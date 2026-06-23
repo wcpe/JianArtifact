@@ -269,10 +269,16 @@ enum V2Route {
     Blob { name: String, digest: String },
     /// manifest 存取：`{name}/manifests/{reference}`。
     Manifest { name: String, reference: String },
+    /// tag 列表：`{name}/tags/list`。
+    TagsList { name: String },
 }
 
 /// 解析 `/v2/` 之后的相对路径为 [`V2Route`]；无法识别返回 None。
 fn parse_v2_route(rest: &str) -> Option<V2Route> {
+    // tag 列表：以 `/tags/list` 结尾
+    if let Some(name) = rest.strip_suffix("/tags/list") {
+        return non_empty(name).map(|n| V2Route::TagsList { name: n });
+    }
     // 启动上传：以 `/blobs/uploads/` 结尾（uuid 为空）
     if let Some(name) = rest.strip_suffix("/blobs/uploads/") {
         return non_empty(name).map(|n| V2Route::StartUpload { name: n });
@@ -377,6 +383,7 @@ pub async fn dispatch_get(
         Some(V2Route::Manifest { name, reference }) => {
             manifest_request(state.0, identity, name, reference, true).await
         }
+        Some(V2Route::TagsList { name }) => tags_list(state.0, identity, name).await,
         _ => DockerApiError::not_found("NAME_UNKNOWN").into_response(),
     }
 }
@@ -396,6 +403,47 @@ pub async fn dispatch_head(
         }
         _ => DockerApiError::not_found("NAME_UNKNOWN").into_response(),
     }
+}
+
+/// tag 列表（`GET /v2/{name}/tags/list`）：返回该镜像在本仓库下的全部 tag。
+///
+/// 经读授权（private 对无权 → 404/401，与 manifest 读一致）；tag 取自存储中
+/// `{image}/tags/{tag}` 指针索引。无任何 tag 视为名称未知，返回 404 NAME_UNKNOWN。
+async fn tags_list(state: AppState, identity: Identity, name: String) -> Response {
+    let (repo_name, image) = match split_name(&name) {
+        Some(v) => v,
+        None => return DockerApiError::not_found("NAME_UNKNOWN").into_response(),
+    };
+    let repo = match load_readable_repo(&state, &identity, &repo_name).await {
+        Ok(r) => r,
+        Err(e) => return e.into_response(),
+    };
+    if let Err(e) = ensure_docker(&repo) {
+        return e.into_response();
+    }
+    let arts = match state.meta.list_artifacts_by_repo(&repo.id).await {
+        Ok(a) => a,
+        Err(e) => return map_docker_error(DockerError::Meta(e)).into_response(),
+    };
+    // tag 指针存储键形如 `{image}/tags/{tag}`：按前缀筛出本镜像的 tag。
+    let prefix = format!("{image}/tags/");
+    let mut tags: Vec<String> = arts
+        .iter()
+        .filter_map(|a| a.path.strip_prefix(&prefix))
+        .filter(|t| !t.is_empty() && !t.contains('/'))
+        .map(|t| t.to_string())
+        .collect();
+    tags.sort();
+    tags.dedup();
+    if tags.is_empty() {
+        return DockerApiError::not_found("NAME_UNKNOWN").into_response();
+    }
+    let mut resp = Json(json!({ "name": name, "tags": tags })).into_response();
+    resp.headers_mut().insert(
+        API_VERSION_HEADER,
+        HeaderValue::from_static(API_VERSION_VALUE),
+    );
+    resp
 }
 
 // ---------------- blob 上传状态机 ----------------

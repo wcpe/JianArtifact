@@ -411,6 +411,53 @@ async fn manifest_按_tag_写入再按_tag_与_digest_读回() {
 }
 
 #[tokio::test]
+async fn tags_list_列出镜像全部_tag_未知镜像_404() {
+    let fx = Fixture::new().await;
+    fx.seed_user("admin", "pw", Role::Admin).await;
+    fx.seed_docker_repo("hub", Visibility::Public).await;
+    let auth = basic("admin", "pw");
+    let manifest = br#"{"schemaVersion":2,"mediaType":"application/vnd.docker.distribution.manifest.v2+json"}"#;
+    // 写两个 tag（乱序写入，验证列表按字典序）
+    for tag in ["2.0", "1.0"] {
+        let put = fx
+            .router()
+            .oneshot(req(
+                "PUT",
+                &format!("/v2/hub/app/manifests/{tag}"),
+                Some(&auth),
+                Some(MANIFEST_V2),
+                manifest.to_vec(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(put.status(), StatusCode::CREATED);
+    }
+
+    // GET tags/list：返回该镜像全部 tag（字典序），带版本头
+    let list = fx
+        .router()
+        .oneshot(req("GET", "/v2/hub/app/tags/list", None, None, Vec::new()))
+        .await
+        .unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+    assert_eq!(
+        header_str(&list, "docker-distribution-api-version").as_deref(),
+        Some("registry/2.0")
+    );
+    let body: serde_json::Value = serde_json::from_slice(&body_bytes(list).await).unwrap();
+    assert_eq!(body["name"], "hub/app");
+    assert_eq!(body["tags"], serde_json::json!(["1.0", "2.0"]));
+
+    // 同仓库未知镜像 → 404 NAME_UNKNOWN（无任何 tag）
+    let none = fx
+        .router()
+        .oneshot(req("GET", "/v2/hub/nope/tags/list", None, None, Vec::new()))
+        .await
+        .unwrap();
+    assert_eq!(none.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn manifest_同_tag_可覆盖指向新内容() {
     let fx = Fixture::new().await;
     fx.seed_user("admin", "pw", Role::Admin).await;
