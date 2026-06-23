@@ -169,15 +169,13 @@ impl MetaStore {
         role: Role,
     ) -> Result<String, MetaError> {
         let id = Uuid::new_v4().to_string();
-        sqlx::query(
-            "INSERT INTO users (id, username, password_hash, role) VALUES (?, ?, ?, ?)",
-        )
-        .bind(&id)
-        .bind(username)
-        .bind(password_hash)
-        .bind(role.as_str())
-        .execute(&self.pool)
-        .await?;
+        sqlx::query("INSERT INTO users (id, username, password_hash, role) VALUES (?, ?, ?, ?)")
+            .bind(&id)
+            .bind(username)
+            .bind(password_hash)
+            .bind(role.as_str())
+            .execute(&self.pool)
+            .await?;
         Ok(id)
     }
 
@@ -368,16 +366,17 @@ mod tests {
     #[tokio::test]
     async fn 查不存在的用户返回_none() {
         let store = MetaStore::open_in_memory().await.unwrap();
-        assert!(store.get_user_by_username("无此人").await.unwrap().is_none());
+        assert!(store
+            .get_user_by_username("无此人")
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]
     async fn 用户名唯一约束拒绝重复() {
         let store = MetaStore::open_in_memory().await.unwrap();
-        store
-            .create_user("bob", "哈希1", Role::User)
-            .await
-            .unwrap();
+        store.create_user("bob", "哈希1", Role::User).await.unwrap();
         // 同名再建应失败（username UNIQUE）
         let err = store.create_user("bob", "哈希2", Role::User).await;
         assert!(err.is_err());

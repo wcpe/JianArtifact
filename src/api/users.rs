@@ -117,7 +117,11 @@ pub async fn get_user(
     Path(id): Path<String>,
 ) -> Result<Json<UserView>, ApiError> {
     identity.require_admin()?;
-    let user = state.meta.get_user_by_id(&id).await?.ok_or(ApiError::NotFound)?;
+    let user = state
+        .meta
+        .get_user_by_id(&id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
     Ok(Json(user.into()))
 }
 
@@ -138,7 +142,11 @@ pub async fn update_user(
         return Err(ApiError::NotFound);
     }
     tracing::info!(用户 = %id, "已更新用户");
-    let user = state.meta.get_user_by_id(&id).await?.ok_or(ApiError::NotFound)?;
+    let user = state
+        .meta
+        .get_user_by_id(&id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
     Ok(Json(user.into()))
 }
 

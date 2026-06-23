@@ -74,7 +74,10 @@ pub async fn create_token(
 
     let plaintext = generate_api_token();
     let hash = hash_api_token(&plaintext);
-    let id = state.meta.create_token(&user.user_id, &req.name, &hash).await?;
+    let id = state
+        .meta
+        .create_token(&user.user_id, &req.name, &hash)
+        .await?;
 
     tracing::info!(用户 = %user.username, token名 = %req.name, "已签发 API Token");
     let record = state
@@ -112,7 +115,11 @@ pub async fn revoke_token(
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     let user = identity.require_authenticated()?;
-    let token = state.meta.get_token_by_id(&id).await?.ok_or(ApiError::NotFound)?;
+    let token = state
+        .meta
+        .get_token_by_id(&id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
     // 仅可吊销本人 Token，避免越权操作他人凭据
     if token.user_id != user.user_id {
         return Err(ApiError::Forbidden);

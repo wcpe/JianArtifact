@@ -56,7 +56,11 @@ impl Fixture {
 
     async fn seed_user(&self, username: &str, password: &str, role: Role) -> String {
         let hash = auth::hash_password(password).unwrap();
-        self.state.meta.create_user(username, &hash, role).await.unwrap()
+        self.state
+            .meta
+            .create_user(username, &hash, role)
+            .await
+            .unwrap()
     }
 
     /// 建一个 maven hosted 仓库，返回 id。
@@ -97,7 +101,11 @@ impl Fixture {
     }
 
     async fn seed_acl(&self, repo_id: &str, user_id: &str, permission: Permission) {
-        self.state.meta.create_acl(repo_id, user_id, permission).await.unwrap();
+        self.state
+            .meta
+            .create_acl(repo_id, user_id, permission)
+            .await
+            .unwrap();
     }
 
     async fn login_token(&self, username: &str, password: &str) -> String {
@@ -127,7 +135,13 @@ async fn send(router: Router, req: Request<Body>) -> (StatusCode, Value) {
 async fn send_bytes(router: Router, req: Request<Body>) -> (StatusCode, Vec<u8>) {
     let resp = router.oneshot(req).await.unwrap();
     let status = resp.status();
-    let bytes = resp.into_body().collect().await.unwrap().to_bytes().to_vec();
+    let bytes = resp
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes()
+        .to_vec();
     (status, bytes)
 }
 
@@ -264,7 +278,12 @@ async fn maven_metadata_允许更新() {
     let path = "/maven-hosted/com/example/lib/maven-metadata.xml";
     let (s1, _) = send(
         fx.router(),
-        raw_req("PUT", path, Some(&auth), b"<metadata>v1</metadata>".to_vec()),
+        raw_req(
+            "PUT",
+            path,
+            Some(&auth),
+            b"<metadata>v1</metadata>".to_vec(),
+        ),
     )
     .await;
     assert_eq!(s1, StatusCode::CREATED);
@@ -272,7 +291,12 @@ async fn maven_metadata_允许更新() {
     // maven-metadata.xml 允许更新 → 200
     let (s2, _) = send(
         fx.router(),
-        raw_req("PUT", path, Some(&auth), b"<metadata>v2</metadata>".to_vec()),
+        raw_req(
+            "PUT",
+            path,
+            Some(&auth),
+            b"<metadata>v2</metadata>".to_vec(),
+        ),
     )
     .await;
     assert_eq!(s2, StatusCode::OK);
@@ -317,7 +341,11 @@ async fn maven_sidecar_校验和与制品摘要一致() {
     // GET sidecar 取回，内容应即客户端计算的 sha1
     let (status, bytes) = send_bytes(
         fx.router(),
-        empty_req("GET", "/maven-hosted/com/example/lib/1.0/lib-1.0.jar.sha1", None),
+        empty_req(
+            "GET",
+            "/maven-hosted/com/example/lib/1.0/lib-1.0.jar.sha1",
+            None,
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -378,9 +406,10 @@ async fn maven_制品详情含依赖坐标片段() {
             && c.contains("<version>1.2.3</version>")
     }));
     // 仓库接入片段含本仓库 URL
-    assert!(usage
-        .iter()
-        .any(|u| u["content"].as_str().unwrap().contains("http://localhost:8080/maven-hosted")));
+    assert!(usage.iter().any(|u| u["content"]
+        .as_str()
+        .unwrap()
+        .contains("http://localhost:8080/maven-hosted")));
 }
 
 // ---------- FR-09 写授权边界（Maven 端点） ----------
@@ -406,7 +435,8 @@ async fn maven_无写权限_deploy_被拒_403() {
 #[tokio::test]
 async fn maven_私有仓库对无权者_404_隐藏存在性() {
     let fx = Fixture::new().await;
-    fx.seed_maven_repo("secret-maven", Visibility::Private).await;
+    fx.seed_maven_repo("secret-maven", Visibility::Private)
+        .await;
     // 匿名读 private → 404（不泄露存在）
     let (status, _) = send(
         fx.router(),
@@ -419,7 +449,9 @@ async fn maven_私有仓库对无权者_404_隐藏存在性() {
 // ---------- FR-12 Maven proxy 代理缓存：cache-miss → hit（真实 HttpUpstream 链路） ----------
 
 /// 启动一个本地 mock 上游服务，按请求路径返回固定内容并记录命中次数。
-async fn 启动_mock_上游(content: &'static [u8]) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+async fn 启动_mock_上游(
+    content: &'static [u8],
+) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
     use std::sync::atomic::Ordering;
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let calls_in_handler = calls.clone();

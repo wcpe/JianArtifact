@@ -128,12 +128,12 @@ fn bearer_challenge(state: &AppState, name: &str, actions: &str) -> String {
 fn map_docker_error(e: DockerError) -> DockerApiError {
     match e {
         DockerError::NotFound => DockerApiError::not_found("BLOB_UNKNOWN"),
-        DockerError::UnknownUpload => {
-            DockerApiError::not_found("BLOB_UPLOAD_UNKNOWN")
-        }
-        DockerError::DigestMismatch => {
-            DockerApiError::new(StatusCode::BAD_REQUEST, "DIGEST_INVALID", "digest 与内容不匹配")
-        }
+        DockerError::UnknownUpload => DockerApiError::not_found("BLOB_UPLOAD_UNKNOWN"),
+        DockerError::DigestMismatch => DockerApiError::new(
+            StatusCode::BAD_REQUEST,
+            "DIGEST_INVALID",
+            "digest 与内容不匹配",
+        ),
         DockerError::InvalidDigest => {
             DockerApiError::new(StatusCode::BAD_REQUEST, "DIGEST_INVALID", "digest 格式非法")
         }
@@ -249,7 +249,11 @@ fn rfc3339_now() -> String {
         .unwrap_or(0) as i64;
     let days = secs.div_euclid(86_400);
     let secs_of_day = secs.rem_euclid(86_400);
-    let (h, m, s) = (secs_of_day / 3600, (secs_of_day % 3600) / 60, secs_of_day % 60);
+    let (h, m, s) = (
+        secs_of_day / 3600,
+        (secs_of_day % 3600) / 60,
+        secs_of_day % 60,
+    );
     let (year, month, day) = civil_from_days(days);
     format!("{year:04}-{month:02}-{day:02}T{h:02}:{m:02}:{s:02}Z")
 }
@@ -303,7 +307,11 @@ async fn resolve_token_identity(
 ///
 /// 仓库不存在或全部动作被拒 → 返回授予空 actions 的项（registry v2 约定：能登录即可签发，
 /// 具体放行交原请求再判）。scope 格式非法 → None（忽略该 scope）。
-async fn grant_scope(state: &AppState, identity: &AuthIdentity, scope: &str) -> Option<DockerAccess> {
+async fn grant_scope(
+    state: &AppState,
+    identity: &AuthIdentity,
+    scope: &str,
+) -> Option<DockerAccess> {
     let (resource_type, rest) = scope.split_once(':')?;
     if resource_type != RESOURCE_TYPE {
         return None;
@@ -462,7 +470,9 @@ async fn load_readable_repo(
     // identity 通道：走既有 authz
     let view = build_repo_view(state, &auth.identity, &repo)
         .await
-        .map_err(|_| DockerApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "UNKNOWN", "内部错误"))?;
+        .map_err(|_| {
+            DockerApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "UNKNOWN", "内部错误")
+        })?;
     match authorize(&auth.identity.0, &view, Action::Read) {
         Decision::Allow => Ok(repo),
         Decision::Deny => Err(deny_read(state, auth, name)),
@@ -491,7 +501,11 @@ async fn load_writable_repo(
             Ok(repo)
         } else if auth.token_grants(name, Action::Read) {
             // 有读无写 → 403
-            Err(DockerApiError::new(StatusCode::FORBIDDEN, "DENIED", "无写权限"))
+            Err(DockerApiError::new(
+                StatusCode::FORBIDDEN,
+                "DENIED",
+                "无写权限",
+            ))
         } else {
             // 既无读也无写 → 404 隐藏存在性
             Err(DockerApiError::not_found("NAME_UNKNOWN"))
@@ -513,7 +527,9 @@ async fn load_writable_repo(
     };
     let view = build_repo_view(state, &auth.identity, &repo)
         .await
-        .map_err(|_| DockerApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "UNKNOWN", "内部错误"))?;
+        .map_err(|_| {
+            DockerApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "UNKNOWN", "内部错误")
+        })?;
     // 先过读判定：无读权限（含登录无 ACL 访问 private）→ 404 隐藏存在性
     if authorize(&auth.identity.0, &view, Action::Read) == Decision::Deny {
         return Err(DockerApiError::not_found("NAME_UNKNOWN"));
@@ -805,7 +821,10 @@ async fn start_blob_upload(
     // 分块上传：返回 202 + Location，客户端后续 PATCH / PUT
     let loc = location(
         &state,
-        &format!("/v2/{repo_name}/{image}/blobs/uploads/{}", started.upload_id),
+        &format!(
+            "/v2/{repo_name}/{image}/blobs/uploads/{}",
+            started.upload_id
+        ),
     );
     upload_accepted(&loc, &started.upload_id, 0)
 }
@@ -849,7 +868,10 @@ async fn patch_blob_upload(
         }
     };
 
-    let loc = location(&state, &format!("/v2/{repo_name}/{image}/blobs/uploads/{uuid}"));
+    let loc = location(
+        &state,
+        &format!("/v2/{repo_name}/{image}/blobs/uploads/{uuid}"),
+    );
     upload_accepted(&loc, &uuid, outcome.written)
 }
 

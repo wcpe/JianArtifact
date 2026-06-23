@@ -376,13 +376,12 @@ impl MetaStore {
         repo_id: &str,
         user_id: &str,
     ) -> Result<Vec<Permission>, MetaError> {
-        let rows: Vec<(String,)> = sqlx::query_as(
-            "SELECT permission FROM repo_acl WHERE repo_id = ? AND user_id = ?",
-        )
-        .bind(repo_id)
-        .bind(user_id)
-        .fetch_all(self.pool())
-        .await?;
+        let rows: Vec<(String,)> =
+            sqlx::query_as("SELECT permission FROM repo_acl WHERE repo_id = ? AND user_id = ?")
+                .bind(repo_id)
+                .bind(user_id)
+                .fetch_all(self.pool())
+                .await?;
         Ok(rows
             .into_iter()
             .map(|(p,)| Permission::from_db_str(&p))
@@ -482,11 +481,10 @@ impl MetaStore {
 
     /// 统计某 sha256 在所有仓库索引中的引用计数（用于删 blob 前判断是否仍被引用）。
     pub async fn count_artifacts_by_sha256(&self, sha256: &str) -> Result<i64, MetaError> {
-        let count: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM artifacts WHERE sha256 = ?")
-                .bind(sha256)
-                .fetch_one(self.pool())
-                .await?;
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM artifacts WHERE sha256 = ?")
+            .bind(sha256)
+            .fetch_one(self.pool())
+            .await?;
         Ok(count)
     }
 
@@ -622,7 +620,10 @@ mod tests {
             .await
             .unwrap();
         let got = store.get_repository_by_id(&id).await.unwrap().unwrap();
-        assert_eq!(got.upstream_url.as_deref(), Some("https://repo1.maven.org/maven2"));
+        assert_eq!(
+            got.upstream_url.as_deref(),
+            Some("https://repo1.maven.org/maven2")
+        );
         // DB 仅存引用，不含凭据真值
         assert_eq!(got.upstream_auth_ref.as_deref(), Some("upstream-cred-1"));
     }
@@ -632,7 +633,10 @@ mod tests {
         let store = MetaStore::open_in_memory().await.unwrap();
         let uid = 建用户(&store, "u").await;
         let rid = 建仓库(&store, "r", Visibility::Private).await;
-        store.create_acl(&rid, &uid, Permission::Read).await.unwrap();
+        store
+            .create_acl(&rid, &uid, Permission::Read)
+            .await
+            .unwrap();
         assert_eq!(store.list_acl_by_repo(&rid).await.unwrap().len(), 1);
 
         assert!(store.delete_repository(&rid).await.unwrap());
@@ -647,11 +651,20 @@ mod tests {
         let uid = 建用户(&store, "u").await;
         let rid = 建仓库(&store, "r", Visibility::Private).await;
 
-        let aid = store.create_acl(&rid, &uid, Permission::Read).await.unwrap();
+        let aid = store
+            .create_acl(&rid, &uid, Permission::Read)
+            .await
+            .unwrap();
         // 同 (repo,user,permission) 重复授予应失败
-        assert!(store.create_acl(&rid, &uid, Permission::Read).await.is_err());
+        assert!(store
+            .create_acl(&rid, &uid, Permission::Read)
+            .await
+            .is_err());
         // 但同一用户可再授 write（不同 permission）
-        store.create_acl(&rid, &uid, Permission::Write).await.unwrap();
+        store
+            .create_acl(&rid, &uid, Permission::Write)
+            .await
+            .unwrap();
 
         let list = store.list_acl_by_repo(&rid).await.unwrap();
         assert_eq!(list.len(), 2);
@@ -670,8 +683,14 @@ mod tests {
         let r1 = 建仓库(&store, "r1", Visibility::Private).await;
         let r2 = 建仓库(&store, "r2", Visibility::Private).await;
         store.create_acl(&r1, &uid, Permission::Read).await.unwrap();
-        store.create_acl(&r1, &uid, Permission::Write).await.unwrap();
-        store.create_acl(&r2, &uid, Permission::Write).await.unwrap();
+        store
+            .create_acl(&r1, &uid, Permission::Write)
+            .await
+            .unwrap();
+        store
+            .create_acl(&r2, &uid, Permission::Write)
+            .await
+            .unwrap();
 
         let mut perms = store.list_user_permissions(&r1, &uid).await.unwrap();
         perms.sort_by_key(|p| p.as_str());
@@ -723,7 +742,11 @@ mod tests {
         assert_eq!(list[0].sha512, "sha512值");
         // 空仓库返回空表
         let empty = 建仓库(&store, "empty", Visibility::Public).await;
-        assert!(store.list_artifacts_by_repo(&empty).await.unwrap().is_empty());
+        assert!(store
+            .list_artifacts_by_repo(&empty)
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]
@@ -749,7 +772,11 @@ mod tests {
         assert_eq!(one.sha256, "新sha");
         assert_eq!(one.size, 9);
         // 查不存在路径返回 None
-        assert!(store.get_artifact(&rid, "无此路径").await.unwrap().is_none());
+        assert!(store
+            .get_artifact(&rid, "无此路径")
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]
@@ -758,8 +785,14 @@ mod tests {
         let r1 = 建仓库(&store, "r1", Visibility::Public).await;
         let r2 = 建仓库(&store, "r2", Visibility::Public).await;
         // 两个仓库引用同一 sha256
-        store.upsert_artifact(制品(&r1, "p", "共享sha")).await.unwrap();
-        store.upsert_artifact(制品(&r2, "p", "共享sha")).await.unwrap();
+        store
+            .upsert_artifact(制品(&r1, "p", "共享sha"))
+            .await
+            .unwrap();
+        store
+            .upsert_artifact(制品(&r2, "p", "共享sha"))
+            .await
+            .unwrap();
         assert_eq!(store.count_artifacts_by_sha256("共享sha").await.unwrap(), 2);
 
         // 删一条后引用计数减一（blob 仍被另一仓库引用，不应被清理）
@@ -804,7 +837,10 @@ mod tests {
         assert!(hits.iter().any(|h| h.repo_visibility == "private"));
 
         // 限定格式 maven 只命中 maven 仓库那条
-        let maven_only = store.search_artifacts("lib", Some("maven"), 0, 50).await.unwrap();
+        let maven_only = store
+            .search_artifacts("lib", Some("maven"), 0, 50)
+            .await
+            .unwrap();
         assert_eq!(maven_only.len(), 1);
         assert_eq!(maven_only[0].repo_name, "maven-repo");
 

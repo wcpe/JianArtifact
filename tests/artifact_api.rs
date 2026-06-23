@@ -69,7 +69,11 @@ impl Fixture {
 
     async fn seed_user(&self, username: &str, password: &str, role: Role) -> String {
         let hash = auth::hash_password(password).unwrap();
-        self.state.meta.create_user(username, &hash, role).await.unwrap()
+        self.state
+            .meta
+            .create_user(username, &hash, role)
+            .await
+            .unwrap()
     }
 
     /// 建一个 raw hosted 仓库，返回 id。
@@ -110,7 +114,11 @@ impl Fixture {
     }
 
     async fn seed_acl(&self, repo_id: &str, user_id: &str, permission: Permission) {
-        self.state.meta.create_acl(repo_id, user_id, permission).await.unwrap();
+        self.state
+            .meta
+            .create_acl(repo_id, user_id, permission)
+            .await
+            .unwrap();
     }
 
     async fn login_token(&self, username: &str, password: &str) -> String {
@@ -142,7 +150,13 @@ async fn send(router: Router, req: Request<Body>) -> (StatusCode, Value) {
 async fn send_bytes(router: Router, req: Request<Body>) -> (StatusCode, Vec<u8>) {
     let resp = router.oneshot(req).await.unwrap();
     let status = resp.status();
-    let bytes = resp.into_body().collect().await.unwrap().to_bytes().to_vec();
+    let bytes = resp
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes()
+        .to_vec();
     (status, bytes)
 }
 
@@ -186,14 +200,22 @@ async fn raw_直传后下载内容一致() {
     // PUT 上传
     let (status, _) = send(
         fx.router(),
-        raw_req("PUT", "/files/docs/readme.txt", Some(&auth), b"hello raw".to_vec()),
+        raw_req(
+            "PUT",
+            "/files/docs/readme.txt",
+            Some(&auth),
+            b"hello raw".to_vec(),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED);
 
     // GET 下载（公开仓库匿名亦可读）
-    let (status, bytes) =
-        send_bytes(fx.router(), empty_req("GET", "/files/docs/readme.txt", None)).await;
+    let (status, bytes) = send_bytes(
+        fx.router(),
+        empty_req("GET", "/files/docs/readme.txt", None),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(bytes, b"hello raw");
 }
@@ -306,7 +328,12 @@ async fn 路径穿越被拒_400() {
     // 含 .. 的路径应被拒
     let (status, _) = send(
         fx.router(),
-        raw_req("PUT", "/files/a/../../etc/passwd", Some(&auth), b"x".to_vec()),
+        raw_req(
+            "PUT",
+            "/files/a/../../etc/passwd",
+            Some(&auth),
+            b"x".to_vec(),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -366,15 +393,22 @@ async fn 制品详情含四校验和与使用片段() {
         detail["checksums"]["sha256"],
         "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
     );
-    assert_eq!(detail["checksums"]["sha1"], "a9993e364706816aba3e25717850c26c9cd0d89d");
-    assert_eq!(detail["checksums"]["md5"], "900150983cd24fb0d6963f7d28e17f72");
+    assert_eq!(
+        detail["checksums"]["sha1"],
+        "a9993e364706816aba3e25717850c26c9cd0d89d"
+    );
+    assert_eq!(
+        detail["checksums"]["md5"],
+        "900150983cd24fb0d6963f7d28e17f72"
+    );
     assert!(detail["checksums"]["sha512"].as_str().unwrap().len() == 128);
     // 使用片段非空且含完整 URL
     let usage = detail["usage"].as_array().unwrap();
     assert!(!usage.is_empty());
-    assert!(usage
-        .iter()
-        .any(|u| u["content"].as_str().unwrap().contains("http://localhost:8080/files/dir/x.txt")));
+    assert!(usage.iter().any(|u| u["content"]
+        .as_str()
+        .unwrap()
+        .contains("http://localhost:8080/files/dir/x.txt")));
 }
 
 #[tokio::test]
@@ -402,7 +436,11 @@ async fn 制品详情对无权私有仓库_404() {
     // 匿名详情 → 404
     let (status, _) = send(
         fx.router(),
-        empty_req("GET", &format!("/api/v1/repositories/{rid}/artifacts/s.txt"), None),
+        empty_req(
+            "GET",
+            &format!("/api/v1/repositories/{rid}/artifacts/s.txt"),
+            None,
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
@@ -543,7 +581,9 @@ async fn 搜索分页结构正确() {
 ///
 /// 返回 (上游基址 `http://127.0.0.1:PORT`, 命中计数器)。计数器记录上游被实际拉取的次数，
 /// 供断言"缓存命中不回源""删缓存后可重拉"。服务返回固定内容，路径不关心。
-async fn 启动_mock_上游(content: &'static [u8]) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+async fn 启动_mock_上游(
+    content: &'static [u8],
+) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
     use std::sync::atomic::Ordering;
 
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));

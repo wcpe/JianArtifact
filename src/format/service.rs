@@ -168,7 +168,10 @@ impl<S: BlobStore, U: Upstream> ArtifactService<S, U> {
             .await?
             .ok_or(ServiceError::NotFound)?;
         tracing::info!(仓库 = %repo.name, 路径 = %coords.path, 覆盖 = overwritten, "已写入 hosted 制品");
-        Ok(WriteOutcome { record, overwritten })
+        Ok(WriteOutcome {
+            record,
+            overwritten,
+        })
     }
 
     /// 读取制品（FR-11/12）：hosted / proxy-cache-hit 直接流式返回；
@@ -195,7 +198,8 @@ impl<S: BlobStore, U: Upstream> ArtifactService<S, U> {
             .ok_or(ServiceError::Upstream)?
             .to_string();
 
-        self.fetch_and_cache(repo, format, coords, &upstream_url).await
+        self.fetch_and_cache(repo, format, coords, &upstream_url)
+            .await
     }
 
     /// proxy cache-miss：单飞合并回源、落盘、写索引。返回新落定的读句柄。
@@ -210,7 +214,9 @@ impl<S: BlobStore, U: Upstream> ArtifactService<S, U> {
         let key = format!("{}\u{0}{}", repo.id, coords.path);
         let result = self
             .single_flight
-            .run(&key, || self.do_fetch_and_cache(repo, format, coords, upstream_url))
+            .run(&key, || {
+                self.do_fetch_and_cache(repo, format, coords, upstream_url)
+            })
             .await;
 
         match result {
@@ -223,7 +229,10 @@ impl<S: BlobStore, U: Upstream> ArtifactService<S, U> {
                     .ok_or(ServiceError::NotFound)?;
                 debug_assert_eq!(record.sha256, sha256);
                 let blob = self.store.get(&record.sha256).await?;
-                Ok((ReadHandle { record, blob }, ArtifactKind::FetchedFromUpstream))
+                Ok((
+                    ReadHandle { record, blob },
+                    ArtifactKind::FetchedFromUpstream,
+                ))
             }
             // 回源失败：统一回退为 Upstream 错误，绝不缓存损坏内容（do_fetch 内已保证不写索引）
             Err(_) => Err(ServiceError::Upstream),
@@ -493,7 +502,11 @@ mod tests {
     /// 构造一套测试用 (服务, 库, blob目录)。
     async fn 新建服务(
         upstream: MockUpstream,
-    ) -> (ArtifactService<LocalFsStore, MockUpstream>, MetaStore, tempfile::TempDir) {
+    ) -> (
+        ArtifactService<LocalFsStore, MockUpstream>,
+        MetaStore,
+        tempfile::TempDir,
+    ) {
         let dir = tempfile::tempdir().unwrap();
         let meta = MetaStore::open_in_memory().await.unwrap();
         let store = LocalFsStore::new(dir.path().join("blobs")).await.unwrap();
@@ -523,7 +536,9 @@ mod tests {
     }
 
     fn 坐标(p: &str) -> ArtifactCoordinates {
-        ArtifactCoordinates { path: p.to_string() }
+        ArtifactCoordinates {
+            path: p.to_string(),
+        }
     }
 
     // ---------- 写入：blob 先落盘再写索引、四校验和正确、覆盖 ----------
@@ -548,7 +563,10 @@ mod tests {
         assert_eq!(out.record.sha1, "a9993e364706816aba3e25717850c26c9cd0d89d");
         assert_eq!(out.record.md5, "900150983cd24fb0d6963f7d28e17f72");
         assert_eq!(out.record.size, 3);
-        assert_eq!(out.record.content_type.as_deref(), Some("text/plain; charset=utf-8"));
+        assert_eq!(
+            out.record.content_type.as_deref(),
+            Some("text/plain; charset=utf-8")
+        );
 
         // 读回内容一致
         let (mut handle, kind) = svc.get(&repo, &RawFormat, &coords).await.unwrap();
@@ -574,7 +592,10 @@ mod tests {
             .unwrap();
         assert!(out.overwritten, "Raw 同路径覆盖应标记 overwritten");
         // 索引只剩一条且为新内容
-        assert_eq!(meta.list_artifacts_by_repo(&repo.id).await.unwrap().len(), 1);
+        assert_eq!(
+            meta.list_artifacts_by_repo(&repo.id).await.unwrap().len(),
+            1
+        );
         let (mut h, _) = svc.get(&repo, &RawFormat, &coords).await.unwrap();
         let mut buf = Vec::new();
         h.blob.read_to_end(&mut buf).await.unwrap();
@@ -597,7 +618,11 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, ServiceError::TooLarge));
         // 索引未写入
-        assert!(meta.get_artifact(&repo.id, "big.bin").await.unwrap().is_none());
+        assert!(meta
+            .get_artifact(&repo.id, "big.bin")
+            .await
+            .unwrap()
+            .is_none());
         // blob 目录下除 tmp 外无落定的正式 blob（半截已被清理）
         let blobs = dir.path().join("blobs");
         let mut dirs = tokio::fs::read_dir(&blobs).await.unwrap();
@@ -633,7 +658,10 @@ mod tests {
             .put_hosted(&ghost, &RawFormat, &coords, &b"orphan-check"[..], None)
             .await
             .unwrap_err();
-        assert!(matches!(err, ServiceError::Meta(_)), "外键失败应是 Meta 错误");
+        assert!(
+            matches!(err, ServiceError::Meta(_)),
+            "外键失败应是 Meta 错误"
+        );
 
         // "orphan-check" 的 blob 不应残留：计数为 0 且 store 中不存在
         let sha = {
@@ -650,8 +678,7 @@ mod tests {
     #[tokio::test]
     async fn proxy_cache_miss_回源后命中不再回源() {
         let calls = Arc::new(AtomicUsize::new(0));
-        let (svc, meta, _dir) =
-            新建服务(MockUpstream::new(b"upstream-bytes", calls.clone())).await;
+        let (svc, meta, _dir) = 新建服务(MockUpstream::new(b"upstream-bytes", calls.clone())).await;
         let repo = 建仓库(&meta, "p", RepoType::Proxy, Some("https://up.example")).await;
         let coords = 坐标("lib/x.bin");
 
@@ -662,7 +689,11 @@ mod tests {
         h.blob.read_to_end(&mut buf).await.unwrap();
         assert_eq!(buf, b"upstream-bytes");
         // 缓存索引已写入且标记 cached
-        let rec = meta.get_artifact(&repo.id, "lib/x.bin").await.unwrap().unwrap();
+        let rec = meta
+            .get_artifact(&repo.id, "lib/x.bin")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(rec.cached, 1);
 
         // 再次：缓存命中，不再回源
@@ -700,7 +731,10 @@ mod tests {
         // 单飞合并：上游仅被拉取一次
         assert_eq!(calls.load(Ordering::SeqCst), 1, "并发同制品应只回源一次");
         // 缓存里只有一条索引，未写坏
-        assert_eq!(meta.list_artifacts_by_repo(&repo.id).await.unwrap().len(), 1);
+        assert_eq!(
+            meta.list_artifacts_by_repo(&repo.id).await.unwrap().len(),
+            1
+        );
     }
 
     #[tokio::test]
@@ -713,8 +747,15 @@ mod tests {
         let err = svc.get(&repo, &RawFormat, &coords).await.unwrap_err();
         assert!(matches!(err, ServiceError::Upstream));
         // 上游失败：不写任何缓存索引
-        assert!(meta.get_artifact(&repo.id, "lib/y.bin").await.unwrap().is_none());
-        assert_eq!(meta.list_artifacts_by_repo(&repo.id).await.unwrap().len(), 0);
+        assert!(meta
+            .get_artifact(&repo.id, "lib/y.bin")
+            .await
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            meta.list_artifacts_by_repo(&repo.id).await.unwrap().len(),
+            0
+        );
     }
 
     // ---------- 删除：hosted 删本体 + 索引；proxy 删缓存后可重新拉取 ----------
@@ -733,7 +774,11 @@ mod tests {
 
         svc.delete(&repo, &coords).await.unwrap();
         // 索引与 blob 本体都已清理
-        assert!(meta.get_artifact(&repo.id, "d.txt").await.unwrap().is_none());
+        assert!(meta
+            .get_artifact(&repo.id, "d.txt")
+            .await
+            .unwrap()
+            .is_none());
         assert!(!svc.store.exists(&sha).await.unwrap());
         // 再删返回 NotFound
         assert!(matches!(
@@ -745,8 +790,7 @@ mod tests {
     #[tokio::test]
     async fn proxy_删缓存后可重新回源() {
         let calls = Arc::new(AtomicUsize::new(0));
-        let (svc, meta, _dir) =
-            新建服务(MockUpstream::new(b"again", calls.clone())).await;
+        let (svc, meta, _dir) = 新建服务(MockUpstream::new(b"again", calls.clone())).await;
         let repo = 建仓库(&meta, "p", RepoType::Proxy, Some("https://up.example")).await;
         let coords = 坐标("lib/z.bin");
 
@@ -754,7 +798,11 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         // 删缓存
         svc.delete(&repo, &coords).await.unwrap();
-        assert!(meta.get_artifact(&repo.id, "lib/z.bin").await.unwrap().is_none());
+        assert!(meta
+            .get_artifact(&repo.id, "lib/z.bin")
+            .await
+            .unwrap()
+            .is_none());
         // 再取应重新回源（计数 +1）
         svc.get(&repo, &RawFormat, &coords).await.unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 2, "删缓存后应可重新拉取");
@@ -805,7 +853,10 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let (svc, meta, _dir) = 新建服务(MockUpstream::new(b"", calls)).await;
         let repo = 建仓库(&meta, "h", RepoType::Hosted, None).await;
-        let err = svc.get(&repo, &RawFormat, &坐标("missing")).await.unwrap_err();
+        let err = svc
+            .get(&repo, &RawFormat, &坐标("missing"))
+            .await
+            .unwrap_err();
         assert!(matches!(err, ServiceError::NotFound));
     }
 }

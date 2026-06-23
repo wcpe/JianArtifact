@@ -160,7 +160,8 @@ impl NpmFormat {
         let manifest_obj = manifest
             .as_object_mut()
             .ok_or_else(|| NpmError::InvalidBody("version manifest 不是对象".to_string()))?;
-        let tarball_url = Self::tarball_url(public_base_url, repo_name, &req.package, &req.tarball_name);
+        let tarball_url =
+            Self::tarball_url(public_base_url, repo_name, &req.package, &req.tarball_name);
         let mut dist = Map::new();
         dist.insert("tarball".to_string(), Value::String(tarball_url));
         dist.insert("shasum".to_string(), Value::String(sha1_hex.to_string()));
@@ -229,7 +230,12 @@ impl NpmFormat {
     }
 
     /// 拼出 tarball 在本仓库的对外 URL：`{base}/{repo}/{包名}/-/{文件}`。
-    fn tarball_url(public_base_url: &str, repo_name: &str, package: &str, tarball_name: &str) -> String {
+    fn tarball_url(
+        public_base_url: &str,
+        repo_name: &str,
+        package: &str,
+        tarball_name: &str,
+    ) -> String {
         let base = public_base_url.trim_end_matches('/');
         format!("{base}/{repo_name}/{package}/{TARBALL_SEGMENT}/{tarball_name}")
     }
@@ -286,7 +292,8 @@ impl Format for NpmFormat {
                 // 仅示意接入位，不写入真实 Token（凭据不入示例）
                 content: format!(
                     "registry={registry}\n//{}/{repo_name}/:_authToken=${{NPM_TOKEN}}",
-                    base.trim_start_matches("http://").trim_start_matches("https://")
+                    base.trim_start_matches("http://")
+                        .trim_start_matches("https://")
                 ),
             },
         ]
@@ -394,7 +401,11 @@ mod tests {
 
     #[test]
     fn 内容类型按_tarball_与_packument_区分() {
-        let ct = |p: &str| NpmFormat.content_type(&ArtifactCoordinates { path: p.to_string() });
+        let ct = |p: &str| {
+            NpmFormat.content_type(&ArtifactCoordinates {
+                path: p.to_string(),
+            })
+        };
         assert_eq!(ct("lodash").as_deref(), Some("application/json"));
         assert_eq!(
             ct("lodash/-/lodash-4.17.21.tgz").as_deref(),
@@ -404,13 +415,9 @@ mod tests {
 
     #[test]
     fn 首次发布生成_packument_并重写_dist() {
-        let req = NpmFormat::parse_publish(&发布体(
-            "lodash",
-            "4.17.21",
-            "lodash-4.17.21.tgz",
-            b"T",
-        ))
-        .unwrap();
+        let req =
+            NpmFormat::parse_publish(&发布体("lodash", "4.17.21", "lodash-4.17.21.tgz", b"T"))
+                .unwrap();
         let pack = NpmFormat::merge_packument(
             None,
             &req,
@@ -437,10 +444,7 @@ mod tests {
     fn 合并新版本到既有_packument() {
         let req1 =
             NpmFormat::parse_publish(&发布体("pkg", "1.0.0", "pkg-1.0.0.tgz", b"A")).unwrap();
-        let pack = NpmFormat::merge_packument(
-            None, &req1, "http://h", "r", "s1", "i1",
-        )
-        .unwrap();
+        let pack = NpmFormat::merge_packument(None, &req1, "http://h", "r", "s1", "i1").unwrap();
 
         let req2 =
             NpmFormat::parse_publish(&发布体("pkg", "2.0.0", "pkg-2.0.0.tgz", b"B")).unwrap();
@@ -456,13 +460,11 @@ mod tests {
 
     #[test]
     fn 重复发布同版本返回_versionexists() {
-        let req =
-            NpmFormat::parse_publish(&发布体("pkg", "1.0.0", "pkg-1.0.0.tgz", b"A")).unwrap();
-        let pack =
-            NpmFormat::merge_packument(None, &req, "http://h", "r", "s", "i").unwrap();
+        let req = NpmFormat::parse_publish(&发布体("pkg", "1.0.0", "pkg-1.0.0.tgz", b"A")).unwrap();
+        let pack = NpmFormat::merge_packument(None, &req, "http://h", "r", "s", "i").unwrap();
         // 再次发布同版本应被拒
-        let err = NpmFormat::merge_packument(Some(&pack), &req, "http://h", "r", "s", "i")
-            .unwrap_err();
+        let err =
+            NpmFormat::merge_packument(Some(&pack), &req, "http://h", "r", "s", "i").unwrap_err();
         assert_eq!(err, NpmError::VersionExists("1.0.0".to_string()));
     }
 
@@ -509,9 +511,13 @@ mod tests {
         let snippets = NpmFormat.usage_snippets("http://localhost:8080/", "npm-hosted", &coords);
         assert_eq!(snippets.len(), 2);
         assert!(snippets[0].content.contains("npm install lodash"));
-        assert!(snippets[0].content.contains("http://localhost:8080/npm-hosted/"));
+        assert!(snippets[0]
+            .content
+            .contains("http://localhost:8080/npm-hosted/"));
         // 接入片段含 registry 与 _authToken 占位，但不含真实 Token 明文
-        assert!(snippets[1].content.contains("registry=http://localhost:8080/npm-hosted/"));
+        assert!(snippets[1]
+            .content
+            .contains("registry=http://localhost:8080/npm-hosted/"));
         assert!(snippets[1].content.contains("_authToken="));
     }
 

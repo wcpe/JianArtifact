@@ -40,9 +40,14 @@ impl Fixture {
         let upstream = HttpUpstream::new(std::time::Duration::from_secs(60)).unwrap();
         let artifacts = Arc::new(ArtifactService::new(store.clone(), meta.clone(), upstream));
         let docker = Arc::new(
-            DockerRegistry::new(store.clone(), meta.clone(), dir.path().join("uploads"), None)
-                .await
-                .unwrap(),
+            DockerRegistry::new(
+                store.clone(),
+                meta.clone(),
+                dir.path().join("uploads"),
+                None,
+            )
+            .await
+            .unwrap(),
         );
         let state = AppState {
             config: Arc::new(Config::default()),
@@ -339,11 +344,7 @@ async fn 刷新换发新令牌_无凭据_401() {
     assert_eq!(status, StatusCode::OK);
     assert!(body["access_token"].as_str().unwrap().len() > 20);
 
-    let (status, _) = send(
-        fx.router(),
-        empty_req("POST", "/api/v1/auth/refresh", None),
-    )
-    .await;
+    let (status, _) = send(fx.router(), empty_req("POST", "/api/v1/auth/refresh", None)).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
@@ -569,11 +570,7 @@ async fn 管理员可增查改删用户() {
     let uid = created["id"].as_str().unwrap().to_string();
 
     // 列表含两人
-    let (status, list) = send(
-        fx.router(),
-        empty_req("GET", "/api/v1/users", Some(&auth)),
-    )
-    .await;
+    let (status, list) = send(fx.router(), empty_req("GET", "/api/v1/users", Some(&auth))).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(list.as_array().unwrap().len(), 2);
 

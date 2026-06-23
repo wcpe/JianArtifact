@@ -270,7 +270,10 @@ pub fn build_router(state: AppState) -> Router {
                 .patch(users::update_user)
                 .delete(users::delete_user),
         )
-        .route("/tokens", get(tokens::list_tokens).post(tokens::create_token))
+        .route(
+            "/tokens",
+            get(tokens::list_tokens).post(tokens::create_token),
+        )
         .route("/tokens/{id}", axum::routing::delete(tokens::revoke_token))
         .route(
             "/repositories",
@@ -326,10 +329,7 @@ pub fn build_router(state: AppState) -> Router {
 
     // Web 控制台 SPA：静态资源走 /assets/{*path}，其余未匹配 GET 经 fallback 回退 index.html。
     // 必须在 API / 格式 / 健康检查路由之后接入，避免拦截 /api/v1、/v2/、/health 与格式路径。
-    let spa = Router::new().route(
-        "/assets/{*path}",
-        get(crate::web::serve_asset),
-    );
+    let spa = Router::new().route("/assets/{*path}", get(crate::web::serve_asset));
 
     Router::new()
         .route("/health", get(health))
@@ -341,7 +341,10 @@ pub fn build_router(state: AppState) -> Router {
         .fallback(crate::web::spa_fallback)
         .with_state(state.clone())
         // 身份解析中间件：先于业务 handler 解析 Bearer/Basic/匿名 注入扩展
-        .layer(middleware::from_fn_with_state(state, identity::identity_layer))
+        .layer(middleware::from_fn_with_state(
+            state,
+            identity::identity_layer,
+        ))
         // 中间件顺序：设置请求 ID → 追踪 → 透传请求 ID 到响应
         .layer(PropagateRequestIdLayer::x_request_id())
         .layer(TraceLayer::new_for_http())
@@ -378,9 +381,14 @@ mod tests {
         let upstream = HttpUpstream::new(std::time::Duration::from_secs(60)).unwrap();
         let artifacts = Arc::new(ArtifactService::new(store.clone(), meta.clone(), upstream));
         let docker = Arc::new(
-            DockerRegistry::new(store.clone(), meta.clone(), dir.path().join("uploads"), None)
-                .await
-                .unwrap(),
+            DockerRegistry::new(
+                store.clone(),
+                meta.clone(),
+                dir.path().join("uploads"),
+                None,
+            )
+            .await
+            .unwrap(),
         );
         let state = AppState {
             config: Arc::new(Config::default()),
@@ -433,7 +441,12 @@ mod tests {
         let (state, _dir) = 测试用状态().await;
         let app = build_router(state);
         let response = app
-            .oneshot(Request::builder().uri("/login").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/login")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         // 未构建前端时为 503 占位，已构建时为 200 index.html；均非 404
@@ -450,7 +463,12 @@ mod tests {
         let (state, _dir) = 测试用状态().await;
         let app = build_router(state);
         let response = app
-            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
@@ -464,7 +482,12 @@ mod tests {
         let (state, _dir) = 测试用状态().await;
         let app = build_router(state);
         let response = app
-            .oneshot(Request::builder().uri("/api/v1/me").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/me")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);

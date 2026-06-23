@@ -247,7 +247,8 @@ mod tests {
 
         for vis in [Visibility::Public, Visibility::Private] {
             for acl in acl_sets {
-                let has_read_acl = acl.contains(&Permission::Read) || acl.contains(&Permission::Write);
+                let has_read_acl =
+                    acl.contains(&Permission::Read) || acl.contains(&Permission::Write);
                 let has_write_acl = acl.contains(&Permission::Write);
 
                 // ---- 匿名：匿名永远不带 ACL，故视图按空 ACL 构造 ----

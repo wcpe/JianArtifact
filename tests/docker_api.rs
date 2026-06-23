@@ -45,9 +45,14 @@ impl Fixture {
         let upstream = HttpUpstream::new(std::time::Duration::from_secs(60)).unwrap();
         let artifacts = Arc::new(ArtifactService::new(store.clone(), meta.clone(), upstream));
         let docker = Arc::new(
-            DockerRegistry::new(store.clone(), meta.clone(), dir.path().join("uploads"), None)
-                .await
-                .unwrap(),
+            DockerRegistry::new(
+                store.clone(),
+                meta.clone(),
+                dir.path().join("uploads"),
+                None,
+            )
+            .await
+            .unwrap(),
         );
         let mut config = Config::default();
         // 固定对外地址，便于断言 Location 头
@@ -71,7 +76,11 @@ impl Fixture {
 
     async fn seed_user(&self, username: &str, password: &str, role: Role) -> String {
         let hash = auth::hash_password(password).unwrap();
-        self.state.meta.create_user(username, &hash, role).await.unwrap()
+        self.state
+            .meta
+            .create_user(username, &hash, role)
+            .await
+            .unwrap()
     }
 
     /// 建一个 docker hosted 仓库，返回 id。
@@ -91,13 +100,20 @@ impl Fixture {
     }
 
     async fn seed_acl(&self, repo_id: &str, user_id: &str, permission: Permission) {
-        self.state.meta.create_acl(repo_id, user_id, permission).await.unwrap();
+        self.state
+            .meta
+            .create_acl(repo_id, user_id, permission)
+            .await
+            .unwrap();
     }
 }
 
 /// 以 Basic 凭据组装 Authorization 头（docker 客户端登录后即用此通道）。
 fn basic(username: &str, password: &str) -> String {
-    format!("Basic {}", STANDARD.encode(format!("{username}:{password}")))
+    format!(
+        "Basic {}",
+        STANDARD.encode(format!("{username}:{password}"))
+    )
 }
 
 /// 以 Bearer 令牌组装 Authorization 头。
@@ -152,7 +168,12 @@ fn header_str(resp: &axum::response::Response, name: &str) -> Option<String> {
 
 /// 收集响应体字节。
 async fn body_bytes(resp: axum::response::Response) -> Vec<u8> {
-    resp.into_body().collect().await.unwrap().to_bytes().to_vec()
+    resp.into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes()
+        .to_vec()
 }
 
 /// 端到端把一段 blob 经 POST→PATCH→PUT 状态机推上去，返回最终 digest。
@@ -224,7 +245,13 @@ async fn v2_版本检查_无凭据_401_bearer_带凭据_200() {
     // 带凭据：返回 200 与版本头（探活成功）
     let authed = fx
         .router()
-        .oneshot(req("GET", "/v2/", Some(&basic("admin", "pw")), None, Vec::new()))
+        .oneshot(req(
+            "GET",
+            "/v2/",
+            Some(&basic("admin", "pw")),
+            None,
+            Vec::new(),
+        ))
         .await
         .unwrap();
     assert_eq!(authed.status(), StatusCode::OK);
@@ -411,11 +438,20 @@ async fn manifest_按_tag_写入再按_tag_与_digest_读回() {
     // GET 按 tag 读回：正确 Content-Type 与 digest 头、字节一致
     let by_tag = fx
         .router()
-        .oneshot(req("GET", "/v2/hub/app/manifests/1.0", None, None, Vec::new()))
+        .oneshot(req(
+            "GET",
+            "/v2/hub/app/manifests/1.0",
+            None,
+            None,
+            Vec::new(),
+        ))
         .await
         .unwrap();
     assert_eq!(by_tag.status(), StatusCode::OK);
-    assert_eq!(header_str(&by_tag, "content-type").as_deref(), Some(MANIFEST_V2));
+    assert_eq!(
+        header_str(&by_tag, "content-type").as_deref(),
+        Some(MANIFEST_V2)
+    );
     assert_eq!(
         header_str(&by_tag, "docker-content-digest").as_deref(),
         Some(expected.as_str())
@@ -515,7 +551,13 @@ async fn manifest_同_tag_可覆盖指向新内容() {
     // latest 现指向 m2
     let now = fx
         .router()
-        .oneshot(req("GET", "/v2/hub/app/manifests/latest", None, None, Vec::new()))
+        .oneshot(req(
+            "GET",
+            "/v2/hub/app/manifests/latest",
+            None,
+            None,
+            Vec::new(),
+        ))
         .await
         .unwrap();
     assert_eq!(now.status(), StatusCode::OK);
@@ -543,7 +585,13 @@ async fn 读不存在的_manifest_返回_404_manifest_unknown() {
     fx.seed_docker_repo("hub", Visibility::Public).await;
     let resp = fx
         .router()
-        .oneshot(req("GET", "/v2/hub/app/manifests/no-such-tag", None, None, Vec::new()))
+        .oneshot(req(
+            "GET",
+            "/v2/hub/app/manifests/no-such-tag",
+            None,
+            None,
+            Vec::new(),
+        ))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
@@ -573,7 +621,10 @@ async fn 匿名写_manifest_返回_401_带_www_authenticate() {
     // Bearer 令牌质询：含 realm（指向令牌端点）、service 与 scope（写需 pull,push）
     assert!(www.starts_with("Bearer "), "应为 Bearer 质询: {www}");
     assert!(www.contains("/v2/token"), "realm 应指向令牌端点: {www}");
-    assert!(www.contains("service=\"jianartifact\""), "应含 service: {www}");
+    assert!(
+        www.contains("service=\"jianartifact\""),
+        "应含 service: {www}"
+    );
     assert!(
         www.contains("scope=\"repository:hub/app:pull,push\""),
         "写操作 scope 应含 pull,push: {www}"
@@ -621,7 +672,13 @@ async fn 私有仓库匿名读_manifest_返回_401_隐藏存在性() {
     // 匿名读：私有仓库 → 401 引导认证（不暴露 404/200 区分存在性）
     let resp = fx
         .router()
-        .oneshot(req("GET", "/v2/priv/app/manifests/1.0", None, None, Vec::new()))
+        .oneshot(req(
+            "GET",
+            "/v2/priv/app/manifests/1.0",
+            None,
+            None,
+            Vec::new(),
+        ))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
@@ -766,7 +823,13 @@ async fn 完整推拉时序_blob_与引用其的_manifest() {
     // 3) 模拟 pull：拉 manifest，再据其引用拉 blob，校验存在
     let m = fx
         .router()
-        .oneshot(req("GET", "/v2/hub/test/manifests/1", None, None, Vec::new()))
+        .oneshot(req(
+            "GET",
+            "/v2/hub/test/manifests/1",
+            None,
+            None,
+            Vec::new(),
+        ))
         .await
         .unwrap();
     assert_eq!(m.status(), StatusCode::OK);
@@ -782,7 +845,11 @@ async fn 完整推拉时序_blob_与引用其的_manifest() {
             ))
             .await
             .unwrap();
-        assert_eq!(head.status(), StatusCode::OK, "manifest 引用的 blob 应可拉取: {d}");
+        assert_eq!(
+            head.status(),
+            StatusCode::OK,
+            "manifest 引用的 blob 应可拉取: {d}"
+        );
     }
 }
 
@@ -795,7 +862,12 @@ async fn 令牌端点_admin_请求_pull_push_可推送() {
     fx.seed_docker_repo("hub", Visibility::Public).await;
 
     // admin 带 Basic 请求 repository:hub/app:pull,push → 200，令牌可推送
-    let json = fetch_token(&fx, Some(&basic("admin", "pw")), "repository:hub/app:pull,push").await;
+    let json = fetch_token(
+        &fx,
+        Some(&basic("admin", "pw")),
+        "repository:hub/app:pull,push",
+    )
+    .await;
     let token = json["token"].as_str().expect("应含 token");
     assert_eq!(json["access_token"], token, "access_token 应与 token 一致");
     assert!(json["expires_in"].as_u64().unwrap() > 0);
@@ -837,7 +909,12 @@ async fn 令牌端点_无写权限用户的令牌不能推送() {
     fx.seed_acl(&rid, &reader, Permission::Read).await;
 
     // 仅读 ACL 用户请求 pull,push：令牌只应授予 pull（push 被拒，不入令牌）
-    let json = fetch_token(&fx, Some(&basic("reader", "pw")), "repository:priv/app:pull,push").await;
+    let json = fetch_token(
+        &fx,
+        Some(&basic("reader", "pw")),
+        "repository:priv/app:pull,push",
+    )
+    .await;
     let token = json["token"].as_str().unwrap();
     let signer = JwtSigner::from_secret(b"docker-secret-32-bytes-xxxxxxxxxx", 3600);
     let claims = signer.verify_docker_token(token).unwrap();
@@ -857,7 +934,11 @@ async fn 令牌端点_无写权限用户的令牌不能推送() {
         ))
         .await
         .unwrap();
-    assert_eq!(put.status(), StatusCode::FORBIDDEN, "无 push 授予的令牌不得推送");
+    assert_eq!(
+        put.status(),
+        StatusCode::FORBIDDEN,
+        "无 push 授予的令牌不得推送"
+    );
 
     // 但该令牌含 pull：可读（管理员先写一个）
     let admin_auth = basic("admin", "pw");
@@ -949,7 +1030,12 @@ async fn 令牌_scope_不含目标仓库则推送被拒() {
     fx.seed_docker_repo("hub", Visibility::Public).await;
 
     // 令牌只授予 hub/other，却用于推 hub/app
-    let json = fetch_token(&fx, Some(&basic("admin", "pw")), "repository:hub/other:pull,push").await;
+    let json = fetch_token(
+        &fx,
+        Some(&basic("admin", "pw")),
+        "repository:hub/other:pull,push",
+    )
+    .await;
     let token = json["token"].as_str().unwrap();
     let put = fx
         .router()
@@ -1012,7 +1098,13 @@ async fn 匿名_public_读回归_仍_200() {
     // 无任何凭据、无令牌：public 仓库读仍 200（tokenless 拉取不被破坏）
     let get = fx
         .router()
-        .oneshot(req("GET", "/v2/hub/app/manifests/1.0", None, None, Vec::new()))
+        .oneshot(req(
+            "GET",
+            "/v2/hub/app/manifests/1.0",
+            None,
+            None,
+            Vec::new(),
+        ))
         .await
         .unwrap();
     assert_eq!(get.status(), StatusCode::OK, "匿名 public 读应保持 200");

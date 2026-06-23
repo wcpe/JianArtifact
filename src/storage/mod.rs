@@ -196,15 +196,13 @@ mod tests {
     use tokio::io::AsyncReadExt;
 
     /// 空内容的四种摘要标准向量。
-    const EMPTY_SHA256: &str =
-        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+    const EMPTY_SHA256: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
     const EMPTY_SHA1: &str = "da39a3ee5e6b4b0d3255bfef95601890afd80709";
     const EMPTY_MD5: &str = "d41d8cd98f00b204e9800998ecf8427e";
     const EMPTY_SHA512: &str = "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e";
 
     /// "abc" 的四种摘要标准向量。
-    const ABC_SHA256: &str =
-        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+    const ABC_SHA256: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
     const ABC_SHA1: &str = "a9993e364706816aba3e25717850c26c9cd0d89d";
     const ABC_MD5: &str = "900150983cd24fb0d6963f7d28e17f72";
     const ABC_SHA512: &str = "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f";

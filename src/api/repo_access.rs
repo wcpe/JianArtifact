@@ -18,7 +18,12 @@ pub(crate) async fn build_repo_view(
     let visibility = Visibility::from_db_str(&repo.visibility);
     let perms = match identity.0.user() {
         // 已认证：查该用户在该仓库上的全部 ACL 授权
-        Some(u) => state.meta.list_user_permissions(&repo.id, &u.user_id).await?,
+        Some(u) => {
+            state
+                .meta
+                .list_user_permissions(&repo.id, &u.user_id)
+                .await?
+        }
         // 匿名：无任何 ACL
         None => Vec::new(),
     };

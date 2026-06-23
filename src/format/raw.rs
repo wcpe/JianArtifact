@@ -97,14 +97,8 @@ mod tests {
 
     #[test]
     fn 解析路径归一化且拒穿越() {
-        assert_eq!(
-            RawFormat.parse_path("/a//b.txt").unwrap().path,
-            "a/b.txt"
-        );
-        assert_eq!(
-            RawFormat.parse_path("a/../b"),
-            Err(PathError::Traversal)
-        );
+        assert_eq!(RawFormat.parse_path("/a//b.txt").unwrap().path, "a/b.txt");
+        assert_eq!(RawFormat.parse_path("a/../b"), Err(PathError::Traversal));
     }
 
     #[test]
@@ -114,7 +108,11 @@ mod tests {
 
     #[test]
     fn 内容类型按扩展名推断() {
-        let c = |p: &str| RawFormat.content_type(&ArtifactCoordinates { path: p.to_string() });
+        let c = |p: &str| {
+            RawFormat.content_type(&ArtifactCoordinates {
+                path: p.to_string(),
+            })
+        };
         assert_eq!(c("a.json").as_deref(), Some("application/json"));
         assert_eq!(c("a/b.txt").as_deref(), Some("text/plain; charset=utf-8"));
         // 未知扩展名返回 None
@@ -130,7 +128,9 @@ mod tests {
         // base_url 尾部带斜杠也不应产生双斜杠
         let snippets = RawFormat.usage_snippets("http://localhost:8080/", "files", &coords);
         assert_eq!(snippets.len(), 2);
-        assert!(snippets[0].content.contains("http://localhost:8080/files/dir/file.bin"));
+        assert!(snippets[0]
+            .content
+            .contains("http://localhost:8080/files/dir/file.bin"));
         assert!(!snippets[0].content.contains("8080//files"));
     }
 }

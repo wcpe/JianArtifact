@@ -213,12 +213,18 @@ mod tests {
     #[test]
     fn 存储键拼接与_tag_反解() {
         let digest = format!("sha256:{}", "a".repeat(64));
-        assert_eq!(blob_key("library/alpine", &digest), format!("library/alpine/blobs/{digest}"));
+        assert_eq!(
+            blob_key("library/alpine", &digest),
+            format!("library/alpine/blobs/{digest}")
+        );
         assert_eq!(
             manifest_digest_key("app", &digest),
             format!("app/manifests/{digest}")
         );
-        assert_eq!(tag_key("library/alpine", "3.20"), "library/alpine/tags/3.20");
+        assert_eq!(
+            tag_key("library/alpine", "3.20"),
+            "library/alpine/tags/3.20"
+        );
 
         // 反解多段 image 的 tag 键
         let (image, tag) = parse_tag_key("library/alpine/tags/3.20").unwrap();
@@ -245,10 +251,7 @@ mod tests {
 
     #[test]
     fn 解析路径拒穿越() {
-        assert_eq!(
-            DockerFormat.parse_path("a/../b"),
-            Err(PathError::Traversal)
-        );
+        assert_eq!(DockerFormat.parse_path("a/../b"), Err(PathError::Traversal));
         assert_eq!(DockerFormat.parse_path("").unwrap_err(), PathError::Empty);
     }
 }

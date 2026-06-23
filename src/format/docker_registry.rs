@@ -133,11 +133,16 @@ impl<S: BlobStore> DockerRegistry<S> {
         let upload_id = Uuid::new_v4().to_string();
         let tmp_path = self.session_dir.join(&upload_id);
         // 建空临时文件占位（后续 PATCH 追加 / PUT 单体写入）
-        tokio::fs::File::create(&tmp_path).await.map_err(StorageError::Io)?;
-        self.sessions
-            .lock()
-            .expect("上传会话表锁未中毒")
-            .insert(upload_id.clone(), UploadSession { tmp_path, written: 0 });
+        tokio::fs::File::create(&tmp_path)
+            .await
+            .map_err(StorageError::Io)?;
+        self.sessions.lock().expect("上传会话表锁未中毒").insert(
+            upload_id.clone(),
+            UploadSession {
+                tmp_path,
+                written: 0,
+            },
+        );
         Ok(StartedUpload { upload_id })
     }
 
@@ -194,7 +199,9 @@ impl<S: BlobStore> DockerRegistry<S> {
         };
 
         // ① 流式落定为内容寻址 blob（BlobStore 边写边算 sha256）
-        let file = tokio::fs::File::open(&tmp_path).await.map_err(StorageError::Io)?;
+        let file = tokio::fs::File::open(&tmp_path)
+            .await
+            .map_err(StorageError::Io)?;
         let digests = self.store.put(file).await;
         // 无论成败都清理会话临时文件
         let _ = tokio::fs::remove_file(&tmp_path).await;
@@ -373,7 +380,9 @@ impl<S: BlobStore> DockerRegistry<S> {
         use tokio::io::AsyncReadExt;
         let mut file = self.store.get(&record.sha256).await?;
         let mut bytes = Vec::with_capacity(record.size as usize);
-        file.read_to_end(&mut bytes).await.map_err(StorageError::Io)?;
+        file.read_to_end(&mut bytes)
+            .await
+            .map_err(StorageError::Io)?;
 
         let media_type = record
             .content_type
@@ -532,9 +541,15 @@ mod tests {
         // POST 启动
         let started = reg.start_upload().await.unwrap();
         // PATCH 分两段追加
-        let a = reg.append_upload(&started.upload_id, &content[..9]).await.unwrap();
+        let a = reg
+            .append_upload(&started.upload_id, &content[..9])
+            .await
+            .unwrap();
         assert_eq!(a.written, 9);
-        let b = reg.append_upload(&started.upload_id, &content[9..]).await.unwrap();
+        let b = reg
+            .append_upload(&started.upload_id, &content[9..])
+            .await
+            .unwrap();
         assert_eq!(b.written, content.len() as u64);
         // PUT 完成（校验 digest）
         let final_digest = reg
@@ -544,7 +559,10 @@ mod tests {
         assert_eq!(final_digest, digest);
 
         // HEAD / GET 可读回，内容一致
-        assert_eq!(reg.stat_blob(&repo, "app", &digest).await.unwrap(), Some(content.len() as i64));
+        assert_eq!(
+            reg.stat_blob(&repo, "app", &digest).await.unwrap(),
+            Some(content.len() as i64)
+        );
         let mut h = reg.get_blob(&repo, "app", &digest).await.unwrap();
         let mut buf = Vec::new();
         h.blob.read_to_end(&mut buf).await.unwrap();
@@ -561,10 +579,18 @@ mod tests {
 
         let started = reg.start_upload().await.unwrap();
         // 单体：直接 append 全量再 finish（对应 POST 后 PUT 带 body）
-        reg.append_upload(&started.upload_id, &content[..]).await.unwrap();
-        let d = reg.finish_upload(&repo, "app", &started.upload_id, &digest).await.unwrap();
+        reg.append_upload(&started.upload_id, &content[..])
+            .await
+            .unwrap();
+        let d = reg
+            .finish_upload(&repo, "app", &started.upload_id, &digest)
+            .await
+            .unwrap();
         assert_eq!(d, digest);
-        assert_eq!(reg.stat_blob(&repo, "app", &digest).await.unwrap(), Some(content.len() as i64));
+        assert_eq!(
+            reg.stat_blob(&repo, "app", &digest).await.unwrap(),
+            Some(content.len() as i64)
+        );
     }
 
     #[tokio::test]
@@ -576,7 +602,9 @@ mod tests {
         let wrong = docker::make_digest(&"0".repeat(64));
 
         let started = reg.start_upload().await.unwrap();
-        reg.append_upload(&started.upload_id, &content[..]).await.unwrap();
+        reg.append_upload(&started.upload_id, &content[..])
+            .await
+            .unwrap();
         let err = reg
             .finish_upload(&repo, "app", &started.upload_id, &wrong)
             .await
@@ -592,7 +620,9 @@ mod tests {
         let (reg, meta, _d) = 新建(None).await;
         let repo = 建_docker_仓库(&meta).await;
         let started = reg.start_upload().await.unwrap();
-        reg.append_upload(&started.upload_id, &b"x"[..]).await.unwrap();
+        reg.append_upload(&started.upload_id, &b"x"[..])
+            .await
+            .unwrap();
         let err = reg
             .finish_upload(&repo, "app", &started.upload_id, "not-a-digest")
             .await
@@ -607,7 +637,10 @@ mod tests {
         let err = reg.append_upload("不存在", &b"x"[..]).await.unwrap_err();
         assert!(matches!(err, DockerError::UnknownUpload));
         let d = docker::make_digest(&"a".repeat(64));
-        let err = reg.finish_upload(&repo, "app", "不存在", &d).await.unwrap_err();
+        let err = reg
+            .finish_upload(&repo, "app", "不存在", &d)
+            .await
+            .unwrap_err();
         assert!(matches!(err, DockerError::UnknownUpload));
     }
 
@@ -619,7 +652,13 @@ mod tests {
         let expected_digest = docker::make_digest(&sha256_hex(manifest));
 
         let digest = reg
-            .put_manifest(&repo, "app", "1.0", MEDIA_TYPE_MANIFEST_V2, manifest.to_vec())
+            .put_manifest(
+                &repo,
+                "app",
+                "1.0",
+                MEDIA_TYPE_MANIFEST_V2,
+                manifest.to_vec(),
+            )
             .await
             .unwrap();
         assert_eq!(digest, expected_digest);
@@ -630,7 +669,10 @@ mod tests {
         assert_eq!(by_tag.digest, expected_digest);
         assert_eq!(by_tag.media_type, MEDIA_TYPE_MANIFEST_V2);
         // 按 digest 读回
-        let by_digest = reg.get_manifest(&repo, "app", &expected_digest).await.unwrap();
+        let by_digest = reg
+            .get_manifest(&repo, "app", &expected_digest)
+            .await
+            .unwrap();
         assert_eq!(by_digest.bytes, manifest);
         assert_eq!(by_digest.digest, expected_digest);
     }
@@ -642,8 +684,14 @@ mod tests {
         let m1 = br#"{"schemaVersion":2,"v":1}"#;
         let m2 = br#"{"schemaVersion":2,"v":2,"more":"data"}"#;
 
-        let d1 = reg.put_manifest(&repo, "app", "latest", MEDIA_TYPE_MANIFEST_V2, m1.to_vec()).await.unwrap();
-        let d2 = reg.put_manifest(&repo, "app", "latest", MEDIA_TYPE_MANIFEST_V2, m2.to_vec()).await.unwrap();
+        let d1 = reg
+            .put_manifest(&repo, "app", "latest", MEDIA_TYPE_MANIFEST_V2, m1.to_vec())
+            .await
+            .unwrap();
+        let d2 = reg
+            .put_manifest(&repo, "app", "latest", MEDIA_TYPE_MANIFEST_V2, m2.to_vec())
+            .await
+            .unwrap();
         assert_ne!(d1, d2, "不同内容应有不同 digest");
 
         // 同 tag 覆盖：latest 现在指向 m2
@@ -677,7 +725,9 @@ mod tests {
         ));
         assert_eq!(reg.stat_blob(&repo, "app", &d).await.unwrap(), None);
         assert!(matches!(
-            reg.get_manifest(&repo, "app", "no-such-tag").await.unwrap_err(),
+            reg.get_manifest(&repo, "app", "no-such-tag")
+                .await
+                .unwrap_err(),
             DockerError::NotFound
         ));
     }
@@ -705,7 +755,13 @@ mod tests {
         // 用一个不匹配内容的 digest 作为 reference
         let wrong = docker::make_digest(&"c".repeat(64));
         let err = reg
-            .put_manifest(&repo, "app", &wrong, MEDIA_TYPE_MANIFEST_V2, manifest.to_vec())
+            .put_manifest(
+                &repo,
+                "app",
+                &wrong,
+                MEDIA_TYPE_MANIFEST_V2,
+                manifest.to_vec(),
+            )
             .await
             .unwrap_err();
         assert!(matches!(err, DockerError::DigestMismatch));

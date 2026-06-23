@@ -60,7 +60,11 @@ impl Fixture {
 
     async fn seed_user(&self, username: &str, password: &str, role: Role) -> String {
         let hash = auth::hash_password(password).unwrap();
-        self.state.meta.create_user(username, &hash, role).await.unwrap()
+        self.state
+            .meta
+            .create_user(username, &hash, role)
+            .await
+            .unwrap()
     }
 
     /// 建一个 npm hosted 仓库，返回 id。
@@ -101,7 +105,11 @@ impl Fixture {
     }
 
     async fn seed_acl(&self, repo_id: &str, user_id: &str, permission: Permission) {
-        self.state.meta.create_acl(repo_id, user_id, permission).await.unwrap();
+        self.state
+            .meta
+            .create_acl(repo_id, user_id, permission)
+            .await
+            .unwrap();
     }
 
     async fn login_token(&self, username: &str, password: &str) -> String {
@@ -133,7 +141,13 @@ async fn send(router: Router, req: Request<Body>) -> (StatusCode, Value) {
 async fn send_bytes(router: Router, req: Request<Body>) -> (StatusCode, Vec<u8>) {
     let resp = router.oneshot(req).await.unwrap();
     let status = resp.status();
-    let bytes = resp.into_body().collect().await.unwrap().to_bytes().to_vec();
+    let bytes = resp
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes()
+        .to_vec();
     (status, bytes)
 }
 
@@ -228,8 +242,7 @@ async fn npm_发布后取_packument_与_tarball_端到端() {
     assert_eq!(status, StatusCode::CREATED, "发布应 201");
 
     // GET packument（公开仓库匿名可读）
-    let (status, packument) =
-        send(fx.router(), empty_req("GET", "/npm-hosted/lodash", None)).await;
+    let (status, packument) = send(fx.router(), empty_req("GET", "/npm-hosted/lodash", None)).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(packument["name"], "lodash");
     assert_eq!(packument["dist-tags"]["latest"], "4.17.21");
@@ -448,7 +461,10 @@ async fn 启动_mock_registry(
                 let doc = pack_doc.clone();
                 async move {
                     pc.fetch_add(1, Ordering::SeqCst);
-                    ([(axum::http::header::CONTENT_TYPE, "application/json")], doc)
+                    (
+                        [(axum::http::header::CONTENT_TYPE, "application/json")],
+                        doc,
+                    )
                 }
             }),
         )
@@ -493,7 +509,11 @@ async fn npm_proxy_回源_packument_重写_tarball_并缓存() {
     // integrity / shasum 保持上游原值（不改写，校验照常）
     assert_eq!(dist["shasum"], sha1_hex(tarball));
     assert_eq!(dist["integrity"], integrity(tarball));
-    assert_eq!(pack_calls.load(Ordering::SeqCst), 1, "应回源拉一次 packument");
+    assert_eq!(
+        pack_calls.load(Ordering::SeqCst),
+        1,
+        "应回源拉一次 packument"
+    );
 
     // ② cache-miss 取 tarball：从重写后的本仓库路径下载，回源一次
     let (status, bytes) = send_bytes(
@@ -503,7 +523,11 @@ async fn npm_proxy_回源_packument_重写_tarball_并缓存() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(bytes, tarball);
-    assert_eq!(tar_calls.load(Ordering::SeqCst), 1, "首次 tarball 应回源一次");
+    assert_eq!(
+        tar_calls.load(Ordering::SeqCst),
+        1,
+        "首次 tarball 应回源一次"
+    );
 
     // ③ cache-hit 再取 tarball：命中本地缓存，不再回源
     let (status, bytes) = send_bytes(
@@ -513,5 +537,9 @@ async fn npm_proxy_回源_packument_重写_tarball_并缓存() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(bytes, tarball);
-    assert_eq!(tar_calls.load(Ordering::SeqCst), 1, "命中缓存不应再回源 tarball");
+    assert_eq!(
+        tar_calls.load(Ordering::SeqCst),
+        1,
+        "命中缓存不应再回源 tarball"
+    );
 }

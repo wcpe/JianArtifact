@@ -38,9 +38,14 @@ impl Fixture {
         let upstream = HttpUpstream::new(std::time::Duration::from_secs(60)).unwrap();
         let artifacts = Arc::new(ArtifactService::new(store.clone(), meta.clone(), upstream));
         let docker = Arc::new(
-            DockerRegistry::new(store.clone(), meta.clone(), dir.path().join("uploads"), None)
-                .await
-                .unwrap(),
+            DockerRegistry::new(
+                store.clone(),
+                meta.clone(),
+                dir.path().join("uploads"),
+                None,
+            )
+            .await
+            .unwrap(),
         );
         let state = AppState {
             config: Arc::new(Config::default()),
@@ -199,7 +204,11 @@ async fn 管理员可创建查改删仓库() {
     // 删除
     let (status, _) = send(
         fx.router(),
-        empty_req("DELETE", &format!("/api/v1/repositories/{rid}"), Some(&auth)),
+        empty_req(
+            "DELETE",
+            &format!("/api/v1/repositories/{rid}"),
+            Some(&auth),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -304,7 +313,11 @@ async fn 非管理员_crud_仓库_403_匿名_401() {
 
     let (status, _) = send(
         fx.router(),
-        empty_req("DELETE", &format!("/api/v1/repositories/{rid}"), Some(&user)),
+        empty_req(
+            "DELETE",
+            &format!("/api/v1/repositories/{rid}"),
+            Some(&user),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
@@ -514,7 +527,11 @@ async fn 管理员可列增删_acl() {
     // 列表含一条
     let (status, list) = send(
         fx.router(),
-        empty_req("GET", &format!("/api/v1/repositories/{rid}/acl"), Some(&auth)),
+        empty_req(
+            "GET",
+            &format!("/api/v1/repositories/{rid}/acl"),
+            Some(&auth),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -533,7 +550,11 @@ async fn 管理员可列增删_acl() {
     assert_eq!(status, StatusCode::OK);
     let (_, list) = send(
         fx.router(),
-        empty_req("GET", &format!("/api/v1/repositories/{rid}/acl"), Some(&auth)),
+        empty_req(
+            "GET",
+            &format!("/api/v1/repositories/{rid}/acl"),
+            Some(&auth),
+        ),
     )
     .await;
     assert_eq!(list.as_array().unwrap().len(), 0);
@@ -577,7 +598,11 @@ async fn 非管理员访问_acl_端点_403_匿名_401() {
 
     let (status, _) = send(
         fx.router(),
-        empty_req("GET", &format!("/api/v1/repositories/{rid}/acl"), Some(&user)),
+        empty_req(
+            "GET",
+            &format!("/api/v1/repositories/{rid}/acl"),
+            Some(&user),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
@@ -650,7 +675,11 @@ async fn 三身份通道对私有仓库读判定一致() {
     let plaintext = jianartifact::auth::generate_api_token();
     fx.state
         .meta
-        .create_token(&reader, "ci", &jianartifact::auth::hash_api_token(&plaintext))
+        .create_token(
+            &reader,
+            "ci",
+            &jianartifact::auth::hash_api_token(&plaintext),
+        )
         .await
         .unwrap();
     let (status, _) = send(
@@ -670,7 +699,11 @@ async fn 三身份通道对私有仓库读判定一致() {
     let out_plain = jianartifact::auth::generate_api_token();
     fx.state
         .meta
-        .create_token(&outsider, "ci", &jianartifact::auth::hash_api_token(&out_plain))
+        .create_token(
+            &outsider,
+            "ci",
+            &jianartifact::auth::hash_api_token(&out_plain),
+        )
         .await
         .unwrap();
     let out_jwt = login_token(&fx, "outsider", "pw").await;

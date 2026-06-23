@@ -31,9 +31,14 @@ async fn 测试用状态() -> (AppState, tempfile::TempDir) {
     let upstream = HttpUpstream::new(std::time::Duration::from_secs(60)).unwrap();
     let artifacts = Arc::new(ArtifactService::new(store.clone(), meta.clone(), upstream));
     let docker = Arc::new(
-        DockerRegistry::new(store.clone(), meta.clone(), dir.path().join("uploads"), None)
-            .await
-            .unwrap(),
+        DockerRegistry::new(
+            store.clone(),
+            meta.clone(),
+            dir.path().join("uploads"),
+            None,
+        )
+        .await
+        .unwrap(),
     );
     let state = AppState {
         config: Arc::new(Config::default()),
@@ -109,7 +114,12 @@ async fn health_不被_spa_拦截() {
     let (state, _dir) = 测试用状态().await;
     let app = build_router(state);
     let resp = app
-        .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);

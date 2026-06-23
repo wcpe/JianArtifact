@@ -3,7 +3,9 @@
 //!
 //! 鉴权（对仓库读写的判定）属后续批次的 `authz` 模块，本模块只解析“是谁”。
 
-use argon2::password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
+use argon2::password_hash::{
+    rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString,
+};
 use argon2::Argon2;
 
 use crate::meta::{MetaError, MetaStore, Role};
@@ -141,8 +143,12 @@ pub async fn bootstrap_admin(meta: &MetaStore) -> Result<BootstrapOutcome, AuthE
     }
 
     // 路径一：环境变量同时提供用户名与口令
-    let env_username = std::env::var(ENV_ADMIN_USERNAME).ok().filter(|s| !s.is_empty());
-    let env_password = std::env::var(ENV_ADMIN_PASSWORD).ok().filter(|s| !s.is_empty());
+    let env_username = std::env::var(ENV_ADMIN_USERNAME)
+        .ok()
+        .filter(|s| !s.is_empty());
+    let env_password = std::env::var(ENV_ADMIN_PASSWORD)
+        .ok()
+        .filter(|s| !s.is_empty());
 
     if let (Some(username), Some(password)) = (env_username, env_password) {
         let hash = hash_password(&password)?;

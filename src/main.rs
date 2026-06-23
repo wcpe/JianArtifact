@@ -136,14 +136,16 @@ async fn main() -> anyhow::Result<()> {
 
 /// 初始化分级日志：默认 info，可经 RUST_LOG 调整。
 fn init_tracing() {
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info"));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::fmt().with_env_filter(filter).init();
 }
 
 /// 执行首启引导并按结果打印日志（随机口令仅首启打印一次）。
 async fn bootstrap_and_log(meta: &MetaStore) -> anyhow::Result<()> {
-    match auth::bootstrap_admin(meta).await.context("首启管理员引导失败")? {
+    match auth::bootstrap_admin(meta)
+        .await
+        .context("首启管理员引导失败")?
+    {
         BootstrapOutcome::AlreadyInitialized => {
             info!("已存在用户，跳过首启管理员引导");
         }

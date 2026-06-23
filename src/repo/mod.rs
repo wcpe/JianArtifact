@@ -55,7 +55,10 @@ pub struct UpdateRepoInput {
 /// 创建仓库：校验业务规则后落库，返回新建记录。
 ///
 /// 规则：格式须为第一期四种；proxy 必须提供 upstream_url；上游凭据仅存引用。
-pub async fn create(meta: &MetaStore, input: CreateRepoInput) -> Result<RepositoryRecord, RepoError> {
+pub async fn create(
+    meta: &MetaStore,
+    input: CreateRepoInput,
+) -> Result<RepositoryRecord, RepoError> {
     if input.name.is_empty() {
         return Err(RepoError::Invalid("仓库名不能为空".to_string()));
     }
@@ -161,7 +164,13 @@ mod tests {
     use super::*;
 
     /// 便捷：构造创建入参。
-    fn 入参(name: &str, format: &str, r#type: &str, vis: &str, upstream: Option<&str>) -> CreateRepoInput {
+    fn 入参(
+        name: &str,
+        format: &str,
+        r#type: &str,
+        vis: &str,
+        upstream: Option<&str>,
+    ) -> CreateRepoInput {
         CreateRepoInput {
             name: name.to_string(),
             format: format.to_string(),
@@ -196,11 +205,23 @@ mod tests {
         let err = create(&meta, 入参("m", "npm", "proxy", "public", None)).await;
         assert!(matches!(err, Err(RepoError::Invalid(_))));
         // 带上游则成功
-        let ok = create(&meta, 入参("m2", "npm", "proxy", "public", Some("https://registry.npmjs.org")))
-            .await
-            .unwrap();
+        let ok = create(
+            &meta,
+            入参(
+                "m2",
+                "npm",
+                "proxy",
+                "public",
+                Some("https://registry.npmjs.org"),
+            ),
+        )
+        .await
+        .unwrap();
         assert_eq!(ok.r#type, "proxy");
-        assert_eq!(ok.upstream_url.as_deref(), Some("https://registry.npmjs.org"));
+        assert_eq!(
+            ok.upstream_url.as_deref(),
+            Some("https://registry.npmjs.org")
+        );
     }
 
     #[tokio::test]

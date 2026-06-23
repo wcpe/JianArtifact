@@ -225,9 +225,7 @@ mod tests {
 
     #[test]
     fn snapshot_版可覆盖() {
-        assert!(MavenFormat.can_overwrite(&制品(
-            "com/foo/lib/1.0-SNAPSHOT/lib-1.0-SNAPSHOT.jar"
-        )));
+        assert!(MavenFormat.can_overwrite(&制品("com/foo/lib/1.0-SNAPSHOT/lib-1.0-SNAPSHOT.jar")));
         // 带时间戳的 snapshot 制品文件，其版本目录仍以 -SNAPSHOT 结尾
         assert!(MavenFormat.can_overwrite(&制品(
             "com/foo/lib/1.0-SNAPSHOT/lib-1.0-20240101.120000-1.jar"
@@ -237,9 +235,7 @@ mod tests {
     #[test]
     fn maven_metadata_可覆盖() {
         assert!(MavenFormat.can_overwrite(&制品("com/foo/lib/maven-metadata.xml")));
-        assert!(MavenFormat.can_overwrite(&制品(
-            "com/foo/lib/1.0-SNAPSHOT/maven-metadata.xml"
-        )));
+        assert!(MavenFormat.can_overwrite(&制品("com/foo/lib/1.0-SNAPSHOT/maven-metadata.xml")));
     }
 
     #[test]
@@ -247,7 +243,10 @@ mod tests {
         // release 主构件不可覆盖，但其 sidecar 允许覆盖（随主文件摘要镜像）
         for ext in ["sha1", "md5", "sha256", "sha512", "asc"] {
             let p = format!("com/foo/lib/1.0/lib-1.0.jar.{ext}");
-            assert!(MavenFormat.can_overwrite(&制品(&p)), "sidecar .{ext} 应可覆盖");
+            assert!(
+                MavenFormat.can_overwrite(&制品(&p)),
+                "sidecar .{ext} 应可覆盖"
+            );
         }
         // metadata 的 sidecar 亦可覆盖
         assert!(MavenFormat.can_overwrite(&制品("com/foo/lib/maven-metadata.xml.sha1")));
@@ -255,10 +254,20 @@ mod tests {
 
     #[test]
     fn 内容类型按扩展名推断() {
-        let c = |p: &str| MavenFormat.content_type(&ArtifactCoordinates { path: p.to_string() });
-        assert_eq!(c("a/b/lib-1.0.jar").as_deref(), Some("application/java-archive"));
+        let c = |p: &str| {
+            MavenFormat.content_type(&ArtifactCoordinates {
+                path: p.to_string(),
+            })
+        };
+        assert_eq!(
+            c("a/b/lib-1.0.jar").as_deref(),
+            Some("application/java-archive")
+        );
         assert_eq!(c("a/b/lib-1.0.pom").as_deref(), Some("application/xml"));
-        assert_eq!(c("a/b/maven-metadata.xml").as_deref(), Some("application/xml"));
+        assert_eq!(
+            c("a/b/maven-metadata.xml").as_deref(),
+            Some("application/xml")
+        );
         assert_eq!(
             c("a/b/lib-1.0.jar.sha1").as_deref(),
             Some("text/plain; charset=utf-8")
@@ -287,10 +296,13 @@ mod tests {
         let coords = ArtifactCoordinates {
             path: "com/example/lib/1.0/lib-1.0.jar".to_string(),
         };
-        let snippets = MavenFormat.usage_snippets("http://localhost:8080/", "maven-hosted", &coords);
+        let snippets =
+            MavenFormat.usage_snippets("http://localhost:8080/", "maven-hosted", &coords);
         // 应含依赖坐标 + 仓库接入两段
         assert_eq!(snippets.len(), 2);
-        assert!(snippets[0].content.contains("<groupId>com.example</groupId>"));
+        assert!(snippets[0]
+            .content
+            .contains("<groupId>com.example</groupId>"));
         assert!(snippets[0].content.contains("<artifactId>lib</artifactId>"));
         assert!(snippets[0].content.contains("<version>1.0</version>"));
         // 仓库接入 URL 无双斜杠

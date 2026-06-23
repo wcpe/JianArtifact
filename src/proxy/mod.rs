@@ -193,7 +193,9 @@ mod tests {
         let sf: Arc<SingleFlight<usize>> = Arc::new(SingleFlight::new());
         // 第一次失败
         let r1 = sf
-            .run("k", || async { Err::<usize, String>("上游挂了".to_string()) })
+            .run("k", || async {
+                Err::<usize, String>("上游挂了".to_string())
+            })
             .await;
         assert!(r1.is_err());
         // 第二次（已非并发）应重新执行并成功，而非复用上次的失败

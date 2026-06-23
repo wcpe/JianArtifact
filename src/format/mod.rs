@@ -8,17 +8,17 @@
 
 use crate::meta::ArtifactRecord;
 
-mod maven;
-mod npm;
 pub mod docker;
 pub mod docker_registry;
+mod maven;
+mod npm;
 mod raw;
 pub mod service;
 
-pub use maven::MavenFormat;
-pub use npm::{NpmError, NpmFormat, PublishRequest};
 pub use docker::DockerFormat;
 pub use docker_registry::{DockerError, DockerRegistry};
+pub use maven::MavenFormat;
+pub use npm::{NpmError, NpmFormat, PublishRequest};
 pub use raw::RawFormat;
 pub use service::{ArtifactKind, ArtifactService, ServiceError};
 

@@ -176,10 +176,7 @@ async fn resolve_writable_repo(
 }
 
 /// 按仓库名查仓库记录；不存在返回 404。
-async fn get_repo_by_name(
-    state: &AppState,
-    repo_name: &str,
-) -> Result<RepositoryRecord, ApiError> {
+async fn get_repo_by_name(state: &AppState, repo_name: &str) -> Result<RepositoryRecord, ApiError> {
     state
         .meta
         .get_repository_by_name(repo_name)

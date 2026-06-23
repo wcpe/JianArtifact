@@ -303,9 +303,7 @@ mod tests {
     fn 过期的_docker_令牌校验失败() {
         let signer = JwtSigner::from_secret(b"docker-expire-xxxxxxxxxxxxxxxxxxx", 3600);
         // TTL = 0 使签发即过期；默认 leeway 已被置 0，等待越过窗口
-        let token = signer
-            .issue_docker_token("u", Vec::new(), 0)
-            .unwrap();
+        let token = signer.issue_docker_token("u", Vec::new(), 0).unwrap();
         std::thread::sleep(std::time::Duration::from_secs(2));
         assert!(signer.verify_docker_token(&token).is_err());
     }

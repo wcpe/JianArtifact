@@ -40,7 +40,10 @@ pub async fn publish(
     // ① 版本不可变预检：读既有 packument，若已含该版本则 409（不写 blob）
     let existing = read_packument(state, repo, &req.package).await?;
     if packument_has_version(existing.as_ref(), &req.version) {
-        return Err(ApiError::Conflict(format!("版本 {} 已发布，不可覆盖", req.version)));
+        return Err(ApiError::Conflict(format!(
+            "版本 {} 已发布，不可覆盖",
+            req.version
+        )));
     }
 
     // ② 落 tarball：经通用机理流式写 blob（边写边算四摘要），得摘要供 packument dist 用
