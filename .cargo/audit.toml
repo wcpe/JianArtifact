@@ -1,0 +1,17 @@
+# cargo audit 配置：受控忽略的安全公告清单。
+#
+# 忽略某条公告必须在此集中声明并写明理由，禁止散落或无理由忽略。
+# 每条理由需说明：为何不可达 / 无可用修复 / 为何不采用替代方案。
+
+[advisories]
+# RUSTSEC-2023-0071（rsa crate Marvin 攻击，计时侧信道，中危 5.9，无修复版本）
+# 理由：
+#   1. rsa 由 jsonwebtoken 的 rust_crypto 伞形特性传入，该特性把 hmac/sha2/rsa
+#      捆绑在一起，无法只取 HMAC 而排除 rsa。
+#   2. 本项目签发 / 校验 JWT 仅使用 HS256（HMAC 对称算法），从不执行任何 RSA
+#      密钥运算，该计时侧信道在本项目实际执行路径上不可达。
+#   3. 上游暂无修复版本；改用 aws_lc_rs 后端虽可彻底移除 rsa，但会引入 cmake/clang
+#      原生构建链与原生库，违背「纯 Rust / 零原生依赖 / 单一二进制」的已决策架构
+#      不变量（见 Cargo.toml 中 jsonwebtoken 声明注释与 ADR-0001/0011），故不采用。
+# 复核：待 rsa 出修复版或 jsonwebtoken 提供可拆分特性后移除本忽略并升级。
+ignore = ["RUSTSEC-2023-0071"]
