@@ -25,6 +25,7 @@ use crate::storage::LocalFsStore;
 
 mod auth_routes;
 mod identity;
+mod repositories;
 mod tokens;
 mod users;
 
@@ -210,7 +211,21 @@ pub fn build_router(state: AppState) -> Router {
                 .delete(users::delete_user),
         )
         .route("/tokens", get(tokens::list_tokens).post(tokens::create_token))
-        .route("/tokens/{id}", axum::routing::delete(tokens::revoke_token));
+        .route("/tokens/{id}", axum::routing::delete(tokens::revoke_token))
+        .route(
+            "/repositories",
+            get(repositories::list_repositories).post(repositories::create_repository),
+        )
+        .route(
+            "/repositories/{id}",
+            get(repositories::get_repository)
+                .patch(repositories::update_repository)
+                .delete(repositories::delete_repository),
+        )
+        .route(
+            "/repositories/{id}/artifacts",
+            get(repositories::list_artifacts),
+        );
 
     Router::new()
         .route("/health", get(health))
