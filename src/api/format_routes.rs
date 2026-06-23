@@ -23,6 +23,30 @@ use crate::authz::{authorize, Action, Decision};
 /// 默认内容类型：格式无法推断且制品未记录时回退。
 const DEFAULT_CONTENT_TYPE: &str = "application/octet-stream";
 
+/// npm 格式名：据此把 npm 仓库的请求分派到其原生协议处理。
+const NPM_FORMAT: &str = "npm";
+
+/// npm tarball 在包内的目录分隔段（npm 协议固定为 `-`）。
+const NPM_TARBALL_SEGMENT: &str = "/-/";
+
+/// 分派 npm 读请求：含 `/-/` 段者为 tarball 下载，否则为 packument 获取。
+///
+/// 仅做协议分派，业务在 `npm_routes`；不在此写 npm 业务逻辑。
+async fn get_npm(
+    state: &AppState,
+    repo: &RepositoryRecord,
+    path: &str,
+) -> Result<Response, ApiError> {
+    match path.split_once(NPM_TARBALL_SEGMENT) {
+        // tarball：`{包名}/-/{文件}`
+        Some((package, tarball_name)) => {
+            super::npm_routes::get_tarball(state, repo, package, tarball_name).await
+        }
+        // packument：`{包名}`
+        None => super::npm_routes::get_packument(state, repo, path).await,
+    }
+}
+
 /// 上传制品（PUT）：写授权后流式落 blob 并写索引，按格式覆盖策略处理重复。
 ///
 /// 流式：请求体经 body stream → AsyncRead 喂给制品机理，大文件不整体载入内存；
@@ -34,6 +58,10 @@ pub async fn put_artifact(
     body: Body,
 ) -> Result<Response, ApiError> {
     let repo = resolve_writable_repo(&state, &identity, &repo_name).await?;
+    // npm 发布走其原生协议（请求体为含 base64 tarball 的 JSON，须整体解析）
+    if repo.format == NPM_FORMAT {
+        return super::npm_routes::publish(&state, &repo, body).await;
+    }
     let format = state
         .formats
         .get(&repo.format)
@@ -69,6 +97,10 @@ pub async fn get_artifact(
 ) -> Result<Response, ApiError> {
     // 读授权（无权 private → 404 隐藏存在性）
     let repo = load_readable_repo_by_name(&state, &identity, &repo_name).await?;
+    // npm 读走其原生协议：tarball（含 `/-/` 段）按 blob 返回，否则按 packument 文档返回
+    if repo.format == NPM_FORMAT {
+        return get_npm(&state, &repo, &path).await;
+    }
     let format = state
         .formats
         .get(&repo.format)

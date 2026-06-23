@@ -9,10 +9,12 @@
 use crate::meta::ArtifactRecord;
 
 mod maven;
+mod npm;
 mod raw;
 pub mod service;
 
 pub use maven::MavenFormat;
+pub use npm::{NpmError, NpmFormat, PublishRequest};
 pub use raw::RawFormat;
 pub use service::{ArtifactKind, ArtifactService, ServiceError};
 
@@ -100,13 +102,14 @@ impl FormatRegistry {
         self.formats.push(format);
     }
 
-    /// 构造含当前已实现格式（Raw、Maven）的注册表。
+    /// 构造含当前已实现格式（Raw、Maven、npm）的注册表。
     ///
-    /// 其余格式由后续批次各自实现后在此注册，本批不提前占位未实现格式。
+    /// 其余格式由各自批次实现后在此注册，本批不提前占位未实现格式。
     pub fn with_builtin() -> Self {
         let mut registry = Self::new();
         registry.register(Box::new(RawFormat));
         registry.register(Box::new(MavenFormat));
+        registry.register(Box::new(NpmFormat));
         registry
     }
 
@@ -165,11 +168,11 @@ mod tests {
         let registry = FormatRegistry::with_builtin();
         assert!(registry.get("raw").is_some());
         assert_eq!(registry.get("raw").unwrap().name(), "raw");
-        // Maven 已实现并注册，应查得
+        // Maven、npm 已实现并注册，应查得
         assert!(registry.get("maven").is_some());
         assert_eq!(registry.get("maven").unwrap().name(), "maven");
-        // 未实现格式仍不注册（不提前占位）
-        assert!(registry.get("npm").is_none());
+        assert!(registry.get("npm").is_some());
+        assert_eq!(registry.get("npm").unwrap().name(), "npm");
         assert!(registry.get("不存在").is_none());
     }
 }

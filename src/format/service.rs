@@ -282,6 +282,45 @@ impl<S: BlobStore, U: Upstream> ArtifactService<S, U> {
         Ok(digests.sha256)
     }
 
+    /// 从 proxy 仓库的上游拉取一个相对路径的资源并缓冲到内存（供 npm packument 等小型 JSON 文档）。
+    ///
+    /// 仅用于"需在服务端再加工后返回、不宜按字节直缓存"的元数据文档（如 npm packument 要重写
+    /// tarball URL）；tarball 等大文件仍走 [`Self::get`] 的流式回源 + 缓存，不经此方法。
+    /// 上限 `max_bytes` 防止上游返回超大响应撑爆内存；超限即报错。
+    pub async fn fetch_upstream_doc(
+        &self,
+        repo: &RepositoryRecord,
+        rel_path: &str,
+        max_bytes: usize,
+    ) -> Result<Vec<u8>, ServiceError> {
+        use tokio::io::AsyncReadExt;
+
+        if RepoType::from_db_str(&repo.r#type) != RepoType::Proxy {
+            return Err(ServiceError::InvalidOperation(
+                "只能从 proxy 仓库回源拉取上游文档".to_string(),
+            ));
+        }
+        let upstream_url = repo.upstream_url.as_deref().ok_or(ServiceError::Upstream)?;
+
+        // 拉取上游字节流（锁外 IO），按上限缓冲到内存
+        let body = self
+            .upstream
+            .fetch(upstream_url, rel_path)
+            .await
+            .map_err(|_| ServiceError::Upstream)?;
+        let mut buf = Vec::new();
+        // take(max+1) 以便区分"恰好等于上限"与"超过上限"（Box<dyn AsyncRead> 自身 Sized，可消费）
+        let read = body
+            .take(max_bytes as u64 + 1)
+            .read_to_end(&mut buf)
+            .await
+            .map_err(|_| ServiceError::Upstream)?;
+        if read > max_bytes {
+            return Err(ServiceError::TooLarge);
+        }
+        Ok(buf)
+    }
+
     /// 删除制品（FR-60）：hosted 删索引 + blob 本体（无其他引用时）；proxy 删缓存索引 + blob。
     ///
     /// 两类仓库都先删索引、再按引用计数清 blob；proxy 删缓存后下次 cache-miss 可重新拉取。

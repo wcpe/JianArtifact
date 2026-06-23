@@ -30,6 +30,7 @@ mod artifacts;
 mod auth_routes;
 mod format_routes;
 mod identity;
+mod npm_routes;
 mod repo_access;
 mod repositories;
 mod search;
