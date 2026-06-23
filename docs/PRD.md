@@ -45,14 +45,14 @@
 | FR-03 | Basic Auth 鉴权（兼容包管理器 CLI 登录习惯） | P1 | 开发中 |
 | FR-04 | 全局角色 Admin / User | P1 | 开发中 |
 | FR-05 | 管理员管理用户（新增/禁用/改角色） | P1 | 开发中 |
-| FR-06 | 仓库可见性 public / private | P1 | 计划 |
-| FR-07 | 每仓库读/写 ACL（按用户授权名单） | P1 | 计划 |
-| FR-08 | 匿名仅能读 public 仓库；private 对匿名拒绝 | P1 | 计划 |
-| FR-09 | 写操作校验对应仓库写权限 | P1 | 计划 |
-| FR-10 | 创建/配置/删除仓库（格式、类型 hosted/proxy、可见性） | P1 | 计划 |
+| FR-06 | 仓库可见性 public / private | P1 | 开发中 |
+| FR-07 | 每仓库读/写 ACL（按用户授权名单） | P1 | 开发中 |
+| FR-08 | 匿名仅能读 public 仓库；private 对匿名拒绝 | P1 | 开发中 |
+| FR-09 | 写操作校验对应仓库写权限 | P1 | 开发中 |
+| FR-10 | 创建/配置/删除仓库（格式、类型 hosted/proxy、可见性） | P1 | 开发中 |
 | FR-11 | hosted 仓库：制品直传与下载 | P1 | 计划 |
 | FR-12 | proxy 仓库：代理上游并缓存制品 | P1 | 计划 |
-| FR-13 | 仓库列表/详情/制品浏览 | P1 | 计划 |
+| FR-13 | 仓库列表/详情/制品浏览 | P1 | 开发中 |
 | FR-14 | Maven 格式（hosted + proxy） | P1 | 计划 |
 | FR-15 | npm 格式（hosted + proxy） | P1 | 计划 |
 | FR-16 | Docker/OCI 格式（hosted + proxy） | P1 | 计划 |
