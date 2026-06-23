@@ -238,6 +238,13 @@
 - **Maven 格式**：以 Maven 仓库布局暴露，路径形如 `/{仓库名}/{groupId 路径}/{artifactId}/{version}/...`，供 `mvn deploy` / `mvn` 拉取使用；按 Maven 协议处理制品与校验和（sha256 索引）。
 - **npm 格式**：以 npm registry 协议暴露，路径形如 `/{仓库名}/{包名}`、`/{仓库名}/{包名}/-/{tarball}`，供 `npm publish` / `npm install` 使用。
 - **Docker / OCI 格式**：以 Docker registry v2 协议暴露，挂载于 `/v2/`，路径含仓库名与镜像名（如 `/v2/{仓库名}/{镜像名}/manifests/{ref}`、`/v2/{仓库名}/{镜像名}/blobs/{digest}`），供 `docker push` / `docker pull` 使用；错误遵循 registry v2 原生错误格式。
+
+  **认证（Bearer 令牌流）**：遵循 registry v2 的"挑战-应答"令牌流。
+
+  - **探活发起发现**：`GET /v2/` 未带凭据时返回 `401 + WWW-Authenticate: Bearer realm="{基址}/v2/token",service="jianartifact"`（不带 scope），让客户端在探活阶段发现令牌 realm；带凭据 / 令牌时返回 `200` 与版本头。
+  - **受保护操作质询**：受保护的 docker 操作在未认证时返回 `401 + WWW-Authenticate: Bearer realm="{基址}/v2/token",service="jianartifact",scope="repository:{仓库名}/{镜像名}:{动作}"`（写 = `pull,push`，读 = `pull`）。客户端据此到令牌端点换取范围令牌后，以 `Authorization: Bearer <token>` 重试原请求。
+  - **令牌端点** `GET /v2/token`：查询参数 `service`、`scope`（形如 `repository:{name}:{actions}`，`actions` 逗号分隔，可多个 `scope`）、可选 `account`。以 `Authorization: Basic`（用户口令或 API Token）认证——无凭据按匿名、提供但无效则 `401`。对每个 `scope` 逐项判定授权，仅把通过的动作放进该 `scope` 的授予集合（仓库不存在或全拒 → 该 `scope` 授予空，不报错）。响应 `200`：`{"token","access_token","expires_in","issued_at"}`，`token` 为短期 Bearer 令牌。
+  - **兼容路径**：匿名拉取 public 仓库无需用户凭据——客户端据 `/v2/` 质询透明换取仅含 public `pull` 的匿名令牌即可拉取；预先携带 `Authorization: Basic` 的请求（如 `curl -u`）继续直接生效，无需自行走令牌流。
 - **Raw 通用文件格式**：以路径直存直取暴露，路径形如 `/{仓库名}/{任意文件路径}`，支持 `curl PUT` / `curl GET`，流式上传下载，大文件不整体载入内存。
 
 ## 4. P2 规划端点（当前未实现，仅记录契约方向）
