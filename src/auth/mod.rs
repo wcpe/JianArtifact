@@ -14,7 +14,9 @@ pub mod lockout;
 pub mod token;
 
 pub use basic::{parse_basic_auth, BasicCredentials};
-pub use jwt::{JwtClaims, JwtError, JwtSigner};
+pub use jwt::{
+    DockerAccess, DockerTokenClaims, JwtClaims, JwtError, JwtSigner, DOCKER_TOKEN_TTL_SECS,
+};
 pub use lockout::{LockoutError, LoginGuard};
 pub use token::{generate_api_token, hash_api_token, verify_api_token, TOKEN_PREFIX};
 

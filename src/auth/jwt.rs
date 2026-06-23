@@ -15,6 +15,8 @@ use crate::meta::Role;
 const SECRET_FILE_NAME: &str = ".jwt_secret";
 /// 生成的 HS256 密钥字节数（256 位高熵）。
 const SECRET_LEN: usize = 32;
+/// docker 范围令牌默认有效期（秒）：取较短值，降低令牌泄露风险。
+pub const DOCKER_TOKEN_TTL_SECS: u64 = 300;
 
 /// JWT 相关错误。
 #[derive(Debug, thiserror::Error)]
@@ -43,6 +45,36 @@ pub struct JwtClaims {
     pub iat: u64,
     /// 过期时间（Unix 秒）。
     pub exp: u64,
+}
+
+/// docker 范围令牌中的单条访问授权（对应 registry v2 token 的 `access` 项）。
+///
+/// 描述"对哪个资源（仓库镜像名）授予哪些动作"。`r#type` 在 registry v2 里固定为
+/// `repository`；`name` 为 docker 的 `{仓库}/{镜像}` 名；`actions` 取 `pull` / `push`。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DockerAccess {
+    /// 资源类型，registry v2 中固定为 `repository`。
+    pub r#type: String,
+    /// 资源名（docker 的 `{仓库}/{镜像}`）。
+    pub name: String,
+    /// 已授予的动作集合（`pull` / `push`）。
+    pub actions: Vec<String>,
+}
+
+/// docker 范围令牌的载荷（claims）。
+///
+/// 仅放非敏感信息：主体（用户名或 `anonymous`）、签发 / 过期时间与已授予的访问集合。
+/// 不含口令 / 凭据，令牌仅在签发时返回、不入库、不进日志。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DockerTokenClaims {
+    /// subject：用户名，匿名为 `anonymous`。
+    pub sub: String,
+    /// 签发时间（Unix 秒）。
+    pub iat: u64,
+    /// 过期时间（Unix 秒）。
+    pub exp: u64,
+    /// 该令牌已授予的访问集合（按 scope 逐项授权）。
+    pub access: Vec<DockerAccess>,
 }
 
 /// JWT 签名器：持有编解码密钥与会话有效期。
@@ -109,6 +141,36 @@ impl JwtSigner {
         let mut validation = Validation::new(Algorithm::HS256);
         validation.leeway = 0;
         let data = decode::<JwtClaims>(token, &self.decoding, &validation)?;
+        Ok(data.claims)
+    }
+
+    /// 签发一枚 docker 范围令牌（复用同一 HS256 密钥）。
+    ///
+    /// `subject` 为用户名或 `anonymous`，`access` 为各 scope 授权后的访问集合，
+    /// `ttl_secs` 为有效期（建议取较短值，见 [`DOCKER_TOKEN_TTL_SECS`]）。
+    pub fn issue_docker_token(
+        &self,
+        subject: &str,
+        access: Vec<DockerAccess>,
+        ttl_secs: u64,
+    ) -> Result<String, JwtError> {
+        let now = now_unix();
+        let claims = DockerTokenClaims {
+            sub: subject.to_string(),
+            iat: now,
+            exp: now + ttl_secs,
+            access,
+        };
+        let token = encode(&Header::new(Algorithm::HS256), &claims, &self.encoding)?;
+        Ok(token)
+    }
+
+    /// 校验 docker 范围令牌并返回其 claims；签名不符 / 过期 / 格式非法均返回 Err。
+    pub fn verify_docker_token(&self, token: &str) -> Result<DockerTokenClaims, JwtError> {
+        // 与会话 JWT 同样：显式 HS256、leeway 置 0 精确判过期（默认要求并校验 exp）
+        let mut validation = Validation::new(Algorithm::HS256);
+        validation.leeway = 0;
+        let data = decode::<DockerTokenClaims>(token, &self.decoding, &validation)?;
         Ok(data.claims)
     }
 }
@@ -218,6 +280,58 @@ mod tests {
         // 再次加载应得到完全相同的密钥（复用而非重新生成）
         let s2 = load_or_create_secret(&p).unwrap();
         assert_eq!(s1, s2);
+    }
+
+    #[test]
+    fn docker_令牌签发后可校验出原始_access() {
+        let signer = JwtSigner::from_secret(b"docker-secret-32-bytes-xxxxxxxxxx", 3600);
+        let access = vec![DockerAccess {
+            r#type: "repository".to_string(),
+            name: "hub/app".to_string(),
+            actions: vec!["pull".to_string(), "push".to_string()],
+        }];
+        let token = signer
+            .issue_docker_token("alice", access.clone(), DOCKER_TOKEN_TTL_SECS)
+            .unwrap();
+        let claims = signer.verify_docker_token(&token).unwrap();
+        assert_eq!(claims.sub, "alice");
+        assert_eq!(claims.access, access);
+        assert!(claims.exp > claims.iat);
+    }
+
+    #[test]
+    fn 过期的_docker_令牌校验失败() {
+        let signer = JwtSigner::from_secret(b"docker-expire-xxxxxxxxxxxxxxxxxxx", 3600);
+        // TTL = 0 使签发即过期；默认 leeway 已被置 0，等待越过窗口
+        let token = signer
+            .issue_docker_token("u", Vec::new(), 0)
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        assert!(signer.verify_docker_token(&token).is_err());
+    }
+
+    #[test]
+    fn 伪造或他密钥签发的_docker_令牌校验失败() {
+        let a = JwtSigner::from_secret(b"docker-key-a-xxxxxxxxxxxxxxxxxxxx", 3600);
+        let b = JwtSigner::from_secret(b"docker-key-b-yyyyyyyyyyyyyyyyyyyy", 3600);
+        let token = a.issue_docker_token("u", Vec::new(), 300).unwrap();
+        // 他密钥无法校验通过（签名不符）
+        assert!(b.verify_docker_token(&token).is_err());
+        // 篡改令牌亦失败
+        let mut tampered = token;
+        tampered.push('x');
+        assert!(a.verify_docker_token(&tampered).is_err());
+    }
+
+    #[test]
+    fn 会话_jwt_与_docker_令牌互不串味() {
+        let signer = JwtSigner::from_secret(b"cross-secret-xxxxxxxxxxxxxxxxxxxx", 3600);
+        // 会话 JWT 不应被当作 docker 令牌解析成功（claims 结构不含 access 必备字段）
+        let session = signer.issue("uid", "u", Role::User).unwrap();
+        assert!(signer.verify_docker_token(&session).is_err());
+        // docker 令牌也不应被当作会话 JWT（缺 username / role）
+        let docker = signer.issue_docker_token("u", Vec::new(), 300).unwrap();
+        assert!(signer.verify(&docker).is_err());
     }
 
     #[test]
