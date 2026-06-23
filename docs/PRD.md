@@ -53,9 +53,9 @@
 | FR-11 | hosted 仓库：制品直传与下载 | P1 | 开发中 |
 | FR-12 | proxy 仓库：代理上游并缓存制品 | P1 | 开发中 |
 | FR-13 | 仓库列表/详情/制品浏览 | P1 | 开发中 |
-| FR-14 | Maven 格式（hosted + proxy） | P1 | 计划 |
-| FR-15 | npm 格式（hosted + proxy） | P1 | 计划 |
-| FR-16 | Docker/OCI 格式（hosted + proxy） | P1 | 计划 |
+| FR-14 | Maven 格式（hosted + proxy） | P1 | 开发中 |
+| FR-15 | npm 格式（hosted + proxy） | P1 | 开发中 |
+| FR-16 | Docker/OCI 格式（hosted + proxy） | P1 | 开发中 |
 | FR-17 | Raw 通用文件格式（hosted + proxy） | P1 | 开发中 |
 | FR-18 | 登录与仪表盘 | P1 | 计划 |
 | FR-19 | 仓库管理界面 | P1 | 计划 |
