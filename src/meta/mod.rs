@@ -8,6 +8,12 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
+mod repo;
+
+pub use repo::{
+    AclRecord, ArtifactRecord, NewRepository, Permission, RepoType, RepositoryRecord, Visibility,
+};
+
 /// 全局角色。以小写字符串存储于 DB，避免魔法字符串散落各处。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -121,6 +127,13 @@ impl MetaStore {
         sqlx::migrate!("./migrations").run(&pool).await?;
 
         Ok(Self { pool })
+    }
+
+    /// 连接池的内部访问入口，供同模块内其他文件（如 repo.rs）复用同一连接池。
+    ///
+    /// 仅限 crate 内 `meta` 模块内部使用，不对外暴露原始连接以保持唯一访问入口。
+    pub(crate) fn pool(&self) -> &SqlitePool {
+        &self.pool
     }
 
     /// 仅用于测试：基于内存数据库构造（每个连接独立，故连接数限制为 1）。
