@@ -10,8 +10,8 @@
 
 use axum::{
     body::Body,
-    extract::{Path, Query, State},
-    http::{header, HeaderValue, StatusCode},
+    extract::{FromRequestParts, Path, Query, State},
+    http::{header, request::Parts, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
@@ -20,13 +20,14 @@ use serde::Deserialize;
 use serde_json::json;
 use tokio_util::io::{ReaderStream, StreamReader};
 
+use crate::auth::{basic, AuthIdentity, DockerAccess, DOCKER_TOKEN_TTL_SECS};
 use crate::authz::{authorize, Action, Decision};
 use crate::format::docker;
 use crate::format::DockerError;
 use crate::meta::RepositoryRecord;
 
 use super::repo_access::build_repo_view;
-use super::{AppState, Identity};
+use super::{ApiError, AppState, Identity};
 
 /// Docker Distribution API 版本头名。
 const API_VERSION_HEADER: &str = "Docker-Distribution-Api-Version";
@@ -34,6 +35,16 @@ const API_VERSION_HEADER: &str = "Docker-Distribution-Api-Version";
 const API_VERSION_VALUE: &str = "registry/2.0";
 /// manifest digest 响应头名。
 const CONTENT_DIGEST_HEADER: &str = "Docker-Content-Digest";
+/// Bearer 质询中的 service 标识（令牌端点据此区分服务）。
+const TOKEN_SERVICE: &str = "jianartifact";
+/// docker 范围令牌端点路径（相对 `/v2`）。
+const TOKEN_PATH: &str = "/v2/token";
+/// docker `pull` 动作名。
+const ACTION_PULL: &str = "pull";
+/// docker `push` 动作名。
+const ACTION_PUSH: &str = "push";
+/// registry v2 资源类型（固定为 repository）。
+const RESOURCE_TYPE: &str = "repository";
 
 /// PUT blob 完成时的 digest 查询参数。
 #[derive(Debug, Deserialize)]
@@ -52,8 +63,8 @@ struct DockerApiError {
     code: &'static str,
     /// 面向客户端的可读说明。
     message: String,
-    /// 是否需要 `WWW-Authenticate` 头（未认证访问受保护资源时为真）。
-    需要认证: bool,
+    /// 401 时携带的 `WWW-Authenticate` 头完整值（Bearer 质询）；其余情况为 None。
+    challenge: Option<String>,
 }
 
 impl DockerApiError {
@@ -62,17 +73,18 @@ impl DockerApiError {
             status,
             code,
             message: message.into(),
-            需要认证: false,
+            challenge: None,
         }
     }
 
-    /// 未认证访问受保护资源：401 + WWW-Authenticate，引导 docker 客户端带凭据重试。
-    fn unauthorized() -> Self {
+    /// 未认证访问受保护资源：401 + `WWW-Authenticate: Bearer`，引导 docker 客户端到
+    /// 令牌端点用 Basic 凭据换取范围令牌后重试。`challenge` 为完整头值。
+    fn unauthorized(challenge: String) -> Self {
         Self {
             status: StatusCode::UNAUTHORIZED,
             code: "UNAUTHORIZED",
             message: "需要认证".to_string(),
-            需要认证: true,
+            challenge: Some(challenge),
         }
     }
 
@@ -91,15 +103,25 @@ impl IntoResponse for DockerApiError {
             API_VERSION_HEADER,
             HeaderValue::from_static(API_VERSION_VALUE),
         );
-        if self.需要认证 {
-            // Basic 认证质询：docker 客户端据此用 docker login 的凭据重试
-            resp.headers_mut().insert(
-                header::WWW_AUTHENTICATE,
-                HeaderValue::from_static("Basic realm=\"JianArtifact\""),
-            );
+        if let Some(challenge) = self.challenge {
+            // Bearer 令牌质询：docker / skopeo 据此到令牌端点换取范围令牌再重试
+            if let Ok(v) = HeaderValue::from_str(&challenge) {
+                resp.headers_mut().insert(header::WWW_AUTHENTICATE, v);
+            }
         }
         resp
     }
+}
+
+/// 组装 Bearer 质询头值：`Bearer realm="{realm}",service="{service}",scope="repository:{name}:{actions}"`。
+///
+/// realm 取对外令牌端点地址（基于 `public_base_url`，缺省按监听地址构造，复用 `location()` 思路）；
+/// `actions` 为本操作所需动作（读 = `pull`；写 = `pull,push`）。
+fn bearer_challenge(state: &AppState, name: &str, actions: &str) -> String {
+    let realm = format!("{}{TOKEN_PATH}", base_url(state));
+    format!(
+        "Bearer realm=\"{realm}\",service=\"{TOKEN_SERVICE}\",scope=\"{RESOURCE_TYPE}:{name}:{actions}\""
+    )
 }
 
 /// 把 DockerRegistry 存储错误映射为 registry v2 协议错误。
@@ -136,14 +158,267 @@ fn map_docker_error(e: DockerError) -> DockerApiError {
     }
 }
 
-/// 版本检查（`GET /v2/`）：返回 200 与版本头，供 docker 客户端探活。
-pub async fn version_check() -> Response {
+/// 版本检查（`GET /v2/`）：探活并发起认证发现。
+///
+/// registry v2 的"挑战-应答"令牌流要求客户端能在**探活阶段**发现令牌 realm：未携带
+/// `Authorization` 时返回 `401 + WWW-Authenticate: Bearer`（不带 scope），客户端据此
+/// 到令牌端点换取令牌（匿名亦可换取仅含 public `pull` 的匿名令牌，故匿名拉取 public 仍成立）；
+/// 携带凭据 / 令牌时返回 200 与版本头。skopeo / docker 据此建立 bearer 流程，认证推送方可用。
+pub async fn version_check(state: State<AppState>, headers: axum::http::HeaderMap) -> Response {
+    if headers.get(header::AUTHORIZATION).is_none() {
+        // 不带 scope 的 Bearer 质询：仅用于让客户端发现令牌 realm 并建立认证流程
+        return DockerApiError::unauthorized(format!(
+            "Bearer realm=\"{}{TOKEN_PATH}\",service=\"{TOKEN_SERVICE}\"",
+            base_url(&state)
+        ))
+        .into_response();
+    }
     let mut resp = StatusCode::OK.into_response();
     resp.headers_mut().insert(
         API_VERSION_HEADER,
         HeaderValue::from_static(API_VERSION_VALUE),
     );
     resp
+}
+
+/// docker 范围令牌端点（`GET /v2/token`）。
+///
+/// 流程：① 读 `Authorization: Basic` 解析用户（口令或 API Token）——提供但无效则 401，
+/// 无凭据则按匿名；② 对每个 `scope=repository:{name}:{actions}` 逐项跑授权，只把**通过**的
+/// 动作放进该 scope 的授予集合（仓库不存在或全拒 → 该 scope 授予空，不报错）；③ 用同一 HS256
+/// 密钥签发短期 docker 令牌返回。客户端据 401 Bearer 质询调用此端点，再用 `Bearer` 重试原请求。
+pub async fn token_endpoint(
+    State(state): State<AppState>,
+    Query(params): Query<Vec<(String, String)>>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    // ① 解析 Basic 凭据为身份：携带 Basic 但无效 → 401；无凭据 → 匿名
+    let identity = match resolve_token_identity(&state, &headers).await {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
+    let subject = identity
+        .user()
+        .map(|u| u.username.clone())
+        .unwrap_or_else(|| "anonymous".to_string());
+
+    // ② 逐个 scope 计算授予动作
+    let mut access = Vec::new();
+    for (k, v) in &params {
+        if k != "scope" {
+            continue;
+        }
+        for scope in v.split(' ').filter(|s| !s.is_empty()) {
+            if let Some(granted) = grant_scope(&state, &identity, scope).await {
+                access.push(granted);
+            }
+        }
+    }
+
+    // ③ 签发短期 docker 令牌
+    let token = match state
+        .jwt
+        .issue_docker_token(&subject, access, DOCKER_TOKEN_TTL_SECS)
+    {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::error!(错误 = %e, "签发 docker 范围令牌失败");
+            return DockerApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "UNKNOWN", "内部错误")
+                .into_response();
+        }
+    };
+
+    Json(json!({
+        "token": token,
+        "access_token": token,
+        "expires_in": DOCKER_TOKEN_TTL_SECS,
+        "issued_at": rfc3339_now(),
+    }))
+    .into_response()
+}
+
+/// 当前 UTC 时间格式化为 RFC3339 字符串（如 `2026-06-23T08:00:00Z`）。
+///
+/// registry v2 令牌响应的 `issued_at` 为可选信息字段，客户端主要依赖 `token` / `expires_in`。
+/// 项目未引入日期库，这里据 Unix 秒按公历换算（civil-from-days 算法），避免新增依赖。
+fn rfc3339_now() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0) as i64;
+    let days = secs.div_euclid(86_400);
+    let secs_of_day = secs.rem_euclid(86_400);
+    let (h, m, s) = (secs_of_day / 3600, (secs_of_day % 3600) / 60, secs_of_day % 60);
+    let (year, month, day) = civil_from_days(days);
+    format!("{year:04}-{month:02}-{day:02}T{h:02}:{m:02}:{s:02}Z")
+}
+
+/// 把"自 1970-01-01 起的天数"换算为公历 (年, 月, 日)。
+///
+/// 采用 Howard Hinnant 的 civil-from-days 算法（对负数天数亦正确，闰年规则完备）。
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+/// 解析令牌端点的 Basic 凭据为身份：无 Authorization → 匿名；
+/// 有 Basic 但解析为匿名（凭据无效）→ Err(401)；其余通道（非 Basic）按匿名。
+async fn resolve_token_identity(
+    state: &AppState,
+    headers: &axum::http::HeaderMap,
+) -> Result<AuthIdentity, Response> {
+    let Some(value) = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+    else {
+        return Ok(AuthIdentity::Anonymous);
+    };
+    // 非 Basic 通道（如直接带 Bearer）在令牌端点不采信，按匿名
+    if basic::strip_scheme_prefix(value, "Basic ").is_none() {
+        return Ok(AuthIdentity::Anonymous);
+    }
+    let identity = super::resolve_identity(&state.meta, &state.jwt, value).await;
+    if identity.is_authenticated() {
+        Ok(identity)
+    } else {
+        // 提供了 Basic 凭据却无效：明确拒绝（而非降级匿名签空令牌）
+        Err(DockerApiError::unauthorized(format!(
+            "Bearer realm=\"{}{TOKEN_PATH}\",service=\"{TOKEN_SERVICE}\"",
+            base_url(state)
+        ))
+        .into_response())
+    }
+}
+
+/// 解析单个 `repository:{name}:{actions}` scope，对每个请求动作跑授权，返回授予项。
+///
+/// 仓库不存在或全部动作被拒 → 返回授予空 actions 的项（registry v2 约定：能登录即可签发，
+/// 具体放行交原请求再判）。scope 格式非法 → None（忽略该 scope）。
+async fn grant_scope(state: &AppState, identity: &AuthIdentity, scope: &str) -> Option<DockerAccess> {
+    let (resource_type, rest) = scope.split_once(':')?;
+    if resource_type != RESOURCE_TYPE {
+        return None;
+    }
+    // name 可含冒号？docker 资源名不含冒号，actions 在最后一段：从右侧切一次
+    let (name, actions_raw) = rest.rsplit_once(':')?;
+    if name.is_empty() {
+        return None;
+    }
+
+    let mut granted = Vec::new();
+    // 解析仓库视图一次，供该 scope 的所有动作复用（锁外 IO 已在 meta 层）
+    let view = match split_name(name) {
+        Some((repo_name, _)) => repo_view_for(state, identity, &repo_name).await,
+        None => None,
+    };
+
+    for action_raw in actions_raw.split(',').filter(|a| !a.is_empty()) {
+        let Some(action) = parse_action(action_raw) else {
+            continue;
+        };
+        if let Some(view) = view.as_ref() {
+            if authorize(identity, view, action) == Decision::Allow {
+                granted.push(action_name(action).to_string());
+            }
+        }
+    }
+
+    Some(DockerAccess {
+        r#type: RESOURCE_TYPE.to_string(),
+        name: name.to_string(),
+        actions: granted,
+    })
+}
+
+/// 据用户身份查某仓库的授权视图；仓库不存在 / 查库失败 → None（视为无授权）。
+async fn repo_view_for(
+    state: &AppState,
+    identity: &AuthIdentity,
+    repo_name: &str,
+) -> Option<crate::authz::RepoView> {
+    let repo = state.meta.get_repository_by_name(repo_name).await.ok()??;
+    // 复用既有视图构造：经 Identity 包装以匹配 build_repo_view 接口
+    build_repo_view(state, &Identity(identity.clone()), &repo)
+        .await
+        .ok()
+}
+
+/// 把 docker 动作名解析为内部 Action；未知动作返回 None。
+fn parse_action(action: &str) -> Option<Action> {
+    match action {
+        ACTION_PULL => Some(Action::Read),
+        ACTION_PUSH => Some(Action::Write),
+        _ => None,
+    }
+}
+
+/// docker 操作的鉴权上下文：封装"先试 docker Bearer 令牌、再回退既有 Identity"。
+///
+/// - `token`：经 `verify_docker_token` 校验通过的范围令牌 claims（若请求带有效 docker 令牌）；
+/// - `identity`：既有身份解析中间件注入的身份（预先 Basic / 会话 JWT / API Token / 匿名）。
+///
+/// 判定时优先用令牌的 `access`（携带 docker 令牌即视为已认证）；无令牌则回退 `identity` 走
+/// 既有 authz 逻辑，确保 curl 预先 Basic 与匿名 public 读照旧可用。
+pub struct DockerAuth {
+    /// 既有身份（令牌缺失或无效时回退使用）。
+    identity: Identity,
+    /// 校验通过的 docker 范围令牌（若有）。
+    token: Option<crate::auth::DockerTokenClaims>,
+}
+
+impl FromRequestParts<AppState> for DockerAuth {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let identity = Identity::from_request_parts(parts, state).await?;
+        // 仅当 Authorization 为 Bearer 且能按 docker 令牌校验通过时采信；
+        // 其余（Basic / 会话 JWT / API Token / 无凭据）一律回退既有 identity。
+        let token = parts
+            .headers
+            .get(header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|h| basic::strip_scheme_prefix(h, "Bearer "))
+            .and_then(|raw| state.jwt.verify_docker_token(raw.trim()).ok());
+        Ok(DockerAuth { identity, token })
+    }
+}
+
+impl DockerAuth {
+    /// 令牌是否对 `(name, action)` 授予对应动作：命中某 access 项的 name 且 actions 含该动作。
+    fn token_grants(&self, name: &str, action: Action) -> bool {
+        let want = action_name(action);
+        self.token.as_ref().is_some_and(|claims| {
+            claims
+                .access
+                .iter()
+                .any(|a| a.name == name && a.actions.iter().any(|act| act == want))
+        })
+    }
+
+    /// 是否携带（已校验）docker 令牌——携带即视为已认证语义（隐藏存在性按 404 而非 401）。
+    fn has_token(&self) -> bool {
+        self.token.is_some()
+    }
+}
+
+/// 操作对应的 docker 动作名。
+fn action_name(action: Action) -> &'static str {
+    match action {
+        Action::Read => ACTION_PULL,
+        Action::Write => ACTION_PUSH,
+    }
 }
 
 /// 把 docker `{name}` 拆为 `(JianArtifact 仓库名, 镜像名)`。
@@ -160,40 +435,75 @@ fn split_name(name: &str) -> Option<(String, String)> {
 
 /// 解析仓库并施加读授权（docker 语义）。
 ///
-/// - 仓库不存在：匿名 → 401（引导带凭据，不暴露不存在）；已认证 → 404。
-/// - 有读权限：放行。
-/// - 无读权限：匿名 → 401（带 WWW-Authenticate）；已认证 → 404（隐藏存在性）。
+/// 鉴权来源二选一（互斥）：① 携带有效 docker 令牌 → **仅按令牌的 access 判定**（令牌的
+/// `sub` 即已认证身份，授权已在签发时定）；② 否则回退既有 identity 走 authz。`name` 为完整
+/// docker 名（`{仓库}/{镜像}`），用于令牌匹配与 401 质询 scope。
+///
+/// 拒绝映射：携令牌或已登录（已认证语义）→ 404 隐藏存在性；无令牌且匿名 → 401 Bearer 质询。
 async fn load_readable_repo(
     state: &AppState,
-    identity: &Identity,
+    auth: &DockerAuth,
+    name: &str,
     repo_name: &str,
 ) -> Result<RepositoryRecord, DockerApiError> {
     let repo = match state.meta.get_repository_by_name(repo_name).await {
         Ok(Some(r)) => r,
-        Ok(None) => return Err(deny_read(identity)),
+        Ok(None) => return Err(deny_read(state, auth, name)),
         Err(e) => return Err(map_docker_error(DockerError::Meta(e))),
     };
-    let view = build_repo_view(state, identity, &repo)
+    if auth.has_token() {
+        // 令牌通道：授予 pull → 放行；否则按已认证 404 隐藏存在性
+        return if auth.token_grants(name, Action::Read) {
+            Ok(repo)
+        } else {
+            Err(DockerApiError::not_found("NAME_UNKNOWN"))
+        };
+    }
+    // identity 通道：走既有 authz
+    let view = build_repo_view(state, &auth.identity, &repo)
         .await
         .map_err(|_| DockerApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "UNKNOWN", "内部错误"))?;
-    match authorize(&identity.0, &view, Action::Read) {
+    match authorize(&auth.identity.0, &view, Action::Read) {
         Decision::Allow => Ok(repo),
-        Decision::Deny => Err(deny_read(identity)),
+        Decision::Deny => Err(deny_read(state, auth, name)),
     }
 }
 
 /// 解析仓库并施加写授权（docker 语义）。
 ///
-/// - 未认证：一律 401 + WWW-Authenticate（写必须认证）。
-/// - 已认证：无读权限 → 404（隐藏存在性）；有读无写 → 403；有写 → 放行。
+/// 鉴权来源二选一（互斥）：① 携带有效 docker 令牌 → **仅按令牌的 access 判定**；② 否则回退
+/// 既有 identity。已认证语义下：授予 push → 放行；仅授予 pull（有读无写）→ 403；无读 → 404。
+/// 未认证（无令牌且匿名）→ 401 + Bearer 质询（scope 含 `pull,push`）。
 async fn load_writable_repo(
     state: &AppState,
-    identity: &Identity,
+    auth: &DockerAuth,
+    name: &str,
     repo_name: &str,
 ) -> Result<RepositoryRecord, DockerApiError> {
-    // 写必须认证：匿名直接 401 引导登录
-    if !identity.0.is_authenticated() {
-        return Err(DockerApiError::unauthorized());
+    if auth.has_token() {
+        // 令牌通道：仓库须存在（不存在按已认证 404）
+        let repo = match state.meta.get_repository_by_name(repo_name).await {
+            Ok(Some(r)) => r,
+            Ok(None) => return Err(DockerApiError::not_found("NAME_UNKNOWN")),
+            Err(e) => return Err(map_docker_error(DockerError::Meta(e))),
+        };
+        return if auth.token_grants(name, Action::Write) {
+            Ok(repo)
+        } else if auth.token_grants(name, Action::Read) {
+            // 有读无写 → 403
+            Err(DockerApiError::new(StatusCode::FORBIDDEN, "DENIED", "无写权限"))
+        } else {
+            // 既无读也无写 → 404 隐藏存在性
+            Err(DockerApiError::not_found("NAME_UNKNOWN"))
+        };
+    }
+    // identity 通道：写必须认证，匿名 → 401 引导到令牌端点（scope 含 pull,push）
+    if !auth.identity.0.is_authenticated() {
+        return Err(DockerApiError::unauthorized(bearer_challenge(
+            state,
+            name,
+            &format!("{ACTION_PULL},{ACTION_PUSH}"),
+        )));
     }
     let repo = match state.meta.get_repository_by_name(repo_name).await {
         Ok(Some(r)) => r,
@@ -201,14 +511,14 @@ async fn load_writable_repo(
         Ok(None) => return Err(DockerApiError::not_found("NAME_UNKNOWN")),
         Err(e) => return Err(map_docker_error(DockerError::Meta(e))),
     };
-    let view = build_repo_view(state, identity, &repo)
+    let view = build_repo_view(state, &auth.identity, &repo)
         .await
         .map_err(|_| DockerApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "UNKNOWN", "内部错误"))?;
     // 先过读判定：无读权限（含登录无 ACL 访问 private）→ 404 隐藏存在性
-    if authorize(&identity.0, &view, Action::Read) == Decision::Deny {
+    if authorize(&auth.identity.0, &view, Action::Read) == Decision::Deny {
         return Err(DockerApiError::not_found("NAME_UNKNOWN"));
     }
-    match authorize(&identity.0, &view, Action::Write) {
+    match authorize(&auth.identity.0, &view, Action::Write) {
         Decision::Allow => Ok(repo),
         Decision::Deny => Err(DockerApiError::new(
             StatusCode::FORBIDDEN,
@@ -218,12 +528,12 @@ async fn load_writable_repo(
     }
 }
 
-/// 读拒绝的状态映射：匿名 → 401 引导认证；已认证 → 404 隐藏存在性。
-fn deny_read(identity: &Identity) -> DockerApiError {
-    if identity.0.is_authenticated() {
+/// 读拒绝的状态映射：携令牌或已登录（已认证语义）→ 404 隐藏存在性；无令牌且匿名 → 401 Bearer 质询。
+fn deny_read(state: &AppState, auth: &DockerAuth, name: &str) -> DockerApiError {
+    if auth.has_token() || auth.identity.0.is_authenticated() {
         DockerApiError::not_found("NAME_UNKNOWN")
     } else {
-        DockerApiError::unauthorized()
+        DockerApiError::unauthorized(bearer_challenge(state, name, ACTION_PULL))
     }
 }
 
@@ -244,16 +554,20 @@ fn registry(state: &AppState) -> Result<&super::AppDockerRegistry, DockerApiErro
     })
 }
 
-/// 把对外基础地址（去 scheme）与路径拼成 Location 头值。
+/// 对外基础地址：优先取 `public_base_url`（去尾斜杠），缺省按监听地址构造 `http://{addr}:{port}`。
+///
+/// 令牌端点 realm 与 Location 头共用此基址，保证客户端取到可回连的地址。
+fn base_url(state: &AppState) -> String {
+    if let Some(u) = state.config.server.public_base_url.as_deref() {
+        return u.trim_end_matches('/').to_string();
+    }
+    let server = &state.config.server;
+    format!("http://{}:{}", server.listen_addr, server.port)
+}
+
+/// 把对外基础地址与路径拼成 Location 头值。
 fn location(state: &AppState, path: &str) -> String {
-    let base = state
-        .config
-        .server
-        .public_base_url
-        .as_deref()
-        .map(|u| u.trim_end_matches('/').to_string())
-        .unwrap_or_default();
-    format!("{base}{path}")
+    format!("{}{path}", base_url(state))
 }
 
 /// `/v2/` 之后的路径解析结果：把 `{name}/{后缀}` 归类为具体的 registry 操作。
@@ -321,15 +635,13 @@ fn non_empty(s: &str) -> Option<String> {
 /// POST 分发：仅 `{name}/blobs/uploads/` 合法（启动上传）。
 pub async fn dispatch_post(
     state: State<AppState>,
-    identity: Identity,
+    auth: DockerAuth,
     Path(rest): Path<String>,
     q: Query<DigestQuery>,
     body: Body,
 ) -> Response {
     match parse_v2_route(&rest) {
-        Some(V2Route::StartUpload { name }) => {
-            start_blob_upload(state, identity, name, q, body).await
-        }
+        Some(V2Route::StartUpload { name }) => start_blob_upload(state, auth, name, q, body).await,
         _ => DockerApiError::not_found("NAME_UNKNOWN").into_response(),
     }
 }
@@ -337,13 +649,13 @@ pub async fn dispatch_post(
 /// PATCH 分发：仅 `{name}/blobs/uploads/{uuid}` 合法（续传）。
 pub async fn dispatch_patch(
     state: State<AppState>,
-    identity: Identity,
+    auth: DockerAuth,
     Path(rest): Path<String>,
     body: Body,
 ) -> Response {
     match parse_v2_route(&rest) {
         Some(V2Route::Upload { name, uuid }) => {
-            patch_blob_upload(state, identity, name, uuid, body).await
+            patch_blob_upload(state, auth, name, uuid, body).await
         }
         _ => DockerApiError::not_found("NAME_UNKNOWN").into_response(),
     }
@@ -352,7 +664,7 @@ pub async fn dispatch_patch(
 /// PUT 分发：`{name}/blobs/uploads/{uuid}`（完成上传）或 `{name}/manifests/{ref}`（写 manifest）。
 pub async fn dispatch_put(
     state: State<AppState>,
-    identity: Identity,
+    auth: DockerAuth,
     Path(rest): Path<String>,
     q: Query<DigestQuery>,
     headers: axum::http::HeaderMap,
@@ -361,10 +673,10 @@ pub async fn dispatch_put(
     match parse_v2_route(&rest) {
         Some(V2Route::Upload { name, uuid }) => {
             // 完成上传需把已读 body 作为末段；这里 body 已聚合为 Bytes（manifest 与完成上传共用 PUT）
-            put_blob_upload(state, identity, name, uuid, q, body).await
+            put_blob_upload(state, auth, name, uuid, q, body).await
         }
         Some(V2Route::Manifest { name, reference }) => {
-            put_manifest(state, identity, name, reference, headers, body).await
+            put_manifest(state, auth, name, reference, headers, body).await
         }
         _ => DockerApiError::not_found("NAME_UNKNOWN").into_response(),
     }
@@ -373,17 +685,17 @@ pub async fn dispatch_put(
 /// GET 分发：`/v2/`（版本检查由专门路由处理）、blob 或 manifest 读取。
 pub async fn dispatch_get(
     state: State<AppState>,
-    identity: Identity,
+    auth: DockerAuth,
     Path(rest): Path<String>,
 ) -> Response {
     match parse_v2_route(&rest) {
         Some(V2Route::Blob { name, digest }) => {
-            blob_request(state.0, identity, name, digest, true).await
+            blob_request(state.0, auth, name, digest, true).await
         }
         Some(V2Route::Manifest { name, reference }) => {
-            manifest_request(state.0, identity, name, reference, true).await
+            manifest_request(state.0, auth, name, reference, true).await
         }
-        Some(V2Route::TagsList { name }) => tags_list(state.0, identity, name).await,
+        Some(V2Route::TagsList { name }) => tags_list(state.0, auth, name).await,
         _ => DockerApiError::not_found("NAME_UNKNOWN").into_response(),
     }
 }
@@ -391,15 +703,15 @@ pub async fn dispatch_get(
 /// HEAD 分发：blob 或 manifest 存在性检查。
 pub async fn dispatch_head(
     state: State<AppState>,
-    identity: Identity,
+    auth: DockerAuth,
     Path(rest): Path<String>,
 ) -> Response {
     match parse_v2_route(&rest) {
         Some(V2Route::Blob { name, digest }) => {
-            blob_request(state.0, identity, name, digest, false).await
+            blob_request(state.0, auth, name, digest, false).await
         }
         Some(V2Route::Manifest { name, reference }) => {
-            manifest_request(state.0, identity, name, reference, false).await
+            manifest_request(state.0, auth, name, reference, false).await
         }
         _ => DockerApiError::not_found("NAME_UNKNOWN").into_response(),
     }
@@ -409,12 +721,12 @@ pub async fn dispatch_head(
 ///
 /// 经读授权（private 对无权 → 404/401，与 manifest 读一致）；tag 取自存储中
 /// `{image}/tags/{tag}` 指针索引。无任何 tag 视为名称未知，返回 404 NAME_UNKNOWN。
-async fn tags_list(state: AppState, identity: Identity, name: String) -> Response {
+async fn tags_list(state: AppState, auth: DockerAuth, name: String) -> Response {
     let (repo_name, image) = match split_name(&name) {
         Some(v) => v,
         None => return DockerApiError::not_found("NAME_UNKNOWN").into_response(),
     };
-    let repo = match load_readable_repo(&state, &identity, &repo_name).await {
+    let repo = match load_readable_repo(&state, &auth, &name, &repo_name).await {
         Ok(r) => r,
         Err(e) => return e.into_response(),
     };
@@ -451,7 +763,7 @@ async fn tags_list(state: AppState, identity: Identity, name: String) -> Respons
 /// 启动 blob 上传（`POST /v2/{name}/blobs/uploads/`）：返回 202 + Location（含 uuid）。
 async fn start_blob_upload(
     State(state): State<AppState>,
-    identity: Identity,
+    auth: DockerAuth,
     name: String,
     Query(q): Query<DigestQuery>,
     body: Body,
@@ -460,7 +772,7 @@ async fn start_blob_upload(
         Some(v) => v,
         None => return DockerApiError::not_found("NAME_UNKNOWN").into_response(),
     };
-    let repo = match load_writable_repo(&state, &identity, &repo_name).await {
+    let repo = match load_writable_repo(&state, &auth, &name, &repo_name).await {
         Ok(r) => r,
         Err(e) => return e.into_response(),
     };
@@ -501,7 +813,7 @@ async fn start_blob_upload(
 /// 追加 blob 分块（`PATCH /v2/{name}/blobs/uploads/{uuid}`）：流式写入，返回 202 + Range。
 async fn patch_blob_upload(
     State(state): State<AppState>,
-    identity: Identity,
+    auth: DockerAuth,
     name: String,
     uuid: String,
     body: Body,
@@ -510,7 +822,7 @@ async fn patch_blob_upload(
         Some(v) => v,
         None => return DockerApiError::not_found("NAME_UNKNOWN").into_response(),
     };
-    let repo = match load_writable_repo(&state, &identity, &repo_name).await {
+    let repo = match load_writable_repo(&state, &auth, &name, &repo_name).await {
         Ok(r) => r,
         Err(e) => return e.into_response(),
     };
@@ -544,7 +856,7 @@ async fn patch_blob_upload(
 /// 完成 blob 上传（`PUT /v2/{name}/blobs/uploads/{uuid}?digest=...`）：可携末段 body。
 async fn put_blob_upload(
     State(state): State<AppState>,
-    identity: Identity,
+    auth: DockerAuth,
     name: String,
     uuid: String,
     Query(q): Query<DigestQuery>,
@@ -554,7 +866,7 @@ async fn put_blob_upload(
         Some(v) => v,
         None => return DockerApiError::not_found("NAME_UNKNOWN").into_response(),
     };
-    let repo = match load_writable_repo(&state, &identity, &repo_name).await {
+    let repo = match load_writable_repo(&state, &auth, &name, &repo_name).await {
         Ok(r) => r,
         Err(e) => return e.into_response(),
     };
@@ -653,7 +965,7 @@ fn upload_accepted(location: &str, uuid: &str, written: u64) -> Response {
 /// blob 读取公共流程：`with_body` 区分 GET（带体）与 HEAD（仅头）。
 async fn blob_request(
     state: AppState,
-    identity: Identity,
+    auth: DockerAuth,
     name: String,
     digest: String,
     with_body: bool,
@@ -662,7 +974,7 @@ async fn blob_request(
         Some(v) => v,
         None => return DockerApiError::not_found("NAME_UNKNOWN").into_response(),
     };
-    let repo = match load_readable_repo(&state, &identity, &repo_name).await {
+    let repo = match load_readable_repo(&state, &auth, &name, &repo_name).await {
         Ok(r) => r,
         Err(e) => return e.into_response(),
     };
@@ -699,7 +1011,7 @@ async fn blob_request(
 /// PUT manifest（`PUT /v2/{name}/manifests/{reference}`）：写入并返回 201 + digest 头。
 async fn put_manifest(
     State(state): State<AppState>,
-    identity: Identity,
+    auth: DockerAuth,
     name: String,
     reference: String,
     headers: axum::http::HeaderMap,
@@ -709,7 +1021,7 @@ async fn put_manifest(
         Some(v) => v,
         None => return DockerApiError::not_found("NAME_UNKNOWN").into_response(),
     };
-    let repo = match load_writable_repo(&state, &identity, &repo_name).await {
+    let repo = match load_writable_repo(&state, &auth, &name, &repo_name).await {
         Ok(r) => r,
         Err(e) => return e.into_response(),
     };
@@ -755,7 +1067,7 @@ async fn put_manifest(
 /// manifest 读取公共流程：`with_body` 区分 GET 与 HEAD。
 async fn manifest_request(
     state: AppState,
-    identity: Identity,
+    auth: DockerAuth,
     name: String,
     reference: String,
     with_body: bool,
@@ -764,7 +1076,7 @@ async fn manifest_request(
         Some(v) => v,
         None => return DockerApiError::not_found("NAME_UNKNOWN").into_response(),
     };
-    let repo = match load_readable_repo(&state, &identity, &repo_name).await {
+    let repo = match load_readable_repo(&state, &auth, &name, &repo_name).await {
         Ok(r) => r,
         Err(e) => return e.into_response(),
     };

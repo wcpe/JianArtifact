@@ -143,8 +143,13 @@ async fn docker_版本检查不被_spa_拦截() {
         .oneshot(Request::builder().uri("/v2/").body(Body::empty()).unwrap())
         .await
         .unwrap();
-    // Docker registry v2 版本检查端点由 docker 路由处理：返回 200 且带版本头，
-    // 证明 `/v2/` 未被 SPA 回退拦截（否则会得到 HTML 而非该头）。
-    assert_eq!(resp.status(), StatusCode::OK);
-    assert!(resp.headers().contains_key("docker-distribution-api-version"));
+    // Docker registry v2 版本检查端点由 docker 路由处理：未带凭据时返回 401 + Bearer 质询
+    // （发起认证发现），证明 `/v2/` 未被 SPA 回退拦截（否则会得到 HTML 而非该质询头）。
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    let www = resp
+        .headers()
+        .get("www-authenticate")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(www.starts_with("Bearer "), "应为 Bearer 质询: {www}");
 }

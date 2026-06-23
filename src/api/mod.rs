@@ -310,9 +310,11 @@ pub fn build_router(state: AppState) -> Router {
     );
 
     // Docker Registry v2 / OCI Distribution：挂载于 /v2/。
-    // `/v2/` 为版本检查；`/v2/{*path}` 按方法分发（name 可多段，故走 catch-all 内部解析）。
+    // `/v2/` 为版本检查；`/v2/token` 为 Bearer 范围令牌端点（须置于 catch-all 之前，
+    // 避免被 `/v2/{*path}` 通配吞掉）；`/v2/{*path}` 按方法分发（name 可多段，走内部解析）。
     let docker_api = Router::new()
         .route("/v2/", get(docker_routes::version_check))
+        .route("/v2/token", get(docker_routes::token_endpoint))
         .route(
             "/v2/{*path}",
             get(docker_routes::dispatch_get)

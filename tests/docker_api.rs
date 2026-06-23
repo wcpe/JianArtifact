@@ -100,6 +100,23 @@ fn basic(username: &str, password: &str) -> String {
     format!("Basic {}", STANDARD.encode(format!("{username}:{password}")))
 }
 
+/// 以 Bearer 令牌组装 Authorization 头。
+fn bearer(token: &str) -> String {
+    format!("Bearer {token}")
+}
+
+/// 请求令牌端点换取范围令牌，返回响应体 JSON。
+async fn fetch_token(fx: &Fixture, auth: Option<&str>, scope: &str) -> serde_json::Value {
+    let uri = format!("/v2/token?service=jianartifact&scope={scope}");
+    let resp = fx
+        .router()
+        .oneshot(req("GET", &uri, auth, None, Vec::new()))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "令牌端点应 200");
+    serde_json::from_slice(&body_bytes(resp).await).unwrap()
+}
+
 /// 算内容 sha256 并拼成 docker digest（`sha256:{hex}`）。
 fn digest_of(data: &[u8]) -> String {
     let mut h = sha2::Sha256::new();
@@ -189,16 +206,30 @@ async fn push_blob(fx: &Fixture, name: &str, auth: &str, content: &[u8]) -> Stri
 // ---------- 版本检查 ----------
 
 #[tokio::test]
-async fn v2_版本检查_200_带版本头() {
+async fn v2_版本检查_无凭据_401_bearer_带凭据_200() {
     let fx = Fixture::new().await;
-    let resp = fx
+    fx.seed_user("admin", "pw", Role::Admin).await;
+
+    // 无凭据：发起认证发现，返回 401 + Bearer 质询（不带 scope）
+    let anon = fx
         .router()
         .oneshot(req("GET", "/v2/", None, None, Vec::new()))
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(anon.status(), StatusCode::UNAUTHORIZED);
+    let www = header_str(&anon, "www-authenticate").expect("应带 WWW-Authenticate");
+    assert!(www.starts_with("Bearer "), "应为 Bearer 质询: {www}");
+    assert!(www.contains("/v2/token"), "realm 应指向令牌端点: {www}");
+
+    // 带凭据：返回 200 与版本头（探活成功）
+    let authed = fx
+        .router()
+        .oneshot(req("GET", "/v2/", Some(&basic("admin", "pw")), None, Vec::new()))
+        .await
+        .unwrap();
+    assert_eq!(authed.status(), StatusCode::OK);
     assert_eq!(
-        header_str(&resp, "docker-distribution-api-version").as_deref(),
+        header_str(&authed, "docker-distribution-api-version").as_deref(),
         Some("registry/2.0")
     );
 }
@@ -539,7 +570,14 @@ async fn 匿名写_manifest_返回_401_带_www_authenticate() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     let www = header_str(&resp, "www-authenticate").expect("401 须带 WWW-Authenticate");
-    assert!(www.starts_with("Basic "), "应为 Basic 质询: {www}");
+    // Bearer 令牌质询：含 realm（指向令牌端点）、service 与 scope（写需 pull,push）
+    assert!(www.starts_with("Bearer "), "应为 Bearer 质询: {www}");
+    assert!(www.contains("/v2/token"), "realm 应指向令牌端点: {www}");
+    assert!(www.contains("service=\"jianartifact\""), "应含 service: {www}");
+    assert!(
+        www.contains("scope=\"repository:hub/app:pull,push\""),
+        "写操作 scope 应含 pull,push: {www}"
+    );
 }
 
 #[tokio::test]
@@ -558,7 +596,8 @@ async fn 匿名启动上传返回_401_带_www_authenticate() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-    assert!(header_str(&resp, "www-authenticate").is_some());
+    let www = header_str(&resp, "www-authenticate").expect("401 须带 WWW-Authenticate");
+    assert!(www.starts_with("Bearer "), "应为 Bearer 质询: {www}");
 }
 
 #[tokio::test]
@@ -586,7 +625,13 @@ async fn 私有仓库匿名读_manifest_返回_401_隐藏存在性() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-    assert!(header_str(&resp, "www-authenticate").is_some());
+    let www = header_str(&resp, "www-authenticate").expect("401 须带 WWW-Authenticate");
+    // 读操作 Bearer 质询 scope 仅需 pull
+    assert!(www.starts_with("Bearer "), "应为 Bearer 质询: {www}");
+    assert!(
+        www.contains("scope=\"repository:priv/app:pull\""),
+        "读操作 scope 应仅含 pull: {www}"
+    );
 }
 
 #[tokio::test]
@@ -739,4 +784,237 @@ async fn 完整推拉时序_blob_与引用其的_manifest() {
             .unwrap();
         assert_eq!(head.status(), StatusCode::OK, "manifest 引用的 blob 应可拉取: {d}");
     }
+}
+
+// ---------- Bearer 令牌端点与令牌鉴权（§2.1 / §2.6） ----------
+
+#[tokio::test]
+async fn 令牌端点_admin_请求_pull_push_可推送() {
+    let fx = Fixture::new().await;
+    fx.seed_user("admin", "pw", Role::Admin).await;
+    fx.seed_docker_repo("hub", Visibility::Public).await;
+
+    // admin 带 Basic 请求 repository:hub/app:pull,push → 200，令牌可推送
+    let json = fetch_token(&fx, Some(&basic("admin", "pw")), "repository:hub/app:pull,push").await;
+    let token = json["token"].as_str().expect("应含 token");
+    assert_eq!(json["access_token"], token, "access_token 应与 token 一致");
+    assert!(json["expires_in"].as_u64().unwrap() > 0);
+
+    // 用同一密钥校验令牌：access 应含 pull 与 push（管理员对 public 仓库读写皆放行）
+    let signer = JwtSigner::from_secret(b"docker-secret-32-bytes-xxxxxxxxxx", 3600);
+    let claims = signer.verify_docker_token(token).expect("令牌应可校验");
+    assert_eq!(claims.sub, "admin");
+    let app = claims
+        .access
+        .iter()
+        .find(|a| a.name == "hub/app")
+        .expect("应含 hub/app 授权");
+    assert!(app.actions.contains(&"pull".to_string()), "应授予 pull");
+    assert!(app.actions.contains(&"push".to_string()), "应授予 push");
+
+    // 用该 Bearer 令牌推 manifest → 201（经令牌流，无需再带 Basic）
+    let manifest = br#"{"schemaVersion":2}"#;
+    let put = fx
+        .router()
+        .oneshot(req(
+            "PUT",
+            "/v2/hub/app/manifests/1.0",
+            Some(&bearer(token)),
+            Some(MANIFEST_V2),
+            manifest.to_vec(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(put.status(), StatusCode::CREATED, "Bearer 令牌推送应 201");
+}
+
+#[tokio::test]
+async fn 令牌端点_无写权限用户的令牌不能推送() {
+    let fx = Fixture::new().await;
+    fx.seed_user("admin", "pw", Role::Admin).await;
+    let reader = fx.seed_user("reader", "pw", Role::User).await;
+    let rid = fx.seed_docker_repo("priv", Visibility::Private).await;
+    fx.seed_acl(&rid, &reader, Permission::Read).await;
+
+    // 仅读 ACL 用户请求 pull,push：令牌只应授予 pull（push 被拒，不入令牌）
+    let json = fetch_token(&fx, Some(&basic("reader", "pw")), "repository:priv/app:pull,push").await;
+    let token = json["token"].as_str().unwrap();
+    let signer = JwtSigner::from_secret(b"docker-secret-32-bytes-xxxxxxxxxx", 3600);
+    let claims = signer.verify_docker_token(token).unwrap();
+    let app = claims.access.iter().find(|a| a.name == "priv/app").unwrap();
+    assert!(app.actions.contains(&"pull".to_string()), "应授予 pull");
+    assert!(!app.actions.contains(&"push".to_string()), "不应授予 push");
+
+    // 该令牌推送 manifest → 403（令牌不含 push，回退既有 identity 也无写）
+    let put = fx
+        .router()
+        .oneshot(req(
+            "PUT",
+            "/v2/priv/app/manifests/1.0",
+            Some(&bearer(token)),
+            Some(MANIFEST_V2),
+            br#"{"schemaVersion":2}"#.to_vec(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(put.status(), StatusCode::FORBIDDEN, "无 push 授予的令牌不得推送");
+
+    // 但该令牌含 pull：可读（管理员先写一个）
+    let admin_auth = basic("admin", "pw");
+    fx.router()
+        .oneshot(req(
+            "PUT",
+            "/v2/priv/app/manifests/1.0",
+            Some(&admin_auth),
+            Some(MANIFEST_V2),
+            br#"{"schemaVersion":2}"#.to_vec(),
+        ))
+        .await
+        .unwrap();
+    let get = fx
+        .router()
+        .oneshot(req(
+            "GET",
+            "/v2/priv/app/manifests/1.0",
+            Some(&bearer(token)),
+            None,
+            Vec::new(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(get.status(), StatusCode::OK, "含 pull 授予的令牌应可读");
+}
+
+#[tokio::test]
+async fn 令牌端点_匿名请求_public_仓库可拉取() {
+    let fx = Fixture::new().await;
+    fx.seed_user("admin", "pw", Role::Admin).await;
+    fx.seed_docker_repo("hub", Visibility::Public).await;
+    // 管理员先写 manifest
+    let admin_auth = basic("admin", "pw");
+    fx.router()
+        .oneshot(req(
+            "PUT",
+            "/v2/hub/app/manifests/1.0",
+            Some(&admin_auth),
+            Some(MANIFEST_V2),
+            br#"{"schemaVersion":2}"#.to_vec(),
+        ))
+        .await
+        .unwrap();
+
+    // 匿名（无 Authorization）请求 public 仓库 pull → 令牌端点 200，签发含 pull 的令牌
+    let json = fetch_token(&fx, None, "repository:hub/app:pull").await;
+    let token = json["token"].as_str().unwrap();
+    let get = fx
+        .router()
+        .oneshot(req(
+            "GET",
+            "/v2/hub/app/manifests/1.0",
+            Some(&bearer(token)),
+            None,
+            Vec::new(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(get.status(), StatusCode::OK, "匿名 public 读令牌应可拉取");
+}
+
+#[tokio::test]
+async fn 令牌端点_错误_basic_凭据返回_401() {
+    let fx = Fixture::new().await;
+    fx.seed_user("admin", "pw", Role::Admin).await;
+    fx.seed_docker_repo("hub", Visibility::Public).await;
+
+    // 提供了 Basic 凭据但口令错误 → 401（不降级为匿名签空令牌）
+    let resp = fx
+        .router()
+        .oneshot(req(
+            "GET",
+            "/v2/token?service=jianartifact&scope=repository:hub/app:pull,push",
+            Some(&basic("admin", "wrong-pw")),
+            None,
+            Vec::new(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    assert!(header_str(&resp, "www-authenticate").is_some());
+}
+
+#[tokio::test]
+async fn 令牌_scope_不含目标仓库则推送被拒() {
+    let fx = Fixture::new().await;
+    fx.seed_user("admin", "pw", Role::Admin).await;
+    fx.seed_docker_repo("hub", Visibility::Public).await;
+
+    // 令牌只授予 hub/other，却用于推 hub/app
+    let json = fetch_token(&fx, Some(&basic("admin", "pw")), "repository:hub/other:pull,push").await;
+    let token = json["token"].as_str().unwrap();
+    let put = fx
+        .router()
+        .oneshot(req(
+            "PUT",
+            "/v2/hub/app/manifests/1.0",
+            Some(&bearer(token)),
+            Some(MANIFEST_V2),
+            br#"{"schemaVersion":2}"#.to_vec(),
+        ))
+        .await
+        .unwrap();
+    // 令牌已认证（sub=admin）但不覆盖 hub/app：按已认证语义 404 隐藏存在性（既无 push 也无 pull）
+    assert_eq!(
+        put.status(),
+        StatusCode::NOT_FOUND,
+        "scope 不含目标仓库的令牌不得推送，按已认证语义 404 隐藏"
+    );
+}
+
+#[tokio::test]
+async fn 伪造或过期_docker_令牌推送被拒() {
+    let fx = Fixture::new().await;
+    fx.seed_user("admin", "pw", Role::Admin).await;
+    fx.seed_docker_repo("hub", Visibility::Public).await;
+
+    // 伪造令牌（非本服务签发）作为 Bearer → 既非有效 docker 令牌、也非有效身份 → 匿名写 401
+    let put = fx
+        .router()
+        .oneshot(req(
+            "PUT",
+            "/v2/hub/app/manifests/1.0",
+            Some(&bearer("not-a-valid-token.payload.sig")),
+            Some(MANIFEST_V2),
+            br#"{"schemaVersion":2}"#.to_vec(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(put.status(), StatusCode::UNAUTHORIZED, "伪造令牌不得推送");
+}
+
+#[tokio::test]
+async fn 匿名_public_读回归_仍_200() {
+    let fx = Fixture::new().await;
+    fx.seed_user("admin", "pw", Role::Admin).await;
+    fx.seed_docker_repo("hub", Visibility::Public).await;
+    let auth = basic("admin", "pw");
+    let manifest = br#"{"schemaVersion":2}"#;
+    fx.router()
+        .oneshot(req(
+            "PUT",
+            "/v2/hub/app/manifests/1.0",
+            Some(&auth),
+            Some(MANIFEST_V2),
+            manifest.to_vec(),
+        ))
+        .await
+        .unwrap();
+
+    // 无任何凭据、无令牌：public 仓库读仍 200（tokenless 拉取不被破坏）
+    let get = fx
+        .router()
+        .oneshot(req("GET", "/v2/hub/app/manifests/1.0", None, None, Vec::new()))
+        .await
+        .unwrap();
+    assert_eq!(get.status(), StatusCode::OK, "匿名 public 读应保持 200");
+    assert_eq!(body_bytes(get).await, manifest);
 }
