@@ -13,7 +13,9 @@ use tower::ServiceExt;
 use jianartifact::api::{build_router, AppState};
 use jianartifact::auth::{self, JwtSigner, LoginGuard};
 use jianartifact::config::Config;
+use jianartifact::format::{ArtifactService, FormatRegistry};
 use jianartifact::meta::{MetaStore, Role};
+use jianartifact::proxy::HttpUpstream;
 use jianartifact::storage::LocalFsStore;
 
 /// 测试夹具：持有可重复构建路由的状态与临时目录。
@@ -35,12 +37,16 @@ impl Fixture {
         let meta = MetaStore::open(&dir.path().join("test.db")).await.unwrap();
         let store = LocalFsStore::new(dir.path().join("blobs")).await.unwrap();
         let jwt = JwtSigner::from_secret(b"integration-secret-32-bytes-xxxx", ttl_secs);
+        let upstream = HttpUpstream::new(std::time::Duration::from_secs(60)).unwrap();
+        let artifacts = Arc::new(ArtifactService::new(store.clone(), meta.clone(), upstream));
         let state = AppState {
             config: Arc::new(Config::default()),
             meta,
             store,
             jwt,
             login_guard: Arc::new(LoginGuard::new(max_failures, lockout_secs)),
+            artifacts,
+            formats: Arc::new(FormatRegistry::with_builtin()),
         };
         Self { state, _dir: dir }
     }

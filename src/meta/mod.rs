@@ -11,7 +11,8 @@ use uuid::Uuid;
 mod repo;
 
 pub use repo::{
-    AclRecord, ArtifactRecord, NewRepository, Permission, RepoType, RepositoryRecord, Visibility,
+    AclRecord, ArtifactRecord, ArtifactSearchHit, NewArtifact, NewRepository, Permission, RepoType,
+    RepositoryRecord, Visibility,
 };
 
 /// 全局角色。以小写字符串存储于 DB，避免魔法字符串散落各处。

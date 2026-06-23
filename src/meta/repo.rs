@@ -153,11 +153,61 @@ pub struct ArtifactRecord {
     pub size: i64,
     /// sha256 摘要（blob 寻址以此为准）。
     pub sha256: String,
+    /// sha1 摘要（主要为客户端兼容）。
+    pub sha1: String,
+    /// md5 摘要（主要为客户端兼容）。
+    pub md5: String,
+    /// sha512 摘要。
+    pub sha512: String,
     /// 内容类型（可空）。
     pub content_type: Option<String>,
     /// 是否为 proxy 缓存制品（0/1）。
     pub cached: i64,
     /// 创建时间（ISO8601）。
+    pub created_at: String,
+}
+
+/// 制品索引写入入参：四校验和与大小由 blob 落盘时算得后传入。
+#[derive(Debug, Clone)]
+pub struct NewArtifact<'a> {
+    /// 所属仓库主键。
+    pub repo_id: &'a str,
+    /// 制品路径（仓库内唯一）。
+    pub path: &'a str,
+    /// 字节大小。
+    pub size: i64,
+    /// sha256 摘要（blob 寻址以此为准）。
+    pub sha256: &'a str,
+    /// sha1 摘要。
+    pub sha1: &'a str,
+    /// md5 摘要。
+    pub md5: &'a str,
+    /// sha512 摘要。
+    pub sha512: &'a str,
+    /// 内容类型（可空）。
+    pub content_type: Option<&'a str>,
+    /// 是否为 proxy 缓存制品。
+    pub cached: bool,
+}
+
+/// 跨仓库搜索命中记录：制品索引连同所属仓库的名称、格式与可见性。
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct ArtifactSearchHit {
+    /// 所属仓库主键。
+    pub repo_id: String,
+    /// 所属仓库名。
+    pub repo_name: String,
+    /// 所属仓库格式。
+    pub repo_format: String,
+    /// 所属仓库可见性字符串（public | private）。
+    pub repo_visibility: String,
+    /// 制品路径。
+    pub path: String,
+    /// sha256 摘要。
+    pub sha256: String,
+    /// 字节大小。
+    pub size: i64,
+    /// 创建时间。
     pub created_at: String,
 }
 
@@ -194,6 +244,21 @@ impl MetaStore {
              FROM repositories WHERE id = ?",
         )
         .bind(id)
+        .fetch_optional(self.pool())
+        .await?;
+        Ok(record)
+    }
+
+    /// 按仓库名查仓库；不存在时返回 None（格式端点据路径中的仓库名定位仓库）。
+    pub async fn get_repository_by_name(
+        &self,
+        name: &str,
+    ) -> Result<Option<RepositoryRecord>, MetaError> {
+        let record = sqlx::query_as::<_, RepositoryRecord>(
+            "SELECT id, name, format, type, visibility, upstream_url, upstream_auth_ref, created_at \
+             FROM repositories WHERE name = ?",
+        )
+        .bind(name)
         .fetch_optional(self.pool())
         .await?;
         Ok(record)
@@ -341,10 +406,117 @@ impl MetaStore {
         repo_id: &str,
     ) -> Result<Vec<ArtifactRecord>, MetaError> {
         let records = sqlx::query_as::<_, ArtifactRecord>(
-            "SELECT id, repo_id, path, size, sha256, content_type, cached, created_at \
+            "SELECT id, repo_id, path, size, sha256, sha1, md5, sha512, content_type, cached, created_at \
              FROM artifacts WHERE repo_id = ? ORDER BY path ASC",
         )
         .bind(repo_id)
+        .fetch_all(self.pool())
+        .await?;
+        Ok(records)
+    }
+
+    /// 按 (仓库, 路径) 查制品索引；不存在时返回 None。
+    pub async fn get_artifact(
+        &self,
+        repo_id: &str,
+        path: &str,
+    ) -> Result<Option<ArtifactRecord>, MetaError> {
+        let record = sqlx::query_as::<_, ArtifactRecord>(
+            "SELECT id, repo_id, path, size, sha256, sha1, md5, sha512, content_type, cached, created_at \
+             FROM artifacts WHERE repo_id = ? AND path = ?",
+        )
+        .bind(repo_id)
+        .bind(path)
+        .fetch_optional(self.pool())
+        .await?;
+        Ok(record)
+    }
+
+    /// 落定一条制品索引（upsert）。
+    ///
+    /// 同 (仓库, 路径) 已存在时整体覆盖为新内容（覆盖策略由上层 Format 先行判定，
+    /// 此处仅负责落库）。本层不接触 blob 本体，仅写索引与多校验和。
+    pub async fn upsert_artifact(&self, art: NewArtifact<'_>) -> Result<String, MetaError> {
+        let id = Uuid::new_v4().to_string();
+        // ON CONFLICT 命中 (repo_id, path) 唯一索引时覆盖；id 与 created_at 保持原值
+        sqlx::query(
+            "INSERT INTO artifacts \
+                (id, repo_id, path, size, sha256, sha1, md5, sha512, content_type, cached) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+             ON CONFLICT (repo_id, path) DO UPDATE SET \
+                size = excluded.size, \
+                sha256 = excluded.sha256, \
+                sha1 = excluded.sha1, \
+                md5 = excluded.md5, \
+                sha512 = excluded.sha512, \
+                content_type = excluded.content_type, \
+                cached = excluded.cached",
+        )
+        .bind(&id)
+        .bind(art.repo_id)
+        .bind(art.path)
+        .bind(art.size)
+        .bind(art.sha256)
+        .bind(art.sha1)
+        .bind(art.md5)
+        .bind(art.sha512)
+        .bind(art.content_type)
+        .bind(art.cached as i64)
+        .execute(self.pool())
+        .await?;
+        Ok(id)
+    }
+
+    /// 删除一条制品索引（按仓库 + 路径）。返回是否命中记录。
+    ///
+    /// 仅删索引；blob 本体的删除由上层（storage）单独处理，以保证次序与回滚可控。
+    pub async fn delete_artifact(&self, repo_id: &str, path: &str) -> Result<bool, MetaError> {
+        let affected = sqlx::query("DELETE FROM artifacts WHERE repo_id = ? AND path = ?")
+            .bind(repo_id)
+            .bind(path)
+            .execute(self.pool())
+            .await?
+            .rows_affected();
+        Ok(affected > 0)
+    }
+
+    /// 统计某 sha256 在所有仓库索引中的引用计数（用于删 blob 前判断是否仍被引用）。
+    pub async fn count_artifacts_by_sha256(&self, sha256: &str) -> Result<i64, MetaError> {
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM artifacts WHERE sha256 = ?")
+                .bind(sha256)
+                .fetch_one(self.pool())
+                .await?;
+        Ok(count)
+    }
+
+    /// 跨仓库搜索制品：按路径关键字（LIKE）匹配，连带所属仓库信息返回。
+    ///
+    /// 鉴权过滤由上层按调用方读权限处理——本层只负责检索 + 可选格式过滤 + 分页，
+    /// 不在此判定可见性（绝不在 SQL 内静默放行，过滤职责清晰单一）。
+    pub async fn search_artifacts(
+        &self,
+        keyword: &str,
+        format: Option<&str>,
+        offset: i64,
+        limit: i64,
+    ) -> Result<Vec<ArtifactSearchHit>, MetaError> {
+        // LIKE 通配：把关键字夹在 % 之间做包含匹配；keyword 经参数绑定，无注入风险
+        let pattern = format!("%{keyword}%");
+        let records = sqlx::query_as::<_, ArtifactSearchHit>(
+            "SELECT a.repo_id AS repo_id, r.name AS repo_name, r.format AS repo_format, \
+                    r.visibility AS repo_visibility, a.path AS path, a.sha256 AS sha256, \
+                    a.size AS size, a.created_at AS created_at \
+             FROM artifacts a JOIN repositories r ON r.id = a.repo_id \
+             WHERE a.path LIKE ? AND (? IS NULL OR r.format = ?) \
+             ORDER BY r.name ASC, a.path ASC \
+             LIMIT ? OFFSET ?",
+        )
+        .bind(&pattern)
+        .bind(format)
+        .bind(format)
+        .bind(limit)
+        .bind(offset)
         .fetch_all(self.pool())
         .await?;
         Ok(records)
@@ -517,33 +689,127 @@ mod tests {
         assert!(none.is_empty());
     }
 
+    /// 便捷：构造制品写入入参。
+    fn 制品<'a>(repo_id: &'a str, path: &'a str, sha256: &'a str) -> NewArtifact<'a> {
+        NewArtifact {
+            repo_id,
+            path,
+            size: 3,
+            sha256,
+            sha1: "sha1值",
+            md5: "md5值",
+            sha512: "sha512值",
+            content_type: Some("text/plain"),
+            cached: false,
+        }
+    }
+
     #[tokio::test]
     async fn 列出仓库制品索引() {
         let store = MetaStore::open_in_memory().await.unwrap();
         let rid = 建仓库(&store, "r", Visibility::Public).await;
-        // 当前批次无制品写入路径，直接插一条索引验证读取
-        sqlx::query(
-            "INSERT INTO artifacts (id, repo_id, path, size, sha256, sha1, md5, sha512) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(Uuid::new_v4().to_string())
-        .bind(&rid)
-        .bind("a/b/c.txt")
-        .bind(12i64)
-        .bind("sha256值")
-        .bind("sha1值")
-        .bind("md5值")
-        .bind("sha512值")
-        .execute(store.pool())
-        .await
-        .unwrap();
+        store
+            .upsert_artifact(制品(&rid, "a/b/c.txt", "sha256值"))
+            .await
+            .unwrap();
 
         let list = store.list_artifacts_by_repo(&rid).await.unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].path, "a/b/c.txt");
         assert_eq!(list[0].sha256, "sha256值");
+        // 四校验和均被项目出来
+        assert_eq!(list[0].sha1, "sha1值");
+        assert_eq!(list[0].md5, "md5值");
+        assert_eq!(list[0].sha512, "sha512值");
         // 空仓库返回空表
         let empty = 建仓库(&store, "empty", Visibility::Public).await;
         assert!(store.list_artifacts_by_repo(&empty).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn 制品_upsert_覆盖同路径并可按路径查出() {
+        let store = MetaStore::open_in_memory().await.unwrap();
+        let rid = 建仓库(&store, "r", Visibility::Public).await;
+        store
+            .upsert_artifact(制品(&rid, "x/y.bin", "旧sha"))
+            .await
+            .unwrap();
+        // 同 (仓库, 路径) 再次写入应覆盖而非新增
+        store
+            .upsert_artifact(NewArtifact {
+                size: 9,
+                ..制品(&rid, "x/y.bin", "新sha")
+            })
+            .await
+            .unwrap();
+
+        let list = store.list_artifacts_by_repo(&rid).await.unwrap();
+        assert_eq!(list.len(), 1, "覆盖不应新增第二条");
+        let one = store.get_artifact(&rid, "x/y.bin").await.unwrap().unwrap();
+        assert_eq!(one.sha256, "新sha");
+        assert_eq!(one.size, 9);
+        // 查不存在路径返回 None
+        assert!(store.get_artifact(&rid, "无此路径").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn 删除制品索引与_sha256_引用计数() {
+        let store = MetaStore::open_in_memory().await.unwrap();
+        let r1 = 建仓库(&store, "r1", Visibility::Public).await;
+        let r2 = 建仓库(&store, "r2", Visibility::Public).await;
+        // 两个仓库引用同一 sha256
+        store.upsert_artifact(制品(&r1, "p", "共享sha")).await.unwrap();
+        store.upsert_artifact(制品(&r2, "p", "共享sha")).await.unwrap();
+        assert_eq!(store.count_artifacts_by_sha256("共享sha").await.unwrap(), 2);
+
+        // 删一条后引用计数减一（blob 仍被另一仓库引用，不应被清理）
+        assert!(store.delete_artifact(&r1, "p").await.unwrap());
+        assert_eq!(store.count_artifacts_by_sha256("共享sha").await.unwrap(), 1);
+        // 删不存在的返回 false
+        assert!(!store.delete_artifact(&r1, "p").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn 跨仓库搜索按关键字与格式过滤分页() {
+        let store = MetaStore::open_in_memory().await.unwrap();
+        let maven = store
+            .create_repository(NewRepository {
+                name: "maven-repo",
+                format: "maven",
+                r#type: RepoType::Hosted,
+                visibility: Visibility::Public,
+                upstream_url: None,
+                upstream_auth_ref: None,
+            })
+            .await
+            .unwrap();
+        let raw = 建仓库(&store, "raw-repo", Visibility::Private).await;
+        store
+            .upsert_artifact(制品(&maven, "com/foo/lib-1.0.jar", "s1"))
+            .await
+            .unwrap();
+        store
+            .upsert_artifact(制品(&raw, "docs/lib-readme.txt", "s2"))
+            .await
+            .unwrap();
+        store
+            .upsert_artifact(制品(&maven, "com/bar/other-1.0.jar", "s3"))
+            .await
+            .unwrap();
+
+        // 关键字 lib 命中两条（跨两个仓库），含私有仓库命中——鉴权过滤在上层
+        let hits = store.search_artifacts("lib", None, 0, 50).await.unwrap();
+        assert_eq!(hits.len(), 2);
+        // 命中里应带回所属仓库可见性，供上层据读权限过滤
+        assert!(hits.iter().any(|h| h.repo_visibility == "private"));
+
+        // 限定格式 maven 只命中 maven 仓库那条
+        let maven_only = store.search_artifacts("lib", Some("maven"), 0, 50).await.unwrap();
+        assert_eq!(maven_only.len(), 1);
+        assert_eq!(maven_only[0].repo_name, "maven-repo");
+
+        // 分页 limit=1 只返回一条
+        let page = store.search_artifacts("lib", None, 0, 1).await.unwrap();
+        assert_eq!(page.len(), 1);
     }
 }

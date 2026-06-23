@@ -14,7 +14,9 @@ use tracing_subscriber::EnvFilter;
 use jianartifact::api::{self, AppState};
 use jianartifact::auth::{self, BootstrapOutcome, JwtSigner, LoginGuard};
 use jianartifact::config::Config;
+use jianartifact::format::{ArtifactService, FormatRegistry};
 use jianartifact::meta::MetaStore;
+use jianartifact::proxy::HttpUpstream;
 use jianartifact::storage::LocalFsStore;
 
 /// 命令行参数。
@@ -78,6 +80,16 @@ async fn main() -> anyhow::Result<()> {
         cfg.auth.login_lockout_secs,
     ));
 
+    // 通用制品机理服务：本地 blob 存储 + reqwest 上游（纯 rustls）+ 单飞缓存
+    let upstream = HttpUpstream::new(std::time::Duration::from_secs(
+        cfg.proxy.upstream_timeout_secs,
+    ))
+    .context("初始化上游 HTTP 客户端失败")?;
+    let artifacts = Arc::new(ArtifactService::new(store.clone(), meta.clone(), upstream));
+    // 格式注册表：当前批次注册 Raw，其余格式由后续批次接入
+    let formats = Arc::new(FormatRegistry::with_builtin());
+    info!("制品机理与格式注册表就绪");
+
     // 构建路由与共享状态
     let state = AppState {
         config: Arc::new(cfg.clone()),
@@ -85,6 +97,8 @@ async fn main() -> anyhow::Result<()> {
         store,
         jwt,
         login_guard,
+        artifacts,
+        formats,
     };
     let app = api::build_router(state);
 

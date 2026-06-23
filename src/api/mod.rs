@@ -20,17 +20,26 @@ use tower_http::trace::TraceLayer;
 
 use crate::auth::{AuthIdentity, JwtSigner, LoginGuard};
 use crate::config::Config;
+use crate::format::{ArtifactService, FormatRegistry};
 use crate::meta::MetaStore;
+use crate::proxy::HttpUpstream;
 use crate::storage::LocalFsStore;
 
 mod acl;
+mod artifacts;
 mod auth_routes;
+mod format_routes;
 mod identity;
+mod repo_access;
 mod repositories;
+mod search;
 mod tokens;
 mod users;
 
 pub use identity::resolve_identity;
+
+/// 应用内具体化的通用制品机理服务类型（本地 blob 存储 + reqwest 上游）。
+pub type AppArtifactService = ArtifactService<LocalFsStore, HttpUpstream>;
 
 /// 请求 ID 头名称。
 const REQUEST_ID_HEADER: &str = "x-request-id";
@@ -50,6 +59,10 @@ pub struct AppState {
     pub jwt: JwtSigner,
     /// 登录暴力破解防护守卫（进程内存计数）。
     pub login_guard: Arc<LoginGuard>,
+    /// 通用制品机理服务（写入 / 读取 / 删除，含 proxy 单飞缓存）。
+    pub artifacts: Arc<AppArtifactService>,
+    /// 格式注册表（按格式名查处理器，多态分发）。
+    pub formats: Arc<FormatRegistry>,
 }
 
 /// 统一 API 错误类型，转换为 JSON 响应 `{"error":{"code","message"}}`。
@@ -76,6 +89,12 @@ pub enum ApiError {
     /// 账户已被禁用。
     #[error("账户已被禁用")]
     AccountDisabled,
+    /// 上传体积超过配置上限（FR-64）。
+    #[error("制品体积超过上限")]
+    PayloadTooLarge,
+    /// 上游网关错误（proxy 回源失败 / 超时）。
+    #[error("上游拉取失败")]
+    BadGateway,
     /// 内部服务器错误。
     #[error("内部服务器错误")]
     Internal,
@@ -93,6 +112,8 @@ impl ApiError {
             ApiError::TooManyRequests(_) => StatusCode::TOO_MANY_REQUESTS,
             // 账户禁用沿用 API.md 约定的 403
             ApiError::AccountDisabled => StatusCode::FORBIDDEN,
+            ApiError::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            ApiError::BadGateway => StatusCode::BAD_GATEWAY,
             ApiError::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -107,8 +128,39 @@ impl ApiError {
             ApiError::Conflict(_) => "conflict",
             ApiError::TooManyRequests(_) => "too_many_requests",
             ApiError::AccountDisabled => "account_disabled",
+            ApiError::PayloadTooLarge => "payload_too_large",
+            ApiError::BadGateway => "bad_gateway",
             ApiError::Internal => "internal_error",
         }
+    }
+}
+
+/// 把通用制品机理错误映射为 HTTP 错误。
+impl From<crate::format::ServiceError> for ApiError {
+    fn from(e: crate::format::ServiceError) -> Self {
+        use crate::format::ServiceError;
+        match e {
+            ServiceError::NotFound => ApiError::NotFound,
+            // 覆盖被拒按各格式语义对应 409（如 Maven release 不可覆盖）
+            ServiceError::OverwriteForbidden => {
+                ApiError::Conflict("制品已存在且不允许覆盖".to_string())
+            }
+            ServiceError::TooLarge => ApiError::PayloadTooLarge,
+            ServiceError::Upstream => ApiError::BadGateway,
+            ServiceError::InvalidOperation(msg) => ApiError::BadRequest(msg),
+            ServiceError::Storage(err) => {
+                tracing::error!(错误 = %err, "blob 存储访问失败");
+                ApiError::Internal
+            }
+            ServiceError::Meta(err) => err.into(),
+        }
+    }
+}
+
+/// 把格式路径解析错误映射为 400（路径非法 / 穿越）。
+impl From<crate::format::PathError> for ApiError {
+    fn from(e: crate::format::PathError) -> Self {
+        ApiError::BadRequest(e.to_string())
     }
 }
 
@@ -228,6 +280,11 @@ pub fn build_router(state: AppState) -> Router {
             get(repositories::list_artifacts),
         )
         .route(
+            "/repositories/{id}/artifacts/{*path}",
+            get(artifacts::get_artifact_detail).delete(artifacts::delete_artifact),
+        )
+        .route("/search", get(search::search))
+        .route(
             "/repositories/{id}/acl",
             get(acl::list_acl).post(acl::create_acl),
         )
@@ -236,9 +293,19 @@ pub fn build_router(state: AppState) -> Router {
             axum::routing::delete(acl::delete_acl),
         );
 
+    // 格式 API：按原生协议挂载，路径含仓库名（如 Raw 的 /{repo}/{path..}）。
+    // 用 catch-all 段匹配仓库内任意路径；axum 优先匹配 /health 与 /api/v1 等字面前缀。
+    let format_api = Router::new().route(
+        "/{repo}/{*path}",
+        get(format_routes::get_artifact)
+            .put(format_routes::put_artifact)
+            .delete(format_routes::delete_artifact),
+    );
+
     Router::new()
         .route("/health", get(health))
         .nest("/api/v1", api_v1)
+        .merge(format_api)
         .with_state(state.clone())
         // 身份解析中间件：先于业务 handler 解析 Bearer/Basic/匿名 注入扩展
         .layer(middleware::from_fn_with_state(state, identity::identity_layer))
@@ -275,12 +342,16 @@ mod tests {
         let meta = MetaStore::open_in_memory().await.unwrap();
         let store = LocalFsStore::new(dir.path().join("blobs")).await.unwrap();
         let jwt = JwtSigner::from_secret(b"test-secret-32-bytes-xxxxxxxxxxxx", 3600);
+        let upstream = HttpUpstream::new(std::time::Duration::from_secs(60)).unwrap();
+        let artifacts = Arc::new(ArtifactService::new(store.clone(), meta.clone(), upstream));
         let state = AppState {
             config: Arc::new(Config::default()),
             meta,
             store,
             jwt,
             login_guard: Arc::new(LoginGuard::new(5, 900)),
+            artifacts,
+            formats: Arc::new(FormatRegistry::with_builtin()),
         };
         (state, dir)
     }

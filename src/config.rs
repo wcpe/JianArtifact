@@ -26,11 +26,13 @@ const DEFAULT_SESSION_TTL_SECS: u64 = 3600;
 const DEFAULT_LOGIN_MAX_FAILURES: u32 = 5;
 /// 默认锁定时长（秒）。
 const DEFAULT_LOGIN_LOCKOUT_SECS: u64 = 900;
+/// 默认上游拉取超时（秒），proxy 回源用，避免慢速上游拖垮代理。
+const DEFAULT_UPSTREAM_TIMEOUT_SECS: u64 = 60;
 /// 环境变量前缀。
 const ENV_PREFIX: &str = "JIANARTIFACT_";
 /// 已知配置节名。环境变量映射时，仅把节名与键名之间的首个下划线视作嵌套分隔，
 /// 键名内部的下划线（如 `session_ttl_secs`）保持原样。
-const KNOWN_SECTIONS: &[&str] = &["server", "data", "auth", "limits"];
+const KNOWN_SECTIONS: &[&str] = &["server", "data", "auth", "limits", "proxy"];
 
 /// 顶层配置。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -47,6 +49,9 @@ pub struct Config {
     /// 上传等限制配置。
     #[serde(default)]
     pub limits: LimitsConfig,
+    /// 代理仓库上游拉取配置。
+    #[serde(default)]
+    pub proxy: ProxyConfig,
 }
 
 /// HTTP 服务配置。
@@ -131,6 +136,21 @@ pub struct LimitsConfig {
     /// 单个制品上传大小上限（字节）；为 None 表示不额外限制。超限返回 413。
     #[serde(default)]
     pub max_artifact_size: Option<u64>,
+}
+
+/// 代理仓库上游拉取配置。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProxyConfig {
+    /// 上游拉取整体超时（秒）。
+    pub upstream_timeout_secs: u64,
+}
+
+impl Default for ProxyConfig {
+    fn default() -> Self {
+        Self {
+            upstream_timeout_secs: DEFAULT_UPSTREAM_TIMEOUT_SECS,
+        }
+    }
 }
 
 impl Config {
