@@ -2,6 +2,7 @@
 //! → 构建 axum 路由 → 监听并提供服务。
 #![forbid(unsafe_code)]
 
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -11,7 +12,7 @@ use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 use jianartifact::api::{self, AppState};
-use jianartifact::auth::{self, BootstrapOutcome};
+use jianartifact::auth::{self, BootstrapOutcome, JwtSigner, LoginGuard};
 use jianartifact::config::Config;
 use jianartifact::meta::MetaStore;
 use jianartifact::storage::LocalFsStore;
@@ -66,11 +67,24 @@ async fn main() -> anyhow::Result<()> {
     // 首启管理员引导（仅空库触发）
     bootstrap_and_log(&meta).await?;
 
+    // 初始化 JWT 签名器（密钥真源在数据目录的 .jwt_secret，无则生成、绝不入库不进日志）
+    let jwt = JwtSigner::from_data_dir(&data_dir, cfg.auth.session_ttl_secs)
+        .context("初始化 JWT 签名密钥失败")?;
+    info!("JWT 会话签名器就绪");
+
+    // 登录暴力破解防护守卫（进程内存计数）
+    let login_guard = Arc::new(LoginGuard::new(
+        cfg.auth.login_max_failures,
+        cfg.auth.login_lockout_secs,
+    ));
+
     // 构建路由与共享状态
     let state = AppState {
         config: Arc::new(cfg.clone()),
         meta,
         store,
+        jwt,
+        login_guard,
     };
     let app = api::build_router(state);
 
@@ -81,10 +95,14 @@ async fn main() -> anyhow::Result<()> {
         .with_context(|| format!("监听地址失败: {bind_addr}"))?;
     info!(监听 = %bind_addr, "服务启动，开始接受请求");
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .context("HTTP 服务异常退出")?;
+    // 携带连接信息以便登录防护按来源 IP 计数
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await
+    .context("HTTP 服务异常退出")?;
 
     info!("服务已优雅关闭");
     Ok(())
