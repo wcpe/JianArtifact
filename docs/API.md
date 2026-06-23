@@ -47,8 +47,8 @@
 
 - **方法 / 路径**：`POST /api/v1/auth/login`
 - **请求**：JSON 体 `{ "username", "password" }`。
-- **响应**：认证成功后建立 Web 会话 / 返回会话凭据，并返回当前用户信息（`id`、`username`、`role`）。
-- **错误**：`400` 参数缺失；`401` 用户名或密码错误；`403` 用户已被禁用（`disabled`）。
+- **响应**：认证成功后返回会话凭据（JWT 访问令牌、令牌类型 `Bearer` 与有效期 `expires_in` 秒）及当前用户信息（`id`、`username`、`role`）。会话令牌放 `Authorization: Bearer` 头使用（不走 Cookie）。
+- **错误**：`400` 参数缺失；`401` 用户名或密码错误；`403` 用户已被禁用（`disabled`）；`429` 登录失败次数过多被限流（暴力破解防护，见 FR-65），响应错误码 `too_many_requests`。
 
 ### 登出
 
