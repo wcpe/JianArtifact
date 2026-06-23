@@ -44,6 +44,12 @@
 |---|---|---|---|
 | max_artifact_size | 单个制品上传大小上限（超限返回 413） | 按需设定 | JIANARTIFACT_LIMITS_MAX_ARTIFACT_SIZE |
 
+### [proxy]
+
+| 键 | 含义 | 默认（取向） | 环境变量 |
+|---|---|---|---|
+| upstream_timeout_secs | proxy 仓库回源上游的整体请求超时（秒），避免慢速上游拖垮代理 | 60 | JIANARTIFACT_PROXY_UPSTREAM_TIMEOUT_SECS |
+
 ### [upstream.&lt;name&gt;]（proxy 仓库上游，可配置多个）
 
 | 键 | 含义 | 默认（取向） | 环境变量 |

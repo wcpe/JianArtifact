@@ -34,3 +34,7 @@ login_lockout_secs = 900
 [limits]
 # 单个制品上传大小上限（字节）；超限返回 413。不填表示不额外限制。
 # max_artifact_size = 1073741824
+
+[proxy]
+# proxy 仓库回源上游的整体请求超时（秒），避免慢速上游拖垮代理。
+upstream_timeout_secs = 60
