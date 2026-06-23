@@ -1,0 +1,56 @@
+[package]
+name = "jianartifact"
+version = "0.1.0"
+edition = "2021"
+description = "单文件、零外部依赖、开箱即用的轻量级多格式制品库管理器"
+license = "Apache-2.0"
+
+[dependencies]
+# Web 框架与异步运行时（ADR-0001）
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "fs", "io-util"] }
+# tower-http 中间件：请求追踪与请求 ID
+tower-http = { version = "0.6", features = ["trace", "request-id", "util"] }
+# 元数据存储：嵌入式 SQLite（ADR-0002），sqlite 经 bundled 静态链接零外部依赖
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
+# 序列化与配置加载
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+# 配置加载：TOML + 环境变量覆盖（前缀 JIANARTIFACT_）
+figment = { version = "0.10", features = ["toml", "env"] }
+# 口令哈希（ADR-0003）
+argon2 = "0.5"
+# 随机数：首启随机口令、Argon2 盐
+rand = "0.8"
+# 日志与分级追踪
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# 错误类型
+thiserror = "2"
+anyhow = "1"
+# 唯一标识（主键与请求 ID）
+uuid = { version = "1", features = ["v4"] }
+# 命令行参数解析
+clap = { version = "4", features = ["derive"] }
+# 多校验和计算（FR-69）：制品流式写入时同时算 sha256/sha1/md5/sha512
+# 均为 RustCrypto 纯 Rust 轻量哈希实现，与 argon2 同生态，零外部运行时依赖
+sha2 = "0.10"
+sha1 = "0.10"
+md-5 = "0.10"
+digest = "0.10"
+
+[dev-dependencies]
+# 集成测试：对 axum 路由直接发起请求
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+# 测试用临时目录
+tempfile = "3"
+
+# release 档：strip + thin LTO + panic=abort 压低体积（ADR-0001，目标 < 27MB）
+# 注意 panic=abort 仅作用于 release，避免影响 cargo test（test 走 dev/test 档）
+[profile.release]
+strip = true
+lto = "thin"
+panic = "abort"
+codegen-units = 1
