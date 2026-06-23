@@ -54,6 +54,11 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 tokio-util = { version = "0.7", features = ["io"] }
 # 单飞合并与上游字节流处理所需的 Stream 适配工具。
 futures-util = "0.3"
+# 前端静态资源编译期嵌入（ADR-0001）：编译期把 frontend/dist 打进二进制，
+# 关闭默认特性以避免引入热重载等开发期依赖，保持发行物精简。
+rust-embed = { version = "8", default-features = false }
+# 据文件扩展名推断静态资源 Content-Type（rust-embed 提供 metadata 但 mime 猜测更稳妥）。
+mime_guess = "2"
 
 [dev-dependencies]
 # 集成测试：对 axum 路由直接发起请求

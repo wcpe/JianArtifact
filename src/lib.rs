@@ -17,3 +17,4 @@ pub mod meta;
 pub mod proxy;
 pub mod repo;
 pub mod storage;
+pub mod web;

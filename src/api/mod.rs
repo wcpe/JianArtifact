@@ -322,11 +322,21 @@ pub fn build_router(state: AppState) -> Router {
                 .put(docker_routes::dispatch_put),
         );
 
+    // Web 控制台 SPA：静态资源走 /assets/{*path}，其余未匹配 GET 经 fallback 回退 index.html。
+    // 必须在 API / 格式 / 健康检查路由之后接入，避免拦截 /api/v1、/v2/、/health 与格式路径。
+    let spa = Router::new().route(
+        "/assets/{*path}",
+        get(crate::web::serve_asset),
+    );
+
     Router::new()
         .route("/health", get(health))
         .nest("/api/v1", api_v1)
         .merge(docker_api)
         .merge(format_api)
+        .merge(spa)
+        // 未匹配任何路由的请求回退到 SPA 入口（前端客户端路由 + 未构建时的 503 占位）
+        .fallback(crate::web::spa_fallback)
         .with_state(state.clone())
         // 身份解析中间件：先于业务 handler 解析 Bearer/Basic/匿名 注入扩展
         .layer(middleware::from_fn_with_state(state, identity::identity_layer))
@@ -414,18 +424,69 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn 未知路径返回_404() {
+    async fn 未知前端路由回退到_spa_入口() {
+        // SPA 行为：未被 API / 格式 / 健康检查匹配的单段 GET 路径回退到前端入口。
+        // 干净检出（未构建前端）时返回 503 占位页；任一情况都不应是 404，
+        // 以便前端客户端路由（如 /login）刷新后仍由前端接管。
         let (state, _dir) = 测试用状态().await;
         let app = build_router(state);
         let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/不存在")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(Request::builder().uri("/login").body(Body::empty()).unwrap())
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        // 未构建前端时为 503 占位，已构建时为 200 index.html；均非 404
+        assert_ne!(response.status(), StatusCode::NOT_FOUND);
+        assert!(
+            response.status() == StatusCode::OK
+                || response.status() == StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
+
+    #[tokio::test]
+    async fn 健康检查不被_spa_回退拦截() {
+        // 关键回归：SPA fallback 不得吞掉 /health，仍返回 200 健康状态。
+        let (state, _dir) = 测试用状态().await;
+        let app = build_router(state);
+        let response = app
+            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = 读_json(response).await;
+        assert_eq!(body["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn api_端点不被_spa_回退拦截() {
+        // 关键回归：未认证访问受保护 API 仍走 API 逻辑返回 401，而非被 SPA 回退成 200/503。
+        let (state, _dir) = 测试用状态().await;
+        let app = build_router(state);
+        let response = app
+            .oneshot(Request::builder().uri("/api/v1/me").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn 根路径返回_spa_入口或占位() {
+        // GET / 应交由 SPA：未构建为 503 占位、已构建为 200 index.html。
+        let (state, _dir) = 测试用状态().await;
+        let app = build_router(state);
+        let response = app
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert!(
+            response.status() == StatusCode::OK
+                || response.status() == StatusCode::SERVICE_UNAVAILABLE
+        );
+        // 内容类型应为 HTML（无论入口还是占位页）
+        let content_type = response
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        assert!(content_type.contains("text/html"));
     }
 }
