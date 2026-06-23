@@ -21,8 +21,16 @@ toml = "0.8"
 figment = { version = "0.10", features = ["toml", "env"] }
 # 口令哈希（ADR-0003）
 argon2 = "0.5"
-# 随机数：首启随机口令、Argon2 盐
+# 随机数：首启随机口令、Argon2 盐、API Token / JWT 密钥的高熵生成
 rand = "0.8"
+# Web 会话 JWT（ADR-0011，HS256）。关闭默认特性以避开 aws-lc-rs/ring 等原生加密后端，
+# 启用纯 Rust 的 rust_crypto 加密 provider（RustCrypto 生态，零原生 C 依赖），
+# 保持单一二进制零外部运行时依赖。
+jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
+# Basic Auth 凭据的 base64 解码（ADR-0003）
+base64 = "0.22"
+# 定长时间比较：API Token 哈希比对避免计时侧信道（ADR-0003）
+subtle = "2"
 # 日志与分级追踪
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

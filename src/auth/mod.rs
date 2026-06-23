@@ -1,11 +1,70 @@
-//! 认证模块：本批仅含口令哈希与首启管理员引导（ADR-0003、ADR-0010）。
+//! 认证模块：口令哈希、首启管理员引导、JWT 会话、API Token、Basic Auth 与登录防护
+//! （ADR-0003、ADR-0010、ADR-0011）。
 //!
-//! 登录/Token/Basic Auth 路由与鉴权中间件为后续批次，本批不实现。
+//! 鉴权（对仓库读写的判定）属后续批次的 `authz` 模块，本模块只解析“是谁”。
 
 use argon2::password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::Argon2;
 
 use crate::meta::{MetaError, MetaStore, Role};
+
+pub mod basic;
+pub mod jwt;
+pub mod lockout;
+pub mod token;
+
+pub use basic::{parse_basic_auth, BasicCredentials};
+pub use jwt::{JwtClaims, JwtError, JwtSigner};
+pub use lockout::{LockoutError, LoginGuard};
+pub use token::{generate_api_token, hash_api_token, verify_api_token, TOKEN_PREFIX};
+
+/// 已解析的调用方身份，由认证中间件注入请求扩展，供后续鉴权使用。
+///
+/// 本模块只回答“是谁”（认证）；“能否读写某仓库”（鉴权）在 `authz` 批次判定。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AuthIdentity {
+    /// 匿名访客：未携带任何有效凭据。
+    Anonymous,
+    /// 已认证用户。
+    Authenticated(AuthUser),
+}
+
+/// 已认证用户的最小身份画像（不含口令 / 凭据等敏感项）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthUser {
+    /// 用户主键。
+    pub user_id: String,
+    /// 用户名。
+    pub username: String,
+    /// 全局角色。
+    pub role: Role,
+}
+
+impl AuthIdentity {
+    /// 是否为已认证用户。
+    pub fn is_authenticated(&self) -> bool {
+        matches!(self, AuthIdentity::Authenticated(_))
+    }
+
+    /// 取已认证用户引用；匿名时返回 None。
+    pub fn user(&self) -> Option<&AuthUser> {
+        match self {
+            AuthIdentity::Authenticated(u) => Some(u),
+            AuthIdentity::Anonymous => None,
+        }
+    }
+
+    /// 是否为管理员。
+    pub fn is_admin(&self) -> bool {
+        matches!(
+            self,
+            AuthIdentity::Authenticated(AuthUser {
+                role: Role::Admin,
+                ..
+            })
+        )
+    }
+}
 
 /// 首启引导默认管理员用户名（未经 env 指定时使用）。
 const DEFAULT_ADMIN_USERNAME: &str = "admin";
