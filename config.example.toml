@@ -1,0 +1,36 @@
+# JianArtifact 配置示例（占位）。
+#
+# 复制本文件为 config.toml 后按需修改；真实 config.toml 不入库（见 .gitignore）。
+# 所有项均可经环境变量覆盖，前缀 JIANARTIFACT_，节名与键名之间用下划线连接。
+# 例：[server] port → JIANARTIFACT_SERVER_PORT；[auth] session_ttl_secs → JIANARTIFACT_AUTH_SESSION_TTL_SECS。
+# 敏感项（口令、上游凭据）建议走环境变量注入，不要写入本文件。
+
+[server]
+# 监听地址。
+listen_addr = "127.0.0.1"
+# 监听端口。
+port = 8080
+# 对外基础 URL（用于生成链接）；不填则由服务按监听推断。
+# public_base_url = "http://127.0.0.1:8080"
+
+[data]
+# 数据目录：存放 SQLite 文件与 blob。
+data_dir = "./data"
+# blob 存储子目录；不填则取 data_dir 下的 blobs。
+# blobs_dir = "./data/blobs"
+
+[auth]
+# Web 会话 / JWT 有效期（秒）。
+session_ttl_secs = 3600
+# 触发锁定的连续登录失败次数。
+login_max_failures = 5
+# 锁定时长（秒）。
+login_lockout_secs = 900
+
+# 首启管理员引导（仅空库首次启动，建议仅用环境变量提供，不写入本文件）：
+#   JIANARTIFACT_ADMIN_USERNAME 与 JIANARTIFACT_ADMIN_PASSWORD
+# 未提供则系统生成随机口令并打印到启动日志（见 ADR-0010），请妥善保管并尽快改密。
+
+[limits]
+# 单个制品上传大小上限（字节）；超限返回 413。不填表示不额外限制。
+# max_artifact_size = 1073741824
