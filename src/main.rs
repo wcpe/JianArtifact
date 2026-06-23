@@ -86,7 +86,7 @@ async fn main() -> anyhow::Result<()> {
     ))
     .context("初始化上游 HTTP 客户端失败")?;
     let artifacts = Arc::new(ArtifactService::new(store.clone(), meta.clone(), upstream));
-    // 格式注册表：当前批次注册 Raw，其余格式由后续批次接入
+    // 格式注册表：注册已实现格式（Raw、Maven），其余格式由后续批次接入
     let formats = Arc::new(FormatRegistry::with_builtin());
     info!("制品机理与格式注册表就绪");
 
