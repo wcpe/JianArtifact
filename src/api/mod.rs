@@ -23,6 +23,7 @@ use crate::config::Config;
 use crate::meta::MetaStore;
 use crate::storage::LocalFsStore;
 
+mod acl;
 mod auth_routes;
 mod identity;
 mod repositories;
@@ -225,6 +226,14 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/repositories/{id}/artifacts",
             get(repositories::list_artifacts),
+        )
+        .route(
+            "/repositories/{id}/acl",
+            get(acl::list_acl).post(acl::create_acl),
+        )
+        .route(
+            "/repositories/{id}/acl/{acl_id}",
+            axum::routing::delete(acl::delete_acl),
         );
 
     Router::new()
