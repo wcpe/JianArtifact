@@ -16,7 +16,7 @@ use tower::ServiceExt;
 use jianartifact::api::{build_router, AppState};
 use jianartifact::auth::{self, JwtSigner, LoginGuard};
 use jianartifact::config::Config;
-use jianartifact::format::{ArtifactService, FormatRegistry};
+use jianartifact::format::{ArtifactService, DockerRegistry, FormatRegistry};
 use jianartifact::meta::{MetaStore, NewRepository, Permission, RepoType, Role, Visibility};
 use jianartifact::proxy::HttpUpstream;
 use jianartifact::storage::LocalFsStore;
@@ -41,6 +41,11 @@ impl Fixture {
         let jwt = JwtSigner::from_secret(b"artifact-secret-32-bytes-xxxxxxxx", 3600);
         let upstream = HttpUpstream::new(std::time::Duration::from_secs(60)).unwrap();
         let artifacts = Arc::new(ArtifactService::new(store.clone(), meta.clone(), upstream));
+        let docker = Arc::new(
+            DockerRegistry::new(store.clone(), meta.clone(), dir.path().join("uploads"), max)
+                .await
+                .unwrap(),
+        );
         let mut config = Config::default();
         config.limits.max_artifact_size = max;
         // 固定对外地址，便于断言使用片段
@@ -53,6 +58,7 @@ impl Fixture {
             login_guard: Arc::new(LoginGuard::new(50, 900)),
             artifacts,
             formats: Arc::new(FormatRegistry::with_builtin()),
+            docker: Some(docker),
         };
         Self { state, _dir: dir }
     }

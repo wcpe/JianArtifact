@@ -17,7 +17,7 @@ use tower::ServiceExt;
 use jianartifact::api::{build_router, AppState};
 use jianartifact::auth::{self, JwtSigner, LoginGuard};
 use jianartifact::config::Config;
-use jianartifact::format::{ArtifactService, FormatRegistry};
+use jianartifact::format::{ArtifactService, DockerRegistry, FormatRegistry};
 use jianartifact::meta::{MetaStore, Permission, Role};
 use jianartifact::proxy::HttpUpstream;
 use jianartifact::storage::LocalFsStore;
@@ -37,6 +37,11 @@ impl Fixture {
         let jwt = JwtSigner::from_secret(b"repo-authz-secret-32-bytes-xxxxxx", 3600);
         let upstream = HttpUpstream::new(std::time::Duration::from_secs(60)).unwrap();
         let artifacts = Arc::new(ArtifactService::new(store.clone(), meta.clone(), upstream));
+        let docker = Arc::new(
+            DockerRegistry::new(store.clone(), meta.clone(), dir.path().join("uploads"), None)
+                .await
+                .unwrap(),
+        );
         let state = AppState {
             config: Arc::new(Config::default()),
             meta,
@@ -45,6 +50,7 @@ impl Fixture {
             login_guard: Arc::new(LoginGuard::new(50, 900)),
             artifacts,
             formats: Arc::new(FormatRegistry::with_builtin()),
+            docker: Some(docker),
         };
         Self { state, _dir: dir }
     }

@@ -14,7 +14,7 @@ use tracing_subscriber::EnvFilter;
 use jianartifact::api::{self, AppState};
 use jianartifact::auth::{self, BootstrapOutcome, JwtSigner, LoginGuard};
 use jianartifact::config::Config;
-use jianartifact::format::{ArtifactService, FormatRegistry};
+use jianartifact::format::{ArtifactService, DockerRegistry, FormatRegistry};
 use jianartifact::meta::MetaStore;
 use jianartifact::proxy::HttpUpstream;
 use jianartifact::storage::LocalFsStore;
@@ -86,8 +86,19 @@ async fn main() -> anyhow::Result<()> {
     ))
     .context("初始化上游 HTTP 客户端失败")?;
     let artifacts = Arc::new(ArtifactService::new(store.clone(), meta.clone(), upstream));
-    // 格式注册表：注册已实现格式（Raw、Maven），其余格式由后续批次接入
+    // 格式注册表：注册已实现格式（Raw、Maven、npm、Docker），其余格式由后续批次接入
     let formats = Arc::new(FormatRegistry::with_builtin());
+    // Docker Registry v2 存储服务：上传会话临时文件落数据目录下的 uploads 子目录
+    let docker = Arc::new(
+        DockerRegistry::new(
+            store.clone(),
+            meta.clone(),
+            data_dir.join("uploads"),
+            cfg.limits.max_artifact_size,
+        )
+        .await
+        .context("初始化 Docker Registry 服务失败")?,
+    );
     info!("制品机理与格式注册表就绪");
 
     // 构建路由与共享状态
@@ -99,6 +110,7 @@ async fn main() -> anyhow::Result<()> {
         login_guard,
         artifacts,
         formats,
+        docker: Some(docker),
     };
     let app = api::build_router(state);
 

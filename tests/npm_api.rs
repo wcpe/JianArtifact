@@ -49,6 +49,7 @@ impl Fixture {
             login_guard: Arc::new(LoginGuard::new(50, 900)),
             artifacts,
             formats: Arc::new(FormatRegistry::with_builtin()),
+            docker: None,
         };
         Self { state, _dir: dir }
     }

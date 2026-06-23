@@ -20,7 +20,7 @@ use tower_http::trace::TraceLayer;
 
 use crate::auth::{AuthIdentity, JwtSigner, LoginGuard};
 use crate::config::Config;
-use crate::format::{ArtifactService, FormatRegistry};
+use crate::format::{ArtifactService, DockerRegistry, FormatRegistry};
 use crate::meta::MetaStore;
 use crate::proxy::HttpUpstream;
 use crate::storage::LocalFsStore;
@@ -28,6 +28,7 @@ use crate::storage::LocalFsStore;
 mod acl;
 mod artifacts;
 mod auth_routes;
+mod docker_routes;
 mod format_routes;
 mod identity;
 mod npm_routes;
@@ -41,6 +42,9 @@ pub use identity::resolve_identity;
 
 /// 应用内具体化的通用制品机理服务类型（本地 blob 存储 + reqwest 上游）。
 pub type AppArtifactService = ArtifactService<LocalFsStore, HttpUpstream>;
+
+/// 应用内具体化的 Docker Registry v2 存储服务类型（本地 blob 存储）。
+pub type AppDockerRegistry = DockerRegistry<LocalFsStore>;
 
 /// 请求 ID 头名称。
 const REQUEST_ID_HEADER: &str = "x-request-id";
@@ -64,6 +68,8 @@ pub struct AppState {
     pub artifacts: Arc<AppArtifactService>,
     /// 格式注册表（按格式名查处理器，多态分发）。
     pub formats: Arc<FormatRegistry>,
+    /// Docker Registry v2 存储服务（blob 上传状态机 + manifest 存取）。
+    pub docker: Option<Arc<AppDockerRegistry>>,
 }
 
 /// 统一 API 错误类型，转换为 JSON 响应 `{"error":{"code","message"}}`。
@@ -303,9 +309,23 @@ pub fn build_router(state: AppState) -> Router {
             .delete(format_routes::delete_artifact),
     );
 
+    // Docker Registry v2 / OCI Distribution：挂载于 /v2/。
+    // `/v2/` 为版本检查；`/v2/{*path}` 按方法分发（name 可多段，故走 catch-all 内部解析）。
+    let docker_api = Router::new()
+        .route("/v2/", get(docker_routes::version_check))
+        .route(
+            "/v2/{*path}",
+            get(docker_routes::dispatch_get)
+                .head(docker_routes::dispatch_head)
+                .post(docker_routes::dispatch_post)
+                .patch(docker_routes::dispatch_patch)
+                .put(docker_routes::dispatch_put),
+        );
+
     Router::new()
         .route("/health", get(health))
         .nest("/api/v1", api_v1)
+        .merge(docker_api)
         .merge(format_api)
         .with_state(state.clone())
         // 身份解析中间件：先于业务 handler 解析 Bearer/Basic/匿名 注入扩展
@@ -345,6 +365,11 @@ mod tests {
         let jwt = JwtSigner::from_secret(b"test-secret-32-bytes-xxxxxxxxxxxx", 3600);
         let upstream = HttpUpstream::new(std::time::Duration::from_secs(60)).unwrap();
         let artifacts = Arc::new(ArtifactService::new(store.clone(), meta.clone(), upstream));
+        let docker = Arc::new(
+            DockerRegistry::new(store.clone(), meta.clone(), dir.path().join("uploads"), None)
+                .await
+                .unwrap(),
+        );
         let state = AppState {
             config: Arc::new(Config::default()),
             meta,
@@ -353,6 +378,7 @@ mod tests {
             login_guard: Arc::new(LoginGuard::new(5, 900)),
             artifacts,
             formats: Arc::new(FormatRegistry::with_builtin()),
+            docker: Some(docker),
         };
         (state, dir)
     }
