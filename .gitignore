@@ -11,6 +11,10 @@ Thumbs.db
 # 前端构建产物与依赖
 node_modules/
 dist/
+# 例外：保留前端 dist 占位，使干净检出下 rust-embed 仍能找到嵌入目录（真实产物仍忽略）
+!frontend/dist/
+frontend/dist/*
+!frontend/dist/.gitkeep
 *.tsbuildinfo
 npm-debug.log*
 yarn-debug.log*
