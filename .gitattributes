@@ -1,0 +1,20 @@
+# 统一文本文件行尾为 LF，避免跨平台（Windows 默认 CRLF）导致
+# 格式化 / 静态检查（如 prettier --check）在不同机器上结果不一致。
+* text=auto eol=lf
+
+# 二进制文件不参与行尾规范化（由 git 自动识别，这里显式兜底常见类型）
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary
+*.jar binary
+*.zip binary
+*.gz binary
+*.pdf binary
+*.db binary
