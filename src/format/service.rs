@@ -15,7 +15,7 @@ use tokio::io::{AsyncRead, ReadBuf};
 
 use crate::meta::{ArtifactRecord, MetaError, MetaStore, NewArtifact, RepoType, RepositoryRecord};
 use crate::proxy::{SingleFlight, Upstream, UpstreamError};
-use crate::storage::{BlobStore, StorageError};
+use crate::storage::{BlobReader, BlobStore, StorageError};
 
 use super::{ArtifactCoordinates, Format};
 
@@ -54,13 +54,22 @@ pub struct WriteOutcome {
     pub overwritten: bool,
 }
 
-/// 制品读取句柄：以文件流暴露内容，连同索引记录（含内容类型 / 大小 / 校验和）。
-#[derive(Debug)]
+/// 制品读取句柄：以字节流暴露内容，连同索引记录（含内容类型 / 大小 / 校验和）。
 pub struct ReadHandle {
     /// 制品索引记录。
     pub record: ArtifactRecord,
-    /// blob 文件流（调用方据此流式返回响应体，不整体载入内存）。
-    pub blob: tokio::fs::File,
+    /// blob 字节流（调用方据此流式返回响应体，不整体载入内存）；后端无关的装箱读句柄。
+    pub blob: BlobReader,
+}
+
+impl std::fmt::Debug for ReadHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // blob 是不可格式化的字节流，仅展示索引记录
+        f.debug_struct("ReadHandle")
+            .field("record", &self.record)
+            .field("blob", &"<字节流>")
+            .finish()
+    }
 }
 
 /// 制品类别：区分本次读取命中的来源，便于上层日志与语义区分。

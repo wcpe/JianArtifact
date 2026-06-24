@@ -28,6 +28,26 @@
 | data_dir | 数据目录（SQLite 与 blob 根） | ./data | JIANARTIFACT_DATA_DATA_DIR |
 | blobs_dir | blob 存储子目录 | data_dir 下的 blobs | JIANARTIFACT_DATA_BLOBS_DIR |
 
+### [data.storage]（blob 后端选择，FR-30 / ADR-0014）
+
+| 键 | 含义 | 默认（取向） | 环境变量 |
+|---|---|---|---|
+| backend | blob 存储后端：`fs`（本地文件系统，默认）/ `s3`（S3 兼容对象存储） | fs | JIANARTIFACT_DATA_STORAGE_BACKEND |
+
+> `backend = "s3"` 需使用启用 `s3` 编译特性的构建，否则启动直接报错退出（不静默回退本地）。S3 为可选 opt-in 后端，启用即引入外部对象存储运行时依赖，详见 docs/OPERATIONS.md。本地文件系统仍是默认与开箱即用形态。
+
+### [data.storage.s3]（仅 backend = "s3" 时使用）
+
+| 键 | 含义 | 默认（取向） | 环境变量 |
+|---|---|---|---|
+| endpoint | S3 端点 URL（兼容 MinIO 等自建网关；指向 AWS 时可省略由 region 推断） | 空（由 region 推断） | JIANARTIFACT_DATA_STORAGE_S3_ENDPOINT |
+| region | 区域（如 us-east-1；MinIO 等可填占位值） | — | JIANARTIFACT_DATA_STORAGE_S3_REGION |
+| bucket | 存储桶名 | — | JIANARTIFACT_DATA_STORAGE_S3_BUCKET |
+| prefix | 对象 key 前缀（与 sha256 内容寻址键拼接） | 空 | JIANARTIFACT_DATA_STORAGE_S3_PREFIX |
+| path_style | path-style 寻址（MinIO 等自建网关需 true） | true | JIANARTIFACT_DATA_STORAGE_S3_PATH_STYLE |
+
+> S3 凭据（access key / secret key）**不在上表**：其真源沿用 AWS SDK 标准环境变量（`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` 等），绝不写入入库配置、绝不进日志或 DB 明文（ADR-0014 §7）。
+
 ### [auth]
 
 | 键 | 含义 | 默认（取向） | 环境变量 |
@@ -62,4 +82,4 @@
 - 真实凭据 / 口令不写入入库的 `config.toml`，走环境变量或不入库的本地配置。
 - `config.toml`、`config.local.toml`、`.env`、数据目录、`*.db`、`*.log` 均不入库（见 `.gitignore`）。
 
-> P2 配置项（如 S3 后端、七层防护阈值、WAF 规则、使用分析）在对应能力落地时补入本表，当前不预留占位。
+> 其余 P2 配置项（如七层防护阈值、WAF 规则、使用分析）在对应能力落地时补入本表，当前不预留占位。

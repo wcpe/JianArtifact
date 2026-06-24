@@ -23,7 +23,7 @@ use crate::config::Config;
 use crate::format::{ArtifactService, DockerRegistry, FormatRegistry};
 use crate::meta::MetaStore;
 use crate::proxy::HttpUpstream;
-use crate::storage::LocalFsStore;
+use crate::storage::BlobBackend;
 
 mod acl;
 mod artifacts;
@@ -44,11 +44,11 @@ mod users;
 
 pub use identity::resolve_identity;
 
-/// 应用内具体化的通用制品机理服务类型（本地 blob 存储 + reqwest 上游）。
-pub type AppArtifactService = ArtifactService<LocalFsStore, HttpUpstream>;
+/// 应用内具体化的通用制品机理服务类型（运行期可选 blob 后端 + reqwest 上游）。
+pub type AppArtifactService = ArtifactService<BlobBackend, HttpUpstream>;
 
-/// 应用内具体化的 Docker Registry v2 存储服务类型（本地 blob 存储）。
-pub type AppDockerRegistry = DockerRegistry<LocalFsStore>;
+/// 应用内具体化的 Docker Registry v2 存储服务类型（运行期可选 blob 后端）。
+pub type AppDockerRegistry = DockerRegistry<BlobBackend>;
 
 /// 请求 ID 头名称。
 const REQUEST_ID_HEADER: &str = "x-request-id";
@@ -62,8 +62,8 @@ pub struct AppState {
     pub config: Arc<Config>,
     /// 元数据存储（内部已是连接池，克隆廉价）。
     pub meta: MetaStore,
-    /// blob 存储。
-    pub store: LocalFsStore,
+    /// blob 存储（运行期按配置选定 fs / s3 后端）。
+    pub store: BlobBackend,
     /// JWT 会话签名器。
     pub jwt: JwtSigner,
     /// 登录暴力破解防护守卫（进程内存计数）。
@@ -385,7 +385,11 @@ mod tests {
     pub(crate) async fn 测试用状态() -> (AppState, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
         let meta = MetaStore::open_in_memory().await.unwrap();
-        let store = LocalFsStore::new(dir.path().join("blobs")).await.unwrap();
+        let store = BlobBackend::Fs(
+            crate::storage::LocalFsStore::new(dir.path().join("blobs"))
+                .await
+                .unwrap(),
+        );
         let jwt = JwtSigner::from_secret(b"test-secret-32-bytes-xxxxxxxxxxxx", 3600);
         let upstream = HttpUpstream::new(std::time::Duration::from_secs(60)).unwrap();
         let artifacts = Arc::new(ArtifactService::new(store.clone(), meta.clone(), upstream));

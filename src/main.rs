@@ -17,7 +17,7 @@ use jianartifact::config::Config;
 use jianartifact::format::{ArtifactService, DockerRegistry, FormatRegistry};
 use jianartifact::meta::MetaStore;
 use jianartifact::proxy::HttpUpstream;
-use jianartifact::storage::LocalFsStore;
+use jianartifact::storage::BlobBackend;
 
 /// 命令行参数。
 #[derive(Debug, Parser)]
@@ -60,11 +60,18 @@ async fn main() -> anyhow::Result<()> {
         .with_context(|| format!("打开元数据库失败: {}", db_path.display()))?;
     info!(数据库 = %db_path.display(), "元数据库就绪");
 
-    // 初始化 blob 存储
-    let store = LocalFsStore::new(&blobs_dir)
+    // 初始化 blob 存储：按配置选 fs（默认）/ s3 后端；S3 临时文件中转目录在数据目录下
+    let s3_tmp_dir = data_dir.join("s3-tmp");
+    let store = BlobBackend::from_config(&cfg.data.storage, &blobs_dir, &s3_tmp_dir)
         .await
-        .with_context(|| format!("初始化 blob 存储失败: {}", blobs_dir.display()))?;
-    info!(blob目录 = %blobs_dir.display(), "blob 存储就绪");
+        .context("初始化 blob 存储失败")?;
+    match &store {
+        BlobBackend::Fs(_) => {
+            info!(blob目录 = %blobs_dir.display(), "blob 存储就绪（本地文件系统）")
+        }
+        #[cfg(feature = "s3")]
+        BlobBackend::S3(_) => info!("blob 存储就绪（S3 兼容对象存储）"),
+    }
 
     // 首启管理员引导（仅空库触发）
     bootstrap_and_log(&meta).await?;

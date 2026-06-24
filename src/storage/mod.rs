@@ -11,6 +11,17 @@ use sha1::Sha1;
 use sha2::{Sha256, Sha512};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 
+#[cfg(feature = "s3")]
+mod s3;
+#[cfg(feature = "s3")]
+pub use s3::{S3Config, S3Store};
+
+/// blob 读取句柄的统一类型：装箱的异步读流。
+///
+/// 两种后端各自返回不同的具体读句柄（本地是文件、S3 是网络字节流），统一装箱为该 trait 对象，
+/// 使上层流式下载逻辑对后端无感（ADR-0014 §6）。
+pub type BlobReader = Box<dyn AsyncRead + Send + Unpin>;
+
 /// 单次流式写入算得的四种摘要与字节数。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlobDigests {
@@ -35,9 +46,13 @@ pub enum StorageError {
     /// 请求的 blob 不存在。
     #[error("blob 不存在: {0}")]
     NotFound(String),
+    /// 对象存储后端错误（仅 S3 后端，消息已脱敏不含凭据）。
+    #[cfg(feature = "s3")]
+    #[error("对象存储后端失败: {0}")]
+    Backend(String),
 }
 
-/// blob 存储抽象。当前仅本地文件系统实现，S3 后端为 P2。
+/// blob 存储抽象。本地文件系统为默认实现，S3 兼容对象存储为可选 opt-in 实现（ADR-0014）。
 #[allow(async_fn_in_trait)]
 pub trait BlobStore {
     /// 流式写入：从 `reader` 读取全部内容，边写边算四种摘要，
@@ -47,13 +62,21 @@ pub trait BlobStore {
         R: AsyncRead + Unpin + Send;
 
     /// 按 sha256 流式打开 blob 读取句柄；不存在时返回 NotFound。
-    async fn get(&self, sha256: &str) -> Result<tokio::fs::File, StorageError>;
+    async fn get(&self, sha256: &str) -> Result<BlobReader, StorageError>;
 
     /// 按 sha256 删除 blob；不存在时视为成功（幂等）。
     async fn delete(&self, sha256: &str) -> Result<(), StorageError>;
 
     /// 判断 blob 是否存在。
     async fn exists(&self, sha256: &str) -> Result<bool, StorageError>;
+}
+
+/// 按 sha256 推导内容寻址的相对存储键：前两位分桶 + 其余作为对象名。
+///
+/// 本地文件系统与 S3 共用同一布局（S3 再叠加配置的 `prefix`），保证两后端寻址同构（ADR-0014 §4）。
+pub fn content_key(sha256: &str) -> String {
+    let (prefix, rest) = sha256.split_at(2.min(sha256.len()));
+    format!("{prefix}/{rest}")
 }
 
 /// 一次读取的缓冲区大小（64 KiB），保证大文件不整体载入内存。
@@ -87,56 +110,71 @@ impl LocalFsStore {
     }
 }
 
+/// 流式把 `reader` 写入临时文件 `tmp_path`，边写边算四种摘要，返回摘要信息。
+///
+/// 失败时清理半截临时文件并返回错误（不留垃圾）；成功时临时文件保留，由调用方负责后续落定 / 上传。
+/// 本地与 S3 后端共用此逻辑，保证「先落本地校验、再按内容寻址落定」的写入语义一致（ADR-0014 §4）。
+async fn stream_to_temp_file<R>(
+    mut reader: R,
+    tmp_path: &std::path::Path,
+) -> Result<BlobDigests, StorageError>
+where
+    R: AsyncRead + Unpin + Send,
+{
+    let mut tmp_file = tokio::fs::File::create(tmp_path).await?;
+
+    let mut sha256 = Sha256::new();
+    let mut sha1 = Sha1::new();
+    let mut md5 = Md5::new();
+    let mut sha512 = Sha512::new();
+    let mut size: u64 = 0;
+    let mut buf = vec![0u8; READ_BUFFER_SIZE];
+
+    // 流式读取 → 边写盘边喂哈希；任一步失败都清理临时文件
+    let write_result = async {
+        loop {
+            let n = reader.read(&mut buf).await?;
+            if n == 0 {
+                break;
+            }
+            let chunk = &buf[..n];
+            tmp_file.write_all(chunk).await?;
+            sha256.update(chunk);
+            sha1.update(chunk);
+            md5.update(chunk);
+            sha512.update(chunk);
+            size += n as u64;
+        }
+        tmp_file.flush().await?;
+        tmp_file.sync_all().await?;
+        Ok::<(), std::io::Error>(())
+    }
+    .await;
+
+    if let Err(e) = write_result {
+        // 清理半截临时文件，不留垃圾
+        let _ = tokio::fs::remove_file(tmp_path).await;
+        return Err(StorageError::Io(e));
+    }
+
+    Ok(BlobDigests {
+        size,
+        sha256: hex_encode(&sha256.finalize()),
+        sha1: hex_encode(&sha1.finalize()),
+        md5: hex_encode(&md5.finalize()),
+        sha512: hex_encode(&sha512.finalize()),
+    })
+}
+
 impl BlobStore for LocalFsStore {
-    async fn put<R>(&self, mut reader: R) -> Result<BlobDigests, StorageError>
+    async fn put<R>(&self, reader: R) -> Result<BlobDigests, StorageError>
     where
         R: AsyncRead + Unpin + Send,
     {
         // 临时文件名用随机 UUID，避免并发写互相覆盖
         let tmp_path = self.tmp_dir().join(uuid::Uuid::new_v4().to_string());
-        let mut tmp_file = tokio::fs::File::create(&tmp_path).await?;
-
-        let mut sha256 = Sha256::new();
-        let mut sha1 = Sha1::new();
-        let mut md5 = Md5::new();
-        let mut sha512 = Sha512::new();
-        let mut size: u64 = 0;
-        let mut buf = vec![0u8; READ_BUFFER_SIZE];
-
-        // 流式读取 → 边写盘边喂哈希；任一步失败都清理临时文件
-        let write_result = async {
-            loop {
-                let n = reader.read(&mut buf).await?;
-                if n == 0 {
-                    break;
-                }
-                let chunk = &buf[..n];
-                tmp_file.write_all(chunk).await?;
-                sha256.update(chunk);
-                sha1.update(chunk);
-                md5.update(chunk);
-                sha512.update(chunk);
-                size += n as u64;
-            }
-            tmp_file.flush().await?;
-            tmp_file.sync_all().await?;
-            Ok::<(), std::io::Error>(())
-        }
-        .await;
-
-        if let Err(e) = write_result {
-            // 清理半截临时文件，不留垃圾
-            let _ = tokio::fs::remove_file(&tmp_path).await;
-            return Err(StorageError::Io(e));
-        }
-
-        let digests = BlobDigests {
-            size,
-            sha256: hex_encode(&sha256.finalize()),
-            sha1: hex_encode(&sha1.finalize()),
-            md5: hex_encode(&md5.finalize()),
-            sha512: hex_encode(&sha512.finalize()),
-        };
+        // 流式写临时文件并算四种摘要（失败已在内部清理临时文件）
+        let digests = stream_to_temp_file(reader, &tmp_path).await?;
 
         // 原子落定：先建分桶目录，再 rename 临时文件到最终路径
         let final_path = self.blob_path(&digests.sha256);
@@ -153,10 +191,11 @@ impl BlobStore for LocalFsStore {
         Ok(digests)
     }
 
-    async fn get(&self, sha256: &str) -> Result<tokio::fs::File, StorageError> {
+    async fn get(&self, sha256: &str) -> Result<BlobReader, StorageError> {
         let path = self.blob_path(sha256);
         match tokio::fs::File::open(&path).await {
-            Ok(file) => Ok(file),
+            // 装箱为统一读句柄类型，上层对后端无感（ADR-0014 §6）
+            Ok(file) => Ok(Box::new(file)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 Err(StorageError::NotFound(sha256.to_string()))
             }
@@ -176,6 +215,109 @@ impl BlobStore for LocalFsStore {
 
     async fn exists(&self, sha256: &str) -> Result<bool, StorageError> {
         Ok(tokio::fs::try_exists(self.blob_path(sha256)).await?)
+    }
+}
+
+/// 构造 blob 后端时的错误。
+#[derive(Debug, thiserror::Error)]
+pub enum BackendInitError {
+    /// 初始化失败（IO / 连接 / 配置缺失等）。
+    #[error("初始化 blob 存储失败: {0}")]
+    Init(String),
+    /// 配置选用了 S3 后端，但二进制未启用 `s3` 编译特性。
+    #[error("配置选用 S3 后端，但本二进制未启用 `s3` 编译特性；请使用启用该特性的构建，或改回 backend = \"fs\"")]
+    S3FeatureDisabled,
+    /// 选用 S3 后端但缺少 `[data.storage.s3]` 子配置。
+    #[error("配置选用 S3 后端，但缺少 [data.storage.s3] 子配置")]
+    MissingS3Settings,
+}
+
+/// blob 后端运行期分发：构造期按配置二选一，上层只依赖 [`BlobStore`] trait，对后端无感（ADR-0014 §3）。
+#[derive(Clone)]
+pub enum BlobBackend {
+    /// 本地文件系统后端（默认）。
+    Fs(LocalFsStore),
+    /// S3 兼容对象存储后端（可选 opt-in，仅启用 `s3` 特性时可用）。
+    #[cfg(feature = "s3")]
+    S3(S3Store),
+}
+
+impl BlobBackend {
+    /// 按运行期配置构造 blob 后端。
+    ///
+    /// - `backend = "fs"`（默认）：用本地文件系统，blob 落 `local_root`，临时文件中转目录 `tmp_dir`。
+    /// - `backend = "s3"`：需启用 `s3` 编译特性，否则直接报错退出（不静默回退本地，ADR-0014 §1）。
+    ///
+    /// `tmp_dir` 仅 S3 后端使用（上传前本地临时文件中转算 sha256）。
+    pub async fn from_config(
+        storage: &crate::config::StorageConfig,
+        local_root: &std::path::Path,
+        #[cfg_attr(not(feature = "s3"), allow(unused_variables))] tmp_dir: &std::path::Path,
+    ) -> Result<Self, BackendInitError> {
+        use crate::config::StorageBackend;
+        match storage.backend {
+            StorageBackend::Fs => {
+                let store = LocalFsStore::new(local_root)
+                    .await
+                    .map_err(|e| BackendInitError::Init(e.to_string()))?;
+                Ok(BlobBackend::Fs(store))
+            }
+            StorageBackend::S3 => {
+                #[cfg(feature = "s3")]
+                {
+                    let settings = storage
+                        .s3
+                        .as_ref()
+                        .ok_or(BackendInitError::MissingS3Settings)?;
+                    let cfg = S3Config::from_settings(settings, tmp_dir);
+                    let store = S3Store::connect(cfg)
+                        .await
+                        .map_err(|e| BackendInitError::Init(e.to_string()))?;
+                    Ok(BlobBackend::S3(store))
+                }
+                #[cfg(not(feature = "s3"))]
+                {
+                    Err(BackendInitError::S3FeatureDisabled)
+                }
+            }
+        }
+    }
+}
+
+impl BlobStore for BlobBackend {
+    async fn put<R>(&self, reader: R) -> Result<BlobDigests, StorageError>
+    where
+        R: AsyncRead + Unpin + Send,
+    {
+        match self {
+            BlobBackend::Fs(s) => s.put(reader).await,
+            #[cfg(feature = "s3")]
+            BlobBackend::S3(s) => s.put(reader).await,
+        }
+    }
+
+    async fn get(&self, sha256: &str) -> Result<BlobReader, StorageError> {
+        match self {
+            BlobBackend::Fs(s) => s.get(sha256).await,
+            #[cfg(feature = "s3")]
+            BlobBackend::S3(s) => s.get(sha256).await,
+        }
+    }
+
+    async fn delete(&self, sha256: &str) -> Result<(), StorageError> {
+        match self {
+            BlobBackend::Fs(s) => s.delete(sha256).await,
+            #[cfg(feature = "s3")]
+            BlobBackend::S3(s) => s.delete(sha256).await,
+        }
+    }
+
+    async fn exists(&self, sha256: &str) -> Result<bool, StorageError> {
+        match self {
+            BlobBackend::Fs(s) => s.exists(sha256).await,
+            #[cfg(feature = "s3")]
+            BlobBackend::S3(s) => s.exists(sha256).await,
+        }
     }
 }
 
@@ -261,8 +403,11 @@ mod tests {
     #[tokio::test]
     async fn get_不存在的_blob_返回_notfound() {
         let (store, _dir) = 新建临时存储().await;
-        let err = store.get(EMPTY_SHA256).await.unwrap_err();
-        assert!(matches!(err, StorageError::NotFound(_)));
+        // BlobReader（装箱读流）不实现 Debug，故不用 unwrap_err，改用 match 断言错误变体
+        match store.get(EMPTY_SHA256).await {
+            Err(StorageError::NotFound(_)) => {}
+            other => panic!("期望 NotFound，实际: {:?}", other.map(|_| "<字节流>")),
+        }
     }
 
     #[tokio::test]
@@ -279,5 +424,79 @@ mod tests {
         let d2 = store.put(&b"same"[..]).await.unwrap();
         assert_eq!(d1, d2);
         assert!(store.exists(&d1.sha256).await.unwrap());
+    }
+
+    #[test]
+    fn content_key_按前两位分桶寻址() {
+        // 正常 64 位 sha256：前两位作桶，其余作对象名
+        assert_eq!(
+            content_key(ABC_SHA256),
+            "ba/7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        // 与本地分桶布局同构：桶名即 blob_path 的第一层目录
+        assert!(content_key(EMPTY_SHA256).starts_with("e3/"));
+    }
+
+    #[test]
+    fn content_key_短串不越界() {
+        // 不足两位时不 panic（split_at 取 min）
+        assert_eq!(content_key("a"), "a/");
+        assert_eq!(content_key(""), "/");
+    }
+
+    #[tokio::test]
+    async fn get_装箱后仍可流式读回内容() {
+        // 验证 get 返回类型改为 Box<dyn AsyncRead> 后本地路径不回归
+        let (store, _dir) = 新建临时存储().await;
+        let content = b"boxed reader roundtrip";
+        let d = store.put(&content[..]).await.unwrap();
+
+        let mut reader = store.get(&d.sha256).await.unwrap();
+        let mut buf = Vec::new();
+        reader.read_to_end(&mut buf).await.unwrap();
+        assert_eq!(buf, content);
+    }
+
+    #[tokio::test]
+    async fn from_config_默认构造本地文件系统后端() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = crate::config::StorageConfig::default();
+        // BlobBackend 不实现 Debug，故用 match 而非 unwrap 断言变体
+        match BlobBackend::from_config(&storage, &dir.path().join("blobs"), dir.path()).await {
+            Ok(BlobBackend::Fs(_)) => {}
+            _ => panic!("默认配置应构造本地文件系统后端"),
+        }
+    }
+
+    /// 配置选 S3 但未启用 `s3` 编译特性时，构造直接报错退出（不静默回退本地，ADR-0014 §1）。
+    #[cfg(not(feature = "s3"))]
+    #[tokio::test]
+    async fn from_config_选_s3_但未启用特性则报错() {
+        use crate::config::{StorageBackend, StorageConfig};
+        let dir = tempfile::tempdir().unwrap();
+        let storage = StorageConfig {
+            backend: StorageBackend::S3,
+            s3: None,
+        };
+        match BlobBackend::from_config(&storage, &dir.path().join("blobs"), dir.path()).await {
+            Err(BackendInitError::S3FeatureDisabled) => {}
+            _ => panic!("未启用 s3 特性时选 S3 后端应报 S3FeatureDisabled"),
+        }
+    }
+
+    /// 启用 `s3` 特性但缺少 `[data.storage.s3]` 子配置时报错。
+    #[cfg(feature = "s3")]
+    #[tokio::test]
+    async fn from_config_选_s3_但缺子配置则报错() {
+        use crate::config::{StorageBackend, StorageConfig};
+        let dir = tempfile::tempdir().unwrap();
+        let storage = StorageConfig {
+            backend: StorageBackend::S3,
+            s3: None,
+        };
+        match BlobBackend::from_config(&storage, &dir.path().join("blobs"), dir.path()).await {
+            Err(BackendInitError::MissingS3Settings) => {}
+            _ => panic!("缺 S3 子配置应报 MissingS3Settings"),
+        }
     }
 }

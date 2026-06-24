@@ -15,7 +15,7 @@ use tokio::io::{AsyncRead, AsyncWriteExt};
 use uuid::Uuid;
 
 use crate::meta::{MetaError, MetaStore, NewArtifact, RepositoryRecord};
-use crate::storage::{BlobStore, StorageError};
+use crate::storage::{BlobReader, BlobStore, StorageError};
 
 use super::docker::{self, MEDIA_TYPE_MANIFEST_V2};
 
@@ -56,15 +56,25 @@ struct UploadSession {
     written: u64,
 }
 
-/// blob 读取句柄：blob 文件流连同其大小与 digest。
-#[derive(Debug)]
+/// blob 读取句柄：blob 字节流连同其大小与 digest。
 pub struct BlobHandle {
-    /// blob 字节流（流式返回，不整体载入内存）。
-    pub blob: tokio::fs::File,
+    /// blob 字节流（流式返回，不整体载入内存）；后端无关的装箱读句柄。
+    pub blob: BlobReader,
     /// blob 字节数。
     pub size: i64,
     /// blob digest（`sha256:{hex}`）。
     pub digest: String,
+}
+
+impl std::fmt::Debug for BlobHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // blob 是不可格式化的字节流，仅展示大小与 digest
+        f.debug_struct("BlobHandle")
+            .field("blob", &"<字节流>")
+            .field("size", &self.size)
+            .field("digest", &self.digest)
+            .finish()
+    }
 }
 
 /// manifest 读取结果：manifest 字节、媒体类型与 digest。

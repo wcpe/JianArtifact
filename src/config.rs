@@ -34,6 +34,15 @@ const ENV_PREFIX: &str = "JIANARTIFACT_";
 /// 键名内部的下划线（如 `session_ttl_secs`）保持原样。
 const KNOWN_SECTIONS: &[&str] = &["server", "data", "auth", "limits", "proxy"];
 
+/// 已知的多级嵌套前缀映射（环境变量下划线前缀 → 点分隔配置路径）。
+///
+/// 单级节名（[`KNOWN_SECTIONS`]）只替换首个下划线，无法表达 `data.storage.s3.*` 这类深层嵌套；
+/// 这里按前缀长度从长到短优先匹配，把整段已知前缀替换为点分隔路径，余下键名内部下划线保留。
+const KNOWN_NESTED_PREFIXES: &[(&str, &str)] = &[
+    ("data_storage_s3_", "data.storage.s3."),
+    ("data_storage_", "data.storage."),
+];
+
 /// 顶层配置。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
@@ -84,6 +93,9 @@ pub struct DataConfig {
     /// blob 存储子目录；为 None 时取 `data_dir/blobs`。
     #[serde(default)]
     pub blobs_dir: Option<PathBuf>,
+    /// blob 存储后端选择（ADR-0014）。默认本地文件系统。
+    #[serde(default)]
+    pub storage: StorageConfig,
 }
 
 impl Default for DataConfig {
@@ -91,8 +103,57 @@ impl Default for DataConfig {
         Self {
             data_dir: PathBuf::from(DEFAULT_DATA_DIR),
             blobs_dir: None,
+            storage: StorageConfig::default(),
         }
     }
+}
+
+/// blob 存储后端类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StorageBackend {
+    /// 本地文件系统（默认，零外部依赖）。
+    #[default]
+    Fs,
+    /// S3 兼容对象存储（可选 opt-in，需启用 `s3` 编译特性，ADR-0014）。
+    S3,
+}
+
+/// blob 存储后端配置（ADR-0014）。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct StorageConfig {
+    /// 后端类型：`fs`（默认）或 `s3`。
+    #[serde(default)]
+    pub backend: StorageBackend,
+    /// S3 子配置；仅 `backend = "s3"` 时使用。
+    #[serde(default)]
+    pub s3: Option<S3Settings>,
+}
+
+/// S3 兼容对象存储连接配置（ADR-0014）。
+///
+/// 凭据（access key / secret key）不在此结构体内：其真源是配置/环境（沿用 AWS SDK 标准
+/// `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` 等），绝不入库、不进日志、不进 DB 明文。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct S3Settings {
+    /// S3 端点 URL（兼容 MinIO 等自建网关；指向 AWS 时可省略由 region 推断）。
+    #[serde(default)]
+    pub endpoint: Option<String>,
+    /// 区域（如 `us-east-1`；MinIO 等可填任意占位值）。
+    pub region: String,
+    /// 存储桶名。
+    pub bucket: String,
+    /// 对象 key 前缀（默认空）；与 sha256 内容寻址键拼接。
+    #[serde(default)]
+    pub prefix: String,
+    /// 是否使用 path-style 寻址（MinIO 等自建网关需 true，默认 true）。
+    #[serde(default = "default_path_style")]
+    pub path_style: bool,
+}
+
+/// path-style 寻址默认值：true，兼容 MinIO 等自建对象存储。
+fn default_path_style() -> bool {
+    true
 }
 
 impl DataConfig {
@@ -179,6 +240,12 @@ impl Config {
 /// `auth_session_ttl_secs` → `auth.session_ttl_secs`。
 fn map_env_key(key: &UncasedStr) -> Uncased<'_> {
     let lower = key.as_str().to_ascii_lowercase();
+    // 先匹配多级嵌套前缀（已按长度从长到短排列，长前缀优先，避免被单级节名截断）
+    for (prefix, dotted) in KNOWN_NESTED_PREFIXES {
+        if let Some(rest) = lower.strip_prefix(prefix) {
+            return Uncased::from_owned(format!("{dotted}{rest}"));
+        }
+    }
     for section in KNOWN_SECTIONS {
         let prefix = format!("{section}_");
         if let Some(rest) = lower.strip_prefix(&prefix) {
@@ -273,7 +340,57 @@ mod tests {
         let data = DataConfig {
             data_dir: PathBuf::from("/var/lib/ja"),
             blobs_dir: Some(PathBuf::from("/mnt/blobs")),
+            storage: StorageConfig::default(),
         };
         assert_eq!(data.resolved_blobs_dir(), PathBuf::from("/mnt/blobs"));
+    }
+
+    #[test]
+    fn 存储后端默认本地文件系统() {
+        let cfg = Config::default();
+        assert_eq!(cfg.data.storage.backend, StorageBackend::Fs);
+        assert!(cfg.data.storage.s3.is_none());
+    }
+
+    #[test]
+    fn toml_可配置_s3_存储后端() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            "[data.storage]\nbackend = \"s3\"\n\n[data.storage.s3]\nregion = \"us-east-1\"\nbucket = \"artifacts\"\nendpoint = \"http://127.0.0.1:9000\""
+        )
+        .unwrap();
+        with_env_vars(&[], || {
+            let cfg = Config::load(file.path()).unwrap();
+            assert_eq!(cfg.data.storage.backend, StorageBackend::S3);
+            let s3 = cfg.data.storage.s3.expect("应有 S3 子配置");
+            assert_eq!(s3.region, "us-east-1");
+            assert_eq!(s3.bucket, "artifacts");
+            assert_eq!(s3.endpoint.as_deref(), Some("http://127.0.0.1:9000"));
+            // path_style 默认 true（兼容 MinIO）
+            assert!(s3.path_style);
+            assert_eq!(s3.prefix, "");
+        });
+    }
+
+    #[test]
+    fn 环境变量可覆盖嵌套的存储配置() {
+        with_env_vars(
+            &[
+                ("JIANARTIFACT_DATA_STORAGE_BACKEND", "s3"),
+                ("JIANARTIFACT_DATA_STORAGE_S3_REGION", "cn-north-1"),
+                ("JIANARTIFACT_DATA_STORAGE_S3_BUCKET", "blobs"),
+                ("JIANARTIFACT_DATA_STORAGE_S3_PATH_STYLE", "false"),
+            ],
+            || {
+                let cfg = Config::load(Path::new("不存在.toml")).unwrap();
+                assert_eq!(cfg.data.storage.backend, StorageBackend::S3);
+                let s3 = cfg.data.storage.s3.expect("应有 S3 子配置");
+                // 嵌套键名内部下划线（path_style）保留，不被误拆
+                assert_eq!(s3.region, "cn-north-1");
+                assert_eq!(s3.bucket, "blobs");
+                assert!(!s3.path_style);
+            },
+        );
     }
 }

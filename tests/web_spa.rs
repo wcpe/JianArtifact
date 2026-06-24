@@ -20,13 +20,13 @@ use jianartifact::config::Config;
 use jianartifact::format::{ArtifactService, DockerRegistry, FormatRegistry};
 use jianartifact::meta::MetaStore;
 use jianartifact::proxy::HttpUpstream;
-use jianartifact::storage::LocalFsStore;
+use jianartifact::storage::{BlobBackend, LocalFsStore};
 
 /// 构造测试用 AppState（内存库 + 临时 blob 目录）。
 async fn 测试用状态() -> (AppState, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let meta = MetaStore::open(&dir.path().join("test.db")).await.unwrap();
-    let store = LocalFsStore::new(dir.path().join("blobs")).await.unwrap();
+    let store = BlobBackend::Fs(LocalFsStore::new(dir.path().join("blobs")).await.unwrap());
     let jwt = JwtSigner::from_secret(b"test-secret-32-bytes-xxxxxxxxxxxx", 3600);
     let upstream = HttpUpstream::new(std::time::Duration::from_secs(60)).unwrap();
     let artifacts = Arc::new(ArtifactService::new(store.clone(), meta.clone(), upstream));

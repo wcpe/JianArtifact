@@ -19,7 +19,7 @@ use jianartifact::config::Config;
 use jianartifact::format::{ArtifactService, DockerRegistry, FormatRegistry};
 use jianartifact::meta::{MetaStore, NewRepository, Permission, RepoType, Role, Visibility};
 use jianartifact::proxy::HttpUpstream;
-use jianartifact::storage::LocalFsStore;
+use jianartifact::storage::{BlobBackend, LocalFsStore};
 
 /// 测试夹具。
 struct Fixture {
@@ -37,7 +37,7 @@ impl Fixture {
     async fn with_max_size(max: Option<u64>) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let meta = MetaStore::open(&dir.path().join("test.db")).await.unwrap();
-        let store = LocalFsStore::new(dir.path().join("blobs")).await.unwrap();
+        let store = BlobBackend::Fs(LocalFsStore::new(dir.path().join("blobs")).await.unwrap());
         let jwt = JwtSigner::from_secret(b"artifact-secret-32-bytes-xxxxxxxx", 3600);
         let upstream = HttpUpstream::new(std::time::Duration::from_secs(60)).unwrap();
         let artifacts = Arc::new(ArtifactService::new(store.clone(), meta.clone(), upstream));

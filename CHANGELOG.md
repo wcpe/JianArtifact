@@ -11,6 +11,7 @@
 - Cargo 格式（hosted+proxy，FR-26）：按 Cargo 稀疏索引协议接入，支持 `cargo publish` 发布、稀疏索引与 `.crate` 下载、yank/unyank、registry config.json；同版本不可覆盖（409）、索引 cksum 用 sha256；proxy 回源上游索引（不缓存）并缓存 `.crate`（cache-miss→hit）；发布/yank 需写权限、private 对无权一律 404
 - PyPI 格式（FR-27，hosted + proxy）：Simple Repository API（PEP503 HTML / PEP691 JSON）项目与文件索引、twine multipart 上传、pip 下载；hosted 已发布文件不可覆盖（409），proxy 回源上游 Simple 并重写文件链接、包文件单飞缓存（cache-miss → hit 不重复回源）
 - NuGet 格式（hosted + proxy）经统一 Format trait 接入：NuGet v3 服务索引、扁平容器版本列表与 .nupkg / .nuspec 存取、`nuget push`（multipart 解析 .nupkg 内嵌 .nuspec 取 id/version）、已发布版本不可覆盖（重复 push 同版本 409）、四校验和、id/version 小写规范化；proxy 回源服务索引重写指向本仓库、版本列表回源、.nupkg cache-miss 缓存；支持 `dotnet nuget push` / `dotnet add package`
+- S3 兼容对象存储后端（FR-30，可选 opt-in，默认关闭）：新增 Cargo 特性 `s3` 与 `[data.storage]` 配置节（`backend = "fs"`（默认）/`"s3"` + endpoint/region/bucket/prefix/path_style）；启用 `s3` 特性并配置 `backend = "s3"` 后 blob 本体改存对象存储，写入语义与本地等价（本地临时文件算 sha256 → 内容寻址 key 流式 multipart 上传，失败清理不留孤儿对象），下载流式 GET 不整体载入内存；本地文件系统仍为默认后端，默认构建不含任何 S3 代码与依赖、保持单一二进制零外部运行时依赖；客户端 aws-sdk-s3 裁为纯 rustls + ring（不引入 aws-lc-rs）。详见 ADR-0014 与 docs/OPERATIONS.md「启用即引入外部依赖」
 
 ### 变更
 - 无

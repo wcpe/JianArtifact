@@ -22,7 +22,7 @@ use jianartifact::config::Config;
 use jianartifact::format::{ArtifactService, FormatRegistry};
 use jianartifact::meta::{MetaStore, NewRepository, Permission, RepoType, Role, Visibility};
 use jianartifact::proxy::HttpUpstream;
-use jianartifact::storage::LocalFsStore;
+use jianartifact::storage::{BlobBackend, LocalFsStore};
 
 /// 测试夹具：真实 SQLite 文件 + 临时 blob 目录 + 固定对外地址。
 struct Fixture {
@@ -34,7 +34,7 @@ impl Fixture {
     async fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
         let meta = MetaStore::open(&dir.path().join("test.db")).await.unwrap();
-        let store = LocalFsStore::new(dir.path().join("blobs")).await.unwrap();
+        let store = BlobBackend::Fs(LocalFsStore::new(dir.path().join("blobs")).await.unwrap());
         let jwt = JwtSigner::from_secret(b"npm-secret-32-bytes-xxxxxxxxxxxxx", 3600);
         let upstream = HttpUpstream::new(std::time::Duration::from_secs(60)).unwrap();
         let artifacts = Arc::new(ArtifactService::new(store.clone(), meta.clone(), upstream));

@@ -67,6 +67,21 @@ zip = { version = "8", default-features = false, features = ["deflate-flate2-zli
 # 解析 NuGet .nuspec（XML）取包 id / version（FR-29）。纯 Rust、零原生依赖。
 quick-xml = "0.40"
 
+# ---- S3 兼容对象存储后端（FR-30 / ADR-0014），默认关闭、opt-in 编译 ----
+# 全部 optional：默认 `cargo build` 不引入任何 S3 代码与依赖，守单一二进制零外部运行时依赖。
+# default-features=false 关掉 SDK 自带的默认 https client，避免默认拖入 aws-lc-rs 原生加密；
+# 由本仓库显式经 aws-smithy-http-client 的 rustls-ring 注入纯 rustls + ring 客户端（零原生 C 依赖），
+# 与现有 reqwest(rustls-tls) / jsonwebtoken(rust_crypto) 取向一致。
+aws-config = { version = "1", default-features = false, features = ["rt-tokio", "behavior-version-latest"], optional = true }
+aws-sdk-s3 = { version = "1", default-features = false, features = ["rt-tokio", "behavior-version-latest", "sigv4a"], optional = true }
+aws-smithy-http-client = { version = "1", default-features = false, features = ["rustls-ring"], optional = true }
+aws-smithy-types = { version = "1", features = ["rt-tokio"], optional = true }
+aws-credential-types = { version = "1", optional = true }
+
+[features]
+# S3 兼容对象存储后端（默认关闭）。启用即引入外部对象存储依赖，详见 ADR-0014 与 docs/OPERATIONS.md。
+s3 = ["dep:aws-config", "dep:aws-sdk-s3", "dep:aws-smithy-http-client", "dep:aws-smithy-types", "dep:aws-credential-types"]
+
 [dev-dependencies]
 # 集成测试：对 axum 路由直接发起请求
 tower = { version = "0.5", features = ["util"] }

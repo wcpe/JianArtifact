@@ -25,7 +25,7 @@ use jianartifact::config::Config;
 use jianartifact::format::{ArtifactService, DockerRegistry, FormatRegistry};
 use jianartifact::meta::{MetaStore, NewRepository, Permission, RepoType, Role, Visibility};
 use jianartifact::proxy::HttpUpstream;
-use jianartifact::storage::LocalFsStore;
+use jianartifact::storage::{BlobBackend, LocalFsStore};
 
 /// schema2 manifest 媒体类型。
 const MANIFEST_V2: &str = "application/vnd.docker.distribution.manifest.v2+json";
@@ -40,7 +40,7 @@ impl Fixture {
     async fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
         let meta = MetaStore::open(&dir.path().join("test.db")).await.unwrap();
-        let store = LocalFsStore::new(dir.path().join("blobs")).await.unwrap();
+        let store = BlobBackend::Fs(LocalFsStore::new(dir.path().join("blobs")).await.unwrap());
         let jwt = JwtSigner::from_secret(b"docker-secret-32-bytes-xxxxxxxxxx", 3600);
         let upstream = HttpUpstream::new(std::time::Duration::from_secs(60)).unwrap();
         let artifacts = Arc::new(ArtifactService::new(store.clone(), meta.clone(), upstream));
