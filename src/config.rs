@@ -60,6 +60,17 @@ const DEFAULT_RATE_LIMIT_IP_MAX_CONCURRENT: u64 = 0;
 const DEFAULT_RATE_LIMIT_USER_MAX_CONCURRENT: u64 = 0;
 /// 单仓库默认并发在途请求上限（FR-51 并发上限）：默认 0 表示不限并发。
 const DEFAULT_RATE_LIMIT_REPO_MAX_CONCURRENT: u64 = 0;
+/// 访问异常检测与自动封禁默认开关（FR-53，ADR-0008）：默认关闭，须运维显式开启，避免误杀。
+const DEFAULT_BAN_ENABLED: bool = false;
+/// 异常检测固定时间窗时长（秒）：在该窗内统计单 IP 的异常信号数。
+const DEFAULT_BAN_WINDOW_SECS: u64 = 60;
+/// 触发自动封禁的窗内异常信号阈值：单 IP 一窗内异常信号数达此值即封禁。
+///
+/// 异常信号指 4xx（客户端错误，含 401/403 鉴权失败）与被限流拒绝（429）等可疑响应。
+/// 默认 100 较保守宽放：正常包管理器批量拉取偶发 404（探测制品是否存在）不应触顶。
+const DEFAULT_BAN_THRESHOLD: u64 = 100;
+/// 自动封禁时长（秒）：封禁期内来源 IP 一律拒绝；到期自动解封。默认 15 分钟。
+const DEFAULT_BAN_DURATION_SECS: u64 = 900;
 /// 环境变量前缀。
 const ENV_PREFIX: &str = "JIANARTIFACT_";
 /// 已知配置节名。环境变量映射时，仅把节名与键名之间的首个下划线视作嵌套分隔，
@@ -456,15 +467,67 @@ impl Default for MetricsConfig {
     }
 }
 
-/// 应用层（L7）防护配置（ADR-0008）：当前仅承载基础速率限制（FR-33）。
+/// 应用层（L7）防护配置（ADR-0008）：承载多维限流（FR-33 + FR-51）、访问异常检测与自动封禁、
+/// IP 黑/白名单（FR-53）。
 ///
 /// 仅做应用层防护；L3/L4 体积型 DDoS 由前置反向代理 / CDN / WAF 承担，不在二进制内实现。
-/// FR-51~56 的多维限流 / 并发上限 / 慢速 / 封禁 / CC / WAF / 告警均不在本批范围。
+/// FR-54~56 的 CC 挑战 / WAF 规则引擎 / 监控告警均不在本批范围。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ProtectionConfig {
     /// 基础速率限制配置。
     #[serde(default)]
     pub rate_limit: RateLimitConfig,
+    /// IP 黑 / 白名单配置（FR-53）：黑名单直接拒、白名单豁免一切防护。
+    #[serde(default)]
+    pub ip_list: IpListConfig,
+    /// 访问异常检测与自动封禁配置（FR-53）。
+    #[serde(default)]
+    pub ban: BanConfig,
+}
+
+/// IP 黑 / 白名单配置（FR-53，ADR-0008）。
+///
+/// 支持单 IP（如 `203.0.113.7`）与 CIDR 网段（如 `10.0.0.0/8`）两种写法，IPv4 / IPv6 均可。
+/// **白名单优先级最高**：命中白名单的来源豁免限流 / 封禁 / 异常检测，照常进入业务；命中黑名单
+/// 的来源在进入业务前直接拒（403）。两者均按**连接级来源 IP** 判定，不采信 `X-Forwarded-For`。
+/// 默认两表皆空 = 不启用名单（不影响现有行为）。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct IpListConfig {
+    /// 白名单条目（IP 或 CIDR）：命中即豁免一切应用层防护，优先级高于黑名单。
+    #[serde(default)]
+    pub allow: Vec<String>,
+    /// 黑名单条目（IP 或 CIDR）：命中即在进入业务前直接拒绝（403）。
+    #[serde(default)]
+    pub deny: Vec<String>,
+}
+
+/// 访问异常检测与自动封禁配置（FR-53，ADR-0008）。
+///
+/// 在固定时间窗内按**连接级来源 IP** 统计异常信号（4xx 客户端错误 / 被限流拒绝），单 IP 一窗内
+/// 异常信号数达 `threshold` 即自动封禁 `duration_secs`，封禁期内该 IP 一律拒绝（403）；封禁到期
+/// 自动解封。封禁状态进程内内存维护（时间窗，重启即清），不落 DB。
+/// 默认关闭且阈值保守宽放，避免误杀正常包管理器的偶发 404 / 鉴权重试；启用与调阈值由运维显式承担。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BanConfig {
+    /// 是否启用异常检测与自动封禁；默认关闭，关闭时不统计、不封禁、零额外开销。
+    pub enabled: bool,
+    /// 异常检测固定时间窗时长（秒）：每窗内独立统计异常信号，跨窗清零。
+    pub window_secs: u64,
+    /// 触发封禁的窗内异常信号阈值：单 IP 一窗内异常信号数达此值即封禁。
+    pub threshold: u64,
+    /// 自动封禁时长（秒）：封禁期内该 IP 一律拒绝；到期自动解封。
+    pub duration_secs: u64,
+}
+
+impl Default for BanConfig {
+    fn default() -> Self {
+        Self {
+            enabled: DEFAULT_BAN_ENABLED,
+            window_secs: DEFAULT_BAN_WINDOW_SECS,
+            threshold: DEFAULT_BAN_THRESHOLD,
+            duration_secs: DEFAULT_BAN_DURATION_SECS,
+        }
+    }
 }
 
 /// 多维速率限制与并发上限配置（FR-33 + FR-51，ADR-0008）。
@@ -655,6 +718,14 @@ mod tests {
             assert_eq!(cfg.protection.rate_limit.ip_max_concurrent, 0);
             assert_eq!(cfg.protection.rate_limit.user_max_concurrent, 0);
             assert_eq!(cfg.protection.rate_limit.repo_max_concurrent, 0);
+            // FR-53 名单默认两表皆空（不启用）
+            assert!(cfg.protection.ip_list.allow.is_empty());
+            assert!(cfg.protection.ip_list.deny.is_empty());
+            // FR-53 异常封禁默认：关闭、阈值保守宽放
+            assert!(!cfg.protection.ban.enabled);
+            assert_eq!(cfg.protection.ban.window_secs, 60);
+            assert_eq!(cfg.protection.ban.threshold, 100);
+            assert_eq!(cfg.protection.ban.duration_secs, 900);
         });
     }
 
@@ -693,6 +764,28 @@ mod tests {
             assert_eq!(cfg.protection.rate_limit.ip_max_concurrent, 5);
             assert_eq!(cfg.protection.rate_limit.user_max_concurrent, 3);
             assert_eq!(cfg.protection.rate_limit.repo_max_concurrent, 7);
+        });
+    }
+
+    #[test]
+    fn toml_可覆盖封禁与黑白名单() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            "[protection.ip_list]\nallow = [\"10.0.0.0/8\"]\ndeny = [\"203.0.113.7\", \"2001:db8::/32\"]\n\n[protection.ban]\nenabled = true\nwindow_secs = 30\nthreshold = 20\nduration_secs = 600"
+        )
+        .unwrap();
+        with_env_vars(&[], || {
+            let cfg = Config::load(file.path()).unwrap();
+            assert_eq!(cfg.protection.ip_list.allow, vec!["10.0.0.0/8"]);
+            assert_eq!(
+                cfg.protection.ip_list.deny,
+                vec!["203.0.113.7", "2001:db8::/32"]
+            );
+            assert!(cfg.protection.ban.enabled);
+            assert_eq!(cfg.protection.ban.window_secs, 30);
+            assert_eq!(cfg.protection.ban.threshold, 20);
+            assert_eq!(cfg.protection.ban.duration_secs, 600);
         });
     }
 

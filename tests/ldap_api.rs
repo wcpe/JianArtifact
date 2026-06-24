@@ -99,6 +99,10 @@ async fn build_state(ldap_cfg: Option<LdapConfig>) -> (AppState, tempfile::TempD
         oidc: None,
         oidc_flows: Arc::new(jianartifact::api::OidcFlowStore::new()),
         ldap,
+        ip_matcher: Arc::new(jianartifact::api::IpMatcher::from_config(
+            &jianartifact::config::IpListConfig::default(),
+        )),
+        ban_registry: Arc::new(jianartifact::api::BanRegistry::new()),
     };
     (state, dir)
 }

@@ -175,6 +175,11 @@ async fn build_state(oidc: Option<OidcProvider>) -> (AppState, tempfile::TempDir
         oidc: oidc.map(Arc::new),
         oidc_flows: Arc::new(jianartifact::api::OidcFlowStore::new()),
         ldap: None,
+        // FR-53：测试默认名单空、封禁登记表空（异常检测默认关闭）
+        ip_matcher: Arc::new(jianartifact::api::IpMatcher::from_config(
+            &jianartifact::config::IpListConfig::default(),
+        )),
+        ban_registry: Arc::new(jianartifact::api::BanRegistry::new()),
     };
     (state, dir)
 }

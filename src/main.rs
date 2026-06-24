@@ -264,6 +264,9 @@ async fn main() -> anyhow::Result<()> {
         oidc,
         oidc_flows: Arc::new(api::OidcFlowStore::new()),
         ldap,
+        // FR-53：从 [protection.ip_list] 预解析黑/白名单网段；封禁登记表为空进程内内存（重启即清）
+        ip_matcher: Arc::new(api::IpMatcher::from_config(&cfg.protection.ip_list)),
+        ban_registry: Arc::new(api::BanRegistry::new()),
     };
     let app = api::build_router(state);
 

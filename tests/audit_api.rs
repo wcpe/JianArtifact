@@ -66,6 +66,11 @@ impl Fixture {
             oidc: None,
             oidc_flows: std::sync::Arc::new(jianartifact::api::OidcFlowStore::new()),
             ldap: None,
+            // FR-53：测试默认名单空、封禁登记表空（异常检测默认关闭）
+            ip_matcher: std::sync::Arc::new(jianartifact::api::IpMatcher::from_config(
+                &jianartifact::config::IpListConfig::default(),
+            )),
+            ban_registry: std::sync::Arc::new(jianartifact::api::BanRegistry::new()),
         };
         Self { state, _dir: dir }
     }
@@ -308,6 +313,11 @@ async fn 审计写入任务缺失时业务仍成功() {
         oidc: None,
         oidc_flows: std::sync::Arc::new(jianartifact::api::OidcFlowStore::new()),
         ldap: None,
+        // FR-53：测试默认名单空、封禁登记表空（异常检测默认关闭）
+        ip_matcher: std::sync::Arc::new(jianartifact::api::IpMatcher::from_config(
+            &jianartifact::config::IpListConfig::default(),
+        )),
+        ban_registry: std::sync::Arc::new(jianartifact::api::BanRegistry::new()),
     };
     let hash = auth::hash_password("S3cret!").unwrap();
     meta.create_user("admin", &hash, Role::Admin).await.unwrap();

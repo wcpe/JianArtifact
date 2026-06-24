@@ -27,6 +27,7 @@ use crate::storage::BlobBackend;
 
 mod acl;
 mod analytics;
+mod anomaly_ban;
 mod artifacts;
 mod audit;
 mod auth_routes;
@@ -50,6 +51,7 @@ mod tokens;
 mod usage;
 mod users;
 
+pub use anomaly_ban::{BanRegistry, IpMatcher};
 pub use audit::{
     channel as audit_channel, spawn_audit_retention, spawn_audit_writer, AuditResult, AuditSink,
 };
@@ -106,6 +108,12 @@ pub struct AppState {
     /// LDAP 认证 provider（FR-35，ADR-0016）：`Some` 表示已配置 `[auth.ldap]`，
     /// 口令型登录（Web 表单 / Basic Auth）本地校验失败后委托其做 bind 校验；`None` 时不参与登录。
     pub ldap: Option<Arc<LdapProvider>>,
+    /// IP 黑/白名单匹配器（FR-53，ADR-0008）：从 `[protection.ip_list]` 预解析的网段集合，
+    /// 白名单豁免一切应用层防护、黑名单直接拒；按连接级来源 IP 判定，不采信 XFF。
+    pub ip_matcher: Arc<anomaly_ban::IpMatcher>,
+    /// 访问异常检测与自动封禁登记表（FR-53，ADR-0008）：进程内内存维护各 IP 的窗内异常信号计数
+    /// 与封禁到期时刻，窗内异常达阈值即自动封禁一个时间窗、到期自动解封；重启即清，不落 DB。
+    pub ban_registry: Arc<anomaly_ban::BanRegistry>,
 }
 
 /// 统一 API 错误类型，转换为 JSON 响应 `{"error":{"code","message"}}`。
@@ -454,8 +462,15 @@ pub fn build_router(state: AppState) -> Router {
         ))
         // 身份解析中间件：先于业务 handler 解析 Bearer/Basic/匿名 注入扩展
         .layer(middleware::from_fn_with_state(
-            state,
+            state.clone(),
             identity::identity_layer,
+        ))
+        // 异常检测与自动封禁 + IP 黑/白名单中间件（FR-53，ADR-0008）：置于热路径前端（外于身份解析
+        // 与限流），白名单豁免、黑名单 / 封禁中直接拒；放行后按响应状态（含限流产生的 429）统计异常
+        // 信号、触阈即自动封禁。仅应用层（L7）；按连接级来源 IP 判定，不采信 XFF。
+        .layer(middleware::from_fn_with_state(
+            state,
+            anomaly_ban::anomaly_ban_layer,
         ))
         // 中间件顺序：设置请求 ID → 追踪 → 透传请求 ID 到响应
         .layer(PropagateRequestIdLayer::x_request_id())
@@ -531,6 +546,11 @@ mod tests {
             oidc_flows: Arc::new(oidc_routes::OidcFlowStore::new()),
             // 默认测试状态不配置 LDAP；需要 LDAP 的测试自行注入 provider
             ldap: None,
+            // 默认测试状态：名单空、封禁登记表空（异常检测默认关闭）；需要的测试自行定制配置
+            ip_matcher: Arc::new(anomaly_ban::IpMatcher::from_config(
+                &crate::config::IpListConfig::default(),
+            )),
+            ban_registry: Arc::new(anomaly_ban::BanRegistry::new()),
         };
         (state, dir)
     }

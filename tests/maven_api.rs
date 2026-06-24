@@ -58,6 +58,11 @@ impl Fixture {
             oidc: None,
             oidc_flows: std::sync::Arc::new(jianartifact::api::OidcFlowStore::new()),
             ldap: None,
+            // FR-53：测试默认名单空、封禁登记表空（异常检测默认关闭）
+            ip_matcher: std::sync::Arc::new(jianartifact::api::IpMatcher::from_config(
+                &jianartifact::config::IpListConfig::default(),
+            )),
+            ban_registry: std::sync::Arc::new(jianartifact::api::BanRegistry::new()),
         };
         Self { state, _dir: dir }
     }
