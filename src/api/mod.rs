@@ -329,6 +329,10 @@ pub fn build_router(state: AppState) -> Router {
             post(migrate::preview_nexus_repositories),
         )
         .route(
+            "/migrate/nexus/offline/preview",
+            post(migrate::preview_nexus_offline),
+        )
+        .route(
             "/repositories/{id}/acl",
             get(acl::list_acl).post(acl::create_acl),
         )

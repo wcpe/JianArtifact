@@ -1,8 +1,8 @@
-//! Nexus OSS 迁移在线入口端点的 HTTP 集成测试（FR-36，ADR-0006）。
+//! Nexus OSS 迁移入口端点的 HTTP 集成测试（FR-36 / FR-37，ADR-0006）。
 //!
 //! 重点覆盖鉴权边界（匿名 401 / 非管理员 403 / 管理员放行）与错误映射
-//! （凭据引用缺失 400、连接源系统失败 502）。响应解析的正确性由 `migrate` 模块单测
-//! 经 mock 穷举覆盖；本文件不依赖真实 Nexus 实例。
+//! （在线：凭据引用缺失 400、连接源系统失败 502；离线：路径不存在 / 非法 400）。
+//! 响应 / 元数据解析的正确性由 `migrate` 模块单测穷举覆盖；本文件不依赖真实 Nexus 实例。
 
 use std::sync::Arc;
 
@@ -69,16 +69,41 @@ async fn send(router: Router, req: Request<Body>) -> (StatusCode, Value) {
     (status, body)
 }
 
-/// 构造带 JSON 体的迁移预览请求。
+/// 构造带 JSON 体的在线迁移预览请求。
 fn preview_req(auth: Option<&str>, body: Value) -> Request<Body> {
+    json_post("/api/v1/migrate/nexus/preview", auth, body)
+}
+
+/// 构造带 JSON 体的离线 blob store 预览请求。
+fn offline_req(auth: Option<&str>, body: Value) -> Request<Body> {
+    json_post("/api/v1/migrate/nexus/offline/preview", auth, body)
+}
+
+/// 构造带可选认证头的 JSON POST 请求。
+fn json_post(uri: &str, auth: Option<&str>, body: Value) -> Request<Body> {
     let mut builder = Request::builder()
         .method("POST")
-        .uri("/api/v1/migrate/nexus/preview")
+        .uri(uri)
         .header("content-type", "application/json");
     if let Some(a) = auth {
         builder = builder.header("authorization", a);
     }
     builder.body(Body::from(body.to_string())).unwrap()
+}
+
+/// 在临时目录下铺一个最小可用的 Nexus 文件型 blob store 布局，返回根目录临时句柄。
+fn build_offline_store() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    let chap = dir.path().join("content").join("vol-01").join("chap-01");
+    std::fs::create_dir_all(&chap).unwrap();
+    std::fs::write(
+        chap.join("blob-1.properties"),
+        "@Repo.repo-name=maven-releases\n\
+         @BlobStore.blob-name=/org/example/app/1.0/app-1.0.jar\n\
+         sha1=a1b2c3\nsize=1024\ndeleted=false\n",
+    )
+    .unwrap();
+    dir
 }
 
 /// 建用户并登录取回 JWT。
@@ -160,4 +185,82 @@ async fn 管理员连接不可达源系统返回_502() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {body}");
+}
+
+#[tokio::test]
+async fn 离线预览匿名返回_401() {
+    let (state, _dir) = 测试用状态().await;
+    let (status, _) = send(
+        build_router(state),
+        offline_req(None, json!({ "path": "/whatever" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn 离线预览普通用户返回_403() {
+    let (state, _dir) = 测试用状态().await;
+    let token = seed_and_login(&state, "user", "pw", Role::User).await;
+    let (status, _) = send(
+        build_router(state),
+        offline_req(
+            Some(&format!("Bearer {token}")),
+            json!({ "path": "/whatever" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn 离线预览管理员枚举有效_blob_store() {
+    let (state, _dir) = 测试用状态().await;
+    let token = seed_and_login(&state, "admin", "pw", Role::Admin).await;
+    let store = build_offline_store();
+    let (status, body) = send(
+        build_router(state),
+        offline_req(
+            Some(&format!("Bearer {token}")),
+            json!({ "path": store.path().to_str().unwrap() }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    // 应枚举出 maven-releases 仓库及其下 1 个 blob
+    assert_eq!(body[0]["repo_name"], "maven-releases");
+    assert_eq!(body[0]["blob_count"], 1);
+    assert_eq!(
+        body[0]["blobs"][0]["blob_name"],
+        "/org/example/app/1.0/app-1.0.jar"
+    );
+    assert_eq!(body[0]["blobs"][0]["sha1"], "a1b2c3");
+    assert_eq!(body[0]["blobs"][0]["size"], 1024);
+}
+
+#[tokio::test]
+async fn 离线预览路径不存在返回_400() {
+    let (state, _dir) = 测试用状态().await;
+    let token = seed_and_login(&state, "admin", "pw", Role::Admin).await;
+    let (status, body) = send(
+        build_router(state),
+        offline_req(
+            Some(&format!("Bearer {token}")),
+            json!({ "path": "D:/__此路径必定不存在的_blob_store__/x" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body}");
+}
+
+#[tokio::test]
+async fn 离线预览空路径返回_400() {
+    let (state, _dir) = 测试用状态().await;
+    let token = seed_and_login(&state, "admin", "pw", Role::Admin).await;
+    let (status, body) = send(
+        build_router(state),
+        offline_req(Some(&format!("Bearer {token}")), json!({ "path": "   " })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body}");
 }

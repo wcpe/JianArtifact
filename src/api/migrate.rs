@@ -1,13 +1,13 @@
-//! Nexus OSS 迁移在线入口端点（FR-36，ADR-0006）。
+//! Nexus OSS 迁移入口端点（ADR-0006）：在线 REST 入口（FR-36）+ 离线 blob store 入口（FR-37）。
 //!
-//! 仅提供迁移的**发现 / 预览**：连接在线 Nexus、枚举其可迁移仓库列表与基本元数据。
+//! 两端点都只提供迁移的**发现 / 预览**：枚举源系统可迁移内容与基本元数据，
 //! 不搬运任何制品（搬运属 FR-38/39，未实现）。仅管理员可调用。
-//! handler 保持薄：构造客户端、调用 `migrate` 模块编排、做错误映射，不写业务逻辑。
+//! handler 保持薄：解析请求、调用 `migrate` 模块编排、做错误映射，不写业务逻辑。
 
 use axum::{extract::State, Json};
 use serde::Deserialize;
 
-use crate::migrate::{self, HttpNexusClient, MigrateError, NexusRepoSummary};
+use crate::migrate::{self, HttpNexusClient, MigrateError, NexusRepoSummary, OfflineRepoSummary};
 
 use super::{ApiError, AppState, Identity};
 
@@ -67,5 +67,42 @@ pub async fn preview_nexus_repositories(
 
     let repos =
         migrate::discover_repositories(&client, &req.base_url, req.auth_ref.as_deref()).await?;
+    Ok(Json(repos))
+}
+
+/// 离线 blob store 预览请求体。
+#[derive(Debug, Deserialize)]
+pub struct NexusOfflinePreviewRequest {
+    /// 本地 Nexus 文件型 blob store 根目录路径（服务进程可访问的本地文件系统路径）。
+    pub path: String,
+}
+
+/// 预览本地 Nexus blob store 可迁移内容（仅管理员）。
+///
+/// 从给定本地 blob store 目录解析磁盘布局，按 repo 枚举可迁移 blob 及基本元数据后返回；
+/// 仅做发现 / 预览，不读取也不搬运 blob 本体。
+pub async fn preview_nexus_offline(
+    _state: State<AppState>,
+    identity: Identity,
+    Json(req): Json<NexusOfflinePreviewRequest>,
+) -> Result<Json<Vec<OfflineRepoSummary>>, ApiError> {
+    identity.require_admin()?;
+
+    let path = req.path.trim().to_string();
+    if path.is_empty() {
+        return Err(ApiError::BadRequest("blob store 路径不能为空".to_string()));
+    }
+
+    // 离线枚举是同步阻塞文件 IO（遍历目录 + 读 .properties），放到阻塞线程池执行，
+    // 不阻塞异步运行时工作线程
+    let repos = tokio::task::spawn_blocking(move || {
+        migrate::enumerate_blob_store(std::path::Path::new(&path))
+    })
+    .await
+    .map_err(|e| {
+        tracing::error!(错误 = %e, "离线 blob store 枚举任务异常");
+        ApiError::Internal
+    })??;
+
     Ok(Json(repos))
 }

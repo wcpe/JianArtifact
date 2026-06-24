@@ -1,18 +1,25 @@
-//! 制品库迁移（FR-36，ADR-0006）：**Nexus OSS 在线 REST API 入口**。
+//! 制品库迁移（ADR-0006）：**Nexus OSS 迁移入口**——在线 REST API + 离线 blob store 双入口。
 //!
-//! 本模块只做迁移的**发现 / 入口**步骤——连接一个在线 Nexus 实例、经其 REST API
-//! 枚举可迁移的仓库列表与基本元数据（仓库名 / 格式 / 类型 / 上游地址），供用户预览。
-//! **不做实际制品搬运**（搬运属 FR-38/39，本批严禁实现）。
+//! 本模块只做迁移的**发现 / 入口**步骤，覆盖两种现实迁移形态：
+//! - **在线 REST 入口**（FR-36）：源 Nexus 仍在线时，经其 REST API 枚举可迁移仓库列表与
+//!   基本元数据（仓库名 / 格式 / 类型 / 上游地址），供用户预览（见 [`http`]）。
+//! - **离线 blob store 入口**（FR-37）：源 Nexus 已下线、只剩其文件型 blob store 目录时，
+//!   从该本地目录解析磁盘布局，按 repo 枚举可迁移的 blob 及基本元数据（见 [`offline`]）。
+//!
+//! 两入口都**不做实际制品搬运**（搬运属 FR-38/39，本批严禁实现）。
 //!
 //! 关键约束：
 //! - 凭据真源在 env / 配置，DB 仅存引用（`auth_ref`），凭据绝不入库、不进日志。
 //! - REST 交互经 [`NexusClient`] trait 抽象，生产实现 [`HttpNexusClient`] 复用 reqwest
 //!   纯 rustls；测试可注入 mock 覆盖响应解析与错误 / 超时分支。
+//! - 离线入口纯文件系统读取、不依赖外部服务；解析逻辑做成无副作用纯函数便于穷举测试。
 //! - 依赖方向：本模块仅依赖 `config` 级以下，不反向依赖上层；api 层薄编排调用之。
 
 mod http;
+mod offline;
 
 pub use http::HttpNexusClient;
+pub use offline::{enumerate_blob_store, OfflineBlobSummary, OfflineRepoSummary};
 
 /// Nexus 仓库列表 REST 端点（相对其 base URL）。
 const NEXUS_REPOSITORIES_PATH: &str = "service/rest/v1/repositories";

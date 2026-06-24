@@ -184,6 +184,14 @@
 - **响应**：仓库摘要数组，每项含 `name`、`format`（Nexus 原样格式，如 `maven2` / `npm`）、`type`（`hosted` / `proxy` / `group`）、`upstream_url`（仅 proxy 仓库有值，取自源系统 `attributes.proxy.remoteUrl`）。
 - **错误**：`400` 参数不合法或 `auth_ref` 对应凭据未在环境变量中配置；`401` 未认证；`403` 非管理员；`502` 连接源系统失败 / 鉴权失败 / 响应异常（不向调用方泄露源系统内部细节）。
 
+### 预览 Nexus 可迁移内容（离线 blob store 入口）
+
+- **方法 / 路径**：`POST /api/v1/migrate/nexus/offline/preview`
+- **请求**：JSON 体 `{ "path" }`。`path` 为本地 Nexus 文件型 blob store 根目录路径（服务进程可访问的本地文件系统路径，其下应含 `content/` 子目录）。仅管理员可调用。
+- **行为**：当源 Nexus 已下线、只剩其文件型 blob store 目录时，从该本地目录解析磁盘布局（`content/` 分片目录 + 每个 blob 一份 `.properties` 元数据），按所属仓库枚举可迁移的 blob 及基本元数据。这是迁移的**发现 / 预览**步骤，**仅解析 `.properties` 元数据、不读取也不搬运 blob 本体**（搬运为后续分期能力）。软删（`deleted=true`）、损坏或缺必要字段的元数据被容错跳过，不中断整次枚举。
+- **响应**：按仓库分组的数组，每项含 `repo_name`（仓库名，取自 `@Repo.repo-name`）、`blob_count`（该仓库枚举到的 blob 数）、`blobs`（blob 预览项数组，每项含 `blob_name`（坐标 / 路径，取自 `@BlobStore.blob-name`）、`sha1`（缺失为 `null`）、`size`（字节数，缺失或非法为 `null`））。结果按仓库名、仓库内按 blob 名字典序稳定排序。
+- **错误**：`400` 路径为空、不存在 / 非目录，或其下缺 `content/` 目录（疑似不是 Nexus 文件型 blob store）；`401` 未认证；`403` 非管理员。
+
 ### 列出仓库 ACL
 
 - **方法 / 路径**：`GET /api/v1/repositories/{id}/acl`
