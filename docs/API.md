@@ -43,19 +43,8 @@
 - **IP 黑/白名单与自动封禁（全局，FR-53 / ADR-0008）**：启用后，置于热路径前端的中间件按**连接来源 IP** 判定：命中黑名单（`[protection.ip_list].deny`，IP / CIDR）或处于自动封禁中（启用 `[protection.ban]` 后，单 IP 一窗内 4xx 异常信号达阈值即封禁一个时长）的来源，对**任意端点**直接返回 `403`（错误码 `forbidden`），不进入业务；封禁到期自动解封。命中白名单（`[protection.ip_list].allow`）的来源**豁免一切应用层防护**（限流 / 封禁 / 异常统计），优先级高于黑名单。来源 IP 取连接级地址、**不采信 `X-Forwarded-For`**（伪造来源不绕过）。默认关闭、阈值保守宽放，正常包管理器偶发 404 / 鉴权重试不触顶。
 - **慢速攻击防护与通用请求体大小限制（全局，FR-52 / ADR-0008）**：启用后（`[protection.slowloris]`，默认关闭），慢速防护中间件对**任意端点**的请求体设超时与通用大小上限：等待首个数据块超过 `header_timeout_secs`、或相邻数据块间隔超过 `body_read_timeout_secs`（**块间空闲超时**，非整体时长）即判为慢速连接并断开；请求体超过通用上限 `max_body_bytes`（>0 时启用）则返回 `413 Payload Too Large`（带 `Content-Length` 时在进入业务前即拒）。该通用体上限区别于各格式上传的 `limits.max_artifact_size`（仅约束制品上传体）。超时按块间空闲判定，**不影响正常大文件流式上传**（持续发数据即不触发）。L3/L4 体积型攻击仍由前置反向代理 / CDN / WAF 承担。
 - **CC 挑战 / 工作量证明 PoW（全局，FR-54 / ADR-0008）**：启用后（`[protection.cc_challenge]`，**默认关闭**），CC 挑战中间件对疑似 CC（HTTP 洪水）攻击的**匿名**请求要求工作量证明：无 / 错误证明时对**任意端点**返回 `429 Too Many Requests`（错误码 `cc_challenge_required`），响应体携带挑战参数——客户端须找到 `nonce` 使 `sha256(challenge_token + ":" + nonce)` 的二进制前导零位数达 `difficulty`，再以请求头 `X-CC-Solution: <challenge_token>:<nonce>` 重发原请求方放行。挑战令牌服务端 HMAC 无状态签名、绑定**连接级来源 IP**（**不采信 `X-Forwarded-For`**，换 IP 的证明不可复用）+ 难度 + 签发时刻，超 `ttl_secs` 过期。**默认豁免已认证（Bearer / Basic / 会话）请求**（`exempt_authenticated=true`），挑战只面向匿名可疑流量。⚠️ 正常包管理器 CLI 不会解 PoW，启用后会拦截匿名拉取——见 OPERATIONS / CONFIG 的误伤提示，仅在确有 CC 攻击时由运维开启。响应体示例：
+- **可配置 WAF 规则引擎（全局，FR-55 / ADR-0008）**：启用后（`[protection.waf]`，默认关闭），置于热路径前端的 WAF 中间件对**任意端点**按有序规则匹配请求属性——`field` 取 `method` / `path` / `query` / `header`（`header` 须配 `header_name`，大小写不敏感），`match_type` 取 `literal`（子串包含）/ `wildcard`（`*` 任意多字符、`?` 任意单字符，整体匹配）/ `regex`（正则子串搜索）。规则**按声明顺序、首个命中生效**：命中 `action="block"` 的请求对**任意端点**直接返回 `403`（错误码 `forbidden`，统一 JSON 错误体），不进入业务；命中 `action="allow"` 即放行并短路后续规则（用于给合法模式开豁免口子）；无命中亦放行。WAF 按请求属性匹配、**与来源 IP 无关**（不采信 `X-Forwarded-For`）。非法规则启动时记 WARN 跳过、不阻断启动。**默认空规则集 + 关闭**，不影响正常包管理器请求。L3/L4 体积型攻击仍由前置反向代理 / CDN / WAF 承担。
   ```json
-  {
-    "error": { "code": "cc_challenge_required", "message": "需完成工作量证明（PoW）挑战后重试" },
-    "challenge": {
-      "type": "pow_sha256_leading_zero_bits",
-      "token": "<challenge_token>",
-      "difficulty": 20,
-      "ttl_secs": 300,
-      "solution_header": "x-cc-solution"
-    }
-  }
-  ```
-- **格式 API**：错误遵循各自原生协议的约定（如 Docker registry v2 返回其规范的错误对象，Maven / npm / Raw / PyPI 主要以 HTTP 状态码表达），不套用上述统一 JSON 错误结构。限流 429、CC 挑战 429 与黑名单 / 封禁 403 在格式 API 上同样可能发生（中间件在协议处理之前判定）。
 - **私有仓库安全语义（定式）**：私有仓库对匿名 / 无有效凭据 / 已认证但无读权限者，一律返回 `404`（隐藏存在性，不用 `401`/`403` 以免暴露“仓库存在但需登录”）。已能读但越权写（有读无写）返回 `403`。管理 API 端点在缺失或无效凭据时返回 `401`。公开仓库匿名可读。
 
 ## 3. 端点 / 方法

@@ -109,6 +109,8 @@ const DEFAULT_CC_CHALLENGE_TTL_SECS: u64 = 300;
 ///
 /// 包管理器 CLI 通常带凭据（Bearer / Basic），豁免使其不受 PoW 挑战影响；挑战只面向匿名可疑流量。
 const DEFAULT_CC_CHALLENGE_EXEMPT_AUTHENTICATED: bool = true;
+/// 可配置 WAF 规则引擎默认开关（FR-55，ADR-0008）：默认关闭，须运维显式开启，避免误杀正常请求。
+const DEFAULT_WAF_ENABLED: bool = false;
 /// 环境变量前缀。
 const ENV_PREFIX: &str = "JIANARTIFACT_";
 /// 已知配置节名。环境变量映射时，仅把节名与键名之间的首个下划线视作嵌套分隔，
@@ -527,6 +529,9 @@ pub struct ProtectionConfig {
     /// CC 挑战（工作量证明 PoW）配置（FR-54）。
     #[serde(default)]
     pub cc_challenge: CcChallengeConfig,
+    /// 可配置 WAF 规则引擎配置（FR-55）：按请求模式匹配阻断 / 放行。
+    #[serde(default)]
+    pub waf: WafConfig,
 }
 
 /// IP 黑 / 白名单配置（FR-53，ADR-0008）。
@@ -700,6 +705,49 @@ impl Default for CcChallengeConfig {
     }
 }
 
+/// 可配置 WAF 规则引擎配置（FR-55，ADR-0008）。
+///
+/// 仅做应用层（L7）请求模式匹配与阻断：按有序规则对请求的 method / path / query / 指定 header
+/// 做字面（literal）/ 通配（wildcard，`*`/`?`）/ 正则（regex）匹配，**首个命中生效**——命中
+/// `block` 即在进入业务前返回 `403`，命中 `allow` 即放行（短路后续规则）。规则在启动期**编译一次**
+/// （正则预编译），热路径仅做匹配；非法规则记 WARN 跳过、不阻断启动。
+/// 默认**空规则集 + 关闭**，不影响现有行为、不误杀正常包管理器请求；启用与规则集由运维显式承担。
+/// 仅应用层防护；L3/L4 体积型攻击仍交前置反向代理 / CDN / WAF。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WafConfig {
+    /// 是否启用 WAF 规则引擎；默认关闭，关闭或空规则集时中间件直接放行、零额外开销。
+    #[serde(default = "default_waf_enabled")]
+    pub enabled: bool,
+    /// 有序规则集：按声明顺序逐条匹配，**首个命中生效**；默认空（不阻断任何请求）。
+    #[serde(default)]
+    pub rules: Vec<WafRuleConfig>,
+}
+
+/// serde 默认值辅助：WAF 启用开关默认值（默认关闭）。
+fn default_waf_enabled() -> bool {
+    DEFAULT_WAF_ENABLED
+}
+
+/// 单条 WAF 规则配置（FR-55，ADR-0008）。
+///
+/// 对请求的某个属性字段（`field`）按指定匹配类型（`match_type`）匹配 `pattern`，命中即执行 `action`。
+/// `field` 为 `header` 时须配 `header_name`（指定要匹配的请求头名，大小写不敏感）；其余字段忽略它。
+/// 字段 / 匹配类型 / 动作均为受限枚举字符串（非法值在编译时记 WARN 跳过该条，不阻断启动）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WafRuleConfig {
+    /// 匹配的请求属性字段：`method` / `path` / `query` / `header`。
+    pub field: String,
+    /// 当 `field = "header"` 时，指定要匹配的请求头名（大小写不敏感）；其余字段忽略。
+    #[serde(default)]
+    pub header_name: Option<String>,
+    /// 匹配模式字符串：按 `match_type` 解释（字面值 / 通配模式 / 正则表达式）。
+    pub pattern: String,
+    /// 匹配类型：`literal`（字面相等 / 包含）/ `wildcard`（`*`/`?` 通配）/ `regex`（正则）。
+    pub match_type: String,
+    /// 命中后的动作：`block`（拒 403）/ `allow`（放行并短路后续规则）。
+    pub action: String,
+}
+
 /// 漏洞库离线镜像配置（FR-70，ADR-0012）。
 ///
 /// 默认关闭：镜像需主动联网拉取公开漏洞数据集到本机，应由运维显式开启。
@@ -842,6 +890,9 @@ mod tests {
             assert_eq!(cfg.protection.cc_challenge.difficulty, 20);
             assert_eq!(cfg.protection.cc_challenge.ttl_secs, 300);
             assert!(cfg.protection.cc_challenge.exempt_authenticated);
+            // FR-55 WAF 默认：关闭、空规则集（不影响现有、不误杀）
+            assert!(!cfg.protection.waf.enabled);
+            assert!(cfg.protection.waf.rules.is_empty());
         });
     }
 
@@ -863,6 +914,28 @@ mod tests {
     }
 
     #[test]
+    fn toml_可覆盖_waf_规则集() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            "[protection.waf]\nenabled = true\n\n[[protection.waf.rules]]\nfield = \"path\"\npattern = \"/admin/*\"\nmatch_type = \"wildcard\"\naction = \"block\"\n\n[[protection.waf.rules]]\nfield = \"header\"\nheader_name = \"User-Agent\"\npattern = \"badbot\"\nmatch_type = \"literal\"\naction = \"block\""
+        )
+        .unwrap();
+        with_env_vars(&[], || {
+            let cfg = Config::load(file.path()).unwrap();
+            assert!(cfg.protection.waf.enabled);
+            assert_eq!(cfg.protection.waf.rules.len(), 2);
+            assert_eq!(cfg.protection.waf.rules[0].field, "path");
+            assert_eq!(cfg.protection.waf.rules[0].match_type, "wildcard");
+            assert_eq!(cfg.protection.waf.rules[0].action, "block");
+            assert_eq!(
+                cfg.protection.waf.rules[1].header_name.as_deref(),
+                Some("User-Agent")
+            );
+        });
+    }
+
+    #[test]
     fn cc_挑战节缺失回落默认向后兼容() {
         let mut file = tempfile::NamedTempFile::new().unwrap();
         // 只配置 rate_limit，cc_challenge 节缺失应回落默认（向后兼容旧配置）
@@ -872,6 +945,19 @@ mod tests {
             assert!(cfg.protection.rate_limit.enabled);
             assert!(!cfg.protection.cc_challenge.enabled);
             assert_eq!(cfg.protection.cc_challenge.difficulty, 20);
+        });
+    }
+
+    #[test]
+    fn waf_未配置时回落默认且不影响其他防护() {
+        // 只配置 rate_limit，waf 节缺失应回落默认（向后兼容旧配置）
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(file, "[protection.rate_limit]\nenabled = true").unwrap();
+        with_env_vars(&[], || {
+            let cfg = Config::load(file.path()).unwrap();
+            assert!(cfg.protection.rate_limit.enabled);
+            assert!(!cfg.protection.waf.enabled);
+            assert!(cfg.protection.waf.rules.is_empty());
         });
     }
 

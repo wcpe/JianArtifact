@@ -261,6 +261,18 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
+    // 可配置 WAF 规则引擎（FR-55，ADR-0008）：启动期把 [protection.waf] 规则编译一次（正则预编译、
+    // 非法规则记 WARN 跳过、不阻断启动）；中间件按请求模式匹配阻断 / 放行。默认空规则集 + 关闭。
+    let waf_rules = Arc::new(api::WafRuleSet::from_config(&cfg.protection.waf));
+    if cfg.protection.waf.enabled && !cfg.protection.waf.rules.is_empty() {
+        info!(
+            规则数 = cfg.protection.waf.rules.len(),
+            "WAF 规则引擎已启用（请求模式匹配与阻断）"
+        );
+    } else {
+        info!("WAF 规则引擎未启用或规则集为空，跳过");
+    }
+
     // 构建路由与共享状态
     let state = AppState {
         config: Arc::new(cfg.clone()),
@@ -283,6 +295,8 @@ async fn main() -> anyhow::Result<()> {
         ban_registry: Arc::new(api::BanRegistry::new()),
         // FR-54：CC 挑战签名器（密钥复用 JWT 派生子密钥，无状态签发 / 校验 PoW 挑战）
         cc_challenger,
+        // FR-55：从 [protection.waf] 启动期编译的有序规则集（正则预编译、非法规则跳过）
+        waf_rules,
     };
     let app = api::build_router(state);
 

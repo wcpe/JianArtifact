@@ -186,6 +186,23 @@
 
 > ⚠️ **默认关闭，且默认仅在确有 CC 攻击时由运维显式开启**——正常包管理器 CLI（mvn / npm / docker / curl）**不会解工作量证明（PoW）**，启用后对匿名拉取无差别下发挑战会**直接打断正常匿名拉取**。故默认 `exempt_authenticated = true`，让带凭据的 CLI 豁免，挑战只面向**匿名可疑流量**；若你的部署允许匿名拉取公开仓库，开启 CC 挑战会影响这些匿名客户端，请谨慎评估。机制：对匿名请求下发挑战令牌（HMAC 无状态签名、绑定**连接级来源 IP** + 难度 + 签发时刻，不采信 `X-Forwarded-For`，换 IP 的证明不可复用），客户端须找到 `nonce` 使摘要前导零位数达 `difficulty`，再以请求头 `X-CC-Solution: <challenge_token>:<nonce>` 重发原请求；无 / 错误证明返回 `429`（错误码 `cc_challenge_required`，响应体含挑战参数）。难度越高刷流成本越高、正常单请求成本仍可忽略；调高 `difficulty` 前请评估目标客户端算力。仅应用层（L7）：L3/L4 体积型攻击仍由前置反向代理 / CDN / WAF 承担（见 OPERATIONS）。按 TOML 嵌套节 `[protection.cc_challenge]` 配置即可。
 
+| 键 | 含义 | 默认（取向） | 环境变量 |
+|---|---|---|---|
+| enabled | 是否启用 WAF 规则引擎；关闭或空规则集时中间件直接放行、零额外开销 | false | （经 TOML 配置） |
+| rules | 有序规则数组（`[[protection.waf.rules]]`）；按声明顺序匹配、**首个命中生效** | 空 | （经 TOML 配置） |
+
+每条规则（`[[protection.waf.rules]]`）字段：
+
+| 键 | 含义 | 取值 |
+|---|---|---|
+| field | 匹配的请求属性字段 | `method` / `path` / `query` / `header` |
+| header_name | 当 `field = "header"` 时指定的请求头名（大小写不敏感）；其余字段忽略 | 字符串（`header` 字段必填） |
+| pattern | 匹配模式串，按 `match_type` 解释 | 字符串 |
+| match_type | 匹配类型 | `literal`（子串包含）/ `wildcard`（`*` 任意多字符、`?` 任意单字符，整体匹配）/ `regex`（正则子串搜索） |
+| action | 命中后的动作 | `block`（拒 403）/ `allow`（放行并短路后续规则） |
+
+> 默认**空规则集 + 关闭**（不影响现有行为、不误杀正常包管理器请求），启用与规则由运维显式承担。规则在**启动期编译一次**（正则经 `regex-lite` 预编译、通配转译为锚定正则）；**字段 / 匹配类型 / 动作非法或正则无法编译的规则在启动时记 WARN 跳过、不阻断启动**，其余规则照常生效——配置后请检查启动日志确认无规则被跳过。匹配**按声明顺序、首个命中生效**：可把对合法模式的 `allow` 规则**排在前面**给其开豁免口子，再用 `block` 规则兜底拦截。**误杀提示**：`literal` 走子串包含、`regex` 走子串搜索——过宽的 `pattern`（如对 `path` 写 `/` 或对 `query` 写常见参数名）会误伤正常请求；`block` 规则上线前建议先以 `allow` 或在测试环境验证其只命中目标请求。WAF 按请求属性（method/path/query/header）匹配，**与来源 IP 无关、不采信 `X-Forwarded-For`**。仅应用层（L7）：L3/L4 体积型攻击仍由前置反向代理 / CDN / WAF 承担（见 OPERATIONS）。按 TOML 嵌套节 `[protection.waf]` 与 `[[protection.waf.rules]]` 配置即可。
+
 ### [upstream.&lt;name&gt;]（proxy 仓库上游，可配置多个）
 
 | 键 | 含义 | 默认（取向） | 环境变量 |

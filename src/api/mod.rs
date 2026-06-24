@@ -52,6 +52,7 @@ mod slowloris;
 mod tokens;
 mod usage;
 mod users;
+mod waf;
 
 pub use anomaly_ban::{BanRegistry, IpMatcher};
 pub use audit::{
@@ -63,6 +64,7 @@ pub use metrics::{install_recorder, MetricsHandle};
 pub use oidc_routes::OidcFlowStore;
 pub use rate_limit::RateLimiter;
 pub use usage::{channel as usage_channel, spawn_usage_pruner, spawn_usage_writer, UsageSink};
+pub use waf::WafRuleSet;
 
 /// 应用内具体化的通用制品机理服务类型（运行期可选 blob 后端 + reqwest 上游）。
 pub type AppArtifactService = ArtifactService<BlobBackend, HttpUpstream>;
@@ -121,6 +123,10 @@ pub struct AppState {
     /// 不与会话 JWT 串味）无状态签发 / 校验工作量证明（PoW）挑战令牌，不存挑战态。默认关闭、默认豁免
     /// 已认证客户端，仅对匿名可疑流量要求 PoW 证明；按连接级来源 IP 绑定，不采信 XFF。
     pub cc_challenger: Arc<cc_challenge::CcChallenger>,
+    /// 可配置 WAF 规则集（FR-55，ADR-0008）：从 `[protection.waf]` 启动期编译一次的有序规则
+    /// （正则预编译、非法规则跳过），中间件按请求 method/path/query/header 有序匹配、首个命中生效。
+    /// 默认空规则集 + 关闭（不影响现有、不误杀）；WAF 不依赖来源 IP。
+    pub waf_rules: Arc<waf::WafRuleSet>,
 }
 
 /// 统一 API 错误类型，转换为 JSON 响应 `{"error":{"code","message"}}`。
@@ -486,6 +492,13 @@ pub fn build_router(state: AppState) -> Router {
             state.clone(),
             anomaly_ban::anomaly_ban_layer,
         ))
+        // 可配置 WAF 规则引擎中间件（FR-55，ADR-0008）：置于热路径前端（与其他 L7 防护同层），
+        // 在进入业务前按有序规则匹配请求 method/path/query/header，首个命中 block 即拒 403、
+        // 命中 allow 即放行。未启用 / 空规则集走零开销快路径。仅应用层（L7）；不依赖来源 IP、不采信 XFF。
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            waf::waf_layer,
+        ))
         // 慢速攻击防护中间件（FR-52，ADR-0008）：置于身份解析之外（更靠近连接侧），在读取请求体前
         // 介入，把请求体包成带「首块等待超时 + 块间空闲超时 + 通用字节上限」的数据流，慢速 drip 超时
         // 即断、超大体（带 Content-Length 时进入业务前）拒 413；未启用时直接放行。仅应用层（L7）。
@@ -575,6 +588,10 @@ mod tests {
             // 默认测试状态 CC 挑战关闭；需要的测试自行定制配置与挑战器（密钥与 jwt 同源）
             cc_challenger: Arc::new(cc_challenge::CcChallenger::new(
                 b"test-secret-32-bytes-xxxxxxxxxxxx",
+            )),
+            // 默认测试状态：WAF 空规则集 + 关闭；需要的测试自行定制配置
+            waf_rules: Arc::new(waf::WafRuleSet::from_config(
+                &crate::config::WafConfig::default(),
             )),
         };
         (state, dir)

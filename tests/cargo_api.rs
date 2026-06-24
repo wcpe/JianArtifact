@@ -70,6 +70,10 @@ impl Fixture {
             cc_challenger: std::sync::Arc::new(jianartifact::api::CcChallenger::new(
                 b"test-secret-32-bytes-xxxxxxxxxxxx",
             )),
+            // FR-55：测试默认 WAF 空规则集 + 关闭
+            waf_rules: std::sync::Arc::new(jianartifact::api::WafRuleSet::from_config(
+                &jianartifact::config::WafConfig::default(),
+            )),
         };
         Self { state, _dir: dir }
     }

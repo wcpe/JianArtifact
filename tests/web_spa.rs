@@ -70,6 +70,10 @@ async fn 测试用状态() -> (AppState, tempfile::TempDir) {
         cc_challenger: std::sync::Arc::new(jianartifact::api::CcChallenger::new(
             b"test-secret-32-bytes-xxxxxxxxxxxx",
         )),
+        // FR-55：测试默认 WAF 空规则集 + 关闭
+        waf_rules: std::sync::Arc::new(jianartifact::api::WafRuleSet::from_config(
+            &jianartifact::config::WafConfig::default(),
+        )),
     };
     (state, dir)
 }

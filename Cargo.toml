@@ -74,6 +74,10 @@ quick-xml = "0.40"
 # 纯 Rust、进程内注册表，只在 GET /metrics 被抓取时渲染；不引外部时序库、不 push / remote-write（pull 模型）。
 metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.17", default-features = false }
+# 可配置 WAF 规则引擎（FR-55，ADR-0008）：正则匹配模式所用的轻量正则引擎。
+# 纯 Rust、无依赖，针对二进制体积与编译时间优化（不含 regex 的 Unicode 大表 / SIMD），
+# 守单一二进制零原生运行时依赖；WAF 规则在启动期预编译一次，热路径仅做匹配。
+regex-lite = "0.1"
 
 # ---- S3 兼容对象存储后端（FR-30 / ADR-0014），默认关闭、opt-in 编译 ----
 # 全部 optional：默认 `cargo build` 不引入任何 S3 代码与依赖，守单一二进制零外部运行时依赖。
