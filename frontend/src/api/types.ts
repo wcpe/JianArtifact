@@ -6,7 +6,7 @@
 export type Role = 'admin' | 'user';
 
 /** 仓库格式。 */
-export type RepoFormat = 'maven' | 'npm' | 'docker' | 'raw' | 'cargo';
+export type RepoFormat = 'maven' | 'npm' | 'docker' | 'raw' | 'cargo' | 'go' | 'pypi' | 'nuget';
 
 /** 仓库类型。 */
 export type RepoType = 'hosted' | 'proxy';

@@ -40,6 +40,9 @@ const FORMAT_OPTIONS: { value: RepoFormat; label: string }[] = [
   { value: 'docker', label: 'Docker / OCI' },
   { value: 'raw', label: 'Raw 通用文件' },
   { value: 'cargo', label: 'Cargo' },
+  { value: 'go', label: 'Go 模块' },
+  { value: 'pypi', label: 'PyPI' },
+  { value: 'nuget', label: 'NuGet' },
 ];
 
 /** 仓库管理页面。 */
