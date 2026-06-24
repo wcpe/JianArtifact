@@ -14,7 +14,8 @@ use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, ReadBuf};
 
 use crate::meta::{ArtifactRecord, MetaError, MetaStore, NewArtifact, RepoType, RepositoryRecord};
-use crate::proxy::{SingleFlight, Upstream, UpstreamError};
+use crate::metrics_keys as keys;
+use crate::proxy::{SingleFlight, Upstream};
 use crate::storage::{BlobReader, BlobStore, StorageError};
 
 use super::{ArtifactCoordinates, Format};
@@ -213,6 +214,7 @@ impl<S: BlobStore, U: Upstream> ArtifactService<S, U> {
         // 缓存 / 本地命中：直接流式返回
         if let Some(record) = self.meta.get_artifact(&repo.id, &coords.path).await? {
             let blob = self.store.get(&record.sha256).await?;
+            record_cache_result(repo, keys::RESULT_HIT);
             return Ok((ReadHandle { record, blob }, ArtifactKind::Local));
         }
 
@@ -247,6 +249,7 @@ impl<S: BlobStore, U: Upstream> ArtifactService<S, U> {
         // 缓存 / 本地命中：直接流式返回（与 get 一致）
         if let Some(record) = self.meta.get_artifact(&repo.id, &coords.path).await? {
             let blob = self.store.get(&record.sha256).await?;
+            record_cache_result(repo, keys::RESULT_HIT);
             return Ok((ReadHandle { record, blob }, ArtifactKind::Local));
         }
         if RepoType::from_db_str(&repo.r#type) != RepoType::Proxy {
@@ -269,6 +272,8 @@ impl<S: BlobStore, U: Upstream> ArtifactService<S, U> {
         upstream_url: &str,
         upstream_rel_path: &str,
     ) -> Result<(ReadHandle, ArtifactKind), ServiceError> {
+        // 读层 cache-miss：触发回源（单飞窗口内的等待者也计 miss，反映真实未命中读流量）
+        record_cache_result(repo, keys::RESULT_MISS);
         // 单飞键：仓库 + 存储键，合并同一制品的并发回源（IO 在 leader 锁外执行）
         let key = format!("{}\u{0}{}", repo.id, coords.path);
         let result = self
@@ -317,11 +322,17 @@ impl<S: BlobStore, U: Upstream> ArtifactService<S, U> {
         }
 
         // 拉取上游字节流（锁外 IO）；上游相对路径可异于本地存储键（如 Cargo .crate 下载 API）
-        let body = self
-            .upstream
-            .fetch(upstream_url, upstream_rel_path)
-            .await
-            .map_err(|e: UpstreamError| e.to_string())?;
+        // 记录回源耗时与失败计数（按格式低基数标签），供观测代理回源健康度。
+        let upstream_started = std::time::Instant::now();
+        let fetched = self.upstream.fetch(upstream_url, upstream_rel_path).await;
+        record_upstream_duration(repo, upstream_started.elapsed().as_secs_f64());
+        let body = match fetched {
+            Ok(body) => body,
+            Err(e) => {
+                record_upstream_failure(repo);
+                return Err(e.to_string());
+            }
+        };
 
         // 流式落 blob：边写边算 sha256，BlobStore 落定即等于校验通过（内容寻址）
         let digests = self.store.put(body).await.map_err(|e| e.to_string())?;
@@ -458,6 +469,37 @@ fn split_file_url(url: &str) -> (&str, &str) {
     }
 }
 
+/// 记录代理缓存命中 / 未命中计数（FR-32，ADR-0015）。
+///
+/// 标签经 [`keys::format_label_for`] 收敛为有界静态格式名，绝不以仓库名 / 路径作标签（守基数纪律）。
+/// 仅做无锁原子观测，位于读热路径但开销恒定。
+fn record_cache_result(repo: &RepositoryRecord, result: &'static str) {
+    metrics::counter!(
+        keys::PROXY_CACHE_TOTAL,
+        keys::LABEL_RESULT => result,
+        keys::LABEL_FORMAT => keys::format_label_for(&repo.format),
+    )
+    .increment(1);
+}
+
+/// 记录上游回源耗时（秒）直方图（FR-32，ADR-0015），按格式低基数标签。
+fn record_upstream_duration(repo: &RepositoryRecord, elapsed_secs: f64) {
+    metrics::histogram!(
+        keys::PROXY_UPSTREAM_DURATION_SECONDS,
+        keys::LABEL_FORMAT => keys::format_label_for(&repo.format),
+    )
+    .record(elapsed_secs);
+}
+
+/// 记录上游回源失败计数（FR-32，ADR-0015），按格式低基数标签。
+fn record_upstream_failure(repo: &RepositoryRecord) {
+    metrics::counter!(
+        keys::PROXY_UPSTREAM_FAILURES_TOTAL,
+        keys::LABEL_FORMAT => keys::format_label_for(&repo.format),
+    )
+    .increment(1);
+}
+
 /// 限长读包装：累计读取字节超过上限时返回专属超限错误，供上层映射 413。
 ///
 /// `limit` 为 None 时不施加限制，直接透传底层读。
@@ -515,6 +557,7 @@ mod tests {
 
     use crate::format::RawFormat;
     use crate::meta::{NewRepository, Visibility};
+    use crate::proxy::UpstreamError;
     use crate::storage::LocalFsStore;
 
     /// 计数型 mock 上游：记录被拉取次数，可配置内容、延迟与失败，用于穷举单飞 / 回退竞态。

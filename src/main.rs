@@ -154,6 +154,27 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
+    // Prometheus 指标（FR-32，ADR-0015）：启用时安装进程内 recorder（pull 模型，仅 /metrics 抓取时渲染）。
+    // 安装失败（如同进程重复安装）记 WARN 后降级为不挂端点，不阻断启动。
+    let metrics = if cfg.observability.metrics.enabled {
+        match api::install_recorder() {
+            Ok(handle) => {
+                info!(
+                    允许匿名抓取 = cfg.observability.metrics.allow_anonymous,
+                    "Prometheus 指标端点已就绪：GET /metrics"
+                );
+                Some(handle)
+            }
+            Err(e) => {
+                warn!(原因 = %e, "安装 Prometheus recorder 失败，指标端点降级关闭");
+                None
+            }
+        }
+    } else {
+        info!("Prometheus 指标端点未启用，跳过");
+        None
+    };
+
     // 构建路由与共享状态
     let state = AppState {
         config: Arc::new(cfg.clone()),
@@ -166,6 +187,7 @@ async fn main() -> anyhow::Result<()> {
         docker: Some(docker),
         audit,
         usage,
+        metrics,
     };
     let app = api::build_router(state);
 

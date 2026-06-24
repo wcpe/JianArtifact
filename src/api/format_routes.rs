@@ -16,13 +16,27 @@ use tokio_util::io::{ReaderStream, StreamReader};
 use crate::format::{ArtifactKind, PypiFormat, PYPI_SIMPLE_SEGMENT};
 use crate::meta::RepositoryRecord;
 
+use super::metrics::FormatLabel;
 use super::repo_access::{build_repo_view, load_readable_repo};
 use super::{ApiError, AppState, ClientIp, Identity};
 use crate::authz::{authorize, Action, Decision};
 use crate::meta::UsageAction;
+use crate::metrics_keys::format_label_for;
 
 /// 默认内容类型：格式无法推断且制品未记录时回退。
 const DEFAULT_CONTENT_TYPE: &str = "application/octet-stream";
+
+/// 给成功响应打上 format 标签（写入响应扩展），供指标中间件按格式归类（零额外 DB 查询）。
+///
+/// 仅在已解析出仓库格式后调用；标签经 [`format_label_for`] 收敛为有界静态值（守基数纪律）。
+/// 错误响应不打标（由中间件回退路径归类），避免错误路径多余开销。
+fn tag_format(result: Result<Response, ApiError>, format: &str) -> Result<Response, ApiError> {
+    result.map(|mut resp| {
+        resp.extensions_mut()
+            .insert(FormatLabel(format_label_for(format)));
+        resp
+    })
+}
 
 /// npm 格式名：据此把 npm 仓库的请求分派到其原生协议处理。
 const NPM_FORMAT: &str = "npm";
@@ -170,6 +184,19 @@ pub async fn put_artifact(
     body: Body,
 ) -> Result<Response, ApiError> {
     let repo = resolve_writable_repo(&state, &identity, &repo_name).await?;
+    let format_name = repo.format.clone();
+    let result = put_artifact_inner(state, repo, path, headers, body).await;
+    tag_format(result, &format_name)
+}
+
+/// PUT 上传内层逻辑：仓库已解析并通过写授权，按格式分派到各原生协议或通用直传。
+async fn put_artifact_inner(
+    state: AppState,
+    repo: RepositoryRecord,
+    path: String,
+    headers: axum::http::HeaderMap,
+    body: Body,
+) -> Result<Response, ApiError> {
     // npm 发布走其原生协议（请求体为含 base64 tarball 的 JSON，须整体解析）
     if repo.format == NPM_FORMAT {
         return super::npm_routes::publish(&state, &repo, body).await;
@@ -244,13 +271,18 @@ async fn post_pypi_upload(
     multipart: Multipart,
 ) -> Result<Response, ApiError> {
     let repo = resolve_writable_repo(state, identity, repo_name).await?;
-    if repo.format != PYPI_FORMAT {
-        // 仅 PyPI 走 POST 上传协议；其余格式不支持该方法
-        return Err(ApiError::BadRequest(
-            "该仓库格式不支持 POST 上传".to_string(),
-        ));
+    let format_name = repo.format.clone();
+    let result = async {
+        if repo.format != PYPI_FORMAT {
+            // 仅 PyPI 走 POST 上传协议；其余格式不支持该方法
+            return Err(ApiError::BadRequest(
+                "该仓库格式不支持 POST 上传".to_string(),
+            ));
+        }
+        super::pypi_routes::upload(state, &repo, multipart).await
     }
-    super::pypi_routes::upload(state, &repo, multipart).await
+    .await;
+    tag_format(result, &format_name)
 }
 
 /// 下载制品（GET）：读授权后流式返回 blob；hosted 命中本地，proxy cache-miss 回源后返回。
@@ -272,6 +304,18 @@ pub async fn get_artifact(
         identity.actor_name(),
         Some(&client_ip),
     );
+    let format_name = repo.format.clone();
+    let result = get_artifact_inner(state, repo, path, headers).await;
+    tag_format(result, &format_name)
+}
+
+/// GET 下载内层逻辑：仓库已解析并通过读授权，按格式分派到各原生协议或通用下载。
+async fn get_artifact_inner(
+    state: AppState,
+    repo: RepositoryRecord,
+    path: String,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
     // npm 读走其原生协议：tarball（含 `/-/` 段）按 blob 返回，否则按 packument 文档返回
     if repo.format == NPM_FORMAT {
         return get_npm(&state, &repo, &path).await;
@@ -328,6 +372,17 @@ pub async fn delete_artifact(
     Path((repo_name, path)): Path<(String, String)>,
 ) -> Result<Response, ApiError> {
     let repo = resolve_writable_repo(&state, &identity, &repo_name).await?;
+    let format_name = repo.format.clone();
+    let result = delete_artifact_inner(state, repo, path).await;
+    tag_format(result, &format_name)
+}
+
+/// DELETE 内层逻辑：仓库已解析并通过写授权，按格式分派删除（cargo yank / 通用删除）。
+async fn delete_artifact_inner(
+    state: AppState,
+    repo: RepositoryRecord,
+    path: String,
+) -> Result<Response, ApiError> {
     // cargo 的 DELETE 用于 yank：api/v1/crates/{name}/{version}/yank
     if repo.format == CARGO_FORMAT {
         if let Some((name, version)) = parse_cargo_yank_path(&path, "yank") {

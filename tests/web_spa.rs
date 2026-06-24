@@ -56,6 +56,7 @@ async fn 测试用状态() -> (AppState, tempfile::TempDir) {
         docker: Some(docker),
         audit,
         usage,
+        metrics: None,
     };
     (state, dir)
 }

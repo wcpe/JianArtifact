@@ -34,6 +34,7 @@ mod docker_routes;
 mod format_routes;
 mod go_routes;
 mod identity;
+mod metrics;
 mod migrate;
 mod npm_routes;
 mod nuget_routes;
@@ -50,6 +51,7 @@ pub use audit::{
 };
 pub use identity::resolve_identity;
 pub use usage::{channel as usage_channel, spawn_usage_pruner, spawn_usage_writer, UsageSink};
+pub use metrics::{install_recorder, MetricsHandle};
 
 /// 应用内具体化的通用制品机理服务类型（运行期可选 blob 后端 + reqwest 上游）。
 pub type AppArtifactService = ArtifactService<BlobBackend, HttpUpstream>;
@@ -85,6 +87,9 @@ pub struct AppState {
     pub audit: AuditSink,
     /// 使用分析采集投递端（FR-57，ADR-0009）：主路径非阻塞采集访问 / 下载，后台任务聚合落库。
     pub usage: UsageSink,
+    /// Prometheus 指标注册表句柄（FR-32，ADR-0015）：`Some` 表示已安装进程内 recorder，
+    /// `/metrics` 抓取时渲染；`None` 表示指标端点未启用（端点返回 404）。
+    pub metrics: Option<MetricsHandle>,
 }
 
 /// 统一 API 错误类型，转换为 JSON 响应 `{"error":{"code","message"}}`。
@@ -366,6 +371,7 @@ pub fn build_router(state: AppState) -> Router {
 
     Router::new()
         .route("/health", get(health))
+        .route("/metrics", get(metrics::metrics_endpoint))
         .nest("/api/v1", api_v1)
         .merge(docker_api)
         .merge(format_api)
@@ -373,6 +379,12 @@ pub fn build_router(state: AppState) -> Router {
         // 未匹配任何路由的请求回退到 SPA 入口（前端客户端路由 + 未构建时的 503 占位）
         .fallback(crate::web::spa_fallback)
         .with_state(state.clone())
+        // 指标采集中间件（FR-32，ADR-0015）：置于最内层（最贴近 handler），观测真实 HTTP 维度
+        // 与延迟；只做无锁原子观测，渲染仅在 /metrics 被抓取时发生。
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            metrics::metrics_layer,
+        ))
         // 审计中间件：置于身份解析之内（更靠近 handler），运行 handler 后按方法+路径+状态
         // 归类精选写/管理/授权拒绝事件并非阻塞投递；读到的身份由下方身份解析中间件先行注入。
         .layer(middleware::from_fn_with_state(
@@ -450,6 +462,8 @@ mod tests {
             docker: Some(docker),
             audit,
             usage,
+            // 默认测试状态不安装 recorder；需要指标端点的测试自行用 install_recorder 注入
+            metrics: None,
         };
         (state, dir)
     }
@@ -564,5 +578,174 @@ mod tests {
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
         assert!(content_type.contains("text/html"));
+    }
+
+    // ===== FR-32 指标端点测试 =====
+
+    use crate::auth::hash_password;
+    use crate::config::MetricsConfig;
+    use crate::meta::Role;
+    use std::sync::OnceLock;
+
+    /// 进程内全局 recorder 仅可安装一次：测试间共享同一句柄，避免重复安装报错。
+    fn 共享指标句柄() -> MetricsHandle {
+        static HANDLE: OnceLock<MetricsHandle> = OnceLock::new();
+        HANDLE
+            .get_or_init(|| install_recorder().expect("安装测试 recorder"))
+            .clone()
+    }
+
+    /// 以给定指标配置 + 是否安装句柄构造状态：覆盖 enabled / allow_anonymous 各组合。
+    async fn 指标状态(
+        metrics_cfg: MetricsConfig,
+        装句柄: bool,
+    ) -> (AppState, tempfile::TempDir) {
+        let (mut state, dir) = 测试用状态().await;
+        let mut cfg = (*state.config).clone();
+        cfg.observability.metrics = metrics_cfg;
+        state.config = Arc::new(cfg);
+        if 装句柄 {
+            state.metrics = Some(共享指标句柄());
+        }
+        (state, dir)
+    }
+
+    /// 在状态库内建一个 Admin 用户并签发其会话 JWT，用于带认证抓取 /metrics。
+    async fn 签发管理员令牌(state: &AppState) -> String {
+        let uid = state
+            .meta
+            .create_user("metrics-admin", &hash_password("pw").unwrap(), Role::Admin)
+            .await
+            .unwrap();
+        state.jwt.issue(&uid, "metrics-admin", Role::Admin).unwrap()
+    }
+
+    /// 在状态库内建一个普通 User 并签发其会话 JWT，用于验证非管理员被拒。
+    async fn 签发普通用户令牌(state: &AppState) -> String {
+        let uid = state
+            .meta
+            .create_user("metrics-user", &hash_password("pw").unwrap(), Role::User)
+            .await
+            .unwrap();
+        state.jwt.issue(&uid, "metrics-user", Role::User).unwrap()
+    }
+
+    async fn 抓取(app: Router, 令牌: Option<&str>) -> Response {
+        let mut builder = Request::builder().uri("/metrics");
+        if let Some(t) = 令牌 {
+            builder = builder.header("Authorization", format!("Bearer {t}"));
+        }
+        app.oneshot(builder.body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn metrics_默认匿名抓取被拒_401() {
+        let (state, _dir) = 指标状态(MetricsConfig::default(), true).await;
+        let app = build_router(state);
+        let resp = 抓取(app, None).await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn metrics_普通用户抓取被拒_403() {
+        let (state, _dir) = 指标状态(MetricsConfig::default(), true).await;
+        let token = 签发普通用户令牌(&state).await;
+        let app = build_router(state);
+        let resp = 抓取(app, Some(&token)).await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn metrics_管理员抓取成功并返回_prometheus_文本() {
+        let (state, _dir) = 指标状态(MetricsConfig::default(), true).await;
+        let token = 签发管理员令牌(&state).await;
+        let app = build_router(state);
+        let resp = 抓取(app, Some(&token)).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let ct = resp
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        assert!(ct.starts_with("text/plain"));
+    }
+
+    #[tokio::test]
+    async fn metrics_允许匿名时免认证抓取成功() {
+        let cfg = MetricsConfig {
+            enabled: true,
+            allow_anonymous: true,
+        };
+        let (state, _dir) = 指标状态(cfg, true).await;
+        let app = build_router(state);
+        let resp = 抓取(app, None).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn metrics_未启用时端点返回_404() {
+        // enabled=false：即便误装了句柄，端点也按未启用返回 404（不泄露运行画像）
+        let cfg = MetricsConfig {
+            enabled: false,
+            allow_anonymous: true,
+        };
+        let (state, _dir) = 指标状态(cfg, true).await;
+        let app = build_router(state);
+        let resp = 抓取(app, None).await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn metrics_未安装句柄时端点返回_404() {
+        // enabled=true 但 metrics=None（recorder 安装失败降级）：端点返回 404
+        let (state, _dir) = 指标状态(MetricsConfig::default(), false).await;
+        let token = 签发管理员令牌(&state).await;
+        let app = build_router(state);
+        let resp = 抓取(app, Some(&token)).await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn metrics_请求计数随抓取增长且为低基数标签() {
+        let cfg = MetricsConfig {
+            enabled: true,
+            allow_anonymous: true,
+        };
+        let (state, _dir) = 指标状态(cfg, true).await;
+        let app = build_router(state.clone());
+
+        // 先打一发健康检查，制造一次被中间件观测的 GET 请求
+        let _ = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let resp = 抓取(app, None).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let text = String::from_utf8(body.to_vec()).unwrap();
+
+        // 渲染文本应含本服务的请求计数指标名，且标签为有界枚举（method/status_class/format）
+        assert!(
+            text.contains("jianartifact_http_requests_total"),
+            "渲染文本应含请求计数指标：{text}"
+        );
+        assert!(text.contains("method="), "应含 method 标签");
+        assert!(text.contains("status_class="), "应含 status_class 标签");
+        assert!(text.contains("format="), "应含 format 标签");
+        // 低基数纪律：标签里不得出现仓库名 / 完整路径等无界值（如 /health 路径串）
+        assert!(
+            !text.contains("/health"),
+            "标签不得包含原始路径等无界值：{text}"
+        );
     }
 }

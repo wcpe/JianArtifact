@@ -61,6 +61,7 @@ impl Fixture {
             docker: Some(docker),
             audit,
             usage,
+            metrics: None,
         };
         Self { state, _dir: dir }
     }
@@ -298,6 +299,7 @@ async fn 审计写入任务缺失时业务仍成功() {
         docker: Some(docker),
         audit,
         usage,
+        metrics: None,
     };
     let hash = auth::hash_password("S3cret!").unwrap();
     meta.create_user("admin", &hash, Role::Admin).await.unwrap();

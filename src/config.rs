@@ -34,6 +34,10 @@ const DEFAULT_AUDIT_RETENTION_DAYS: u32 = 90;
 const DEFAULT_AUDIT_MAX_ROWS: u64 = 1_000_000;
 /// 使用分析明细行数硬上限默认值（兜底，防止明细撑爆 SQLite；ADR-0009）。
 const DEFAULT_USAGE_MAX_DETAIL_ROWS: u64 = 1_000_000;
+/// 默认是否启用 Prometheus 指标端点（FR-32，ADR-0015）：默认开。
+const DEFAULT_METRICS_ENABLED: bool = true;
+/// 默认是否允许匿名抓取 /metrics（ADR-0015）：默认关，须运维显式开启（限内网 / 反代后）。
+const DEFAULT_METRICS_ALLOW_ANONYMOUS: bool = false;
 /// 漏洞库离线镜像默认数据源基址（OSV 公开数据集，按生态提供 all.zip 整包下载）。
 const DEFAULT_VULN_SOURCE_BASE_URL: &str = "https://osv-vulnerabilities.storage.googleapis.com";
 /// 漏洞库镜像默认刷新周期（秒），默认 24 小时。
@@ -241,6 +245,7 @@ impl Default for ProxyConfig {
 }
 
 /// 可观测性配置：当前承载审计日志（FR-31）与使用分析采集（FR-57）。
+/// 可观测性配置：承载审计日志（FR-31）与 Prometheus 指标端点（FR-32）。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ObservabilityConfig {
     /// 审计日志配置。
@@ -249,6 +254,9 @@ pub struct ObservabilityConfig {
     /// 使用分析采集配置。
     #[serde(default)]
     pub usage: UsageConfig,
+    /// Prometheus 指标端点配置。
+    #[serde(default)]
+    pub metrics: MetricsConfig,
 }
 
 /// 审计日志配置（ADR-0015）。
@@ -287,6 +295,27 @@ impl Default for UsageConfig {
             // 默认只采集聚合计数，不落明细
             detail_enabled: false,
             max_detail_rows: DEFAULT_USAGE_MAX_DETAIL_ROWS,
+        }
+    }
+}
+
+/// Prometheus 指标端点配置（FR-32，ADR-0015）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetricsConfig {
+    /// 是否启用 `GET /metrics` 端点：默认开。关闭后端点返回 404，不安装 recorder。
+    pub enabled: bool,
+    /// 是否允许匿名抓取 `/metrics`：默认关，须运维显式开启。
+    ///
+    /// 关闭时端点要求认证且仅 Admin 可访问；开启时免认证抓取，**前提是把端点限定在内网 /
+    /// 反向代理之后**（运维显式承担的暴露面，详见 OPERATIONS）。
+    pub allow_anonymous: bool,
+}
+
+impl Default for MetricsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: DEFAULT_METRICS_ENABLED,
+            allow_anonymous: DEFAULT_METRICS_ALLOW_ANONYMOUS,
         }
     }
 }
@@ -402,6 +431,9 @@ mod tests {
             // 使用分析默认：明细关闭、明细行数上限 100 万
             assert!(!cfg.observability.usage.detail_enabled);
             assert_eq!(cfg.observability.usage.max_detail_rows, 1_000_000);
+            // 指标默认：端点开、匿名抓取关
+            assert!(cfg.observability.metrics.enabled);
+            assert!(!cfg.observability.metrics.allow_anonymous);
         });
     }
 
@@ -432,6 +464,21 @@ mod tests {
             let cfg = Config::load(file.path()).unwrap();
             assert_eq!(cfg.observability.audit.retention_days, 30);
             assert_eq!(cfg.observability.audit.max_rows, 5000);
+        });
+    }
+
+    #[test]
+    fn toml_可覆盖指标端点开关与匿名抓取() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            "[observability.metrics]\nenabled = false\nallow_anonymous = true"
+        )
+        .unwrap();
+        with_env_vars(&[], || {
+            let cfg = Config::load(file.path()).unwrap();
+            assert!(!cfg.observability.metrics.enabled);
+            assert!(cfg.observability.metrics.allow_anonymous);
         });
     }
 

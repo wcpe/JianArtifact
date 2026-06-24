@@ -15,6 +15,7 @@ pub mod authz;
 pub mod config;
 pub mod format;
 pub mod meta;
+pub mod metrics_keys;
 pub mod migrate;
 pub mod proxy;
 pub mod repo;

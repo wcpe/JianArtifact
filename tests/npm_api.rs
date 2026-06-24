@@ -57,6 +57,7 @@ impl Fixture {
             docker: None,
             audit,
             usage,
+            metrics: None,
         };
         Self { state, _dir: dir }
     }

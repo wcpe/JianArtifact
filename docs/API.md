@@ -233,6 +233,14 @@
 - **响应**：`200` 表示服务正常，返回简单状态体。
 - **错误**：服务不可用时由进程层体现，不返回业务错误结构。
 
+### Prometheus 指标（P2，默认仅 Admin）
+
+- **方法 / 路径**：`GET /metrics`
+- **请求**：无请求体。鉴权由配置决定——默认 `observability.metrics.allow_anonymous=false`，要求认证且仅管理员可访问；运维显式设 `allow_anonymous=true` 时免认证抓取（须把端点限定在内网 / 反向代理之后）。
+- **响应**：`200`，`Content-Type: text/plain; version=0.0.4; charset=utf-8`，体为 Prometheus 文本格式的进程内注册表快照。指标为进程内自采（pull 模型），仅在被抓取时渲染，**不向任何外部端点 push / remote-write**（FR-32，ADR-0015）。
+- **指标项**：HTTP 请求计数 / 延迟直方图（标签 `method` / `status_class` / `format`）、上传 / 下载字节累计、并发上传数、代理缓存命中 / 未命中（`result=hit|miss`）、上游回源耗时 / 失败、审计丢弃累计。所有标签均为**有界枚举值**，**不以仓库名 / 路径 / 用户名 / 制品坐标作标签**（守低基数纪律）。
+- **错误**：`observability.metrics.enabled=false` 时返回 `404`（端点形同不存在）；默认鉴权下 `401` 未认证、`403` 非管理员。
+
 ### 格式 API 概览
 
 格式端点按各自原生协议挂载，路径中包含仓库名以定位目标仓库；写操作校验对应仓库的写权限，读操作受 public/private 与读 ACL 约束。`hosted` 仓库支持制品直传与下载，`proxy` 仓库在 cache-miss 时从上游拉取、校验、落盘并写索引（并发请求单飞合并）。

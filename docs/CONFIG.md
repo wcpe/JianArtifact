@@ -87,6 +87,14 @@
 | max_detail_rows | 明细行数硬上限；超限删最旧行，兜底防止明细撑爆 SQLite | 1000000 | （经 TOML 配置） |
 
 > 聚合计数（`usage_stats`）始终采集（开销小、量级可控）；明细默认关闭，开启后量级由 `max_detail_rows` 兜底裁剪。统计数据本机内部、**默认不主动外发、不向外部遥测 phone-home**；不提供任何外部导出 / 上报开关（本批不做导出，ADR-0009）。本两层键以 TOML `[observability.usage]` 为准（环境变量前缀仅对单层节名做嵌套映射）。
+### [observability.metrics]（Prometheus 指标端点，P2 / FR-32）
+
+| 键 | 含义 | 默认（取向） | 环境变量 |
+|---|---|---|---|
+| enabled | 是否启用 `GET /metrics` 端点；关闭后端点返回 404 且不安装进程内 recorder | true | （经 TOML 配置） |
+| allow_anonymous | 是否允许匿名抓取 `/metrics`；关闭时要求认证且仅 Admin 可访问 | false | （经 TOML 配置） |
+
+> 指标为进程内自采（pull 模型），仅在 `/metrics` 被抓取时渲染，不向任何外部端点 push / remote-write，数据本机内部、默认不外发（ADR-0009 / ADR-0015）。`allow_anonymous=true` 会把端点对匿名开放——**仅在把端点限定在内网 / 反向代理 / 防火墙之后时启用**，否则运行画像可能被外部探知（见 OPERATIONS 风险说明）。按 TOML 嵌套节 `[observability.metrics]` 配置即可（本两层键以 TOML 为准）。
 
 ### [upstream.&lt;name&gt;]（proxy 仓库上游，可配置多个）
 

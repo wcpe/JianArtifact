@@ -66,6 +66,10 @@ mime_guess = "2"
 zip = { version = "8", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 # 解析 NuGet .nuspec（XML）取包 id / version（FR-29）。纯 Rust、零原生依赖。
 quick-xml = "0.40"
+# Prometheus 指标（FR-32，ADR-0015）：metrics facade + 进程内 prometheus recorder。
+# 纯 Rust、进程内注册表，只在 GET /metrics 被抓取时渲染；不引外部时序库、不 push / remote-write（pull 模型）。
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.17", default-features = false }
 
 # ---- S3 兼容对象存储后端（FR-30 / ADR-0014），默认关闭、opt-in 编译 ----
 # 全部 optional：默认 `cargo build` 不引入任何 S3 代码与依赖，守单一二进制零外部运行时依赖。
