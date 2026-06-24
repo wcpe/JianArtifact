@@ -1,12 +1,14 @@
 //! 制品库迁移（ADR-0006）：**Nexus OSS 迁移入口**——在线 REST API + 离线 blob store 双入口。
 //!
-//! 本模块只做迁移的**发现 / 入口**步骤，覆盖两种现实迁移形态：
+//! 本模块覆盖迁移的**发现 / 入口**与 **proxy 仓库搬运**：
 //! - **在线 REST 入口**（FR-36）：源 Nexus 仍在线时，经其 REST API 枚举可迁移仓库列表与
 //!   基本元数据（仓库名 / 格式 / 类型 / 上游地址），供用户预览（见 [`http`]）。
 //! - **离线 blob store 入口**（FR-37）：源 Nexus 已下线、只剩其文件型 blob store 目录时，
 //!   从该本地目录解析磁盘布局，按 repo 枚举可迁移的 blob 及基本元数据（见 [`offline`]）。
+//! - **proxy 仓库配置 + 缓存制品搬运**（FR-38）：据在线枚举的 proxy 仓库配置在本系统建仓，
+//!   并把离线 blob store 中该仓库的缓存制品本体经既有制品机理搬运入缓存（见 [`proxy`]）。
 //!
-//! 两入口都**不做实际制品搬运**（搬运属 FR-38/39，本批严禁实现）。
+//! hosted 仓库制品完整搬运（FR-39）仍未实现，不在本模块当前范围内。
 //!
 //! 关键约束：
 //! - 凭据真源在 env / 配置，DB 仅存引用（`auth_ref`），凭据绝不入库、不进日志。
@@ -17,9 +19,14 @@
 
 mod http;
 mod offline;
+mod proxy;
 
 pub use http::HttpNexusClient;
-pub use offline::{enumerate_blob_store, OfflineBlobSummary, OfflineRepoSummary};
+pub use offline::{
+    enumerate_blob_entries, enumerate_blob_store, OfflineBlobEntry, OfflineBlobSummary,
+    OfflineRepoSummary,
+};
+pub use proxy::{migrate_proxy_repositories, ProxyMigrationReport, RepoMigrationOutcome};
 
 /// Nexus 仓库列表 REST 端点（相对其 base URL）。
 const NEXUS_REPOSITORIES_PATH: &str = "service/rest/v1/repositories";

@@ -25,6 +25,9 @@ const CONTENT_DIR: &str = "content";
 /// blob 元数据文件（Java Properties 格式）的扩展名。
 const PROPERTIES_EXT: &str = "properties";
 
+/// blob 本体文件的扩展名（与同名 `.properties` 同目录、同文件名主干）。
+const BYTES_EXT: &str = "bytes";
+
 /// `.properties` 中所属 repo 名的键。
 const KEY_REPO_NAME: &str = "@Repo.repo-name";
 
@@ -252,6 +255,59 @@ pub fn enumerate_blob_store(root: &Path) -> Result<Vec<OfflineRepoSummary>, Migr
         "离线 Nexus blob store 枚举完成"
     );
     Ok(repos)
+}
+
+/// 离线 blob store 中可搬运的单个 blob 条目：含所属 repo、逻辑名与本体 `.bytes` 文件路径。
+///
+/// 与预览项 [`OfflineBlobSummary`] 的区别：本条目额外携带 `.bytes` 本体路径，供搬运阶段（FR-38）
+/// 流式读取内容。仅当同目录存在同主干的 `.bytes` 文件时才产出（缺本体的元数据无可搬运内容）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OfflineBlobEntry {
+    /// 所属仓库名（取自 `@Repo.repo-name`）。
+    pub repo_name: String,
+    /// blob 逻辑名（源系统中的路径 / 坐标，取自 `@BlobStore.blob-name`）。
+    pub blob_name: String,
+    /// blob 本体文件（`.bytes`）的绝对路径。
+    pub bytes_path: PathBuf,
+}
+
+/// 枚举离线 blob store 中**可搬运**的 blob 条目（含 `.bytes` 本体路径），供 FR-38 搬运编排。
+///
+/// 与 [`enumerate_blob_store`]（预览，仅解析元数据）相比，本函数额外定位每个有效 `.properties`
+/// 对应的同主干 `.bytes` 本体文件：本体缺失的条目被跳过（无可搬运内容）。软删 / 损坏 / 缺字段的
+/// 元数据同样容错跳过，不中断整次枚举。仍**不读取** blob 字节，仅返回其路径，搬运时再流式读。
+pub fn enumerate_blob_entries(root: &Path) -> Result<Vec<OfflineBlobEntry>, MigrateError> {
+    let content_dir = locate_content_dir(root)?;
+    let files = collect_properties_files(&content_dir)?;
+
+    let mut entries = Vec::new();
+    for prop_path in &files {
+        let text = match std::fs::read_to_string(prop_path) {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::warn!(文件 = %prop_path.display(), 错误 = %e, "读取 blob 元数据失败，跳过");
+                continue;
+            }
+        };
+        let Some(parsed) = parse_blob_properties(&text) else {
+            continue;
+        };
+        // 同主干的 `.bytes` 本体须存在才可搬运
+        let bytes_path = prop_path.with_extension(BYTES_EXT);
+        if !bytes_path.is_file() {
+            tracing::warn!(
+                元数据 = %prop_path.display(),
+                "缺少对应 .bytes 本体文件，跳过该 blob 的搬运"
+            );
+            continue;
+        }
+        entries.push(OfflineBlobEntry {
+            repo_name: parsed.repo_name,
+            blob_name: parsed.summary.blob_name,
+            bytes_path,
+        });
+    }
+    Ok(entries)
 }
 
 #[cfg(test)]
@@ -490,5 +546,40 @@ mod tests {
         fs::create_dir_all(tmp.path().join(CONTENT_DIR)).unwrap();
         let repos = enumerate_blob_store(tmp.path()).unwrap();
         assert!(repos.is_empty());
+    }
+
+    #[test]
+    fn 枚举可搬运条目仅含有_bytes_本体者() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        build_sample_store(
+            root,
+            &[
+                // 有 .properties 且有同主干 .bytes：可搬运
+                (
+                    "blob-1.properties",
+                    &sample_properties("maven-proxy", "/a/app-1.0.jar", "sha-a", "10"),
+                ),
+                ("blob-1.bytes", "本体内容A"),
+                // 有 .properties 但缺 .bytes：跳过
+                (
+                    "blob-2.properties",
+                    &sample_properties("maven-proxy", "/a/app-2.0.jar", "sha-b", "20"),
+                ),
+                // 软删：跳过（即便有 .bytes）
+                (
+                    "blob-3.properties",
+                    "@Repo.repo-name=maven-proxy\n@BlobStore.blob-name=/a/del.jar\ndeleted=true\n",
+                ),
+                ("blob-3.bytes", "已删本体"),
+            ],
+        );
+
+        let mut entries = enumerate_blob_entries(root).unwrap();
+        entries.sort_by(|a, b| a.blob_name.cmp(&b.blob_name));
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].repo_name, "maven-proxy");
+        assert_eq!(entries[0].blob_name, "/a/app-1.0.jar");
+        assert!(entries[0].bytes_path.is_file());
     }
 }

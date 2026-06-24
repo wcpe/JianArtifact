@@ -194,6 +194,14 @@
 - **响应**：按仓库分组的数组，每项含 `repo_name`（仓库名，取自 `@Repo.repo-name`）、`blob_count`（该仓库枚举到的 blob 数）、`blobs`（blob 预览项数组，每项含 `blob_name`（坐标 / 路径，取自 `@BlobStore.blob-name`）、`sha1`（缺失为 `null`）、`size`（字节数，缺失或非法为 `null`））。结果按仓库名、仓库内按 blob 名字典序稳定排序。
 - **错误**：`400` 路径为空、不存在 / 非目录，或其下缺 `content/` 目录（疑似不是 Nexus 文件型 blob store）；`401` 未认证；`403` 非管理员。
 
+### 迁移 Nexus proxy 仓库（配置 + 缓存制品搬运）
+
+- **方法 / 路径**：`POST /api/v1/migrate/nexus/proxy/migrate`
+- **请求**：JSON 体 `{ "base_url", "auth_ref"?, "offline_path" }`。`base_url` 为源 Nexus 基址（经其 REST API 枚举 proxy 仓库配置：格式 / 上游地址）；`auth_ref` 为在线访问凭据引用（仅引用，真值走环境变量 `JIANARTIFACT_MIGRATE_<NAME>_USERNAME` / `PASSWORD`，不入库、不回显，匿名可访问的源系统可省略）；`offline_path` 为源 Nexus 文件型 blob store 根目录的本地路径（其下应含 `content/` 子目录），提供已缓存 proxy 制品本体。仅管理员可调用。
+- **行为**：把源 Nexus 的 **proxy 类型仓库**搬到本系统：① 据在线枚举的 proxy 仓库配置在本系统创建对应 proxy 仓库（映射 Nexus 格式名 → 本系统已实现格式：`maven2`→`maven` 等；同名仓库已存在则复用、不重复建仓、不改其既有配置；格式未实现或缺上游地址的仓库整体跳过）；② 从离线 blob store 按仓库名取该仓库的缓存制品本体（成对的 `.properties` + `.bytes`，缺本体者跳过），经既有制品机理流式写入缓存——**blob 先落盘并校验 sha256 再写元数据索引（标记 `cached`），写索引失败回滚不留孤儿，不整体载入内存**。搬运幂等可重入（同坐标同内容跳过），单个制品搬运失败（路径非法 / 读本体失败 / 写入失败）记录跳过、不中断整批。仅迁移 proxy 仓库；hosted 仓库制品完整搬运为后续分期能力。迁移**不搬运源系统上游凭据**（凭据真源 env / 配置，需运维另行配置）。
+- **响应**：迁移报告 `{ "repos": [...], "skipped_repos": [...] }`。`repos` 为各被迁移 proxy 仓库的明细数组，每项含 `repo_name`、`format`（映射后本系统格式）、`created`（`true` 新建 / `false` 复用已存在）、`migrated_artifacts`（成功搬运的缓存制品数）、`skipped_artifacts`（跳过 / 失败的制品数）；`skipped_repos` 为因格式未实现或缺上游地址而整体跳过的源仓库名列表。
+- **错误**：`400` `offline_path` 为空、离线目录不存在 / 非目录或缺 `content/` 子目录；`401` 未认证；`403` 非管理员；`502` 连接 / 鉴权 / 解析源 Nexus 失败（在线枚举阶段）。
+
 ### 列出仓库 ACL
 
 - **方法 / 路径**：`GET /api/v1/repositories/{id}/acl`

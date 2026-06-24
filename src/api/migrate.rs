@@ -7,7 +7,9 @@
 use axum::{extract::State, Json};
 use serde::Deserialize;
 
-use crate::migrate::{self, HttpNexusClient, MigrateError, NexusRepoSummary, OfflineRepoSummary};
+use crate::migrate::{
+    self, HttpNexusClient, MigrateError, NexusRepoSummary, OfflineRepoSummary, ProxyMigrationReport,
+};
 
 use super::{ApiError, AppState, Identity};
 
@@ -105,4 +107,54 @@ pub async fn preview_nexus_offline(
     })??;
 
     Ok(Json(repos))
+}
+
+/// proxy 仓库配置 + 缓存制品搬运请求体（FR-38）。
+#[derive(Debug, Deserialize)]
+pub struct NexusProxyMigrateRequest {
+    /// 源 Nexus 基址：经其 REST API 枚举 proxy 仓库配置（格式 / 上游地址）。
+    pub base_url: String,
+    /// 上游凭据引用（仅引用，真值走 env，不入库）；匿名可访问的源系统可省略。
+    #[serde(default)]
+    pub auth_ref: Option<String>,
+    /// 源离线 blob store 根目录路径：提供已缓存 proxy 制品本体（其下应含 `content/` 子目录）。
+    pub offline_path: String,
+}
+
+/// 执行 Nexus proxy 仓库配置创建 + 缓存制品搬运（仅管理员，FR-38）。
+///
+/// 经在线 REST 枚举源 proxy 仓库配置 → 在本系统建仓 → 从离线 blob store 搬运其缓存制品本体
+/// （blob 先落盘校验再写索引，失败回滚不留孤儿；单制品失败不中断整批、可重入）。
+/// 不搬运 hosted 仓库制品（FR-39 未实现）。
+pub async fn migrate_nexus_proxy(
+    State(state): State<AppState>,
+    identity: Identity,
+    Json(req): Json<NexusProxyMigrateRequest>,
+) -> Result<Json<ProxyMigrationReport>, ApiError> {
+    identity.require_admin()?;
+
+    let offline_path = req.offline_path.trim().to_string();
+    if offline_path.is_empty() {
+        return Err(ApiError::BadRequest("offline_path 不能为空".to_string()));
+    }
+
+    // ① 在线枚举源 proxy 仓库配置（格式 / 上游地址）
+    let client = HttpNexusClient::new(std::time::Duration::from_secs(
+        state.config.proxy.upstream_timeout_secs,
+    ))
+    .map_err(ApiError::from)?;
+    let source_repos =
+        migrate::discover_repositories(&client, &req.base_url, req.auth_ref.as_deref()).await?;
+
+    // ② 据配置建仓 + 从离线 blob store 搬运缓存制品本体
+    let report = migrate::migrate_proxy_repositories(
+        &state.meta,
+        &state.artifacts,
+        &state.formats,
+        &source_repos,
+        std::path::Path::new(&offline_path),
+    )
+    .await?;
+
+    Ok(Json(report))
 }

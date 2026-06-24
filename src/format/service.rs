@@ -184,6 +184,71 @@ impl<S: BlobStore, U: Upstream> ArtifactService<S, U> {
         })
     }
 
+    /// 迁移搬运：把外部已缓存的 proxy 制品按字节流写入本仓库缓存（FR-38）。
+    ///
+    /// 与回源缓存（[`Self::do_fetch_and_cache`]）共用同一不变量——**blob 先落盘并校验 sha256，
+    /// 再写元数据索引（`cached = true`）**；写索引失败回滚 blob，不留孤儿。区别仅在于字节来源是
+    /// 迁移搬运的本地输入流而非上游回源。仅适用于 proxy 仓库（缓存语义）。
+    ///
+    /// 幂等：同坐标已存在同 sha256 缓存索引时跳过落盘与写索引，直接返回既有记录（搬运可重入）；
+    /// 同坐标已存在但 sha256 不同则按覆盖落定新内容（源系统缓存即权威）。
+    pub async fn ingest_cached<R>(
+        &self,
+        repo: &RepositoryRecord,
+        format: &dyn Format,
+        coords: &ArtifactCoordinates,
+        reader: R,
+    ) -> Result<ArtifactRecord, ServiceError>
+    where
+        R: AsyncRead + Unpin + Send,
+    {
+        if RepoType::from_db_str(&repo.r#type) != RepoType::Proxy {
+            return Err(ServiceError::InvalidOperation(
+                "只能向 proxy 仓库搬运缓存制品".to_string(),
+            ));
+        }
+
+        // ① 流式落 blob：边写边算四摘要，落定即等于 sha256 校验通过（内容寻址）
+        let digests = self.store.put(reader).await?;
+
+        // 幂等：同坐标已存在同 sha256 缓存，则本次搬运为重入——清理本次多余落盘后复用既有记录
+        if let Some(existing) = self.meta.get_artifact(&repo.id, &coords.path).await? {
+            if existing.sha256 == digests.sha256 {
+                self.rollback_blob(&digests.sha256).await;
+                return Ok(existing);
+            }
+        }
+
+        // ② 写缓存索引（cached = true）；失败回滚 blob，不留孤儿
+        let content_type = format.content_type(coords);
+        if let Err(e) = self
+            .meta
+            .upsert_artifact(NewArtifact {
+                repo_id: &repo.id,
+                path: &coords.path,
+                size: digests.size as i64,
+                sha256: &digests.sha256,
+                sha1: &digests.sha1,
+                md5: &digests.md5,
+                sha512: &digests.sha512,
+                content_type: content_type.as_deref(),
+                cached: true,
+            })
+            .await
+        {
+            self.rollback_blob(&digests.sha256).await;
+            return Err(e.into());
+        }
+
+        let record = self
+            .meta
+            .get_artifact(&repo.id, &coords.path)
+            .await?
+            .ok_or(ServiceError::NotFound)?;
+        tracing::info!(仓库 = %repo.name, 路径 = %coords.path, "已搬运缓存制品");
+        Ok(record)
+    }
+
     /// 读取制品（FR-11/12）：hosted / proxy-cache-hit 直接流式返回；
     /// proxy cache-miss 经单飞合并回源 → 校验落盘 → 写索引 → 返回。
     ///
@@ -869,6 +934,94 @@ mod tests {
             meta.list_artifacts_by_repo(&repo.id).await.unwrap().len(),
             0
         );
+    }
+
+    // ---------- 迁移搬运：blob 先落盘再写缓存索引、回滚、幂等（FR-38）----------
+
+    #[tokio::test]
+    async fn 搬运缓存制品后可读回且标记_cached() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (svc, meta, _dir) = 新建服务(MockUpstream::new(b"", calls)).await;
+        let repo = 建仓库(&meta, "p", RepoType::Proxy, Some("https://up.example")).await;
+        let coords = 坐标("a/b.bin");
+
+        let rec = svc
+            .ingest_cached(&repo, &RawFormat, &coords, &b"migrated"[..])
+            .await
+            .unwrap();
+        assert_eq!(rec.cached, 1);
+        assert_eq!(rec.size, 8);
+
+        // 读回内容一致、命中本地缓存（不回源）
+        let (mut h, kind) = svc.get(&repo, &RawFormat, &coords).await.unwrap();
+        assert_eq!(kind, ArtifactKind::Local);
+        let mut buf = Vec::new();
+        h.blob.read_to_end(&mut buf).await.unwrap();
+        assert_eq!(buf, b"migrated");
+    }
+
+    #[tokio::test]
+    async fn 搬运至非_proxy_仓库被拒() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (svc, meta, _dir) = 新建服务(MockUpstream::new(b"", calls)).await;
+        let repo = 建仓库(&meta, "h", RepoType::Hosted, None).await;
+        let err = svc
+            .ingest_cached(&repo, &RawFormat, &坐标("x"), &b"y"[..])
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::InvalidOperation(_)));
+    }
+
+    #[tokio::test]
+    async fn 搬运幂等重入同坐标同内容不重复写() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (svc, meta, _dir) = 新建服务(MockUpstream::new(b"", calls)).await;
+        let repo = 建仓库(&meta, "p", RepoType::Proxy, Some("https://up.example")).await;
+        let coords = 坐标("dup.bin");
+
+        let r1 = svc
+            .ingest_cached(&repo, &RawFormat, &coords, &b"same"[..])
+            .await
+            .unwrap();
+        // 重入：同坐标同内容，应复用既有记录、索引仍只有一条
+        let r2 = svc
+            .ingest_cached(&repo, &RawFormat, &coords, &b"same"[..])
+            .await
+            .unwrap();
+        assert_eq!(r1.sha256, r2.sha256);
+        assert_eq!(
+            meta.list_artifacts_by_repo(&repo.id).await.unwrap().len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn 搬运写索引失败回滚_blob_无孤儿() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (svc, _meta, _dir) = 新建服务(MockUpstream::new(b"", calls)).await;
+        // id 不存在的 proxy 仓库记录：写索引外键失败，触发 blob 回滚
+        let ghost = RepositoryRecord {
+            id: "不存在的仓库id".to_string(),
+            name: "ghost".to_string(),
+            format: "raw".to_string(),
+            r#type: "proxy".to_string(),
+            visibility: "public".to_string(),
+            upstream_url: Some("https://up.example".to_string()),
+            upstream_auth_ref: None,
+            created_at: "now".to_string(),
+        };
+        let err = svc
+            .ingest_cached(&ghost, &RawFormat, &坐标("p.bin"), &b"orphan-migrate"[..])
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Meta(_)));
+        let sha = {
+            use digest::Digest;
+            let mut h = sha2::Sha256::new();
+            h.update(b"orphan-migrate");
+            format!("{:x}", h.finalize())
+        };
+        assert!(!svc.store.exists(&sha).await.unwrap());
     }
 
     // ---------- 删除：hosted 删本体 + 索引；proxy 删缓存后可重新拉取 ----------
