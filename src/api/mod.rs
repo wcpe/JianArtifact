@@ -33,6 +33,7 @@ mod cargo_routes;
 mod docker_routes;
 mod format_routes;
 mod go_routes;
+mod groups;
 mod identity;
 mod metrics;
 mod migrate;
@@ -334,6 +335,30 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/repositories/{id}/acl/{acl_id}",
             axum::routing::delete(acl::delete_acl),
+        )
+        .route(
+            "/groups",
+            get(groups::list_groups).post(groups::create_group),
+        )
+        .route(
+            "/groups/{id}",
+            get(groups::get_group).delete(groups::delete_group),
+        )
+        .route(
+            "/groups/{id}/members",
+            get(groups::list_members).post(groups::add_member),
+        )
+        .route(
+            "/groups/{id}/members/{user_id}",
+            axum::routing::delete(groups::remove_member),
+        )
+        .route(
+            "/repositories/{id}/group-acl",
+            get(groups::list_group_acl).post(groups::create_group_acl),
+        )
+        .route(
+            "/repositories/{id}/group-acl/{acl_id}",
+            axum::routing::delete(groups::delete_group_acl),
         );
 
     // 格式 API：按原生协议挂载，路径含仓库名（如 Raw 的 /{repo}/{path..}）。

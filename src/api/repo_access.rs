@@ -10,6 +10,9 @@ use crate::meta::{RepositoryRecord, Visibility};
 use super::{ApiError, AppState, Identity};
 
 /// 为调用方在某仓库上构造授权视图：解析其 ACL 命中情况（匿名不查库，避免无谓 IO）。
+///
+/// 已认证用户的有效权限 = 直接授予其的 ACL ∪ 其经所属各组继承的组 ACL（FR-49）。
+/// 两路权限取并集后交 `authz` 纯函数按动作蕴含关系判定，既有直接-ACL 判定结论不变。
 pub(crate) async fn build_repo_view(
     state: &AppState,
     identity: &Identity,
@@ -17,14 +20,20 @@ pub(crate) async fn build_repo_view(
 ) -> Result<RepoView, ApiError> {
     let visibility = Visibility::from_db_str(&repo.visibility);
     let perms = match identity.0.user() {
-        // 已认证：查该用户在该仓库上的全部 ACL 授权
+        // 已认证：直接-用户 ACL 与经组继承的组 ACL 取并集
         Some(u) => {
-            state
+            let mut perms = state
                 .meta
                 .list_user_permissions(&repo.id, &u.user_id)
-                .await?
+                .await?;
+            let group_perms = state
+                .meta
+                .list_user_group_permissions(&repo.id, &u.user_id)
+                .await?;
+            perms.extend(group_perms);
+            perms
         }
-        // 匿名：无任何 ACL
+        // 匿名：无任何 ACL（含组），匿名不属于任何组
         None => Vec::new(),
     };
     Ok(RepoView::from_permissions(visibility, &perms))

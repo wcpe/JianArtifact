@@ -9,11 +9,13 @@ use sqlx::SqlitePool;
 use uuid::Uuid;
 
 mod audit;
+mod groups;
 mod repo;
 mod usage;
 mod vuln;
 
 pub use audit::{AuditEntry, AuditQuery, NewAuditEntry};
+pub use groups::{GroupAclRecord, GroupMemberRecord, GroupRecord};
 pub use repo::{
     AclRecord, ArtifactRecord, ArtifactSearchHit, NewArtifact, NewRepository, Permission, RepoType,
     RepositoryRecord, Visibility,

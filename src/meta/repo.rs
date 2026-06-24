@@ -400,14 +400,23 @@ impl MetaStore {
             .collect())
     }
 
-    /// 列出某用户拥有读或写权限的仓库主键集合（供列表端点过滤私有仓库）。
+    /// 列出某用户拥有读权限的仓库主键集合（供列表端点过滤私有仓库）。
+    ///
+    /// 可读来源有二并取并集：① 直接授予该用户的 ACL；② 该用户经所属各组继承的组 ACL。
+    /// 任一动作（read / write / delete / admin）都蕴含可读，故命中任一即视为可读（FR-49）。
     pub async fn list_repo_ids_with_read(&self, user_id: &str) -> Result<Vec<String>, MetaError> {
-        // read 与 write 都意味着可读，故只要在 ACL 中命中该用户即视为可读
-        let rows: Vec<(String,)> =
-            sqlx::query_as("SELECT DISTINCT repo_id FROM repo_acl WHERE user_id = ?")
-                .bind(user_id)
-                .fetch_all(self.pool())
-                .await?;
+        // 直接-用户 ACL 与经组继承的组 ACL 取并集（UNION 自动去重）
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT repo_id FROM repo_acl WHERE user_id = ? \
+             UNION \
+             SELECT rga.repo_id FROM repo_group_acl rga \
+             JOIN user_groups ug ON ug.group_id = rga.group_id \
+             WHERE ug.user_id = ?",
+        )
+        .bind(user_id)
+        .bind(user_id)
+        .fetch_all(self.pool())
+        .await?;
         Ok(rows.into_iter().map(|(r,)| r).collect())
     }
 
