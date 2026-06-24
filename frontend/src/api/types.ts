@@ -155,6 +155,28 @@ export interface Paginated<T> {
   has_more: boolean;
 }
 
+/** 使用分析：制品级聚合（热门制品）。 */
+export interface ArtifactUsageDto {
+  repo_name: string;
+  repo_path: string;
+  count: number;
+  last_at: string;
+}
+
+/** 使用分析：仓库级聚合（仓库用量）。 */
+export interface RepoUsageDto {
+  repo_name: string;
+  count: number;
+}
+
+/** 使用分析聚合总览（数据面板，仅管理员）。 */
+export interface UsageAnalyticsDto {
+  total_access: number;
+  total_download: number;
+  top_downloads: ArtifactUsageDto[];
+  repo_usage: RepoUsageDto[];
+}
+
 /** 创建用户请求体。 */
 export interface CreateUserRequest {
   username: string;

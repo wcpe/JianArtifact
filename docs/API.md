@@ -178,6 +178,13 @@
 - **响应**：统一分页结构 `{ items, total, offset, limit, has_more }`，按时间倒序（最新在前）。每项含 `id`、`ts`、`actor`、`actor_kind`（`session` | `token` | `basic` | `anonymous`）、`request_id`、`source_ip`、`action`、`target_repo`、`target`、`result`（`success` | `denied` | `error`）、`detail`。审计只记元数据级安全 / 管理事件，**绝不含密码 / Token / JWT / 上游凭据**（FR-31，ADR-0015）。
 - **错误**：`401` 未认证；`403` 非管理员。
 
+### 查询使用分析（P2，仅 Admin）
+
+- **方法 / 路径**：`GET /api/v1/analytics/usage`
+- **请求**：查询参数可选 `top`（热门制品 / 仓库用量各取前 N 条，默认 10，上限 100）。仅管理员可访问。
+- **响应**：聚合总览对象 `{ total_access, total_download, top_downloads, repo_usage }`——`total_access` / `total_download` 为全局累计访问 / 下载量；`top_downloads` 为按下载量倒序的热门制品（每项含 `repo_name`、`repo_path`、`count`、`last_at`）；`repo_usage` 为按下载量汇总到仓库的用量（每项含 `repo_name`、`count`），均倒序。数据为本机内部聚合统计（消费 FR-57 采集的 `usage_stats`），**纯本地查询、绝不外发、不向外部遥测 phone-home**（FR-58，ADR-0009）。
+- **错误**：`401` 未认证；`403` 非管理员。
+
 ### 预览 Nexus 可迁移仓库（在线 REST 入口）
 
 - **方法 / 路径**：`POST /api/v1/migrate/nexus/preview`
@@ -403,7 +410,7 @@
 
 ### 使用分析
 
-- 使用统计查询：`/api/v1/stats`（或 `/api/v1/analytics`）返回访问量、下载量、热门制品、仓库用量等聚合数据，供数据面板展示；数据本机内部、不外发。
+- 使用统计查询：`GET /api/v1/analytics/usage`（仅 Admin）返回访问量、下载量、热门制品、仓库用量等聚合数据，供数据面板展示；数据本机内部、不外发（详见上文「查询使用分析」端点）。
 
 ### 漏洞（P2）
 

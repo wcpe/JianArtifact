@@ -26,6 +26,7 @@ use crate::proxy::HttpUpstream;
 use crate::storage::BlobBackend;
 
 mod acl;
+mod analytics;
 mod artifacts;
 mod audit;
 mod auth_routes;
@@ -328,6 +329,7 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/search", get(search::search))
         .route("/audit", get(audit::list_audit))
+        .route("/analytics/usage", get(analytics::usage_analytics))
         .route(
             "/migrate/nexus/preview",
             post(migrate::preview_nexus_repositories),

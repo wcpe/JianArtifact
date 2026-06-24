@@ -21,6 +21,7 @@ import type {
   TokenView,
   UpdateRepositoryRequest,
   UpdateUserRequest,
+  UsageAnalyticsDto,
   UserInfo,
   UserView,
 } from './types';
@@ -245,6 +246,13 @@ export function search(
       limit: options.limit,
     },
   });
+}
+
+// —— 使用分析数据面板（仅管理员） ——
+
+/** 查询使用分析聚合（访问 / 下载总量、热门制品、仓库用量）。 */
+export function usageAnalytics(top?: number): Promise<UsageAnalyticsDto> {
+  return request<UsageAnalyticsDto>('/analytics/usage', { query: { top } });
 }
 
 /** 对制品路径逐段编码（保留 `/` 分隔，避免破坏 catch-all 路径语义）。 */

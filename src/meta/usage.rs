@@ -62,6 +62,15 @@ pub struct UsageStatRow {
     pub last_at: String,
 }
 
+/// 仓库级聚合计数视图（按仓库名汇总某动作的总次数），供 FR-58 仓库用量面板使用。
+#[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
+pub struct RepoUsageRow {
+    /// 目标仓库名。
+    pub repo_name: String,
+    /// 该仓库下该动作的累计次数（跨所有制品路径汇总）。
+    pub count: i64,
+}
+
 impl MetaStore {
     /// 批量聚合落库使用事件：对每条事件做计数 UPSERT 累加；若开启明细则同批写入明细行。
     ///
@@ -139,6 +148,38 @@ impl MetaStore {
         let rows = sqlx::query_as::<_, UsageStatRow>(
             "SELECT repo_name, repo_path, action, count, last_at FROM usage_stats \
              WHERE action = ? ORDER BY count DESC, repo_name ASC, repo_path ASC LIMIT ?",
+        )
+        .bind(action.as_str())
+        .bind(limit)
+        .fetch_all(self.pool())
+        .await?;
+        Ok(rows)
+    }
+
+    /// 某动作的全局累计总次数（跨所有仓库与制品路径汇总）；无记录视为 0。
+    ///
+    /// 供 FR-58 数据面板展示访问量 / 下载量总览的内部聚合查询入口（纯查本地聚合，不外发）。
+    pub async fn usage_total_by_action(&self, action: UsageAction) -> Result<i64, MetaError> {
+        let total: Option<i64> =
+            sqlx::query_scalar("SELECT SUM(count) FROM usage_stats WHERE action = ?")
+                .bind(action.as_str())
+                .fetch_one(self.pool())
+                .await?;
+        Ok(total.unwrap_or(0))
+    }
+
+    /// 列出某动作下计数最高的前 N 个仓库（仓库用量），按汇总计数倒序。
+    ///
+    /// 与 `top_usage_by_action`（制品粒度）不同，这里按 `repo_name` 跨制品路径汇总到仓库粒度，
+    /// 供 FR-58 仓库用量面板使用（纯查本地聚合，不外发）。
+    pub async fn top_repo_usage_by_action(
+        &self,
+        action: UsageAction,
+        limit: i64,
+    ) -> Result<Vec<RepoUsageRow>, MetaError> {
+        let rows = sqlx::query_as::<_, RepoUsageRow>(
+            "SELECT repo_name, SUM(count) AS count FROM usage_stats \
+             WHERE action = ? GROUP BY repo_name ORDER BY count DESC, repo_name ASC LIMIT ?",
         )
         .bind(action.as_str())
         .bind(limit)
@@ -307,6 +348,89 @@ mod tests {
             .unwrap();
         assert_eq!(top1.len(), 1);
         assert_eq!(top1[0].repo_path, "c");
+    }
+
+    #[tokio::test]
+    async fn 动作总量跨仓库汇总() {
+        let store = MetaStore::open_in_memory().await.unwrap();
+        // 无记录时总量为 0
+        assert_eq!(
+            store
+                .usage_total_by_action(UsageAction::Download)
+                .await
+                .unwrap(),
+            0
+        );
+        // repoA/x 下载 2 次、repoB/y 下载 3 次：总下载量应为 5
+        for _ in 0..2 {
+            store
+                .insert_usage_batch(&[事件("repoA", "x", UsageAction::Download)], false)
+                .await
+                .unwrap();
+        }
+        for _ in 0..3 {
+            store
+                .insert_usage_batch(&[事件("repoB", "y", UsageAction::Download)], false)
+                .await
+                .unwrap();
+        }
+        // 另有一条 access，不应混入 download 总量
+        store
+            .insert_usage_batch(&[事件("repoA", "x", UsageAction::Access)], false)
+            .await
+            .unwrap();
+        assert_eq!(
+            store
+                .usage_total_by_action(UsageAction::Download)
+                .await
+                .unwrap(),
+            5
+        );
+        assert_eq!(
+            store
+                .usage_total_by_action(UsageAction::Access)
+                .await
+                .unwrap(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn 仓库用量按仓库汇总并倒序() {
+        let store = MetaStore::open_in_memory().await.unwrap();
+        // repoA：a 下载 1 + b 下载 1 = 2；repoB：c 下载 3 = 3
+        store
+            .insert_usage_batch(&[事件("repoA", "a", UsageAction::Download)], false)
+            .await
+            .unwrap();
+        store
+            .insert_usage_batch(&[事件("repoA", "b", UsageAction::Download)], false)
+            .await
+            .unwrap();
+        for _ in 0..3 {
+            store
+                .insert_usage_batch(&[事件("repoB", "c", UsageAction::Download)], false)
+                .await
+                .unwrap();
+        }
+
+        let rows = store
+            .top_repo_usage_by_action(UsageAction::Download, 10)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 2);
+        // repoB（3）应排在 repoA（2）之前
+        assert_eq!(rows[0].repo_name, "repoB");
+        assert_eq!(rows[0].count, 3);
+        assert_eq!(rows[1].repo_name, "repoA");
+        assert_eq!(rows[1].count, 2);
+        // limit 截断只取前 1
+        let top1 = store
+            .top_repo_usage_by_action(UsageAction::Download, 1)
+            .await
+            .unwrap();
+        assert_eq!(top1.len(), 1);
+        assert_eq!(top1[0].repo_name, "repoB");
     }
 
     #[tokio::test]
