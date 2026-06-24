@@ -422,10 +422,13 @@ impl DockerAuth {
 }
 
 /// 操作对应的 docker 动作名。
+///
+/// docker registry 协议仅有 pull / push 两种动作，本端点只会以 Read / Write 调用本函数；
+/// delete / admin 等变更类动作归入 push（写类），但 docker 流程实际不产生它们。
 fn action_name(action: Action) -> &'static str {
     match action {
         Action::Read => ACTION_PULL,
-        Action::Write => ACTION_PUSH,
+        Action::Write | Action::Delete | Action::Admin => ACTION_PUSH,
     }
 }
 

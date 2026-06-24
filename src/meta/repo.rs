@@ -62,13 +62,20 @@ impl RepoType {
     }
 }
 
-/// 每仓库 ACL 的权限级别。
+/// 每仓库 ACL 的权限动作（四级动作，FR-48 / ADR-0007）。
+///
+/// 动作自低到高为 read < write < delete < admin；高动作蕴含低动作的能力，
+/// 蕴含关系在授权判定（[`crate::authz`]）中体现，本枚举仅表达单条 ACL 授予的动作。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Permission {
-    /// 读权限。
+    /// 读权限（下载 / 浏览 / 详情）。
     Read,
-    /// 写权限。
+    /// 写权限（上传 / 发布 / 覆盖）。
     Write,
+    /// 删除权限（删除制品 / 缓存）。
+    Delete,
+    /// 仓库级管理权限（配置 / 删除仓库 / 维护其 ACL）。
+    Admin,
 }
 
 impl Permission {
@@ -77,13 +84,18 @@ impl Permission {
         match self {
             Permission::Read => "read",
             Permission::Write => "write",
+            Permission::Delete => "delete",
+            Permission::Admin => "admin",
         }
     }
 
-    /// 从 DB 字符串解析权限；未知值按最小权限回退为 read，绝不误授写权限。
+    /// 从 DB 字符串解析权限；未知值按最小权限回退为 read，绝不误授更高动作。
     pub fn from_db_str(s: &str) -> Self {
         match s {
             "write" => Permission::Write,
+            "delete" => Permission::Delete,
+            "admin" => Permission::Admin,
+            // 未知 / 损坏取值一律降级为最小权限 read，绝不误授写 / 删 / 管理
             _ => Permission::Read,
         }
     }
@@ -136,7 +148,7 @@ pub struct AclRecord {
     pub repo_id: String,
     /// 被授权用户主键。
     pub user_id: String,
-    /// 权限字符串（read | write）。
+    /// 权限动作字符串（read | write | delete | admin）。
     pub permission: String,
 }
 
@@ -554,9 +566,14 @@ mod tests {
         assert_eq!(Visibility::from_db_str(""), Visibility::Private);
         assert_eq!(RepoType::from_db_str("proxy"), RepoType::Proxy);
         assert_eq!(RepoType::from_db_str("未知"), RepoType::Hosted);
-        // 未知权限降级为 read，绝不误授写
+        // 四级动作字符串往返
+        assert_eq!(Permission::from_db_str("read"), Permission::Read);
         assert_eq!(Permission::from_db_str("write"), Permission::Write);
-        assert_eq!(Permission::from_db_str("admin"), Permission::Read);
+        assert_eq!(Permission::from_db_str("delete"), Permission::Delete);
+        assert_eq!(Permission::from_db_str("admin"), Permission::Admin);
+        // 未知 / 损坏权限降级为最小权限 read，绝不误授写 / 删 / 管理
+        assert_eq!(Permission::from_db_str("superadmin"), Permission::Read);
+        assert_eq!(Permission::from_db_str(""), Permission::Read);
     }
 
     #[tokio::test]

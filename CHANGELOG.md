@@ -15,7 +15,7 @@
 - 审计日志（FR-31，ADR-0015）：新增 `audit_log` 表，经审计中间件采集精选的写 / 管理 / 授权拒绝事件（登录、Token 与用户管理、仓库与 ACL 变更、制品上传 / 删除），普通匿名读取不入审计；事件经进程内有界 channel 异步批量落 SQLite，主路径只做非阻塞投递、采集失败不影响业务、队列满则丢弃 + 计数 + WARN；后台任务按保留天数（`observability.audit.retention_days`，默认 90）与行数上限（`observability.audit.max_rows`，默认 100 万）轮转；新增 `GET /api/v1/audit` 仅 Admin 分页查询；密码 / Token / JWT / 上游凭据一律不入审计
 
 ### 变更
-- 无
+- 仓库 ACL 权限动作细化为四级 `read` / `write` / `delete` / `admin`（FR-48 / ADR-0007）：授权判定纯函数按动作蕴含关系（admin ⊇ delete ⊇ write ⊇ read）综合可见性、全局角色与 ACL 给出结论；既有读 / 写授权语义与判定结论保持不变，既有 `read` / `write` 数据原样兼容；ACL 管理端点（`POST /api/v1/repositories/{id}/acl`）接受四级动作取值。本次仅落地动作模型与判定，删除 / 管理动作的具体业务端点未接入
 
 ### 修复
 - 无

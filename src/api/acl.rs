@@ -20,7 +20,7 @@ pub struct AclDto {
     pub id: String,
     /// 被授权用户主键。
     pub user_id: String,
-    /// 权限（read | write）。
+    /// 权限动作（read | write | delete | admin）。
     pub permission: String,
 }
 
@@ -39,7 +39,7 @@ impl From<AclRecord> for AclDto {
 pub struct CreateAclRequest {
     /// 被授权用户主键。
     pub user_id: String,
-    /// 权限（read | write，大小写不敏感）。
+    /// 权限动作（read | write | delete | admin，大小写不敏感）。
     pub permission: String,
 }
 
@@ -122,11 +122,13 @@ pub async fn delete_acl(
     Ok(Json(json!({ "status": "ok" })))
 }
 
-/// 解析权限（大小写不敏感）；非法值返回 400。
+/// 解析权限动作（大小写不敏感，FR-48 四级动作）；非法值返回 400。
 fn parse_permission(s: &str) -> Result<Permission, ApiError> {
     match s.to_ascii_lowercase().as_str() {
         "read" => Ok(Permission::Read),
         "write" => Ok(Permission::Write),
+        "delete" => Ok(Permission::Delete),
+        "admin" => Ok(Permission::Admin),
         _ => Err(ApiError::BadRequest(format!("非法权限: {s}"))),
     }
 }

@@ -180,13 +180,13 @@
 
 - **方法 / 路径**：`GET /api/v1/repositories/{id}/acl`
 - **请求**：路径参数 `id`（仓库 id）。
-- **响应**：ACL 条目数组，每项含 `id`、`user_id`、`permission`（`read` 或 `write`）。
+- **响应**：ACL 条目数组，每项含 `id`、`user_id`、`permission`（`read` / `write` / `delete` / `admin`，四级动作，高动作蕴含低动作）。
 - **错误**：`401` 未认证；`403` 非管理员；`404` 仓库不存在。
 
 ### 新增仓库 ACL 条目
 
 - **方法 / 路径**：`POST /api/v1/repositories/{id}/acl`
-- **请求**：路径参数 `id`；JSON 体 `{ "user_id", "permission" }`，`permission` 为 `read` 或 `write`。
+- **请求**：路径参数 `id`；JSON 体 `{ "user_id", "permission" }`，`permission` 为 `read` / `write` / `delete` / `admin`（大小写不敏感）。
 - **响应**：新建 ACL 条目对象。
 - **错误**：`400` 参数不合法；`401` 未认证；`403` 非管理员；`404` 仓库或用户不存在；`409` 该用户的同类授权已存在。
 
@@ -291,7 +291,7 @@
 ### 权限增强（扩展 ACL）
 
 - 用户组/团队：`/api/v1/groups` 的 CRUD，并支持把组作为仓库 ACL 的授权主体。
-- 仓库 ACL 扩展：授权主体从用户扩展为"用户或组"，`permission` 从 `read` / `write` 扩展为 `read` / `write` / `delete` / `admin`。
+- 仓库 ACL 授权主体扩展：从用户扩展为"用户或组"。（动作维度 `read` / `write` / `delete` / `admin` 已在现有 ACL 端点落地，见上文“新增仓库 ACL 条目”。）
 
 ### 七层防护管理
 
