@@ -18,6 +18,7 @@ use jianartifact::format::{ArtifactService, DockerRegistry, FormatRegistry};
 use jianartifact::meta::MetaStore;
 use jianartifact::proxy::HttpUpstream;
 use jianartifact::storage::BlobBackend;
+use jianartifact::vuln::{self, HttpMirrorSource, VulnMirror};
 
 /// 命令行参数。
 #[derive(Debug, Parser)]
@@ -122,6 +123,21 @@ async fn main() -> anyhow::Result<()> {
         行数上限 = cfg.observability.audit.max_rows,
         "审计日志采集与保留期轮转已就绪"
     );
+
+    // 漏洞库离线镜像（FR-70，ADR-0012）：默认关闭，启用时后台周期下载公开漏洞数据落本地库。
+    // 仅镜像/落库，不做制品坐标匹配（FR-71）；下载公开数据集整包，不外发本机制品坐标。
+    let _vuln_refresh = if cfg.vuln.enabled {
+        let source = HttpMirrorSource::new(
+            cfg.vuln.source_base_url.clone(),
+            std::time::Duration::from_secs(cfg.vuln.download_timeout_secs),
+        )
+        .context("初始化漏洞库镜像下载器失败")?;
+        let mirror = Arc::new(VulnMirror::new(meta.clone(), source, &data_dir));
+        vuln::spawn_refresh_loop(mirror, cfg.vuln.clone())
+    } else {
+        info!("漏洞库离线镜像未启用，跳过");
+        None
+    };
 
     // 构建路由与共享状态
     let state = AppState {

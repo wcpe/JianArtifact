@@ -38,3 +38,17 @@ login_lockout_secs = 900
 [proxy]
 # proxy 仓库回源上游的整体请求超时（秒），避免慢速上游拖垮代理。
 upstream_timeout_secs = 60
+
+[vuln]
+# 漏洞库离线镜像（FR-70 / ADR-0012）。默认关闭：启用后会按周期主动联网下载
+# 公开漏洞数据集（OSV 等）整体镜像到本机并落库；下载只携带公开生态名，
+# 不把本机制品坐标外发。本批仅镜像/落库，制品坐标匹配标记（FR-71）尚未实现。
+enabled = false
+# 数据源基址：按生态取 {source_base_url}/{ecosystem}/all.zip。
+source_base_url = "https://osv-vulnerabilities.storage.googleapis.com"
+# 镜像的生态列表（如 ["Maven", "npm"]）；为空表示不镜像任何生态。
+ecosystems = []
+# 刷新周期（秒），默认 24 小时。
+refresh_interval_secs = 86400
+# 单次镜像下载整体超时（秒）。
+download_timeout_secs = 600

@@ -32,11 +32,18 @@ const DEFAULT_UPSTREAM_TIMEOUT_SECS: u64 = 60;
 const DEFAULT_AUDIT_RETENTION_DAYS: u32 = 90;
 /// 默认审计日志行数硬上限（兜底，防止撑爆 SQLite）。
 const DEFAULT_AUDIT_MAX_ROWS: u64 = 1_000_000;
+/// 漏洞库离线镜像默认数据源基址（OSV 公开数据集，按生态提供 all.zip 整包下载）。
+const DEFAULT_VULN_SOURCE_BASE_URL: &str = "https://osv-vulnerabilities.storage.googleapis.com";
+/// 漏洞库镜像默认刷新周期（秒），默认 24 小时。
+const DEFAULT_VULN_REFRESH_INTERVAL_SECS: u64 = 86_400;
+/// 漏洞库镜像下载整体超时（秒），默认 600 秒（按生态 all.zip 可能较大）。
+const DEFAULT_VULN_DOWNLOAD_TIMEOUT_SECS: u64 = 600;
 /// 环境变量前缀。
 const ENV_PREFIX: &str = "JIANARTIFACT_";
 /// 已知配置节名。环境变量映射时，仅把节名与键名之间的首个下划线视作嵌套分隔，
 /// 键名内部的下划线（如 `session_ttl_secs`）保持原样。
-const KNOWN_SECTIONS: &[&str] = &["server", "data", "auth", "limits", "proxy", "observability"];
+const KNOWN_SECTIONS: &[&str] =
+    &["server", "data", "auth", "limits", "proxy", "observability", "vuln"];
 
 /// 已知的多级嵌套前缀映射（环境变量下划线前缀 → 点分隔配置路径）。
 ///
@@ -68,6 +75,9 @@ pub struct Config {
     /// 可观测性配置（审计日志等，ADR-0015）。
     #[serde(default)]
     pub observability: ObservabilityConfig,
+    /// 漏洞库离线镜像配置。
+    #[serde(default)]
+    pub vuln: VulnConfig,
 }
 
 /// HTTP 服务配置。
@@ -243,6 +253,38 @@ impl Default for AuditConfig {
         Self {
             retention_days: DEFAULT_AUDIT_RETENTION_DAYS,
             max_rows: DEFAULT_AUDIT_MAX_ROWS,
+        }
+    }
+}
+
+/// 漏洞库离线镜像配置（FR-70，ADR-0012）。
+///
+/// 默认关闭：镜像需主动联网拉取公开漏洞数据集到本机，应由运维显式开启。
+/// 下载的是公开数据集整体镜像，**不把本机制品坐标逐包外发到外部漏洞服务**（守隐私红线）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VulnConfig {
+    /// 是否启用漏洞库离线镜像；默认关闭，由运维显式开启。
+    pub enabled: bool,
+    /// 镜像数据源基址（按生态在其下取 `{ecosystem}/all.zip`）。
+    pub source_base_url: String,
+    /// 镜像的生态列表（如 ["Maven", "npm"]）；为空表示不镜像任何生态。
+    pub ecosystems: Vec<String>,
+    /// 刷新周期（秒）：每隔该时长重新拉取并落库一次。
+    pub refresh_interval_secs: u64,
+    /// 单次镜像下载的整体超时（秒）。
+    pub download_timeout_secs: u64,
+}
+
+impl Default for VulnConfig {
+    fn default() -> Self {
+        Self {
+            // 默认关闭，避免未配置时静默联网拉取
+            enabled: false,
+            source_base_url: DEFAULT_VULN_SOURCE_BASE_URL.to_string(),
+            // 默认不预设生态，由运维按需开启，避免无意义的全量下载
+            ecosystems: Vec::new(),
+            refresh_interval_secs: DEFAULT_VULN_REFRESH_INTERVAL_SECS,
+            download_timeout_secs: DEFAULT_VULN_DOWNLOAD_TIMEOUT_SECS,
         }
     }
 }
@@ -443,5 +485,32 @@ mod tests {
                 assert!(!s3.path_style);
             },
         );
+    }
+
+    #[test]
+    fn 漏洞库镜像默认关闭且空生态() {
+        let cfg = Config::default();
+        assert!(!cfg.vuln.enabled);
+        assert!(cfg.vuln.ecosystems.is_empty());
+        assert_eq!(cfg.vuln.refresh_interval_secs, 86_400);
+    }
+
+    #[test]
+    fn 漏洞库镜像可经_toml_配置生态与开关() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            "[vuln]\nenabled = true\necosystems = [\"Maven\", \"npm\"]\nrefresh_interval_secs = 3600"
+        )
+        .unwrap();
+        with_env_vars(&[], || {
+            let cfg = Config::load(file.path()).unwrap();
+            assert!(cfg.vuln.enabled);
+            assert_eq!(
+                cfg.vuln.ecosystems,
+                vec!["Maven".to_string(), "npm".to_string()]
+            );
+            assert_eq!(cfg.vuln.refresh_interval_secs, 3600);
+        });
     }
 }

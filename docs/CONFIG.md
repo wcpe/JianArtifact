@@ -86,6 +86,18 @@
 | url | 上游地址 | — | JIANARTIFACT_UPSTREAM_&lt;NAME&gt;_URL |
 | auth_ref | 上游凭据引用（真值走 env，不入库） | — | JIANARTIFACT_UPSTREAM_&lt;NAME&gt;_TOKEN |
 
+### [vuln]（漏洞库离线镜像，FR-70 / ADR-0012）
+
+> 默认关闭：镜像需主动联网拉取公开漏洞数据集到本机，由运维显式开启。下载公开数据集整体镜像（按生态 `all.zip`），**不把本机制品坐标逐包外发**。本批仅镜像/落库，制品坐标匹配标记（FR-71）尚未实现。
+
+| 键 | 含义 | 默认（取向） | 环境变量 |
+|---|---|---|---|
+| enabled | 是否启用漏洞库离线镜像 | false | JIANARTIFACT_VULN_ENABLED |
+| source_base_url | 数据源基址（按生态取 `{base}/{ecosystem}/all.zip`） | https://osv-vulnerabilities.storage.googleapis.com | JIANARTIFACT_VULN_SOURCE_BASE_URL |
+| ecosystems | 镜像的生态列表（如 ["Maven","npm"]） | 空（不镜像任何生态） | JIANARTIFACT_VULN_ECOSYSTEMS |
+| refresh_interval_secs | 刷新周期（秒） | 86400 | JIANARTIFACT_VULN_REFRESH_INTERVAL_SECS |
+| download_timeout_secs | 单次镜像下载整体超时（秒） | 600 | JIANARTIFACT_VULN_DOWNLOAD_TIMEOUT_SECS |
+
 ## 3. 安全
 
 - 真实凭据 / 口令不写入入库的 `config.toml`，走环境变量或不入库的本地配置。
