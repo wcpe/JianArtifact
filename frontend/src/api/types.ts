@@ -14,8 +14,8 @@ export type RepoType = 'hosted' | 'proxy';
 /** 仓库可见性。 */
 export type Visibility = 'public' | 'private';
 
-/** 仓库 ACL 权限。 */
-export type Permission = 'read' | 'write';
+/** 仓库 ACL 权限动作（四级，高动作蕴含低动作；FR-48）。 */
+export type Permission = 'read' | 'write' | 'delete' | 'admin';
 
 /** 登录 / 刷新 / /me 返回的当前用户信息。 */
 export interface UserInfo {
@@ -95,6 +95,26 @@ export interface ArtifactDetailDto {
 export interface AclDto {
   id: string;
   user_id: string;
+  permission: Permission;
+}
+
+/** 用户组视图（FR-49）。 */
+export interface GroupView {
+  id: string;
+  name: string;
+  created_at: string;
+}
+
+/** 组成员视图（FR-49）。 */
+export interface GroupMemberView {
+  user_id: string;
+  username: string;
+}
+
+/** 组 ACL 条目视图（FR-49）。 */
+export interface GroupAclView {
+  id: string;
+  group_id: string;
   permission: Permission;
 }
 

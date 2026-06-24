@@ -9,6 +9,9 @@ import type {
   CreateRepositoryRequest,
   CreateTokenResponse,
   CreateUserRequest,
+  GroupAclView,
+  GroupMemberView,
+  GroupView,
   LoginResponse,
   Paginated,
   Permission,
@@ -141,6 +144,71 @@ export function createAcl(repoId: string, userId: string, permission: Permission
 export function deleteAcl(repoId: string, aclId: string): Promise<void> {
   return request<void>(
     `/repositories/${encodeURIComponent(repoId)}/acl/${encodeURIComponent(aclId)}`,
+    { method: 'DELETE' },
+  );
+}
+
+// —— 用户组管理（仅管理员，FR-49） ——
+
+/** 列出全部用户组。 */
+export function listGroups(): Promise<GroupView[]> {
+  return request<GroupView[]>('/groups');
+}
+
+/** 创建用户组（组名重复 409）。 */
+export function createGroup(name: string): Promise<GroupView> {
+  return request<GroupView>('/groups', { method: 'POST', body: { name } });
+}
+
+/** 删除用户组（级联清成员与组 ACL）。 */
+export function deleteGroup(id: string): Promise<void> {
+  return request<void>(`/groups/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+/** 列出某组成员。 */
+export function listGroupMembers(groupId: string): Promise<GroupMemberView[]> {
+  return request<GroupMemberView[]>(`/groups/${encodeURIComponent(groupId)}/members`);
+}
+
+/** 把用户加入组（重复加入 409）。 */
+export function addGroupMember(groupId: string, userId: string): Promise<void> {
+  return request<void>(`/groups/${encodeURIComponent(groupId)}/members`, {
+    method: 'POST',
+    body: { user_id: userId },
+  });
+}
+
+/** 把用户移出组。 */
+export function removeGroupMember(groupId: string, userId: string): Promise<void> {
+  return request<void>(
+    `/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(userId)}`,
+    { method: 'DELETE' },
+  );
+}
+
+// —— 仓库组 ACL（仅管理员，FR-49） ——
+
+/** 列出某仓库的组 ACL。 */
+export function listGroupAcl(repoId: string): Promise<GroupAclView[]> {
+  return request<GroupAclView[]>(`/repositories/${encodeURIComponent(repoId)}/group-acl`);
+}
+
+/** 对组授予一条仓库 ACL。 */
+export function createGroupAcl(
+  repoId: string,
+  groupId: string,
+  permission: Permission,
+): Promise<GroupAclView> {
+  return request<GroupAclView>(`/repositories/${encodeURIComponent(repoId)}/group-acl`, {
+    method: 'POST',
+    body: { group_id: groupId, permission },
+  });
+}
+
+/** 撤销一条组 ACL。 */
+export function deleteGroupAcl(repoId: string, aclId: string): Promise<void> {
+  return request<void>(
+    `/repositories/${encodeURIComponent(repoId)}/group-acl/${encodeURIComponent(aclId)}`,
     { method: 'DELETE' },
   );
 }

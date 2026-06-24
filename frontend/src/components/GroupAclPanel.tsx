@@ -1,5 +1,5 @@
-// 每仓库 ACL 管理面板（FR-20，仅管理员）：列出 / 新增 / 移除读写授权。
-// ACL 条目仅含 user_id，故拉取用户列表把 user_id 解析为用户名展示。
+// 每仓库「组 ACL」管理面板（FR-49 / FR-50，仅管理员）：对用户组授予 / 撤销四级动作授权。
+// 组 ACL 条目仅含 group_id，故拉取用户组列表把 group_id 解析为组名展示。
 
 import { useEffect, useState } from 'react';
 import {
@@ -16,28 +16,28 @@ import {
 } from '@mantine/core';
 import { IconTrash } from '@tabler/icons-react';
 import * as api from '../api/endpoints';
-import type { AclDto, Permission, UserView } from '../api/types';
+import type { GroupAclView, GroupView, Permission } from '../api/types';
 import { errorMessage } from '../lib/format';
 import { PERMISSION_OPTIONS, permissionColor, permissionLabel } from '../lib/permissions';
 import { notifyError, notifySuccess } from '../lib/notify';
 import { ErrorAlert } from './ErrorAlert';
 
-/** ACL 管理面板。 */
-export function AclPanel({ repoId }: { repoId: string }) {
-  const [acls, setAcls] = useState<AclDto[]>([]);
-  const [users, setUsers] = useState<UserView[]>([]);
+/** 组 ACL 管理面板。 */
+export function GroupAclPanel({ repoId }: { repoId: string }) {
+  const [acls, setAcls] = useState<GroupAclView[]>([]);
+  const [groups, setGroups] = useState<GroupView[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [selectedUser, setSelectedUser] = useState<string | null>(null);
+  const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
   const [permission, setPermission] = useState<Permission>('read');
   const [submitting, setSubmitting] = useState(false);
 
   const reload = () => {
     setLoading(true);
-    Promise.all([api.listAcl(repoId), api.listUsers()])
-      .then(([aclList, userList]) => {
+    Promise.all([api.listGroupAcl(repoId), api.listGroups()])
+      .then(([aclList, groupList]) => {
         setAcls(aclList);
-        setUsers(userList);
+        setGroups(groupList);
       })
       .catch((err) => setError(errorMessage(err)))
       .finally(() => setLoading(false));
@@ -45,15 +45,15 @@ export function AclPanel({ repoId }: { repoId: string }) {
 
   useEffect(reload, [repoId]);
 
-  const userName = (id: string) => users.find((u) => u.id === id)?.username ?? id;
+  const groupName = (id: string) => groups.find((g) => g.id === id)?.name ?? id;
 
   const handleAdd = async () => {
-    if (!selectedUser) return;
+    if (!selectedGroup) return;
     setSubmitting(true);
     try {
-      await api.createAcl(repoId, selectedUser, permission);
-      notifySuccess('已新增授权');
-      setSelectedUser(null);
+      await api.createGroupAcl(repoId, selectedGroup, permission);
+      notifySuccess('已对组新增授权');
+      setSelectedGroup(null);
       reload();
     } catch (err) {
       notifyError(errorMessage(err));
@@ -64,8 +64,8 @@ export function AclPanel({ repoId }: { repoId: string }) {
 
   const handleRemove = async (aclId: string) => {
     try {
-      await api.deleteAcl(repoId, aclId);
-      notifySuccess('已移除授权');
+      await api.deleteGroupAcl(repoId, aclId);
+      notifySuccess('已撤销组授权');
       reload();
     } catch (err) {
       notifyError(errorMessage(err));
@@ -85,11 +85,11 @@ export function AclPanel({ repoId }: { repoId: string }) {
     <Stack>
       <Group align="flex-end">
         <Select
-          label="用户"
-          placeholder="选择用户"
-          data={users.map((u) => ({ value: u.id, label: u.username }))}
-          value={selectedUser}
-          onChange={setSelectedUser}
+          label="用户组"
+          placeholder="选择用户组"
+          data={groups.map((g) => ({ value: g.id, label: g.name }))}
+          value={selectedGroup}
+          onChange={setSelectedGroup}
           searchable
           maw={240}
         />
@@ -101,18 +101,18 @@ export function AclPanel({ repoId }: { repoId: string }) {
           allowDeselect={false}
           maw={160}
         />
-        <Button onClick={handleAdd} loading={submitting} disabled={!selectedUser}>
+        <Button onClick={handleAdd} loading={submitting} disabled={!selectedGroup}>
           授权
         </Button>
       </Group>
 
       {acls.length === 0 ? (
-        <Text c="dimmed">该仓库暂无 ACL 授权条目。</Text>
+        <Text c="dimmed">该仓库暂无组 ACL 授权条目。</Text>
       ) : (
         <Table striped>
           <Table.Thead>
             <Table.Tr>
-              <Table.Th>用户</Table.Th>
+              <Table.Th>用户组</Table.Th>
               <Table.Th>权限</Table.Th>
               <Table.Th>操作</Table.Th>
             </Table.Tr>
@@ -120,7 +120,7 @@ export function AclPanel({ repoId }: { repoId: string }) {
           <Table.Tbody>
             {acls.map((acl) => (
               <Table.Tr key={acl.id}>
-                <Table.Td>{userName(acl.user_id)}</Table.Td>
+                <Table.Td>{groupName(acl.group_id)}</Table.Td>
                 <Table.Td>
                   <Badge variant="light" color={permissionColor(acl.permission)}>
                     {permissionLabel(acl.permission)}
@@ -131,7 +131,7 @@ export function AclPanel({ repoId }: { repoId: string }) {
                     variant="subtle"
                     color="red"
                     onClick={() => handleRemove(acl.id)}
-                    aria-label="移除授权"
+                    aria-label="撤销组授权"
                   >
                     <IconTrash size={18} />
                   </ActionIcon>

@@ -14,6 +14,7 @@ import { DashboardPage } from './pages/DashboardPage';
 import { RepositoriesPage } from './pages/RepositoriesPage';
 import { RepositoryDetailPage } from './pages/RepositoryDetailPage';
 import { UsersPage } from './pages/UsersPage';
+import { GroupsPage } from './pages/GroupsPage';
 import { TokensPage } from './pages/TokensPage';
 import { SearchPage } from './pages/SearchPage';
 import { ArtifactDetailPage } from './pages/ArtifactDetailPage';
@@ -68,6 +69,14 @@ export function App() {
           element={
             <RequireAdmin>
               <UsersPage />
+            </RequireAdmin>
+          }
+        />
+        <Route
+          path="groups"
+          element={
+            <RequireAdmin>
+              <GroupsPage />
             </RequireAdmin>
           }
         />

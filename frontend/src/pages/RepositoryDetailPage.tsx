@@ -28,6 +28,7 @@ import { errorMessage, formatBytes } from '../lib/format';
 import { notifyError, notifySuccess } from '../lib/notify';
 import { ErrorAlert } from '../components/ErrorAlert';
 import { AclPanel } from '../components/AclPanel';
+import { GroupAclPanel } from '../components/GroupAclPanel';
 
 /** 仓库详情页。 */
 export function RepositoryDetailPage() {
@@ -105,7 +106,16 @@ export function RepositoryDetailPage() {
 
         {isAdmin && (
           <Tabs.Panel value="acl" pt="md">
-            <AclPanel repoId={repo.id} />
+            <Stack gap="xl">
+              <Stack gap="sm">
+                <Title order={4}>用户授权</Title>
+                <AclPanel repoId={repo.id} />
+              </Stack>
+              <Stack gap="sm">
+                <Title order={4}>用户组授权</Title>
+                <GroupAclPanel repoId={repo.id} />
+              </Stack>
+            </Stack>
           </Tabs.Panel>
         )}
       </Tabs>

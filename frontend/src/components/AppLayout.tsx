@@ -8,6 +8,7 @@ import {
   IconSearch,
   IconKey,
   IconUsers,
+  IconUsersGroup,
   IconLogout,
 } from '@tabler/icons-react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
@@ -27,6 +28,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: '制品搜索', path: '/search', icon: <IconSearch size={18} /> },
   { label: 'Token 管理', path: '/tokens', icon: <IconKey size={18} /> },
   { label: '用户管理', path: '/users', icon: <IconUsers size={18} />, adminOnly: true },
+  { label: '用户组管理', path: '/groups', icon: <IconUsersGroup size={18} />, adminOnly: true },
 ];
 
 /** 应用布局：渲染导航与子路由出口。 */
