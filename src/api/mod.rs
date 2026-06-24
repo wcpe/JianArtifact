@@ -34,6 +34,7 @@ mod docker_routes;
 mod format_routes;
 mod go_routes;
 mod identity;
+mod migrate;
 mod npm_routes;
 mod nuget_routes;
 mod pypi_routes;
@@ -305,6 +306,10 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/search", get(search::search))
         .route("/audit", get(audit::list_audit))
+        .route(
+            "/migrate/nexus/preview",
+            post(migrate::preview_nexus_repositories),
+        )
         .route(
             "/repositories/{id}/acl",
             get(acl::list_acl).post(acl::create_acl),

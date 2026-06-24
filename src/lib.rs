@@ -14,6 +14,7 @@ pub mod authz;
 pub mod config;
 pub mod format;
 pub mod meta;
+pub mod migrate;
 pub mod proxy;
 pub mod repo;
 pub mod storage;

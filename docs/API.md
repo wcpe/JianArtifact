@@ -176,6 +176,14 @@
 - **响应**：统一分页结构 `{ items, total, offset, limit, has_more }`，按时间倒序（最新在前）。每项含 `id`、`ts`、`actor`、`actor_kind`（`session` | `token` | `basic` | `anonymous`）、`request_id`、`source_ip`、`action`、`target_repo`、`target`、`result`（`success` | `denied` | `error`）、`detail`。审计只记元数据级安全 / 管理事件，**绝不含密码 / Token / JWT / 上游凭据**（FR-31，ADR-0015）。
 - **错误**：`401` 未认证；`403` 非管理员。
 
+### 预览 Nexus 可迁移仓库（在线 REST 入口）
+
+- **方法 / 路径**：`POST /api/v1/migrate/nexus/preview`
+- **请求**：JSON 体 `{ "base_url", "auth_ref"? }`。`base_url` 为源 Nexus 基址（如 `https://nexus.example`）；`auth_ref` 为上游凭据引用（仅引用，真值走环境变量 `JIANARTIFACT_MIGRATE_<NAME>_USERNAME` / `JIANARTIFACT_MIGRATE_<NAME>_PASSWORD`，不入库、不回显），匿名可访问的源系统可省略。仅管理员可调用。
+- **行为**：连接在线 Nexus，经其 `service/rest/v1/repositories` 枚举可迁移仓库列表与基本元数据。这是迁移的**发现 / 预览**步骤，**不搬运任何制品**（搬运为后续分期能力）。
+- **响应**：仓库摘要数组，每项含 `name`、`format`（Nexus 原样格式，如 `maven2` / `npm`）、`type`（`hosted` / `proxy` / `group`）、`upstream_url`（仅 proxy 仓库有值，取自源系统 `attributes.proxy.remoteUrl`）。
+- **错误**：`400` 参数不合法或 `auth_ref` 对应凭据未在环境变量中配置；`401` 未认证；`403` 非管理员；`502` 连接源系统失败 / 鉴权失败 / 响应异常（不向调用方泄露源系统内部细节）。
+
 ### 列出仓库 ACL
 
 - **方法 / 路径**：`GET /api/v1/repositories/{id}/acl`
