@@ -10,6 +10,7 @@ use crate::meta::ArtifactRecord;
 
 pub mod docker;
 pub mod docker_registry;
+mod go_mod;
 mod maven;
 mod npm;
 mod raw;
@@ -17,6 +18,7 @@ pub mod service;
 
 pub use docker::DockerFormat;
 pub use docker_registry::{DockerError, DockerRegistry};
+pub use go_mod::{GoError, GoFormat, GoRequest, VersionFile};
 pub use maven::MavenFormat;
 pub use npm::{NpmError, NpmFormat, PublishRequest};
 pub use raw::RawFormat;
@@ -106,7 +108,7 @@ impl FormatRegistry {
         self.formats.push(format);
     }
 
-    /// 构造含当前已实现格式（Raw、Maven、npm、Docker）的注册表。
+    /// 构造含当前已实现格式（Raw、Maven、npm、Docker、Go）的注册表。
     ///
     /// 其余格式由各自批次实现后在此注册，本批不提前占位未实现格式。
     pub fn with_builtin() -> Self {
@@ -115,6 +117,7 @@ impl FormatRegistry {
         registry.register(Box::new(MavenFormat));
         registry.register(Box::new(NpmFormat));
         registry.register(Box::new(DockerFormat));
+        registry.register(Box::new(GoFormat));
         registry
     }
 
@@ -180,6 +183,8 @@ mod tests {
         assert_eq!(registry.get("npm").unwrap().name(), "npm");
         assert!(registry.get("docker").is_some());
         assert_eq!(registry.get("docker").unwrap().name(), "docker");
+        assert!(registry.get("go").is_some());
+        assert_eq!(registry.get("go").unwrap().name(), "go");
         assert!(registry.get("不存在").is_none());
     }
 }

@@ -66,6 +66,9 @@ tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 # 测试用临时目录
 tempfile = "3"
+# Go 模块格式集成测试：构造 / 校验模块 zip 内部布局（{module}@{version}/...）；
+# 仅测试维度使用——生产把 zip 当不透明 blob 流式存取，不解压。
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 # release 档：strip + thin LTO + panic=abort 压低体积（ADR-0001，目标 < 27MB）
 # 注意 panic=abort 仅作用于 release，避免影响 cargo test（test 走 dev/test 档）

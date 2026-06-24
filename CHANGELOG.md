@@ -7,7 +7,7 @@
 ## 未发布版本
 
 ### 新增
-- 无
+- Go 模块格式（hosted + proxy）经统一 Format trait 注册接入通用机理：按 GOPROXY 协议暴露 `@v/list` / `.info` / `.mod` / `.zip` / `@latest`，模块路径大小写 bang 编码（`!x` ↔ `X`），版本不可变（重复上传同版本 409），多校验和与流式存取；hosted 据已存版本聚合 `@v/list` 与 `@latest`、`.info` 缺失时按 `.mod` 合成，proxy 对 `.mod`/`.zip`/`.info` 走 cache-miss 单飞缓存、对 `@v/list`/`@latest` 回源透传；授权复用既有编排（上传需 write、private 对无权一律 404）
 
 ### 变更
 - 无

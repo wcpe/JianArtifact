@@ -26,6 +26,9 @@ const DEFAULT_CONTENT_TYPE: &str = "application/octet-stream";
 /// npm 格式名：据此把 npm 仓库的请求分派到其原生协议处理。
 const NPM_FORMAT: &str = "npm";
 
+/// Go 格式名：据此把 Go 仓库的请求分派到 GOPROXY 协议处理。
+const GO_FORMAT: &str = "go";
+
 /// npm tarball 在包内的目录分隔段（npm 协议固定为 `-`）。
 const NPM_TARBALL_SEGMENT: &str = "/-/";
 
@@ -61,6 +64,10 @@ pub async fn put_artifact(
     // npm 发布走其原生协议（请求体为含 base64 tarball 的 JSON，须整体解析）
     if repo.format == NPM_FORMAT {
         return super::npm_routes::publish(&state, &repo, body).await;
+    }
+    // Go 上传走 GOPROXY 约定端点（PUT {module}/@v/{version}.{mod|zip|info}）
+    if repo.format == GO_FORMAT {
+        return super::go_routes::put(&state, &repo, &path, body).await;
     }
     let format = state
         .formats
@@ -100,6 +107,10 @@ pub async fn get_artifact(
     // npm 读走其原生协议：tarball（含 `/-/` 段）按 blob 返回，否则按 packument 文档返回
     if repo.format == NPM_FORMAT {
         return get_npm(&state, &repo, &path).await;
+    }
+    // Go 读走 GOPROXY 协议：据端点分派 list / info / mod / zip / latest
+    if repo.format == GO_FORMAT {
+        return super::go_routes::get(&state, &repo, &path).await;
     }
     let format = state
         .formats

@@ -4,7 +4,7 @@
 
 ## 1. 通用约定
 
-- **协议形态**：管理 API 为 REST + JSON；格式 API 按各自原生协议（Maven、npm、Docker registry v2、Raw）暴露。
+- **协议形态**：管理 API 为 REST + JSON；格式 API 按各自原生协议（Maven、npm、Docker registry v2、Go GOPROXY、Raw）暴露。
 - **版本**：管理 API 统一挂载在 `/api/v1` 前缀下。
 - **编码**：管理 API 请求体与响应体均为 `application/json; charset=utf-8`；格式端点的内容类型遵循各自协议（如制品二进制、清单 JSON 等）。
 - **认证**：支持三种方式，由认证中间件统一识别。
@@ -229,6 +229,7 @@
 - Maven：release 版本不可覆盖（重复上传同 GAV 的 release 返回 `409 Conflict`）；snapshot 版本允许覆盖。
 - npm：已发布版本不可覆盖（重复发布同版本返回 `409`）。
 - Docker：同一 tag 允许覆盖（符合 Docker 习惯），manifest 按 digest 寻址与去重。
+- Go：模块版本一经发布即不可变（重复上传同 `{module}@{version}` 的 `.mod` / `.zip` / `.info` 返回 `409`）。
 - Raw：同路径文件允许覆盖。
 
 **校验和**：每个制品计算并提供 sha256 / sha1 / md5 / sha512；按各格式约定暴露 sidecar（如 Maven 的 `.sha1` / `.md5` / `.sha256` 伴随文件），下载方可据以校验完整性。sha1 / md5 主要为客户端兼容，安全完整性以 sha256 及以上为准。
@@ -245,6 +246,15 @@
   - **受保护操作质询**：受保护的 docker 操作在未认证时返回 `401 + WWW-Authenticate: Bearer realm="{基址}/v2/token",service="jianartifact",scope="repository:{仓库名}/{镜像名}:{动作}"`（写 = `pull,push`，读 = `pull`）。客户端据此到令牌端点换取范围令牌后，以 `Authorization: Bearer <token>` 重试原请求。
   - **令牌端点** `GET /v2/token`：查询参数 `service`、`scope`（形如 `repository:{name}:{actions}`，`actions` 逗号分隔，可多个 `scope`）、可选 `account`。以 `Authorization: Basic`（用户口令或 API Token）认证——无凭据按匿名、提供但无效则 `401`。对每个 `scope` 逐项判定授权，仅把通过的动作放进该 `scope` 的授予集合（仓库不存在或全拒 → 该 `scope` 授予空，不报错）。响应 `200`：`{"token","access_token","expires_in","issued_at"}`，`token` 为短期 Bearer 令牌。
   - **兼容路径**：匿名拉取 public 仓库无需用户凭据——客户端据 `/v2/` 质询透明换取仅含 public `pull` 的匿名令牌即可拉取；预先携带 `Authorization: Basic` 的请求（如 `curl -u`）继续直接生效，无需自行走令牌流。
+- **Go 模块格式**：以 Go 模块代理协议（GOPROXY）暴露，路径形如 `/{仓库名}/{模块路径}/@v/...`，供客户端配置 `GOPROXY=http://host/{仓库名}` 后 `go mod download` / `go get` 使用。模块路径中的大写字母按 GOPROXY 约定用 bang 编码表达（如 `GitHub.com/Foo` → `!git!hub.com/!foo`）。
+
+  - **版本列表** `GET /{仓库名}/{模块路径}/@v/list`：返回该模块所有版本，每行一个版本号（`text/plain`）；无版本返回空 `200`。
+  - **版本元信息** `GET /{仓库名}/{模块路径}/@v/{version}.info`：返回 JSON `{"Version":"v1.2.3","Time":"<RFC3339>"}`。
+  - **go.mod** `GET /{仓库名}/{模块路径}/@v/{version}.mod`：返回该版本 go.mod 文本（`text/plain`）。
+  - **模块 zip** `GET /{仓库名}/{模块路径}/@v/{version}.zip`：返回模块 zip（内部布局 `{module}@{version}/...`，`application/zip`）。
+  - **最新版本** `GET /{仓库名}/{模块路径}/@latest`：返回最新版本的 info JSON（按语义版本排序取最大；hosted 据已存版本，proxy 回源上游）。
+  - **hosted 上传约定**（Go 无原生 publish，本项目据下载端点对称定义）：`PUT /{仓库名}/{模块路径}/@v/{version}.{mod|zip|info}` 上传对应文件；`.info` 可不传，服务端在取 `.info` / `@v/list` / `@latest` 时按已存 `.mod` 视为版本存在并以其 `created_at` 合成 `Time`。
+  - **proxy**：`.mod` / `.zip` / `.info` 走 cache-miss → 回源 → 校验 → 落盘 → 写索引、命中不回源、并发单飞合并；`@v/list` 与 `@latest` 为易变聚合文档，每次回源透传不缓存。
 - **Raw 通用文件格式**：以路径直存直取暴露，路径形如 `/{仓库名}/{任意文件路径}`，支持 `curl PUT` / `curl GET`，流式上传下载，大文件不整体载入内存。
 
 ## 4. P2 规划端点（当前未实现，仅记录契约方向）

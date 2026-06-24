@@ -7,8 +7,9 @@
 
 use crate::meta::{MetaError, MetaStore, NewRepository, RepoType, RepositoryRecord, Visibility};
 
-/// 第一期支持的格式集合（FR-14~17）。其余格式属后续阶段，提前接受即越界。
-const SUPPORTED_FORMATS: [&str; 4] = ["maven", "npm", "docker", "raw"];
+/// 已实现并可创建仓库的格式集合（P1 的 FR-14~17 + P2 的 FR-28 Go）。
+/// 其余格式由各自批次实现后在此登记，未实现格式不提前接受（越界）。
+const SUPPORTED_FORMATS: [&str; 5] = ["maven", "npm", "docker", "raw", "go"];
 
 /// 仓库生命周期错误。
 #[derive(Debug, thiserror::Error)]
@@ -131,7 +132,7 @@ pub async fn delete(meta: &MetaStore, id: &str) -> Result<bool, RepoError> {
     Ok(deleted)
 }
 
-/// 归一化并校验格式：大小写不敏感，仅接受第一期四种格式。
+/// 归一化并校验格式：大小写不敏感，仅接受已实现并登记的格式。
 fn normalize_format(s: &str) -> Result<String, RepoError> {
     let lower = s.to_ascii_lowercase();
     if SUPPORTED_FORMATS.contains(&lower.as_str()) {
@@ -197,6 +198,16 @@ mod tests {
         let meta = MetaStore::open_in_memory().await.unwrap();
         let err = create(&meta, 入参("x", "cargo", "hosted", "public", None)).await;
         assert!(matches!(err, Err(RepoError::Invalid(_))));
+    }
+
+    #[tokio::test]
+    async fn 创建_go_格式仓库被接受() {
+        // FR-28：Go 已实现并登记进受支持格式，应可创建仓库（大小写不敏感）
+        let meta = MetaStore::open_in_memory().await.unwrap();
+        let rec = create(&meta, 入参("gomod", "Go", "hosted", "public", None))
+            .await
+            .unwrap();
+        assert_eq!(rec.format, "go");
     }
 
     #[tokio::test]
