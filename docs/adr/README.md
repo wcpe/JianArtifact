@@ -17,6 +17,9 @@
 | 0011 | 会话与 JWT 生命周期：TTL + 刷新端点 + 按承载方式的 CSRF 防护，与 API Token 相互独立 | 已接受 |
 | 0012 | 漏洞库离线对接：本地镜像 OSV 等公开漏洞数据 + 坐标级本地匹配，不逐包外发（P2）；Docker 层扫描留 P3 | 已接受 |
 | 0013 | Docker Registry v2 Bearer 令牌认证：`/v2/token` 范围令牌端点 + 401 Bearer 质询，复用会话 JWT 的 HS256 密钥，匿名 public 读保持 tokenless | 已接受 |
+| 0014 | S3 兼容对象存储后端：经 `BlobStore` 抽象新增可选 opt-in 的 `S3Store`（Cargo `s3` 特性默认关 + 配置 `data.storage.backend`，客户端 aws-sdk-s3 裁 rustls），扩展 ADR-0002，本地 FS 仍默认（P2） | 已接受 |
+| 0015 | 可观测性：审计日志经 `meta` 异步落 SQLite（保留期 + 行数轮转、脱敏）+ Prometheus 指标进程内 `metrics`/exporter 经 `GET /metrics` 被动 pull（默认仅 Admin），默认不外发不 phone-home（P2） | 已接受 |
+| 0016 | 认证 provider 抽象 + OIDC（授权码流+PKCE）/LDAP（bind）：落地 ADR-0003 预留边界，只在登录入口接入并收敛为本地会话/JWT，四通道与鉴权矩阵不变，JIT 默认关、默认角色 User，不破 ADR-0010（P2） | 已接受 |
 
 > 模板：状态 / 背景 / 决策 / 理由 / 后果 / 备选方案。
 
