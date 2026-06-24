@@ -176,11 +176,30 @@ impl<S: BlobStore, U: Upstream> ArtifactService<S, U> {
 
     /// 读取制品（FR-11/12）：hosted / proxy-cache-hit 直接流式返回；
     /// proxy cache-miss 经单飞合并回源 → 校验落盘 → 写索引 → 返回。
+    ///
+    /// proxy 回源时以 `coords.path` 作为上游相对路径（存储键即上游路径，适用于 npm/maven/raw
+    /// 等存储布局与上游一致的格式）。若上游下载路径与本仓库存储键不一致（如 Cargo `.crate`
+    /// 的上游下载 API 路径异于本地存储键），用 [`Self::get_with_upstream_path`] 指定上游相对路径。
     pub async fn get(
         &self,
         repo: &RepositoryRecord,
         format: &dyn Format,
         coords: &ArtifactCoordinates,
+    ) -> Result<(ReadHandle, ArtifactKind), ServiceError> {
+        self.get_with_upstream_path(repo, format, coords, None)
+            .await
+    }
+
+    /// 读取制品，proxy 回源时可指定与存储键不同的上游相对路径。
+    ///
+    /// `upstream_rel_path` 为 None 时回退为 `coords.path`（与 [`Self::get`] 一致）。
+    /// 缓存命中判定、落盘与索引写入始终以 `coords.path` 为存储键，仅上游拉取路径可被覆盖。
+    pub async fn get_with_upstream_path(
+        &self,
+        repo: &RepositoryRecord,
+        format: &dyn Format,
+        coords: &ArtifactCoordinates,
+        upstream_rel_path: Option<&str>,
     ) -> Result<(ReadHandle, ArtifactKind), ServiceError> {
         // 缓存 / 本地命中：直接流式返回
         if let Some(record) = self.meta.get_artifact(&repo.id, &coords.path).await? {
@@ -197,8 +216,10 @@ impl<S: BlobStore, U: Upstream> ArtifactService<S, U> {
             .as_deref()
             .ok_or(ServiceError::Upstream)?
             .to_string();
+        // 上游相对路径：默认与存储键一致，可被显式覆盖（如 Cargo .crate 下载 API 路径）
+        let rel_path = upstream_rel_path.unwrap_or(&coords.path).to_string();
 
-        self.fetch_and_cache(repo, format, coords, &upstream_url)
+        self.fetch_and_cache(repo, format, coords, &upstream_url, &rel_path)
             .await
     }
 
@@ -209,13 +230,14 @@ impl<S: BlobStore, U: Upstream> ArtifactService<S, U> {
         format: &dyn Format,
         coords: &ArtifactCoordinates,
         upstream_url: &str,
+        upstream_rel_path: &str,
     ) -> Result<(ReadHandle, ArtifactKind), ServiceError> {
-        // 单飞键：仓库 + 路径，合并同一制品的并发回源（IO 在 leader 锁外执行）
+        // 单飞键：仓库 + 存储键，合并同一制品的并发回源（IO 在 leader 锁外执行）
         let key = format!("{}\u{0}{}", repo.id, coords.path);
         let result = self
             .single_flight
             .run(&key, || {
-                self.do_fetch_and_cache(repo, format, coords, upstream_url)
+                self.do_fetch_and_cache(repo, format, coords, upstream_url, upstream_rel_path)
             })
             .await;
 
@@ -248,6 +270,7 @@ impl<S: BlobStore, U: Upstream> ArtifactService<S, U> {
         format: &dyn Format,
         coords: &ArtifactCoordinates,
         upstream_url: &str,
+        upstream_rel_path: &str,
     ) -> Result<String, String> {
         // 单飞窗口内可能已有其他 leader 落定过：再查一次缓存，命中则直接复用
         match self.meta.get_artifact(&repo.id, &coords.path).await {
@@ -256,10 +279,10 @@ impl<S: BlobStore, U: Upstream> ArtifactService<S, U> {
             Err(e) => return Err(e.to_string()),
         }
 
-        // 拉取上游字节流（锁外 IO）
+        // 拉取上游字节流（锁外 IO）；上游相对路径可异于本地存储键（如 Cargo .crate 下载 API）
         let body = self
             .upstream
-            .fetch(upstream_url, &coords.path)
+            .fetch(upstream_url, upstream_rel_path)
             .await
             .map_err(|e: UpstreamError| e.to_string())?;
 

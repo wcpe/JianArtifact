@@ -231,6 +231,7 @@
 - Docker：同一 tag 允许覆盖（符合 Docker 习惯），manifest 按 digest 寻址与去重。
 - Go：模块版本一经发布即不可变（重复上传同 `{module}@{version}` 的 `.mod` / `.zip` / `.info` 返回 `409`）。
 - Raw：同路径文件允许覆盖。
+- Cargo：已发布版本不可覆盖（重复发布同 `name`+`vers` 返回 `409`）；索引文件随新版本追加更新；yank/unyank 仅翻转索引 `yanked` 标记、不删 `.crate`。
 
 **校验和**：每个制品计算并提供 sha256 / sha1 / md5 / sha512；按各格式约定暴露 sidecar（如 Maven 的 `.sha1` / `.md5` / `.sha256` 伴随文件），下载方可据以校验完整性。sha1 / md5 主要为客户端兼容，安全完整性以 sha256 及以上为准。
 
@@ -256,6 +257,13 @@
   - **hosted 上传约定**（Go 无原生 publish，本项目据下载端点对称定义）：`PUT /{仓库名}/{模块路径}/@v/{version}.{mod|zip|info}` 上传对应文件；`.info` 可不传，服务端在取 `.info` / `@v/list` / `@latest` 时按已存 `.mod` 视为版本存在并以其 `created_at` 合成 `Time`。
   - **proxy**：`.mod` / `.zip` / `.info` 走 cache-miss → 回源 → 校验 → 落盘 → 写索引、命中不回源、并发单飞合并；`@v/list` 与 `@latest` 为易变聚合文档，每次回源透传不缓存。
 - **Raw 通用文件格式**：以路径直存直取暴露，路径形如 `/{仓库名}/{任意文件路径}`，支持 `curl PUT` / `curl GET`，流式上传下载，大文件不整体载入内存。
+- **Cargo 格式**：以 Cargo 稀疏索引（sparse registry）协议暴露，供 `cargo publish` / 依赖解析 / 下载使用。
+  - **registry 配置** `GET /{仓库名}/config.json`：返回 `{"dl":"{基址}/{仓库名}/api/v1/crates","api":"{基址}/{仓库名}"}`，把下载与 API 都指回本仓库（proxy 同样指回本仓库）。
+  - **稀疏索引** `GET /{仓库名}/{索引路径}`：返回某包索引文件（每行一个版本的 JSON：`name`/`vers`/`deps`/`cksum`=sha256(.crate) hex/`features`/`yanked`）。索引路径按包名长度分目录（1→`1/{name}`、2→`2/{name}`、3→`3/{name[0]}/{name}`、≥4→`{name[0..2]}/{name[2..4]}/{name}`，均小写）；proxy cache-miss 回源上游索引（不缓存，索引易变）。
+  - **下载** `GET /{仓库名}/api/v1/crates/{name}/{version}/download`：返回 `.crate` 字节，proxy cache-miss 回源并缓存、命中不回源。
+  - **发布** `PUT /{仓库名}/api/v1/crates/new`：请求体为二进制（4 字节 LE 长度前缀 + metadata JSON + 4 字节 LE 长度前缀 + `.crate` 字节）；落 `.crate` 得 sha256、把该版本追加进索引，返回 `{"warnings":{"invalid_categories":[],"invalid_badges":[],"other":[]}}`。同 `name`+`vers` 已发布不可覆盖（重复发布返回 `409`）。
+  - **yank / unyank** `DELETE /{仓库名}/api/v1/crates/{name}/{version}/yank`（置 `yanked=true`）、`PUT /{仓库名}/api/v1/crates/{name}/{version}/unyank`（置 `yanked=false`）：翻转索引行的 `yanked` 标记、不删 blob，返回 `{"ok":true}`。
+  - **认证**：以 `Authorization: Bearer <API Token>` 鉴权；发布 / yank 需写权限，读受 visibility / ACL，private 对无权一律 404。
 
 ## 4. P2 规划端点（当前未实现，仅记录契约方向）
 

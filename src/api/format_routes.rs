@@ -32,6 +32,15 @@ const GO_FORMAT: &str = "go";
 /// npm tarball 在包内的目录分隔段（npm 协议固定为 `-`）。
 const NPM_TARBALL_SEGMENT: &str = "/-/";
 
+/// cargo 格式名：据此把 cargo 仓库的请求分派到其稀疏索引协议处理。
+const CARGO_FORMAT: &str = "cargo";
+
+/// cargo 发布 API 子路径。
+const CARGO_PUBLISH_PATH: &str = "api/v1/crates/new";
+
+/// cargo yank/unyank API 子路径前缀。
+const CARGO_API_PREFIX: &str = "api/v1/crates/";
+
 /// 分派 npm 读请求：含 `/-/` 段者为 tarball 下载，否则为 packument 获取。
 ///
 /// 仅做协议分派，业务在 `npm_routes`；不在此写 npm 业务逻辑。
@@ -48,6 +57,38 @@ async fn get_npm(
         // packument：`{包名}`
         None => super::npm_routes::get_packument(state, repo, path).await,
     }
+}
+
+/// 分派 cargo PUT 请求：`api/v1/crates/new` 为发布；`.../{name}/{version}/unyank` 为取消 yank。
+///
+/// 仅做协议分派，业务在 `cargo_routes`；不在此写 cargo 业务逻辑。
+async fn put_cargo(
+    state: &AppState,
+    repo: &RepositoryRecord,
+    path: &str,
+    body: Body,
+) -> Result<Response, ApiError> {
+    if path == CARGO_PUBLISH_PATH {
+        return super::cargo_routes::publish(state, repo, body).await;
+    }
+    // unyank：api/v1/crates/{name}/{version}/unyank
+    if let Some((name, version)) = parse_cargo_yank_path(path, "unyank") {
+        return super::cargo_routes::set_yanked(state, repo, &name, &version, false).await;
+    }
+    Err(ApiError::BadRequest(
+        "不支持的 cargo 写请求路径".to_string(),
+    ))
+}
+
+/// 解析 cargo yank/unyank 子路径 `api/v1/crates/{name}/{version}/{action}` → (name, version)。
+fn parse_cargo_yank_path(path: &str, action: &str) -> Option<(String, String)> {
+    let rest = path.strip_prefix(CARGO_API_PREFIX)?;
+    let stripped = rest.strip_suffix(&format!("/{action}"))?;
+    let (name, version) = stripped.split_once('/')?;
+    if name.is_empty() || version.is_empty() {
+        return None;
+    }
+    Some((name.to_string(), version.to_string()))
 }
 
 /// 上传制品（PUT）：写授权后流式落 blob 并写索引，按格式覆盖策略处理重复。
@@ -68,6 +109,10 @@ pub async fn put_artifact(
     // Go 上传走 GOPROXY 约定端点（PUT {module}/@v/{version}.{mod|zip|info}）
     if repo.format == GO_FORMAT {
         return super::go_routes::put(&state, &repo, &path, body).await;
+    }
+    // cargo 发布 / unyank 走其稀疏索引协议（请求体为二进制 publish 体或 unyank 无体）
+    if repo.format == CARGO_FORMAT {
+        return put_cargo(&state, &repo, &path, body).await;
     }
     let format = state
         .formats
@@ -112,6 +157,10 @@ pub async fn get_artifact(
     if repo.format == GO_FORMAT {
         return super::go_routes::get(&state, &repo, &path).await;
     }
+    // cargo 读走其稀疏索引协议：config.json / 下载 / 索引文件由 cargo_routes 内部分派
+    if repo.format == CARGO_FORMAT {
+        return super::cargo_routes::get(&state, &repo, &path).await;
+    }
     let format = state
         .formats
         .get(&repo.format)
@@ -148,6 +197,15 @@ pub async fn delete_artifact(
     Path((repo_name, path)): Path<(String, String)>,
 ) -> Result<Response, ApiError> {
     let repo = resolve_writable_repo(&state, &identity, &repo_name).await?;
+    // cargo 的 DELETE 用于 yank：api/v1/crates/{name}/{version}/yank
+    if repo.format == CARGO_FORMAT {
+        if let Some((name, version)) = parse_cargo_yank_path(&path, "yank") {
+            return super::cargo_routes::set_yanked(&state, &repo, &name, &version, true).await;
+        }
+        return Err(ApiError::BadRequest(
+            "不支持的 cargo 删除请求路径".to_string(),
+        ));
+    }
     let format = state
         .formats
         .get(&repo.format)

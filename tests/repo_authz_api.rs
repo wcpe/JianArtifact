@@ -251,7 +251,7 @@ async fn 创建非法格式_400() {
             "POST",
             "/api/v1/repositories",
             Some(&auth),
-            json!({ "name": "x", "format": "cargo", "type": "hosted", "visibility": "public" }),
+            json!({ "name": "x", "format": "pypi", "type": "hosted", "visibility": "public" }),
         ),
     )
     .await;

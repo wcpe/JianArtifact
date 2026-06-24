@@ -39,6 +39,7 @@ const FORMAT_OPTIONS: { value: RepoFormat; label: string }[] = [
   { value: 'npm', label: 'npm' },
   { value: 'docker', label: 'Docker / OCI' },
   { value: 'raw', label: 'Raw 通用文件' },
+  { value: 'cargo', label: 'Cargo' },
 ];
 
 /** 仓库管理页面。 */

@@ -40,7 +40,8 @@ pub async fn identity_layer(
 
 /// 从 `Authorization` 头值解析身份；任何无效 / 缺失凭据都回退为匿名。
 ///
-/// 解析顺序：Bearer → 先按 JWT 校验，失败再按 API Token 校验；Basic → 口令或 Token。
+/// 解析顺序：Bearer → 先按 JWT 校验，失败再按 API Token 校验；Basic → 口令或 Token；
+/// 无识别 scheme 前缀时，按 Cargo registry 约定把整个头值当作裸 API Token 校验。
 /// 命中的用户若已禁用，则不授予身份（按匿名处理），避免禁用账户继续访问。
 pub async fn resolve_identity(
     meta: &MetaStore,
@@ -54,8 +55,15 @@ pub async fn resolve_identity(
         if let Some(creds) = auth::parse_basic_auth(header_value) {
             return resolve_basic(meta, &creds.username, &creds.secret).await;
         }
+        return AuthIdentity::Anonymous;
     }
-    AuthIdentity::Anonymous
+    // 无 Bearer / Basic scheme：Cargo registry 客户端把 API Token 裸放进 Authorization 头
+    // （`Authorization: <token>`，无 scheme 前缀），按 API Token 校验；非法则回退匿名。
+    let raw = header_value.trim();
+    if raw.is_empty() {
+        return AuthIdentity::Anonymous;
+    }
+    resolve_api_token(meta, raw).await
 }
 
 /// 解析 Bearer：先试 JWT（会话），失败再试 API Token。
@@ -154,6 +162,30 @@ mod tests {
 
         let id = resolve_identity(&meta, &jwt, &format!("Bearer {token}")).await;
         assert_eq!(id.user().unwrap().username, "dev");
+    }
+
+    #[tokio::test]
+    async fn 裸_token_通道解析身份() {
+        // Cargo registry 把 API Token 裸放进 Authorization 头（无 Bearer/Basic 前缀）
+        let meta = 新建库().await;
+        let jwt = 测试签名器();
+        let uid = meta
+            .create_user("dev", &hash_password("pw").unwrap(), Role::User)
+            .await
+            .unwrap();
+        let token = generate_api_token();
+        meta.create_token(&uid, "cargo", &hash_api_token(&token))
+            .await
+            .unwrap();
+
+        // 裸 Token（无 scheme 前缀）应解析出对应身份
+        let id = resolve_identity(&meta, &jwt, &token).await;
+        assert_eq!(id.user().unwrap().username, "dev");
+        // 非法裸 Token 回退匿名
+        assert_eq!(
+            resolve_identity(&meta, &jwt, "不是有效的裸令牌").await,
+            AuthIdentity::Anonymous
+        );
     }
 
     #[tokio::test]

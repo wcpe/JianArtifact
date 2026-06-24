@@ -31,14 +31,15 @@ pub fn parse_basic_auth(header_value: &str) -> Option<BasicCredentials> {
 }
 
 /// 大小写不敏感地剥离方案前缀（如 `Basic ` / `Bearer `），返回其后内容。
+///
+/// 用 `get(..prefix_len)` 取前缀，前缀长度落在多字节字符内部时返回 None（避免 `split_at`
+/// 在非字符边界 panic）；方案前缀本身为 ASCII，正常请求不受影响。
 pub fn strip_scheme_prefix<'a>(header_value: &'a str, scheme_with_space: &str) -> Option<&'a str> {
     let prefix_len = scheme_with_space.len();
-    if header_value.len() < prefix_len {
-        return None;
-    }
-    let (head, tail) = header_value.split_at(prefix_len);
+    let head = header_value.get(..prefix_len)?;
     if head.eq_ignore_ascii_case(scheme_with_space) {
-        Some(tail)
+        // 前缀为 ASCII，命中后 prefix_len 必为字符边界，切片安全
+        Some(&header_value[prefix_len..])
     } else {
         None
     }
@@ -92,5 +93,13 @@ mod tests {
         assert_eq!(strip_scheme_prefix("Bearer xyz", "Bearer "), Some("xyz"));
         assert_eq!(strip_scheme_prefix("bearer xyz", "Bearer "), Some("xyz"));
         assert_eq!(strip_scheme_prefix("Basic xyz", "Bearer "), None);
+    }
+
+    #[test]
+    fn 前缀长度落在多字节字符内不_panic() {
+        // 头值短于前缀且首字符多字节：get(..7) 落在字符内部，应返回 None 而非 panic
+        assert_eq!(strip_scheme_prefix("不是有效令牌", "Bearer "), None);
+        assert_eq!(strip_scheme_prefix("中", "Basic "), None);
+        assert_eq!(strip_scheme_prefix("", "Bearer "), None);
     }
 }

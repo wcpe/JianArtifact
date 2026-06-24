@@ -28,6 +28,7 @@ use crate::storage::LocalFsStore;
 mod acl;
 mod artifacts;
 mod auth_routes;
+mod cargo_routes;
 mod docker_routes;
 mod format_routes;
 mod go_routes;
