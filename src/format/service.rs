@@ -249,6 +249,87 @@ impl<S: BlobStore, U: Upstream> ArtifactService<S, U> {
         Ok(record)
     }
 
+    /// 迁移搬运：把源 hosted 仓库的制品按字节流写入本仓库（FR-39）。
+    ///
+    /// 与 hosted 直传（[`Self::put_hosted`]）共用同一不变量——**blob 先落盘并校验 sha256，
+    /// 再写元数据索引（`cached = false`，hosted 正常制品语义）**；写索引失败回滚 blob，不留孤儿。
+    /// 区别在于字节来源是迁移搬运的本地输入流，而非客户端直传。仅适用于 hosted 仓库。
+    ///
+    /// 幂等：同坐标已存在同 sha256 索引时跳过落盘与写索引，直接返回既有记录（搬运可重入）。
+    /// 覆盖策略：同坐标已存在但 sha256 不同时，按 [`Format::can_overwrite`] 判定——不允许覆盖
+    /// （如 Maven release）则返回 [`ServiceError::OverwriteForbidden`]，由搬运编排据此跳过该制品
+    /// 而不中断整批；允许覆盖（如 Raw / Docker tag）则落定新内容。
+    pub async fn ingest_hosted<R>(
+        &self,
+        repo: &RepositoryRecord,
+        format: &dyn Format,
+        coords: &ArtifactCoordinates,
+        reader: R,
+        max_size: Option<u64>,
+    ) -> Result<ArtifactRecord, ServiceError>
+    where
+        R: AsyncRead + Unpin + Send,
+    {
+        if RepoType::from_db_str(&repo.r#type) != RepoType::Hosted {
+            return Err(ServiceError::InvalidOperation(
+                "只能向 hosted 仓库搬运制品".to_string(),
+            ));
+        }
+
+        // ① 流式落 blob：边写边算四摘要，超限在写入途中即拒（BlobStore 清理半截临时文件）
+        let limited = LimitedReader::new(reader, max_size);
+        let digests = match self.store.put(limited).await {
+            Ok(d) => d,
+            Err(StorageError::Io(e)) if is_too_large(&e) => {
+                return Err(ServiceError::TooLarge);
+            }
+            Err(e) => return Err(e.into()),
+        };
+
+        // 幂等 / 覆盖判定：先按既有制品决定是复用、覆盖还是拒绝，再决定是否写索引
+        if let Some(existing) = self.meta.get_artifact(&repo.id, &coords.path).await? {
+            // 同坐标同内容：本次搬运为重入，清理多余落盘后复用既有记录
+            if existing.sha256 == digests.sha256 {
+                self.rollback_blob(&digests.sha256).await;
+                return Ok(existing);
+            }
+            // 同坐标不同内容：按格式覆盖策略判定；不可覆盖则回滚本次落盘并报错（交编排跳过）
+            if !format.can_overwrite(&existing) {
+                self.rollback_blob(&digests.sha256).await;
+                return Err(ServiceError::OverwriteForbidden);
+            }
+        }
+
+        // ② 写元数据索引（cached = false，hosted 正常制品）；失败回滚 blob，不留孤儿
+        let content_type = format.content_type(coords);
+        if let Err(e) = self
+            .meta
+            .upsert_artifact(NewArtifact {
+                repo_id: &repo.id,
+                path: &coords.path,
+                size: digests.size as i64,
+                sha256: &digests.sha256,
+                sha1: &digests.sha1,
+                md5: &digests.md5,
+                sha512: &digests.sha512,
+                content_type: content_type.as_deref(),
+                cached: false,
+            })
+            .await
+        {
+            self.rollback_blob(&digests.sha256).await;
+            return Err(e.into());
+        }
+
+        let record = self
+            .meta
+            .get_artifact(&repo.id, &coords.path)
+            .await?
+            .ok_or(ServiceError::NotFound)?;
+        tracing::info!(仓库 = %repo.name, 路径 = %coords.path, "已搬运 hosted 制品");
+        Ok(record)
+    }
+
     /// 读取制品（FR-11/12）：hosted / proxy-cache-hit 直接流式返回；
     /// proxy cache-miss 经单飞合并回源 → 校验落盘 → 写索引 → 返回。
     ///
@@ -1019,6 +1100,189 @@ mod tests {
             use digest::Digest;
             let mut h = sha2::Sha256::new();
             h.update(b"orphan-migrate");
+            format!("{:x}", h.finalize())
+        };
+        assert!(!svc.store.exists(&sha).await.unwrap());
+    }
+
+    // ---------- 迁移搬运（hosted）：blob 先落盘再写索引、回滚、幂等、覆盖语义（FR-39）----------
+
+    #[tokio::test]
+    async fn 搬运_hosted_制品后可读回且非缓存() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (svc, meta, _dir) = 新建服务(MockUpstream::new(b"", calls)).await;
+        let repo = 建仓库(&meta, "h", RepoType::Hosted, None).await;
+        let coords = 坐标("a/b.bin");
+
+        let rec = svc
+            .ingest_hosted(&repo, &RawFormat, &coords, &b"hosted-migrated"[..], None)
+            .await
+            .unwrap();
+        // hosted 制品非缓存
+        assert_eq!(rec.cached, 0);
+        assert_eq!(rec.size, 15);
+
+        // 读回内容一致、命中本地（hosted 不回源）
+        let (mut h, kind) = svc.get(&repo, &RawFormat, &coords).await.unwrap();
+        assert_eq!(kind, ArtifactKind::Local);
+        let mut buf = Vec::new();
+        h.blob.read_to_end(&mut buf).await.unwrap();
+        assert_eq!(buf, b"hosted-migrated");
+    }
+
+    #[tokio::test]
+    async fn 搬运至非_hosted_仓库被拒() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (svc, meta, _dir) = 新建服务(MockUpstream::new(b"", calls)).await;
+        let repo = 建仓库(&meta, "p", RepoType::Proxy, Some("https://up.example")).await;
+        let err = svc
+            .ingest_hosted(&repo, &RawFormat, &坐标("x"), &b"y"[..], None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::InvalidOperation(_)));
+    }
+
+    #[tokio::test]
+    async fn 搬运_hosted_幂等重入同坐标同内容不重复写() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (svc, meta, _dir) = 新建服务(MockUpstream::new(b"", calls)).await;
+        let repo = 建仓库(&meta, "h", RepoType::Hosted, None).await;
+        let coords = 坐标("dup.bin");
+
+        let r1 = svc
+            .ingest_hosted(&repo, &RawFormat, &coords, &b"same"[..], None)
+            .await
+            .unwrap();
+        // 重入：同坐标同内容，复用既有记录、索引仍只一条
+        let r2 = svc
+            .ingest_hosted(&repo, &RawFormat, &coords, &b"same"[..], None)
+            .await
+            .unwrap();
+        assert_eq!(r1.sha256, r2.sha256);
+        assert_eq!(
+            meta.list_artifacts_by_repo(&repo.id).await.unwrap().len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn 搬运_hosted_不可覆盖时报覆盖禁止() {
+        use crate::format::MavenFormat;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (svc, meta, _dir) = 新建服务(MockUpstream::new(b"", calls)).await;
+        // Maven hosted 仓库（格式字段 raw 无关紧要，搬运按传入的 format 判定覆盖）
+        let repo = 建仓库(&meta, "mvn", RepoType::Hosted, None).await;
+        // release 主构件路径，Maven 判定不可覆盖
+        let coords = 坐标("com/foo/lib/1.0/lib-1.0.jar");
+
+        svc.ingest_hosted(&repo, &MavenFormat, &coords, &b"v1"[..], None)
+            .await
+            .unwrap();
+        // 同坐标不同内容：release 不可覆盖，报 OverwriteForbidden（编排据此跳过）
+        let err = svc
+            .ingest_hosted(&repo, &MavenFormat, &coords, &b"v2-changed"[..], None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::OverwriteForbidden));
+        // 索引仍是原内容、仅一条；不可覆盖的落盘已回滚不留孤儿
+        let rec = meta
+            .get_artifact(&repo.id, &coords.path)
+            .await
+            .unwrap()
+            .unwrap();
+        let sha_v2 = {
+            use digest::Digest;
+            let mut h = sha2::Sha256::new();
+            h.update(b"v2-changed");
+            format!("{:x}", h.finalize())
+        };
+        assert_ne!(rec.sha256, sha_v2);
+        assert!(!svc.store.exists(&sha_v2).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn 搬运_hosted_可覆盖时落定新内容() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (svc, meta, _dir) = 新建服务(MockUpstream::new(b"", calls)).await;
+        let repo = 建仓库(&meta, "h", RepoType::Hosted, None).await;
+        let coords = 坐标("f.bin");
+
+        svc.ingest_hosted(&repo, &RawFormat, &coords, &b"v1"[..], None)
+            .await
+            .unwrap();
+        // Raw 允许覆盖：搬运不同内容应落定新值，索引仍只一条
+        svc.ingest_hosted(&repo, &RawFormat, &coords, &b"v2-new"[..], None)
+            .await
+            .unwrap();
+        assert_eq!(
+            meta.list_artifacts_by_repo(&repo.id).await.unwrap().len(),
+            1
+        );
+        let (mut h, _) = svc.get(&repo, &RawFormat, &coords).await.unwrap();
+        let mut buf = Vec::new();
+        h.blob.read_to_end(&mut buf).await.unwrap();
+        assert_eq!(buf, b"v2-new");
+    }
+
+    #[tokio::test]
+    async fn 搬运_hosted_超限拒绝_413_且不留半截_blob() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (svc, meta, dir) = 新建服务(MockUpstream::new(b"", calls)).await;
+        let repo = 建仓库(&meta, "h", RepoType::Hosted, None).await;
+        let coords = 坐标("big.bin");
+
+        let err = svc
+            .ingest_hosted(&repo, &RawFormat, &coords, &b"0123456789"[..], Some(4))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::TooLarge));
+        assert!(meta
+            .get_artifact(&repo.id, "big.bin")
+            .await
+            .unwrap()
+            .is_none());
+        // 无落定 blob 桶
+        let blobs = dir.path().join("blobs");
+        let mut dirs = tokio::fs::read_dir(&blobs).await.unwrap();
+        let mut 桶数 = 0;
+        while let Some(e) = dirs.next_entry().await.unwrap() {
+            if e.file_name() != "tmp" {
+                桶数 += 1;
+            }
+        }
+        assert_eq!(桶数, 0, "超限不应留下任何落定 blob");
+    }
+
+    #[tokio::test]
+    async fn 搬运_hosted_写索引失败回滚_blob_无孤儿() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (svc, _meta, _dir) = 新建服务(MockUpstream::new(b"", calls)).await;
+        // id 不存在的 hosted 仓库记录：写索引外键失败，触发 blob 回滚
+        let ghost = RepositoryRecord {
+            id: "不存在的仓库id".to_string(),
+            name: "ghost".to_string(),
+            format: "raw".to_string(),
+            r#type: "hosted".to_string(),
+            visibility: "public".to_string(),
+            upstream_url: None,
+            upstream_auth_ref: None,
+            created_at: "now".to_string(),
+        };
+        let err = svc
+            .ingest_hosted(
+                &ghost,
+                &RawFormat,
+                &坐标("p.bin"),
+                &b"orphan-hosted"[..],
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::Meta(_)));
+        let sha = {
+            use digest::Digest;
+            let mut h = sha2::Sha256::new();
+            h.update(b"orphan-hosted");
             format!("{:x}", h.finalize())
         };
         assert!(!svc.store.exists(&sha).await.unwrap());

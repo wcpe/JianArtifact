@@ -1,8 +1,9 @@
-//! Nexus OSS 迁移入口端点的 HTTP 集成测试（FR-36 / FR-37，ADR-0006）。
+//! Nexus OSS 迁移入口端点的 HTTP 集成测试（FR-36 / FR-37 / FR-39，ADR-0006）。
 //!
 //! 重点覆盖鉴权边界（匿名 401 / 非管理员 403 / 管理员放行）与错误映射
-//! （在线：凭据引用缺失 400、连接源系统失败 502；离线：路径不存在 / 非法 400）。
-//! 响应 / 元数据解析的正确性由 `migrate` 模块单测穷举覆盖；本文件不依赖真实 Nexus 实例。
+//! （在线：凭据引用缺失 400、连接源系统失败 502；离线：路径不存在 / 非法 400；
+//! hosted 搬运：`offline_path` 为空 400）。响应 / 元数据解析与搬运编排（建仓 / blob 先落盘
+//! 再写索引 / 覆盖语义 / 幂等）的正确性由 `migrate` 模块单测穷举覆盖；本文件不依赖真实 Nexus 实例。
 
 use std::sync::Arc;
 
@@ -80,6 +81,11 @@ fn preview_req(auth: Option<&str>, body: Value) -> Request<Body> {
 /// 构造带 JSON 体的离线 blob store 预览请求。
 fn offline_req(auth: Option<&str>, body: Value) -> Request<Body> {
     json_post("/api/v1/migrate/nexus/offline/preview", auth, body)
+}
+
+/// 构造带 JSON 体的 hosted 仓库搬运请求。
+fn hosted_migrate_req(auth: Option<&str>, body: Value) -> Request<Body> {
+    json_post("/api/v1/migrate/nexus/hosted/migrate", auth, body)
 }
 
 /// 构造带可选认证头的 JSON POST 请求。
@@ -263,6 +269,53 @@ async fn 离线预览空路径返回_400() {
     let (status, body) = send(
         build_router(state),
         offline_req(Some(&format!("Bearer {token}")), json!({ "path": "   " })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body}");
+}
+
+// ---------- hosted 仓库搬运端点（FR-39）鉴权与校验边界 ----------
+
+#[tokio::test]
+async fn hosted_搬运匿名返回_401() {
+    let (state, _dir) = 测试用状态().await;
+    let (status, _) = send(
+        build_router(state),
+        hosted_migrate_req(
+            None,
+            json!({ "base_url": "https://nexus.example", "offline_path": "/whatever" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn hosted_搬运普通用户返回_403() {
+    let (state, _dir) = 测试用状态().await;
+    let token = seed_and_login(&state, "user", "pw", Role::User).await;
+    let (status, _) = send(
+        build_router(state),
+        hosted_migrate_req(
+            Some(&format!("Bearer {token}")),
+            json!({ "base_url": "https://nexus.example", "offline_path": "/whatever" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn hosted_搬运管理员空_offline_path_返回_400() {
+    let (state, _dir) = 测试用状态().await;
+    let token = seed_and_login(&state, "admin", "pw", Role::Admin).await;
+    // offline_path 为空白应在调用源系统前以 400 短路
+    let (status, body) = send(
+        build_router(state),
+        hosted_migrate_req(
+            Some(&format!("Bearer {token}")),
+            json!({ "base_url": "https://nexus.example", "offline_path": "   " }),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body}");

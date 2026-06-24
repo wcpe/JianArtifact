@@ -7,8 +7,10 @@
 //!   从该本地目录解析磁盘布局，按 repo 枚举可迁移的 blob 及基本元数据（见 [`offline`]）。
 //! - **proxy 仓库配置 + 缓存制品搬运**（FR-38）：据在线枚举的 proxy 仓库配置在本系统建仓，
 //!   并把离线 blob store 中该仓库的缓存制品本体经既有制品机理搬运入缓存（见 [`proxy`]）。
-//!
-//! hosted 仓库制品完整搬运（FR-39）仍未实现，不在本模块当前范围内。
+//! - **hosted 仓库配置 + 完整制品搬运**（FR-39）：据在线枚举的 hosted 仓库配置在本系统建
+//!   hosted 仓库，并把离线 blob store 中该仓库的全部制品本体经既有制品机理搬运为正常 hosted
+//!   制品（`cached = false`，按各格式覆盖 / 不可变策略处理重复），见 [`hosted`]。至此 Nexus
+//!   迁移框架（FR-36/37/38/39）完整。
 //!
 //! 关键约束：
 //! - 凭据真源在 env / 配置，DB 仅存引用（`auth_ref`），凭据绝不入库、不进日志。
@@ -17,16 +19,47 @@
 //! - 离线入口纯文件系统读取、不依赖外部服务；解析逻辑做成无副作用纯函数便于穷举测试。
 //! - 依赖方向：本模块仅依赖 `config` 级以下，不反向依赖上层；api 层薄编排调用之。
 
+mod hosted;
 mod http;
 mod offline;
 mod proxy;
 
+pub use hosted::{migrate_hosted_repositories, HostedMigrationReport, HostedRepoMigrationOutcome};
 pub use http::HttpNexusClient;
 pub use offline::{
     enumerate_blob_entries, enumerate_blob_store, OfflineBlobEntry, OfflineBlobSummary,
     OfflineRepoSummary,
 };
 pub use proxy::{migrate_proxy_repositories, ProxyMigrationReport, RepoMigrationOutcome};
+
+/// 把 Nexus 原样格式名映射为本系统已实现的格式名；无法映射（未实现格式）返回 None。
+///
+/// 仅映射本系统当前已实现的格式（与 `repo` 模块受支持格式集合一致）；其余 Nexus 格式
+/// （如 `rubygems` / `conan` 等后续阶段格式）不映射、对应仓库整体跳过，不越界建仓。
+/// proxy（FR-38）与 hosted（FR-39）搬运共用此映射，保证格式判定一致。
+pub(crate) fn map_nexus_format(nexus_format: &str) -> Option<&'static str> {
+    match nexus_format.to_ascii_lowercase().as_str() {
+        // Nexus 的 Maven 格式标识为 maven2
+        "maven2" | "maven" => Some("maven"),
+        "npm" => Some("npm"),
+        "docker" => Some("docker"),
+        "nuget" => Some("nuget"),
+        "pypi" => Some("pypi"),
+        "go" => Some("go"),
+        "cargo" => Some("cargo"),
+        // Nexus 的 Raw 格式标识为 raw
+        "raw" => Some("raw"),
+        _ => None,
+    }
+}
+
+/// 把 Nexus blob 逻辑名归一化为本仓库内制品路径：去首部斜杠（Nexus blob-name 多以 `/` 起头）。
+///
+/// 归一化后交由对应 [`crate::format::Format::parse_path`] 做合法性校验（拒目录穿越 / 空路径）。
+/// proxy 与 hosted 搬运共用此归一化逻辑。
+pub(crate) fn normalize_blob_path(blob_name: &str) -> &str {
+    blob_name.trim_start_matches('/')
+}
 
 /// Nexus 仓库列表 REST 端点（相对其 base URL）。
 const NEXUS_REPOSITORIES_PATH: &str = "service/rest/v1/repositories";
@@ -275,6 +308,22 @@ mod tests {
             "attributes": {}
         }
     ]"#;
+
+    #[test]
+    fn 映射格式仅认已实现格式() {
+        assert_eq!(map_nexus_format("maven2"), Some("maven"));
+        assert_eq!(map_nexus_format("NPM"), Some("npm"));
+        assert_eq!(map_nexus_format("raw"), Some("raw"));
+        // 未实现格式不映射
+        assert_eq!(map_nexus_format("rubygems"), None);
+        assert_eq!(map_nexus_format("conan"), None);
+    }
+
+    #[test]
+    fn 归一化_blob_路径去首斜杠() {
+        assert_eq!(normalize_blob_path("/a/b.jar"), "a/b.jar");
+        assert_eq!(normalize_blob_path("a/b.jar"), "a/b.jar");
+    }
 
     #[test]
     fn 解析仓库列表取基本元数据并区分_proxy_上游() {

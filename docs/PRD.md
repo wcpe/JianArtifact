@@ -78,7 +78,7 @@
 | FR-36 | Nexus OSS 迁移：在线 REST API 入口 | P2 | 开发中 |
 | FR-37 | Nexus OSS 迁移：离线 blob store 入口 | P2 | 开发中 |
 | FR-38 | Nexus 迁移：proxy 仓库配置 + 缓存制品搬运 | P2 | 开发中 |
-| FR-39 | Nexus 迁移：hosted 仓库制品完整搬运 | P2 | 计划 |
+| FR-39 | Nexus 迁移：hosted 仓库制品完整搬运 | P2 | 开发中 |
 | FR-40 | RubyGems 格式 | P3 | 计划 |
 | FR-41 | Terraform 模块格式 | P3 | 计划 |
 | FR-42 | Ansible Galaxy 格式 | P3 | 计划 |
