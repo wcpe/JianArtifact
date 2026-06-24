@@ -228,6 +228,7 @@
 
 - Maven：release 版本不可覆盖（重复上传同 GAV 的 release 返回 `409 Conflict`）；snapshot 版本允许覆盖。
 - npm：已发布版本不可覆盖（重复发布同版本返回 `409`）。
+- NuGet：已发布版本不可覆盖（重复 `nuget push` 同 id+version 返回 `409`，NuGet 默认 server policy）。
 - Docker：同一 tag 允许覆盖（符合 Docker 习惯），manifest 按 digest 寻址与去重。
 - Go：模块版本一经发布即不可变（重复上传同 `{module}@{version}` 的 `.mod` / `.zip` / `.info` 返回 `409`）。
 - PyPI：已发布发行文件不可覆盖（重复上传同 `packages/{规范名}/{文件}` 返回 `409`）。
@@ -240,6 +241,11 @@
 
 - **Maven 格式**：以 Maven 仓库布局暴露，路径形如 `/{仓库名}/{groupId 路径}/{artifactId}/{version}/...`，供 `mvn deploy` / `mvn` 拉取使用；按 Maven 协议处理制品与校验和（sha256 索引）。
 - **npm 格式**：以 npm registry 协议暴露，路径形如 `/{仓库名}/{包名}`、`/{仓库名}/{包名}/-/{tarball}`，供 `npm publish` / `npm install` 使用。
+- **NuGet 格式**：以 NuGet v3 协议暴露，供 `dotnet nuget push` / `dotnet add package` 使用。客户端 source 配 `/{仓库名}/v3/index.json`。
+  - 服务索引 `GET /{仓库名}/v3/index.json`：列出本仓库 v3 资源（扁平容器 `PackageBaseAddress/3.0.0`、发布端点 `PackagePublish/2.0.0`），`@id` 指向本仓库对应端点；`proxy` 仓库回源上游服务索引后把扁平容器 `@id` 重写为指向本仓库。
+  - 扁平容器版本列表 `GET /{仓库名}/v3-flatcontainer/{id}/index.json`：返回该包所有已发布版本 `{"versions":[...]}`；`hosted` 由元数据索引动态生成，`proxy` 回源上游。
+  - 下载 `GET /{仓库名}/v3-flatcontainer/{id}/{version}/{id}.{version}.nupkg`（及同目录 `{id}.nuspec`）：流式返回；`proxy` cache-miss 回源缓存、命中不回源。id 与 version 按 NuGet 约定小写规范化。
+  - 发布 `PUT /{仓库名}/v3/package`（`nuget push`）：`multipart/form-data` 内含 .nupkg；服务端解压读取内嵌 `.nuspec` 解析 id / version，先落 .nupkg 再落 .nuspec。鉴权经 `Authorization: Basic`（用户口令或 API Token 作密码字段）。
 - **Docker / OCI 格式**：以 Docker registry v2 协议暴露，挂载于 `/v2/`，路径含仓库名与镜像名（如 `/v2/{仓库名}/{镜像名}/manifests/{ref}`、`/v2/{仓库名}/{镜像名}/blobs/{digest}`），供 `docker push` / `docker pull` 使用；错误遵循 registry v2 原生错误格式。
 
   **认证（Bearer 令牌流）**：遵循 registry v2 的"挑战-应答"令牌流。

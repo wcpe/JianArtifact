@@ -7,7 +7,7 @@ license = "Apache-2.0"
 
 [dependencies]
 # Web 框架与异步运行时（ADR-0001）
-# multipart 特性：解析 PyPI twine 的 multipart/form-data 上传体（FR-27）
+# multipart 特性：解析 PyPI twine 与 NuGet nuget push 的 multipart/form-data 上传体（FR-27 / FR-29）
 axum = { version = "0.8", features = ["multipart"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "fs", "io-util"] }
 # tower-http 中间件：请求追踪与请求 ID
@@ -60,6 +60,12 @@ futures-util = "0.3"
 rust-embed = { version = "8", default-features = false }
 # 据文件扩展名推断静态资源 Content-Type（rust-embed 提供 metadata 但 mime 猜测更稳妥）。
 mime_guess = "2"
+# 读取 NuGet .nupkg（zip 容器）内的 .nuspec 条目（FR-29）。关闭默认特性以避开
+# bzip2 / zstd / lzma 等原生 C 压缩后端，仅启用纯 Rust 的 deflate（zlib-rs）——
+# .nupkg 仅用 deflate / store 压缩，足够解压，守 SECURITY 零原生运行时依赖。
+zip = { version = "8", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+# 解析 NuGet .nuspec（XML）取包 id / version（FR-29）。纯 Rust、零原生依赖。
+quick-xml = "0.40"
 
 [dev-dependencies]
 # 集成测试：对 axum 路由直接发起请求
@@ -67,9 +73,8 @@ tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 # 测试用临时目录
 tempfile = "3"
-# Go 模块格式集成测试：构造 / 校验模块 zip 内部布局（{module}@{version}/...）；
-# 仅测试维度使用——生产把 zip 当不透明 blob 流式存取，不解压。
-zip = { version = "2", default-features = false, features = ["deflate"] }
+# Go 模块格式集成测试构造 / 校验模块 zip 内部布局（{module}@{version}/...）所用的 zip
+# 复用 [dependencies] 中 NuGet 引入的同一 zip（统一版本，避免重复声明不同主版本）。
 
 # release 档：strip + thin LTO + panic=abort 压低体积（ADR-0001，目标 < 27MB）
 # 注意 panic=abort 仅作用于 release，避免影响 cargo test（test 走 dev/test 档）

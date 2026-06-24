@@ -43,6 +43,48 @@ const CARGO_PUBLISH_PATH: &str = "api/v1/crates/new";
 /// cargo yank/unyank API 子路径前缀。
 const CARGO_API_PREFIX: &str = "api/v1/crates/";
 
+/// NuGet 格式名：据此把 NuGet 仓库的请求分派到其 v3 协议处理。
+const NUGET_FORMAT: &str = "nuget";
+
+/// NuGet 发布端点路径（`PUT /{repo}/v3/package`，`nuget push`）。
+const NUGET_PUBLISH_PATH: &str = "v3/package";
+
+/// NuGet 服务索引路径（`GET /{repo}/v3/index.json`）。
+const NUGET_SERVICE_INDEX_PATH: &str = "v3/index.json";
+
+/// NuGet 扁平容器前缀（版本列表与 .nupkg / .nuspec 下载均在其下）。
+const NUGET_FLATCONTAINER_PREFIX: &str = "v3-flatcontainer/";
+
+/// NuGet 版本列表文件名后缀（`v3-flatcontainer/{id}/index.json`）。
+const NUGET_VERSIONS_INDEX_SUFFIX: &str = "/index.json";
+
+/// 分派 NuGet GET 请求：服务索引 / 版本列表 / 扁平容器制品（.nupkg / .nuspec）。
+///
+/// 仅做前缀匹配的协议分派，业务在 `nuget_routes`；不在此写 NuGet 业务逻辑。
+async fn get_nuget(
+    state: &AppState,
+    repo: &RepositoryRecord,
+    path: &str,
+) -> Result<Response, ApiError> {
+    // 服务索引：列出本仓库 v3 资源
+    if path == NUGET_SERVICE_INDEX_PATH {
+        return super::nuget_routes::get_service_index(state, repo).await;
+    }
+    // 扁平容器子树：版本列表（`{id}/index.json`）或制品下载（.nupkg / .nuspec）
+    if let Some(flat) = path.strip_prefix(NUGET_FLATCONTAINER_PREFIX) {
+        // 版本列表：`{id}/index.json`（id 为单段，不含更深目录）
+        if let Some(id) = flat.strip_suffix(NUGET_VERSIONS_INDEX_SUFFIX) {
+            if !id.is_empty() && !id.contains('/') {
+                return super::nuget_routes::get_versions_index(state, repo, id).await;
+            }
+        }
+        // 其余为 .nupkg / .nuspec 下载：以完整路径（含前缀）为存储键
+        return super::nuget_routes::get_flat_artifact(state, repo, path).await;
+    }
+    // 未实现的 v3 资源端点：不存在
+    Err(ApiError::NotFound)
+}
+
 /// 分派 npm 读请求：含 `/-/` 段者为 tarball 下载，否则为 packument 获取。
 ///
 /// 仅做协议分派，业务在 `npm_routes`；不在此写 npm 业务逻辑。
@@ -123,6 +165,7 @@ pub async fn put_artifact(
     State(state): State<AppState>,
     identity: Identity,
     Path((repo_name, path)): Path<(String, String)>,
+    headers: axum::http::HeaderMap,
     body: Body,
 ) -> Result<Response, ApiError> {
     let repo = resolve_writable_repo(&state, &identity, &repo_name).await?;
@@ -137,6 +180,11 @@ pub async fn put_artifact(
     // cargo 发布 / unyank 走其稀疏索引协议（请求体为二进制 publish 体或 unyank 无体）
     if repo.format == CARGO_FORMAT {
         return put_cargo(&state, &repo, &path, body).await;
+    }
+    // NuGet 发布走 v3 协议（`PUT /{repo}/v3/package`，multipart/form-data 内含 .nupkg）。
+    // nuget / dotnet 客户端会给端点补尾斜杠（`v3/package/`），按去尾斜杠后比较以兼容。
+    if repo.format == NUGET_FORMAT && path.trim_end_matches('/') == NUGET_PUBLISH_PATH {
+        return super::nuget_routes::publish(&state, &repo, headers, body).await;
     }
     let format = state
         .formats
@@ -228,6 +276,10 @@ pub async fn get_artifact(
     // PyPI 读走其原生协议：simple/... 为索引，packages/... 为包文件下载
     if repo.format == PYPI_FORMAT {
         return get_pypi(&state, &repo, &path, &headers).await;
+    }
+    // NuGet 读走 v3 协议：服务索引 / 版本列表 / 扁平容器制品下载
+    if repo.format == NUGET_FORMAT {
+        return get_nuget(&state, &repo, &path).await;
     }
     let format = state
         .formats

@@ -10,6 +10,7 @@
 - Go 模块格式（hosted + proxy）经统一 Format trait 注册接入通用机理：按 GOPROXY 协议暴露 `@v/list` / `.info` / `.mod` / `.zip` / `@latest`，模块路径大小写 bang 编码（`!x` ↔ `X`），版本不可变（重复上传同版本 409），多校验和与流式存取；hosted 据已存版本聚合 `@v/list` 与 `@latest`、`.info` 缺失时按 `.mod` 合成，proxy 对 `.mod`/`.zip`/`.info` 走 cache-miss 单飞缓存、对 `@v/list`/`@latest` 回源透传；授权复用既有编排（上传需 write、private 对无权一律 404）
 - Cargo 格式（hosted+proxy，FR-26）：按 Cargo 稀疏索引协议接入，支持 `cargo publish` 发布、稀疏索引与 `.crate` 下载、yank/unyank、registry config.json；同版本不可覆盖（409）、索引 cksum 用 sha256；proxy 回源上游索引（不缓存）并缓存 `.crate`（cache-miss→hit）；发布/yank 需写权限、private 对无权一律 404
 - PyPI 格式（FR-27，hosted + proxy）：Simple Repository API（PEP503 HTML / PEP691 JSON）项目与文件索引、twine multipart 上传、pip 下载；hosted 已发布文件不可覆盖（409），proxy 回源上游 Simple 并重写文件链接、包文件单飞缓存（cache-miss → hit 不重复回源）
+- NuGet 格式（hosted + proxy）经统一 Format trait 接入：NuGet v3 服务索引、扁平容器版本列表与 .nupkg / .nuspec 存取、`nuget push`（multipart 解析 .nupkg 内嵌 .nuspec 取 id/version）、已发布版本不可覆盖（重复 push 同版本 409）、四校验和、id/version 小写规范化；proxy 回源服务索引重写指向本仓库、版本列表回源、.nupkg cache-miss 缓存；支持 `dotnet nuget push` / `dotnet add package`
 
 ### 变更
 - 无

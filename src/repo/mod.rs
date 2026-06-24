@@ -7,9 +7,9 @@
 
 use crate::meta::{MetaError, MetaStore, NewRepository, RepoType, RepositoryRecord, Visibility};
 
-/// 已实现并可创建仓库的格式集合（P1 的 FR-14~17 + P2 的 FR-28 Go、FR-26 Cargo、FR-27 PyPI）。
+/// 已实现并可创建仓库的格式集合（P1 的 FR-14~17 + P2 的 FR-28 Go、FR-26 Cargo、FR-27 PyPI、FR-29 NuGet）。
 /// 其余格式由各自批次实现后在此登记，未实现格式不提前接受（越界）。
-const SUPPORTED_FORMATS: [&str; 7] = ["maven", "npm", "docker", "raw", "go", "cargo", "pypi"];
+const SUPPORTED_FORMATS: [&str; 8] = ["maven", "npm", "docker", "raw", "go", "cargo", "pypi", "nuget"];
 
 /// 仓库生命周期错误。
 #[derive(Debug, thiserror::Error)]

@@ -35,6 +35,7 @@ mod go_routes;
 mod identity;
 mod npm_routes;
 mod pypi_routes;
+mod nuget_routes;
 mod repo_access;
 mod repositories;
 mod search;
