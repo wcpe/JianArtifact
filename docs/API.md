@@ -73,6 +73,21 @@
 - **响应**：当前调用方信息（`id`、`username`、`role`），供 Web 控制台判定登录态与权限。
 - **错误**：`401` 未认证。
 
+### OIDC 登录（P2，FR-34 / ADR-0016）
+
+- **方法 / 路径**：`GET /api/v1/auth/oidc/login`
+- **请求**：浏览器直接访问，无请求体。
+- **响应**：`303` 重定向到 IdP 授权端点（携带 `state`、`nonce`、PKCE `code_challenge`（S256）等参数）。
+- **错误**：`404` 未配置 OIDC（`[auth.oidc]` 缺失，端点视为不存在）；`502` IdP discovery 不可达；`429` 登录流程暂存表已满。
+
+### OIDC 回调（P2，FR-34 / ADR-0016）
+
+- **方法 / 路径**：`GET /api/v1/auth/oidc/callback`
+- **请求**：IdP 重定向回调，查询参数含 `code`、`state`（或 `error`）。服务端校验 `state`（一次性、防 CSRF/重放），用 `code` 换 ID Token 并校验签名（JWKS）/`iss`/`aud`/`exp`/`nonce`，经「外部身份 → 本地用户」映射得本地用户。
+- **响应**：认证成功后**照常签发既有会话 JWT**，`303` 回跳前端 `/login`，会话令牌经 URL fragment（`#access_token=...&token_type=Bearer`）交给 SPA。
+- **错误**：`404` 未配置 OIDC；`400` 缺 `code`/`state`；`401` `state` 校验失败、ID Token 校验失败、IdP 回错，或外部身份无对应本地用户（JIT 关闭，`auto_provision=false`）/ 绑定用户已禁用。
+- **JIT 即时开通**：`auto_provision=false`（默认）时无对应本地用户一律拒绝（守不自助注册红线，ADR-0010）；显式开启时首次外部登录即时建用户，**默认角色固定为 `User`，绝不自动 `Admin`**。
+
 ### 列出用户
 
 - **方法 / 路径**：`GET /api/v1/users`

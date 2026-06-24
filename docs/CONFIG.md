@@ -58,6 +58,20 @@
 
 > 首启管理员引导（仅空库首次启动）：`JIANARTIFACT_ADMIN_USERNAME` 与 `JIANARTIFACT_ADMIN_PASSWORD`。建议仅用环境变量提供，不写入入库配置；未提供则系统生成随机口令打印到启动日志（见 ADR-0010）。
 
+### [auth.oidc]（OIDC 认证集成，P2 / FR-34 / ADR-0016）
+
+可选；配置后才启用 OIDC 登录端点（未配置即不存在）。
+
+| 键 | 含义 | 默认（取向） | 环境变量 |
+|---|---|---|---|
+| issuer | IdP 签发者标识（issuer），同时用作 discovery 基址与 ID Token `iss` 校验值 | 必填 | JIANARTIFACT_AUTH_OIDC_ISSUER |
+| client_id | OIDC 客户端 ID | 必填 | JIANARTIFACT_AUTH_OIDC_CLIENT_ID |
+| client_secret | 客户端密钥（敏感） | 必填 | JIANARTIFACT_AUTH_OIDC_CLIENT_SECRET |
+| redirect_uri | 回调地址（须与 IdP 注册的 redirect_uri 完全一致） | 必填 | JIANARTIFACT_AUTH_OIDC_REDIRECT_URI |
+| auto_provision | 即时开通（JIT）：无对应本地用户时是否自动建用户（默认角色固定 User，绝不 Admin） | false（关闭） | JIANARTIFACT_AUTH_OIDC_AUTO_PROVISION |
+
+> `client_secret` 是密钥：真源在 env / 配置，**绝不入库、不进日志、不进 DB 明文**；建议仅经环境变量 `JIANARTIFACT_AUTH_OIDC_CLIENT_SECRET` 提供，不写入入库 TOML。`auto_provision` 默认关闭：外部认证成功但本地无对应用户时拒绝登录（守不自助注册红线，ADR-0010）；显式开启时即时建用户、默认角色 `User`，到 `Admin` 的提升只能由现有管理员显式操作。
+
 ### [limits]
 
 | 键 | 含义 | 默认（取向） | 环境变量 |

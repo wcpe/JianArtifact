@@ -73,7 +73,7 @@
 | FR-31 | 审计日志 | P2 | 开发中 |
 | FR-32 | Prometheus 指标端点 | P2 | 开发中 |
 | FR-33 | 基础速率限制（IP/Token 维度；多维限流与并发控制扩展见 FR-51） | P2 | 开发中 |
-| FR-34 | OIDC 认证集成 | P2 | 计划 |
+| FR-34 | OIDC 认证集成 | P2 | 开发中 |
 | FR-35 | LDAP 认证集成 | P2 | 计划 |
 | FR-36 | Nexus OSS 迁移：在线 REST API 入口 | P2 | 开发中 |
 | FR-37 | Nexus OSS 迁移：离线 blob store 入口 | P2 | 开发中 |

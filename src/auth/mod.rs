@@ -8,11 +8,13 @@ use argon2::password_hash::{
 };
 use argon2::Argon2;
 
-use crate::meta::{MetaError, MetaStore, Role};
+use crate::meta::{MetaError, MetaStore, Role, UserRecord};
 
 pub mod basic;
 pub mod jwt;
 pub mod lockout;
+pub mod oidc;
+pub mod provider;
 pub mod token;
 
 pub use basic::{parse_basic_auth, BasicCredentials};
@@ -20,6 +22,8 @@ pub use jwt::{
     DockerAccess, DockerTokenClaims, JwtClaims, JwtError, JwtSigner, DOCKER_TOKEN_TTL_SECS,
 };
 pub use lockout::{LockoutError, LoginGuard};
+pub use oidc::{OidcError, OidcProvider, OidcSettings};
+pub use provider::{AuthProvider, AuthenticatedSubject, ProviderKind};
 pub use token::{generate_api_token, hash_api_token, verify_api_token, TOKEN_PREFIX};
 
 /// 已解析的调用方身份，由认证中间件注入请求扩展，供后续鉴权使用。
@@ -167,6 +171,82 @@ pub async fn bootstrap_admin(meta: &MetaStore) -> Result<BootstrapOutcome, AuthE
     })
 }
 
+/// 外部认证（OIDC）映射到本地用户时的拒绝原因（守 ADR-0010 不自助注册红线）。
+#[derive(Debug, thiserror::Error)]
+pub enum ExternalLoginError {
+    /// 外部认证成功但无对应本地用户、且 JIT 关闭：拒绝登录（最严默认）。
+    #[error("外部身份未绑定本地用户，且即时开通未开启")]
+    NoLocalUser,
+    /// 命中的本地用户已被禁用：拒绝登录。
+    #[error("绑定的本地用户已被禁用")]
+    Disabled,
+    /// 元数据访问失败。
+    #[error(transparent)]
+    Meta(#[from] MetaError),
+}
+
+/// 把已认证的外部主体映射到本地用户（FR-34 / ADR-0016，守 ADR-0010）。
+///
+/// 流程：① 按外部身份键（provider + sub）查已绑定本地用户，命中即复用（未禁用）；
+/// ② 未命中且 `auto_provision = false` → 拒绝（最严默认，等价「仅管理员预置账号可登录」）；
+/// ③ 未命中且 `auto_provision = true` → 即时开通，**默认角色固定为最低权限 `User`**，
+///    绝不自动授予 `Admin`；用户名取建议名，冲突时追加短后缀避重。
+///
+/// 该函数只做「外部身份 → 本地用户」映射，不签发会话（签发由调用方照常走既有 JWT）。
+pub async fn resolve_external_login(
+    meta: &MetaStore,
+    subject: &AuthenticatedSubject,
+    auto_provision: bool,
+) -> Result<UserRecord, ExternalLoginError> {
+    let idp = subject.provider.as_str();
+    // ① 已绑定本地用户：复用（拒绝已禁用账户）
+    if let Some(user) = meta
+        .get_user_by_external_identity(idp, &subject.subject)
+        .await?
+    {
+        if user.disabled != 0 {
+            return Err(ExternalLoginError::Disabled);
+        }
+        return Ok(user);
+    }
+
+    // ② JIT 关闭：拒绝（守不自助注册红线）
+    if !auto_provision {
+        return Err(ExternalLoginError::NoLocalUser);
+    }
+
+    // ③ JIT 开通：默认角色 User，绝不自动 Admin
+    let username = provision_username(meta, &subject.preferred_username).await?;
+    let id = meta
+        .create_external_user(&username, Role::User, idp, &subject.subject)
+        .await?;
+    // 回读刚建的用户记录返回（含本地主键 / 角色）
+    let user = meta
+        .get_user_by_id(&id)
+        .await?
+        .ok_or(ExternalLoginError::NoLocalUser)?;
+    Ok(user)
+}
+
+/// 为 JIT 开通挑一个可用用户名：建议名可用则用之，已被占用则追加短随机后缀避重。
+///
+/// 不无限重试：单次冲突即追加 6 位随机后缀，几乎必然唯一；仍冲突由唯一约束兜底报错。
+async fn provision_username(
+    meta: &MetaStore,
+    preferred: &str,
+) -> Result<String, ExternalLoginError> {
+    let base = if preferred.trim().is_empty() {
+        "oidc-user"
+    } else {
+        preferred.trim()
+    };
+    if meta.get_user_by_username(base).await?.is_none() {
+        return Ok(base.to_string());
+    }
+    let suffix = generate_random_password(6).to_lowercase();
+    Ok(format!("{base}-{suffix}"))
+}
+
 /// 生成高熵随机口令：从无歧义字符集中均匀采样。
 fn generate_random_password(len: usize) -> String {
     use rand::Rng;
@@ -293,5 +373,106 @@ mod tests {
             outcome,
             BootstrapOutcome::CreatedWithRandomPassword { .. }
         ));
+    }
+
+    // ===== FR-34 外部认证 → 本地用户映射（守 ADR-0010）=====
+
+    /// 构造一个 OIDC 外部主体。
+    fn oidc_subject(sub: &str, preferred: &str) -> AuthenticatedSubject {
+        AuthenticatedSubject {
+            provider: ProviderKind::Oidc,
+            subject: sub.to_string(),
+            preferred_username: preferred.to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn jit_关闭且无绑定用户时拒绝登录() {
+        let meta = MetaStore::open_in_memory().await.unwrap();
+        let subject = oidc_subject("ext-sub-1", "alice");
+        // auto_provision = false：无对应本地用户一律拒绝（最严默认，守不自助注册红线）
+        let err = resolve_external_login(&meta, &subject, false)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ExternalLoginError::NoLocalUser));
+        // 拒绝后不得静默建用户
+        assert_eq!(meta.count_users().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn jit_关闭但已预置绑定用户时复用登录() {
+        let meta = MetaStore::open_in_memory().await.unwrap();
+        // 管理员预置外部用户并绑定外部身份
+        let uid = meta
+            .create_external_user("alice", Role::User, "oidc", "ext-sub-1")
+            .await
+            .unwrap();
+        let subject = oidc_subject("ext-sub-1", "alice-from-idp");
+        let user = resolve_external_login(&meta, &subject, false)
+            .await
+            .unwrap();
+        assert_eq!(user.id, uid);
+        assert_eq!(user.role, "user");
+        // 复用既有用户，不新增
+        assert_eq!(meta.count_users().await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn jit_开启时即时开通且默认角色_user_绝不_admin() {
+        let meta = MetaStore::open_in_memory().await.unwrap();
+        let subject = oidc_subject("ext-sub-2", "bob");
+        let user = resolve_external_login(&meta, &subject, true).await.unwrap();
+        // JIT 开通默认角色固定为最低权限 User，绝不自动 Admin
+        assert_eq!(user.role, "user");
+        assert_ne!(user.role, "admin");
+        assert_eq!(user.username, "bob");
+        assert_eq!(user.external_idp.as_deref(), Some("oidc"));
+        assert_eq!(user.external_subject.as_deref(), Some("ext-sub-2"));
+        assert_eq!(meta.count_users().await.unwrap(), 1);
+
+        // 再次同一外部身份登录复用同一本地用户（不重复建号）
+        let again = resolve_external_login(&meta, &subject, true).await.unwrap();
+        assert_eq!(again.id, user.id);
+        assert_eq!(meta.count_users().await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn jit_开通用户名冲突时追加后缀避重() {
+        let meta = MetaStore::open_in_memory().await.unwrap();
+        // 先占用本地用户名 "carol"
+        meta.create_user("carol", "h", Role::Admin).await.unwrap();
+        let subject = oidc_subject("ext-sub-3", "carol");
+        let user = resolve_external_login(&meta, &subject, true).await.unwrap();
+        // 不得复用本地同名管理员账号；新建用户名带后缀且角色为 User
+        assert_ne!(user.username, "carol");
+        assert!(user.username.starts_with("carol-"));
+        assert_eq!(user.role, "user");
+    }
+
+    #[tokio::test]
+    async fn 绑定的本地用户被禁用时拒绝登录() {
+        let meta = MetaStore::open_in_memory().await.unwrap();
+        let uid = meta
+            .create_external_user("dave", Role::User, "oidc", "ext-sub-4")
+            .await
+            .unwrap();
+        meta.update_user(&uid, None, Some(true)).await.unwrap();
+        let subject = oidc_subject("ext-sub-4", "dave");
+        let err = resolve_external_login(&meta, &subject, true)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ExternalLoginError::Disabled));
+    }
+
+    #[tokio::test]
+    async fn 外部用户不能经本地口令登录() {
+        // 外部用户口令哈希为占位串，任何明文口令校验均不通过
+        let meta = MetaStore::open_in_memory().await.unwrap();
+        meta.create_external_user("erin", Role::User, "oidc", "ext-sub-5")
+            .await
+            .unwrap();
+        let user = meta.get_user_by_username("erin").await.unwrap().unwrap();
+        assert!(!verify_password("任何口令", &user.password_hash));
+        assert!(!verify_password("", &user.password_hash));
     }
 }

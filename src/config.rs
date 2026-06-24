@@ -74,6 +74,8 @@ const KNOWN_SECTIONS: &[&str] = &[
 const KNOWN_NESTED_PREFIXES: &[(&str, &str)] = &[
     ("data_storage_s3_", "data.storage.s3."),
     ("data_storage_", "data.storage."),
+    // OIDC 配置在 auth.oidc 子节下；env 形如 JIANARTIFACT_AUTH_OIDC_CLIENT_SECRET。
+    ("auth_oidc_", "auth.oidc."),
 ];
 
 /// 顶层配置。
@@ -221,6 +223,9 @@ pub struct AuthConfig {
     pub login_max_failures: u32,
     /// 锁定时长（秒）。
     pub login_lockout_secs: u64,
+    /// OIDC 认证集成（FR-34 / ADR-0016）；未配置时为 None（不实例化 provider）。
+    #[serde(default)]
+    pub oidc: Option<OidcConfig>,
 }
 
 impl Default for AuthConfig {
@@ -229,7 +234,40 @@ impl Default for AuthConfig {
             session_ttl_secs: DEFAULT_SESSION_TTL_SECS,
             login_max_failures: DEFAULT_LOGIN_MAX_FAILURES,
             login_lockout_secs: DEFAULT_LOGIN_LOCKOUT_SECS,
+            oidc: None,
         }
+    }
+}
+
+/// OIDC 认证集成配置（FR-34 / ADR-0016）。
+///
+/// `client_secret` 是密钥：真源在 env / 配置（前缀 `JIANARTIFACT_`），绝不入库、不进日志、
+/// 不进 DB 明文。建议仅经环境变量 `JIANARTIFACT_AUTH_OIDC_CLIENT_SECRET` 提供，不写入入库 TOML。
+#[derive(Clone, Serialize, Deserialize)]
+pub struct OidcConfig {
+    /// IdP 签发者标识（issuer），同时用作 discovery 基址与 ID Token `iss` 校验值。
+    pub issuer: String,
+    /// 客户端 ID。
+    pub client_id: String,
+    /// 客户端密钥（敏感）；真源 env / 配置，绝不入库 / 进日志。
+    pub client_secret: String,
+    /// 回调地址（须与 IdP 注册的 redirect_uri 完全一致）。
+    pub redirect_uri: String,
+    /// 是否即时开通（JIT）：默认关闭，无对应本地用户则拒登录（守 ADR-0010）。
+    #[serde(default)]
+    pub auto_provision: bool,
+}
+
+impl std::fmt::Debug for OidcConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // 绝不在调试输出中泄露 client_secret
+        f.debug_struct("OidcConfig")
+            .field("issuer", &self.issuer)
+            .field("client_id", &self.client_id)
+            .field("client_secret", &"<已脱敏>")
+            .field("redirect_uri", &self.redirect_uri)
+            .field("auto_provision", &self.auto_provision)
+            .finish()
     }
 }
 

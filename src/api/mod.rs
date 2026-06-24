@@ -18,7 +18,7 @@ use serde_json::json;
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::trace::TraceLayer;
 
-use crate::auth::{AuthIdentity, JwtSigner, LoginGuard};
+use crate::auth::{AuthIdentity, JwtSigner, LoginGuard, OidcProvider};
 use crate::config::Config;
 use crate::format::{ArtifactService, DockerRegistry, FormatRegistry};
 use crate::meta::MetaStore;
@@ -40,6 +40,7 @@ mod metrics;
 mod migrate;
 mod npm_routes;
 mod nuget_routes;
+mod oidc_routes;
 mod pypi_routes;
 mod rate_limit;
 mod repo_access;
@@ -54,6 +55,7 @@ pub use audit::{
 };
 pub use identity::resolve_identity;
 pub use metrics::{install_recorder, MetricsHandle};
+pub use oidc_routes::OidcFlowStore;
 pub use rate_limit::RateLimiter;
 pub use usage::{channel as usage_channel, spawn_usage_pruner, spawn_usage_writer, UsageSink};
 
@@ -96,6 +98,11 @@ pub struct AppState {
     pub metrics: Option<MetricsHandle>,
     /// 基础速率限制器（FR-33，ADR-0008）：进程内按 IP / 身份维度固定窗计数，超阈值返回 429。
     pub rate_limiter: Arc<rate_limit::RateLimiter>,
+    /// OIDC 认证 provider（FR-34，ADR-0016）：`Some` 表示已配置 `[auth.oidc]`，
+    /// OIDC 登录端点据此发起授权码流；`None` 时相关端点返回 404（未配置即不存在）。
+    pub oidc: Option<Arc<OidcProvider>>,
+    /// OIDC 登录流程的进程内短期存储（按 state 一次性绑定 PKCE / nonce，防 CSRF / 重放）。
+    pub oidc_flows: Arc<oidc_routes::OidcFlowStore>,
 }
 
 /// 统一 API 错误类型，转换为 JSON 响应 `{"error":{"code","message"}}`。
@@ -296,6 +303,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/auth/login", post(auth_routes::login))
         .route("/auth/logout", post(auth_routes::logout))
         .route("/auth/refresh", post(auth_routes::refresh))
+        .route("/auth/oidc/login", get(oidc_routes::oidc_login))
+        .route("/auth/oidc/callback", get(oidc_routes::oidc_callback))
         .route("/me", get(auth_routes::me))
         .route("/users", get(users::list_users).post(users::create_user))
         .route(
@@ -510,6 +519,9 @@ mod tests {
             // 默认测试状态不安装 recorder；需要指标端点的测试自行用 install_recorder 注入
             metrics: None,
             rate_limiter: Arc::new(rate_limit::RateLimiter::new()),
+            // 默认测试状态不配置 OIDC；需要 OIDC 的测试自行注入 provider
+            oidc: None,
+            oidc_flows: Arc::new(oidc_routes::OidcFlowStore::new()),
         };
         (state, dir)
     }

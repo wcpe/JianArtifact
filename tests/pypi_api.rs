@@ -61,6 +61,8 @@ impl Fixture {
             usage,
             metrics: None,
             rate_limiter: Arc::new(jianartifact::api::RateLimiter::new()),
+            oidc: None,
+            oidc_flows: std::sync::Arc::new(jianartifact::api::OidcFlowStore::new()),
         };
         Self { state, _dir: dir }
     }
@@ -94,6 +96,8 @@ impl Fixture {
             usage,
             metrics: None,
             rate_limiter: Arc::new(jianartifact::api::RateLimiter::new()),
+            oidc: None,
+            oidc_flows: std::sync::Arc::new(jianartifact::api::OidcFlowStore::new()),
         };
         Self { state, _dir: dir }
     }

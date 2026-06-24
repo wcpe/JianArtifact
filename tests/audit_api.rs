@@ -63,6 +63,8 @@ impl Fixture {
             usage,
             metrics: None,
             rate_limiter: Arc::new(jianartifact::api::RateLimiter::new()),
+            oidc: None,
+            oidc_flows: std::sync::Arc::new(jianartifact::api::OidcFlowStore::new()),
         };
         Self { state, _dir: dir }
     }
@@ -302,6 +304,8 @@ async fn 审计写入任务缺失时业务仍成功() {
         usage,
         metrics: None,
         rate_limiter: Arc::new(jianartifact::api::RateLimiter::new()),
+        oidc: None,
+        oidc_flows: std::sync::Arc::new(jianartifact::api::OidcFlowStore::new()),
     };
     let hash = auth::hash_password("S3cret!").unwrap();
     meta.create_user("admin", &hash, Role::Admin).await.unwrap();

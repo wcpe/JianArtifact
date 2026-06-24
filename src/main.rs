@@ -12,7 +12,9 @@ use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 use jianartifact::api::{self, AppState};
-use jianartifact::auth::{self, BootstrapOutcome, JwtSigner, LoginGuard};
+use jianartifact::auth::{
+    self, BootstrapOutcome, JwtSigner, LoginGuard, OidcProvider, OidcSettings,
+};
 use jianartifact::config::Config;
 use jianartifact::format::{ArtifactService, DockerRegistry, FormatRegistry};
 use jianartifact::meta::MetaStore;
@@ -189,6 +191,35 @@ async fn main() -> anyhow::Result<()> {
         info!("基础速率限制未启用，跳过");
     }
 
+    // OIDC 认证 provider（FR-34，ADR-0016）：仅当配置了 `[auth.oidc]` 才实例化（未配置即不存在）。
+    // client_secret 真源 env / 配置，绝不入库 / 进日志；复用纯 rustls 的 reqwest 客户端。
+    let oidc = if let Some(oidc_cfg) = cfg.auth.oidc.clone() {
+        let http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(
+                cfg.proxy.upstream_timeout_secs,
+            ))
+            .build()
+            .context("初始化 OIDC HTTP 客户端失败")?;
+        let provider = OidcProvider::new(
+            OidcSettings {
+                issuer: oidc_cfg.issuer,
+                client_id: oidc_cfg.client_id,
+                client_secret: oidc_cfg.client_secret,
+                redirect_uri: oidc_cfg.redirect_uri,
+                auto_provision: oidc_cfg.auto_provision,
+            },
+            http,
+        );
+        info!(
+            JIT开通 = oidc_cfg.auto_provision,
+            "OIDC 认证集成已启用（授权码流 + PKCE）"
+        );
+        Some(Arc::new(provider))
+    } else {
+        info!("OIDC 认证集成未配置，跳过");
+        None
+    };
+
     // 构建路由与共享状态
     let state = AppState {
         config: Arc::new(cfg.clone()),
@@ -203,6 +234,8 @@ async fn main() -> anyhow::Result<()> {
         usage,
         metrics,
         rate_limiter,
+        oidc,
+        oidc_flows: Arc::new(api::OidcFlowStore::new()),
     };
     let app = api::build_router(state);
 

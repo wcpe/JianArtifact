@@ -66,6 +66,10 @@ pub struct UserRecord {
     pub disabled: i64,
     /// 创建时间（ISO8601）。
     pub created_at: String,
+    /// 外部认证 provider 类别（如 oidc）；本地账号为 None（FR-34 / ADR-0016）。
+    pub external_idp: Option<String>,
+    /// 外部稳定标识（OIDC `sub`）；本地账号为 None。仅存身份标识，绝不存外部凭据。
+    pub external_subject: Option<String>,
 }
 
 /// API Token 元数据记录（不含明文与哈希之外的敏感项；列表时哈希也不回显）。
@@ -187,13 +191,65 @@ impl MetaStore {
         Ok(id)
     }
 
+    /// 即时开通（JIT）创建外部认证用户（FR-34 / ADR-0016）。
+    ///
+    /// 仅绑定非敏感的外部身份标识（provider 类别 + 外部 `sub`），不设本地口令哈希
+    /// （置占位串，外部用户不走本地口令登录）。角色由调用方传入，JIT 默认应为最低权限
+    /// `User`，绝不自动授予 `Admin`。用户名 / 外部身份重复时返回底层唯一约束错误。
+    pub async fn create_external_user(
+        &self,
+        username: &str,
+        role: Role,
+        external_idp: &str,
+        external_subject: &str,
+    ) -> Result<String, MetaError> {
+        let id = Uuid::new_v4().to_string();
+        // 口令哈希列非空：外部用户填入不可用于校验的占位值（绝非可登录的明文 / 弱哈希）。
+        // argon2 校验对该占位串恒为 false，外部用户无法经本地口令通道登录。
+        const EXTERNAL_PASSWORD_PLACEHOLDER: &str = "!external-no-local-password";
+        sqlx::query(
+            "INSERT INTO users (id, username, password_hash, role, external_idp, external_subject) \
+             VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&id)
+        .bind(username)
+        .bind(EXTERNAL_PASSWORD_PLACEHOLDER)
+        .bind(role.as_str())
+        .bind(external_idp)
+        .bind(external_subject)
+        .execute(&self.pool)
+        .await?;
+        Ok(id)
+    }
+
+    /// 按外部身份键（provider 类别 + 外部 `sub`）查已绑定的本地用户；未绑定返回 None。
+    ///
+    /// 用于外部认证成功后定位本地账号：命中即复用，未命中按 JIT 策略决定拒绝或开通。
+    pub async fn get_user_by_external_identity(
+        &self,
+        external_idp: &str,
+        external_subject: &str,
+    ) -> Result<Option<UserRecord>, MetaError> {
+        let record = sqlx::query_as::<_, UserRecord>(
+            "SELECT id, username, password_hash, role, disabled, created_at, \
+                    external_idp, external_subject \
+             FROM users WHERE external_idp = ? AND external_subject = ?",
+        )
+        .bind(external_idp)
+        .bind(external_subject)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(record)
+    }
+
     /// 按用户名查用户；不存在时返回 None。
     pub async fn get_user_by_username(
         &self,
         username: &str,
     ) -> Result<Option<UserRecord>, MetaError> {
         let record = sqlx::query_as::<_, UserRecord>(
-            "SELECT id, username, password_hash, role, disabled, created_at \
+            "SELECT id, username, password_hash, role, disabled, created_at, \
+                    external_idp, external_subject \
              FROM users WHERE username = ?",
         )
         .bind(username)
@@ -205,7 +261,8 @@ impl MetaStore {
     /// 按主键查用户；不存在时返回 None。
     pub async fn get_user_by_id(&self, id: &str) -> Result<Option<UserRecord>, MetaError> {
         let record = sqlx::query_as::<_, UserRecord>(
-            "SELECT id, username, password_hash, role, disabled, created_at \
+            "SELECT id, username, password_hash, role, disabled, created_at, \
+                    external_idp, external_subject \
              FROM users WHERE id = ?",
         )
         .bind(id)
@@ -217,7 +274,8 @@ impl MetaStore {
     /// 列出全部用户，按创建时间升序。供管理员用户管理界面使用。
     pub async fn list_users(&self) -> Result<Vec<UserRecord>, MetaError> {
         let records = sqlx::query_as::<_, UserRecord>(
-            "SELECT id, username, password_hash, role, disabled, created_at \
+            "SELECT id, username, password_hash, role, disabled, created_at, \
+                    external_idp, external_subject \
              FROM users ORDER BY created_at ASC, id ASC",
         )
         .fetch_all(&self.pool)
@@ -487,6 +545,52 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn 外部用户按外部身份键查回且本地账号外部列为空() {
+        let store = MetaStore::open_in_memory().await.unwrap();
+        // 本地账号：外部列应为 NULL
+        let lid = store.create_user("local", "h", Role::User).await.unwrap();
+        let local = store.get_user_by_id(&lid).await.unwrap().unwrap();
+        assert!(local.external_idp.is_none());
+        assert!(local.external_subject.is_none());
+
+        // 外部账号：绑定外部身份键，可据此查回
+        let eid = store
+            .create_external_user("ext", Role::User, "oidc", "sub-1")
+            .await
+            .unwrap();
+        let found = store
+            .get_user_by_external_identity("oidc", "sub-1")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(found.id, eid);
+        assert_eq!(found.external_idp.as_deref(), Some("oidc"));
+        assert_eq!(found.external_subject.as_deref(), Some("sub-1"));
+        assert_eq!(found.role, "user");
+
+        // 未绑定的外部身份键查不到
+        assert!(store
+            .get_user_by_external_identity("oidc", "无此人")
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn 同一外部身份键唯一_重复绑定被拒() {
+        let store = MetaStore::open_in_memory().await.unwrap();
+        store
+            .create_external_user("a", Role::User, "oidc", "dup-sub")
+            .await
+            .unwrap();
+        // 同一 (external_idp, external_subject) 再建应触发唯一索引失败
+        let err = store
+            .create_external_user("b", Role::User, "oidc", "dup-sub")
+            .await;
+        assert!(err.is_err());
     }
 
     #[tokio::test]
