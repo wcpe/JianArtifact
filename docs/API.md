@@ -4,7 +4,7 @@
 
 ## 1. 通用约定
 
-- **协议形态**：管理 API 为 REST + JSON；格式 API 按各自原生协议（Maven、npm、Docker registry v2、Go GOPROXY、Raw）暴露。
+- **协议形态**：管理 API 为 REST + JSON；格式 API 按各自原生协议（Maven、npm、Docker registry v2、Go GOPROXY、Raw、PyPI Simple Repository API）暴露。
 - **版本**：管理 API 统一挂载在 `/api/v1` 前缀下。
 - **编码**：管理 API 请求体与响应体均为 `application/json; charset=utf-8`；格式端点的内容类型遵循各自协议（如制品二进制、清单 JSON 等）。
 - **认证**：支持三种方式，由认证中间件统一识别。
@@ -38,7 +38,7 @@
   - `404 Not Found`：资源不存在；私有仓库对未授权方亦可返回 404 以避免暴露存在性。
   - `409 Conflict`：资源冲突（如同名仓库 / 用户已存在）。
   - `5xx`：服务端内部错误。
-- **格式 API**：错误遵循各自原生协议的约定（如 Docker registry v2 返回其规范的错误对象，Maven / npm / Raw 主要以 HTTP 状态码表达），不套用上述统一 JSON 错误结构。
+- **格式 API**：错误遵循各自原生协议的约定（如 Docker registry v2 返回其规范的错误对象，Maven / npm / Raw / PyPI 主要以 HTTP 状态码表达），不套用上述统一 JSON 错误结构。
 - **私有仓库安全语义（定式）**：私有仓库对匿名 / 无有效凭据 / 已认证但无读权限者，一律返回 `404`（隐藏存在性，不用 `401`/`403` 以免暴露“仓库存在但需登录”）。已能读但越权写（有读无写）返回 `403`。管理 API 端点在缺失或无效凭据时返回 `401`。公开仓库匿名可读。
 
 ## 3. 端点 / 方法
@@ -230,6 +230,7 @@
 - npm：已发布版本不可覆盖（重复发布同版本返回 `409`）。
 - Docker：同一 tag 允许覆盖（符合 Docker 习惯），manifest 按 digest 寻址与去重。
 - Go：模块版本一经发布即不可变（重复上传同 `{module}@{version}` 的 `.mod` / `.zip` / `.info` 返回 `409`）。
+- PyPI：已发布发行文件不可覆盖（重复上传同 `packages/{规范名}/{文件}` 返回 `409`）。
 - Raw：同路径文件允许覆盖。
 - Cargo：已发布版本不可覆盖（重复发布同 `name`+`vers` 返回 `409`）；索引文件随新版本追加更新；yank/unyank 仅翻转索引 `yanked` 标记、不删 `.crate`。
 
@@ -264,6 +265,11 @@
   - **发布** `PUT /{仓库名}/api/v1/crates/new`：请求体为二进制（4 字节 LE 长度前缀 + metadata JSON + 4 字节 LE 长度前缀 + `.crate` 字节）；落 `.crate` 得 sha256、把该版本追加进索引，返回 `{"warnings":{"invalid_categories":[],"invalid_badges":[],"other":[]}}`。同 `name`+`vers` 已发布不可覆盖（重复发布返回 `409`）。
   - **yank / unyank** `DELETE /{仓库名}/api/v1/crates/{name}/{version}/yank`（置 `yanked=true`）、`PUT /{仓库名}/api/v1/crates/{name}/{version}/unyank`（置 `yanked=false`）：翻转索引行的 `yanked` 标记、不删 blob，返回 `{"ok":true}`。
   - **认证**：以 `Authorization: Bearer <API Token>` 鉴权；发布 / yank 需写权限，读受 visibility / ACL，private 对无权一律 404。
+- **PyPI 格式**：以 PyPI Simple Repository API 暴露，供 `twine upload` / `pip install` 使用。
+  - **Simple 索引**：`GET /{仓库名}/simple/` 列项目、`GET /{仓库名}/simple/{规范名}/` 列发行文件，默认返回 PEP503 HTML（每文件 `href` 带 `#sha256=`）；带 `Accept: application/vnd.pypi.simple.v1+json` 时返回 PEP691 JSON。项目名按 PEP503 规范化（小写、`[-_.]+` 折叠为单个 `-`）。
+  - **上传（twine）**：`POST /{仓库名}/`，`multipart/form-data`（`:action=file_upload`、`content` 文件、`name`、`version`、可选 `sha256_digest`）；落 wheel/sdist 于 `packages/{规范名}/{文件}`，提供 `sha256_digest` 时与服务端算得的 sha256 对账，不符 `400`。
+  - **下载**：`GET /{仓库名}/packages/{规范名}/{文件}` 流式返回；`proxy` 仓库 cache-miss 时从上游解析文件 URL 后回源并缓存。
+  - **proxy 上游约定**：`upstream_url` 指向索引服务主机根（如 `https://pypi.org`），服务端按 `simple/...` 回源；Simple 页面每次回源（索引不缓存）并把文件链接重写为本仓库 `packages/...` 路径，仅包文件走缓存。本服务不提供 PEP658/714 `.metadata` sidecar，代理重写时剥除上游 `data-core-metadata` / `data-dist-info-metadata` 属性，使 pip 回退为下载完整 wheel。
 
 ## 4. P2 规划端点（当前未实现，仅记录契约方向）
 

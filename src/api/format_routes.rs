@@ -6,14 +6,14 @@
 
 use axum::{
     body::Body,
-    extract::{Path, State},
-    http::{header, StatusCode},
+    extract::{Multipart, Path, State},
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
 use futures_util::TryStreamExt;
 use tokio_util::io::{ReaderStream, StreamReader};
 
-use crate::format::ArtifactKind;
+use crate::format::{ArtifactKind, PypiFormat, PYPI_SIMPLE_SEGMENT};
 use crate::meta::RepositoryRecord;
 
 use super::repo_access::{build_repo_view, load_readable_repo};
@@ -28,6 +28,8 @@ const NPM_FORMAT: &str = "npm";
 
 /// Go 格式名：据此把 Go 仓库的请求分派到 GOPROXY 协议处理。
 const GO_FORMAT: &str = "go";
+/// PyPI 格式名：据此把 PyPI 仓库的请求分派到其原生协议处理。
+const PYPI_FORMAT: &str = "pypi";
 
 /// npm tarball 在包内的目录分隔段（npm 协议固定为 `-`）。
 const NPM_TARBALL_SEGMENT: &str = "/-/";
@@ -91,6 +93,28 @@ fn parse_cargo_yank_path(path: &str, action: &str) -> Option<(String, String)> {
     Some((name.to_string(), version.to_string()))
 }
 
+/// 分派 PyPI 读请求：`simple/...` 为 Simple Repository API 索引，`packages/...` 为包文件下载。
+///
+/// 仅做协议分派，业务在 `pypi_routes`；不在此写 PyPI 业务逻辑。
+async fn get_pypi(
+    state: &AppState,
+    repo: &RepositoryRecord,
+    path: &str,
+    headers: &HeaderMap,
+) -> Result<Response, ApiError> {
+    let simple_prefix = format!("{PYPI_SIMPLE_SEGMENT}/");
+    if path == PYPI_SIMPLE_SEGMENT || path == simple_prefix {
+        // Simple 根索引：`simple` / `simple/`
+        return super::pypi_routes::simple_index(state, repo, headers).await;
+    }
+    if let Some(project) = PypiFormat::project_of_simple_path(path) {
+        // Simple 项目页：`simple/{project}` / `simple/{project}/`
+        return super::pypi_routes::simple_project(state, repo, &project, headers).await;
+    }
+    // 其余按包文件下载（`packages/{规范名}/{文件}`）
+    super::pypi_routes::download(state, repo, path).await
+}
+
 /// 上传制品（PUT）：写授权后流式落 blob 并写索引，按格式覆盖策略处理重复。
 ///
 /// 流式：请求体经 body stream → AsyncRead 喂给制品机理，大文件不整体载入内存；
@@ -141,10 +165,50 @@ pub async fn put_artifact(
     Ok(status.into_response())
 }
 
+/// PyPI twine 上传（`POST /{repo}/`）：写授权后解析 multipart 落 wheel/sdist。
+///
+/// twine 默认上传到仓库根（空路径），故单列此路由；仅 PyPI 格式支持，其余格式 405 语义按 400 返回。
+pub async fn post_artifact_root(
+    State(state): State<AppState>,
+    identity: Identity,
+    Path(repo_name): Path<String>,
+    multipart: Multipart,
+) -> Result<Response, ApiError> {
+    post_pypi_upload(&state, &identity, &repo_name, multipart).await
+}
+
+/// PyPI twine 上传兜底（`POST /{repo}/{*path}`）：覆盖 twine 的 `legacy/` 等带路径上传形态。
+pub async fn post_artifact(
+    State(state): State<AppState>,
+    identity: Identity,
+    Path((repo_name, _path)): Path<(String, String)>,
+    multipart: Multipart,
+) -> Result<Response, ApiError> {
+    post_pypi_upload(&state, &identity, &repo_name, multipart).await
+}
+
+/// PyPI 上传共用编排：写授权 → 校验格式为 pypi → 交 `pypi_routes::upload` 落 blob。
+async fn post_pypi_upload(
+    state: &AppState,
+    identity: &Identity,
+    repo_name: &str,
+    multipart: Multipart,
+) -> Result<Response, ApiError> {
+    let repo = resolve_writable_repo(state, identity, repo_name).await?;
+    if repo.format != PYPI_FORMAT {
+        // 仅 PyPI 走 POST 上传协议；其余格式不支持该方法
+        return Err(ApiError::BadRequest(
+            "该仓库格式不支持 POST 上传".to_string(),
+        ));
+    }
+    super::pypi_routes::upload(state, &repo, multipart).await
+}
+
 /// 下载制品（GET）：读授权后流式返回 blob；hosted 命中本地，proxy cache-miss 回源后返回。
 pub async fn get_artifact(
     State(state): State<AppState>,
     identity: Identity,
+    headers: HeaderMap,
     Path((repo_name, path)): Path<(String, String)>,
 ) -> Result<Response, ApiError> {
     // 读授权（无权 private → 404 隐藏存在性）
@@ -160,6 +224,10 @@ pub async fn get_artifact(
     // cargo 读走其稀疏索引协议：config.json / 下载 / 索引文件由 cargo_routes 内部分派
     if repo.format == CARGO_FORMAT {
         return super::cargo_routes::get(&state, &repo, &path).await;
+    }
+    // PyPI 读走其原生协议：simple/... 为索引，packages/... 为包文件下载
+    if repo.format == PYPI_FORMAT {
+        return get_pypi(&state, &repo, &path, &headers).await;
     }
     let format = state
         .formats

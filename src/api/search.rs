@@ -26,7 +26,7 @@ const CANDIDATE_CAP: i64 = 5000;
 pub struct SearchQuery {
     /// 关键字 / 坐标（按制品路径包含匹配）。
     pub q: String,
-    /// 可选格式过滤（maven | npm | docker | raw）。
+    /// 可选格式过滤（maven | npm | docker | raw | pypi）。
     #[serde(default)]
     pub format: Option<String>,
     /// 分页起点（默认 0）。

@@ -7,7 +7,8 @@ license = "Apache-2.0"
 
 [dependencies]
 # Web 框架与异步运行时（ADR-0001）
-axum = "0.8"
+# multipart 特性：解析 PyPI twine 的 multipart/form-data 上传体（FR-27）
+axum = { version = "0.8", features = ["multipart"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "fs", "io-util"] }
 # tower-http 中间件：请求追踪与请求 ID
 tower-http = { version = "0.6", features = ["trace", "request-id", "util"] }

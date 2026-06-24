@@ -34,6 +34,7 @@ mod format_routes;
 mod go_routes;
 mod identity;
 mod npm_routes;
+mod pypi_routes;
 mod repo_access;
 mod repositories;
 mod search;
@@ -307,12 +308,17 @@ pub fn build_router(state: AppState) -> Router {
 
     // 格式 API：按原生协议挂载，路径含仓库名（如 Raw 的 /{repo}/{path..}）。
     // 用 catch-all 段匹配仓库内任意路径；axum 优先匹配 /health 与 /api/v1 等字面前缀。
-    let format_api = Router::new().route(
-        "/{repo}/{*path}",
-        get(format_routes::get_artifact)
-            .put(format_routes::put_artifact)
-            .delete(format_routes::delete_artifact),
-    );
+    // PyPI twine 上传目标为 `POST /{repo}/`（空路径，catch-all 不匹配），故单列其路由；
+    // `POST /{repo}/{*path}` 兜底 PyPI 的 `legacy/` 等带路径上传形态。
+    let format_api = Router::new()
+        .route("/{repo}/", post(format_routes::post_artifact_root))
+        .route(
+            "/{repo}/{*path}",
+            get(format_routes::get_artifact)
+                .put(format_routes::put_artifact)
+                .post(format_routes::post_artifact)
+                .delete(format_routes::delete_artifact),
+        );
 
     // Docker Registry v2 / OCI Distribution：挂载于 /v2/。
     // `/v2/` 为版本检查；`/v2/token` 为 Bearer 范围令牌端点（须置于 catch-all 之前，

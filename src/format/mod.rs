@@ -14,6 +14,7 @@ pub mod docker_registry;
 mod go_mod;
 mod maven;
 mod npm;
+mod pypi;
 mod raw;
 pub mod service;
 
@@ -23,6 +24,10 @@ pub use docker_registry::{DockerError, DockerRegistry};
 pub use go_mod::{GoError, GoFormat, GoRequest, VersionFile};
 pub use maven::MavenFormat;
 pub use npm::{NpmError, NpmFormat, PublishRequest};
+pub use pypi::{
+    MultipartField, PypiError, PypiFormat, UploadRequest, PACKAGES_PREFIX as PYPI_PACKAGES_PREFIX,
+    PEP691_CONTENT_TYPE as PYPI_PEP691_CONTENT_TYPE, SIMPLE_SEGMENT as PYPI_SIMPLE_SEGMENT,
+};
 pub use raw::RawFormat;
 pub use service::{ArtifactKind, ArtifactService, ServiceError};
 
@@ -110,7 +115,7 @@ impl FormatRegistry {
         self.formats.push(format);
     }
 
-    /// 构造含当前已实现格式（Raw、Maven、npm、Docker、Go、Cargo）的注册表。
+    /// 构造含当前已实现格式（Raw、Maven、npm、Docker、Go、Cargo、PyPI）的注册表。
     ///
     /// 其余格式由各自批次实现后在此注册，本批不提前占位未实现格式。
     pub fn with_builtin() -> Self {
@@ -121,6 +126,7 @@ impl FormatRegistry {
         registry.register(Box::new(DockerFormat));
         registry.register(Box::new(GoFormat));
         registry.register(Box::new(CargoFormat));
+        registry.register(Box::new(PypiFormat));
         registry
     }
 
@@ -191,6 +197,8 @@ mod tests {
         // Cargo 已实现并注册，应查得
         assert!(registry.get("cargo").is_some());
         assert_eq!(registry.get("cargo").unwrap().name(), "cargo");
+        assert!(registry.get("pypi").is_some());
+        assert_eq!(registry.get("pypi").unwrap().name(), "pypi");
         assert!(registry.get("不存在").is_none());
     }
 }

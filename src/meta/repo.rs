@@ -96,7 +96,7 @@ pub struct RepositoryRecord {
     pub id: String,
     /// 仓库名（唯一）。
     pub name: String,
-    /// 格式字符串（maven | npm | docker | raw）。
+    /// 格式字符串（maven | npm | docker | raw | pypi）。
     pub format: String,
     /// 类型字符串（hosted | proxy）。
     pub r#type: String,

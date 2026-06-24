@@ -24,7 +24,7 @@ pub struct RepositoryDto {
     pub id: String,
     /// 仓库名。
     pub name: String,
-    /// 格式（maven | npm | docker | raw）。
+    /// 格式（maven | npm | docker | raw | pypi）。
     pub format: String,
     /// 类型（hosted | proxy）。
     #[serde(rename = "type")]
@@ -98,7 +98,7 @@ impl From<RepoError> for ApiError {
 pub struct CreateRepositoryRequest {
     /// 仓库名。
     pub name: String,
-    /// 格式（maven | npm | docker | raw）。
+    /// 格式（maven | npm | docker | raw | pypi）。
     pub format: String,
     /// 类型（hosted | proxy）。
     #[serde(rename = "type")]

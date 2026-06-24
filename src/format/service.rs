@@ -223,7 +223,35 @@ impl<S: BlobStore, U: Upstream> ArtifactService<S, U> {
             .await
     }
 
+    /// 读取制品但 cache-miss 时从**显式给定的上游文件 URL** 回源（FR-27 PyPI 用）。
+    ///
+    /// PyPI 的发行文件常托管在与 Simple 索引不同的主机（如 `files.pythonhosted.org`），
+    /// 无法用「上游基址 + 相对路径」模型定位；故由调用方从项目页解析出文件的上游 URL，
+    /// 经本方法回源。缓存键仍是本仓库内的 `coords.path`，单飞合并 / 落盘校验 / 写索引复用既有机理。
+    pub async fn get_or_fetch_from(
+        &self,
+        repo: &RepositoryRecord,
+        format: &dyn Format,
+        coords: &ArtifactCoordinates,
+        upstream_file_url: &str,
+    ) -> Result<(ReadHandle, ArtifactKind), ServiceError> {
+        // 缓存 / 本地命中：直接流式返回（与 get 一致）
+        if let Some(record) = self.meta.get_artifact(&repo.id, &coords.path).await? {
+            let blob = self.store.get(&record.sha256).await?;
+            return Ok((ReadHandle { record, blob }, ArtifactKind::Local));
+        }
+        if RepoType::from_db_str(&repo.r#type) != RepoType::Proxy {
+            return Err(ServiceError::NotFound);
+        }
+        // 把绝对文件 URL 拆为 (基址, 末段文件名)，复用 fetch 的「基址 + 相对路径」拼接
+        let (base, file) = split_file_url(upstream_file_url);
+        self.fetch_and_cache(repo, format, coords, base, file).await
+    }
+
     /// proxy cache-miss：单飞合并回源、落盘、写索引。返回新落定的读句柄。
+    ///
+    /// `upstream_base` + `rel_path` 共同决定回源 URL（[`Upstream::fetch`] 内做拼接），
+    /// 缓存键仍是 `coords.path`（与回源 rel_path 可能不同，如 PyPI 跨主机文件）。
     async fn fetch_and_cache(
         &self,
         repo: &RepositoryRecord,
@@ -409,6 +437,16 @@ fn is_too_large(e: &std::io::Error) -> bool {
     e.get_ref()
         .map(|inner| inner.is::<TooLargeMarker>())
         .unwrap_or(false)
+}
+
+/// 把绝对文件 URL 拆为 (基址, 末段文件名)，供 [`Upstream::fetch`] 的「基址 + 相对路径」拼接复用。
+///
+/// 如 `https://h/a/b/x.whl` → (`https://h/a/b`, `x.whl`)；无 `/` 时基址为空、文件名为整串。
+fn split_file_url(url: &str) -> (&str, &str) {
+    match url.rsplit_once('/') {
+        Some((base, file)) => (base, file),
+        None => ("", url),
+    }
 }
 
 /// 限长读包装：累计读取字节超过上限时返回专属超限错误，供上层映射 413。
