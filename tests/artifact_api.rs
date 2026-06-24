@@ -52,6 +52,9 @@ impl Fixture {
         config.server.public_base_url = Some("http://localhost:8080".to_string());
         let (audit, audit_rx) = jianartifact::api::audit_channel();
         jianartifact::api::spawn_audit_writer(meta.clone(), audit_rx);
+        // 使用分析采集：建有界 channel 并启动写入任务（关明细），使路由真实走采集链路
+        let (usage, usage_rx) = jianartifact::api::usage_channel();
+        jianartifact::api::spawn_usage_writer(meta.clone(), usage_rx, false);
         let state = AppState {
             config: Arc::new(config),
             meta,
@@ -62,6 +65,7 @@ impl Fixture {
             formats: Arc::new(FormatRegistry::with_builtin()),
             docker: Some(docker),
             audit,
+            usage,
         };
         Self { state, _dir: dir }
     }
@@ -188,6 +192,79 @@ fn empty_req(method: &str, uri: &str, auth: Option<&str>) -> Request<Body> {
         builder = builder.header("authorization", a);
     }
     builder.body(Body::empty()).unwrap()
+}
+
+// ---------- FR-57 使用分析采集端到端 ----------
+
+/// 轮询等待聚合下载计数达到期望值（写入任务异步落库，不依赖固定睡眠时长）。
+async fn 等待下载计数(meta: &MetaStore, repo: &str, path: &str, want: i64) -> i64 {
+    use jianartifact::meta::UsageAction;
+    let mut got = 0;
+    for _ in 0..100 {
+        got = meta
+            .usage_count(repo, path, UsageAction::Download)
+            .await
+            .unwrap();
+        if got >= want {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    got
+}
+
+#[tokio::test]
+async fn 下载成功被聚合计数_匿名与登录共计() {
+    let fx = Fixture::new().await;
+    let writer = fx.seed_user("writer", "pw", Role::User).await;
+    let rid = fx.seed_raw_repo("files", Visibility::Public).await;
+    fx.seed_acl(&rid, &writer, Permission::Write).await;
+    let auth = format!("Bearer {}", fx.login_token("writer", "pw").await);
+
+    // 上传一个制品
+    let (status, _) = send(
+        fx.router(),
+        raw_req("PUT", "/files/a/b.txt", Some(&auth), b"data".to_vec()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // 公开仓库匿名下载 2 次 + 登录下载 1 次，聚合应累加为 3
+    for _ in 0..2 {
+        let (s, _) = send_bytes(fx.router(), empty_req("GET", "/files/a/b.txt", None)).await;
+        assert_eq!(s, StatusCode::OK);
+    }
+    let (s, _) = send_bytes(fx.router(), empty_req("GET", "/files/a/b.txt", Some(&auth))).await;
+    assert_eq!(s, StatusCode::OK);
+
+    let got = 等待下载计数(&fx.state.meta, "files", "a/b.txt", 3).await;
+    assert_eq!(got, 3, "匿名 + 登录的下载应聚合累加");
+}
+
+#[tokio::test]
+async fn 无权访问私有仓库不计入下载统计() {
+    // §2.1 高风险：私有仓库对无权者一律 404；这类被拒访问不得计入使用统计（不泄露存在性）
+    let fx = Fixture::new().await;
+    let writer = fx.seed_user("writer", "pw", Role::User).await;
+    let rid = fx.seed_raw_repo("secret", Visibility::Private).await;
+    fx.seed_acl(&rid, &writer, Permission::Write).await;
+    let auth = format!("Bearer {}", fx.login_token("writer", "pw").await);
+    // 写者上传一个私有制品
+    let (status, _) = send(
+        fx.router(),
+        raw_req("PUT", "/secret/k.txt", Some(&auth), b"top".to_vec()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // 匿名访问私有制品被拒 404
+    let (s, _) = send(fx.router(), empty_req("GET", "/secret/k.txt", None)).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+
+    // 给异步采集留出时间窗后，被拒访问不应产生任何下载计数
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let got = 等待下载计数(&fx.state.meta, "secret", "k.txt", 1).await;
+    assert_eq!(got, 0, "被拒的私有访问不得计入统计");
 }
 
 // ---------- FR-11/17 Raw 直传与下载端到端 ----------

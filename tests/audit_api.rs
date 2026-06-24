@@ -47,6 +47,9 @@ impl Fixture {
         );
         let (audit, audit_rx) = jianartifact::api::audit_channel();
         jianartifact::api::spawn_audit_writer(meta.clone(), audit_rx);
+        // 使用分析采集：建有界 channel 并启动写入任务（关明细），使路由真实走采集链路
+        let (usage, usage_rx) = jianartifact::api::usage_channel();
+        jianartifact::api::spawn_usage_writer(meta.clone(), usage_rx, false);
         let state = AppState {
             config: Arc::new(Config::default()),
             meta,
@@ -57,6 +60,7 @@ impl Fixture {
             formats: Arc::new(FormatRegistry::with_builtin()),
             docker: Some(docker),
             audit,
+            usage,
         };
         Self { state, _dir: dir }
     }
@@ -280,6 +284,9 @@ async fn 审计写入任务缺失时业务仍成功() {
     // 注意：丢弃接收端（不 spawn 写入任务），channel 随即关闭
     let (audit, audit_rx) = jianartifact::api::audit_channel();
     drop(audit_rx);
+    // 使用分析同样丢弃接收端：本用例只验证审计降级，不需要使用采集落库
+    let (usage, usage_rx) = jianartifact::api::usage_channel();
+    drop(usage_rx);
     let state = AppState {
         config: Arc::new(Config::default()),
         meta: meta.clone(),
@@ -290,6 +297,7 @@ async fn 审计写入任务缺失时业务仍成功() {
         formats: Arc::new(FormatRegistry::with_builtin()),
         docker: Some(docker),
         audit,
+        usage,
     };
     let hash = auth::hash_password("S3cret!").unwrap();
     meta.create_user("admin", &hash, Role::Admin).await.unwrap();

@@ -32,6 +32,8 @@ const DEFAULT_UPSTREAM_TIMEOUT_SECS: u64 = 60;
 const DEFAULT_AUDIT_RETENTION_DAYS: u32 = 90;
 /// 默认审计日志行数硬上限（兜底，防止撑爆 SQLite）。
 const DEFAULT_AUDIT_MAX_ROWS: u64 = 1_000_000;
+/// 使用分析明细行数硬上限默认值（兜底，防止明细撑爆 SQLite；ADR-0009）。
+const DEFAULT_USAGE_MAX_DETAIL_ROWS: u64 = 1_000_000;
 /// 漏洞库离线镜像默认数据源基址（OSV 公开数据集，按生态提供 all.zip 整包下载）。
 const DEFAULT_VULN_SOURCE_BASE_URL: &str = "https://osv-vulnerabilities.storage.googleapis.com";
 /// 漏洞库镜像默认刷新周期（秒），默认 24 小时。
@@ -238,12 +240,15 @@ impl Default for ProxyConfig {
     }
 }
 
-/// 可观测性配置：当前承载审计日志（FR-31）。指标端点（FR-32）由后续批次接入。
+/// 可观测性配置：当前承载审计日志（FR-31）与使用分析采集（FR-57）。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ObservabilityConfig {
     /// 审计日志配置。
     #[serde(default)]
     pub audit: AuditConfig,
+    /// 使用分析采集配置。
+    #[serde(default)]
+    pub usage: UsageConfig,
 }
 
 /// 审计日志配置（ADR-0015）。
@@ -260,6 +265,28 @@ impl Default for AuditConfig {
         Self {
             retention_days: DEFAULT_AUDIT_RETENTION_DAYS,
             max_rows: DEFAULT_AUDIT_MAX_ROWS,
+        }
+    }
+}
+
+/// 使用分析采集配置（FR-57，ADR-0009）。
+///
+/// 聚合计数始终采集（开销小、量级可控）；明细默认关闭，开启后量级由 `max_detail_rows` 兜底裁剪。
+/// 统计数据为本机内部数据、默认不外发，本结构不含任何外部导出 / 上报开关（本批不做导出）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsageConfig {
+    /// 是否记录逐条访问 / 下载明细；默认关闭（仅聚合计数），避免明细无谓增长。
+    pub detail_enabled: bool,
+    /// 明细行数硬上限：超限删最旧行，兜底防止明细撑爆 SQLite。
+    pub max_detail_rows: u64,
+}
+
+impl Default for UsageConfig {
+    fn default() -> Self {
+        Self {
+            // 默认只采集聚合计数，不落明细
+            detail_enabled: false,
+            max_detail_rows: DEFAULT_USAGE_MAX_DETAIL_ROWS,
         }
     }
 }
@@ -372,6 +399,24 @@ mod tests {
             // 审计默认：保留 90 天、行数上限 100 万
             assert_eq!(cfg.observability.audit.retention_days, 90);
             assert_eq!(cfg.observability.audit.max_rows, 1_000_000);
+            // 使用分析默认：明细关闭、明细行数上限 100 万
+            assert!(!cfg.observability.usage.detail_enabled);
+            assert_eq!(cfg.observability.usage.max_detail_rows, 1_000_000);
+        });
+    }
+
+    #[test]
+    fn toml_可覆盖使用分析明细开关与上限() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            "[observability.usage]\ndetail_enabled = true\nmax_detail_rows = 5000"
+        )
+        .unwrap();
+        with_env_vars(&[], || {
+            let cfg = Config::load(file.path()).unwrap();
+            assert!(cfg.observability.usage.detail_enabled);
+            assert_eq!(cfg.observability.usage.max_detail_rows, 5000);
         });
     }
 

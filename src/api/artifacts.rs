@@ -15,7 +15,8 @@ use crate::format::UsageSnippet;
 use crate::meta::ArtifactRecord;
 
 use super::repo_access::{load_readable_repo, load_writable_repo};
-use super::{ApiError, AppState, Identity};
+use super::{ApiError, AppState, ClientIp, Identity};
+use crate::meta::UsageAction;
 
 /// 制品详情视图（字段对齐 docs/API.md 制品详情）。
 #[derive(Debug, Serialize)]
@@ -70,6 +71,7 @@ impl From<ArtifactRecord> for Checksums {
 pub async fn get_artifact_detail(
     State(state): State<AppState>,
     identity: Identity,
+    ClientIp(client_ip): ClientIp,
     Path((id, path)): Path<(String, String)>,
 ) -> Result<Json<ArtifactDetailDto>, ApiError> {
     // 先过读授权（无权 private → 404 隐藏存在性）
@@ -81,6 +83,16 @@ pub async fn get_artifact_detail(
         .get_artifact(&repo.id, &path)
         .await?
         .ok_or(ApiError::NotFound)?;
+
+    // 使用分析采集（FR-57）：详情查看记一次访问（非阻塞、采集失败不影响业务）。
+    // 路径取已落库的制品路径，与下载采集口径一致，便于聚合到同一制品。
+    state.usage.record(
+        UsageAction::Access,
+        &repo.name,
+        &record.path,
+        identity.actor_name(),
+        Some(&client_ip),
+    );
 
     // 据格式注册表多态生成使用片段（未注册格式给空片段，不报错）
     let usage = build_usage(&state, &repo.format, &repo.name, &record.path);

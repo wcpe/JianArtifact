@@ -17,8 +17,9 @@ use crate::format::{ArtifactKind, PypiFormat, PYPI_SIMPLE_SEGMENT};
 use crate::meta::RepositoryRecord;
 
 use super::repo_access::{build_repo_view, load_readable_repo};
-use super::{ApiError, AppState, Identity};
+use super::{ApiError, AppState, ClientIp, Identity};
 use crate::authz::{authorize, Action, Decision};
+use crate::meta::UsageAction;
 
 /// 默认内容类型：格式无法推断且制品未记录时回退。
 const DEFAULT_CONTENT_TYPE: &str = "application/octet-stream";
@@ -256,11 +257,21 @@ async fn post_pypi_upload(
 pub async fn get_artifact(
     State(state): State<AppState>,
     identity: Identity,
+    ClientIp(client_ip): ClientIp,
     headers: HeaderMap,
     Path((repo_name, path)): Path<(String, String)>,
 ) -> Result<Response, ApiError> {
     // 读授权（无权 private → 404 隐藏存在性）
     let repo = load_readable_repo_by_name(&state, &identity, &repo_name).await?;
+    // 使用分析采集（FR-57）：读授权通过即记一次下载（非阻塞、采集失败不影响业务）。
+    // 仅授权放行的格式 GET 才计数；private 对无权者上一步已 404 返回，不会到此。
+    state.usage.record(
+        UsageAction::Download,
+        &repo.name,
+        &path,
+        identity.actor_name(),
+        Some(&client_ip),
+    );
     // npm 读走其原生协议：tarball（含 `/-/` 段）按 blob 返回，否则按 packument 文档返回
     if repo.format == NPM_FORMAT {
         return get_npm(&state, &repo, &path).await;

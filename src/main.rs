@@ -124,6 +124,21 @@ async fn main() -> anyhow::Result<()> {
         "审计日志采集与保留期轮转已就绪"
     );
 
+    // 使用分析采集（FR-57，ADR-0009）：建有界 channel，启动聚合写入与明细兜底裁剪后台任务。
+    // 聚合计数始终采集；明细按配置开关落库。主路径只非阻塞采集；写入失败只记 WARN，不影响业务。
+    // 数据落本地、默认不外发、不向外部遥测 phone-home（本批不做外部导出）。
+    let detail_enabled = cfg.observability.usage.detail_enabled;
+    let (usage, usage_rx) = api::usage_channel();
+    api::spawn_usage_writer(meta.clone(), usage_rx, detail_enabled);
+    if detail_enabled {
+        api::spawn_usage_pruner(meta.clone(), cfg.observability.usage.max_detail_rows);
+    }
+    info!(
+        明细开启 = detail_enabled,
+        明细行数上限 = cfg.observability.usage.max_detail_rows,
+        "使用分析采集已就绪（数据本机内部、默认不外发）"
+    );
+
     // 漏洞库离线镜像（FR-70，ADR-0012）：默认关闭，启用时后台周期下载公开漏洞数据落本地库。
     // 仅镜像/落库，不做制品坐标匹配（FR-71）；下载公开数据集整包，不外发本机制品坐标。
     let _vuln_refresh = if cfg.vuln.enabled {
@@ -150,6 +165,7 @@ async fn main() -> anyhow::Result<()> {
         formats,
         docker: Some(docker),
         audit,
+        usage,
     };
     let app = api::build_router(state);
 

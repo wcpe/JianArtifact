@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 mod audit;
 mod repo;
+mod usage;
 mod vuln;
 
 pub use audit::{AuditEntry, AuditQuery, NewAuditEntry};
@@ -17,6 +18,7 @@ pub use repo::{
     AclRecord, ArtifactRecord, ArtifactSearchHit, NewArtifact, NewRepository, Permission, RepoType,
     RepositoryRecord, Visibility,
 };
+pub use usage::{NewUsageEvent, UsageAction, UsageStatRow};
 pub use vuln::{MirrorStateRecord, NewAdvisory, NewAffected};
 
 /// 全局角色。以小写字符串存储于 DB，避免魔法字符串散落各处。

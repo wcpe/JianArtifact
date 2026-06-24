@@ -79,6 +79,15 @@
 
 > 审计保留期不是敏感项，按 TOML 嵌套节 `[observability.audit]` 配置即可（环境变量前缀仅对单层节名做嵌套映射，本两层键以 TOML 为准）。审计日志数据本机内部、默认不外发（ADR-0009 / ADR-0015）。
 
+### [observability.usage]（使用分析采集，P2 / FR-57）
+
+| 键 | 含义 | 默认（取向） | 环境变量 |
+|---|---|---|---|
+| detail_enabled | 是否记录逐条访问 / 下载明细（`usage_events`）；默认关闭，仅采集聚合计数 | false | （经 TOML 配置） |
+| max_detail_rows | 明细行数硬上限；超限删最旧行，兜底防止明细撑爆 SQLite | 1000000 | （经 TOML 配置） |
+
+> 聚合计数（`usage_stats`）始终采集（开销小、量级可控）；明细默认关闭，开启后量级由 `max_detail_rows` 兜底裁剪。统计数据本机内部、**默认不主动外发、不向外部遥测 phone-home**；不提供任何外部导出 / 上报开关（本批不做导出，ADR-0009）。本两层键以 TOML `[observability.usage]` 为准（环境变量前缀仅对单层节名做嵌套映射）。
+
 ### [upstream.&lt;name&gt;]（proxy 仓库上游，可配置多个）
 
 | 键 | 含义 | 默认（取向） | 环境变量 |

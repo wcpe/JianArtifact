@@ -42,12 +42,14 @@ mod repo_access;
 mod repositories;
 mod search;
 mod tokens;
+mod usage;
 mod users;
 
 pub use audit::{
     channel as audit_channel, spawn_audit_retention, spawn_audit_writer, AuditResult, AuditSink,
 };
 pub use identity::resolve_identity;
+pub use usage::{channel as usage_channel, spawn_usage_pruner, spawn_usage_writer, UsageSink};
 
 /// 应用内具体化的通用制品机理服务类型（运行期可选 blob 后端 + reqwest 上游）。
 pub type AppArtifactService = ArtifactService<BlobBackend, HttpUpstream>;
@@ -81,6 +83,8 @@ pub struct AppState {
     pub docker: Option<Arc<AppDockerRegistry>>,
     /// 审计事件投递端（FR-31，ADR-0015）：主路径非阻塞 enqueue，后台任务批量落库。
     pub audit: AuditSink,
+    /// 使用分析采集投递端（FR-57，ADR-0009）：主路径非阻塞采集访问 / 下载，后台任务聚合落库。
+    pub usage: UsageSink,
 }
 
 /// 统一 API 错误类型，转换为 JSON 响应 `{"error":{"code","message"}}`。
@@ -264,6 +268,14 @@ impl Identity {
             Err(ApiError::Forbidden)
         }
     }
+
+    /// 采集用主体名：已认证取用户名，匿名取 `anonymous`（绝不含凭据）。
+    pub fn actor_name(&self) -> &str {
+        self.0
+            .user()
+            .map(|u| u.username.as_str())
+            .unwrap_or("anonymous")
+    }
 }
 
 /// 构建 axum 路由：挂健康检查、认证、用户、Token 端点与请求 ID、追踪、身份解析中间件。
@@ -424,6 +436,9 @@ mod tests {
         // 测试用审计：创建 sink 并启动写入任务，使路由真实走审计采集链路
         let (audit, audit_rx) = audit::channel();
         audit::spawn_audit_writer(meta.clone(), audit_rx);
+        // 测试用使用分析：创建 sink 并启动写入任务（关明细），使路由真实走采集链路
+        let (usage, usage_rx) = usage::channel();
+        usage::spawn_usage_writer(meta.clone(), usage_rx, false);
         let state = AppState {
             config: Arc::new(Config::default()),
             meta,
@@ -434,6 +449,7 @@ mod tests {
             formats: Arc::new(FormatRegistry::with_builtin()),
             docker: Some(docker),
             audit,
+            usage,
         };
         (state, dir)
     }
