@@ -42,8 +42,15 @@ const DEFAULT_VULN_DOWNLOAD_TIMEOUT_SECS: u64 = 600;
 const ENV_PREFIX: &str = "JIANARTIFACT_";
 /// 已知配置节名。环境变量映射时，仅把节名与键名之间的首个下划线视作嵌套分隔，
 /// 键名内部的下划线（如 `session_ttl_secs`）保持原样。
-const KNOWN_SECTIONS: &[&str] =
-    &["server", "data", "auth", "limits", "proxy", "observability", "vuln"];
+const KNOWN_SECTIONS: &[&str] = &[
+    "server",
+    "data",
+    "auth",
+    "limits",
+    "proxy",
+    "observability",
+    "vuln",
+];
 
 /// 已知的多级嵌套前缀映射（环境变量下划线前缀 → 点分隔配置路径）。
 ///
