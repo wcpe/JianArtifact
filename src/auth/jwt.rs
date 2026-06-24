@@ -84,6 +84,8 @@ pub struct JwtSigner {
     encoding: EncodingKey,
     /// HS256 解码密钥。
     decoding: DecodingKey,
+    /// 原始密钥字节，仅用于为其他子系统派生**域分隔**子密钥（如 CC 挑战），不直接对外暴露。
+    secret: Vec<u8>,
     /// 会话有效期（秒）。
     ttl_secs: u64,
 }
@@ -112,8 +114,17 @@ impl JwtSigner {
         Self {
             encoding: EncodingKey::from_secret(secret),
             decoding: DecodingKey::from_secret(secret),
+            secret: secret.to_vec(),
             ttl_secs,
         }
+    }
+
+    /// 为其他子系统派生一把**域分隔**的子密钥：`HMAC-SHA256(jwt_secret, domain)`。
+    ///
+    /// 复用 JWT 的同一真源密钥而不直接泄露其本体，且不同 `domain` 派生互不相同——
+    /// 由此签发的令牌（如 CC 挑战令牌）与会话 JWT 在密钥层面隔离，互不可伪造、不串味。
+    pub fn derive_key(&self, domain: &[u8]) -> [u8; 32] {
+        hmac_sha256(&self.secret, domain)
     }
 
     /// 会话有效期（秒）。
@@ -173,6 +184,40 @@ impl JwtSigner {
         let data = decode::<DockerTokenClaims>(token, &self.decoding, &validation)?;
         Ok(data.claims)
     }
+}
+
+/// HMAC-SHA256 标准实现（RFC 2104）：块长 64 字节，超长密钥先哈希，内外 padding 各异或后两轮哈希。
+///
+/// 供本模块派生域分隔子密钥与 CC 挑战（`api::cc_challenge`）无状态签名复用，避免重复实现。
+pub(crate) fn hmac_sha256(key: &[u8], msg: &[u8]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    const BLOCK: usize = 64;
+    // 超过块长的密钥先哈希为 32 字节；否则零填充到块长
+    let mut k = [0u8; BLOCK];
+    if key.len() > BLOCK {
+        let d = Sha256::digest(key);
+        k[..32].copy_from_slice(&d);
+    } else {
+        k[..key.len()].copy_from_slice(key);
+    }
+    let mut ipad = [0x36u8; BLOCK];
+    let mut opad = [0x5cu8; BLOCK];
+    for i in 0..BLOCK {
+        ipad[i] ^= k[i];
+        opad[i] ^= k[i];
+    }
+    // inner = H(ipad || msg)
+    let mut inner = Sha256::new();
+    inner.update(ipad);
+    inner.update(msg);
+    let inner_digest = inner.finalize();
+    // outer = H(opad || inner)
+    let mut outer = Sha256::new();
+    outer.update(opad);
+    outer.update(inner_digest);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&outer.finalize());
+    out
 }
 
 /// 计算密钥文件路径。
@@ -330,6 +375,32 @@ mod tests {
         // docker 令牌也不应被当作会话 JWT（缺 username / role）
         let docker = signer.issue_docker_token("u", Vec::new(), 300).unwrap();
         assert!(signer.verify(&docker).is_err());
+    }
+
+    #[test]
+    fn hmac_符合rfc4231测试向量() {
+        // RFC 4231 Test Case 2：key="Jefe"，data="what do ya want for nothing?"
+        // 期望 HMAC-SHA256 = 5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843
+        let mac = hmac_sha256(b"Jefe", b"what do ya want for nothing?");
+        let hex: String = mac.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(
+            hex,
+            "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+        );
+    }
+
+    #[test]
+    fn 派生子密钥域分隔且确定() {
+        let signer = JwtSigner::from_secret(b"derive-secret-32-bytes-xxxxxxxxxx", 3600);
+        let a = signer.derive_key(b"cc-challenge");
+        let b = signer.derive_key(b"other-domain");
+        // 同 domain 确定一致
+        assert_eq!(a, signer.derive_key(b"cc-challenge"));
+        // 不同 domain 派生不同（域分隔）
+        assert_ne!(a, b);
+        // 不同源密钥派生不同
+        let other = JwtSigner::from_secret(b"another-secret-yyyyyyyyyyyyyyyyyy", 3600);
+        assert_ne!(a, other.derive_key(b"cc-challenge"));
     }
 
     #[test]

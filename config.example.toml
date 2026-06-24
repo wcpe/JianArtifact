@@ -54,6 +54,21 @@ upstream_timeout_secs = 60
 # # 启用时应设得高于预期最大制品体，避免误杀正常大制品流式上传。
 # max_body_bytes = 0
 
+# CC 挑战（工作量证明 PoW，FR-54 / ADR-0008）。默认关闭。
+# ⚠️ 正常包管理器 CLI（mvn / npm / docker / curl）不会解 PoW，启用后对匿名拉取
+# 无差别下发挑战会直接打断正常匿名拉取——故默认豁免已认证（带凭据）客户端，
+# 挑战只面向匿名可疑流量；仅在确有 CC 攻击、且能接受匿名访问受影响时开启。
+# 挑战令牌服务端 HMAC 无状态签名、绑定连接级来源 IP（不采信 X-Forwarded-For）。
+# 仅应用层（L7）；L3/L4 体积型攻击仍由前置反向代理 / CDN / WAF 承担。
+# [protection.cc_challenge]
+# enabled = false
+# # PoW 难度（要求 sha256 摘要的前导零比特数）：越高客户端求解开销越大。
+# difficulty = 20
+# # 挑战令牌有效期（秒）：超此时长的证明视为过期、须重新获取挑战。
+# ttl_secs = 300
+# # 是否豁免已认证（Bearer / Basic / 会话）请求，避免误伤带凭据的包管理器 CLI。
+# exempt_authenticated = true
+
 [vuln]
 # 漏洞库离线镜像（FR-70 / ADR-0012）。默认关闭：启用后会按周期主动联网下载
 # 公开漏洞数据集（OSV 等）整体镜像到本机并落库；下载只携带公开生态名，

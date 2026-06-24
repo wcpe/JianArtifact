@@ -19,6 +19,7 @@ pub mod provider;
 pub mod token;
 
 pub use basic::{parse_basic_auth, BasicCredentials};
+pub(crate) use jwt::hmac_sha256;
 pub use jwt::{
     DockerAccess, DockerTokenClaims, JwtClaims, JwtError, JwtSigner, DOCKER_TOKEN_TTL_SECS,
 };

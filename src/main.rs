@@ -192,6 +192,20 @@ async fn main() -> anyhow::Result<()> {
         info!("基础速率限制未启用，跳过");
     }
 
+    // CC 挑战（FR-54，ADR-0008）：挑战签名器复用 JWT 派生的域分隔子密钥（不直接泄露 JWT 密钥本体），
+    // 随状态共享、按配置开关在中间件生效。默认关闭、默认豁免已认证客户端，仅对匿名可疑流量要求 PoW。
+    let cc_challenger = Arc::new(api::CcChallenger::new(&jwt.derive_key(b"cc-challenge")));
+    if cfg.protection.cc_challenge.enabled {
+        warn!(
+            难度位 = cfg.protection.cc_challenge.difficulty,
+            过期秒 = cfg.protection.cc_challenge.ttl_secs,
+            豁免已认证 = cfg.protection.cc_challenge.exempt_authenticated,
+            "CC 挑战已启用（PoW 工作量证明）——注意：正常包管理器 CLI 不会解 PoW，匿名拉取将被挑战拦截"
+        );
+    } else {
+        info!("CC 挑战未启用，跳过");
+    }
+
     // OIDC 认证 provider（FR-34，ADR-0016）：仅当配置了 `[auth.oidc]` 才实例化（未配置即不存在）。
     // client_secret 真源 env / 配置，绝不入库 / 进日志；复用纯 rustls 的 reqwest 客户端。
     let oidc = if let Some(oidc_cfg) = cfg.auth.oidc.clone() {
@@ -267,6 +281,8 @@ async fn main() -> anyhow::Result<()> {
         // FR-53：从 [protection.ip_list] 预解析黑/白名单网段；封禁登记表为空进程内内存（重启即清）
         ip_matcher: Arc::new(api::IpMatcher::from_config(&cfg.protection.ip_list)),
         ban_registry: Arc::new(api::BanRegistry::new()),
+        // FR-54：CC 挑战签名器（密钥复用 JWT 派生子密钥，无状态签发 / 校验 PoW 挑战）
+        cc_challenger,
     };
     let app = api::build_router(state);
 

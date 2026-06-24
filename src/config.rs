@@ -90,6 +90,25 @@ const DEFAULT_SLOWLORIS_HEADER_TIMEOUT_SECS: u64 = 30;
 /// 防止任意端点（如管理 JSON 接口）被超大体撑爆。默认 0（不启用），避免误杀正常大制品流式上传；
 /// 启用时应设得高于预期最大制品体，仅作异常超大体的兜底拦截。
 const DEFAULT_SLOWLORIS_MAX_BODY_BYTES: u64 = 0;
+/// CC 挑战默认开关（FR-54，ADR-0008）：**默认关闭**。
+///
+/// 正常包管理器 CLI（mvn / npm / docker / curl）不会解工作量证明（PoW），无差别拦截会直接打断
+/// 正常拉取。故默认关闭，启用与否由运维显式承担——仅在确有 CC（HTTP 洪水）攻击且能接受匿名访问
+/// 受影响时开启。
+const DEFAULT_CC_CHALLENGE_ENABLED: bool = false;
+/// CC 挑战默认 PoW 难度（要求 sha256 摘要的前导零比特数）。
+///
+/// 难度越高客户端单次求解开销越大、攻击者刷流成本越高，而正常单次请求成本仍可忽略。
+/// 默认 20 位：现代 CPU 求解约毫秒级，对单请求开销小，又足以抬高高频刷流成本。
+const DEFAULT_CC_CHALLENGE_DIFFICULTY: u32 = 20;
+/// CC 挑战令牌默认有效期（秒）：签发后超此时长的证明视为过期，须重新获取挑战。
+///
+/// 取较短值以收紧证明的可复用窗口（配合绑定来源 IP），默认 300 秒兼顾客户端求解 + 重试时间。
+const DEFAULT_CC_CHALLENGE_TTL_SECS: u64 = 300;
+/// CC 挑战是否默认豁免已认证请求：**默认豁免**。
+///
+/// 包管理器 CLI 通常带凭据（Bearer / Basic），豁免使其不受 PoW 挑战影响；挑战只面向匿名可疑流量。
+const DEFAULT_CC_CHALLENGE_EXEMPT_AUTHENTICATED: bool = true;
 /// 环境变量前缀。
 const ENV_PREFIX: &str = "JIANARTIFACT_";
 /// 已知配置节名。环境变量映射时，仅把节名与键名之间的首个下划线视作嵌套分隔，
@@ -505,6 +524,9 @@ pub struct ProtectionConfig {
     /// 慢速攻击（slowloris）超时与通用请求体大小限制配置（FR-52）。
     #[serde(default)]
     pub slowloris: SlowlorisConfig,
+    /// CC 挑战（工作量证明 PoW）配置（FR-54）。
+    #[serde(default)]
+    pub cc_challenge: CcChallengeConfig,
 }
 
 /// IP 黑 / 白名单配置（FR-53，ADR-0008）。
@@ -648,6 +670,36 @@ impl Default for SlowlorisConfig {
     }
 }
 
+/// CC 挑战（工作量证明 PoW）配置（FR-54，ADR-0008）。
+///
+/// 对疑似 CC（HTTP 洪水）攻击的匿名来源下发工作量证明挑战：客户端须找到 `nonce` 使
+/// `sha256(challenge_token + ":" + nonce)` 前导零位数达 `difficulty`，带证明重试方放行。
+/// 服务端无状态校验（HMAC 签名挑战，绑定来源 IP + 难度 + 签发时刻），不存挑战态。
+/// **默认关闭**：正常包管理器 CLI 不会解 PoW，无差别拦截会打断正常拉取；默认豁免已认证客户端
+/// （带凭据的 CLI），挑战只面向匿名可疑流量。启用与否由运维显式承担。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CcChallengeConfig {
+    /// 是否启用 CC 挑战；**默认关闭**，关闭时中间件直接放行、零开销。
+    pub enabled: bool,
+    /// PoW 难度（要求 sha256 摘要的前导零比特数）：越高客户端开销越大。默认 20。
+    pub difficulty: u32,
+    /// 挑战令牌有效期（秒）：签发后超此时长的证明视为过期、须重新获取挑战。默认 300。
+    pub ttl_secs: u64,
+    /// 是否豁免已认证（Bearer / Basic / 会话）请求：**默认豁免**，避免误伤带凭据的包管理器 CLI。
+    pub exempt_authenticated: bool,
+}
+
+impl Default for CcChallengeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: DEFAULT_CC_CHALLENGE_ENABLED,
+            difficulty: DEFAULT_CC_CHALLENGE_DIFFICULTY,
+            ttl_secs: DEFAULT_CC_CHALLENGE_TTL_SECS,
+            exempt_authenticated: DEFAULT_CC_CHALLENGE_EXEMPT_AUTHENTICATED,
+        }
+    }
+}
+
 /// 漏洞库离线镜像配置（FR-70，ADR-0012）。
 ///
 /// 默认关闭：镜像需主动联网拉取公开漏洞数据集到本机，应由运维显式开启。
@@ -785,6 +837,41 @@ mod tests {
             assert_eq!(cfg.protection.slowloris.body_read_timeout_secs, 30);
             assert_eq!(cfg.protection.slowloris.header_timeout_secs, 30);
             assert_eq!(cfg.protection.slowloris.max_body_bytes, 0);
+            // FR-54 CC 挑战默认：关闭、难度 20、过期 300、豁免已认证
+            assert!(!cfg.protection.cc_challenge.enabled);
+            assert_eq!(cfg.protection.cc_challenge.difficulty, 20);
+            assert_eq!(cfg.protection.cc_challenge.ttl_secs, 300);
+            assert!(cfg.protection.cc_challenge.exempt_authenticated);
+        });
+    }
+
+    #[test]
+    fn toml_可覆盖_cc_挑战配置() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            "[protection.cc_challenge]\nenabled = true\ndifficulty = 12\nttl_secs = 120\nexempt_authenticated = false"
+        )
+        .unwrap();
+        with_env_vars(&[], || {
+            let cfg = Config::load(file.path()).unwrap();
+            assert!(cfg.protection.cc_challenge.enabled);
+            assert_eq!(cfg.protection.cc_challenge.difficulty, 12);
+            assert_eq!(cfg.protection.cc_challenge.ttl_secs, 120);
+            assert!(!cfg.protection.cc_challenge.exempt_authenticated);
+        });
+    }
+
+    #[test]
+    fn cc_挑战节缺失回落默认向后兼容() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        // 只配置 rate_limit，cc_challenge 节缺失应回落默认（向后兼容旧配置）
+        writeln!(file, "[protection.rate_limit]\nenabled = true").unwrap();
+        with_env_vars(&[], || {
+            let cfg = Config::load(file.path()).unwrap();
+            assert!(cfg.protection.rate_limit.enabled);
+            assert!(!cfg.protection.cc_challenge.enabled);
+            assert_eq!(cfg.protection.cc_challenge.difficulty, 20);
         });
     }
 

@@ -180,6 +180,10 @@ async fn build_state(oidc: Option<OidcProvider>) -> (AppState, tempfile::TempDir
             &jianartifact::config::IpListConfig::default(),
         )),
         ban_registry: Arc::new(jianartifact::api::BanRegistry::new()),
+        // FR-54：测试默认 CC 挑战关闭；挑战器用固定密钥
+        cc_challenger: Arc::new(jianartifact::api::CcChallenger::new(
+            b"test-secret-32-bytes-xxxxxxxxxxxx",
+        )),
     };
     (state, dir)
 }

@@ -69,6 +69,10 @@ impl Fixture {
                 &jianartifact::config::IpListConfig::default(),
             )),
             ban_registry: std::sync::Arc::new(jianartifact::api::BanRegistry::new()),
+            // FR-54：测试默认 CC 挑战关闭；挑战器用固定密钥
+            cc_challenger: std::sync::Arc::new(jianartifact::api::CcChallenger::new(
+                b"test-secret-32-bytes-xxxxxxxxxxxx",
+            )),
         };
         Self { state, _dir: dir }
     }
@@ -110,6 +114,10 @@ impl Fixture {
                 &jianartifact::config::IpListConfig::default(),
             )),
             ban_registry: std::sync::Arc::new(jianartifact::api::BanRegistry::new()),
+            // FR-54：测试默认 CC 挑战关闭；挑战器用固定密钥
+            cc_challenger: std::sync::Arc::new(jianartifact::api::CcChallenger::new(
+                b"test-secret-32-bytes-xxxxxxxxxxxx",
+            )),
         };
         Self { state, _dir: dir }
     }

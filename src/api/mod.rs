@@ -32,6 +32,7 @@ mod artifacts;
 mod audit;
 mod auth_routes;
 mod cargo_routes;
+mod cc_challenge;
 mod docker_routes;
 mod format_routes;
 mod go_routes;
@@ -56,6 +57,7 @@ pub use anomaly_ban::{BanRegistry, IpMatcher};
 pub use audit::{
     channel as audit_channel, spawn_audit_retention, spawn_audit_writer, AuditResult, AuditSink,
 };
+pub use cc_challenge::CcChallenger;
 pub use identity::resolve_identity;
 pub use metrics::{install_recorder, MetricsHandle};
 pub use oidc_routes::OidcFlowStore;
@@ -115,6 +117,10 @@ pub struct AppState {
     /// 访问异常检测与自动封禁登记表（FR-53，ADR-0008）：进程内内存维护各 IP 的窗内异常信号计数
     /// 与封禁到期时刻，窗内异常达阈值即自动封禁一个时间窗、到期自动解封；重启即清，不落 DB。
     pub ban_registry: Arc<anomaly_ban::BanRegistry>,
+    /// CC 挑战签名器（FR-54，ADR-0008）：以 HMAC（密钥经会话 JWT 真源密钥域分隔派生，不暴露其本体、
+    /// 不与会话 JWT 串味）无状态签发 / 校验工作量证明（PoW）挑战令牌，不存挑战态。默认关闭、默认豁免
+    /// 已认证客户端，仅对匿名可疑流量要求 PoW 证明；按连接级来源 IP 绑定，不采信 XFF。
+    pub cc_challenger: Arc<cc_challenge::CcChallenger>,
 }
 
 /// 统一 API 错误类型，转换为 JSON 响应 `{"error":{"code","message"}}`。
@@ -461,6 +467,13 @@ pub fn build_router(state: AppState) -> Router {
             state.clone(),
             rate_limit::rate_limit_layer,
         ))
+        // CC 挑战中间件（FR-54，ADR-0008）：置于身份解析之内（须读已注入身份以豁免已认证客户端）。
+        // 启用时仅对匿名可疑流量要求工作量证明（PoW）：无 / 错误证明返回 429 + 挑战参数，带合法证明
+        // 放行；已认证默认豁免。无状态 HMAC 签发 / 校验、绑定连接级来源 IP（不采信 XFF）；未启用时直接放行。
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            cc_challenge::cc_challenge_layer,
+        ))
         // 身份解析中间件：先于业务 handler 解析 Bearer/Basic/匿名 注入扩展
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -559,6 +572,10 @@ mod tests {
                 &crate::config::IpListConfig::default(),
             )),
             ban_registry: Arc::new(anomaly_ban::BanRegistry::new()),
+            // 默认测试状态 CC 挑战关闭；需要的测试自行定制配置与挑战器（密钥与 jwt 同源）
+            cc_challenger: Arc::new(cc_challenge::CcChallenger::new(
+                b"test-secret-32-bytes-xxxxxxxxxxxx",
+            )),
         };
         (state, dir)
     }

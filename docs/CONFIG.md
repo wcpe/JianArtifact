@@ -175,6 +175,17 @@
 
 > 默认关闭，启用由运维显式承担。超时按「**块间空闲**」而非「整体时长」判定——只要客户端持续有数据到达就不触发，故对正常大文件流式上传（mvn deploy 大 jar、docker push 大层）友好，只切断长时间不发数据的慢速连接；档位默认保守（30 秒），调小前请评估正常网络抖动。`max_body_bytes` 区别于 `limits.max_artifact_size`（仅约束制品上传体）：本项是对**所有请求**请求体的兜底上限，带 `Content-Length` 时在进入业务前即拒 413（不读体），分块传输则边读边计、超限即断开；默认 0（不启用），启用时应设得**高于预期最大制品体**，仅作异常超大体的兜底拦截，避免误杀正常大制品上传。仅应用层（L7）：L3/L4 体积型攻击仍由前置反向代理 / CDN / WAF 承担（见 OPERATIONS）。按 TOML 嵌套节 `[protection.slowloris]` 配置即可。
 
+### [protection.cc_challenge]（CC 挑战 / 工作量证明 PoW，P2 / FR-54 / ADR-0008）
+
+| 键 | 含义 | 默认（取向） | 环境变量 |
+|---|---|---|---|
+| enabled | 是否启用 CC 挑战；关闭时中间件直接放行、零开销 | false | （经 TOML 配置） |
+| difficulty | PoW 难度（要求 `sha256(token + ":" + nonce)` 的二进制前导零比特数）；越高客户端求解开销越大 | 20 | （经 TOML 配置） |
+| ttl_secs | 挑战令牌有效期（秒）；签发后超此时长的证明视为过期、须重新获取挑战 | 300 | （经 TOML 配置） |
+| exempt_authenticated | 是否豁免已认证（Bearer / Basic / 会话）请求；避免误伤带凭据的包管理器 CLI | true | （经 TOML 配置） |
+
+> ⚠️ **默认关闭，且默认仅在确有 CC 攻击时由运维显式开启**——正常包管理器 CLI（mvn / npm / docker / curl）**不会解工作量证明（PoW）**，启用后对匿名拉取无差别下发挑战会**直接打断正常匿名拉取**。故默认 `exempt_authenticated = true`，让带凭据的 CLI 豁免，挑战只面向**匿名可疑流量**；若你的部署允许匿名拉取公开仓库，开启 CC 挑战会影响这些匿名客户端，请谨慎评估。机制：对匿名请求下发挑战令牌（HMAC 无状态签名、绑定**连接级来源 IP** + 难度 + 签发时刻，不采信 `X-Forwarded-For`，换 IP 的证明不可复用），客户端须找到 `nonce` 使摘要前导零位数达 `difficulty`，再以请求头 `X-CC-Solution: <challenge_token>:<nonce>` 重发原请求；无 / 错误证明返回 `429`（错误码 `cc_challenge_required`，响应体含挑战参数）。难度越高刷流成本越高、正常单请求成本仍可忽略；调高 `difficulty` 前请评估目标客户端算力。仅应用层（L7）：L3/L4 体积型攻击仍由前置反向代理 / CDN / WAF 承担（见 OPERATIONS）。按 TOML 嵌套节 `[protection.cc_challenge]` 配置即可。
+
 ### [upstream.&lt;name&gt;]（proxy 仓库上游，可配置多个）
 
 | 键 | 含义 | 默认（取向） | 环境变量 |
