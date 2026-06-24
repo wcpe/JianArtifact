@@ -71,6 +71,25 @@ const DEFAULT_BAN_WINDOW_SECS: u64 = 60;
 const DEFAULT_BAN_THRESHOLD: u64 = 100;
 /// 自动封禁时长（秒）：封禁期内来源 IP 一律拒绝；到期自动解封。默认 15 分钟。
 const DEFAULT_BAN_DURATION_SECS: u64 = 900;
+/// 慢速攻击防护默认开关（FR-52，ADR-0008）：默认关闭，须运维显式开启，避免误伤慢速合法客户端。
+const DEFAULT_SLOWLORIS_ENABLED: bool = false;
+/// 请求体读取的相邻数据块默认空闲超时（秒）：两次到达数据块的最大间隔，超过即判为慢速 drip 并断开。
+///
+/// 这是「块间空闲超时」而非「整体超时」：只要客户端持续有数据到达就不触发，因此对正常大文件流式
+/// 上传（如 mvn deploy 大 jar、docker push 大层）友好——只惩罚长时间不发数据的 slowloris 慢速连接。
+/// 默认 30 秒：远宽于正常网络抖动，又能及时切断只为占用连接而几乎不发数据的慢速攻击。
+const DEFAULT_SLOWLORIS_BODY_READ_TIMEOUT_SECS: u64 = 30;
+/// 等待请求体首个数据块的默认超时（秒）：从中间件开始读取体到收到第一个字节的最长等待。
+///
+/// 针对「发完头后迟迟不发体」的慢速起始攻击；同样对正常上传友好（正常客户端发完头即开始发体）。
+/// 默认 30 秒，与块间空闲超时同档，保守不误伤。
+const DEFAULT_SLOWLORIS_HEADER_TIMEOUT_SECS: u64 = 30;
+/// 单个请求体通用大小上限默认值（字节，FR-52）：默认 0 表示不启用该通用上限。
+///
+/// 区别于 `limits.max_artifact_size`（仅约束制品上传体）：本项是对**所有请求**请求体的兜底上限，
+/// 防止任意端点（如管理 JSON 接口）被超大体撑爆。默认 0（不启用），避免误杀正常大制品流式上传；
+/// 启用时应设得高于预期最大制品体，仅作异常超大体的兜底拦截。
+const DEFAULT_SLOWLORIS_MAX_BODY_BYTES: u64 = 0;
 /// 环境变量前缀。
 const ENV_PREFIX: &str = "JIANARTIFACT_";
 /// 已知配置节名。环境变量映射时，仅把节名与键名之间的首个下划线视作嵌套分隔，
@@ -467,14 +486,14 @@ impl Default for MetricsConfig {
     }
 }
 
-/// 应用层（L7）防护配置（ADR-0008）：承载多维限流（FR-33 + FR-51）、访问异常检测与自动封禁、
-/// IP 黑/白名单（FR-53）。
+/// 应用层（L7）防护配置（ADR-0008）：承载多维限流（FR-33 + FR-51）、慢速攻击防护（FR-52）、
+/// 访问异常检测与自动封禁、IP 黑/白名单（FR-53）。
 ///
 /// 仅做应用层防护；L3/L4 体积型 DDoS 由前置反向代理 / CDN / WAF 承担，不在二进制内实现。
 /// FR-54~56 的 CC 挑战 / WAF 规则引擎 / 监控告警均不在本批范围。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ProtectionConfig {
-    /// 基础速率限制配置。
+    /// 多维速率限制与并发上限配置。
     #[serde(default)]
     pub rate_limit: RateLimitConfig,
     /// IP 黑 / 白名单配置（FR-53）：黑名单直接拒、白名单豁免一切防护。
@@ -483,6 +502,9 @@ pub struct ProtectionConfig {
     /// 访问异常检测与自动封禁配置（FR-53）。
     #[serde(default)]
     pub ban: BanConfig,
+    /// 慢速攻击（slowloris）超时与通用请求体大小限制配置（FR-52）。
+    #[serde(default)]
+    pub slowloris: SlowlorisConfig,
 }
 
 /// IP 黑 / 白名单配置（FR-53，ADR-0008）。
@@ -590,6 +612,38 @@ impl Default for RateLimitConfig {
             ip_max_concurrent: DEFAULT_RATE_LIMIT_IP_MAX_CONCURRENT,
             user_max_concurrent: DEFAULT_RATE_LIMIT_USER_MAX_CONCURRENT,
             repo_max_concurrent: DEFAULT_RATE_LIMIT_REPO_MAX_CONCURRENT,
+        }
+    }
+}
+
+/// 慢速攻击（slowloris）超时与通用请求体大小限制配置（FR-52，ADR-0008）。
+///
+/// 仅做应用层（L7）防护：对慢速 drip 请求体设「块间空闲超时」与「首块等待超时」，超时即断开，
+/// 避免连接长期被占用；并对所有请求体设可配置的通用大小上限（超限 413）。默认关闭且超时档位保守，
+/// 对正常大文件流式上传（mvn deploy 大 jar、docker push 大层）友好——只惩罚长时间不发数据的慢速连接，
+/// 不按整体时长一刀切。L3/L4 体积型攻击仍交前置反向代理 / CDN / WAF。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SlowlorisConfig {
+    /// 是否启用慢速攻击防护与通用请求体大小限制；默认关闭，关闭时中间件直接放行、零额外开销。
+    pub enabled: bool,
+    /// 请求体相邻数据块的空闲超时（秒）：两次到达数据块的最大间隔，超过即判为慢速 drip 并断开。
+    pub body_read_timeout_secs: u64,
+    /// 等待请求体首个数据块的超时（秒）：发完头后迟迟不发体即判为慢速起始攻击并断开。
+    pub header_timeout_secs: u64,
+    /// 单个请求体通用大小上限（字节）：超过即返回 413。0 表示不启用该通用上限。
+    ///
+    /// 区别于 `limits.max_artifact_size`（仅约束制品上传体）：本项对所有请求体兜底，
+    /// 启用时应设得高于预期最大制品体，避免误杀正常大制品流式上传。
+    pub max_body_bytes: u64,
+}
+
+impl Default for SlowlorisConfig {
+    fn default() -> Self {
+        Self {
+            enabled: DEFAULT_SLOWLORIS_ENABLED,
+            body_read_timeout_secs: DEFAULT_SLOWLORIS_BODY_READ_TIMEOUT_SECS,
+            header_timeout_secs: DEFAULT_SLOWLORIS_HEADER_TIMEOUT_SECS,
+            max_body_bytes: DEFAULT_SLOWLORIS_MAX_BODY_BYTES,
         }
     }
 }
@@ -726,6 +780,41 @@ mod tests {
             assert_eq!(cfg.protection.ban.window_secs, 60);
             assert_eq!(cfg.protection.ban.threshold, 100);
             assert_eq!(cfg.protection.ban.duration_secs, 900);
+            // 慢速攻击防护默认：关闭、超时档位保守、通用体上限 0（不启用）
+            assert!(!cfg.protection.slowloris.enabled);
+            assert_eq!(cfg.protection.slowloris.body_read_timeout_secs, 30);
+            assert_eq!(cfg.protection.slowloris.header_timeout_secs, 30);
+            assert_eq!(cfg.protection.slowloris.max_body_bytes, 0);
+        });
+    }
+
+    #[test]
+    fn toml_可覆盖慢速攻击防护与通用体上限() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            "[protection.slowloris]\nenabled = true\nbody_read_timeout_secs = 5\nheader_timeout_secs = 8\nmax_body_bytes = 1048576"
+        )
+        .unwrap();
+        with_env_vars(&[], || {
+            let cfg = Config::load(file.path()).unwrap();
+            assert!(cfg.protection.slowloris.enabled);
+            assert_eq!(cfg.protection.slowloris.body_read_timeout_secs, 5);
+            assert_eq!(cfg.protection.slowloris.header_timeout_secs, 8);
+            assert_eq!(cfg.protection.slowloris.max_body_bytes, 1048576);
+        });
+    }
+
+    #[test]
+    fn 慢速攻击防护未配置时回落默认且不影响限流() {
+        // 只配置 rate_limit，slowloris 节缺失应回落默认（向后兼容旧配置）
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(file, "[protection.rate_limit]\nenabled = true").unwrap();
+        with_env_vars(&[], || {
+            let cfg = Config::load(file.path()).unwrap();
+            assert!(cfg.protection.rate_limit.enabled);
+            assert!(!cfg.protection.slowloris.enabled);
+            assert_eq!(cfg.protection.slowloris.body_read_timeout_secs, 30);
         });
     }
 

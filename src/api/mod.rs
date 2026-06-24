@@ -47,6 +47,7 @@ mod rate_limit;
 mod repo_access;
 mod repositories;
 mod search;
+mod slowloris;
 mod tokens;
 mod usage;
 mod users;
@@ -469,8 +470,15 @@ pub fn build_router(state: AppState) -> Router {
         // 与限流），白名单豁免、黑名单 / 封禁中直接拒；放行后按响应状态（含限流产生的 429）统计异常
         // 信号、触阈即自动封禁。仅应用层（L7）；按连接级来源 IP 判定，不采信 XFF。
         .layer(middleware::from_fn_with_state(
-            state,
+            state.clone(),
             anomaly_ban::anomaly_ban_layer,
+        ))
+        // 慢速攻击防护中间件（FR-52，ADR-0008）：置于身份解析之外（更靠近连接侧），在读取请求体前
+        // 介入，把请求体包成带「首块等待超时 + 块间空闲超时 + 通用字节上限」的数据流，慢速 drip 超时
+        // 即断、超大体（带 Content-Length 时进入业务前）拒 413；未启用时直接放行。仅应用层（L7）。
+        .layer(middleware::from_fn_with_state(
+            state,
+            slowloris::slowloris_layer,
         ))
         // 中间件顺序：设置请求 ID → 追踪 → 透传请求 ID 到响应
         .layer(PropagateRequestIdLayer::x_request_id())

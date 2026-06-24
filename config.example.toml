@@ -39,6 +39,21 @@ login_lockout_secs = 900
 # proxy 仓库回源上游的整体请求超时（秒），避免慢速上游拖垮代理。
 upstream_timeout_secs = 60
 
+# 慢速攻击（slowloris）超时与通用请求体大小限制（FR-52 / ADR-0008）。默认关闭。
+# 超时按「块间空闲」而非整体时长判定，对正常大文件流式上传（mvn deploy 大 jar、
+# docker push 大层）友好，只切断长时间不发数据的慢速连接。仅应用层（L7）；
+# L3/L4 体积型攻击仍由前置反向代理 / CDN / WAF 承担。
+# [protection.slowloris]
+# enabled = false
+# # 请求体相邻数据块的空闲超时（秒）：超过即判为慢速 drip 并断开。
+# body_read_timeout_secs = 30
+# # 等待请求体首个数据块的超时（秒）：发完头后迟迟不发体即断开。
+# header_timeout_secs = 30
+# # 单个请求体通用大小上限（字节）；超限返回 413。0 表示不启用。
+# # 区别于 limits.max_artifact_size（仅约束制品上传体），本项对所有请求体兜底，
+# # 启用时应设得高于预期最大制品体，避免误杀正常大制品流式上传。
+# max_body_bytes = 0
+
 [vuln]
 # 漏洞库离线镜像（FR-70 / ADR-0012）。默认关闭：启用后会按周期主动联网下载
 # 公开漏洞数据集（OSV 等）整体镜像到本机并落库；下载只携带公开生态名，
