@@ -51,8 +51,8 @@ pub use audit::{
     channel as audit_channel, spawn_audit_retention, spawn_audit_writer, AuditResult, AuditSink,
 };
 pub use identity::resolve_identity;
-pub use usage::{channel as usage_channel, spawn_usage_pruner, spawn_usage_writer, UsageSink};
 pub use metrics::{install_recorder, MetricsHandle};
+pub use usage::{channel as usage_channel, spawn_usage_pruner, spawn_usage_writer, UsageSink};
 
 /// 应用内具体化的通用制品机理服务类型（运行期可选 blob 后端 + reqwest 上游）。
 pub type AppArtifactService = ArtifactService<BlobBackend, HttpUpstream>;
