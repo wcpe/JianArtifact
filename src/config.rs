@@ -52,6 +52,14 @@ const DEFAULT_RATE_LIMIT_WINDOW_SECS: u64 = 60;
 const DEFAULT_RATE_LIMIT_IP_MAX_REQUESTS: u64 = 1200;
 /// 单身份（用户 / Token）每窗默认请求上限：略高于 IP，照顾 CI 等高频合法调用。
 const DEFAULT_RATE_LIMIT_IDENTITY_MAX_REQUESTS: u64 = 2400;
+/// 单仓库每窗默认请求上限（FR-51 仓库维度）：默认 0 表示不启用该维度，保守不误杀。
+const DEFAULT_RATE_LIMIT_REPO_MAX_REQUESTS: u64 = 0;
+/// 单 IP 默认并发在途请求上限（FR-51 并发上限）：默认 0 表示不限并发，避免误杀正常并发拉取。
+const DEFAULT_RATE_LIMIT_IP_MAX_CONCURRENT: u64 = 0;
+/// 单用户默认并发在途请求上限（FR-51 并发上限）：默认 0 表示不限并发。
+const DEFAULT_RATE_LIMIT_USER_MAX_CONCURRENT: u64 = 0;
+/// 单仓库默认并发在途请求上限（FR-51 并发上限）：默认 0 表示不限并发。
+const DEFAULT_RATE_LIMIT_REPO_MAX_CONCURRENT: u64 = 0;
 /// 环境变量前缀。
 const ENV_PREFIX: &str = "JIANARTIFACT_";
 /// 已知配置节名。环境变量映射时，仅把节名与键名之间的首个下划线视作嵌套分隔，
@@ -381,10 +389,12 @@ pub struct ProtectionConfig {
     pub rate_limit: RateLimitConfig,
 }
 
-/// 基础速率限制配置（FR-33，ADR-0008）。
+/// 多维速率限制与并发上限配置（FR-33 + FR-51，ADR-0008）。
 ///
-/// 进程内固定窗计数，按 IP 维度与身份（用户 / Token）维度分别限流；超阈值返回 429。
-/// 默认关闭且阈值保守，避免误杀正常包管理器批量拉取；启用与调阈值由运维显式承担。
+/// 进程内固定窗计数，按 IP / 身份（用户及其所有 Token）/ 用户 / 仓库维度分别限流；任一维度
+/// 超阈值返回 429。并发维度按 IP / 用户 / 仓库限制在途请求数，超上限返回 429。
+/// 默认关闭且阈值保守（新增维度默认 0 = 不启用），避免误杀正常包管理器批量拉取；
+/// 启用与调阈值由运维显式承担。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RateLimitConfig {
     /// 是否启用速率限制；默认关闭，关闭时中间件直接放行、零计数开销。
@@ -394,7 +404,38 @@ pub struct RateLimitConfig {
     /// 单 IP 每窗请求数上限：超过即对该 IP 限流。
     pub ip_max_requests: u64,
     /// 单身份（用户 / 其所有 Token / 会话）每窗请求数上限：超过即对该主体限流。
+    ///
+    /// 此即 FR-51 的「用户维度」限流：身份按 `user_id` 归一，覆盖该用户的所有 Token 与会话。
     pub identity_max_requests: u64,
+    /// 单仓库每窗请求数上限（FR-51 仓库维度，按格式路径首段仓库名计数）：0 表示不启用。
+    #[serde(default = "default_repo_max_requests")]
+    pub repo_max_requests: u64,
+    /// 单 IP 并发在途请求上限（FR-51 并发上限）：0 表示不限并发。
+    #[serde(default = "default_ip_max_concurrent")]
+    pub ip_max_concurrent: u64,
+    /// 单用户并发在途请求上限（FR-51 并发上限）：0 表示不限并发。
+    #[serde(default = "default_user_max_concurrent")]
+    pub user_max_concurrent: u64,
+    /// 单仓库并发在途请求上限（FR-51 并发上限）：0 表示不限并发。
+    #[serde(default = "default_repo_max_concurrent")]
+    pub repo_max_concurrent: u64,
+}
+
+/// serde 默认值辅助：仓库维度每窗请求上限默认值。
+fn default_repo_max_requests() -> u64 {
+    DEFAULT_RATE_LIMIT_REPO_MAX_REQUESTS
+}
+/// serde 默认值辅助：单 IP 并发上限默认值。
+fn default_ip_max_concurrent() -> u64 {
+    DEFAULT_RATE_LIMIT_IP_MAX_CONCURRENT
+}
+/// serde 默认值辅助：单用户并发上限默认值。
+fn default_user_max_concurrent() -> u64 {
+    DEFAULT_RATE_LIMIT_USER_MAX_CONCURRENT
+}
+/// serde 默认值辅助：单仓库并发上限默认值。
+fn default_repo_max_concurrent() -> u64 {
+    DEFAULT_RATE_LIMIT_REPO_MAX_CONCURRENT
 }
 
 impl Default for RateLimitConfig {
@@ -404,6 +445,10 @@ impl Default for RateLimitConfig {
             window_secs: DEFAULT_RATE_LIMIT_WINDOW_SECS,
             ip_max_requests: DEFAULT_RATE_LIMIT_IP_MAX_REQUESTS,
             identity_max_requests: DEFAULT_RATE_LIMIT_IDENTITY_MAX_REQUESTS,
+            repo_max_requests: DEFAULT_RATE_LIMIT_REPO_MAX_REQUESTS,
+            ip_max_concurrent: DEFAULT_RATE_LIMIT_IP_MAX_CONCURRENT,
+            user_max_concurrent: DEFAULT_RATE_LIMIT_USER_MAX_CONCURRENT,
+            repo_max_concurrent: DEFAULT_RATE_LIMIT_REPO_MAX_CONCURRENT,
         }
     }
 }
@@ -527,6 +572,11 @@ mod tests {
             assert_eq!(cfg.protection.rate_limit.window_secs, 60);
             assert_eq!(cfg.protection.rate_limit.ip_max_requests, 1200);
             assert_eq!(cfg.protection.rate_limit.identity_max_requests, 2400);
+            // FR-51 新增维度默认 0（不启用），避免误杀
+            assert_eq!(cfg.protection.rate_limit.repo_max_requests, 0);
+            assert_eq!(cfg.protection.rate_limit.ip_max_concurrent, 0);
+            assert_eq!(cfg.protection.rate_limit.user_max_concurrent, 0);
+            assert_eq!(cfg.protection.rate_limit.repo_max_concurrent, 0);
         });
     }
 
@@ -544,6 +594,27 @@ mod tests {
             assert_eq!(cfg.protection.rate_limit.window_secs, 10);
             assert_eq!(cfg.protection.rate_limit.ip_max_requests, 50);
             assert_eq!(cfg.protection.rate_limit.identity_max_requests, 100);
+            // 未在 TOML 给出的 FR-51 新维度回落默认 0（向后兼容旧配置）
+            assert_eq!(cfg.protection.rate_limit.repo_max_requests, 0);
+            assert_eq!(cfg.protection.rate_limit.repo_max_concurrent, 0);
+        });
+    }
+
+    #[test]
+    fn toml_可覆盖多维限流与并发上限() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            "[protection.rate_limit]\nenabled = true\nrepo_max_requests = 40\nip_max_concurrent = 5\nuser_max_concurrent = 3\nrepo_max_concurrent = 7"
+        )
+        .unwrap();
+        with_env_vars(&[], || {
+            let cfg = Config::load(file.path()).unwrap();
+            assert!(cfg.protection.rate_limit.enabled);
+            assert_eq!(cfg.protection.rate_limit.repo_max_requests, 40);
+            assert_eq!(cfg.protection.rate_limit.ip_max_concurrent, 5);
+            assert_eq!(cfg.protection.rate_limit.user_max_concurrent, 3);
+            assert_eq!(cfg.protection.rate_limit.repo_max_concurrent, 7);
         });
     }
 

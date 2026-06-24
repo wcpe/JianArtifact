@@ -1,21 +1,25 @@
-//! 基础速率限制（FR-33，ADR-0008 的「仅基础限流」部分）。
+//! 多维速率限制与并发上限（FR-33 + FR-51，ADR-0008 的「多维限流 + 并发/连接上限」部分）。
 //!
-//! 进程内存按 **IP 维度** 与 **Token / 用户维度** 用固定时间窗计数请求，单窗内超阈值即返回
-//! `429 Too Many Requests`（带 `Retry-After`）。本批只做基础 IP / Token 限流，**不做** FR-51
-//! 多维并发 / 连接上限、FR-52~56 的慢速 / 封禁 / CC / WAF / 告警。
+//! 进程内存按 **IP / 身份（用户及其所有 Token）/ 仓库** 维度用固定时间窗计数请求，单窗内任一
+//! 维度超阈值即返回 `429 Too Many Requests`（带 `Retry-After`）；并按 **IP / 用户 / 仓库** 维度
+//! 限制在途并发请求数，超并发上限同样返回 `429`。本批承接 FR-33 基础限流向多维扩展，**不做**
+//! FR-52~56 的慢速 / 封禁 / CC / WAF / 告警。
 //!
 //! 设计要点（对齐 testing-and-quality §2.7）：
-//! - **热路径低开销**：每请求只取一次 `Mutex`、做整型自增与窗口比较，临界区内无 IO、无格式化、
-//!   无锁外重活；窗口表的过期清理顺带在加锁期间按概率触发，避免单独后台任务与长时间持锁。
-//! - **防误杀**：默认阈值保守且按窗口宽放，正常包管理器批量拉取不应触顶；默认关闭，须运维显式开启。
-//! - **防绕过**：来源 IP 取连接级 `ConnectInfo`（与登录防护一致），**不采信 XFF 头**，伪造来源不绕过；
-//!   已认证请求额外按 Token / 用户维度计数，轮换 IP 也受身份维度阈值约束。
-//! - **配置即时生效**：阈值 / 窗口从 `AppState.config` 读取，配置热替换后下个请求即按新值判定。
+//! - **热路径低开销**：限流计数每请求只取一次 `Mutex`、做整型自增与窗口比较，临界区内无 IO、无
+//!   格式化；并发计数走分片 `Mutex`（按键散列分片，降低争用），入站 +1、请求结束 -1。
+//! - **并发计数可靠归还**：并发占用以 RAII `ConcurrencyGuard` 持有，无论请求成功 / 出错 / panic，
+//!   `Drop` 都会 -1，绝不泄漏在途计数。
+//! - **防误杀**：默认阈值保守且按窗口宽放，新增的仓库 / 并发维度默认 0（不启用），正常包管理器
+//!   批量并发拉取不应触顶；整体默认关闭，须运维显式开启。
+//! - **防绕过**：来源 IP 取连接级 `ConnectInfo`（与登录防护一致），**不采信 XFF 头**，伪造来源不
+//!   绕过；已认证请求额外按用户维度计数，轮换 IP 也受身份维度阈值约束。
+//! - **配置即时生效**：阈值 / 窗口 / 并发上限从 `AppState.config` 读取，配置热替换后下个请求即按新值判定。
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use axum::{
@@ -31,13 +35,15 @@ use crate::auth::AuthIdentity;
 
 use super::AppState;
 
-/// 限流维度键：把来源归一为 IP 维度或身份维度，避免不同维度计数互相串味。
+/// 限流维度键：把来源归一为 IP / 身份 / 仓库维度，避免不同维度计数互相串味。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum RateKey {
     /// 按连接来源 IP 计数（匿名与未认证流量的主维度）。
     Ip(String),
     /// 按已认证主体（用户 id，含其所有 Token / 会话）计数；轮换 IP 也受此约束。
     Identity(String),
+    /// 按目标仓库名计数（FR-51 仓库维度，按格式路径首段解析）。
+    Repo(String),
 }
 
 /// 单个键在当前固定窗内的计数状态。
@@ -49,7 +55,7 @@ struct WindowState {
     window_start: Instant,
 }
 
-/// 进程内速率限制器：线程安全地维护各维度键的固定窗计数。
+/// 进程内速率限制器：线程安全地维护各维度键的固定窗计数与在途并发计数。
 ///
 /// 克隆经 `Arc`（随 `AppState`）共享；本结构自身不实现 `Clone`，由调用方用 `Arc` 包裹。
 pub struct RateLimiter {
@@ -57,6 +63,8 @@ pub struct RateLimiter {
     state: Mutex<HashMap<RateKey, WindowState>>,
     /// 触顶被拒请求累计数（供观测，不影响判定）。
     rejected: AtomicU64,
+    /// 并发上限计数器（FR-51 并发/连接上限）。
+    concurrency: ConcurrencyLimiter,
 }
 
 /// 限流判定结果：放行，或被拒并附建议等待秒数。
@@ -74,6 +82,7 @@ impl RateLimiter {
         Self {
             state: Mutex::new(HashMap::new()),
             rejected: AtomicU64::new(0),
+            concurrency: ConcurrencyLimiter::new(),
         }
     }
 
@@ -143,9 +152,112 @@ impl Default for RateLimiter {
 /// 触发过期清理的表大小阈值：低于此值不扫描，避免给常态小表加无谓开销。
 const EVICT_THRESHOLD: usize = 1024;
 
+/// 并发计数分片数：按键散列分片，降低高并发下单锁争用（取 2 的幂便于掩码取模）。
+const CONCURRENCY_SHARDS: usize = 16;
+
+/// 在途并发上限计数器（FR-51 并发/连接上限）。
+///
+/// 维护各维度键当前在途请求数：入站 `try_acquire` +1，请求结束由 `ConcurrencyGuard::drop` -1。
+/// 计数表按键散列分到多个分片，各分片独立加锁，避免所有请求争用同一把锁（热路径开销可控）。
+/// 计数归零的键随即从分片表移除，防止无界增长。
+struct ConcurrencyLimiter {
+    /// 分片计数表，每片维护「键 → 当前在途数」。
+    shards: Vec<Mutex<HashMap<RateKey, u64>>>,
+}
+
+impl ConcurrencyLimiter {
+    /// 构造空的分片并发计数器。
+    fn new() -> Self {
+        let mut shards = Vec::with_capacity(CONCURRENCY_SHARDS);
+        for _ in 0..CONCURRENCY_SHARDS {
+            shards.push(Mutex::new(HashMap::new()));
+        }
+        Self { shards }
+    }
+
+    /// 按键散列选定分片。
+    fn shard(&self, key: &RateKey) -> &Mutex<HashMap<RateKey, u64>> {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut h = DefaultHasher::new();
+        key.hash(&mut h);
+        // CONCURRENCY_SHARDS 为 2 的幂，用掩码取模
+        let idx = (h.finish() as usize) & (CONCURRENCY_SHARDS - 1);
+        &self.shards[idx]
+    }
+
+    /// 尝试占用一个在途名额：当前在途数 `< max` 时 +1 并返回 `true`；已达上限返回 `false`、不增计数。
+    fn try_increment(&self, key: &RateKey, max: u64) -> bool {
+        let mut guard = self.shard(key).lock().unwrap_or_else(|e| e.into_inner());
+        let entry = guard.entry(key.clone()).or_insert(0);
+        if *entry >= max {
+            // 已达上限：不占用，若是本次新建的 0 值键则清掉，避免遗留空键
+            if *entry == 0 {
+                guard.remove(key);
+            }
+            return false;
+        }
+        *entry += 1;
+        true
+    }
+
+    /// 归还一个在途名额：计数 -1，归零后移除键，防止表无界增长。
+    fn release(&self, key: &RateKey) {
+        let mut guard = self.shard(key).lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(entry) = guard.get_mut(key) {
+            *entry = entry.saturating_sub(1);
+            if *entry == 0 {
+                guard.remove(key);
+            }
+        }
+    }
+}
+
+impl RateLimiter {
+    /// 尝试为某并发维度键占用一个在途名额（FR-51 并发上限）。
+    ///
+    /// `max == 0` 表示该维度不限并发，返回一个不计数的空占位 guard。占用成功返回 `Some(guard)`，
+    /// `guard` 在 `Drop` 时自动归还名额；超上限返回 `None`（调用方据此拒 429）。
+    fn acquire_concurrency(self: &Arc<Self>, key: RateKey, max: u64) -> Option<ConcurrencyGuard> {
+        if max == 0 {
+            return Some(ConcurrencyGuard { limiter: None, key });
+        }
+        if self.concurrency.try_increment(&key, max) {
+            Some(ConcurrencyGuard {
+                limiter: Some(Arc::clone(self)),
+                key,
+            })
+        } else {
+            // 并发触顶也计入被拒累计数（与限流被拒同口径，供观测）
+            self.rejected.fetch_add(1, Ordering::Relaxed);
+            None
+        }
+    }
+}
+
+/// 在途并发名额的 RAII 占位：持有期间计数 +1，`Drop` 时 -1，确保异常 / panic 也可靠归还。
+///
+/// `limiter` 为 `None` 时表示该维度不限并发（`max == 0`），`Drop` 不做任何事。
+struct ConcurrencyGuard {
+    /// 归还目标限流器（不限并发时为 `None`）。
+    limiter: Option<Arc<RateLimiter>>,
+    /// 本次占用的维度键。
+    key: RateKey,
+}
+
+impl Drop for ConcurrencyGuard {
+    fn drop(&mut self) {
+        if let Some(limiter) = &self.limiter {
+            limiter.concurrency.release(&self.key);
+        }
+    }
+}
+
 /// 限流中间件：置于身份解析之后、业务 handler 之前。
 ///
-/// 先按连接 IP 维度计数；已认证请求再按身份维度计数。任一维度触顶即在进入业务前返回 429。
+/// 先按 IP / 身份（用户）/ 仓库维度做固定窗速率判定，任一触顶即在进入业务前返回 429；再按
+/// IP / 用户 / 仓库维度尝试占用并发名额，任一超并发上限同样返回 429。占用的并发名额由 RAII
+/// guard 持有至 `next.run` 返回后自动归还（请求结束可靠 -1，异常 / panic 也不泄漏）。
 /// 配置未启用（`enabled=false`）时直接放行，零计数开销。
 pub async fn rate_limit_layer(
     State(state): State<AppState>,
@@ -159,22 +271,24 @@ pub async fn rate_limit_layer(
 
     let now = Instant::now();
     let window = Duration::from_secs(cfg.window_secs.max(1));
+    let limiter = &state.rate_limiter;
 
-    // IP 维度：来源取连接级 ConnectInfo，绝不采信 XFF 头（防伪造来源绕过）
-    if let Some(ip) = client_ip(&request) {
+    // 预解析三维来源：IP 取连接级 ConnectInfo（不采信 XFF）；用户取已认证身份；仓库取格式路径首段
+    let ip = client_ip(&request);
+    let user_id = authenticated_user_id(&request);
+    let repo = repo_name(&request);
+
+    // —— 速率维度：任一触顶即拒 429 ——
+    if let Some(ip) = &ip {
         if let Decision::Limited { retry_after_secs } =
-            state
-                .rate_limiter
-                .check_key(RateKey::Ip(ip), cfg.ip_max_requests, window, now)
+            limiter.check_key(RateKey::Ip(ip.clone()), cfg.ip_max_requests, window, now)
         {
             return too_many_requests(retry_after_secs);
         }
     }
-
-    // 身份维度：已认证请求按用户 id 计数（含其所有 Token / 会话），轮换 IP 也受此约束
-    if let Some(user_id) = authenticated_user_id(&request) {
-        if let Decision::Limited { retry_after_secs } = state.rate_limiter.check_key(
-            RateKey::Identity(user_id),
+    if let Some(user_id) = &user_id {
+        if let Decision::Limited { retry_after_secs } = limiter.check_key(
+            RateKey::Identity(user_id.clone()),
             cfg.identity_max_requests,
             window,
             now,
@@ -182,6 +296,46 @@ pub async fn rate_limit_layer(
             return too_many_requests(retry_after_secs);
         }
     }
+    if let Some(repo) = &repo {
+        if cfg.repo_max_requests > 0 {
+            if let Decision::Limited { retry_after_secs } = limiter.check_key(
+                RateKey::Repo(repo.clone()),
+                cfg.repo_max_requests,
+                window,
+                now,
+            ) {
+                return too_many_requests(retry_after_secs);
+            }
+        }
+    }
+
+    // —— 并发维度：依次占用 IP / 用户 / 仓库名额，任一超上限即拒；占用 guard 持有至请求结束 ——
+    // guard 变量绑定到本作用域，next.run 返回（含出错 / panic 展开）后随作用域 Drop 归还计数。
+    let _ip_guard = match ip {
+        Some(ip) => match limiter.acquire_concurrency(RateKey::Ip(ip), cfg.ip_max_concurrent) {
+            Some(g) => Some(g),
+            None => return too_many_requests_concurrency(),
+        },
+        None => None,
+    };
+    let _user_guard = match user_id {
+        Some(user_id) => {
+            match limiter.acquire_concurrency(RateKey::Identity(user_id), cfg.user_max_concurrent) {
+                Some(g) => Some(g),
+                None => return too_many_requests_concurrency(),
+            }
+        }
+        None => None,
+    };
+    let _repo_guard = match repo {
+        Some(repo) => {
+            match limiter.acquire_concurrency(RateKey::Repo(repo), cfg.repo_max_concurrent) {
+                Some(g) => Some(g),
+                None => return too_many_requests_concurrency(),
+            }
+        }
+        None => None,
+    };
 
     next.run(request).await
 }
@@ -204,6 +358,34 @@ fn authenticated_user_id(request: &Request) -> Option<String> {
         Some(AuthIdentity::Authenticated(u)) => Some(u.user_id.clone()),
         _ => None,
     }
+}
+
+/// 从请求路径解析目标仓库名（FR-51 仓库维度），无法判定时返回 None。
+///
+/// 格式 API 路径形如 `/{repo}/{path..}`，仓库名即首个路径段；跳过保留前缀（`api`/`v2`/`health`/
+/// `metrics`/`assets` 等非仓库路由），避免把管理端点 / Docker / 健康检查误算到某个仓库维度。
+/// Docker（`/v2/...`）的仓库名为多段且与路由解析耦合，本中间件不在此处解析其仓库维度。
+fn repo_name(request: &Request) -> Option<String> {
+    let path = request.uri().path();
+    let first = path.trim_start_matches('/').split('/').next()?;
+    if first.is_empty() || RESERVED_PATH_PREFIXES.contains(&first) {
+        return None;
+    }
+    Some(first.to_string())
+}
+
+/// 非仓库路由的保留首段：这些前缀下的路径不归属任一仓库，不参与仓库维度限流 / 并发。
+const RESERVED_PATH_PREFIXES: &[&str] = &["api", "v2", "health", "metrics", "assets"];
+
+/// 构造并发超限的 429 响应：统一错误体，提示降低并发后重试（并发上限无固定重试窗，不带 Retry-After）。
+fn too_many_requests_concurrency() -> Response {
+    let body = Json(json!({
+        "error": {
+            "code": "too_many_requests",
+            "message": "并发请求过多，请降低并发后重试",
+        }
+    }));
+    (StatusCode::TOO_MANY_REQUESTS, body).into_response()
 }
 
 /// 构造 429 响应：统一错误体 + `Retry-After` 头（秒）。
@@ -372,6 +554,137 @@ mod tests {
         assert_eq!(total_allowed, max, "放行数应恰为阈值");
         assert_eq!(rl.rejected_count(), total - max, "被拒数应为总数减阈值");
     }
+
+    /// 仓库维度独立于 IP / 身份：同一仓库触顶不影响另一个仓库（防误杀）。
+    #[test]
+    fn 仓库维度独立触顶() {
+        let rl = RateLimiter::new();
+        let now = Instant::now();
+        let window = Duration::from_secs(60);
+        // 仓库 A 阈值 2：第 3 次触顶
+        assert_eq!(
+            rl.check_key(RateKey::Repo("maven-hosted".into()), 2, window, now),
+            Decision::Allow
+        );
+        assert_eq!(
+            rl.check_key(RateKey::Repo("maven-hosted".into()), 2, window, now),
+            Decision::Allow
+        );
+        assert!(matches!(
+            rl.check_key(RateKey::Repo("maven-hosted".into()), 2, window, now),
+            Decision::Limited { .. }
+        ));
+        // 另一仓库不受影响（防误杀）
+        assert_eq!(
+            rl.check_key(RateKey::Repo("npm-hosted".into()), 2, window, now),
+            Decision::Allow
+        );
+    }
+
+    /// 并发上限触顶：占满名额后再申请被拒，归还（Drop）一个名额后又可申请（RAII 可靠归还）。
+    #[test]
+    fn 并发上限触顶后归还可再申请() {
+        use std::sync::Arc;
+        let rl = Arc::new(RateLimiter::new());
+        let key = || RateKey::Ip("1.1.1.1".into());
+        // 上限 2：连占 2 个成功
+        let g1 = rl.acquire_concurrency(key(), 2);
+        let g2 = rl.acquire_concurrency(key(), 2);
+        assert!(g1.is_some() && g2.is_some(), "前两次占用应成功");
+        // 第 3 次超上限被拒
+        assert!(
+            rl.acquire_concurrency(key(), 2).is_none(),
+            "超并发上限应被拒"
+        );
+        // 归还一个名额（Drop g1）后又可申请
+        drop(g1);
+        assert!(
+            rl.acquire_concurrency(key(), 2).is_some(),
+            "归还后应可再次占用"
+        );
+        drop(g2);
+    }
+
+    /// 并发上限为 0 表示不限并发：任意数量占用均成功（默认不误杀正常并发）。
+    #[test]
+    fn 并发上限为零不限制() {
+        use std::sync::Arc;
+        let rl = Arc::new(RateLimiter::new());
+        let mut guards = Vec::new();
+        for _ in 0..100 {
+            let g = rl.acquire_concurrency(RateKey::Ip("1.1.1.1".into()), 0);
+            assert!(g.is_some(), "不限并发时应一律成功");
+            guards.push(g);
+        }
+    }
+
+    /// 不同维度键并发互不串味：IP 维度占满不影响仓库维度（各维度独立计数）。
+    #[test]
+    fn 并发各维度独立() {
+        use std::sync::Arc;
+        let rl = Arc::new(RateLimiter::new());
+        let g_ip1 = rl.acquire_concurrency(RateKey::Ip("1.1.1.1".into()), 1);
+        assert!(g_ip1.is_some());
+        // 同一 IP 再占被拒
+        assert!(rl
+            .acquire_concurrency(RateKey::Ip("1.1.1.1".into()), 1)
+            .is_none());
+        // 仓库维度不受 IP 维度影响
+        let g_repo = rl.acquire_concurrency(RateKey::Repo("r1".into()), 1);
+        assert!(g_repo.is_some(), "仓库维度并发应独立于 IP 维度");
+        drop(g_ip1);
+        drop(g_repo);
+    }
+
+    /// 并发计数在多线程下一致：N 线程并发占用同一键，成功数恰为上限，且全部归还后计数清零。
+    #[test]
+    fn 并发占用计数一致且全部归还() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::sync::{Arc, Barrier};
+        let rl = Arc::new(RateLimiter::new());
+        let max = 50u64;
+        let threads = 16usize;
+        let per = 20u64; // 总申请 320，远超上限 50
+        let acquired = Arc::new(AtomicU64::new(0));
+        let barrier = Arc::new(Barrier::new(threads));
+        let mut handles = Vec::new();
+        for _ in 0..threads {
+            let rl = Arc::clone(&rl);
+            let acquired = Arc::clone(&acquired);
+            let barrier = Arc::clone(&barrier);
+            handles.push(std::thread::spawn(move || {
+                barrier.wait();
+                // 各线程持有自己拿到的 guard 直到本轮结束，制造真实并发占用
+                let mut held = Vec::new();
+                for _ in 0..per {
+                    if let Some(g) = rl.acquire_concurrency(RateKey::Ip("9.9.9.9".into()), max) {
+                        acquired.fetch_add(1, Ordering::Relaxed);
+                        held.push(g);
+                    }
+                }
+                // 线程结束时 held 内 guard 全部 Drop，归还名额
+                held
+            }));
+        }
+        // 等所有线程跑完（其 guard 随返回值在此处统一 Drop）
+        let all: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        // 并发占用成功数恰为上限（无超发、无丢计）
+        assert_eq!(
+            acquired.load(Ordering::Relaxed),
+            max,
+            "成功占用数应恰为并发上限"
+        );
+        drop(all);
+        // 全部归还后该键应可再次占满（计数已清零、键已移除）
+        let mut again = Vec::new();
+        for _ in 0..max {
+            again.push(rl.acquire_concurrency(RateKey::Ip("9.9.9.9".into()), max));
+        }
+        assert!(
+            again.iter().all(|g| g.is_some()),
+            "全部归还后应能再次占满，证明计数已可靠清零"
+        );
+    }
 }
 
 // ============ 中间件端到端测试（经真实路由）============
@@ -400,6 +713,27 @@ mod middleware_tests {
         cfg.protection.rate_limit.identity_max_requests = identity_max;
         state.config = Arc::new(cfg);
         (state, dir)
+    }
+
+    /// 仅设仓库维度每窗阈值（其余维度放宽到极大，隔离观察仓库维度行为）的测试状态。
+    async fn 仓库限流状态(repo_max: u64) -> (AppState, tempfile::TempDir) {
+        let (mut state, dir) = 测试用状态().await;
+        let mut cfg = (*state.config).clone();
+        cfg.protection.rate_limit.enabled = true;
+        cfg.protection.rate_limit.window_secs = 60;
+        cfg.protection.rate_limit.ip_max_requests = u64::MAX;
+        cfg.protection.rate_limit.identity_max_requests = u64::MAX;
+        cfg.protection.rate_limit.repo_max_requests = repo_max;
+        state.config = Arc::new(cfg);
+        (state, dir)
+    }
+
+    /// 用指定来源 IP 对任意路径发一发 GET 请求，返回状态码（经真实路由与限流中间件）。
+    async fn 打路径(app: axum::Router, ip: &str, uri: &str) -> StatusCode {
+        let addr: SocketAddr = format!("{ip}:50000").parse().unwrap();
+        let mut req = Request::builder().uri(uri).body(Body::empty()).unwrap();
+        req.extensions_mut().insert(ConnectInfo(addr));
+        app.oneshot(req).await.unwrap().status()
     }
 
     /// 用指定来源 IP（连接级）发一发 /health 请求。
@@ -492,5 +826,123 @@ mod middleware_tests {
             resp.headers().contains_key(axum::http::header::RETRY_AFTER),
             "429 响应应带 Retry-After 头"
         );
+    }
+
+    /// 仓库维度超阈值返回 429：同一仓库路径连发超过 repo_max 后被限（FR-51 仓库维度）。
+    #[tokio::test]
+    async fn 同仓库超阈值返回429() {
+        // 仓库阈值 3：前 3 次进入业务（仓库不存在返回 404），第 4 次被限流中间件拒 429
+        let (state, _dir) = 仓库限流状态(3).await;
+        let app = build_router(state);
+        for _ in 0..3 {
+            let st = 打路径(app.clone(), "1.1.1.1", "/maven-hosted/a/b.jar").await;
+            assert_ne!(st, StatusCode::TOO_MANY_REQUESTS, "未触顶前不应被限流");
+        }
+        assert_eq!(
+            打路径(app.clone(), "1.1.1.1", "/maven-hosted/a/b.jar").await,
+            StatusCode::TOO_MANY_REQUESTS
+        );
+    }
+
+    /// 不同仓库互不影响：一个仓库打满后另一个仓库仍可访问（防误杀）。
+    #[tokio::test]
+    async fn 不同仓库互不影响() {
+        let (state, _dir) = 仓库限流状态(2).await;
+        let app = build_router(state);
+        for _ in 0..3 {
+            let _ = 打路径(app.clone(), "1.1.1.1", "/repo-a/x").await;
+        }
+        // repo-a 已被限
+        assert_eq!(
+            打路径(app.clone(), "1.1.1.1", "/repo-a/x").await,
+            StatusCode::TOO_MANY_REQUESTS
+        );
+        // repo-b 不受影响（防误杀）
+        assert_ne!(
+            打路径(app.clone(), "1.1.1.1", "/repo-b/x").await,
+            StatusCode::TOO_MANY_REQUESTS
+        );
+    }
+
+    /// 保留前缀不计入仓库维度：连发 /health 远超仓库阈值也不会被仓库维度限流（避免误算系统路由）。
+    #[tokio::test]
+    async fn 保留前缀不计入仓库维度() {
+        let (state, _dir) = 仓库限流状态(2).await;
+        let app = build_router(state);
+        // /health 属保留前缀，不归属任何仓库；连发 10 次均不应因仓库维度被限
+        for _ in 0..10 {
+            assert_eq!(
+                打路径(app.clone(), "1.1.1.1", "/health").await,
+                StatusCode::OK
+            );
+        }
+    }
+
+    /// 并发上限端到端：单 IP 并发上限为 1 时，两个重叠在途请求中至少一个被拒 429，
+    /// 且占用名额在请求结束后归还、后续请求恢复放行（验证 RAII 归还 + 不泄漏）。
+    #[tokio::test]
+    async fn 并发上限端到端触顶与归还() {
+        use axum::routing::get;
+        use axum::Router;
+        use std::time::Duration;
+        use tokio::sync::Notify;
+
+        let (mut state, _dir) = 测试用状态().await;
+        let mut cfg = (*state.config).clone();
+        cfg.protection.rate_limit.enabled = true;
+        // 速率维度放到极大，单独观察并发维度
+        cfg.protection.rate_limit.ip_max_requests = u64::MAX;
+        cfg.protection.rate_limit.identity_max_requests = u64::MAX;
+        cfg.protection.rate_limit.ip_max_concurrent = 1;
+        state.config = Arc::new(cfg);
+
+        // 用一个可被唤醒前一直挂起的 handler 制造确定性的「在途重叠」
+        let gate = Arc::new(Notify::new());
+        let gate_for_handler = Arc::clone(&gate);
+        let app = Router::new()
+            .route(
+                "/slow",
+                get(move || {
+                    let gate = Arc::clone(&gate_for_handler);
+                    async move {
+                        gate.notified().await;
+                        StatusCode::OK
+                    }
+                }),
+            )
+            .with_state(state.clone())
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                super::rate_limit_layer,
+            ));
+
+        let mk = |app: Router| async move {
+            let addr: SocketAddr = "1.1.1.1:50000".parse().unwrap();
+            let mut req = Request::builder().uri("/slow").body(Body::empty()).unwrap();
+            req.extensions_mut().insert(ConnectInfo(addr));
+            app.oneshot(req).await.unwrap().status()
+        };
+
+        // 先发起第一个请求（会挂在 handler 内，持有并发名额）
+        let first = tokio::spawn(mk(app.clone()));
+        // 给第一个请求时间进入 handler（已占用名额）
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        // 第二个请求重叠在途：并发上限为 1，应被并发维度拒 429
+        let second_status = mk(app.clone()).await;
+        assert_eq!(
+            second_status,
+            StatusCode::TOO_MANY_REQUESTS,
+            "重叠在途请求应被并发上限拒"
+        );
+        // 放行第一个请求，使其完成并归还名额
+        gate.notify_waiters();
+        let first_status = first.await.unwrap();
+        assert_eq!(first_status, StatusCode::OK, "第一个请求应正常完成");
+        // 名额已归还：再发一个请求，它能拿到名额、进入 handler 并被唤醒完成（不泄漏在途计数）
+        let third = tokio::spawn(mk(app.clone()));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        gate.notify_waiters();
+        let third_status = third.await.unwrap();
+        assert_eq!(third_status, StatusCode::OK, "并发名额归还后请求应恢复放行");
     }
 }
