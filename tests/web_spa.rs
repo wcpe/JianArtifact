@@ -57,6 +57,7 @@ async fn 测试用状态() -> (AppState, tempfile::TempDir) {
         audit,
         usage,
         metrics: None,
+        rate_limiter: Arc::new(jianartifact::api::RateLimiter::new()),
     };
     (state, dir)
 }

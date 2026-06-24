@@ -44,6 +44,14 @@ const DEFAULT_VULN_SOURCE_BASE_URL: &str = "https://osv-vulnerabilities.storage.
 const DEFAULT_VULN_REFRESH_INTERVAL_SECS: u64 = 86_400;
 /// 漏洞库镜像下载整体超时（秒），默认 600 秒（按生态 all.zip 可能较大）。
 const DEFAULT_VULN_DOWNLOAD_TIMEOUT_SECS: u64 = 600;
+/// 速率限制默认开关（FR-33，ADR-0008）：默认关闭，须运维显式开启，避免误杀正常流量。
+const DEFAULT_RATE_LIMIT_ENABLED: bool = false;
+/// 速率限制默认时间窗（秒）：60 秒固定窗。
+const DEFAULT_RATE_LIMIT_WINDOW_SECS: u64 = 60;
+/// 单 IP 每窗默认请求上限：保守宽放，正常包管理器批量拉取不应触顶。
+const DEFAULT_RATE_LIMIT_IP_MAX_REQUESTS: u64 = 1200;
+/// 单身份（用户 / Token）每窗默认请求上限：略高于 IP，照顾 CI 等高频合法调用。
+const DEFAULT_RATE_LIMIT_IDENTITY_MAX_REQUESTS: u64 = 2400;
 /// 环境变量前缀。
 const ENV_PREFIX: &str = "JIANARTIFACT_";
 /// 已知配置节名。环境变量映射时，仅把节名与键名之间的首个下划线视作嵌套分隔，
@@ -55,6 +63,7 @@ const KNOWN_SECTIONS: &[&str] = &[
     "limits",
     "proxy",
     "observability",
+    "protection",
     "vuln",
 ];
 
@@ -88,6 +97,9 @@ pub struct Config {
     /// 可观测性配置（审计日志等，ADR-0015）。
     #[serde(default)]
     pub observability: ObservabilityConfig,
+    /// 应用层（L7）防护配置（当前承载基础速率限制，FR-33 / ADR-0008）。
+    #[serde(default)]
+    pub protection: ProtectionConfig,
     /// 漏洞库离线镜像配置。
     #[serde(default)]
     pub vuln: VulnConfig,
@@ -320,6 +332,44 @@ impl Default for MetricsConfig {
     }
 }
 
+/// 应用层（L7）防护配置（ADR-0008）：当前仅承载基础速率限制（FR-33）。
+///
+/// 仅做应用层防护；L3/L4 体积型 DDoS 由前置反向代理 / CDN / WAF 承担，不在二进制内实现。
+/// FR-51~56 的多维限流 / 并发上限 / 慢速 / 封禁 / CC / WAF / 告警均不在本批范围。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ProtectionConfig {
+    /// 基础速率限制配置。
+    #[serde(default)]
+    pub rate_limit: RateLimitConfig,
+}
+
+/// 基础速率限制配置（FR-33，ADR-0008）。
+///
+/// 进程内固定窗计数，按 IP 维度与身份（用户 / Token）维度分别限流；超阈值返回 429。
+/// 默认关闭且阈值保守，避免误杀正常包管理器批量拉取；启用与调阈值由运维显式承担。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RateLimitConfig {
+    /// 是否启用速率限制；默认关闭，关闭时中间件直接放行、零计数开销。
+    pub enabled: bool,
+    /// 固定时间窗时长（秒）：每个窗内独立计数，跨窗清零。
+    pub window_secs: u64,
+    /// 单 IP 每窗请求数上限：超过即对该 IP 限流。
+    pub ip_max_requests: u64,
+    /// 单身份（用户 / 其所有 Token / 会话）每窗请求数上限：超过即对该主体限流。
+    pub identity_max_requests: u64,
+}
+
+impl Default for RateLimitConfig {
+    fn default() -> Self {
+        Self {
+            enabled: DEFAULT_RATE_LIMIT_ENABLED,
+            window_secs: DEFAULT_RATE_LIMIT_WINDOW_SECS,
+            ip_max_requests: DEFAULT_RATE_LIMIT_IP_MAX_REQUESTS,
+            identity_max_requests: DEFAULT_RATE_LIMIT_IDENTITY_MAX_REQUESTS,
+        }
+    }
+}
+
 /// 漏洞库离线镜像配置（FR-70，ADR-0012）。
 ///
 /// 默认关闭：镜像需主动联网拉取公开漏洞数据集到本机，应由运维显式开启。
@@ -434,6 +484,28 @@ mod tests {
             // 指标默认：端点开、匿名抓取关
             assert!(cfg.observability.metrics.enabled);
             assert!(!cfg.observability.metrics.allow_anonymous);
+            // 速率限制默认：关闭、保守阈值（不误杀正常批量拉取）
+            assert!(!cfg.protection.rate_limit.enabled);
+            assert_eq!(cfg.protection.rate_limit.window_secs, 60);
+            assert_eq!(cfg.protection.rate_limit.ip_max_requests, 1200);
+            assert_eq!(cfg.protection.rate_limit.identity_max_requests, 2400);
+        });
+    }
+
+    #[test]
+    fn toml_可覆盖速率限制开关与阈值() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            "[protection.rate_limit]\nenabled = true\nwindow_secs = 10\nip_max_requests = 50\nidentity_max_requests = 100"
+        )
+        .unwrap();
+        with_env_vars(&[], || {
+            let cfg = Config::load(file.path()).unwrap();
+            assert!(cfg.protection.rate_limit.enabled);
+            assert_eq!(cfg.protection.rate_limit.window_secs, 10);
+            assert_eq!(cfg.protection.rate_limit.ip_max_requests, 50);
+            assert_eq!(cfg.protection.rate_limit.identity_max_requests, 100);
         });
     }
 

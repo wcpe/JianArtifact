@@ -60,6 +60,7 @@ impl Fixture {
             audit,
             usage,
             metrics: None,
+            rate_limiter: Arc::new(jianartifact::api::RateLimiter::new()),
         };
         Self { state, _dir: dir }
     }
@@ -92,6 +93,7 @@ impl Fixture {
             audit,
             usage,
             metrics: None,
+            rate_limiter: Arc::new(jianartifact::api::RateLimiter::new()),
         };
         Self { state, _dir: dir }
     }

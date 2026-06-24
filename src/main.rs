@@ -175,6 +175,20 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
+    // 基础速率限制（FR-33，ADR-0008）：进程内限流器随状态共享，按配置开关在中间件生效。
+    // 默认关闭、阈值保守，避免误杀正常批量拉取；仅应用层（L7），L3/L4 交前置设施。
+    let rate_limiter = Arc::new(api::RateLimiter::new());
+    if cfg.protection.rate_limit.enabled {
+        info!(
+            窗口秒 = cfg.protection.rate_limit.window_secs,
+            单IP上限 = cfg.protection.rate_limit.ip_max_requests,
+            单身份上限 = cfg.protection.rate_limit.identity_max_requests,
+            "基础速率限制已启用（IP / 身份维度）"
+        );
+    } else {
+        info!("基础速率限制未启用，跳过");
+    }
+
     // 构建路由与共享状态
     let state = AppState {
         config: Arc::new(cfg.clone()),
@@ -188,6 +202,7 @@ async fn main() -> anyhow::Result<()> {
         audit,
         usage,
         metrics,
+        rate_limiter,
     };
     let app = api::build_router(state);
 

@@ -40,6 +40,7 @@ mod migrate;
 mod npm_routes;
 mod nuget_routes;
 mod pypi_routes;
+mod rate_limit;
 mod repo_access;
 mod repositories;
 mod search;
@@ -52,6 +53,7 @@ pub use audit::{
 };
 pub use identity::resolve_identity;
 pub use metrics::{install_recorder, MetricsHandle};
+pub use rate_limit::RateLimiter;
 pub use usage::{channel as usage_channel, spawn_usage_pruner, spawn_usage_writer, UsageSink};
 
 /// 应用内具体化的通用制品机理服务类型（运行期可选 blob 后端 + reqwest 上游）。
@@ -91,6 +93,8 @@ pub struct AppState {
     /// Prometheus 指标注册表句柄（FR-32，ADR-0015）：`Some` 表示已安装进程内 recorder，
     /// `/metrics` 抓取时渲染；`None` 表示指标端点未启用（端点返回 404）。
     pub metrics: Option<MetricsHandle>,
+    /// 基础速率限制器（FR-33，ADR-0008）：进程内按 IP / 身份维度固定窗计数，超阈值返回 429。
+    pub rate_limiter: Arc<rate_limit::RateLimiter>,
 }
 
 /// 统一 API 错误类型，转换为 JSON 响应 `{"error":{"code","message"}}`。
@@ -420,6 +424,12 @@ pub fn build_router(state: AppState) -> Router {
             state.clone(),
             audit::audit_layer,
         ))
+        // 速率限制中间件（FR-33，ADR-0008）：置于身份解析之后、业务之前，按 IP / 身份维度计数，
+        // 超阈值在进入业务前返回 429；未启用时直接放行。须读身份，故置于身份解析之内（更靠近 handler）。
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            rate_limit::rate_limit_layer,
+        ))
         // 身份解析中间件：先于业务 handler 解析 Bearer/Basic/匿名 注入扩展
         .layer(middleware::from_fn_with_state(
             state,
@@ -493,6 +503,7 @@ mod tests {
             usage,
             // 默认测试状态不安装 recorder；需要指标端点的测试自行用 install_recorder 注入
             metrics: None,
+            rate_limiter: Arc::new(rate_limit::RateLimiter::new()),
         };
         (state, dir)
     }

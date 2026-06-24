@@ -62,6 +62,7 @@ impl Fixture {
             audit,
             usage,
             metrics: None,
+            rate_limiter: Arc::new(jianartifact::api::RateLimiter::new()),
         };
         Self { state, _dir: dir }
     }
@@ -300,6 +301,7 @@ async fn 审计写入任务缺失时业务仍成功() {
         audit,
         usage,
         metrics: None,
+        rate_limiter: Arc::new(jianartifact::api::RateLimiter::new()),
     };
     let hash = auth::hash_password("S3cret!").unwrap();
     meta.create_user("admin", &hash, Role::Admin).await.unwrap();
