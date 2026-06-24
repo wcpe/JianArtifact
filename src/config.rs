@@ -84,6 +84,8 @@ const KNOWN_NESTED_PREFIXES: &[(&str, &str)] = &[
     ("data_storage_", "data.storage."),
     // OIDC 配置在 auth.oidc 子节下；env 形如 JIANARTIFACT_AUTH_OIDC_CLIENT_SECRET。
     ("auth_oidc_", "auth.oidc."),
+    // LDAP 配置在 auth.ldap 子节下；env 形如 JIANARTIFACT_AUTH_LDAP_BIND_PASSWORD。
+    ("auth_ldap_", "auth.ldap."),
 ];
 
 /// 顶层配置。
@@ -234,6 +236,9 @@ pub struct AuthConfig {
     /// OIDC 认证集成（FR-34 / ADR-0016）；未配置时为 None（不实例化 provider）。
     #[serde(default)]
     pub oidc: Option<OidcConfig>,
+    /// LDAP 认证集成（FR-35 / ADR-0016）；未配置时为 None（不实例化 provider）。
+    #[serde(default)]
+    pub ldap: Option<LdapConfig>,
 }
 
 impl Default for AuthConfig {
@@ -243,6 +248,7 @@ impl Default for AuthConfig {
             login_max_failures: DEFAULT_LOGIN_MAX_FAILURES,
             login_lockout_secs: DEFAULT_LOGIN_LOCKOUT_SECS,
             oidc: None,
+            ldap: None,
         }
     }
 }
@@ -274,6 +280,78 @@ impl std::fmt::Debug for OidcConfig {
             .field("client_id", &self.client_id)
             .field("client_secret", &"<已脱敏>")
             .field("redirect_uri", &self.redirect_uri)
+            .field("auto_provision", &self.auto_provision)
+            .finish()
+    }
+}
+
+/// 默认用户搜索过滤模板（按 `uid` 匹配，适配 OpenLDAP；AD 常用 `sAMAccountName`）。
+const DEFAULT_LDAP_USER_FILTER: &str = "(uid={username})";
+/// 默认取作建议用户名的属性名。
+const DEFAULT_LDAP_USERNAME_ATTR: &str = "uid";
+/// LDAP 默认连接超时（秒）。
+const DEFAULT_LDAP_CONN_TIMEOUT_SECS: u64 = 10;
+
+/// LDAP 认证集成配置（FR-35 / ADR-0016）。
+///
+/// `bind_password` 是密钥：真源在 env / 配置（前缀 `JIANARTIFACT_`），绝不入库、不进日志、
+/// 不进 DB 明文。建议仅经环境变量 `JIANARTIFACT_AUTH_LDAP_BIND_PASSWORD` 提供，不写入入库 TOML。
+#[derive(Clone, Serialize, Deserialize)]
+pub struct LdapConfig {
+    /// 目录服务 URL（`ldaps://host:636` 或 `ldap://host:389`）。
+    pub url: String,
+    /// 搜索绑定 DN（服务账号），连接后先用其查用户 DN。
+    pub bind_dn: String,
+    /// 搜索绑定口令（敏感）；真源 env / 配置，绝不入库 / 进日志。
+    pub bind_password: String,
+    /// 用户搜索基准 DN（如 `ou=people,dc=example,dc=org`）。
+    pub user_search_base: String,
+    /// 用户搜索过滤模板，含 `{username}` 占位符；缺省 `(uid={username})`。
+    #[serde(default = "default_ldap_user_filter")]
+    pub user_filter: String,
+    /// 取作建议用户名的属性名；缺省 `uid`。
+    #[serde(default = "default_ldap_username_attr")]
+    pub username_attr: String,
+    /// 是否使用 StartTLS（在明文端口上协商升级 TLS）；缺省 false。
+    #[serde(default)]
+    pub starttls: bool,
+    /// 是否允许明文 `ldap://`（无 TLS）：缺省 false，仅运维在可信内网显式开启。
+    #[serde(default)]
+    pub allow_insecure: bool,
+    /// 连接超时（秒）；缺省 10。
+    #[serde(default = "default_ldap_conn_timeout_secs")]
+    pub conn_timeout_secs: u64,
+    /// 是否即时开通（JIT）：缺省关闭，无对应本地用户则拒登录（守 ADR-0010）。
+    #[serde(default)]
+    pub auto_provision: bool,
+}
+
+/// serde 默认值辅助：用户搜索过滤模板默认值。
+fn default_ldap_user_filter() -> String {
+    DEFAULT_LDAP_USER_FILTER.to_string()
+}
+/// serde 默认值辅助：建议用户名属性默认值。
+fn default_ldap_username_attr() -> String {
+    DEFAULT_LDAP_USERNAME_ATTR.to_string()
+}
+/// serde 默认值辅助：连接超时默认值。
+fn default_ldap_conn_timeout_secs() -> u64 {
+    DEFAULT_LDAP_CONN_TIMEOUT_SECS
+}
+
+impl std::fmt::Debug for LdapConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // 绝不在调试输出中泄露 bind_password
+        f.debug_struct("LdapConfig")
+            .field("url", &self.url)
+            .field("bind_dn", &self.bind_dn)
+            .field("bind_password", &"<已脱敏>")
+            .field("user_search_base", &self.user_search_base)
+            .field("user_filter", &self.user_filter)
+            .field("username_attr", &self.username_attr)
+            .field("starttls", &self.starttls)
+            .field("allow_insecure", &self.allow_insecure)
+            .field("conn_timeout_secs", &self.conn_timeout_secs)
             .field("auto_provision", &self.auto_provision)
             .finish()
     }
@@ -765,6 +843,86 @@ mod tests {
                 assert!(!s3.path_style);
             },
         );
+    }
+
+    #[test]
+    fn 默认不配置_ldap() {
+        let cfg = Config::default();
+        assert!(cfg.auth.ldap.is_none());
+    }
+
+    #[test]
+    fn toml_可配置_ldap_并回落缺省项() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            "[auth.ldap]\nurl = \"ldaps://dir.example:636\"\nbind_dn = \"cn=svc,dc=ex,dc=org\"\nbind_password = \"pw\"\nuser_search_base = \"ou=people,dc=ex,dc=org\""
+        )
+        .unwrap();
+        with_env_vars(&[], || {
+            let cfg = Config::load(file.path()).unwrap();
+            let ldap = cfg.auth.ldap.expect("应有 LDAP 配置");
+            assert_eq!(ldap.url, "ldaps://dir.example:636");
+            assert_eq!(ldap.bind_dn, "cn=svc,dc=ex,dc=org");
+            // 缺省项回落默认值
+            assert_eq!(ldap.user_filter, "(uid={username})");
+            assert_eq!(ldap.username_attr, "uid");
+            assert_eq!(ldap.conn_timeout_secs, 10);
+            // 安全默认：不 StartTLS、不允许明文、JIT 关闭
+            assert!(!ldap.starttls);
+            assert!(!ldap.allow_insecure);
+            assert!(!ldap.auto_provision);
+        });
+    }
+
+    #[test]
+    fn 环境变量可覆盖嵌套的_ldap_配置() {
+        with_env_vars(
+            &[
+                ("JIANARTIFACT_AUTH_LDAP_URL", "ldaps://ad.corp:636"),
+                ("JIANARTIFACT_AUTH_LDAP_BIND_DN", "cn=reader,dc=corp"),
+                ("JIANARTIFACT_AUTH_LDAP_BIND_PASSWORD", "env-secret"),
+                (
+                    "JIANARTIFACT_AUTH_LDAP_USER_SEARCH_BASE",
+                    "ou=users,dc=corp",
+                ),
+                (
+                    "JIANARTIFACT_AUTH_LDAP_USER_FILTER",
+                    "(sAMAccountName={username})",
+                ),
+                ("JIANARTIFACT_AUTH_LDAP_AUTO_PROVISION", "true"),
+            ],
+            || {
+                let cfg = Config::load(Path::new("不存在.toml")).unwrap();
+                let ldap = cfg.auth.ldap.expect("应有 LDAP 配置");
+                // 嵌套键名内部下划线（user_search_base / auto_provision）保留，不被误拆
+                assert_eq!(ldap.url, "ldaps://ad.corp:636");
+                assert_eq!(ldap.bind_dn, "cn=reader,dc=corp");
+                assert_eq!(ldap.bind_password, "env-secret");
+                assert_eq!(ldap.user_search_base, "ou=users,dc=corp");
+                assert_eq!(ldap.user_filter, "(sAMAccountName={username})");
+                assert!(ldap.auto_provision);
+            },
+        );
+    }
+
+    #[test]
+    fn ldap_配置_debug_脱敏_bind_口令() {
+        let ldap = LdapConfig {
+            url: "ldaps://d:636".into(),
+            bind_dn: "cn=svc".into(),
+            bind_password: "top-secret-pw".into(),
+            user_search_base: "dc=ex".into(),
+            user_filter: default_ldap_user_filter(),
+            username_attr: default_ldap_username_attr(),
+            starttls: false,
+            allow_insecure: false,
+            conn_timeout_secs: default_ldap_conn_timeout_secs(),
+            auto_provision: false,
+        };
+        let dbg = format!("{ldap:?}");
+        assert!(dbg.contains("<已脱敏>"));
+        assert!(!dbg.contains("top-secret-pw"));
     }
 
     #[test]

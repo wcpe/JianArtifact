@@ -18,7 +18,7 @@ use serde_json::json;
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::trace::TraceLayer;
 
-use crate::auth::{AuthIdentity, JwtSigner, LoginGuard, OidcProvider};
+use crate::auth::{AuthIdentity, JwtSigner, LdapProvider, LoginGuard, OidcProvider};
 use crate::config::Config;
 use crate::format::{ArtifactService, DockerRegistry, FormatRegistry};
 use crate::meta::MetaStore;
@@ -103,6 +103,9 @@ pub struct AppState {
     pub oidc: Option<Arc<OidcProvider>>,
     /// OIDC 登录流程的进程内短期存储（按 state 一次性绑定 PKCE / nonce，防 CSRF / 重放）。
     pub oidc_flows: Arc<oidc_routes::OidcFlowStore>,
+    /// LDAP 认证 provider（FR-35，ADR-0016）：`Some` 表示已配置 `[auth.ldap]`，
+    /// 口令型登录（Web 表单 / Basic Auth）本地校验失败后委托其做 bind 校验；`None` 时不参与登录。
+    pub ldap: Option<Arc<LdapProvider>>,
 }
 
 /// 统一 API 错误类型，转换为 JSON 响应 `{"error":{"code","message"}}`。
@@ -526,6 +529,8 @@ mod tests {
             // 默认测试状态不配置 OIDC；需要 OIDC 的测试自行注入 provider
             oidc: None,
             oidc_flows: Arc::new(oidc_routes::OidcFlowStore::new()),
+            // 默认测试状态不配置 LDAP；需要 LDAP 的测试自行注入 provider
+            ldap: None,
         };
         (state, dir)
     }

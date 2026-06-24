@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::auth::verify_password;
+use crate::meta::UserRecord;
 
 use super::{ApiError, AppState, AuditResult, ClientIp, Identity};
 
@@ -76,18 +77,23 @@ pub async fn login(
         return Err(ApiError::TooManyRequests(e.retry_after_secs));
     }
 
-    let user = state.meta.get_user_by_username(&req.username).await?;
-    let user = match user {
+    let local_user = state.meta.get_user_by_username(&req.username).await?;
+    let user = match local_user {
         Some(u) if verify_password(&req.password, &u.password_hash) => u,
-        _ => {
-            // 用户不存在或口令错误：均记一次失败并统一返回 401，不泄露存在性
-            state.login_guard.record_failure(&req.username, &client_ip);
-            state
-                .audit
-                .record_login(&req.username, AuditResult::Denied, source_ip, request_id);
-            tracing::warn!(用户名 = %req.username, "登录失败：用户名或口令错误");
-            return Err(ApiError::Unauthorized);
-        }
+        // 本地口令未命中：若配置了 LDAP，则委托其做 bind 校验（FR-35 / ADR-0016），
+        // 成功后经既有 JIT 映射得本地用户；失败再按统一失败处理。
+        _ => match try_ldap_login(&state, &req.username, &req.password).await {
+            Some(u) => u,
+            None => {
+                // 用户不存在 / 口令错误 / LDAP 校验未通过：均记一次失败并统一返回 401，不泄露存在性
+                state.login_guard.record_failure(&req.username, &client_ip);
+                state
+                    .audit
+                    .record_login(&req.username, AuditResult::Denied, source_ip, request_id);
+                tracing::warn!(用户名 = %req.username, "登录失败：用户名或口令错误");
+                return Err(ApiError::Unauthorized);
+            }
+        },
     };
 
     if user.disabled != 0 {
@@ -123,6 +129,38 @@ pub async fn login(
             role: user.role,
         },
     }))
+}
+
+/// 尝试经 LDAP provider 登录：未配置 LDAP 返回 None；配置了则做 bind 校验 + JIT 映射，
+/// 成功返回本地用户，失败 / 被拒返回 None（由调用方按统一失败处理，不泄露细节）。
+async fn try_ldap_login(state: &AppState, username: &str, password: &str) -> Option<UserRecord> {
+    let provider = state.ldap.as_ref()?;
+    match crate::auth::ldap_login(
+        &state.meta,
+        provider,
+        username,
+        password,
+        provider_auto_provision(state),
+    )
+    .await
+    {
+        Ok(user) => Some(user),
+        Err(e) => {
+            tracing::warn!(用户名 = %username, 原因 = %e, "LDAP 登录失败");
+            None
+        }
+    }
+}
+
+/// 取 LDAP provider 的 JIT 开通开关（从配置读取，默认关闭，守 ADR-0010）。
+fn provider_auto_provision(state: &AppState) -> bool {
+    state
+        .config
+        .auth
+        .ldap
+        .as_ref()
+        .map(|c| c.auto_provision)
+        .unwrap_or(false)
 }
 
 /// 登出：无状态 JWT 下由客户端丢弃令牌，服务端返回 200。

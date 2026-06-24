@@ -72,6 +72,25 @@
 
 > `client_secret` 是密钥：真源在 env / 配置，**绝不入库、不进日志、不进 DB 明文**；建议仅经环境变量 `JIANARTIFACT_AUTH_OIDC_CLIENT_SECRET` 提供，不写入入库 TOML。`auto_provision` 默认关闭：外部认证成功但本地无对应用户时拒绝登录（守不自助注册红线，ADR-0010）；显式开启时即时建用户、默认角色 `User`，到 `Admin` 的提升只能由现有管理员显式操作。
 
+### [auth.ldap]（LDAP 认证集成，P2 / FR-35 / ADR-0016）
+
+可选；配置后才启用 LDAP 登录（未配置即不存在）。仅参与口令型登录（Web 表单 / Basic Auth），bind 校验成功后收敛为本地会话。
+
+| 键 | 含义 | 默认（取向） | 环境变量 |
+|---|---|---|---|
+| url | 目录服务 URL（`ldaps://host:636` 或 `ldap://host:389`） | 必填 | JIANARTIFACT_AUTH_LDAP_URL |
+| bind_dn | 搜索绑定 DN（服务账号），连接后先用其查用户 DN | 必填 | JIANARTIFACT_AUTH_LDAP_BIND_DN |
+| bind_password | 搜索绑定口令（敏感） | 必填 | JIANARTIFACT_AUTH_LDAP_BIND_PASSWORD |
+| user_search_base | 用户搜索基准 DN（如 `ou=people,dc=example,dc=org`） | 必填 | JIANARTIFACT_AUTH_LDAP_USER_SEARCH_BASE |
+| user_filter | 用户搜索过滤模板，含 `{username}` 占位符（按 RFC 4515 转义防注入） | `(uid={username})` | JIANARTIFACT_AUTH_LDAP_USER_FILTER |
+| username_attr | 取作建议用户名的属性名（如 `uid` / `cn` / `sAMAccountName`） | `uid` | JIANARTIFACT_AUTH_LDAP_USERNAME_ATTR |
+| starttls | 是否在明文端口上经 StartTLS 协商升级 TLS | false（关闭） | JIANARTIFACT_AUTH_LDAP_STARTTLS |
+| allow_insecure | 是否允许明文 `ldap://`（无 TLS）；仅可信内网显式开启 | false（关闭） | JIANARTIFACT_AUTH_LDAP_ALLOW_INSECURE |
+| conn_timeout_secs | 连接超时（秒） | 10 | JIANARTIFACT_AUTH_LDAP_CONN_TIMEOUT_SECS |
+| auto_provision | 即时开通（JIT）：无对应本地用户时是否自动建用户（默认角色固定 User，绝不 Admin） | false（关闭） | JIANARTIFACT_AUTH_LDAP_AUTO_PROVISION |
+
+> `bind_password` 是密钥：真源在 env / 配置，**绝不入库、不进日志、不进 DB 明文**；建议仅经环境变量 `JIANARTIFACT_AUTH_LDAP_BIND_PASSWORD` 提供，不写入入库 TOML。连接默认走 LDAPS / StartTLS（TLS 由 rustls 提供，不引 openssl）；`allow_insecure` 默认关闭，明文 `ldap://` 仅在可信内网显式开启。`auto_provision` 默认关闭，语义与 `[auth.oidc]` 一致（守 ADR-0010）。
+
 ### [limits]
 
 | 键 | 含义 | 默认（取向） | 环境变量 |

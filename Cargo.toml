@@ -51,6 +51,10 @@ digest = "0.10"
 # proxy 上游拉取（FR-12）：关闭默认特性以避开 native-tls/openssl 等原生后端，
 # 仅启用纯 rustls TLS（校验上游 HTTPS 证书）与流式响应体，守 SECURITY 零原生依赖。
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+# LDAP 认证集成（FR-35，ADR-0016）：bind 校验对接目录（AD / OpenLDAP）。关闭默认特性
+# 以剔除 sync 同步客户端与 native-tls（openssl）后端，仅启用 rustls + ring 加密 provider
+# （tls-rustls-ring，与上方 reqwest 同一 ring，零原生 C 依赖），守 SECURITY 单一二进制零原生运行时依赖。
+ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-ring"] }
 # 把 reqwest 的字节流适配为 AsyncRead 喂给 BlobStore 流式写入（不整体载入内存）。
 tokio-util = { version = "0.7", features = ["io"] }
 # 单飞合并与上游字节流处理所需的 Stream 适配工具。

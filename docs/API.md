@@ -51,6 +51,7 @@
 - **请求**：JSON 体 `{ "username", "password" }`。
 - **响应**：认证成功后返回会话凭据（JWT 访问令牌、令牌类型 `Bearer` 与有效期 `expires_in` 秒）及当前用户信息（`id`、`username`、`role`）。会话令牌放 `Authorization: Bearer` 头使用（不走 Cookie）。
 - **错误**：`400` 参数缺失；`401` 用户名或密码错误；`403` 用户已被禁用（`disabled`）；`429` 登录失败次数过多被限流（暴力破解防护，见 FR-65），响应错误码 `too_many_requests`。
+- **LDAP 登录（P2，FR-35 / ADR-0016）**：配置 `[auth.ldap]` 后，本地口令未命中时本端点委托 LDAP 做 bind 校验（见下「LDAP 登录」）；bind 成功经「外部身份 → 本地用户」映射得本地用户后照常签发会话 JWT。bind 失败 / 目录不可达 / JIT 关闭且无对应本地用户，统一记一次登录失败并返回 `401`（不泄露细节、不区分原因）。
 
 ### 登出
 
@@ -87,6 +88,15 @@
 - **响应**：认证成功后**照常签发既有会话 JWT**，`303` 回跳前端 `/login`，会话令牌经 URL fragment（`#access_token=...&token_type=Bearer`）交给 SPA。
 - **错误**：`404` 未配置 OIDC；`400` 缺 `code`/`state`；`401` `state` 校验失败、ID Token 校验失败、IdP 回错，或外部身份无对应本地用户（JIT 关闭，`auto_provision=false`）/ 绑定用户已禁用。
 - **JIT 即时开通**：`auto_provision=false`（默认）时无对应本地用户一律拒绝（守不自助注册红线，ADR-0010）；显式开启时首次外部登录即时建用户，**默认角色固定为 `User`，绝不自动 `Admin`**。
+
+### LDAP 登录（P2，FR-35 / ADR-0016）
+
+- **无独立端点**：LDAP 不新增端点，经既有口令型登录入口接入——Web 表单 `POST /api/v1/auth/login`、Basic Auth（`Authorization: Basic`，含 Docker v2 令牌端点 `GET /v2/token`）。仅当配置 `[auth.ldap]` 时启用。
+- **校验流程**：口令通道在本地口令 / API Token 均未命中时委托 LDAP——服务账号（`bind_dn` + bind 口令）连接目录，按 `user_search_base` + 过滤模板（`{username}` 占位，RFC 4515 转义防注入）搜出唯一用户 DN，再用该 DN + 用户提交口令做一次 bind；bind 成功即认证通过，外部 `subject` 取用户 DN，经「外部身份 → 本地用户」映射得本地用户后照常签发既有会话 / 收敛为本地身份。
+- **传输安全**：连接走 LDAPS / StartTLS（TLS 由 rustls/ring 提供）；默认拒绝明文 `ldap://`（除非运维显式 `allow_insecure`，限可信内网）。
+- **失败语义**：bind 失败 / 目录不可达 / 无唯一匹配 / JIT 关闭且无对应本地用户，Web 表单返回 `401`（并计一次登录失败），Basic Auth 通道回退匿名（受保护端点据私有仓库语义返回 `401`/`404`）；均不泄露目录存在性与失败原因。
+- **JIT 即时开通**：与 OIDC 同——`auto_provision=false`（默认）无对应本地用户即拒（守 ADR-0010），开启时即时建用户默认角色固定 `User`、绝不自动 `Admin`。
+- **真机互通**：对接 AD / OpenLDAP 的端到端 bind 待真机验（需 LDAP 目录）。
 
 ### 列出用户
 

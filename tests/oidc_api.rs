@@ -174,6 +174,7 @@ async fn build_state(oidc: Option<OidcProvider>) -> (AppState, tempfile::TempDir
         rate_limiter: Arc::new(jianartifact::api::RateLimiter::new()),
         oidc: oidc.map(Arc::new),
         oidc_flows: Arc::new(jianartifact::api::OidcFlowStore::new()),
+        ldap: None,
     };
     (state, dir)
 }

@@ -12,10 +12,40 @@ use axum::{
     response::Response,
 };
 
-use crate::auth::{self, AuthIdentity, AuthUser};
+use std::sync::Arc;
+
+use crate::auth::{self, AuthIdentity, AuthUser, LdapProvider};
 use crate::meta::{MetaStore, Role};
 
 use super::AppState;
+
+/// LDAP 登录上下文：Basic Auth 口令通道本地校验失败后委托 LDAP bind 校验所需的最小依赖。
+///
+/// 仅在配置了 `[auth.ldap]` 时构造；持有 provider 与 JIT 开关（守 ADR-0010 默认关）。
+pub struct LdapAuthContext {
+    /// LDAP 认证 provider。
+    pub provider: Arc<LdapProvider>,
+    /// 是否即时开通（JIT）：默认关闭，无对应本地用户则拒登录。
+    pub auto_provision: bool,
+}
+
+impl LdapAuthContext {
+    /// 从应用状态装配 LDAP 上下文；未配置 LDAP 时返回 None。
+    pub fn from_state(state: &AppState) -> Option<Self> {
+        let provider = state.ldap.clone()?;
+        let auto_provision = state
+            .config
+            .auth
+            .ldap
+            .as_ref()
+            .map(|c| c.auto_provision)
+            .unwrap_or(false);
+        Some(Self {
+            provider,
+            auto_provision,
+        })
+    }
+}
 
 /// axum 中间件入口：解析身份后注入扩展并放行。
 pub async fn identity_layer(
@@ -29,8 +59,9 @@ pub async fn identity_layer(
         .and_then(|v| v.to_str().ok())
         .map(str::to_owned);
 
+    let ldap = LdapAuthContext::from_state(&state);
     let identity = match header {
-        Some(value) => resolve_identity(&state.meta, &state.jwt, &value).await,
+        Some(value) => resolve_identity(&state.meta, &state.jwt, &value, ldap.as_ref()).await,
         None => AuthIdentity::Anonymous,
     };
 
@@ -47,13 +78,14 @@ pub async fn resolve_identity(
     meta: &MetaStore,
     jwt: &auth::JwtSigner,
     header_value: &str,
+    ldap: Option<&LdapAuthContext>,
 ) -> AuthIdentity {
     if let Some(rest) = auth::basic::strip_scheme_prefix(header_value, "Bearer ") {
         return resolve_bearer(meta, jwt, rest.trim()).await;
     }
     if auth::basic::strip_scheme_prefix(header_value, "Basic ").is_some() {
         if let Some(creds) = auth::parse_basic_auth(header_value) {
-            return resolve_basic(meta, &creds.username, &creds.secret).await;
+            return resolve_basic(meta, &creds.username, &creds.secret, ldap).await;
         }
         return AuthIdentity::Anonymous;
     }
@@ -97,16 +129,49 @@ async fn resolve_api_token(meta: &MetaStore, raw: &str) -> AuthIdentity {
     }
 }
 
-/// 解析 Basic：secret 先按用户口令（argon2）校验，失败再按 API Token 校验。
-async fn resolve_basic(meta: &MetaStore, username: &str, secret: &str) -> AuthIdentity {
-    // 路径一：用户名 + 口令
+/// 解析 Basic：secret 先按用户口令（argon2）校验，失败再按 API Token 校验，
+/// 最后（配置了 LDAP 时）委托 LDAP bind 校验。
+async fn resolve_basic(
+    meta: &MetaStore,
+    username: &str,
+    secret: &str,
+    ldap: Option<&LdapAuthContext>,
+) -> AuthIdentity {
+    // 路径一：用户名 + 本地口令
     if let Ok(Some(user)) = meta.get_user_by_username(username).await {
         if user.disabled == 0 && auth::verify_password(secret, &user.password_hash) {
             return authenticated(user.id, user.username, &user.role);
         }
     }
     // 路径二：secret 作为 API Token（兼容包管理器把 Token 当密码填）
-    resolve_api_token(meta, secret).await
+    let token_identity = resolve_api_token(meta, secret).await;
+    if token_identity.is_authenticated() {
+        return token_identity;
+    }
+    // 路径三：LDAP bind 校验（FR-35 / ADR-0016）——仅在配置了 LDAP 时尝试；
+    // 成功经既有 JIT 映射得本地用户，失败 / 被拒回退匿名（不泄露细节）。
+    resolve_ldap(meta, username, secret, ldap).await
+}
+
+/// 经 LDAP provider 做 Basic Auth 口令校验：未配置 LDAP 直接匿名；
+/// 配置了则做 bind + JIT 映射，成功授予身份（拒绝已禁用账户），失败回退匿名。
+async fn resolve_ldap(
+    meta: &MetaStore,
+    username: &str,
+    secret: &str,
+    ldap: Option<&LdapAuthContext>,
+) -> AuthIdentity {
+    let Some(ctx) = ldap else {
+        return AuthIdentity::Anonymous;
+    };
+    match auth::ldap_login(meta, &ctx.provider, username, secret, ctx.auto_provision).await {
+        Ok(user) if user.disabled == 0 => authenticated(user.id, user.username, &user.role),
+        Ok(_) => AuthIdentity::Anonymous,
+        Err(e) => {
+            tracing::warn!(用户名 = %username, 原因 = %e, "LDAP Basic Auth 校验失败");
+            AuthIdentity::Anonymous
+        }
+    }
 }
 
 /// 组装已认证身份。
@@ -141,7 +206,7 @@ mod tests {
             .unwrap();
         let token = jwt.issue(&uid, "alice", Role::Admin).unwrap();
 
-        let id = resolve_identity(&meta, &jwt, &format!("Bearer {token}")).await;
+        let id = resolve_identity(&meta, &jwt, &format!("Bearer {token}"), None).await;
         let user = id.user().unwrap();
         assert_eq!(user.username, "alice");
         assert_eq!(user.role, Role::Admin);
@@ -160,7 +225,7 @@ mod tests {
             .await
             .unwrap();
 
-        let id = resolve_identity(&meta, &jwt, &format!("Bearer {token}")).await;
+        let id = resolve_identity(&meta, &jwt, &format!("Bearer {token}"), None).await;
         assert_eq!(id.user().unwrap().username, "dev");
     }
 
@@ -179,11 +244,11 @@ mod tests {
             .unwrap();
 
         // 裸 Token（无 scheme 前缀）应解析出对应身份
-        let id = resolve_identity(&meta, &jwt, &token).await;
+        let id = resolve_identity(&meta, &jwt, &token, None).await;
         assert_eq!(id.user().unwrap().username, "dev");
         // 非法裸 Token 回退匿名
         assert_eq!(
-            resolve_identity(&meta, &jwt, "不是有效的裸令牌").await,
+            resolve_identity(&meta, &jwt, "不是有效的裸令牌", None).await,
             AuthIdentity::Anonymous
         );
     }
@@ -198,7 +263,7 @@ mod tests {
             .unwrap();
         let header = format!("Basic {}", STANDARD.encode("bob:s3cret"));
 
-        let id = resolve_identity(&meta, &jwt, &header).await;
+        let id = resolve_identity(&meta, &jwt, &header, None).await;
         assert_eq!(id.user().unwrap().username, "bob");
     }
 
@@ -218,7 +283,7 @@ mod tests {
         // 包管理器常把 Token 当作 Basic 的密码字段
         let header = format!("Basic {}", STANDARD.encode(format!("bob:{token}")));
 
-        let id = resolve_identity(&meta, &jwt, &header).await;
+        let id = resolve_identity(&meta, &jwt, &header, None).await;
         assert_eq!(id.user().unwrap().username, "bob");
     }
 
@@ -227,15 +292,15 @@ mod tests {
         let meta = 新建库().await;
         let jwt = 测试签名器();
         assert_eq!(
-            resolve_identity(&meta, &jwt, "Bearer 不是有效令牌").await,
+            resolve_identity(&meta, &jwt, "Bearer 不是有效令牌", None).await,
             AuthIdentity::Anonymous
         );
         assert_eq!(
-            resolve_identity(&meta, &jwt, "Basic !!!非法").await,
+            resolve_identity(&meta, &jwt, "Basic !!!非法", None).await,
             AuthIdentity::Anonymous
         );
         assert_eq!(
-            resolve_identity(&meta, &jwt, "Unknown scheme").await,
+            resolve_identity(&meta, &jwt, "Unknown scheme", None).await,
             AuthIdentity::Anonymous
         );
     }
@@ -253,7 +318,7 @@ mod tests {
         let header = format!("Basic {}", STANDARD.encode("bob:pw"));
         // 禁用账户即便口令正确也不授予身份
         assert_eq!(
-            resolve_identity(&meta, &jwt, &header).await,
+            resolve_identity(&meta, &jwt, &header, None).await,
             AuthIdentity::Anonymous
         );
     }
@@ -273,7 +338,7 @@ mod tests {
             .unwrap();
         meta.revoke_token(&tid).await.unwrap();
         assert_eq!(
-            resolve_identity(&meta, &jwt, &format!("Bearer {token}")).await,
+            resolve_identity(&meta, &jwt, &format!("Bearer {token}"), None).await,
             AuthIdentity::Anonymous
         );
     }

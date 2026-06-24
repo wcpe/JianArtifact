@@ -12,6 +12,7 @@ use crate::meta::{MetaError, MetaStore, Role, UserRecord};
 
 pub mod basic;
 pub mod jwt;
+pub mod ldap;
 pub mod lockout;
 pub mod oidc;
 pub mod provider;
@@ -21,6 +22,7 @@ pub use basic::{parse_basic_auth, BasicCredentials};
 pub use jwt::{
     DockerAccess, DockerTokenClaims, JwtClaims, JwtError, JwtSigner, DOCKER_TOKEN_TTL_SECS,
 };
+pub use ldap::{LdapProvider, LdapSettings};
 pub use lockout::{LockoutError, LoginGuard};
 pub use oidc::{OidcError, OidcProvider, OidcSettings};
 pub use provider::{AuthProvider, AuthenticatedSubject, ProviderKind};
@@ -92,6 +94,11 @@ pub enum AuthError {
     /// 元数据访问失败。
     #[error(transparent)]
     Meta(#[from] MetaError),
+    /// 外部 provider（LDAP 等）认证失败：凭据无效 / 目录不可达 / 协议错误等。
+    ///
+    /// 统一收敛，不区分「用户不存在 / 口令错误 / 目录故障」，避免泄露目录存在性与拓扑。
+    #[error("外部认证失败")]
+    ExternalAuth,
 }
 
 /// 用 argon2 计算口令哈希（含随机盐），返回 PHC 字符串。
@@ -226,6 +233,27 @@ pub async fn resolve_external_login(
         .await?
         .ok_or(ExternalLoginError::NoLocalUser)?;
     Ok(user)
+}
+
+/// 经 LDAP provider 做口令型登录并映射到本地用户（FR-35 / ADR-0016）。
+///
+/// 流程：① 调用 provider 的 bind 校验（[`LdapProvider::authenticate_password`]）证明外部身份；
+/// ② 经既有 [`resolve_external_login`] 把外部主体映射到本地用户（守 ADR-0010：JIT 默认关、
+/// 默认角色 User）。校验失败 / 映射拒绝统一返回 [`ExternalLoginError`]，调用方据此回 401。
+///
+/// 该函数只产出本地用户记录，不签发会话（签发由调用方照常走既有 JWT）。
+pub async fn ldap_login(
+    meta: &MetaStore,
+    provider: &LdapProvider,
+    username: &str,
+    password: &str,
+    auto_provision: bool,
+) -> Result<UserRecord, ExternalLoginError> {
+    let subject = provider
+        .authenticate_password(username, password)
+        .await
+        .map_err(|_| ExternalLoginError::NoLocalUser)?;
+    resolve_external_login(meta, &subject, auto_provision).await
 }
 
 /// 为 JIT 开通挑一个可用用户名：建议名可用则用之，已被占用则追加短随机后缀避重。

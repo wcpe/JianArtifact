@@ -60,6 +60,7 @@ async fn 测试用状态() -> (AppState, tempfile::TempDir) {
         rate_limiter: Arc::new(jianartifact::api::RateLimiter::new()),
         oidc: None,
         oidc_flows: std::sync::Arc::new(jianartifact::api::OidcFlowStore::new()),
+        ldap: None,
     };
     (state, dir)
 }

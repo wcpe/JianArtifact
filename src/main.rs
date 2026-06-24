@@ -13,7 +13,8 @@ use tracing_subscriber::EnvFilter;
 
 use jianartifact::api::{self, AppState};
 use jianartifact::auth::{
-    self, BootstrapOutcome, JwtSigner, LoginGuard, OidcProvider, OidcSettings,
+    self, BootstrapOutcome, JwtSigner, LdapProvider, LdapSettings, LoginGuard, OidcProvider,
+    OidcSettings,
 };
 use jianartifact::config::Config;
 use jianartifact::format::{ArtifactService, DockerRegistry, FormatRegistry};
@@ -220,6 +221,32 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
+    // LDAP 认证 provider（FR-35，ADR-0016）：仅当配置了 `[auth.ldap]` 才实例化（未配置即不存在）。
+    // bind 口令真源 env / 配置，绝不入库 / 进日志；连接走 LDAPS / StartTLS（rustls），默认不接受明文。
+    let ldap = if let Some(ldap_cfg) = cfg.auth.ldap.clone() {
+        let provider = LdapProvider::new(LdapSettings {
+            url: ldap_cfg.url,
+            bind_dn: ldap_cfg.bind_dn,
+            bind_password: ldap_cfg.bind_password,
+            user_search_base: ldap_cfg.user_search_base,
+            user_filter: ldap_cfg.user_filter,
+            username_attr: ldap_cfg.username_attr,
+            starttls: ldap_cfg.starttls,
+            allow_insecure: ldap_cfg.allow_insecure,
+            conn_timeout_secs: ldap_cfg.conn_timeout_secs,
+        });
+        info!(
+            JIT开通 = ldap_cfg.auto_provision,
+            StartTLS = ldap_cfg.starttls,
+            允许明文 = ldap_cfg.allow_insecure,
+            "LDAP 认证集成已启用（bind 校验）"
+        );
+        Some(Arc::new(provider))
+    } else {
+        info!("LDAP 认证集成未配置，跳过");
+        None
+    };
+
     // 构建路由与共享状态
     let state = AppState {
         config: Arc::new(cfg.clone()),
@@ -236,6 +263,7 @@ async fn main() -> anyhow::Result<()> {
         rate_limiter,
         oidc,
         oidc_flows: Arc::new(api::OidcFlowStore::new()),
+        ldap,
     };
     let app = api::build_router(state);
 

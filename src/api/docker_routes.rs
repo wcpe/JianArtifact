@@ -290,7 +290,9 @@ async fn resolve_token_identity(
     if basic::strip_scheme_prefix(value, "Basic ").is_none() {
         return Ok(AuthIdentity::Anonymous);
     }
-    let identity = super::resolve_identity(&state.meta, &state.jwt, value).await;
+    // Docker 令牌端点同走 Basic Auth，配置了 LDAP 时一并支持 LDAP bind 登录。
+    let ldap = super::identity::LdapAuthContext::from_state(state);
+    let identity = super::resolve_identity(&state.meta, &state.jwt, value, ldap.as_ref()).await;
     if identity.is_authenticated() {
         Ok(identity)
     } else {
