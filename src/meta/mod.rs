@@ -21,7 +21,7 @@ pub use repo::{
     RepositoryRecord, Visibility,
 };
 pub use usage::{NewUsageEvent, UsageAction, UsageStatRow};
-pub use vuln::{MirrorStateRecord, NewAdvisory, NewAffected};
+pub use vuln::{AdvisoryAffectedMatch, MirrorStateRecord, NewAdvisory, NewAffected};
 
 /// 全局角色。以小写字符串存储于 DB，避免魔法字符串散落各处。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

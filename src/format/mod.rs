@@ -33,6 +33,8 @@ pub use pypi::{
 pub use raw::RawFormat;
 pub use service::{ArtifactKind, ArtifactService, ServiceError};
 
+// VulnCoordinate / Format::vuln_coordinate 在本模块内定义并对外公开，供 api 层做坐标级漏洞匹配。
+
 /// 制品在仓库内的定位坐标：由格式把请求路径解析而来，或用于反解为存储路径。
 ///
 /// 当前四格式均以"仓库内相对路径"作为制品键，故坐标即归一化后的路径；
@@ -52,6 +54,21 @@ pub enum PathError {
     /// 路径含非法分段（`.` / `..`），可能用于目录穿越。
     #[error("制品路径含非法分段")]
     Traversal,
+}
+
+/// 制品的生态坐标三元组（FR-71）：由格式从制品路径反解，用于本地漏洞库坐标级匹配。
+///
+/// `ecosystem` 与 OSV `package.ecosystem` 对齐（如 `Maven` / `npm`），`package` 为该生态的包坐标名
+/// （Maven 为 `group:artifact`，npm 为包名），`version` 为版本号。无标准坐标的格式（如 Raw / Docker）
+/// 不产出本坐标（`vuln_coordinate` 返回 None），其制品不参与坐标级漏洞匹配。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VulnCoordinate {
+    /// 生态名（与 OSV `package.ecosystem` 对齐）。
+    pub ecosystem: String,
+    /// 包坐标名（Maven `group:artifact`、npm 包名）。
+    pub package: String,
+    /// 版本号。
+    pub version: String,
 }
 
 /// 使用方式片段（FR-68）：详情页按格式生成的获取与接入示例。
@@ -93,6 +110,14 @@ pub trait Format: Send + Sync {
         repo_name: &str,
         coords: &ArtifactCoordinates,
     ) -> Vec<UsageSnippet>;
+
+    /// 从制品坐标反解生态坐标三元组，供本地漏洞库坐标级匹配（FR-71）。
+    ///
+    /// 默认返回 None——无标准生态坐标的格式（Raw / Docker 等）不参与坐标级匹配。
+    /// 有坐标的格式（Maven / npm）覆写本方法，从仓库内路径反解 `(ecosystem, package, version)`。
+    fn vuln_coordinate(&self, _coords: &ArtifactCoordinates) -> Option<VulnCoordinate> {
+        None
+    }
 }
 
 /// 按格式名注册的格式注册表：通用机理据仓库 `format` 字段查得对应处理器。

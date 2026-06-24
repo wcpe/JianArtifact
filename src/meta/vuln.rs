@@ -44,6 +44,24 @@ pub struct NewAffected {
     pub versions: Option<String>,
 }
 
+/// 按生态 + 包定位到的候选受影响记录（FR-71 坐标级匹配用）。
+///
+/// 连带所属公告的展示元数据（id / 严重度 / 摘要）一并取回，
+/// 版本范围（`ranges` / `versions`）交上层 `vuln` 纯函数判定是否真正命中本制品版本。
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct AdvisoryAffectedMatch {
+    /// 所属公告 id。
+    pub advisory_id: String,
+    /// 公告严重度（可空）。
+    pub severity: Option<String>,
+    /// 公告简要描述（可空）。
+    pub summary: Option<String>,
+    /// 受影响版本范围的原始 JSON 文本（可空），交上层做范围语义判定。
+    pub ranges: Option<String>,
+    /// 受影响具体版本列表的原始 JSON 文本（可空）。
+    pub versions: Option<String>,
+}
+
 /// 镜像刷新状态记录。
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct MirrorStateRecord {
@@ -131,6 +149,32 @@ impl MetaStore {
                 .fetch_one(self.pool())
                 .await?;
         Ok(count)
+    }
+
+    /// 按生态 + 包坐标列出候选受影响记录（FR-71）。
+    ///
+    /// 经 `(ecosystem, package)` 索引（`idx_vuln_affected_eco_pkg`）定位候选行，连带公告
+    /// 严重度 / 摘要返回；**仅做生态 + 包名相等匹配，不在 SQL 内做版本范围判定**——
+    /// 范围语义交上层 `vuln` 纯函数判定，职责清晰且便于穷举测试。
+    /// 输入仅为本机制品自身坐标，全程查本地库，绝不外发（守 ADR-0012 数据不外发红线）。
+    pub async fn list_affected_for_coordinate(
+        &self,
+        ecosystem: &str,
+        package: &str,
+    ) -> Result<Vec<AdvisoryAffectedMatch>, MetaError> {
+        let records = sqlx::query_as::<_, AdvisoryAffectedMatch>(
+            "SELECT af.advisory_id AS advisory_id, ad.severity AS severity, \
+                    ad.summary AS summary, af.ranges AS ranges, af.versions AS versions \
+             FROM vuln_advisory_affected af \
+             JOIN vuln_advisories ad ON ad.id = af.advisory_id \
+             WHERE af.ecosystem = ? AND af.package = ? \
+             ORDER BY af.advisory_id ASC",
+        )
+        .bind(ecosystem)
+        .bind(package)
+        .fetch_all(self.pool())
+        .await?;
+        Ok(records)
     }
 
     /// 记录某来源某生态的一次成功刷新状态（last_refreshed 置为当前时刻）。
@@ -249,6 +293,54 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(store.count_advisory_affected("OSV-3").await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn 按坐标列出候选受影响记录() {
+        let store = MetaStore::open_in_memory().await.unwrap();
+        // 落库一条 Maven log4j-core 的公告，带范围
+        let adv = NewAdvisory {
+            id: "GHSA-jfh8".to_string(),
+            source: "osv".to_string(),
+            summary: Some("RCE".to_string()),
+            details: None,
+            severity: Some("CVSS:3.1/AV:N".to_string()),
+            modified: None,
+            published: None,
+            affected: vec![NewAffected {
+                ecosystem: "Maven".to_string(),
+                package: "org.apache.logging.log4j:log4j-core".to_string(),
+                ranges: Some(
+                    r#"[{"type":"ECOSYSTEM","events":[{"introduced":"2.0"},{"fixed":"2.17.1"}]}]"#
+                        .to_string(),
+                ),
+                versions: None,
+            }],
+        };
+        store.upsert_advisory(&adv).await.unwrap();
+
+        // 命中生态 + 包名相等的候选行，连带公告元数据
+        let hits = store
+            .list_affected_for_coordinate("Maven", "org.apache.logging.log4j:log4j-core")
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].advisory_id, "GHSA-jfh8");
+        assert_eq!(hits[0].severity.as_deref(), Some("CVSS:3.1/AV:N"));
+        assert!(hits[0].ranges.as_deref().unwrap().contains("2.17.1"));
+
+        // 包名不同不命中（坐标级精确匹配，不做模糊）
+        assert!(store
+            .list_affected_for_coordinate("Maven", "org.other:lib")
+            .await
+            .unwrap()
+            .is_empty());
+        // 生态不同不命中
+        assert!(store
+            .list_affected_for_coordinate("npm", "org.apache.logging.log4j:log4j-core")
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]

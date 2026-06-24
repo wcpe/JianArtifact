@@ -19,10 +19,53 @@ use crate::config::VulnConfig;
 use crate::meta::{MetaStore, NewAdvisory, NewAffected};
 
 mod http;
+mod matcher;
 mod osv;
 
 pub use http::HttpMirrorSource;
+pub use matcher::{compare_versions, is_affected, AffectedRecord};
 pub use osv::{parse_advisory, OsvParseError, ParsedAdvisory};
+
+use crate::meta::AdvisoryAffectedMatch;
+
+/// 制品命中的单条漏洞公告（FR-71）：供 API 展示的最小结果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VulnHit {
+    /// 命中的公告 id（如 GHSA / CVE）。
+    pub advisory_id: String,
+    /// 公告严重度（可空）。
+    pub severity: Option<String>,
+    /// 公告简要描述（可空）。
+    pub summary: Option<String>,
+}
+
+/// 在已由 `meta` 取回的候选受影响记录中，筛出真正命中本制品版本的公告（FR-71）。
+///
+/// 输入 `candidates` 为本地库按 `(ecosystem, package)` 查得的候选行，本函数据各行的版本范围
+/// 用纯函数 [`is_affected`] 判定该制品 `version` 是否落入受影响区间；同一公告多条受影响行命中时只计一次。
+/// **全程在内存对本机已镜像数据比对，绝不外发坐标**（守 ADR-0012 数据不外发红线）。
+pub fn select_hits(version: &str, candidates: &[AdvisoryAffectedMatch]) -> Vec<VulnHit> {
+    let mut hits: Vec<VulnHit> = Vec::new();
+    for c in candidates {
+        let record = AffectedRecord {
+            ranges: c.ranges.clone(),
+            versions: c.versions.clone(),
+        };
+        if !is_affected(version, &record) {
+            continue;
+        }
+        // 同一公告可能有多条受影响行命中，去重（按 advisory_id）只计一次
+        if hits.iter().any(|h| h.advisory_id == c.advisory_id) {
+            continue;
+        }
+        hits.push(VulnHit {
+            advisory_id: c.advisory_id.clone(),
+            severity: c.severity.clone(),
+            summary: c.summary.clone(),
+        });
+    }
+    hits
+}
 
 /// 数据来源标识（落库 source 字段与刷新状态用）。
 const SOURCE_OSV: &str = "osv";
@@ -442,6 +485,102 @@ mod tests {
             ..VulnConfig::default()
         };
         assert!(spawn_refresh_loop(mirror2, cfg2).is_none());
+    }
+
+    /// 便捷：构造一条候选受影响记录（仅含匹配判定所需字段）。
+    fn 候选(
+        advisory_id: &str,
+        ranges: Option<&str>,
+        versions: Option<&str>,
+    ) -> AdvisoryAffectedMatch {
+        AdvisoryAffectedMatch {
+            advisory_id: advisory_id.to_string(),
+            severity: Some("CVSS:3.1/AV:N".to_string()),
+            summary: Some("摘要".to_string()),
+            ranges: ranges.map(str::to_string),
+            versions: versions.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn select_hits_命中范围内版本() {
+        let candidates = vec![候选(
+            "GHSA-1",
+            Some(r#"[{"type":"ECOSYSTEM","events":[{"introduced":"2.0"},{"fixed":"2.17.1"}]}]"#),
+            None,
+        )];
+        // 落入范围 → 命中
+        let hits = select_hits("2.14.1", &candidates);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].advisory_id, "GHSA-1");
+        assert_eq!(hits[0].severity.as_deref(), Some("CVSS:3.1/AV:N"));
+        // 修复版不命中
+        assert!(select_hits("2.17.1", &candidates).is_empty());
+    }
+
+    #[test]
+    fn select_hits_同公告多条命中只计一次() {
+        // 同一公告 id 的两条受影响行都覆盖该版本，结果应去重为一条
+        let candidates = vec![
+            候选(
+                "GHSA-DUP",
+                Some(r#"[{"type":"ECOSYSTEM","events":[{"introduced":"1.0"}]}]"#),
+                None,
+            ),
+            候选("GHSA-DUP", None, Some(r#"["1.5"]"#)),
+        ];
+        let hits = select_hits("1.5", &candidates);
+        assert_eq!(hits.len(), 1);
+    }
+
+    #[test]
+    fn select_hits_无候选无命中() {
+        assert!(select_hits("1.0.0", &[]).is_empty());
+    }
+
+    #[tokio::test]
+    async fn 坐标匹配端到端命中且不发起网络() {
+        // 端到端：落库公告 → 按坐标查候选 → 纯函数判定命中。
+        // 用 MetaStore::open_in_memory（纯本地 SQLite），全程无任何网络下载器参与，
+        // 据此断言坐标匹配链路绝不外发坐标到外部漏洞服务（守 ADR-0012）。
+        let store = MetaStore::open_in_memory().await.unwrap();
+        store
+            .upsert_advisory(&NewAdvisory {
+                id: "GHSA-jfh8".to_string(),
+                source: "osv".to_string(),
+                summary: Some("log4j RCE".to_string()),
+                details: None,
+                severity: Some("CVSS:3.1/严重".to_string()),
+                modified: None,
+                published: None,
+                affected: vec![NewAffected {
+                    ecosystem: "Maven".to_string(),
+                    package: "org.apache.logging.log4j:log4j-core".to_string(),
+                    ranges: Some(
+                        r#"[{"type":"ECOSYSTEM","events":[{"introduced":"2.0"},{"fixed":"2.17.1"}]}]"#
+                            .to_string(),
+                    ),
+                    versions: None,
+                }],
+            })
+            .await
+            .unwrap();
+
+        // 制品坐标（生态 / 包 / 版本）；仅查本地库（list_affected_for_coordinate 只读本机 SQLite，无网络）
+        let candidates = store
+            .list_affected_for_coordinate("Maven", "org.apache.logging.log4j:log4j-core")
+            .await
+            .unwrap();
+        let hits = select_hits("2.14.1", &candidates);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].advisory_id, "GHSA-jfh8");
+
+        // 不受影响版本：不命中
+        let safe = store
+            .list_affected_for_coordinate("Maven", "org.apache.logging.log4j:log4j-core")
+            .await
+            .unwrap();
+        assert!(select_hits("2.17.1", &safe).is_empty());
     }
 
     /// 真机联网验证：用生产 `HttpMirrorSource` 真实下载 OSV 的小生态镜像并跑完整管线。

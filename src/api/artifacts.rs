@@ -13,6 +13,7 @@ use serde_json::{json, Value};
 
 use crate::format::UsageSnippet;
 use crate::meta::ArtifactRecord;
+use crate::vuln::{self, VulnHit};
 
 use super::repo_access::{load_readable_repo, load_writable_repo};
 use super::{ApiError, AppState, ClientIp, Identity};
@@ -41,6 +42,30 @@ pub struct ArtifactDetailDto {
     pub checksums: Checksums,
     /// 按格式生成的使用方式片段（FR-68）。
     pub usage: Vec<UsageSnippet>,
+    /// 该制品命中的已知漏洞公告（FR-71，本地漏洞库坐标级匹配，不外发）。
+    /// 无坐标的格式或未命中时为空数组。
+    pub vulnerabilities: Vec<VulnerabilityDto>,
+}
+
+/// 制品命中的单条漏洞公告视图（FR-71）。
+#[derive(Debug, Serialize)]
+pub struct VulnerabilityDto {
+    /// 公告 id（如 GHSA / CVE）。
+    pub id: String,
+    /// 严重度（可空）。
+    pub severity: Option<String>,
+    /// 简要描述（可空）。
+    pub summary: Option<String>,
+}
+
+impl From<VulnHit> for VulnerabilityDto {
+    fn from(h: VulnHit) -> Self {
+        Self {
+            id: h.advisory_id,
+            severity: h.severity,
+            summary: h.summary,
+        }
+    }
 }
 
 /// 四校验和分组。
@@ -97,6 +122,9 @@ pub async fn get_artifact_detail(
     // 据格式注册表多态生成使用片段（未注册格式给空片段，不报错）
     let usage = build_usage(&state, &repo.format, &repo.name, &record.path);
 
+    // 本地漏洞库坐标级匹配（FR-71）：仅查本机已镜像数据，绝不外发坐标
+    let vulnerabilities = scan_vulnerabilities(&state, &repo.format, &record.path).await?;
+
     let detail = ArtifactDetailDto {
         repo_id: repo.id.clone(),
         repo_name: repo.name.clone(),
@@ -108,8 +136,38 @@ pub async fn get_artifact_detail(
         created_at: record.created_at.clone(),
         checksums: record.into(),
         usage,
+        vulnerabilities,
     };
     Ok(Json(detail))
+}
+
+/// 据格式坐标在本地漏洞库做坐标级匹配，返回命中的漏洞公告视图（FR-71）。
+///
+/// 无标准生态坐标的格式（Raw / Docker 等）或无法反解坐标时返回空集——这些制品不参与坐标级匹配。
+/// **全程仅查本机已镜像数据，绝不把坐标外发到外部漏洞服务**（守 ADR-0012 数据不外发红线）。
+async fn scan_vulnerabilities(
+    state: &AppState,
+    format: &str,
+    path: &str,
+) -> Result<Vec<VulnerabilityDto>, ApiError> {
+    // 据仓库格式取处理器并反解生态坐标；未注册格式 / 无坐标即不匹配
+    let Some(handler) = state.formats.get(format) else {
+        return Ok(Vec::new());
+    };
+    let Ok(coords) = handler.parse_path(path) else {
+        return Ok(Vec::new());
+    };
+    let Some(coord) = handler.vuln_coordinate(&coords) else {
+        return Ok(Vec::new());
+    };
+
+    // 仅按 (生态, 包) 查本地候选公告，再用纯函数据版本范围筛出命中
+    let candidates = state
+        .meta
+        .list_affected_for_coordinate(&coord.ecosystem, &coord.package)
+        .await?;
+    let hits = vuln::select_hits(&coord.version, &candidates);
+    Ok(hits.into_iter().map(VulnerabilityDto::from).collect())
 }
 
 /// 删除制品（FR-60）：需对应仓库写权限或管理员。无读权限 404、有读无写 403、不存在 404。

@@ -13,7 +13,14 @@ use serde_json::{Map, Value};
 
 use crate::meta::ArtifactRecord;
 
-use super::{normalize_repo_path, ArtifactCoordinates, Format, PathError, UsageSnippet};
+use super::{
+    normalize_repo_path, ArtifactCoordinates, Format, PathError, UsageSnippet, VulnCoordinate,
+};
+
+/// OSV 中 npm 生态的标识（与公告 `package.ecosystem` 对齐）。
+const NPM_ECOSYSTEM: &str = "npm";
+/// npm tarball 文件扩展名。
+const TARBALL_EXTENSION: &str = ".tgz";
 
 /// npm packument 在仓库内的内容类型。
 const PACKUMENT_CONTENT_TYPE: &str = "application/json";
@@ -298,6 +305,34 @@ impl Format for NpmFormat {
             },
         ]
     }
+
+    fn vuln_coordinate(&self, coords: &ArtifactCoordinates) -> Option<VulnCoordinate> {
+        // 仅 tarball（含版本号）参与坐标级匹配；packument 是包级文档、无具体版本，跳过。
+        let (package, version) = parse_tarball_coordinate(&coords.path)?;
+        Some(VulnCoordinate {
+            ecosystem: NPM_ECOSYSTEM.to_string(),
+            package,
+            version,
+        })
+    }
+}
+
+/// 从 tarball 存储路径反解 `(包名, 版本)`：路径形如 `{包名}/-/{无scope名}-{版本}.tgz`。
+///
+/// 非 tarball 路径（无 `/-/` 段或非 `.tgz`）返回 None。版本取 tarball 文件名去掉
+/// `{无scope名}-` 前缀与 `.tgz` 后缀的中间段；前缀不匹配（文件名异常）时返回 None。
+fn parse_tarball_coordinate(path: &str) -> Option<(String, String)> {
+    let sep = format!("/{TARBALL_SEGMENT}/");
+    let (package, file_name) = path.split_once(&sep)?;
+    let stem = file_name.strip_suffix(TARBALL_EXTENSION)?;
+    // tarball 文件名用无 scope 的包名作前缀（如 @scope/pkg → pkg-1.0.0.tgz）
+    let unscoped = package.rsplit('/').next().unwrap_or(package);
+    let prefix = format!("{unscoped}-");
+    let version = stem.strip_prefix(&prefix)?;
+    if version.is_empty() {
+        return None;
+    }
+    Some((package.to_string(), version.to_string()))
 }
 
 #[cfg(test)]
@@ -519,6 +554,45 @@ mod tests {
             .content
             .contains("registry=http://localhost:8080/npm-hosted/"));
         assert!(snippets[1].content.contains("_authToken="));
+    }
+
+    #[test]
+    fn vuln坐标_从tarball反解包名与版本() {
+        let coord = NpmFormat
+            .vuln_coordinate(&ArtifactCoordinates {
+                path: "lodash/-/lodash-4.17.21.tgz".to_string(),
+            })
+            .unwrap();
+        assert_eq!(coord.ecosystem, "npm");
+        assert_eq!(coord.package, "lodash");
+        assert_eq!(coord.version, "4.17.21");
+    }
+
+    #[test]
+    fn vuln坐标_scoped包tarball反解() {
+        let coord = NpmFormat
+            .vuln_coordinate(&ArtifactCoordinates {
+                path: "@scope/pkg/-/pkg-1.2.3.tgz".to_string(),
+            })
+            .unwrap();
+        // 包名保留 scope，版本取无 scope 名前缀之后的中段
+        assert_eq!(coord.package, "@scope/pkg");
+        assert_eq!(coord.version, "1.2.3");
+    }
+
+    #[test]
+    fn vuln坐标_packument不产出() {
+        // packument（无 /-/ 段，无具体版本）不参与坐标级匹配
+        assert!(NpmFormat
+            .vuln_coordinate(&ArtifactCoordinates {
+                path: "lodash".to_string(),
+            })
+            .is_none());
+        assert!(NpmFormat
+            .vuln_coordinate(&ArtifactCoordinates {
+                path: "@scope/pkg".to_string(),
+            })
+            .is_none());
     }
 
     #[test]

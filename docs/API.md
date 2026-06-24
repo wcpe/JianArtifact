@@ -159,7 +159,7 @@
 
 - **方法 / 路径**：`GET /api/v1/repositories/{id}/artifacts/{path}`
 - **请求**：路径参数 `id`、`path`。受 public/private 与读 ACL 约束。
-- **响应**：制品详情——`path`、`size`、`content_type`、`created_at`、各校验和（`sha256`、`sha1`、`md5`、`sha512`）、所属仓库与格式，以及按格式生成的“使用方式”片段（如 Maven `<dependency>`、`npm install`、`docker pull`、Raw URL/curl，及把客户端指向本仓库的接入配置）。
+- **响应**：制品详情——`path`、`size`、`content_type`、`created_at`、各校验和（`sha256`、`sha1`、`md5`、`sha512`）、所属仓库与格式，按格式生成的“使用方式”片段（如 Maven `<dependency>`、`npm install`、`docker pull`、Raw URL/curl，及把客户端指向本仓库的接入配置），以及 `vulnerabilities` 数组（FR-71）：该制品命中的已知漏洞公告，每项含 `id`（如 GHSA / CVE）、`severity`（可空）、`summary`（可空）。基于本地漏洞库离线镜像（FR-70）按制品生态坐标 `(ecosystem, package, version)` 做坐标级本地匹配，**制品坐标绝不外发到外部漏洞服务**；无标准生态坐标的格式（Raw / Docker）或未命中时为空数组 `[]`。
 - **错误**：`401`/`404` 私有仓库对未授权方拒绝；`403` 无读权限；`404` 仓库或制品不存在。
 
 ### 跨仓库搜索

@@ -11,7 +11,12 @@
 
 use crate::meta::ArtifactRecord;
 
-use super::{normalize_repo_path, ArtifactCoordinates, Format, PathError, UsageSnippet};
+use super::{
+    normalize_repo_path, ArtifactCoordinates, Format, PathError, UsageSnippet, VulnCoordinate,
+};
+
+/// OSV 中 Maven 生态的标识（与公告 `package.ecosystem` 对齐）。
+const MAVEN_ECOSYSTEM: &str = "Maven";
 
 /// SNAPSHOT 版本后缀：版本目录以此结尾即为快照版（可覆盖）。
 const SNAPSHOT_SUFFIX: &str = "-SNAPSHOT";
@@ -134,6 +139,28 @@ impl Format for MavenFormat {
         });
 
         snippets
+    }
+
+    fn vuln_coordinate(&self, coords: &ArtifactCoordinates) -> Option<VulnCoordinate> {
+        // 仅对能反解出 GAV 的主构件路径产出坐标；sidecar 与 metadata 不参与匹配。
+        // sidecar（.sha1/.md5/.sha256/.sha512/.asc）与 maven-metadata.xml 不是发布的库本体，
+        // 跳过它们避免对同一版本重复匹配。
+        let file_name = coords.path.rsplit('/').next().unwrap_or(&coords.path);
+        if file_name == MAVEN_METADATA {
+            return None;
+        }
+        if let Some(ext) = file_name.rsplit('.').next() {
+            if SIDECAR_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()) {
+                return None;
+            }
+        }
+        let gav = Gav::from_path(&coords.path)?;
+        Some(VulnCoordinate {
+            ecosystem: MAVEN_ECOSYSTEM.to_string(),
+            // OSV Maven 坐标包名为 `groupId:artifactId`
+            package: format!("{}:{}", gav.group_id, gav.artifact_id),
+            version: gav.version,
+        })
     }
 }
 
@@ -310,6 +337,42 @@ mod tests {
             .content
             .contains("http://localhost:8080/maven-hosted"));
         assert!(!snippets[1].content.contains("8080//maven-hosted"));
+    }
+
+    #[test]
+    fn vuln坐标_从主构件反解生态包版本() {
+        let coord = MavenFormat
+            .vuln_coordinate(&ArtifactCoordinates {
+                path: "org/apache/logging/log4j/log4j-core/2.14.1/log4j-core-2.14.1.jar"
+                    .to_string(),
+            })
+            .unwrap();
+        assert_eq!(coord.ecosystem, "Maven");
+        // OSV Maven 包名为 groupId:artifactId
+        assert_eq!(coord.package, "org.apache.logging.log4j:log4j-core");
+        assert_eq!(coord.version, "2.14.1");
+    }
+
+    #[test]
+    fn vuln坐标_sidecar与metadata不产出() {
+        // sidecar 不参与匹配
+        assert!(MavenFormat
+            .vuln_coordinate(&ArtifactCoordinates {
+                path: "com/foo/lib/1.0/lib-1.0.jar.sha1".to_string(),
+            })
+            .is_none());
+        // maven-metadata.xml 不参与匹配
+        assert!(MavenFormat
+            .vuln_coordinate(&ArtifactCoordinates {
+                path: "com/foo/lib/maven-metadata.xml".to_string(),
+            })
+            .is_none());
+        // 段数不足无法解 GAV
+        assert!(MavenFormat
+            .vuln_coordinate(&ArtifactCoordinates {
+                path: "lib-1.0.jar".to_string(),
+            })
+            .is_none());
     }
 
     #[test]
