@@ -1,0 +1,494 @@
+//! 审计日志（FR-31，ADR-0015）的 HTTP 集成测试：经 axum 路由端到端验证
+//! 事件入库、异步不阻塞主路径、采集失败降级不影响业务、管理查询仅 Admin、脱敏。
+//!
+//! 审计写入是异步的（独立写入任务），故对"已落库"的断言用短轮询等待，避免脆弱的固定睡眠。
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use axum::body::Body;
+use axum::http::{Request, StatusCode};
+use axum::Router;
+use http_body_util::BodyExt;
+use serde_json::{json, Value};
+use tower::ServiceExt;
+
+use jianartifact::api::{build_router, AppState};
+use jianartifact::auth::{self, JwtSigner, LoginGuard};
+use jianartifact::config::Config;
+use jianartifact::format::{ArtifactService, DockerRegistry, FormatRegistry};
+use jianartifact::meta::{AuditQuery, MetaStore, Role};
+use jianartifact::proxy::HttpUpstream;
+use jianartifact::storage::{BlobBackend, LocalFsStore};
+
+/// 测试夹具：持有可重复构建路由的状态与临时目录。
+struct Fixture {
+    state: AppState,
+    _dir: tempfile::TempDir,
+}
+
+impl Fixture {
+    async fn new() -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let meta = MetaStore::open(&dir.path().join("test.db")).await.unwrap();
+        let store = BlobBackend::Fs(LocalFsStore::new(dir.path().join("blobs")).await.unwrap());
+        let jwt = JwtSigner::from_secret(b"audit-secret-32-bytes-xxxxxxxxxxx", 3600);
+        let upstream = HttpUpstream::new(Duration::from_secs(60)).unwrap();
+        let artifacts = Arc::new(ArtifactService::new(store.clone(), meta.clone(), upstream));
+        let docker = Arc::new(
+            DockerRegistry::new(
+                store.clone(),
+                meta.clone(),
+                dir.path().join("uploads"),
+                None,
+            )
+            .await
+            .unwrap(),
+        );
+        let (audit, audit_rx) = jianartifact::api::audit_channel();
+        jianartifact::api::spawn_audit_writer(meta.clone(), audit_rx);
+        let state = AppState {
+            config: Arc::new(Config::default()),
+            meta,
+            store,
+            jwt,
+            login_guard: Arc::new(LoginGuard::new(5, 900)),
+            artifacts,
+            formats: Arc::new(FormatRegistry::with_builtin()),
+            docker: Some(docker),
+            audit,
+        };
+        Self { state, _dir: dir }
+    }
+
+    fn router(&self) -> Router {
+        build_router(self.state.clone())
+    }
+
+    async fn seed_user(&self, username: &str, password: &str, role: Role) -> String {
+        let hash = auth::hash_password(password).unwrap();
+        self.state
+            .meta
+            .create_user(username, &hash, role)
+            .await
+            .unwrap()
+    }
+
+    /// 短轮询等待审计库出现满足条件的行，最多等约 2 秒；超时返回最后一次查询结果。
+    async fn wait_audit<F>(&self, predicate: F) -> Vec<jianartifact::meta::AuditEntry>
+    where
+        F: Fn(&[jianartifact::meta::AuditEntry]) -> bool,
+    {
+        for _ in 0..200 {
+            let rows = self
+                .state
+                .meta
+                .query_audit(&AuditQuery {
+                    limit: 1000,
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            if predicate(&rows) {
+                return rows;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        self.state
+            .meta
+            .query_audit(&AuditQuery {
+                limit: 1000,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+    }
+}
+
+/// 发送请求并返回 (状态码, JSON 体)。
+async fn send(router: Router, req: Request<Body>) -> (StatusCode, Value) {
+    let resp = router.oneshot(req).await.unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let body = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    (status, body)
+}
+
+/// 构造带 JSON 体的请求。
+fn json_req(method: &str, uri: &str, auth: Option<&str>, body: Value) -> Request<Body> {
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("content-type", "application/json");
+    if let Some(a) = auth {
+        builder = builder.header("authorization", a);
+    }
+    builder.body(Body::from(body.to_string())).unwrap()
+}
+
+/// 构造无 body 的请求。
+fn empty_req(method: &str, uri: &str, auth: Option<&str>) -> Request<Body> {
+    let mut builder = Request::builder().method(method).uri(uri);
+    if let Some(a) = auth {
+        builder = builder.header("authorization", a);
+    }
+    builder.body(Body::empty()).unwrap()
+}
+
+/// 登录取回 JWT 访问令牌。
+async fn login_token(fx: &Fixture, username: &str, password: &str) -> String {
+    let (status, body) = send(
+        fx.router(),
+        json_req(
+            "POST",
+            "/api/v1/auth/login",
+            None,
+            json!({ "username": username, "password": password }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "登录应成功: {body}");
+    body["access_token"].as_str().unwrap().to_string()
+}
+
+// ---------- 事件入库 ----------
+
+#[tokio::test]
+async fn 仓库创建事件落审计库() {
+    let fx = Fixture::new().await;
+    fx.seed_user("admin", "S3cret!", Role::Admin).await;
+    let token = login_token(&fx, "admin", "S3cret!").await;
+    let bearer = format!("Bearer {token}");
+
+    let (status, _) = send(
+        fx.router(),
+        json_req(
+            "POST",
+            "/api/v1/repositories",
+            Some(&bearer),
+            json!({ "name": "libs", "format": "raw", "type": "hosted", "visibility": "private" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let rows = fx
+        .wait_audit(|rows| rows.iter().any(|e| e.action == "repo.create"))
+        .await;
+    let ev = rows.iter().find(|e| e.action == "repo.create").unwrap();
+    assert_eq!(ev.actor, "admin");
+    assert_eq!(ev.actor_kind, "session");
+    assert_eq!(ev.result, "success");
+}
+
+#[tokio::test]
+async fn 制品上传事件带仓库与路径() {
+    let fx = Fixture::new().await;
+    fx.seed_user("admin", "S3cret!", Role::Admin).await;
+    let token = login_token(&fx, "admin", "S3cret!").await;
+    let bearer = format!("Bearer {token}");
+
+    // 建一个 raw hosted 仓库再上传
+    send(
+        fx.router(),
+        json_req(
+            "POST",
+            "/api/v1/repositories",
+            Some(&bearer),
+            json!({ "name": "files", "format": "raw", "type": "hosted", "visibility": "public" }),
+        ),
+    )
+    .await;
+    let put = Request::builder()
+        .method("PUT")
+        .uri("/files/dir/a.txt")
+        .header("authorization", &bearer)
+        .body(Body::from("hello"))
+        .unwrap();
+    let resp = fx.router().oneshot(put).await.unwrap();
+    assert!(resp.status().is_success(), "上传应成功: {}", resp.status());
+
+    let rows = fx
+        .wait_audit(|rows| rows.iter().any(|e| e.action == "artifact.upload"))
+        .await;
+    let ev = rows.iter().find(|e| e.action == "artifact.upload").unwrap();
+    assert_eq!(ev.target_repo.as_deref(), Some("files"));
+    assert_eq!(ev.target.as_deref(), Some("dir/a.txt"));
+    assert_eq!(ev.result, "success");
+}
+
+// ---------- 异步不阻塞主路径 ----------
+
+#[tokio::test]
+async fn 审计采集不阻塞主请求路径() {
+    let fx = Fixture::new().await;
+    fx.seed_user("admin", "S3cret!", Role::Admin).await;
+    let token = login_token(&fx, "admin", "S3cret!").await;
+    let bearer = format!("Bearer {token}");
+
+    // 连续多次管理写操作；每次响应都应立即返回成功，不被审计写入拖慢
+    let started = std::time::Instant::now();
+    for i in 0..20 {
+        let (status, _) = send(
+            fx.router(),
+            json_req(
+                "POST",
+                "/api/v1/repositories",
+                Some(&bearer),
+                json!({ "name": format!("r{i}"), "format": "raw", "type": "hosted", "visibility": "public" }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+    }
+    // 20 次创建应远快于审计批量落库的累计时延（主路径只做非阻塞 enqueue）
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "主路径不应被审计写入阻塞，实际耗时 {:?}",
+        started.elapsed()
+    );
+
+    // 审计最终都会落库（异步）
+    let rows = fx
+        .wait_audit(|rows| rows.iter().filter(|e| e.action == "repo.create").count() >= 20)
+        .await;
+    assert!(rows.iter().filter(|e| e.action == "repo.create").count() >= 20);
+}
+
+// ---------- 采集失败降级不影响业务 ----------
+
+#[tokio::test]
+async fn 审计写入任务缺失时业务仍成功() {
+    // 构造一个不启动写入任务的状态：channel 接收端立即丢弃，enqueue 走 Closed/Full 降级分支。
+    // 业务请求仍应正常返回，证明"采集失败不影响业务"。
+    let dir = tempfile::tempdir().unwrap();
+    let meta = MetaStore::open(&dir.path().join("test.db")).await.unwrap();
+    let store = BlobBackend::Fs(LocalFsStore::new(dir.path().join("blobs")).await.unwrap());
+    let jwt = JwtSigner::from_secret(b"audit-secret-32-bytes-xxxxxxxxxxx", 3600);
+    let upstream = HttpUpstream::new(Duration::from_secs(60)).unwrap();
+    let artifacts = Arc::new(ArtifactService::new(store.clone(), meta.clone(), upstream));
+    let docker = Arc::new(
+        DockerRegistry::new(
+            store.clone(),
+            meta.clone(),
+            dir.path().join("uploads"),
+            None,
+        )
+        .await
+        .unwrap(),
+    );
+    // 注意：丢弃接收端（不 spawn 写入任务），channel 随即关闭
+    let (audit, audit_rx) = jianartifact::api::audit_channel();
+    drop(audit_rx);
+    let state = AppState {
+        config: Arc::new(Config::default()),
+        meta: meta.clone(),
+        store,
+        jwt,
+        login_guard: Arc::new(LoginGuard::new(5, 900)),
+        artifacts,
+        formats: Arc::new(FormatRegistry::with_builtin()),
+        docker: Some(docker),
+        audit,
+    };
+    let hash = auth::hash_password("S3cret!").unwrap();
+    meta.create_user("admin", &hash, Role::Admin).await.unwrap();
+
+    // 登录（成功）——即便审计 channel 已关闭，登录业务仍应成功
+    let (status, body) = send(
+        build_router(state.clone()),
+        json_req(
+            "POST",
+            "/api/v1/auth/login",
+            None,
+            json!({ "username": "admin", "password": "S3cret!" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "审计降级不应影响登录业务: {body}");
+    let token = body["access_token"].as_str().unwrap().to_string();
+
+    // 管理写操作同样不受影响
+    let (status, _) = send(
+        build_router(state.clone()),
+        json_req(
+            "POST",
+            "/api/v1/repositories",
+            Some(&format!("Bearer {token}")),
+            json!({ "name": "libs", "format": "raw", "type": "hosted", "visibility": "public" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "审计降级不应影响仓库创建业务");
+}
+
+// ---------- 管理查询仅 Admin ----------
+
+#[tokio::test]
+async fn 审计查询匿名_401() {
+    let fx = Fixture::new().await;
+    let (status, _) = send(fx.router(), empty_req("GET", "/api/v1/audit", None)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn 审计查询普通用户_403() {
+    let fx = Fixture::new().await;
+    fx.seed_user("dev", "pw", Role::User).await;
+    let token = login_token(&fx, "dev", "pw").await;
+    let (status, _) = send(
+        fx.router(),
+        empty_req("GET", "/api/v1/audit", Some(&format!("Bearer {token}"))),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn 审计查询管理员可读且分页过滤生效() {
+    let fx = Fixture::new().await;
+    fx.seed_user("admin", "S3cret!", Role::Admin).await;
+    let token = login_token(&fx, "admin", "S3cret!").await;
+    let bearer = format!("Bearer {token}");
+
+    // 制造两类事件：登录（已发生）+ 仓库创建
+    send(
+        fx.router(),
+        json_req(
+            "POST",
+            "/api/v1/repositories",
+            Some(&bearer),
+            json!({ "name": "libs", "format": "raw", "type": "hosted", "visibility": "public" }),
+        ),
+    )
+    .await;
+    fx.wait_audit(|rows| rows.iter().any(|e| e.action == "repo.create"))
+        .await;
+
+    // 全量查询
+    let (status, body) = send(
+        fx.router(),
+        empty_req("GET", "/api/v1/audit?limit=50", Some(&bearer)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["total"].as_i64().unwrap() >= 2);
+    assert!(body["items"].as_array().unwrap().len() >= 2);
+
+    // 按动作过滤只剩 repo.create
+    let (status, body) = send(
+        fx.router(),
+        empty_req("GET", "/api/v1/audit?action=repo.create", Some(&bearer)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let items = body["items"].as_array().unwrap();
+    assert!(!items.is_empty());
+    assert!(items.iter().all(|it| it["action"] == "repo.create"));
+}
+
+// ---------- 脱敏 ----------
+
+#[tokio::test]
+async fn 登录事件不含口令且失败记被尝试用户名() {
+    let fx = Fixture::new().await;
+    fx.seed_user("admin", "TopS3cretPw", Role::Admin).await;
+
+    // 一次失败登录（口令错误）
+    let (status, _) = send(
+        fx.router(),
+        json_req(
+            "POST",
+            "/api/v1/auth/login",
+            None,
+            json!({ "username": "admin", "password": "WrongPw" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let rows = fx
+        .wait_audit(|rows| rows.iter().any(|e| e.action == "login"))
+        .await;
+    let ev = rows.iter().find(|e| e.action == "login").unwrap();
+    // 失败登录记被尝试的用户名与 denied 结果
+    assert_eq!(ev.actor, "admin");
+    assert_eq!(ev.result, "denied");
+
+    // 全字段拼起来检查：绝不含任何口令明文（正确口令与被尝试口令都不得出现）
+    let serialized = format!("{ev:?}");
+    assert!(
+        !serialized.contains("TopS3cretPw") && !serialized.contains("WrongPw"),
+        "审计记录不得包含口令明文: {serialized}"
+    );
+}
+
+#[tokio::test]
+async fn token_签发审计不含明文token() {
+    let fx = Fixture::new().await;
+    fx.seed_user("dev", "pw", Role::User).await;
+    let token = login_token(&fx, "dev", "pw").await;
+    let bearer = format!("Bearer {token}");
+
+    let (status, body) = send(
+        fx.router(),
+        json_req(
+            "POST",
+            "/api/v1/tokens",
+            Some(&bearer),
+            json!({ "name": "ci" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let plaintext = body["token"].as_str().unwrap().to_string();
+    assert!(plaintext.starts_with("jna_"));
+
+    let rows = fx
+        .wait_audit(|rows| rows.iter().any(|e| e.action == "token.issue"))
+        .await;
+    let ev = rows.iter().find(|e| e.action == "token.issue").unwrap();
+    assert_eq!(ev.result, "success");
+    // 明文 Token 绝不入审计
+    let serialized = format!("{ev:?}");
+    assert!(
+        !serialized.contains(&plaintext),
+        "审计记录不得包含明文 Token"
+    );
+}
+
+// ---------- 授权拒绝入审计 ----------
+
+#[tokio::test]
+async fn 普通用户越权创建仓库记_denied() {
+    let fx = Fixture::new().await;
+    fx.seed_user("dev", "pw", Role::User).await;
+    let token = login_token(&fx, "dev", "pw").await;
+    let bearer = format!("Bearer {token}");
+
+    // 普通用户无权创建仓库 → 403
+    let (status, _) = send(
+        fx.router(),
+        json_req(
+            "POST",
+            "/api/v1/repositories",
+            Some(&bearer),
+            json!({ "name": "libs", "format": "raw", "type": "hosted", "visibility": "public" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let rows = fx
+        .wait_audit(|rows| {
+            rows.iter()
+                .any(|e| e.action == "repo.create" && e.result == "denied")
+        })
+        .await;
+    let ev = rows
+        .iter()
+        .find(|e| e.action == "repo.create" && e.result == "denied")
+        .unwrap();
+    assert_eq!(ev.actor, "dev");
+    assert_eq!(ev.actor_kind, "session");
+}

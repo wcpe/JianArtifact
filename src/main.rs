@@ -108,6 +108,21 @@ async fn main() -> anyhow::Result<()> {
     );
     info!("制品机理与格式注册表就绪");
 
+    // 审计日志（FR-31，ADR-0015）：建有界 channel，启动批量写入与保留期轮转后台任务。
+    // 主路径只非阻塞投递；写入 / 轮转失败只记 WARN，不影响业务。
+    let (audit, audit_rx) = api::audit_channel();
+    api::spawn_audit_writer(meta.clone(), audit_rx);
+    api::spawn_audit_retention(
+        meta.clone(),
+        cfg.observability.audit.retention_days,
+        cfg.observability.audit.max_rows,
+    );
+    info!(
+        保留天数 = cfg.observability.audit.retention_days,
+        行数上限 = cfg.observability.audit.max_rows,
+        "审计日志采集与保留期轮转已就绪"
+    );
+
     // 构建路由与共享状态
     let state = AppState {
         config: Arc::new(cfg.clone()),
@@ -118,6 +133,7 @@ async fn main() -> anyhow::Result<()> {
         artifacts,
         formats,
         docker: Some(docker),
+        audit,
     };
     let app = api::build_router(state);
 

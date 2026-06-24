@@ -27,6 +27,7 @@ use crate::storage::BlobBackend;
 
 mod acl;
 mod artifacts;
+mod audit;
 mod auth_routes;
 mod cargo_routes;
 mod docker_routes;
@@ -42,6 +43,9 @@ mod search;
 mod tokens;
 mod users;
 
+pub use audit::{
+    channel as audit_channel, spawn_audit_retention, spawn_audit_writer, AuditResult, AuditSink,
+};
 pub use identity::resolve_identity;
 
 /// 应用内具体化的通用制品机理服务类型（运行期可选 blob 后端 + reqwest 上游）。
@@ -74,6 +78,8 @@ pub struct AppState {
     pub formats: Arc<FormatRegistry>,
     /// Docker Registry v2 存储服务（blob 上传状态机 + manifest 存取）。
     pub docker: Option<Arc<AppDockerRegistry>>,
+    /// 审计事件投递端（FR-31，ADR-0015）：主路径非阻塞 enqueue，后台任务批量落库。
+    pub audit: AuditSink,
 }
 
 /// 统一 API 错误类型，转换为 JSON 响应 `{"error":{"code","message"}}`。
@@ -298,6 +304,7 @@ pub fn build_router(state: AppState) -> Router {
             get(artifacts::get_artifact_detail).delete(artifacts::delete_artifact),
         )
         .route("/search", get(search::search))
+        .route("/audit", get(audit::list_audit))
         .route(
             "/repositories/{id}/acl",
             get(acl::list_acl).post(acl::create_acl),
@@ -349,6 +356,12 @@ pub fn build_router(state: AppState) -> Router {
         // 未匹配任何路由的请求回退到 SPA 入口（前端客户端路由 + 未构建时的 503 占位）
         .fallback(crate::web::spa_fallback)
         .with_state(state.clone())
+        // 审计中间件：置于身份解析之内（更靠近 handler），运行 handler 后按方法+路径+状态
+        // 归类精选写/管理/授权拒绝事件并非阻塞投递；读到的身份由下方身份解析中间件先行注入。
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            audit::audit_layer,
+        ))
         // 身份解析中间件：先于业务 handler 解析 Bearer/Basic/匿名 注入扩展
         .layer(middleware::from_fn_with_state(
             state,
@@ -403,6 +416,9 @@ mod tests {
             .await
             .unwrap(),
         );
+        // 测试用审计：创建 sink 并启动写入任务，使路由真实走审计采集链路
+        let (audit, audit_rx) = audit::channel();
+        audit::spawn_audit_writer(meta.clone(), audit_rx);
         let state = AppState {
             config: Arc::new(Config::default()),
             meta,
@@ -412,6 +428,7 @@ mod tests {
             artifacts,
             formats: Arc::new(FormatRegistry::with_builtin()),
             docker: Some(docker),
+            audit,
         };
         (state, dir)
     }

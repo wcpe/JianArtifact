@@ -8,8 +8,10 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
+mod audit;
 mod repo;
 
+pub use audit::{AuditEntry, AuditQuery, NewAuditEntry};
 pub use repo::{
     AclRecord, ArtifactRecord, ArtifactSearchHit, NewArtifact, NewRepository, Permission, RepoType,
     RepositoryRecord, Visibility,

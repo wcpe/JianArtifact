@@ -28,11 +28,15 @@ const DEFAULT_LOGIN_MAX_FAILURES: u32 = 5;
 const DEFAULT_LOGIN_LOCKOUT_SECS: u64 = 900;
 /// 默认上游拉取超时（秒），proxy 回源用，避免慢速上游拖垮代理。
 const DEFAULT_UPSTREAM_TIMEOUT_SECS: u64 = 60;
+/// 默认审计日志保留天数（ADR-0015）。
+const DEFAULT_AUDIT_RETENTION_DAYS: u32 = 90;
+/// 默认审计日志行数硬上限（兜底，防止撑爆 SQLite）。
+const DEFAULT_AUDIT_MAX_ROWS: u64 = 1_000_000;
 /// 环境变量前缀。
 const ENV_PREFIX: &str = "JIANARTIFACT_";
 /// 已知配置节名。环境变量映射时，仅把节名与键名之间的首个下划线视作嵌套分隔，
 /// 键名内部的下划线（如 `session_ttl_secs`）保持原样。
-const KNOWN_SECTIONS: &[&str] = &["server", "data", "auth", "limits", "proxy"];
+const KNOWN_SECTIONS: &[&str] = &["server", "data", "auth", "limits", "proxy", "observability"];
 
 /// 已知的多级嵌套前缀映射（环境变量下划线前缀 → 点分隔配置路径）。
 ///
@@ -61,6 +65,9 @@ pub struct Config {
     /// 代理仓库上游拉取配置。
     #[serde(default)]
     pub proxy: ProxyConfig,
+    /// 可观测性配置（审计日志等，ADR-0015）。
+    #[serde(default)]
+    pub observability: ObservabilityConfig,
 }
 
 /// HTTP 服务配置。
@@ -214,6 +221,32 @@ impl Default for ProxyConfig {
     }
 }
 
+/// 可观测性配置：当前承载审计日志（FR-31）。指标端点（FR-32）由后续批次接入。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ObservabilityConfig {
+    /// 审计日志配置。
+    #[serde(default)]
+    pub audit: AuditConfig,
+}
+
+/// 审计日志配置（ADR-0015）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditConfig {
+    /// 保留天数：后台任务按此周期删除更早的审计行。
+    pub retention_days: u32,
+    /// 行数硬上限：超限删最旧行，兜底防止撑爆 SQLite。
+    pub max_rows: u64,
+}
+
+impl Default for AuditConfig {
+    fn default() -> Self {
+        Self {
+            retention_days: DEFAULT_AUDIT_RETENTION_DAYS,
+            max_rows: DEFAULT_AUDIT_MAX_ROWS,
+        }
+    }
+}
+
 impl Config {
     /// 从指定 TOML 文件与环境变量加载配置。
     ///
@@ -287,6 +320,24 @@ mod tests {
             assert_eq!(cfg.auth.login_lockout_secs, 900);
             assert_eq!(cfg.data.data_dir, PathBuf::from("./data"));
             assert_eq!(cfg.limits.max_artifact_size, None);
+            // 审计默认：保留 90 天、行数上限 100 万
+            assert_eq!(cfg.observability.audit.retention_days, 90);
+            assert_eq!(cfg.observability.audit.max_rows, 1_000_000);
+        });
+    }
+
+    #[test]
+    fn toml_可覆盖审计保留期与行数上限() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            "[observability.audit]\nretention_days = 30\nmax_rows = 5000"
+        )
+        .unwrap();
+        with_env_vars(&[], || {
+            let cfg = Config::load(file.path()).unwrap();
+            assert_eq!(cfg.observability.audit.retention_days, 30);
+            assert_eq!(cfg.observability.audit.max_rows, 5000);
         });
     }
 

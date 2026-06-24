@@ -70,6 +70,15 @@
 |---|---|---|---|
 | upstream_timeout_secs | proxy 仓库回源上游的整体请求超时（秒），避免慢速上游拖垮代理 | 60 | JIANARTIFACT_PROXY_UPSTREAM_TIMEOUT_SECS |
 
+### [observability.audit]（审计日志，P2 / FR-31）
+
+| 键 | 含义 | 默认（取向） | 环境变量 |
+|---|---|---|---|
+| retention_days | 审计日志保留天数；后台任务按此周期删除更早的审计行 | 90 | （经 TOML 配置） |
+| max_rows | 审计日志行数硬上限；超限删最旧行，兜底防止撑爆 SQLite | 1000000 | （经 TOML 配置） |
+
+> 审计保留期不是敏感项，按 TOML 嵌套节 `[observability.audit]` 配置即可（环境变量前缀仅对单层节名做嵌套映射，本两层键以 TOML 为准）。审计日志数据本机内部、默认不外发（ADR-0009 / ADR-0015）。
+
 ### [upstream.&lt;name&gt;]（proxy 仓库上游，可配置多个）
 
 | 键 | 含义 | 默认（取向） | 环境变量 |

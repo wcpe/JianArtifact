@@ -49,6 +49,9 @@ impl Fixture {
             .await
             .unwrap(),
         );
+        // 审计采集：建有界 channel 并启动写入任务，使登录等事件真实落库供断言
+        let (audit, audit_rx) = jianartifact::api::audit_channel();
+        jianartifact::api::spawn_audit_writer(meta.clone(), audit_rx);
         let state = AppState {
             config: Arc::new(Config::default()),
             meta,
@@ -58,6 +61,7 @@ impl Fixture {
             artifacts,
             formats: Arc::new(FormatRegistry::with_builtin()),
             docker: Some(docker),
+            audit,
         };
         Self { state, _dir: dir }
     }

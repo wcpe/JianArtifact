@@ -169,6 +169,13 @@
 - **响应**：统一分页结构 `{ items, total, offset, limit, has_more }`，每项含所属仓库（`repo_id`、`repo_name`、`format`）、`path`、`sha256`、`size`、`created_at`。**结果仅含调用方有读权限的仓库制品**（匿名仅含 public 仓库）；`total` 与 `items` 均按读权限过滤后计数，不泄露无权私有仓库内容。
 - **错误**：`400` 查询参数不合法（如 `q` 为空）。
 
+### 查询审计日志（P2，仅 Admin）
+
+- **方法 / 路径**：`GET /api/v1/audit`
+- **请求**：查询参数均可选——`action`（按动作过滤，如 `login` / `repo.create` / `artifact.upload`）、`target_repo`（按仓库名过滤）、`actor`（按主体用户名过滤），及 `offset` / `limit` 分页参数（默认 `offset=0`、`limit=50`，上限 1000）。仅管理员可访问。
+- **响应**：统一分页结构 `{ items, total, offset, limit, has_more }`，按时间倒序（最新在前）。每项含 `id`、`ts`、`actor`、`actor_kind`（`session` | `token` | `basic` | `anonymous`）、`request_id`、`source_ip`、`action`、`target_repo`、`target`、`result`（`success` | `denied` | `error`）、`detail`。审计只记元数据级安全 / 管理事件，**绝不含密码 / Token / JWT / 上游凭据**（FR-31，ADR-0015）。
+- **错误**：`401` 未认证；`403` 非管理员。
+
 ### 列出仓库 ACL
 
 - **方法 / 路径**：`GET /api/v1/repositories/{id}/acl`

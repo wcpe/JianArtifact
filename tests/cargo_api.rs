@@ -40,6 +40,8 @@ impl Fixture {
         let mut config = Config::default();
         // 固定对外地址，便于断言 config.json / 使用片段
         config.server.public_base_url = Some("http://localhost:8080".to_string());
+        let (audit, audit_rx) = jianartifact::api::audit_channel();
+        jianartifact::api::spawn_audit_writer(meta.clone(), audit_rx);
         let state = AppState {
             config: Arc::new(config),
             meta,
@@ -49,6 +51,7 @@ impl Fixture {
             artifacts,
             formats: Arc::new(FormatRegistry::with_builtin()),
             docker: None,
+            audit,
         };
         Self { state, _dir: dir }
     }

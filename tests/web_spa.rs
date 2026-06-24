@@ -40,6 +40,8 @@ async fn 测试用状态() -> (AppState, tempfile::TempDir) {
         .await
         .unwrap(),
     );
+    let (audit, audit_rx) = jianartifact::api::audit_channel();
+    jianartifact::api::spawn_audit_writer(meta.clone(), audit_rx);
     let state = AppState {
         config: Arc::new(Config::default()),
         meta,
@@ -49,6 +51,7 @@ async fn 测试用状态() -> (AppState, tempfile::TempDir) {
         artifacts,
         formats: Arc::new(FormatRegistry::with_builtin()),
         docker: Some(docker),
+        audit,
     };
     (state, dir)
 }

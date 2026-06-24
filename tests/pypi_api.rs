@@ -43,6 +43,8 @@ impl Fixture {
         let artifacts = Arc::new(ArtifactService::new(store.clone(), meta.clone(), upstream));
         let mut config = Config::default();
         config.server.public_base_url = Some("http://localhost:8080".to_string());
+        let (audit, audit_rx) = jianartifact::api::audit_channel();
+        jianartifact::api::spawn_audit_writer(meta.clone(), audit_rx);
         let state = AppState {
             config: Arc::new(config),
             meta,
@@ -52,6 +54,7 @@ impl Fixture {
             artifacts,
             formats: Arc::new(FormatRegistry::with_builtin()),
             docker: None,
+            audit,
         };
         Self { state, _dir: dir }
     }
@@ -67,6 +70,8 @@ impl Fixture {
         let mut config = Config::default();
         config.server.public_base_url = Some("http://localhost:8080".to_string());
         config.limits.max_artifact_size = Some(max);
+        let (audit, audit_rx) = jianartifact::api::audit_channel();
+        jianartifact::api::spawn_audit_writer(meta.clone(), audit_rx);
         let state = AppState {
             config: Arc::new(config),
             meta,
@@ -76,6 +81,7 @@ impl Fixture {
             artifacts,
             formats: Arc::new(FormatRegistry::with_builtin()),
             docker: None,
+            audit,
         };
         Self { state, _dir: dir }
     }
