@@ -9,7 +9,9 @@ use crate::meta::{MetaError, MetaStore, NewRepository, RepoType, RepositoryRecor
 
 /// 已实现并可创建仓库的格式集合（P1 的 FR-14~17 + P2 的 FR-28 Go、FR-26 Cargo、FR-27 PyPI、FR-29 NuGet）。
 /// 其余格式由各自批次实现后在此登记，未实现格式不提前接受（越界）。
-const SUPPORTED_FORMATS: [&str; 8] = ["maven", "npm", "docker", "raw", "go", "cargo", "pypi", "nuget"];
+const SUPPORTED_FORMATS: [&str; 8] = [
+    "maven", "npm", "docker", "raw", "go", "cargo", "pypi", "nuget",
+];
 
 /// 仓库生命周期错误。
 #[derive(Debug, thiserror::Error)]
@@ -196,8 +198,8 @@ mod tests {
     #[tokio::test]
     async fn 创建非法格式被拒() {
         let meta = MetaStore::open_in_memory().await.unwrap();
-        // pypi 属后续阶段尚未实现，创建应被拒（cargo 已实现，见 SUPPORTED_FORMATS）
-        let err = create(&meta, 入参("x", "pypi", "hosted", "public", None)).await;
+        // rubygems 属后续阶段（P3）尚未实现，创建应被拒（go/cargo/pypi/nuget 已实现，见 SUPPORTED_FORMATS）
+        let err = create(&meta, 入参("x", "rubygems", "hosted", "public", None)).await;
         assert!(matches!(err, Err(RepoError::Invalid(_))));
     }
 

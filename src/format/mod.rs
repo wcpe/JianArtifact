@@ -14,8 +14,8 @@ pub mod docker_registry;
 mod go_mod;
 mod maven;
 mod npm;
-mod pypi;
 mod nuget;
+mod pypi;
 mod raw;
 pub mod service;
 
@@ -25,11 +25,11 @@ pub use docker_registry::{DockerError, DockerRegistry};
 pub use go_mod::{GoError, GoFormat, GoRequest, VersionFile};
 pub use maven::MavenFormat;
 pub use npm::{NpmError, NpmFormat, PublishRequest};
+pub use nuget::{NuGetError, NuGetFormat, PackageIdentity};
 pub use pypi::{
     MultipartField, PypiError, PypiFormat, UploadRequest, PACKAGES_PREFIX as PYPI_PACKAGES_PREFIX,
     PEP691_CONTENT_TYPE as PYPI_PEP691_CONTENT_TYPE, SIMPLE_SEGMENT as PYPI_SIMPLE_SEGMENT,
 };
-pub use nuget::{NuGetError, NuGetFormat, PackageIdentity};
 pub use raw::RawFormat;
 pub use service::{ArtifactKind, ArtifactService, ServiceError};
 
