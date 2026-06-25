@@ -84,6 +84,18 @@ impl MavenFormat {
             file_name.trim()
         )
     }
+
+    /// 判断路径是否为校验和 / 签名 sidecar（`.sha1` / `.md5` / `.sha256` / `.sha512` / `.asc`）。
+    ///
+    /// 服务端为主构件补齐校验和 sidecar 时据此跳过 sidecar 自身，避免生成「sidecar 的 sidecar」。
+    pub fn is_sidecar(path: &str) -> bool {
+        let file_name = path.rsplit('/').next().unwrap_or(path);
+        file_name
+            .rsplit('.')
+            .next()
+            .map(|ext| SIDECAR_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
+            .unwrap_or(false)
+    }
 }
 
 impl Format for MavenFormat {

@@ -308,6 +308,85 @@ async fn maven_表单gav上传后可下载且字节一致() {
     assert_eq!(bytes, jar);
 }
 
+// ---------- Maven：通用上传补齐四校验和 sidecar（mvn 下载校验所需） ----------
+
+#[tokio::test]
+async fn maven上传自动补齐四校验和sidecar() {
+    let fx = Fixture::new().await;
+    let writer = fx.seed_user("dev", "pw", Role::User).await;
+    let rid = fx
+        .seed_repo("maven-hosted", "maven", Visibility::Public)
+        .await;
+    fx.seed_acl(&rid, &writer, Permission::Write).await;
+    let auth = format!("Bearer {}", fx.login_token("dev", "pw").await);
+
+    // 固定载荷，其四校验和为已知值（离线计算）
+    let jar = b"sidecar-maven-fixture-v1";
+    let parts = vec![
+        text_part("group_id", "com.example.app"),
+        text_part("artifact_id", "demo"),
+        text_part("version", "1.0.0"),
+        file_part("file", "demo-1.0.0.jar", jar),
+    ];
+    let (status, _) = send_json(fx.router(), upload_req(&rid, Some(&auth), &parts)).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // 主构件落定后应自动生成四校验和 sidecar，内容为对应摘要的小写十六进制，
+    // 可经下载端点取回——服务端上传无客户端提供 sidecar，须补齐才能被 mvn 校验。
+    let base = "/maven-hosted/com/example/app/demo/1.0.0/demo-1.0.0.jar";
+    let expected = [
+        ("sha1", "6f53d9c6348673b228b7416aeb6495f3a0723744"),
+        ("md5", "de44ab28daec3aec92614b2f7dcd8dfc"),
+        (
+            "sha256",
+            "68e9e9702196267c9832e413cb66fe40836d9388c7b5296302b7e571f5e062c9",
+        ),
+        (
+            "sha512",
+            "51b60bdcb52ee68235a62e4d2050d10b4915be13ea85829ab3de02f9f6f10721e1462c8b56266817e169adb4f93083319f99d2fab4f4fcc863f8c4e90c7d346c",
+        ),
+    ];
+    for (ext, digest) in expected {
+        let (status, bytes) = send_bytes(
+            fx.router(),
+            empty_req("GET", &format!("{base}.{ext}"), None),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "sidecar .{ext} 应可取回");
+        assert_eq!(
+            String::from_utf8_lossy(&bytes),
+            digest,
+            "sidecar .{ext} 内容应为对应摘要"
+        );
+    }
+}
+
+// ---------- Raw 通用上传不产出 Maven 校验和 sidecar（修复仅限 Maven） ----------
+
+#[tokio::test]
+async fn raw上传不生成sidecar() {
+    let fx = Fixture::new().await;
+    let writer = fx.seed_user("dev", "pw", Role::User).await;
+    let rid = fx.seed_repo("raw-hosted", "raw", Visibility::Public).await;
+    fx.seed_acl(&rid, &writer, Permission::Write).await;
+    let auth = format!("Bearer {}", fx.login_token("dev", "pw").await);
+
+    let parts = vec![
+        text_part("path", "dir/file.bin"),
+        file_part("file", "file.bin", b"raw-bytes"),
+    ];
+    let (status, _) = send_json(fx.router(), upload_req(&rid, Some(&auth), &parts)).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // Raw 无校验和 sidecar 约定，不应凭空生成
+    let (status, _) = send_bytes(
+        fx.router(),
+        empty_req("GET", "/raw-hosted/dir/file.bin.sha256", None),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "Raw 上传不应生成 sidecar");
+}
+
 // ---------- npm：表单 name+version 上传（不解包）→ 取回字节一致 ----------
 
 #[tokio::test]

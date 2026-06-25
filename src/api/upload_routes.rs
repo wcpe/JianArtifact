@@ -13,7 +13,8 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
-use crate::format::{ArtifactCoordinates, MavenFormat, NpmFormat};
+use crate::format::{ArtifactCoordinates, Format, MavenFormat, NpmFormat};
+use crate::meta::{ArtifactRecord, RepositoryRecord};
 
 use super::repo_access::load_writable_repo;
 use super::{ApiError, AppState, Identity};
@@ -70,6 +71,12 @@ pub async fn upload_artifact(
         )
         .await?;
 
+    // Maven：服务端上传无客户端逐文件 PUT 的 sidecar，故为主构件补齐四校验和 sidecar，
+    // 使产出制品与 mvn deploy 一致、可被官方客户端独立 GET 校验和并校验（FR-69）。
+    if repo.format == FORMAT_MAVEN && !MavenFormat::is_sidecar(&coords.path) {
+        write_maven_checksum_sidecars(&state, &repo, format, &outcome.record).await?;
+    }
+
     tracing::info!(
         仓库 = %repo.name,
         格式 = %repo.format,
@@ -84,6 +91,34 @@ pub async fn upload_artifact(
         StatusCode::CREATED
     };
     Ok(status.into_response())
+}
+
+/// 为 Maven 主构件补齐四校验和 sidecar（`.sha1` / `.md5` / `.sha256` / `.sha512`）。
+///
+/// 服务端 Web 上传没有客户端逐文件 PUT 的 sidecar，故据主构件已算好的四摘要各落一份小文件，
+/// 内容为对应摘要的小写十六进制——使 mvn 等官方客户端下载时可独立取回校验和并比对。
+/// sidecar 经 `put_hosted` 落为独立制品（其覆盖策略放行 sidecar 更新），与 mvn deploy 产物同构。
+async fn write_maven_checksum_sidecars(
+    state: &AppState,
+    repo: &RepositoryRecord,
+    format: &dyn Format,
+    record: &ArtifactRecord,
+) -> Result<(), ApiError> {
+    let digests = [
+        ("sha1", record.sha1.as_str()),
+        ("md5", record.md5.as_str()),
+        ("sha256", record.sha256.as_str()),
+        ("sha512", record.sha512.as_str()),
+    ];
+    for (ext, digest) in digests {
+        let path = format!("{}.{}", record.path, ext);
+        let coords = format.parse_path(&path)?;
+        state
+            .artifacts
+            .put_hosted(repo, format, &coords, digest.as_bytes(), None)
+            .await?;
+    }
+    Ok(())
 }
 
 /// 据仓库格式与表单字段拼出制品在仓库内的存储路径。

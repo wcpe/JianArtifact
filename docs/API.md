@@ -210,7 +210,7 @@
 - **请求**：路径参数 `id`（仓库 id）；需对应仓库写权限或管理员。`multipart/form-data` 体含：
   - `file`：上传文件字段（含文件名），承载制品字节（必填）。
   - 按目标仓库格式区分的坐标字段：
-    - **Maven**：`group_id` / `artifact_id` / `version`；存储路径 = `{group 点转斜杠}/{artifact}/{version}/{上传文件名}`。
+    - **Maven**：`group_id` / `artifact_id` / `version`；存储路径 = `{group 点转斜杠}/{artifact}/{version}/{上传文件名}`。服务端为该主构件**自动补齐四校验和 sidecar**（`.sha1` / `.md5` / `.sha256` / `.sha512`，内容为对应摘要的小写十六进制）——服务端上传无客户端逐文件 PUT 的 sidecar，补齐后产出制品与 `mvn deploy` 一致、可被官方客户端独立取回校验和并校验。
     - **npm**：`name` / `version`；存储路径 = `{name}/-/{上传文件名}`（不解包 .tgz，name/version 由表单提供）。
     - **Raw**：`path`；存储路径即该路径。
 - **响应**：新建返回 `201`、覆盖返回 `200`（覆盖语义沿用各格式策略）。上传后可经各格式既有下载端点取回。

@@ -21,7 +21,7 @@
 - 无
 
 ### 修复
-- 无
+- 通用上传 Maven 制品补齐校验和 sidecar（FR-73）：经 `POST /api/v1/repositories/{id}/upload` 向 Maven 仓库上传主构件后，服务端自动生成 `.sha1` / `.md5` / `.sha256` / `.sha512` 四个 sidecar（内容为对应摘要的小写十六进制）。此前服务端上传无客户端逐文件 PUT 的 sidecar，导致 `mvn` 下载时校验和文件 404；补齐后产出制品与 `mvn deploy` 一致、可被官方客户端独立校验。仅 Maven 生成，npm / Raw 无此约定不受影响
 
 ### 移除
 - 无
