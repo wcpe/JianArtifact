@@ -346,3 +346,76 @@ export interface ProtectionStatusDto {
   dropped_alerts: number;
   recent_alerts: ProtectionAlertDto[];
 }
+
+// —— Nexus 迁移（FR-81，对接 ADR-0006 的已有迁移端点） ——
+
+/**
+ * 在线预览：从源 Nexus 枚举出的单个仓库元数据。
+ * 严格对齐后端 NexusRepoSummary（src/migrate/mod.rs）。
+ * `type` 为 Nexus 原样值（hosted / proxy / group）；`upstream_url` 仅 proxy 有值。
+ */
+export interface NexusRepoSummary {
+  name: string;
+  format: string;
+  type: string;
+  upstream_url: string | null;
+}
+
+/**
+ * 离线预览：blob store 中单个 blob 的基本元数据。
+ * 严格对齐后端 OfflineBlobSummary（src/migrate/offline.rs）。
+ */
+export interface OfflineBlobSummary {
+  blob_name: string;
+  sha1: string | null;
+  size: number | null;
+}
+
+/**
+ * 离线预览：按 repo 聚合的分组结果。
+ * 严格对齐后端 OfflineRepoSummary（src/migrate/offline.rs）。
+ */
+export interface OfflineRepoSummary {
+  repo_name: string;
+  blob_count: number;
+  blobs: OfflineBlobSummary[];
+}
+
+/**
+ * 单个仓库的迁移结果（proxy / hosted 报告共用同构结构）。
+ * 严格对齐后端 RepoMigrationOutcome / HostedRepoMigrationOutcome。
+ */
+export interface RepoMigrationOutcome {
+  repo_name: string;
+  format: string;
+  created: boolean;
+  migrated_artifacts: number;
+  skipped_artifacts: number;
+}
+
+/**
+ * 迁移报告（proxy / hosted 报告共用同构结构）。
+ * 严格对齐后端 ProxyMigrationReport / HostedMigrationReport。
+ */
+export interface MigrationReport {
+  repos: RepoMigrationOutcome[];
+  skipped_repos: string[];
+}
+
+/** 在线预览请求体（auth_ref 仅引用，凭据真值走后端 env，不入库不回显）。 */
+export interface NexusPreviewRequest {
+  base_url: string;
+  auth_ref?: string | null;
+}
+
+/** 离线预览请求体（本地 blob store 根目录路径）。 */
+export interface NexusOfflinePreviewRequest {
+  path: string;
+}
+
+/** proxy / hosted 搬运请求体（在线枚举配置 + 离线 blob store 提供制品本体）。 */
+export interface NexusMigrateRequest {
+  base_url: string;
+  auth_ref?: string | null;
+  offline_path: string;
+}

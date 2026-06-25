@@ -23,6 +23,7 @@ import { ProtectionConfigPage } from './pages/ProtectionConfigPage';
 import { UploadPage } from './pages/UploadPage';
 import { AuditPage } from './pages/AuditPage';
 import { ProtectionMonitorPage } from './pages/ProtectionMonitorPage';
+import { MigrationPage } from './pages/MigrationPage';
 
 /** 登录守卫：未登录跳登录页（带回跳路径）；恢复会话期间显示加载态。 */
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -115,6 +116,14 @@ export function App() {
           element={
             <RequireAdmin>
               <ProtectionMonitorPage />
+            </RequireAdmin>
+          }
+        />
+        <Route
+          path="migration"
+          element={
+            <RequireAdmin>
+              <MigrationPage />
             </RequireAdmin>
           }
         />

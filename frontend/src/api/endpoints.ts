@@ -16,6 +16,12 @@ import type {
   GroupMemberView,
   GroupView,
   LoginResponse,
+  MigrationReport,
+  NexusMigrateRequest,
+  NexusOfflinePreviewRequest,
+  NexusPreviewRequest,
+  NexusRepoSummary,
+  OfflineRepoSummary,
   Paginated,
   Permission,
   ProtectionAlertDto,
@@ -367,6 +373,41 @@ export function listProtectionAlerts(
       offset: options.offset,
       limit: options.limit,
     },
+  });
+}
+// —— Nexus 迁移（仅管理员，FR-81；对接 ADR-0006 已有端点） ——
+
+/** 在线预览：枚举源 Nexus 可迁移仓库列表（不搬运制品）。 */
+export function previewNexusRepositories(req: NexusPreviewRequest): Promise<NexusRepoSummary[]> {
+  return request<NexusRepoSummary[]>('/migrate/nexus/preview', {
+    method: 'POST',
+    body: req,
+  });
+}
+
+/** 离线预览：枚举本地 blob store 可迁移内容（按 repo 分组，不搬运 blob 本体）。 */
+export function previewNexusOffline(
+  req: NexusOfflinePreviewRequest,
+): Promise<OfflineRepoSummary[]> {
+  return request<OfflineRepoSummary[]>('/migrate/nexus/offline/preview', {
+    method: 'POST',
+    body: req,
+  });
+}
+
+/** 执行 proxy 仓库配置创建 + 缓存制品搬运，返回迁移报告。 */
+export function migrateNexusProxy(req: NexusMigrateRequest): Promise<MigrationReport> {
+  return request<MigrationReport>('/migrate/nexus/proxy/migrate', {
+    method: 'POST',
+    body: req,
+  });
+}
+
+/** 执行 hosted 仓库配置创建 + 完整制品搬运，返回迁移报告。 */
+export function migrateNexusHosted(req: NexusMigrateRequest): Promise<MigrationReport> {
+  return request<MigrationReport>('/migrate/nexus/hosted/migrate', {
+    method: 'POST',
+    body: req,
   });
 }
 /** 对制品路径逐段编码（保留 `/` 分隔，避免破坏 catch-all 路径语义）。 */
