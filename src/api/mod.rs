@@ -54,6 +54,7 @@ mod repositories;
 mod search;
 mod slowloris;
 mod tokens;
+mod upload_routes;
 mod usage;
 mod users;
 mod waf;
@@ -371,6 +372,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/repositories/{id}/artifacts/{*path}",
             get(artifacts::get_artifact_detail).delete(artifacts::delete_artifact),
+        )
+        .route(
+            "/repositories/{id}/upload",
+            post(upload_routes::upload_artifact),
         )
         .route("/search", get(search::search))
         .route("/audit", get(audit::list_audit))

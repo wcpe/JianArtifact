@@ -64,6 +64,26 @@ impl MavenFormat {
         // ④ 其余为 release 正式构件，不可覆盖
         false
     }
+
+    /// 据 GAV 与文件名拼出制品在仓库内的存储路径（Maven 布局）。
+    ///
+    /// 布局 `{groupId 点转斜杠}/{artifactId}/{version}/{文件名}`，供 Web 上传按表单 GAV 定位坐标。
+    /// 各段做基础清洗（去首尾空白）；groupId 的 `.` 统一转 `/`，路径合法性最终由 `parse_path` 归一化把关。
+    pub fn artifact_path(
+        group_id: &str,
+        artifact_id: &str,
+        version: &str,
+        file_name: &str,
+    ) -> String {
+        let group_path = group_id.trim().replace('.', "/");
+        format!(
+            "{}/{}/{}/{}",
+            group_path.trim_matches('/'),
+            artifact_id.trim(),
+            version.trim(),
+            file_name.trim()
+        )
+    }
 }
 
 impl Format for MavenFormat {
@@ -239,6 +259,20 @@ mod tests {
         assert_eq!(
             MavenFormat.parse_path("com/../etc/passwd"),
             Err(PathError::Traversal)
+        );
+    }
+
+    #[test]
+    fn 据gav拼制品路径_点转斜杠() {
+        // groupId 的点转斜杠，与 artifactId / version / 文件名拼为 Maven 布局
+        assert_eq!(
+            MavenFormat::artifact_path("com.example.app", "demo", "1.0.0", "demo-1.0.0.jar"),
+            "com/example/app/demo/1.0.0/demo-1.0.0.jar"
+        );
+        // 各段前后空白被清洗，不产生多余斜杠
+        assert_eq!(
+            MavenFormat::artifact_path(" com.foo ", " lib ", " 2.0 ", " lib-2.0.pom "),
+            "com/foo/lib/2.0/lib-2.0.pom"
         );
     }
 

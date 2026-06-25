@@ -194,6 +194,19 @@
 - **响应**：制品详情——`path`、`size`、`content_type`、`created_at`、各校验和（`sha256`、`sha1`、`md5`、`sha512`）、所属仓库与格式，按格式生成的“使用方式”片段（如 Maven `<dependency>`、`npm install`、`docker pull`、Raw URL/curl，及把客户端指向本仓库的接入配置），以及 `vulnerabilities` 数组（FR-71）：该制品命中的已知漏洞公告，每项含 `id`（如 GHSA / CVE）、`severity`（可空）、`summary`（可空）。基于本地漏洞库离线镜像（FR-70）按制品生态坐标 `(ecosystem, package, version)` 做坐标级本地匹配，**制品坐标绝不外发到外部漏洞服务**；无标准生态坐标的格式（Raw / Docker）或未命中时为空数组 `[]`。
 - **错误**：`401`/`404` 私有仓库对未授权方拒绝；`403` 无读权限；`404` 仓库或制品不存在。
 
+### 通用制品上传（FR-73）
+
+- **方法 / 路径**：`POST /api/v1/repositories/{id}/upload`
+- **用途**：Web 控制台统一上传入口——无需各格式原生客户端，经 `multipart/form-data` 向 **hosted** 仓库直传制品。仅支持 **Maven / npm / Raw** 三格式；`proxy` 仓库与其余格式拒绝。
+- **请求**：路径参数 `id`（仓库 id）；需对应仓库写权限或管理员。`multipart/form-data` 体含：
+  - `file`：上传文件字段（含文件名），承载制品字节（必填）。
+  - 按目标仓库格式区分的坐标字段：
+    - **Maven**：`group_id` / `artifact_id` / `version`；存储路径 = `{group 点转斜杠}/{artifact}/{version}/{上传文件名}`。
+    - **npm**：`name` / `version`；存储路径 = `{name}/-/{上传文件名}`（不解包 .tgz，name/version 由表单提供）。
+    - **Raw**：`path`；存储路径即该路径。
+- **响应**：新建返回 `201`、覆盖返回 `200`（覆盖语义沿用各格式策略）。上传后可经各格式既有下载端点取回。
+- **错误**：`401`/`404` 私有仓库对未授权方拒绝；`403` 无写权限；`400` 向 `proxy` 仓库上传 / 格式不支持 / 缺必填字段；`409` 命中不可覆盖策略（Maven release / npm 已发布 tarball）；`413` 超过 `limits.max_artifact_size`。
+
 ### 跨仓库搜索
 
 - **方法 / 路径**：`GET /api/v1/search`
