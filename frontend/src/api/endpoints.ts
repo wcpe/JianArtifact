@@ -1,7 +1,7 @@
 // 类型化的管理 API 端点封装：每个函数对应 docs/API.md / src/api 的一个端点。
 // 路径与字段严格对齐后端真实契约。
 
-import { request } from './client';
+import { ApiError, getToken, request } from './client';
 import type {
   ProtectionConfig,
   AclDto,
@@ -266,6 +266,70 @@ export function getProtectionConfig(): Promise<ProtectionConfig> {
 /** 整体替换防护配置，校验通过即时生效、无须重启；返回替换后的配置。 */
 export function updateProtectionConfig(config: ProtectionConfig): Promise<ProtectionConfig> {
   return request<ProtectionConfig>('/protection/config', { method: 'PATCH', body: config });
+}
+
+// —— 通用制品上传（FR-73） ——
+
+/** 通用上传管理 API 前缀（与 client.ts 的 API_BASE 一致）。 */
+const UPLOAD_API_BASE = '/api/v1';
+
+/**
+ * 经统一上传端点上传制品（multipart/form-data）。
+ *
+ * 用 XMLHttpRequest 以支持上传进度回调（fetch 不原生支持上传进度）。
+ * `formData` 须含 `file` 文件字段，以及按格式区分的坐标字段
+ * （Maven: group_id/artifact_id/version；npm: name/version；Raw: path）。
+ * `onProgress` 在每次进度事件回调 0~100 的百分比（不可计算时不回调）。
+ */
+export function uploadArtifact(
+  repoId: string,
+  formData: FormData,
+  onProgress?: (percent: number) => void,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${UPLOAD_API_BASE}/repositories/${encodeURIComponent(repoId)}/upload`);
+    const token = getToken();
+    if (token) {
+      xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    }
+
+    xhr.upload.onprogress = (event) => {
+      if (onProgress && event.lengthComputable) {
+        onProgress(Math.round((event.loaded / event.total) * 100));
+      }
+    };
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve();
+        return;
+      }
+      reject(parseUploadError(xhr));
+    };
+    xhr.onerror = () => reject(new ApiError(0, 'error', '网络错误，上传失败'));
+    xhr.onabort = () => reject(new ApiError(0, 'aborted', '上传已取消'));
+
+    xhr.send(formData);
+  });
+}
+
+/** 从上传 XHR 的错误响应解析后端统一错误结构，回退到通用文案。 */
+function parseUploadError(xhr: XMLHttpRequest): ApiError {
+  let code = 'error';
+  let message = `上传失败（HTTP ${xhr.status}）`;
+  try {
+    const data = JSON.parse(xhr.responseText) as {
+      error?: { code?: string; message?: string };
+    };
+    if (data.error) {
+      code = data.error.code ?? code;
+      message = data.error.message ?? message;
+    }
+  } catch {
+    // 响应体非 JSON：保留默认文案
+  }
+  return new ApiError(xhr.status, code, message);
 }
 
 /** 对制品路径逐段编码（保留 `/` 分隔，避免破坏 catch-all 路径语义）。 */

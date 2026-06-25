@@ -20,6 +20,7 @@ import { SearchPage } from './pages/SearchPage';
 import { ArtifactDetailPage } from './pages/ArtifactDetailPage';
 import { AnalyticsPage } from './pages/AnalyticsPage';
 import { ProtectionConfigPage } from './pages/ProtectionConfigPage';
+import { UploadPage } from './pages/UploadPage';
 
 /** 登录守卫：未登录跳登录页（带回跳路径）；恢复会话期间显示加载态。 */
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -62,6 +63,7 @@ export function App() {
       >
         <Route index element={<DashboardPage />} />
         <Route path="repositories" element={<RepositoriesPage />} />
+        <Route path="upload" element={<UploadPage />} />
         <Route path="repository" element={<RepositoryDetailPage />} />
         <Route path="artifact" element={<ArtifactDetailPage />} />
         <Route path="search" element={<SearchPage />} />
