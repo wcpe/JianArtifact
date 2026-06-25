@@ -3,6 +3,7 @@
 
 import { request } from './client';
 import type {
+  ProtectionConfig,
   AclDto,
   ArtifactDetailDto,
   ArtifactDto,
@@ -253,6 +254,18 @@ export function search(
 /** 查询使用分析聚合（访问 / 下载总量、热门制品、仓库用量）。 */
 export function usageAnalytics(top?: number): Promise<UsageAnalyticsDto> {
   return request<UsageAnalyticsDto>('/analytics/usage', { query: { top } });
+}
+
+// —— 防护配置（FR-79，仅管理员） ——
+
+/** 读取当前生效的防护配置（各防护维度阈值 / 开关 / 难度 / 名单 / WAF 规则）。 */
+export function getProtectionConfig(): Promise<ProtectionConfig> {
+  return request<ProtectionConfig>('/protection/config');
+}
+
+/** 整体替换防护配置，校验通过即时生效、无须重启；返回替换后的配置。 */
+export function updateProtectionConfig(config: ProtectionConfig): Promise<ProtectionConfig> {
+  return request<ProtectionConfig>('/protection/config', { method: 'PATCH', body: config });
 }
 
 /** 对制品路径逐段编码（保留 `/` 分隔，避免破坏 catch-all 路径语义）。 */

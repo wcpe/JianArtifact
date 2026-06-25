@@ -206,3 +206,85 @@ export interface UpdateRepositoryRequest {
   upstream_url?: string | null;
   upstream_auth_ref?: string | null;
 }
+
+// —— 防护配置（FR-79，对齐后端 src/config.rs 的 ProtectionConfig 子树）——
+
+/** 多维速率限制与并发上限配置。 */
+export interface RateLimitConfig {
+  enabled: boolean;
+  window_secs: number;
+  ip_max_requests: number;
+  identity_max_requests: number;
+  repo_max_requests: number;
+  ip_max_concurrent: number;
+  user_max_concurrent: number;
+  repo_max_concurrent: number;
+}
+
+/** IP 黑 / 白名单配置（单 IP 或 CIDR）。 */
+export interface IpListConfig {
+  allow: string[];
+  deny: string[];
+}
+
+/** 访问异常检测与自动封禁配置。 */
+export interface BanConfig {
+  enabled: boolean;
+  window_secs: number;
+  threshold: number;
+  duration_secs: number;
+}
+
+/** 慢速攻击防护与通用请求体大小上限配置。 */
+export interface SlowlorisConfig {
+  enabled: boolean;
+  body_read_timeout_secs: number;
+  header_timeout_secs: number;
+  max_body_bytes: number;
+}
+
+/** CC 挑战（工作量证明 PoW）配置。 */
+export interface CcChallengeConfig {
+  enabled: boolean;
+  difficulty: number;
+  ttl_secs: number;
+  exempt_authenticated: boolean;
+}
+
+/** 单条 WAF 规则配置。 */
+export interface WafRuleConfig {
+  field: string;
+  header_name?: string | null;
+  pattern: string;
+  match_type: string;
+  action: string;
+}
+
+/** 可配置 WAF 规则引擎配置。 */
+export interface WafConfig {
+  enabled: boolean;
+  rules: WafRuleConfig[];
+}
+
+/** 防护监控与阈值告警配置。 */
+export interface AlertsConfig {
+  enabled: boolean;
+  window_secs: number;
+  rate_limit_warn_threshold: number;
+  ban_warn_threshold: number;
+  cc_challenge_fail_warn_threshold: number;
+  waf_block_warn_threshold: number;
+  slowloris_warn_threshold: number;
+  max_rows: number;
+}
+
+/** 防护配置全量（七个维度），GET / PATCH /api/v1/protection/config 的载荷。 */
+export interface ProtectionConfig {
+  rate_limit: RateLimitConfig;
+  ip_list: IpListConfig;
+  ban: BanConfig;
+  slowloris: SlowlorisConfig;
+  cc_challenge: CcChallengeConfig;
+  waf: WafConfig;
+  alerts: AlertsConfig;
+}
