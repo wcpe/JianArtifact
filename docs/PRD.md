@@ -115,7 +115,7 @@
 | FR-73 | 通用制品上传 API（multipart，Maven/npm/Raw，仅 hosted） | P2 | 开发中 |
 | FR-74 | Web 控制台上传页面（统一入口，选仓库→格式→动态表单） | P2 | 开发中 |
 | FR-75 | 目录列表 JSON API + HTML 仓库索引视图（Accept 驱动双形态） | P2 | 开发中 |
-| FR-76 | Web 控制台文件浏览器（仓库详情页内嵌目录树） | P2 | 计划 |
+| FR-76 | Web 控制台文件浏览器（仓库详情页内嵌目录树） | P2 | 开发中 |
 | FR-77 | 审计日志查询页面（分页/过滤/详情，仅 Admin） | P2 | 计划 |
 | FR-78 | 防护状态监控页面（实时快照 + 告警列表，仅 Admin） | P2 | 计划 |
 | FR-79 | 防护配置 API（GET/PATCH /api/v1/protection/config，新增端点） | P2 | 开发中 |

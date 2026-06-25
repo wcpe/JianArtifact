@@ -19,11 +19,18 @@ import {
   Card,
   TextInput,
 } from '@mantine/core';
-import { IconTrash, IconArrowLeft } from '@tabler/icons-react';
+import {
+  IconTrash,
+  IconArrowLeft,
+  IconFolder,
+  IconFile,
+  IconFolderOpen,
+} from '@tabler/icons-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import * as api from '../api/endpoints';
 import type { ArtifactDto, RepositoryDto, Visibility } from '../api/types';
 import { useAuth } from '../auth/useAuth';
+import { buildDirectoryListing, breadcrumbSegments } from '../lib/browse';
 import { errorMessage, formatBytes } from '../lib/format';
 import { notifyError, notifySuccess } from '../lib/notify';
 import { ErrorAlert } from '../components/ErrorAlert';
@@ -90,12 +97,19 @@ export function RepositoryDetailPage() {
       <Tabs defaultValue="artifacts">
         <Tabs.List>
           <Tabs.Tab value="artifacts">制品浏览</Tabs.Tab>
+          <Tabs.Tab value="browse" leftSection={<IconFolderOpen size={16} />}>
+            文件浏览
+          </Tabs.Tab>
           {isAdmin && <Tabs.Tab value="config">配置</Tabs.Tab>}
           {isAdmin && <Tabs.Tab value="acl">权限（ACL）</Tabs.Tab>}
         </Tabs.List>
 
         <Tabs.Panel value="artifacts" pt="md">
           <ArtifactsTab repo={repo} />
+        </Tabs.Panel>
+
+        <Tabs.Panel value="browse" pt="md">
+          <FileBrowserTab repo={repo} />
         </Tabs.Panel>
 
         {isAdmin && (
@@ -236,6 +250,107 @@ function ArtifactsTab({ repo }: { repo: RepositoryDto }) {
         </Table.Tbody>
       </Table>
     </Table.ScrollContainer>
+  );
+}
+
+/** 文件浏览页签（FR-76）：按目录树逐级浏览，点文件看详情，点目录进入下一层。 */
+function FileBrowserTab({ repo }: { repo: RepositoryDto }) {
+  const navigate = useNavigate();
+  const [artifacts, setArtifacts] = useState<ArtifactDto[]>([]);
+  const [prefix, setPrefix] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setLoading(true);
+    api
+      .listArtifacts(repo.id)
+      .then(setArtifacts)
+      .catch((err) => setError(errorMessage(err)))
+      .finally(() => setLoading(false));
+  }, [repo.id]);
+
+  const entries = buildDirectoryListing(artifacts, prefix);
+  const crumbs = breadcrumbSegments(prefix);
+
+  const openDetail = (path: string) => {
+    navigate(`/artifact?repo=${encodeURIComponent(repo.id)}&path=${encodeURIComponent(path)}`);
+  };
+
+  if (loading) {
+    return (
+      <Center h={120}>
+        <Loader />
+      </Center>
+    );
+  }
+  if (error) return <ErrorAlert message={error} />;
+
+  return (
+    <Stack gap="sm">
+      {/* 面包屑导航：根 + 各级目录，点击回跳对应层 */}
+      <Group gap={4}>
+        <Anchor onClick={() => setPrefix('')}>{repo.name}</Anchor>
+        {crumbs.map((c) => (
+          <Group key={c.prefix} gap={4}>
+            <Text c="dimmed">/</Text>
+            <Anchor onClick={() => setPrefix(c.prefix)}>{c.name}</Anchor>
+          </Group>
+        ))}
+        <Text c="dimmed">/</Text>
+      </Group>
+
+      {entries.length === 0 ? (
+        <Text c="dimmed">该目录为空。</Text>
+      ) : (
+        <Table.ScrollContainer minWidth={520}>
+          <Table highlightOnHover>
+            <Table.Thead>
+              <Table.Tr>
+                <Table.Th>名称</Table.Th>
+                <Table.Th>大小</Table.Th>
+                <Table.Th>创建时间</Table.Th>
+              </Table.Tr>
+            </Table.Thead>
+            <Table.Tbody>
+              {entries.map((e) =>
+                e.type === 'folder' ? (
+                  <Table.Tr key={`d:${e.name}`}>
+                    <Table.Td>
+                      <Anchor onClick={() => setPrefix(`${prefix}${e.name}/`)}>
+                        <Group gap={6} wrap="nowrap">
+                          <IconFolder size={16} />
+                          <span>{e.name}/</span>
+                        </Group>
+                      </Anchor>
+                    </Table.Td>
+                    <Table.Td>-</Table.Td>
+                    <Table.Td>-</Table.Td>
+                  </Table.Tr>
+                ) : (
+                  <Table.Tr key={`f:${e.path}`}>
+                    <Table.Td>
+                      <Anchor onClick={() => openDetail(e.path!)}>
+                        <Group gap={6} wrap="nowrap">
+                          <IconFile size={16} />
+                          <span>{e.name}</span>
+                        </Group>
+                      </Anchor>
+                    </Table.Td>
+                    <Table.Td>{e.size !== undefined ? formatBytes(e.size) : '-'}</Table.Td>
+                    <Table.Td>
+                      <Text size="sm" c="dimmed">
+                        {e.createdAt ?? '-'}
+                      </Text>
+                    </Table.Td>
+                  </Table.Tr>
+                ),
+              )}
+            </Table.Tbody>
+          </Table>
+        </Table.ScrollContainer>
+      )}
+    </Stack>
   );
 }
 
