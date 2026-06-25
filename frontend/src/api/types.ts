@@ -312,3 +312,37 @@ export interface AuditListParams {
   offset?: number;
   limit?: number;
 }
+
+/** 防护维度（与后端 ProtectionDimension 入库字符串一致；FR-78）。 */
+export type ProtectionDimension = 'rate_limit' | 'ban' | 'cc_challenge' | 'waf' | 'slowloris';
+
+/** 告警严重度（后端以小写返回）。 */
+export type AlertSeverity = 'warn' | 'error';
+
+/** 单维度窗内计数（状态快照项，FR-78）。 */
+export interface DimensionCountDto {
+  dimension: string;
+  count: number;
+}
+
+/** 单条防护告警视图（对齐 protection_alerts 字段，FR-78）。 */
+export interface ProtectionAlertDto {
+  id: number;
+  ts: string;
+  dimension: string;
+  severity: string;
+  observed_value: number;
+  threshold: number;
+  window_secs: number;
+  detail: string | null;
+}
+
+/** 防护状态快照（数据面板总览，仅管理员，FR-78）。 */
+export interface ProtectionStatusDto {
+  alerts_enabled: boolean;
+  window_secs: number;
+  window_counts: DimensionCountDto[];
+  active_banned_ips: number;
+  dropped_alerts: number;
+  recent_alerts: ProtectionAlertDto[];
+}

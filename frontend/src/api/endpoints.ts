@@ -18,6 +18,8 @@ import type {
   LoginResponse,
   Paginated,
   Permission,
+  ProtectionAlertDto,
+  ProtectionStatusDto,
   RepoFormat,
   RepositoryDto,
   SearchHit,
@@ -345,6 +347,25 @@ export function listAudit(params: AuditListParams = {}): Promise<Paginated<Audit
       actor: params.actor,
       offset: params.offset,
       limit: params.limit,
+    },
+  });
+}
+// —— 防护状态监控（仅管理员，FR-78） ——
+
+/** 查询防护状态快照（各维度窗内计数、当前封禁 IP 数、最近告警）。 */
+export function protectionStatus(): Promise<ProtectionStatusDto> {
+  return request<ProtectionStatusDto>('/protection/status');
+}
+
+/** 分页查询告警历史（可按维度过滤，按时间倒序）。 */
+export function listProtectionAlerts(
+  options: { dimension?: string; offset?: number; limit?: number } = {},
+): Promise<Paginated<ProtectionAlertDto>> {
+  return request<Paginated<ProtectionAlertDto>>('/protection/alerts', {
+    query: {
+      dimension: options.dimension,
+      offset: options.offset,
+      limit: options.limit,
     },
   });
 }
