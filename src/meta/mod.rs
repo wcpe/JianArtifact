@@ -8,12 +8,14 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
+mod alerts;
 mod audit;
 mod groups;
 mod repo;
 mod usage;
 mod vuln;
 
+pub use alerts::{AlertQuery, AlertRecord, NewAlert};
 pub use audit::{AuditEntry, AuditQuery, NewAuditEntry};
 pub use groups::{GroupAclRecord, GroupMemberRecord, GroupRecord};
 pub use repo::{
