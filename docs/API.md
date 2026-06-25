@@ -180,6 +180,15 @@
 - **响应**：制品索引数组，每项含 `path`、`size`、`sha256`、`content_type`、`cached`、`created_at`。
 - **错误**：`401`/`404` 私有仓库对未授权方拒绝；`403` 无读权限；`404` 仓库不存在。
 
+### 目录列表 / 仓库索引（FR-75，Accept 驱动双形态）
+
+- **方法 / 路径**：`GET /{repo}/`（仓库根）或 `GET /{repo}/{dir}/`（子目录）。以**路径尾斜杠**作为目录请求信号；无尾斜杠仍为单文件下载。仅通用格式（`raw` / `maven` 等经统一 trait 落库者）参与；`npm` / `docker` / `cargo` / `pypi` / `nuget` / `go` 等原生协议格式不走此目录浏览（其尾斜杠语义由各自协议处理）。
+- **内容协商**：按 `Accept` 头返回双形态——
+  - `Accept: application/json`（或不带偏好）：返回 `{ repo, path, entries }`。`entries` 为当前目录一层条目（目录在前、文件在后，各自名称升序），每项含 `name`、`type`（`folder` / `file`）；文件项另含 `size`、`sha256`、`created_at`。**只下钻一层**，不扁平铺开整棵子树。
+  - `Accept: text/html`（浏览器）：返回类 Apache 目录索引的 HTML 页（条目链接、类型、大小）；文件名 / 路径经 HTML 转义防注入。
+- **鉴权**：受 public/private 与读 ACL 约束，三身份通道（Basic / Bearer / 会话）一致；**私有仓库对匿名 / 无权一律 404**，JSON 与 HTML 两形态均不泄露资源存在性。结果按读权限过滤。
+- **错误**：`401`/`404` 私有仓库对未授权方拒绝；`404` 仓库不存在 / 无读权限。
+
 ### 删除制品
 
 - **方法 / 路径**：`DELETE /api/v1/repositories/{id}/artifacts/{path}`

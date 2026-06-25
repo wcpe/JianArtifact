@@ -17,7 +17,7 @@ use crate::format::{ArtifactKind, PypiFormat, PYPI_SIMPLE_SEGMENT};
 use crate::meta::RepositoryRecord;
 
 use super::metrics::FormatLabel;
-use super::repo_access::{build_repo_view, load_readable_repo};
+use super::repo_access::{build_repo_view, load_readable_repo_by_name};
 use super::{ApiError, AppState, ClientIp, Identity};
 use crate::authz::{authorize, Action, Decision};
 use crate::meta::UsageAction;
@@ -285,7 +285,22 @@ async fn post_pypi_upload(
     tag_format(result, &format_name)
 }
 
+/// 浏览仓库根目录（GET `/{repo}/`，FR-75）：Accept 驱动双形态的根目录索引。
+///
+/// 仅通用格式参与（原生协议的根路径各有语义）；读授权与渲染下沉到 `browse`。
+pub async fn get_repo_root(
+    State(state): State<AppState>,
+    identity: Identity,
+    headers: HeaderMap,
+    Path(repo_name): Path<String>,
+) -> Result<Response, ApiError> {
+    browse_repo_dir(&state, &identity, &repo_name, "", &headers).await
+}
+
 /// 下载制品（GET）：读授权后流式返回 blob；hosted 命中本地，proxy cache-miss 回源后返回。
+///
+/// 目录浏览（FR-75）：通用格式下路径以 `/` 结尾视为目录请求，分流到 `browse`；
+/// 无尾斜杠仍为单文件下载（行为不变）。原生协议格式不受影响（其尾斜杠语义自行处理）。
 pub async fn get_artifact(
     State(state): State<AppState>,
     identity: Identity,
@@ -293,6 +308,16 @@ pub async fn get_artifact(
     headers: HeaderMap,
     Path((repo_name, path)): Path<(String, String)>,
 ) -> Result<Response, ApiError> {
+    // 目录请求：尾斜杠 + 通用格式 → 走目录浏览（鉴权在 browse 内部，private 对无权 404）
+    if path.ends_with('/') {
+        let dir_path = path.trim_end_matches('/');
+        // 仅在通用格式下接管；原生协议（含尾斜杠的索引端点）不进此分支
+        if let Some(repo) = state.meta.get_repository_by_name(&repo_name).await? {
+            if super::browse::is_browsable_format(&repo.format) {
+                return browse_repo_dir(&state, &identity, &repo_name, dir_path, &headers).await;
+            }
+        }
+    }
     // 读授权（无权 private → 404 隐藏存在性）
     let repo = load_readable_repo_by_name(&state, &identity, &repo_name).await?;
     // 使用分析采集（FR-57）：读授权通过即记一次下载（非阻塞、采集失败不影响业务）。
@@ -401,15 +426,17 @@ async fn delete_artifact_inner(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-/// 按仓库名解析并施加读授权：仓库不存在 / 无读权限一律 404（隐藏存在性）。
-async fn load_readable_repo_by_name(
+/// 目录浏览编排（FR-75）：委托 `browse` 完成读授权、前缀列举与 Accept 渲染。
+///
+/// 鉴权在 `browse` 内部（private 对无权一律 404、不泄露存在性）；本处仅做格式标签透传。
+async fn browse_repo_dir(
     state: &AppState,
     identity: &Identity,
     repo_name: &str,
-) -> Result<RepositoryRecord, ApiError> {
-    let repo = get_repo_by_name(state, repo_name).await?;
-    // 复用按 id 的读授权编排（已封装查 ACL + 判定 + 404 定式）
-    load_readable_repo(state, identity, &repo.id).await
+    dir_path: &str,
+    headers: &HeaderMap,
+) -> Result<Response, ApiError> {
+    super::browse::browse_directory(state, identity, repo_name, dir_path, headers).await
 }
 
 /// 按仓库名解析并施加写授权：无读权限 404、有读无写 403。

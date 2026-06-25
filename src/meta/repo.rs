@@ -435,6 +435,32 @@ impl MetaStore {
         Ok(records)
     }
 
+    /// 列出某仓库内位于给定路径前缀下的制品索引（FR-75 目录浏览），按路径升序。
+    ///
+    /// `prefix` 为已归一化的目录前缀（空串表示仓库根，否则形如 `dir/`，调用方负责补尾斜杠）。
+    /// 用 `LIKE prefix||'%' ESCAPE '\'` 做前缀匹配，并对前缀中的 `%`/`_`/`\` 转义，避免通配符
+    /// 把兄弟前缀（如 `docsx/`）误纳入 `docs/` 的列举。鉴权过滤由上层处理。
+    pub async fn list_artifacts_under_prefix(
+        &self,
+        repo_id: &str,
+        prefix: &str,
+    ) -> Result<Vec<ArtifactRecord>, MetaError> {
+        // 空前缀（仓库根）等价列全仓，复用既有查询，避免无谓 LIKE
+        if prefix.is_empty() {
+            return self.list_artifacts_by_repo(repo_id).await;
+        }
+        let pattern = format!("{}%", escape_like(prefix));
+        let records = sqlx::query_as::<_, ArtifactRecord>(
+            "SELECT id, repo_id, path, size, sha256, sha1, md5, sha512, content_type, cached, created_at \
+             FROM artifacts WHERE repo_id = ? AND path LIKE ? ESCAPE '\\' ORDER BY path ASC",
+        )
+        .bind(repo_id)
+        .bind(pattern)
+        .fetch_all(self.pool())
+        .await?;
+        Ok(records)
+    }
+
     /// 按 (仓库, 路径) 查制品索引；不存在时返回 None。
     pub async fn get_artifact(
         &self,
@@ -540,6 +566,21 @@ impl MetaStore {
         .await?;
         Ok(records)
     }
+}
+
+/// 转义 LIKE 模式中的特殊字符（`\` / `%` / `_`），配合 `ESCAPE '\'` 使其按字面匹配。
+///
+/// 仅用于前缀匹配场景：调用方拼接后再追加 `%` 通配，故此处不引入额外通配语义，
+/// 避免用户路径里的 `%`/`_` 被当作通配符把兄弟前缀误纳入列举。
+fn escape_like(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars() {
+        if matches!(ch, '\\' | '%' | '_') {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -773,6 +814,60 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
+    }
+
+    #[tokio::test]
+    async fn 按前缀列举制品_仅命中前缀且不串入兄弟前缀() {
+        let store = MetaStore::open_in_memory().await.unwrap();
+        let rid = 建仓库(&store, "r", Visibility::Public).await;
+        for p in ["docs/a.txt", "docs/sub/b.txt", "docsx/c.txt", "top.txt"] {
+            store.upsert_artifact(制品(&rid, p, "s")).await.unwrap();
+        }
+        // 列举 docs/ 前缀：命中 docs/a.txt 与 docs/sub/b.txt，不含兄弟前缀 docsx/c.txt
+        let mut paths: Vec<String> = store
+            .list_artifacts_under_prefix(&rid, "docs/")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|r| r.path)
+            .collect();
+        paths.sort();
+        assert_eq!(paths, vec!["docs/a.txt", "docs/sub/b.txt"]);
+
+        // 空前缀（仓库根）等价列全仓
+        let all = store.list_artifacts_under_prefix(&rid, "").await.unwrap();
+        assert_eq!(all.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn 按前缀列举制品_前缀含通配符按字面匹配() {
+        let store = MetaStore::open_in_memory().await.unwrap();
+        let rid = 建仓库(&store, "r", Visibility::Public).await;
+        // 路径里真实含 % 与 _ 字符，转义后应按字面匹配，不当通配符
+        store
+            .upsert_artifact(制品(&rid, "a%b/x.txt", "s"))
+            .await
+            .unwrap();
+        store
+            .upsert_artifact(制品(&rid, "axb/y.txt", "s"))
+            .await
+            .unwrap();
+        let paths: Vec<String> = store
+            .list_artifacts_under_prefix(&rid, "a%b/")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|r| r.path)
+            .collect();
+        assert_eq!(paths, vec!["a%b/x.txt"], "% 应按字面匹配，不通配 axb/");
+    }
+
+    #[test]
+    fn 转义_like_特殊字符() {
+        assert_eq!(escape_like("a%b"), "a\\%b");
+        assert_eq!(escape_like("a_b"), "a\\_b");
+        assert_eq!(escape_like("a\\b"), "a\\\\b");
+        assert_eq!(escape_like("docs/"), "docs/");
     }
 
     #[tokio::test]

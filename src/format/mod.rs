@@ -8,6 +8,7 @@
 
 use crate::meta::ArtifactRecord;
 
+mod browse;
 mod cargo;
 pub mod docker;
 pub mod docker_registry;
@@ -19,6 +20,7 @@ mod pypi;
 mod raw;
 pub mod service;
 
+pub use browse::{collapse_directory_entries, DirEntry, DirEntryKind};
 pub use cargo::{CargoError, CargoFormat, CargoPublishRequest};
 pub use docker::DockerFormat;
 pub use docker_registry::{DockerError, DockerRegistry};

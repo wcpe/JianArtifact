@@ -32,6 +32,7 @@ mod anomaly_ban;
 mod artifacts;
 mod audit;
 mod auth_routes;
+mod browse;
 mod cargo_routes;
 mod cc_challenge;
 mod docker_routes;
@@ -441,7 +442,10 @@ pub fn build_router(state: AppState) -> Router {
     // PyPI twine 上传目标为 `POST /{repo}/`（空路径，catch-all 不匹配），故单列其路由；
     // `POST /{repo}/{*path}` 兜底 PyPI 的 `legacy/` 等带路径上传形态。
     let format_api = Router::new()
-        .route("/{repo}/", post(format_routes::post_artifact_root))
+        .route(
+            "/{repo}/",
+            get(format_routes::get_repo_root).post(format_routes::post_artifact_root),
+        )
         .route(
             "/{repo}/{*path}",
             get(format_routes::get_artifact)

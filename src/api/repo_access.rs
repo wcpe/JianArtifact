@@ -58,6 +58,22 @@ pub(crate) async fn load_readable_repo(
     }
 }
 
+/// 按仓库名解析并施加读授权：仓库不存在 / 无读权限（含匿名 private）一律 404 隐藏存在性。
+///
+/// 格式端点据路径中的仓库名定位仓库，故单列按名解析的读授权编排，复用按 id 的读判定。
+pub(crate) async fn load_readable_repo_by_name(
+    state: &AppState,
+    identity: &Identity,
+    repo_name: &str,
+) -> Result<RepositoryRecord, ApiError> {
+    let repo = state
+        .meta
+        .get_repository_by_name(repo_name)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    load_readable_repo(state, identity, &repo.id).await
+}
+
 /// 解析仓库并施加写授权：先按读判定隐藏存在性（无读权限 404），有读但无写返回 403。
 ///
 /// 遵 API §2 定式：私有仓库对无读权限者返回 404（不暴露存在性）；有读无写返回 403。

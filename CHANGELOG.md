@@ -9,6 +9,7 @@
 ### 新增
 - 通用制品上传 API（FR-73）：新增 `POST /api/v1/repositories/{id}/upload`（multipart/form-data），向 hosted 仓库统一直传 Maven / npm / Raw 三格式制品——Maven 按表单 GAV 拼坐标、npm 按表单 name + 上传文件名定位 tarball（不解包 .tgz）、Raw 用表单 path；复用既有写授权与流式落 blob 机理，proxy 仓库与不支持格式拒绝（400），覆盖语义沿用各格式策略（release/已发布 409），超上传上限返回 413
 - Web 控制台制品上传页面（FR-74）：新增“制品上传”页与导航入口，选 hosted 仓库后按格式渲染动态表单（Maven: GAV / npm: name+version / Raw: path），选文件后带进度条上传，成功/失败有提示
+- 目录列表 API 与 HTML 仓库索引视图（FR-75）：以路径尾斜杠作为目录请求信号，按 `Accept` 头返回 JSON 目录项或类 Apache 的 HTML 索引页；仅通用格式参与，私有仓库对匿名 / 无权一律 404 不泄露存在性，结果按读权限过滤。
 - 防护配置 API（FR-79，扩展 ADR-0008）：新增 `GET /api/v1/protection/config` 与 `PATCH /api/v1/protection/config`（仅 Admin），Admin 可在线读取 / 整体替换七层防护各维度配置（限流阈值 / 并发上限、IP 黑白名单、异常封禁、慢速攻击、CC 挑战、WAF 规则、监控告警），**校验通过即时生效、无须重启**；运行时配置经新增的进程内热替换槽（`RwLock<Arc<ProtectionSnapshot>>`，std 实现、不引入外部依赖）承载，PATCH 后锁外按新配置重建派生态（IP 名单匹配器、WAF 规则集），下一个请求即按新值判定，限流计数 / 封禁登记 / 告警去抖等运行态不清零；非法配置（如某时间窗为 0、CC 难度超 64 位）返回 400 且不改变现有生效配置；防护配置无密码 / Token / 凭据等敏感项，整体回显不泄露。运行时改动为进程内热替换、不写回 TOML，重启回落文件配置（配置真源仍是文件 + 环境变量）
 - 防护配置管理页面（FR-80）：控制台新增「防护配置」页（仅 Admin 可见），把七个防护维度拆为分区表单（启停开关 + 阈值 / 难度 / 名单 / WAF 规则编辑），保存即调 `PATCH /api/v1/protection/config` 整体回传、即时生效并回显；后端 400 校验错误在页面展示中文文案
 
