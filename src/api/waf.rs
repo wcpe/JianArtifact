@@ -12,7 +12,8 @@
 //! - **防误杀**：默认空规则集 + 关闭，不影响现有行为、不误杀正常包管理器请求；规则与启用由运维显式承担。
 //! - **不依赖 IP**：WAF 按请求属性（method/path/query/header）匹配，与来源 IP 无关；不读 / 不采信 XFF
 //!   做任何 IP 相关判定（与其他 L7 防护「不采信可伪造头做 IP 项」一致）。
-//! - **配置即时生效**：规则集随 `AppState` 经 `Arc` 共享；配置热替换后重建规则集，下个请求即按新规则判定。
+//! - **配置即时生效**：规则集随运行时防护热替换槽（`AppState.protection`）经 `Arc` 共享；PATCH 配置
+//!   热替换时按新配置重建规则集（正则重新预编译），下个请求即按新规则判定（FR-79）。
 
 use axum::{
     extract::{Request, State},
@@ -253,7 +254,9 @@ fn regex_syntax_special(ch: char) -> bool {
 /// 未启用或空规则集时走零开销快路径直接放行；否则按 method / path / query / header 有序匹配，
 /// 首个命中 `block` 返回 403、首个命中 `allow` 放行；无命中亦放行。WAF 不依赖来源 IP。
 pub async fn waf_layer(State(state): State<AppState>, request: Request, next: Next) -> Response {
-    let rules = &state.waf_rules;
+    // 从热替换槽取当前快照（FR-79）；防护配置真源为本槽，不读 config.protection
+    let snapshot = state.protection.snapshot();
+    let rules = &snapshot.waf_rules;
     // 快路径：未启用 / 空规则集，零匹配开销直接放行
     if !rules.is_active() {
         return next.run(request).await;
@@ -272,7 +275,7 @@ pub async fn waf_layer(State(state): State<AppState>, request: Request, next: Ne
         metrics::counter!(keys::WAF_BLOCKED_TOTAL).increment(1);
         state.alert_engine.record(
             ProtectionDimension::Waf,
-            &state.config.protection.alerts,
+            &snapshot.config.alerts,
             std::time::Instant::now(),
         );
         return forbidden();
@@ -528,11 +531,9 @@ mod tests {
 mod middleware_tests {
     use super::super::tests::测试用状态;
     use super::super::{build_router, AppState};
-    use super::WafRuleSet;
     use crate::config::{WafConfig, WafRuleConfig};
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
-    use std::sync::Arc;
     use tower::ServiceExt;
 
     /// 便捷：构造一条规则配置。
@@ -552,11 +553,14 @@ mod middleware_tests {
         }
     }
 
-    /// 以给定 WAF 配置定制测试状态（编译规则集注入 AppState）。
+    /// 以给定 WAF 配置定制测试状态（经防护热替换槽装载，规则集随之按新配置重建）。
     async fn waf状态(enabled: bool, rules: Vec<WafRuleConfig>) -> (AppState, tempfile::TempDir) {
-        let (mut state, dir) = 测试用状态().await;
-        let cfg = WafConfig { enabled, rules };
-        state.waf_rules = Arc::new(WafRuleSet::from_config(&cfg));
+        let (state, dir) = 测试用状态().await;
+        let cfg = crate::config::ProtectionConfig {
+            waf: WafConfig { enabled, rules },
+            ..Default::default()
+        };
+        state.protection.replace(cfg);
         (state, dir)
     }
 

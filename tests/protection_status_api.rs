@@ -60,9 +60,9 @@ impl Fixture {
 
         let mut cfg = Config::default();
         customize(&mut cfg);
-        // 从（定制后的）配置编译 WAF 规则集，使夹具反映 customize 设置的 [protection.waf]
-        let waf_rules = Arc::new(jianartifact::api::WafRuleSet::from_config(
-            &cfg.protection.waf,
+        // 从（定制后的）配置装载防护热替换槽，使夹具反映 customize 设置的 [protection.*]（含 WAF 规则集）
+        let protection = Arc::new(jianartifact::api::ProtectionState::new(
+            cfg.protection.clone(),
         ));
 
         let state = AppState {
@@ -81,14 +81,11 @@ impl Fixture {
             oidc: None,
             oidc_flows: Arc::new(jianartifact::api::OidcFlowStore::new()),
             ldap: None,
-            ip_matcher: Arc::new(jianartifact::api::IpMatcher::from_config(
-                &jianartifact::config::IpListConfig::default(),
-            )),
+            protection,
             ban_registry: Arc::new(jianartifact::api::BanRegistry::new()),
             cc_challenger: Arc::new(jianartifact::api::CcChallenger::new(
                 b"prot-cc-secret-32-bytes-xxxxxxxx",
             )),
-            waf_rules,
             alerts,
             alert_engine,
         };

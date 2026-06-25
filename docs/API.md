@@ -229,6 +229,21 @@
 - **响应**：统一分页结构 `{ items, total, offset, limit, has_more }`，按时间倒序（最新在前）。每项含 `id`、`ts`、`dimension`、`severity`（`warn` | `error`）、`observed_value`（触发告警时的窗内观测计数）、`threshold`（触发阈值）、`window_secs`（评估窗时长）、`detail`（中文文案）。告警是本机内部数据，**绝不含凭据**，**纯本地查询、绝不外发**（FR-56，ADR-0017）。
 - **错误**：`401` 未认证；`403` 非管理员。
 
+### 读取防护配置（P2，仅 Admin，FR-79）
+
+- **方法 / 路径**：`GET /api/v1/protection/config`
+- **请求**：无查询参数。仅管理员可访问。
+- **响应**：当前**生效**的防护配置全量对象（七个维度），取自运行时防护配置真源（含运行时 PATCH 在内的最新值），结构为 `{ rate_limit, ip_list, ban, slowloris, cc_challenge, waf, alerts }`，各子对象字段与 `[protection.*]` TOML 配置同名同义（如 `rate_limit.{enabled,window_secs,ip_max_requests,identity_max_requests,repo_max_requests,ip_max_concurrent,user_max_concurrent,repo_max_concurrent}`、`ip_list.{allow,deny}`、`ban.{enabled,window_secs,threshold,duration_secs}`、`slowloris.{enabled,body_read_timeout_secs,header_timeout_secs,max_body_bytes}`、`cc_challenge.{enabled,difficulty,ttl_secs,exempt_authenticated}`、`waf.{enabled,rules[]}`、`alerts.{enabled,window_secs,...}`）。防护配置**不含任何密码 / Token / 上游凭据**，整体回显无敏感项。
+- **错误**：`401` 未认证；`403` 非管理员。
+
+### 修改防护配置（P2，仅 Admin，FR-79）
+
+- **方法 / 路径**：`PATCH /api/v1/protection/config`
+- **请求**：JSON 体为一份**完整**的防护配置对象（结构同上 `GET` 的响应；前端应先 `GET` 当前值、改后整体回传）。仅管理员可调用。
+- **行为**：**整体替换** `protection` 配置子树，校验通过即**即时生效、无须重启**——派生态（IP 名单匹配器、WAF 规则集）按新配置重建，下一个请求即按新阈值 / 开关 / 名单 / 规则判定。限流计数 / 封禁登记 / 告警去抖等进程内累计运行态在改配置时**不清零**。运行时改动为进程内热替换，**不写回 TOML**：重启回落文件配置（配置真源仍是文件 + 环境变量）。
+- **响应**：替换后生效的防护配置全量对象（同 `GET`）。
+- **错误**：`400` 配置非法（如某时间窗为 0、CC 难度超 64 位等），错误码 `bad_request`，**且不改变现有生效配置**；`401` 未认证；`403` 非管理员。
+
 ### 预览 Nexus 可迁移仓库（在线 REST 入口）
 
 - **方法 / 路径**：`POST /api/v1/migrate/nexus/preview`
@@ -457,7 +472,7 @@
 
 ### 七层防护管理
 
-- 防护策略管理（管理员）：`/api/v1/admin/protection` 下配置限流阈值、并发 / 连接上限、WAF 规则、IP 黑白名单与封禁列表。
+- 防护策略管理（管理员，FR-79）**已落地**：见上文 §3「读取防护配置」「修改防护配置」（`GET` / `PATCH /api/v1/protection/config`）——在线读取 / 整体替换限流阈值、并发上限、WAF 规则、IP 黑白名单、慢速 / CC / 告警等各维度配置，校验通过即时生效、无须重启。
 - CC 挑战（FR-54 / ADR-0008）已落地，但**无独立管理端点**：经 `[protection.cc_challenge]` 配置开关 / 难度 / 过期 / 豁免，由中间件对匿名请求按工作量证明（PoW）挑战 / 校验（见上文「错误约定」的 CC 挑战说明）；不另设质询 / 校验端点（挑战令牌无状态、随 `429` 响应体下发，证明经请求头 `X-CC-Solution` 在原请求上提交）。
 
 ### 使用分析

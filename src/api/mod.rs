@@ -45,6 +45,8 @@ mod npm_routes;
 mod nuget_routes;
 mod oidc_routes;
 mod protection;
+mod protection_config;
+mod protection_state;
 mod pypi_routes;
 mod rate_limit;
 mod repo_access;
@@ -68,6 +70,7 @@ pub use cc_challenge::CcChallenger;
 pub use identity::resolve_identity;
 pub use metrics::{install_recorder, MetricsHandle};
 pub use oidc_routes::OidcFlowStore;
+pub use protection_state::{ProtectionSnapshot, ProtectionState};
 pub use rate_limit::RateLimiter;
 pub use usage::{channel as usage_channel, spawn_usage_pruner, spawn_usage_writer, UsageSink};
 pub use waf::WafRuleSet;
@@ -119,9 +122,11 @@ pub struct AppState {
     /// LDAP 认证 provider（FR-35，ADR-0016）：`Some` 表示已配置 `[auth.ldap]`，
     /// 口令型登录（Web 表单 / Basic Auth）本地校验失败后委托其做 bind 校验；`None` 时不参与登录。
     pub ldap: Option<Arc<LdapProvider>>,
-    /// IP 黑/白名单匹配器（FR-53，ADR-0008）：从 `[protection.ip_list]` 预解析的网段集合，
-    /// 白名单豁免一切应用层防护、黑名单直接拒；按连接级来源 IP 判定，不采信 XFF。
-    pub ip_matcher: Arc<anomaly_ban::IpMatcher>,
+    /// 运行时防护配置热替换槽（FR-79，扩展 ADR-0008）：收拢当前生效的 `ProtectionConfig` 及其派生态
+    /// （IP 名单匹配器、WAF 规则集），经 `RwLock<Arc<..>>` 原子替换。防护中间件经 `snapshot()` 读当前
+    /// 配置与派生态（读锁极短、锁外判定）；管理端 PATCH 经 `replace()` 重建派生态并即时生效、无须重启。
+    /// **防护配置真源为本槽**：启动后中间件不再读 `config.protection`，`config.protection` 仅初始装载来源。
+    pub protection: Arc<protection_state::ProtectionState>,
     /// 访问异常检测与自动封禁登记表（FR-53，ADR-0008）：进程内内存维护各 IP 的窗内异常信号计数
     /// 与封禁到期时刻，窗内异常达阈值即自动封禁一个时间窗、到期自动解封；重启即清，不落 DB。
     pub ban_registry: Arc<anomaly_ban::BanRegistry>,
@@ -129,10 +134,6 @@ pub struct AppState {
     /// 不与会话 JWT 串味）无状态签发 / 校验工作量证明（PoW）挑战令牌，不存挑战态。默认关闭、默认豁免
     /// 已认证客户端，仅对匿名可疑流量要求 PoW 证明；按连接级来源 IP 绑定，不采信 XFF。
     pub cc_challenger: Arc<cc_challenge::CcChallenger>,
-    /// 可配置 WAF 规则集（FR-55，ADR-0008）：从 `[protection.waf]` 启动期编译一次的有序规则
-    /// （正则预编译、非法规则跳过），中间件按请求 method/path/query/header 有序匹配、首个命中生效。
-    /// 默认空规则集 + 关闭（不影响现有、不误杀）；WAF 不依赖来源 IP。
-    pub waf_rules: Arc<waf::WafRuleSet>,
     /// 防护告警投递端（FR-56，ADR-0017）：主路径非阻塞 enqueue，后台任务批量落库。
     pub alerts: alerts::AlertSink,
     /// 进程内防护告警评估器（FR-56，ADR-0017）：各防护命中点累加窗内计数、达阈值即告警；
@@ -377,6 +378,11 @@ pub fn build_router(state: AppState) -> Router {
         .route("/protection/status", get(protection::protection_status))
         .route("/protection/alerts", get(protection::list_alerts))
         .route(
+            "/protection/config",
+            get(protection_config::get_protection_config)
+                .patch(protection_config::patch_protection_config),
+        )
+        .route(
             "/migrate/nexus/preview",
             post(migrate::preview_nexus_repositories),
         )
@@ -597,18 +603,15 @@ mod tests {
             oidc_flows: Arc::new(oidc_routes::OidcFlowStore::new()),
             // 默认测试状态不配置 LDAP；需要 LDAP 的测试自行注入 provider
             ldap: None,
-            // 默认测试状态：名单空、封禁登记表空（异常检测默认关闭）；需要的测试自行定制配置
-            ip_matcher: Arc::new(anomaly_ban::IpMatcher::from_config(
-                &crate::config::IpListConfig::default(),
+            // 默认测试状态：防护热替换槽以默认配置装载（名单空、WAF 空、各防护默认关闭）；
+            // 需要的测试经 protection.replace 或直接构造定制配置
+            protection: Arc::new(protection_state::ProtectionState::new(
+                crate::config::ProtectionConfig::default(),
             )),
             ban_registry: Arc::new(anomaly_ban::BanRegistry::new()),
             // 默认测试状态 CC 挑战关闭；需要的测试自行定制配置与挑战器（密钥与 jwt 同源）
             cc_challenger: Arc::new(cc_challenge::CcChallenger::new(
                 b"test-secret-32-bytes-xxxxxxxxxxxx",
-            )),
-            // 默认测试状态：WAF 空规则集 + 关闭；需要的测试自行定制配置
-            waf_rules: Arc::new(waf::WafRuleSet::from_config(
-                &crate::config::WafConfig::default(),
             )),
             // 默认测试状态：告警引擎就绪（默认配置告警关闭，record 直接返回）
             alerts,

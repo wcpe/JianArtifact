@@ -22,7 +22,8 @@
 //!   校验（无锁、无 IO、无 DB）；正常已认证请求走豁免快路径。
 //! - **防绕过**：挑战绑定**连接级来源 IP**（取 `ConnectInfo`，**不采信 XFF**），换 IP 的证明
 //!   不可复用；HMAC 签名防伪造挑战；过期证明被拒。
-//! - **配置即时生效**：开关 / 难度 / 过期 / 豁免从 `AppState.config` 读取，配置热替换后下个请求即按新值判定。
+//! - **配置即时生效**：开关 / 难度 / 过期 / 豁免从运行时防护热替换槽（`AppState.protection`）的当前快照
+//!   读取，PATCH 配置热替换后下个请求即按新值判定（FR-79）。
 
 use std::net::SocketAddr;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -215,7 +216,9 @@ pub async fn cc_challenge_layer(
     request: Request,
     next: Next,
 ) -> Response {
-    let cfg = &state.config.protection.cc_challenge;
+    // 从热替换槽取当前快照（FR-79）；防护配置真源为本槽，不读 config.protection
+    let snapshot = state.protection.snapshot();
+    let cfg = &snapshot.config.cc_challenge;
     if !cfg.enabled {
         return next.run(request).await;
     }
@@ -245,7 +248,7 @@ pub async fn cc_challenge_layer(
             Ok(()) => return next.run(request).await,
             Err(_) => {
                 // 证明无效（伪造 / 过期 / 换 IP / 工作量不足）：计失败 + 告警评估，下发新挑战要求重新解
-                record_failure(&state);
+                record_failure(&state, &snapshot.config.alerts);
                 let new_token = challenger.issue(&client_ip, difficulty, now);
                 record_issued();
                 return challenge_required(&new_token, difficulty, max_age);
@@ -268,11 +271,11 @@ fn record_issued() {
 ///
 /// 失败指带证明但校验未过（工作量不足 / 过期 / 伪造 / 换 IP 复用）；按 `CcChallenge` 维度累加窗内
 /// 计数，达阈值即告警。热路径只做原子累加 + 一次内存计数，不做 IO。
-fn record_failure(state: &AppState) {
+fn record_failure(state: &AppState, alerts_cfg: &crate::config::AlertsConfig) {
     metrics::counter!(keys::CC_CHALLENGE_FAILED_TOTAL).increment(1);
     state.alert_engine.record(
         ProtectionDimension::CcChallenge,
-        &state.config.protection.alerts,
+        alerts_cfg,
         std::time::Instant::now(),
     );
 }
@@ -478,6 +481,8 @@ mod middleware_tests {
         cfg.protection.cc_challenge.difficulty = difficulty;
         cfg.protection.cc_challenge.ttl_secs = 300;
         cfg.protection.cc_challenge.exempt_authenticated = exempt_authenticated;
+        // 经防护热替换槽装载定制配置（中间件从本槽读取，与生产同一路径）
+        state.protection.replace(cfg.protection.clone());
         state.config = Arc::new(cfg);
         // 用固定密钥的挑战器，确保签发 / 校验跨请求一致
         state.cc_challenger = Arc::new(CcChallenger::new(b"cc-mw-secret-32-bytes-xxxxxxxxxx"));

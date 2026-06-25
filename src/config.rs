@@ -554,6 +554,45 @@ pub struct ProtectionConfig {
     pub alerts: AlertsConfig,
 }
 
+/// CC 挑战难度上限（位）：与中间件实现一致，超过即无意义（PoW 不可解）。
+const MAX_CC_CHALLENGE_DIFFICULTY_BITS: u32 = 64;
+
+impl ProtectionConfig {
+    /// 校验防护配置各维度的数值边界（FR-79，运行时热替换入口用）。
+    ///
+    /// 纯函数、无副作用，便于穷举测试。仅校验会导致运行异常或无意义的边界：
+    /// - 各时间窗（限流 / 异常封禁 / 告警评估窗）必须 > 0，否则固定窗计数无法成立。
+    /// - 慢速攻击防护的两个超时必须 > 0，否则等同零超时立即断流、误杀正常上传。
+    /// - CC 挑战令牌有效期必须 > 0，否则签发即过期；难度不得超过
+    ///   [`MAX_CC_CHALLENGE_DIFFICULTY_BITS`]（超过则 PoW 不可解、等同 DoS 自身）。
+    ///
+    /// WAF 规则的字段 / 匹配类型 / 动作合法性沿用既有「非法项记 WARN 跳过、不阻断」语义（与文件配置
+    /// 向后兼容），不在此处硬拒，避免单条坏规则使整次热替换失败。校验通过返回 `Ok(())`，否则返回中文原因。
+    pub fn validate(&self) -> Result<(), String> {
+        if self.rate_limit.window_secs == 0 {
+            return Err("限流时间窗（rate_limit.window_secs）必须大于 0".to_string());
+        }
+        if self.ban.window_secs == 0 {
+            return Err("异常检测时间窗（ban.window_secs）必须大于 0".to_string());
+        }
+        if self.alerts.window_secs == 0 {
+            return Err("告警评估时间窗（alerts.window_secs）必须大于 0".to_string());
+        }
+        if self.slowloris.body_read_timeout_secs == 0 || self.slowloris.header_timeout_secs == 0 {
+            return Err("慢速攻击防护超时（slowloris.*_timeout_secs）必须大于 0".to_string());
+        }
+        if self.cc_challenge.ttl_secs == 0 {
+            return Err("CC 挑战令牌有效期（cc_challenge.ttl_secs）必须大于 0".to_string());
+        }
+        if self.cc_challenge.difficulty > MAX_CC_CHALLENGE_DIFFICULTY_BITS {
+            return Err(format!(
+                "CC 挑战难度（cc_challenge.difficulty）不得超过 {MAX_CC_CHALLENGE_DIFFICULTY_BITS} 位"
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// 防护监控与阈值告警配置（FR-56，ADR-0017）。
 ///
 /// 进程内在固定时间窗内统计各防护维度（限流被拒 / 自动封禁 / CC 挑战失败 / WAF 阻断 / 慢速超时）
@@ -1367,5 +1406,54 @@ mod tests {
             );
             assert_eq!(cfg.vuln.refresh_interval_secs, 3600);
         });
+    }
+
+    // ===== FR-79 防护配置校验 =====
+
+    #[test]
+    fn 防护配置默认值通过校验() {
+        // 默认配置应是合法可生效的（各窗口非 0、难度在上限内）
+        assert!(ProtectionConfig::default().validate().is_ok());
+    }
+
+    #[test]
+    fn 限流窗口为零被校验拒绝() {
+        let mut cfg = ProtectionConfig::default();
+        cfg.rate_limit.window_secs = 0;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn 异常检测窗口为零被校验拒绝() {
+        let mut cfg = ProtectionConfig::default();
+        cfg.ban.window_secs = 0;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn 告警窗口为零被校验拒绝() {
+        let mut cfg = ProtectionConfig::default();
+        cfg.alerts.window_secs = 0;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn 慢速超时为零被校验拒绝() {
+        let mut cfg = ProtectionConfig::default();
+        cfg.slowloris.body_read_timeout_secs = 0;
+        assert!(cfg.validate().is_err());
+        let mut cfg2 = ProtectionConfig::default();
+        cfg2.slowloris.header_timeout_secs = 0;
+        assert!(cfg2.validate().is_err());
+    }
+
+    #[test]
+    fn cc挑战有效期为零或难度超限被拒绝() {
+        let mut cfg = ProtectionConfig::default();
+        cfg.cc_challenge.ttl_secs = 0;
+        assert!(cfg.validate().is_err());
+        let mut cfg2 = ProtectionConfig::default();
+        cfg2.cc_challenge.difficulty = 65;
+        assert!(cfg2.validate().is_err());
     }
 }

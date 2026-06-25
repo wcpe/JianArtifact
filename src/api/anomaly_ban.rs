@@ -149,6 +149,12 @@ impl IpMatcher {
     fn is_empty(&self) -> bool {
         self.allow.is_empty() && self.deny.is_empty()
     }
+
+    /// 测试专用：暴露黑名单命中判定，供热替换槽（`protection_state`）的跨模块单元测试断言派生态重建。
+    #[cfg(test)]
+    pub fn is_denied_for_test(&self, ip: &IpAddr) -> bool {
+        self.is_denied(ip)
+    }
 }
 
 /// 解析一组名单项为网段集合，非法项记 WARN 并跳过。
@@ -298,9 +304,14 @@ pub async fn anomaly_ban_layer(
     request: Request,
     next: Next,
 ) -> Response {
+    // 从热替换槽取当前快照（FR-79）；防护配置真源为本槽，不读 config.protection
+    let snapshot = state.protection.snapshot();
+    let ip_matcher = &snapshot.ip_matcher;
+    let ban_cfg = &snapshot.config.ban;
+
     // 防护整体未启用（名单空 + 异常检测关闭）：直接放行，零计数 / 零加锁开销。
     // 此快路径确保 FR-53 默认配置不给请求热路径增加任何可观测开销。
-    if state.ip_matcher.is_empty() && !state.config.protection.ban.enabled {
+    if ip_matcher.is_empty() && !ban_cfg.enabled {
         return next.run(request).await;
     }
 
@@ -312,16 +323,14 @@ pub async fn anomaly_ban_layer(
     };
 
     // —— 白名单优先级最高：命中即豁免一切应用层防护，照常进入业务、不统计异常 ——
-    if state.ip_matcher.is_allowed(&ip) {
+    if ip_matcher.is_allowed(&ip) {
         return next.run(request).await;
     }
 
     // —— 黑名单：命中即在进入业务前直接拒 403 ——
-    if state.ip_matcher.is_denied(&ip) {
+    if ip_matcher.is_denied(&ip) {
         return forbidden("来源 IP 在黑名单中，访问被拒绝");
     }
-
-    let ban_cfg = &state.config.protection.ban;
 
     // —— 封禁中：命中即拒 403（即便异常检测已关闭，仍需放行已到期解封）——
     let now = Instant::now();
@@ -353,11 +362,9 @@ pub async fn anomaly_ban_layer(
             metrics::counter!(keys::BAN_TRIGGERED_TOTAL).increment(1);
             metrics::gauge!(keys::BAN_ACTIVE_IPS)
                 .set(state.ban_registry.active_ban_count(now) as f64);
-            state.alert_engine.record(
-                ProtectionDimension::Ban,
-                &state.config.protection.alerts,
-                now,
-            );
+            state
+                .alert_engine
+                .record(ProtectionDimension::Ban, &snapshot.config.alerts, now);
         }
     }
     response
@@ -633,8 +640,8 @@ mod tests {
 mod middleware_tests {
     use super::super::tests::测试用状态;
     use super::super::{build_router, AppState};
-    use super::{BanRegistry, IpMatcher};
-    use crate::config::IpListConfig;
+    use super::BanRegistry;
+    use crate::config::ProtectionConfig;
     use axum::body::Body;
     use axum::extract::ConnectInfo;
     use axum::http::{Request, StatusCode};
@@ -643,25 +650,27 @@ mod middleware_tests {
     use tower::ServiceExt;
 
     /// 以给定黑/白名单定制测试状态（异常检测保持关闭，单独观察名单行为）。
+    ///
+    /// 经防护热替换槽装载名单配置（派生的 IP 匹配器随之按新配置重建），与生产同一条路径。
     async fn 名单状态(allow: Vec<&str>, deny: Vec<&str>) -> (AppState, tempfile::TempDir) {
-        let (mut state, dir) = 测试用状态().await;
-        let cfg = IpListConfig {
-            allow: allow.into_iter().map(String::from).collect(),
-            deny: deny.into_iter().map(String::from).collect(),
-        };
-        state.ip_matcher = Arc::new(IpMatcher::from_config(&cfg));
+        let (state, dir) = 测试用状态().await;
+        let mut cfg = ProtectionConfig::default();
+        cfg.ip_list.allow = allow.into_iter().map(String::from).collect();
+        cfg.ip_list.deny = deny.into_iter().map(String::from).collect();
+        state.protection.replace(cfg);
         (state, dir)
     }
 
     /// 以给定异常检测阈值定制测试状态（名单为空，单独观察封禁行为）。
     async fn 封禁状态(threshold: u64) -> (AppState, tempfile::TempDir) {
         let (mut state, dir) = 测试用状态().await;
-        let mut cfg = (*state.config).clone();
-        cfg.protection.ban.enabled = true;
-        cfg.protection.ban.window_secs = 60;
-        cfg.protection.ban.threshold = threshold;
-        cfg.protection.ban.duration_secs = 900;
-        state.config = Arc::new(cfg);
+        let mut cfg = ProtectionConfig::default();
+        cfg.ban.enabled = true;
+        cfg.ban.window_secs = 60;
+        cfg.ban.threshold = threshold;
+        cfg.ban.duration_secs = 900;
+        // 经热替换槽装载封禁配置（防护配置真源）
+        state.protection.replace(cfg);
         // 共享同一封禁登记表，确保跨请求计数累积
         state.ban_registry = Arc::new(BanRegistry::new());
         (state, dir)

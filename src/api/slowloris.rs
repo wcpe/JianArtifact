@@ -17,7 +17,8 @@
 //!   逐块惰性处理，不缓冲整个体、不整体载入内存。
 //! - **L3/L4 不在此实现**：体积型攻击交前置反向代理 / CDN / WAF；本中间件只在应用层切断慢速连接、
 //!   兜底超大体。
-//! - **配置即时生效**：超时档位与体上限从 `AppState.config` 读取，配置热替换后下个请求即按新值判定。
+//! - **配置即时生效**：超时档位与体上限从运行时防护热替换槽（`AppState.protection`）的当前快照读取，
+//!   PATCH 配置热替换后下个请求即按新值判定（FR-79）。
 
 use std::time::Duration;
 
@@ -49,7 +50,9 @@ pub async fn slowloris_layer(
     request: Request,
     next: Next,
 ) -> Response {
-    let cfg = &state.config.protection.slowloris;
+    // 从热替换槽取当前快照（FR-79）；防护配置真源为本槽，不读 config.protection
+    let snapshot = state.protection.snapshot();
+    let cfg = &snapshot.config.slowloris;
     if !cfg.enabled {
         return next.run(request).await;
     }
@@ -60,7 +63,7 @@ pub async fn slowloris_layer(
         if let Some(len) = content_length(&request) {
             if len > max_body_bytes {
                 // FR-56：超大体被拒计入慢速维度计数 + 告警评估（热路径只做原子累加 + 一次内存计数）
-                record_timeout(&state);
+                record_timeout(&state, &snapshot.config.alerts);
                 return payload_too_large();
             }
         }
@@ -72,7 +75,7 @@ pub async fn slowloris_layer(
     // 拆出请求体，套一层带超时与字节上限的流式包装后重组请求；正常上传逐块透传、不缓冲整体。
     // 把告警引擎与告警配置克隆进流，使流内发生的慢速超时 / 截断 / 超限也计入慢速维度（FR-56）。
     let alert_engine = Arc::clone(&state.alert_engine);
-    let alerts_cfg = state.config.protection.alerts.clone();
+    let alerts_cfg = snapshot.config.alerts.clone();
     let (parts, body) = request.into_parts();
     let guarded = guard_body_stream(
         body,
@@ -91,11 +94,11 @@ pub async fn slowloris_layer(
 ///
 /// 含超大体预拒（413）与流内慢速超时 / 截断 / 超限；按 `Slowloris` 维度累加窗内计数，达阈值即告警。
 /// metrics 未启用时宏为 no-op；热路径只做原子累加 + 一次内存计数，不做 IO。
-fn record_timeout(state: &AppState) {
+fn record_timeout(state: &AppState, alerts_cfg: &crate::config::AlertsConfig) {
     metrics::counter!(keys::SLOWLORIS_TIMEOUT_TOTAL).increment(1);
     state.alert_engine.record(
         ProtectionDimension::Slowloris,
-        &state.config.protection.alerts,
+        alerts_cfg,
         std::time::Instant::now(),
     );
 }
@@ -416,6 +419,8 @@ mod middleware_tests {
         // 超时给足，隔离观察体上限维度（超时维度由模块单元测试覆盖）
         cfg.protection.slowloris.header_timeout_secs = 30;
         cfg.protection.slowloris.body_read_timeout_secs = 30;
+        // 经防护热替换槽装载定制配置（中间件从本槽读取，与生产同一路径）
+        state.protection.replace(cfg.protection.clone());
         state.config = Arc::new(cfg);
         (state, dir)
     }

@@ -99,17 +99,13 @@ async fn build_state(ldap_cfg: Option<LdapConfig>) -> (AppState, tempfile::TempD
         oidc: None,
         oidc_flows: Arc::new(jianartifact::api::OidcFlowStore::new()),
         ldap,
-        ip_matcher: Arc::new(jianartifact::api::IpMatcher::from_config(
-            &jianartifact::config::IpListConfig::default(),
+        protection: Arc::new(jianartifact::api::ProtectionState::new(
+            jianartifact::config::ProtectionConfig::default(),
         )),
         ban_registry: Arc::new(jianartifact::api::BanRegistry::new()),
         // FR-54：测试默认 CC 挑战关闭；挑战器用固定密钥
         cc_challenger: Arc::new(jianartifact::api::CcChallenger::new(
             b"test-secret-32-bytes-xxxxxxxxxxxx",
-        )),
-        // FR-55：测试默认 WAF 空规则集 + 关闭
-        waf_rules: Arc::new(jianartifact::api::WafRuleSet::from_config(
-            &jianartifact::config::WafConfig::default(),
         )),
         // FR-56：防护告警默认关闭，引擎与投递端就绪（关闭时 record 直接返回）
         alerts: jianartifact::api::alert_channel().0,

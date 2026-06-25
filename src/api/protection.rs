@@ -97,7 +97,9 @@ pub async fn protection_status(
 ) -> Result<Json<ProtectionStatusDto>, ApiError> {
     identity.require_admin()?;
 
-    let alerts_cfg = &state.config.protection.alerts;
+    // 从热替换槽取当前快照（FR-79）：状态展示的告警窗口 / 启用状态须反映当前生效配置
+    let snapshot = state.protection.snapshot();
+    let alerts_cfg = &snapshot.config.alerts;
     let window_secs = alerts_cfg.window_secs.max(1);
     let now = Instant::now();
 

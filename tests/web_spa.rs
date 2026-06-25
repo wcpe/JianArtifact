@@ -62,17 +62,13 @@ async fn 测试用状态() -> (AppState, tempfile::TempDir) {
         oidc_flows: std::sync::Arc::new(jianartifact::api::OidcFlowStore::new()),
         ldap: None,
         // FR-53：测试默认名单空、封禁登记表空（异常检测默认关闭）
-        ip_matcher: std::sync::Arc::new(jianartifact::api::IpMatcher::from_config(
-            &jianartifact::config::IpListConfig::default(),
+        protection: std::sync::Arc::new(jianartifact::api::ProtectionState::new(
+            jianartifact::config::ProtectionConfig::default(),
         )),
         ban_registry: std::sync::Arc::new(jianartifact::api::BanRegistry::new()),
         // FR-54：测试默认 CC 挑战关闭；挑战器用固定密钥
         cc_challenger: std::sync::Arc::new(jianartifact::api::CcChallenger::new(
             b"test-secret-32-bytes-xxxxxxxxxxxx",
-        )),
-        // FR-55：测试默认 WAF 空规则集 + 关闭
-        waf_rules: std::sync::Arc::new(jianartifact::api::WafRuleSet::from_config(
-            &jianartifact::config::WafConfig::default(),
         )),
         // FR-56：防护告警默认关闭，引擎与投递端就绪（关闭时 record 直接返回）
         alerts: jianartifact::api::alert_channel().0,

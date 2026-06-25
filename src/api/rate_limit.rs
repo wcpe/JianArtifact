@@ -14,7 +14,8 @@
 //!   批量并发拉取不应触顶；整体默认关闭，须运维显式开启。
 //! - **防绕过**：来源 IP 取连接级 `ConnectInfo`（与登录防护一致），**不采信 XFF 头**，伪造来源不
 //!   绕过；已认证请求额外按用户维度计数，轮换 IP 也受身份维度阈值约束。
-//! - **配置即时生效**：阈值 / 窗口 / 并发上限从 `AppState.config` 读取，配置热替换后下个请求即按新值判定。
+//! - **配置即时生效**：阈值 / 窗口 / 并发上限从运行时防护热替换槽（`AppState.protection`）的当前快照
+//!   读取，PATCH 配置热替换后下个请求即按新值判定（FR-79）。
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -266,7 +267,9 @@ pub async fn rate_limit_layer(
     request: Request,
     next: Next,
 ) -> Response {
-    let cfg = &state.config.protection.rate_limit;
+    // 从热替换槽取当前快照（读锁极短、锁外判定）；防护配置真源为本槽，不读 config.protection
+    let snapshot = state.protection.snapshot();
+    let cfg = &snapshot.config.rate_limit;
     if !cfg.enabled {
         return next.run(request).await;
     }
@@ -285,7 +288,7 @@ pub async fn rate_limit_layer(
         if let Decision::Limited { retry_after_secs } =
             limiter.check_key(RateKey::Ip(ip.clone()), cfg.ip_max_requests, window, now)
         {
-            record_rejection(&state, keys::DIMENSION_IP);
+            record_rejection(&state, &snapshot.config.alerts, keys::DIMENSION_IP);
             return too_many_requests(retry_after_secs);
         }
     }
@@ -296,7 +299,7 @@ pub async fn rate_limit_layer(
             window,
             now,
         ) {
-            record_rejection(&state, keys::DIMENSION_TOKEN);
+            record_rejection(&state, &snapshot.config.alerts, keys::DIMENSION_TOKEN);
             return too_many_requests(retry_after_secs);
         }
     }
@@ -308,7 +311,7 @@ pub async fn rate_limit_layer(
                 window,
                 now,
             ) {
-                record_rejection(&state, keys::DIMENSION_REPO);
+                record_rejection(&state, &snapshot.config.alerts, keys::DIMENSION_REPO);
                 return too_many_requests(retry_after_secs);
             }
         }
@@ -320,7 +323,7 @@ pub async fn rate_limit_layer(
         Some(ip) => match limiter.acquire_concurrency(RateKey::Ip(ip), cfg.ip_max_concurrent) {
             Some(g) => Some(g),
             None => {
-                record_rejection(&state, keys::DIMENSION_CONCURRENCY);
+                record_rejection(&state, &snapshot.config.alerts, keys::DIMENSION_CONCURRENCY);
                 return too_many_requests_concurrency();
             }
         },
@@ -331,7 +334,7 @@ pub async fn rate_limit_layer(
             match limiter.acquire_concurrency(RateKey::Identity(user_id), cfg.user_max_concurrent) {
                 Some(g) => Some(g),
                 None => {
-                    record_rejection(&state, keys::DIMENSION_CONCURRENCY);
+                    record_rejection(&state, &snapshot.config.alerts, keys::DIMENSION_CONCURRENCY);
                     return too_many_requests_concurrency();
                 }
             }
@@ -343,7 +346,7 @@ pub async fn rate_limit_layer(
             match limiter.acquire_concurrency(RateKey::Repo(repo), cfg.repo_max_concurrent) {
                 Some(g) => Some(g),
                 None => {
-                    record_rejection(&state, keys::DIMENSION_CONCURRENCY);
+                    record_rejection(&state, &snapshot.config.alerts, keys::DIMENSION_CONCURRENCY);
                     return too_many_requests_concurrency();
                 }
             }
@@ -358,14 +361,17 @@ pub async fn rate_limit_layer(
 ///
 /// 指标用低基数标签 `dimension`（ip / token / repo / concurrency）；metrics 未启用时宏为 no-op。
 /// 告警评估按 `RateLimit` 维度累加窗内计数，达阈值即告警；热路径只做原子累加 + 一次内存计数，不做 IO。
-fn record_rejection(state: &AppState, dimension: &'static str) {
+/// 告警配置由调用方从当前防护快照传入（与限流判定同一份快照，避免热替换中途读到不一致配置）。
+fn record_rejection(
+    state: &AppState,
+    alerts_cfg: &crate::config::AlertsConfig,
+    dimension: &'static str,
+) {
     metrics::counter!(keys::RATE_LIMIT_REJECTED_TOTAL, keys::LABEL_DIMENSION => dimension)
         .increment(1);
-    state.alert_engine.record(
-        ProtectionDimension::RateLimit,
-        &state.config.protection.alerts,
-        Instant::now(),
-    );
+    state
+        .alert_engine
+        .record(ProtectionDimension::RateLimit, alerts_cfg, Instant::now());
 }
 
 /// 取连接级来源 IP（由 `into_make_service_with_connect_info` 注入）；缺失（如单元测试）返回 None。
@@ -739,6 +745,8 @@ mod middleware_tests {
         cfg.protection.rate_limit.window_secs = 60;
         cfg.protection.rate_limit.ip_max_requests = ip_max;
         cfg.protection.rate_limit.identity_max_requests = identity_max;
+        // 经防护热替换槽装载定制配置（中间件从本槽读取，与生产同一路径）
+        state.protection.replace(cfg.protection.clone());
         state.config = Arc::new(cfg);
         (state, dir)
     }
@@ -752,6 +760,8 @@ mod middleware_tests {
         cfg.protection.rate_limit.ip_max_requests = u64::MAX;
         cfg.protection.rate_limit.identity_max_requests = u64::MAX;
         cfg.protection.rate_limit.repo_max_requests = repo_max;
+        // 经防护热替换槽装载定制配置（中间件从本槽读取，与生产同一路径）
+        state.protection.replace(cfg.protection.clone());
         state.config = Arc::new(cfg);
         (state, dir)
     }
@@ -922,6 +932,8 @@ mod middleware_tests {
         cfg.protection.rate_limit.ip_max_requests = u64::MAX;
         cfg.protection.rate_limit.identity_max_requests = u64::MAX;
         cfg.protection.rate_limit.ip_max_concurrent = 1;
+        // 经防护热替换槽装载定制配置（中间件从本槽读取，与生产同一路径）
+        state.protection.replace(cfg.protection.clone());
         state.config = Arc::new(cfg);
 
         // 用一个可被唤醒前一直挂起的 handler 制造确定性的「在途重叠」

@@ -278,9 +278,8 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
-    // 可配置 WAF 规则引擎（FR-55，ADR-0008）：启动期把 [protection.waf] 规则编译一次（正则预编译、
-    // 非法规则记 WARN 跳过、不阻断启动）；中间件按请求模式匹配阻断 / 放行。默认空规则集 + 关闭。
-    let waf_rules = Arc::new(api::WafRuleSet::from_config(&cfg.protection.waf));
+    // 可配置 WAF 规则引擎（FR-55，ADR-0008）：规则在构建防护热替换槽时按 [protection.waf] 编译一次
+    // （正则预编译、非法规则记 WARN 跳过、不阻断启动）；中间件按请求模式匹配阻断 / 放行。默认空规则集 + 关闭。
     if cfg.protection.waf.enabled && !cfg.protection.waf.rules.is_empty() {
         info!(
             规则数 = cfg.protection.waf.rules.len(),
@@ -289,6 +288,11 @@ async fn main() -> anyhow::Result<()> {
     } else {
         info!("WAF 规则引擎未启用或规则集为空，跳过");
     }
+
+    // 运行时防护配置热替换槽（FR-79，扩展 ADR-0008）：以 [protection.*] 文件配置装载当前生效快照
+    // （含 IP 名单匹配器、WAF 规则集等派生态）；管理端 PATCH 经 protection.replace 即时生效、无须重启。
+    // 防护配置真源自此为本槽，中间件不再读 config.protection。
+    let protection = Arc::new(api::ProtectionState::new(cfg.protection.clone()));
 
     // 构建路由与共享状态
     let state = AppState {
@@ -307,13 +311,12 @@ async fn main() -> anyhow::Result<()> {
         oidc,
         oidc_flows: Arc::new(api::OidcFlowStore::new()),
         ldap,
-        // FR-53：从 [protection.ip_list] 预解析黑/白名单网段；封禁登记表为空进程内内存（重启即清）
-        ip_matcher: Arc::new(api::IpMatcher::from_config(&cfg.protection.ip_list)),
+        // FR-79：运行时防护配置热替换槽（含 IP 名单匹配器、WAF 规则集等派生态），PATCH 即时生效
+        protection,
+        // FR-53：封禁登记表为空进程内内存（重启即清，配置热替换不清空已积累的封禁 / 信号计数）
         ban_registry: Arc::new(api::BanRegistry::new()),
         // FR-54：CC 挑战签名器（密钥复用 JWT 派生子密钥，无状态签发 / 校验 PoW 挑战）
         cc_challenger,
-        // FR-55：从 [protection.waf] 启动期编译的有序规则集（正则预编译、非法规则跳过）
-        waf_rules,
         // FR-56：防护告警投递端 + 进程内告警评估器（窗内各维度达阈值即告警并异步落库）
         alerts,
         alert_engine,
