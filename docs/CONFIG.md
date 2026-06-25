@@ -203,6 +203,21 @@
 
 > 默认**空规则集 + 关闭**（不影响现有行为、不误杀正常包管理器请求），启用与规则由运维显式承担。规则在**启动期编译一次**（正则经 `regex-lite` 预编译、通配转译为锚定正则）；**字段 / 匹配类型 / 动作非法或正则无法编译的规则在启动时记 WARN 跳过、不阻断启动**，其余规则照常生效——配置后请检查启动日志确认无规则被跳过。匹配**按声明顺序、首个命中生效**：可把对合法模式的 `allow` 规则**排在前面**给其开豁免口子，再用 `block` 规则兜底拦截。**误杀提示**：`literal` 走子串包含、`regex` 走子串搜索——过宽的 `pattern`（如对 `path` 写 `/` 或对 `query` 写常见参数名）会误伤正常请求；`block` 规则上线前建议先以 `allow` 或在测试环境验证其只命中目标请求。WAF 按请求属性（method/path/query/header）匹配，**与来源 IP 无关、不采信 `X-Forwarded-For`**。仅应用层（L7）：L3/L4 体积型攻击仍由前置反向代理 / CDN / WAF 承担（见 OPERATIONS）。按 TOML 嵌套节 `[protection.waf]` 与 `[[protection.waf.rules]]` 配置即可。
 
+### [protection.alerts]（防护监控与阈值告警，P2 / FR-56 / ADR-0017）
+
+| 键 | 含义 | 默认（取向） | 环境变量 |
+|---|---|---|---|
+| enabled | 是否启用阈值告警；关闭时不评估、不落库、零额外开销 | false | （经 TOML 配置） |
+| window_secs | 告警评估固定时间窗时长（秒）；每窗内独立统计各维度计数、跨窗清零 | 300 | （经 TOML 配置） |
+| rate_limit_warn_threshold | 限流被拒窗内告警阈值（一窗内限流被拒次数达此值即告警） | 1000 | （经 TOML 配置） |
+| ban_warn_threshold | 自动封禁触发窗内告警阈值 | 50 | （经 TOML 配置） |
+| cc_challenge_fail_warn_threshold | CC 挑战证明校验失败窗内告警阈值 | 1000 | （经 TOML 配置） |
+| waf_block_warn_threshold | WAF 阻断窗内告警阈值 | 500 | （经 TOML 配置） |
+| slowloris_warn_threshold | 慢速攻击超时 / 截断拒绝窗内告警阈值 | 200 | （经 TOML 配置） |
+| max_rows | 告警明细行数硬上限（超限删最旧行，兜底防撑爆 SQLite） | 100000 | （经 TOML 配置） |
+
+> 默认**关闭**（避免无人值守时刷告警），阈值默认**保守宽放**（避免正常高频访问 / 合法批量拉取误报），启用与阈值由运维按自身流量基线显式调优。机制：在固定时间窗内按维度（限流 / 自动封禁 / CC 挑战失败 / WAF 阻断 / 慢速超时）累加防护事件计数，单维度窗内计数达对应阈值即按严重度记**中文分级日志**（窗内观测值达阈值 5 倍升级为 ERROR、否则 WARN）并**异步落 SQLite**（`protection_alerts` 表）；同一维度**窗内去抖**（一窗只告警一次、不刷屏），跨窗计数清零后可再告警。各维度的连续计数同时经 `GET /metrics`（见 `[observability.metrics]`）暴露为低基数指标供外部 Prometheus 抓取并自定义告警规则。**告警是本机内部数据：只落本地、不外发、不内置外发型通知（Webhook / 邮件等若未来要做须另写 ADR）**；运维经 `GET /api/v1/protection/status`（仅 Admin）查看防护健康快照、经 `GET /api/v1/protection/alerts`（仅 Admin）分页查询告警历史。仅应用层（L7）。按 TOML 嵌套节 `[protection.alerts]` 配置即可。
+
 ### [upstream.&lt;name&gt;]（proxy 仓库上游，可配置多个）
 
 | 键 | 含义 | 默认（取向） | 环境变量 |

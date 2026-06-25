@@ -214,6 +214,20 @@
 - **响应**：聚合总览对象 `{ total_access, total_download, top_downloads, repo_usage }`——`total_access` / `total_download` 为全局累计访问 / 下载量；`top_downloads` 为按下载量倒序的热门制品（每项含 `repo_name`、`repo_path`、`count`、`last_at`）；`repo_usage` 为按下载量汇总到仓库的用量（每项含 `repo_name`、`count`），均倒序。数据为本机内部聚合统计（消费 FR-57 采集的 `usage_stats`），**纯本地查询、绝不外发、不向外部遥测 phone-home**（FR-58，ADR-0009）。
 - **错误**：`401` 未认证；`403` 非管理员。
 
+### 查询防护状态快照（P2，仅 Admin）
+
+- **方法 / 路径**：`GET /api/v1/protection/status`
+- **请求**：无查询参数。仅管理员可访问。
+- **响应**：防护健康快照对象 `{ alerts_enabled, window_secs, window_counts, active_banned_ips, dropped_alerts, recent_alerts }`——`alerts_enabled` 为阈值告警是否启用；`window_secs` 为当前评估窗时长（秒）；`window_counts` 为各防护维度当前窗内计数数组（每项 `{ dimension, count }`，`dimension` 取 `rate_limit` / `ban` / `cc_challenge` / `waf` / `slowloris`）；`active_banned_ips` 为当前处于封禁中的 IP 数；`dropped_alerts` 为因队列满被丢弃的告警累计数（采集降级观测）；`recent_alerts` 为最近若干条告警（结构同下「查询告警历史」的项）。窗内计数 / 封禁数取自进程内态、告警查本地 SQLite，**纯本机聚合、绝不外发、不向外部遥测 phone-home**（FR-56，ADR-0017）。
+- **错误**：`401` 未认证；`403` 非管理员。
+
+### 查询告警历史（P2，仅 Admin）
+
+- **方法 / 路径**：`GET /api/v1/protection/alerts`
+- **请求**：查询参数均可选——`dimension`（按防护维度过滤，取 `rate_limit` / `ban` / `cc_challenge` / `waf` / `slowloris`），及 `offset` / `limit` 分页参数（默认 `offset=0`、`limit=50`，上限 1000）。仅管理员可访问。
+- **响应**：统一分页结构 `{ items, total, offset, limit, has_more }`，按时间倒序（最新在前）。每项含 `id`、`ts`、`dimension`、`severity`（`warn` | `error`）、`observed_value`（触发告警时的窗内观测计数）、`threshold`（触发阈值）、`window_secs`（评估窗时长）、`detail`（中文文案）。告警是本机内部数据，**绝不含凭据**，**纯本地查询、绝不外发**（FR-56，ADR-0017）。
+- **错误**：`401` 未认证；`403` 非管理员。
+
 ### 预览 Nexus 可迁移仓库（在线 REST 入口）
 
 - **方法 / 路径**：`POST /api/v1/migrate/nexus/preview`
@@ -370,7 +384,7 @@
 - **方法 / 路径**：`GET /metrics`
 - **请求**：无请求体。鉴权由配置决定——默认 `observability.metrics.allow_anonymous=false`，要求认证且仅管理员可访问；运维显式设 `allow_anonymous=true` 时免认证抓取（须把端点限定在内网 / 反向代理之后）。
 - **响应**：`200`，`Content-Type: text/plain; version=0.0.4; charset=utf-8`，体为 Prometheus 文本格式的进程内注册表快照。指标为进程内自采（pull 模型），仅在被抓取时渲染，**不向任何外部端点 push / remote-write**（FR-32，ADR-0015）。
-- **指标项**：HTTP 请求计数 / 延迟直方图（标签 `method` / `status_class` / `format`）、上传 / 下载字节累计、并发上传数、代理缓存命中 / 未命中（`result=hit|miss`）、上游回源耗时 / 失败、审计丢弃累计。所有标签均为**有界枚举值**，**不以仓库名 / 路径 / 用户名 / 制品坐标作标签**（守低基数纪律）。
+- **指标项**：HTTP 请求计数 / 延迟直方图（标签 `method` / `status_class` / `format`）、上传 / 下载字节累计、并发上传数、代理缓存命中 / 未命中（`result=hit|miss`）、上游回源耗时 / 失败、审计丢弃累计；**七层防护监控指标（FR-56，ADR-0017）**：限流被拒 `jianartifact_rate_limit_rejected_total`（标签 `dimension=ip|token|repo|concurrency`）、自动封禁触发 `jianartifact_ban_triggered_total`、当前封禁 IP 数 `jianartifact_ban_active_ips`（gauge）、CC 挑战下发 `jianartifact_cc_challenge_issued_total` / 失败 `jianartifact_cc_challenge_failed_total`、WAF 阻断 `jianartifact_waf_blocked_total`、慢速超时 `jianartifact_slowloris_timeout_total`。所有标签均为**有界枚举值**，**不以仓库名 / 路径 / 用户名 / 制品坐标 / 规则模式串作标签**（守低基数纪律）。
 - **错误**：`observability.metrics.enabled=false` 时返回 `404`（端点形同不存在）；默认鉴权下 `401` 未认证、`403` 非管理员。
 
 ### 格式 API 概览
