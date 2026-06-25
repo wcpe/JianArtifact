@@ -39,6 +39,7 @@
 
 ### 修复
 - NuGet 发布兼容 `dotnet nuget push` 原生鉴权（FR-29）：身份解析中间件新增识别 NuGet 规范的 api-key 头 `X-NuGet-ApiKey`，无 `Authorization` 头时按 API Token 校验该头值，使 `dotnet nuget push -k <token>` 原生互通（此前仅接受 `Authorization: Basic`，dotnet 默认仅发 api-key 头而返回 403）。非法 api-key 仍按匿名处理、不绕过鉴权
+- Nexus 离线 blob store 迁移识别真实仓库名键（FR-37 / FR-38 / FR-39）：离线 `.properties` 解析改用 Nexus 3.x 实际写出的 `@Bucket.repo-name` 键（回退兼容历史 `@Repo.repo-name`）。此前仅认 `@Repo.repo-name`，对真实 Nexus（实测 3.70.2）blob store 枚举为空、proxy/hosted 迁移搬运 0 制品；修复后离线预览与制品搬运对真实 blob store 正常工作（实测：hosted 制品与 proxy 缓存制品均成功搬运、sha1 一致、可从本系统取回）
 
 ### 移除
 - 无

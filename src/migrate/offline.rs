@@ -28,7 +28,10 @@ const PROPERTIES_EXT: &str = "properties";
 /// blob 本体文件的扩展名（与同名 `.properties` 同目录、同文件名主干）。
 const BYTES_EXT: &str = "bytes";
 
-/// `.properties` 中所属 repo 名的键。
+/// `.properties` 中所属 repo 名的键（Nexus 3.x 实际写出的键，含 3.70.2）。
+const KEY_BUCKET_REPO_NAME: &str = "@Bucket.repo-name";
+
+/// `.properties` 中所属 repo 名的回退键（历史 / 其他版本可能写出 `@Repo.repo-name`）。
 const KEY_REPO_NAME: &str = "@Repo.repo-name";
 
 /// `.properties` 中 blob 逻辑名（路径 / 坐标）的键。
@@ -60,7 +63,7 @@ pub struct OfflineBlobSummary {
 /// 离线 blob store 枚举结果中的单个仓库分组（按 repo 聚合的预览项）。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct OfflineRepoSummary {
-    /// 仓库名（取自各 blob `.properties` 的 `@Repo.repo-name`）。
+    /// 仓库名（取自各 blob `.properties` 的 `@Bucket.repo-name`，回退 `@Repo.repo-name`）。
     pub repo_name: String,
     /// 该仓库下枚举到的 blob 数量。
     pub blob_count: usize,
@@ -111,7 +114,7 @@ fn parse_properties(text: &str) -> BTreeMap<String, String> {
 
 /// 把一份 blob `.properties` 文本解析为预览项。
 ///
-/// 容错策略：缺所属 repo 名（`@Repo.repo-name`）或缺 blob 名（`@BlobStore.blob-name`）
+/// 容错策略：缺所属 repo 名（`@Bucket.repo-name`，回退 `@Repo.repo-name`）或缺 blob 名（`@BlobStore.blob-name`）
 /// 视为不可用元数据，返回 None 由调用方跳过；软删（`deleted=true`）的 blob 同样跳过——
 /// 它在源系统中已被逻辑删除，不属可迁移内容。`sha1` / `size` 缺失不影响枚举，仅置 None。
 fn parse_blob_properties(text: &str) -> Option<ParsedBlobProperties> {
@@ -122,8 +125,12 @@ fn parse_blob_properties(text: &str) -> Option<ParsedBlobProperties> {
         return None;
     }
 
-    // repo 名与 blob 名是归组与定位的必要信息，缺任一即视为不可用元数据
-    let repo_name = props.get(KEY_REPO_NAME)?.trim();
+    // repo 名与 blob 名是归组与定位的必要信息，缺任一即视为不可用元数据。
+    // repo 名优先取 Nexus 3.x 实际键 `@Bucket.repo-name`，回退历史键 `@Repo.repo-name`。
+    let repo_name = props
+        .get(KEY_BUCKET_REPO_NAME)
+        .or_else(|| props.get(KEY_REPO_NAME))?
+        .trim();
     let blob_name = props.get(KEY_BLOB_NAME)?.trim();
     if repo_name.is_empty() || blob_name.is_empty() {
         return None;
@@ -263,7 +270,7 @@ pub fn enumerate_blob_store(root: &Path) -> Result<Vec<OfflineRepoSummary>, Migr
 /// 流式读取内容。仅当同目录存在同主干的 `.bytes` 文件时才产出（缺本体的元数据无可搬运内容）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OfflineBlobEntry {
-    /// 所属仓库名（取自 `@Repo.repo-name`）。
+    /// 所属仓库名（取自 `@Bucket.repo-name`，回退 `@Repo.repo-name`）。
     pub repo_name: String,
     /// blob 逻辑名（源系统中的路径 / 坐标，取自 `@BlobStore.blob-name`）。
     pub blob_name: String,
@@ -315,13 +322,13 @@ mod tests {
     use super::*;
     use std::fs;
 
-    /// 构造一份合法的 Nexus blob `.properties` 文本。
+    /// 构造一份合法的 Nexus blob `.properties` 文本（用真实 Nexus 3.x 的 `@Bucket.repo-name` 键）。
     fn sample_properties(repo: &str, blob_name: &str, sha1: &str, size: &str) -> String {
         format!(
             "#Mon Jun 24 00:00:00 UTC 2026\n\
              @BlobStore.created-by=admin\n\
              @BlobStore.content-type=application/octet-stream\n\
-             @Repo.repo-name={repo}\n\
+             @Bucket.repo-name={repo}\n\
              size={size}\n\
              @BlobStore.blob-name={blob_name}\n\
              creationTime=1700000000000\n\
@@ -382,6 +389,23 @@ mod tests {
     fn 软删的_blob_被跳过() {
         let text = "@Repo.repo-name=r\n@BlobStore.blob-name=/x\ndeleted=true\n";
         assert_eq!(parse_blob_properties(text), None);
+    }
+
+    #[test]
+    fn 真实_nexus_用_bucket_repo_name_键() {
+        // Nexus 3.x（含 3.70.2）实际写出的 blob .properties 用 `@Bucket.repo-name` 标记所属仓库，
+        // 须被识别（此前仅认 `@Repo.repo-name` 导致离线枚举对真实 blob store 返回空）。
+        let text = "@Bucket.repo-name=maven-releases\n@BlobStore.blob-name=/com/jian/demo/1.0.0/demo-1.0.0.jar\nsize=21\nsha1=abc\n";
+        let p = parse_blob_properties(text).unwrap();
+        assert_eq!(p.repo_name, "maven-releases");
+        assert_eq!(p.summary.blob_name, "/com/jian/demo/1.0.0/demo-1.0.0.jar");
+    }
+
+    #[test]
+    fn 旧_repo_repo_name_键作回退仍识别() {
+        // 兼容历史 / 其他版本写出的 `@Repo.repo-name`：作为回退仍应识别。
+        let text = "@Repo.repo-name=r\n@BlobStore.blob-name=/x\n";
+        assert_eq!(parse_blob_properties(text).unwrap().repo_name, "r");
     }
 
     #[test]

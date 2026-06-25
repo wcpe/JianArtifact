@@ -236,7 +236,7 @@ mod tests {
         for (i, (repo, blob_name, body)) in blobs.iter().enumerate() {
             let stem = format!("blob-{i}");
             let props = format!(
-                "@Repo.repo-name={repo}\n@BlobStore.blob-name={blob_name}\nsize={}\nsha1=x\ndeleted=false\n",
+                "@Bucket.repo-name={repo}\n@BlobStore.blob-name={blob_name}\nsize={}\nsha1=x\ndeleted=false\n",
                 body.len()
             );
             fs::write(chap.join(format!("{stem}.properties")), props).unwrap();

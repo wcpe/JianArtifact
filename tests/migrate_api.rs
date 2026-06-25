@@ -126,7 +126,7 @@ fn build_offline_store() -> tempfile::TempDir {
     std::fs::create_dir_all(&chap).unwrap();
     std::fs::write(
         chap.join("blob-1.properties"),
-        "@Repo.repo-name=maven-releases\n\
+        "@Bucket.repo-name=maven-releases\n\
          @BlobStore.blob-name=/org/example/app/1.0/app-1.0.jar\n\
          sha1=a1b2c3\nsize=1024\ndeleted=false\n",
     )
