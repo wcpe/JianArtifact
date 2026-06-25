@@ -111,6 +111,11 @@ async fn build_state(ldap_cfg: Option<LdapConfig>) -> (AppState, tempfile::TempD
         waf_rules: Arc::new(jianartifact::api::WafRuleSet::from_config(
             &jianartifact::config::WafConfig::default(),
         )),
+        // FR-56：防护告警默认关闭，引擎与投递端就绪（关闭时 record 直接返回）
+        alerts: jianartifact::api::alert_channel().0,
+        alert_engine: Arc::new(jianartifact::api::AlertEngine::new(
+            jianartifact::api::alert_channel().0,
+        )),
     };
     (state, dir)
 }

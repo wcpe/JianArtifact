@@ -41,7 +41,9 @@ use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
 use crate::auth::AuthIdentity;
+use crate::metrics_keys as keys;
 
+use super::alerts::ProtectionDimension;
 use super::AppState;
 
 /// 客户端提交 PoW 解的请求头：值形如 `<challenge_token>:<nonce>`。
@@ -242,8 +244,10 @@ pub async fn cc_challenge_layer(
         match challenger.verify(&token, &nonce, &client_ip, max_age, now) {
             Ok(()) => return next.run(request).await,
             Err(_) => {
-                // 证明无效（伪造 / 过期 / 换 IP / 工作量不足）：下发新挑战要求重新解
+                // 证明无效（伪造 / 过期 / 换 IP / 工作量不足）：计失败 + 告警评估，下发新挑战要求重新解
+                record_failure(&state);
                 let new_token = challenger.issue(&client_ip, difficulty, now);
+                record_issued();
                 return challenge_required(&new_token, difficulty, max_age);
             }
         }
@@ -251,7 +255,26 @@ pub async fn cc_challenge_layer(
 
     // 无证明头：签发挑战，要求客户端解出后带证明重试
     let token = challenger.issue(&client_ip, difficulty, now);
+    record_issued();
     challenge_required(&token, difficulty, max_age)
+}
+
+/// 累加 CC 挑战下发计数（FR-56）。metrics 未启用时宏为 no-op；热路径只做原子累加。
+fn record_issued() {
+    metrics::counter!(keys::CC_CHALLENGE_ISSUED_TOTAL).increment(1);
+}
+
+/// 累加 CC 挑战失败计数并做告警评估（FR-56）。
+///
+/// 失败指带证明但校验未过（工作量不足 / 过期 / 伪造 / 换 IP 复用）；按 `CcChallenge` 维度累加窗内
+/// 计数，达阈值即告警。热路径只做原子累加 + 一次内存计数，不做 IO。
+fn record_failure(state: &AppState) {
+    metrics::counter!(keys::CC_CHALLENGE_FAILED_TOTAL).increment(1);
+    state.alert_engine.record(
+        ProtectionDimension::CcChallenge,
+        &state.config.protection.alerts,
+        std::time::Instant::now(),
+    );
 }
 
 /// 取连接级来源 IP（由 `into_make_service_with_connect_info` 注入）；缺失返回 None。

@@ -27,6 +27,36 @@ pub const PROXY_UPSTREAM_FAILURES_TOTAL: &str = "jianartifact_proxy_upstream_fai
 /// 审计事件因 channel 满被丢弃的累计数（gauge，渲染时从 AuditSink 读取）。
 pub const AUDIT_DROPPED_TOTAL: &str = "jianartifact_audit_dropped_total";
 
+// ===== 七层防护监控指标（FR-56，ADR-0017）=====
+// 均为低基数：仅用有界枚举标签（如 dimension），严禁以 IP / 仓库名 / 规则模式串作标签。
+
+/// 限流被拒计数（标签：dimension=ip|token|repo|concurrency）。
+pub const RATE_LIMIT_REJECTED_TOTAL: &str = "jianartifact_rate_limit_rejected_total";
+/// 自动封禁触发次数累计。
+pub const BAN_TRIGGERED_TOTAL: &str = "jianartifact_ban_triggered_total";
+/// 当前处于封禁中的 IP 数（gauge，渲染时从封禁登记表读取）。
+pub const BAN_ACTIVE_IPS: &str = "jianartifact_ban_active_ips";
+/// CC 挑战下发次数累计。
+pub const CC_CHALLENGE_ISSUED_TOTAL: &str = "jianartifact_cc_challenge_issued_total";
+/// CC 挑战证明校验失败次数累计（含工作量不足 / 过期 / 伪造 / 换 IP 复用）。
+pub const CC_CHALLENGE_FAILED_TOTAL: &str = "jianartifact_cc_challenge_failed_total";
+/// WAF 阻断计数（命中 block 规则拒 403 的累计次数）。
+pub const WAF_BLOCKED_TOTAL: &str = "jianartifact_waf_blocked_total";
+/// 慢速攻击超时 / 截断拒绝计数（含超大体被拒）。
+pub const SLOWLORIS_TIMEOUT_TOTAL: &str = "jianartifact_slowloris_timeout_total";
+
+/// 标签键：限流被拒维度（ip / token / repo / concurrency）。
+pub const LABEL_DIMENSION: &str = "dimension";
+
+/// 限流维度标签值：按连接 IP 维度被拒。
+pub const DIMENSION_IP: &str = "ip";
+/// 限流维度标签值：按身份（用户 / Token）维度被拒。
+pub const DIMENSION_TOKEN: &str = "token";
+/// 限流维度标签值：按仓库维度被拒。
+pub const DIMENSION_REPO: &str = "repo";
+/// 限流维度标签值：按并发上限被拒。
+pub const DIMENSION_CONCURRENCY: &str = "concurrency";
+
 /// 标签键：HTTP 方法。
 pub const LABEL_METHOD: &str = "method";
 /// 标签键：HTTP 状态类（2xx / 4xx / 5xx 等）。

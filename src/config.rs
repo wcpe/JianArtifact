@@ -111,6 +111,22 @@ const DEFAULT_CC_CHALLENGE_TTL_SECS: u64 = 300;
 const DEFAULT_CC_CHALLENGE_EXEMPT_AUTHENTICATED: bool = true;
 /// 可配置 WAF 规则引擎默认开关（FR-55，ADR-0008）：默认关闭，须运维显式开启，避免误杀正常请求。
 const DEFAULT_WAF_ENABLED: bool = false;
+/// 防护阈值告警默认开关（FR-56，ADR-0017）：默认关闭，须运维显式开启，避免无人值守时刷告警。
+const DEFAULT_ALERTS_ENABLED: bool = false;
+/// 告警评估固定时间窗时长（秒）：在该窗内统计各防护维度事件计数并与阈值比较。默认 5 分钟。
+const DEFAULT_ALERTS_WINDOW_SECS: u64 = 300;
+/// 限流被拒窗内告警阈值（FR-56）：一窗内限流被拒次数达此值即告警。默认保守宽放，避免误报。
+const DEFAULT_ALERTS_RATE_LIMIT_WARN_THRESHOLD: u64 = 1000;
+/// 自动封禁触发窗内告警阈值（FR-56）：一窗内自动封禁触发次数达此值即告警。
+const DEFAULT_ALERTS_BAN_WARN_THRESHOLD: u64 = 50;
+/// CC 挑战失败窗内告警阈值（FR-56）：一窗内 CC 证明校验失败次数达此值即告警。
+const DEFAULT_ALERTS_CC_CHALLENGE_FAIL_WARN_THRESHOLD: u64 = 1000;
+/// WAF 阻断窗内告警阈值（FR-56）：一窗内 WAF 阻断次数达此值即告警。
+const DEFAULT_ALERTS_WAF_BLOCK_WARN_THRESHOLD: u64 = 500;
+/// 慢速攻击超时窗内告警阈值（FR-56）：一窗内慢速超时 / 截断拒绝次数达此值即告警。
+const DEFAULT_ALERTS_SLOWLORIS_WARN_THRESHOLD: u64 = 200;
+/// 防护告警明细行数硬上限（FR-56）：超限删最旧行，兜底防止撑爆 SQLite。
+const DEFAULT_ALERTS_MAX_ROWS: u64 = 100_000;
 /// 环境变量前缀。
 const ENV_PREFIX: &str = "JIANARTIFACT_";
 /// 已知配置节名。环境变量映射时，仅把节名与键名之间的首个下划线视作嵌套分隔，
@@ -511,7 +527,8 @@ impl Default for MetricsConfig {
 /// 访问异常检测与自动封禁、IP 黑/白名单（FR-53）。
 ///
 /// 仅做应用层防护；L3/L4 体积型 DDoS 由前置反向代理 / CDN / WAF 承担，不在二进制内实现。
-/// FR-54~56 的 CC 挑战 / WAF 规则引擎 / 监控告警均不在本批范围。
+/// 承载多维限流（FR-33 + FR-51）、慢速攻击防护（FR-52）、异常封禁 + IP 名单（FR-53）、
+/// CC 挑战（FR-54）、WAF 规则引擎（FR-55）与防护监控告警（FR-56）。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ProtectionConfig {
     /// 多维速率限制与并发上限配置。
@@ -532,6 +549,51 @@ pub struct ProtectionConfig {
     /// 可配置 WAF 规则引擎配置（FR-55）：按请求模式匹配阻断 / 放行。
     #[serde(default)]
     pub waf: WafConfig,
+    /// 防护监控与阈值告警配置（FR-56）：窗内各维度防护事件达阈值即告警并落库。
+    #[serde(default)]
+    pub alerts: AlertsConfig,
+}
+
+/// 防护监控与阈值告警配置（FR-56，ADR-0017）。
+///
+/// 进程内在固定时间窗内统计各防护维度（限流被拒 / 自动封禁 / CC 挑战失败 / WAF 阻断 / 慢速超时）
+/// 的事件计数，单维度窗内计数达对应阈值即产生一条告警：按严重度记中文分级日志（WARN）并异步落
+/// SQLite（`protection_alerts` 表）。同一维度在窗内**去抖**——一窗内同维度只告警一次，不刷屏。
+/// **默认关闭**：避免无人值守时刷告警；阈值默认保守宽放，避免正常高频访问误报。启用与阈值由运维显式承担。
+/// 告警是本机内部数据：只落本地、不外发、不内置外发型通知（Webhook / 邮件等若未来要做须另写 ADR）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlertsConfig {
+    /// 是否启用阈值告警；默认关闭，关闭时不评估、不落库、零额外开销。
+    pub enabled: bool,
+    /// 告警评估固定时间窗时长（秒）：每窗内独立统计各维度计数，跨窗清零。
+    pub window_secs: u64,
+    /// 限流被拒窗内告警阈值：一窗内限流被拒次数达此值即告警。
+    pub rate_limit_warn_threshold: u64,
+    /// 自动封禁触发窗内告警阈值：一窗内自动封禁触发次数达此值即告警。
+    pub ban_warn_threshold: u64,
+    /// CC 挑战失败窗内告警阈值：一窗内 CC 证明校验失败次数达此值即告警。
+    pub cc_challenge_fail_warn_threshold: u64,
+    /// WAF 阻断窗内告警阈值：一窗内 WAF 阻断次数达此值即告警。
+    pub waf_block_warn_threshold: u64,
+    /// 慢速攻击超时窗内告警阈值：一窗内慢速超时 / 截断拒绝次数达此值即告警。
+    pub slowloris_warn_threshold: u64,
+    /// 告警明细行数硬上限：超限删最旧行，兜底防止撑爆 SQLite。
+    pub max_rows: u64,
+}
+
+impl Default for AlertsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: DEFAULT_ALERTS_ENABLED,
+            window_secs: DEFAULT_ALERTS_WINDOW_SECS,
+            rate_limit_warn_threshold: DEFAULT_ALERTS_RATE_LIMIT_WARN_THRESHOLD,
+            ban_warn_threshold: DEFAULT_ALERTS_BAN_WARN_THRESHOLD,
+            cc_challenge_fail_warn_threshold: DEFAULT_ALERTS_CC_CHALLENGE_FAIL_WARN_THRESHOLD,
+            waf_block_warn_threshold: DEFAULT_ALERTS_WAF_BLOCK_WARN_THRESHOLD,
+            slowloris_warn_threshold: DEFAULT_ALERTS_SLOWLORIS_WARN_THRESHOLD,
+            max_rows: DEFAULT_ALERTS_MAX_ROWS,
+        }
+    }
 }
 
 /// IP 黑 / 白名单配置（FR-53，ADR-0008）。

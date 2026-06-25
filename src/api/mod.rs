@@ -26,6 +26,7 @@ use crate::proxy::HttpUpstream;
 use crate::storage::BlobBackend;
 
 mod acl;
+mod alerts;
 mod analytics;
 mod anomaly_ban;
 mod artifacts;
@@ -43,6 +44,7 @@ mod migrate;
 mod npm_routes;
 mod nuget_routes;
 mod oidc_routes;
+mod protection;
 mod pypi_routes;
 mod rate_limit;
 mod repo_access;
@@ -54,6 +56,10 @@ mod usage;
 mod users;
 mod waf;
 
+pub use alerts::{
+    channel as alert_channel, spawn_alert_pruner, spawn_alert_writer, AlertEngine, AlertSink,
+    ProtectionDimension,
+};
 pub use anomaly_ban::{BanRegistry, IpMatcher};
 pub use audit::{
     channel as audit_channel, spawn_audit_retention, spawn_audit_writer, AuditResult, AuditSink,
@@ -127,6 +133,11 @@ pub struct AppState {
     /// （正则预编译、非法规则跳过），中间件按请求 method/path/query/header 有序匹配、首个命中生效。
     /// 默认空规则集 + 关闭（不影响现有、不误杀）；WAF 不依赖来源 IP。
     pub waf_rules: Arc<waf::WafRuleSet>,
+    /// 防护告警投递端（FR-56，ADR-0017）：主路径非阻塞 enqueue，后台任务批量落库。
+    pub alerts: alerts::AlertSink,
+    /// 进程内防护告警评估器（FR-56，ADR-0017）：各防护命中点累加窗内计数、达阈值即告警；
+    /// 状态端点据其窗内计数快照展示防护健康。计数 / 去抖状态进程内内存维护，重启即清。
+    pub alert_engine: Arc<alerts::AlertEngine>,
 }
 
 /// 统一 API 错误类型，转换为 JSON 响应 `{"error":{"code","message"}}`。
@@ -363,6 +374,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/search", get(search::search))
         .route("/audit", get(audit::list_audit))
         .route("/analytics/usage", get(analytics::usage_analytics))
+        .route("/protection/status", get(protection::protection_status))
+        .route("/protection/alerts", get(protection::list_alerts))
         .route(
             "/migrate/nexus/preview",
             post(migrate::preview_nexus_repositories),
@@ -561,6 +574,10 @@ mod tests {
         // 测试用使用分析：创建 sink 并启动写入任务（关明细），使路由真实走采集链路
         let (usage, usage_rx) = usage::channel();
         usage::spawn_usage_writer(meta.clone(), usage_rx, false);
+        // 测试用防护告警：创建 sink 并启动写入任务，使路由真实走告警落库链路
+        let (alerts, alert_rx) = alerts::channel();
+        alerts::spawn_alert_writer(meta.clone(), alert_rx);
+        let alert_engine = Arc::new(alerts::AlertEngine::new(alerts.clone()));
         let state = AppState {
             config: Arc::new(Config::default()),
             meta,
@@ -593,6 +610,9 @@ mod tests {
             waf_rules: Arc::new(waf::WafRuleSet::from_config(
                 &crate::config::WafConfig::default(),
             )),
+            // 默认测试状态：告警引擎就绪（默认配置告警关闭，record 直接返回）
+            alerts,
+            alert_engine,
         };
         (state, dir)
     }

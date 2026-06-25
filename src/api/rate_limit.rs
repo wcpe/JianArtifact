@@ -32,7 +32,9 @@ use axum::{
 use serde_json::json;
 
 use crate::auth::AuthIdentity;
+use crate::metrics_keys as keys;
 
+use super::alerts::ProtectionDimension;
 use super::AppState;
 
 /// 限流维度键：把来源归一为 IP / 身份 / 仓库维度，避免不同维度计数互相串味。
@@ -283,6 +285,7 @@ pub async fn rate_limit_layer(
         if let Decision::Limited { retry_after_secs } =
             limiter.check_key(RateKey::Ip(ip.clone()), cfg.ip_max_requests, window, now)
         {
+            record_rejection(&state, keys::DIMENSION_IP);
             return too_many_requests(retry_after_secs);
         }
     }
@@ -293,6 +296,7 @@ pub async fn rate_limit_layer(
             window,
             now,
         ) {
+            record_rejection(&state, keys::DIMENSION_TOKEN);
             return too_many_requests(retry_after_secs);
         }
     }
@@ -304,6 +308,7 @@ pub async fn rate_limit_layer(
                 window,
                 now,
             ) {
+                record_rejection(&state, keys::DIMENSION_REPO);
                 return too_many_requests(retry_after_secs);
             }
         }
@@ -314,7 +319,10 @@ pub async fn rate_limit_layer(
     let _ip_guard = match ip {
         Some(ip) => match limiter.acquire_concurrency(RateKey::Ip(ip), cfg.ip_max_concurrent) {
             Some(g) => Some(g),
-            None => return too_many_requests_concurrency(),
+            None => {
+                record_rejection(&state, keys::DIMENSION_CONCURRENCY);
+                return too_many_requests_concurrency();
+            }
         },
         None => None,
     };
@@ -322,7 +330,10 @@ pub async fn rate_limit_layer(
         Some(user_id) => {
             match limiter.acquire_concurrency(RateKey::Identity(user_id), cfg.user_max_concurrent) {
                 Some(g) => Some(g),
-                None => return too_many_requests_concurrency(),
+                None => {
+                    record_rejection(&state, keys::DIMENSION_CONCURRENCY);
+                    return too_many_requests_concurrency();
+                }
             }
         }
         None => None,
@@ -331,13 +342,30 @@ pub async fn rate_limit_layer(
         Some(repo) => {
             match limiter.acquire_concurrency(RateKey::Repo(repo), cfg.repo_max_concurrent) {
                 Some(g) => Some(g),
-                None => return too_many_requests_concurrency(),
+                None => {
+                    record_rejection(&state, keys::DIMENSION_CONCURRENCY);
+                    return too_many_requests_concurrency();
+                }
             }
         }
         None => None,
     };
 
     next.run(request).await
+}
+
+/// 在限流被拒命中点累加指标与告警评估（FR-56，ADR-0017）。
+///
+/// 指标用低基数标签 `dimension`（ip / token / repo / concurrency）；metrics 未启用时宏为 no-op。
+/// 告警评估按 `RateLimit` 维度累加窗内计数，达阈值即告警；热路径只做原子累加 + 一次内存计数，不做 IO。
+fn record_rejection(state: &AppState, dimension: &'static str) {
+    metrics::counter!(keys::RATE_LIMIT_REJECTED_TOTAL, keys::LABEL_DIMENSION => dimension)
+        .increment(1);
+    state.alert_engine.record(
+        ProtectionDimension::RateLimit,
+        &state.config.protection.alerts,
+        Instant::now(),
+    );
 }
 
 /// 取连接级来源 IP（由 `into_make_service_with_connect_info` 注入）；缺失（如单元测试）返回 None。

@@ -77,6 +77,11 @@ impl Fixture {
             waf_rules: std::sync::Arc::new(jianartifact::api::WafRuleSet::from_config(
                 &jianartifact::config::WafConfig::default(),
             )),
+            // FR-56：防护告警默认关闭，引擎与投递端就绪（关闭时 record 直接返回）
+            alerts: jianartifact::api::alert_channel().0,
+            alert_engine: std::sync::Arc::new(jianartifact::api::AlertEngine::new(
+                jianartifact::api::alert_channel().0,
+            )),
         };
         Self { state, _dir: dir }
     }
@@ -125,6 +130,11 @@ impl Fixture {
             // FR-55：测试默认 WAF 空规则集 + 关闭
             waf_rules: std::sync::Arc::new(jianartifact::api::WafRuleSet::from_config(
                 &jianartifact::config::WafConfig::default(),
+            )),
+            // FR-56：防护告警默认关闭，引擎与投递端就绪（关闭时 record 直接返回）
+            alerts: jianartifact::api::alert_channel().0,
+            alert_engine: std::sync::Arc::new(jianartifact::api::AlertEngine::new(
+                jianartifact::api::alert_channel().0,
             )),
         };
         Self { state, _dir: dir }

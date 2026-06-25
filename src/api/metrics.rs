@@ -173,6 +173,12 @@ pub async fn metrics_endpoint(
 
     // 渲染前把审计 channel 丢弃累计数同步进注册表（gauge），随指标一并暴露
     gauge!(keys::AUDIT_DROPPED_TOTAL).set(state.audit.dropped_count() as f64);
+    // 渲染前把当前封禁 IP 数同步进注册表（gauge，FR-56）：反映实时封禁规模
+    gauge!(keys::BAN_ACTIVE_IPS).set(
+        state
+            .ban_registry
+            .active_ban_count(std::time::Instant::now()) as f64,
+    );
 
     let body = handle.render();
     // Prometheus 文本格式的标准 Content-Type

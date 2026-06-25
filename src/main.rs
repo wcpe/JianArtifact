@@ -142,6 +142,23 @@ async fn main() -> anyhow::Result<()> {
         "使用分析采集已就绪（数据本机内部、默认不外发）"
     );
 
+    // 防护监控与阈值告警（FR-56，ADR-0017）：建有界 channel，启动告警写入与行数兜底裁剪后台任务，
+    // 构造进程内告警评估器随状态共享。主路径只在防护命中点非阻塞累加 / 投递；写入失败只记 WARN，不影响业务。
+    // 告警是本机内部数据：只落本地 SQLite、不外发、不内置外发型通知。
+    let (alerts, alert_rx) = api::alert_channel();
+    api::spawn_alert_writer(meta.clone(), alert_rx);
+    api::spawn_alert_pruner(meta.clone(), cfg.protection.alerts.max_rows);
+    let alert_engine = Arc::new(api::AlertEngine::new(alerts.clone()));
+    if cfg.protection.alerts.enabled {
+        info!(
+            窗口秒 = cfg.protection.alerts.window_secs,
+            行数上限 = cfg.protection.alerts.max_rows,
+            "防护阈值告警已启用（窗内各维度达阈值即告警，数据本机内部、不外发）"
+        );
+    } else {
+        info!("防护阈值告警未启用，跳过（仍可经 /metrics 与状态端点观测防护计数）");
+    }
+
     // 漏洞库离线镜像（FR-70，ADR-0012）：默认关闭，启用时后台周期下载公开漏洞数据落本地库。
     // 仅镜像/落库，不做制品坐标匹配（FR-71）；下载公开数据集整包，不外发本机制品坐标。
     let _vuln_refresh = if cfg.vuln.enabled {
@@ -297,6 +314,9 @@ async fn main() -> anyhow::Result<()> {
         cc_challenger,
         // FR-55：从 [protection.waf] 启动期编译的有序规则集（正则预编译、非法规则跳过）
         waf_rules,
+        // FR-56：防护告警投递端 + 进程内告警评估器（窗内各维度达阈值即告警并异步落库）
+        alerts,
+        alert_engine,
     };
     let app = api::build_router(state);
 

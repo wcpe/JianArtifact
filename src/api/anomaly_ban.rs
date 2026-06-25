@@ -34,7 +34,9 @@ use axum::{
 use serde_json::json;
 
 use crate::config::IpListConfig;
+use crate::metrics_keys as keys;
 
+use super::alerts::ProtectionDimension;
 use super::AppState;
 
 /// 单个 CIDR 网段（或单 IP，视作前缀长度为满位的网段）。
@@ -256,9 +258,10 @@ impl BanRegistry {
         newly
     }
 
-    /// 当前封禁中的 IP 数量（供测试与后续观测读取）。
-    #[cfg(test)]
-    fn active_ban_count(&self, now: Instant) -> usize {
+    /// 当前封禁中的 IP 数量（供状态端点快照与测试读取）。
+    ///
+    /// 只读统计，不改动登记表（不顺带清理过期项，避免在只读路径上加写锁副作用）。
+    pub fn active_ban_count(&self, now: Instant) -> usize {
         let guard = self.bans.lock().unwrap_or_else(|e| e.into_inner());
         guard.values().filter(|&&until| now < until).count()
     }
@@ -346,6 +349,15 @@ pub async fn anomaly_ban_layer(
         if newly {
             // 仅记封禁动作，不含凭据 / 完整路径等敏感信息
             tracing::warn!(来源 = %ip, 时长秒 = ban_cfg.duration_secs, "来源 IP 异常访问触顶，已自动封禁");
+            // FR-56：自动封禁触发计数 + 当前封禁 IP 数 gauge + 告警评估（低基数、热路径只做原子累加）
+            metrics::counter!(keys::BAN_TRIGGERED_TOTAL).increment(1);
+            metrics::gauge!(keys::BAN_ACTIVE_IPS)
+                .set(state.ban_registry.active_ban_count(now) as f64);
+            state.alert_engine.record(
+                ProtectionDimension::Ban,
+                &state.config.protection.alerts,
+                now,
+            );
         }
     }
     response

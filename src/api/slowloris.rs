@@ -29,9 +29,14 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
+use std::sync::Arc;
+
 use futures_util::StreamExt;
 use serde_json::json;
 
+use crate::metrics_keys as keys;
+
+use super::alerts::{AlertEngine, ProtectionDimension};
 use super::AppState;
 
 /// 慢速攻击防护中间件：置于身份解析 / 限流之外（更靠近连接侧），在读取请求体前介入。
@@ -54,6 +59,8 @@ pub async fn slowloris_layer(
     if max_body_bytes > 0 {
         if let Some(len) = content_length(&request) {
             if len > max_body_bytes {
+                // FR-56：超大体被拒计入慢速维度计数 + 告警评估（热路径只做原子累加 + 一次内存计数）
+                record_timeout(&state);
                 return payload_too_large();
             }
         }
@@ -63,11 +70,46 @@ pub async fn slowloris_layer(
     let body_read_timeout = Duration::from_secs(cfg.body_read_timeout_secs.max(1));
 
     // 拆出请求体，套一层带超时与字节上限的流式包装后重组请求；正常上传逐块透传、不缓冲整体。
+    // 把告警引擎与告警配置克隆进流，使流内发生的慢速超时 / 截断 / 超限也计入慢速维度（FR-56）。
+    let alert_engine = Arc::clone(&state.alert_engine);
+    let alerts_cfg = state.config.protection.alerts.clone();
     let (parts, body) = request.into_parts();
-    let guarded = guard_body_stream(body, header_timeout, body_read_timeout, max_body_bytes);
+    let guarded = guard_body_stream(
+        body,
+        header_timeout,
+        body_read_timeout,
+        max_body_bytes,
+        alert_engine,
+        alerts_cfg,
+    );
     let request = Request::from_parts(parts, Body::from_stream(guarded));
 
     next.run(request).await
+}
+
+/// 在慢速攻击拒绝命中点累加指标与告警评估（FR-56，ADR-0017）。
+///
+/// 含超大体预拒（413）与流内慢速超时 / 截断 / 超限；按 `Slowloris` 维度累加窗内计数，达阈值即告警。
+/// metrics 未启用时宏为 no-op；热路径只做原子累加 + 一次内存计数，不做 IO。
+fn record_timeout(state: &AppState) {
+    metrics::counter!(keys::SLOWLORIS_TIMEOUT_TOTAL).increment(1);
+    state.alert_engine.record(
+        ProtectionDimension::Slowloris,
+        &state.config.protection.alerts,
+        std::time::Instant::now(),
+    );
+}
+
+/// 在流内（无 `AppState`）累加慢速指标与告警评估（FR-56）。
+///
+/// 与 [`record_timeout`] 同口径，但只持有告警引擎与配置克隆，供 [`guard_body_stream`] 在流出错时调用。
+fn record_timeout_in_stream(engine: &AlertEngine, cfg: &crate::config::AlertsConfig) {
+    metrics::counter!(keys::SLOWLORIS_TIMEOUT_TOTAL).increment(1);
+    engine.record(
+        ProtectionDimension::Slowloris,
+        cfg,
+        std::time::Instant::now(),
+    );
 }
 
 /// 把请求体的数据流包成带超时与累计字节上限的流：首块用 `header_timeout` 计时、后续块用
@@ -80,46 +122,60 @@ fn guard_body_stream(
     header_timeout: Duration,
     body_read_timeout: Duration,
     max_body_bytes: u64,
+    engine: Arc<AlertEngine>,
+    alerts_cfg: crate::config::AlertsConfig,
 ) -> impl futures_util::Stream<Item = Result<Bytes, std::io::Error>> {
     // 状态：底层数据流、是否仍在等首块（决定用哪个超时）、已累计读取字节数、是否已终止。
     // `done` 置位后立即结束本流，避免在超时 / 超限后继续 poll 慢速底层流（否则会一直阻塞）。
     let init = (body.into_data_stream(), true, 0u64, false);
-    futures_util::stream::unfold(init, move |(mut stream, is_first, read, done)| async move {
-        // 已终止：不再 poll 底层流，直接结束（防超时后继续阻塞在慢速连接上）
-        if done {
-            return None;
-        }
-        // 首块等待用 header_timeout，后续块间用 body_read_timeout，区分「慢起始」与「慢 drip」。
-        let timeout = if is_first {
-            header_timeout
-        } else {
-            body_read_timeout
-        };
-        match tokio::time::timeout(timeout, stream.next()).await {
-            // 在超时窗内收到一个数据块
-            Ok(Some(Ok(chunk))) => {
-                let read = read.saturating_add(chunk.len() as u64);
-                // 通用体上限（>0 时启用）：累计超限即以错误终止流（分块体的兜底拦截）
-                if max_body_bytes > 0 && read > max_body_bytes {
-                    return Some((
-                        Err(std::io::Error::other(BodyLimitExceeded)),
-                        (stream, false, read, true),
-                    ));
-                }
-                Some((Ok(chunk), (stream, false, read, false)))
+    futures_util::stream::unfold(init, move |(mut stream, is_first, read, done)| {
+        // 克隆引擎与配置进入本次轮询的 async 块（unfold 闭包多次调用，需各次独立持有）
+        let engine = Arc::clone(&engine);
+        let alerts_cfg = alerts_cfg.clone();
+        async move {
+            // 已终止：不再 poll 底层流，直接结束（防超时后继续阻塞在慢速连接上）
+            if done {
+                return None;
             }
-            // 底层流的读取错误，原样透传后终止（连接中断 / 截断等）
-            Ok(Some(Err(e))) => Some((Err(std::io::Error::other(e)), (stream, false, read, true))),
-            // 底层流正常结束：终止本流
-            Ok(None) => None,
-            // 超时：判为慢速连接，以错误终止流并断开（slowloris / 慢速 POST 防护）
-            Err(_) => Some((
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    SlowRequestTimeout,
-                )),
-                (stream, false, read, true),
-            )),
+            // 首块等待用 header_timeout，后续块间用 body_read_timeout，区分「慢起始」与「慢 drip」。
+            let timeout = if is_first {
+                header_timeout
+            } else {
+                body_read_timeout
+            };
+            match tokio::time::timeout(timeout, stream.next()).await {
+                // 在超时窗内收到一个数据块
+                Ok(Some(Ok(chunk))) => {
+                    let read = read.saturating_add(chunk.len() as u64);
+                    // 通用体上限（>0 时启用）：累计超限即以错误终止流（分块体的兜底拦截）
+                    if max_body_bytes > 0 && read > max_body_bytes {
+                        record_timeout_in_stream(&engine, &alerts_cfg);
+                        return Some((
+                            Err(std::io::Error::other(BodyLimitExceeded)),
+                            (stream, false, read, true),
+                        ));
+                    }
+                    Some((Ok(chunk), (stream, false, read, false)))
+                }
+                // 底层流的读取错误，原样透传后终止（连接中断 / 截断等）
+                Ok(Some(Err(e))) => {
+                    record_timeout_in_stream(&engine, &alerts_cfg);
+                    Some((Err(std::io::Error::other(e)), (stream, false, read, true)))
+                }
+                // 底层流正常结束：终止本流
+                Ok(None) => None,
+                // 超时：判为慢速连接，以错误终止流并断开（slowloris / 慢速 POST 防护）
+                Err(_) => {
+                    record_timeout_in_stream(&engine, &alerts_cfg);
+                    Some((
+                        Err(std::io::Error::new(
+                            std::io::ErrorKind::TimedOut,
+                            SlowRequestTimeout,
+                        )),
+                        (stream, false, read, true),
+                    ))
+                }
+            }
         }
     })
 }
@@ -173,6 +229,17 @@ mod tests {
     use super::*;
     use axum::http::Request as HttpRequest;
 
+    /// 便捷：构造一个告警关闭的引擎（流内 record 直接返回，不影响被测的流式行为）。
+    fn 测试引擎() -> Arc<AlertEngine> {
+        let (sink, _rx) = super::super::alerts::channel();
+        Arc::new(AlertEngine::new(sink))
+    }
+
+    /// 便捷：默认（关闭）告警配置。
+    fn 测试告警配置() -> crate::config::AlertsConfig {
+        crate::config::AlertsConfig::default()
+    }
+
     /// 带 Content-Length 且超上限时，content_length 能正确解析，供预拒判定。
     #[test]
     fn content_length_解析合法长度() {
@@ -205,8 +272,14 @@ mod tests {
         ];
         let body = Body::from_stream(futures_util::stream::iter(chunks));
         // 超时给足、上限设大：应全部透传
-        let guarded =
-            guard_body_stream(body, Duration::from_secs(10), Duration::from_secs(10), 1024);
+        let guarded = guard_body_stream(
+            body,
+            Duration::from_secs(10),
+            Duration::from_secs(10),
+            1024,
+            测试引擎(),
+            测试告警配置(),
+        );
         let collected: Vec<_> = guarded.collect().await;
         let total: usize = collected
             .iter()
@@ -224,7 +297,14 @@ mod tests {
             Ok(Bytes::from_static(b"bbbb")), // 累计 8，超上限 5
         ];
         let body = Body::from_stream(futures_util::stream::iter(chunks));
-        let guarded = guard_body_stream(body, Duration::from_secs(10), Duration::from_secs(10), 5);
+        let guarded = guard_body_stream(
+            body,
+            Duration::from_secs(10),
+            Duration::from_secs(10),
+            5,
+            测试引擎(),
+            测试告警配置(),
+        );
         let collected: Vec<_> = guarded.collect().await;
         // 至少出现一次错误（越限块），证明被拦截
         assert!(
@@ -240,7 +320,14 @@ mod tests {
             .map(|_| Ok(Bytes::from_static(b"xxxxxxxx")))
             .collect();
         let body = Body::from_stream(futures_util::stream::iter(chunks));
-        let guarded = guard_body_stream(body, Duration::from_secs(10), Duration::from_secs(10), 0);
+        let guarded = guard_body_stream(
+            body,
+            Duration::from_secs(10),
+            Duration::from_secs(10),
+            0,
+            测试引擎(),
+            测试告警配置(),
+        );
         let collected: Vec<_> = guarded.collect().await;
         assert!(
             collected.iter().all(|r| r.is_ok()),
@@ -262,8 +349,14 @@ mod tests {
         }));
         let body = Body::from_stream(slow);
         // 首块超时给足、块间空闲超时设很短：第二块等待将超时
-        let guarded =
-            guard_body_stream(body, Duration::from_secs(10), Duration::from_millis(50), 0);
+        let guarded = guard_body_stream(
+            body,
+            Duration::from_secs(10),
+            Duration::from_millis(50),
+            0,
+            测试引擎(),
+            测试告警配置(),
+        );
         let collected: Vec<_> = guarded.collect().await;
         // 第一块应透传，随后因块间空闲超时出现一次错误
         assert!(
@@ -285,8 +378,14 @@ mod tests {
         });
         let body = Body::from_stream(slow);
         // 首块超时很短：首块等待将超时
-        let guarded =
-            guard_body_stream(body, Duration::from_millis(50), Duration::from_secs(10), 0);
+        let guarded = guard_body_stream(
+            body,
+            Duration::from_millis(50),
+            Duration::from_secs(10),
+            0,
+            测试引擎(),
+            测试告警配置(),
+        );
         let collected: Vec<_> = guarded.collect().await;
         assert!(
             collected.iter().any(|r| r.is_err()),

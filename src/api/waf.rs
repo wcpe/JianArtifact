@@ -25,7 +25,9 @@ use regex_lite::Regex;
 use serde_json::json;
 
 use crate::config::{WafConfig, WafRuleConfig};
+use crate::metrics_keys as keys;
 
+use super::alerts::ProtectionDimension;
 use super::AppState;
 
 /// 规则匹配的请求属性字段。
@@ -266,6 +268,13 @@ pub async fn waf_layer(State(state): State<AppState>, request: Request, next: Ne
     if let Some(WafAction::Block) = rules.evaluate(&method, &path, &query, &headers) {
         // 仅记命中阻断动作，不含可能含敏感信息的完整查询 / 头值
         tracing::warn!(方法 = %method, 路径 = %path, "WAF 规则命中，已阻断请求");
+        // FR-56：阻断计数 + 告警评估（不以规则模式串作标签，守低基数）；热路径只做原子累加
+        metrics::counter!(keys::WAF_BLOCKED_TOTAL).increment(1);
+        state.alert_engine.record(
+            ProtectionDimension::Waf,
+            &state.config.protection.alerts,
+            std::time::Instant::now(),
+        );
         return forbidden();
     }
     // 命中 allow 或无命中：放行
