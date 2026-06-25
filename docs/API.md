@@ -7,10 +7,11 @@
 - **协议形态**：管理 API 为 REST + JSON；格式 API 按各自原生协议（Maven、npm、Docker registry v2、Go GOPROXY、Raw、PyPI Simple Repository API）暴露。
 - **版本**：管理 API 统一挂载在 `/api/v1` 前缀下。
 - **编码**：管理 API 请求体与响应体均为 `application/json; charset=utf-8`；格式端点的内容类型遵循各自协议（如制品二进制、清单 JSON 等）。
-- **认证**：支持三种方式，由认证中间件统一识别。
+- **认证**：支持以下方式，由认证中间件统一识别。
   - **Bearer Token**：`Authorization: Bearer <token>`，供 CLI / 包管理器客户端使用，服务端以哈希形式比对（不存明文）。
   - **Basic Auth**：`Authorization: Basic <base64(用户名:密码或令牌)>`，兼容包管理器 CLI 的登录习惯（如 mvn / docker login）。
   - **Web 会话**：浏览器登录后通过会话凭据访问管理 API。
+  - **NuGet api-key 头**：兼容 NuGet 规范的 `X-NuGet-ApiKey: <API Token>`（`dotnet nuget push` 原生方式）；仅在无 `Authorization` 头时回退按 API Token 校验该头值，非法值仍按匿名处理。
 - **匿名访问**：未携带任何凭据即视为匿名访客，仅能读取 public 仓库；对 private 仓库一律拒绝。
 - **身份解析**：认证中间件解析出身份（注册用户 / 管理员）或匿名；鉴权中间件按目标仓库与操作（读 / 写）综合 public/private、全局角色、每仓库 ACL 三者判定。
 - **会话生命周期**：Web 会话 / JWT 有有限有效期（TTL，默认约 1 小时，可配置）；临近过期可经刷新端点续期，过期或吊销后须重新登录。API Token 不设过期（除非吊销），与会话相互独立。
@@ -414,7 +415,7 @@
   - 服务索引 `GET /{仓库名}/v3/index.json`：列出本仓库 v3 资源（扁平容器 `PackageBaseAddress/3.0.0`、发布端点 `PackagePublish/2.0.0`），`@id` 指向本仓库对应端点；`proxy` 仓库回源上游服务索引后把扁平容器 `@id` 重写为指向本仓库。
   - 扁平容器版本列表 `GET /{仓库名}/v3-flatcontainer/{id}/index.json`：返回该包所有已发布版本 `{"versions":[...]}`；`hosted` 由元数据索引动态生成，`proxy` 回源上游。
   - 下载 `GET /{仓库名}/v3-flatcontainer/{id}/{version}/{id}.{version}.nupkg`（及同目录 `{id}.nuspec`）：流式返回；`proxy` cache-miss 回源缓存、命中不回源。id 与 version 按 NuGet 约定小写规范化。
-  - 发布 `PUT /{仓库名}/v3/package`（`nuget push`）：`multipart/form-data` 内含 .nupkg；服务端解压读取内嵌 `.nuspec` 解析 id / version，先落 .nupkg 再落 .nuspec。鉴权经 `Authorization: Basic`（用户口令或 API Token 作密码字段）。
+  - 发布 `PUT /{仓库名}/v3/package`（`nuget push`）：`multipart/form-data` 内含 .nupkg；服务端解压读取内嵌 `.nuspec` 解析 id / version，先落 .nupkg 再落 .nuspec。鉴权支持两种：`Authorization: Basic`（用户口令或 API Token 作密码字段），或 NuGet 规范的 api-key 头 `X-NuGet-ApiKey: <API Token>`（即 `dotnet nuget push -k <token>` 的原生方式，无 `Authorization` 头时按 API Token 校验该头值）。
 - **Docker / OCI 格式**：以 Docker registry v2 协议暴露，挂载于 `/v2/`，路径含仓库名与镜像名（如 `/v2/{仓库名}/{镜像名}/manifests/{ref}`、`/v2/{仓库名}/{镜像名}/blobs/{digest}`），供 `docker push` / `docker pull` 使用；错误遵循 registry v2 原生错误格式。
 
   **认证（Bearer 令牌流）**：遵循 registry v2 的"挑战-应答"令牌流。

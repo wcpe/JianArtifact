@@ -259,6 +259,20 @@ fn push_req(repo: &str, nupkg: &[u8], auth: Option<&str>) -> Request<Body> {
     builder.body(Body::from(body)).unwrap()
 }
 
+/// 发起一次以 NuGet 规范 api-key 头（`X-NuGet-ApiKey`）鉴权的 push（模拟 `dotnet nuget push`）。
+///
+/// dotnet 仅经该头携带凭据、不发 `Authorization`，因此服务端须把该头值按 API Token 校验。
+fn push_req_apikey(repo: &str, nupkg: &[u8], api_key: &str) -> Request<Body> {
+    let (content_type, body) = build_push_multipart(nupkg);
+    Request::builder()
+        .method("PUT")
+        .uri(format!("/{repo}/v3/package"))
+        .header("content-type", content_type)
+        .header("X-NuGet-ApiKey", api_key)
+        .body(Body::from(body))
+        .unwrap()
+}
+
 /// 计算字节的 sha256 十六进制（与下载响应头 / 独立计算对账）。
 fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
@@ -402,6 +416,62 @@ async fn nuget_两个版本都进版本列表() {
     assert_eq!(status, StatusCode::OK);
     // 升序、去重
     assert_eq!(versions["versions"], json!(["1.0.0", "2.0.0"]));
+}
+
+// ---------- FR-29 真机互通：dotnet nuget push 经 X-NuGet-ApiKey 头鉴权 ----------
+
+#[tokio::test]
+async fn nuget_push_经_apikey_头鉴权发布成功() {
+    let fx = Fixture::new().await;
+    let writer = fx.seed_user("dev", "pw", Role::User).await;
+    let rid = fx.seed_nuget_repo("nuget-hosted", Visibility::Public).await;
+    fx.seed_acl(&rid, &writer, Permission::Write).await;
+    // 为写用户签发 API Token，作 dotnet nuget push 的 -k api-key
+    let token = auth::generate_api_token();
+    fx.state
+        .meta
+        .create_token(&writer, "nuget-push", &auth::hash_api_token(&token))
+        .await
+        .unwrap();
+
+    // dotnet nuget push 仅经 X-NuGet-ApiKey 头携带凭据、无 Authorization
+    let nupkg = build_nupkg("ApiKey.Pkg", "1.0.0");
+    let (status, body) = send(fx.router(), push_req_apikey("nuget-hosted", &nupkg, &token)).await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "经 api-key 头的 push 应 201: {body}"
+    );
+
+    // 确实落库：扁平容器版本列表含该版本
+    let (status, versions) = send(
+        fx.router(),
+        empty_req(
+            "GET",
+            "/nuget-hosted/v3-flatcontainer/apikey.pkg/index.json",
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(versions["versions"], json!(["1.0.0"]));
+}
+
+#[tokio::test]
+async fn nuget_push_非法_apikey_头仍被拒_403() {
+    let fx = Fixture::new().await;
+    let writer = fx.seed_user("dev", "pw", Role::User).await;
+    let rid = fx.seed_nuget_repo("nuget-hosted", Visibility::Public).await;
+    fx.seed_acl(&rid, &writer, Permission::Write).await;
+
+    // 无效 api-key 不得绕过鉴权：写操作仍 403（按匿名处理）
+    let nupkg = build_nupkg("Bad.Key", "1.0.0");
+    let (status, _) = send(
+        fx.router(),
+        push_req_apikey("nuget-hosted", &nupkg, "jna_不是有效令牌"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
 }
 
 // ---------- FR-61 版本不可变：重复 push 同版本 409 ----------

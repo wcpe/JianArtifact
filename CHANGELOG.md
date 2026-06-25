@@ -38,7 +38,7 @@
 - 仓库 ACL 权限动作细化为四级 `read` / `write` / `delete` / `admin`（FR-48 / ADR-0007）：授权判定纯函数按动作蕴含关系（admin ⊇ delete ⊇ write ⊇ read）综合可见性、全局角色与 ACL 给出结论；既有读 / 写授权语义与判定结论保持不变，既有 `read` / `write` 数据原样兼容；ACL 管理端点（`POST /api/v1/repositories/{id}/acl`）接受四级动作取值。本次仅落地动作模型与判定，删除 / 管理动作的具体业务端点未接入
 
 ### 修复
-- 无
+- NuGet 发布兼容 `dotnet nuget push` 原生鉴权（FR-29）：身份解析中间件新增识别 NuGet 规范的 api-key 头 `X-NuGet-ApiKey`，无 `Authorization` 头时按 API Token 校验该头值，使 `dotnet nuget push -k <token>` 原生互通（此前仅接受 `Authorization: Basic`，dotnet 默认仅发 api-key 头而返回 403）。非法 api-key 仍按匿名处理、不绕过鉴权
 
 ### 移除
 - 无

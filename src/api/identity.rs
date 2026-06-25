@@ -19,6 +19,9 @@ use crate::meta::{MetaStore, Role};
 
 use super::AppState;
 
+/// NuGet 规范 api-key 请求头名：`dotnet nuget push` 经此头携带 API Token（不发 `Authorization`）。
+const NUGET_API_KEY_HEADER: &str = "X-NuGet-ApiKey";
+
 /// LDAP 登录上下文：Basic Auth 口令通道本地校验失败后委托 LDAP bind 校验所需的最小依赖。
 ///
 /// 仅在配置了 `[auth.ldap]` 时构造；持有 provider 与 JIT 开关（守 ADR-0010 默认关）。
@@ -60,10 +63,25 @@ pub async fn identity_layer(
         .map(str::to_owned);
 
     let ldap = LdapAuthContext::from_state(&state);
-    let identity = match header {
+    let mut identity = match header {
         Some(value) => resolve_identity(&state.meta, &state.jwt, &value, ldap.as_ref()).await,
         None => AuthIdentity::Anonymous,
     };
+
+    // NuGet 规范 api-key 头：`dotnet nuget push -k <token>` 仅经 `X-NuGet-ApiKey` 头携带凭据、
+    // 不发 `Authorization`。当 `Authorization` 未解析出身份时，回退按 API Token 校验该头值，
+    // 使 dotnet 客户端原生互通；非法 key 仍回退匿名、不绕过鉴权。
+    if !identity.is_authenticated() {
+        if let Some(key) = request
+            .headers()
+            .get(NUGET_API_KEY_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .map(str::trim)
+            .filter(|k| !k.is_empty())
+        {
+            identity = resolve_api_token(&state.meta, key).await;
+        }
+    }
 
     request.extensions_mut().insert(identity);
     next.run(request).await
