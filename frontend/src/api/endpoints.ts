@@ -7,6 +7,8 @@ import type {
   AclDto,
   ArtifactDetailDto,
   ArtifactDto,
+  AuditEntryDto,
+  AuditListParams,
   CreateRepositoryRequest,
   CreateTokenResponse,
   CreateUserRequest,
@@ -332,6 +334,20 @@ function parseUploadError(xhr: XMLHttpRequest): ApiError {
   return new ApiError(xhr.status, code, message);
 }
 
+// —— 审计日志（仅管理员，FR-77） ——
+
+/** 分页查询审计日志（按时间倒序，支持动作 / 仓库 / 主体过滤）。 */
+export function listAudit(params: AuditListParams = {}): Promise<Paginated<AuditEntryDto>> {
+  return request<Paginated<AuditEntryDto>>('/audit', {
+    query: {
+      action: params.action,
+      target_repo: params.target_repo,
+      actor: params.actor,
+      offset: params.offset,
+      limit: params.limit,
+    },
+  });
+}
 /** 对制品路径逐段编码（保留 `/` 分隔，避免破坏 catch-all 路径语义）。 */
 function encodePath(path: string): string {
   return path

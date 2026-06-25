@@ -21,6 +21,7 @@ import { ArtifactDetailPage } from './pages/ArtifactDetailPage';
 import { AnalyticsPage } from './pages/AnalyticsPage';
 import { ProtectionConfigPage } from './pages/ProtectionConfigPage';
 import { UploadPage } from './pages/UploadPage';
+import { AuditPage } from './pages/AuditPage';
 
 /** 登录守卫：未登录跳登录页（带回跳路径）；恢复会话期间显示加载态。 */
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -97,6 +98,14 @@ export function App() {
           element={
             <RequireAdmin>
               <ProtectionConfigPage />
+            </RequireAdmin>
+          }
+        />
+        <Route
+          path="audit"
+          element={
+            <RequireAdmin>
+              <AuditPage />
             </RequireAdmin>
           }
         />

@@ -288,3 +288,27 @@ export interface ProtectionConfig {
   waf: WafConfig;
   alerts: AlertsConfig;
 }
+
+/** 单条审计日志视图（FR-77，对齐 GET /api/v1/audit 的 AuditEntryDto）。 */
+export interface AuditEntryDto {
+  id: number;
+  ts: string;
+  actor: string;
+  actor_kind: string;
+  request_id: string | null;
+  source_ip: string | null;
+  action: string;
+  target_repo: string | null;
+  target: string | null;
+  result: string;
+  detail: string | null;
+}
+
+/** 审计日志查询过滤参数（FR-77，均可选；分页用 offset/limit）。 */
+export interface AuditListParams {
+  action?: string;
+  target_repo?: string;
+  actor?: string;
+  offset?: number;
+  limit?: number;
+}

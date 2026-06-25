@@ -12,6 +12,7 @@ import {
   IconChartBar,
   IconShieldLock,
   IconUpload,
+  IconHistory,
   IconLogout,
 } from '@tabler/icons-react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
@@ -35,6 +36,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: '使用分析', path: '/analytics', icon: <IconChartBar size={18} />, adminOnly: true },
   { label: '防护配置', path: '/protection', icon: <IconShieldLock size={18} />, adminOnly: true },
   { label: '制品上传', path: '/upload', icon: <IconUpload size={18} /> },
+  { label: '审计日志', path: '/audit', icon: <IconHistory size={18} />, adminOnly: true },
 ];
 
 /** 应用布局：渲染导航与子路由出口。 */
