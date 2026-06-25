@@ -405,6 +405,10 @@ pub fn build_router(state: AppState) -> Router {
             post(migrate::migrate_nexus_hosted),
         )
         .route(
+            "/migrate/nexus/online/migrate",
+            post(migrate::migrate_nexus_online),
+        )
+        .route(
             "/repositories/{id}/acl",
             get(acl::list_acl).post(acl::create_acl),
         )

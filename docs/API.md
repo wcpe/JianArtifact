@@ -298,6 +298,14 @@
 - **响应**：迁移报告 `{ "repos": [...], "skipped_repos": [...] }`。`repos` 为各被迁移 hosted 仓库的明细数组，每项含 `repo_name`、`format`（映射后本系统格式）、`created`（`true` 新建 / `false` 复用已存在）、`migrated_artifacts`（成功搬运的制品数）、`skipped_artifacts`（跳过 / 失败的制品数，含路径非法 / 不可覆盖 / 超限）；`skipped_repos` 为因格式未实现而整体跳过的源仓库名列表。
 - **错误**：`400` `offline_path` 为空、离线目录不存在 / 非目录或缺 `content/` 子目录；`401` 未认证；`403` 非管理员；`502` 连接 / 鉴权 / 解析源 Nexus 失败（在线枚举阶段）。
 
+### Nexus 在线拉取迁移（FR-82）
+
+- **方法 / 路径**：`POST /api/v1/migrate/nexus/online/migrate`
+- **请求**：JSON 体 `{ "base_url", "auth_ref"?, "repositories": [{ "source", "target"? }] }`。`base_url` 为源 Nexus 基址；`auth_ref` 为在线访问凭据引用（仅引用，真值走环境变量 `JIANARTIFACT_MIGRATE_<NAME>_USERNAME` / `PASSWORD`，不入库、不回显，匿名源可省略）；`repositories` 为选中的源仓库，`source` 为源仓库名、`target` 为本系统目标仓库名（省略 / 空则与源同名，允许改名）。仅管理员可调用。**与 `hosted/migrate` 的区别：本端点不需离线 blob store 目录**——经源 Nexus REST 在线拉取制品。
+- **行为**：把所选 **Maven（`maven2`）hosted** 仓库经在线 HTTP 搬到本系统：① 据在线枚举的仓库配置匹配所选 `source`，建 / 复用目标 hosted 仓库（名取 `target`，允许与源不同名）；② 经 `service/rest/v1/components?repository=X`（`continuationToken` 分页）枚举该仓库全部 asset，按各 asset 的 `downloadUrl` HTTP 流式下载（不整体载入内存），经既有制品机理写入——**blob 先落盘并校验 sha256 再写元数据索引（`cached=false`），写索引失败回滚不留孤儿**；落定后比对下载内容 sha256 与源报告值，不符即视为损坏、回滚该制品并跳过（保证文件字节一致，含 `.sha1`/`.md5`/`.sha256`/`.sha512` sidecar——Nexus 把它们作为独立 asset 暴露，一并搬运）。按各格式覆盖 / 不可变策略处理重复，超 `limits.max_artifact_size` 跳过；搬运幂等可重入，单 asset 失败记录跳过、不中断整批。**仅 `maven2` hosted 参与**，其余格式 / 类型的选中仓库整体跳过（进 `skipped_repos`）。迁移**不搬运源系统上游凭据**。
+- **响应**：迁移报告 `{ "repos": [...], "skipped_repos": [...] }`。`repos` 每项含 `source_repo`、`target_repo`、`format`、`created`、`migrated_artifacts`、`skipped_artifacts`；`skipped_repos` 为因非 maven / 非 hosted 整体跳过的源仓库名列表。
+- **错误**：`400` 未选择仓库 / 源仓库不存在；`401` 未认证；`403` 非管理员；`502` 连接 / 鉴权 / 解析源 Nexus 失败（枚举阶段）。
+
 ### 列出仓库 ACL
 
 - **方法 / 路径**：`GET /api/v1/repositories/{id}/acl`

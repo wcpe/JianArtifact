@@ -22,6 +22,8 @@ import type {
   NexusPreviewRequest,
   NexusRepoSummary,
   OfflineRepoSummary,
+  OnlineMigrateRequest,
+  OnlineMigrationReport,
   Paginated,
   Permission,
   ProtectionAlertDto,
@@ -410,6 +412,17 @@ export function migrateNexusHosted(req: NexusMigrateRequest): Promise<MigrationR
     body: req,
   });
 }
+/**
+ * 在线拉取迁移（FR-82）：按所选源仓库经 REST 枚举 + HTTP 下载同步制品，
+ * 无需离线目录；仅 maven2 hosted 仓库会被拉取，非 maven / 非 hosted 进 skipped_repos。
+ */
+export function migrateNexusOnline(req: OnlineMigrateRequest): Promise<OnlineMigrationReport> {
+  return request<OnlineMigrationReport>('/migrate/nexus/online/migrate', {
+    method: 'POST',
+    body: req,
+  });
+}
+
 /** 对制品路径逐段编码（保留 `/` 分隔，避免破坏 catch-all 路径语义）。 */
 function encodePath(path: string): string {
   return path

@@ -12,7 +12,7 @@ use serde::Deserialize;
 
 use crate::migrate::{
     self, HostedMigrationReport, HttpNexusClient, MigrateError, NexusRepoSummary,
-    OfflineRepoSummary, ProxyMigrationReport,
+    OfflineRepoSummary, OnlineMigrationReport, ProxyMigrationReport,
 };
 
 use super::{ApiError, AppState, Identity};
@@ -208,6 +208,92 @@ pub async fn migrate_nexus_hosted(
         &state.formats,
         &source_repos,
         std::path::Path::new(&offline_path),
+        state.config.limits.max_artifact_size,
+    )
+    .await?;
+
+    Ok(Json(report))
+}
+
+/// 在线拉取迁移请求体（FR-82）：选中的源仓库 + 目标仓库名（无需离线 blob store）。
+#[derive(Debug, Deserialize)]
+pub struct NexusOnlineMigrateRequest {
+    /// 源 Nexus 基址：经其 REST API 枚举仓库配置与制品。
+    pub base_url: String,
+    /// 上游凭据引用（仅引用，真值走 env，不入库）；匿名可访问的源系统可省略。
+    #[serde(default)]
+    pub auth_ref: Option<String>,
+    /// 选中的源仓库及目标仓库名（`target` 省略 / 空则与源同名）。
+    pub repositories: Vec<OnlineRepoSelectionDto>,
+}
+
+/// 在线拉取的单个仓库选择项。
+#[derive(Debug, Deserialize)]
+pub struct OnlineRepoSelectionDto {
+    /// 源 Nexus 仓库名。
+    pub source: String,
+    /// 本系统目标仓库名（省略 / 空则与源同名，允许改名）。
+    #[serde(default)]
+    pub target: Option<String>,
+}
+
+/// 执行 Nexus 在线拉取迁移（仅管理员，FR-82）。
+///
+/// 经在线 REST 枚举源仓库配置 → 匹配所选源仓库 → 经 components API 枚举其 asset 并 HTTP 流式
+/// 下载、落为本系统 hosted 制品（**无需离线 blob store**）。仅 Maven hosted 参与，其余整体跳过。
+/// 凭据真值走 env，绝不入库 / 不进日志。
+pub async fn migrate_nexus_online(
+    State(state): State<AppState>,
+    identity: Identity,
+    Json(req): Json<NexusOnlineMigrateRequest>,
+) -> Result<Json<OnlineMigrationReport>, ApiError> {
+    identity.require_admin()?;
+    if req.repositories.is_empty() {
+        return Err(ApiError::BadRequest("未选择要迁移的仓库".to_string()));
+    }
+
+    let client = HttpNexusClient::new(std::time::Duration::from_secs(
+        state.config.proxy.upstream_timeout_secs,
+    ))
+    .map_err(ApiError::from)?;
+
+    // 解析凭据（用于 components 枚举与 asset 下载）；匿名源可省略
+    let credential = match req.auth_ref.as_deref() {
+        Some(r) if !r.is_empty() => Some(migrate::resolve_credential(r)?),
+        _ => None,
+    };
+
+    // 在线枚举源仓库列表，按所选 source 匹配出其摘要（含格式 / 类型，供范围判定）
+    let source_repos =
+        migrate::discover_repositories(&client, &req.base_url, req.auth_ref.as_deref()).await?;
+
+    let mut selections = Vec::with_capacity(req.repositories.len());
+    for r in &req.repositories {
+        let source = r.source.trim();
+        let Some(summary) = source_repos.iter().find(|s| s.name == source) else {
+            return Err(ApiError::BadRequest(format!("源仓库不存在: {source}")));
+        };
+        let target = r
+            .target
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .unwrap_or(source)
+            .to_string();
+        selections.push(migrate::OnlinePullSelection {
+            source: summary.clone(),
+            target_repo: target,
+        });
+    }
+
+    let report = migrate::migrate_online_repositories(
+        &client,
+        &state.meta,
+        &state.artifacts,
+        &state.formats,
+        &req.base_url,
+        credential.as_ref(),
+        &selections,
         state.config.limits.max_artifact_size,
     )
     .await?;

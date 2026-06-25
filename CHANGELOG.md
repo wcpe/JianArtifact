@@ -7,7 +7,7 @@
 ## 未发布版本
 
 ### 新增
-- 无
+- Nexus 在线拉取制品迁移（FR-82，补齐 ADR-0006 在线入口的「搬运」）：新增 `POST /api/v1/migrate/nexus/online/migrate`（仅 Admin），源 Nexus 在线时经其 `service/rest/v1/components`（`continuationToken` 分页）枚举所选 **Maven hosted** 仓库的全部 asset，按各 asset `downloadUrl` HTTP 流式下载、经既有制品机理落为本系统 hosted 制品——**无需离线 blob store 目录**，补足远程 Nexus（无磁盘访问）的迁移路径。落定后比对源报告 sha256 保证文件字节一致（`.sha1`/`.md5`/`.sha256`/`.sha512` sidecar 作为独立 asset 一并搬运），目标仓库名可自定义（默认同源名）；下载 / 写入瞬时失败（网络中断 / 流式解码失败）自动重试、指数退避（确定性失败不重试），单 asset 失败记录跳过、不中断整批、可重入；仅 `maven2` hosted 参与、其余整体跳过。Web 迁移页新增「在线拉取 / 离线目录」方式选择与每仓库目标改名
 
 ### 变更
 - 无

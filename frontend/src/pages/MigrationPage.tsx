@@ -1,8 +1,11 @@
-// Nexus 迁移管理页面（FR-81，对接 ADR-0006 已有迁移端点，仅 Admin）。
+// Nexus 迁移管理页面（FR-81 / FR-82，对接 ADR-0006 已有迁移端点，仅 Admin）。
 //
 // 多步流程（Mantine Stepper）：
 //   ① 选迁移形态（在线 REST / 离线 blob store）+ 填源 → 预览可迁移仓库列表（不搬运）。
-//   ② 勾选要搬运的仓库 + 填离线 blob store 路径（制品本体来源）→ 执行 proxy / hosted 搬运。
+//   ② 勾选要搬运的仓库 + 选迁移方式：
+//        · 在线拉取（FR-82）：经 REST 枚举 + HTTP 下载同步，无需离线目录；
+//          可为每个仓库选填目标仓库名（默认与源同名）；仅 maven2 hosted 有效。
+//        · 离线目录（FR-81）：填离线 blob store 路径，执行 proxy / hosted 搬运。
 //   ③ 展示迁移报告（每仓库已迁 / 跳过数、整仓跳过列表）。
 //
 // 凭据脱敏（红线）：源 Nexus 凭据仅以「引用名 auth_ref」形式输入，用口令型输入框承载、
@@ -25,9 +28,15 @@ import {
   Card,
   Loader,
   Center,
+  Alert,
 } from '@mantine/core';
 import * as api from '../api/endpoints';
-import type { MigrationReport, NexusRepoSummary, OfflineRepoSummary } from '../api/types';
+import type {
+  MigrationReport,
+  NexusRepoSummary,
+  OfflineRepoSummary,
+  OnlineMigrationReport,
+} from '../api/types';
 import { errorMessage } from '../lib/format';
 import { ErrorAlert } from '../components/ErrorAlert';
 import { notifySuccess } from '../lib/notify';
@@ -35,7 +44,10 @@ import { notifySuccess } from '../lib/notify';
 /** 迁移形态：在线 REST 入口 / 离线 blob store 入口。 */
 type SourceMode = 'online' | 'offline';
 
-/** 搬运目标类型：proxy 仓库 / hosted 仓库。 */
+/** 迁移方式：在线拉取（HTTP 下载，无需本地目录）/ 离线目录（直接访问 blob store 目录）。 */
+type MigrateMethod = 'online' | 'offline';
+
+/** 离线目录搬运目标类型：proxy 仓库 / hosted 仓库。 */
 type MigrateKind = 'proxy' | 'hosted';
 
 /** 预览到的仓库名集合（在线与离线归一为「仓库名 + 类型/计数」用于展示与勾选）。 */
@@ -79,12 +91,17 @@ export function MigrationPage() {
 
   // —— 勾选与搬运（步骤 ②）——
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [method, setMethod] = useState<MigrateMethod>('online');
   const [migratePath, setMigratePath] = useState('');
+  // 在线拉取：源仓库名 → 目标仓库名改名映射（空 / 缺省即与源同名）。
+  const [renames, setRenames] = useState<Record<string, string>>({});
   const [migrating, setMigrating] = useState(false);
   const [migrateError, setMigrateError] = useState<string | null>(null);
 
   // —— 报告（步骤 ③）——
+  // 离线目录报告与在线拉取报告结构不同，分开持有，按上次执行方式择一展示。
   const [report, setReport] = useState<MigrationReport | null>(null);
+  const [onlineReport, setOnlineReport] = useState<OnlineMigrationReport | null>(null);
 
   /** auth_ref 为空白时按未提供处理（匿名源）。 */
   const authRefValue = authRef.trim() === '' ? undefined : authRef.trim();
@@ -105,6 +122,7 @@ export function MigrationPage() {
         setRows(fromOffline(repos));
       }
       setSelected(new Set());
+      setRenames({});
     } catch (err) {
       setPreviewError(errorMessage(err));
     } finally {
@@ -125,8 +143,13 @@ export function MigrationPage() {
     });
   };
 
-  /** 执行搬运：按目标类型调用 proxy / hosted 搬运端点，得到报告并进入步骤 ③。 */
-  const handleMigrate = async (kind: MigrateKind) => {
+  /** 设置某源仓库的目标改名。 */
+  const setRename = (source: string, target: string) => {
+    setRenames((prev) => ({ ...prev, [source]: target }));
+  };
+
+  /** 执行离线目录搬运：按目标类型调用 proxy / hosted 端点，得到报告并进入步骤 ③。 */
+  const handleMigrateOffline = async (kind: MigrateKind) => {
     setMigrateError(null);
     setMigrating(true);
     try {
@@ -138,6 +161,7 @@ export function MigrationPage() {
       const result =
         kind === 'proxy' ? await api.migrateNexusProxy(req) : await api.migrateNexusHosted(req);
       setReport(result);
+      setOnlineReport(null);
       notifySuccess('迁移已完成，请查看报告');
       setActive(2);
     } catch (err) {
@@ -147,8 +171,38 @@ export function MigrationPage() {
     }
   };
 
-  // 在线形态搬运需源地址；两形态搬运均需离线路径提供制品本体来源
-  const canMigrate =
+  /** 执行在线拉取迁移：把所选仓库（含改名）映射为请求，调用在线端点并进入步骤 ③。 */
+  const handleMigrateOnline = async () => {
+    setMigrateError(null);
+    setMigrating(true);
+    try {
+      const repositories = rows
+        .filter((row) => selected.has(row.name))
+        .map((row) => {
+          const target = (renames[row.name] ?? '').trim();
+          // 目标为空即与源同名：省略 target 字段交后端默认处理。
+          return target === '' ? { source: row.name } : { source: row.name, target };
+        });
+      const result = await api.migrateNexusOnline({
+        base_url: baseUrl.trim(),
+        auth_ref: authRefValue,
+        repositories,
+      });
+      setOnlineReport(result);
+      setReport(null);
+      notifySuccess('迁移已完成，请查看报告');
+      setActive(2);
+    } catch (err) {
+      setMigrateError(errorMessage(err));
+    } finally {
+      setMigrating(false);
+    }
+  };
+
+  // 在线拉取：选中仓库且有源地址即可执行（无需离线路径）。
+  const canMigrateOnline = selected.size > 0 && baseUrl.trim() !== '' && !migrating;
+  // 离线目录：选中仓库 + 离线路径 + 源地址。
+  const canMigrateOffline =
     selected.size > 0 && migratePath.trim() !== '' && baseUrl.trim() !== '' && !migrating;
   const canPreview =
     (mode === 'online' ? baseUrl.trim() !== '' : offlinePath.trim() !== '') && !previewing;
@@ -250,63 +304,131 @@ export function MigrationPage() {
           </Stack>
         </Stepper.Step>
 
-        <Stepper.Step label="勾选执行" description="选仓库并搬运">
+        <Stepper.Step label="勾选执行" description="选仓库、选方式并搬运">
           <Stack mt="md">
             {rows.length === 0 ? (
               <Text c="dimmed">请先在上一步预览仓库。</Text>
             ) : (
               <>
+                <div>
+                  <Text fw={600} mb="xs">
+                    迁移方式
+                  </Text>
+                  <SegmentedControl
+                    value={method}
+                    onChange={(v) => setMethod(v as MigrateMethod)}
+                    data={[
+                      { label: '在线拉取（HTTP 下载）', value: 'online' },
+                      { label: '离线目录（blob store）', value: 'offline' },
+                    ]}
+                  />
+                </div>
+
                 <Card withBorder padding="md" radius="md">
                   <Text fw={600} mb="sm">
                     勾选要搬运的仓库（已选 {selected.size}）
                   </Text>
-                  <Stack gap="xs">
-                    {rows.map((row) => (
-                      <Checkbox
-                        key={row.name}
-                        label={`${row.name}（${row.format} / ${row.detail}）`}
-                        checked={selected.has(row.name)}
-                        onChange={() => toggleSelect(row.name)}
-                      />
-                    ))}
-                  </Stack>
+                  {method === 'online' ? (
+                    <Stack gap="sm">
+                      {rows.map((row) => (
+                        <Group key={row.name} align="center" wrap="nowrap">
+                          <Checkbox
+                            label={`${row.name}（${row.format} / ${row.detail}）`}
+                            checked={selected.has(row.name)}
+                            onChange={() => toggleSelect(row.name)}
+                            style={{ flex: 1 }}
+                          />
+                          <TextInput
+                            aria-label={`${row.name} 目标仓库名`}
+                            placeholder={`目标名（默认 ${row.name}）`}
+                            value={renames[row.name] ?? ''}
+                            onChange={(e) => setRename(row.name, e.currentTarget.value)}
+                            disabled={!selected.has(row.name)}
+                            w={220}
+                          />
+                        </Group>
+                      ))}
+                    </Stack>
+                  ) : (
+                    <Stack gap="xs">
+                      {rows.map((row) => (
+                        <Checkbox
+                          key={row.name}
+                          label={`${row.name}（${row.format} / ${row.detail}）`}
+                          checked={selected.has(row.name)}
+                          onChange={() => toggleSelect(row.name)}
+                        />
+                      ))}
+                    </Stack>
+                  )}
                 </Card>
 
-                <TextInput
-                  label="离线 blob store 路径（制品本体来源）"
-                  description="搬运需从离线 blob store 读取制品本体，其下应含 content/ 子目录。"
-                  placeholder="/data/nexus/blobs/default"
-                  value={migratePath}
-                  onChange={(e) => setMigratePath(e.currentTarget.value)}
-                  required
-                />
+                {method === 'online' ? (
+                  <Alert color="blue" variant="light">
+                    在线拉取仅对 maven2 hosted 仓库有效，经源 Nexus REST 枚举并逐个 HTTP
+                    下载制品，无需本地 blob store 目录；非 maven / 非 hosted
+                    的所选仓库会被跳过并列入报告。 每个仓库可选填目标仓库名，留空即与源同名。
+                  </Alert>
+                ) : (
+                  <TextInput
+                    label="离线 blob store 路径（制品本体来源）"
+                    description="搬运需从离线 blob store 读取制品本体，其下应含 content/ 子目录。"
+                    placeholder="/data/nexus/blobs/default"
+                    value={migratePath}
+                    onChange={(e) => setMigratePath(e.currentTarget.value)}
+                    required
+                  />
+                )}
 
                 {migrateError && <ErrorAlert message={migrateError} />}
 
-                <Group>
-                  <Button onClick={() => setActive(0)} variant="default">
-                    上一步
-                  </Button>
-                  <Button
-                    onClick={() => handleMigrate('proxy')}
-                    disabled={!canMigrate}
-                    loading={migrating}
-                  >
-                    执行 proxy 搬运
-                  </Button>
-                  <Button
-                    onClick={() => handleMigrate('hosted')}
-                    disabled={!canMigrate}
-                    loading={migrating}
-                    color="grape"
-                  >
-                    执行 hosted 搬运
-                  </Button>
-                </Group>
-                <Text size="xs" c="dimmed">
-                  proxy 搬运建仓 + 搬运缓存制品；hosted 搬运建仓 + 搬运完整制品。两者均按源仓库
-                  类型在后端各取所需，非目标类型仓库会被跳过并列入报告。
-                </Text>
+                {method === 'online' ? (
+                  <>
+                    <Group>
+                      <Button onClick={() => setActive(0)} variant="default">
+                        上一步
+                      </Button>
+                      <Button
+                        onClick={handleMigrateOnline}
+                        disabled={!canMigrateOnline}
+                        loading={migrating}
+                      >
+                        执行在线拉取
+                      </Button>
+                    </Group>
+                    <Text size="xs" c="dimmed">
+                      在线拉取建仓 + 经 HTTP 下载同步制品；仅 maven2 hosted 仓库被处理，其余进报告
+                      的整仓跳过列表。
+                    </Text>
+                  </>
+                ) : (
+                  <>
+                    <Group>
+                      <Button onClick={() => setActive(0)} variant="default">
+                        上一步
+                      </Button>
+                      <Button
+                        onClick={() => handleMigrateOffline('proxy')}
+                        disabled={!canMigrateOffline}
+                        loading={migrating}
+                      >
+                        执行 proxy 搬运
+                      </Button>
+                      <Button
+                        onClick={() => handleMigrateOffline('hosted')}
+                        disabled={!canMigrateOffline}
+                        loading={migrating}
+                        color="grape"
+                      >
+                        执行 hosted 搬运
+                      </Button>
+                    </Group>
+                    <Text size="xs" c="dimmed">
+                      proxy 搬运建仓 + 搬运缓存制品；hosted 搬运建仓 + 搬运完整制品。两者均按源仓库
+                      类型在后端各取所需，非目标类型仓库会被跳过并列入报告。
+                    </Text>
+                  </>
+                )}
               </>
             )}
           </Stack>
@@ -314,7 +436,62 @@ export function MigrationPage() {
 
         <Stepper.Step label="迁移报告" description="查看结果">
           <Stack mt="md">
-            {!report ? (
+            {onlineReport ? (
+              <Card withBorder padding="md" radius="md">
+                <Text fw={600} mb="sm">
+                  在线拉取迁移报告
+                </Text>
+                {onlineReport.repos.length === 0 ? (
+                  <Text c="dimmed" size="sm">
+                    无仓库被搬运。
+                  </Text>
+                ) : (
+                  <Table.ScrollContainer minWidth={560}>
+                    <Table striped>
+                      <Table.Thead>
+                        <Table.Tr>
+                          <Table.Th>源仓库</Table.Th>
+                          <Table.Th>目标仓库</Table.Th>
+                          <Table.Th>格式</Table.Th>
+                          <Table.Th>新建仓库</Table.Th>
+                          <Table.Th ta="right">已迁制品</Table.Th>
+                          <Table.Th ta="right">跳过制品</Table.Th>
+                        </Table.Tr>
+                      </Table.Thead>
+                      <Table.Tbody>
+                        {onlineReport.repos.map((r) => (
+                          <Table.Tr key={`${r.source_repo}->${r.target_repo}`}>
+                            <Table.Td>{r.source_repo}</Table.Td>
+                            <Table.Td>{r.target_repo}</Table.Td>
+                            <Table.Td>{r.format}</Table.Td>
+                            <Table.Td>
+                              <Badge color={r.created ? 'green' : 'gray'} variant="light">
+                                {r.created ? '是' : '已存在'}
+                              </Badge>
+                            </Table.Td>
+                            <Table.Td ta="right">{r.migrated_artifacts}</Table.Td>
+                            <Table.Td ta="right">{r.skipped_artifacts}</Table.Td>
+                          </Table.Tr>
+                        ))}
+                      </Table.Tbody>
+                    </Table>
+                  </Table.ScrollContainer>
+                )}
+
+                {onlineReport.skipped_repos.length > 0 && (
+                  <Group mt="sm" gap="xs">
+                    <Text size="sm" c="dimmed">
+                      整仓跳过（非 maven hosted）：
+                    </Text>
+                    {onlineReport.skipped_repos.map((name) => (
+                      <Badge key={name} color="orange" variant="light">
+                        {name}
+                      </Badge>
+                    ))}
+                  </Group>
+                )}
+              </Card>
+            ) : !report ? (
               <Text c="dimmed">尚无迁移报告。</Text>
             ) : (
               <Card withBorder padding="md" radius="md">

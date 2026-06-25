@@ -57,7 +57,7 @@ pub struct HostedMigrationReport {
 ///
 /// 同名仓库已存在则直接复用（幂等，不重复建仓、不改其既有配置）；否则按映射格式新建一个
 /// public hosted 仓库（hosted 无上游地址 / 上游凭据）。
-async fn ensure_hosted_repo(
+pub(crate) async fn ensure_hosted_repo(
     meta: &MetaStore,
     name: &str,
     format: &str,

@@ -103,6 +103,11 @@ fn hosted_migrate_req(auth: Option<&str>, body: Value) -> Request<Body> {
     json_post("/api/v1/migrate/nexus/hosted/migrate", auth, body)
 }
 
+/// 构造带 JSON 体的在线拉取迁移请求（FR-82）。
+fn online_migrate_req(auth: Option<&str>, body: Value) -> Request<Body> {
+    json_post("/api/v1/migrate/nexus/online/migrate", auth, body)
+}
+
 /// 构造带可选认证头的 JSON POST 请求。
 fn json_post(uri: &str, auth: Option<&str>, body: Value) -> Request<Body> {
     let mut builder = Request::builder()
@@ -330,6 +335,51 @@ async fn hosted_搬运管理员空_offline_path_返回_400() {
         hosted_migrate_req(
             Some(&format!("Bearer {token}")),
             json!({ "base_url": "https://nexus.example", "offline_path": "   " }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body}");
+}
+
+#[tokio::test]
+async fn 匿名在线迁移返回_401() {
+    let (state, _dir) = 测试用状态().await;
+    let (status, _) = send(
+        build_router(state),
+        online_migrate_req(
+            None,
+            json!({ "base_url": "https://nexus.example", "repositories": [{ "source": "r3d" }] }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn 普通用户在线迁移返回_403() {
+    let (state, _dir) = 测试用状态().await;
+    let token = seed_and_login(&state, "user", "pw", Role::User).await;
+    let (status, _) = send(
+        build_router(state),
+        online_migrate_req(
+            Some(&format!("Bearer {token}")),
+            json!({ "base_url": "https://nexus.example", "repositories": [{ "source": "r3d" }] }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn 在线迁移管理员空仓库列表返回_400() {
+    let (state, _dir) = 测试用状态().await;
+    let token = seed_and_login(&state, "admin", "pw", Role::Admin).await;
+    // 未选择仓库应在调用源系统前以 400 短路
+    let (status, body) = send(
+        build_router(state),
+        online_migrate_req(
+            Some(&format!("Bearer {token}")),
+            json!({ "base_url": "https://nexus.example", "repositories": [] }),
         ),
     )
     .await;

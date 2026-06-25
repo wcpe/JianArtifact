@@ -419,3 +419,48 @@ export interface NexusMigrateRequest {
   auth_ref?: string | null;
   offline_path: string;
 }
+
+// —— Nexus 在线拉取迁移（FR-82，对接后端 /migrate/nexus/online/migrate） ——
+
+/**
+ * 在线拉取：单个待迁移仓库的选择项。
+ * `source` 为源仓库名；`target` 省略 / 为空则与源同名（允许改名）。
+ * 严格对齐后端 OnlineRepoSelection。
+ */
+export interface OnlineRepoSelection {
+  source: string;
+  target?: string | null;
+}
+
+/**
+ * 在线拉取迁移请求体（经 REST 枚举 + HTTP 下载，无需离线目录）。
+ * 凭据仅以引用名 auth_ref 提供，真值走后端 env，不入库、不回显。
+ * 严格对齐后端 OnlineMigrateRequest。
+ */
+export interface OnlineMigrateRequest {
+  base_url: string;
+  auth_ref?: string | null;
+  repositories: OnlineRepoSelection[];
+}
+
+/**
+ * 在线拉取：单个仓库的迁移结果。
+ * 严格对齐后端 OnlineRepoMigrationOutcome。
+ */
+export interface OnlineRepoMigrationOutcome {
+  source_repo: string;
+  target_repo: string;
+  format: string;
+  created: boolean;
+  migrated_artifacts: number;
+  skipped_artifacts: number;
+}
+
+/**
+ * 在线拉取迁移报告。
+ * 严格对齐后端 OnlineMigrationReport。
+ */
+export interface OnlineMigrationReport {
+  repos: OnlineRepoMigrationOutcome[];
+  skipped_repos: string[];
+}

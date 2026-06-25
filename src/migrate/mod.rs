@@ -22,6 +22,7 @@
 mod hosted;
 mod http;
 mod offline;
+mod online;
 mod proxy;
 
 pub use hosted::{migrate_hosted_repositories, HostedMigrationReport, HostedRepoMigrationOutcome};
@@ -29,6 +30,10 @@ pub use http::HttpNexusClient;
 pub use offline::{
     enumerate_blob_entries, enumerate_blob_store, OfflineBlobEntry, OfflineBlobSummary,
     OfflineRepoSummary,
+};
+pub use online::{
+    migrate_online_repositories, OnlineMigrationReport, OnlinePullSelection,
+    OnlineRepoMigrationOutcome,
 };
 pub use proxy::{migrate_proxy_repositories, ProxyMigrationReport, RepoMigrationOutcome};
 
@@ -63,6 +68,9 @@ pub(crate) fn normalize_blob_path(blob_name: &str) -> &str {
 
 /// Nexus 仓库列表 REST 端点（相对其 base URL）。
 const NEXUS_REPOSITORIES_PATH: &str = "service/rest/v1/repositories";
+
+/// Nexus 制品（components）REST 端点（相对其 base URL，按 `?repository=X` 分页枚举）。
+const NEXUS_COMPONENTS_PATH: &str = "service/rest/v1/components";
 
 /// 解析凭据引用时的 env 前缀。`auth_ref` 为 `<NAME>`，
 /// 真值取 `JIANARTIFACT_MIGRATE_<NAME>_USERNAME` / `JIANARTIFACT_MIGRATE_<NAME>_PASSWORD`，
@@ -137,6 +145,28 @@ pub trait NexusClient: Send + Sync {
         base_url: &str,
         credential: Option<&NexusCredential>,
     ) -> Result<String, MigrateError>;
+
+    /// 分页拉取某仓库的 components REST 响应原文（JSON 文本）。
+    ///
+    /// `continuation_token` 为上一页返回的续页令牌（首页传 `None`）；非 2xx / 传输失败
+    /// 返回对应 [`MigrateError`]。供在线拉取迁移枚举某仓库的全部 asset。
+    async fn fetch_components(
+        &self,
+        base_url: &str,
+        repository: &str,
+        continuation_token: Option<&str>,
+        credential: Option<&NexusCredential>,
+    ) -> Result<String, MigrateError>;
+
+    /// 流式下载单个 asset，返回装箱的异步读句柄（不整体载入内存）。
+    ///
+    /// 供在线拉取迁移逐 asset 下载后喂给既有 `ingest_hosted`；非 2xx / 传输失败返回
+    /// 对应 [`MigrateError`]。
+    async fn download_asset(
+        &self,
+        download_url: &str,
+        credential: Option<&NexusCredential>,
+    ) -> Result<Box<dyn tokio::io::AsyncRead + Send + Unpin>, MigrateError>;
 }
 
 /// 据 `auth_ref` 从环境变量解析 Nexus 访问凭据。
@@ -191,6 +221,76 @@ pub fn parse_repositories(body: &str) -> Result<Vec<NexusRepoSummary>, MigrateEr
             upstream_url: r.attributes.proxy.and_then(|p| p.remote_url),
         })
         .collect())
+}
+
+/// 源 Nexus 某仓库的单个 asset（在线拉取的下载单元）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NexusAsset {
+    /// 仓库内路径（即本系统落地路径），如 `com/foo/lib/1.0/lib-1.0.jar`。
+    pub path: String,
+    /// 该 asset 的 HTTP 下载地址（取自 Nexus 的 `downloadUrl`）。
+    pub download_url: String,
+    /// Nexus 报告的 sha256：用于流式落定后比对，保证文件字节一致；缺失则不比对。
+    pub sha256: Option<String>,
+}
+
+/// components REST 单页解析结果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComponentsPage {
+    /// 本页所有 component 展平后的 asset 列表。
+    pub assets: Vec<NexusAsset>,
+    /// 续页令牌；`None` 表示已是最后一页。
+    pub continuation_token: Option<String>,
+}
+
+/// 解析 Nexus components REST 单页响应为 asset 列表与续页令牌（纯函数，便于穷举测试）。
+///
+/// 取 `items[].assets[]` 的 `path` / `downloadUrl` / `checksum.sha256`，与顶层
+/// `continuationToken`；Nexus 多出的字段（id / format / blobCreated 等）由 serde 忽略。
+/// 顶层须为含 `items` 数组的对象，否则报 [`MigrateError::Parse`]。
+pub fn parse_components(body: &str) -> Result<ComponentsPage, MigrateError> {
+    #[derive(serde::Deserialize)]
+    struct RawPage {
+        #[serde(default)]
+        items: Vec<RawComponent>,
+        #[serde(rename = "continuationToken")]
+        continuation_token: Option<String>,
+    }
+    #[derive(serde::Deserialize)]
+    struct RawComponent {
+        #[serde(default)]
+        assets: Vec<RawAsset>,
+    }
+    #[derive(serde::Deserialize)]
+    struct RawAsset {
+        path: String,
+        #[serde(rename = "downloadUrl")]
+        download_url: String,
+        #[serde(default)]
+        checksum: RawChecksum,
+    }
+    #[derive(serde::Deserialize, Default)]
+    struct RawChecksum {
+        #[serde(default)]
+        sha256: Option<String>,
+    }
+
+    let raw: RawPage =
+        serde_json::from_str(body).map_err(|e| MigrateError::Parse(e.to_string()))?;
+    let assets = raw
+        .items
+        .into_iter()
+        .flat_map(|c| c.assets)
+        .map(|a| NexusAsset {
+            path: a.path,
+            download_url: a.download_url,
+            sha256: a.checksum.sha256,
+        })
+        .collect();
+    Ok(ComponentsPage {
+        assets,
+        continuation_token: raw.continuation_token,
+    })
 }
 
 /// 连接在线 Nexus 并枚举可迁移仓库列表（迁移发现 / 入口步骤）。
@@ -287,6 +387,25 @@ mod tests {
                 }
             }
         }
+
+        // 本 mock 仅用于 discover_repositories 用例，不触达在线拉取路径。
+        async fn fetch_components(
+            &self,
+            _base_url: &str,
+            _repository: &str,
+            _continuation_token: Option<&str>,
+            _credential: Option<&NexusCredential>,
+        ) -> Result<String, MigrateError> {
+            unimplemented!("discover 用例不调用 fetch_components")
+        }
+
+        async fn download_asset(
+            &self,
+            _download_url: &str,
+            _credential: Option<&NexusCredential>,
+        ) -> Result<Box<dyn tokio::io::AsyncRead + Send + Unpin>, MigrateError> {
+            unimplemented!("discover 用例不调用 download_asset")
+        }
     }
 
     /// Nexus 文档示例响应：一个 proxy（带 remoteUrl）与一个 hosted（空 attributes）。
@@ -364,6 +483,61 @@ mod tests {
         // 完全非法 JSON
         assert!(matches!(
             parse_repositories("not json"),
+            Err(MigrateError::Parse(_))
+        ));
+    }
+
+    #[test]
+    fn 解析_components_页取_asset_与续页令牌() {
+        let body = r#"{
+            "items": [
+                { "assets": [
+                    { "path": "com/foo/lib/1.0/lib-1.0.jar", "downloadUrl": "https://nx/repository/r/com/foo/lib/1.0/lib-1.0.jar", "checksum": { "sha256": "abc", "sha1": "x" } },
+                    { "path": "com/foo/lib/1.0/lib-1.0.jar.sha1", "downloadUrl": "https://nx/repository/r/com/foo/lib/1.0/lib-1.0.jar.sha1", "checksum": { "sha256": "def" } }
+                ]},
+                { "assets": [
+                    { "path": "com/foo/lib/1.0/lib-1.0.pom", "downloadUrl": "https://nx/p/lib-1.0.pom", "checksum": {} }
+                ]}
+            ],
+            "continuationToken": "tok123"
+        }"#;
+        let page = parse_components(body).unwrap();
+        assert_eq!(page.continuation_token.as_deref(), Some("tok123"));
+        // 跨 component 展平所有 asset
+        assert_eq!(page.assets.len(), 3);
+        assert_eq!(page.assets[0].path, "com/foo/lib/1.0/lib-1.0.jar");
+        assert_eq!(
+            page.assets[0].download_url,
+            "https://nx/repository/r/com/foo/lib/1.0/lib-1.0.jar"
+        );
+        assert_eq!(page.assets[0].sha256.as_deref(), Some("abc"));
+        // sidecar 作为独立 asset 一并枚举
+        assert_eq!(page.assets[1].path, "com/foo/lib/1.0/lib-1.0.jar.sha1");
+        // checksum 缺 sha256 时为 None（不比对）
+        assert_eq!(page.assets[2].sha256, None);
+    }
+
+    #[test]
+    fn 解析_components_末页续页令牌为_none() {
+        let page =
+            parse_components(r#"{ "items": [ { "assets": [] } ], "continuationToken": null }"#)
+                .unwrap();
+        assert!(page.assets.is_empty());
+        assert_eq!(page.continuation_token, None);
+        // 缺 continuationToken 字段也视为末页
+        let page2 = parse_components(r#"{ "items": [] }"#).unwrap();
+        assert!(page2.continuation_token.is_none());
+    }
+
+    #[test]
+    fn 解析_components_非法_json_报解析错误() {
+        assert!(matches!(
+            parse_components("not json"),
+            Err(MigrateError::Parse(_))
+        ));
+        // asset 缺 path 字段
+        assert!(matches!(
+            parse_components(r#"{"items":[{"assets":[{"downloadUrl":"u"}]}]}"#),
             Err(MigrateError::Parse(_))
         ));
     }
