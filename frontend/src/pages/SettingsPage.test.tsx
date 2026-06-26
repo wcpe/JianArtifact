@@ -1,5 +1,7 @@
-// 设置页组件测试（FR-87 只读 + FR-88 可编辑热替换）：加载填充脱敏配置到表单、保存调 PATCH 即时生效、
-// 检查更新展示版本对比、有更新触发升级确认流、enabled=false 禁用升级、各错误码（409/502/422）友好提示。
+// 设置页组件测试（FR-87 只读 + FR-88 可编辑热替换 + FR-96 页内 tab 重排）：
+// 加载填充脱敏配置到表单、保存调 PATCH 即时生效、检查更新展示版本对比、有更新触发升级确认流、
+// enabled=false 禁用升级、各错误码（409/502/422）友好提示；
+// 并校验左侧页内 tab（网络代理 / 在线更新 / 关于·版本）切换显示对应区。
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
@@ -267,6 +269,41 @@ describe('SettingsPage', () => {
       expect(screen.getByText('下载内容校验和不一致，已拒绝替换')).toBeInTheDocument(),
     );
     expect(screen.queryByText('已触发升级')).not.toBeInTheDocument();
+  });
+
+  it('FR-96：渲染左侧页内 tab（网络代理 / 在线更新 / 关于·版本）', async () => {
+    vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
+    // 三个页内 tab 均以 tab 角色呈现
+    expect(screen.getByRole('tab', { name: /网络代理/ })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /在线更新/ })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /关于/ })).toBeInTheDocument();
+  });
+
+  it('FR-96：切换到「关于·版本」tab 展示当前版本与生效说明', async () => {
+    vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('tab', { name: /关于/ }));
+
+    // 关于区展示当前版本与「无须重启」生效说明
+    await waitFor(() => expect(screen.getByText(/运行时即时生效、无须重启/)).toBeInTheDocument());
+    expect(screen.getByText('0.3.0')).toBeInTheDocument();
+  });
+
+  it('FR-96：默认激活「网络代理」tab，代理表单可见', async () => {
+    vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
+    // 默认 tab 选中态为网络代理
+    expect(screen.getByRole('tab', { name: /网络代理/ })).toHaveAttribute('aria-selected', 'true');
+    // 切到在线更新 tab 后，仓库源表单仍可访问（panel keepMounted）
+    fireEvent.click(screen.getByRole('tab', { name: /在线更新/ }));
+    expect(screen.getByDisplayValue('wcpe/JianArtifact')).toBeInTheDocument();
   });
 
   it('加载失败时展示错误提示', async () => {
