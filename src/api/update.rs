@@ -106,6 +106,15 @@ pub async fn apply_update(
     identity: Identity,
 ) -> Result<Json<ApplyResponse>, ApiError> {
     identity.require_admin()?;
+
+    // 进程级单飞互斥（M2）：先抢占 apply 标志（鉴权之后、出站 / 替换之前），抢不到说明已有自更新
+    // 在途，立即 409「更新进行中」，不竞争下载临时文件与 .bak/.old/.new。guard 持有至本 handler
+    // 全程结束（含出错 / 早返回），析构时可靠复位，不泄漏占用。
+    let _apply_guard = state
+        .restart
+        .try_begin_apply()
+        .ok_or_else(|| ApiError::Conflict("更新进行中".to_string()))?;
+
     let source = build_source(&state)?;
 
     // 当前 exe 与数据目录由配置 / 运行时给出；替换在阻塞线程池执行，校验通过才替换
@@ -218,5 +227,30 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::CONFLICT);
         // 未启用即不应置位重启请求
         assert!(restart.take().is_none(), "未启用时不得置位重启请求");
+    }
+
+    #[tokio::test]
+    async fn apply_并发在途第二个返回_409_更新进行中() {
+        // M2：手动占用 apply 单飞标志，模拟已有一次自更新在途；
+        // 再触发 apply 的 Admin 应拿到 409「更新进行中」，且不进入替换 / 不置位重启请求。
+        let (state, _dir) = 测试用状态().await;
+        let restart = state.restart.clone();
+        let token = 签发令牌(&state, "admin", Role::Admin).await;
+        // 占用单飞标志（持有 guard 至断言后），代表“已有 apply 在途”
+        let in_flight = restart.try_begin_apply().expect("测试前置：首个抢占应成功");
+
+        let resp = 请求(state, "/api/v1/update/apply", "POST", Some(&token)).await;
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        let body = super::super::tests::读_json(resp).await;
+        assert_eq!(body["error"]["message"], "更新进行中");
+        // 在途期间第二个不得置位重启请求
+        assert!(restart.take().is_none(), "在途时不得置位重启请求");
+
+        // 释放在途标志后，单飞标志复位、可再次抢占（验证 guard 未泄漏）
+        drop(in_flight);
+        assert!(
+            restart.try_begin_apply().is_some(),
+            "在途结束后标志应复位、可再次 apply"
+        );
     }
 }

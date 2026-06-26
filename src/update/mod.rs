@@ -22,7 +22,7 @@ mod source;
 #[cfg(test)]
 mod tests;
 
-pub use restart::{RestartHandle, RestartRequest};
+pub use restart::{ApplyGuard, RestartHandle, RestartRequest};
 pub use source::{GithubReleaseSource, Release, ReleaseAsset, ReleaseSource};
 
 /// 临时下载子目录名（位于数据目录下），存放下载中的资产，校验失败即清理。
@@ -249,22 +249,29 @@ fn sibling_with_suffix(exe: &Path, suffix: &str) -> PathBuf {
     }
 }
 
-/// 启动早期清理 Windows 残留的 `{exe}.old`（best-effort，失败仅 WARN，不阻断启动）。
+/// 启动早期清理上次自更新留下的残留临时文件（best-effort，失败仅 WARN，不阻断启动）。
 ///
-/// Unix 无残留文件，直接返回。在 main 早期调用，清理上次自更新留下的旧二进制。
+/// 清理两类残留（在 main 早期调用）：
+/// - `{exe}.old`：仅 Windows——运行中 exe 改名后留下的旧二进制（下次启动清理）。
+/// - `{exe}.new`：任意平台——跨卷 copy fallback 或替换执行失败时残留的暂存新文件（m3）。
 pub fn cleanup_stale_old() {
-    if !cfg!(windows) {
-        return;
-    }
     let Ok(exe) = std::env::current_exe() else {
         return;
     };
-    let old = sibling_with_suffix(&exe, ".old");
-    if old.exists() {
-        if let Err(e) = std::fs::remove_file(&old) {
-            tracing::warn!(路径 = %old.display(), 错误 = %e, "清理残留旧二进制失败（将下次重试）");
+    // .old 仅 Windows 产生；.new 任意平台都可能残留
+    if cfg!(windows) {
+        remove_stale_file(&sibling_with_suffix(&exe, ".old"), "残留旧二进制");
+    }
+    remove_stale_file(&sibling_with_suffix(&exe, ".new"), "残留暂存新二进制");
+}
+
+/// 尽力删除一个残留临时文件（不存在则跳过；失败仅 WARN，不阻断启动）。
+fn remove_stale_file(path: &Path, desc: &str) {
+    if path.exists() {
+        if let Err(e) = std::fs::remove_file(path) {
+            tracing::warn!(路径 = %path.display(), 错误 = %e, "清理{desc}失败（将下次重试）");
         } else {
-            tracing::info!(路径 = %old.display(), "已清理自更新残留的旧二进制");
+            tracing::info!(路径 = %path.display(), "已清理自更新{desc}");
         }
     }
 }
@@ -446,9 +453,14 @@ pub async fn apply_update<S: ReleaseSource>(
     stage_file(&tmp_bin, &plan.staged).await?;
     // 替换执行是同步阻塞文件操作，放到阻塞线程池
     let plan_for_exec = plan.clone();
-    tokio::task::spawn_blocking(move || execute_replace(&plan_for_exec))
+    let exec_result = tokio::task::spawn_blocking(move || execute_replace(&plan_for_exec))
         .await
-        .map_err(|e| UpdateError::Io(e.to_string()))??;
+        .map_err(|e| UpdateError::Io(e.to_string()))?;
+    // 替换执行失败：尽力清理已暂存的 .new（m3，避免残留无人清理），旧二进制已在 execute_replace 内尽力还原
+    if let Err(e) = exec_result {
+        let _ = tokio::fs::remove_file(&plan.staged).await;
+        return Err(e);
+    }
 
     tracing::info!(新版本 = %latest, "二进制原子替换完成，准备触发自动重启");
     Ok(ApplyOutcome {

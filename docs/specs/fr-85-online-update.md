@@ -98,8 +98,8 @@ download_timeout_secs = 300
 
 ### 3.10 API（仅 Admin，挂 `/api/v1/update/*`）
 - `GET /api/v1/update/check` → `{current_version, latest_version, update_available, asset_name, notes}`；`enabled=false` 返 409「在线更新未启用」。
-- `POST /api/v1/update/apply` → 下载+校验+替换+触发重启；成功 `200 {status, new_version}`。`enabled=false` 拒绝；非 Admin/匿名 403。
-- 错误映射：上游不可达/超时 → 502；校验失败 → 422/400（明确文案）；平台不支持 → 400；无更新可用 → 409。
+- `POST /api/v1/update/apply` → 下载+校验+替换+触发重启；成功 `200 {status, new_version}`。`enabled=false` 拒绝；非 Admin/匿名 403。**并发单飞**：apply 进程级互斥，已有一次自更新在途时再次触发返回 409「更新进行中」、不竞争临时文件（M2）。
+- 错误映射：上游不可达/超时 → 502；校验失败 → 422/400（明确文案）；平台不支持 → 400；无更新可用 → 409；已有自更新在途 → 409「更新进行中」。
 - 同步 `docs/API.md`。
 
 ## 4. 任务拆分

@@ -410,3 +410,38 @@ fn 解析_release_缺_tag_报错() {
         Err(UpdateError::Parse(_))
     ));
 }
+
+// ---------- apply 单飞互斥（M2）----------
+
+#[test]
+fn apply_单飞_第二次抢占失败() {
+    let handle = std::sync::Arc::new(RestartHandle::default());
+    // 第一个抢到 guard
+    let guard = handle.try_begin_apply().expect("首个应抢到 apply 标志");
+    // 持有期间第二个抢不到
+    assert!(
+        handle.try_begin_apply().is_none(),
+        "在途时第二个 apply 应抢占失败"
+    );
+    // guard 释放后可再次抢占（标志复位）
+    drop(guard);
+    assert!(
+        handle.try_begin_apply().is_some(),
+        "释放后标志应复位、可再次抢占"
+    );
+}
+
+#[test]
+fn apply_单飞_guard_出错路径也复位() {
+    let handle = std::sync::Arc::new(RestartHandle::default());
+    // 模拟一次 apply 中途 ? 早返回：guard 在作用域结束即析构复位
+    {
+        let _guard = handle.try_begin_apply().expect("应抢到");
+        // 此作用域代表 apply 执行中（含任意早返回点）
+    }
+    // 析构后标志复位，下一次仍可抢占
+    assert!(
+        handle.try_begin_apply().is_some(),
+        "出错 / 早返回后 guard 析构应复位标志"
+    );
+}
