@@ -517,3 +517,43 @@ export interface MigrationJobSummary {
   skipped: number;
   current_repo: string | null;
 }
+
+// —— 设置页（FR-87，仅管理员） ——
+
+/** 网络代理视图（脱敏后：URL 已去除 user:pass@ 凭据）。 */
+export interface NetworkProxyView {
+  http: string | null;
+  https: string | null;
+  no_proxy: string | null;
+}
+
+/** 在线更新视图（脱敏后：token 仅以 has_token 布尔暴露，不回显本体）。 */
+export interface UpdateView {
+  enabled: boolean;
+  repo: string;
+  api_base_url: string;
+  restart_mode: string;
+  has_token: boolean;
+}
+
+/** 设置页聚合视图（GET /api/v1/settings，仅管理员）。 */
+export interface SettingsView {
+  current_version: string;
+  network_proxy: NetworkProxyView;
+  update: UpdateView;
+}
+
+/** 更新检查结果（GET /api/v1/update/check，对齐 FR-85 既有契约）。 */
+export interface UpdateCheck {
+  current_version: string;
+  latest_version: string;
+  update_available: boolean;
+  asset_name: string;
+  notes: string;
+}
+
+/** 应用更新成功响应（POST /api/v1/update/apply）。 */
+export interface ApplyResponse {
+  status: string;
+  new_version: string;
+}

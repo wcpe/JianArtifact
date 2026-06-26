@@ -33,6 +33,9 @@ import type {
   RepoFormat,
   RepositoryDto,
   SearchHit,
+  SettingsView,
+  UpdateCheck,
+  ApplyResponse,
   TokenView,
   UpdateRepositoryRequest,
   UpdateUserRequest,
@@ -434,6 +437,23 @@ export function getMigrationJob(id: string): Promise<OnlinePullJob> {
 /** 列出活动 / 近期在线拉取任务（供客户端重连点选续看）。 */
 export function listMigrationJobs(): Promise<MigrationJobSummary[]> {
   return request<MigrationJobSummary[]>('/migrate/jobs');
+}
+
+// —— 设置页（FR-87，仅管理员） ——
+
+/** 读取脱敏后的网络代理 + 在线更新配置与当前版本（仅管理员）。 */
+export function getSettings(): Promise<SettingsView> {
+  return request<SettingsView>('/settings');
+}
+
+/** 更新检查：查最新版本并比对（仅管理员；未启用时后端返回 409）。 */
+export function checkUpdate(): Promise<UpdateCheck> {
+  return request<UpdateCheck>('/update/check');
+}
+
+/** 应用更新：下载 → 校验 → 替换 → 触发重启（仅管理员）。 */
+export function applyUpdate(): Promise<ApplyResponse> {
+  return request<ApplyResponse>('/update/apply', { method: 'POST' });
 }
 
 /** 对制品路径逐段编码（保留 `/` 分隔，避免破坏 catch-all 路径语义）。 */

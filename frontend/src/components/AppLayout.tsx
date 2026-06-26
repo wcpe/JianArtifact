@@ -15,6 +15,7 @@ import {
   IconHistory,
   IconShield,
   IconTransfer,
+  IconSettings,
   IconLogout,
 } from '@tabler/icons-react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
@@ -46,6 +47,7 @@ const NAV_ITEMS: NavItem[] = [
     adminOnly: true,
   },
   { label: 'Nexus 迁移', path: '/migration', icon: <IconTransfer size={18} />, adminOnly: true },
+  { label: '设置', path: '/settings', icon: <IconSettings size={18} />, adminOnly: true },
 ];
 
 /** 应用布局：渲染导航与子路由出口。 */
