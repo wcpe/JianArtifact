@@ -12,6 +12,7 @@
 - 统一出站网络代理（FR-84，ADR-0020）：新增 `[network.proxy]` 配置（`http` / `https` / `no_proxy`，环境变量前缀 `JIANARTIFACT_NETWORK_PROXY_*`）作为出站正向代理的唯一真源，`config` 层抽共享出站客户端 helper `build_outbound_client` 统一注入全部出站 reqwest 客户端（proxy 回源 / Nexus 在线迁移 / 漏洞库镜像 / OIDC），保留既有 rustls / stream 特性。配置给值即为真源（压过系统代理环境变量）、三键全空时不注入保持现状（仍 honor 系统 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`）；代理 URL 凭据不入库、不进日志 / 错误信息
 - GitHub Actions CI/CD 发布流水线（FR-86）：新增质量门工作流（push/PR 到 `master` → 前端构建 + `cargo fmt`/`clippy`/`test`，依赖审计独立非阻断）与发布工作流（push `master` → 滚动 prerelease 开发版快照；push tag `v*` → 正式 Release）；三目标原生编译（Linux x86_64 / Windows x86_64 / macOS arm64），每资产产出 `jianartifact-{version}-{target}{ext}` 及配套 `.sha256`，命名契约与 FR-85 在线自更新下载约定对齐
 - 在线更新（FR-85，ADR-0021）：管理员手动触发的完整自更新——新增 `GET /api/v1/update/check`（查 GitHub 最新稳定 Release 并与当前版本比对）与 `POST /api/v1/update/apply`（按本机平台下载对应资产、流式校验 sha256、原子替换运行中的二进制并触发自动重启），均仅 Admin。校验失败（sha256 不一致 / 缺资产）即拒绝替换、保留旧二进制；新增 `[update]` 配置（`enabled` / `repo` / `api_base_url` / `restart_mode` / `download_timeout_secs`，可选 token 真源 env `JIANARTIFACT_UPDATE_TOKEN`），**出站默认关闭**（`enabled=false` 时两端点拒绝、不联网），出站经 `[network.proxy]`（FR-84）注入的代理
+- 控制台设置页（FR-87）：新增**仅 Admin** 只读聚合端点 `GET /api/v1/settings`（脱敏返回网络代理 + 在线更新配置与当前版本——代理 URL 去 `user:pass@` 凭据、更新 token 仅以 `has_token` 暴露，绝不回显凭据），与前端「设置」页（仅 Admin 可达，侧栏入口）：只读展示网络代理（http/https/no_proxy）与在线更新（状态 / 仓库源 / 当前版本）配置并标注「真源为 config.toml / 环境变量、运行时不可改」，提供「检查更新」（消费 `GET /api/v1/update/check` 展示版本对比）与有更新时「升级到 vX.Y.Z」（二次确认后调 `POST /api/v1/update/apply`、成功进入「正在重启」提示态），`enabled=false` 展示「未启用」并禁用检查按钮，各错误码（409/502/422/400）友好提示
 
 ### 变更
 - 无

@@ -126,7 +126,7 @@
 | FR-84 | 统一出站网络代理（`[network.proxy]` http/https/no_proxy + env 覆盖，统一注入全部出站 reqwest 客户端：proxy 回源 / Nexus 迁移 / 漏洞库镜像 / OIDC / 更新检查；凭据不入库不进日志） | P2 | 开发中 |
 | FR-85 | 在线更新：管理员手动触发的完整自更新（查 GitHub 最新稳定 Release 比对当前版本 → 按本机 target 下载资产 → 校验 sha256 → 原子替换二进制 → 自动重启；出站默认关闭、仅 Admin、仅版本检查与资产下载不外发使用数据/坐标） | P2 | 开发中 |
 | FR-86 | GitHub Actions CI/CD：质量门（push/PR → 前端构建 + fmt + clippy + test）+ 发布（push 默认分支 → prerelease；tag `v*` → 正式 release；3 目标 Linux/Windows/macOS + 每资产 sha256，资产命名与 FR-85 下载约定对齐） | P2 | 开发中 |
-| FR-87 | Web 控制台设置页（仅 Admin）：网络代理（FR-84）配置查看/状态 + 在线更新（FR-85）版本检查与一键升级入口，把已落地的后端配置/API 收口为控制台 UI | P2 | 计划 |
+| FR-87 | Web 控制台设置页（仅 Admin）：网络代理（FR-84）配置查看/状态 + 在线更新（FR-85）版本检查与一键升级入口，把已落地的后端配置/API 收口为控制台 UI | P2 | 开发中 |
 
 > 状态取值：计划 / 开发中 / 已交付@vX.Y.Z。优先级：P1(MVP) / P2 / P3。
 > 标 `已交付` 是有门的：只有该 FR 的 §6 / spec 验收标准全部满足、对应测试 / 实机验收通过后，才由 `sdd-release-version` 在发版时统一标 `已交付@vX.Y.Z`——开发 / 修复过程中不得自行预标。FR 标了 `已交付` 实际是断的（false-done）：功能坏了要修回 done 走 `sdd-fix-bug` 把状态归真（从没真正工作过 → 回退 `开发中`）；需求本身要撤 / 推迟则走 `sdd-rollback-change`。

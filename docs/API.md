@@ -331,6 +331,15 @@
 - **错误**：`400` 当前平台无自更新资产 / 版本串非法；`401` 未认证；`403` 非管理员；`409` 在线更新未启用（`enabled=false`）/ 无更新可用（最新版本不高于当前）/ 已有自更新在途（「更新进行中」）；`422` 下载内容 sha256 不一致或发布缺所需资产（拒绝替换、保留旧二进制）；`500` 本地替换 / 落盘失败；`502` 上游不可达 / 超时 / 响应异常。
 - **错误响应体**：统一为 `{ "error": { "code", "message" } }`（`422` 对应错误码 `unprocessable_entity`）。
 
+### 读取设置聚合（仅 Admin，FR-87）
+
+- **方法 / 路径**：`GET /api/v1/settings`
+- **请求**：无请求体。仅管理员可调用。
+- **行为**：只读聚合网络代理（FR-84）与在线更新（FR-85）配置及当前版本，供控制台「设置」页展示。配置真源为 `config.toml` / 环境变量、运行时不热替换（ADR-0020），本端点**只读、不提供编辑**。
+- **脱敏**：响应**绝不含任何凭据**——代理 URL 去除 `user:pass@` 凭据（`scheme://user:pass@host` → `scheme://host`）；更新 token 仅以 `has_token: bool` 暴露、绝不回显 token 本体。
+- **响应**：`{ "current_version", "network_proxy": { "http", "https", "no_proxy" }, "update": { "enabled", "repo", "api_base_url", "restart_mode", "has_token" } }`。`network_proxy` 各 URL 为脱敏后字符串或 `null`；`update.has_token` 表示是否已配置访问 token。
+- **错误**：`401` 未认证；`403` 非管理员。
+
 ### 列出仓库 ACL
 
 - **方法 / 路径**：`GET /api/v1/repositories/{id}/acl`
