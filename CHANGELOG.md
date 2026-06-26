@@ -23,8 +23,6 @@
 
 ## [0.4.0] - 2026-06-26
 
-> 本地预备版本：尚未打 tag、未推送。FR-82/83（真实 Nexus 互通）与 FR-85/86（自更新真机 / Actions 真 CI）的实机维度待 push 后验证，验证通过再由后续发版收尾打 tag 并翻 FR 状态为已交付。
-
 ### 新增
 - Nexus 在线拉取制品迁移（FR-82，补齐 ADR-0006 在线入口的「搬运」）：新增 `POST /api/v1/migrate/nexus/online/migrate`（仅 Admin），源 Nexus 在线时经其 `service/rest/v1/components`（`continuationToken` 分页）枚举所选 **Maven hosted** 仓库的全部 asset，按各 asset `downloadUrl` HTTP 流式下载、经既有制品机理落为本系统 hosted 制品——**无需离线 blob store 目录**，补足远程 Nexus（无磁盘访问）的迁移路径。落定后比对源报告 sha256 保证文件字节一致（`.sha1`/`.md5`/`.sha256`/`.sha512` sidecar 作为独立 asset 一并搬运），目标仓库名可自定义（默认同源名）；下载 / 写入瞬时失败（网络中断 / 流式解码失败）自动重试、指数退避（确定性失败不重试），单 asset 失败记录跳过、不中断整批、可重入；仅 `maven2` hosted 参与、其余整体跳过。Web 迁移页新增「在线拉取 / 离线目录」方式选择与每仓库目标改名
 - 迁移任务异步化与进度可观测（FR-83，ADR-0019）：在线拉取迁移改**进程内异步任务**——`POST /api/v1/migrate/nexus/online/migrate` 同步只做枚举源 + 匹配选仓 + 解析凭据后**立即返回 `job_id`（202）**，asset 枚举（先枚举全量得知总数）+ HTTP 下载 + 落地在后台任务跑、边搬边上报进度；新增 `GET /api/v1/migrate/jobs/{id}`（单任务进度：阶段 / 总数 / 已迁 / 已跳过 / 当前仓库与文件 / 各仓库结果 / 错误）与 `GET /api/v1/migrate/jobs`（任务列表，供重连），均仅 Admin。任务为进程内有界注册表（**不落库**，服务器重启即丢失、靠迁移幂等重跑恢复，保留 ADR-0006「无须持久化迁移任务表」）。Web 迁移页在线执行改异步轮询，展示导入队列进度条与当前文件，支持客户端断开后经本地存档的 `job_id` 重连续看
