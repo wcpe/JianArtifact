@@ -80,13 +80,13 @@
 
 采用 GitHub Flow（适合小团队 + 持续发布）：
 
-- **`main`**：始终可发布、受保护；改动经 PR 合入（PR 模板含防漂移自检）。main 每次推送由 CI 发**快照**（`latest` 预发布，见对应版本 ADR 与 `sdd-publish-snapshot` 技能）。
-- **`feature/*`、`fix/*`、`refactor/*`**：短生命周期分支，做完发 PR 回 main。
-- **稳定发布**：在 main 打 `vX.Y.Z` tag（`sdd-release-version` 技能），CI 据 tag 出正式 Release。
-- **`hotfix/*`**：从出问题的发布 tag 切分支紧急修，出补丁版后**回流 main**（`sdd-hotfix` 技能）。
+- **`master`**：始终可发布、受保护；改动经 PR 合入（PR 模板含防漂移自检）。master 每次推送由 CI 发**快照**（`dev` 预发布，见对应版本 ADR 与 `sdd-publish-snapshot` 技能）。
+- **`feature/*`、`fix/*`、`refactor/*`**：短生命周期分支，做完发 PR 回 master。
+- **稳定发布**：在 master 打 `vX.Y.Z` tag（`sdd-release-version` 技能），CI 据 tag 出正式 Release。
+- **`hotfix/*`**：从出问题的发布 tag 切分支紧急修，出补丁版后**回流 master**（`sdd-hotfix` 技能）。
 - **回滚**优先 `git revert`，不重写已 push 历史（`sdd-rollback-change` 技能）。
 
-版本号唯一来源是根 `VERSION` 文件，构建把它注入单一可执行二进制，恒一致。
+版本号唯一来源是 `Cargo.toml` 的 `version`，经 clap `#[command(version)]`（`CARGO_PKG_VERSION`）注入单一可执行二进制，与运行时 `--version` 一致。
 
 ### 8.1 发布流水线（FR-86）
 
@@ -124,7 +124,7 @@ GitHub Actions 实现两条流水线，触发条件与产出渠道如下：
 | 🌡 中频 | `docs/OPERATIONS.md` | 部署 / 运维方式变化时 |
 | 🌡 中频 | `docs/specs/<feature>.md` | 功能开发期；交付后基本不动 |
 | ❄ 低频 | `docs/adr/*`、`README.md`、`SECURITY.md` | 架构决策时追加 / 总览或安全模型变化时 |
-| 🧊 近乎不变（改它=动项目根基） | `.claude/rules/*`（尤其 `architecture-invariants`）、全局 `sdd-*` 技能（改它影响所有 SDD 项目）、`.editorconfig`、`.gitignore`、`VERSION`（仅发版动） | 极少；改不变量 / 红线要慎重并配 ADR |
+| 🧊 近乎不变（改它=动项目根基） | `.claude/rules/*`（尤其 `architecture-invariants`）、全局 `sdd-*` 技能（改它影响所有 SDD 项目）、`.editorconfig`、`.gitignore`、`Cargo.toml` 版本字段（仅发版动） | 极少；改不变量 / 红线要慎重并配 ADR |
 
 把"改不变量 / 红线"当大事——它们近乎不变，真要改先走 ADR，别随手动。
 
@@ -137,10 +137,10 @@ GitHub Actions 实现两条流水线，触发条件与产出渠道如下：
 1. **识别工作项**，选对应技能（路由见下表）。
 2. **开分支**：`feature/*` / `fix/*` / `refactor/*` / `hotfix/*`（§8）。
 3. **按技能走**：读相关 PRD / ARCHITECTURE / ADR → 测试先行 → 实现（守不变量、简单优先）→ 过验证门 → `doc-sync` 同步文档。
-4. **发 PR**：填防漂移自检模板 → 评审 → 合入 `main`。
-5. **main 自动出快照**（CI / `sdd-publish-snapshot`），可随时让人试用。
-6. **攒够一批 → 发版**（`sdd-release-version`：CHANGELOG 分段、定 SemVer、bump `VERSION`、打 `vX.Y.Z` → CI 出正式 Release）。
-7. **生产事故** → `sdd-hotfix` 旁路：从发布 tag 切分支最小修 → 出补丁版 → 回流 `main`。
+4. **发 PR**：填防漂移自检模板 → 评审 → 合入 `master`。
+5. **master 自动出快照**（CI / `sdd-publish-snapshot`），可随时让人试用。
+6. **攒够一批 → 发版**（`sdd-release-version`：CHANGELOG 分段、定 SemVer、bump `Cargo.toml` 版本、打 `vX.Y.Z` → CI 出正式 Release）。
+7. **生产事故** → `sdd-hotfix` 旁路：从发布 tag 切分支最小修 → 出补丁版 → 回流 `master`。
 
 → 回到 1。
 
@@ -168,18 +168,18 @@ GitHub Actions 实现两条流水线，触发条件与产出渠道如下：
 
 | 来了什么 | 要动 | 不用动 |
 |---|---|---|
-| **feat 新功能** | PRD §4 加一行 FR（贴**已有**期 + 状态 `计划`）· 非平凡写 `docs/specs/<f>.md` · 结构变更动 `ARCHITECTURE` · 接口变更动 `API` · `CHANGELOG` +1 行 · 加测试 | 期数 · `VERSION`（发版才动） |
-| **fix 修 bug** | `CHANGELOG` +1 行 · 复现 + 回归测试 | PRD · 期数 · `VERSION` · ADR · API |
+| **feat 新功能** | PRD §4 加一行 FR（贴**已有**期 + 状态 `计划`）· 非平凡写 `docs/specs/<f>.md` · 结构变更动 `ARCHITECTURE` · 接口变更动 `API` · `CHANGELOG` +1 行 · 加测试 | 期数 · `Cargo.toml` 版本（发版才动） |
+| **fix 修 bug** | `CHANGELOG` +1 行 · 复现 + 回归测试 | PRD · 期数 · `Cargo.toml` 版本 · ADR · API |
 | **refactor 重构** | 结构变才动 `ARCHITECTURE` · 测试前后同样全绿 | PRD · 期数 · API · 行为 |
 | **rollback 回滚** | FR 状态回退 · 取代相关 ADR · `CHANGELOG` +1（移除） | 期数 |
 | **依赖升级** | 锁文件 · 有感知影响才记 `CHANGELOG` · 全测试绿 | PRD · 期数 · ADR |
 | **架构决策** | **ADR +1 条（或取代旧的，编号 = 现有最大 +1）** · 更新 `ARCHITECTURE` | 期数（除非顺带开新阶段） |
-| **发版 release** | **`VERSION` 改（按提交定 SemVer）** · `CHANGELOG` 未发布段 → `## X.Y.Z` · 交付的 FR 翻 `已交付@vX.Y.Z` · 打 tag | 期数 |
-| **发快照** | 构建发预发布 / 快照（产物标 `-SNAPSHOT+<sha>`） | `VERSION` · `CHANGELOG` · 期数 |
+| **发版 release** | **`Cargo.toml` 版本改（按提交定 SemVer）** · `CHANGELOG` 未发布段 → `## X.Y.Z` · 交付的 FR 翻 `已交付@vX.Y.Z` · 打 tag | 期数 |
+| **发快照** | 构建发预发布 / 快照（产物标 `dev` 预发布） | `Cargo.toml` 版本 · `CHANGELOG` · 期数 |
 | **开新大阶段（罕见）** | PRD §7 加一行主题 + 启用新期号 | —— 这是**唯一**动期数的时候 |
 
 **谁常动 / 谁不动**：
-- 🔥 高频：`CHANGELOG`（几乎每次）、PRD FR 表（每个 feat 加行 / 发版翻状态）、`VERSION`（每次发版）。
+- 🔥 高频：`CHANGELOG`（几乎每次）、PRD FR 表（每个 feat 加行 / 发版翻状态）、`Cargo.toml` 版本（每次发版）。
 - ❄ 低频：ADR（只在架构决策时 +1 或取代）。
 - 🧊 几乎不动：**期数**（只在开新大阶段，罕见）、`.claude/rules`（项目内）/ 全局 `sdd-*` 技能（动它 = 动根基，要配 ADR）。
 
