@@ -94,17 +94,9 @@ describe('AppLayout 折叠图标导航条', () => {
 });
 
 describe('AppLayout 角色门控入口', () => {
-  // 管理类入口清单：仅 Admin 可见
-  const 管理入口 = [
-    '用户管理',
-    '用户组管理',
-    '使用分析',
-    '防护配置',
-    '审计日志',
-    '防护监控',
-    'Nexus 迁移',
-    '设置',
-  ];
+  // 管理类入口清单：仅 Admin 可见。
+  // FR-99：使用分析 / 审计日志 / 防护监控三个独立入口已收敛为统一「监控」入口。
+  const 管理入口 = ['用户管理', '用户组管理', '监控', '防护配置', 'Nexus 迁移', '设置'];
   // 通用入口：所有登录用户可见
   const 通用入口 = ['仪表盘', '仓库管理', '制品搜索', 'Token 管理', '制品上传'];
 
@@ -129,18 +121,18 @@ describe('AppLayout 角色门控入口', () => {
 });
 
 describe('AppLayout 侧栏导航高亮（fix-B 段精确匹配）', () => {
-  it('位于 /protection-monitor 时仅「防护监控」高亮，「防护配置」不串台', () => {
-    renderAt('/protection-monitor');
+  it('位于 /monitor 时仅「监控」高亮，「防护配置」不串台（FR-99 整合入口）', () => {
+    renderAt('/monitor');
 
-    expect(navLinkByLabel('防护监控').getAttribute('data-active')).toBe('true');
+    expect(navLinkByLabel('监控').getAttribute('data-active')).toBe('true');
     expect(navLinkByLabel('防护配置').getAttribute('data-active')).toBeNull();
   });
 
-  it('位于 /protection 时仅「防护配置」高亮', () => {
+  it('位于 /protection 时仅「防护配置」高亮，不被「监控」串台', () => {
     renderAt('/protection');
 
     expect(navLinkByLabel('防护配置').getAttribute('data-active')).toBe('true');
-    expect(navLinkByLabel('防护监控').getAttribute('data-active')).toBeNull();
+    expect(navLinkByLabel('监控').getAttribute('data-active')).toBeNull();
   });
 
   it('位于子路径 /repositories/libs 时「仓库管理」仍高亮（按段匹配）', () => {

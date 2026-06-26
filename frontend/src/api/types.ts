@@ -530,6 +530,44 @@ export interface MigrationJobSummary {
   paused: boolean;
 }
 
+// —— 主机 / 系统监控（FR-98，仅管理员；对齐后端 src/monitor/mod.rs 的 HostMetrics DTO） ——
+
+/** CPU 指标（usage_percent 首样可能为 0，属后端已知取舍）。 */
+export interface CpuMetrics {
+  usage_percent: number;
+  logical_cores: number;
+}
+
+/** 内存与交换分区指标（单位：字节）。 */
+export interface MemoryMetrics {
+  total_bytes: number;
+  used_bytes: number;
+  swap_total_bytes: number;
+  swap_used_bytes: number;
+}
+
+/** 单块磁盘明细（单位：字节）。 */
+export interface DiskEntry {
+  mount_point: string;
+  total_bytes: number;
+  available_bytes: number;
+}
+
+/** 磁盘指标：逐盘明细 + 总量 / 可用汇总（单位：字节）。 */
+export interface DiskMetrics {
+  total_bytes: number;
+  available_bytes: number;
+  disks: DiskEntry[];
+}
+
+/** 主机指标快照（GET /api/v1/monitor/host，仅管理员，按请求采样）。 */
+export interface HostMetrics {
+  cpu: CpuMetrics;
+  memory: MemoryMetrics;
+  disk: DiskMetrics;
+  uptime_secs: number;
+}
+
 // —— 设置页（FR-87，仅管理员） ——
 
 /** 网络代理视图（脱敏后：URL 已去除 user:pass@ 凭据）。 */

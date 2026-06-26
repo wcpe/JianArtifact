@@ -18,11 +18,9 @@ import { GroupsPage } from './pages/GroupsPage';
 import { TokensPage } from './pages/TokensPage';
 import { SearchPage } from './pages/SearchPage';
 import { ArtifactDetailPage } from './pages/ArtifactDetailPage';
-import { AnalyticsPage } from './pages/AnalyticsPage';
 import { ProtectionConfigPage } from './pages/ProtectionConfigPage';
 import { UploadPage } from './pages/UploadPage';
-import { AuditPage } from './pages/AuditPage';
-import { ProtectionMonitorPage } from './pages/ProtectionMonitorPage';
+import { MonitorPage } from './pages/MonitorPage';
 import { MigrationPage } from './pages/MigrationPage';
 import { SettingsPage } from './pages/SettingsPage';
 
@@ -89,14 +87,6 @@ export function App() {
           }
         />
         <Route
-          path="analytics"
-          element={
-            <RequireAdmin>
-              <AnalyticsPage />
-            </RequireAdmin>
-          }
-        />
-        <Route
           path="protection"
           element={
             <RequireAdmin>
@@ -105,18 +95,10 @@ export function App() {
           }
         />
         <Route
-          path="audit"
+          path="monitor"
           element={
             <RequireAdmin>
-              <AuditPage />
-            </RequireAdmin>
-          }
-        />
-        <Route
-          path="protection-monitor"
-          element={
-            <RequireAdmin>
-              <ProtectionMonitorPage />
+              <MonitorPage />
             </RequireAdmin>
           }
         />

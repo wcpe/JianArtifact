@@ -15,6 +15,7 @@ import type {
   GroupAclView,
   GroupMemberView,
   GroupView,
+  HostMetrics,
   LoginResponse,
   MigrationJobCreated,
   MigrationJobSummary,
@@ -383,6 +384,13 @@ export function listProtectionAlerts(
     },
   });
 }
+// —— 主机 / 系统监控（仅管理员，FR-98） ——
+
+/** 查询主机指标快照（按请求采样：CPU / 内存 / 磁盘 / uptime）。 */
+export function getHostMonitor(): Promise<HostMetrics> {
+  return request<HostMetrics>('/monitor/host');
+}
+
 // —— Nexus 迁移（仅管理员，FR-81；对接 ADR-0006 已有端点） ——
 
 /** 在线预览：枚举源 Nexus 可迁移仓库列表（不搬运制品）。 */
