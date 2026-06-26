@@ -545,6 +545,8 @@ export interface UpdateView {
   repo: string;
   api_base_url: string;
   restart_mode: string;
+  /** 更新通道（stable / prerelease，FR-89）。 */
+  channel: string;
   has_token: boolean;
 }
 
@@ -570,6 +572,8 @@ export interface UpdatePatch {
   repo: string;
   api_base_url: string;
   restart_mode: string;
+  /** 更新通道（stable / prerelease，FR-89）。 */
+  channel: string;
   token?: string | null;
 }
 

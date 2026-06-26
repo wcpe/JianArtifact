@@ -25,3 +25,7 @@ globalThis.ResizeObserver = class {
   unobserve() {}
   disconnect() {}
 };
+
+// Mantine Combobox（Select 下拉）打开时会在定时器里调用选项的 scrollIntoView，jsdom 不提供，需打桩。
+// 缺失会在下拉打开后抛 Uncaught Exception（异步定时器，污染测试运行），故全局补一个空实现。
+Element.prototype.scrollIntoView = () => {};

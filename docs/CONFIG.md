@@ -253,7 +253,7 @@
 
 > 管理员手动触发的完整自更新：查 GitHub 最新稳定 Release、与当前版本比对，下载对应资产、校验 sha256、原子替换二进制并自动重启。**出站默认关闭**（`enabled=false` 时检查 / 应用端点一律拒绝、不联网），须运维显式开启。出站经 `[network.proxy]`（FR-84）注入的代理。
 >
-> **运行时可编辑（FR-88）**：`enabled` / `repo` / `api_base_url` / `restart_mode` / `token` 可经控制台「设置」页或 `PATCH /api/v1/settings` 在线改、**即时生效、无须重启**；运行时改动只入内存槽、**不写回本文件**（token 同样只入内存、不回显），重启回落本节 + env。
+> **运行时可编辑（FR-88）**：`enabled` / `repo` / `api_base_url` / `restart_mode` / `channel` / `token` 可经控制台「设置」页或 `PATCH /api/v1/settings` 在线改、**即时生效、无须重启**；运行时改动只入内存槽、**不写回本文件**（token 同样只入内存、不回显），重启回落本节 + env。
 
 | 键 | 含义 | 默认（取向） | 环境变量 |
 |---|---|---|---|
@@ -261,6 +261,7 @@
 | repo | 仓库源（`owner/repo` 形式），自更新从此仓库取 Release | wcpe/JianArtifact | JIANARTIFACT_UPDATE_REPO |
 | api_base_url | GitHub API 基址（可配，便于测试 / 镜像） | https://api.github.com | JIANARTIFACT_UPDATE_API_BASE_URL |
 | restart_mode | 重启模式：`self`（自拉起新进程）/ `exit`（仅退出交外部进程管理器 systemd / docker 重启） | self | JIANARTIFACT_UPDATE_RESTART_MODE |
+| channel | 更新通道（FR-89）：`stable`（仅最新稳定版）/ `prerelease`（含预发布，取最新一条非草稿 release） | stable | JIANARTIFACT_UPDATE_CHANNEL |
 | download_timeout_secs | 资产下载整体超时（秒） | 300 | JIANARTIFACT_UPDATE_DOWNLOAD_TIMEOUT_SECS |
 
 > `token` 是密钥（私有仓库可选）：真源为环境变量 `JIANARTIFACT_UPDATE_TOKEN`，**绝不入库、不进日志、序列化不回显**；公开仓库免凭据。仅做 sha256 完整性校验、校验通过才替换（不做签名验签）；校验失败即拒绝替换、删临时文件、保留旧二进制，进程续以旧版运行。

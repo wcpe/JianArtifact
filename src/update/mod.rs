@@ -22,6 +22,7 @@ mod source;
 #[cfg(test)]
 mod tests;
 
+pub use crate::config::UpdateChannel;
 pub use restart::{ApplyGuard, RestartHandle, RestartRequest};
 pub use source::{GithubReleaseSource, Release, ReleaseAsset, ReleaseSource};
 
@@ -392,14 +393,16 @@ pub struct ApplyOutcome {
 /// → 一致则把临时文件落到 exe 同目录并原子替换。任何校验失败：删临时文件、不触碰二进制。
 ///
 /// `current_exe` 与 `data_dir` 由调用方注入（便于测试用 tempdir）。出站经 `source`（已注入代理）。
+/// `channel` 决定取哪一条 Release（FR-89：stable 仅稳定版 / prerelease 含预发布最新一条）。
 pub async fn apply_update<S: ReleaseSource>(
     source: &S,
+    channel: UpdateChannel,
     current_version: &str,
     current_exe: &Path,
     data_dir: &Path,
 ) -> Result<ApplyOutcome, UpdateError> {
     let target = current_target()?;
-    let release = source.fetch_latest_release().await?;
+    let release = source.fetch_latest_release(channel).await?;
     let latest = release.version();
 
     // 防御性校验：仅当最新版本确实高于当前版本才替换，避免把同版 / 旧版当新版落地

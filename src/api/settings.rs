@@ -71,6 +71,8 @@ pub struct UpdateView {
     pub api_base_url: String,
     /// 重启模式（`self` / `exit`）。
     pub restart_mode: String,
+    /// 更新通道（`stable` / `prerelease`，FR-89）。
+    pub channel: String,
     /// 是否已配置访问 token：**仅布尔，绝不回显 token 本体**。
     pub has_token: bool,
 }
@@ -104,6 +106,7 @@ fn current_view(state: &AppState) -> SettingsView {
             repo: update.repo.clone(),
             api_base_url: update.api_base_url.clone(),
             restart_mode: update.restart_mode.clone(),
+            channel: update.channel.clone(),
             // 仅暴露是否已配置 token，绝不回显 token 本体
             has_token: update.token.is_some(),
         },
@@ -147,6 +150,8 @@ pub struct UpdatePatch {
     pub api_base_url: String,
     /// 重启模式（`self` / `exit`）。
     pub restart_mode: String,
+    /// 更新通道（`stable` / `prerelease`，FR-89）。
+    pub channel: String,
     /// 访问 token 编辑语义（GET 不回显 token，故区分三态）：
     /// - 缺省 / `null`：**保留**当前 token 不变；
     /// - 空串 `""`：**清空** token；
@@ -200,6 +205,7 @@ pub async fn patch_settings(
         repo: patch.update.repo.trim().to_string(),
         api_base_url: patch.update.api_base_url.trim().to_string(),
         restart_mode: patch.update.restart_mode.trim().to_string(),
+        channel: patch.update.channel.trim().to_string(),
         // 下载超时不在设置页可调，沿用当前值（与 ADR-0021 启动期口径一致）
         download_timeout_secs: current_update.download_timeout_secs,
         token: new_token,
@@ -435,6 +441,7 @@ mod tests {
                 "repo": "wcpe/JianArtifact",
                 "api_base_url": "https://api.github.com",
                 "restart_mode": "exit",
+                "channel": "prerelease",
                 "token": "ghp_newsecret"
             }
         })
@@ -472,6 +479,7 @@ mod tests {
         );
         assert_eq!(body["update"]["enabled"], true);
         assert_eq!(body["update"]["restart_mode"], "exit");
+        assert_eq!(body["update"]["channel"], "prerelease");
         assert_eq!(body["update"]["has_token"], true);
         // 关键脱敏：响应不含任何凭据明文
         let text = body.to_string();
@@ -487,11 +495,54 @@ mod tests {
         );
         let upd = settings.update();
         assert!(upd.enabled, "update.enabled 应已翻为 true");
+        assert_eq!(upd.channel, "prerelease", "channel 应已热替换为 prerelease");
         assert_eq!(
             upd.token.as_deref(),
             Some("ghp_newsecret"),
             "token 应已入内存槽"
         );
+    }
+
+    #[tokio::test]
+    async fn settings_管理员_get_回显默认_channel_为_stable() {
+        // FR-89：默认配置 channel=stable，GET 应回显之
+        let (state, _dir) = 测试用状态().await;
+        let token = 签发令牌(&state, "admin", Role::Admin).await;
+        let resp = 请求(state, Some(&token)).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = 读_json(resp).await;
+        assert_eq!(body["update"]["channel"], "stable");
+    }
+
+    #[tokio::test]
+    async fn patch_非法_channel_返回_400_且不改现有生效值() {
+        // FR-89：非法 channel 在 EditableUpdate::validate 阶段被拒，返回 400 且不触碰现有生效值
+        let (mut state, _dir) = 测试用状态().await;
+        注入设置(
+            &mut state,
+            crate::config::NetworkProxyConfig::default(),
+            &crate::config::UpdateConfig::default(),
+        );
+        let token = 签发令牌(&state, "admin", Role::Admin).await;
+        let settings = state.settings.clone();
+
+        let body = serde_json::json!({
+            "network_proxy": { "http": null, "https": null, "no_proxy": null },
+            "update": {
+                "enabled": true,
+                "repo": "wcpe/JianArtifact",
+                "api_base_url": "https://api.github.com",
+                "restart_mode": "self",
+                "channel": "beta",
+                "token": null
+            }
+        });
+        let resp = 请求_patch(state, Some(&token), body).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        // 非法 channel 不得改动现有生效值（仍为默认 stable、enabled=false）
+        let upd = settings.update();
+        assert_eq!(upd.channel, "stable", "非法 channel 不得改动现有生效通道");
+        assert!(!upd.enabled, "非法配置不得改动现有 enabled");
     }
 
     #[tokio::test]
@@ -530,6 +581,7 @@ mod tests {
                 "repo": "wcpe/JianArtifact",
                 "api_base_url": "http://127.0.0.1:1",
                 "restart_mode": "self",
+                "channel": "stable",
                 "token": null
             }
         });
@@ -592,6 +644,7 @@ mod tests {
                 "repo": "wcpe/JianArtifact",
                 "api_base_url": "https://api.github.com",
                 "restart_mode": "INVALID_MODE",
+                "channel": "stable",
                 "token": null
             }
         });
@@ -631,7 +684,7 @@ mod tests {
         // ① token 缺省：保留现有
         let body = serde_json::json!({
             "network_proxy": { "http": null, "https": null, "no_proxy": null },
-            "update": { "enabled": false, "repo": "wcpe/JianArtifact", "api_base_url": "https://api.github.com", "restart_mode": "self" }
+            "update": { "enabled": false, "repo": "wcpe/JianArtifact", "api_base_url": "https://api.github.com", "restart_mode": "self", "channel": "stable" }
         });
         let resp = app
             .clone()
@@ -656,7 +709,7 @@ mod tests {
         // ② token 空串：清空
         let body = serde_json::json!({
             "network_proxy": { "http": null, "https": null, "no_proxy": null },
-            "update": { "enabled": false, "repo": "wcpe/JianArtifact", "api_base_url": "https://api.github.com", "restart_mode": "self", "token": "" }
+            "update": { "enabled": false, "repo": "wcpe/JianArtifact", "api_base_url": "https://api.github.com", "restart_mode": "self", "channel": "stable", "token": "" }
         });
         let resp = app
             .oneshot(

@@ -31,6 +31,7 @@ const 启用样例: SettingsView = {
     repo: 'wcpe/JianArtifact',
     api_base_url: 'https://api.github.com',
     restart_mode: 'self',
+    channel: 'stable',
     has_token: true,
   },
 };
@@ -44,6 +45,7 @@ const 未启用样例: SettingsView = {
     repo: 'wcpe/JianArtifact',
     api_base_url: 'https://api.github.com',
     restart_mode: 'self',
+    channel: 'stable',
     has_token: false,
   },
 };
@@ -78,6 +80,7 @@ describe('SettingsPage', () => {
           repo: p.update.repo,
           api_base_url: p.update.api_base_url,
           restart_mode: p.update.restart_mode,
+          channel: p.update.channel,
           has_token: Boolean(p.update.token),
         },
       }),
@@ -98,6 +101,8 @@ describe('SettingsPage', () => {
     expect(payload.network_proxy.http).toBe('http://new-proxy.internal:3128');
     expect(payload.update.enabled).toBe(true);
     expect(payload.update.token).toBeUndefined();
+    // FR-89：默认通道 stable 随 PATCH 一并提交
+    expect(payload.update.channel).toBe('stable');
     // 成功提示
     await waitFor(() => expect(screen.getByText('已保存，配置已即时生效。')).toBeInTheDocument());
   });
@@ -115,6 +120,33 @@ describe('SettingsPage', () => {
 
     await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
     expect(update.mock.calls[0][0].update.token).toBe('ghp_newtoken');
+  });
+
+  it('选择 prerelease 通道后保存，PATCH 载荷带 channel=prerelease', async () => {
+    vi.spyOn(api, 'getSettings').mockResolvedValue(未启用样例);
+    const update = vi.spyOn(api, 'updateSettings').mockResolvedValue(未启用样例);
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
+    // 打开「更新通道」下拉并选 prerelease（默认 stable，点输入框展开选项）
+    fireEvent.click(screen.getByDisplayValue('stable（仅稳定版）'));
+    fireEvent.click(await screen.findByText('prerelease（含预发布版）'));
+    fireEvent.click(screen.getByText('保存'));
+
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+    expect(update.mock.calls[0][0].update.channel).toBe('prerelease');
+  });
+
+  it('加载后将后端返回的 channel 填入更新通道下拉', async () => {
+    vi.spyOn(api, 'getSettings').mockResolvedValue({
+      ...启用样例,
+      update: { ...启用样例.update, channel: 'prerelease' },
+    });
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
+    // 通道下拉回显 prerelease（Select 输入框展示选中项 label）
+    expect(screen.getByDisplayValue('prerelease（含预发布版）')).toBeInTheDocument();
   });
 
   it('保存返回 400（非法配置）时展示友好提示', async () => {

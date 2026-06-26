@@ -48,6 +48,7 @@ export function SettingsPage() {
   const [repo, setRepo] = useState('');
   const [apiBaseUrl, setApiBaseUrl] = useState('');
   const [restartMode, setRestartMode] = useState('self');
+  const [channel, setChannel] = useState('stable');
   // token 输入框：留空 = 保留现有（提交时省略 token 字段）；填值 = 设置新 token
   const [tokenInput, setTokenInput] = useState('');
   const [hasToken, setHasToken] = useState(false);
@@ -74,6 +75,7 @@ export function SettingsPage() {
     setRepo(s.update.repo);
     setApiBaseUrl(s.update.api_base_url);
     setRestartMode(s.update.restart_mode);
+    setChannel(s.update.channel);
     setHasToken(s.update.has_token);
     setTokenInput('');
   }
@@ -119,6 +121,7 @@ export function SettingsPage() {
           repo: repo.trim(),
           api_base_url: apiBaseUrl.trim(),
           restart_mode: restartMode,
+          channel,
           // token 留空则省略（保留现有）；填值则设置新 token
           ...(tokenInput.trim() ? { token: tokenInput.trim() } : {}),
         },
@@ -232,6 +235,17 @@ export function SettingsPage() {
             ]}
             value={restartMode}
             onChange={(v) => setRestartMode(v ?? 'self')}
+            allowDeselect={false}
+          />
+          <Select
+            label="更新通道"
+            description="stable 仅升级到最新稳定版；prerelease 可升级到最新预发布版（含测试版）。"
+            data={[
+              { value: 'stable', label: 'stable（仅稳定版）' },
+              { value: 'prerelease', label: 'prerelease（含预发布版）' },
+            ]}
+            value={channel}
+            onChange={(v) => setChannel(v ?? 'stable')}
             allowDeselect={false}
           />
           <PasswordInput

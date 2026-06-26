@@ -1,10 +1,13 @@
-//! Release 来源抽象与 GitHub 生产实现（FR-85，ADR-0021）。
+//! Release 来源抽象与 GitHub 生产实现（FR-85，ADR-0021；FR-89 加更新通道）。
 //!
-//! `ReleaseSource` 抽象「取最新稳定 Release 元数据 + 流式下载资产」，便于测试注入 fake 源不触网。
-//! 生产实现 `GithubReleaseSource` 经统一出站客户端（FR-84 / ADR-0020，honor 代理）请求 GitHub API。
+//! `ReleaseSource` 抽象「按通道取 Release 元数据 + 流式下载资产」，便于测试注入 fake 源不触网。
+//! 生产实现 `GithubReleaseSource` 经统一出站客户端（FR-84 / ADR-0020，honor 代理）请求 GitHub API：
+//! `stable` 通道走 `/releases/latest`（只认稳定版）、`prerelease` 通道走 `/releases`（取最新含预发布一条）。
 
 use serde::Serialize;
 use tokio::io::AsyncRead;
+
+use crate::config::UpdateChannel;
 
 use super::UpdateError;
 
@@ -46,11 +49,15 @@ pub struct ReleaseAsset {
     pub download_url: String,
 }
 
-/// Release 来源抽象：取最新稳定 Release + 流式下载资产。
+/// Release 来源抽象：按通道取 Release + 流式下载资产。
 pub trait ReleaseSource {
-    /// 取配置仓库的最新稳定 Release 元数据。
+    /// 按通道取配置仓库的 Release 元数据。
+    ///
+    /// `Stable` 取最新稳定版（`/releases/latest`）；`Prerelease` 取最新一条非 draft 的 release
+    /// （含预发布，`/releases` 列表首条）。
     fn fetch_latest_release(
         &self,
+        channel: UpdateChannel,
     ) -> impl std::future::Future<Output = Result<Release, UpdateError>> + Send;
 
     /// 流式下载资产（不整体载入内存），返回装箱异步读句柄。
@@ -113,12 +120,20 @@ impl GithubReleaseSource {
 }
 
 impl ReleaseSource for GithubReleaseSource {
-    async fn fetch_latest_release(&self) -> Result<Release, UpdateError> {
-        let url = format!(
-            "{}/repos/{}/releases/latest",
-            self.api_base_url.trim_end_matches('/'),
-            self.repo
-        );
+    async fn fetch_latest_release(&self, channel: UpdateChannel) -> Result<Release, UpdateError> {
+        // 通道决定端点：stable 取单条最新稳定版，prerelease 取列表后选最新非 draft 一条
+        let url = match channel {
+            UpdateChannel::Stable => format!(
+                "{}/repos/{}/releases/latest",
+                self.api_base_url.trim_end_matches('/'),
+                self.repo
+            ),
+            UpdateChannel::Prerelease => format!(
+                "{}/repos/{}/releases",
+                self.api_base_url.trim_end_matches('/'),
+                self.repo
+            ),
+        };
         // 从热替换槽取当前 client（读锁极短、锁外发请求）
         let req = self.network.client().get(&url);
         let resp = self
@@ -136,7 +151,11 @@ impl ReleaseSource for GithubReleaseSource {
             .text()
             .await
             .map_err(|e| UpdateError::Upstream(e.to_string()))?;
-        parse_release(&body)
+        // stable 解析单对象；prerelease 解析数组、取最新非 draft 一条
+        match channel {
+            UpdateChannel::Stable => parse_release(&body),
+            UpdateChannel::Prerelease => parse_release_list(&body),
+        }
     }
 
     async fn download_asset(
@@ -166,39 +185,69 @@ impl ReleaseSource for GithubReleaseSource {
     }
 }
 
+/// GitHub Release 原始 JSON 形态（只取所需字段，其余忽略）。
+#[derive(serde::Deserialize)]
+struct RawRelease {
+    tag_name: String,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    body: Option<String>,
+    /// 是否为草稿（FR-89：prerelease 通道跳过草稿，草稿无可下载资产）。
+    #[serde(default)]
+    draft: bool,
+    #[serde(default)]
+    assets: Vec<RawAsset>,
+}
+
+/// GitHub Release 资产原始 JSON 形态。
+#[derive(serde::Deserialize)]
+struct RawAsset {
+    name: String,
+    browser_download_url: String,
+}
+
+impl From<RawRelease> for Release {
+    fn from(raw: RawRelease) -> Self {
+        Release {
+            name: raw.name.unwrap_or_else(|| raw.tag_name.clone()),
+            tag_name: raw.tag_name,
+            body: raw.body.unwrap_or_default(),
+            assets: raw
+                .assets
+                .into_iter()
+                .map(|a| ReleaseAsset {
+                    name: a.name,
+                    download_url: a.browser_download_url,
+                })
+                .collect(),
+        }
+    }
+}
+
 /// 解析 GitHub `releases/latest` 响应 JSON 为 [`Release`]（纯函数，可测）。
 ///
 /// 只取 `tag_name` / `name` / `body` / `assets[].name` / `assets[].browser_download_url`；
 /// 其余字段忽略。缺 `tag_name` 即报 [`UpdateError::Parse`]。
 pub(crate) fn parse_release(body: &str) -> Result<Release, UpdateError> {
-    #[derive(serde::Deserialize)]
-    struct RawRelease {
-        tag_name: String,
-        #[serde(default)]
-        name: Option<String>,
-        #[serde(default)]
-        body: Option<String>,
-        #[serde(default)]
-        assets: Vec<RawAsset>,
-    }
-    #[derive(serde::Deserialize)]
-    struct RawAsset {
-        name: String,
-        browser_download_url: String,
-    }
     let raw: RawRelease =
         serde_json::from_str(body).map_err(|e| UpdateError::Parse(e.to_string()))?;
-    Ok(Release {
-        name: raw.name.unwrap_or_else(|| raw.tag_name.clone()),
-        tag_name: raw.tag_name,
-        body: raw.body.unwrap_or_default(),
-        assets: raw
-            .assets
-            .into_iter()
-            .map(|a| ReleaseAsset {
-                name: a.name,
-                download_url: a.browser_download_url,
-            })
-            .collect(),
-    })
+    Ok(raw.into())
+}
+
+/// 解析 GitHub `releases` 列表响应 JSON，取最新一条非 draft 的 release（含预发布；纯函数，可测）。
+///
+/// GitHub 列表按发布时间倒序，故首个非 draft 即「最新」。draft 无可下载资产、跳过；列表为空或
+/// 全为 draft 时报 [`UpdateError::Upstream`]（无可用 release）。`prerelease` 字段当前不参与筛选——
+/// prerelease 通道意在「含预发布的最新一条」，稳定版与预发布版皆可被选中，由后续版本比较决定是否升级。
+pub(crate) fn parse_release_list(body: &str) -> Result<Release, UpdateError> {
+    let raw_list: Vec<RawRelease> =
+        serde_json::from_str(body).map_err(|e| UpdateError::Parse(e.to_string()))?;
+    raw_list
+        .into_iter()
+        .find(|r| !r.draft)
+        .map(Release::from)
+        .ok_or_else(|| {
+            UpdateError::Upstream("仓库无可用 release（列表为空或全为草稿）".to_string())
+        })
 }

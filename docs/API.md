@@ -324,7 +324,7 @@
 
 - **方法 / 路径**：`GET /api/v1/update/check`
 - **请求**：无请求体。仅管理员可调用。
-- **行为**：查配置仓库（`[update] repo`，默认 `wcpe/JianArtifact`）的最新稳定 Release，与当前运行版本比对，返回是否有更新。出站经 `[network.proxy]`（FR-84）注入的代理。**`[update] enabled=false` 时一律拒绝、不联网**；token / 凭据不进日志、不回显。
+- **行为**：查配置仓库（`[update] repo`，默认 `wcpe/JianArtifact`）的 Release，与当前运行版本比对，返回是否有更新。**更新通道**（`[update] channel`，FR-89）决定取哪一条：`stable`（默认）取最新稳定版（`/releases/latest`，忽略预发布）；`prerelease` 取最新一条非草稿的 release（`/releases` 列表首条，含预发布）。出站经 `[network.proxy]`（FR-84）注入的代理。**`[update] enabled=false` 时一律拒绝、不联网**；token / 凭据不进日志、不回显。
 - **响应**：`{ "current_version", "latest_version", "update_available", "asset_name", "notes" }`。`current_version` 为当前运行版本；`latest_version` 为最新稳定版本（`tag_name` 去前导 `v`）；`update_available` 为 `latest > current`；`asset_name` 为本机平台对应资产名（`jianartifact-{version}-{target}{ext}`）；`notes` 为发布说明（Release `body`）。
 - **错误**：`400` 当前平台无自更新资产 / 版本串非法；`401` 未认证；`403` 非管理员；`409` 在线更新未启用（`enabled=false`）；`502` 上游不可达 / 超时 / 响应异常（不向调用方泄露内部细节）。
 
@@ -344,19 +344,20 @@
 - **请求**：无请求体。仅管理员可调用。
 - **行为**：聚合网络代理（FR-84）与在线更新（FR-85）配置及当前版本，供控制台「设置」页展示。读**运行时可编辑设置热替换槽当前值**（含运行时 PATCH 在内，FR-88 / ADR-0022）；真源为 `config.toml` / env，运行时改动只入内存槽、重启回落文件配置。
 - **脱敏**：响应**绝不含任何凭据**——代理 URL 去除 `user:pass@` 凭据（`scheme://user:pass@host` → `scheme://host`）；更新 token 仅以 `has_token: bool` 暴露、绝不回显 token 本体。
-- **响应**：`{ "current_version", "network_proxy": { "http", "https", "no_proxy" }, "update": { "enabled", "repo", "api_base_url", "restart_mode", "has_token" } }`。`network_proxy` 各 URL 为脱敏后字符串或 `null`；`update.has_token` 表示是否已配置访问 token。
+- **响应**：`{ "current_version", "network_proxy": { "http", "https", "no_proxy" }, "update": { "enabled", "repo", "api_base_url", "restart_mode", "channel", "has_token" } }`。`network_proxy` 各 URL 为脱敏后字符串或 `null`；`update.channel` 为更新通道（`stable` / `prerelease`，FR-89）；`update.has_token` 表示是否已配置访问 token。
 - **错误**：`401` 未认证；`403` 非管理员。
 
 ### 编辑设置（仅 Admin，FR-88，运行时热替换）
 
 - **方法 / 路径**：`PATCH /api/v1/settings`
-- **请求**：仅管理员可调用。JSON 体 `{ "network_proxy": { "http", "https", "no_proxy" }, "update": { "enabled", "repo", "api_base_url", "restart_mode", "token"? } }`。
+- **请求**：仅管理员可调用。JSON 体 `{ "network_proxy": { "http", "https", "no_proxy" }, "update": { "enabled", "repo", "api_base_url", "restart_mode", "channel", "token"? } }`。
   - `network_proxy` 各项为字符串或 `null`；空串 / 空白视为不配置（清空）。代理 URL 可含 `user:pass@` 凭据。
+  - `update.channel`（FR-89）：更新通道，仅允许 `stable` / `prerelease`。
   - `update.token` 三态：**缺省 / `null`** 保留现有 token 不变；**空串 `""`** 清空 token；**非空串**设置为新 token。
 - **行为**：校验后锁外重建出站 `reqwest::Client`、原子换槽，**即时生效、无须重启**（FR-88 / ADR-0022）。代理凭据与 token **只入内存槽、不写回 TOML / 不入 DB / 不进日志 / 不回显**，重启回落文件 + env 配置。
 - **校验失败不改状态**：任一校验未过返回 `400` 且**不改变**现有生效值（再次 GET 仍返回旧值）。
 - **响应**：`200`，体同 GET（脱敏后的当前生效值）。
-- **错误**：`400` 网络代理 URL 无法构造 / `restart_mode` 非 `self`|`exit` / `repo` / `api_base_url` 为空；`401` 未认证；`403` 非管理员。
+- **错误**：`400` 网络代理 URL 无法构造 / `restart_mode` 非 `self`|`exit` / `channel` 非 `stable`|`prerelease` / `repo` / `api_base_url` 为空；`401` 未认证；`403` 非管理员。
 
 ### 列出仓库 ACL
 

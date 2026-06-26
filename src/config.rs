@@ -137,6 +137,8 @@ const DEFAULT_UPDATE_API_BASE_URL: &str = "https://api.github.com";
 const DEFAULT_UPDATE_RESTART_MODE: &str = "self";
 /// 在线更新默认下载超时（秒）：资产下载整体超时，默认 300 秒。
 const DEFAULT_UPDATE_DOWNLOAD_TIMEOUT_SECS: u64 = 300;
+/// 在线更新默认更新通道（FR-89）：`stable`（仅稳定版）或 `prerelease`（含预发布），默认仅稳定版。
+const DEFAULT_UPDATE_CHANNEL: &str = "stable";
 /// 环境变量前缀。
 const ENV_PREFIX: &str = "JIANARTIFACT_";
 /// 已知配置节名。环境变量映射时，仅把节名与键名之间的首个下划线视作嵌套分隔，
@@ -944,11 +946,19 @@ pub struct UpdateConfig {
     pub restart_mode: String,
     /// 资产下载整体超时（秒），默认 300。
     pub download_timeout_secs: u64,
+    /// 更新通道（FR-89）：`stable`（仅稳定版，默认）或 `prerelease`（含预发布，取最新一条）。
+    #[serde(default = "default_update_channel")]
+    pub channel: String,
     /// 私有仓库可选访问 token（真源 env `JIANARTIFACT_UPDATE_TOKEN`）。
     ///
     /// 绝不入库、不进日志、不回显：序列化时一律跳过，避免写入配置导出或调试输出。
     #[serde(default, skip_serializing)]
     pub token: Option<String>,
+}
+
+/// `channel` 字段缺省值（TOML 未给 `[update] channel` 时回落默认通道）。
+fn default_update_channel() -> String {
+    DEFAULT_UPDATE_CHANNEL.to_string()
 }
 
 impl Default for UpdateConfig {
@@ -959,6 +969,7 @@ impl Default for UpdateConfig {
             api_base_url: DEFAULT_UPDATE_API_BASE_URL.to_string(),
             restart_mode: DEFAULT_UPDATE_RESTART_MODE.to_string(),
             download_timeout_secs: DEFAULT_UPDATE_DOWNLOAD_TIMEOUT_SECS,
+            channel: DEFAULT_UPDATE_CHANNEL.to_string(),
             token: None,
         }
     }
@@ -1086,6 +1097,28 @@ impl NetworkState {
     }
 }
 
+/// 在线更新通道（FR-89）：决定取哪一条 GitHub Release。
+///
+/// `Stable` 走 `/releases/latest`（只认稳定版，默认）；`Prerelease` 走 `/releases` 列表、
+/// 取最新一条非 draft 的 release（含预发布）。纯枚举，便于 check / apply 据其选源。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpdateChannel {
+    /// 稳定通道：仅最新稳定版（`/releases/latest`）。
+    Stable,
+    /// 预发布通道：含预发布的最新一条（`/releases` 列表）。
+    Prerelease,
+}
+
+impl UpdateChannel {
+    /// 由配置字符串解析通道：未知值回退 `Stable`（最保守默认，配合 `validate` 在编辑期拒非法值）。
+    pub fn from_config(s: &str) -> Self {
+        match s {
+            "prerelease" => UpdateChannel::Prerelease,
+            _ => UpdateChannel::Stable,
+        }
+    }
+}
+
 /// 在线更新运行时可调配置（FR-88，ADR-0022，收拢 ADR-0021 可热替换的字段）。
 ///
 /// 不含 `download_timeout_secs`（出站 client 经 `NetworkState` 取、超时随槽），只承载 check / apply
@@ -1100,6 +1133,8 @@ pub struct EditableUpdate {
     pub api_base_url: String,
     /// 重启模式：`self`（自拉起）或 `exit`（交外部进程管理器）。
     pub restart_mode: String,
+    /// 更新通道（FR-89）：`stable`（仅稳定版）或 `prerelease`（含预发布）。
+    pub channel: String,
     /// 资产下载整体超时（秒）。
     pub download_timeout_secs: u64,
     /// 私有仓库可选访问 token（真源 env，绝不回显 / 入库 / 进日志）。
@@ -1114,6 +1149,7 @@ impl EditableUpdate {
             repo: cfg.repo.clone(),
             api_base_url: cfg.api_base_url.clone(),
             restart_mode: cfg.restart_mode.clone(),
+            channel: cfg.channel.clone(),
             download_timeout_secs: cfg.download_timeout_secs,
             token: cfg.token.clone(),
         }
@@ -1129,6 +1165,9 @@ impl EditableUpdate {
         }
         if self.restart_mode != "self" && self.restart_mode != "exit" {
             return Err("重启模式 restart_mode 仅允许 self 或 exit".to_string());
+        }
+        if self.channel != "stable" && self.channel != "prerelease" {
+            return Err("更新通道 channel 仅允许 stable 或 prerelease".to_string());
         }
         Ok(())
     }
@@ -1975,6 +2014,34 @@ mod tests {
         u.restart_mode = "self".to_string();
         u.repo = "  ".to_string();
         assert!(u.validate().is_err(), "空 repo 应拒");
+    }
+
+    #[test]
+    fn editable_update_默认_channel_为_stable_且校验通过() {
+        // FR-89：默认通道为 stable，from_config 应装载之，validate 通过
+        let u = EditableUpdate::from_config(&UpdateConfig::default());
+        assert_eq!(u.channel, "stable", "默认通道应为 stable");
+        assert!(u.validate().is_ok(), "默认 stable 通道应合法");
+    }
+
+    #[test]
+    fn editable_update_校验_channel_仅允许_stable_或_prerelease() {
+        let mut u = EditableUpdate::from_config(&UpdateConfig::default());
+        u.channel = "prerelease".to_string();
+        assert!(u.validate().is_ok(), "prerelease 通道应合法");
+        u.channel = "beta".to_string();
+        assert!(u.validate().is_err(), "非法通道应拒");
+    }
+
+    #[test]
+    fn update_channel_from_config_解析() {
+        // FR-89：prerelease 解析为预发布通道，其余（含未知值）回退 stable
+        assert_eq!(
+            UpdateChannel::from_config("prerelease"),
+            UpdateChannel::Prerelease
+        );
+        assert_eq!(UpdateChannel::from_config("stable"), UpdateChannel::Stable);
+        assert_eq!(UpdateChannel::from_config("unknown"), UpdateChannel::Stable);
     }
 
     /// 测试用出站超时。

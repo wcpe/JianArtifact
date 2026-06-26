@@ -8,6 +8,7 @@ use axum::extract::State;
 use axum::Json;
 use serde::Serialize;
 
+use crate::config::UpdateChannel;
 use crate::update::{
     self, GithubReleaseSource, ReleaseSource, RestartMode, RestartRequest, UpdateCheck, UpdateError,
 };
@@ -62,22 +63,24 @@ pub struct ApplyResponse {
     pub new_version: String,
 }
 
-/// 据**热替换槽当前值**构造 GitHub Release 来源（出站默认关闭时返回 `Disabled`）。
+/// 据**热替换槽当前值**构造 GitHub Release 来源 + 解析当前更新通道（出站默认关闭时返回 `Disabled`）。
 ///
-/// 读运行时可编辑设置槽（FR-88，ADR-0022）的在线更新配置（含 `enabled` 开关），出站经共享出站网络
-/// 热替换槽取当前 client；PATCH 翻 `enabled` / 改 repo / 改代理后即时生效，无须重启。
-fn build_source(state: &AppState) -> Result<GithubReleaseSource, UpdateError> {
+/// 读运行时可编辑设置槽（FR-88，ADR-0022）的在线更新配置（含 `enabled` 开关与 `channel` 通道），
+/// 出站经共享出站网络热替换槽取当前 client；PATCH 翻 `enabled` / 改 repo / 改 channel / 改代理后即时
+/// 生效，无须重启。返回的 [`UpdateChannel`]（FR-89）决定取哪一条 Release。
+fn build_source(state: &AppState) -> Result<(GithubReleaseSource, UpdateChannel), UpdateError> {
     let cfg = state.settings.update();
     if !cfg.enabled {
         return Err(UpdateError::Disabled);
     }
-    Ok(GithubReleaseSource::with_network_state(
+    let source = GithubReleaseSource::with_network_state(
         state.settings.network.clone(),
         cfg.api_base_url.clone(),
         cfg.repo.clone(),
         cfg.token.clone(),
         std::time::Duration::from_secs(cfg.download_timeout_secs),
-    ))
+    );
+    Ok((source, UpdateChannel::from_config(&cfg.channel)))
 }
 
 /// 当前运行版本（编译期注入）。
@@ -93,8 +96,8 @@ pub async fn check_update(
     identity: Identity,
 ) -> Result<Json<UpdateCheck>, ApiError> {
     identity.require_admin()?;
-    let source = build_source(&state)?;
-    let release = source.fetch_latest_release().await?;
+    let (source, channel) = build_source(&state)?;
+    let release = source.fetch_latest_release(channel).await?;
     let check = update::build_check(current_version(), &release)?;
     Ok(Json(check))
 }
@@ -118,7 +121,7 @@ pub async fn apply_update(
         .try_begin_apply()
         .ok_or_else(|| ApiError::Conflict("更新进行中".to_string()))?;
 
-    let source = build_source(&state)?;
+    let (source, channel) = build_source(&state)?;
 
     // 当前 exe 与数据目录由配置 / 运行时给出；替换在阻塞线程池执行，校验通过才替换
     let current_exe = std::env::current_exe().map_err(|e| {
@@ -127,7 +130,8 @@ pub async fn apply_update(
     })?;
     let data_dir = state.config.data.data_dir.clone();
 
-    let outcome = update::apply_update(&source, current_version(), &current_exe, &data_dir).await?;
+    let outcome =
+        update::apply_update(&source, channel, current_version(), &current_exe, &data_dir).await?;
 
     // 替换成功：置位重启请求（透传当前 argv，不含 argv[0]）+ 触发优雅停机
     // 重启模式读热替换槽当前值（PATCH 可调），不再读启动期 config.update

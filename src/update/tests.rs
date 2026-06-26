@@ -164,6 +164,8 @@ struct FakeSource {
     assets: HashMap<String, Vec<u8>>,
     /// 记录被请求的下载 url（断言只下了该下的）。
     downloaded: Mutex<Vec<String>>,
+    /// 记录被请求的更新通道（FR-89：断言 stable / prerelease 各取对应源）。
+    channels: Mutex<Vec<UpdateChannel>>,
 }
 
 impl FakeSource {
@@ -172,12 +174,18 @@ impl FakeSource {
             release: Ok(release),
             assets,
             downloaded: Mutex::new(Vec::new()),
+            channels: Mutex::new(Vec::new()),
         }
     }
 }
 
 impl ReleaseSource for FakeSource {
-    async fn fetch_latest_release(&self) -> Result<Release, UpdateError> {
+    async fn fetch_latest_release(&self, channel: UpdateChannel) -> Result<Release, UpdateError> {
+        // 记录被请求的通道，便于断言「stable / prerelease 各取对应源」
+        self.channels
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(channel);
         match &self.release {
             Ok(r) => Ok(r.clone()),
             Err(_) => Err(UpdateError::Upstream("fake 上游失败".to_string())),
@@ -250,7 +258,7 @@ async fn apply_正确_sha256_落地替换() {
     let (release, assets) = release_with_assets("0.4.0", new_bin);
     let source = FakeSource::new(release, assets);
 
-    let outcome = apply_update(&source, "0.3.0", &exe, dir.path())
+    let outcome = apply_update(&source, UpdateChannel::Stable, "0.3.0", &exe, dir.path())
         .await
         .expect("校验通过应成功替换");
     assert_eq!(outcome.new_version, "0.4.0");
@@ -301,7 +309,7 @@ async fn apply_sha256_不一致_拒绝替换() {
     assets.insert(sha_url, wrong_sha.into_bytes());
     let source = FakeSource::new(release, assets);
 
-    let err = apply_update(&source, "0.3.0", &exe, dir.path())
+    let err = apply_update(&source, UpdateChannel::Stable, "0.3.0", &exe, dir.path())
         .await
         .unwrap_err();
     assert!(matches!(err, UpdateError::ChecksumMismatch));
@@ -327,7 +335,7 @@ async fn apply_缺二进制资产_报错() {
         assets: vec![],
     };
     let source = FakeSource::new(release, HashMap::new());
-    let err = apply_update(&source, "0.3.0", &exe, dir.path())
+    let err = apply_update(&source, UpdateChannel::Stable, "0.3.0", &exe, dir.path())
         .await
         .unwrap_err();
     assert!(matches!(err, UpdateError::MissingAsset(_)));
@@ -355,7 +363,7 @@ async fn apply_缺_sha256_资产_报错() {
     let mut assets = HashMap::new();
     assets.insert(bin_url, b"NEW".to_vec());
     let source = FakeSource::new(release, assets);
-    let err = apply_update(&source, "0.3.0", &exe, dir.path())
+    let err = apply_update(&source, UpdateChannel::Stable, "0.3.0", &exe, dir.path())
         .await
         .unwrap_err();
     assert!(matches!(err, UpdateError::MissingAsset(_)));
@@ -409,6 +417,99 @@ fn 解析_release_缺_tag_报错() {
         super::source::parse_release(r#"{"name":"x"}"#),
         Err(UpdateError::Parse(_))
     ));
+}
+
+// ---------- prerelease 列表解析（FR-89：跳 draft、取最新一条）----------
+
+#[test]
+fn 解析_release_列表_跳_draft_取最新() {
+    // 列表按发布时间倒序：首条为 draft 应跳过，取下一条（含预发布）
+    let body = r#"[
+        {"tag_name": "v0.5.0-rc.2", "draft": true, "prerelease": true, "assets": []},
+        {"tag_name": "v0.5.0-rc.1", "draft": false, "prerelease": true,
+         "assets": [{"name": "a.bin", "browser_download_url": "https://x/a.bin"}]},
+        {"tag_name": "v0.4.0", "draft": false, "prerelease": false, "assets": []}
+    ]"#;
+    let r = super::source::parse_release_list(body).unwrap();
+    // 跳过 draft 的 rc.2，取最新非 draft 的 rc.1（预发布）
+    assert_eq!(r.tag_name, "v0.5.0-rc.1");
+    assert_eq!(r.version(), "0.5.0-rc.1");
+    assert_eq!(r.assets.len(), 1);
+}
+
+#[test]
+fn 解析_release_列表_空或全_draft_报上游错误() {
+    // 空列表
+    assert!(matches!(
+        super::source::parse_release_list("[]"),
+        Err(UpdateError::Upstream(_))
+    ));
+    // 全为 draft
+    let body = r#"[{"tag_name": "v0.5.0-rc.1", "draft": true, "assets": []}]"#;
+    assert!(matches!(
+        super::source::parse_release_list(body),
+        Err(UpdateError::Upstream(_))
+    ));
+}
+
+#[test]
+fn 解析_release_列表_非数组报解析错() {
+    // prerelease 通道期望数组；返回单对象应报 Parse 错
+    assert!(matches!(
+        super::source::parse_release_list(r#"{"tag_name":"v0.4.0"}"#),
+        Err(UpdateError::Parse(_))
+    ));
+}
+
+// ---------- 通道选源：stable 取稳定、prerelease 取预发布（FR-89）----------
+
+#[tokio::test]
+async fn apply_prerelease_通道_升级到预发布版() {
+    // prerelease 通道下，fake 源返回预发布版 → 走到替换、断言记录的通道为 Prerelease
+    let dir = tempfile::tempdir().unwrap();
+    let exe = dir.path().join("jianartifact");
+    tokio::fs::write(&exe, b"OLD-BINARY").await.unwrap();
+
+    let new_bin = b"PRERELEASE-BINARY";
+    // 预发布版 0.5.0-rc.1：版本比较忽略后缀，0.5.0 > 0.3.0，应可升级
+    let (release, assets) = release_with_assets("0.5.0-rc.1", new_bin);
+    let source = FakeSource::new(release, assets);
+
+    let outcome = apply_update(
+        &source,
+        UpdateChannel::Prerelease,
+        "0.3.0",
+        &exe,
+        dir.path(),
+    )
+    .await
+    .expect("prerelease 通道校验通过应替换");
+    assert_eq!(outcome.new_version, "0.5.0-rc.1");
+    assert_eq!(tokio::fs::read(&exe).await.unwrap(), new_bin);
+    // 断言确实以 Prerelease 通道取的源
+    let chans = source.channels.lock().unwrap_or_else(|e| e.into_inner());
+    assert_eq!(chans.as_slice(), [UpdateChannel::Prerelease]);
+}
+
+#[tokio::test]
+async fn fetch_stable_与_prerelease_各记录对应通道() {
+    // 验证 fake 源记录的通道与传入一致（stable / prerelease 各取对应源）
+    let (release, assets) = release_with_assets("0.4.0", b"BIN");
+    let source = FakeSource::new(release, assets);
+
+    let _ = source
+        .fetch_latest_release(UpdateChannel::Stable)
+        .await
+        .unwrap();
+    let _ = source
+        .fetch_latest_release(UpdateChannel::Prerelease)
+        .await
+        .unwrap();
+    let chans = source.channels.lock().unwrap_or_else(|e| e.into_inner());
+    assert_eq!(
+        chans.as_slice(),
+        [UpdateChannel::Stable, UpdateChannel::Prerelease]
+    );
 }
 
 // ---------- apply 单飞互斥（M2）----------
