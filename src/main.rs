@@ -92,9 +92,10 @@ async fn main() -> anyhow::Result<()> {
     ));
 
     // 通用制品机理服务：本地 blob 存储 + reqwest 上游（纯 rustls）+ 单飞缓存
-    let upstream = HttpUpstream::new(std::time::Duration::from_secs(
-        cfg.proxy.upstream_timeout_secs,
-    ))
+    let upstream = HttpUpstream::with_network(
+        std::time::Duration::from_secs(cfg.proxy.upstream_timeout_secs),
+        &cfg.network.proxy,
+    )
     .context("初始化上游 HTTP 客户端失败")?;
     let artifacts = Arc::new(ArtifactService::new(store.clone(), meta.clone(), upstream));
     // 格式注册表：注册已实现格式（Raw、Maven、npm、Docker），其余格式由后续批次接入
@@ -162,9 +163,10 @@ async fn main() -> anyhow::Result<()> {
     // 漏洞库离线镜像（FR-70，ADR-0012）：默认关闭，启用时后台周期下载公开漏洞数据落本地库。
     // 仅镜像/落库，不做制品坐标匹配（FR-71）；下载公开数据集整包，不外发本机制品坐标。
     let _vuln_refresh = if cfg.vuln.enabled {
-        let source = HttpMirrorSource::new(
+        let source = HttpMirrorSource::with_network(
             cfg.vuln.source_base_url.clone(),
             std::time::Duration::from_secs(cfg.vuln.download_timeout_secs),
+            &cfg.network.proxy,
         )
         .context("初始化漏洞库镜像下载器失败")?;
         let mirror = Arc::new(VulnMirror::new(meta.clone(), source, &data_dir));
@@ -226,12 +228,13 @@ async fn main() -> anyhow::Result<()> {
     // OIDC 认证 provider（FR-34，ADR-0016）：仅当配置了 `[auth.oidc]` 才实例化（未配置即不存在）。
     // client_secret 真源 env / 配置，绝不入库 / 进日志；复用纯 rustls 的 reqwest 客户端。
     let oidc = if let Some(oidc_cfg) = cfg.auth.oidc.clone() {
-        let http = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(
-                cfg.proxy.upstream_timeout_secs,
-            ))
-            .build()
-            .context("初始化 OIDC HTTP 客户端失败")?;
+        // 经统一出站客户端 helper 构造，注入 [network.proxy] 出站代理（FR-84，ADR-0020）
+        let http = jianartifact::config::build_outbound_client(
+            std::time::Duration::from_secs(cfg.proxy.upstream_timeout_secs),
+            &cfg.network.proxy,
+        )
+        .map_err(|e| anyhow::anyhow!(e))
+        .context("初始化 OIDC HTTP 客户端失败")?;
         let provider = OidcProvider::new(
             OidcSettings {
                 issuer: oidc_cfg.issuer,

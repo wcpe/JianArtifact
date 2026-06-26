@@ -237,6 +237,16 @@
 | refresh_interval_secs | 刷新周期（秒） | 86400 | JIANARTIFACT_VULN_REFRESH_INTERVAL_SECS |
 | download_timeout_secs | 单次镜像下载整体超时（秒） | 600 | JIANARTIFACT_VULN_DOWNLOAD_TIMEOUT_SECS |
 
+### [network.proxy]（出站网络代理，P2 / FR-84 / ADR-0020）
+
+> 统一注入全部出站 reqwest 客户端（proxy 回源 / Nexus 迁移 / 漏洞库镜像 / OIDC）。三键默认全空：不显式注入代理，保持 reqwest 既有行为不变（含其默认 honor 系统 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` 环境变量）。**任一键给值即以本配置为真源**（注入即关闭 reqwest 的自动系统代理探测，配置压过系统环境）。代理 URL 可含 `user:pass@` 凭据，凭据**不入库、不进日志 / 错误信息**——建议含凭据的代理 URL 仅经环境变量提供，不写入入库 TOML。
+
+| 键 | 含义 | 默认（取向） | 环境变量 |
+|---|---|---|---|
+| http | HTTP 出站代理 URL（如 `http://proxy.internal:8080`） | 空（不注入） | JIANARTIFACT_NETWORK_PROXY_HTTP |
+| https | HTTPS 出站代理 URL | 空（不注入） | JIANARTIFACT_NETWORK_PROXY_HTTPS |
+| no_proxy | 直连绕过列表（逗号分隔的主机 / 域 / CIDR） | 空 | JIANARTIFACT_NETWORK_PROXY_NO_PROXY |
+
 ## 3. 安全
 
 - 真实凭据 / 口令不写入入库的 `config.toml`，走环境变量或不入库的本地配置。

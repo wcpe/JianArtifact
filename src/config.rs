@@ -140,6 +140,7 @@ const KNOWN_SECTIONS: &[&str] = &[
     "observability",
     "protection",
     "vuln",
+    "network",
 ];
 
 /// 已知的多级嵌套前缀映射（环境变量下划线前缀 → 点分隔配置路径）。
@@ -153,6 +154,8 @@ const KNOWN_NESTED_PREFIXES: &[(&str, &str)] = &[
     ("auth_oidc_", "auth.oidc."),
     // LDAP 配置在 auth.ldap 子节下；env 形如 JIANARTIFACT_AUTH_LDAP_BIND_PASSWORD。
     ("auth_ldap_", "auth.ldap."),
+    // 出站代理在 network.proxy 子节下；env 形如 JIANARTIFACT_NETWORK_PROXY_HTTPS（FR-84）。
+    ("network_proxy_", "network.proxy."),
 ];
 
 /// 顶层配置。
@@ -182,6 +185,9 @@ pub struct Config {
     /// 漏洞库离线镜像配置。
     #[serde(default)]
     pub vuln: VulnConfig,
+    /// 出站网络代理配置（FR-84，ADR-0020）：统一注入全部出站 reqwest 客户端。
+    #[serde(default)]
+    pub network: NetworkConfig,
 }
 
 /// HTTP 服务配置。
@@ -881,6 +887,71 @@ impl Default for VulnConfig {
     }
 }
 
+/// 出站网络配置（FR-84，ADR-0020）：当前仅承载正向出站代理。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NetworkConfig {
+    /// 出站代理配置。
+    #[serde(default)]
+    pub proxy: NetworkProxyConfig,
+}
+
+/// 出站正向代理配置（FR-84，ADR-0020）。
+///
+/// 三键均默认 `None`：全不配置时不显式注入代理，保持 reqwest 既有行为不变
+/// （含其默认 honor 系统 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` 环境变量）。
+/// 任一键给值即以配置为真源（见 [`build_outbound_client`] 与 ADR-0020）。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NetworkProxyConfig {
+    /// HTTP 出站代理 URL（如 `http://proxy.internal:8080`，可含 `user:pass@` 凭据）。
+    #[serde(default)]
+    pub http: Option<String>,
+    /// HTTPS 出站代理 URL。
+    #[serde(default)]
+    pub https: Option<String>,
+    /// 直连绕过列表（逗号分隔的主机 / 域 / CIDR），命中者不经代理。
+    #[serde(default)]
+    pub no_proxy: Option<String>,
+}
+
+/// 构造统一的出站 reqwest 客户端（FR-84，ADR-0020）。
+///
+/// 在固定的 rustls / stream 特性（见 Cargo.toml）与给定整体超时基础上，按 `proxy` 配置
+/// 注入出站正向代理：
+/// - `https` / `http` 任一给值即注入对应 scheme 的 [`reqwest::Proxy`]，并关闭 reqwest 的
+///   自动系统代理探测（配置为真源，压过系统环境）；
+/// - `no_proxy` 给值则解析为绕过列表挂到所注入的各 Proxy 上；
+/// - 三键全空时不调用任何 `.proxy()`，保持 reqwest 默认行为（含其系统环境变量 honor），
+///   从而「不配置即与现状一致」。
+///
+/// 失败返回的错误信息**不含原始代理 URL**（避免泄露代理凭据，守安全脱敏红线）。
+pub fn build_outbound_client(
+    timeout: std::time::Duration,
+    proxy: &NetworkProxyConfig,
+) -> Result<reqwest::Client, String> {
+    let mut builder = reqwest::Client::builder().timeout(timeout);
+
+    // no_proxy 解析一次，挂到每个注入的 Proxy 上（reqwest 的绕过列表绑定在 Proxy 维度）
+    let no_proxy = proxy
+        .no_proxy
+        .as_deref()
+        .and_then(reqwest::NoProxy::from_string);
+
+    if let Some(url) = proxy.https.as_deref() {
+        let p = reqwest::Proxy::https(url)
+            .map_err(|_| "出站 HTTPS 代理配置无效".to_string())?
+            .no_proxy(no_proxy.clone());
+        builder = builder.proxy(p);
+    }
+    if let Some(url) = proxy.http.as_deref() {
+        let p = reqwest::Proxy::http(url)
+            .map_err(|_| "出站 HTTP 代理配置无效".to_string())?
+            .no_proxy(no_proxy.clone());
+        builder = builder.proxy(p);
+    }
+
+    builder.build().map_err(|e| e.to_string())
+}
+
 impl Config {
     /// 从指定 TOML 文件与环境变量加载配置。
     ///
@@ -1455,5 +1526,55 @@ mod tests {
         let mut cfg2 = ProtectionConfig::default();
         cfg2.cc_challenge.difficulty = 65;
         assert!(cfg2.validate().is_err());
+    }
+
+    #[test]
+    fn 出站代理默认全为空() {
+        let cfg = Config::default();
+        // 三键默认 None：不显式注入代理，保持现状（FR-84）
+        assert!(cfg.network.proxy.http.is_none());
+        assert!(cfg.network.proxy.https.is_none());
+        assert!(cfg.network.proxy.no_proxy.is_none());
+    }
+
+    #[test]
+    fn 环境变量覆盖出站代理() {
+        with_env_vars(
+            &[
+                (
+                    "JIANARTIFACT_NETWORK_PROXY_HTTPS",
+                    "http://proxy.internal:8080",
+                ),
+                ("JIANARTIFACT_NETWORK_PROXY_NO_PROXY", "localhost,127.0.0.1"),
+            ],
+            || {
+                let cfg = Config::load(Path::new("不存在的配置文件.toml")).unwrap();
+                // network_proxy_ 前缀正确映射到 network.proxy.*
+                assert_eq!(
+                    cfg.network.proxy.https.as_deref(),
+                    Some("http://proxy.internal:8080")
+                );
+                assert_eq!(
+                    cfg.network.proxy.no_proxy.as_deref(),
+                    Some("localhost,127.0.0.1")
+                );
+                assert!(cfg.network.proxy.http.is_none());
+            },
+        );
+    }
+
+    #[test]
+    fn toml_可覆盖出站代理() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            "[network.proxy]\nhttp = \"http://p1:3128\"\nhttps = \"http://p2:3128\""
+        )
+        .unwrap();
+        with_env_vars(&[], || {
+            let cfg = Config::load(file.path()).unwrap();
+            assert_eq!(cfg.network.proxy.http.as_deref(), Some("http://p1:3128"));
+            assert_eq!(cfg.network.proxy.https.as_deref(), Some("http://p2:3128"));
+        });
     }
 }

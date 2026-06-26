@@ -20,12 +20,25 @@ pub struct HttpNexusClient {
 impl HttpNexusClient {
     /// 构造客户端，设定整体请求超时（避免慢速源系统拖垮请求线程）。
     ///
-    /// 超时来自配置，不硬编码；构造失败（如 TLS 后端初始化异常）冒泡给调用方。
+    /// 不注入出站代理（等价空代理配置，保持既有行为）；超时来自配置，不硬编码。
+    /// 需注入 `[network.proxy]` 出站代理时改用 [`HttpNexusClient::with_network`]。
     pub fn new(request_timeout: std::time::Duration) -> Result<Self, MigrateError> {
-        let client = reqwest::Client::builder()
-            .timeout(request_timeout)
-            .build()
-            .map_err(|e| MigrateError::Transport(e.to_string()))?;
+        Self::with_network(
+            request_timeout,
+            &crate::config::NetworkProxyConfig::default(),
+        )
+    }
+
+    /// 按出站代理配置构造 Nexus 客户端（FR-84，ADR-0020）。
+    ///
+    /// 经统一出站客户端 helper 注入 `[network.proxy]` 代理与既有超时 / rustls / stream 特性；
+    /// 构造失败冒泡给调用方，错误信息不含代理凭据。
+    pub fn with_network(
+        request_timeout: std::time::Duration,
+        proxy: &crate::config::NetworkProxyConfig,
+    ) -> Result<Self, MigrateError> {
+        let client = crate::config::build_outbound_client(request_timeout, proxy)
+            .map_err(MigrateError::Transport)?;
         Ok(Self { client })
     }
 }

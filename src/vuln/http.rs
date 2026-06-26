@@ -21,11 +21,28 @@ pub struct HttpMirrorSource {
 
 impl HttpMirrorSource {
     /// 构造下载器，设定单次下载整体超时（按生态 all.zip 可能较大）。
+    ///
+    /// 不注入出站代理（等价空代理配置，保持既有行为）。
+    /// 需注入 `[network.proxy]` 出站代理时改用 [`HttpMirrorSource::with_network`]。
     pub fn new(base_url: String, download_timeout: std::time::Duration) -> Result<Self, VulnError> {
-        let client = reqwest::Client::builder()
-            .timeout(download_timeout)
-            .build()
-            .map_err(|e| VulnError::Download(e.to_string()))?;
+        Self::with_network(
+            base_url,
+            download_timeout,
+            &crate::config::NetworkProxyConfig::default(),
+        )
+    }
+
+    /// 按出站代理配置构造镜像下载器（FR-84，ADR-0020）。
+    ///
+    /// 经统一出站客户端 helper 注入 `[network.proxy]` 代理与既有超时 / rustls / stream 特性；
+    /// 构造失败冒泡给调用方，错误信息不含代理凭据。
+    pub fn with_network(
+        base_url: String,
+        download_timeout: std::time::Duration,
+        proxy: &crate::config::NetworkProxyConfig,
+    ) -> Result<Self, VulnError> {
+        let client = crate::config::build_outbound_client(download_timeout, proxy)
+            .map_err(VulnError::Download)?;
         Ok(Self { client, base_url })
     }
 }

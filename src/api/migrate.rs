@@ -70,9 +70,10 @@ pub async fn preview_nexus_repositories(
     identity.require_admin()?;
 
     // 复用 proxy 上游超时配置，避免慢速源系统拖垮请求线程
-    let client = HttpNexusClient::new(std::time::Duration::from_secs(
-        state.config.proxy.upstream_timeout_secs,
-    ))
+    let client = HttpNexusClient::with_network(
+        std::time::Duration::from_secs(state.config.proxy.upstream_timeout_secs),
+        &state.config.network.proxy,
+    )
     .map_err(ApiError::from)?;
 
     let repos =
@@ -147,9 +148,10 @@ pub async fn migrate_nexus_proxy(
     }
 
     // ① 在线枚举源 proxy 仓库配置（格式 / 上游地址）
-    let client = HttpNexusClient::new(std::time::Duration::from_secs(
-        state.config.proxy.upstream_timeout_secs,
-    ))
+    let client = HttpNexusClient::with_network(
+        std::time::Duration::from_secs(state.config.proxy.upstream_timeout_secs),
+        &state.config.network.proxy,
+    )
     .map_err(ApiError::from)?;
     let source_repos =
         migrate::discover_repositories(&client, &req.base_url, req.auth_ref.as_deref()).await?;
@@ -198,9 +200,10 @@ pub async fn migrate_nexus_hosted(
     }
 
     // ① 在线枚举源 hosted 仓库配置（格式 / 可见性）
-    let client = HttpNexusClient::new(std::time::Duration::from_secs(
-        state.config.proxy.upstream_timeout_secs,
-    ))
+    let client = HttpNexusClient::with_network(
+        std::time::Duration::from_secs(state.config.proxy.upstream_timeout_secs),
+        &state.config.network.proxy,
+    )
     .map_err(ApiError::from)?;
     let source_repos =
         migrate::discover_repositories(&client, &req.base_url, req.auth_ref.as_deref()).await?;
@@ -293,9 +296,10 @@ pub async fn migrate_nexus_online(
         return Err(ApiError::BadRequest("未选择要迁移的仓库".to_string()));
     }
 
-    let client = HttpNexusClient::new(std::time::Duration::from_secs(
-        state.config.proxy.upstream_timeout_secs,
-    ))
+    let client = HttpNexusClient::with_network(
+        std::time::Duration::from_secs(state.config.proxy.upstream_timeout_secs),
+        &state.config.network.proxy,
+    )
     .map_err(ApiError::from)?;
 
     // 解析凭据（用于 components 枚举与 asset 下载）；匿名源可省略
