@@ -127,6 +127,16 @@ const DEFAULT_ALERTS_WAF_BLOCK_WARN_THRESHOLD: u64 = 500;
 const DEFAULT_ALERTS_SLOWLORIS_WARN_THRESHOLD: u64 = 200;
 /// 防护告警明细行数硬上限（FR-56）：超限删最旧行，兜底防止撑爆 SQLite。
 const DEFAULT_ALERTS_MAX_ROWS: u64 = 100_000;
+/// 在线更新默认开关（FR-85，ADR-0021）：**默认关闭**，出站默认不联网，须运维显式开启。
+const DEFAULT_UPDATE_ENABLED: bool = false;
+/// 在线更新默认仓库源（FR-85）：`owner/repo` 形式，默认本项目发布仓库。
+const DEFAULT_UPDATE_REPO: &str = "wcpe/JianArtifact";
+/// 在线更新默认 GitHub API 基址（FR-85）：可配（便于测试 / 镜像）。
+const DEFAULT_UPDATE_API_BASE_URL: &str = "https://api.github.com";
+/// 在线更新默认重启模式（FR-85）：`self`（自拉起新进程）或 `exit`（仅退出交外部进程管理器）。
+const DEFAULT_UPDATE_RESTART_MODE: &str = "self";
+/// 在线更新默认下载超时（秒）：资产下载整体超时，默认 300 秒。
+const DEFAULT_UPDATE_DOWNLOAD_TIMEOUT_SECS: u64 = 300;
 /// 环境变量前缀。
 const ENV_PREFIX: &str = "JIANARTIFACT_";
 /// 已知配置节名。环境变量映射时，仅把节名与键名之间的首个下划线视作嵌套分隔，
@@ -141,6 +151,7 @@ const KNOWN_SECTIONS: &[&str] = &[
     "protection",
     "vuln",
     "network",
+    "update",
 ];
 
 /// 已知的多级嵌套前缀映射（环境变量下划线前缀 → 点分隔配置路径）。
@@ -188,6 +199,9 @@ pub struct Config {
     /// 出站网络代理配置（FR-84，ADR-0020）：统一注入全部出站 reqwest 客户端。
     #[serde(default)]
     pub network: NetworkConfig,
+    /// 在线更新配置（FR-85，ADR-0021）：管理员手动触发的自更新；默认关闭出站。
+    #[serde(default)]
+    pub update: UpdateConfig,
 }
 
 /// HTTP 服务配置。
@@ -913,6 +927,43 @@ pub struct NetworkProxyConfig {
     pub no_proxy: Option<String>,
 }
 
+/// 在线更新配置（FR-85，ADR-0021）。
+///
+/// 管理员手动触发的完整自更新：查 GitHub 最新稳定 Release、按本机 target 下载资产、
+/// 校验 sha256、原子替换二进制并自动重启。出站默认关闭，须运维显式开启。
+/// `token` 真源为 env `JIANARTIFACT_UPDATE_TOKEN`（私有仓库可选），不入库、不进日志、不回显。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateConfig {
+    /// 是否启用在线更新（出站开关）：默认 `false`，关闭时检查 / 应用端点一律拒绝、不联网。
+    pub enabled: bool,
+    /// 仓库源（`owner/repo`），默认 `wcpe/JianArtifact`。
+    pub repo: String,
+    /// GitHub API 基址，可配（便于测试 / 镜像），默认 `https://api.github.com`。
+    pub api_base_url: String,
+    /// 重启模式：`self`（重启后自拉起新进程）或 `exit`（仅退出，交外部进程管理器重启）。
+    pub restart_mode: String,
+    /// 资产下载整体超时（秒），默认 300。
+    pub download_timeout_secs: u64,
+    /// 私有仓库可选访问 token（真源 env `JIANARTIFACT_UPDATE_TOKEN`）。
+    ///
+    /// 绝不入库、不进日志、不回显：序列化时一律跳过，避免写入配置导出或调试输出。
+    #[serde(default, skip_serializing)]
+    pub token: Option<String>,
+}
+
+impl Default for UpdateConfig {
+    fn default() -> Self {
+        Self {
+            enabled: DEFAULT_UPDATE_ENABLED,
+            repo: DEFAULT_UPDATE_REPO.to_string(),
+            api_base_url: DEFAULT_UPDATE_API_BASE_URL.to_string(),
+            restart_mode: DEFAULT_UPDATE_RESTART_MODE.to_string(),
+            download_timeout_secs: DEFAULT_UPDATE_DOWNLOAD_TIMEOUT_SECS,
+            token: None,
+        }
+    }
+}
+
 /// 构造统一的出站 reqwest 客户端（FR-84，ADR-0020）。
 ///
 /// 在固定的 rustls / stream 特性（见 Cargo.toml）与给定整体超时基础上，按 `proxy` 配置
@@ -1576,5 +1627,61 @@ mod tests {
             assert_eq!(cfg.network.proxy.http.as_deref(), Some("http://p1:3128"));
             assert_eq!(cfg.network.proxy.https.as_deref(), Some("http://p2:3128"));
         });
+    }
+
+    #[test]
+    fn 在线更新默认值() {
+        with_env_vars(&[], || {
+            let cfg = Config::load(Path::new("不存在的配置文件.toml")).unwrap();
+            // 出站默认关闭、仓库源 / API 基址 / 重启模式 / 超时取内置默认
+            assert!(!cfg.update.enabled);
+            assert_eq!(cfg.update.repo, "wcpe/JianArtifact");
+            assert_eq!(cfg.update.api_base_url, "https://api.github.com");
+            assert_eq!(cfg.update.restart_mode, "self");
+            assert_eq!(cfg.update.download_timeout_secs, 300);
+            assert!(cfg.update.token.is_none());
+        });
+    }
+
+    #[test]
+    fn toml_可覆盖在线更新() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            "[update]\nenabled = true\nrepo = \"acme/app\"\napi_base_url = \"http://localhost:9999\"\nrestart_mode = \"exit\"\ndownload_timeout_secs = 120"
+        )
+        .unwrap();
+        with_env_vars(&[], || {
+            let cfg = Config::load(file.path()).unwrap();
+            assert!(cfg.update.enabled);
+            assert_eq!(cfg.update.repo, "acme/app");
+            assert_eq!(cfg.update.api_base_url, "http://localhost:9999");
+            assert_eq!(cfg.update.restart_mode, "exit");
+            assert_eq!(cfg.update.download_timeout_secs, 120);
+        });
+    }
+
+    #[test]
+    fn 环境变量覆盖在线更新_token() {
+        with_env_vars(&[("JIANARTIFACT_UPDATE_TOKEN", "ghp_secret_xxx")], || {
+            // update_token 前缀经单级节名映射到 update.token
+            let cfg = Config::load(Path::new("不存在的配置文件.toml")).unwrap();
+            assert_eq!(cfg.update.token.as_deref(), Some("ghp_secret_xxx"));
+        });
+    }
+
+    #[test]
+    fn 在线更新_token_不回显序列化() {
+        // token 标记 skip_serializing：序列化导出 / 调试输出绝不含 token，守凭据不外泄
+        let cfg = UpdateConfig {
+            token: Some("ghp_should_not_leak".to_string()),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(
+            !json.contains("ghp_should_not_leak"),
+            "序列化输出不得包含 token"
+        );
+        assert!(!json.contains("token"), "序列化输出不得包含 token 字段名");
     }
 }

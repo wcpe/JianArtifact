@@ -56,6 +56,7 @@ mod repositories;
 mod search;
 mod slowloris;
 mod tokens;
+mod update;
 mod upload_routes;
 mod usage;
 mod users;
@@ -143,6 +144,9 @@ pub struct AppState {
     /// 进程内防护告警评估器（FR-56，ADR-0017）：各防护命中点累加窗内计数、达阈值即告警；
     /// 状态端点据其窗内计数快照展示防护健康。计数 / 去抖状态进程内内存维护，重启即清。
     pub alert_engine: Arc<alerts::AlertEngine>,
+    /// 在线更新重启句柄（FR-85，ADR-0021）：自更新替换成功后置位重启请求并触发优雅停机，
+    /// `main` 在 `serve` 返回后据此拉起新进程（`self`）或退出（`exit`）。
+    pub restart: Arc<crate::update::RestartHandle>,
 }
 
 /// 统一 API 错误类型，转换为 JSON 响应 `{"error":{"code","message"}}`。
@@ -175,6 +179,9 @@ pub enum ApiError {
     /// 上游网关错误（proxy 回源失败 / 超时）。
     #[error("上游拉取失败")]
     BadGateway,
+    /// 请求语义正确但内容不可处理（如下载资产缺失 / 校验失败，FR-85）。
+    #[error("{0}")]
+    UnprocessableEntity(String),
     /// 内部服务器错误。
     #[error("内部服务器错误")]
     Internal,
@@ -194,6 +201,7 @@ impl ApiError {
             ApiError::AccountDisabled => StatusCode::FORBIDDEN,
             ApiError::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             ApiError::BadGateway => StatusCode::BAD_GATEWAY,
+            ApiError::UnprocessableEntity(_) => StatusCode::UNPROCESSABLE_ENTITY,
             ApiError::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -210,6 +218,7 @@ impl ApiError {
             ApiError::AccountDisabled => "account_disabled",
             ApiError::PayloadTooLarge => "payload_too_large",
             ApiError::BadGateway => "bad_gateway",
+            ApiError::UnprocessableEntity(_) => "unprocessable_entity",
             ApiError::Internal => "internal_error",
         }
     }
@@ -415,6 +424,8 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/migrate/jobs", get(migrate::migrate_nexus_jobs))
         .route("/migrate/jobs/{id}", get(migrate::migrate_nexus_job))
+        .route("/update/check", get(update::check_update))
+        .route("/update/apply", post(update::apply_update))
         .route(
             "/repositories/{id}/acl",
             get(acl::list_acl).post(acl::create_acl),
@@ -638,6 +649,8 @@ mod tests {
             // 默认测试状态：告警引擎就绪（默认配置告警关闭，record 直接返回）
             alerts,
             alert_engine,
+            // 默认测试状态：在线更新重启句柄就绪（无重启请求）
+            restart: Arc::new(crate::update::RestartHandle::default()),
         };
         (state, dir)
     }

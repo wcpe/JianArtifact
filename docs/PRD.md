@@ -124,7 +124,7 @@
 | FR-82 | Nexus 在线拉取制品迁移（经 REST components 枚举 + HTTP 下载，Maven hosted，无需离线目录，文件字节一致、目标仓库名可自定义） | P2 | 开发中 |
 | FR-83 | 迁移任务异步化与进度可观测（在线拉取改后台任务、立即返回 job_id + 轮询进度队列 + 客户端断点重连，进程内不落库） | P2 | 开发中 |
 | FR-84 | 统一出站网络代理（`[network.proxy]` http/https/no_proxy + env 覆盖，统一注入全部出站 reqwest 客户端：proxy 回源 / Nexus 迁移 / 漏洞库镜像 / OIDC / 更新检查；凭据不入库不进日志） | P2 | 开发中 |
-| FR-85 | 在线更新：管理员手动触发的完整自更新（查 GitHub 最新稳定 Release 比对当前版本 → 按本机 target 下载资产 → 校验 sha256 → 原子替换二进制 → 自动重启；出站默认关闭、仅 Admin、仅版本检查与资产下载不外发使用数据/坐标） | P2 | 计划 |
+| FR-85 | 在线更新：管理员手动触发的完整自更新（查 GitHub 最新稳定 Release 比对当前版本 → 按本机 target 下载资产 → 校验 sha256 → 原子替换二进制 → 自动重启；出站默认关闭、仅 Admin、仅版本检查与资产下载不外发使用数据/坐标） | P2 | 开发中 |
 | FR-86 | GitHub Actions CI/CD：质量门（push/PR → 前端构建 + fmt + clippy + test）+ 发布（push 默认分支 → prerelease；tag `v*` → 正式 release；3 目标 Linux/Windows/macOS + 每资产 sha256，资产命名与 FR-85 下载约定对齐） | P2 | 开发中 |
 
 > 状态取值：计划 / 开发中 / 已交付@vX.Y.Z。优先级：P1(MVP) / P2 / P3。

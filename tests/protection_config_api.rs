@@ -84,6 +84,7 @@ impl Fixture {
             )),
             alerts,
             alert_engine,
+            restart: std::sync::Arc::new(jianartifact::update::RestartHandle::default()),
         };
         Self { state, _dir: dir }
     }

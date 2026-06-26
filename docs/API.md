@@ -313,6 +313,23 @@
 - **列表响应**（`jobs`）：`[{ "job_id", "phase", "total_assets", "done_assets", "migrated", "skipped", "current_repo" }]`，按登记时序。
 - **错误**：`401` 未认证；`403` 非管理员；`404` 未知 `job_id`（含已被淘汰的旧任务）。
 
+### 检查在线更新（仅 Admin，FR-85）
+
+- **方法 / 路径**：`GET /api/v1/update/check`
+- **请求**：无请求体。仅管理员可调用。
+- **行为**：查配置仓库（`[update] repo`，默认 `wcpe/JianArtifact`）的最新稳定 Release，与当前运行版本比对，返回是否有更新。出站经 `[network.proxy]`（FR-84）注入的代理。**`[update] enabled=false` 时一律拒绝、不联网**；token / 凭据不进日志、不回显。
+- **响应**：`{ "current_version", "latest_version", "update_available", "asset_name", "notes" }`。`current_version` 为当前运行版本；`latest_version` 为最新稳定版本（`tag_name` 去前导 `v`）；`update_available` 为 `latest > current`；`asset_name` 为本机平台对应资产名（`jianartifact-{version}-{target}{ext}`）；`notes` 为发布说明（Release `body`）。
+- **错误**：`400` 当前平台无自更新资产 / 版本串非法；`401` 未认证；`403` 非管理员；`409` 在线更新未启用（`enabled=false`）；`502` 上游不可达 / 超时 / 响应异常（不向调用方泄露内部细节）。
+
+### 应用在线更新（仅 Admin，FR-85）
+
+- **方法 / 路径**：`POST /api/v1/update/apply`
+- **请求**：无请求体。仅管理员可调用。
+- **行为**：按本机平台取对应资产 → 流式下载并边算 sha256（不整体载入内存）→ 取同名 `.sha256` 资产比对 → 一致则**原子替换**当前二进制 → 置位重启请求触发优雅停机，排空在途请求后由 `main` 据 `[update] restart_mode`（`self` 自拉起 / `exit` 仅退出交外部进程管理器）拉起新进程或退出。**仅 sha256 校验通过才替换、替换是最后一步**：校验失败即删临时文件、保留旧二进制、进程续以旧版运行。`enabled=false` 时一律拒绝、不联网；token / 凭据不进日志、不回显。
+- **响应**：`200`，体 `{ "status": "已更新，正在重启", "new_version" }`。`new_version` 为替换后的新版本号；返回后服务排空在途请求并按 `restart_mode` 重启。
+- **错误**：`400` 当前平台无自更新资产 / 版本串非法；`401` 未认证；`403` 非管理员；`409` 在线更新未启用（`enabled=false`）/ 无更新可用（最新版本不高于当前）；`422` 下载内容 sha256 不一致或发布缺所需资产（拒绝替换、保留旧二进制）；`500` 本地替换 / 落盘失败；`502` 上游不可达 / 超时 / 响应异常。
+- **错误响应体**：统一为 `{ "error": { "code", "message" } }`（`422` 对应错误码 `unprocessable_entity`）。
+
 ### 列出仓库 ACL
 
 - **方法 / 路径**：`GET /api/v1/repositories/{id}/acl`

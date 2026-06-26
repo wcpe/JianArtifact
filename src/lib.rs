@@ -20,5 +20,6 @@ pub mod migrate;
 pub mod proxy;
 pub mod repo;
 pub mod storage;
+pub mod update;
 pub mod vuln;
 pub mod web;

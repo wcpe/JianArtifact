@@ -247,6 +247,20 @@
 | https | HTTPS 出站代理 URL | 空（不注入） | JIANARTIFACT_NETWORK_PROXY_HTTPS |
 | no_proxy | 直连绕过列表（逗号分隔的主机 / 域 / CIDR） | 空 | JIANARTIFACT_NETWORK_PROXY_NO_PROXY |
 
+### [update]（在线更新，P2 / FR-85 / ADR-0021）
+
+> 管理员手动触发的完整自更新：查 GitHub 最新稳定 Release、与当前版本比对，下载对应资产、校验 sha256、原子替换二进制并自动重启。**出站默认关闭**（`enabled=false` 时检查 / 应用端点一律拒绝、不联网），须运维显式开启。出站经 `[network.proxy]`（FR-84）注入的代理。
+
+| 键 | 含义 | 默认（取向） | 环境变量 |
+|---|---|---|---|
+| enabled | 是否启用在线更新（出站开关）；关闭时检查 / 应用端点一律拒绝、不联网 | false | JIANARTIFACT_UPDATE_ENABLED |
+| repo | 仓库源（`owner/repo` 形式），自更新从此仓库取 Release | wcpe/JianArtifact | JIANARTIFACT_UPDATE_REPO |
+| api_base_url | GitHub API 基址（可配，便于测试 / 镜像） | https://api.github.com | JIANARTIFACT_UPDATE_API_BASE_URL |
+| restart_mode | 重启模式：`self`（自拉起新进程）/ `exit`（仅退出交外部进程管理器 systemd / docker 重启） | self | JIANARTIFACT_UPDATE_RESTART_MODE |
+| download_timeout_secs | 资产下载整体超时（秒） | 300 | JIANARTIFACT_UPDATE_DOWNLOAD_TIMEOUT_SECS |
+
+> `token` 是密钥（私有仓库可选）：真源为环境变量 `JIANARTIFACT_UPDATE_TOKEN`，**绝不入库、不进日志、序列化不回显**；公开仓库免凭据。仅做 sha256 完整性校验、校验通过才替换（不做签名验签）；校验失败即拒绝替换、删临时文件、保留旧二进制，进程续以旧版运行。
+
 ## 3. 安全
 
 - 真实凭据 / 口令不写入入库的 `config.toml`，走环境变量或不入库的本地配置。

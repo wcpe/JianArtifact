@@ -78,6 +78,7 @@ impl Fixture {
             alert_engine: std::sync::Arc::new(jianartifact::api::AlertEngine::new(
                 jianartifact::api::alert_channel().0,
             )),
+            restart: std::sync::Arc::new(jianartifact::update::RestartHandle::default()),
         };
         Self { state, _dir: dir }
     }
@@ -128,6 +129,7 @@ impl Fixture {
             alert_engine: std::sync::Arc::new(jianartifact::api::AlertEngine::new(
                 jianartifact::api::alert_channel().0,
             )),
+            restart: std::sync::Arc::new(jianartifact::update::RestartHandle::default()),
         };
         Self { state, _dir: dir }
     }

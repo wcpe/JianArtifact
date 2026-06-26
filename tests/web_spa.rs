@@ -75,6 +75,7 @@ async fn 测试用状态() -> (AppState, tempfile::TempDir) {
         alert_engine: std::sync::Arc::new(jianartifact::api::AlertEngine::new(
             jianartifact::api::alert_channel().0,
         )),
+        restart: std::sync::Arc::new(jianartifact::update::RestartHandle::default()),
     };
     (state, dir)
 }

@@ -41,6 +41,9 @@ async fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
 
+    // 启动早期清理上次自更新在 Windows 留下的残留旧二进制（FR-85，best-effort）
+    jianartifact::update::cleanup_stale_old();
+
     // 加载配置（默认值 → TOML → 环境变量覆盖）
     let mut cfg = Config::load(&cli.config)
         .with_context(|| format!("加载配置失败: {}", cli.config.display()))?;
@@ -297,6 +300,10 @@ async fn main() -> anyhow::Result<()> {
     // 防护配置真源自此为本槽，中间件不再读 config.protection。
     let protection = Arc::new(api::ProtectionState::new(cfg.protection.clone()));
 
+    // 在线更新重启句柄（FR-85，ADR-0021）：随 AppState 共享；自更新替换成功后置位重启请求并
+    // 触发优雅停机，serve 返回后据此拉起新进程或退出。
+    let restart = Arc::new(jianartifact::update::RestartHandle::default());
+
     // 构建路由与共享状态
     let state = AppState {
         config: Arc::new(cfg.clone()),
@@ -323,6 +330,8 @@ async fn main() -> anyhow::Result<()> {
         // FR-56：防护告警投递端 + 进程内告警评估器（窗内各维度达阈值即告警并异步落库）
         alerts,
         alert_engine,
+        // FR-85：在线更新重启句柄（自更新替换成功后触发优雅停机 + 重启）
+        restart: restart.clone(),
     };
     let app = api::build_router(state);
 
@@ -338,12 +347,39 @@ async fn main() -> anyhow::Result<()> {
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
-    .with_graceful_shutdown(shutdown_signal())
+    .with_graceful_shutdown(shutdown_signal(restart.clone()))
     .await
     .context("HTTP 服务异常退出")?;
 
     info!("服务已优雅关闭");
+
+    // 在线更新（FR-85，ADR-0021，§3.8）：serve 已排空在途请求并释放监听端口，此时若有重启请求则处理：
+    // - self：拉起新进程（端口已释放，避免新旧争用）后旧进程退出；
+    // - exit：直接退出码 0，交外部进程管理器（systemd / docker）重启。
+    if let Some(req) = restart.take() {
+        handle_restart(req)?;
+    }
     Ok(())
+}
+
+/// 据重启请求拉起新进程或退出（FR-85，§3.8）。**真正的拉起进程 + 端口序列需真机验证**。
+fn handle_restart(req: jianartifact::update::RestartRequest) -> anyhow::Result<()> {
+    use jianartifact::update::RestartMode;
+    match req.mode {
+        RestartMode::SelfRespawn => {
+            info!(二进制 = %req.exe.display(), "自更新：拉起新进程后退出");
+            std::process::Command::new(&req.exe)
+                .args(&req.argv)
+                .spawn()
+                .with_context(|| format!("拉起新进程失败: {}", req.exe.display()))?;
+            // 拉起成功后正常退出，交还端口给新进程
+            std::process::exit(0);
+        }
+        RestartMode::Exit => {
+            info!("自更新：仅退出，交外部进程管理器重启");
+            std::process::exit(0);
+        }
+    }
 }
 
 /// 初始化分级日志：默认 info，可经 RUST_LOG 调整。
@@ -376,10 +412,15 @@ async fn bootstrap_and_log(meta: &MetaStore) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// 等待 Ctrl+C 信号以触发优雅关闭。
-async fn shutdown_signal() {
-    if let Err(e) = tokio::signal::ctrl_c().await {
-        warn!(错误 = %e, "监听关闭信号失败，将依赖进程退出");
+/// 等待优雅关闭触发：Ctrl+C 信号，或在线更新置位的重启通知（FR-85，§3.8），任一即停机。
+async fn shutdown_signal(restart: Arc<jianartifact::update::RestartHandle>) {
+    let ctrl_c = async {
+        if let Err(e) = tokio::signal::ctrl_c().await {
+            warn!(错误 = %e, "监听关闭信号失败，将依赖进程退出");
+        }
+    };
+    tokio::select! {
+        _ = ctrl_c => info!("收到关闭信号，开始优雅停机"),
+        _ = restart.notified() => info!("收到在线更新重启请求，开始优雅停机"),
     }
-    info!("收到关闭信号，开始优雅停机");
 }
