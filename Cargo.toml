@@ -78,6 +78,11 @@ metrics-exporter-prometheus = { version = "0.17", default-features = false }
 # 纯 Rust、无依赖，针对二进制体积与编译时间优化（不含 regex 的 Unicode 大表 / SIMD），
 # 守单一二进制零原生运行时依赖；WAF 规则在启动期预编译一次，热路径仅做匹配。
 regex-lite = "0.1"
+# 主机 / 系统监控采集（FR-98，ADR-0023）：跨平台读取 CPU / 内存 / 磁盘 / uptime。
+# default-features=false 关掉默认全量，仅启用 system（CPU/内存/交换/uptime）与 disk（磁盘），
+# 剔除 component（温度传感器）/ network（网卡）/ user（账户）以控二进制体积与依赖面。
+# 其内部 unsafe 不影响本仓库的 forbid(unsafe_code)（仅约束本仓库代码）。
+sysinfo = { version = "0.39.5", default-features = false, features = ["system", "disk"] }
 
 # ---- S3 兼容对象存储后端（FR-30 / ADR-0014），默认关闭、opt-in 编译 ----
 # 全部 optional：默认 `cargo build` 不引入任何 S3 代码与依赖，守单一二进制零外部运行时依赖。
