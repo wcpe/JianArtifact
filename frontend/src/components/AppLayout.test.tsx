@@ -39,6 +39,17 @@ function 普通用户上下文(): AuthContextValue {
   };
 }
 
+/** 构造匿名访客认证上下文（未登录、会话已恢复完毕）。 */
+function 匿名上下文(): AuthContextValue {
+  return {
+    user: null,
+    loading: false,
+    isAdmin: false,
+    signIn: async () => {},
+    signOut: async () => {},
+  };
+}
+
 /** 在指定初始路由与认证上下文下渲染布局外壳（附带定位探针）。 */
 function renderAt(initialPath: string, ctx: AuthContextValue = 管理员上下文()) {
   return render(
@@ -196,5 +207,57 @@ describe('AppLayout 页眉全局搜索（FR-94）', () => {
 
     expect(screen.getByTestId('location-probe')).toHaveTextContent('/');
     expect(screen.getByTestId('location-probe')).not.toHaveTextContent('/search');
+  });
+});
+
+describe('AppLayout 匿名访客 shell（FR-95）', () => {
+  // 公开导航项：匿名可见
+  const 公开导航 = ['仓库管理', '制品搜索'];
+  // 受限入口：匿名一律不可见（含通用登录项与全部管理项）
+  const 受限入口 = [
+    '仪表盘',
+    'Token 管理',
+    '制品上传',
+    '用户管理',
+    '用户组管理',
+    '监控',
+    '防护配置',
+    'Nexus 迁移',
+    '设置',
+  ];
+
+  it('匿名态页眉显示「登录」按钮，不显示用户名与登出', () => {
+    renderAt('/repositories', 匿名上下文());
+
+    expect(screen.getByRole('button', { name: '登录' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '登出' })).not.toBeInTheDocument();
+  });
+
+  it('匿名态导航只留公开项，不显示任何受限 / 管理 / 上传入口', () => {
+    renderAt('/repositories', 匿名上下文());
+
+    for (const label of 公开导航) {
+      expect(screen.getByLabelText(label)).toBeInTheDocument();
+    }
+    for (const label of 受限入口) {
+      expect(screen.queryByLabelText(label)).not.toBeInTheDocument();
+    }
+  });
+
+  it('匿名态保留页眉全局搜索（FR-94 不回归）', () => {
+    renderAt('/repositories', 匿名上下文());
+
+    const input = screen.getByLabelText('全局搜索');
+    expect(input).toBeInTheDocument();
+    expect(input).not.toBeDisabled();
+  });
+
+  it('点击页眉「登录」跳转到 /login', async () => {
+    const user = userEvent.setup();
+    renderAt('/repositories', 匿名上下文());
+
+    await user.click(screen.getByRole('button', { name: '登录' }));
+
+    expect(screen.getByTestId('location-probe')).toHaveTextContent('/login');
   });
 });

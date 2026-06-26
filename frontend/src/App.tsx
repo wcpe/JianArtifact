@@ -41,7 +41,7 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-/** 管理员守卫：非管理员重定向到仪表盘。 */
+/** 管理员守卫：非管理员重定向到落地路由。 */
 function RequireAdmin({ children }: { children: React.ReactNode }) {
   const { isAdmin } = useAuth();
   if (!isAdmin) {
@@ -50,72 +50,119 @@ function RequireAdmin({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-/** 应用路由表。 */
+/**
+ * 落地路由分流（FR-95）：登录用户看仪表盘，匿名访客重定向到公开浏览。
+ * 仪表盘读取当前用户信息、不能匿名渲染，故匿名落地到只读的公开仓库浏览。
+ * 恢复会话期间显示加载态，避免据未恢复的空登录态误判。
+ */
+function HomeRoute() {
+  const { user, loading } = useAuth();
+  if (loading) {
+    return (
+      <Center h="100vh">
+        <Loader />
+      </Center>
+    );
+  }
+  return user ? <DashboardPage /> : <Navigate to="/repositories" replace />;
+}
+
+/**
+ * 应用路由表（三层守卫，FR-95）。
+ *
+ * 外壳 `AppLayout` 挂在 `/` 且**不包 RequireAuth**——匿名访客也能进入外壳浏览公开内容；
+ * 由 `AppLayout` 自身据登录态渲染匿名 / 登录页眉与导航。各子路由按层加守卫：
+ * - 公开层（匿名可达，只读公开内容）：`/`（落地分流）、`/repositories`、`/repository`、`/search`、`/artifact`。
+ * - 需登录层（user+）：`/tokens`、`/upload`——`RequireAuth`。
+ * - 需管理员层（admin）：`/users`、`/groups`、`/protection`、`/monitor`、`/migration`、`/settings`——`RequireAuth` + `RequireAdmin`。
+ */
 export function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
-      <Route
-        path="/"
-        element={
-          <RequireAuth>
-            <AppLayout />
-          </RequireAuth>
-        }
-      >
-        <Route index element={<DashboardPage />} />
+      <Route path="/" element={<AppLayout />}>
+        {/* 公开层：匿名可达，只读浏览 / 搜索公开制品 */}
+        <Route index element={<HomeRoute />} />
         <Route path="repositories" element={<RepositoriesPage />} />
-        <Route path="upload" element={<UploadPage />} />
         <Route path="repository" element={<RepositoryDetailPage />} />
         <Route path="artifact" element={<ArtifactDetailPage />} />
         <Route path="search" element={<SearchPage />} />
-        <Route path="tokens" element={<TokensPage />} />
+        {/* 需登录层：匿名跳登录（带回跳） */}
+        <Route
+          path="tokens"
+          element={
+            <RequireAuth>
+              <TokensPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="upload"
+          element={
+            <RequireAuth>
+              <UploadPage />
+            </RequireAuth>
+          }
+        />
+        {/* 需管理员层：匿名跳登录、普通用户重定向到落地 */}
         <Route
           path="users"
           element={
-            <RequireAdmin>
-              <UsersPage />
-            </RequireAdmin>
+            <RequireAuth>
+              <RequireAdmin>
+                <UsersPage />
+              </RequireAdmin>
+            </RequireAuth>
           }
         />
         <Route
           path="groups"
           element={
-            <RequireAdmin>
-              <GroupsPage />
-            </RequireAdmin>
+            <RequireAuth>
+              <RequireAdmin>
+                <GroupsPage />
+              </RequireAdmin>
+            </RequireAuth>
           }
         />
         <Route
           path="protection"
           element={
-            <RequireAdmin>
-              <ProtectionConfigPage />
-            </RequireAdmin>
+            <RequireAuth>
+              <RequireAdmin>
+                <ProtectionConfigPage />
+              </RequireAdmin>
+            </RequireAuth>
           }
         />
         <Route
           path="monitor"
           element={
-            <RequireAdmin>
-              <MonitorPage />
-            </RequireAdmin>
+            <RequireAuth>
+              <RequireAdmin>
+                <MonitorPage />
+              </RequireAdmin>
+            </RequireAuth>
           }
         />
         <Route
           path="migration"
           element={
-            <RequireAdmin>
-              <MigrationPage />
-            </RequireAdmin>
+            <RequireAuth>
+              <RequireAdmin>
+                <MigrationPage />
+              </RequireAdmin>
+            </RequireAuth>
           }
         />
         <Route
           path="settings"
           element={
-            <RequireAdmin>
-              <SettingsPage />
-            </RequireAdmin>
+            <RequireAuth>
+              <RequireAdmin>
+                <SettingsPage />
+              </RequireAdmin>
+            </RequireAuth>
           }
         />
       </Route>

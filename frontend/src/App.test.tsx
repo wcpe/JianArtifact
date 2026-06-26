@@ -1,0 +1,165 @@
+// 三层路由守卫测试（FR-95 角色感知 UI）：
+// 公开层（匿名可达，只读）/ 需登录层（user+）/ 需管理员层（admin）。
+// 验证匿名、普通用户、管理员三种身份在各层路由上的可达性与重定向行为。
+
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen } from '@testing-library/react';
+import { MantineProvider } from '@mantine/core';
+import { MemoryRouter } from 'react-router-dom';
+import { App } from './App';
+import { AuthContext, type AuthContextValue } from './auth/AuthContext';
+
+// 桩掉端点模块：各页面挂载时会调用 api.*，统一返回空，避免真实网络
+vi.mock('./api/endpoints');
+// 桩掉通知，避免依赖 Notifications Provider
+vi.mock('./lib/notify', () => ({
+  notifySuccess: vi.fn(),
+  notifyError: vi.fn(),
+}));
+
+import * as api from './api/endpoints';
+const mockedApi = vi.mocked(api);
+
+/** 匿名上下文：未登录、会话已恢复完毕（loading=false）。 */
+function 匿名上下文(): AuthContextValue {
+  return {
+    user: null,
+    loading: false,
+    isAdmin: false,
+    signIn: async () => {},
+    signOut: async () => {},
+  };
+}
+
+/** 普通用户上下文。 */
+function 普通用户上下文(): AuthContextValue {
+  return {
+    user: { id: 'u-user', username: 'alice', role: 'user' },
+    loading: false,
+    isAdmin: false,
+    signIn: async () => {},
+    signOut: async () => {},
+  };
+}
+
+/** 管理员上下文。 */
+function 管理员上下文(): AuthContextValue {
+  return {
+    user: { id: 'u-admin', username: 'admin', role: 'admin' },
+    loading: false,
+    isAdmin: true,
+    signIn: async () => {},
+    signOut: async () => {},
+  };
+}
+
+/** 在指定初始路由与认证上下文下渲染整个应用路由表。 */
+function renderApp(initialPath: string, ctx: AuthContextValue) {
+  return render(
+    <MantineProvider>
+      <AuthContext.Provider value={ctx}>
+        <MemoryRouter initialEntries={[initialPath]}>
+          <App />
+        </MemoryRouter>
+      </AuthContext.Provider>
+    </MantineProvider>,
+  );
+}
+
+describe('App 三层路由守卫（FR-95）', () => {
+  beforeEach(() => {
+    // 列表 / 搜索类端点统一返回空，页面据此渲染空态而非报错
+    mockedApi.listRepositories.mockResolvedValue([]);
+    mockedApi.listTokens.mockResolvedValue([]);
+    mockedApi.listUsers.mockResolvedValue([]);
+    mockedApi.search.mockResolvedValue({
+      items: [],
+      total: 0,
+      offset: 0,
+      limit: 20,
+      has_more: false,
+    });
+  });
+  afterEach(() => vi.clearAllMocks());
+
+  describe('匿名访客', () => {
+    it('访问公开路由 /repositories：不跳登录，渲染仓库浏览（标题可见）', async () => {
+      renderApp('/repositories', 匿名上下文());
+      // 公开浏览页标题；不应出现登录页的「登录 JianArtifact」
+      expect(await screen.findByText('仓库管理')).toBeInTheDocument();
+      expect(screen.queryByText('登录 JianArtifact')).not.toBeInTheDocument();
+    });
+
+    it('访问公开路由 /search：不跳登录，渲染搜索页', async () => {
+      renderApp('/search', 匿名上下文());
+      expect(await screen.findByText('制品搜索')).toBeInTheDocument();
+      expect(screen.queryByText('登录 JianArtifact')).not.toBeInTheDocument();
+    });
+
+    it('落地路由 / 重定向到公开浏览 /repositories', async () => {
+      renderApp('/', 匿名上下文());
+      expect(await screen.findByText('仓库管理')).toBeInTheDocument();
+    });
+
+    it('访问需登录路由 /tokens：重定向到登录页', async () => {
+      renderApp('/tokens', 匿名上下文());
+      expect(await screen.findByText('登录 JianArtifact')).toBeInTheDocument();
+    });
+
+    it('访问需登录路由 /upload：重定向到登录页', async () => {
+      renderApp('/upload', 匿名上下文());
+      expect(await screen.findByText('登录 JianArtifact')).toBeInTheDocument();
+    });
+
+    it('访问管理路由 /users：重定向到登录页', async () => {
+      renderApp('/users', 匿名上下文());
+      expect(await screen.findByText('登录 JianArtifact')).toBeInTheDocument();
+    });
+
+    it('访问管理路由 /settings：重定向到登录页', async () => {
+      renderApp('/settings', 匿名上下文());
+      expect(await screen.findByText('登录 JianArtifact')).toBeInTheDocument();
+    });
+  });
+
+  describe('普通用户', () => {
+    it('访问公开路由 /repositories：可达', async () => {
+      renderApp('/repositories', 普通用户上下文());
+      expect(await screen.findByText('仓库管理')).toBeInTheDocument();
+    });
+
+    it('访问需登录路由 /tokens：可达（自助管理自己的 Token）', async () => {
+      renderApp('/tokens', 普通用户上下文());
+      expect(await screen.findByText('Token 管理')).toBeInTheDocument();
+    });
+
+    it('访问管理路由 /users：重定向到落地（不可达，不渲染用户管理）', async () => {
+      renderApp('/users', 普通用户上下文());
+      // 被 RequireAdmin 重定向到 /，登录用户落地到仪表盘；不应渲染用户管理
+      expect(await screen.findByText('仪表盘')).toBeInTheDocument();
+      expect(mockedApi.listUsers).not.toHaveBeenCalled();
+    });
+
+    it('访问管理路由 /settings：重定向到落地（不可达）', async () => {
+      renderApp('/settings', 普通用户上下文());
+      expect(await screen.findByText('仪表盘')).toBeInTheDocument();
+    });
+  });
+
+  describe('管理员', () => {
+    it('落地路由 / 渲染仪表盘', async () => {
+      renderApp('/', 管理员上下文());
+      expect(await screen.findByText('仪表盘')).toBeInTheDocument();
+    });
+
+    it('访问管理路由 /users：可达', async () => {
+      renderApp('/users', 管理员上下文());
+      expect(await screen.findByText('用户管理')).toBeInTheDocument();
+    });
+
+    it('访问需登录路由 /tokens：可达', async () => {
+      renderApp('/tokens', 管理员上下文());
+      expect(await screen.findByText('Token 管理')).toBeInTheDocument();
+    });
+  });
+});

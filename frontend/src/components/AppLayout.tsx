@@ -27,6 +27,7 @@ import {
   IconTransfer,
   IconSettings,
   IconLogout,
+  IconLogin,
   IconLayoutSidebarLeftExpand,
   IconLayoutSidebarLeftCollapse,
 } from '@tabler/icons-react';
@@ -39,7 +40,10 @@ interface NavItem {
   label: string;
   path: string;
   icon: React.ReactNode;
+  /** 仅管理员可见。 */
   adminOnly?: boolean;
+  /** 匿名访客可见（公开只读浏览入口，FR-95）。未标记的项匿名一律不可见。 */
+  publicVisible?: boolean;
 }
 
 /**
@@ -56,8 +60,14 @@ function isNavActive(pathname: string, itemPath: string): boolean {
 
 const NAV_ITEMS: NavItem[] = [
   { label: '仪表盘', path: '/', icon: <IconDashboard size={18} /> },
-  { label: '仓库管理', path: '/repositories', icon: <IconDatabase size={18} /> },
-  { label: '制品搜索', path: '/search', icon: <IconSearch size={18} /> },
+  // 公开浏览入口：匿名访客亦可见（FR-95），用于只读浏览 / 搜索公开制品
+  {
+    label: '仓库管理',
+    path: '/repositories',
+    icon: <IconDatabase size={18} />,
+    publicVisible: true,
+  },
+  { label: '制品搜索', path: '/search', icon: <IconSearch size={18} />, publicVisible: true },
   { label: 'Token 管理', path: '/tokens', icon: <IconKey size={18} /> },
   { label: '用户管理', path: '/users', icon: <IconUsers size={18} />, adminOnly: true },
   { label: '用户组管理', path: '/groups', icon: <IconUsersGroup size={18} />, adminOnly: true },
@@ -139,7 +149,10 @@ export function AppLayout() {
     }
   };
 
-  const visibleItems = NAV_ITEMS.filter((item) => !item.adminOnly || isAdmin);
+  // 角色感知导航过滤（FR-95）：匿名只见公开浏览入口；登录用户按 adminOnly 门控（FR-92 不回归）。
+  const visibleItems = user
+    ? NAV_ITEMS.filter((item) => !item.adminOnly || isAdmin)
+    : NAV_ITEMS.filter((item) => item.publicVisible);
 
   const navbarWidth = navExpanded ? density.navbarWidth.expanded : density.navbarWidth.collapsed;
 
@@ -169,19 +182,31 @@ export function AppLayout() {
             onChange={(e) => handleSearchChange(e.currentTarget.value)}
             onKeyDown={handleSearchKeyDown}
           />
-          <Group>
-            <Text size="sm" c="dimmed">
-              {user?.username}（{user?.role === 'admin' ? '管理员' : '用户'}）
-            </Text>
+          {/* 角色感知页眉（FR-95）：登录态显示用户名 + 登出；匿名态显示「登录」按钮 */}
+          {user ? (
+            <Group>
+              <Text size="sm" c="dimmed">
+                {user.username}（{user.role === 'admin' ? '管理员' : '用户'}）
+              </Text>
+              <Button
+                variant="subtle"
+                size="xs"
+                leftSection={<IconLogout size={16} />}
+                onClick={handleSignOut}
+              >
+                登出
+              </Button>
+            </Group>
+          ) : (
             <Button
-              variant="subtle"
+              variant="light"
               size="xs"
-              leftSection={<IconLogout size={16} />}
-              onClick={handleSignOut}
+              leftSection={<IconLogin size={16} />}
+              onClick={() => navigate('/login')}
             >
-              登出
+              登录
             </Button>
-          </Group>
+          )}
         </Group>
       </AppShell.Header>
 
