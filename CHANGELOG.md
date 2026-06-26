@@ -9,6 +9,7 @@
 ### 新增
 - 设置可编辑与运行时热替换（FR-88，ADR-0022，取代 ADR-0020 的「代理只读 / 运行时不热替换」取向）：网络代理 `[network.proxy]` 与在线更新可调字段（`enabled` / `repo` / `api_base_url` / `restart_mode` / `token`）改为经控制台「设置」页或 `PATCH /api/v1/settings`（仅 Admin）在线编辑、**即时生效、无须重启**。新增随 `AppState` 共享的出站网络热替换槽 `config::NetworkState`（std `RwLock<Arc<NetworkSnapshot>>`，快照含代理配置 + 据其构造的 `reqwest::Client`）：5 处出站点（proxy 回源 / Nexus 迁移 / 漏洞库镜像 / OIDC / 在线更新）不再持启动期 client，改持 `Arc<NetworkState>`、每次出站取当前 client；PATCH 改代理后锁外重建 client、原子换槽，下个出站请求即用新代理。设置页从只读改可编辑（代理 http/https/no_proxy 表单 + 在线更新 enabled/repo/api_base_url/restart_mode/token），保存调 `PATCH`。校验失败 400 且不改现有生效值；代理凭据与 token 只入内存槽、**不写回 TOML / 不入 DB / 不进日志 / 不回显**，重启回落文件 + env 配置
 - Nexus 迁移任务控制（FR-91，增强 FR-83）：在线拉取异步任务新增取消 + 暂停 / 继续——新增 `POST /api/v1/migrate/jobs/{id}/cancel`、`/pause`、`/resume`（均仅 Admin）；后台逐 asset 循环在 asset 边界响应信号：取消即停止后续搬运、任务标 `cancelled`（不算失败、已搬运保留），暂停即挂起不推进、继续即恢复；进度快照新增 `paused` 布尔、阶段枚举新增 `paused` / `cancelled`；对已结束任务的控制为幂等空操作（200），未知 id 返 404。用进程内 `AtomicBool` + `tokio::sync::Notify` 实现（不引入新依赖）。Web 迁移页进度面板新增「取消 / 暂停 / 继续」按钮，按任务态启停
+- 首启自动生成默认 `config.toml`（FR-90）：二进制启动时若配置文件路径（默认 `./config.toml`，或 `--config` 指定）不存在，自动写一份带中文注释的默认配置到该路径并记 INFO 日志（已存在则绝不覆盖），运维拿到单二进制后开箱即有可编辑配置——解决「config 不释放、想开启在线更新 / 改代理却无处下手」的痛点。默认模板编译期嵌入仓库已维护的 `config.example.toml`（保真带注释）；写入失败只记 WARN、不阻断启动（回落默认值加载）
 
 ### 变更
 - 控制台设置页（FR-87 → FR-88）：`GET /api/v1/settings` 改为读**运行时可编辑设置热替换槽当前值**（含运行时 PATCH 在内，原读 `state.config`）；前端「设置」页从只读展示改为可编辑表单 + 保存按钮，文案由「真源为 config.toml / 环境变量、运行时不可改」改为「保存后运行时即时生效、无须重启」

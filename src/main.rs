@@ -44,6 +44,10 @@ async fn main() -> anyhow::Result<()> {
     // 启动早期清理上次自更新在 Windows 留下的残留旧二进制（FR-85，best-effort）
     jianartifact::update::cleanup_stale_old();
 
+    // 首启缺失即生成默认配置（FR-90）：配置文件不存在时写一份带中文注释的默认配置到该路径，
+    // 便于运维拿到单二进制后有现成可编辑的配置；已存在则绝不覆盖。须在加载配置之前完成。
+    ensure_default_config(&cli.config);
+
     // 加载配置（默认值 → TOML → 环境变量覆盖）
     let mut cfg = Config::load(&cli.config)
         .with_context(|| format!("加载配置失败: {}", cli.config.display()))?;
@@ -384,6 +388,27 @@ fn handle_restart(req: jianartifact::update::RestartRequest) -> anyhow::Result<(
             info!("自更新：仅退出，交外部进程管理器重启");
             std::process::exit(0);
         }
+    }
+}
+
+/// 首启缺失即生成默认配置文件（FR-90）。
+///
+/// 配置文件不存在时，写入 `config` 层嵌入的带中文注释默认模板并记 INFO；已存在则跳过、绝不覆盖。
+/// 写入失败（如目录无权限）只记 WARN、不阻断启动——回落到「文件不存在」语义，后续照常用默认值 + env 加载。
+/// 启动期一次性 IO，用同步 `std::fs` 即可（早于大量并发，简单直接）。
+fn ensure_default_config(config_path: &std::path::Path) {
+    if config_path.exists() {
+        return;
+    }
+    match std::fs::write(config_path, jianartifact::config::default_config_template()) {
+        Ok(()) => {
+            info!(配置文件 = %config_path.display(), "配置文件缺失，已生成带注释的默认配置，可按需编辑")
+        }
+        Err(e) => warn!(
+            配置文件 = %config_path.display(),
+            错误 = %e,
+            "生成默认配置文件失败，将回落默认值加载（请检查目录权限）"
+        ),
     }
 }
 

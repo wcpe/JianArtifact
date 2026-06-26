@@ -1217,6 +1217,21 @@ fn map_env_key(key: &UncasedStr) -> Uncased<'_> {
     Uncased::from_owned(lower)
 }
 
+/// 首启默认配置模板（FR-90）：编译期嵌入仓库已维护的示例配置 `config.example.toml`。
+///
+/// 选嵌入示例文件而非从 [`Config::default`] 反序列化生成 TOML：示例是已评审、带丰富中文注释、
+/// 随配置项演进同步维护的活模板（见 `docs/CONFIG.md`），保真且零额外序列化逻辑（简单优先）。
+/// 示例若未穷举全部节，缺失节由内置默认值兜底——写出的文件仍能被 [`Config::load`] 成功加载。
+const DEFAULT_CONFIG_TEMPLATE: &str = include_str!("../config.example.toml");
+
+/// 返回首启默认配置文件的模板文本（FR-90）。
+///
+/// 纯函数、无副作用：仅返回编译期嵌入的模板，便于单测断言「非空且能被 [`Config::load`] 解析」。
+/// 实际「文件不存在即写入」的 IO 由 `main` 在加载配置前完成（写失败只记 WARN、不阻断启动）。
+pub fn default_config_template() -> &'static str {
+    DEFAULT_CONFIG_TEMPLATE
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1964,4 +1979,66 @@ mod tests {
 
     /// 测试用出站超时。
     const DUR: std::time::Duration = std::time::Duration::from_secs(30);
+
+    // ===== FR-90：首启默认配置模板 =====
+
+    #[test]
+    fn 默认配置模板非空且能被加载() {
+        // 模板必须非空，且写到文件后可被 Config::load 成功解析（兜底节由默认值补齐）
+        let tmpl = default_config_template();
+        assert!(!tmpl.trim().is_empty(), "默认配置模板不应为空");
+
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(tmpl.as_bytes()).unwrap();
+        with_env_vars(&[], || {
+            let cfg = Config::load(file.path()).expect("模板应能被 Config::load 成功加载");
+            // 断言示例模板里显式给出的关键默认值确被加载
+            assert_eq!(cfg.server.listen_addr, "127.0.0.1");
+            assert_eq!(cfg.server.port, 8080);
+            assert_eq!(cfg.auth.session_ttl_secs, 3600);
+            assert_eq!(cfg.data.data_dir, PathBuf::from("./data"));
+        });
+    }
+
+    #[test]
+    fn 首启缺失即生成且可被加载() {
+        // 在临时目录下取一个不存在的配置路径，模拟首启「文件缺失」
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        assert!(!path.exists(), "前置条件：配置文件应不存在");
+
+        // 复刻 main 的「缺失即生成」一次性写入逻辑
+        std::fs::write(&path, default_config_template()).unwrap();
+        assert!(path.exists(), "生成后配置文件应存在");
+        assert!(
+            !std::fs::read_to_string(&path).unwrap().trim().is_empty(),
+            "生成的配置文件内容应非空"
+        );
+
+        with_env_vars(&[], || {
+            let cfg = Config::load(&path).expect("生成的配置文件应能被 Config::load 加载");
+            assert_eq!(cfg.server.port, 8080);
+        });
+    }
+
+    #[test]
+    fn 已存在配置不被覆盖() {
+        // 写入哨兵内容，模拟运维已有自定义配置
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let sentinel = "# 运维自定义配置，勿覆盖\n[server]\nport = 9999\n";
+        std::fs::write(&path, sentinel).unwrap();
+
+        // 「缺失即生成」的守卫：仅当文件不存在才写，已存在则跳过
+        if !path.exists() {
+            std::fs::write(&path, default_config_template()).unwrap();
+        }
+
+        // 文件内容应逐字节保持哨兵不变
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            sentinel,
+            "已存在的配置文件不应被覆盖"
+        );
+    }
 }
