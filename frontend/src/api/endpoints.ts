@@ -440,6 +440,30 @@ export function listMigrationJobs(): Promise<MigrationJobSummary[]> {
   return request<MigrationJobSummary[]>('/migrate/jobs');
 }
 
+/**
+ * 取消某在线拉取任务（FR-91，仅管理员）：后台循环在下一资产边界停止后续搬运、标已取消
+ * （已搬运的保留）。未知 id 返回 404；对已结束任务为幂等空操作（200）。
+ */
+export function cancelMigrationJob(id: string): Promise<void> {
+  return request<void>(`/migrate/jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST' });
+}
+
+/**
+ * 暂停某在线拉取任务（FR-91，仅管理员）：后台循环在下一资产边界挂起、不再推进。
+ * 未知 id 返回 404；对已结束 / 已取消任务为幂等空操作（200）。
+ */
+export function pauseMigrationJob(id: string): Promise<void> {
+  return request<void>(`/migrate/jobs/${encodeURIComponent(id)}/pause`, { method: 'POST' });
+}
+
+/**
+ * 继续某已暂停的在线拉取任务（FR-91，仅管理员）：唤醒挂起的后台循环恢复搬运。
+ * 未知 id 返回 404；对未暂停 / 已结束任务为幂等空操作（200）。
+ */
+export function resumeMigrationJob(id: string): Promise<void> {
+  return request<void>(`/migrate/jobs/${encodeURIComponent(id)}/resume`, { method: 'POST' });
+}
+
 // —— 设置页（FR-87，仅管理员） ——
 
 /** 读取脱敏后的网络代理 + 在线更新配置与当前版本（仅管理员）。 */

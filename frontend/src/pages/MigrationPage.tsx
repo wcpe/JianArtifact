@@ -82,9 +82,9 @@ const ONLINE_POLL_INTERVAL_MS = 1500;
 /** 在线拉取任务 job_id 的 localStorage 键名（供客户端重连续看）。 */
 const ONLINE_JOB_STORAGE_KEY = 'jian.migrate.online.jobId';
 
-/** 任务是否处于终态（done / failed）：终态即停止轮询并展示结果。 */
+/** 任务是否处于终态（done / failed / cancelled）：终态即停止轮询并展示结果。 */
 function isTerminalPhase(phase: OnlinePullJob['phase']): boolean {
-  return phase === 'done' || phase === 'failed';
+  return phase === 'done' || phase === 'failed' || phase === 'cancelled';
 }
 
 /** 阶段中文标签。 */
@@ -94,10 +94,30 @@ function phaseLabel(phase: OnlinePullJob['phase']): string {
       return '枚举资产中';
     case 'downloading':
       return '下载搬运中';
+    case 'paused':
+      return '已暂停';
+    case 'cancelled':
+      return '已取消';
     case 'done':
       return '已完成';
     case 'failed':
       return '失败';
+  }
+}
+
+/** 阶段对应的 Badge 颜色。 */
+function phaseColor(phase: OnlinePullJob['phase']): string {
+  switch (phase) {
+    case 'failed':
+      return 'red';
+    case 'done':
+      return 'green';
+    case 'paused':
+      return 'yellow';
+    case 'cancelled':
+      return 'gray';
+    default:
+      return 'blue';
   }
 }
 
@@ -305,6 +325,29 @@ export function MigrationPage() {
     };
     // 仅在首次挂载时尝试重连（依赖均为稳定的 setter，无需列入依赖）。
   }, []);
+
+  // 任务控制（FR-91）：取消 / 暂停 / 继续。控制端点幂等返回 200，调用后立即拉一次快照刷新按钮态。
+  // 取消后任务转终态、轮询自停；暂停 / 继续后轮询照旧反映新态。
+  const [controlling, setControlling] = useState(false);
+  const runControl = async (action: (id: string) => Promise<void>, id: string) => {
+    setControlling(true);
+    setMigrateError(null);
+    try {
+      await action(id);
+      await fetchJobRef.current(id);
+    } catch (err) {
+      // 未知 id（任务已过期 / 被清理）：清存档并停止轮询，不再续看。
+      if (err instanceof ApiError && err.status === 404) {
+        setPollingJobId(null);
+        setOnlineJob(null);
+        localStorage.removeItem(ONLINE_JOB_STORAGE_KEY);
+      } else {
+        setMigrateError(errorMessage(err));
+      }
+    } finally {
+      setControlling(false);
+    }
+  };
 
   // 在线拉取：选中仓库且有源地址即可执行（无需离线路径）。
   const canMigrateOnline = selected.size > 0 && baseUrl.trim() !== '' && !migrating;
@@ -544,7 +587,14 @@ export function MigrationPage() {
         <Stepper.Step label="迁移报告" description="查看结果">
           <Stack mt="md">
             {onlineJob ? (
-              <OnlineJobPanel job={onlineJob} polling={pollingJobId !== null} />
+              <OnlineJobPanel
+                job={onlineJob}
+                polling={pollingJobId !== null}
+                controlling={controlling}
+                onCancel={() => runControl(api.cancelMigrationJob, onlineJob.job_id)}
+                onPause={() => runControl(api.pauseMigrationJob, onlineJob.job_id)}
+                onResume={() => runControl(api.resumeMigrationJob, onlineJob.job_id)}
+              />
             ) : !report ? (
               <Text c="dimmed">尚无迁移报告。</Text>
             ) : (
@@ -613,11 +663,29 @@ export function MigrationPage() {
   );
 }
 
-/** 在线拉取任务进度面板：进行中展示导入队列进度，终态展示最终报告。 */
-function OnlineJobPanel({ job, polling }: { job: OnlinePullJob; polling: boolean }) {
+/** 在线拉取任务进度面板：进行中展示导入队列进度，终态展示最终报告，并提供取消 / 暂停 / 继续。 */
+function OnlineJobPanel({
+  job,
+  polling,
+  controlling,
+  onCancel,
+  onPause,
+  onResume,
+}: {
+  job: OnlinePullJob;
+  polling: boolean;
+  controlling: boolean;
+  onCancel: () => void;
+  onPause: () => void;
+  onResume: () => void;
+}) {
   // 进度百分比：无资产（尚在枚举）时为 0，避免除零。
   const percent = job.total_assets > 0 ? Math.round((job.done_assets / job.total_assets) * 100) : 0;
   const terminal = isTerminalPhase(job.phase);
+  // 按钮可用性（FR-91）：仅进行中（未暂停的活动态）可暂停 / 取消；仅已暂停可继续；终态全禁用。
+  const canPause = !terminal && !job.paused && !controlling;
+  const canResume = !terminal && job.paused && !controlling;
+  const canCancel = !terminal && !controlling;
 
   return (
     <Card withBorder padding="md" radius="md">
@@ -625,17 +693,30 @@ function OnlineJobPanel({ job, polling }: { job: OnlinePullJob; polling: boolean
         <Text fw={600}>在线拉取导入队列</Text>
         <Group gap="xs">
           {polling && <Loader size="xs" />}
-          <Badge
-            color={job.phase === 'failed' ? 'red' : job.phase === 'done' ? 'green' : 'blue'}
-            variant="light"
-          >
+          <Badge color={phaseColor(job.phase)} variant="light">
             {phaseLabel(job.phase)}
           </Badge>
         </Group>
       </Group>
 
+      {/* 任务控制：取消 / 暂停 / 继续（按任务态启停） */}
+      <Group gap="xs" mb="sm">
+        {job.paused ? (
+          <Button size="xs" variant="light" onClick={onResume} disabled={!canResume}>
+            继续
+          </Button>
+        ) : (
+          <Button size="xs" variant="light" onClick={onPause} disabled={!canPause}>
+            暂停
+          </Button>
+        )}
+        <Button size="xs" variant="light" color="red" onClick={onCancel} disabled={!canCancel}>
+          取消
+        </Button>
+      </Group>
+
       {/* 进度条 + 资产计数 */}
-      <Progress value={percent} aria-label="导入进度" animated={!terminal} />
+      <Progress value={percent} aria-label="导入进度" animated={!terminal && !job.paused} />
       <Group justify="space-between" mt="xs">
         <Text size="sm" c="dimmed">
           进度 {job.done_assets} / {job.total_assets}（{percent}%）

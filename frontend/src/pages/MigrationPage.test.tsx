@@ -46,9 +46,24 @@ const 任务进行中: OnlinePullJob = {
   skipped: 0,
   current_repo: 'maven-releases',
   current_path: 'com/example/app/1.0/app-1.0.jar',
+  paused: false,
   repos: [],
   skipped_repos: [],
   error: null,
+};
+
+/** 任务暂停态快照（paused）：用于断言「继续」按钮可用、「暂停」按钮被「继续」替换。 */
+const 任务已暂停: OnlinePullJob = {
+  ...任务进行中,
+  phase: 'paused',
+  paused: true,
+};
+
+/** 任务已取消终态快照（cancelled）：不算失败、保留已搬运。 */
+const 任务已取消: OnlinePullJob = {
+  ...任务进行中,
+  phase: 'cancelled',
+  paused: false,
 };
 
 /** 任务终态快照（done）：含每仓库明细与整仓跳过列表。 */
@@ -61,6 +76,7 @@ const 任务完成: OnlinePullJob = {
   skipped: 0,
   current_repo: null,
   current_path: null,
+  paused: false,
   repos: [
     {
       source_repo: 'maven-releases',
@@ -279,6 +295,66 @@ describe('MigrationPage', () => {
     renderPage();
 
     await waitFor(() => expect(localStorage.getItem('jian.migrate.online.jobId')).toBeNull());
+  });
+
+  it('任务控制：进行中展示暂停 / 取消，点暂停调用暂停端点', async () => {
+    localStorage.setItem('jian.migrate.online.jobId', 'job-1');
+    // 稳定返回进行中态：避免轮询期间快照漂移，确保按钮态确定。
+    vi.spyOn(api, 'getMigrationJob').mockResolvedValue(任务进行中);
+    const pauseSpy = vi.spyOn(api, 'pauseMigrationJob').mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('下载搬运中')).toBeInTheDocument());
+    // 进行中：展示「暂停」而非「继续」，暂停 / 取消均可用
+    const pauseBtn = screen.getByRole('button', { name: '暂停' });
+    expect(pauseBtn).toBeEnabled();
+    expect(screen.getByRole('button', { name: '取消' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: '继续' })).toBeNull();
+    await user.click(pauseBtn);
+
+    await waitFor(() => expect(pauseSpy).toHaveBeenCalledWith('job-1'));
+  });
+
+  it('任务控制：已暂停展示继续，点继续调用继续端点', async () => {
+    localStorage.setItem('jian.migrate.online.jobId', 'job-1');
+    vi.spyOn(api, 'getMigrationJob').mockResolvedValue(任务已暂停);
+    const resumeSpy = vi.spyOn(api, 'resumeMigrationJob').mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('已暂停')).toBeInTheDocument());
+    // 暂停态：展示「继续」而非「暂停」
+    const resumeBtn = screen.getByRole('button', { name: '继续' });
+    expect(resumeBtn).toBeEnabled();
+    expect(screen.queryByRole('button', { name: '暂停' })).toBeNull();
+    await user.click(resumeBtn);
+
+    await waitFor(() => expect(resumeSpy).toHaveBeenCalledWith('job-1'));
+  });
+
+  it('任务控制：点取消调用取消端点', async () => {
+    localStorage.setItem('jian.migrate.online.jobId', 'job-1');
+    vi.spyOn(api, 'getMigrationJob').mockResolvedValue(任务进行中);
+    const cancelSpy = vi.spyOn(api, 'cancelMigrationJob').mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('下载搬运中')).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: '取消' }));
+
+    await waitFor(() => expect(cancelSpy).toHaveBeenCalledWith('job-1'));
+  });
+
+  it('任务控制：终态（已取消）下控制按钮全禁用', async () => {
+    localStorage.setItem('jian.migrate.online.jobId', 'job-1');
+    vi.spyOn(api, 'getMigrationJob').mockResolvedValue(任务已取消);
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('已取消')).toBeInTheDocument());
+    // 终态：取消禁用；展示的是「暂停」（paused=false）且禁用
+    expect(screen.getByRole('button', { name: '取消' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '暂停' })).toBeDisabled();
   });
 
   it('预览失败展示错误文案', async () => {

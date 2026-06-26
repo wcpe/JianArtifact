@@ -479,11 +479,19 @@ export interface MigrationJobCreated {
  * 在线拉取任务的阶段。
  * - enumerating：经 REST 枚举待迁移资产；
  * - downloading：逐个 HTTP 下载并搬运；
+ * - paused：已被运维暂停，后台循环挂起等待继续（FR-91）；
+ * - cancelled：已被运维取消，停止后续搬运（不算失败，FR-91）；
  * - done：全部完成；
  * - failed：任务失败（详见 error）。
  * 严格对齐后端 phase 字段取值。
  */
-export type OnlinePullPhase = 'enumerating' | 'downloading' | 'done' | 'failed';
+export type OnlinePullPhase =
+  | 'enumerating'
+  | 'downloading'
+  | 'paused'
+  | 'cancelled'
+  | 'done'
+  | 'failed';
 
 /**
  * 在线拉取任务进度快照（GET /migrate/jobs/{id}）。
@@ -499,6 +507,8 @@ export interface OnlinePullJob {
   skipped: number;
   current_repo: string | null;
   current_path: string | null;
+  /** 是否处于暂停态（FR-91）：暂停期间为真，继续后置假。 */
+  paused: boolean;
   repos: OnlineRepoMigrationOutcome[];
   skipped_repos: string[];
   error: string | null;
@@ -516,6 +526,8 @@ export interface MigrationJobSummary {
   migrated: number;
   skipped: number;
   current_repo: string | null;
+  /** 是否处于暂停态（FR-91）。 */
+  paused: boolean;
 }
 
 // —— 设置页（FR-87，仅管理员） ——
