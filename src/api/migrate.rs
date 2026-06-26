@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::migrate::{
-    self, HostedMigrationReport, HttpNexusClient, MigrateError, NexusRepoSummary,
+    self, HostedMigrationReport, HttpNexusClient, JobControl, MigrateError, NexusRepoSummary,
     OfflineRepoSummary, OnlinePullPhase, OnlinePullProgress, ProxyMigrationReport,
 };
 
@@ -269,6 +269,8 @@ pub struct JobSummaryDto {
     pub skipped: usize,
     /// 当前处理的源仓库。
     pub current_repo: Option<String>,
+    /// 是否处于暂停态（FR-91）。
+    pub paused: bool,
 }
 
 /// 触发 Nexus 在线拉取迁移（仅管理员，FR-82 + FR-83）。
@@ -319,10 +321,11 @@ pub async fn migrate_nexus_online(
         });
     }
 
-    // 登记任务进度共享态，起后台任务执行枚举 + 下载，端点立即返回 job_id（202）
+    // 登记任务进度共享态与控制句柄，起后台任务执行枚举 + 下载，端点立即返回 job_id（202）
     let job_id = Uuid::new_v4().to_string();
     let progress = Arc::new(Mutex::new(OnlinePullProgress::default()));
-    jobs.register(job_id.clone(), progress.clone());
+    let control = Arc::new(JobControl::default());
+    jobs.register(job_id.clone(), progress.clone(), control.clone());
 
     let meta = state.meta.clone();
     let artifacts = state.artifacts.clone();
@@ -341,11 +344,15 @@ pub async fn migrate_nexus_online(
             &selections,
             max_size,
             &progress,
+            &control,
         )
         .await;
         let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
         p.current_path = None;
         match result {
+            // 被取消时 migrate_online_with_progress 已把进度标为 Cancelled 终态，
+            // 此处不得覆盖为 Done（取消不算成功完成，FR-91）
+            Ok(_) if p.phase == OnlinePullPhase::Cancelled => {}
             Ok(_) => {
                 p.phase = OnlinePullPhase::Done;
                 p.current_repo = None;
@@ -393,7 +400,61 @@ pub async fn migrate_nexus_jobs(
             migrated: p.migrated,
             skipped: p.skipped,
             current_repo: p.current_repo,
+            paused: p.paused,
         })
         .collect();
     Ok(Json(list))
+}
+
+/// 取某在线拉取任务的控制句柄；未知 id 返回 404（含已被注册表淘汰的旧任务，FR-91）。
+fn job_control(jobs: &Arc<MigrationJobs>, job_id: &str) -> Result<Arc<JobControl>, ApiError> {
+    jobs.control(job_id).ok_or(ApiError::NotFound)
+}
+
+/// 取消某在线拉取任务（仅管理员，FR-91）。
+///
+/// 置取消信号，后台循环在下一 asset 边界停止后续搬运、任务标 `cancelled`（不算失败，已搬运保留）。
+/// 未知 id 返回 404；对已结束任务为幂等空操作、返回 200（`request_cancel` 自身吞掉）。
+pub async fn migrate_nexus_job_cancel(
+    Extension(jobs): Extension<Arc<MigrationJobs>>,
+    identity: Identity,
+    Path(job_id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    identity.require_admin()?;
+    let control = job_control(&jobs, &job_id)?;
+    control.request_cancel();
+    tracing::info!(任务 = %job_id, "已请求取消在线拉取任务");
+    Ok(StatusCode::OK)
+}
+
+/// 暂停某在线拉取任务（仅管理员，FR-91）。
+///
+/// 置暂停信号，后台循环在下一 asset 边界挂起、不再推进。未知 id 返回 404；
+/// 对已取消 / 已结束任务为幂等空操作、返回 200。
+pub async fn migrate_nexus_job_pause(
+    Extension(jobs): Extension<Arc<MigrationJobs>>,
+    identity: Identity,
+    Path(job_id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    identity.require_admin()?;
+    let control = job_control(&jobs, &job_id)?;
+    control.request_pause();
+    tracing::info!(任务 = %job_id, "已请求暂停在线拉取任务");
+    Ok(StatusCode::OK)
+}
+
+/// 继续某已暂停的在线拉取任务（仅管理员，FR-91）。
+///
+/// 清暂停信号并唤醒挂起的后台循环恢复搬运。未知 id 返回 404；
+/// 对未暂停 / 已结束任务为幂等空操作、返回 200。
+pub async fn migrate_nexus_job_resume(
+    Extension(jobs): Extension<Arc<MigrationJobs>>,
+    identity: Identity,
+    Path(job_id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    identity.require_admin()?;
+    let control = job_control(&jobs, &job_id)?;
+    control.request_resume();
+    tracing::info!(任务 = %job_id, "已请求继续在线拉取任务");
+    Ok(StatusCode::OK)
 }

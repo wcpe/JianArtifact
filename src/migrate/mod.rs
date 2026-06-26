@@ -32,7 +32,7 @@ pub use offline::{
     OfflineRepoSummary,
 };
 pub use online::{
-    migrate_online_repositories, migrate_online_with_progress, OnlineMigrationReport,
+    migrate_online_repositories, migrate_online_with_progress, JobControl, OnlineMigrationReport,
     OnlinePullPhase, OnlinePullProgress, OnlinePullSelection, OnlineRepoMigrationOutcome,
 };
 pub use proxy::{migrate_proxy_repositories, ProxyMigrationReport, RepoMigrationOutcome};

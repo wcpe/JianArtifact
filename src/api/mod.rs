@@ -430,6 +430,18 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/migrate/jobs", get(migrate::migrate_nexus_jobs))
         .route("/migrate/jobs/{id}", get(migrate::migrate_nexus_job))
+        .route(
+            "/migrate/jobs/{id}/cancel",
+            post(migrate::migrate_nexus_job_cancel),
+        )
+        .route(
+            "/migrate/jobs/{id}/pause",
+            post(migrate::migrate_nexus_job_pause),
+        )
+        .route(
+            "/migrate/jobs/{id}/resume",
+            post(migrate::migrate_nexus_job_resume),
+        )
         .route("/update/check", get(update::check_update))
         .route("/update/apply", post(update::apply_update))
         .route(

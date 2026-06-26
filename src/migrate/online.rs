@@ -80,7 +80,7 @@ pub struct OnlineMigrationReport {
     pub skipped_repos: Vec<String>,
 }
 
-/// 在线拉取任务的阶段（FR-83）。
+/// 在线拉取任务的阶段（FR-83 / FR-91）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OnlinePullPhase {
@@ -89,10 +89,65 @@ pub enum OnlinePullPhase {
     Enumerating,
     /// 正在下载 / 落地 asset。
     Downloading,
+    /// 已被运维暂停，后台循环挂起等待继续（FR-91）。
+    Paused,
+    /// 已被运维取消，后台循环在 asset 边界停止后续搬运（不算失败，FR-91）。
+    Cancelled,
     /// 任务成功完成。
     Done,
     /// 任务失败（枚举 / 鉴权 / 网络等致命错误）。
     Failed,
+}
+
+/// 在线拉取任务的进程内控制信号（FR-91）：随任务与控制端点共享。
+///
+/// 用 std `AtomicBool` + 既有 `tokio::sync::Notify` 实现协作式取消与暂停 / 继续，不引入新依赖：
+/// 后台循环在每个 asset 边界轮询标志，暂停时 `await` 在 `notify` 上挂起，继续 / 取消时唤醒。
+#[derive(Debug, Default)]
+pub struct JobControl {
+    /// 取消请求标志：置真后后台循环在下一 asset 边界收尾退出（标 `Cancelled`）。
+    cancel: std::sync::atomic::AtomicBool,
+    /// 暂停请求标志：置真后后台循环在下一 asset 边界挂起，直至继续 / 取消。
+    paused: std::sync::atomic::AtomicBool,
+    /// 唤醒挂起的后台循环（继续 / 取消时触发）。
+    notify: tokio::sync::Notify,
+}
+
+impl JobControl {
+    /// 请求取消任务：置取消标志并唤醒可能挂起的后台循环。对已结束任务为幂等空操作
+    /// （后台循环已退出，标志置真无副作用）。
+    pub fn request_cancel(&self) {
+        self.cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+        // 同时清暂停标志，确保被唤醒后不再回到暂停等待
+        self.paused
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        self.notify.notify_waiters();
+    }
+
+    /// 请求暂停任务：置暂停标志。后台循环在下一 asset 边界自行挂起。已取消则不覆盖。
+    pub fn request_pause(&self) {
+        if self.cancel.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        self.paused.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// 请求继续任务：清暂停标志并唤醒挂起的后台循环。
+    pub fn request_resume(&self) {
+        self.paused
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        self.notify.notify_waiters();
+    }
+
+    /// 是否已请求取消。
+    pub fn is_cancelled(&self) -> bool {
+        self.cancel.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// 是否已请求暂停。
+    pub fn is_paused(&self) -> bool {
+        self.paused.load(std::sync::atomic::Ordering::SeqCst)
+    }
 }
 
 /// 在线拉取任务的进度快照（FR-83）：任务执行期间持续更新，`GET jobs/{id}` 直接序列化之。
@@ -112,6 +167,8 @@ pub struct OnlinePullProgress {
     pub current_repo: Option<String>,
     /// 当前正在处理的 asset 路径。
     pub current_path: Option<String>,
+    /// 是否处于暂停态（FR-91）：暂停期间为真，继续后置假。
+    pub paused: bool,
     /// 各仓库完成结果明细。
     pub repos: Vec<OnlineRepoMigrationOutcome>,
     /// 因非 maven hosted 整体跳过的源仓库名。
@@ -146,8 +203,11 @@ where
     U: Upstream,
 {
     let progress = std::sync::Mutex::new(OnlinePullProgress::default());
+    // 便捷入口无控制需求：用一次性默认控制（从不取消 / 暂停）委托
+    let control = JobControl::default();
     migrate_online_with_progress(
         client, meta, artifacts, formats, base_url, credential, selections, max_size, &progress,
+        &control,
     )
     .await
 }
@@ -167,6 +227,7 @@ pub async fn migrate_online_with_progress<C, S, U>(
     selections: &[OnlinePullSelection],
     max_size: Option<u64>,
     progress: &std::sync::Mutex<OnlinePullProgress>,
+    control: &JobControl,
 ) -> Result<OnlineMigrationReport, MigrateError>
 where
     C: NexusClient,
@@ -182,6 +243,12 @@ where
 
     let mut report = OnlineMigrationReport::default();
     for sel in selections {
+        // 取消优先：已请求取消则不再开始新仓库（FR-91）
+        if control.is_cancelled() {
+            mark_cancelled(progress);
+            return Ok(report);
+        }
+
         let src = &sel.source;
         // 范围：仅 maven2 hosted；其余格式 / 类型整体跳过，不越界建仓
         if src.r#type != "hosted" || map_nexus_format(&src.format) != Some("maven") {
@@ -204,34 +271,61 @@ where
         // 建 / 复用目标 hosted 仓库（名取 target_repo，允许与源不同名）
         let (repo, created) = ensure_hosted_repo(meta, &sel.target_repo, "maven").await?;
 
-        let (migrated, skipped) = pull_repo_assets(
+        let pulled = pull_repo_assets(
             client, artifacts, formats, base, &src.name, &repo, credential, max_size, progress,
+            control,
         )
         .await?;
 
         tracing::info!(
             源仓库 = %src.name, 目标仓库 = %sel.target_repo,
-            新建 = created, 已搬运 = migrated, 已跳过 = skipped,
-            "Maven hosted 仓库在线拉取迁移完成"
+            新建 = created, 已搬运 = pulled.migrated, 已跳过 = pulled.skipped, 已取消 = pulled.cancelled,
+            "Maven hosted 仓库在线拉取迁移结束"
         );
         let outcome = OnlineRepoMigrationOutcome {
             source_repo: src.name.clone(),
             target_repo: sel.target_repo.clone(),
             format: "maven".to_string(),
             created,
-            migrated_artifacts: migrated,
-            skipped_artifacts: skipped,
+            migrated_artifacts: pulled.migrated,
+            skipped_artifacts: pulled.skipped,
         };
         lock_progress(progress).repos.push(outcome.clone());
         report.repos.push(outcome);
+
+        // 仓库内被取消：标记已取消并停止后续仓库（不算失败，已搬运保留）
+        if pulled.cancelled {
+            mark_cancelled(progress);
+            return Ok(report);
+        }
     }
 
     Ok(report)
 }
 
+/// 把进度标记为「已取消」终态（FR-91）：清当前项、置 `Cancelled` 阶段、清暂停标志。
+fn mark_cancelled(progress: &std::sync::Mutex<OnlinePullProgress>) {
+    let mut p = lock_progress(progress);
+    p.phase = OnlinePullPhase::Cancelled;
+    p.paused = false;
+    p.current_path = None;
+    tracing::info!("在线拉取任务已按请求取消，停止后续搬运");
+}
+
+/// 单仓库在线拉取的结果：成功 / 跳过计数 + 是否在搬运中途被取消（FR-91）。
+struct RepoPullResult {
+    /// 成功搬运的 asset 数。
+    migrated: usize,
+    /// 跳过 / 失败的 asset 数。
+    skipped: usize,
+    /// 是否在 asset 边界被取消（取消则提前结束本仓库、未搬完）。
+    cancelled: bool,
+}
+
 /// 枚举某源仓库的全部 components（已知总数）再逐 asset 下载搬运，边搬边上报进度。
 ///
-/// 返回 (成功数, 跳过数)。枚举失败向上冒泡（整仓无法继续）；单 asset 失败计跳过、不中断整批。
+/// 枚举失败向上冒泡（整仓无法继续）；单 asset 失败计跳过、不中断整批。每个 asset 处理前检查
+/// 控制信号（FR-91）：取消则提前结束（`cancelled=true`）；暂停则挂起等待继续 / 取消。
 #[allow(clippy::too_many_arguments)]
 async fn pull_repo_assets<C, S, U>(
     client: &C,
@@ -243,7 +337,8 @@ async fn pull_repo_assets<C, S, U>(
     credential: Option<&NexusCredential>,
     max_size: Option<u64>,
     progress: &std::sync::Mutex<OnlinePullProgress>,
-) -> Result<(usize, usize), MigrateError>
+    control: &JobControl,
+) -> Result<RepoPullResult, MigrateError>
 where
     C: NexusClient,
     S: BlobStore,
@@ -252,7 +347,11 @@ where
     let Some(format) = formats.get(&target_repo.format) else {
         // 防御：目标仓库已按 maven 建成，注册表理应有处理器
         tracing::warn!(仓库 = %target_repo.name, 格式 = %target_repo.format, "格式处理器未注册，跳过在线拉取");
-        return Ok((0, 0));
+        return Ok(RepoPullResult {
+            migrated: 0,
+            skipped: 0,
+            cancelled: false,
+        });
     };
 
     // 阶段1：枚举该仓库全部 asset（仅元数据，得知总数，便于进度条）
@@ -280,6 +379,15 @@ where
     let mut migrated = 0usize;
     let mut skipped = 0usize;
     for asset in &assets {
+        // 每个 asset 边界先响应控制信号（FR-91）：取消则提前结束；暂停则挂起等待
+        if await_control(control, progress).await {
+            return Ok(RepoPullResult {
+                migrated,
+                skipped,
+                cancelled: true,
+            });
+        }
+
         lock_progress(progress).current_path = Some(asset.path.clone());
 
         let ok = pull_one_asset(
@@ -305,7 +413,55 @@ where
         p.done_assets += 1;
     }
 
-    Ok((migrated, skipped))
+    Ok(RepoPullResult {
+        migrated,
+        skipped,
+        cancelled: false,
+    })
+}
+
+/// 在 asset 边界响应控制信号（FR-91）。返回 `true` 表示应取消（提前结束本仓库）。
+///
+/// 取消优先：已取消立即返回 `true`，不进入暂停等待。暂停时把进度标 `Paused`，`await` 在 `notify`
+/// 上挂起，直至被继续 / 取消唤醒；醒来复核——取消则返回 `true`，继续则清暂停标志、恢复
+/// `Downloading` 后返回 `false`。等待在进度锁外（不持锁阻塞）。
+async fn await_control(
+    control: &JobControl,
+    progress: &std::sync::Mutex<OnlinePullProgress>,
+) -> bool {
+    if control.is_cancelled() {
+        return true;
+    }
+    if !control.is_paused() {
+        return false;
+    }
+
+    // 进入暂停态：标记进度后在锁外挂起等待唤醒
+    {
+        let mut p = lock_progress(progress);
+        p.paused = true;
+        p.phase = OnlinePullPhase::Paused;
+    }
+    loop {
+        // 先创建并 enable() 等待者再复核标志：消除「复核后、await 前」继续 / 取消唤醒丢失的竞态
+        // （`notify_waiters` 对未注册的等待者不留存通知，故须先注册）
+        let notified = control.notify.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+
+        if control.is_cancelled() {
+            return true;
+        }
+        if !control.is_paused() {
+            // 已继续：恢复下载态并清暂停标志
+            let mut p = lock_progress(progress);
+            p.paused = false;
+            p.phase = OnlinePullPhase::Downloading;
+            return false;
+        }
+        // 仍处暂停：挂起直至下一次唤醒，醒来再复核
+        notified.await;
+    }
 }
 
 /// 拉取并落定单个 asset：解析路径 → 流式下载 → `ingest_hosted` → 比对 sha256（不符回滚）。
@@ -836,6 +992,7 @@ mod tests {
             ]),
         };
         let progress = std::sync::Mutex::new(OnlinePullProgress::default());
+        let control = JobControl::default();
         let report = migrate_online_with_progress(
             &client,
             &meta,
@@ -846,6 +1003,7 @@ mod tests {
             &[sel(src("r3d", "maven2", "hosted"), "r3d")],
             None,
             &progress,
+            &control,
         )
         .await
         .unwrap();
@@ -871,6 +1029,7 @@ mod tests {
             assets: HashMap::new(),
         };
         let progress = std::sync::Mutex::new(OnlinePullProgress::default());
+        let control = JobControl::default();
         let _ = migrate_online_with_progress(
             &client,
             &meta,
@@ -881,11 +1040,258 @@ mod tests {
             &[sel(src("npm-release", "npm", "hosted"), "npm-release")],
             None,
             &progress,
+            &control,
         )
         .await
         .unwrap();
         let p = progress.lock().unwrap();
         assert!(p.skipped_repos.contains(&"npm-release".to_string()));
         assert_eq!(p.total_assets, 0);
+    }
+
+    // ---------- FR-91：任务控制（取消 / 暂停 / 继续）----------
+
+    /// 受控下载 mock：每次 `download_asset` 进入时计数 + 通知测试，再在信号量上阻塞，
+    /// 直至测试为该 asset「放行」一个许可。借此把后台搬运卡在确切的 asset 边界，
+    /// 让测试在边界处注入取消 / 暂停信号并断言时序，无需 sleep。
+    struct GatedClient {
+        page: String,
+        /// downloadUrl → 字节。
+        assets: HashMap<String, Vec<u8>>,
+        /// 已进入下载的次数。
+        entered: Arc<std::sync::atomic::AtomicUsize>,
+        /// 每进入一次下载即通知测试。
+        entered_notify: Arc<tokio::sync::Notify>,
+        /// 放行许可：测试 `add_permits(1)` 放行一个 asset 下载。
+        release: Arc<tokio::sync::Semaphore>,
+    }
+
+    impl NexusClient for GatedClient {
+        async fn fetch_repositories(
+            &self,
+            _b: &str,
+            _c: Option<&NexusCredential>,
+        ) -> Result<String, MigrateError> {
+            unimplemented!()
+        }
+        async fn fetch_components(
+            &self,
+            _b: &str,
+            _r: &str,
+            _t: Option<&str>,
+            _c: Option<&NexusCredential>,
+        ) -> Result<String, MigrateError> {
+            Ok(self.page.clone())
+        }
+        async fn download_asset(
+            &self,
+            download_url: &str,
+            _c: Option<&NexusCredential>,
+        ) -> Result<Box<dyn tokio::io::AsyncRead + Send + Unpin>, MigrateError> {
+            self.entered
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.entered_notify.notify_waiters();
+            // 等测试放行该 asset 的下载
+            let permit = self.release.acquire().await.unwrap();
+            permit.forget();
+            match self.assets.get(download_url) {
+                Some(bytes) => Ok(Box::new(std::io::Cursor::new(bytes.clone()))),
+                None => Err(MigrateError::Transport(format!("404 {download_url}"))),
+            }
+        }
+    }
+
+    /// 构造 N 个 asset 的单仓库 components 页 + 受控客户端句柄。
+    fn gated_client(
+        n: usize,
+    ) -> (
+        GatedClient,
+        Arc<tokio::sync::Semaphore>,
+        Arc<tokio::sync::Notify>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        let mut asset_lines = Vec::new();
+        let mut assets = HashMap::new();
+        for i in 0..n {
+            let url = format!("https://nx/repository/r3d/a{i}.jar");
+            asset_lines.push(format!(
+                r#"{{ "path": "g/1.0/a{i}-1.0.jar", "downloadUrl": "{url}", "checksum": {{}} }}"#
+            ));
+            assets.insert(url, format!("bytes-{i}").into_bytes());
+        }
+        let page = format!(
+            r#"{{ "items": [ {{ "assets": [ {} ]}} ], "continuationToken": null }}"#,
+            asset_lines.join(",")
+        );
+        let release = Arc::new(tokio::sync::Semaphore::new(0));
+        let entered_notify = Arc::new(tokio::sync::Notify::new());
+        let entered = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let client = GatedClient {
+            page,
+            assets,
+            entered: entered.clone(),
+            entered_notify: entered_notify.clone(),
+            release: release.clone(),
+        };
+        (client, release, entered_notify, entered)
+    }
+
+    /// 取消在途任务：循环在 asset 边界停止后续搬运、任务标 Cancelled，且已搬运的保留。
+    #[tokio::test]
+    async fn 取消后停止后续搬运并标_cancelled() {
+        let (meta, svc, formats, _d) = 新建().await;
+        let (client, release, entered_notify, entered) = gated_client(3);
+        let progress = Arc::new(std::sync::Mutex::new(OnlinePullProgress::default()));
+        let control = Arc::new(JobControl::default());
+
+        // 后台跑迁移
+        let (meta2, formats2, progress2, control2) =
+            (meta.clone(), formats, progress.clone(), control.clone());
+        let svc = Arc::new(svc);
+        let svc2 = svc.clone();
+        let handle = tokio::spawn(async move {
+            migrate_online_with_progress(
+                &client,
+                &meta2,
+                &svc2,
+                &formats2,
+                "https://nx",
+                None,
+                &[sel(src("r3d", "maven2", "hosted"), "r3d")],
+                None,
+                &progress2,
+                &control2,
+            )
+            .await
+            .unwrap()
+        });
+
+        // 放行第 0 个 asset 并等其确实下载完进入第 1 个 asset 的边界
+        release.add_permits(1);
+        wait_entered(&entered_notify, &entered, 1).await;
+        // 请求取消：第 1 个 asset 在边界处应被拦下，不再下载
+        control.request_cancel();
+        // 放行余下许可（即便放行，被取消后循环也不会再进入下载）
+        release.add_permits(2);
+
+        let report = handle.await.unwrap();
+        // 仅第 0 个 asset 被搬运，后续在边界被取消
+        assert_eq!(
+            entered.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "取消后不应再进入下载"
+        );
+        assert_eq!(report.repos[0].migrated_artifacts, 1);
+        let p = progress.lock().unwrap();
+        assert_eq!(p.phase, OnlinePullPhase::Cancelled);
+        assert_eq!(p.migrated, 1);
+        assert!(!p.paused);
+    }
+
+    /// 暂停在途任务：循环挂起不推进；继续后恢复并搬完。
+    #[tokio::test]
+    async fn 暂停后不推进继续后恢复() {
+        let (meta, svc, formats, _d) = 新建().await;
+        let (client, release, entered_notify, entered) = gated_client(2);
+        let progress = Arc::new(std::sync::Mutex::new(OnlinePullProgress::default()));
+        let control = Arc::new(JobControl::default());
+
+        let (meta2, formats2, progress2, control2) =
+            (meta.clone(), formats, progress.clone(), control.clone());
+        let svc = Arc::new(svc);
+        let svc2 = svc.clone();
+        let handle = tokio::spawn(async move {
+            migrate_online_with_progress(
+                &client,
+                &meta2,
+                &svc2,
+                &formats2,
+                "https://nx",
+                None,
+                &[sel(src("r3d", "maven2", "hosted"), "r3d")],
+                None,
+                &progress2,
+                &control2,
+            )
+            .await
+            .unwrap()
+        });
+
+        // 放行第 0 个 asset，等其完成进入第 1 个 asset 边界
+        release.add_permits(1);
+        wait_entered(&entered_notify, &entered, 1).await;
+        // 请求暂停：第 1 个 asset 边界应挂起
+        control.request_pause();
+        // 即便放行第 1 个许可，暂停态下循环不应进入下载——轮询直到进度标 paused
+        release.add_permits(1);
+        wait_paused(&progress).await;
+        assert_eq!(
+            entered.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "暂停期间不应推进下载"
+        );
+        {
+            let p = progress.lock().unwrap();
+            assert!(p.paused);
+            assert_eq!(p.phase, OnlinePullPhase::Paused);
+        }
+
+        // 继续：应恢复并搬完第 1 个 asset
+        control.request_resume();
+        let report = handle.await.unwrap();
+        assert_eq!(
+            entered.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "继续后应搬完全部 asset"
+        );
+        assert_eq!(report.repos[0].migrated_artifacts, 2);
+        let p = progress.lock().unwrap();
+        assert!(!p.paused);
+    }
+
+    /// 控制信号对已结束任务为幂等空操作（不 panic、不改变标志语义）。
+    #[test]
+    fn 控制信号幂等() {
+        let control = JobControl::default();
+        // 取消后再请求暂停应被取消优先吞掉，不会回到暂停
+        control.request_cancel();
+        assert!(control.is_cancelled());
+        control.request_pause();
+        assert!(!control.is_paused(), "已取消不应再被置为暂停");
+        // 继续对已取消任务不改变取消标志
+        control.request_resume();
+        assert!(control.is_cancelled());
+    }
+
+    /// 轮询直至下载进入次数达到目标（避免 sleep；mock 在每次进入时 notify）。
+    async fn wait_entered(
+        notify: &tokio::sync::Notify,
+        entered: &std::sync::atomic::AtomicUsize,
+        target: usize,
+    ) {
+        loop {
+            if entered.load(std::sync::atomic::Ordering::SeqCst) >= target {
+                return;
+            }
+            let n = notify.notified();
+            tokio::pin!(n);
+            n.as_mut().enable();
+            if entered.load(std::sync::atomic::Ordering::SeqCst) >= target {
+                return;
+            }
+            // 设超时兜底，避免用例在回归失败时永久挂起
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(5), n).await;
+        }
+    }
+
+    /// 轮询直至进度进入暂停态。
+    async fn wait_paused(progress: &std::sync::Mutex<OnlinePullProgress>) {
+        for _ in 0..500 {
+            if progress.lock().unwrap().paused {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        panic!("等待暂停态超时");
     }
 }

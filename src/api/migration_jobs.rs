@@ -7,19 +7,28 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, RwLock};
 
-use crate::migrate::OnlinePullProgress;
+use crate::migrate::{JobControl, OnlinePullProgress};
 
 /// 单个任务的进度共享态：后台任务持续更新，查询端点读取。
 pub type JobProgress = Arc<Mutex<OnlinePullProgress>>;
 
-/// 进程内迁移任务注册表：`job_id` → 进度共享态，有界。
+/// 单个任务的控制句柄（FR-91）：取消 / 暂停 / 继续信号，随后台任务与控制端点共享。
+pub type JobControlHandle = Arc<JobControl>;
+
+/// 注册表内单个任务的条目：进度共享态 + 控制句柄。
+struct JobEntry {
+    progress: JobProgress,
+    control: JobControlHandle,
+}
+
+/// 进程内迁移任务注册表：`job_id` → 任务条目（进度 + 控制），有界。
 pub struct MigrationJobs {
     inner: RwLock<Inner>,
     capacity: usize,
 }
 
 struct Inner {
-    jobs: HashMap<String, JobProgress>,
+    jobs: HashMap<String, JobEntry>,
     /// 登记时序（淘汰最旧用）。
     order: VecDeque<String>,
 }
@@ -42,10 +51,11 @@ impl MigrationJobs {
         }
     }
 
-    /// 登记一个任务的进度共享态；超出容量按登记时序淘汰最旧任务。
-    pub fn register(&self, job_id: String, progress: JobProgress) {
+    /// 登记一个任务的进度共享态与控制句柄；超出容量按登记时序淘汰最旧任务。
+    pub fn register(&self, job_id: String, progress: JobProgress, control: JobControlHandle) {
         let mut g = self.inner.write().unwrap_or_else(|e| e.into_inner());
-        g.jobs.insert(job_id.clone(), progress);
+        g.jobs
+            .insert(job_id.clone(), JobEntry { progress, control });
         g.order.push_back(job_id);
         while g.order.len() > self.capacity {
             if let Some(old) = g.order.pop_front() {
@@ -61,7 +71,17 @@ impl MigrationJobs {
             .unwrap_or_else(|e| e.into_inner())
             .jobs
             .get(job_id)
-            .cloned()
+            .map(|e| e.progress.clone())
+    }
+
+    /// 取某任务的控制句柄（未知返回 None，FR-91）。
+    pub fn control(&self, job_id: &str) -> Option<JobControlHandle> {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .jobs
+            .get(job_id)
+            .map(|e| e.control.clone())
     }
 
     /// 列出所有任务的 (job_id, 进度快照)，按登记时序（新在后）。
@@ -70,8 +90,8 @@ impl MigrationJobs {
         g.order
             .iter()
             .filter_map(|id| {
-                g.jobs.get(id).map(|p| {
-                    let snap = p.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                g.jobs.get(id).map(|e| {
+                    let snap = e.progress.lock().unwrap_or_else(|e| e.into_inner()).clone();
                     (id.clone(), snap)
                 })
             })
@@ -87,12 +107,16 @@ mod tests {
         Arc::new(Mutex::new(OnlinePullProgress::default()))
     }
 
+    fn control() -> JobControlHandle {
+        Arc::new(JobControl::default())
+    }
+
     #[test]
     fn 登记后可查与列出() {
         let jobs = MigrationJobs::with_capacity(10);
         let p = progress();
         p.lock().unwrap().migrated = 3;
-        jobs.register("job-1".to_string(), p);
+        jobs.register("job-1".to_string(), p, control());
 
         let got = jobs.get("job-1").unwrap();
         assert_eq!(got.lock().unwrap().migrated, 3);
@@ -107,23 +131,38 @@ mod tests {
     #[test]
     fn 超出容量按时序淘汰最旧() {
         let jobs = MigrationJobs::with_capacity(2);
-        jobs.register("a".to_string(), progress());
-        jobs.register("b".to_string(), progress());
-        jobs.register("c".to_string(), progress()); // 触发淘汰最旧 a
+        jobs.register("a".to_string(), progress(), control());
+        jobs.register("b".to_string(), progress(), control());
+        jobs.register("c".to_string(), progress(), control()); // 触发淘汰最旧 a
 
         assert!(jobs.get("a").is_none(), "最旧任务 a 应被淘汰");
         assert!(jobs.get("b").is_some());
         assert!(jobs.get("c").is_some());
+        // 控制句柄随条目一同淘汰：被淘汰任务取不到控制句柄
+        assert!(jobs.control("a").is_none(), "被淘汰任务不应再有控制句柄");
+        assert!(jobs.control("c").is_some());
         // 列表按时序保留 b、c
         let ids: Vec<String> = jobs.list().into_iter().map(|(id, _)| id).collect();
         assert_eq!(ids, vec!["b".to_string(), "c".to_string()]);
     }
 
     #[test]
+    fn 控制句柄可取且置取消信号生效() {
+        let jobs = MigrationJobs::with_capacity(4);
+        let c = control();
+        jobs.register("j".to_string(), progress(), c.clone());
+        // 经注册表取回的句柄与登记的共享同一控制：置取消信号双方均可见
+        let got = jobs.control("j").unwrap();
+        got.request_cancel();
+        assert!(c.is_cancelled());
+        assert!(jobs.control("不存在").is_none());
+    }
+
+    #[test]
     fn 进度共享态可被外部更新后查到() {
         let jobs = MigrationJobs::with_capacity(4);
         let p = progress();
-        jobs.register("j".to_string(), p.clone());
+        jobs.register("j".to_string(), p.clone(), control());
         // 模拟后台任务更新进度
         {
             let mut g = p.lock().unwrap();

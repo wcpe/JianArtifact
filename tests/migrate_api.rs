@@ -461,3 +461,60 @@ async fn 管理员列迁移任务空表返回_200() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, json!([]));
 }
+
+// ---------- FR-91：任务控制端点（取消 / 暂停 / 继续）鉴权与 404 边界 ----------
+
+/// 构造带可选认证头的无体 POST 请求（任务控制端点用）。
+fn post_req(uri: &str, auth: Option<&str>) -> Request<Body> {
+    let mut builder = Request::builder().method("POST").uri(uri);
+    if let Some(a) = auth {
+        builder = builder.header("authorization", a);
+    }
+    builder.body(Body::empty()).unwrap()
+}
+
+/// 三个控制端点的相对路径（针对同一未知 id），统一穷举鉴权与 404。
+fn control_uris() -> [&'static str; 3] {
+    [
+        "/api/v1/migrate/jobs/任意/cancel",
+        "/api/v1/migrate/jobs/任意/pause",
+        "/api/v1/migrate/jobs/任意/resume",
+    ]
+}
+
+#[tokio::test]
+async fn 匿名控制迁移任务返回_401() {
+    for uri in control_uris() {
+        let (state, _dir) = 测试用状态().await;
+        let (status, _) = send(build_router(state), post_req(uri, None)).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "端点 {uri} 匿名应 401");
+    }
+}
+
+#[tokio::test]
+async fn 普通用户控制迁移任务返回_403() {
+    for uri in control_uris() {
+        let (state, _dir) = 测试用状态().await;
+        let token = seed_and_login(&state, "user", "pw", Role::User).await;
+        let (status, _) = send(
+            build_router(state),
+            post_req(uri, Some(&format!("Bearer {token}"))),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "端点 {uri} 普通用户应 403");
+    }
+}
+
+#[tokio::test]
+async fn 管理员控制未知迁移任务返回_404() {
+    for uri in control_uris() {
+        let (state, _dir) = 测试用状态().await;
+        let token = seed_and_login(&state, "admin", "pw", Role::Admin).await;
+        let (status, _) = send(
+            build_router(state),
+            post_req(uri, Some(&format!("Bearer {token}"))),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "端点 {uri} 未知 id 应 404");
+    }
+}
