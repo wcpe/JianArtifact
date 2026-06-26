@@ -17,6 +17,7 @@ pub mod format;
 pub mod meta;
 pub mod metrics_keys;
 pub mod migrate;
+pub mod monitor;
 pub mod proxy;
 pub mod repo;
 pub mod storage;

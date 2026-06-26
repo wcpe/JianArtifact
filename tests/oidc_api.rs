@@ -198,6 +198,7 @@ async fn build_state(oidc: Option<OidcProvider>) -> (AppState, tempfile::TempDir
             )
             .unwrap(),
         ),
+        host_system: std::sync::Arc::new(tokio::sync::Mutex::new(sysinfo::System::new())),
     };
     (state, dir)
 }

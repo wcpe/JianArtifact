@@ -43,6 +43,7 @@ mod identity;
 mod metrics;
 mod migrate;
 mod migration_jobs;
+mod monitor;
 mod npm_routes;
 mod nuget_routes;
 mod oidc_routes;
@@ -153,6 +154,10 @@ pub struct AppState {
     /// `settings.network.client()` 取当前 client；管理端 `PATCH /api/v1/settings` 校验后锁外重建、原子
     /// 换槽即时生效、无须重启。凭据只入本内存槽，不写回 TOML / 不入 DB / 不回显。
     pub settings: Arc<crate::config::EditableSettings>,
+    /// 主机 / 系统监控采样器（FR-98，ADR-0023）：单进程共享一份 `sysinfo::System`（refresh 需 `&mut`），
+    /// 经 `Mutex` 串行化按请求采样 CPU / 内存 / 磁盘 / uptime。仅 Admin 端点 `GET /api/v1/monitor/host`
+    /// 取用；纯本机内部采样、不外发、不落库、不后台轮询。
+    pub host_system: Arc<tokio::sync::Mutex<sysinfo::System>>,
 }
 
 /// 统一 API 错误类型，转换为 JSON 响应 `{"error":{"code","message"}}`。
@@ -401,6 +406,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/search", get(search::search))
         .route("/audit", get(audit::list_audit))
         .route("/analytics/usage", get(analytics::usage_analytics))
+        .route("/monitor/host", get(monitor::monitor_host))
         .route("/protection/status", get(protection::protection_status))
         .route("/protection/alerts", get(protection::list_alerts))
         .route(
@@ -682,6 +688,8 @@ mod tests {
                 )
                 .unwrap(),
             ),
+            // 默认测试状态：主机监控采样器以空 System 装载（按请求刷新采样）
+            host_system: Arc::new(tokio::sync::Mutex::new(sysinfo::System::new())),
         };
         (state, dir)
     }

@@ -237,6 +237,13 @@
 - **响应**：聚合总览对象 `{ total_access, total_download, top_downloads, repo_usage }`——`total_access` / `total_download` 为全局累计访问 / 下载量；`top_downloads` 为按下载量倒序的热门制品（每项含 `repo_name`、`repo_path`、`count`、`last_at`）；`repo_usage` 为按下载量汇总到仓库的用量（每项含 `repo_name`、`count`），均倒序。数据为本机内部聚合统计（消费 FR-57 采集的 `usage_stats`），**纯本地查询、绝不外发、不向外部遥测 phone-home**（FR-58，ADR-0009）。
 - **错误**：`401` 未认证；`403` 非管理员。
 
+### 查询主机监控（P2，仅 Admin，FR-98）
+
+- **方法 / 路径**：`GET /api/v1/monitor/host`
+- **请求**：无查询参数。仅管理员可访问。
+- **响应**：主机指标快照对象 `{ cpu, memory, disk, uptime_secs }`——`cpu` 为 `{ usage_percent, logical_cores }`（全局 CPU 使用率百分比 0~100 + 逻辑核数）；`memory` 为 `{ total_bytes, used_bytes, swap_total_bytes, swap_used_bytes }`（物理内存与交换分区的总量 / 已用，单位字节）；`disk` 为 `{ total_bytes, available_bytes, disks }`（磁盘总量 / 可用汇总 + 逐盘明细数组，每项 `{ mount_point, total_bytes, available_bytes }`）；`uptime_secs` 为系统运行时长（秒）。经 `sysinfo` **按请求单次采样**（不后台轮询、不落库），**纯本机内部数据、绝不外发、不向外部遥测 phone-home**（ADR-0023，守 ADR-0009 / 0015 基调）。注意：`cpu.usage_percent` 在首次 / 间隔过近的采样可能为 `0`（CPU 使用率需两次采样间隔才有非零值，属已知取舍）。
+- **错误**：`401` 未认证；`403` 非管理员。
+
 ### 查询防护状态快照（P2，仅 Admin）
 
 - **方法 / 路径**：`GET /api/v1/protection/status`

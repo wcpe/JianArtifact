@@ -87,6 +87,7 @@ impl Fixture {
                 )
                 .unwrap(),
             ),
+            host_system: std::sync::Arc::new(tokio::sync::Mutex::new(sysinfo::System::new())),
         };
         Self { state, _dir: dir }
     }
@@ -146,6 +147,7 @@ impl Fixture {
                 )
                 .unwrap(),
             ),
+            host_system: std::sync::Arc::new(tokio::sync::Mutex::new(sysinfo::System::new())),
         };
         Self { state, _dir: dir }
     }

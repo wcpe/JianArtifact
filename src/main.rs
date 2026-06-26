@@ -311,6 +311,10 @@ async fn main() -> anyhow::Result<()> {
     // 触发优雅停机，serve 返回后据此拉起新进程或退出。
     let restart = Arc::new(jianartifact::update::RestartHandle::default());
 
+    // 主机 / 系统监控采样器（FR-98，ADR-0023）：单进程共享一份 sysinfo::System（refresh 需 &mut），
+    // 经 Mutex 串行化按请求采样；纯本机内部采样、不外发、不落库、不后台轮询。
+    let host_system = Arc::new(tokio::sync::Mutex::new(sysinfo::System::new()));
+
     // 构建路由与共享状态
     let state = AppState {
         config: Arc::new(cfg.clone()),
@@ -341,6 +345,8 @@ async fn main() -> anyhow::Result<()> {
         restart: restart.clone(),
         // FR-88：运行时可编辑设置热替换槽（出站网络代理 + 在线更新可调字段），PATCH 即时生效
         settings,
+        // FR-98：主机 / 系统监控采样器（按请求采样 CPU / 内存 / 磁盘 / uptime）
+        host_system,
     };
     let app = api::build_router(state);
 

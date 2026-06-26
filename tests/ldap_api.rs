@@ -121,6 +121,7 @@ async fn build_state(ldap_cfg: Option<LdapConfig>) -> (AppState, tempfile::TempD
             )
             .unwrap(),
         ),
+        host_system: std::sync::Arc::new(tokio::sync::Mutex::new(sysinfo::System::new())),
     };
     (state, dir)
 }
