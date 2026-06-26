@@ -54,6 +54,7 @@ mod rate_limit;
 mod repo_access;
 mod repositories;
 mod search;
+mod settings;
 mod slowloris;
 mod tokens;
 mod update;
@@ -426,6 +427,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/migrate/jobs/{id}", get(migrate::migrate_nexus_job))
         .route("/update/check", get(update::check_update))
         .route("/update/apply", post(update::apply_update))
+        .route("/settings", get(settings::get_settings))
         .route(
             "/repositories/{id}/acl",
             get(acl::list_acl).post(acl::create_acl),
