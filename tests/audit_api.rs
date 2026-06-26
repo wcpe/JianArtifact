@@ -556,3 +556,180 @@ async fn 普通用户越权创建仓库记_denied() {
     assert_eq!(ev.actor, "dev");
     assert_eq!(ev.actor_kind, "session");
 }
+
+// ---------- 全量非读：新覆盖的变更端点产事件（FR-97） ----------
+
+#[tokio::test]
+async fn 设置patch事件落审计库() {
+    let fx = Fixture::new().await;
+    fx.seed_user("admin", "S3cret!", Role::Admin).await;
+    let token = login_token(&fx, "admin", "S3cret!").await;
+    let bearer = format!("Bearer {token}");
+
+    // PATCH 设置（空代理 + 关在线更新，避免依赖外部代理）：变更类请求须留痕
+    let (status, _) = send(
+        fx.router(),
+        json_req(
+            "PATCH",
+            "/api/v1/settings",
+            Some(&bearer),
+            json!({
+                "network_proxy": { "http": null, "https": null, "no_proxy": null },
+                "update": {
+                    "enabled": false,
+                    "repo": "owner/repo",
+                    "api_base_url": "https://api.github.com",
+                    "restart_mode": "exit"
+                }
+            }),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "设置 PATCH 应成功: {status}");
+
+    let rows = fx
+        .wait_audit(|rows| rows.iter().any(|e| e.action == "settings.update"))
+        .await;
+    let ev = rows.iter().find(|e| e.action == "settings.update").unwrap();
+    assert_eq!(ev.actor, "admin");
+}
+
+#[tokio::test]
+async fn 防护配置patch事件落审计库() {
+    let fx = Fixture::new().await;
+    fx.seed_user("admin", "S3cret!", Role::Admin).await;
+    let token = login_token(&fx, "admin", "S3cret!").await;
+    let bearer = format!("Bearer {token}");
+
+    let (status, _) = send(
+        fx.router(),
+        json_req(
+            "PATCH",
+            "/api/v1/protection/config",
+            Some(&bearer),
+            json!({}),
+        ),
+    )
+    .await;
+    assert!(
+        status.is_success() || status == StatusCode::BAD_REQUEST,
+        "防护配置 PATCH 应被路由处理: {status}"
+    );
+
+    let rows = fx
+        .wait_audit(|rows| rows.iter().any(|e| e.action == "protection.config.update"))
+        .await;
+    assert!(rows
+        .iter()
+        .any(|e| e.action == "protection.config.update" && e.actor == "admin"));
+}
+
+#[tokio::test]
+async fn 迁移任务控制事件落审计库() {
+    let fx = Fixture::new().await;
+    fx.seed_user("admin", "S3cret!", Role::Admin).await;
+    let token = login_token(&fx, "admin", "S3cret!").await;
+    let bearer = format!("Bearer {token}");
+
+    // 未知任务控制返回 404，但仍属变更类请求、须留痕
+    let (status, _) = send(
+        fx.router(),
+        empty_req("POST", "/api/v1/migrate/jobs/nope/cancel", Some(&bearer)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let rows = fx
+        .wait_audit(|rows| rows.iter().any(|e| e.action == "migrate.job.control"))
+        .await;
+    let ev = rows
+        .iter()
+        .find(|e| e.action == "migrate.job.control")
+        .unwrap();
+    assert_eq!(ev.actor, "admin");
+    assert_eq!(ev.target.as_deref(), Some("nope/cancel"));
+    // 未知任务 404 归类 denied（不泄露存在性，仅留痕动作）
+    assert_eq!(ev.result, "denied");
+}
+
+#[tokio::test]
+async fn 用户组创建事件落审计库() {
+    let fx = Fixture::new().await;
+    fx.seed_user("admin", "S3cret!", Role::Admin).await;
+    let token = login_token(&fx, "admin", "S3cret!").await;
+    let bearer = format!("Bearer {token}");
+
+    let (status, _) = send(
+        fx.router(),
+        json_req(
+            "POST",
+            "/api/v1/groups",
+            Some(&bearer),
+            json!({ "name": "team-a" }),
+        ),
+    )
+    .await;
+    assert!(status.is_success(), "用户组创建应成功: {status}");
+
+    let rows = fx
+        .wait_audit(|rows| rows.iter().any(|e| e.action == "group.create"))
+        .await;
+    assert!(rows
+        .iter()
+        .any(|e| e.action == "group.create" && e.actor == "admin"));
+}
+
+// ---------- 读取类一律不入审计（GET 下载/浏览/搜索/详情） ----------
+
+#[tokio::test]
+async fn 读取类请求不产审计事件() {
+    let fx = Fixture::new().await;
+    fx.seed_user("admin", "S3cret!", Role::Admin).await;
+    let token = login_token(&fx, "admin", "S3cret!").await;
+    let bearer = format!("Bearer {token}");
+
+    // 先做一次变更产生一条审计基线，便于"等到该基线落库后再断言无读事件"
+    send(
+        fx.router(),
+        json_req(
+            "POST",
+            "/api/v1/repositories",
+            Some(&bearer),
+            json!({ "name": "g-read", "format": "raw", "type": "hosted", "visibility": "public" }),
+        ),
+    )
+    .await;
+
+    // 一批读取请求：列表 / 详情 / 搜索 / 下载
+    for (m, uri) in [
+        ("GET", "/api/v1/repositories"),
+        ("GET", "/api/v1/users"),
+        ("GET", "/api/v1/search?q=x"),
+        ("GET", "/api/v1/repositories/g-read"),
+        ("GET", "/g-read/no/such.txt"),
+    ] {
+        send(fx.router(), empty_req(m, uri, Some(&bearer))).await;
+    }
+
+    // 等基线变更事件落库
+    let rows = fx
+        .wait_audit(|rows| rows.iter().any(|e| e.action == "repo.create"))
+        .await;
+    // 读取类动作一律不应出现在审计中
+    let read_actions = [
+        "repo.list",
+        "user.list",
+        "search",
+        "artifact.access",
+        "artifact.download",
+        "change.get",
+    ];
+    for a in read_actions {
+        assert!(
+            rows.iter().all(|e| e.action != a),
+            "读取动作 {a} 不应入审计"
+        );
+    }
+    // 也不应有任何以 GET 兜底的事件
+    assert!(rows.iter().all(|e| !e.action.contains("get")));
+}

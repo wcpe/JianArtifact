@@ -4,8 +4,10 @@
 //! - **异步不阻塞**：事件经进程内有界 channel 投递给单独写入任务批量入库；主请求路径只做
 //!   一次非阻塞 `try_send`，**采集 / 写入失败只记 WARN、不影响业务**；channel 满时按
 //!   "丢弃并计数 + WARN"降级，绝不反压主路径（testing-and-quality §2.8）。
-//! - **精选事件**：审计中间件在鉴权判定之后捕获 actor / result，只记**写与管理类**事件与
-//!   **授权拒绝**；普通匿名 public 读取不逐条入审计（避免撑爆 SQLite，交指标计数）。
+//! - **全量非读**（FR-97，扩展 FR-31）：审计中间件在鉴权判定之后捕获 actor / result，
+//!   **所有变更类请求（POST/PUT/PATCH/DELETE）一律产一条审计**——已知端点归精确语义 action
+//!   （`repo.create` / `artifact.upload` 等），未显式归类的非读路径走兜底 `change.{method}`、不漏记；
+//!   **读取类（GET/HEAD，含下载 / 浏览 / 搜索 / 详情）一律不入审计**（交使用分析计数，避免刷屏与性能损耗）。
 //!   登录事件因需记录"被尝试的用户名"，由登录 handler 显式发事件（中间件跳过 `/auth/login`）。
 //! - **脱敏**：actor 只记用户名；口令 / Token / JWT / 上游凭据一律不入审计。
 //! - **保留期轮转**：后台任务按 `observability.audit.retention_days` 删旧 + `max_rows` 兜底。
@@ -253,7 +255,7 @@ pub fn spawn_audit_retention(meta: MetaStore, retention_days: u32, max_rows: u64
 }
 
 /// 审计中间件：置于身份解析中间件之后，运行 handler 后按"方法 + 路径 + 状态"归类事件，
-/// 命中精选的写 / 管理 / 授权拒绝事件则非阻塞投递。
+/// 命中任一变更类请求（非读方法，FR-97 全量非读）即非阻塞投递；读取类（GET/HEAD）不投递。
 ///
 /// 登录事件由 `/auth/login` handler 自行发（需记被尝试用户名），本中间件跳过该路径避免重复。
 pub async fn audit_layer(State(state): State<AppState>, request: Request, next: Next) -> Response {
@@ -352,72 +354,153 @@ struct ClassifiedEvent {
     target: Option<String>,
 }
 
-/// 把"方法 + 路径"归类为精选审计事件；非审计范围返回 None（不逐条记普通读流量）。
+/// 把"方法 + 路径"归类为审计事件；读取类（GET/HEAD）一律返回 None（FR-97 全量非读）。
 ///
-/// 仅记写与管理类事件：用户 / Token / 仓库 / ACL 管理，以及制品上传 / 删除。
+/// 覆盖矩阵：**非读方法（POST/PUT/PATCH/DELETE）一律产事件**——已知管理 / 格式 / Docker
+/// 路径归为精确语义 action（`repo.create` / `artifact.upload` 等），未显式归类的非读路径走
+/// 兜底 `change.{method}`，保证无遗漏。读流量交使用分析计数，不入审计。
 /// 管理 API 路径形如 `/api/v1/...`；格式 API 为 `/{repo}/{path..}`；Docker 为 `/v2/...`。
 fn classify_event(method: &Method, path: &str) -> Option<ClassifiedEvent> {
-    // 登录由 handler 发事件
+    // 读取方法不入审计（全量非读的"非读"门）：下载 / 浏览 / 搜索 / 详情均为 GET / HEAD
+    if !is_change_method(method) {
+        return None;
+    }
+    // 登录由 handler 发事件（需记被尝试用户名），中间件跳过避免重复
     if path == "/api/v1/auth/login" {
         return None;
     }
 
     if let Some(rest) = path.strip_prefix("/api/v1/") {
-        return classify_management(method, rest);
-    }
-    if path == "/v2/" || path == "/v2/token" {
-        return None;
+        return Some(classify_management(method, rest));
     }
     if let Some(rest) = path.strip_prefix("/v2/") {
-        return classify_docker(method, rest);
+        return Some(classify_docker(method, rest));
     }
-    // 其余视作格式 API（/{repo}/{path..}）：仅审计写 / 删
-    classify_format(method, path)
+    // 其余视作格式 API（/{repo}/{path..}）
+    Some(classify_format(method, path))
 }
 
-/// 归类管理 API 事件（路径已去掉 `/api/v1/` 前缀）。
-fn classify_management(method: &Method, rest: &str) -> Option<ClassifiedEvent> {
+/// 是否为变更类方法（非读）：POST / PUT / PATCH / DELETE 产审计，GET / HEAD / OPTIONS 不产。
+fn is_change_method(method: &Method) -> bool {
+    matches!(
+        *method,
+        Method::POST | Method::PUT | Method::PATCH | Method::DELETE
+    )
+}
+
+/// 变更类方法的兜底 action：`change.{小写方法名}`，给未显式归类的非读路径留痕、不漏记。
+fn fallback_action(method: &Method) -> &'static str {
+    match *method {
+        Method::POST => "change.post",
+        Method::PUT => "change.put",
+        Method::PATCH => "change.patch",
+        Method::DELETE => "change.delete",
+        // is_change_method 已挡下其余方法，此分支不可达；保守兜底
+        _ => "change.other",
+    }
+}
+
+/// 归类管理 API 事件（路径已去掉 `/api/v1/` 前缀）。已知端点归精确 action，其余非读路径走兜底。
+fn classify_management(method: &Method, rest: &str) -> ClassifiedEvent {
     let segs: Vec<&str> = rest.split('/').filter(|s| !s.is_empty()).collect();
     match segs.as_slice() {
+        // 认证：登出 / 刷新（登录在入口已跳过）
+        ["auth", "logout"] if method == Method::POST => simple("auth.logout"),
+        ["auth", "refresh"] if method == Method::POST => simple("auth.refresh"),
         // 用户管理
-        ["users"] if method == Method::POST => Some(simple("user.create")),
-        ["users", id] if method == Method::PATCH => Some(target("user.update", id)),
-        ["users", id] if method == Method::DELETE => Some(target("user.delete", id)),
+        ["users"] if method == Method::POST => simple("user.create"),
+        ["users", id] if method == Method::PATCH => target("user.update", id),
+        ["users", id] if method == Method::DELETE => target("user.delete", id),
         // Token 管理
-        ["tokens"] if method == Method::POST => Some(simple("token.issue")),
-        ["tokens", id] if method == Method::DELETE => Some(target("token.revoke", id)),
+        ["tokens"] if method == Method::POST => simple("token.issue"),
+        ["tokens", id] if method == Method::DELETE => target("token.revoke", id),
         // 仓库管理
-        ["repositories"] if method == Method::POST => Some(simple("repo.create")),
-        ["repositories", id] if method == Method::PATCH => Some(repo_target("repo.update", id)),
-        ["repositories", id] if method == Method::DELETE => Some(repo_target("repo.delete", id)),
+        ["repositories"] if method == Method::POST => simple("repo.create"),
+        ["repositories", id] if method == Method::PATCH => repo_target("repo.update", id),
+        ["repositories", id] if method == Method::DELETE => repo_target("repo.delete", id),
+        // 制品上传专用端点（POST /repositories/{id}/upload）
+        ["repositories", id, "upload"] if method == Method::POST => {
+            repo_target("artifact.upload", id)
+        }
+        // 制品详情删除（DELETE /repositories/{id}/artifacts/{path..}）
+        ["repositories", id, "artifacts", ..] if method == Method::DELETE => {
+            let target = rest
+                .split_once("/artifacts/")
+                .map(|(_, p)| p.to_string())
+                .filter(|p| !p.is_empty());
+            ClassifiedEvent {
+                action: "artifact.delete",
+                target_repo: Some((*id).to_string()),
+                target,
+            }
+        }
         // ACL 管理（新增 / 删除均归为 acl.update）
-        ["repositories", id, "acl"] if method == Method::POST => {
-            Some(repo_target("acl.update", id))
-        }
+        ["repositories", id, "acl"] if method == Method::POST => repo_target("acl.update", id),
         ["repositories", id, "acl", _aid] if method == Method::DELETE => {
-            Some(repo_target("acl.update", id))
+            repo_target("acl.update", id)
         }
-        _ => None,
+        // 组 ACL 管理（新增 / 删除均归为 group.acl.update）
+        ["repositories", id, "group-acl"] if method == Method::POST => {
+            repo_target("group.acl.update", id)
+        }
+        ["repositories", id, "group-acl", _aid] if method == Method::DELETE => {
+            repo_target("group.acl.update", id)
+        }
+        // 用户组管理
+        ["groups"] if method == Method::POST => simple("group.create"),
+        ["groups", id] if method == Method::DELETE => target("group.delete", id),
+        // 组成员增删（POST / DELETE 均归为 group.member.update）
+        ["groups", id, "members"] if method == Method::POST => target("group.member.update", id),
+        ["groups", id, "members", _uid] if method == Method::DELETE => {
+            target("group.member.update", id)
+        }
+        // 设置 / 防护配置热替换
+        ["settings"] if method == Method::PATCH => simple("settings.update"),
+        ["protection", "config"] if method == Method::PATCH => simple("protection.config.update"),
+        // 迁移任务控制（cancel / pause / resume）：target 记 "id/动作"
+        ["migrate", "jobs", id, action] if method == Method::POST => ClassifiedEvent {
+            action: "migrate.job.control",
+            target_repo: None,
+            target: Some(format!("{id}/{action}")),
+        },
+        // 迁移预览 / 搬运（preview / migrate）：target 记末段语义
+        ["migrate", "nexus", ..] if method == Method::POST => {
+            let tail = segs.last().copied().unwrap_or_default();
+            ClassifiedEvent {
+                action: "migrate.run",
+                target_repo: None,
+                target: Some(tail.to_string()),
+            }
+        }
+        // 在线更新 apply
+        ["update", "apply"] if method == Method::POST => simple("update.apply"),
+        // 其余未显式归类的非读路径：按方法兜底留痕，不漏记
+        _ => simple(fallback_action(method)),
     }
 }
 
-/// 归类 Docker Registry v2 事件（路径已去掉 `/v2/` 前缀）。
+/// 归类 Docker Registry v2 事件（路径已去掉 `/v2/` 前缀；调用方已确保为非读方法）。
 ///
-/// 写制品：PUT（manifest / blob 提交）；删制品：DELETE。其余（GET/HEAD/POST/PATCH）不逐条审计。
-fn classify_docker(method: &Method, rest: &str) -> Option<ClassifiedEvent> {
+/// 写制品：PUT（manifest / blob 提交）；删制品：DELETE。blob 分块过程（POST/PATCH）走兜底留痕。
+fn classify_docker(method: &Method, rest: &str) -> ClassifiedEvent {
     let (repo, target) = docker_repo_and_target(rest);
     match *method {
-        Method::PUT => Some(ClassifiedEvent {
+        Method::PUT => ClassifiedEvent {
             action: "artifact.upload",
             target_repo: repo,
             target,
-        }),
-        Method::DELETE => Some(ClassifiedEvent {
+        },
+        Method::DELETE => ClassifiedEvent {
             action: "artifact.delete",
             target_repo: repo,
             target,
-        }),
-        _ => None,
+        },
+        // blob 上传初始化 / 分块（POST / PATCH）：仍属变更类，按方法兜底留痕
+        _ => ClassifiedEvent {
+            action: fallback_action(method),
+            target_repo: repo,
+            target,
+        },
     }
 }
 
@@ -439,24 +522,34 @@ fn docker_repo_and_target(rest: &str) -> (Option<String>, Option<String>) {
     (None, Some(rest.to_string()))
 }
 
-/// 归类格式 API 事件：路径形如 `/{repo}/{path..}`，仅审计写（PUT/POST）与删（DELETE）。
-fn classify_format(method: &Method, path: &str) -> Option<ClassifiedEvent> {
+/// 归类格式 API 事件：路径形如 `/{repo}/{path..}`（调用方已确保为非读方法）。
+///
+/// 写（PUT/POST）→ `artifact.upload`，删（DELETE）→ `artifact.delete`；仓库名缺失则按方法兜底。
+fn classify_format(method: &Method, path: &str) -> ClassifiedEvent {
     let trimmed = path.trim_start_matches('/');
     let mut parts = trimmed.splitn(2, '/');
-    let repo = parts.next().filter(|s| !s.is_empty())?.to_string();
+    let repo = match parts.next().filter(|s| !s.is_empty()) {
+        Some(r) => r.to_string(),
+        None => return simple(fallback_action(method)),
+    };
     let target = parts.next().filter(|s| !s.is_empty()).map(str::to_owned);
     match *method {
-        Method::PUT | Method::POST => Some(ClassifiedEvent {
+        Method::PUT | Method::POST => ClassifiedEvent {
             action: "artifact.upload",
             target_repo: Some(repo),
             target,
-        }),
-        Method::DELETE => Some(ClassifiedEvent {
+        },
+        Method::DELETE => ClassifiedEvent {
             action: "artifact.delete",
             target_repo: Some(repo),
             target,
-        }),
-        _ => None,
+        },
+        // PATCH 等其余非读方法对格式 API 罕见，按方法兜底
+        _ => ClassifiedEvent {
+            action: fallback_action(method),
+            target_repo: Some(repo),
+            target,
+        },
     }
 }
 
@@ -717,11 +810,169 @@ mod tests {
         assert_eq!(manifest.action, "artifact.upload");
         assert_eq!(manifest.target_repo.as_deref(), Some("library/app"));
         assert_eq!(manifest.target.as_deref(), Some("manifests/latest"));
-        // 版本检查与 token 端点不审计
+        // 版本检查与 token 端点为 GET，自然被方法门挡下
         assert!(classify_event(&Method::GET, "/v2/").is_none());
         assert!(classify_event(&Method::GET, "/v2/token").is_none());
-        // blob 上传的 POST/PATCH 过程不逐条审计，仅最终 PUT 记一条
-        assert!(classify_event(&Method::POST, "/v2/library/app/blobs/uploads/").is_none());
+        // blob 上传的 POST/PATCH 过程按"全量非读"走兜底留痕（详见兜底用例）
+        assert_eq!(
+            classify_event(&Method::POST, "/v2/library/app/blobs/uploads/")
+                .unwrap()
+                .action,
+            "change.post"
+        );
+    }
+
+    #[test]
+    fn 读取方法一律不入审计() {
+        // GET / HEAD 任意路径都不产事件（全量非读的"非读"门）
+        for p in [
+            "/api/v1/users",
+            "/api/v1/repositories/r1",
+            "/api/v1/settings",
+            "/api/v1/protection/config",
+            "/api/v1/migrate/jobs/j1",
+            "/raw-repo/a/b.txt",
+            "/v2/library/app/manifests/latest",
+        ] {
+            assert!(
+                classify_event(&Method::GET, p).is_none(),
+                "GET {p} 不应入审计"
+            );
+            assert!(
+                classify_event(&Method::HEAD, p).is_none(),
+                "HEAD {p} 不应入审计"
+            );
+        }
+    }
+
+    #[test]
+    fn 新覆盖变更端点归类() {
+        let c = |m: Method, p: &str| classify_event(&m, p);
+        // 设置 / 防护配置 PATCH
+        assert_eq!(
+            c(Method::PATCH, "/api/v1/settings").unwrap().action,
+            "settings.update"
+        );
+        assert_eq!(
+            c(Method::PATCH, "/api/v1/protection/config")
+                .unwrap()
+                .action,
+            "protection.config.update"
+        );
+        // 迁移任务控制
+        let ctl = c(Method::POST, "/api/v1/migrate/jobs/j1/cancel").unwrap();
+        assert_eq!(ctl.action, "migrate.job.control");
+        assert_eq!(ctl.target.as_deref(), Some("j1/cancel"));
+        assert_eq!(
+            c(Method::POST, "/api/v1/migrate/jobs/j1/pause")
+                .unwrap()
+                .action,
+            "migrate.job.control"
+        );
+        // 迁移预览 / 搬运
+        assert_eq!(
+            c(Method::POST, "/api/v1/migrate/nexus/online/migrate")
+                .unwrap()
+                .action,
+            "migrate.run"
+        );
+        assert_eq!(
+            c(Method::POST, "/api/v1/migrate/nexus/preview")
+                .unwrap()
+                .action,
+            "migrate.run"
+        );
+        // 在线更新 apply
+        assert_eq!(
+            c(Method::POST, "/api/v1/update/apply").unwrap().action,
+            "update.apply"
+        );
+        // 登出 / 刷新
+        assert_eq!(
+            c(Method::POST, "/api/v1/auth/logout").unwrap().action,
+            "auth.logout"
+        );
+        assert_eq!(
+            c(Method::POST, "/api/v1/auth/refresh").unwrap().action,
+            "auth.refresh"
+        );
+        // 制品上传专用端点
+        let up = c(Method::POST, "/api/v1/repositories/r1/upload").unwrap();
+        assert_eq!(up.action, "artifact.upload");
+        assert_eq!(up.target_repo.as_deref(), Some("r1"));
+        // 制品详情删除
+        let del = c(Method::DELETE, "/api/v1/repositories/r1/artifacts/a/b.txt").unwrap();
+        assert_eq!(del.action, "artifact.delete");
+        assert_eq!(del.target_repo.as_deref(), Some("r1"));
+        assert_eq!(del.target.as_deref(), Some("a/b.txt"));
+    }
+
+    #[test]
+    fn 用户组与组acl归类() {
+        let c = |m: Method, p: &str| classify_event(&m, p);
+        assert_eq!(
+            c(Method::POST, "/api/v1/groups").unwrap().action,
+            "group.create"
+        );
+        assert_eq!(
+            c(Method::DELETE, "/api/v1/groups/g1").unwrap().action,
+            "group.delete"
+        );
+        assert_eq!(
+            c(Method::POST, "/api/v1/groups/g1/members").unwrap().action,
+            "group.member.update"
+        );
+        assert_eq!(
+            c(Method::DELETE, "/api/v1/groups/g1/members/u1")
+                .unwrap()
+                .action,
+            "group.member.update"
+        );
+        let ga = c(Method::POST, "/api/v1/repositories/r1/group-acl").unwrap();
+        assert_eq!(ga.action, "group.acl.update");
+        assert_eq!(ga.target_repo.as_deref(), Some("r1"));
+        assert_eq!(
+            c(Method::DELETE, "/api/v1/repositories/r1/group-acl/a1")
+                .unwrap()
+                .action,
+            "group.acl.update"
+        );
+    }
+
+    #[test]
+    fn 未显式归类的非读端点走兜底() {
+        // 任何未单列的 /api/v1 非读路径都不应漏记，按方法兜底
+        assert_eq!(
+            classify_event(&Method::POST, "/api/v1/some/new/endpoint")
+                .unwrap()
+                .action,
+            "change.post"
+        );
+        assert_eq!(
+            classify_event(&Method::PUT, "/api/v1/some/thing")
+                .unwrap()
+                .action,
+            "change.put"
+        );
+        assert_eq!(
+            classify_event(&Method::PATCH, "/api/v1/another")
+                .unwrap()
+                .action,
+            "change.patch"
+        );
+        assert_eq!(
+            classify_event(&Method::DELETE, "/api/v1/yet/another")
+                .unwrap()
+                .action,
+            "change.delete"
+        );
+        // Docker blob 分块过程（POST/PATCH）也走兜底留痕（不再静默丢弃）
+        assert_eq!(
+            classify_event(&Method::POST, "/v2/library/app/blobs/uploads/")
+                .unwrap()
+                .action,
+            "change.post"
+        );
     }
 
     #[test]
