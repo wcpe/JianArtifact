@@ -581,7 +581,8 @@ async fn 设置patch事件落审计库() {
                     "enabled": false,
                     "repo": "owner/repo",
                     "api_base_url": "https://api.github.com",
-                    "restart_mode": "exit"
+                    "restart_mode": "exit",
+                    "channel": "stable"
                 }
             }),
         ),
