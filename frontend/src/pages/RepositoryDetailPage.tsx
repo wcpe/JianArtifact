@@ -1,7 +1,7 @@
-// 仓库详情页：配置（可见性 / 上游，管理员）、每仓库 ACL 管理（FR-20）、制品浏览（FR-22）。
+// 仓库详情页（FR-20 / FR-22 / FR-76 / FR-93）：浏览（左文件树 + 右制品详情）、配置与 ACL（管理员）。
 // 经查询参数 ?id= 定位仓库，避免与后端格式 catch-all 路由冲突。
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Tabs,
   Title,
@@ -13,27 +13,30 @@ import {
   Text,
   Button,
   Select,
-  Table,
   ActionIcon,
-  Anchor,
   Card,
   TextInput,
+  ScrollArea,
+  UnstyledButton,
 } from '@mantine/core';
 import {
-  IconTrash,
   IconArrowLeft,
   IconFolder,
-  IconFile,
   IconFolderOpen,
+  IconChevronRight,
+  IconChevronDown,
+  IconTrash,
 } from '@tabler/icons-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import * as api from '../api/endpoints';
-import type { ArtifactDto, RepositoryDto, Visibility } from '../api/types';
+import type { ArtifactDetailDto, ArtifactDto, RepositoryDto, Visibility } from '../api/types';
 import { useAuth } from '../auth/useAuth';
-import { buildDirectoryListing, breadcrumbSegments } from '../lib/browse';
-import { errorMessage, formatBytes } from '../lib/format';
+import { buildDirectoryListing } from '../lib/browse';
+import { FormatIcon } from '../lib/formatIcon';
+import { errorMessage } from '../lib/format';
 import { notifyError, notifySuccess } from '../lib/notify';
 import { ErrorAlert } from '../components/ErrorAlert';
+import { ArtifactDetailPanel } from '../components/ArtifactDetailPanel';
 import { AclPanel } from '../components/AclPanel';
 import { GroupAclPanel } from '../components/GroupAclPanel';
 
@@ -94,22 +97,17 @@ export function RepositoryDetailPage() {
         </Group>
       </Group>
 
-      <Tabs defaultValue="artifacts">
+      <Tabs defaultValue="browse">
         <Tabs.List>
-          <Tabs.Tab value="artifacts">制品浏览</Tabs.Tab>
           <Tabs.Tab value="browse" leftSection={<IconFolderOpen size={16} />}>
-            文件浏览
+            浏览
           </Tabs.Tab>
           {isAdmin && <Tabs.Tab value="config">配置</Tabs.Tab>}
           {isAdmin && <Tabs.Tab value="acl">权限（ACL）</Tabs.Tab>}
         </Tabs.List>
 
-        <Tabs.Panel value="artifacts" pt="md">
-          <ArtifactsTab repo={repo} />
-        </Tabs.Panel>
-
         <Tabs.Panel value="browse" pt="md">
-          <FileBrowserTab repo={repo} />
+          <BrowseTab repo={repo} />
         </Tabs.Panel>
 
         {isAdmin && (
@@ -154,13 +152,21 @@ function BackButton() {
   );
 }
 
-/** 制品浏览页签（FR-22）。 */
-function ArtifactsTab({ repo }: { repo: RepositoryDto }) {
-  const navigate = useNavigate();
+/**
+ * 浏览页签（FR-93）：左侧文件树（逐级展开）+ 右侧制品详情面板。
+ * 一次性拉取仓库制品索引（FR-75），客户端按目录折叠成树；点文件加载详情。
+ */
+function BrowseTab({ repo }: { repo: RepositoryDto }) {
   const { isAdmin } = useAuth();
   const [artifacts, setArtifacts] = useState<ArtifactDto[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // 右侧详情：选中文件路径 + 加载态
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [detail, setDetail] = useState<ArtifactDetailDto | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
 
   const reload = useCallback(() => {
     setLoading(true);
@@ -173,24 +179,39 @@ function ArtifactsTab({ repo }: { repo: RepositoryDto }) {
 
   useEffect(reload, [reload]);
 
+  const selectFile = useCallback(
+    (path: string) => {
+      setSelectedPath(path);
+      setDetail(null);
+      setDetailError(null);
+      setDetailLoading(true);
+      api
+        .getArtifactDetail(repo.id, path)
+        .then(setDetail)
+        .catch((err) => setDetailError(errorMessage(err)))
+        .finally(() => setDetailLoading(false));
+    },
+    [repo.id],
+  );
+
   const handleDelete = async (path: string) => {
     if (!window.confirm(`确认删除制品「${path}」？`)) return;
     try {
       await api.deleteArtifact(repo.id, path);
       notifySuccess('制品已删除');
+      if (selectedPath === path) {
+        setSelectedPath(null);
+        setDetail(null);
+      }
       reload();
     } catch (err) {
       notifyError(errorMessage(err));
     }
   };
 
-  const openDetail = (path: string) => {
-    navigate(`/artifact?repo=${encodeURIComponent(repo.id)}&path=${encodeURIComponent(path)}`);
-  };
-
   if (loading) {
     return (
-      <Center h={120}>
+      <Center h={160}>
         <Loader />
       </Center>
     );
@@ -201,155 +222,170 @@ function ArtifactsTab({ repo }: { repo: RepositoryDto }) {
   }
 
   return (
-    <Table.ScrollContainer minWidth={620}>
-      <Table striped highlightOnHover>
-        <Table.Thead>
-          <Table.Tr>
-            <Table.Th>路径</Table.Th>
-            <Table.Th>大小</Table.Th>
-            <Table.Th>缓存</Table.Th>
-            <Table.Th>创建时间</Table.Th>
-            <Table.Th>操作</Table.Th>
-          </Table.Tr>
-        </Table.Thead>
-        <Table.Tbody>
-          {artifacts.map((a) => (
-            <Table.Tr key={a.path}>
-              <Table.Td>
-                <Anchor onClick={() => openDetail(a.path)}>{a.path}</Anchor>
-              </Table.Td>
-              <Table.Td>{formatBytes(a.size)}</Table.Td>
-              <Table.Td>
-                {a.cached ? (
-                  <Badge size="sm" variant="light">
-                    缓存
-                  </Badge>
-                ) : (
-                  '-'
-                )}
-              </Table.Td>
-              <Table.Td>
-                <Text size="sm" c="dimmed">
-                  {a.created_at}
-                </Text>
-              </Table.Td>
-              <Table.Td>
-                {isAdmin && (
-                  <ActionIcon
-                    variant="subtle"
-                    color="red"
-                    onClick={() => handleDelete(a.path)}
-                    aria-label="删除制品"
-                  >
-                    <IconTrash size={18} />
-                  </ActionIcon>
-                )}
-              </Table.Td>
-            </Table.Tr>
-          ))}
-        </Table.Tbody>
-      </Table>
-    </Table.ScrollContainer>
+    <Group align="flex-start" gap="lg" wrap="nowrap">
+      {/* 左：文件树 */}
+      <Card withBorder padding="sm" radius="md" w={320} style={{ flexShrink: 0 }}>
+        <ScrollArea.Autosize mah={520}>
+          <FileTree
+            repo={repo}
+            artifacts={artifacts}
+            selectedPath={selectedPath}
+            onSelectFile={selectFile}
+            onDelete={isAdmin ? handleDelete : undefined}
+          />
+        </ScrollArea.Autosize>
+      </Card>
+
+      {/* 右：详情面板 */}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        {!selectedPath ? (
+          <Center h={160}>
+            <Text c="dimmed">从左侧选择一个文件查看详情。</Text>
+          </Center>
+        ) : detailLoading ? (
+          <Center h={160}>
+            <Loader />
+          </Center>
+        ) : detailError || !detail ? (
+          <ErrorAlert message={detailError ?? '制品不存在'} />
+        ) : (
+          <ArtifactDetailPanel detail={detail} />
+        )}
+      </div>
+    </Group>
   );
 }
 
-/** 文件浏览页签（FR-76）：按目录树逐级浏览，点文件看详情，点目录进入下一层。 */
-function FileBrowserTab({ repo }: { repo: RepositoryDto }) {
-  const navigate = useNavigate();
-  const [artifacts, setArtifacts] = useState<ArtifactDto[]>([]);
-  const [prefix, setPrefix] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+/** 文件树：从仓库根递归渲染目录 / 文件，目录可逐级展开。 */
+function FileTree({
+  repo,
+  artifacts,
+  selectedPath,
+  onSelectFile,
+  onDelete,
+}: {
+  repo: RepositoryDto;
+  artifacts: ArtifactDto[];
+  selectedPath: string | null;
+  onSelectFile: (path: string) => void;
+  onDelete?: (path: string) => void;
+}) {
+  return (
+    <TreeLevel
+      repo={repo}
+      artifacts={artifacts}
+      prefix=""
+      depth={0}
+      selectedPath={selectedPath}
+      onSelectFile={onSelectFile}
+      onDelete={onDelete}
+    />
+  );
+}
 
-  useEffect(() => {
-    setLoading(true);
-    api
-      .listArtifacts(repo.id)
-      .then(setArtifacts)
-      .catch((err) => setError(errorMessage(err)))
-      .finally(() => setLoading(false));
-  }, [repo.id]);
+/** 树的一层：渲染给定前缀下的目录 / 文件条目，目录展开时递归渲染下一层。 */
+function TreeLevel({
+  repo,
+  artifacts,
+  prefix,
+  depth,
+  selectedPath,
+  onSelectFile,
+  onDelete,
+}: {
+  repo: RepositoryDto;
+  artifacts: ArtifactDto[];
+  prefix: string;
+  depth: number;
+  selectedPath: string | null;
+  onSelectFile: (path: string) => void;
+  onDelete?: (path: string) => void;
+}) {
+  const entries = useMemo(() => buildDirectoryListing(artifacts, prefix), [artifacts, prefix]);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
-  const entries = buildDirectoryListing(artifacts, prefix);
-  const crumbs = breadcrumbSegments(prefix);
-
-  const openDetail = (path: string) => {
-    navigate(`/artifact?repo=${encodeURIComponent(repo.id)}&path=${encodeURIComponent(path)}`);
+  const toggle = (name: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
   };
 
-  if (loading) {
-    return (
-      <Center h={120}>
-        <Loader />
-      </Center>
-    );
-  }
-  if (error) return <ErrorAlert message={error} />;
-
   return (
-    <Stack gap="sm">
-      {/* 面包屑导航：根 + 各级目录，点击回跳对应层 */}
-      <Group gap={4}>
-        <Anchor onClick={() => setPrefix('')}>{repo.name}</Anchor>
-        {crumbs.map((c) => (
-          <Group key={c.prefix} gap={4}>
-            <Text c="dimmed">/</Text>
-            <Anchor onClick={() => setPrefix(c.prefix)}>{c.name}</Anchor>
-          </Group>
-        ))}
-        <Text c="dimmed">/</Text>
-      </Group>
-
-      {entries.length === 0 ? (
-        <Text c="dimmed">该目录为空。</Text>
-      ) : (
-        <Table.ScrollContainer minWidth={520}>
-          <Table highlightOnHover>
-            <Table.Thead>
-              <Table.Tr>
-                <Table.Th>名称</Table.Th>
-                <Table.Th>大小</Table.Th>
-                <Table.Th>创建时间</Table.Th>
-              </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
-              {entries.map((e) =>
-                e.type === 'folder' ? (
-                  <Table.Tr key={`d:${e.name}`}>
-                    <Table.Td>
-                      <Anchor onClick={() => setPrefix(`${prefix}${e.name}/`)}>
-                        <Group gap={6} wrap="nowrap">
-                          <IconFolder size={16} />
-                          <span>{e.name}/</span>
-                        </Group>
-                      </Anchor>
-                    </Table.Td>
-                    <Table.Td>-</Table.Td>
-                    <Table.Td>-</Table.Td>
-                  </Table.Tr>
-                ) : (
-                  <Table.Tr key={`f:${e.path}`}>
-                    <Table.Td>
-                      <Anchor onClick={() => openDetail(e.path!)}>
-                        <Group gap={6} wrap="nowrap">
-                          <IconFile size={16} />
-                          <span>{e.name}</span>
-                        </Group>
-                      </Anchor>
-                    </Table.Td>
-                    <Table.Td>{e.size !== undefined ? formatBytes(e.size) : '-'}</Table.Td>
-                    <Table.Td>
-                      <Text size="sm" c="dimmed">
-                        {e.createdAt ?? '-'}
-                      </Text>
-                    </Table.Td>
-                  </Table.Tr>
-                ),
+    <Stack gap={2}>
+      {entries.map((e) => {
+        const indent = depth * 16;
+        if (e.type === 'folder') {
+          const open = expanded.has(e.name);
+          const childPrefix = `${prefix}${e.name}/`;
+          return (
+            <div key={`d:${e.name}`}>
+              <UnstyledButton
+                onClick={() => toggle(e.name)}
+                px={6}
+                py={4}
+                style={{ width: '100%', borderRadius: 4, paddingLeft: indent + 6 }}
+              >
+                <Group gap={4} wrap="nowrap">
+                  {open ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />}
+                  {open ? <IconFolderOpen size={16} /> : <IconFolder size={16} />}
+                  <Text size="sm" truncate>
+                    {e.name}
+                  </Text>
+                </Group>
+              </UnstyledButton>
+              {open && (
+                <TreeLevel
+                  repo={repo}
+                  artifacts={artifacts}
+                  prefix={childPrefix}
+                  depth={depth + 1}
+                  selectedPath={selectedPath}
+                  onSelectFile={onSelectFile}
+                  onDelete={onDelete}
+                />
               )}
-            </Table.Tbody>
-          </Table>
-        </Table.ScrollContainer>
-      )}
+            </div>
+          );
+        }
+        // 文件叶子
+        const active = selectedPath === e.path;
+        return (
+          <Group key={`f:${e.path}`} gap={4} wrap="nowrap" style={{ paddingLeft: indent + 6 }}>
+            <UnstyledButton
+              onClick={() => onSelectFile(e.path!)}
+              px={6}
+              py={4}
+              style={{
+                flex: 1,
+                minWidth: 0,
+                borderRadius: 4,
+                fontWeight: active ? 600 : 400,
+              }}
+            >
+              <Group gap={6} wrap="nowrap">
+                <FormatIcon format={repo.format} />
+                <Text size="sm" truncate>
+                  {e.name}
+                </Text>
+              </Group>
+            </UnstyledButton>
+            {onDelete && (
+              <ActionIcon
+                variant="subtle"
+                color="red"
+                size="sm"
+                onClick={() => onDelete(e.path!)}
+                aria-label="删除制品"
+              >
+                <IconTrash size={15} />
+              </ActionIcon>
+            )}
+          </Group>
+        );
+      })}
     </Stack>
   );
 }
