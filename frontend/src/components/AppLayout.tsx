@@ -1,6 +1,17 @@
-// 控制台布局外壳：顶部栏 + 侧边导航 + 内容区。导航据角色显隐用户管理。
+// 控制台布局外壳：顶部栏 + 折叠图标导航条 + 内容区（FR-92）。
+// 导航默认窄（仅图标 + tooltip / aria-label），可点击展开为图标+文字；据角色显隐管理入口。
 
-import { AppShell, Burger, Group, NavLink, ScrollArea, Text, Button } from '@mantine/core';
+import {
+  AppShell,
+  Burger,
+  Group,
+  NavLink,
+  ScrollArea,
+  Text,
+  Button,
+  Tooltip,
+  TextInput,
+} from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import {
   IconDashboard,
@@ -17,9 +28,12 @@ import {
   IconTransfer,
   IconSettings,
   IconLogout,
+  IconLayoutSidebarLeftExpand,
+  IconLayoutSidebarLeftCollapse,
 } from '@tabler/icons-react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/useAuth';
+import { density } from '../theme/density';
 
 /** 导航项定义。 */
 interface NavItem {
@@ -62,9 +76,44 @@ const NAV_ITEMS: NavItem[] = [
   { label: '设置', path: '/settings', icon: <IconSettings size={18} />, adminOnly: true },
 ];
 
-/** 应用布局：渲染导航与子路由出口。 */
+/**
+ * 单个导航项：展开态显示图标+文字；折叠（窄）态仅图标，
+ * 经 Tooltip + aria-label 提供可访问名，保证窄态读屏 / 键盘可用。
+ */
+function NavItemLink({
+  item,
+  expanded,
+  active,
+  onSelect,
+}: {
+  item: NavItem;
+  expanded: boolean;
+  active: boolean;
+  onSelect: () => void;
+}) {
+  if (expanded) {
+    return (
+      <NavLink
+        label={item.label}
+        aria-label={item.label}
+        leftSection={item.icon}
+        active={active}
+        onClick={onSelect}
+      />
+    );
+  }
+  return (
+    <Tooltip label={item.label} position="right" withArrow>
+      <NavLink aria-label={item.label} leftSection={item.icon} active={active} onClick={onSelect} />
+    </Tooltip>
+  );
+}
+
+/** 应用布局：渲染折叠图标导航与子路由出口。 */
 export function AppLayout() {
-  const [opened, { toggle }] = useDisclosure();
+  // mobileOpened：移动端抽屉开合；navExpanded：桌面侧栏窄/宽（默认窄）。
+  const [mobileOpened, { toggle: toggleMobile }] = useDisclosure();
+  const [navExpanded, { toggle: toggleNav }] = useDisclosure(false);
   const { user, isAdmin, signOut } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
@@ -76,20 +125,32 @@ export function AppLayout() {
 
   const visibleItems = NAV_ITEMS.filter((item) => !item.adminOnly || isAdmin);
 
+  const navbarWidth = navExpanded ? density.navbarWidth.expanded : density.navbarWidth.collapsed;
+
   return (
     <AppShell
       header={{ height: 56 }}
-      navbar={{ width: 240, breakpoint: 'sm', collapsed: { mobile: !opened } }}
-      padding="md"
+      navbar={{ width: navbarWidth, breakpoint: 'sm', collapsed: { mobile: !mobileOpened } }}
+      padding={density.mainPadding}
     >
       <AppShell.Header>
         <Group h="100%" px="md" justify="space-between">
           <Group>
-            <Burger opened={opened} onClick={toggle} hiddenFrom="sm" size="sm" />
+            <Burger opened={mobileOpened} onClick={toggleMobile} hiddenFrom="sm" size="sm" />
             <Text fw={700} size="lg">
               JianArtifact 控制台
             </Text>
           </Group>
+          {/* 全局搜索框占位：搜索逻辑由 FR-94 实现，本 FR 仅留位置、禁用不接逻辑 */}
+          <TextInput
+            visibleFrom="sm"
+            disabled
+            size="xs"
+            w={240}
+            leftSection={<IconSearch size={14} />}
+            placeholder="全局搜索（即将上线）"
+            aria-label="全局搜索（即将上线）"
+          />
           <Group>
             <Text size="sm" c="dimmed">
               {user?.username}（{user?.role === 'admin' ? '管理员' : '用户'}）
@@ -106,17 +167,34 @@ export function AppLayout() {
         </Group>
       </AppShell.Header>
 
-      <AppShell.Navbar p="md">
+      <AppShell.Navbar p="xs">
+        <Group justify={navExpanded ? 'flex-end' : 'center'} mb="xs">
+          <Tooltip label={navExpanded ? '收起导航' : '展开导航'} position="right" withArrow>
+            <Button
+              variant="subtle"
+              size="xs"
+              px="xs"
+              aria-label={navExpanded ? '收起导航' : '展开导航'}
+              onClick={toggleNav}
+            >
+              {navExpanded ? (
+                <IconLayoutSidebarLeftCollapse size={18} />
+              ) : (
+                <IconLayoutSidebarLeftExpand size={18} />
+              )}
+            </Button>
+          </Tooltip>
+        </Group>
         <ScrollArea>
           {visibleItems.map((item) => (
-            <NavLink
+            <NavItemLink
               key={item.path}
-              label={item.label}
-              leftSection={item.icon}
+              item={item}
+              expanded={navExpanded}
               active={isNavActive(location.pathname, item.path)}
-              onClick={() => {
+              onSelect={() => {
                 navigate(item.path);
-                if (opened) toggle();
+                if (mobileOpened) toggleMobile();
               }}
             />
           ))}

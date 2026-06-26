@@ -8,11 +8,12 @@ import type { RepositoryDto } from '../api/types';
 import { useAuth } from '../auth/useAuth';
 import { errorMessage } from '../lib/format';
 import { ErrorAlert } from '../components/ErrorAlert';
+import { density } from '../theme/density';
 
-/** 统计卡片。 */
+/** 统计卡片：按密度基线瘦身（padding 由 lg 收紧为 md）。 */
 function StatCard({ label, value }: { label: string; value: string | number }) {
   return (
-    <Card withBorder padding="lg" radius="md">
+    <Card withBorder padding={density.cardPadding} radius="md">
       <Text size="sm" c="dimmed">
         {label}
       </Text>
@@ -60,20 +61,20 @@ export function DashboardPage() {
   const byType = countBy(repos, (r) => r.type);
 
   return (
-    <Stack>
+    <Stack gap={density.gridSpacing}>
       <Title order={2}>仪表盘</Title>
       <Text c="dimmed">欢迎，{user?.username}。以下为当前可见范围内的基础信息。</Text>
       {error && <ErrorAlert message={error} />}
 
-      <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }}>
+      <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing={density.gridSpacing}>
         <StatCard label="当前用户" value={user?.username ?? '-'} />
         <StatCard label="角色" value={user?.role === 'admin' ? '管理员' : '用户'} />
         <StatCard label="可见仓库数" value={repos.length} />
         <StatCard label="格式种类" value={Object.keys(byFormat).length} />
       </SimpleGrid>
 
-      <SimpleGrid cols={{ base: 1, md: 2 }}>
-        <Card withBorder padding="lg" radius="md">
+      <SimpleGrid cols={{ base: 1, md: 2 }} spacing={density.gridSpacing}>
+        <Card withBorder padding={density.cardPadding} radius="md">
           <Title order={4} mb="sm">
             格式分布
           </Title>
@@ -91,7 +92,7 @@ export function DashboardPage() {
             </Group>
           )}
         </Card>
-        <Card withBorder padding="lg" radius="md">
+        <Card withBorder padding={density.cardPadding} radius="md">
           <Title order={4} mb="sm">
             类型分布
           </Title>

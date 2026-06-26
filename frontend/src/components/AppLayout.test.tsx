@@ -1,9 +1,11 @@
-// 控制台布局侧栏导航高亮测试（fix-B）：
-// 防止前缀匹配导致的高亮串台 —— /protection 是 /protection-monitor 的前缀，
-// 进入「防护监控」页时「防护配置」不得被误判为 active；任一时刻只高亮当前页对应项。
+// 控制台布局外壳测试（FR-92 折叠图标导航条 + 角色门控 + fix-B 高亮）：
+// 1) 默认窄（图标条，仅 aria-label，无可见文字）/ 点击切换可展开为图标+文字、再切回；
+// 2) 角色门控：非 Admin 看不到管理入口，Admin 看得到；
+// 3) active 高亮按路径段精确匹配（保持 fix-B）——/protection 不被 /protection-monitor 串台。
 
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MantineProvider } from '@mantine/core';
 import { MemoryRouter } from 'react-router-dom';
 import { AppLayout } from './AppLayout';
@@ -20,11 +22,22 @@ function 管理员上下文(): AuthContextValue {
   };
 }
 
-/** 在指定初始路由下渲染布局外壳。 */
-function renderAt(initialPath: string) {
+/** 构造普通用户认证上下文（管理入口应隐藏）。 */
+function 普通用户上下文(): AuthContextValue {
+  return {
+    user: { id: 'u-user', username: 'alice', role: 'user' },
+    loading: false,
+    isAdmin: false,
+    signIn: async () => {},
+    signOut: async () => {},
+  };
+}
+
+/** 在指定初始路由与认证上下文下渲染布局外壳。 */
+function renderAt(initialPath: string, ctx: AuthContextValue = 管理员上下文()) {
   return render(
     <MantineProvider>
-      <AuthContext.Provider value={管理员上下文()}>
+      <AuthContext.Provider value={ctx}>
         <MemoryRouter initialEntries={[initialPath]}>
           <AppLayout />
         </MemoryRouter>
@@ -33,18 +46,89 @@ function renderAt(initialPath: string) {
   );
 }
 
-/** 取导航项的 NavLink 根元素（带 data-active 属性）。 */
+/** 取导航项的锚点元素（带 data-active 属性，窄态靠 aria-label 定位）。 */
 function navLinkByLabel(label: string): HTMLElement {
-  const labelEl = screen.getByText(label);
-  // Mantine NavLink 的 data-active 落在最外层 <a> 上，向上找到带 href 的锚点
-  const anchor = labelEl.closest('a');
+  // 窄态无可见文字，统一经无障碍名（aria-label）定位锚点
+  const el = screen.getByLabelText(label);
+  const anchor = el.closest('a');
   if (!anchor) {
     throw new Error(`未找到导航项「${label}」对应的锚点元素`);
   }
   return anchor;
 }
 
-describe('AppLayout 侧栏导航高亮', () => {
+describe('AppLayout 折叠图标导航条', () => {
+  it('默认窄：导航项仅有 aria-label、无可见文字，提供折叠切换', () => {
+    renderAt('/');
+
+    // 窄态：靠 aria-label 可达，但文字不直接可见
+    expect(screen.getByLabelText('仪表盘')).toBeInTheDocument();
+    expect(screen.queryByText('仪表盘')).not.toBeInTheDocument();
+    // 折叠态展示「展开导航」切换控件
+    expect(screen.getByLabelText('展开导航')).toBeInTheDocument();
+  });
+
+  it('点击展开后导航项显示文字，再点击收起回到窄态', async () => {
+    const user = userEvent.setup();
+    renderAt('/');
+
+    await user.click(screen.getByLabelText('展开导航'));
+
+    // 展开态：文字可见，切换控件变为「收起导航」
+    expect(screen.getByText('仪表盘')).toBeInTheDocument();
+    expect(screen.getByLabelText('收起导航')).toBeInTheDocument();
+
+    await user.click(screen.getByLabelText('收起导航'));
+
+    // 收回窄态：文字再次隐藏
+    expect(screen.queryByText('仪表盘')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('展开导航')).toBeInTheDocument();
+  });
+
+  it('窄态每个导航项有可访问名（aria-label）', () => {
+    renderAt('/');
+
+    expect(navLinkByLabel('仓库管理')).toBeInTheDocument();
+    expect(navLinkByLabel('制品搜索')).toBeInTheDocument();
+  });
+});
+
+describe('AppLayout 角色门控入口', () => {
+  // 管理类入口清单：仅 Admin 可见
+  const 管理入口 = [
+    '用户管理',
+    '用户组管理',
+    '使用分析',
+    '防护配置',
+    '审计日志',
+    '防护监控',
+    'Nexus 迁移',
+    '设置',
+  ];
+  // 通用入口：所有登录用户可见
+  const 通用入口 = ['仪表盘', '仓库管理', '制品搜索', 'Token 管理', '制品上传'];
+
+  it('普通用户看不到任何管理入口，但看得到通用入口', () => {
+    renderAt('/', 普通用户上下文());
+
+    for (const label of 管理入口) {
+      expect(screen.queryByLabelText(label)).not.toBeInTheDocument();
+    }
+    for (const label of 通用入口) {
+      expect(screen.getByLabelText(label)).toBeInTheDocument();
+    }
+  });
+
+  it('管理员看得到全部管理入口', () => {
+    renderAt('/', 管理员上下文());
+
+    for (const label of [...管理入口, ...通用入口]) {
+      expect(screen.getByLabelText(label)).toBeInTheDocument();
+    }
+  });
+});
+
+describe('AppLayout 侧栏导航高亮（fix-B 段精确匹配）', () => {
   it('位于 /protection-monitor 时仅「防护监控」高亮，「防护配置」不串台', () => {
     renderAt('/protection-monitor');
 
