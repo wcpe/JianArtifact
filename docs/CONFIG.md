@@ -18,7 +18,7 @@
 | 键 | 含义 | 默认（取向） | 环境变量 |
 |---|---|---|---|
 | listen_addr | 监听地址 | 127.0.0.1 | JIANARTIFACT_SERVER_LISTEN_ADDR |
-| port | 监听端口 | 8080 | JIANARTIFACT_SERVER_PORT |
+| port | 监听端口 | 9999 | JIANARTIFACT_SERVER_PORT |
 | public_base_url | 对外基础 URL（用于生成链接） | 按监听推断 | JIANARTIFACT_SERVER_PUBLIC_BASE_URL |
 
 ### [data]

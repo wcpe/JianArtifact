@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 /// 默认监听地址。
 const DEFAULT_LISTEN_ADDR: &str = "127.0.0.1";
 /// 默认监听端口。
-const DEFAULT_PORT: u16 = 8080;
+const DEFAULT_PORT: u16 = 9999;
 /// 默认数据目录。
 const DEFAULT_DATA_DIR: &str = "./data";
 /// blob 存储默认子目录名（位于数据目录下）。
@@ -1297,7 +1297,7 @@ mod tests {
         with_env_vars(&[], || {
             let cfg = Config::load(Path::new("不存在的配置文件.toml")).unwrap();
             assert_eq!(cfg.server.listen_addr, "127.0.0.1");
-            assert_eq!(cfg.server.port, 8080);
+            assert_eq!(cfg.server.port, 9999);
             assert_eq!(cfg.auth.session_ttl_secs, 3600);
             assert_eq!(cfg.auth.login_max_failures, 5);
             assert_eq!(cfg.auth.login_lockout_secs, 900);
@@ -2061,7 +2061,7 @@ mod tests {
             let cfg = Config::load(file.path()).expect("模板应能被 Config::load 成功加载");
             // 断言示例模板里显式给出的关键默认值确被加载
             assert_eq!(cfg.server.listen_addr, "127.0.0.1");
-            assert_eq!(cfg.server.port, 8080);
+            assert_eq!(cfg.server.port, 9999);
             assert_eq!(cfg.auth.session_ttl_secs, 3600);
             assert_eq!(cfg.data.data_dir, PathBuf::from("./data"));
         });
@@ -2084,7 +2084,7 @@ mod tests {
 
         with_env_vars(&[], || {
             let cfg = Config::load(&path).expect("生成的配置文件应能被 Config::load 加载");
-            assert_eq!(cfg.server.port, 8080);
+            assert_eq!(cfg.server.port, 9999);
         });
     }
 

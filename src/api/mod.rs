@@ -721,7 +721,7 @@ mod tests {
 
         let body = 读_json(response).await;
         assert_eq!(body["status"], "ok");
-        assert_eq!(body["port"], 8080);
+        assert_eq!(body["port"], 9999);
     }
 
     #[tokio::test]
