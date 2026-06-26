@@ -7,9 +7,15 @@ import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MantineProvider } from '@mantine/core';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { AppLayout } from './AppLayout';
 import { AuthContext, type AuthContextValue } from '../auth/AuthContext';
+
+/** 探针：把当前路由的 pathname + search 暴露到 DOM，供断言页眉搜索跳转。 */
+function LocationProbe() {
+  const location = useLocation();
+  return <div data-testid="location-probe">{location.pathname + location.search}</div>;
+}
 
 /** 构造管理员认证上下文（导航全部可见）。 */
 function 管理员上下文(): AuthContextValue {
@@ -33,13 +39,14 @@ function 普通用户上下文(): AuthContextValue {
   };
 }
 
-/** 在指定初始路由与认证上下文下渲染布局外壳。 */
+/** 在指定初始路由与认证上下文下渲染布局外壳（附带定位探针）。 */
 function renderAt(initialPath: string, ctx: AuthContextValue = 管理员上下文()) {
   return render(
     <MantineProvider>
       <AuthContext.Provider value={ctx}>
         <MemoryRouter initialEntries={[initialPath]}>
           <AppLayout />
+          <LocationProbe />
         </MemoryRouter>
       </AuthContext.Provider>
     </MantineProvider>,
@@ -146,5 +153,48 @@ describe('AppLayout 侧栏导航高亮（fix-B 段精确匹配）', () => {
 
     expect(navLinkByLabel('仪表盘').getAttribute('data-active')).toBe('true');
     expect(navLinkByLabel('仓库管理').getAttribute('data-active')).toBeNull();
+  });
+});
+
+describe('AppLayout 页眉全局搜索（FR-94）', () => {
+  it('页眉搜索框可用（非禁用），有可访问名', () => {
+    renderAt('/');
+    const input = screen.getByLabelText('全局搜索');
+    expect(input).toBeInTheDocument();
+    expect(input).not.toBeDisabled();
+  });
+
+  it('输入关键字回车 → 跳转 /search?q=<关键字>', async () => {
+    const user = userEvent.setup();
+    renderAt('/');
+
+    const input = screen.getByLabelText('全局搜索');
+    await user.type(input, 'lib-core{enter}');
+
+    expect(screen.getByTestId('location-probe')).toHaveTextContent('/search?q=lib-core');
+  });
+
+  it('关键字含特殊字符时按 URL 编码跳转', async () => {
+    const user = userEvent.setup();
+    renderAt('/');
+
+    const input = screen.getByLabelText('全局搜索');
+    await user.type(input, 'a b{enter}');
+
+    // 空格被编码为 +（URLSearchParams 序列化），断言落到搜索页且携带 q
+    const probe = screen.getByTestId('location-probe');
+    expect(probe.textContent).toContain('/search?q=');
+    expect(probe.textContent).toContain('a+b');
+  });
+
+  it('空关键字回车不跳转（停留原路由）', async () => {
+    const user = userEvent.setup();
+    renderAt('/');
+
+    const input = screen.getByLabelText('全局搜索');
+    await user.type(input, '   {enter}');
+
+    expect(screen.getByTestId('location-probe')).toHaveTextContent('/');
+    expect(screen.getByTestId('location-probe')).not.toHaveTextContent('/search');
   });
 });

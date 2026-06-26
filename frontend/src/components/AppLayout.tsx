@@ -12,7 +12,8 @@ import {
   Tooltip,
   TextInput,
 } from '@mantine/core';
-import { useDisclosure } from '@mantine/hooks';
+import { useDisclosure, useDebouncedCallback } from '@mantine/hooks';
+import { useState, type KeyboardEvent } from 'react';
 import {
   IconDashboard,
   IconDatabase,
@@ -109,10 +110,33 @@ export function AppLayout() {
   const { user, isAdmin, signOut } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  // 页眉全局搜索（FR-94）：输入关键字 → 跳转 /search?q=；回车立即跳，停止输入防抖后自动跳。
+  const [searchValue, setSearchValue] = useState('');
 
   const handleSignOut = async () => {
     await signOut();
     navigate('/login', { replace: true });
+  };
+
+  // 跳转到搜索结果页：空关键字不跳；用 URLSearchParams 统一编码，重复跳同 URL 幂等。
+  const gotoSearch = (raw: string) => {
+    const keyword = raw.trim();
+    if (!keyword) return;
+    navigate(`/search?${new URLSearchParams({ q: keyword }).toString()}`);
+  };
+
+  const debouncedGotoSearch = useDebouncedCallback(gotoSearch, 300);
+
+  const handleSearchChange = (value: string) => {
+    setSearchValue(value);
+    debouncedGotoSearch(value);
+  };
+
+  const handleSearchKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      gotoSearch(searchValue);
+    }
   };
 
   const visibleItems = NAV_ITEMS.filter((item) => !item.adminOnly || isAdmin);
@@ -133,15 +157,17 @@ export function AppLayout() {
               JianArtifact 控制台
             </Text>
           </Group>
-          {/* 全局搜索框占位：搜索逻辑由 FR-94 实现，本 FR 仅留位置、禁用不接逻辑 */}
+          {/* 全局搜索框（FR-94）：回车立即跳、停止输入防抖后自动跳到 /search?q= */}
           <TextInput
             visibleFrom="sm"
-            disabled
             size="xs"
             w={240}
             leftSection={<IconSearch size={14} />}
-            placeholder="全局搜索（即将上线）"
-            aria-label="全局搜索（即将上线）"
+            placeholder="搜索制品（回车或停顿即搜）"
+            aria-label="全局搜索"
+            value={searchValue}
+            onChange={(e) => handleSearchChange(e.currentTarget.value)}
+            onKeyDown={handleSearchKeyDown}
           />
           <Group>
             <Text size="sm" c="dimmed">
