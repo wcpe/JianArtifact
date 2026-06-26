@@ -194,10 +194,11 @@ fn collect_properties_files(content_dir: &Path) -> Result<Vec<PathBuf>, MigrateE
             let path = entry.path();
             match entry.file_type() {
                 Ok(ft) if ft.is_dir() => stack.push(path),
-                Ok(ft) if ft.is_file() => {
-                    if path.extension().and_then(|e| e.to_str()) == Some(PROPERTIES_EXT) {
-                        files.push(path);
-                    }
+                Ok(ft)
+                    if ft.is_file()
+                        && path.extension().and_then(|e| e.to_str()) == Some(PROPERTIES_EXT) =>
+                {
+                    files.push(path);
                 }
                 _ => {}
             }
