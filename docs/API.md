@@ -309,8 +309,15 @@
 ### Nexus 迁移任务进度（FR-83）
 
 - **方法 / 路径**：`GET /api/v1/migrate/jobs/{id}`（单任务进度）、`GET /api/v1/migrate/jobs`（任务列表，供客户端重连找回）。仅管理员可调用。
-- **进度响应**（`jobs/{id}`）：`{ "job_id", "phase", "total_assets", "done_assets", "migrated", "skipped", "current_repo", "current_path", "repos": [...], "skipped_repos": [...], "error" }`。`phase` ∈ `enumerating` / `downloading` / `done` / `failed`；`repos` 项同迁移报告明细（`source_repo` / `target_repo` / `format` / `created` / `migrated_artifacts` / `skipped_artifacts`）；`error` 仅 `failed` 时非空。任务为**进程内、有界、不落库**——服务器重启即丢失，靠迁移幂等重跑恢复（见 ADR-0019）。
-- **列表响应**（`jobs`）：`[{ "job_id", "phase", "total_assets", "done_assets", "migrated", "skipped", "current_repo" }]`，按登记时序。
+- **进度响应**（`jobs/{id}`）：`{ "job_id", "phase", "total_assets", "done_assets", "migrated", "skipped", "current_repo", "current_path", "paused", "repos": [...], "skipped_repos": [...], "error" }`。`phase` ∈ `enumerating` / `downloading` / `paused` / `cancelled` / `done` / `failed`；`paused` 为暂停态布尔（FR-91，暂停期间为真）；`repos` 项同迁移报告明细（`source_repo` / `target_repo` / `format` / `created` / `migrated_artifacts` / `skipped_artifacts`）；`error` 仅 `failed` 时非空。任务为**进程内、有界、不落库**——服务器重启即丢失，靠迁移幂等重跑恢复（见 ADR-0019）。
+- **列表响应**（`jobs`）：`[{ "job_id", "phase", "total_assets", "done_assets", "migrated", "skipped", "current_repo", "paused" }]`，按登记时序。
+- **错误**：`401` 未认证；`403` 非管理员；`404` 未知 `job_id`（含已被淘汰的旧任务）。
+
+### Nexus 迁移任务控制（取消 / 暂停 / 继续，FR-91）
+
+- **方法 / 路径**：`POST /api/v1/migrate/jobs/{id}/cancel`、`POST /api/v1/migrate/jobs/{id}/pause`、`POST /api/v1/migrate/jobs/{id}/resume`。无请求体。仅管理员可调用。
+- **行为**：对在线拉取（FR-82/83）异步任务做协作式生命周期控制——后台循环在**下一个 asset 边界**响应信号（正在下载的单个 asset 跑完再停）。`cancel`：停止后续搬运、任务标 `cancelled`（**不算失败**，已搬运的制品保留）；`pause`：后台循环挂起、不再推进、进度 `paused` 置真、`phase` 置 `paused`；`resume`：唤醒挂起的循环恢复搬运。
+- **响应**：`200 OK`，无响应体。对**已结束**任务（`done` / `failed` / `cancelled`）的控制为**幂等空操作**（不报错、不改终态）；`pause` 对已取消任务亦为空操作。
 - **错误**：`401` 未认证；`403` 非管理员；`404` 未知 `job_id`（含已被淘汰的旧任务）。
 
 ### 检查在线更新（仅 Admin，FR-85）
