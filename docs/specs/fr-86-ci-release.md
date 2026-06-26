@@ -122,4 +122,4 @@ push `master` 的 prerelease 版本串：
 
 - **真 CI 未验**：本仓库本地无法跑 GitHub Actions，所有运行期正确性（runner 镜像可用性、action 版本兼容、`aarch64-apple-darwin` 在 `macos-14` 原生编译）待用户 push 后由真 CI 确认。`dtolnay/rust-toolchain` / `pnpm/action-setup` / `softprops/action-gh-release` 等第三方 action 的具体行为以其真实执行为准。
 - **VERSION 文件漂移（非本功能范围）**：根 `VERSION` 文件为 `0.1.0`，与二进制实际注入的 `Cargo.toml` `0.3.0` 不一致；clap `version` 用的是 `CARGO_PKG_VERSION`（`Cargo.toml`），`VERSION` 文件未被代码消费。CONTRIBUTING §8 仍称「版本号唯一来源是根 VERSION 文件」，与实际不符。本流水线以 `Cargo.toml` 为版本来源（与二进制一致），`VERSION` 文件的清理 / 对齐另行处置，不在 FR-86 内。
-- **prerelease 滚动 tag `dev`**：用固定 tag `dev` 滚动覆盖快照，依赖 `softprops/action-gh-release` 的覆盖能力；若需保留历史快照需另设策略，本期只保留「最新开发版」。
+- **prerelease 滚动 tag `dev`**：用固定 tag `dev` 滚动覆盖快照，只保留「最新开发版」。因快照资产名内嵌 `{run_number}+{sha}`、各次不同，`action-gh-release` 仅追加不删旧资产会堆积；故发布前显式 `gh release delete dev --cleanup-tag`（仅 prerelease 渠道）删旧 dev 预发布及其 tag，使每次发布为只含当前快照的全新 dev 预发布。正式 `v*` tag 渠道不删、保留历史正式版。若日后需保留历史开发版快照需另设策略。

@@ -161,6 +161,18 @@ jobs:
           pattern: asset-*
           merge-multiple: true
 
+      # 清理旧的 dev 滚动预发布（仅 prerelease 渠道）：每次推 master 的快照资产名内嵌
+      # {run_number}+{sha}、各次不同，若不先删旧 dev 预发布，action-gh-release 只会把新资产
+      # 追加进去、旧资产永不清理而堆积。故发布前删掉旧 dev 预发布及其 tag，让本次发布为
+      # 只含当前快照的全新 dev 预发布（正式 v* tag 渠道不删、保留历史正式版）。
+      - name: 清理旧 dev 预发布（避免资产堆积）
+        if: needs.prepare.outputs.prerelease == 'true'
+        shell: bash
+        run: |
+          gh release delete dev --yes --cleanup-tag --repo "${GITHUB_REPOSITORY}" 2>/dev/null || true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       # 发布为 GitHub Release：仓库坐标用内置 github.repository（不硬编码），
       # 凭据用内置 GITHUB_TOKEN。prerelease 走滚动 tag dev、正式走 v* tag。
       - name: 发布 GitHub Release
