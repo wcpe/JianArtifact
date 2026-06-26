@@ -1,0 +1,177 @@
+# 发布工作流（FR-86）：
+# - push master ⇒ prerelease（开发版快照，滚动 tag `dev`，版本 {cargo版本}-dev.{run_number}+{shortsha}）
+# - push tag `v*` ⇒ 正式 Release（版本取 tag 去前导 v）
+# 三目标各用原生 runner 编译（免交叉编译），产出按命名契约重命名的二进制 + 每资产一份 .sha256。
+# 资产命名契约（FR-85 消费）：jianartifact-{version}-{target}{ext} 及其 .sha256
+#   {ext}：Windows 为 .exe，Linux / macOS 为空。
+name: Release
+
+# 触发：push 到 master（出 prerelease），或 push v* tag（出正式 Release）。
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+
+# 并发控制：同一 ref 串行，避免并发发布相互覆盖资产。
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+# 仅授予写 Release 所需的最小权限；凭据用内置 GITHUB_TOKEN，不入库任何密钥。
+permissions:
+  contents: write
+
+jobs:
+  # 第一步：统一推导版本号与发布渠道参数，供后续矩阵与发布步骤复用（单一真源）。
+  prepare:
+    name: 推导版本与发布渠道
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 计算版本与渠道
+        id: meta
+        shell: bash
+        run: |
+          # 从 Cargo.toml 读取 version（二进制经 clap version 由 CARGO_PKG_VERSION 注入，二者一致）。
+          cargo_version=$(grep -m1 '^version' Cargo.toml | sed -E 's/version *= *"([^"]+)".*/\1/')
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            # 正式 Release：版本取 tag 去前导 v，发布 tag 即该 tag，非预发布。
+            tag="${GITHUB_REF#refs/tags/}"
+            version="${tag#v}"
+            prerelease="false"
+          else
+            # 开发版快照：版本 {cargo版本}-dev.{run_number}+{shortsha}，滚动 tag dev，预发布。
+            short_sha="${GITHUB_SHA:0:7}"
+            version="${cargo_version}-dev.${GITHUB_RUN_NUMBER}+${short_sha}"
+            tag="dev"
+            prerelease="true"
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"
+
+  # 第二步：三目标矩阵各自原生 runner 编译，产出按命名契约重命名的二进制 + .sha256，上传为构件。
+  build:
+    name: 构建 ${{ matrix.target }}
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x86_64：原生 ubuntu，无扩展名。
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            ext: ''
+          # Windows x86_64（MSVC）：原生 windows，扩展名 .exe。
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            ext: '.exe'
+          # macOS arm64（Apple Silicon）：原生 macos-14（Apple Silicon runner），无扩展名。
+          - target: aarch64-apple-darwin
+            runner: macos-14
+            ext: ''
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: 缓存 Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: 安装前端依赖
+        run: pnpm -C frontend install --frozen-lockfile
+
+      # 先建前端，产出 frontend/dist 供 rust-embed 嵌入（构建顺序硬约束）。
+      - name: 构建前端
+        run: pnpm -C frontend build
+
+      # 默认特性发布构建（不启用 s3，守单一二进制零外部运行时依赖）。
+      - name: 编译 release 二进制
+        run: cargo build --release --target ${{ matrix.target }}
+
+      # 按命名契约重命名二进制 + 生成 .sha256（裸 64 位十六进制串，不带文件名）。
+      # 用 bash（windows runner 也用 git bash）统一处理三平台路径与哈希工具差异。
+      - name: 打包资产与校验和
+        id: pack
+        shell: bash
+        run: |
+          version="${{ needs.prepare.outputs.version }}"
+          target="${{ matrix.target }}"
+          ext="${{ matrix.ext }}"
+          # cargo 产物路径：target/{triple}/release/jianartifact{ext}
+          src="target/${target}/release/jianartifact${ext}"
+          asset="jianartifact-${version}-${target}${ext}"
+          mkdir -p dist
+          cp "$src" "dist/${asset}"
+          # 计算 sha256：Linux 用 sha256sum，macOS 用 shasum，统一取首列裸哈希。
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha=$(sha256sum "dist/${asset}" | awk '{print $1}')
+          else
+            sha=$(shasum -a 256 "dist/${asset}" | awk '{print $1}')
+          fi
+          printf '%s' "$sha" > "dist/${asset}.sha256"
+          echo "asset=${asset}" >> "$GITHUB_OUTPUT"
+
+      # 上传该目标的两份资产为工作流构件，交由后续 publish job 汇总发布。
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: asset-${{ matrix.target }}
+          path: |
+            dist/${{ steps.pack.outputs.asset }}
+            dist/${{ steps.pack.outputs.asset }}.sha256
+          if-no-files-found: error
+
+  # 第三步：汇总三目标资产，按渠道发布为 GitHub Release（prerelease 或正式）。
+  publish:
+    name: 发布 Release
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    steps:
+      # 下载全部目标构件到 dist/（每个构件解包到以其 name 命名的子目录）。
+      - name: 下载全部构建产物
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: asset-*
+          merge-multiple: true
+
+      # 发布为 GitHub Release：仓库坐标用内置 github.repository（不硬编码），
+      # 凭据用内置 GITHUB_TOKEN。prerelease 走滚动 tag dev、正式走 v* tag。
+      - name: 发布 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          name: ${{ needs.prepare.outputs.version }}
+          prerelease: ${{ needs.prepare.outputs.prerelease }}
+          # prerelease 用滚动 tag dev：每次推 master 覆盖更新同一预发布。
+          make_latest: ${{ needs.prepare.outputs.prerelease == 'false' }}
+          files: dist/*
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

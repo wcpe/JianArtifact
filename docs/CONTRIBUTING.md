@@ -88,6 +88,20 @@
 
 版本号唯一来源是根 `VERSION` 文件，构建把它注入单一可执行二进制，恒一致。
 
+### 8.1 发布流水线（FR-86）
+
+GitHub Actions 实现两条流水线，触发条件与产出渠道如下：
+
+- **质量门**（`.github/workflows/ci.yml`）：push / PR 到 `master` 触发，跑前端构建 → 后端 `cargo fmt --check` / `cargo clippy --all-targets -- -D warnings` / `cargo test`；依赖安全审计（`cargo audit` / `pnpm audit`）作独立非阻断 job。**构建顺序硬约束**：先 `pnpm -C frontend build` 产出 `frontend/dist`，再编译 / clippy / test 后端（rust-embed 编译期嵌入）。
+- **发布**（`.github/workflows/release.yml`）：
+  - **push `master`** ⇒ **prerelease**（开发版快照，滚动 tag `dev`、标记 prerelease），版本约定 `{Cargo.toml 版本}-dev.{run_number}+{shortsha}`（如 `0.3.0-dev.42+1a2b3c4`）。
+  - **push tag `v*`** ⇒ **正式 Release**（非预发布），版本取 tag 去前导 `v`（`v0.3.0` → `0.3.0`）。
+  - 三目标各用原生 runner 编译（免交叉编译）：`x86_64-unknown-linux-gnu`（ubuntu-latest）、`x86_64-pc-windows-msvc`（windows-latest）、`aarch64-apple-darwin`（macos-14）。
+  - **资产命名契约**（FR-85 在线自更新消费）：每目标产出 `jianartifact-{version}-{target}{ext}` 及配套 `jianartifact-{version}-{target}{ext}.sha256`（裸 64 位十六进制哈希）；`{ext}` 在 Windows 为 `.exe`，Linux / macOS 为空。
+  - 仓库坐标用 Actions 内置 `github.repository`，凭据仅用内置 `GITHUB_TOKEN`，不入库任何密钥。
+
+> 说明：发布流水线读取 **`Cargo.toml` 的 `version`** 作为版本来源——它经 clap `version`（`CARGO_PKG_VERSION`）注入二进制，与运行时 `--version` 一致。流水线发布的版本号即以此为准。
+
 ## 9. 文档如何长期演进（本次会话之后）
 
 这些文档不是一次性产物，而是随项目活下去。每篇的演进方式不同：

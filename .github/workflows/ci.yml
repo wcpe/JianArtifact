@@ -1,0 +1,106 @@
+# 质量门工作流（FR-86）：push / PR 到 master 时跑前端构建 + 后端 fmt / clippy / test。
+# 构建顺序硬约束：必须先建前端（产出 frontend/dist），再编译 / clippy / test 后端——
+# rust-embed 在编译期读 frontend/dist，否则后端拿到的是占位空集，与发布产物不一致。
+name: CI
+
+# 触发：仅 push / PR 到 master。
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+# 并发控制：同一 ref 的新推送取消尚在运行的旧流水线，省额度。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # 主质量门：前端构建 + 后端 fmt / clippy / test。
+  quality-gate:
+    name: 质量门（fmt / clippy / test）
+    runs-on: ubuntu-latest
+    steps:
+      # 检出源码。
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      # 装 pnpm（前端包管理器，与 frontend/pnpm-lock.yaml lockfileVersion 9 对应 pnpm 9）。
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      # 装 Node，并按 pnpm lockfile 缓存依赖。
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      # 装 Rust stable，带 clippy / rustfmt 组件。
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      # 缓存 cargo 注册表与构建产物，加速后续运行。
+      - name: 缓存 Cargo
+        uses: Swatinem/rust-cache@v2
+
+      # 按 lockfile 严格安装前端依赖（lockfile 不一致即失败，防漂移）。
+      - name: 安装前端依赖
+        run: pnpm -C frontend install --frozen-lockfile
+
+      # 先建前端，产出 frontend/dist 供 rust-embed 编译期嵌入（构建顺序硬约束）。
+      - name: 构建前端
+        run: pnpm -C frontend build
+
+      # 格式检查：不符合 rustfmt 即失败。
+      - name: 检查格式（cargo fmt --check）
+        run: cargo fmt --check
+
+      # 静态检查：clippy 全目标，告警一律视为错误。
+      - name: 静态检查（cargo clippy）
+        run: cargo clippy --all-targets -- -D warnings
+
+      # 跑测试套件。
+      - name: 运行测试（cargo test）
+        run: cargo test
+
+  # 依赖安全审计：独立 job，不阻断主质量门（对齐 static-analysis.md「漏洞发现工具作入口」，
+  # 但不因上游公告波动阻断合并）。continue-on-error 使其失败仅告警、不挂红主流程。
+  security-audit:
+    name: 依赖安全审计（cargo audit / pnpm audit）
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@stable
+
+      # 安装并运行 cargo audit，扫描 Cargo.lock 中的已知漏洞依赖。
+      - name: 安装 cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: 运行 cargo audit
+        run: cargo audit
+
+      # 扫描前端依赖的已知漏洞（仅生产依赖）。
+      - name: 运行 pnpm audit
+        run: pnpm -C frontend audit --prod
