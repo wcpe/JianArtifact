@@ -12,7 +12,7 @@ use axum::{
     middleware,
     response::{IntoResponse, Response},
     routing::{get, post},
-    Json, Router,
+    Extension, Json, Router,
 };
 use serde_json::json;
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
@@ -42,6 +42,7 @@ mod groups;
 mod identity;
 mod metrics;
 mod migrate;
+mod migration_jobs;
 mod npm_routes;
 mod nuget_routes;
 mod oidc_routes;
@@ -71,6 +72,7 @@ pub use audit::{
 pub use cc_challenge::CcChallenger;
 pub use identity::resolve_identity;
 pub use metrics::{install_recorder, MetricsHandle};
+pub use migration_jobs::MigrationJobs;
 pub use oidc_routes::OidcFlowStore;
 pub use protection_state::{ProtectionSnapshot, ProtectionState};
 pub use rate_limit::RateLimiter;
@@ -336,6 +338,9 @@ impl Identity {
 
 /// 构建 axum 路由：挂健康检查、认证、用户、Token 端点与请求 ID、追踪、身份解析中间件。
 pub fn build_router(state: AppState) -> Router {
+    // 进程内迁移任务注册表（FR-83，ADR-0019）：随路由创建一份，经 Extension 注入迁移端点共享
+    let migration_jobs = Arc::new(MigrationJobs::default());
+
     // 管理 API 子路由，统一挂在 /api/v1 前缀下
     let api_v1 = Router::new()
         .route("/auth/login", post(auth_routes::login))
@@ -408,6 +413,8 @@ pub fn build_router(state: AppState) -> Router {
             "/migrate/nexus/online/migrate",
             post(migrate::migrate_nexus_online),
         )
+        .route("/migrate/jobs", get(migrate::migrate_nexus_jobs))
+        .route("/migrate/jobs/{id}", get(migrate::migrate_nexus_job))
         .route(
             "/repositories/{id}/acl",
             get(acl::list_acl).post(acl::create_acl),
@@ -487,6 +494,8 @@ pub fn build_router(state: AppState) -> Router {
         // 未匹配任何路由的请求回退到 SPA 入口（前端客户端路由 + 未构建时的 503 占位）
         .fallback(crate::web::spa_fallback)
         .with_state(state.clone())
+        // 迁移任务注册表注入（FR-83，ADR-0019）：异步在线拉取端点与进度查询端点共享之
+        .layer(Extension(migration_jobs))
         // 指标采集中间件（FR-32，ADR-0015）：置于最内层（最贴近 handler），观测真实 HTTP 维度
         // 与延迟；只做无锁原子观测，渲染仅在 /metrics 被抓取时发生。
         .layer(middleware::from_fn_with_state(

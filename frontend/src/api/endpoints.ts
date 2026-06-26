@@ -16,6 +16,8 @@ import type {
   GroupMemberView,
   GroupView,
   LoginResponse,
+  MigrationJobCreated,
+  MigrationJobSummary,
   MigrationReport,
   NexusMigrateRequest,
   NexusOfflinePreviewRequest,
@@ -23,7 +25,7 @@ import type {
   NexusRepoSummary,
   OfflineRepoSummary,
   OnlineMigrateRequest,
-  OnlineMigrationReport,
+  OnlinePullJob,
   Paginated,
   Permission,
   ProtectionAlertDto,
@@ -413,14 +415,25 @@ export function migrateNexusHosted(req: NexusMigrateRequest): Promise<MigrationR
   });
 }
 /**
- * 在线拉取迁移（FR-82）：按所选源仓库经 REST 枚举 + HTTP 下载同步制品，
- * 无需离线目录；仅 maven2 hosted 仓库会被拉取，非 maven / 非 hosted 进 skipped_repos。
+ * 在线拉取迁移（FR-82 / FR-83）：发起异步任务，立即返回任务句柄（job_id）；
+ * 实际搬运在后台运行，进度经 getMigrationJob 轮询。同步阶段失败（未选仓库 / 源不存在 /
+ * 凭据未配置 / 源不可达）仍同步返回错误。仅 maven2 hosted 仓库会被拉取。
  */
-export function migrateNexusOnline(req: OnlineMigrateRequest): Promise<OnlineMigrationReport> {
-  return request<OnlineMigrationReport>('/migrate/nexus/online/migrate', {
+export function migrateNexusOnline(req: OnlineMigrateRequest): Promise<MigrationJobCreated> {
+  return request<MigrationJobCreated>('/migrate/nexus/online/migrate', {
     method: 'POST',
     body: req,
   });
+}
+
+/** 查询某在线拉取任务的进度快照（未知 id 返回 404）。 */
+export function getMigrationJob(id: string): Promise<OnlinePullJob> {
+  return request<OnlinePullJob>(`/migrate/jobs/${encodeURIComponent(id)}`);
+}
+
+/** 列出活动 / 近期在线拉取任务（供客户端重连点选续看）。 */
+export function listMigrationJobs(): Promise<MigrationJobSummary[]> {
+  return request<MigrationJobSummary[]>('/migrate/jobs');
 }
 
 /** 对制品路径逐段编码（保留 `/` 分隔，避免破坏 catch-all 路径语义）。 */

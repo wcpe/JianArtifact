@@ -385,3 +385,70 @@ async fn 在线迁移管理员空仓库列表返回_400() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body}");
 }
+
+/// 构造带可选认证头的 GET 请求。
+fn get_req(uri: &str, auth: Option<&str>) -> Request<Body> {
+    let mut builder = Request::builder().method("GET").uri(uri);
+    if let Some(a) = auth {
+        builder = builder.header("authorization", a);
+    }
+    builder.body(Body::empty()).unwrap()
+}
+
+#[tokio::test]
+async fn 匿名查询迁移任务返回_401() {
+    let (state, _dir) = 测试用状态().await;
+    let (status, _) = send(
+        build_router(state),
+        get_req("/api/v1/migrate/jobs/any", None),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn 普通用户查询迁移任务返回_403() {
+    let (state, _dir) = 测试用状态().await;
+    let token = seed_and_login(&state, "user", "pw", Role::User).await;
+    let (status, _) = send(
+        build_router(state),
+        get_req("/api/v1/migrate/jobs/any", Some(&format!("Bearer {token}"))),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn 管理员查询未知迁移任务返回_404() {
+    let (state, _dir) = 测试用状态().await;
+    let token = seed_and_login(&state, "admin", "pw", Role::Admin).await;
+    let (status, _) = send(
+        build_router(state),
+        get_req(
+            "/api/v1/migrate/jobs/不存在",
+            Some(&format!("Bearer {token}")),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn 匿名列迁移任务返回_401() {
+    let (state, _dir) = 测试用状态().await;
+    let (status, _) = send(build_router(state), get_req("/api/v1/migrate/jobs", None)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn 管理员列迁移任务空表返回_200() {
+    let (state, _dir) = 测试用状态().await;
+    let token = seed_and_login(&state, "admin", "pw", Role::Admin).await;
+    let (status, body) = send(
+        build_router(state),
+        get_req("/api/v1/migrate/jobs", Some(&format!("Bearer {token}"))),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, json!([]));
+}

@@ -13,7 +13,7 @@ import type {
   MigrationReport,
   NexusRepoSummary,
   OfflineRepoSummary,
-  OnlineMigrationReport,
+  OnlinePullJob,
 } from '../api/types';
 
 /** 在 Provider 下渲染迁移页（含通知容器）。 */
@@ -36,7 +36,31 @@ const 在线仓库含maven: NexusRepoSummary[] = [
   { name: 'npm-hosted', format: 'npm', type: 'hosted', upstream_url: null },
 ];
 
-const 在线迁移报告: OnlineMigrationReport = {
+/** 任务进行中快照（downloading）：进度过半、含当前仓库 / 当前文件。 */
+const 任务进行中: OnlinePullJob = {
+  job_id: 'job-1',
+  phase: 'downloading',
+  total_assets: 7,
+  done_assets: 3,
+  migrated: 3,
+  skipped: 0,
+  current_repo: 'maven-releases',
+  current_path: 'com/example/app/1.0/app-1.0.jar',
+  repos: [],
+  skipped_repos: [],
+  error: null,
+};
+
+/** 任务终态快照（done）：含每仓库明细与整仓跳过列表。 */
+const 任务完成: OnlinePullJob = {
+  job_id: 'job-1',
+  phase: 'done',
+  total_assets: 7,
+  done_assets: 7,
+  migrated: 7,
+  skipped: 0,
+  current_repo: null,
+  current_path: null,
   repos: [
     {
       source_repo: 'maven-releases',
@@ -48,6 +72,7 @@ const 在线迁移报告: OnlineMigrationReport = {
     },
   ],
   skipped_repos: ['npm-hosted'],
+  error: null,
 };
 
 const 离线仓库: OfflineRepoSummary[] = [
@@ -75,7 +100,12 @@ const 迁移报告: MigrationReport = {
 };
 
 describe('MigrationPage', () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    // 清理在线任务存档，避免跨用例触发重连副作用。
+    localStorage.clear();
+  });
 
   it('在线预览：填源地址后枚举仓库并展示列表', async () => {
     const spy = vi.spyOn(api, 'previewNexusRepositories').mockResolvedValue(在线仓库);
@@ -150,9 +180,14 @@ describe('MigrationPage', () => {
     expect(screen.getByText('npm-hosted')).toBeInTheDocument();
   });
 
-  it('在线拉取：勾选仓库并改名，按所选仓库发起请求并渲染报告', async () => {
+  it('在线拉取：发起异步任务后轮询进度，downloading→done 渲染队列进度与最终报告', async () => {
     vi.spyOn(api, 'previewNexusRepositories').mockResolvedValue(在线仓库含maven);
-    const onlineSpy = vi.spyOn(api, 'migrateNexusOnline').mockResolvedValue(在线迁移报告);
+    const onlineSpy = vi.spyOn(api, 'migrateNexusOnline').mockResolvedValue({ job_id: 'job-1' });
+    // 任务进度顺序：首次返回 downloading，下一周期返回 done。
+    const jobSpy = vi
+      .spyOn(api, 'getMigrationJob')
+      .mockResolvedValueOnce(任务进行中)
+      .mockResolvedValue(任务完成);
     const user = userEvent.setup();
     renderPage();
 
@@ -168,7 +203,7 @@ describe('MigrationPage', () => {
       screen.getByRole('textbox', { name: 'maven-releases 目标仓库名' }),
       'maven-mirror',
     );
-    // 执行在线拉取
+    // 发起在线拉取（异步，立即返回 job_id）
     await user.click(screen.getByRole('button', { name: '执行在线拉取' }));
 
     await waitFor(() => expect(onlineSpy).toHaveBeenCalled());
@@ -178,21 +213,30 @@ describe('MigrationPage', () => {
       auth_ref: undefined,
       repositories: [{ source: 'maven-releases', target: 'maven-mirror' }],
     });
+    // job_id 存档供重连
+    expect(localStorage.getItem('jian.migrate.online.jobId')).toBe('job-1');
 
-    // 报告展示源→目标与已迁制品数
-    await waitFor(() =>
-      expect(screen.getByText('maven-releases', { selector: 'td' })).toBeInTheDocument(),
-    );
+    // 首次轮询（发起后立即拉一次）：展示进行中队列（当前仓库 / 当前文件 / 进度计数）
+    await waitFor(() => expect(jobSpy).toHaveBeenCalledWith('job-1'));
+    await waitFor(() => expect(screen.getByText('下载搬运中')).toBeInTheDocument());
+    expect(screen.getByText(/com\/example\/app\/1\.0\/app-1\.0\.jar/)).toBeInTheDocument();
+    expect(screen.getByText(/进度 3 \/ 7/)).toBeInTheDocument();
+
+    // 经下一个轮询周期（约 1.5s）转入终态 done，展示最终报告
+    await waitFor(() => expect(screen.getByText('已完成')).toBeInTheDocument(), { timeout: 3000 });
     const reportTable = screen.getByText('maven-releases', { selector: 'td' }).closest('table')!;
     expect(within(reportTable).getByText('maven-mirror')).toBeInTheDocument();
     expect(within(reportTable).getByText('7')).toBeInTheDocument();
     // 整仓跳过项以徽章呈现
     expect(screen.getByText('npm-hosted')).toBeInTheDocument();
+    // 终态后清理存档
+    expect(localStorage.getItem('jian.migrate.online.jobId')).toBeNull();
   });
 
   it('在线拉取：未填目标改名时省略 target（与源同名）', async () => {
     vi.spyOn(api, 'previewNexusRepositories').mockResolvedValue(在线仓库含maven);
-    const onlineSpy = vi.spyOn(api, 'migrateNexusOnline').mockResolvedValue(在线迁移报告);
+    const onlineSpy = vi.spyOn(api, 'migrateNexusOnline').mockResolvedValue({ job_id: 'job-2' });
+    vi.spyOn(api, 'getMigrationJob').mockResolvedValue({ ...任务完成, job_id: 'job-2' });
     const user = userEvent.setup();
     renderPage();
 
@@ -202,7 +246,7 @@ describe('MigrationPage', () => {
 
     await user.click(screen.getByRole('button', { name: '下一步：勾选执行' }));
     await user.click(screen.getByRole('checkbox', { name: /maven-releases/ }));
-    // 不填目标名，直接执行
+    // 不填目标名，直接发起
     await user.click(screen.getByRole('button', { name: '执行在线拉取' }));
 
     await waitFor(() => expect(onlineSpy).toHaveBeenCalled());
@@ -211,6 +255,30 @@ describe('MigrationPage', () => {
       auth_ref: undefined,
       repositories: [{ source: 'maven-releases' }],
     });
+  });
+
+  it('客户端重连：页面加载时存档 job_id 仍进行中则恢复轮询续看', async () => {
+    // 预置存档：模拟刷新页面前已发起的任务。
+    localStorage.setItem('jian.migrate.online.jobId', 'job-9');
+    const jobSpy = vi
+      .spyOn(api, 'getMigrationJob')
+      .mockResolvedValue({ ...任务进行中, job_id: 'job-9' });
+    renderPage();
+
+    // 加载即拉取存档任务并切到报告步骤、展示进行中队列
+    await waitFor(() => expect(jobSpy).toHaveBeenCalledWith('job-9'));
+    await waitFor(() => expect(screen.getByText('下载搬运中')).toBeInTheDocument());
+    expect(screen.getByText(/进度 3 \/ 7/)).toBeInTheDocument();
+  });
+
+  it('客户端重连：存档 job_id 已失效（404）则清理存档', async () => {
+    localStorage.setItem('jian.migrate.online.jobId', 'job-gone');
+    vi.spyOn(api, 'getMigrationJob').mockRejectedValue(
+      new ApiError(404, 'not_found', '任务不存在'),
+    );
+    renderPage();
+
+    await waitFor(() => expect(localStorage.getItem('jian.migrate.online.jobId')).toBeNull());
   });
 
   it('预览失败展示错误文案', async () => {

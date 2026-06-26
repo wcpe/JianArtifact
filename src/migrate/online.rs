@@ -80,10 +80,55 @@ pub struct OnlineMigrationReport {
     pub skipped_repos: Vec<String>,
 }
 
-/// 执行 Nexus 在线拉取迁移：逐选中仓库经 REST 枚举 + HTTP 下载搬运 Maven hosted 制品。
-///
-/// `base_url` 为源 Nexus 基址；`credential` 为可选凭据（匿名源可不给）；`selections` 为已选源仓库
-/// 及其目标仓库名；`max_size` 为单制品上传上限。仅 `maven2` + `hosted` 参与，其余计入 `skipped_repos`。
+/// 在线拉取任务的阶段（FR-83）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OnlinePullPhase {
+    /// 正在枚举某仓库的 asset 列表。
+    #[default]
+    Enumerating,
+    /// 正在下载 / 落地 asset。
+    Downloading,
+    /// 任务成功完成。
+    Done,
+    /// 任务失败（枚举 / 鉴权 / 网络等致命错误）。
+    Failed,
+}
+
+/// 在线拉取任务的进度快照（FR-83）：任务执行期间持续更新，`GET jobs/{id}` 直接序列化之。
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct OnlinePullProgress {
+    /// 当前阶段。
+    pub phase: OnlinePullPhase,
+    /// 已枚举到的待搬运 asset 总数（各仓库枚举完成后累加）。
+    pub total_assets: usize,
+    /// 已处理 asset 数（migrated + skipped）。
+    pub done_assets: usize,
+    /// 成功搬运数。
+    pub migrated: usize,
+    /// 跳过 / 失败数。
+    pub skipped: usize,
+    /// 当前正在处理的源仓库名。
+    pub current_repo: Option<String>,
+    /// 当前正在处理的 asset 路径。
+    pub current_path: Option<String>,
+    /// 各仓库完成结果明细。
+    pub repos: Vec<OnlineRepoMigrationOutcome>,
+    /// 因非 maven hosted 整体跳过的源仓库名。
+    pub skipped_repos: Vec<String>,
+    /// 失败原因（`phase == failed` 时）。
+    pub error: Option<String>,
+}
+
+/// 取进度锁（容忍中毒：恢复内部数据继续，不让一次 panic 永久毒死进度查询）。
+fn lock_progress(
+    p: &std::sync::Mutex<OnlinePullProgress>,
+) -> std::sync::MutexGuard<'_, OnlinePullProgress> {
+    p.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// （无进度上报的便捷入口）执行在线拉取迁移——内部用一次性进度委托
+/// [`migrate_online_with_progress`]；同步调用 / 测试用。仅 `maven2` + `hosted` 参与。
 #[allow(clippy::too_many_arguments)]
 pub async fn migrate_online_repositories<C, S, U>(
     client: &C,
@@ -94,6 +139,34 @@ pub async fn migrate_online_repositories<C, S, U>(
     credential: Option<&NexusCredential>,
     selections: &[OnlinePullSelection],
     max_size: Option<u64>,
+) -> Result<OnlineMigrationReport, MigrateError>
+where
+    C: NexusClient,
+    S: BlobStore,
+    U: Upstream,
+{
+    let progress = std::sync::Mutex::new(OnlinePullProgress::default());
+    migrate_online_with_progress(
+        client, meta, artifacts, formats, base_url, credential, selections, max_size, &progress,
+    )
+    .await
+}
+
+/// 执行 Nexus 在线拉取迁移并持续上报进度（FR-83，异步任务用）。
+///
+/// 形参同上，另加 `progress` 进度共享态（任务执行期间持续更新，供查询端点读取）。仅 `maven2` +
+/// `hosted` 参与，其余计入 `skipped_repos`。进度锁临界区只更新内存态、不持锁做 IO（锁外做 IO）。
+#[allow(clippy::too_many_arguments)]
+pub async fn migrate_online_with_progress<C, S, U>(
+    client: &C,
+    meta: &MetaStore,
+    artifacts: &ArtifactService<S, U>,
+    formats: &FormatRegistry,
+    base_url: &str,
+    credential: Option<&NexusCredential>,
+    selections: &[OnlinePullSelection],
+    max_size: Option<u64>,
+    progress: &std::sync::Mutex<OnlinePullProgress>,
 ) -> Result<OnlineMigrationReport, MigrateError>
 where
     C: NexusClient,
@@ -117,14 +190,22 @@ where
                 "非 Maven hosted，跳过在线拉取迁移"
             );
             report.skipped_repos.push(src.name.clone());
+            lock_progress(progress).skipped_repos.push(src.name.clone());
             continue;
+        }
+
+        {
+            let mut p = lock_progress(progress);
+            p.phase = OnlinePullPhase::Enumerating;
+            p.current_repo = Some(src.name.clone());
+            p.current_path = None;
         }
 
         // 建 / 复用目标 hosted 仓库（名取 target_repo，允许与源不同名）
         let (repo, created) = ensure_hosted_repo(meta, &sel.target_repo, "maven").await?;
 
         let (migrated, skipped) = pull_repo_assets(
-            client, artifacts, formats, base, &src.name, &repo, credential, max_size,
+            client, artifacts, formats, base, &src.name, &repo, credential, max_size, progress,
         )
         .await?;
 
@@ -133,20 +214,24 @@ where
             新建 = created, 已搬运 = migrated, 已跳过 = skipped,
             "Maven hosted 仓库在线拉取迁移完成"
         );
-        report.repos.push(OnlineRepoMigrationOutcome {
+        let outcome = OnlineRepoMigrationOutcome {
             source_repo: src.name.clone(),
             target_repo: sel.target_repo.clone(),
             format: "maven".to_string(),
             created,
             migrated_artifacts: migrated,
             skipped_artifacts: skipped,
-        });
+        };
+        lock_progress(progress).repos.push(outcome.clone());
+        report.repos.push(outcome);
     }
 
     Ok(report)
 }
 
-/// 分页枚举某源仓库的 components 并逐 asset 下载搬运，返回 (成功数, 跳过数)。
+/// 枚举某源仓库的全部 components（已知总数）再逐 asset 下载搬运，边搬边上报进度。
+///
+/// 返回 (成功数, 跳过数)。枚举失败向上冒泡（整仓无法继续）；单 asset 失败计跳过、不中断整批。
 #[allow(clippy::too_many_arguments)]
 async fn pull_repo_assets<C, S, U>(
     client: &C,
@@ -157,6 +242,7 @@ async fn pull_repo_assets<C, S, U>(
     target_repo: &RepositoryRecord,
     credential: Option<&NexusCredential>,
     max_size: Option<u64>,
+    progress: &std::sync::Mutex<OnlinePullProgress>,
 ) -> Result<(usize, usize), MigrateError>
 where
     C: NexusClient,
@@ -169,39 +255,56 @@ where
         return Ok((0, 0));
     };
 
-    let mut migrated = 0usize;
-    let mut skipped = 0usize;
+    // 阶段1：枚举该仓库全部 asset（仅元数据，得知总数，便于进度条）
+    let mut assets: Vec<NexusAsset> = Vec::new();
     let mut token: Option<String> = None;
     loop {
-        // 枚举失败（鉴权 / 网络 / 解析）向上冒泡——整仓拉取无法继续
         let body = client
             .fetch_components(base_url, source_repo, token.as_deref(), credential)
             .await?;
         let page = parse_components(&body)?;
-
-        for asset in &page.assets {
-            match pull_one_asset(
-                client,
-                artifacts,
-                format,
-                target_repo,
-                asset,
-                credential,
-                max_size,
-            )
-            .await
-            {
-                Ok(()) => migrated += 1,
-                // 单 asset 失败已在内部记 WARN / INFO，计跳过、不中断整批
-                Err(()) => skipped += 1,
-            }
-        }
-
+        assets.extend(page.assets);
         match page.continuation_token {
             Some(t) => token = Some(t),
             None => break,
         }
     }
+
+    {
+        let mut p = lock_progress(progress);
+        p.total_assets += assets.len();
+        p.phase = OnlinePullPhase::Downloading;
+    }
+
+    // 阶段2：逐 asset 下载 + 落地，边搬边更新进度（下载 / 落盘在锁外）
+    let mut migrated = 0usize;
+    let mut skipped = 0usize;
+    for asset in &assets {
+        lock_progress(progress).current_path = Some(asset.path.clone());
+
+        let ok = pull_one_asset(
+            client,
+            artifacts,
+            format,
+            target_repo,
+            asset,
+            credential,
+            max_size,
+        )
+        .await
+        .is_ok();
+
+        let mut p = lock_progress(progress);
+        if ok {
+            migrated += 1;
+            p.migrated += 1;
+        } else {
+            skipped += 1;
+            p.skipped += 1;
+        }
+        p.done_assets += 1;
+    }
+
     Ok((migrated, skipped))
 }
 
@@ -710,5 +813,79 @@ mod tests {
         assert_eq!(report.repos[0].migrated_artifacts, 1);
         assert_eq!(report.repos[0].skipped_artifacts, 0);
         assert_eq!(*client.count.lock().unwrap(), 3);
+    }
+
+    #[tokio::test]
+    async fn 进度随枚举与下载推进() {
+        let (meta, svc, formats, _d) = 新建().await;
+        let u1 = "https://nx/repository/r3d/a.jar";
+        let u2 = "https://nx/repository/r3d/b.jar";
+        let bad = "https://nx/repository/r3d/missing.jar";
+        let page = format!(
+            r#"{{ "items": [ {{ "assets": [
+                {{ "path": "a/1.0/a-1.0.jar", "downloadUrl": "{u1}", "checksum": {{}} }},
+                {{ "path": "b/1.0/b-1.0.jar", "downloadUrl": "{u2}", "checksum": {{}} }},
+                {{ "path": "c/1.0/c-1.0.jar", "downloadUrl": "{bad}", "checksum": {{}} }}
+            ]}} ], "continuationToken": null }}"#
+        );
+        let client = MockOnline {
+            pages: vec![page],
+            assets: HashMap::from([
+                (u1.to_string(), b"a".to_vec()),
+                (u2.to_string(), b"b".to_vec()),
+            ]),
+        };
+        let progress = std::sync::Mutex::new(OnlinePullProgress::default());
+        let report = migrate_online_with_progress(
+            &client,
+            &meta,
+            &svc,
+            &formats,
+            "https://nx",
+            None,
+            &[sel(src("r3d", "maven2", "hosted"), "r3d")],
+            None,
+            &progress,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(report.repos[0].migrated_artifacts, 2);
+        assert_eq!(report.repos[0].skipped_artifacts, 1);
+        // 进度终态：总 3、完成 3（2 迁 + 1 跳）；Done 由 api 任务在返回后置，故此处仍为 downloading
+        let p = progress.lock().unwrap();
+        assert_eq!(p.total_assets, 3);
+        assert_eq!(p.done_assets, 3);
+        assert_eq!(p.migrated, 2);
+        assert_eq!(p.skipped, 1);
+        assert_eq!(p.phase, OnlinePullPhase::Downloading);
+        assert_eq!(p.repos.len(), 1);
+        assert_eq!(p.current_repo.as_deref(), Some("r3d"));
+    }
+
+    #[tokio::test]
+    async fn 非maven仓库计入进度的skipped_repos() {
+        let (meta, svc, formats, _d) = 新建().await;
+        let client = MockOnline {
+            pages: vec![],
+            assets: HashMap::new(),
+        };
+        let progress = std::sync::Mutex::new(OnlinePullProgress::default());
+        let _ = migrate_online_with_progress(
+            &client,
+            &meta,
+            &svc,
+            &formats,
+            "https://nx",
+            None,
+            &[sel(src("npm-release", "npm", "hosted"), "npm-release")],
+            None,
+            &progress,
+        )
+        .await
+        .unwrap();
+        let p = progress.lock().unwrap();
+        assert!(p.skipped_repos.contains(&"npm-release".to_string()));
+        assert_eq!(p.total_assets, 0);
     }
 }

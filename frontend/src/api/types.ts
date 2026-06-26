@@ -464,3 +464,56 @@ export interface OnlineMigrationReport {
   repos: OnlineRepoMigrationOutcome[];
   skipped_repos: string[];
 }
+
+// —— Nexus 在线拉取异步任务（FR-83，对接后端异步任务 + 进度查询） ——
+
+/**
+ * 发起在线拉取迁移后立即返回的任务句柄（202 Accepted）。
+ * 严格对齐后端 POST /migrate/nexus/online/migrate 的 202 响应体。
+ */
+export interface MigrationJobCreated {
+  job_id: string;
+}
+
+/**
+ * 在线拉取任务的阶段。
+ * - enumerating：经 REST 枚举待迁移资产；
+ * - downloading：逐个 HTTP 下载并搬运；
+ * - done：全部完成；
+ * - failed：任务失败（详见 error）。
+ * 严格对齐后端 phase 字段取值。
+ */
+export type OnlinePullPhase = 'enumerating' | 'downloading' | 'done' | 'failed';
+
+/**
+ * 在线拉取任务进度快照（GET /migrate/jobs/{id}）。
+ * `repos` / `skipped_repos` / `error` 在终态（done / failed）时填充。
+ * 严格对齐后端任务进度快照结构。
+ */
+export interface OnlinePullJob {
+  job_id: string;
+  phase: OnlinePullPhase;
+  total_assets: number;
+  done_assets: number;
+  migrated: number;
+  skipped: number;
+  current_repo: string | null;
+  current_path: string | null;
+  repos: OnlineRepoMigrationOutcome[];
+  skipped_repos: string[];
+  error: string | null;
+}
+
+/**
+ * 活动 / 近期任务列表项（GET /migrate/jobs，供客户端重连点选）。
+ * 严格对齐后端任务列表项结构。
+ */
+export interface MigrationJobSummary {
+  job_id: string;
+  phase: OnlinePullPhase;
+  total_assets: number;
+  done_assets: number;
+  migrated: number;
+  skipped: number;
+  current_repo: string | null;
+}

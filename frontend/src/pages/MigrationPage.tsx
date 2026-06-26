@@ -11,7 +11,7 @@
 // 凭据脱敏（红线）：源 Nexus 凭据仅以「引用名 auth_ref」形式输入，用口令型输入框承载、
 // 真值在后端 env 解析，前端绝不回显明文、不持久化。
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Stack,
   Title,
@@ -29,13 +29,15 @@ import {
   Loader,
   Center,
   Alert,
+  Progress,
 } from '@mantine/core';
 import * as api from '../api/endpoints';
+import { ApiError } from '../api/client';
 import type {
   MigrationReport,
   NexusRepoSummary,
   OfflineRepoSummary,
-  OnlineMigrationReport,
+  OnlinePullJob,
 } from '../api/types';
 import { errorMessage } from '../lib/format';
 import { ErrorAlert } from '../components/ErrorAlert';
@@ -74,6 +76,31 @@ function fromOffline(repos: OfflineRepoSummary[]): PreviewRow[] {
   }));
 }
 
+/** 在线拉取任务轮询间隔（毫秒）。 */
+const ONLINE_POLL_INTERVAL_MS = 1500;
+
+/** 在线拉取任务 job_id 的 localStorage 键名（供客户端重连续看）。 */
+const ONLINE_JOB_STORAGE_KEY = 'jian.migrate.online.jobId';
+
+/** 任务是否处于终态（done / failed）：终态即停止轮询并展示结果。 */
+function isTerminalPhase(phase: OnlinePullJob['phase']): boolean {
+  return phase === 'done' || phase === 'failed';
+}
+
+/** 阶段中文标签。 */
+function phaseLabel(phase: OnlinePullJob['phase']): string {
+  switch (phase) {
+    case 'enumerating':
+      return '枚举资产中';
+    case 'downloading':
+      return '下载搬运中';
+    case 'done':
+      return '已完成';
+    case 'failed':
+      return '失败';
+  }
+}
+
 /** Nexus 迁移管理页面。 */
 export function MigrationPage() {
   const [active, setActive] = useState(0);
@@ -99,9 +126,12 @@ export function MigrationPage() {
   const [migrateError, setMigrateError] = useState<string | null>(null);
 
   // —— 报告（步骤 ③）——
-  // 离线目录报告与在线拉取报告结构不同，分开持有，按上次执行方式择一展示。
+  // 离线目录报告同步返回；在线拉取改为异步任务，以进度快照承载（含终态报告）。
   const [report, setReport] = useState<MigrationReport | null>(null);
-  const [onlineReport, setOnlineReport] = useState<OnlineMigrationReport | null>(null);
+  // 在线拉取任务的当前进度快照（轮询刷新；null 表示尚无在线任务）。
+  const [onlineJob, setOnlineJob] = useState<OnlinePullJob | null>(null);
+  // 正在轮询的任务 id（非 null 即开启轮询；终态或清理时置 null）。
+  const [pollingJobId, setPollingJobId] = useState<string | null>(null);
 
   /** auth_ref 为空白时按未提供处理（匿名源）。 */
   const authRefValue = authRef.trim() === '' ? undefined : authRef.trim();
@@ -161,7 +191,9 @@ export function MigrationPage() {
       const result =
         kind === 'proxy' ? await api.migrateNexusProxy(req) : await api.migrateNexusHosted(req);
       setReport(result);
-      setOnlineReport(null);
+      // 离线目录执行时清理在线任务态，报告区只显示离线结果。
+      setOnlineJob(null);
+      setPollingJobId(null);
       notifySuccess('迁移已完成，请查看报告');
       setActive(2);
     } catch (err) {
@@ -171,7 +203,11 @@ export function MigrationPage() {
     }
   };
 
-  /** 执行在线拉取迁移：把所选仓库（含改名）映射为请求，调用在线端点并进入步骤 ③。 */
+  /**
+   * 发起在线拉取迁移（异步）：把所选仓库（含改名）映射为请求，调用在线端点得 job_id；
+   * 立即把 job_id 存档（供重连）、开启轮询并进入步骤 ③ 看进度队列。
+   * 同步阶段失败（未选仓库 / 源不存在 / 凭据未配置 / 源不可达）就地展示错误，不进入步骤 ③。
+   */
   const handleMigrateOnline = async () => {
     setMigrateError(null);
     setMigrating(true);
@@ -183,14 +219,17 @@ export function MigrationPage() {
           // 目标为空即与源同名：省略 target 字段交后端默认处理。
           return target === '' ? { source: row.name } : { source: row.name, target };
         });
-      const result = await api.migrateNexusOnline({
+      const { job_id } = await api.migrateNexusOnline({
         base_url: baseUrl.trim(),
         auth_ref: authRefValue,
         repositories,
       });
-      setOnlineReport(result);
+      // 存档 job_id（重连续看）；清理离线报告；以初始快照占位并开启轮询。
+      localStorage.setItem(ONLINE_JOB_STORAGE_KEY, job_id);
       setReport(null);
-      notifySuccess('迁移已完成，请查看报告');
+      setOnlineJob(null);
+      setPollingJobId(job_id);
+      notifySuccess('在线拉取任务已发起，正在导入');
       setActive(2);
     } catch (err) {
       setMigrateError(errorMessage(err));
@@ -198,6 +237,74 @@ export function MigrationPage() {
       setMigrating(false);
     }
   };
+
+  // 拉取一次任务进度快照：写入状态；终态则停止轮询并清存档；404 视为存档失效，清理。
+  const fetchJobRef = useRef<(id: string) => Promise<void>>(async () => {});
+  fetchJobRef.current = async (id: string) => {
+    try {
+      const job = await api.getMigrationJob(id);
+      setOnlineJob(job);
+      if (isTerminalPhase(job.phase)) {
+        setPollingJobId(null);
+        localStorage.removeItem(ONLINE_JOB_STORAGE_KEY);
+      }
+    } catch (err) {
+      // 未知 job_id（任务已过期 / 被清理）：停止轮询并清存档，不再续看。
+      if (err instanceof ApiError && err.status === 404) {
+        setPollingJobId(null);
+        setOnlineJob(null);
+        localStorage.removeItem(ONLINE_JOB_STORAGE_KEY);
+        return;
+      }
+      // 其他瞬时错误（如网络抖动）：保留轮询，下个周期重试。
+      setMigrateError(errorMessage(err));
+    }
+  };
+
+  // 轮询在线拉取任务进度：pollingJobId 非空即立即拉一次并定时刷新；终态 / 卸载时清理定时器。
+  useEffect(() => {
+    if (pollingJobId === null) {
+      return;
+    }
+    void fetchJobRef.current(pollingJobId);
+    const timer = setInterval(() => {
+      void fetchJobRef.current(pollingJobId);
+    }, ONLINE_POLL_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [pollingJobId]);
+
+  // 客户端重连：页面加载时若有存档 job_id，拉取其进度——
+  // 仍在进行则恢复轮询续看（并切到报告步骤），终态则展示结果，404 则清存档。
+  useEffect(() => {
+    const archived = localStorage.getItem(ONLINE_JOB_STORAGE_KEY);
+    if (!archived) {
+      return;
+    }
+    let active = true;
+    void (async () => {
+      try {
+        const job = await api.getMigrationJob(archived);
+        if (!active) {
+          return;
+        }
+        setOnlineJob(job);
+        setActive(2);
+        if (isTerminalPhase(job.phase)) {
+          localStorage.removeItem(ONLINE_JOB_STORAGE_KEY);
+        } else {
+          setPollingJobId(archived);
+        }
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 404) {
+          localStorage.removeItem(ONLINE_JOB_STORAGE_KEY);
+        }
+      }
+    })();
+    return () => {
+      active = false;
+    };
+    // 仅在首次挂载时尝试重连（依赖均为稳定的 setter，无需列入依赖）。
+  }, []);
 
   // 在线拉取：选中仓库且有源地址即可执行（无需离线路径）。
   const canMigrateOnline = selected.size > 0 && baseUrl.trim() !== '' && !migrating;
@@ -436,61 +543,8 @@ export function MigrationPage() {
 
         <Stepper.Step label="迁移报告" description="查看结果">
           <Stack mt="md">
-            {onlineReport ? (
-              <Card withBorder padding="md" radius="md">
-                <Text fw={600} mb="sm">
-                  在线拉取迁移报告
-                </Text>
-                {onlineReport.repos.length === 0 ? (
-                  <Text c="dimmed" size="sm">
-                    无仓库被搬运。
-                  </Text>
-                ) : (
-                  <Table.ScrollContainer minWidth={560}>
-                    <Table striped>
-                      <Table.Thead>
-                        <Table.Tr>
-                          <Table.Th>源仓库</Table.Th>
-                          <Table.Th>目标仓库</Table.Th>
-                          <Table.Th>格式</Table.Th>
-                          <Table.Th>新建仓库</Table.Th>
-                          <Table.Th ta="right">已迁制品</Table.Th>
-                          <Table.Th ta="right">跳过制品</Table.Th>
-                        </Table.Tr>
-                      </Table.Thead>
-                      <Table.Tbody>
-                        {onlineReport.repos.map((r) => (
-                          <Table.Tr key={`${r.source_repo}->${r.target_repo}`}>
-                            <Table.Td>{r.source_repo}</Table.Td>
-                            <Table.Td>{r.target_repo}</Table.Td>
-                            <Table.Td>{r.format}</Table.Td>
-                            <Table.Td>
-                              <Badge color={r.created ? 'green' : 'gray'} variant="light">
-                                {r.created ? '是' : '已存在'}
-                              </Badge>
-                            </Table.Td>
-                            <Table.Td ta="right">{r.migrated_artifacts}</Table.Td>
-                            <Table.Td ta="right">{r.skipped_artifacts}</Table.Td>
-                          </Table.Tr>
-                        ))}
-                      </Table.Tbody>
-                    </Table>
-                  </Table.ScrollContainer>
-                )}
-
-                {onlineReport.skipped_repos.length > 0 && (
-                  <Group mt="sm" gap="xs">
-                    <Text size="sm" c="dimmed">
-                      整仓跳过（非 maven hosted）：
-                    </Text>
-                    {onlineReport.skipped_repos.map((name) => (
-                      <Badge key={name} color="orange" variant="light">
-                        {name}
-                      </Badge>
-                    ))}
-                  </Group>
-                )}
-              </Card>
+            {onlineJob ? (
+              <OnlineJobPanel job={onlineJob} polling={pollingJobId !== null} />
             ) : !report ? (
               <Text c="dimmed">尚无迁移报告。</Text>
             ) : (
@@ -556,5 +610,124 @@ export function MigrationPage() {
         </Stepper.Step>
       </Stepper>
     </Stack>
+  );
+}
+
+/** 在线拉取任务进度面板：进行中展示导入队列进度，终态展示最终报告。 */
+function OnlineJobPanel({ job, polling }: { job: OnlinePullJob; polling: boolean }) {
+  // 进度百分比：无资产（尚在枚举）时为 0，避免除零。
+  const percent = job.total_assets > 0 ? Math.round((job.done_assets / job.total_assets) * 100) : 0;
+  const terminal = isTerminalPhase(job.phase);
+
+  return (
+    <Card withBorder padding="md" radius="md">
+      <Group justify="space-between" mb="sm">
+        <Text fw={600}>在线拉取导入队列</Text>
+        <Group gap="xs">
+          {polling && <Loader size="xs" />}
+          <Badge
+            color={job.phase === 'failed' ? 'red' : job.phase === 'done' ? 'green' : 'blue'}
+            variant="light"
+          >
+            {phaseLabel(job.phase)}
+          </Badge>
+        </Group>
+      </Group>
+
+      {/* 进度条 + 资产计数 */}
+      <Progress value={percent} aria-label="导入进度" animated={!terminal} />
+      <Group justify="space-between" mt="xs">
+        <Text size="sm" c="dimmed">
+          进度 {job.done_assets} / {job.total_assets}（{percent}%）
+        </Text>
+        <Group gap="md">
+          <Text size="sm">已迁 {job.migrated}</Text>
+          <Text size="sm" c="dimmed">
+            已跳过 {job.skipped}
+          </Text>
+        </Group>
+      </Group>
+
+      {/* 当前仓库 / 当前文件（进行中显示） */}
+      {!terminal && (job.current_repo || job.current_path) && (
+        <Stack gap={2} mt="sm">
+          {job.current_repo && (
+            <Text size="sm">
+              当前仓库：
+              <Text span fw={500}>
+                {job.current_repo}
+              </Text>
+            </Text>
+          )}
+          {job.current_path && (
+            <Text size="xs" c="dimmed" style={{ wordBreak: 'break-all' }}>
+              当前文件：{job.current_path}
+            </Text>
+          )}
+        </Stack>
+      )}
+
+      {/* 失败：展示错误文案 */}
+      {job.phase === 'failed' && job.error && (
+        <Alert color="red" variant="light" mt="sm" title="任务失败">
+          {job.error}
+        </Alert>
+      )}
+
+      {/* 终态：展示各仓库迁移明细 */}
+      {terminal && (
+        <>
+          {job.repos.length === 0 ? (
+            <Text c="dimmed" size="sm" mt="sm">
+              无仓库被搬运。
+            </Text>
+          ) : (
+            <Table.ScrollContainer minWidth={560}>
+              <Table striped mt="sm">
+                <Table.Thead>
+                  <Table.Tr>
+                    <Table.Th>源仓库</Table.Th>
+                    <Table.Th>目标仓库</Table.Th>
+                    <Table.Th>格式</Table.Th>
+                    <Table.Th>新建仓库</Table.Th>
+                    <Table.Th ta="right">已迁制品</Table.Th>
+                    <Table.Th ta="right">跳过制品</Table.Th>
+                  </Table.Tr>
+                </Table.Thead>
+                <Table.Tbody>
+                  {job.repos.map((r) => (
+                    <Table.Tr key={`${r.source_repo}->${r.target_repo}`}>
+                      <Table.Td>{r.source_repo}</Table.Td>
+                      <Table.Td>{r.target_repo}</Table.Td>
+                      <Table.Td>{r.format}</Table.Td>
+                      <Table.Td>
+                        <Badge color={r.created ? 'green' : 'gray'} variant="light">
+                          {r.created ? '是' : '已存在'}
+                        </Badge>
+                      </Table.Td>
+                      <Table.Td ta="right">{r.migrated_artifacts}</Table.Td>
+                      <Table.Td ta="right">{r.skipped_artifacts}</Table.Td>
+                    </Table.Tr>
+                  ))}
+                </Table.Tbody>
+              </Table>
+            </Table.ScrollContainer>
+          )}
+
+          {job.skipped_repos.length > 0 && (
+            <Group mt="sm" gap="xs">
+              <Text size="sm" c="dimmed">
+                整仓跳过（非 maven hosted）：
+              </Text>
+              {job.skipped_repos.map((name) => (
+                <Badge key={name} color="orange" variant="light">
+                  {name}
+                </Badge>
+              ))}
+            </Group>
+          )}
+        </>
+      )}
+    </Card>
   );
 }

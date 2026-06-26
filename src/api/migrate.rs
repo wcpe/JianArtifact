@@ -7,15 +7,19 @@
 //! 所有端点仅管理员可调用。handler 保持薄：解析请求、调用 `migrate` 模块编排、做错误映射，
 //! 不写业务逻辑。
 
-use axum::{extract::State, Json};
-use serde::Deserialize;
+use std::sync::{Arc, Mutex};
+
+use axum::extract::{Path, State};
+use axum::{http::StatusCode, Extension, Json};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::migrate::{
     self, HostedMigrationReport, HttpNexusClient, MigrateError, NexusRepoSummary,
-    OfflineRepoSummary, OnlineMigrationReport, ProxyMigrationReport,
+    OfflineRepoSummary, OnlinePullPhase, OnlinePullProgress, ProxyMigrationReport,
 };
 
-use super::{ApiError, AppState, Identity};
+use super::{ApiError, AppState, Identity, MigrationJobs};
 
 /// 把迁移入口错误映射为 HTTP 错误。
 impl From<MigrateError> for ApiError {
@@ -237,16 +241,53 @@ pub struct OnlineRepoSelectionDto {
     pub target: Option<String>,
 }
 
-/// 执行 Nexus 在线拉取迁移（仅管理员，FR-82）。
+/// 在线拉取迁移触发响应（FR-83）：返回 `job_id`，搬运在后台异步执行。
+#[derive(Debug, Serialize)]
+pub struct JobCreatedDto {
+    /// 任务 id，供轮询 `GET /migrate/jobs/{id}`。
+    pub job_id: String,
+}
+
+/// 单任务进度响应（FR-83）：`job_id` + 进度快照（展平）。
+#[derive(Debug, Serialize)]
+pub struct JobProgressDto {
+    /// 任务 id。
+    pub job_id: String,
+    /// 进度快照。
+    #[serde(flatten)]
+    pub progress: OnlinePullProgress,
+}
+
+/// 任务列表项（FR-83）：供客户端重连找回活动 / 近期任务。
+#[derive(Debug, Serialize)]
+pub struct JobSummaryDto {
+    /// 任务 id。
+    pub job_id: String,
+    /// 当前阶段。
+    pub phase: OnlinePullPhase,
+    /// 总 asset 数。
+    pub total_assets: usize,
+    /// 已处理 asset 数。
+    pub done_assets: usize,
+    /// 成功搬运数。
+    pub migrated: usize,
+    /// 跳过数。
+    pub skipped: usize,
+    /// 当前处理的源仓库。
+    pub current_repo: Option<String>,
+}
+
+/// 触发 Nexus 在线拉取迁移（仅管理员，FR-82 + FR-83）。
 ///
-/// 经在线 REST 枚举源仓库配置 → 匹配所选源仓库 → 经 components API 枚举其 asset 并 HTTP 流式
-/// 下载、落为本系统 hosted 制品（**无需离线 blob store**）。仅 Maven hosted 参与，其余整体跳过。
-/// 凭据真值走 env，绝不入库 / 不进日志。
+/// 同步阶段：枚举源仓库配置、匹配所选仓库、解析凭据（失败即 400 / 502，不开任务）；随后**立即返回
+/// `job_id`（202）**，实际 asset 枚举 + HTTP 流式下载 + 落地在后台 tokio 任务执行，进度经任务注册表
+/// 轮询（`GET /migrate/jobs/{id}`）。仅 Maven hosted 参与，其余整体跳过。凭据真值走 env，绝不入库 / 不进日志。
 pub async fn migrate_nexus_online(
     State(state): State<AppState>,
+    Extension(jobs): Extension<Arc<MigrationJobs>>,
     identity: Identity,
     Json(req): Json<NexusOnlineMigrateRequest>,
-) -> Result<Json<OnlineMigrationReport>, ApiError> {
+) -> Result<(StatusCode, Json<JobCreatedDto>), ApiError> {
     identity.require_admin()?;
     if req.repositories.is_empty() {
         return Err(ApiError::BadRequest("未选择要迁移的仓库".to_string()));
@@ -263,7 +304,7 @@ pub async fn migrate_nexus_online(
         _ => None,
     };
 
-    // 在线枚举源仓库列表，按所选 source 匹配出其摘要（含格式 / 类型，供范围判定）
+    // 同步枚举源仓库列表并匹配所选 source（含格式 / 类型）；失败即同步报错，不开任务
     let source_repos =
         migrate::discover_repositories(&client, &req.base_url, req.auth_ref.as_deref()).await?;
 
@@ -286,17 +327,81 @@ pub async fn migrate_nexus_online(
         });
     }
 
-    let report = migrate::migrate_online_repositories(
-        &client,
-        &state.meta,
-        &state.artifacts,
-        &state.formats,
-        &req.base_url,
-        credential.as_ref(),
-        &selections,
-        state.config.limits.max_artifact_size,
-    )
-    .await?;
+    // 登记任务进度共享态，起后台任务执行枚举 + 下载，端点立即返回 job_id（202）
+    let job_id = Uuid::new_v4().to_string();
+    let progress = Arc::new(Mutex::new(OnlinePullProgress::default()));
+    jobs.register(job_id.clone(), progress.clone());
 
-    Ok(Json(report))
+    let meta = state.meta.clone();
+    let artifacts = state.artifacts.clone();
+    let formats = state.formats.clone();
+    let max_size = state.config.limits.max_artifact_size;
+    let base_url = req.base_url.clone();
+    let task_job_id = job_id.clone();
+    tokio::spawn(async move {
+        let result = migrate::migrate_online_with_progress(
+            &client,
+            &meta,
+            &artifacts,
+            &formats,
+            &base_url,
+            credential.as_ref(),
+            &selections,
+            max_size,
+            &progress,
+        )
+        .await;
+        let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
+        p.current_path = None;
+        match result {
+            Ok(_) => {
+                p.phase = OnlinePullPhase::Done;
+                p.current_repo = None;
+            }
+            Err(e) => {
+                p.phase = OnlinePullPhase::Failed;
+                p.error = Some(e.to_string());
+            }
+        }
+        tracing::info!(任务 = %task_job_id, "在线拉取后台任务结束");
+    });
+
+    Ok((StatusCode::ACCEPTED, Json(JobCreatedDto { job_id })))
+}
+
+/// 查询某在线拉取任务的进度（仅管理员，FR-83）。未知 id 返回 404。
+pub async fn migrate_nexus_job(
+    Extension(jobs): Extension<Arc<MigrationJobs>>,
+    identity: Identity,
+    Path(job_id): Path<String>,
+) -> Result<Json<JobProgressDto>, ApiError> {
+    identity.require_admin()?;
+    let progress = jobs.get(&job_id).ok_or(ApiError::NotFound)?;
+    let snap = progress.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    Ok(Json(JobProgressDto {
+        job_id,
+        progress: snap,
+    }))
+}
+
+/// 列出活动 / 近期在线拉取任务（仅管理员，FR-83），供客户端重连找回。
+pub async fn migrate_nexus_jobs(
+    Extension(jobs): Extension<Arc<MigrationJobs>>,
+    identity: Identity,
+) -> Result<Json<Vec<JobSummaryDto>>, ApiError> {
+    identity.require_admin()?;
+    let list = jobs
+        .list()
+        .into_iter()
+        .map(|(job_id, p)| JobSummaryDto {
+            job_id,
+            phase: p.phase,
+            total_assets: p.total_assets,
+            done_assets: p.done_assets,
+            migrated: p.migrated,
+            skipped: p.skipped,
+            current_repo: p.current_repo,
+        })
+        .collect();
+    Ok(Json(list))
 }
