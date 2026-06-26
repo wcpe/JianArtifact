@@ -29,6 +29,18 @@ interface NavItem {
   adminOnly?: boolean;
 }
 
+/**
+ * 判定导航项是否对应当前路由：按路径段精确匹配，避免前缀串台。
+ * 仅当当前路径等于该项路径、或为其子路径（以「该项路径 + /」开头）时高亮，
+ * 故 /protection 不会在 /protection-monitor 下被误判为 active。
+ */
+function isNavActive(pathname: string, itemPath: string): boolean {
+  if (itemPath === '/') {
+    return pathname === '/';
+  }
+  return pathname === itemPath || pathname.startsWith(`${itemPath}/`);
+}
+
 const NAV_ITEMS: NavItem[] = [
   { label: '仪表盘', path: '/', icon: <IconDashboard size={18} /> },
   { label: '仓库管理', path: '/repositories', icon: <IconDatabase size={18} /> },
@@ -101,11 +113,7 @@ export function AppLayout() {
               key={item.path}
               label={item.label}
               leftSection={item.icon}
-              active={
-                item.path === '/'
-                  ? location.pathname === '/'
-                  : location.pathname.startsWith(item.path)
-              }
+              active={isNavActive(location.pathname, item.path)}
               onClick={() => {
                 navigate(item.path);
                 if (opened) toggle();
