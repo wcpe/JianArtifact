@@ -7,10 +7,10 @@
 ## 未发布版本
 
 ### 新增
-- 无
+- 设置可编辑与运行时热替换（FR-88，ADR-0022，取代 ADR-0020 的「代理只读 / 运行时不热替换」取向）：网络代理 `[network.proxy]` 与在线更新可调字段（`enabled` / `repo` / `api_base_url` / `restart_mode` / `token`）改为经控制台「设置」页或 `PATCH /api/v1/settings`（仅 Admin）在线编辑、**即时生效、无须重启**。新增随 `AppState` 共享的出站网络热替换槽 `config::NetworkState`（std `RwLock<Arc<NetworkSnapshot>>`，快照含代理配置 + 据其构造的 `reqwest::Client`）：5 处出站点（proxy 回源 / Nexus 迁移 / 漏洞库镜像 / OIDC / 在线更新）不再持启动期 client，改持 `Arc<NetworkState>`、每次出站取当前 client；PATCH 改代理后锁外重建 client、原子换槽，下个出站请求即用新代理。设置页从只读改可编辑（代理 http/https/no_proxy 表单 + 在线更新 enabled/repo/api_base_url/restart_mode/token），保存调 `PATCH`。校验失败 400 且不改现有生效值；代理凭据与 token 只入内存槽、**不写回 TOML / 不入 DB / 不进日志 / 不回显**，重启回落文件 + env 配置
 
 ### 变更
-- 无
+- 控制台设置页（FR-87 → FR-88）：`GET /api/v1/settings` 改为读**运行时可编辑设置热替换槽当前值**（含运行时 PATCH 在内，原读 `state.config`）；前端「设置」页从只读展示改为可编辑表单 + 保存按钮，文案由「真源为 config.toml / 环境变量、运行时不可改」改为「保存后运行时即时生效、无须重启」
 
 ### 修复
 - 无

@@ -237,9 +237,11 @@
 | refresh_interval_secs | 刷新周期（秒） | 86400 | JIANARTIFACT_VULN_REFRESH_INTERVAL_SECS |
 | download_timeout_secs | 单次镜像下载整体超时（秒） | 600 | JIANARTIFACT_VULN_DOWNLOAD_TIMEOUT_SECS |
 
-### [network.proxy]（出站网络代理，P2 / FR-84 / ADR-0020）
+### [network.proxy]（出站网络代理，P2 / FR-84 / ADR-0020，运行时可编辑见 FR-88 / ADR-0022）
 
-> 统一注入全部出站 reqwest 客户端（proxy 回源 / Nexus 迁移 / 漏洞库镜像 / OIDC）。三键默认全空：不显式注入代理，保持 reqwest 既有行为不变（含其默认 honor 系统 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` 环境变量）。**任一键给值即以本配置为真源**（注入即关闭 reqwest 的自动系统代理探测，配置压过系统环境）。代理 URL 可含 `user:pass@` 凭据，凭据**不入库、不进日志 / 错误信息**——建议含凭据的代理 URL 仅经环境变量提供，不写入入库 TOML。
+> 统一注入全部出站 reqwest 客户端（proxy 回源 / Nexus 迁移 / 漏洞库镜像 / OIDC / 在线更新）。三键默认全空：不显式注入代理，保持 reqwest 既有行为不变（含其默认 honor 系统 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` 环境变量）。**任一键给值即以本配置为真源**（注入即关闭 reqwest 的自动系统代理探测，配置压过系统环境）。代理 URL 可含 `user:pass@` 凭据，凭据**不入库、不进日志 / 错误信息**——建议含凭据的代理 URL 仅经环境变量提供，不写入入库 TOML。
+>
+> **运行时可编辑（FR-88）**：本节为启动期初值；Admin 可经控制台「设置」页或 `PATCH /api/v1/settings` 在线改代理，**即时生效、无须重启**。运行时改动只入内存热替换槽、**不写回本文件**，重启回落本节 + env——需持久代理仍应写本节 / env。
 
 | 键 | 含义 | 默认（取向） | 环境变量 |
 |---|---|---|---|
@@ -247,9 +249,11 @@
 | https | HTTPS 出站代理 URL | 空（不注入） | JIANARTIFACT_NETWORK_PROXY_HTTPS |
 | no_proxy | 直连绕过列表（逗号分隔的主机 / 域 / CIDR） | 空 | JIANARTIFACT_NETWORK_PROXY_NO_PROXY |
 
-### [update]（在线更新，P2 / FR-85 / ADR-0021）
+### [update]（在线更新，P2 / FR-85 / ADR-0021，运行时可编辑见 FR-88 / ADR-0022）
 
 > 管理员手动触发的完整自更新：查 GitHub 最新稳定 Release、与当前版本比对，下载对应资产、校验 sha256、原子替换二进制并自动重启。**出站默认关闭**（`enabled=false` 时检查 / 应用端点一律拒绝、不联网），须运维显式开启。出站经 `[network.proxy]`（FR-84）注入的代理。
+>
+> **运行时可编辑（FR-88）**：`enabled` / `repo` / `api_base_url` / `restart_mode` / `token` 可经控制台「设置」页或 `PATCH /api/v1/settings` 在线改、**即时生效、无须重启**；运行时改动只入内存槽、**不写回本文件**（token 同样只入内存、不回显），重启回落本节 + env。
 
 | 键 | 含义 | 默认（取向） | 环境变量 |
 |---|---|---|---|

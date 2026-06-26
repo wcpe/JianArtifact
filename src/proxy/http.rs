@@ -3,41 +3,46 @@
 //! 守 SECURITY：仅 rustls 校验上游 HTTPS 证书，不引 native-tls / openssl；
 //! 响应体以流式暴露为 `AsyncRead`，大文件不整体载入内存。
 
+use std::sync::Arc;
+
 use futures_util::TryStreamExt;
 use tokio_util::io::StreamReader;
 
+use crate::config::NetworkState;
+
 use super::{Upstream, UpstreamBody, UpstreamError};
 
-/// 基于 reqwest 的上游客户端。内部持有复用连接池的 `reqwest::Client`。
-#[derive(Debug, Clone)]
+/// 基于 reqwest 的上游客户端。
+///
+/// 不再持有启动期固化的 client，改持出站网络热替换槽 [`NetworkState`]（FR-88，ADR-0022）：
+/// 每次回源经 `network.client()` 取当前 client（含运行时 PATCH 后的新代理），下个请求即用新代理。
+#[derive(Clone)]
 pub struct HttpUpstream {
-    /// 复用的 HTTP 客户端（连接池、超时已配置）。
-    client: reqwest::Client,
+    /// 出站网络热替换槽（含当前 client，随 PATCH 即时换代理）。
+    network: Arc<NetworkState>,
 }
 
 impl HttpUpstream {
-    /// 构造上游客户端，设定整体请求超时（避免慢速上游拖垮代理）。
+    /// 持出站网络热替换槽构造上游客户端（FR-88，ADR-0022）。
     ///
-    /// 不注入出站代理（等价空代理配置，保持既有行为）；超时来自配置，不硬编码。
-    /// 需注入 `[network.proxy]` 出站代理时改用 [`HttpUpstream::with_network`]。
-    pub fn new(request_timeout: std::time::Duration) -> Result<Self, UpstreamError> {
-        Self::with_network(
-            request_timeout,
-            &crate::config::NetworkProxyConfig::default(),
-        )
+    /// 回源时经 `network.client()` 取当前出站 client；代理 / 超时 / rustls / stream 特性由槽统一注入。
+    /// 生产装配应传入随 `AppState` 共享的同一槽，方能在设置页 PATCH 改代理后即时生效。
+    pub fn with_network_state(network: Arc<NetworkState>) -> Self {
+        Self { network }
     }
 
-    /// 按出站代理配置构造上游客户端（FR-84，ADR-0020）。
+    /// 便捷构造：以默认空代理 + 给定超时建一个**独立**出站网络槽（不接共享热替换槽）。
     ///
-    /// 经统一出站客户端 helper 注入 `[network.proxy]` 代理与既有超时 / rustls / stream 特性；
-    /// 构造失败（如 TLS 后端初始化异常 / 代理配置无效）冒泡给调用方，错误信息不含代理凭据。
-    pub fn with_network(
-        request_timeout: std::time::Duration,
-        proxy: &crate::config::NetworkProxyConfig,
-    ) -> Result<Self, UpstreamError> {
-        let client = crate::config::build_outbound_client(request_timeout, proxy)
-            .map_err(UpstreamError::Transport)?;
-        Ok(Self { client })
+    /// 仅用于测试 / 无需热替换的场景（如 proxy 回源在单测里不验代理热替换）。构造失败冒泡。
+    pub fn new(request_timeout: std::time::Duration) -> Result<Self, UpstreamError> {
+        let network = NetworkState::new(
+            crate::config::NetworkProxyConfig::default(),
+            request_timeout,
+        )
+        .map_err(UpstreamError::Transport)?;
+        Ok(Self {
+            network: Arc::new(network),
+        })
     }
 }
 
@@ -50,8 +55,10 @@ impl Upstream for HttpUpstream {
             rel_path.trim_start_matches('/')
         );
 
+        // 从热替换槽取当前 client（读锁极短、锁外发请求），运行时换代理后即用新 client
         let resp = self
-            .client
+            .network
+            .client()
             .get(&url)
             .send()
             .await

@@ -593,11 +593,18 @@ mod tests {
     async fn 真机下载小生态镜像并落库() {
         let store = MetaStore::open_in_memory().await.unwrap();
         let dir = tempfile::tempdir().unwrap();
-        let source = HttpMirrorSource::new(
+        // 测试用独立出站网络槽（默认空代理 + 60s 超时），不接共享热替换槽
+        let network = std::sync::Arc::new(
+            crate::config::NetworkState::new(
+                crate::config::NetworkProxyConfig::default(),
+                std::time::Duration::from_secs(60),
+            )
+            .unwrap(),
+        );
+        let source = HttpMirrorSource::with_network_state(
             "https://osv-vulnerabilities.storage.googleapis.com".to_string(),
-            std::time::Duration::from_secs(60),
-        )
-        .unwrap();
+            network,
+        );
         let mirror = VulnMirror::new(store.clone(), source, dir.path());
 
         let n = mirror.refresh_ecosystem("GHC").await.unwrap();

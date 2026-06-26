@@ -34,6 +34,7 @@ import type {
   RepositoryDto,
   SearchHit,
   SettingsView,
+  SettingsPatch,
   UpdateCheck,
   ApplyResponse,
   TokenView,
@@ -444,6 +445,11 @@ export function listMigrationJobs(): Promise<MigrationJobSummary[]> {
 /** 读取脱敏后的网络代理 + 在线更新配置与当前版本（仅管理员）。 */
 export function getSettings(): Promise<SettingsView> {
   return request<SettingsView>('/settings');
+}
+
+/** 编辑网络代理 + 在线更新配置（仅管理员，PATCH 即时生效、无须重启，FR-88）。 */
+export function updateSettings(patch: SettingsPatch): Promise<SettingsView> {
+  return request<SettingsView>('/settings', { method: 'PATCH', body: patch });
 }
 
 /** 更新检查：查最新版本并比对（仅管理员；未启用时后端返回 409）。 */

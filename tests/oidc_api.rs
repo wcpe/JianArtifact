@@ -190,16 +190,28 @@ async fn build_state(oidc: Option<OidcProvider>) -> (AppState, tempfile::TempDir
             jianartifact::api::alert_channel().0,
         )),
         restart: std::sync::Arc::new(jianartifact::update::RestartHandle::default()),
+        settings: std::sync::Arc::new(
+            jianartifact::config::EditableSettings::new(
+                jianartifact::config::NetworkProxyConfig::default(),
+                std::time::Duration::from_secs(60),
+                &jianartifact::config::UpdateConfig::default(),
+            )
+            .unwrap(),
+        ),
     };
     (state, dir)
 }
 
 /// 据 issuer 与 auto_provision 造一个指向 mock IdP 的 OIDC provider。
 fn make_provider(issuer: &str, auto_provision: bool) -> OidcProvider {
-    let http = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .unwrap();
+    // 测试用独立出站网络槽（默认空代理 + 10s 超时），不接共享热替换槽
+    let network = std::sync::Arc::new(
+        jianartifact::config::NetworkState::new(
+            jianartifact::config::NetworkProxyConfig::default(),
+            std::time::Duration::from_secs(10),
+        )
+        .unwrap(),
+    );
     OidcProvider::new(
         OidcSettings {
             issuer: issuer.to_string(),
@@ -208,7 +220,7 @@ fn make_provider(issuer: &str, auto_provision: bool) -> OidcProvider {
             redirect_uri: "http://app/api/v1/auth/oidc/callback".to_string(),
             auto_provision,
         },
-        http,
+        network,
     )
 }
 

@@ -4,46 +4,33 @@
 //! 流式写盘（不整体载入内存）；下载的是公开数据集整包，**绝不携带本机制品坐标**（守隐私红线）。
 
 use std::path::Path;
+use std::sync::Arc;
 
 use futures_util::StreamExt;
 use tokio::io::AsyncWriteExt;
 
+use crate::config::NetworkState;
+
 use super::{MirrorSource, VulnError};
 
-/// 基于 reqwest 的镜像下载器。内部持有复用连接池的 `reqwest::Client`。
-#[derive(Debug, Clone)]
+/// 基于 reqwest 的镜像下载器。
+///
+/// 不再持有启动期固化的 client，改持出站网络热替换槽 [`NetworkState`]（FR-88，ADR-0022）：
+/// 后台周期刷新每次下载经 `network.client()` 取**当前** client，故运行时 PATCH 改代理后下次刷新即用新代理。
+#[derive(Clone)]
 pub struct HttpMirrorSource {
-    /// 复用的 HTTP 客户端（超时已配置）。
-    client: reqwest::Client,
+    /// 出站网络热替换槽（含当前 client，随 PATCH 即时换代理）。
+    network: Arc<NetworkState>,
     /// 数据源基址（按生态在其下取 `{ecosystem}/all.zip`）。
     base_url: String,
 }
 
 impl HttpMirrorSource {
-    /// 构造下载器，设定单次下载整体超时（按生态 all.zip 可能较大）。
+    /// 持出站网络热替换槽构造镜像下载器（FR-88，ADR-0022）。
     ///
-    /// 不注入出站代理（等价空代理配置，保持既有行为）。
-    /// 需注入 `[network.proxy]` 出站代理时改用 [`HttpMirrorSource::with_network`]。
-    pub fn new(base_url: String, download_timeout: std::time::Duration) -> Result<Self, VulnError> {
-        Self::with_network(
-            base_url,
-            download_timeout,
-            &crate::config::NetworkProxyConfig::default(),
-        )
-    }
-
-    /// 按出站代理配置构造镜像下载器（FR-84，ADR-0020）。
-    ///
-    /// 经统一出站客户端 helper 注入 `[network.proxy]` 代理与既有超时 / rustls / stream 特性；
-    /// 构造失败冒泡给调用方，错误信息不含代理凭据。
-    pub fn with_network(
-        base_url: String,
-        download_timeout: std::time::Duration,
-        proxy: &crate::config::NetworkProxyConfig,
-    ) -> Result<Self, VulnError> {
-        let client = crate::config::build_outbound_client(download_timeout, proxy)
-            .map_err(VulnError::Download)?;
-        Ok(Self { client, base_url })
+    /// 下载时经 `network.client()` 取当前 client；代理 / 超时 / rustls / stream 特性由槽统一注入。
+    pub fn with_network_state(base_url: String, network: Arc<NetworkState>) -> Self {
+        Self { network, base_url }
     }
 }
 
@@ -56,8 +43,10 @@ impl MirrorSource for HttpMirrorSource {
             ecosystem
         );
 
+        // 从热替换槽取当前 client（读锁极短、锁外发请求），运行时换代理后下次刷新即用新 client
         let resp = self
-            .client
+            .network
+            .client()
             .get(&url)
             .send()
             .await

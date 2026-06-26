@@ -1,15 +1,20 @@
-//! 控制台设置只读聚合端点（FR-87）：仅 Admin 读取脱敏后的网络代理（FR-84）+ 在线更新（FR-85）
-//! 配置与当前版本，供「设置」页展示。
+//! 控制台设置可编辑端点（FR-87 只读 + FR-88 可编辑热替换）：仅 Admin 读取 / 修改脱敏后的网络代理
+//! （FR-84）+ 在线更新（FR-85）配置，PATCH 即时生效、无须重启。
 //!
 //! 设计要点：
-//! - **薄 handler**：只做鉴权编排（仅 Admin）、读 `state.config` 组装脱敏 DTO、返回 JSON；无业务逻辑。
-//! - **只读取向（守 ADR-0020）**：网络代理与在线更新配置真源是 TOML + env、运行时不热替换，本端点
-//!   只读展示、不提供编辑；页面唯一写动作走 FR-85 既有 check/apply 端点。
+//! - **薄 handler**：只做鉴权编排（仅 Admin）、读热替换槽组装脱敏 DTO / 校验后换槽、返回 JSON；无业务逻辑。
+//! - **可编辑 + 热替换（FR-88，ADR-0022）**：`GET` 回显热替换槽**当前生效值**（含运行时 PATCH 在内）；
+//!   `PATCH` 校验后锁外重建出站 client、原子换槽，下个出站请求即用新代理 / 新更新开关，无须重启。
+//! - **校验失败不改状态**：校验未过返回 400 且**不替换**现有生效值（GET 仍返回旧值）。
 //! - **脱敏红线**：响应**绝不含任何凭据**——代理 URL 经 [`sanitize_proxy_url`] 去 `user:pass@`；
 //!   更新 token 只回 `has_token: bool`，绝不回显 token 本体。
+//! - **凭据只入内存槽**：PATCH 接受的代理凭据与 update token 只入热替换槽、**不写回 TOML / 不入 DB /
+//!   不进日志**；重启回落文件 + env 配置（与 ADR-0018 一致）。
 
 use axum::{extract::State, Json};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+
+use crate::config::{EditableUpdate, NetworkProxyConfig};
 
 use super::{ApiError, AppState, Identity};
 
@@ -81,20 +86,13 @@ pub struct SettingsView {
     pub update: UpdateView,
 }
 
-/// 读取脱敏后的网络代理 + 在线更新配置与当前版本（仅 Admin）。
-///
-/// 未认证 401、非管理员 403（复用 [`Identity::require_admin`]）。读 `state.config`，
-/// 代理 URL 去凭据、token 只回 `has_token`，响应绝不含任何凭据。
-pub async fn get_settings(
-    State(state): State<AppState>,
-    identity: Identity,
-) -> Result<Json<SettingsView>, ApiError> {
-    identity.require_admin()?;
+/// 据热替换槽当前值组装脱敏视图（GET 与 PATCH 成功后复用）。
+fn current_view(state: &AppState) -> SettingsView {
+    let snapshot = state.settings.network.snapshot();
+    let proxy = &snapshot.proxy;
+    let update = state.settings.update();
 
-    let proxy = &state.config.network.proxy;
-    let update = &state.config.update;
-
-    let view = SettingsView {
+    SettingsView {
         current_version: env!("CARGO_PKG_VERSION").to_string(),
         network_proxy: NetworkProxyView {
             http: proxy.http.as_deref().map(sanitize_proxy_url),
@@ -109,8 +107,121 @@ pub async fn get_settings(
             // 仅暴露是否已配置 token，绝不回显 token 本体
             has_token: update.token.is_some(),
         },
+    }
+}
+
+/// 读取脱敏后的网络代理 + 在线更新配置与当前版本（仅 Admin）。
+///
+/// 未认证 401、非管理员 403（复用 [`Identity::require_admin`]）。读**热替换槽当前生效值**
+/// （含运行时 PATCH 在内），代理 URL 去凭据、token 只回 `has_token`，响应绝不含任何凭据。
+pub async fn get_settings(
+    State(state): State<AppState>,
+    identity: Identity,
+) -> Result<Json<SettingsView>, ApiError> {
+    identity.require_admin()?;
+    Ok(Json(current_view(&state)))
+}
+
+/// 网络代理编辑请求（空字符串视作清空对应项）。
+#[derive(Debug, Deserialize)]
+pub struct NetworkProxyPatch {
+    /// HTTP 出站代理 URL（可含 `user:pass@` 凭据，只入内存槽不回显）；`null` / 缺省 / 空串视为不配置。
+    #[serde(default)]
+    pub http: Option<String>,
+    /// HTTPS 出站代理 URL。
+    #[serde(default)]
+    pub https: Option<String>,
+    /// 直连绕过列表。
+    #[serde(default)]
+    pub no_proxy: Option<String>,
+}
+
+/// 在线更新编辑请求。
+#[derive(Debug, Deserialize)]
+pub struct UpdatePatch {
+    /// 是否启用在线更新（出站开关）。
+    pub enabled: bool,
+    /// 仓库源（`owner/repo`）。
+    pub repo: String,
+    /// GitHub API 基址。
+    pub api_base_url: String,
+    /// 重启模式（`self` / `exit`）。
+    pub restart_mode: String,
+    /// 访问 token 编辑语义（GET 不回显 token，故区分三态）：
+    /// - 缺省 / `null`：**保留**当前 token 不变；
+    /// - 空串 `""`：**清空** token；
+    /// - 非空串：**设置**为新 token（只入内存槽、不入库 / 不进日志 / 不回显）。
+    #[serde(default)]
+    pub token: Option<String>,
+}
+
+/// 设置编辑请求体（整体替换网络代理 + 在线更新可调字段）。
+#[derive(Debug, Deserialize)]
+pub struct SettingsPatch {
+    /// 网络代理编辑项。
+    pub network_proxy: NetworkProxyPatch,
+    /// 在线更新编辑项。
+    pub update: UpdatePatch,
+}
+
+/// 把空白字符串归一为 `None`（前端清空输入即不配置该代理项）。
+fn normalize_blank(v: Option<String>) -> Option<String> {
+    v.and_then(|s| if s.trim().is_empty() { None } else { Some(s) })
+}
+
+/// 编辑网络代理 + 在线更新配置（仅 Admin），校验通过即时生效、无须重启。
+///
+/// 校验失败返回 400 且**不改变**现有生效值（GET 仍返回旧值）；成功后锁外重建出站 client、原子换槽，
+/// 下个出站请求即用新代理 / 新更新开关。代理凭据与 token 只入内存槽、不写回 TOML / 不入 DB / 不回显。
+/// 未认证 401、非管理员 403。
+pub async fn patch_settings(
+    State(state): State<AppState>,
+    identity: Identity,
+    Json(patch): Json<SettingsPatch>,
+) -> Result<Json<SettingsView>, ApiError> {
+    identity.require_admin()?;
+
+    // 组装新代理配置（空白归一为不配置）
+    let new_proxy = NetworkProxyConfig {
+        http: normalize_blank(patch.network_proxy.http),
+        https: normalize_blank(patch.network_proxy.https),
+        no_proxy: normalize_blank(patch.network_proxy.no_proxy),
     };
-    Ok(Json(view))
+
+    // 组装新在线更新配置：token 三态——缺省保留、空串清空、非空设置
+    let current_update = state.settings.update();
+    let new_token = match patch.update.token {
+        None => current_update.token.clone(),
+        Some(t) if t.trim().is_empty() => None,
+        Some(t) => Some(t),
+    };
+    let new_update = EditableUpdate {
+        enabled: patch.update.enabled,
+        repo: patch.update.repo.trim().to_string(),
+        api_base_url: patch.update.api_base_url.trim().to_string(),
+        restart_mode: patch.update.restart_mode.trim().to_string(),
+        // 下载超时不在设置页可调，沿用当前值（与 ADR-0021 启动期口径一致）
+        download_timeout_secs: current_update.download_timeout_secs,
+        token: new_token,
+    };
+    // 先校验在线更新字段（非法即拒，不触碰现有生效值）
+    new_update
+        .validate()
+        .map_err(|reason| ApiError::BadRequest(format!("在线更新配置非法：{reason}")))?;
+
+    // 再热替换代理：锁外重建 client，失败即拒（现有 client 仍生效），不触碰在线更新槽
+    state
+        .settings
+        .network
+        .replace_proxy(new_proxy)
+        .map_err(|reason| ApiError::BadRequest(format!("网络代理配置非法：{reason}")))?;
+    // 代理换槽成功后再换在线更新槽（已校验，不会失败）
+    state.settings.replace_update(new_update);
+
+    // 记一条管理动作日志（仅记动作，不含任何凭据明文）
+    tracing::info!(操作者 = %identity.actor_name(), "管理员更新了网络代理 / 在线更新设置，已即时生效");
+
+    Ok(Json(current_view(&state)))
 }
 
 #[cfg(test)]
@@ -191,7 +302,7 @@ mod tests {
         state.jwt.issue(&uid, name, role).unwrap()
     }
 
-    /// 便捷：带可选 Bearer 令牌请求设置端点。
+    /// 便捷：带可选 Bearer 令牌 GET 设置端点。
     async fn 请求(state: AppState, 令牌: Option<&str>) -> axum::response::Response {
         let app = super::super::build_router(state);
         let mut builder = Request::builder().method("GET").uri("/api/v1/settings");
@@ -201,6 +312,37 @@ mod tests {
         app.oneshot(builder.body(Body::empty()).unwrap())
             .await
             .unwrap()
+    }
+
+    /// 便捷：带可选 Bearer 令牌 PATCH 设置端点（JSON 请求体）。
+    async fn 请求_patch(
+        state: AppState,
+        令牌: Option<&str>,
+        body: serde_json::Value,
+    ) -> axum::response::Response {
+        let app = super::super::build_router(state);
+        let mut builder = Request::builder()
+            .method("PATCH")
+            .uri("/api/v1/settings")
+            .header("Content-Type", "application/json");
+        if let Some(t) = 令牌 {
+            builder = builder.header("Authorization", format!("Bearer {t}"));
+        }
+        app.oneshot(builder.body(Body::from(body.to_string())).unwrap())
+            .await
+            .unwrap()
+    }
+
+    /// 便捷：以指定网络代理 + 在线更新配置重建可编辑设置槽并注入 state（模拟启动期热值）。
+    fn 注入设置(
+        state: &mut AppState,
+        proxy: crate::config::NetworkProxyConfig,
+        update: &crate::config::UpdateConfig,
+    ) {
+        state.settings = Arc::new(
+            crate::config::EditableSettings::new(proxy, std::time::Duration::from_secs(60), update)
+                .unwrap(),
+        );
     }
 
     #[tokio::test]
@@ -221,15 +363,19 @@ mod tests {
     #[tokio::test]
     async fn settings_管理员成功_200_并脱敏代理凭据与隐藏_token() {
         let (mut state, _dir) = 测试用状态().await;
-        // 注入含凭据的代理与更新 token，断言响应中均不回显凭据
-        let mut cfg = (*state.config).clone();
-        cfg.network.proxy.http = Some("http://user:pass@proxy.internal:8080".to_string());
-        cfg.network.proxy.https = Some("https://secret:tok@proxy.internal:8443".to_string());
-        cfg.network.proxy.no_proxy = Some("localhost,127.0.0.1".to_string());
-        cfg.update.enabled = true;
-        cfg.update.repo = "wcpe/JianArtifact".to_string();
-        cfg.update.token = Some("ghp_supersecrettoken".to_string());
-        state.config = Arc::new(cfg);
+        // 注入含凭据的代理与更新 token（入热替换槽），断言响应中均不回显凭据
+        let proxy = crate::config::NetworkProxyConfig {
+            http: Some("http://user:pass@proxy.internal:8080".to_string()),
+            https: Some("https://secret:tok@proxy.internal:8443".to_string()),
+            no_proxy: Some("localhost,127.0.0.1".to_string()),
+        };
+        let update = crate::config::UpdateConfig {
+            enabled: true,
+            repo: "wcpe/JianArtifact".to_string(),
+            token: Some("ghp_supersecrettoken".to_string()),
+            ..Default::default()
+        };
+        注入设置(&mut state, proxy, &update);
 
         let token = 签发令牌(&state, "admin", Role::Admin).await;
         let resp = 请求(state, Some(&token)).await;
@@ -272,5 +418,259 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let body = 读_json(resp).await;
         assert_eq!(body["update"]["has_token"], false);
+    }
+
+    // ===== PATCH /api/v1/settings 鉴权 + 热替换 + 脱敏 + 非法不改值 =====
+
+    /// 构造一个合法的设置编辑请求体（含凭据，用于断言不回显）。
+    fn 合法编辑体() -> serde_json::Value {
+        serde_json::json!({
+            "network_proxy": {
+                "http": "http://user:pass@new-proxy.internal:3128",
+                "https": null,
+                "no_proxy": "localhost"
+            },
+            "update": {
+                "enabled": true,
+                "repo": "wcpe/JianArtifact",
+                "api_base_url": "https://api.github.com",
+                "restart_mode": "exit",
+                "token": "ghp_newsecret"
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn patch_匿名被拒_401() {
+        let (state, _dir) = 测试用状态().await;
+        let resp = 请求_patch(state, None, 合法编辑体()).await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn patch_普通用户被拒_403() {
+        let (state, _dir) = 测试用状态().await;
+        let token = 签发令牌(&state, "u", Role::User).await;
+        let resp = 请求_patch(state, Some(&token), 合法编辑体()).await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn patch_管理员成功_即时生效_并脱敏() {
+        let (state, _dir) = 测试用状态().await;
+        let token = 签发令牌(&state, "admin", Role::Admin).await;
+        // 持槽引用，PATCH 后直接断言热槽当前值已变（即时生效，无须重启）
+        let settings = state.settings.clone();
+
+        let resp = 请求_patch(state, Some(&token), 合法编辑体()).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = 读_json(resp).await;
+        // 响应回显脱敏后的当前值：代理去凭据、token 仅 has_token
+        assert_eq!(
+            body["network_proxy"]["http"],
+            "http://new-proxy.internal:3128"
+        );
+        assert_eq!(body["update"]["enabled"], true);
+        assert_eq!(body["update"]["restart_mode"], "exit");
+        assert_eq!(body["update"]["has_token"], true);
+        // 关键脱敏：响应不含任何凭据明文
+        let text = body.to_string();
+        assert!(!text.contains("user:pass"), "代理凭据不得回显：{text}");
+        assert!(!text.contains("ghp_newsecret"), "token 不得回显：{text}");
+
+        // 热槽当前值已即时生效（PATCH 锁外重建后原子换槽）
+        let snap = settings.network.snapshot();
+        assert_eq!(
+            snap.proxy.http.as_deref(),
+            Some("http://user:pass@new-proxy.internal:3128"),
+            "代理热槽应已换为新值（凭据仅入内存槽，不回显）"
+        );
+        let upd = settings.update();
+        assert!(upd.enabled, "update.enabled 应已翻为 true");
+        assert_eq!(
+            upd.token.as_deref(),
+            Some("ghp_newsecret"),
+            "token 应已入内存槽"
+        );
+    }
+
+    #[tokio::test]
+    async fn patch_翻_enabled_为_true_后_update_check_不再_409() {
+        // 默认 update.enabled=false，check 因 Disabled 返回 409；PATCH 翻 true 后改走出站。
+        // 用一个不可达 api_base_url，断言不再是 409（Disabled），而是出站失败 502（已过开关闸）。
+        let (state, _dir) = 测试用状态().await;
+        let admin = 签发令牌(&state, "admin", Role::Admin).await;
+        let settings = state.settings.clone();
+        let meta = state.meta.clone();
+        let jwt = state.jwt.clone();
+
+        // 先确认默认 check 为 409（Disabled）
+        let app = super::super::build_router(state);
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/update/check")
+                    .header("Authorization", format!("Bearer {admin}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CONFLICT, "默认未启用应 409");
+
+        // PATCH 翻 enabled=true，指向一个不可路由的地址（不实际联网，仅验证已过 Disabled 闸）
+        let _ = meta;
+        let _ = jwt;
+        let body = serde_json::json!({
+            "network_proxy": { "http": null, "https": null, "no_proxy": null },
+            "update": {
+                "enabled": true,
+                "repo": "wcpe/JianArtifact",
+                "api_base_url": "http://127.0.0.1:1",
+                "restart_mode": "self",
+                "token": null
+            }
+        });
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri("/api/v1/settings")
+                    .header("Authorization", format!("Bearer {admin}"))
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(settings.update().enabled, "PATCH 后 enabled 应为 true");
+
+        // 再次 check：已过 Disabled 闸，出站到不可达地址应返回 502（BadGateway），而非 409
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/update/check")
+                    .header("Authorization", format!("Bearer {admin}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_ne!(
+            resp.status(),
+            StatusCode::CONFLICT,
+            "启用后 check 不应再因 Disabled 返回 409"
+        );
+        assert_eq!(
+            resp.status(),
+            StatusCode::BAD_GATEWAY,
+            "启用后出站到不可达地址应为 502"
+        );
+    }
+
+    #[tokio::test]
+    async fn patch_非法_restart_mode_返回_400_且不改现有生效值() {
+        let (mut state, _dir) = 测试用状态().await;
+        // 先注入一份已知生效值
+        let proxy = crate::config::NetworkProxyConfig {
+            http: Some("http://old-proxy.internal:8080".to_string()),
+            ..Default::default()
+        };
+        注入设置(&mut state, proxy, &crate::config::UpdateConfig::default());
+        let token = 签发令牌(&state, "admin", Role::Admin).await;
+        let settings = state.settings.clone();
+
+        let body = serde_json::json!({
+            "network_proxy": { "http": "http://new-proxy.internal:9999", "https": null, "no_proxy": null },
+            "update": {
+                "enabled": true,
+                "repo": "wcpe/JianArtifact",
+                "api_base_url": "https://api.github.com",
+                "restart_mode": "INVALID_MODE",
+                "token": null
+            }
+        });
+        let resp = 请求_patch(state, Some(&token), body).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        // 非法校验先于代理换槽：现有代理与更新生效值均不变
+        let snap = settings.network.snapshot();
+        assert_eq!(
+            snap.proxy.http.as_deref(),
+            Some("http://old-proxy.internal:8080"),
+            "非法配置不得改动现有生效代理"
+        );
+        assert!(
+            !settings.update().enabled,
+            "非法配置不得改动现有生效的 update（仍为默认关闭）"
+        );
+    }
+
+    #[tokio::test]
+    async fn patch_token_三态_缺省保留_空串清空() {
+        let (mut state, _dir) = 测试用状态().await;
+        // 初始已配置 token
+        let update = crate::config::UpdateConfig {
+            token: Some("ghp_existing".to_string()),
+            ..Default::default()
+        };
+        注入设置(
+            &mut state,
+            crate::config::NetworkProxyConfig::default(),
+            &update,
+        );
+        let token = 签发令牌(&state, "admin", Role::Admin).await;
+        let settings = state.settings.clone();
+        let app = super::super::build_router(state);
+
+        // ① token 缺省：保留现有
+        let body = serde_json::json!({
+            "network_proxy": { "http": null, "https": null, "no_proxy": null },
+            "update": { "enabled": false, "repo": "wcpe/JianArtifact", "api_base_url": "https://api.github.com", "restart_mode": "self" }
+        });
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri("/api/v1/settings")
+                    .header("Authorization", format!("Bearer {token}"))
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            settings.update().token.as_deref(),
+            Some("ghp_existing"),
+            "token 缺省应保留现有"
+        );
+
+        // ② token 空串：清空
+        let body = serde_json::json!({
+            "network_proxy": { "http": null, "https": null, "no_proxy": null },
+            "update": { "enabled": false, "repo": "wcpe/JianArtifact", "api_base_url": "https://api.github.com", "restart_mode": "self", "token": "" }
+        });
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri("/api/v1/settings")
+                    .header("Authorization", format!("Bearer {token}"))
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(settings.update().token.is_none(), "token 空串应清空");
     }
 }

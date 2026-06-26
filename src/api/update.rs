@@ -62,19 +62,22 @@ pub struct ApplyResponse {
     pub new_version: String,
 }
 
-/// 据配置构造 GitHub Release 来源（出站默认关闭时返回 `Disabled`）。
+/// 据**热替换槽当前值**构造 GitHub Release 来源（出站默认关闭时返回 `Disabled`）。
+///
+/// 读运行时可编辑设置槽（FR-88，ADR-0022）的在线更新配置（含 `enabled` 开关），出站经共享出站网络
+/// 热替换槽取当前 client；PATCH 翻 `enabled` / 改 repo / 改代理后即时生效，无须重启。
 fn build_source(state: &AppState) -> Result<GithubReleaseSource, UpdateError> {
-    let cfg = &state.config.update;
+    let cfg = state.settings.update();
     if !cfg.enabled {
         return Err(UpdateError::Disabled);
     }
-    GithubReleaseSource::new(
-        std::time::Duration::from_secs(cfg.download_timeout_secs),
-        &state.config.network.proxy,
+    Ok(GithubReleaseSource::with_network_state(
+        state.settings.network.clone(),
         cfg.api_base_url.clone(),
         cfg.repo.clone(),
         cfg.token.clone(),
-    )
+        std::time::Duration::from_secs(cfg.download_timeout_secs),
+    ))
 }
 
 /// 当前运行版本（编译期注入）。
@@ -127,7 +130,8 @@ pub async fn apply_update(
     let outcome = update::apply_update(&source, current_version(), &current_exe, &data_dir).await?;
 
     // 替换成功：置位重启请求（透传当前 argv，不含 argv[0]）+ 触发优雅停机
-    let mode = RestartMode::from_config(&state.config.update.restart_mode);
+    // 重启模式读热替换槽当前值（PATCH 可调），不再读启动期 config.update
+    let mode = RestartMode::from_config(&state.settings.update().restart_mode);
     let argv: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
     state.restart.request_restart(RestartRequest {
         mode,

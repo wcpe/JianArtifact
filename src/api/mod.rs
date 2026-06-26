@@ -148,6 +148,11 @@ pub struct AppState {
     /// 在线更新重启句柄（FR-85，ADR-0021）：自更新替换成功后置位重启请求并触发优雅停机，
     /// `main` 在 `serve` 返回后据此拉起新进程（`self`）或退出（`exit`）。
     pub restart: Arc<crate::update::RestartHandle>,
+    /// 运行时可编辑设置热替换槽（FR-88，ADR-0022）：收拢出站网络代理（含据其构造的 reqwest::Client）
+    /// 与在线更新可调字段（enabled/repo/api_base_url/restart_mode/token）。出站点经
+    /// `settings.network.client()` 取当前 client；管理端 `PATCH /api/v1/settings` 校验后锁外重建、原子
+    /// 换槽即时生效、无须重启。凭据只入本内存槽，不写回 TOML / 不入 DB / 不回显。
+    pub settings: Arc<crate::config::EditableSettings>,
 }
 
 /// 统一 API 错误类型，转换为 JSON 响应 `{"error":{"code","message"}}`。
@@ -427,7 +432,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/migrate/jobs/{id}", get(migrate::migrate_nexus_job))
         .route("/update/check", get(update::check_update))
         .route("/update/apply", post(update::apply_update))
-        .route("/settings", get(settings::get_settings))
+        .route(
+            "/settings",
+            get(settings::get_settings).patch(settings::patch_settings),
+        )
         .route(
             "/repositories/{id}/acl",
             get(acl::list_acl).post(acl::create_acl),
@@ -653,6 +661,15 @@ mod tests {
             alert_engine,
             // 默认测试状态：在线更新重启句柄就绪（无重启请求）
             restart: Arc::new(crate::update::RestartHandle::default()),
+            // 默认测试状态：可编辑设置槽以默认配置装载（空代理 + 默认在线更新关闭）
+            settings: Arc::new(
+                crate::config::EditableSettings::new(
+                    crate::config::NetworkProxyConfig::default(),
+                    std::time::Duration::from_secs(60),
+                    &crate::config::UpdateConfig::default(),
+                )
+                .unwrap(),
+            ),
         };
         (state, dir)
     }

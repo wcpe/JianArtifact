@@ -76,6 +76,14 @@ async fn 测试用状态() -> (AppState, tempfile::TempDir) {
             jianartifact::api::alert_channel().0,
         )),
         restart: std::sync::Arc::new(jianartifact::update::RestartHandle::default()),
+        settings: std::sync::Arc::new(
+            jianartifact::config::EditableSettings::new(
+                jianartifact::config::NetworkProxyConfig::default(),
+                std::time::Duration::from_secs(60),
+                &jianartifact::config::UpdateConfig::default(),
+            )
+            .unwrap(),
+        ),
     };
     (state, dir)
 }

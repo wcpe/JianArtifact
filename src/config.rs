@@ -1003,6 +1003,179 @@ pub fn build_outbound_client(
     builder.build().map_err(|e| e.to_string())
 }
 
+// ===== FR-88 / ADR-0022：运行时可编辑设置与出站客户端热替换 =====
+
+/// 出站网络当前快照：当前生效的代理配置 + 据其构造的出站 `reqwest::Client` + 构造用超时。
+///
+/// 三者打包成不可变、整体替换的快照，保证「代理配置」与「据其构造的 client」始终一致，
+/// 绝不出现「配置已换、client 仍是旧代理」的中间态（仿 ADR-0018 防护快照）。
+#[derive(Clone)]
+pub struct NetworkSnapshot {
+    /// 当前生效的出站代理配置（PATCH 整体替换的来源）。
+    pub proxy: NetworkProxyConfig,
+    /// 构造出站 client 用的整体请求超时（沿用启动期超时，热替换不改超时口径）。
+    pub timeout: std::time::Duration,
+    /// 据 `proxy` + `timeout` 经 [`build_outbound_client`] 构造的出站客户端。
+    ///
+    /// `reqwest::Client` 内部为 `Arc`，clone 仅引用计数 +1、廉价；各出站点经
+    /// [`NetworkState::client`] 取一份立即在锁外发起请求。
+    pub client: reqwest::Client,
+}
+
+/// 运行时出站网络代理热替换槽（FR-88，ADR-0022）：随 `AppState` 经 `Arc` 共享。
+///
+/// 读多写极少：各出站点经 [`Self::client`] 取当前 client（读锁极短、锁外发请求）；管理端 PATCH
+/// 经 [`Self::replace_proxy`] 锁外重建 client、再短持写锁原子换快照。用 std `RwLock<Arc<..>>`
+/// 实现，不引入外部依赖。
+pub struct NetworkState {
+    /// 当前生效快照；替换时整体换 `Arc`，读时 clone 出锁。
+    current: std::sync::RwLock<std::sync::Arc<NetworkSnapshot>>,
+}
+
+impl NetworkState {
+    /// 用初始代理配置与超时构造热替换槽（启动期由 `[network.proxy]` 文件 / env 配置装载）。
+    ///
+    /// 构造失败（代理 URL 无效 / TLS 初始化异常）冒泡给调用方；错误信息不含代理凭据。
+    pub fn new(proxy: NetworkProxyConfig, timeout: std::time::Duration) -> Result<Self, String> {
+        let client = build_outbound_client(timeout, &proxy)?;
+        Ok(Self {
+            current: std::sync::RwLock::new(std::sync::Arc::new(NetworkSnapshot {
+                proxy,
+                timeout,
+                client,
+            })),
+        })
+    }
+
+    /// 取当前出站客户端：读锁内 clone `reqwest::Client`（内部 `Arc`、廉价）立即放锁，锁外发请求。
+    pub fn client(&self) -> reqwest::Client {
+        self.current
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .client
+            .clone()
+    }
+
+    /// 取当前生效快照（含代理配置）：读锁内 clone `Arc` 立即放锁，调用方锁外读。
+    pub fn snapshot(&self) -> std::sync::Arc<NetworkSnapshot> {
+        std::sync::Arc::clone(&self.current.read().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    /// 用新代理配置原子替换当前快照：**锁外**重建 client，再短持写锁换指针。
+    ///
+    /// 构造失败即返回错误且**不替换**（现有 client 仍生效）；成功后下一个 [`Self::client`] 即返回
+    /// 新代理的 client，对应下一个出站请求即经新代理。沿用当前快照的超时口径。
+    pub fn replace_proxy(&self, proxy: NetworkProxyConfig) -> Result<(), String> {
+        // 沿用当前超时，PATCH 只调代理
+        let timeout = self
+            .current
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .timeout;
+        // 锁外重建 client（TLS / 代理初始化开销均在临界区外完成）；失败即返回、不触碰现有快照
+        let client = build_outbound_client(timeout, &proxy)?;
+        let next = std::sync::Arc::new(NetworkSnapshot {
+            proxy,
+            timeout,
+            client,
+        });
+        // 写临界区只做一次指针赋值，短持有、不做编译 / IO
+        let mut guard = self.current.write().unwrap_or_else(|e| e.into_inner());
+        *guard = next;
+        Ok(())
+    }
+}
+
+/// 在线更新运行时可调配置（FR-88，ADR-0022，收拢 ADR-0021 可热替换的字段）。
+///
+/// 不含 `download_timeout_secs`（出站 client 经 `NetworkState` 取、超时随槽），只承载 check / apply
+/// 需读且可运行时调的字段。`token` 绝不回显 / 不入库 / 不进日志。
+#[derive(Debug, Clone)]
+pub struct EditableUpdate {
+    /// 是否启用在线更新（出站开关）：false 时 check / apply 一律拒绝、不联网。
+    pub enabled: bool,
+    /// 仓库源（`owner/repo`）。
+    pub repo: String,
+    /// GitHub API 基址。
+    pub api_base_url: String,
+    /// 重启模式：`self`（自拉起）或 `exit`（交外部进程管理器）。
+    pub restart_mode: String,
+    /// 资产下载整体超时（秒）。
+    pub download_timeout_secs: u64,
+    /// 私有仓库可选访问 token（真源 env，绝不回显 / 入库 / 进日志）。
+    pub token: Option<String>,
+}
+
+impl EditableUpdate {
+    /// 从启动期 [`UpdateConfig`] 装载初值。
+    pub fn from_config(cfg: &UpdateConfig) -> Self {
+        Self {
+            enabled: cfg.enabled,
+            repo: cfg.repo.clone(),
+            api_base_url: cfg.api_base_url.clone(),
+            restart_mode: cfg.restart_mode.clone(),
+            download_timeout_secs: cfg.download_timeout_secs,
+            token: cfg.token.clone(),
+        }
+    }
+
+    /// 校验运行时可调字段：`repo` / `api_base_url` 非空、`restart_mode` 合法。
+    pub fn validate(&self) -> Result<(), String> {
+        if self.repo.trim().is_empty() {
+            return Err("仓库源 repo 不能为空".to_string());
+        }
+        if self.api_base_url.trim().is_empty() {
+            return Err("GitHub API 基址 api_base_url 不能为空".to_string());
+        }
+        if self.restart_mode != "self" && self.restart_mode != "exit" {
+            return Err("重启模式 restart_mode 仅允许 self 或 exit".to_string());
+        }
+        Ok(())
+    }
+}
+
+/// 运行时可编辑设置热替换槽（FR-88，ADR-0022）：随 `AppState` 经 `Arc` 共享。
+///
+/// 收拢两块可运行时调整的配置：出站网络代理（[`NetworkState`]，含据代理构造的 client）与在线更新
+/// 可调字段（[`EditableUpdate`]）。设置页 `PATCH /api/v1/settings` 校验后换槽即时生效、无须重启；
+/// 凭据（代理 `user:pass@` 与 update token）只入本内存槽、不写回 TOML / 不入 DB / 不回显。
+pub struct EditableSettings {
+    /// 出站网络代理热替换槽（含当前 client）；`Arc` 共享给各出站点持有。
+    pub network: std::sync::Arc<NetworkState>,
+    /// 在线更新可调字段（`RwLock<Arc<..>>` 原子换）。
+    update: std::sync::RwLock<std::sync::Arc<EditableUpdate>>,
+}
+
+impl EditableSettings {
+    /// 用启动期网络代理 + 出站超时 + 在线更新配置构造可编辑设置槽。
+    ///
+    /// `network_timeout` 为出站 client 整体超时（沿用启动期上游超时口径）。构造失败（代理无效）
+    /// 冒泡给调用方，错误信息不含凭据。
+    pub fn new(
+        proxy: NetworkProxyConfig,
+        network_timeout: std::time::Duration,
+        update: &UpdateConfig,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            network: std::sync::Arc::new(NetworkState::new(proxy, network_timeout)?),
+            update: std::sync::RwLock::new(std::sync::Arc::new(EditableUpdate::from_config(
+                update,
+            ))),
+        })
+    }
+
+    /// 取当前在线更新可调配置：读锁内 clone `Arc` 立即放锁。
+    pub fn update(&self) -> std::sync::Arc<EditableUpdate> {
+        std::sync::Arc::clone(&self.update.read().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    /// 原子替换在线更新可调配置（调用方应先 [`EditableUpdate::validate`] 校验）。
+    pub fn replace_update(&self, next: EditableUpdate) {
+        let mut guard = self.update.write().unwrap_or_else(|e| e.into_inner());
+        *guard = std::sync::Arc::new(next);
+    }
+}
+
 impl Config {
     /// 从指定 TOML 文件与环境变量加载配置。
     ///
@@ -1684,4 +1857,111 @@ mod tests {
         );
         assert!(!json.contains("token"), "序列化输出不得包含 token 字段名");
     }
+
+    // ===== FR-88 / ADR-0022：NetworkState 热替换与 EditableUpdate 校验 =====
+
+    /// 便捷：构造一份指定 http 代理的网络配置。
+    fn 含代理的网络配置(http: &str) -> NetworkProxyConfig {
+        NetworkProxyConfig {
+            http: Some(http.to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn network_state_初始快照反映初始代理() {
+        let state = NetworkState::new(含代理的网络配置("http://p1.internal:8080"), DUR).unwrap();
+        let snap = state.snapshot();
+        assert_eq!(snap.proxy.http.as_deref(), Some("http://p1.internal:8080"));
+    }
+
+    #[test]
+    fn network_state_replace_后快照反映新代理_旧持有快照不受影响() {
+        let state = NetworkState::new(NetworkProxyConfig::default(), DUR).unwrap();
+        // 初始无代理
+        let old = state.snapshot();
+        assert!(old.proxy.http.is_none());
+        // 热替换为新代理
+        state
+            .replace_proxy(含代理的网络配置("http://p2.internal:3128"))
+            .unwrap();
+        // 新快照反映新代理
+        assert_eq!(
+            state.snapshot().proxy.http.as_deref(),
+            Some("http://p2.internal:3128")
+        );
+        // 替换前持有的旧快照仍是替换前一致视图（不会半新半旧）
+        assert!(old.proxy.http.is_none());
+    }
+
+    #[test]
+    fn network_state_replace_非法代理_返回错误且不改现有生效值() {
+        let state = NetworkState::new(含代理的网络配置("http://good.internal:8080"), DUR).unwrap();
+        // 非法代理 URL（reqwest 构造失败）应返回错误、不替换
+        let bad = 含代理的网络配置("http://[::bad url");
+        let res = state.replace_proxy(bad);
+        assert!(res.is_err(), "非法代理应构造失败");
+        // 现有生效代理不变
+        assert_eq!(
+            state.snapshot().proxy.http.as_deref(),
+            Some("http://good.internal:8080"),
+            "非法替换不得改动现有生效代理"
+        );
+    }
+
+    #[test]
+    fn network_state_并发replace与读取不panic且自洽() {
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+        let state = Arc::new(NetworkState::new(NetworkProxyConfig::default(), DUR).unwrap());
+        let writers = 4usize;
+        let readers = 4usize;
+        let per = 100usize;
+        let barrier = Arc::new(Barrier::new(writers + readers));
+        let mut handles = Vec::new();
+        for w in 0..writers {
+            let state = Arc::clone(&state);
+            let barrier = Arc::clone(&barrier);
+            handles.push(thread::spawn(move || {
+                barrier.wait();
+                for i in 0..per {
+                    let cfg = if (w + i) % 2 == 0 {
+                        含代理的网络配置("http://a.internal:8080")
+                    } else {
+                        NetworkProxyConfig::default()
+                    };
+                    state.replace_proxy(cfg).unwrap();
+                }
+            }));
+        }
+        for _ in 0..readers {
+            let state = Arc::clone(&state);
+            let barrier = Arc::clone(&barrier);
+            handles.push(thread::spawn(move || {
+                barrier.wait();
+                for _ in 0..per {
+                    // 取 client 与快照都不应 panic；快照自洽（代理配置与构造它的 client 同源）
+                    let _ = state.client();
+                    let _ = state.snapshot().proxy.clone();
+                }
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn editable_update_校验_拒非法_restart_mode_与空_repo() {
+        let mut u = EditableUpdate::from_config(&UpdateConfig::default());
+        assert!(u.validate().is_ok(), "默认配置应合法");
+        u.restart_mode = "boom".to_string();
+        assert!(u.validate().is_err(), "非法 restart_mode 应拒");
+        u.restart_mode = "self".to_string();
+        u.repo = "  ".to_string();
+        assert!(u.validate().is_err(), "空 repo 应拒");
+    }
+
+    /// 测试用出站超时。
+    const DUR: std::time::Duration = std::time::Duration::from_secs(30);
 }

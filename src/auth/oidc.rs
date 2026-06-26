@@ -139,17 +139,21 @@ pub struct FlowState {
 /// 授权 URL 构造与回调换码 / 校验能力。
 pub struct OidcProvider {
     settings: OidcSettings,
-    http: reqwest::Client,
+    /// 出站网络热替换槽（含当前 client，随 PATCH 即时换代理；FR-88，ADR-0022）。
+    network: std::sync::Arc<crate::config::NetworkState>,
     /// discovery + JWKS 缓存（首次使用拉取；本批简化为进程内一次性缓存，按需可扩 TTL 刷新）。
     cache: tokio::sync::OnceCell<(Discovery, Jwks)>,
 }
 
 impl OidcProvider {
-    /// 构造 provider；复用调用方提供的 reqwest 客户端（纯 rustls，与既有上游一致）。
-    pub fn new(settings: OidcSettings, http: reqwest::Client) -> Self {
+    /// 构造 provider；持出站网络热替换槽，出站时取当前 client（纯 rustls，与既有上游一致）。
+    pub fn new(
+        settings: OidcSettings,
+        network: std::sync::Arc<crate::config::NetworkState>,
+    ) -> Self {
         Self {
             settings,
-            http,
+            network,
             cache: tokio::sync::OnceCell::new(),
         }
     }
@@ -237,7 +241,8 @@ impl OidcProvider {
 
     /// GET 并按 JSON 解析（用 bytes + serde_json，不依赖 reqwest 的 json 特性）。
     async fn get_json<T: serde::de::DeserializeOwned>(&self, url: &str) -> Result<T, OidcError> {
-        let resp = self.http.get(url).send().await.map_err(|e| {
+        // 从热替换槽取当前 client（读锁极短、锁外发请求）
+        let resp = self.network.client().get(url).send().await.map_err(|e| {
             tracing::warn!(错误 = %e, "OIDC 请求 IdP 端点失败");
             OidcError::Upstream
         })?;
@@ -270,7 +275,8 @@ impl OidcProvider {
         form.insert("code_verifier", code_verifier);
 
         let resp = self
-            .http
+            .network
+            .client()
             .post(token_endpoint)
             .form(&form)
             .send()

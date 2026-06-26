@@ -3,43 +3,33 @@
 //! 守 SECURITY：仅 rustls 校验源系统 HTTPS 证书，不引 native-tls / openssl。
 //! 凭据经 HTTP Basic Auth 注入请求头，绝不写入日志 / 错误信息。
 
+use std::sync::Arc;
+
 use futures_util::TryStreamExt;
 use tokio_util::io::StreamReader;
+
+use crate::config::NetworkState;
 
 use super::{
     MigrateError, NexusClient, NexusCredential, NEXUS_COMPONENTS_PATH, NEXUS_REPOSITORIES_PATH,
 };
 
-/// 基于 reqwest 的 Nexus REST 客户端。内部持有复用连接池的 `reqwest::Client`。
-#[derive(Debug, Clone)]
+/// 基于 reqwest 的 Nexus REST 客户端。
+///
+/// 不再持有启动期固化的 client，改持出站网络热替换槽 [`NetworkState`]（FR-88，ADR-0022）：
+/// 每次出站经 `network.client()` 取当前 client（含运行时 PATCH 后的新代理）。
+#[derive(Clone)]
 pub struct HttpNexusClient {
-    /// 复用的 HTTP 客户端（连接池、超时已配置）。
-    client: reqwest::Client,
+    /// 出站网络热替换槽（含当前 client，随 PATCH 即时换代理）。
+    network: Arc<NetworkState>,
 }
 
 impl HttpNexusClient {
-    /// 构造客户端，设定整体请求超时（避免慢速源系统拖垮请求线程）。
+    /// 持出站网络热替换槽构造 Nexus 客户端（FR-88，ADR-0022）。
     ///
-    /// 不注入出站代理（等价空代理配置，保持既有行为）；超时来自配置，不硬编码。
-    /// 需注入 `[network.proxy]` 出站代理时改用 [`HttpNexusClient::with_network`]。
-    pub fn new(request_timeout: std::time::Duration) -> Result<Self, MigrateError> {
-        Self::with_network(
-            request_timeout,
-            &crate::config::NetworkProxyConfig::default(),
-        )
-    }
-
-    /// 按出站代理配置构造 Nexus 客户端（FR-84，ADR-0020）。
-    ///
-    /// 经统一出站客户端 helper 注入 `[network.proxy]` 代理与既有超时 / rustls / stream 特性；
-    /// 构造失败冒泡给调用方，错误信息不含代理凭据。
-    pub fn with_network(
-        request_timeout: std::time::Duration,
-        proxy: &crate::config::NetworkProxyConfig,
-    ) -> Result<Self, MigrateError> {
-        let client = crate::config::build_outbound_client(request_timeout, proxy)
-            .map_err(MigrateError::Transport)?;
-        Ok(Self { client })
+    /// 出站时经 `network.client()` 取当前 client；代理 / 超时 / rustls / stream 特性由槽统一注入。
+    pub fn with_network_state(network: Arc<NetworkState>) -> Self {
+        Self { network }
     }
 }
 
@@ -56,7 +46,8 @@ impl NexusClient for HttpNexusClient {
             NEXUS_REPOSITORIES_PATH
         );
 
-        let mut req = self.client.get(&url);
+        // 从热替换槽取当前 client（读锁极短、锁外发请求）
+        let mut req = self.network.client().get(&url);
         // 带凭据时以 Basic Auth 注入；凭据不进日志
         if let Some(c) = credential {
             req = req.basic_auth(&c.username, Some(&c.password));
@@ -100,7 +91,7 @@ impl NexusClient for HttpNexusClient {
             }
         }
 
-        let mut req = self.client.get(url);
+        let mut req = self.network.client().get(url);
         if let Some(c) = credential {
             req = req.basic_auth(&c.username, Some(&c.password));
         }
@@ -121,7 +112,7 @@ impl NexusClient for HttpNexusClient {
         download_url: &str,
         credential: Option<&NexusCredential>,
     ) -> Result<Box<dyn tokio::io::AsyncRead + Send + Unpin>, MigrateError> {
-        let mut req = self.client.get(download_url);
+        let mut req = self.network.client().get(download_url);
         if let Some(c) = credential {
             req = req.basic_auth(&c.username, Some(&c.password));
         }

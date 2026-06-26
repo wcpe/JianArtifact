@@ -94,12 +94,22 @@ async fn main() -> anyhow::Result<()> {
         cfg.auth.login_lockout_secs,
     ));
 
-    // 通用制品机理服务：本地 blob 存储 + reqwest 上游（纯 rustls）+ 单飞缓存
-    let upstream = HttpUpstream::with_network(
-        std::time::Duration::from_secs(cfg.proxy.upstream_timeout_secs),
-        &cfg.network.proxy,
-    )
-    .context("初始化上游 HTTP 客户端失败")?;
+    // 运行时可编辑设置热替换槽（FR-88，ADR-0022）：以 [network.proxy] + [update] 文件 / env 配置装载初值，
+    // 收拢出站网络代理（含据其构造的 reqwest::Client）与在线更新可调字段。全部出站点与在线更新端点经本槽
+    // 取当前值；管理端 PATCH /api/v1/settings 锁外重建、原子换槽即时生效、无须重启。出站 client 超时沿用
+    // 上游回源口径。
+    let settings = Arc::new(
+        jianartifact::config::EditableSettings::new(
+            cfg.network.proxy.clone(),
+            std::time::Duration::from_secs(cfg.proxy.upstream_timeout_secs),
+            &cfg.update,
+        )
+        .map_err(|e| anyhow::anyhow!(e))
+        .context("初始化运行时可编辑设置槽失败")?,
+    );
+
+    // 通用制品机理服务：本地 blob 存储 + reqwest 上游（纯 rustls，经热替换槽取当前 client）+ 单飞缓存
+    let upstream = HttpUpstream::with_network_state(settings.network.clone());
     let artifacts = Arc::new(ArtifactService::new(store.clone(), meta.clone(), upstream));
     // 格式注册表：注册已实现格式（Raw、Maven、npm、Docker），其余格式由后续批次接入
     let formats = Arc::new(FormatRegistry::with_builtin());
@@ -166,12 +176,11 @@ async fn main() -> anyhow::Result<()> {
     // 漏洞库离线镜像（FR-70，ADR-0012）：默认关闭，启用时后台周期下载公开漏洞数据落本地库。
     // 仅镜像/落库，不做制品坐标匹配（FR-71）；下载公开数据集整包，不外发本机制品坐标。
     let _vuln_refresh = if cfg.vuln.enabled {
-        let source = HttpMirrorSource::with_network(
+        // 持共享出站网络热替换槽，后台周期刷新每次下载取当前 client（运行时 PATCH 改代理后下次刷新即生效）
+        let source = HttpMirrorSource::with_network_state(
             cfg.vuln.source_base_url.clone(),
-            std::time::Duration::from_secs(cfg.vuln.download_timeout_secs),
-            &cfg.network.proxy,
-        )
-        .context("初始化漏洞库镜像下载器失败")?;
+            settings.network.clone(),
+        );
         let mirror = Arc::new(VulnMirror::new(meta.clone(), source, &data_dir));
         vuln::spawn_refresh_loop(mirror, cfg.vuln.clone())
     } else {
@@ -231,13 +240,7 @@ async fn main() -> anyhow::Result<()> {
     // OIDC 认证 provider（FR-34，ADR-0016）：仅当配置了 `[auth.oidc]` 才实例化（未配置即不存在）。
     // client_secret 真源 env / 配置，绝不入库 / 进日志；复用纯 rustls 的 reqwest 客户端。
     let oidc = if let Some(oidc_cfg) = cfg.auth.oidc.clone() {
-        // 经统一出站客户端 helper 构造，注入 [network.proxy] 出站代理（FR-84，ADR-0020）
-        let http = jianartifact::config::build_outbound_client(
-            std::time::Duration::from_secs(cfg.proxy.upstream_timeout_secs),
-            &cfg.network.proxy,
-        )
-        .map_err(|e| anyhow::anyhow!(e))
-        .context("初始化 OIDC HTTP 客户端失败")?;
+        // 持共享出站网络热替换槽，登录出站取当前 client（运行时 PATCH 改代理即时生效；FR-88，ADR-0022）
         let provider = OidcProvider::new(
             OidcSettings {
                 issuer: oidc_cfg.issuer,
@@ -246,7 +249,7 @@ async fn main() -> anyhow::Result<()> {
                 redirect_uri: oidc_cfg.redirect_uri,
                 auto_provision: oidc_cfg.auto_provision,
             },
-            http,
+            settings.network.clone(),
         );
         info!(
             JIT开通 = oidc_cfg.auto_provision,
@@ -332,6 +335,8 @@ async fn main() -> anyhow::Result<()> {
         alert_engine,
         // FR-85：在线更新重启句柄（自更新替换成功后触发优雅停机 + 重启）
         restart: restart.clone(),
+        // FR-88：运行时可编辑设置热替换槽（出站网络代理 + 在线更新可调字段），PATCH 即时生效
+        settings,
     };
     let app = api::build_router(state);
 

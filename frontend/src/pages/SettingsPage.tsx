@@ -1,9 +1,9 @@
-// 设置页（FR-87，仅管理员）：只读展示网络代理（FR-84）+ 在线更新（FR-85）配置，
-// 并提供「检查更新 / 应用更新」入口。
+// 设置页（FR-87 只读 + FR-88 可编辑热替换，仅管理员）：编辑网络代理（FR-84）+ 在线更新（FR-85）
+// 配置，保存调 PATCH /api/v1/settings 即时生效、无须重启；并提供「检查更新 / 应用更新」入口。
 //
 // 数据来自后端 GET /api/v1/settings（已脱敏：代理 URL 去凭据、更新 token 仅以 has_token 暴露）。
-// 配置真源为 config.toml / 环境变量，运行时不可改（守 ADR-0020），故本页对配置只读、不提供编辑；
-// 唯一写动作是检查更新（GET /update/check）与应用更新（POST /update/apply，二次确认后触发）。
+// 保存走 PATCH（运行时热替换，守 ADR-0022）：代理凭据与 token 只入内存槽、不写回 TOML / 不回显，
+// 重启回落文件 / env 配置。token 三态：留空=保留现有，清空动作=清除，填新值=设置。
 
 import { useEffect, useState } from 'react';
 import {
@@ -17,49 +17,43 @@ import {
   Loader,
   Center,
   Divider,
-  Table,
   Code,
   Modal,
   Alert,
+  TextInput,
+  Switch,
+  Select,
+  PasswordInput,
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
-import { IconRefresh, IconArrowUp, IconInfoCircle } from '@tabler/icons-react';
+import { IconRefresh, IconArrowUp, IconInfoCircle, IconDeviceFloppy } from '@tabler/icons-react';
 import * as api from '../api/endpoints';
 import type { SettingsView, UpdateCheck } from '../api/types';
 import { errorMessage } from '../lib/format';
 import { ErrorAlert } from '../components/ErrorAlert';
-
-/** 只读字段行：标签 + 值（值缺省时展示「未配置」）。 */
-function FieldRow({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <Table.Tr>
-      <Table.Td style={{ width: 180, whiteSpace: 'nowrap' }}>
-        <Text c="dimmed" size="sm">
-          {label}
-        </Text>
-      </Table.Td>
-      <Table.Td>{value}</Table.Td>
-    </Table.Tr>
-  );
-}
-
-/** 展示一个可空字符串：有值用等宽 Code，无值展示灰色「未配置」。 */
-function OptionalValue({ value }: { value: string | null }) {
-  if (!value) {
-    return (
-      <Text c="dimmed" size="sm">
-        未配置
-      </Text>
-    );
-  }
-  return <Code>{value}</Code>;
-}
 
 /** 设置页。 */
 export function SettingsPage() {
   const [settings, setSettings] = useState<SettingsView | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // —— 可编辑表单态（FR-88）——
+  // 代理 URL：编辑框展示的是脱敏值；保存时如未改动则原样回传（脱敏值无凭据，回传不会泄露已有凭据，
+  // 但也无法恢复原凭据——运维如需保留代理凭据应在 config.toml / env 配置）。
+  const [httpProxy, setHttpProxy] = useState('');
+  const [httpsProxy, setHttpsProxy] = useState('');
+  const [noProxy, setNoProxy] = useState('');
+  const [updateEnabled, setUpdateEnabled] = useState(false);
+  const [repo, setRepo] = useState('');
+  const [apiBaseUrl, setApiBaseUrl] = useState('');
+  const [restartMode, setRestartMode] = useState('self');
+  // token 输入框：留空 = 保留现有（提交时省略 token 字段）；填值 = 设置新 token
+  const [tokenInput, setTokenInput] = useState('');
+  const [hasToken, setHasToken] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
 
   // 更新检查 / 应用相关状态
   const [check, setCheck] = useState<UpdateCheck | null>(null);
@@ -70,10 +64,24 @@ export function SettingsPage() {
   const [restarting, setRestarting] = useState(false);
   const [confirmOpened, confirmModal] = useDisclosure(false);
 
+  // 用一份设置填充表单态。
+  function fillForm(s: SettingsView) {
+    setSettings(s);
+    setHttpProxy(s.network_proxy.http ?? '');
+    setHttpsProxy(s.network_proxy.https ?? '');
+    setNoProxy(s.network_proxy.no_proxy ?? '');
+    setUpdateEnabled(s.update.enabled);
+    setRepo(s.update.repo);
+    setApiBaseUrl(s.update.api_base_url);
+    setRestartMode(s.update.restart_mode);
+    setHasToken(s.update.has_token);
+    setTokenInput('');
+  }
+
   useEffect(() => {
     api
       .getSettings()
-      .then(setSettings)
+      .then(fillForm)
       .catch((err) => setError(errorMessage(err)))
       .finally(() => setLoading(false));
   }, []);
@@ -95,8 +103,34 @@ export function SettingsPage() {
     );
   }
 
-  const proxy = settings.network_proxy;
-  const update = settings.update;
+  async function handleSave() {
+    setSaving(true);
+    setSaveError(null);
+    setSaved(false);
+    try {
+      const updated = await api.updateSettings({
+        network_proxy: {
+          http: httpProxy.trim() ? httpProxy.trim() : null,
+          https: httpsProxy.trim() ? httpsProxy.trim() : null,
+          no_proxy: noProxy.trim() ? noProxy.trim() : null,
+        },
+        update: {
+          enabled: updateEnabled,
+          repo: repo.trim(),
+          api_base_url: apiBaseUrl.trim(),
+          restart_mode: restartMode,
+          // token 留空则省略（保留现有）；填值则设置新 token
+          ...(tokenInput.trim() ? { token: tokenInput.trim() } : {}),
+        },
+      });
+      fillForm(updated);
+      setSaved(true);
+    } catch (err) {
+      setSaveError(errorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  }
 
   async function handleCheck() {
     setChecking(true);
@@ -132,7 +166,8 @@ export function SettingsPage() {
     <Stack>
       <Title order={2}>设置</Title>
       <Text c="dimmed">
-        网络代理与在线更新配置；配置真源为 config.toml / 环境变量，运行时只读不可改。
+        网络代理与在线更新配置，保存后运行时即时生效、无须重启。代理凭据与访问令牌只入内存、不回显、不写回配置文件，重启回落
+        config.toml / 环境变量。
       </Text>
       {error && <ErrorAlert message={error} />}
 
@@ -140,69 +175,105 @@ export function SettingsPage() {
       <Card withBorder padding="lg" radius="md">
         <Title order={4}>网络代理</Title>
         <Text size="sm" c="dimmed" mb="sm">
-          统一出站代理配置（已脱敏，不展示任何凭据）。配置真源为 config.toml /
-          环境变量，运行时不可在此修改。
+          统一出站代理（回源 / 迁移 / 漏洞库 / OIDC / 在线更新共用）。可含 user:pass@
+          凭据（不回显）；留空表示不配置。
         </Text>
-        <Table>
-          <Table.Tbody>
-            <FieldRow label="HTTP 代理" value={<OptionalValue value={proxy.http} />} />
-            <FieldRow label="HTTPS 代理" value={<OptionalValue value={proxy.https} />} />
-            <FieldRow
-              label="直连绕过（no_proxy）"
-              value={<OptionalValue value={proxy.no_proxy} />}
-            />
-          </Table.Tbody>
-        </Table>
+        <Stack gap="sm">
+          <TextInput
+            label="HTTP 代理"
+            placeholder="http://proxy.internal:8080"
+            value={httpProxy}
+            onChange={(e) => setHttpProxy(e.currentTarget.value)}
+          />
+          <TextInput
+            label="HTTPS 代理"
+            placeholder="http://proxy.internal:8080"
+            value={httpsProxy}
+            onChange={(e) => setHttpsProxy(e.currentTarget.value)}
+          />
+          <TextInput
+            label="直连绕过（no_proxy）"
+            placeholder="localhost,127.0.0.1,.internal"
+            value={noProxy}
+            onChange={(e) => setNoProxy(e.currentTarget.value)}
+          />
+        </Stack>
       </Card>
 
       {/* —— 在线更新 —— */}
       <Card withBorder padding="lg" radius="md">
         <Title order={4}>在线更新</Title>
         <Text size="sm" c="dimmed" mb="sm">
-          管理员手动触发的自更新。是否启用、仓库源等真源为 config.toml / 环境变量，运行时只读。
+          管理员手动触发的自更新。当前版本 <Badge variant="light">{settings.current_version}</Badge>
         </Text>
-        <Table>
-          <Table.Tbody>
-            <FieldRow
-              label="状态"
-              value={
-                update.enabled ? (
-                  <Badge color="green">已启用</Badge>
-                ) : (
-                  <Badge color="gray">未启用</Badge>
-                )
-              }
-            />
-            <FieldRow label="仓库源" value={<Code>{update.repo}</Code>} />
-            <FieldRow label="API 基址" value={<Code>{update.api_base_url}</Code>} />
-            <FieldRow label="重启模式" value={<Code>{update.restart_mode}</Code>} />
-            <FieldRow
-              label="访问令牌"
-              value={
-                update.has_token ? (
-                  <Badge color="blue">已配置</Badge>
-                ) : (
-                  <Text c="dimmed" size="sm">
-                    未配置
-                  </Text>
-                )
-              }
-            />
-            <FieldRow label="当前版本" value={<Code>{settings.current_version}</Code>} />
-          </Table.Tbody>
-        </Table>
+        <Stack gap="sm">
+          <Switch
+            label="启用在线更新（出站开关）"
+            checked={updateEnabled}
+            onChange={(e) => setUpdateEnabled(e.currentTarget.checked)}
+          />
+          <TextInput
+            label="仓库源（owner/repo）"
+            placeholder="wcpe/JianArtifact"
+            value={repo}
+            onChange={(e) => setRepo(e.currentTarget.value)}
+          />
+          <TextInput
+            label="API 基址"
+            placeholder="https://api.github.com"
+            value={apiBaseUrl}
+            onChange={(e) => setApiBaseUrl(e.currentTarget.value)}
+          />
+          <Select
+            label="重启模式"
+            data={[
+              { value: 'self', label: 'self（自拉起新进程）' },
+              { value: 'exit', label: 'exit（交外部进程管理器重启）' },
+            ]}
+            value={restartMode}
+            onChange={(v) => setRestartMode(v ?? 'self')}
+            allowDeselect={false}
+          />
+          <PasswordInput
+            label="访问令牌（私有仓库可选）"
+            description={
+              hasToken
+                ? '已配置令牌（不回显）。留空保留现有，填新值则替换。'
+                : '未配置。留空表示不设置，填值则设置。'
+            }
+            placeholder={hasToken ? '保留现有令牌' : '可选'}
+            value={tokenInput}
+            onChange={(e) => setTokenInput(e.currentTarget.value)}
+          />
+        </Stack>
+      </Card>
 
-        <Divider my="md" />
+      {/* —— 保存 —— */}
+      <Group>
+        <Button leftSection={<IconDeviceFloppy size={16} />} onClick={handleSave} loading={saving}>
+          保存
+        </Button>
+        {saved && (
+          <Text c="green" size="sm">
+            已保存，配置已即时生效。
+          </Text>
+        )}
+      </Group>
+      {saveError && <ErrorAlert message={saveError} />}
 
-        {!update.enabled && (
+      {/* —— 更新检查 / 应用 —— */}
+      <Card withBorder padding="lg" radius="md">
+        <Title order={4}>检查与应用更新</Title>
+        <Divider my="sm" />
+
+        {!settings.update.enabled && (
           <Alert
             icon={<IconInfoCircle size={16} />}
             color="gray"
             variant="light"
             title="在线更新未启用"
           >
-            在线更新出站开关默认关闭。如需使用，请在 config.toml 的 [update]
-            段或环境变量中开启后重启服务。
+            在线更新出站开关当前关闭。请在上方启用并保存后，再检查 / 应用更新。
           </Alert>
         )}
 
@@ -222,7 +293,7 @@ export function SettingsPage() {
                 leftSection={<IconRefresh size={16} />}
                 onClick={handleCheck}
                 loading={checking}
-                disabled={!update.enabled}
+                disabled={!settings.update.enabled}
               >
                 检查更新
               </Button>

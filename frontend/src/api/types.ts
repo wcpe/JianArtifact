@@ -543,6 +543,30 @@ export interface SettingsView {
   update: UpdateView;
 }
 
+// —— 设置编辑（FR-88，仅管理员，运行时热替换） ——
+
+/** 网络代理编辑项（空串视作清空对应项；可含 user:pass@ 凭据，只入内存槽不回显）。 */
+export interface NetworkProxyPatch {
+  http: string | null;
+  https: string | null;
+  no_proxy: string | null;
+}
+
+/** 在线更新编辑项。token 三态：缺省/null=保留现有，空串=清空，非空=设置（不回显）。 */
+export interface UpdatePatch {
+  enabled: boolean;
+  repo: string;
+  api_base_url: string;
+  restart_mode: string;
+  token?: string | null;
+}
+
+/** 设置编辑请求体（PATCH /api/v1/settings，整体替换网络代理 + 在线更新可调字段）。 */
+export interface SettingsPatch {
+  network_proxy: NetworkProxyPatch;
+  update: UpdatePatch;
+}
+
 /** 更新检查结果（GET /api/v1/update/check，对齐 FR-85 既有契约）。 */
 export interface UpdateCheck {
   current_version: string;

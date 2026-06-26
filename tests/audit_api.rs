@@ -81,6 +81,14 @@ impl Fixture {
                 jianartifact::api::alert_channel().0,
             )),
             restart: std::sync::Arc::new(jianartifact::update::RestartHandle::default()),
+            settings: std::sync::Arc::new(
+                jianartifact::config::EditableSettings::new(
+                    jianartifact::config::NetworkProxyConfig::default(),
+                    std::time::Duration::from_secs(60),
+                    &jianartifact::config::UpdateConfig::default(),
+                )
+                .unwrap(),
+            ),
         };
         Self { state, _dir: dir }
     }
@@ -338,6 +346,14 @@ async fn 审计写入任务缺失时业务仍成功() {
             jianartifact::api::alert_channel().0,
         )),
         restart: std::sync::Arc::new(jianartifact::update::RestartHandle::default()),
+        settings: std::sync::Arc::new(
+            jianartifact::config::EditableSettings::new(
+                jianartifact::config::NetworkProxyConfig::default(),
+                std::time::Duration::from_secs(60),
+                &jianartifact::config::UpdateConfig::default(),
+            )
+            .unwrap(),
+        ),
     };
     let hash = auth::hash_password("S3cret!").unwrap();
     meta.create_user("admin", &hash, Role::Admin).await.unwrap();

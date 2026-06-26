@@ -60,45 +60,51 @@ pub trait ReleaseSource {
     ) -> impl std::future::Future<Output = Result<Box<dyn AsyncRead + Send + Unpin>, UpdateError>> + Send;
 }
 
-/// GitHub Release 生产来源（经 `build_outbound_client` 注入代理与 rustls / stream 特性）。
-#[derive(Debug, Clone)]
+/// GitHub Release 生产来源（出站经热替换槽 [`NetworkState`] 取当前 client，FR-88 / ADR-0022）。
+#[derive(Clone)]
 pub struct GithubReleaseSource {
-    /// 复用的出站 HTTP 客户端（已注入 `[network.proxy]` 与超时）。
-    client: reqwest::Client,
+    /// 出站网络热替换槽（含当前 client，随 PATCH 即时换代理）。
+    network: std::sync::Arc<crate::config::NetworkState>,
     /// GitHub API 基址（默认 `https://api.github.com`，可配）。
     api_base_url: String,
     /// 仓库源（`owner/repo`）。
     repo: String,
     /// 可选访问 token（私有仓库；真源 env，绝不进日志 / 错误）。
     token: Option<String>,
+    /// 资产下载整体超时（按 `[update] download_timeout_secs`，可能远大于出站 client 默认超时）。
+    ///
+    /// 出站 client 取自共享热替换槽（其超时为上游回源口径）；自更新下载大资产需更长超时，故按请求级
+    /// `RequestBuilder::timeout` 注入本值覆盖 client 超时，保持 ADR-0021 的下载超时语义。
+    download_timeout: std::time::Duration,
 }
 
 impl GithubReleaseSource {
-    /// 据出站代理配置构造 GitHub 来源（FR-84，ADR-0020）。
+    /// 持出站网络热替换槽构造 GitHub 来源（FR-88，ADR-0022）。
     ///
-    /// 经统一出站客户端 helper 注入代理与既有 rustls / stream / 超时特性；token 仅注入请求头，
-    /// 绝不进日志 / 错误。构造失败冒泡给调用方（错误信息不含代理凭据）。
-    pub fn new(
-        timeout: std::time::Duration,
-        proxy: &crate::config::NetworkProxyConfig,
+    /// 出站时经 `network.client()` 取当前 client（代理 / rustls / stream 由槽统一注入）；下载超时按
+    /// `download_timeout` 请求级注入。token 仅注入请求头，绝不进日志 / 错误。
+    pub fn with_network_state(
+        network: std::sync::Arc<crate::config::NetworkState>,
         api_base_url: String,
         repo: String,
         token: Option<String>,
-    ) -> Result<Self, UpdateError> {
-        let client =
-            crate::config::build_outbound_client(timeout, proxy).map_err(UpdateError::Upstream)?;
-        Ok(Self {
-            client,
+        download_timeout: std::time::Duration,
+    ) -> Self {
+        Self {
+            network,
             api_base_url,
             repo,
             token,
-        })
+            download_timeout,
+        }
     }
 
-    /// 给请求注入 GitHub API 必需的 `User-Agent` 与可选 `Authorization`。
+    /// 给请求注入 GitHub API 必需的 `User-Agent`、可选 `Authorization` 与请求级下载超时。
     fn with_headers(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        // GitHub API 要求带 User-Agent；缺失会被拒
-        let mut req = req.header(reqwest::header::USER_AGENT, "JianArtifact-Updater");
+        // GitHub API 要求带 User-Agent；缺失会被拒。请求级超时覆盖 client 超时，保持下载超时语义
+        let mut req = req
+            .timeout(self.download_timeout)
+            .header(reqwest::header::USER_AGENT, "JianArtifact-Updater");
         if let Some(token) = &self.token {
             req = req.header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"));
         }
@@ -113,7 +119,8 @@ impl ReleaseSource for GithubReleaseSource {
             self.api_base_url.trim_end_matches('/'),
             self.repo
         );
-        let req = self.client.get(&url);
+        // 从热替换槽取当前 client（读锁极短、锁外发请求）
+        let req = self.network.client().get(&url);
         let resp = self
             .with_headers(req)
             .send()
@@ -139,7 +146,7 @@ impl ReleaseSource for GithubReleaseSource {
         use futures_util::TryStreamExt;
         use tokio_util::io::StreamReader;
 
-        let req = self.client.get(url);
+        let req = self.network.client().get(url);
         let resp = self
             .with_headers(req)
             .send()

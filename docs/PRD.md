@@ -127,7 +127,7 @@
 | FR-85 | 在线更新：管理员手动触发的完整自更新（查 GitHub 最新稳定 Release 比对当前版本 → 按本机 target 下载资产 → 校验 sha256 → 原子替换二进制 → 自动重启；出站默认关闭、仅 Admin、仅版本检查与资产下载不外发使用数据/坐标） | P2 | 开发中 |
 | FR-86 | GitHub Actions CI/CD：质量门（push/PR → 前端构建 + fmt + clippy + test）+ 发布（push 默认分支 → prerelease；tag `v*` → 正式 release；3 目标 Linux/Windows/macOS + 每资产 sha256，资产命名与 FR-85 下载约定对齐） | P2 | 开发中 |
 | FR-87 | Web 控制台设置页（仅 Admin）：网络代理（FR-84）配置查看/状态 + 在线更新（FR-85）版本检查与一键升级入口，把已落地的后端配置/API 收口为控制台 UI | P2 | 开发中 |
-| FR-88 | 设置可编辑与运行时热替换：网络代理 `[network.proxy]` 与在线更新开关等经网页 PATCH 即时生效（仿 FR-79 热替换槽建 NetworkState、出站客户端收进可换槽 PATCH 后重建）；设置页从只读改可编辑（仅 Admin），凭据仍不回显 | P2 | 计划 |
+| FR-88 | 设置可编辑与运行时热替换：网络代理 `[network.proxy]` 与在线更新开关等经网页 PATCH 即时生效（仿 FR-79 热替换槽建 NetworkState、出站客户端收进可换槽 PATCH 后重建）；设置页从只读改可编辑（仅 Admin），凭据仍不回显 | P2 | 开发中 |
 | FR-89 | 在线更新 prerelease / 测试通道（可选拉取预发布版本，默认仍仅 stable；增强 FR-85） | P2 | 计划 |
 | FR-90 | 首启自动生成默认 config.toml（缺失时写一份带注释默认配置，已存在则不覆盖） | P2 | 计划 |
 | FR-91 | Nexus 迁移任务控制：取消 + 暂停 / 继续在途任务（增强 FR-83 异步任务生命周期 + 端点 + 前端按钮） | P2 | 计划 |
