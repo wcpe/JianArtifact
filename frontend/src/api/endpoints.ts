@@ -41,6 +41,8 @@ import type {
   SearchHit,
   SettingsView,
   SettingsPatch,
+  SystemLogEntryDto,
+  SystemLogListParams,
   UpdateCheck,
   ApplyResponse,
   RollbackResponse,
@@ -366,6 +368,21 @@ export function listAudit(params: AuditListParams = {}): Promise<Paginated<Audit
       action: params.action,
       target_repo: params.target_repo,
       actor: params.actor,
+      offset: params.offset,
+      limit: params.limit,
+    },
+  });
+}
+
+// —— 系统运行日志（仅管理员，FR-107） ——
+
+/** 分页查询系统运行日志（tail 最新在前，支持级别过滤）。 */
+export function listSystemLogs(
+  params: SystemLogListParams = {},
+): Promise<Paginated<SystemLogEntryDto>> {
+  return request<Paginated<SystemLogEntryDto>>('/system-logs', {
+    query: {
+      level: params.level,
       offset: params.offset,
       limit: params.limit,
     },

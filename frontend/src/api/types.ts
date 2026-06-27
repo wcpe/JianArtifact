@@ -313,6 +313,24 @@ export interface AuditListParams {
   limit?: number;
 }
 
+/** 单条系统运行日志视图（FR-107，对齐 GET /api/v1/system-logs 的 LogEntry）。 */
+export interface SystemLogEntryDto {
+  /** RFC3339 时间戳；无法解析为 null。 */
+  timestamp: string | null;
+  /** 级别规范大写串（ERROR/WARN/INFO/DEBUG/TRACE）；无法解析为 null。 */
+  level: string | null;
+  /** 消息正文（含 target 与字段）。 */
+  message: string;
+}
+
+/** 系统日志查询参数（FR-107，均可选；分页用 offset/limit，tail 最新在前）。 */
+export interface SystemLogListParams {
+  /** 按级别过滤（ERROR/WARN/INFO/DEBUG/TRACE）。 */
+  level?: string;
+  offset?: number;
+  limit?: number;
+}
+
 /** 防护维度（与后端 ProtectionDimension 入库字符串一致；FR-78）。 */
 export type ProtectionDimension = 'rate_limit' | 'ban' | 'cc_challenge' | 'waf' | 'slowloris';
 

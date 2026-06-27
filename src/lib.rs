@@ -16,6 +16,7 @@ pub mod config;
 pub mod config_overlay;
 pub mod format;
 pub mod licenses;
+pub mod logs;
 pub mod meta;
 pub mod metrics_keys;
 pub mod migrate;

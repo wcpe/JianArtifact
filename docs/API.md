@@ -237,6 +237,13 @@
 - **响应**：统一分页结构 `{ items, total, offset, limit, has_more }`，按时间倒序（最新在前）。每项含 `id`、`ts`、`actor`、`actor_kind`（`session` | `token` | `basic` | `anonymous`）、`request_id`、`source_ip`、`action`、`target_repo`、`target`、`result`（`success` | `denied` | `error`）、`detail`。审计只记元数据级安全 / 管理事件，**绝不含密码 / Token / JWT / 上游凭据**（FR-31，ADR-0015）。
 - **错误**：`401` 未认证；`403` 非管理员。
 
+### 查询系统运行日志（P2，仅 Admin，FR-107）
+
+- **方法 / 路径**：`GET /api/v1/system-logs`
+- **请求**：查询参数均可选——`level`（按级别过滤，大小写不敏感：`ERROR` / `WARN` / `INFO` / `DEBUG` / `TRACE`，精确匹配该级别；无法识别的值视为不过滤），及 `offset` / `limit` 分页参数（默认 `offset=0`、`limit=200`，上限 1000）。仅管理员可访问。
+- **响应**：统一分页结构 `{ items, total, offset, limit, has_more }`，**tail 语义、最新在前**（`offset` 从最新行起向更旧偏移）。每项为一条结构化日志条目 `{ timestamp, level, message }`——`timestamp` 为 RFC3339 字符串（无法解析为 `null`）、`level` 为级别规范大写串（无法识别为 `null`）、`message` 为消息正文（含 target 与字段）。数据来自应用运行时技术日志文件 `{data_dir}/logs/app.log`（tracing 输出，经文件 sink 落盘 + 大小滚动，ADR-0029），**与审计日志（业务留痕落 SQLite）区分**：本端点是运行时技术日志、不落库。日志文件不存在 / 为空时返回 `200` + 空清单（`total=0`），不报错。**纯本机内部数据、绝不外发**（守 ADR-0009 / 0015 基调）。
+- **错误**：`401` 未认证；`403` 非管理员。
+
 ### 查询使用分析（P2，仅 Admin）
 
 - **方法 / 路径**：`GET /api/v1/analytics/usage`

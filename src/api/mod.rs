@@ -62,6 +62,7 @@ mod repositories;
 mod search;
 mod settings;
 mod slowloris;
+mod system_logs;
 mod tokens;
 mod update;
 mod upload_routes;
@@ -413,6 +414,7 @@ pub fn build_router(state: AppState) -> Router {
         // 开源许可清单（FR-102，ADR-0025）：公开、匿名可读，不经鉴权门
         .route("/licenses", get(licenses::list_licenses))
         .route("/audit", get(audit::list_audit))
+        .route("/system-logs", get(system_logs::list_system_logs))
         .route("/analytics/usage", get(analytics::usage_analytics))
         .route("/dashboard/summary", get(dashboard::dashboard_summary))
         .route("/monitor/host", get(monitor::monitor_host))

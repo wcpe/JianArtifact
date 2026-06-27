@@ -3,13 +3,15 @@
 #![forbid(unsafe_code)]
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context;
 use clap::Parser;
 use tracing::{info, warn};
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{reload, EnvFilter, Layer, Registry};
 
 use jianartifact::api::{self, AppState};
 use jianartifact::auth::{
@@ -38,7 +40,8 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    init_tracing();
+    // 先装 stdout 日志（data_dir 未知，文件层留空槽），拿到 data_dir 后再换入文件层（FR-107，ADR-0029）
+    let log_reload = init_tracing();
 
     let cli = Cli::parse();
 
@@ -64,6 +67,9 @@ async fn main() -> anyhow::Result<()> {
     tokio::fs::create_dir_all(&data_dir)
         .await
         .with_context(|| format!("创建数据目录失败: {}", data_dir.display()))?;
+
+    // data_dir 已确定：把运行日志文件输出层换入（此后日志同时进 stdout 与 {data_dir}/logs/app.log）
+    install_file_logging(&log_reload, &data_dir);
 
     // 打开元数据库并跑迁移
     let db_path = cfg.data.database_path();
@@ -465,10 +471,58 @@ fn ensure_default_config(config_path: &std::path::Path) {
     }
 }
 
-/// 初始化分级日志：默认 info，可经 RUST_LOG 调整。
-fn init_tracing() {
+/// 运行日志文件层的重载句柄类型（FR-107，ADR-0029）。
+///
+/// 槽内是一个**可选**的、类型擦除的 `Layer`：初始为 `None`（无文件输出），待 `data_dir` 确定后
+/// 经 `reload(Some(..))` 换入文件层。类型擦除（`Box<dyn Layer>`）避免写出冗长的 fmt 层具体类型。
+type FileLogReloadHandle = reload::Handle<Option<Box<dyn Layer<Registry> + Send + Sync>>, Registry>;
+
+/// 初始化分级日志：默认 info，可经 RUST_LOG 调整；保留 stdout，并预留一个可重载的文件输出层槽。
+///
+/// 文件层在 `init` 时为空（`data_dir` 尚未确定，见 ADR-0029 时序）——`main` 拿到 `data_dir` 后
+/// 调 `install_file_logging` 把文件层换入，此后日志同时进 stdout 与 `{data_dir}/logs/app.log`。
+/// 返回换入文件层所需的重载句柄。
+fn init_tracing() -> FileLogReloadHandle {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+    // stdout 层：沿用既有默认（Full 格式 + 时间戳），输出到标准输出
+    let stdout_layer = tracing_subscriber::fmt::layer();
+    // 可重载的文件层槽：初始 None（无输出）。先 `.with` 到 registry，使其类型参数 S = Registry，
+    // 与返回的句柄类型一致（句柄的 S 即其所在订阅者层）。EnvFilter 作为顶层全局过滤器约束所有下层。
+    let (file_layer, handle) = reload::Layer::new(None::<Box<dyn Layer<Registry> + Send + Sync>>);
+    tracing_subscriber::registry()
+        .with(file_layer)
+        .with(stdout_layer)
+        .with(filter)
+        .init();
+    handle
+}
+
+/// 在 `{data_dir}/logs/` 下装配运行日志文件输出层并经重载句柄换入（FR-107，ADR-0029）。
+///
+/// 文件层关闭 ANSI 颜色码（写文件不需要）、用 `RollingFileWriter` 做单文件 + 大小滚动。
+/// 任一步失败只记 WARN、不阻断启动——回落到「仅 stdout」语义（与既有行为一致）。
+fn install_file_logging(handle: &FileLogReloadHandle, data_dir: &Path) {
+    let logs_dir = jianartifact::logs::logs_dir(data_dir);
+    if let Err(e) = std::fs::create_dir_all(&logs_dir) {
+        warn!(目录 = %logs_dir.display(), 错误 = %e, "创建日志目录失败，运行日志仅输出到 stdout");
+        return;
+    }
+    match jianartifact::logs::RollingFileWriter::new(&logs_dir) {
+        Ok(writer) => {
+            let layer = tracing_subscriber::fmt::layer()
+                .with_writer(writer)
+                .with_ansi(false)
+                .boxed();
+            if let Err(e) = handle.reload(Some(layer)) {
+                warn!(错误 = %e, "装配运行日志文件层失败，运行日志仅输出到 stdout");
+            } else {
+                info!(日志文件 = %logs_dir.join("app.log").display(), "运行日志文件输出已就绪");
+            }
+        }
+        Err(e) => {
+            warn!(目录 = %logs_dir.display(), 错误 = %e, "打开运行日志文件失败，运行日志仅输出到 stdout");
+        }
+    }
 }
 
 /// 执行首启引导并按结果打印日志（随机口令仅首启打印一次）。

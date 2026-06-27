@@ -23,6 +23,7 @@ import { UploadPage } from './pages/UploadPage';
 import { MonitorPage } from './pages/MonitorPage';
 import { AnalyticsPage } from './pages/AnalyticsPage';
 import { AuditPage } from './pages/AuditPage';
+import { SystemLogsPage } from './pages/SystemLogsPage';
 import { ProtectionMonitorPage } from './pages/ProtectionMonitorPage';
 import { MigrationPage } from './pages/MigrationPage';
 import { SettingsPage } from './pages/SettingsPage';
@@ -78,7 +79,7 @@ function HomeRoute() {
  * 由 `AppLayout` 自身据登录态渲染匿名 / 登录页眉与导航。各子路由按层加守卫：
  * - 公开层（匿名可达，只读公开内容）：`/`（落地分流）、`/repositories`、`/repository`、`/search`、`/artifact`、`/licenses`。
  * - 需登录层（user+）：`/tokens`、`/upload`——`RequireAuth`。
- * - 需管理员层（admin）：`/users`、`/groups`、`/protection`、`/monitor`、`/analytics`、`/audit`、`/protection-monitor`、`/migration`、`/settings`——`RequireAuth` + `RequireAdmin`。
+ * - 需管理员层（admin）：`/users`、`/groups`、`/protection`、`/monitor`、`/analytics`、`/audit`、`/system-logs`、`/protection-monitor`、`/migration`、`/settings`——`RequireAuth` + `RequireAdmin`。
  */
 export function App() {
   return (
@@ -169,6 +170,17 @@ export function App() {
             <RequireAuth>
               <RequireAdmin>
                 <AuditPage />
+              </RequireAdmin>
+            </RequireAuth>
+          }
+        />
+        {/* 系统日志（FR-107，仅 Admin）：运行时技术日志，导航入口由 FR-92 外壳添加 */}
+        <Route
+          path="system-logs"
+          element={
+            <RequireAuth>
+              <RequireAdmin>
+                <SystemLogsPage />
               </RequireAdmin>
             </RequireAuth>
           }
