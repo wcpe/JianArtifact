@@ -57,8 +57,9 @@ trait ReleaseSource {
 其余组合 → `UpdateError::UnsupportedPlatform`（该平台无自更新资产，明确报错不静默）。
 
 ### 3.4 版本比较（纯函数，可测）
-- 当前版本 `env!("CARGO_PKG_VERSION")`；最新版本取 `tag_name` 去前导 `v`。
-- 解析 `major.minor.patch` 三段整数比较；预发布/构建元数据后缀忽略（`/releases/latest` 只返稳定版）。非法版本串报错。`update_available = latest > current`。
+- 当前版本 `env!("CARGO_PKG_VERSION")`；最新版本取 `tag_name` 去前导 `v`（prerelease 滚动 `tag_name=dev` 时回退取 release 标题 `name`，见 fr-89 §3.6）。
+- **stable 通道**：解析 `major.minor.patch` 三段整数比较；预发布 / 构建元数据后缀忽略（`/releases/latest` 只返稳定版）。非法版本串报错。`update_available = latest > current`。
+- **prerelease 通道**（FR-89）：dev 预发布常与当前正式版共享核心版本，故改按**完整版本串**判定（目标 != 当前即可更新），详见 fr-89 §3.6。判定经 `is_update_available_for_channel(channel, …)` 按通道分流。
 
 ### 3.5 资产名推导（纯函数，可测）
 `jianartifact-{latestVersion}-{target}{ext}`（见 FR-86 §3.1）；对应 `.sha256` 资产为该名 + `.sha256`。在 Release `assets[]` 里按名精确匹配；缺资产或缺 sha256 → 报错。

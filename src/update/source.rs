@@ -25,13 +25,22 @@ pub struct Release {
 }
 
 impl Release {
-    /// 最新版本号：`tag_name` 去前导 `v`。
+    /// 最新版本号：优先 `tag_name`（去前导 `v`），但 prerelease 滚动发布的 `tag_name` 是固定标签
+    /// `dev`（非版本串，见 FR-86 release.yml），此时回退到 release 标题 `name`（内嵌完整 dev 版本串，
+    /// 如 `0.4.0-dev.5.<sha>`）。正式版 `tag_name=vX.Y.Z` 仍走 tag。
     pub fn version(&self) -> String {
-        self.tag_name
-            .trim()
-            .strip_prefix('v')
-            .unwrap_or_else(|| self.tag_name.trim())
-            .to_string()
+        let tag = self.tag_name.trim();
+        let tag_ver = tag.strip_prefix('v').unwrap_or(tag);
+        // tag 不是合法版本串（如滚动标签 `dev`）时，回退到 name；name 也无效则原样返回 tag 值
+        if super::parse_version(tag_ver).is_ok() {
+            return tag_ver.to_string();
+        }
+        let name = self.name.trim();
+        let name_ver = name.strip_prefix('v').unwrap_or(name);
+        if super::parse_version(name_ver).is_ok() {
+            return name_ver.to_string();
+        }
+        tag_ver.to_string()
     }
 
     /// 按名精确匹配资产。

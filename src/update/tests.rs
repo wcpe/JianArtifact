@@ -380,7 +380,7 @@ fn 检查结果_组装() {
         body: "说明".to_string(),
         assets: vec![],
     };
-    let check = build_check("0.3.0", &release).unwrap();
+    let check = build_check(UpdateChannel::Stable, "0.3.0", &release).unwrap();
     assert_eq!(check.current_version, "0.3.0");
     assert_eq!(check.latest_version, "0.4.0");
     assert!(check.update_available);
@@ -409,6 +409,26 @@ fn 解析_release_json() {
         r.find_asset("a.bin").unwrap().download_url,
         "https://x/a.bin"
     );
+}
+
+#[test]
+fn version_滚动dev标签_回退到name版本串() {
+    // prerelease 滚动发布：tag_name 是固定标签 `dev`（非版本串），版本应回退到 name。
+    let r = Release {
+        tag_name: "dev".to_string(),
+        name: "0.4.0-dev.5.a68e6d0".to_string(),
+        body: String::new(),
+        assets: vec![],
+    };
+    assert_eq!(r.version(), "0.4.0-dev.5.a68e6d0");
+    // 正式版：tag_name=vX.Y.Z 仍走 tag，不受回退影响
+    let r2 = Release {
+        tag_name: "v0.4.0".to_string(),
+        name: "Release 0.4.0".to_string(),
+        body: String::new(),
+        assets: vec![],
+    };
+    assert_eq!(r2.version(), "0.4.0");
 }
 
 #[test]
@@ -489,6 +509,102 @@ async fn apply_prerelease_通道_升级到预发布版() {
     // 断言确实以 Prerelease 通道取的源
     let chans = source.channels.lock().unwrap_or_else(|e| e.into_inner());
     assert_eq!(chans.as_slice(), [UpdateChannel::Prerelease]);
+}
+
+// ---------- 复现：dev 预发布同核心版本应可升级（FR-89 通道分流，bug 复现）----------
+
+#[test]
+fn 通道分流_prerelease_同核心dev构建判为可更新() {
+    // 复现根因 2：当前 0.4.0，最新 dev 预发布 0.4.0-dev.5.<sha>（核心版本相等）。
+    // prerelease 通道应「目标 != 当前即可更新」，而非按 major.minor.patch 判 false。
+    assert!(
+        is_update_available_for_channel(UpdateChannel::Prerelease, "0.4.0", "0.4.0-dev.5.a68e6d0")
+            .unwrap(),
+        "prerelease 通道下不同的 dev 构建应判为可更新"
+    );
+    // 完全相同的版本串：无可更新（避免无意义自替换）。
+    assert!(
+        !is_update_available_for_channel(
+            UpdateChannel::Prerelease,
+            "0.4.0-dev.5.a68e6d0",
+            "0.4.0-dev.5.a68e6d0"
+        )
+        .unwrap(),
+        "prerelease 通道下完全相同的版本串应判为无更新"
+    );
+}
+
+#[test]
+fn 通道分流_stable_语义不变仍要求严格更高() {
+    // stable 通道语义保持不变：核心版本必须严格更高才更新。
+    assert!(
+        !is_update_available_for_channel(UpdateChannel::Stable, "0.4.0", "0.4.0").unwrap(),
+        "stable 通道下同版本应判为无更新"
+    );
+    assert!(
+        is_update_available_for_channel(UpdateChannel::Stable, "0.3.0", "0.4.0").unwrap(),
+        "stable 通道下更高版本应判为可更新"
+    );
+    // stable 通道下，dev 预发布同核心版本仍判无更新（不被本修破坏）。
+    assert!(
+        !is_update_available_for_channel(UpdateChannel::Stable, "0.4.0", "0.4.0-dev.5.a68e6d0")
+            .unwrap(),
+        "stable 通道下同核心版本的 dev 串仍判无更新"
+    );
+}
+
+#[test]
+fn 检查结果_prerelease通道_dev串判可更新且资产名匹配() {
+    // 复现根因 1+2 合流：prerelease 通道、当前 0.4.0、最新 dev 预发布资产（GitHub 已把 '+' 写成 '.'）。
+    // build_check 应判 update_available=true，且 asset_name 与 release 资产名（dot 串）一致。
+    let target = current_target().unwrap();
+    let dev_version = "0.4.0-dev.5.a68e6d0"; // 资产名无 '+'，与 GitHub 存储一致
+    let bin_name = asset_name(dev_version, target);
+    let release = Release {
+        tag_name: "dev".to_string(),
+        name: dev_version.to_string(),
+        body: "开发版快照".to_string(),
+        assets: vec![ReleaseAsset {
+            name: bin_name.clone(),
+            download_url: format!("https://example/{bin_name}"),
+        }],
+    };
+    let check = build_check(UpdateChannel::Prerelease, "0.4.0", &release).unwrap();
+    assert!(
+        check.update_available,
+        "prerelease 通道下不同 dev 构建应判可更新"
+    );
+    assert_eq!(check.latest_version, dev_version);
+    // 资产名按 dot 串重构，应与 release 中实际资产名精确匹配（find_asset 命中）
+    assert_eq!(check.asset_name, bin_name);
+    assert!(
+        release.find_asset(&check.asset_name).is_some(),
+        "build_check 推导的资产名应在 release 资产中命中"
+    );
+}
+
+#[tokio::test]
+async fn apply_prerelease_通道_dev同核心版本落地替换() {
+    // 复现根因 2 在 apply 链路：当前 0.4.0，最新 dev 预发布同核心版本 → 应走到替换而非 NoUpdate。
+    let dir = tempfile::tempdir().unwrap();
+    let exe = dir.path().join("jianartifact");
+    tokio::fs::write(&exe, b"OLD-BINARY").await.unwrap();
+
+    let new_bin = b"DEV-SNAPSHOT-BINARY";
+    let (release, assets) = release_with_assets("0.4.0-dev.5.a68e6d0", new_bin);
+    let source = FakeSource::new(release, assets);
+
+    let outcome = apply_update(
+        &source,
+        UpdateChannel::Prerelease,
+        "0.4.0",
+        &exe,
+        dir.path(),
+    )
+    .await
+    .expect("prerelease 通道下不同 dev 构建应走到替换");
+    assert_eq!(outcome.new_version, "0.4.0-dev.5.a68e6d0");
+    assert_eq!(tokio::fs::read(&exe).await.unwrap(), new_bin);
 }
 
 #[tokio::test]

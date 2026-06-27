@@ -98,7 +98,7 @@ pub async fn check_update(
     identity.require_admin()?;
     let (source, channel) = build_source(&state)?;
     let release = source.fetch_latest_release(channel).await?;
-    let check = update::build_check(current_version(), &release)?;
+    let check = update::build_check(channel, current_version(), &release)?;
     Ok(Json(check))
 }
 

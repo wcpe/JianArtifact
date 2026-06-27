@@ -180,19 +180,53 @@ fn parse_version(raw: &str) -> Result<SemVer, UpdateError> {
 }
 
 /// 比较版本，判定是否有更新（`latest > current`，纯函数，可测）。
+///
+/// 仅比较 `major.minor.patch` 三段、忽略预发布 / 构建后缀，是 stable 通道的判定口径。
 pub(crate) fn is_update_available(current: &str, latest: &str) -> Result<bool, UpdateError> {
     let cur = parse_version(current)?;
     let lat = parse_version(latest)?;
     Ok((lat.major, lat.minor, lat.patch) > (cur.major, cur.minor, cur.patch))
 }
 
+/// 归一化版本串用于完整比较：去首尾空白与前导 `v`（prerelease 通道按完整串判定）。
+fn normalize_version(raw: &str) -> &str {
+    let trimmed = raw.trim();
+    trimmed.strip_prefix('v').unwrap_or(trimmed)
+}
+
+/// 按更新通道判定是否有更新（纯函数，可测；FR-89 通道分流）。
+///
+/// - `Stable`：维持 SemVer 三段严格更高语义（忽略预发布 / 构建后缀），仅当核心版本确实更高才更新。
+/// - `Prerelease`：dev 预发布常与当前正式版共享核心版本（如 `0.4.0` vs `0.4.0-dev.5.<sha>`），
+///   故改按**完整版本串**判定——目标与当前不同即视为可更新 / 可切换；完全相同则无更新。
+pub(crate) fn is_update_available_for_channel(
+    channel: UpdateChannel,
+    current: &str,
+    latest: &str,
+) -> Result<bool, UpdateError> {
+    match channel {
+        UpdateChannel::Stable => is_update_available(current, latest),
+        UpdateChannel::Prerelease => {
+            // 校验两侧均为合法版本串（含预发布后缀），非法即报错、不静默放行
+            parse_version(current)?;
+            parse_version(latest)?;
+            Ok(normalize_version(current) != normalize_version(latest))
+        }
+    }
+}
+
 /// 据当前版本与 Release 组装更新检查结果（纯函数，可测）。
 ///
-/// 推导本机 target 与资产名、比对版本；不要求 Release 中已含资产（检查阶段只看版本）。
-pub fn build_check(current_version: &str, release: &Release) -> Result<UpdateCheck, UpdateError> {
+/// 推导本机 target 与资产名、按通道比对版本；不要求 Release 中已含资产（检查阶段只看版本）。
+/// `channel` 决定版本判定口径（FR-89）：stable 要求 SemVer 严格更高，prerelease 按完整串不同即可更新。
+pub fn build_check(
+    channel: UpdateChannel,
+    current_version: &str,
+    release: &Release,
+) -> Result<UpdateCheck, UpdateError> {
     let target = current_target()?;
     let latest = release.version();
-    let update_available = is_update_available(current_version, &latest)?;
+    let update_available = is_update_available_for_channel(channel, current_version, &latest)?;
     Ok(UpdateCheck {
         current_version: current_version.to_string(),
         latest_version: latest.clone(),
@@ -405,10 +439,11 @@ pub async fn apply_update<S: ReleaseSource>(
     let release = source.fetch_latest_release(channel).await?;
     let latest = release.version();
 
-    // 防御性校验：仅当最新版本确实高于当前版本才替换，避免把同版 / 旧版当新版落地
-    if !is_update_available(current_version, &latest)? {
+    // 防御性校验：按通道判定是否可更新，避免把同版 / 旧版当新版落地（FR-89 通道分流）。
+    // stable 要求 SemVer 严格更高；prerelease 仅当目标与当前版本串不同才替换。
+    if !is_update_available_for_channel(channel, current_version, &latest)? {
         return Err(UpdateError::NoUpdate(format!(
-            "最新版本 {latest} 不高于当前版本 {current_version}"
+            "最新版本 {latest} 相对当前版本 {current_version} 无可应用更新"
         )));
     }
 
