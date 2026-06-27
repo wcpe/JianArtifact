@@ -94,9 +94,9 @@ GitHub Actions 实现两条流水线，触发条件与产出渠道如下：
 
 - **质量门**（`.github/workflows/ci.yml`）：push / PR 到 `master` 触发，跑前端构建 → 后端 `cargo fmt --check` / `cargo clippy --all-targets -- -D warnings` / `cargo test`；依赖安全审计（`cargo audit` / `pnpm audit`）作独立非阻断 job。**构建顺序硬约束**：先 `pnpm -C frontend build` 产出 `frontend/dist`，再编译 / clippy / test 后端（rust-embed 编译期嵌入）。
 - **发布**（`.github/workflows/release.yml`）：
-  - **push `master`** ⇒ **prerelease**（开发版快照，滚动 tag `dev`、标记 prerelease），版本约定 `{Cargo.toml 版本}-dev.{run_number}+{shortsha}`（如 `0.3.0-dev.42+1a2b3c4`）。
+  - **push `master`** ⇒ **prerelease**（开发版快照，滚动 tag `dev`、标记 prerelease），版本约定 `{Cargo.toml 版本}-dev.{run_number}.{shortsha}`（如 `0.4.0-dev.42.1a2b3c4`）。此处用 `.` 点分连接（而非 `+` 构建元数据）：GitHub 上传 Release 资产时会把资产名里的 `+` 改写成 `.`，导致自更新按含 `+` 的版本重构的期望资产名匹配不到；点分形态仍是合法 SemVer 预发布标识，资产名与 GitHub 存储一致。
   - **push tag `v*`** ⇒ **正式 Release**（非预发布），版本取 tag 去前导 `v`（`v0.3.0` → `0.3.0`）。
-  - 三目标各用原生 runner 编译（免交叉编译）：`x86_64-unknown-linux-gnu`（ubuntu-latest）、`x86_64-pc-windows-msvc`（windows-latest）、`aarch64-apple-darwin`（macos-14）。
+  - 三目标各用原生 runner 编译（免交叉编译）：`x86_64-unknown-linux-musl`（ubuntu-latest，musl 静态链接、跨发行版可跑）、`x86_64-pc-windows-msvc`（windows-latest）、`aarch64-apple-darwin`（macos-14）。
   - **资产命名契约**（FR-85 在线自更新消费）：每目标产出 `jianartifact-{version}-{target}{ext}` 及配套 `jianartifact-{version}-{target}{ext}.sha256`（裸 64 位十六进制哈希）；`{ext}` 在 Windows 为 `.exe`，Linux / macOS 为空。
   - 仓库坐标用 Actions 内置 `github.repository`，凭据仅用内置 `GITHUB_TOKEN`，不入库任何密钥。
 
