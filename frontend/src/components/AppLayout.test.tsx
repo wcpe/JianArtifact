@@ -349,51 +349,55 @@ describe('AppLayout 更新徽标（FR-101）', () => {
   });
 });
 
-describe('AppLayout 底部版本号与开源许可入口（FR-101）', () => {
-  it('展开态：底部显示当前版本号 v{version} 文字', async () => {
+describe('AppLayout 底部 footer 小字块：版本号 + 开源许可入口（FR-101）', () => {
+  it('展开态：footer 显示小字版本号 v{version} 与「开源许可」入口', async () => {
     const user = userEvent.setup();
     renderAt('/', 匿名上下文());
 
     await user.click(screen.getByLabelText('展开导航'));
     expect(await screen.findByText('v0.4.0')).toBeInTheDocument();
+    expect(screen.getByLabelText('开源许可')).toBeInTheDocument();
+    expect(screen.getByText('开源许可')).toBeInTheDocument();
   });
 
-  it('匿名访客也能看到版本号（所有用户可见）', async () => {
+  it('展开态：匿名访客也能看到 footer 版本号（所有用户可见）', async () => {
+    const user = userEvent.setup();
     renderAt('/repositories', 匿名上下文());
-    // 折叠态版本号经 aria-label / Tooltip 呈现
-    expect(await screen.findByLabelText('当前版本 v0.4.0')).toBeInTheDocument();
+
+    await user.click(screen.getByLabelText('展开导航'));
+    expect(await screen.findByText('v0.4.0')).toBeInTheDocument();
   });
 
-  it('健康检查失败：版本号区静默不渲染，不阻塞外壳', async () => {
-    vi.spyOn(api, 'getHealth').mockRejectedValue(new ApiError(500, 'error', '失败'));
+  it('收缩（窄）态：整块 footer 隐藏（版本号与许可入口均不渲染）', async () => {
     renderAt('/', 匿名上下文());
 
+    // 等健康检查 resolve，确认即便取到版本号，收缩态下 footer 整块仍不渲染
     await waitFor(() => expect(api.getHealth).toHaveBeenCalled());
-    expect(screen.queryByLabelText(/当前版本/)).not.toBeInTheDocument();
-    // 外壳照常渲染
+    expect(screen.queryByText('v0.4.0')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('开源许可')).not.toBeInTheDocument();
+    // 外壳照常渲染（导航可用）
     expect(screen.getByLabelText('仓库管理')).toBeInTheDocument();
   });
 
-  it('开源许可按钮点击跳转 /licenses', async () => {
+  it('展开态健康检查失败：版本号静默不渲染、许可入口仍在，不阻塞外壳', async () => {
     const user = userEvent.setup();
+    vi.spyOn(api, 'getHealth').mockRejectedValue(new ApiError(500, 'error', '失败'));
     renderAt('/', 匿名上下文());
 
-    await user.click(screen.getByLabelText('开源许可'));
-    expect(screen.getByTestId('location-probe')).toHaveTextContent('/licenses');
-  });
-
-  it('折叠态：开源许可入口经 aria-label 可达（icon + Tooltip）', () => {
-    renderAt('/', 匿名上下文());
-    // 折叠（窄）态：无可见「开源许可」文字，但 aria-label 可达
+    await user.click(screen.getByLabelText('展开导航'));
+    await waitFor(() => expect(api.getHealth).toHaveBeenCalled());
+    expect(screen.queryByText(/^v/)).not.toBeInTheDocument();
+    // 许可入口与外壳照常渲染
     expect(screen.getByLabelText('开源许可')).toBeInTheDocument();
-    expect(screen.queryByText('开源许可')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('仓库管理')).toBeInTheDocument();
   });
 
-  it('展开态：开源许可入口显示可见文字', async () => {
+  it('展开态点击「开源许可」跳转 /licenses', async () => {
     const user = userEvent.setup();
     renderAt('/', 匿名上下文());
 
     await user.click(screen.getByLabelText('展开导航'));
-    expect(screen.getByText('开源许可')).toBeInTheDocument();
+    await user.click(screen.getByLabelText('开源许可'));
+    expect(screen.getByTestId('location-probe')).toHaveTextContent('/licenses');
   });
 });

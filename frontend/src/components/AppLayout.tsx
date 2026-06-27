@@ -32,7 +32,6 @@ import {
   IconLogin,
   IconLayoutSidebarLeftExpand,
   IconLayoutSidebarLeftCollapse,
-  IconTag,
   IconLicense,
   IconArrowUpCircle,
 } from '@tabler/icons-react';
@@ -308,51 +307,47 @@ export function AppLayout() {
             />
           ))}
         </ScrollArea>
-        {/* 导航底部（FR-101）：常显当前版本号 + 开源许可入口，所有用户可见（含匿名）。 */}
-        <Stack
-          gap={4}
-          mt="xs"
-          pt="xs"
-          style={{ borderTop: '1px solid var(--mantine-color-default-border)' }}
-        >
-          {version &&
-            (navExpanded ? (
-              <Group gap={6} px="xs" c="dimmed" wrap="nowrap">
-                <IconTag size={14} />
-                <Text size="xs">v{version}</Text>
-              </Group>
-            ) : (
-              <Tooltip label={`当前版本 v${version}`} position="right" withArrow>
-                <Group justify="center" c="dimmed" aria-label={`当前版本 v${version}`}>
-                  <IconTag size={16} />
-                </Group>
-              </Tooltip>
-            ))}
-          {navExpanded ? (
-            <NavLink
-              label="开源许可"
+        {/* 导航底部 footer 小字块（FR-101）：版本号 + 开源许可入口，
+            置于导航项之下、小灰字呈现，所有用户可见（含匿名）；
+            仅展开态显示，窄（收缩）态整块隐藏。 */}
+        {navExpanded && (
+          <Stack
+            gap={2}
+            mt="xs"
+            pt="xs"
+            px="xs"
+            style={{ borderTop: '1px solid var(--mantine-color-default-border)' }}
+          >
+            {version && (
+              <Text size="xs" c="dimmed">
+                v{version}
+              </Text>
+            )}
+            <Group
+              gap={4}
+              c="dimmed"
+              wrap="nowrap"
+              role="button"
+              tabIndex={0}
               aria-label="开源许可"
-              leftSection={<IconLicense size={18} />}
-              active={isNavActive(location.pathname, '/licenses')}
+              style={{ cursor: 'pointer' }}
               onClick={() => {
                 navigate('/licenses');
                 if (mobileOpened) toggleMobile();
               }}
-            />
-          ) : (
-            <Tooltip label="开源许可" position="right" withArrow>
-              <NavLink
-                aria-label="开源许可"
-                leftSection={<IconLicense size={18} />}
-                active={isNavActive(location.pathname, '/licenses')}
-                onClick={() => {
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
                   navigate('/licenses');
                   if (mobileOpened) toggleMobile();
-                }}
-              />
-            </Tooltip>
-          )}
-        </Stack>
+                }
+              }}
+            >
+              <IconLicense size={14} />
+              <Text size="xs">开源许可</Text>
+            </Group>
+          </Stack>
+        )}
       </AppShell.Navbar>
 
       <AppShell.Main>

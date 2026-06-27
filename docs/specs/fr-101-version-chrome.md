@@ -7,8 +7,8 @@ UX 重构 epic 收尾项：把版本信息呈现到控制台外壳（`AppLayout`
 
 ## 2. 需求（要什么）
 - **Logo 旁更新徽标**：页眉 Logo 旁，**仅 Admin 且确有可更新时**显示徽标 `更新: {current} → {latest}`，点击跳 `/settings`（设置页在线更新区）。判定：Admin 登录后调一次 `GET /api/v1/update/check`，仅当 **HTTP 200 且 `update_available===true`** 才显；未启用在线更新（409）/ 无更新 / 非 Admin / 请求失败 → 不显徽标（静默，不报错、不阻塞渲染）。**只在挂载时查一次并缓存**，不每次渲染重查（避免 GitHub 限流）；查询走后台、不阻塞页面渲染。
-- **导航底部版本号 + 开源许可入口**：导航栏**底部**常显当前版本号 `v{version}`（取自公开 `GET /health` 的 `version`，**所有用户可见含匿名**）+ 「开源许可」按钮（点击进 `/licenses`）。折叠（窄）态用 icon + Tooltip 呈现，展开态显文字，沿用 FR-92 折叠 / 无障碍口径。
-- 可见性：徽标仅 Admin；版本号 + 许可入口对所有人（含匿名）可见。
+- **导航底部 footer 小字块（版本号 + 开源许可入口）**：导航项**下方**以独立小字区块（小灰字）呈现当前版本号 `v{version}`（取自公开 `GET /health` 的 `version`，**所有用户可见含匿名**）+ 「开源许可」链接（带 icon，点击进 `/licenses`）。**仅展开态显示**整块 footer；**窄导航（收缩态）时整块隐藏**（不再用 icon + Tooltip 占位）。
+- 可见性：徽标仅 Admin；footer 小字块（版本号 + 许可入口）展开态对所有人（含匿名）可见，收缩态对所有人隐藏。
 - 范围内：仅 `AppLayout` 外壳呈现 + api 层新增 `getHealth` 封装（包公开 `/health`）。
 - 不做（范围外）：不改后端、不新增后端端点；不在徽标里做轮询自动刷新；不改 `/settings`、`/licenses` 页内容。
 
@@ -18,7 +18,7 @@ UX 重构 epic 收尾项：把版本信息呈现到控制台外壳（`AppLayout`
   - 挂载时 `useEffect` 调 `getHealth()` 取 `version`，存入 state；失败则版本号区不渲染（静默）。
   - 仅当 `isAdmin` 时，挂载时调一次 `checkUpdate()`，仅 200 且 `update_available` 为真才置徽标 state；任何错误（含 409）静默吞掉、不置徽标。两次查询都不阻塞首屏渲染。
   - 页眉 Logo 旁条件渲染 `Badge`（点击 `navigate('/settings')`）。
-  - 导航底部新增固定区：版本号文本（展开态显 `v{version}`、折叠态显 icon + Tooltip）+「开源许可」按钮（点击 `navigate('/licenses')`，折叠态 icon + Tooltip、展开态显文字）。
+  - 导航项下方 footer 小字块（**仅展开态渲染**，收缩态整块不渲染）：小灰字版本号 `v{version}` + 「开源许可」链接（带 icon，点击 `navigate('/licenses')`）。
 - 无架构决策，不写 ADR。
 
 ## 4. 任务拆分
@@ -28,7 +28,7 @@ UX 重构 epic 收尾项：把版本信息呈现到控制台外壳（`AppLayout`
 - [x] 文档同步：PRD 状态行、ARCHITECTURE（AppLayout 结构）、CHANGELOG 末尾追加一行
 
 ## 5. 验收标准
-- `pnpm -C frontend test` 全绿，新增 / 改 `AppLayout` 测试覆盖：Admin + 有更新显徽标 / 非 Admin / 无更新 / 未启用（409）不显徽标、底部版本号渲染（含匿名）、许可按钮跳 `/licenses`、折叠态 Tooltip 可访问名。
+- `pnpm -C frontend test` 全绿，新增 / 改 `AppLayout` 测试覆盖：Admin + 有更新显徽标 / 非 Admin / 无更新 / 未启用（409）不显徽标、展开态 footer 显小字版本号 + 许可入口（含匿名）、收缩态整块 footer 隐藏、许可点击跳 `/licenses`。
 - `pnpm -C frontend build` 通过、`pnpm -C frontend lint` 通过。
 - FR-92 既有测试不回归（折叠 / 角色门控 / 段精确高亮 / 全局搜索 / 匿名 shell）。
 
