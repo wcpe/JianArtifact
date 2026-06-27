@@ -8,6 +8,7 @@ import { MantineProvider } from '@mantine/core';
 import { MemoryRouter } from 'react-router-dom';
 import { App } from './App';
 import { AuthContext, type AuthContextValue } from './auth/AuthContext';
+import { ApiError } from './api/client';
 
 // 桩掉端点模块：各页面挂载时会调用 api.*，统一返回空，避免真实网络
 vi.mock('./api/endpoints');
@@ -85,6 +86,9 @@ describe('App 三层路由守卫（FR-95）', () => {
       entries: [],
       summary: { total: 0, runtime: 0, dev: 0, licenses: 0 },
     });
+    // 外壳版本展示（FR-101）：底部版本号取自 /health；更新检查默认未启用（409）不显徽标
+    mockedApi.getHealth.mockResolvedValue({ status: 'ok', version: '0.4.0', port: 9999 });
+    mockedApi.checkUpdate.mockRejectedValue(new ApiError(409, 'conflict', '在线更新未启用'));
   });
   afterEach(() => vi.clearAllMocks());
 

@@ -12,6 +12,7 @@ import type {
   CreateRepositoryRequest,
   CreateTokenResponse,
   CreateUserRequest,
+  HealthInfo,
   GroupAclView,
   GroupMemberView,
   GroupView,
@@ -500,6 +501,22 @@ export function checkUpdate(): Promise<UpdateCheck> {
 /** 应用更新：下载 → 校验 → 替换 → 触发重启（仅管理员）。 */
 export function applyUpdate(): Promise<ApplyResponse> {
   return request<ApplyResponse>('/update/apply', { method: 'POST' });
+}
+
+// —— 健康检查（公开 / 匿名可读，FR-101） ——
+
+/**
+ * 查询健康状态（含构建版本号）。
+ *
+ * `/health` 为根路径（在 `/api/v1` 之外），故不走统一 `request`，单独 `fetch`。
+ * 公开端点、无需 Bearer；非 2xx 即抛错，由调用方静默处理（不阻塞外壳渲染）。
+ */
+export async function getHealth(): Promise<HealthInfo> {
+  const response = await fetch('/health');
+  if (!response.ok) {
+    throw new ApiError(response.status, 'error', `健康检查失败（HTTP ${response.status}）`);
+  }
+  return (await response.json()) as HealthInfo;
 }
 
 /** 对制品路径逐段编码（保留 `/` 分隔，避免破坏 catch-all 路径语义）。 */

@@ -652,6 +652,13 @@ export interface ApplyResponse {
   new_version: string;
 }
 
+/** 健康检查响应（GET /health，公开 / 匿名可读；version 为构建版本串，FR-101）。 */
+export interface HealthInfo {
+  status: string;
+  version: string;
+  port: number;
+}
+
 // —— 开源许可（FR-102，公开） ——
 
 /** 依赖类别：运行时 / 开发。 */

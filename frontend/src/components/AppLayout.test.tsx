@@ -3,13 +3,47 @@
 // 2) 角色门控：非 Admin 看不到管理入口，Admin 看得到；
 // 3) active 高亮按路径段精确匹配（保持 fix-B）——/protection 不被 /protection-monitor 串台。
 
-import { describe, it, expect } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MantineProvider } from '@mantine/core';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { AppLayout } from './AppLayout';
 import { AuthContext, type AuthContextValue } from '../auth/AuthContext';
+import * as api from '../api/endpoints';
+import { ApiError } from '../api/client';
+import type { HealthInfo, UpdateCheck } from '../api/types';
+
+/** 样例健康响应（含构建版本号）。 */
+const 样例健康: HealthInfo = { status: 'ok', version: '0.4.0', port: 9999 };
+
+/** 有可用更新的更新检查结果。 */
+const 有更新检查: UpdateCheck = {
+  current_version: '0.4.0',
+  latest_version: '0.5.0',
+  update_available: true,
+  asset_name: 'jianartifact-x86_64',
+  notes: '',
+};
+
+/** 无可用更新的更新检查结果。 */
+const 无更新检查: UpdateCheck = {
+  current_version: '0.5.0',
+  latest_version: '0.5.0',
+  update_available: false,
+  asset_name: 'jianartifact-x86_64',
+  notes: '',
+};
+
+beforeEach(() => {
+  // 默认：健康检查成功、更新检查未启用（409），各用例按需覆盖
+  vi.spyOn(api, 'getHealth').mockResolvedValue(样例健康);
+  vi.spyOn(api, 'checkUpdate').mockRejectedValue(new ApiError(409, 'conflict', '在线更新未启用'));
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 /** 探针：把当前路由的 pathname + search 暴露到 DOM，供断言页眉搜索跳转。 */
 function LocationProbe() {
@@ -259,5 +293,107 @@ describe('AppLayout 匿名访客 shell（FR-95）', () => {
     await user.click(screen.getByRole('button', { name: '登录' }));
 
     expect(screen.getByTestId('location-probe')).toHaveTextContent('/login');
+  });
+});
+
+describe('AppLayout 更新徽标（FR-101）', () => {
+  it('Admin 且有可用更新：显示「更新: cur → latest」徽标，点击跳 /settings', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, 'checkUpdate').mockResolvedValue(有更新检查);
+    renderAt('/', 管理员上下文());
+
+    const badge = await screen.findByLabelText('有可用更新，点击前往设置页升级');
+    expect(badge).toHaveTextContent('更新');
+    expect(badge).toHaveTextContent('0.4.0');
+    expect(badge).toHaveTextContent('0.5.0');
+
+    await user.click(badge);
+    expect(screen.getByTestId('location-probe')).toHaveTextContent('/settings');
+  });
+
+  it('Admin 但无可用更新：不显示徽标', async () => {
+    vi.spyOn(api, 'checkUpdate').mockResolvedValue(无更新检查);
+    renderAt('/', 管理员上下文());
+
+    // 等更新检查 resolve 后断言徽标不渲染
+    await waitFor(() => expect(api.checkUpdate).toHaveBeenCalled());
+    expect(screen.queryByLabelText('有可用更新，点击前往设置页升级')).not.toBeInTheDocument();
+  });
+
+  it('Admin 但在线更新未启用（409）：静默不显徽标，不阻塞渲染', async () => {
+    // beforeEach 默认 checkUpdate 抛 409
+    renderAt('/', 管理员上下文());
+
+    await waitFor(() => expect(api.checkUpdate).toHaveBeenCalled());
+    expect(screen.queryByLabelText('有可用更新，点击前往设置页升级')).not.toBeInTheDocument();
+    // 外壳照常渲染（导航可用）
+    expect(screen.getByLabelText('仪表盘')).toBeInTheDocument();
+  });
+
+  it('非 Admin（普通用户）：不查更新、不显徽标', async () => {
+    vi.spyOn(api, 'checkUpdate').mockResolvedValue(有更新检查);
+    renderAt('/', 普通用户上下文());
+
+    await waitFor(() => expect(api.getHealth).toHaveBeenCalled());
+    expect(api.checkUpdate).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText('有可用更新，点击前往设置页升级')).not.toBeInTheDocument();
+  });
+
+  it('匿名访客：不查更新、不显徽标', async () => {
+    vi.spyOn(api, 'checkUpdate').mockResolvedValue(有更新检查);
+    renderAt('/repositories', 匿名上下文());
+
+    await waitFor(() => expect(api.getHealth).toHaveBeenCalled());
+    expect(api.checkUpdate).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText('有可用更新，点击前往设置页升级')).not.toBeInTheDocument();
+  });
+});
+
+describe('AppLayout 底部版本号与开源许可入口（FR-101）', () => {
+  it('展开态：底部显示当前版本号 v{version} 文字', async () => {
+    const user = userEvent.setup();
+    renderAt('/', 匿名上下文());
+
+    await user.click(screen.getByLabelText('展开导航'));
+    expect(await screen.findByText('v0.4.0')).toBeInTheDocument();
+  });
+
+  it('匿名访客也能看到版本号（所有用户可见）', async () => {
+    renderAt('/repositories', 匿名上下文());
+    // 折叠态版本号经 aria-label / Tooltip 呈现
+    expect(await screen.findByLabelText('当前版本 v0.4.0')).toBeInTheDocument();
+  });
+
+  it('健康检查失败：版本号区静默不渲染，不阻塞外壳', async () => {
+    vi.spyOn(api, 'getHealth').mockRejectedValue(new ApiError(500, 'error', '失败'));
+    renderAt('/', 匿名上下文());
+
+    await waitFor(() => expect(api.getHealth).toHaveBeenCalled());
+    expect(screen.queryByLabelText(/当前版本/)).not.toBeInTheDocument();
+    // 外壳照常渲染
+    expect(screen.getByLabelText('仓库管理')).toBeInTheDocument();
+  });
+
+  it('开源许可按钮点击跳转 /licenses', async () => {
+    const user = userEvent.setup();
+    renderAt('/', 匿名上下文());
+
+    await user.click(screen.getByLabelText('开源许可'));
+    expect(screen.getByTestId('location-probe')).toHaveTextContent('/licenses');
+  });
+
+  it('折叠态：开源许可入口经 aria-label 可达（icon + Tooltip）', () => {
+    renderAt('/', 匿名上下文());
+    // 折叠（窄）态：无可见「开源许可」文字，但 aria-label 可达
+    expect(screen.getByLabelText('开源许可')).toBeInTheDocument();
+    expect(screen.queryByText('开源许可')).not.toBeInTheDocument();
+  });
+
+  it('展开态：开源许可入口显示可见文字', async () => {
+    const user = userEvent.setup();
+    renderAt('/', 匿名上下文());
+
+    await user.click(screen.getByLabelText('展开导航'));
+    expect(screen.getByText('开源许可')).toBeInTheDocument();
   });
 });
