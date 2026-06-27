@@ -48,6 +48,7 @@
   - 把「制品浏览 + 文件浏览」两 Tab 合并为单一「浏览」Tab：左 `Tree`（Mantine `<Tree>` 或自绘可展开列表，复用 `buildDirectoryListing` 逐层折叠）、右详情面板。
   - 选中文件 → 调 `getArtifactDetail` 加载右侧详情；不再整页跳转 `ArtifactDetailPage`（该独立页保留供深链 `/artifact?repo=&path=`，复用同一详情面板组件）。
   - 详情面板抽为可复用组件 `ArtifactDetailPanel`（供内嵌与独立页共用），承载元数据 / 校验和 / 后端 usage / 多格式坐标 / HTML View / 下载。
+  - 树的展开态由顶层 `FileTree` 集中持有（按目录**完整前缀路径**键，如 `com/example/`），向下传给各 `TreeLevel`；子层不再各自持有局部 state。这样折叠父目录再重新展开时，深层子目录的展开态不丢失（逐级展开不被重置）。
 - **复用端点**：`listArtifacts`（FR-75 索引）、`getArtifactDetail`（FR-66/68）；不新增端点。
 
 ## 4. 任务拆分
@@ -66,7 +67,7 @@
   - **非 Maven**：npm / docker / raw 制品 → 坐标片段为空数组（不渲染坐标下拉）。
   - **HTML View URL**：`htmlViewUrl('files', 'dir/a.txt')` → `/files/dir/`；根目录文件 → `/files/`。
   - **下载 URL**：`downloadUrl('files', 'dir/a.txt')` → `/files/dir/a.txt`（逐段编码）。
-  - **组件**：文件树渲染并可展开子目录；点文件 → 右侧详情面板加载（mock `getArtifactDetail`）并出现坐标下拉与 HTML View 外链（`href` 指向正确）；坐标下拉切换 → 片段内容随之变化（至少 Maven 全套）。
+  - **组件**：文件树渲染并可展开子目录；点文件 → 右侧详情面板加载（mock `getArtifactDetail`）并出现坐标下拉与 HTML View 外链（`href` 指向正确）；坐标下拉切换 → 片段内容随之变化（至少 Maven 全套）；**折叠父目录再重展开，深层子层展开态保留**（展开 com→example→lib→1.0→折叠 com→重展 com，子层一次性恢复）。
   - **不泄露**：沿用 FR-76 既有测试——非管理员 / 无权场景下端点返回受控，前端不额外暴露（既有 `RepositoryDetailPage.test.tsx` 鉴权门控不破）。
 - `pnpm -C frontend lint` 过、`pnpm -C frontend build` 过（build 后 `git checkout -- frontend/dist/.gitkeep`）。
 - 无 `.rs` 改动 → 不跑 cargo。

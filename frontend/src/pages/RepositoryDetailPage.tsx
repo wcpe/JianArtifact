@@ -256,7 +256,12 @@ function BrowseTab({ repo }: { repo: RepositoryDto }) {
   );
 }
 
-/** 文件树：从仓库根递归渲染目录 / 文件，目录可逐级展开。 */
+/**
+ * 文件树：从仓库根递归渲染目录 / 文件，目录可逐级展开。
+ *
+ * 展开态在此集中持有（按目录**完整前缀路径**键，如 `com/example/`），向下传给各层。
+ * 这样折叠父目录再重新展开时，深层子目录的展开态不丢失（子层不再各自持有局部 state）。
+ */
 function FileTree({
   repo,
   artifacts,
@@ -270,6 +275,17 @@ function FileTree({
   onSelectFile: (path: string) => void;
   onDelete?: (path: string) => void;
 }) {
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  const toggle = (path: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  };
+
   return (
     <TreeLevel
       repo={repo}
@@ -277,6 +293,8 @@ function FileTree({
       prefix=""
       depth={0}
       selectedPath={selectedPath}
+      expanded={expanded}
+      onToggle={toggle}
       onSelectFile={onSelectFile}
       onDelete={onDelete}
     />
@@ -290,6 +308,8 @@ function TreeLevel({
   prefix,
   depth,
   selectedPath,
+  expanded,
+  onToggle,
   onSelectFile,
   onDelete,
 }: {
@@ -298,32 +318,26 @@ function TreeLevel({
   prefix: string;
   depth: number;
   selectedPath: string | null;
+  /** 全树共享的展开态（按目录完整前缀路径键）。 */
+  expanded: Set<string>;
+  /** 切换某目录展开态（传目录完整前缀路径）。 */
+  onToggle: (path: string) => void;
   onSelectFile: (path: string) => void;
   onDelete?: (path: string) => void;
 }) {
   const entries = useMemo(() => buildDirectoryListing(artifacts, prefix), [artifacts, prefix]);
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
-
-  const toggle = (name: string) => {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(name)) next.delete(name);
-      else next.add(name);
-      return next;
-    });
-  };
 
   return (
     <Stack gap={2}>
       {entries.map((e) => {
         const indent = depth * 16;
         if (e.type === 'folder') {
-          const open = expanded.has(e.name);
           const childPrefix = `${prefix}${e.name}/`;
+          const open = expanded.has(childPrefix);
           return (
             <div key={`d:${e.name}`}>
               <UnstyledButton
-                onClick={() => toggle(e.name)}
+                onClick={() => onToggle(childPrefix)}
                 px={6}
                 py={4}
                 style={{ width: '100%', borderRadius: 4, paddingLeft: indent + 6 }}
@@ -343,6 +357,8 @@ function TreeLevel({
                   prefix={childPrefix}
                   depth={depth + 1}
                   selectedPath={selectedPath}
+                  expanded={expanded}
+                  onToggle={onToggle}
                   onSelectFile={onSelectFile}
                   onDelete={onDelete}
                 />

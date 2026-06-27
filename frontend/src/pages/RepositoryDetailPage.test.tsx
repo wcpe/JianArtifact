@@ -94,6 +94,32 @@ describe('RepositoryDetailPage 浏览（文件树 + 右侧详情）', () => {
     expect(screen.queryByText('lib-1.0.jar')).not.toBeInTheDocument();
   });
 
+  it('折叠父目录再重展开，子层展开态保留（不丢失逐级展开）', async () => {
+    const user = userEvent.setup();
+    mockedApi.listArtifacts.mockResolvedValue([art('com/example/lib/1.0/lib-1.0.jar')]);
+    renderPage();
+
+    // 逐级展开 com → example → lib → 1.0，直到文件可见
+    await waitFor(() => expect(screen.getByText('com')).toBeInTheDocument());
+    await user.click(screen.getByText('com'));
+    await user.click(await screen.findByText('example'));
+    await user.click(await screen.findByText('lib'));
+    await user.click(await screen.findByText('1.0'));
+    expect(await screen.findByText('lib-1.0.jar')).toBeInTheDocument();
+
+    // 折叠顶层 com → 整个子树隐藏
+    await user.click(screen.getByText('com'));
+    expect(screen.queryByText('example')).not.toBeInTheDocument();
+    expect(screen.queryByText('lib-1.0.jar')).not.toBeInTheDocument();
+
+    // 重新展开 com → 之前逐级展开的子层一次性恢复（无需再逐级点开）
+    await user.click(screen.getByText('com'));
+    expect(await screen.findByText('example')).toBeInTheDocument();
+    expect(screen.getByText('lib')).toBeInTheDocument();
+    expect(screen.getByText('1.0')).toBeInTheDocument();
+    expect(screen.getByText('lib-1.0.jar')).toBeInTheDocument();
+  });
+
   it('点目录逐级展开到文件，点文件 → 右侧详情面板加载', async () => {
     const user = userEvent.setup();
     renderPage();

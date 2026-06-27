@@ -1,5 +1,5 @@
-// 跨仓库制品搜索页测试（FR-94）：经页眉跳转的 ?q= 自动搜索、结果按仓库分组成树、
-// 每个仓库分组 / 命中按格式渲染专属 icon、点击命中进入详情、空结果文案。
+// 跨仓库制品搜索页测试（FR-94）：经页眉跳转的 ?q= 自动搜索、结果按仓库分组 → 路径层级树、
+// 每个仓库分组 / 文件按格式渲染专属 icon、点击文件叶子进入详情、空结果文案。
 // 结果集由后端按读权限过滤，前端只渲染返回项（断言不渲染未返回的私有制品）。
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -69,7 +69,7 @@ describe('SearchPage 页眉驱动的自动搜索（FR-94）', () => {
     expect(screen.getByText('输入关键字开始搜索。')).toBeInTheDocument();
   });
 
-  it('结果按仓库分组成树渲染（仓库名作为分组节点）', async () => {
+  it('结果按仓库分组 → 路径层级树渲染（目录节点 + 文件叶子，默认全展开）', async () => {
     mockedApi.search.mockResolvedValue(
       paged([
         hit('r1', 'maven-hosted', 'maven', 'com/a/a.jar'),
@@ -82,10 +82,34 @@ describe('SearchPage 页眉驱动的自动搜索（FR-94）', () => {
     // 两个仓库分组节点
     await waitFor(() => expect(screen.getByText('maven-hosted')).toBeInTheDocument());
     expect(screen.getByText('npm-proxy')).toBeInTheDocument();
-    // 默认展开 → 命中制品路径可见
-    expect(screen.getByText('com/a/a.jar')).toBeInTheDocument();
-    expect(screen.getByText('com/b/b.jar')).toBeInTheDocument();
-    expect(screen.getByText('left-pad/index.js')).toBeInTheDocument();
+    // 路径折叠为层级树：出现中间目录节点（com 合并、a/b 子目录、left-pad 目录）
+    expect(screen.getByText('com')).toBeInTheDocument();
+    expect(screen.getByText('a')).toBeInTheDocument();
+    expect(screen.getByText('b')).toBeInTheDocument();
+    expect(screen.getByText('left-pad')).toBeInTheDocument();
+    // 默认全展开 → 文件叶子以文件名可见（非整条路径）
+    expect(screen.getByText('a.jar')).toBeInTheDocument();
+    expect(screen.getByText('b.jar')).toBeInTheDocument();
+    expect(screen.getByText('index.js')).toBeInTheDocument();
+    // 不再以整条路径平铺
+    expect(screen.queryByText('com/a/a.jar')).not.toBeInTheDocument();
+  });
+
+  it('点击目录节点可折叠 / 展开其子树', async () => {
+    const user = userEvent.setup();
+    mockedApi.search.mockResolvedValue(paged([hit('r1', 'maven-hosted', 'maven', 'com/a/a.jar')]));
+    renderAt('?q=x');
+
+    // 默认展开 → a.jar 可见
+    await waitFor(() => expect(screen.getByText('a.jar')).toBeInTheDocument());
+    // 折叠顶层目录 com → 其下子树（含 a.jar）隐藏
+    await user.click(screen.getByText('com'));
+    expect(screen.queryByText('a.jar')).not.toBeInTheDocument();
+    expect(screen.queryByText('a')).not.toBeInTheDocument();
+    // 再展开 com → 子层展开态保留（a 与 a.jar 重新可见，无需逐级重展）
+    await user.click(screen.getByText('com'));
+    expect(await screen.findByText('a')).toBeInTheDocument();
+    expect(screen.getByText('a.jar')).toBeInTheDocument();
   });
 
   it('每个命中项按格式渲染专属 icon（带格式无障碍标签）', async () => {
@@ -104,12 +128,13 @@ describe('SearchPage 页眉驱动的自动搜索（FR-94）', () => {
     expect(screen.getByLabelText('docker 仓库 docker-hosted')).toBeInTheDocument();
   });
 
-  it('点击命中制品 → 跳转制品详情（repo + path 参数）', async () => {
+  it('点击文件叶子 → 跳转制品详情（repo + 完整 path 参数）', async () => {
     const user = userEvent.setup();
     mockedApi.search.mockResolvedValue(paged([hit('r1', 'maven-hosted', 'maven', 'com/a/a.jar')]));
     renderAt('?q=x');
 
-    await user.click(await screen.findByText('com/a/a.jar'));
+    // 叶子以文件名渲染，但跳转仍带完整路径
+    await user.click(await screen.findByText('a.jar'));
     expect(navigateMock).toHaveBeenCalledWith('/artifact?repo=r1&path=com%2Fa%2Fa.jar');
   });
 
