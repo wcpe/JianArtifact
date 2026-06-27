@@ -35,6 +35,7 @@ mod auth_routes;
 mod browse;
 mod cargo_routes;
 mod cc_challenge;
+mod dashboard;
 mod docker_routes;
 mod dynamic_config;
 mod format_routes;
@@ -413,6 +414,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/licenses", get(licenses::list_licenses))
         .route("/audit", get(audit::list_audit))
         .route("/analytics/usage", get(analytics::usage_analytics))
+        .route("/dashboard/summary", get(dashboard::dashboard_summary))
         .route("/monitor/host", get(monitor::monitor_host))
         .route("/monitor/metrics", get(metrics_query::query_metrics))
         .route("/protection/status", get(protection::protection_status))

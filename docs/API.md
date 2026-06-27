@@ -244,6 +244,13 @@
 - **响应**：聚合总览对象 `{ total_access, total_download, top_downloads, repo_usage }`——`total_access` / `total_download` 为全局累计访问 / 下载量；`top_downloads` 为按下载量倒序的热门制品（每项含 `repo_name`、`repo_path`、`count`、`last_at`）；`repo_usage` 为按下载量汇总到仓库的用量（每项含 `repo_name`、`count`），均倒序。数据为本机内部聚合统计（消费 FR-57 采集的 `usage_stats`），**纯本地查询、绝不外发、不向外部遥测 phone-home**（FR-58，ADR-0009）。
 - **错误**：`401` 未认证；`403` 非管理员。
 
+### 查询仪表盘概览（P2，仅 Admin，FR-108）
+
+- **方法 / 路径**：`GET /api/v1/dashboard/summary`
+- **请求**：无查询参数。仅管理员可访问。
+- **响应**：KPI 概览对象 `{ repo_count, artifact_count, total_bytes, user_count }`——`repo_count` 为仓库总数；`artifact_count` 为制品**索引条目数**（不去重，含同一 blob 被多仓库引用的多条）；`total_bytes` 为存储用量字节（按 `sha256` **去重**求和，同一 blob 只计一次）；`user_count` 为用户总数。供控制台首页仪表盘 KPI 卡（FR-108，增强 FR-18）。各计数经 `meta` 既有计数方法纯本地聚合查询取得，**纯本机内部数据、绝不外发**。普通用户 / 匿名的首页降级展示由前端只用可见仓库列表承载，不调本端点。
+- **错误**：`401` 未认证；`403` 非管理员。
+
 ### 查询主机监控（P2，仅 Admin，FR-98）
 
 - **方法 / 路径**：`GET /api/v1/monitor/host`

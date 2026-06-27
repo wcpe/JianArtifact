@@ -89,6 +89,54 @@ describe('App 三层路由守卫（FR-95）', () => {
     // 外壳版本展示（FR-101）：底部版本号取自 /health；更新检查默认未启用（409）不显徽标
     mockedApi.getHealth.mockResolvedValue({ status: 'ok', version: '0.4.0', port: 9999 });
     mockedApi.checkUpdate.mockRejectedValue(new ApiError(409, 'conflict', '在线更新未启用'));
+    // 管理员仪表盘（FR-108）落地 / 时各数据源端点：统一返回最简空 / 默认值，仅验证落地可达
+    mockedApi.getDashboardSummary.mockResolvedValue({
+      repo_count: 0,
+      artifact_count: 0,
+      total_bytes: 0,
+      user_count: 0,
+    });
+    mockedApi.getHostMonitor.mockResolvedValue({
+      cpu: { usage_percent: 0, logical_cores: 1 },
+      memory: { total_bytes: 1, used_bytes: 0, swap_total_bytes: 0, swap_used_bytes: 0 },
+      disk: { total_bytes: 1, available_bytes: 1, disks: [] },
+      uptime_secs: 0,
+    });
+    mockedApi.listAudit.mockResolvedValue({
+      items: [],
+      total: 0,
+      offset: 0,
+      limit: 8,
+      has_more: false,
+    });
+    mockedApi.getDynamicConfig.mockResolvedValue({
+      limits: { max_artifact_size: null },
+      audit: { retention_days: 30, max_rows: 100000 },
+      usage: { detail_enabled: false, max_detail_rows: 100000 },
+      metrics: { enabled: false, allow_anonymous: false },
+      metrics_timeseries: {
+        enabled: true,
+        sample_interval_secs: 60,
+        retention_days: 7,
+        max_rows: 100000,
+      },
+      vuln: {
+        enabled: false,
+        source_base_url: '',
+        ecosystems: [],
+        refresh_interval_secs: 3600,
+        download_timeout_secs: 60,
+      },
+      auth: { session_ttl_secs: 3600, login_max_failures: 5, login_lockout_secs: 900 },
+    });
+    mockedApi.protectionStatus.mockResolvedValue({
+      alerts_enabled: false,
+      window_secs: 60,
+      window_counts: [],
+      active_banned_ips: 0,
+      dropped_alerts: 0,
+      recent_alerts: [],
+    });
   });
   afterEach(() => vi.clearAllMocks());
 

@@ -12,6 +12,7 @@ import type {
   CreateRepositoryRequest,
   CreateTokenResponse,
   CreateUserRequest,
+  DashboardSummary,
   DynamicConfig,
   HealthInfo,
   GroupAclView,
@@ -389,6 +390,14 @@ export function listProtectionAlerts(
     },
   });
 }
+
+// —— 仪表盘全局概览（仅管理员，FR-108） ——
+
+/** 查询仪表盘 KPI 概览（仓库 / 制品 / 去重存储字节 / 用户数）。 */
+export function getDashboardSummary(): Promise<DashboardSummary> {
+  return request<DashboardSummary>('/dashboard/summary');
+}
+
 // —— 主机 / 系统监控（仅管理员，FR-98） ——
 
 /** 查询主机指标快照（按请求采样：CPU / 内存 / 磁盘 / uptime）。 */

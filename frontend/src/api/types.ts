@@ -530,6 +530,19 @@ export interface MigrationJobSummary {
   paused: boolean;
 }
 
+// —— 仪表盘全局概览（FR-108，仅管理员；对齐后端 src/api/dashboard.rs 的 DashboardSummaryDto） ——
+
+/**
+ * 仪表盘 KPI 概览（GET /api/v1/dashboard/summary，仅管理员）。
+ * `artifact_count` 为制品索引条目数（不去重）；`total_bytes` 为按 sha256 去重的占盘字节。
+ */
+export interface DashboardSummary {
+  repo_count: number;
+  artifact_count: number;
+  total_bytes: number;
+  user_count: number;
+}
+
 // —— 主机 / 系统监控（FR-98，仅管理员；对齐后端 src/monitor/mod.rs 的 HostMetrics DTO） ——
 
 /** CPU 指标（usage_percent 首样可能为 0，属后端已知取舍）。 */

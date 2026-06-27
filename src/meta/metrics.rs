@@ -130,6 +130,14 @@ impl MetaStore {
         Ok(count)
     }
 
+    /// 制品索引条目总数（不去重，含同一 blob 被多仓库引用的多条；供仪表盘 KPI，FR-108）。
+    pub async fn count_artifacts(&self) -> Result<i64, MetaError> {
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM artifacts")
+            .fetch_one(self.pool())
+            .await?;
+        Ok(count)
+    }
+
     /// 存储总字节：按 sha256 去重后求和，避免同一 blob 被多个制品重复计字节。
     pub async fn total_blob_bytes(&self) -> Result<i64, MetaError> {
         let total: i64 = sqlx::query_scalar(
@@ -277,6 +285,7 @@ mod tests {
         // 空库时计数均为 0
         assert_eq!(store.count_repositories().await.unwrap(), 0);
         assert_eq!(store.count_distinct_blobs().await.unwrap(), 0);
+        assert_eq!(store.count_artifacts().await.unwrap(), 0);
         assert_eq!(store.total_blob_bytes().await.unwrap(), 0);
 
         let r1 = 建仓库(&store, "r1").await;
@@ -299,6 +308,8 @@ mod tests {
 
         // 去重 blob：共享sha + 独立sha = 2
         assert_eq!(store.count_distinct_blobs().await.unwrap(), 2);
+        // 制品索引条目数不去重：三条制品行（含同 blob 两处引用） = 3
+        assert_eq!(store.count_artifacts().await.unwrap(), 3);
         // 去重字节：共享sha 计一次 100 + 独立sha 30 = 130（共享不重复计）
         assert_eq!(store.total_blob_bytes().await.unwrap(), 130);
     }
