@@ -28,8 +28,8 @@ pub use source::{GithubReleaseSource, Release, ReleaseAsset, ReleaseSource};
 
 /// 临时下载子目录名（位于数据目录下），存放下载中的资产，校验失败即清理。
 const UPDATE_TMP_SUBDIR: &str = "update-tmp";
-/// FR-86 三发布目标之一：Linux x86_64。
-const TARGET_LINUX_X64: &str = "x86_64-unknown-linux-gnu";
+/// FR-86 三发布目标之一：Linux x86_64（musl 静态链接，不依赖 glibc、跨发行版可跑）。
+const TARGET_LINUX_X64: &str = "x86_64-unknown-linux-musl";
 /// FR-86 三发布目标之一：Windows x86_64。
 const TARGET_WINDOWS_X64: &str = "x86_64-pc-windows-msvc";
 /// FR-86 三发布目标之一：macOS aarch64。

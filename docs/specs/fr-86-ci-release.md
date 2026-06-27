@@ -26,7 +26,7 @@
 
   | target | runner | 产物扩展名 `{ext}` |
   |---|---|---|
-  | `x86_64-unknown-linux-gnu` | `ubuntu-latest` | （空） |
+  | `x86_64-unknown-linux-musl` | `ubuntu-latest` | （空） |
   | `x86_64-pc-windows-msvc` | `windows-latest` | `.exe` |
   | `aarch64-apple-darwin` | `macos-14` | （空） |
 
@@ -65,8 +65,8 @@ jianartifact-{version}-{target}{ext}.sha256
 示例（正式 Release `v0.3.0`）：
 
 ```
-jianartifact-0.3.0-x86_64-unknown-linux-gnu
-jianartifact-0.3.0-x86_64-unknown-linux-gnu.sha256
+jianartifact-0.3.0-x86_64-unknown-linux-musl
+jianartifact-0.3.0-x86_64-unknown-linux-musl.sha256
 jianartifact-0.3.0-x86_64-pc-windows-msvc.exe
 jianartifact-0.3.0-x86_64-pc-windows-msvc.exe.sha256
 jianartifact-0.3.0-aarch64-apple-darwin

@@ -51,7 +51,7 @@ trait ReleaseSource {
 据 `std::env::consts::{OS, ARCH}` 映射到 FR-86 三目标之一：
 | OS / ARCH | target | ext |
 |---|---|---|
-| linux / x86_64 | `x86_64-unknown-linux-gnu` | （空） |
+| linux / x86_64 | `x86_64-unknown-linux-musl` | （空） |
 | windows / x86_64 | `x86_64-pc-windows-msvc` | `.exe` |
 | macos / aarch64 | `aarch64-apple-darwin` | （空） |
 其余组合 → `UpdateError::UnsupportedPlatform`（该平台无自更新资产，明确报错不静默）。

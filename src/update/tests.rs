@@ -19,7 +19,7 @@ use super::*;
 fn target_推导_三平台() {
     assert_eq!(
         resolve_target("linux", "x86_64").unwrap(),
-        "x86_64-unknown-linux-gnu"
+        "x86_64-unknown-linux-musl"
     );
     assert_eq!(
         resolve_target("windows", "x86_64").unwrap(),
@@ -46,7 +46,7 @@ fn target_推导_不支持平台报错() {
 #[test]
 fn 扩展名_仅_windows_为_exe() {
     assert_eq!(target_ext("x86_64-pc-windows-msvc"), ".exe");
-    assert_eq!(target_ext("x86_64-unknown-linux-gnu"), "");
+    assert_eq!(target_ext("x86_64-unknown-linux-musl"), "");
     assert_eq!(target_ext("aarch64-apple-darwin"), "");
 }
 
@@ -59,8 +59,8 @@ fn 资产名_含版本_target_扩展名() {
         "jianartifact-0.4.0-x86_64-pc-windows-msvc.exe"
     );
     assert_eq!(
-        asset_name("1.2.3", "x86_64-unknown-linux-gnu"),
-        "jianartifact-1.2.3-x86_64-unknown-linux-gnu"
+        asset_name("1.2.3", "x86_64-unknown-linux-musl"),
+        "jianartifact-1.2.3-x86_64-unknown-linux-musl"
     );
 }
 
@@ -106,7 +106,7 @@ fn sha256_解析_纯_hex_与_sha256sum_格式() {
     let hex = "a".repeat(64);
     assert_eq!(parse_sha256_content(&hex).unwrap(), hex);
     // sha256sum 形态：<hex>  <filename>
-    let line = format!("{hex}  jianartifact-0.4.0-x86_64-unknown-linux-gnu");
+    let line = format!("{hex}  jianartifact-0.4.0-x86_64-unknown-linux-musl");
     assert_eq!(parse_sha256_content(&line).unwrap(), hex);
     // 大写规整为小写
     let upper = "A".repeat(64);

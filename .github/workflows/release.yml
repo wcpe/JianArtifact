@@ -68,8 +68,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Linux x86_64：原生 ubuntu，无扩展名。
-          - target: x86_64-unknown-linux-gnu
+          # Linux x86_64：musl 静态链接（不依赖 glibc、跨发行版可跑），无扩展名。
+          - target: x86_64-unknown-linux-musl
             runner: ubuntu-latest
             ext: ''
           # Windows x86_64（MSVC）：原生 windows，扩展名 .exe。
@@ -105,6 +105,11 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
+
+      # musl 静态链接需 musl-gcc 编译 C 依赖（bundled sqlite / ring）；仅 Linux musl 目标装。
+      - name: 安装 musl 工具链（仅 Linux musl 目标）
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
 
       - name: 安装前端依赖
         run: pnpm -C frontend install --frozen-lockfile
