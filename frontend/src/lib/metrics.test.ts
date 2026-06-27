@@ -90,6 +90,13 @@ describe('formatMetricValue', () => {
     expect(formatMetricValue(1024, 'bytes')).toBe('1.00 KB');
   });
 
+  it('字节型降采样平均产物取整、不渲染原始浮点', () => {
+    // 监控页字节 gauge 经降采样平均后为小数，展示须取整且带单位
+    const out = formatMetricValue(121.33333333333333, 'bytes');
+    expect(out).toBe('121 B');
+    expect(out).not.toMatch(/\d\.\d{3,}/);
+  });
+
   it('计数取整', () => {
     expect(formatMetricValue(7.0, 'count')).toBe('7');
   });

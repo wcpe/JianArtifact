@@ -14,6 +14,14 @@ describe('formatBytes', () => {
   it('MB 级别换算正确', () => {
     expect(formatBytes(5 * 1024 * 1024)).toBe('5.00 MB');
   });
+  it('小于 1KB 的小数字节取整、不渲染原始浮点（降采样平均产物）', () => {
+    // 监控页降采样平均会把整数字节 gauge 变小数，如 121.33333333333333
+    const out = formatBytes(121.33333333333333);
+    expect(out).toBe('121 B');
+    // 杜绝原始浮点串泄漏到展示
+    expect(out).not.toContain('.333');
+    expect(out).not.toMatch(/\d\.\d{3,}/);
+  });
 });
 
 describe('formatCount', () => {

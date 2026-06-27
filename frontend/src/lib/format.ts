@@ -4,7 +4,8 @@ import { ApiError } from '../api/client';
 
 /** 把字节数格式化为人类可读体积。 */
 export function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
+  // 字节为整数语义；降采样平均可能产生小数浮点，取整避免渲染原始浮点（如 121.33333333333333）
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
   const units = ['KB', 'MB', 'GB', 'TB'];
   let value = bytes / 1024;
   let unitIndex = 0;

@@ -41,6 +41,7 @@
 - 发布流水线 dev 预发布资产堆积（FR-86）：滚动 `dev` 开发版快照的资产名内嵌 `{run_number}+{sha}`、各次不同，原先 `action-gh-release` 只追加不删旧资产致其在 `dev` 预发布里无限堆积。发布前显式删除旧 `dev` 预发布及其 tag（仅 prerelease 渠道，正式 `v*` 不删），使每次推 master 的 `dev` 预发布只含当前快照资产
 - 在线更新 prerelease 通道拉不到预发布版（FR-89，增强 FR-85）：修复开启在线更新 + `channel=prerelease` 时拉不到 dev 预发布的两处缺陷——① 发布流水线 dev 版本串由 `{cargo版本}-dev.{run_number}+{shortsha}`（含 `+`）改为 `.{shortsha}`（点分），避免 GitHub 上传 Release 资产时把资产名里的 `+` 改写成 `.`、致自更新按含 `+` 的版本重构的期望资产名匹配不到；② prerelease 通道的版本判定由 `major.minor.patch` 三段比改为按完整版本串判定（目标与当前不同即视为可更新 / 可切换），修复 `0.4.0` 当前版对 `0.4.0-dev.N.<sha>`（核心版本相等）被误判「无更新」。stable 通道仍维持 SemVer 严格更高语义不变。另修 prerelease 滚动发布的 `tag_name` 为固定标签 `dev`（非版本串）时版本解析失败的问题——版本回退取 release 标题 `name`（内嵌完整 dev 版本串）
 - Linux 发布二进制 glibc 版本锁致跨发行版跑不起来（FR-86，增强 FR-85）：Linux 目标由 `x86_64-unknown-linux-gnu`（动态链接构建机 glibc，CI 在 ubuntu-latest=glibc 2.39 上编、旧发行版报 `GLIBC_2.39 not found`）改为 `x86_64-unknown-linux-musl`（**musl 静态链接、不依赖 glibc**，老新发行版皆可跑）；CI 仅 Linux musl 目标装 `musl-tools` 编 C 依赖（bundled sqlite / ring）。自更新 target 推导同步改 musl，资产名随之为 `…-x86_64-unknown-linux-musl`（`unknown` 是 Rust target triple 的厂商字段、属正常命名，非异常）
+- 监控页字节型指标渲染原始浮点（增强 FR-99/105/108）：监控页 KPI「存储用量」显示 `121.33333333333333 B` 这类未取整的原始浮点字节——根因在前端 `formatBytes` 的「小于 1KB」分支直出 `${bytes} B` 未取整，而字节型 gauge（去重存储字节）经 FR-105 降采样按桶平均后变为带小数浮点。修为该分支对字节取整（`Math.round`）；≥1KB 分支本就保留两位小数不受影响。纯展示层修复，KPI 卡 / 时序卡当前值 / 折线 hover 浮层均经此函数、一并修正；后端采样仍存整数字节、未改
 
 ### 移除
 - 无
