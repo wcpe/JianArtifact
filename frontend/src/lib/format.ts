@@ -34,11 +34,25 @@ export function formatUptime(seconds: number): string {
 }
 
 /**
+ * 解析后端时间戳为毫秒纪元，统一按 UTC。
+ *
+ * 后端时间戳多为**裸 UTC 串**（如 `"2026-06-27 16:10:29"`，无时区标识）；若直接 `Date.parse`，
+ * JS 会按**本地时区**解析，导致相对时间偏一个时区偏移（如 UTC+8 下「刚刚」显示成「8 小时前」）。
+ * 故：已带时区标识（`Z` / `±HH:MM`）的原样解析；裸串补 `T` 与 `Z` 视作 UTC 再解析。解析失败回退原始解析。
+ */
+export function parseUtcMs(ts: string): number {
+  const s = ts.trim();
+  if (/[zZ]$/.test(s) || /[+-]\d{2}:?\d{2}$/.test(s)) return Date.parse(s);
+  const ms = Date.parse(`${s.replace(' ', 'T')}Z`);
+  return Number.isNaN(ms) ? Date.parse(s) : ms;
+}
+
+/**
  * 把 ISO 时间串格式化为相对「现在」的中文相对时间（如 "3 分钟前"、"刚刚"）。
  * `now` 可注入便于测试；解析失败回退原串。
  */
 export function formatRelativeTime(iso: string, now: number = Date.now()): string {
-  const then = Date.parse(iso);
+  const then = parseUtcMs(iso);
   if (Number.isNaN(then)) return iso;
   const diffSecs = Math.floor((now - then) / 1000);
   if (diffSecs < 60) return '刚刚';

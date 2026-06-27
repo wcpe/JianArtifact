@@ -35,6 +35,7 @@
 - 默认监听端口由 `8080` 改为 `9999`（`server.port` 默认值）：同步更新 `config.example.toml` / `docs/CONFIG.md`；仍可经 `JIANARTIFACT_SERVER_PORT` 或 TOML 覆盖
 
 ### 修复
+- 相对时间显示偏一个时区（增强 FR-108/77）：后端时间戳为裸 UTC 串（`"2026-06-27 16:10:29"`，无时区标识），前端 `formatRelativeTime` 直接 `Date.parse` 会按本地时区解析——在 UTC+8 等环境下「刚刚」被显示成「8 小时前」（仪表盘近期活动等处可见）。新增 `parseUtcMs` 统一按 UTC 解析（裸串补 `T`/`Z`、已带时区标识则原样），`formatRelativeTime` 改用之；纯前端、不改后端时间戳契约
 - 在线更新版本号永不收敛（增强 FR-85/86/89）：`current_version` 原恒取 `CARGO_PKG_VERSION`（基线 `0.4.0`），而 prerelease 的 `dev.N.sha` 只存在于 Release 名 / 资产名、从未编进二进制——导致 prerelease 通道自更新后「当前版本」纹丝不动（恒 `0.4.0`），与 `latest=0.4.0-dev.N.sha` 永远不等而一直显示「有可用更新」、永不收敛。新增 `src/version.rs` 的 `build_version()`：CI 发布时经环境变量 `JIANARTIFACT_BUILD_VERSION` 注入完整版本串（prerelease=`{cargo}-dev.{run}.{sha}`、tag=版本），编译期由 `option_env!` 读入、优先取用，回退 `CARGO_PKG_VERSION`；全部「当前版本」展示点（在线更新检查 / 应用、`/health`、设置页、clap `--version`）统一改经它取值。`release.yml` 在 release 构建步骤注入该 env（`ci.yml` 测试任务不注入，本地 / 测试仍为基线版本，行为不变）。修复后 CI 出的 dev 二进制自报 `0.4.0-dev.N.sha`，自更新到同版即 `当前==最新`→无更新（收敛）
 - 控制台设置页「保存」按钮漂移（FR-96）：保存动作条改为 sticky 底部固定条（`position: sticky; bottom: 0`），始终贴在滚动视口底部、不随内容 / 窗口缩放漂移、滚动时常驻可见；配顶部描边 + 背景 + 内边距与正文分隔、不遮挡内容。仅定位呈现，沿用 FR-88/89 既有保存 / 检查 / 应用逻辑与 `GET` / `PATCH /api/v1/settings` 契约
 - 控制台侧栏导航高亮串台：导航 active 判定由前缀匹配改为按路径段精确匹配，修复进入「防护监控」（`/protection-monitor`）时「防护配置」（`/protection`，前者前缀）被一并高亮的问题；其它有前缀关系的路由同样不再串台，仓库等子路径仍正确高亮

@@ -1,7 +1,14 @@
 // 展示辅助函数单元测试：体积格式化与错误文案提取。
 
 import { describe, it, expect } from 'vitest';
-import { formatBytes, formatCount, formatUptime, formatRelativeTime, errorMessage } from './format';
+import {
+  formatBytes,
+  formatCount,
+  formatUptime,
+  formatRelativeTime,
+  parseUtcMs,
+  errorMessage,
+} from './format';
 import { ApiError } from '../api/client';
 
 describe('formatBytes', () => {
@@ -67,6 +74,23 @@ describe('formatRelativeTime', () => {
   });
   it('非法时间串回退原串', () => {
     expect(formatRelativeTime('不是时间', now)).toBe('不是时间');
+  });
+  it('裸 UTC 时间戳（无 Z，后端审计/活动格式）按 UTC 解析、不偏时区', () => {
+    // 后端时间戳为 "YYYY-MM-DD HH:MM:SS" 裸 UTC 串；旧实现按本地解析致「刚刚」显示成「8 小时前」
+    expect(formatRelativeTime('2026-06-27 11:59:30', now)).toBe('刚刚');
+    expect(formatRelativeTime('2026-06-27 11:45:00', now)).toBe('15 分钟前');
+  });
+});
+
+describe('parseUtcMs', () => {
+  it('裸串（无时区）按 UTC 解析，等同补 Z', () => {
+    expect(parseUtcMs('2026-06-27 16:10:29')).toBe(Date.parse('2026-06-27T16:10:29Z'));
+  });
+  it('已带 Z 原样解析', () => {
+    expect(parseUtcMs('2026-06-27T16:10:29Z')).toBe(Date.parse('2026-06-27T16:10:29Z'));
+  });
+  it('带时区偏移原样解析', () => {
+    expect(parseUtcMs('2026-06-27T16:10:29+08:00')).toBe(Date.parse('2026-06-27T16:10:29+08:00'));
   });
 });
 
