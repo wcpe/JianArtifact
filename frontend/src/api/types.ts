@@ -653,6 +653,69 @@ export interface SettingsPatch {
   update: UpdatePatch;
 }
 
+// —— 动态配置面板（FR-106，仅管理员，保存后重启生效；对齐后端 src/api/dynamic_config.rs） ——
+
+/** 上传等限制（limits 节）。max_artifact_size 为 null 表示不额外限制。 */
+export interface LimitsConfig {
+  max_artifact_size?: number | null;
+}
+
+/** 审计日志保留（observability.audit 节）。 */
+export interface AuditConfig {
+  retention_days: number;
+  max_rows: number;
+}
+
+/** 使用分析采集（observability.usage 节）。 */
+export interface UsageConfig {
+  detail_enabled: boolean;
+  max_detail_rows: number;
+}
+
+/** Prometheus 指标端点（observability.metrics 节）。 */
+export interface MetricsConfig {
+  enabled: boolean;
+  allow_anonymous: boolean;
+}
+
+/** 指标时序采集（observability.metrics_timeseries 节）。 */
+export interface MetricsTimeseriesConfig {
+  enabled: boolean;
+  sample_interval_secs: number;
+  retention_days: number;
+  max_rows: number;
+}
+
+/** 漏洞库离线镜像（vuln 节）。 */
+export interface VulnConfig {
+  enabled: boolean;
+  source_base_url: string;
+  ecosystems: string[];
+  refresh_interval_secs: number;
+  download_timeout_secs: number;
+}
+
+/** 认证可调标量（auth 节非密钥视图）：会话 TTL / 登录失败阈值 / 锁定时长。绝不含 OIDC / LDAP 密钥。 */
+export interface AuthTunables {
+  session_ttl_secs: number;
+  login_max_failures: number;
+  login_lockout_secs: number;
+}
+
+/**
+ * 动态配置面板载荷（GET / PATCH /api/v1/settings/dynamic，仅管理员）。
+ * 各节均为**非密钥**项；改动落库 SQLite、**保存后重启生效**（无现成热替换槽）。
+ */
+export interface DynamicConfig {
+  limits: LimitsConfig;
+  audit: AuditConfig;
+  usage: UsageConfig;
+  metrics: MetricsConfig;
+  metrics_timeseries: MetricsTimeseriesConfig;
+  vuln: VulnConfig;
+  auth: AuthTunables;
+}
+
 /** 更新检查结果（GET /api/v1/update/check，对齐 FR-85 既有契约）。 */
 export interface UpdateCheck {
   current_version: string;

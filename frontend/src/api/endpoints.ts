@@ -12,6 +12,7 @@ import type {
   CreateRepositoryRequest,
   CreateTokenResponse,
   CreateUserRequest,
+  DynamicConfig,
   HealthInfo,
   GroupAclView,
   GroupMemberView,
@@ -507,6 +508,19 @@ export function getSettings(): Promise<SettingsView> {
 /** 编辑网络代理 + 在线更新配置（仅管理员，PATCH 即时生效、无须重启，FR-88）。 */
 export function updateSettings(patch: SettingsPatch): Promise<SettingsView> {
   return request<SettingsView>('/settings', { method: 'PATCH', body: patch });
+}
+
+/** 读取动态配置面板各非密钥节的当前 / 待生效值（仅管理员，FR-106）。 */
+export function getDynamicConfig(): Promise<DynamicConfig> {
+  return request<DynamicConfig>('/settings/dynamic');
+}
+
+/**
+ * 编辑动态配置面板各非密钥节（仅管理员，FR-106）。
+ * 校验通过即落库；这些节无热替换槽，**保存后重启生效**。返回写入后的当前 / 待生效值。
+ */
+export function updateDynamicConfig(config: DynamicConfig): Promise<DynamicConfig> {
+  return request<DynamicConfig>('/settings/dynamic', { method: 'PATCH', body: config });
 }
 
 /** 更新检查：查最新版本并比对（仅管理员；未启用时后端返回 409）。 */

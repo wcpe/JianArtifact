@@ -9,7 +9,7 @@ import { MantineProvider } from '@mantine/core';
 import { SettingsPage } from './SettingsPage';
 import * as api from '../api/endpoints';
 import { ApiError } from '../api/client';
-import type { SettingsView, UpdateCheck } from '../api/types';
+import type { SettingsView, UpdateCheck, DynamicConfig } from '../api/types';
 
 /** 在 Mantine Provider 下渲染设置页。 */
 function renderPage() {
@@ -24,6 +24,33 @@ function renderPage() {
 function 切到在线更新() {
   fireEvent.click(screen.getByRole('tab', { name: '在线更新' }));
 }
+
+/** 切到「系统配置」二级 tab（FR-106 动态配置面板）。 */
+function 切到系统配置() {
+  fireEvent.click(screen.getByRole('tab', { name: '系统配置' }));
+}
+
+/** 一份默认动态配置样例（FR-106）。 */
+const 动态配置样例: DynamicConfig = {
+  limits: { max_artifact_size: null },
+  audit: { retention_days: 90, max_rows: 1000000 },
+  usage: { detail_enabled: false, max_detail_rows: 1000000 },
+  metrics: { enabled: true, allow_anonymous: false },
+  metrics_timeseries: {
+    enabled: true,
+    sample_interval_secs: 60,
+    retention_days: 7,
+    max_rows: 1000000,
+  },
+  vuln: {
+    enabled: false,
+    source_base_url: 'https://osv.example',
+    ecosystems: [],
+    refresh_interval_secs: 86400,
+    download_timeout_secs: 600,
+  },
+  auth: { session_ttl_secs: 3600, login_max_failures: 5, login_lockout_secs: 900 },
+};
 
 /** 一份启用在线更新、含脱敏代理的设置样例。 */
 const 启用样例: SettingsView = {
@@ -529,7 +556,73 @@ describe('SettingsPage', () => {
     vi.spyOn(api, 'getSettings').mockRejectedValue(
       new ApiError(403, 'forbidden', '无权执行该操作'),
     );
+    vi.spyOn(api, 'getDynamicConfig').mockResolvedValue(动态配置样例);
     renderPage();
     await waitFor(() => expect(screen.getByText('无权执行该操作')).toBeInTheDocument());
+  });
+
+  // ===== FR-106：系统配置（动态配置）tab =====
+
+  it('FR-106：有「系统配置」tab，切入后渲染各节表单并显「保存后重启生效」标注', async () => {
+    vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
+    vi.spyOn(api, 'getDynamicConfig').mockResolvedValue(动态配置样例);
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
+    expect(screen.getByRole('tab', { name: '系统配置' })).toBeInTheDocument();
+    切到系统配置();
+
+    // 重启生效标注（区别于代理 / 更新即时生效）
+    await waitFor(() => expect(screen.getByRole('heading', { name: '系统配置' })).toBeVisible());
+    expect(screen.getByText('保存后重启生效')).toBeVisible();
+    // 各节表单回显默认值：会话有效期 3600、审计保留 90、采样间隔 60
+    expect(screen.getByDisplayValue('3600')).toBeVisible();
+    expect(screen.getByDisplayValue('90')).toBeVisible();
+    expect(screen.getByDisplayValue('60')).toBeVisible();
+  });
+
+  it('FR-106：编辑系统配置后点「保存系统配置」调 updateDynamicConfig，成功显已保存重启生效', async () => {
+    vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
+    vi.spyOn(api, 'getDynamicConfig').mockResolvedValue(动态配置样例);
+    const update = vi
+      .spyOn(api, 'updateDynamicConfig')
+      .mockImplementation((c) => Promise.resolve(c));
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
+    切到系统配置();
+    await waitFor(() => expect(screen.getByLabelText('会话有效期（秒）')).toBeVisible());
+
+    // 改会话有效期为 7200
+    fireEvent.change(screen.getByLabelText('会话有效期（秒）'), { target: { value: '7200' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存系统配置' }));
+
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+    expect(update.mock.calls[0][0].auth.session_ttl_secs).toBe(7200);
+    await waitFor(() => expect(screen.getByText('已保存，重启服务后生效。')).toBeInTheDocument());
+  });
+
+  it('FR-106：系统配置保存返回 400（非法值）时展示友好提示', async () => {
+    vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
+    vi.spyOn(api, 'getDynamicConfig').mockResolvedValue(动态配置样例);
+    vi.spyOn(api, 'updateDynamicConfig').mockRejectedValue(
+      new ApiError(
+        400,
+        'bad_request',
+        '动态配置非法：会话有效期（auth.session_ttl_secs）必须大于 0',
+      ),
+    );
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
+    切到系统配置();
+    await waitFor(() => expect(screen.getByRole('button', { name: '保存系统配置' })).toBeVisible());
+    fireEvent.click(screen.getByRole('button', { name: '保存系统配置' }));
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('动态配置非法：会话有效期（auth.session_ttl_secs）必须大于 0'),
+      ).toBeInTheDocument(),
+    );
   });
 });

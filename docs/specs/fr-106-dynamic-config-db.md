@@ -1,6 +1,6 @@
 # 功能规格：动态配置持久化（文件默认 + DB 覆盖 + 内存缓存）
 
-> 状态：开发中（后端基座 + 既有可编辑端点持久化 + 穷举测试已落地；新 Dynamic 节在线表单 + 真机重启验收待续）　·　关联 PRD：FR-106　·　ADR：ADR-0028（已接受）　·　分支：feature/fr-106-dynamic-config-db
+> 状态：开发中（后端基座 + 既有可编辑端点持久化 + 新 Dynamic 节在线表单（读写端点 + 设置页「系统配置」tab）+ 穷举测试已落地；真机「面板改 → 重启 → 仍生效」验收待续）　·　关联 PRD：FR-106　·　ADR：ADR-0028（已接受）　·　分支：feature/fr-106-dynamic-config-db
 
 ## 1. 背景与目标
 
@@ -91,4 +91,12 @@ CREATE TABLE app_settings (
 1. **Dynamic 首批清单**（§2）请确认增减。
 2. **优先级**（§3）env > DB > 文件——确认这个口径（vs DB 最高）。
 3. **范围**：是否真要"非密钥全部节"一次到位，还是先高频节、增量纳入（推荐后者，YAGNI）。
-4. 前端：配置项变多后设置页二级导航如何容纳这些 Dynamic 节（与 FR-103 新设置页协调，可能多加几个 tab）。
+4. 前端：配置项变多后设置页二级导航如何容纳这些 Dynamic 节（与 FR-103 新设置页协调，可能多加几个 tab）。**已落地**：设置页二级导航新增「系统配置」tab，按分组（限制与配额 / 可观测性 / 漏洞库 / 安全 · 会话）承载 limits / observability / vuln / auth 非密钥项，独立保存按钮并显著标注「保存后重启生效」（区别于代理 / 更新 / 防护的即时生效）。
+
+## 9. 新 Dynamic 节在线表单（已落地，FR-106 收尾）
+
+- **端点**：新增 `GET` / `PATCH /api/v1/settings/dynamic`（仅 Admin，见 `src/api/dynamic_config.rs`）。覆盖 `limits` / `observability.{audit,usage,metrics,metrics_timeseries}` / `vuln` / `auth` 三个可调标量。
+  - `GET`：以启动期生效配置（`state.config`，已是 env⊕DB⊕文件 合并值）为基线、叠加当前 `app_settings` 覆盖，回显「当前 + 待生效」值（含本次 PATCH 后写入的待生效值）。
+  - `PATCH`：整体校验各节边界（周期 / 间隔 / 会话 TTL 等必须 > 0）→ 通过则按节 `upsert_setting` 落库（经白名单键）；任一节非法返回 400 且不写任何节。
+- **生效语义（诚实）**：这些节多在启动期装载、**无现成热替换槽**，本期落库后**重启生效**（黄金组合「变更=改 DB、下次装载生效」），不为每个后台任务强造热替换槽（YAGNI）。前端「系统配置」tab 显著标注「保存后重启生效」。
+- **凭据红线**：`auth` 经 `AuthTunables` 非密钥视图序列化，结构上不可能带出 OIDC / LDAP 密钥；`limits` / `observability` / `vuln` 本就无凭据；端点只写固定白名单键，bootstrap 键（`server.*` / `data.*`）绝不经此路径（穷举测试断言落库键集限于白名单、auth 节无凭据字段名）。

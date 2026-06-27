@@ -390,6 +390,24 @@
 - **响应**：`200`，体同 GET（脱敏后的当前生效值）。
 - **错误**：`400` 网络代理 URL 无法构造 / `restart_mode` 非 `self`|`exit` / `channel` 非 `stable`|`prerelease` / `repo` / `api_base_url` 为空；`401` 未认证；`403` 非管理员。
 
+### 读取动态配置（仅 Admin，FR-106）
+
+- **方法 / 路径**：`GET /api/v1/settings/dynamic`
+- **请求**：无请求体。仅管理员可调用。
+- **行为**：读取「新 Dynamic 节」的**非密钥**项当前 / 待生效值，供控制台「设置」页「系统配置」tab 回显。以启动期生效配置（`env 显式 > DB > 文件默认` 合并值）为基线、叠加**当前** `app_settings` 覆盖——回显含本次 PATCH 后写入 DB 的**待生效**值。这些节多在启动期装载、无热替换槽，**改动重启生效**（与代理 / 更新 / 防护的即时生效不同）。
+- **响应**：`{ "limits": { "max_artifact_size" }, "audit": { "retention_days", "max_rows" }, "usage": { "detail_enabled", "max_detail_rows" }, "metrics": { "enabled", "allow_anonymous" }, "metrics_timeseries": { "enabled", "sample_interval_secs", "retention_days", "max_rows" }, "vuln": { "enabled", "source_base_url", "ecosystems", "refresh_interval_secs", "download_timeout_secs" }, "auth": { "session_ttl_secs", "login_max_failures", "login_lockout_secs" } }`。`auth` 仅三个可调标量，**绝不含 OIDC / LDAP 密钥**；各节均无凭据。
+- **错误**：`401` 未认证；`403` 非管理员。
+
+### 编辑动态配置（仅 Admin，FR-106，保存后重启生效）
+
+- **方法 / 路径**：`PATCH /api/v1/settings/dynamic`
+- **请求**：仅管理员可调用。JSON 体同 GET 响应形态（各非密钥节整体提交）。
+- **行为**：整体校验各节数值边界（`metrics_timeseries.sample_interval_secs` / `vuln.refresh_interval_secs` / `vuln.download_timeout_secs` / `auth.session_ttl_secs` / `auth.login_lockout_secs` 必须 > 0）→ 通过则按节序列化落库 `app_settings`（key 为 `limits` / `observability.audit` / `observability.usage` / `observability.metrics` / `observability.metrics_timeseries` / `vuln` / `auth`，经白名单），**重启生效**（启动经覆盖层 `env 显式 > DB > 文件默认` 合并装载）。这些节无热替换槽，本期**不即时换槽**——下次启动装载生效（黄金组合）。
+- **凭据红线**：`auth` 经专用非密钥视图序列化（仅三个标量），**OIDC / LDAP 密钥绝不入库**；其余节本就无凭据；端点只写固定白名单键，bootstrap 项（`server.*` / `data.*`）不经此路径。env 显式给值的节仍以 env 为准、重启时不被 DB 覆盖。
+- **校验失败不落库**：任一节校验未过返回 `400` 且**不写任何节**（再次 GET 仍返回旧值）。
+- **响应**：`200`，体同 GET（叠加刚写入的待生效值）。
+- **错误**：`400` 校验未过（含中文原因）；`401` 未认证；`403` 非管理员；`500` 落库 / 序列化失败。
+
 ### 列出仓库 ACL
 
 - **方法 / 路径**：`GET /api/v1/repositories/{id}/acl`

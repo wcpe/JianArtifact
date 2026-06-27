@@ -36,6 +36,7 @@ mod browse;
 mod cargo_routes;
 mod cc_challenge;
 mod docker_routes;
+mod dynamic_config;
 mod format_routes;
 mod go_routes;
 mod groups;
@@ -461,6 +462,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/settings",
             get(settings::get_settings).patch(settings::patch_settings),
+        )
+        .route(
+            "/settings/dynamic",
+            get(dynamic_config::get_dynamic_config).patch(dynamic_config::patch_dynamic_config),
         )
         .route(
             "/repositories/{id}/acl",
