@@ -237,16 +237,19 @@
 | refresh_interval_secs | 刷新周期（秒） | 86400 | JIANARTIFACT_VULN_REFRESH_INTERVAL_SECS |
 | download_timeout_secs | 单次镜像下载整体超时（秒） | 600 | JIANARTIFACT_VULN_DOWNLOAD_TIMEOUT_SECS |
 
-### [network.proxy]（出站网络代理，P2 / FR-84 / ADR-0020，运行时可编辑见 FR-88 / ADR-0022）
+### [network.proxy]（出站网络代理，P2 / FR-84 / ADR-0020，`all` / SOCKS5 见 FR-100 / ADR-0024，运行时可编辑见 FR-88 / ADR-0022）
 
-> 统一注入全部出站 reqwest 客户端（proxy 回源 / Nexus 迁移 / 漏洞库镜像 / OIDC / 在线更新）。三键默认全空：不显式注入代理，保持 reqwest 既有行为不变（含其默认 honor 系统 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` 环境变量）。**任一键给值即以本配置为真源**（注入即关闭 reqwest 的自动系统代理探测，配置压过系统环境）。代理 URL 可含 `user:pass@` 凭据，凭据**不入库、不进日志 / 错误信息**——建议含凭据的代理 URL 仅经环境变量提供，不写入入库 TOML。
+> 统一注入全部出站 reqwest 客户端（proxy 回源 / Nexus 迁移 / 漏洞库镜像 / OIDC / 在线更新）。四键默认全空：不显式注入代理，保持 reqwest 既有行为不变（含其默认 honor 系统 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` 环境变量）。**任一键给值即以本配置为真源**（注入即关闭 reqwest 的自动系统代理探测，配置压过系统环境）。代理 URL 可含 `user:pass@` 凭据，凭据**不入库、不进日志 / 错误信息**——建议含凭据的代理 URL 仅经环境变量提供，不写入入库 TOML。
 >
-> **运行时可编辑（FR-88）**：本节为启动期初值；Admin 可经控制台「设置」页或 `PATCH /api/v1/settings` 在线改代理，**即时生效、无须重启**。运行时改动只入内存热替换槽、**不写回本文件**，重启回落本节 + env——需持久代理仍应写本节 / env。
+> **`all` 全 scheme 兜底代理（FR-100）**：接受 `socks5://` / `socks5h://` / `http(s)://`，经 `reqwest::Proxy::all` 注入（已启 reqwest `socks` 特性，认 SOCKS5 并解析 `user:pass@` 为认证）。`http` / `https` 仍为 scheme 专属代理、各自优先，`all` 兜底其余——**仅配 `all` 即覆盖 http+https**（SOCKS5 单代理常见用法）；同时配 `http` 与 `all` 时 http 走 http 代理、其余走 all。注入顺序固定 `http → https → all`。
+>
+> **运行时可编辑（FR-88）+ 网页凭据管理（FR-100）**：本节为启动期初值；Admin 可经控制台「设置」页或 `PATCH /api/v1/settings` 在线改代理，**即时生效、无须重启**。设置页每代理拆 URL（脱敏 host，无凭据）+ 用户名 + 密码三字段：**用户名回显**（连接标识、非密钥），**密码绝不回显**（GET 仅返回 `has_password: bool`，PATCH 密码三态——缺省=保留 / 空串=清空 / 非空=设置）。运行时改动只入内存热替换槽、**不写回本文件**，重启回落本节 + env——需持久代理仍应写本节 / env。
 
 | 键 | 含义 | 默认（取向） | 环境变量 |
 |---|---|---|---|
-| http | HTTP 出站代理 URL（如 `http://proxy.internal:8080`） | 空（不注入） | JIANARTIFACT_NETWORK_PROXY_HTTP |
-| https | HTTPS 出站代理 URL | 空（不注入） | JIANARTIFACT_NETWORK_PROXY_HTTPS |
+| http | HTTP 出站代理 URL（scheme 专属，如 `http://proxy.internal:8080`） | 空（不注入） | JIANARTIFACT_NETWORK_PROXY_HTTP |
+| https | HTTPS 出站代理 URL（scheme 专属） | 空（不注入） | JIANARTIFACT_NETWORK_PROXY_HTTPS |
+| all | 全 scheme 兜底代理 URL（FR-100，接受 `socks5://` / `socks5h://` / `http(s)://`，如 `socks5://user:pass@host:1080`） | 空（不注入） | JIANARTIFACT_NETWORK_PROXY_ALL |
 | no_proxy | 直连绕过列表（逗号分隔的主机 / 域 / CIDR） | 空 | JIANARTIFACT_NETWORK_PROXY_NO_PROXY |
 
 ### [update]（在线更新，P2 / FR-85 / ADR-0021，运行时可编辑见 FR-88 / ADR-0022）

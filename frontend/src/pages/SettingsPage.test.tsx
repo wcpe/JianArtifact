@@ -24,8 +24,9 @@ function renderPage() {
 const 启用样例: SettingsView = {
   current_version: '0.3.0',
   network_proxy: {
-    http: 'http://proxy.internal:8080',
-    https: 'https://proxy.internal:8443',
+    http: { url: 'http://proxy.internal:8080', username: 'alice', has_password: true },
+    https: { url: 'https://proxy.internal:8443', username: null, has_password: false },
+    all: { url: 'socks5://proxy.internal:1080', username: null, has_password: false },
     no_proxy: 'localhost,127.0.0.1',
   },
   update: {
@@ -39,9 +40,15 @@ const 启用样例: SettingsView = {
 };
 
 /** 一份未启用在线更新、无代理凭据的设置样例。 */
+const 空代理项 = { url: null, username: null, has_password: false };
 const 未启用样例: SettingsView = {
   current_version: '0.3.0',
-  network_proxy: { http: null, https: null, no_proxy: null },
+  network_proxy: {
+    http: { ...空代理项 },
+    https: { ...空代理项 },
+    all: { ...空代理项 },
+    no_proxy: null,
+  },
   update: {
     enabled: false,
     repo: 'wcpe/JianArtifact',
@@ -76,7 +83,13 @@ describe('SettingsPage', () => {
     const update = vi.spyOn(api, 'updateSettings').mockImplementation((p) =>
       Promise.resolve({
         current_version: '0.3.0',
-        network_proxy: p.network_proxy,
+        // 回放为视图形态（脱敏）：仅据 patch 的 url 是否填写决定回显，密码统一不回显
+        network_proxy: {
+          http: { url: p.network_proxy.http.url || null, username: null, has_password: false },
+          https: { url: p.network_proxy.https.url || null, username: null, has_password: false },
+          all: { url: p.network_proxy.all.url || null, username: null, has_password: false },
+          no_proxy: p.network_proxy.no_proxy || null,
+        },
         update: {
           enabled: p.update.enabled,
           repo: p.update.repo,
@@ -90,17 +103,19 @@ describe('SettingsPage', () => {
     renderPage();
 
     await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
-    // 填入新 HTTP 代理并启用在线更新
-    fireEvent.change(screen.getByLabelText('HTTP 代理'), {
+    // 填入新 HTTP 代理 URL（三个代理各有一个「URL」框，HTTP 为第一个）并启用在线更新
+    const urlInputs = screen.getAllByLabelText('URL');
+    fireEvent.change(urlInputs[0], {
       target: { value: 'http://new-proxy.internal:3128' },
     });
     fireEvent.click(screen.getByLabelText('启用在线更新（出站开关）'));
     fireEvent.click(screen.getByText('保存'));
 
     await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
-    // 断言 PATCH 载荷：新代理 + enabled 翻为 true；未填 token 则省略 token 字段
+    // 断言 PATCH 载荷：新代理 URL + enabled 翻为 true；未填密码则省略 password 字段；未填 token 则省略 token
     const payload = update.mock.calls[0][0];
-    expect(payload.network_proxy.http).toBe('http://new-proxy.internal:3128');
+    expect(payload.network_proxy.http.url).toBe('http://new-proxy.internal:3128');
+    expect(payload.network_proxy.http.password).toBeUndefined();
     expect(payload.update.enabled).toBe(true);
     expect(payload.update.token).toBeUndefined();
     // FR-89：默认通道 stable 随 PATCH 一并提交
@@ -316,6 +331,95 @@ describe('SettingsPage', () => {
     expect(saveBar).toHaveStyle({ position: 'sticky', bottom: '0' });
     // 保存按钮落在该固定条内
     expect(saveBar).toContainElement(screen.getByText('保存').closest('button'));
+  });
+
+  it('FR-100：三代理（HTTP / HTTPS / SOCKS5）各渲染 URL / 用户名 / 密码三字段', async () => {
+    vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
+    // 三组标题均在场
+    expect(screen.getByText('HTTP 代理')).toBeInTheDocument();
+    expect(screen.getByText('HTTPS 代理')).toBeInTheDocument();
+    expect(screen.getByText(/SOCKS5 代理/)).toBeInTheDocument();
+    // 每代理三字段：URL / 用户名 / 密码 各三个
+    expect(screen.getAllByLabelText('URL')).toHaveLength(3);
+    expect(screen.getAllByLabelText('用户名')).toHaveLength(3);
+    expect(screen.getAllByLabelText('密码')).toHaveLength(3);
+  });
+
+  it('FR-100：has_password 为真时展示「密码已配置」徽标', async () => {
+    vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
+    // HTTP 代理 has_password=true → 徽标在场
+    expect(screen.getByText('密码已配置')).toBeInTheDocument();
+  });
+
+  it('FR-100：密码框留空保存时 PATCH 载荷省略各代理 password', async () => {
+    vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
+    const update = vi.spyOn(api, 'updateSettings').mockResolvedValue(启用样例);
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('保存'));
+
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+    const np = update.mock.calls[0][0].network_proxy;
+    expect(np.http.password).toBeUndefined();
+    expect(np.https.password).toBeUndefined();
+    expect(np.all.password).toBeUndefined();
+    // 用户名照填回显值
+    expect(np.http.username).toBe('alice');
+  });
+
+  it('FR-100：填入密码保存时对应代理 PATCH 载荷带 password', async () => {
+    vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
+    const update = vi.spyOn(api, 'updateSettings').mockResolvedValue(启用样例);
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
+    // 给 HTTP 代理（第一个密码框）填入新密码
+    const passInputs = screen.getAllByLabelText('密码');
+    fireEvent.change(passInputs[0], { target: { value: 's3cret' } });
+    fireEvent.click(screen.getByText('保存'));
+
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+    const np = update.mock.calls[0][0].network_proxy;
+    expect(np.http.password).toBe('s3cret');
+    // 其余代理仍省略 password
+    expect(np.https.password).toBeUndefined();
+    expect(np.all.password).toBeUndefined();
+  });
+
+  it('FR-100：SOCKS5 的 URL 能填入并组装到 all 槽', async () => {
+    vi.spyOn(api, 'getSettings').mockResolvedValue(未启用样例);
+    const update = vi.spyOn(api, 'updateSettings').mockResolvedValue(未启用样例);
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
+    // 第三个 URL 框为 SOCKS5(all)
+    const urlInputs = screen.getAllByLabelText('URL');
+    fireEvent.change(urlInputs[2], { target: { value: 'socks5://socks.internal:1080' } });
+    fireEvent.click(screen.getByText('保存'));
+
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+    expect(update.mock.calls[0][0].network_proxy.all.url).toBe('socks5://socks.internal:1080');
+  });
+
+  it('FR-100：点「清除密码」后保存，对应代理 PATCH 载荷带 password 空串', async () => {
+    vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
+    const update = vi.spyOn(api, 'updateSettings').mockResolvedValue(启用样例);
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
+    // HTTP 代理 has_password=true → 有「清除密码」按钮
+    fireEvent.click(screen.getByText('清除密码'));
+    fireEvent.click(screen.getByText('保存'));
+
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+    expect(update.mock.calls[0][0].network_proxy.http.password).toBe('');
   });
 
   it('加载失败时展示错误提示', async () => {

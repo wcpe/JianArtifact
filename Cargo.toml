@@ -50,7 +50,9 @@ md-5 = "0.10"
 digest = "0.10"
 # proxy 上游拉取（FR-12）：关闭默认特性以避开 native-tls/openssl 等原生后端，
 # 仅启用纯 rustls TLS（校验上游 HTTPS 证书）与流式响应体，守 SECURITY 零原生依赖。
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+# socks 特性（FR-100 / ADR-0024）：支持 socks5:// / socks5h:// 出站代理，经 tokio-socks
+# 纯 Rust 传递依赖实现，无原生 C 依赖，守单一二进制零原生运行时依赖。
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "socks"] }
 # LDAP 认证集成（FR-35，ADR-0016）：bind 校验对接目录（AD / OpenLDAP）。关闭默认特性
 # 以剔除 sync 同步客户端与 native-tls（openssl）后端，仅启用 rustls + ring 加密 provider
 # （tls-rustls-ring，与上方 reqwest 同一 ring，零原生 C 依赖），守 SECURITY 单一二进制零原生运行时依赖。

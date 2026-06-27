@@ -2,9 +2,9 @@
 
 ## 状态
 
-已被 ADR-0022 取代
+部分被 ADR-0022、ADR-0024 取代
 
-> 「`[network.proxy]` 为出站代理唯一真源、`config` 层统一 `build_outbound_client` helper、rustls-only、凭据脱敏」诸决策仍有效并由 ADR-0022 沿用；仅本 ADR 后果中「代理配置在启动期装载、运行时不热替换」一条被 ADR-0022 推翻，改为运行时经网页 PATCH 可编辑 + 热替换。
+> 「`[network.proxy]` 为出站代理唯一真源、`config` 层统一 `build_outbound_client` helper、rustls-only、凭据脱敏」诸决策仍有效并由 ADR-0022 / ADR-0024 沿用；本 ADR 后果中「代理配置在启动期装载、运行时不热替换」一条被 ADR-0022 推翻（改为运行时经网页 PATCH 可编辑 + 热替换）；「不支持 SOCKS（未引入 reqwest `socks` 特性）」一条被 ADR-0024 取代（新增 `all` 键经 `reqwest::Proxy::all` 支持 SOCKS5，并按"用户名回显、密码不回显"在网页管理代理凭据）。
 
 ## 背景
 

@@ -570,10 +570,18 @@ export interface HostMetrics {
 
 // —— 设置页（FR-87，仅管理员） ——
 
-/** 网络代理视图（脱敏后：URL 已去除 user:pass@ 凭据）。 */
+/** 单代理视图（脱敏后：URL 去 userinfo；用户名回显、密码仅以 has_password 暴露，FR-100）。 */
+export interface ProxyEntryView {
+  url: string | null;
+  username: string | null;
+  has_password: boolean;
+}
+
+/** 网络代理视图（http / https / all 三槽，均脱敏不回显密码，FR-100）。 */
 export interface NetworkProxyView {
-  http: string | null;
-  https: string | null;
+  http: ProxyEntryView;
+  https: ProxyEntryView;
+  all: ProxyEntryView;
   no_proxy: string | null;
 }
 
@@ -597,11 +605,19 @@ export interface SettingsView {
 
 // —— 设置编辑（FR-88，仅管理员，运行时热替换） ——
 
-/** 网络代理编辑项（空串视作清空对应项；可含 user:pass@ 凭据，只入内存槽不回显）。 */
+/** 单代理编辑项（FR-100）。url 空 / 缺省=清除该代理；password 三态：缺省=保留现有 / ""=清空 / 非空=设置。 */
+export interface ProxyEntryPatch {
+  url?: string;
+  username?: string;
+  password?: string;
+}
+
+/** 网络代理编辑项（http / https / all 三槽 + no_proxy；凭据只入内存槽不回显，FR-100）。 */
 export interface NetworkProxyPatch {
-  http: string | null;
-  https: string | null;
-  no_proxy: string | null;
+  http: ProxyEntryPatch;
+  https: ProxyEntryPatch;
+  all: ProxyEntryPatch;
+  no_proxy?: string;
 }
 
 /** 在线更新编辑项。token 三态：缺省/null=保留现有，空串=清空，非空=设置（不回显）。 */

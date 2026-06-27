@@ -576,7 +576,7 @@ async fn 设置patch事件落审计库() {
             "/api/v1/settings",
             Some(&bearer),
             json!({
-                "network_proxy": { "http": null, "https": null, "no_proxy": null },
+                "network_proxy": { "http": {}, "https": {}, "all": {}, "no_proxy": null },
                 "update": {
                     "enabled": false,
                     "repo": "owner/repo",

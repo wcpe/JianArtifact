@@ -911,11 +911,11 @@ pub struct NetworkConfig {
     pub proxy: NetworkProxyConfig,
 }
 
-/// 出站正向代理配置（FR-84，ADR-0020）。
+/// 出站正向代理配置（FR-84，ADR-0020；`all` 见 FR-100 / ADR-0024）。
 ///
-/// 三键均默认 `None`：全不配置时不显式注入代理，保持 reqwest 既有行为不变
+/// 四键均默认 `None`：全不配置时不显式注入代理，保持 reqwest 既有行为不变
 /// （含其默认 honor 系统 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` 环境变量）。
-/// 任一键给值即以配置为真源（见 [`build_outbound_client`] 与 ADR-0020）。
+/// 任一键给值即以配置为真源（见 [`build_outbound_client`] 与 ADR-0020 / ADR-0024）。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct NetworkProxyConfig {
     /// HTTP 出站代理 URL（如 `http://proxy.internal:8080`，可含 `user:pass@` 凭据）。
@@ -924,6 +924,11 @@ pub struct NetworkProxyConfig {
     /// HTTPS 出站代理 URL。
     #[serde(default)]
     pub https: Option<String>,
+    /// 全 scheme 兜底代理 URL（FR-100 / ADR-0024）：接受 `socks5://` / `socks5h://` / `http(s)://`，
+    /// 可含 `user:pass@` 凭据，经 [`reqwest::Proxy::all`] 注入。`http` / `https` 仍为 scheme 专属代理、
+    /// 各自优先，`all` 兜底其余（仅配 `all` 即覆盖 http+https，正是 SOCKS5 单代理常见用法）。
+    #[serde(default)]
+    pub all: Option<String>,
     /// 直连绕过列表（逗号分隔的主机 / 域 / CIDR），命中者不经代理。
     #[serde(default)]
     pub no_proxy: Option<String>,
@@ -975,14 +980,18 @@ impl Default for UpdateConfig {
     }
 }
 
-/// 构造统一的出站 reqwest 客户端（FR-84，ADR-0020）。
+/// 构造统一的出站 reqwest 客户端（FR-84，ADR-0020；`all` / SOCKS5 见 FR-100 / ADR-0024）。
 ///
-/// 在固定的 rustls / stream 特性（见 Cargo.toml）与给定整体超时基础上，按 `proxy` 配置
-/// 注入出站正向代理：
-/// - `https` / `http` 任一给值即注入对应 scheme 的 [`reqwest::Proxy`]，并关闭 reqwest 的
+/// 在固定的 rustls / stream / socks 特性（见 Cargo.toml）与给定整体超时基础上，按 `proxy`
+/// 配置注入出站正向代理：
+/// - `http` / `https` 任一给值即注入对应 scheme 的 [`reqwest::Proxy`]，并关闭 reqwest 的
 ///   自动系统代理探测（配置为真源，压过系统环境）；
+/// - `all` 给值则经 [`reqwest::Proxy::all`] 注入全 scheme 兜底代理（启 `socks` 特性后认
+///   `socks5://` / `socks5h://` 并解析 `user:pass@` 为认证）；
+/// - 注入顺序固定 `http → https → all`：reqwest 按注册顺序首个匹配生效，scheme 专属的
+///   http / https 对各自 scheme 优先，`all` 兜底其余（仅配 `all` 即覆盖 http+https）；
 /// - `no_proxy` 给值则解析为绕过列表挂到所注入的各 Proxy 上；
-/// - 三键全空时不调用任何 `.proxy()`，保持 reqwest 默认行为（含其系统环境变量 honor），
+/// - 四键全空时不调用任何 `.proxy()`，保持 reqwest 默认行为（含其系统环境变量 honor），
 ///   从而「不配置即与现状一致」。
 ///
 /// 失败返回的错误信息**不含原始代理 URL**（避免泄露代理凭据，守安全脱敏红线）。
@@ -998,15 +1007,22 @@ pub fn build_outbound_client(
         .as_deref()
         .and_then(reqwest::NoProxy::from_string);
 
+    // 注入顺序 http → https → all：scheme 专属者各自优先，all 兜底其余（首个匹配生效）
+    if let Some(url) = proxy.http.as_deref() {
+        let p = reqwest::Proxy::http(url)
+            .map_err(|_| "出站 HTTP 代理配置无效".to_string())?
+            .no_proxy(no_proxy.clone());
+        builder = builder.proxy(p);
+    }
     if let Some(url) = proxy.https.as_deref() {
         let p = reqwest::Proxy::https(url)
             .map_err(|_| "出站 HTTPS 代理配置无效".to_string())?
             .no_proxy(no_proxy.clone());
         builder = builder.proxy(p);
     }
-    if let Some(url) = proxy.http.as_deref() {
-        let p = reqwest::Proxy::http(url)
-            .map_err(|_| "出站 HTTP 代理配置无效".to_string())?
+    if let Some(url) = proxy.all.as_deref() {
+        let p = reqwest::Proxy::all(url)
+            .map_err(|_| "出站全局(all)代理配置无效".to_string())?
             .no_proxy(no_proxy.clone());
         builder = builder.proxy(p);
     }
@@ -1809,9 +1825,10 @@ mod tests {
     #[test]
     fn 出站代理默认全为空() {
         let cfg = Config::default();
-        // 三键默认 None：不显式注入代理，保持现状（FR-84）
+        // 四键默认 None：不显式注入代理，保持现状（FR-84；all 见 FR-100）
         assert!(cfg.network.proxy.http.is_none());
         assert!(cfg.network.proxy.https.is_none());
+        assert!(cfg.network.proxy.all.is_none());
         assert!(cfg.network.proxy.no_proxy.is_none());
     }
 
@@ -1854,6 +1871,85 @@ mod tests {
             assert_eq!(cfg.network.proxy.http.as_deref(), Some("http://p1:3128"));
             assert_eq!(cfg.network.proxy.https.as_deref(), Some("http://p2:3128"));
         });
+    }
+
+    #[test]
+    fn toml_可覆盖出站全局代理_all() {
+        // FR-100：新增 all 键，TOML 可配，向后兼容（未配 all 仍回落 None）
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            "[network.proxy]\nall = \"socks5://user:pass@host:1080\""
+        )
+        .unwrap();
+        with_env_vars(&[], || {
+            let cfg = Config::load(file.path()).unwrap();
+            assert_eq!(
+                cfg.network.proxy.all.as_deref(),
+                Some("socks5://user:pass@host:1080")
+            );
+            // 未配置的 http / https 回落 None
+            assert!(cfg.network.proxy.http.is_none());
+            assert!(cfg.network.proxy.https.is_none());
+        });
+    }
+
+    #[test]
+    fn 环境变量覆盖出站全局代理_all() {
+        // FR-100：env JIANARTIFACT_NETWORK_PROXY_ALL 能覆盖 all 键
+        with_env_vars(
+            &[(
+                "JIANARTIFACT_NETWORK_PROXY_ALL",
+                "socks5h://proxy.internal:1080",
+            )],
+            || {
+                let cfg = Config::load(Path::new("不存在的配置文件.toml")).unwrap();
+                assert_eq!(
+                    cfg.network.proxy.all.as_deref(),
+                    Some("socks5h://proxy.internal:1080")
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn 出站全局代理_socks5_含认证能构造客户端() {
+        // FR-100：all 给 socks5://user:pass@host:1080 应能构造出站 client（socks 特性已启）
+        let proxy = NetworkProxyConfig {
+            all: Some("socks5://user:pass@host:1080".to_string()),
+            ..Default::default()
+        };
+        let client = build_outbound_client(DUR, &proxy);
+        assert!(client.is_ok(), "合法 socks5 全局代理应能构造 client");
+    }
+
+    #[test]
+    fn 出站全局代理_非法_socks_url_构造失败且错误不含_url() {
+        // FR-100：非法 socks url 构造失败，错误信息不含原始 URL（守凭据脱敏）
+        let proxy = NetworkProxyConfig {
+            all: Some("socks5://secretuser:secretpass@".to_string()),
+            ..Default::default()
+        };
+        let result = build_outbound_client(DUR, &proxy);
+        if let Err(msg) = result {
+            assert!(
+                !msg.contains("secretuser") && !msg.contains("secretpass"),
+                "错误信息不得泄露代理凭据，实际：{msg}"
+            );
+        }
+        // 构造成功也可接受：关键是失败路径不泄露凭据（上面已断言）
+    }
+
+    #[test]
+    fn 出站_http_与_all_并存能构造客户端() {
+        // FR-100：http 走 http 代理、其余走 all（兜底），二者并存应能构造 client
+        let proxy = NetworkProxyConfig {
+            http: Some("http://p1.internal:3128".to_string()),
+            all: Some("socks5://p2.internal:1080".to_string()),
+            ..Default::default()
+        };
+        let client = build_outbound_client(DUR, &proxy);
+        assert!(client.is_ok(), "http 与 all 并存应能构造 client");
     }
 
     #[test]

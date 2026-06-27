@@ -89,6 +89,7 @@ async fn 配置http代理后出站请求经代理() {
     let proxy = NetworkProxyConfig {
         http: Some(format!("http://{proxy_addr}")),
         https: None,
+        all: None,
         no_proxy: None,
     };
     let client = build_outbound_client(Duration::from_secs(5), &proxy).unwrap();
@@ -105,6 +106,54 @@ async fn 配置http代理后出站请求经代理() {
 }
 
 #[tokio::test]
+async fn 仅配_all_时_http_请求也走全局代理() {
+    // FR-100：all 为全 scheme 兜底代理，仅配 all 时 http 请求也应经它（覆盖 http+https）。
+    // 用 http(s):// 形式的 all（mock 是裸 HTTP 代理，不解 SOCKS 握手），验证 http 出站经 all。
+    let (proxy_addr, seen) = start_mock_proxy().await;
+    let proxy = NetworkProxyConfig {
+        http: None,
+        https: None,
+        all: Some(format!("http://{proxy_addr}")),
+        no_proxy: None,
+    };
+    let client = build_outbound_client(Duration::from_secs(5), &proxy).unwrap();
+    let _ = client.get("http://example.invalid/some/path").send().await;
+
+    let lines = seen.lock().unwrap().clone();
+    assert!(!lines.is_empty(), "仅配 all 时 http 请求也应经全局代理");
+    assert!(
+        lines.iter().any(|l| l.contains("http://example.invalid")),
+        "all 代理收到的请求行应为指向目标主机的 absolute-form，实际：{lines:?}"
+    );
+}
+
+#[tokio::test]
+async fn 同时配_http_与_all_时_http_请求走_http_代理() {
+    // FR-100：http 走 http 专属代理、其余走 all 兜底；同时配时 http 请求应命中 http 代理。
+    let (http_proxy_addr, http_seen) = start_mock_proxy().await;
+    let (all_proxy_addr, all_seen) = start_mock_proxy().await;
+    let proxy = NetworkProxyConfig {
+        http: Some(format!("http://{http_proxy_addr}")),
+        https: None,
+        all: Some(format!("http://{all_proxy_addr}")),
+        no_proxy: None,
+    };
+    let client = build_outbound_client(Duration::from_secs(5), &proxy).unwrap();
+    let _ = client.get("http://example.invalid/some/path").send().await;
+
+    // http 请求应命中 http 专属代理，而非 all 兜底
+    assert!(
+        !http_seen.lock().unwrap().is_empty(),
+        "http 请求应走 http 专属代理"
+    );
+    assert!(
+        all_seen.lock().unwrap().is_empty(),
+        "http 请求不应走 all 兜底代理，all 却收到：{:?}",
+        all_seen.lock().unwrap()
+    );
+}
+
+#[tokio::test]
 async fn no_proxy命中主机直连绕过代理() {
     let (proxy_addr, seen) = start_mock_proxy().await;
     let (origin_addr, origin_hit) = start_mock_origin().await;
@@ -113,6 +162,7 @@ async fn no_proxy命中主机直连绕过代理() {
     let proxy = NetworkProxyConfig {
         http: Some(format!("http://{proxy_addr}")),
         https: None,
+        all: None,
         // 把源站主机列入 no_proxy，应直连绕过代理
         no_proxy: Some(origin_host.clone()),
     };
@@ -160,6 +210,7 @@ async fn 凭据型代理url的凭据不出现在错误信息() {
     let proxy = NetworkProxyConfig {
         http: Some("http://secretuser:secretpass@".to_string()),
         https: None,
+        all: None,
         no_proxy: None,
     };
     let result = build_outbound_client(Duration::from_secs(5), &proxy);

@@ -41,10 +41,87 @@ import {
   IconInfoSquareRounded,
 } from '@tabler/icons-react';
 import * as api from '../api/endpoints';
-import type { SettingsView, UpdateCheck } from '../api/types';
+import type { SettingsView, UpdateCheck, ProxyEntryPatch } from '../api/types';
 import { errorMessage } from '../lib/format';
 import { ErrorAlert } from '../components/ErrorAlert';
 import { density } from '../theme/density';
+
+/** 单代理三字段（URL / 用户名 / 密码）一组（FR-100）。密码框始终空、不回显；已配置时标徽标 + 提供清除密码。 */
+interface ProxyFieldsProps {
+  title: string;
+  urlPlaceholder: string;
+  url: string;
+  onUrlChange: (v: string) => void;
+  username: string;
+  onUsernameChange: (v: string) => void;
+  password: string;
+  onPasswordChange: (v: string) => void;
+  hasPassword: boolean;
+  passwordCleared: boolean;
+  onClearPassword: () => void;
+}
+
+function ProxyFields(props: ProxyFieldsProps) {
+  const {
+    title,
+    urlPlaceholder,
+    url,
+    onUrlChange,
+    username,
+    onUsernameChange,
+    password,
+    onPasswordChange,
+    hasPassword,
+    passwordCleared,
+    onClearPassword,
+  } = props;
+  return (
+    <Stack gap="xs">
+      <Group gap="xs">
+        <Text size="sm" fw={600}>
+          {title}
+        </Text>
+        {/* 已配置密码标识（绝不回显密码本体）；点过清除则提示本次保存将清空 */}
+        {hasPassword && !passwordCleared && (
+          <Badge size="sm" color="blue" variant="light">
+            密码已配置
+          </Badge>
+        )}
+        {passwordCleared && (
+          <Badge size="sm" color="orange" variant="light">
+            保存后清除密码
+          </Badge>
+        )}
+      </Group>
+      <TextInput
+        label="URL"
+        placeholder={urlPlaceholder}
+        value={url}
+        onChange={(e) => onUrlChange(e.currentTarget.value)}
+      />
+      <TextInput
+        label="用户名"
+        placeholder="可选"
+        value={username}
+        onChange={(e) => onUsernameChange(e.currentTarget.value)}
+      />
+      <PasswordInput
+        label="密码"
+        placeholder="留空保留现有密码"
+        value={password}
+        onChange={(e) => onPasswordChange(e.currentTarget.value)}
+      />
+      {/* 仅在已配置密码时提供「清除密码」动作（发 password: ""）；填了新密码或已点清除则不再显示 */}
+      {hasPassword && !passwordCleared && !password && (
+        <Group>
+          <Button size="xs" variant="subtle" color="red" onClick={onClearPassword}>
+            清除密码
+          </Button>
+        </Group>
+      )}
+    </Stack>
+  );
+}
 
 /** 设置页。 */
 export function SettingsPage() {
@@ -52,11 +129,25 @@ export function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // —— 可编辑表单态（FR-88）——
-  // 代理 URL：编辑框展示的是脱敏值；保存时如未改动则原样回传（脱敏值无凭据，回传不会泄露已有凭据，
-  // 但也无法恢复原凭据——运维如需保留代理凭据应在 config.toml / env 配置）。
-  const [httpProxy, setHttpProxy] = useState('');
-  const [httpsProxy, setHttpsProxy] = useState('');
+  // —— 可编辑表单态（FR-88 + FR-100）——
+  // 每代理（http / https / all）拆三字段：URL（脱敏 host，无凭据）、用户名（回显）、密码（不回显）。
+  // 密码框始终空：留空保存=省略 password 字段（保留现有）；填值=设置；另有「清除密码」动作发空串清空。
+  const [httpUrl, setHttpUrl] = useState('');
+  const [httpUser, setHttpUser] = useState('');
+  const [httpPass, setHttpPass] = useState('');
+  const [httpHasPass, setHttpHasPass] = useState(false);
+  const [httpsUrl, setHttpsUrl] = useState('');
+  const [httpsUser, setHttpsUser] = useState('');
+  const [httpsPass, setHttpsPass] = useState('');
+  const [httpsHasPass, setHttpsHasPass] = useState(false);
+  const [allUrl, setAllUrl] = useState('');
+  const [allUser, setAllUser] = useState('');
+  const [allPass, setAllPass] = useState('');
+  const [allHasPass, setAllHasPass] = useState(false);
+  // 三个「清除密码」动作的标记：点了清除即在本次 PATCH 发 password: "" 清空对应代理密码。
+  const [httpClearPass, setHttpClearPass] = useState(false);
+  const [httpsClearPass, setHttpsClearPass] = useState(false);
+  const [allClearPass, setAllClearPass] = useState(false);
   const [noProxy, setNoProxy] = useState('');
   const [updateEnabled, setUpdateEnabled] = useState(false);
   const [repo, setRepo] = useState('');
@@ -82,8 +173,22 @@ export function SettingsPage() {
   // 用一份设置填充表单态。
   function fillForm(s: SettingsView) {
     setSettings(s);
-    setHttpProxy(s.network_proxy.http ?? '');
-    setHttpsProxy(s.network_proxy.https ?? '');
+    // 网络代理三槽：URL / 用户名回显预填，密码框始终空、仅以 has_password 标识是否已配置（FR-100）。
+    setHttpUrl(s.network_proxy.http.url ?? '');
+    setHttpUser(s.network_proxy.http.username ?? '');
+    setHttpPass('');
+    setHttpHasPass(s.network_proxy.http.has_password);
+    setHttpClearPass(false);
+    setHttpsUrl(s.network_proxy.https.url ?? '');
+    setHttpsUser(s.network_proxy.https.username ?? '');
+    setHttpsPass('');
+    setHttpsHasPass(s.network_proxy.https.has_password);
+    setHttpsClearPass(false);
+    setAllUrl(s.network_proxy.all.url ?? '');
+    setAllUser(s.network_proxy.all.username ?? '');
+    setAllPass('');
+    setAllHasPass(s.network_proxy.all.has_password);
+    setAllClearPass(false);
     setNoProxy(s.network_proxy.no_proxy ?? '');
     setUpdateEnabled(s.update.enabled);
     setRepo(s.update.repo);
@@ -119,6 +224,24 @@ export function SettingsPage() {
     );
   }
 
+  // 组装单代理 PATCH 项（FR-100）：url / username 照填；
+  // 密码三态——填了新密码 → 带 password（设置）；点了「清除密码」→ 带 password: ""（清空）；
+  // 否则省略 password 字段（保留现有）。
+  function buildProxyPatch(
+    url: string,
+    username: string,
+    password: string,
+    clearPass: boolean,
+  ): ProxyEntryPatch {
+    const entry: ProxyEntryPatch = { url: url.trim(), username: username.trim() };
+    if (password) {
+      entry.password = password;
+    } else if (clearPass) {
+      entry.password = '';
+    }
+    return entry;
+  }
+
   async function handleSave() {
     setSaving(true);
     setSaveError(null);
@@ -126,9 +249,10 @@ export function SettingsPage() {
     try {
       const updated = await api.updateSettings({
         network_proxy: {
-          http: httpProxy.trim() ? httpProxy.trim() : null,
-          https: httpsProxy.trim() ? httpsProxy.trim() : null,
-          no_proxy: noProxy.trim() ? noProxy.trim() : null,
+          http: buildProxyPatch(httpUrl, httpUser, httpPass, httpClearPass),
+          https: buildProxyPatch(httpsUrl, httpsUser, httpsPass, httpsClearPass),
+          all: buildProxyPatch(allUrl, allUser, allPass, allClearPass),
+          no_proxy: noProxy.trim(),
         },
         update: {
           enabled: updateEnabled,
@@ -203,21 +327,49 @@ export function SettingsPage() {
           <Stack gap={density.gridSpacing}>
             <Card withBorder padding={density.cardPadding} radius="md">
               <Text size="sm" c="dimmed" mb="sm">
-                统一出站代理（回源 / 迁移 / 漏洞库 / OIDC / 在线更新共用）。可含 user:pass@
-                凭据（不回显）；留空表示不配置。
+                统一出站代理（回源 / 迁移 / 漏洞库 / OIDC / 在线更新共用）。每代理可填用户名 +
+                密码； 用户名回显、密码不回显（留空保留现有），URL 留空表示不配置该代理。
               </Text>
-              <Stack gap="sm">
-                <TextInput
-                  label="HTTP 代理"
-                  placeholder="http://proxy.internal:8080"
-                  value={httpProxy}
-                  onChange={(e) => setHttpProxy(e.currentTarget.value)}
+              <Stack gap="md">
+                {/* HTTP / HTTPS 各自 scheme 专属代理；SOCKS5 填 all（兜底全 scheme，FR-100） */}
+                <ProxyFields
+                  title="HTTP 代理"
+                  urlPlaceholder="http://host:3128"
+                  url={httpUrl}
+                  onUrlChange={setHttpUrl}
+                  username={httpUser}
+                  onUsernameChange={setHttpUser}
+                  password={httpPass}
+                  onPasswordChange={setHttpPass}
+                  hasPassword={httpHasPass}
+                  passwordCleared={httpClearPass}
+                  onClearPassword={() => setHttpClearPass(true)}
                 />
-                <TextInput
-                  label="HTTPS 代理"
-                  placeholder="http://proxy.internal:8080"
-                  value={httpsProxy}
-                  onChange={(e) => setHttpsProxy(e.currentTarget.value)}
+                <ProxyFields
+                  title="HTTPS 代理"
+                  urlPlaceholder="http://host:3128"
+                  url={httpsUrl}
+                  onUrlChange={setHttpsUrl}
+                  username={httpsUser}
+                  onUsernameChange={setHttpsUser}
+                  password={httpsPass}
+                  onPasswordChange={setHttpsPass}
+                  hasPassword={httpsHasPass}
+                  passwordCleared={httpsClearPass}
+                  onClearPassword={() => setHttpsClearPass(true)}
+                />
+                <ProxyFields
+                  title="SOCKS5 代理（all，兜底全 scheme）"
+                  urlPlaceholder="socks5://host:1080"
+                  url={allUrl}
+                  onUrlChange={setAllUrl}
+                  username={allUser}
+                  onUsernameChange={setAllUser}
+                  password={allPass}
+                  onPasswordChange={setAllPass}
+                  hasPassword={allHasPass}
+                  passwordCleared={allClearPass}
+                  onClearPassword={() => setAllClearPass(true)}
                 />
                 <TextInput
                   label="直连绕过（no_proxy）"

@@ -39,6 +39,23 @@ login_lockout_secs = 900
 # proxy 仓库回源上游的整体请求超时（秒），避免慢速上游拖垮代理。
 upstream_timeout_secs = 60
 
+# 出站网络代理（FR-84 / FR-100 / ADR-0020 / ADR-0024）。统一注入全部出站 reqwest 客户端
+# （proxy 回源 / 漏洞库镜像 / OIDC / 在线更新等）。四键默认全空：不显式注入代理，保持
+# reqwest 既有行为（含 honor 系统 HTTP_PROXY / HTTPS_PROXY / NO_PROXY 环境变量）。
+# 任一键给值即以本配置为真源。代理 URL 可含 user:pass@ 凭据——凭据不入库、不进日志 /
+# 错误信息，建议含凭据的代理 URL 仅经环境变量提供，不写入本文件。
+# 运行时可经控制台「设置」页或 PATCH /api/v1/settings 在线改、即时生效、无须重启（FR-88）。
+# [network.proxy]
+# # HTTP 出站代理（scheme 专属）。
+# http = "http://user:pass@host:3128"
+# # HTTPS 出站代理（scheme 专属）。
+# https = "http://user:pass@host:3128"
+# # 全 scheme 兜底代理（FR-100）：接受 socks5:// / socks5h:// / http(s)://，可含 user:pass@。
+# # http / https 各自优先，all 兜底其余；仅配 all 即覆盖 http+https（SOCKS5 单代理常见用法）。
+# all = "socks5://user:pass@host:1080"
+# # 直连绕过列表（逗号分隔的主机 / 域 / CIDR），命中者不经代理。
+# no_proxy = "localhost,127.0.0.1"
+
 # 慢速攻击（slowloris）超时与通用请求体大小限制（FR-52 / ADR-0008）。默认关闭。
 # 超时按「块间空闲」而非整体时长判定，对正常大文件流式上传（mvn deploy 大 jar、
 # docker push 大层）友好，只切断长时间不发数据的慢速连接。仅应用层（L7）；
