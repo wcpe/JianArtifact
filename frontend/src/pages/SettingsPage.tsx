@@ -1,17 +1,21 @@
-// 设置页（FR-87 只读 + FR-88 可编辑热替换 + FR-103 二级导航重设计，仅管理员）：
-// 左侧二级导航（网络代理 / 在线更新）+ 右侧内容区，切 tab 布局不抖、保存条位置稳定；
-// 在线更新做成一张「应用更新」卡片（右上角通道切换 + 检查更新、版本对比 + 徽标、预发布提示、
-// 版本明细 + release 说明、底部「立即更新并重启 / 回滚到上一版」），低频项收进卡内「高级设置」折叠区。
-// 编辑网络代理（FR-100）+ 在线更新（FR-85/89）配置，保存调 PATCH /api/v1/settings 即时生效、无须重启。
+// 设置页（FR-87 只读 + FR-88 可编辑热替换 + FR-103 锚点单页重做 + FR-106 动态配置，仅管理员）：
+// 左侧 sticky 锚点子导航（网络代理 / 在线更新 / 限制与配额 / 可观测性 / 漏洞库 / 安全·会话）——
+// 点击平滑滚动到对应节、滚动时按可视区高亮当前节；右侧单页分节（不强制等高、短节不留空白）。
+// 底部**只有一个** sticky 全局保存按钮：一次性提交 PATCH /settings（即时生效）+ PATCH /settings/dynamic（重启生效），
+// 去掉系统配置节早先自带的「保存系统配置」按钮。各节内用小字标注「即时生效」/「保存后重启生效」。
+// 在线更新做成一张「应用更新」卡片（右上角通道切换 + 检查更新、版本对比 + 徽标、预发布提示、release 说明、
+// **应用进度条**、立即更新并重启 / 回滚到上一版），低频项收进卡内「高级设置」折叠区。
 //
-// 数据来自后端 GET /api/v1/settings（已脱敏：代理 URL 去凭据、更新 token 仅以 has_token 暴露）。
-// 保存走 PATCH（运行时热替换，守 ADR-0022）：代理凭据与 token 只入内存槽、不写回 TOML / 不回显，
-// 重启回落文件 / env 配置。token 三态：留空=保留现有，清空动作=清除，填新值=设置。
-// FR-103 仅重排呈现：数据加载 / 保存 / 检查 / 应用 / 回滚逻辑原样复用，不改 GET/PATCH 与更新端点契约。
+// 数据来自后端 GET /api/v1/settings（已脱敏：代理 URL 去凭据、更新 token 仅以 has_token 暴露）与
+// GET /api/v1/settings/dynamic（非密钥项）。保存走两次 PATCH（代理凭据与 token 只入内存槽、不写回 TOML / 不回显，
+// 重启回落文件 / env 配置）。token 三态：留空=保留现有，清空动作=清除，填新值=设置。
+// FR-103 仅重排呈现 + 客户端模拟进度：数据加载 / 保存 / 检查 / 应用 / 回滚逻辑原样复用，
+// 不改 GET/PATCH 与更新端点契约（apply 仍为单次阻塞 POST，无字节级回传，进度条为客户端模拟推进）。
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Box,
+  Flex,
   Stack,
   Title,
   Text,
@@ -30,7 +34,8 @@ import {
   SegmentedControl,
   PasswordInput,
   Collapse,
-  Tabs,
+  NavLink,
+  Progress,
   NumberInput,
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
@@ -42,15 +47,22 @@ import {
   IconDeviceFloppy,
   IconChevronDown,
   IconChevronRight,
-  IconNetwork,
-  IconCloudDownload,
-  IconAdjustments,
 } from '@tabler/icons-react';
 import * as api from '../api/endpoints';
 import type { SettingsView, UpdateCheck, ProxyEntryPatch, DynamicConfig } from '../api/types';
 import { errorMessage } from '../lib/format';
 import { ErrorAlert } from '../components/ErrorAlert';
 import { density } from '../theme/density';
+
+/** 锚点节定义（单一真源：左侧导航与右侧分节共用，避免标签 / id 复制散落）。 */
+const SECTIONS = [
+  { id: 'proxy', label: '网络代理' },
+  { id: 'update', label: '在线更新' },
+  { id: 'limits', label: '限制与配额' },
+  { id: 'observability', label: '可观测性' },
+  { id: 'vuln', label: '漏洞库' },
+  { id: 'auth', label: '安全 / 会话' },
+] as const;
 
 /** 单代理三字段（URL / 用户名 / 密码）一组（FR-100）。密码框始终空、不回显；已配置时标徽标 + 提供清除密码。 */
 interface ProxyFieldsProps {
@@ -174,6 +186,10 @@ export function SettingsPage() {
   const [applying, setApplying] = useState(false);
   const [applyError, setApplyError] = useState<string | null>(null);
   const [restarting, setRestarting] = useState(false);
+  // 应用更新进度（FR-103）：null = 未在应用；0~95 = 客户端模拟推进百分比（封顶不到 100，待请求 resolve 进入重启态）。
+  // 后端 apply 为单次阻塞 POST、无字节级回传（契约不改），故进度为时间驱动的体感模拟、非真实下载进度。
+  const [applyProgress, setApplyProgress] = useState<number | null>(null);
+  const applyTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [confirmOpened, confirmModal] = useDisclosure(false);
   // 回滚相关状态（FR-104）：进行中标志、错误、二次确认弹窗开合
   const [rollingBack, setRollingBack] = useState(false);
@@ -184,11 +200,12 @@ export function SettingsPage() {
 
   // —— 系统配置（动态配置面板，FR-106）——
   // limits / observability / vuln / auth 非密钥项；保存落库、**重启生效**（无热替换槽）。
-  // 独立于代理 / 更新的 PATCH（后者即时生效），有独立保存按钮与「重启生效」标注。
+  // FR-103 起并入对应锚点节、随**全局保存**一并 PATCH（不再有独立保存按钮）。
   const [dynamic, setDynamic] = useState<DynamicConfig | null>(null);
-  const [dynamicSaving, setDynamicSaving] = useState(false);
   const [dynamicError, setDynamicError] = useState<string | null>(null);
-  const [dynamicSaved, setDynamicSaved] = useState(false);
+
+  // 当前高亮的锚点节（FR-103）：由 IntersectionObserver 据可视区更新；点击导航即时设置以即时反馈。
+  const [activeSection, setActiveSection] = useState<string>(SECTIONS[0].id);
 
   // 用一份设置填充表单态。
   function fillForm(s: SettingsView) {
@@ -227,7 +244,7 @@ export function SettingsPage() {
       .finally(() => setLoading(false));
   }, []);
 
-  // 动态配置（系统配置 tab）独立加载：失败不阻塞代理 / 更新主表单，仅在该 tab 内提示。
+  // 动态配置独立加载：失败不阻塞代理 / 更新主表单，仅在对应节内提示；加载失败时全局保存只发 settings PATCH。
   useEffect(() => {
     api
       .getDynamicConfig()
@@ -235,26 +252,47 @@ export function SettingsPage() {
       .catch((err) => setDynamicError(errorMessage(err)));
   }, []);
 
+  // 组件卸载时清理应用进度定时器，避免泄漏。
+  useEffect(() => {
+    return () => {
+      if (applyTimerRef.current) {
+        clearInterval(applyTimerRef.current);
+      }
+    };
+  }, []);
+
+  // 锚点高亮（FR-103）：观察各节，取最靠上的可视节作为当前高亮。jsdom 无真实布局、IO 为空桩（见 test setup）。
+  useEffect(() => {
+    if (loading) return;
+    const elements = SECTIONS.map((s) => document.getElementById(s.id)).filter(
+      (el): el is HTMLElement => el !== null,
+    );
+    if (elements.length === 0) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries
+          .filter((e) => e.isIntersecting)
+          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+        if (visible.length > 0) {
+          setActiveSection(visible[0].target.id);
+        }
+      },
+      { rootMargin: '0px 0px -60% 0px', threshold: 0 },
+    );
+    elements.forEach((el) => observer.observe(el));
+    return () => observer.disconnect();
+  }, [loading]);
+
+  /** 点击锚点导航：平滑滚动到对应节并即时高亮（即时反馈，可视区高亮随后由 IO 校正）。 */
+  function scrollToSection(id: string) {
+    setActiveSection(id);
+    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
   // 不可变更新动态配置某节的某字段（保持薄、复用于所有数值 / 开关项）。
   function patchDynamic<K extends keyof DynamicConfig>(section: K, value: DynamicConfig[K]): void {
     setDynamic((prev) => (prev ? { ...prev, [section]: value } : prev));
-    setDynamicSaved(false);
-  }
-
-  async function handleSaveDynamic() {
-    if (!dynamic) return;
-    setDynamicSaving(true);
-    setDynamicError(null);
-    setDynamicSaved(false);
-    try {
-      const updated = await api.updateDynamicConfig(dynamic);
-      setDynamic(updated);
-      setDynamicSaved(true);
-    } catch (err) {
-      setDynamicError(errorMessage(err));
-    } finally {
-      setDynamicSaving(false);
-    }
+    setSaved(false);
   }
 
   if (loading) {
@@ -292,7 +330,11 @@ export function SettingsPage() {
     return entry;
   }
 
-  async function handleSave() {
+  // 全局保存（FR-103）：一次性提交两处写入——
+  // ① PATCH /settings（网络代理 + 在线更新，运行时即时生效，沿用 FR-88/89/100）；
+  // ② 若动态配置已加载则 PATCH /settings/dynamic（limits/observability/vuln/auth，重启生效，FR-106）。
+  // 顺序提交：先 settings 再 dynamic，任一失败聚合到 saveError、成功显「已保存」。
+  async function handleSaveAll() {
     setSaving(true);
     setSaveError(null);
     setSaved(false);
@@ -315,6 +357,11 @@ export function SettingsPage() {
         },
       });
       fillForm(updated);
+      // 动态配置已加载才提交（未加载则跳过，不报错）
+      if (dynamic) {
+        const updatedDynamic = await api.updateDynamicConfig(dynamic);
+        setDynamic(updatedDynamic);
+      }
       setSaved(true);
     } catch (err) {
       setSaveError(errorMessage(err));
@@ -337,17 +384,39 @@ export function SettingsPage() {
     }
   }
 
+  /** 清理应用进度定时器（成功 / 失败 / 卸载共用，避免重复样板）。 */
+  function clearApplyTimer() {
+    if (applyTimerRef.current) {
+      clearInterval(applyTimerRef.current);
+      applyTimerRef.current = null;
+    }
+  }
+
   async function handleApply() {
     setApplying(true);
     setApplyError(null);
+    // 启动客户端模拟进度（FR-103）：apply 是单次阻塞 POST、无字节级回传，进度为时间驱动体感反馈。
+    // 平滑爬升至 95% 封顶（不到 100），待请求 resolve（进入重启态）或失败再收尾。
+    confirmModal.close();
+    setApplyProgress(0);
+    clearApplyTimer();
+    applyTimerRef.current = setInterval(() => {
+      setApplyProgress((prev) => {
+        if (prev === null) return prev;
+        // 越接近上限步进越小，模拟收尾放缓
+        const next = prev + Math.max(1, Math.round((95 - prev) / 12));
+        return next >= 95 ? 95 : next;
+      });
+    }, 400);
     try {
       await api.applyUpdate();
       // apply 成功即服务将停机重启，当前连接会断；进入「正在重启」提示态、引导手动刷新
-      confirmModal.close();
+      clearApplyTimer();
       setRestarting(true);
     } catch (err) {
+      clearApplyTimer();
+      setApplyProgress(null);
       setApplyError(errorMessage(err));
-      confirmModal.close();
     } finally {
       setApplying(false);
     }
@@ -374,28 +443,37 @@ export function SettingsPage() {
       <Title order={2}>设置</Title>
       {error && <ErrorAlert message={error} />}
 
-      {/* FR-103：左侧二级导航（网络代理 / 在线更新）+ 右侧内容区。
-          Tabs 垂直布局，切 tab 仅切右侧面板、左导航与底部保存条不动；Tabs 默认保留挂载，表单态不丢。 */}
-      <Tabs defaultValue="proxy" orientation="vertical" variant="pills">
-        <Tabs.List w={180} mr="md">
-          <Tabs.Tab value="proxy" leftSection={<IconNetwork size={16} />}>
-            网络代理
-          </Tabs.Tab>
-          <Tabs.Tab value="update" leftSection={<IconCloudDownload size={16} />}>
-            在线更新
-          </Tabs.Tab>
-          <Tabs.Tab value="system" leftSection={<IconAdjustments size={16} />}>
-            系统配置
-          </Tabs.Tab>
-        </Tabs.List>
+      {/* FR-103：左侧 sticky 锚点子导航 + 右侧单页分节。
+          导航固定置顶（随右侧内容滚动常驻可见）；右侧各节纵向排列、不强制等高（短节不留空白）。 */}
+      <Flex gap="md" align="flex-start">
+        {/* —— 左侧 sticky 锚点导航 —— */}
+        <Box
+          component="nav"
+          aria-label="设置分节导航"
+          visibleFrom="sm"
+          style={{ position: 'sticky', top: 0, width: 180, flexShrink: 0 }}
+        >
+          {SECTIONS.map((s) => (
+            <NavLink
+              key={s.id}
+              component="button"
+              type="button"
+              label={s.label}
+              active={activeSection === s.id}
+              onClick={() => scrollToSection(s.id)}
+            />
+          ))}
+        </Box>
 
-        {/* —— 网络代理面板 —— */}
-        <Tabs.Panel value="proxy">
-          <Card withBorder padding={density.cardPadding} radius="md">
+        {/* —— 右侧单页分节 —— */}
+        <Stack gap={density.gridSpacing} style={{ flex: 1, minWidth: 0 }}>
+          {/* —— 网络代理节 —— */}
+          <Card component="section" id="proxy" withBorder padding={density.cardPadding} radius="md">
             <Title order={4}>网络代理</Title>
             <Text size="sm" c="dimmed" mb="sm">
               统一出站代理（回源 / 迁移 / 漏洞库 / OIDC / 在线更新共用）。每代理可填用户名 + 密码；
-              用户名回显、密码不回显（留空保留现有），URL 留空表示不配置该代理。
+              用户名回显、密码不回显（留空保留现有），URL
+              留空表示不配置该代理。保存后**即时生效、无须重启**。
             </Text>
             <Stack gap="md">
               {/* HTTP / HTTPS 各自 scheme 专属代理；SOCKS5 填 all（兜底全 scheme，FR-100） */}
@@ -446,11 +524,15 @@ export function SettingsPage() {
               />
             </Stack>
           </Card>
-        </Tabs.Panel>
 
-        {/* —— 在线更新面板：一张「应用更新」卡片（FR-103） —— */}
-        <Tabs.Panel value="update">
-          <Card withBorder padding={density.cardPadding} radius="md">
+          {/* —— 在线更新节：一张「应用更新」卡片（FR-103） —— */}
+          <Card
+            component="section"
+            id="update"
+            withBorder
+            padding={density.cardPadding}
+            radius="md"
+          >
             {/* 卡片头：左标题，右侧通道切换（正式版 / 测试版）+ 检查更新 */}
             <Group justify="space-between" align="flex-start" mb="sm" wrap="nowrap">
               <Box>
@@ -555,6 +637,25 @@ export function SettingsPage() {
               {applyError && <ErrorAlert message={applyError} />}
               {rollbackError && <ErrorAlert message={rollbackError} />}
 
+              {/* 应用进度条（FR-103）：apply 在途时显示客户端模拟进度（封顶不到 100），
+                  有 asset_name 时附资产名说明。成功进入重启态即撤下。 */}
+              {applyProgress !== null && !restarting && (
+                <Box data-testid="apply-progress">
+                  <Group justify="space-between" mb={4} gap="xs">
+                    <Text size="sm">正在下载并替换新版本…</Text>
+                    <Text size="sm" c="dimmed">
+                      {applyProgress}%
+                    </Text>
+                  </Group>
+                  <Progress value={applyProgress} animated />
+                  <Text size="xs" c="dimmed" mt={4}>
+                    {check?.asset_name
+                      ? `资产 ${check.asset_name}（进度为体感估算，实际以服务端替换为准）`
+                      : '进度为体感估算，实际以服务端替换为准。'}
+                  </Text>
+                </Box>
+              )}
+
               {restarting && (
                 <Alert
                   icon={<IconInfoCircle size={16} />}
@@ -573,7 +674,7 @@ export function SettingsPage() {
                     color="orange"
                     leftSection={<IconArrowUp size={16} />}
                     onClick={confirmModal.open}
-                    disabled={!check?.update_available}
+                    disabled={!check?.update_available || applying}
                   >
                     立即更新并重启
                   </Button>
@@ -582,7 +683,7 @@ export function SettingsPage() {
                     variant="default"
                     leftSection={<IconArrowBackUp size={16} />}
                     onClick={rollbackConfirmModal.open}
-                    disabled={!settings.update.rollback_available}
+                    disabled={!settings.update.rollback_available || applying}
                   >
                     回滚到上一版
                   </Button>
@@ -649,284 +750,272 @@ export function SettingsPage() {
               </Box>
             </Stack>
           </Card>
-        </Tabs.Panel>
 
-        {/* —— 系统配置面板（动态配置，FR-106）：limits / observability / vuln / auth 非密钥项 ——
-            与代理 / 更新不同：这些节无热替换槽，保存后**重启生效**（独立保存按钮 + 显著标注）。 */}
-        <Tabs.Panel value="system">
-          <Card withBorder padding={density.cardPadding} radius="md">
-            <Group justify="space-between" align="flex-start" mb="xs" wrap="nowrap">
-              <Box>
-                <Title order={4}>系统配置</Title>
-                <Text size="sm" c="dimmed">
-                  上传上限 / 可观测性 / 漏洞库 / 安全会话等非密钥项，可在线编辑并持久化。
-                </Text>
-              </Box>
+          {/* —— 系统配置各节（动态配置，FR-106）：limits / observability / vuln / auth 非密钥项 ——
+              这些节无热替换槽，保存后**重启生效**；随全局保存一并 PATCH /settings/dynamic（无独立保存按钮）。 */}
+          {dynamicError && <ErrorAlert message={dynamicError} />}
+
+          {/* —— 限制与配额节 —— */}
+          <Card
+            component="section"
+            id="limits"
+            withBorder
+            padding={density.cardPadding}
+            radius="md"
+          >
+            <Group gap="xs" mb="xs">
+              <Title order={4}>限制与配额</Title>
+              <Badge size="sm" color="yellow" variant="light">
+                保存后重启生效
+              </Badge>
             </Group>
-            {/* 生效语义诚实标注：区别于代理 / 更新 / 防护的即时生效 */}
-            <Alert
-              icon={<IconInfoCircle size={16} />}
-              color="yellow"
-              variant="light"
-              title="保存后重启生效"
-              mb="md"
-            >
-              这些项在服务启动期装载（审计保留 / 使用裁剪 / 指标采样 / 漏洞库刷新 / 会话有效期 /
-              登录锁定等），无运行时热替换槽。保存即写入并持久化，**重启服务后生效**。env
-              显式给值的项仍以环境变量为准、不被覆盖。
-            </Alert>
-
-            {dynamicError && <ErrorAlert message={dynamicError} />}
-
             {!dynamic ? (
-              <Center h={120}>
-                <Loader />
+              <Center h={80}>
+                <Loader size="sm" />
               </Center>
             ) : (
-              <Stack gap="lg">
-                {/* —— 限制与配额 —— */}
-                <Box>
-                  <Text size="sm" fw={600} mb="xs">
-                    限制与配额
-                  </Text>
+              <NumberInput
+                label="单个制品上传上限（字节）"
+                description="留空表示不额外限制；超限上传返回 413。"
+                placeholder="不限制"
+                min={0}
+                value={dynamic.limits.max_artifact_size ?? ''}
+                onChange={(v) =>
+                  patchDynamic('limits', {
+                    max_artifact_size: v === '' || v === null ? null : Number(v),
+                  })
+                }
+              />
+            )}
+          </Card>
+
+          {/* —— 可观测性节 —— */}
+          <Card
+            component="section"
+            id="observability"
+            withBorder
+            padding={density.cardPadding}
+            radius="md"
+          >
+            <Group gap="xs" mb="xs">
+              <Title order={4}>可观测性</Title>
+              <Badge size="sm" color="yellow" variant="light">
+                保存后重启生效
+              </Badge>
+            </Group>
+            {!dynamic ? (
+              <Center h={120}>
+                <Loader size="sm" />
+              </Center>
+            ) : (
+              <Stack gap="sm">
+                <Group grow>
                   <NumberInput
-                    label="单个制品上传上限（字节）"
-                    description="留空表示不额外限制；超限上传返回 413。"
-                    placeholder="不限制"
+                    label="审计日志保留天数"
                     min={0}
-                    value={dynamic.limits.max_artifact_size ?? ''}
+                    value={dynamic.audit.retention_days}
                     onChange={(v) =>
-                      patchDynamic('limits', {
-                        max_artifact_size: v === '' || v === null ? null : Number(v),
+                      patchDynamic('audit', { ...dynamic.audit, retention_days: Number(v) || 0 })
+                    }
+                  />
+                  <NumberInput
+                    label="审计日志行数上限"
+                    min={0}
+                    value={dynamic.audit.max_rows}
+                    onChange={(v) =>
+                      patchDynamic('audit', { ...dynamic.audit, max_rows: Number(v) || 0 })
+                    }
+                  />
+                </Group>
+                <Switch
+                  label="记录逐条访问 / 下载明细（使用分析）"
+                  checked={dynamic.usage.detail_enabled}
+                  onChange={(e) =>
+                    patchDynamic('usage', {
+                      ...dynamic.usage,
+                      detail_enabled: e.currentTarget.checked,
+                    })
+                  }
+                />
+                <NumberInput
+                  label="使用明细行数上限"
+                  min={0}
+                  value={dynamic.usage.max_detail_rows}
+                  onChange={(v) =>
+                    patchDynamic('usage', { ...dynamic.usage, max_detail_rows: Number(v) || 0 })
+                  }
+                />
+                <Switch
+                  label="启用 Prometheus 指标端点（/metrics）"
+                  checked={dynamic.metrics.enabled}
+                  onChange={(e) =>
+                    patchDynamic('metrics', {
+                      ...dynamic.metrics,
+                      enabled: e.currentTarget.checked,
+                    })
+                  }
+                />
+                <Switch
+                  label="允许匿名抓取 /metrics（须限内网 / 反代后）"
+                  checked={dynamic.metrics.allow_anonymous}
+                  onChange={(e) =>
+                    patchDynamic('metrics', {
+                      ...dynamic.metrics,
+                      allow_anonymous: e.currentTarget.checked,
+                    })
+                  }
+                />
+                <Switch
+                  label="启用指标时序采集"
+                  checked={dynamic.metrics_timeseries.enabled}
+                  onChange={(e) =>
+                    patchDynamic('metrics_timeseries', {
+                      ...dynamic.metrics_timeseries,
+                      enabled: e.currentTarget.checked,
+                    })
+                  }
+                />
+                <Group grow>
+                  <NumberInput
+                    label="时序采样间隔（秒）"
+                    min={1}
+                    value={dynamic.metrics_timeseries.sample_interval_secs}
+                    onChange={(v) =>
+                      patchDynamic('metrics_timeseries', {
+                        ...dynamic.metrics_timeseries,
+                        sample_interval_secs: Number(v) || 0,
                       })
                     }
                   />
-                </Box>
-
-                {/* —— 可观测性 —— */}
-                <Box>
-                  <Text size="sm" fw={600} mb="xs">
-                    可观测性
-                  </Text>
-                  <Stack gap="sm">
-                    <Group grow>
-                      <NumberInput
-                        label="审计日志保留天数"
-                        min={0}
-                        value={dynamic.audit.retention_days}
-                        onChange={(v) =>
-                          patchDynamic('audit', {
-                            ...dynamic.audit,
-                            retention_days: Number(v) || 0,
-                          })
-                        }
-                      />
-                      <NumberInput
-                        label="审计日志行数上限"
-                        min={0}
-                        value={dynamic.audit.max_rows}
-                        onChange={(v) =>
-                          patchDynamic('audit', { ...dynamic.audit, max_rows: Number(v) || 0 })
-                        }
-                      />
-                    </Group>
-                    <Switch
-                      label="记录逐条访问 / 下载明细（使用分析）"
-                      checked={dynamic.usage.detail_enabled}
-                      onChange={(e) =>
-                        patchDynamic('usage', {
-                          ...dynamic.usage,
-                          detail_enabled: e.currentTarget.checked,
-                        })
-                      }
-                    />
-                    <NumberInput
-                      label="使用明细行数上限"
-                      min={0}
-                      value={dynamic.usage.max_detail_rows}
-                      onChange={(v) =>
-                        patchDynamic('usage', {
-                          ...dynamic.usage,
-                          max_detail_rows: Number(v) || 0,
-                        })
-                      }
-                    />
-                    <Switch
-                      label="启用 Prometheus 指标端点（/metrics）"
-                      checked={dynamic.metrics.enabled}
-                      onChange={(e) =>
-                        patchDynamic('metrics', {
-                          ...dynamic.metrics,
-                          enabled: e.currentTarget.checked,
-                        })
-                      }
-                    />
-                    <Switch
-                      label="允许匿名抓取 /metrics（须限内网 / 反代后）"
-                      checked={dynamic.metrics.allow_anonymous}
-                      onChange={(e) =>
-                        patchDynamic('metrics', {
-                          ...dynamic.metrics,
-                          allow_anonymous: e.currentTarget.checked,
-                        })
-                      }
-                    />
-                    <Switch
-                      label="启用指标时序采集"
-                      checked={dynamic.metrics_timeseries.enabled}
-                      onChange={(e) =>
-                        patchDynamic('metrics_timeseries', {
-                          ...dynamic.metrics_timeseries,
-                          enabled: e.currentTarget.checked,
-                        })
-                      }
-                    />
-                    <Group grow>
-                      <NumberInput
-                        label="时序采样间隔（秒）"
-                        min={1}
-                        value={dynamic.metrics_timeseries.sample_interval_secs}
-                        onChange={(v) =>
-                          patchDynamic('metrics_timeseries', {
-                            ...dynamic.metrics_timeseries,
-                            sample_interval_secs: Number(v) || 0,
-                          })
-                        }
-                      />
-                      <NumberInput
-                        label="时序保留天数"
-                        min={0}
-                        value={dynamic.metrics_timeseries.retention_days}
-                        onChange={(v) =>
-                          patchDynamic('metrics_timeseries', {
-                            ...dynamic.metrics_timeseries,
-                            retention_days: Number(v) || 0,
-                          })
-                        }
-                      />
-                    </Group>
-                  </Stack>
-                </Box>
-
-                {/* —— 漏洞库 —— */}
-                <Box>
-                  <Text size="sm" fw={600} mb="xs">
-                    漏洞库离线镜像
-                  </Text>
-                  <Stack gap="sm">
-                    <Switch
-                      label="启用漏洞库离线镜像"
-                      checked={dynamic.vuln.enabled}
-                      onChange={(e) =>
-                        patchDynamic('vuln', { ...dynamic.vuln, enabled: e.currentTarget.checked })
-                      }
-                    />
-                    <TextInput
-                      label="镜像数据源基址"
-                      placeholder="https://osv-vulnerabilities.storage.googleapis.com"
-                      value={dynamic.vuln.source_base_url}
-                      onChange={(e) =>
-                        patchDynamic('vuln', {
-                          ...dynamic.vuln,
-                          source_base_url: e.currentTarget.value,
-                        })
-                      }
-                    />
-                    <Group grow>
-                      <NumberInput
-                        label="刷新周期（秒）"
-                        min={1}
-                        value={dynamic.vuln.refresh_interval_secs}
-                        onChange={(v) =>
-                          patchDynamic('vuln', {
-                            ...dynamic.vuln,
-                            refresh_interval_secs: Number(v) || 0,
-                          })
-                        }
-                      />
-                      <NumberInput
-                        label="下载超时（秒）"
-                        min={1}
-                        value={dynamic.vuln.download_timeout_secs}
-                        onChange={(v) =>
-                          patchDynamic('vuln', {
-                            ...dynamic.vuln,
-                            download_timeout_secs: Number(v) || 0,
-                          })
-                        }
-                      />
-                    </Group>
-                  </Stack>
-                </Box>
-
-                {/* —— 安全 / 会话 —— */}
-                <Box>
-                  <Text size="sm" fw={600} mb="xs">
-                    安全 / 会话
-                  </Text>
-                  <Text size="xs" c="dimmed" mb="xs">
-                    仅会话 / 登录锁定可调标量；OIDC / LDAP 等密钥项不在此处、只能经配置文件 /
-                    环境变量设置。
-                  </Text>
-                  <Group grow>
-                    <NumberInput
-                      label="会话有效期（秒）"
-                      min={1}
-                      value={dynamic.auth.session_ttl_secs}
-                      onChange={(v) =>
-                        patchDynamic('auth', { ...dynamic.auth, session_ttl_secs: Number(v) || 0 })
-                      }
-                    />
-                    <NumberInput
-                      label="触发锁定的连续失败次数"
-                      min={0}
-                      value={dynamic.auth.login_max_failures}
-                      onChange={(v) =>
-                        patchDynamic('auth', {
-                          ...dynamic.auth,
-                          login_max_failures: Number(v) || 0,
-                        })
-                      }
-                    />
-                    <NumberInput
-                      label="锁定时长（秒）"
-                      min={1}
-                      value={dynamic.auth.login_lockout_secs}
-                      onChange={(v) =>
-                        patchDynamic('auth', {
-                          ...dynamic.auth,
-                          login_lockout_secs: Number(v) || 0,
-                        })
-                      }
-                    />
-                  </Group>
-                </Box>
-
-                {/* 系统配置独立保存（区别于底部即时生效保存条）：保存后重启生效 */}
-                <Group>
-                  <Button
-                    leftSection={<IconDeviceFloppy size={16} />}
-                    onClick={handleSaveDynamic}
-                    loading={dynamicSaving}
-                  >
-                    保存系统配置
-                  </Button>
-                  {dynamicSaved && (
-                    <Text c="green" size="sm">
-                      已保存，重启服务后生效。
-                    </Text>
-                  )}
+                  <NumberInput
+                    label="时序保留天数"
+                    min={0}
+                    value={dynamic.metrics_timeseries.retention_days}
+                    onChange={(v) =>
+                      patchDynamic('metrics_timeseries', {
+                        ...dynamic.metrics_timeseries,
+                        retention_days: Number(v) || 0,
+                      })
+                    }
+                  />
                 </Group>
               </Stack>
             )}
           </Card>
-        </Tabs.Panel>
-      </Tabs>
 
-      {/* —— 保存（网络代理 + 在线更新共用一次 PATCH，沿用 FR-88 既有逻辑）——
-          固定为 sticky 底部动作条：始终贴在滚动视口底部、不随内容 / 窗口缩放 / 切 tab 漂移；
+          {/* —— 漏洞库节 —— */}
+          <Card component="section" id="vuln" withBorder padding={density.cardPadding} radius="md">
+            <Group gap="xs" mb="xs">
+              <Title order={4}>漏洞库</Title>
+              <Badge size="sm" color="yellow" variant="light">
+                保存后重启生效
+              </Badge>
+            </Group>
+            {!dynamic ? (
+              <Center h={120}>
+                <Loader size="sm" />
+              </Center>
+            ) : (
+              <Stack gap="sm">
+                <Switch
+                  label="启用漏洞库离线镜像"
+                  checked={dynamic.vuln.enabled}
+                  onChange={(e) =>
+                    patchDynamic('vuln', { ...dynamic.vuln, enabled: e.currentTarget.checked })
+                  }
+                />
+                <TextInput
+                  label="镜像数据源基址"
+                  placeholder="https://osv-vulnerabilities.storage.googleapis.com"
+                  value={dynamic.vuln.source_base_url}
+                  onChange={(e) =>
+                    patchDynamic('vuln', {
+                      ...dynamic.vuln,
+                      source_base_url: e.currentTarget.value,
+                    })
+                  }
+                />
+                <Group grow>
+                  <NumberInput
+                    label="刷新周期（秒）"
+                    min={1}
+                    value={dynamic.vuln.refresh_interval_secs}
+                    onChange={(v) =>
+                      patchDynamic('vuln', {
+                        ...dynamic.vuln,
+                        refresh_interval_secs: Number(v) || 0,
+                      })
+                    }
+                  />
+                  <NumberInput
+                    label="下载超时（秒）"
+                    min={1}
+                    value={dynamic.vuln.download_timeout_secs}
+                    onChange={(v) =>
+                      patchDynamic('vuln', {
+                        ...dynamic.vuln,
+                        download_timeout_secs: Number(v) || 0,
+                      })
+                    }
+                  />
+                </Group>
+              </Stack>
+            )}
+          </Card>
+
+          {/* —— 安全 / 会话节 —— */}
+          <Card component="section" id="auth" withBorder padding={density.cardPadding} radius="md">
+            <Group gap="xs" mb="xs">
+              <Title order={4}>安全 / 会话</Title>
+              <Badge size="sm" color="yellow" variant="light">
+                保存后重启生效
+              </Badge>
+            </Group>
+            <Text size="xs" c="dimmed" mb="xs">
+              仅会话 / 登录锁定可调标量；OIDC / LDAP 等密钥项不在此处、只能经配置文件 /
+              环境变量设置。
+            </Text>
+            {!dynamic ? (
+              <Center h={80}>
+                <Loader size="sm" />
+              </Center>
+            ) : (
+              <Group grow>
+                <NumberInput
+                  label="会话有效期（秒）"
+                  min={1}
+                  value={dynamic.auth.session_ttl_secs}
+                  onChange={(v) =>
+                    patchDynamic('auth', { ...dynamic.auth, session_ttl_secs: Number(v) || 0 })
+                  }
+                />
+                <NumberInput
+                  label="触发锁定的连续失败次数"
+                  min={0}
+                  value={dynamic.auth.login_max_failures}
+                  onChange={(v) =>
+                    patchDynamic('auth', { ...dynamic.auth, login_max_failures: Number(v) || 0 })
+                  }
+                />
+                <NumberInput
+                  label="锁定时长（秒）"
+                  min={1}
+                  value={dynamic.auth.login_lockout_secs}
+                  onChange={(v) =>
+                    patchDynamic('auth', { ...dynamic.auth, login_lockout_secs: Number(v) || 0 })
+                  }
+                />
+              </Group>
+            )}
+          </Card>
+        </Stack>
+      </Flex>
+
+      {/* —— 单个全局保存（FR-103）——
+          固定为 sticky 底部动作条：始终贴在滚动视口底部、不随内容 / 窗口缩放 / 滚动漂移；
           负的左右 / 下外边距抵消 AppShell.Main 的内边距，使其横向铺满、紧贴底缘；
-          顶部描边 + 背景 + 内边距与内容区分隔，避免遮挡正文。仅改定位呈现，保存逻辑不变。 */}
+          顶部描边 + 背景 + 内边距与内容区分隔，避免遮挡正文。
+          一次提交两处写入：PATCH /settings（即时生效）+ PATCH /settings/dynamic（重启生效）。 */}
       <Box
         data-testid="settings-save-bar"
         style={{
@@ -943,14 +1032,14 @@ export function SettingsPage() {
         <Group>
           <Button
             leftSection={<IconDeviceFloppy size={16} />}
-            onClick={handleSave}
+            onClick={handleSaveAll}
             loading={saving}
           >
             保存
           </Button>
           {saved && (
             <Text c="green" size="sm">
-              已保存，配置已即时生效。
+              已保存。代理 / 在线更新即时生效；限制配额 / 可观测性 / 漏洞库 / 安全会话重启后生效。
             </Text>
           )}
         </Group>

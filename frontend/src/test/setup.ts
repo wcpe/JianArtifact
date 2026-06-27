@@ -29,3 +29,14 @@ globalThis.ResizeObserver = class {
 // Mantine Combobox（Select 下拉）打开时会在定时器里调用选项的 scrollIntoView，jsdom 不提供，需打桩。
 // 缺失会在下拉打开后抛 Uncaught Exception（异步定时器，污染测试运行），故全局补一个空实现。
 Element.prototype.scrollIntoView = () => {};
+
+// 设置页锚点导航（FR-103）用 IntersectionObserver 维护当前高亮节，jsdom 不提供，需打桩为空实现。
+// 单测不断言可视区计算（无真实布局），只断言导航存在与点击滚动，故空桩即可、不触发回调。
+globalThis.IntersectionObserver = class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+  takeRecords() {
+    return [];
+  }
+} as unknown as typeof IntersectionObserver;
