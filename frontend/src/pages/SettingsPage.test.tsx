@@ -36,6 +36,7 @@ const 启用样例: SettingsView = {
     restart_mode: 'self',
     channel: 'stable',
     has_token: true,
+    rollback_available: true,
   },
 };
 
@@ -56,6 +57,7 @@ const 未启用样例: SettingsView = {
     restart_mode: 'self',
     channel: 'stable',
     has_token: false,
+    rollback_available: false,
   },
 };
 
@@ -97,6 +99,7 @@ describe('SettingsPage', () => {
           restart_mode: p.update.restart_mode,
           channel: p.update.channel,
           has_token: Boolean(p.update.token),
+          rollback_available: false,
         },
       }),
     );
@@ -440,6 +443,54 @@ describe('SettingsPage', () => {
 
     await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
     expect(update.mock.calls[0][0].network_proxy.http.password).toBe('');
+  });
+
+  it('FR-104：有回滚备份时回滚按钮可用，点回滚走二次确认并调 rollback，成功后进入正在重启态', async () => {
+    vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
+    const rollback = vi
+      .spyOn(api, 'rollbackUpdate')
+      .mockResolvedValue({ status: '已回滚，正在重启' });
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
+    const btn = screen.getByText('回滚到上一版本').closest('button');
+    expect(btn).not.toBeDisabled();
+
+    fireEvent.click(screen.getByText('回滚到上一版本'));
+    await waitFor(() => expect(screen.getByText('确认回滚到上一版本')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('确认回滚'));
+
+    await waitFor(() => expect(rollback).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByText('已触发升级')).toBeInTheDocument());
+  });
+
+  it('FR-104：无回滚备份时回滚按钮禁用并提示暂无备份', async () => {
+    vi.spyOn(api, 'getSettings').mockResolvedValue({
+      ...启用样例,
+      update: { ...启用样例.update, rollback_available: false },
+    });
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
+    const btn = screen.getByText('回滚到上一版本').closest('button');
+    expect(btn).toBeDisabled();
+    expect(screen.getByText(/暂无可回滚的备份版本/)).toBeInTheDocument();
+  });
+
+  it('FR-104：回滚返回 409（无备份）时展示友好提示且不进入重启态', async () => {
+    vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
+    vi.spyOn(api, 'rollbackUpdate').mockRejectedValue(
+      new ApiError(409, 'conflict', '无可回滚的备份版本'),
+    );
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('回滚到上一版本'));
+    await waitFor(() => expect(screen.getByText('确认回滚到上一版本')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('确认回滚'));
+
+    await waitFor(() => expect(screen.getByText('无可回滚的备份版本')).toBeInTheDocument());
+    expect(screen.queryByText('已触发升级')).not.toBeInTheDocument();
   });
 
   it('加载失败时展示错误提示', async () => {

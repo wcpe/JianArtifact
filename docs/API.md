@@ -352,13 +352,22 @@
 - **错误**：`400` 当前平台无自更新资产 / 版本串非法；`401` 未认证；`403` 非管理员；`409` 在线更新未启用（`enabled=false`）/ 无更新可用（最新版本不高于当前）/ 已有自更新在途（「更新进行中」）；`422` 下载内容 sha256 不一致或发布缺所需资产（拒绝替换、保留旧二进制）；`500` 本地替换 / 落盘失败；`502` 上游不可达 / 超时 / 响应异常。
 - **错误响应体**：统一为 `{ "error": { "code", "message" } }`（`422` 对应错误码 `unprocessable_entity`）。
 
+### 回滚到上一版本（仅 Admin，FR-104）
+
+- **方法 / 路径**：`POST /api/v1/update/rollback`
+- **请求**：无请求体。仅管理员可调用。
+- **行为**：用升级时留下的持久回滚备份 `{exe}.rollback.bak`（单备份，只保留上一版）**原子还原**当前二进制 → 置位重启请求触发优雅停机，排空在途请求后由 `main` 据 `[update] restart_mode`（`self` / `exit`）拉起上一版进程或退出。回滚是**纯本地操作、不出站**，故**不受 `[update] enabled` 开关约束**（与是否允许联网升级无关）。失败尽力回退、不留半截。
+- **并发单飞**：回滚与 apply **共用**进程级单飞互斥——同一时刻只允许一个二进制变更在途（升级或回滚），已有一次在途时再次触发立即返回 `409`「更新进行中」，不竞争替换中间态（`.new`/`.old`/备份）。
+- **响应**：`200`，体 `{ "status": "已回滚，正在重启" }`。返回后服务排空在途请求并按 `restart_mode` 重启。
+- **错误**：`401` 未认证；`403` 非管理员；`409` 无可回滚的备份版本（从未成功升级过或备份缺失）/ 已有自更新在途（「更新进行中」）；`500` 本地替换失败。
+
 ### 读取设置聚合（仅 Admin，FR-87）
 
 - **方法 / 路径**：`GET /api/v1/settings`
 - **请求**：无请求体。仅管理员可调用。
 - **行为**：聚合网络代理（FR-84）与在线更新（FR-85）配置及当前版本，供控制台「设置」页展示。读**运行时可编辑设置热替换槽当前值**（含运行时 PATCH 在内，FR-88 / ADR-0022）；真源为 `config.toml` / env，运行时改动只入内存槽、重启回落文件配置。
 - **脱敏**：响应**绝不含任何凭据**——代理 URL 去除 `user:pass@` 凭据（`scheme://user:pass@host` → `scheme://host`）；更新 token 仅以 `has_token: bool` 暴露、绝不回显 token 本体。
-- **响应**：`{ "current_version", "network_proxy": { "http", "https", "no_proxy" }, "update": { "enabled", "repo", "api_base_url", "restart_mode", "channel", "has_token" } }`。`network_proxy` 各 URL 为脱敏后字符串或 `null`；`update.channel` 为更新通道（`stable` / `prerelease`，FR-89）；`update.has_token` 表示是否已配置访问 token。
+- **响应**：`{ "current_version", "network_proxy": { "http", "https", "no_proxy" }, "update": { "enabled", "repo", "api_base_url", "restart_mode", "channel", "has_token", "rollback_available" } }`。`network_proxy` 各 URL 为脱敏后字符串或 `null`；`update.channel` 为更新通道（`stable` / `prerelease`，FR-89）；`update.has_token` 表示是否已配置访问 token；`update.rollback_available`（FR-104）表示是否有可回滚的上一版本备份（持久回滚备份存在），供控制台启用 / 禁用回滚按钮。
 - **错误**：`401` 未认证；`403` 非管理员。
 
 ### 编辑设置（仅 Admin，FR-88，运行时热替换）

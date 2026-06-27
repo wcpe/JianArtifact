@@ -40,6 +40,7 @@ import type {
   SettingsPatch,
   UpdateCheck,
   ApplyResponse,
+  RollbackResponse,
   TokenView,
   UpdateRepositoryRequest,
   UpdateUserRequest,
@@ -517,6 +518,11 @@ export async function getHealth(): Promise<HealthInfo> {
     throw new ApiError(response.status, 'error', `健康检查失败（HTTP ${response.status}）`);
   }
   return (await response.json()) as HealthInfo;
+}
+
+/** 回滚到上一版本：用持久备份还原旧二进制 → 触发重启（仅管理员；无备份时后端返回 409）。 */
+export function rollbackUpdate(): Promise<RollbackResponse> {
+  return request<RollbackResponse>('/update/rollback', { method: 'POST' });
 }
 
 /** 对制品路径逐段编码（保留 `/` 分隔，避免破坏 catch-all 路径语义）。 */

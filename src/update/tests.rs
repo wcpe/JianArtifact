@@ -155,6 +155,120 @@ fn 替换规划_路径推导() {
     }
 }
 
+// ---------- 回滚备份路径推导（FR-104，跨平台可测）----------
+
+#[test]
+fn 回滚备份路径_同目录加固定后缀() {
+    let exe = Path::new("/opt/app/jianartifact");
+    assert_eq!(
+        rollback_backup_path(exe),
+        Path::new("/opt/app/jianartifact.rollback.bak")
+    );
+    // Windows 形态：保留原扩展名、整体再加后缀
+    let win = Path::new(r"C:\app\jianartifact.exe");
+    assert_eq!(
+        rollback_backup_path(win),
+        Path::new(r"C:\app\jianartifact.exe.rollback.bak")
+    );
+}
+
+// ---------- 回滚规划（FR-104，unix / windows 路径推导跨平台可测）----------
+
+#[test]
+fn 回滚规划_路径推导() {
+    let exe = Path::new("/opt/app/jianartifact");
+    let plan = plan_rollback(exe);
+    assert_eq!(plan.current_exe, exe);
+    assert_eq!(
+        plan.backup_source,
+        Path::new("/opt/app/jianartifact.rollback.bak")
+    );
+    assert_eq!(plan.staged, Path::new("/opt/app/jianartifact.new"));
+    if cfg!(windows) {
+        assert_eq!(
+            plan.replace.old.as_deref(),
+            Some(Path::new("/opt/app/jianartifact.old"))
+        );
+    } else {
+        assert!(plan.replace.old.is_none());
+    }
+}
+
+// ---------- 回滚可用性：备份存在与否（FR-104）----------
+
+#[tokio::test]
+async fn 回滚可用性_随备份存在与否() {
+    let dir = tempfile::tempdir().unwrap();
+    let exe = dir.path().join("jianartifact");
+    tokio::fs::write(&exe, b"CUR").await.unwrap();
+    // 无备份 → 不可回滚
+    assert!(!rollback_available(&exe));
+    // 造一个备份 → 可回滚
+    tokio::fs::write(dir.path().join("jianartifact.rollback.bak"), b"OLD")
+        .await
+        .unwrap();
+    assert!(rollback_available(&exe));
+}
+
+// ---------- 回滚执行：有备份还原成功 ----------
+
+#[tokio::test]
+async fn 回滚_有备份_还原上一版() {
+    let dir = tempfile::tempdir().unwrap();
+    let exe = dir.path().join("jianartifact");
+    // 当前是新版（坏版本），备份是旧版（要回滚到的目标）
+    tokio::fs::write(&exe, b"NEW-BAD-BINARY").await.unwrap();
+    tokio::fs::write(
+        dir.path().join("jianartifact.rollback.bak"),
+        b"OLD-GOOD-BINARY",
+    )
+    .await
+    .unwrap();
+
+    let outcome = rollback(&exe).await.expect("有备份应回滚成功");
+    assert_eq!(outcome.exe, exe);
+    // 回滚后 exe 内容应为旧版备份
+    assert_eq!(tokio::fs::read(&exe).await.unwrap(), b"OLD-GOOD-BINARY");
+}
+
+// ---------- 回滚执行：无备份报 NoBackup ----------
+
+#[tokio::test]
+async fn 回滚_无备份_报错() {
+    let dir = tempfile::tempdir().unwrap();
+    let exe = dir.path().join("jianartifact");
+    tokio::fs::write(&exe, b"CUR-BINARY").await.unwrap();
+
+    let err = rollback(&exe).await.unwrap_err();
+    assert!(matches!(err, UpdateError::NoBackup));
+    // 当前二进制不受影响
+    assert_eq!(tokio::fs::read(&exe).await.unwrap(), b"CUR-BINARY");
+}
+
+// ---------- apply：升级后应留持久回滚备份（FR-104）----------
+
+#[tokio::test]
+async fn apply_成功后留持久回滚备份() {
+    let dir = tempfile::tempdir().unwrap();
+    let exe = dir.path().join("jianartifact");
+    tokio::fs::write(&exe, b"OLD-BINARY").await.unwrap();
+
+    let new_bin = b"NEW-BINARY-BYTES";
+    let (release, assets) = release_with_assets("0.4.0", new_bin);
+    let source = FakeSource::new(release, assets);
+
+    apply_update(&source, UpdateChannel::Stable, "0.3.0", &exe, dir.path())
+        .await
+        .expect("校验通过应成功替换");
+    // 持久回滚备份应留有升级前的旧二进制（跨平台一致，独立于 .bak/.old）
+    let rollback_bak = dir.path().join("jianartifact.rollback.bak");
+    assert_eq!(
+        tokio::fs::read(&rollback_bak).await.unwrap(),
+        b"OLD-BINARY",
+        "升级后应留持久回滚备份（升级前的旧二进制）"
+    );
+}
+
 // ---------- fake ReleaseSource ----------
 
 /// 测试用 fake 源：注入构造好的 Release 与「url → 字节」映射，不触网。

@@ -35,6 +35,7 @@ import { useDisclosure } from '@mantine/hooks';
 import {
   IconRefresh,
   IconArrowUp,
+  IconArrowBackUp,
   IconInfoCircle,
   IconDeviceFloppy,
   IconChevronDown,
@@ -169,6 +170,10 @@ export function SettingsPage() {
   const [applyError, setApplyError] = useState<string | null>(null);
   const [restarting, setRestarting] = useState(false);
   const [confirmOpened, confirmModal] = useDisclosure(false);
+  // 回滚相关状态（FR-104）：进行中标志、错误、二次确认弹窗开合
+  const [rollingBack, setRollingBack] = useState(false);
+  const [rollbackError, setRollbackError] = useState<string | null>(null);
+  const [rollbackConfirmOpened, rollbackConfirmModal] = useDisclosure(false);
   // 在线更新「高级设置」折叠区开合（FR-103）：默认收起，低频项（仓库源 / API 基址 / 重启模式 / 访问令牌）点开才显
   const [advancedOpened, advancedToggle] = useDisclosure(false);
 
@@ -302,6 +307,22 @@ export function SettingsPage() {
       confirmModal.close();
     } finally {
       setApplying(false);
+    }
+  }
+
+  async function handleRollback() {
+    setRollingBack(true);
+    setRollbackError(null);
+    try {
+      await api.rollbackUpdate();
+      // 回滚成功即服务将停机重启，当前连接会断；进入「正在重启」提示态、引导手动刷新
+      rollbackConfirmModal.close();
+      setRestarting(true);
+    } catch (err) {
+      setRollbackError(errorMessage(err));
+      rollbackConfirmModal.close();
+    } finally {
+      setRollingBack(false);
     }
   }
 
@@ -494,10 +515,26 @@ export function SettingsPage() {
                     升级到 v{check.latest_version}
                   </Button>
                 )}
+                {/* 回滚到上一版本（FR-104）：无备份时禁用；回滚是本地操作、不依赖在线更新开关 */}
+                <Button
+                  variant="default"
+                  leftSection={<IconArrowBackUp size={16} />}
+                  onClick={rollbackConfirmModal.open}
+                  disabled={!settings.update.rollback_available}
+                >
+                  回滚到上一版本
+                </Button>
               </Group>
+
+              {!settings.update.rollback_available && (
+                <Text size="xs" c="dimmed">
+                  暂无可回滚的备份版本（成功升级一次后才会生成回滚备份）。
+                </Text>
+              )}
 
               {checkError && <ErrorAlert message={checkError} />}
               {applyError && <ErrorAlert message={applyError} />}
+              {rollbackError && <ErrorAlert message={rollbackError} />}
 
               {check && (
                 <Card withBorder padding="md" radius="sm" bg="var(--mantine-color-gray-0)">
@@ -596,6 +633,28 @@ export function SettingsPage() {
             </Button>
             <Button color="orange" onClick={handleApply} loading={applying}>
               确认升级
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      {/* —— 回滚二次确认弹窗（FR-104）—— */}
+      <Modal
+        opened={rollbackConfirmOpened}
+        onClose={rollbackConfirmModal.close}
+        title="确认回滚到上一版本"
+        centered
+      >
+        <Stack>
+          <Text>
+            将用备份还原到上一版本的二进制。回滚成功后服务会立即重启，当前连接将断开。确认继续？
+          </Text>
+          <Group justify="flex-end">
+            <Button variant="default" onClick={rollbackConfirmModal.close} disabled={rollingBack}>
+              取消
+            </Button>
+            <Button color="red" onClick={handleRollback} loading={rollingBack}>
+              确认回滚
             </Button>
           </Group>
         </Stack>

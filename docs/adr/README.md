@@ -24,10 +24,11 @@
 | 0018 | 运行时防护配置热替换：防护各维度阈值/开关/难度/IP 名单/WAF 规则经 Admin 在线 PATCH 即时生效（std `RwLock` 原子换快照、锁外重建 ip_matcher/waf_rules 派生态），扩展 ADR-0008（P2） | 已接受 |
 | 0019 | 迁移执行异步化为进程内任务：在线拉取迁移立即返回 `job_id`、后台 tokio 任务跑，进度存进程内有界注册表（不落库）+ 轮询查询端点 + 客户端重连；保留 ADR-0006「无须持久化迁移任务表」，扩展 ADR-0006（P2） | 已接受 |
 | 0020 | 统一出站网络代理与共享出站客户端：`[network.proxy]`（http/https/no_proxy + env）为出站代理唯一真源，`config` 层抽 `build_outbound_client` 统一注入全部出站 reqwest 客户端（rustls 保持、凭据脱敏），配置给值即真源、不配置保留系统 env（P2） | 部分被 ADR-0022、ADR-0024 取代 |
-| 0021 | 在线更新（自更新）机制：管理员手动触发查 GitHub 最新 Release → 按本机 target 下载 → 校验 sha256 → 原子替换二进制 → graceful-shutdown 后自动重启（restart_mode self/exit）；出站默认关闭、只拉公开数据不外发、复用 ADR-0020 helper、仅 sha256 不签名（P2） | 已接受 |
+| 0021 | 在线更新（自更新）机制：管理员手动触发查 GitHub 最新 Release → 按本机 target 下载 → 校验 sha256 → 原子替换二进制 → graceful-shutdown 后自动重启（restart_mode self/exit）；出站默认关闭、只拉公开数据不外发、复用 ADR-0020 helper、仅 sha256 不签名（P2） | 已接受（回滚增强见 ADR-0026） |
 | 0022 | 运行时可编辑设置与出站客户端热替换（取代 ADR-0020）：网络代理与在线更新可调字段经 Admin 在线 PATCH 即时生效、无须重启；`config` 层 `NetworkState`（std `RwLock<Arc<NetworkSnapshot>>` 含代理配置 + reqwest::Client），出站点按需取 client、PATCH 锁外重建后原子换槽；沿用 ADR-0020 真源/helper/rustls/脱敏，凭据只入内存槽不落库不回显，设置页改可编辑（P2） | 已接受 |
 | 0024 | SOCKS5 出站代理与网页代理凭据管理（取代 ADR-0020「不支持 SOCKS」条目）：启 reqwest `socks` 特性，`[network.proxy]` 新增 `all` 键经 `reqwest::Proxy::all` 支持 `socks5://` 全 scheme 兜底代理（注入序 http→https→all）；设置页每代理拆 URL/用户名/密码三字段，用户名回显、密码三态不回显，纯函数 `rebuild_proxy_url` 据三字段 + 当前存储值重建含凭据 URL（userinfo RFC3986 编码），凭据只入内存槽不落库 / 不回显（P2） | 已接受 |
 | 0025 | 开源许可清单构建期扫描 + 数据嵌入二进制 + 公开页：构建期由 `cargo-about`（Rust，按 `about.toml` accepted 清单）+ `pnpm licenses list`（前端）扫描运行时 + 开发依赖许可，`scripts/gen-licenses.mjs` 合并为 JSON 嵌入二进制（`include_str!` + 占位降级），公开端点 `GET /api/v1/licenses` 与页 `/licenses` 匿名只读；运行时不外联、守数据不外发（P2） | 已接受 |
+| 0026 | 自更新回滚（增强 ADR-0021）：升级时把当前二进制持久备份为跨平台一致的 `{exe}.rollback.bak`（单备份、不被启动清理，独立于 ADR-0021 临时 `.bak`/`.old`）→ `POST /api/v1/update/rollback`（仅 Admin）复用 execute_replace 原子换回 + 走既有重启链路 → 无备份返 409，回滚与升级共用 apply 单飞 guard，设置视图增 `rollback_available`（P2） | 已接受 |
 
 > 模板：状态 / 背景 / 决策 / 理由 / 后果 / 备选方案。
 

@@ -272,6 +272,8 @@ pub struct UpdateView {
     pub channel: String,
     /// 是否已配置访问 token：**仅布尔，绝不回显 token 本体**。
     pub has_token: bool,
+    /// 是否有可回滚的上一版本备份（FR-104）：持久回滚备份存在时为 `true`，供控制台启用回滚按钮。
+    pub rollback_available: bool,
 }
 
 /// 设置页聚合视图（脱敏后）。
@@ -307,6 +309,10 @@ fn current_view(state: &AppState) -> SettingsView {
             channel: update.channel.clone(),
             // 仅暴露是否已配置 token，绝不回显 token 本体
             has_token: update.token.is_some(),
+            // 持久回滚备份是否存在（FR-104）：定位 current_exe 失败时降级为 false（不暴露路径）
+            rollback_available: std::env::current_exe()
+                .map(|exe| crate::update::rollback_available(&exe))
+                .unwrap_or(false),
         },
     }
 }

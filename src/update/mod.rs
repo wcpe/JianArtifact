@@ -36,6 +36,9 @@ const TARGET_WINDOWS_X64: &str = "x86_64-pc-windows-msvc";
 const TARGET_MACOS_ARM64: &str = "aarch64-apple-darwin";
 /// 资产名前缀（与 FR-86 命名契约一致：`jianartifact-{version}-{target}{ext}`）。
 const ASSET_PREFIX: &str = "jianartifact";
+/// 持久回滚备份后缀（FR-104，ADR-0026）：升级前把当前二进制复制为 `{exe}.rollback.bak`，
+/// 作为跨平台一致的单一回滚源；**不被启动清理**（区别于 Windows 临时 `.old`）。
+const ROLLBACK_BACKUP_SUFFIX: &str = ".rollback.bak";
 
 /// 在线更新错误类型。
 #[derive(Debug, thiserror::Error)]
@@ -67,6 +70,9 @@ pub enum UpdateError {
     /// 本地文件系统操作失败（下载落盘 / 替换）。
     #[error("文件操作失败: {0}")]
     Io(String),
+    /// 无可回滚的备份版本（FR-104）：从未成功升级过、或备份已缺失。
+    #[error("无可回滚的备份版本")]
+    NoBackup,
 }
 
 /// 更新检查结果（对外响应载体）。
@@ -284,6 +290,90 @@ fn sibling_with_suffix(exe: &Path, suffix: &str) -> PathBuf {
     }
 }
 
+/// 推导持久回滚备份路径（纯函数，跨平台可测；FR-104，ADR-0026）。
+///
+/// 在 exe 同目录（同卷以保 rename 原子）落 `{exe}.rollback.bak`，作为单一回滚源。
+pub fn rollback_backup_path(current_exe: &Path) -> PathBuf {
+    sibling_with_suffix(current_exe, ROLLBACK_BACKUP_SUFFIX)
+}
+
+/// 回滚是否可用（纯查询）：持久回滚备份是否存在（FR-104）。
+///
+/// 设置聚合视图（FR-87）据此暴露 `rollback_available`，供控制台启用 / 禁用回滚按钮。
+pub fn rollback_available(current_exe: &Path) -> bool {
+    rollback_backup_path(current_exe).exists()
+}
+
+/// 回滚规划（FR-104，跨平台，路径推导可单测）。
+///
+/// 回滚本质是「再做一次原子替换，只是新内容是持久备份里的旧二进制」，故内嵌 [`ReplacePlan`]
+/// 复用 ADR-0021 的 [`execute_replace`]；仅多一个 `backup_source`（回滚源）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RollbackPlan {
+    /// 当前运行的二进制路径（替换目标）。
+    pub current_exe: PathBuf,
+    /// 回滚源：持久回滚备份 `{exe}.rollback.bak`。
+    pub backup_source: PathBuf,
+    /// 暂存路径：把备份 copy 到 exe 同目录 `.new`，再经 [`execute_replace`] 原子换回。
+    pub staged: PathBuf,
+    /// 复用的原子替换规划（承载 Windows `.old` 等平台分支）。
+    pub replace: ReplacePlan,
+}
+
+/// 据当前 exe 路径生成回滚规划（纯函数，跨平台可测；FR-104，ADR-0026）。
+pub fn plan_rollback(current_exe: &Path) -> RollbackPlan {
+    let replace = plan_replace(current_exe);
+    RollbackPlan {
+        current_exe: current_exe.to_path_buf(),
+        backup_source: rollback_backup_path(current_exe),
+        staged: replace.staged.clone(),
+        replace,
+    }
+}
+
+/// 回滚结果（FR-104）：还原后落地的二进制路径，供 handler 置位重启请求。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RollbackOutcome {
+    /// 回滚后落地的二进制路径（重启时拉起之）。
+    pub exe: PathBuf,
+}
+
+/// 回滚到上一版本（FR-104，ADR-0026）：校验备份存在 → 原子换回 → 返回落地路径（不含重启）。
+///
+/// 流程：校验持久回滚备份存在（不存在报 [`UpdateError::NoBackup`]）→ 把备份 copy 到 exe 同目录
+/// `.new` 暂存 → 复用 [`execute_replace`] 原子换回当前二进制 → 返回落地路径。替换执行同步阻塞，
+/// 放阻塞线程池。失败尽力清理暂存 `.new`、旧二进制在 `execute_replace` 内尽力还原，不留半截。
+///
+/// `current_exe` 由调用方注入（便于测试用 tempdir）。重启由 handler 置请求 + main 拉起。
+pub async fn rollback(current_exe: &Path) -> Result<RollbackOutcome, UpdateError> {
+    let plan = plan_rollback(current_exe);
+    // 校验回滚源存在（异步元数据查询，锁外 IO）
+    if !tokio::fs::try_exists(&plan.backup_source)
+        .await
+        .map_err(|e| UpdateError::Io(e.to_string()))?
+    {
+        return Err(UpdateError::NoBackup);
+    }
+    // 把备份复制到 exe 同目录 `.new` 暂存（同卷以保后续 rename 原子）
+    tokio::fs::copy(&plan.backup_source, &plan.staged)
+        .await
+        .map_err(|e| UpdateError::Io(e.to_string()))?;
+    // 复用原子替换：把暂存的旧二进制换回当前 exe（同步阻塞，放阻塞线程池）
+    let replace = plan.replace.clone();
+    let exec_result = tokio::task::spawn_blocking(move || execute_replace(&replace))
+        .await
+        .map_err(|e| UpdateError::Io(e.to_string()))?;
+    if let Err(e) = exec_result {
+        // 替换执行失败：尽力清理暂存 `.new`，旧二进制已在 execute_replace 内尽力还原
+        let _ = tokio::fs::remove_file(&plan.staged).await;
+        return Err(e);
+    }
+    tracing::info!("已用持久回滚备份还原上一版二进制，准备触发自动重启");
+    Ok(RollbackOutcome {
+        exe: plan.current_exe,
+    })
+}
+
 /// 启动早期清理上次自更新留下的残留临时文件（best-effort，失败仅 WARN，不阻断启动）。
 ///
 /// 清理两类残留（在 main 早期调用）：
@@ -486,7 +576,15 @@ pub async fn apply_update<S: ReleaseSource>(
         return Err(e);
     }
 
-    // 校验通过：把临时文件移到 exe 同目录（同卷保 rename 原子，跨卷先 copy）后原子替换
+    // 校验通过：替换前先把当前运行的二进制持久备份为回滚源（FR-104，ADR-0026）。
+    // 覆盖单一备份（只留上一版）；落盘失败即报错、不触碰二进制。该备份独立于下方的
+    // Unix `.bak` / Windows `.old`（临时兜底 / 启动清理），且不被启动清理。
+    let rollback_bak = rollback_backup_path(current_exe);
+    tokio::fs::copy(current_exe, &rollback_bak)
+        .await
+        .map_err(|e| UpdateError::Io(e.to_string()))?;
+
+    // 把临时文件移到 exe 同目录（同卷保 rename 原子，跨卷先 copy）后原子替换
     let plan = plan_replace(current_exe);
     stage_file(&tmp_bin, &plan.staged).await?;
     // 替换执行是同步阻塞文件操作，放到阻塞线程池

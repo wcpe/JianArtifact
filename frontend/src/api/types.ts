@@ -594,6 +594,8 @@ export interface UpdateView {
   /** 更新通道（stable / prerelease，FR-89）。 */
   channel: string;
   has_token: boolean;
+  /** 是否有可回滚的上一版本备份（FR-104）：true 时启用回滚按钮。 */
+  rollback_available: boolean;
 }
 
 /** 设置页聚合视图（GET /api/v1/settings，仅管理员）。 */
@@ -657,6 +659,11 @@ export interface HealthInfo {
   status: string;
   version: string;
   port: number;
+}
+
+/** 回滚成功响应（POST /api/v1/update/rollback，FR-104）。 */
+export interface RollbackResponse {
+  status: string;
 }
 
 // —— 开源许可（FR-102，公开） ——

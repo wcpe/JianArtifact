@@ -453,6 +453,7 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/update/check", get(update::check_update))
         .route("/update/apply", post(update::apply_update))
+        .route("/update/rollback", post(update::rollback_update))
         .route(
             "/settings",
             get(settings::get_settings).patch(settings::patch_settings),

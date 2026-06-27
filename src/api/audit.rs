@@ -472,8 +472,9 @@ fn classify_management(method: &Method, rest: &str) -> ClassifiedEvent {
                 target: Some(tail.to_string()),
             }
         }
-        // 在线更新 apply
+        // 在线更新 apply / rollback
         ["update", "apply"] if method == Method::POST => simple("update.apply"),
+        ["update", "rollback"] if method == Method::POST => simple("update.rollback"),
         // 其余未显式归类的非读路径：按方法兜底留痕，不漏记
         _ => simple(fallback_action(method)),
     }
@@ -882,10 +883,14 @@ mod tests {
                 .action,
             "migrate.run"
         );
-        // 在线更新 apply
+        // 在线更新 apply / rollback
         assert_eq!(
             c(Method::POST, "/api/v1/update/apply").unwrap().action,
             "update.apply"
+        );
+        assert_eq!(
+            c(Method::POST, "/api/v1/update/rollback").unwrap().action,
+            "update.rollback"
         );
         // 登出 / 刷新
         assert_eq!(

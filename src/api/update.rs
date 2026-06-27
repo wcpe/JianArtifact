@@ -29,6 +29,8 @@ impl From<UpdateError> for ApiError {
             UpdateError::InvalidVersion(v) => ApiError::BadRequest(format!("版本串非法: {v}")),
             // 无更新可用 → 409
             UpdateError::NoUpdate(msg) => ApiError::Conflict(msg),
+            // 无可回滚的备份版本 → 409（FR-104，明确文案、不静默）
+            UpdateError::NoBackup => ApiError::Conflict("无可回滚的备份版本".to_string()),
             // 缺资产 / 校验失败 → 422（不可用的发布内容）
             UpdateError::MissingAsset(name) => {
                 ApiError::UnprocessableEntity(format!("发布缺少所需资产: {name}"))
@@ -61,6 +63,13 @@ pub struct ApplyResponse {
     pub status: String,
     /// 替换后的新版本号。
     pub new_version: String,
+}
+
+/// 回滚成功响应（FR-104）。
+#[derive(Debug, Serialize)]
+pub struct RollbackResponse {
+    /// 固定状态文案。
+    pub status: String,
 }
 
 /// 据**热替换槽当前值**构造 GitHub Release 来源 + 解析当前更新通道（出站默认关闭时返回 `Disabled`）。
@@ -152,6 +161,46 @@ pub async fn apply_update(
     }))
 }
 
+/// 回滚到上一版本（仅 Admin，手动触发，FR-104）：用持久回滚备份原子还原 → 触发重启。
+///
+/// 纯本地操作、不出站，故**不受 `[update] enabled` 开关约束**（回滚是把已落地的旧二进制换回，
+/// 与是否允许联网升级无关）。成功返回 `200 {status}`，随后排空在途请求后据 `restart_mode` 重启。
+/// 无可回滚备份 → 409「无可回滚的备份版本」；非 Admin / 匿名 403 / 401；本地替换失败 → 500。
+pub async fn rollback_update(
+    State(state): State<AppState>,
+    identity: Identity,
+) -> Result<Json<RollbackResponse>, ApiError> {
+    identity.require_admin()?;
+
+    // 与 apply 共用进程级单飞互斥（M2）：同一时刻只允许一个二进制变更在途（升级或回滚），
+    // 抢不到说明已有自更新 / 回滚在途，立即 409「更新进行中」，不竞争 .new/.old/备份中间态。
+    let _apply_guard = state
+        .restart
+        .try_begin_apply()
+        .ok_or_else(|| ApiError::Conflict("更新进行中".to_string()))?;
+
+    let current_exe = std::env::current_exe().map_err(|e| {
+        tracing::error!(错误 = %e, "无法定位当前可执行文件，拒绝回滚");
+        ApiError::Internal
+    })?;
+
+    let outcome = update::rollback(&current_exe).await?;
+
+    // 还原成功：置位重启请求（透传当前 argv，不含 argv[0]）+ 触发优雅停机
+    let mode = RestartMode::from_config(&state.settings.update().restart_mode);
+    let argv: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    state.restart.request_restart(RestartRequest {
+        mode,
+        exe: outcome.exe,
+        argv,
+    });
+    tracing::info!("已置位重启请求（回滚），等待优雅停机后拉起上一版进程");
+
+    Ok(Json(RollbackResponse {
+        status: "已回滚，正在重启".to_string(),
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::tests::测试用状态;
@@ -237,6 +286,56 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::CONFLICT);
         // 未启用即不应置位重启请求
         assert!(restart.take().is_none(), "未启用时不得置位重启请求");
+    }
+
+    #[tokio::test]
+    async fn rollback_匿名被拒_401() {
+        let (state, _dir) = 测试用状态().await;
+        let resp = 请求(state, "/api/v1/update/rollback", "POST", None).await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn rollback_普通用户被拒_403() {
+        let (state, _dir) = 测试用状态().await;
+        let token = 签发令牌(&state, "u", Role::User).await;
+        let resp = 请求(state, "/api/v1/update/rollback", "POST", Some(&token)).await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn rollback_管理员但无备份_409() {
+        // 测试进程的 current_exe 旁不存在 .rollback.bak，Admin 触发回滚应返 409「无可回滚的备份版本」
+        let (state, _dir) = 测试用状态().await;
+        let restart = state.restart.clone();
+        let token = 签发令牌(&state, "admin", Role::Admin).await;
+        let resp = 请求(state, "/api/v1/update/rollback", "POST", Some(&token)).await;
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        let body = super::super::tests::读_json(resp).await;
+        assert_eq!(body["error"]["message"], "无可回滚的备份版本");
+        // 无备份即不应置位重启请求
+        assert!(restart.take().is_none(), "无备份时不得置位重启请求");
+    }
+
+    #[tokio::test]
+    async fn rollback_并发在途第二个返回_409_更新进行中() {
+        // 与 apply 共用单飞标志：手动占用后，再触发 rollback 的 Admin 应拿到 409「更新进行中」
+        let (state, _dir) = 测试用状态().await;
+        let restart = state.restart.clone();
+        let token = 签发令牌(&state, "admin", Role::Admin).await;
+        let in_flight = restart.try_begin_apply().expect("测试前置：首个抢占应成功");
+
+        let resp = 请求(state, "/api/v1/update/rollback", "POST", Some(&token)).await;
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        let body = super::super::tests::读_json(resp).await;
+        assert_eq!(body["error"]["message"], "更新进行中");
+        assert!(restart.take().is_none(), "在途时不得置位重启请求");
+
+        drop(in_flight);
+        assert!(
+            restart.try_begin_apply().is_some(),
+            "在途结束后标志应复位、可再次触发"
+        );
     }
 
     #[tokio::test]
