@@ -388,6 +388,32 @@ fn 检查结果_组装() {
     assert_eq!(check.notes, "说明");
 }
 
+#[test]
+fn prerelease_当前版本反映_dev_构建时收敛为无更新() {
+    // 回归守护（修复版本号不收敛）：prerelease 滚动 Release（tag=dev、name 内嵌完整 dev 版本串）。
+    let release = Release {
+        tag_name: "dev".to_string(),
+        name: "0.4.0-dev.8.4488ab2".to_string(),
+        body: String::new(),
+        assets: vec![],
+    };
+    // 当 current 反映真实 dev 构建版本（CI 注入 build_version 后的形态）→ 与 latest 相等 → 无更新（收敛）
+    let converged =
+        build_check(UpdateChannel::Prerelease, "0.4.0-dev.8.4488ab2", &release).unwrap();
+    assert_eq!(converged.latest_version, "0.4.0-dev.8.4488ab2");
+    assert!(
+        !converged.update_available,
+        "当前版本已等于最新 dev 版本，应收敛为无更新"
+    );
+
+    // 反衬 bug：若 current 仍是裸 CARGO_PKG_VERSION（0.4.0，未注入），则永远 != dev 串 → 一直有更新
+    let buggy = build_check(UpdateChannel::Prerelease, "0.4.0", &release).unwrap();
+    assert!(
+        buggy.update_available,
+        "裸 0.4.0 与 dev 串不等 → 一直显示有更新（正是注入 build_version 前的不收敛症状）"
+    );
+}
+
 // ---------- release JSON 解析 ----------
 
 #[test]

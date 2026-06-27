@@ -292,7 +292,7 @@ fn current_view(state: &AppState) -> SettingsView {
     let update = state.settings.update();
 
     SettingsView {
-        current_version: env!("CARGO_PKG_VERSION").to_string(),
+        current_version: crate::version::build_version().to_string(),
         network_proxy: NetworkProxyView {
             http: proxy_entry_view(proxy.http.as_deref()),
             https: proxy_entry_view(proxy.https.as_deref()),
@@ -613,8 +613,8 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
 
         let body = 读_json(resp).await;
-        // 当前版本回显
-        assert_eq!(body["current_version"], env!("CARGO_PKG_VERSION"));
+        // 当前版本回显：经 build_version()（测试构建未注入环境，回退 CARGO_PKG_VERSION）
+        assert_eq!(body["current_version"], crate::version::build_version());
         // 代理 URL 已脱敏：不含凭据、保留 host:port；用户名回显、has_password=true
         assert_eq!(
             body["network_proxy"]["http"]["url"],

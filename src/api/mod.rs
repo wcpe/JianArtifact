@@ -599,7 +599,7 @@ pub fn build_router(state: AppState) -> Router {
 async fn health(State(state): State<AppState>) -> impl IntoResponse {
     Json(json!({
         "status": "ok",
-        "version": env!("CARGO_PKG_VERSION"),
+        "version": crate::version::build_version(),
         // 不泄露敏感信息，仅回显服务监听端口供探活区分
         "port": state.config.server.port,
     }))

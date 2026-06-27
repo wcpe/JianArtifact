@@ -83,9 +83,11 @@ fn build_source(state: &AppState) -> Result<(GithubReleaseSource, UpdateChannel)
     Ok((source, UpdateChannel::from_config(&cfg.channel)))
 }
 
-/// 当前运行版本（编译期注入）。
+/// 当前运行版本：优先 CI 注入的完整版本串（含 prerelease `dev.N.sha`），回退 `CARGO_PKG_VERSION`。
+///
+/// 经 [`crate::version::build_version`] 统一取值，修复 prerelease 自更新版本号不收敛（见 `version` 模块）。
 fn current_version() -> &'static str {
-    env!("CARGO_PKG_VERSION")
+    crate::version::build_version()
 }
 
 /// 更新检查（仅 Admin）：查最新稳定 Release、比对版本，返回是否有更新。

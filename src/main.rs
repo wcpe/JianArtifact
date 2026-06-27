@@ -25,7 +25,8 @@ use jianartifact::vuln::{self, HttpMirrorSource, VulnMirror};
 
 /// 命令行参数。
 #[derive(Debug, Parser)]
-#[command(name = "jianartifact", about = "轻量级多格式制品库管理器", version)]
+// version 取 build_version()：优先 CI 注入的完整版本串（含 prerelease dev.N.sha），回退 CARGO_PKG_VERSION
+#[command(name = "jianartifact", about = "轻量级多格式制品库管理器", version = jianartifact::version::build_version())]
 struct Cli {
     /// 配置文件路径。
     #[arg(long, default_value = "./config.toml")]

@@ -86,7 +86,7 @@
 - **`hotfix/*`**：从出问题的发布 tag 切分支紧急修，出补丁版后**回流 master**（`sdd-hotfix` 技能）。
 - **回滚**优先 `git revert`，不重写已 push 历史（`sdd-rollback-change` 技能）。
 
-版本号唯一来源是 `Cargo.toml` 的 `version`，经 clap `#[command(version)]`（`CARGO_PKG_VERSION`）注入单一可执行二进制，与运行时 `--version` 一致。
+版本号**基线**来源是 `Cargo.toml` 的 `version`（经 `CARGO_PKG_VERSION` 编入二进制）。展示版本统一经 `src/version.rs` 的 `build_version()` 取值：CI 发布时另经环境变量 `JIANARTIFACT_BUILD_VERSION` 注入**完整发布版本串**（prerelease 含 `dev.N.sha`、tag 取版本），`build_version()` 优先取注入值、回退 `CARGO_PKG_VERSION`，使 `--version` / `/health` / 设置页 / 自更新「当前版本」自报真实发布版本（修复 prerelease 自更新版本号不收敛）；本地开发未注入时即为 `CARGO_PKG_VERSION`。
 
 ### 8.1 发布流水线（FR-86）
 
@@ -100,7 +100,7 @@ GitHub Actions 实现两条流水线，触发条件与产出渠道如下：
   - **资产命名契约**（FR-85 在线自更新消费）：每目标产出 `jianartifact-{version}-{target}{ext}` 及配套 `jianartifact-{version}-{target}{ext}.sha256`（裸 64 位十六进制哈希）；`{ext}` 在 Windows 为 `.exe`，Linux / macOS 为空。
   - 仓库坐标用 Actions 内置 `github.repository`，凭据仅用内置 `GITHUB_TOKEN`，不入库任何密钥。
 
-> 说明：发布流水线读取 **`Cargo.toml` 的 `version`** 作为版本来源——它经 clap `version`（`CARGO_PKG_VERSION`）注入二进制，与运行时 `--version` 一致。流水线发布的版本号即以此为准。
+> 说明：发布流水线在 `prepare` job 推导完整版本串（prerelease=`{Cargo 版本}-dev.{run}.{sha}`、tag=版本），并在 `编译 release 二进制` 步骤经 `JIANARTIFACT_BUILD_VERSION` 注入该串到二进制；运行时 `build_version()`（`src/version.rs`）优先取注入值、回退 `CARGO_PKG_VERSION`，故 `--version` 与自更新「当前版本」反映真实发布版本，本地未注入时即基线 `CARGO_PKG_VERSION`。
 
 ## 9. 文档如何长期演进（本次会话之后）
 

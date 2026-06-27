@@ -121,6 +121,10 @@ jobs:
       # 默认特性发布构建（不启用 s3，守单一二进制零外部运行时依赖）。
       - name: 编译 release 二进制
         run: cargo build --release --target ${{ matrix.target }}
+        env:
+          # 注入完整版本串（prerelease=dev.N.sha / tag=版本）到二进制，使其自报真实发布版本。
+          # 编译期由 option_env! 读入（见 src/version.rs），修复 prerelease 自更新「当前版本」不收敛。
+          JIANARTIFACT_BUILD_VERSION: ${{ needs.prepare.outputs.version }}
 
       # 按命名契约重命名二进制 + 生成 .sha256（裸 64 位十六进制串，不带文件名）。
       # 用 bash（windows runner 也用 git bash）统一处理三平台路径与哈希工具差异。
