@@ -1,13 +1,13 @@
-// 设置页（FR-87 只读 + FR-88 可编辑热替换 + FR-103 单页堆叠重排，仅管理员）：
-// 单页纵向堆叠（网络代理 → 在线更新 → 关于·版本，去 tab、布局不抖）+ 高密度可编辑表单，
-// 编辑网络代理（FR-84）+ 在线更新（FR-85）配置，保存调 PATCH /api/v1/settings 即时生效、
-// 无须重启；并提供「检查更新 / 应用更新」入口。在线更新区默认仅显「更新通道」+ 检查更新，
-// 低频高级项（仓库源 / API 基址 / 重启模式 / 访问令牌）收进默认收起的「高级设置」折叠区。
+// 设置页（FR-87 只读 + FR-88 可编辑热替换 + FR-103 二级导航重设计，仅管理员）：
+// 左侧二级导航（网络代理 / 在线更新）+ 右侧内容区，切 tab 布局不抖、保存条位置稳定；
+// 在线更新做成一张「应用更新」卡片（右上角通道切换 + 检查更新、版本对比 + 徽标、预发布提示、
+// 版本明细 + release 说明、底部「立即更新并重启 / 回滚到上一版」），低频项收进卡内「高级设置」折叠区。
+// 编辑网络代理（FR-100）+ 在线更新（FR-85/89）配置，保存调 PATCH /api/v1/settings 即时生效、无须重启。
 //
 // 数据来自后端 GET /api/v1/settings（已脱敏：代理 URL 去凭据、更新 token 仅以 has_token 暴露）。
 // 保存走 PATCH（运行时热替换，守 ADR-0022）：代理凭据与 token 只入内存槽、不写回 TOML / 不回显，
 // 重启回落文件 / env 配置。token 三态：留空=保留现有，清空动作=清除，填新值=设置。
-// FR-103 仅重排呈现：数据加载 / 保存 / 检查 / 应用逻辑原样复用，不改 GET/PATCH 契约。
+// FR-103 仅重排呈现：数据加载 / 保存 / 检查 / 应用 / 回滚逻辑原样复用，不改 GET/PATCH 与更新端点契约。
 
 import { useEffect, useState } from 'react';
 import {
@@ -21,15 +21,16 @@ import {
   Button,
   Loader,
   Center,
-  Divider,
   Code,
   Modal,
   Alert,
   TextInput,
   Switch,
   Select,
+  SegmentedControl,
   PasswordInput,
   Collapse,
+  Tabs,
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import {
@@ -40,6 +41,8 @@ import {
   IconDeviceFloppy,
   IconChevronDown,
   IconChevronRight,
+  IconNetwork,
+  IconCloudDownload,
 } from '@tabler/icons-react';
 import * as api from '../api/endpoints';
 import type { SettingsView, UpdateCheck, ProxyEntryPatch } from '../api/types';
@@ -331,174 +334,101 @@ export function SettingsPage() {
       <Title order={2}>设置</Title>
       {error && <ErrorAlert message={error} />}
 
-      {/* FR-103：单页纵向堆叠（网络代理 → 在线更新 → 关于·版本，去 tab、布局不抖） */}
-      <Stack gap={density.gridSpacing}>
-        {/* —— 网络代理 —— */}
-        <Card withBorder padding={density.cardPadding} radius="md">
-          <Title order={4}>网络代理</Title>
-          <Text size="sm" c="dimmed" mb="sm">
-            统一出站代理（回源 / 迁移 / 漏洞库 / OIDC / 在线更新共用）。每代理可填用户名 + 密码；
-            用户名回显、密码不回显（留空保留现有），URL 留空表示不配置该代理。
-          </Text>
-          <Stack gap="md">
-            {/* HTTP / HTTPS 各自 scheme 专属代理；SOCKS5 填 all（兜底全 scheme，FR-100） */}
-            <ProxyFields
-              title="HTTP 代理"
-              urlPlaceholder="http://host:3128"
-              url={httpUrl}
-              onUrlChange={setHttpUrl}
-              username={httpUser}
-              onUsernameChange={setHttpUser}
-              password={httpPass}
-              onPasswordChange={setHttpPass}
-              hasPassword={httpHasPass}
-              passwordCleared={httpClearPass}
-              onClearPassword={() => setHttpClearPass(true)}
-            />
-            <ProxyFields
-              title="HTTPS 代理"
-              urlPlaceholder="http://host:3128"
-              url={httpsUrl}
-              onUrlChange={setHttpsUrl}
-              username={httpsUser}
-              onUsernameChange={setHttpsUser}
-              password={httpsPass}
-              onPasswordChange={setHttpsPass}
-              hasPassword={httpsHasPass}
-              passwordCleared={httpsClearPass}
-              onClearPassword={() => setHttpsClearPass(true)}
-            />
-            <ProxyFields
-              title="SOCKS5 代理（all，兜底全 scheme）"
-              urlPlaceholder="socks5://host:1080"
-              url={allUrl}
-              onUrlChange={setAllUrl}
-              username={allUser}
-              onUsernameChange={setAllUser}
-              password={allPass}
-              onPasswordChange={setAllPass}
-              hasPassword={allHasPass}
-              passwordCleared={allClearPass}
-              onClearPassword={() => setAllClearPass(true)}
-            />
-            <TextInput
-              label="直连绕过（no_proxy）"
-              placeholder="localhost,127.0.0.1,.internal"
-              value={noProxy}
-              onChange={(e) => setNoProxy(e.currentTarget.value)}
-            />
-          </Stack>
-        </Card>
+      {/* FR-103：左侧二级导航（网络代理 / 在线更新）+ 右侧内容区。
+          Tabs 垂直布局，切 tab 仅切右侧面板、左导航与底部保存条不动；Tabs 默认保留挂载，表单态不丢。 */}
+      <Tabs defaultValue="proxy" orientation="vertical" variant="pills">
+        <Tabs.List w={180} mr="md">
+          <Tabs.Tab value="proxy" leftSection={<IconNetwork size={16} />}>
+            网络代理
+          </Tabs.Tab>
+          <Tabs.Tab value="update" leftSection={<IconCloudDownload size={16} />}>
+            在线更新
+          </Tabs.Tab>
+        </Tabs.List>
 
-        {/* —— 在线更新 —— */}
-        <Card withBorder padding={density.cardPadding} radius="md">
-          <Title order={4}>在线更新</Title>
-          <Text size="sm" c="dimmed" mb="sm">
-            管理员手动触发的自更新。当前版本见「关于·版本」。
-          </Text>
-          <Stack gap="sm">
-            {/* 默认可见：启用开关 + 更新通道（高频项） */}
-            <Switch
-              label="启用在线更新（出站开关）"
-              checked={updateEnabled}
-              onChange={(e) => setUpdateEnabled(e.currentTarget.checked)}
-            />
-            <Select
-              label="更新通道"
-              description="stable 仅升级到最新稳定版；prerelease 可升级到最新预发布版（含测试版）。"
-              data={[
-                { value: 'stable', label: 'stable（仅稳定版）' },
-                { value: 'prerelease', label: 'prerelease（含预发布版）' },
-              ]}
-              value={channel}
-              onChange={(v) => setChannel(v ?? 'stable')}
-              allowDeselect={false}
-            />
+        {/* —— 网络代理面板 —— */}
+        <Tabs.Panel value="proxy">
+          <Card withBorder padding={density.cardPadding} radius="md">
+            <Title order={4}>网络代理</Title>
+            <Text size="sm" c="dimmed" mb="sm">
+              统一出站代理（回源 / 迁移 / 漏洞库 / OIDC / 在线更新共用）。每代理可填用户名 + 密码；
+              用户名回显、密码不回显（留空保留现有），URL 留空表示不配置该代理。
+            </Text>
+            <Stack gap="md">
+              {/* HTTP / HTTPS 各自 scheme 专属代理；SOCKS5 填 all（兜底全 scheme，FR-100） */}
+              <ProxyFields
+                title="HTTP 代理"
+                urlPlaceholder="http://host:3128"
+                url={httpUrl}
+                onUrlChange={setHttpUrl}
+                username={httpUser}
+                onUsernameChange={setHttpUser}
+                password={httpPass}
+                onPasswordChange={setHttpPass}
+                hasPassword={httpHasPass}
+                passwordCleared={httpClearPass}
+                onClearPassword={() => setHttpClearPass(true)}
+              />
+              <ProxyFields
+                title="HTTPS 代理"
+                urlPlaceholder="http://host:3128"
+                url={httpsUrl}
+                onUrlChange={setHttpsUrl}
+                username={httpsUser}
+                onUsernameChange={setHttpsUser}
+                password={httpsPass}
+                onPasswordChange={setHttpsPass}
+                hasPassword={httpsHasPass}
+                passwordCleared={httpsClearPass}
+                onClearPassword={() => setHttpsClearPass(true)}
+              />
+              <ProxyFields
+                title="SOCKS5 代理（all，兜底全 scheme）"
+                urlPlaceholder="socks5://host:1080"
+                url={allUrl}
+                onUrlChange={setAllUrl}
+                username={allUser}
+                onUsernameChange={setAllUser}
+                password={allPass}
+                onPasswordChange={setAllPass}
+                hasPassword={allHasPass}
+                passwordCleared={allClearPass}
+                onClearPassword={() => setAllClearPass(true)}
+              />
+              <TextInput
+                label="直连绕过（no_proxy）"
+                placeholder="localhost,127.0.0.1,.internal"
+                value={noProxy}
+                onChange={(e) => setNoProxy(e.currentTarget.value)}
+              />
+            </Stack>
+          </Card>
+        </Tabs.Panel>
 
-            {/* 高级设置折叠区（FR-103）：低频项默认收起，点开才显示编辑 */}
-            <Box>
-              <Button
-                variant="subtle"
-                size="xs"
-                px={0}
-                leftSection={
-                  advancedOpened ? <IconChevronDown size={16} /> : <IconChevronRight size={16} />
-                }
-                onClick={advancedToggle.toggle}
-                aria-expanded={advancedOpened}
-              >
-                高级设置（仓库源 / API 基址 / 重启模式 / 访问令牌）
-              </Button>
-              <Collapse in={advancedOpened}>
-                <Stack gap="sm" mt="sm">
-                  <TextInput
-                    label="仓库源（owner/repo）"
-                    placeholder="wcpe/JianArtifact"
-                    value={repo}
-                    onChange={(e) => setRepo(e.currentTarget.value)}
-                  />
-                  <TextInput
-                    label="API 基址"
-                    placeholder="https://api.github.com"
-                    value={apiBaseUrl}
-                    onChange={(e) => setApiBaseUrl(e.currentTarget.value)}
-                  />
-                  <Select
-                    label="重启模式"
-                    data={[
-                      { value: 'self', label: 'self（自拉起新进程）' },
-                      { value: 'exit', label: 'exit（交外部进程管理器重启）' },
-                    ]}
-                    value={restartMode}
-                    onChange={(v) => setRestartMode(v ?? 'self')}
-                    allowDeselect={false}
-                  />
-                  <PasswordInput
-                    label="访问令牌（私有仓库可选）"
-                    description={
-                      hasToken
-                        ? '已配置令牌（不回显）。留空保留现有，填新值则替换。'
-                        : '未配置。留空表示不设置，填值则设置。'
-                    }
-                    placeholder={hasToken ? '保留现有令牌' : '可选'}
-                    value={tokenInput}
-                    onChange={(e) => setTokenInput(e.currentTarget.value)}
-                  />
-                </Stack>
-              </Collapse>
-            </Box>
-          </Stack>
-        </Card>
-
-        {/* —— 更新检查 / 应用 —— */}
-        <Card withBorder padding={density.cardPadding} radius="md">
-          <Title order={4}>检查与应用更新</Title>
-          <Divider my="sm" />
-
-          {!settings.update.enabled && (
-            <Alert
-              icon={<IconInfoCircle size={16} />}
-              color="gray"
-              variant="light"
-              title="在线更新未启用"
-            >
-              在线更新出站开关当前关闭。请在上方启用并保存后，再检查 / 应用更新。
-            </Alert>
-          )}
-
-          {restarting ? (
-            <Alert
-              icon={<IconInfoCircle size={16} />}
-              color="blue"
-              variant="light"
-              title="已触发升级"
-            >
-              服务正在重启…当前连接将断开，请稍候片刻后手动刷新页面。
-            </Alert>
-          ) : (
-            <Stack gap="sm">
-              <Group>
+        {/* —— 在线更新面板：一张「应用更新」卡片（FR-103） —— */}
+        <Tabs.Panel value="update">
+          <Card withBorder padding={density.cardPadding} radius="md">
+            {/* 卡片头：左标题，右侧通道切换（正式版 / 测试版）+ 检查更新 */}
+            <Group justify="space-between" align="flex-start" mb="sm" wrap="nowrap">
+              <Box>
+                <Title order={4}>应用更新</Title>
+                <Text size="sm" c="dimmed">
+                  管理员手动触发的自更新，配置即时生效、无须重启。
+                </Text>
+              </Box>
+              <Group gap="xs" wrap="nowrap">
+                <SegmentedControl
+                  size="xs"
+                  value={channel}
+                  onChange={setChannel}
+                  data={[
+                    { value: 'stable', label: '正式版' },
+                    { value: 'prerelease', label: '测试版' },
+                  ]}
+                />
                 <Button
+                  size="xs"
+                  variant="light"
                   leftSection={<IconRefresh size={16} />}
                   onClick={handleCheck}
                   loading={checking}
@@ -506,25 +436,115 @@ export function SettingsPage() {
                 >
                   检查更新
                 </Button>
-                {check?.update_available && (
+              </Group>
+            </Group>
+
+            <Stack gap="sm">
+              {/* 启用在线更新（出站开关）：高频项留卡内可见处 */}
+              <Switch
+                label="启用在线更新（出站开关）"
+                checked={updateEnabled}
+                onChange={(e) => setUpdateEnabled(e.currentTarget.checked)}
+              />
+
+              {/* 测试版（prerelease）通道提示：滚动开发预览，可能不稳定 */}
+              {channel === 'prerelease' && (
+                <Alert
+                  icon={<IconInfoCircle size={16} />}
+                  color="yellow"
+                  variant="light"
+                  title="测试版通道"
+                >
+                  滚动开发预览，由 main 最新构建，可能不稳定。仅用于尝鲜 /
+                  灰度，生产环境建议用正式版。
+                </Alert>
+              )}
+
+              {/* 版本对比 + 徽标：当前 ↔ 最新（检查后），预发布徽标随通道显隐 */}
+              <Card withBorder padding="sm" radius="sm" bg="var(--mantine-color-gray-0)">
+                <Group gap="xs">
+                  <Text size="sm">当前版本</Text>
+                  <Badge variant="light">
+                    {check?.current_version ?? settings.current_version}
+                  </Badge>
+                  {check && (
+                    <>
+                      <Text size="sm">→ 最新版本</Text>
+                      <Code>{check.latest_version}</Code>
+                      {check.update_available ? (
+                        <Badge color="orange">有可用更新</Badge>
+                      ) : (
+                        <Badge color="green">已是最新</Badge>
+                      )}
+                    </>
+                  )}
+                  {channel === 'prerelease' && (
+                    <Badge color="yellow" variant="light">
+                      预发布
+                    </Badge>
+                  )}
+                </Group>
+                {/* 检查到的 release 发布说明（notes 即 release body），无说明优雅留空 */}
+                {check?.notes && (
+                  <>
+                    <Text size="xs" c="dimmed" fw={600} mt="sm">
+                      发布说明
+                    </Text>
+                    <Text size="sm" c="dimmed" mt={4} style={{ whiteSpace: 'pre-wrap' }}>
+                      {check.notes}
+                    </Text>
+                  </>
+                )}
+              </Card>
+
+              {!settings.update.enabled && (
+                <Alert
+                  icon={<IconInfoCircle size={16} />}
+                  color="gray"
+                  variant="light"
+                  title="在线更新未启用"
+                >
+                  在线更新出站开关当前关闭。请启用并保存后，再检查 / 应用更新。
+                </Alert>
+              )}
+
+              {checkError && <ErrorAlert message={checkError} />}
+              {applyError && <ErrorAlert message={applyError} />}
+              {rollbackError && <ErrorAlert message={rollbackError} />}
+
+              {restarting && (
+                <Alert
+                  icon={<IconInfoCircle size={16} />}
+                  color="blue"
+                  variant="light"
+                  title="已触发升级"
+                >
+                  服务正在重启…当前连接将断开，请稍候片刻后手动刷新页面。
+                </Alert>
+              )}
+
+              {!restarting && (
+                <Group>
+                  {/* 立即更新并重启：有可用更新时高亮可点；否则禁用（无更新无可应用对象） */}
                   <Button
                     color="orange"
                     leftSection={<IconArrowUp size={16} />}
                     onClick={confirmModal.open}
+                    disabled={!check?.update_available}
                   >
-                    升级到 v{check.latest_version}
+                    立即更新并重启
                   </Button>
-                )}
-                {/* 回滚到上一版本（FR-104）：无备份时禁用；回滚是本地操作、不依赖在线更新开关 */}
-                <Button
-                  variant="default"
-                  leftSection={<IconArrowBackUp size={16} />}
-                  onClick={rollbackConfirmModal.open}
-                  disabled={!settings.update.rollback_available}
-                >
-                  回滚到上一版本
-                </Button>
-              </Group>
+                  {/* 回滚到上一版（FR-104）：无备份时禁用；回滚是本地操作、不依赖在线更新开关 */}
+                  <Button
+                    variant="default"
+                    leftSection={<IconArrowBackUp size={16} />}
+                    onClick={rollbackConfirmModal.open}
+                    disabled={!settings.update.rollback_available}
+                  >
+                    回滚到上一版
+                  </Button>
+                </Group>
+              )}
 
               {!settings.update.rollback_available && (
                 <Text size="xs" c="dimmed">
@@ -532,58 +552,65 @@ export function SettingsPage() {
                 </Text>
               )}
 
-              {checkError && <ErrorAlert message={checkError} />}
-              {applyError && <ErrorAlert message={applyError} />}
-              {rollbackError && <ErrorAlert message={rollbackError} />}
-
-              {check && (
-                <Card withBorder padding="md" radius="sm" bg="var(--mantine-color-gray-0)">
-                  <Group gap="xs">
-                    <Text size="sm">当前版本</Text>
-                    <Code>{check.current_version}</Code>
-                    <Text size="sm">最新版本</Text>
-                    <Code>{check.latest_version}</Code>
-                    {check.update_available ? (
-                      <Badge color="orange">有可用更新</Badge>
-                    ) : (
-                      <Badge color="green">已是最新</Badge>
-                    )}
-                  </Group>
-                  {/* FR-103：展示拉取到的 release 发布说明（notes 即 release body），无说明优雅留空 */}
-                  {check.notes && (
-                    <>
-                      <Text size="xs" c="dimmed" fw={600} mt="sm">
-                        发布说明
-                      </Text>
-                      <Text size="sm" c="dimmed" mt={4} style={{ whiteSpace: 'pre-wrap' }}>
-                        {check.notes}
-                      </Text>
-                    </>
-                  )}
-                </Card>
-              )}
+              {/* 高级设置折叠区（FR-103）：低频项默认收起，点开才显示编辑 */}
+              <Box>
+                <Button
+                  variant="subtle"
+                  size="xs"
+                  px={0}
+                  leftSection={
+                    advancedOpened ? <IconChevronDown size={16} /> : <IconChevronRight size={16} />
+                  }
+                  onClick={advancedToggle.toggle}
+                  aria-expanded={advancedOpened}
+                >
+                  高级设置（仓库源 / API 基址 / 重启模式 / 访问令牌）
+                </Button>
+                <Collapse in={advancedOpened}>
+                  <Stack gap="sm" mt="sm">
+                    <TextInput
+                      label="仓库源（owner/repo）"
+                      placeholder="wcpe/JianArtifact"
+                      value={repo}
+                      onChange={(e) => setRepo(e.currentTarget.value)}
+                    />
+                    <TextInput
+                      label="API 基址"
+                      placeholder="https://api.github.com"
+                      value={apiBaseUrl}
+                      onChange={(e) => setApiBaseUrl(e.currentTarget.value)}
+                    />
+                    <Select
+                      label="重启模式"
+                      data={[
+                        { value: 'self', label: 'self（自拉起新进程）' },
+                        { value: 'exit', label: 'exit（交外部进程管理器重启）' },
+                      ]}
+                      value={restartMode}
+                      onChange={(v) => setRestartMode(v ?? 'self')}
+                      allowDeselect={false}
+                    />
+                    <PasswordInput
+                      label="访问令牌（私有仓库可选）"
+                      description={
+                        hasToken
+                          ? '已配置令牌（不回显）。留空保留现有，填新值则替换。'
+                          : '未配置。留空表示不设置，填值则设置。'
+                      }
+                      placeholder={hasToken ? '保留现有令牌' : '可选'}
+                      value={tokenInput}
+                      onChange={(e) => setTokenInput(e.currentTarget.value)}
+                    />
+                  </Stack>
+                </Collapse>
+              </Box>
             </Stack>
-          )}
-        </Card>
-
-        {/* —— 关于·版本 —— */}
-        <Card withBorder padding={density.cardPadding} radius="md">
-          <Title order={4}>关于·版本</Title>
-          <Stack gap="xs" mt="sm">
-            <Group gap="xs">
-              <Text size="sm">当前版本</Text>
-              <Badge variant="light">{settings.current_version}</Badge>
-            </Group>
-            <Text size="sm" c="dimmed">
-              网络代理与在线更新配置，保存后运行时即时生效、无须重启。代理凭据与访问令牌只入内存、不回显、不写回配置文件，重启回落
-              config.toml / 环境变量。
-            </Text>
-          </Stack>
-        </Card>
-      </Stack>
+          </Card>
+        </Tabs.Panel>
+      </Tabs>
 
       {/* —— 保存（网络代理 + 在线更新共用一次 PATCH，沿用 FR-88 既有逻辑）——
-          固定为 sticky 底部动作条：始终贴在滚动视口底部、不随内容 / 窗口缩放漂移；
+          固定为 sticky 底部动作条：始终贴在滚动视口底部、不随内容 / 窗口缩放 / 切 tab 漂移；
           负的左右 / 下外边距抵消 AppShell.Main 的内边距，使其横向铺满、紧贴底缘；
           顶部描边 + 背景 + 内边距与内容区分隔，避免遮挡正文。仅改定位呈现，保存逻辑不变。 */}
       <Box

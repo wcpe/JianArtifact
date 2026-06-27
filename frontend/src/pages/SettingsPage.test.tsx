@@ -1,7 +1,7 @@
-// 设置页组件测试（FR-87 只读 + FR-88 可编辑热替换 + FR-103 单页堆叠重排）：
+// 设置页组件测试（FR-87 只读 + FR-88 可编辑热替换 + FR-103 二级导航重设计）：
 // 加载填充脱敏配置到表单、保存调 PATCH 即时生效、检查更新展示版本对比 + release 说明、
-// 有更新触发升级确认流、enabled=false 禁用升级、各错误码（409/502/422）友好提示；
-// 并校验单页纵向堆叠（去 tab）三块同屏、在线更新高级项默认折叠且可展开。
+// 有更新 / 预发布 / 回滚各态、enabled=false 禁用升级、各错误码（400/409/502/422）友好提示；
+// 并校验左侧二级导航（网络代理 / 在线更新两 tab）+ 在线更新「应用更新」卡片各态 + 高级项默认折叠可展开。
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
@@ -18,6 +18,11 @@ function renderPage() {
       <SettingsPage />
     </MantineProvider>,
   );
+}
+
+/** 切到「在线更新」二级 tab（默认在「网络代理」tab）。 */
+function 切到在线更新() {
+  fireEvent.click(screen.getByRole('tab', { name: '在线更新' }));
 }
 
 /** 一份启用在线更新、含脱敏代理的设置样例。 */
@@ -68,14 +73,13 @@ describe('SettingsPage', () => {
     vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
     renderPage();
 
-    await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
     // 代理 URL 脱敏后填入输入框（不含凭据）
     expect(screen.getByDisplayValue('http://proxy.internal:8080')).toBeInTheDocument();
     expect(screen.getByDisplayValue('https://proxy.internal:8443')).toBeInTheDocument();
     expect(screen.getByDisplayValue('localhost,127.0.0.1')).toBeInTheDocument();
-    // 在线更新区：仓库源填入、当前版本展示
+    // 在线更新区：仓库源填入（高级项，DOM 中即可）
     expect(screen.getByDisplayValue('wcpe/JianArtifact')).toBeInTheDocument();
-    expect(screen.getByText('0.3.0')).toBeInTheDocument();
     // 令牌已配置：description 提示不回显本体
     expect(screen.getByText(/已配置令牌（不回显）/)).toBeInTheDocument();
   });
@@ -105,12 +109,14 @@ describe('SettingsPage', () => {
     );
     renderPage();
 
-    await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
-    // 填入新 HTTP 代理 URL（三个代理各有一个「URL」框，HTTP 为第一个）并启用在线更新
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
+    // 填入新 HTTP 代理 URL（三个代理各有一个「URL」框，HTTP 为第一个）
     const urlInputs = screen.getAllByLabelText('URL');
     fireEvent.change(urlInputs[0], {
       target: { value: 'http://new-proxy.internal:3128' },
     });
+    // 切到在线更新 tab 启用开关
+    切到在线更新();
     fireEvent.click(screen.getByLabelText('启用在线更新（出站开关）'));
     fireEvent.click(screen.getByText('保存'));
 
@@ -132,7 +138,10 @@ describe('SettingsPage', () => {
     const update = vi.spyOn(api, 'updateSettings').mockResolvedValue(未启用样例);
     renderPage();
 
-    await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
+    切到在线更新();
+    // 令牌在「高级设置」折叠区内，先展开
+    fireEvent.click(screen.getByRole('button', { name: /高级设置/ }));
     fireEvent.change(screen.getByLabelText('访问令牌（私有仓库可选）'), {
       target: { value: 'ghp_newtoken' },
     });
@@ -142,31 +151,32 @@ describe('SettingsPage', () => {
     expect(update.mock.calls[0][0].update.token).toBe('ghp_newtoken');
   });
 
-  it('选择 prerelease 通道后保存，PATCH 载荷带 channel=prerelease', async () => {
+  it('切「测试版」通道后保存，PATCH 载荷带 channel=prerelease', async () => {
     vi.spyOn(api, 'getSettings').mockResolvedValue(未启用样例);
     const update = vi.spyOn(api, 'updateSettings').mockResolvedValue(未启用样例);
     renderPage();
 
-    await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
-    // 打开「更新通道」下拉并选 prerelease（默认 stable，点输入框展开选项）
-    fireEvent.click(screen.getByDisplayValue('stable（仅稳定版）'));
-    fireEvent.click(await screen.findByText('prerelease（含预发布版）'));
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
+    切到在线更新();
+    // 通道切换为 segmented：点「测试版」
+    fireEvent.click(screen.getByText('测试版'));
     fireEvent.click(screen.getByText('保存'));
 
     await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
     expect(update.mock.calls[0][0].update.channel).toBe('prerelease');
   });
 
-  it('加载后将后端返回的 channel 填入更新通道下拉', async () => {
+  it('加载后将后端返回的 channel 填入通道切换（测试版选中）', async () => {
     vi.spyOn(api, 'getSettings').mockResolvedValue({
       ...启用样例,
       update: { ...启用样例.update, channel: 'prerelease' },
     });
     renderPage();
 
-    await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
-    // 通道下拉回显 prerelease（Select 输入框展示选中项 label）
-    expect(screen.getByDisplayValue('prerelease（含预发布版）')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
+    切到在线更新();
+    // prerelease 通道：预发布徽标在场（说明 channel 已回显为 prerelease）
+    expect(screen.getByText('预发布')).toBeInTheDocument();
   });
 
   it('保存返回 400（非法配置）时展示友好提示', async () => {
@@ -176,14 +186,14 @@ describe('SettingsPage', () => {
     );
     renderPage();
 
-    await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
     fireEvent.click(screen.getByText('保存'));
     await waitFor(() =>
       expect(screen.getByText('网络代理配置非法：出站 HTTP 代理配置无效')).toBeInTheDocument(),
     );
   });
 
-  it('点检查更新展示版本对比；有更新时出现升级按钮', async () => {
+  it('点检查更新展示版本对比；有更新时出现立即更新按钮', async () => {
     vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
     const checkResult: UpdateCheck = {
       current_version: '0.3.0',
@@ -195,16 +205,17 @@ describe('SettingsPage', () => {
     vi.spyOn(api, 'checkUpdate').mockResolvedValue(checkResult);
     renderPage();
 
-    await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
+    切到在线更新();
     fireEvent.click(screen.getByText('检查更新'));
 
     await waitFor(() => expect(screen.getByText('有可用更新')).toBeInTheDocument());
     expect(screen.getByText('0.4.0')).toBeInTheDocument();
     expect(screen.getByText('修复若干问题')).toBeInTheDocument();
-    expect(screen.getByText('升级到 v0.4.0')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /立即更新并重启/ })).toBeInTheDocument();
   });
 
-  it('有更新时点升级走二次确认弹窗并调 apply，成功后进入正在重启态', async () => {
+  it('有更新时点立即更新走二次确认弹窗并调 apply，成功后进入正在重启态', async () => {
     vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
     vi.spyOn(api, 'checkUpdate').mockResolvedValue({
       current_version: '0.3.0',
@@ -218,11 +229,14 @@ describe('SettingsPage', () => {
       .mockResolvedValue({ status: '已更新，正在重启', new_version: '0.4.0' });
     renderPage();
 
-    await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
+    切到在线更新();
     fireEvent.click(screen.getByText('检查更新'));
-    await waitFor(() => expect(screen.getByText('升级到 v0.4.0')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /立即更新并重启/ })).toBeInTheDocument(),
+    );
 
-    fireEvent.click(screen.getByText('升级到 v0.4.0'));
+    fireEvent.click(screen.getByRole('button', { name: /立即更新并重启/ }));
     await waitFor(() => expect(screen.getByText('确认升级到新版本')).toBeInTheDocument());
     fireEvent.click(screen.getByText('确认升级'));
 
@@ -234,6 +248,8 @@ describe('SettingsPage', () => {
     vi.spyOn(api, 'getSettings').mockResolvedValue(未启用样例);
     renderPage();
 
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
+    切到在线更新();
     await waitFor(() => expect(screen.getByText('在线更新未启用')).toBeInTheDocument());
     // 检查更新按钮禁用
     const btn = screen.getByText('检查更新').closest('button');
@@ -245,7 +261,8 @@ describe('SettingsPage', () => {
     vi.spyOn(api, 'checkUpdate').mockRejectedValue(new ApiError(409, 'conflict', '在线更新未启用'));
     renderPage();
 
-    await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
+    切到在线更新();
     fireEvent.click(screen.getByText('检查更新'));
     await waitFor(() => expect(screen.getByText('在线更新未启用')).toBeInTheDocument());
   });
@@ -257,7 +274,8 @@ describe('SettingsPage', () => {
     );
     renderPage();
 
-    await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
+    切到在线更新();
     fireEvent.click(screen.getByText('检查更新'));
     await waitFor(() => expect(screen.getByText('上游拉取失败')).toBeInTheDocument());
   });
@@ -276,10 +294,13 @@ describe('SettingsPage', () => {
     );
     renderPage();
 
-    await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
+    切到在线更新();
     fireEvent.click(screen.getByText('检查更新'));
-    await waitFor(() => expect(screen.getByText('升级到 v0.4.0')).toBeInTheDocument());
-    fireEvent.click(screen.getByText('升级到 v0.4.0'));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /立即更新并重启/ })).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole('button', { name: /立即更新并重启/ }));
     await waitFor(() => expect(screen.getByText('确认升级到新版本')).toBeInTheDocument());
     fireEvent.click(screen.getByText('确认升级'));
 
@@ -289,70 +310,78 @@ describe('SettingsPage', () => {
     expect(screen.queryByText('已触发升级')).not.toBeInTheDocument();
   });
 
-  it('FR-103：单页纵向堆叠去 tab，网络代理 / 在线更新 / 关于·版本 三块同屏可见', async () => {
+  it('FR-103：左侧二级导航有「网络代理」「在线更新」两 tab，默认网络代理面板可见', async () => {
     vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
     renderPage();
 
-    await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
-    // 去 tab：页面不再有任何 tab 角色元素
-    expect(screen.queryAllByRole('tab')).toHaveLength(0);
-    // 三块标题同屏可见（无须切换）：网络代理（代理段标题）、在线更新、关于·版本
-    expect(screen.getByText('网络代理')).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: '在线更新' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: '关于·版本' })).toBeInTheDocument();
-    // 代理表单与在线更新「检查与应用更新」同屏（不靠切 tab）
-    expect(screen.getByDisplayValue('http://proxy.internal:8080')).toBeInTheDocument();
-    expect(screen.getByText('检查与应用更新')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
+    // 两个二级导航 tab 在场
+    expect(screen.getByRole('tab', { name: '网络代理' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: '在线更新' })).toBeInTheDocument();
+    // 默认网络代理面板可见：代理 URL 输入框可见
+    expect(screen.getByDisplayValue('http://proxy.internal:8080')).toBeVisible();
+    // 在线更新面板默认未激活（Mantine Tabs 隐藏非激活面板）：应用更新卡片标题不可见
+    expect(screen.getByText('应用更新')).not.toBeVisible();
   });
 
-  it('FR-103：关于·版本区直接展示当前版本与生效说明（无须切换）', async () => {
+  it('FR-103：切到「在线更新」tab 显应用更新卡片（标题 + 通道切换 + 检查更新）', async () => {
     vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
     renderPage();
 
-    await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
-    // 关于区展示当前版本与「无须重启」生效说明（单页同屏，无须点击）
-    expect(screen.getByText(/运行时即时生效、无须重启/)).toBeInTheDocument();
-    expect(screen.getByText('0.3.0')).toBeInTheDocument();
-  });
-
-  it('FR-103：在线更新默认仅显「更新通道」+ 检查更新，高级项收进折叠区', async () => {
-    vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
-    renderPage();
-
-    await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
-    // 默认可见：启用开关、更新通道、检查更新按钮
-    expect(screen.getByLabelText('启用在线更新（出站开关）')).toBeVisible();
-    expect(screen.getByDisplayValue('stable（仅稳定版）')).toBeVisible();
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
+    切到在线更新();
+    // 应用更新卡片标题、通道切换（正式版 / 测试版）、检查更新按钮可见
+    await waitFor(() => expect(screen.getByRole('heading', { name: '应用更新' })).toBeVisible());
+    expect(screen.getByText('正式版')).toBeVisible();
+    expect(screen.getByText('测试版')).toBeVisible();
     expect(screen.getByRole('button', { name: '检查更新' })).toBeVisible();
-    // 高级设置切换按钮在场
-    expect(screen.getByRole('button', { name: /高级设置/ })).toBeInTheDocument();
-    // 高级项默认折叠不可见：仓库源 / API 基址 / 重启模式 / 访问令牌
+    expect(screen.getByLabelText('启用在线更新（出站开关）')).toBeVisible();
+  });
+
+  it('FR-103：通道切「测试版」显「预发布」徽标与预发布提示框', async () => {
+    vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
+    切到在线更新();
+    // 默认 stable：无预发布徽标 / 提示
+    expect(screen.queryByText('预发布')).not.toBeInTheDocument();
+    // 切测试版
+    fireEvent.click(screen.getByText('测试版'));
+    await waitFor(() => expect(screen.getByText('预发布')).toBeInTheDocument());
+    expect(screen.getByText(/滚动开发预览/)).toBeInTheDocument();
+  });
+
+  it('FR-103：在线更新高级项默认折叠不可见，点「高级设置」展开后可见', async () => {
+    vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
+    切到在线更新();
+    // 高级项默认折叠不可见：仓库源 / 访问令牌
     expect(screen.queryByDisplayValue('wcpe/JianArtifact')).not.toBeVisible();
     expect(screen.queryByLabelText('访问令牌（私有仓库可选）')).not.toBeVisible();
-  });
-
-  it('FR-103：点「高级设置」展开后，仓库源 / API 基址 / 重启模式 / 访问令牌可见', async () => {
-    vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
-    renderPage();
-
-    await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
+    // 点高级设置展开
     fireEvent.click(screen.getByRole('button', { name: /高级设置/ }));
-
     await waitFor(() => expect(screen.getByDisplayValue('wcpe/JianArtifact')).toBeVisible());
     expect(screen.getByDisplayValue('https://api.github.com')).toBeVisible();
     expect(screen.getByDisplayValue('self（自拉起新进程）')).toBeVisible();
     expect(screen.getByLabelText('访问令牌（私有仓库可选）')).toBeVisible();
   });
 
-  it('保存动作条为 sticky 底部固定条，保存按钮在其内', async () => {
+  it('FR-103：切 tab 时底部保存条始终在场且 sticky 贴底（位置稳定）', async () => {
     vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
     renderPage();
 
-    await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
-    // 保存按钮所在的固定条容器带 sticky 定位、贴底（bottom:0），不随内容滚动漂移
-    const saveBar = screen.getByTestId('settings-save-bar');
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
+    // 网络代理 tab 下保存条在场且 sticky 贴底
+    let saveBar = screen.getByTestId('settings-save-bar');
     expect(saveBar).toHaveStyle({ position: 'sticky', bottom: '0' });
-    // 保存按钮落在该固定条内
+    expect(saveBar).toContainElement(screen.getByText('保存').closest('button'));
+    // 切到在线更新 tab 后保存条仍在场、仍 sticky 贴底
+    切到在线更新();
+    saveBar = screen.getByTestId('settings-save-bar');
+    expect(saveBar).toHaveStyle({ position: 'sticky', bottom: '0' });
     expect(saveBar).toContainElement(screen.getByText('保存').closest('button'));
   });
 
@@ -360,7 +389,7 @@ describe('SettingsPage', () => {
     vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
     renderPage();
 
-    await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
     // 三组标题均在场
     expect(screen.getByText('HTTP 代理')).toBeInTheDocument();
     expect(screen.getByText('HTTPS 代理')).toBeInTheDocument();
@@ -375,7 +404,7 @@ describe('SettingsPage', () => {
     vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
     renderPage();
 
-    await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
     // HTTP 代理 has_password=true → 徽标在场
     expect(screen.getByText('密码已配置')).toBeInTheDocument();
   });
@@ -385,7 +414,7 @@ describe('SettingsPage', () => {
     const update = vi.spyOn(api, 'updateSettings').mockResolvedValue(启用样例);
     renderPage();
 
-    await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
     fireEvent.click(screen.getByText('保存'));
 
     await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
@@ -402,7 +431,7 @@ describe('SettingsPage', () => {
     const update = vi.spyOn(api, 'updateSettings').mockResolvedValue(启用样例);
     renderPage();
 
-    await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
     // 给 HTTP 代理（第一个密码框）填入新密码
     const passInputs = screen.getAllByLabelText('密码');
     fireEvent.change(passInputs[0], { target: { value: 's3cret' } });
@@ -421,7 +450,7 @@ describe('SettingsPage', () => {
     const update = vi.spyOn(api, 'updateSettings').mockResolvedValue(未启用样例);
     renderPage();
 
-    await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
     // 第三个 URL 框为 SOCKS5(all)
     const urlInputs = screen.getAllByLabelText('URL');
     fireEvent.change(urlInputs[2], { target: { value: 'socks5://socks.internal:1080' } });
@@ -436,7 +465,7 @@ describe('SettingsPage', () => {
     const update = vi.spyOn(api, 'updateSettings').mockResolvedValue(启用样例);
     renderPage();
 
-    await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
     // HTTP 代理 has_password=true → 有「清除密码」按钮
     fireEvent.click(screen.getByText('清除密码'));
     fireEvent.click(screen.getByText('保存'));
@@ -452,11 +481,12 @@ describe('SettingsPage', () => {
       .mockResolvedValue({ status: '已回滚，正在重启' });
     renderPage();
 
-    await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
-    const btn = screen.getByText('回滚到上一版本').closest('button');
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
+    切到在线更新();
+    const btn = screen.getByText('回滚到上一版').closest('button');
     expect(btn).not.toBeDisabled();
 
-    fireEvent.click(screen.getByText('回滚到上一版本'));
+    fireEvent.click(screen.getByText('回滚到上一版'));
     await waitFor(() => expect(screen.getByText('确认回滚到上一版本')).toBeInTheDocument());
     fireEvent.click(screen.getByText('确认回滚'));
 
@@ -471,8 +501,9 @@ describe('SettingsPage', () => {
     });
     renderPage();
 
-    await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
-    const btn = screen.getByText('回滚到上一版本').closest('button');
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
+    切到在线更新();
+    const btn = screen.getByText('回滚到上一版').closest('button');
     expect(btn).toBeDisabled();
     expect(screen.getByText(/暂无可回滚的备份版本/)).toBeInTheDocument();
   });
@@ -484,8 +515,9 @@ describe('SettingsPage', () => {
     );
     renderPage();
 
-    await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
-    fireEvent.click(screen.getByText('回滚到上一版本'));
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
+    切到在线更新();
+    fireEvent.click(screen.getByText('回滚到上一版'));
     await waitFor(() => expect(screen.getByText('确认回滚到上一版本')).toBeInTheDocument());
     fireEvent.click(screen.getByText('确认回滚'));
 
