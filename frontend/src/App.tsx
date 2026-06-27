@@ -23,6 +23,7 @@ import { UploadPage } from './pages/UploadPage';
 import { MonitorPage } from './pages/MonitorPage';
 import { MigrationPage } from './pages/MigrationPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { LicensesPage } from './pages/LicensesPage';
 
 /** 登录守卫：未登录跳登录页（带回跳路径）；恢复会话期间显示加载态。 */
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -72,7 +73,7 @@ function HomeRoute() {
  *
  * 外壳 `AppLayout` 挂在 `/` 且**不包 RequireAuth**——匿名访客也能进入外壳浏览公开内容；
  * 由 `AppLayout` 自身据登录态渲染匿名 / 登录页眉与导航。各子路由按层加守卫：
- * - 公开层（匿名可达，只读公开内容）：`/`（落地分流）、`/repositories`、`/repository`、`/search`、`/artifact`。
+ * - 公开层（匿名可达，只读公开内容）：`/`（落地分流）、`/repositories`、`/repository`、`/search`、`/artifact`、`/licenses`。
  * - 需登录层（user+）：`/tokens`、`/upload`——`RequireAuth`。
  * - 需管理员层（admin）：`/users`、`/groups`、`/protection`、`/monitor`、`/migration`、`/settings`——`RequireAuth` + `RequireAdmin`。
  */
@@ -87,6 +88,9 @@ export function App() {
         <Route path="repository" element={<RepositoryDetailPage />} />
         <Route path="artifact" element={<ArtifactDetailPage />} />
         <Route path="search" element={<SearchPage />} />
+        {/* 开源许可页（FR-102）：公开、匿名可直达（导航入口属 FR-101，本 FR 仅保证路由可达） */}
+        <Route path="licenses" element={<LicensesPage />} />
+
         {/* 需登录层：匿名跳登录（带回跳） */}
         <Route
           path="tokens"

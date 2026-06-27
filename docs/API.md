@@ -223,6 +223,13 @@
 - **响应**：统一分页结构 `{ items, total, offset, limit, has_more }`，每项含所属仓库（`repo_id`、`repo_name`、`format`）、`path`、`sha256`、`size`、`created_at`。**结果仅含调用方有读权限的仓库制品**（匿名仅含 public 仓库）；`total` 与 `items` 均按读权限过滤后计数，不泄露无权私有仓库内容。
 - **错误**：`400` 查询参数不合法（如 `q` 为空）。
 
+### 查询开源许可清单（P2，公开 / 匿名可读，FR-102）
+
+- **方法 / 路径**：`GET /api/v1/licenses`
+- **请求**：无查询参数。**公开端点，匿名可读**（不经鉴权门）。
+- **响应**：开源许可清单对象 `{ generated, entries, summary }`——`generated` 为是否已由构建期脚本生成（`false` 表示本地未生成 / 占位，`entries` 为空，客户端显空态）；`entries` 为逐条依赖归因数组，每项 `{ name, version, license, author, kind, source }`，`kind` 取 `runtime` | `dev`（运行时 / 开发依赖）、`source` 取 `rust` | `frontend`（Rust crate / 前端 npm）；`summary` 为 `{ total, runtime, dev, licenses }`（依赖总数 / 运行时数 / 开发数 / 许可证种类数）。清单由构建期 `cargo-about`（Rust）+ `pnpm licenses list`（前端）扫描生成并**嵌入二进制**，运行时只读、**纯本机内部、绝不外发、不向外部 phone-home**（ADR-0025，守 ADR-0009）。
+- **错误**：无（公开只读；本地未生成时仍返回 `200` + `generated=false` 空清单，不报错）。
+
 ### 查询审计日志（P2，仅 Admin）
 
 - **方法 / 路径**：`GET /api/v1/audit`

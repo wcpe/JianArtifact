@@ -40,6 +40,7 @@ mod format_routes;
 mod go_routes;
 mod groups;
 mod identity;
+mod licenses;
 mod metrics;
 mod migrate;
 mod migration_jobs;
@@ -404,6 +405,8 @@ pub fn build_router(state: AppState) -> Router {
             post(upload_routes::upload_artifact),
         )
         .route("/search", get(search::search))
+        // 开源许可清单（FR-102，ADR-0025）：公开、匿名可读，不经鉴权门
+        .route("/licenses", get(licenses::list_licenses))
         .route("/audit", get(audit::list_audit))
         .route("/analytics/usage", get(analytics::usage_analytics))
         .route("/monitor/host", get(monitor::monitor_host))

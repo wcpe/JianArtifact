@@ -651,3 +651,37 @@ export interface ApplyResponse {
   status: string;
   new_version: string;
 }
+
+// —— 开源许可（FR-102，公开） ——
+
+/** 依赖类别：运行时 / 开发。 */
+export type LicenseKind = 'runtime' | 'dev';
+
+/** 依赖来源生态：Rust crate / 前端 npm 包。 */
+export type LicenseSource = 'rust' | 'frontend';
+
+/** 单条依赖的许可归因（对齐后端 src/licenses DTO）。 */
+export interface LicenseEntry {
+  name: string;
+  version: string;
+  license: string;
+  author: string;
+  kind: LicenseKind;
+  source: LicenseSource;
+}
+
+/** 许可清单汇总（供统计卡）。 */
+export interface LicenseSummary {
+  total: number;
+  runtime: number;
+  dev: number;
+  licenses: number;
+}
+
+/** 开源许可清单（GET /api/v1/licenses，公开）。 */
+export interface LicenseManifest {
+  /** 是否已由构建期脚本生成；false 表示未生成，页面显空态。 */
+  generated: boolean;
+  entries: LicenseEntry[];
+  summary: LicenseSummary;
+}

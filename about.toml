@@ -1,0 +1,18 @@
+# cargo-about 配置：构建期扫描 Rust crates 许可（FR-102，ADR-0025）
+# accepted 列出可接受的许可证 SPDX 标识；用于 scripts/gen-licenses 生成开源许可清单。
+accepted = [
+    "Apache-2.0",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "CC0-1.0",
+    "OpenSSL",
+    "Unlicense",
+    "BSL-1.0",
+    "CDLA-Permissive-2.0",
+]

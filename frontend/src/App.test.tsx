@@ -79,6 +79,12 @@ describe('App 三层路由守卫（FR-95）', () => {
       limit: 20,
       has_more: false,
     });
+    // 开源许可页（FR-102）匿名可达，端点返回未生成空清单即可渲染
+    mockedApi.getLicenses.mockResolvedValue({
+      generated: false,
+      entries: [],
+      summary: { total: 0, runtime: 0, dev: 0, licenses: 0 },
+    });
   });
   afterEach(() => vi.clearAllMocks());
 
@@ -99,6 +105,12 @@ describe('App 三层路由守卫（FR-95）', () => {
     it('落地路由 / 重定向到公开浏览 /repositories', async () => {
       renderApp('/', 匿名上下文());
       expect(await screen.findByText('仓库管理')).toBeInTheDocument();
+    });
+
+    it('访问公开路由 /licenses：不跳登录，渲染开源许可页', async () => {
+      renderApp('/licenses', 匿名上下文());
+      expect(await screen.findByText('开源许可')).toBeInTheDocument();
+      expect(screen.queryByText('登录 JianArtifact')).not.toBeInTheDocument();
     });
 
     it('访问需登录路由 /tokens：重定向到登录页', async () => {

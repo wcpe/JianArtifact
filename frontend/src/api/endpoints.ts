@@ -16,6 +16,7 @@ import type {
   GroupMemberView,
   GroupView,
   HostMetrics,
+  LicenseManifest,
   LoginResponse,
   MigrationJobCreated,
   MigrationJobSummary,
@@ -389,6 +390,13 @@ export function listProtectionAlerts(
 /** 查询主机指标快照（按请求采样：CPU / 内存 / 磁盘 / uptime）。 */
 export function getHostMonitor(): Promise<HostMetrics> {
   return request<HostMetrics>('/monitor/host');
+}
+
+// —— 开源许可（FR-102，公开 / 匿名可读） ——
+
+/** 查询开源许可清单（公开，匿名亦可访问；本地未生成时返回 generated=false 空清单）。 */
+export function getLicenses(): Promise<LicenseManifest> {
+  return request<LicenseManifest>('/licenses');
 }
 
 // —— Nexus 迁移（仅管理员，FR-81；对接 ADR-0006 已有端点） ——

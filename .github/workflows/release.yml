@@ -114,6 +114,15 @@ jobs:
       - name: 安装前端依赖
         run: pnpm -C frontend install --frozen-lockfile
 
+      # 开源许可清单扫描工具（FR-102，ADR-0025）：构建期 CLI，非项目运行时依赖。
+      - name: 安装 cargo-about
+        run: cargo install cargo-about --locked --features cli
+
+      # 生成开源许可清单（Rust crates + 前端 npm，运行时 + 开发依赖）写入 src/licenses，
+      # 供后端 include_str! 编译期嵌入。须在编译二进制前跑（依赖已装 cargo-about 与前端 node_modules）。
+      - name: 生成开源许可清单
+        run: node scripts/gen-licenses.mjs
+
       # 先建前端，产出 frontend/dist 供 rust-embed 嵌入（构建顺序硬约束）。
       - name: 构建前端
         run: pnpm -C frontend build
