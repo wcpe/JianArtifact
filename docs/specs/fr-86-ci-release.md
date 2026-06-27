@@ -81,14 +81,18 @@ jianartifact-0.3.0-aarch64-apple-darwin.sha256
 push `master` 的 prerelease 版本串：
 
 ```
-{cargo版本}-dev.{run_number}+{shortsha}
+{cargo版本}-dev.{run_number}.{shortsha}
 ```
 
-- `{cargo版本}`：从 `Cargo.toml` 读出的 `version`（当前 `0.3.0`）。
+- `{cargo版本}`：从 `Cargo.toml` 读出的 `version`（当前 `0.4.0`）。
 - `{run_number}`：`github.run_number`，单调递增，区分同一基线版本的多次快照。
 - `{shortsha}`：`github.sha` 前 7 位，定位具体提交。
 
-示例：`0.3.0-dev.42+1a2b3c4`。该串符合 SemVer 预发布 + 构建元数据语法（`-dev.N` 预发布段排在正式版之前，`+sha` 为构建元数据）。prerelease 的 GitHub Release 用固定 tag `dev`（滚动覆盖），资产名内嵌上述完整版本串以便区分。
+示例：`0.4.0-dev.42.1a2b3c4`。该串符合 SemVer 预发布语法（`-dev.N.sha` 整体为点分预发布标识，排在正式版之前）。
+
+> **为何用 `.` 而非 `+` 连接 shortsha**：SemVer 允许 `+{sha}` 作为构建元数据，但 **GitHub 上传 Release 资产时会把资产名里的 `+`（及其它非 `[A-Za-z0-9._-]` 字符）改写成 `.`**——资产实际存为 `…dev.N.sha…`，而 FR-85 自更新按含 `+` 的版本串重构期望资产名，二者不一致致匹配不到、prerelease 拉不到。改用 `.` 连接，使资产名与 GitHub 存储一致、自更新可精确匹配。
+
+prerelease 的 GitHub Release 用固定 tag `dev`（滚动覆盖），资产名内嵌上述完整版本串以便区分；release 标题 `name` 也置为该完整版本串（tag 是固定 `dev`、非版本，FR-85 据 `name` 解析真实版本）。
 
 > 版本真源说明：二进制版本经 clap `version` 由 `CARGO_PKG_VERSION`（即 `Cargo.toml` 的 `version`）注入。流水线读取 `Cargo.toml` 的 `version` 作为 `{cargo版本}`，与二进制内注入值一致。
 

@@ -1,5 +1,5 @@
 # 发布工作流（FR-86）：
-# - push master ⇒ prerelease（开发版快照，滚动 tag `dev`，版本 {cargo版本}-dev.{run_number}+{shortsha}）
+# - push master ⇒ prerelease（开发版快照，滚动 tag `dev`，版本 {cargo版本}-dev.{run_number}.{shortsha}）
 # - push tag `v*` ⇒ 正式 Release（版本取 tag 去前导 v）
 # 三目标各用原生 runner 编译（免交叉编译），产出按命名契约重命名的二进制 + 每资产一份 .sha256。
 # 资产命名契约（FR-85 消费）：jianartifact-{version}-{target}{ext} 及其 .sha256
@@ -46,9 +46,12 @@ jobs:
             version="${tag#v}"
             prerelease="false"
           else
-            # 开发版快照：版本 {cargo版本}-dev.{run_number}+{shortsha}，滚动 tag dev，预发布。
+            # 开发版快照：版本 {cargo版本}-dev.{run_number}.{shortsha}，滚动 tag dev，预发布。
+            # 用 '.' 连接 shortsha（而非 '+' 构建元数据）：GitHub 上传 Release 资产时会把资产名里的
+            # '+' 改写成 '.'，导致自更新按含 '+' 的版本重构的期望资产名匹配不到。点分形态仍是合法的
+            # SemVer 预发布标识（dev.N.sha），资产名与 GitHub 存储一致，自更新可精确匹配。
             short_sha="${GITHUB_SHA:0:7}"
-            version="${cargo_version}-dev.${GITHUB_RUN_NUMBER}+${short_sha}"
+            version="${cargo_version}-dev.${GITHUB_RUN_NUMBER}.${short_sha}"
             tag="dev"
             prerelease="true"
           fi
