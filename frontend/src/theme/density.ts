@@ -16,6 +16,11 @@ export const density = {
   },
   /** 内容区主 padding：较默认 md 收紧为 sm，提升信息密度。 */
   mainPadding: 'sm' as MantineSpacing,
+  /**
+   * 内容区最大宽度（FR-92）：内容居中并限定最大宽度，使卡片 / 新内容出现时
+   * 不再把整体布局撑变形（用户反馈「出来个东西就变形」）。单位 px。
+   */
+  contentMaxWidth: 1280,
   /** 卡片内边距：由 lg 收紧为 md，卡片瘦身。 */
   cardPadding: 'md' as MantineSpacing,
   /** 栅格 / 堆叠间距：默认收紧为 sm，避免一味纵向铺开。 */

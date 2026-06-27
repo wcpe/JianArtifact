@@ -1,10 +1,13 @@
-// 控制台布局外壳：顶部栏 + 折叠图标导航条 + 内容区（FR-92）。
-// 导航默认窄（仅图标 + tooltip / aria-label），可点击展开为图标+文字；据角色显隐管理入口。
+// 控制台外壳（FR-92 重做）：左上 logo 区（SVG + 品牌 + 版本号，点 logo 切换导航展开/收起）
+// + 分段导航（浏览 / 管理 / 系统·监控）+ 左下 footer（开源许可 + 折叠按钮）+ 固定 max-width 内容区。
+// 收起态仅图标（Tooltip + aria-label 可达）、段间以分隔线代替段头；据角色显隐管理 / 系统入口。
 
 import {
   AppShell,
   Badge,
+  Box,
   Burger,
+  Divider,
   Group,
   NavLink,
   ScrollArea,
@@ -13,23 +16,22 @@ import {
   Button,
   Tooltip,
   TextInput,
+  UnstyledButton,
 } from '@mantine/core';
 import { useDisclosure, useDebouncedCallback } from '@mantine/hooks';
 import { useEffect, useState, type KeyboardEvent } from 'react';
 import {
-  IconDashboard,
-  IconDatabase,
+  IconLayoutDashboard,
+  IconPackage,
   IconSearch,
   IconKey,
   IconUsers,
-  IconUsersGroup,
-  IconShieldLock,
-  IconShield,
   IconUpload,
-  IconActivity,
-  IconChartBar,
-  IconHistory,
-  IconTransfer,
+  IconArrowsExchange,
+  IconChartDots,
+  IconClipboardText,
+  IconFileText,
+  IconShieldHalf,
   IconSettings,
   IconLogout,
   IconLogin,
@@ -43,6 +45,48 @@ import { useAuth } from '../auth/useAuth';
 import { density } from '../theme/density';
 import { checkUpdate, getHealth } from '../api/endpoints';
 
+/** 品牌紫（logo 主色）：集中一处常量，避免散落魔法值。 */
+const BRAND_PURPLE = '#7048e8';
+/** 品牌浅紫（立方体 / 包裹线稿描边）。 */
+const BRAND_PURPLE_LIGHT = '#d0bfff';
+
+/**
+ * 品牌 logo 矢量图（FR-92）：紫底圆角方块 + 浅紫立方体 / 包裹线稿，寓意「制品 / 打包」。
+ * viewBox 24×24，纯内联 SVG（无外部资源、无新增依赖）；尺寸由调用方控制。
+ */
+function BrandLogo({ size = 28 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden="true"
+      focusable="false"
+    >
+      {/* 紫底圆角方块 */}
+      <rect x="1.5" y="1.5" width="21" height="21" rx="5" fill={BRAND_PURPLE} />
+      {/* 浅紫立方体线稿：顶面菱形 + 三条竖棱（制品 / 包裹寓意） */}
+      <path
+        d="M12 5.5 L17.5 8.5 L12 11.5 L6.5 8.5 Z"
+        stroke={BRAND_PURPLE_LIGHT}
+        strokeWidth="1.4"
+        strokeLinejoin="round"
+        fill="none"
+      />
+      <path
+        d="M6.5 8.5 L6.5 15 L12 18 L17.5 15 L17.5 8.5"
+        stroke={BRAND_PURPLE_LIGHT}
+        strokeWidth="1.4"
+        strokeLinejoin="round"
+        fill="none"
+      />
+      <path d="M12 11.5 L12 18" stroke={BRAND_PURPLE_LIGHT} strokeWidth="1.4" />
+    </svg>
+  );
+}
+
 /** 导航项定义。 */
 interface NavItem {
   label: string;
@@ -52,6 +96,12 @@ interface NavItem {
   adminOnly?: boolean;
   /** 匿名访客可见（公开只读浏览入口，FR-95）。未标记的项匿名一律不可见。 */
   publicVisible?: boolean;
+}
+
+/** 导航分段：段标题 + 段内项；展开态显段头小灰字，收起态以分隔线代替。 */
+interface NavSection {
+  title: string;
+  items: NavItem[];
 }
 
 /**
@@ -66,38 +116,64 @@ function isNavActive(pathname: string, itemPath: string): boolean {
   return pathname === itemPath || pathname.startsWith(`${itemPath}/`);
 }
 
-const NAV_ITEMS: NavItem[] = [
-  { label: '仪表盘', path: '/', icon: <IconDashboard size={18} /> },
-  // 公开浏览入口：匿名访客亦可见（FR-95），用于只读浏览 / 搜索公开制品
+// 分段导航（FR-92 已确认设计）：
+// - 浏览：仪表盘 / 仓库 / 搜索（仓库、搜索匿名可见，FR-95）
+// - 管理：用户与组 / 访问令牌 / 上传 / Nexus 迁移
+// - 系统·监控：监控 / 审计日志 / 系统日志（FR-107 路由）/ 防护配置 / 设置
+// 「使用分析」入口已并入监控（FR-99）删除；「系统日志」为本次新增入口。
+const NAV_SECTIONS: NavSection[] = [
   {
-    label: '仓库管理',
-    path: '/repositories',
-    icon: <IconDatabase size={18} />,
-    publicVisible: true,
+    title: '浏览',
+    items: [
+      { label: '仪表盘', path: '/', icon: <IconLayoutDashboard size={18} /> },
+      {
+        label: '仓库',
+        path: '/repositories',
+        icon: <IconPackage size={18} />,
+        publicVisible: true,
+      },
+      { label: '搜索', path: '/search', icon: <IconSearch size={18} />, publicVisible: true },
+    ],
   },
-  { label: '制品搜索', path: '/search', icon: <IconSearch size={18} />, publicVisible: true },
-  { label: 'Token 管理', path: '/tokens', icon: <IconKey size={18} /> },
-  { label: '用户管理', path: '/users', icon: <IconUsers size={18} />, adminOnly: true },
-  { label: '用户组管理', path: '/groups', icon: <IconUsersGroup size={18} />, adminOnly: true },
-  { label: '防护配置', path: '/protection', icon: <IconShieldLock size={18} />, adminOnly: true },
-  { label: '制品上传', path: '/upload', icon: <IconUpload size={18} /> },
-  // FR-99 重设计：监控页改为跨域 KPI + 时序网格总览（消费 FR-105）；
-  // 审计 / 使用分析 / 防护监控恢复为各自独立入口（不再 tab 化整合于监控页）。
-  { label: '监控', path: '/monitor', icon: <IconActivity size={18} />, adminOnly: true },
-  { label: '使用分析', path: '/analytics', icon: <IconChartBar size={18} />, adminOnly: true },
-  { label: '审计日志', path: '/audit', icon: <IconHistory size={18} />, adminOnly: true },
   {
-    label: '防护监控',
-    path: '/protection-monitor',
-    icon: <IconShield size={18} />,
-    adminOnly: true,
+    title: '管理',
+    items: [
+      { label: '用户与组', path: '/users', icon: <IconUsers size={18} />, adminOnly: true },
+      { label: '访问令牌', path: '/tokens', icon: <IconKey size={18} /> },
+      { label: '上传', path: '/upload', icon: <IconUpload size={18} /> },
+      {
+        label: 'Nexus 迁移',
+        path: '/migration',
+        icon: <IconArrowsExchange size={18} />,
+        adminOnly: true,
+      },
+    ],
   },
-  { label: 'Nexus 迁移', path: '/migration', icon: <IconTransfer size={18} />, adminOnly: true },
-  { label: '设置', path: '/settings', icon: <IconSettings size={18} />, adminOnly: true },
+  {
+    title: '系统 · 监控',
+    items: [
+      { label: '监控', path: '/monitor', icon: <IconChartDots size={18} />, adminOnly: true },
+      { label: '审计日志', path: '/audit', icon: <IconClipboardText size={18} />, adminOnly: true },
+      // 系统日志页与 /system-logs 路由由并行 FR-107 创建；本 FR 仅加导航入口
+      {
+        label: '系统日志',
+        path: '/system-logs',
+        icon: <IconFileText size={18} />,
+        adminOnly: true,
+      },
+      {
+        label: '防护配置',
+        path: '/protection',
+        icon: <IconShieldHalf size={18} />,
+        adminOnly: true,
+      },
+      { label: '设置', path: '/settings', icon: <IconSettings size={18} />, adminOnly: true },
+    ],
+  },
 ];
 
 /**
- * 单个导航项：展开态显示图标+文字；折叠（窄）态仅图标，
+ * 单个导航项：展开态显示图标+文字；收起（窄）态仅图标，
  * 经 Tooltip + aria-label 提供可访问名，保证窄态读屏 / 键盘可用。
  */
 function NavItemLink({
@@ -129,7 +205,7 @@ function NavItemLink({
   );
 }
 
-/** 应用布局：渲染折叠图标导航与子路由出口。 */
+/** 应用布局：渲染 logo 区 + 分段导航 + 左下 footer + 固定 max-width 内容区。 */
 export function AppLayout() {
   // mobileOpened：移动端抽屉开合；navExpanded：桌面侧栏窄/宽（默认窄）。
   const [mobileOpened, { toggle: toggleMobile }] = useDisclosure();
@@ -139,7 +215,7 @@ export function AppLayout() {
   const location = useLocation();
   // 页眉全局搜索（FR-94）：输入关键字 → 跳转 /search?q=；回车立即跳，停止输入防抖后自动跳。
   const [searchValue, setSearchValue] = useState('');
-  // 控制台版本展示（FR-101）：底部常显当前版本号（取自公开 /health，所有用户可见）。
+  // 控制台版本展示（FR-101）：logo 区下方小灰字常显当前版本号（取自公开 /health，所有用户可见）。
   const [version, setVersion] = useState<string | null>(null);
   // Logo 旁更新徽标（FR-101，仅 Admin、确有可更新时显）：缓存 {当前版本, 最新版本}。
   const [updateInfo, setUpdateInfo] = useState<{ current: string; latest: string } | null>(null);
@@ -204,10 +280,36 @@ export function AppLayout() {
     }
   };
 
-  // 角色感知导航过滤（FR-95）：匿名只见公开浏览入口；登录用户按 adminOnly 门控（FR-92 不回归）。
-  const visibleItems = user
-    ? NAV_ITEMS.filter((item) => !item.adminOnly || isAdmin)
-    : NAV_ITEMS.filter((item) => item.publicVisible);
+  // 点 logo 区切换导航展开/收起（键盘 Enter / Space 等效）。
+  const handleBrandKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      toggleNav();
+    }
+  };
+
+  // 进入许可页（footer 入口）；移动端抽屉态点击后顺手收起抽屉。
+  const gotoLicenses = () => {
+    navigate('/licenses');
+    if (mobileOpened) toggleMobile();
+  };
+
+  const handleLicensesKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      gotoLicenses();
+    }
+  };
+
+  // 角色感知导航过滤（FR-95）：匿名只见公开浏览入口；登录用户按 adminOnly 门控。
+  const isItemVisible = (item: NavItem): boolean =>
+    user ? !item.adminOnly || isAdmin : Boolean(item.publicVisible);
+
+  // 按段过滤后仅保留含可见项的段（空段不渲染段头 / 分隔线）。
+  const visibleSections = NAV_SECTIONS.map((section) => ({
+    title: section.title,
+    items: section.items.filter(isItemVisible),
+  })).filter((section) => section.items.length > 0);
 
   const navbarWidth = navExpanded ? density.navbarWidth.expanded : density.navbarWidth.collapsed;
 
@@ -219,12 +321,10 @@ export function AppLayout() {
     >
       <AppShell.Header>
         <Group h="100%" px="md" justify="space-between">
-          <Group>
+          <Group gap="sm" wrap="nowrap">
             <Burger opened={mobileOpened} onClick={toggleMobile} hiddenFrom="sm" size="sm" />
-            <Text fw={700} size="lg">
-              JianArtifact 控制台
-            </Text>
-            {/* 更新徽标（FR-101，仅 Admin 且确有可更新时显）：点击跳设置页在线更新区 */}
+            {/* 更新徽标（FR-101，仅 Admin 且确有可更新时显）：常显于页眉、点击跳设置页在线更新区。
+                置于页眉而非收起态窄导航内，保证任何导航开合态下都可见、不被 64px 窄栏裁剪。 */}
             {updateInfo && (
               <Badge
                 color="orange"
@@ -288,82 +388,115 @@ export function AppLayout() {
       </AppShell.Header>
 
       <AppShell.Navbar p="xs">
-        <Group justify={navExpanded ? 'flex-end' : 'center'} mb="xs">
-          <Tooltip label={navExpanded ? '收起导航' : '展开导航'} position="right" withArrow>
-            <Button
-              variant="subtle"
-              size="xs"
-              px="xs"
-              aria-label={navExpanded ? '收起导航' : '展开导航'}
-              onClick={toggleNav}
-            >
-              {navExpanded ? (
-                <IconLayoutSidebarLeftCollapse size={18} />
-              ) : (
-                <IconLayoutSidebarLeftExpand size={18} />
+        {/* 左上 logo 区（FR-92）：点击「logo + 文字」整体切换导航展开/收起；
+            展开态显品牌文字 + 小灰字版本号，收起态只留可点击 SVG。 */}
+        <Group
+          gap="xs"
+          wrap="nowrap"
+          mb="xs"
+          justify={navExpanded ? 'flex-start' : 'center'}
+          role="button"
+          tabIndex={0}
+          aria-label="切换导航展开收起"
+          style={{ cursor: 'pointer' }}
+          onClick={toggleNav}
+          onKeyDown={handleBrandKeyDown}
+        >
+          <BrandLogo size={28} />
+          {navExpanded && (
+            <Stack gap={0}>
+              <Text fw={700} size="sm" lh={1.2}>
+                JianArtifact
+              </Text>
+              {version && (
+                <Text size="xs" c="dimmed" lh={1.2}>
+                  v{version}
+                </Text>
               )}
-            </Button>
-          </Tooltip>
+            </Stack>
+          )}
         </Group>
+
         <ScrollArea style={{ flex: 1 }}>
-          {visibleItems.map((item) => (
-            <NavItemLink
-              key={item.path}
-              item={item}
-              expanded={navExpanded}
-              active={isNavActive(location.pathname, item.path)}
-              onSelect={() => {
-                navigate(item.path);
-                if (mobileOpened) toggleMobile();
-              }}
-            />
+          {visibleSections.map((section, index) => (
+            <Box key={section.title} mt={index === 0 ? 0 : 'xs'}>
+              {/* 展开态：段头小灰字；收起态：以细分隔线代替段头（首段不加分隔线） */}
+              {navExpanded ? (
+                <Text size="xs" c="dimmed" fw={600} px="xs" py={4}>
+                  {section.title}
+                </Text>
+              ) : (
+                index > 0 && <Divider my={6} />
+              )}
+              {section.items.map((item) => (
+                <NavItemLink
+                  key={item.path}
+                  item={item}
+                  expanded={navExpanded}
+                  active={isNavActive(location.pathname, item.path)}
+                  onSelect={() => {
+                    navigate(item.path);
+                    if (mobileOpened) toggleMobile();
+                  }}
+                />
+              ))}
+            </Box>
           ))}
         </ScrollArea>
-        {/* 导航底部 footer 小字块（FR-101）：版本号 + 开源许可入口，
-            置于导航项之下、小灰字呈现，所有用户可见（含匿名）；
-            仅展开态显示，窄（收缩）态整块隐藏。 */}
-        {navExpanded && (
-          <Stack
-            gap={2}
-            mt="xs"
-            pt="xs"
-            px="xs"
-            style={{ borderTop: '1px solid var(--mantine-color-default-border)' }}
-          >
-            {version && (
-              <Text size="xs" c="dimmed">
-                v{version}
-              </Text>
-            )}
-            <Group
-              gap={4}
-              c="dimmed"
-              wrap="nowrap"
-              role="button"
-              tabIndex={0}
-              aria-label="开源许可"
-              style={{ cursor: 'pointer' }}
-              onClick={() => {
-                navigate('/licenses');
-                if (mobileOpened) toggleMobile();
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  navigate('/licenses');
-                  if (mobileOpened) toggleMobile();
-                }
-              }}
-            >
-              <IconLicense size={14} />
-              <Text size="xs">开源许可</Text>
+
+        {/* 左下 footer（FR-92）：展开态显「开源许可」+「收起导航」按钮；
+            收起（窄）态隐藏许可、只留「展开导航」按钮在底。 */}
+        <Box mt="xs" pt="xs" style={{ borderTop: '1px solid var(--mantine-color-default-border)' }}>
+          {navExpanded ? (
+            <Group justify="space-between" wrap="nowrap">
+              <Group
+                gap={4}
+                c="dimmed"
+                wrap="nowrap"
+                role="button"
+                tabIndex={0}
+                aria-label="开源许可"
+                style={{ cursor: 'pointer' }}
+                onClick={gotoLicenses}
+                onKeyDown={handleLicensesKeyDown}
+              >
+                <IconLicense size={14} />
+                <Text size="xs">开源许可</Text>
+              </Group>
+              <Tooltip label="收起导航" position="right" withArrow>
+                <UnstyledButton
+                  aria-label="收起导航"
+                  onClick={toggleNav}
+                  style={{ display: 'flex' }}
+                >
+                  <IconLayoutSidebarLeftCollapse size={18} />
+                </UnstyledButton>
+              </Tooltip>
             </Group>
-          </Stack>
-        )}
+          ) : (
+            <Group justify="center">
+              <Tooltip label="展开导航" position="right" withArrow>
+                <UnstyledButton
+                  aria-label="展开导航"
+                  onClick={toggleNav}
+                  style={{ display: 'flex' }}
+                >
+                  <IconLayoutSidebarLeftExpand size={18} />
+                </UnstyledButton>
+              </Tooltip>
+            </Group>
+          )}
+        </Box>
       </AppShell.Navbar>
 
       <AppShell.Main>
-        <Outlet />
+        {/* 固定 max-width 居中内容容器（FR-92）：卡片 / 新内容出现不再撑变形整体布局。 */}
+        <Box
+          data-testid="content-shell"
+          style={{ maxWidth: density.contentMaxWidth, marginInline: 'auto' }}
+        >
+          <Outlet />
+        </Box>
       </AppShell.Main>
     </AppShell>
   );
