@@ -150,6 +150,14 @@ impl ReleaseSource for GithubReleaseSource {
             .send()
             .await
             .map_err(|e| UpdateError::Upstream(e.to_string()))?;
+        // stable 通道下 `/releases/latest` 对「仓库尚无正式发布（只有预发布 / 草稿）」返 404——
+        // 这不是上游故障，给清晰提示而非笼统「拉取失败」；提示改用 prerelease 通道或发正式版。
+        if resp.status() == reqwest::StatusCode::NOT_FOUND && channel == UpdateChannel::Stable {
+            return Err(UpdateError::NoUpdate(
+                "仓库尚无正式发布版本，暂无可用更新（如需拉取开发版，请将更新通道切换为 prerelease）"
+                    .to_string(),
+            ));
+        }
         if !resp.status().is_success() {
             return Err(UpdateError::Upstream(format!(
                 "GitHub 返回状态 {}",
