@@ -538,11 +538,21 @@ async fn bootstrap_and_log(meta: &MetaStore) -> anyhow::Result<()> {
             info!(用户名 = %username, "已根据环境变量创建首个管理员");
         }
         BootstrapOutcome::CreatedWithRandomPassword { username, password } => {
-            // 随机口令仅首启打印一次，提示运维妥善保管并尽快改密
+            // 安全红线（凭据不进日志）：口令明文绝不经 tracing 打印——否则会被 FR-107 文件 sink 捕获、
+            // 写进 `{data_dir}/logs/app.log` 并经「系统日志」页可查。故口令仅直接写 stdout 提示运维一次
+            // （首启可用性不破），非密上下文经 WARN 进运行日志、但不含口令字段。
+            let mut stdout = std::io::stdout().lock();
+            if let Err(e) = jianartifact::logs::write_bootstrap_password_notice(
+                &mut stdout,
+                &username,
+                &password,
+            ) {
+                // stdout 写失败极罕见；只记 WARN（不含口令），不阻断启动
+                warn!(错误 = %e, "向标准输出打印首启管理员初始口令失败，请检查标准输出是否可写");
+            }
             warn!(
                 用户名 = %username,
-                初始口令 = %password,
-                "已创建首个管理员并生成随机初始口令，请妥善保管并尽快登录后修改"
+                "已创建首个管理员并生成随机初始口令，口令仅在标准输出提示一次，请妥善保管并尽快登录后修改"
             );
         }
     }

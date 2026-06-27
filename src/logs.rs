@@ -173,6 +173,34 @@ pub fn read_log_lines(path: &Path) -> Vec<String> {
     }
 }
 
+/// 把首启随机管理员口令的一次性提示**直接写到给定 writer（生产为 stdout）**（FR-59，安全红线）。
+///
+/// 为何不走 `tracing`：运行日志经 `tracing` 文件 sink 落盘到 `{data_dir}/logs/app.log` 且经「系统日志」页
+/// 可查（FR-107，ADR-0029）。口令一旦经 `tracing` 打印就会被文件 sink 捕获、写进可查日志——违反
+/// 「凭据/密码绝不进日志」红线（架构不变量 §3）。故口令明文仅经本函数直接写 stdout 提示运维（首启一次），
+/// 从源头上不进入任何 `tracing` sink；非密上下文（已创建首个管理员）仍可经 `tracing` 记录。
+pub fn write_bootstrap_password_notice<W: Write>(
+    out: &mut W,
+    username: &str,
+    password: &str,
+) -> io::Result<()> {
+    writeln!(
+        out,
+        "================ 首启管理员初始口令（仅本次显示，请妥善保管并尽快登录后修改）================"
+    )?;
+    writeln!(out, "  用户名: {username}")?;
+    writeln!(out, "  初始口令: {password}")?;
+    writeln!(
+        out,
+        "  注意: 该口令不入库、不写入运行日志文件，仅在此标准输出提示一次；如未记下需重置数据重新引导。"
+    )?;
+    writeln!(
+        out,
+        "================================================================================"
+    )?;
+    out.flush()
+}
+
 /// 单文件 + 单次大小滚动的日志 writer（FR-107，ADR-0029）。
 ///
 /// 写入前若现有文件超过 `max_bytes` 则滚动一次（`app.log` → `app.log.1`，旧 `.1` 覆盖），
@@ -444,5 +472,16 @@ mod tests {
         w.flush().unwrap();
         assert!(dir.path().join("app.log").exists());
         assert!(!dir.path().join("app.log.1").exists(), "未超阈值不应滚动");
+    }
+
+    #[test]
+    fn 首启口令提示_含口令明文且写入给定writer() {
+        // 口令明文须出现在给运维的 stdout 提示里，否则首启无法登录（可用性不破）
+        let mut buf: Vec<u8> = Vec::new();
+        let password = "Zq7Wv3Nx9Lm2Kp5T-唯一口令";
+        write_bootstrap_password_notice(&mut buf, "admin", password).unwrap();
+        let text = String::from_utf8(buf).unwrap();
+        assert!(text.contains("admin"), "提示应含用户名");
+        assert!(text.contains(password), "提示必须含口令明文供运维首次登录");
     }
 }

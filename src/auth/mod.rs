@@ -140,7 +140,7 @@ pub enum BootstrapOutcome {
     CreatedWithRandomPassword {
         /// 默认管理员用户名。
         username: String,
-        /// 一次性随机口令明文（仅用于启动日志提示，不入库、不持久化）。
+        /// 一次性随机口令明文（仅用于首启在标准输出提示运维，不进运行日志、不入库、不持久化）。
         password: String,
     },
 }
