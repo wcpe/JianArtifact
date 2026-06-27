@@ -316,6 +316,32 @@ async fn main() -> anyhow::Result<()> {
     // 经 Mutex 串行化按请求采样；纯本机内部采样、不外发、不落库、不后台轮询。
     let host_system = Arc::new(tokio::sync::Mutex::new(sysinfo::System::new()));
 
+    // FR-53：封禁登记表为空进程内内存（重启即清，配置热替换不清空已积累的封禁 / 信号计数）。
+    // 提取为局部变量，供下方指标时序采样任务与 AppState 共享同一份。
+    let ban_registry = Arc::new(api::BanRegistry::new());
+
+    // 指标时序采集（FR-105，ADR-0027）：后台按可配间隔采样各域 gauge 落 SQLite + 按保留期 / 行数兜底滚动清理。
+    // 本机内部时序、默认不外发；采样 / 清理失败只记 WARN，不影响业务。复用 host_system / 限流器 / 封禁表读数。
+    if cfg.observability.metrics_timeseries.enabled {
+        let mt = &cfg.observability.metrics_timeseries;
+        api::spawn_metrics_sampler(
+            meta.clone(),
+            host_system.clone(),
+            rate_limiter.clone(),
+            ban_registry.clone(),
+            mt.sample_interval_secs,
+        );
+        api::spawn_metrics_retention(meta.clone(), mt.retention_days, mt.max_rows);
+        info!(
+            采样间隔秒 = mt.sample_interval_secs,
+            保留天数 = mt.retention_days,
+            行数上限 = mt.max_rows,
+            "指标时序采集已就绪（本机内部、默认不外发）"
+        );
+    } else {
+        info!("指标时序采集未启用，跳过");
+    }
+
     // 构建路由与共享状态
     let state = AppState {
         config: Arc::new(cfg.clone()),
@@ -335,8 +361,9 @@ async fn main() -> anyhow::Result<()> {
         ldap,
         // FR-79：运行时防护配置热替换槽（含 IP 名单匹配器、WAF 规则集等派生态），PATCH 即时生效
         protection,
-        // FR-53：封禁登记表为空进程内内存（重启即清，配置热替换不清空已积累的封禁 / 信号计数）
-        ban_registry: Arc::new(api::BanRegistry::new()),
+        // FR-53：封禁登记表为空进程内内存（重启即清，配置热替换不清空已积累的封禁 / 信号计数）。
+        // 已在上方提取为局部变量与指标时序采样任务共享，此处直接复用同一份。
+        ban_registry,
         // FR-54：CC 挑战签名器（密钥复用 JWT 派生子密钥，无状态签发 / 校验 PoW 挑战）
         cc_challenger,
         // FR-56：防护告警投递端 + 进程内告警评估器（窗内各维度达阈值即告警并异步落库）

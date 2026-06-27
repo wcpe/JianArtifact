@@ -129,6 +129,17 @@
 
 > 指标为进程内自采（pull 模型），仅在 `/metrics` 被抓取时渲染，不向任何外部端点 push / remote-write，数据本机内部、默认不外发（ADR-0009 / ADR-0015）。`allow_anonymous=true` 会把端点对匿名开放——**仅在把端点限定在内网 / 反向代理 / 防火墙之后时启用**，否则运行画像可能被外部探知（见 OPERATIONS 风险说明）。按 TOML 嵌套节 `[observability.metrics]` 配置即可（本两层键以 TOML 为准）。
 
+### [observability.metrics_timeseries]（指标时序采集，P2 / FR-105 / ADR-0027）
+
+| 键 | 含义 | 默认（取向） | 环境变量 |
+|---|---|---|---|
+| enabled | 是否启用后台指标时序采集与清理；关闭则不 spawn 采样 / 清理任务（FR-98 实时快照端点不受影响） | true | JIANARTIFACT_OBSERVABILITY_METRICS_TIMESERIES_ENABLED |
+| sample_interval_secs | 采样间隔（秒）：后台每拍采样一组各域 gauge 落库的周期 | 60 | JIANARTIFACT_OBSERVABILITY_METRICS_TIMESERIES_SAMPLE_INTERVAL_SECS |
+| retention_days | 保留天数：后台任务按此周期删除更早的时序样本 | 7 | JIANARTIFACT_OBSERVABILITY_METRICS_TIMESERIES_RETENTION_DAYS |
+| max_rows | 行数硬上限：超限删最旧行，兜底防止时序撑爆 SQLite | 1000000 | JIANARTIFACT_OBSERVABILITY_METRICS_TIMESERIES_MAX_ROWS |
+
+> 在 FR-98 实时快照之外提供历史时序：后台按间隔采主机 CPU/内存/磁盘使用率%、存储仓库计数、防护活跃封禁与限流累计、使用累计访问 / 下载等各域 gauge 落 SQLite（`metric_samples` 表，经 `meta` 唯一入口），按保留期 + 行数滚动清理；经**仅 Admin** 端点 `GET /api/v1/monitor/metrics` 查询。量级由采样间隔 + 保留期 + 行数兜底压住。缓存命中率本期未采（待埋点）。统计数据本机内部、**默认不主动外发、不向外部遥测 phone-home**；不提供任何外部导出 / 上报开关（ADR-0009 / ADR-0027）。本节键支持 `JIANARTIFACT_OBSERVABILITY_METRICS_TIMESERIES_*` 环境变量覆盖，亦可按 TOML 嵌套节 `[observability.metrics_timeseries]` 配置。
+
 ### [protection.rate_limit]（多维速率限制与并发上限，P2 / FR-33 + FR-51 / ADR-0008）
 
 | 键 | 含义 | 默认（取向） | 环境变量 |

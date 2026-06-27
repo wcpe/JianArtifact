@@ -42,6 +42,8 @@ mod groups;
 mod identity;
 mod licenses;
 mod metrics;
+mod metrics_query;
+mod metrics_sampler;
 mod migrate;
 mod migration_jobs;
 mod monitor;
@@ -76,6 +78,7 @@ pub use audit::{
 pub use cc_challenge::CcChallenger;
 pub use identity::resolve_identity;
 pub use metrics::{install_recorder, MetricsHandle};
+pub use metrics_sampler::{spawn_metrics_retention, spawn_metrics_sampler};
 pub use migration_jobs::MigrationJobs;
 pub use oidc_routes::OidcFlowStore;
 pub use protection_state::{ProtectionSnapshot, ProtectionState};
@@ -410,6 +413,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/audit", get(audit::list_audit))
         .route("/analytics/usage", get(analytics::usage_analytics))
         .route("/monitor/host", get(monitor::monitor_host))
+        .route("/monitor/metrics", get(metrics_query::query_metrics))
         .route("/protection/status", get(protection::protection_status))
         .route("/protection/alerts", get(protection::list_alerts))
         .route(

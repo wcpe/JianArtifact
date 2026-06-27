@@ -251,6 +251,14 @@
 - **响应**：主机指标快照对象 `{ cpu, memory, disk, uptime_secs }`——`cpu` 为 `{ usage_percent, logical_cores }`（全局 CPU 使用率百分比 0~100 + 逻辑核数）；`memory` 为 `{ total_bytes, used_bytes, swap_total_bytes, swap_used_bytes }`（物理内存与交换分区的总量 / 已用，单位字节）；`disk` 为 `{ total_bytes, available_bytes, disks }`（磁盘总量 / 可用汇总 + 逐盘明细数组，每项 `{ mount_point, total_bytes, available_bytes }`）；`uptime_secs` 为系统运行时长（秒）。经 `sysinfo` **按请求单次采样**（不后台轮询、不落库），**纯本机内部数据、绝不外发、不向外部遥测 phone-home**（ADR-0023，守 ADR-0009 / 0015 基调）。注意：`cpu.usage_percent` 在首次 / 间隔过近的采样可能为 `0`（CPU 使用率需两次采样间隔才有非零值，属已知取舍）。
 - **错误**：`401` 未认证；`403` 非管理员。
 
+### 查询指标时序（P2，仅 Admin，FR-105）
+
+- **方法 / 路径**：`GET /api/v1/monitor/metrics`
+- **请求**：查询参数 `metric`（必填，指标键）、`from` / `to`（可选，Unix 毫秒 UTC；`to` 缺省取「现在」、`from` 缺省取 `to` 往前 1 小时）、`step`（可选，降采样步长毫秒；缺省 `0` 表示不降采样、返回原始样本点）。仅管理员可访问。
+- **指标键**：`host.cpu_percent` / `host.memory_percent` / `host.disk_percent`（主机使用率%）、`storage.repo_count` / `storage.blob_count` / `storage.total_bytes`（仓库数 / 去重 blob 数 / 去重存储字节）、`protection.active_bans` / `protection.rate_limited_total`（活跃封禁数 / 限流累计被拒数）、`usage.access_total` / `usage.download_total`（累计访问量 / 下载量）。后两类与限流被拒为**累计值**（counter），曲线为单调累计，按需增量由调用方差分。缓存命中率本期未采（待埋点）。
+- **响应**：`{ metric, points }`——`points` 为时序点数组（按 ts 升序，每项 `{ ts, value }`，`ts` 为 Unix 毫秒；`step>0` 时为「桶起点 + 桶内平均」的降采样点）。后台按可配间隔采样各域 gauge 落 SQLite（经 `meta`）、按保留期 + 行数滚动清理；**纯本机内部数据、绝不外发、不向外部遥测 phone-home**（ADR-0027，取代 ADR-0023「不留时序」；FR-98 实时快照端点保留）。
+- **错误**：`400` 缺失 / 空 `metric`；`401` 未认证；`403` 非管理员。
+
 ### 查询防护状态快照（P2，仅 Admin）
 
 - **方法 / 路径**：`GET /api/v1/protection/status`

@@ -11,6 +11,7 @@ use uuid::Uuid;
 mod alerts;
 mod audit;
 mod groups;
+mod metrics;
 mod repo;
 mod usage;
 mod vuln;
@@ -18,6 +19,7 @@ mod vuln;
 pub use alerts::{AlertQuery, AlertRecord, NewAlert};
 pub use audit::{AuditEntry, AuditQuery, NewAuditEntry};
 pub use groups::{GroupAclRecord, GroupMemberRecord, GroupRecord};
+pub use metrics::{MetricSample, NewMetricSample};
 pub use repo::{
     AclRecord, ArtifactRecord, ArtifactSearchHit, NewArtifact, NewRepository, Permission, RepoType,
     RepositoryRecord, Visibility,

@@ -34,6 +34,14 @@ const DEFAULT_AUDIT_RETENTION_DAYS: u32 = 90;
 const DEFAULT_AUDIT_MAX_ROWS: u64 = 1_000_000;
 /// 使用分析明细行数硬上限默认值（兜底，防止明细撑爆 SQLite；ADR-0009）。
 const DEFAULT_USAGE_MAX_DETAIL_ROWS: u64 = 1_000_000;
+/// 指标时序采集默认开关（FR-105，ADR-0027）：默认开启，采本机内部 gauge 落库。
+const DEFAULT_METRICS_TS_ENABLED: bool = true;
+/// 指标时序默认采样间隔（秒，FR-105，ADR-0027）：默认 60 秒一拍。
+const DEFAULT_METRICS_TS_SAMPLE_INTERVAL_SECS: u64 = 60;
+/// 指标时序默认保留天数（FR-105，ADR-0027）：默认保留 7 天，更早样本滚动清理。
+const DEFAULT_METRICS_TS_RETENTION_DAYS: u32 = 7;
+/// 指标时序默认行数硬上限（FR-105，ADR-0027）：兜底防止时序撑爆 SQLite。
+const DEFAULT_METRICS_TS_MAX_ROWS: u64 = 1_000_000;
 /// 默认是否启用 Prometheus 指标端点（FR-32，ADR-0015）：默认开。
 const DEFAULT_METRICS_ENABLED: bool = true;
 /// 默认是否允许匿名抓取 /metrics（ADR-0015）：默认关，须运维显式开启（限内网 / 反代后）。
@@ -169,6 +177,13 @@ const KNOWN_NESTED_PREFIXES: &[(&str, &str)] = &[
     ("auth_ldap_", "auth.ldap."),
     // 出站代理在 network.proxy 子节下；env 形如 JIANARTIFACT_NETWORK_PROXY_HTTPS（FR-84）。
     ("network_proxy_", "network.proxy."),
+    // 指标时序在 observability.metrics_timeseries 子节下（FR-105，ADR-0027）；
+    // env 形如 JIANARTIFACT_OBSERVABILITY_METRICS_TIMESERIES_SAMPLE_INTERVAL_SECS。
+    // 本条前缀最长，按长前缀优先匹配不会被更短前缀截断，放数组末尾即可。
+    (
+        "observability_metrics_timeseries_",
+        "observability.metrics_timeseries.",
+    ),
 ];
 
 /// 顶层配置。
@@ -482,6 +497,9 @@ pub struct ObservabilityConfig {
     /// Prometheus 指标端点配置。
     #[serde(default)]
     pub metrics: MetricsConfig,
+    /// 指标时序采集配置（FR-105，ADR-0027）。
+    #[serde(default)]
+    pub metrics_timeseries: MetricsTimeseriesConfig,
 }
 
 /// 审计日志配置（ADR-0015）。
@@ -541,6 +559,30 @@ impl Default for MetricsConfig {
         Self {
             enabled: DEFAULT_METRICS_ENABLED,
             allow_anonymous: DEFAULT_METRICS_ALLOW_ANONYMOUS,
+        }
+    }
+}
+
+/// 指标时序采集配置（FR-105，ADR-0027）。本机内部时序，结构不含任何外部导出/上报开关。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetricsTimeseriesConfig {
+    /// 是否启用后台时序采集与清理；默认开启。关闭则不 spawn 采样 / 清理任务。
+    pub enabled: bool,
+    /// 采样间隔（秒）：后台每拍采样一组 gauge 落库的周期。
+    pub sample_interval_secs: u64,
+    /// 保留天数：后台任务按此周期删除更早的时序样本。
+    pub retention_days: u32,
+    /// 行数硬上限：超限删最旧行，兜底防止时序撑爆 SQLite。
+    pub max_rows: u64,
+}
+
+impl Default for MetricsTimeseriesConfig {
+    fn default() -> Self {
+        Self {
+            enabled: DEFAULT_METRICS_TS_ENABLED,
+            sample_interval_secs: DEFAULT_METRICS_TS_SAMPLE_INTERVAL_SECS,
+            retention_days: DEFAULT_METRICS_TS_RETENTION_DAYS,
+            max_rows: DEFAULT_METRICS_TS_MAX_ROWS,
         }
     }
 }
@@ -1723,6 +1765,39 @@ mod tests {
                 assert_eq!(ldap.user_search_base, "ou=users,dc=corp");
                 assert_eq!(ldap.user_filter, "(sAMAccountName={username})");
                 assert!(ldap.auto_provision);
+            },
+        );
+    }
+
+    #[test]
+    fn 环境变量可覆盖嵌套的指标时序配置() {
+        with_env_vars(
+            &[
+                (
+                    "JIANARTIFACT_OBSERVABILITY_METRICS_TIMESERIES_ENABLED",
+                    "false",
+                ),
+                (
+                    "JIANARTIFACT_OBSERVABILITY_METRICS_TIMESERIES_SAMPLE_INTERVAL_SECS",
+                    "30",
+                ),
+                (
+                    "JIANARTIFACT_OBSERVABILITY_METRICS_TIMESERIES_RETENTION_DAYS",
+                    "14",
+                ),
+                (
+                    "JIANARTIFACT_OBSERVABILITY_METRICS_TIMESERIES_MAX_ROWS",
+                    "500000",
+                ),
+            ],
+            || {
+                let cfg = Config::load(Path::new("不存在.toml")).unwrap();
+                let mt = cfg.observability.metrics_timeseries;
+                // 嵌套键名内部下划线（sample_interval_secs / retention_days / max_rows）保留，不被误拆
+                assert!(!mt.enabled);
+                assert_eq!(mt.sample_interval_secs, 30);
+                assert_eq!(mt.retention_days, 14);
+                assert_eq!(mt.max_rows, 500_000);
             },
         );
     }
