@@ -1,62 +1,153 @@
-// 统一监控页（FR-99，UX 重构 epic）：顶部 tab 切换四区，整合可观测性视图，仅 Admin。
+// 监控总览页（FR-99 重设计）：跨域 KPI 指标行 + 多指标时序网格，仅 Admin。
 //
-// 四个 tab：
-// - 主机监控（新，消费 FR-98 GET /api/v1/monitor/host）：HostMonitorPanel；
-// - 使用分析（整合 FR-58）：复用既有 AnalyticsPage 组件；
-// - 审计（整合 FR-77）：复用既有 AuditPage 组件；
-// - 防护（整合 FR-78）：复用既有 ProtectionMonitorPage 组件。
-//
-// 复用而非重写：三页均为无 props、自带数据加载的自包含组件，直接作为 tab 面板内容挂载，
-// 数据层零改动，其既有测试不回归。各 tab 面板按需挂载（keepMounted={false}），切到才拉数据。
-// 路由已由 RequireAdmin 守卫（仅 Admin 可达）。图表手搓 SVG/CSS，零新增依赖。数据本机内部、不外发。
+// 顶部：分类切换（全部 / 主机 / 使用分析 / 防护 / 缓存 / 存储仓库）+ 时间范围切换（1h / 24h / 7d）。
+// KPI 行：各指标在所选范围内的最新值（末点 value）。
+// 时序网格：每指标一张卡（标题 + 手搓 SVG 折线 + 当前值），消费 FR-105 GET /api/v1/monitor/metrics，
+// 悬停看某时间点取值。无数据源指标（如缓存命中率）优雅显示「暂无数据」。
+// 数据本机内部、不外发。审计 / 使用分析 / 防护监控为各自独立页（不再 tab 化整合于此）。
 
-import { useState } from 'react';
-import { Stack, Title, Tabs } from '@mantine/core';
-import { IconServer, IconChartBar, IconHistory, IconShield } from '@tabler/icons-react';
-import { HostMonitorPanel } from '../components/HostMonitorPanel';
-import { AnalyticsPage } from './AnalyticsPage';
-import { AuditPage } from './AuditPage';
-import { ProtectionMonitorPage } from './ProtectionMonitorPage';
+import { useCallback, useEffect, useState } from 'react';
+import { Stack, Title, Text, Group, Card, SimpleGrid, SegmentedControl } from '@mantine/core';
+import * as api from '../api/endpoints';
+import type { MetricPoint } from '../api/types';
+import { errorMessage } from '../lib/format';
+import {
+  CATEGORY_OPTIONS,
+  TIME_RANGES,
+  formatMetricValue,
+  metricsForCategory,
+  rangeToQuery,
+  timeRange,
+  type MetricCategoryFilter,
+  type MetricMeta,
+  type TimeRangeKey,
+} from '../lib/metrics';
+import { LineChart } from '../components/charts/LineChart';
 
-/** tab 取值（用作 URL 无关的内部状态键）。 */
-type MonitorTab = 'host' | 'analytics' | 'audit' | 'protection';
+/** 单指标的取数状态（时序点 + 错误，loading 由 points/error 均空表达）。 */
+interface SeriesState {
+  points: MetricPoint[];
+  error: string | null;
+}
 
-/** 统一监控页。 */
+/** 取某指标 series 的末点值（无点返回 null）。 */
+function lastValue(points: MetricPoint[]): number | null {
+  return points.length > 0 ? points[points.length - 1].value : null;
+}
+
+/** 监控总览页。 */
 export function MonitorPage() {
-  const [tab, setTab] = useState<MonitorTab>('host');
+  const [category, setCategory] = useState<MetricCategoryFilter>('all');
+  const [rangeKey, setRangeKey] = useState<TimeRangeKey>('24h');
+  // 各指标键 → 取数状态
+  const [series, setSeries] = useState<Record<string, SeriesState>>({});
+
+  const visibleMetrics = metricsForCategory(category);
+
+  // 取数：对当前可见且有数据源的指标按当前时间范围并发查询；无数据源指标不发请求（走空态）。
+  const load = useCallback(() => {
+    const range = timeRange(rangeKey);
+    const { from, to, step } = rangeToQuery(range, Date.now());
+    const targets = metricsForCategory(category).filter((m) => m.available);
+
+    targets.forEach((m) => {
+      api
+        .getMetricSeries(m.key, { from, to, step })
+        .then((res) => {
+          setSeries((prev) => ({ ...prev, [m.key]: { points: res.points, error: null } }));
+        })
+        .catch((err) => {
+          setSeries((prev) => ({ ...prev, [m.key]: { points: [], error: errorMessage(err) } }));
+        });
+    });
+  }, [category, rangeKey]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
 
   return (
     <Stack>
       <Title order={2}>监控</Title>
-      <Tabs value={tab} onChange={(v) => setTab((v as MonitorTab) ?? 'host')} keepMounted={false}>
-        <Tabs.List>
-          <Tabs.Tab value="host" leftSection={<IconServer size={16} />}>
-            主机监控
-          </Tabs.Tab>
-          <Tabs.Tab value="analytics" leftSection={<IconChartBar size={16} />}>
-            使用分析
-          </Tabs.Tab>
-          <Tabs.Tab value="audit" leftSection={<IconHistory size={16} />}>
-            审计
-          </Tabs.Tab>
-          <Tabs.Tab value="protection" leftSection={<IconShield size={16} />}>
-            防护
-          </Tabs.Tab>
-        </Tabs.List>
+      <Text c="dimmed" size="sm">
+        跨域运行指标总览（主机 / 存储仓库 / 防护 /
+        使用分析）；时序数据按可配间隔采样落本机，纯内部、不外发。
+      </Text>
 
-        <Tabs.Panel value="host" pt="md">
-          <HostMonitorPanel />
-        </Tabs.Panel>
-        <Tabs.Panel value="analytics" pt="md">
-          <AnalyticsPage />
-        </Tabs.Panel>
-        <Tabs.Panel value="audit" pt="md">
-          <AuditPage />
-        </Tabs.Panel>
-        <Tabs.Panel value="protection" pt="md">
-          <ProtectionMonitorPage />
-        </Tabs.Panel>
-      </Tabs>
+      <Group justify="space-between" wrap="wrap">
+        <SegmentedControl
+          aria-label="指标分类"
+          value={category}
+          onChange={(v) => setCategory(v as MetricCategoryFilter)}
+          data={CATEGORY_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+        />
+        <SegmentedControl
+          aria-label="时间范围"
+          value={rangeKey}
+          onChange={(v) => setRangeKey(v as TimeRangeKey)}
+          data={TIME_RANGES.map((r) => ({ value: r.key, label: r.label }))}
+        />
+      </Group>
+
+      {/* KPI 指标行：各指标当前值（末点） */}
+      <SimpleGrid cols={{ base: 2, sm: 3, md: 4 }} spacing="sm">
+        {visibleMetrics.map((m) => (
+          <KpiCard key={m.key} meta={m} state={series[m.key]} />
+        ))}
+      </SimpleGrid>
+
+      {/* 多指标时序网格：每指标一张卡（标题 + 折线 + 当前值） */}
+      <SimpleGrid cols={{ base: 1, sm: 2, lg: 3 }} spacing="sm">
+        {visibleMetrics.map((m) => (
+          <MetricChartCard key={m.key} meta={m} state={series[m.key]} />
+        ))}
+      </SimpleGrid>
     </Stack>
+  );
+}
+
+/** KPI 卡：指标名 + 当前值（无数据 / 无数据源显「—」）。 */
+function KpiCard({ meta, state }: { meta: MetricMeta; state: SeriesState | undefined }) {
+  const value = state ? lastValue(state.points) : null;
+  const display = !meta.available || value === null ? '—' : formatMetricValue(value, meta.format);
+  return (
+    <Card withBorder padding="sm" radius="md">
+      <Text size="xs" c="dimmed">
+        {meta.label}
+      </Text>
+      <Text fw={700} size="xl">
+        {display}
+      </Text>
+    </Card>
+  );
+}
+
+/** 时序卡：标题 + 手搓折线（悬停看点值）+ 当前值；无数据源 / 无点走空态。 */
+function MetricChartCard({ meta, state }: { meta: MetricMeta; state: SeriesState | undefined }) {
+  const points = meta.available && state ? state.points : [];
+  const value = lastValue(points);
+  const emptyText = !meta.available ? '暂无数据（待埋点）' : '暂无数据';
+  return (
+    <Card withBorder padding="md" radius="md">
+      <Group justify="space-between" mb="xs">
+        <Text fw={600} size="sm">
+          {meta.label}
+        </Text>
+        <Text size="sm" c="dimmed">
+          {value === null ? '—' : formatMetricValue(value, meta.format)}
+        </Text>
+      </Group>
+      {state?.error ? (
+        <Text c="red" size="sm">
+          {state.error}
+        </Text>
+      ) : (
+        <LineChart
+          points={points}
+          emptyText={emptyText}
+          valueFormat={(v) => formatMetricValue(v, meta.format)}
+        />
+      )}
+    </Card>
   );
 }

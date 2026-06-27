@@ -17,6 +17,7 @@ import type {
   GroupMemberView,
   GroupView,
   HostMetrics,
+  MetricSeries,
   LicenseManifest,
   LoginResponse,
   MigrationJobCreated,
@@ -392,6 +393,20 @@ export function listProtectionAlerts(
 /** 查询主机指标快照（按请求采样：CPU / 内存 / 磁盘 / uptime）。 */
 export function getHostMonitor(): Promise<HostMetrics> {
   return request<HostMetrics>('/monitor/host');
+}
+
+/**
+ * 查询某指标的时序点（FR-105，仅管理员）。
+ * `from`/`to` 为 Unix 毫秒（缺省由后端补：to=现在、from=前 1 小时）；
+ * `step` 为降采样步长毫秒（缺省 / 0 = 不降采样、返回原始点）。
+ */
+export function getMetricSeries(
+  metric: string,
+  opts: { from?: number; to?: number; step?: number } = {},
+): Promise<MetricSeries> {
+  return request<MetricSeries>('/monitor/metrics', {
+    query: { metric, from: opts.from, to: opts.to, step: opts.step },
+  });
 }
 
 // —— 开源许可（FR-102，公开 / 匿名可读） ——

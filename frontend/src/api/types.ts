@@ -568,6 +568,20 @@ export interface HostMetrics {
   uptime_secs: number;
 }
 
+// —— 指标时序（FR-105，仅管理员；对齐后端 GET /api/v1/monitor/metrics 契约） ——
+
+/** 单个时序点（ts 为 Unix 毫秒 UTC，value 为标量取值）。 */
+export interface MetricPoint {
+  ts: number;
+  value: number;
+}
+
+/** 某指标键的时序响应（points 按 ts 升序）。 */
+export interface MetricSeries {
+  metric: string;
+  points: MetricPoint[];
+}
+
 // —— 设置页（FR-87，仅管理员） ——
 
 /** 单代理视图（脱敏后：URL 去 userinfo；用户名回显、密码仅以 has_password 暴露，FR-100）。 */

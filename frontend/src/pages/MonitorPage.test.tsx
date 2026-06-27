@@ -1,7 +1,10 @@
-// 统一监控页测试（FR-99）：
-// 1) 渲染四个 tab，默认主机监控 tab 展示 CPU/内存/磁盘/uptime 结构（mock host 端点）；
-// 2) 切到使用分析 / 审计 / 防护 tab 时复用既有页组件、数据可渲染（mock 各自端点）；
-// 3) 主机 tab 刷新按钮再次拉取。
+// 监控总览页测试（FR-99 重设计）：
+// 1) KPI 行渲染各指标当前值（末点 value）；
+// 2) 分类切换过滤展示哪些指标（主机 / 防护 / 全部）；
+// 3) 时序网格消费 GET /monitor/metrics（mock），每指标一张含折线的卡；
+// 4) 时间范围切换改变传给 getMetricSeries 的 from/to/step；
+// 5) 无数据源指标（缓存命中率）显「暂无数据」、不发请求；
+// 6) 监控页不再含审计内容（审计已拆出独立页）。
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
@@ -9,14 +12,7 @@ import userEvent from '@testing-library/user-event';
 import { MantineProvider } from '@mantine/core';
 import { MonitorPage } from './MonitorPage';
 import * as api from '../api/endpoints';
-import type {
-  HostMetrics,
-  Paginated,
-  AuditEntryDto,
-  ProtectionStatusDto,
-  ProtectionAlertDto,
-  UsageAnalyticsDto,
-} from '../api/types';
+import type { MetricSeries } from '../api/types';
 
 /** 在 Mantine Provider 下渲染监控页。 */
 function renderPage() {
@@ -27,133 +23,128 @@ function renderPage() {
   );
 }
 
-const 样例主机指标: HostMetrics = {
-  cpu: { usage_percent: 42.5, logical_cores: 8 },
-  memory: {
-    total_bytes: 16 * 1024 * 1024 * 1024,
-    used_bytes: 8 * 1024 * 1024 * 1024,
-    swap_total_bytes: 2 * 1024 * 1024 * 1024,
-    swap_used_bytes: 0,
-  },
-  disk: {
-    total_bytes: 500 * 1024 * 1024 * 1024,
-    available_bytes: 200 * 1024 * 1024 * 1024,
-    disks: [
-      {
-        mount_point: 'C:\\',
-        total_bytes: 500 * 1024 * 1024 * 1024,
-        available_bytes: 200 * 1024 * 1024 * 1024,
-      },
-    ],
-  },
-  uptime_secs: 3661,
-};
-
-const 样例使用分析: UsageAnalyticsDto = {
-  total_access: 12,
-  total_download: 34,
-  top_downloads: [
-    { repo_name: 'libs', repo_path: 'a/b.jar', count: 9, last_at: '2026-06-24T00:00:00Z' },
-  ],
-  repo_usage: [{ repo_name: 'libs', count: 9 }],
-};
-
-const 空审计: Paginated<AuditEntryDto> = {
-  items: [],
-  total: 0,
-  offset: 0,
-  limit: 50,
-  has_more: false,
-};
-
-const 样例防护状态: ProtectionStatusDto = {
-  alerts_enabled: true,
-  window_secs: 300,
-  window_counts: [{ dimension: 'rate_limit', count: 7 }],
-  active_banned_ips: 3,
-  dropped_alerts: 0,
-  recent_alerts: [],
-};
-
-const 空告警: Paginated<ProtectionAlertDto> = {
-  items: [],
-  total: 0,
-  offset: 0,
-  limit: 50,
-  has_more: false,
-};
-
-/** 统一桩：mock 四个 tab 各自端点，避免 useEffect 触发未处理拒绝。 */
-function 桩全部端点() {
-  vi.spyOn(api, 'getHostMonitor').mockResolvedValue(样例主机指标);
-  vi.spyOn(api, 'usageAnalytics').mockResolvedValue(样例使用分析);
-  vi.spyOn(api, 'listAudit').mockResolvedValue(空审计);
-  vi.spyOn(api, 'protectionStatus').mockResolvedValue(样例防护状态);
-  vi.spyOn(api, 'listProtectionAlerts').mockResolvedValue(空告警);
+/** 桩 getMetricSeries：按指标键返回一段固定时序（末点值由 key 决定，便于断言）。 */
+function 桩指标(lastValueByKey: Record<string, number> = {}) {
+  vi.spyOn(api, 'getMetricSeries').mockImplementation((metric: string): Promise<MetricSeries> => {
+    const last = lastValueByKey[metric] ?? 50;
+    return Promise.resolve({
+      metric,
+      points: [
+        { ts: 1_700_000_000_000, value: last - 10 },
+        { ts: 1_700_000_060_000, value: last },
+      ],
+    });
+  });
 }
 
-describe('MonitorPage', () => {
+describe('MonitorPage（KPI + 时序网格）', () => {
   afterEach(() => {
     vi.restoreAllMocks();
-    vi.useRealTimers();
   });
 
-  it('渲染四个 tab', async () => {
-    桩全部端点();
+  it('渲染分类切换与时间范围切换控件', async () => {
+    桩指标();
     renderPage();
 
-    expect(screen.getByRole('tab', { name: '主机监控' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: '使用分析' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: '审计' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: '防护' })).toBeInTheDocument();
+    expect(screen.getByLabelText('指标分类')).toBeInTheDocument();
+    expect(screen.getByLabelText('时间范围')).toBeInTheDocument();
+    // 分类选项含「全部 / 主机 / 防护」等
+    expect(screen.getByText('主机')).toBeInTheDocument();
+    expect(screen.getByText('防护')).toBeInTheDocument();
   });
 
-  it('默认主机监控 tab：展示 CPU 核数、内存与磁盘结构、uptime', async () => {
-    桩全部端点();
+  it('默认「全部」分类：KPI 行渲染各指标当前值（末点）', async () => {
+    桩指标({ 'host.cpu_percent': 42, 'usage.access_total': 123 });
     renderPage();
 
-    // 逻辑核数
-    await waitFor(() => expect(screen.getByText(/8 核/)).toBeInTheDocument());
-    // CPU / 内存 / 磁盘环形标签
-    expect(screen.getByRole('img', { name: /CPU/ })).toBeInTheDocument();
-    expect(screen.getByRole('img', { name: /内存/ })).toBeInTheDocument();
-    expect(screen.getByRole('img', { name: /磁盘/ })).toBeInTheDocument();
-    // 磁盘挂载点
-    expect(screen.getByText('C:\\')).toBeInTheDocument();
+    // CPU 使用率当前值 42% 与累计访问量 123 出现（KPI + 网格当前值各一处）
+    await waitFor(() => expect(screen.getAllByText('42%').length).toBeGreaterThan(0));
+    expect(screen.getAllByText('123').length).toBeGreaterThan(0);
   });
 
-  it('主机 tab 刷新按钮再次拉取指标', async () => {
-    桩全部端点();
-    const spy = vi.mocked(api.getHostMonitor);
-    renderPage();
+  it('每个可见指标渲染一张含折线的时序卡', async () => {
+    桩指标();
+    const { container } = renderPage();
 
-    await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
-    await userEvent.click(screen.getByRole('button', { name: '刷新' }));
-    await waitFor(() => expect(spy.mock.calls.length).toBeGreaterThanOrEqual(2));
+    // 取数完成后出现多条折线（每个有数据源指标一条）
+    await waitFor(() => expect(container.querySelectorAll('polyline').length).toBeGreaterThan(1));
   });
 
-  it('切到使用分析 tab 复用既有页，展示总量', async () => {
-    桩全部端点();
+  it('切到「主机」分类只展示 host.* 指标，隐藏防护指标', async () => {
+    桩指标();
     renderPage();
 
-    await userEvent.click(screen.getByRole('tab', { name: '使用分析' }));
-    await waitFor(() => expect(screen.getByText('12')).toBeInTheDocument());
-    expect(screen.getByText('34')).toBeInTheDocument();
+    // 指标名在 KPI 卡与时序卡各出现一次，用 getAllByText 避免「多元素」歧义
+    await waitFor(() => expect(screen.getAllByText('CPU 使用率').length).toBeGreaterThan(0));
+
+    await userEvent.click(screen.getByText('主机'));
+
+    // 主机三项可见
+    expect(screen.getAllByText('CPU 使用率').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('内存使用率').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('磁盘使用率').length).toBeGreaterThan(0);
+    // 防护 / 使用分析指标不在主机分类
+    expect(screen.queryByText('活跃封禁 IP')).not.toBeInTheDocument();
+    expect(screen.queryByText('累计访问量')).not.toBeInTheDocument();
   });
 
-  it('切到审计 tab 复用既有页，展示空态', async () => {
-    桩全部端点();
+  it('时间范围切换改变 getMetricSeries 的 from/to/step', async () => {
+    桩指标();
+    const spy = vi.mocked(api.getMetricSeries);
     renderPage();
 
-    await userEvent.click(screen.getByRole('tab', { name: '审计' }));
-    await waitFor(() => expect(screen.getByText('暂无审计记录。')).toBeInTheDocument());
+    await waitFor(() => expect(spy).toHaveBeenCalled());
+    // 取首次（默认 24h）某次调用的 step
+    const first = spy.mock.calls[0][1];
+    spy.mockClear();
+
+    // 切到 1h（step=0 不降采样）
+    await userEvent.click(screen.getByText('1 小时'));
+    await waitFor(() => expect(spy).toHaveBeenCalled());
+    const afterSwitch = spy.mock.calls[0][1];
+
+    // 1h 档 step 为 0，与默认 24h 档（非零）不同
+    expect(afterSwitch?.step).toBe(0);
+    expect(afterSwitch?.step).not.toBe(first?.step);
   });
 
-  it('切到防护 tab 复用既有页，展示封禁 IP 数', async () => {
-    桩全部端点();
+  it('无数据源指标（缓存命中率）显「暂无数据（待埋点）」且不发请求', async () => {
+    桩指标();
+    const spy = vi.mocked(api.getMetricSeries);
     renderPage();
 
-    await userEvent.click(screen.getByRole('tab', { name: '防护' }));
-    await waitFor(() => expect(screen.getByText('当前封禁 IP 数')).toBeInTheDocument());
+    // 切到缓存分类
+    await userEvent.click(screen.getByText('缓存'));
+
+    await waitFor(() => expect(screen.getAllByText('缓存命中率').length).toBeGreaterThan(0));
+    expect(screen.getByText('暂无数据（待埋点）')).toBeInTheDocument();
+    // 缓存命中率无数据源 → 不应对其发查询
+    const calledKeys = spy.mock.calls.map((c) => c[0]);
+    expect(calledKeys).not.toContain('cache.hit_ratio');
+  });
+
+  it('折线某点 hover 显示该时刻取值浮层', async () => {
+    桩指标({ 'host.cpu_percent': 66 });
+    renderPage();
+
+    await waitFor(() => expect(screen.getAllByText('CPU 使用率').length).toBeGreaterThan(0));
+
+    // 切到主机分类，缩小可见指标，定位 CPU 卡内的数据点
+    await userEvent.click(screen.getByText('主机'));
+    const cpuPoint = await screen.findByLabelText(/66%/);
+    await userEvent.hover(cpuPoint);
+
+    const tip = await screen.findByRole('status');
+    expect(tip).toHaveTextContent('66%');
+  });
+
+  it('监控页不再含审计内容（审计已拆出独立页）', async () => {
+    桩指标();
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('监控')).toBeInTheDocument());
+    // 不再有审计 tab / 审计标题
+    expect(screen.queryByRole('tab', { name: '审计' })).not.toBeInTheDocument();
+    expect(screen.queryByText('暂无审计记录。')).not.toBeInTheDocument();
   });
 });

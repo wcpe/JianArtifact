@@ -24,8 +24,11 @@ import {
   IconUsers,
   IconUsersGroup,
   IconShieldLock,
+  IconShield,
   IconUpload,
   IconActivity,
+  IconChartBar,
+  IconHistory,
   IconTransfer,
   IconSettings,
   IconLogout,
@@ -78,8 +81,17 @@ const NAV_ITEMS: NavItem[] = [
   { label: '用户组管理', path: '/groups', icon: <IconUsersGroup size={18} />, adminOnly: true },
   { label: '防护配置', path: '/protection', icon: <IconShieldLock size={18} />, adminOnly: true },
   { label: '制品上传', path: '/upload', icon: <IconUpload size={18} /> },
-  // FR-99：使用分析 / 审计日志 / 防护监控三个独立入口收敛为统一「监控」入口（tab 化整合）
+  // FR-99 重设计：监控页改为跨域 KPI + 时序网格总览（消费 FR-105）；
+  // 审计 / 使用分析 / 防护监控恢复为各自独立入口（不再 tab 化整合于监控页）。
   { label: '监控', path: '/monitor', icon: <IconActivity size={18} />, adminOnly: true },
+  { label: '使用分析', path: '/analytics', icon: <IconChartBar size={18} />, adminOnly: true },
+  { label: '审计日志', path: '/audit', icon: <IconHistory size={18} />, adminOnly: true },
+  {
+    label: '防护监控',
+    path: '/protection-monitor',
+    icon: <IconShield size={18} />,
+    adminOnly: true,
+  },
   { label: 'Nexus 迁移', path: '/migration', icon: <IconTransfer size={18} />, adminOnly: true },
   { label: '设置', path: '/settings', icon: <IconSettings size={18} />, adminOnly: true },
 ];

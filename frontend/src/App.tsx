@@ -21,6 +21,9 @@ import { ArtifactDetailPage } from './pages/ArtifactDetailPage';
 import { ProtectionConfigPage } from './pages/ProtectionConfigPage';
 import { UploadPage } from './pages/UploadPage';
 import { MonitorPage } from './pages/MonitorPage';
+import { AnalyticsPage } from './pages/AnalyticsPage';
+import { AuditPage } from './pages/AuditPage';
+import { ProtectionMonitorPage } from './pages/ProtectionMonitorPage';
 import { MigrationPage } from './pages/MigrationPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { LicensesPage } from './pages/LicensesPage';
@@ -75,7 +78,7 @@ function HomeRoute() {
  * 由 `AppLayout` 自身据登录态渲染匿名 / 登录页眉与导航。各子路由按层加守卫：
  * - 公开层（匿名可达，只读公开内容）：`/`（落地分流）、`/repositories`、`/repository`、`/search`、`/artifact`、`/licenses`。
  * - 需登录层（user+）：`/tokens`、`/upload`——`RequireAuth`。
- * - 需管理员层（admin）：`/users`、`/groups`、`/protection`、`/monitor`、`/migration`、`/settings`——`RequireAuth` + `RequireAdmin`。
+ * - 需管理员层（admin）：`/users`、`/groups`、`/protection`、`/monitor`、`/analytics`、`/audit`、`/protection-monitor`、`/migration`、`/settings`——`RequireAuth` + `RequireAdmin`。
  */
 export function App() {
   return (
@@ -145,6 +148,37 @@ export function App() {
             <RequireAuth>
               <RequireAdmin>
                 <MonitorPage />
+              </RequireAdmin>
+            </RequireAuth>
+          }
+        />
+        {/* FR-99：使用分析 / 审计 / 防护监控恢复为各自独立路由（监控页不再 tab 化整合） */}
+        <Route
+          path="analytics"
+          element={
+            <RequireAuth>
+              <RequireAdmin>
+                <AnalyticsPage />
+              </RequireAdmin>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="audit"
+          element={
+            <RequireAuth>
+              <RequireAdmin>
+                <AuditPage />
+              </RequireAdmin>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="protection-monitor"
+          element={
+            <RequireAuth>
+              <RequireAdmin>
+                <ProtectionMonitorPage />
               </RequireAdmin>
             </RequireAuth>
           }
