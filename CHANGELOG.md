@@ -25,6 +25,7 @@
 - 默认监听端口由 `8080` 改为 `9999`（`server.port` 默认值）：同步更新 `config.example.toml` / `docs/CONFIG.md`；仍可经 `JIANARTIFACT_SERVER_PORT` 或 TOML 覆盖
 
 ### 修复
+- 控制台设置页「保存」按钮漂移（FR-96）：保存动作条改为 sticky 底部固定条（`position: sticky; bottom: 0`），始终贴在滚动视口底部、不随内容 / 窗口缩放漂移、滚动时常驻可见；配顶部描边 + 背景 + 内边距与正文分隔、不遮挡内容。仅定位呈现，沿用 FR-88/89 既有保存 / 检查 / 应用逻辑与 `GET` / `PATCH /api/v1/settings` 契约
 - 控制台侧栏导航高亮串台：导航 active 判定由前缀匹配改为按路径段精确匹配，修复进入「防护监控」（`/protection-monitor`）时「防护配置」（`/protection`，前者前缀）被一并高亮的问题；其它有前缀关系的路由同样不再串台，仓库等子路径仍正确高亮
 - 发布流水线 dev 预发布资产堆积（FR-86）：滚动 `dev` 开发版快照的资产名内嵌 `{run_number}+{sha}`、各次不同，原先 `action-gh-release` 只追加不删旧资产致其在 `dev` 预发布里无限堆积。发布前显式删除旧 `dev` 预发布及其 tag（仅 prerelease 渠道，正式 `v*` 不删），使每次推 master 的 `dev` 预发布只含当前快照资产
 - 在线更新 prerelease 通道拉不到预发布版（FR-89，增强 FR-85）：修复开启在线更新 + `channel=prerelease` 时拉不到 dev 预发布的两处缺陷——① 发布流水线 dev 版本串由 `{cargo版本}-dev.{run_number}+{shortsha}`（含 `+`）改为 `.{shortsha}`（点分），避免 GitHub 上传 Release 资产时把资产名里的 `+` 改写成 `.`、致自更新按含 `+` 的版本重构的期望资产名匹配不到；② prerelease 通道的版本判定由 `major.minor.patch` 三段比改为按完整版本串判定（目标与当前不同即视为可更新 / 可切换），修复 `0.4.0` 当前版对 `0.4.0-dev.N.<sha>`（核心版本相等）被误判「无更新」。stable 通道仍维持 SemVer 严格更高语义不变。另修 prerelease 滚动发布的 `tag_name` 为固定标签 `dev`（非版本串）时版本解析失败的问题——版本回退取 release 标题 `name`（内嵌完整 dev 版本串）

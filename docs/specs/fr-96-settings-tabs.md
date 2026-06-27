@@ -14,6 +14,7 @@
   - 切换 tab 显示对应区、其余区隐藏。
   - 密度提升：引用 `theme/density.ts`（卡片瘦身 `cardPadding`、堆叠间距 `gridSpacing`），卡片改用密度 token，紧凑表单。
   - 「保存」按钮归属在网络代理与在线更新区共用（一次 PATCH 提交全部字段，沿用既有 `handleSave`，不拆分契约）。
+  - 保存动作条为 **sticky 底部固定条**（`position: sticky; bottom: 0`）：始终贴在滚动视口底部、不随内容 / 窗口缩放漂移，配顶部描边 + 背景 + 内边距与正文分隔、不遮挡内容；仅定位呈现，保存逻辑与 PATCH 契约不变。
 - 不做（范围外）：
   - 不改后端、不改 GET / PATCH /api/v1/settings 契约。
   - 不改 FR-88/89 既有可编辑字段语义、token 三态、代理凭据脱敏。

@@ -10,6 +10,7 @@
 
 import { useEffect, useState } from 'react';
 import {
+  Box,
   Stack,
   Title,
   Text,
@@ -384,18 +385,43 @@ export function SettingsPage() {
         </Tabs.Panel>
       </Tabs>
 
-      {/* —— 保存（网络代理 + 在线更新共用一次 PATCH，沿用 FR-88 既有逻辑）—— */}
-      <Group>
-        <Button leftSection={<IconDeviceFloppy size={16} />} onClick={handleSave} loading={saving}>
-          保存
-        </Button>
-        {saved && (
-          <Text c="green" size="sm">
-            已保存，配置已即时生效。
-          </Text>
+      {/* —— 保存（网络代理 + 在线更新共用一次 PATCH，沿用 FR-88 既有逻辑）——
+          固定为 sticky 底部动作条：始终贴在滚动视口底部、不随内容 / 窗口缩放漂移；
+          负的左右 / 下外边距抵消 AppShell.Main 的内边距，使其横向铺满、紧贴底缘；
+          顶部描边 + 背景 + 内边距与内容区分隔，避免遮挡正文。仅改定位呈现，保存逻辑不变。 */}
+      <Box
+        data-testid="settings-save-bar"
+        style={{
+          position: 'sticky',
+          bottom: 0,
+          zIndex: 1,
+          marginInline: `calc(-1 * var(--mantine-spacing-sm))`,
+          marginBottom: `calc(-1 * var(--mantine-spacing-sm))`,
+          padding: `var(--mantine-spacing-sm)`,
+          backgroundColor: 'var(--mantine-color-body)',
+          borderTop: '1px solid var(--mantine-color-default-border)',
+        }}
+      >
+        <Group>
+          <Button
+            leftSection={<IconDeviceFloppy size={16} />}
+            onClick={handleSave}
+            loading={saving}
+          >
+            保存
+          </Button>
+          {saved && (
+            <Text c="green" size="sm">
+              已保存，配置已即时生效。
+            </Text>
+          )}
+        </Group>
+        {saveError && (
+          <Box mt="sm">
+            <ErrorAlert message={saveError} />
+          </Box>
         )}
-      </Group>
-      {saveError && <ErrorAlert message={saveError} />}
+      </Box>
 
       {/* —— 升级二次确认弹窗 —— */}
       <Modal opened={confirmOpened} onClose={confirmModal.close} title="确认升级到新版本" centered>

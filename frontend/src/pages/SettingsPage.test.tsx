@@ -306,6 +306,18 @@ describe('SettingsPage', () => {
     expect(screen.getByDisplayValue('wcpe/JianArtifact')).toBeInTheDocument();
   });
 
+  it('保存动作条为 sticky 底部固定条，保存按钮在其内', async () => {
+    vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
+    // 保存按钮所在的固定条容器带 sticky 定位、贴底（bottom:0），不随内容滚动漂移
+    const saveBar = screen.getByTestId('settings-save-bar');
+    expect(saveBar).toHaveStyle({ position: 'sticky', bottom: '0' });
+    // 保存按钮落在该固定条内
+    expect(saveBar).toContainElement(screen.getByText('保存').closest('button'));
+  });
+
   it('加载失败时展示错误提示', async () => {
     vi.spyOn(api, 'getSettings').mockRejectedValue(
       new ApiError(403, 'forbidden', '无权执行该操作'),
