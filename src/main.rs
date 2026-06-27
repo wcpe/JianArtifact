@@ -72,6 +72,25 @@ async fn main() -> anyhow::Result<()> {
         .with_context(|| format!("打开元数据库失败: {}", db_path.display()))?;
     info!(数据库 = %db_path.display(), "元数据库就绪");
 
+    // 动态配置入库覆盖（FR-106，ADR-0028）：meta 就绪后读 app_settings 作 DB 覆盖，按优先级
+    // env 显式 > DB > 文件默认 合并出生效配置，再供下方各热替换槽 / 后台任务消费。覆盖在装配层完成、
+    // config 零 DB 依赖（守红线）；DB 空 / 损坏只 WARN、回落文件默认，不阻断启动。
+    let env_keys = jianartifact::config_overlay::collect_env_explicit_keys();
+    let db_overlay = match meta.load_settings().await {
+        Ok(rows) => rows,
+        Err(e) => {
+            warn!(原因 = %e, "读取动态配置（app_settings）失败，回落文件默认");
+            Vec::new()
+        }
+    };
+    if !db_overlay.is_empty() {
+        info!(
+            覆盖项数 = db_overlay.len(),
+            "已从 DB 读取动态配置覆盖（env 显式项仍以 env 为准）"
+        );
+    }
+    let cfg = jianartifact::config_overlay::merge_effective_config(cfg, &env_keys, &db_overlay);
+
     // 初始化 blob 存储：按配置选 fs（默认）/ s3 后端；S3 临时文件中转目录在数据目录下
     let s3_tmp_dir = data_dir.join("s3-tmp");
     let store = BlobBackend::from_config(&cfg.data.storage, &blobs_dir, &s3_tmp_dir)

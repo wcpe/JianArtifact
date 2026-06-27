@@ -13,6 +13,7 @@ mod audit;
 mod groups;
 mod metrics;
 mod repo;
+mod settings;
 mod usage;
 mod vuln;
 

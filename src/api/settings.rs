@@ -452,7 +452,23 @@ pub async fn patch_settings(
         .replace_proxy(new_proxy)
         .map_err(|reason| ApiError::BadRequest(format!("网络代理配置非法：{reason}")))?;
     // 代理换槽成功后再换在线更新槽（已校验，不会失败）
-    state.settings.replace_update(new_update);
+    state.settings.replace_update(new_update.clone());
+
+    // 持久化在线更新「非密钥字段」到 app_settings（FR-106，ADR-0028）：仅 enabled / repo /
+    // api_base_url / restart_mode / channel 落库（经 UpdateTunables 视图，token 自动剔除——token
+    // 真源是 env、绝不入库）。网络代理（含账密）继续只入内存槽、不落库（ADR-0022）。落库失败只 WARN，
+    // 不阻断热替换（即时生效优先，重启回落上次入库 / 文件 / env）。
+    let tunables = crate::config_overlay::UpdateTunables::from_editable(&new_update);
+    match serde_json::to_string(&tunables) {
+        Ok(json) => {
+            if let Err(e) = state.meta.upsert_setting("update", &json).await {
+                tracing::warn!(原因 = %e, "在线更新非密钥配置落库失败，热替换仍生效（重启回落 env / 文件）");
+            }
+        }
+        Err(e) => {
+            tracing::warn!(原因 = %e, "在线更新配置序列化失败，跳过落库，热替换仍生效");
+        }
+    }
 
     // 记一条管理动作日志（仅记动作，不含任何凭据明文）
     tracing::info!(操作者 = %identity.actor_name(), "管理员更新了网络代理 / 在线更新设置，已即时生效");
@@ -1149,5 +1165,128 @@ mod tests {
         let (u, p) = parse_proxy_credentials("http://alice@host:3128");
         assert_eq!(u.as_deref(), Some("alice"));
         assert!(!p);
+    }
+
+    // ===== FR-106：在线更新非密钥字段落库 + 凭据红线 =====
+
+    #[tokio::test]
+    async fn patch_settings_落库_update_非密钥字段_重装载仍生效() {
+        // FR-106：PATCH update 非密钥字段 → 写 app_settings(key=update) → 重新装载后仍生效
+        let (state, _dir) = 测试用状态().await;
+        let token = 签发令牌(&state, "admin", Role::Admin).await;
+        let meta = state.meta.clone();
+
+        let body = serde_json::json!({
+            "network_proxy": { "http": {}, "https": {}, "all": {}, "no_proxy": null },
+            "update": {
+                "enabled": true,
+                "repo": "acme/app",
+                "api_base_url": "https://api.github.com",
+                "restart_mode": "exit",
+                "channel": "prerelease",
+                "token": "ghp_secret_should_not_persist"
+            }
+        });
+        let resp = 请求_patch(state, Some(&token), body).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let rows = meta.load_settings().await.unwrap();
+        // update 节已落库（非密钥字段）
+        assert!(
+            rows.iter().any(|(k, _)| k == "update"),
+            "update 非密钥字段应已落库"
+        );
+        // 重新装载：经覆盖纯函数合并，enabled / repo / channel 仍生效（token 走 env / 文件，不在 DB）
+        let eff = crate::config_overlay::merge_effective_config(
+            crate::config::Config::default(),
+            &std::collections::BTreeSet::new(),
+            &rows,
+        );
+        assert!(eff.update.enabled, "重新装载后 enabled 应仍为 true");
+        assert_eq!(eff.update.repo, "acme/app");
+        assert_eq!(eff.update.channel, "prerelease");
+        assert_eq!(eff.update.restart_mode, "exit");
+        // token 绝不入库：重新装载回落文件默认 None（真源是 env，不在 app_settings）
+        assert!(
+            eff.update.token.is_none(),
+            "token 绝不入库，重装载应回落 None"
+        );
+    }
+
+    #[tokio::test]
+    async fn patch_settings_凭据红线_db_无_token_无代理账密() {
+        // FR-106 红线：PATCH 含 update token + 代理账密 → app_settings 中无任何凭据明文
+        let (state, _dir) = 测试用状态().await;
+        let token = 签发令牌(&state, "admin", Role::Admin).await;
+        let meta = state.meta.clone();
+
+        let body = serde_json::json!({
+            "network_proxy": {
+                "http": { "url": "http://proxy.internal:3128", "username": "alice", "password": "supersecretpw" },
+                "https": {},
+                "all": {},
+                "no_proxy": null
+            },
+            "update": {
+                "enabled": true,
+                "repo": "wcpe/JianArtifact",
+                "api_base_url": "https://api.github.com",
+                "restart_mode": "self",
+                "channel": "stable",
+                "token": "ghp_topsecrettoken"
+            }
+        });
+        let resp = 请求_patch(state, Some(&token), body).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // app_settings 全量 JSON 中绝不含 token 本体、代理账密、或 token / password 字段名
+        let rows = meta.load_settings().await.unwrap();
+        let all: String = rows.iter().map(|(k, v)| format!("{k}{v}")).collect();
+        assert!(
+            !all.contains("ghp_topsecrettoken"),
+            "update token 绝不入库：{all}"
+        );
+        assert!(!all.contains("supersecretpw"), "代理密码绝不入库：{all}");
+        assert!(
+            !all.contains("alice"),
+            "代理账号不入库（代理整体不落库）：{all}"
+        );
+        assert!(!all.contains("token"), "落库不得含 token 字段名：{all}");
+        assert!(
+            !all.contains("password"),
+            "落库不得含 password 字段名：{all}"
+        );
+        // 代理节整体不落库（ADR-0022 仍走内存槽）：app_settings 不含 proxy / network 键
+        assert!(
+            !rows
+                .iter()
+                .any(|(k, _)| k == "network" || k == "proxy" || k == "network.proxy"),
+            "网络代理（含账密）整体不落库，仅入内存槽"
+        );
+    }
+
+    #[tokio::test]
+    async fn patch_settings_校验失败_400_不落库() {
+        // FR-106：非法 channel 返回 400，app_settings 不被写入 update 节
+        let (state, _dir) = 测试用状态().await;
+        let token = 签发令牌(&state, "admin", Role::Admin).await;
+        let meta = state.meta.clone();
+        let body = serde_json::json!({
+            "network_proxy": { "http": {}, "https": {}, "all": {}, "no_proxy": null },
+            "update": {
+                "enabled": true,
+                "repo": "wcpe/JianArtifact",
+                "api_base_url": "https://api.github.com",
+                "restart_mode": "self",
+                "channel": "beta",
+                "token": null
+            }
+        });
+        let resp = 请求_patch(state, Some(&token), body).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            meta.load_settings().await.unwrap().is_empty(),
+            "校验失败不得落库 update 节"
+        );
     }
 }
