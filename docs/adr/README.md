@@ -31,6 +31,7 @@
 | 0025 | 开源许可清单构建期扫描 + 数据嵌入二进制 + 公开页：构建期由 `cargo-about`（Rust，按 `about.toml` accepted 清单）+ `pnpm licenses list`（前端）扫描运行时 + 开发依赖许可，`scripts/gen-licenses.mjs` 合并为 JSON 嵌入二进制（`include_str!` + 占位降级），公开端点 `GET /api/v1/licenses` 与页 `/licenses` 匿名只读；运行时不外联、守数据不外发（P2） | 已接受 |
 | 0026 | 自更新回滚（增强 ADR-0021）：升级时把当前二进制持久备份为跨平台一致的 `{exe}.rollback.bak`（单备份、不被启动清理，独立于 ADR-0021 临时 `.bak`/`.old`）→ `POST /api/v1/update/rollback`（仅 Admin）复用 execute_replace 原子换回 + 走既有重启链路 → 无备份返 409，回滚与升级共用 apply 单飞 guard，设置视图增 `rollback_available`（P2） | 已接受 |
 | 0027 | 统一指标时序采集与查询（取代 ADR-0023「不留时序」）：通用扁平表 `metric_samples(metric_key,ts,value)` 经 `meta` 落库，后台定时按可配间隔采样主机/存储仓库/防护/使用分析各域 gauge + 可配保留期滚动清理 + 行数兜底，仅 Admin `GET /api/v1/monitor/metrics` 降采样查询；保留 FR-98 实时快照，缓存命中率本期降级不采，本机内部不外发（P2） | 已接受 |
+| 0028 | 动态配置持久化（文件默认 + DB 覆盖 + 内存缓存，扩展 ADR-0022）：`app_settings(key,value_json)` KV 表经 `meta` 落库，启动加载文件默认 → 读 DB 覆盖 → 填内存热替换槽，PATCH 写库 + 换槽即时生效；优先级 env 显式 > DB > 文件默认；**凭据与 bootstrap 严格不入库**（代理账密/token/密钥/端口/数据目录仍走文件+env），落库白名单默认拒绝；`config` 不反向依赖 DB（覆盖在装配层），增量纳入高频非密钥节（P2） | 已接受 |
 
 > 模板：状态 / 背景 / 决策 / 理由 / 后果 / 备选方案。
 
