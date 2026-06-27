@@ -1,7 +1,7 @@
-// 设置页组件测试（FR-87 只读 + FR-88 可编辑热替换 + FR-96 页内 tab 重排）：
-// 加载填充脱敏配置到表单、保存调 PATCH 即时生效、检查更新展示版本对比、有更新触发升级确认流、
-// enabled=false 禁用升级、各错误码（409/502/422）友好提示；
-// 并校验左侧页内 tab（网络代理 / 在线更新 / 关于·版本）切换显示对应区。
+// 设置页组件测试（FR-87 只读 + FR-88 可编辑热替换 + FR-103 单页堆叠重排）：
+// 加载填充脱敏配置到表单、保存调 PATCH 即时生效、检查更新展示版本对比 + release 说明、
+// 有更新触发升级确认流、enabled=false 禁用升级、各错误码（409/502/422）友好提示；
+// 并校验单页纵向堆叠（去 tab）三块同屏、在线更新高级项默认折叠且可展开。
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
@@ -286,39 +286,59 @@ describe('SettingsPage', () => {
     expect(screen.queryByText('已触发升级')).not.toBeInTheDocument();
   });
 
-  it('FR-96：渲染左侧页内 tab（网络代理 / 在线更新 / 关于·版本）', async () => {
+  it('FR-103：单页纵向堆叠去 tab，网络代理 / 在线更新 / 关于·版本 三块同屏可见', async () => {
     vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
     renderPage();
 
     await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
-    // 三个页内 tab 均以 tab 角色呈现
-    expect(screen.getByRole('tab', { name: /网络代理/ })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /在线更新/ })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /关于/ })).toBeInTheDocument();
+    // 去 tab：页面不再有任何 tab 角色元素
+    expect(screen.queryAllByRole('tab')).toHaveLength(0);
+    // 三块标题同屏可见（无须切换）：网络代理（代理段标题）、在线更新、关于·版本
+    expect(screen.getByText('网络代理')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '在线更新' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '关于·版本' })).toBeInTheDocument();
+    // 代理表单与在线更新「检查与应用更新」同屏（不靠切 tab）
+    expect(screen.getByDisplayValue('http://proxy.internal:8080')).toBeInTheDocument();
+    expect(screen.getByText('检查与应用更新')).toBeInTheDocument();
   });
 
-  it('FR-96：切换到「关于·版本」tab 展示当前版本与生效说明', async () => {
+  it('FR-103：关于·版本区直接展示当前版本与生效说明（无须切换）', async () => {
     vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
     renderPage();
 
     await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('tab', { name: /关于/ }));
-
-    // 关于区展示当前版本与「无须重启」生效说明
-    await waitFor(() => expect(screen.getByText(/运行时即时生效、无须重启/)).toBeInTheDocument());
+    // 关于区展示当前版本与「无须重启」生效说明（单页同屏，无须点击）
+    expect(screen.getByText(/运行时即时生效、无须重启/)).toBeInTheDocument();
     expect(screen.getByText('0.3.0')).toBeInTheDocument();
   });
 
-  it('FR-96：默认激活「网络代理」tab，代理表单可见', async () => {
+  it('FR-103：在线更新默认仅显「更新通道」+ 检查更新，高级项收进折叠区', async () => {
     vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
     renderPage();
 
     await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
-    // 默认 tab 选中态为网络代理
-    expect(screen.getByRole('tab', { name: /网络代理/ })).toHaveAttribute('aria-selected', 'true');
-    // 切到在线更新 tab 后，仓库源表单仍可访问（panel keepMounted）
-    fireEvent.click(screen.getByRole('tab', { name: /在线更新/ }));
-    expect(screen.getByDisplayValue('wcpe/JianArtifact')).toBeInTheDocument();
+    // 默认可见：启用开关、更新通道、检查更新按钮
+    expect(screen.getByLabelText('启用在线更新（出站开关）')).toBeVisible();
+    expect(screen.getByDisplayValue('stable（仅稳定版）')).toBeVisible();
+    expect(screen.getByRole('button', { name: '检查更新' })).toBeVisible();
+    // 高级设置切换按钮在场
+    expect(screen.getByRole('button', { name: /高级设置/ })).toBeInTheDocument();
+    // 高级项默认折叠不可见：仓库源 / API 基址 / 重启模式 / 访问令牌
+    expect(screen.queryByDisplayValue('wcpe/JianArtifact')).not.toBeVisible();
+    expect(screen.queryByLabelText('访问令牌（私有仓库可选）')).not.toBeVisible();
+  });
+
+  it('FR-103：点「高级设置」展开后，仓库源 / API 基址 / 重启模式 / 访问令牌可见', async () => {
+    vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('网络代理')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /高级设置/ }));
+
+    await waitFor(() => expect(screen.getByDisplayValue('wcpe/JianArtifact')).toBeVisible());
+    expect(screen.getByDisplayValue('https://api.github.com')).toBeVisible();
+    expect(screen.getByDisplayValue('self（自拉起新进程）')).toBeVisible();
+    expect(screen.getByLabelText('访问令牌（私有仓库可选）')).toBeVisible();
   });
 
   it('保存动作条为 sticky 底部固定条，保存按钮在其内', async () => {
