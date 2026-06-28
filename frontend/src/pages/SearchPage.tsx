@@ -34,9 +34,10 @@ import { FormatIcon } from '../lib/formatIcon';
 import { errorMessage, formatBytes } from '../lib/format';
 import { density } from '../theme/density';
 import { ErrorAlert } from '../components/ErrorAlert';
+import { TREE_INDENT_STEP } from '../lib/browseTree';
 
-/** 每层缩进像素（与 FR-93 仓库详情树一致的层级观感）。 */
-const INDENT_STEP = 16;
+/** 每层缩进像素（与 FR-93 仓库详情树共用同一步长，层级递进观感一致，FR-115）。 */
+const INDENT_STEP = TREE_INDENT_STEP;
 
 /** 收集一棵树里全部目录前缀（用于默认全展开，结果一眼可见）。 */
 function collectFolderPaths(nodes: SearchTreeNode[], acc: Set<string>): Set<string> {
@@ -86,15 +87,17 @@ function TreeNodes({
           return (
             <div key={`d:${node.path}`}>
               <UnstyledButton
+                data-testid="search-tree-folder"
                 onClick={() => onToggle(node.path)}
                 px={6}
                 py={4}
                 style={{ width: '100%', borderRadius: 4, paddingLeft: indent + 6 }}
               >
-                <Group gap={4} wrap="nowrap">
+                <Group gap={4} wrap="nowrap" align="flex-start">
                   {open ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />}
                   {open ? <IconFolderOpen size={16} /> : <IconFolder size={16} />}
-                  <Text size="sm" truncate>
+                  {/* 目录名不截断（FR-115）：去掉 truncate，可换行看全名 */}
+                  <Text size="sm" style={{ wordBreak: 'break-all' }}>
                     {node.name}
                   </Text>
                 </Group>
@@ -116,12 +119,19 @@ function TreeNodes({
         return (
           <Group
             key={`f:${node.path}`}
+            data-testid="search-tree-file"
             gap={density.inlineGap}
             wrap="nowrap"
+            align="flex-start"
             style={{ paddingLeft: indent + 6 }}
           >
             <FormatIcon format={format} />
-            <Anchor size="sm" onClick={() => onOpenFile(node.path)}>
+            {/* 文件名不截断（FR-115）：可换行看全名 */}
+            <Anchor
+              size="sm"
+              onClick={() => onOpenFile(node.path)}
+              style={{ wordBreak: 'break-all' }}
+            >
               {node.name}
             </Anchor>
             <Text size="xs" c="dimmed">

@@ -199,3 +199,81 @@ describe('RepositoryDetailPage 浏览（文件树 + 右侧详情）', () => {
     await waitFor(() => expect(screen.getByText('该仓库暂无制品。')).toBeInTheDocument());
   });
 });
+
+describe('RepositoryDetailPage 浏览布局重构（FR-115）', () => {
+  beforeEach(() => {
+    navigateMock.mockReset();
+    mockedApi.getRepository.mockResolvedValue(REPO);
+    mockedApi.getArtifactDetail.mockResolvedValue(detailOf('com/example/lib/1.0/lib-1.0.jar'));
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('左树为主、右详情为辅：两栏为各自独立滚动容器', async () => {
+    mockedApi.listArtifacts.mockResolvedValue([art('top.txt')]);
+    renderPage();
+    await waitFor(() => expect(screen.getByText('top.txt')).toBeInTheDocument());
+
+    // 左树与右详情各有独立滚动容器
+    expect(screen.getByTestId('browse-tree-scroll')).toBeInTheDocument();
+    expect(screen.getByTestId('browse-detail-scroll')).toBeInTheDocument();
+    // 浏览区为固定高度的两栏布局容器（不随内容整页滚动）
+    expect(screen.getByTestId('browse-layout')).toBeInTheDocument();
+  });
+
+  it('文件树逐层缩进递进：深层条目缩进大于浅层', async () => {
+    const user = userEvent.setup();
+    mockedApi.listArtifacts.mockResolvedValue([art('com/example/lib-1.0.jar')]);
+    renderPage();
+
+    // 根层目录 com 缩进最小
+    await waitFor(() => expect(screen.getByText('com')).toBeInTheDocument());
+    const comFolder = screen.getByText('com').closest('[data-testid="tree-folder"]') as HTMLElement;
+    const comIndent = parseInt(comFolder.style.paddingLeft, 10);
+
+    // 展开 com → 次层目录 example 缩进更大
+    await user.click(screen.getByText('com'));
+    const exampleFolder = (await screen.findByText('example')).closest(
+      '[data-testid="tree-folder"]',
+    ) as HTMLElement;
+    const exampleIndent = parseInt(exampleFolder.style.paddingLeft, 10);
+
+    // 展开 example → 文件叶子缩进再更大
+    await user.click(screen.getByText('example'));
+    const fileRow = (await screen.findByText('lib-1.0.jar')).closest(
+      '[data-testid="tree-file"]',
+    ) as HTMLElement;
+    const fileIndent = parseInt(fileRow.style.paddingLeft, 10);
+
+    expect(exampleIndent).toBeGreaterThan(comIndent);
+    expect(fileIndent).toBeGreaterThan(exampleIndent);
+  });
+
+  it('文件名不截断：同目录多 sidecar 全名可辨（无 truncate 类）', async () => {
+    const user = userEvent.setup();
+    mockedApi.listArtifacts.mockResolvedValue([
+      art('v/lib-1.0.jar'),
+      art('v/lib-1.0.jar.md5'),
+      art('v/lib-1.0.jar.sha1'),
+      art('v/lib-1.0.jar.sha256'),
+      art('v/lib-1.0.jar.sha512'),
+    ]);
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('v')).toBeInTheDocument());
+    await user.click(screen.getByText('v'));
+
+    // 同目录五个全名各自完整出现，互不截断
+    for (const name of [
+      'lib-1.0.jar',
+      'lib-1.0.jar.md5',
+      'lib-1.0.jar.sha1',
+      'lib-1.0.jar.sha256',
+      'lib-1.0.jar.sha512',
+    ]) {
+      const node = await screen.findByText(name);
+      expect(node).toBeInTheDocument();
+      // 名称节点不再带 truncate（Mantine truncate 产出该 data 属性 / mod 类）
+      expect(node).not.toHaveAttribute('data-truncate', 'true');
+    }
+  });
+});

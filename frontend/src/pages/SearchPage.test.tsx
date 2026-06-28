@@ -145,4 +145,33 @@ describe('SearchPage 页眉驱动的自动搜索（FR-94）', () => {
     // 前端只渲染后端返回项：无私有仓库制品被渲染
     expect(screen.queryByText('private-secret.jar')).not.toBeInTheDocument();
   });
+
+  it('结果树逐层缩进递进 + 文件名不截断（FR-115）', async () => {
+    mockedApi.search.mockResolvedValue(
+      paged([hit('r1', 'maven-hosted', 'maven', 'com/example/lib-1.0.jar.sha256')]),
+    );
+    renderAt('?q=x');
+
+    // 默认全展开：根层目录 com、次层 example、文件叶子均可见
+    await waitFor(() => expect(screen.getByText('com')).toBeInTheDocument());
+    const comFolder = screen
+      .getByText('com')
+      .closest('[data-testid="search-tree-folder"]') as HTMLElement;
+    const exampleFolder = screen
+      .getByText('example')
+      .closest('[data-testid="search-tree-folder"]') as HTMLElement;
+    const fileRow = screen
+      .getByText('lib-1.0.jar.sha256')
+      .closest('[data-testid="search-tree-file"]') as HTMLElement;
+
+    const comIndent = parseInt(comFolder.style.paddingLeft, 10);
+    const exampleIndent = parseInt(exampleFolder.style.paddingLeft, 10);
+    const fileIndent = parseInt(fileRow.style.paddingLeft, 10);
+
+    // 逐层缩进递增
+    expect(exampleIndent).toBeGreaterThan(comIndent);
+    expect(fileIndent).toBeGreaterThan(exampleIndent);
+    // 文件名不截断（无 Mantine truncate 标记）
+    expect(screen.getByText('lib-1.0.jar.sha256')).not.toHaveAttribute('data-truncate', 'true');
+  });
 });

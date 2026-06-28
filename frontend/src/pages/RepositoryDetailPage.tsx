@@ -40,6 +40,7 @@ import { ErrorAlert } from '../components/ErrorAlert';
 import { ArtifactDetailPanel } from '../components/ArtifactDetailPanel';
 import { AclPanel } from '../components/AclPanel';
 import { GroupAclPanel } from '../components/GroupAclPanel';
+import { TREE_INDENT_STEP } from '../lib/browseTree';
 
 /** 仓库详情页。 */
 export function RepositoryDetailPage() {
@@ -228,10 +229,25 @@ function BrowseTab({ repo }: { repo: RepositoryDto }) {
   }
 
   return (
-    <Group align="flex-start" gap="lg" wrap="nowrap">
-      {/* 左：文件树 */}
-      <Card withBorder padding="sm" radius="md" w={320} style={{ flexShrink: 0 }}>
-        <ScrollArea.Autosize mah={520}>
+    // 固定高度的浏览区（FR-115）：整体不随内容整页滚动，左树为主、右详情为辅，两栏各自独立滚动。
+    // 高度取视口减去页眉 / 标题 / 页签等顶部占用，让文件树铺满内容区可用高度。
+    <Group
+      data-testid="browse-layout"
+      align="stretch"
+      gap="lg"
+      wrap="nowrap"
+      h="calc(100vh - 220px)"
+      mih={360}
+    >
+      {/* 左：文件树（主栏，占更大宽度，独立滚动） */}
+      <Card
+        withBorder
+        padding="sm"
+        radius="md"
+        flex={2}
+        style={{ minWidth: 0, display: 'flex', flexDirection: 'column' }}
+      >
+        <ScrollArea h="100%" data-testid="browse-tree-scroll">
           <FileTree
             repo={repo}
             artifacts={artifacts}
@@ -239,25 +255,33 @@ function BrowseTab({ repo }: { repo: RepositoryDto }) {
             onSelectFile={selectFile}
             onDelete={isAdmin ? handleDelete : undefined}
           />
-        </ScrollArea.Autosize>
+        </ScrollArea>
       </Card>
 
-      {/* 右：详情面板 */}
-      <div style={{ flex: 1, minWidth: 0 }}>
-        {!selectedPath ? (
-          <Center h={160}>
-            <Text c="dimmed">{t('selectFileHint')}</Text>
-          </Center>
-        ) : detailLoading ? (
-          <Center h={160}>
-            <Loader />
-          </Center>
-        ) : detailError || !detail ? (
-          <ErrorAlert message={detailError ?? t('artifactNotFound')} />
-        ) : (
-          <ArtifactDetailPanel detail={detail} />
-        )}
-      </div>
+      {/* 右：详情面板（辅栏，独立滚动） */}
+      <Card
+        withBorder
+        padding="sm"
+        radius="md"
+        flex={1}
+        style={{ minWidth: 0, display: 'flex', flexDirection: 'column' }}
+      >
+        <ScrollArea h="100%" data-testid="browse-detail-scroll">
+          {!selectedPath ? (
+            <Center h={160}>
+              <Text c="dimmed">{t('selectFileHint')}</Text>
+            </Center>
+          ) : detailLoading ? (
+            <Center h={160}>
+              <Loader />
+            </Center>
+          ) : detailError || !detail ? (
+            <ErrorAlert message={detailError ?? t('artifactNotFound')} />
+          ) : (
+            <ArtifactDetailPanel detail={detail} />
+          )}
+        </ScrollArea>
+      </Card>
     </Group>
   );
 }
@@ -337,22 +361,24 @@ function TreeLevel({
   return (
     <Stack gap={2}>
       {entries.map((e) => {
-        const indent = depth * 16;
+        const indent = depth * TREE_INDENT_STEP;
         if (e.type === 'folder') {
           const childPrefix = `${prefix}${e.name}/`;
           const open = expanded.has(childPrefix);
           return (
             <div key={`d:${e.name}`}>
               <UnstyledButton
+                data-testid="tree-folder"
                 onClick={() => onToggle(childPrefix)}
                 px={6}
                 py={4}
                 style={{ width: '100%', borderRadius: 4, paddingLeft: indent + 6 }}
               >
-                <Group gap={4} wrap="nowrap">
+                <Group gap={4} wrap="nowrap" align="flex-start">
                   {open ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />}
                   {open ? <IconFolderOpen size={16} /> : <IconFolder size={16} />}
-                  <Text size="sm" truncate>
+                  {/* 文件名不截断（FR-115）：去掉 truncate，目录名可换行看全 */}
+                  <Text size="sm" style={{ wordBreak: 'break-all' }}>
                     {e.name}
                   </Text>
                 </Group>
@@ -376,7 +402,14 @@ function TreeLevel({
         // 文件叶子
         const active = selectedPath === e.path;
         return (
-          <Group key={`f:${e.path}`} gap={4} wrap="nowrap" style={{ paddingLeft: indent + 6 }}>
+          <Group
+            key={`f:${e.path}`}
+            data-testid="tree-file"
+            gap={4}
+            wrap="nowrap"
+            align="flex-start"
+            style={{ paddingLeft: indent + 6 }}
+          >
             <UnstyledButton
               onClick={() => onSelectFile(e.path!)}
               px={6}
@@ -388,9 +421,10 @@ function TreeLevel({
                 fontWeight: active ? 600 : 400,
               }}
             >
-              <Group gap={6} wrap="nowrap">
+              <Group gap={6} wrap="nowrap" align="flex-start">
                 <FormatIcon format={repo.format} />
-                <Text size="sm" truncate>
+                {/* 文件名不截断（FR-115）：去掉 truncate，全名可换行辨认（.jar/.jar.md5 等） */}
+                <Text size="sm" style={{ wordBreak: 'break-all' }}>
                   {e.name}
                 </Text>
               </Group>
