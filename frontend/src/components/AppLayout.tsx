@@ -43,15 +43,16 @@ import {
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/useAuth';
 import { density } from '../theme/density';
+import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { checkUpdate, getHealth } from '../api/endpoints';
 
-/** 品牌紫（logo 主色）：集中一处常量，避免散落魔法值。 */
-const BRAND_PURPLE = '#7048e8';
-/** 品牌浅紫（立方体 / 包裹线稿描边）。 */
-const BRAND_PURPLE_LIGHT = '#d0bfff';
+/** 品牌蓝（logo 主色，FR-113）：集中一处常量，避免散落魔法值。 */
+const BRAND_BLUE = '#228be6';
+/** 品牌浅蓝（立方体 / 包裹线稿描边，FR-113）。 */
+const BRAND_BLUE_LIGHT = '#a5d8ff';
 
 /**
- * 品牌 logo 矢量图（FR-92）：紫底圆角方块 + 浅紫立方体 / 包裹线稿，寓意「制品 / 打包」。
+ * 品牌 logo 矢量图（FR-92；FR-113 改蓝）：蓝底圆角方块 + 浅蓝立方体 / 包裹线稿，寓意「制品 / 打包」。
  * viewBox 24×24，纯内联 SVG（无外部资源、无新增依赖）；尺寸由调用方控制。
  */
 function BrandLogo({ size = 28 }: { size?: number }) {
@@ -65,24 +66,24 @@ function BrandLogo({ size = 28 }: { size?: number }) {
       aria-hidden="true"
       focusable="false"
     >
-      {/* 紫底圆角方块 */}
-      <rect x="1.5" y="1.5" width="21" height="21" rx="5" fill={BRAND_PURPLE} />
-      {/* 浅紫立方体线稿：顶面菱形 + 三条竖棱（制品 / 包裹寓意） */}
+      {/* 蓝底圆角方块 */}
+      <rect x="1.5" y="1.5" width="21" height="21" rx="5" fill={BRAND_BLUE} />
+      {/* 浅蓝立方体线稿：顶面菱形 + 三条竖棱（制品 / 包裹寓意） */}
       <path
         d="M12 5.5 L17.5 8.5 L12 11.5 L6.5 8.5 Z"
-        stroke={BRAND_PURPLE_LIGHT}
+        stroke={BRAND_BLUE_LIGHT}
         strokeWidth="1.4"
         strokeLinejoin="round"
         fill="none"
       />
       <path
         d="M6.5 8.5 L6.5 15 L12 18 L17.5 15 L17.5 8.5"
-        stroke={BRAND_PURPLE_LIGHT}
+        stroke={BRAND_BLUE_LIGHT}
         strokeWidth="1.4"
         strokeLinejoin="round"
         fill="none"
       />
-      <path d="M12 11.5 L12 18" stroke={BRAND_PURPLE_LIGHT} strokeWidth="1.4" />
+      <path d="M12 11.5 L12 18" stroke={BRAND_BLUE_LIGHT} strokeWidth="1.4" />
     </svg>
   );
 }
@@ -209,6 +210,8 @@ export function AppLayout() {
   const { user, isAdmin, signOut } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  // 按路由动态设置浏览器标签页标题（FR-113）：「<当前页名> - JianArtifact」
+  useDocumentTitle(location.pathname);
   // 页眉全局搜索（FR-94）：输入关键字 → 跳转 /search?q=；回车立即跳，停止输入防抖后自动跳。
   const [searchValue, setSearchValue] = useState('');
   // 控制台版本展示（FR-101）：logo 区下方小灰字常显当前版本号（取自公开 /health，所有用户可见）。
