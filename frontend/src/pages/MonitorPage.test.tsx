@@ -7,10 +7,10 @@
 // 6) 监控页不再含审计内容（审计已拆出独立页）。
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MantineProvider } from '@mantine/core';
-import { MonitorPage } from './MonitorPage';
+import { MonitorPage, MONITOR_REFRESH_MS } from './MonitorPage';
 import * as api from '../api/endpoints';
 import type { MetricSeries } from '../api/types';
 
@@ -136,6 +136,50 @@ describe('MonitorPage（KPI + 时序网格）', () => {
 
     const tip = await screen.findByRole('status');
     expect(tip).toHaveTextContent('66%');
+  });
+
+  it('Bug-2 刷新：加载后按固定周期自动重取（无须手动切类目/区间）', async () => {
+    vi.useFakeTimers();
+    try {
+      桩指标();
+      const spy = vi.mocked(api.getMetricSeries);
+      renderPage();
+
+      // 首次加载发起一轮查询
+      await vi.waitFor(() => expect(spy).toHaveBeenCalled());
+      const firstRound = spy.mock.calls.length;
+      expect(firstRound).toBeGreaterThan(0);
+      spy.mockClear();
+
+      // 推进一个刷新周期，应自动再取一轮（依赖未变）
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(MONITOR_REFRESH_MS);
+      });
+      expect(spy.mock.calls.length).toBeGreaterThan(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('Bug-2 刷新：卸载后不再触发定时取数（清理定时器、无泄漏）', async () => {
+    vi.useFakeTimers();
+    try {
+      桩指标();
+      const spy = vi.mocked(api.getMetricSeries);
+      const { unmount } = renderPage();
+
+      await vi.waitFor(() => expect(spy).toHaveBeenCalled());
+      unmount();
+      spy.mockClear();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(MONITOR_REFRESH_MS * 2);
+      });
+      // 卸载后定时器已清，不应再发查询
+      expect(spy.mock.calls.length).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('监控页不再含审计内容（审计已拆出独立页）', async () => {

@@ -35,6 +35,9 @@ function lastValue(points: MetricPoint[]): number | null {
   return points.length > 0 ? points[points.length - 1].value : null;
 }
 
+/** 前台自动刷新周期（毫秒）：监控页停留期间按此周期重取时序，无须手动切类目 / 区间。 */
+export const MONITOR_REFRESH_MS = 15_000;
+
 /** 监控总览页。 */
 export function MonitorPage() {
   const [category, setCategory] = useState<MetricCategoryFilter>('all');
@@ -62,8 +65,11 @@ export function MonitorPage() {
     });
   }, [category, rangeKey]);
 
+  // 首次加载 + 按周期前台轮询自动刷新；依赖（分类 / 区间）变化时重建定时器、卸载时清理（防泄漏）
   useEffect(() => {
     load();
+    const timer = setInterval(load, MONITOR_REFRESH_MS);
+    return () => clearInterval(timer);
   }, [load]);
 
   return (

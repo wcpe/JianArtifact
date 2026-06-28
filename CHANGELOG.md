@@ -19,6 +19,7 @@
 
 ### 修复
 - 设置页锚点导航 sticky 滚动后失效（增强 FR-92，仅 Admin）：FR-92 外壳改 `AppShell layout="alt"` 后页眉变为 `position: fixed`、覆盖视口顶部，而设置页左侧锚点子导航 sticky 仍用 `top: 0`，滚动后导航被固定页眉遮住、上方 tab 看不见。修复把 sticky 顶部偏移改为页眉高度（新增单一真源 `density.headerHeight`，AppShell 页眉高度与页内 sticky 偏移共用），并给各锚点节加 `scroll-margin-top`，使点击导航滚动时目标节停在页眉下方而非藏到其后
+- 监控页图表三问题修复（增强 FR-99 / FR-105，纯前端）：① **tooltip 闪烁**——`LineChart` 由"逐点小命中圆 + 各自 onMouseLeave"改为"底层单一透明覆盖矩形按最近点判定 hover + 仅整图离开才清空浮层"，并把浮层外层固定一行占位（min-height）避免文案出现 / 消失引发的高度跳动，消除快速划过多点时的抖动 / 闪烁；② **折线 / 坐标渲染失真**——去掉 SVG `preserveAspectRatio="none"`（不再把圆点横向拉伸成椭圆、折线 x 向失真），单点序列时让 polyline 退化为可见水平线段，圆点加 `non-scaling-stroke`；坐标归一逻辑抽为无副作用纯函数 `lineChartGeometry`（等距 x、单点居中、全等值落中线避免除零 / NaN），便于穷举测试；③ **数据不自动刷新**——监控页 `MonitorPage` 停留期间按固定周期（15s）前台轮询自动重取所选区间时序，依赖（分类 / 区间）变化重建定时器、组件卸载清理定时器（无泄漏），无须手动切类目 / 区间才更新
 
 ### 移除
 - 无

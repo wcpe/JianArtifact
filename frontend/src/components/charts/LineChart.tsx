@@ -6,6 +6,7 @@
 import { useState } from 'react';
 import { Box, Text } from '@mantine/core';
 import type { MetricPoint } from '../../api/types';
+import { VIEW_WIDTH, computePlot, nearestIndex } from './lineChartGeometry';
 
 /** 折线图属性。 */
 interface LineChartProps {
@@ -18,16 +19,6 @@ interface LineChartProps {
   /** 折线区高度（像素），默认 80。 */
   height?: number;
 }
-
-/** 内部坐标点（含归一后的 x/y 与原始 ts/value）。 */
-interface PlotPoint {
-  x: number;
-  y: number;
-  ts: number;
-  value: number;
-}
-
-const VIEW_WIDTH = 300;
 
 /** 把某点的 ts + value 组成 hover 浮层文案（本地时间 + 格式化取值）。 */
 function pointLabel(point: MetricPoint, valueFormat: (v: number) => string): string {
@@ -55,24 +46,22 @@ export function LineChart({
     );
   }
 
-  // 归一：x 按索引等距（避免不均匀 ts 间隔挤压），y 按 [min,max] 映射到 [pad, height-pad]
-  const pad = 6;
-  const values = points.map((p) => p.value);
-  const minV = Math.min(...values);
-  const maxV = Math.max(...values);
-  const span = maxV - minV;
-  const denom = points.length > 1 ? points.length - 1 : 1;
+  const plot = computePlot(points, height);
 
-  const plot: PlotPoint[] = points.map((p, i) => {
-    const x = points.length > 1 ? (i / denom) * VIEW_WIDTH : VIEW_WIDTH / 2;
-    // span 为 0（全等值）时画在中线，避免除零
-    const ratio = span > 0 ? (p.value - minV) / span : 0.5;
-    const y = height - pad - ratio * (height - 2 * pad);
-    return { x, y, ts: p.ts, value: p.value };
-  });
-
-  const polyline = plot.map((pt) => `${pt.x.toFixed(1)},${pt.y.toFixed(1)}`).join(' ');
+  // 单点时把同一坐标复制一份，让 polyline 退化为可见的水平线段（单坐标 polyline 不渲染）
+  const linePoints = plot.length === 1 ? [plot[0], plot[0]] : plot;
+  const polyline = linePoints.map((pt) => `${pt.x.toFixed(1)},${pt.y.toFixed(1)}`).join(' ');
   const hoveredPoint = hovered !== null ? points[hovered] : null;
+
+  // 单一透明覆盖矩形承载 hover：按鼠标位置取最近点，消除逐点命中圆空隙导致的浮层闪烁
+  function handleMove(e: React.MouseEvent<SVGRectElement>) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    if (rect.width === 0) {
+      return;
+    }
+    const svgX = ((e.clientX - rect.left) / rect.width) * VIEW_WIDTH;
+    setHovered(nearestIndex(plot, svgX));
+  }
 
   return (
     <Box>
@@ -80,10 +69,21 @@ export function LineChart({
         width="100%"
         height={height}
         viewBox={`0 0 ${VIEW_WIDTH} ${height}`}
-        preserveAspectRatio="none"
         role="img"
         aria-label="时序折线"
+        // 单一离开判定：仅当鼠标真正移出整张图才清空浮层，避免逐点命中区空隙引发的抖动 / 闪烁
+        onMouseLeave={() => setHovered(null)}
       >
+        {/* 底层单一透明覆盖区：按鼠标位置取最近点统一接管 hover（填补点间空隙，消除闪烁） */}
+        <rect
+          x={0}
+          y={0}
+          width={VIEW_WIDTH}
+          height={height}
+          fill="transparent"
+          onMouseMove={handleMove}
+          style={{ cursor: 'pointer' }}
+        />
         {/* 折线 */}
         <polyline
           points={polyline}
@@ -92,27 +92,31 @@ export function LineChart({
           strokeWidth={2}
           vectorEffect="non-scaling-stroke"
         />
-        {/* 数据点：圆点 + 不可见命中区（半径较大便于 hover）；以 aria-label 承载该点取值，测试可查询 */}
+        {/* 数据点圆点（叠在覆盖区之上）：以 aria-label 承载该点取值，测试 / 读屏可查询；
+            mouseenter 给出精确命中点，高亮当前悬停点 */}
         {plot.map((pt, i) => (
           <circle
             key={pt.ts}
             cx={pt.x}
             cy={pt.y}
-            r={3}
+            r={hovered === i ? 4 : 2.5}
             fill="var(--mantine-primary-color-filled)"
             aria-label={pointLabel(points[i], valueFormat)}
+            vectorEffect="non-scaling-stroke"
             onMouseEnter={() => setHovered(i)}
-            onMouseLeave={() => setHovered((h) => (h === i ? null : h))}
             style={{ cursor: 'pointer' }}
           />
         ))}
       </svg>
-      {/* 悬停浮层：显示当前悬停点的时间 + 取值；未悬停不渲染 */}
-      {hoveredPoint && (
-        <Text size="xs" c="dimmed" role="status">
-          {pointLabel(hoveredPoint, valueFormat)}
-        </Text>
-      )}
+      {/* 悬停浮层：外层固定占位一行（min-height）避免文案出现 / 消失时高度跳动引发抖动；
+          浮层文案仅悬停时渲染（未悬停无 status 节点，契约不变） */}
+      <Box style={{ minHeight: '1.2em' }}>
+        {hoveredPoint && (
+          <Text size="xs" c="dimmed" role="status">
+            {pointLabel(hoveredPoint, valueFormat)}
+          </Text>
+        )}
+      </Box>
     </Box>
   );
 }
