@@ -45,9 +45,9 @@
 - **数据加载 / 检查 / 应用 / 回滚**（`fillForm` / `handleCheck` / `handleApply` / `handleRollback` / `buildProxyPatch`）原样复用；`handleSave` 扩展为 `handleSaveAll` 合并两次 PATCH。无架构决策、不写 ADR（纯前端呈现重排 + 客户端模拟进度）。
 
 ## 4. 任务拆分
-- [ ] 更新 Vitest（`SettingsPage.test.tsx`）：锚点导航六项 + 点击调 `scrollIntoView`（平滑滚动）；**只有一个保存按钮**（断言「保存系统配置」按钮不存在）；单页分节各节标题在场且可见（非 tab 隐藏）；在线更新卡片各态（有更新 / 预发布 / 最新）+ 通道切换驱动 channel 与徽标 / 提示 + 高级项默认折叠可展开；点立即更新确认后**显应用进度条**；各节表单经全局保存调对应 PATCH（settings + dynamic）；契约不回归（代理三字段 / token 三态 / channel / 动态配置字段）。
-- [ ] 改 `SettingsPage.tsx`：二级 tab → 锚点单页 + 单保存 + 应用进度条；FR-106 表单并入锚点节。
-- [ ] 文档同步：spec（本文，取代二级 tab 方案）、CHANGELOG 末尾追加一行（改写 FR-103 段为锚点单页重做取代二级 tab）。
+- [x] 更新 Vitest（`SettingsPage.test.tsx`）：锚点导航六项 + 点击调 `scrollIntoView`（平滑滚动）；**只有一个保存按钮**（断言「保存系统配置」按钮不存在）；单页分节各节标题在场且可见（非 tab 隐藏）；在线更新卡片各态（有更新 / 预发布 / 最新）+ 通道切换驱动 channel 与徽标 / 提示 + 高级项默认折叠可展开；点立即更新确认后**显应用进度条**；各节表单经全局保存调对应 PATCH（settings + dynamic）；契约不回归（代理三字段 / token 三态 / channel / 动态配置字段）。
+- [x] 改 `SettingsPage.tsx`：二级 tab → 锚点单页 + 单保存 + 应用进度条；FR-106 表单并入锚点节。
+- [x] 文档同步：spec（本文，取代二级 tab 方案）、CHANGELOG 末尾追加一行（改写 FR-103 段为锚点单页重做取代二级 tab）。
 
 ## 5. 验收标准
 - `pnpm -C frontend build`（tsc + vite）通过。

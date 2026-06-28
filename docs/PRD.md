@@ -121,11 +121,11 @@
 | FR-79 | 防护配置 API（GET/PATCH /api/v1/protection/config，新增端点） | P2 | 已交付@v0.3.0 |
 | FR-80 | 防护配置管理页面（各维度启停/调参，仅 Admin） | P2 | 已交付@v0.3.0 |
 | FR-81 | Nexus 迁移管理页面（在线/离线预览 + 执行 + 报告，仅 Admin） | P2 | 已交付@v0.3.0 |
-| FR-82 | Nexus 在线拉取制品迁移（经 REST components 枚举 + HTTP 下载，Maven hosted，无需离线目录，文件字节一致、目标仓库名可自定义） | P2 | 开发中 |
-| FR-83 | 迁移任务异步化与进度可观测（在线拉取改后台任务、立即返回 job_id + 轮询进度队列 + 客户端断点重连，进程内不落库） | P2 | 开发中 |
-| FR-84 | 统一出站网络代理（`[network.proxy]` http/https/no_proxy + env 覆盖，统一注入全部出站 reqwest 客户端：proxy 回源 / Nexus 迁移 / 漏洞库镜像 / OIDC / 更新检查；凭据不入库不进日志） | P2 | 开发中 |
-| FR-85 | 在线更新：管理员手动触发的完整自更新（查 GitHub 最新稳定 Release 比对当前版本 → 按本机 target 下载资产 → 校验 sha256 → 原子替换二进制 → 自动重启；出站默认关闭、仅 Admin、仅版本检查与资产下载不外发使用数据/坐标） | P2 | 开发中 |
-| FR-86 | GitHub Actions CI/CD：质量门（push/PR → 前端构建 + fmt + clippy + test）+ 发布（push 默认分支 → prerelease；tag `v*` → 正式 release；3 目标 Linux/Windows/macOS + 每资产 sha256，资产命名与 FR-85 下载约定对齐） | P2 | 开发中 |
+| FR-82 | Nexus 在线拉取制品迁移（经 REST components 枚举 + HTTP 下载，Maven hosted，无需离线目录，文件字节一致、目标仓库名可自定义） | P2 | 已交付@v0.4.0 |
+| FR-83 | 迁移任务异步化与进度可观测（在线拉取改后台任务、立即返回 job_id + 轮询进度队列 + 客户端断点重连，进程内不落库） | P2 | 已交付@v0.4.0 |
+| FR-84 | 统一出站网络代理（`[network.proxy]` http/https/no_proxy + env 覆盖，统一注入全部出站 reqwest 客户端：proxy 回源 / Nexus 迁移 / 漏洞库镜像 / OIDC / 更新检查；凭据不入库不进日志） | P2 | 已交付@v0.4.0 |
+| FR-85 | 在线更新：管理员手动触发的完整自更新（查 GitHub 最新稳定 Release 比对当前版本 → 按本机 target 下载资产 → 校验 sha256 → 原子替换二进制 → 自动重启；出站默认关闭、仅 Admin、仅版本检查与资产下载不外发使用数据/坐标） | P2 | 已交付@v0.4.0 |
+| FR-86 | GitHub Actions CI/CD：质量门（push/PR → 前端构建 + fmt + clippy + test）+ 发布（push 默认分支 → prerelease；tag `v*` → 正式 release；3 目标 Linux/Windows/macOS + 每资产 sha256，资产命名与 FR-85 下载约定对齐） | P2 | 已交付@v0.4.0 |
 | FR-87 | Web 控制台设置页（仅 Admin）：网络代理（FR-84）配置查看/状态 + 在线更新（FR-85）版本检查与一键升级入口，把已落地的后端配置/API 收口为控制台 UI | P2 | 开发中 |
 | FR-88 | 设置可编辑与运行时热替换：网络代理 `[network.proxy]` 与在线更新开关等经网页 PATCH 即时生效（仿 FR-79 热替换槽建 NetworkState、出站客户端收进可换槽 PATCH 后重建）；设置页从只读改可编辑（仅 Admin），凭据仍不回显 | P2 | 开发中 |
 | FR-89 | 在线更新 prerelease / 测试通道（可选拉取预发布版本，默认仍仅 stable；增强 FR-85） | P2 | 开发中 |
