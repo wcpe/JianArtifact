@@ -288,6 +288,42 @@ describe('AppLayout 页眉全局搜索（FR-94，不回归）', () => {
   });
 });
 
+describe('AppLayout 全局搜索快捷键（FR-114）', () => {
+  it('Ctrl+K 聚焦页眉搜索框（即便初始焦点不在其上）', async () => {
+    const user = userEvent.setup();
+    renderAt('/');
+
+    const input = screen.getByLabelText('全局搜索');
+    expect(input).not.toHaveFocus();
+
+    await user.keyboard('{Control>}k{/Control}');
+
+    expect(input).toHaveFocus();
+  });
+
+  it('Cmd+K（Mac）同样聚焦搜索框', async () => {
+    const user = userEvent.setup();
+    renderAt('/');
+
+    const input = screen.getByLabelText('全局搜索');
+    await user.keyboard('{Meta>}k{/Meta}');
+
+    expect(input).toHaveFocus();
+  });
+
+  it('搜索框聚焦后按 Esc 失焦收起', async () => {
+    const user = userEvent.setup();
+    renderAt('/');
+
+    const input = screen.getByLabelText('全局搜索');
+    await user.keyboard('{Control>}k{/Control}');
+    expect(input).toHaveFocus();
+
+    await user.keyboard('{Escape}');
+    expect(input).not.toHaveFocus();
+  });
+});
+
 describe('AppLayout 匿名访客外壳（FR-95，不回归）', () => {
   // 公开导航项：匿名可见
   const 公开导航 = ['仓库', '搜索'];

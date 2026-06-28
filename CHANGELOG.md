@@ -12,6 +12,7 @@
 - 仪表盘加载体验优化（FR-112，增强 FR-108）：管理员仪表盘新增加载过渡——首屏内容在首批端点 settle 后整体**淡入**（Mantine `Transition`），加载中以**骨架占位**保留 KPI 区布局高度、消除「卡片从上挤出」的抖动；新增**自研顶部进度条**组件（`TopProgressBar`，约 30 行、不引入 `@mantine/nprogress` 等第三方件），加载中显示伪进度、完成后补满淡出；**主机健康改为前台每 5 秒实时轮询** `GET /api/v1/monitor/host`，页面不可见（`visibilitychange`）时暂停、回到前台立即补一帧、组件卸载清理定时器，不再卡为一次性加载。纯前端、复用既有端点，本机内部数据不外发
 
 - 外壳品牌与浏览器标签页（FR-113，增强 FR-92）：控制台 logo 主色由紫改蓝（主色 `#228be6`、浅色 `#a5d8ff`）；新增浏览器标签页 favicon（取品牌蓝 logo 的 SVG，`frontend/public/favicon.svg`）；按路由动态设置 `document.title` 为「<当前页名> - JianArtifact」（如「仪表盘 - JianArtifact」「设置 - JianArtifact」），各主要路由均有对应中文页名
+- 全局搜索快捷键（FR-114，增强 FR-92）：页眉全局搜索框支持 Ctrl+K（Mac Cmd+K）快捷键唤起并聚焦、Esc 失焦收起；命中快捷键即 `preventDefault` 避免浏览器默认行为，仅在搜索框聚焦时拦截 Esc、不误触其它控件；搜索框右侧加「Ctrl K」提示徽标
 
 ### 变更
 - 无

@@ -19,7 +19,7 @@ import {
   UnstyledButton,
 } from '@mantine/core';
 import { useDisclosure, useDebouncedCallback } from '@mantine/hooks';
-import { useEffect, useState, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import {
   IconLayoutDashboard,
   IconPackage,
@@ -214,6 +214,8 @@ export function AppLayout() {
   useDocumentTitle(location.pathname);
   // 页眉全局搜索（FR-94）：输入关键字 → 跳转 /search?q=；回车立即跳，停止输入防抖后自动跳。
   const [searchValue, setSearchValue] = useState('');
+  // 全局搜索框引用（FR-114）：供 Ctrl/Cmd+K 快捷键聚焦、Esc 失焦。
+  const searchRef = useRef<HTMLInputElement>(null);
   // 控制台版本展示（FR-101）：logo 区下方小灰字常显当前版本号（取自公开 /health，所有用户可见）。
   const [version, setVersion] = useState<string | null>(null);
   // Logo 旁更新徽标（FR-101，仅 Admin、确有可更新时显）：缓存 {当前版本, 最新版本}。
@@ -252,6 +254,26 @@ export function AppLayout() {
       cancelled = true;
     };
   }, [isAdmin]);
+
+  // 全局搜索快捷键（FR-114）：Ctrl+K（Mac Cmd+K）聚焦页眉搜索框、Esc 失焦。
+  // 挂载时注册、卸载时移除；命中本快捷键即 preventDefault，避免触发浏览器默认行为；
+  // 单独处理 mod+K，故不会误触其它输入控件内的按键（仅在 K + 修饰键命中时介入）。
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: globalThis.KeyboardEvent) => {
+      const isModK = (e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'k';
+      if (isModK) {
+        e.preventDefault();
+        searchRef.current?.focus();
+        return;
+      }
+      // Esc：仅当焦点在搜索框上时失焦收起（避免越权拦截其它控件的 Esc）。
+      if (e.key === 'Escape' && document.activeElement === searchRef.current) {
+        searchRef.current?.blur();
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, []);
 
   const handleSignOut = async () => {
     await signOut();
@@ -349,12 +371,20 @@ export function AppLayout() {
               </Badge>
             )}
           </Group>
-          {/* 全局搜索框（FR-94）：回车立即跳、停止输入防抖后自动跳到 /search?q= */}
+          {/* 全局搜索框（FR-94）：回车立即跳、停止输入防抖后自动跳到 /search?q=。
+              FR-114：ref 供 Ctrl/Cmd+K 聚焦；右侧「Ctrl K」提示徽标。 */}
           <TextInput
+            ref={searchRef}
             visibleFrom="sm"
             size="xs"
             w={240}
             leftSection={<IconSearch size={14} />}
+            rightSection={
+              <Badge color="gray" variant="light" size="xs" aria-hidden="true">
+                Ctrl K
+              </Badge>
+            }
+            rightSectionWidth={56}
             placeholder="搜索制品（回车或停顿即搜）"
             aria-label="全局搜索"
             value={searchValue}
