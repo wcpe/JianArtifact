@@ -1,0 +1,8 @@
+# 提交前质量门（FR-117）：在 git 根（hook 工作目录即仓库根）依次跑前端与后端格式 / lint 门。
+# 任一步非零退出即中止提交。前端 node_modules 在 frontend/ 子目录，故统一经 pnpm -C frontend 调用。
+
+# ① 前端：对本次暂存的 frontend 文件跑 eslint --fix + prettier --write（配置见 frontend/package.json 的 lint-staged 段）。
+pnpm -C frontend exec lint-staged || exit 1
+
+# ② 后端：rust 格式门——格式不合规即拒绝提交（不自动改写，保持提交者可控）。
+rustup run 1.96.0 cargo fmt --check || exit 1

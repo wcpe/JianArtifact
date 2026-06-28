@@ -156,7 +156,7 @@
 | FR-114 | [增强] 全局搜索快捷键（增强 FR-92）：Ctrl/Cmd+K 唤起并聚焦全局搜索框，Esc 收起；输入控件内不误触 | P2 | 开发中 |
 | FR-115 | [增强] 仓库详情页文件浏览重构 + 文件树修正（增强 FR-76/67）：左树为主 / 右详情为辅、页面固定高度、左右两栏各自独立滚动、树铺满内容区；文件树**层级递进缩进**、文件名**不截断**（可看全名，区分 .jar/.jar.md5 等）；制品搜索页文件树同步修层级递进 + 不截断 | P2 | 开发中 |
 | FR-116 | 前端测试 MSW 契约强断言（先 ADR 定测试策略 + 新依赖）：引入 msw 建**有状态内存 mock 后端**（实现各 REST 端点的有状态 CRUD），组件 / 集成测试经其按请求 / 响应契约强断言（替手工 vi.mock 弱断言）；该内存后端为 FR-119 运行时 Mock 模式共用底座 | P2 | 开发中 |
-| FR-117 | 质量工程门禁补齐：CI 质量门加**前端 lint + vitest（+ FR-118 E2E）**；Cargo `[lints.rust] unsafe_code="forbid"`（保留 crate 属性）+ clippy 分类门；新增 rustfmt.toml（贴近现默认风格、不无谓重排）；husky + lint-staged **pre-commit** 提交前跑 fmt + lint | P2 | 计划 |
+| FR-117 | 质量工程门禁补齐：CI 质量门加**前端 lint + vitest（+ FR-118 E2E）**；Cargo `[lints.rust] unsafe_code="forbid"`（保留 crate 属性）+ clippy 分类门；新增 rustfmt.toml（贴近现默认风格、不无谓重排）；husky + lint-staged **pre-commit** 提交前跑 fmt + lint | P2 | 开发中 |
 | FR-118 | 前端 Playwright E2E（先 ADR 含测试策略 + 新依赖）：引入 @playwright/test 跑真浏览器端到端关键流程（登录 → 浏览 → 详情等），对运行的应用验证；**挂入 CI**（装浏览器 + 构建 / 起应用） | P2 | 计划 |
 | FR-119 | 前端运行时 Mock 模式（复用 FR-116 内存后端）：可开关的运行时模式，开启后由浏览器内有状态 mock 后端拦截全部 `/api/v1/*`、支持全操作内存 CRUD，无需真实后端即可在前端模拟创建 / 浏览所有数据，便于开发与手动测试；默认关闭、不影响生产 | P2 | 开发中 |
 

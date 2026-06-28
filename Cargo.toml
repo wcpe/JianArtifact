@@ -104,6 +104,12 @@ aws-credential-types = { version = "1", optional = true }
 # S3 兼容对象存储后端（默认关闭）。启用即引入外部对象存储依赖，详见 ADR-0014 与 docs/OPERATIONS.md。
 s3 = ["dep:aws-config", "dep:aws-sdk-s3", "dep:aws-smithy-http-client", "dep:aws-smithy-types", "dep:aws-credential-types"]
 
+# 工程级 lint 门禁（FR-117）：在 Cargo 清单集中声明 lint，与各 crate 根的 #![forbid(unsafe_code)]
+# 共存（两者均生效、互不取代）——清单声明覆盖全工作区构建入口，源码属性是就地的二次保险。
+# clippy 维持 CI 的 `-D warnings` 不在此重复加项，避免与现有门禁重叠。
+[lints.rust]
+unsafe_code = "forbid"
+
 [dev-dependencies]
 # 集成测试：对 axum 路由直接发起请求
 tower = { version = "0.5", features = ["util"] }
