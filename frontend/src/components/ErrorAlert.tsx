@@ -2,11 +2,13 @@
 
 import { Alert } from '@mantine/core';
 import { IconAlertCircle } from '@tabler/icons-react';
+import { useTranslation } from 'react-i18next';
 
 /** 错误提示条。 */
 export function ErrorAlert({ message }: { message: string }) {
+  const { t } = useTranslation('errors');
   return (
-    <Alert icon={<IconAlertCircle size={16} />} color="red" variant="light" title="出错了">
+    <Alert icon={<IconAlertCircle size={16} />} color="red" variant="light" title={t('title')}>
       {message}
     </Alert>
   );

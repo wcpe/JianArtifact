@@ -14,11 +14,13 @@ import {
 } from '@mantine/core';
 import { IconAlertCircle } from '@tabler/icons-react';
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { useAuth } from '../auth/useAuth';
 import { errorMessage } from '../lib/format';
 
 /** 登录页面组件。 */
 export function LoginPage() {
+  const { t } = useTranslation('login');
   const { user, signIn } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
@@ -53,10 +55,10 @@ export function LoginPage() {
       <Card shadow="md" padding="xl" radius="md" withBorder w={380}>
         <Stack>
           <Title order={2} ta="center">
-            登录 JianArtifact
+            {t('title')}
           </Title>
           <Text c="dimmed" size="sm" ta="center">
-            轻量级多格式制品库管理器
+            {t('subtitle')}
           </Text>
           {error && (
             <Alert icon={<IconAlertCircle size={16} />} color="red" variant="light">
@@ -66,22 +68,22 @@ export function LoginPage() {
           <form onSubmit={handleSubmit}>
             <Stack>
               <TextInput
-                label="用户名"
-                placeholder="请输入用户名"
+                label={t('username')}
+                placeholder={t('usernamePlaceholder')}
                 value={username}
                 onChange={(e) => setUsername(e.currentTarget.value)}
                 required
                 autoFocus
               />
               <PasswordInput
-                label="口令"
-                placeholder="请输入口令"
+                label={t('password')}
+                placeholder={t('passwordPlaceholder')}
                 value={password}
                 onChange={(e) => setPassword(e.currentTarget.value)}
                 required
               />
               <Button type="submit" loading={submitting} fullWidth>
-                登录
+                {t('submit')}
               </Button>
             </Stack>
           </form>

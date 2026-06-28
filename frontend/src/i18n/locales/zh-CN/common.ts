@@ -36,4 +36,7 @@ export default {
   visibilityPrivate: '私有',
   repoHosted: '托管',
   repoProxy: '代理',
+  // 通用组件 aria-label
+  timeSeriesChart: '时序折线',
+  loadingProgress: '页面加载进度',
 } as const;

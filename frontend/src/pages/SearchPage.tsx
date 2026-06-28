@@ -3,6 +3,7 @@
 // 结果按读权限过滤（后端保证）。
 
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   TextInput,
   Button,
@@ -49,14 +50,6 @@ function collectFolderPaths(nodes: SearchTreeNode[], acc: Set<string>): Set<stri
 }
 
 const PAGE_SIZE = 20;
-
-const FORMAT_FILTER: { value: string; label: string }[] = [
-  { value: '', label: '全部格式' },
-  { value: 'maven', label: 'Maven' },
-  { value: 'npm', label: 'npm' },
-  { value: 'docker', label: 'Docker / OCI' },
-  { value: 'raw', label: 'Raw' },
-];
 
 /** 统计一棵树的命中（文件叶子）总数，用于分组节点显示「N 项」。 */
 function countFiles(nodes: SearchTreeNode[]): number {
@@ -143,6 +136,7 @@ function TreeNodes({
 
 /** 单个仓库分组：可折叠的分组节点，组内为该仓库命中折叠出的路径层级树。 */
 function RepoGroupNode({ group }: { group: SearchRepoGroup }) {
+  const { t } = useTranslation('search');
   const navigate = useNavigate();
   // 仓库分组默认展开，便于一眼看到命中；点击折叠 / 展开。
   const [open, setOpen] = useState(true);
@@ -167,7 +161,7 @@ function RepoGroupNode({ group }: { group: SearchRepoGroup }) {
     <Stack gap={4}>
       <UnstyledButton
         onClick={() => setOpen((v) => !v)}
-        aria-label={`${group.format} 仓库 ${group.repoName}`}
+        aria-label={t('repoGroupAria', { format: group.format, repoName: group.repoName })}
       >
         <Group gap={density.inlineGap} wrap="nowrap">
           {open ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />}
@@ -176,7 +170,7 @@ function RepoGroupNode({ group }: { group: SearchRepoGroup }) {
             {group.repoName}
           </Text>
           <Text size="xs" c="dimmed">
-            {fileCount} 项
+            {t('fileCount', { count: fileCount })}
           </Text>
         </Group>
       </UnstyledButton>
@@ -198,8 +192,18 @@ function RepoGroupNode({ group }: { group: SearchRepoGroup }) {
 
 /** 制品搜索页面：搜索框联动页眉（经 URL ?q= 承载），结果树形展示。 */
 export function SearchPage() {
+  const { t } = useTranslation('search');
   const [searchParams, setSearchParams] = useSearchParams();
   const urlQuery = searchParams.get('q') ?? '';
+
+  // 格式过滤项：品牌名为固定标识，仅「全部格式」走翻译。
+  const formatFilter: { value: string; label: string }[] = [
+    { value: '', label: t('allFormats') },
+    { value: 'maven', label: 'Maven' },
+    { value: 'npm', label: 'npm' },
+    { value: 'docker', label: 'Docker / OCI' },
+    { value: 'raw', label: 'Raw' },
+  ];
 
   const [query, setQuery] = useState(urlQuery);
   const [format, setFormat] = useState('');
@@ -258,26 +262,26 @@ export function SearchPage() {
 
   return (
     <Stack gap={density.gridSpacing}>
-      <Title order={2}>制品搜索</Title>
+      <Title order={2}>{t('title')}</Title>
       <form onSubmit={handleSubmit}>
         <Group align="flex-end">
           <TextInput
-            label="关键字 / 坐标"
-            placeholder="按制品路径关键字搜索"
+            label={t('keywordLabel')}
+            placeholder={t('keywordPlaceholder')}
             value={query}
             onChange={(e) => setQuery(e.currentTarget.value)}
             flex={1}
           />
           <Select
-            label="格式"
-            data={FORMAT_FILTER}
+            label={t('formatLabel')}
+            data={formatFilter}
             value={format}
             onChange={(v) => setFormat(v ?? '')}
             allowDeselect={false}
             maw={160}
           />
           <Button type="submit" leftSection={<IconSearch size={16} />} disabled={!query.trim()}>
-            搜索
+            {t('common:search')}
           </Button>
         </Group>
       </form>
@@ -290,11 +294,11 @@ export function SearchPage() {
         </Center>
       ) : searched ? (
         groups.length === 0 ? (
-          <Text c="dimmed">未找到匹配的制品。</Text>
+          <Text c="dimmed">{t('empty')}</Text>
         ) : (
           <Stack gap={density.gridSpacing}>
             <Text size="sm" c="dimmed">
-              共 {total} 条结果
+              {t('totalResults', { total })}
             </Text>
             <Stack gap="sm">
               {groups.map((group) => (
@@ -313,7 +317,7 @@ export function SearchPage() {
           </Stack>
         )
       ) : (
-        <Text c="dimmed">输入关键字开始搜索。</Text>
+        <Text c="dimmed">{t('initialHint')}</Text>
       )}
     </Stack>
   );

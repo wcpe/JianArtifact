@@ -6,6 +6,7 @@
 // 按 运行时 / 开发 分组的表格（包名 / 版本 / 许可证 / 作者）。
 
 import { useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   SimpleGrid,
   Card,
@@ -39,6 +40,7 @@ function StatCard({ label, value }: { label: string; value: string | number }) {
 
 /** 一组依赖的表格（按运行时 / 开发分组）。 */
 function LicenseTable({ title, entries }: { title: string; entries: LicenseEntry[] }) {
+  const { t } = useTranslation('licenses');
   return (
     <Card withBorder padding="lg" radius="md">
       <Title order={4} mb="sm">
@@ -46,17 +48,17 @@ function LicenseTable({ title, entries }: { title: string; entries: LicenseEntry
       </Title>
       {entries.length === 0 ? (
         <Text c="dimmed" size="sm">
-          无匹配依赖
+          {t('noMatch')}
         </Text>
       ) : (
         <Table.ScrollContainer minWidth={520}>
           <Table striped highlightOnHover>
             <Table.Thead>
               <Table.Tr>
-                <Table.Th>包名</Table.Th>
-                <Table.Th>版本</Table.Th>
-                <Table.Th>许可证</Table.Th>
-                <Table.Th>作者</Table.Th>
+                <Table.Th>{t('colName')}</Table.Th>
+                <Table.Th>{t('colVersion')}</Table.Th>
+                <Table.Th>{t('colLicense')}</Table.Th>
+                <Table.Th>{t('colAuthor')}</Table.Th>
               </Table.Tr>
             </Table.Thead>
             <Table.Tbody>
@@ -78,6 +80,7 @@ function LicenseTable({ title, entries }: { title: string; entries: LicenseEntry
 
 /** 开源许可页。 */
 export function LicensesPage() {
+  const { t } = useTranslation('licenses');
   const [data, setData] = useState<LicenseManifest | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -112,36 +115,34 @@ export function LicensesPage() {
 
   return (
     <Stack>
-      <Title order={2}>开源许可</Title>
-      <Text c="dimmed">
-        本产品依赖的开源组件及其许可证与作者；清单由构建期扫描生成，数据为本机内部、不外发。
-      </Text>
+      <Title order={2}>{t('title')}</Title>
+      <Text c="dimmed">{t('description')}</Text>
       {error && <ErrorAlert message={error} />}
 
       {data && !data.generated && (
-        <Alert color="yellow" title="许可清单未生成">
-          当前二进制未嵌入开源许可清单（本地开发未运行生成脚本）。正式发布版会在构建期自动生成并嵌入。
+        <Alert color="yellow" title={t('notGeneratedTitle')}>
+          {t('notGeneratedBody')}
         </Alert>
       )}
 
       {data && (
         <>
           <SimpleGrid cols={{ base: 2, sm: 4 }}>
-            <StatCard label="依赖总数" value={data.summary.total} />
-            <StatCard label="运行时依赖" value={data.summary.runtime} />
-            <StatCard label="开发依赖" value={data.summary.dev} />
-            <StatCard label="许可证种类" value={data.summary.licenses} />
+            <StatCard label={t('statTotal')} value={data.summary.total} />
+            <StatCard label={t('runtimeDeps')} value={data.summary.runtime} />
+            <StatCard label={t('devDeps')} value={data.summary.dev} />
+            <StatCard label={t('statLicenses')} value={data.summary.licenses} />
           </SimpleGrid>
 
           <TextInput
-            placeholder="按包名过滤…"
+            placeholder={t('filterPlaceholder')}
             value={query}
             onChange={(e) => setQuery(e.currentTarget.value)}
-            aria-label="按包名过滤"
+            aria-label={t('filterAriaLabel')}
           />
 
-          <LicenseTable title="运行时依赖" entries={runtime} />
-          <LicenseTable title="开发依赖" entries={dev} />
+          <LicenseTable title={t('runtimeDeps')} entries={runtime} />
+          <LicenseTable title={t('devDeps')} entries={dev} />
         </>
       )}
     </Stack>

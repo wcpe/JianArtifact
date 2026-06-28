@@ -5,6 +5,7 @@
 // 隐私红线：纯本机内部聚合，不接任何外部遥测 / 导出。
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   SimpleGrid,
   Card,
@@ -44,6 +45,7 @@ function StatCard({ label, value }: { label: string; value: string | number }) {
 
 /** 防护状态监控页面。 */
 export function ProtectionMonitorPage() {
+  const { t } = useTranslation('protectionMonitor');
   const [status, setStatus] = useState<ProtectionStatusDto | null>(null);
   const [alerts, setAlerts] = useState<Paginated<ProtectionAlertDto> | null>(null);
   const [loading, setLoading] = useState(true);
@@ -101,23 +103,24 @@ export function ProtectionMonitorPage() {
 
   return (
     <Stack>
-      <Title order={2}>防护监控</Title>
-      <Text c="dimmed">
-        七层防护各维度窗内计数快照与告警历史；数据为本机内部统计，不外发。每 5 秒自动刷新。
-      </Text>
+      <Title order={2}>{t('title')}</Title>
+      <Text c="dimmed">{t('description')}</Text>
       {error && <ErrorAlert message={error} />}
 
       {status && (
         <>
           <SimpleGrid cols={{ base: 1, sm: 3 }}>
-            <StatCard label="当前封禁 IP 数" value={status.active_banned_ips} />
-            <StatCard label="告警评估" value={status.alerts_enabled ? '已启用' : '已停用'} />
-            <StatCard label="评估窗口（秒）" value={status.window_secs} />
+            <StatCard label={t('activeBannedIps')} value={status.active_banned_ips} />
+            <StatCard
+              label={t('alertsEval')}
+              value={status.alerts_enabled ? t('common:enabled') : t('alertsDisabled')}
+            />
+            <StatCard label={t('windowSecs')} value={status.window_secs} />
           </SimpleGrid>
 
           <Card withBorder padding="lg" radius="md">
             <Title order={4} mb="sm">
-              各维度窗内计数
+              {t('windowCounts')}
             </Title>
             <SimpleGrid cols={{ base: 2, sm: 3, lg: 5 }}>
               {status.window_counts.map((d) => (
@@ -137,28 +140,28 @@ export function ProtectionMonitorPage() {
 
       <Card withBorder padding="lg" radius="md">
         <Group justify="space-between" mb="sm">
-          <Title order={4}>告警列表</Title>
+          <Title order={4}>{t('alertList')}</Title>
           {alerts && (
             <Text size="sm" c="dimmed">
-              共 {alerts.total} 条
+              {t('total', { count: alerts.total })}
             </Text>
           )}
         </Group>
         {alerts && alerts.items.length === 0 ? (
           <Text c="dimmed" size="sm">
-            暂无告警记录
+            {t('noAlerts')}
           </Text>
         ) : (
           <Table.ScrollContainer minWidth={640}>
             <Table striped highlightOnHover>
               <Table.Thead>
                 <Table.Tr>
-                  <Table.Th>时间</Table.Th>
-                  <Table.Th>维度</Table.Th>
-                  <Table.Th>严重度</Table.Th>
-                  <Table.Th ta="right">观测值</Table.Th>
-                  <Table.Th ta="right">阈值</Table.Th>
-                  <Table.Th>详情</Table.Th>
+                  <Table.Th>{t('thTime')}</Table.Th>
+                  <Table.Th>{t('thDimension')}</Table.Th>
+                  <Table.Th>{t('thSeverity')}</Table.Th>
+                  <Table.Th ta="right">{t('thObserved')}</Table.Th>
+                  <Table.Th ta="right">{t('thThreshold')}</Table.Th>
+                  <Table.Th>{t('thDetail')}</Table.Th>
                 </Table.Tr>
               </Table.Thead>
               <Table.Tbody>

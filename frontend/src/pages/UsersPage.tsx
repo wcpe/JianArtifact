@@ -19,6 +19,7 @@ import {
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { IconPlus, IconTrash } from '@tabler/icons-react';
+import { useTranslation } from 'react-i18next';
 import * as api from '../api/endpoints';
 import type { Role, UserView } from '../api/types';
 import { errorMessage } from '../lib/format';
@@ -27,6 +28,7 @@ import { ErrorAlert } from '../components/ErrorAlert';
 
 /** 用户管理页面。 */
 export function UsersPage() {
+  const { t } = useTranslation('users');
   const [users, setUsers] = useState<UserView[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -46,7 +48,7 @@ export function UsersPage() {
   const handleRoleChange = async (user: UserView, role: Role) => {
     try {
       await api.updateUser(user.id, { role });
-      notifySuccess('已更新角色');
+      notifySuccess(t('roleUpdated'));
       reload();
     } catch (err) {
       notifyError(errorMessage(err));
@@ -56,7 +58,7 @@ export function UsersPage() {
   const handleToggleDisabled = async (user: UserView) => {
     try {
       await api.updateUser(user.id, { disabled: !user.disabled });
-      notifySuccess(user.disabled ? '已启用用户' : '已禁用用户');
+      notifySuccess(user.disabled ? t('userEnabled') : t('userDisabled'));
       reload();
     } catch (err) {
       notifyError(errorMessage(err));
@@ -64,10 +66,10 @@ export function UsersPage() {
   };
 
   const handleDelete = async (user: UserView) => {
-    if (!window.confirm(`确认删除用户「${user.username}」？`)) return;
+    if (!window.confirm(t('confirmDelete', { username: user.username }))) return;
     try {
       await api.deleteUser(user.id);
-      notifySuccess('用户已删除');
+      notifySuccess(t('userDeleted'));
       reload();
     } catch (err) {
       notifyError(errorMessage(err));
@@ -85,9 +87,9 @@ export function UsersPage() {
   return (
     <Stack>
       <Group justify="space-between">
-        <Title order={2}>用户管理</Title>
+        <Title order={2}>{t('title')}</Title>
         <Button leftSection={<IconPlus size={16} />} onClick={modal.open}>
-          新增用户
+          {t('createUser')}
         </Button>
       </Group>
       {error && <ErrorAlert message={error} />}
@@ -96,11 +98,11 @@ export function UsersPage() {
         <Table striped highlightOnHover>
           <Table.Thead>
             <Table.Tr>
-              <Table.Th>用户名</Table.Th>
-              <Table.Th>角色</Table.Th>
-              <Table.Th>状态</Table.Th>
-              <Table.Th>创建时间</Table.Th>
-              <Table.Th>操作</Table.Th>
+              <Table.Th>{t('colUsername')}</Table.Th>
+              <Table.Th>{t('colRole')}</Table.Th>
+              <Table.Th>{t('colStatus')}</Table.Th>
+              <Table.Th>{t('colCreatedAt')}</Table.Th>
+              <Table.Th>{t('colActions')}</Table.Th>
             </Table.Tr>
           </Table.Thead>
           <Table.Tbody>
@@ -112,8 +114,8 @@ export function UsersPage() {
                     size="xs"
                     maw={120}
                     data={[
-                      { value: 'admin', label: '管理员' },
-                      { value: 'user', label: '用户' },
+                      { value: 'admin', label: t('common:roleAdmin') },
+                      { value: 'user', label: t('common:roleUser') },
                     ]}
                     value={user.role}
                     onChange={(v) => v && handleRoleChange(user, v as Role)}
@@ -122,7 +124,7 @@ export function UsersPage() {
                 </Table.Td>
                 <Table.Td>
                   <Badge color={user.disabled ? 'red' : 'green'} variant="light">
-                    {user.disabled ? '已禁用' : '正常'}
+                    {user.disabled ? t('statusDisabled') : t('statusNormal')}
                   </Badge>
                 </Table.Td>
                 <Table.Td>
@@ -133,13 +135,13 @@ export function UsersPage() {
                 <Table.Td>
                   <Group gap="xs">
                     <Button size="xs" variant="default" onClick={() => handleToggleDisabled(user)}>
-                      {user.disabled ? '启用' : '禁用'}
+                      {user.disabled ? t('enable') : t('disable')}
                     </Button>
                     <ActionIcon
                       variant="subtle"
                       color="red"
                       onClick={() => handleDelete(user)}
-                      aria-label="删除用户"
+                      aria-label={t('deleteUserAria')}
                     >
                       <IconTrash size={18} />
                     </ActionIcon>
@@ -173,6 +175,7 @@ function CreateUserModal({
   onClose: () => void;
   onCreated: () => void;
 }) {
+  const { t } = useTranslation('users');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [role, setRole] = useState<Role>('user');
@@ -188,7 +191,7 @@ function CreateUserModal({
     setSubmitting(true);
     try {
       await api.createUser({ username, password, role });
-      notifySuccess('用户已创建');
+      notifySuccess(t('userCreated'));
       reset();
       onCreated();
     } catch (err) {
@@ -199,25 +202,25 @@ function CreateUserModal({
   };
 
   return (
-    <Modal opened={opened} onClose={onClose} title="新增用户" centered>
+    <Modal opened={opened} onClose={onClose} title={t('createModalTitle')} centered>
       <Stack>
         <TextInput
-          label="用户名"
+          label={t('fieldUsername')}
           value={username}
           onChange={(e) => setUsername(e.currentTarget.value)}
           required
         />
         <PasswordInput
-          label="口令"
+          label={t('fieldPassword')}
           value={password}
           onChange={(e) => setPassword(e.currentTarget.value)}
           required
         />
         <Select
-          label="角色"
+          label={t('fieldRole')}
           data={[
-            { value: 'user', label: '用户' },
-            { value: 'admin', label: '管理员' },
+            { value: 'user', label: t('common:roleUser') },
+            { value: 'admin', label: t('common:roleAdmin') },
           ]}
           value={role}
           onChange={(v) => setRole((v as Role) ?? 'user')}
@@ -225,10 +228,10 @@ function CreateUserModal({
         />
         <Group justify="flex-end">
           <Button variant="default" onClick={onClose}>
-            取消
+            {t('common:cancel')}
           </Button>
           <Button onClick={handleSubmit} loading={submitting} disabled={!username || !password}>
-            创建
+            {t('common:create')}
           </Button>
         </Group>
       </Stack>

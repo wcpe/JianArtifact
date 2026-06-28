@@ -5,6 +5,7 @@
 // 与基础仪表盘（FR-18）相互独立：基础仪表盘只展示基础信息，本页是 P2 的富数据面板。
 
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   SimpleGrid,
   Card,
@@ -38,6 +39,7 @@ function StatCard({ label, value }: { label: string; value: string | number }) {
 
 /** 使用分析数据面板页面。 */
 export function AnalyticsPage() {
+  const { t } = useTranslation('analytics');
   const [data, setData] = useState<UsageAnalyticsDto | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -63,41 +65,41 @@ export function AnalyticsPage() {
 
   return (
     <Stack>
-      <Title order={2}>使用分析</Title>
-      <Text c="dimmed">访问量 / 下载量、热门制品与仓库用量；数据为本机内部统计，不外发。</Text>
+      <Title order={2}>{t('title')}</Title>
+      <Text c="dimmed">{t('subtitle')}</Text>
       {error && <ErrorAlert message={error} />}
 
       {data && (
         <>
           <SimpleGrid cols={{ base: 1, sm: 2 }}>
-            <StatCard label="累计访问量" value={data.total_access} />
-            <StatCard label="累计下载量" value={data.total_download} />
+            <StatCard label={t('totalAccess')} value={data.total_access} />
+            <StatCard label={t('totalDownload')} value={data.total_download} />
           </SimpleGrid>
 
           <SimpleGrid cols={{ base: 1, lg: 2 }}>
             <Card withBorder padding="lg" radius="md">
               <Title order={4} mb="sm">
-                热门制品（按下载量）
+                {t('topDownloads')}
               </Title>
               {data.top_downloads.length === 0 ? (
                 <Text c="dimmed" size="sm">
-                  暂无下载记录
+                  {t('noDownloadRecords')}
                 </Text>
               ) : (
                 <Table.ScrollContainer minWidth={420}>
                   <Table striped highlightOnHover>
                     <Table.Thead>
                       <Table.Tr>
-                        <Table.Th>仓库</Table.Th>
-                        <Table.Th>制品路径</Table.Th>
-                        <Table.Th ta="right">下载量</Table.Th>
+                        <Table.Th>{t('colRepo')}</Table.Th>
+                        <Table.Th>{t('colArtifactPath')}</Table.Th>
+                        <Table.Th ta="right">{t('colDownloadCount')}</Table.Th>
                       </Table.Tr>
                     </Table.Thead>
                     <Table.Tbody>
                       {data.top_downloads.map((item) => (
                         <Table.Tr key={`${item.repo_name}/${item.repo_path}`}>
                           <Table.Td>{item.repo_name}</Table.Td>
-                          <Table.Td>{item.repo_path || '（仓库级）'}</Table.Td>
+                          <Table.Td>{item.repo_path || t('repoLevel')}</Table.Td>
                           <Table.Td ta="right">{item.count}</Table.Td>
                         </Table.Tr>
                       ))}
@@ -109,11 +111,11 @@ export function AnalyticsPage() {
 
             <Card withBorder padding="lg" radius="md">
               <Title order={4} mb="sm">
-                仓库用量（按下载量）
+                {t('repoUsage')}
               </Title>
               {data.repo_usage.length === 0 ? (
                 <Text c="dimmed" size="sm">
-                  暂无下载记录
+                  {t('noDownloadRecords')}
                 </Text>
               ) : (
                 <Stack gap="xs">

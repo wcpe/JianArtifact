@@ -4,6 +4,7 @@
 // 路由已由 RequireAdmin 守卫；本页只读展示，不做任何写操作。
 
 import { useEffect, useState, type FormEvent } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Title,
   Stack,
@@ -24,6 +25,7 @@ import * as api from '../api/endpoints';
 import type { AuditEntryDto } from '../api/types';
 import { errorMessage } from '../lib/format';
 import { ErrorAlert } from '../components/ErrorAlert';
+import { tAuditAction } from '../i18n';
 
 /** 单页容量（对齐后端默认 50）。 */
 const PAGE_SIZE = 50;
@@ -50,23 +52,24 @@ function AuditDetailModal({
   entry: AuditEntryDto | null;
   onClose: () => void;
 }) {
+  const { t } = useTranslation('audit');
   return (
-    <Modal opened={entry !== null} onClose={onClose} title="审计详情" centered size="lg">
+    <Modal opened={entry !== null} onClose={onClose} title={t('detailTitle')} centered size="lg">
       {entry && (
         <Stack gap="xs">
-          <DetailRow label="时间" value={entry.ts} />
-          <DetailRow label="操作者" value={entry.actor} />
-          <DetailRow label="身份种类" value={entry.actor_kind} />
-          <DetailRow label="动作" value={entry.action} />
-          <DetailRow label="结果" value={entry.result} />
-          <DetailRow label="仓库" value={entry.target_repo} />
-          <DetailRow label="对象" value={entry.target} />
-          <DetailRow label="来源 IP" value={entry.source_ip} />
-          <DetailRow label="请求 ID" value={entry.request_id} />
+          <DetailRow label={t('time')} value={entry.ts} />
+          <DetailRow label={t('actor')} value={entry.actor} />
+          <DetailRow label={t('actorKind')} value={entry.actor_kind} />
+          <DetailRow label={t('action')} value={tAuditAction(entry.action)} />
+          <DetailRow label={t('result')} value={entry.result} />
+          <DetailRow label={t('repo')} value={entry.target_repo} />
+          <DetailRow label={t('object')} value={entry.target} />
+          <DetailRow label={t('sourceIp')} value={entry.source_ip} />
+          <DetailRow label={t('requestId')} value={entry.request_id} />
           {entry.detail && (
             <div>
               <Text size="sm" c="dimmed">
-                补充
+                {t('detail')}
               </Text>
               <Code block>{entry.detail}</Code>
             </div>
@@ -93,6 +96,7 @@ function DetailRow({ label, value }: { label: string; value: string | null }) {
 
 /** 审计日志查询页面。 */
 export function AuditPage() {
+  const { t } = useTranslation('audit');
   // 已提交生效的过滤条件（点击查询时从输入框快照）
   const [filter, setFilter] = useState<{ actor: string; action: string; repo: string }>({
     actor: '',
@@ -152,31 +156,31 @@ export function AuditPage() {
 
   return (
     <Stack>
-      <Title order={2}>审计日志</Title>
-      <Text c="dimmed">记录写 / 管理 / 授权拒绝类安全事件，按时间倒序。点击任意行查看详情。</Text>
+      <Title order={2}>{t('title')}</Title>
+      <Text c="dimmed">{t('description')}</Text>
 
       <form onSubmit={handleSubmit}>
         <Group align="flex-end">
           <TextInput
-            label="操作者"
-            placeholder="按用户名过滤"
+            label={t('actor')}
+            placeholder={t('actorPlaceholder')}
             value={actorInput}
             onChange={(e) => setActorInput(e.currentTarget.value)}
           />
           <TextInput
-            label="动作"
-            placeholder="如 repo.create"
+            label={t('action')}
+            placeholder={t('actionPlaceholder')}
             value={actionInput}
             onChange={(e) => setActionInput(e.currentTarget.value)}
           />
           <TextInput
-            label="仓库"
-            placeholder="按仓库名过滤"
+            label={t('repo')}
+            placeholder={t('repoPlaceholder')}
             value={repoInput}
             onChange={(e) => setRepoInput(e.currentTarget.value)}
           />
           <Button type="submit" leftSection={<IconSearch size={16} />}>
-            查询
+            {t('query')}
           </Button>
         </Group>
       </form>
@@ -188,21 +192,21 @@ export function AuditPage() {
           <Loader />
         </Center>
       ) : entries.length === 0 ? (
-        <Text c="dimmed">暂无审计记录。</Text>
+        <Text c="dimmed">{t('empty')}</Text>
       ) : (
         <Stack>
           <Text size="sm" c="dimmed">
-            共 {total} 条记录
+            {t('totalRecords', { count: total })}
           </Text>
           <Table.ScrollContainer minWidth={760}>
             <Table striped highlightOnHover>
               <Table.Thead>
                 <Table.Tr>
-                  <Table.Th>时间</Table.Th>
-                  <Table.Th>操作者</Table.Th>
-                  <Table.Th>动作</Table.Th>
-                  <Table.Th>仓库</Table.Th>
-                  <Table.Th>结果</Table.Th>
+                  <Table.Th>{t('time')}</Table.Th>
+                  <Table.Th>{t('actor')}</Table.Th>
+                  <Table.Th>{t('action')}</Table.Th>
+                  <Table.Th>{t('repo')}</Table.Th>
+                  <Table.Th>{t('result')}</Table.Th>
                 </Table.Tr>
               </Table.Thead>
               <Table.Tbody>
@@ -214,7 +218,7 @@ export function AuditPage() {
                   >
                     <Table.Td>{entry.ts}</Table.Td>
                     <Table.Td>{entry.actor}</Table.Td>
-                    <Table.Td>{entry.action}</Table.Td>
+                    <Table.Td>{tAuditAction(entry.action)}</Table.Td>
                     <Table.Td>{entry.target_repo ?? '—'}</Table.Td>
                     <Table.Td>
                       <Badge variant="light" size="sm" color={resultColor(entry.result)}>

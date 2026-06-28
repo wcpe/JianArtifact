@@ -9,6 +9,7 @@
 // （即时生效，区别于动态配置的「保存后重启生效」），不并入设置页全局保存。
 
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Stack,
   Title,
@@ -75,6 +76,7 @@ const WAF_ACTIONS = ['block', 'allow'];
 
 /** 防护配置节（嵌入设置页，FR-110）。 */
 export function ProtectionConfigSection() {
+  const { t } = useTranslation('protection');
   const [config, setConfig] = useState<ProtectionConfig | null>(null);
   const [allowText, setAllowText] = useState('');
   const [denyText, setDenyText] = useState('');
@@ -135,14 +137,13 @@ export function ProtectionConfigSection() {
       style={{ scrollMarginTop: density.headerHeight }}
     >
       <Group gap="xs" mb="xs">
-        <Title order={4}>防护配置</Title>
+        <Title order={4}>{t('card.title')}</Title>
         <Badge size="sm" color="green" variant="light">
-          保存后即时生效
+          {t('card.instantBadge')}
         </Badge>
       </Group>
       <Text size="sm" c="dimmed" mb="sm">
-        各七层防护维度的启停与调参，保存后即时生效、无须重启；阈值 / 名单 /
-        规则为本机内部配置，不外发。
+        {t('card.description')}
       </Text>
 
       {loading ? (
@@ -193,6 +194,7 @@ function ProtectionForm({
   onPatch: <K extends keyof ProtectionConfig>(key: K, value: ProtectionConfig[K]) => void;
   onSave: () => void;
 }) {
+  const { t } = useTranslation('protection');
   const rl = config.rate_limit;
   const ban = config.ban;
   const slow = config.slowloris;
@@ -203,33 +205,33 @@ function ProtectionForm({
   return (
     <Stack>
       {error && <ErrorAlert message={error} />}
-      {saved && <Text c="green">已保存，配置已即时生效。</Text>}
+      {saved && <Text c="green">{t('savedHint')}</Text>}
 
       {/* —— 速率限制 —— */}
       <Section
-        title="速率限制"
-        description="按 IP / 身份 / 仓库维度固定窗计数，超阈值返回 429；并发上限 0 表示不限。"
+        title={t('rateLimit.title')}
+        description={t('rateLimit.description')}
       >
         <Switch
-          label="启用速率限制"
+          label={t('rateLimit.enable')}
           checked={rl.enabled}
           onChange={(e) => onPatch('rate_limit', { ...rl, enabled: e.currentTarget.checked })}
         />
         <Group grow>
           <NumberInput
-            label="时间窗（秒）"
+            label={t('rateLimit.windowSecs')}
             min={1}
             value={rl.window_secs}
             onChange={(v) => onPatch('rate_limit', { ...rl, window_secs: Number(v) || 0 })}
           />
           <NumberInput
-            label="单 IP 每窗上限"
+            label={t('rateLimit.ipMaxRequests')}
             min={0}
             value={rl.ip_max_requests}
             onChange={(v) => onPatch('rate_limit', { ...rl, ip_max_requests: Number(v) || 0 })}
           />
           <NumberInput
-            label="单身份每窗上限"
+            label={t('rateLimit.identityMaxRequests')}
             min={0}
             value={rl.identity_max_requests}
             onChange={(v) =>
@@ -239,25 +241,25 @@ function ProtectionForm({
         </Group>
         <Group grow>
           <NumberInput
-            label="单仓库每窗上限（0=不启用）"
+            label={t('rateLimit.repoMaxRequests')}
             min={0}
             value={rl.repo_max_requests}
             onChange={(v) => onPatch('rate_limit', { ...rl, repo_max_requests: Number(v) || 0 })}
           />
           <NumberInput
-            label="单 IP 并发上限（0=不限）"
+            label={t('rateLimit.ipMaxConcurrent')}
             min={0}
             value={rl.ip_max_concurrent}
             onChange={(v) => onPatch('rate_limit', { ...rl, ip_max_concurrent: Number(v) || 0 })}
           />
           <NumberInput
-            label="单用户并发上限（0=不限）"
+            label={t('rateLimit.userMaxConcurrent')}
             min={0}
             value={rl.user_max_concurrent}
             onChange={(v) => onPatch('rate_limit', { ...rl, user_max_concurrent: Number(v) || 0 })}
           />
           <NumberInput
-            label="单仓库并发上限（0=不限）"
+            label={t('rateLimit.repoMaxConcurrent')}
             min={0}
             value={rl.repo_max_concurrent}
             onChange={(v) => onPatch('rate_limit', { ...rl, repo_max_concurrent: Number(v) || 0 })}
@@ -267,18 +269,18 @@ function ProtectionForm({
 
       {/* —— IP 黑 / 白名单 —— */}
       <Section
-        title="IP 黑 / 白名单"
-        description="每行一个 IP 或 CIDR 网段；白名单豁免一切防护、黑名单直接拒。"
+        title={t('ipList.title')}
+        description={t('ipList.description')}
       >
         <Textarea
-          label="白名单（每行一个 IP / CIDR）"
+          label={t('ipList.allowLabel')}
           autosize
           minRows={2}
           value={allowText}
           onChange={(e) => onAllowTextChange(e.currentTarget.value)}
         />
         <Textarea
-          label="黑名单（每行一个 IP / CIDR）"
+          label={t('ipList.denyLabel')}
           autosize
           minRows={2}
           value={denyText}
@@ -288,29 +290,29 @@ function ProtectionForm({
 
       {/* —— 异常检测与自动封禁 —— */}
       <Section
-        title="异常检测与自动封禁"
-        description="窗内单 IP 异常信号达阈值即封禁一段时间，到期自动解封。"
+        title={t('ban.title')}
+        description={t('ban.description')}
       >
         <Switch
-          label="启用异常封禁"
+          label={t('ban.enable')}
           checked={ban.enabled}
           onChange={(e) => onPatch('ban', { ...ban, enabled: e.currentTarget.checked })}
         />
         <Group grow>
           <NumberInput
-            label="时间窗（秒）"
+            label={t('ban.windowSecs')}
             min={1}
             value={ban.window_secs}
             onChange={(v) => onPatch('ban', { ...ban, window_secs: Number(v) || 0 })}
           />
           <NumberInput
-            label="封禁阈值"
+            label={t('ban.threshold')}
             min={1}
             value={ban.threshold}
             onChange={(v) => onPatch('ban', { ...ban, threshold: Number(v) || 0 })}
           />
           <NumberInput
-            label="封禁时长（秒）"
+            label={t('ban.durationSecs')}
             min={1}
             value={ban.duration_secs}
             onChange={(v) => onPatch('ban', { ...ban, duration_secs: Number(v) || 0 })}
@@ -320,17 +322,17 @@ function ProtectionForm({
 
       {/* —— 慢速攻击防护 —— */}
       <Section
-        title="慢速攻击防护"
-        description="对慢速 drip 请求体设超时、对所有请求体设通用大小上限（0=不启用）。"
+        title={t('slowloris.title')}
+        description={t('slowloris.description')}
       >
         <Switch
-          label="启用慢速攻击防护"
+          label={t('slowloris.enable')}
           checked={slow.enabled}
           onChange={(e) => onPatch('slowloris', { ...slow, enabled: e.currentTarget.checked })}
         />
         <Group grow>
           <NumberInput
-            label="块间空闲超时（秒）"
+            label={t('slowloris.bodyReadTimeoutSecs')}
             min={1}
             value={slow.body_read_timeout_secs}
             onChange={(v) =>
@@ -338,13 +340,13 @@ function ProtectionForm({
             }
           />
           <NumberInput
-            label="首块等待超时（秒）"
+            label={t('slowloris.headerTimeoutSecs')}
             min={1}
             value={slow.header_timeout_secs}
             onChange={(v) => onPatch('slowloris', { ...slow, header_timeout_secs: Number(v) || 0 })}
           />
           <NumberInput
-            label="通用体上限（字节，0=不启用）"
+            label={t('slowloris.maxBodyBytes')}
             min={0}
             value={slow.max_body_bytes}
             onChange={(v) => onPatch('slowloris', { ...slow, max_body_bytes: Number(v) || 0 })}
@@ -354,16 +356,16 @@ function ProtectionForm({
 
       {/* —— CC 挑战 —— */}
       <Section
-        title="CC 挑战（PoW）"
-        description="对匿名可疑流量要求工作量证明；难度越高刷流成本越高。默认豁免已认证客户端。"
+        title={t('ccChallenge.title')}
+        description={t('ccChallenge.description')}
       >
         <Switch
-          label="启用 CC 挑战"
+          label={t('ccChallenge.enable')}
           checked={cc.enabled}
           onChange={(e) => onPatch('cc_challenge', { ...cc, enabled: e.currentTarget.checked })}
         />
         <Switch
-          label="豁免已认证请求"
+          label={t('ccChallenge.exemptAuthenticated')}
           checked={cc.exempt_authenticated}
           onChange={(e) =>
             onPatch('cc_challenge', { ...cc, exempt_authenticated: e.currentTarget.checked })
@@ -371,14 +373,14 @@ function ProtectionForm({
         />
         <Group grow>
           <NumberInput
-            label="难度（前导零位，≤64）"
+            label={t('ccChallenge.difficulty')}
             min={0}
             max={64}
             value={cc.difficulty}
             onChange={(v) => onPatch('cc_challenge', { ...cc, difficulty: Number(v) || 0 })}
           />
           <NumberInput
-            label="令牌有效期（秒）"
+            label={t('ccChallenge.ttlSecs')}
             min={1}
             value={cc.ttl_secs}
             onChange={(v) => onPatch('cc_challenge', { ...cc, ttl_secs: Number(v) || 0 })}
@@ -388,22 +390,22 @@ function ProtectionForm({
 
       {/* —— WAF 规则引擎 —— */}
       <Section
-        title="WAF 规则引擎"
-        description="按 method / path / query / header 有序匹配，首个命中生效（block 拒 / allow 放行）。"
+        title={t('waf.title')}
+        description={t('waf.description')}
       >
         <Switch
-          label="启用 WAF"
+          label={t('waf.enable')}
           checked={waf.enabled}
           onChange={(e) => onPatch('waf', { ...waf, enabled: e.currentTarget.checked })}
         />
         <Table>
           <Table.Thead>
             <Table.Tr>
-              <Table.Th>字段</Table.Th>
-              <Table.Th>头名（仅 header）</Table.Th>
-              <Table.Th>模式</Table.Th>
-              <Table.Th>匹配类型</Table.Th>
-              <Table.Th>动作</Table.Th>
+              <Table.Th>{t('waf.colField')}</Table.Th>
+              <Table.Th>{t('waf.colHeaderName')}</Table.Th>
+              <Table.Th>{t('waf.colPattern')}</Table.Th>
+              <Table.Th>{t('waf.colMatchType')}</Table.Th>
+              <Table.Th>{t('waf.colAction')}</Table.Th>
               <Table.Th />
             </Table.Tr>
           </Table.Thead>
@@ -420,21 +422,21 @@ function ProtectionForm({
                       data={WAF_FIELDS}
                       value={rule.field}
                       onChange={(v) => updateRule({ field: v ?? 'path' })}
-                      aria-label="规则字段"
+                      aria-label={t('waf.ariaField')}
                     />
                   </Table.Td>
                   <Table.Td>
                     <TextInput
                       value={rule.header_name ?? ''}
                       onChange={(e) => updateRule({ header_name: e.currentTarget.value })}
-                      aria-label="头名"
+                      aria-label={t('waf.ariaHeaderName')}
                     />
                   </Table.Td>
                   <Table.Td>
                     <TextInput
                       value={rule.pattern}
                       onChange={(e) => updateRule({ pattern: e.currentTarget.value })}
-                      aria-label="模式"
+                      aria-label={t('waf.ariaPattern')}
                     />
                   </Table.Td>
                   <Table.Td>
@@ -442,7 +444,7 @@ function ProtectionForm({
                       data={WAF_MATCH_TYPES}
                       value={rule.match_type}
                       onChange={(v) => updateRule({ match_type: v ?? 'literal' })}
-                      aria-label="匹配类型"
+                      aria-label={t('waf.ariaMatchType')}
                     />
                   </Table.Td>
                   <Table.Td>
@@ -450,14 +452,14 @@ function ProtectionForm({
                       data={WAF_ACTIONS}
                       value={rule.action}
                       onChange={(v) => updateRule({ action: v ?? 'block' })}
-                      aria-label="动作"
+                      aria-label={t('waf.ariaAction')}
                     />
                   </Table.Td>
                   <Table.Td>
                     <ActionIcon
                       color="red"
                       variant="subtle"
-                      aria-label="删除规则"
+                      aria-label={t('waf.ariaDeleteRule')}
                       onClick={() =>
                         onPatch('waf', { ...waf, rules: waf.rules.filter((_, i) => i !== idx) })
                       }
@@ -484,30 +486,30 @@ function ProtectionForm({
               })
             }
           >
-            新增规则
+            {t('waf.addRule')}
           </Button>
         </Group>
       </Section>
 
       {/* —— 监控告警 —— */}
       <Section
-        title="监控告警"
-        description="窗内各防护维度计数达阈值即告警并落库；告警是本机内部数据、不外发。"
+        title={t('alerts.title')}
+        description={t('alerts.description')}
       >
         <Switch
-          label="启用阈值告警"
+          label={t('alerts.enable')}
           checked={alerts.enabled}
           onChange={(e) => onPatch('alerts', { ...alerts, enabled: e.currentTarget.checked })}
         />
         <Group grow>
           <NumberInput
-            label="评估窗（秒）"
+            label={t('alerts.windowSecs')}
             min={1}
             value={alerts.window_secs}
             onChange={(v) => onPatch('alerts', { ...alerts, window_secs: Number(v) || 0 })}
           />
           <NumberInput
-            label="限流被拒阈值"
+            label={t('alerts.rateLimitThreshold')}
             min={0}
             value={alerts.rate_limit_warn_threshold}
             onChange={(v) =>
@@ -515,7 +517,7 @@ function ProtectionForm({
             }
           />
           <NumberInput
-            label="自动封禁阈值"
+            label={t('alerts.banThreshold')}
             min={0}
             value={alerts.ban_warn_threshold}
             onChange={(v) => onPatch('alerts', { ...alerts, ban_warn_threshold: Number(v) || 0 })}
@@ -523,7 +525,7 @@ function ProtectionForm({
         </Group>
         <Group grow>
           <NumberInput
-            label="CC 失败阈值"
+            label={t('alerts.ccFailThreshold')}
             min={0}
             value={alerts.cc_challenge_fail_warn_threshold}
             onChange={(v) =>
@@ -531,7 +533,7 @@ function ProtectionForm({
             }
           />
           <NumberInput
-            label="WAF 阻断阈值"
+            label={t('alerts.wafBlockThreshold')}
             min={0}
             value={alerts.waf_block_warn_threshold}
             onChange={(v) =>
@@ -539,7 +541,7 @@ function ProtectionForm({
             }
           />
           <NumberInput
-            label="慢速超时阈值"
+            label={t('alerts.slowlorisThreshold')}
             min={0}
             value={alerts.slowloris_warn_threshold}
             onChange={(v) =>
@@ -552,7 +554,7 @@ function ProtectionForm({
       <Divider />
       <Group>
         <Button onClick={onSave} loading={saving}>
-          保存并即时生效
+          {t('saveButton')}
         </Button>
       </Group>
     </Stack>

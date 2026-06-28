@@ -7,6 +7,7 @@
 // 数据本机内部、不外发。审计 / 使用分析 / 防护监控为各自独立页（不再 tab 化整合于此）。
 
 import { useCallback, useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Stack, Title, Text, Group, Card, SimpleGrid, SegmentedControl } from '@mantine/core';
 import * as api from '../api/endpoints';
 import type { MetricPoint } from '../api/types';
@@ -40,6 +41,7 @@ export const MONITOR_REFRESH_MS = 15_000;
 
 /** 监控总览页。 */
 export function MonitorPage() {
+  const { t } = useTranslation('monitor');
   const [category, setCategory] = useState<MetricCategoryFilter>('all');
   const [rangeKey, setRangeKey] = useState<TimeRangeKey>('24h');
   // 各指标键 → 取数状态
@@ -74,21 +76,20 @@ export function MonitorPage() {
 
   return (
     <Stack>
-      <Title order={2}>监控</Title>
+      <Title order={2}>{t('title')}</Title>
       <Text c="dimmed" size="sm">
-        跨域运行指标总览（主机 / 存储仓库 / 防护 /
-        使用分析）；时序数据按可配间隔采样落本机，纯内部、不外发。
+        {t('description')}
       </Text>
 
       <Group justify="space-between" wrap="wrap">
         <SegmentedControl
-          aria-label="指标分类"
+          aria-label={t('categoryAriaLabel')}
           value={category}
           onChange={(v) => setCategory(v as MetricCategoryFilter)}
           data={CATEGORY_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
         />
         <SegmentedControl
-          aria-label="时间范围"
+          aria-label={t('timeRangeAriaLabel')}
           value={rangeKey}
           onChange={(v) => setRangeKey(v as TimeRangeKey)}
           data={TIME_RANGES.map((r) => ({ value: r.key, label: r.label }))}
@@ -130,9 +131,10 @@ function KpiCard({ meta, state }: { meta: MetricMeta; state: SeriesState | undef
 
 /** 时序卡：标题 + 手搓折线（悬停看点值）+ 当前值；无数据源 / 无点走空态。 */
 function MetricChartCard({ meta, state }: { meta: MetricMeta; state: SeriesState | undefined }) {
+  const { t } = useTranslation('monitor');
   const points = meta.available && state ? state.points : [];
   const value = lastValue(points);
-  const emptyText = !meta.available ? '暂无数据（待埋点）' : '暂无数据';
+  const emptyText = !meta.available ? t('emptyPending') : t('common:empty');
   return (
     <Card withBorder padding="md" radius="md">
       <Group justify="space-between" mb="xs">

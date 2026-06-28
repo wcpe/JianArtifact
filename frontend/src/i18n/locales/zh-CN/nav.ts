@@ -20,8 +20,17 @@ export default {
   // 外壳通用
   searchPlaceholder: '搜索制品（回车或停顿即搜）',
   searchAriaLabel: '全局搜索',
+  signIn: '登录',
   signOut: '登出',
   collapse: '收起',
   expand: '展开',
+  collapseNav: '收起导航',
+  expandNav: '展开导航',
+  toggleNav: '切换导航展开收起',
   openSourceLicenses: '开源许可',
+  // 用户身份后缀（FR-95 页眉）：「<用户名>（<角色>）」
+  userSuffix: '（{{role}}）',
+  // 更新徽标（FR-101，仅 Admin 且确有可更新时显）
+  updateBadge: '更新: {{current}} → {{latest}}',
+  updateBadgeAriaLabel: '有可用更新，点击前往设置页升级',
 } as const;

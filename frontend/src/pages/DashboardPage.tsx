@@ -83,39 +83,41 @@ function ratio(used: number, total: number): number {
 
 /** 管理员 KPI 区：4 张卡，存储用量人类可读、计数千分位。 */
 function KpiSection({ summary }: { summary: DashboardSummary }) {
+  const { t } = useTranslation('dashboard');
   return (
     <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing={density.gridSpacing}>
-      <KpiCard label="仓库数" value={formatCount(summary.repo_count)} />
-      <KpiCard label="制品数" value={formatCount(summary.artifact_count)} />
-      <KpiCard label="存储用量" value={formatBytes(summary.total_bytes)} />
-      <KpiCard label="用户数" value={formatCount(summary.user_count)} />
+      <KpiCard label={t('repoCount')} value={formatCount(summary.repo_count)} />
+      <KpiCard label={t('artifactCount')} value={formatCount(summary.artifact_count)} />
+      <KpiCard label={t('storageUsage')} value={formatBytes(summary.total_bytes)} />
+      <KpiCard label={t('userCount')} value={formatCount(summary.user_count)} />
     </SimpleGrid>
   );
 }
 
 /** 主机健康卡：CPU / 内存 / 磁盘三条进度条。 */
 function HostHealthCard({ host }: { host: HostMetrics }) {
+  const { t } = useTranslation('dashboard');
   const memPercent = ratio(host.memory.used_bytes, host.memory.total_bytes);
   const diskUsed = host.disk.total_bytes - host.disk.available_bytes;
   const diskPercent = ratio(diskUsed, host.disk.total_bytes);
   return (
     <Card withBorder padding={density.cardPadding} radius="md">
       <Title order={4} mb="sm">
-        主机健康
+        {t('hostHealth')}
       </Title>
       <Stack gap="sm">
         <HealthBar
-          label="CPU"
+          label={t('cpu')}
           percent={host.cpu.usage_percent}
           detail={`${Math.round(host.cpu.usage_percent)}%`}
         />
         <HealthBar
-          label="内存"
+          label={t('memory')}
           percent={memPercent}
           detail={`${formatBytes(host.memory.used_bytes)} / ${formatBytes(host.memory.total_bytes)}`}
         />
         <HealthBar
-          label="磁盘"
+          label={t('disk')}
           percent={diskPercent}
           detail={`${formatBytes(diskUsed)} / ${formatBytes(host.disk.total_bytes)}`}
         />
@@ -181,24 +183,25 @@ function SystemStatusCard({
   status: SystemStatus;
   uptimeSecs: number | null;
 }) {
+  const { t } = useTranslation('dashboard');
   return (
     <Card withBorder padding={density.cardPadding} radius="md">
       <Title order={4} mb="sm">
-        系统状态
+        {t('systemStatus')}
       </Title>
       <Stack gap="xs">
-        <StatusRow label="在线更新">
+        <StatusRow label={t('onlineUpdate')}>
           {status.update.kind === 'available' ? (
             <Badge color="blue" variant="light">
-              有新版 {status.update.latest}
+              {t('updateAvailable', { version: status.update.latest })}
             </Badge>
           ) : status.update.kind === 'latest' ? (
             <Badge color="green" variant="light">
-              已是最新
+              {t('updateLatest')}
             </Badge>
           ) : status.update.kind === 'disabled' ? (
             <Badge color="gray" variant="light">
-              未启用
+              {t('updateDisabled')}
             </Badge>
           ) : (
             <Text size="sm" c="dimmed">
@@ -206,14 +209,14 @@ function SystemStatusCard({
             </Text>
           )}
         </StatusRow>
-        <StatusRow label="七层防护">
+        <StatusRow label={t('protection')}>
           {status.protection === 'ok' ? (
             <Badge color="green" variant="light">
-              正常
+              {t('protectionOk')}
             </Badge>
           ) : status.protection === 'alert' ? (
             <Badge color="orange" variant="light">
-              异常
+              {t('protectionAlert')}
             </Badge>
           ) : (
             <Text size="sm" c="dimmed">
@@ -221,18 +224,18 @@ function SystemStatusCard({
             </Text>
           )}
         </StatusRow>
-        <StatusRow label="漏洞库">
+        <StatusRow label={t('vulnDb')}>
           {status.vulnEnabled === null ? (
             <Text size="sm" c="dimmed">
               —
             </Text>
           ) : (
             <Badge color={status.vulnEnabled ? 'green' : 'gray'} variant="light">
-              {status.vulnEnabled ? '已启用' : '未启用'}
+              {status.vulnEnabled ? t('vulnEnabled') : t('vulnDisabled')}
             </Badge>
           )}
         </StatusRow>
-        <StatusRow label="运行时长">
+        <StatusRow label={t('uptime')}>
           <Text size="sm" c="dimmed">
             {uptimeSecs === null ? '—' : formatUptime(uptimeSecs)}
           </Text>
@@ -377,6 +380,7 @@ function AdminDashboard() {
 
 /** 非管理员 / 匿名降级视图：仅当前用户 + 可见仓库数（不调仅管理员端点）。 */
 function BasicDashboard() {
+  const { t } = useTranslation('dashboard');
   const [repoCount, setRepoCount] = useState<number | null>(null);
 
   useEffect(() => {
@@ -396,22 +400,23 @@ function BasicDashboard() {
 
   return (
     <SimpleGrid cols={{ base: 1, sm: 2 }} spacing={density.gridSpacing}>
-      <KpiCard label="可见仓库数" value={formatCount(repoCount)} />
+      <KpiCard label={t('visibleRepoCount')} value={formatCount(repoCount)} />
     </SimpleGrid>
   );
 }
 
 /** 仪表盘页面：按角色分流到管理员概览或基础降级视图。 */
 export function DashboardPage() {
+  const { t } = useTranslation('dashboard');
   const { user, isAdmin } = useAuth();
 
   return (
     // position: relative 让顶部进度条（绝对定位）锚定在仪表盘内容区顶部。
     <Stack gap={density.gridSpacing} style={{ position: 'relative' }}>
-      <Title order={2}>仪表盘</Title>
+      <Title order={2}>{t('title')}</Title>
       <Text c="dimmed">
-        欢迎，{user?.username}。
-        {isAdmin ? '以下为本实例的全局状态概览。' : '以下为当前可见范围内的基础信息。'}
+        {t('welcome', { username: user?.username })}
+        {isAdmin ? t('welcomeAdmin') : t('welcomeBasic')}
       </Text>
       {isAdmin ? <AdminDashboard /> : <BasicDashboard />}
     </Stack>

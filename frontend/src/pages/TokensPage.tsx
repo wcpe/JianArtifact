@@ -20,6 +20,7 @@ import {
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { IconPlus, IconCopy, IconCheck, IconAlertTriangle } from '@tabler/icons-react';
+import { useTranslation } from 'react-i18next';
 import * as api from '../api/endpoints';
 import type { CreateTokenResponse, TokenView } from '../api/types';
 import { errorMessage } from '../lib/format';
@@ -28,6 +29,7 @@ import { ErrorAlert } from '../components/ErrorAlert';
 
 /** Token 管理页面。 */
 export function TokensPage() {
+  const { t } = useTranslation('tokens');
   const [tokens, setTokens] = useState<TokenView[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -47,10 +49,10 @@ export function TokensPage() {
   useEffect(reload, []);
 
   const handleRevoke = async (token: TokenView) => {
-    if (!window.confirm(`确认吊销 Token「${token.name}」？吊销后立即失效。`)) return;
+    if (!window.confirm(t('confirmRevoke', { name: token.name }))) return;
     try {
       await api.revokeToken(token.id);
-      notifySuccess('Token 已吊销');
+      notifySuccess(t('tokenRevoked'));
       reload();
     } catch (err) {
       notifyError(errorMessage(err));
@@ -68,28 +70,28 @@ export function TokensPage() {
   return (
     <Stack>
       <Group justify="space-between">
-        <Title order={2}>Token 管理</Title>
+        <Title order={2}>{t('title')}</Title>
         <Button leftSection={<IconPlus size={16} />} onClick={createModal.open}>
-          签发 Token
+          {t('issue')}
         </Button>
       </Group>
       <Text c="dimmed" size="sm">
-        API Token 供 CLI 与包管理器客户端鉴权使用；明文仅在签发时显示一次，请妥善保存。
+        {t('intro')}
       </Text>
       {error && <ErrorAlert message={error} />}
 
       {tokens.length === 0 ? (
-        <Text c="dimmed">暂无 Token。</Text>
+        <Text c="dimmed">{t('empty')}</Text>
       ) : (
         <Table.ScrollContainer minWidth={620}>
           <Table striped highlightOnHover>
             <Table.Thead>
               <Table.Tr>
-                <Table.Th>名称</Table.Th>
-                <Table.Th>创建时间</Table.Th>
-                <Table.Th>最近使用</Table.Th>
-                <Table.Th>状态</Table.Th>
-                <Table.Th>操作</Table.Th>
+                <Table.Th>{t('colName')}</Table.Th>
+                <Table.Th>{t('colCreatedAt')}</Table.Th>
+                <Table.Th>{t('colLastUsed')}</Table.Th>
+                <Table.Th>{t('colStatus')}</Table.Th>
+                <Table.Th>{t('colActions')}</Table.Th>
               </Table.Tr>
             </Table.Thead>
             <Table.Tbody>
@@ -103,12 +105,12 @@ export function TokensPage() {
                   </Table.Td>
                   <Table.Td>
                     <Text size="sm" c="dimmed">
-                      {token.last_used_at ?? '从未使用'}
+                      {token.last_used_at ?? t('neverUsed')}
                     </Text>
                   </Table.Td>
                   <Table.Td>
                     <Badge color={token.revoked ? 'gray' : 'green'} variant="light">
-                      {token.revoked ? '已吊销' : '有效'}
+                      {token.revoked ? t('statusRevoked') : t('statusActive')}
                     </Badge>
                   </Table.Td>
                   <Table.Td>
@@ -119,7 +121,7 @@ export function TokensPage() {
                       disabled={token.revoked}
                       onClick={() => handleRevoke(token)}
                     >
-                      吊销
+                      {t('revoke')}
                     </Button>
                   </Table.Td>
                 </Table.Tr>
@@ -154,6 +156,7 @@ function CreateTokenModal({
   onClose: () => void;
   onCreated: (resp: CreateTokenResponse) => void;
 }) {
+  const { t } = useTranslation('tokens');
   const [name, setName] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -171,21 +174,21 @@ function CreateTokenModal({
   };
 
   return (
-    <Modal opened={opened} onClose={onClose} title="签发 API Token" centered>
+    <Modal opened={opened} onClose={onClose} title={t('createModalTitle')} centered>
       <Stack>
         <TextInput
-          label="名称"
-          placeholder="如 ci-pipeline"
+          label={t('fieldName')}
+          placeholder={t('namePlaceholder')}
           value={name}
           onChange={(e) => setName(e.currentTarget.value)}
           required
         />
         <Group justify="flex-end">
           <Button variant="default" onClick={onClose}>
-            取消
+            {t('common:cancel')}
           </Button>
           <Button onClick={handleSubmit} loading={submitting} disabled={!name}>
-            签发
+            {t('issueSubmit')}
           </Button>
         </Group>
       </Stack>
@@ -201,18 +204,19 @@ function IssuedTokenModal({
   token: CreateTokenResponse | null;
   onClose: () => void;
 }) {
+  const { t } = useTranslation('tokens');
   return (
     <Modal
       opened={token !== null}
       onClose={onClose}
-      title="Token 已签发"
+      title={t('issuedModalTitle')}
       centered
       closeOnClickOutside={false}
     >
       {token && (
         <Stack>
           <Alert icon={<IconAlertTriangle size={16} />} color="yellow" variant="light">
-            请立即复制并妥善保存。该明文仅显示这一次，关闭后将无法再次查看。
+            {t('issuedWarning')}
           </Alert>
           <Text size="sm" fw={600}>
             {token.name}
@@ -226,12 +230,12 @@ function IssuedTokenModal({
                   color={copied ? 'green' : undefined}
                   onClick={copy}
                 >
-                  {copied ? '已复制' : '复制 Token'}
+                  {copied ? t('copied') : t('copyToken')}
                 </Button>
               )}
             </CopyButton>
             <Button variant="default" onClick={onClose}>
-              我已保存
+              {t('saved')}
             </Button>
           </Group>
         </Stack>

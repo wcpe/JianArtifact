@@ -15,6 +15,7 @@ import {
   Center,
 } from '@mantine/core';
 import { IconTrash } from '@tabler/icons-react';
+import { useTranslation } from 'react-i18next';
 import * as api from '../api/endpoints';
 import type { GroupAclView, GroupView, Permission } from '../api/types';
 import { errorMessage } from '../lib/format';
@@ -24,6 +25,7 @@ import { ErrorAlert } from './ErrorAlert';
 
 /** 组 ACL 管理面板。 */
 export function GroupAclPanel({ repoId }: { repoId: string }) {
+  const { t } = useTranslation('groups');
   const [acls, setAcls] = useState<GroupAclView[]>([]);
   const [groups, setGroups] = useState<GroupView[]>([]);
   const [loading, setLoading] = useState(true);
@@ -52,7 +54,7 @@ export function GroupAclPanel({ repoId }: { repoId: string }) {
     setSubmitting(true);
     try {
       await api.createGroupAcl(repoId, selectedGroup, permission);
-      notifySuccess('已对组新增授权');
+      notifySuccess(t('groupAclGranted'));
       setSelectedGroup(null);
       reload();
     } catch (err) {
@@ -65,7 +67,7 @@ export function GroupAclPanel({ repoId }: { repoId: string }) {
   const handleRemove = async (aclId: string) => {
     try {
       await api.deleteGroupAcl(repoId, aclId);
-      notifySuccess('已撤销组授权');
+      notifySuccess(t('groupAclRemoved'));
       reload();
     } catch (err) {
       notifyError(errorMessage(err));
@@ -85,8 +87,8 @@ export function GroupAclPanel({ repoId }: { repoId: string }) {
     <Stack>
       <Group align="flex-end">
         <Select
-          label="用户组"
-          placeholder="选择用户组"
+          label={t('groupAclGroup')}
+          placeholder={t('groupAclGroupPlaceholder')}
           data={groups.map((g) => ({ value: g.id, label: g.name }))}
           value={selectedGroup}
           onChange={setSelectedGroup}
@@ -94,7 +96,7 @@ export function GroupAclPanel({ repoId }: { repoId: string }) {
           maw={240}
         />
         <Select
-          label="权限"
+          label={t('groupAclPermission')}
           data={PERMISSION_OPTIONS}
           value={permission}
           onChange={(v) => setPermission((v as Permission) ?? 'read')}
@@ -102,19 +104,19 @@ export function GroupAclPanel({ repoId }: { repoId: string }) {
           maw={160}
         />
         <Button onClick={handleAdd} loading={submitting} disabled={!selectedGroup}>
-          授权
+          {t('groupAclGrant')}
         </Button>
       </Group>
 
       {acls.length === 0 ? (
-        <Text c="dimmed">该仓库暂无组 ACL 授权条目。</Text>
+        <Text c="dimmed">{t('groupAclEmpty')}</Text>
       ) : (
         <Table striped>
           <Table.Thead>
             <Table.Tr>
-              <Table.Th>用户组</Table.Th>
-              <Table.Th>权限</Table.Th>
-              <Table.Th>操作</Table.Th>
+              <Table.Th>{t('groupAclColGroup')}</Table.Th>
+              <Table.Th>{t('groupAclColPermission')}</Table.Th>
+              <Table.Th>{t('groupAclColActions')}</Table.Th>
             </Table.Tr>
           </Table.Thead>
           <Table.Tbody>
@@ -131,7 +133,7 @@ export function GroupAclPanel({ repoId }: { repoId: string }) {
                     variant="subtle"
                     color="red"
                     onClick={() => handleRemove(acl.id)}
-                    aria-label="撤销组授权"
+                    aria-label={t('groupAclRemoveAria')}
                   >
                     <IconTrash size={18} />
                   </ActionIcon>

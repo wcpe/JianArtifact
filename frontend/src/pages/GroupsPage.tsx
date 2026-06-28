@@ -19,6 +19,7 @@ import {
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { IconPlus, IconTrash, IconUsersGroup } from '@tabler/icons-react';
+import { useTranslation } from 'react-i18next';
 import * as api from '../api/endpoints';
 import type { GroupMemberView, GroupView, UserView } from '../api/types';
 import { errorMessage } from '../lib/format';
@@ -27,6 +28,7 @@ import { ErrorAlert } from '../components/ErrorAlert';
 
 /** 用户组管理页面。 */
 export function GroupsPage() {
+  const { t } = useTranslation('groups');
   const [groups, setGroups] = useState<GroupView[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -45,10 +47,10 @@ export function GroupsPage() {
   useEffect(reload, []);
 
   const handleDelete = async (group: GroupView) => {
-    if (!window.confirm(`确认删除用户组「${group.name}」？将同时清理其成员与组授权。`)) return;
+    if (!window.confirm(t('confirmDelete', { name: group.name }))) return;
     try {
       await api.deleteGroup(group.id);
-      notifySuccess('用户组已删除');
+      notifySuccess(t('groupDeleted'));
       reload();
     } catch (err) {
       notifyError(errorMessage(err));
@@ -66,23 +68,23 @@ export function GroupsPage() {
   return (
     <Stack>
       <Group justify="space-between">
-        <Title order={2}>用户组管理</Title>
+        <Title order={2}>{t('title')}</Title>
         <Button leftSection={<IconPlus size={16} />} onClick={createModal.open}>
-          新增用户组
+          {t('createGroup')}
         </Button>
       </Group>
       {error && <ErrorAlert message={error} />}
 
       {groups.length === 0 ? (
-        <Text c="dimmed">暂无用户组。</Text>
+        <Text c="dimmed">{t('empty')}</Text>
       ) : (
         <Table.ScrollContainer minWidth={520}>
           <Table striped highlightOnHover>
             <Table.Thead>
               <Table.Tr>
-                <Table.Th>组名</Table.Th>
-                <Table.Th>创建时间</Table.Th>
-                <Table.Th>操作</Table.Th>
+                <Table.Th>{t('colName')}</Table.Th>
+                <Table.Th>{t('colCreatedAt')}</Table.Th>
+                <Table.Th>{t('colActions')}</Table.Th>
               </Table.Tr>
             </Table.Thead>
             <Table.Tbody>
@@ -102,13 +104,13 @@ export function GroupsPage() {
                         leftSection={<IconUsersGroup size={14} />}
                         onClick={() => setMembersOf(g)}
                       >
-                        成员
+                        {t('members')}
                       </Button>
                       <ActionIcon
                         variant="subtle"
                         color="red"
                         onClick={() => handleDelete(g)}
-                        aria-label="删除用户组"
+                        aria-label={t('deleteGroupAria')}
                       >
                         <IconTrash size={18} />
                       </ActionIcon>
@@ -144,6 +146,7 @@ function CreateGroupModal({
   onClose: () => void;
   onCreated: () => void;
 }) {
+  const { t } = useTranslation('groups');
   const [name, setName] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -151,7 +154,7 @@ function CreateGroupModal({
     setSubmitting(true);
     try {
       await api.createGroup(name);
-      notifySuccess('用户组已创建');
+      notifySuccess(t('groupCreated'));
       setName('');
       onCreated();
     } catch (err) {
@@ -162,21 +165,21 @@ function CreateGroupModal({
   };
 
   return (
-    <Modal opened={opened} onClose={onClose} title="新增用户组" centered>
+    <Modal opened={opened} onClose={onClose} title={t('createModalTitle')} centered>
       <Stack>
         <TextInput
-          label="组名"
-          placeholder="如 dev-team"
+          label={t('fieldName')}
+          placeholder={t('namePlaceholder')}
           value={name}
           onChange={(e) => setName(e.currentTarget.value)}
           required
         />
         <Group justify="flex-end">
           <Button variant="default" onClick={onClose}>
-            取消
+            {t('common:cancel')}
           </Button>
           <Button onClick={handleSubmit} loading={submitting} disabled={!name}>
-            创建
+            {t('common:create')}
           </Button>
         </Group>
       </Stack>
@@ -186,6 +189,7 @@ function CreateGroupModal({
 
 /** 组成员管理弹窗：列出 / 加入 / 移出成员。 */
 function MembersModal({ group, onClose }: { group: GroupView | null; onClose: () => void }) {
+  const { t } = useTranslation('groups');
   const [members, setMembers] = useState<GroupMemberView[]>([]);
   const [users, setUsers] = useState<UserView[]>([]);
   const [loading, setLoading] = useState(true);
@@ -221,7 +225,7 @@ function MembersModal({ group, onClose }: { group: GroupView | null; onClose: ()
     setSubmitting(true);
     try {
       await api.addGroupMember(groupId, selectedUser);
-      notifySuccess('已加入成员');
+      notifySuccess(t('memberAdded'));
       setSelectedUser(null);
       await reloadMembers();
     } catch (err) {
@@ -234,7 +238,7 @@ function MembersModal({ group, onClose }: { group: GroupView | null; onClose: ()
   const handleRemove = async (userId: string) => {
     try {
       await api.removeGroupMember(groupId, userId);
-      notifySuccess('已移出成员');
+      notifySuccess(t('memberRemoved'));
       await reloadMembers();
     } catch (err) {
       notifyError(errorMessage(err));
@@ -248,7 +252,7 @@ function MembersModal({ group, onClose }: { group: GroupView | null; onClose: ()
     <Modal
       opened={group !== null}
       onClose={onClose}
-      title={group ? `「${group.name}」成员管理` : '成员管理'}
+      title={group ? t('membersModalTitle', { name: group.name }) : t('membersModalTitleFallback')}
       centered
       size="lg"
     >
@@ -262,8 +266,8 @@ function MembersModal({ group, onClose }: { group: GroupView | null; onClose: ()
         <Stack>
           <Group align="flex-end">
             <Select
-              label="添加成员"
-              placeholder="选择用户"
+              label={t('addMember')}
+              placeholder={t('selectUserPlaceholder')}
               data={candidates.map((u) => ({ value: u.id, label: u.username }))}
               value={selectedUser}
               onChange={setSelectedUser}
@@ -271,18 +275,18 @@ function MembersModal({ group, onClose }: { group: GroupView | null; onClose: ()
               maw={260}
             />
             <Button onClick={handleAdd} loading={submitting} disabled={!selectedUser}>
-              加入
+              {t('join')}
             </Button>
           </Group>
 
           {members.length === 0 ? (
-            <Text c="dimmed">该组暂无成员。</Text>
+            <Text c="dimmed">{t('noMembers')}</Text>
           ) : (
             <Table striped>
               <Table.Thead>
                 <Table.Tr>
-                  <Table.Th>成员</Table.Th>
-                  <Table.Th>操作</Table.Th>
+                  <Table.Th>{t('colMember')}</Table.Th>
+                  <Table.Th>{t('colActions')}</Table.Th>
                 </Table.Tr>
               </Table.Thead>
               <Table.Tbody>
@@ -296,7 +300,7 @@ function MembersModal({ group, onClose }: { group: GroupView | null; onClose: ()
                         variant="subtle"
                         color="red"
                         onClick={() => handleRemove(m.user_id)}
-                        aria-label="移出成员"
+                        aria-label={t('removeMemberAria')}
                       >
                         <IconTrash size={18} />
                       </ActionIcon>

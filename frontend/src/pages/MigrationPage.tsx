@@ -12,6 +12,8 @@
 // 真值在后端 env 解析，前端绝不回显明文、不持久化。
 
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import {
   Stack,
   Title,
@@ -67,12 +69,12 @@ function fromOnline(repos: NexusRepoSummary[]): PreviewRow[] {
   return repos.map((r) => ({ name: r.name, format: r.format, detail: r.type }));
 }
 
-/** 把离线预览结果归一为展示行。 */
-function fromOffline(repos: OfflineRepoSummary[]): PreviewRow[] {
+/** 把离线预览结果归一为展示行（t 由调用方组件传入，模块级函数自身无法使用 hook）。 */
+function fromOffline(repos: OfflineRepoSummary[], t: TFunction): PreviewRow[] {
   return repos.map((r) => ({
     name: r.repo_name,
     format: '-',
-    detail: `${r.blob_count} 个 blob`,
+    detail: t('preview.blobCount', { count: r.blob_count }),
   }));
 }
 
@@ -87,21 +89,21 @@ function isTerminalPhase(phase: OnlinePullJob['phase']): boolean {
   return phase === 'done' || phase === 'failed' || phase === 'cancelled';
 }
 
-/** 阶段中文标签。 */
-function phaseLabel(phase: OnlinePullJob['phase']): string {
+/** 阶段中文标签（t 由调用方组件传入，模块级函数自身无法使用 hook）。 */
+function phaseLabel(phase: OnlinePullJob['phase'], t: TFunction): string {
   switch (phase) {
     case 'enumerating':
-      return '枚举资产中';
+      return t('phase.enumerating');
     case 'downloading':
-      return '下载搬运中';
+      return t('phase.downloading');
     case 'paused':
-      return '已暂停';
+      return t('phase.paused');
     case 'cancelled':
-      return '已取消';
+      return t('phase.cancelled');
     case 'done':
-      return '已完成';
+      return t('phase.done');
     case 'failed':
-      return '失败';
+      return t('phase.failed');
   }
 }
 
@@ -123,6 +125,7 @@ function phaseColor(phase: OnlinePullJob['phase']): string {
 
 /** Nexus 迁移管理页面。 */
 export function MigrationPage() {
+  const { t } = useTranslation('migration');
   const [active, setActive] = useState(0);
 
   // —— 源配置（步骤 ①）——
@@ -169,7 +172,7 @@ export function MigrationPage() {
         setRows(fromOnline(repos));
       } else {
         const repos = await api.previewNexusOffline({ path: offlinePath.trim() });
-        setRows(fromOffline(repos));
+        setRows(fromOffline(repos, t));
       }
       setSelected(new Set());
       setRenames({});
@@ -214,7 +217,7 @@ export function MigrationPage() {
       // 离线目录执行时清理在线任务态，报告区只显示离线结果。
       setOnlineJob(null);
       setPollingJobId(null);
-      notifySuccess('迁移已完成，请查看报告');
+      notifySuccess(t('toast.offlineDone'));
       setActive(2);
     } catch (err) {
       setMigrateError(errorMessage(err));
@@ -249,7 +252,7 @@ export function MigrationPage() {
       setReport(null);
       setOnlineJob(null);
       setPollingJobId(job_id);
-      notifySuccess('在线拉取任务已发起，正在导入');
+      notifySuccess(t('toast.onlineStarted'));
       setActive(2);
     } catch (err) {
       setMigrateError(errorMessage(err));
@@ -359,45 +362,42 @@ export function MigrationPage() {
 
   return (
     <Stack>
-      <Title order={2}>Nexus 迁移</Title>
-      <Text c="dimmed">
-        从源 Nexus OSS 迁移仓库与制品：在线 REST 或离线 blob store 预览 → 勾选 → 执行 → 查看报告。源
-        Nexus 凭据仅以引用名提供，明文不入库、不回显。
-      </Text>
+      <Title order={2}>{t('title')}</Title>
+      <Text c="dimmed">{t('intro')}</Text>
 
       <Stepper active={active} onStepClick={setActive}>
-        <Stepper.Step label="选源与预览" description="填源地址或离线路径">
+        <Stepper.Step label={t('step.sourceLabel')} description={t('step.sourceDesc')}>
           <Stack mt="md">
             <SegmentedControl
               value={mode}
               onChange={(v) => setMode(v as SourceMode)}
               data={[
-                { label: '在线（REST API）', value: 'online' },
-                { label: '离线（blob store）', value: 'offline' },
+                { label: t('mode.online'), value: 'online' },
+                { label: t('mode.offline'), value: 'offline' },
               ]}
             />
 
             {mode === 'online' ? (
               <>
                 <TextInput
-                  label="源 Nexus 地址"
+                  label={t('source.baseUrlLabel')}
                   placeholder="https://nexus.example"
                   value={baseUrl}
                   onChange={(e) => setBaseUrl(e.currentTarget.value)}
                   required
                 />
                 <PasswordInput
-                  label="凭据引用（auth_ref，可选）"
-                  description="仅填引用名；真实凭据由后端 env 解析，明文不入库、不回显。匿名源可留空。"
-                  placeholder="例如 NEXUS_SRC"
+                  label={t('source.authRefLabel')}
+                  description={t('source.authRefDesc')}
+                  placeholder={t('source.authRefPlaceholder')}
                   value={authRef}
                   onChange={(e) => setAuthRef(e.currentTarget.value)}
                 />
               </>
             ) : (
               <TextInput
-                label="离线 blob store 路径"
-                description="服务进程可访问的本地 Nexus 文件型 blob store 根目录。"
+                label={t('source.offlinePathLabel')}
+                description={t('source.offlinePathDesc')}
                 placeholder="/data/nexus/blobs/default"
                 value={offlinePath}
                 onChange={(e) => setOfflinePath(e.currentTarget.value)}
@@ -409,11 +409,11 @@ export function MigrationPage() {
 
             <Group>
               <Button onClick={handlePreview} disabled={!canPreview} loading={previewing}>
-                预览仓库
+                {t('preview.button')}
               </Button>
               {rows.length > 0 && (
                 <Button variant="default" onClick={() => setActive(1)}>
-                  下一步：勾选执行
+                  {t('preview.next')}
                 </Button>
               )}
             </Group>
@@ -426,15 +426,15 @@ export function MigrationPage() {
               rows.length > 0 && (
                 <Card withBorder padding="md" radius="md">
                   <Text fw={600} mb="sm">
-                    可迁移仓库（{rows.length}）
+                    {t('preview.count', { count: rows.length })}
                   </Text>
                   <Table.ScrollContainer minWidth={420}>
                     <Table striped highlightOnHover>
                       <Table.Thead>
                         <Table.Tr>
-                          <Table.Th>仓库</Table.Th>
-                          <Table.Th>格式</Table.Th>
-                          <Table.Th>类型 / 内容</Table.Th>
+                          <Table.Th>{t('preview.thRepo')}</Table.Th>
+                          <Table.Th>{t('preview.thFormat')}</Table.Th>
+                          <Table.Th>{t('preview.thDetail')}</Table.Th>
                         </Table.Tr>
                       </Table.Thead>
                       <Table.Tbody>
@@ -454,29 +454,29 @@ export function MigrationPage() {
           </Stack>
         </Stepper.Step>
 
-        <Stepper.Step label="勾选执行" description="选仓库、选方式并搬运">
+        <Stepper.Step label={t('step.selectLabel')} description={t('step.selectDesc')}>
           <Stack mt="md">
             {rows.length === 0 ? (
-              <Text c="dimmed">请先在上一步预览仓库。</Text>
+              <Text c="dimmed">{t('select.empty')}</Text>
             ) : (
               <>
                 <div>
                   <Text fw={600} mb="xs">
-                    迁移方式
+                    {t('select.method')}
                   </Text>
                   <SegmentedControl
                     value={method}
                     onChange={(v) => setMethod(v as MigrateMethod)}
                     data={[
-                      { label: '在线拉取（HTTP 下载）', value: 'online' },
-                      { label: '离线目录（blob store）', value: 'offline' },
+                      { label: t('method.online'), value: 'online' },
+                      { label: t('method.offline'), value: 'offline' },
                     ]}
                   />
                 </div>
 
                 <Card withBorder padding="md" radius="md">
                   <Text fw={600} mb="sm">
-                    勾选要搬运的仓库（已选 {selected.size}）
+                    {t('select.chosen', { count: selected.size })}
                   </Text>
                   {method === 'online' ? (
                     <Stack gap="sm">
@@ -489,8 +489,8 @@ export function MigrationPage() {
                             style={{ flex: 1 }}
                           />
                           <TextInput
-                            aria-label={`${row.name} 目标仓库名`}
-                            placeholder={`目标名（默认 ${row.name}）`}
+                            aria-label={t('source.targetRepoAria', { name: row.name })}
+                            placeholder={t('source.targetRepoPlaceholder', { name: row.name })}
                             value={renames[row.name] ?? ''}
                             onChange={(e) => setRename(row.name, e.currentTarget.value)}
                             disabled={!selected.has(row.name)}
@@ -515,14 +515,12 @@ export function MigrationPage() {
 
                 {method === 'online' ? (
                   <Alert color="blue" variant="light">
-                    在线拉取仅对 maven2 hosted 仓库有效，经源 Nexus REST 枚举并逐个 HTTP
-                    下载制品，无需本地 blob store 目录；非 maven / 非 hosted
-                    的所选仓库会被跳过并列入报告。 每个仓库可选填目标仓库名，留空即与源同名。
+                    {t('select.onlineHint')}
                   </Alert>
                 ) : (
                   <TextInput
-                    label="离线 blob store 路径（制品本体来源）"
-                    description="搬运需从离线 blob store 读取制品本体，其下应含 content/ 子目录。"
+                    label={t('source.migratePathLabel')}
+                    description={t('source.migratePathDesc')}
                     placeholder="/data/nexus/blobs/default"
                     value={migratePath}
                     onChange={(e) => setMigratePath(e.currentTarget.value)}
@@ -536,33 +534,32 @@ export function MigrationPage() {
                   <>
                     <Group>
                       <Button onClick={() => setActive(0)} variant="default">
-                        上一步
+                        {t('select.prevStep')}
                       </Button>
                       <Button
                         onClick={handleMigrateOnline}
                         disabled={!canMigrateOnline}
                         loading={migrating}
                       >
-                        执行在线拉取
+                        {t('select.runOnline')}
                       </Button>
                     </Group>
                     <Text size="xs" c="dimmed">
-                      在线拉取建仓 + 经 HTTP 下载同步制品；仅 maven2 hosted 仓库被处理，其余进报告
-                      的整仓跳过列表。
+                      {t('select.onlineFootnote')}
                     </Text>
                   </>
                 ) : (
                   <>
                     <Group>
                       <Button onClick={() => setActive(0)} variant="default">
-                        上一步
+                        {t('select.prevStep')}
                       </Button>
                       <Button
                         onClick={() => handleMigrateOffline('proxy')}
                         disabled={!canMigrateOffline}
                         loading={migrating}
                       >
-                        执行 proxy 搬运
+                        {t('select.runProxy')}
                       </Button>
                       <Button
                         onClick={() => handleMigrateOffline('hosted')}
@@ -570,12 +567,11 @@ export function MigrationPage() {
                         loading={migrating}
                         color="grape"
                       >
-                        执行 hosted 搬运
+                        {t('select.runHosted')}
                       </Button>
                     </Group>
                     <Text size="xs" c="dimmed">
-                      proxy 搬运建仓 + 搬运缓存制品；hosted 搬运建仓 + 搬运完整制品。两者均按源仓库
-                      类型在后端各取所需，非目标类型仓库会被跳过并列入报告。
+                      {t('select.offlineFootnote')}
                     </Text>
                   </>
                 )}
@@ -584,7 +580,7 @@ export function MigrationPage() {
           </Stack>
         </Stepper.Step>
 
-        <Stepper.Step label="迁移报告" description="查看结果">
+        <Stepper.Step label={t('step.reportLabel')} description={t('step.reportDesc')}>
           <Stack mt="md">
             {onlineJob ? (
               <OnlineJobPanel
@@ -596,26 +592,26 @@ export function MigrationPage() {
                 onResume={() => runControl(api.resumeMigrationJob, onlineJob.job_id)}
               />
             ) : !report ? (
-              <Text c="dimmed">尚无迁移报告。</Text>
+              <Text c="dimmed">{t('report.empty')}</Text>
             ) : (
               <Card withBorder padding="md" radius="md">
                 <Text fw={600} mb="sm">
-                  迁移报告
+                  {t('report.title')}
                 </Text>
                 {report.repos.length === 0 ? (
                   <Text c="dimmed" size="sm">
-                    无仓库被搬运。
+                    {t('report.noRepos')}
                   </Text>
                 ) : (
                   <Table.ScrollContainer minWidth={520}>
                     <Table striped>
                       <Table.Thead>
                         <Table.Tr>
-                          <Table.Th>仓库</Table.Th>
-                          <Table.Th>格式</Table.Th>
-                          <Table.Th>新建仓库</Table.Th>
-                          <Table.Th ta="right">已迁制品</Table.Th>
-                          <Table.Th ta="right">跳过制品</Table.Th>
+                          <Table.Th>{t('report.thRepo')}</Table.Th>
+                          <Table.Th>{t('report.thFormat')}</Table.Th>
+                          <Table.Th>{t('report.thCreated')}</Table.Th>
+                          <Table.Th ta="right">{t('report.thMigrated')}</Table.Th>
+                          <Table.Th ta="right">{t('report.thSkipped')}</Table.Th>
                         </Table.Tr>
                       </Table.Thead>
                       <Table.Tbody>
@@ -625,7 +621,7 @@ export function MigrationPage() {
                             <Table.Td>{r.format}</Table.Td>
                             <Table.Td>
                               <Badge color={r.created ? 'green' : 'gray'} variant="light">
-                                {r.created ? '是' : '已存在'}
+                                {r.created ? t('report.createdYes') : t('report.createdExisting')}
                               </Badge>
                             </Table.Td>
                             <Table.Td ta="right">{r.migrated_artifacts}</Table.Td>
@@ -640,7 +636,7 @@ export function MigrationPage() {
                 {report.skipped_repos.length > 0 && (
                   <Group mt="sm" gap="xs">
                     <Text size="sm" c="dimmed">
-                      整仓跳过（非目标类型）：
+                      {t('report.skippedRepos')}
                     </Text>
                     {report.skipped_repos.map((name) => (
                       <Badge key={name} color="orange" variant="light">
@@ -653,7 +649,7 @@ export function MigrationPage() {
             )}
             <Group>
               <Button variant="default" onClick={() => setActive(1)}>
-                返回勾选
+                {t('report.backToSelect')}
               </Button>
             </Group>
           </Stack>
@@ -679,6 +675,7 @@ function OnlineJobPanel({
   onPause: () => void;
   onResume: () => void;
 }) {
+  const { t } = useTranslation('migration');
   // 进度百分比：无资产（尚在枚举）时为 0，避免除零。
   const percent = job.total_assets > 0 ? Math.round((job.done_assets / job.total_assets) * 100) : 0;
   const terminal = isTerminalPhase(job.phase);
@@ -690,11 +687,11 @@ function OnlineJobPanel({
   return (
     <Card withBorder padding="md" radius="md">
       <Group justify="space-between" mb="sm">
-        <Text fw={600}>在线拉取导入队列</Text>
+        <Text fw={600}>{t('job.queueTitle')}</Text>
         <Group gap="xs">
           {polling && <Loader size="xs" />}
           <Badge color={phaseColor(job.phase)} variant="light">
-            {phaseLabel(job.phase)}
+            {phaseLabel(job.phase, t)}
           </Badge>
         </Group>
       </Group>
@@ -703,28 +700,28 @@ function OnlineJobPanel({
       <Group gap="xs" mb="sm">
         {job.paused ? (
           <Button size="xs" variant="light" onClick={onResume} disabled={!canResume}>
-            继续
+            {t('job.resume')}
           </Button>
         ) : (
           <Button size="xs" variant="light" onClick={onPause} disabled={!canPause}>
-            暂停
+            {t('job.pause')}
           </Button>
         )}
         <Button size="xs" variant="light" color="red" onClick={onCancel} disabled={!canCancel}>
-          取消
+          {t('job.cancel')}
         </Button>
       </Group>
 
       {/* 进度条 + 资产计数 */}
-      <Progress value={percent} aria-label="导入进度" animated={!terminal && !job.paused} />
+      <Progress value={percent} aria-label={t('job.progressAria')} animated={!terminal && !job.paused} />
       <Group justify="space-between" mt="xs">
         <Text size="sm" c="dimmed">
-          进度 {job.done_assets} / {job.total_assets}（{percent}%）
+          {t('job.progress', { done: job.done_assets, total: job.total_assets, percent })}
         </Text>
         <Group gap="md">
-          <Text size="sm">已迁 {job.migrated}</Text>
+          <Text size="sm">{t('job.migrated', { count: job.migrated })}</Text>
           <Text size="sm" c="dimmed">
-            已跳过 {job.skipped}
+            {t('job.skipped', { count: job.skipped })}
           </Text>
         </Group>
       </Group>
@@ -734,7 +731,7 @@ function OnlineJobPanel({
         <Stack gap={2} mt="sm">
           {job.current_repo && (
             <Text size="sm">
-              当前仓库：
+              {t('job.currentRepo')}
               <Text span fw={500}>
                 {job.current_repo}
               </Text>
@@ -742,7 +739,8 @@ function OnlineJobPanel({
           )}
           {job.current_path && (
             <Text size="xs" c="dimmed" style={{ wordBreak: 'break-all' }}>
-              当前文件：{job.current_path}
+              {t('job.currentPath')}
+              {job.current_path}
             </Text>
           )}
         </Stack>
@@ -750,7 +748,7 @@ function OnlineJobPanel({
 
       {/* 失败：展示错误文案 */}
       {job.phase === 'failed' && job.error && (
-        <Alert color="red" variant="light" mt="sm" title="任务失败">
+        <Alert color="red" variant="light" mt="sm" title={t('job.failedTitle')}>
           {job.error}
         </Alert>
       )}
@@ -760,19 +758,19 @@ function OnlineJobPanel({
         <>
           {job.repos.length === 0 ? (
             <Text c="dimmed" size="sm" mt="sm">
-              无仓库被搬运。
+              {t('job.noRepos')}
             </Text>
           ) : (
             <Table.ScrollContainer minWidth={560}>
               <Table striped mt="sm">
                 <Table.Thead>
                   <Table.Tr>
-                    <Table.Th>源仓库</Table.Th>
-                    <Table.Th>目标仓库</Table.Th>
-                    <Table.Th>格式</Table.Th>
-                    <Table.Th>新建仓库</Table.Th>
-                    <Table.Th ta="right">已迁制品</Table.Th>
-                    <Table.Th ta="right">跳过制品</Table.Th>
+                    <Table.Th>{t('job.thSourceRepo')}</Table.Th>
+                    <Table.Th>{t('job.thTargetRepo')}</Table.Th>
+                    <Table.Th>{t('job.thFormat')}</Table.Th>
+                    <Table.Th>{t('job.thCreated')}</Table.Th>
+                    <Table.Th ta="right">{t('job.thMigrated')}</Table.Th>
+                    <Table.Th ta="right">{t('job.thSkipped')}</Table.Th>
                   </Table.Tr>
                 </Table.Thead>
                 <Table.Tbody>
@@ -783,7 +781,7 @@ function OnlineJobPanel({
                       <Table.Td>{r.format}</Table.Td>
                       <Table.Td>
                         <Badge color={r.created ? 'green' : 'gray'} variant="light">
-                          {r.created ? '是' : '已存在'}
+                          {r.created ? t('job.createdYes') : t('job.createdExisting')}
                         </Badge>
                       </Table.Td>
                       <Table.Td ta="right">{r.migrated_artifacts}</Table.Td>
@@ -798,7 +796,7 @@ function OnlineJobPanel({
           {job.skipped_repos.length > 0 && (
             <Group mt="sm" gap="xs">
               <Text size="sm" c="dimmed">
-                整仓跳过（非 maven hosted）：
+                {t('job.skippedRepos')}
               </Text>
               {job.skipped_repos.map((name) => (
                 <Badge key={name} color="orange" variant="light">

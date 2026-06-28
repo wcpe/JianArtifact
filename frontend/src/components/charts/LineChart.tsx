@@ -4,6 +4,7 @@
 // 颜色经 CSS 变量适配主题，不引图表库。
 
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Box, Text } from '@mantine/core';
 import type { MetricPoint } from '../../api/types';
 import { VIEW_WIDTH, computePlot, nearestIndex } from './lineChartGeometry';
@@ -33,6 +34,7 @@ export function LineChart({
   valueFormat = (v) => `${v}`,
   height = 80,
 }: LineChartProps) {
+  const { t } = useTranslation('common');
   // 悬停点索引（null = 未悬停）；受控 state 便于测试断言浮层文案
   const [hovered, setHovered] = useState<number | null>(null);
 
@@ -70,7 +72,7 @@ export function LineChart({
         height={height}
         viewBox={`0 0 ${VIEW_WIDTH} ${height}`}
         role="img"
-        aria-label="时序折线"
+        aria-label={t('timeSeriesChart')}
         // 单一离开判定：仅当鼠标真正移出整张图才清空浮层，避免逐点命中区空隙引发的抖动 / 闪烁
         onMouseLeave={() => setHovered(null)}
       >

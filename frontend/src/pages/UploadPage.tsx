@@ -18,6 +18,7 @@ import {
   Center,
 } from '@mantine/core';
 import { IconUpload, IconFile } from '@tabler/icons-react';
+import { useTranslation } from 'react-i18next';
 import * as api from '../api/endpoints';
 import type { RepoFormat, RepositoryDto } from '../api/types';
 import { errorMessage } from '../lib/format';
@@ -29,6 +30,7 @@ const UPLOADABLE_FORMATS: RepoFormat[] = ['maven', 'npm', 'raw'];
 
 /** 上传页面。 */
 export function UploadPage() {
+  const { t } = useTranslation('upload');
   const [repos, setRepos] = useState<RepositoryDto[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -104,7 +106,7 @@ export function UploadPage() {
     setProgress(0);
     try {
       await api.uploadArtifact(selectedRepo.id, buildFormData(selectedRepo, file), setProgress);
-      notifySuccess('制品上传成功');
+      notifySuccess(t('uploadSuccess'));
       // 成功后清空文件，保留坐标字段便于继续上传同一坐标族下的文件
       setFile(null);
       setProgress(0);
@@ -125,37 +127,37 @@ export function UploadPage() {
 
   return (
     <Stack maw={560}>
-      <Title order={2}>制品上传</Title>
+      <Title order={2}>{t('title')}</Title>
       {loadError && <ErrorAlert message={loadError} />}
 
       <Select
-        label="目标仓库"
-        placeholder="选择一个 hosted 仓库（Maven / npm / Raw）"
+        label={t('targetRepo')}
+        placeholder={t('repoPlaceholder')}
         data={repos.map((r) => ({ value: r.id, label: `${r.name}（${r.format}）` }))}
         value={repoId}
         onChange={setRepoId}
         searchable
-        nothingFoundMessage="无可上传的 hosted 仓库"
+        nothingFoundMessage={t('noRepoFound')}
       />
 
       {selectedRepo?.format === 'maven' && (
         <>
           <TextInput
-            label="groupId"
+            label={t('mavenGroupId')}
             placeholder="com.example.app"
             value={groupId}
             onChange={(e) => setGroupId(e.currentTarget.value)}
             required
           />
           <TextInput
-            label="artifactId"
+            label={t('mavenArtifactId')}
             placeholder="demo"
             value={artifactId}
             onChange={(e) => setArtifactId(e.currentTarget.value)}
             required
           />
           <TextInput
-            label="version"
+            label={t('mavenVersion')}
             placeholder="1.0.0"
             value={version}
             onChange={(e) => setVersion(e.currentTarget.value)}
@@ -167,14 +169,14 @@ export function UploadPage() {
       {selectedRepo?.format === 'npm' && (
         <>
           <TextInput
-            label="包名（name）"
-            placeholder="lodash 或 @scope/pkg"
+            label={t('npmName')}
+            placeholder={t('npmNamePlaceholder')}
             value={npmName}
             onChange={(e) => setNpmName(e.currentTarget.value)}
             required
           />
           <TextInput
-            label="版本（version）"
+            label={t('npmVersion')}
             placeholder="4.17.21"
             value={npmVersion}
             onChange={(e) => setNpmVersion(e.currentTarget.value)}
@@ -185,7 +187,7 @@ export function UploadPage() {
 
       {selectedRepo?.format === 'raw' && (
         <TextInput
-          label="目标路径（path）"
+          label={t('rawPath')}
           placeholder="dir/sub/file.bin"
           value={rawPath}
           onChange={(e) => setRawPath(e.currentTarget.value)}
@@ -195,8 +197,8 @@ export function UploadPage() {
 
       {selectedRepo && (
         <FileInput
-          label="文件"
-          placeholder="选择要上传的文件"
+          label={t('fileLabel')}
+          placeholder={t('filePlaceholder')}
           leftSection={<IconFile size={16} />}
           value={file}
           onChange={setFile}
@@ -207,9 +209,9 @@ export function UploadPage() {
 
       {uploading && (
         <Stack gap={4}>
-          <Progress value={progress} animated aria-label="上传进度" />
+          <Progress value={progress} animated aria-label={t('progressAria')} />
           <Text size="xs" c="dimmed">
-            上传中… {progress}%
+            {t('uploading', { progress })}
           </Text>
         </Stack>
       )}
@@ -221,7 +223,7 @@ export function UploadPage() {
           loading={uploading}
           disabled={!canSubmit}
         >
-          上传
+          {t('upload')}
         </Button>
       </Group>
     </Stack>

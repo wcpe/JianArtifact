@@ -2,6 +2,7 @@
 // 经查询参数 ?id= 定位仓库，避免与后端格式 catch-all 路由冲突。
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Tabs,
   Title,
@@ -42,6 +43,7 @@ import { GroupAclPanel } from '../components/GroupAclPanel';
 
 /** 仓库详情页。 */
 export function RepositoryDetailPage() {
+  const { t } = useTranslation('repositoryDetail');
   const [params] = useSearchParams();
   const repoId = params.get('id') ?? '';
   const { isAdmin } = useAuth();
@@ -51,7 +53,7 @@ export function RepositoryDetailPage() {
 
   const loadRepo = useCallback(() => {
     if (!repoId) {
-      setError('缺少仓库标识');
+      setError(t('missingId'));
       setLoading(false);
       return;
     }
@@ -61,7 +63,7 @@ export function RepositoryDetailPage() {
       .then(setRepo)
       .catch((err) => setError(errorMessage(err)))
       .finally(() => setLoading(false));
-  }, [repoId]);
+  }, [repoId, t]);
 
   useEffect(loadRepo, [loadRepo]);
 
@@ -76,7 +78,7 @@ export function RepositoryDetailPage() {
     return (
       <Stack>
         <BackButton />
-        <ErrorAlert message={error ?? '仓库不存在'} />
+        <ErrorAlert message={error ?? t('notFound')} />
       </Stack>
     );
   }
@@ -89,10 +91,12 @@ export function RepositoryDetailPage() {
           <Title order={2}>{repo.name}</Title>
           <Badge variant="light">{repo.format}</Badge>
           <Badge variant="light" color="grape">
-            {repo.type === 'hosted' ? '托管' : '代理'}
+            {repo.type === 'hosted' ? t('common:repoHosted') : t('common:repoProxy')}
           </Badge>
           <Badge color={repo.visibility === 'public' ? 'green' : 'gray'} variant="light">
-            {repo.visibility === 'public' ? '公开' : '私有'}
+            {repo.visibility === 'public'
+              ? t('common:visibilityPublic')
+              : t('common:visibilityPrivate')}
           </Badge>
         </Group>
       </Group>
@@ -100,10 +104,10 @@ export function RepositoryDetailPage() {
       <Tabs defaultValue="browse">
         <Tabs.List>
           <Tabs.Tab value="browse" leftSection={<IconFolderOpen size={16} />}>
-            浏览
+            {t('tabBrowse')}
           </Tabs.Tab>
-          {isAdmin && <Tabs.Tab value="config">配置</Tabs.Tab>}
-          {isAdmin && <Tabs.Tab value="acl">权限（ACL）</Tabs.Tab>}
+          {isAdmin && <Tabs.Tab value="config">{t('tabConfig')}</Tabs.Tab>}
+          {isAdmin && <Tabs.Tab value="acl">{t('tabAcl')}</Tabs.Tab>}
         </Tabs.List>
 
         <Tabs.Panel value="browse" pt="md">
@@ -120,11 +124,11 @@ export function RepositoryDetailPage() {
           <Tabs.Panel value="acl" pt="md">
             <Stack gap="xl">
               <Stack gap="sm">
-                <Title order={4}>用户授权</Title>
+                <Title order={4}>{t('aclUsers')}</Title>
                 <AclPanel repoId={repo.id} />
               </Stack>
               <Stack gap="sm">
-                <Title order={4}>用户组授权</Title>
+                <Title order={4}>{t('aclGroups')}</Title>
                 <GroupAclPanel repoId={repo.id} />
               </Stack>
             </Stack>
@@ -137,6 +141,7 @@ export function RepositoryDetailPage() {
 
 /** 返回仓库列表按钮。 */
 function BackButton() {
+  const { t } = useTranslation('repositoryDetail');
   const navigate = useNavigate();
   return (
     <Group>
@@ -146,7 +151,7 @@ function BackButton() {
         leftSection={<IconArrowLeft size={16} />}
         onClick={() => navigate('/repositories')}
       >
-        返回仓库列表
+        {t('backToList')}
       </Button>
     </Group>
   );
@@ -157,6 +162,7 @@ function BackButton() {
  * 一次性拉取仓库制品索引（FR-75），客户端按目录折叠成树；点文件加载详情。
  */
 function BrowseTab({ repo }: { repo: RepositoryDto }) {
+  const { t } = useTranslation('repositoryDetail');
   const { isAdmin } = useAuth();
   const [artifacts, setArtifacts] = useState<ArtifactDto[]>([]);
   const [loading, setLoading] = useState(true);
@@ -195,10 +201,10 @@ function BrowseTab({ repo }: { repo: RepositoryDto }) {
   );
 
   const handleDelete = async (path: string) => {
-    if (!window.confirm(`确认删除制品「${path}」？`)) return;
+    if (!window.confirm(t('deleteConfirm', { path }))) return;
     try {
       await api.deleteArtifact(repo.id, path);
-      notifySuccess('制品已删除');
+      notifySuccess(t('deleteSuccess'));
       if (selectedPath === path) {
         setSelectedPath(null);
         setDetail(null);
@@ -218,7 +224,7 @@ function BrowseTab({ repo }: { repo: RepositoryDto }) {
   }
   if (error) return <ErrorAlert message={error} />;
   if (artifacts.length === 0) {
-    return <Text c="dimmed">该仓库暂无制品。</Text>;
+    return <Text c="dimmed">{t('emptyArtifacts')}</Text>;
   }
 
   return (
@@ -240,14 +246,14 @@ function BrowseTab({ repo }: { repo: RepositoryDto }) {
       <div style={{ flex: 1, minWidth: 0 }}>
         {!selectedPath ? (
           <Center h={160}>
-            <Text c="dimmed">从左侧选择一个文件查看详情。</Text>
+            <Text c="dimmed">{t('selectFileHint')}</Text>
           </Center>
         ) : detailLoading ? (
           <Center h={160}>
             <Loader />
           </Center>
         ) : detailError || !detail ? (
-          <ErrorAlert message={detailError ?? '制品不存在'} />
+          <ErrorAlert message={detailError ?? t('artifactNotFound')} />
         ) : (
           <ArtifactDetailPanel detail={detail} />
         )}
@@ -325,6 +331,7 @@ function TreeLevel({
   onSelectFile: (path: string) => void;
   onDelete?: (path: string) => void;
 }) {
+  const { t } = useTranslation('repositoryDetail');
   const entries = useMemo(() => buildDirectoryListing(artifacts, prefix), [artifacts, prefix]);
 
   return (
@@ -394,7 +401,7 @@ function TreeLevel({
                 color="red"
                 size="sm"
                 onClick={() => onDelete(e.path!)}
-                aria-label="删除制品"
+                aria-label={t('deleteArtifact')}
               >
                 <IconTrash size={15} />
               </ActionIcon>
@@ -408,6 +415,7 @@ function TreeLevel({
 
 /** 仓库配置页签（仅管理员）。 */
 function ConfigTab({ repo, onUpdated }: { repo: RepositoryDto; onUpdated: () => void }) {
+  const { t } = useTranslation('repositoryDetail');
   const [visibility, setVisibility] = useState<Visibility>(repo.visibility);
   const [upstreamUrl, setUpstreamUrl] = useState(repo.upstream_url ?? '');
   const [submitting, setSubmitting] = useState(false);
@@ -419,7 +427,7 @@ function ConfigTab({ repo, onUpdated }: { repo: RepositoryDto; onUpdated: () => 
         visibility,
         upstream_url: repo.type === 'proxy' ? upstreamUrl : undefined,
       });
-      notifySuccess('仓库配置已更新');
+      notifySuccess(t('configSaved'));
       onUpdated();
     } catch (err) {
       notifyError(errorMessage(err));
@@ -432,10 +440,10 @@ function ConfigTab({ repo, onUpdated }: { repo: RepositoryDto; onUpdated: () => 
     <Card withBorder padding="lg" radius="md" maw={480}>
       <Stack>
         <Select
-          label="可见性"
+          label={t('visibilityLabel')}
           data={[
-            { value: 'private', label: '私有（private）' },
-            { value: 'public', label: '公开（public）' },
+            { value: 'private', label: t('visibilityPrivateOption') },
+            { value: 'public', label: t('visibilityPublicOption') },
           ]}
           value={visibility}
           onChange={(v) => setVisibility((v as Visibility) ?? repo.visibility)}
@@ -443,7 +451,7 @@ function ConfigTab({ repo, onUpdated }: { repo: RepositoryDto; onUpdated: () => 
         />
         {repo.type === 'proxy' && (
           <TextInput
-            label="上游地址"
+            label={t('upstreamUrlLabel')}
             placeholder="https://repo1.maven.org/maven2"
             value={upstreamUrl}
             onChange={(e) => setUpstreamUrl(e.currentTarget.value)}
@@ -451,7 +459,7 @@ function ConfigTab({ repo, onUpdated }: { repo: RepositoryDto; onUpdated: () => 
         )}
         <Group justify="flex-end">
           <Button onClick={handleSave} loading={submitting}>
-            保存
+            {t('common:save')}
           </Button>
         </Group>
       </Stack>

@@ -3,6 +3,7 @@
 // 经查询参数 ?repo=&path= 定位，避免与后端格式 catch-all 路由冲突。
 
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Stack, Group, Loader, Center, Button } from '@mantine/core';
 import { IconArrowLeft } from '@tabler/icons-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -14,6 +15,7 @@ import { ArtifactDetailPanel } from '../components/ArtifactDetailPanel';
 
 /** 制品详情页面。 */
 export function ArtifactDetailPage() {
+  const { t } = useTranslation('artifactDetail');
   const [params] = useSearchParams();
   const navigate = useNavigate();
   const repoId = params.get('repo') ?? '';
@@ -24,7 +26,7 @@ export function ArtifactDetailPage() {
 
   useEffect(() => {
     if (!repoId || !path) {
-      setError('缺少制品标识');
+      setError(t('missingId'));
       setLoading(false);
       return;
     }
@@ -33,7 +35,7 @@ export function ArtifactDetailPage() {
       .then(setDetail)
       .catch((err) => setError(errorMessage(err)))
       .finally(() => setLoading(false));
-  }, [repoId, path]);
+  }, [repoId, path, t]);
 
   if (loading) {
     return (
@@ -52,12 +54,12 @@ export function ArtifactDetailPage() {
           leftSection={<IconArrowLeft size={16} />}
           onClick={() => navigate(-1)}
         >
-          返回
+          {t('common:back')}
         </Button>
       </Group>
 
       {error || !detail ? (
-        <ErrorAlert message={error ?? '制品不存在'} />
+        <ErrorAlert message={error ?? t('notFound')} />
       ) : (
         <ArtifactDetailPanel detail={detail} />
       )}

@@ -5,6 +5,7 @@
 // 纯展示：接收已加载的 ArtifactDetailDto，自身不发请求。
 
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Title,
   Stack,
@@ -27,6 +28,7 @@ import { buildCoordinateSnippets, htmlViewUrl, downloadUrl } from '../lib/coordi
 
 /** 制品详情面板。 */
 export function ArtifactDetailPanel({ detail }: { detail: ArtifactDetailDto }) {
+  const { t } = useTranslation('artifactDetail');
   const coordinates = buildCoordinateSnippets(detail.format, detail.path);
 
   return (
@@ -39,7 +41,7 @@ export function ArtifactDetailPanel({ detail }: { detail: ArtifactDetailDto }) {
           <Badge variant="light">{detail.format}</Badge>
           {detail.cached && (
             <Badge variant="light" color="cyan">
-              缓存
+              {t('cached')}
             </Badge>
           )}
         </Group>
@@ -53,7 +55,7 @@ export function ArtifactDetailPanel({ detail }: { detail: ArtifactDetailDto }) {
             variant="default"
             leftSection={<IconExternalLink size={14} />}
           >
-            HTML View
+            {t('htmlView')}
           </Button>
           <Button
             component="a"
@@ -61,24 +63,24 @@ export function ArtifactDetailPanel({ detail }: { detail: ArtifactDetailDto }) {
             size="xs"
             leftSection={<IconDownload size={14} />}
           >
-            下载
+            {t('download')}
           </Button>
         </Group>
       </Group>
 
       <Card withBorder padding="md" radius="md">
         <Stack gap={4}>
-          <InfoRow label="所属仓库" value={detail.repo_name} />
-          <InfoRow label="格式" value={detail.format} />
-          <InfoRow label="大小" value={formatBytes(detail.size)} />
-          <InfoRow label="内容类型" value={detail.content_type ?? '-'} />
-          <InfoRow label="创建时间" value={detail.created_at} />
+          <InfoRow label={t('repo')} value={detail.repo_name} />
+          <InfoRow label={t('format')} value={detail.format} />
+          <InfoRow label={t('common:size')} value={formatBytes(detail.size)} />
+          <InfoRow label={t('contentType')} value={detail.content_type ?? '-'} />
+          <InfoRow label={t('common:createdAt')} value={detail.created_at} />
         </Stack>
       </Card>
 
       <Card withBorder padding="md" radius="md">
         <Title order={5} mb="sm">
-          校验和
+          {t('checksums')}
         </Title>
         <Table>
           <Table.Tbody>
@@ -95,7 +97,7 @@ export function ArtifactDetailPanel({ detail }: { detail: ArtifactDetailDto }) {
       {detail.usage.length > 0 && (
         <Card withBorder padding="md" radius="md">
           <Title order={5} mb="sm">
-            使用方式
+            {t('usage')}
           </Title>
           <Tabs defaultValue={detail.usage[0]?.title}>
             <Tabs.List>
@@ -123,7 +125,7 @@ export function ArtifactDetailPanel({ detail }: { detail: ArtifactDetailDto }) {
     return (
       <Card withBorder padding="md" radius="md">
         <Group justify="space-between" mb="sm">
-          <Title order={5}>依赖坐标</Title>
+          <Title order={5}>{t('coordinates')}</Title>
           <Select
             data={coordinates.map((c) => c.label)}
             value={active}
@@ -131,7 +133,7 @@ export function ArtifactDetailPanel({ detail }: { detail: ArtifactDetailDto }) {
             allowDeselect={false}
             size="xs"
             w={200}
-            aria-label="选择依赖坐标格式"
+            aria-label={t('coordinatesSelectAria')}
           />
         </Group>
         <CopyableCode content={current.content} />
@@ -156,6 +158,7 @@ function InfoRow({ label, value }: { label: string; value: string }) {
 
 /** 校验和行（带复制）。 */
 function ChecksumRow({ label, value }: { label: string; value: string }) {
+  const { t } = useTranslation('artifactDetail');
   return (
     <Table.Tr>
       <Table.Td w={100}>
@@ -168,7 +171,7 @@ function ChecksumRow({ label, value }: { label: string; value: string }) {
           <Code style={{ wordBreak: 'break-all' }}>{value}</Code>
           <CopyButton value={value}>
             {({ copied, copy }) => (
-              <ActionIcon variant="subtle" onClick={copy} aria-label="复制校验和">
+              <ActionIcon variant="subtle" onClick={copy} aria-label={t('copyChecksum')}>
                 {copied ? <IconCheck size={16} /> : <IconCopy size={16} />}
               </ActionIcon>
             )}
@@ -181,6 +184,7 @@ function ChecksumRow({ label, value }: { label: string; value: string }) {
 
 /** 带复制按钮的代码块。 */
 function CopyableCode({ content }: { content: string }) {
+  const { t } = useTranslation('artifactDetail');
   return (
     <>
       <Group justify="flex-end" mb="xs">
@@ -192,7 +196,7 @@ function CopyableCode({ content }: { content: string }) {
               leftSection={copied ? <IconCheck size={14} /> : <IconCopy size={14} />}
               onClick={copy}
             >
-              {copied ? '已复制' : '复制'}
+              {copied ? t('copied') : t('copy')}
             </Button>
           )}
         </CopyButton>

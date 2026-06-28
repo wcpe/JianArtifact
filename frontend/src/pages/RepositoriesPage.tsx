@@ -2,6 +2,7 @@
 // 创建 / 删除仅管理员可见；列表对所有登录用户按可见性过滤展示。
 
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Table,
   Button,
@@ -34,19 +35,21 @@ import { errorMessage } from '../lib/format';
 import { notifyError, notifySuccess } from '../lib/notify';
 import { ErrorAlert } from '../components/ErrorAlert';
 
-const FORMAT_OPTIONS: { value: RepoFormat; label: string }[] = [
-  { value: 'maven', label: 'Maven' },
-  { value: 'npm', label: 'npm' },
-  { value: 'docker', label: 'Docker / OCI' },
-  { value: 'raw', label: 'Raw 通用文件' },
-  { value: 'cargo', label: 'Cargo' },
-  { value: 'go', label: 'Go 模块' },
-  { value: 'pypi', label: 'PyPI' },
-  { value: 'nuget', label: 'NuGet' },
+// 仓库格式下拉的取值顺序（标签经 i18n 的 repositories.formats.* 解析）。
+const FORMAT_VALUES: RepoFormat[] = [
+  'maven',
+  'npm',
+  'docker',
+  'raw',
+  'cargo',
+  'go',
+  'pypi',
+  'nuget',
 ];
 
 /** 仓库管理页面。 */
 export function RepositoriesPage() {
+  const { t } = useTranslation('repositories');
   const { isAdmin } = useAuth();
   const navigate = useNavigate();
   const [repos, setRepos] = useState<RepositoryDto[]>([]);
@@ -66,12 +69,12 @@ export function RepositoriesPage() {
   useEffect(reload, []);
 
   const handleDelete = async (repo: RepositoryDto) => {
-    if (!window.confirm(`确认删除仓库「${repo.name}」？该操作不可撤销。`)) {
+    if (!window.confirm(t('deleteConfirm', { name: repo.name }))) {
       return;
     }
     try {
       await api.deleteRepository(repo.id);
-      notifySuccess('仓库已删除');
+      notifySuccess(t('deleteSuccess'));
       reload();
     } catch (err) {
       notifyError(errorMessage(err));
@@ -89,28 +92,28 @@ export function RepositoriesPage() {
   return (
     <Stack>
       <Group justify="space-between">
-        <Title order={2}>仓库管理</Title>
+        <Title order={2}>{t('title')}</Title>
         {isAdmin && (
           <Button leftSection={<IconPlus size={16} />} onClick={modal.open}>
-            创建仓库
+            {t('createRepo')}
           </Button>
         )}
       </Group>
       {error && <ErrorAlert message={error} />}
 
       {repos.length === 0 ? (
-        <Text c="dimmed">暂无可见仓库。</Text>
+        <Text c="dimmed">{t('emptyHint')}</Text>
       ) : (
         <Table.ScrollContainer minWidth={680}>
           <Table striped highlightOnHover>
             <Table.Thead>
               <Table.Tr>
-                <Table.Th>名称</Table.Th>
-                <Table.Th>格式</Table.Th>
-                <Table.Th>类型</Table.Th>
-                <Table.Th>可见性</Table.Th>
-                <Table.Th>上游</Table.Th>
-                <Table.Th>操作</Table.Th>
+                <Table.Th>{t('colName')}</Table.Th>
+                <Table.Th>{t('colFormat')}</Table.Th>
+                <Table.Th>{t('colType')}</Table.Th>
+                <Table.Th>{t('colVisibility')}</Table.Th>
+                <Table.Th>{t('colUpstream')}</Table.Th>
+                <Table.Th>{t('colActions')}</Table.Th>
               </Table.Tr>
             </Table.Thead>
             <Table.Tbody>
@@ -124,10 +127,14 @@ export function RepositoriesPage() {
                     </Anchor>
                   </Table.Td>
                   <Table.Td>{repo.format}</Table.Td>
-                  <Table.Td>{repo.type === 'hosted' ? '托管' : '代理'}</Table.Td>
+                  <Table.Td>
+                    {repo.type === 'hosted' ? t('common:repoHosted') : t('common:repoProxy')}
+                  </Table.Td>
                   <Table.Td>
                     <Badge color={repo.visibility === 'public' ? 'green' : 'gray'} variant="light">
-                      {repo.visibility === 'public' ? '公开' : '私有'}
+                      {repo.visibility === 'public'
+                        ? t('common:visibilityPublic')
+                        : t('common:visibilityPrivate')}
                     </Badge>
                   </Table.Td>
                   <Table.Td>
@@ -140,7 +147,7 @@ export function RepositoriesPage() {
                       <ActionIcon
                         variant="subtle"
                         onClick={() => navigate(`/repository?id=${encodeURIComponent(repo.id)}`)}
-                        aria-label="配置 / 浏览"
+                        aria-label={t('configBrowse')}
                       >
                         <IconSettings size={18} />
                       </ActionIcon>
@@ -149,7 +156,7 @@ export function RepositoriesPage() {
                           variant="subtle"
                           color="red"
                           onClick={() => handleDelete(repo)}
-                          aria-label="删除仓库"
+                          aria-label={t('deleteRepo')}
                         >
                           <IconTrash size={18} />
                         </ActionIcon>
@@ -185,6 +192,7 @@ function CreateRepoModal({
   onClose: () => void;
   onCreated: () => void;
 }) {
+  const { t } = useTranslation('repositories');
   const [name, setName] = useState('');
   const [format, setFormat] = useState<RepoFormat>('raw');
   const [type, setType] = useState<RepoType>('hosted');
@@ -211,7 +219,7 @@ function CreateRepoModal({
         upstream_url: type === 'proxy' ? upstreamUrl : null,
       };
       await api.createRepository(req);
-      notifySuccess('仓库已创建');
+      notifySuccess(t('createSuccess'));
       reset();
       onCreated();
     } catch (err) {
@@ -222,37 +230,37 @@ function CreateRepoModal({
   };
 
   return (
-    <Modal opened={opened} onClose={onClose} title="创建仓库" centered>
+    <Modal opened={opened} onClose={onClose} title={t('modalTitle')} centered>
       <Stack>
         <TextInput
-          label="仓库名"
-          placeholder="如 maven-releases"
+          label={t('nameLabel')}
+          placeholder={t('namePlaceholder')}
           value={name}
           onChange={(e) => setName(e.currentTarget.value)}
           required
         />
         <Select
-          label="格式"
-          data={FORMAT_OPTIONS}
+          label={t('formatLabel')}
+          data={FORMAT_VALUES.map((value) => ({ value, label: t(`formats.${value}`) }))}
           value={format}
           onChange={(v) => setFormat((v as RepoFormat) ?? 'raw')}
           allowDeselect={false}
         />
         <Select
-          label="类型"
+          label={t('typeLabel')}
           data={[
-            { value: 'hosted', label: '托管（hosted）' },
-            { value: 'proxy', label: '代理（proxy）' },
+            { value: 'hosted', label: t('typeHosted') },
+            { value: 'proxy', label: t('typeProxy') },
           ]}
           value={type}
           onChange={(v) => setType((v as RepoType) ?? 'hosted')}
           allowDeselect={false}
         />
         <Select
-          label="可见性"
+          label={t('visibilityLabel')}
           data={[
-            { value: 'private', label: '私有（private）' },
-            { value: 'public', label: '公开（public）' },
+            { value: 'private', label: t('visibilityPrivate') },
+            { value: 'public', label: t('visibilityPublic') },
           ]}
           value={visibility}
           onChange={(v) => setVisibility((v as Visibility) ?? 'private')}
@@ -260,7 +268,7 @@ function CreateRepoModal({
         />
         {type === 'proxy' && (
           <TextInput
-            label="上游地址"
+            label={t('upstreamLabel')}
             placeholder="https://repo1.maven.org/maven2"
             value={upstreamUrl}
             onChange={(e) => setUpstreamUrl(e.currentTarget.value)}
@@ -269,10 +277,10 @@ function CreateRepoModal({
         )}
         <Group justify="flex-end">
           <Button variant="default" onClick={onClose}>
-            取消
+            {t('common:cancel')}
           </Button>
           <Button onClick={handleSubmit} loading={submitting} disabled={!name}>
-            创建
+            {t('create')}
           </Button>
         </Group>
       </Stack>

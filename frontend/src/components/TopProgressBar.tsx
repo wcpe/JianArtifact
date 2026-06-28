@@ -3,6 +3,7 @@
 // 仅用 React state + setTimeout 实现，约 30 行内，刻意不引入 @mantine/nprogress 等第三方件。
 
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 
 /** 伪进度每步逼近目标 90% 的衰减步进间隔（毫秒）。 */
 const TICK_MS = 200;
@@ -14,6 +15,7 @@ const DONE_MS = 300;
  * 进度条绝对定位于最近的定位父容器顶部，故使用方需给容器加 position: relative。
  */
 export function TopProgressBar({ loading }: { loading: boolean }) {
+  const { t } = useTranslation('common');
   // visible 控制是否挂载渲染；width 为当前进度百分比。
   const [visible, setVisible] = useState(loading);
   const [width, setWidth] = useState(0);
@@ -45,7 +47,7 @@ export function TopProgressBar({ loading }: { loading: boolean }) {
   return (
     <div
       role="progressbar"
-      aria-label="页面加载进度"
+      aria-label={t('loadingProgress')}
       style={{
         position: 'absolute',
         top: 0,

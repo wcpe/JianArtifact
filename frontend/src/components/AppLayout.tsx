@@ -41,6 +41,7 @@ import {
   IconArrowUpCircle,
 } from '@tabler/icons-react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { useAuth } from '../auth/useAuth';
 import { density } from '../theme/density';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
@@ -90,7 +91,8 @@ function BrandLogo({ size = 28 }: { size?: number }) {
 
 /** 导航项定义。 */
 interface NavItem {
-  label: string;
+  /** nav 命名空间内的文案 key（渲染时经 t() 解析为本地化标签，FR-111）。 */
+  labelKey: string;
   path: string;
   icon: React.ReactNode;
   /** 仅管理员可见。 */
@@ -101,7 +103,8 @@ interface NavItem {
 
 /** 导航分段：段标题 + 段内项；展开态显段头小灰字，收起态以分隔线代替。 */
 interface NavSection {
-  title: string;
+  /** nav 命名空间内的段标题 key（渲染时经 t() 解析，FR-111）。 */
+  titleKey: string;
   items: NavItem[];
 }
 
@@ -124,26 +127,26 @@ function isNavActive(pathname: string, itemPath: string): boolean {
 // 「使用分析」入口已并入监控（FR-99）删除；防护配置入口已并入「设置」页（FR-110）移除。
 const NAV_SECTIONS: NavSection[] = [
   {
-    title: '浏览',
+    titleKey: 'sectionBrowse',
     items: [
-      { label: '仪表盘', path: '/', icon: <IconLayoutDashboard size={18} /> },
+      { labelKey: 'dashboard', path: '/', icon: <IconLayoutDashboard size={18} /> },
       {
-        label: '仓库',
+        labelKey: 'repositories',
         path: '/repositories',
         icon: <IconPackage size={18} />,
         publicVisible: true,
       },
-      { label: '搜索', path: '/search', icon: <IconSearch size={18} />, publicVisible: true },
+      { labelKey: 'search', path: '/search', icon: <IconSearch size={18} />, publicVisible: true },
     ],
   },
   {
-    title: '管理',
+    titleKey: 'sectionManage',
     items: [
-      { label: '用户与组', path: '/users', icon: <IconUsers size={18} />, adminOnly: true },
-      { label: '访问令牌', path: '/tokens', icon: <IconKey size={18} /> },
-      { label: '上传', path: '/upload', icon: <IconUpload size={18} /> },
+      { labelKey: 'usersGroups', path: '/users', icon: <IconUsers size={18} />, adminOnly: true },
+      { labelKey: 'tokens', path: '/tokens', icon: <IconKey size={18} /> },
+      { labelKey: 'upload', path: '/upload', icon: <IconUpload size={18} /> },
       {
-        label: 'Nexus 迁移',
+        labelKey: 'migration',
         path: '/migration',
         icon: <IconArrowsExchange size={18} />,
         adminOnly: true,
@@ -151,20 +154,25 @@ const NAV_SECTIONS: NavSection[] = [
     ],
   },
   {
-    title: '系统 · 监控',
+    titleKey: 'sectionSystem',
     items: [
-      { label: '监控', path: '/monitor', icon: <IconChartDots size={18} />, adminOnly: true },
-      { label: '审计日志', path: '/audit', icon: <IconClipboardText size={18} />, adminOnly: true },
+      { labelKey: 'monitor', path: '/monitor', icon: <IconChartDots size={18} />, adminOnly: true },
+      {
+        labelKey: 'audit',
+        path: '/audit',
+        icon: <IconClipboardText size={18} />,
+        adminOnly: true,
+      },
       // 系统日志页与 /system-logs 路由由并行 FR-107 创建；本 FR 仅加导航入口
       {
-        label: '系统日志',
+        labelKey: 'systemLogs',
         path: '/system-logs',
         icon: <IconFileText size={18} />,
         adminOnly: true,
       },
-      { label: '设置', path: '/settings', icon: <IconSettings size={18} />, adminOnly: true },
+      { labelKey: 'settings', path: '/settings', icon: <IconSettings size={18} />, adminOnly: true },
       // 系统管理页（FR-109，仅 Admin）：在线更新 + 重启 / 关闭
-      { label: '系统', path: '/system', icon: <IconServerCog size={18} />, adminOnly: true },
+      { labelKey: 'system', path: '/system', icon: <IconServerCog size={18} />, adminOnly: true },
     ],
   },
 ];
@@ -184,11 +192,13 @@ function NavItemLink({
   active: boolean;
   onSelect: () => void;
 }) {
+  const { t } = useTranslation('nav');
+  const label = t(item.labelKey);
   if (expanded) {
     return (
       <NavLink
-        label={item.label}
-        aria-label={item.label}
+        label={label}
+        aria-label={label}
         leftSection={item.icon}
         active={active}
         onClick={onSelect}
@@ -196,14 +206,15 @@ function NavItemLink({
     );
   }
   return (
-    <Tooltip label={item.label} position="right" withArrow>
-      <NavLink aria-label={item.label} leftSection={item.icon} active={active} onClick={onSelect} />
+    <Tooltip label={label} position="right" withArrow>
+      <NavLink aria-label={label} leftSection={item.icon} active={active} onClick={onSelect} />
     </Tooltip>
   );
 }
 
 /** 应用布局：渲染 logo 区 + 分段导航 + 左下 footer + 固定 max-width 内容区。 */
 export function AppLayout() {
+  const { t } = useTranslation('nav');
   // mobileOpened：移动端抽屉开合；navExpanded：桌面侧栏窄/宽（默认窄）。
   const [mobileOpened, { toggle: toggleMobile }] = useDisclosure();
   const [navExpanded, { toggle: toggleNav }] = useDisclosure(false);
@@ -328,7 +339,7 @@ export function AppLayout() {
 
   // 按段过滤后仅保留含可见项的段（空段不渲染段头 / 分隔线）。
   const visibleSections = NAV_SECTIONS.map((section) => ({
-    title: section.title,
+    titleKey: section.titleKey,
     items: section.items.filter(isItemVisible),
   })).filter((section) => section.items.length > 0);
 
@@ -358,7 +369,7 @@ export function AppLayout() {
                 leftSection={<IconArrowUpCircle size={12} />}
                 role="button"
                 tabIndex={0}
-                aria-label="有可用更新，点击前往设置页升级"
+                aria-label={t('updateBadgeAriaLabel')}
                 onClick={() => navigate('/settings')}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' || e.key === ' ') {
@@ -367,7 +378,7 @@ export function AppLayout() {
                   }
                 }}
               >
-                更新: {updateInfo.current} → {updateInfo.latest}
+                {t('updateBadge', { current: updateInfo.current, latest: updateInfo.latest })}
               </Badge>
             )}
           </Group>
@@ -385,8 +396,8 @@ export function AppLayout() {
               </Badge>
             }
             rightSectionWidth={56}
-            placeholder="搜索制品（回车或停顿即搜）"
-            aria-label="全局搜索"
+            placeholder={t('searchPlaceholder')}
+            aria-label={t('searchAriaLabel')}
             value={searchValue}
             onChange={(e) => handleSearchChange(e.currentTarget.value)}
             onKeyDown={handleSearchKeyDown}
@@ -395,7 +406,10 @@ export function AppLayout() {
           {user ? (
             <Group>
               <Text size="sm" c="dimmed">
-                {user.username}（{user.role === 'admin' ? '管理员' : '用户'}）
+                {user.username}
+                {t('userSuffix', {
+                  role: user.role === 'admin' ? t('common:roleAdmin') : t('common:roleUser'),
+                })}
               </Text>
               <Button
                 variant="subtle"
@@ -403,7 +417,7 @@ export function AppLayout() {
                 leftSection={<IconLogout size={16} />}
                 onClick={handleSignOut}
               >
-                登出
+                {t('signOut')}
               </Button>
             </Group>
           ) : (
@@ -413,7 +427,7 @@ export function AppLayout() {
               leftSection={<IconLogin size={16} />}
               onClick={() => navigate('/login')}
             >
-              登录
+              {t('signIn')}
             </Button>
           )}
         </Group>
@@ -429,7 +443,7 @@ export function AppLayout() {
           justify={navExpanded ? 'flex-start' : 'center'}
           role="button"
           tabIndex={0}
-          aria-label="切换导航展开收起"
+          aria-label={t('toggleNav')}
           style={{ cursor: 'pointer' }}
           onClick={toggleNav}
           onKeyDown={handleBrandKeyDown}
@@ -451,11 +465,11 @@ export function AppLayout() {
 
         <ScrollArea style={{ flex: 1 }}>
           {visibleSections.map((section, index) => (
-            <Box key={section.title} mt={index === 0 ? 0 : 'xs'}>
+            <Box key={section.titleKey} mt={index === 0 ? 0 : 'xs'}>
               {/* 展开态：段头小灰字；收起态：以细分隔线代替段头（首段不加分隔线） */}
               {navExpanded ? (
                 <Text size="xs" c="dimmed" fw={600} px="xs" py={4}>
-                  {section.title}
+                  {t(section.titleKey)}
                 </Text>
               ) : (
                 index > 0 && <Divider my={6} />
@@ -487,17 +501,17 @@ export function AppLayout() {
                 wrap="nowrap"
                 role="button"
                 tabIndex={0}
-                aria-label="开源许可"
+                aria-label={t('openSourceLicenses')}
                 style={{ cursor: 'pointer' }}
                 onClick={gotoLicenses}
                 onKeyDown={handleLicensesKeyDown}
               >
                 <IconLicense size={14} />
-                <Text size="xs">开源许可</Text>
+                <Text size="xs">{t('openSourceLicenses')}</Text>
               </Group>
-              <Tooltip label="收起导航" position="right" withArrow>
+              <Tooltip label={t('collapseNav')} position="right" withArrow>
                 <UnstyledButton
-                  aria-label="收起导航"
+                  aria-label={t('collapseNav')}
                   onClick={toggleNav}
                   style={{ display: 'flex' }}
                 >
@@ -507,9 +521,9 @@ export function AppLayout() {
             </Group>
           ) : (
             <Group justify="center">
-              <Tooltip label="展开导航" position="right" withArrow>
+              <Tooltip label={t('expandNav')} position="right" withArrow>
                 <UnstyledButton
-                  aria-label="展开导航"
+                  aria-label={t('expandNav')}
                   onClick={toggleNav}
                   style={{ display: 'flex' }}
                 >

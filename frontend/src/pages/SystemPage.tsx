@@ -47,6 +47,7 @@ import {
   IconPower,
   IconAlertTriangle,
 } from '@tabler/icons-react';
+import { useTranslation } from 'react-i18next';
 import { ApiError } from '../api/client';
 import * as api from '../api/endpoints';
 import type { SettingsView, UpdateCheck } from '../api/types';
@@ -57,6 +58,7 @@ import { density } from '../theme/density';
 
 /** 系统管理页。 */
 export function SystemPage() {
+  const { t } = useTranslation('system');
   const [settings, setSettings] = useState<SettingsView | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -224,7 +226,7 @@ export function SystemPage() {
   // 把系统操作错误转成面向用户的中文文案：409（更新进行中）单独提示。
   function systemActionMessage(err: unknown): string {
     if (err instanceof ApiError && err.status === 409) {
-      return '更新进行中，请稍后';
+      return t('updateInProgress');
     }
     return errorMessage(err);
   }
@@ -234,7 +236,7 @@ export function SystemPage() {
     try {
       await api.systemRestart();
       restartConfirmModal.close();
-      notifySuccess('正在重启…当前连接将断开，请稍候片刻后手动刷新页面');
+      notifySuccess(t('restartingNotice'));
     } catch (err) {
       notifyError(systemActionMessage(err));
     } finally {
@@ -247,7 +249,7 @@ export function SystemPage() {
     try {
       await api.systemShutdown();
       shutdownConfirmModal.close();
-      notifySuccess('正在关闭…服务将停止，需在服务器上重新启动');
+      notifySuccess(t('shuttingDownNotice'));
     } catch (err) {
       notifyError(systemActionMessage(err));
     } finally {
@@ -265,35 +267,35 @@ export function SystemPage() {
 
   return (
     <Stack gap={density.gridSpacing}>
-      <Title order={2}>系统</Title>
+      <Title order={2}>{t('pageTitle')}</Title>
       {error && <ErrorAlert message={error} />}
 
       <Tabs defaultValue="update">
         <Tabs.List>
           <Tabs.Tab value="update" leftSection={<IconCloudDownload size={16} />}>
-            在线更新
+            {t('tabUpdate')}
           </Tabs.Tab>
           <Tabs.Tab value="restart" leftSection={<IconReload size={16} />}>
-            重启
+            {t('tabRestart')}
           </Tabs.Tab>
           <Tabs.Tab value="shutdown" leftSection={<IconPower size={16} />}>
-            关闭
+            {t('tabShutdown')}
           </Tabs.Tab>
         </Tabs.List>
 
         {/* —— 在线更新 tab —— */}
         <Tabs.Panel value="update" pt="md">
           {!settings ? (
-            <ErrorAlert message={error ?? '无法加载在线更新配置'} />
+            <ErrorAlert message={error ?? t('loadConfigFailed')} />
           ) : (
             <Stack gap={density.gridSpacing}>
               <Card withBorder padding={density.cardPadding} radius="md">
                 {/* 卡片头：左标题，右侧通道切换（正式版 / 测试版）+ 检查更新 */}
                 <Group justify="space-between" align="flex-start" mb="sm" wrap="nowrap">
                   <Box>
-                    <Title order={4}>应用更新</Title>
+                    <Title order={4}>{t('updateCardTitle')}</Title>
                     <Text size="sm" c="dimmed">
-                      管理员手动触发的自更新，配置即时生效、无须重启。
+                      {t('updateCardDesc')}
                     </Text>
                   </Box>
                   <Group gap="xs" wrap="nowrap">
@@ -302,8 +304,8 @@ export function SystemPage() {
                       value={channel}
                       onChange={setChannel}
                       data={[
-                        { value: 'stable', label: '正式版' },
-                        { value: 'prerelease', label: '测试版' },
+                        { value: 'stable', label: t('channelStable') },
+                        { value: 'prerelease', label: t('channelPrerelease') },
                       ]}
                     />
                     <Button
@@ -314,7 +316,7 @@ export function SystemPage() {
                       loading={checking}
                       disabled={!settings.update.enabled}
                     >
-                      检查更新
+                      {t('checkUpdate')}
                     </Button>
                   </Group>
                 </Group>
@@ -322,7 +324,7 @@ export function SystemPage() {
                 <Stack gap="sm">
                   {/* 启用在线更新（出站开关）：高频项留卡内可见处 */}
                   <Switch
-                    label="启用在线更新（出站开关）"
+                    label={t('enableUpdateSwitch')}
                     checked={updateEnabled}
                     onChange={(e) => setUpdateEnabled(e.currentTarget.checked)}
                   />
@@ -333,34 +335,33 @@ export function SystemPage() {
                       icon={<IconInfoCircle size={16} />}
                       color="yellow"
                       variant="light"
-                      title="测试版通道"
+                      title={t('prereleaseAlertTitle')}
                     >
-                      滚动开发预览，由 main 最新构建，可能不稳定。仅用于尝鲜 /
-                      灰度，生产环境建议用正式版。
+                      {t('prereleaseAlertBody')}
                     </Alert>
                   )}
 
                   {/* 版本对比 + 徽标：当前 ↔ 最新（检查后），预发布徽标随通道显隐 */}
                   <Card withBorder padding="sm" radius="sm" bg="var(--mantine-color-gray-0)">
                     <Group gap="xs">
-                      <Text size="sm">当前版本</Text>
+                      <Text size="sm">{t('currentVersion')}</Text>
                       <Badge variant="light">
                         {check?.current_version ?? settings.current_version}
                       </Badge>
                       {check && (
                         <>
-                          <Text size="sm">→ 最新版本</Text>
+                          <Text size="sm">{t('latestVersionArrow')}</Text>
                           <Code>{check.latest_version}</Code>
                           {check.update_available ? (
-                            <Badge color="orange">有可用更新</Badge>
+                            <Badge color="orange">{t('updateAvailableBadge')}</Badge>
                           ) : (
-                            <Badge color="green">已是最新</Badge>
+                            <Badge color="green">{t('upToDateBadge')}</Badge>
                           )}
                         </>
                       )}
                       {channel === 'prerelease' && (
                         <Badge color="yellow" variant="light">
-                          预发布
+                          {t('prereleaseBadge')}
                         </Badge>
                       )}
                     </Group>
@@ -368,7 +369,7 @@ export function SystemPage() {
                     {check?.notes && (
                       <>
                         <Text size="xs" c="dimmed" fw={600} mt="sm">
-                          发布说明
+                          {t('releaseNotes')}
                         </Text>
                         <Text size="sm" c="dimmed" mt={4} style={{ whiteSpace: 'pre-wrap' }}>
                           {check.notes}
@@ -382,9 +383,9 @@ export function SystemPage() {
                       icon={<IconInfoCircle size={16} />}
                       color="gray"
                       variant="light"
-                      title="在线更新未启用"
+                      title={t('updateDisabledAlertTitle')}
                     >
-                      在线更新出站开关当前关闭。请启用并保存后，再检查 / 应用更新。
+                      {t('updateDisabledAlertBody')}
                     </Alert>
                   )}
 
@@ -397,7 +398,7 @@ export function SystemPage() {
                   {applyProgress !== null && !restarting && (
                     <Box data-testid="apply-progress">
                       <Group justify="space-between" mb={4} gap="xs">
-                        <Text size="sm">正在下载并替换新版本…</Text>
+                        <Text size="sm">{t('downloadingReplacing')}</Text>
                         <Text size="sm" c="dimmed">
                           {applyProgress}%
                         </Text>
@@ -405,8 +406,8 @@ export function SystemPage() {
                       <Progress value={applyProgress} animated />
                       <Text size="xs" c="dimmed" mt={4}>
                         {check?.asset_name
-                          ? `资产 ${check.asset_name}（进度为体感估算，实际以服务端替换为准）`
-                          : '进度为体感估算，实际以服务端替换为准。'}
+                          ? t('progressHintWithAsset', { name: check.asset_name })
+                          : t('progressHint')}
                       </Text>
                     </Box>
                   )}
@@ -416,9 +417,9 @@ export function SystemPage() {
                       icon={<IconInfoCircle size={16} />}
                       color="blue"
                       variant="light"
-                      title="已触发升级"
+                      title={t('upgradeTriggeredAlertTitle')}
                     >
-                      服务正在重启…当前连接将断开，请稍候片刻后手动刷新页面。
+                      {t('upgradeTriggeredAlertBody')}
                     </Alert>
                   )}
 
@@ -431,7 +432,7 @@ export function SystemPage() {
                         onClick={confirmModal.open}
                         disabled={!check?.update_available || applying}
                       >
-                        立即更新并重启
+                        {t('applyNow')}
                       </Button>
                       {/* 回滚到上一版（FR-104）：无备份时禁用；回滚是本地操作、不依赖在线更新开关 */}
                       <Button
@@ -440,14 +441,14 @@ export function SystemPage() {
                         onClick={rollbackConfirmModal.open}
                         disabled={!settings.update.rollback_available || applying}
                       >
-                        回滚到上一版
+                        {t('rollbackNow')}
                       </Button>
                     </Group>
                   )}
 
                   {!settings.update.rollback_available && (
                     <Text size="xs" c="dimmed">
-                      暂无可回滚的备份版本（成功升级一次后才会生成回滚备份）。
+                      {t('noRollbackBackup')}
                     </Text>
                   )}
 
@@ -467,40 +468,40 @@ export function SystemPage() {
                       onClick={advancedToggle.toggle}
                       aria-expanded={advancedOpened}
                     >
-                      高级设置（仓库源 / API 基址 / 重启模式 / 访问令牌）
+                      {t('advancedSettingsToggle')}
                     </Button>
                     <Collapse in={advancedOpened}>
                       <Stack gap="sm" mt="sm">
                         <TextInput
-                          label="仓库源（owner/repo）"
+                          label={t('repoLabel')}
                           placeholder="wcpe/JianArtifact"
                           value={repo}
                           onChange={(e) => setRepo(e.currentTarget.value)}
                         />
                         <TextInput
-                          label="API 基址"
+                          label={t('apiBaseUrlLabel')}
                           placeholder="https://api.github.com"
                           value={apiBaseUrl}
                           onChange={(e) => setApiBaseUrl(e.currentTarget.value)}
                         />
                         <Select
-                          label="重启模式"
+                          label={t('restartModeLabel')}
                           data={[
-                            { value: 'self', label: 'self（自拉起新进程）' },
-                            { value: 'exit', label: 'exit（交外部进程管理器重启）' },
+                            { value: 'self', label: t('restartModeSelf') },
+                            { value: 'exit', label: t('restartModeExit') },
                           ]}
                           value={restartMode}
                           onChange={(v) => setRestartMode(v ?? 'self')}
                           allowDeselect={false}
                         />
                         <PasswordInput
-                          label="访问令牌（私有仓库可选）"
+                          label={t('tokenLabel')}
                           description={
                             hasToken
-                              ? '已配置令牌（不回显）。留空保留现有，填新值则替换。'
-                              : '未配置。留空表示不设置，填值则设置。'
+                              ? t('tokenDescConfigured')
+                              : t('tokenDescUnconfigured')
                           }
-                          placeholder={hasToken ? '保留现有令牌' : '可选'}
+                          placeholder={hasToken ? t('tokenPlaceholderConfigured') : t('tokenPlaceholderUnconfigured')}
                           value={tokenInput}
                           onChange={(e) => setTokenInput(e.currentTarget.value)}
                         />
@@ -517,11 +518,11 @@ export function SystemPage() {
                   onClick={handleSaveUpdate}
                   loading={saving}
                 >
-                  保存
+                  {t('common:save')}
                 </Button>
                 {saved && (
                   <Text c="green" size="sm">
-                    已保存。在线更新配置即时生效。
+                    {t('saved')}
                   </Text>
                 )}
               </Group>
@@ -534,9 +535,9 @@ export function SystemPage() {
         <Tabs.Panel value="restart" pt="md">
           <Card withBorder padding={density.cardPadding} radius="md">
             <Stack gap="sm">
-              <Title order={4}>重启服务</Title>
+              <Title order={4}>{t('restartCardTitle')}</Title>
               <Text size="sm" c="dimmed">
-                重启服务进程。重启期间服务将短暂不可用，当前连接会断开，重启完成后需手动刷新页面。
+                {t('restartCardDesc')}
               </Text>
               <Group>
                 <Button
@@ -544,7 +545,7 @@ export function SystemPage() {
                   leftSection={<IconReload size={16} />}
                   onClick={restartConfirmModal.open}
                 >
-                  重启服务
+                  {t('restartButton')}
                 </Button>
               </Group>
             </Stack>
@@ -555,10 +556,9 @@ export function SystemPage() {
         <Tabs.Panel value="shutdown" pt="md">
           <Card withBorder padding={density.cardPadding} radius="md">
             <Stack gap="sm">
-              <Title order={4}>关闭服务</Title>
+              <Title order={4}>{t('shutdownCardTitle')}</Title>
               <Text size="sm" c="dimmed">
-                关闭服务进程。关闭后服务将停止，无法从本控制台再次启动，需在服务器上经进程管理器
-                （systemd / docker 等）重新拉起。
+                {t('shutdownCardDesc')}
               </Text>
               <Group>
                 <Button
@@ -566,7 +566,7 @@ export function SystemPage() {
                   leftSection={<IconPower size={16} />}
                   onClick={shutdownConfirmModal.open}
                 >
-                  关闭服务
+                  {t('shutdownButton')}
                 </Button>
               </Group>
             </Stack>
@@ -575,18 +575,19 @@ export function SystemPage() {
       </Tabs>
 
       {/* —— 升级二次确认弹窗 —— */}
-      <Modal opened={confirmOpened} onClose={confirmModal.close} title="确认升级到新版本" centered>
+      <Modal opened={confirmOpened} onClose={confirmModal.close} title={t('upgradeModalTitle')} centered>
         <Stack>
           <Text>
-            将升级到 <Code>v{check?.latest_version}</Code>
-            。升级成功后服务会立即重启，当前连接将断开。确认继续？
+            {t('upgradeConfirmPrefix')}
+            <Code>v{check?.latest_version}</Code>
+            {t('upgradeConfirmSuffix')}
           </Text>
           <Group justify="flex-end">
             <Button variant="default" onClick={confirmModal.close} disabled={applying}>
-              取消
+              {t('common:cancel')}
             </Button>
             <Button color="orange" onClick={handleApply} loading={applying}>
-              确认升级
+              {t('confirmUpgrade')}
             </Button>
           </Group>
         </Stack>
@@ -596,19 +597,19 @@ export function SystemPage() {
       <Modal
         opened={rollbackConfirmOpened}
         onClose={rollbackConfirmModal.close}
-        title="确认回滚到上一版本"
+        title={t('rollbackModalTitle')}
         centered
       >
         <Stack>
           <Text>
-            将用备份还原到上一版本的二进制。回滚成功后服务会立即重启，当前连接将断开。确认继续？
+            {t('rollbackConfirmBody')}
           </Text>
           <Group justify="flex-end">
             <Button variant="default" onClick={rollbackConfirmModal.close} disabled={rollingBack}>
-              取消
+              {t('common:cancel')}
             </Button>
             <Button color="red" onClick={handleRollback} loading={rollingBack}>
-              确认回滚
+              {t('confirmRollback')}
             </Button>
           </Group>
         </Stack>
@@ -618,12 +619,12 @@ export function SystemPage() {
       <Modal
         opened={restartConfirmOpened}
         onClose={restartConfirmModal.close}
-        title="确认重启服务"
+        title={t('restartModalTitle')}
         centered
       >
         <Stack>
           <Text>
-            将重启服务进程。重启期间服务短暂不可用，当前连接会断开，完成后需手动刷新页面。确认继续？
+            {t('restartConfirmBody')}
           </Text>
           <Group justify="flex-end">
             <Button
@@ -631,10 +632,10 @@ export function SystemPage() {
               onClick={restartConfirmModal.close}
               disabled={restartSubmitting}
             >
-              取消
+              {t('common:cancel')}
             </Button>
             <Button color="orange" onClick={handleRestartService} loading={restartSubmitting}>
-              确认重启
+              {t('confirmRestart')}
             </Button>
           </Group>
         </Stack>
@@ -644,25 +645,29 @@ export function SystemPage() {
       <Modal
         opened={shutdownConfirmOpened}
         onClose={shutdownConfirmModal.close}
-        title="确认关闭服务"
+        title={t('shutdownModalTitle')}
         centered
       >
         <Stack>
-          <Alert icon={<IconAlertTriangle size={16} />} color="red" variant="light" title="警告">
-            关闭后服务将停止，无法从本控制台再次启动，需在服务器上经进程管理器（systemd / docker
-            等）重新拉起。
+          <Alert
+            icon={<IconAlertTriangle size={16} />}
+            color="red"
+            variant="light"
+            title={t('shutdownWarningTitle')}
+          >
+            {t('shutdownWarningBody')}
           </Alert>
-          <Text>确认关闭服务？</Text>
+          <Text>{t('shutdownConfirmBody')}</Text>
           <Group justify="flex-end">
             <Button
               variant="default"
               onClick={shutdownConfirmModal.close}
               disabled={shutdownSubmitting}
             >
-              取消
+              {t('common:cancel')}
             </Button>
             <Button color="red" onClick={handleShutdownService} loading={shutdownSubmitting}>
-              确认关闭
+              {t('confirmShutdown')}
             </Button>
           </Group>
         </Stack>

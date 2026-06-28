@@ -15,6 +15,7 @@ import {
   Center,
 } from '@mantine/core';
 import { IconTrash } from '@tabler/icons-react';
+import { useTranslation } from 'react-i18next';
 import * as api from '../api/endpoints';
 import type { AclDto, Permission, UserView } from '../api/types';
 import { errorMessage } from '../lib/format';
@@ -24,6 +25,7 @@ import { ErrorAlert } from './ErrorAlert';
 
 /** ACL 管理面板。 */
 export function AclPanel({ repoId }: { repoId: string }) {
+  const { t } = useTranslation('groups');
   const [acls, setAcls] = useState<AclDto[]>([]);
   const [users, setUsers] = useState<UserView[]>([]);
   const [loading, setLoading] = useState(true);
@@ -52,7 +54,7 @@ export function AclPanel({ repoId }: { repoId: string }) {
     setSubmitting(true);
     try {
       await api.createAcl(repoId, selectedUser, permission);
-      notifySuccess('已新增授权');
+      notifySuccess(t('aclGranted'));
       setSelectedUser(null);
       reload();
     } catch (err) {
@@ -65,7 +67,7 @@ export function AclPanel({ repoId }: { repoId: string }) {
   const handleRemove = async (aclId: string) => {
     try {
       await api.deleteAcl(repoId, aclId);
-      notifySuccess('已移除授权');
+      notifySuccess(t('aclRemoved'));
       reload();
     } catch (err) {
       notifyError(errorMessage(err));
@@ -85,8 +87,8 @@ export function AclPanel({ repoId }: { repoId: string }) {
     <Stack>
       <Group align="flex-end">
         <Select
-          label="用户"
-          placeholder="选择用户"
+          label={t('aclUser')}
+          placeholder={t('aclUserPlaceholder')}
           data={users.map((u) => ({ value: u.id, label: u.username }))}
           value={selectedUser}
           onChange={setSelectedUser}
@@ -94,7 +96,7 @@ export function AclPanel({ repoId }: { repoId: string }) {
           maw={240}
         />
         <Select
-          label="权限"
+          label={t('aclPermission')}
           data={PERMISSION_OPTIONS}
           value={permission}
           onChange={(v) => setPermission((v as Permission) ?? 'read')}
@@ -102,19 +104,19 @@ export function AclPanel({ repoId }: { repoId: string }) {
           maw={160}
         />
         <Button onClick={handleAdd} loading={submitting} disabled={!selectedUser}>
-          授权
+          {t('aclGrant')}
         </Button>
       </Group>
 
       {acls.length === 0 ? (
-        <Text c="dimmed">该仓库暂无 ACL 授权条目。</Text>
+        <Text c="dimmed">{t('aclEmpty')}</Text>
       ) : (
         <Table striped>
           <Table.Thead>
             <Table.Tr>
-              <Table.Th>用户</Table.Th>
-              <Table.Th>权限</Table.Th>
-              <Table.Th>操作</Table.Th>
+              <Table.Th>{t('aclColUser')}</Table.Th>
+              <Table.Th>{t('aclColPermission')}</Table.Th>
+              <Table.Th>{t('aclColActions')}</Table.Th>
             </Table.Tr>
           </Table.Thead>
           <Table.Tbody>
@@ -131,7 +133,7 @@ export function AclPanel({ repoId }: { repoId: string }) {
                     variant="subtle"
                     color="red"
                     onClick={() => handleRemove(acl.id)}
-                    aria-label="移除授权"
+                    aria-label={t('aclRemoveAria')}
                   >
                     <IconTrash size={18} />
                   </ActionIcon>

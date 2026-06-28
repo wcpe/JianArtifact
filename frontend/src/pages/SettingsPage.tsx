@@ -11,6 +11,7 @@
 // 与 PATCH /settings/dynamic（代理凭据只入内存槽、不写回 TOML / 不回显，重启回落文件 / env 配置）。
 
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Box,
   Flex,
@@ -37,15 +38,18 @@ import { ErrorAlert } from '../components/ErrorAlert';
 import { density } from '../theme/density';
 import { ProtectionConfigSection } from './ProtectionConfigSection';
 
-/** 锚点节定义（单一真源：左侧导航与右侧分节共用，避免标签 / id 复制散落）。 */
+/**
+ * 锚点节定义（单一真源：左侧导航与右侧分节共用，避免 id 复制散落）。
+ * 各节标签为可见文案、走 i18n（settings.nav.<id>）；此处仅保留 id，渲染处用 t() 取标签。
+ */
 const SECTIONS = [
-  { id: 'proxy', label: '网络代理' },
-  { id: 'limits', label: '限制与配额' },
-  { id: 'observability', label: '可观测性' },
-  { id: 'vuln', label: '漏洞库' },
-  { id: 'auth', label: '安全 / 会话' },
+  { id: 'proxy' },
+  { id: 'limits' },
+  { id: 'observability' },
+  { id: 'vuln' },
+  { id: 'auth' },
   // FR-110：防护配置由独立页并入设置页，作为一个锚点节；自带 PATCH /protection/config 保存（即时生效）、不并入全局保存。
-  { id: 'protection', label: '防护配置' },
+  { id: 'protection' },
 ] as const;
 
 /**
@@ -84,6 +88,7 @@ function ProxyFields(props: ProxyFieldsProps) {
     passwordCleared,
     onClearPassword,
   } = props;
+  const { t } = useTranslation('settings');
   return (
     <Stack gap="xs">
       <Group gap="xs">
@@ -93,30 +98,30 @@ function ProxyFields(props: ProxyFieldsProps) {
         {/* 已配置密码标识（绝不回显密码本体）；点过清除则提示本次保存将清空 */}
         {hasPassword && !passwordCleared && (
           <Badge size="sm" color="blue" variant="light">
-            密码已配置
+            {t('proxyFields.passwordConfigured')}
           </Badge>
         )}
         {passwordCleared && (
           <Badge size="sm" color="orange" variant="light">
-            保存后清除密码
+            {t('proxyFields.passwordWillClear')}
           </Badge>
         )}
       </Group>
       <TextInput
-        label="URL"
+        label={t('proxyFields.urlLabel')}
         placeholder={urlPlaceholder}
         value={url}
         onChange={(e) => onUrlChange(e.currentTarget.value)}
       />
       <TextInput
-        label="用户名"
-        placeholder="可选"
+        label={t('proxyFields.usernameLabel')}
+        placeholder={t('proxyFields.usernamePlaceholder')}
         value={username}
         onChange={(e) => onUsernameChange(e.currentTarget.value)}
       />
       <PasswordInput
-        label="密码"
-        placeholder="留空保留现有密码"
+        label={t('proxyFields.passwordLabel')}
+        placeholder={t('proxyFields.passwordPlaceholder')}
         value={password}
         onChange={(e) => onPasswordChange(e.currentTarget.value)}
       />
@@ -124,7 +129,7 @@ function ProxyFields(props: ProxyFieldsProps) {
       {hasPassword && !passwordCleared && !password && (
         <Group>
           <Button size="xs" variant="subtle" color="red" onClick={onClearPassword}>
-            清除密码
+            {t('proxyFields.clearPassword')}
           </Button>
         </Group>
       )}
@@ -134,6 +139,7 @@ function ProxyFields(props: ProxyFieldsProps) {
 
 /** 设置页。 */
 export function SettingsPage() {
+  const { t } = useTranslation('settings');
   const [settings, setSettings] = useState<SettingsView | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -254,7 +260,7 @@ export function SettingsPage() {
   if (!settings) {
     return (
       <Stack>
-        <Title order={2}>设置</Title>
+        <Title order={2}>{t('pageTitle')}</Title>
         {error && <ErrorAlert message={error} />}
       </Stack>
     );
@@ -311,7 +317,7 @@ export function SettingsPage() {
 
   return (
     <Stack gap={density.gridSpacing}>
-      <Title order={2}>设置</Title>
+      <Title order={2}>{t('pageTitle')}</Title>
       {error && <ErrorAlert message={error} />}
 
       {/* FR-103：左侧 sticky 锚点子导航 + 右侧单页分节。
@@ -323,7 +329,7 @@ export function SettingsPage() {
         {/* —— 左侧 sticky 锚点导航 —— */}
         <Box
           component="nav"
-          aria-label="设置分节导航"
+          aria-label={t('navAriaLabel')}
           visibleFrom="sm"
           style={{ position: 'sticky', top: density.headerHeight, width: 180, flexShrink: 0 }}
         >
@@ -332,7 +338,7 @@ export function SettingsPage() {
               key={s.id}
               component="button"
               type="button"
-              label={s.label}
+              label={t(`nav.${s.id}`)}
               active={activeSection === s.id}
               onClick={() => scrollToSection(s.id)}
             />
@@ -350,16 +356,14 @@ export function SettingsPage() {
             radius="md"
             style={SECTION_SCROLL_STYLE}
           >
-            <Title order={4}>网络代理</Title>
+            <Title order={4}>{t('proxy.title')}</Title>
             <Text size="sm" c="dimmed" mb="sm">
-              统一出站代理（回源 / 迁移 / 漏洞库 / OIDC / 在线更新共用）。每代理可填用户名 + 密码；
-              用户名回显、密码不回显（留空保留现有），URL
-              留空表示不配置该代理。保存后**即时生效、无须重启**。
+              {t('proxy.desc')}
             </Text>
             <Stack gap="md">
               {/* HTTP / HTTPS 各自 scheme 专属代理；SOCKS5 填 all（兜底全 scheme，FR-100） */}
               <ProxyFields
-                title="HTTP 代理"
+                title={t('proxy.httpTitle')}
                 urlPlaceholder="http://host:3128"
                 url={httpUrl}
                 onUrlChange={setHttpUrl}
@@ -372,7 +376,7 @@ export function SettingsPage() {
                 onClearPassword={() => setHttpClearPass(true)}
               />
               <ProxyFields
-                title="HTTPS 代理"
+                title={t('proxy.httpsTitle')}
                 urlPlaceholder="http://host:3128"
                 url={httpsUrl}
                 onUrlChange={setHttpsUrl}
@@ -385,7 +389,7 @@ export function SettingsPage() {
                 onClearPassword={() => setHttpsClearPass(true)}
               />
               <ProxyFields
-                title="SOCKS5 代理（all，兜底全 scheme）"
+                title={t('proxy.socks5Title')}
                 urlPlaceholder="socks5://host:1080"
                 url={allUrl}
                 onUrlChange={setAllUrl}
@@ -398,7 +402,7 @@ export function SettingsPage() {
                 onClearPassword={() => setAllClearPass(true)}
               />
               <TextInput
-                label="直连绕过（no_proxy）"
+                label={t('proxy.noProxyLabel')}
                 placeholder="localhost,127.0.0.1,.internal"
                 value={noProxy}
                 onChange={(e) => setNoProxy(e.currentTarget.value)}
@@ -420,9 +424,9 @@ export function SettingsPage() {
             style={SECTION_SCROLL_STYLE}
           >
             <Group gap="xs" mb="xs">
-              <Title order={4}>限制与配额</Title>
+              <Title order={4}>{t('limits.title')}</Title>
               <Badge size="sm" color="yellow" variant="light">
-                保存后重启生效
+                {t('restartHint')}
               </Badge>
             </Group>
             {!dynamic ? (
@@ -431,9 +435,9 @@ export function SettingsPage() {
               </Center>
             ) : (
               <NumberInput
-                label="单个制品上传上限（字节）"
-                description="留空表示不额外限制；超限上传返回 413。"
-                placeholder="不限制"
+                label={t('limits.maxArtifactSizeLabel')}
+                description={t('limits.maxArtifactSizeDesc')}
+                placeholder={t('limits.maxArtifactSizePlaceholder')}
                 min={0}
                 value={dynamic.limits.max_artifact_size ?? ''}
                 onChange={(v) =>
@@ -455,9 +459,9 @@ export function SettingsPage() {
             style={SECTION_SCROLL_STYLE}
           >
             <Group gap="xs" mb="xs">
-              <Title order={4}>可观测性</Title>
+              <Title order={4}>{t('observability.title')}</Title>
               <Badge size="sm" color="yellow" variant="light">
-                保存后重启生效
+                {t('restartHint')}
               </Badge>
             </Group>
             {!dynamic ? (
@@ -468,7 +472,7 @@ export function SettingsPage() {
               <Stack gap="sm">
                 <Group grow>
                   <NumberInput
-                    label="审计日志保留天数"
+                    label={t('observability.auditRetentionDays')}
                     min={0}
                     value={dynamic.audit.retention_days}
                     onChange={(v) =>
@@ -476,7 +480,7 @@ export function SettingsPage() {
                     }
                   />
                   <NumberInput
-                    label="审计日志行数上限"
+                    label={t('observability.auditMaxRows')}
                     min={0}
                     value={dynamic.audit.max_rows}
                     onChange={(v) =>
@@ -485,7 +489,7 @@ export function SettingsPage() {
                   />
                 </Group>
                 <Switch
-                  label="记录逐条访问 / 下载明细（使用分析）"
+                  label={t('observability.usageDetailEnabled')}
                   checked={dynamic.usage.detail_enabled}
                   onChange={(e) =>
                     patchDynamic('usage', {
@@ -495,7 +499,7 @@ export function SettingsPage() {
                   }
                 />
                 <NumberInput
-                  label="使用明细行数上限"
+                  label={t('observability.usageMaxDetailRows')}
                   min={0}
                   value={dynamic.usage.max_detail_rows}
                   onChange={(v) =>
@@ -503,7 +507,7 @@ export function SettingsPage() {
                   }
                 />
                 <Switch
-                  label="启用 Prometheus 指标端点（/metrics）"
+                  label={t('observability.metricsEnabled')}
                   checked={dynamic.metrics.enabled}
                   onChange={(e) =>
                     patchDynamic('metrics', {
@@ -513,7 +517,7 @@ export function SettingsPage() {
                   }
                 />
                 <Switch
-                  label="允许匿名抓取 /metrics（须限内网 / 反代后）"
+                  label={t('observability.metricsAllowAnonymous')}
                   checked={dynamic.metrics.allow_anonymous}
                   onChange={(e) =>
                     patchDynamic('metrics', {
@@ -523,7 +527,7 @@ export function SettingsPage() {
                   }
                 />
                 <Switch
-                  label="启用指标时序采集"
+                  label={t('observability.timeseriesEnabled')}
                   checked={dynamic.metrics_timeseries.enabled}
                   onChange={(e) =>
                     patchDynamic('metrics_timeseries', {
@@ -534,7 +538,7 @@ export function SettingsPage() {
                 />
                 <Group grow>
                   <NumberInput
-                    label="时序采样间隔（秒）"
+                    label={t('observability.timeseriesSampleInterval')}
                     min={1}
                     value={dynamic.metrics_timeseries.sample_interval_secs}
                     onChange={(v) =>
@@ -545,7 +549,7 @@ export function SettingsPage() {
                     }
                   />
                   <NumberInput
-                    label="时序保留天数"
+                    label={t('observability.timeseriesRetentionDays')}
                     min={0}
                     value={dynamic.metrics_timeseries.retention_days}
                     onChange={(v) =>
@@ -570,9 +574,9 @@ export function SettingsPage() {
             style={SECTION_SCROLL_STYLE}
           >
             <Group gap="xs" mb="xs">
-              <Title order={4}>漏洞库</Title>
+              <Title order={4}>{t('vuln.title')}</Title>
               <Badge size="sm" color="yellow" variant="light">
-                保存后重启生效
+                {t('restartHint')}
               </Badge>
             </Group>
             {!dynamic ? (
@@ -582,14 +586,14 @@ export function SettingsPage() {
             ) : (
               <Stack gap="sm">
                 <Switch
-                  label="启用漏洞库离线镜像"
+                  label={t('vuln.enabled')}
                   checked={dynamic.vuln.enabled}
                   onChange={(e) =>
                     patchDynamic('vuln', { ...dynamic.vuln, enabled: e.currentTarget.checked })
                   }
                 />
                 <TextInput
-                  label="镜像数据源基址"
+                  label={t('vuln.sourceBaseUrl')}
                   placeholder="https://osv-vulnerabilities.storage.googleapis.com"
                   value={dynamic.vuln.source_base_url}
                   onChange={(e) =>
@@ -601,7 +605,7 @@ export function SettingsPage() {
                 />
                 <Group grow>
                   <NumberInput
-                    label="刷新周期（秒）"
+                    label={t('vuln.refreshInterval')}
                     min={1}
                     value={dynamic.vuln.refresh_interval_secs}
                     onChange={(v) =>
@@ -612,7 +616,7 @@ export function SettingsPage() {
                     }
                   />
                   <NumberInput
-                    label="下载超时（秒）"
+                    label={t('vuln.downloadTimeout')}
                     min={1}
                     value={dynamic.vuln.download_timeout_secs}
                     onChange={(v) =>
@@ -637,14 +641,13 @@ export function SettingsPage() {
             style={SECTION_SCROLL_STYLE}
           >
             <Group gap="xs" mb="xs">
-              <Title order={4}>安全 / 会话</Title>
+              <Title order={4}>{t('auth.title')}</Title>
               <Badge size="sm" color="yellow" variant="light">
-                保存后重启生效
+                {t('restartHint')}
               </Badge>
             </Group>
             <Text size="xs" c="dimmed" mb="xs">
-              仅会话 / 登录锁定可调标量；OIDC / LDAP 等密钥项不在此处、只能经配置文件 /
-              环境变量设置。
+              {t('auth.desc')}
             </Text>
             {!dynamic ? (
               <Center h={80}>
@@ -653,7 +656,7 @@ export function SettingsPage() {
             ) : (
               <Group grow>
                 <NumberInput
-                  label="会话有效期（秒）"
+                  label={t('auth.sessionTtl')}
                   min={1}
                   value={dynamic.auth.session_ttl_secs}
                   onChange={(v) =>
@@ -661,7 +664,7 @@ export function SettingsPage() {
                   }
                 />
                 <NumberInput
-                  label="触发锁定的连续失败次数"
+                  label={t('auth.loginMaxFailures')}
                   min={0}
                   value={dynamic.auth.login_max_failures}
                   onChange={(v) =>
@@ -669,7 +672,7 @@ export function SettingsPage() {
                   }
                 />
                 <NumberInput
-                  label="锁定时长（秒）"
+                  label={t('auth.loginLockoutSecs')}
                   min={1}
                   value={dynamic.auth.login_lockout_secs}
                   onChange={(v) =>
@@ -711,11 +714,11 @@ export function SettingsPage() {
             onClick={handleSaveAll}
             loading={saving}
           >
-            保存
+            {t('common:save')}
           </Button>
           {saved && (
             <Text c="green" size="sm">
-              已保存。代理即时生效；限制配额 / 可观测性 / 漏洞库 / 安全会话重启后生效。
+              {t('saveBar.savedHint')}
             </Text>
           )}
         </Group>

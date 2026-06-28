@@ -56,7 +56,8 @@ describe('AuditPage', () => {
     renderPage();
 
     await waitFor(() => expect(screen.getByText('alice')).toBeInTheDocument());
-    expect(screen.getByText('repo.create')).toBeInTheDocument();
+    // 动作经 i18n 显示中文标签（FR-111）：repo.create → 创建仓库
+    expect(screen.getByText('创建仓库')).toBeInTheDocument();
     expect(screen.getByText('libs')).toBeInTheDocument();
     // 结果徽章
     expect(screen.getByText('success')).toBeInTheDocument();
@@ -106,7 +107,8 @@ describe('AuditPage', () => {
     renderPage();
     await waitFor(() => expect(screen.getByText('alice')).toBeInTheDocument());
 
-    await userEvent.click(screen.getByText('repo.create'));
+    // 动作列经 i18n 显示中文标签（FR-111）：repo.create → 创建仓库
+    await userEvent.click(screen.getByText('创建仓库'));
 
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByText('req-xyz')).toBeInTheDocument();
