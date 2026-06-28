@@ -7,6 +7,7 @@ import { Notifications } from '@mantine/notifications';
 import { BrowserRouter } from 'react-router-dom';
 import '@mantine/core/styles.css';
 import '@mantine/notifications/styles.css';
+import './i18n';
 import { AuthProvider } from './auth/AuthContext';
 import { App } from './App';
 

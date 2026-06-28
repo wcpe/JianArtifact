@@ -189,8 +189,9 @@ describe('DashboardPage（全局状态概览）', () => {
   it('管理员：近期活动列出审计事件与相对时间', async () => {
     renderPage();
     await waitFor(() => expect(screen.getByText('近期活动')).toBeInTheDocument());
-    // 动作与主体出现
-    expect(screen.getByText(/artifact\.upload/)).toBeInTheDocument();
+    // 动作经 i18n 显示中文标签（FR-111）：artifact.upload → 上传制品（不再显示原始 key）
+    expect(screen.getByText('上传制品')).toBeInTheDocument();
+    expect(screen.queryByText(/artifact\.upload/)).not.toBeInTheDocument();
     expect(screen.getByText(/alice/)).toBeInTheDocument();
     // 相对时间（5 分钟前）
     expect(screen.getByText('5 分钟前')).toBeInTheDocument();

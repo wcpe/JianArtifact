@@ -10,6 +10,7 @@
 // 单项失败只让该卡显空 / 错，不拖垮整页。本机内部数据、不外发。
 
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   SimpleGrid,
   Card,
@@ -30,6 +31,7 @@ import { useAuth } from '../auth/useAuth';
 import { formatBytes, formatCount, formatUptime, formatRelativeTime } from '../lib/format';
 import { density } from '../theme/density';
 import { TopProgressBar } from '../components/TopProgressBar';
+import { tAuditAction } from '../i18n';
 
 /** 主机监控前台轮询间隔（FR-112）：每 5 秒刷新一次主机健康。 */
 const HOST_POLL_INTERVAL_MS = 5000;
@@ -124,14 +126,15 @@ function HostHealthCard({ host }: { host: HostMetrics }) {
 
 /** 近期活动卡：审计最近事件 + 相对时间。 */
 function RecentActivityCard({ events }: { events: AuditEntryDto[] }) {
+  const { t } = useTranslation('dashboard');
   return (
     <Card withBorder padding={density.cardPadding} radius="md">
       <Title order={4} mb="sm">
-        近期活动
+        {t('recentActivity')}
       </Title>
       {events.length === 0 ? (
         <Text c="dimmed" size="sm">
-          暂无活动记录
+          {t('noActivity')}
         </Text>
       ) : (
         <Stack gap="xs">
@@ -139,7 +142,7 @@ function RecentActivityCard({ events }: { events: AuditEntryDto[] }) {
             <Group key={e.id} justify="space-between" wrap="nowrap">
               <Text size="sm" truncate>
                 <Text span fw={600}>
-                  {e.action}
+                  {tAuditAction(e.action)}
                 </Text>{' '}
                 {e.actor}
                 {e.target_repo ? (

@@ -1,6 +1,9 @@
 // Vitest 测试初始化：引入 jest-dom 断言扩展，提供 toBeInTheDocument 等匹配器。
 import '@testing-library/jest-dom/vitest';
 
+// 初始化 i18n（FR-111）：测试中组件经 useTranslation 渲染中文文案，须在渲染前装载全局 i18n 单例。
+import '../i18n';
+
 // Mantine 组件依赖 window.matchMedia（响应式与配色方案），jsdom 不提供，需打桩。
 // 用普通函数而非 vi.fn()，以免测试里的 vi.restoreAllMocks() 把它清除导致后续渲染报错。
 Object.defineProperty(window, 'matchMedia', {

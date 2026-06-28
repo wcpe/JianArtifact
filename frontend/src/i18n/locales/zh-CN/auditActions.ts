@@ -1,0 +1,36 @@
+// 审计动作 key → 中文标签命名空间（FR-111）。
+// 后端审计 action 形如 `artifact.upload`，含点；i18next 默认按 `.` 解析嵌套 key，故此处键名把
+// `.` 归一为 `_`，查询时同样归一（见 i18n/index.ts 的 tAuditAction）。未知动作回落原始串。
+export default {
+  login: '登录',
+  auth_logout: '登出',
+  auth_refresh: '会话刷新',
+  user_create: '创建用户',
+  user_update: '更新用户',
+  user_delete: '删除用户',
+  token_issue: '签发令牌',
+  token_revoke: '吊销令牌',
+  repo_create: '创建仓库',
+  repo_update: '更新仓库',
+  repo_delete: '删除仓库',
+  artifact_upload: '上传制品',
+  artifact_delete: '删除制品',
+  acl_update: '更新访问控制',
+  group_acl_update: '更新组访问控制',
+  group_create: '创建用户组',
+  group_delete: '删除用户组',
+  group_member_update: '更新组成员',
+  settings_update: '更新设置',
+  protection_config_update: '更新防护配置',
+  migrate_job_control: '迁移任务控制',
+  migrate_run: '执行迁移',
+  update_apply: '应用更新',
+  update_rollback: '回滚更新',
+  system_restart: '系统重启',
+  system_shutdown: '系统关闭',
+  // 兜底（未显式归类的变更类请求）
+  change_post: '创建操作',
+  change_put: '更新操作',
+  change_patch: '修改操作',
+  change_delete: '删除操作',
+} as const;
