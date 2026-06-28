@@ -95,7 +95,7 @@ async fn main() -> anyhow::Result<()> {
             "已从 DB 读取动态配置覆盖（env 显式项仍以 env 为准）"
         );
     }
-    let cfg = jianartifact::config_overlay::merge_effective_config(cfg, &env_keys, &db_overlay);
+    let mut cfg = jianartifact::config_overlay::merge_effective_config(cfg, &env_keys, &db_overlay);
 
     // 初始化 blob 存储：按配置选 fs（默认）/ s3 后端；S3 临时文件中转目录在数据目录下
     let s3_tmp_dir = data_dir.join("s3-tmp");
@@ -117,6 +117,20 @@ async fn main() -> anyhow::Result<()> {
     let jwt = JwtSigner::from_data_dir(&data_dir, cfg.auth.session_ttl_secs)
         .context("初始化 JWT 签名密钥失败")?;
     info!("JWT 会话签名器就绪");
+
+    // 网络代理加密落库恢复（ADR-0030）：JWT 就绪后、装配可编辑设置槽前，从 app_settings 读
+    // `network.proxy`（专用加密通道，不并入 config_overlay 白名单），用派生子密钥解密密码、重建
+    // 内存态代理覆盖 cfg.network.proxy。解密失败该代理降级无密码 + WARN，不阻断启动。代理重启不丢。
+    if let Some((_, json)) = db_overlay
+        .iter()
+        .find(|(k, _)| k == jianartifact::api::settings::PROXY_SETTING_KEY)
+    {
+        let key = jwt.derive_key(jianartifact::crypto_box::PROXY_KEY_DOMAIN);
+        if let Some(restored) = jianartifact::api::settings::restore_proxy_from_db(json, &key) {
+            cfg.network.proxy = restored;
+            info!("已从落库配置恢复网络代理（含加密凭据），重启不丢");
+        }
+    }
 
     // 登录暴力破解防护守卫（进程内存计数）
     let login_guard = Arc::new(LoginGuard::new(

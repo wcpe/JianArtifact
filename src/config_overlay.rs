@@ -36,6 +36,10 @@ const ENV_PREFIX: &str = "JIANARTIFACT_";
 ///   经专用非密钥视图序列化，OIDC / LDAP 密钥子节**绝不**入库（见 [`AuthTunables`]）。
 /// - `update` 仅承载非密钥字段（`enabled` / `repo` / `api_base_url` / `restart_mode` / `channel`），
 ///   经专用非密钥视图序列化，`token` **绝不**入库（真源 env，见 [`UpdateTunables`]）。
+// 网络代理在 app_settings 的落库键（ADR-0030，与 api::settings::PROXY_SETTING_KEY 同值）：
+// 代理走专用加密落库与装配层恢复路径、不归通用动态配置白名单，本模块合并时静默跳过它。
+const PROXY_PERSIST_KEY: &str = "network.proxy";
+
 pub const DYNAMIC_KEYS: &[&str] = &[
     "limits",
     "protection",
@@ -255,6 +259,11 @@ pub fn merge_effective_config(
 ) -> Config {
     let mut cfg = file_default;
     for (key, json) in db_overlay {
+        // 网络代理走专用加密落库 / 装配层恢复路径（ADR-0030），不归本通用白名单管——
+        // 在此静默跳过，避免误报「非白名单已忽略（默认拒绝）」吓到用户（代理实际被正确恢复）。
+        if key == PROXY_PERSIST_KEY {
+            continue;
+        }
         // 白名单外的键一律不应用（默认拒绝，防凭据 / bootstrap 误入）
         if !DYNAMIC_KEYS.contains(&key.as_str()) {
             warn!(配置键 = %key, "DB 中存在非白名单动态配置键，已忽略（默认拒绝）");

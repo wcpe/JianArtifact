@@ -14,6 +14,7 @@ pub mod auth;
 pub mod authz;
 pub mod config;
 pub mod config_overlay;
+pub mod crypto_box;
 pub mod format;
 pub mod licenses;
 pub mod logs;

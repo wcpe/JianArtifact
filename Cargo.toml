@@ -30,6 +30,9 @@ rand = "0.8"
 jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
 # Basic Auth 凭据的 base64 解码（ADR-0003）
 base64 = "0.22"
+# 网络代理凭据加密落库（ADR-0030）：XChaCha20-Poly1305 AEAD，RustCrypto 纯 Rust，
+# 与 argon2 / sha2 同生态、零原生 C 依赖，不用 ring 作直接加密 API。
+chacha20poly1305 = "0.10"
 # 定长时间比较：API Token 哈希比对避免计时侧信道（ADR-0003）
 subtle = "2"
 # 日志与分级追踪

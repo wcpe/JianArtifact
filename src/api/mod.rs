@@ -60,7 +60,8 @@ mod rate_limit;
 mod repo_access;
 mod repositories;
 mod search;
-mod settings;
+/// 设置端点（FR-87/88）；`pub` 以暴露代理加密落库 / 启动恢复纯函数给装配层（ADR-0030）。
+pub mod settings;
 mod slowloris;
 mod system_logs;
 mod tokens;

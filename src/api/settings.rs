@@ -178,6 +178,143 @@ fn parse_proxy_password(url: &str) -> Option<String> {
     Some(percent_decode(pass_enc))
 }
 
+// ===== 代理凭据加密落库持久化（ADR-0030）：拆分落库 + 启动恢复 =====
+
+/// `app_settings` 中网络代理的持久化键（专用加密通道，不入 config_overlay 的 DYNAMIC_KEYS 白名单）。
+pub const PROXY_SETTING_KEY: &str = "network.proxy";
+
+/// 单代理的落库形态（ADR-0030）：URL 脱敏 host（非密钥，明文）+ 用户名（标识，明文）+ 密码密文。
+///
+/// **密码只以密文落库**（`password_enc`，XChaCha20-Poly1305）；URL 已脱敏不含凭据、用户名是连接标识，
+/// 二者属非密钥明文落库（沿用 ADR-0024）。三字段可空：未配置该代理则整项为 `None`。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PersistedProxyEntry {
+    /// 脱敏后的代理 URL（`scheme://host:port`，无 userinfo）；可空。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// 用户名（连接标识、非密钥，明文）；无用户名为 `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    /// 密码密文（`base64(nonce ‖ ciphertext)`）；**绝不是明文**，无密码为 `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password_enc: Option<String>,
+}
+
+/// 网络代理整体落库形态（ADR-0030）：三代理拆分形态 + 直连绕过列表（明文）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct PersistedProxy {
+    /// HTTP 代理拆分形态。
+    pub http: Option<PersistedProxyEntry>,
+    /// HTTPS 代理拆分形态。
+    pub https: Option<PersistedProxyEntry>,
+    /// 全 scheme 兜底代理拆分形态。
+    pub all: Option<PersistedProxyEntry>,
+    /// 直连绕过列表（无凭据，明文）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub no_proxy: Option<String>,
+}
+
+impl PersistedProxy {
+    /// 判断是否「空代理」（四项全空）——空则启动恢复时不覆盖文件默认、PATCH 时删键。
+    fn is_empty(&self) -> bool {
+        self.http.is_none() && self.https.is_none() && self.all.is_none() && self.no_proxy.is_none()
+    }
+}
+
+/// 从存储 URL 解析（已解码的）密码明文：与 [`parse_proxy_password`] 同口径，供拆分落库用。
+///
+/// 把单条存储 URL（含 `user:pass@`）拆为落库形态：URL 脱敏去凭据、用户名明文、密码用 `key`
+/// 加密为密文。无 URL 返回 `None`（清除该代理）。
+fn split_proxy_entry(stored: Option<&str>, key: &[u8; 32]) -> Option<PersistedProxyEntry> {
+    let url = stored?;
+    let (username, _has_pw) = parse_proxy_credentials(url);
+    let password_enc =
+        parse_proxy_password(url).map(|pw| crate::crypto_box::encrypt_secret(key, &pw));
+    Some(PersistedProxyEntry {
+        url: Some(sanitize_proxy_url(url)),
+        username,
+        password_enc,
+    })
+}
+
+/// 把当前生效的内存态代理配置拆分为加密落库形态（ADR-0030）。
+///
+/// 纯函数：URL 脱敏、用户名明文、密码加密；`no_proxy` 原样。密码绝不以明文出现在产物里。
+pub fn to_persisted(proxy: &NetworkProxyConfig, key: &[u8; 32]) -> PersistedProxy {
+    PersistedProxy {
+        http: split_proxy_entry(proxy.http.as_deref(), key),
+        https: split_proxy_entry(proxy.https.as_deref(), key),
+        all: split_proxy_entry(proxy.all.as_deref(), key),
+        no_proxy: proxy.no_proxy.clone(),
+    }
+}
+
+/// 把单条落库形态解密重建为含凭据的存储 URL（启动恢复用）。
+///
+/// 复用 [`rebuild_proxy_url`] 的组装规则：用 URL（脱敏 host）+ 用户名 + 解密后的密码三字段重组。
+/// 解密失败（密钥轮换 / 密文损坏）降级为「无密码」（密码三态置空串），不阻断、不 panic。
+/// 返回 `(重建 URL, 是否发生解密失败需 WARN)`。
+fn rebuild_persisted_entry(entry: &PersistedProxyEntry, key: &[u8; 32]) -> (Option<String>, bool) {
+    // 密码三态：无密文=空串（无密码）；有密文则解密，失败降级为空串并标记 WARN
+    let (password, degraded) = match entry.password_enc.as_deref() {
+        None => (Some(String::new()), false),
+        Some(enc) => match crate::crypto_box::decrypt_secret(key, enc) {
+            Some(pw) => (Some(pw), false),
+            None => (Some(String::new()), true),
+        },
+    };
+    let patch = ProxyEntryPatch {
+        url: entry.url.clone(),
+        username: entry.username.clone(),
+        password,
+    };
+    // current 传 None：落库形态自含全部三字段，无须沿用「现有密码」
+    (rebuild_proxy_url(&patch, None), degraded)
+}
+
+/// 把落库形态解密重建为内存态 [`NetworkProxyConfig`]（启动恢复，ADR-0030）。
+///
+/// 任一代理项解密失败即降级为该项无密码并记一条 WARN（不泄露密文 / 密钥），不阻断启动。
+pub fn from_persisted(persisted: &PersistedProxy, key: &[u8; 32]) -> NetworkProxyConfig {
+    let mut any_degraded = false;
+    let mut rebuild = |entry: &Option<PersistedProxyEntry>| -> Option<String> {
+        let e = entry.as_ref()?;
+        let (url, degraded) = rebuild_persisted_entry(e, key);
+        any_degraded |= degraded;
+        url
+    };
+    let cfg = NetworkProxyConfig {
+        http: rebuild(&persisted.http),
+        https: rebuild(&persisted.https),
+        all: rebuild(&persisted.all),
+        no_proxy: persisted.no_proxy.clone(),
+    };
+    if any_degraded {
+        tracing::warn!(
+            "已落库的网络代理密码解密失败（.jwt_secret 可能已轮换），相应代理降级为无密码，请在设置页重填"
+        );
+    }
+    cfg
+}
+
+/// 从 `app_settings` 读出的网络代理 JSON 解密重建内存态代理配置（启动恢复入口，ADR-0030）。
+///
+/// `value_json` 为 [`PROXY_SETTING_KEY`] 对应的存储 JSON；解析失败只 WARN 回落 `None`（不阻断启动）。
+/// 返回 `Some(cfg)` 表示有落库代理需覆盖文件默认；`None` 表示无 / 损坏 / 空代理，保持文件默认。
+pub fn restore_proxy_from_db(value_json: &str, key: &[u8; 32]) -> Option<NetworkProxyConfig> {
+    let persisted = match serde_json::from_str::<PersistedProxy>(value_json) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(原因 = %e, "解析已落库网络代理配置失败，回落文件默认");
+            return None;
+        }
+    };
+    if persisted.is_empty() {
+        return None;
+    }
+    Some(from_persisted(&persisted, key))
+}
+
 /// 单代理视图（脱敏后，FR-100）：URL 去凭据 + 用户名回显 + 是否已配置密码。
 ///
 /// **密码绝不回显**：仅以 `has_password` 暴露是否已配置（ADR-0024「用户名回显、密码不回显」）。
@@ -398,6 +535,32 @@ fn normalize_blank(v: Option<String>) -> Option<String> {
     v.and_then(|s| if s.trim().is_empty() { None } else { Some(s) })
 }
 
+/// 把当前生效代理拆分加密后落库 `app_settings`（ADR-0030）：空代理删键、否则 upsert 密文形态。
+///
+/// 用 `state.jwt` 派生的子密钥加密密码；密钥与明文密码绝不入库 / 进日志。落库 / 序列化失败只 WARN，
+/// 不阻断热替换（即时生效优先）。
+async fn persist_proxy(state: &AppState, proxy: &NetworkProxyConfig) {
+    let key = state.jwt.derive_key(crate::crypto_box::PROXY_KEY_DOMAIN);
+    let persisted = to_persisted(proxy, &key);
+    if persisted.is_empty() {
+        // 空代理：删键回落文件默认（删不存在键不报错）
+        if let Err(e) = state.meta.delete_setting(PROXY_SETTING_KEY).await {
+            tracing::warn!(原因 = %e, "清空网络代理落库失败，热替换仍生效（重启回落文件）");
+        }
+        return;
+    }
+    match serde_json::to_string(&persisted) {
+        Ok(json) => {
+            if let Err(e) = state.meta.upsert_setting(PROXY_SETTING_KEY, &json).await {
+                tracing::warn!(原因 = %e, "网络代理落库失败，热替换仍生效（重启回落文件）");
+            }
+        }
+        Err(e) => {
+            tracing::warn!(原因 = %e, "网络代理配置序列化失败，跳过落库，热替换仍生效");
+        }
+    }
+}
+
 /// 编辑网络代理 + 在线更新配置（仅 Admin），校验通过即时生效、无须重启。
 ///
 /// 校验失败返回 400 且**不改变**现有生效值（GET 仍返回旧值）；成功后锁外重建出站 client、原子换槽，
@@ -445,7 +608,9 @@ pub async fn patch_settings(
         .validate()
         .map_err(|reason| ApiError::BadRequest(format!("在线更新配置非法：{reason}")))?;
 
-    // 再热替换代理：锁外重建 client，失败即拒（现有 client 仍生效），不触碰在线更新槽
+    // 再热替换代理：锁外重建 client，失败即拒（现有 client 仍生效），不触碰在线更新槽。
+    // replace_proxy 取走所有权，故先 clone 一份留作落库（代理配置小、clone 廉价）。
+    let persist_proxy_cfg = new_proxy.clone();
     state
         .settings
         .network
@@ -454,10 +619,14 @@ pub async fn patch_settings(
     // 代理换槽成功后再换在线更新槽（已校验，不会失败）
     state.settings.replace_update(new_update.clone());
 
+    // 持久化网络代理到 app_settings（ADR-0030）：拆分落库——URL 脱敏 host + 用户名明文 + 密码密文。
+    // 密钥经 JwtSigner::derive_key 域分隔派生（真源 .jwt_secret，绝不入库）。落库失败只 WARN、不阻断
+    // 热替换（即时生效优先，重启回落上次入库 / 文件）。空代理则删键，恢复为文件默认。
+    persist_proxy(&state, &persist_proxy_cfg).await;
+
     // 持久化在线更新「非密钥字段」到 app_settings（FR-106，ADR-0028）：仅 enabled / repo /
     // api_base_url / restart_mode / channel 落库（经 UpdateTunables 视图，token 自动剔除——token
-    // 真源是 env、绝不入库）。网络代理（含账密）继续只入内存槽、不落库（ADR-0022）。落库失败只 WARN，
-    // 不阻断热替换（即时生效优先，重启回落上次入库 / 文件 / env）。
+    // 真源是 env、绝不入库）。落库失败只 WARN，不阻断热替换（即时生效优先，重启回落上次入库 / 文件 / env）。
     let tunables = crate::config_overlay::UpdateTunables::from_editable(&new_update);
     match serde_json::to_string(&tunables) {
         Ok(json) => {
@@ -1214,11 +1383,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn patch_settings_凭据红线_db_无_token_无代理账密() {
-        // FR-106 红线：PATCH 含 update token + 代理账密 → app_settings 中无任何凭据明文
+    async fn patch_settings_凭据红线_token_不入库_代理密码仅密文落库() {
+        // ADR-0030 红线：PATCH 含 update token + 代理账密 →
+        // - update token 绝不入库（真源 env）；
+        // - 代理密码**只以密文**落 network.proxy（明文密码绝不入库）；
+        // - 代理 URL（脱敏 host）与用户名（标识、非密钥）明文落库 OK。
         let (state, _dir) = 测试用状态().await;
         let token = 签发令牌(&state, "admin", Role::Admin).await;
         let meta = state.meta.clone();
+        let jwt = state.jwt.clone();
 
         let body = serde_json::json!({
             "network_proxy": {
@@ -1239,29 +1412,126 @@ mod tests {
         let resp = 请求_patch(state, Some(&token), body).await;
         assert_eq!(resp.status(), StatusCode::OK);
 
-        // app_settings 全量 JSON 中绝不含 token 本体、代理账密、或 token / password 字段名
         let rows = meta.load_settings().await.unwrap();
         let all: String = rows.iter().map(|(k, v)| format!("{k}{v}")).collect();
+        // update token 本体绝不入库（真源 env）
         assert!(
             !all.contains("ghp_topsecrettoken"),
             "update token 绝不入库：{all}"
         );
-        assert!(!all.contains("supersecretpw"), "代理密码绝不入库：{all}");
+        // 代理密码明文绝不入库（只落密文）
         assert!(
-            !all.contains("alice"),
-            "代理账号不入库（代理整体不落库）：{all}"
+            !all.contains("supersecretpw"),
+            "代理密码明文绝不入库（仅密文）：{all}"
         );
-        assert!(!all.contains("token"), "落库不得含 token 字段名：{all}");
-        assert!(
-            !all.contains("password"),
-            "落库不得含 password 字段名：{all}"
+
+        // 代理节已落库为加密形态（ADR-0030）：network.proxy 键存在
+        let proxy_row = rows
+            .iter()
+            .find(|(k, _)| k == PROXY_SETTING_KEY)
+            .expect("network.proxy 应已落库");
+        let persisted: PersistedProxy = serde_json::from_str(&proxy_row.1).unwrap();
+        let http = persisted.http.expect("http 代理应已落库");
+        // URL 脱敏 host + 用户名明文落库（均非密钥）
+        assert_eq!(http.url.as_deref(), Some("http://proxy.internal:3128"));
+        assert_eq!(http.username.as_deref(), Some("alice"));
+        // 密码以密文落库（password_enc 非空、且不等于明文）
+        let enc = http.password_enc.expect("密码应以密文落库");
+        assert_ne!(enc, "supersecretpw", "落库密码不得为明文");
+        assert!(!enc.contains("supersecretpw"), "密文不得含明文子串：{enc}");
+        // 用派生子密钥能解密回明文（重启恢复的等价路径）
+        let key = jwt.derive_key(crate::crypto_box::PROXY_KEY_DOMAIN);
+        assert_eq!(
+            crate::crypto_box::decrypt_secret(&key, &enc).as_deref(),
+            Some("supersecretpw"),
+            "密文应能用派生子密钥解回明文"
         );
-        // 代理节整体不落库（ADR-0022 仍走内存槽）：app_settings 不含 proxy / network 键
+    }
+
+    #[tokio::test]
+    async fn patch_settings_代理落库后重启恢复含密码() {
+        // ADR-0030：PATCH 代理（带密码）→ 落库 → 走启动恢复纯函数 → 代理含密码仍在（重启不丢）
+        let (state, _dir) = 测试用状态().await;
+        let token = 签发令牌(&state, "admin", Role::Admin).await;
+        let meta = state.meta.clone();
+        let jwt = state.jwt.clone();
+
+        let body = serde_json::json!({
+            "network_proxy": {
+                "http": { "url": "http://proxy.internal:3128", "username": "alice", "password": "supersecretpw" },
+                "https": {},
+                "all": { "url": "socks5://socks.internal:1080", "username": "su", "password": "sp" },
+                "no_proxy": "localhost,127.0.0.1"
+            },
+            "update": {
+                "enabled": false,
+                "repo": "wcpe/JianArtifact",
+                "api_base_url": "https://api.github.com",
+                "restart_mode": "self",
+                "channel": "stable",
+                "token": null
+            }
+        });
+        let resp = 请求_patch(state, Some(&token), body).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // 取落库 JSON，走启动恢复纯函数（等价重启装配）
+        let rows = meta.load_settings().await.unwrap();
+        let (_, json) = rows
+            .iter()
+            .find(|(k, _)| k == PROXY_SETTING_KEY)
+            .expect("network.proxy 应已落库");
+        let key = jwt.derive_key(crate::crypto_box::PROXY_KEY_DOMAIN);
+        let restored = restore_proxy_from_db(json, &key).expect("应恢复出代理");
+        // 恢复出的代理 URL 含解密后的凭据（与 PATCH 时一致），密码仍在
+        assert_eq!(
+            restored.http.as_deref(),
+            Some("http://alice:supersecretpw@proxy.internal:3128")
+        );
+        assert_eq!(
+            restored.all.as_deref(),
+            Some("socks5://su:sp@socks.internal:1080")
+        );
+        assert_eq!(restored.https, None);
+        assert_eq!(restored.no_proxy.as_deref(), Some("localhost,127.0.0.1"));
+    }
+
+    #[tokio::test]
+    async fn patch_settings_空代理删键_恢复回落文件默认() {
+        // ADR-0030：先落一份代理，再 PATCH 空代理 → 删 network.proxy 键 → 恢复返回 None（回落文件默认）
+        let (state, _dir) = 测试用状态().await;
+        let token = 签发令牌(&state, "admin", Role::Admin).await;
+        let meta = state.meta.clone();
+
+        let 带代理 = serde_json::json!({
+            "network_proxy": { "http": { "url": "http://p.internal:3128" }, "https": {}, "all": {}, "no_proxy": null },
+            "update": { "enabled": false, "repo": "wcpe/JianArtifact", "api_base_url": "https://api.github.com", "restart_mode": "self", "channel": "stable", "token": null }
+        });
+        let resp = 请求_patch(state.clone(), Some(&token), 带代理).await;
+        assert_eq!(resp.status(), StatusCode::OK);
         assert!(
-            !rows
+            meta.load_settings()
+                .await
+                .unwrap()
                 .iter()
-                .any(|(k, _)| k == "network" || k == "proxy" || k == "network.proxy"),
-            "网络代理（含账密）整体不落库，仅入内存槽"
+                .any(|(k, _)| k == PROXY_SETTING_KEY),
+            "应已落库一份代理"
+        );
+
+        let 空代理 = serde_json::json!({
+            "network_proxy": { "http": {}, "https": {}, "all": {}, "no_proxy": null },
+            "update": { "enabled": false, "repo": "wcpe/JianArtifact", "api_base_url": "https://api.github.com", "restart_mode": "self", "channel": "stable", "token": null }
+        });
+        let resp = 请求_patch(state, Some(&token), 空代理).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(
+            !meta
+                .load_settings()
+                .await
+                .unwrap()
+                .iter()
+                .any(|(k, _)| k == PROXY_SETTING_KEY),
+            "空代理应删 network.proxy 键，恢复回落文件默认"
         );
     }
 

@@ -32,6 +32,7 @@
 | 0026 | 自更新回滚（增强 ADR-0021）：升级时把当前二进制持久备份为跨平台一致的 `{exe}.rollback.bak`（单备份、不被启动清理，独立于 ADR-0021 临时 `.bak`/`.old`）→ `POST /api/v1/update/rollback`（仅 Admin）复用 execute_replace 原子换回 + 走既有重启链路 → 无备份返 409，回滚与升级共用 apply 单飞 guard，设置视图增 `rollback_available`（P2） | 已接受 |
 | 0027 | 统一指标时序采集与查询（取代 ADR-0023「不留时序」）：通用扁平表 `metric_samples(metric_key,ts,value)` 经 `meta` 落库，后台定时按可配间隔采样主机/存储仓库/防护/使用分析各域 gauge + 可配保留期滚动清理 + 行数兜底，仅 Admin `GET /api/v1/monitor/metrics` 降采样查询；保留 FR-98 实时快照，缓存命中率本期降级不采，本机内部不外发（P2） | 已接受 |
 | 0028 | 动态配置持久化（文件默认 + DB 覆盖 + 内存缓存，扩展 ADR-0022）：`app_settings(key,value_json)` KV 表经 `meta` 落库，启动加载文件默认 → 读 DB 覆盖 → 填内存热替换槽，PATCH 写库 + 换槽即时生效；优先级 env 显式 > DB > 文件默认；**凭据与 bootstrap 严格不入库**（代理账密/token/密钥/端口/数据目录仍走文件+env），落库白名单默认拒绝；`config` 不反向依赖 DB（覆盖在装配层），增量纳入高频非密钥节（P2） | 已接受 |
+| 0030 | 网络代理凭据加密落库持久化（扩展 ADR-0028/0024、细化 ADR-0018）：代理经网页配置后只入内存槽、重启即丢（自更新重启后出站断），故落库 `app_settings`——URL/用户名明文、**密码用 XChaCha20-Poly1305（RustCrypto 纯 Rust）加密落库**（密文非明文、红线不破），加密子密钥经 `JwtSigner::derive_key` 从 `.jwt_secret` 文件真源域分隔派生、绝不入库；启动解密恢复进内存槽，解密失败降级无密码不阻断；专用持久化路径不并入 FR-106 明文白名单（P2） | 已接受 |
 | 0029 | 运行时日志文件 sink + 读取 API（扩展 ADR-0015）：`init_tracing` 保留 stdout 之外经 tracing-subscriber `reload` 层（拿到 data_dir 后换入）追加文件 sink 写 `{data_dir}/logs/app.log`，自实现单文件 + 单次大小滚动（`std`，不引 tracing-appender）；仅 Admin `GET /api/v1/system-logs` 读文件 → 纯函数解析（时间/级别/消息）+ 级别精确过滤 + tail/分页 → 统一分页响应，文件缺失返空；运行日志载体文件、**不落库**，与审计（业务留痕落 SQLite）严格区分（P2） | 已接受 |
 
 > 模板：状态 / 背景 / 决策 / 理由 / 后果 / 备选方案。
