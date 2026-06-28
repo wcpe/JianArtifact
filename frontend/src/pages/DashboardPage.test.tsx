@@ -244,3 +244,108 @@ describe('DashboardPage（全局状态概览）', () => {
     expect(screen.queryByText('系统状态')).not.toBeInTheDocument();
   });
 });
+
+// FR-112：仪表盘加载体验——顶部进度条 / 骨架占位 / 内容淡入 / 主机 5s 实时轮询（离开页面暂停）。
+describe('DashboardPage（FR-112 加载体验）', () => {
+  beforeEach(() => {
+    mockIsAdmin = true;
+    mockUsername = 'admin';
+    mockedApi.getDashboardSummary.mockResolvedValue(SUMMARY);
+    mockedApi.getHostMonitor.mockResolvedValue(HOST);
+    mockedApi.listAudit.mockResolvedValue(auditPage(RECENT));
+    mockedApi.checkUpdate.mockResolvedValue(UPDATE_AVAILABLE);
+    mockedApi.getDynamicConfig.mockResolvedValue(dynamicWithVuln(true));
+    mockedApi.protectionStatus.mockResolvedValue(PROTECTION_OK);
+    mockedApi.listRepositories.mockResolvedValue(REPOS);
+    // 默认页面可见
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => 'visible',
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it('加载中显示顶部进度条，加载完成后展示内容', async () => {
+    // 用假定时器接管进度条内部的伪进度 tick，避免其 setTimeout 在断言后逸出 act
+    vi.useFakeTimers();
+    // 把首批端点挂起，制造可观测的加载态
+    let resolveSummary: (v: DashboardSummary) => void = () => {};
+    mockedApi.getDashboardSummary.mockReturnValue(
+      new Promise<DashboardSummary>((res) => {
+        resolveSummary = res;
+      }),
+    );
+
+    renderPage();
+
+    // 加载态：顶部进度条存在（自研组件 aria-label）
+    expect(screen.getByLabelText('页面加载进度')).toBeInTheDocument();
+    // 加载态：KPI 内容尚未出现
+    expect(screen.queryByText('仓库数')).not.toBeInTheDocument();
+
+    resolveSummary(SUMMARY);
+
+    // 加载完成后内容淡入出现
+    await vi.waitFor(() => expect(screen.getByText('仓库数')).toBeInTheDocument());
+    expect(screen.getByText('主机健康')).toBeInTheDocument();
+  });
+
+  it('主机健康每 5 秒轮询刷新 getHostMonitor', async () => {
+    vi.useFakeTimers();
+    renderPage();
+
+    // 等首批取数（含首帧 getHostMonitor）落地
+    await vi.waitFor(() => expect(mockedApi.getHostMonitor).toHaveBeenCalledTimes(1));
+
+    // 推进 5 秒 → 轮询补一帧
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(mockedApi.getHostMonitor).toHaveBeenCalledTimes(2);
+
+    // 再推进 5 秒 → 再补一帧
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(mockedApi.getHostMonitor).toHaveBeenCalledTimes(3);
+  });
+
+  it('页面不可见时暂停轮询，回到前台立即补一帧并恢复', async () => {
+    vi.useFakeTimers();
+    renderPage();
+    await vi.waitFor(() => expect(mockedApi.getHostMonitor).toHaveBeenCalledTimes(1));
+
+    // 切到后台
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => 'hidden',
+    });
+    document.dispatchEvent(new Event('visibilitychange'));
+
+    // 后台期间不再轮询
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(mockedApi.getHostMonitor).toHaveBeenCalledTimes(1);
+
+    // 回到前台：立即补一帧并恢复周期
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => 'visible',
+    });
+    document.dispatchEvent(new Event('visibilitychange'));
+    await vi.waitFor(() => expect(mockedApi.getHostMonitor).toHaveBeenCalledTimes(2));
+
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(mockedApi.getHostMonitor).toHaveBeenCalledTimes(3);
+  });
+
+  it('组件卸载时清理轮询定时器', async () => {
+    vi.useFakeTimers();
+    const { unmount } = renderPage();
+    await vi.waitFor(() => expect(mockedApi.getHostMonitor).toHaveBeenCalledTimes(1));
+
+    unmount();
+    await vi.advanceTimersByTimeAsync(15000);
+    // 卸载后不再轮询
+    expect(mockedApi.getHostMonitor).toHaveBeenCalledTimes(1);
+  });
+});

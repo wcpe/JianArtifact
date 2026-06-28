@@ -21,12 +21,18 @@ import {
   Progress,
   Loader,
   Center,
+  Skeleton,
+  Transition,
 } from '@mantine/core';
 import * as api from '../api/endpoints';
 import type { DashboardSummary, HostMetrics, AuditEntryDto } from '../api/types';
 import { useAuth } from '../auth/useAuth';
 import { formatBytes, formatCount, formatUptime, formatRelativeTime } from '../lib/format';
 import { density } from '../theme/density';
+import { TopProgressBar } from '../components/TopProgressBar';
+
+/** 主机监控前台轮询间隔（FR-112）：每 5 秒刷新一次主机健康。 */
+const HOST_POLL_INTERVAL_MS = 5000;
 
 /** 系统状态四项的语义取值（与渲染解耦，便于各端点独立兜底）。 */
 interface SystemStatus {
@@ -233,6 +239,17 @@ function SystemStatusCard({
   );
 }
 
+/** KPI 区加载占位（FR-112）：保留 4 张卡布局高度，消除「卡片从上挤出」的抖动。 */
+function KpiSkeleton() {
+  return (
+    <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing={density.gridSpacing}>
+      {Array.from({ length: 4 }).map((_, i) => (
+        <Skeleton key={i} height={78} radius="md" />
+      ))}
+    </SimpleGrid>
+  );
+}
+
 /** 管理员仪表盘：聚合 KPI + 主机健康 + 近期活动 + 系统状态。 */
 function AdminDashboard() {
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
@@ -243,61 +260,114 @@ function AdminDashboard() {
     protection: 'unknown',
     vulnEnabled: null,
   });
+  // 首屏加载态（FR-112）：驱动顶部进度条、骨架占位与内容淡入；首批端点全部 settle 后转 false。
+  const [loading, setLoading] = useState(true);
 
   // 各端点独立取数：单项失败仅影响该卡（兜底为空 / —），不拖垮整页。
   useEffect(() => {
-    api
-      .getDashboardSummary()
-      .then(setSummary)
-      .catch(() => setSummary(null));
-    api
-      .getHostMonitor()
-      .then(setHost)
-      .catch(() => setHost(null));
-    api
-      .listAudit({ limit: 8 })
-      .then((page) => setEvents(page.items))
-      .catch(() => setEvents([]));
-    // 在线更新：未启用返回 409，按「未启用」处理而非报错；其余失败按未知。
-    api
-      .checkUpdate()
-      .then((c) =>
-        setStatus((prev) => ({
-          ...prev,
-          update: c.update_available
-            ? { kind: 'available', latest: c.latest_version }
-            : { kind: 'latest' },
-        })),
-      )
-      .catch((err) => {
-        const disabled = err && typeof err === 'object' && 'status' in err && err.status === 409;
-        setStatus((prev) => ({ ...prev, update: { kind: disabled ? 'disabled' : 'unknown' } }));
-      });
-    // 漏洞库启用：取动态配置 vuln.enabled。
-    api
-      .getDynamicConfig()
-      .then((cfg) => setStatus((prev) => ({ ...prev, vulnEnabled: cfg.vuln.enabled })))
-      .catch(() => setStatus((prev) => ({ ...prev, vulnEnabled: null })));
-    // 七层防护：据状态快照推导正常 / 异常（有活跃封禁或窗内任一维度计数即视为异常）。
-    api
-      .protectionStatus()
-      .then((s) => {
-        const active = s.active_banned_ips > 0 || s.window_counts.some((d) => d.count > 0);
-        setStatus((prev) => ({ ...prev, protection: active ? 'alert' : 'ok' }));
-      })
-      .catch(() => setStatus((prev) => ({ ...prev, protection: 'unknown' })));
+    const tasks = [
+      api
+        .getDashboardSummary()
+        .then(setSummary)
+        .catch(() => setSummary(null)),
+      api
+        .getHostMonitor()
+        .then(setHost)
+        .catch(() => setHost(null)),
+      api
+        .listAudit({ limit: 8 })
+        .then((page) => setEvents(page.items))
+        .catch(() => setEvents([])),
+      // 在线更新：未启用返回 409，按「未启用」处理而非报错；其余失败按未知。
+      api
+        .checkUpdate()
+        .then((c) =>
+          setStatus((prev) => ({
+            ...prev,
+            update: c.update_available
+              ? { kind: 'available', latest: c.latest_version }
+              : { kind: 'latest' },
+          })),
+        )
+        .catch((err) => {
+          const disabled = err && typeof err === 'object' && 'status' in err && err.status === 409;
+          setStatus((prev) => ({ ...prev, update: { kind: disabled ? 'disabled' : 'unknown' } }));
+        }),
+      // 漏洞库启用：取动态配置 vuln.enabled。
+      api
+        .getDynamicConfig()
+        .then((cfg) => setStatus((prev) => ({ ...prev, vulnEnabled: cfg.vuln.enabled })))
+        .catch(() => setStatus((prev) => ({ ...prev, vulnEnabled: null }))),
+      // 七层防护：据状态快照推导正常 / 异常（有活跃封禁或窗内任一维度计数即视为异常）。
+      api
+        .protectionStatus()
+        .then((s) => {
+          const active = s.active_banned_ips > 0 || s.window_counts.some((d) => d.count > 0);
+          setStatus((prev) => ({ ...prev, protection: active ? 'alert' : 'ok' }));
+        })
+        .catch(() => setStatus((prev) => ({ ...prev, protection: 'unknown' }))),
+    ];
+    void Promise.allSettled(tasks).then(() => setLoading(false));
+  }, []);
+
+  // 主机健康前台 5s 实时轮询（FR-112）：页面不可见时暂停、卸载时清理，不再卡为一次性。
+  useEffect(() => {
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const refresh = () => {
+      api
+        .getHostMonitor()
+        .then(setHost)
+        .catch(() => {
+          // 轮询失败保留上一帧数据，不闪空、不报错；下个周期再试。
+        });
+    };
+    const start = () => {
+      if (timer === null) timer = setInterval(refresh, HOST_POLL_INTERVAL_MS);
+    };
+    const stop = () => {
+      if (timer !== null) {
+        clearInterval(timer);
+        timer = null;
+      }
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        refresh(); // 回到前台立即补一帧，避免等满一个周期才更新。
+        start();
+      } else {
+        stop();
+      }
+    };
+    if (document.visibilityState === 'visible') start();
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      stop();
+    };
   }, []);
 
   return (
     <>
-      {summary && <KpiSection summary={summary} />}
+      <TopProgressBar loading={loading} />
 
-      <SimpleGrid cols={{ base: 1, md: 2 }} spacing={density.gridSpacing}>
-        {host && <HostHealthCard host={host} />}
-        <SystemStatusCard status={status} uptimeSecs={host?.uptime_secs ?? null} />
-      </SimpleGrid>
+      {loading ? (
+        <KpiSkeleton />
+      ) : (
+        <Transition mounted transition="fade" duration={300} timingFunction="ease">
+          {(transitionStyle) => (
+            <Stack gap={density.gridSpacing} style={transitionStyle}>
+              {summary && <KpiSection summary={summary} />}
 
-      <RecentActivityCard events={events} />
+              <SimpleGrid cols={{ base: 1, md: 2 }} spacing={density.gridSpacing}>
+                {host && <HostHealthCard host={host} />}
+                <SystemStatusCard status={status} uptimeSecs={host?.uptime_secs ?? null} />
+              </SimpleGrid>
+
+              <RecentActivityCard events={events} />
+            </Stack>
+          )}
+        </Transition>
+      )}
     </>
   );
 }
@@ -333,7 +403,8 @@ export function DashboardPage() {
   const { user, isAdmin } = useAuth();
 
   return (
-    <Stack gap={density.gridSpacing}>
+    // position: relative 让顶部进度条（绝对定位）锚定在仪表盘内容区顶部。
+    <Stack gap={density.gridSpacing} style={{ position: 'relative' }}>
       <Title order={2}>仪表盘</Title>
       <Text c="dimmed">
         欢迎，{user?.username}。
