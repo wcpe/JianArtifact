@@ -4,7 +4,8 @@ export default {
   card: {
     title: '防护配置',
     instantBadge: '保存后即时生效',
-    description: '各七层防护维度的启停与调参，保存后即时生效、无须重启；阈值 / 名单 / 规则为本机内部配置，不外发。',
+    description:
+      '各七层防护维度的启停与调参，保存后即时生效、无须重启；阈值 / 名单 / 规则为本机内部配置，不外发。',
   },
   savedHint: '已保存，配置已即时生效。',
   saveButton: '保存并即时生效',
@@ -64,7 +65,8 @@ export default {
   // —— WAF 规则引擎 ——
   waf: {
     title: 'WAF 规则引擎',
-    description: '按 method / path / query / header 有序匹配，首个命中生效（block 拒 / allow 放行）。',
+    description:
+      '按 method / path / query / header 有序匹配，首个命中生效（block 拒 / allow 放行）。',
     enable: '启用 WAF',
     colField: '字段',
     colHeaderName: '头名（仅 header）',

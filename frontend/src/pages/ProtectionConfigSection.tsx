@@ -208,10 +208,7 @@ function ProtectionForm({
       {saved && <Text c="green">{t('savedHint')}</Text>}
 
       {/* —— 速率限制 —— */}
-      <Section
-        title={t('rateLimit.title')}
-        description={t('rateLimit.description')}
-      >
+      <Section title={t('rateLimit.title')} description={t('rateLimit.description')}>
         <Switch
           label={t('rateLimit.enable')}
           checked={rl.enabled}
@@ -268,10 +265,7 @@ function ProtectionForm({
       </Section>
 
       {/* —— IP 黑 / 白名单 —— */}
-      <Section
-        title={t('ipList.title')}
-        description={t('ipList.description')}
-      >
+      <Section title={t('ipList.title')} description={t('ipList.description')}>
         <Textarea
           label={t('ipList.allowLabel')}
           autosize
@@ -289,10 +283,7 @@ function ProtectionForm({
       </Section>
 
       {/* —— 异常检测与自动封禁 —— */}
-      <Section
-        title={t('ban.title')}
-        description={t('ban.description')}
-      >
+      <Section title={t('ban.title')} description={t('ban.description')}>
         <Switch
           label={t('ban.enable')}
           checked={ban.enabled}
@@ -321,10 +312,7 @@ function ProtectionForm({
       </Section>
 
       {/* —— 慢速攻击防护 —— */}
-      <Section
-        title={t('slowloris.title')}
-        description={t('slowloris.description')}
-      >
+      <Section title={t('slowloris.title')} description={t('slowloris.description')}>
         <Switch
           label={t('slowloris.enable')}
           checked={slow.enabled}
@@ -355,10 +343,7 @@ function ProtectionForm({
       </Section>
 
       {/* —— CC 挑战 —— */}
-      <Section
-        title={t('ccChallenge.title')}
-        description={t('ccChallenge.description')}
-      >
+      <Section title={t('ccChallenge.title')} description={t('ccChallenge.description')}>
         <Switch
           label={t('ccChallenge.enable')}
           checked={cc.enabled}
@@ -389,10 +374,7 @@ function ProtectionForm({
       </Section>
 
       {/* —— WAF 规则引擎 —— */}
-      <Section
-        title={t('waf.title')}
-        description={t('waf.description')}
-      >
+      <Section title={t('waf.title')} description={t('waf.description')}>
         <Switch
           label={t('waf.enable')}
           checked={waf.enabled}
@@ -492,10 +474,7 @@ function ProtectionForm({
       </Section>
 
       {/* —— 监控告警 —— */}
-      <Section
-        title={t('alerts.title')}
-        description={t('alerts.description')}
-      >
+      <Section title={t('alerts.title')} description={t('alerts.description')}>
         <Switch
           label={t('alerts.enable')}
           checked={alerts.enabled}

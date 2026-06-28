@@ -497,11 +497,13 @@ export function SystemPage() {
                         <PasswordInput
                           label={t('tokenLabel')}
                           description={
-                            hasToken
-                              ? t('tokenDescConfigured')
-                              : t('tokenDescUnconfigured')
+                            hasToken ? t('tokenDescConfigured') : t('tokenDescUnconfigured')
                           }
-                          placeholder={hasToken ? t('tokenPlaceholderConfigured') : t('tokenPlaceholderUnconfigured')}
+                          placeholder={
+                            hasToken
+                              ? t('tokenPlaceholderConfigured')
+                              : t('tokenPlaceholderUnconfigured')
+                          }
                           value={tokenInput}
                           onChange={(e) => setTokenInput(e.currentTarget.value)}
                         />
@@ -575,7 +577,12 @@ export function SystemPage() {
       </Tabs>
 
       {/* —— 升级二次确认弹窗 —— */}
-      <Modal opened={confirmOpened} onClose={confirmModal.close} title={t('upgradeModalTitle')} centered>
+      <Modal
+        opened={confirmOpened}
+        onClose={confirmModal.close}
+        title={t('upgradeModalTitle')}
+        centered
+      >
         <Stack>
           <Text>
             {t('upgradeConfirmPrefix')}
@@ -601,9 +608,7 @@ export function SystemPage() {
         centered
       >
         <Stack>
-          <Text>
-            {t('rollbackConfirmBody')}
-          </Text>
+          <Text>{t('rollbackConfirmBody')}</Text>
           <Group justify="flex-end">
             <Button variant="default" onClick={rollbackConfirmModal.close} disabled={rollingBack}>
               {t('common:cancel')}
@@ -623,9 +628,7 @@ export function SystemPage() {
         centered
       >
         <Stack>
-          <Text>
-            {t('restartConfirmBody')}
-          </Text>
+          <Text>{t('restartConfirmBody')}</Text>
           <Group justify="flex-end">
             <Button
               variant="default"

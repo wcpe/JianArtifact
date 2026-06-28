@@ -713,7 +713,11 @@ function OnlineJobPanel({
       </Group>
 
       {/* 进度条 + 资产计数 */}
-      <Progress value={percent} aria-label={t('job.progressAria')} animated={!terminal && !job.paused} />
+      <Progress
+        value={percent}
+        aria-label={t('job.progressAria')}
+        animated={!terminal && !job.paused}
+      />
       <Group justify="space-between" mt="xs">
         <Text size="sm" c="dimmed">
           {t('job.progress', { done: job.done_assets, total: job.total_assets, percent })}

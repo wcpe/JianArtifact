@@ -19,7 +19,8 @@ export default {
   checkUpdate: '检查更新',
   enableUpdateSwitch: '启用在线更新（出站开关）',
   prereleaseAlertTitle: '测试版通道',
-  prereleaseAlertBody: '滚动开发预览，由 main 最新构建，可能不稳定。仅用于尝鲜 / 灰度，生产环境建议用正式版。',
+  prereleaseAlertBody:
+    '滚动开发预览，由 main 最新构建，可能不稳定。仅用于尝鲜 / 灰度，生产环境建议用正式版。',
   currentVersion: '当前版本',
   latestVersionArrow: '→ 最新版本',
   updateAvailableBadge: '有可用更新',
@@ -54,12 +55,14 @@ export default {
 
   // 重启 tab
   restartCardTitle: '重启服务',
-  restartCardDesc: '重启服务进程。重启期间服务将短暂不可用，当前连接会断开，重启完成后需手动刷新页面。',
+  restartCardDesc:
+    '重启服务进程。重启期间服务将短暂不可用，当前连接会断开，重启完成后需手动刷新页面。',
   restartButton: '重启服务',
 
   // 关闭 tab
   shutdownCardTitle: '关闭服务',
-  shutdownCardDesc: '关闭服务进程。关闭后服务将停止，无法从本控制台再次启动，需在服务器上经进程管理器（systemd / docker 等）重新拉起。',
+  shutdownCardDesc:
+    '关闭服务进程。关闭后服务将停止，无法从本控制台再次启动，需在服务器上经进程管理器（systemd / docker 等）重新拉起。',
   shutdownButton: '关闭服务',
 
   // 升级弹窗
@@ -70,18 +73,21 @@ export default {
 
   // 回滚弹窗
   rollbackModalTitle: '确认回滚到上一版本',
-  rollbackConfirmBody: '将用备份还原到上一版本的二进制。回滚成功后服务会立即重启，当前连接将断开。确认继续？',
+  rollbackConfirmBody:
+    '将用备份还原到上一版本的二进制。回滚成功后服务会立即重启，当前连接将断开。确认继续？',
   confirmRollback: '确认回滚',
 
   // 重启弹窗
   restartModalTitle: '确认重启服务',
-  restartConfirmBody: '将重启服务进程。重启期间服务短暂不可用，当前连接会断开，完成后需手动刷新页面。确认继续？',
+  restartConfirmBody:
+    '将重启服务进程。重启期间服务短暂不可用，当前连接会断开，完成后需手动刷新页面。确认继续？',
   confirmRestart: '确认重启',
 
   // 关闭弹窗
   shutdownModalTitle: '确认关闭服务',
   shutdownWarningTitle: '警告',
-  shutdownWarningBody: '关闭后服务将停止，无法从本控制台再次启动，需在服务器上经进程管理器（systemd / docker 等）重新拉起。',
+  shutdownWarningBody:
+    '关闭后服务将停止，无法从本控制台再次启动，需在服务器上经进程管理器（systemd / docker 等）重新拉起。',
   shutdownConfirmBody: '确认关闭服务？',
   confirmShutdown: '确认关闭',
 

@@ -1,7 +1,8 @@
 // protectionMonitor 命名空间文案（FR-111）：防护监控页专属文案。
 export default {
   title: '防护监控',
-  description: '七层防护各维度窗内计数快照与告警历史；数据为本机内部统计，不外发。每 5 秒自动刷新。',
+  description:
+    '七层防护各维度窗内计数快照与告警历史；数据为本机内部统计，不外发。每 5 秒自动刷新。',
   // 统计卡标签
   activeBannedIps: '当前封禁 IP 数',
   alertsEval: '告警评估',

@@ -170,7 +170,12 @@ const NAV_SECTIONS: NavSection[] = [
         icon: <IconFileText size={18} />,
         adminOnly: true,
       },
-      { labelKey: 'settings', path: '/settings', icon: <IconSettings size={18} />, adminOnly: true },
+      {
+        labelKey: 'settings',
+        path: '/settings',
+        icon: <IconSettings size={18} />,
+        adminOnly: true,
+      },
       // 系统管理页（FR-109，仅 Admin）：在线更新 + 重启 / 关闭
       { labelKey: 'system', path: '/system', icon: <IconServerCog size={18} />, adminOnly: true },
     ],
