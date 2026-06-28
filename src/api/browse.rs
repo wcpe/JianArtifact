@@ -130,6 +130,20 @@ fn wants_html(headers: &HeaderMap) -> bool {
 
 /// 渲染类 Apache 目录索引的 HTML 页（转义用户可见文本，防存储型 XSS）。
 fn render_html(repo: &str, dir_path: &str, entries: &[DirEntry]) -> Response {
+    let body = build_html_body(repo, dir_path, entries);
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        body,
+    )
+        .into_response()
+}
+
+/// 构造目录索引页 HTML 正文（纯函数，便于穷举测试）。
+///
+/// 非根目录在条目表首行补一条「返回上级」链接（href `../`，相对当前带尾斜杠的目录 URL，
+/// 上跳一层）；根目录（`dir_path` 为空）不补，避免越出仓库根。
+fn build_html_body(repo: &str, dir_path: &str, entries: &[DirEntry]) -> String {
     let display = if dir_path.is_empty() {
         format!("/{repo}/")
     } else {
@@ -138,6 +152,13 @@ fn render_html(repo: &str, dir_path: &str, entries: &[DirEntry]) -> Response {
     let title = format!("索引 {}", html_escape(&display));
 
     let mut rows = String::new();
+    // 非根目录补「返回上级」：href 用相对 `../`，依当前目录尾斜杠 URL 自然上跳一层；
+    // 根目录不补，防止链接越出仓库根。
+    if !dir_path.is_empty() {
+        rows.push_str(
+            "<tr><td><a href=\"../\">../</a></td><td>目录</td><td class=\"size\">-</td></tr>",
+        );
+    }
     for entry in entries {
         let is_dir = entry.kind == DirEntryKind::Folder;
         // 子目录链接补尾斜杠（再次进入目录浏览），文件链接指向其本体
@@ -161,20 +182,13 @@ fn render_html(repo: &str, dir_path: &str, entries: &[DirEntry]) -> Response {
         ));
     }
 
-    let body = format!(
+    format!(
         "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">\
          <title>{title}</title></head><body>\
          <h1>{title}</h1><table>\
          <thead><tr><th>名称</th><th>类型</th><th>大小</th></tr></thead>\
          <tbody>{rows}</tbody></table></body></html>"
-    );
-
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-        body,
     )
-        .into_response()
 }
 
 /// 最小 HTML 转义：防止文件名 / 路径中的特殊字符破坏标签或注入脚本。
@@ -228,5 +242,36 @@ mod tests {
     #[test]
     fn html_转义防注入() {
         assert_eq!(html_escape("a<b>&\"'"), "a&lt;b&gt;&amp;&quot;&#39;");
+    }
+
+    /// 便捷：构造一个文件目录项。
+    fn 文件项(name: &str) -> DirEntry {
+        DirEntry {
+            name: name.to_string(),
+            kind: DirEntryKind::File,
+            size: Some(1),
+            sha256: None,
+            created_at: None,
+        }
+    }
+
+    #[test]
+    fn html目录_非根目录含返回上级链接() {
+        // 非根目录（dir_path 非空）：表内须含 `../` 返回上级链接
+        let body = build_html_body("repo", "a/b", &[文件项("c.txt")]);
+        assert!(
+            body.contains("<a href=\"../\">../</a>"),
+            "非根目录应含返回上级链接，实际: {body}"
+        );
+    }
+
+    #[test]
+    fn html目录_根目录不含返回上级链接() {
+        // 根目录（dir_path 为空）：不应出现 `../` 链接，避免越出仓库根
+        let body = build_html_body("repo", "", &[文件项("c.txt")]);
+        assert!(
+            !body.contains("href=\"../\""),
+            "根目录不应含返回上级链接，实际: {body}"
+        );
     }
 }
