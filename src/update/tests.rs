@@ -194,6 +194,75 @@ fn 回滚规划_路径推导() {
     }
 }
 
+// ---------- 防 compound：派生临时 / 备份名前剥离已有更新管理后缀（ADR-0032）----------
+
+#[test]
+fn 替换规划_运行二进制已带_bak_后缀不再_compound() {
+    // 用户手动跑了备份文件（路径以 .bak 结尾）再触发更新时，
+    // 暂存 / 备份名必须落在「规范 exe 名」上，不得叠成 .bak.new / .bak.bak。
+    let exe = Path::new("/opt/app/jianartifact.bak");
+    let plan = plan_replace(exe);
+    assert_eq!(plan.staged, Path::new("/opt/app/jianartifact.new"));
+    if cfg!(not(windows)) {
+        assert_eq!(
+            plan.backup.as_deref(),
+            Some(Path::new("/opt/app/jianartifact.bak"))
+        );
+    }
+}
+
+#[test]
+fn 回滚备份路径_运行二进制已带管理后缀不再_compound() {
+    // 运行的二进制名末尾带 .bak / .rollback.bak 时，回滚备份名仍收敛到规范名。
+    assert_eq!(
+        rollback_backup_path(Path::new("/opt/app/jianartifact.bak")),
+        Path::new("/opt/app/jianartifact.rollback.bak")
+    );
+    assert_eq!(
+        rollback_backup_path(Path::new("/opt/app/jianartifact.rollback.bak")),
+        Path::new("/opt/app/jianartifact.rollback.bak")
+    );
+}
+
+// ---------- 启动清理：删 compound 残留、保留单层 .bak / .rollback.bak（ADR-0032）----------
+
+#[test]
+fn 清理_删compound残留_保留单层备份与运行二进制() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = "jianartifact";
+    let exe = dir.path().join(base);
+    // 运行二进制本体 + 两个合法单层备份 + 一个残留暂存 + 两个 compound 残留
+    for name in [
+        base.to_string(),                   // 运行二进制：保留
+        format!("{base}.bak"),              // ADR-0021 事务兜底：保留
+        format!("{base}.rollback.bak"),     // ADR-0026 持久回滚源：保留
+        format!("{base}.new"),              // 残留暂存：清理
+        format!("{base}.bak.bak"),          // compound：清理
+        format!("{base}.bak.rollback.bak"), // compound：清理
+    ] {
+        std::fs::write(dir.path().join(&name), b"x").unwrap();
+    }
+    cleanup_stale_artifacts(&exe);
+    let exists = |n: &str| dir.path().join(n).exists();
+    // 保留项
+    assert!(exists(base), "运行二进制不应被清理");
+    assert!(exists(&format!("{base}.bak")), "单层 .bak 应保留");
+    assert!(
+        exists(&format!("{base}.rollback.bak")),
+        "单层 .rollback.bak 应保留"
+    );
+    // 清理项
+    assert!(!exists(&format!("{base}.new")), "残留暂存 .new 应清理");
+    assert!(
+        !exists(&format!("{base}.bak.bak")),
+        "compound .bak.bak 应清理"
+    );
+    assert!(
+        !exists(&format!("{base}.bak.rollback.bak")),
+        "compound .bak.rollback.bak 应清理"
+    );
+}
+
 // ---------- 回滚可用性：备份存在与否（FR-104）----------
 
 #[tokio::test]

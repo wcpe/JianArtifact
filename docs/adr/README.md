@@ -24,7 +24,7 @@
 | 0018 | 运行时防护配置热替换：防护各维度阈值/开关/难度/IP 名单/WAF 规则经 Admin 在线 PATCH 即时生效（std `RwLock` 原子换快照、锁外重建 ip_matcher/waf_rules 派生态），扩展 ADR-0008（P2） | 已接受 |
 | 0019 | 迁移执行异步化为进程内任务：在线拉取迁移立即返回 `job_id`、后台 tokio 任务跑，进度存进程内有界注册表（不落库）+ 轮询查询端点 + 客户端重连；保留 ADR-0006「无须持久化迁移任务表」，扩展 ADR-0006（P2） | 已接受 |
 | 0020 | 统一出站网络代理与共享出站客户端：`[network.proxy]`（http/https/no_proxy + env）为出站代理唯一真源，`config` 层抽 `build_outbound_client` 统一注入全部出站 reqwest 客户端（rustls 保持、凭据脱敏），配置给值即真源、不配置保留系统 env（P2） | 部分被 ADR-0022、ADR-0024 取代 |
-| 0021 | 在线更新（自更新）机制：管理员手动触发查 GitHub 最新 Release → 按本机 target 下载 → 校验 sha256 → 原子替换二进制 → graceful-shutdown 后自动重启（restart_mode self/exit）；出站默认关闭、只拉公开数据不外发、复用 ADR-0020 helper、仅 sha256 不签名（P2） | 已接受（回滚增强见 ADR-0026） |
+| 0021 | 在线更新（自更新）机制：管理员手动触发查 GitHub 最新 Release → 按本机 target 下载 → 校验 sha256 → 原子替换二进制 → graceful-shutdown 后自动重启（restart_mode self/exit）；出站默认关闭、只拉公开数据不外发、复用 ADR-0020 helper、仅 sha256 不签名（P2） | 已接受（回滚增强见 ADR-0026、重启增强见 ADR-0032） |
 | 0022 | 运行时可编辑设置与出站客户端热替换（取代 ADR-0020）：网络代理与在线更新可调字段经 Admin 在线 PATCH 即时生效、无须重启；`config` 层 `NetworkState`（std `RwLock<Arc<NetworkSnapshot>>` 含代理配置 + reqwest::Client），出站点按需取 client、PATCH 锁外重建后原子换槽；沿用 ADR-0020 真源/helper/rustls/脱敏，凭据只入内存槽不落库不回显，设置页改可编辑（P2） | 已接受 |
 | 0023 | 主机/系统监控采集：经 sysinfo 跨平台按请求采样本机 CPU/内存/磁盘/uptime，仅 Admin `GET /api/v1/monitor/host`，本机内部不外发（P2） | 已接受（「不留历史时序」一条被 ADR-0027 取代，其余仍有效） |
 | 0024 | SOCKS5 出站代理与网页代理凭据管理（取代 ADR-0020「不支持 SOCKS」条目）：启 reqwest `socks` 特性，`[network.proxy]` 新增 `all` 键经 `reqwest::Proxy::all` 支持 `socks5://` 全 scheme 兜底代理（注入序 http→https→all）；设置页每代理拆 URL/用户名/密码三字段，用户名回显、密码三态不回显，纯函数 `rebuild_proxy_url` 据三字段 + 当前存储值重建含凭据 URL（userinfo RFC3986 编码），凭据只入内存槽不落库 / 不回显（P2） | 已接受 |
@@ -34,6 +34,7 @@
 | 0028 | 动态配置持久化（文件默认 + DB 覆盖 + 内存缓存，扩展 ADR-0022）：`app_settings(key,value_json)` KV 表经 `meta` 落库，启动加载文件默认 → 读 DB 覆盖 → 填内存热替换槽，PATCH 写库 + 换槽即时生效；优先级 env 显式 > DB > 文件默认；**凭据与 bootstrap 严格不入库**（代理账密/token/密钥/端口/数据目录仍走文件+env），落库白名单默认拒绝；`config` 不反向依赖 DB（覆盖在装配层），增量纳入高频非密钥节（P2） | 已接受 |
 | 0031 | 向前兼容迁移 + 容忍未知已应用迁移（扩展 ADR-0002/0026）：自更新回滚只还原二进制不还原 DB，旧二进制遇 DB 里新版应用的更高迁移时 sqlx 默认报错锁死；故 ① 迁移**只增不改不删**（向前兼容，破坏性变更先走 ADR）② `MetaStore::open` 跑迁移设 `set_ignore_missing(true)` 忽略未知更高迁移、只跑自身待应用项——使回滚跨增量迁移后旧二进制仍能打开 DB（P2） | 已接受 |
 | 0030 | 网络代理凭据加密落库持久化（扩展 ADR-0028/0024、细化 ADR-0018）：代理经网页配置后只入内存槽、重启即丢（自更新重启后出站断），故落库 `app_settings`——URL/用户名明文、**密码用 XChaCha20-Poly1305（RustCrypto 纯 Rust）加密落库**（密文非明文、红线不破），加密子密钥经 `JwtSigner::derive_key` 从 `.jwt_secret` 文件真源域分隔派生、绝不入库；启动解密恢复进内存槽，解密失败降级无密码不阻断；专用持久化路径不并入 FR-106 明文白名单（P2） | 已接受 |
+| 0032 | 交互式终端下的自更新重启与备份健壮性（扩展 ADR-0021/0026）：`restart_mode=self` 在 Unix 改用 `exec` 原地替换进程映像（同 PID/终端/前台，tmux 前台自更新后进程不脱离、日志连续；端口已在优雅停机释放），Windows 无 exec 保持 spawn+exit；派生 staged/.bak/.old/.rollback.bak 前剥离已叠管理后缀防 compound（`.bak.bak`）+ 守自拷贝 + 启动清 compound 残留，保留单层 `.bak`/`.rollback.bak` 两份；原地替换保留原文件名为设计行为（保路径引用、--version 自报真实版本）（P2） | 已接受 |
 | 0029 | 运行时日志文件 sink + 读取 API（扩展 ADR-0015）：`init_tracing` 保留 stdout 之外经 tracing-subscriber `reload` 层（拿到 data_dir 后换入）追加文件 sink 写 `{data_dir}/logs/app.log`，自实现单文件 + 单次大小滚动（`std`，不引 tracing-appender）；仅 Admin `GET /api/v1/system-logs` 读文件 → 纯函数解析（时间/级别/消息）+ 级别精确过滤 + tail/分页 → 统一分页响应，文件缺失返空；运行日志载体文件、**不落库**，与审计（业务留痕落 SQLite）严格区分（P2） | 已接受 |
 
 > 模板：状态 / 背景 / 决策 / 理由 / 后果 / 备选方案。

@@ -448,19 +448,38 @@ async fn main() -> anyhow::Result<()> {
 fn handle_restart(req: jianartifact::update::RestartRequest) -> anyhow::Result<()> {
     use jianartifact::update::RestartMode;
     match req.mode {
-        RestartMode::SelfRespawn => {
-            info!(二进制 = %req.exe.display(), "自更新：拉起新进程后退出");
-            std::process::Command::new(&req.exe)
-                .args(&req.argv)
-                .spawn()
-                .with_context(|| format!("拉起新进程失败: {}", req.exe.display()))?;
-            // 拉起成功后正常退出，交还端口给新进程
-            std::process::exit(0);
-        }
+        RestartMode::SelfRespawn => respawn_self(&req),
         RestartMode::Exit => {
             info!("自更新：仅退出，交外部进程管理器重启");
             std::process::exit(0);
         }
+    }
+}
+
+/// 自拉起新版本（restart_mode=self）。**真正的拉起 + 端口序列需真机验证**。
+///
+/// Unix 用 `exec` 原地替换进程映像：同 PID / 同终端 / 同前台作业，tmux 等交互前台运行自更新后
+/// 进程不脱离作业控制、日志连续可见（端口已在优雅停机时释放，新映像启动再绑）。exec 成功永不返回。
+/// Windows 无 exec 语义：拉起新进程后旧进程退出（新进程会脱离当前控制台；端口已释放，避免新旧争用）。
+fn respawn_self(req: &jianartifact::update::RestartRequest) -> anyhow::Result<()> {
+    info!(二进制 = %req.exe.display(), "自更新：重启拉起新版本");
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let err = std::process::Command::new(&req.exe).args(&req.argv).exec();
+        // 走到这里即 exec 失败（成功不返回）
+        Err(anyhow::anyhow!(
+            "exec 替换进程失败 {}: {err}",
+            req.exe.display()
+        ))
+    }
+    #[cfg(not(unix))]
+    {
+        std::process::Command::new(&req.exe)
+            .args(&req.argv)
+            .spawn()
+            .with_context(|| format!("拉起新进程失败: {}", req.exe.display()))?;
+        std::process::exit(0);
     }
 }
 

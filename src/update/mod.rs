@@ -277,11 +277,40 @@ pub fn plan_replace(current_exe: &Path) -> ReplacePlan {
     }
 }
 
-/// 在 exe 同目录生成「原文件名 + 后缀」的兄弟路径（同卷以保 rename 原子）。
+/// 自更新管理的临时 / 备份后缀集合（ADR-0032）。
+///
+/// 用于：① 派生临时 / 备份名前先剥离已有后缀，防 compound（`.bak.bak`）；② 启动清理识别 compound 残留。
+/// `.rollback.bak` 须排在 `.bak` 前（更长者优先匹配），避免把它误当作单层 `.bak`。
+const MANAGED_SUFFIXES: &[&str] = &[".rollback.bak", ".bak", ".old", ".new"];
+
+/// 把文件名末尾叠加的更新管理后缀（可能多层）全部剥离，得到「规范 exe 名」（ADR-0032）。
+///
+/// 正常运行时 exe 名不带这些后缀，剥离为恒等；仅当用户手动跑了备份文件（名以 `.bak`/`.rollback.bak`
+/// 结尾）再触发更新时生效，使派生的临时 / 备份名收敛到规范名、不再 compound。
+fn strip_managed_suffixes(file_name: &std::ffi::OsStr) -> std::ffi::OsString {
+    let mut name = file_name.to_string_lossy().into_owned();
+    loop {
+        let before = name.len();
+        for suffix in MANAGED_SUFFIXES {
+            if let Some(stripped) = name.strip_suffix(suffix) {
+                name.truncate(stripped.len());
+                break;
+            }
+        }
+        if name.len() == before {
+            break;
+        }
+    }
+    std::ffi::OsString::from(name)
+}
+
+/// 在 exe 同目录生成「规范 exe 名 + 后缀」的兄弟路径（同卷以保 rename 原子）。
+///
+/// 追加后缀前先剥离 exe 名末尾已有的更新管理后缀（ADR-0032），防止在 `.bak` 文件上再叠 `.bak`。
 fn sibling_with_suffix(exe: &Path, suffix: &str) -> PathBuf {
     let mut file_name = exe
         .file_name()
-        .map(|s| s.to_os_string())
+        .map(strip_managed_suffixes)
         .unwrap_or_default();
     file_name.push(suffix);
     match exe.parent() {
@@ -383,11 +412,59 @@ pub fn cleanup_stale_old() {
     let Ok(exe) = std::env::current_exe() else {
         return;
     };
+    cleanup_stale_artifacts(&exe);
+}
+
+/// 据给定 exe 路径清理残留临时文件（注入 exe 便于测试）。
+fn cleanup_stale_artifacts(exe: &Path) {
     // .old 仅 Windows 产生；.new 任意平台都可能残留
     if cfg!(windows) {
-        remove_stale_file(&sibling_with_suffix(&exe, ".old"), "残留旧二进制");
+        remove_stale_file(&sibling_with_suffix(exe, ".old"), "残留旧二进制");
     }
-    remove_stale_file(&sibling_with_suffix(&exe, ".new"), "残留暂存新二进制");
+    remove_stale_file(&sibling_with_suffix(exe, ".new"), "残留暂存新二进制");
+    remove_compound_managed_files(exe);
+}
+
+/// 清理 compound 残留（ADR-0032）：删 exe 同目录里名为「规范 exe 名 + 两层及以上管理后缀」的文件
+/// （如 `.bak.bak`、`.bak.rollback.bak`，多由用户手动跑备份文件再更新留下）；**保留**单层
+/// `.bak`（ADR-0021 事务兜底）与 `.rollback.bak`（ADR-0026 持久回滚源）。best-effort，失败仅 WARN。
+fn remove_compound_managed_files(exe: &Path) {
+    let (Some(dir), Some(canonical)) = (exe.parent(), exe.file_name().map(strip_managed_suffixes))
+    else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let canonical = canonical.to_string_lossy().into_owned();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        // 仅处理「规范名 + 管理后缀」者；剥去规范名前缀后剩余须是 ≥2 层管理后缀才算 compound
+        let Some(remainder) = name.strip_prefix(&canonical) else {
+            continue;
+        };
+        if managed_suffix_layers(remainder) >= 2 {
+            remove_stale_file(&entry.path(), "compound 残留备份");
+        }
+    }
+}
+
+/// 数文件名剩余串由几层管理后缀叠成（ADR-0032）：从左反复剥离最长匹配的管理后缀；
+/// 若中途遇到非管理内容则返回 0（不是纯管理后缀串，不清理）。
+fn managed_suffix_layers(remainder: &str) -> usize {
+    let mut rest = remainder;
+    let mut layers = 0;
+    while !rest.is_empty() {
+        let Some(stripped) = MANAGED_SUFFIXES
+            .iter()
+            .find_map(|suffix| rest.strip_prefix(suffix))
+        else {
+            return 0;
+        };
+        rest = stripped;
+        layers += 1;
+    }
+    layers
 }
 
 /// 尽力删除一个残留临时文件（不存在则跳过；失败仅 WARN，不阻断启动）。
@@ -471,8 +548,8 @@ fn execute_replace(plan: &ReplacePlan) -> Result<(), UpdateError> {
     {
         // Windows：运行中 exe 不能被覆盖，但可改名。先把运行中 exe 改名为 .old，再落新文件。
         let old = plan.old.as_ref().expect("Windows 替换规划必含 .old 路径");
-        // 若已存在残留 .old，先尽力删除，避免改名失败
-        if old.exists() {
+        // 若已存在残留 .old，先尽力删除，避免改名失败；守 old == 当前 exe（剥离后缀后可能相等）不误删运行二进制
+        if old != &plan.current_exe && old.exists() {
             let _ = std::fs::remove_file(old);
         }
         std::fs::rename(&plan.current_exe, old).map_err(|e| UpdateError::Io(e.to_string()))?;
@@ -486,9 +563,13 @@ fn execute_replace(plan: &ReplacePlan) -> Result<(), UpdateError> {
     #[cfg(not(windows))]
     {
         use std::os::unix::fs::PermissionsExt;
-        // Unix：替换前把旧 exe 复制为 .bak（单步回退兜底）
+        // Unix：替换前把旧 exe 复制为 .bak（单步回退兜底）。
+        // 守自拷贝：剥离后缀后规范 .bak 名可能恰等于当前 exe（用户跑的就是 .bak 文件），跳过避免毁源。
         if let Some(backup) = &plan.backup {
-            std::fs::copy(&plan.current_exe, backup).map_err(|e| UpdateError::Io(e.to_string()))?;
+            if backup != &plan.current_exe {
+                std::fs::copy(&plan.current_exe, backup)
+                    .map_err(|e| UpdateError::Io(e.to_string()))?;
+            }
         }
         // 给新文件置可执行权限 0755
         let perms = std::fs::Permissions::from_mode(0o755);
@@ -580,9 +661,12 @@ pub async fn apply_update<S: ReleaseSource>(
     // 覆盖单一备份（只留上一版）；落盘失败即报错、不触碰二进制。该备份独立于下方的
     // Unix `.bak` / Windows `.old`（临时兜底 / 启动清理），且不被启动清理。
     let rollback_bak = rollback_backup_path(current_exe);
-    tokio::fs::copy(current_exe, &rollback_bak)
-        .await
-        .map_err(|e| UpdateError::Io(e.to_string()))?;
+    // 守自拷贝：剥离后缀后规范回滚备份名可能恰等于当前 exe（用户跑的就是 .rollback.bak），跳过避免毁源。
+    if rollback_bak != current_exe {
+        tokio::fs::copy(current_exe, &rollback_bak)
+            .await
+            .map_err(|e| UpdateError::Io(e.to_string()))?;
+    }
 
     // 把临时文件移到 exe 同目录（同卷保 rename 原子，跨卷先 copy）后原子替换
     let plan = plan_replace(current_exe);
