@@ -33,6 +33,7 @@ import protectionMonitor from './locales/zh-CN/protectionMonitor';
 import audit from './locales/zh-CN/audit';
 import licenses from './locales/zh-CN/licenses';
 import acl from './locales/zh-CN/acl';
+import mock from './locales/zh-CN/mock';
 
 /** 默认且唯一首发语言。 */
 export const DEFAULT_LNG = 'zh-CN';
@@ -65,6 +66,7 @@ const resources = {
     audit,
     licenses,
     acl,
+    mock,
   },
 } as const;
 

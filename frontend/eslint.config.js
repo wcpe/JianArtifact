@@ -7,7 +7,8 @@ import prettier from 'eslint-config-prettier';
 
 // ESLint 扁平配置：TypeScript + React Hooks 规则，并以 prettier 关闭与格式化冲突的规则。
 export default tseslint.config(
-  { ignores: ['dist', 'coverage'] },
+  // public/mockServiceWorker.js 为 msw 生成的运行时 worker（FR-119，ADR-0035），原样保留不改、不纳入 lint。
+  { ignores: ['dist', 'coverage', 'public/mockServiceWorker.js'] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ['**/*.{ts,tsx}'],
