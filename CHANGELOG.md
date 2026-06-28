@@ -7,6 +7,23 @@
 ## 未发布版本
 
 ### 新增
+- 无
+
+### 变更
+- 无
+
+### 修复
+- 无
+
+### 移除
+- 无
+
+### 安全
+- 无
+
+## [0.5.0] - 2026-06-28
+
+### 新增
 - 动态配置入库与覆盖（FR-106，ADR-0028，扩展 ADR-0022）：除启动必需项与凭据外的**非密钥**配置可经面板在线编辑、持久化到 SQLite 并重启不丢，按「黄金组合」生效——文件兜底 + DB 覆盖 + 内存槽缓存，优先级 **env 显式 > DB > 文件默认**。新增迁移 `0012_app_settings.sql`（KV 表 `app_settings(key, value_json, updated_at)`）与 `meta` 三方法（`load_settings` / `upsert_setting` / `delete_setting`，DB 只经 meta）。新增**装配层**覆盖模块 `config_overlay`（`config` 模块零 DB 依赖、依赖方向不变）：启动序列在 meta 就绪后读 `app_settings` 作 DB 覆盖，经**纯函数** `merge_effective_config` 合并出生效配置再填充各热替换槽 / 后台任务参数；合并 / 解析失败只 WARN + 回落文件默认，不阻断启动。**白名单 + 默认拒绝**（守凭据红线）：仅 `limits` / `protection` / `observability.{audit,usage,metrics,metrics_timeseries}` / `vuln` / `auth` 三个可调标量 / `update` 非密钥字段可入库；代理账密 / update token / OIDC·LDAP 密钥 / JWT 密钥与 bootstrap 项（`server.*` / `data.*`）**永不入库**（`auth` / `update` 经专用非密钥视图序列化，结构上不可能带出凭据）。`PATCH /api/v1/protection/config`（FR-79）与 `PATCH /api/v1/settings`（FR-88，仅 update 非密钥字段）的改动同时落库 `app_settings`、重启仍生效；代理凭据与 token 继续只入内存槽不落库。env 显式给值的节仍以 env 为准、不被 DB 覆盖。新 Dynamic 节（limits / observability / vuln / auth 非密钥项）的在线编辑表单已落地：新增**仅 Admin** 端点 `GET` / `PATCH /api/v1/settings/dynamic`（`src/api/dynamic_config.rs`）——GET 以启动期生效配置为基线叠加当前 DB 覆盖回显「当前 + 待生效」值，PATCH 整体校验各节边界（采样间隔 / 刷新周期 / 下载超时 / 会话 TTL / 锁定时长须 > 0）后按节落库 `app_settings`；`auth` 经 `AuthTunables` 非密钥视图序列化（OIDC / LDAP 密钥绝不入库），端点只写固定白名单键、bootstrap 项不经此路径。这些节多在启动期装载、无热替换槽，改动**保存后重启生效**（黄金组合「变更=改 DB、下次装载生效」，不为每个后台任务强造热替换槽）。控制台「设置」页二级导航新增「系统配置」tab，分组（限制与配额 / 可观测性 / 漏洞库 / 安全 · 会话）编辑上述非密钥项，独立保存按钮并显著标注「保存后重启生效」（区别于代理 / 更新 / 防护的即时生效）。真机「面板改 → 重启 → 仍生效」端到端持久化待真机验证
 - 主机 / 系统监控采集（FR-98，ADR-0023）：新增**仅 Admin** 端点 `GET /api/v1/monitor/host`，经新增依赖 `sysinfo`（裁 features 仅 `system` + `disk`）跨平台采集**这台主机**的基础资源画像——CPU 全局使用率 + 逻辑核数、内存 / 交换的已用 / 总量、磁盘逐盘挂载点 / 总量 / 可用及汇总、系统 uptime。**按请求单次采样**（共享 `sysinfo::System` 经 `Mutex` 串行刷新、磁盘按请求刷新），不后台轮询、不落库、不留历史时序；纯本机内部数据、**绝不外发、不向外部遥测 phone-home**（守 ADR-0009 / 0015 基调），GET 读取类不入审计。新增 `monitor` 模块承载采集（「sysinfo 读数 → DTO」纯映射抽为无副作用纯函数）；`cpu.usage_percent` 首样可能为 0（CPU 使用率需两次采样间隔）属已知取舍
 - 设置可编辑与运行时热替换（FR-88，ADR-0022，取代 ADR-0020 的「代理只读 / 运行时不热替换」取向）：网络代理 `[network.proxy]` 与在线更新可调字段（`enabled` / `repo` / `api_base_url` / `restart_mode` / `token`）改为经控制台「设置」页或 `PATCH /api/v1/settings`（仅 Admin）在线编辑、**即时生效、无须重启**。新增随 `AppState` 共享的出站网络热替换槽 `config::NetworkState`（std `RwLock<Arc<NetworkSnapshot>>`，快照含代理配置 + 据其构造的 `reqwest::Client`）：5 处出站点（proxy 回源 / Nexus 迁移 / 漏洞库镜像 / OIDC / 在线更新）不再持启动期 client，改持 `Arc<NetworkState>`、每次出站取当前 client；PATCH 改代理后锁外重建 client、原子换槽，下个出站请求即用新代理。设置页从只读改可编辑（代理 http/https/no_proxy 表单 + 在线更新 enabled/repo/api_base_url/restart_mode/token），保存调 `PATCH`。校验失败 400 且不改现有生效值；代理凭据与 token 只入内存槽、**不写回 TOML / 不入 DB / 不进日志 / 不回显**，重启回落文件 + env 配置
