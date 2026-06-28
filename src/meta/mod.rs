@@ -142,7 +142,12 @@ impl MetaStore {
         let pool = SqlitePoolOptions::new().connect_with(options).await?;
 
         // 跑编译期嵌入的迁移脚本（migrations/ 目录）
-        sqlx::migrate!("./migrations").run(&pool).await?;
+        // set_ignore_missing(true)：旧二进制遇到 DB 里它不认识的「更高」已应用迁移时忽略、不报错，
+        // 只跑自己知道的待应用项——使自更新回滚到旧版（DB 已被新版增量迁移过）仍能打开 DB（ADR-0031）。
+        // 前提：迁移只增不改不删（向前兼容），新版加的表 / 列旧版不用、不冲突。
+        let mut migrator = sqlx::migrate!("./migrations");
+        migrator.set_ignore_missing(true);
+        migrator.run(&pool).await?;
 
         Ok(Self { pool })
     }
@@ -164,7 +169,12 @@ impl MetaStore {
             .max_connections(1)
             .connect_with(options)
             .await?;
-        sqlx::migrate!("./migrations").run(&pool).await?;
+        // set_ignore_missing(true)：旧二进制遇到 DB 里它不认识的「更高」已应用迁移时忽略、不报错，
+        // 只跑自己知道的待应用项——使自更新回滚到旧版（DB 已被新版增量迁移过）仍能打开 DB（ADR-0031）。
+        // 前提：迁移只增不改不删（向前兼容），新版加的表 / 列旧版不用、不冲突。
+        let mut migrator = sqlx::migrate!("./migrations");
+        migrator.set_ignore_missing(true);
+        migrator.run(&pool).await?;
         Ok(Self { pool })
     }
 
@@ -416,6 +426,36 @@ mod tests {
     async fn 空库计数为零() {
         let store = MetaStore::open_in_memory().await.unwrap();
         assert_eq!(store.count_users().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn 回滚到旧二进制_db有更高已应用迁移_仍能打开() {
+        // 复现自更新回滚跨迁移把 DB 锁死：回滚到旧二进制后，DB 里有新版应用、旧二进制内嵌集没有的
+        // 更高迁移 → sqlx 默认报「previously applied but missing in resolved」→ DB 打不开、回滚后起不来。
+        // 修复（set_ignore_missing）后应忽略未知更高迁移、正常打开（增量迁移下回滚安全）。
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+
+        // 首次打开：应用全部内嵌迁移
+        let store = MetaStore::open(&db_path).await.unwrap();
+        // 模拟「新版二进制」已应用一条本二进制内嵌集里没有的更高迁移行
+        sqlx::query(
+            "INSERT INTO _sqlx_migrations \
+             (version, description, installed_on, success, checksum, execution_time) \
+             VALUES (99999999, '未来的迁移', CURRENT_TIMESTAMP, 1, X'00', 0)",
+        )
+        .execute(store.pool())
+        .await
+        .unwrap();
+        drop(store);
+
+        // 重新打开（等价于回滚后的旧二进制启动）：应忽略未知的更高已应用迁移、Ok
+        let reopened = MetaStore::open(&db_path).await;
+        assert!(
+            reopened.is_ok(),
+            "DB 有更高的已应用迁移时旧二进制仍应能打开（回滚兼容），实际: {:?}",
+            reopened.err()
+        );
     }
 
     #[tokio::test]
