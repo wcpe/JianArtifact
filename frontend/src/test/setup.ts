@@ -1,8 +1,24 @@
 // Vitest 测试初始化：引入 jest-dom 断言扩展，提供 toBeInTheDocument 等匹配器。
 import '@testing-library/jest-dom/vitest';
+import { afterAll, afterEach, beforeAll, beforeEach } from 'vitest';
 
 // 初始化 i18n（FR-111）：测试中组件经 useTranslation 渲染中文文案，须在渲染前装载全局 i18n 单例。
 import '../i18n';
+
+// MSW 有状态内存 mock 后端（FR-116，ADR-0035）：在网络边界拦截真实 fetch，
+// 让走 client.ts 的测试按真实请求 / 响应契约强断言。每用例前重置 store + handlers 保证隔离。
+// 仍用 vi.mock('../api/endpoints') 的既有测试不发请求，MSW 不干预；故未处理请求放行（bypass）而非报错。
+import { server } from './mocks/server';
+import { reset as resetMockStore } from './mocks/store';
+import { clearToken } from '../api/client';
+
+beforeAll(() => server.listen({ onUnhandledRequest: 'bypass' }));
+beforeEach(() => {
+  resetMockStore();
+  clearToken();
+});
+afterEach(() => server.resetHandlers());
+afterAll(() => server.close());
 
 // Mantine 组件依赖 window.matchMedia（响应式与配色方案），jsdom 不提供，需打桩。
 // 用普通函数而非 vi.fn()，以免测试里的 vi.restoreAllMocks() 把它清除导致后续渲染报错。
