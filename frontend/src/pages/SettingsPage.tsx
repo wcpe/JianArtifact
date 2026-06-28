@@ -35,6 +35,7 @@ import type { SettingsView, ProxyEntryPatch, DynamicConfig } from '../api/types'
 import { errorMessage } from '../lib/format';
 import { ErrorAlert } from '../components/ErrorAlert';
 import { density } from '../theme/density';
+import { ProtectionConfigSection } from './ProtectionConfigSection';
 
 /** 锚点节定义（单一真源：左侧导航与右侧分节共用，避免标签 / id 复制散落）。 */
 const SECTIONS = [
@@ -43,6 +44,8 @@ const SECTIONS = [
   { id: 'observability', label: '可观测性' },
   { id: 'vuln', label: '漏洞库' },
   { id: 'auth', label: '安全 / 会话' },
+  // FR-110：防护配置由独立页并入设置页，作为一个锚点节；自带 PATCH /protection/config 保存（即时生效）、不并入全局保存。
+  { id: 'protection', label: '防护配置' },
 ] as const;
 
 /** 单代理三字段（URL / 用户名 / 密码）一组（FR-100）。密码框始终空、不回显；已配置时标徽标 + 提供清除密码。 */
@@ -643,6 +646,11 @@ export function SettingsPage() {
               </Group>
             )}
           </Card>
+
+          {/* —— 防护配置节（FR-110）：原独立页 /protection 并入此处 ——
+              自带 GET/PATCH /protection/config 与独立保存按钮（即时生效），
+              不并入设置页底部「全局保存」（代理 + 动态配置）。 */}
+          <ProtectionConfigSection />
         </Stack>
       </Flex>
 

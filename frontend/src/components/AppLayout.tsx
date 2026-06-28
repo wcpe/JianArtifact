@@ -31,7 +31,6 @@ import {
   IconChartDots,
   IconClipboardText,
   IconFileText,
-  IconShieldHalf,
   IconSettings,
   IconServerCog,
   IconLogout,
@@ -108,7 +107,7 @@ interface NavSection {
 /**
  * 判定导航项是否对应当前路由：按路径段精确匹配，避免前缀串台。
  * 仅当当前路径等于该项路径、或为其子路径（以「该项路径 + /」开头）时高亮，
- * 故 /protection 不会在 /protection-monitor 下被误判为 active。
+ * 故 /system 不会在 /system-logs 下被误判为 active。
  */
 function isNavActive(pathname: string, itemPath: string): boolean {
   if (itemPath === '/') {
@@ -120,8 +119,8 @@ function isNavActive(pathname: string, itemPath: string): boolean {
 // 分段导航（FR-92 已确认设计）：
 // - 浏览：仪表盘 / 仓库 / 搜索（仓库、搜索匿名可见，FR-95）
 // - 管理：用户与组 / 访问令牌 / 上传 / Nexus 迁移
-// - 系统·监控：监控 / 审计日志 / 系统日志（FR-107 路由）/ 防护配置 / 设置
-// 「使用分析」入口已并入监控（FR-99）删除；「系统日志」为本次新增入口。
+// - 系统·监控：监控 / 审计日志 / 系统日志（FR-107 路由）/ 设置 / 系统
+// 「使用分析」入口已并入监控（FR-99）删除；防护配置入口已并入「设置」页（FR-110）移除。
 const NAV_SECTIONS: NavSection[] = [
   {
     title: '浏览',
@@ -160,12 +159,6 @@ const NAV_SECTIONS: NavSection[] = [
         label: '系统日志',
         path: '/system-logs',
         icon: <IconFileText size={18} />,
-        adminOnly: true,
-      },
-      {
-        label: '防护配置',
-        path: '/protection',
-        icon: <IconShieldHalf size={18} />,
         adminOnly: true,
       },
       { label: '设置', path: '/settings', icon: <IconSettings size={18} />, adminOnly: true },

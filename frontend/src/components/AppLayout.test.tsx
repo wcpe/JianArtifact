@@ -204,8 +204,8 @@ describe('AppLayout 导航入口增删（删使用分析、加系统日志）', 
 });
 
 describe('AppLayout 角色门控入口（不回归 FR-95）', () => {
-  // 管理 / 系统类入口：仅 Admin 可见（按重做后的分段导航清单）。
-  const 受控入口 = ['用户与组', 'Nexus 迁移', '监控', '审计日志', '系统日志', '防护配置', '设置'];
+  // 管理 / 系统类入口：仅 Admin 可见（按重做后的分段导航清单；防护配置已并入设置页，FR-110）。
+  const 受控入口 = ['用户与组', 'Nexus 迁移', '监控', '审计日志', '系统日志', '设置', '系统'];
   // 通用入口：所有登录用户可见
   const 通用入口 = ['仪表盘', '仓库', '搜索', '访问令牌', '上传'];
 
@@ -230,18 +230,18 @@ describe('AppLayout 角色门控入口（不回归 FR-95）', () => {
 });
 
 describe('AppLayout 侧栏导航高亮（fix-B 段精确匹配，不回归）', () => {
-  it('位于 /monitor 时仅「监控」高亮，「防护配置」不串台', () => {
-    renderAt('/monitor');
+  it('位于 /system-logs 时仅「系统日志」高亮，「系统」不串台', () => {
+    renderAt('/system-logs');
 
-    expect(navLinkByLabel('监控').getAttribute('data-active')).toBe('true');
-    expect(navLinkByLabel('防护配置').getAttribute('data-active')).toBeNull();
+    expect(navLinkByLabel('系统日志').getAttribute('data-active')).toBe('true');
+    expect(navLinkByLabel('系统').getAttribute('data-active')).toBeNull();
   });
 
-  it('位于 /protection 时仅「防护配置」高亮，不被「监控」串台（段精确匹配）', () => {
-    renderAt('/protection');
+  it('位于 /system 时仅「系统」高亮，不被「系统日志」串台（段精确匹配）', () => {
+    renderAt('/system');
 
-    expect(navLinkByLabel('防护配置').getAttribute('data-active')).toBe('true');
-    expect(navLinkByLabel('监控').getAttribute('data-active')).toBeNull();
+    expect(navLinkByLabel('系统').getAttribute('data-active')).toBe('true');
+    expect(navLinkByLabel('系统日志').getAttribute('data-active')).toBeNull();
   });
 
   it('位于子路径 /repositories/libs 时「仓库」仍高亮（按段匹配）', () => {
@@ -301,8 +301,8 @@ describe('AppLayout 匿名访客外壳（FR-95，不回归）', () => {
     '监控',
     '审计日志',
     '系统日志',
-    '防护配置',
     '设置',
+    '系统',
   ];
 
   it('匿名态页眉显示「登录」按钮，不显示用户名与登出', () => {

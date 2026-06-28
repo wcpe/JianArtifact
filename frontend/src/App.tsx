@@ -18,7 +18,6 @@ import { GroupsPage } from './pages/GroupsPage';
 import { TokensPage } from './pages/TokensPage';
 import { SearchPage } from './pages/SearchPage';
 import { ArtifactDetailPage } from './pages/ArtifactDetailPage';
-import { ProtectionConfigPage } from './pages/ProtectionConfigPage';
 import { UploadPage } from './pages/UploadPage';
 import { MonitorPage } from './pages/MonitorPage';
 import { AnalyticsPage } from './pages/AnalyticsPage';
@@ -80,7 +79,8 @@ function HomeRoute() {
  * 由 `AppLayout` 自身据登录态渲染匿名 / 登录页眉与导航。各子路由按层加守卫：
  * - 公开层（匿名可达，只读公开内容）：`/`（落地分流）、`/repositories`、`/repository`、`/search`、`/artifact`、`/licenses`。
  * - 需登录层（user+）：`/tokens`、`/upload`——`RequireAuth`。
- * - 需管理员层（admin）：`/users`、`/groups`、`/protection`、`/monitor`、`/analytics`、`/audit`、`/system-logs`、`/protection-monitor`、`/migration`、`/settings`——`RequireAuth` + `RequireAdmin`。
+ * - 需管理员层（admin）：`/users`、`/groups`、`/monitor`、`/analytics`、`/audit`、`/system-logs`、`/protection-monitor`、`/migration`、`/settings`、`/system`——`RequireAuth` + `RequireAdmin`。
+ * - `/protection` 重定向到 `/settings`（防护配置已并入设置页，FR-110）。
  */
 export function App() {
   return (
@@ -134,16 +134,8 @@ export function App() {
             </RequireAuth>
           }
         />
-        <Route
-          path="protection"
-          element={
-            <RequireAuth>
-              <RequireAdmin>
-                <ProtectionConfigPage />
-              </RequireAdmin>
-            </RequireAuth>
-          }
-        />
+        {/* FR-110：防护配置已并入「设置」页，独立页 /protection 重定向到设置页（保留旧链接可达） */}
+        <Route path="protection" element={<Navigate to="/settings" replace />} />
         <Route
           path="monitor"
           element={

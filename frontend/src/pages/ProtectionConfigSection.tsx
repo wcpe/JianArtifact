@@ -1,9 +1,12 @@
-// 防护配置管理页面（FR-80，仅管理员）：各防护维度启停 / 调参，保存即调
-// PATCH /api/v1/protection/config，校验通过即时生效、无须重启。
+// 防护配置节（FR-110，原 FR-80 防护配置页并入设置页）：作为「设置」页的一个锚点节渲染，
+// 各防护维度启停 / 调参，保存即调 PATCH /api/v1/protection/config，校验通过即时生效、无须重启。
 //
-// 数据来自后端 GET /api/v1/protection/config（仅管理员）。页面把七个维度（限流 / IP 名单 /
+// 数据来自后端 GET /api/v1/protection/config（仅管理员）。把七个维度（限流 / IP 名单 /
 // 异常封禁 / 慢速攻击 / CC 挑战 / WAF / 告警）拆为分区表单，编辑后整体回传。
-// 校验失败（如窗口为 0）后端返回 400，页面展示其错误文案，不改变现有生效配置。
+// 校验失败（如窗口为 0）后端返回 400，节内展示其错误文案，不改变现有生效配置。
+//
+// 与设置页的代理 / 动态配置「全局保存」相互独立：本节有自己的保存按钮与 PATCH 链路
+// （即时生效，区别于动态配置的「保存后重启生效」），不并入设置页全局保存。
 
 import { useEffect, useState } from 'react';
 import {
@@ -12,6 +15,7 @@ import {
   Text,
   Card,
   Group,
+  Badge,
   Switch,
   NumberInput,
   Textarea,
@@ -29,6 +33,7 @@ import * as api from '../api/endpoints';
 import type { ProtectionConfig, WafRuleConfig } from '../api/types';
 import { errorMessage } from '../lib/format';
 import { ErrorAlert } from '../components/ErrorAlert';
+import { density } from '../theme/density';
 
 /** 把字符串文本域按行解析为去空白、去空行的字符串数组。 */
 function linesToList(text: string): string[] {
@@ -50,7 +55,7 @@ function Section({
 }) {
   return (
     <Card withBorder padding="lg" radius="md">
-      <Title order={4}>{title}</Title>
+      <Title order={5}>{title}</Title>
       {description && (
         <Text size="sm" c="dimmed" mb="sm">
           {description}
@@ -68,8 +73,8 @@ const WAF_FIELDS = ['method', 'path', 'query', 'header'];
 const WAF_MATCH_TYPES = ['literal', 'wildcard', 'regex'];
 const WAF_ACTIONS = ['block', 'allow'];
 
-/** 防护配置管理页面。 */
-export function ProtectionConfigPage() {
+/** 防护配置节（嵌入设置页，FR-110）。 */
+export function ProtectionConfigSection() {
   const [config, setConfig] = useState<ProtectionConfig | null>(null);
   const [allowText, setAllowText] = useState('');
   const [denyText, setDenyText] = useState('');
@@ -89,23 +94,6 @@ export function ProtectionConfigPage() {
       .catch((err) => setError(errorMessage(err)))
       .finally(() => setLoading(false));
   }, []);
-
-  if (loading) {
-    return (
-      <Center h={200}>
-        <Loader />
-      </Center>
-    );
-  }
-
-  if (!config) {
-    return (
-      <Stack>
-        <Title order={2}>防护配置</Title>
-        {error && <ErrorAlert message={error} />}
-      </Stack>
-    );
-  }
 
   // 局部更新某维度的某字段（保持其余不变，整体可回传）
   function patch<K extends keyof ProtectionConfig>(key: K, value: ProtectionConfig[K]) {
@@ -135,6 +123,68 @@ export function ProtectionConfigPage() {
     }
   }
 
+  // 外层节卡片（id=protection，供锚点导航定位）：标题 + 即时生效徽标 + 内容。
+  return (
+    <Card component="section" id="protection" withBorder padding={density.cardPadding} radius="md">
+      <Group gap="xs" mb="xs">
+        <Title order={4}>防护配置</Title>
+        <Badge size="sm" color="green" variant="light">
+          保存后即时生效
+        </Badge>
+      </Group>
+      <Text size="sm" c="dimmed" mb="sm">
+        各七层防护维度的启停与调参，保存后即时生效、无须重启；阈值 / 名单 /
+        规则为本机内部配置，不外发。
+      </Text>
+
+      {loading ? (
+        <Center h={200}>
+          <Loader />
+        </Center>
+      ) : !config ? (
+        error && <ErrorAlert message={error} />
+      ) : (
+        <ProtectionForm
+          config={config}
+          allowText={allowText}
+          denyText={denyText}
+          saving={saving}
+          error={error}
+          saved={saved}
+          onAllowTextChange={setAllowText}
+          onDenyTextChange={setDenyText}
+          onPatch={patch}
+          onSave={handleSave}
+        />
+      )}
+    </Card>
+  );
+}
+
+/** 防护表单主体（配置已加载后渲染）。 */
+function ProtectionForm({
+  config,
+  allowText,
+  denyText,
+  saving,
+  error,
+  saved,
+  onAllowTextChange,
+  onDenyTextChange,
+  onPatch,
+  onSave,
+}: {
+  config: ProtectionConfig;
+  allowText: string;
+  denyText: string;
+  saving: boolean;
+  error: string | null;
+  saved: boolean;
+  onAllowTextChange: (v: string) => void;
+  onDenyTextChange: (v: string) => void;
+  onPatch: <K extends keyof ProtectionConfig>(key: K, value: ProtectionConfig[K]) => void;
+  onSave: () => void;
+}) {
   const rl = config.rate_limit;
   const ban = config.ban;
   const slow = config.slowloris;
@@ -144,11 +194,6 @@ export function ProtectionConfigPage() {
 
   return (
     <Stack>
-      <Title order={2}>防护配置</Title>
-      <Text c="dimmed">
-        各七层防护维度的启停与调参，保存后即时生效、无须重启；阈值 / 名单 /
-        规则为本机内部配置，不外发。
-      </Text>
       {error && <ErrorAlert message={error} />}
       {saved && <Text c="green">已保存，配置已即时生效。</Text>}
 
@@ -160,26 +205,28 @@ export function ProtectionConfigPage() {
         <Switch
           label="启用速率限制"
           checked={rl.enabled}
-          onChange={(e) => patch('rate_limit', { ...rl, enabled: e.currentTarget.checked })}
+          onChange={(e) => onPatch('rate_limit', { ...rl, enabled: e.currentTarget.checked })}
         />
         <Group grow>
           <NumberInput
             label="时间窗（秒）"
             min={1}
             value={rl.window_secs}
-            onChange={(v) => patch('rate_limit', { ...rl, window_secs: Number(v) || 0 })}
+            onChange={(v) => onPatch('rate_limit', { ...rl, window_secs: Number(v) || 0 })}
           />
           <NumberInput
             label="单 IP 每窗上限"
             min={0}
             value={rl.ip_max_requests}
-            onChange={(v) => patch('rate_limit', { ...rl, ip_max_requests: Number(v) || 0 })}
+            onChange={(v) => onPatch('rate_limit', { ...rl, ip_max_requests: Number(v) || 0 })}
           />
           <NumberInput
             label="单身份每窗上限"
             min={0}
             value={rl.identity_max_requests}
-            onChange={(v) => patch('rate_limit', { ...rl, identity_max_requests: Number(v) || 0 })}
+            onChange={(v) =>
+              onPatch('rate_limit', { ...rl, identity_max_requests: Number(v) || 0 })
+            }
           />
         </Group>
         <Group grow>
@@ -187,25 +234,25 @@ export function ProtectionConfigPage() {
             label="单仓库每窗上限（0=不启用）"
             min={0}
             value={rl.repo_max_requests}
-            onChange={(v) => patch('rate_limit', { ...rl, repo_max_requests: Number(v) || 0 })}
+            onChange={(v) => onPatch('rate_limit', { ...rl, repo_max_requests: Number(v) || 0 })}
           />
           <NumberInput
             label="单 IP 并发上限（0=不限）"
             min={0}
             value={rl.ip_max_concurrent}
-            onChange={(v) => patch('rate_limit', { ...rl, ip_max_concurrent: Number(v) || 0 })}
+            onChange={(v) => onPatch('rate_limit', { ...rl, ip_max_concurrent: Number(v) || 0 })}
           />
           <NumberInput
             label="单用户并发上限（0=不限）"
             min={0}
             value={rl.user_max_concurrent}
-            onChange={(v) => patch('rate_limit', { ...rl, user_max_concurrent: Number(v) || 0 })}
+            onChange={(v) => onPatch('rate_limit', { ...rl, user_max_concurrent: Number(v) || 0 })}
           />
           <NumberInput
             label="单仓库并发上限（0=不限）"
             min={0}
             value={rl.repo_max_concurrent}
-            onChange={(v) => patch('rate_limit', { ...rl, repo_max_concurrent: Number(v) || 0 })}
+            onChange={(v) => onPatch('rate_limit', { ...rl, repo_max_concurrent: Number(v) || 0 })}
           />
         </Group>
       </Section>
@@ -220,14 +267,14 @@ export function ProtectionConfigPage() {
           autosize
           minRows={2}
           value={allowText}
-          onChange={(e) => setAllowText(e.currentTarget.value)}
+          onChange={(e) => onAllowTextChange(e.currentTarget.value)}
         />
         <Textarea
           label="黑名单（每行一个 IP / CIDR）"
           autosize
           minRows={2}
           value={denyText}
-          onChange={(e) => setDenyText(e.currentTarget.value)}
+          onChange={(e) => onDenyTextChange(e.currentTarget.value)}
         />
       </Section>
 
@@ -239,26 +286,26 @@ export function ProtectionConfigPage() {
         <Switch
           label="启用异常封禁"
           checked={ban.enabled}
-          onChange={(e) => patch('ban', { ...ban, enabled: e.currentTarget.checked })}
+          onChange={(e) => onPatch('ban', { ...ban, enabled: e.currentTarget.checked })}
         />
         <Group grow>
           <NumberInput
             label="时间窗（秒）"
             min={1}
             value={ban.window_secs}
-            onChange={(v) => patch('ban', { ...ban, window_secs: Number(v) || 0 })}
+            onChange={(v) => onPatch('ban', { ...ban, window_secs: Number(v) || 0 })}
           />
           <NumberInput
             label="封禁阈值"
             min={1}
             value={ban.threshold}
-            onChange={(v) => patch('ban', { ...ban, threshold: Number(v) || 0 })}
+            onChange={(v) => onPatch('ban', { ...ban, threshold: Number(v) || 0 })}
           />
           <NumberInput
             label="封禁时长（秒）"
             min={1}
             value={ban.duration_secs}
-            onChange={(v) => patch('ban', { ...ban, duration_secs: Number(v) || 0 })}
+            onChange={(v) => onPatch('ban', { ...ban, duration_secs: Number(v) || 0 })}
           />
         </Group>
       </Section>
@@ -271,7 +318,7 @@ export function ProtectionConfigPage() {
         <Switch
           label="启用慢速攻击防护"
           checked={slow.enabled}
-          onChange={(e) => patch('slowloris', { ...slow, enabled: e.currentTarget.checked })}
+          onChange={(e) => onPatch('slowloris', { ...slow, enabled: e.currentTarget.checked })}
         />
         <Group grow>
           <NumberInput
@@ -279,20 +326,20 @@ export function ProtectionConfigPage() {
             min={1}
             value={slow.body_read_timeout_secs}
             onChange={(v) =>
-              patch('slowloris', { ...slow, body_read_timeout_secs: Number(v) || 0 })
+              onPatch('slowloris', { ...slow, body_read_timeout_secs: Number(v) || 0 })
             }
           />
           <NumberInput
             label="首块等待超时（秒）"
             min={1}
             value={slow.header_timeout_secs}
-            onChange={(v) => patch('slowloris', { ...slow, header_timeout_secs: Number(v) || 0 })}
+            onChange={(v) => onPatch('slowloris', { ...slow, header_timeout_secs: Number(v) || 0 })}
           />
           <NumberInput
             label="通用体上限（字节，0=不启用）"
             min={0}
             value={slow.max_body_bytes}
-            onChange={(v) => patch('slowloris', { ...slow, max_body_bytes: Number(v) || 0 })}
+            onChange={(v) => onPatch('slowloris', { ...slow, max_body_bytes: Number(v) || 0 })}
           />
         </Group>
       </Section>
@@ -305,13 +352,13 @@ export function ProtectionConfigPage() {
         <Switch
           label="启用 CC 挑战"
           checked={cc.enabled}
-          onChange={(e) => patch('cc_challenge', { ...cc, enabled: e.currentTarget.checked })}
+          onChange={(e) => onPatch('cc_challenge', { ...cc, enabled: e.currentTarget.checked })}
         />
         <Switch
           label="豁免已认证请求"
           checked={cc.exempt_authenticated}
           onChange={(e) =>
-            patch('cc_challenge', { ...cc, exempt_authenticated: e.currentTarget.checked })
+            onPatch('cc_challenge', { ...cc, exempt_authenticated: e.currentTarget.checked })
           }
         />
         <Group grow>
@@ -320,13 +367,13 @@ export function ProtectionConfigPage() {
             min={0}
             max={64}
             value={cc.difficulty}
-            onChange={(v) => patch('cc_challenge', { ...cc, difficulty: Number(v) || 0 })}
+            onChange={(v) => onPatch('cc_challenge', { ...cc, difficulty: Number(v) || 0 })}
           />
           <NumberInput
             label="令牌有效期（秒）"
             min={1}
             value={cc.ttl_secs}
-            onChange={(v) => patch('cc_challenge', { ...cc, ttl_secs: Number(v) || 0 })}
+            onChange={(v) => onPatch('cc_challenge', { ...cc, ttl_secs: Number(v) || 0 })}
           />
         </Group>
       </Section>
@@ -339,7 +386,7 @@ export function ProtectionConfigPage() {
         <Switch
           label="启用 WAF"
           checked={waf.enabled}
-          onChange={(e) => patch('waf', { ...waf, enabled: e.currentTarget.checked })}
+          onChange={(e) => onPatch('waf', { ...waf, enabled: e.currentTarget.checked })}
         />
         <Table>
           <Table.Thead>
@@ -356,7 +403,7 @@ export function ProtectionConfigPage() {
             {waf.rules.map((rule, idx) => {
               const updateRule = (next: Partial<WafRuleConfig>) => {
                 const rules = waf.rules.map((r, i) => (i === idx ? { ...r, ...next } : r));
-                patch('waf', { ...waf, rules });
+                onPatch('waf', { ...waf, rules });
               };
               return (
                 <Table.Tr key={idx}>
@@ -404,7 +451,7 @@ export function ProtectionConfigPage() {
                       variant="subtle"
                       aria-label="删除规则"
                       onClick={() =>
-                        patch('waf', { ...waf, rules: waf.rules.filter((_, i) => i !== idx) })
+                        onPatch('waf', { ...waf, rules: waf.rules.filter((_, i) => i !== idx) })
                       }
                     >
                       <IconTrash size={16} />
@@ -420,7 +467,7 @@ export function ProtectionConfigPage() {
             variant="light"
             leftSection={<IconPlus size={16} />}
             onClick={() =>
-              patch('waf', {
+              onPatch('waf', {
                 ...waf,
                 rules: [
                   ...waf.rules,
@@ -442,28 +489,28 @@ export function ProtectionConfigPage() {
         <Switch
           label="启用阈值告警"
           checked={alerts.enabled}
-          onChange={(e) => patch('alerts', { ...alerts, enabled: e.currentTarget.checked })}
+          onChange={(e) => onPatch('alerts', { ...alerts, enabled: e.currentTarget.checked })}
         />
         <Group grow>
           <NumberInput
             label="评估窗（秒）"
             min={1}
             value={alerts.window_secs}
-            onChange={(v) => patch('alerts', { ...alerts, window_secs: Number(v) || 0 })}
+            onChange={(v) => onPatch('alerts', { ...alerts, window_secs: Number(v) || 0 })}
           />
           <NumberInput
             label="限流被拒阈值"
             min={0}
             value={alerts.rate_limit_warn_threshold}
             onChange={(v) =>
-              patch('alerts', { ...alerts, rate_limit_warn_threshold: Number(v) || 0 })
+              onPatch('alerts', { ...alerts, rate_limit_warn_threshold: Number(v) || 0 })
             }
           />
           <NumberInput
             label="自动封禁阈值"
             min={0}
             value={alerts.ban_warn_threshold}
-            onChange={(v) => patch('alerts', { ...alerts, ban_warn_threshold: Number(v) || 0 })}
+            onChange={(v) => onPatch('alerts', { ...alerts, ban_warn_threshold: Number(v) || 0 })}
           />
         </Group>
         <Group grow>
@@ -472,7 +519,7 @@ export function ProtectionConfigPage() {
             min={0}
             value={alerts.cc_challenge_fail_warn_threshold}
             onChange={(v) =>
-              patch('alerts', { ...alerts, cc_challenge_fail_warn_threshold: Number(v) || 0 })
+              onPatch('alerts', { ...alerts, cc_challenge_fail_warn_threshold: Number(v) || 0 })
             }
           />
           <NumberInput
@@ -480,7 +527,7 @@ export function ProtectionConfigPage() {
             min={0}
             value={alerts.waf_block_warn_threshold}
             onChange={(v) =>
-              patch('alerts', { ...alerts, waf_block_warn_threshold: Number(v) || 0 })
+              onPatch('alerts', { ...alerts, waf_block_warn_threshold: Number(v) || 0 })
             }
           />
           <NumberInput
@@ -488,7 +535,7 @@ export function ProtectionConfigPage() {
             min={0}
             value={alerts.slowloris_warn_threshold}
             onChange={(v) =>
-              patch('alerts', { ...alerts, slowloris_warn_threshold: Number(v) || 0 })
+              onPatch('alerts', { ...alerts, slowloris_warn_threshold: Number(v) || 0 })
             }
           />
         </Group>
@@ -496,7 +543,7 @@ export function ProtectionConfigPage() {
 
       <Divider />
       <Group>
-        <Button onClick={handleSave} loading={saving}>
+        <Button onClick={onSave} loading={saving}>
           保存并即时生效
         </Button>
       </Group>

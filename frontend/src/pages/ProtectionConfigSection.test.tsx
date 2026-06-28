@@ -1,18 +1,19 @@
-// 防护配置管理页面组件测试（FR-80）：加载后展示各维度表单、保存调 PATCH、失败展示错误文案。
+// 防护配置节组件测试（FR-110，原 FR-80 防护配置页迁入）：加载后展示各维度表单、
+// 保存调 PATCH、失败展示错误文案；节自带 GET/PATCH /protection/config 与独立保存按钮。
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
-import { ProtectionConfigPage } from './ProtectionConfigPage';
+import { ProtectionConfigSection } from './ProtectionConfigSection';
 import * as api from '../api/endpoints';
 import { ApiError } from '../api/client';
 import type { ProtectionConfig } from '../api/types';
 
-/** 在 Mantine Provider 下渲染防护配置页。 */
-function renderPage() {
+/** 在 Mantine Provider 下渲染防护配置节。 */
+function renderSection() {
   return render(
     <MantineProvider>
-      <ProtectionConfigPage />
+      <ProtectionConfigSection />
     </MantineProvider>,
   );
 }
@@ -51,12 +52,12 @@ const 样例配置: ProtectionConfig = {
   },
 };
 
-describe('ProtectionConfigPage', () => {
+describe('ProtectionConfigSection', () => {
   afterEach(() => vi.restoreAllMocks());
 
   it('加载后展示各防护维度分区与当前值', async () => {
     vi.spyOn(api, 'getProtectionConfig').mockResolvedValue(样例配置);
-    renderPage();
+    renderSection();
 
     // 各维度分区标题
     await waitFor(() => expect(screen.getByText('速率限制')).toBeInTheDocument());
@@ -72,7 +73,7 @@ describe('ProtectionConfigPage', () => {
     const update = vi
       .spyOn(api, 'updateProtectionConfig')
       .mockImplementation((cfg) => Promise.resolve(cfg));
-    renderPage();
+    renderSection();
 
     await waitFor(() => expect(screen.getByText('速率限制')).toBeInTheDocument());
     fireEvent.click(screen.getByText('保存并即时生效'));
@@ -95,7 +96,7 @@ describe('ProtectionConfigPage', () => {
         '防护配置非法：限流时间窗（rate_limit.window_secs）必须大于 0',
       ),
     );
-    renderPage();
+    renderSection();
 
     await waitFor(() => expect(screen.getByText('速率限制')).toBeInTheDocument());
     fireEvent.click(screen.getByText('保存并即时生效'));
@@ -111,7 +112,7 @@ describe('ProtectionConfigPage', () => {
     vi.spyOn(api, 'getProtectionConfig').mockRejectedValue(
       new ApiError(403, 'forbidden', '无权执行该操作'),
     );
-    renderPage();
+    renderSection();
 
     await waitFor(() => expect(screen.getByText('无权执行该操作')).toBeInTheDocument());
   });
