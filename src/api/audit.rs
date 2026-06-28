@@ -671,6 +671,17 @@ pub struct Paginated {
     pub has_more: bool,
 }
 
+/// 把审计行的 target_repo 解析为仓库名（纯函数，便于穷举测试）。
+///
+/// 命中 `repo_names`（仓库 ID → 名）则替换为仓库名；否则原样返回——
+/// 涵盖仓库已删除、或该行本就存的是仓库名（格式 / docker 行）等情形，均不报错。
+fn resolve_target_repo_name(
+    target_repo: Option<String>,
+    repo_names: &std::collections::HashMap<String, String>,
+) -> Option<String> {
+    target_repo.map(|v| repo_names.get(&v).cloned().unwrap_or(v))
+}
+
 /// 列出审计日志（仅 Admin）：按时间倒序，支持动作 / 仓库 / 主体过滤与分页。
 pub async fn list_audit(
     State(state): State<AppState>,
@@ -690,7 +701,25 @@ pub async fn list_audit(
     };
     let total = state.meta.count_audit(&filter).await?;
     let rows = state.meta.query_audit(&filter).await?;
-    let items: Vec<AuditEntryDto> = rows.into_iter().map(AuditEntryDto::from).collect();
+
+    // 仓库 ID → 仓库名映射：管理类端点的 target_repo 存的是仓库 ID（UUID），
+    // 展示时解析为仓库名。一次性取全量仓库构表（避免逐行查库的 N+1），
+    // 查不到 / 已删除（或本就存名的格式 / docker 行）回落原值、不报错。
+    let repo_names: std::collections::HashMap<String, String> = state
+        .meta
+        .list_repositories()
+        .await?
+        .into_iter()
+        .map(|r| (r.id, r.name))
+        .collect();
+    let items: Vec<AuditEntryDto> = rows
+        .into_iter()
+        .map(|e| {
+            let mut dto = AuditEntryDto::from(e);
+            dto.target_repo = resolve_target_repo_name(dto.target_repo, &repo_names);
+            dto
+        })
+        .collect();
     let has_more = offset + (items.len() as i64) < total;
 
     Ok(Json(Paginated {
@@ -705,6 +734,84 @@ pub async fn list_audit(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::meta::{NewRepository, RepoType, Visibility};
+    use std::collections::HashMap;
+
+    #[tokio::test]
+    async fn 审计target_repo解析仓库id为名() {
+        // 复现：管理类审计行的 target_repo 存的是仓库 ID（UUID），展示应解析为仓库名。
+        let store = MetaStore::open_in_memory().await.unwrap();
+        let repo_id = store
+            .create_repository(NewRepository {
+                name: "libs",
+                format: "raw",
+                r#type: RepoType::Hosted,
+                visibility: Visibility::Private,
+                upstream_url: None,
+                upstream_auth_ref: None,
+            })
+            .await
+            .unwrap();
+        // 写一条 target_repo = 仓库 ID 的审计行（模拟 repo.delete 等管理事件）
+        store
+            .insert_audit_batch(&[NewAuditEntry {
+                actor: "admin".into(),
+                actor_kind: "session".into(),
+                request_id: None,
+                source_ip: None,
+                action: "repo.delete".into(),
+                target_repo: Some(repo_id.clone()),
+                target: None,
+                result: "success".into(),
+                detail: None,
+            }])
+            .await
+            .unwrap();
+
+        // 按 list_audit 的解析路径构表并解析：ID 应被解析为仓库名 "libs"
+        let repo_names: HashMap<String, String> = store
+            .list_repositories()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.id, r.name))
+            .collect();
+        let row = store
+            .query_audit(&AuditQuery {
+                limit: 10,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .remove(0);
+        let resolved = resolve_target_repo_name(row.target_repo, &repo_names);
+        assert_eq!(resolved.as_deref(), Some("libs"));
+    }
+
+    #[test]
+    fn 解析未知或已删仓库回落原值() {
+        // 查不到对应仓库（已删除 / 本就存名）时原样返回，不报错
+        let map: HashMap<String, String> = [("id-1".to_string(), "libs".to_string())]
+            .into_iter()
+            .collect();
+        // 命中 ID → 名
+        assert_eq!(
+            resolve_target_repo_name(Some("id-1".into()), &map).as_deref(),
+            Some("libs")
+        );
+        // 未命中（如已删除仓库的旧 ID）→ 原值
+        assert_eq!(
+            resolve_target_repo_name(Some("id-已删".into()), &map).as_deref(),
+            Some("id-已删")
+        );
+        // 本就是仓库名（格式 / docker 行）→ 不命中任何 ID，原样保留
+        assert_eq!(
+            resolve_target_repo_name(Some("libs".into()), &map).as_deref(),
+            Some("libs")
+        );
+        // None 保持 None
+        assert_eq!(resolve_target_repo_name(None, &map), None);
+    }
 
     #[test]
     fn 状态码归类结果() {
