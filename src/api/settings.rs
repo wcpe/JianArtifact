@@ -521,13 +521,16 @@ pub struct UpdatePatch {
     pub token: Option<String>,
 }
 
-/// 设置编辑请求体（整体替换网络代理 + 在线更新可调字段）。
-#[derive(Debug, Deserialize)]
+/// 设置编辑请求体：网络代理与在线更新两块均**可选**，按提供的块部分更新（FR-109 拆分后，
+/// 设置页只发 `network_proxy`、系统页只发 `update`；两块都给仍整体替换，向后兼容）。
+#[derive(Debug, Default, Deserialize)]
 pub struct SettingsPatch {
-    /// 网络代理编辑项。
-    pub network_proxy: NetworkProxyPatch,
-    /// 在线更新编辑项。
-    pub update: UpdatePatch,
+    /// 网络代理编辑项（缺省则不动代理）。
+    #[serde(default)]
+    pub network_proxy: Option<NetworkProxyPatch>,
+    /// 在线更新编辑项（缺省则不动在线更新）。
+    #[serde(default)]
+    pub update: Option<UpdatePatch>,
 }
 
 /// 把空白字符串归一为 `None`（前端清空输入即不配置该代理项）。
@@ -573,74 +576,75 @@ pub async fn patch_settings(
 ) -> Result<Json<SettingsView>, ApiError> {
     identity.require_admin()?;
 
-    // 取当前生效代理作 rebuild 的 `current`（用于密码三态「保留现有」判定）
-    let current_proxy = state.settings.network.snapshot().proxy.clone();
-    let np = patch.network_proxy;
-
-    // 组装新代理配置：每代理经 rebuild_proxy_url 据三字段 + 当前存储值重建含凭据的存储 URL；
-    // no_proxy 空白归一为不配置。凭据只入内存槽、不回显、不写回 TOML / 不入 DB / 不进日志。
-    let new_proxy = NetworkProxyConfig {
-        http: rebuild_proxy_url(&np.http, current_proxy.http.as_deref()),
-        https: rebuild_proxy_url(&np.https, current_proxy.https.as_deref()),
-        all: rebuild_proxy_url(&np.all, current_proxy.all.as_deref()),
-        no_proxy: normalize_blank(np.no_proxy),
-    };
-
-    // 组装新在线更新配置：token 三态——缺省保留、空串清空、非空设置
-    let current_update = state.settings.update();
-    let new_token = match patch.update.token {
-        None => current_update.token.clone(),
-        Some(t) if t.trim().is_empty() => None,
-        Some(t) => Some(t),
-    };
-    let new_update = EditableUpdate {
-        enabled: patch.update.enabled,
-        repo: patch.update.repo.trim().to_string(),
-        api_base_url: patch.update.api_base_url.trim().to_string(),
-        restart_mode: patch.update.restart_mode.trim().to_string(),
-        channel: patch.update.channel.trim().to_string(),
-        // 下载超时不在设置页可调，沿用当前值（与 ADR-0021 启动期口径一致）
-        download_timeout_secs: current_update.download_timeout_secs,
-        token: new_token,
-    };
-    // 先校验在线更新字段（非法即拒，不触碰现有生效值）
-    new_update
-        .validate()
-        .map_err(|reason| ApiError::BadRequest(format!("在线更新配置非法：{reason}")))?;
-
-    // 再热替换代理：锁外重建 client，失败即拒（现有 client 仍生效），不触碰在线更新槽。
-    // replace_proxy 取走所有权，故先 clone 一份留作落库（代理配置小、clone 廉价）。
-    let persist_proxy_cfg = new_proxy.clone();
-    state
-        .settings
-        .network
-        .replace_proxy(new_proxy)
-        .map_err(|reason| ApiError::BadRequest(format!("网络代理配置非法：{reason}")))?;
-    // 代理换槽成功后再换在线更新槽（已校验，不会失败）
-    state.settings.replace_update(new_update.clone());
-
-    // 持久化网络代理到 app_settings（ADR-0030）：拆分落库——URL 脱敏 host + 用户名明文 + 密码密文。
-    // 密钥经 JwtSigner::derive_key 域分隔派生（真源 .jwt_secret，绝不入库）。落库失败只 WARN、不阻断
-    // 热替换（即时生效优先，重启回落上次入库 / 文件）。空代理则删键，恢复为文件默认。
-    persist_proxy(&state, &persist_proxy_cfg).await;
-
-    // 持久化在线更新「非密钥字段」到 app_settings（FR-106，ADR-0028）：仅 enabled / repo /
-    // api_base_url / restart_mode / channel 落库（经 UpdateTunables 视图，token 自动剔除——token
-    // 真源是 env、绝不入库）。落库失败只 WARN，不阻断热替换（即时生效优先，重启回落上次入库 / 文件 / env）。
-    let tunables = crate::config_overlay::UpdateTunables::from_editable(&new_update);
-    match serde_json::to_string(&tunables) {
-        Ok(json) => {
-            if let Err(e) = state.meta.upsert_setting("update", &json).await {
-                tracing::warn!(原因 = %e, "在线更新非密钥配置落库失败，热替换仍生效（重启回落 env / 文件）");
-            }
+    // 预校验在线更新（若提供）：token 三态——缺省保留、空串清空、非空设置；非法即拒、不触碰任何现有生效值。
+    let new_update = match &patch.update {
+        Some(up) => {
+            let current_update = state.settings.update();
+            let new_token = match up.token.as_deref() {
+                None => current_update.token.clone(),
+                Some(t) if t.trim().is_empty() => None,
+                Some(t) => Some(t.to_string()),
+            };
+            let nu = EditableUpdate {
+                enabled: up.enabled,
+                repo: up.repo.trim().to_string(),
+                api_base_url: up.api_base_url.trim().to_string(),
+                restart_mode: up.restart_mode.trim().to_string(),
+                channel: up.channel.trim().to_string(),
+                // 下载超时不在面板可调，沿用当前值（与 ADR-0021 启动期口径一致）
+                download_timeout_secs: current_update.download_timeout_secs,
+                token: new_token,
+            };
+            nu.validate()
+                .map_err(|reason| ApiError::BadRequest(format!("在线更新配置非法：{reason}")))?;
+            Some(nu)
         }
-        Err(e) => {
-            tracing::warn!(原因 = %e, "在线更新配置序列化失败，跳过落库，热替换仍生效");
+        None => None,
+    };
+
+    // 应用网络代理（若提供）：每代理经 rebuild_proxy_url 据三字段 + 当前存储值重建含凭据的存储 URL；
+    // no_proxy 空白归一为不配置。锁外重建 client，失败即拒（现有 client 仍生效）。凭据只入内存槽、
+    // 不回显、不写回 TOML / 不入 DB / 不进日志。
+    if let Some(np) = &patch.network_proxy {
+        let current_proxy = state.settings.network.snapshot().proxy.clone();
+        let new_proxy = NetworkProxyConfig {
+            http: rebuild_proxy_url(&np.http, current_proxy.http.as_deref()),
+            https: rebuild_proxy_url(&np.https, current_proxy.https.as_deref()),
+            all: rebuild_proxy_url(&np.all, current_proxy.all.as_deref()),
+            no_proxy: normalize_blank(np.no_proxy.clone()),
+        };
+        // replace_proxy 取走所有权，故先 clone 一份留作落库（代理配置小、clone 廉价）。
+        let persist_proxy_cfg = new_proxy.clone();
+        state
+            .settings
+            .network
+            .replace_proxy(new_proxy)
+            .map_err(|reason| ApiError::BadRequest(format!("网络代理配置非法：{reason}")))?;
+        // 持久化网络代理到 app_settings（ADR-0030）：URL 脱敏 host + 用户名明文 + 密码密文；
+        // 密钥经 JwtSigner::derive_key 域分隔派生（真源 .jwt_secret，绝不入库）。落库失败只 WARN、
+        // 不阻断热替换。空代理则删键，恢复为文件默认。
+        persist_proxy(&state, &persist_proxy_cfg).await;
+    }
+
+    // 应用在线更新（若提供，已校验）：换槽即时生效；非密钥字段落库（FR-106，ADR-0028），token 自动剔除
+    // （真源是 env、绝不入库）。落库失败只 WARN，不阻断热替换（重启回落上次入库 / 文件 / env）。
+    if let Some(nu) = new_update {
+        state.settings.replace_update(nu.clone());
+        let tunables = crate::config_overlay::UpdateTunables::from_editable(&nu);
+        match serde_json::to_string(&tunables) {
+            Ok(json) => {
+                if let Err(e) = state.meta.upsert_setting("update", &json).await {
+                    tracing::warn!(原因 = %e, "在线更新非密钥配置落库失败，热替换仍生效（重启回落 env / 文件）");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(原因 = %e, "在线更新配置序列化失败，跳过落库，热替换仍生效");
+            }
         }
     }
 
     // 记一条管理动作日志（仅记动作，不含任何凭据明文）
-    tracing::info!(操作者 = %identity.actor_name(), "管理员更新了网络代理 / 在线更新设置，已即时生效");
+    tracing::info!(操作者 = %identity.actor_name(), "管理员更新了设置，已即时生效");
 
     Ok(Json(current_view(&state)))
 }
@@ -1158,6 +1162,76 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         assert!(settings.update().token.is_none(), "token 空串应清空");
+    }
+
+    // ===== FR-109：部分 PATCH（设置页只发 network_proxy、系统页只发 update）=====
+
+    #[tokio::test]
+    async fn 部分patch_仅update_不动代理() {
+        // 系统页迁入在线更新后只发 update 块、不带 network_proxy：应成功且仅改在线更新。
+        let (state, _dir) = 测试用状态().await;
+        let token = 签发令牌(&state, "admin", Role::Admin).await;
+        let settings = state.settings.clone();
+        let app = super::super::build_router(state);
+
+        let body = serde_json::json!({
+            "update": { "enabled": true, "repo": "wcpe/JianArtifact", "api_base_url": "https://api.github.com", "restart_mode": "exit", "channel": "stable" }
+        });
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri("/api/v1/settings")
+                    .header("Authorization", format!("Bearer {token}"))
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "缺 network_proxy 块应被接受");
+        assert!(settings.update().enabled, "在线更新应已更新");
+        assert_eq!(settings.update().restart_mode, "exit");
+    }
+
+    #[tokio::test]
+    async fn 部分patch_仅代理_不动update() {
+        // 设置页移除在线更新节后只发 network_proxy 块、不带 update：应成功且不动在线更新。
+        let (mut state, _dir) = 测试用状态().await;
+        let update = crate::config::UpdateConfig {
+            repo: "owner/keep".to_string(),
+            ..Default::default()
+        };
+        注入设置(&mut state, NetworkProxyConfig::default(), &update);
+        let token = 签发令牌(&state, "admin", Role::Admin).await;
+        let settings = state.settings.clone();
+        let app = super::super::build_router(state);
+
+        let body = serde_json::json!({
+            "network_proxy": { "http": { "url": "http://proxy.local:8080" }, "https": {}, "all": {}, "no_proxy": null }
+        });
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri("/api/v1/settings")
+                    .header("Authorization", format!("Bearer {token}"))
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "缺 update 块应被接受");
+        assert_eq!(
+            settings.update().repo,
+            "owner/keep",
+            "在线更新未提供应保持不动"
+        );
+        assert!(
+            settings.network.snapshot().proxy.http.is_some(),
+            "代理应已更新"
+        );
     }
 
     // ===== FR-100：rebuild_proxy_url 纯函数穷举 =====

@@ -33,6 +33,7 @@ import {
   IconFileText,
   IconShieldHalf,
   IconSettings,
+  IconServerCog,
   IconLogout,
   IconLogin,
   IconLayoutSidebarLeftExpand,
@@ -168,6 +169,8 @@ const NAV_SECTIONS: NavSection[] = [
         adminOnly: true,
       },
       { label: '设置', path: '/settings', icon: <IconSettings size={18} />, adminOnly: true },
+      // 系统管理页（FR-109，仅 Admin）：在线更新 + 重启 / 关闭
+      { label: '系统', path: '/system', icon: <IconServerCog size={18} />, adminOnly: true },
     ],
   },
 ];

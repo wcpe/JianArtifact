@@ -7,7 +7,7 @@
 ## 未发布版本
 
 ### 新增
-- 无
+- 系统管理页 + 手动重启 / 关闭（FR-109，ADR-0033，仅 Admin）：新建「系统」页（导航「系统·监控」段新增入口 + `/system` 路由，仅 Admin），用 tab 收纳系统级运维操作——① **在线更新**（FR-85/87 的检查 / 应用 / 回滚及其配置，自「设置」页整体迁入；设置页不再含在线更新节）② **重启** ③ **关闭**。后端新增**仅 Admin** 端点 `POST /api/v1/system/restart`（按运行时 `restart_mode` 重启、不换二进制，走自更新同一重启链路 ADR-0021/0032）与 `POST /api/v1/system/shutdown`（强制 `Exit` 优雅排空后退出、不自拉起）；两者复用 `RestartHandle::request_restart` + graceful-shutdown，**与自更新 apply / rollback 共用单飞互斥**（忙时 409「更新进行中」）、操作入审计（`system.restart` / `system.shutdown`）、前端**二次确认**弹窗；纯本地不出站，故**不受 `[update] enabled` 约束**（同回滚）。`PATCH /api/v1/settings` 改为**部分更新**（`network_proxy` 与 `update` 两块均可选，设置页只发代理、系统页只发更新；两块都给仍整体替换、向后兼容）。**运维前提**：关闭=进程优雅退出，若部署配了自动重启的进程管理器（systemd / docker）会被其再起——真正停机须经该管理器（ADR-0033）。真重启 / 真关闭依赖真机验证
 
 ### 变更
 - 无

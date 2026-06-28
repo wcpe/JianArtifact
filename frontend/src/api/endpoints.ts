@@ -41,6 +41,7 @@ import type {
   SearchHit,
   SettingsView,
   SettingsPatch,
+  SystemActionResponse,
   SystemLogEntryDto,
   SystemLogListParams,
   UpdateCheck,
@@ -578,6 +579,18 @@ export async function getHealth(): Promise<HealthInfo> {
 /** 回滚到上一版本：用持久备份还原旧二进制 → 触发重启（仅管理员；无备份时后端返回 409）。 */
 export function rollbackUpdate(): Promise<RollbackResponse> {
   return request<RollbackResponse>('/update/rollback', { method: 'POST' });
+}
+
+// —— 系统操作（FR-109，仅管理员） ——
+
+/** 重启服务：触发进程重启（仅管理员；更新进行中时后端返回 409）。 */
+export function systemRestart(): Promise<SystemActionResponse> {
+  return request<SystemActionResponse>('/system/restart', { method: 'POST' });
+}
+
+/** 关闭服务：停止进程（仅管理员；更新进行中时后端返回 409）。 */
+export function systemShutdown(): Promise<SystemActionResponse> {
+  return request<SystemActionResponse>('/system/shutdown', { method: 'POST' });
 }
 
 /** 对制品路径逐段编码（保留 `/` 分隔，避免破坏 catch-all 路径语义）。 */

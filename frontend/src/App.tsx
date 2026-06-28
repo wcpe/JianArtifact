@@ -27,6 +27,7 @@ import { SystemLogsPage } from './pages/SystemLogsPage';
 import { ProtectionMonitorPage } from './pages/ProtectionMonitorPage';
 import { MigrationPage } from './pages/MigrationPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { SystemPage } from './pages/SystemPage';
 import { LicensesPage } from './pages/LicensesPage';
 
 /** 登录守卫：未登录跳登录页（带回跳路径）；恢复会话期间显示加载态。 */
@@ -211,6 +212,17 @@ export function App() {
             <RequireAuth>
               <RequireAdmin>
                 <SettingsPage />
+              </RequireAdmin>
+            </RequireAuth>
+          }
+        />
+        {/* 系统管理页（FR-109，仅 Admin）：在线更新 + 重启 / 关闭 */}
+        <Route
+          path="system"
+          element={
+            <RequireAuth>
+              <RequireAdmin>
+                <SystemPage />
               </RequireAdmin>
             </RequireAuth>
           }

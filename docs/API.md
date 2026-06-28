@@ -383,6 +383,24 @@
 - **响应**：`200`，体 `{ "status": "已回滚，正在重启" }`。返回后服务排空在途请求并按 `restart_mode` 重启。
 - **错误**：`401` 未认证；`403` 非管理员；`409` 无可回滚的备份版本（从未成功升级过或备份缺失）/ 已有自更新在途（「更新进行中」）；`500` 本地替换失败。
 
+### 系统重启（仅 Admin，FR-109）
+
+- **方法 / 路径**：`POST /api/v1/system/restart`
+- **请求**：无请求体。仅管理员可调用。
+- **行为**：置位重启请求触发优雅停机，排空在途请求后由 `main` 据运行时 `restart_mode`（`self` 原地 `exec` 拉起 / `exit` 交进程管理器）**重启进程，不换二进制**（复用 ADR-0021/0032 自更新重启链路）。纯本地操作、不出站，**不受 `[update] enabled` 约束**。
+- **并发单飞**：与 apply / rollback **共用**进程级单飞互斥，忙时 `409`「更新进行中」。
+- **响应**：`200`，体 `{ "status": "正在重启" }`。
+- **错误**：`401` 未认证；`403` 非管理员；`409` 已有进程级变更在途（「更新进行中」）；`500` 无法定位当前可执行文件。
+
+### 系统关闭（仅 Admin，FR-109）
+
+- **方法 / 路径**：`POST /api/v1/system/shutdown`
+- **请求**：无请求体。仅管理员可调用。
+- **行为**：置位重启请求（强制 `RestartMode::Exit`）触发优雅停机，排空在途请求后**进程退出、不自拉起**。**运维前提（ADR-0033）**：若部署配了自动重启的进程管理器（systemd `Restart=always` / docker `restart: always`），进程会被其再起——真正停机须经该管理器（`systemctl stop` 等）。纯本地操作、不出站，**不受 `[update] enabled` 约束**。
+- **并发单飞**：与 apply / rollback / restart **共用**单飞互斥，忙时 `409`「更新进行中」。
+- **响应**：`200`，体 `{ "status": "正在关闭" }`。
+- **错误**：`401` 未认证；`403` 非管理员；`409` 已有进程级变更在途；`500` 无法定位当前可执行文件。
+
 ### 读取设置聚合（仅 Admin，FR-87）
 
 - **方法 / 路径**：`GET /api/v1/settings`
@@ -395,7 +413,8 @@
 ### 编辑设置（仅 Admin，FR-88，运行时热替换）
 
 - **方法 / 路径**：`PATCH /api/v1/settings`
-- **请求**：仅管理员可调用。JSON 体 `{ "network_proxy": { "http", "https", "no_proxy" }, "update": { "enabled", "repo", "api_base_url", "restart_mode", "channel", "token"? } }`。
+- **请求**：仅管理员可调用。JSON 体 `{ "network_proxy"?: { "http", "https", "no_proxy" }, "update"?: { "enabled", "repo", "api_base_url", "restart_mode", "channel", "token"? } }`。
+  - **部分更新（FR-109）**：`network_proxy` 与 `update` 两块**均可选**——只提供哪块就只改哪块（设置页只发 `network_proxy`、系统页只发 `update`）；两块都给则整体替换，向后兼容。
   - `network_proxy` 各项为字符串或 `null`；空串 / 空白视为不配置（清空）。代理 URL 可含 `user:pass@` 凭据。
   - `update.channel`（FR-89）：更新通道，仅允许 `stable` / `prerelease`。
   - `update.token` 三态：**缺省 / `null`** 保留现有 token 不变；**空串 `""`** 清空 token；**非空串**设置为新 token。

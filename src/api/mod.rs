@@ -63,6 +63,7 @@ mod search;
 /// 设置端点（FR-87/88）；`pub` 以暴露代理加密落库 / 启动恢复纯函数给装配层（ADR-0030）。
 pub mod settings;
 mod slowloris;
+mod system;
 mod system_logs;
 mod tokens;
 mod update;
@@ -464,6 +465,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/update/check", get(update::check_update))
         .route("/update/apply", post(update::apply_update))
         .route("/update/rollback", post(update::rollback_update))
+        .route("/system/restart", post(system::system_restart))
+        .route("/system/shutdown", post(system::system_shutdown))
         .route(
             "/settings",
             get(settings::get_settings).patch(settings::patch_settings),

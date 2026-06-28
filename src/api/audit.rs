@@ -475,6 +475,9 @@ fn classify_management(method: &Method, rest: &str) -> ClassifiedEvent {
         // 在线更新 apply / rollback
         ["update", "apply"] if method == Method::POST => simple("update.apply"),
         ["update", "rollback"] if method == Method::POST => simple("update.rollback"),
+        // 系统重启 / 关闭（FR-109，ADR-0033）
+        ["system", "restart"] if method == Method::POST => simple("system.restart"),
+        ["system", "shutdown"] if method == Method::POST => simple("system.shutdown"),
         // 其余未显式归类的非读路径：按方法兜底留痕，不漏记
         _ => simple(fallback_action(method)),
     }
@@ -891,6 +894,15 @@ mod tests {
         assert_eq!(
             c(Method::POST, "/api/v1/update/rollback").unwrap().action,
             "update.rollback"
+        );
+        // 系统重启 / 关闭（FR-109，ADR-0033）
+        assert_eq!(
+            c(Method::POST, "/api/v1/system/restart").unwrap().action,
+            "system.restart"
+        );
+        assert_eq!(
+            c(Method::POST, "/api/v1/system/shutdown").unwrap().action,
+            "system.shutdown"
         );
         // 登出 / 刷新
         assert_eq!(

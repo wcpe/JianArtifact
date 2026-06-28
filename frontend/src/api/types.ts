@@ -678,10 +678,13 @@ export interface UpdatePatch {
   token?: string | null;
 }
 
-/** 设置编辑请求体（PATCH /api/v1/settings，整体替换网络代理 + 在线更新可调字段）。 */
+/**
+ * 设置编辑请求体（PATCH /api/v1/settings，支持部分更新）。
+ * network_proxy 与 update 两块均可选：只发哪块就只改哪块（设置页只发 network_proxy、系统页只发 update）。
+ */
 export interface SettingsPatch {
-  network_proxy: NetworkProxyPatch;
-  update: UpdatePatch;
+  network_proxy?: NetworkProxyPatch;
+  update?: UpdatePatch;
 }
 
 // —— 动态配置面板（FR-106，仅管理员，保存后重启生效；对齐后端 src/api/dynamic_config.rs） ——
@@ -771,6 +774,11 @@ export interface HealthInfo {
 
 /** 回滚成功响应（POST /api/v1/update/rollback，FR-104）。 */
 export interface RollbackResponse {
+  status: string;
+}
+
+/** 系统操作响应（POST /api/v1/system/restart、/system/shutdown，仅 Admin，FR-109）。 */
+export interface SystemActionResponse {
   status: string;
 }
 
