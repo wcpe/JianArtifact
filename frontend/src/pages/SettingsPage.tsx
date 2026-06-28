@@ -48,6 +48,13 @@ const SECTIONS = [
   { id: 'protection', label: '防护配置' },
 ] as const;
 
+/**
+ * 各锚点节卡片的滚动外边距（增强 FR-92）：点击导航走 `scrollIntoView({block:'start'})` 时，
+ * 目标节顶部会贴到视口顶端、被 alt 外壳的固定页眉遮住；以页眉高度作 `scroll-margin-top`，
+ * 让目标节停在页眉下方而非藏到其后（与 sticky 导航的 `top` 偏移成对，单一真源 density.headerHeight）。
+ */
+const SECTION_SCROLL_STYLE = { scrollMarginTop: density.headerHeight } as const;
+
 /** 单代理三字段（URL / 用户名 / 密码）一组（FR-100）。密码框始终空、不回显；已配置时标徽标 + 提供清除密码。 */
 interface ProxyFieldsProps {
   title: string;
@@ -308,14 +315,17 @@ export function SettingsPage() {
       {error && <ErrorAlert message={error} />}
 
       {/* FR-103：左侧 sticky 锚点子导航 + 右侧单页分节。
-          导航固定置顶（随右侧内容滚动常驻可见）；右侧各节纵向排列、不强制等高（短节不留空白）。 */}
+          导航固定置顶（随右侧内容滚动常驻可见）；右侧各节纵向排列、不强制等高（短节不留空白）。
+          滚动祖先是文档（AppShell.Main 不自带 overflow）；FR-92 alt 外壳的页眉 `position: fixed`
+          覆盖视口顶部，故 sticky `top` 取页眉高度（density.headerHeight），让导航贴在页眉下方常驻、
+          不被固定页眉遮住上方的 tab（修 sticky 滚动后失效）。 */}
       <Flex gap="md" align="flex-start">
         {/* —— 左侧 sticky 锚点导航 —— */}
         <Box
           component="nav"
           aria-label="设置分节导航"
           visibleFrom="sm"
-          style={{ position: 'sticky', top: 0, width: 180, flexShrink: 0 }}
+          style={{ position: 'sticky', top: density.headerHeight, width: 180, flexShrink: 0 }}
         >
           {SECTIONS.map((s) => (
             <NavLink
@@ -332,7 +342,14 @@ export function SettingsPage() {
         {/* —— 右侧单页分节 —— */}
         <Stack gap={density.gridSpacing} style={{ flex: 1, minWidth: 0 }}>
           {/* —— 网络代理节 —— */}
-          <Card component="section" id="proxy" withBorder padding={density.cardPadding} radius="md">
+          <Card
+            component="section"
+            id="proxy"
+            withBorder
+            padding={density.cardPadding}
+            radius="md"
+            style={SECTION_SCROLL_STYLE}
+          >
             <Title order={4}>网络代理</Title>
             <Text size="sm" c="dimmed" mb="sm">
               统一出站代理（回源 / 迁移 / 漏洞库 / OIDC / 在线更新共用）。每代理可填用户名 + 密码；
@@ -400,6 +417,7 @@ export function SettingsPage() {
             withBorder
             padding={density.cardPadding}
             radius="md"
+            style={SECTION_SCROLL_STYLE}
           >
             <Group gap="xs" mb="xs">
               <Title order={4}>限制与配额</Title>
@@ -434,6 +452,7 @@ export function SettingsPage() {
             withBorder
             padding={density.cardPadding}
             radius="md"
+            style={SECTION_SCROLL_STYLE}
           >
             <Group gap="xs" mb="xs">
               <Title order={4}>可观测性</Title>
@@ -542,7 +561,14 @@ export function SettingsPage() {
           </Card>
 
           {/* —— 漏洞库节 —— */}
-          <Card component="section" id="vuln" withBorder padding={density.cardPadding} radius="md">
+          <Card
+            component="section"
+            id="vuln"
+            withBorder
+            padding={density.cardPadding}
+            radius="md"
+            style={SECTION_SCROLL_STYLE}
+          >
             <Group gap="xs" mb="xs">
               <Title order={4}>漏洞库</Title>
               <Badge size="sm" color="yellow" variant="light">
@@ -602,7 +628,14 @@ export function SettingsPage() {
           </Card>
 
           {/* —— 安全 / 会话节 —— */}
-          <Card component="section" id="auth" withBorder padding={density.cardPadding} radius="md">
+          <Card
+            component="section"
+            id="auth"
+            withBorder
+            padding={density.cardPadding}
+            radius="md"
+            style={SECTION_SCROLL_STYLE}
+          >
             <Group gap="xs" mb="xs">
               <Title order={4}>安全 / 会话</Title>
               <Badge size="sm" color="yellow" variant="light">

@@ -442,6 +442,36 @@ describe('SettingsPage', () => {
     expect(restartBadges[0]).toBeVisible();
   });
 
+  // ===== Bug-1：锚点导航 sticky 滚动后失效（增强 FR-92）=====
+  // FR-92 alt 外壳的页眉 position:fixed 覆盖视口顶部；sticky 导航若 top:0 会park 到页眉之后、
+  // 上方 tab 被遮（滚到底看不见）。回归：sticky 顶部偏移须为页眉高度、各节带 scroll-margin-top。
+
+  it('Bug-1：sticky 锚点导航顶部偏移为页眉高度（不再 top:0 被固定页眉遮挡）', async () => {
+    vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
+    桩动态配置();
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
+    const nav = screen.getByRole('navigation', { name: '设置分节导航' });
+    // 仍是 sticky，但 top 取页眉高度（56px）而非 0，避免藏到固定页眉之后
+    expect(nav).toHaveStyle({ position: 'sticky', top: '56px' });
+    expect(nav).not.toHaveStyle({ top: '0px' });
+  });
+
+  it('Bug-1：各锚点节带 scroll-margin-top（点击滚动停在固定页眉下方）', async () => {
+    vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
+    桩动态配置();
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
+    // 抽查首节（proxy）与并入的防护节（protection）均有 scroll-margin-top=页眉高度
+    for (const id of ['proxy', 'protection']) {
+      const section = document.getElementById(id);
+      expect(section).not.toBeNull();
+      expect(section).toHaveStyle({ scrollMarginTop: '56px' });
+    }
+  });
+
   // ===== FR-110：防护配置并入设置页（新增锚点节 + 节内自洽保存）=====
 
   it('FR-110：左侧锚点导航含「防护配置」一项', async () => {

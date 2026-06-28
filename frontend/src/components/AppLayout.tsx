@@ -314,7 +314,7 @@ export function AppLayout() {
       // alt 布局：侧边栏（navbar）占满整列高度、从最顶端起（logo 置于侧栏最上），
       // 页眉（header）只压在右侧内容区上方、不再横跨顶部占据侧边栏顶部（参 JianVideo 版式）
       layout="alt"
-      header={{ height: 56 }}
+      header={{ height: density.headerHeight }}
       navbar={{ width: navbarWidth, breakpoint: 'sm', collapsed: { mobile: !mobileOpened } }}
       padding={density.mainPadding}
     >

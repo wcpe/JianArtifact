@@ -17,6 +17,12 @@ export const density = {
   /** 内容区主 padding：较默认 md 收紧为 sm，提升信息密度。 */
   mainPadding: 'sm' as MantineSpacing,
   /**
+   * 页眉高度（FR-92 alt 外壳）：单一真源，供 AppShell.Header 高度与页内 sticky 元素的
+   * 顶部偏移共用。alt 布局下页眉 `position: fixed` 覆盖视口顶部，页内 sticky 锚点须以此为
+   * `top` 偏移、避免被固定页眉遮住（修 FR-92 后设置页锚点导航 sticky 失效）。单位 px。
+   */
+  headerHeight: 56,
+  /**
    * 内容区最大宽度（FR-92）：内容居中并限定最大宽度，使卡片 / 新内容出现时
    * 不再把整体布局撑变形（用户反馈「出来个东西就变形」）。单位 px。
    */

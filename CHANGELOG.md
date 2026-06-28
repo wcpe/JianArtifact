@@ -14,7 +14,7 @@
 - 无
 
 ### 修复
-- 无
+- 设置页锚点导航 sticky 滚动后失效（增强 FR-92，仅 Admin）：FR-92 外壳改 `AppShell layout="alt"` 后页眉变为 `position: fixed`、覆盖视口顶部，而设置页左侧锚点子导航 sticky 仍用 `top: 0`，滚动后导航被固定页眉遮住、上方 tab 看不见。修复把 sticky 顶部偏移改为页眉高度（新增单一真源 `density.headerHeight`，AppShell 页眉高度与页内 sticky 偏移共用），并给各锚点节加 `scroll-margin-top`，使点击导航滚动时目标节停在页眉下方而非藏到其后
 
 ### 移除
 - 无

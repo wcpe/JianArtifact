@@ -124,8 +124,16 @@ export function ProtectionConfigSection() {
   }
 
   // 外层节卡片（id=protection，供锚点导航定位）：标题 + 即时生效徽标 + 内容。
+  // scrollMarginTop 取页眉高度：点击锚点滚到本节时停在固定页眉下方、不被遮住（增强 FR-92，与设置页各节一致）。
   return (
-    <Card component="section" id="protection" withBorder padding={density.cardPadding} radius="md">
+    <Card
+      component="section"
+      id="protection"
+      withBorder
+      padding={density.cardPadding}
+      radius="md"
+      style={{ scrollMarginTop: density.headerHeight }}
+    >
       <Group gap="xs" mb="xs">
         <Title order={4}>防护配置</Title>
         <Badge size="sm" color="green" variant="light">
