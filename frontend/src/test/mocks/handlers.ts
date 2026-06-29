@@ -10,22 +10,31 @@ import type {
   AclDto,
   CreateRepositoryRequest,
   CreateUserRequest,
+  DynamicConfig,
+  GroupAclView,
+  GroupView,
+  OnlinePullJob,
   Paginated,
   Permission,
+  ProtectionConfig,
   SearchHit,
   UpdateRepositoryRequest,
   UpdateUserRequest,
 } from '../../api/types';
 import {
   dashboardSummary,
+  groupMemberViews,
   hostMetrics,
+  metricPoints,
   nextId,
+  protectionStatus,
   state,
   toArtifactDetail,
   toArtifactDto,
   toTokenView,
   toUserInfo,
   toUserView,
+  usageAnalytics,
   type MockUser,
 } from './store';
 
@@ -401,6 +410,363 @@ export const handlers = [
     const guard = requireUser(request, { admin: true });
     if (isResponse(guard)) return guard;
     return HttpResponse.json(state.settings);
+  }),
+
+  // —— 动态配置（仅管理员，FR-106；有状态 PATCH） ——
+  http.get(`${API}/settings/dynamic`, ({ request }) => {
+    const guard = requireUser(request, { admin: true });
+    if (isResponse(guard)) return guard;
+    return HttpResponse.json(state.dynamicConfig);
+  }),
+
+  http.patch(`${API}/settings/dynamic`, async ({ request }) => {
+    const guard = requireUser(request, { admin: true });
+    if (isResponse(guard)) return guard;
+    const body = (await request.json()) as DynamicConfig;
+    // 整体替换（与后端「全量写入」语义一致）。
+    state.dynamicConfig = body;
+    return HttpResponse.json(state.dynamicConfig);
+  }),
+
+  // —— 在线更新检查 / 应用 / 回滚（仅管理员，FR-85/104） ——
+  http.get(`${API}/update/check`, ({ request }) => {
+    const guard = requireUser(request, { admin: true });
+    if (isResponse(guard)) return guard;
+    // Mock 下「已是最新」：当前 = 最新、无可用更新。
+    const current = state.settings.current_version;
+    return HttpResponse.json({
+      current_version: current,
+      latest_version: current,
+      update_available: false,
+      asset_name: '',
+      notes: '',
+    });
+  }),
+
+  http.post(`${API}/update/apply`, ({ request }) => {
+    const guard = requireUser(request, { admin: true });
+    if (isResponse(guard)) return guard;
+    // Mock 下不真重启，仅回报形态正确的成功响应。
+    return HttpResponse.json({ status: 'ok', new_version: state.settings.current_version });
+  }),
+
+  http.post(`${API}/update/rollback`, ({ request }) => {
+    const guard = requireUser(request, { admin: true });
+    if (isResponse(guard)) return guard;
+    return HttpResponse.json({ status: 'ok' });
+  }),
+
+  // —— 系统操作（仅管理员，FR-109；Mock 下不真重启 / 关闭） ——
+  http.post(`${API}/system/restart`, ({ request }) => {
+    const guard = requireUser(request, { admin: true });
+    if (isResponse(guard)) return guard;
+    return HttpResponse.json({ status: 'ok' });
+  }),
+
+  http.post(`${API}/system/shutdown`, ({ request }) => {
+    const guard = requireUser(request, { admin: true });
+    if (isResponse(guard)) return guard;
+    return HttpResponse.json({ status: 'ok' });
+  }),
+
+  // —— 防护配置（仅管理员，FR-79；有状态 PATCH 整体替换） ——
+  http.get(`${API}/protection/config`, ({ request }) => {
+    const guard = requireUser(request, { admin: true });
+    if (isResponse(guard)) return guard;
+    return HttpResponse.json(state.protection);
+  }),
+
+  http.patch(`${API}/protection/config`, async ({ request }) => {
+    const guard = requireUser(request, { admin: true });
+    if (isResponse(guard)) return guard;
+    const body = (await request.json()) as ProtectionConfig;
+    state.protection = body;
+    return HttpResponse.json(state.protection);
+  }),
+
+  // —— 防护状态 / 告警（仅管理员，FR-78） ——
+  http.get(`${API}/protection/status`, ({ request }) => {
+    const guard = requireUser(request, { admin: true });
+    if (isResponse(guard)) return guard;
+    return HttpResponse.json(protectionStatus());
+  }),
+
+  http.get(`${API}/protection/alerts`, ({ request }) => {
+    const guard = requireUser(request, { admin: true });
+    if (isResponse(guard)) return guard;
+    const url = new URL(request.url);
+    const offset = Number(url.searchParams.get('offset') ?? 0);
+    const limit = Number(url.searchParams.get('limit') ?? 20);
+    // Mock 下无告警：返回空分页。
+    return HttpResponse.json({ items: [], total: 0, offset, limit, has_more: false });
+  }),
+
+  // —— 使用分析（仅管理员，FR-99） ——
+  http.get(`${API}/analytics/usage`, ({ request }) => {
+    const guard = requireUser(request, { admin: true });
+    if (isResponse(guard)) return guard;
+    const url = new URL(request.url);
+    const top = url.searchParams.has('top') ? Number(url.searchParams.get('top')) : undefined;
+    return HttpResponse.json(usageAnalytics(top));
+  }),
+
+  // —— 指标时序（仅管理员，FR-105） ——
+  http.get(`${API}/monitor/metrics`, ({ request }) => {
+    const guard = requireUser(request, { admin: true });
+    if (isResponse(guard)) return guard;
+    const url = new URL(request.url);
+    const metric = url.searchParams.get('metric') ?? '';
+    const from = url.searchParams.has('from') ? Number(url.searchParams.get('from')) : undefined;
+    const to = url.searchParams.has('to') ? Number(url.searchParams.get('to')) : undefined;
+    const step = url.searchParams.has('step') ? Number(url.searchParams.get('step')) : undefined;
+    return HttpResponse.json({ metric, points: metricPoints(metric, { from, to, step }) });
+  }),
+
+  // —— 系统运行日志（仅管理员，FR-107；tail 最新在前） ——
+  http.get(`${API}/system-logs`, ({ request }) => {
+    const guard = requireUser(request, { admin: true });
+    if (isResponse(guard)) return guard;
+    const url = new URL(request.url);
+    const level = url.searchParams.get('level');
+    const offset = Number(url.searchParams.get('offset') ?? 0);
+    const limit = Number(url.searchParams.get('limit') ?? 20);
+    const filtered = level
+      ? state.systemLogs.filter((l) => l.level === level.toUpperCase())
+      : state.systemLogs;
+    return HttpResponse.json({
+      items: filtered.slice(offset, offset + limit),
+      total: filtered.length,
+      offset,
+      limit,
+      has_more: offset + limit < filtered.length,
+    });
+  }),
+
+  // —— 用户组管理（仅管理员，FR-49；有状态 CRUD） ——
+  http.get(`${API}/groups`, ({ request }) => {
+    const guard = requireUser(request, { admin: true });
+    if (isResponse(guard)) return guard;
+    return HttpResponse.json(state.groups);
+  }),
+
+  http.post(`${API}/groups`, async ({ request }) => {
+    const guard = requireUser(request, { admin: true });
+    if (isResponse(guard)) return guard;
+    const { name } = (await request.json()) as { name: string };
+    if (state.groups.some((g) => g.name === name)) {
+      return error(409, 'conflict', '组名已存在');
+    }
+    const group: GroupView = {
+      id: nextId('g'),
+      name,
+      created_at: new Date().toISOString(),
+    };
+    state.groups.push(group);
+    state.groupMembers.set(group.id, []);
+    return HttpResponse.json(group);
+  }),
+
+  http.delete(`${API}/groups/:id`, ({ request, params }) => {
+    const guard = requireUser(request, { admin: true });
+    if (isResponse(guard)) return guard;
+    const idx = state.groups.findIndex((g) => g.id === params.id);
+    if (idx === -1) return error(404, 'not_found', '组不存在');
+    const [removed] = state.groups.splice(idx, 1);
+    // 级联清成员与组 ACL（与后端语义一致）。
+    state.groupMembers.delete(removed.id);
+    for (const [repoId, list] of state.groupAcls) {
+      state.groupAcls.set(
+        repoId,
+        list.filter((a) => a.group_id !== removed.id),
+      );
+    }
+    return new HttpResponse(null, { status: 204 });
+  }),
+
+  http.get(`${API}/groups/:id/members`, ({ request, params }) => {
+    const guard = requireUser(request, { admin: true });
+    if (isResponse(guard)) return guard;
+    if (!state.groups.some((g) => g.id === params.id)) {
+      return error(404, 'not_found', '组不存在');
+    }
+    return HttpResponse.json(groupMemberViews(params.id as string));
+  }),
+
+  http.post(`${API}/groups/:id/members`, async ({ request, params }) => {
+    const guard = requireUser(request, { admin: true });
+    if (isResponse(guard)) return guard;
+    if (!state.groups.some((g) => g.id === params.id)) {
+      return error(404, 'not_found', '组不存在');
+    }
+    const { user_id } = (await request.json()) as { user_id: string };
+    const members = state.groupMembers.get(params.id as string) ?? [];
+    if (members.includes(user_id)) {
+      return error(409, 'conflict', '用户已在组内');
+    }
+    members.push(user_id);
+    state.groupMembers.set(params.id as string, members);
+    return new HttpResponse(null, { status: 204 });
+  }),
+
+  http.delete(`${API}/groups/:id/members/:userId`, ({ request, params }) => {
+    const guard = requireUser(request, { admin: true });
+    if (isResponse(guard)) return guard;
+    const members = state.groupMembers.get(params.id as string) ?? [];
+    state.groupMembers.set(
+      params.id as string,
+      members.filter((uid) => uid !== params.userId),
+    );
+    return new HttpResponse(null, { status: 204 });
+  }),
+
+  // —— 仓库组 ACL（仅管理员，FR-49；有状态） ——
+  http.get(`${API}/repositories/:id/group-acl`, ({ request, params }) => {
+    const guard = requireUser(request, { admin: true });
+    if (isResponse(guard)) return guard;
+    return HttpResponse.json(state.groupAcls.get(params.id as string) ?? []);
+  }),
+
+  http.post(`${API}/repositories/:id/group-acl`, async ({ request, params }) => {
+    const guard = requireUser(request, { admin: true });
+    if (isResponse(guard)) return guard;
+    const body = (await request.json()) as { group_id: string; permission: Permission };
+    const entry: GroupAclView = {
+      id: nextId('gacl'),
+      group_id: body.group_id,
+      permission: body.permission,
+    };
+    const list = state.groupAcls.get(params.id as string) ?? [];
+    list.push(entry);
+    state.groupAcls.set(params.id as string, list);
+    return HttpResponse.json(entry);
+  }),
+
+  http.delete(`${API}/repositories/:id/group-acl/:aclId`, ({ request, params }) => {
+    const guard = requireUser(request, { admin: true });
+    if (isResponse(guard)) return guard;
+    const list = state.groupAcls.get(params.id as string) ?? [];
+    state.groupAcls.set(
+      params.id as string,
+      list.filter((a) => a.id !== params.aclId),
+    );
+    return new HttpResponse(null, { status: 204 });
+  }),
+
+  // —— Nexus 迁移（仅管理员，FR-81/82/83/91；列表 / 预览 / 任务控制） ——
+  http.get(`${API}/migrate/jobs`, ({ request }) => {
+    const guard = requireUser(request, { admin: true });
+    if (isResponse(guard)) return guard;
+    const summaries = state.migrationJobs.map((j) => ({
+      job_id: j.job_id,
+      phase: j.phase,
+      total_assets: j.total_assets,
+      done_assets: j.done_assets,
+      migrated: j.migrated,
+      skipped: j.skipped,
+      current_repo: j.current_repo,
+      paused: j.paused,
+    }));
+    return HttpResponse.json(summaries);
+  }),
+
+  http.get(`${API}/migrate/jobs/:id`, ({ request, params }) => {
+    const guard = requireUser(request, { admin: true });
+    if (isResponse(guard)) return guard;
+    const job = state.migrationJobs.find((j) => j.job_id === params.id);
+    if (!job) return error(404, 'not_found', '任务不存在');
+    return HttpResponse.json(job);
+  }),
+
+  http.post(`${API}/migrate/jobs/:id/cancel`, ({ request, params }) => {
+    const guard = requireUser(request, { admin: true });
+    if (isResponse(guard)) return guard;
+    const job = state.migrationJobs.find((j) => j.job_id === params.id);
+    if (!job) return error(404, 'not_found', '任务不存在');
+    job.phase = 'cancelled';
+    job.paused = false;
+    return new HttpResponse(null, { status: 204 });
+  }),
+
+  http.post(`${API}/migrate/jobs/:id/pause`, ({ request, params }) => {
+    const guard = requireUser(request, { admin: true });
+    if (isResponse(guard)) return guard;
+    const job = state.migrationJobs.find((j) => j.job_id === params.id);
+    if (!job) return error(404, 'not_found', '任务不存在');
+    job.paused = true;
+    job.phase = 'paused';
+    return new HttpResponse(null, { status: 204 });
+  }),
+
+  http.post(`${API}/migrate/jobs/:id/resume`, ({ request, params }) => {
+    const guard = requireUser(request, { admin: true });
+    if (isResponse(guard)) return guard;
+    const job = state.migrationJobs.find((j) => j.job_id === params.id);
+    if (!job) return error(404, 'not_found', '任务不存在');
+    job.paused = false;
+    job.phase = 'downloading';
+    return new HttpResponse(null, { status: 204 });
+  }),
+
+  http.post(`${API}/migrate/nexus/preview`, ({ request }) => {
+    const guard = requireUser(request, { admin: true });
+    if (isResponse(guard)) return guard;
+    // 在线预览：返回示例可迁移仓库列表。
+    return HttpResponse.json([
+      {
+        name: 'maven-central',
+        format: 'maven2',
+        type: 'proxy',
+        upstream_url: 'https://repo1.maven.org/maven2/',
+      },
+      { name: 'maven-internal', format: 'maven2', type: 'hosted', upstream_url: null },
+    ]);
+  }),
+
+  http.post(`${API}/migrate/nexus/offline/preview`, ({ request }) => {
+    const guard = requireUser(request, { admin: true });
+    if (isResponse(guard)) return guard;
+    return HttpResponse.json([
+      {
+        repo_name: 'maven-internal',
+        blob_count: 1,
+        blobs: [{ blob_name: 'com/example/app-1.0.0.jar', sha1: 'a1b2c3', size: 2048 }],
+      },
+    ]);
+  }),
+
+  http.post(`${API}/migrate/nexus/proxy/migrate`, ({ request }) => {
+    const guard = requireUser(request, { admin: true });
+    if (isResponse(guard)) return guard;
+    return HttpResponse.json({ repos: [], skipped_repos: [] });
+  }),
+
+  http.post(`${API}/migrate/nexus/hosted/migrate`, ({ request }) => {
+    const guard = requireUser(request, { admin: true });
+    if (isResponse(guard)) return guard;
+    return HttpResponse.json({ repos: [], skipped_repos: [] });
+  }),
+
+  http.post(`${API}/migrate/nexus/online/migrate`, ({ request }) => {
+    const guard = requireUser(request, { admin: true });
+    if (isResponse(guard)) return guard;
+    // 发起异步任务：建一个已完成的任务并返回句柄（202 Accepted）。
+    const jobId = nextId('job');
+    const job: OnlinePullJob = {
+      job_id: jobId,
+      phase: 'done',
+      total_assets: 0,
+      done_assets: 0,
+      migrated: 0,
+      skipped: 0,
+      current_repo: null,
+      current_path: null,
+      paused: false,
+      repos: [],
+      skipped_repos: [],
+      error: null,
+    };
+    state.migrationJobs.push(job);
+    return HttpResponse.json({ job_id: jobId }, { status: 202 });
   }),
 
   http.get(`${API}/licenses`, () => {
