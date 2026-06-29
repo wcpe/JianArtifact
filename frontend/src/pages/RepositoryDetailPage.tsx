@@ -239,15 +239,15 @@ function BrowseTab({ repo }: { repo: RepositoryDto }) {
       h="calc(100vh - 220px)"
       mih={360}
     >
-      {/* 左：文件树（主栏，占更大宽度，独立滚动） */}
+      {/* 左：文件树（固定窄边栏，长名/深层经左右+上下滚动查看；详情占剩余大头，FR-115 真机调整） */}
       <Card
         withBorder
         padding="sm"
         radius="md"
-        flex={2}
-        style={{ minWidth: 0, display: 'flex', flexDirection: 'column' }}
+        w={340}
+        style={{ flexShrink: 0, display: 'flex', flexDirection: 'column' }}
       >
-        <ScrollArea h="100%" data-testid="browse-tree-scroll">
+        <ScrollArea h="100%" type="auto" data-testid="browse-tree-scroll">
           <FileTree
             repo={repo}
             artifacts={artifacts}
@@ -378,8 +378,8 @@ function TreeLevel({
                 <Group gap={4} wrap="nowrap" align="flex-start">
                   {open ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />}
                   {open ? <IconFolderOpen size={16} /> : <IconFolder size={16} />}
-                  {/* 文件名不截断（FR-115）：去掉 truncate，目录名可换行看全 */}
-                  <Text size="sm" style={{ wordBreak: 'break-all' }}>
+                  {/* 文件名不截断（FR-115）：不换行，超出窄边栏经横向滚动看全名 */}
+                  <Text size="sm" style={{ whiteSpace: 'nowrap' }}>
                     {e.name}
                   </Text>
                 </Group>
@@ -424,8 +424,8 @@ function TreeLevel({
             >
               <Group gap={6} wrap="nowrap" align="flex-start">
                 <FormatIcon format={repo.format} />
-                {/* 文件名不截断（FR-115）：去掉 truncate，全名可换行辨认（.jar/.jar.md5 等） */}
-                <Text size="sm" style={{ wordBreak: 'break-all' }}>
+                {/* 文件名不截断（FR-115）：不换行，超出窄边栏经横向滚动看全名（.jar/.jar.md5 等） */}
+                <Text size="sm" style={{ whiteSpace: 'nowrap' }}>
                   {e.name}
                 </Text>
               </Group>
