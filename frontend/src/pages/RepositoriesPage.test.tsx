@@ -86,7 +86,9 @@ describe('RepositoriesPage 走 MSW 的契约强断言（FR-116）', () => {
     // 初始为空态
     await waitFor(() => expect(state.repositories).toHaveLength(0));
 
-    await user.click(screen.getByRole('button', { name: '创建仓库' }));
+    // 等工具栏「创建仓库」按钮随初始加载完成渲染后再点（findBy 异步等待）：
+    // 空列表无行文本可锚定，若用同步 getByRole 在较慢环境（CI Node 20）会在加载态尚未结束时取不到按钮而失败。
+    await user.click(await screen.findByRole('button', { name: '创建仓库' }));
     await user.type(await screen.findByPlaceholderText('如 maven-releases'), 'demo-raw');
     await user.click(screen.getByRole('button', { name: '创建' }));
 
