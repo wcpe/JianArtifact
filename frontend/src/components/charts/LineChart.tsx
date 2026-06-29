@@ -1,13 +1,16 @@
 // 手搓时序折线图（FR-99）：纯 SVG，零依赖。
-// 把一串时序点（ts/value）归一到 viewBox 画折线 + 各数据点圆点；
-// 悬停某点经受控 state 显示浮层文案（该点本地时间 + 格式化取值），空数据走空态文案。
-// 颜色经 CSS 变量适配主题，不引图表库。
+// 把一串时序点（ts/value）归一到 viewBox 画折线 + 半透明面积；点稀疏时画逐点圆点、点密集
+// （5s 轮询累积）时省略圆点只留干净折线 + 悬停标记，避免圆点堆成密集团块。
+// 悬停经单一覆盖区取最近点显示竖直参考线 + 浮层文案，空数据走空态文案。颜色经 CSS 变量适配主题。
 
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Box, Text } from '@mantine/core';
 import type { MetricPoint } from '../../api/types';
 import { VIEW_WIDTH, computePlot, nearestIndex } from './lineChartGeometry';
+
+/** 逐点圆点的最大点数：超过则只画折线 + 悬停标记，避免密集团块（FR-99 优化）。 */
+const MARKER_LIMIT = 40;
 
 /** 折线图属性。 */
 interface LineChartProps {
@@ -53,7 +56,12 @@ export function LineChart({
   // 单点时把同一坐标复制一份，让 polyline 退化为可见的水平线段（单坐标 polyline 不渲染）
   const linePoints = plot.length === 1 ? [plot[0], plot[0]] : plot;
   const polyline = linePoints.map((pt) => `${pt.x.toFixed(1)},${pt.y.toFixed(1)}`).join(' ');
+  // 点稀疏才逐点画圆点，密集时省略避免团块（FR-99 优化）。
+  const showMarkers = plot.length <= MARKER_LIMIT;
+  // 折线下方半透明面积填充，观感更像监控图。
+  const areaPoints = `${linePoints[0].x.toFixed(1)},${height} ${polyline} ${linePoints[linePoints.length - 1].x.toFixed(1)},${height}`;
   const hoveredPoint = hovered !== null ? points[hovered] : null;
+  const hoveredPlot = hovered !== null ? plot[hovered] : null;
 
   // 单一透明覆盖矩形承载 hover：按鼠标位置取最近点，消除逐点命中圆空隙导致的浮层闪烁
   function handleMove(e: React.MouseEvent<SVGRectElement>) {
@@ -86,6 +94,13 @@ export function LineChart({
           onMouseMove={handleMove}
           style={{ cursor: 'pointer' }}
         />
+        {/* 折线下方半透明面积填充（观感优化，FR-99） */}
+        <polygon
+          points={areaPoints}
+          fill="var(--mantine-primary-color-filled)"
+          fillOpacity={0.12}
+          stroke="none"
+        />
         {/* 折线 */}
         <polyline
           points={polyline}
@@ -94,21 +109,45 @@ export function LineChart({
           strokeWidth={2}
           vectorEffect="non-scaling-stroke"
         />
-        {/* 数据点圆点（叠在覆盖区之上）：以 aria-label 承载该点取值，测试 / 读屏可查询；
-            mouseenter 给出精确命中点，高亮当前悬停点 */}
-        {plot.map((pt, i) => (
-          <circle
-            key={pt.ts}
-            cx={pt.x}
-            cy={pt.y}
-            r={hovered === i ? 4 : 2.5}
-            fill="var(--mantine-primary-color-filled)"
-            aria-label={pointLabel(points[i], valueFormat)}
+        {/* 悬停竖直参考线 */}
+        {hoveredPlot && (
+          <line
+            x1={hoveredPlot.x}
+            y1={0}
+            x2={hoveredPlot.x}
+            y2={height}
+            stroke="var(--mantine-color-dimmed)"
+            strokeWidth={1}
+            strokeDasharray="3 3"
             vectorEffect="non-scaling-stroke"
-            onMouseEnter={() => setHovered(i)}
-            style={{ cursor: 'pointer' }}
           />
-        ))}
+        )}
+        {/* 数据点圆点：仅点稀疏时逐点画（密集时省略避免团块）；以 aria-label 承载取值供测试 / 读屏 */}
+        {showMarkers &&
+          plot.map((pt, i) => (
+            <circle
+              key={pt.ts}
+              cx={pt.x}
+              cy={pt.y}
+              r={hovered === i ? 4 : 2.5}
+              fill="var(--mantine-primary-color-filled)"
+              aria-label={pointLabel(points[i], valueFormat)}
+              vectorEffect="non-scaling-stroke"
+              onMouseEnter={() => setHovered(i)}
+              style={{ cursor: 'pointer' }}
+            />
+          ))}
+        {/* 密集模式下只高亮当前悬停点 */}
+        {!showMarkers && hoveredPlot && (
+          <circle
+            cx={hoveredPlot.x}
+            cy={hoveredPlot.y}
+            r={4}
+            fill="var(--mantine-primary-color-filled)"
+            aria-label={hoveredPoint ? pointLabel(hoveredPoint, valueFormat) : undefined}
+            vectorEffect="non-scaling-stroke"
+          />
+        )}
       </svg>
       {/* 悬停浮层：外层固定占位一行（min-height）避免文案出现 / 消失时高度跳动引发抖动；
           浮层文案仅悬停时渲染（未悬停无 status 节点，契约不变） */}

@@ -18,20 +18,27 @@ export interface PlotPoint {
 
 /**
  * 把时序点归一为绘图坐标（纯函数，便于穷举测试）。
- * x 按索引等距铺满 [0, VIEW_WIDTH]（避免不均匀 ts 间隔挤压），单点居中；
- * y 按 [min,max] 线性映射到 [PAD, height-PAD]，全等值（span=0）落中线避免除零 / NaN。
+ * x 按索引等距铺满 [0, VIEW_WIDTH]（避免不均匀 ts 间隔挤压），单点居中。
+ *
+ * y 轴**以 0 为基线**（多数监控指标非负）、峰值上留 10% 余量后线性映射到 [PAD, height-PAD]——
+ * 即按数值**量级**而非[min,max]极差作图（FR-99 优化）：避免把微小波动（如 CPU 54~56%）拉伸到
+ * 全高显示成「噪声草丛」，近乎恒定的序列呈近水平线。含负值时把下界扩到该负值；全零 / 全等值时
+ * 给最小跨度（lo+1）防除零 / NaN。
  */
 export function computePlot(points: MetricPoint[], height: number): PlotPoint[] {
   const values = points.map((p) => p.value);
   const minV = Math.min(...values);
   const maxV = Math.max(...values);
-  const span = maxV - minV;
+  // 下界取 0 与数据最小值的较小者（非负数据基线即 0；有负值则纳入）；上界在峰值上留 10% 余量。
+  const lo = Math.min(0, minV);
+  const rawRange = maxV - lo;
+  const hi = rawRange > 0 ? maxV + rawRange * 0.1 : lo + 1;
+  const span = hi - lo;
   const denom = points.length > 1 ? points.length - 1 : 1;
 
   return points.map((p, i) => {
     const x = points.length > 1 ? (i / denom) * VIEW_WIDTH : VIEW_WIDTH / 2;
-    // span 为 0（全等值）时画在中线，避免除零
-    const ratio = span > 0 ? (p.value - minV) / span : 0.5;
+    const ratio = span > 0 ? (p.value - lo) / span : 0.5;
     const y = height - PAD - ratio * (height - 2 * PAD);
     return { x, y, ts: p.ts, value: p.value };
   });

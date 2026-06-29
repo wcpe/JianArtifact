@@ -518,7 +518,8 @@ export function metricPoints(
   const base = metric.length * 3;
   const points: MetricPoint[] = [];
   for (let ts = from, i = 0; ts <= to; ts += step, i += 1) {
-    points.push({ ts, value: base + (i % 5) * 2 });
+    // 平滑确定性波形（正弦，非锯齿）——让 Mock 模式监控折线接近真实「平缓波动」而非噪声锯齿。
+    points.push({ ts, value: Math.round(base + Math.sin(i / 6) * 4) });
   }
   return points;
 }
