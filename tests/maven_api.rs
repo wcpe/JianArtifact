@@ -1039,3 +1039,113 @@ async fn maven_deploy时间戳snapshot_服务端重生成snapshot_metadata() {
     assert!(xml.contains("<extension>jar</extension>"));
     assert!(xml.contains("<extension>pom</extension>"));
 }
+
+// ---------- FR-123 Web 上传页 Maven 适配（坐标自动回填 + 可选 pom 多文件） ----------
+
+#[tokio::test]
+async fn maven_web上传jar_坐标留空时从内嵌pom自动识别() {
+    let fx = Fixture::new().await;
+    let writer = fx.seed_user("writer", "pw", Role::User).await;
+    let rid = fx.seed_maven_repo("maven-hosted", Visibility::Public).await;
+    fx.seed_acl(&rid, &writer, Permission::Write).await;
+    let auth = format!("Bearer {}", fx.login_token("writer", "pw").await);
+
+    let pom = r#"<project><groupId>com.example</groupId><artifactId>autolib</artifactId><version>3.0</version></project>"#;
+    let jar = build_jar("com.example", "autolib", Some(pom));
+    // 仅上传文件，不带 group_id / artifact_id / version 表单字段
+    let parts = vec![file_part("file", "autolib-3.0.jar", &jar)];
+    let resp = fx
+        .router()
+        .oneshot(upload_req(&rid, Some(&auth), &parts))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    // 服务端据 jar 内嵌 pom 自动识别坐标，制品落于正确 GAV 路径
+    let (status, jbytes) = send_bytes(
+        fx.router(),
+        empty_req(
+            "GET",
+            "/maven-hosted/com/example/autolib/3.0/autolib-3.0.jar",
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "应据内嵌 pom 落于 GAV 路径");
+    assert_eq!(jbytes, jar);
+
+    // artifact 级 metadata 也据自动识别坐标生成
+    let (status, mbytes) = send_bytes(
+        fx.router(),
+        empty_req(
+            "GET",
+            "/maven-hosted/com/example/autolib/maven-metadata.xml",
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(String::from_utf8(mbytes)
+        .unwrap()
+        .contains("<version>3.0</version>"));
+}
+
+#[tokio::test]
+async fn maven_web上传jar无坐标无内嵌pom_返回400() {
+    let fx = Fixture::new().await;
+    let writer = fx.seed_user("writer", "pw", Role::User).await;
+    let rid = fx.seed_maven_repo("maven-hosted", Visibility::Public).await;
+    fx.seed_acl(&rid, &writer, Permission::Write).await;
+    let auth = format!("Bearer {}", fx.login_token("writer", "pw").await);
+
+    // 无内嵌 pom 的 jar + 不填坐标 → 无法识别坐标 → 400
+    let jar = build_jar("com.example", "x", None);
+    let parts = vec![file_part("file", "mystery.jar", &jar)];
+    let resp = fx
+        .router()
+        .oneshot(upload_req(&rid, Some(&auth), &parts))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn maven_web上传jar附用户pom_采用用户pom不被覆盖() {
+    let fx = Fixture::new().await;
+    let writer = fx.seed_user("writer", "pw", Role::User).await;
+    let rid = fx.seed_maven_repo("maven-hosted", Visibility::Public).await;
+    fx.seed_acl(&rid, &writer, Permission::Write).await;
+    let auth = format!("Bearer {}", fx.login_token("writer", "pw").await);
+
+    // 无内嵌 pom 的 jar + 用户显式附带的 pom 文件 + 手填坐标
+    let jar = build_jar("com.example", "withpom", None);
+    let user_pom =
+        b"<project><modelVersion>4.0.0</modelVersion><description>user pom</description></project>"
+            .to_vec();
+    let parts = vec![
+        text_part("group_id", "com.example"),
+        text_part("artifact_id", "withpom"),
+        text_part("version", "1.0"),
+        file_part("file", "withpom-1.0.jar", &jar),
+        file_part("pom", "withpom-1.0.pom", &user_pom),
+    ];
+    let resp = fx
+        .router()
+        .oneshot(upload_req(&rid, Some(&auth), &parts))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    // pom 为用户上传内容（client-priority），不被服务端最小 pom 覆盖
+    let (status, bytes) = send_bytes(
+        fx.router(),
+        empty_req(
+            "GET",
+            "/maven-hosted/com/example/withpom/1.0/withpom-1.0.pom",
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(bytes, user_pom, "应保留用户上传 pom");
+}

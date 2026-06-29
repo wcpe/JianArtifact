@@ -10,6 +10,16 @@ export default {
   mavenGroupId: 'groupId',
   mavenArtifactId: 'artifactId',
   mavenVersion: 'version',
+  // Maven 坐标可留空，由后端从 jar 内嵌 pom 自动识别（FR-123/120）
+  mavenCoordsHint:
+    '坐标可留空：上传含内嵌 pom 的 jar 时，服务端将自动识别 groupId / artifactId / version',
+  // 可选 pom 文件（FR-123，pom 三级兜底「用户上传」层）
+  mavenPomLabel: 'pom 文件（可选）',
+  mavenPomPlaceholder: '可附带 {artifactId}-{version}.pom',
+  mavenPomHint: '不附带时，服务端按 jar 内嵌 pom 或最小 pom 自动兜底',
+  // 快照版提示（FR-122）：服务端生成时间戳唯一版本
+  mavenSnapshotHint:
+    '快照版：服务端将生成时间戳唯一版本（如 1.0-20260629.135300-1）并维护快照元数据',
   // npm 坐标字段
   npmName: '包名（name）',
   npmNamePlaceholder: 'lodash 或 @scope/pkg',

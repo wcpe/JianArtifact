@@ -49,10 +49,8 @@ pub async fn upload_artifact(
         .ok_or_else(|| ApiError::BadRequest("缺少上传文件字段 file".to_string()))?;
     let file_name = file.filename.clone().unwrap_or_default();
 
-    // 据仓库格式拼仓库内路径（不同格式取不同表单字段）
-    let path = resolve_upload_path(&repo.format, &fields, &file_name)?;
-    // FR-122：Maven 快照主构件 Web 上传 → 改写为唯一时间戳存储路径（非快照 / sidecar / pom 不变）
-    let path = maybe_mint_snapshot_path(&state, &repo, &fields, &file_name, path).await?;
+    // 据仓库格式拼仓库内路径：Maven 缺坐标时回退 jar 内嵌 pom（FR-123）、快照铸造时间戳唯一版本（FR-122）
+    let path = build_upload_path(&state, &repo, &fields, &file_name, &file.bytes).await?;
 
     // 经格式处理器归一化坐标（拒目录穿越 / 空路径）
     let format = state
@@ -76,6 +74,8 @@ pub async fn upload_artifact(
     // Maven：服务端上传无客户端逐文件 PUT 的 sidecar，故为主构件补齐四校验和 sidecar，
     // 使产出制品与 mvn deploy 一致、可被官方客户端独立 GET 校验和并校验（FR-69）。
     if repo.format == FORMAT_MAVEN && !MavenFormat::is_sidecar(&coords.path) {
+        // 可选用户上传 pom（FR-123，pom 三级兜底「用户上传」层）：先落库，使后续兜底视其已存在而不覆盖。
+        store_user_pom_if_present(&state, &repo, format, &coords.path, &fields).await?;
         write_maven_checksum_sidecars(&state, &repo, format, &outcome.record).await?;
         // 写入后维护服务端权威派生文件（FR-121/122，ADR-0037）：pom 三级兜底（持有主构件字节，可提取 jar
         // 内嵌 pom，否则生成最小 pom）+ 重生成 artifact 级 maven-metadata.xml；快照构件另生成快照级 metadata。
@@ -105,36 +105,126 @@ pub async fn upload_artifact(
     Ok(status.into_response())
 }
 
-/// 对 Maven 快照主构件 Web 上传，把落库路径改写为唯一时间戳版本（FR-122）。
+/// 据仓库格式与表单字段拼出制品在仓库内的存储路径。
 ///
-/// 仅作用于 Maven 格式、非 sidecar、非 pom 自身、且 `version` 以 `-SNAPSHOT` 结尾的主构件；
-/// 其余原样返回。时间戳与构建号由 `maven_publish::mint_snapshot_path` 据真实 now 与目录现状铸造。
-async fn maybe_mint_snapshot_path(
+/// - Maven：坐标 `group_id` / `artifact_id` / `version` 可留空，缺失时回退 jar 内嵌 pom 自动识别（FR-123）；
+///   快照主构件铸造唯一时间戳路径（FR-122）。
+/// - npm：表单 `name` / `version` + 上传文件名 → `{name}/-/{文件名}`（不解包 .tgz）。
+/// - Raw：表单 `path` 即仓库内路径。
+/// - 其余格式：不支持经通用上传发布（400）。
+async fn build_upload_path(
     state: &AppState,
     repo: &RepositoryRecord,
     fields: &[UploadField],
     file_name: &str,
-    path: String,
+    main_bytes: &[u8],
 ) -> Result<String, ApiError> {
-    if repo.format != FORMAT_MAVEN || MavenFormat::is_sidecar(&path) || file_name.ends_with(".pom")
-    {
-        return Ok(path);
+    match repo.format.as_str() {
+        FORMAT_MAVEN => {
+            let (group_id, artifact_id, version) = resolve_maven_coords(fields, main_bytes)?;
+            let base = MavenFormat::artifact_path(&group_id, &artifact_id, &version, file_name);
+            // 快照主构件（非 sidecar / 非 pom 自身）→ 铸造唯一时间戳版本（FR-122）
+            if MavenFormat::is_snapshot_version(&version)
+                && !file_name.ends_with(".pom")
+                && !MavenFormat::is_sidecar(&base)
+            {
+                return super::maven_publish::mint_snapshot_path(
+                    state,
+                    repo,
+                    &group_id,
+                    &artifact_id,
+                    &version,
+                    file_name,
+                )
+                .await;
+            }
+            Ok(base)
+        }
+        FORMAT_NPM => {
+            let name = required_text(fields, "name")?;
+            // version 在 Web 上传中校验存在（用于人工核对），路径以 name + 文件名定位 tarball
+            let _version = required_text(fields, "version")?;
+            Ok(NpmFormat::tarball_path(&name, file_name))
+        }
+        FORMAT_RAW => {
+            let path = required_text(fields, "path")?;
+            Ok(path)
+        }
+        other => Err(ApiError::BadRequest(format!(
+            "格式 {other} 不支持经通用上传端点发布（仅 maven / npm / raw）"
+        ))),
     }
-    let version = required_text(fields, "version")?;
-    if !MavenFormat::is_snapshot_version(&version) {
-        return Ok(path);
+}
+
+/// 解析 Maven 坐标（FR-123）：表单 `group_id` / `artifact_id` / `version` 为主，缺失项回退 jar 内嵌 pom；
+/// 仍无法补齐（无表单且 jar 无内嵌 pom）则 400，提示填写坐标或上传含内嵌 pom 的 jar。
+fn resolve_maven_coords(
+    fields: &[UploadField],
+    main_bytes: &[u8],
+) -> Result<(String, String, String), ApiError> {
+    let mut group_id = optional_text(fields, "group_id");
+    let mut artifact_id = optional_text(fields, "artifact_id");
+    let mut version = optional_text(fields, "version");
+
+    // 任一坐标缺失 → 尝试从 jar 内嵌 pom 提取补齐（复用 FR-120）
+    if group_id.is_none() || artifact_id.is_none() || version.is_none() {
+        if let Some(gav) = MavenFormat::parse_gav_from_jar(main_bytes) {
+            group_id = group_id.or(Some(gav.group_id));
+            artifact_id = artifact_id.or(Some(gav.artifact_id));
+            version = version.or(Some(gav.version));
+        }
     }
-    let group_id = required_text(fields, "group_id")?;
-    let artifact_id = required_text(fields, "artifact_id")?;
-    super::maven_publish::mint_snapshot_path(
-        state,
-        repo,
-        &group_id,
-        &artifact_id,
-        &version,
-        file_name,
-    )
-    .await
+
+    match (group_id, artifact_id, version) {
+        (Some(g), Some(a), Some(v)) => Ok((g, a, v)),
+        _ => Err(ApiError::BadRequest(
+            "缺少 Maven 坐标且无法从 jar 内嵌 pom 识别：请填写 groupId / artifactId / version，或上传含内嵌 pom 的 jar".to_string(),
+        )),
+    }
+}
+
+/// 可选用户上传 pom（FR-123）：表单含 `pom` 文件字段时，按主构件同名落 `.pom` + 四校验和 sidecar。
+///
+/// 落在主构件旁同基名的 `.pom`（release `{a}-{v}.pom`；快照 `{a}-{base}-{ts}-{bn}.pom`）；先于
+/// 服务端 pom 兜底写入，使 [`maven_publish::maintain_after_maven_write`] 视其已存在而不覆盖（client-priority）。
+async fn store_user_pom_if_present(
+    state: &AppState,
+    repo: &RepositoryRecord,
+    format: &dyn Format,
+    main_path: &str,
+    fields: &[UploadField],
+) -> Result<(), ApiError> {
+    // 主构件本身是 pom 则无需另存
+    if main_path.ends_with(".pom") {
+        return Ok(());
+    }
+    let Some(pom) = fields
+        .iter()
+        .find(|f| f.name == "pom" && f.filename.is_some())
+    else {
+        return Ok(());
+    };
+    let pom_path = derive_pom_path(main_path);
+    let coords = format.parse_path(&pom_path)?;
+    let outcome = state
+        .artifacts
+        .put_hosted(
+            repo,
+            format,
+            &coords,
+            &pom.bytes[..],
+            state.config.limits.max_artifact_size,
+        )
+        .await?;
+    write_maven_checksum_sidecars(state, repo, format, &outcome.record).await
+}
+
+/// 由主构件路径推导同基名的 pom 路径（换扩展名为 `.pom`）。
+fn derive_pom_path(main_path: &str) -> String {
+    match main_path.rsplit_once('.') {
+        Some((base, _)) => format!("{base}.pom"),
+        None => format!("{main_path}.pom"),
+    }
 }
 
 /// 为 Maven 主构件补齐四校验和 sidecar（`.sha1` / `.md5` / `.sha256` / `.sha512`）。
@@ -165,53 +255,19 @@ async fn write_maven_checksum_sidecars(
     Ok(())
 }
 
-/// 据仓库格式与表单字段拼出制品在仓库内的存储路径。
-///
-/// - Maven：表单 `group_id` / `artifact_id` / `version` + 上传文件名 → Maven 布局路径。
-/// - npm：表单 `name` / `version` + 上传文件名 → `{name}/-/{文件名}`（不解包 .tgz）。
-/// - Raw：表单 `path` 即仓库内路径。
-/// - 其余格式：不支持经通用上传发布（400）。
-fn resolve_upload_path(
-    format: &str,
-    fields: &[UploadField],
-    file_name: &str,
-) -> Result<String, ApiError> {
-    match format {
-        FORMAT_MAVEN => {
-            let group_id = required_text(fields, "group_id")?;
-            let artifact_id = required_text(fields, "artifact_id")?;
-            let version = required_text(fields, "version")?;
-            Ok(MavenFormat::artifact_path(
-                &group_id,
-                &artifact_id,
-                &version,
-                file_name,
-            ))
-        }
-        FORMAT_NPM => {
-            let name = required_text(fields, "name")?;
-            // version 在 Web 上传中校验存在（用于人工核对），路径以 name + 文件名定位 tarball
-            let _version = required_text(fields, "version")?;
-            Ok(NpmFormat::tarball_path(&name, file_name))
-        }
-        FORMAT_RAW => {
-            let path = required_text(fields, "path")?;
-            Ok(path)
-        }
-        other => Err(ApiError::BadRequest(format!(
-            "格式 {other} 不支持经通用上传端点发布（仅 maven / npm / raw）"
-        ))),
-    }
+/// 取某文本字段的值；缺失 / 为空一律 400（必填字段不可缺）。
+fn required_text(fields: &[UploadField], name: &str) -> Result<String, ApiError> {
+    optional_text(fields, name)
+        .ok_or_else(|| ApiError::BadRequest(format!("缺少必填表单字段 {name}")))
 }
 
-/// 取某文本字段的值；缺失 / 为空一律 400（坐标字段不可缺）。
-fn required_text(fields: &[UploadField], name: &str) -> Result<String, ApiError> {
-    let value = fields
+/// 取某文本字段的值；缺失 / 为空返回 None（可选字段）。
+fn optional_text(fields: &[UploadField], name: &str) -> Option<String> {
+    fields
         .iter()
         .find(|f| f.name == name && f.filename.is_none())
         .map(|f| String::from_utf8_lossy(&f.bytes).trim().to_string())
-        .filter(|v| !v.is_empty());
-    value.ok_or_else(|| ApiError::BadRequest(format!("缺少必填表单字段 {name}")))
+        .filter(|v| !v.is_empty())
 }
 
 /// multipart 中读出的单个字段（文本字段或文件字段）。

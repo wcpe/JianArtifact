@@ -44,6 +44,8 @@ export function UploadPage() {
   const [npmVersion, setNpmVersion] = useState('');
   const [rawPath, setRawPath] = useState('');
   const [file, setFile] = useState<File | null>(null);
+  // Maven 可选 pom 文件（FR-123，pom 三级兜底「用户上传」层）
+  const [pomFile, setPomFile] = useState<File | null>(null);
 
   // 上传状态
   const [uploading, setUploading] = useState(false);
@@ -62,12 +64,13 @@ export function UploadPage() {
 
   const selectedRepo = useMemo(() => repos.find((r) => r.id === repoId) ?? null, [repos, repoId]);
 
-  /** 当前表单坐标字段是否填齐（据所选格式判定）。 */
+  /** 当前表单坐标字段是否满足提交条件（据所选格式判定）。 */
   const coordsReady = useMemo(() => {
     if (!selectedRepo) return false;
     switch (selectedRepo.format) {
+      // Maven 坐标可留空：缺失时服务端从 jar 内嵌 pom 自动识别（FR-123），故不强制填齐
       case 'maven':
-        return groupId.trim() !== '' && artifactId.trim() !== '' && version.trim() !== '';
+        return true;
       case 'npm':
         return npmName.trim() !== '' && npmVersion.trim() !== '';
       case 'raw':
@@ -75,7 +78,13 @@ export function UploadPage() {
       default:
         return false;
     }
-  }, [selectedRepo, groupId, artifactId, version, npmName, npmVersion, rawPath]);
+  }, [selectedRepo, npmName, npmVersion, rawPath]);
+
+  /** 当前 Maven 版本是否为快照版（用于提示服务端时间戳唯一版本，FR-122）。 */
+  const isSnapshot = useMemo(
+    () => selectedRepo?.format === 'maven' && version.trim().endsWith('-SNAPSHOT'),
+    [selectedRepo, version],
+  );
 
   const canSubmit = !!selectedRepo && !!file && coordsReady && !uploading;
 
@@ -85,9 +94,12 @@ export function UploadPage() {
     fd.append('file', picked);
     switch (repo.format) {
       case 'maven':
-        fd.append('group_id', groupId.trim());
-        fd.append('artifact_id', artifactId.trim());
-        fd.append('version', version.trim());
+        // 坐标留空则不附带对应字段，由服务端从 jar 内嵌 pom 自动识别（FR-123）
+        if (groupId.trim()) fd.append('group_id', groupId.trim());
+        if (artifactId.trim()) fd.append('artifact_id', artifactId.trim());
+        if (version.trim()) fd.append('version', version.trim());
+        // 可选用户上传 pom（client-priority，FR-123）
+        if (pomFile) fd.append('pom', pomFile);
         break;
       case 'npm':
         fd.append('name', npmName.trim());
@@ -109,6 +121,7 @@ export function UploadPage() {
       notifySuccess(t('uploadSuccess'));
       // 成功后清空文件，保留坐标字段便于继续上传同一坐标族下的文件
       setFile(null);
+      setPomFile(null);
       setProgress(0);
     } catch (err) {
       notifyError(errorMessage(err));
@@ -147,22 +160,38 @@ export function UploadPage() {
             placeholder="com.example.app"
             value={groupId}
             onChange={(e) => setGroupId(e.currentTarget.value)}
-            required
           />
           <TextInput
             label={t('mavenArtifactId')}
             placeholder="demo"
             value={artifactId}
             onChange={(e) => setArtifactId(e.currentTarget.value)}
-            required
           />
           <TextInput
             label={t('mavenVersion')}
             placeholder="1.0.0"
             value={version}
             onChange={(e) => setVersion(e.currentTarget.value)}
-            required
           />
+          <Text size="xs" c="dimmed">
+            {t('mavenCoordsHint')}
+          </Text>
+          {isSnapshot && (
+            <Text size="xs" c="blue">
+              {t('mavenSnapshotHint')}
+            </Text>
+          )}
+          <FileInput
+            label={t('mavenPomLabel')}
+            placeholder={t('mavenPomPlaceholder')}
+            leftSection={<IconFile size={16} />}
+            value={pomFile}
+            onChange={setPomFile}
+            clearable
+          />
+          <Text size="xs" c="dimmed">
+            {t('mavenPomHint')}
+          </Text>
         </>
       )}
 
