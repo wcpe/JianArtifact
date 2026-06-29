@@ -35,7 +35,7 @@ jobs:
       - name: 安装 Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
 
@@ -95,7 +95,7 @@ jobs:
       - name: 安装 Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
 
@@ -125,12 +125,12 @@ jobs:
         with:
           version: 9
 
+      # 本 job 仅跑 audit、不执行 pnpm install，故不缓存 pnpm store——
+      # 否则 post 步因 store 路径不存在报「Path Validation Error / no cache is being saved」（非致命但刷红）。
       - name: 安装 Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: pnpm
-          cache-dependency-path: frontend/pnpm-lock.yaml
+          node-version: 22
 
       - name: 安装 Rust 工具链
         uses: dtolnay/rust-toolchain@stable
