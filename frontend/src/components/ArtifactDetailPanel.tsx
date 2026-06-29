@@ -33,9 +33,11 @@ export function ArtifactDetailPanel({ detail }: { detail: ArtifactDetailDto }) {
 
   return (
     <Stack>
-      <Group justify="space-between" wrap="nowrap">
-        <Group gap="xs" wrap="nowrap">
-          <Title order={4} style={{ wordBreak: 'break-all' }}>
+      {/* 头部允许换行（FR-115）：详情面板在窄栏（左树为主）下，按钮组整体换到标题下一行，
+          标题组占满本行宽度（flex:1 + minWidth:0）而非被按钮挤成一字一行。 */}
+      <Group justify="space-between" wrap="wrap" align="flex-start">
+        <Group gap="xs" wrap="wrap" style={{ flex: 1, minWidth: 0 }}>
+          <Title order={4} style={{ wordBreak: 'break-word', minWidth: 0 }}>
             {detail.path}
           </Title>
           <Badge variant="light">{detail.format}</Badge>
@@ -45,7 +47,7 @@ export function ArtifactDetailPanel({ detail }: { detail: ArtifactDetailDto }) {
             </Badge>
           )}
         </Group>
-        <Group gap="xs" wrap="nowrap">
+        <Group gap="xs" wrap="nowrap" style={{ flexShrink: 0 }}>
           <Button
             component="a"
             href={htmlViewUrl(detail.repo_name, detail.path)}

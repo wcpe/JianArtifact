@@ -370,9 +370,10 @@ function TreeLevel({
               <UnstyledButton
                 data-testid="tree-folder"
                 onClick={() => onToggle(childPrefix)}
-                px={6}
                 py={4}
-                style={{ width: '100%', borderRadius: 4, paddingLeft: indent + 6 }}
+                // 缩进经 style.paddingLeft 表达「层级递进」；不可再用 Mantine `px` prop——
+                // 它会覆盖此处 paddingLeft，使所有目录恒为 6px、丢失层级缩进（FR-115 修复）。
+                style={{ width: '100%', borderRadius: 4, paddingLeft: indent + 6, paddingRight: 6 }}
               >
                 <Group gap={4} wrap="nowrap" align="flex-start">
                   {open ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />}
