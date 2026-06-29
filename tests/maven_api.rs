@@ -863,3 +863,179 @@ async fn maven_deploy路径_client_pom_不被服务端兜底覆盖() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(bytes, client_pom);
 }
+
+// ---------- FR-122 完整 Maven 快照（时间戳唯一版本 + snapshot 级 metadata） ----------
+
+/// 从 XML 中取首个 `<tag>...</tag>` 的内容（测试用简易提取）。
+fn extract_tag(xml: &str, tag: &str) -> Option<String> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let start = xml.find(&open)? + open.len();
+    let end = xml[start..].find(&close)? + start;
+    Some(xml[start..end].to_string())
+}
+
+#[tokio::test]
+async fn maven_web上传snapshot_生成时间戳版本与snapshot_metadata() {
+    let fx = Fixture::new().await;
+    let writer = fx.seed_user("writer", "pw", Role::User).await;
+    let rid = fx.seed_maven_repo("maven-hosted", Visibility::Public).await;
+    fx.seed_acl(&rid, &writer, Permission::Write).await;
+    let auth = format!("Bearer {}", fx.login_token("writer", "pw").await);
+
+    let jar = build_jar("com.example", "snaplib", None);
+    let parts = vec![
+        text_part("group_id", "com.example"),
+        text_part("artifact_id", "snaplib"),
+        text_part("version", "1.0-SNAPSHOT"),
+        file_part("file", "snaplib-1.0-SNAPSHOT.jar", &jar),
+    ];
+    let resp = fx
+        .router()
+        .oneshot(upload_req(&rid, Some(&auth), &parts))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    // 快照级 maven-metadata.xml 生成，含 snapshot/timestamp/buildNumber/snapshotVersions
+    let (status, bytes) = send_bytes(
+        fx.router(),
+        empty_req(
+            "GET",
+            "/maven-hosted/com/example/snaplib/1.0-SNAPSHOT/maven-metadata.xml",
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let xml = String::from_utf8(bytes).unwrap();
+    assert!(
+        xml.contains("<version>1.0-SNAPSHOT</version>"),
+        "snapshot meta: {xml}"
+    );
+    assert!(xml.contains("<buildNumber>1</buildNumber>"));
+    assert!(xml.contains("<snapshotVersions>"));
+    let value = extract_tag(&xml, "value").expect("应有 snapshotVersion value");
+    assert!(value.starts_with("1.0-"), "value 形如 1.0-<ts>-1: {value}");
+    assert!(value.ends_with("-1"));
+
+    // 时间戳唯一构件按 value 落库、可下载、字节与上传一致
+    let ts_jar = format!("/maven-hosted/com/example/snaplib/1.0-SNAPSHOT/snaplib-{value}.jar");
+    let (status, jbytes) = send_bytes(fx.router(), empty_req("GET", &ts_jar, None)).await;
+    assert_eq!(status, StatusCode::OK, "时间戳构件应可下载: {ts_jar}");
+    assert_eq!(jbytes, jar);
+
+    // 同名 pom 也按时间戳唯一名生成（最小 pom）
+    let ts_pom = format!("/maven-hosted/com/example/snaplib/1.0-SNAPSHOT/snaplib-{value}.pom");
+    let (status, pbytes) = send_bytes(fx.router(), empty_req("GET", &ts_pom, None)).await;
+    assert_eq!(status, StatusCode::OK, "时间戳 pom 应生成: {ts_pom}");
+    assert!(String::from_utf8(pbytes)
+        .unwrap()
+        .contains("<version>1.0-SNAPSHOT</version>"));
+
+    // artifact 级 metadata 把 1.0-SNAPSHOT 列为一个版本
+    let (status, abytes) = send_bytes(
+        fx.router(),
+        empty_req(
+            "GET",
+            "/maven-hosted/com/example/snaplib/maven-metadata.xml",
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(String::from_utf8(abytes)
+        .unwrap()
+        .contains("<version>1.0-SNAPSHOT</version>"));
+}
+
+#[tokio::test]
+async fn maven_web上传snapshot两次_构建号递增() {
+    let fx = Fixture::new().await;
+    let writer = fx.seed_user("writer", "pw", Role::User).await;
+    let rid = fx.seed_maven_repo("maven-hosted", Visibility::Public).await;
+    fx.seed_acl(&rid, &writer, Permission::Write).await;
+    let auth = format!("Bearer {}", fx.login_token("writer", "pw").await);
+
+    let jar = build_jar("com.example", "snaplib", None);
+    for _ in 0..2 {
+        let parts = vec![
+            text_part("group_id", "com.example"),
+            text_part("artifact_id", "snaplib"),
+            text_part("version", "2.0-SNAPSHOT"),
+            file_part("file", "snaplib-2.0-SNAPSHOT.jar", &jar),
+        ];
+        let resp = fx
+            .router()
+            .oneshot(upload_req(&rid, Some(&auth), &parts))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+    }
+
+    let (status, bytes) = send_bytes(
+        fx.router(),
+        empty_req(
+            "GET",
+            "/maven-hosted/com/example/snaplib/2.0-SNAPSHOT/maven-metadata.xml",
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let xml = String::from_utf8(bytes).unwrap();
+    // 第二次上传后最新构建号为 2
+    assert!(
+        xml.contains("<buildNumber>2</buildNumber>"),
+        "应递增到 2: {xml}"
+    );
+    let value = extract_tag(&xml, "value").unwrap();
+    assert!(value.ends_with("-2"), "最新 value 构建号应为 2: {value}");
+}
+
+#[tokio::test]
+async fn maven_deploy时间戳snapshot_服务端重生成snapshot_metadata() {
+    let fx = Fixture::new().await;
+    let writer = fx.seed_user("writer", "pw", Role::User).await;
+    let rid = fx.seed_maven_repo("maven-hosted", Visibility::Public).await;
+    fx.seed_acl(&rid, &writer, Permission::Write).await;
+    let auth = format!("Bearer {}", fx.login_token("writer", "pw").await);
+
+    // mvn deploy 模拟：客户端 PUT 时间戳唯一构件（含 jar + pom）
+    for ext in ["jar", "pom"] {
+        let path =
+            format!("/maven-hosted/com/example/dlib/1.0-SNAPSHOT/dlib-1.0-20260629.120000-1.{ext}");
+        let (status, _) = send(
+            fx.router(),
+            raw_req(
+                "PUT",
+                &path,
+                Some(&auth),
+                format!("data-{ext}").into_bytes(),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+    }
+
+    // 服务端据目录时间戳构建权威重生成快照级 metadata
+    let (status, bytes) = send_bytes(
+        fx.router(),
+        empty_req(
+            "GET",
+            "/maven-hosted/com/example/dlib/1.0-SNAPSHOT/maven-metadata.xml",
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let xml = String::from_utf8(bytes).unwrap();
+    assert!(
+        xml.contains("<timestamp>20260629.120000</timestamp>"),
+        "{xml}"
+    );
+    assert!(xml.contains("<buildNumber>1</buildNumber>"));
+    assert!(xml.contains("<value>1.0-20260629.120000-1</value>"));
+    assert!(xml.contains("<extension>jar</extension>"));
+    assert!(xml.contains("<extension>pom</extension>"));
+}

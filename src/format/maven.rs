@@ -313,6 +313,188 @@ impl MavenFormat {
         xml.push_str("</metadata>\n");
         xml.into_bytes()
     }
+
+    /// 判断版本是否为 SNAPSHOT（以 `-SNAPSHOT` 结尾）。
+    pub fn is_snapshot_version(version: &str) -> bool {
+        version.trim().ends_with(SNAPSHOT_SUFFIX)
+    }
+
+    /// 取 SNAPSHOT 版本的基版本（去 `-SNAPSHOT` 后缀）：`1.0-SNAPSHOT` → `1.0`。
+    pub fn snapshot_base(version: &str) -> &str {
+        let v = version.trim();
+        v.strip_suffix(SNAPSHOT_SUFFIX).unwrap_or(v)
+    }
+
+    /// 拼快照时间戳唯一构件文件名：`{a}-{base}-{ts}-{bn}.{ext}`（FR-122）。
+    pub fn snapshot_artifact_filename(
+        artifact_id: &str,
+        base: &str,
+        timestamp: &str,
+        build_number: u32,
+        ext: &str,
+    ) -> String {
+        format!(
+            "{}-{}-{}-{}.{}",
+            artifact_id.trim(),
+            base.trim(),
+            timestamp,
+            build_number,
+            ext
+        )
+    }
+
+    /// 拼快照时间戳唯一构件在仓库内的存储路径（版本目录仍为 `{base}-SNAPSHOT`，FR-122）。
+    pub fn snapshot_artifact_path(
+        group_id: &str,
+        artifact_id: &str,
+        snapshot_version: &str,
+        ext: &str,
+        timestamp: &str,
+        build_number: u32,
+    ) -> String {
+        let base = Self::snapshot_base(snapshot_version);
+        let file =
+            Self::snapshot_artifact_filename(artifact_id, base, timestamp, build_number, ext);
+        Self::artifact_path(group_id, artifact_id, snapshot_version, &file)
+    }
+
+    /// 拼快照级 `maven-metadata.xml` 路径（`{group路径}/{a}/{base}-SNAPSHOT/maven-metadata.xml`）。
+    pub fn snapshot_metadata_path(
+        group_id: &str,
+        artifact_id: &str,
+        snapshot_version: &str,
+    ) -> String {
+        Self::artifact_path(group_id, artifact_id, snapshot_version, MAVEN_METADATA)
+    }
+
+    /// 解析快照时间戳构件文件名 → `(timestamp, build_number, extension)`；非时间戳构件返回 None。
+    ///
+    /// 形如 `{a}-{base}-{yyyyMMdd.HHmmss}-{bn}.{ext}`；字面 `{a}-{base}-SNAPSHOT.{ext}` 与 sidecar 不匹配。
+    pub fn parse_snapshot_build(
+        file_name: &str,
+        artifact_id: &str,
+        base: &str,
+    ) -> Option<(String, u32, String)> {
+        let prefix = format!("{}-{}-", artifact_id.trim(), base.trim());
+        let rest = file_name.strip_prefix(&prefix)?; // 形如 20260629.135300-1.jar
+        let (value, ext) = rest.rsplit_once('.')?; // value=20260629.135300-1, ext=jar
+        let (ts, bn) = value.rsplit_once('-')?; // ts=20260629.135300, bn=1
+        if !is_snapshot_timestamp(ts) {
+            return None;
+        }
+        let build_number: u32 = bn.parse().ok()?;
+        Some((ts.to_string(), build_number, ext.to_string()))
+    }
+
+    /// 收集某快照版本目录下的时间戳构件为 [`SnapshotBuilds`]（FR-122）。
+    ///
+    /// 仅取该 `{base}-SNAPSHOT/` 目录直接子文件中的时间戳构件，跳过 sidecar 与 maven-metadata.xml。
+    pub fn collect_snapshot_builds(
+        records: &[ArtifactRecord],
+        group_id: &str,
+        artifact_id: &str,
+        snapshot_version: &str,
+    ) -> SnapshotBuilds {
+        let base = Self::snapshot_base(snapshot_version);
+        let dir_prefix = format!(
+            "{}{}/",
+            Self::artifact_prefix(group_id, artifact_id),
+            snapshot_version.trim()
+        );
+        let mut builds = Vec::new();
+        for r in records {
+            let Some(rest) = r.path.strip_prefix(&dir_prefix) else {
+                continue;
+            };
+            // 仅该目录直接子文件（无更深路径段）
+            if rest.contains('/') || rest == MAVEN_METADATA || Self::is_sidecar(rest) {
+                continue;
+            }
+            if let Some((timestamp, build_number, extension)) =
+                Self::parse_snapshot_build(rest, artifact_id, base)
+            {
+                builds.push(SnapshotBuild {
+                    timestamp,
+                    build_number,
+                    extension,
+                });
+            }
+        }
+        SnapshotBuilds { builds }
+    }
+
+    /// 生成快照级 `maven-metadata.xml`（FR-122）：含 `snapshot`（最新 timestamp/buildNumber）、
+    /// `snapshotVersions`（最新构建各扩展的 value）与 `lastUpdated`。
+    pub fn build_snapshot_metadata(
+        group_id: &str,
+        artifact_id: &str,
+        snapshot_version: &str,
+        builds: &SnapshotBuilds,
+    ) -> Vec<u8> {
+        use std::fmt::Write as _;
+        let base = Self::snapshot_base(snapshot_version);
+        let latest = builds.latest_key();
+
+        let mut xml = String::new();
+        xml.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+        xml.push_str("<metadata>\n");
+        let _ = writeln!(xml, "  <groupId>{}</groupId>", xml_escape(group_id.trim()));
+        let _ = writeln!(
+            xml,
+            "  <artifactId>{}</artifactId>",
+            xml_escape(artifact_id.trim())
+        );
+        let _ = writeln!(
+            xml,
+            "  <version>{}</version>",
+            xml_escape(snapshot_version.trim())
+        );
+        xml.push_str("  <versioning>\n");
+        if let Some((ts, bn)) = latest {
+            let last_updated = ts.replace('.', "");
+            xml.push_str("    <snapshot>\n");
+            let _ = writeln!(xml, "      <timestamp>{}</timestamp>", xml_escape(ts));
+            let _ = writeln!(xml, "      <buildNumber>{bn}</buildNumber>");
+            xml.push_str("    </snapshot>\n");
+            let _ = writeln!(xml, "    <lastUpdated>{last_updated}</lastUpdated>");
+            xml.push_str("    <snapshotVersions>\n");
+            // 最新构建（同 ts+bn）的各扩展，去重保序
+            let mut seen_ext: Vec<&str> = Vec::new();
+            for b in &builds.builds {
+                if b.timestamp == ts
+                    && b.build_number == bn
+                    && !seen_ext.contains(&b.extension.as_str())
+                {
+                    seen_ext.push(&b.extension);
+                    let value = format!("{base}-{ts}-{bn}");
+                    xml.push_str("      <snapshotVersion>\n");
+                    let _ = writeln!(
+                        xml,
+                        "        <extension>{}</extension>",
+                        xml_escape(&b.extension)
+                    );
+                    let _ = writeln!(xml, "        <value>{}</value>", xml_escape(&value));
+                    let _ = writeln!(xml, "        <updated>{last_updated}</updated>");
+                    xml.push_str("      </snapshotVersion>\n");
+                }
+            }
+            xml.push_str("    </snapshotVersions>\n");
+        }
+        xml.push_str("  </versioning>\n");
+        xml.push_str("</metadata>\n");
+        xml.into_bytes()
+    }
+
+    /// 把 Unix 秒（UTC）格式化为快照时间戳 `yyyyMMdd.HHmmss`（FR-122）。
+    ///
+    /// 纯函数，便于以已知 epoch 向量穷举；调用方传 `SystemTime::now()` 的秒数。
+    pub fn epoch_to_snapshot_timestamp(secs: u64) -> String {
+        let days = (secs / 86_400) as i64;
+        let rem = secs % 86_400;
+        let (hh, mm, ss) = (rem / 3600, (rem % 3600) / 60, rem % 60);
+        let (y, m, d) = civil_from_days(days);
+        format!("{y:04}{m:02}{d:02}.{hh:02}{mm:02}{ss:02}")
+    }
 }
 
 impl Format for MavenFormat {
@@ -429,6 +611,75 @@ fn xml_escape(s: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&apos;")
+}
+
+/// 单个快照时间戳构建（FR-122）：同一 timestamp+buildNumber 下某扩展的构件。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotBuild {
+    /// 时间戳（`yyyyMMdd.HHmmss`）。
+    pub timestamp: String,
+    /// 构建号（同一时间戳内递增）。
+    pub build_number: u32,
+    /// 扩展名（如 `jar` / `pom`）。
+    pub extension: String,
+}
+
+/// 某快照版本目录下收集到的全部时间戳构建（FR-122）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotBuilds {
+    /// 全部时间戳构建（含各扩展、各构建号）。
+    pub builds: Vec<SnapshotBuild>,
+}
+
+impl SnapshotBuilds {
+    /// 是否无任何时间戳构建。
+    pub fn is_empty(&self) -> bool {
+        self.builds.is_empty()
+    }
+
+    /// 下一个构建号：现有最大构建号 + 1，无则 1。
+    pub fn next_build_number(&self) -> u32 {
+        self.builds
+            .iter()
+            .map(|b| b.build_number)
+            .max()
+            .map_or(1, |m| m + 1)
+    }
+
+    /// 最新构建键 `(timestamp, build_number)`：按时间戳（字典序即时序）再按构建号取最大。
+    fn latest_key(&self) -> Option<(&str, u32)> {
+        self.builds
+            .iter()
+            .map(|b| (b.timestamp.as_str(), b.build_number))
+            .max()
+    }
+}
+
+/// 校验字符串是否为快照时间戳格式 `\d{8}\.\d{6}`（FR-122）。
+fn is_snapshot_timestamp(s: &str) -> bool {
+    let Some((date, time)) = s.split_once('.') else {
+        return false;
+    };
+    date.len() == 8
+        && time.len() == 6
+        && date.bytes().all(|b| b.is_ascii_digit())
+        && time.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// 由「1970-01-01 起的天数」反算公历 `(year, month, day)`（Howard Hinnant 算法，UTC）。
+///
+/// 仅供 [`MavenFormat::epoch_to_snapshot_timestamp`] 把 Unix 秒转为快照时间戳，避免引入时间库依赖。
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32; // [1, 12]
+    (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
 /// Maven 坐标（GAV）：由仓库内路径反解（[`Gav::from_path`]）或 jar 内嵌 pom
@@ -1077,5 +1328,149 @@ mod tests {
             String::from_utf8(MavenFormat::build_artifact_metadata("g", "a", &versions)).unwrap();
         assert!(xml.contains("<latest></latest>"));
         assert!(!xml.contains("<version>"));
+    }
+
+    // ---------- FR-122 快照 ----------
+
+    #[test]
+    fn 快照版本判定与基版本() {
+        assert!(MavenFormat::is_snapshot_version("1.0-SNAPSHOT"));
+        assert!(!MavenFormat::is_snapshot_version("1.0"));
+        assert_eq!(MavenFormat::snapshot_base("1.0-SNAPSHOT"), "1.0");
+        assert_eq!(
+            MavenFormat::snapshot_base("2.1.0-beta-SNAPSHOT"),
+            "2.1.0-beta"
+        );
+        // 非快照原样返回
+        assert_eq!(MavenFormat::snapshot_base("1.0"), "1.0");
+    }
+
+    #[test]
+    fn 快照时间戳路径拼装() {
+        assert_eq!(
+            MavenFormat::snapshot_artifact_path(
+                "com.example",
+                "lib",
+                "1.0-SNAPSHOT",
+                "jar",
+                "20260629.135300",
+                3
+            ),
+            "com/example/lib/1.0-SNAPSHOT/lib-1.0-20260629.135300-3.jar"
+        );
+        assert_eq!(
+            MavenFormat::snapshot_metadata_path("com.example", "lib", "1.0-SNAPSHOT"),
+            "com/example/lib/1.0-SNAPSHOT/maven-metadata.xml"
+        );
+    }
+
+    #[test]
+    fn 解析快照时间戳构件文件名() {
+        // 合法时间戳构件
+        let (ts, bn, ext) =
+            MavenFormat::parse_snapshot_build("lib-1.0-20260629.135300-2.jar", "lib", "1.0")
+                .unwrap();
+        assert_eq!(ts, "20260629.135300");
+        assert_eq!(bn, 2);
+        assert_eq!(ext, "jar");
+        // 字面 SNAPSHOT 名（非时间戳）不匹配
+        assert!(MavenFormat::parse_snapshot_build("lib-1.0-SNAPSHOT.jar", "lib", "1.0").is_none());
+        // 基版本带连字符也能解析
+        let (ts2, bn2, ext2) = MavenFormat::parse_snapshot_build(
+            "app-2.1-beta-20260101.000000-1.pom",
+            "app",
+            "2.1-beta",
+        )
+        .unwrap();
+        assert_eq!(ts2, "20260101.000000");
+        assert_eq!(bn2, 1);
+        assert_eq!(ext2, "pom");
+    }
+
+    #[test]
+    fn epoch_转快照时间戳() {
+        // Unix 0 → 1970-01-01 00:00:00 UTC
+        assert_eq!(
+            MavenFormat::epoch_to_snapshot_timestamp(0),
+            "19700101.000000"
+        );
+        // 1_000_000_000 → 2001-09-09 01:46:40 UTC（著名时间戳）
+        assert_eq!(
+            MavenFormat::epoch_to_snapshot_timestamp(1_000_000_000),
+            "20010909.014640"
+        );
+    }
+
+    #[test]
+    fn 收集快照构建并算下一构建号() {
+        let records = vec![
+            制品带时间(
+                "com/example/lib/1.0-SNAPSHOT/lib-1.0-20260629.120000-1.jar",
+                "2026-06-29 12:00:00",
+            ),
+            制品带时间(
+                "com/example/lib/1.0-SNAPSHOT/lib-1.0-20260629.120000-1.pom",
+                "2026-06-29 12:00:01",
+            ),
+            制品带时间(
+                "com/example/lib/1.0-SNAPSHOT/lib-1.0-20260629.130000-2.jar",
+                "2026-06-29 13:00:00",
+            ),
+            // sidecar 与 metadata 不计入
+            制品带时间(
+                "com/example/lib/1.0-SNAPSHOT/lib-1.0-20260629.130000-2.jar.sha1",
+                "2026-06-29 13:00:01",
+            ),
+            制品带时间(
+                "com/example/lib/1.0-SNAPSHOT/maven-metadata.xml",
+                "2026-06-29 13:00:02",
+            ),
+        ];
+        let builds =
+            MavenFormat::collect_snapshot_builds(&records, "com.example", "lib", "1.0-SNAPSHOT");
+        assert_eq!(builds.builds.len(), 3); // 2 jar + 1 pom（sidecar/metadata 排除）
+        assert_eq!(builds.next_build_number(), 3); // 最大构建号 2 + 1
+    }
+
+    #[test]
+    fn 生成快照metadata含snapshot与snapshotversions() {
+        let builds = SnapshotBuilds {
+            builds: vec![
+                SnapshotBuild {
+                    timestamp: "20260629.120000".to_string(),
+                    build_number: 1,
+                    extension: "jar".to_string(),
+                },
+                // 最新构建（ts 更大）：jar + pom
+                SnapshotBuild {
+                    timestamp: "20260629.130000".to_string(),
+                    build_number: 2,
+                    extension: "jar".to_string(),
+                },
+                SnapshotBuild {
+                    timestamp: "20260629.130000".to_string(),
+                    build_number: 2,
+                    extension: "pom".to_string(),
+                },
+            ],
+        };
+        let xml = String::from_utf8(MavenFormat::build_snapshot_metadata(
+            "com.example",
+            "lib",
+            "1.0-SNAPSHOT",
+            &builds,
+        ))
+        .unwrap();
+        assert!(xml.contains("<version>1.0-SNAPSHOT</version>"), "{xml}");
+        // snapshot 块取最新构建 ts/bn
+        assert!(xml.contains("<timestamp>20260629.130000</timestamp>"));
+        assert!(xml.contains("<buildNumber>2</buildNumber>"));
+        assert!(xml.contains("<lastUpdated>20260629130000</lastUpdated>"));
+        // snapshotVersions 列出最新构建的 jar 与 pom，value 为 {base}-{ts}-{bn}
+        assert!(xml.contains("<value>1.0-20260629.130000-2</value>"));
+        assert!(xml.contains("<extension>jar</extension>"));
+        assert!(xml.contains("<extension>pom</extension>"));
+        // 不应出现旧构建的 value
+        assert!(!xml.contains("20260629.120000"));
     }
 }

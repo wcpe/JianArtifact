@@ -589,7 +589,7 @@
 
 各格式详细协议规格在开发该格式时落到 `docs/specs/`，此处只定覆盖语义与状态码。
 
-- **Maven 格式**：以 Maven 仓库布局暴露，路径形如 `/{仓库名}/{groupId 路径}/{artifactId}/{version}/...`，供 `mvn deploy` / `mvn` 拉取使用；按 Maven 协议处理制品与校验和（sha256 索引）。**服务端权威维护元数据**（FR-121，ADR-0037）：主版本文件写入后据 SQLite 索引重生成 artifact 级 `maven-metadata.xml` + pom 三级兜底（jar 内嵌 → 用户上传 → 按 GAV 最小 pom），遵循 client-priority（`mvn deploy` 自带的 pom 不被改写）。
+- **Maven 格式**：以 Maven 仓库布局暴露，路径形如 `/{仓库名}/{groupId 路径}/{artifactId}/{version}/...`，供 `mvn deploy` / `mvn` 拉取使用；按 Maven 协议处理制品与校验和（sha256 索引）。**服务端权威维护元数据**（FR-121/122，ADR-0037）：主版本文件写入后据 SQLite 索引重生成 artifact 级 `maven-metadata.xml` + pom 三级兜底（jar 内嵌 → 用户上传 → 按 GAV 最小 pom），遵循 client-priority（`mvn deploy` 自带的 pom 不被改写）。**SNAPSHOT**：Web 上传的快照主构件由服务端铸造唯一时间戳版本（`{artifact}-{base}-{yyyyMMdd.HHmmss}-{buildNumber}.{ext}`）并生成快照级 `{base}-SNAPSHOT/maven-metadata.xml`（snapshot/snapshotVersions/lastUpdated），供 `mvn` 解析最新快照；`mvn deploy` 自带的时间戳构件由服务端据目录扫描权威重生成快照 metadata。
 - **npm 格式**：以 npm registry 协议暴露，路径形如 `/{仓库名}/{包名}`、`/{仓库名}/{包名}/-/{tarball}`，供 `npm publish` / `npm install` 使用。
 - **NuGet 格式**：以 NuGet v3 协议暴露，供 `dotnet nuget push` / `dotnet add package` 使用。客户端 source 配 `/{仓库名}/v3/index.json`。
   - 服务索引 `GET /{仓库名}/v3/index.json`：列出本仓库 v3 资源（扁平容器 `PackageBaseAddress/3.0.0`、发布端点 `PackagePublish/2.0.0`），`@id` 指向本仓库对应端点；`proxy` 仓库回源上游服务索引后把扁平容器 `@id` 重写为指向本仓库。

@@ -161,7 +161,7 @@
 | FR-119 | 前端运行时 Mock 模式（复用 FR-116 内存后端）：可开关的运行时模式，开启后由浏览器内有状态 mock 后端拦截全部 `/api/v1/*`、支持全操作内存 CRUD，无需真实后端即可在前端模拟创建 / 浏览所有数据，便于开发与手动测试；默认关闭、不影响生产 | P2 | 开发中 |
 | FR-120 | [增强 FR-14] jar 内嵌 pom 解析提取 GAV：上传 jar 时读取 `META-INF/maven/<g>/<a>/pom.xml`（无则 `pom.properties`）提取 groupId/artifactId/version，免手填坐标（复用现有 zip + quick-xml，无新依赖）；无内嵌 pom 时回落用户提供 | P2 | 开发中 |
 | FR-121 | [增强 FR-14/61] Maven 服务端权威 maven-metadata.xml + pom 三级兜底（先 ADR）：Maven 写入时服务端生成 / 维护 artifact 级 maven-metadata.xml（versions/latest/release/lastUpdated）；pom 三级兜底放置（jar 内嵌 → 用户上传 → 按 GAV 生成最小 pom）+ 校验和 sidecar，符合 Maven 仓库布局供 mvn 客户端消费；**client-priority**（mvn deploy 自带 pom/metadata 时以客户端为主、服务端补缺并维护聚合）。ADR 取代 p1-maven「服务端不重写 metadata」旧决策 | P2 | 开发中 |
-| FR-122 | [增强 FR-14/61] 完整 Maven 快照规则：SNAPSHOT 上传服务端生成唯一时间戳版本（`<artifact>-<version>-<yyyyMMdd.HHmmss>-<buildnumber>`）+ snapshot 级 maven-metadata.xml（snapshotVersions/timestamp/buildNumber），release 不可覆盖 / snapshot 时间戳唯一并可拉最新；mvn 客户端按 Maven 快照规则正常解析 | P2 | 计划 |
+| FR-122 | [增强 FR-14/61] 完整 Maven 快照规则：SNAPSHOT 上传服务端生成唯一时间戳版本（`<artifact>-<version>-<yyyyMMdd.HHmmss>-<buildnumber>`）+ snapshot 级 maven-metadata.xml（snapshotVersions/timestamp/buildNumber），release 不可覆盖 / snapshot 时间戳唯一并可拉最新；mvn 客户端按 Maven 快照规则正常解析 | P2 | 开发中 |
 | FR-123 | [增强 FR-74] Web 上传页 Maven 适配：上传 jar 自动回填坐标（FR-120）+ 可选上传 pom 文件（三级兜底）+ 快照版提示，支持 jar+pom 多文件，使网页上传产出合规 Maven 制品 | P2 | 计划 |
 
 > 状态取值：计划 / 开发中 / 已交付@vX.Y.Z。优先级：P1(MVP) / P2 / P3。

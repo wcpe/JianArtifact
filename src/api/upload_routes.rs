@@ -51,6 +51,8 @@ pub async fn upload_artifact(
 
     // 据仓库格式拼仓库内路径（不同格式取不同表单字段）
     let path = resolve_upload_path(&repo.format, &fields, &file_name)?;
+    // FR-122：Maven 快照主构件 Web 上传 → 改写为唯一时间戳存储路径（非快照 / sidecar / pom 不变）
+    let path = maybe_mint_snapshot_path(&state, &repo, &fields, &file_name, path).await?;
 
     // 经格式处理器归一化坐标（拒目录穿越 / 空路径）
     let format = state
@@ -75,8 +77,8 @@ pub async fn upload_artifact(
     // 使产出制品与 mvn deploy 一致、可被官方客户端独立 GET 校验和并校验（FR-69）。
     if repo.format == FORMAT_MAVEN && !MavenFormat::is_sidecar(&coords.path) {
         write_maven_checksum_sidecars(&state, &repo, format, &outcome.record).await?;
-        // 写入后维护服务端权威派生文件（FR-121，ADR-0037）：pom 三级兜底（持有主构件字节，可提取 jar 内嵌
-        // pom，否则生成最小 pom）+ 重生成 artifact 级 maven-metadata.xml。
+        // 写入后维护服务端权威派生文件（FR-121/122，ADR-0037）：pom 三级兜底（持有主构件字节，可提取 jar
+        // 内嵌 pom，否则生成最小 pom）+ 重生成 artifact 级 maven-metadata.xml；快照构件另生成快照级 metadata。
         super::maven_publish::maintain_after_maven_write(
             &state,
             &repo,
@@ -101,6 +103,38 @@ pub async fn upload_artifact(
         StatusCode::CREATED
     };
     Ok(status.into_response())
+}
+
+/// 对 Maven 快照主构件 Web 上传，把落库路径改写为唯一时间戳版本（FR-122）。
+///
+/// 仅作用于 Maven 格式、非 sidecar、非 pom 自身、且 `version` 以 `-SNAPSHOT` 结尾的主构件；
+/// 其余原样返回。时间戳与构建号由 `maven_publish::mint_snapshot_path` 据真实 now 与目录现状铸造。
+async fn maybe_mint_snapshot_path(
+    state: &AppState,
+    repo: &RepositoryRecord,
+    fields: &[UploadField],
+    file_name: &str,
+    path: String,
+) -> Result<String, ApiError> {
+    if repo.format != FORMAT_MAVEN || MavenFormat::is_sidecar(&path) || file_name.ends_with(".pom")
+    {
+        return Ok(path);
+    }
+    let version = required_text(fields, "version")?;
+    if !MavenFormat::is_snapshot_version(&version) {
+        return Ok(path);
+    }
+    let group_id = required_text(fields, "group_id")?;
+    let artifact_id = required_text(fields, "artifact_id")?;
+    super::maven_publish::mint_snapshot_path(
+        state,
+        repo,
+        &group_id,
+        &artifact_id,
+        &version,
+        file_name,
+    )
+    .await
 }
 
 /// 为 Maven 主构件补齐四校验和 sidecar（`.sha1` / `.md5` / `.sha256` / `.sha512`）。
