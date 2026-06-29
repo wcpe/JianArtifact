@@ -530,6 +530,11 @@ export interface OnlinePullJob {
   repos: OnlineRepoMigrationOutcome[];
   skipped_repos: string[];
   error: string | null;
+  /**
+   * 离线 blob store 预览枚举结果（FR-124）：仅离线预览任务在 `phase === 'done'` 时填充；
+   * 在线拉取任务无此字段。严格对齐后端 OnlinePullProgress.offline_preview。
+   */
+  offline_preview?: OfflineRepoSummary[];
 }
 
 /**

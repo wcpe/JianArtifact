@@ -253,28 +253,57 @@ async fn 离线预览普通用户返回_403() {
 }
 
 #[tokio::test]
-async fn 离线预览管理员枚举有效_blob_store() {
+async fn 离线预览异步_管理员枚举有效_blob_store() {
     let (state, _dir) = 测试用状态().await;
     let token = seed_and_login(&state, "admin", "pw", Role::Admin).await;
     let store = build_offline_store();
+    // 复用同一 router（克隆共享进程内 MigrationJobs 注册表），使提交与轮询命中同一 job
+    let app = build_router(state);
+
+    // 提交预览 → 立即返回 202 + job_id（FR-124 异步化，避免大库同步遍历在反代后 504）
     let (status, body) = send(
-        build_router(state),
+        app.clone(),
         offline_req(
             Some(&format!("Bearer {token}")),
             json!({ "path": store.path().to_str().unwrap() }),
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "body: {body}");
-    // 应枚举出 maven-releases 仓库及其下 1 个 blob
-    assert_eq!(body[0]["repo_name"], "maven-releases");
-    assert_eq!(body[0]["blob_count"], 1);
+    assert_eq!(status, StatusCode::ACCEPTED, "body: {body}");
+    let job_id = body["job_id"].as_str().expect("应返回 job_id").to_string();
+
+    // 轮询任务进度直到完成
+    let mut done = Value::Null;
+    for _ in 0..100 {
+        let (s, b) = send(
+            app.clone(),
+            get_req(
+                &format!("/api/v1/migrate/jobs/{job_id}"),
+                Some(&format!("Bearer {token}")),
+            ),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK, "poll: {b}");
+        // 进度字段在任务详情里展平到顶层（job_id 与 phase / offline_preview 同级）
+        match b["phase"].as_str().unwrap_or("") {
+            "done" | "failed" => {
+                done = b;
+                break;
+            }
+            _ => tokio::time::sleep(std::time::Duration::from_millis(20)).await,
+        }
+    }
+    assert_eq!(done["phase"], "done", "job: {done}");
+    // 枚举结果经 offline_preview 字段随进度返回：maven-releases 仓库及其下 1 个 blob
+    let repos = &done["offline_preview"];
+    assert_eq!(repos[0]["repo_name"], "maven-releases");
+    assert_eq!(repos[0]["blob_count"], 1);
     assert_eq!(
-        body[0]["blobs"][0]["blob_name"],
+        repos[0]["blobs"][0]["blob_name"],
         "/org/example/app/1.0/app-1.0.jar"
     );
-    assert_eq!(body[0]["blobs"][0]["sha1"], "a1b2c3");
-    assert_eq!(body[0]["blobs"][0]["size"], 1024);
+    assert_eq!(repos[0]["blobs"][0]["sha1"], "a1b2c3");
+    assert_eq!(repos[0]["blobs"][0]["size"], 1024);
 }
 
 #[tokio::test]

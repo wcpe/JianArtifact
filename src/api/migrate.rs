@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 use crate::migrate::{
     self, HostedMigrationReport, HttpNexusClient, JobControl, MigrateError, NexusRepoSummary,
-    OfflineRepoSummary, OnlinePullPhase, OnlinePullProgress, ProxyMigrationReport,
+    OnlinePullPhase, OnlinePullProgress, ProxyMigrationReport,
 };
 
 use super::{ApiError, AppState, Identity, MigrationJobs};
@@ -85,34 +85,66 @@ pub struct NexusOfflinePreviewRequest {
     pub path: String,
 }
 
-/// 预览本地 Nexus blob store 可迁移内容（仅管理员）。
+/// 预览本地 Nexus blob store 可迁移内容（仅管理员，FR-124 异步化）。
 ///
-/// 从给定本地 blob store 目录解析磁盘布局，按 repo 枚举可迁移 blob 及基本元数据后返回；
-/// 仅做发现 / 预览，不读取也不搬运 blob 本体。
+/// 仅做发现 / 预览（解析磁盘布局、按 repo 枚举可迁移 blob 及基本元数据），不读取也不搬运 blob 本体。
+/// 上万 blob 的同步遍历会在前置反代后超时（504），故复用 FR-83 异步 job 基建：立即返回 `job_id`（202），
+/// 后台执行枚举，结果经 `GET /migrate/jobs/{id}` 进度的 `offline_preview` 字段轮询取回。
 pub async fn preview_nexus_offline(
-    _state: State<AppState>,
+    Extension(jobs): Extension<Arc<MigrationJobs>>,
     identity: Identity,
     Json(req): Json<NexusOfflinePreviewRequest>,
-) -> Result<Json<Vec<OfflineRepoSummary>>, ApiError> {
+) -> Result<(StatusCode, Json<JobCreatedDto>), ApiError> {
     identity.require_admin()?;
 
     let path = req.path.trim().to_string();
     if path.is_empty() {
         return Err(ApiError::BadRequest("blob store 路径不能为空".to_string()));
     }
+    // 廉价同步预校验：路径必须是存在的目录——对明显错误的路径即时 400，无需起后台任务
+    //（一次 stat 开销可忽略；真正高开销的 content/ 遍历 + 读上万 .properties 才放后台异步）
+    if !std::path::Path::new(&path).is_dir() {
+        return Err(ApiError::BadRequest(format!(
+            "blob store 路径不存在或不是目录: {path}"
+        )));
+    }
 
-    // 离线枚举是同步阻塞文件 IO（遍历目录 + 读 .properties），放到阻塞线程池执行，
-    // 不阻塞异步运行时工作线程
-    let repos = tokio::task::spawn_blocking(move || {
-        migrate::enumerate_blob_store(std::path::Path::new(&path))
-    })
-    .await
-    .map_err(|e| {
-        tracing::error!(错误 = %e, "离线 blob store 枚举任务异常");
-        ApiError::Internal
-    })??;
+    // 登记进度共享态与控制句柄（预览为单次枚举、无逐 asset 边界，控制句柄仅为统一注册表形态、不参与取消），
+    // 起后台任务执行枚举，端点立即返回 job_id（202）
+    let job_id = Uuid::new_v4().to_string();
+    let progress = Arc::new(Mutex::new(OnlinePullProgress::default()));
+    let control = Arc::new(JobControl::default());
+    jobs.register(job_id.clone(), progress.clone(), control);
 
-    Ok(Json(repos))
+    let task_job_id = job_id.clone();
+    tokio::spawn(async move {
+        // 离线枚举是同步阻塞文件 IO（遍历目录 + 读 .properties），放阻塞线程池，不占异步工作线程
+        let result = tokio::task::spawn_blocking(move || {
+            migrate::enumerate_blob_store(std::path::Path::new(&path))
+        })
+        .await;
+
+        let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
+        match result {
+            Ok(Ok(repos)) => {
+                // total_assets 记枚举到的 blob 总数，供 UI 展示规模
+                p.total_assets = repos.iter().map(|r| r.blob_count).sum();
+                p.offline_preview = Some(repos);
+                p.phase = OnlinePullPhase::Done;
+            }
+            Ok(Err(e)) => {
+                p.phase = OnlinePullPhase::Failed;
+                p.error = Some(e.to_string());
+            }
+            Err(e) => {
+                p.phase = OnlinePullPhase::Failed;
+                p.error = Some(format!("离线枚举任务异常: {e}"));
+            }
+        }
+        tracing::info!(任务 = %task_job_id, "离线 blob store 预览枚举任务结束");
+    });
+
+    Ok((StatusCode::ACCEPTED, Json(JobCreatedDto { job_id })))
 }
 
 /// proxy 仓库配置 + 缓存制品搬运请求体（FR-38）。

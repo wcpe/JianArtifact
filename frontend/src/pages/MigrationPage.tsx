@@ -89,6 +89,21 @@ function isTerminalPhase(phase: OnlinePullJob['phase']): boolean {
   return phase === 'done' || phase === 'failed' || phase === 'cancelled';
 }
 
+/**
+ * 轮询离线预览任务直到终态（FR-124）。返回终态快照；超时返回 null。
+ * 间隔 800ms、上限约 5 分钟（上万 blob 枚举可能较久）。
+ */
+async function pollOfflinePreview(jobId: string): Promise<OnlinePullJob | null> {
+  for (let i = 0; i < 375; i++) {
+    const job = await api.getMigrationJob(jobId);
+    if (isTerminalPhase(job.phase)) {
+      return job;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 800));
+  }
+  return null;
+}
+
 /** 阶段中文标签（t 由调用方组件传入，模块级函数自身无法使用 hook）。 */
 function phaseLabel(phase: OnlinePullJob['phase'], t: TFunction): string {
   switch (phase) {
@@ -171,8 +186,16 @@ export function MigrationPage() {
         });
         setRows(fromOnline(repos));
       } else {
-        const repos = await api.previewNexusOffline({ path: offlinePath.trim() });
-        setRows(fromOffline(repos, t));
+        // FR-124：离线预览异步化——发起任务后轮询，避免大库同步枚举在反代后 504。
+        const { job_id } = await api.previewNexusOffline({ path: offlinePath.trim() });
+        const job = await pollOfflinePreview(job_id);
+        if (!job) {
+          throw new Error(t('preview.timeout'));
+        }
+        if (job.phase === 'failed') {
+          throw new Error(job.error ?? t('preview.failed'));
+        }
+        setRows(fromOffline(job.offline_preview ?? [], t));
       }
       setSelected(new Set());
       setRenames({});

@@ -314,9 +314,9 @@
 
 - **方法 / 路径**：`POST /api/v1/migrate/nexus/offline/preview`
 - **请求**：JSON 体 `{ "path" }`。`path` 为本地 Nexus 文件型 blob store 根目录路径（服务进程可访问的本地文件系统路径，其下应含 `content/` 子目录）。仅管理员可调用。
-- **行为**：当源 Nexus 已下线、只剩其文件型 blob store 目录时，从该本地目录解析磁盘布局（`content/` 分片目录 + 每个 blob 一份 `.properties` 元数据），按所属仓库枚举可迁移的 blob 及基本元数据。这是迁移的**发现 / 预览**步骤，**仅解析 `.properties` 元数据、不读取也不搬运 blob 本体**（搬运为后续分期能力）。软删（`deleted=true`）、损坏或缺必要字段的元数据被容错跳过，不中断整次枚举。
-- **响应**：按仓库分组的数组，每项含 `repo_name`（仓库名，取自 `@Repo.repo-name`）、`blob_count`（该仓库枚举到的 blob 数）、`blobs`（blob 预览项数组，每项含 `blob_name`（坐标 / 路径，取自 `@BlobStore.blob-name`）、`sha1`（缺失为 `null`）、`size`（字节数，缺失或非法为 `null`））。结果按仓库名、仓库内按 blob 名字典序稳定排序。
-- **错误**：`400` 路径为空、不存在 / 非目录，或其下缺 `content/` 目录（疑似不是 Nexus 文件型 blob store）；`401` 未认证；`403` 非管理员。
+- **行为**：当源 Nexus 已下线、只剩其文件型 blob store 目录时，从该本地目录解析磁盘布局（`content/` 分片目录 + 每个 blob 一份 `.properties` 元数据），按所属仓库枚举可迁移的 blob 及基本元数据。这是迁移的**发现 / 预览**步骤，**仅解析 `.properties` 元数据、不读取也不搬运 blob 本体**（搬运为后续分期能力）。软删（`deleted=true`）、损坏或缺必要字段的元数据被容错跳过，不中断整次枚举。**异步化（FR-124）**：上万 blob 的同步遍历会在前置反向代理后超时（504），故枚举改为**后台异步任务**——同步阶段只做廉价校验（路径非空、是存在目录）即**立即返回 `202 + job_id`**，实际遍历在后台执行，结果经 `GET /api/v1/migrate/jobs/{id}` 进度的 `offline_preview` 字段轮询取回（复用 FR-83 任务注册表与轮询端点，进程内不落库）。
+- **响应**：`202 Accepted`，体 `{ "job_id": string }`——供轮询 `GET /api/v1/migrate/jobs/{id}`；任务完成（`phase == "done"`）时其进度的 **`offline_preview`** 字段为按仓库分组的数组，每项含 `repo_name`（仓库名，取自 `@Bucket.repo-name`，回退 `@Repo.repo-name`）、`blob_count`（该仓库枚举到的 blob 数）、`blobs`（blob 预览项数组，每项含 `blob_name`（坐标 / 路径，取自 `@BlobStore.blob-name`）、`sha1`（缺失为 `null`）、`size`（字节数，缺失或非法为 `null`））。结果按仓库名、仓库内按 blob 名字典序稳定排序。枚举失败（如目录下缺 `content/`）反映为任务 `phase == "failed"` + `error`。
+- **错误**：`400` 路径为空、不存在 / 非目录（同步即时返回）；`401` 未认证；`403` 非管理员。（其下缺 `content/` 等遍历期错误经任务 `failed` 阶段反映，不再是同步 400。）
 
 ### 迁移 Nexus proxy 仓库（配置 + 缓存制品搬运）
 

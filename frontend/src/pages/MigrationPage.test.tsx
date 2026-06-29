@@ -143,8 +143,15 @@ describe('MigrationPage', () => {
     expect(input).toHaveAttribute('type', 'password');
   });
 
-  it('离线预览：填本地路径后枚举 blob 分组', async () => {
-    const spy = vi.spyOn(api, 'previewNexusOffline').mockResolvedValue(离线仓库);
+  it('离线预览：异步任务——发起后轮询拿 offline_preview 枚举结果（FR-124）', async () => {
+    // FR-124：离线预览改异步，先返 job_id，再经 getMigrationJob 轮询拿 offline_preview
+    const spy = vi.spyOn(api, 'previewNexusOffline').mockResolvedValue({ job_id: 'prev-1' });
+    const jobSpy = vi.spyOn(api, 'getMigrationJob').mockResolvedValue({
+      ...任务完成,
+      job_id: 'prev-1',
+      phase: 'done',
+      offline_preview: 离线仓库,
+    });
     const user = userEvent.setup();
     renderPage();
 
@@ -155,7 +162,9 @@ describe('MigrationPage', () => {
 
     await waitFor(() => expect(screen.getByText('raw-hosted')).toBeInTheDocument());
     expect(screen.getByText('2')).toBeInTheDocument();
+    // 提交预览只带路径；枚举结果经任务轮询取回
     expect(spy).toHaveBeenCalledWith({ path: '/data/blobs' });
+    expect(jobSpy).toHaveBeenCalledWith('prev-1');
   });
 
   it('预览后勾选仓库、执行 proxy 搬运并展示报告', async () => {

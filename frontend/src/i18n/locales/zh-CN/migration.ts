@@ -61,6 +61,9 @@ export default {
     thDetail: '类型 / 内容',
     // 离线预览行的内容文案（blob 数量）
     blobCount: '{{count}} 个 blob',
+    // FR-124 离线预览异步化：枚举任务超时 / 失败提示
+    timeout: '离线预览任务超时（blob store 可能过大），请稍后重试或缩小目录',
+    failed: '离线预览枚举失败，请检查 blob store 路径与目录结构',
   },
 
   // 勾选与执行区

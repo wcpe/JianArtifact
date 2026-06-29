@@ -29,7 +29,6 @@ import type {
   NexusOfflinePreviewRequest,
   NexusPreviewRequest,
   NexusRepoSummary,
-  OfflineRepoSummary,
   OnlineMigrateRequest,
   OnlinePullJob,
   Paginated,
@@ -454,11 +453,14 @@ export function previewNexusRepositories(req: NexusPreviewRequest): Promise<Nexu
   });
 }
 
-/** 离线预览：枚举本地 blob store 可迁移内容（按 repo 分组，不搬运 blob 本体）。 */
-export function previewNexusOffline(
-  req: NexusOfflinePreviewRequest,
-): Promise<OfflineRepoSummary[]> {
-  return request<OfflineRepoSummary[]>('/migrate/nexus/offline/preview', {
+/**
+ * 离线预览：枚举本地 blob store 可迁移内容（按 repo 分组，不搬运 blob 本体）。
+ * FR-124 异步化：发起异步任务、立即返回任务句柄（job_id）；上万 blob 的枚举在后台执行，
+ * 结果经 getMigrationJob 轮询的 `offline_preview` 字段取回（避免大库同步遍历在反代后 504）。
+ * 路径为空 / 不存在等可同步判定的错误仍同步返回 400。
+ */
+export function previewNexusOffline(req: NexusOfflinePreviewRequest): Promise<MigrationJobCreated> {
+  return request<MigrationJobCreated>('/migrate/nexus/offline/preview', {
     method: 'POST',
     body: req,
   });
