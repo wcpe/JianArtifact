@@ -3,3 +3,6 @@ coverage
 node_modules
 pnpm-lock.yaml
 public/mockServiceWorker.js
+# Playwright E2E（FR-118）运行产物，非源码、不参与格式检查
+test-results
+playwright-report
