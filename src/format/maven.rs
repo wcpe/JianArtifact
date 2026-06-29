@@ -9,6 +9,8 @@
 //! 通用机理已为每个落盘文件算好四摘要，sidecar 内容即取对应摘要——客户端各文件独立 PUT / GET，
 //! 通用机理逐文件存取，本格式不需特殊聚合。
 
+use std::io::Read;
+
 use crate::meta::ArtifactRecord;
 
 use super::{
@@ -83,6 +85,35 @@ impl MavenFormat {
             version.trim(),
             file_name.trim()
         )
+    }
+
+    /// 从 jar（zip 容器）内嵌的 Maven 元数据提取 GAV（FR-120）。
+    ///
+    /// jar 即标准 zip：Maven 构建在 `META-INF/maven/<g>/<a>/pom.xml` 内嵌项目坐标，
+    /// 同目录另有 `pom.properties`（`groupId` / `artifactId` / `version` 键值）。
+    /// 优先解析 pom.xml（项目级 `groupId` / `version` 缺失时回落 `<parent>` 继承），
+    /// pom.xml 不存在或字段不全时回落 pom.properties。
+    /// 非 zip / 无内嵌 pom / 字段不全一律返回 None，调用方据此回落用户提供坐标（不崩）。
+    pub fn parse_gav_from_jar(jar: &[u8]) -> Option<Gav> {
+        let cursor = std::io::Cursor::new(jar);
+        let mut archive = zip::ZipArchive::new(cursor).ok()?;
+
+        // 优先内嵌 pom.xml（含 parent 继承），其次 pom.properties 兜底
+        if let Some(name) = find_embedded_maven_entry(&mut archive, "pom.xml") {
+            if let Some(bytes) = read_zip_entry(&mut archive, &name) {
+                if let Some(gav) = parse_gav_from_pom_xml(&bytes) {
+                    return Some(gav);
+                }
+            }
+        }
+        if let Some(name) = find_embedded_maven_entry(&mut archive, "pom.properties") {
+            if let Some(bytes) = read_zip_entry(&mut archive, &name) {
+                if let Some(gav) = parse_gav_from_pom_properties(&bytes) {
+                    return Some(gav);
+                }
+            }
+        }
+        None
     }
 
     /// 判断路径是否为校验和 / 签名 sidecar（`.sha1` / `.md5` / `.sha256` / `.sha512` / `.asc`）。
@@ -196,15 +227,16 @@ impl Format for MavenFormat {
     }
 }
 
-/// Maven 坐标（GAV）：由仓库内路径反解而来，用于生成依赖片段。
+/// Maven 坐标（GAV）：由仓库内路径反解（[`Gav::from_path`]）或 jar 内嵌 pom
+/// 解析（[`MavenFormat::parse_gav_from_jar`]）而来，用于生成依赖片段与免手填坐标。
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Gav {
+pub struct Gav {
     /// groupId（以 `.` 分隔）。
-    group_id: String,
+    pub group_id: String,
     /// artifactId。
-    artifact_id: String,
+    pub artifact_id: String,
     /// version。
-    version: String,
+    pub version: String,
 }
 
 impl Gav {
@@ -230,6 +262,143 @@ impl Gav {
             artifact_id: artifact_id.to_string(),
             version: version.to_string(),
         })
+    }
+}
+
+/// 在 jar 内查找 `META-INF/maven/.../{file_name}` 条目名（取首个命中）。
+///
+/// Maven 把内嵌坐标固定放在 `META-INF/maven/<groupId>/<artifactId>/` 下，
+/// 这里以前缀 `META-INF/maven/` + 末段文件名定位，避免误取其它同名文件。
+fn find_embedded_maven_entry<R: Read + std::io::Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    file_name: &str,
+) -> Option<String> {
+    let suffix = format!("/{file_name}");
+    (0..archive.len()).find_map(|i| {
+        let entry = archive.by_index(i).ok()?;
+        let name = entry.name();
+        if name.starts_with("META-INF/maven/") && name.ends_with(&suffix) {
+            Some(name.to_string())
+        } else {
+            None
+        }
+    })
+}
+
+/// 读取 zip 内指定条目的全部字节（读取失败返回 None）。
+fn read_zip_entry<R: Read + std::io::Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    name: &str,
+) -> Option<Vec<u8>> {
+    let mut entry = archive.by_name(name).ok()?;
+    let mut buf = Vec::new();
+    entry.read_to_end(&mut buf).ok()?;
+    Some(buf)
+}
+
+/// 解析 pom.xml 提取 GAV：项目级 `groupId` / `artifactId` / `version`，
+/// `groupId` / `version` 缺失时回落 `<parent>` 同名字段（Maven 继承语义）。
+///
+/// 以元素本地名栈定位「project 直接子元素」与「project/parent 直接子元素」，
+/// 不误取 dependencies / build 等嵌套层的同名标签。三者齐备方返回 Some。
+fn parse_gav_from_pom_xml(xml: &[u8]) -> Option<Gav> {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+
+    let mut reader = Reader::from_reader(xml);
+    reader.config_mut().trim_text(true);
+
+    // 元素本地名栈（如 ["project", "parent", "groupId"]）
+    let mut stack: Vec<String> = Vec::new();
+    let mut project_group: Option<String> = None;
+    let mut project_artifact: Option<String> = None;
+    let mut project_version: Option<String> = None;
+    let mut parent_group: Option<String> = None;
+    let mut parent_version: Option<String> = None;
+
+    let mut buf = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) => stack.push(local_name(e.name().as_ref())),
+            Ok(Event::End(_)) => {
+                stack.pop();
+            }
+            Ok(Event::Text(e)) => {
+                let text = match e.xml_content(quick_xml::XmlVersion::default()) {
+                    Ok(t) => t.trim().to_string(),
+                    Err(_) => {
+                        buf.clear();
+                        continue;
+                    }
+                };
+                if text.is_empty() {
+                    buf.clear();
+                    continue;
+                }
+                let path: Vec<&str> = stack.iter().map(String::as_str).collect();
+                match path.as_slice() {
+                    ["project", "groupId"] => project_group = Some(text),
+                    ["project", "artifactId"] => project_artifact = Some(text),
+                    ["project", "version"] => project_version = Some(text),
+                    ["project", "parent", "groupId"] => parent_group = Some(text),
+                    ["project", "parent", "version"] => parent_version = Some(text),
+                    _ => {}
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => return None,
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    Some(Gav {
+        group_id: project_group.or(parent_group)?,
+        artifact_id: project_artifact?,
+        version: project_version.or(parent_version)?,
+    })
+}
+
+/// 解析 pom.properties 提取 GAV：逐行 `key=value`，取 groupId / artifactId / version。
+///
+/// 跳过空行与 `#` / `!` 注释行；三者齐备方返回 Some。
+fn parse_gav_from_pom_properties(bytes: &[u8]) -> Option<Gav> {
+    let text = String::from_utf8_lossy(bytes);
+    let mut group_id: Option<String> = None;
+    let mut artifact_id: Option<String> = None;
+    let mut version: Option<String> = None;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with('!') {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let value = value.trim().to_string();
+        if value.is_empty() {
+            continue;
+        }
+        match key.trim() {
+            "groupId" => group_id = Some(value),
+            "artifactId" => artifact_id = Some(value),
+            "version" => version = Some(value),
+            _ => {}
+        }
+    }
+    Some(Gav {
+        group_id: group_id?,
+        artifact_id: artifact_id?,
+        version: version?,
+    })
+}
+
+/// 取 XML 限定名的本地名（去命名空间前缀 `ns:`）。
+fn local_name(qname: &[u8]) -> String {
+    let s = String::from_utf8_lossy(qname);
+    match s.rsplit_once(':') {
+        Some((_, local)) => local.to_string(),
+        None => s.to_string(),
     }
 }
 
@@ -430,5 +599,149 @@ mod tests {
         // 无法解出 GAV 时只给仓库接入片段
         assert_eq!(snippets.len(), 1);
         assert_eq!(snippets[0].title, "仓库接入 (settings.xml)");
+    }
+
+    /// 构造一份最小 jar（zip）：可选放入内嵌 pom.xml / pom.properties 于标准 META-INF/maven 路径。
+    fn 构造_jar(pom_xml: Option<&str>, pom_properties: Option<&str>) -> Vec<u8> {
+        use std::io::Write;
+        use zip::write::SimpleFileOptions;
+        use zip::ZipWriter;
+        let mut buf = Vec::new();
+        {
+            let cursor = std::io::Cursor::new(&mut buf);
+            let mut zip = ZipWriter::new(cursor);
+            let opts =
+                SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+            // 放一个普通 class 条目，验证不被误读为坐标来源
+            zip.start_file("com/example/Demo.class", opts).unwrap();
+            zip.write_all(b"CAFEBABE").unwrap();
+            if let Some(xml) = pom_xml {
+                zip.start_file("META-INF/maven/com.example/demo/pom.xml", opts)
+                    .unwrap();
+                zip.write_all(xml.as_bytes()).unwrap();
+            }
+            if let Some(props) = pom_properties {
+                zip.start_file("META-INF/maven/com.example/demo/pom.properties", opts)
+                    .unwrap();
+                zip.write_all(props.as_bytes()).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        buf
+    }
+
+    #[test]
+    fn jar内嵌pom_xml提取gav() {
+        let xml = r#"<project>
+            <groupId>com.example</groupId>
+            <artifactId>demo</artifactId>
+            <version>1.2.3</version>
+        </project>"#;
+        let jar = 构造_jar(Some(xml), None);
+        let gav = MavenFormat::parse_gav_from_jar(&jar).unwrap();
+        assert_eq!(gav.group_id, "com.example");
+        assert_eq!(gav.artifact_id, "demo");
+        assert_eq!(gav.version, "1.2.3");
+    }
+
+    #[test]
+    fn jar内嵌pom_xml的groupid与version继承parent() {
+        // 子项目仅声明 artifactId，groupId / version 继承 parent
+        let xml = r#"<project>
+            <parent>
+                <groupId>com.parent</groupId>
+                <artifactId>parent</artifactId>
+                <version>9.9.9</version>
+            </parent>
+            <artifactId>child</artifactId>
+        </project>"#;
+        let jar = 构造_jar(Some(xml), None);
+        let gav = MavenFormat::parse_gav_from_jar(&jar).unwrap();
+        assert_eq!(gav.group_id, "com.parent");
+        assert_eq!(gav.artifact_id, "child");
+        assert_eq!(gav.version, "9.9.9");
+    }
+
+    #[test]
+    fn jar内嵌pom_xml项目级优先于parent() {
+        // 同时声明 parent 与项目级 groupId / version 时，项目级优先
+        let xml = r#"<project>
+            <parent>
+                <groupId>com.parent</groupId>
+                <artifactId>parent</artifactId>
+                <version>9.9.9</version>
+            </parent>
+            <groupId>com.child</groupId>
+            <artifactId>child</artifactId>
+            <version>1.0.0</version>
+        </project>"#;
+        let jar = 构造_jar(Some(xml), None);
+        let gav = MavenFormat::parse_gav_from_jar(&jar).unwrap();
+        assert_eq!(gav.group_id, "com.child");
+        assert_eq!(gav.version, "1.0.0");
+    }
+
+    #[test]
+    fn jar内嵌pom_xml不取dependencies内的groupid() {
+        let xml = r#"<project>
+            <groupId>real.group</groupId>
+            <artifactId>real-artifact</artifactId>
+            <version>2.0.0</version>
+            <dependencies>
+                <dependency>
+                    <groupId>other.group</groupId>
+                    <artifactId>other</artifactId>
+                    <version>3.0.0</version>
+                </dependency>
+            </dependencies>
+        </project>"#;
+        let jar = 构造_jar(Some(xml), None);
+        let gav = MavenFormat::parse_gav_from_jar(&jar).unwrap();
+        assert_eq!(gav.group_id, "real.group");
+        assert_eq!(gav.artifact_id, "real-artifact");
+        assert_eq!(gav.version, "2.0.0");
+    }
+
+    #[test]
+    fn jar内嵌pom_properties兜底() {
+        let props = "#Generated by Maven\ngroupId=com.props\nartifactId=props-lib\nversion=4.5.6\n";
+        let jar = 构造_jar(None, Some(props));
+        let gav = MavenFormat::parse_gav_from_jar(&jar).unwrap();
+        assert_eq!(gav.group_id, "com.props");
+        assert_eq!(gav.artifact_id, "props-lib");
+        assert_eq!(gav.version, "4.5.6");
+    }
+
+    #[test]
+    fn jar_pom_xml优先于properties() {
+        let xml = r#"<project><groupId>from.xml</groupId><artifactId>x</artifactId><version>1.0</version></project>"#;
+        let props = "groupId=from.props\nartifactId=p\nversion=2.0\n";
+        let jar = 构造_jar(Some(xml), Some(props));
+        let gav = MavenFormat::parse_gav_from_jar(&jar).unwrap();
+        assert_eq!(gav.group_id, "from.xml");
+        assert_eq!(gav.artifact_id, "x");
+        assert_eq!(gav.version, "1.0");
+    }
+
+    #[test]
+    fn jar_pom_xml不全时回落properties() {
+        // pom.xml 缺 version，无法解出完整 GAV → 回落 properties
+        let xml = r#"<project><groupId>g</groupId><artifactId>a</artifactId></project>"#;
+        let props = "groupId=com.props\nartifactId=props-lib\nversion=4.5.6\n";
+        let jar = 构造_jar(Some(xml), Some(props));
+        let gav = MavenFormat::parse_gav_from_jar(&jar).unwrap();
+        assert_eq!(gav.version, "4.5.6");
+        assert_eq!(gav.group_id, "com.props");
+    }
+
+    #[test]
+    fn jar无内嵌pom返回none() {
+        let jar = 构造_jar(None, None);
+        assert!(MavenFormat::parse_gav_from_jar(&jar).is_none());
+    }
+
+    #[test]
+    fn 非zip字节返回none() {
+        assert!(MavenFormat::parse_gav_from_jar(b"not-a-zip-file").is_none());
     }
 }

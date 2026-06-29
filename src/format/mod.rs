@@ -25,7 +25,7 @@ pub use cargo::{CargoError, CargoFormat, CargoPublishRequest};
 pub use docker::DockerFormat;
 pub use docker_registry::{DockerError, DockerRegistry};
 pub use go_mod::{GoError, GoFormat, GoRequest, VersionFile};
-pub use maven::MavenFormat;
+pub use maven::{Gav, MavenFormat};
 pub use npm::{NpmError, NpmFormat, PublishRequest};
 pub use nuget::{NuGetError, NuGetFormat, PackageIdentity};
 pub use pypi::{
