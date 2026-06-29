@@ -23,5 +23,8 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
     css: false,
+    // 排除 Playwright E2E 规格（FR-118）：e2e/*.spec.ts 由 @playwright/test 运行，
+    // 其用例导入 playwright 夹具、在真浏览器跑，不能被 vitest（jsdom）收集。
+    exclude: ['node_modules', 'dist', 'e2e/**'],
   },
 });

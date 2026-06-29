@@ -57,6 +57,14 @@ jobs:
       - name: 构建前端
         run: pnpm -C frontend build
 
+      # 前端静态检查（FR-117）：eslint + prettier --check，与后端 fmt/clippy 同级门禁。
+      - name: 前端 lint（eslint + prettier）
+        run: pnpm -C frontend lint
+
+      # 前端单元 / 集成测试（FR-117）：vitest（含 MSW 契约强断言，FR-116）。
+      - name: 前端测试（vitest）
+        run: pnpm -C frontend test
+
       # 格式检查：不符合 rustfmt 即失败。
       - name: 检查格式（cargo fmt --check）
         run: cargo fmt --check
@@ -68,6 +76,39 @@ jobs:
       # 跑测试套件。
       - name: 运行测试（cargo test）
         run: cargo test
+
+  # 前端 E2E（FR-118，ADR-0036）：Playwright 真浏览器跑关键流程。E2E 目标=前端 Mock 模式
+  # （VITE_MOCK=true，复用 FR-119/ADR-0035 浏览器内有状态 mock 后端），故自包含、无须起 Rust
+  # 后端；playwright.config 的 webServer 自行 vite build + preview 起被测前端。独立 job。
+  e2e:
+    name: 前端 E2E（Playwright）
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: 安装前端依赖
+        run: pnpm -C frontend install --frozen-lockfile
+
+      # 装 Playwright 浏览器（仅 chromium）+ 系统依赖。
+      - name: 安装 Playwright 浏览器
+        run: pnpm -C frontend exec playwright install --with-deps chromium
+
+      # 跑 E2E（webServer 自行 vite build + preview，VITE_MOCK=true）。
+      - name: 运行 E2E（playwright test）
+        run: pnpm -C frontend exec playwright test
 
   # 依赖安全审计：独立 job，不阻断主质量门（对齐 static-analysis.md「漏洞发现工具作入口」，
   # 但不因上游公告波动阻断合并）。continue-on-error 使其失败仅告警、不挂红主流程。

@@ -39,6 +39,7 @@
 | 0034 | 前端 i18n 框架与文案组织（FR-111）：引入 i18next + react-i18next，`src/i18n` init 全局单例、`main.tsx` 与测试 setup 装载；**本期只交付 zh-CN**（默认且唯一、不做切换 UI），结构上为多语言预留；**按命名空间分文件**（每页一个 ns + common/nav/errors/auditActions）以支持并行迁移防写冲突；key 规范 `t('ns:key')`、缺 key 回落 key；审计动作 key 含点经 `tAuditAction` 归一（`.`→`_`）查 auditActions ns；文案逐字不变、既有测试基本不破（P2） | 已接受 |
 | 0029 | 运行时日志文件 sink + 读取 API（扩展 ADR-0015）：`init_tracing` 保留 stdout 之外经 tracing-subscriber `reload` 层（拿到 data_dir 后换入）追加文件 sink 写 `{data_dir}/logs/app.log`，自实现单文件 + 单次大小滚动（`std`，不引 tracing-appender）；仅 Admin `GET /api/v1/system-logs` 读文件 → 纯函数解析（时间/级别/消息）+ 级别精确过滤 + tail/分页 → 统一分页响应，文件缺失返空；运行日志载体文件、**不落库**，与审计（业务留痕落 SQLite）严格区分（P2） | 已接受 |
 | 0035 | 前端测试 mock 与运行时 Mock 模式策略（FR-116/FR-119）：引入 msw（devDep）建**有状态内存 mock 后端**——内存 store（用户/仓库/制品/令牌/审计/设置等可变集合 + seed/reset）+ 各 REST 端点有状态 CRUD handlers，作测试与运行时 Mock 模式**共用底座**；测试经 `msw/node` `setupServer` 全局装载、组件走真实 client.ts 发请求被拦截，**按真实请求方法/路径/体 + 响应渲染强断言**（替手工 vi.mock 弱断言）；运行时经 `msw/browser` `setupWorker` + `public/mockServiceWorker.js` 仅在 Mock 模式开启时拦截全部 `/api/v1/*`，**默认关、生产零影响**（P2） | 已接受 |
+| 0036 | 前端 Playwright E2E 测试策略（FR-118）：引入 @playwright/test（devDep）跑真浏览器（仅 chromium）端到端关键流程；**E2E 目标=前端 Mock 模式**（复用 FR-119/ADR-0035 浏览器内有状态 mock 后端，`VITE_MOCK=true`），故 E2E **自包含、不起 Rust 后端 / 无须 bootstrap·数据目录**、种子数据固定、确定性强、CI 友好；`webServer` 先 `vite build` 再 `vite preview`（贴近生产产物含 service worker）；新增 CI e2e job 装 chromium 跑 `playwright test`。真二进制端到端（前端打真后端）重、留后续（P2） | 已接受 |
 
 > 模板：状态 / 背景 / 决策 / 理由 / 后果 / 备选方案。
 
