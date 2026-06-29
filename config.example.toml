@@ -56,12 +56,12 @@ upstream_timeout_secs = 60
 # # 直连绕过列表（逗号分隔的主机 / 域 / CIDR），命中者不经代理。
 # no_proxy = "localhost,127.0.0.1"
 
-# 慢速攻击（slowloris）超时与通用请求体大小限制（FR-52 / ADR-0008）。默认关闭。
+# 慢速攻击（slowloris）超时与通用请求体大小限制（FR-52 / ADR-0008，FR-130）。默认开启。
 # 超时按「块间空闲」而非整体时长判定，对正常大文件流式上传（mvn deploy 大 jar、
 # docker push 大层）友好，只切断长时间不发数据的慢速连接。仅应用层（L7）；
 # L3/L4 体积型攻击仍由前置反向代理 / CDN / WAF 承担。
 # [protection.slowloris]
-# enabled = false
+# enabled = true
 # # 请求体相邻数据块的空闲超时（秒）：超过即判为慢速 drip 并断开。
 # body_read_timeout_secs = 30
 # # 等待请求体首个数据块的超时（秒）：发完头后迟迟不发体即断开。

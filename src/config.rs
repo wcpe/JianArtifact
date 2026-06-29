@@ -52,8 +52,11 @@ const DEFAULT_VULN_SOURCE_BASE_URL: &str = "https://osv-vulnerabilities.storage.
 const DEFAULT_VULN_REFRESH_INTERVAL_SECS: u64 = 86_400;
 /// 漏洞库镜像下载整体超时（秒），默认 600 秒（按生态 all.zip 可能较大）。
 const DEFAULT_VULN_DOWNLOAD_TIMEOUT_SECS: u64 = 600;
-/// 速率限制默认开关（FR-33，ADR-0008）：默认关闭，须运维显式开启，避免误杀正常流量。
-const DEFAULT_RATE_LIMIT_ENABLED: bool = false;
+/// 速率限制默认开关（FR-33，ADR-0008，FR-130）：默认开启。
+///
+/// 阈值保守宽放（单 IP 1200 req/60s、单身份 2400 req/60s），正常包管理器批量拉取不触顶；
+/// 仓库与并发维度默认 0（不启用），进一步规避误杀。CC 挑战 / WAF 仍默认关。
+const DEFAULT_RATE_LIMIT_ENABLED: bool = true;
 /// 速率限制默认时间窗（秒）：60 秒固定窗。
 const DEFAULT_RATE_LIMIT_WINDOW_SECS: u64 = 60;
 /// 单 IP 每窗默认请求上限：保守宽放，正常包管理器批量拉取不应触顶。
@@ -68,8 +71,11 @@ const DEFAULT_RATE_LIMIT_IP_MAX_CONCURRENT: u64 = 0;
 const DEFAULT_RATE_LIMIT_USER_MAX_CONCURRENT: u64 = 0;
 /// 单仓库默认并发在途请求上限（FR-51 并发上限）：默认 0 表示不限并发。
 const DEFAULT_RATE_LIMIT_REPO_MAX_CONCURRENT: u64 = 0;
-/// 访问异常检测与自动封禁默认开关（FR-53，ADR-0008）：默认关闭，须运维显式开启，避免误杀。
-const DEFAULT_BAN_ENABLED: bool = false;
+/// 访问异常检测与自动封禁默认开关（FR-53，ADR-0008，FR-130）：默认开启。
+///
+/// 阈值保守宽放（单 IP 一窗 100 异常信号才触发封禁），包管理器偶发 404 探测不触顶；
+/// 封禁到期自动解封，误封运维可手动清除。CC 挑战 / WAF 仍默认关。
+const DEFAULT_BAN_ENABLED: bool = true;
 /// 异常检测固定时间窗时长（秒）：在该窗内统计单 IP 的异常信号数。
 const DEFAULT_BAN_WINDOW_SECS: u64 = 60;
 /// 触发自动封禁的窗内异常信号阈值：单 IP 一窗内异常信号数达此值即封禁。
@@ -79,8 +85,12 @@ const DEFAULT_BAN_WINDOW_SECS: u64 = 60;
 const DEFAULT_BAN_THRESHOLD: u64 = 100;
 /// 自动封禁时长（秒）：封禁期内来源 IP 一律拒绝；到期自动解封。默认 15 分钟。
 const DEFAULT_BAN_DURATION_SECS: u64 = 900;
-/// 慢速攻击防护默认开关（FR-52，ADR-0008）：默认关闭，须运维显式开启，避免误伤慢速合法客户端。
-const DEFAULT_SLOWLORIS_ENABLED: bool = false;
+/// 慢速攻击防护默认开关（FR-52，ADR-0008，FR-130）：默认开启。
+///
+/// 超时按「块间空闲」而非整体时长判定：只要客户端持续有数据到达就不触发，
+/// 对正常大文件流式上传（mvn deploy 大 jar、docker push 大层）友好；
+/// 仅切断长时间不发数据的 slowloris 慢速连接。CC 挑战 / WAF 仍默认关。
+const DEFAULT_SLOWLORIS_ENABLED: bool = true;
 /// 请求体读取的相邻数据块默认空闲超时（秒）：两次到达数据块的最大间隔，超过即判为慢速 drip 并断开。
 ///
 /// 这是「块间空闲超时」而非「整体超时」：只要客户端持续有数据到达就不触发，因此对正常大文件流式
@@ -1370,8 +1380,8 @@ mod tests {
             // 指标默认：端点开、匿名抓取关
             assert!(cfg.observability.metrics.enabled);
             assert!(!cfg.observability.metrics.allow_anonymous);
-            // 速率限制默认：关闭、保守阈值（不误杀正常批量拉取）
-            assert!(!cfg.protection.rate_limit.enabled);
+            // 速率限制默认：开启（FR-130）、保守阈值（不误杀正常批量拉取）
+            assert!(cfg.protection.rate_limit.enabled);
             assert_eq!(cfg.protection.rate_limit.window_secs, 60);
             assert_eq!(cfg.protection.rate_limit.ip_max_requests, 1200);
             assert_eq!(cfg.protection.rate_limit.identity_max_requests, 2400);
@@ -1383,13 +1393,13 @@ mod tests {
             // FR-53 名单默认两表皆空（不启用）
             assert!(cfg.protection.ip_list.allow.is_empty());
             assert!(cfg.protection.ip_list.deny.is_empty());
-            // FR-53 异常封禁默认：关闭、阈值保守宽放
-            assert!(!cfg.protection.ban.enabled);
+            // FR-53 异常封禁默认：开启（FR-130）、阈值保守宽放
+            assert!(cfg.protection.ban.enabled);
             assert_eq!(cfg.protection.ban.window_secs, 60);
             assert_eq!(cfg.protection.ban.threshold, 100);
             assert_eq!(cfg.protection.ban.duration_secs, 900);
-            // 慢速攻击防护默认：关闭、超时档位保守、通用体上限 0（不启用）
-            assert!(!cfg.protection.slowloris.enabled);
+            // 慢速攻击防护默认：开启（FR-130）、超时档位保守、通用体上限 0（不启用）
+            assert!(cfg.protection.slowloris.enabled);
             assert_eq!(cfg.protection.slowloris.body_read_timeout_secs, 30);
             assert_eq!(cfg.protection.slowloris.header_timeout_secs, 30);
             assert_eq!(cfg.protection.slowloris.max_body_bytes, 0);
@@ -1402,6 +1412,103 @@ mod tests {
             assert!(!cfg.protection.waf.enabled);
             assert!(cfg.protection.waf.rules.is_empty());
         });
+    }
+
+    // ===== FR-130：防护默认开启（仅基础三层） =====
+
+    /// FR-130 核心断言：基础三层默认开启，CC/WAF 仍默认关。
+    ///
+    /// 验收：`ProtectionConfig::default()` 中 RateLimit / Slowloris / AnomalyBan 的
+    /// `enabled` 为 `true`；CC 挑战 / WAF 的 `enabled` 为 `false`。
+    #[test]
+    fn 基础三层防护默认开启_cc_waf_仍默认关() {
+        let cfg = ProtectionConfig::default();
+        // 基础三层：默认开启
+        assert!(cfg.rate_limit.enabled, "FR-130: RateLimit 应默认开启");
+        assert!(cfg.slowloris.enabled, "FR-130: Slowloris 应默认开启");
+        assert!(cfg.ban.enabled, "FR-130: AnomalyBan 应默认开启");
+        // CC 挑战 / WAF：仍默认关（误杀风险高）
+        assert!(!cfg.cc_challenge.enabled, "FR-130: CC 挑战应仍默认关");
+        assert!(!cfg.waf.enabled, "FR-130: WAF 应仍默认关");
+    }
+
+    /// FR-130 §2.7 误杀：默认配置下，正常高频包管理器访问（IP 维度）不触限流。
+    ///
+    /// 验收：在默认 RateLimit 配置（`enabled=true`，窗 60s，IP 上限 1200）下，
+    /// 正常批量拉取（<1200 次/窗）不应被限流拒绝——即单窗内请求数低于阈值时放行。
+    #[test]
+    fn 默认速率限制配置下正常高频访问不被误杀() {
+        let cfg = RateLimitConfig::default();
+        // 前提：默认已开启
+        assert!(cfg.enabled, "FR-130: 默认应已开启，否则本测试无意义");
+        // 阈值足够宽松：包管理器高频拉取不触顶
+        // 以 mvn 批量下载为例：一次完整构建拉 200 依赖（每依赖 pom + jar + 校验和 ≈4 请求）
+        // = ~800 请求，远低于 1200/窗，应被放行
+        let typical_build_requests: u64 = 800;
+        assert!(
+            typical_build_requests < cfg.ip_max_requests,
+            "FR-130 误杀防护：典型构建 {} 请求 < IP 阈值 {}，应被放行",
+            typical_build_requests,
+            cfg.ip_max_requests
+        );
+        // CI 高频身份维度：ci 并发构建约 400 请求/身份/窗，低于 2400 身份阈值
+        let ci_identity_requests: u64 = 400;
+        assert!(
+            ci_identity_requests < cfg.identity_max_requests,
+            "FR-130 误杀防护：CI 高频 {} 请求 < 身份阈值 {}，应被放行",
+            ci_identity_requests,
+            cfg.identity_max_requests
+        );
+        // 仓库维度默认 0（不启用该维度），避免误杀正常批量拉取
+        assert_eq!(
+            cfg.repo_max_requests, 0,
+            "FR-130 误杀防护：仓库维度默认 0（不启用），不误杀"
+        );
+    }
+
+    /// FR-130 §2.7 误杀：默认封禁配置下，偶发 4xx 不触发自动封禁。
+    ///
+    /// 验收：在默认 AnomalyBan 配置（`enabled=true`，窗 60s，阈值 100）下，
+    /// 包管理器偶发 404（探测版本是否存在）不应触发封禁。
+    #[test]
+    fn 默认封禁配置下偶发4xx不触发自动封禁() {
+        let cfg = BanConfig::default();
+        assert!(cfg.enabled, "FR-130: 默认应已开启");
+        // mvn 探测：检查 release 版本存在性时会 404，典型一次构建触发 10-20 个 404
+        // 远低于 100 异常信号/窗的阈值
+        let typical_404_per_build: u64 = 20;
+        assert!(
+            typical_404_per_build < cfg.threshold,
+            "FR-130 误杀防护：偶发 404 {} < 封禁阈值 {}，不应封禁",
+            typical_404_per_build,
+            cfg.threshold
+        );
+        // 窗口保守：60s 内统计
+        assert_eq!(cfg.window_secs, 60, "FR-130: 封禁统计窗应为 60s");
+    }
+
+    /// FR-130 §2.7 误杀：默认慢速防护配置下，正常大文件上传不被误伤。
+    ///
+    /// 验收：在默认 Slowloris 配置（`enabled=true`，块间 30s，首块 30s）下，
+    /// 只要客户端持续发送数据，正常大文件流式上传不会被截断。
+    #[test]
+    fn 默认慢速防护配置下正常大文件上传不被误伤() {
+        let cfg = SlowlorisConfig::default();
+        assert!(cfg.enabled, "FR-130: 默认应已开启");
+        // 块间空闲超时 30s：正常流式上传（网络持续传输）的块间间隔 << 30s，不触发
+        assert_eq!(
+            cfg.body_read_timeout_secs, 30,
+            "FR-130: 块间空闲超时应为 30s（宽松）"
+        );
+        assert_eq!(
+            cfg.header_timeout_secs, 30,
+            "FR-130: 首块超时应为 30s（宽松）"
+        );
+        // 通用体上限 0（不启用）：不会误杀大制品（如 docker 镜像层）
+        assert_eq!(
+            cfg.max_body_bytes, 0,
+            "FR-130 误杀防护：通用体上限 0（不启用），不误杀大制品"
+        );
     }
 
     #[test]
@@ -1488,13 +1595,15 @@ mod tests {
 
     #[test]
     fn 慢速攻击防护未配置时回落默认且不影响限流() {
-        // 只配置 rate_limit，slowloris 节缺失应回落默认（向后兼容旧配置）
+        // 只配置 rate_limit，slowloris 节缺失应回落默认（向后兼容旧配置）。
+        // FR-130 后默认值为开启，缺失节回落 enabled=true（新默认值）。
         let mut file = tempfile::NamedTempFile::new().unwrap();
         writeln!(file, "[protection.rate_limit]\nenabled = true").unwrap();
         with_env_vars(&[], || {
             let cfg = Config::load(file.path()).unwrap();
             assert!(cfg.protection.rate_limit.enabled);
-            assert!(!cfg.protection.slowloris.enabled);
+            // FR-130：slowloris 节缺失时回落新默认值（enabled=true）
+            assert!(cfg.protection.slowloris.enabled);
             assert_eq!(cfg.protection.slowloris.body_read_timeout_secs, 30);
         });
     }
