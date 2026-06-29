@@ -516,4 +516,83 @@ describe('SettingsPage', () => {
     expect(updateSettings).not.toHaveBeenCalled();
     await waitFor(() => expect(screen.getByText('已保存，配置已即时生效。')).toBeInTheDocument());
   });
+
+  // ===== FR-128：代理连通性测试 =====
+
+  it('FR-128：代理节有测试 URL 输入框和「测试」按钮', async () => {
+    vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
+    桩动态配置();
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
+    // 测试 URL 输入框存在
+    expect(screen.getByTestId('proxy-test-url-input')).toBeInTheDocument();
+    // 测试按钮存在
+    expect(screen.getByTestId('proxy-test-button')).toBeInTheDocument();
+    expect(screen.getByTestId('proxy-test-button')).toHaveTextContent('测试');
+  });
+
+  it('FR-128：点测试按钮调 testProxy 并展示连通成功结果', async () => {
+    vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
+    桩动态配置();
+    const testProxy = vi.spyOn(api, 'testProxy').mockResolvedValue({
+      ok: true,
+      status: 200,
+      elapsed_ms: 123,
+    });
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
+
+    // 填入 URL
+    fireEvent.change(screen.getByTestId('proxy-test-url-input'), {
+      target: { value: 'https://example.com' },
+    });
+    // 点测试
+    fireEvent.click(screen.getByTestId('proxy-test-button'));
+
+    await waitFor(() => expect(testProxy).toHaveBeenCalledWith('https://example.com'));
+    // 展示成功结果（绿色，含状态码与耗时）
+    await waitFor(() => expect(screen.getByTestId('proxy-test-result')).toBeInTheDocument());
+    expect(screen.getByTestId('proxy-test-result').textContent).toContain('200');
+    expect(screen.getByTestId('proxy-test-result').textContent).toContain('123');
+  });
+
+  it('FR-128：点测试按钮调 testProxy 并展示连通失败结果', async () => {
+    vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
+    桩动态配置();
+    vi.spyOn(api, 'testProxy').mockResolvedValue({
+      ok: false,
+      elapsed_ms: 500,
+      error: '连接失败',
+    });
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByTestId('proxy-test-url-input'), {
+      target: { value: 'http://127.0.0.1:1' },
+    });
+    fireEvent.click(screen.getByTestId('proxy-test-button'));
+
+    await waitFor(() => expect(screen.getByTestId('proxy-test-result')).toBeInTheDocument());
+    expect(screen.getByTestId('proxy-test-result').textContent).toContain('连接失败');
+  });
+
+  it('FR-128：URL 为空时不调 testProxy，展示提示', async () => {
+    vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
+    桩动态配置();
+    const testProxy = vi.spyOn(api, 'testProxy');
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
+
+    // 不填 URL 直接点测试
+    fireEvent.click(screen.getByTestId('proxy-test-button'));
+
+    // 不应调用 testProxy
+    expect(testProxy).not.toHaveBeenCalled();
+    // 应展示错误提示
+    await waitFor(() => expect(screen.getByTestId('proxy-test-error')).toBeInTheDocument());
+  });
 });

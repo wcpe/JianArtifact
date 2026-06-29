@@ -23,6 +23,17 @@ export default {
     httpsTitle: 'HTTPS 代理',
     socks5Title: 'SOCKS5 代理（all，兜底全 scheme）',
     noProxyLabel: '直连绕过（no_proxy）',
+    // 连通性测试（FR-128）
+    testTitle: '连通性测试',
+    testDesc: '经当前生效出站代理访问目标 URL，验证代理是否可达。',
+    testUrlLabel: '目标 URL',
+    testUrlPlaceholder: 'https://example.com',
+    testButton: '测试',
+    testTesting: '测试中…',
+    testResultOk: '连通（{{status}} · {{elapsed_ms}} ms）',
+    testResultFail: '失败：{{error}}',
+    testResultFailNoError: '连接失败',
+    testUrlRequired: '请填写目标 URL',
   },
   // 单代理三字段子组件（ProxyFields）
   proxyFields: {

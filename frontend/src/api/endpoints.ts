@@ -34,6 +34,8 @@ import type {
   Permission,
   ProtectionAlertDto,
   ProtectionStatusDto,
+  ProxyTestRequest,
+  ProxyTestResult,
   RepoFormat,
   RepositoryDto,
   SearchHit,
@@ -543,6 +545,12 @@ export function getSettings(): Promise<SettingsView> {
 /** 编辑网络代理 + 在线更新配置（仅管理员，PATCH 即时生效、无须重启，FR-88）。 */
 export function updateSettings(patch: SettingsPatch): Promise<SettingsView> {
   return request<SettingsView>('/settings', { method: 'PATCH', body: patch });
+}
+
+/** 出站代理连通性测试（FR-128，仅管理员）：经当前生效出站代理对给定 URL 发 GET，返回连通性。 */
+export function testProxy(url: string): Promise<ProxyTestResult> {
+  const body: ProxyTestRequest = { url };
+  return request<ProxyTestResult>('/settings/proxy-test', { method: 'POST', body });
 }
 
 /** 读取动态配置面板各非密钥节的当前 / 待生效值（仅管理员，FR-106）。 */

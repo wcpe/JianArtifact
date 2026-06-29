@@ -692,6 +692,26 @@ export interface SettingsPatch {
   update?: UpdatePatch;
 }
 
+// —— 出站代理连通性测试（FR-128，仅管理员） ——
+
+/** 出站代理连通性测试请求体。 */
+export interface ProxyTestRequest {
+  /** 目标测试 URL（仅接受 http/https scheme）。 */
+  url: string;
+}
+
+/** 出站代理连通性测试结果。 */
+export interface ProxyTestResult {
+  /** 是否连通：能收到响应即为 true，连接失败 / 超时为 false。 */
+  ok: boolean;
+  /** HTTP 响应状态码（仅 ok=true 时有值）。 */
+  status?: number;
+  /** 往返耗时（毫秒）。 */
+  elapsed_ms: number;
+  /** 失败原因（仅 ok=false 时有值）。 */
+  error?: string;
+}
+
 // —— 动态配置面板（FR-106，仅管理员，保存后重启生效；对齐后端 src/api/dynamic_config.rs） ——
 
 /** 上传等限制（limits 节）。max_artifact_size 为 null 表示不额外限制。 */

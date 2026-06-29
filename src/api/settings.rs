@@ -649,6 +649,107 @@ pub async fn patch_settings(
     Ok(Json(current_view(&state)))
 }
 
+/// 出站代理连通性测试请求体（FR-128）。
+#[derive(Debug, Deserialize)]
+pub struct ProxyTestRequest {
+    /// 目标测试 URL（仅接受 http/https scheme）。
+    pub url: String,
+}
+
+/// 出站代理连通性测试响应（FR-128）。
+#[derive(Debug, Serialize)]
+pub struct ProxyTestResult {
+    /// 是否连通：能收到响应即为 true，连接失败 / 超时为 false。
+    pub ok: bool,
+    /// HTTP 响应状态码（仅 ok=true 时有值）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<u16>,
+    /// 往返耗时（毫秒）。
+    pub elapsed_ms: u64,
+    /// 失败原因（仅 ok=false 时有值，不含凭据 / 代理 URL 明文）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// 出站代理连通性测试（FR-128，仅 Admin）。
+///
+/// 取当前生效出站 client（含代理配置）对用户给定 URL 发 GET，返回连通性。
+/// 仅接受 http/https scheme（防 SSRF file/ftp 等）；仅访问用户给定 URL，不外发任何使用数据（ADR-0009）。
+pub async fn proxy_test(
+    State(state): State<AppState>,
+    identity: Identity,
+    Json(req): Json<ProxyTestRequest>,
+) -> Result<Json<ProxyTestResult>, ApiError> {
+    identity.require_admin()?;
+
+    let url = req.url.trim().to_string();
+
+    // 校验 URL：仅接受 http/https scheme（防 SSRF file/ftp 等非出站协议）
+    let lower = url.to_lowercase();
+    if !lower.starts_with("http://") && !lower.starts_with("https://") {
+        return Err(ApiError::BadRequest(
+            "仅支持 http:// 或 https:// 开头的 URL".to_string(),
+        ));
+    }
+    // 进一步校验：URL 不能过短（至少 scheme + "://" + 一个字符）
+    if url.len() < 8 {
+        return Err(ApiError::BadRequest("URL 格式非法".to_string()));
+    }
+
+    // 取当前生效出站 client（含出站代理），读锁极短、锁外发请求
+    let client = state.settings.network.client();
+
+    let start = std::time::Instant::now();
+    // 带 10s 超时的 GET 请求（覆盖 client 默认超时，专用测试超时）
+    let result = client
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await;
+    let elapsed_ms = start.elapsed().as_millis() as u64;
+
+    match result {
+        Ok(resp) => {
+            let status = resp.status().as_u16();
+            tracing::info!(
+                操作者 = %identity.actor_name(),
+                状态码 = status,
+                耗时毫秒 = elapsed_ms,
+                "代理连通性测试成功"
+            );
+            Ok(Json(ProxyTestResult {
+                ok: true,
+                status: Some(status),
+                elapsed_ms,
+                error: None,
+            }))
+        }
+        Err(e) => {
+            // 错误描述不含代理 URL / 凭据（reqwest 错误消息不暴露代理配置）
+            let error_msg = if e.is_timeout() {
+                "连接超时".to_string()
+            } else if e.is_connect() {
+                "连接失败".to_string()
+            } else if e.is_builder() {
+                "URL 格式非法".to_string()
+            } else {
+                "请求失败".to_string()
+            };
+            tracing::info!(
+                操作者 = %identity.actor_name(),
+                耗时毫秒 = elapsed_ms,
+                "代理连通性测试失败"
+            );
+            Ok(Json(ProxyTestResult {
+                ok: false,
+                status: None,
+                elapsed_ms,
+                error: Some(error_msg),
+            }))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::tests::{测试用状态, 读_json};
@@ -1632,5 +1733,124 @@ mod tests {
             meta.load_settings().await.unwrap().is_empty(),
             "校验失败不得落库 update 节"
         );
+    }
+
+    // ===== FR-128：proxy_test 端点鉴权 + URL 校验 + 连通性测试 =====
+
+    /// 便捷：带可选 Bearer 令牌 POST proxy-test 端点（JSON 请求体）。
+    async fn 请求_proxy_test(
+        state: AppState,
+        令牌: Option<&str>,
+        body: serde_json::Value,
+    ) -> axum::response::Response {
+        let app = super::super::build_router(state);
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri("/api/v1/settings/proxy-test")
+            .header("Content-Type", "application/json");
+        if let Some(t) = 令牌 {
+            builder = builder.header("Authorization", format!("Bearer {t}"));
+        }
+        app.oneshot(builder.body(Body::from(body.to_string())).unwrap())
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn proxy_test_匿名被拒_401() {
+        let (state, _dir) = 测试用状态().await;
+        let resp = 请求_proxy_test(
+            state,
+            None,
+            serde_json::json!({"url": "https://example.com"}),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn proxy_test_普通用户被拒_403() {
+        let (state, _dir) = 测试用状态().await;
+        let token = 签发令牌(&state, "u", Role::User).await;
+        let resp = 请求_proxy_test(
+            state,
+            Some(&token),
+            serde_json::json!({"url": "https://example.com"}),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn proxy_test_非_http_scheme_返回_400() {
+        let (state, _dir) = 测试用状态().await;
+        let token = 签发令牌(&state, "admin", Role::Admin).await;
+        // ftp:// 非法
+        let resp = 请求_proxy_test(
+            state.clone(),
+            Some(&token),
+            serde_json::json!({"url": "ftp://example.com/file"}),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn proxy_test_空串返回_400() {
+        let (state, _dir) = 测试用状态().await;
+        let token = 签发令牌(&state, "admin", Role::Admin).await;
+        let resp = 请求_proxy_test(state, Some(&token), serde_json::json!({"url": ""})).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn proxy_test_file_scheme_返回_400() {
+        let (state, _dir) = 测试用状态().await;
+        let token = 签发令牌(&state, "admin", Role::Admin).await;
+        let resp = 请求_proxy_test(
+            state,
+            Some(&token),
+            serde_json::json!({"url": "file:///etc/passwd"}),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn proxy_test_不可达地址返回_ok_false() {
+        // 对 127.0.0.1:1（无监听）发 GET，期望返回 200 OK（端点本身成功）但内含 ok=false（连通性失败）
+        let (state, _dir) = 测试用状态().await;
+        let token = 签发令牌(&state, "admin", Role::Admin).await;
+        let resp = 请求_proxy_test(
+            state,
+            Some(&token),
+            serde_json::json!({"url": "http://127.0.0.1:1"}),
+        )
+        .await;
+        // 端点本身正常响应 200；但 body.ok = false（连接失败）
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = 读_json(resp).await;
+        assert_eq!(body["ok"], false, "连接失败应为 ok=false");
+        assert!(body["error"].is_string(), "连接失败应有 error 字段：{body}");
+        assert!(
+            body.get("elapsed_ms").is_some(),
+            "应含 elapsed_ms 字段：{body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn proxy_test_https_合法_url_不可达返回_ok_false() {
+        // https 前缀合法，但地址不可达 → ok=false
+        let (state, _dir) = 测试用状态().await;
+        let token = 签发令牌(&state, "admin", Role::Admin).await;
+        let resp = 请求_proxy_test(
+            state,
+            Some(&token),
+            serde_json::json!({"url": "https://127.0.0.1:1"}),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = 读_json(resp).await;
+        assert_eq!(body["ok"], false);
     }
 }

@@ -425,6 +425,14 @@
 - **响应**：`200`，体同 GET（脱敏后的当前生效值）。
 - **错误**：`400` 网络代理 URL 无法构造 / `restart_mode` 非 `self`|`exit` / `channel` 非 `stable`|`prerelease` / `repo` / `api_base_url` 为空；`401` 未认证；`403` 非管理员。
 
+### 出站代理连通性测试（仅 Admin，FR-128）
+
+- **方法 / 路径**：`POST /api/v1/settings/proxy-test`
+- **请求**：仅管理员可调用。JSON 体 `{ "url": "https://example.com" }`，仅接受 `http://` 或 `https://` 前缀的 URL。
+- **行为**：取当前生效出站 client（含代理配置）对目标 URL 发 GET，超时 10s，返回连通性。仅访问用户给定 URL，不外发任何使用数据（ADR-0009）。
+- **响应**：`200`，体 `{ "ok": bool, "status"?: u16, "elapsed_ms": u64, "error"?: string }`。`ok=true` 时携带 HTTP 响应状态码与耗时；`ok=false` 时携带失败原因（连接失败 / 连接超时 / 请求失败）。
+- **错误**：`400` URL 格式非法 / 非 http/https scheme（错误码 `bad_request`）；`401` 未认证；`403` 非管理员。
+
 ### 读取动态配置（仅 Admin，FR-106）
 
 - **方法 / 路径**：`GET /api/v1/settings/dynamic`

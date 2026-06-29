@@ -472,6 +472,8 @@ pub fn build_router(state: AppState) -> Router {
             "/settings",
             get(settings::get_settings).patch(settings::patch_settings),
         )
+        // 出站代理连通性测试（FR-128）：仅 Admin 显式触发，不外发使用数据（ADR-0009）
+        .route("/settings/proxy-test", post(settings::proxy_test))
         .route(
             "/settings/dynamic",
             get(dynamic_config::get_dynamic_config).patch(dynamic_config::patch_dynamic_config),

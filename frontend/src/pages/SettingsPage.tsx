@@ -13,6 +13,7 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
+  Alert,
   Box,
   Flex,
   Stack,
@@ -32,7 +33,7 @@ import {
 } from '@mantine/core';
 import { IconDeviceFloppy } from '@tabler/icons-react';
 import * as api from '../api/endpoints';
-import type { SettingsView, ProxyEntryPatch, DynamicConfig } from '../api/types';
+import type { SettingsView, ProxyEntryPatch, DynamicConfig, ProxyTestResult } from '../api/types';
 import { errorMessage } from '../lib/format';
 import { ErrorAlert } from '../components/ErrorAlert';
 import { density } from '../theme/density';
@@ -168,6 +169,12 @@ export function SettingsPage() {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
+  // —— 代理连通性测试（FR-128）——
+  const [testUrl, setTestUrl] = useState('');
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<ProxyTestResult | null>(null);
+  const [testError, setTestError] = useState<string | null>(null);
+
   // —— 系统配置（动态配置面板，FR-106）——
   // limits / observability / vuln / auth 非密钥项；保存落库、**重启生效**（无热替换槽）。
   // FR-103 起并入对应锚点节、随**全局保存**一并 PATCH（不再有独立保存按钮）。
@@ -282,6 +289,26 @@ export function SettingsPage() {
       entry.password = '';
     }
     return entry;
+  }
+
+  // 代理连通性测试（FR-128）：发 POST /settings/proxy-test，展示连通性结果。
+  async function handleProxyTest() {
+    const url = testUrl.trim();
+    if (!url) {
+      setTestError(t('proxy.testUrlRequired'));
+      return;
+    }
+    setTesting(true);
+    setTestResult(null);
+    setTestError(null);
+    try {
+      const result = await api.testProxy(url);
+      setTestResult(result);
+    } catch (err) {
+      setTestError(errorMessage(err));
+    } finally {
+      setTesting(false);
+    }
   }
 
   // 全局保存（FR-103）：一次性提交两处写入——
@@ -407,6 +434,60 @@ export function SettingsPage() {
                 value={noProxy}
                 onChange={(e) => setNoProxy(e.currentTarget.value)}
               />
+
+              {/* —— 连通性测试（FR-128）：经当前生效出站代理访问目标 URL —— */}
+              <Stack gap="xs">
+                <Text size="sm" fw={600}>
+                  {t('proxy.testTitle')}
+                </Text>
+                <Text size="xs" c="dimmed">
+                  {t('proxy.testDesc')}
+                </Text>
+                <Group gap="xs" align="flex-end">
+                  <TextInput
+                    label={t('proxy.testUrlLabel')}
+                    placeholder={t('proxy.testUrlPlaceholder')}
+                    value={testUrl}
+                    onChange={(e) => {
+                      setTestUrl(e.currentTarget.value);
+                      setTestResult(null);
+                      setTestError(null);
+                    }}
+                    style={{ flex: 1 }}
+                    data-testid="proxy-test-url-input"
+                  />
+                  <Button
+                    loading={testing}
+                    disabled={testing}
+                    onClick={handleProxyTest}
+                    data-testid="proxy-test-button"
+                  >
+                    {testing ? t('proxy.testTesting') : t('proxy.testButton')}
+                  </Button>
+                </Group>
+                {/* 测试结果：成功绿色、失败红色 */}
+                {testResult && (
+                  <Alert
+                    color={testResult.ok ? 'green' : 'red'}
+                    variant="light"
+                    data-testid="proxy-test-result"
+                  >
+                    {testResult.ok
+                      ? t('proxy.testResultOk', {
+                          status: testResult.status,
+                          elapsed_ms: testResult.elapsed_ms,
+                        })
+                      : t('proxy.testResultFail', {
+                          error: testResult.error ?? t('proxy.testResultFailNoError'),
+                        })}
+                  </Alert>
+                )}
+                {testError && (
+                  <Alert color="red" variant="light" data-testid="proxy-test-error">
+                    {testError}
+                  </Alert>
+                )}
+              </Stack>
             </Stack>
           </Card>
 
