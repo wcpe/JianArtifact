@@ -75,6 +75,16 @@ pub async fn upload_artifact(
     // 使产出制品与 mvn deploy 一致、可被官方客户端独立 GET 校验和并校验（FR-69）。
     if repo.format == FORMAT_MAVEN && !MavenFormat::is_sidecar(&coords.path) {
         write_maven_checksum_sidecars(&state, &repo, format, &outcome.record).await?;
+        // 写入后维护服务端权威派生文件（FR-121，ADR-0037）：pom 三级兜底（持有主构件字节，可提取 jar 内嵌
+        // pom，否则生成最小 pom）+ 重生成 artifact 级 maven-metadata.xml。
+        super::maven_publish::maintain_after_maven_write(
+            &state,
+            &repo,
+            format,
+            &coords.path,
+            Some(&file.bytes),
+        )
+        .await?;
     }
 
     tracing::info!(

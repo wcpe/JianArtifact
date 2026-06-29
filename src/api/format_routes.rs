@@ -38,6 +38,9 @@ fn tag_format(result: Result<Response, ApiError>, format: &str) -> Result<Respon
     })
 }
 
+/// Maven 格式名：据此在通用直传成功后触发 Maven 派生文件维护（FR-121）。
+const MAVEN_FORMAT: &str = "maven";
+
 /// npm 格式名：据此把 npm 仓库的请求分派到其原生协议处理。
 const NPM_FORMAT: &str = "npm";
 
@@ -231,6 +234,13 @@ async fn put_artifact_inner(
         .artifacts
         .put_hosted(&repo, format, &coords, reader, max_size)
         .await?;
+
+    // Maven：写入后维护服务端权威派生文件（FR-121，ADR-0037）——重生成 artifact 级 maven-metadata.xml。
+    // mvn deploy 自带 pom（client-priority），此路径不兜底 pom（artifact_bytes 传 None），仅维护聚合 metadata。
+    if repo.format == MAVEN_FORMAT {
+        super::maven_publish::maintain_after_maven_write(&state, &repo, format, &coords.path, None)
+            .await?;
+    }
 
     // 覆盖返回 200，新建返回 201（贴近 Raw / HTTP 习惯）
     let status = if outcome.overwritten {

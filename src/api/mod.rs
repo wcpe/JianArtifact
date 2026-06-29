@@ -43,6 +43,7 @@ mod go_routes;
 mod groups;
 mod identity;
 mod licenses;
+mod maven_publish;
 mod metrics;
 mod metrics_query;
 mod metrics_sampler;

@@ -1,6 +1,8 @@
 # 功能规格：Maven 格式（hosted + proxy）
 
 > 状态：开发中　·　关联 PRD：FR-14 / FR-61 / FR-68 / FR-69　·　分支：feature/fr-14-maven
+>
+> **更新（FR-121，ADR-0037）**：本规格 §2 / §6 「服务端不重写 `maven-metadata.xml`、由客户端自管」一节**已被取代**——服务端现权威生成 / 维护 artifact 级 `maven-metadata.xml` + pom 三级兜底（client-priority）。详见 `docs/adr/0037-maven-server-authoritative-metadata.md` 与 `docs/specs/fr-121-maven-metadata-authority.md`。
 
 ## 1. 背景与目标
 

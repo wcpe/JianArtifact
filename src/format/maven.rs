@@ -127,6 +127,192 @@ impl MavenFormat {
             .map(|ext| SIDECAR_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
             .unwrap_or(false)
     }
+
+    /// 拼某 GAV 的 pom 在仓库内的存储路径（`{group路径}/{a}/{v}/{a}-{v}.pom`）。
+    pub fn pom_path(group_id: &str, artifact_id: &str, version: &str) -> String {
+        let file = format!("{}-{}.pom", artifact_id.trim(), version.trim());
+        Self::artifact_path(group_id, artifact_id, version, &file)
+    }
+
+    /// 拼 artifact 级 `maven-metadata.xml` 在仓库内的存储路径（`{group路径}/{a}/maven-metadata.xml`）。
+    pub fn artifact_metadata_path(group_id: &str, artifact_id: &str) -> String {
+        let group_path = group_id.trim().replace('.', "/");
+        format!(
+            "{}/{}/{}",
+            group_path.trim_matches('/'),
+            artifact_id.trim(),
+            MAVEN_METADATA
+        )
+    }
+
+    /// 反解仓库内路径为 GAV（布局 `{group路径}/{a}/{v}/{文件}`，≥4 段）；无法构成返回 None。
+    ///
+    /// 对外暴露给写入后编排（FR-121）判定本次写入归属的 artifact 坐标。
+    pub fn gav_from_path(path: &str) -> Option<Gav> {
+        Gav::from_path(path)
+    }
+
+    /// 拼某 `{groupId}/{artifactId}` 的版本目录前缀（`{group路径}/{artifactId}/`）。
+    ///
+    /// 既用于按前缀列举该 artifact 的全部制品，也用于版本聚合时筛选归属记录。
+    pub fn artifact_prefix(group_id: &str, artifact_id: &str) -> String {
+        let group_path = group_id.trim().replace('.', "/");
+        format!("{}/{}/", group_path.trim_matches('/'), artifact_id.trim())
+    }
+
+    /// 据主构件文件名扩展名推断 Maven `packaging`（war / ear，默认 jar）。
+    pub fn derive_packaging(file_name: &str) -> &'static str {
+        match file_name
+            .rsplit('.')
+            .next()
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Some("war") => "war",
+            Some("ear") => "ear",
+            _ => "jar",
+        }
+    }
+
+    /// 从 jar（zip）内嵌的 `META-INF/maven/.../pom.xml` 原样取出 pom 字节（FR-121 pom 兜底第二级）。
+    ///
+    /// 与 [`Self::parse_gav_from_jar`] 共用条目定位；返回 pom.xml 原始字节供按布局落盘，非 zip / 无内嵌 pom 返回 None。
+    pub fn extract_embedded_pom(jar: &[u8]) -> Option<Vec<u8>> {
+        let cursor = std::io::Cursor::new(jar);
+        let mut archive = zip::ZipArchive::new(cursor).ok()?;
+        let name = find_embedded_maven_entry(&mut archive, "pom.xml")?;
+        read_zip_entry(&mut archive, &name)
+    }
+
+    /// 按 GAV 生成最小合法 pom（FR-121 pom 兜底第三级）：`modelVersion` + GAV + `packaging`。
+    pub fn build_minimal_pom(
+        group_id: &str,
+        artifact_id: &str,
+        version: &str,
+        packaging: &str,
+    ) -> Vec<u8> {
+        use std::fmt::Write as _;
+        let mut xml = String::new();
+        xml.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+        xml.push_str("<project xmlns=\"http://maven.apache.org/POM/4.0.0\">\n");
+        xml.push_str("  <modelVersion>4.0.0</modelVersion>\n");
+        let _ = writeln!(xml, "  <groupId>{}</groupId>", xml_escape(group_id.trim()));
+        let _ = writeln!(
+            xml,
+            "  <artifactId>{}</artifactId>",
+            xml_escape(artifact_id.trim())
+        );
+        let _ = writeln!(xml, "  <version>{}</version>", xml_escape(version.trim()));
+        let _ = writeln!(
+            xml,
+            "  <packaging>{}</packaging>",
+            xml_escape(packaging.trim())
+        );
+        xml.push_str("</project>\n");
+        xml.into_bytes()
+    }
+
+    /// 从全仓制品记录聚合某 `{groupId}/{artifactId}` 下的版本（FR-121）。
+    ///
+    /// 取前缀 `{group路径}/{artifactId}/` 下记录的版本段，按各版本**首见 `created_at`** 升序去重；
+    /// `last_updated` 取全部命中记录 `created_at` 的最大值、保留数字字符截 14 位为 `yyyyMMddHHmmss`。
+    pub fn collect_versions(
+        records: &[ArtifactRecord],
+        group_id: &str,
+        artifact_id: &str,
+    ) -> MavenVersions {
+        let prefix = Self::artifact_prefix(group_id, artifact_id);
+
+        // 版本 → 最早 created_at（作排序键）
+        let mut earliest: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        let mut last_updated_raw: Option<String> = None;
+        for r in records {
+            let Some(rest) = r.path.strip_prefix(&prefix) else {
+                continue;
+            };
+            // rest 形如 `{version}/{文件...}`；必须含 '/'，排除直接位于 {a} 下的 maven-metadata.xml 等
+            let Some((version, _)) = rest.split_once('/') else {
+                continue;
+            };
+            if version.is_empty() {
+                continue;
+            }
+            earliest
+                .entry(version.to_string())
+                .and_modify(|e| {
+                    if r.created_at < *e {
+                        *e = r.created_at.clone();
+                    }
+                })
+                .or_insert_with(|| r.created_at.clone());
+            if last_updated_raw
+                .as_deref()
+                .is_none_or(|m| m < r.created_at.as_str())
+            {
+                last_updated_raw = Some(r.created_at.clone());
+            }
+        }
+
+        // 按 (最早 created_at, 版本字符串) 升序排，得部署序版本列表
+        let mut paired: Vec<(String, String)> = earliest.into_iter().map(|(v, c)| (c, v)).collect();
+        paired.sort();
+        let versions = paired.into_iter().map(|(_, v)| v).collect();
+
+        let last_updated = last_updated_raw
+            .map(|s| s.chars().filter(char::is_ascii_digit).take(14).collect())
+            .unwrap_or_default();
+
+        MavenVersions {
+            versions,
+            last_updated,
+        }
+    }
+
+    /// 生成 artifact 级 `maven-metadata.xml` 字节（FR-121）。
+    ///
+    /// `latest` 取版本列表末位（部署序最新，含 SNAPSHOT）；`release` 取末位非 SNAPSHOT 版本（无则省略该元素）。
+    pub fn build_artifact_metadata(
+        group_id: &str,
+        artifact_id: &str,
+        versions: &MavenVersions,
+    ) -> Vec<u8> {
+        use std::fmt::Write as _;
+        let latest = versions.versions.last().cloned().unwrap_or_default();
+        let release = versions
+            .versions
+            .iter()
+            .rev()
+            .find(|v| !v.ends_with(SNAPSHOT_SUFFIX));
+
+        let mut xml = String::new();
+        xml.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+        xml.push_str("<metadata>\n");
+        let _ = writeln!(xml, "  <groupId>{}</groupId>", xml_escape(group_id.trim()));
+        let _ = writeln!(
+            xml,
+            "  <artifactId>{}</artifactId>",
+            xml_escape(artifact_id.trim())
+        );
+        xml.push_str("  <versioning>\n");
+        let _ = writeln!(xml, "    <latest>{}</latest>", xml_escape(&latest));
+        if let Some(rel) = release {
+            let _ = writeln!(xml, "    <release>{}</release>", xml_escape(rel));
+        }
+        xml.push_str("    <versions>\n");
+        for v in &versions.versions {
+            let _ = writeln!(xml, "      <version>{}</version>", xml_escape(v));
+        }
+        xml.push_str("    </versions>\n");
+        let _ = writeln!(
+            xml,
+            "    <lastUpdated>{}</lastUpdated>",
+            xml_escape(&versions.last_updated)
+        );
+        xml.push_str("  </versioning>\n");
+        xml.push_str("</metadata>\n");
+        xml.into_bytes()
+    }
 }
 
 impl Format for MavenFormat {
@@ -225,6 +411,24 @@ impl Format for MavenFormat {
             version: gav.version,
         })
     }
+}
+
+/// Maven 版本聚合结果（FR-121）：某 artifact 下的版本列表与 lastUpdated。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MavenVersions {
+    /// 版本列表（按各版本首见 `created_at` 升序、去重，末位为最新部署）。
+    pub versions: Vec<String>,
+    /// lastUpdated（`yyyyMMddHHmmss`，取最大 `created_at` 的数字字符截 14 位；无版本为空串）。
+    pub last_updated: String,
+}
+
+/// 对 XML 文本值做最小转义（`& < > " '`），用于把 GAV / 版本等坐标安全嵌入元素文本。
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
 }
 
 /// Maven 坐标（GAV）：由仓库内路径反解（[`Gav::from_path`]）或 jar 内嵌 pom
@@ -743,5 +947,135 @@ mod tests {
     #[test]
     fn 非zip字节返回none() {
         assert!(MavenFormat::parse_gav_from_jar(b"not-a-zip-file").is_none());
+    }
+
+    /// 构造一条带指定路径与创建时间的制品记录，供版本聚合判定用。
+    fn 制品带时间(path: &str, created_at: &str) -> ArtifactRecord {
+        ArtifactRecord {
+            id: "id".to_string(),
+            repo_id: "r".to_string(),
+            path: path.to_string(),
+            size: 1,
+            sha256: "s".to_string(),
+            sha1: "s".to_string(),
+            md5: "s".to_string(),
+            sha512: "s".to_string(),
+            content_type: None,
+            cached: 0,
+            created_at: created_at.to_string(),
+        }
+    }
+
+    #[test]
+    fn 派生文件路径拼装() {
+        assert_eq!(
+            MavenFormat::pom_path("com.example.app", "demo", "1.0.0"),
+            "com/example/app/demo/1.0.0/demo-1.0.0.pom"
+        );
+        assert_eq!(
+            MavenFormat::artifact_metadata_path("com.example.app", "demo"),
+            "com/example/app/demo/maven-metadata.xml"
+        );
+    }
+
+    #[test]
+    fn packaging据扩展名推断() {
+        assert_eq!(MavenFormat::derive_packaging("demo-1.0.jar"), "jar");
+        assert_eq!(MavenFormat::derive_packaging("demo-1.0.war"), "war");
+        assert_eq!(MavenFormat::derive_packaging("demo-1.0.EAR"), "ear");
+        // 未知扩展名默认 jar
+        assert_eq!(MavenFormat::derive_packaging("demo-1.0.bin"), "jar");
+    }
+
+    #[test]
+    fn 从jar提取内嵌pom原样字节() {
+        let xml = r#"<project><groupId>com.example</groupId><artifactId>demo</artifactId><version>1.2.3</version></project>"#;
+        let jar = 构造_jar(Some(xml), None);
+        let pom = MavenFormat::extract_embedded_pom(&jar).unwrap();
+        assert_eq!(pom, xml.as_bytes());
+        // 无内嵌 pom / 非 zip → None
+        assert!(MavenFormat::extract_embedded_pom(&构造_jar(None, None)).is_none());
+        assert!(MavenFormat::extract_embedded_pom(b"not-a-zip").is_none());
+    }
+
+    #[test]
+    fn 生成最小pom含坐标与packaging() {
+        let pom = MavenFormat::build_minimal_pom("com.example", "demo", "1.0.0", "jar");
+        let s = String::from_utf8(pom).unwrap();
+        assert!(s.contains("<modelVersion>4.0.0</modelVersion>"));
+        assert!(s.contains("<groupId>com.example</groupId>"));
+        assert!(s.contains("<artifactId>demo</artifactId>"));
+        assert!(s.contains("<version>1.0.0</version>"));
+        assert!(s.contains("<packaging>jar</packaging>"));
+    }
+
+    #[test]
+    fn 版本聚合按部署序去重并算lastupdated() {
+        let records = vec![
+            // demo 的两个版本，注意 created_at 顺序（1.0 早于 2.0）
+            制品带时间("com/example/demo/1.0/demo-1.0.jar", "2026-01-01 10:00:00"),
+            制品带时间("com/example/demo/1.0/demo-1.0.pom", "2026-01-01 10:00:01"),
+            制品带时间("com/example/demo/2.0/demo-2.0.jar", "2026-02-02 12:30:45"),
+            // 直接位于 artifact 下的 maven-metadata.xml 不计入版本
+            制品带时间("com/example/demo/maven-metadata.xml", "2026-02-02 12:30:46"),
+            // 其他 artifact 不计入
+            制品带时间("com/example/other/9.9/other-9.9.jar", "2026-03-03 09:00:00"),
+        ];
+        let v = MavenFormat::collect_versions(&records, "com.example", "demo");
+        assert_eq!(v.versions, vec!["1.0".to_string(), "2.0".to_string()]);
+        // lastUpdated 取命中记录最大 created_at（2.0 的 jar，12:30:45）去非数字截 14 位
+        assert_eq!(v.last_updated, "20260202123045");
+    }
+
+    #[test]
+    fn 生成metadata含latest_release与版本列表() {
+        let versions = MavenVersions {
+            versions: vec![
+                "1.0".to_string(),
+                "2.0-SNAPSHOT".to_string(),
+                "2.0".to_string(),
+            ],
+            last_updated: "20260202123045".to_string(),
+        };
+        let xml = String::from_utf8(MavenFormat::build_artifact_metadata(
+            "com.example",
+            "demo",
+            &versions,
+        ))
+        .unwrap();
+        assert!(xml.contains("<groupId>com.example</groupId>"));
+        assert!(xml.contains("<artifactId>demo</artifactId>"));
+        // latest = 末位（2.0）；release = 末位非 SNAPSHOT（2.0）
+        assert!(xml.contains("<latest>2.0</latest>"));
+        assert!(xml.contains("<release>2.0</release>"));
+        assert!(xml.contains("<version>1.0</version>"));
+        assert!(xml.contains("<version>2.0-SNAPSHOT</version>"));
+        assert!(xml.contains("<version>2.0</version>"));
+        assert!(xml.contains("<lastUpdated>20260202123045</lastUpdated>"));
+    }
+
+    #[test]
+    fn 仅snapshot版本时metadata省略release() {
+        let versions = MavenVersions {
+            versions: vec!["1.0-SNAPSHOT".to_string()],
+            last_updated: "20260101100000".to_string(),
+        };
+        let xml =
+            String::from_utf8(MavenFormat::build_artifact_metadata("g", "a", &versions)).unwrap();
+        assert!(xml.contains("<latest>1.0-SNAPSHOT</latest>"));
+        // 无 release 元素
+        assert!(!xml.contains("<release>"));
+    }
+
+    #[test]
+    fn 空版本集metadata不崩且无版本项() {
+        let versions = MavenVersions {
+            versions: vec![],
+            last_updated: String::new(),
+        };
+        let xml =
+            String::from_utf8(MavenFormat::build_artifact_metadata("g", "a", &versions)).unwrap();
+        assert!(xml.contains("<latest></latest>"));
+        assert!(!xml.contains("<version>"));
     }
 }

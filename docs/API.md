@@ -210,7 +210,7 @@
 - **请求**：路径参数 `id`（仓库 id）；需对应仓库写权限或管理员。`multipart/form-data` 体含：
   - `file`：上传文件字段（含文件名），承载制品字节（必填）。
   - 按目标仓库格式区分的坐标字段：
-    - **Maven**：`group_id` / `artifact_id` / `version`；存储路径 = `{group 点转斜杠}/{artifact}/{version}/{上传文件名}`。服务端为该主构件**自动补齐四校验和 sidecar**（`.sha1` / `.md5` / `.sha256` / `.sha512`，内容为对应摘要的小写十六进制）——服务端上传无客户端逐文件 PUT 的 sidecar，补齐后产出制品与 `mvn deploy` 一致、可被官方客户端独立取回校验和并校验。
+    - **Maven**：`group_id` / `artifact_id` / `version`；存储路径 = `{group 点转斜杠}/{artifact}/{version}/{上传文件名}`。服务端为该主构件**自动补齐四校验和 sidecar**（`.sha1` / `.md5` / `.sha256` / `.sha512`，内容为对应摘要的小写十六进制）——服务端上传无客户端逐文件 PUT 的 sidecar，补齐后产出制品与 `mvn deploy` 一致、可被官方客户端独立取回校验和并校验。此外（FR-121，ADR-0037）服务端**权威生成派生文件**使网页上传产出完整 Maven 制品：缺 pom 时**三级兜底**生成 `{artifact}-{version}.pom`（jar 内嵌 `META-INF/maven/.../pom.xml` 原样提取 → 按 GAV 生成最小 pom），并按 SQLite 索引聚合该 `{groupId}/{artifactId}` 全部版本**重生成 artifact 级 `maven-metadata.xml`**（`versions`/`latest`/`release`/`lastUpdated`），二者均附四校验和 sidecar，供 `mvn dependency:get` 解析。
     - **npm**：`name` / `version`；存储路径 = `{name}/-/{上传文件名}`（不解包 .tgz，name/version 由表单提供）。
     - **Raw**：`path`；存储路径即该路径。
 - **响应**：新建返回 `201`、覆盖返回 `200`（覆盖语义沿用各格式策略）。上传后可经各格式既有下载端点取回。
@@ -589,7 +589,7 @@
 
 各格式详细协议规格在开发该格式时落到 `docs/specs/`，此处只定覆盖语义与状态码。
 
-- **Maven 格式**：以 Maven 仓库布局暴露，路径形如 `/{仓库名}/{groupId 路径}/{artifactId}/{version}/...`，供 `mvn deploy` / `mvn` 拉取使用；按 Maven 协议处理制品与校验和（sha256 索引）。
+- **Maven 格式**：以 Maven 仓库布局暴露，路径形如 `/{仓库名}/{groupId 路径}/{artifactId}/{version}/...`，供 `mvn deploy` / `mvn` 拉取使用；按 Maven 协议处理制品与校验和（sha256 索引）。**服务端权威维护元数据**（FR-121，ADR-0037）：主版本文件写入后据 SQLite 索引重生成 artifact 级 `maven-metadata.xml` + pom 三级兜底（jar 内嵌 → 用户上传 → 按 GAV 最小 pom），遵循 client-priority（`mvn deploy` 自带的 pom 不被改写）。
 - **npm 格式**：以 npm registry 协议暴露，路径形如 `/{仓库名}/{包名}`、`/{仓库名}/{包名}/-/{tarball}`，供 `npm publish` / `npm install` 使用。
 - **NuGet 格式**：以 NuGet v3 协议暴露，供 `dotnet nuget push` / `dotnet add package` 使用。客户端 source 配 `/{仓库名}/v3/index.json`。
   - 服务索引 `GET /{仓库名}/v3/index.json`：列出本仓库 v3 资源（扁平容器 `PackageBaseAddress/3.0.0`、发布端点 `PackagePublish/2.0.0`），`@id` 指向本仓库对应端点；`proxy` 仓库回源上游服务索引后把扁平容器 `@id` 重写为指向本仓库。

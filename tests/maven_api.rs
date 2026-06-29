@@ -528,3 +528,338 @@ async fn maven_proxy_cache_miss_回源后命中不再回源() {
     assert_eq!(bytes, b"upstream-jar");
     assert_eq!(上游命中.load(Ordering::SeqCst), 1, "命中缓存不应再回源");
 }
+
+// ---------- FR-121 服务端权威 maven-metadata.xml + pom 三级兜底（ADR-0037） ----------
+
+/// 构造一份最小 jar（zip）：可选在标准 META-INF/maven 路径放入内嵌 pom.xml。
+fn build_jar(group_id: &str, artifact_id: &str, pom_xml: Option<&str>) -> Vec<u8> {
+    use std::io::Write as _;
+    use zip::write::SimpleFileOptions;
+    use zip::ZipWriter;
+    let mut buf = Vec::new();
+    {
+        let cursor = std::io::Cursor::new(&mut buf);
+        let mut zip = ZipWriter::new(cursor);
+        let opts =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        zip.start_file("a/b/Demo.class", opts).unwrap();
+        zip.write_all(b"CAFEBABE").unwrap();
+        if let Some(xml) = pom_xml {
+            let entry = format!("META-INF/maven/{group_id}/{artifact_id}/pom.xml");
+            zip.start_file(entry, opts).unwrap();
+            zip.write_all(xml.as_bytes()).unwrap();
+        }
+        zip.finish().unwrap();
+    }
+    buf
+}
+
+/// multipart 上传字段。
+struct Part {
+    name: String,
+    filename: Option<String>,
+    value: Vec<u8>,
+}
+
+fn text_part(name: &str, value: &str) -> Part {
+    Part {
+        name: name.to_string(),
+        filename: None,
+        value: value.as_bytes().to_vec(),
+    }
+}
+
+fn file_part(name: &str, filename: &str, value: &[u8]) -> Part {
+    Part {
+        name: name.to_string(),
+        filename: Some(filename.to_string()),
+        value: value.to_vec(),
+    }
+}
+
+/// 构造 multipart/form-data 上传请求，POST 到通用上传端点（FR-73）。
+fn upload_req(repo_id: &str, auth: Option<&str>, parts: &[Part]) -> Request<Body> {
+    let boundary = "----JianArtifactMavenBoundary";
+    let mut body: Vec<u8> = Vec::new();
+    for p in parts {
+        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        match &p.filename {
+            Some(fname) => {
+                body.extend_from_slice(
+                    format!(
+                        "Content-Disposition: form-data; name=\"{}\"; filename=\"{}\"\r\n",
+                        p.name, fname
+                    )
+                    .as_bytes(),
+                );
+                body.extend_from_slice(b"Content-Type: application/octet-stream\r\n\r\n");
+            }
+            None => {
+                body.extend_from_slice(
+                    format!(
+                        "Content-Disposition: form-data; name=\"{}\"\r\n\r\n",
+                        p.name
+                    )
+                    .as_bytes(),
+                );
+            }
+        }
+        body.extend_from_slice(&p.value);
+        body.extend_from_slice(b"\r\n");
+    }
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+
+    let mut builder = Request::builder()
+        .method("POST")
+        .uri(format!("/api/v1/repositories/{repo_id}/upload"))
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        );
+    if let Some(a) = auth {
+        builder = builder.header("authorization", a);
+    }
+    builder.body(Body::from(body)).unwrap()
+}
+
+#[tokio::test]
+async fn maven_deploy_jar_后服务端生成_metadata() {
+    let fx = Fixture::new().await;
+    let writer = fx.seed_user("writer", "pw", Role::User).await;
+    let rid = fx.seed_maven_repo("maven-hosted", Visibility::Public).await;
+    fx.seed_acl(&rid, &writer, Permission::Write).await;
+    let auth = format!("Bearer {}", fx.login_token("writer", "pw").await);
+
+    // mvn deploy 模拟：PUT 一个 release jar
+    let (status, _) = send(
+        fx.router(),
+        raw_req(
+            "PUT",
+            "/maven-hosted/com/example/lib/1.0/lib-1.0.jar",
+            Some(&auth),
+            b"jar-bytes".to_vec(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // 服务端权威生成 artifact 级 maven-metadata.xml，匿名可读（public）
+    let (status, bytes) = send_bytes(
+        fx.router(),
+        empty_req(
+            "GET",
+            "/maven-hosted/com/example/lib/maven-metadata.xml",
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let xml = String::from_utf8(bytes).unwrap();
+    assert!(
+        xml.contains("<groupId>com.example</groupId>"),
+        "metadata: {xml}"
+    );
+    assert!(xml.contains("<artifactId>lib</artifactId>"));
+    assert!(xml.contains("<latest>1.0</latest>"));
+    assert!(xml.contains("<release>1.0</release>"));
+    assert!(xml.contains("<version>1.0</version>"));
+
+    // metadata 的校验和 sidecar 一并生成、可读
+    let (status, _) = send_bytes(
+        fx.router(),
+        empty_req(
+            "GET",
+            "/maven-hosted/com/example/lib/maven-metadata.xml.sha256",
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn maven_deploy_多版本_metadata_聚合_latest_release() {
+    let fx = Fixture::new().await;
+    let writer = fx.seed_user("writer", "pw", Role::User).await;
+    let rid = fx.seed_maven_repo("maven-hosted", Visibility::Public).await;
+    fx.seed_acl(&rid, &writer, Permission::Write).await;
+    let auth = format!("Bearer {}", fx.login_token("writer", "pw").await);
+
+    for v in ["1.0", "2.0"] {
+        let path = format!("/maven-hosted/com/example/lib/{v}/lib-{v}.jar");
+        let (status, _) = send(
+            fx.router(),
+            raw_req("PUT", &path, Some(&auth), format!("jar-{v}").into_bytes()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+    }
+
+    let (status, bytes) = send_bytes(
+        fx.router(),
+        empty_req(
+            "GET",
+            "/maven-hosted/com/example/lib/maven-metadata.xml",
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let xml = String::from_utf8(bytes).unwrap();
+    // 两个版本都进聚合，latest / release 为最新部署的 2.0
+    assert!(xml.contains("<version>1.0</version>"), "metadata: {xml}");
+    assert!(xml.contains("<version>2.0</version>"));
+    assert!(xml.contains("<latest>2.0</latest>"));
+    assert!(xml.contains("<release>2.0</release>"));
+}
+
+#[tokio::test]
+async fn maven_web上传jar_提取内嵌pom并生成metadata() {
+    let fx = Fixture::new().await;
+    let writer = fx.seed_user("writer", "pw", Role::User).await;
+    let rid = fx.seed_maven_repo("maven-hosted", Visibility::Public).await;
+    fx.seed_acl(&rid, &writer, Permission::Write).await;
+    let auth = format!("Bearer {}", fx.login_token("writer", "pw").await);
+
+    let pom = r#"<project><groupId>com.example</groupId><artifactId>weblib</artifactId><version>1.0</version><packaging>jar</packaging></project>"#;
+    let jar = build_jar("com.example", "weblib", Some(pom));
+    let parts = vec![
+        text_part("group_id", "com.example"),
+        text_part("artifact_id", "weblib"),
+        text_part("version", "1.0"),
+        file_part("file", "weblib-1.0.jar", &jar),
+    ];
+    let resp = fx
+        .router()
+        .oneshot(upload_req(&rid, Some(&auth), &parts))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    // 服务端据 jar 内嵌 pom 兜底生成 .pom，内容为内嵌 pom 原样字节
+    let (status, bytes) = send_bytes(
+        fx.router(),
+        empty_req(
+            "GET",
+            "/maven-hosted/com/example/weblib/1.0/weblib-1.0.pom",
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(bytes, pom.as_bytes(), "应原样落 jar 内嵌 pom");
+
+    // 同时生成 artifact 级 metadata，含该版本
+    let (status, mbytes) = send_bytes(
+        fx.router(),
+        empty_req(
+            "GET",
+            "/maven-hosted/com/example/weblib/maven-metadata.xml",
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(String::from_utf8(mbytes)
+        .unwrap()
+        .contains("<version>1.0</version>"));
+}
+
+#[tokio::test]
+async fn maven_web上传jar_无内嵌pom_生成最小pom() {
+    let fx = Fixture::new().await;
+    let writer = fx.seed_user("writer", "pw", Role::User).await;
+    let rid = fx.seed_maven_repo("maven-hosted", Visibility::Public).await;
+    fx.seed_acl(&rid, &writer, Permission::Write).await;
+    let auth = format!("Bearer {}", fx.login_token("writer", "pw").await);
+
+    let jar = build_jar("com.example", "plainlib", None);
+    let parts = vec![
+        text_part("group_id", "com.example"),
+        text_part("artifact_id", "plainlib"),
+        text_part("version", "2.5.0"),
+        file_part("file", "plainlib-2.5.0.jar", &jar),
+    ];
+    let resp = fx
+        .router()
+        .oneshot(upload_req(&rid, Some(&auth), &parts))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    let (status, bytes) = send_bytes(
+        fx.router(),
+        empty_req(
+            "GET",
+            "/maven-hosted/com/example/plainlib/2.5.0/plainlib-2.5.0.pom",
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let pom = String::from_utf8(bytes).unwrap();
+    assert!(
+        pom.contains("<modelVersion>4.0.0</modelVersion>"),
+        "最小 pom: {pom}"
+    );
+    assert!(pom.contains("<groupId>com.example</groupId>"));
+    assert!(pom.contains("<artifactId>plainlib</artifactId>"));
+    assert!(pom.contains("<version>2.5.0</version>"));
+}
+
+#[tokio::test]
+async fn maven_deploy路径_client_pom_不被服务端兜底覆盖() {
+    let fx = Fixture::new().await;
+    let writer = fx.seed_user("writer", "pw", Role::User).await;
+    let rid = fx.seed_maven_repo("maven-hosted", Visibility::Public).await;
+    fx.seed_acl(&rid, &writer, Permission::Write).await;
+    let auth = format!("Bearer {}", fx.login_token("writer", "pw").await);
+
+    // mvn deploy 路径：先 PUT release jar（服务端不兜底 pom，client-priority）
+    let (status, _) = send(
+        fx.router(),
+        raw_req(
+            "PUT",
+            "/maven-hosted/com/example/lib/1.0/lib-1.0.jar",
+            Some(&auth),
+            b"jar".to_vec(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // deploy 路径不生成 pom：此时客户端尚未上传 pom，pom 应不存在（404）
+    let (status, _) = send_bytes(
+        fx.router(),
+        empty_req("GET", "/maven-hosted/com/example/lib/1.0/lib-1.0.pom", None),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "deploy 路径不应预生成 release pom"
+    );
+
+    // 客户端随后 PUT 自己的 release pom → 成功 201（未被服务端占位阻挡为 409）
+    let client_pom = b"<project><client>own</client></project>".to_vec();
+    let (status, _) = send(
+        fx.router(),
+        raw_req(
+            "PUT",
+            "/maven-hosted/com/example/lib/1.0/lib-1.0.pom",
+            Some(&auth),
+            client_pom.clone(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // 客户端 pom 原样保留
+    let (status, bytes) = send_bytes(
+        fx.router(),
+        empty_req("GET", "/maven-hosted/com/example/lib/1.0/lib-1.0.pom", None),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(bytes, client_pom);
+}
