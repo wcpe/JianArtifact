@@ -30,7 +30,7 @@ import type { DashboardSummary, HostMetrics, AuditEntryDto } from '../api/types'
 import { useAuth } from '../auth/useAuth';
 import { formatBytes, formatCount, formatUptime, formatRelativeTime } from '../lib/format';
 import { density } from '../theme/density';
-import { TopProgressBar } from '../components/TopProgressBar';
+import { useGlobalProgress } from '../hooks/useGlobalProgress';
 import { tAuditAction } from '../i18n';
 
 /** 主机监控前台轮询间隔（FR-112）：每 5 秒刷新一次主机健康。 */
@@ -266,11 +266,15 @@ function AdminDashboard() {
     protection: 'unknown',
     vulnEnabled: null,
   });
-  // 首屏加载态（FR-112）：驱动顶部进度条、骨架占位与内容淡入；首批端点全部 settle 后转 false。
+  // 首屏加载态：驱动骨架占位与内容淡入；首批端点全部 settle 后转 false。
+  // 进度条已由全局 GlobalTopProgressBar 接管（FR-127），此处 loading 仅控制内容骨架。
   const [loading, setLoading] = useState(true);
+  const { inc, dec } = useGlobalProgress();
 
   // 各端点独立取数：单项失败仅影响该卡（兜底为空 / —），不拖垮整页。
+  // inc/dec 接入全局进度条（FR-127）：首屏加载期间全局进度条显示。
   useEffect(() => {
+    inc();
     const tasks = [
       api
         .getDashboardSummary()
@@ -313,8 +317,11 @@ function AdminDashboard() {
         })
         .catch(() => setStatus((prev) => ({ ...prev, protection: 'unknown' }))),
     ];
-    void Promise.allSettled(tasks).then(() => setLoading(false));
-  }, []);
+    void Promise.allSettled(tasks).then(() => {
+      setLoading(false);
+      dec();
+    });
+  }, [inc, dec]);
 
   // 主机健康前台 5s 实时轮询（FR-112）：页面不可见时暂停、卸载时清理，不再卡为一次性。
   useEffect(() => {
@@ -354,8 +361,6 @@ function AdminDashboard() {
 
   return (
     <>
-      <TopProgressBar loading={loading} />
-
       {loading ? (
         <KpiSkeleton />
       ) : (

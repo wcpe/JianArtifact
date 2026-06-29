@@ -10,6 +10,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
 import { DashboardPage } from './DashboardPage';
+import { GlobalProgressProvider } from '../hooks/useGlobalProgress';
+import { GlobalTopProgressBar } from '../components/GlobalTopProgressBar';
 import * as api from '../api/endpoints';
 import { ApiError } from '../api/client';
 import type {
@@ -130,9 +132,14 @@ const REPOS: RepositoryDto[] = [
 
 function renderPage() {
   return render(
-    <MantineProvider>
-      <DashboardPage />
-    </MantineProvider>,
+    // GlobalProgressProvider + GlobalTopProgressBar 模拟真实外壳中的全局进度条（FR-127）：
+    // 真实运行中 GlobalTopProgressBar 在 AppLayout 里；此处在测试包裹层中一并渲染以断言进度条 DOM。
+    <GlobalProgressProvider>
+      <MantineProvider>
+        <GlobalTopProgressBar />
+        <DashboardPage />
+      </MantineProvider>
+    </GlobalProgressProvider>,
   );
 }
 

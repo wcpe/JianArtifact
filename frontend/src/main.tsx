@@ -10,6 +10,7 @@ import '@mantine/notifications/styles.css';
 import './global.css';
 import './i18n';
 import { AuthProvider } from './auth/AuthContext';
+import { GlobalProgressProvider } from './hooks/useGlobalProgress';
 import { App } from './App';
 import { startMockRuntime } from './mock/runtime';
 import { MockModeBadge } from './mock/MockModeBadge';
@@ -29,11 +30,13 @@ async function bootstrap(): Promise<void> {
     <StrictMode>
       <MantineProvider defaultColorScheme="auto">
         <Notifications />
-        <BrowserRouter>
-          <AuthProvider>
-            <App />
-          </AuthProvider>
-        </BrowserRouter>
+        <GlobalProgressProvider>
+          <BrowserRouter>
+            <AuthProvider>
+              <App />
+            </AuthProvider>
+          </BrowserRouter>
+        </GlobalProgressProvider>
         <MockModeBadge />
       </MantineProvider>
     </StrictMode>,

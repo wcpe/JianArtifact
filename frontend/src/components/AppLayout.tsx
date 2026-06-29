@@ -46,6 +46,7 @@ import { useAuth } from '../auth/useAuth';
 import { density } from '../theme/density';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { checkUpdate, getHealth } from '../api/endpoints';
+import { GlobalTopProgressBar } from './GlobalTopProgressBar';
 
 /** 品牌蓝（logo 主色，FR-113）：集中一处常量，避免散落魔法值。 */
 const BRAND_BLUE = '#228be6';
@@ -360,6 +361,9 @@ export function AppLayout() {
       padding={density.mainPadding}
     >
       <AppShell.Header>
+        {/* 全局顶部进度条（FR-127）：fixed 定位于视口最顶端，z-index 高于页眉，
+            路由切换 / 数据加载时显示；置于 Header 内确保与 AppShell 同级生命周期。 */}
+        <GlobalTopProgressBar />
         <Group h="100%" px="md" justify="space-between">
           <Group gap="sm" wrap="nowrap">
             <Burger opened={mobileOpened} onClick={toggleMobile} hiddenFrom="sm" size="sm" />

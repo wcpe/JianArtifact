@@ -5,9 +5,10 @@
 // 详情视图用查询参数承载（如 /artifacts?repo=..&path=..），
 // 确保任意前端 URL 都落到后端 SPA 回退而不被格式路由拦截。
 
-import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation, useEffect, useRef } from 'react-router-dom';
 import { Center, Loader } from '@mantine/core';
 import { useAuth } from './auth/useAuth';
+import { useGlobalProgress } from './hooks/useGlobalProgress';
 import { AppLayout } from './components/AppLayout';
 import { LoginPage } from './pages/LoginPage';
 import { DashboardPage } from './pages/DashboardPage';
@@ -56,6 +57,27 @@ function RequireAdmin({ children }: { children: React.ReactNode }) {
 }
 
 /**
+ * 路由切换进度触发器（FR-127）：监听 location 变化，每次路由切换短暂置全局进度为 true，
+ * 再在下一个宏任务帧置 false（给「瞬切」页面也带来进度反馈感）。
+ * 使用 useRef 记上一次 pathname，避免同路径无效触发（如搜索 q 参数变化不算切页）。
+ */
+function RouteProgressTrigger() {
+  const location = useLocation();
+  const { setRouteLoading } = useGlobalProgress();
+  const prevPathRef = useRef(location.pathname);
+
+  useEffect(() => {
+    if (prevPathRef.current === location.pathname) return;
+    prevPathRef.current = location.pathname;
+    setRouteLoading(true);
+    const id = setTimeout(() => setRouteLoading(false), 400);
+    return () => clearTimeout(id);
+  }, [location.pathname, setRouteLoading]);
+
+  return null;
+}
+
+/**
  * 落地路由分流（FR-95）：登录用户看仪表盘，匿名访客重定向到公开浏览。
  * 仪表盘读取当前用户信息、不能匿名渲染，故匿名落地到只读的公开仓库浏览。
  * 恢复会话期间显示加载态，避免据未恢复的空登录态误判。
@@ -85,6 +107,8 @@ function HomeRoute() {
 export function App() {
   return (
     <Routes>
+      {/* 路由切换进度触发器（FR-127）：监听 pathname 变化，短暂触发全局进度条。 */}
+      <Route path="*" element={<RouteProgressTrigger />} />
       <Route path="/login" element={<LoginPage />} />
       <Route path="/" element={<AppLayout />}>
         {/* 公开层：匿名可达，只读浏览 / 搜索公开制品 */}
