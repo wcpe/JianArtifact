@@ -102,6 +102,7 @@ export default {
   // 成功提示（toast）
   toast: {
     offlineDone: '迁移已完成，请查看报告',
+    offlineStarted: '离线目录搬运任务已发起，正在后台导入',
     onlineStarted: '在线拉取任务已发起，正在导入',
   },
 

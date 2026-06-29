@@ -224,7 +224,11 @@ export function MigrationPage() {
     setRenames((prev) => ({ ...prev, [source]: target }));
   };
 
-  /** 执行离线目录搬运：按目标类型调用 proxy / hosted 端点，得到报告并进入步骤 ③。 */
+  /**
+   * 执行离线目录搬运（FR-125 异步化）：调用 proxy / hosted 端点得 job_id；
+   * 立即存档 job_id（重连续看）、开启轮询并进入步骤 ③ 看进度队列（与在线拉取共用进度 UI）。
+   * 同步阶段失败（offline_path 为空 / 源不可达 / 凭据未配置）就地展示错误，不进入步骤 ③。
+   */
   const handleMigrateOffline = async (kind: MigrateKind) => {
     setMigrateError(null);
     setMigrating(true);
@@ -234,13 +238,14 @@ export function MigrationPage() {
         auth_ref: authRefValue,
         offline_path: migratePath.trim(),
       };
-      const result =
+      const { job_id } =
         kind === 'proxy' ? await api.migrateNexusProxy(req) : await api.migrateNexusHosted(req);
-      setReport(result);
-      // 离线目录执行时清理在线任务态，报告区只显示离线结果。
+      // 存档 job_id（重连续看）；清旧报告；开启轮询、进入步骤 ③ 看进度。
+      localStorage.setItem(ONLINE_JOB_STORAGE_KEY, job_id);
+      setReport(null);
       setOnlineJob(null);
-      setPollingJobId(null);
-      notifySuccess(t('toast.offlineDone'));
+      setPollingJobId(job_id);
+      notifySuccess(t('toast.offlineStarted'));
       setActive(2);
     } catch (err) {
       setMigrateError(errorMessage(err));

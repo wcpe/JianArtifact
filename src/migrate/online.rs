@@ -308,7 +308,9 @@ where
 }
 
 /// 把进度标记为「已取消」终态（FR-91）：清当前项、置 `Cancelled` 阶段、清暂停标志。
-fn mark_cancelled(progress: &std::sync::Mutex<OnlinePullProgress>) {
+///
+/// `pub(crate)` 供离线搬运（FR-125）复用同一取消终态语义。
+pub(crate) fn mark_cancelled(progress: &std::sync::Mutex<OnlinePullProgress>) {
     let mut p = lock_progress(progress);
     p.phase = OnlinePullPhase::Cancelled;
     p.paused = false;
@@ -429,7 +431,7 @@ where
 /// 取消优先：已取消立即返回 `true`，不进入暂停等待。暂停时把进度标 `Paused`，`await` 在 `notify`
 /// 上挂起，直至被继续 / 取消唤醒；醒来复核——取消则返回 `true`，继续则清暂停标志、恢复
 /// `Downloading` 后返回 `false`。等待在进度锁外（不持锁阻塞）。
-async fn await_control(
+pub(crate) async fn await_control(
     control: &JobControl,
     progress: &std::sync::Mutex<OnlinePullProgress>,
 ) -> bool {

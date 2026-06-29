@@ -15,8 +15,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::migrate::{
-    self, HostedMigrationReport, HttpNexusClient, JobControl, MigrateError, NexusRepoSummary,
-    OnlinePullPhase, OnlinePullProgress, ProxyMigrationReport,
+    self, HttpNexusClient, JobControl, MigrateError, NexusRepoSummary, OnlinePullPhase,
+    OnlinePullProgress,
 };
 
 use super::{ApiError, AppState, Identity, MigrationJobs};
@@ -166,9 +166,10 @@ pub struct NexusProxyMigrateRequest {
 /// 不搬运 hosted 仓库制品（FR-39 未实现）。
 pub async fn migrate_nexus_proxy(
     State(state): State<AppState>,
+    Extension(jobs): Extension<Arc<MigrationJobs>>,
     identity: Identity,
     Json(req): Json<NexusProxyMigrateRequest>,
-) -> Result<Json<ProxyMigrationReport>, ApiError> {
+) -> Result<(StatusCode, Json<JobCreatedDto>), ApiError> {
     identity.require_admin()?;
 
     let offline_path = req.offline_path.trim().to_string();
@@ -176,23 +177,51 @@ pub async fn migrate_nexus_proxy(
         return Err(ApiError::BadRequest("offline_path 不能为空".to_string()));
     }
 
-    // ① 在线枚举源 proxy 仓库配置（格式 / 上游地址）
+    // 同步阶段（失败即 400/502、不开任务）：在线枚举源 proxy 仓库配置（格式 / 上游地址）
     // 持随 AppState 共享的出站网络热替换槽，出站时取当前 client（含运行时 PATCH 后的新代理）
     let client = HttpNexusClient::with_network_state(state.settings.network.clone());
     let source_repos =
         migrate::discover_repositories(&client, &req.base_url, req.auth_ref.as_deref()).await?;
 
-    // ② 据配置建仓 + 从离线 blob store 搬运缓存制品本体
-    let report = migrate::migrate_proxy_repositories(
-        &state.meta,
-        &state.artifacts,
-        &state.formats,
-        &source_repos,
-        std::path::Path::new(&offline_path),
-    )
-    .await?;
+    // 登记任务进度 + 控制句柄，起后台任务执行搬运（大库不阻塞请求、不在反代后 504，FR-125），立即返回 job_id（202）
+    let job_id = Uuid::new_v4().to_string();
+    let progress = Arc::new(Mutex::new(OnlinePullProgress::default()));
+    let control = Arc::new(JobControl::default());
+    jobs.register(job_id.clone(), progress.clone(), control.clone());
 
-    Ok(Json(report))
+    let meta = state.meta.clone();
+    let artifacts = state.artifacts.clone();
+    let formats = state.formats.clone();
+    let task_job_id = job_id.clone();
+    tokio::spawn(async move {
+        let result = migrate::migrate_proxy_repositories_with_progress(
+            &meta,
+            &artifacts,
+            &formats,
+            &source_repos,
+            std::path::Path::new(&offline_path),
+            &progress,
+            &control,
+        )
+        .await;
+        let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
+        p.current_path = None;
+        match result {
+            // 被取消时 with_progress 已标 Cancelled 终态，不覆盖为 Done（FR-91）
+            Ok(_) if p.phase == OnlinePullPhase::Cancelled => {}
+            Ok(_) => {
+                p.phase = OnlinePullPhase::Done;
+                p.current_repo = None;
+            }
+            Err(e) => {
+                p.phase = OnlinePullPhase::Failed;
+                p.error = Some(e.to_string());
+            }
+        }
+        tracing::info!(任务 = %task_job_id, "离线 proxy 仓库搬运后台任务结束");
+    });
+
+    Ok((StatusCode::ACCEPTED, Json(JobCreatedDto { job_id })))
 }
 
 /// hosted 仓库配置 + 完整制品搬运请求体（FR-39）。
@@ -215,9 +244,10 @@ pub struct NexusHostedMigrateRequest {
 /// 不搬运 proxy 仓库制品（proxy 走 FR-38 端点）。
 pub async fn migrate_nexus_hosted(
     State(state): State<AppState>,
+    Extension(jobs): Extension<Arc<MigrationJobs>>,
     identity: Identity,
     Json(req): Json<NexusHostedMigrateRequest>,
-) -> Result<Json<HostedMigrationReport>, ApiError> {
+) -> Result<(StatusCode, Json<JobCreatedDto>), ApiError> {
     identity.require_admin()?;
 
     let offline_path = req.offline_path.trim().to_string();
@@ -225,24 +255,52 @@ pub async fn migrate_nexus_hosted(
         return Err(ApiError::BadRequest("offline_path 不能为空".to_string()));
     }
 
-    // ① 在线枚举源 hosted 仓库配置（格式 / 可见性）
+    // 同步阶段（失败即 400/502、不开任务）：在线枚举源 hosted 仓库配置（格式 / 可见性）
     // 持随 AppState 共享的出站网络热替换槽，出站时取当前 client（含运行时 PATCH 后的新代理）
     let client = HttpNexusClient::with_network_state(state.settings.network.clone());
     let source_repos =
         migrate::discover_repositories(&client, &req.base_url, req.auth_ref.as_deref()).await?;
 
-    // ② 据配置建 hosted 仓库 + 从离线 blob store 搬运全部制品本体
-    let report = migrate::migrate_hosted_repositories(
-        &state.meta,
-        &state.artifacts,
-        &state.formats,
-        &source_repos,
-        std::path::Path::new(&offline_path),
-        state.config.limits.max_artifact_size,
-    )
-    .await?;
+    // 登记任务进度 + 控制句柄，起后台任务执行搬运（大库不阻塞请求、不在反代后 504，FR-125），立即返回 job_id（202）
+    let job_id = Uuid::new_v4().to_string();
+    let progress = Arc::new(Mutex::new(OnlinePullProgress::default()));
+    let control = Arc::new(JobControl::default());
+    jobs.register(job_id.clone(), progress.clone(), control.clone());
 
-    Ok(Json(report))
+    let meta = state.meta.clone();
+    let artifacts = state.artifacts.clone();
+    let formats = state.formats.clone();
+    let max_size = state.config.limits.max_artifact_size;
+    let task_job_id = job_id.clone();
+    tokio::spawn(async move {
+        let result = migrate::migrate_hosted_repositories_with_progress(
+            &meta,
+            &artifacts,
+            &formats,
+            &source_repos,
+            std::path::Path::new(&offline_path),
+            max_size,
+            &progress,
+            &control,
+        )
+        .await;
+        let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
+        p.current_path = None;
+        match result {
+            Ok(_) if p.phase == OnlinePullPhase::Cancelled => {}
+            Ok(_) => {
+                p.phase = OnlinePullPhase::Done;
+                p.current_repo = None;
+            }
+            Err(e) => {
+                p.phase = OnlinePullPhase::Failed;
+                p.error = Some(e.to_string());
+            }
+        }
+        tracing::info!(任务 = %task_job_id, "离线 hosted 仓库搬运后台任务结束");
+    });
+
+    Ok((StatusCode::ACCEPTED, Json(JobCreatedDto { job_id })))
 }
 
 /// 在线拉取迁移请求体（FR-82）：选中的源仓库 + 目标仓库名（无需离线 blob store）。

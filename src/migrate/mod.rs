@@ -25,7 +25,10 @@ mod offline;
 mod online;
 mod proxy;
 
-pub use hosted::{migrate_hosted_repositories, HostedMigrationReport, HostedRepoMigrationOutcome};
+pub use hosted::{
+    migrate_hosted_repositories, migrate_hosted_repositories_with_progress, HostedMigrationReport,
+    HostedRepoMigrationOutcome,
+};
 pub use http::HttpNexusClient;
 pub use offline::{
     enumerate_blob_entries, enumerate_blob_store, OfflineBlobEntry, OfflineBlobSummary,
@@ -35,7 +38,10 @@ pub use online::{
     migrate_online_repositories, migrate_online_with_progress, JobControl, OnlineMigrationReport,
     OnlinePullPhase, OnlinePullProgress, OnlinePullSelection, OnlineRepoMigrationOutcome,
 };
-pub use proxy::{migrate_proxy_repositories, ProxyMigrationReport, RepoMigrationOutcome};
+pub use proxy::{
+    migrate_proxy_repositories, migrate_proxy_repositories_with_progress, ProxyMigrationReport,
+    RepoMigrationOutcome,
+};
 
 /// 把 Nexus 原样格式名映射为本系统已实现的格式名；无法映射（未实现格式）返回 None。
 ///

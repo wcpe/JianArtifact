@@ -164,7 +164,7 @@
 | FR-122 | [增强 FR-14/61] 完整 Maven 快照规则：SNAPSHOT 上传服务端生成唯一时间戳版本（`<artifact>-<version>-<yyyyMMdd.HHmmss>-<buildnumber>`）+ snapshot 级 maven-metadata.xml（snapshotVersions/timestamp/buildNumber），release 不可覆盖 / snapshot 时间戳唯一并可拉最新；mvn 客户端按 Maven 快照规则正常解析 | P2 | 开发中 |
 | FR-123 | [增强 FR-74] Web 上传页 Maven 适配：上传 jar 自动回填坐标（FR-120）+ 可选上传 pom 文件（三级兜底）+ 快照版提示，支持 jar+pom 多文件，使网页上传产出合规 Maven 制品 | P2 | 开发中 |
 | FR-124 | [增强 FR-37] 离线 blob store 预览异步化：`preview_nexus_offline` 同步遍历上万 blob 在反代后超时（504），改为复用 FR-83 异步 job 基建——立即返回 `job_id`、后台枚举、前端轮询进度与结果。验收：上万 blob 离线目录预览不再 504、轮询拿到按 repo 枚举结果；真机指向真实 blob store 跑通 | P2 | 开发中 |
-| FR-125 | [增强 FR-38/39] 离线 proxy/hosted 搬运异步化：`migrate_nexus_proxy` / `migrate_nexus_hosted` 同步搬运上万 blob 在反代后超时，改为复用 FR-83 异步 job（立即返回 `job_id` + 进度 + 复用 FR-91 取消/暂停）；blob 先落盘校验再写索引、失败回滚不变。验收：大目录搬运不阻塞请求 / 不 504 / 进度可观测可取消；真机搬运真实大目录 | P2 | 计划 |
+| FR-125 | [增强 FR-38/39] 离线 proxy/hosted 搬运异步化：`migrate_nexus_proxy` / `migrate_nexus_hosted` 同步搬运上万 blob 在反代后超时，改为复用 FR-83 异步 job（立即返回 `job_id` + 进度 + 复用 FR-91 取消/暂停）；blob 先落盘校验再写索引、失败回滚不变。验收：大目录搬运不阻塞请求 / 不 504 / 进度可观测可取消；真机搬运真实大目录 | P2 | 开发中 |
 
 > 状态取值：计划 / 开发中 / 已交付@vX.Y.Z。优先级：P1(MVP) / P2 / P3。
 > 标 `已交付` 是有门的：只有该 FR 的 §6 / spec 验收标准全部满足、对应测试 / 实机验收通过后，才由 `sdd-release-version` 在发版时统一标 `已交付@vX.Y.Z`——开发 / 修复过程中不得自行预标。FR 标了 `已交付` 实际是断的（false-done）：功能坏了要修回 done 走 `sdd-fix-bug` 把状态归真（从没真正工作过 → 回退 `开发中`）；需求本身要撤 / 推迟则走 `sdd-rollback-change`。

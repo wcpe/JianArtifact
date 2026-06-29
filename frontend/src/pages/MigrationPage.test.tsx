@@ -9,12 +9,7 @@ import { Notifications } from '@mantine/notifications';
 import { MigrationPage } from './MigrationPage';
 import * as api from '../api/endpoints';
 import { ApiError } from '../api/client';
-import type {
-  MigrationReport,
-  NexusRepoSummary,
-  OfflineRepoSummary,
-  OnlinePullJob,
-} from '../api/types';
+import type { NexusRepoSummary, OfflineRepoSummary, OnlinePullJob } from '../api/types';
 
 /** 在 Provider 下渲染迁移页（含通知容器）。 */
 function renderPage() {
@@ -102,19 +97,6 @@ const 离线仓库: OfflineRepoSummary[] = [
   },
 ];
 
-const 迁移报告: MigrationReport = {
-  repos: [
-    {
-      repo_name: 'maven-proxy',
-      format: 'maven',
-      created: true,
-      migrated_artifacts: 5,
-      skipped_artifacts: 1,
-    },
-  ],
-  skipped_repos: ['npm-hosted'],
-};
-
 describe('MigrationPage', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -167,9 +149,11 @@ describe('MigrationPage', () => {
     expect(jobSpy).toHaveBeenCalledWith('prev-1');
   });
 
-  it('预览后勾选仓库、执行 proxy 搬运并展示报告', async () => {
+  it('执行 proxy 离线搬运（异步）：发起任务后轮询至 done 展示报告（FR-125）', async () => {
     vi.spyOn(api, 'previewNexusRepositories').mockResolvedValue(在线仓库);
-    const migrateSpy = vi.spyOn(api, 'migrateNexusProxy').mockResolvedValue(迁移报告);
+    // FR-125：离线搬运改异步，先返 job_id，再经 getMigrationJob 轮询至终态
+    const migrateSpy = vi.spyOn(api, 'migrateNexusProxy').mockResolvedValue({ job_id: 'off-1' });
+    const jobSpy = vi.spyOn(api, 'getMigrationJob').mockResolvedValue(任务完成);
     const user = userEvent.setup();
     renderPage();
 
@@ -182,11 +166,10 @@ describe('MigrationPage', () => {
     // 切到「离线目录」迁移方式（默认是在线拉取）
     await user.click(screen.getByRole('radio', { name: /离线目录/ }));
     // 勾选第一个仓库
-    const checkbox = screen.getByRole('checkbox', { name: /maven-proxy/ });
-    await user.click(checkbox);
+    await user.click(screen.getByRole('checkbox', { name: /maven-proxy/ }));
     // 填离线路径（搬运需要 blob 本体来源）
     await user.type(screen.getByPlaceholderText('/data/nexus/blobs/default'), '/data/blobs');
-    // 执行 proxy 搬运
+    // 执行 proxy 搬运（异步，立即返回 job_id）
     await user.click(screen.getByRole('button', { name: '执行 proxy 搬运' }));
 
     await waitFor(() => expect(migrateSpy).toHaveBeenCalled());
@@ -195,14 +178,12 @@ describe('MigrationPage', () => {
       auth_ref: undefined,
       offline_path: '/data/blobs',
     });
-    // 报告展示：等待报告表格中的仓库行出现，校验已迁制品数
-    await waitFor(() =>
-      expect(screen.getByText('maven-proxy', { selector: 'td' })).toBeInTheDocument(),
-    );
-    const reportRegion = screen.getByText('maven-proxy', { selector: 'td' }).closest('table')!;
-    expect(within(reportRegion).getByText('5')).toBeInTheDocument();
-    // 整仓跳过项以徽章呈现
-    expect(screen.getByText('npm-hosted')).toBeInTheDocument();
+    // 异步：以返回的 job_id 开启轮询
+    await waitFor(() => expect(jobSpy).toHaveBeenCalledWith('off-1'));
+    // 轮询至终态 done，展示最终报告（仓库行 + 已迁制品数）
+    await waitFor(() => expect(screen.getByText('已完成')).toBeInTheDocument(), { timeout: 3000 });
+    const reportTable = screen.getByText('maven-releases', { selector: 'td' }).closest('table')!;
+    expect(within(reportTable).getByText('7')).toBeInTheDocument();
   });
 
   it('在线拉取：发起异步任务后轮询进度，downloading→done 渲染队列进度与最终报告', async () => {

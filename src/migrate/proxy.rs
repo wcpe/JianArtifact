@@ -25,7 +25,22 @@ use crate::meta::{MetaStore, NewRepository, RepoType, RepositoryRecord, Visibili
 use crate::proxy::Upstream;
 use crate::storage::BlobStore;
 
-use super::{map_nexus_format, normalize_blob_path, MigrateError, NexusRepoSummary};
+use super::online::{await_control, mark_cancelled};
+use super::{
+    map_nexus_format, normalize_blob_path, JobControl, MigrateError, NexusRepoSummary,
+    OnlinePullPhase, OnlinePullProgress, OnlineRepoMigrationOutcome,
+};
+
+/// 在一个 blob 处理完成后推进进度计数（FR-125）：`done_assets` +1，按结果累加 `migrated` / `skipped`。
+fn bump_progress(progress: &std::sync::Mutex<OnlinePullProgress>, migrated: bool) {
+    let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
+    p.done_assets += 1;
+    if migrated {
+        p.migrated += 1;
+    } else {
+        p.skipped += 1;
+    }
+}
 
 /// 单个 proxy 仓库的搬运结果明细。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -94,21 +109,40 @@ async fn ensure_proxy_repo(
 ///
 /// 逐条流式读取 `.bytes` 本体并经 [`ArtifactService::ingest_cached`] 写入缓存；单条失败
 /// （路径非法 / 读本体失败 / 写入失败）记 WARN 后跳过，不中断整批。
+/// 返回 `(成功数, 跳过数, 是否中途被取消)`。每条前在 blob 边界响应取消 / 暂停（FR-91/125）：
+/// 取消即提前结束本仓库（`cancelled=true`）、暂停即挂起等待继续；边搬边推进进度
+/// （`current_path` / `done_assets` / `migrated` / `skipped`）。
 async fn migrate_repo_artifacts<S: BlobStore, U: Upstream>(
     artifacts: &ArtifactService<S, U>,
     formats: &FormatRegistry,
     repo: &RepositoryRecord,
     entries: &[super::OfflineBlobEntry],
-) -> (usize, usize) {
+    progress: &std::sync::Mutex<OnlinePullProgress>,
+    control: &JobControl,
+) -> (usize, usize, bool) {
     let Some(format) = formats.get(&repo.format) else {
         // 仓库已按映射格式建成，注册表理应有对应处理器；缺失则整批跳过（防御）
         tracing::warn!(仓库 = %repo.name, 格式 = %repo.format, "格式处理器未注册，跳过该仓库制品搬运");
-        return (0, entries.len());
+        let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
+        p.skipped += entries.len();
+        p.done_assets += entries.len();
+        return (0, entries.len(), false);
     };
 
     let mut migrated = 0usize;
     let mut skipped = 0usize;
     for entry in entries {
+        // blob 边界响应取消 / 暂停（FR-91）：取消即提前结束本仓库（已搬运保留）
+        if await_control(control, progress).await {
+            return (migrated, skipped, true);
+        }
+        {
+            let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
+            p.phase = OnlinePullPhase::Downloading;
+            p.current_repo = Some(repo.name.clone());
+            p.current_path = Some(entry.blob_name.clone());
+        }
+
         // 归一化并校验路径：非法路径（穿越 / 空）跳过
         let rel = normalize_blob_path(&entry.blob_name);
         let coords: ArtifactCoordinates = match format.parse_path(rel) {
@@ -116,6 +150,7 @@ async fn migrate_repo_artifacts<S: BlobStore, U: Upstream>(
             Err(e) => {
                 tracing::warn!(仓库 = %repo.name, blob = %entry.blob_name, 错误 = %e, "制品路径非法，跳过搬运");
                 skipped += 1;
+                bump_progress(progress, false);
                 continue;
             }
         };
@@ -126,19 +161,24 @@ async fn migrate_repo_artifacts<S: BlobStore, U: Upstream>(
             Err(e) => {
                 tracing::warn!(仓库 = %repo.name, 路径 = %entry.bytes_path.display(), 错误 = %e, "读取 blob 本体失败，跳过搬运");
                 skipped += 1;
+                bump_progress(progress, false);
                 continue;
             }
         };
 
         match artifacts.ingest_cached(repo, format, &coords, file).await {
-            Ok(_) => migrated += 1,
+            Ok(_) => {
+                migrated += 1;
+                bump_progress(progress, true);
+            }
             Err(e) => {
                 tracing::warn!(仓库 = %repo.name, blob = %entry.blob_name, 错误 = %e, "缓存制品搬运失败，跳过");
                 skipped += 1;
+                bump_progress(progress, false);
             }
         }
     }
-    (migrated, skipped)
+    (migrated, skipped, false)
 }
 
 /// 执行 proxy 仓库配置创建 + 缓存制品搬运（FR-38）。
@@ -153,8 +193,43 @@ pub async fn migrate_proxy_repositories<S: BlobStore, U: Upstream>(
     source_repos: &[NexusRepoSummary],
     offline_root: &Path,
 ) -> Result<ProxyMigrationReport, MigrateError> {
+    // 无进度上报的便捷入口（同步调用 / 测试用）：用一次性进度态 + 永不触发的控制句柄委托
+    let progress = std::sync::Mutex::new(OnlinePullProgress::default());
+    let control = JobControl::default();
+    migrate_proxy_repositories_with_progress(
+        meta,
+        artifacts,
+        formats,
+        source_repos,
+        offline_root,
+        &progress,
+        &control,
+    )
+    .await
+}
+
+/// 执行 proxy 仓库配置创建 + 缓存制品搬运，边搬边上报进度、在 blob 边界响应取消 / 暂停（FR-125）。
+///
+/// 语义同 [`migrate_proxy_repositories`]，额外把进度写入 `progress`（供 `GET /migrate/jobs/{id}` 轮询）、
+/// 在每个 blob 与每个仓库边界响应 `control`（FR-91 取消 / 暂停；取消即停止后续、已搬运保留）。
+pub async fn migrate_proxy_repositories_with_progress<S: BlobStore, U: Upstream>(
+    meta: &MetaStore,
+    artifacts: &ArtifactService<S, U>,
+    formats: &FormatRegistry,
+    source_repos: &[NexusRepoSummary],
+    offline_root: &Path,
+    progress: &std::sync::Mutex<OnlinePullProgress>,
+    control: &JobControl,
+) -> Result<ProxyMigrationReport, MigrateError> {
+    progress.lock().unwrap_or_else(|e| e.into_inner()).phase = OnlinePullPhase::Enumerating;
+
     // 离线 blob store 中的可搬运条目，按仓库名归组（一次枚举、避免逐仓库重复遍历磁盘）
     let entries = crate::migrate::enumerate_blob_entries(offline_root)?;
+    // total_assets 作进度分母：离线 store 全部可搬运条目数
+    progress
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .total_assets = entries.len();
     let mut by_repo: std::collections::HashMap<&str, Vec<super::OfflineBlobEntry>> =
         std::collections::HashMap::new();
     for e in &entries {
@@ -166,6 +241,11 @@ pub async fn migrate_proxy_repositories<S: BlobStore, U: Upstream>(
 
     let mut report = ProxyMigrationReport::default();
     for src in source_repos {
+        // 仓库边界响应取消：已请求取消则不再开始新仓库（FR-91）
+        if control.is_cancelled() {
+            mark_cancelled(progress);
+            return Ok(report);
+        }
         // 仅迁移 proxy 类型仓库（hosted / group 不在本批范围）
         if src.r#type != "proxy" {
             continue;
@@ -174,20 +254,31 @@ pub async fn migrate_proxy_repositories<S: BlobStore, U: Upstream>(
         let Some(format) = map_nexus_format(&src.format) else {
             tracing::info!(仓库 = %src.name, 源格式 = %src.format, "源格式未实现，跳过该 proxy 仓库迁移");
             report.skipped_repos.push(src.name.clone());
+            progress
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .skipped_repos
+                .push(src.name.clone());
             continue;
         };
         // proxy 仓库须有上游地址；缺失则跳过（无法建合法 proxy 仓库）
         let Some(upstream_url) = src.upstream_url.as_deref().filter(|u| !u.is_empty()) else {
             tracing::warn!(仓库 = %src.name, "proxy 仓库缺上游地址，跳过迁移");
             report.skipped_repos.push(src.name.clone());
+            progress
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .skipped_repos
+                .push(src.name.clone());
             continue;
         };
 
         let (repo, created) = ensure_proxy_repo(meta, &src.name, format, upstream_url).await?;
 
         let repo_entries = by_repo.remove(src.name.as_str()).unwrap_or_default();
-        let (migrated, skipped) =
-            migrate_repo_artifacts(artifacts, formats, &repo, &repo_entries).await;
+        let (migrated, skipped, cancelled) =
+            migrate_repo_artifacts(artifacts, formats, &repo, &repo_entries, progress, control)
+                .await;
 
         tracing::info!(
             仓库 = %src.name,
@@ -195,6 +286,7 @@ pub async fn migrate_proxy_repositories<S: BlobStore, U: Upstream>(
             新建 = created,
             已搬运 = migrated,
             已跳过 = skipped,
+            已取消 = cancelled,
             "proxy 仓库迁移完成"
         );
         report.repos.push(RepoMigrationOutcome {
@@ -204,6 +296,25 @@ pub async fn migrate_proxy_repositories<S: BlobStore, U: Upstream>(
             migrated_artifacts: migrated,
             skipped_artifacts: skipped,
         });
+        // 进度内同记一份（统一 OnlineRepoMigrationOutcome 形态供轮询展示，target 同源名）
+        progress
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .repos
+            .push(OnlineRepoMigrationOutcome {
+                source_repo: src.name.clone(),
+                target_repo: src.name.clone(),
+                format: format.to_string(),
+                created,
+                migrated_artifacts: migrated,
+                skipped_artifacts: skipped,
+            });
+
+        // 仓库内被取消：标记终态并停止后续仓库（不算失败，已搬运保留）
+        if cancelled {
+            mark_cancelled(progress);
+            return Ok(report);
+        }
     }
 
     Ok(report)
@@ -408,5 +519,67 @@ mod tests {
         // 合法 1 条搬运成功、非法 1 条跳过，整批未中断
         assert_eq!(report.repos[0].migrated_artifacts, 1);
         assert_eq!(report.repos[0].skipped_artifacts, 1);
+    }
+
+    #[tokio::test]
+    async fn with_progress_边搬边上报进度() {
+        let (meta, svc, formats, store_dir) = 新建().await;
+        let blob_root = store_dir.path().join("nexus");
+        build_store(
+            &blob_root,
+            &[("raw-proxy", "/a.bin", "A"), ("raw-proxy", "/b.bin", "B")],
+        );
+        let src = vec![src_repo(
+            "raw-proxy",
+            "raw",
+            "proxy",
+            Some("https://up.example"),
+        )];
+        let progress = std::sync::Mutex::new(OnlinePullProgress::default());
+        let control = JobControl::default();
+        let report = migrate_proxy_repositories_with_progress(
+            &meta, &svc, &formats, &src, &blob_root, &progress, &control,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(report.repos[0].migrated_artifacts, 2);
+        let p = progress.lock().unwrap();
+        assert_eq!(p.total_assets, 2, "total_assets 为离线条目总数");
+        assert_eq!(p.done_assets, 2);
+        assert_eq!(p.migrated, 2);
+        // 进度内同记一份仓库结果（供轮询展示，target 同源名）
+        assert_eq!(p.repos.len(), 1);
+        assert_eq!(p.repos[0].source_repo, "raw-proxy");
+        assert_eq!(p.repos[0].target_repo, "raw-proxy");
+        assert_eq!(p.repos[0].migrated_artifacts, 2);
+    }
+
+    #[tokio::test]
+    async fn with_progress_预先取消则不搬运并标终态() {
+        let (meta, svc, formats, store_dir) = 新建().await;
+        let blob_root = store_dir.path().join("nexus");
+        build_store(&blob_root, &[("raw-proxy", "/a.bin", "A")]);
+        let src = vec![src_repo(
+            "raw-proxy",
+            "raw",
+            "proxy",
+            Some("https://up.example"),
+        )];
+        let progress = std::sync::Mutex::new(OnlinePullProgress::default());
+        let control = JobControl::default();
+        control.request_cancel(); // 仓库边界前即请求取消
+
+        let report = migrate_proxy_repositories_with_progress(
+            &meta, &svc, &formats, &src, &blob_root, &progress, &control,
+        )
+        .await
+        .unwrap();
+
+        // 仓库边界取消：未搬任何制品、报告为空、进度终态为 Cancelled（不算失败）
+        assert!(report.repos.is_empty());
+        let p = progress.lock().unwrap();
+        assert_eq!(p.phase, OnlinePullPhase::Cancelled);
+        assert_eq!(p.migrated, 0);
     }
 }

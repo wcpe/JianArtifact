@@ -24,7 +24,6 @@ import type {
   LoginResponse,
   MigrationJobCreated,
   MigrationJobSummary,
-  MigrationReport,
   NexusMigrateRequest,
   NexusOfflinePreviewRequest,
   NexusPreviewRequest,
@@ -466,17 +465,24 @@ export function previewNexusOffline(req: NexusOfflinePreviewRequest): Promise<Mi
   });
 }
 
-/** 执行 proxy 仓库配置创建 + 缓存制品搬运，返回迁移报告。 */
-export function migrateNexusProxy(req: NexusMigrateRequest): Promise<MigrationReport> {
-  return request<MigrationReport>('/migrate/nexus/proxy/migrate', {
+/**
+ * 执行 proxy 仓库配置创建 + 缓存制品搬运（FR-125 异步化）：发起异步任务、立即返回 job_id；
+ * 实际搬运在后台运行、进度经 getMigrationJob 轮询（避免大库同步搬运在反代后 504）。
+ * 同步阶段失败（offline_path 为空 / 源不可达 / 凭据未配置）仍同步返回错误。
+ */
+export function migrateNexusProxy(req: NexusMigrateRequest): Promise<MigrationJobCreated> {
+  return request<MigrationJobCreated>('/migrate/nexus/proxy/migrate', {
     method: 'POST',
     body: req,
   });
 }
 
-/** 执行 hosted 仓库配置创建 + 完整制品搬运，返回迁移报告。 */
-export function migrateNexusHosted(req: NexusMigrateRequest): Promise<MigrationReport> {
-  return request<MigrationReport>('/migrate/nexus/hosted/migrate', {
+/**
+ * 执行 hosted 仓库配置创建 + 完整制品搬运（FR-125 异步化）：发起异步任务、立即返回 job_id；
+ * 实际搬运在后台运行、进度经 getMigrationJob 轮询。同步阶段失败仍同步返回错误。
+ */
+export function migrateNexusHosted(req: NexusMigrateRequest): Promise<MigrationJobCreated> {
+  return request<MigrationJobCreated>('/migrate/nexus/hosted/migrate', {
     method: 'POST',
     body: req,
   });

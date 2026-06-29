@@ -27,7 +27,22 @@ use crate::meta::{MetaStore, NewRepository, RepoType, RepositoryRecord, Visibili
 use crate::proxy::Upstream;
 use crate::storage::BlobStore;
 
-use super::{map_nexus_format, normalize_blob_path, MigrateError, NexusRepoSummary};
+use super::online::{await_control, mark_cancelled};
+use super::{
+    map_nexus_format, normalize_blob_path, JobControl, MigrateError, NexusRepoSummary,
+    OnlinePullPhase, OnlinePullProgress, OnlineRepoMigrationOutcome,
+};
+
+/// 在一个 blob 处理完成后推进进度计数（FR-125）：`done_assets` +1，按结果累加 `migrated` / `skipped`。
+fn bump_progress(progress: &std::sync::Mutex<OnlinePullProgress>, migrated: bool) {
+    let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
+    p.done_assets += 1;
+    if migrated {
+        p.migrated += 1;
+    } else {
+        p.skipped += 1;
+    }
+}
 
 /// 单个 hosted 仓库的搬运结果明细。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -96,22 +111,41 @@ pub(crate) async fn ensure_hosted_repo(
 /// 逐条流式读取 `.bytes` 本体并经 [`ArtifactService::ingest_hosted`] 写入；单条失败
 /// （路径非法 / 读本体失败 / 不可覆盖 / 写入失败）记 WARN 后跳过，不中断整批。
 /// `max_size` 为单制品上传上限（超限的制品按跳过处理，不写半截 blob）。
+/// 返回 `(成功数, 跳过数, 是否中途被取消)`。每条前在 blob 边界响应取消 / 暂停（FR-91/125）：
+/// 取消即提前结束本仓库（`cancelled=true`）、暂停即挂起等待继续；边搬边推进进度。
+/// `max_size` 为单制品上传上限（超限的制品按跳过处理，不写半截 blob）。
 async fn migrate_repo_artifacts<S: BlobStore, U: Upstream>(
     artifacts: &ArtifactService<S, U>,
     formats: &FormatRegistry,
     repo: &RepositoryRecord,
     entries: &[super::OfflineBlobEntry],
     max_size: Option<u64>,
-) -> (usize, usize) {
+    progress: &std::sync::Mutex<OnlinePullProgress>,
+    control: &JobControl,
+) -> (usize, usize, bool) {
     let Some(format) = formats.get(&repo.format) else {
         // 仓库已按映射格式建成，注册表理应有对应处理器；缺失则整批跳过（防御）
         tracing::warn!(仓库 = %repo.name, 格式 = %repo.format, "格式处理器未注册，跳过该仓库制品搬运");
-        return (0, entries.len());
+        let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
+        p.skipped += entries.len();
+        p.done_assets += entries.len();
+        return (0, entries.len(), false);
     };
 
     let mut migrated = 0usize;
     let mut skipped = 0usize;
     for entry in entries {
+        // blob 边界响应取消 / 暂停（FR-91）：取消即提前结束本仓库（已搬运保留）
+        if await_control(control, progress).await {
+            return (migrated, skipped, true);
+        }
+        {
+            let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
+            p.phase = OnlinePullPhase::Downloading;
+            p.current_repo = Some(repo.name.clone());
+            p.current_path = Some(entry.blob_name.clone());
+        }
+
         // 归一化并校验路径：非法路径（穿越 / 空）跳过
         let rel = normalize_blob_path(&entry.blob_name);
         let coords: ArtifactCoordinates = match format.parse_path(rel) {
@@ -119,6 +153,7 @@ async fn migrate_repo_artifacts<S: BlobStore, U: Upstream>(
             Err(e) => {
                 tracing::warn!(仓库 = %repo.name, blob = %entry.blob_name, 错误 = %e, "制品路径非法，跳过搬运");
                 skipped += 1;
+                bump_progress(progress, false);
                 continue;
             }
         };
@@ -129,6 +164,7 @@ async fn migrate_repo_artifacts<S: BlobStore, U: Upstream>(
             Err(e) => {
                 tracing::warn!(仓库 = %repo.name, 路径 = %entry.bytes_path.display(), 错误 = %e, "读取 blob 本体失败，跳过搬运");
                 skipped += 1;
+                bump_progress(progress, false);
                 continue;
             }
         };
@@ -137,19 +173,24 @@ async fn migrate_repo_artifacts<S: BlobStore, U: Upstream>(
             .ingest_hosted(repo, format, &coords, file, max_size)
             .await
         {
-            Ok(_) => migrated += 1,
+            Ok(_) => {
+                migrated += 1;
+                bump_progress(progress, true);
+            }
             // 不可覆盖（如 Maven release 已存在不同内容）：按覆盖 / 不可变策略跳过，不中断整批
             Err(ServiceError::OverwriteForbidden) => {
                 tracing::info!(仓库 = %repo.name, blob = %entry.blob_name, "同坐标制品已存在且不可覆盖，跳过搬运");
                 skipped += 1;
+                bump_progress(progress, false);
             }
             Err(e) => {
                 tracing::warn!(仓库 = %repo.name, blob = %entry.blob_name, 错误 = %e, "hosted 制品搬运失败，跳过");
                 skipped += 1;
+                bump_progress(progress, false);
             }
         }
     }
-    (migrated, skipped)
+    (migrated, skipped, false)
 }
 
 /// 执行 hosted 仓库配置创建 + 完整制品搬运（FR-39）。
@@ -166,8 +207,45 @@ pub async fn migrate_hosted_repositories<S: BlobStore, U: Upstream>(
     offline_root: &Path,
     max_size: Option<u64>,
 ) -> Result<HostedMigrationReport, MigrateError> {
+    // 无进度上报的便捷入口（同步调用 / 测试用）：用一次性进度态 + 永不触发的控制句柄委托
+    let progress = std::sync::Mutex::new(OnlinePullProgress::default());
+    let control = JobControl::default();
+    migrate_hosted_repositories_with_progress(
+        meta,
+        artifacts,
+        formats,
+        source_repos,
+        offline_root,
+        max_size,
+        &progress,
+        &control,
+    )
+    .await
+}
+
+/// 执行 hosted 仓库配置创建 + 完整制品搬运，边搬边上报进度、在 blob 边界响应取消 / 暂停（FR-125）。
+///
+/// 语义同 [`migrate_hosted_repositories`]，额外把进度写入 `progress`（供 `GET /migrate/jobs/{id}` 轮询）、
+/// 在每个 blob 与每个仓库边界响应 `control`（FR-91 取消 / 暂停；取消即停止后续、已搬运保留）。
+#[allow(clippy::too_many_arguments)]
+pub async fn migrate_hosted_repositories_with_progress<S: BlobStore, U: Upstream>(
+    meta: &MetaStore,
+    artifacts: &ArtifactService<S, U>,
+    formats: &FormatRegistry,
+    source_repos: &[NexusRepoSummary],
+    offline_root: &Path,
+    max_size: Option<u64>,
+    progress: &std::sync::Mutex<OnlinePullProgress>,
+    control: &JobControl,
+) -> Result<HostedMigrationReport, MigrateError> {
+    progress.lock().unwrap_or_else(|e| e.into_inner()).phase = OnlinePullPhase::Enumerating;
+
     // 离线 blob store 中的可搬运条目，按仓库名归组（一次枚举、避免逐仓库重复遍历磁盘）
     let entries = super::enumerate_blob_entries(offline_root)?;
+    progress
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .total_assets = entries.len();
     let mut by_repo: std::collections::HashMap<&str, Vec<super::OfflineBlobEntry>> =
         std::collections::HashMap::new();
     for e in &entries {
@@ -179,6 +257,11 @@ pub async fn migrate_hosted_repositories<S: BlobStore, U: Upstream>(
 
     let mut report = HostedMigrationReport::default();
     for src in source_repos {
+        // 仓库边界响应取消：已请求取消则不再开始新仓库（FR-91）
+        if control.is_cancelled() {
+            mark_cancelled(progress);
+            return Ok(report);
+        }
         // 仅迁移 hosted 类型仓库（proxy / group 不在本批范围；proxy 走 FR-38）
         if src.r#type != "hosted" {
             continue;
@@ -187,14 +270,27 @@ pub async fn migrate_hosted_repositories<S: BlobStore, U: Upstream>(
         let Some(format) = map_nexus_format(&src.format) else {
             tracing::info!(仓库 = %src.name, 源格式 = %src.format, "源格式未实现，跳过该 hosted 仓库迁移");
             report.skipped_repos.push(src.name.clone());
+            progress
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .skipped_repos
+                .push(src.name.clone());
             continue;
         };
 
         let (repo, created) = ensure_hosted_repo(meta, &src.name, format).await?;
 
         let repo_entries = by_repo.remove(src.name.as_str()).unwrap_or_default();
-        let (migrated, skipped) =
-            migrate_repo_artifacts(artifacts, formats, &repo, &repo_entries, max_size).await;
+        let (migrated, skipped, cancelled) = migrate_repo_artifacts(
+            artifacts,
+            formats,
+            &repo,
+            &repo_entries,
+            max_size,
+            progress,
+            control,
+        )
+        .await;
 
         tracing::info!(
             仓库 = %src.name,
@@ -202,6 +298,7 @@ pub async fn migrate_hosted_repositories<S: BlobStore, U: Upstream>(
             新建 = created,
             已搬运 = migrated,
             已跳过 = skipped,
+            已取消 = cancelled,
             "hosted 仓库迁移完成"
         );
         report.repos.push(HostedRepoMigrationOutcome {
@@ -211,6 +308,24 @@ pub async fn migrate_hosted_repositories<S: BlobStore, U: Upstream>(
             migrated_artifacts: migrated,
             skipped_artifacts: skipped,
         });
+        progress
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .repos
+            .push(OnlineRepoMigrationOutcome {
+                source_repo: src.name.clone(),
+                target_repo: src.name.clone(),
+                format: format.to_string(),
+                created,
+                migrated_artifacts: migrated,
+                skipped_artifacts: skipped,
+            });
+
+        // 仓库内被取消：标记终态并停止后续仓库（不算失败，已搬运保留）
+        if cancelled {
+            mark_cancelled(progress);
+            return Ok(report);
+        }
     }
 
     Ok(report)
@@ -463,5 +578,53 @@ mod tests {
             .unwrap();
         assert_eq!(report.repos[0].migrated_artifacts, 1);
         assert_eq!(report.repos[0].skipped_artifacts, 1);
+    }
+
+    #[tokio::test]
+    async fn with_progress_边搬边上报进度() {
+        let (meta, svc, formats, store_dir) = 新建().await;
+        let blob_root = store_dir.path().join("nexus");
+        build_store(
+            &blob_root,
+            &[("raw-hosted", "/a.bin", "A"), ("raw-hosted", "/b.bin", "B")],
+        );
+        let src = vec![src_repo("raw-hosted", "raw", "hosted")];
+        let progress = std::sync::Mutex::new(OnlinePullProgress::default());
+        let control = JobControl::default();
+        let report = migrate_hosted_repositories_with_progress(
+            &meta, &svc, &formats, &src, &blob_root, None, &progress, &control,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(report.repos[0].migrated_artifacts, 2);
+        let p = progress.lock().unwrap();
+        assert_eq!(p.total_assets, 2);
+        assert_eq!(p.done_assets, 2);
+        assert_eq!(p.migrated, 2);
+        assert_eq!(p.repos.len(), 1);
+        assert_eq!(p.repos[0].source_repo, "raw-hosted");
+    }
+
+    #[tokio::test]
+    async fn with_progress_预先取消则不搬运并标终态() {
+        let (meta, svc, formats, store_dir) = 新建().await;
+        let blob_root = store_dir.path().join("nexus");
+        build_store(&blob_root, &[("raw-hosted", "/a.bin", "A")]);
+        let src = vec![src_repo("raw-hosted", "raw", "hosted")];
+        let progress = std::sync::Mutex::new(OnlinePullProgress::default());
+        let control = JobControl::default();
+        control.request_cancel();
+
+        let report = migrate_hosted_repositories_with_progress(
+            &meta, &svc, &formats, &src, &blob_root, None, &progress, &control,
+        )
+        .await
+        .unwrap();
+
+        assert!(report.repos.is_empty());
+        let p = progress.lock().unwrap();
+        assert_eq!(p.phase, OnlinePullPhase::Cancelled);
+        assert_eq!(p.migrated, 0);
     }
 }
