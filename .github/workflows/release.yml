@@ -136,6 +136,8 @@ jobs:
           JIANARTIFACT_BUILD_VERSION: ${{ needs.prepare.outputs.version }}
 
       # 按命名契约重命名二进制 + 生成 .sha256（裸 64 位十六进制串，不带文件名）。
+      # 同时打包压缩包（FR-138：三平台统一 zip，规避杀软对裸 musl ELF 的启发式误报）
+      # 并生成 zip 的 .sha256 / .md5 校验和文件；过渡版同时保留裸可执行（兼容旧版自更新）。
       # 用 bash（windows runner 也用 git bash）统一处理三平台路径与哈希工具差异。
       - name: 打包资产与校验和
         id: pack
@@ -147,18 +149,42 @@ jobs:
           # cargo 产物路径：target/{triple}/release/jianartifact{ext}
           src="target/${target}/release/jianartifact${ext}"
           asset="jianartifact-${version}-${target}${ext}"
+          zip_asset="jianartifact-${version}-${target}.zip"
           mkdir -p dist
           cp "$src" "dist/${asset}"
-          # 计算 sha256：Linux 用 sha256sum，macOS 用 shasum，统一取首列裸哈希。
+
+          # 裸 exe sha256（过渡保留：供旧版自更新回落路径校验）
           if command -v sha256sum >/dev/null 2>&1; then
             sha=$(sha256sum "dist/${asset}" | awk '{print $1}')
           else
             sha=$(shasum -a 256 "dist/${asset}" | awk '{print $1}')
           fi
           printf '%s' "$sha" > "dist/${asset}.sha256"
-          echo "asset=${asset}" >> "$GITHUB_OUTPUT"
 
-      # 上传该目标的两份资产为工作流构件，交由后续 publish job 汇总发布。
+          # 打包压缩包（FR-138）：zip 内只放二进制本体，-j 不保留目录路径。
+          zip -j "dist/${zip_asset}" "dist/${asset}"
+
+          # zip sha256
+          if command -v sha256sum >/dev/null 2>&1; then
+            zip_sha=$(sha256sum "dist/${zip_asset}" | awk '{print $1}')
+          else
+            zip_sha=$(shasum -a 256 "dist/${zip_asset}" | awk '{print $1}')
+          fi
+          printf '%s' "$zip_sha" > "dist/${zip_asset}.sha256"
+
+          # zip md5（供下载方可选校验）
+          if command -v md5sum >/dev/null 2>&1; then
+            zip_md5=$(md5sum "dist/${zip_asset}" | awk '{print $1}')
+          else
+            zip_md5=$(md5 -q "dist/${zip_asset}")
+          fi
+          printf '%s' "$zip_md5" > "dist/${zip_asset}.md5"
+
+          echo "asset=${asset}" >> "$GITHUB_OUTPUT"
+          echo "zip_asset=${zip_asset}" >> "$GITHUB_OUTPUT"
+
+      # 上传该目标的全部资产为工作流构件（过渡版：裸 exe + 压缩包各含校验和），
+      # 交由后续 publish job 汇总发布。
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
@@ -166,6 +192,9 @@ jobs:
           path: |
             dist/${{ steps.pack.outputs.asset }}
             dist/${{ steps.pack.outputs.asset }}.sha256
+            dist/${{ steps.pack.outputs.zip_asset }}
+            dist/${{ steps.pack.outputs.zip_asset }}.sha256
+            dist/${{ steps.pack.outputs.zip_asset }}.md5
           if-no-files-found: error
 
   # 第三步：汇总三目标资产，按渠道发布为 GitHub Release（prerelease 或正式）。
