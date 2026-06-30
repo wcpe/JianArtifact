@@ -13,7 +13,6 @@ import { DashboardPage } from './DashboardPage';
 import { GlobalProgressProvider } from '../hooks/useGlobalProgress';
 import { GlobalTopProgressBar } from '../components/GlobalTopProgressBar';
 import * as api from '../api/endpoints';
-import { ApiError } from '../api/client';
 import type {
   DashboardSummary,
   HostMetrics,
@@ -151,7 +150,7 @@ describe('DashboardPage（全局状态概览）', () => {
     mockedApi.getDashboardSummary.mockResolvedValue(SUMMARY);
     mockedApi.getHostMonitor.mockResolvedValue(HOST);
     mockedApi.listAudit.mockResolvedValue(auditPage(RECENT));
-    mockedApi.checkUpdate.mockResolvedValue(UPDATE_AVAILABLE);
+    mockedApi.getCachedCheck.mockResolvedValue({ result: UPDATE_AVAILABLE, checked_at: 1 });
     mockedApi.getDynamicConfig.mockResolvedValue(dynamicWithVuln(true));
     mockedApi.protectionStatus.mockResolvedValue(PROTECTION_OK);
     mockedApi.listRepositories.mockResolvedValue(REPOS);
@@ -221,14 +220,14 @@ describe('DashboardPage（全局状态概览）', () => {
     expect(screen.getByText('3 天 4 小时')).toBeInTheDocument();
   });
 
-  it('管理员：在线更新未启用（409）静默不报错', async () => {
-    mockedApi.checkUpdate.mockRejectedValue(new ApiError(409, 'conflict', '在线更新未启用'));
+  it('管理员：无留存检查结果静默不报错（FR-126 只读留存）', async () => {
+    mockedApi.getCachedCheck.mockResolvedValue({ result: null, checked_at: null });
     renderPage();
 
     await waitFor(() => expect(screen.getByText('系统状态')).toBeInTheDocument());
-    // 不把 409 当错误弹出；更新项显示「未启用」语义
+    // 不报错；无留存时更新项显示「未知」占位（—），不显「有可用更新」
     expect(screen.queryByText('在线更新未启用')).not.toBeInTheDocument();
-    expect(screen.getByText('未启用')).toBeInTheDocument();
+    expect(screen.queryByText(/0\.5\.0/)).not.toBeInTheDocument();
   });
 
   it('非管理员：仅见基础信息（可见仓库数），不调任何管理端点', async () => {
@@ -244,7 +243,7 @@ describe('DashboardPage（全局状态概览）', () => {
     expect(mockedApi.getDashboardSummary).not.toHaveBeenCalled();
     expect(mockedApi.getHostMonitor).not.toHaveBeenCalled();
     expect(mockedApi.listAudit).not.toHaveBeenCalled();
-    expect(mockedApi.checkUpdate).not.toHaveBeenCalled();
+    expect(mockedApi.getCachedCheck).not.toHaveBeenCalled();
     expect(mockedApi.getDynamicConfig).not.toHaveBeenCalled();
     expect(mockedApi.protectionStatus).not.toHaveBeenCalled();
     // 富区不渲染
@@ -261,7 +260,7 @@ describe('DashboardPage（FR-112 加载体验）', () => {
     mockedApi.getDashboardSummary.mockResolvedValue(SUMMARY);
     mockedApi.getHostMonitor.mockResolvedValue(HOST);
     mockedApi.listAudit.mockResolvedValue(auditPage(RECENT));
-    mockedApi.checkUpdate.mockResolvedValue(UPDATE_AVAILABLE);
+    mockedApi.getCachedCheck.mockResolvedValue({ result: UPDATE_AVAILABLE, checked_at: 1 });
     mockedApi.getDynamicConfig.mockResolvedValue(dynamicWithVuln(true));
     mockedApi.protectionStatus.mockResolvedValue(PROTECTION_OK);
     mockedApi.listRepositories.mockResolvedValue(REPOS);

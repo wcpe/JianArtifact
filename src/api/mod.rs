@@ -68,6 +68,7 @@ mod system;
 mod system_logs;
 mod tokens;
 mod update;
+mod update_jobs;
 mod upload_routes;
 mod usage;
 mod users;
@@ -89,6 +90,7 @@ pub use migration_jobs::MigrationJobs;
 pub use oidc_routes::OidcFlowStore;
 pub use protection_state::{ProtectionSnapshot, ProtectionState};
 pub use rate_limit::RateLimiter;
+pub use update_jobs::UpdateJobs;
 pub use usage::{channel as usage_channel, spawn_usage_pruner, spawn_usage_writer, UsageSink};
 pub use waf::WafRuleSet;
 
@@ -371,6 +373,18 @@ pub fn build_router(state: AppState) -> Router {
     // 进程内迁移任务注册表（FR-83，ADR-0019）：随路由创建一份，经 Extension 注入迁移端点共享
     let migration_jobs = Arc::new(MigrationJobs::default());
 
+    // 进程内在线更新任务注册表（FR-126）：随路由创建一份，经 Extension 注入更新端点共享。
+    // 启动早期从数据目录状态文件回填「上次更新终态」，使重启后 GET /update/jobs 即含上次结果供续看
+    //（状态文件 IO 异步、build_router 同步，故起一次性任务回填，不阻塞路由构建）。
+    let update_jobs = Arc::new(UpdateJobs::default());
+    {
+        let jobs = update_jobs.clone();
+        let data_dir = state.config.data.data_dir.clone();
+        tokio::spawn(async move {
+            update::backfill_last_apply(&jobs, &data_dir).await;
+        });
+    }
+
     // 管理 API 子路由，统一挂在 /api/v1 前缀下
     let api_v1 = Router::new()
         .route("/auth/login", post(auth_routes::login))
@@ -463,9 +477,16 @@ pub fn build_router(state: AppState) -> Router {
             "/migrate/jobs/{id}/resume",
             post(migrate::migrate_nexus_job_resume),
         )
-        .route("/update/check", get(update::check_update))
+        // 在线更新（FR-126 异步化）：POST /check 触发联网检查 job，GET /check 只读留存结果（不联网）；
+        // apply / rollback 立即返回 job_id；jobs 轮询进度（重启后回填上次终态供续看）
+        .route(
+            "/update/check",
+            get(update::get_cached_check).post(update::trigger_check_update),
+        )
         .route("/update/apply", post(update::apply_update))
         .route("/update/rollback", post(update::rollback_update))
+        .route("/update/jobs", get(update::list_update_jobs))
+        .route("/update/jobs/{id}", get(update::get_update_job))
         .route("/system/restart", post(system::system_restart))
         .route("/system/shutdown", post(system::system_shutdown))
         .route(
@@ -559,6 +580,8 @@ pub fn build_router(state: AppState) -> Router {
         .with_state(state.clone())
         // 迁移任务注册表注入（FR-83，ADR-0019）：异步在线拉取端点与进度查询端点共享之
         .layer(Extension(migration_jobs))
+        // 在线更新任务注册表注入（FR-126）：异步检查 / 应用端点与进度查询端点共享之
+        .layer(Extension(update_jobs))
         // 指标采集中间件（FR-32，ADR-0015）：置于最内层（最贴近 handler），观测真实 HTTP 维度
         // 与延迟；只做无锁原子观测，渲染仅在 /metrics 被抓取时发生。
         .layer(middleware::from_fn_with_state(

@@ -27,14 +27,26 @@ export default {
   upToDateBadge: '已是最新',
   prereleaseBadge: '预发布',
   releaseNotes: '发布说明',
+  // FR-126：留存的上次检查时刻（GET /update/check 读回时展示）
+  lastCheckedAt: '上次检查于 {{time}}（结果为留存值，可重新检查刷新）',
   updateDisabledAlertTitle: '在线更新未启用',
   updateDisabledAlertBody: '在线更新出站开关当前关闭。请启用并保存后，再检查 / 应用更新。',
-  downloadingReplacing: '正在下载并替换新版本…',
-  // 进度说明（含资产名插值）
-  progressHintWithAsset: '资产 {{name}}（进度为体感估算，实际以服务端替换为准）',
-  progressHint: '进度为体感估算，实际以服务端替换为准。',
+  // FR-126：按阶段反馈真实进度（不再用客户端假百分比）
+  updateInProgressTitle: '更新进行中',
+  phaseChecking: '检查中：正在联网查最新发布并比对版本…',
+  phaseDownloading: '下载中：正在下载更新资产并校验…',
+  phaseVerifying: '校验中：正在比对 sha256…',
+  phaseReplacing: '替换中：校验通过，正在原子替换二进制…',
+  phaseRestarting: '即将重启：替换完成，服务正在重启…',
+  phaseDoneCheck: '检查完成。',
+  // 阶段说明（含资产名插值）
+  progressHintWithAsset: '资产 {{name}}',
+  jobFailedTitle: '更新失败',
   upgradeTriggeredAlertTitle: '已触发升级',
   upgradeTriggeredAlertBody: '服务正在重启…当前连接将断开，请稍候片刻后手动刷新页面。',
+  // 重启后续看：展示上次更新结果
+  lastUpdateResultTitle: '上次更新结果',
+  lastUpdateRestarted: '上次已升级到 {{version}} 并触发重启。若新版本已起来，本提示可忽略。',
   applyNow: '立即更新并重启',
   rollbackNow: '回滚到上一版',
   noRollbackBackup: '暂无可回滚的备份版本（成功升级一次后才会生成回滚备份）。',

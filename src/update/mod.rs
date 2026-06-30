@@ -12,12 +12,13 @@
 use std::path::{Path, PathBuf};
 
 use digest::Digest;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 mod restart;
 mod source;
+mod state;
 
 #[cfg(test)]
 mod tests;
@@ -25,6 +26,18 @@ mod tests;
 pub use crate::config::UpdateChannel;
 pub use restart::{ApplyGuard, RestartHandle, RestartRequest};
 pub use source::{GithubReleaseSource, Release, ReleaseAsset, ReleaseSource};
+pub use state::{
+    load_state, now_unix_secs, persist_state, state_path, update_state, CachedCheck, UpdateKind,
+    UpdatePhase, UpdateProgress, UpdateState,
+};
+
+/// 进度共享态（FR-126）：异步更新 job 持续更新，`GET /update/jobs/{id}` 读取。
+pub type ProgressSlot = std::sync::Mutex<UpdateProgress>;
+
+/// 取进度锁（容忍中毒：恢复内部数据继续，不让一次 panic 永久毒死进度查询）。
+fn lock_progress(p: &ProgressSlot) -> std::sync::MutexGuard<'_, UpdateProgress> {
+    p.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 /// 临时下载子目录名（位于数据目录下），存放下载中的资产，校验失败即清理。
 const UPDATE_TMP_SUBDIR: &str = "update-tmp";
@@ -76,7 +89,7 @@ pub enum UpdateError {
 }
 
 /// 更新检查结果（对外响应载体）。
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UpdateCheck {
     /// 当前运行版本（`CARGO_PKG_VERSION`）。
     pub current_version: String,
@@ -240,6 +253,26 @@ pub fn build_check(
         asset_name: asset_name(&latest, target),
         notes: release.body.clone(),
     })
+}
+
+/// 异步检查 job 核心（FR-126）：联网查 Release → 组装 [`UpdateCheck`]，逐阶段写日志、返回结果。
+///
+/// 仅做检查、不下载 / 不替换；出站经 `source`（已注入代理，honor `[network.proxy]`）。供 `api::update`
+/// 的检查 job 后台调用：成功后把结果写进度并留存到状态文件（留存在 handler 层做，守分层）。
+pub async fn check_with_progress<S: ReleaseSource>(
+    source: &S,
+    channel: UpdateChannel,
+    current_version: &str,
+) -> Result<UpdateCheck, UpdateError> {
+    tracing::info!("在线更新：开始联网检查最新发布");
+    let release = source.fetch_latest_release(channel).await?;
+    let check = build_check(channel, current_version, &release)?;
+    tracing::info!(
+        最新版本 = %check.latest_version,
+        有更新 = check.update_available,
+        "在线更新：检查完成"
+    );
+    Ok(check)
 }
 
 /// 二进制替换规划（跨平台，路径推导可单测）。
@@ -606,7 +639,39 @@ pub async fn apply_update<S: ReleaseSource>(
     current_exe: &Path,
     data_dir: &Path,
 ) -> Result<ApplyOutcome, UpdateError> {
+    // 无进度上报的便捷入口（同步调用 / 既有测试用）：委托进度版，传 None。
+    apply_update_with_progress(
+        source,
+        channel,
+        current_version,
+        current_exe,
+        data_dir,
+        None,
+    )
+    .await
+}
+
+/// 应用更新并逐阶段上报进度（FR-126，异步 job 用）。
+///
+/// 与 [`apply_update`] 同逻辑（复用 download / verify / replace 核心与失败回滚，**不改安全门**），
+/// 仅在「下载 / 校验 / 替换」边界更新 `progress`（若有）并写中文分级 `tracing` 日志，便于后台 `tail`
+/// 看进度。进度锁临界区只更新内存态、不持锁做 IO（锁外做 IO）。
+pub async fn apply_update_with_progress<S: ReleaseSource>(
+    source: &S,
+    channel: UpdateChannel,
+    current_version: &str,
+    current_exe: &Path,
+    data_dir: &Path,
+    progress: Option<&ProgressSlot>,
+) -> Result<ApplyOutcome, UpdateError> {
+    let set_phase = |phase: UpdatePhase| {
+        if let Some(p) = progress {
+            lock_progress(p).phase = phase;
+        }
+    };
+
     let target = current_target()?;
+    tracing::info!("在线更新：开始检查最新发布与版本比对");
     let release = source.fetch_latest_release(channel).await?;
     let latest = release.version();
 
@@ -616,6 +681,9 @@ pub async fn apply_update<S: ReleaseSource>(
         return Err(UpdateError::NoUpdate(format!(
             "最新版本 {latest} 相对当前版本 {current_version} 无可应用更新"
         )));
+    }
+    if let Some(p) = progress {
+        lock_progress(p).latest_version = Some(latest.clone());
     }
 
     // 资产名与其 .sha256 名
@@ -636,6 +704,8 @@ pub async fn apply_update<S: ReleaseSource>(
     let tmp_bin = tmp_dir.join(&bin_name);
 
     // 流式下载二进制，边写边算 sha256
+    set_phase(UpdatePhase::Downloading);
+    tracing::info!(资产 = %bin_name, 新版本 = %latest, "在线更新：开始流式下载更新资产");
     let reader = source.download_asset(&bin_asset.download_url).await?;
     let actual = download_to_file(reader, &tmp_bin).await?;
 
@@ -651,11 +721,16 @@ pub async fn apply_update<S: ReleaseSource>(
     };
 
     // 定长校验：不一致即删临时文件、拒绝替换、保留旧二进制
+    set_phase(UpdatePhase::Verifying);
+    tracing::info!("在线更新：下载完成，开始校验 sha256");
     if let Err(e) = verify_checksum(&actual, &expected) {
         let _ = tokio::fs::remove_file(&tmp_bin).await;
         tracing::warn!("下载内容 sha256 与发布不符，已删临时文件、拒绝替换");
         return Err(e);
     }
+
+    set_phase(UpdatePhase::Replacing);
+    tracing::info!("在线更新：sha256 校验通过，开始原子替换二进制");
 
     // 校验通过：替换前先把当前运行的二进制持久备份为回滚源（FR-104，ADR-0026）。
     // 覆盖单一备份（只留上一版）；落盘失败即报错、不触碰二进制。该备份独立于下方的

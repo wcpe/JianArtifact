@@ -5,13 +5,19 @@
 // 系统操作 409（更新进行中）的错误提示文案。
 // 注：notify 依赖 Notifications Provider，这里整体 mock 掉，用 vi.mocked 断言被调用（参考 App.test.tsx）。
 
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
 import { SystemPage } from './SystemPage';
 import * as api from '../api/endpoints';
 import { ApiError } from '../api/client';
-import type { SettingsView, UpdateCheck, SystemActionResponse } from '../api/types';
+import type {
+  SettingsView,
+  UpdateCheck,
+  UpdateJob,
+  CachedCheck,
+  SystemActionResponse,
+} from '../api/types';
 
 // 桩掉通知，避免依赖 Notifications Provider；用 vi.mocked 断言被调用
 vi.mock('../lib/notify', () => ({
@@ -20,6 +26,13 @@ vi.mock('../lib/notify', () => ({
 }));
 
 import { notifySuccess, notifyError } from '../lib/notify';
+
+// FR-126 异步化：进页会调用 getCachedCheck（读留存检查结果）与 listUpdateJobs（重连续看）。
+// 各测试默认桩为「无留存 / 无 job」，避免触达真实 fetch；个别测试再覆盖。
+beforeEach(() => {
+  vi.spyOn(api, 'getCachedCheck').mockResolvedValue({ result: null, checked_at: null });
+  vi.spyOn(api, 'listUpdateJobs').mockResolvedValue([]);
+});
 
 /** 在 Mantine Provider 下渲染系统页。 */
 function renderPage() {
@@ -93,17 +106,55 @@ describe('SystemPage', () => {
     expect(payload.update!.enabled).toBe(false);
   });
 
-  it('检查更新展示版本对比：出现「有可用更新」与最新版本、立即更新并重启按钮', async () => {
+  it('检查更新（异步）：触发检查 job 后轮询到终态，展示版本对比与立即更新按钮', async () => {
     vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
-    vi.spyOn(api, 'checkUpdate').mockResolvedValue(有更新样例);
+    // 触发检查返回 job_id；轮询返回「检查完成、带结果」的终态 job
+    vi.spyOn(api, 'triggerCheckUpdate').mockResolvedValue({ job_id: 'job-check' });
+    const checkJob: UpdateJob = {
+      job_id: 'job-check',
+      kind: 'check',
+      phase: 'done',
+      current_version: '0.3.0',
+      latest_version: '0.4.0',
+      check: 有更新样例,
+    };
+    vi.spyOn(api, 'getUpdateJob').mockResolvedValue(checkJob);
     renderPage();
 
     await waitFor(() => expect(screen.getByText('应用更新')).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: '检查更新' }));
 
+    // 轮询到 done 终态后填检查结果
     await waitFor(() => expect(screen.getByText('有可用更新')).toBeInTheDocument());
     expect(screen.getByText('0.4.0')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '立即更新并重启' })).toBeInTheDocument();
+  });
+
+  it('进页读留存检查结果：getCachedCheck 有结果时直接展示，无需重点检查', async () => {
+    vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
+    const cached: CachedCheck = { result: 有更新样例, checked_at: 1_700_000_000 };
+    vi.mocked(api.getCachedCheck).mockResolvedValue(cached);
+    renderPage();
+
+    // 不点「检查更新」也应显示上次留存的版本对比
+    await waitFor(() => expect(screen.getByText('有可用更新')).toBeInTheDocument());
+    expect(screen.getByText('0.4.0')).toBeInTheDocument();
+  });
+
+  it('重连续看：listUpdateJobs 含重启后回填终态时，展示「上次更新结果」', async () => {
+    vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
+    const restartedJob: UpdateJob = {
+      job_id: 'last-apply',
+      kind: 'apply',
+      phase: 'restarting',
+      current_version: '0.3.0',
+      new_version: '0.4.0',
+      restarted: true,
+    };
+    vi.mocked(api.listUpdateJobs).mockResolvedValue([restartedJob]);
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('上次更新结果')).toBeInTheDocument());
   });
 
   it('切到「重启」tab：确认后调 systemRestart 并 notifySuccess', async () => {

@@ -44,9 +44,9 @@ import type {
   SystemActionResponse,
   SystemLogEntryDto,
   SystemLogListParams,
-  UpdateCheck,
-  ApplyResponse,
-  RollbackResponse,
+  CachedCheck,
+  UpdateJobCreated,
+  UpdateJob,
   TokenView,
   UpdateRepositoryRequest,
   UpdateUserRequest,
@@ -566,14 +566,29 @@ export function updateDynamicConfig(config: DynamicConfig): Promise<DynamicConfi
   return request<DynamicConfig>('/settings/dynamic', { method: 'PATCH', body: config });
 }
 
-/** 更新检查：查最新版本并比对（仅管理员；未启用时后端返回 409）。 */
-export function checkUpdate(): Promise<UpdateCheck> {
-  return request<UpdateCheck>('/update/check');
+/** 触发联网检查（FR-126 异步）：起后台检查 job，立即返回 job_id（仅管理员；未启用时后端返回 409）。 */
+export function triggerCheckUpdate(): Promise<UpdateJobCreated> {
+  return request<UpdateJobCreated>('/update/check', { method: 'POST' });
 }
 
-/** 应用更新：下载 → 校验 → 替换 → 触发重启（仅管理员）。 */
-export function applyUpdate(): Promise<ApplyResponse> {
-  return request<ApplyResponse>('/update/apply', { method: 'POST' });
+/** 读取留存的检查结果（FR-126）：不联网，返回上次检查结果（无留存时 result 为 null）。 */
+export function getCachedCheck(): Promise<CachedCheck> {
+  return request<CachedCheck>('/update/check');
+}
+
+/** 应用更新（FR-126 异步）：起后台 apply job（下载 → 校验 → 替换 → 重启），立即返回 job_id（仅管理员）。 */
+export function applyUpdate(): Promise<UpdateJobCreated> {
+  return request<UpdateJobCreated>('/update/apply', { method: 'POST' });
+}
+
+/** 查询某更新任务进度（FR-126，仅管理员）。未知 id 返回 404。 */
+export function getUpdateJob(id: string): Promise<UpdateJob> {
+  return request<UpdateJob>(`/update/jobs/${encodeURIComponent(id)}`);
+}
+
+/** 列出活动 / 近期 + 重启后回填的更新任务（FR-126，仅管理员），供重连续看。 */
+export function listUpdateJobs(): Promise<UpdateJob[]> {
+  return request<UpdateJob[]>('/update/jobs');
 }
 
 // —— 健康检查（公开 / 匿名可读，FR-101） ——
@@ -592,9 +607,12 @@ export async function getHealth(): Promise<HealthInfo> {
   return (await response.json()) as HealthInfo;
 }
 
-/** 回滚到上一版本：用持久备份还原旧二进制 → 触发重启（仅管理员；无备份时后端返回 409）。 */
-export function rollbackUpdate(): Promise<RollbackResponse> {
-  return request<RollbackResponse>('/update/rollback', { method: 'POST' });
+/**
+ * 回滚到上一版本（FR-126 异步）：起后台 rollback job（还原旧二进制 → 触发重启），立即返回 job_id
+ *（仅管理员；无备份时后台 job 标 failed，触发响应仍为 202）。
+ */
+export function rollbackUpdate(): Promise<UpdateJobCreated> {
+  return request<UpdateJobCreated>('/update/rollback', { method: 'POST' });
 }
 
 // —— 系统操作（FR-109，仅管理员） ——

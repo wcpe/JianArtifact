@@ -288,20 +288,21 @@ function AdminDashboard() {
         .listAudit({ limit: 8 })
         .then((page) => setEvents(page.items))
         .catch(() => setEvents([])),
-      // 在线更新：未启用返回 409，按「未启用」处理而非报错；其余失败按未知。
+      // 在线更新（FR-126：读留存的上次检查结果，不联网）：有留存按可用 / 最新展示；无留存或失败按未知。
       api
-        .checkUpdate()
-        .then((c) =>
+        .getCachedCheck()
+        .then((cached) =>
           setStatus((prev) => ({
             ...prev,
-            update: c.update_available
-              ? { kind: 'available', latest: c.latest_version }
-              : { kind: 'latest' },
+            update: cached.result
+              ? cached.result.update_available
+                ? { kind: 'available', latest: cached.result.latest_version }
+                : { kind: 'latest' }
+              : { kind: 'unknown' },
           })),
         )
-        .catch((err) => {
-          const disabled = err && typeof err === 'object' && 'status' in err && err.status === 409;
-          setStatus((prev) => ({ ...prev, update: { kind: disabled ? 'disabled' : 'unknown' } }));
+        .catch(() => {
+          setStatus((prev) => ({ ...prev, update: { kind: 'unknown' } }));
         }),
       // 漏洞库启用：取动态配置 vuln.enabled。
       api

@@ -55,15 +55,16 @@ describe('新增 MSW handlers（管理员端点不返 401）', () => {
     expect(page.total).toBe(0);
   });
 
-  it('GET /update/check 返 200「已是最新」（不 409）', async () => {
-    const check = await api.checkUpdate();
-    expect(check.update_available).toBe(false);
-    expect(check.current_version).toBe(check.latest_version);
+  it('GET /update/check 返留存结果「已是最新」（FR-126 只读、不联网）', async () => {
+    const cached = await api.getCachedCheck();
+    expect(cached.result).not.toBeNull();
+    expect(cached.result!.update_available).toBe(false);
+    expect(cached.result!.current_version).toBe(cached.result!.latest_version);
   });
 
-  it('POST /update/apply 与 /update/rollback 返成功形态', async () => {
-    expect((await api.applyUpdate()).status).toBe('ok');
-    expect((await api.rollbackUpdate()).status).toBe('ok');
+  it('POST /update/apply 与 /update/rollback 返 job_id（FR-126 异步）', async () => {
+    expect((await api.applyUpdate()).job_id).toBeTruthy();
+    expect((await api.rollbackUpdate()).job_id).toBeTruthy();
   });
 
   it('POST /system/restart 与 /system/shutdown 返 {status}', async () => {

@@ -428,32 +428,70 @@ export const handlers = [
     return HttpResponse.json(state.dynamicConfig);
   }),
 
-  // —— 在线更新检查 / 应用 / 回滚（仅管理员，FR-85/104） ——
+  // —— 在线更新检查 / 应用 / 回滚 / 任务（仅管理员，FR-85/104 + FR-126 异步化） ——
+  // GET /update/check：只读留存的上次检查结果（不联网）。Mock 下「已是最新」留存。
   http.get(`${API}/update/check`, ({ request }) => {
     const guard = requireUser(request, { admin: true });
     if (isResponse(guard)) return guard;
-    // Mock 下「已是最新」：当前 = 最新、无可用更新。
     const current = state.settings.current_version;
     return HttpResponse.json({
-      current_version: current,
-      latest_version: current,
-      update_available: false,
-      asset_name: '',
-      notes: '',
+      result: {
+        current_version: current,
+        latest_version: current,
+        update_available: false,
+        asset_name: '',
+        notes: '',
+      },
+      checked_at: 1_700_000_000,
     });
+  }),
+
+  // POST /update/check：触发异步检查 job，返回 job_id（202）。
+  http.post(`${API}/update/check`, ({ request }) => {
+    const guard = requireUser(request, { admin: true });
+    if (isResponse(guard)) return guard;
+    return HttpResponse.json({ job_id: 'mock-check-job' }, { status: 202 });
   }),
 
   http.post(`${API}/update/apply`, ({ request }) => {
     const guard = requireUser(request, { admin: true });
     if (isResponse(guard)) return guard;
-    // Mock 下不真重启，仅回报形态正确的成功响应。
-    return HttpResponse.json({ status: 'ok', new_version: state.settings.current_version });
+    // FR-126：立即返回 job_id（202），实际执行在后台。
+    return HttpResponse.json({ job_id: 'mock-apply-job' }, { status: 202 });
   }),
 
   http.post(`${API}/update/rollback`, ({ request }) => {
     const guard = requireUser(request, { admin: true });
     if (isResponse(guard)) return guard;
-    return HttpResponse.json({ status: 'ok' });
+    return HttpResponse.json({ job_id: 'mock-rollback-job' }, { status: 202 });
+  }),
+
+  // GET /update/jobs：列出活动 / 近期更新任务（Mock 下空）。
+  http.get(`${API}/update/jobs`, ({ request }) => {
+    const guard = requireUser(request, { admin: true });
+    if (isResponse(guard)) return guard;
+    return HttpResponse.json([]);
+  }),
+
+  // GET /update/jobs/{id}：查询某更新任务进度（Mock 下回「检查完成、已是最新」终态）。
+  http.get(`${API}/update/jobs/:id`, ({ request, params }) => {
+    const guard = requireUser(request, { admin: true });
+    if (isResponse(guard)) return guard;
+    const current = state.settings.current_version;
+    return HttpResponse.json({
+      job_id: String(params.id),
+      kind: 'check',
+      phase: 'done',
+      current_version: current,
+      latest_version: current,
+      check: {
+        current_version: current,
+        latest_version: current,
+        update_available: false,
+        asset_name: '',
+        notes: '',
+      },
+    });
   }),
 
   // —— 系统操作（仅管理员，FR-109；Mock 下不真重启 / 关闭） ——

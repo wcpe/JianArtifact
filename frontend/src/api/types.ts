@@ -775,7 +775,7 @@ export interface DynamicConfig {
   auth: AuthTunables;
 }
 
-/** 更新检查结果（GET /api/v1/update/check，对齐 FR-85 既有契约）。 */
+/** 更新检查结果（对齐 FR-85 既有契约，FR-126 经检查 job 产出 / 留存）。 */
 export interface UpdateCheck {
   current_version: string;
   latest_version: string;
@@ -784,10 +784,42 @@ export interface UpdateCheck {
   notes: string;
 }
 
-/** 应用更新成功响应（POST /api/v1/update/apply）。 */
-export interface ApplyResponse {
-  status: string;
-  new_version: string;
+/** 留存的检查结果（GET /api/v1/update/check 只读，不联网，FR-126）。无留存时字段为 null。 */
+export interface CachedCheck {
+  result: UpdateCheck | null;
+  checked_at: number | null;
+}
+
+/** 异步更新任务触发响应（POST /update/check·/apply·/rollback，FR-126）：返回 job_id（202）。 */
+export interface UpdateJobCreated {
+  job_id: string;
+}
+
+/** 更新任务类别（FR-126）。 */
+export type UpdateKind = 'check' | 'apply' | 'rollback';
+
+/** 更新任务阶段（FR-126）：按阶段反馈，不做字节级假百分比。 */
+export type UpdatePhase =
+  | 'checking'
+  | 'downloading'
+  | 'verifying'
+  | 'replacing'
+  | 'restarting'
+  | 'done'
+  | 'failed';
+
+/** 更新任务进度快照（GET /api/v1/update/jobs/{id}，FR-126）。 */
+export interface UpdateJob {
+  job_id: string;
+  kind: UpdateKind;
+  phase: UpdatePhase;
+  current_version: string;
+  latest_version?: string;
+  check?: UpdateCheck;
+  new_version?: string;
+  error?: string;
+  /** 是否为重启后从状态文件回填的历史终态（重启续看用）。 */
+  restarted?: boolean;
 }
 
 /** 健康检查响应（GET /health，公开 / 匿名可读；version 为构建版本串，FR-101）。 */
@@ -795,11 +827,6 @@ export interface HealthInfo {
   status: string;
   version: string;
   port: number;
-}
-
-/** 回滚成功响应（POST /api/v1/update/rollback，FR-104）。 */
-export interface RollbackResponse {
-  status: string;
 }
 
 /** 系统操作响应（POST /api/v1/system/restart、/system/shutdown，仅 Admin，FR-109）。 */

@@ -12,7 +12,6 @@ import { MemoryRouter, useLocation } from 'react-router-dom';
 import { AppLayout } from './AppLayout';
 import { AuthContext, type AuthContextValue } from '../auth/AuthContext';
 import * as api from '../api/endpoints';
-import { ApiError } from '../api/client';
 import type { HealthInfo, UpdateCheck } from '../api/types';
 
 /** 样例健康响应（含构建版本号）。 */
@@ -37,9 +36,9 @@ const 无更新检查: UpdateCheck = {
 };
 
 beforeEach(() => {
-  // 默认：健康检查成功、更新检查未启用（409），各用例按需覆盖
+  // 默认：健康检查成功、无留存检查结果（FR-126：GET /update/check 只读留存），各用例按需覆盖
   vi.spyOn(api, 'getHealth').mockResolvedValue(样例健康);
-  vi.spyOn(api, 'checkUpdate').mockRejectedValue(new ApiError(409, 'conflict', '在线更新未启用'));
+  vi.spyOn(api, 'getCachedCheck').mockResolvedValue({ result: null, checked_at: null });
 });
 
 afterEach(() => {
@@ -372,7 +371,7 @@ describe('AppLayout 匿名访客外壳（FR-95，不回归）', () => {
 describe('AppLayout 更新徽标（FR-101，不回归）', () => {
   it('Admin 且有可用更新：显示「更新: cur → latest」徽标，点击跳 /settings', async () => {
     const user = userEvent.setup();
-    vi.spyOn(api, 'checkUpdate').mockResolvedValue(有更新检查);
+    vi.spyOn(api, 'getCachedCheck').mockResolvedValue({ result: 有更新检查, checked_at: 1 });
     renderAt('/', 管理员上下文());
 
     const badge = await screen.findByLabelText('有可用更新，点击前往设置页升级');
@@ -385,29 +384,29 @@ describe('AppLayout 更新徽标（FR-101，不回归）', () => {
   });
 
   it('Admin 但无可用更新：不显示徽标', async () => {
-    vi.spyOn(api, 'checkUpdate').mockResolvedValue(无更新检查);
+    vi.spyOn(api, 'getCachedCheck').mockResolvedValue({ result: 无更新检查, checked_at: 1 });
     renderAt('/', 管理员上下文());
 
-    await waitFor(() => expect(api.checkUpdate).toHaveBeenCalled());
+    await waitFor(() => expect(api.getCachedCheck).toHaveBeenCalled());
     expect(screen.queryByLabelText('有可用更新，点击前往设置页升级')).not.toBeInTheDocument();
   });
 
-  it('Admin 但在线更新未启用（409）：静默不显徽标，不阻塞渲染', async () => {
-    // beforeEach 默认 checkUpdate 抛 409
+  it('Admin 但无留存检查结果：静默不显徽标，不阻塞渲染', async () => {
+    // beforeEach 默认 getCachedCheck 返空留存
     renderAt('/', 管理员上下文());
 
-    await waitFor(() => expect(api.checkUpdate).toHaveBeenCalled());
+    await waitFor(() => expect(api.getCachedCheck).toHaveBeenCalled());
     expect(screen.queryByLabelText('有可用更新，点击前往设置页升级')).not.toBeInTheDocument();
     // 外壳照常渲染（导航可用）
     expect(screen.getByLabelText('仪表盘')).toBeInTheDocument();
   });
 
-  it('非 Admin（普通用户）：不查更新、不显徽标', async () => {
-    vi.spyOn(api, 'checkUpdate').mockResolvedValue(有更新检查);
+  it('非 Admin（普通用户）：不读留存、不显徽标', async () => {
+    vi.spyOn(api, 'getCachedCheck').mockResolvedValue({ result: 有更新检查, checked_at: 1 });
     renderAt('/', 普通用户上下文());
 
     await waitFor(() => expect(api.getHealth).toHaveBeenCalled());
-    expect(api.checkUpdate).not.toHaveBeenCalled();
+    expect(api.getCachedCheck).not.toHaveBeenCalled();
     expect(screen.queryByLabelText('有可用更新，点击前往设置页升级')).not.toBeInTheDocument();
   });
 });

@@ -456,6 +456,97 @@ async fn apply_正确_sha256_落地替换() {
     }
 }
 
+// ---------- FR-126：带进度的 apply / check 阶段流转 ----------
+
+#[tokio::test]
+async fn apply_带进度_成功推进到替换阶段() {
+    use std::sync::Mutex;
+    let dir = tempfile::tempdir().unwrap();
+    let exe = dir.path().join("jianartifact");
+    tokio::fs::write(&exe, b"OLD-BINARY").await.unwrap();
+
+    let (release, assets) = release_with_assets("0.4.0", b"NEW-BINARY-BYTES");
+    let source = FakeSource::new(release, assets);
+
+    let progress = Mutex::new(UpdateProgress::new(UpdateKind::Apply, "0.3.0"));
+    let outcome = apply_update_with_progress(
+        &source,
+        UpdateChannel::Stable,
+        "0.3.0",
+        &exe,
+        dir.path(),
+        Some(&progress),
+    )
+    .await
+    .expect("校验通过应成功替换");
+    assert_eq!(outcome.new_version, "0.4.0");
+    // 进度应记下最新版本、并推进到「替换中」（重启态由 handler 在置位重启时再标）
+    let p = progress.lock().unwrap();
+    assert_eq!(p.latest_version.as_deref(), Some("0.4.0"));
+    assert_eq!(p.phase, UpdatePhase::Replacing);
+}
+
+#[tokio::test]
+async fn apply_带进度_校验失败保留检查阶段不替换() {
+    use std::sync::Mutex;
+    let dir = tempfile::tempdir().unwrap();
+    let exe = dir.path().join("jianartifact");
+    tokio::fs::write(&exe, b"OLD-BINARY").await.unwrap();
+
+    // 构造 sha256 不符的 release
+    let target = current_target().unwrap();
+    let bin_name = asset_name("0.4.0", target);
+    let sha_name = format!("{bin_name}.sha256");
+    let bin_url = format!("https://example/{bin_name}");
+    let sha_url = format!("https://example/{sha_name}");
+    let release = Release {
+        tag_name: "v0.4.0".to_string(),
+        name: "x".to_string(),
+        body: String::new(),
+        assets: vec![
+            ReleaseAsset {
+                name: bin_name,
+                download_url: bin_url.clone(),
+            },
+            ReleaseAsset {
+                name: sha_name,
+                download_url: sha_url.clone(),
+            },
+        ],
+    };
+    let mut assets = HashMap::new();
+    assets.insert(bin_url, b"NEW".to_vec());
+    assets.insert(sha_url, "0".repeat(64).into_bytes());
+    let source = FakeSource::new(release, assets);
+
+    let progress = Mutex::new(UpdateProgress::new(UpdateKind::Apply, "0.3.0"));
+    let err = apply_update_with_progress(
+        &source,
+        UpdateChannel::Stable,
+        "0.3.0",
+        &exe,
+        dir.path(),
+        Some(&progress),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(err, UpdateError::ChecksumMismatch));
+    // 校验失败：不应进入替换阶段，旧二进制不变
+    assert_ne!(progress.lock().unwrap().phase, UpdatePhase::Replacing);
+    assert_eq!(tokio::fs::read(&exe).await.unwrap(), b"OLD-BINARY");
+}
+
+#[tokio::test]
+async fn check_带进度_返回检查结果() {
+    let (release, assets) = release_with_assets("0.4.0", b"NEW");
+    let source = FakeSource::new(release, assets);
+    let check = check_with_progress(&source, UpdateChannel::Stable, "0.3.0")
+        .await
+        .expect("检查应成功");
+    assert_eq!(check.latest_version, "0.4.0");
+    assert!(check.update_available);
+}
+
 // ---------- apply：sha256 不一致 → 拒绝替换、删临时文件、不触碰二进制 ----------
 
 #[tokio::test]

@@ -1,13 +1,17 @@
 // 系统管理页（FR-109，仅管理员）：用 Tabs 分三页——
 // 「在线更新」（从设置页迁来的应用更新卡片：通道切换 / 检查更新 / 版本对比 / 预发布提示 /
-//   release 说明 / 启用开关 / 应用进度条 / 应用并重启 / 回滚 / 高级设置折叠，含本 tab 自己的保存按钮，
+//   release 说明 / 启用开关 / 真实阶段进度 / 应用并重启 / 回滚 / 高级设置折叠，含本 tab 自己的保存按钮，
 //   保存只发 update 块的部分 PATCH /settings）、
 // 「重启」（重启服务，二次确认后调 POST /system/restart）、
 // 「关闭」（关闭服务，危险操作，二次确认后调 POST /system/shutdown）。
 //
-// 在线更新数据来自 GET /api/v1/settings（已脱敏：更新 token 仅以 has_token 暴露）；
+// 在线更新配置来自 GET /api/v1/settings（已脱敏：更新 token 仅以 has_token 暴露）；
 // 保存走部分 PATCH /settings（只发 update 块），token 三态：留空=保留、清空动作不适用此处、填新值=设置。
-// apply 仍为单次阻塞 POST、无字节级回传，进度条为客户端模拟推进（契约不改）。
+//
+// FR-126 异步化：检查 / 应用 / 回滚改为后台 job——触发得 job_id，setInterval 轮询
+// GET /update/jobs/{id} 渲染**真实阶段进度**（替换旧客户端假进度），终态停轮询。检查结果经
+// GET /update/check 留存（进页即显上次结果，不必每次重检）；apply 终态跨重启留存，进页经
+// GET /update/jobs 回填「上次更新结果」续看，apply 的 job_id 记 localStorage 供刷新重连。
 
 import { useEffect, useRef, useState } from 'react';
 import {
@@ -50,11 +54,37 @@ import {
 import { useTranslation } from 'react-i18next';
 import { ApiError } from '../api/client';
 import * as api from '../api/endpoints';
-import type { SettingsView, UpdateCheck } from '../api/types';
+import type { SettingsView, UpdateCheck, UpdateJob, UpdatePhase } from '../api/types';
 import { errorMessage } from '../lib/format';
 import { notifyError, notifySuccess } from '../lib/notify';
 import { ErrorAlert } from '../components/ErrorAlert';
 import { density } from '../theme/density';
+
+/** 应用更新任务 job_id 的 localStorage 键名（供刷新 / 重连续看，FR-126）。 */
+const UPDATE_JOB_STORAGE_KEY = 'jian.update.applyJobId';
+
+/** 更新任务阶段是否为终态（轮询见终态即停）。 */
+function isTerminalPhase(phase: UpdatePhase): boolean {
+  return phase === 'restarting' || phase === 'done' || phase === 'failed';
+}
+
+/** 阶段→中文进度文案（按阶段反馈，不做假百分比，FR-126）。 */
+function phaseLabel(t: (k: string) => string, phase: UpdatePhase): string {
+  switch (phase) {
+    case 'checking':
+      return t('phaseChecking');
+    case 'downloading':
+      return t('phaseDownloading');
+    case 'verifying':
+      return t('phaseVerifying');
+    case 'replacing':
+      return t('phaseReplacing');
+    case 'restarting':
+      return t('phaseRestarting');
+    default:
+      return t('phaseDoneCheck');
+  }
+}
 
 /** 系统管理页。 */
 export function SystemPage() {
@@ -76,16 +106,18 @@ export function SystemPage() {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
-  // 更新检查 / 应用相关状态
+  // 更新检查 / 应用相关状态（FR-126 异步化：检查 / 应用 / 回滚均为后台 job，前端轮询真实阶段进度）
   const [check, setCheck] = useState<UpdateCheck | null>(null);
+  const [checkedAt, setCheckedAt] = useState<number | null>(null);
   const [checking, setChecking] = useState(false);
   const [checkError, setCheckError] = useState<string | null>(null);
   const [applying, setApplying] = useState(false);
   const [applyError, setApplyError] = useState<string | null>(null);
   const [restarting, setRestarting] = useState(false);
-  // 应用更新进度：null = 未在应用；0~95 = 客户端模拟推进百分比（封顶不到 100，待请求 resolve 进入重启态）。
-  const [applyProgress, setApplyProgress] = useState<number | null>(null);
-  const applyTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // 当前在途 / 近期更新 job 的进度快照（null = 无活动 job）；非检查类终态进入「正在重启」/「失败」提示。
+  const [job, setJob] = useState<UpdateJob | null>(null);
+  // 轮询定时器：触发检查 / 应用 / 回滚后 setInterval 拉 GET /update/jobs/{id}，见终态即停。
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [confirmOpened, confirmModal] = useDisclosure(false);
   // 回滚相关状态（FR-104）：进行中标志、错误、二次确认弹窗开合
   const [rollingBack, setRollingBack] = useState(false);
@@ -118,16 +150,94 @@ export function SystemPage() {
       .then(fillForm)
       .catch((err) => setError(errorMessage(err)))
       .finally(() => setLoading(false));
+    // 进页读留存的上次检查结果（不联网），免去每次重点检查
+    api
+      .getCachedCheck()
+      .then((cached) => {
+        if (cached.result) {
+          setCheck(cached.result);
+          setCheckedAt(cached.checked_at);
+        }
+      })
+      .catch(() => {
+        // 留存读取失败不阻断页面（仅影响「上次检查结果」展示）
+      });
+    // 重连续看：若有进行中 / 重启后回填的更新 job，挑最新一条恢复进度展示
+    api
+      .listUpdateJobs()
+      .then((list) => {
+        if (list.length === 0) return;
+        const latest = list[list.length - 1];
+        applyJobSnapshot(latest);
+        // 未到终态则继续轮询其进度
+        if (!isTerminalPhase(latest.phase)) {
+          startPolling(latest.job_id);
+        }
+      })
+      .catch(() => {
+        // 列表读取失败不阻断页面
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 组件卸载时清理应用进度定时器，避免泄漏。
+  // 组件卸载时清理轮询定时器，避免泄漏。
   useEffect(() => {
-    return () => {
-      if (applyTimerRef.current) {
-        clearInterval(applyTimerRef.current);
-      }
-    };
+    return () => clearPollTimer();
   }, []);
+
+  /** 清理轮询定时器（成功 / 失败 / 卸载共用）。 */
+  function clearPollTimer() {
+    if (pollTimerRef.current) {
+      clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+  }
+
+  /** 据 job 进度快照刷新页面态：检查类终态填检查结果，应用 / 回滚终态进入重启 / 失败提示。 */
+  function applyJobSnapshot(snapshot: UpdateJob) {
+    setJob(snapshot);
+    if (snapshot.kind === 'check') {
+      if (snapshot.phase === 'done' && snapshot.check) {
+        setCheck(snapshot.check);
+        setCheckedAt(Math.floor(Date.now() / 1000));
+      } else if (snapshot.phase === 'failed') {
+        setCheckError(snapshot.error ?? t('jobFailedTitle'));
+      }
+    } else {
+      // apply / rollback：本进程内 restarting 视为「已触发更新、连接将断」（蓝色提示）；
+      // 但 restarted=true 是重启后从状态文件回填的历史终态——新进程已起来，改显「上次更新结果」
+      //（绿色），不再提示「正在重启」。
+      if (snapshot.phase === 'restarting' && !snapshot.restarted) {
+        setRestarting(true);
+      } else if (snapshot.phase === 'failed') {
+        setApplyError(snapshot.error ?? t('jobFailedTitle'));
+      }
+    }
+  }
+
+  /** 启动轮询：每 800ms 拉一次 job 进度，见终态即停。 */
+  function startPolling(jobId: string) {
+    clearPollTimer();
+    pollTimerRef.current = setInterval(() => {
+      api
+        .getUpdateJob(jobId)
+        .then((snapshot) => {
+          applyJobSnapshot(snapshot);
+          if (isTerminalPhase(snapshot.phase)) {
+            clearPollTimer();
+            setChecking(false);
+            setApplying(false);
+            setRollingBack(false);
+          }
+        })
+        .catch(() => {
+          // 轮询失败（如服务正在重启导致连接断）：停轮询，保留当前进度态供用户手动刷新
+          clearPollTimer();
+          setChecking(false);
+          setApplying(false);
+        });
+    }, 800);
+  }
 
   // 保存在线更新配置：只发 update 块的部分 PATCH /settings（部分更新已支持）。
   // token 留空则省略（保留现有）；填值则设置新 token。
@@ -155,71 +265,51 @@ export function SystemPage() {
     }
   }
 
+  // 触发联网检查（FR-126 异步）：起后台检查 job，得 job_id 后轮询真实阶段进度，终态填检查结果。
   async function handleCheck() {
     setChecking(true);
     setCheckError(null);
-    setCheck(null);
+    setJob(null);
     try {
-      const result = await api.checkUpdate();
-      setCheck(result);
+      const created = await api.triggerCheckUpdate();
+      startPolling(created.job_id);
     } catch (err) {
-      setCheckError(errorMessage(err));
-    } finally {
+      // 触发失败（如未启用 409）即时回显，不进轮询
       setChecking(false);
+      setCheckError(errorMessage(err));
     }
   }
 
-  /** 清理应用进度定时器（成功 / 失败 / 卸载共用，避免重复样板）。 */
-  function clearApplyTimer() {
-    if (applyTimerRef.current) {
-      clearInterval(applyTimerRef.current);
-      applyTimerRef.current = null;
-    }
-  }
-
+  // 触发应用更新（FR-126 异步）：起后台 apply job，记 job_id 于 localStorage 供刷新重连，轮询进度。
   async function handleApply() {
     setApplying(true);
     setApplyError(null);
-    // 启动客户端模拟进度：apply 是单次阻塞 POST、无字节级回传，进度为时间驱动体感反馈。
-    // 平滑爬升至 95% 封顶（不到 100），待请求 resolve（进入重启态）或失败再收尾。
     confirmModal.close();
-    setApplyProgress(0);
-    clearApplyTimer();
-    applyTimerRef.current = setInterval(() => {
-      setApplyProgress((prev) => {
-        if (prev === null) return prev;
-        // 越接近上限步进越小，模拟收尾放缓
-        const next = prev + Math.max(1, Math.round((95 - prev) / 12));
-        return next >= 95 ? 95 : next;
-      });
-    }, 400);
     try {
-      await api.applyUpdate();
-      // apply 成功即服务将停机重启，当前连接会断；进入「正在重启」提示态、引导手动刷新
-      clearApplyTimer();
-      setRestarting(true);
+      const created = await api.applyUpdate();
+      try {
+        localStorage.setItem(UPDATE_JOB_STORAGE_KEY, created.job_id);
+      } catch {
+        // localStorage 不可用（隐私模式等）不影响本次轮询
+      }
+      startPolling(created.job_id);
     } catch (err) {
-      clearApplyTimer();
-      setApplyProgress(null);
-      setApplyError(errorMessage(err));
-    } finally {
       setApplying(false);
+      setApplyError(errorMessage(err));
     }
   }
 
+  // 触发回滚（FR-104 + FR-126 异步）：起后台 rollback job，轮询进度，终态进入重启 / 失败提示。
   async function handleRollback() {
     setRollingBack(true);
     setRollbackError(null);
+    rollbackConfirmModal.close();
     try {
-      await api.rollbackUpdate();
-      // 回滚成功即服务将停机重启，当前连接会断；进入「正在重启」提示态、引导手动刷新
-      rollbackConfirmModal.close();
-      setRestarting(true);
+      const created = await api.rollbackUpdate();
+      startPolling(created.job_id);
     } catch (err) {
-      setRollbackError(errorMessage(err));
-      rollbackConfirmModal.close();
-    } finally {
       setRollingBack(false);
+      setRollbackError(errorMessage(err));
     }
   }
 
@@ -365,6 +455,14 @@ export function SystemPage() {
                         </Badge>
                       )}
                     </Group>
+                    {/* 上次检查时刻（FR-126：留存读回时展示，提示结果非实时） */}
+                    {check && checkedAt && (
+                      <Text size="xs" c="dimmed" mt={4}>
+                        {t('lastCheckedAt', {
+                          time: new Date(checkedAt * 1000).toLocaleString(),
+                        })}
+                      </Text>
+                    )}
                     {/* 检查到的 release 发布说明（notes 即 release body），无说明优雅留空 */}
                     {check?.notes && (
                       <>
@@ -393,23 +491,32 @@ export function SystemPage() {
                   {applyError && <ErrorAlert message={applyError} />}
                   {rollbackError && <ErrorAlert message={rollbackError} />}
 
-                  {/* 应用进度条：apply 在途时显示客户端模拟进度（封顶不到 100），
-                      有 asset_name 时附资产名说明。成功进入重启态即撤下。 */}
-                  {applyProgress !== null && !restarting && (
-                    <Box data-testid="apply-progress">
-                      <Group justify="space-between" mb={4} gap="xs">
-                        <Text size="sm">{t('downloadingReplacing')}</Text>
-                        <Text size="sm" c="dimmed">
-                          {applyProgress}%
-                        </Text>
-                      </Group>
-                      <Progress value={applyProgress} animated />
-                      <Text size="xs" c="dimmed" mt={4}>
-                        {check?.asset_name
-                          ? t('progressHintWithAsset', { name: check.asset_name })
-                          : t('progressHint')}
+                  {/* 真实阶段进度（FR-126）：有活动 job 且未到终态时，按阶段展示进度（不做假百分比）。
+                      下载阶段若有资产名则附资产说明。终态由下方重启 / 失败提示接管。 */}
+                  {job && !isTerminalPhase(job.phase) && (
+                    <Box data-testid="update-progress">
+                      <Text size="sm" mb={4}>
+                        {t('updateInProgressTitle')}：{phaseLabel(t, job.phase)}
                       </Text>
+                      <Progress value={100} animated striped />
+                      {job.phase === 'downloading' && check?.asset_name && (
+                        <Text size="xs" c="dimmed" mt={4}>
+                          {t('progressHintWithAsset', { name: check.asset_name })}
+                        </Text>
+                      )}
                     </Box>
+                  )}
+
+                  {/* 重启后续看（FR-126）：从状态文件回填的上次 apply 终态，提示已升级到的版本 */}
+                  {job?.restarted && job.new_version && !restarting && (
+                    <Alert
+                      icon={<IconInfoCircle size={16} />}
+                      color="green"
+                      variant="light"
+                      title={t('lastUpdateResultTitle')}
+                    >
+                      {t('lastUpdateRestarted', { version: job.new_version })}
+                    </Alert>
                   )}
 
                   {restarting && (
@@ -430,7 +537,7 @@ export function SystemPage() {
                         color="orange"
                         leftSection={<IconArrowUp size={16} />}
                         onClick={confirmModal.open}
-                        disabled={!check?.update_available || applying}
+                        disabled={!check?.update_available || applying || rollingBack}
                       >
                         {t('applyNow')}
                       </Button>
@@ -439,7 +546,7 @@ export function SystemPage() {
                         variant="default"
                         leftSection={<IconArrowBackUp size={16} />}
                         onClick={rollbackConfirmModal.open}
-                        disabled={!settings.update.rollback_available || applying}
+                        disabled={!settings.update.rollback_available || applying || rollingBack}
                       >
                         {t('rollbackNow')}
                       </Button>

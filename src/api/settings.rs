@@ -1085,21 +1085,22 @@ mod tests {
 
     #[tokio::test]
     async fn patch_翻_enabled_为_true_后_update_check_不再_409() {
-        // 默认 update.enabled=false，check 因 Disabled 返回 409；PATCH 翻 true 后改走出站。
-        // 用一个不可达 api_base_url，断言不再是 409（Disabled），而是出站失败 502（已过开关闸）。
+        // FR-126 异步化：check 触发改为 POST /update/check。默认 update.enabled=false 时触发因 Disabled
+        // 返回 409；PATCH 翻 true 后已过开关闸，触发返回 202（job_id），实际出站在后台任务进行
+        //（出站失败 502 已移入后台 job 进度，不再是触发响应的同步错误）。本测试只验「开关闸」生效。
         let (state, _dir) = 测试用状态().await;
         let admin = 签发令牌(&state, "admin", Role::Admin).await;
         let settings = state.settings.clone();
         let meta = state.meta.clone();
         let jwt = state.jwt.clone();
 
-        // 先确认默认 check 为 409（Disabled）
+        // 先确认默认触发 check 为 409（Disabled）
         let app = super::super::build_router(state);
         let resp = app
             .clone()
             .oneshot(
                 Request::builder()
-                    .method("GET")
+                    .method("POST")
                     .uri("/api/v1/update/check")
                     .header("Authorization", format!("Bearer {admin}"))
                     .body(Body::empty())
@@ -1139,11 +1140,11 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         assert!(settings.update().enabled, "PATCH 后 enabled 应为 true");
 
-        // 再次 check：已过 Disabled 闸，出站到不可达地址应返回 502（BadGateway），而非 409
+        // 再次触发 check：已过 Disabled 闸，立即返回 202（job_id），不再因 Disabled 返回 409
         let resp = app
             .oneshot(
                 Request::builder()
-                    .method("GET")
+                    .method("POST")
                     .uri("/api/v1/update/check")
                     .header("Authorization", format!("Bearer {admin}"))
                     .body(Body::empty())
@@ -1154,12 +1155,12 @@ mod tests {
         assert_ne!(
             resp.status(),
             StatusCode::CONFLICT,
-            "启用后 check 不应再因 Disabled 返回 409"
+            "启用后触发 check 不应再因 Disabled 返回 409"
         );
         assert_eq!(
             resp.status(),
-            StatusCode::BAD_GATEWAY,
-            "启用后出站到不可达地址应为 502"
+            StatusCode::ACCEPTED,
+            "启用后触发 check 应立即返回 202（job_id），出站在后台进行"
         );
     }
 

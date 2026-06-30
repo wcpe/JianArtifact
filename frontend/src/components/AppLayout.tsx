@@ -45,7 +45,7 @@ import { useTranslation } from 'react-i18next';
 import { useAuth } from '../auth/useAuth';
 import { density } from '../theme/density';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
-import { checkUpdate, getHealth } from '../api/endpoints';
+import { getCachedCheck, getHealth } from '../api/endpoints';
 import { GlobalTopProgressBar } from './GlobalTopProgressBar';
 
 /** 品牌蓝（logo 主色，FR-113）：集中一处常量，避免散落魔法值。 */
@@ -253,19 +253,20 @@ export function AppLayout() {
     };
   }, []);
 
-  // 仅 Admin 挂载时查一次更新：仅「有可用更新」才置徽标；其余（未启用 409 / 无更新 / 失败）静默不显。
-  // 只在挂载查一次并缓存，不每次渲染重查（避免 GitHub 限流）；查询走后台、不阻塞渲染。
+  // 仅 Admin 挂载时读一次留存的检查结果（FR-126：GET /update/check 只读、不联网）：仅「有可用更新」
+  // 才置徽标；无留存 / 无更新 / 失败静默不显。读留存不触发出站，不限流、不阻塞渲染。
   useEffect(() => {
     if (!isAdmin) return;
     let cancelled = false;
-    checkUpdate()
-      .then((result) => {
-        if (!cancelled && result.update_available) {
+    getCachedCheck()
+      .then((cached) => {
+        const result = cached.result;
+        if (!cancelled && result?.update_available) {
           setUpdateInfo({ current: result.current_version, latest: result.latest_version });
         }
       })
       .catch(() => {
-        // 未启用在线更新（409）/ 请求失败：静默吞掉，不显徽标
+        // 留存读取失败：静默吞掉，不显徽标
       });
     return () => {
       cancelled = true;
