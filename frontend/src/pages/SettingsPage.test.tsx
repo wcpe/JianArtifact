@@ -1,8 +1,9 @@
-// 设置页组件测试（FR-87 只读 + FR-88 可编辑热替换 + FR-103 锚点单页重做 + FR-106 动态配置）：
-// 加载填充脱敏配置到表单、单个全局保存一次性提交 settings + dynamic 两次 PATCH、
+// 设置页组件测试（FR-87 只读 + FR-88 可编辑热替换 + FR-106 动态配置 + FR-129 顶部 Tab 分页）：
+// 加载填充脱敏配置到表单、单个全局保存一次性提交 settings + dynamic + protection 三次 PATCH、
 // 网络代理三字段 / 密码三态契约（FR-100）、动态配置各节回显与字段绑定、各错误码（400）友好提示；
-// 并校验左侧 sticky 锚点子导航（五项，点击平滑滚动）+ 单页分节（各节标题可见、非 tab 隐藏）+
-// **只有一个保存按钮**。
+// 并校验顶部 Tab 分页（六项，点 Tab 切换显示对应节内容、非默认节切换前不可见）+ **只有一个保存按钮**。
+// FR-129：原锚点长滚动 + scroll-spy 改为 Tab 分页（切换不滚动、根因消除高亮 / hover 错位）；
+// 防护节并入单一保存（移除其独立「保存并即时生效」按钮）。
 // 注：在线更新已迁至「系统」页（FR-109，SystemPage），本页不再含相关 UI 与测试。
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -20,6 +21,12 @@ function renderPage() {
       <SettingsPage />
     </MantineProvider>,
   );
+}
+
+/** 点击顶部 Tab 切到指定分节（Tab 标题与各节标题同文案）。 */
+function 切到Tab(name: string) {
+  const tablist = screen.getByRole('tablist');
+  fireEvent.click(within(tablist).getByRole('tab', { name }));
 }
 
 /** 一份默认动态配置样例（FR-106）。 */
@@ -149,53 +156,50 @@ describe('SettingsPage', () => {
     expect(screen.getByDisplayValue('localhost,127.0.0.1')).toBeInTheDocument();
   });
 
-  // ===== FR-103：锚点单页骨架 =====
+  // ===== FR-129：顶部 Tab 分页骨架 =====
 
-  it('FR-103：左侧锚点导航有五项（网络代理 / 限制与配额 / 可观测性 / 漏洞库 / 安全·会话）', async () => {
+  it('FR-129：顶部 Tab 列表有六项（网络代理 / 限制与配额 / 可观测性 / 漏洞库 / 安全·会话 / 防护配置）', async () => {
     vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
     桩动态配置();
     renderPage();
 
     await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
-    // 导航在 <nav> 内（与正文同名标题区分）
-    const nav = screen.getByRole('navigation', { name: '设置分节导航' });
-    expect(within(nav).getByText('网络代理')).toBeInTheDocument();
-    expect(within(nav).getByText('限制与配额')).toBeInTheDocument();
-    expect(within(nav).getByText('可观测性')).toBeInTheDocument();
-    expect(within(nav).getByText('漏洞库')).toBeInTheDocument();
-    expect(within(nav).getByText('安全 / 会话')).toBeInTheDocument();
+    const tablist = screen.getByRole('tablist');
+    expect(within(tablist).getByRole('tab', { name: '网络代理' })).toBeInTheDocument();
+    expect(within(tablist).getByRole('tab', { name: '限制与配额' })).toBeInTheDocument();
+    expect(within(tablist).getByRole('tab', { name: '可观测性' })).toBeInTheDocument();
+    expect(within(tablist).getByRole('tab', { name: '漏洞库' })).toBeInTheDocument();
+    expect(within(tablist).getByRole('tab', { name: '安全 / 会话' })).toBeInTheDocument();
+    expect(within(tablist).getByRole('tab', { name: '防护配置' })).toBeInTheDocument();
   });
 
-  it('FR-103：点击锚点导航项平滑滚动到对应节（调 scrollIntoView）', async () => {
-    vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
-    桩动态配置();
-    // scrollIntoView 已在 setup 全局桩，这里 spy 以断言被调用且传 behavior:'smooth'
-    const scrollSpy = vi.spyOn(Element.prototype, 'scrollIntoView');
-    renderPage();
-
-    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
-    const nav = screen.getByRole('navigation', { name: '设置分节导航' });
-    fireEvent.click(within(nav).getByText('漏洞库'));
-
-    expect(scrollSpy).toHaveBeenCalled();
-    const arg = scrollSpy.mock.calls[scrollSpy.mock.calls.length - 1][0];
-    expect(arg).toMatchObject({ behavior: 'smooth' });
-  });
-
-  it('FR-103：单页分节——各节标题默认即可见（非 tab 隐藏），无需切换', async () => {
+  it('FR-129：默认显示网络代理节，其余节内容切 Tab 前不可见', async () => {
     vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
     桩动态配置();
     renderPage();
 
-    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
-    // 网络代理 + 限制与配额 + 漏洞库 + 安全/会话 节标题（heading）默认可见，无须点 tab
-    expect(screen.getByRole('heading', { name: '网络代理' })).toBeVisible();
-    expect(screen.getByRole('heading', { name: '限制与配额' })).toBeVisible();
-    expect(screen.getByRole('heading', { name: '漏洞库' })).toBeVisible();
-    expect(screen.getByRole('heading', { name: '安全 / 会话' })).toBeVisible();
+    // 默认 Tab 为网络代理：HTTP 代理可见
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeVisible());
+    // 安全 / 会话节字段（会话有效期）虽随面板挂载在 DOM，但未激活面板不可见
+    expect(screen.getByLabelText('会话有效期（秒）')).not.toBeVisible();
   });
 
-  it('FR-103：只有一个保存按钮——保存条内有「保存」、且不存在「保存系统配置」按钮', async () => {
+  it('FR-129：点击 Tab 切换显示对应节内容', async () => {
+    vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
+    桩动态配置();
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeVisible());
+    // 切到「安全 / 会话」Tab → 会话有效期字段可见
+    切到Tab('安全 / 会话');
+    await waitFor(() => expect(screen.getByLabelText('会话有效期（秒）')).toBeVisible());
+    // 切走后网络代理节内容重新可见、安全会话节内容隐藏
+    切到Tab('网络代理');
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeVisible());
+    expect(screen.getByLabelText('会话有效期（秒）')).not.toBeVisible();
+  });
+
+  it('FR-129：只有一个保存按钮——保存条内有「保存」、且无防护节「保存并即时生效」按钮', async () => {
     vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
     桩动态配置();
     renderPage();
@@ -207,41 +211,51 @@ describe('SettingsPage', () => {
     expect(within(saveBar).getByRole('button', { name: '保存' })).toBeInTheDocument();
     // 旧的「保存系统配置」按钮已去除：整页不存在
     expect(screen.queryByRole('button', { name: '保存系统配置' })).not.toBeInTheDocument();
+    // 防护节独立保存按钮已并入全局保存：切到防护 Tab 也不应再出现
+    切到Tab('防护配置');
+    await waitFor(() => expect(screen.getByText('速率限制')).toBeVisible());
+    expect(screen.queryByRole('button', { name: '保存并即时生效' })).not.toBeInTheDocument();
     // 整页文案恰为「保存」的按钮只此一个
     const allButtons = screen.getAllByRole('button');
     const saveButtons = allButtons.filter((b) => b.textContent?.trim() === '保存');
     expect(saveButtons).toHaveLength(1);
   });
 
-  // ===== FR-103：单个全局保存（合并 settings + dynamic 两次 PATCH）=====
+  // ===== FR-103/129：单个全局保存（合并 settings + dynamic + protection 三次 PATCH）=====
 
-  it('FR-103：点保存一次性提交 updateSettings + updateDynamicConfig，成功显已保存', async () => {
+  it('FR-129：点保存一次性提交 updateSettings + updateDynamicConfig + updateProtectionConfig，成功显已保存', async () => {
     vi.spyOn(api, 'getSettings').mockResolvedValue(未启用样例);
     桩动态配置();
     const update = vi.spyOn(api, 'updateSettings').mockResolvedValue(未启用样例);
     const updateDyn = vi
       .spyOn(api, 'updateDynamicConfig')
       .mockImplementation((c) => Promise.resolve(c));
+    const updateProtection = vi
+      .spyOn(api, 'updateProtectionConfig')
+      .mockImplementation((c) => Promise.resolve(c));
     renderPage();
 
     await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
-    await waitFor(() => expect(screen.getByLabelText('会话有效期（秒）')).toBeVisible());
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
     await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(updateDyn).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(updateProtection).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.getByText(/已保存/)).toBeInTheDocument());
   });
 
-  it('FR-103：保存时改过的动态配置（会话有效期）随 updateDynamicConfig 一并提交', async () => {
+  it('FR-129：保存时改过的动态配置（会话有效期）随 updateDynamicConfig 一并提交', async () => {
     vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
     桩动态配置();
     vi.spyOn(api, 'updateSettings').mockResolvedValue(启用样例);
+    vi.spyOn(api, 'updateProtectionConfig').mockImplementation((c) => Promise.resolve(c));
     const updateDyn = vi
       .spyOn(api, 'updateDynamicConfig')
       .mockImplementation((c) => Promise.resolve(c));
     renderPage();
 
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
+    切到Tab('安全 / 会话');
     await waitFor(() => expect(screen.getByLabelText('会话有效期（秒）')).toBeVisible());
     fireEvent.change(screen.getByLabelText('会话有效期（秒）'), { target: { value: '7200' } });
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
@@ -250,23 +264,69 @@ describe('SettingsPage', () => {
     expect(updateDyn.mock.calls[0][0].auth.session_ttl_secs).toBe(7200);
   });
 
-  it('FR-103：动态配置未加载（getDynamicConfig 失败）时保存只发 updateSettings，不报错', async () => {
+  it('FR-129：保存时改过的防护配置随 updateProtectionConfig 一并提交（防护并入单一保存）', async () => {
+    vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
+    桩动态配置();
+    vi.spyOn(api, 'updateSettings').mockResolvedValue(启用样例);
+    vi.spyOn(api, 'updateDynamicConfig').mockImplementation((c) => Promise.resolve(c));
+    const updateProtection = vi
+      .spyOn(api, 'updateProtectionConfig')
+      .mockImplementation((c) => Promise.resolve(c));
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
+    // 切到防护 Tab，开启「速率限制」开关
+    切到Tab('防护配置');
+    await waitFor(() => expect(screen.getByText('速率限制')).toBeVisible());
+    fireEvent.click(screen.getByLabelText('启用速率限制'));
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    await waitFor(() => expect(updateProtection).toHaveBeenCalledTimes(1));
+    expect(updateProtection.mock.calls[0][0].rate_limit.enabled).toBe(true);
+  });
+
+  it('FR-129：动态配置未加载（getDynamicConfig 失败）时保存只发 settings + protection，不报错', async () => {
     vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
     vi.spyOn(api, 'getDynamicConfig').mockRejectedValue(
       new ApiError(403, 'forbidden', '无权执行该操作'),
     );
     const update = vi.spyOn(api, 'updateSettings').mockResolvedValue(启用样例);
     const updateDyn = vi.spyOn(api, 'updateDynamicConfig');
+    const updateProtection = vi
+      .spyOn(api, 'updateProtectionConfig')
+      .mockImplementation((c) => Promise.resolve(c));
     renderPage();
 
     await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
     await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(updateProtection).toHaveBeenCalledTimes(1));
     expect(updateDyn).not.toHaveBeenCalled();
   });
 
-  it('FR-103：保存（settings PATCH）返回 400 时展示友好提示', async () => {
+  it('FR-129：防护配置未加载（getProtectionConfig 失败）时保存只发 settings + dynamic，不报错', async () => {
+    vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
+    桩动态配置();
+    vi.spyOn(api, 'getProtectionConfig').mockRejectedValue(
+      new ApiError(403, 'forbidden', '无权执行该操作'),
+    );
+    const update = vi.spyOn(api, 'updateSettings').mockResolvedValue(启用样例);
+    const updateDyn = vi
+      .spyOn(api, 'updateDynamicConfig')
+      .mockImplementation((c) => Promise.resolve(c));
+    const updateProtection = vi.spyOn(api, 'updateProtectionConfig');
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(updateDyn).toHaveBeenCalledTimes(1));
+    expect(updateProtection).not.toHaveBeenCalled();
+  });
+
+  it('FR-129：保存（settings PATCH）返回 400 时展示友好提示', async () => {
     vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
     桩动态配置();
     vi.spyOn(api, 'updateSettings').mockRejectedValue(
@@ -281,7 +341,7 @@ describe('SettingsPage', () => {
     );
   });
 
-  it('FR-103：动态配置保存返回 400（非法值）时展示友好提示', async () => {
+  it('FR-129：动态配置保存返回 400（非法值）时展示友好提示', async () => {
     vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
     桩动态配置();
     vi.spyOn(api, 'updateSettings').mockResolvedValue(启用样例);
@@ -294,7 +354,7 @@ describe('SettingsPage', () => {
     );
     renderPage();
 
-    await waitFor(() => expect(screen.getByLabelText('会话有效期（秒）')).toBeVisible());
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
     await waitFor(() =>
@@ -304,11 +364,30 @@ describe('SettingsPage', () => {
     );
   });
 
+  it('FR-129：防护配置保存返回 400（非法值）时展示友好提示', async () => {
+    vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
+    桩动态配置();
+    vi.spyOn(api, 'updateSettings').mockResolvedValue(启用样例);
+    vi.spyOn(api, 'updateDynamicConfig').mockImplementation((c) => Promise.resolve(c));
+    vi.spyOn(api, 'updateProtectionConfig').mockRejectedValue(
+      new ApiError(400, 'bad_request', '防护配置非法：限流窗口必须大于 0'),
+    );
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    await waitFor(() =>
+      expect(screen.getByText('防护配置非法：限流窗口必须大于 0')).toBeInTheDocument(),
+    );
+  });
+
   // ===== FR-100：网络代理三字段 / 三态（合并到全局保存，契约不回归）=====
 
   it('编辑代理 URL 后点保存，PATCH 载荷带新 URL、省略 password', async () => {
     vi.spyOn(api, 'getSettings').mockResolvedValue(未启用样例);
     桩动态配置();
+    vi.spyOn(api, 'updateProtectionConfig').mockImplementation((c) => Promise.resolve(c));
     const update = vi.spyOn(api, 'updateSettings').mockResolvedValue(未启用样例);
     renderPage();
 
@@ -350,6 +429,8 @@ describe('SettingsPage', () => {
   it('FR-100：密码框留空保存时 PATCH 载荷省略各代理 password', async () => {
     vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
     桩动态配置();
+    vi.spyOn(api, 'updateProtectionConfig').mockImplementation((c) => Promise.resolve(c));
+    vi.spyOn(api, 'updateDynamicConfig').mockImplementation((c) => Promise.resolve(c));
     const update = vi.spyOn(api, 'updateSettings').mockResolvedValue(启用样例);
     renderPage();
 
@@ -367,6 +448,8 @@ describe('SettingsPage', () => {
   it('FR-100：填入密码保存时对应代理 PATCH 载荷带 password', async () => {
     vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
     桩动态配置();
+    vi.spyOn(api, 'updateProtectionConfig').mockImplementation((c) => Promise.resolve(c));
+    vi.spyOn(api, 'updateDynamicConfig').mockImplementation((c) => Promise.resolve(c));
     const update = vi.spyOn(api, 'updateSettings').mockResolvedValue(启用样例);
     renderPage();
 
@@ -385,6 +468,7 @@ describe('SettingsPage', () => {
   it('FR-100：SOCKS5 的 URL 能填入并组装到 all 槽', async () => {
     vi.spyOn(api, 'getSettings').mockResolvedValue(未启用样例);
     桩动态配置();
+    vi.spyOn(api, 'updateProtectionConfig').mockImplementation((c) => Promise.resolve(c));
     const update = vi.spyOn(api, 'updateSettings').mockResolvedValue(未启用样例);
     renderPage();
 
@@ -402,6 +486,8 @@ describe('SettingsPage', () => {
   it('FR-100：点「清除密码」后保存，对应代理 PATCH 载荷带 password 空串', async () => {
     vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
     桩动态配置();
+    vi.spyOn(api, 'updateProtectionConfig').mockImplementation((c) => Promise.resolve(c));
+    vi.spyOn(api, 'updateDynamicConfig').mockImplementation((c) => Promise.resolve(c));
     const update = vi.spyOn(api, 'updateSettings').mockResolvedValue(启用样例);
     renderPage();
 
@@ -424,102 +510,56 @@ describe('SettingsPage', () => {
     await waitFor(() => expect(screen.getByText('无权执行该操作')).toBeInTheDocument());
   });
 
-  // ===== FR-106：动态配置各节并入锚点节（表单回显 + 字段绑定不回归）=====
+  // ===== FR-106：动态配置各节并入 Tab 分页（表单回显 + 字段绑定不回归）=====
 
-  it('FR-106：限制配额 / 可观测性 / 安全会话各节表单回显默认值', async () => {
+  it('FR-106：切到各 Tab 后限制配额 / 可观测性 / 安全会话节表单回显默认值', async () => {
     vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
     桩动态配置();
     renderPage();
 
-    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
-    // 各节默认值：会话有效期 3600、审计保留 90、采样间隔 60（均默认可见，无须切 tab）
-    await waitFor(() => expect(screen.getByDisplayValue('3600')).toBeVisible());
-    expect(screen.getByDisplayValue('90')).toBeVisible();
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeVisible());
+    // 可观测性 Tab：审计保留 90、采样间隔 60
+    切到Tab('可观测性');
+    await waitFor(() => expect(screen.getByDisplayValue('90')).toBeVisible());
     expect(screen.getByDisplayValue('60')).toBeVisible();
-    // 重启生效标注（区别于代理 / 更新即时生效）：每个动态配置节各一枚徽标，取首枚断言可见
-    const restartBadges = screen.getAllByText('保存后重启生效');
-    expect(restartBadges.length).toBeGreaterThan(0);
-    expect(restartBadges[0]).toBeVisible();
+    // 安全 / 会话 Tab：会话有效期 3600 + 重启生效徽标（区别于代理即时生效）
+    切到Tab('安全 / 会话');
+    await waitFor(() => expect(screen.getByDisplayValue('3600')).toBeVisible());
+    // 安全会话节内的重启徽标随该 Tab 激活而可见（面板保持挂载，故各节均有徽标，断言激活节的可见）
+    const authPanel = screen.getByLabelText('会话有效期（秒）').closest('[role="tabpanel"]');
+    expect(authPanel).not.toBeNull();
+    expect(within(authPanel as HTMLElement).getByText('保存后重启生效')).toBeVisible();
   });
 
-  // ===== Bug-1：锚点导航 sticky 滚动后失效（增强 FR-92）=====
-  // FR-92 alt 外壳的页眉 position:fixed 覆盖视口顶部；sticky 导航若 top:0 会park 到页眉之后、
-  // 上方 tab 被遮（滚到底看不见）。回归：sticky 顶部偏移须为页眉高度、各节带 scroll-margin-top。
+  // ===== FR-110/129：防护配置并入设置页（Tab 分节 + 并入单一保存）=====
 
-  it('Bug-1：sticky 锚点导航顶部偏移为页眉高度（不再 top:0 被固定页眉遮挡）', async () => {
+  it('FR-129：顶部 Tab 含「防护配置」一项', async () => {
     vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
     桩动态配置();
     renderPage();
 
     await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
-    const nav = screen.getByRole('navigation', { name: '设置分节导航' });
-    // 仍是 sticky，但 top 取页眉高度（56px）而非 0，避免藏到固定页眉之后
-    expect(nav).toHaveStyle({ position: 'sticky', top: '56px' });
-    expect(nav).not.toHaveStyle({ top: '0px' });
+    const tablist = screen.getByRole('tablist');
+    expect(within(tablist).getByRole('tab', { name: '防护配置' })).toBeInTheDocument();
   });
 
-  it('Bug-1：各锚点节带 scroll-margin-top（点击滚动停在固定页眉下方）', async () => {
+  it('FR-129：切到防护 Tab——防护各维度标题可见、无独立保存按钮', async () => {
     vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
     桩动态配置();
     renderPage();
 
     await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
-    // 抽查首节（proxy）与并入的防护节（protection）均有 scroll-margin-top=页眉高度
-    for (const id of ['proxy', 'protection']) {
-      const section = document.getElementById(id);
-      expect(section).not.toBeNull();
-      expect(section).toHaveStyle({ scrollMarginTop: '56px' });
-    }
-  });
-
-  // ===== FR-110：防护配置并入设置页（新增锚点节 + 节内自洽保存）=====
-
-  it('FR-110：左侧锚点导航含「防护配置」一项', async () => {
-    vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
-    桩动态配置();
-    renderPage();
-
-    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
-    const nav = screen.getByRole('navigation', { name: '设置分节导航' });
-    expect(within(nav).getByText('防护配置')).toBeInTheDocument();
-  });
-
-  it('FR-110：设置页含防护节——防护各维度标题默认可见（非 tab 隐藏）', async () => {
-    vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
-    桩动态配置();
-    renderPage();
-
-    // 防护节标题（heading）+ 各防护维度分区默认即可见，无须切页
-    await waitFor(() => expect(screen.getByRole('heading', { name: '防护配置' })).toBeVisible());
-    expect(screen.getByText('速率限制')).toBeVisible();
+    切到Tab('防护配置');
+    // 防护各维度分区可见
+    await waitFor(() => expect(screen.getByText('速率限制')).toBeVisible());
     expect(screen.getByText('WAF 规则引擎')).toBeVisible();
-    // 防护节有自己的即时生效保存按钮（与全局「保存」并存、文案不同）
-    expect(screen.getByRole('button', { name: '保存并即时生效' })).toBeInTheDocument();
+    // 防护节不再有自己的保存按钮（并入单一保存）
+    expect(screen.queryByRole('button', { name: '保存并即时生效' })).not.toBeInTheDocument();
   });
 
-  it('FR-110：防护节保存调 PATCH /protection/config（节内自洽，不并入全局保存）', async () => {
-    vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
-    桩动态配置();
-    const updateProtection = vi
-      .spyOn(api, 'updateProtectionConfig')
-      .mockImplementation((cfg) => Promise.resolve(cfg));
-    const updateSettings = vi.spyOn(api, 'updateSettings');
-    renderPage();
+  // ===== FR-128：代理连通性测试（在网络代理 Tab）=====
 
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: '保存并即时生效' })).toBeInTheDocument(),
-    );
-    fireEvent.click(screen.getByRole('button', { name: '保存并即时生效' }));
-
-    await waitFor(() => expect(updateProtection).toHaveBeenCalledTimes(1));
-    // 防护节独立保存，不触发设置页的全局 settings PATCH
-    expect(updateSettings).not.toHaveBeenCalled();
-    await waitFor(() => expect(screen.getByText('已保存，配置已即时生效。')).toBeInTheDocument());
-  });
-
-  // ===== FR-128：代理连通性测试 =====
-
-  it('FR-128：代理节有测试 URL 输入框和「测试」按钮', async () => {
+  it('FR-128：代理 Tab 有测试 URL 输入框和「测试」按钮', async () => {
     vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
     桩动态配置();
     renderPage();

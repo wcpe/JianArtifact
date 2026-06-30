@@ -8,6 +8,7 @@ import {
   formatRelativeTime,
   parseUtcMs,
   errorMessage,
+  linesToList,
 } from './format';
 import { ApiError } from '../api/client';
 
@@ -103,5 +104,19 @@ describe('errorMessage', () => {
   });
   it('未知类型回退默认文案', () => {
     expect(errorMessage('字符串')).toBe('发生未知错误');
+  });
+});
+
+describe('linesToList', () => {
+  it('按行去空白去空行解析', () => {
+    expect(linesToList('1.1.1.1\n  2.2.2.2  \n\n  \n3.3.3.3')).toEqual([
+      '1.1.1.1',
+      '2.2.2.2',
+      '3.3.3.3',
+    ]);
+  });
+  it('空文本得到空数组', () => {
+    expect(linesToList('')).toEqual([]);
+    expect(linesToList('   \n  ')).toEqual([]);
   });
 });

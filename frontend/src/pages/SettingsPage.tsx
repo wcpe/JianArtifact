@@ -1,21 +1,19 @@
-// 设置页（FR-87 只读 + FR-88 可编辑热替换 + FR-103 锚点单页重做 + FR-106 动态配置，仅管理员）：
-// 左侧 sticky 锚点子导航（网络代理 / 限制与配额 / 可观测性 / 漏洞库 / 安全·会话）——
-// 点击平滑滚动到对应节、滚动时按可视区高亮当前节；右侧单页分节（不强制等高、短节不留空白）。
-// 底部**只有一个** sticky 全局保存按钮：一次性提交 PATCH /settings（即时生效）+ PATCH /settings/dynamic（重启生效），
-// 去掉系统配置节早先自带的「保存系统配置」按钮。各节内用小字标注「即时生效」/「保存后重启生效」。
+// 设置页（FR-87 只读 + FR-88 可编辑热替换 + FR-106 动态配置 + FR-129 顶部 Tab 分页，仅管理员）：
+// 顶部水平 Tab 分页（网络代理 / 限制与配额 / 可观测性 / 漏洞库 / 安全·会话 / 防护配置），
+// 每节一个 Tab.Panel、切换不滚动——彻底消除原锚点长滚动 scroll-spy 的高亮 / hover 错位（FR-129）。
+// 底部**只有一个** sticky 全局保存按钮：一次性提交 PATCH /settings（即时生效）+
+// PATCH /settings/dynamic（重启生效）+ PATCH /protection/config（即时生效，FR-129 起并入单一保存）。
 //
 // 在线更新已迁至「系统」页（FR-109，SystemPage），本页不再含应用更新卡片。
 //
-// 数据来自后端 GET /api/v1/settings（已脱敏：代理 URL 去凭据）与
-// GET /api/v1/settings/dynamic（非密钥项）。保存走 PATCH /settings（只发 network_proxy，部分更新）
-// 与 PATCH /settings/dynamic（代理凭据只入内存槽、不写回 TOML / 不回显，重启回落文件 / env 配置）。
+// 数据来自后端 GET /api/v1/settings（已脱敏：代理 URL 去凭据）、GET /api/v1/settings/dynamic（非密钥项）
+// 与 GET /api/v1/protection/config（防护各维度）。保存走对应 PATCH（代理凭据只入内存槽、不写回 TOML / 不回显）。
 
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Alert,
   Box,
-  Flex,
   Stack,
   Title,
   Text,
@@ -28,37 +26,22 @@ import {
   TextInput,
   Switch,
   PasswordInput,
-  NavLink,
   NumberInput,
+  Tabs,
 } from '@mantine/core';
 import { IconDeviceFloppy } from '@tabler/icons-react';
 import * as api from '../api/endpoints';
-import type { SettingsView, ProxyEntryPatch, DynamicConfig, ProxyTestResult } from '../api/types';
-import { errorMessage } from '../lib/format';
+import type {
+  SettingsView,
+  ProxyEntryPatch,
+  DynamicConfig,
+  ProxyTestResult,
+  ProtectionConfig,
+} from '../api/types';
+import { errorMessage, linesToList } from '../lib/format';
 import { ErrorAlert } from '../components/ErrorAlert';
 import { density } from '../theme/density';
 import { ProtectionConfigSection } from './ProtectionConfigSection';
-
-/**
- * 锚点节定义（单一真源：左侧导航与右侧分节共用，避免 id 复制散落）。
- * 各节标签为可见文案、走 i18n（settings.nav.<id>）；此处仅保留 id，渲染处用 t() 取标签。
- */
-const SECTIONS = [
-  { id: 'proxy' },
-  { id: 'limits' },
-  { id: 'observability' },
-  { id: 'vuln' },
-  { id: 'auth' },
-  // FR-110：防护配置由独立页并入设置页，作为一个锚点节；自带 PATCH /protection/config 保存（即时生效）、不并入全局保存。
-  { id: 'protection' },
-] as const;
-
-/**
- * 各锚点节卡片的滚动外边距（增强 FR-92）：点击导航走 `scrollIntoView({block:'start'})` 时，
- * 目标节顶部会贴到视口顶端、被 alt 外壳的固定页眉遮住；以页眉高度作 `scroll-margin-top`，
- * 让目标节停在页眉下方而非藏到其后（与 sticky 导航的 `top` 偏移成对，单一真源 density.headerHeight）。
- */
-const SECTION_SCROLL_STYLE = { scrollMarginTop: density.headerHeight } as const;
 
 /** 单代理三字段（URL / 用户名 / 密码）一组（FR-100）。密码框始终空、不回显；已配置时标徽标 + 提供清除密码。 */
 interface ProxyFieldsProps {
@@ -138,12 +121,25 @@ function ProxyFields(props: ProxyFieldsProps) {
   );
 }
 
+/** 重启生效徽标（动态配置各节共用：保存后须重启才生效，区别于代理 / 防护即时生效）。 */
+function RestartHintBadge() {
+  const { t } = useTranslation('settings');
+  return (
+    <Badge size="sm" color="yellow" variant="light">
+      {t('restartHint')}
+    </Badge>
+  );
+}
+
 /** 设置页。 */
 export function SettingsPage() {
   const { t } = useTranslation('settings');
   const [settings, setSettings] = useState<SettingsView | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // 当前激活的顶部 Tab（FR-129）：仅驱动分页显示，不与滚动联动（根因消除锚点高亮 / hover 错位）。
+  const [activeTab, setActiveTab] = useState<string>('proxy');
 
   // —— 可编辑表单态（FR-88 + FR-100）——
   // 每代理（http / https / all）拆三字段：URL（脱敏 host，无凭据）、用户名（回显）、密码（不回显）。
@@ -177,12 +173,17 @@ export function SettingsPage() {
 
   // —— 系统配置（动态配置面板，FR-106）——
   // limits / observability / vuln / auth 非密钥项；保存落库、**重启生效**（无热替换槽）。
-  // FR-103 起并入对应锚点节、随**全局保存**一并 PATCH（不再有独立保存按钮）。
+  // 并入对应 Tab、随**全局保存**一并 PATCH（不再有独立保存按钮）。
   const [dynamic, setDynamic] = useState<DynamicConfig | null>(null);
   const [dynamicError, setDynamicError] = useState<string | null>(null);
 
-  // 当前高亮的锚点节（FR-103）：由 IntersectionObserver 据可视区更新；点击导航即时设置以即时反馈。
-  const [activeSection, setActiveSection] = useState<string>(SECTIONS[0].id);
+  // —— 防护配置（FR-110 + FR-129：state 上提、并入单一保存）——
+  // GET /protection/config 加载；IP 名单以文本域为准（保存前归并）；随全局保存一并 PATCH（即时生效）。
+  const [protection, setProtection] = useState<ProtectionConfig | null>(null);
+  const [protectionAllowText, setProtectionAllowText] = useState('');
+  const [protectionDenyText, setProtectionDenyText] = useState('');
+  const [protectionLoading, setProtectionLoading] = useState(true);
+  const [protectionError, setProtectionError] = useState<string | null>(null);
 
   // 用一份设置填充表单态。
   function fillForm(s: SettingsView) {
@@ -206,6 +207,13 @@ export function SettingsPage() {
     setNoProxy(s.network_proxy.no_proxy ?? '');
   }
 
+  // 用一份防护配置填充表单态（含 IP 名单文本域）。
+  function fillProtection(cfg: ProtectionConfig) {
+    setProtection(cfg);
+    setProtectionAllowText(cfg.ip_list.allow.join('\n'));
+    setProtectionDenyText(cfg.ip_list.deny.join('\n'));
+  }
+
   useEffect(() => {
     api
       .getSettings()
@@ -214,7 +222,7 @@ export function SettingsPage() {
       .finally(() => setLoading(false));
   }, []);
 
-  // 动态配置独立加载：失败不阻塞代理 / 更新主表单，仅在对应节内提示；加载失败时全局保存只发 settings PATCH。
+  // 动态配置独立加载：失败不阻塞代理 / 主表单，仅在对应节内提示；加载失败时全局保存跳过 dynamic PATCH。
   useEffect(() => {
     api
       .getDynamicConfig()
@@ -222,37 +230,27 @@ export function SettingsPage() {
       .catch((err) => setDynamicError(errorMessage(err)));
   }, []);
 
-  // 锚点高亮（FR-103）：观察各节，取最靠上的可视节作为当前高亮。jsdom 无真实布局、IO 为空桩（见 test setup）。
+  // 防护配置独立加载（FR-110/129）：失败仅在防护 Tab 内提示；加载失败时全局保存跳过 protection PATCH。
   useEffect(() => {
-    if (loading) return;
-    const elements = SECTIONS.map((s) => document.getElementById(s.id)).filter(
-      (el): el is HTMLElement => el !== null,
-    );
-    if (elements.length === 0) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const visible = entries
-          .filter((e) => e.isIntersecting)
-          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
-        if (visible.length > 0) {
-          setActiveSection(visible[0].target.id);
-        }
-      },
-      { rootMargin: '0px 0px -60% 0px', threshold: 0 },
-    );
-    elements.forEach((el) => observer.observe(el));
-    return () => observer.disconnect();
-  }, [loading]);
-
-  /** 点击锚点导航：平滑滚动到对应节并即时高亮（即时反馈，可视区高亮随后由 IO 校正）。 */
-  function scrollToSection(id: string) {
-    setActiveSection(id);
-    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }
+    api
+      .getProtectionConfig()
+      .then(fillProtection)
+      .catch((err) => setProtectionError(errorMessage(err)))
+      .finally(() => setProtectionLoading(false));
+  }, []);
 
   // 不可变更新动态配置某节的某字段（保持薄、复用于所有数值 / 开关项）。
   function patchDynamic<K extends keyof DynamicConfig>(section: K, value: DynamicConfig[K]): void {
     setDynamic((prev) => (prev ? { ...prev, [section]: value } : prev));
+    setSaved(false);
+  }
+
+  // 不可变更新防护配置某维度的某字段（保持其余不变，整体可回传）。
+  function patchProtection<K extends keyof ProtectionConfig>(
+    key: K,
+    value: ProtectionConfig[K],
+  ): void {
+    setProtection((prev) => (prev ? { ...prev, [key]: value } : prev));
     setSaved(false);
   }
 
@@ -311,10 +309,11 @@ export function SettingsPage() {
     }
   }
 
-  // 全局保存（FR-103）：一次性提交两处写入——
-  // ① PATCH /settings（网络代理，运行时即时生效，沿用 FR-88/89/100，部分 PATCH 只发 network_proxy）；
-  // ② 若动态配置已加载则 PATCH /settings/dynamic（limits/observability/vuln/auth，重启生效，FR-106）。
-  // 顺序提交：先 settings 再 dynamic，任一失败聚合到 saveError、成功显「已保存」。
+  // 全局保存（FR-103 + FR-129）：一次性提交三处写入——
+  // ① PATCH /settings（网络代理，即时生效，部分 PATCH 只发 network_proxy）；
+  // ② 若动态配置已加载则 PATCH /settings/dynamic（limits/observability/vuln/auth，重启生效）；
+  // ③ 若防护配置已加载则 PATCH /protection/config（即时生效，IP 名单以文本域为准、保存前归并）。
+  // 顺序提交，任一失败聚合到 saveError、成功显「已保存」。
   async function handleSaveAll() {
     setSaving(true);
     setSaveError(null);
@@ -334,6 +333,17 @@ export function SettingsPage() {
         const updatedDynamic = await api.updateDynamicConfig(dynamic);
         setDynamic(updatedDynamic);
       }
+      // 防护配置已加载才提交（未加载则跳过，不报错）：IP 名单以文本域为准，提交前归并回配置。
+      if (protection) {
+        const updatedProtection = await api.updateProtectionConfig({
+          ...protection,
+          ip_list: {
+            allow: linesToList(protectionAllowText),
+            deny: linesToList(protectionDenyText),
+          },
+        });
+        fillProtection(updatedProtection);
+      }
       setSaved(true);
     } catch (err) {
       setSaveError(errorMessage(err));
@@ -347,42 +357,21 @@ export function SettingsPage() {
       <Title order={2}>{t('pageTitle')}</Title>
       {error && <ErrorAlert message={error} />}
 
-      {/* FR-103：左侧 sticky 锚点子导航 + 右侧单页分节。
-          导航固定置顶（随右侧内容滚动常驻可见）；右侧各节纵向排列、不强制等高（短节不留空白）。
-          滚动祖先是文档（AppShell.Main 不自带 overflow）；FR-92 alt 外壳的页眉 `position: fixed`
-          覆盖视口顶部，故 sticky `top` 取页眉高度（density.headerHeight），让导航贴在页眉下方常驻、
-          不被固定页眉遮住上方的 tab（修 sticky 滚动后失效）。 */}
-      <Flex gap="md" align="flex-start">
-        {/* —— 左侧 sticky 锚点导航 —— */}
-        <Box
-          component="nav"
-          aria-label={t('navAriaLabel')}
-          visibleFrom="sm"
-          style={{ position: 'sticky', top: density.headerHeight, width: 180, flexShrink: 0 }}
-        >
-          {SECTIONS.map((s) => (
-            <NavLink
-              key={s.id}
-              component="button"
-              type="button"
-              label={t(`nav.${s.id}`)}
-              active={activeSection === s.id}
-              onClick={() => scrollToSection(s.id)}
-            />
-          ))}
-        </Box>
+      {/* FR-129：顶部水平 Tab 分页。每节一个 Tab.Panel、切换不滚动；
+          未激活面板不渲染（Mantine 默认），各节内容互不串味，根因消除锚点高亮 / hover 错位。 */}
+      <Tabs value={activeTab} onChange={(v) => v && setActiveTab(v)}>
+        <Tabs.List aria-label={t('navAriaLabel')}>
+          <Tabs.Tab value="proxy">{t('proxy.title')}</Tabs.Tab>
+          <Tabs.Tab value="limits">{t('limits.title')}</Tabs.Tab>
+          <Tabs.Tab value="observability">{t('observability.title')}</Tabs.Tab>
+          <Tabs.Tab value="vuln">{t('vuln.title')}</Tabs.Tab>
+          <Tabs.Tab value="auth">{t('auth.title')}</Tabs.Tab>
+          <Tabs.Tab value="protection">{t('nav.protection')}</Tabs.Tab>
+        </Tabs.List>
 
-        {/* —— 右侧单页分节 —— */}
-        <Stack gap={density.gridSpacing} style={{ flex: 1, minWidth: 0 }}>
-          {/* —— 网络代理节 —— */}
-          <Card
-            component="section"
-            id="proxy"
-            withBorder
-            padding={density.cardPadding}
-            radius="md"
-            style={SECTION_SCROLL_STYLE}
-          >
+        {/* —— 网络代理 Tab —— */}
+        <Tabs.Panel value="proxy" pt="md">
+          <Card component="section" withBorder padding={density.cardPadding} radius="md">
             <Title order={4}>{t('proxy.title')}</Title>
             <Text size="sm" c="dimmed" mb="sm">
               {t('proxy.desc')}
@@ -490,25 +479,15 @@ export function SettingsPage() {
               </Stack>
             </Stack>
           </Card>
+        </Tabs.Panel>
 
-          {/* —— 系统配置各节（动态配置，FR-106）：limits / observability / vuln / auth 非密钥项 ——
-              这些节无热替换槽，保存后**重启生效**；随全局保存一并 PATCH /settings/dynamic（无独立保存按钮）。 */}
+        {/* —— 限制与配额 Tab（动态配置，FR-106：重启生效）—— */}
+        <Tabs.Panel value="limits" pt="md">
           {dynamicError && <ErrorAlert message={dynamicError} />}
-
-          {/* —— 限制与配额节 —— */}
-          <Card
-            component="section"
-            id="limits"
-            withBorder
-            padding={density.cardPadding}
-            radius="md"
-            style={SECTION_SCROLL_STYLE}
-          >
+          <Card component="section" withBorder padding={density.cardPadding} radius="md">
             <Group gap="xs" mb="xs">
               <Title order={4}>{t('limits.title')}</Title>
-              <Badge size="sm" color="yellow" variant="light">
-                {t('restartHint')}
-              </Badge>
+              <RestartHintBadge />
             </Group>
             {!dynamic ? (
               <Center h={80}>
@@ -529,21 +508,15 @@ export function SettingsPage() {
               />
             )}
           </Card>
+        </Tabs.Panel>
 
-          {/* —— 可观测性节 —— */}
-          <Card
-            component="section"
-            id="observability"
-            withBorder
-            padding={density.cardPadding}
-            radius="md"
-            style={SECTION_SCROLL_STYLE}
-          >
+        {/* —— 可观测性 Tab —— */}
+        <Tabs.Panel value="observability" pt="md">
+          {dynamicError && <ErrorAlert message={dynamicError} />}
+          <Card component="section" withBorder padding={density.cardPadding} radius="md">
             <Group gap="xs" mb="xs">
               <Title order={4}>{t('observability.title')}</Title>
-              <Badge size="sm" color="yellow" variant="light">
-                {t('restartHint')}
-              </Badge>
+              <RestartHintBadge />
             </Group>
             {!dynamic ? (
               <Center h={120}>
@@ -644,21 +617,15 @@ export function SettingsPage() {
               </Stack>
             )}
           </Card>
+        </Tabs.Panel>
 
-          {/* —— 漏洞库节 —— */}
-          <Card
-            component="section"
-            id="vuln"
-            withBorder
-            padding={density.cardPadding}
-            radius="md"
-            style={SECTION_SCROLL_STYLE}
-          >
+        {/* —— 漏洞库 Tab —— */}
+        <Tabs.Panel value="vuln" pt="md">
+          {dynamicError && <ErrorAlert message={dynamicError} />}
+          <Card component="section" withBorder padding={density.cardPadding} radius="md">
             <Group gap="xs" mb="xs">
               <Title order={4}>{t('vuln.title')}</Title>
-              <Badge size="sm" color="yellow" variant="light">
-                {t('restartHint')}
-              </Badge>
+              <RestartHintBadge />
             </Group>
             {!dynamic ? (
               <Center h={120}>
@@ -711,21 +678,15 @@ export function SettingsPage() {
               </Stack>
             )}
           </Card>
+        </Tabs.Panel>
 
-          {/* —— 安全 / 会话节 —— */}
-          <Card
-            component="section"
-            id="auth"
-            withBorder
-            padding={density.cardPadding}
-            radius="md"
-            style={SECTION_SCROLL_STYLE}
-          >
+        {/* —— 安全 / 会话 Tab —— */}
+        <Tabs.Panel value="auth" pt="md">
+          {dynamicError && <ErrorAlert message={dynamicError} />}
+          <Card component="section" withBorder padding={density.cardPadding} radius="md">
             <Group gap="xs" mb="xs">
               <Title order={4}>{t('auth.title')}</Title>
-              <Badge size="sm" color="yellow" variant="light">
-                {t('restartHint')}
-              </Badge>
+              <RestartHintBadge />
             </Group>
             <Text size="xs" c="dimmed" mb="xs">
               {t('auth.desc')}
@@ -763,19 +724,35 @@ export function SettingsPage() {
               </Group>
             )}
           </Card>
+        </Tabs.Panel>
 
-          {/* —— 防护配置节（FR-110）：原独立页 /protection 并入此处 ——
-              自带 GET/PATCH /protection/config 与独立保存按钮（即时生效），
-              不并入设置页底部「全局保存」（代理 + 动态配置）。 */}
-          <ProtectionConfigSection />
-        </Stack>
-      </Flex>
+        {/* —— 防护配置 Tab（FR-110 并入设置页 + FR-129 并入单一保存）——
+            state 由设置页托管，随全局保存一并 PATCH /protection/config（即时生效），无独立保存按钮。 */}
+        <Tabs.Panel value="protection" pt="md">
+          <ProtectionConfigSection
+            config={protection}
+            allowText={protectionAllowText}
+            denyText={protectionDenyText}
+            loading={protectionLoading}
+            error={protectionError}
+            onAllowTextChange={(v) => {
+              setProtectionAllowText(v);
+              setSaved(false);
+            }}
+            onDenyTextChange={(v) => {
+              setProtectionDenyText(v);
+              setSaved(false);
+            }}
+            onPatch={patchProtection}
+          />
+        </Tabs.Panel>
+      </Tabs>
 
-      {/* —— 单个全局保存（FR-103）——
+      {/* —— 单个全局保存（FR-103 + FR-129）——
           固定为 sticky 底部动作条：始终贴在滚动视口底部、不随内容 / 窗口缩放 / 滚动漂移；
           负的左右 / 下外边距抵消 AppShell.Main 的内边距，使其横向铺满、紧贴底缘；
           顶部描边 + 背景 + 内边距与内容区分隔，避免遮挡正文。
-          一次提交两处写入：PATCH /settings（即时生效）+ PATCH /settings/dynamic（重启生效）。 */}
+          一次提交三处写入：PATCH /settings（即时生效）+ /settings/dynamic（重启生效）+ /protection/config（即时生效）。 */}
       <Box
         data-testid="settings-save-bar"
         style={{

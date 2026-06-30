@@ -74,3 +74,11 @@ export function errorMessage(err: unknown): string {
   }
   return '发生未知错误';
 }
+
+/** 把文本域内容按行解析为去空白、去空行的字符串数组（如 IP 名单 / 多行配置）。 */
+export function linesToList(text: string): string[] {
+  return text
+    .split('\n')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
