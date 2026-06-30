@@ -38,6 +38,28 @@ struct Cli {
     data_dir: Option<PathBuf>,
 }
 
+/// 漏洞库刷新的统一任务注册适配器（FR-131）：把 `vuln::RefreshObserver` 回调桥接到 api 层
+/// `TaskRegistry`。定义在装配层（`main`）以守 `vuln` 不反向依赖 `api` 的分层不变量。
+struct VulnTaskObserver {
+    tasks: Arc<api::TaskRegistry>,
+}
+
+impl vuln::RefreshObserver for VulnTaskObserver {
+    fn on_start(&self) -> String {
+        self.tasks
+            .register(api::TaskKind::Vuln, Some("漏洞库刷新".to_string()))
+    }
+
+    fn on_finish(&self, task_id: &str, ok: bool, _advisories: usize) {
+        let state = if ok {
+            api::TaskState::Succeeded
+        } else {
+            api::TaskState::Failed
+        };
+        self.tasks.set_state(task_id, state, None);
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // 先装 stdout 日志（data_dir 未知，文件层留空槽），拿到 data_dir 后再换入文件层（FR-107，ADR-0029）
@@ -217,6 +239,10 @@ async fn main() -> anyhow::Result<()> {
         info!("防护阈值告警未启用，跳过（仍可经 /metrics 与状态端点观测防护计数）");
     }
 
+    // 统一进程内任务注册表（FR-131，修订 ADR-0019）：迁移 / 在线更新 / 漏洞库刷新等多类长耗时任务
+    // 统一登记于此。在此构造以便 vuln 周期刷新经 observer 登记；随 AppState 共享给 api 端点与单飞判定。
+    let tasks = Arc::new(api::TaskRegistry::default());
+
     // 漏洞库离线镜像（FR-70，ADR-0012）：默认关闭，启用时后台周期下载公开漏洞数据落本地库。
     // 仅镜像/落库，不做制品坐标匹配（FR-71）；下载公开数据集整包，不外发本机制品坐标。
     let _vuln_refresh = if cfg.vuln.enabled {
@@ -226,7 +252,11 @@ async fn main() -> anyhow::Result<()> {
             settings.network.clone(),
         );
         let mirror = Arc::new(VulnMirror::new(meta.clone(), source, &data_dir));
-        vuln::spawn_refresh_loop(mirror, cfg.vuln.clone())
+        // FR-131：把每轮刷新登记进统一任务注册表（observer 适配器解耦 vuln 与 api 分层）
+        let observer: Arc<dyn vuln::RefreshObserver> = Arc::new(VulnTaskObserver {
+            tasks: tasks.clone(),
+        });
+        vuln::spawn_refresh_loop(mirror, cfg.vuln.clone(), Some(observer))
     } else {
         info!("漏洞库离线镜像未启用，跳过");
         None
@@ -414,6 +444,8 @@ async fn main() -> anyhow::Result<()> {
         settings,
         // FR-98：主机 / 系统监控采样器（按请求采样 CPU / 内存 / 磁盘 / uptime）
         host_system,
+        // FR-131：统一进程内任务注册表（已在上方构造、供 vuln 周期刷新登记，此处复用同一份）
+        tasks,
     };
     let app = api::build_router(state);
 

@@ -21,7 +21,7 @@ use crate::update::{
     UpdateError, UpdateKind, UpdatePhase, UpdateProgress,
 };
 
-use super::{ApiError, AppState, Identity, UpdateJobs};
+use super::{ApiError, AppState, Identity, TaskKind, TaskRegistry, TaskState, UpdateJobs};
 
 /// 把在线更新错误映射为 HTTP 错误（spec §3.10）。
 impl From<UpdateError> for ApiError {
@@ -119,6 +119,17 @@ fn new_job_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
+/// 同步更新任务终态到统一任务注册表（FR-131）：`error == Some` → Failed（带错误），否则 Succeeded。
+///
+/// apply / rollback 成功后进程会重启（kind 专表标 Restarting）；统一表把成功视为 Succeeded
+/// （进度明细仍由 kind 专表的 Restarting 体现，统一表只记轻量终态）。
+fn sync_update_task_state(tasks: &Arc<TaskRegistry>, job_id: &str, error: Option<String>) {
+    match error {
+        Some(e) => tasks.set_state(job_id, TaskState::Failed, Some(e)),
+        None => tasks.set_state(job_id, TaskState::Succeeded, None),
+    }
+}
+
 /// 触发在线更新检查（仅 Admin，FR-126 异步）：起后台联网检查 job，立即返回 `job_id`（202）。
 ///
 /// `enabled=false` 返回 409「在线更新未启用」（不联网、不开任务）；非 Admin / 匿名 403 / 401。
@@ -138,12 +149,20 @@ pub async fn trigger_check_update(
         current_version(),
     )));
     jobs.register(job_id.clone(), progress.clone());
+    // 登记统一任务（FR-131）
+    state.tasks.register_with_id(
+        job_id.clone(),
+        TaskKind::Update,
+        Some("检查更新".to_string()),
+    );
 
     let data_dir = state.config.data.data_dir.clone();
+    let tasks = state.tasks.clone();
     let task_job_id = job_id.clone();
     tokio::spawn(async move {
         let result = update::check_with_progress(&source, channel, current_version()).await;
-        // 先在锁内更新进度并取出 check（不持锁做 IO：锁外再留存）
+        // 先在锁内更新进度并取出 check（不持锁做 IO：锁外再留存）；同时取出终态错误供统一表收敛
+        let mut task_error: Option<String> = None;
         let check_to_persist = {
             let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
             match result {
@@ -155,11 +174,15 @@ pub async fn trigger_check_update(
                 }
                 Err(e) => {
                     tracing::warn!(任务 = %task_job_id, "在线更新检查任务失败");
-                    p.fail(format!("{e}"));
+                    let msg = format!("{e}");
+                    p.fail(msg.clone());
+                    task_error = Some(msg);
                     None
                 }
             }
         };
+        // 同步统一任务终态（FR-131）：检查成功 succeeded、失败 failed
+        sync_update_task_state(&tasks, &task_job_id, task_error);
         // 锁外留存检查结果（不含凭据），供 GET /update/check 不联网读回
         if let Some(check) = check_to_persist {
             let persist = update::update_state(&data_dir, |s| {
@@ -231,6 +254,12 @@ pub async fn apply_update(
         current_version(),
     )));
     jobs.register(job_id.clone(), progress.clone());
+    // 登记统一任务（FR-131）
+    state.tasks.register_with_id(
+        job_id.clone(),
+        TaskKind::Update,
+        Some("应用更新".to_string()),
+    );
 
     let data_dir = state.config.data.data_dir.clone();
     let restart = state.restart.clone();
@@ -245,6 +274,7 @@ pub async fn apply_update(
         restart,
         restart_mode,
         guard,
+        tasks: state.tasks.clone(),
         job_id: task_job_id,
         kind: UpdateKind::Apply,
     }));
@@ -279,10 +309,17 @@ pub async fn rollback_update(
         current_version(),
     )));
     jobs.register(job_id.clone(), progress.clone());
+    // 登记统一任务（FR-131）
+    state.tasks.register_with_id(
+        job_id.clone(),
+        TaskKind::Update,
+        Some("回滚更新".to_string()),
+    );
 
     let data_dir = state.config.data.data_dir.clone();
     let restart = state.restart.clone();
     let restart_mode = RestartMode::from_config(&state.settings.update().restart_mode);
+    let tasks = state.tasks.clone();
     let task_job_id = job_id.clone();
     let progress_task = progress.clone();
     tokio::spawn(async move {
@@ -305,13 +342,17 @@ pub async fn rollback_update(
                     UpdateKind::Rollback,
                 )
                 .await;
+                // 同步统一任务终态（FR-131）：回滚成功（即将重启）视为 succeeded
+                sync_update_task_state(&tasks, &task_job_id, None);
             }
             Err(e) => {
                 tracing::warn!(任务 = %task_job_id, "在线更新回滚任务失败");
+                let msg = format!("{e}");
                 progress_task
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
-                    .fail(format!("{e}"));
+                    .fail(msg.clone());
+                sync_update_task_state(&tasks, &task_job_id, Some(msg));
             }
         }
     });
@@ -329,6 +370,7 @@ struct ApplyJobCtx {
     restart: Arc<update::RestartHandle>,
     restart_mode: RestartMode,
     guard: ApplyGuard,
+    tasks: Arc<TaskRegistry>,
     job_id: String,
     kind: UpdateKind,
 }
@@ -358,13 +400,17 @@ async fn run_apply_job(ctx: ApplyJobCtx) {
                 ctx.kind,
             )
             .await;
+            // 同步统一任务终态（FR-131）：替换成功（即将重启）视为 succeeded
+            sync_update_task_state(&ctx.tasks, &ctx.job_id, None);
         }
         Err(e) => {
             tracing::warn!(任务 = %ctx.job_id, "在线更新应用任务失败");
+            let msg = format!("{e}");
             ctx.progress
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .fail(format!("{e}"));
+                .fail(msg.clone());
+            sync_update_task_state(&ctx.tasks, &ctx.job_id, Some(msg));
         }
     }
 }

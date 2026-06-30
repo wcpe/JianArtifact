@@ -85,6 +85,7 @@ async fn 测试用状态() -> (AppState, tempfile::TempDir) {
             .unwrap(),
         ),
         host_system: std::sync::Arc::new(tokio::sync::Mutex::new(sysinfo::System::new())),
+        tasks: std::sync::Arc::new(jianartifact::api::TaskRegistry::default()),
     };
     (state, dir)
 }

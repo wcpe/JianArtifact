@@ -19,7 +19,7 @@ use crate::migrate::{
     OnlinePullProgress,
 };
 
-use super::{ApiError, AppState, Identity, MigrationJobs};
+use super::{ApiError, AppState, Identity, MigrationJobs, TaskKind, TaskState};
 
 /// 把迁移入口错误映射为 HTTP 错误。
 impl From<MigrateError> for ApiError {
@@ -91,6 +91,7 @@ pub struct NexusOfflinePreviewRequest {
 /// 上万 blob 的同步遍历会在前置反代后超时（504），故复用 FR-83 异步 job 基建：立即返回 `job_id`（202），
 /// 后台执行枚举，结果经 `GET /migrate/jobs/{id}` 进度的 `offline_preview` 字段轮询取回。
 pub async fn preview_nexus_offline(
+    State(state): State<AppState>,
     Extension(jobs): Extension<Arc<MigrationJobs>>,
     identity: Identity,
     Json(req): Json<NexusOfflinePreviewRequest>,
@@ -115,7 +116,14 @@ pub async fn preview_nexus_offline(
     let progress = Arc::new(Mutex::new(OnlinePullProgress::default()));
     let control = Arc::new(JobControl::default());
     jobs.register(job_id.clone(), progress.clone(), control);
+    // 登记统一任务（FR-131）：预览为枚举、不参与迁移单飞门（可与搬运并行），故用普通 register
+    state.tasks.register_with_id(
+        job_id.clone(),
+        TaskKind::Migration,
+        Some("离线预览".to_string()),
+    );
 
+    let tasks = state.tasks.clone();
     let task_job_id = job_id.clone();
     tokio::spawn(async move {
         // 离线枚举是同步阻塞文件 IO（遍历目录 + 读 .properties），放阻塞线程池，不占异步工作线程
@@ -124,23 +132,27 @@ pub async fn preview_nexus_offline(
         })
         .await;
 
-        let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
-        match result {
-            Ok(Ok(repos)) => {
-                // total_assets 记枚举到的 blob 总数，供 UI 展示规模
-                p.total_assets = repos.iter().map(|r| r.blob_count).sum();
-                p.offline_preview = Some(repos);
-                p.phase = OnlinePullPhase::Done;
+        let final_phase = {
+            let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
+            match result {
+                Ok(Ok(repos)) => {
+                    // total_assets 记枚举到的 blob 总数，供 UI 展示规模
+                    p.total_assets = repos.iter().map(|r| r.blob_count).sum();
+                    p.offline_preview = Some(repos);
+                    p.phase = OnlinePullPhase::Done;
+                }
+                Ok(Err(e)) => {
+                    p.phase = OnlinePullPhase::Failed;
+                    p.error = Some(e.to_string());
+                }
+                Err(e) => {
+                    p.phase = OnlinePullPhase::Failed;
+                    p.error = Some(format!("离线枚举任务异常: {e}"));
+                }
             }
-            Ok(Err(e)) => {
-                p.phase = OnlinePullPhase::Failed;
-                p.error = Some(e.to_string());
-            }
-            Err(e) => {
-                p.phase = OnlinePullPhase::Failed;
-                p.error = Some(format!("离线枚举任务异常: {e}"));
-            }
-        }
+            p.phase
+        };
+        sync_migration_task_state(&tasks, &task_job_id, final_phase);
         tracing::info!(任务 = %task_job_id, "离线 blob store 预览枚举任务结束");
     });
 
@@ -176,6 +188,10 @@ pub async fn migrate_nexus_proxy(
     if offline_path.is_empty() {
         return Err(ApiError::BadRequest("offline_path 不能为空".to_string()));
     }
+    // 迁移单飞早拒（FR-131）：昂贵同步枚举前先快查在途迁移，已有即 409、不白跑上游
+    if state.tasks.migration_in_flight() {
+        return Err(ApiError::Conflict("已有迁移任务在途".to_string()));
+    }
 
     // 同步阶段（失败即 400/502、不开任务）：在线枚举源 proxy 仓库配置（格式 / 上游地址）
     // 持随 AppState 共享的出站网络热替换槽，出站时取当前 client（含运行时 PATCH 后的新代理）
@@ -183,8 +199,15 @@ pub async fn migrate_nexus_proxy(
     let source_repos =
         migrate::discover_repositories(&client, &req.base_url, req.auth_ref.as_deref()).await?;
 
-    // 登记任务进度 + 控制句柄，起后台任务执行搬运（大库不阻塞请求、不在反代后 504，FR-125），立即返回 job_id（202）
+    // 迁移单飞（FR-131）：原子「检查无在途迁移 → 登记统一任务」，已有在途即 409。
     let job_id = Uuid::new_v4().to_string();
+    if !state
+        .tasks
+        .try_begin_migration(job_id.clone(), Some("离线 proxy 搬运".to_string()))
+    {
+        return Err(ApiError::Conflict("已有迁移任务在途".to_string()));
+    }
+    // 登记任务进度 + 控制句柄，起后台任务执行搬运（大库不阻塞请求、不在反代后 504，FR-125），立即返回 job_id（202）
     let progress = Arc::new(Mutex::new(OnlinePullProgress::default()));
     let control = Arc::new(JobControl::default());
     jobs.register(job_id.clone(), progress.clone(), control.clone());
@@ -192,6 +215,7 @@ pub async fn migrate_nexus_proxy(
     let meta = state.meta.clone();
     let artifacts = state.artifacts.clone();
     let formats = state.formats.clone();
+    let tasks = state.tasks.clone();
     let task_job_id = job_id.clone();
     tokio::spawn(async move {
         let result = migrate::migrate_proxy_repositories_with_progress(
@@ -204,20 +228,24 @@ pub async fn migrate_nexus_proxy(
             &control,
         )
         .await;
-        let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
-        p.current_path = None;
-        match result {
-            // 被取消时 with_progress 已标 Cancelled 终态，不覆盖为 Done（FR-91）
-            Ok(_) if p.phase == OnlinePullPhase::Cancelled => {}
-            Ok(_) => {
-                p.phase = OnlinePullPhase::Done;
-                p.current_repo = None;
+        let final_phase = {
+            let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
+            p.current_path = None;
+            match result {
+                // 被取消时 with_progress 已标 Cancelled 终态，不覆盖为 Done（FR-91）
+                Ok(_) if p.phase == OnlinePullPhase::Cancelled => {}
+                Ok(_) => {
+                    p.phase = OnlinePullPhase::Done;
+                    p.current_repo = None;
+                }
+                Err(e) => {
+                    p.phase = OnlinePullPhase::Failed;
+                    p.error = Some(e.to_string());
+                }
             }
-            Err(e) => {
-                p.phase = OnlinePullPhase::Failed;
-                p.error = Some(e.to_string());
-            }
-        }
+            p.phase
+        };
+        sync_migration_task_state(&tasks, &task_job_id, final_phase);
         tracing::info!(任务 = %task_job_id, "离线 proxy 仓库搬运后台任务结束");
     });
 
@@ -254,6 +282,10 @@ pub async fn migrate_nexus_hosted(
     if offline_path.is_empty() {
         return Err(ApiError::BadRequest("offline_path 不能为空".to_string()));
     }
+    // 迁移单飞早拒（FR-131）：昂贵同步枚举前先快查在途迁移，已有即 409、不白跑上游
+    if state.tasks.migration_in_flight() {
+        return Err(ApiError::Conflict("已有迁移任务在途".to_string()));
+    }
 
     // 同步阶段（失败即 400/502、不开任务）：在线枚举源 hosted 仓库配置（格式 / 可见性）
     // 持随 AppState 共享的出站网络热替换槽，出站时取当前 client（含运行时 PATCH 后的新代理）
@@ -262,7 +294,14 @@ pub async fn migrate_nexus_hosted(
         migrate::discover_repositories(&client, &req.base_url, req.auth_ref.as_deref()).await?;
 
     // 登记任务进度 + 控制句柄，起后台任务执行搬运（大库不阻塞请求、不在反代后 504，FR-125），立即返回 job_id（202）
+    // 迁移单飞（FR-131）：原子「检查无在途迁移 → 登记统一任务」，已有在途即 409。
     let job_id = Uuid::new_v4().to_string();
+    if !state
+        .tasks
+        .try_begin_migration(job_id.clone(), Some("离线 hosted 搬运".to_string()))
+    {
+        return Err(ApiError::Conflict("已有迁移任务在途".to_string()));
+    }
     let progress = Arc::new(Mutex::new(OnlinePullProgress::default()));
     let control = Arc::new(JobControl::default());
     jobs.register(job_id.clone(), progress.clone(), control.clone());
@@ -271,6 +310,7 @@ pub async fn migrate_nexus_hosted(
     let artifacts = state.artifacts.clone();
     let formats = state.formats.clone();
     let max_size = state.config.limits.max_artifact_size;
+    let tasks = state.tasks.clone();
     let task_job_id = job_id.clone();
     tokio::spawn(async move {
         let result = migrate::migrate_hosted_repositories_with_progress(
@@ -284,19 +324,23 @@ pub async fn migrate_nexus_hosted(
             &control,
         )
         .await;
-        let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
-        p.current_path = None;
-        match result {
-            Ok(_) if p.phase == OnlinePullPhase::Cancelled => {}
-            Ok(_) => {
-                p.phase = OnlinePullPhase::Done;
-                p.current_repo = None;
+        let final_phase = {
+            let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
+            p.current_path = None;
+            match result {
+                Ok(_) if p.phase == OnlinePullPhase::Cancelled => {}
+                Ok(_) => {
+                    p.phase = OnlinePullPhase::Done;
+                    p.current_repo = None;
+                }
+                Err(e) => {
+                    p.phase = OnlinePullPhase::Failed;
+                    p.error = Some(e.to_string());
+                }
             }
-            Err(e) => {
-                p.phase = OnlinePullPhase::Failed;
-                p.error = Some(e.to_string());
-            }
-        }
+            p.phase
+        };
+        sync_migration_task_state(&tasks, &task_job_id, final_phase);
         tracing::info!(任务 = %task_job_id, "离线 hosted 仓库搬运后台任务结束");
     });
 
@@ -378,6 +422,10 @@ pub async fn migrate_nexus_online(
     if req.repositories.is_empty() {
         return Err(ApiError::BadRequest("未选择要迁移的仓库".to_string()));
     }
+    // 迁移单飞早拒（FR-131）：昂贵同步枚举前先快查在途迁移，已有即 409、不白跑上游
+    if state.tasks.migration_in_flight() {
+        return Err(ApiError::Conflict("已有迁移任务在途".to_string()));
+    }
 
     // 持随 AppState 共享的出站网络热替换槽，出站时取当前 client（含运行时 PATCH 后的新代理）
     let client = HttpNexusClient::with_network_state(state.settings.network.clone());
@@ -411,8 +459,15 @@ pub async fn migrate_nexus_online(
         });
     }
 
-    // 登记任务进度共享态与控制句柄，起后台任务执行枚举 + 下载，端点立即返回 job_id（202）
+    // 迁移单飞（FR-131）：原子「检查无在途迁移 → 登记统一任务」，已有在途即 409。
     let job_id = Uuid::new_v4().to_string();
+    if !state
+        .tasks
+        .try_begin_migration(job_id.clone(), Some("在线拉取迁移".to_string()))
+    {
+        return Err(ApiError::Conflict("已有迁移任务在途".to_string()));
+    }
+    // 登记任务进度共享态与控制句柄，起后台任务执行枚举 + 下载，端点立即返回 job_id（202）
     let progress = Arc::new(Mutex::new(OnlinePullProgress::default()));
     let control = Arc::new(JobControl::default());
     jobs.register(job_id.clone(), progress.clone(), control.clone());
@@ -422,6 +477,7 @@ pub async fn migrate_nexus_online(
     let formats = state.formats.clone();
     let max_size = state.config.limits.max_artifact_size;
     let base_url = req.base_url.clone();
+    let tasks = state.tasks.clone();
     let task_job_id = job_id.clone();
     tokio::spawn(async move {
         let result = migrate::migrate_online_with_progress(
@@ -437,25 +493,50 @@ pub async fn migrate_nexus_online(
             &control,
         )
         .await;
-        let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
-        p.current_path = None;
-        match result {
-            // 被取消时 migrate_online_with_progress 已把进度标为 Cancelled 终态，
-            // 此处不得覆盖为 Done（取消不算成功完成，FR-91）
-            Ok(_) if p.phase == OnlinePullPhase::Cancelled => {}
-            Ok(_) => {
-                p.phase = OnlinePullPhase::Done;
-                p.current_repo = None;
+        let final_phase = {
+            let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
+            p.current_path = None;
+            match result {
+                // 被取消时 migrate_online_with_progress 已把进度标为 Cancelled 终态，
+                // 此处不得覆盖为 Done（取消不算成功完成，FR-91）
+                Ok(_) if p.phase == OnlinePullPhase::Cancelled => {}
+                Ok(_) => {
+                    p.phase = OnlinePullPhase::Done;
+                    p.current_repo = None;
+                }
+                Err(e) => {
+                    p.phase = OnlinePullPhase::Failed;
+                    p.error = Some(e.to_string());
+                }
             }
-            Err(e) => {
-                p.phase = OnlinePullPhase::Failed;
-                p.error = Some(e.to_string());
-            }
-        }
+            p.phase
+        };
+        // 据 kind 专表终态同步统一注册表（FR-131），释放迁移单飞门
+        sync_migration_task_state(&tasks, &task_job_id, final_phase);
         tracing::info!(任务 = %task_job_id, "在线拉取后台任务结束");
     });
 
     Ok((StatusCode::ACCEPTED, Json(JobCreatedDto { job_id })))
+}
+
+/// 把迁移 kind 专表的最终阶段映射并同步到统一任务注册表（FR-131）。
+///
+/// 终态收敛迁移单飞门：`done → succeeded` / `failed → failed`（带错误） / `cancelled → cancelled`；
+/// 其余非终态阶段不更新（理论上后台任务结束时阶段已是终态之一）。
+fn sync_migration_task_state(
+    tasks: &Arc<super::TaskRegistry>,
+    job_id: &str,
+    phase: OnlinePullPhase,
+) {
+    match phase {
+        OnlinePullPhase::Done => tasks.set_state(job_id, TaskState::Succeeded, None),
+        OnlinePullPhase::Cancelled => tasks.set_state(job_id, TaskState::Cancelled, None),
+        OnlinePullPhase::Failed => {
+            tasks.set_state(job_id, TaskState::Failed, Some("迁移失败".to_string()))
+        }
+        // 非终态：后台任务正常结束不会停在此（防御性不更新，避免误把在途置终态）
+        OnlinePullPhase::Enumerating | OnlinePullPhase::Downloading | OnlinePullPhase::Paused => {}
+    }
 }
 
 /// 查询某在线拉取任务的进度（仅管理员，FR-83）。未知 id 返回 404。
@@ -547,4 +628,103 @@ pub async fn migrate_nexus_job_resume(
     control.request_resume();
     tracing::info!(任务 = %job_id, "已请求继续在线拉取任务");
     Ok(StatusCode::OK)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::tests::{测试用状态, 读_json};
+    use super::*;
+    use crate::auth::hash_password;
+    use crate::meta::Role;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    /// 在状态库内建一个指定角色用户并签发其会话 JWT。
+    async fn 签发令牌(state: &AppState, name: &str, role: Role) -> String {
+        let uid = state
+            .meta
+            .create_user(name, &hash_password("pw").unwrap(), role)
+            .await
+            .unwrap();
+        state.jwt.issue(&uid, name, role).unwrap()
+    }
+
+    /// 便捷：带 Bearer 令牌 POST JSON 到某迁移端点。
+    async fn 请求(
+        state: AppState,
+        path: &str,
+        令牌: &str,
+        body: serde_json::Value,
+    ) -> axum::response::Response {
+        let app = super::super::build_router(state);
+        app.oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(path)
+                .header("Authorization", format!("Bearer {令牌}"))
+                .header("Content-Type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn 在线迁移_已有在途迁移时第二个_409_且不白跑上游() {
+        // 预置一个在途迁移任务占用单飞门，触发在线迁移应在同步枚举前早拒 409
+        let (state, _dir) = 测试用状态().await;
+        state
+            .tasks
+            .try_begin_migration("in-flight".to_string(), Some("占位".to_string()));
+        let token = 签发令牌(&state, "admin", Role::Admin).await;
+        let resp = 请求(
+            state,
+            "/api/v1/migrate/nexus/online/migrate",
+            &token,
+            serde_json::json!({ "base_url": "http://127.0.0.1:0", "repositories": [{ "source": "a" }] }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        let body = 读_json(resp).await;
+        assert_eq!(body["error"]["message"], "已有迁移任务在途");
+    }
+
+    #[tokio::test]
+    async fn 离线proxy搬运_已有在途迁移时第二个_409() {
+        let (state, _dir) = 测试用状态().await;
+        state
+            .tasks
+            .try_begin_migration("in-flight".to_string(), None);
+        let token = 签发令牌(&state, "admin", Role::Admin).await;
+        let resp = 请求(
+            state,
+            "/api/v1/migrate/nexus/proxy/migrate",
+            &token,
+            serde_json::json!({ "base_url": "http://127.0.0.1:0", "offline_path": "/tmp/x" }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn 在线迁移_无在途时不被单飞门拦() {
+        // 无在途迁移时单飞门放行，端点进入同步枚举阶段；本测试只断言「未被 409 早拒」
+        //（base_url 指向不可达地址，枚举失败应是 502，而非 409）
+        let (state, _dir) = 测试用状态().await;
+        let token = 签发令牌(&state, "admin", Role::Admin).await;
+        let resp = 请求(
+            state,
+            "/api/v1/migrate/nexus/online/migrate",
+            &token,
+            serde_json::json!({ "base_url": "http://127.0.0.1:0", "repositories": [{ "source": "a" }] }),
+        )
+        .await;
+        assert_ne!(
+            resp.status(),
+            StatusCode::CONFLICT,
+            "无在途迁移时不应被单飞门 409 拦截"
+        );
+    }
 }

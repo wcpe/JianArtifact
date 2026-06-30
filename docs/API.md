@@ -358,6 +358,16 @@
 - **响应**：`200 OK`，无响应体。对**已结束**任务（`done` / `failed` / `cancelled`）的控制为**幂等空操作**（不报错、不改终态）；`pause` 对已取消任务亦为空操作。
 - **错误**：`401` 未认证；`403` 非管理员；`404` 未知 `job_id`（含已被淘汰的旧任务）。
 
+### 统一任务注册表（FR-131）
+
+把迁移 / 在线更新 / 漏洞库刷新等多类长耗时任务收口到**同一进程内注册表**，统一列出活跃 + 近期任务、查单任务进度。进程内、**有界、不落库**——服务器重启即清（与 ADR-0019 一致）。各 kind 进度明细仍由各自端点提供（`GET /migrate/jobs/{id}` / `GET /update/jobs/{id}`，契约不变），本端点只附带统一记录与（若专表仍在）进度明细。
+
+- **方法 / 路径**：`GET /api/v1/tasks`（跨 kind 活跃 + 近期列表）、`GET /api/v1/tasks/{id}`（单任务统一记录 + 进度明细）。仅管理员可调用。
+- **列表响应**（`tasks`）：`[{ "id", "kind", "state", "label"?, "started_at", "updated_at", "finished_at"?, "error"? }]`，按登记时序。`kind` ∈ `migration` / `update` / `vuln`；`state` ∈ `running` / `paused` / `succeeded` / `failed` / `cancelled`；时间为 Unix 秒。
+- **详情响应**（`tasks/{id}`）：上述统一记录字段（展平）+ 可选 `migration`（`kind == migration` 且专表仍有该 job 时为 `OnlinePullProgress` 进度）/ `update`（`kind == update` 时为 `UpdateProgress` 进度）。
+- **错误**：`401` 未认证；`403` 非管理员；`404` 未知 `id`。
+- **迁移单飞**：迁移**搬运**触发（`online/migrate`、`proxy/migrate`、`hosted/migrate`）同时只允许一个在途，已有在途时第二个返回 `409`「已有迁移任务在途」；离线**预览**（枚举）不受单飞约束、可与搬运并行。
+
 > **FR-126 异步化**：检查 / 应用 / 回滚改为**进程内异步 job**——触发端点立即返回 `202 + { job_id }`，实际执行在后台，进度经 `GET /api/v1/update/jobs/{id}` 轮询（阶段式：检查 / 下载 / 校验 / 替换 / 重启，**不返回假百分比**）。检查结果与上次 apply 终态**留存到数据目录状态文件**，重启后经 `GET /api/v1/update/jobs` / `GET /api/v1/update/check` 仍可读回（应对二进制替换重启后续看）。全过程写 FR-107 系统日志。下方各端点的安全门（仅 sha256 / 出站默认关闭 / 单飞互斥 / token 脱敏）不变。
 
 ### 读取上次检查结果（仅 Admin，FR-126）

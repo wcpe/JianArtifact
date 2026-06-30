@@ -90,6 +90,7 @@ impl Fixture {
                 .unwrap(),
             ),
             host_system: std::sync::Arc::new(tokio::sync::Mutex::new(sysinfo::System::new())),
+            tasks: std::sync::Arc::new(jianartifact::api::TaskRegistry::default()),
         };
         Self { state, _dir: dir }
     }
@@ -356,6 +357,7 @@ async fn 审计写入任务缺失时业务仍成功() {
             .unwrap(),
         ),
         host_system: std::sync::Arc::new(tokio::sync::Mutex::new(sysinfo::System::new())),
+        tasks: std::sync::Arc::new(jianartifact::api::TaskRegistry::default()),
     };
     let hash = auth::hash_password("S3cret!").unwrap();
     meta.create_user("admin", &hash, Role::Admin).await.unwrap();

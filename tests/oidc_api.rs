@@ -199,6 +199,7 @@ async fn build_state(oidc: Option<OidcProvider>) -> (AppState, tempfile::TempDir
             .unwrap(),
         ),
         host_system: std::sync::Arc::new(tokio::sync::Mutex::new(sysinfo::System::new())),
+        tasks: std::sync::Arc::new(jianartifact::api::TaskRegistry::default()),
     };
     (state, dir)
 }

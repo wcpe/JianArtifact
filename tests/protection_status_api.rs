@@ -98,6 +98,7 @@ impl Fixture {
                 .unwrap(),
             ),
             host_system: std::sync::Arc::new(tokio::sync::Mutex::new(sysinfo::System::new())),
+            tasks: std::sync::Arc::new(jianartifact::api::TaskRegistry::default()),
         };
         Self { state, _dir: dir }
     }

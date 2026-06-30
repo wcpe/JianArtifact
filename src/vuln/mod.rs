@@ -256,13 +256,27 @@ fn sanitize(name: &str) -> String {
         .collect()
 }
 
+/// 周期刷新观察者（FR-131）：让上层把每轮漏洞库刷新登记进统一任务注册表。
+///
+/// **分层守恒**：trait 定义在 `vuln`（低于 `api`），`vuln` 不反向依赖 `api`；由 `main` 注入
+/// 一个由 api 层 `TaskRegistry` 支撑的适配器实现。每轮刷新前 `on_start` 取任务 id、刷新后
+/// `on_finish` 置终态。回调应轻量、不阻塞、不 panic（实现内自行容错）。
+pub trait RefreshObserver: Send + Sync {
+    /// 一轮刷新开始：返回该任务的 id，供结束时定位。
+    fn on_start(&self) -> String;
+    /// 一轮刷新结束：`ok` 为是否成功，`落库公告数` 供日志 / 展示。
+    fn on_finish(&self, task_id: &str, ok: bool, advisories: usize);
+}
+
 /// 启动后台周期刷新任务（FR-70 刷新机制）。
 ///
 /// 仅当 `cfg.enabled` 且 `cfg.ecosystems` 非空时启动；返回 `JoinHandle` 供调用方持有。
 /// 任务先立即刷新一次，随后每隔 `refresh_interval_secs` 刷新一次；刷新失败不退出循环。
+/// `observer` 可选（`None` 时行为同旧、向后兼容）：给定则每轮刷新登记进统一任务注册表（FR-131）。
 pub fn spawn_refresh_loop<S>(
     mirror: Arc<VulnMirror<S>>,
     cfg: VulnConfig,
+    observer: Option<Arc<dyn RefreshObserver>>,
 ) -> Option<tokio::task::JoinHandle<()>>
 where
     S: MirrorSource + 'static,
@@ -282,7 +296,13 @@ where
         let mut ticker = tokio::time::interval(interval);
         loop {
             ticker.tick().await;
+            // 登记本轮刷新为统一任务（FR-131）；observer 缺省时不登记
+            let task_id = observer.as_ref().map(|o| o.on_start());
             let total = mirror.refresh_all(&ecosystems).await;
+            if let (Some(obs), Some(id)) = (observer.as_ref(), task_id.as_ref()) {
+                // 刷新失败不退出循环（refresh_all 已容错），统计落库数即视为完成
+                obs.on_finish(id, true, total);
+            }
             info!(落库公告数 = total, "漏洞库离线镜像本轮刷新结束");
         }
     });
@@ -475,7 +495,7 @@ mod tests {
 
         // enabled = false → 不启动
         let mirror = Arc::new(VulnMirror::new(store.clone(), mk(false), dir.path()));
-        assert!(spawn_refresh_loop(mirror, VulnConfig::default()).is_none());
+        assert!(spawn_refresh_loop(mirror, VulnConfig::default(), None).is_none());
 
         // 启用但生态为空 → 也不启动
         let mirror2 = Arc::new(VulnMirror::new(store.clone(), mk(false), dir.path()));
@@ -484,7 +504,7 @@ mod tests {
             ecosystems: Vec::new(),
             ..VulnConfig::default()
         };
-        assert!(spawn_refresh_loop(mirror2, cfg2).is_none());
+        assert!(spawn_refresh_loop(mirror2, cfg2, None).is_none());
     }
 
     /// 便捷：构造一条候选受影响记录（仅含匹配判定所需字段）。

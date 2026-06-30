@@ -66,6 +66,8 @@ pub mod settings;
 mod slowloris;
 mod system;
 mod system_logs;
+mod task_registry;
+mod tasks;
 mod tokens;
 mod update;
 mod update_jobs;
@@ -90,6 +92,7 @@ pub use migration_jobs::MigrationJobs;
 pub use oidc_routes::OidcFlowStore;
 pub use protection_state::{ProtectionSnapshot, ProtectionState};
 pub use rate_limit::RateLimiter;
+pub use task_registry::{TaskKind, TaskRegistry, TaskState};
 pub use update_jobs::UpdateJobs;
 pub use usage::{channel as usage_channel, spawn_usage_pruner, spawn_usage_writer, UsageSink};
 pub use waf::WafRuleSet;
@@ -170,6 +173,12 @@ pub struct AppState {
     /// 经 `Mutex` 串行化按请求采样 CPU / 内存 / 磁盘 / uptime。仅 Admin 端点 `GET /api/v1/monitor/host`
     /// 取用；纯本机内部采样、不外发、不落库、不后台轮询。
     pub host_system: Arc<tokio::sync::Mutex<sysinfo::System>>,
+    /// 统一进程内任务注册表（FR-131，修订 ADR-0019）：把迁移 / 在线更新 / 漏洞库刷新等多类长耗时
+    /// 任务收口到同一注册表，存轻量记录（kind / 状态 / 起止时间），供 `GET /api/v1/tasks` 列出活跃 +
+    /// 近期、`GET /api/v1/tasks/{id}` 查进度，并据其做迁移单飞判定。进度明细仍归各 kind 专表
+    /// （`MigrationJobs` / `UpdateJobs`），统一表只存轻量记录、与专表同 `job_id` 关联。进程内不落库、
+    /// 重启即清。在 `main` 构造以便 vuln 周期刷新登记，随状态共享。
+    pub tasks: Arc<TaskRegistry>,
 }
 
 /// 统一 API 错误类型，转换为 JSON 响应 `{"error":{"code","message"}}`。
@@ -463,6 +472,9 @@ pub fn build_router(state: AppState) -> Router {
             "/migrate/nexus/online/migrate",
             post(migrate::migrate_nexus_online),
         )
+        // 统一任务注册表（FR-131）：跨 kind 列出活跃 + 近期任务、查单任务进度（仅 Admin）
+        .route("/tasks", get(tasks::list_tasks))
+        .route("/tasks/{id}", get(tasks::get_task))
         .route("/migrate/jobs", get(migrate::migrate_nexus_jobs))
         .route("/migrate/jobs/{id}", get(migrate::migrate_nexus_job))
         .route(
@@ -737,6 +749,8 @@ mod tests {
             ),
             // 默认测试状态：主机监控采样器以空 System 装载（按请求刷新采样）
             host_system: Arc::new(tokio::sync::Mutex::new(sysinfo::System::new())),
+            // 默认测试状态：统一任务注册表为空（FR-131）
+            tasks: Arc::new(TaskRegistry::default()),
         };
         (state, dir)
     }
