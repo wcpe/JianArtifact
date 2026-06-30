@@ -834,6 +834,216 @@ fn 通道分流_prerelease_同核心dev构建判为可更新() {
     );
 }
 
+// ---------- FR-138：压缩包资产名推导 ----------
+
+#[test]
+fn 压缩包资产名_三平台统一_zip后缀() {
+    // 三平台均用 .zip，不再按平台区分 tar.gz / zip
+    assert_eq!(
+        archive_asset_name("0.4.0", "x86_64-unknown-linux-musl"),
+        "jianartifact-0.4.0-x86_64-unknown-linux-musl.zip"
+    );
+    assert_eq!(
+        archive_asset_name("0.4.0", "x86_64-pc-windows-msvc"),
+        "jianartifact-0.4.0-x86_64-pc-windows-msvc.zip"
+    );
+    assert_eq!(
+        archive_asset_name("1.2.3", "aarch64-apple-darwin"),
+        "jianartifact-1.2.3-aarch64-apple-darwin.zip"
+    );
+}
+
+// ---------- FR-138：解压 zip 取出二进制 ----------
+
+/// 构造一个内含单个二进制文件的 zip 字节流（测试辅助）。
+fn make_zip_bytes(inner_name: &str, content: &[u8]) -> Vec<u8> {
+    use std::io::Write;
+    let buf = std::io::Cursor::new(Vec::new());
+    let mut zw = zip::ZipWriter::new(buf);
+    let opts =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    zw.start_file(inner_name, opts).unwrap();
+    zw.write_all(content).unwrap();
+    zw.finish().unwrap().into_inner()
+}
+
+#[tokio::test]
+async fn 解压_zip_取出二进制内容() {
+    let dir = tempfile::tempdir().unwrap();
+    let zip_path = dir.path().join("asset.zip");
+    let bin_content = b"BINARY-CONTENT-FROM-ZIP";
+    let zip_bytes = make_zip_bytes("jianartifact", bin_content);
+    tokio::fs::write(&zip_path, &zip_bytes).await.unwrap();
+
+    let out_path = dir.path().join("extracted_bin");
+    extract_zip_binary(&zip_path, &out_path)
+        .await
+        .expect("解压应成功");
+    let got = tokio::fs::read(&out_path).await.unwrap();
+    assert_eq!(got, bin_content);
+}
+
+#[tokio::test]
+async fn 解压_zip_文件不存在_报错() {
+    let dir = tempfile::tempdir().unwrap();
+    let zip_path = dir.path().join("nonexistent.zip");
+    let out_path = dir.path().join("out");
+    let err = extract_zip_binary(&zip_path, &out_path).await.unwrap_err();
+    assert!(matches!(err, UpdateError::Io(_)));
+}
+
+#[tokio::test]
+async fn 解压_zip_内容损坏_报错() {
+    let dir = tempfile::tempdir().unwrap();
+    let zip_path = dir.path().join("bad.zip");
+    tokio::fs::write(&zip_path, b"this is not a zip file")
+        .await
+        .unwrap();
+    let out_path = dir.path().join("out");
+    let err = extract_zip_binary(&zip_path, &out_path).await.unwrap_err();
+    assert!(matches!(err, UpdateError::Io(_)));
+}
+
+// ---------- FR-138：apply 优先选压缩包资产、回落裸 exe ----------
+
+/// 构造一份同时含裸 exe + zip 的 Release（模拟过渡版双产物）。
+fn release_with_zip_and_bare(
+    version: &str,
+    bare_bin: &[u8],
+    zip_content: &[u8],
+) -> (Release, HashMap<String, Vec<u8>>) {
+    let target = current_target().expect("测试运行平台应为受支持的三目标之一");
+    let bin_name = asset_name(version, target);
+    let sha_name = format!("{bin_name}.sha256");
+    let zip_name = archive_asset_name(version, target);
+    let zip_sha_name = format!("{zip_name}.sha256");
+    let bin_url = format!("https://example/{bin_name}");
+    let sha_url = format!("https://example/{sha_name}");
+    let zip_url = format!("https://example/{zip_name}");
+    let zip_sha_url = format!("https://example/{zip_sha_name}");
+
+    let zip_sha = sha256_hex(zip_content);
+    let bare_sha = sha256_hex(bare_bin);
+
+    let release = Release {
+        tag_name: format!("v{version}"),
+        name: format!("Release {version}"),
+        body: "发布说明".to_string(),
+        assets: vec![
+            ReleaseAsset {
+                name: bin_name,
+                download_url: bin_url.clone(),
+            },
+            ReleaseAsset {
+                name: sha_name,
+                download_url: sha_url.clone(),
+            },
+            ReleaseAsset {
+                name: zip_name,
+                download_url: zip_url.clone(),
+            },
+            ReleaseAsset {
+                name: zip_sha_name,
+                download_url: zip_sha_url.clone(),
+            },
+        ],
+    };
+    let mut assets = HashMap::new();
+    assets.insert(bin_url, bare_bin.to_vec());
+    assets.insert(sha_url, bare_sha.into_bytes());
+    assets.insert(zip_url, zip_content.to_vec());
+    assets.insert(zip_sha_url, zip_sha.into_bytes());
+    (release, assets)
+}
+
+#[tokio::test]
+async fn apply_优先选压缩包_解压后替换() {
+    let dir = tempfile::tempdir().unwrap();
+    let exe = dir.path().join("jianartifact");
+    tokio::fs::write(&exe, b"OLD-BINARY").await.unwrap();
+
+    let inner_bin = b"NEW-BINARY-FROM-ZIP";
+    let target = current_target().unwrap();
+    let ext = target_ext(target);
+    let zip_bytes = make_zip_bytes(&format!("jianartifact{ext}"), inner_bin);
+    let (release, assets) = release_with_zip_and_bare("0.4.0", b"BARE-BIN", &zip_bytes);
+    let source = FakeSource::new(release, assets);
+
+    let outcome = apply_update(&source, UpdateChannel::Stable, "0.3.0", &exe, dir.path())
+        .await
+        .expect("优先选 zip 路径应成功");
+    assert_eq!(outcome.new_version, "0.4.0");
+    // exe 内容应为从 zip 中解压出的二进制
+    assert_eq!(tokio::fs::read(&exe).await.unwrap(), inner_bin);
+}
+
+/// 构造仅含裸 exe（无 zip）的 Release（模拟旧版发布，用于测试回落）。
+fn release_only_bare(version: &str, bin: &[u8]) -> (Release, HashMap<String, Vec<u8>>) {
+    release_with_assets(version, bin)
+}
+
+#[tokio::test]
+async fn apply_无压缩包资产_回落裸_exe() {
+    let dir = tempfile::tempdir().unwrap();
+    let exe = dir.path().join("jianartifact");
+    tokio::fs::write(&exe, b"OLD-BINARY").await.unwrap();
+
+    let bare_bin = b"NEW-BARE-BINARY";
+    let (release, assets) = release_only_bare("0.4.0", bare_bin);
+    let source = FakeSource::new(release, assets);
+
+    let outcome = apply_update(&source, UpdateChannel::Stable, "0.3.0", &exe, dir.path())
+        .await
+        .expect("无 zip 时回落裸 exe 应成功");
+    assert_eq!(outcome.new_version, "0.4.0");
+    assert_eq!(tokio::fs::read(&exe).await.unwrap(), bare_bin);
+}
+
+#[tokio::test]
+async fn apply_zip_sha256_不一致_拒绝解压替换() {
+    let dir = tempfile::tempdir().unwrap();
+    let exe = dir.path().join("jianartifact");
+    tokio::fs::write(&exe, b"OLD-BINARY").await.unwrap();
+
+    let target = current_target().unwrap();
+    let version = "0.4.0";
+    let zip_name = archive_asset_name(version, target);
+    let zip_sha_name = format!("{zip_name}.sha256");
+    let zip_url = format!("https://example/{zip_name}");
+    let zip_sha_url = format!("https://example/{zip_sha_name}");
+
+    // 构造一个有效 zip 但 sha256 故意写错
+    let inner_bin = b"ZIP-CONTENT";
+    let ext = target_ext(target);
+    let zip_bytes = make_zip_bytes(&format!("jianartifact{ext}"), inner_bin);
+    let release = Release {
+        tag_name: format!("v{version}"),
+        name: "x".to_string(),
+        body: String::new(),
+        assets: vec![
+            ReleaseAsset {
+                name: zip_name,
+                download_url: zip_url.clone(),
+            },
+            ReleaseAsset {
+                name: zip_sha_name,
+                download_url: zip_sha_url.clone(),
+            },
+        ],
+    };
+    let mut assets = HashMap::new();
+    assets.insert(zip_url, zip_bytes);
+    assets.insert(zip_sha_url, "0".repeat(64).into_bytes()); // 故意错的 sha256
+
+    let source = FakeSource::new(release, assets);
+    let err = apply_update(&source, UpdateChannel::Stable, "0.3.0", &exe, dir.path())
+        .await
+        .unwrap_err();
+    assert!(matches!(err, UpdateError::ChecksumMismatch));
+    // 旧二进制不变
+    assert_eq!(tokio::fs::read(&exe).await.unwrap(), b"OLD-BINARY");
+}
+
 #[test]
 fn 通道分流_stable_语义不变仍要求严格更高() {
     // stable 通道语义保持不变：核心版本必须严格更高才更新。

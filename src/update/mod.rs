@@ -49,6 +49,8 @@ const TARGET_WINDOWS_X64: &str = "x86_64-pc-windows-msvc";
 const TARGET_MACOS_ARM64: &str = "aarch64-apple-darwin";
 /// 资产名前缀（与 FR-86 命名契约一致：`jianartifact-{version}-{target}{ext}`）。
 const ASSET_PREFIX: &str = "jianartifact";
+/// 压缩包扩展名（FR-138：三平台统一打 zip，避免引入 tar/flate2 新依赖）。
+const ARCHIVE_EXT: &str = ".zip";
 /// 持久回滚备份后缀（FR-104，ADR-0026）：升级前把当前二进制复制为 `{exe}.rollback.bak`，
 /// 作为跨平台一致的单一回滚源；**不被启动清理**（区别于 Windows 临时 `.old`）。
 const ROLLBACK_BACKUP_SUFFIX: &str = ".rollback.bak";
@@ -155,6 +157,13 @@ pub(crate) fn asset_name(version: &str, target: &str) -> String {
         "{ASSET_PREFIX}-{version}-{target}{ext}",
         ext = target_ext(target)
     )
+}
+
+/// 推导压缩包资产名（纯函数，可测；FR-138）：`jianartifact-{version}-{target}.zip`。
+///
+/// 三平台统一打 zip，不按平台区分 tar.gz / zip；zip 内含单个可执行文件（`jianartifact{ext}`）。
+pub(crate) fn archive_asset_name(version: &str, target: &str) -> String {
+    format!("{ASSET_PREFIX}-{version}-{target}{ARCHIVE_EXT}")
 }
 
 /// 解析后的三段语义版本（用于比较，纯函数）。
@@ -511,6 +520,51 @@ fn remove_stale_file(path: &Path, desc: &str) {
     }
 }
 
+/// 从 zip 压缩包中解压第一个文件到指定路径（FR-138，在 `spawn_blocking` 中执行）。
+///
+/// zip 内预期只含一个文件（即可执行二进制）；取第一个文件，按名忽略，直接流式写到 `dest`。
+/// zip 不合法、文件为空或 IO 失败均报 [`UpdateError::Io`]，由调用方清理临时文件。
+fn extract_zip_entry_sync(
+    zip_path: &std::path::Path,
+    dest: &std::path::Path,
+) -> Result<(), UpdateError> {
+    use std::io::{Read, Write};
+    let file = std::fs::File::open(zip_path).map_err(|e| UpdateError::Io(e.to_string()))?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| UpdateError::Io(e.to_string()))?;
+    if archive.is_empty() {
+        return Err(UpdateError::Io("压缩包为空".to_string()));
+    }
+    // 取第一个文件（zip 内含单个二进制，不关注文件名）
+    let mut entry = archive
+        .by_index(0)
+        .map_err(|e| UpdateError::Io(e.to_string()))?;
+    let mut out = std::fs::File::create(dest).map_err(|e| UpdateError::Io(e.to_string()))?;
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let n = entry
+            .read(&mut buf)
+            .map_err(|e| UpdateError::Io(e.to_string()))?;
+        if n == 0 {
+            break;
+        }
+        out.write_all(&buf[..n])
+            .map_err(|e| UpdateError::Io(e.to_string()))?;
+    }
+    out.flush().map_err(|e| UpdateError::Io(e.to_string()))?;
+    Ok(())
+}
+
+/// 异步封装：在阻塞线程池中解压 zip 到 `dest`（FR-138）。
+///
+/// 失败不自行清理 `dest`，由调用方决定清理策略（与 `download_to_file` 保持一致）。
+pub(crate) async fn extract_zip_binary(zip_path: &Path, dest: &Path) -> Result<(), UpdateError> {
+    let zip_path = zip_path.to_path_buf();
+    let dest = dest.to_path_buf();
+    tokio::task::spawn_blocking(move || extract_zip_entry_sync(&zip_path, &dest))
+        .await
+        .map_err(|e| UpdateError::Io(e.to_string()))?
+}
+
 /// 流式下载资产到临时文件，边写边算 sha256（不二次读盘、不整体载入内存），返回实算 hex。
 ///
 /// 失败时尽力删除半截临时文件，不留残留。
@@ -686,47 +740,100 @@ pub async fn apply_update_with_progress<S: ReleaseSource>(
         lock_progress(p).latest_version = Some(latest.clone());
     }
 
-    // 资产名与其 .sha256 名
-    let bin_name = asset_name(&latest, target);
-    let sha_name = format!("{bin_name}.sha256");
-    let bin_asset = release
-        .find_asset(&bin_name)
-        .ok_or_else(|| UpdateError::MissingAsset(bin_name.clone()))?;
-    let sha_asset = release
-        .find_asset(&sha_name)
-        .ok_or_else(|| UpdateError::MissingAsset(sha_name.clone()))?;
-
     // 临时下载目录（数据目录下），按需创建
     let tmp_dir = data_dir.join(UPDATE_TMP_SUBDIR);
     tokio::fs::create_dir_all(&tmp_dir)
         .await
         .map_err(|e| UpdateError::Io(e.to_string()))?;
-    let tmp_bin = tmp_dir.join(&bin_name);
 
-    // 流式下载二进制，边写边算 sha256
+    // FR-138：优先选压缩包资产（zip + .sha256），回落到裸可执行资产（兼容旧版发布）。
+    // zip 路径：下载 zip → 校验 sha256 → 解压取出二进制（staged 直接是解压后的二进制）。
+    // 裸 exe 路径：下载二进制 → 校验 sha256（与现有逻辑一致）。
+    let zip_name = archive_asset_name(&latest, target);
+    let zip_sha_name = format!("{zip_name}.sha256");
+    let use_zip =
+        release.find_asset(&zip_name).is_some() && release.find_asset(&zip_sha_name).is_some();
+
+    // 最终落盘到 staged 的二进制路径（供后续 stage_file 移到 exe 同目录）
+    let staged_bin: PathBuf;
+
     set_phase(UpdatePhase::Downloading);
-    tracing::info!(资产 = %bin_name, 新版本 = %latest, "在线更新：开始流式下载更新资产");
-    let reader = source.download_asset(&bin_asset.download_url).await?;
-    let actual = download_to_file(reader, &tmp_bin).await?;
+    if use_zip {
+        // --- zip 路径 ---
+        let zip_asset = release.find_asset(&zip_name).unwrap();
+        let zip_sha_asset = release.find_asset(&zip_sha_name).unwrap();
+        let tmp_zip = tmp_dir.join(&zip_name);
 
-    // 下载 .sha256 资产（小文件）取期望摘要
-    let expected = {
-        let mut sha_reader = source.download_asset(&sha_asset.download_url).await?;
-        let mut content = String::new();
-        sha_reader
-            .read_to_string(&mut content)
-            .await
-            .map_err(|e| UpdateError::Io(e.to_string()))?;
-        parse_sha256_content(&content)?
-    };
+        tracing::info!(资产 = %zip_name, 新版本 = %latest, "在线更新：开始流式下载压缩包资产（FR-138）");
+        let reader = source.download_asset(&zip_asset.download_url).await?;
+        let actual = download_to_file(reader, &tmp_zip).await?;
 
-    // 定长校验：不一致即删临时文件、拒绝替换、保留旧二进制
-    set_phase(UpdatePhase::Verifying);
-    tracing::info!("在线更新：下载完成，开始校验 sha256");
-    if let Err(e) = verify_checksum(&actual, &expected) {
-        let _ = tokio::fs::remove_file(&tmp_bin).await;
-        tracing::warn!("下载内容 sha256 与发布不符，已删临时文件、拒绝替换");
-        return Err(e);
+        // 下载 zip.sha256 取期望摘要
+        let expected = {
+            let mut sha_reader = source.download_asset(&zip_sha_asset.download_url).await?;
+            let mut content = String::new();
+            sha_reader
+                .read_to_string(&mut content)
+                .await
+                .map_err(|e| UpdateError::Io(e.to_string()))?;
+            parse_sha256_content(&content)?
+        };
+
+        // 校验 zip 整体 sha256
+        set_phase(UpdatePhase::Verifying);
+        tracing::info!("在线更新：压缩包下载完成，开始校验 sha256（FR-138）");
+        if let Err(e) = verify_checksum(&actual, &expected) {
+            let _ = tokio::fs::remove_file(&tmp_zip).await;
+            tracing::warn!("压缩包 sha256 与发布不符，已删临时文件、拒绝解压替换（FR-138）");
+            return Err(e);
+        }
+
+        // 解压取出二进制到 tmp_bin（与 zip 同目录）
+        let bin_name = asset_name(&latest, target);
+        let tmp_bin = tmp_dir.join(&bin_name);
+        if let Err(e) = extract_zip_binary(&tmp_zip, &tmp_bin).await {
+            let _ = tokio::fs::remove_file(&tmp_zip).await;
+            let _ = tokio::fs::remove_file(&tmp_bin).await;
+            tracing::warn!(错误 = %e, "解压压缩包失败，已删临时文件（FR-138）");
+            return Err(e);
+        }
+        // zip 已用完，清理
+        let _ = tokio::fs::remove_file(&tmp_zip).await;
+        staged_bin = tmp_bin;
+    } else {
+        // --- 裸 exe 回落路径（兼容无 zip 的旧版发布）---
+        let bin_name = asset_name(&latest, target);
+        let sha_name = format!("{bin_name}.sha256");
+        let bin_asset = release
+            .find_asset(&bin_name)
+            .ok_or_else(|| UpdateError::MissingAsset(bin_name.clone()))?;
+        let sha_asset = release
+            .find_asset(&sha_name)
+            .ok_or_else(|| UpdateError::MissingAsset(sha_name.clone()))?;
+        let tmp_bin = tmp_dir.join(&bin_name);
+
+        tracing::info!(资产 = %bin_name, 新版本 = %latest, "在线更新：开始流式下载更新资产（回落裸 exe）");
+        let reader = source.download_asset(&bin_asset.download_url).await?;
+        let actual = download_to_file(reader, &tmp_bin).await?;
+
+        let expected = {
+            let mut sha_reader = source.download_asset(&sha_asset.download_url).await?;
+            let mut content = String::new();
+            sha_reader
+                .read_to_string(&mut content)
+                .await
+                .map_err(|e| UpdateError::Io(e.to_string()))?;
+            parse_sha256_content(&content)?
+        };
+
+        set_phase(UpdatePhase::Verifying);
+        tracing::info!("在线更新：下载完成，开始校验 sha256");
+        if let Err(e) = verify_checksum(&actual, &expected) {
+            let _ = tokio::fs::remove_file(&tmp_bin).await;
+            tracing::warn!("下载内容 sha256 与发布不符，已删临时文件、拒绝替换");
+            return Err(e);
+        }
+        staged_bin = tmp_bin;
     }
 
     set_phase(UpdatePhase::Replacing);
@@ -745,7 +852,7 @@ pub async fn apply_update_with_progress<S: ReleaseSource>(
 
     // 把临时文件移到 exe 同目录（同卷保 rename 原子，跨卷先 copy）后原子替换
     let plan = plan_replace(current_exe);
-    stage_file(&tmp_bin, &plan.staged).await?;
+    stage_file(&staged_bin, &plan.staged).await?;
     // 替换执行是同步阻塞文件操作，放到阻塞线程池
     let plan_for_exec = plan.clone();
     let exec_result = tokio::task::spawn_blocking(move || execute_replace(&plan_for_exec))
