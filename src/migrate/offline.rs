@@ -174,13 +174,25 @@ fn locate_content_dir(root: &Path) -> Result<PathBuf, MigrateError> {
     Ok(content)
 }
 
-/// 递归收集 `content/` 目录下所有 `.properties` 文件路径。
+/// 解析单元产物：单个 `.properties` 文件路径与其解析出的预览项。
+///
+/// 携带原 `.properties` 路径，供 [`enumerate_blob_entries`] 据此推定同主干 `.bytes` 本体路径；
+/// [`enumerate_blob_store`] 仅用其中的 [`ParsedBlobProperties`]、丢弃路径。
+struct ParsedEntry {
+    /// 该 blob 元数据文件（`.properties`）的路径。
+    prop_path: PathBuf,
+    /// 解析出的预览项（含所属 repo）。
+    parsed: ParsedBlobProperties,
+}
+
+/// 递归收集 `content/` 目录下所有子目录路径（含 `content_dir` 自身），作为并发解析的分片单元。
 ///
 /// Nexus 文件型 blob store 按 `content/vol-XX/chap-YY/<id>.properties` 两级分片存放，
-/// 此处对子目录深度不作假设、统一递归遍历。单个条目读取失败（权限等）记 WARN 后跳过，
-/// 不中断整次遍历。
-fn collect_properties_files(content_dir: &Path) -> Result<Vec<PathBuf>, MigrateError> {
-    let mut files = Vec::new();
+/// 此处对子目录深度不作假设、统一递归收集所有层级目录；每个目录后续只解析其**直属**的
+/// `.properties` 文件，天然把 vol/chap 各级目录拆成可并行的独立单元。单个目录读取失败
+/// （权限等）记 WARN 后跳过，不中断整次遍历。
+fn collect_all_dirs(content_dir: &Path) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
     let mut stack = vec![content_dir.to_path_buf()];
     while let Some(dir) = stack.pop() {
         let entries = match std::fs::read_dir(&dir) {
@@ -191,20 +203,109 @@ fn collect_properties_files(content_dir: &Path) -> Result<Vec<PathBuf>, MigrateE
             }
         };
         for entry in entries.flatten() {
-            let path = entry.path();
-            match entry.file_type() {
-                Ok(ft) if ft.is_dir() => stack.push(path),
-                Ok(ft)
-                    if ft.is_file()
-                        && path.extension().and_then(|e| e.to_str()) == Some(PROPERTIES_EXT) =>
-                {
-                    files.push(path);
-                }
-                _ => {}
+            // 仅下钻子目录；`.properties` 文件留待 parse_dir_properties 在各自目录内处理
+            if matches!(entry.file_type(), Ok(ft) if ft.is_dir()) {
+                stack.push(entry.path());
             }
         }
+        dirs.push(dir);
     }
-    Ok(files)
+    dirs
+}
+
+/// 解析单个目录内**直属**的所有 `.properties` 文件为预览项（不递归子目录）。
+///
+/// 纯磁盘读取 + 复用无副作用纯函数 [`parse_blob_properties`]；单个文件读取失败或元数据不可用
+/// （软删 / 损坏 / 缺字段）记 WARN / 跳过，不中断本目录其余文件，返回成功解析的条目列表。
+fn parse_dir_properties(dir: &Path) -> Vec<ParsedEntry> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::warn!(目录 = %dir.display(), 错误 = %e, "读取 blob store 子目录失败，跳过");
+            return Vec::new();
+        }
+    };
+    let mut parsed_entries = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        // 仅处理本目录直属的 `.properties` 文件
+        let is_prop_file = matches!(entry.file_type(), Ok(ft) if ft.is_file())
+            && path.extension().and_then(|e| e.to_str()) == Some(PROPERTIES_EXT);
+        if !is_prop_file {
+            continue;
+        }
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::warn!(文件 = %path.display(), 错误 = %e, "读取 blob 元数据失败，跳过");
+                continue;
+            }
+        };
+        if let Some(parsed) = parse_blob_properties(&text) {
+            parsed_entries.push(ParsedEntry {
+                prop_path: path,
+                parsed,
+            });
+        }
+    }
+    parsed_entries
+}
+
+/// 并发线程数上限：取逻辑核数（`available_parallelism`），获取失败回退 4。
+const FALLBACK_PARALLELISM: usize = 4;
+
+/// 多线程并发解析 `content/` 下所有目录的 `.properties`，汇总为解析条目列表（FR-133）。
+///
+/// 先廉价地递归收集所有目录路径（仅读目录、不读文件），再把「逐目录读 + 解析」分发到并发
+/// 线程——每个目录是独立分片单元、互不依赖。线程数取 `min(目录数, 逻辑核数)`，IO 密集场景
+/// 不无界开线程；空目录 / 无 chap 等退化情形线程数为 0、直接返回空集，不 panic。
+///
+/// **结果确定性**：并发采集顺序无关，汇总后交由 [`group_by_repo`]（`BTreeMap` + 字典序排序）
+/// 归并，最终结果集与单线程串行枚举等价。磁盘读取均在线程内进行，主线程仅做汇总（锁外）。
+fn collect_parsed_parallel(content_dir: &Path) -> Vec<ParsedEntry> {
+    let dirs = collect_all_dirs(content_dir);
+    if dirs.is_empty() {
+        return Vec::new();
+    }
+
+    // 线程数上限：逻辑核数（回退 4），且不超过目录数（避免空转线程）
+    let cpus = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(FALLBACK_PARALLELISM);
+    let workers = cpus.min(dirs.len());
+
+    // 单目录或单核：无并发收益，直接串行解析，省去线程开销
+    if workers <= 1 {
+        return dirs.iter().flat_map(|d| parse_dir_properties(d)).collect();
+    }
+
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let (tx, rx) = std::sync::mpsc::channel::<Vec<ParsedEntry>>();
+
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            let tx = tx.clone();
+            let next = &next;
+            let dirs = &dirs;
+            scope.spawn(move || {
+                // 各线程经原子游标领取目录索引，处理完即把本目录解析结果发回汇总通道
+                loop {
+                    let idx = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if idx >= dirs.len() {
+                        break;
+                    }
+                    let parsed = parse_dir_properties(&dirs[idx]);
+                    if !parsed.is_empty() {
+                        // 接收端始终存活（drop 在 scope 结束后），发送不会失败
+                        let _ = tx.send(parsed);
+                    }
+                }
+            });
+        }
+        // 主线程持有的 tx 必须先 drop，否则 rx 迭代不会终止
+        drop(tx);
+        rx.iter().flatten().collect()
+    })
 }
 
 /// 把按 repo 归组的中间映射整理为有序的仓库摘要列表（纯函数，便于穷举测试）。
@@ -236,32 +337,14 @@ pub fn enumerate_blob_store(root: &Path) -> Result<Vec<OfflineRepoSummary>, Migr
     let content_dir = locate_content_dir(root)?;
     tracing::info!(根目录 = %root.display(), "开始枚举离线 Nexus blob store");
 
-    let files = collect_properties_files(&content_dir)?;
-
-    let mut parsed = Vec::new();
-    let mut skipped = 0usize;
-    for file in &files {
-        // 单个文件读取失败（权限 / 瞬时 IO）记 WARN 后跳过，不中断整次枚举
-        let text = match std::fs::read_to_string(file) {
-            Ok(t) => t,
-            Err(e) => {
-                tracing::warn!(文件 = %file.display(), 错误 = %e, "读取 blob 元数据失败，跳过");
-                skipped += 1;
-                continue;
-            }
-        };
-        match parse_blob_properties(&text) {
-            Some(p) => parsed.push(p),
-            None => skipped += 1,
-        }
-    }
+    // 多线程并发解析（FR-133）：各目录分片独立解析后汇总，结果与单线程等价
+    let parsed: Vec<ParsedBlobProperties> = collect_parsed_parallel(&content_dir)
+        .into_iter()
+        .map(|e| e.parsed)
+        .collect();
 
     let repos = group_by_repo(parsed);
-    tracing::info!(
-        仓库数 = repos.len(),
-        跳过数 = skipped,
-        "离线 Nexus blob store 枚举完成"
-    );
+    tracing::info!(仓库数 = repos.len(), "离线 Nexus blob store 枚举完成");
     Ok(repos)
 }
 
@@ -286,35 +369,34 @@ pub struct OfflineBlobEntry {
 /// 元数据同样容错跳过，不中断整次枚举。仍**不读取** blob 字节，仅返回其路径，搬运时再流式读。
 pub fn enumerate_blob_entries(root: &Path) -> Result<Vec<OfflineBlobEntry>, MigrateError> {
     let content_dir = locate_content_dir(root)?;
-    let files = collect_properties_files(&content_dir)?;
 
-    let mut entries = Vec::new();
-    for prop_path in &files {
-        let text = match std::fs::read_to_string(prop_path) {
-            Ok(t) => t,
-            Err(e) => {
-                tracing::warn!(文件 = %prop_path.display(), 错误 = %e, "读取 blob 元数据失败，跳过");
-                continue;
+    // 多线程并发解析（FR-133）：复用 collect_parsed_parallel（已并发解析 + 保留 .properties 路径），
+    // 再据同主干 `.bytes` 本体定位可搬运条目；结果排序保证确定性、与单线程串行等价。
+    let mut entries: Vec<OfflineBlobEntry> = collect_parsed_parallel(&content_dir)
+        .into_iter()
+        .filter_map(|pe| {
+            // 同主干的 `.bytes` 本体须存在才可搬运
+            let bytes_path = pe.prop_path.with_extension(BYTES_EXT);
+            if !bytes_path.is_file() {
+                tracing::warn!(
+                    元数据 = %pe.prop_path.display(),
+                    "缺少对应 .bytes 本体文件，跳过该 blob 的搬运"
+                );
+                return None;
             }
-        };
-        let Some(parsed) = parse_blob_properties(&text) else {
-            continue;
-        };
-        // 同主干的 `.bytes` 本体须存在才可搬运
-        let bytes_path = prop_path.with_extension(BYTES_EXT);
-        if !bytes_path.is_file() {
-            tracing::warn!(
-                元数据 = %prop_path.display(),
-                "缺少对应 .bytes 本体文件，跳过该 blob 的搬运"
-            );
-            continue;
-        }
-        entries.push(OfflineBlobEntry {
-            repo_name: parsed.repo_name,
-            blob_name: parsed.summary.blob_name,
-            bytes_path,
-        });
-    }
+            Some(OfflineBlobEntry {
+                repo_name: pe.parsed.repo_name,
+                blob_name: pe.parsed.summary.blob_name,
+                bytes_path,
+            })
+        })
+        .collect();
+    // 并发采集顺序无关：按 (repo_name, blob_name) 排序，保证枚举结果稳定可比较、与串行等价
+    entries.sort_by(|a, b| {
+        a.repo_name
+            .cmp(&b.repo_name)
+            .then_with(|| a.blob_name.cmp(&b.blob_name))
+    });
     Ok(entries)
 }
 
@@ -344,6 +426,16 @@ mod tests {
         fs::create_dir_all(&chap).unwrap();
         for (name, content) in files {
             fs::write(chap.join(name), content).unwrap();
+        }
+    }
+
+    /// 把若干 `.properties` 文件按 `(vol, chap, 文件名, 内容)` 散布到指定 vol/chap 分片，
+    /// 用于构造多 vol/多 chap 布局，验证并发分片枚举与单 chap 集中布局结果一致。
+    fn build_store_spread(root: &Path, files: &[(&str, &str, &str, &str)]) {
+        for (vol, chap_name, file_name, content) in files {
+            let chap = root.join(CONTENT_DIR).join(vol).join(chap_name);
+            fs::create_dir_all(&chap).unwrap();
+            fs::write(chap.join(file_name), content).unwrap();
         }
     }
 
@@ -606,5 +698,177 @@ mod tests {
         assert_eq!(entries[0].repo_name, "maven-proxy");
         assert_eq!(entries[0].blob_name, "/a/app-1.0.jar");
         assert!(entries[0].bytes_path.is_file());
+    }
+
+    /// 本 FR 命门：并发分片枚举的结果集必须与单线程串行枚举一致（顺序无关、归组 / 去重不变）。
+    /// 同一组数据分别铺成「单 vol/chap 集中」与「多 vol/多 chap 散布」两套布局，
+    /// 断言两者枚举结果**完全相等**——证明并行分片不改变结果。
+    #[test]
+    fn 并发分片枚举结果与单线程集中布局一致() {
+        // 同一批 blob 元数据（跨多个 repo、含重复 repo 多 blob），后续铺到不同布局。
+        let blobs: Vec<(&str, &str, &str, &str, &str)> = vec![
+            // (文件名, repo, blob_name, sha1, size)
+            (
+                "a.properties",
+                "maven-releases",
+                "/org/a/app-1.0.jar",
+                "sa",
+                "10",
+            ),
+            (
+                "b.properties",
+                "maven-releases",
+                "/org/b/app-2.0.jar",
+                "sb",
+                "20",
+            ),
+            (
+                "c.properties",
+                "npm-hosted",
+                "/pkg/-/pkg-1.0.0.tgz",
+                "sc",
+                "30",
+            ),
+            (
+                "d.properties",
+                "docker-proxy",
+                "/v2/img/manifests/latest",
+                "sd",
+                "40",
+            ),
+            (
+                "e.properties",
+                "maven-releases",
+                "/org/c/app-3.0.jar",
+                "se",
+                "50",
+            ),
+            (
+                "f.properties",
+                "npm-hosted",
+                "/pkg2/-/pkg2-2.0.0.tgz",
+                "sf",
+                "60",
+            ),
+        ];
+
+        // 集中布局：全部铺在 vol-01/chap-01（等价于单线程串行遍历的输入）。
+        let tmp_flat = tempfile::tempdir().unwrap();
+        let flat_files: Vec<(String, String)> = blobs
+            .iter()
+            .map(|(name, repo, bn, sha1, size)| {
+                ((*name).to_string(), sample_properties(repo, bn, sha1, size))
+            })
+            .collect();
+        let flat_refs: Vec<(&str, &str)> = flat_files
+            .iter()
+            .map(|(n, c)| (n.as_str(), c.as_str()))
+            .collect();
+        build_sample_store(tmp_flat.path(), &flat_refs);
+
+        // 散布布局：把同一批数据打散到多 vol / 多 chap，逼出并发分片路径。
+        let tmp_spread = tempfile::tempdir().unwrap();
+        let vols = ["vol-01", "vol-02", "vol-03"];
+        let chaps = ["chap-01", "chap-02"];
+        let spread_contents: Vec<String> = blobs
+            .iter()
+            .map(|(_, repo, bn, sha1, size)| sample_properties(repo, bn, sha1, size))
+            .collect();
+        let spread_files: Vec<(&str, &str, &str, &str)> = blobs
+            .iter()
+            .enumerate()
+            .map(|(i, (name, _, _, _, _))| {
+                (
+                    vols[i % vols.len()],
+                    chaps[i % chaps.len()],
+                    *name,
+                    spread_contents[i].as_str(),
+                )
+            })
+            .collect();
+        build_store_spread(tmp_spread.path(), &spread_files);
+
+        let flat = enumerate_blob_store(tmp_flat.path()).unwrap();
+        let spread = enumerate_blob_store(tmp_spread.path()).unwrap();
+
+        // 结果集完全相等：repo 归组、blob 集合、排序、去重均不受分片 / 并发影响。
+        assert_eq!(flat, spread);
+        // 同时核对内容确实非空且按 repo 字典序归组（docker-proxy < maven-releases < npm-hosted）。
+        assert_eq!(spread.len(), 3);
+        assert_eq!(spread[0].repo_name, "docker-proxy");
+        assert_eq!(spread[1].repo_name, "maven-releases");
+        assert_eq!(spread[1].blob_count, 3);
+        assert_eq!(spread[2].repo_name, "npm-hosted");
+        assert_eq!(spread[2].blob_count, 2);
+    }
+
+    /// 可搬运条目枚举同样需并发 / 串行结果集一致（散布到多 vol/chap，含成对 .bytes）。
+    #[test]
+    fn 并发分片枚举可搬运条目与集中布局一致() {
+        let tmp_flat = tempfile::tempdir().unwrap();
+        build_sample_store(
+            tmp_flat.path(),
+            &[
+                ("a.properties", &sample_properties("r1", "/a", "sa", "1")),
+                ("a.bytes", "本体A"),
+                ("b.properties", &sample_properties("r2", "/b", "sb", "2")),
+                ("b.bytes", "本体B"),
+            ],
+        );
+
+        let tmp_spread = tempfile::tempdir().unwrap();
+        // .properties 与其 .bytes 必须同目录同主干，分别散布到不同 vol/chap。
+        build_store_spread(
+            tmp_spread.path(),
+            &[
+                (
+                    "vol-01",
+                    "chap-01",
+                    "a.properties",
+                    &sample_properties("r1", "/a", "sa", "1"),
+                ),
+                ("vol-01", "chap-01", "a.bytes", "本体A"),
+                (
+                    "vol-02",
+                    "chap-02",
+                    "b.properties",
+                    &sample_properties("r2", "/b", "sb", "2"),
+                ),
+                ("vol-02", "chap-02", "b.bytes", "本体B"),
+            ],
+        );
+
+        let mut flat = enumerate_blob_entries(tmp_flat.path()).unwrap();
+        let mut spread = enumerate_blob_entries(tmp_spread.path()).unwrap();
+        // bytes_path 是绝对路径、两套布局不同，按 (repo_name, blob_name) 比对逻辑结果集。
+        let key = |e: &OfflineBlobEntry| (e.repo_name.clone(), e.blob_name.clone());
+        flat.sort_by_key(key);
+        spread.sort_by_key(key);
+        let flat_logical: Vec<_> = flat.iter().map(key).collect();
+        let spread_logical: Vec<_> = spread.iter().map(key).collect();
+        assert_eq!(flat_logical, spread_logical);
+        assert_eq!(spread_logical.len(), 2);
+    }
+
+    /// 退化情形不 panic、返回空集：空 content 目录 / 有 vol 无 chap / 有 chap 但空。
+    #[test]
+    fn 退化布局不_panic_返回空集() {
+        // 仅空 content 目录
+        let tmp1 = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp1.path().join(CONTENT_DIR)).unwrap();
+        assert!(enumerate_blob_store(tmp1.path()).unwrap().is_empty());
+        assert!(enumerate_blob_entries(tmp1.path()).unwrap().is_empty());
+
+        // content/vol-01 存在但无任何 chap 子目录
+        let tmp2 = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp2.path().join(CONTENT_DIR).join("vol-01")).unwrap();
+        assert!(enumerate_blob_store(tmp2.path()).unwrap().is_empty());
+        assert!(enumerate_blob_entries(tmp2.path()).unwrap().is_empty());
+
+        // content/vol-01/chap-01 存在但为空目录
+        let tmp3 = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp3.path().join(CONTENT_DIR).join("vol-01").join("chap-01")).unwrap();
+        assert!(enumerate_blob_store(tmp3.path()).unwrap().is_empty());
+        assert!(enumerate_blob_entries(tmp3.path()).unwrap().is_empty());
     }
 }
