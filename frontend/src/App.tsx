@@ -5,7 +5,8 @@
 // 详情视图用查询参数承载（如 /artifacts?repo=..&path=..），
 // 确保任意前端 URL 都落到后端 SPA 回退而不被格式路由拦截。
 
-import { Routes, Route, Navigate, useLocation, useEffect, useRef } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { useEffect, useRef } from 'react';
 import { Center, Loader } from '@mantine/core';
 import { useAuth } from './auth/useAuth';
 import { useGlobalProgress } from './hooks/useGlobalProgress';
