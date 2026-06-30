@@ -243,8 +243,8 @@ async fn admin读取返回当前防护配置() {
     )
     .await;
     assert_eq!(st, StatusCode::OK);
-    // 默认配置：各防护默认关闭，结构含七个维度
-    assert_eq!(body["rate_limit"]["enabled"], json!(false));
+    // 默认配置（FR-130）：基础三层（限流 / 慢速 / 异常封禁）默认开，CC / WAF 默认关，结构含七个维度
+    assert_eq!(body["rate_limit"]["enabled"], json!(true));
     assert!(body.get("ip_list").is_some());
     assert!(body.get("waf").is_some());
     assert!(body.get("cc_challenge").is_some());
