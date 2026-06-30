@@ -86,7 +86,31 @@ POST /api/v1/settings/proxy-test
 - 后端测试全绿；前端 vitest 测试全绿。
 - 真机经代理测试一次（待真机验收）。
 
-## 6. 风险 / 待定
+## 6. 回流修：测试失效修复 + 模态框 UX
+
+### 根因诊断
+
+1. **MSW handler 缺口**（mock 模式下测试无反应的根因）：`frontend/src/test/mocks/handlers.ts` 缺少 `POST /api/v1/settings/proxy-test` 处理器。Mock 模式（`VITE_MOCK=true` / `?mock=1`）下该请求被 MSW 拦截但无 handler，静默失败、前端无反应、后端无日志（请求根本没到后端）。
+
+2. **UX 改造**：用户要求将全局单一测试区改为每代理独立按钮 → 模态框交互，提升可操作性。
+
+### 修复内容
+
+- **`frontend/src/test/mocks/handlers.ts`**：添加 `http.post('/api/v1/settings/proxy-test', ...)` handler（Admin 鉴权，mock 下固定返回 `ok: false / 连接失败（Mock 模式）`）。
+- **`frontend/src/pages/SettingsPage.tsx`**：
+  - 移除全局测试 URL 输入框 + 单一按钮；
+  - 三个 `ProxyFields` 后各添加一个「测试」按钮（`proxy-test-button-http/https/all`），预填对应代理 URL；
+  - 共用 Mantine `Modal`（`testModalOpen` 状态控制），模态框内含 URL 输入框（可修改预填值）+ 「测试」按钮 + 结果展示（`data-testid` 与原规格保持一致）。
+- **`frontend/src/i18n/locales/zh-CN/settings.ts`**：调整 `proxy.test*` 键名（`testModalTitle / testModalDesc / testRunButton`）。
+- **`frontend/src/pages/SettingsPage.test.tsx`**：更新 FR-128 的 4 个 vitest 用例，验证三按钮 + 模态框 UX。
+
+### 验收补充
+
+- Mock 模式下点「测试」按钮弹出模态框（不再无反应）；模态框内发 POST 经 MSW handler 返回结果并展示。
+- 三代理各有独立按钮，点击预填对应代理 URL（无 URL 则预填占位文案）。
+- 全量 vitest 346/346 绿；lint + tsc build 通过。
+
+## 7. 风险 / 待定
 
 - 测试 URL 由用户提供，后端只接受 http/https，防止 SSRF 利用 file://、ftp:// 等协议。
 - 10s 超时是合理保守值，不挂死请求；可在配置中未来可调（本期硬编码）。

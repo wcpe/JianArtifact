@@ -28,6 +28,7 @@ import {
   PasswordInput,
   NumberInput,
   Tabs,
+  Modal,
 } from '@mantine/core';
 import { IconDeviceFloppy } from '@tabler/icons-react';
 import * as api from '../api/endpoints';
@@ -165,7 +166,8 @@ export function SettingsPage() {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
-  // —— 代理连通性测试（FR-128）——
+  // —— 代理连通性测试（FR-128 回流 UX：每代理各一个按钮 → 共用模态框）——
+  const [testModalOpen, setTestModalOpen] = useState(false);
   const [testUrl, setTestUrl] = useState('');
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<ProxyTestResult | null>(null);
@@ -289,7 +291,15 @@ export function SettingsPage() {
     return entry;
   }
 
-  // 代理连通性测试（FR-128）：发 POST /settings/proxy-test，展示连通性结果。
+  // 打开代理连通性测试模态框（FR-128 回流 UX）：每代理各一个按钮触发，预填当前代理 URL。
+  function openTestModal(defaultUrl: string) {
+    setTestUrl(defaultUrl);
+    setTestResult(null);
+    setTestError(null);
+    setTestModalOpen(true);
+  }
+
+  // 模态框内执行连通性测试：发 POST /settings/proxy-test，展示状态码 / 耗时 / 失败原因。
   async function handleProxyTest() {
     const url = testUrl.trim();
     if (!url) {
@@ -357,6 +367,64 @@ export function SettingsPage() {
       <Title order={2}>{t('pageTitle')}</Title>
       {error && <ErrorAlert message={error} />}
 
+      {/* 代理连通性测试模态框（FR-128 回流 UX：每代理各一个按钮共用此模态框） */}
+      <Modal
+        opened={testModalOpen}
+        onClose={() => setTestModalOpen(false)}
+        title={t('proxy.testModalTitle')}
+        size="md"
+      >
+        <Stack gap="sm">
+          <Text size="sm" c="dimmed">
+            {t('proxy.testModalDesc')}
+          </Text>
+          <Group gap="xs" align="flex-end">
+            <TextInput
+              label={t('proxy.testUrlLabel')}
+              placeholder={t('proxy.testUrlPlaceholder')}
+              value={testUrl}
+              onChange={(e) => {
+                setTestUrl(e.currentTarget.value);
+                setTestResult(null);
+                setTestError(null);
+              }}
+              style={{ flex: 1 }}
+              data-testid="proxy-test-url-input"
+            />
+            <Button
+              loading={testing}
+              disabled={testing}
+              onClick={handleProxyTest}
+              data-testid="proxy-test-button"
+            >
+              {testing ? t('proxy.testTesting') : t('proxy.testRunButton')}
+            </Button>
+          </Group>
+          {/* 测试结果：成功绿色（含状态码 + 耗时）、失败红色（含失败原因）*/}
+          {testResult && (
+            <Alert
+              color={testResult.ok ? 'green' : 'red'}
+              variant="light"
+              data-testid="proxy-test-result"
+            >
+              {testResult.ok
+                ? t('proxy.testResultOk', {
+                    status: testResult.status,
+                    elapsed_ms: testResult.elapsed_ms,
+                  })
+                : t('proxy.testResultFail', {
+                    error: testResult.error ?? t('proxy.testResultFailNoError'),
+                  })}
+            </Alert>
+          )}
+          {testError && (
+            <Alert color="red" variant="light" data-testid="proxy-test-error">
+              {testError}
+            </Alert>
+          )}
+        </Stack>
+      </Modal>
+
       {/* FR-129：顶部水平 Tab 分页。每节一个 Tab.Panel、切换不滚动；
           未激活面板不渲染（Mantine 默认），各节内容互不串味，根因消除锚点高亮 / hover 错位。 */}
       <Tabs value={activeTab} onChange={(v) => v && setActiveTab(v)}>
@@ -378,105 +446,93 @@ export function SettingsPage() {
             </Text>
             <Stack gap="md">
               {/* HTTP / HTTPS 各自 scheme 专属代理；SOCKS5 填 all（兜底全 scheme，FR-100） */}
-              <ProxyFields
-                title={t('proxy.httpTitle')}
-                urlPlaceholder="http://host:3128"
-                url={httpUrl}
-                onUrlChange={setHttpUrl}
-                username={httpUser}
-                onUsernameChange={setHttpUser}
-                password={httpPass}
-                onPasswordChange={setHttpPass}
-                hasPassword={httpHasPass}
-                passwordCleared={httpClearPass}
-                onClearPassword={() => setHttpClearPass(true)}
-              />
-              <ProxyFields
-                title={t('proxy.httpsTitle')}
-                urlPlaceholder="http://host:3128"
-                url={httpsUrl}
-                onUrlChange={setHttpsUrl}
-                username={httpsUser}
-                onUsernameChange={setHttpsUser}
-                password={httpsPass}
-                onPasswordChange={setHttpsPass}
-                hasPassword={httpsHasPass}
-                passwordCleared={httpsClearPass}
-                onClearPassword={() => setHttpsClearPass(true)}
-              />
-              <ProxyFields
-                title={t('proxy.socks5Title')}
-                urlPlaceholder="socks5://host:1080"
-                url={allUrl}
-                onUrlChange={setAllUrl}
-                username={allUser}
-                onUsernameChange={setAllUser}
-                password={allPass}
-                onPasswordChange={setAllPass}
-                hasPassword={allHasPass}
-                passwordCleared={allClearPass}
-                onClearPassword={() => setAllClearPass(true)}
-              />
+              {/* HTTP 代理 + 测试按钮（FR-128 回流 UX：每代理各一个按钮）*/}
+              <Stack gap="xs">
+                <ProxyFields
+                  title={t('proxy.httpTitle')}
+                  urlPlaceholder="http://host:3128"
+                  url={httpUrl}
+                  onUrlChange={setHttpUrl}
+                  username={httpUser}
+                  onUsernameChange={setHttpUser}
+                  password={httpPass}
+                  onPasswordChange={setHttpPass}
+                  hasPassword={httpHasPass}
+                  passwordCleared={httpClearPass}
+                  onClearPassword={() => setHttpClearPass(true)}
+                />
+                <Group>
+                  <Button
+                    size="xs"
+                    variant="light"
+                    onClick={() => openTestModal(httpUrl || t('proxy.testUrlPlaceholder'))}
+                    data-testid="proxy-test-button-http"
+                  >
+                    {t('proxy.testButton')}
+                  </Button>
+                </Group>
+              </Stack>
+
+              {/* HTTPS 代理 + 测试按钮 */}
+              <Stack gap="xs">
+                <ProxyFields
+                  title={t('proxy.httpsTitle')}
+                  urlPlaceholder="http://host:3128"
+                  url={httpsUrl}
+                  onUrlChange={setHttpsUrl}
+                  username={httpsUser}
+                  onUsernameChange={setHttpsUser}
+                  password={httpsPass}
+                  onPasswordChange={setHttpsPass}
+                  hasPassword={httpsHasPass}
+                  passwordCleared={httpsClearPass}
+                  onClearPassword={() => setHttpsClearPass(true)}
+                />
+                <Group>
+                  <Button
+                    size="xs"
+                    variant="light"
+                    onClick={() => openTestModal(httpsUrl || t('proxy.testUrlPlaceholder'))}
+                    data-testid="proxy-test-button-https"
+                  >
+                    {t('proxy.testButton')}
+                  </Button>
+                </Group>
+              </Stack>
+
+              {/* SOCKS5 代理（all）+ 测试按钮 */}
+              <Stack gap="xs">
+                <ProxyFields
+                  title={t('proxy.socks5Title')}
+                  urlPlaceholder="socks5://host:1080"
+                  url={allUrl}
+                  onUrlChange={setAllUrl}
+                  username={allUser}
+                  onUsernameChange={setAllUser}
+                  password={allPass}
+                  onPasswordChange={setAllPass}
+                  hasPassword={allHasPass}
+                  passwordCleared={allClearPass}
+                  onClearPassword={() => setAllClearPass(true)}
+                />
+                <Group>
+                  <Button
+                    size="xs"
+                    variant="light"
+                    onClick={() => openTestModal(allUrl || t('proxy.testUrlPlaceholder'))}
+                    data-testid="proxy-test-button-all"
+                  >
+                    {t('proxy.testButton')}
+                  </Button>
+                </Group>
+              </Stack>
+
               <TextInput
                 label={t('proxy.noProxyLabel')}
                 placeholder="localhost,127.0.0.1,.internal"
                 value={noProxy}
                 onChange={(e) => setNoProxy(e.currentTarget.value)}
               />
-
-              {/* —— 连通性测试（FR-128）：经当前生效出站代理访问目标 URL —— */}
-              <Stack gap="xs">
-                <Text size="sm" fw={600}>
-                  {t('proxy.testTitle')}
-                </Text>
-                <Text size="xs" c="dimmed">
-                  {t('proxy.testDesc')}
-                </Text>
-                <Group gap="xs" align="flex-end">
-                  <TextInput
-                    label={t('proxy.testUrlLabel')}
-                    placeholder={t('proxy.testUrlPlaceholder')}
-                    value={testUrl}
-                    onChange={(e) => {
-                      setTestUrl(e.currentTarget.value);
-                      setTestResult(null);
-                      setTestError(null);
-                    }}
-                    style={{ flex: 1 }}
-                    data-testid="proxy-test-url-input"
-                  />
-                  <Button
-                    loading={testing}
-                    disabled={testing}
-                    onClick={handleProxyTest}
-                    data-testid="proxy-test-button"
-                  >
-                    {testing ? t('proxy.testTesting') : t('proxy.testButton')}
-                  </Button>
-                </Group>
-                {/* 测试结果：成功绿色、失败红色 */}
-                {testResult && (
-                  <Alert
-                    color={testResult.ok ? 'green' : 'red'}
-                    variant="light"
-                    data-testid="proxy-test-result"
-                  >
-                    {testResult.ok
-                      ? t('proxy.testResultOk', {
-                          status: testResult.status,
-                          elapsed_ms: testResult.elapsed_ms,
-                        })
-                      : t('proxy.testResultFail', {
-                          error: testResult.error ?? t('proxy.testResultFailNoError'),
-                        })}
-                  </Alert>
-                )}
-                {testError && (
-                  <Alert color="red" variant="light" data-testid="proxy-test-error">
-                    {testError}
-                  </Alert>
-                )}
-              </Stack>
             </Stack>
           </Card>
         </Tabs.Panel>

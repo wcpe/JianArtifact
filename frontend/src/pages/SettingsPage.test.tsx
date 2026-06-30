@@ -557,22 +557,40 @@ describe('SettingsPage', () => {
     expect(screen.queryByRole('button', { name: '保存并即时生效' })).not.toBeInTheDocument();
   });
 
-  // ===== FR-128：代理连通性测试（在网络代理 Tab）=====
+  // ===== FR-128：代理连通性测试（每代理各一个按钮 → 共用模态框，回流 UX）=====
 
-  it('FR-128：代理 Tab 有测试 URL 输入框和「测试」按钮', async () => {
+  it('FR-128：代理 Tab 三代理各有独立「测试」按钮（http / https / all）', async () => {
     vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
     桩动态配置();
     renderPage();
 
     await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
-    // 测试 URL 输入框存在
-    expect(screen.getByTestId('proxy-test-url-input')).toBeInTheDocument();
-    // 测试按钮存在
-    expect(screen.getByTestId('proxy-test-button')).toBeInTheDocument();
-    expect(screen.getByTestId('proxy-test-button')).toHaveTextContent('测试');
+    // 三代理各一个测试按钮
+    expect(screen.getByTestId('proxy-test-button-http')).toBeInTheDocument();
+    expect(screen.getByTestId('proxy-test-button-http')).toHaveTextContent('测试');
+    expect(screen.getByTestId('proxy-test-button-https')).toBeInTheDocument();
+    expect(screen.getByTestId('proxy-test-button-all')).toBeInTheDocument();
   });
 
-  it('FR-128：点测试按钮调 testProxy 并展示连通成功结果', async () => {
+  it('FR-128：点 HTTP 代理「测试」按钮弹出模态框，预填代理 URL', async () => {
+    vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
+    桩动态配置();
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
+    // 点 HTTP 代理测试按钮
+    fireEvent.click(screen.getByTestId('proxy-test-button-http'));
+
+    // 模态框打开：URL 输入框与内部测试按钮可见
+    await waitFor(() => expect(screen.getByTestId('proxy-test-url-input')).toBeInTheDocument());
+    // 预填了当前 HTTP 代理 URL（启用样例 http.url = 'http://proxy.internal:8080'）
+    expect((screen.getByTestId('proxy-test-url-input') as HTMLInputElement).value).toBe(
+      'http://proxy.internal:8080',
+    );
+    expect(screen.getByTestId('proxy-test-button')).toBeInTheDocument();
+  });
+
+  it('FR-128：模态框内点「测试」调 testProxy 并展示连通成功结果', async () => {
     vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
     桩动态配置();
     const testProxy = vi.spyOn(api, 'testProxy').mockResolvedValue({
@@ -583,12 +601,14 @@ describe('SettingsPage', () => {
     renderPage();
 
     await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
+    // 打开 HTTP 代理的测试模态框
+    fireEvent.click(screen.getByTestId('proxy-test-button-http'));
+    await waitFor(() => expect(screen.getByTestId('proxy-test-url-input')).toBeInTheDocument());
 
-    // 填入 URL
+    // 修改 URL 后点测试
     fireEvent.change(screen.getByTestId('proxy-test-url-input'), {
       target: { value: 'https://example.com' },
     });
-    // 点测试
     fireEvent.click(screen.getByTestId('proxy-test-button'));
 
     await waitFor(() => expect(testProxy).toHaveBeenCalledWith('https://example.com'));
@@ -598,7 +618,7 @@ describe('SettingsPage', () => {
     expect(screen.getByTestId('proxy-test-result').textContent).toContain('123');
   });
 
-  it('FR-128：点测试按钮调 testProxy 并展示连通失败结果', async () => {
+  it('FR-128：模态框内点「测试」调 testProxy 并展示连通失败结果', async () => {
     vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
     桩动态配置();
     vi.spyOn(api, 'testProxy').mockResolvedValue({
@@ -609,6 +629,8 @@ describe('SettingsPage', () => {
     renderPage();
 
     await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('proxy-test-button-https'));
+    await waitFor(() => expect(screen.getByTestId('proxy-test-url-input')).toBeInTheDocument());
 
     fireEvent.change(screen.getByTestId('proxy-test-url-input'), {
       target: { value: 'http://127.0.0.1:1' },
@@ -619,15 +641,19 @@ describe('SettingsPage', () => {
     expect(screen.getByTestId('proxy-test-result').textContent).toContain('连接失败');
   });
 
-  it('FR-128：URL 为空时不调 testProxy，展示提示', async () => {
-    vi.spyOn(api, 'getSettings').mockResolvedValue(启用样例);
+  it('FR-128：模态框内 URL 为空时不调 testProxy，展示提示', async () => {
+    vi.spyOn(api, 'getSettings').mockResolvedValue(未启用样例);
     桩动态配置();
     const testProxy = vi.spyOn(api, 'testProxy');
     renderPage();
 
     await waitFor(() => expect(screen.getByText('HTTP 代理')).toBeInTheDocument());
+    // 未启用样例代理 URL 为空，打开模态框后 URL 输入框预填空
+    fireEvent.click(screen.getByTestId('proxy-test-button-http'));
+    await waitFor(() => expect(screen.getByTestId('proxy-test-url-input')).toBeInTheDocument());
 
-    // 不填 URL 直接点测试
+    // 清空 URL 后直接点测试
+    fireEvent.change(screen.getByTestId('proxy-test-url-input'), { target: { value: '' } });
     fireEvent.click(screen.getByTestId('proxy-test-button'));
 
     // 不应调用 testProxy
