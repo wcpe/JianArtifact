@@ -50,6 +50,20 @@ export interface RepositoryDto {
   visibility: Visibility;
   upstream_url: string | null;
   created_at: string;
+  /** 制品索引条目数（FR-135）。 */
+  artifact_count: number;
+  /** 去重 sha256 后的总字节数（FR-135）。 */
+  total_size: number;
+  /** 仓库状态（FR-135；P1 固定 "active"）。 */
+  status: string;
+}
+
+/** proxy 仓库连通性测试结果（FR-135）。 */
+export interface ConnectivityResult {
+  ok: boolean;
+  status?: number;
+  elapsed_ms: number;
+  error?: string;
 }
 
 /** 仓库制品浏览索引项。 */

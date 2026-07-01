@@ -203,6 +203,10 @@ export const handlers = [
       visibility: body.visibility,
       upstream_url: body.upstream_url ?? null,
       created_at: new Date().toISOString(),
+      // 新建仓库统计初始为零（FR-135）
+      artifact_count: 0,
+      total_size: 0,
+      status: 'active',
     };
     state.repositories.push(repo);
     return HttpResponse.json(repo);
@@ -262,6 +266,19 @@ export const handlers = [
     if (idx === -1) return error(404, 'not_found', '制品不存在');
     state.artifacts.splice(idx, 1);
     return new HttpResponse(null, { status: 204 });
+  }),
+
+  // —— proxy 仓库连通性测试（FR-135，仅 Admin） ——
+  http.post(`${API}/repositories/:id/test-connectivity`, ({ request, params }) => {
+    const guard = requireUser(request, { admin: true });
+    if (isResponse(guard)) return guard;
+    const repo = state.repositories.find((r) => r.id === params.id);
+    if (!repo) return error(404, 'not_found', '仓库不存在');
+    if (!repo.upstream_url) {
+      return error(400, 'bad_request', '该仓库非 proxy 类型或未配置 upstream URL，无法测试连通性');
+    }
+    // mock 始终返回连通成功（避免真实网络请求）
+    return HttpResponse.json({ ok: true, status: 200, elapsed_ms: 42 });
   }),
 
   // —— 仓库 ACL（仅管理员） ——

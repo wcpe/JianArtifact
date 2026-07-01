@@ -1,5 +1,6 @@
-// 仓库管理界面（FR-19）：列表 / 创建 / 删除，并跳转到详情做配置与浏览。
-// 创建 / 删除仅管理员可见；列表对所有登录用户按可见性过滤展示。
+// 仓库管理界面（FR-19 + FR-135）：列表 / 创建 / 删除，并跳转到详情做配置与浏览。
+// FR-135 增强：制品数 / 总大小 / 状态 / upstream URL 展示 + proxy 仓库连通性测试按钮（Admin）。
+// 创建 / 删除 / 连通性测试仅管理员可见；列表对所有登录用户按可见性过滤展示。
 
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -18,12 +19,14 @@ import {
   Loader,
   Center,
   Anchor,
+  Alert,
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
-import { IconPlus, IconTrash, IconSettings } from '@tabler/icons-react';
+import { IconPlus, IconTrash, IconSettings, IconPlugConnected } from '@tabler/icons-react';
 import { useNavigate } from 'react-router-dom';
 import * as api from '../api/endpoints';
 import type {
+  ConnectivityResult,
   CreateRepositoryRequest,
   RepoFormat,
   RepoType,
@@ -32,6 +35,7 @@ import type {
 } from '../api/types';
 import { useAuth } from '../auth/useAuth';
 import { errorMessage } from '../lib/format';
+import { formatBytes } from '../lib/format';
 import { notifyError, notifySuccess } from '../lib/notify';
 import { ErrorAlert } from '../components/ErrorAlert';
 
@@ -47,6 +51,25 @@ const FORMAT_VALUES: RepoFormat[] = [
   'nuget',
 ];
 
+/** 连通性测试结果展示（成功绿色 / 失败红色）。 */
+function ConnectivityAlert({ result }: { result: ConnectivityResult }) {
+  const { t } = useTranslation('repositories');
+  if (result.ok) {
+    return (
+      <Alert color="green" title={t('connectivitySuccess')}>
+        {t('connectivityStatus', { status: result.status })}
+        {t('connectivityElapsed', { ms: result.elapsed_ms })}
+      </Alert>
+    );
+  }
+  return (
+    <Alert color="red" title={t('connectivityFail')}>
+      {result.error ?? t('connectivityUnknownError')}
+      {t('connectivityElapsed', { ms: result.elapsed_ms })}
+    </Alert>
+  );
+}
+
 /** 仓库管理页面。 */
 export function RepositoriesPage() {
   const { t } = useTranslation('repositories');
@@ -56,6 +79,11 @@ export function RepositoriesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [modalOpened, modal] = useDisclosure(false);
+  // 连通性测试状态
+  const [testingId, setTestingId] = useState<string | null>(null);
+  const [testResult, setTestResult] = useState<ConnectivityResult | null>(null);
+  const [testRepoName, setTestRepoName] = useState<string>('');
+  const [resultOpened, resultModal] = useDisclosure(false);
 
   const reload = () => {
     setLoading(true);
@@ -78,6 +106,20 @@ export function RepositoriesPage() {
       reload();
     } catch (err) {
       notifyError(errorMessage(err));
+    }
+  };
+
+  const handleTestConnectivity = async (repo: RepositoryDto) => {
+    setTestingId(repo.id);
+    setTestRepoName(repo.name);
+    try {
+      const result = await api.testRepoConnectivity(repo.id);
+      setTestResult(result);
+      resultModal.open();
+    } catch (err) {
+      notifyError(errorMessage(err));
+    } finally {
+      setTestingId(null);
     }
   };
 
@@ -104,7 +146,7 @@ export function RepositoriesPage() {
       {repos.length === 0 ? (
         <Text c="dimmed">{t('emptyHint')}</Text>
       ) : (
-        <Table.ScrollContainer minWidth={680}>
+        <Table.ScrollContainer minWidth={860}>
           <Table striped highlightOnHover>
             <Table.Thead>
               <Table.Tr>
@@ -112,6 +154,9 @@ export function RepositoriesPage() {
                 <Table.Th>{t('colFormat')}</Table.Th>
                 <Table.Th>{t('colType')}</Table.Th>
                 <Table.Th>{t('colVisibility')}</Table.Th>
+                <Table.Th>{t('colArtifactCount')}</Table.Th>
+                <Table.Th>{t('colTotalSize')}</Table.Th>
+                <Table.Th>{t('colStatus')}</Table.Th>
                 <Table.Th>{t('colUpstream')}</Table.Th>
                 <Table.Th>{t('colActions')}</Table.Th>
               </Table.Tr>
@@ -138,7 +183,18 @@ export function RepositoriesPage() {
                     </Badge>
                   </Table.Td>
                   <Table.Td>
-                    <Text size="sm" c="dimmed" truncate maw={220}>
+                    <Text size="sm">{repo.artifact_count}</Text>
+                  </Table.Td>
+                  <Table.Td>
+                    <Text size="sm">{formatBytes(repo.total_size)}</Text>
+                  </Table.Td>
+                  <Table.Td>
+                    <Badge color={repo.status === 'active' ? 'teal' : 'gray'} variant="light">
+                      {repo.status}
+                    </Badge>
+                  </Table.Td>
+                  <Table.Td>
+                    <Text size="sm" c="dimmed" truncate maw={200} title={repo.upstream_url ?? ''}>
                       {repo.upstream_url ?? '-'}
                     </Text>
                   </Table.Td>
@@ -151,6 +207,17 @@ export function RepositoriesPage() {
                       >
                         <IconSettings size={18} />
                       </ActionIcon>
+                      {isAdmin && repo.type === 'proxy' && repo.upstream_url && (
+                        <ActionIcon
+                          variant="subtle"
+                          color="blue"
+                          loading={testingId === repo.id}
+                          onClick={() => handleTestConnectivity(repo)}
+                          aria-label={t('testConnectivity')}
+                        >
+                          <IconPlugConnected size={18} />
+                        </ActionIcon>
+                      )}
                       {isAdmin && (
                         <ActionIcon
                           variant="subtle"
@@ -169,6 +236,16 @@ export function RepositoriesPage() {
           </Table>
         </Table.ScrollContainer>
       )}
+
+      {/* 连通性测试结果弹窗 */}
+      <Modal
+        opened={resultOpened}
+        onClose={resultModal.close}
+        title={t('connectivityModalTitle', { name: testRepoName })}
+        centered
+      >
+        {testResult && <ConnectivityAlert result={testResult} />}
+      </Modal>
 
       <CreateRepoModal
         opened={modalOpened}

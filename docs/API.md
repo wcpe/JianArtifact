@@ -142,7 +142,7 @@
 
 - **方法 / 路径**：`GET /api/v1/repositories`
 - **请求**：无请求体。按调用方身份过滤可见仓库（匿名仅见 public）。
-- **响应**：仓库数组，每项含 `id`、`name`、`format`、`type`（`hosted` / `proxy` / `group`）、`visibility`（`public` / `private`）、`upstream_url`（proxy 适用）、`created_at`。
+- **响应**：仓库数组，每项含 `id`、`name`、`format`、`type`（`hosted` / `proxy` / `group`）、`visibility`（`public` / `private`）、`upstream_url`（proxy 适用）、`created_at`、`artifact_count`（制品索引条目数，FR-135）、`total_size`（sha256 去重后总字节数，FR-135）、`status`（仓库状态，P1 固定 `"active"`，FR-135）。
 - **错误**：`401` 未认证（仅在限定接口范围时）。
 
 ### 创建仓库
@@ -173,6 +173,13 @@
 - **请求**：路径参数 `id`。
 - **响应**：删除成功状态。
 - **错误**：`401` 未认证；`403` 非管理员；`404` 仓库不存在。
+
+### 测试 proxy 仓库连通性（FR-135，仅 Admin）
+
+- **方法 / 路径**：`POST /api/v1/repositories/{id}/test-connectivity`
+- **请求**：路径参数 `id`；无请求体。
+- **响应**：JSON 对象 `{ "ok": bool, "status"?: number, "elapsed_ms": number, "error"?: string }`。`ok=true` 表示上游返回 HTTP 响应（含 4xx/5xx）；`ok=false` 表示连接失败（超时 / DNS 解析失败等）。
+- **错误**：`400` 仓库为 hosted 类型或未配置 `upstream_url`；`401` 未认证；`403` 非管理员；`404` 仓库不存在。
 
 ### 浏览仓库制品
 

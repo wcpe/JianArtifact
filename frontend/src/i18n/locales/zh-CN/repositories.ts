@@ -1,4 +1,4 @@
-// repositories 命名空间文案（FR-111）：仓库管理页（列表 / 创建 / 删除）。
+// repositories 命名空间文案（FR-111 + FR-135）：仓库管理页（列表 / 创建 / 删除 / 连通性测试）。
 export default {
   // 页头与列表
   title: '仓库管理',
@@ -9,11 +9,22 @@ export default {
   colFormat: '格式',
   colType: '类型',
   colVisibility: '可见性',
+  colArtifactCount: '制品数',
+  colTotalSize: '总大小',
+  colStatus: '状态',
   colUpstream: '上游',
   colActions: '操作',
   // 行内操作（无障碍标签）
   configBrowse: '配置 / 浏览',
   deleteRepo: '删除仓库',
+  testConnectivity: '测试连通性',
+  // 连通性测试（FR-135）
+  connectivityModalTitle: '连通性测试：{{name}}',
+  connectivitySuccess: '连通成功',
+  connectivityFail: '连通失败',
+  connectivityStatus: '状态码：{{status}}　',
+  connectivityElapsed: '耗时：{{ms}} ms',
+  connectivityUnknownError: '未知错误',
   // 删除确认与提示
   deleteConfirm: '确认删除仓库「{{name}}」？该操作不可撤销。',
   deleteSuccess: '仓库已删除',

@@ -433,6 +433,11 @@ pub fn build_router(state: AppState) -> Router {
             "/repositories/{id}/artifacts",
             get(repositories::list_artifacts),
         )
+        // proxy 仓库连通性测试（FR-135，仅 Admin）
+        .route(
+            "/repositories/{id}/test-connectivity",
+            post(repositories::test_repo_connectivity),
+        )
         .route(
             "/repositories/{id}/artifacts/{*path}",
             get(artifacts::get_artifact_detail).delete(artifacts::delete_artifact),

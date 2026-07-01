@@ -251,6 +251,9 @@ export function seed(): void {
     visibility: 'public',
     upstream_url: null,
     created_at: '2026-02-02T10:00:00Z',
+    artifact_count: 0,
+    total_size: 0,
+    status: 'active',
   };
   const npmProxy: RepositoryDto = {
     id: nextId('r'),
@@ -260,6 +263,9 @@ export function seed(): void {
     visibility: 'private',
     upstream_url: 'https://registry.npmjs.org',
     created_at: '2026-02-03T10:00:00Z',
+    artifact_count: 0,
+    total_size: 0,
+    status: 'active',
   };
   const dockerHosted: RepositoryDto = {
     id: nextId('r'),
@@ -269,6 +275,9 @@ export function seed(): void {
     visibility: 'private',
     upstream_url: null,
     created_at: '2026-02-04T10:00:00Z',
+    artifact_count: 0,
+    total_size: 0,
+    status: 'active',
   };
   state.repositories.push(mavenHosted, npmProxy, dockerHosted);
 

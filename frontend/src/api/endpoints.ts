@@ -9,6 +9,7 @@ import type {
   ArtifactDto,
   AuditEntryDto,
   AuditListParams,
+  ConnectivityResult,
   CreateRepositoryRequest,
   CreateTokenResponse,
   CreateUserRequest,
@@ -135,6 +136,13 @@ export function updateRepository(id: string, req: UpdateRepositoryRequest): Prom
 /** 删除仓库（仅管理员）。 */
 export function deleteRepository(id: string): Promise<void> {
   return request<void>(`/repositories/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+/** proxy 仓库连通性测试（仅 Admin，FR-135）。 */
+export function testRepoConnectivity(id: string): Promise<ConnectivityResult> {
+  return request<ConnectivityResult>(`/repositories/${encodeURIComponent(id)}/test-connectivity`, {
+    method: 'POST',
+  });
 }
 
 /** 浏览仓库制品索引。 */

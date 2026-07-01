@@ -27,6 +27,9 @@ const 仓库列表: RepositoryDto[] = [
     visibility: 'private',
     upstream_url: null,
     created_at: '2026-06-24T00:00:00Z',
+    artifact_count: 0,
+    total_size: 0,
+    status: 'active',
   },
   {
     id: 'r-raw',
@@ -36,6 +39,9 @@ const 仓库列表: RepositoryDto[] = [
     visibility: 'public',
     upstream_url: null,
     created_at: '2026-06-24T00:00:00Z',
+    artifact_count: 0,
+    total_size: 0,
+    status: 'active',
   },
   {
     id: 'r-proxy',
@@ -45,6 +51,9 @@ const 仓库列表: RepositoryDto[] = [
     visibility: 'public',
     upstream_url: 'https://repo1.maven.org/maven2',
     created_at: '2026-06-24T00:00:00Z',
+    artifact_count: 0,
+    total_size: 0,
+    status: 'active',
   },
   {
     id: 'r-docker',
@@ -54,6 +63,9 @@ const 仓库列表: RepositoryDto[] = [
     visibility: 'public',
     upstream_url: null,
     created_at: '2026-06-24T00:00:00Z',
+    artifact_count: 0,
+    total_size: 0,
+    status: 'active',
   },
 ];
 

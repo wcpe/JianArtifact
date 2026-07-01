@@ -183,6 +183,17 @@ pub struct ArtifactRecord {
     pub created_at: String,
 }
 
+/// 按仓库聚合的统计行（一次性批量查询，避免 N+1）。
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct RepoStatRow {
+    /// 仓库主键。
+    pub repo_id: String,
+    /// 制品索引条目数（不去重）。
+    pub artifact_count: i64,
+    /// 去重 sha256 后的总字节数（同 sha256 只计一次最大 size）。
+    pub total_size: i64,
+}
+
 /// 制品索引写入入参：四校验和与大小由 blob 落盘时算得后传入。
 #[derive(Debug, Clone)]
 pub struct NewArtifact<'a> {
@@ -437,6 +448,39 @@ impl MetaStore {
         .fetch_all(self.pool())
         .await?;
         Ok(records)
+    }
+
+    /// 按仓库批量聚合统计（FR-135）：一次 SQL 取所有仓库的制品数与去重字节，避免 N+1。
+    ///
+    /// 内层子查询先按 (repo_id, sha256) 去重并取 MAX(size) 作为该 blob 的大小，
+    /// 外层按 repo_id 分组统计条目数与总字节；无制品的仓库不出现在结果中（调用方补 0）。
+    /// 风格参照 `total_blob_bytes`（`meta/metrics.rs`）的去重模式。
+    pub async fn list_repo_stats(&self) -> Result<Vec<RepoStatRow>, MetaError> {
+        // artifact_count 按原始路径计（每条制品索引算一条），
+        // total_size 按 (repo_id, sha256) 去重后求和（同 sha256 blob 只计一次）。
+        // 两者语义不同，须分子查询分别聚合后 JOIN 合并。
+        let rows = sqlx::query_as::<_, RepoStatRow>(
+            "SELECT c.repo_id, \
+                    c.artifact_count, \
+                    COALESCE(s.total_size, 0) AS total_size \
+             FROM ( \
+                 SELECT repo_id, COUNT(*) AS artifact_count \
+                 FROM artifacts \
+                 GROUP BY repo_id \
+             ) c \
+             LEFT JOIN ( \
+                 SELECT repo_id, SUM(size_per_sha) AS total_size \
+                 FROM ( \
+                     SELECT repo_id, sha256, MAX(size) AS size_per_sha \
+                     FROM artifacts \
+                     GROUP BY repo_id, sha256 \
+                 ) \
+                 GROUP BY repo_id \
+             ) s ON c.repo_id = s.repo_id",
+        )
+        .fetch_all(self.pool())
+        .await?;
+        Ok(rows)
     }
 
     /// 列出某仓库内位于给定路径前缀下的制品索引（FR-75 目录浏览），按路径升序。
@@ -976,6 +1020,74 @@ mod tests {
         assert_eq!(store.count_artifacts_by_sha256("共享sha").await.unwrap(), 1);
         // 删不存在的返回 false
         assert!(!store.delete_artifact(&r1, "p").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn 批量统计_空库返回空结果() {
+        let store = MetaStore::open_in_memory().await.unwrap();
+        let rows = store.list_repo_stats().await.unwrap();
+        assert!(rows.is_empty(), "空库应返回空统计列表");
+    }
+
+    #[tokio::test]
+    async fn 批量统计_制品数与去重字节正确() {
+        let store = MetaStore::open_in_memory().await.unwrap();
+        let r1 = 建仓库(&store, "r1", Visibility::Public).await;
+        let r2 = 建仓库(&store, "r2", Visibility::Public).await;
+
+        // r1：两条制品，同 sha256（共享 blob，size=100）；一条独立 blob（size=30）
+        store
+            .upsert_artifact(制品(&r1, "a.jar", "共享sha"))
+            .await
+            .unwrap();
+        store
+            .upsert_artifact(制品(&r1, "b.jar", "共享sha"))
+            .await
+            .unwrap();
+        store
+            .upsert_artifact(制品(&r1, "c.txt", "独立sha"))
+            .await
+            .unwrap();
+
+        // r2：一条制品（引用 r1 共享 blob，size=3 固定值）
+        store
+            .upsert_artifact(制品(&r2, "d.jar", "共享sha"))
+            .await
+            .unwrap();
+
+        let stats = store.list_repo_stats().await.unwrap();
+        // 两个仓库都有制品，应各出一行
+        assert_eq!(stats.len(), 2);
+
+        // 找到 r1 的统计：3 条制品，去重字节 = 共享sha(3) + 独立sha(3) = 6
+        let s1 = stats.iter().find(|r| r.repo_id == r1).unwrap();
+        assert_eq!(s1.artifact_count, 3, "r1 应有 3 条制品");
+        // 去重按 (repo_id, sha256)：r1 内共享sha(3) + 独立sha(3) = 6
+        assert_eq!(s1.total_size, 6, "r1 去重字节应为 6");
+
+        // 找到 r2 的统计：1 条制品，去重字节 = 3
+        let s2 = stats.iter().find(|r| r.repo_id == r2).unwrap();
+        assert_eq!(s2.artifact_count, 1, "r2 应有 1 条制品");
+        assert_eq!(s2.total_size, 3, "r2 去重字节应为 3");
+    }
+
+    #[tokio::test]
+    async fn 批量统计_无制品的仓库不出现在结果中() {
+        let store = MetaStore::open_in_memory().await.unwrap();
+        let _r1 = 建仓库(&store, "有制品", Visibility::Public).await;
+        let r2 = 建仓库(&store, "空仓库", Visibility::Public).await;
+        store
+            .upsert_artifact(制品(&_r1, "f.jar", "sha1"))
+            .await
+            .unwrap();
+
+        let stats = store.list_repo_stats().await.unwrap();
+        // 只有有制品的仓库出现在结果中
+        assert_eq!(stats.len(), 1);
+        assert!(
+            stats.iter().all(|r| r.repo_id != r2),
+            "空仓库不应出现在统计结果中"
+        );
     }
 
     #[tokio::test]

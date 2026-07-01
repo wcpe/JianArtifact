@@ -54,6 +54,10 @@ function seedRepo(name: string, partial: Partial<RepositoryDto> = {}): Repositor
     visibility: 'private',
     upstream_url: null,
     created_at: '2026-03-01T00:00:00Z',
+    // FR-135 统计字段（默认零值）
+    artifact_count: 0,
+    total_size: 0,
+    status: 'active',
     ...partial,
   };
   state.repositories.push(repo);
@@ -145,5 +149,139 @@ describe('RepositoriesPage 走 MSW 的契约强断言（FR-116）', () => {
     );
     renderPage();
     expect(await screen.findByText('内部错误')).toBeInTheDocument();
+  });
+});
+
+// —— FR-135 增强：统计字段、upstream URL、连通性测试 ——
+
+describe('RepositoriesPage FR-135 统计字段与连通性测试', () => {
+  beforeEach(async () => {
+    await loginAs(); // 写入管理员令牌
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('列表表头含制品数、总大小、状态三列', async () => {
+    seedRepo('repo1');
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('制品数')).toBeInTheDocument());
+    expect(screen.getByText('总大小')).toBeInTheDocument();
+    expect(screen.getByText('状态')).toBeInTheDocument();
+  });
+
+  it('列表渲染制品数与格式化后的总大小（50 KB）', async () => {
+    // artifact_count=5，total_size=51200 → "50.00 KB"
+    seedRepo('stats-repo', { artifact_count: 5, total_size: 51200 });
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('5')).toBeInTheDocument());
+    expect(screen.getByText(/50\.00 KB/)).toBeInTheDocument();
+  });
+
+  it('列表渲染 status badge', async () => {
+    seedRepo('active-repo', { status: 'active' });
+    renderPage();
+
+    // Badge 把 status 原文渲染出来
+    await waitFor(() => expect(screen.getByText('active')).toBeInTheDocument());
+  });
+
+  it('proxy 仓库显示 upstream URL', async () => {
+    seedRepo('npm-proxy', {
+      format: 'npm',
+      type: 'proxy',
+      upstream_url: 'https://registry.npmjs.org',
+    });
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('https://registry.npmjs.org')).toBeInTheDocument());
+  });
+
+  it('hosted 仓库 upstream 列显示 -', async () => {
+    seedRepo('hosted', { type: 'hosted', upstream_url: null });
+    renderPage();
+
+    await waitFor(() => expect(screen.getAllByText('-').length).toBeGreaterThan(0));
+  });
+
+  it('proxy 仓库（Admin）显示连通性测试按钮', async () => {
+    seedRepo('maven-proxy', {
+      type: 'proxy',
+      upstream_url: 'https://repo1.maven.org/maven2',
+    });
+    renderPage();
+
+    await waitFor(() => expect(screen.getByLabelText('测试连通性')).toBeInTheDocument());
+  });
+
+  it('hosted 仓库不显示连通性测试按钮', async () => {
+    seedRepo('hosted-only', { type: 'hosted' });
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('hosted-only')).toBeInTheDocument());
+    expect(screen.queryByLabelText('测试连通性')).not.toBeInTheDocument();
+  });
+
+  it('proxy 仓库无 upstream_url 不显示连通性测试按钮', async () => {
+    seedRepo('proxy-no-upstream', { type: 'proxy', upstream_url: null });
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('proxy-no-upstream')).toBeInTheDocument());
+    expect(screen.queryByLabelText('测试连通性')).not.toBeInTheDocument();
+  });
+
+  it('非管理员用户不显示连通性测试按钮', async () => {
+    seedRepo('proxy-repo', {
+      type: 'proxy',
+      upstream_url: 'https://registry.npmjs.org',
+      visibility: 'public',
+    });
+    renderPage(false); // isAdmin=false
+
+    await waitFor(() => expect(screen.getByText('proxy-repo')).toBeInTheDocument());
+    expect(screen.queryByLabelText('测试连通性')).not.toBeInTheDocument();
+  });
+
+  it('点击连通性测试按钮调端点并弹窗展示成功结果', async () => {
+    // 覆盖 handler：保证返回 ok=true
+    server.use(
+      http.post('/api/v1/repositories/:id/test-connectivity', () =>
+        HttpResponse.json({ ok: true, status: 200, elapsed_ms: 42 }),
+      ),
+    );
+    seedRepo('maven-proxy', {
+      type: 'proxy',
+      upstream_url: 'https://repo1.maven.org/maven2',
+    });
+    renderPage();
+
+    const user = userEvent.setup();
+    const btn = await screen.findByLabelText('测试连通性');
+    await user.click(btn);
+
+    // 弹窗出现，展示成功结果
+    await waitFor(() => expect(screen.getByText('连通成功')).toBeInTheDocument());
+    expect(screen.getByText(/状态码：200/)).toBeInTheDocument();
+    expect(screen.getByText(/42 ms/)).toBeInTheDocument();
+  });
+
+  it('连通性测试失败弹窗展示错误原因', async () => {
+    server.use(
+      http.post('/api/v1/repositories/:id/test-connectivity', () =>
+        HttpResponse.json({ ok: false, elapsed_ms: 500, error: '连接超时' }),
+      ),
+    );
+    seedRepo('broken-proxy', {
+      type: 'proxy',
+      upstream_url: 'http://unreachable.example.com',
+    });
+    renderPage();
+
+    const user = userEvent.setup();
+    const btn = await screen.findByLabelText('测试连通性');
+    await user.click(btn);
+
+    await waitFor(() => expect(screen.getByText('连通失败')).toBeInTheDocument());
+    expect(screen.getByText(/连接超时/)).toBeInTheDocument();
   });
 });

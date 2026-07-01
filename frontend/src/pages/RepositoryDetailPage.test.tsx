@@ -35,6 +35,9 @@ const REPO: RepositoryDto = {
   visibility: 'public',
   upstream_url: null,
   created_at: '2026-01-01T00:00:00Z',
+  artifact_count: 0,
+  total_size: 0,
+  status: 'active',
 };
 
 function art(path: string): ArtifactDto {
