@@ -26,20 +26,24 @@ pub struct RepositoryDto {
     pub name: String,
     /// 格式（maven | npm | docker | raw | pypi）。
     pub format: String,
-    /// 类型（hosted | proxy）。
+    /// 类型（hosted | proxy | group）。
     #[serde(rename = "type")]
     pub r#type: String,
     /// 可见性（public | private）。
     pub visibility: String,
     /// 上游地址（proxy 适用）。
     pub upstream_url: Option<String>,
+    /// 成员仓库名（有序，仅 group 适用；非 group 省略）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub members: Option<Vec<String>>,
     /// 创建时间（ISO8601）。
     pub created_at: String,
 }
 
 impl From<RepositoryRecord> for RepositoryDto {
     fn from(r: RepositoryRecord) -> Self {
-        // 不回显 upstream_auth_ref：它是凭据引用，无须对外暴露
+        // 不回显 upstream_auth_ref：它是凭据引用，无须对外暴露。
+        // members 由能访问 meta 的 handler 按需填充（本 From 不查库，故默认 None）。
         Self {
             id: r.id,
             name: r.name,
@@ -47,9 +51,24 @@ impl From<RepositoryRecord> for RepositoryDto {
             r#type: r.r#type,
             visibility: r.visibility,
             upstream_url: r.upstream_url,
+            members: None,
             created_at: r.created_at,
         }
     }
+}
+
+/// 为 group 仓库 DTO 填充有序成员名（非 group 仓库不查库、不填）。
+///
+/// 单仓库详情 / 创建 / 更新响应据此回显成员；列表端点为防 N+1 不逐仓库填成员（见 list 注释）。
+async fn fill_group_members(
+    state: &AppState,
+    mut dto: RepositoryDto,
+) -> Result<RepositoryDto, ApiError> {
+    if dto.r#type == crate::meta::RepoType::Group.as_str() {
+        let members = state.meta.list_repo_group_members(&dto.id).await?;
+        dto.members = Some(members.into_iter().map(|m| m.name).collect());
+    }
+    Ok(dto)
 }
 
 /// 制品索引视图（字段对齐 docs/API.md 浏览制品）。
@@ -100,7 +119,7 @@ pub struct CreateRepositoryRequest {
     pub name: String,
     /// 格式（maven | npm | docker | raw | pypi）。
     pub format: String,
-    /// 类型（hosted | proxy）。
+    /// 类型（hosted | proxy | group）。
     #[serde(rename = "type")]
     pub r#type: String,
     /// 可见性（public | private）。
@@ -111,6 +130,9 @@ pub struct CreateRepositoryRequest {
     /// 上游凭据引用（仅引用，真值走配置 / env，不入库明文）。
     #[serde(default)]
     pub upstream_auth_ref: Option<String>,
+    /// 成员仓库名（有序，仅 group 适用）。
+    #[serde(default)]
+    pub members: Option<Vec<String>>,
 }
 
 /// 更新仓库请求体：字段可选，仅更新提供的项。
@@ -125,6 +147,9 @@ pub struct UpdateRepositoryRequest {
     /// 上游凭据引用。
     #[serde(default)]
     pub upstream_auth_ref: Option<String>,
+    /// 成员仓库名（有序，仅 group 适用；提供时整体替换成员列表）。
+    #[serde(default)]
+    pub members: Option<Vec<String>>,
 }
 
 /// 列出仓库：按调用方身份过滤可见仓库（匿名仅见 public）。
@@ -179,10 +204,12 @@ pub async fn create_repository(
             visibility: req.visibility,
             upstream_url: req.upstream_url,
             upstream_auth_ref: req.upstream_auth_ref,
+            members: req.members,
         },
     )
     .await?;
-    Ok((axum::http::StatusCode::CREATED, Json(created.into())))
+    let dto = fill_group_members(&state, created.into()).await?;
+    Ok((axum::http::StatusCode::CREATED, Json(dto)))
 }
 
 /// 获取仓库详情：受读权限约束，无权 private 映射为 404。
@@ -192,7 +219,8 @@ pub async fn get_repository(
     Path(id): Path<String>,
 ) -> Result<Json<RepositoryDto>, ApiError> {
     let repo = load_readable_repo(&state, &identity, &id).await?;
-    Ok(Json(repo.into()))
+    let dto = fill_group_members(&state, repo.into()).await?;
+    Ok(Json(dto))
 }
 
 /// 更新仓库（仅管理员）。业务规则校验与落库下沉到 `repo` 模块。
@@ -210,11 +238,13 @@ pub async fn update_repository(
             visibility: req.visibility,
             upstream_url: req.upstream_url,
             upstream_auth_ref: req.upstream_auth_ref,
+            members: req.members,
         },
     )
     .await?
     .ok_or(ApiError::NotFound)?;
-    Ok(Json(updated.into()))
+    let dto = fill_group_members(&state, updated.into()).await?;
+    Ok(Json(dto))
 }
 
 /// 删除仓库（仅管理员）。

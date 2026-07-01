@@ -142,15 +142,16 @@
 
 - **方法 / 路径**：`GET /api/v1/repositories`
 - **请求**：无请求体。按调用方身份过滤可见仓库（匿名仅见 public）。
-- **响应**：仓库数组，每项含 `id`、`name`、`format`、`type`（`hosted` / `proxy`）、`visibility`（`public` / `private`）、`upstream_url`（proxy 适用）、`created_at`。
+- **响应**：仓库数组，每项含 `id`、`name`、`format`、`type`（`hosted` / `proxy` / `group`）、`visibility`（`public` / `private`）、`upstream_url`（proxy 适用）、`created_at`。
 - **错误**：`401` 未认证（仅在限定接口范围时）。
 
 ### 创建仓库
 
 - **方法 / 路径**：`POST /api/v1/repositories`
-- **请求**：JSON 体 `{ "name", "format", "type", "visibility", "upstream_url"?, "upstream_auth_ref"? }`。`type` 为 `hosted` 或 `proxy`；`visibility` 为 `public` 或 `private`；`upstream_url` 与 `upstream_auth_ref` 仅 `proxy` 适用，上游凭据真值不入库，DB 仅存引用 `upstream_auth_ref`。
-- **响应**：新建仓库对象。
-- **错误**：`400` 参数不合法；`401` 未认证；`403` 非管理员；`409` 仓库名已存在。
+- **请求**：JSON 体 `{ "name", "format", "type", "visibility", "upstream_url"?, "upstream_auth_ref"?, "members"? }`。`type` 为 `hosted`、`proxy` 或 `group`；`visibility` 为 `public` 或 `private`；`upstream_url` 与 `upstream_auth_ref` 仅 `proxy` 适用，上游凭据真值不入库，DB 仅存引用 `upstream_auth_ref`。
+  - **group（虚拟聚合，FR-136）**：`members` 为**有序成员仓库名数组**（解析顺序即此顺序），仅 `type=group` 适用。成员须与 group **格式一致**（maven group 只聚合 maven 成员，否则 `400`）、须为 hosted / proxy（**禁嵌套 group**，否则 `400`）、须存在、去重；空 `members` 合法（空 group，解析恒 404）。
+- **响应**：新建仓库对象（group 时含有序 `members`）。
+- **错误**：`400` 参数不合法（含 group 成员格式不一致 / 成员为 group / 成员不存在 / 重复）；`401` 未认证；`403` 非管理员；`409` 仓库名已存在。
 
 ### 获取仓库详情
 
@@ -162,9 +163,9 @@
 ### 更新仓库
 
 - **方法 / 路径**：`PATCH /api/v1/repositories/{id}`
-- **请求**：路径参数 `id`；JSON 体可含 `visibility`、`upstream_url`、`upstream_auth_ref` 等可配置字段。
+- **请求**：路径参数 `id`；JSON 体可含 `visibility`、`upstream_url`、`upstream_auth_ref`、`members`（仅 group 适用，提供时**整体替换**有序成员列表，校验规则同创建）等可配置字段。
 - **响应**：更新后的仓库对象。
-- **错误**：`400` 参数不合法；`401` 未认证；`403` 非管理员；`404` 仓库不存在。
+- **错误**：`400` 参数不合法（含对非 group 仓库配置 `members`、group 成员校验失败）；`401` 未认证；`403` 非管理员；`404` 仓库不存在。
 
 ### 删除仓库
 
@@ -605,6 +606,8 @@
 ### 格式 API 概览
 
 格式端点按各自原生协议挂载，路径中包含仓库名以定位目标仓库；写操作校验对应仓库的写权限，读操作受 public/private 与读 ACL 约束。`hosted` 仓库支持制品直传与下载，`proxy` 仓库在 cache-miss 时从上游拉取、校验、落盘并写索引（并发请求单飞合并）。
+
+**group（虚拟聚合，FR-136）读取语义**：GET 制品 `/{group}/{*path}` 命中 group 仓库时——① 先过 **group 自身**读判定（group 私有且调用方无权 → `404`，隐藏 group 存在性）；② 按成员有序 `position` 逐个解析，对每个成员**施加调用方读权限判定**（public/private + 直接 / 组继承 ACL + 角色），**无读权限的成员视同不存在、跳过、不泄露存在性**（匿名跳过 private 成员）；命中第一个「有读权限且存在该制品」的成员即返回其制品（proxy 成员命中触发既有回源缓存）；③ 全部未命中 → `404`。group **只读**：PUT / POST / DELETE 到 group 一律 `405 Method Not Allowed`（私有 group 对无权调用方先返 `404`、不泄露存在性，再谈 405）。**限制**：不做跨成员 metadata 合并——`maven-metadata.xml` / npm packument / PyPI Simple 索引等元数据文件只返回**第一个含该文件的成员**内容、**版本列表不跨成员聚合**；group 仅支持经格式 API 挂载的格式（maven / npm / raw / go / cargo / pypi / nuget），**Docker（`/v2/`）group 不在本范围**（属后续能力）。
 
 **上传限制**：各格式上传受可配置的单文件大小上限约束，超限返回 `413 Payload Too Large`；上传走流式处理，不整体载入内存。
 

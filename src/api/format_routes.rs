@@ -14,7 +14,7 @@ use futures_util::TryStreamExt;
 use tokio_util::io::{ReaderStream, StreamReader};
 
 use crate::format::{ArtifactKind, PypiFormat, PYPI_SIMPLE_SEGMENT};
-use crate::meta::RepositoryRecord;
+use crate::meta::{RepoType, RepositoryRecord};
 
 use super::metrics::FormatLabel;
 use super::repo_access::{build_repo_view, load_readable_repo_by_name};
@@ -318,6 +318,15 @@ pub async fn get_artifact(
     headers: HeaderMap,
     Path((repo_name, path)): Path<(String, String)>,
 ) -> Result<Response, ApiError> {
+    // group（虚拟聚合）仓库：按有序成员解析，逐成员施加调用方读权限（FR-136）。
+    // group 自身不存 blob、不走目录浏览与本地下载，单列分支；解析编排在 resolve_group_get。
+    if let Some(repo) = state.meta.get_repository_by_name(&repo_name).await? {
+        if RepoType::from_db_str(&repo.r#type) == RepoType::Group {
+            let format_name = repo.format.clone();
+            let result = resolve_group_get(&state, &identity, &repo, &path, &headers).await;
+            return tag_format(result, &format_name);
+        }
+    }
     // 目录请求：尾斜杠 + 通用格式 → 走目录浏览（鉴权在 browse 内部，private 对无权 404）
     if path.ends_with('/') {
         let dir_path = path.trim_end_matches('/');
@@ -342,6 +351,64 @@ pub async fn get_artifact(
     let format_name = repo.format.clone();
     let result = get_artifact_inner(state, repo, path, headers).await;
     tag_format(result, &format_name)
+}
+
+/// group（虚拟聚合）GET 解析（FR-136）：先过 group 自身读判定，再按成员顺序逐个解析。
+///
+/// 鉴权命门：①group 不可见 → 404（隐藏存在性）；②逐成员**施加调用方读权限**——
+/// 无读权限的成员视同不存在、跳过、不泄露（匿名跳过 private 成员）；③命中第一个
+/// 「有读权限且存在该制品」的成员即返回；④全部未命中 → 404（与「group 内无此制品」同语义）。
+/// 成员命中走既有 `get_artifact_inner`（按成员格式分派 + proxy 成员回源缓存复用既有机理）。
+async fn resolve_group_get(
+    state: &AppState,
+    identity: &Identity,
+    group: &RepositoryRecord,
+    path: &str,
+    headers: &HeaderMap,
+) -> Result<Response, ApiError> {
+    // ① group 自身读判定：不可见 → 404，不泄露 group 存在性
+    let group_view = build_repo_view(state, identity, group).await?;
+    if authorize(&identity.0, &group_view, Action::Read) == Decision::Deny {
+        return Err(ApiError::NotFound);
+    }
+
+    // ② 按 position 顺序取成员，逐成员过读判定
+    let members = state.meta.list_repo_group_members(&group.id).await?;
+    for member in members {
+        let member_view = build_repo_view(state, identity, &member).await?;
+        // 无读权限的成员：视同不存在，跳过，不泄露其存在性（匿名跳过 private 成员）
+        if authorize(&identity.0, &member_view, Action::Read) == Decision::Deny {
+            continue;
+        }
+        // ③ 有读权限：尝试在该成员解析制品（proxy 成员 cache-miss 触发回源缓存）
+        match get_artifact_inner(
+            state.clone(),
+            member.clone(),
+            path.to_string(),
+            headers.clone(),
+        )
+        .await
+        {
+            Ok(resp) => {
+                // 使用分析采集：group 解析命中记一次下载（归到 group 名下，非阻塞）
+                state.usage.record(
+                    UsageAction::Download,
+                    &group.name,
+                    path,
+                    identity.actor_name(),
+                    None,
+                );
+                tracing::debug!(group = %group.name, 命中成员 = %member.name, 路径 = %path, "group 解析命中");
+                return Ok(resp);
+            }
+            // 该成员无此制品：继续下一成员
+            Err(ApiError::NotFound) => continue,
+            // 其余错误（如上游故障）直接上抛，不静默吞
+            Err(e) => return Err(e),
+        }
+    }
+    // ④ 全部成员遍历完未命中 → 404
+    Err(ApiError::NotFound)
 }
 
 /// GET 下载内层逻辑：仓库已解析并通过读授权，按格式分派到各原生协议或通用下载。
@@ -460,6 +527,11 @@ async fn resolve_writable_repo(
     // 先过读判定：无读权限者（含匿名访问 private）一律 404，不泄露仓库存在
     if authorize(&identity.0, &view, Action::Read) == Decision::Deny {
         return Err(ApiError::NotFound);
+    }
+    // group（虚拟聚合）仓库只读：读判定通过后对写 / 删一律 405（FR-136）。
+    // 置于读判定之后，私有 group 对无权调用方先返 404、不泄露其存在性。
+    if RepoType::from_db_str(&repo.r#type) == RepoType::Group {
+        return Err(ApiError::MethodNotAllowed);
     }
     match authorize(&identity.0, &view, Action::Write) {
         Decision::Allow => Ok(repo),

@@ -42,6 +42,8 @@ pub enum RepoType {
     Hosted,
     /// 代理型：代理上游并缓存。
     Proxy,
+    /// 聚合型（group / virtual）：自身不存 blob，按有序成员解析读取（FR-136）。
+    Group,
 }
 
 impl RepoType {
@@ -50,13 +52,15 @@ impl RepoType {
         match self {
             RepoType::Hosted => "hosted",
             RepoType::Proxy => "proxy",
+            RepoType::Group => "group",
         }
     }
 
-    /// 从 DB 字符串解析类型；未知值回退为 hosted（不引入上游拉取行为）。
+    /// 从 DB 字符串解析类型；未知值回退为 hosted（不引入上游拉取与聚合解析行为）。
     pub fn from_db_str(s: &str) -> Self {
         match s {
             "proxy" => RepoType::Proxy,
+            "group" => RepoType::Group,
             _ => RepoType::Hosted,
         }
     }
@@ -566,6 +570,57 @@ impl MetaStore {
         .await?;
         Ok(records)
     }
+
+    /// 设定 group 仓库的有序成员列表（FR-136）：先清后插，position 按入参顺序从 0 递增。
+    ///
+    /// 在单事务内「删旧 + 插新」，避免并发下出现半截成员列表。`member_ids` 顺序即解析顺序。
+    /// group 自身存储在 repositories 表（type='group'），本方法只维护其成员关联。
+    pub async fn set_repo_group_members(
+        &self,
+        group_repo_id: &str,
+        member_ids: &[String],
+    ) -> Result<(), MetaError> {
+        let mut tx = self.pool().begin().await?;
+        sqlx::query("DELETE FROM repository_group_members WHERE group_repo_id = ?")
+            .bind(group_repo_id)
+            .execute(&mut *tx)
+            .await?;
+        for (position, member_id) in member_ids.iter().enumerate() {
+            sqlx::query(
+                "INSERT INTO repository_group_members (group_repo_id, member_repo_id, position) \
+                 VALUES (?, ?, ?)",
+            )
+            .bind(group_repo_id)
+            .bind(member_id)
+            .bind(position as i64)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// 列出 group 仓库的有序成员仓库记录（FR-136），按 position 升序连表取出。
+    ///
+    /// 供 group GET 解析按序遍历；返回成员仓库的完整记录（格式 / 类型 / 可见性等），
+    /// 鉴权过滤与逐成员命中判定由上层（api）处理，本层只负责按序取成员。
+    pub async fn list_repo_group_members(
+        &self,
+        group_repo_id: &str,
+    ) -> Result<Vec<RepositoryRecord>, MetaError> {
+        let records = sqlx::query_as::<_, RepositoryRecord>(
+            "SELECT r.id, r.name, r.format, r.type, r.visibility, r.upstream_url, \
+                    r.upstream_auth_ref, r.created_at \
+             FROM repository_group_members m \
+             JOIN repositories r ON r.id = m.member_repo_id \
+             WHERE m.group_repo_id = ? \
+             ORDER BY m.position ASC",
+        )
+        .bind(group_repo_id)
+        .fetch_all(self.pool())
+        .await?;
+        Ok(records)
+    }
 }
 
 /// 转义 LIKE 模式中的特殊字符（`\` / `%` / `_`），配合 `ESCAPE '\'` 使其按字面匹配。
@@ -968,5 +1023,82 @@ mod tests {
         // 分页 limit=1 只返回一条
         let page = store.search_artifacts("lib", None, 0, 1).await.unwrap();
         assert_eq!(page.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn group_成员有序设定与按序取出() {
+        let store = MetaStore::open_in_memory().await.unwrap();
+        let g = store
+            .create_repository(NewRepository {
+                name: "maven-group",
+                format: "maven",
+                r#type: RepoType::Group,
+                visibility: Visibility::Public,
+                upstream_url: None,
+                upstream_auth_ref: None,
+            })
+            .await
+            .unwrap();
+        // group 类型应正确入库与解析
+        let rec = store.get_repository_by_id(&g).await.unwrap().unwrap();
+        assert_eq!(rec.r#type, "group");
+        assert_eq!(RepoType::from_db_str(&rec.r#type), RepoType::Group);
+
+        let a = 建仓库(&store, "a", Visibility::Public).await;
+        let b = 建仓库(&store, "b", Visibility::Private).await;
+        // 顺序 [b, a]：解析顺序应原样保留
+        store
+            .set_repo_group_members(&g, &[b.clone(), a.clone()])
+            .await
+            .unwrap();
+        let members = store.list_repo_group_members(&g).await.unwrap();
+        let ids: Vec<&str> = members.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, vec![b.as_str(), a.as_str()], "成员应按 position 升序");
+
+        // 重设为 [a]：先清后插，旧成员 b 不再出现
+        store
+            .set_repo_group_members(&g, std::slice::from_ref(&a))
+            .await
+            .unwrap();
+        let members = store.list_repo_group_members(&g).await.unwrap();
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].id, a);
+
+        // 空 group 合法：成员列表为空
+        store.set_repo_group_members(&g, &[]).await.unwrap();
+        assert!(store.list_repo_group_members(&g).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn 删除成员仓库经外键级联移出_group() {
+        let store = MetaStore::open_in_memory().await.unwrap();
+        let g = store
+            .create_repository(NewRepository {
+                name: "g",
+                format: "raw",
+                r#type: RepoType::Group,
+                visibility: Visibility::Public,
+                upstream_url: None,
+                upstream_auth_ref: None,
+            })
+            .await
+            .unwrap();
+        let a = 建仓库(&store, "a", Visibility::Public).await;
+        let b = 建仓库(&store, "b", Visibility::Public).await;
+        store
+            .set_repo_group_members(&g, &[a.clone(), b.clone()])
+            .await
+            .unwrap();
+        assert_eq!(store.list_repo_group_members(&g).await.unwrap().len(), 2);
+
+        // 删除成员仓库 a：经外键级联从 group 成员中移除，仅余 b
+        assert!(store.delete_repository(&a).await.unwrap());
+        let members = store.list_repo_group_members(&g).await.unwrap();
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].id, b);
+
+        // 删除 group 自身：成员关联级联清理，但成员仓库 b 仍在
+        assert!(store.delete_repository(&g).await.unwrap());
+        assert!(store.get_repository_by_id(&b).await.unwrap().is_some());
     }
 }

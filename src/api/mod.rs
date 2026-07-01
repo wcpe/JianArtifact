@@ -199,6 +199,9 @@ pub enum ApiError {
     /// 资源冲突（如同名用户已存在）。
     #[error("{0}")]
     Conflict(String),
+    /// 方法不被允许（如对只读的 group 聚合仓库执行写 / 删，FR-136）。
+    #[error("该仓库不支持此操作")]
+    MethodNotAllowed,
     /// 登录尝试过于频繁被限流，携带建议等待秒数。
     #[error("登录尝试过于频繁，请在 {0} 秒后重试")]
     TooManyRequests(u64),
@@ -228,6 +231,7 @@ impl ApiError {
             ApiError::Forbidden => StatusCode::FORBIDDEN,
             ApiError::NotFound => StatusCode::NOT_FOUND,
             ApiError::Conflict(_) => StatusCode::CONFLICT,
+            ApiError::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
             ApiError::TooManyRequests(_) => StatusCode::TOO_MANY_REQUESTS,
             // 账户禁用沿用 API.md 约定的 403
             ApiError::AccountDisabled => StatusCode::FORBIDDEN,
@@ -246,6 +250,7 @@ impl ApiError {
             ApiError::Forbidden => "forbidden",
             ApiError::NotFound => "not_found",
             ApiError::Conflict(_) => "conflict",
+            ApiError::MethodNotAllowed => "method_not_allowed",
             ApiError::TooManyRequests(_) => "too_many_requests",
             ApiError::AccountDisabled => "account_disabled",
             ApiError::PayloadTooLarge => "payload_too_large",
