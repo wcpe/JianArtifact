@@ -33,7 +33,7 @@ pub use pypi::{
     PEP691_CONTENT_TYPE as PYPI_PEP691_CONTENT_TYPE, SIMPLE_SEGMENT as PYPI_SIMPLE_SEGMENT,
 };
 pub use raw::RawFormat;
-pub use service::{ArtifactKind, ArtifactService, ServiceError};
+pub use service::{ArtifactKind, ArtifactService, IngestOutcome, ServiceError};
 
 // VulnCoordinate / Format::vuln_coordinate 在本模块内定义并对外公开，供 api 层做坐标级漏洞匹配。
 

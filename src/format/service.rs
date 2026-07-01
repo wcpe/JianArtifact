@@ -55,6 +55,31 @@ pub struct WriteOutcome {
     pub overwritten: bool,
 }
 
+/// 迁移搬运写入结果（FR-134）：区分「新写入」与「命中既有一致记录而幂等跳过落盘」。
+///
+/// 供搬运编排层区分增量跳过（已存在同 sha256）与真正新写，分类统计进度计数。
+#[derive(Debug, Clone)]
+pub enum IngestOutcome {
+    /// 本次为新写入（blob 落盘 + 写索引均执行）。
+    Written(ArtifactRecord),
+    /// 同坐标同 sha256 已存在，本次为幂等重入（回滚多余落盘，复用既有记录）。
+    AlreadyExists(ArtifactRecord),
+}
+
+impl IngestOutcome {
+    /// 取出内部的制品索引记录（不论写入结果类别）。
+    pub fn into_record(self) -> ArtifactRecord {
+        match self {
+            IngestOutcome::Written(r) | IngestOutcome::AlreadyExists(r) => r,
+        }
+    }
+
+    /// 是否为新写入（非幂等重入）。
+    pub fn is_written(&self) -> bool {
+        matches!(self, IngestOutcome::Written(_))
+    }
+}
+
 /// 制品读取句柄：以字节流暴露内容，连同索引记录（含内容类型 / 大小 / 校验和）。
 pub struct ReadHandle {
     /// 制品索引记录。
@@ -190,15 +215,15 @@ impl<S: BlobStore, U: Upstream> ArtifactService<S, U> {
     /// 再写元数据索引（`cached = true`）**；写索引失败回滚 blob，不留孤儿。区别仅在于字节来源是
     /// 迁移搬运的本地输入流而非上游回源。仅适用于 proxy 仓库（缓存语义）。
     ///
-    /// 幂等：同坐标已存在同 sha256 缓存索引时跳过落盘与写索引，直接返回既有记录（搬运可重入）；
-    /// 同坐标已存在但 sha256 不同则按覆盖落定新内容（源系统缓存即权威）。
+    /// 幂等：同坐标已存在同 sha256 缓存索引时跳过落盘与写索引，直接返回 `AlreadyExists`（搬运可重入，FR-134）；
+    /// 同坐标已存在但 sha256 不同则按覆盖落定新内容（源系统缓存即权威），返回 `Written`。
     pub async fn ingest_cached<R>(
         &self,
         repo: &RepositoryRecord,
         format: &dyn Format,
         coords: &ArtifactCoordinates,
         reader: R,
-    ) -> Result<ArtifactRecord, ServiceError>
+    ) -> Result<IngestOutcome, ServiceError>
     where
         R: AsyncRead + Unpin + Send,
     {
@@ -211,11 +236,11 @@ impl<S: BlobStore, U: Upstream> ArtifactService<S, U> {
         // ① 流式落 blob：边写边算四摘要，落定即等于 sha256 校验通过（内容寻址）
         let digests = self.store.put(reader).await?;
 
-        // 幂等：同坐标已存在同 sha256 缓存，则本次搬运为重入——清理本次多余落盘后复用既有记录
+        // 幂等：同坐标已存在同 sha256 缓存，则本次搬运为重入——清理本次多余落盘后复用既有记录（FR-134）
         if let Some(existing) = self.meta.get_artifact(&repo.id, &coords.path).await? {
             if existing.sha256 == digests.sha256 {
                 self.rollback_blob(&digests.sha256).await;
-                return Ok(existing);
+                return Ok(IngestOutcome::AlreadyExists(existing));
             }
         }
 
@@ -246,7 +271,7 @@ impl<S: BlobStore, U: Upstream> ArtifactService<S, U> {
             .await?
             .ok_or(ServiceError::NotFound)?;
         tracing::info!(仓库 = %repo.name, 路径 = %coords.path, "已搬运缓存制品");
-        Ok(record)
+        Ok(IngestOutcome::Written(record))
     }
 
     /// 迁移搬运：把源 hosted 仓库的制品按字节流写入本仓库（FR-39）。
@@ -255,10 +280,10 @@ impl<S: BlobStore, U: Upstream> ArtifactService<S, U> {
     /// 再写元数据索引（`cached = false`，hosted 正常制品语义）**；写索引失败回滚 blob，不留孤儿。
     /// 区别在于字节来源是迁移搬运的本地输入流，而非客户端直传。仅适用于 hosted 仓库。
     ///
-    /// 幂等：同坐标已存在同 sha256 索引时跳过落盘与写索引，直接返回既有记录（搬运可重入）。
+    /// 幂等：同坐标已存在同 sha256 索引时跳过落盘与写索引，返回 `AlreadyExists`（搬运可重入，FR-134）。
     /// 覆盖策略：同坐标已存在但 sha256 不同时，按 [`Format::can_overwrite`] 判定——不允许覆盖
     /// （如 Maven release）则返回 [`ServiceError::OverwriteForbidden`]，由搬运编排据此跳过该制品
-    /// 而不中断整批；允许覆盖（如 Raw / Docker tag）则落定新内容。
+    /// 而不中断整批；允许覆盖（如 Raw / Docker tag）则落定新内容，返回 `Written`。
     pub async fn ingest_hosted<R>(
         &self,
         repo: &RepositoryRecord,
@@ -266,7 +291,7 @@ impl<S: BlobStore, U: Upstream> ArtifactService<S, U> {
         coords: &ArtifactCoordinates,
         reader: R,
         max_size: Option<u64>,
-    ) -> Result<ArtifactRecord, ServiceError>
+    ) -> Result<IngestOutcome, ServiceError>
     where
         R: AsyncRead + Unpin + Send,
     {
@@ -288,10 +313,10 @@ impl<S: BlobStore, U: Upstream> ArtifactService<S, U> {
 
         // 幂等 / 覆盖判定：先按既有制品决定是复用、覆盖还是拒绝，再决定是否写索引
         if let Some(existing) = self.meta.get_artifact(&repo.id, &coords.path).await? {
-            // 同坐标同内容：本次搬运为重入，清理多余落盘后复用既有记录
+            // 同坐标同内容：本次搬运为重入，清理多余落盘后复用既有记录（FR-134 增量跳过）
             if existing.sha256 == digests.sha256 {
                 self.rollback_blob(&digests.sha256).await;
-                return Ok(existing);
+                return Ok(IngestOutcome::AlreadyExists(existing));
             }
             // 同坐标不同内容：按格式覆盖策略判定；不可覆盖则回滚本次落盘并报错（交编排跳过）
             if !format.can_overwrite(&existing) {
@@ -327,7 +352,7 @@ impl<S: BlobStore, U: Upstream> ArtifactService<S, U> {
             .await?
             .ok_or(ServiceError::NotFound)?;
         tracing::info!(仓库 = %repo.name, 路径 = %coords.path, "已搬运 hosted 制品");
-        Ok(record)
+        Ok(IngestOutcome::Written(record))
     }
 
     /// 读取制品（FR-11/12）：hosted / proxy-cache-hit 直接流式返回；
@@ -1029,7 +1054,8 @@ mod tests {
         let rec = svc
             .ingest_cached(&repo, &RawFormat, &coords, &b"migrated"[..])
             .await
-            .unwrap();
+            .unwrap()
+            .into_record();
         assert_eq!(rec.cached, 1);
         assert_eq!(rec.size, 8);
 
@@ -1063,16 +1089,70 @@ mod tests {
         let r1 = svc
             .ingest_cached(&repo, &RawFormat, &coords, &b"same"[..])
             .await
-            .unwrap();
+            .unwrap()
+            .into_record();
         // 重入：同坐标同内容，应复用既有记录、索引仍只有一条
         let r2 = svc
             .ingest_cached(&repo, &RawFormat, &coords, &b"same"[..])
             .await
-            .unwrap();
+            .unwrap()
+            .into_record();
         assert_eq!(r1.sha256, r2.sha256);
         assert_eq!(
             meta.list_artifacts_by_repo(&repo.id).await.unwrap().len(),
             1
+        );
+    }
+
+    // ---------- FR-134：IngestOutcome 区分 Written / AlreadyExists ----------
+
+    #[tokio::test]
+    async fn ingest_cached_首次返回_written_重入返回_already_exists() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (svc, meta, _dir) = 新建服务(MockUpstream::new(b"", calls)).await;
+        let repo = 建仓库(&meta, "p", RepoType::Proxy, Some("https://up.example")).await;
+        let coords = 坐标("x.bin");
+
+        // 首次：应返回 Written
+        let outcome1 = svc
+            .ingest_cached(&repo, &RawFormat, &coords, &b"hello"[..])
+            .await
+            .unwrap();
+        assert!(outcome1.is_written(), "首次搬运应为 Written");
+
+        // 重入（同内容）：应返回 AlreadyExists
+        let outcome2 = svc
+            .ingest_cached(&repo, &RawFormat, &coords, &b"hello"[..])
+            .await
+            .unwrap();
+        assert!(
+            matches!(outcome2, IngestOutcome::AlreadyExists(_)),
+            "重入应为 AlreadyExists"
+        );
+    }
+
+    #[tokio::test]
+    async fn ingest_hosted_首次返回_written_重入返回_already_exists() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (svc, meta, _dir) = 新建服务(MockUpstream::new(b"", calls)).await;
+        let repo = 建仓库(&meta, "h", RepoType::Hosted, None).await;
+        let coords = 坐标("x.bin");
+
+        // 首次：应返回 Written
+        let outcome1 = svc
+            .ingest_hosted(&repo, &RawFormat, &coords, &b"world"[..], None)
+            .await
+            .unwrap();
+        assert!(outcome1.is_written(), "首次搬运应为 Written");
+
+        // 重入（同内容）：应返回 AlreadyExists
+        let outcome2 = svc
+            .ingest_hosted(&repo, &RawFormat, &coords, &b"world"[..], None)
+            .await
+            .unwrap();
+        assert!(
+            matches!(outcome2, IngestOutcome::AlreadyExists(_)),
+            "重入应为 AlreadyExists"
         );
     }
 
@@ -1117,7 +1197,8 @@ mod tests {
         let rec = svc
             .ingest_hosted(&repo, &RawFormat, &coords, &b"hosted-migrated"[..], None)
             .await
-            .unwrap();
+            .unwrap()
+            .into_record();
         // hosted 制品非缓存
         assert_eq!(rec.cached, 0);
         assert_eq!(rec.size, 15);
@@ -1152,12 +1233,14 @@ mod tests {
         let r1 = svc
             .ingest_hosted(&repo, &RawFormat, &coords, &b"same"[..], None)
             .await
-            .unwrap();
+            .unwrap()
+            .into_record();
         // 重入：同坐标同内容，复用既有记录、索引仍只一条
         let r2 = svc
             .ingest_hosted(&repo, &RawFormat, &coords, &b"same"[..], None)
             .await
-            .unwrap();
+            .unwrap()
+            .into_record();
         assert_eq!(r1.sha256, r2.sha256);
         assert_eq!(
             meta.list_artifacts_by_repo(&repo.id).await.unwrap().len(),
@@ -1177,7 +1260,8 @@ mod tests {
 
         svc.ingest_hosted(&repo, &MavenFormat, &coords, &b"v1"[..], None)
             .await
-            .unwrap();
+            .unwrap()
+            .into_record();
         // 同坐标不同内容：release 不可覆盖，报 OverwriteForbidden（编排据此跳过）
         let err = svc
             .ingest_hosted(&repo, &MavenFormat, &coords, &b"v2-changed"[..], None)
@@ -1209,11 +1293,13 @@ mod tests {
 
         svc.ingest_hosted(&repo, &RawFormat, &coords, &b"v1"[..], None)
             .await
-            .unwrap();
+            .unwrap()
+            .into_record();
         // Raw 允许覆盖：搬运不同内容应落定新值，索引仍只一条
         svc.ingest_hosted(&repo, &RawFormat, &coords, &b"v2-new"[..], None)
             .await
-            .unwrap();
+            .unwrap()
+            .into_record();
         assert_eq!(
             meta.list_artifacts_by_repo(&repo.id).await.unwrap().len(),
             1

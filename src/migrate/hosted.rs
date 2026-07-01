@@ -22,7 +22,9 @@
 
 use std::path::Path;
 
-use crate::format::{ArtifactCoordinates, ArtifactService, FormatRegistry, ServiceError};
+use crate::format::{
+    ArtifactCoordinates, ArtifactService, FormatRegistry, IngestOutcome, ServiceError,
+};
 use crate::meta::{MetaStore, NewRepository, RepoType, RepositoryRecord, Visibility};
 use crate::proxy::Upstream;
 use crate::storage::BlobStore;
@@ -33,14 +35,25 @@ use super::{
     OnlinePullPhase, OnlinePullProgress, OnlineRepoMigrationOutcome,
 };
 
-/// 在一个 blob 处理完成后推进进度计数（FR-125）：`done_assets` +1，按结果累加 `migrated` / `skipped`。
-fn bump_progress(progress: &std::sync::Mutex<OnlinePullProgress>, migrated: bool) {
+/// 搬运进度计数三态（FR-134）。
+enum BumpKind {
+    /// 新写入（首次搬运或内容变化后覆盖写入）。
+    Migrated,
+    /// 增量跳过（目标已存在且 sha256 一致，幂等重入）。
+    SkippedExisting,
+    /// 失败跳过（路径非法 / 读本体失败 / 不可覆盖 / 写入失败等）。
+    SkippedFailed,
+}
+
+/// 在一个 blob 处理完成后推进进度计数（FR-125/FR-134）：
+/// `done_assets` +1，按三态分别累加 `migrated` / `skipped_existing` / `skipped`。
+fn bump_progress(progress: &std::sync::Mutex<OnlinePullProgress>, kind: BumpKind) {
     let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
     p.done_assets += 1;
-    if migrated {
-        p.migrated += 1;
-    } else {
-        p.skipped += 1;
+    match kind {
+        BumpKind::Migrated => p.migrated += 1,
+        BumpKind::SkippedExisting => p.skipped_existing += 1,
+        BumpKind::SkippedFailed => p.skipped += 1,
     }
 }
 
@@ -53,9 +66,11 @@ pub struct HostedRepoMigrationOutcome {
     pub format: String,
     /// 本仓库是否新建（false 表示同名仓库已存在、复用）。
     pub created: bool,
-    /// 成功搬运的制品数。
+    /// 成功新写入的制品数（首次搬运或内容变化后覆盖写入）。
     pub migrated_artifacts: usize,
-    /// 跳过 / 失败的制品数（路径非法、读本体失败、不可覆盖、写入失败等，均不中断整批）。
+    /// 增量跳过数（FR-134）：目标已存在且 sha256 一致，本次幂等重入跳过落盘。
+    pub skipped_existing_artifacts: usize,
+    /// 失败跳过数（路径非法、读本体失败、不可覆盖、写入失败等，均不中断整批）。
     pub skipped_artifacts: usize,
 }
 
@@ -106,14 +121,14 @@ pub(crate) async fn ensure_hosted_repo(
     Ok((record, true))
 }
 
-/// 搬运一个 hosted 仓库的全部离线制品本体，返回 (成功数, 跳过数)。
+/// 搬运一个 hosted 仓库的全部离线制品本体，返回 `(新写数, 增量跳过数, 失败跳过数, 是否中途被取消)`。
 ///
 /// 逐条流式读取 `.bytes` 本体并经 [`ArtifactService::ingest_hosted`] 写入；单条失败
-/// （路径非法 / 读本体失败 / 不可覆盖 / 写入失败）记 WARN 后跳过，不中断整批。
-/// `max_size` 为单制品上传上限（超限的制品按跳过处理，不写半截 blob）。
-/// 返回 `(成功数, 跳过数, 是否中途被取消)`。每条前在 blob 边界响应取消 / 暂停（FR-91/125）：
+/// （路径非法 / 读本体失败 / 不可覆盖 / 写入失败）记 WARN 后计失败跳过，不中断整批。
+/// 重跑时目标已存在且 sha256 一致的制品计增量跳过（FR-134）。
+/// `max_size` 为单制品上传上限（超限的制品按失败跳过处理，不写半截 blob）。
+/// 每条前在 blob 边界响应取消 / 暂停（FR-91/125）：
 /// 取消即提前结束本仓库（`cancelled=true`）、暂停即挂起等待继续；边搬边推进进度。
-/// `max_size` 为单制品上传上限（超限的制品按跳过处理，不写半截 blob）。
 async fn migrate_repo_artifacts<S: BlobStore, U: Upstream>(
     artifacts: &ArtifactService<S, U>,
     formats: &FormatRegistry,
@@ -122,22 +137,23 @@ async fn migrate_repo_artifacts<S: BlobStore, U: Upstream>(
     max_size: Option<u64>,
     progress: &std::sync::Mutex<OnlinePullProgress>,
     control: &JobControl,
-) -> (usize, usize, bool) {
+) -> (usize, usize, usize, bool) {
     let Some(format) = formats.get(&repo.format) else {
         // 仓库已按映射格式建成，注册表理应有对应处理器；缺失则整批跳过（防御）
         tracing::warn!(仓库 = %repo.name, 格式 = %repo.format, "格式处理器未注册，跳过该仓库制品搬运");
         let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
         p.skipped += entries.len();
         p.done_assets += entries.len();
-        return (0, entries.len(), false);
+        return (0, 0, entries.len(), false);
     };
 
     let mut migrated = 0usize;
+    let mut skipped_existing = 0usize;
     let mut skipped = 0usize;
     for entry in entries {
         // blob 边界响应取消 / 暂停（FR-91）：取消即提前结束本仓库（已搬运保留）
         if await_control(control, progress).await {
-            return (migrated, skipped, true);
+            return (migrated, skipped_existing, skipped, true);
         }
         {
             let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
@@ -153,7 +169,7 @@ async fn migrate_repo_artifacts<S: BlobStore, U: Upstream>(
             Err(e) => {
                 tracing::warn!(仓库 = %repo.name, blob = %entry.blob_name, 错误 = %e, "制品路径非法，跳过搬运");
                 skipped += 1;
-                bump_progress(progress, false);
+                bump_progress(progress, BumpKind::SkippedFailed);
                 continue;
             }
         };
@@ -164,7 +180,7 @@ async fn migrate_repo_artifacts<S: BlobStore, U: Upstream>(
             Err(e) => {
                 tracing::warn!(仓库 = %repo.name, 路径 = %entry.bytes_path.display(), 错误 = %e, "读取 blob 本体失败，跳过搬运");
                 skipped += 1;
-                bump_progress(progress, false);
+                bump_progress(progress, BumpKind::SkippedFailed);
                 continue;
             }
         };
@@ -173,24 +189,31 @@ async fn migrate_repo_artifacts<S: BlobStore, U: Upstream>(
             .ingest_hosted(repo, format, &coords, file, max_size)
             .await
         {
-            Ok(_) => {
+            // 新写入：首次搬运或内容变化后覆盖
+            Ok(IngestOutcome::Written(_)) => {
                 migrated += 1;
-                bump_progress(progress, true);
+                bump_progress(progress, BumpKind::Migrated);
+            }
+            // 增量跳过：目标已存在且 sha256 一致，幂等重入（FR-134）
+            Ok(IngestOutcome::AlreadyExists(_)) => {
+                skipped_existing += 1;
+                bump_progress(progress, BumpKind::SkippedExisting);
+                tracing::debug!(仓库 = %repo.name, blob = %entry.blob_name, "制品已存在且 sha256 一致，增量跳过");
             }
             // 不可覆盖（如 Maven release 已存在不同内容）：按覆盖 / 不可变策略跳过，不中断整批
             Err(ServiceError::OverwriteForbidden) => {
                 tracing::info!(仓库 = %repo.name, blob = %entry.blob_name, "同坐标制品已存在且不可覆盖，跳过搬运");
                 skipped += 1;
-                bump_progress(progress, false);
+                bump_progress(progress, BumpKind::SkippedFailed);
             }
             Err(e) => {
                 tracing::warn!(仓库 = %repo.name, blob = %entry.blob_name, 错误 = %e, "hosted 制品搬运失败，跳过");
                 skipped += 1;
-                bump_progress(progress, false);
+                bump_progress(progress, BumpKind::SkippedFailed);
             }
         }
     }
-    (migrated, skipped, false)
+    (migrated, skipped_existing, skipped, false)
 }
 
 /// 执行 hosted 仓库配置创建 + 完整制品搬运（FR-39）。
@@ -281,7 +304,7 @@ pub async fn migrate_hosted_repositories_with_progress<S: BlobStore, U: Upstream
         let (repo, created) = ensure_hosted_repo(meta, &src.name, format).await?;
 
         let repo_entries = by_repo.remove(src.name.as_str()).unwrap_or_default();
-        let (migrated, skipped, cancelled) = migrate_repo_artifacts(
+        let (migrated, skipped_existing, skipped, cancelled) = migrate_repo_artifacts(
             artifacts,
             formats,
             &repo,
@@ -297,7 +320,8 @@ pub async fn migrate_hosted_repositories_with_progress<S: BlobStore, U: Upstream
             格式 = %format,
             新建 = created,
             已搬运 = migrated,
-            已跳过 = skipped,
+            增量跳过 = skipped_existing,
+            失败跳过 = skipped,
             已取消 = cancelled,
             "hosted 仓库迁移完成"
         );
@@ -306,6 +330,7 @@ pub async fn migrate_hosted_repositories_with_progress<S: BlobStore, U: Upstream
             format: format.to_string(),
             created,
             migrated_artifacts: migrated,
+            skipped_existing_artifacts: skipped_existing,
             skipped_artifacts: skipped,
         });
         progress
@@ -318,6 +343,7 @@ pub async fn migrate_hosted_repositories_with_progress<S: BlobStore, U: Upstream
                 format: format.to_string(),
                 created,
                 migrated_artifacts: migrated,
+                skipped_existing_artifacts: skipped_existing,
                 skipped_artifacts: skipped,
             });
 
@@ -626,5 +652,152 @@ mod tests {
         let p = progress.lock().unwrap();
         assert_eq!(p.phase, OnlinePullPhase::Cancelled);
         assert_eq!(p.migrated, 0);
+    }
+
+    // ---------- FR-134：增量幂等续传计数 ----------
+
+    #[tokio::test]
+    async fn 二次跑同源_hosted_制品增量跳过且_migrated_为零() {
+        let (meta, svc, formats, store_dir) = 新建().await;
+        let blob_root = store_dir.path().join("nexus");
+        build_store(
+            &blob_root,
+            &[
+                ("raw-hosted", "/a.bin", "内容A"),
+                ("raw-hosted", "/b.bin", "内容B"),
+            ],
+        );
+
+        let src = vec![src_repo("raw-hosted", "raw", "hosted")];
+
+        // 首次搬运：全部新写入
+        let r1 = migrate_hosted_repositories(&meta, &svc, &formats, &src, &blob_root, None)
+            .await
+            .unwrap();
+        assert_eq!(r1.repos[0].migrated_artifacts, 2, "首次应全部新写入");
+        assert_eq!(r1.repos[0].skipped_existing_artifacts, 0, "首次无增量跳过");
+        assert_eq!(r1.repos[0].skipped_artifacts, 0, "首次无失败跳过");
+
+        // 二次搬运同源：全部命中既有一致 sha256，应增量跳过
+        let r2 = migrate_hosted_repositories(&meta, &svc, &formats, &src, &blob_root, None)
+            .await
+            .unwrap();
+        assert_eq!(r2.repos[0].migrated_artifacts, 0, "二次跑应无新写入");
+        assert_eq!(
+            r2.repos[0].skipped_existing_artifacts, 2,
+            "二次跑应全部增量跳过"
+        );
+        assert_eq!(r2.repos[0].skipped_artifacts, 0, "二次跑无失败跳过");
+        // 索引仍只有两条（幂等不重复写）
+        let repo = meta
+            .get_repository_by_name("raw-hosted")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            meta.list_artifacts_by_repo(&repo.id).await.unwrap().len(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn 二次跑进度计数区分增量跳过与新写入() {
+        let (meta, svc, formats, store_dir) = 新建().await;
+        let blob_root = store_dir.path().join("nexus");
+        build_store(
+            &blob_root,
+            &[
+                ("raw-hosted", "/a.bin", "内容A"),
+                ("raw-hosted", "/b.bin", "内容B"),
+            ],
+        );
+        let src = vec![src_repo("raw-hosted", "raw", "hosted")];
+
+        // 首次搬运
+        let progress1 = std::sync::Mutex::new(OnlinePullProgress::default());
+        let control1 = JobControl::default();
+        migrate_hosted_repositories_with_progress(
+            &meta, &svc, &formats, &src, &blob_root, None, &progress1, &control1,
+        )
+        .await
+        .unwrap();
+        {
+            let p = progress1.lock().unwrap();
+            assert_eq!(p.migrated, 2);
+            assert_eq!(p.skipped_existing, 0);
+            assert_eq!(p.skipped, 0);
+            assert_eq!(
+                p.done_assets,
+                p.migrated + p.skipped_existing + p.skipped,
+                "三态之和守恒"
+            );
+        }
+
+        // 二次搬运：进度显示全部增量跳过
+        let progress2 = std::sync::Mutex::new(OnlinePullProgress::default());
+        let control2 = JobControl::default();
+        migrate_hosted_repositories_with_progress(
+            &meta, &svc, &formats, &src, &blob_root, None, &progress2, &control2,
+        )
+        .await
+        .unwrap();
+        {
+            let p = progress2.lock().unwrap();
+            assert_eq!(p.migrated, 0, "二次跑无新写入");
+            assert_eq!(p.skipped_existing, 2, "二次跑全部增量跳过");
+            assert_eq!(p.skipped, 0, "二次跑无失败跳过");
+            assert_eq!(
+                p.done_assets,
+                p.migrated + p.skipped_existing + p.skipped,
+                "三态之和守恒"
+            );
+            assert_eq!(p.repos[0].migrated_artifacts, 0);
+            assert_eq!(p.repos[0].skipped_existing_artifacts, 2);
+            assert_eq!(p.repos[0].skipped_artifacts, 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn 失败跳过不计入增量跳过_不可覆盖单独保留() {
+        let (meta, svc, formats, store_dir) = 新建().await;
+        let blob_root = store_dir.path().join("nexus");
+        let coord = "/com/foo/lib/1.0/lib-1.0.jar";
+
+        // 先搬入 v1 release
+        build_store(&blob_root, &[("maven-releases", coord, "release-v1")]);
+        let src = vec![src_repo("maven-releases", "maven2", "hosted")];
+        let r1 = migrate_hosted_repositories(&meta, &svc, &formats, &src, &blob_root, None)
+            .await
+            .unwrap();
+        assert_eq!(r1.repos[0].migrated_artifacts, 1);
+        assert_eq!(r1.repos[0].skipped_existing_artifacts, 0);
+        assert_eq!(r1.repos[0].skipped_artifacts, 0);
+
+        // 二次跑相同内容 → 增量跳过（sha256 一致）
+        let r2 = migrate_hosted_repositories(&meta, &svc, &formats, &src, &blob_root, None)
+            .await
+            .unwrap();
+        assert_eq!(r2.repos[0].migrated_artifacts, 0, "二次无新写入");
+        assert_eq!(
+            r2.repos[0].skipped_existing_artifacts, 1,
+            "相同内容增量跳过"
+        );
+        assert_eq!(r2.repos[0].skipped_artifacts, 0);
+
+        // 搬运不同内容（sha256 不同）→ 不可覆盖失败跳过（计入 skipped，不计 skipped_existing）
+        let blob_root2 = store_dir.path().join("nexus2");
+        build_store(
+            &blob_root2,
+            &[("maven-releases", coord, "release-v2-tampered")],
+        );
+        let r3 = migrate_hosted_repositories(&meta, &svc, &formats, &src, &blob_root2, None)
+            .await
+            .unwrap();
+        assert_eq!(r3.repos[0].migrated_artifacts, 0, "不可覆盖：无新写入");
+        assert_eq!(
+            r3.repos[0].skipped_existing_artifacts, 0,
+            "不同内容不计增量跳过"
+        );
+        assert_eq!(r3.repos[0].skipped_artifacts, 1, "不可覆盖计失败跳过");
     }
 }

@@ -65,9 +65,11 @@ pub struct OnlineRepoMigrationOutcome {
     pub format: String,
     /// 目标仓库是否新建（false 表示同名仓库已存在、复用）。
     pub created: bool,
-    /// 成功搬运的 asset 数。
+    /// 成功新写入的 asset 数（首次搬运或内容变化后覆盖写入）。
     pub migrated_artifacts: usize,
-    /// 跳过 / 失败的 asset 数（路径非法、下载失败、sha256 不符、不可覆盖、写入失败等，均不中断整批）。
+    /// 增量跳过数（FR-134）：目标已存在且 sha256 一致，本次幂等重入跳过落盘。
+    pub skipped_existing_artifacts: usize,
+    /// 失败跳过数（路径非法、下载失败、sha256 不符、不可覆盖、写入失败等，均不中断整批）。
     pub skipped_artifacts: usize,
 }
 
@@ -157,11 +159,13 @@ pub struct OnlinePullProgress {
     pub phase: OnlinePullPhase,
     /// 已枚举到的待搬运 asset 总数（各仓库枚举完成后累加）。
     pub total_assets: usize,
-    /// 已处理 asset 数（migrated + skipped）。
+    /// 已处理 asset 数（migrated + skipped_existing + skipped）。
     pub done_assets: usize,
-    /// 成功搬运数。
+    /// 成功新写入数（首次搬运或内容变化后覆盖写入）。
     pub migrated: usize,
-    /// 跳过 / 失败数。
+    /// 增量跳过数（FR-134）：目标已存在且 sha256 一致，本次幂等重入跳过落盘。
+    pub skipped_existing: usize,
+    /// 失败跳过数（路径非法 / 读本体失败 / 写入失败 / 不可覆盖等）。
     pub skipped: usize,
     /// 当前正在处理的源仓库名。
     pub current_repo: Option<String>,
@@ -292,6 +296,8 @@ where
             format: "maven".to_string(),
             created,
             migrated_artifacts: pulled.migrated,
+            // 在线拉取路径不区分增量跳过（AlreadyExists 已计入 migrated）
+            skipped_existing_artifacts: 0,
             skipped_artifacts: pulled.skipped,
         };
         lock_progress(progress).repos.push(outcome.clone());
@@ -520,7 +526,8 @@ where
             .ingest_hosted(repo, format, &coords, reader, max_size)
             .await
         {
-            Ok(r) => break r,
+            // 无论新写还是幂等重入（AlreadyExists），在线拉取路径均视为已处理
+            Ok(outcome) => break outcome.into_record(),
             // 不可覆盖为确定性失败，不重试
             Err(ServiceError::OverwriteForbidden) => {
                 tracing::info!(仓库 = %repo.name, 路径 = %asset.path, "同坐标制品已存在且不可覆盖，跳过");
