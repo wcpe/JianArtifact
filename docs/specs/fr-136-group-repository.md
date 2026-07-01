@@ -1,6 +1,6 @@
 # 功能规格：group / 虚拟聚合仓库（新仓库类型）
 
-> 状态：已实现（ADR-group-virtual-repository 已接受）　·　关联 PRD：FR-136（被 FR-137 依赖）　·　分支：fr-136-group-repo
+> 状态：已实现（ADR-0039 已接受）　·　关联 PRD：FR-136（被 FR-137 依赖）　·　分支：fr-136-group-repo
 
 ## 1. 背景与目标
 
@@ -40,7 +40,7 @@
 
 ## 3. 设计（怎么做）
 
-涉及架构决策（新仓库类型 + 推翻 scope 排除）→ 另写 **ADR-XXXX（group/virtual 仓库）**（占位号，主控统一分配），
+涉及架构决策（新仓库类型 + 推翻 scope 排除）→ 另写 **ADR-0039（group/virtual 仓库）**，
 在此仅引用、不重复其决策正文。
 
 ### 3.1 数据模型（meta，唯一真源）
