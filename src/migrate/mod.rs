@@ -19,12 +19,14 @@
 //! - 离线入口纯文件系统读取、不依赖外部服务；解析逻辑做成无副作用纯函数便于穷举测试。
 //! - 依赖方向：本模块仅依赖 `config` 级以下，不反向依赖上层；api 层薄编排调用之。
 
+mod group;
 mod hosted;
 mod http;
 mod offline;
 mod online;
 mod proxy;
 
+pub use group::{migrate_group_repositories, GroupMigrationReport, GroupRepoOutcome};
 pub use hosted::{
     migrate_hosted_repositories, migrate_hosted_repositories_with_progress, HostedMigrationReport,
     HostedRepoMigrationOutcome,
@@ -106,7 +108,9 @@ pub enum MigrateError {
 /// 从源 Nexus 枚举出的单个仓库的基本元数据（迁移预览项）。
 ///
 /// 仅承载迁移发现所需的基本信息；不含任何凭据。`upstream_url` 仅 proxy 仓库有值
-/// （取自 Nexus 的 `attributes.proxy.remoteUrl`），hosted 仓库为 None。
+/// （取自 Nexus 的 `attributes.proxy.remoteUrl`），hosted / group 仓库为 None。
+/// `group_members` 仅 group 仓库有值（取自 Nexus 的 `attributes.group.memberNames`），
+/// 非 group 仓库为空列表。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct NexusRepoSummary {
     /// 仓库名。
@@ -117,6 +121,10 @@ pub struct NexusRepoSummary {
     pub r#type: String,
     /// proxy 仓库的上游地址（hosted / group 为 None）。
     pub upstream_url: Option<String>,
+    /// group 仓库的成员名列表（按 Nexus position 顺序，取自 `attributes.group.memberNames`）；
+    /// 非 group 仓库为空列表。
+    #[serde(default)]
+    pub group_members: Vec<String>,
 }
 
 /// 连接源 Nexus 时使用的凭据（用户名 + 口令 / token）。真源在 env，绝不入库、不进日志。
@@ -191,8 +199,8 @@ pub fn resolve_credential(auth_ref: &str) -> Result<NexusCredential, MigrateErro
 
 /// 解析 Nexus 仓库列表 REST 响应文本为仓库摘要列表（纯函数，便于穷举测试）。
 ///
-/// 只取迁移发现所需字段（name / format / type / proxy.remoteUrl），忽略其余字段；
-/// 顶层须为 JSON 数组，每项须含 name / format / type，否则报 [`MigrateError::Parse`]。
+/// 取迁移发现所需字段（name / format / type / proxy.remoteUrl / group.memberNames），
+/// 忽略其余字段；顶层须为 JSON 数组，每项须含 name / format / type，否则报 [`MigrateError::Parse`]。
 pub fn parse_repositories(body: &str) -> Result<Vec<NexusRepoSummary>, MigrateError> {
     // 仅声明需要的字段，Nexus 多出的字段（size 等）由 serde 忽略
     #[derive(serde::Deserialize)]
@@ -207,11 +215,18 @@ pub fn parse_repositories(body: &str) -> Result<Vec<NexusRepoSummary>, MigrateEr
     struct RawAttributes {
         #[serde(default)]
         proxy: Option<RawProxy>,
+        #[serde(default)]
+        group: Option<RawGroup>,
     }
     #[derive(serde::Deserialize)]
     struct RawProxy {
         #[serde(rename = "remoteUrl")]
         remote_url: Option<String>,
+    }
+    #[derive(serde::Deserialize)]
+    struct RawGroup {
+        #[serde(rename = "memberNames", default)]
+        member_names: Vec<String>,
     }
 
     let raw: Vec<RawRepo> =
@@ -225,6 +240,12 @@ pub fn parse_repositories(body: &str) -> Result<Vec<NexusRepoSummary>, MigrateEr
             r#type: r.r#type,
             // proxy 仓库的上游地址取自 attributes.proxy.remoteUrl；其余类型无此项
             upstream_url: r.attributes.proxy.and_then(|p| p.remote_url),
+            // group 仓库的成员名列表取自 attributes.group.memberNames；非 group 为空列表
+            group_members: r
+                .attributes
+                .group
+                .map(|g| g.member_names)
+                .unwrap_or_default(),
         })
         .collect())
 }
@@ -461,12 +482,14 @@ mod tests {
                 format: "nuget".to_string(),
                 r#type: "proxy".to_string(),
                 upstream_url: Some("https://www.nuget.org/api/v2/".to_string()),
+                group_members: vec![],
             }
         );
-        // hosted 仓库无上游地址
+        // hosted 仓库无上游地址、无成员列表
         assert_eq!(repos[1].name, "maven-releases");
         assert_eq!(repos[1].r#type, "hosted");
         assert_eq!(repos[1].upstream_url, None);
+        assert!(repos[1].group_members.is_empty());
     }
 
     #[test]
@@ -491,6 +514,85 @@ mod tests {
             parse_repositories("not json"),
             Err(MigrateError::Parse(_))
         ));
+    }
+
+    #[test]
+    fn 解析_group_仓库成员名列表() {
+        // group 仓库含 memberNames → group_members 正确解析
+        let body = r#"[
+            {
+                "name": "maven-group",
+                "format": "maven2",
+                "type": "group",
+                "url": "http://localhost:8081/repository/maven-group",
+                "attributes": {
+                    "group": { "memberNames": ["maven-releases", "maven-snapshots", "maven-central"] }
+                }
+            }
+        ]"#;
+        let repos = parse_repositories(body).unwrap();
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0].r#type, "group");
+        assert_eq!(
+            repos[0].group_members,
+            vec!["maven-releases", "maven-snapshots", "maven-central"]
+        );
+        assert_eq!(repos[0].upstream_url, None);
+    }
+
+    #[test]
+    fn 解析_group_仓库空成员列表() {
+        // memberNames 为空数组 → group_members 为空
+        let body = r#"[
+            {
+                "name": "empty-group",
+                "format": "npm",
+                "type": "group",
+                "attributes": {
+                    "group": { "memberNames": [] }
+                }
+            }
+        ]"#;
+        let repos = parse_repositories(body).unwrap();
+        assert!(repos[0].group_members.is_empty());
+    }
+
+    #[test]
+    fn 解析_非_group_仓库_group_members_为空() {
+        // proxy/hosted 无 attributes.group → group_members 为空
+        let body = r#"[
+            {
+                "name": "raw-proxy",
+                "format": "raw",
+                "type": "proxy",
+                "attributes": { "proxy": { "remoteUrl": "https://up.example" } }
+            },
+            {
+                "name": "raw-hosted",
+                "format": "raw",
+                "type": "hosted",
+                "attributes": {}
+            }
+        ]"#;
+        let repos = parse_repositories(body).unwrap();
+        assert!(repos[0].group_members.is_empty());
+        assert!(repos[1].group_members.is_empty());
+    }
+
+    #[test]
+    fn 解析_group_仓库缺_attributes_group_字段() {
+        // group 类型但 attributes 内无 group 键 → group_members 为空（不 panic / 不报解析错误）
+        let body = r#"[
+            {
+                "name": "bare-group",
+                "format": "maven2",
+                "type": "group",
+                "attributes": {}
+            }
+        ]"#;
+        let repos = parse_repositories(body).unwrap();
+        assert_eq!(repos[0].r#type, "group");
+        assert!(repos[0].group_members.is_empty());
     }
 
     #[test]

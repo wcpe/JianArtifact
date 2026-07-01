@@ -477,6 +477,10 @@ pub fn build_router(state: AppState) -> Router {
             "/migrate/nexus/online/migrate",
             post(migrate::migrate_nexus_online),
         )
+        .route(
+            "/migrate/nexus/group/migrate",
+            post(migrate::migrate_nexus_group),
+        )
         // 统一任务注册表（FR-131）：跨 kind 列出活跃 + 近期任务、查单任务进度（仅 Admin）
         .route("/tasks", get(tasks::list_tasks))
         .route("/tasks/{id}", get(tasks::get_task))

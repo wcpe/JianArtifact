@@ -630,6 +630,46 @@ pub async fn migrate_nexus_job_resume(
     Ok(StatusCode::OK)
 }
 
+/// group 仓库配置 + 成员映射迁移请求体（FR-137）。
+#[derive(Debug, Deserialize)]
+pub struct NexusGroupMigrateRequest {
+    /// 源 Nexus 基址：经其 REST API 枚举 group 仓库配置（格式 / 成员名列表）。
+    pub base_url: String,
+    /// 上游凭据引用（仅引用，真值走 env，不入库）；匿名可访问的源系统可省略。
+    #[serde(default)]
+    pub auth_ref: Option<String>,
+}
+
+/// 执行 Nexus group 仓库配置 + 成员映射迁移（仅管理员，FR-137）。
+///
+/// 经在线 REST 枚举源 group 仓库配置 → 在本系统建 group 仓库 → 按成员名映射成员 id 列表并写入关联。
+/// 成员仓库应已由 proxy/hosted 迁移（FR-38/39）先建好；成员缺失时记告警 + 跳过该成员（不中断整 group）。
+/// group 迁移为纯元数据操作（无 blob 搬运），同步返回完整报告，无需异步 job。
+pub async fn migrate_nexus_group(
+    State(state): State<AppState>,
+    identity: Identity,
+    Json(req): Json<NexusGroupMigrateRequest>,
+) -> Result<Json<migrate::GroupMigrationReport>, ApiError> {
+    identity.require_admin()?;
+
+    // 同步阶段：在线枚举源仓库配置（含 group 成员名列表）
+    let client = HttpNexusClient::with_network_state(state.settings.network.clone());
+    let source_repos =
+        migrate::discover_repositories(&client, &req.base_url, req.auth_ref.as_deref()).await?;
+
+    // group 迁移为纯元数据操作，同步执行并返回报告
+    let report = migrate::migrate_group_repositories(&state.meta, &source_repos)
+        .await
+        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+
+    tracing::info!(
+        已迁移 = report.migrated.len(),
+        已跳过 = report.skipped_repos.len(),
+        "group 仓库迁移完成"
+    );
+    Ok(Json(report))
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::tests::{测试用状态, 读_json};

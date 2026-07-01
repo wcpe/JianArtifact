@@ -400,6 +400,7 @@ mod tests {
             format: format.to_string(),
             r#type: r#type.to_string(),
             upstream_url: up.map(str::to_string),
+            group_members: vec![],
         }
     }
 

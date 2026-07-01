@@ -345,6 +345,14 @@
 - **响应**：`202 Accepted`，体 `{ "job_id": string }`——供轮询 `GET /api/v1/migrate/jobs/{id}`。
 - **错误**：`400` 未选择仓库 / 源仓库不存在；`401` 未认证；`403` 非管理员；`502` 连接 / 鉴权 / 解析源 Nexus 失败（同步枚举阶段）。
 
+### Nexus group 仓库本体迁移（FR-137）
+
+- **方法 / 路径**：`POST /api/v1/migrate/nexus/group/migrate`
+- **请求**：JSON 体 `{ "base_url", "auth_ref"? }`。`base_url` 为源 Nexus 基址；`auth_ref` 为凭据引用（可选，真值走环境变量，不入库）。仅管理员可调用。
+- **行为**：经在线 REST 枚举源 Nexus 的 **group 类型仓库**（`type == group`，取 `attributes.group.memberNames` 成员名列表），在本系统建对应 group 仓库并映射成员 id。**建议先执行 `proxy/migrate` 与 `hosted/migrate` 使成员仓库在本系统存在，再执行本端点**；成员缺失时记告警 + 跳过该成员（不中断整 group 建立）。同名 group 已存在则更新成员映射（幂等覆盖）；docker 与未实现格式整体跳过。本操作为**纯元数据操作**（无 blob 搬运），同步执行并返回完整报告（无需异步 job）。
+- **响应**：`200 OK`，体 `{ "migrated": [{ "name", "format", "created", "member_count", "skipped_members" }], "skipped_repos": [...] }`。`migrated` 为已迁移（新建或更新成员映射）的 group 仓库结果列表；`skipped_repos` 为因格式无法映射而跳过的源仓库名列表。
+- **错误**：`400` 入参非法 / 凭据引用未配置；`401` 未认证；`403` 非管理员；`502` 连接 / 鉴权 / 解析源 Nexus 失败。
+
 ### Nexus 迁移任务进度（FR-83）
 
 - **方法 / 路径**：`GET /api/v1/migrate/jobs/{id}`（单任务进度）、`GET /api/v1/migrate/jobs`（任务列表，供客户端重连找回）。仅管理员可调用。

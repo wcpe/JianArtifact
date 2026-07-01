@@ -641,6 +641,7 @@ mod tests {
             format: format.to_string(),
             r#type: r#type.to_string(),
             upstream_url: None,
+            group_members: vec![],
         }
     }
 
