@@ -867,3 +867,42 @@ export interface LicenseManifest {
   entries: LicenseEntry[];
   summary: LicenseSummary;
 }
+
+// —— 统一任务注册表（FR-132，消费 FR-131 后端，仅 Admin） ——
+
+/** 任务类别（与后端 TaskKind 的 snake_case 序列化对齐）。 */
+export type TaskKind = 'migration' | 'update' | 'vuln';
+
+/** 任务统一状态（与后端 TaskState 的 snake_case 序列化对齐）。 */
+export type TaskState = 'running' | 'paused' | 'succeeded' | 'failed' | 'cancelled';
+
+/**
+ * 统一任务记录（GET /api/v1/tasks 列表项；GET /api/v1/tasks/{id} 展平字段，FR-131）。
+ * 字段严格对齐后端 task_registry.rs 的 TaskRecord serde 输出。
+ */
+export interface TaskRecord {
+  id: string;
+  kind: TaskKind;
+  state: TaskState;
+  /** 人类可读标签（如「在线拉取迁移」「应用更新」「漏洞库刷新」）；可选。 */
+  label?: string;
+  /** 登记时刻（Unix 秒）。 */
+  started_at: number;
+  /** 最近一次状态更新时刻（Unix 秒）。 */
+  updated_at: number;
+  /** 终态时刻（Unix 秒，未结束为 undefined）。 */
+  finished_at?: number;
+  /** 失败原因（state === 'failed' 时）。 */
+  error?: string;
+}
+
+/**
+ * 单任务详情（GET /api/v1/tasks/{id}，FR-131）：统一记录展平 + 据 kind 附进度明细。
+ * migration / update 进度字段在对应 kind 专表仍有记录时填充；vuln 任务两字段均缺省。
+ */
+export interface TaskDetailDto extends TaskRecord {
+  /** 迁移进度明细（仅 kind==='migration' 且专表仍有记录时填）。 */
+  migration?: OnlinePullJob;
+  /** 更新进度明细（仅 kind==='update' 且专表仍有记录时填）。 */
+  update?: UpdateJob;
+}

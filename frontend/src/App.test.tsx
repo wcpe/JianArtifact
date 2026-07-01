@@ -89,6 +89,7 @@ describe('App 三层路由守卫（FR-95）', () => {
     mockedApi.getHealth.mockResolvedValue({ status: 'ok', version: '0.4.0', port: 9999 });
     mockedApi.getCachedCheck.mockResolvedValue({ result: null, checked_at: null });
     mockedApi.listUpdateJobs.mockResolvedValue([]);
+    mockedApi.listTasks.mockResolvedValue([]);
     // 管理员仪表盘（FR-108）落地 / 时各数据源端点：统一返回最简空 / 默认值，仅验证落地可达
     mockedApi.getDashboardSummary.mockResolvedValue({
       repo_count: 0,

@@ -30,6 +30,7 @@ import { MigrationPage } from './pages/MigrationPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { SystemPage } from './pages/SystemPage';
 import { LicensesPage } from './pages/LicensesPage';
+import { TaskCenterPage } from './pages/TaskCenterPage';
 
 /** 登录守卫：未登录跳登录页（带回跳路径）；恢复会话期间显示加载态。 */
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -240,6 +241,17 @@ export function App() {
             <RequireAuth>
               <RequireAdmin>
                 <SystemPage />
+              </RequireAdmin>
+            </RequireAuth>
+          }
+        />
+        {/* 任务中心（FR-132，仅 Admin）：展示统一任务注册表活跃+近期队列 */}
+        <Route
+          path="tasks"
+          element={
+            <RequireAuth>
+              <RequireAdmin>
+                <TaskCenterPage />
               </RequireAdmin>
             </RequireAuth>
           }

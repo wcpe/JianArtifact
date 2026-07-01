@@ -39,6 +39,7 @@ import {
   IconLayoutSidebarLeftCollapse,
   IconLicense,
   IconArrowUpCircle,
+  IconListCheck,
 } from '@tabler/icons-react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -47,6 +48,7 @@ import { density } from '../theme/density';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { getCachedCheck, getHealth } from '../api/endpoints';
 import { GlobalTopProgressBar } from './GlobalTopProgressBar';
+import { NotificationCenter } from './NotificationCenter';
 
 /** 品牌蓝（logo 主色，FR-113）：集中一处常量，避免散落魔法值。 */
 const BRAND_BLUE = '#228be6';
@@ -157,6 +159,8 @@ const NAV_SECTIONS: NavSection[] = [
   {
     titleKey: 'sectionSystem',
     items: [
+      // 任务中心（FR-132，仅 Admin）：任务队列展示 + 通知
+      { labelKey: 'tasks', path: '/tasks', icon: <IconListCheck size={18} />, adminOnly: true },
       { labelKey: 'monitor', path: '/monitor', icon: <IconChartDots size={18} />, adminOnly: true },
       {
         labelKey: 'audit',
@@ -412,6 +416,8 @@ export function AppLayout() {
             onChange={(e) => handleSearchChange(e.currentTarget.value)}
             onKeyDown={handleSearchKeyDown}
           />
+          {/* 通知中心（FR-132，仅 Admin）：铃铛图标+下拉，轮询 /tasks 推状态跃迁通知 */}
+          <NotificationCenter isAdmin={!!isAdmin} />
           {/* 角色感知页眉（FR-95）：登录态显示用户名 + 登出；匿名态显示「登录」按钮 */}
           {user ? (
             <Group>

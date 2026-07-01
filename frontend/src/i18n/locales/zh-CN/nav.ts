@@ -12,6 +12,7 @@ export default {
   tokens: '访问令牌',
   upload: '上传',
   migration: 'Nexus 迁移',
+  tasks: '任务中心',
   monitor: '监控',
   audit: '审计日志',
   systemLogs: '系统日志',

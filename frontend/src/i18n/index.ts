@@ -34,6 +34,7 @@ import audit from './locales/zh-CN/audit';
 import licenses from './locales/zh-CN/licenses';
 import acl from './locales/zh-CN/acl';
 import mock from './locales/zh-CN/mock';
+import taskCenter from './locales/zh-CN/taskCenter';
 
 /** 默认且唯一首发语言。 */
 export const DEFAULT_LNG = 'zh-CN';
@@ -67,6 +68,7 @@ const resources = {
     licenses,
     acl,
     mock,
+    taskCenter,
   },
 } as const;
 

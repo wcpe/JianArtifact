@@ -53,6 +53,8 @@ import type {
   UsageAnalyticsDto,
   UserInfo,
   UserView,
+  TaskRecord,
+  TaskDetailDto,
 } from './types';
 
 // —— 认证 ——
@@ -625,6 +627,18 @@ export function systemRestart(): Promise<SystemActionResponse> {
 /** 关闭服务：停止进程（仅管理员；更新进行中时后端返回 409）。 */
 export function systemShutdown(): Promise<SystemActionResponse> {
   return request<SystemActionResponse>('/system/shutdown', { method: 'POST' });
+}
+
+// —— 统一任务注册表（FR-132，消费 FR-131 后端，仅 Admin） ——
+
+/** 列出活跃+近期所有任务（跨 kind，仅 Admin）。 */
+export function listTasks(): Promise<TaskRecord[]> {
+  return request<TaskRecord[]>('/tasks');
+}
+
+/** 查询某任务的统一记录+进度明细（仅 Admin）；未知 id 返回 404。 */
+export function getTask(id: string): Promise<TaskDetailDto> {
+  return request<TaskDetailDto>(`/tasks/${encodeURIComponent(id)}`);
 }
 
 /** 对制品路径逐段编码（保留 `/` 分隔，避免破坏 catch-all 路径语义）。 */
