@@ -161,8 +161,17 @@ jobs:
           fi
           printf '%s' "$sha" > "dist/${asset}.sha256"
 
-          # 打包压缩包（FR-138）：zip 内只放二进制本体，-j 不保留目录路径。
-          zip -j "dist/${zip_asset}" "dist/${asset}"
+          # 打包压缩包（FR-138）：zip 内只放二进制本体、不保留目录路径。
+          # Windows runner 的 Git bash 无 unix `zip`，回落 `7z`（GitHub runner 自带）；
+          # 均在 dist 子 shell 内按 basename 打包，保证压缩包内为扁平结构（等价 zip -j）。
+          if command -v zip >/dev/null 2>&1; then
+            ( cd dist && zip -j "${zip_asset}" "${asset}" )
+          elif command -v 7z >/dev/null 2>&1; then
+            ( cd dist && 7z a -tzip "${zip_asset}" "${asset}" >/dev/null )
+          else
+            echo "未找到 zip 或 7z 打包工具" >&2
+            exit 1
+          fi
 
           # zip sha256
           if command -v sha256sum >/dev/null 2>&1; then
