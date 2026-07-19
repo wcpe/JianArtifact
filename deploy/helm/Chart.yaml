@@ -1,0 +1,7 @@
+apiVersion: v2
+name: jianartifact
+description: 自托管多格式制品仓库 JianArtifact 的 Helm Chart（单实例，RWO 卷 + Recreate 策略）。
+type: application
+# Chart 版本随 Chart 结构变化递增；appVersion 跟随应用版本。
+version: 0.1.0
+appVersion: "0.1.0"

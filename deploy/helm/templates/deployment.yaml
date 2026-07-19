@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "jianartifact.fullname" . }}
+  labels:
+    {{- include "jianartifact.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  # 单实例 + RWO 卷：滚动更新会因卷独占失败，故用 Recreate（见 ADR-0007）。
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "jianartifact.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "jianartifact.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: jianartifact
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: {{ include "jianartifact.fullname" . }}-config
+            - secretRef:
+                name: {{ include "jianartifact.fullname" . }}-secret
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: {{ .Values.persistence.mountPath }}
+      volumes:
+        - name: data
+        {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "jianartifact.fullname" . }}-data
+        {{- else }}
+          emptyDir: {}
+        {{- end }}

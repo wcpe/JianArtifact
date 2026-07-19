@@ -1,0 +1,26 @@
+# JianArtifact rootless systemd 用户单元模板。
+# 安装：放到 ~/.config/systemd/user/jianartifact.service，然后
+#   systemctl --user daemon-reload && systemctl --user enable --now jianartifact
+# 环境变量从 %h/.config/jianartifact/env 读取（该文件不入库，权限 600）。
+# 二进制由 deploy/deploy.sh（systemd 模式）经 current 符号链接原子切换。
+[Unit]
+Description=JianArtifact 制品仓库
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/jianartifact/env
+ExecStart=/opt/jianartifact/current/jianartifact
+Restart=on-failure
+RestartSec=3
+# 加固
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+# 允许写入数据目录（按实际部署路径调整）
+ReadWritePaths=%h/.local/share/jianartifact
+
+[Install]
+WantedBy=default.target

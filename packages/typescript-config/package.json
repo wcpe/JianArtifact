@@ -1,0 +1,7 @@
+{
+  "name": "@jianartifact/typescript-config",
+  "version": "0.1.0",
+  "private": true,
+  "description": "前端共享严格 TypeScript 配置（strict + noUncheckedIndexedAccess + isolatedModules）。",
+  "files": ["base.json"]
+}

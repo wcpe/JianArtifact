@@ -1,0 +1,39 @@
+# 单机部署编排。凭据经 .env 注入（.env 不入库，见 .env.example）。
+# 用法：cp deploy/.env.example deploy/.env && 编辑 .env && docker compose -f deploy/docker-compose.yml up -d
+services:
+  jianartifact:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: jianartifact:latest
+    container_name: jianartifact
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "${JIAN_HTTP_PORT:-8080}:8080"
+    volumes:
+      - jian-data:/data
+    healthcheck:
+      # distroless 无 shell/curl：由容器内二进制自带的 healthcheck 子命令探活（M1 落地）。
+      test: ["CMD", "/app/jianartifact", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # 可选反向代理（TLS 终结）示例，按需取消注释并提供证书。
+  # proxy:
+  #   image: caddy:2
+  #   restart: unless-stopped
+  #   depends_on:
+  #     - jianartifact
+  #   ports:
+  #     - "443:443"
+  #   volumes:
+  #     - ./Caddyfile:/etc/caddy/Caddyfile:ro
+  #     - caddy-data:/data
+
+volumes:
+  jian-data:
+  # caddy-data:

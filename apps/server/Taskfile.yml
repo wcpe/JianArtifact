@@ -1,0 +1,59 @@
+# Go 后端任务编排（go-task/task）。顶层 Makefile 委托到此。
+# 参考：https://taskfile.dev
+version: "3"
+
+vars:
+  BIN: jianartifact
+  PKG: ./...
+  CMD: ./cmd/jianartifact
+
+tasks:
+  gen:
+    desc: 从 api/openapi.yaml 生成 Go server 接口与类型（oapi-codegen）
+    cmds:
+      - echo "TODO(M1/0.1.0)：oapi-codegen 生成 ../../api/openapi.yaml -> internal/api"
+
+  lint:
+    desc: 静态检查（gofmt/goimports + go vet + golangci-lint，警告即失败）
+    cmds:
+      - gofmt -l .
+      - go vet {{.PKG}}
+      - golangci-lint run
+
+  vet:
+    desc: go vet
+    cmds:
+      - go vet {{.PKG}}
+
+  test:
+    desc: 单测 + 集成 + 协议兼容 + 迁移测试（race 检测）
+    cmds:
+      - go test -race -count=1 {{.PKG}}
+
+  vuln:
+    desc: 依赖漏洞扫描
+    cmds:
+      - govulncheck {{.PKG}}
+
+  build:
+    desc: 静态编译单二进制（前端 dist 须先经 pnpm build 内嵌）
+    env:
+      CGO_ENABLED: "0"
+    cmds:
+      - go build -trimpath -o bin/{{.BIN}} {{.CMD}}
+
+  release:
+    desc: 多平台发布物（arm64/amd64 + Windows，含校验和）
+    cmds:
+      - echo "TODO(M3)：多平台交叉编译 + 校验和 / cosign 签名 / SBOM"
+
+  migrate:
+    desc: 应用数据库迁移（向前追加）
+    cmds:
+      - echo "TODO(M1)：执行 SQLite 迁移"
+
+  clean:
+    desc: 清理产物
+    cmds:
+      - cmd: rm -rf bin
+        ignore_error: true

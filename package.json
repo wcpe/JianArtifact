@@ -1,0 +1,21 @@
+{
+  "name": "jianartifact",
+  "version": "0.1.0",
+  "private": true,
+  "description": "JianArtifact monorepo（前端管理端 + 共享包），后端见 apps/server（Go）。",
+  "license": "MIT",
+  "packageManager": "pnpm@9.12.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "typecheck": "turbo run typecheck",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "build": "turbo run build",
+    "dev": "turbo run dev"
+  },
+  "devDependencies": {
+    "turbo": "^2.1.0"
+  }
+}

@@ -1,0 +1,69 @@
+# JianArtifact Helm 默认值。生产部署请覆盖 image.tag、persistence.size、secrets。
+# 单实例部署：无 HA（与 SQLite 单写者模型一致，见 ADR-0002 / ADR-0007）。
+replicaCount: 1
+
+image:
+  repository: jianartifact
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+service:
+  type: ClusterIP
+  port: 8080
+
+# 持久卷：元数据 SQLite 与 blob 同处一卷，ReadWriteOnce。
+persistence:
+  enabled: true
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 20Gi
+  mountPath: /data
+
+# 非密配置 -> ConfigMap
+config:
+  JIAN_HTTP_ADDR: "0.0.0.0"
+  JIAN_HTTP_PORT: "8080"
+  JIAN_DATA_DIR: "/data"
+  JIAN_DB_PATH: "/data/jianartifact.db"
+  JIAN_BLOB_DIR: "/data/blobs"
+  JIAN_TRUSTED_WORKDIR: "/data"
+  JIAN_LOG_LEVEL: "info"
+
+# 敏感配置 -> Secret（生产请用 --set 或外部 Secret 管理，勿写入版本库）
+secrets:
+  JIAN_JWT_SECRET: ""
+  JIAN_BOOTSTRAP_ADMIN_USER: ""
+  JIAN_BOOTSTRAP_ADMIN_PASSWORD: ""
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: jianartifact.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  fsGroup: 65532
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL

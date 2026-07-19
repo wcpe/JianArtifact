@@ -1,0 +1,21 @@
+{
+  "name": "@jianartifact/wiki",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "UI 组件 / 业务模式验收站。",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@jianartifact/ui": "workspace:*"
+  },
+  "devDependencies": {
+    "@jianartifact/eslint-config": "workspace:*",
+    "@jianartifact/typescript-config": "workspace:*"
+  }
+}

@@ -1,0 +1,119 @@
+# JianArtifact 基础 Kubernetes 清单（单实例，无 HA）。
+# 与 Helm Chart 等价的最小手写版本，便于无 Helm 环境直接 kubectl apply。
+# 生产请通过 Secret 管理工具注入 jianartifact-secret 的真实值，勿提交明文。
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: jianartifact-config
+  labels:
+    app.kubernetes.io/name: jianartifact
+data:
+  JIAN_HTTP_ADDR: "0.0.0.0"
+  JIAN_HTTP_PORT: "8080"
+  JIAN_DATA_DIR: "/data"
+  JIAN_DB_PATH: "/data/jianartifact.db"
+  JIAN_BLOB_DIR: "/data/blobs"
+  JIAN_TRUSTED_WORKDIR: "/data"
+  JIAN_LOG_LEVEL: "info"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: jianartifact-secret
+  labels:
+    app.kubernetes.io/name: jianartifact
+type: Opaque
+stringData:
+  # 部署前用真实值覆盖（kubectl create secret / 外部 Secret 管理），勿提交明文。
+  JIAN_JWT_SECRET: ""
+  JIAN_BOOTSTRAP_ADMIN_USER: ""
+  JIAN_BOOTSTRAP_ADMIN_PASSWORD: ""
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jianartifact-data
+  labels:
+    app.kubernetes.io/name: jianartifact
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jianartifact
+  labels:
+    app.kubernetes.io/name: jianartifact
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: jianartifact
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: jianartifact
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        fsGroup: 65532
+      containers:
+        - name: jianartifact
+          image: jianartifact:0.1.0
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: jianartifact-config
+            - secretRef:
+                name: jianartifact-secret
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: jianartifact-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jianartifact
+  labels:
+    app.kubernetes.io/name: jianartifact
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: jianartifact
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP

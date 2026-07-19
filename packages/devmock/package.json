@@ -1,0 +1,19 @@
+{
+  "name": "@jianartifact/devmock",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "浏览器 + Node 双端 Mock 与场景包；据 api/openapi.yaml 做契约比对。",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@jianartifact/eslint-config": "workspace:*",
+    "@jianartifact/typescript-config": "workspace:*"
+  }
+}

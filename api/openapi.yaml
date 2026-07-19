@@ -1,0 +1,60 @@
+# JianArtifact API 契约 —— 唯一真源（设计优先，见 docs/adr/0004-design-first-openapi.md）。
+# 变更此文件后运行 `task gen` 重生成 Go 接口与前端 client；生成产物不得手改。
+# 当前为 0.1.0 骨架：仅含健康 / 就绪端点，管理 API 与协议端点随 M1 迭代补齐。
+openapi: 3.0.3
+info:
+  title: JianArtifact API
+  version: 0.1.0
+  description: 自托管多格式制品仓库的管理 API。协议端点（Raw/Maven/npm 等原生客户端交互）以协议兼容测试保障，不在此契约内描述。
+  license:
+    name: MIT
+servers:
+  - url: /
+paths:
+  /healthz:
+    get:
+      operationId: getHealthz
+      summary: 存活探针
+      responses:
+        "200":
+          description: 进程存活
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+  /readyz:
+    get:
+      operationId: getReadyz
+      summary: 就绪探针（依赖自检通过后才返回 200）
+      responses:
+        "200":
+          description: 已就绪
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+        "503":
+          description: 未就绪
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      required: [status, version]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded, unavailable]
+        version:
+          type: string
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string

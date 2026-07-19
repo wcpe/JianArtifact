@@ -1,0 +1,18 @@
+# 统一换行：仓库内文本默认由 Git 规范化，避免跨平台 CRLF/LF 漂移。
+* text=auto eol=lf
+
+# 在任何平台都必须为 LF 的文件（否则在 Linux 上执行会失败）
+*.sh text eol=lf
+*.go text eol=lf
+Makefile text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+Dockerfile text eol=lf
+
+# 二进制文件不做换行转换
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary

@@ -1,0 +1,8 @@
+{
+  "name": "@jianartifact/eslint-config",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "前端共享严格 ESLint 配置。",
+  "main": "./index.js"
+}
