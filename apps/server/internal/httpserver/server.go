@@ -1,0 +1,103 @@
+// Package httpserver 装配 JianArtifact 的 HTTP 服务：挂载据契约（api/openapi.yaml）
+// 生成的路由、健康 / 就绪端点，以及内嵌前端静态资源（SPA 回退）。
+// 见 docs/adr/0004-design-first-openapi.md 与 docs/adr/0005-single-binary-embed.md。
+package httpserver
+
+import (
+	"io/fs"
+	"net/http"
+	"path"
+	"strings"
+
+	"github.com/gin-gonic/gin"
+
+	"github.com/wcpe/jianartifact/apps/server/internal/api"
+)
+
+// ReadinessCheck 是就绪自检钩子：返回非 nil 错误表示某依赖未就绪。
+// 0.1.0 无外部依赖，检查集合为空（恒就绪）；后续版本注入 SQLite / blob 存储等自检。
+type ReadinessCheck func() error
+
+// Server 实现契约生成的 api.ServerInterface，并持有版本与就绪检查集合。
+type Server struct {
+	version string
+	checks  []ReadinessCheck
+}
+
+// Option 配置 Server。
+type Option func(*Server)
+
+// WithReadinessCheck 追加一个就绪自检钩子。
+func WithReadinessCheck(c ReadinessCheck) Option {
+	return func(s *Server) { s.checks = append(s.checks, c) }
+}
+
+// New 构造 Server。
+func New(version string, opts ...Option) *Server {
+	s := &Server{version: version}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
+}
+
+// 编译期断言：Server 满足契约生成的接口。
+var _ api.ServerInterface = (*Server)(nil)
+
+// GetHealthz 存活探针：进程存活即 200。
+func (s *Server) GetHealthz(c *gin.Context) {
+	c.JSON(http.StatusOK, api.HealthStatus{Status: api.Ok, Version: s.version})
+}
+
+// GetReadyz 就绪探针：全部就绪自检通过才 200，任一未过返回 503。
+func (s *Server) GetReadyz(c *gin.Context) {
+	for _, check := range s.checks {
+		if err := check(); err != nil {
+			c.JSON(http.StatusServiceUnavailable, api.HealthStatus{Status: api.Unavailable, Version: s.version})
+			return
+		}
+	}
+	c.JSON(http.StatusOK, api.HealthStatus{Status: api.Ok, Version: s.version})
+}
+
+// Handler 装配并返回完整的 gin.Engine：契约路由优先，其余交给内嵌前端静态资源
+// （带 SPA 回退）。assets 为 nil 时不挂载静态资源（便于测试）。
+func (s *Server) Handler(assets fs.FS) http.Handler {
+	gin.SetMode(gin.ReleaseMode)
+	r := gin.New()
+	r.Use(gin.Recovery())
+
+	api.RegisterHandlers(r, s)
+
+	if assets != nil {
+		s.mountStatic(r, assets)
+	}
+	return r
+}
+
+// mountStatic 把未命中契约路由的 GET/HEAD 请求交给前端静态资源；
+// 资源不存在时回退到 index.html，支持前端客户端路由（SPA）。
+func (s *Server) mountStatic(r *gin.Engine, assets fs.FS) {
+	fileServer := http.FileServer(http.FS(assets))
+	serveIndex := func(c *gin.Context) {
+		c.Request.URL.Path = "/"
+		fileServer.ServeHTTP(c.Writer, c.Request)
+	}
+	r.NoRoute(func(c *gin.Context) {
+		if c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead {
+			c.Status(http.StatusNotFound)
+			return
+		}
+		name := strings.TrimPrefix(path.Clean(c.Request.URL.Path), "/")
+		if name == "" {
+			serveIndex(c)
+			return
+		}
+		if f, err := assets.Open(name); err == nil {
+			_ = f.Close()
+			fileServer.ServeHTTP(c.Writer, c.Request)
+			return
+		}
+		serveIndex(c)
+	})
+}

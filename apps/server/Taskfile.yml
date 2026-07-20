@@ -9,9 +9,11 @@ vars:
 
 tasks:
   gen:
-    desc: 从 api/openapi.yaml 生成 Go server 接口与类型（oapi-codegen）
+    desc: 从 api/openapi.yaml 生成 Go server 接口与类型（oapi-codegen，dev 工具经 go run 调用，不入 go.mod）
+    vars:
+      OAPI_VERSION: v2.8.0
     cmds:
-      - echo "TODO(M1/0.1.0)：oapi-codegen 生成 ../../api/openapi.yaml -> internal/api"
+      - go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@{{.OAPI_VERSION}} -config internal/api/cfg.yaml ../../api/openapi.yaml
 
   lint:
     desc: 静态检查（gofmt/goimports + go vet + golangci-lint，警告即失败）

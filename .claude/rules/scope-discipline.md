@@ -3,6 +3,7 @@
 > 依据 `docs/PRD.md` 的分期。**只做当前阶段该做的，不提前做、不顺手做。**
 
 ## 1. 第一期（MVP）只做
+
 第一期（M1，跨 0.1.0–0.5.0）范围以 `docs/PRD.md` §4 FR 表中标 P1 的条目与 `docs/ROADMAP.md` M1 章节为唯一权威边界，概括为：
 
 - 工程基座与契约骨架：monorepo（pnpm workspace + Turborepo + Makefile + Go Task + go.work）、Docker 质量门、`api/openapi.yaml` 全域契约骨架 + `oapi-codegen` 接线、devmock 契约比对、部署骨架（Dockerfile / docker-compose / .env.example / 远程部署脚本）。
@@ -13,6 +14,7 @@
 > 凡不在 PRD §4 P1 FR 表内的能力都属越界。M2–M5 的能力（见下）在 M1 阶段一律不做。
 
 ## 2. MVP 严禁出现（属后续阶段）
+
 M1（MVP）阶段严禁提前实现以下后续阶段能力（对应 PRD §4 中标 P2/P3 的 FR、`docs/ROADMAP.md` M2–M5）：
 
 - **M2（0.6.0）**：Docker/OCI、Cargo、PyPI、Go modules proxy、NuGet 格式；全局跨仓库搜索；声明式按格式启停；arm64 二进制。
@@ -22,11 +24,12 @@ M1（MVP）阶段严禁提前实现以下后续阶段能力（对应 PRD §4 中
 
 一旦在代码 / 数据模型 / 契约里看到上述能力的提前实现或占位字段（如 `s3_*`、`oidc_*`、`ldap_*`、`webhook_*`、`quota_*`、`rate_limit_*` 等）→ **删除，或停下来问**，不得镀金。
 
-
 ## 3. 不为未来预留空壳
+
 - 不写"以后可能用"的抽象、配置项、接口、字段。需要时再加。
 - 后续阶段能力到时按域新增包，当前不留占位。
 
 ## 4. 越界先问
+
 - 若某任务看起来需要某个后续阶段能力才能完成 → **停止并向用户确认**，不自行扩大范围。
 - 简洁方案优先：实现远多于必要（如 200 行 vs 50 行）时重写。资深工程师会觉得过度复杂的，就是过度。

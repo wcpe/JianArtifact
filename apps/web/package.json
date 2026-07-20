@@ -12,10 +12,19 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@jianartifact/ui": "workspace:*"
+    "@jianartifact/ui": "workspace:*",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
   },
   "devDependencies": {
     "@jianartifact/eslint-config": "workspace:*",
-    "@jianartifact/typescript-config": "workspace:*"
+    "@jianartifact/typescript-config": "workspace:*",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.3",
+    "eslint": "^9.13.0",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10",
+    "vitest": "^2.1.4"
   }
 }

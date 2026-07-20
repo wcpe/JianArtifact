@@ -28,24 +28,29 @@
 > 完整参数与 schema 见 `api/openapi.yaml`。以下为分组概览。
 
 ### 认证与会话
+
 - `POST /api/v1/auth/login`：用户名 + 口令 → JWT + 用户信息。
 - `POST /api/v1/auth/logout`：注销当前会话。
 - `POST /api/v1/auth/bootstrap`：首启管理员自举（仅在未初始化时可用）。
 
 ### 用户与令牌
+
 - `GET/POST/PATCH/DELETE /api/v1/users`：用户管理。
 - `POST /api/v1/users/{id}/password`：口令修改 / 重置。
 - `GET/POST/DELETE /api/v1/tokens`：API Token 签发 / 列表 / 吊销。
 
 ### 仓库与 ACL
+
 - `GET/POST/PATCH/DELETE /api/v1/repositories`：仓库管理（格式 raw/maven/npm、类型 hosted/proxy/group、可见性、上游 / 成员配置）。
 - `GET/PUT /api/v1/repositories/{name}/acl`：读写 ACL。
 
 ### 制品浏览
+
 - `GET /api/v1/repositories/{name}/browse`：浏览目录 / 组件。
 - `GET /api/v1/repositories/{name}/usage`：使用片段（客户端接入示例）。
 
 ### Nexus 迁移
+
 - `POST /api/v1/migrations/discover`：三来源发现，产出计划预览。
 - `POST /api/v1/migrations`：创建迁移任务（含冲突策略）。
 - `GET /api/v1/migrations/{id}`：任务状态 / 进度。
@@ -53,10 +58,12 @@
 - `GET /api/v1/migrations/{id}/report`：迁移报告。
 
 ### 健康
+
 - `GET /healthz`：存活探针。
 - `GET /readyz`：就绪探针（SQLite + blob 目录自检）。
 
 ### 协议端点（非 OpenAPI，按格式规范）
+
 - **Raw**：`GET/PUT/DELETE /repository/{repo}/{path}`。
 - **Maven**：`GET/PUT /repository/{repo}/{group-path}/{artifact}/{version}/...`（含 `maven-metadata.xml`）。
 - **npm**：`GET /repository/{repo}/{package}`、`PUT /repository/{repo}/{package}`（publish）、dist-tags 等。

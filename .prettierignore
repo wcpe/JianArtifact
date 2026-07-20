@@ -1,0 +1,12 @@
+# Prettier 忽略：生成产物、依赖、构建输出与非前端目录
+node_modules/
+dist/
+coverage/
+.turbo/
+**/*.gen.ts
+apps/server/
+.gomodcache/
+.gocache/
+pnpm-lock.yaml
+# Helm 模板含 Go 模板语法（{{ }}），非合法 YAML，prettier 无法解析
+deploy/helm/templates/

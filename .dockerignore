@@ -1,0 +1,25 @@
+# Docker 构建上下文忽略：避免把宿主依赖 / 缓存 / 产物带入镜像（保证可复现）。
+.git/
+.gitignore
+
+# Node 依赖与产物（容器内重新安装 / 构建）
+node_modules/
+**/node_modules/
+**/dist/
+**/coverage/
+.turbo/
+**/.turbo/
+
+# Go 本地缓存与产物（容器内重新拉取 / 编译）
+.gomodcache/
+.gocache/
+apps/server/bin/
+
+# 内嵌前端产物由 Stage 1 生成后拷入，勿带入宿主构建物
+apps/server/web/dist/
+
+# 过程性文档 / 临时文件 / IDE
+.tmp/
+.idea/
+.vscode/
+*.log

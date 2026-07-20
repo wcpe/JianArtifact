@@ -21,12 +21,14 @@
 ## 3. 示例
 
 ✅ 正确
+
 ```
 // 校验用户是否在线，离线时直接返回空
 function resolve(id) { ... }
 ```
 
 ❌ 错误
+
 ```
 // check if user online, return null when offline
 function resolve(id) { ... }

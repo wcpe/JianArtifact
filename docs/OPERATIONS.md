@@ -10,17 +10,17 @@
 
 配置经环境变量注入（`deploy/.env.example` 为无真实值模板，`.env` 不入库）：
 
-| 变量 | 含义 | 示例 / 默认 |
-|---|---|---|
-| `JIAN_LISTEN` | 监听地址:端口 | `0.0.0.0:8080` |
-| `JIAN_DATA_DIR` | 数据根目录 | `/var/lib/jianartifact` |
-| `JIAN_BLOB_DIR` | blob 存储目录 | `${JIAN_DATA_DIR}/blobs` |
-| `JIAN_SQLITE_PATH` | SQLite 元数据库路径 | `${JIAN_DATA_DIR}/meta.db` |
-| `JIAN_JWT_SECRET` | JWT(HS256) 签名密钥 | （必填，强随机） |
-| `JIAN_BOOTSTRAP_USER` | 首启管理员用户名 | `admin` |
-| `JIAN_BOOTSTRAP_PASSWORD` | 首启管理员引导口令 | （首启后应改） |
-| `JIAN_LOG_LEVEL` | 日志级别 | `INFO` |
-| `JIAN_TRUSTED_WORKDIR` | 可信工作目录根 | `${JIAN_DATA_DIR}` |
+| 变量                      | 含义                | 示例 / 默认                |
+| ------------------------- | ------------------- | -------------------------- |
+| `JIAN_LISTEN`             | 监听地址:端口       | `0.0.0.0:8080`             |
+| `JIAN_DATA_DIR`           | 数据根目录          | `/var/lib/jianartifact`    |
+| `JIAN_BLOB_DIR`           | blob 存储目录       | `${JIAN_DATA_DIR}/blobs`   |
+| `JIAN_SQLITE_PATH`        | SQLite 元数据库路径 | `${JIAN_DATA_DIR}/meta.db` |
+| `JIAN_JWT_SECRET`         | JWT(HS256) 签名密钥 | （必填，强随机）           |
+| `JIAN_BOOTSTRAP_USER`     | 首启管理员用户名    | `admin`                    |
+| `JIAN_BOOTSTRAP_PASSWORD` | 首启管理员引导口令  | （首启后应改）             |
+| `JIAN_LOG_LEVEL`          | 日志级别            | `INFO`                     |
+| `JIAN_TRUSTED_WORKDIR`    | 可信工作目录根      | `${JIAN_DATA_DIR}`         |
 
 > 代理上游凭据用引用名 → 环境变量注入 `Authorization`，不硬编码、不入库、不进日志（见 `SECURITY.md`）。
 
@@ -52,6 +52,7 @@
 - **恢复步骤**：停实例 → 还原 SQLite 与 blob 到同一时间点 → 启动 → `/readyz` → 抽样校验制品可拉取。
 
 ### 恢复演练
+
 - 定期在非生产环境用真实备份恢复并抽样校验制品与元数据一致，记录演练结论；发现备份不可用当缺陷处理。
 
 ## 4. 回滚

@@ -22,6 +22,7 @@
 ### 示例
 
 ✅ 正确
+
 ```yaml
 health:
   # 下发给节点的心跳周期（秒）
@@ -31,9 +32,10 @@ health:
 ```
 
 ❌ 错误（缺注释 / 注释空洞 / 行尾注释）
+
 ```yaml
 health:
-  heartbeat-interval-sec: 10   # interval
+  heartbeat-interval-sec: 10 # interval
   ttl-sec: 30
 ```
 

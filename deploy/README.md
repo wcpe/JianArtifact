@@ -6,15 +6,15 @@
 
 ## 内容
 
-| 文件 / 目录 | 用途 |
-|---|---|
-| `Dockerfile` | 多阶段构建：前端 dist → Go embed 静态编译 → distroless 最小运行镜像（非 root） |
-| `docker-compose.yml` | 单机 Compose 部署（命名卷、`env_file`、健康检查、`restart: unless-stopped`） |
-| `.env.example` | 环境变量模板；复制为 `.env` 填值。**`.env` 不入库** |
-| `deploy.sh` | 远程部署 / 回滚脚本（Compose 主路径 + 可选 rootless systemd 二进制路径） |
-| `helm/` | Helm Chart（Deployment/Service/PVC/ConfigMap/Secret/Ingress，单实例 + Recreate） |
-| `k8s/` | 等价的手写 K8s 清单（无 Helm 环境直接 `kubectl apply`） |
-| `systemd/` | rootless systemd 用户单元模板 |
+| 文件 / 目录          | 用途                                                                             |
+| -------------------- | -------------------------------------------------------------------------------- |
+| `Dockerfile`         | 多阶段构建：前端 dist → Go embed 静态编译 → distroless 最小运行镜像（非 root）   |
+| `docker-compose.yml` | 单机 Compose 部署（命名卷、`env_file`、健康检查、`restart: unless-stopped`）     |
+| `.env.example`       | 环境变量模板；复制为 `.env` 填值。**`.env` 不入库**                              |
+| `deploy.sh`          | 远程部署 / 回滚脚本（Compose 主路径 + 可选 rootless systemd 二进制路径）         |
+| `helm/`              | Helm Chart（Deployment/Service/PVC/ConfigMap/Secret/Ingress，单实例 + Recreate） |
+| `k8s/`               | 等价的手写 K8s 清单（无 Helm 环境直接 `kubectl apply`）                          |
+| `systemd/`           | rootless systemd 用户单元模板                                                    |
 
 ## 主路径（Docker Compose）
 

@@ -41,98 +41,98 @@ JianArtifact 是一个**自托管、单二进制交付的多格式制品仓库**
 
 ### 4.1 M1 · MVP（P1，跨 0.1.0–0.5.0）
 
-| 编号 | 需求 | 优先级 | 状态 |
-|---|---|---|---|
-| FR-01 | monorepo 工程基座：pnpm workspace + Turborepo + Makefile + Go Task + go.work | P1 | 计划 |
-| FR-02 | Docker 化质量门（格式/构建/静态分析/测试/契约一致/依赖漏洞），CI 与本地同一组脚本 | P1 | 计划 |
-| FR-03 | `api/openapi.yaml` 全域契约骨架 + `oapi-codegen` 生成 Go 接口/类型 | P1 | 计划 |
-| FR-04 | 前端 client 据 OpenAPI 生成 + devmock 契约比对防漂移 | P1 | 计划 |
-| FR-05 | 单二进制交付：前端构建产物经 Go embed 内嵌，`CGO_ENABLED=0` 静态编译 | P1 | 计划 |
-| FR-06 | 管理员自举（首启引导凭据）+ 口令 argon2 哈希 | P1 | 计划 |
-| FR-07 | 登录 / 会话 / 退出（JWT HS256） | P1 | 计划 |
-| FR-08 | API Token 签发 / 吊销，用于 CLI 与 CI 鉴权 | P1 | 计划 |
-| FR-09 | 用户管理、口令修改 / 重置 | P1 | 计划 |
-| FR-10 | 仓库管理 + 可见性 / 读写 ACL | P1 | 计划 |
-| FR-11 | 管理端 web 全页面（Mantine 7 + i18next）对 devmock 完成 | P1 | 计划 |
-| FR-12 | wiki UI 组件 / 业务模式验收站 | P1 | 计划 |
-| FR-13 | Raw 协议：hosted + proxy + group | P1 | 计划 |
-| FR-14 | Maven 协议：hosted + proxy + group（含元数据） | P1 | 计划 |
-| FR-15 | npm 协议：hosted + proxy + group | P1 | 计划 |
-| FR-16 | hosted/proxy 通用能力：浏览、使用片段、健康检查 / 就绪自检 | P1 | 计划 |
-| FR-17 | 并发下载单飞合并（single-flight）+ 大文件流式处理 | P1 | 计划 |
-| FR-18 | 内容寻址 blob 存储（文件系统）+ 校验和校验 | P1 | 计划 |
-| FR-19 | 原生客户端（curl/mvn/npm）互通真机验收 | P1 | 计划 |
-| FR-20 | Nexus 迁移：三来源发现（在线 REST / 离线原生目录 / 自有离线包） | P1 | 计划 |
-| FR-21 | Nexus 迁移：计划预览 + 异步任务状态机 | P1 | 计划 |
-| FR-22 | Nexus 迁移：持久化与幂等续传 + 冲突策略 | P1 | 计划 |
-| FR-23 | Nexus 迁移：凭据安全 + 迁移报告 + 切换与最终增量扫描 | P1 | 计划 |
-| FR-24 | 部署骨架：Dockerfile（多阶段）/ docker-compose / .env.example / 远程部署脚本 | P1 | 计划 |
+| 编号  | 需求                                                                              | 优先级 | 状态 |
+| ----- | --------------------------------------------------------------------------------- | ------ | ---- |
+| FR-01 | monorepo 工程基座：pnpm workspace + Turborepo + Makefile + Go Task + go.work      | P1     | 开发中 |
+| FR-02 | Docker 化质量门（格式/构建/静态分析/测试/契约一致/依赖漏洞），CI 与本地同一组脚本 | P1     | 开发中 |
+| FR-03 | `api/openapi.yaml` 全域契约骨架 + `oapi-codegen` 生成 Go 接口/类型                | P1     | 开发中 |
+| FR-04 | 前端 client 据 OpenAPI 生成 + devmock 契约比对防漂移                              | P1     | 开发中 |
+| FR-05 | 单二进制交付：前端构建产物经 Go embed 内嵌，`CGO_ENABLED=0` 静态编译              | P1     | 开发中 |
+| FR-06 | 管理员自举（首启引导凭据）+ 口令 argon2 哈希                                      | P1     | 计划 |
+| FR-07 | 登录 / 会话 / 退出（JWT HS256）                                                   | P1     | 计划 |
+| FR-08 | API Token 签发 / 吊销，用于 CLI 与 CI 鉴权                                        | P1     | 计划 |
+| FR-09 | 用户管理、口令修改 / 重置                                                         | P1     | 计划 |
+| FR-10 | 仓库管理 + 可见性 / 读写 ACL                                                      | P1     | 计划 |
+| FR-11 | 管理端 web 全页面（Mantine 7 + i18next）对 devmock 完成                           | P1     | 计划 |
+| FR-12 | wiki UI 组件 / 业务模式验收站                                                     | P1     | 计划 |
+| FR-13 | Raw 协议：hosted + proxy + group                                                  | P1     | 计划 |
+| FR-14 | Maven 协议：hosted + proxy + group（含元数据）                                    | P1     | 计划 |
+| FR-15 | npm 协议：hosted + proxy + group                                                  | P1     | 计划 |
+| FR-16 | hosted/proxy 通用能力：浏览、使用片段、健康检查 / 就绪自检                        | P1     | 计划 |
+| FR-17 | 并发下载单飞合并（single-flight）+ 大文件流式处理                                 | P1     | 计划 |
+| FR-18 | 内容寻址 blob 存储（文件系统）+ 校验和校验                                        | P1     | 计划 |
+| FR-19 | 原生客户端（curl/mvn/npm）互通真机验收                                            | P1     | 计划 |
+| FR-20 | Nexus 迁移：三来源发现（在线 REST / 离线原生目录 / 自有离线包）                   | P1     | 计划 |
+| FR-21 | Nexus 迁移：计划预览 + 异步任务状态机                                             | P1     | 计划 |
+| FR-22 | Nexus 迁移：持久化与幂等续传 + 冲突策略                                           | P1     | 计划 |
+| FR-23 | Nexus 迁移：凭据安全 + 迁移报告 + 切换与最终增量扫描                              | P1     | 计划 |
+| FR-24 | 部署骨架：Dockerfile（多阶段）/ docker-compose / .env.example / 远程部署脚本      | P1     | 开发中 |
 
 ### 4.2 M2 · 高频格式扩展 + 工程能力（P2，0.6.0）
 
-| 编号 | 需求 | 优先级 | 状态 |
-|---|---|---|---|
-| FR-25 | Docker/OCI 协议：hosted + proxy + group | P2 | 计划 |
-| FR-26 | Cargo sparse registry | P2 | 计划 |
-| FR-27 | PyPI（simple index） | P2 | 计划 |
-| FR-28 | Go modules proxy | P2 | 计划 |
-| FR-29 | NuGet | P2 | 计划 |
-| FR-30 | 全局跨仓库搜索 | P2 | 计划 |
-| FR-31 | 上述格式的 Nexus 迁移扩展 | P2 | 计划 |
-| FR-32 | 声明式按格式启停（未启用格式零路由零后台任务）〔对标 NORA〕 | P2 | 计划 |
-| FR-33 | 多架构发布起点：arm64 Linux 二进制〔对标 NORA〕 | P2 | 计划 |
+| 编号  | 需求                                                        | 优先级 | 状态 |
+| ----- | ----------------------------------------------------------- | ------ | ---- |
+| FR-25 | Docker/OCI 协议：hosted + proxy + group                     | P2     | 计划 |
+| FR-26 | Cargo sparse registry                                       | P2     | 计划 |
+| FR-27 | PyPI（simple index）                                        | P2     | 计划 |
+| FR-28 | Go modules proxy                                            | P2     | 计划 |
+| FR-29 | NuGet                                                       | P2     | 计划 |
+| FR-30 | 全局跨仓库搜索                                              | P2     | 计划 |
+| FR-31 | 上述格式的 Nexus 迁移扩展                                   | P2     | 计划 |
+| FR-32 | 声明式按格式启停（未启用格式零路由零后台任务）〔对标 NORA〕 | P2     | 计划 |
+| FR-33 | 多架构发布起点：arm64 Linux 二进制〔对标 NORA〕             | P2     | 计划 |
 
 ### 4.3 M3 · 企业认证、存储与运维（P2，0.7.0）
 
-| 编号 | 需求 | 优先级 | 状态 |
-|---|---|---|---|
-| FR-34 | OIDC 认证 | P2 | 计划 |
-| FR-35 | LDAP 认证 | P2 | 计划 |
-| FR-36 | 用户组与更细粒度权限动作 | P2 | 计划 |
-| FR-37 | S3 兼容对象存储后端（需 ADR） | P2 | 计划 |
-| FR-38 | 审计日志 | P2 | 计划 |
-| FR-39 | Prometheus 指标 | P2 | 计划 |
-| FR-40 | 备份与恢复 | P2 | 计划 |
-| FR-41 | GC / 保留策略 / 配额 / 存储清理 | P2 | 计划 |
-| FR-42 | 出站代理与受控运行时管理（含热重载） | P2 | 计划 |
-| FR-43 | 上游断路器（per-registry circuit breaker）〔对标 NORA〕 | P2 | 计划 |
-| FR-44 | 定时任务调度器（周期 GC/保留/压实/校验）〔对标 NORA〕 | P2 | 计划 |
-| FR-45 | 离线镜像 CLI（air-gapped lockfile 预取同步 `mirror`）〔对标 NORA〕 | P2 | 计划 |
-| FR-46 | 存储后端迁移 CLI（local↔S3）+ `integrity verify` 离线全量校验〔对标 NORA〕 | P2 | 计划 |
-| FR-47 | Helm Chart + Kubernetes 部署清单〔对标 NORA〕 | P2 | 计划 |
-| FR-48 | Windows 二进制补齐多平台发布矩阵〔对标 NORA〕 | P2 | 计划 |
+| 编号  | 需求                                                                       | 优先级 | 状态 |
+| ----- | -------------------------------------------------------------------------- | ------ | ---- |
+| FR-34 | OIDC 认证                                                                  | P2     | 计划 |
+| FR-35 | LDAP 认证                                                                  | P2     | 计划 |
+| FR-36 | 用户组与更细粒度权限动作                                                   | P2     | 计划 |
+| FR-37 | S3 兼容对象存储后端（需 ADR）                                              | P2     | 计划 |
+| FR-38 | 审计日志                                                                   | P2     | 计划 |
+| FR-39 | Prometheus 指标                                                            | P2     | 计划 |
+| FR-40 | 备份与恢复                                                                 | P2     | 计划 |
+| FR-41 | GC / 保留策略 / 配额 / 存储清理                                            | P2     | 计划 |
+| FR-42 | 出站代理与受控运行时管理（含热重载）                                       | P2     | 计划 |
+| FR-43 | 上游断路器（per-registry circuit breaker）〔对标 NORA〕                    | P2     | 计划 |
+| FR-44 | 定时任务调度器（周期 GC/保留/压实/校验）〔对标 NORA〕                      | P2     | 计划 |
+| FR-45 | 离线镜像 CLI（air-gapped lockfile 预取同步 `mirror`）〔对标 NORA〕         | P2     | 计划 |
+| FR-46 | 存储后端迁移 CLI（local↔S3）+ `integrity verify` 离线全量校验〔对标 NORA〕 | P2     | 计划 |
+| FR-47 | Helm Chart + Kubernetes 部署清单〔对标 NORA〕                              | P2     | 计划 |
+| FR-48 | Windows 二进制补齐多平台发布矩阵〔对标 NORA〕                              | P2     | 计划 |
 
 ### 4.4 M4 · 安全、供应链与运营可见性（P2，0.8.0）
 
-| 编号 | 需求 | 优先级 | 状态 |
-|---|---|---|---|
-| FR-49 | 多维限流、连接 / 并发限制、慢请求防护 | P2 | 计划 |
-| FR-50 | IP 名单、异常检测、应用层防护 | P2 | 计划 |
-| FR-51 | 本地漏洞库镜像与 Maven/npm/Cargo/PyPI/NuGet 坐标匹配 | P2 | 计划 |
-| FR-52 | Docker 镜像层扫描 | P2 | 计划 |
-| FR-53 | 使用分析、容量趋势、缓存命中率与运维告警 | P2 | 计划 |
-| FR-54 | Curation 内容治理链（blocklist/allowlist + namespace 隔离 + 最小发布年龄，enforce/audit 双模式，fail-closed）〔对标 NORA〕 | P2 | 计划 |
-| FR-55 | 完整性校验门（Hash Pin：写入即钉、读取即验、失败即拒）+ 代理 digest 首见隔离〔对标 NORA〕 | P2 | 计划 |
-| FR-56 | cosign 镜像 / 制品签名策略（上游拉取验签，不通过则阻断）〔对标 NORA〕 | P2 | 计划 |
+| 编号  | 需求                                                                                                                       | 优先级 | 状态 |
+| ----- | -------------------------------------------------------------------------------------------------------------------------- | ------ | ---- |
+| FR-49 | 多维限流、连接 / 并发限制、慢请求防护                                                                                      | P2     | 计划 |
+| FR-50 | IP 名单、异常检测、应用层防护                                                                                              | P2     | 计划 |
+| FR-51 | 本地漏洞库镜像与 Maven/npm/Cargo/PyPI/NuGet 坐标匹配                                                                       | P2     | 计划 |
+| FR-52 | Docker 镜像层扫描                                                                                                          | P2     | 计划 |
+| FR-53 | 使用分析、容量趋势、缓存命中率与运维告警                                                                                   | P2     | 计划 |
+| FR-54 | Curation 内容治理链（blocklist/allowlist + namespace 隔离 + 最小发布年龄，enforce/audit 双模式，fail-closed）〔对标 NORA〕 | P2     | 计划 |
+| FR-55 | 完整性校验门（Hash Pin：写入即钉、读取即验、失败即拒）+ 代理 digest 首见隔离〔对标 NORA〕                                  | P2     | 计划 |
+| FR-56 | cosign 镜像 / 制品签名策略（上游拉取验签，不通过则阻断）〔对标 NORA〕                                                      | P2     | 计划 |
 
 ### 4.5 M5 · 长尾格式与成熟期能力（P3，0.9.0）
 
-| 编号 | 需求 | 优先级 | 状态 |
-|---|---|---|---|
-| FR-57 | RubyGems、Conan、Terraform、Ansible Galaxy、Dart/Flutter Pub 等长尾格式 | P3 | 计划 |
-| FR-58 | 高级虚拟仓库策略与跨成员 metadata 聚合 | P3 | 计划 |
-| FR-59 | 多节点只读扩展或高可用可选方案（先独立 ADR） | P3 | 计划 |
-| FR-60 | 外部数据库 / 分布式存储可选方案（不破坏默认轻量形态，需 ADR） | P3 | 计划 |
-| FR-61 | deb/rpm（apt/yum）Linux 系统包仓库〔对标 Nexus〕 | P3 | 计划 |
-| FR-62 | Webhooks（制品事件通知）+ 仓库内路径路由规则 / content selector〔对标 Nexus〕 | P3 | 计划 |
+| 编号  | 需求                                                                          | 优先级 | 状态 |
+| ----- | ----------------------------------------------------------------------------- | ------ | ---- |
+| FR-57 | RubyGems、Conan、Terraform、Ansible Galaxy、Dart/Flutter Pub 等长尾格式       | P3     | 计划 |
+| FR-58 | 高级虚拟仓库策略与跨成员 metadata 聚合                                        | P3     | 计划 |
+| FR-59 | 多节点只读扩展或高可用可选方案（先独立 ADR）                                  | P3     | 计划 |
+| FR-60 | 外部数据库 / 分布式存储可选方案（不破坏默认轻量形态，需 ADR）                 | P3     | 计划 |
+| FR-61 | deb/rpm（apt/yum）Linux 系统包仓库〔对标 Nexus〕                              | P3     | 计划 |
+| FR-62 | Webhooks（制品事件通知）+ 仓库内路径路由规则 / content selector〔对标 Nexus〕 | P3     | 计划 |
 
 ### 4.6 贯穿全期 · 产品供应链与发布质量
 
-| 编号 | 需求 | 优先级 | 状态 |
-|---|---|---|---|
-| FR-63 | 签名发布（cosign / 校验和）+ 生成 SBOM + 接入 OpenSSF Scorecard〔对标 NORA〕 | P2 | 计划 |
-| FR-64 | 对协议解析 / 路径校验等入口做 Fuzz 模糊测试并纳入 CI 门禁〔对标 NORA〕 | P2 | 计划 |
-| FR-65 | 1.0.0-rc：全格式与迁移兼容矩阵回归 + semver 契约冻结 + 升级手册 | P3 | 计划 |
+| 编号  | 需求                                                                         | 优先级 | 状态 |
+| ----- | ---------------------------------------------------------------------------- | ------ | ---- |
+| FR-63 | 签名发布（cosign / 校验和）+ 生成 SBOM + 接入 OpenSSF Scorecard〔对标 NORA〕 | P2     | 计划 |
+| FR-64 | 对协议解析 / 路径校验等入口做 Fuzz 模糊测试并纳入 CI 门禁〔对标 NORA〕       | P2     | 计划 |
+| FR-65 | 1.0.0-rc：全格式与迁移兼容矩阵回归 + semver 契约冻结 + 升级手册              | P3     | 计划 |
 
 ## 5. 非功能需求（NFR）
 

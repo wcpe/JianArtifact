@@ -1,14 +1,22 @@
 # 多阶段构建：前端 dist -> Go embed 静态编译 -> distroless 最小运行镜像。
 # 见 docs/adr/0005-single-binary-embed.md 与 docs/adr/0007-deployment-orchestration.md。
+#
+# 基础镜像通过 ARG 参数化：默认取生产推荐镜像（distroless nonroot）。
+# 在离线 / 内网环境可用 --build-arg 覆盖为本地已缓存镜像，例如：
+#   --build-arg WEB_IMAGE=node:22-alpine \
+#   --build-arg BUILD_IMAGE=golang:1.26.5-bookworm \
+#   --build-arg RUNTIME_IMAGE=alpine:3.20
+ARG WEB_IMAGE=node:22-bookworm-slim
+ARG BUILD_IMAGE=golang:1.26-bookworm
+ARG RUNTIME_IMAGE=gcr.io/distroless/static-debian12:nonroot
 
 # ---- Stage 1：前端构建 ----
-FROM node:22-bookworm-slim AS web
+FROM ${WEB_IMAGE} AS web
 WORKDIR /src
 RUN corepack enable
 # 先拷依赖清单以利用层缓存
-COPY pnpm-workspace.yaml package.json pnpm-lock.yaml* ./
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml* .npmrc* ./
 COPY apps/web/package.json apps/web/
-COPY apps/wiki/package.json apps/wiki/
 COPY packages/ui/package.json packages/ui/
 COPY packages/devmock/package.json packages/devmock/
 COPY packages/eslint-config/package.json packages/eslint-config/
@@ -18,8 +26,12 @@ COPY . .
 RUN pnpm build
 
 # ---- Stage 2：Go 编译（内嵌前端 dist）----
-FROM golang:1.23-bookworm AS build
+FROM ${BUILD_IMAGE} AS build
 WORKDIR /src
+# 用国内可达的 Go 模块代理，避免默认 proxy.golang.org 在内网 / 离线环境不可达
+ARG GOPROXY=https://goproxy.cn,direct
+ENV GOPROXY=${GOPROXY}
+ENV GOTOOLCHAIN=local
 COPY go.work ./
 COPY apps/server/go.mod apps/server/go.sum* apps/server/
 RUN cd apps/server && go mod download || true
@@ -31,11 +43,12 @@ RUN cd apps/server && go build -trimpath -ldflags="-s -w -X main.version=$(cat /
     -o /out/jianartifact ./cmd/jianartifact
 
 # ---- Stage 3：最小运行镜像 ----
-FROM gcr.io/distroless/static-debian12:nonroot AS runtime
+FROM ${RUNTIME_IMAGE} AS runtime
 WORKDIR /app
 COPY --from=build /out/jianartifact /app/jianartifact
 # 数据目录（元数据 SQLite 与 blob）通过卷挂载到 /data
 VOLUME ["/data"]
 EXPOSE 8080
-USER nonroot:nonroot
+# 65532 即 distroless nonroot 的 UID，用数字形式以便在任意最小基础镜像上都能非 root 运行
+USER 65532:65532
 ENTRYPOINT ["/app/jianartifact"]

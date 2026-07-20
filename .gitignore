@@ -1,5 +1,6 @@
 # ===== Go 构建产物 =====
 /bin/
+apps/server/bin/
 *.exe
 *.exe~
 *.dll
@@ -12,6 +13,10 @@
 /vendor/
 coverage.out
 coverage.html
+
+# 本地 Go 模块缓存（仅本机构建用，不入库；见 README 环境说明）
+/.gomodcache/
+/.gocache/
 
 # ===== Node 构建产物与依赖 =====
 node_modules/
@@ -29,8 +34,11 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-# ===== 前端内嵌产物（由构建注入 apps/server，不入库）=====
-/apps/server/web/dist/
+# ===== 前端内嵌产物（由构建注入 apps/server，不入库；保留占位 index.html 以保证 //go:embed 可编译）=====
+# 先重新纳入该目录（覆盖上面全局 dist/ 规则），再忽略其内容，最后放行占位 index.html。
+!/apps/server/web/dist/
+/apps/server/web/dist/*
+!/apps/server/web/dist/index.html
 
 # ===== 运行期数据（不入库）=====
 # SQLite 元数据库

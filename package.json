@@ -9,6 +9,8 @@
     "node": ">=22"
   },
   "scripts": {
+    "format:check": "prettier --check .",
+    "format": "prettier --write .",
     "typecheck": "turbo run typecheck",
     "lint": "turbo run lint",
     "test": "turbo run test",
@@ -16,6 +18,7 @@
     "dev": "turbo run dev"
   },
   "devDependencies": {
+    "prettier": "^3.3.3",
     "turbo": "^2.1.0"
   }
 }
