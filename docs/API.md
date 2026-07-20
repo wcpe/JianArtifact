@@ -61,6 +61,7 @@
 
 - `GET /healthz`：存活探针。
 - `GET /readyz`：就绪探针（SQLite + blob 目录自检）。
+- `GET /api/v1/status`：运行时状态（版本、就绪、迁移版本、初始化标志、用户数），供 CLI `status` 与首启 web 设置页判定实例是否已初始化。
 
 ### 协议端点（非 OpenAPI，按格式规范）
 

@@ -60,12 +60,16 @@ web          go:embed 前端 dist（由构建注入）
 
 ## 3. 数据模型
 
-**元数据真源 = SQLite**（`modernc.org/sqlite`，纯 Go 无 CGO），经 sqlx 访问，schema 由迁移脚本管理。核心实体（随实现细化）：
+**元数据真源 = SQLite**（`modernc.org/sqlite`，纯 Go 无 CGO），经 sqlx 访问，开启 WAL、`foreign_keys=ON`、`busy_timeout`；schema 由 `internal/persistence/migrations/*.sql` 迁移脚本管理，内置极简迁移器按文件名字典序前向执行，`schema_migrations` 表记录已应用版本。0.2.0 已落地的表：
 
-- **user**：账号、argon2 口令哈希、状态、角色。
-- **api_token**：令牌摘要、所属用户、作用域、创建 / 吊销时间（明文令牌不入库）。
-- **repository**：名称、格式（raw/maven/npm…）、类型（hosted/proxy/group）、可见性、配置（上游 URL、成员列表等）。
-- **acl**：主体（用户/组）× 仓库 × 动作（读/写/管理）。
+- **user**：账号（唯一）、argon2id 口令哈希、角色（admin/user）、状态（active/disabled）、创建 / 更新时间。明文口令不落库。
+- **api_token**：仅存 sha256 摘要（唯一）、所属用户、名称、创建 / 吊销时间；明文令牌仅签发时返回一次，不入库。
+- **revoked_token**：登出会话 JWT 的 `jti` 与过期时间，直至过期前拒绝复用（无状态 JWT 的短期黑名单）。
+- **repository**：名称（唯一）、格式（raw/maven/npm）、类型（hosted/proxy/group）、可见性（public/private）、配置（JSON 文本，上游 URL / 成员列表等）、创建 / 更新时间。
+- **acl**：主体（用户）× 仓库 × 动作（read/write/admin），唯一约束去重；admin 蕴含 read/write，write 蕴含 read。
+
+后续版本引入：
+
 - **artifact / component / asset**：制品坐标、路径、大小、内容哈希（指向 blob）、所属仓库、时间戳。
 - **migration_task**：迁移任务状态机、来源、进度、断点、冲突策略、报告。
 

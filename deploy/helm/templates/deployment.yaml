@@ -27,6 +27,8 @@ spec:
         - name: jianartifact
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # 显式传 run 启动服务：无参数时二进制只打印用法。
+          args: ["run"]
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
           ports:

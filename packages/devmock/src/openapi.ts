@@ -30,3 +30,13 @@ export function schemaFor(name: string): Record<string, unknown> {
   }
   return schema;
 }
+
+/** 返回全部组件 schema，键为 `#/components/schemas/<名>`，供 ajv 解析交叉 $ref。 */
+export function allSchemas(): Record<string, Record<string, unknown>> {
+  const doc = loadOpenApi();
+  const out: Record<string, Record<string, unknown>> = {};
+  for (const [name, schema] of Object.entries(doc.components?.schemas ?? {})) {
+    out[`#/components/schemas/${name}`] = schema;
+  }
+  return out;
+}

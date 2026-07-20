@@ -1,0 +1,71 @@
+package repository
+
+import (
+	"database/sql"
+	"errors"
+
+	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
+)
+
+// RepoRepo 读写 repository 表。
+type RepoRepo struct{ db *persistence.DB }
+
+// NewRepoRepo 构造 RepoRepo。
+func NewRepoRepo(db *persistence.DB) *RepoRepo { return &RepoRepo{db: db} }
+
+// Create 插入仓库，返回新 ID。
+func (r *RepoRepo) Create(name, format, typ, visibility string) (int64, error) {
+	res, err := r.db.Exec(
+		`INSERT INTO repository (name, format, type, visibility) VALUES (?, ?, ?, ?)`,
+		name, format, typ, visibility,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// GetByName 按名取仓库；不存在返回 ErrNotFound。
+func (r *RepoRepo) GetByName(name string) (*Repository, error) {
+	var repo Repository
+	err := r.db.Get(&repo, `SELECT id, name, format, type, visibility, created_at FROM repository WHERE name = ?`, name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &repo, nil
+}
+
+// List 返回分页仓库（按 id 升序）。
+func (r *RepoRepo) List(limit, offset int) ([]Repository, error) {
+	var repos []Repository
+	err := r.db.Select(&repos, `SELECT id, name, format, type, visibility, created_at FROM repository ORDER BY id LIMIT ? OFFSET ?`, limit, offset)
+	return repos, err
+}
+
+// Count 返回仓库总数。
+func (r *RepoRepo) Count() (int, error) {
+	var n int
+	err := r.db.Get(&n, `SELECT COUNT(*) FROM repository`)
+	return n, err
+}
+
+// UpdateVisibility 更新可见性（空串表示不改）。
+func (r *RepoRepo) UpdateVisibility(name, visibility string) error {
+	res, err := r.db.Exec(
+		`UPDATE repository SET
+			visibility = COALESCE(NULLIF(?, ''), visibility),
+			updated_at = datetime('now')
+		WHERE name = ?`,
+		visibility, name,
+	)
+	return affected(res, err)
+}
+
+// Delete 删除仓库（级联删除其 ACL）。
+func (r *RepoRepo) Delete(name string) error {
+	res, err := r.db.Exec(`DELETE FROM repository WHERE name = ?`, name)
+	return affected(res, err)
+}

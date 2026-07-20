@@ -19,9 +19,14 @@ import (
 type ReadinessCheck func() error
 
 // Server 实现契约生成的 api.ServerInterface，并持有版本与就绪检查集合。
+// 管理与状态端点由注入的 api.ServerInterface（api.Handlers）经嵌入提供；
+// Server 自身覆盖 GetHealthz / GetReadyz，使无依赖装配（如测试）也能提供健康探针。
 type Server struct {
-	version string
-	checks  []ReadinessCheck
+	api.ServerInterface // 管理 + 状态 handler（WithHandlers 注入；未注入时仅健康探针可用）
+
+	version     string
+	checks      []ReadinessCheck
+	middlewares []api.MiddlewareFunc
 }
 
 // Option 配置 Server。
@@ -30,6 +35,16 @@ type Option func(*Server)
 // WithReadinessCheck 追加一个就绪自检钩子。
 func WithReadinessCheck(c ReadinessCheck) Option {
 	return func(s *Server) { s.checks = append(s.checks, c) }
+}
+
+// WithHandlers 注入实现管理与状态端点的 api.ServerInterface。
+func WithHandlers(h api.ServerInterface) Option {
+	return func(s *Server) { s.ServerInterface = h }
+}
+
+// WithMiddleware 追加应用到全部契约路由的 Gin 中间件（如鉴权主体解析）。
+func WithMiddleware(m ...api.MiddlewareFunc) Option {
+	return func(s *Server) { s.middlewares = append(s.middlewares, m...) }
 }
 
 // New 构造 Server。
@@ -67,7 +82,7 @@ func (s *Server) Handler(assets fs.FS) http.Handler {
 	r := gin.New()
 	r.Use(gin.Recovery())
 
-	api.RegisterHandlers(r, s)
+	api.RegisterHandlersWithOptions(r, s, api.GinServerOptions{Middlewares: s.middlewares})
 
 	if assets != nil {
 		s.mountStatic(r, assets)

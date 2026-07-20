@@ -14,9 +14,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
+	"github.com/wcpe/jianartifact/apps/server/internal/api"
+	"github.com/wcpe/jianartifact/apps/server/internal/auth"
+	"github.com/wcpe/jianartifact/apps/server/internal/config"
 	"github.com/wcpe/jianartifact/apps/server/internal/httpserver"
 	"github.com/wcpe/jianartifact/apps/server/web"
 )
@@ -25,18 +29,69 @@ import (
 var version = "0.1.0"
 
 func main() {
-	// healthcheck 子命令：供 distroless 容器（无 shell/curl）自探活，探测本地 /readyz。
-	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
+	// 子命令分发器：run/serve（启动 HTTP 服务）/ status（在线探测或离线静态信息）/
+	// admin reset（离线重置管理员）/ healthcheck（容器自探活）/ help（打印用法）。
+	// 无子命令或未知命令均打印用法，避免误触发启动服务。
+	args := os.Args[1:]
+	if len(args) == 0 {
+		usage(os.Stdout)
+		return
+	}
+	switch args[0] {
+	case "run", "serve":
+		if err := run(); err != nil {
+			fmt.Fprintln(os.Stderr, "启动失败：", err)
+			os.Exit(1)
+		}
+	case "status":
+		if err := statusCmd(); err != nil {
+			fmt.Fprintln(os.Stderr, "status 子命令失败：", err)
+			os.Exit(1)
+		}
+	case "admin":
+		if err := adminCmd(args[1:]); err != nil {
+			fmt.Fprintln(os.Stderr, "admin 子命令失败：", err)
+			os.Exit(1)
+		}
+	case "healthcheck":
 		if err := healthcheck(); err != nil {
 			fmt.Fprintln(os.Stderr, "探活失败：", err)
 			os.Exit(1)
 		}
-		return
+	case "help", "-h", "--help":
+		usage(os.Stdout)
+	default:
+		fmt.Fprintf(os.Stderr, "未知命令：%s\n\n", args[0])
+		usage(os.Stderr)
+		os.Exit(2)
 	}
-	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, "启动失败：", err)
-		os.Exit(1)
-	}
+}
+
+// usage 打印子命令清单与用法说明。
+func usage(w io.Writer) {
+	fmt.Fprintf(w, `JianArtifact %s — 制品仓库服务
+
+用法：
+  jianartifact <命令> [参数]
+
+命令：
+  run                启动 HTTP 服务（监听 JIAN_HTTP_ADDR，默认 :8080）
+  status             打印运行时状态（服务在跑）或离线静态信息
+  admin reset        重置 / 创建管理员账号与口令（离线直连 SQLite）
+                     [--username <名>] [--password <口令>]
+  healthcheck        对本地 /readyz 探活，供容器健康检查
+  help               显示本帮助
+
+环境变量：
+  JIAN_HTTP_ADDR     HTTP 监听地址:端口（默认 :8080）
+  JIAN_DATA_DIR      数据根目录（默认 ./data；存放 SQLite 与 blob）
+  JIAN_JWT_SECRET    JWT(HS256) 签名密钥（缺省时生成并持久化到数据目录）
+
+示例：
+  jianartifact run
+  jianartifact admin reset --username admin
+  jianartifact status
+`, version)
 }
 
 // healthcheck 对本进程监听地址发起 GET /readyz，返回 200 视为就绪（退出 0），否则报错。
@@ -65,20 +120,50 @@ func listenAddr() string {
 	return ":8080"
 }
 
+// blobWritableCheck 返回一个就绪自检：探测 blob 目录可写（写入并删除探针文件）。
+func blobWritableCheck(blobDir string) httpserver.ReadinessCheck {
+	return func() error {
+		probe := filepath.Join(blobDir, ".readyz-probe")
+		if err := os.WriteFile(probe, []byte("ok"), 0o600); err != nil {
+			return fmt.Errorf("blob 目录不可写：%w", err)
+		}
+		_ = os.Remove(probe)
+		return nil
+	}
+}
+
 func run() error {
-	addr := listenAddr()
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("加载配置：%w", err)
+	}
+
+	svc, err := openServices(cfg)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = svc.db.Close() }()
 
 	assets, err := web.Assets()
 	if err != nil {
 		return fmt.Errorf("加载内嵌前端资源：%w", err)
 	}
 
-	srv := httpserver.New(version)
+	checks := []func() error{svc.db.Ping, blobWritableCheck(cfg.BlobDir)}
+	authenticator := auth.NewAuthenticator(svc.jwt, svc.store)
+
+	srv := httpserver.New(version,
+		httpserver.WithReadinessCheck(svc.db.Ping),
+		httpserver.WithReadinessCheck(blobWritableCheck(cfg.BlobDir)),
+		httpserver.WithHandlers(svc.handlers(version, checks)),
+		httpserver.WithMiddleware(api.MiddlewareFunc(authenticator.Optional())),
+	)
 	httpServer := &http.Server{
-		Addr:              addr,
+		Addr:              cfg.HTTPAddr,
 		Handler:           srv.Handler(assets),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+	addr := cfg.HTTPAddr
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

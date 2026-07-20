@@ -4,8 +4,111 @@
 package api
 
 import (
+	"fmt"
+	"net/http"
+
 	"github.com/gin-gonic/gin"
+	"github.com/oapi-codegen/runtime"
 )
+
+// Defines values for AclEntryAction.
+const (
+	AclEntryActionAdmin AclEntryAction = "admin"
+	AclEntryActionRead  AclEntryAction = "read"
+	AclEntryActionWrite AclEntryAction = "write"
+)
+
+// Valid indicates whether the value is a known member of the AclEntryAction enum.
+func (e AclEntryAction) Valid() bool {
+	switch e {
+	case AclEntryActionAdmin:
+		return true
+	case AclEntryActionRead:
+		return true
+	case AclEntryActionWrite:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CreateRepositoryRequestFormat.
+const (
+	CreateRepositoryRequestFormatMaven CreateRepositoryRequestFormat = "maven"
+	CreateRepositoryRequestFormatNpm   CreateRepositoryRequestFormat = "npm"
+	CreateRepositoryRequestFormatRaw   CreateRepositoryRequestFormat = "raw"
+)
+
+// Valid indicates whether the value is a known member of the CreateRepositoryRequestFormat enum.
+func (e CreateRepositoryRequestFormat) Valid() bool {
+	switch e {
+	case CreateRepositoryRequestFormatMaven:
+		return true
+	case CreateRepositoryRequestFormatNpm:
+		return true
+	case CreateRepositoryRequestFormatRaw:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CreateRepositoryRequestType.
+const (
+	CreateRepositoryRequestTypeGroup  CreateRepositoryRequestType = "group"
+	CreateRepositoryRequestTypeHosted CreateRepositoryRequestType = "hosted"
+	CreateRepositoryRequestTypeProxy  CreateRepositoryRequestType = "proxy"
+)
+
+// Valid indicates whether the value is a known member of the CreateRepositoryRequestType enum.
+func (e CreateRepositoryRequestType) Valid() bool {
+	switch e {
+	case CreateRepositoryRequestTypeGroup:
+		return true
+	case CreateRepositoryRequestTypeHosted:
+		return true
+	case CreateRepositoryRequestTypeProxy:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CreateRepositoryRequestVisibility.
+const (
+	CreateRepositoryRequestVisibilityPrivate CreateRepositoryRequestVisibility = "private"
+	CreateRepositoryRequestVisibilityPublic  CreateRepositoryRequestVisibility = "public"
+)
+
+// Valid indicates whether the value is a known member of the CreateRepositoryRequestVisibility enum.
+func (e CreateRepositoryRequestVisibility) Valid() bool {
+	switch e {
+	case CreateRepositoryRequestVisibilityPrivate:
+		return true
+	case CreateRepositoryRequestVisibilityPublic:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CreateUserRequestRole.
+const (
+	CreateUserRequestRoleAdmin CreateUserRequestRole = "admin"
+	CreateUserRequestRoleUser  CreateUserRequestRole = "user"
+)
+
+// Valid indicates whether the value is a known member of the CreateUserRequestRole enum.
+func (e CreateUserRequestRole) Valid() bool {
+	switch e {
+	case CreateUserRequestRoleAdmin:
+		return true
+	case CreateUserRequestRoleUser:
+		return true
+	default:
+		return false
+	}
+}
 
 // Defines values for HealthStatusStatus.
 const (
@@ -28,10 +131,214 @@ func (e HealthStatusStatus) Valid() bool {
 	}
 }
 
+// Defines values for RepositoryFormat.
+const (
+	RepositoryFormatMaven RepositoryFormat = "maven"
+	RepositoryFormatNpm   RepositoryFormat = "npm"
+	RepositoryFormatRaw   RepositoryFormat = "raw"
+)
+
+// Valid indicates whether the value is a known member of the RepositoryFormat enum.
+func (e RepositoryFormat) Valid() bool {
+	switch e {
+	case RepositoryFormatMaven:
+		return true
+	case RepositoryFormatNpm:
+		return true
+	case RepositoryFormatRaw:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RepositoryType.
+const (
+	RepositoryTypeGroup  RepositoryType = "group"
+	RepositoryTypeHosted RepositoryType = "hosted"
+	RepositoryTypeProxy  RepositoryType = "proxy"
+)
+
+// Valid indicates whether the value is a known member of the RepositoryType enum.
+func (e RepositoryType) Valid() bool {
+	switch e {
+	case RepositoryTypeGroup:
+		return true
+	case RepositoryTypeHosted:
+		return true
+	case RepositoryTypeProxy:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RepositoryVisibility.
+const (
+	RepositoryVisibilityPrivate RepositoryVisibility = "private"
+	RepositoryVisibilityPublic  RepositoryVisibility = "public"
+)
+
+// Valid indicates whether the value is a known member of the RepositoryVisibility enum.
+func (e RepositoryVisibility) Valid() bool {
+	switch e {
+	case RepositoryVisibilityPrivate:
+		return true
+	case RepositoryVisibilityPublic:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UpdateRepositoryRequestVisibility.
+const (
+	UpdateRepositoryRequestVisibilityPrivate UpdateRepositoryRequestVisibility = "private"
+	UpdateRepositoryRequestVisibilityPublic  UpdateRepositoryRequestVisibility = "public"
+)
+
+// Valid indicates whether the value is a known member of the UpdateRepositoryRequestVisibility enum.
+func (e UpdateRepositoryRequestVisibility) Valid() bool {
+	switch e {
+	case UpdateRepositoryRequestVisibilityPrivate:
+		return true
+	case UpdateRepositoryRequestVisibilityPublic:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UpdateUserRequestRole.
+const (
+	UpdateUserRequestRoleAdmin UpdateUserRequestRole = "admin"
+	UpdateUserRequestRoleUser  UpdateUserRequestRole = "user"
+)
+
+// Valid indicates whether the value is a known member of the UpdateUserRequestRole enum.
+func (e UpdateUserRequestRole) Valid() bool {
+	switch e {
+	case UpdateUserRequestRoleAdmin:
+		return true
+	case UpdateUserRequestRoleUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UpdateUserRequestStatus.
+const (
+	UpdateUserRequestStatusActive   UpdateUserRequestStatus = "active"
+	UpdateUserRequestStatusDisabled UpdateUserRequestStatus = "disabled"
+)
+
+// Valid indicates whether the value is a known member of the UpdateUserRequestStatus enum.
+func (e UpdateUserRequestStatus) Valid() bool {
+	switch e {
+	case UpdateUserRequestStatusActive:
+		return true
+	case UpdateUserRequestStatusDisabled:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UserRole.
+const (
+	UserRoleAdmin UserRole = "admin"
+	UserRoleUser  UserRole = "user"
+)
+
+// Valid indicates whether the value is a known member of the UserRole enum.
+func (e UserRole) Valid() bool {
+	switch e {
+	case UserRoleAdmin:
+		return true
+	case UserRoleUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UserStatus.
+const (
+	UserStatusActive   UserStatus = "active"
+	UserStatusDisabled UserStatus = "disabled"
+)
+
+// Valid indicates whether the value is a known member of the UserStatus enum.
+func (e UserStatus) Valid() bool {
+	switch e {
+	case UserStatusActive:
+		return true
+	case UserStatusDisabled:
+		return true
+	default:
+		return false
+	}
+}
+
+// AclEntry defines model for AclEntry.
+type AclEntry struct {
+	Action    AclEntryAction `json:"action"`
+	SubjectId int64          `json:"subjectId"`
+}
+
+// AclEntryAction defines model for AclEntry.Action.
+type AclEntryAction string
+
+// AclList defines model for AclList.
+type AclList struct {
+	Items []AclEntry `json:"items"`
+}
+
+// BootstrapRequest defines model for BootstrapRequest.
+type BootstrapRequest struct {
+	Password string `json:"password"`
+	Username string `json:"username"`
+}
+
+// CreateRepositoryRequest defines model for CreateRepositoryRequest.
+type CreateRepositoryRequest struct {
+	Format     CreateRepositoryRequestFormat      `json:"format"`
+	Name       string                             `json:"name"`
+	Type       CreateRepositoryRequestType        `json:"type"`
+	Visibility *CreateRepositoryRequestVisibility `json:"visibility,omitempty"`
+}
+
+// CreateRepositoryRequestFormat defines model for CreateRepositoryRequest.Format.
+type CreateRepositoryRequestFormat string
+
+// CreateRepositoryRequestType defines model for CreateRepositoryRequest.Type.
+type CreateRepositoryRequestType string
+
+// CreateRepositoryRequestVisibility defines model for CreateRepositoryRequest.Visibility.
+type CreateRepositoryRequestVisibility string
+
+// CreateTokenRequest defines model for CreateTokenRequest.
+type CreateTokenRequest struct {
+	Name string `json:"name"`
+}
+
+// CreateUserRequest defines model for CreateUserRequest.
+type CreateUserRequest struct {
+	Password string                 `json:"password"`
+	Role     *CreateUserRequestRole `json:"role,omitempty"`
+	Username string                 `json:"username"`
+}
+
+// CreateUserRequestRole defines model for CreateUserRequest.Role.
+type CreateUserRequestRole string
+
 // Error defines model for Error.
 type Error struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Error struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	} `json:"error"`
 }
 
 // HealthStatus defines model for HealthStatus.
@@ -43,12 +350,254 @@ type HealthStatus struct {
 // HealthStatusStatus defines model for HealthStatus.Status.
 type HealthStatusStatus string
 
+// LoginRequest defines model for LoginRequest.
+type LoginRequest struct {
+	Password string `json:"password"`
+	Username string `json:"username"`
+}
+
+// LoginResponse defines model for LoginResponse.
+type LoginResponse struct {
+	Token string `json:"token"`
+	User  User   `json:"user"`
+}
+
+// PasswordChangeRequest defines model for PasswordChangeRequest.
+type PasswordChangeRequest struct {
+	Password string `json:"password"`
+}
+
+// PutAclRequest defines model for PutAclRequest.
+type PutAclRequest struct {
+	Items []AclEntry `json:"items"`
+}
+
+// Repository defines model for Repository.
+type Repository struct {
+	CreatedAt  string               `json:"createdAt"`
+	Format     RepositoryFormat     `json:"format"`
+	Id         int64                `json:"id"`
+	Name       string               `json:"name"`
+	Type       RepositoryType       `json:"type"`
+	Visibility RepositoryVisibility `json:"visibility"`
+}
+
+// RepositoryFormat defines model for Repository.Format.
+type RepositoryFormat string
+
+// RepositoryType defines model for Repository.Type.
+type RepositoryType string
+
+// RepositoryVisibility defines model for Repository.Visibility.
+type RepositoryVisibility string
+
+// RepositoryList defines model for RepositoryList.
+type RepositoryList struct {
+	Items []Repository `json:"items"`
+	Total int          `json:"total"`
+}
+
+// StatusInfo defines model for StatusInfo.
+type StatusInfo struct {
+	Initialized      bool   `json:"initialized"`
+	MigrationVersion string `json:"migrationVersion"`
+	Ready            bool   `json:"ready"`
+	UserCount        int    `json:"userCount"`
+	Version          string `json:"version"`
+}
+
+// Token defines model for Token.
+type Token struct {
+	CreatedAt string `json:"createdAt"`
+	Id        int64  `json:"id"`
+	Name      string `json:"name"`
+}
+
+// TokenCreated defines model for TokenCreated.
+type TokenCreated struct {
+	CreatedAt string `json:"createdAt"`
+	Id        int64  `json:"id"`
+	Name      string `json:"name"`
+
+	// Token 明文令牌，仅此次返回一次。
+	Token string `json:"token"`
+}
+
+// TokenList defines model for TokenList.
+type TokenList struct {
+	Items []Token `json:"items"`
+}
+
+// UpdateRepositoryRequest defines model for UpdateRepositoryRequest.
+type UpdateRepositoryRequest struct {
+	Visibility *UpdateRepositoryRequestVisibility `json:"visibility,omitempty"`
+}
+
+// UpdateRepositoryRequestVisibility defines model for UpdateRepositoryRequest.Visibility.
+type UpdateRepositoryRequestVisibility string
+
+// UpdateUserRequest defines model for UpdateUserRequest.
+type UpdateUserRequest struct {
+	Role   *UpdateUserRequestRole   `json:"role,omitempty"`
+	Status *UpdateUserRequestStatus `json:"status,omitempty"`
+}
+
+// UpdateUserRequestRole defines model for UpdateUserRequest.Role.
+type UpdateUserRequestRole string
+
+// UpdateUserRequestStatus defines model for UpdateUserRequest.Status.
+type UpdateUserRequestStatus string
+
+// User defines model for User.
+type User struct {
+	CreatedAt string     `json:"createdAt"`
+	Id        int64      `json:"id"`
+	Role      UserRole   `json:"role"`
+	Status    UserStatus `json:"status"`
+	Username  string     `json:"username"`
+}
+
+// UserRole defines model for User.Role.
+type UserRole string
+
+// UserStatus defines model for User.Status.
+type UserStatus string
+
+// UserList defines model for UserList.
+type UserList struct {
+	Items []User `json:"items"`
+	Total int    `json:"total"`
+}
+
+// PageParam defines model for PageParam.
+type PageParam = int
+
+// PageSizeParam defines model for PageSizeParam.
+type PageSizeParam = int
+
+// RepoNameParam defines model for RepoNameParam.
+type RepoNameParam = string
+
+// TokenIdParam defines model for TokenIdParam.
+type TokenIdParam = int64
+
+// UserIdParam defines model for UserIdParam.
+type UserIdParam = int64
+
+// BadRequest defines model for BadRequest.
+type BadRequest = Error
+
+// Conflict defines model for Conflict.
+type Conflict = Error
+
+// Forbidden defines model for Forbidden.
+type Forbidden = Error
+
+// NotFound defines model for NotFound.
+type NotFound = Error
+
+// Unauthorized defines model for Unauthorized.
+type Unauthorized = Error
+
+// ListRepositoriesParams defines parameters for ListRepositories.
+type ListRepositoriesParams struct {
+	Page     *PageParam     `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *PageSizeParam `form:"page_size,omitempty" json:"page_size,omitempty"`
+}
+
+// ListUsersParams defines parameters for ListUsers.
+type ListUsersParams struct {
+	Page     *PageParam     `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *PageSizeParam `form:"page_size,omitempty" json:"page_size,omitempty"`
+}
+
+// BootstrapJSONRequestBody defines body for Bootstrap for application/json ContentType.
+type BootstrapJSONRequestBody = BootstrapRequest
+
+// LoginJSONRequestBody defines body for Login for application/json ContentType.
+type LoginJSONRequestBody = LoginRequest
+
+// CreateRepositoryJSONRequestBody defines body for CreateRepository for application/json ContentType.
+type CreateRepositoryJSONRequestBody = CreateRepositoryRequest
+
+// UpdateRepositoryJSONRequestBody defines body for UpdateRepository for application/json ContentType.
+type UpdateRepositoryJSONRequestBody = UpdateRepositoryRequest
+
+// SetRepositoryAclJSONRequestBody defines body for SetRepositoryAcl for application/json ContentType.
+type SetRepositoryAclJSONRequestBody = PutAclRequest
+
+// CreateTokenJSONRequestBody defines body for CreateToken for application/json ContentType.
+type CreateTokenJSONRequestBody = CreateTokenRequest
+
+// CreateUserJSONRequestBody defines body for CreateUser for application/json ContentType.
+type CreateUserJSONRequestBody = CreateUserRequest
+
+// UpdateUserJSONRequestBody defines body for UpdateUser for application/json ContentType.
+type UpdateUserJSONRequestBody = UpdateUserRequest
+
+// ChangePasswordJSONRequestBody defines body for ChangePassword for application/json ContentType.
+type ChangePasswordJSONRequestBody = PasswordChangeRequest
+
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
+	// Bootstrap 首启管理员自举（仅在未初始化，即 user 表为空时可用）
+	// (POST /api/v1/auth/bootstrap)
+	Bootstrap(c *gin.Context)
+	// Login 用户名 + 口令换取会话 JWT
+	// (POST /api/v1/auth/login)
+	Login(c *gin.Context)
+	// Logout 注销当前会话（当前 JWT 记入吊销名单直至过期）
+	// (POST /api/v1/auth/logout)
+	Logout(c *gin.Context)
+	// ListRepositories 仓库列表（分页，按可见性 / ACL 过滤）
+	// (GET /api/v1/repositories)
+	ListRepositories(c *gin.Context, params ListRepositoriesParams)
+	// CreateRepository 创建仓库
+	// (POST /api/v1/repositories)
+	CreateRepository(c *gin.Context)
+	// DeleteRepository 删除仓库
+	// (DELETE /api/v1/repositories/{name})
+	DeleteRepository(c *gin.Context, name RepoNameParam)
+	// UpdateRepository 更新仓库（可见性 / 配置）
+	// (PATCH /api/v1/repositories/{name})
+	UpdateRepository(c *gin.Context, name RepoNameParam)
+	// GetRepositoryAcl 读取仓库 ACL
+	// (GET /api/v1/repositories/{name}/acl)
+	GetRepositoryAcl(c *gin.Context, name RepoNameParam)
+	// SetRepositoryAcl 覆盖写入仓库 ACL
+	// (PUT /api/v1/repositories/{name}/acl)
+	SetRepositoryAcl(c *gin.Context, name RepoNameParam)
+	// GetStatus 运行时状态（版本、就绪、迁移版本、初始化标志、用户数）
+	// (GET /api/v1/status)
+	GetStatus(c *gin.Context)
+	// ListTokens 当前用户的 API Token 列表（不含明文）
+	// (GET /api/v1/tokens)
+	ListTokens(c *gin.Context)
+	// CreateToken 签发 API Token（明文仅此次返回一次）
+	// (POST /api/v1/tokens)
+	CreateToken(c *gin.Context)
+	// DeleteToken 吊销 API Token
+	// (DELETE /api/v1/tokens/{id})
+	DeleteToken(c *gin.Context, id TokenIdParam)
+	// ListUsers 用户列表（分页）
+	// (GET /api/v1/users)
+	ListUsers(c *gin.Context, params ListUsersParams)
+	// CreateUser 创建用户
+	// (POST /api/v1/users)
+	CreateUser(c *gin.Context)
+	// DeleteUser 删除用户
+	// (DELETE /api/v1/users/{id})
+	DeleteUser(c *gin.Context, id UserIdParam)
+	// UpdateUser 更新用户（角色 / 状态）
+	// (PATCH /api/v1/users/{id})
+	UpdateUser(c *gin.Context, id UserIdParam)
+	// ChangePassword 修改 / 重置用户口令
+	// (POST /api/v1/users/{id}/password)
+	ChangePassword(c *gin.Context, id UserIdParam)
 	// GetHealthz 存活探针
 	// (GET /healthz)
 	GetHealthz(c *gin.Context)
-	// GetReadyz 就绪探针（依赖自检通过后才返回 200）
+	// GetReadyz 就绪探针（SQLite + blob 目录自检通过后才返回 200）
 	// (GET /readyz)
 	GetReadyz(c *gin.Context)
 }
@@ -61,6 +610,380 @@ type ServerInterfaceWrapper struct {
 }
 
 type MiddlewareFunc func(c *gin.Context)
+
+// Bootstrap operation middleware
+func (siw *ServerInterfaceWrapper) Bootstrap(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.Bootstrap(c)
+}
+
+// Login operation middleware
+func (siw *ServerInterfaceWrapper) Login(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.Login(c)
+}
+
+// Logout operation middleware
+func (siw *ServerInterfaceWrapper) Logout(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.Logout(c)
+}
+
+// ListRepositories operation middleware
+func (siw *ServerInterfaceWrapper) ListRepositories(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListRepositoriesParams
+
+	// ------------- Optional query parameter "page" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page", c.Request.URL.Query(), &params.Page, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter page: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "page_size" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page_size", c.Request.URL.Query(), &params.PageSize, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter page_size: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ListRepositories(c, params)
+}
+
+// CreateRepository operation middleware
+func (siw *ServerInterfaceWrapper) CreateRepository(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.CreateRepository(c)
+}
+
+// DeleteRepository operation middleware
+func (siw *ServerInterfaceWrapper) DeleteRepository(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "name" -------------
+	var name RepoNameParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "name", c.Param("name"), &name, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter name: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.DeleteRepository(c, name)
+}
+
+// UpdateRepository operation middleware
+func (siw *ServerInterfaceWrapper) UpdateRepository(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "name" -------------
+	var name RepoNameParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "name", c.Param("name"), &name, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter name: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.UpdateRepository(c, name)
+}
+
+// GetRepositoryAcl operation middleware
+func (siw *ServerInterfaceWrapper) GetRepositoryAcl(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "name" -------------
+	var name RepoNameParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "name", c.Param("name"), &name, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter name: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetRepositoryAcl(c, name)
+}
+
+// SetRepositoryAcl operation middleware
+func (siw *ServerInterfaceWrapper) SetRepositoryAcl(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "name" -------------
+	var name RepoNameParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "name", c.Param("name"), &name, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter name: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.SetRepositoryAcl(c, name)
+}
+
+// GetStatus operation middleware
+func (siw *ServerInterfaceWrapper) GetStatus(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetStatus(c)
+}
+
+// ListTokens operation middleware
+func (siw *ServerInterfaceWrapper) ListTokens(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ListTokens(c)
+}
+
+// CreateToken operation middleware
+func (siw *ServerInterfaceWrapper) CreateToken(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.CreateToken(c)
+}
+
+// DeleteToken operation middleware
+func (siw *ServerInterfaceWrapper) DeleteToken(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id TokenIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.DeleteToken(c, id)
+}
+
+// ListUsers operation middleware
+func (siw *ServerInterfaceWrapper) ListUsers(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListUsersParams
+
+	// ------------- Optional query parameter "page" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page", c.Request.URL.Query(), &params.Page, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter page: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "page_size" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page_size", c.Request.URL.Query(), &params.PageSize, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter page_size: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ListUsers(c, params)
+}
+
+// CreateUser operation middleware
+func (siw *ServerInterfaceWrapper) CreateUser(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.CreateUser(c)
+}
+
+// DeleteUser operation middleware
+func (siw *ServerInterfaceWrapper) DeleteUser(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id UserIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.DeleteUser(c, id)
+}
+
+// UpdateUser operation middleware
+func (siw *ServerInterfaceWrapper) UpdateUser(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id UserIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.UpdateUser(c, id)
+}
+
+// ChangePassword operation middleware
+func (siw *ServerInterfaceWrapper) ChangePassword(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id UserIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ChangePassword(c, id)
+}
 
 // GetHealthz operation middleware
 func (siw *ServerInterfaceWrapper) GetHealthz(c *gin.Context) {
@@ -117,4 +1040,22 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 
 	router.GET(options.BaseURL+"/healthz", wrapper.GetHealthz)
 	router.GET(options.BaseURL+"/readyz", wrapper.GetReadyz)
+	router.GET(options.BaseURL+"/api/v1/status", wrapper.GetStatus)
+	router.POST(options.BaseURL+"/api/v1/auth/bootstrap", wrapper.Bootstrap)
+	router.POST(options.BaseURL+"/api/v1/auth/login", wrapper.Login)
+	router.POST(options.BaseURL+"/api/v1/auth/logout", wrapper.Logout)
+	router.GET(options.BaseURL+"/api/v1/users", wrapper.ListUsers)
+	router.POST(options.BaseURL+"/api/v1/users", wrapper.CreateUser)
+	router.DELETE(options.BaseURL+"/api/v1/users/:id", wrapper.DeleteUser)
+	router.PATCH(options.BaseURL+"/api/v1/users/:id", wrapper.UpdateUser)
+	router.POST(options.BaseURL+"/api/v1/users/:id/password", wrapper.ChangePassword)
+	router.GET(options.BaseURL+"/api/v1/tokens", wrapper.ListTokens)
+	router.POST(options.BaseURL+"/api/v1/tokens", wrapper.CreateToken)
+	router.DELETE(options.BaseURL+"/api/v1/tokens/:id", wrapper.DeleteToken)
+	router.GET(options.BaseURL+"/api/v1/repositories", wrapper.ListRepositories)
+	router.POST(options.BaseURL+"/api/v1/repositories", wrapper.CreateRepository)
+	router.DELETE(options.BaseURL+"/api/v1/repositories/:name", wrapper.DeleteRepository)
+	router.PATCH(options.BaseURL+"/api/v1/repositories/:name", wrapper.UpdateRepository)
+	router.GET(options.BaseURL+"/api/v1/repositories/:name/acl", wrapper.GetRepositoryAcl)
+	router.PUT(options.BaseURL+"/api/v1/repositories/:name/acl", wrapper.SetRepositoryAcl)
 }

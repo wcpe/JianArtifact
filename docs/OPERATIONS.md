@@ -10,26 +10,31 @@
 
 配置经环境变量注入（`deploy/.env.example` 为无真实值模板，`.env` 不入库）：
 
-| 变量                      | 含义                | 示例 / 默认                |
-| ------------------------- | ------------------- | -------------------------- |
-| `JIAN_LISTEN`             | 监听地址:端口       | `0.0.0.0:8080`             |
-| `JIAN_DATA_DIR`           | 数据根目录          | `/var/lib/jianartifact`    |
-| `JIAN_BLOB_DIR`           | blob 存储目录       | `${JIAN_DATA_DIR}/blobs`   |
-| `JIAN_SQLITE_PATH`        | SQLite 元数据库路径 | `${JIAN_DATA_DIR}/meta.db` |
-| `JIAN_JWT_SECRET`         | JWT(HS256) 签名密钥 | （必填，强随机）           |
-| `JIAN_BOOTSTRAP_USER`     | 首启管理员用户名    | `admin`                    |
-| `JIAN_BOOTSTRAP_PASSWORD` | 首启管理员引导口令  | （首启后应改）             |
-| `JIAN_LOG_LEVEL`          | 日志级别            | `INFO`                     |
-| `JIAN_TRUSTED_WORKDIR`    | 可信工作目录根      | `${JIAN_DATA_DIR}`         |
+| 变量              | 含义                              | 示例 / 默认             |
+| ----------------- | --------------------------------- | ----------------------- |
+| `JIAN_HTTP_ADDR`  | HTTP 监听地址:端口                | `:8080`                 |
+| `JIAN_DATA_DIR`   | 数据根目录（SQLite 与 blob 存放） | `/var/lib/jianartifact` |
+| `JIAN_JWT_SECRET` | JWT(HS256) 签名密钥               | （建议必填，强随机）    |
+
+> 派生约定（不单独配置）：SQLite 元数据库固定为 `${JIAN_DATA_DIR}/jianartifact.db`，blob 目录为 `${JIAN_DATA_DIR}/blobs`，二者随进程启动自动创建。`JIAN_JWT_SECRET` 缺省时进程生成随机密钥并持久化到数据目录（附告警），生产务必显式配置。首个管理员不再经环境变量引导，改为经网页自举端点或 CLI `admin reset` 创建（见 §1.2、§1.5）。
 
 > 代理上游凭据用引用名 → 环境变量注入 `Authorization`，不硬编码、不入库、不进日志（见 `SECURITY.md`）。
 
 ### 1.2 Docker / Compose 部署（主路径）
 
-1. 复制 `deploy/.env.example` 为 `deploy/.env`，填入密钥与引导凭据。
+1. 复制 `deploy/.env.example` 为 `deploy/.env`，填入 `JIAN_JWT_SECRET` 等配置。
 2. `docker compose -f deploy/docker-compose.yml up -d`。
 3. 探活：`curl -fsS http://<host>:8080/readyz`。
-4. 首次登录用引导凭据，立即修改管理员口令。
+4. 首次初始化：经网页自举端点创建首个管理员（`POST /api/v1/auth/bootstrap`，仅未初始化时开放），或用 CLI `jianartifact admin reset` 创建（见 §1.5）。
+
+### 1.5 CLI 运维子命令
+
+单二进制内置以下子命令。**须显式传子命令**：无参数或未知命令只打印用法（不再默认启动服务），以避免误触发。`help` / `-h` / `--help` 打印用法。
+
+- `jianartifact run`（别名 `serve`）：启动 HTTP 服务，监听 `JIAN_HTTP_ADDR`（默认 `:8080`），启动即执行 schema 迁移。容器 / systemd 均须显式传 `run`（见 `deploy/`）。
+- `jianartifact admin reset [--username <名>] [--password <口令>]`：离线直连 SQLite 重置 / 创建管理员账号与口令，用于账号锁死后的恢复。该用户名不存在则以 `admin` 角色创建，已存在则重置口令并确保角色 `admin`、状态 `active`。省略 `--password` 时在交互式终端安全录入（两次校验、不回显）；非交互环境须显式传 `--password`。示例：`jianartifact admin reset --username admin`。
+- `jianartifact status`：服务在跑时在线探测本地 `/api/v1/status` 打印版本 / 就绪 / 已初始化 / 迁移版本 / 用户数；服务未跑时回退输出版本与解析后的配置（data 目录、DB 路径、监听地址、离线读取的迁移版本与用户数）。
+- `jianartifact healthcheck`：容器探活用，读 `/readyz` 决定退出码。
 
 ### 1.3 二进制部署（rootless systemd，可选）
 
@@ -47,7 +52,7 @@
 
 ## 3. 数据备份与恢复
 
-- **备份什么**：SQLite 元数据库（`JIAN_SQLITE_PATH` 及其 `-wal`/`-shm`）+ blob 目录（`JIAN_BLOB_DIR`）。二者须一致快照（建议停写或用一致性快照）。
+- **备份什么**：SQLite 元数据库（`${JIAN_DATA_DIR}/jianartifact.db` 及其 `-wal`/`-shm`）+ blob 目录（`${JIAN_DATA_DIR}/blobs`）。二者须一致快照（建议停写或用一致性快照）。
 - **频率**：按数据重要性定期（如每日）；保留策略按容量与合规定。
 - **恢复步骤**：停实例 → 还原 SQLite 与 blob 到同一时间点 → 启动 → `/readyz` → 抽样校验制品可拉取。
 

@@ -1,20 +1,23 @@
 # JianArtifact API 契约 —— 唯一真源（设计优先，见 docs/adr/0004-design-first-openapi.md）。
 # 变更此文件后运行 `task gen` 重生成 Go 接口与前端 client；生成产物不得手改。
-# 当前为 0.1.0 骨架：仅含健康 / 就绪端点，管理 API 与协议端点随 M1 迭代补齐。
+# 0.2.0：认证授权 + 用户 / 令牌 / 仓库 / ACL 管理面。协议端点与 Nexus 迁移随后续版本补齐。
 openapi: 3.0.3
 info:
   title: JianArtifact API
-  version: 0.1.0
+  version: 0.2.0
   description: 自托管多格式制品仓库的管理 API。协议端点（Raw/Maven/npm 等原生客户端交互）以协议兼容测试保障，不在此契约内描述。
   license:
     name: MIT
 servers:
   - url: /
+security:
+  - bearerAuth: []
 paths:
   /healthz:
     get:
       operationId: getHealthz
       summary: 存活探针
+      security: []
       responses:
         "200":
           description: 进程存活
@@ -25,7 +28,8 @@ paths:
   /readyz:
     get:
       operationId: getReadyz
-      summary: 就绪探针（依赖自检通过后才返回 200）
+      summary: 就绪探针（SQLite + blob 目录自检通过后才返回 200）
+      security: []
       responses:
         "200":
           description: 已就绪
@@ -39,7 +43,428 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /api/v1/status:
+    get:
+      operationId: getStatus
+      summary: 运行时状态（版本、就绪、迁移版本、初始化标志、用户数）
+      security: []
+      responses:
+        "200":
+          description: 状态信息
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusInfo"
+  /api/v1/auth/bootstrap:
+    post:
+      operationId: bootstrap
+      summary: 首启管理员自举（仅在未初始化，即 user 表为空时可用）
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BootstrapRequest"
+      responses:
+        "201":
+          description: 首个管理员创建成功，返回会话
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          description: 实例已初始化，自举关闭
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/auth/login:
+    post:
+      operationId: login
+      summary: 用户名 + 口令换取会话 JWT
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: 登录成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/v1/auth/logout:
+    post:
+      operationId: logout
+      summary: 注销当前会话（当前 JWT 记入吊销名单直至过期）
+      responses:
+        "204":
+          description: 已注销
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/v1/users:
+    get:
+      operationId: listUsers
+      summary: 用户列表（分页）
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/PageSizeParam"
+      responses:
+        "200":
+          description: 用户列表
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      operationId: createUser
+      summary: 创建用户
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUserRequest"
+      responses:
+        "201":
+          description: 已创建
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/users/{id}:
+    patch:
+      operationId: updateUser
+      summary: 更新用户（角色 / 状态）
+      parameters:
+        - $ref: "#/components/parameters/UserIdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateUserRequest"
+      responses:
+        "200":
+          description: 已更新
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: deleteUser
+      summary: 删除用户
+      parameters:
+        - $ref: "#/components/parameters/UserIdParam"
+      responses:
+        "204":
+          description: 已删除
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/v1/users/{id}/password:
+    post:
+      operationId: changePassword
+      summary: 修改 / 重置用户口令
+      parameters:
+        - $ref: "#/components/parameters/UserIdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PasswordChangeRequest"
+      responses:
+        "204":
+          description: 已修改
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/v1/tokens:
+    get:
+      operationId: listTokens
+      summary: 当前用户的 API Token 列表（不含明文）
+      responses:
+        "200":
+          description: 令牌列表
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      operationId: createToken
+      summary: 签发 API Token（明文仅此次返回一次）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTokenRequest"
+      responses:
+        "201":
+          description: 已签发
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenCreated"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/v1/tokens/{id}:
+    delete:
+      operationId: deleteToken
+      summary: 吊销 API Token
+      parameters:
+        - $ref: "#/components/parameters/TokenIdParam"
+      responses:
+        "204":
+          description: 已吊销
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/v1/repositories:
+    get:
+      operationId: listRepositories
+      summary: 仓库列表（分页，按可见性 / ACL 过滤）
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/PageSizeParam"
+      responses:
+        "200":
+          description: 仓库列表
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RepositoryList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      operationId: createRepository
+      summary: 创建仓库
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRepositoryRequest"
+      responses:
+        "201":
+          description: 已创建
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Repository"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/repositories/{name}:
+    patch:
+      operationId: updateRepository
+      summary: 更新仓库（可见性 / 配置）
+      parameters:
+        - $ref: "#/components/parameters/RepoNameParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateRepositoryRequest"
+      responses:
+        "200":
+          description: 已更新
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Repository"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: deleteRepository
+      summary: 删除仓库
+      parameters:
+        - $ref: "#/components/parameters/RepoNameParam"
+      responses:
+        "204":
+          description: 已删除
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/v1/repositories/{name}/acl:
+    get:
+      operationId: getRepositoryAcl
+      summary: 读取仓库 ACL
+      parameters:
+        - $ref: "#/components/parameters/RepoNameParam"
+      responses:
+        "200":
+          description: ACL 列表
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AclList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      operationId: setRepositoryAcl
+      summary: 覆盖写入仓库 ACL
+      parameters:
+        - $ref: "#/components/parameters/RepoNameParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PutAclRequest"
+      responses:
+        "200":
+          description: 已写入
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AclList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    PageParam:
+      name: page
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    PageSizeParam:
+      name: page_size
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    UserIdParam:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int64
+    TokenIdParam:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int64
+    RepoNameParam:
+      name: name
+      in: path
+      required: true
+      schema:
+        type: string
+  responses:
+    BadRequest:
+      description: 参数错误
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Unauthorized:
+      description: 未认证
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Forbidden:
+      description: 越权
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: 不存在
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Conflict:
+      description: 冲突
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
   schemas:
     HealthStatus:
       type: object
@@ -52,9 +477,228 @@ components:
           type: string
     Error:
       type: object
-      required: [code, message]
+      required: [error]
       properties:
-        code:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+    StatusInfo:
+      type: object
+      required: [version, ready, initialized, migrationVersion, userCount]
+      properties:
+        version:
           type: string
-        message:
+        ready:
+          type: boolean
+        initialized:
+          type: boolean
+        migrationVersion:
           type: string
+        userCount:
+          type: integer
+    BootstrapRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          minLength: 3
+        password:
+          type: string
+          minLength: 8
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+    LoginResponse:
+      type: object
+      required: [token, user]
+      properties:
+        token:
+          type: string
+        user:
+          $ref: "#/components/schemas/User"
+    User:
+      type: object
+      required: [id, username, role, status, createdAt]
+      properties:
+        id:
+          type: integer
+          format: int64
+        username:
+          type: string
+        role:
+          type: string
+          enum: [admin, user]
+        status:
+          type: string
+          enum: [active, disabled]
+        createdAt:
+          type: string
+    UserList:
+      type: object
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/User"
+        total:
+          type: integer
+    CreateUserRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          minLength: 3
+        password:
+          type: string
+          minLength: 8
+        role:
+          type: string
+          enum: [admin, user]
+          default: user
+    UpdateUserRequest:
+      type: object
+      properties:
+        role:
+          type: string
+          enum: [admin, user]
+        status:
+          type: string
+          enum: [active, disabled]
+    PasswordChangeRequest:
+      type: object
+      required: [password]
+      properties:
+        password:
+          type: string
+          minLength: 8
+    Token:
+      type: object
+      required: [id, name, createdAt]
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        createdAt:
+          type: string
+    TokenList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Token"
+    CreateTokenRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+    TokenCreated:
+      type: object
+      required: [id, name, token, createdAt]
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        token:
+          type: string
+          description: 明文令牌，仅此次返回一次。
+        createdAt:
+          type: string
+    Repository:
+      type: object
+      required: [id, name, format, type, visibility, createdAt]
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        format:
+          type: string
+          enum: [raw, maven, npm]
+        type:
+          type: string
+          enum: [hosted, proxy, group]
+        visibility:
+          type: string
+          enum: [public, private]
+        createdAt:
+          type: string
+    RepositoryList:
+      type: object
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Repository"
+        total:
+          type: integer
+    CreateRepositoryRequest:
+      type: object
+      required: [name, format, type]
+      properties:
+        name:
+          type: string
+          minLength: 1
+        format:
+          type: string
+          enum: [raw, maven, npm]
+        type:
+          type: string
+          enum: [hosted, proxy, group]
+        visibility:
+          type: string
+          enum: [public, private]
+          default: private
+    UpdateRepositoryRequest:
+      type: object
+      properties:
+        visibility:
+          type: string
+          enum: [public, private]
+    AclEntry:
+      type: object
+      required: [subjectId, action]
+      properties:
+        subjectId:
+          type: integer
+          format: int64
+        action:
+          type: string
+          enum: [read, write, admin]
+    AclList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AclEntry"
+    PutAclRequest:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AclEntry"

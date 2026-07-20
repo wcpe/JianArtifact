@@ -11,6 +11,7 @@
 | [0005](0005-single-binary-embed.md)       | 前端产物经 Go embed 内嵌，单二进制交付                     | 已接受 |
 | [0006](0006-monorepo-workspace.md)        | 单 monorepo，pnpm+Turborepo / Go Task，Makefile 顶层入口   | 已接受 |
 | [0007](0007-deployment-orchestration.md)  | 部署编排以 Docker/Compose 为主，Helm/K8s 与 systemd 为可选 | 已接受 |
+| [0008](0008-auth-session-model.md)        | 认证会话模型：网页自举 + 无状态 JWT + Token 摘要           | 已接受 |
 
 > 模板：状态 / 背景 / 决策 / 理由 / 后果 / 备选方案。
 

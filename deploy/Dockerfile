@@ -52,3 +52,6 @@ EXPOSE 8080
 # 65532 即 distroless nonroot 的 UID，用数字形式以便在任意最小基础镜像上都能非 root 运行
 USER 65532:65532
 ENTRYPOINT ["/app/jianartifact"]
+# 默认子命令为 run（启动 HTTP 服务）；无参数只打印用法，故须显式传 run。
+# 探活 / 运维经其它子命令覆盖，例如 docker run ... jianartifact status。
+CMD ["run"]

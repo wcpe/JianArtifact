@@ -68,6 +68,8 @@ spec:
       containers:
         - name: jianartifact
           image: jianartifact:0.1.0
+          # 显式传 run 启动服务：无参数时二进制只打印用法。
+          args: ["run"]
           ports:
             - name: http
               containerPort: 8080

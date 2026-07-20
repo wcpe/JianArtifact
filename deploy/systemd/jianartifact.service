@@ -11,7 +11,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=%h/.config/jianartifact/env
-ExecStart=/opt/jianartifact/current/jianartifact
+ExecStart=/opt/jianartifact/current/jianartifact run
 Restart=on-failure
 RestartSec=3
 # 加固
