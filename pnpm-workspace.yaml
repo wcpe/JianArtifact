@@ -1,4 +1,4 @@
 packages:
   - "apps/web"
-  # apps/wiki（UI 组件 / 业务模式验收站）随 0.2.0 引入 Mantine 组件后启用
+  - "apps/wiki"
   - "packages/*"

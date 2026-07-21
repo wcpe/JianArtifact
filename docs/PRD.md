@@ -53,8 +53,8 @@ JianArtifact 是一个**自托管、单二进制交付的多格式制品仓库**
 | FR-08 | API Token 签发 / 吊销，用于 CLI 与 CI 鉴权                                        | P1     | 开发中 |
 | FR-09 | 用户管理、口令修改 / 重置                                                         | P1     | 开发中 |
 | FR-10 | 仓库管理 + 可见性 / 读写 ACL                                                      | P1     | 开发中 |
-| FR-11 | 管理端 web 全页面（Mantine 7 + i18next）对 devmock 完成                           | P1     | 计划   |
-| FR-12 | wiki UI 组件 / 业务模式验收站                                                     | P1     | 计划   |
+| FR-11 | 管理端 web 全页面（Mantine 7 + i18next）对 devmock 完成                           | P1     | 完成   |
+| FR-12 | wiki UI 组件 / 业务模式验收站                                                     | P1     | 完成   |
 | FR-13 | Raw 协议：hosted + proxy + group                                                  | P1     | 计划   |
 | FR-14 | Maven 协议：hosted + proxy + group（含元数据）                                    | P1     | 计划   |
 | FR-15 | npm 协议：hosted + proxy + group                                                  | P1     | 计划   |

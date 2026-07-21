@@ -56,7 +56,7 @@ web          go:embed 前端 dist（由构建注入）
 
 ### 2.2 前端依赖
 
-`packages/ui`（真源）→ 被 `apps/web`、`apps/wiki` 消费；`packages/ui` 不反向依赖 `apps/*`。`packages/devmock` 据 `api/openapi.yaml` 生成契约，供 web/wiki 离线开发与契约比对。共享 `eslint-config` / `typescript-config` 供各前端工程继承。
+`packages/ui`（真源）→ 被 `apps/web`、`apps/wiki` 消费；`packages/ui` 不反向依赖 `apps/*`。`apps/web` 为管理端全页面（Mantine 7 + i18next + react-router + typed API client + 鉴权上下文），控制台外壳沿用旧项目视觉（`AppShell layout="alt"` 可折叠分段侧栏 + 密度令牌 + 品牌蓝 logo，对齐 ADR-0003，主色 Mantine 原生蓝、色彩模式 `auto`）；开发/测试期经 `packages/devmock` 的 MSW 双端拦截（浏览器 worker + Node server + 内存态 store）脱离后端运行，并经子路径 `@jianartifact/devmock/schema` 仅做类型级契约复用；生产构建不含 MSW/devmock。`apps/wiki` 为组件 / 业务模式验收站（AppShell 画廊 + 展台注册表），复用 `packages/ui` 组件核验共享主题与状态态一致性，脱离后端且不内嵌进后端二进制。共享 `eslint-config` / `typescript-config` 供各前端工程继承。
 
 ## 3. 数据模型
 

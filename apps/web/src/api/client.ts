@@ -1,0 +1,96 @@
+// 轻量 typed API 客户端：统一 baseURL、Bearer 注入、JSON 解析与错误归一化。
+// 开发态由 MSW worker 拦截（见 src/mocks），生产态直连同源后端 /api/v1。
+
+/** 归一化的接口错误：承载后端 error.code / message 与 HTTP 状态。 */
+export class ApiError extends Error {
+  readonly code: string;
+  readonly status: number;
+
+  constructor(code: string, message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.code = code;
+    this.status = status;
+  }
+}
+
+const TOKEN_KEY = "jianartifact.token";
+
+/** 读取持久化的会话令牌（localStorage）。 */
+export function getToken(): string | null {
+  try {
+    return localStorage.getItem(TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/** 写入或清除会话令牌。 */
+export function setToken(token: string | null): void {
+  try {
+    if (token) {
+      localStorage.setItem(TOKEN_KEY, token);
+    } else {
+      localStorage.removeItem(TOKEN_KEY);
+    }
+  } catch {
+    /* 隐私模式等场景下忽略存储失败 */
+  }
+}
+
+interface RequestOptions {
+  method?: string;
+  body?: unknown;
+  /** 查询参数（值为 undefined 时跳过）。 */
+  query?: Record<string, string | number | undefined>;
+}
+
+function buildUrl(path: string, query?: RequestOptions["query"]): string {
+  const url = `/api/v1${path}`;
+  if (!query) {
+    return url;
+  }
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    if (value !== undefined) {
+      params.set(key, String(value));
+    }
+  }
+  const qs = params.toString();
+  return qs ? `${url}?${qs}` : url;
+}
+
+async function parseError(response: Response): Promise<ApiError> {
+  try {
+    const data = (await response.json()) as { error?: { code?: string; message?: string } };
+    const code = data.error?.code ?? "unknown";
+    const message = data.error?.message ?? response.statusText;
+    return new ApiError(code, message, response.status);
+  } catch {
+    return new ApiError("unknown", response.statusText || "请求失败", response.status);
+  }
+}
+
+/** 发起请求；2xx 返回解析后的 JSON（204 返回 undefined），否则抛出 ApiError。 */
+export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  const { method = "GET", body, query } = options;
+  const headers: Record<string, string> = {};
+  const token = getToken();
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+  let payload: string | undefined;
+  if (body !== undefined) {
+    headers["Content-Type"] = "application/json";
+    payload = JSON.stringify(body);
+  }
+
+  const response = await fetch(buildUrl(path, query), { method, headers, body: payload });
+  if (!response.ok) {
+    throw await parseError(response);
+  }
+  if (response.status === 204) {
+    return undefined as T;
+  }
+  return (await response.json()) as T;
+}
