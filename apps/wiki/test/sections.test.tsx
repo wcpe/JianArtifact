@@ -1,8 +1,9 @@
-// 展台渲染测试：核验四类状态态与关键交互（表单校验 + 通知）在验收站可用。
-import { render, screen } from "@testing-library/react";
+// 展台渲染测试：核验四类状态态与关键交互（表单校验 + 通知 + 危险操作确认弹窗）在验收站可用。
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { AppProvider } from "@jianartifact/ui";
+import { ModalsProvider } from "@mantine/modals";
 import { Notifications } from "@mantine/notifications";
 import type { ReactElement } from "react";
 
@@ -12,8 +13,10 @@ import { InteractionsSection } from "../src/sections/InteractionsSection";
 function renderWithProviders(ui: ReactElement) {
   return render(
     <AppProvider>
-      <Notifications />
-      {ui}
+      <ModalsProvider>
+        <Notifications />
+        {ui}
+      </ModalsProvider>
     </AppProvider>,
   );
 }
@@ -42,5 +45,14 @@ describe("InteractionsSection 关键交互展台", () => {
     await user.type(screen.getByLabelText("仓库名称"), "maven-releases");
     await user.click(screen.getByRole("button", { name: "提交" }));
     expect(await screen.findByText("创建成功")).toBeInTheDocument();
+  });
+
+  it("危险操作先弹确认弹窗，确认后执行并通知", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<InteractionsSection />);
+    await user.click(screen.getByRole("button", { name: /删除仓库/ }));
+    const dialog = within(await screen.findByRole("dialog"));
+    await user.click(dialog.getByRole("button", { name: "删除" }));
+    expect(await screen.findByText("删除成功")).toBeInTheDocument();
   });
 });
