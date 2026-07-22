@@ -26,7 +26,7 @@ import (
 )
 
 // version 由构建时注入（-ldflags "-X main.version=..."）；默认与 VERSION 文件一致。
-var version = "0.1.0"
+var version = "0.2.0"
 
 func main() {
 	// 子命令分发器：run/serve（启动 HTTP 服务）/ status（在线探测或离线静态信息）/

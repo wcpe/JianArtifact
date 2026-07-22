@@ -43,18 +43,18 @@ JianArtifact 是一个**自托管、单二进制交付的多格式制品仓库**
 
 | 编号  | 需求                                                                              | 优先级 | 状态   |
 | ----- | --------------------------------------------------------------------------------- | ------ | ------ |
-| FR-01 | monorepo 工程基座：pnpm workspace + Turborepo + Makefile + Go Task + go.work      | P1     | 开发中 |
-| FR-02 | Docker 化质量门（格式/构建/静态分析/测试/契约一致/依赖漏洞），CI 与本地同一组脚本 | P1     | 开发中 |
-| FR-03 | `api/openapi.yaml` 全域契约骨架 + `oapi-codegen` 生成 Go 接口/类型                | P1     | 开发中 |
-| FR-04 | 前端 client 据 OpenAPI 生成 + devmock 契约比对防漂移                              | P1     | 开发中 |
-| FR-05 | 单二进制交付：前端构建产物经 Go embed 内嵌，`CGO_ENABLED=0` 静态编译              | P1     | 开发中 |
-| FR-06 | 管理员自举（网页自举端点 + CLI 重置，无环境令牌）+ 口令 argon2id 哈希             | P1     | 开发中 |
-| FR-07 | 登录 / 会话 / 退出（JWT HS256）                                                   | P1     | 开发中 |
-| FR-08 | API Token 签发 / 吊销，用于 CLI 与 CI 鉴权                                        | P1     | 开发中 |
-| FR-09 | 用户管理、口令修改 / 重置                                                         | P1     | 开发中 |
-| FR-10 | 仓库管理 + 可见性 / 读写 ACL                                                      | P1     | 开发中 |
-| FR-11 | 管理端 web 全页面（Mantine 7 + i18next）对 devmock 完成                           | P1     | 完成   |
-| FR-12 | wiki UI 组件 / 业务模式验收站                                                     | P1     | 完成   |
+| FR-01 | monorepo 工程基座：pnpm workspace + Turborepo + Makefile + Go Task + go.work      | P1     | 已交付@v0.1.0 |
+| FR-02 | Docker 化质量门（格式/构建/静态分析/测试/契约一致/依赖漏洞），CI 与本地同一组脚本 | P1     | 已交付@v0.1.0 |
+| FR-03 | `api/openapi.yaml` 全域契约骨架 + `oapi-codegen` 生成 Go 接口/类型                | P1     | 已交付@v0.1.0 |
+| FR-04 | 前端 client 据 OpenAPI 生成 + devmock 契约比对防漂移                              | P1     | 已交付@v0.1.0 |
+| FR-05 | 单二进制交付：前端构建产物经 Go embed 内嵌，`CGO_ENABLED=0` 静态编译              | P1     | 已交付@v0.1.0 |
+| FR-06 | 管理员自举（网页自举端点 + CLI 重置，无环境令牌）+ 口令 argon2id 哈希             | P1     | 已交付@v0.2.0 |
+| FR-07 | 登录 / 会话 / 退出（JWT HS256）                                                   | P1     | 已交付@v0.2.0 |
+| FR-08 | API Token 签发 / 吊销，用于 CLI 与 CI 鉴权                                        | P1     | 已交付@v0.2.0 |
+| FR-09 | 用户管理、口令修改 / 重置                                                         | P1     | 已交付@v0.2.0 |
+| FR-10 | 仓库管理 + 可见性 / 读写 ACL                                                      | P1     | 已交付@v0.2.0 |
+| FR-11 | 管理端 web 全页面（Mantine 7 + i18next）对 devmock 完成                           | P1     | 已交付@v0.2.0 |
+| FR-12 | wiki UI 组件 / 业务模式验收站                                                     | P1     | 已交付@v0.2.0 |
 | FR-13 | Raw 协议：hosted + proxy + group                                                  | P1     | 计划   |
 | FR-14 | Maven 协议：hosted + proxy + group（含元数据）                                    | P1     | 计划   |
 | FR-15 | npm 协议：hosted + proxy + group                                                  | P1     | 计划   |
@@ -66,7 +66,7 @@ JianArtifact 是一个**自托管、单二进制交付的多格式制品仓库**
 | FR-21 | Nexus 迁移：计划预览 + 异步任务状态机                                             | P1     | 计划   |
 | FR-22 | Nexus 迁移：持久化与幂等续传 + 冲突策略                                           | P1     | 计划   |
 | FR-23 | Nexus 迁移：凭据安全 + 迁移报告 + 切换与最终增量扫描                              | P1     | 计划   |
-| FR-24 | 部署骨架：Dockerfile（多阶段）/ docker-compose / .env.example / 远程部署脚本      | P1     | 开发中 |
+| FR-24 | 部署骨架：Dockerfile（多阶段）/ docker-compose / .env.example / 远程部署脚本      | P1     | 已交付@v0.1.0 |
 
 ### 4.2 M2 · 高频格式扩展 + 工程能力（P2，0.6.0）
 

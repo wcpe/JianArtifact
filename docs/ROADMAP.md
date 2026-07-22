@@ -26,13 +26,14 @@
 - monorepo（pnpm workspace + Turborepo + Makefile + Go Task + go.work）；Docker 质量门；`api/openapi.yaml` 全域契约骨架 + `oapi-codegen` 接线；devmock 契约比对；单二进制 embed 打通。
 - **部署骨架先落地可演练**：Dockerfile / docker-compose / .env.example / 远程部署脚本。
 - 门禁：质量门在 Docker 与 CI 同脚本全绿；契约↔devmock 一致；`/readyz` 可探活。
-- 状态：**开发中**（工作树内五项验收门 AC-0.1.0-1~5 均已自测通过，详见 `docs/specs/0.1.0-foundation.md`；待整期收敛后由 `sdd-release-version` 打版并标 `已交付@v0.1.0`）。
+- 状态：**已交付@v0.1.0**（五项验收门 AC-0.1.0-1~5 全部通过，详见 `docs/specs/0.1.0-foundation.md`）。
 
 ### 0.2.0 认证授权 + 管理端骨架
 
 - 管理员自举、登录 / 会话 / 退出、API Token、CLI 鉴权、用户管理、口令修改 / 重置、仓库可见性 / ACL / 仓库管理。
 - web 全页面对 devmock 完成、wiki 组件验收。
 - 门禁：鉴权 / ACL 越权用例全拒（401/403）；令牌不入库不进日志。
+- 状态：**已交付@v0.2.0**（FR-06–12 验收门全绿：鉴权/ACL 越权 401/403、令牌仅存 sha256 摘要不入库不进日志、契约↔devmock 一致；单二进制内嵌 web 真实后端联调冒烟 28/28 通过）。
 
 ### 0.3.0 三格式协议真连
 
