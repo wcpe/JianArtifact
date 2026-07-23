@@ -23,7 +23,8 @@ COPY packages/eslint-config/package.json packages/eslint-config/
 COPY packages/typescript-config/package.json packages/typescript-config/
 RUN pnpm install --frozen-lockfile || pnpm install
 COPY . .
-RUN pnpm build
+# 仅构建管理端 web 及其依赖（ui/devmock 等）；wiki 是独立验收站，不进二进制 embed
+RUN pnpm --filter @jianartifact/web... build
 
 # ---- Stage 2：Go 编译（内嵌前端 dist）----
 FROM ${BUILD_IMAGE} AS build
