@@ -149,7 +149,7 @@ func TestNpmProxyRewritesTarball(t *testing.T) {
 		switch r.URL.Path {
 		case "/lodash":
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprintf(w, `{"name":"lodash","dist-tags":{"latest":"1.0.0"},"versions":{"1.0.0":{"name":"lodash","version":"1.0.0","dist":{"tarball":"%s/lodash/-/lodash-1.0.0.tgz"}}}}`, srv.URL)
+			_, _ = fmt.Fprintf(w, `{"name":"lodash","dist-tags":{"latest":"1.0.0"},"versions":{"1.0.0":{"name":"lodash","version":"1.0.0","dist":{"tarball":"%s/lodash/-/lodash-1.0.0.tgz"}}}}`, srv.URL)
 		case "/lodash/-/lodash-1.0.0.tgz":
 			w.Header().Set("Content-Type", "application/octet-stream")
 			_, _ = w.Write(tarball)

@@ -31,7 +31,13 @@ export interface ConfirmOptions {
  * 危险操作二次确认弹窗：确认按钮红色，替代原生 window.confirm，
  * 与 Mantine 主题 / 暗色一致，且可本地化按钮文案。
  */
-export function confirmDanger({ title, message, confirmLabel, cancelLabel, onConfirm }: ConfirmOptions): void {
+export function confirmDanger({
+  title,
+  message,
+  confirmLabel,
+  cancelLabel,
+  onConfirm,
+}: ConfirmOptions): void {
   modals.openConfirmModal({
     title,
     centered: true,

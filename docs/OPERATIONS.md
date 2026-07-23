@@ -10,12 +10,12 @@
 
 配置经环境变量注入（`deploy/.env.example` 为无真实值模板，`.env` 不入库）：
 
-| 变量              | 含义                              | 示例 / 默认             |
-| ----------------- | --------------------------------- | ----------------------- |
-| `JIAN_HTTP_ADDR`  | HTTP 监听地址:端口                | `:8080`                 |
-| `JIAN_DATA_DIR`   | 数据根目录（SQLite 与 blob 存放） | `/var/lib/jianartifact` |
-| `JIAN_JWT_SECRET` | JWT(HS256) 签名密钥               | （建议必填，强随机）    |
-| `JIAN_UPSTREAM_TIMEOUT` | proxy 回源上游 HTTP 超时（秒） | `30`                    |
+| 变量                    | 含义                              | 示例 / 默认             |
+| ----------------------- | --------------------------------- | ----------------------- |
+| `JIAN_HTTP_ADDR`        | HTTP 监听地址:端口                | `:8080`                 |
+| `JIAN_DATA_DIR`         | 数据根目录（SQLite 与 blob 存放） | `/var/lib/jianartifact` |
+| `JIAN_JWT_SECRET`       | JWT(HS256) 签名密钥               | （建议必填，强随机）    |
+| `JIAN_UPSTREAM_TIMEOUT` | proxy 回源上游 HTTP 超时（秒）    | `30`                    |
 
 > 派生约定（不单独配置）：SQLite 元数据库固定为 `${JIAN_DATA_DIR}/jianartifact.db`，blob 目录为 `${JIAN_DATA_DIR}/blobs`，二者随进程启动自动创建。`JIAN_JWT_SECRET` 缺省时进程生成随机密钥并持久化到数据目录（附告警），生产务必显式配置。首个管理员不再经环境变量引导，改为经网页自举端点或 CLI `admin reset` 创建（见 §1.2、§1.5）。
 
@@ -44,6 +44,26 @@
 ### 1.4 Helm / Kubernetes（M3 交付）
 
 - `deploy/helm/`：Deployment（`Recreate` 策略）、Service、PVC（RWO 单卷）、ConfigMap、Secret、Ingress；就绪 / 存活探针打 `/readyz` `/healthz`。
+
+## 1.6 CI 质量门与发布
+
+GitHub Actions 工作流（`.github/workflows/`）与本地 `scripts/check.sh` 对齐：
+
+| 触发                   | 工作流        | 行为                                                                                                                                                                                                                              |
+| ---------------------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| PR / 任意分支 push     | `ci.yml`      | 跑统一质量门（前端 + 后端 + 契约）                                                                                                                                                                                                |
+| push 到 `main`         | `release.yml` | 质量门通过后发**开发预览版**：固定 git tag / GitHub Release `dev-preview`（prerelease，每次覆盖更新）；版本号 `${VERSION}-dev.<sha7>`；多平台二进制 + `SHA256SUMS`；推送镜像 `ghcr.io/<owner>/<repo>:dev-preview` 与 `:<version>` |
+| push `vX.Y.Z` 正式 tag | `release.yml` | 质量门通过后发**正式版** GitHub Release（latest）；校验 tag 与 `VERSION` 一致；多平台二进制；镜像 `:<version>` + `:latest`                                                                                                        |
+
+本地复现发布资产构建：
+
+```bash
+bash scripts/build-release-assets.sh 0.3.0 dist/release
+# 或预览版号
+bash scripts/build-release-assets.sh 0.3.0-dev.abc1234 dist/release
+```
+
+> 首次使用 GHCR 时，仓库 Settings → Actions → General 确保允许 GITHUB_TOKEN 写 packages；镜像默认私有时可在 Packages 设置可见性。
 
 ## 2. 升级
 

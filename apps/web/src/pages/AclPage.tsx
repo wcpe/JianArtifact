@@ -107,7 +107,12 @@ export function AclPage() {
                         />
                       </Table.Td>
                       <Table.Td>
-                        <ActionIcon color="red" variant="subtle" onClick={() => removeEntry(index)} aria-label={t("common.delete")}>
+                        <ActionIcon
+                          color="red"
+                          variant="subtle"
+                          onClick={() => removeEntry(index)}
+                          aria-label={t("common.delete")}
+                        >
                           <IconTrash size={16} />
                         </ActionIcon>
                       </Table.Td>

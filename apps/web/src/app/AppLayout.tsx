@@ -98,7 +98,13 @@ function NavItemLink({
 }) {
   if (expanded) {
     return (
-      <NavLink label={label} aria-label={label} leftSection={icon} active={active} onClick={onSelect} />
+      <NavLink
+        label={label}
+        aria-label={label}
+        leftSection={icon}
+        active={active}
+        onClick={onSelect}
+      />
     );
   }
   return (

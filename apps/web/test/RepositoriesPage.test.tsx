@@ -37,4 +37,3 @@ describe("仓库管理", () => {
     await waitFor(() => expect(screen.getByText("my-proxy")).toBeTruthy());
   });
 });
-

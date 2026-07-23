@@ -72,7 +72,7 @@ func main() {
 
 // usage 打印子命令清单与用法说明。
 func usage(w io.Writer) {
-	fmt.Fprintf(w, `JianArtifact %s — 制品仓库服务
+	_, _ = fmt.Fprintf(w, `JianArtifact %s — 制品仓库服务
 
 用法：
   jianartifact <命令> [参数]

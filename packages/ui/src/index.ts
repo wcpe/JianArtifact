@@ -7,9 +7,4 @@ export { AppProvider } from "./AppProvider";
 export type { AppProviderProps } from "./AppProvider";
 export { PageHeader } from "./components/PageHeader";
 export type { PageHeaderProps } from "./components/PageHeader";
-export {
-  LoadingState,
-  EmptyState,
-  ErrorState,
-  ForbiddenState,
-} from "./components/StateMessage";
+export { LoadingState, EmptyState, ErrorState, ForbiddenState } from "./components/StateMessage";

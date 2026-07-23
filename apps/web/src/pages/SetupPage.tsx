@@ -75,7 +75,11 @@ export function SetupPage() {
   const strength = passwordStrength(form.values.password);
   const strengthColor = strength < 50 ? "red" : strength < 80 ? "yellow" : "green";
   const strengthLabel =
-    strength < 50 ? t("setup.strengthWeak") : strength < 80 ? t("setup.strengthMedium") : t("setup.strengthStrong");
+    strength < 50
+      ? t("setup.strengthWeak")
+      : strength < 80
+        ? t("setup.strengthMedium")
+        : t("setup.strengthStrong");
 
   const handleSubmit = form.onSubmit((values) => {
     setSubmitting(true);
@@ -132,8 +136,16 @@ export function SetupPage() {
                       {error}
                     </Alert>
                   ) : null}
-                  <TextInput label={t("auth.username")} withAsterisk {...form.getInputProps("username")} />
-                  <PasswordInput label={t("auth.password")} withAsterisk {...form.getInputProps("password")} />
+                  <TextInput
+                    label={t("auth.username")}
+                    withAsterisk
+                    {...form.getInputProps("username")}
+                  />
+                  <PasswordInput
+                    label={t("auth.password")}
+                    withAsterisk
+                    {...form.getInputProps("password")}
+                  />
                   {form.values.password ? (
                     <Box>
                       <Group justify="space-between" mb={4}>

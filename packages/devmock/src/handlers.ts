@@ -128,7 +128,11 @@ export function mockUsageInfo(): UsageInfo {
     format: "maven",
     type: "hosted",
     snippets: [
-      { title: "解析依赖（pom.xml）", description: "在 <repositories> 中声明该仓库。", code: "<repository>...</repository>" },
+      {
+        title: "解析依赖（pom.xml）",
+        description: "在 <repositories> 中声明该仓库。",
+        code: "<repository>...</repository>",
+      },
     ],
   };
 }

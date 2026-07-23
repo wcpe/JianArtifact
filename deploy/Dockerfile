@@ -39,7 +39,11 @@ COPY . .
 # 将前端产物放到后端 embed 目录
 COPY --from=web /src/apps/web/dist/ apps/server/web/dist/
 ENV CGO_ENABLED=0
-RUN cd apps/server && go build -trimpath -ldflags="-s -w -X main.version=$(cat /src/VERSION 2>/dev/null || echo dev)" \
+# VERSION 可由构建参数注入（CI 预览版带 -dev.<sha>；正式版与 VERSION 文件一致）
+ARG VERSION=
+RUN V="${VERSION:-$(cat /src/VERSION 2>/dev/null || echo dev)}" \
+ && cd apps/server \
+ && go build -trimpath -ldflags="-s -w -X main.version=${V}" \
     -o /out/jianartifact ./cmd/jianartifact
 
 # ---- Stage 3：最小运行镜像 ----

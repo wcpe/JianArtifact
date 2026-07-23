@@ -19,11 +19,19 @@ export function InteractionsSection() {
     modals.openConfirmModal({
       title: "删除仓库",
       centered: true,
-      children: <Text size="sm">确认删除仓库「maven-releases」？该操作不可撤销（验收站示例，未落库）。</Text>,
+      children: (
+        <Text size="sm">
+          确认删除仓库「maven-releases」？该操作不可撤销（验收站示例，未落库）。
+        </Text>
+      ),
       labels: { confirm: "删除", cancel: "取消" },
       confirmProps: { color: "red" },
       onConfirm: () => {
-        notifications.show({ title: "删除成功", message: "已删除仓库（验收站示例）。", color: "green" });
+        notifications.show({
+          title: "删除成功",
+          message: "已删除仓库（验收站示例）。",
+          color: "green",
+        });
       },
     });
   };
@@ -95,4 +103,3 @@ export function InteractionsSection() {
     </Stack>
   );
 }
-

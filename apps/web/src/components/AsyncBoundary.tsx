@@ -19,7 +19,14 @@ export function AsyncBoundary<T>({ state, children }: AsyncBoundaryProps<T>) {
     return <ForbiddenState message={t("common.forbidden")} />;
   }
   if (state.error) {
-    return <ErrorState message={t("common.error")} description={state.error.message} onRetry={state.reload} retryLabel={t("common.retry")} />;
+    return (
+      <ErrorState
+        message={t("common.error")}
+        description={state.error.message}
+        onRetry={state.reload}
+        retryLabel={t("common.retry")}
+      />
+    );
   }
   if (state.loading || state.data === null) {
     return <LoadingState message={t("common.loading")} />;

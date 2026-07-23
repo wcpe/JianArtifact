@@ -35,6 +35,14 @@ helm install jianartifact deploy/helm \
   --set secrets.JIAN_BOOTSTRAP_ADMIN_PASSWORD=...
 ```
 
+## CI 镜像与发布物
+
+- 开发预览（`main` 每次推送）：`ghcr.io/<owner>/jianartifact:dev-preview`
+- 正式版（`vX.Y.Z` tag）：`ghcr.io/<owner>/jianartifact:<version>` 与 `:latest`
+- 多平台二进制与校验和见对应 GitHub Release（预览固定在 prerelease `dev-preview`）
+
+详见 [`docs/OPERATIONS.md` §1.6](../docs/OPERATIONS.md)。
+
 ## 安全约束
 
 - 密钥（`JIAN_JWT_SECRET`、上游凭据、管理员自举口令）经环境变量 / Secret 注入，**严禁硬编码、严禁入库**。

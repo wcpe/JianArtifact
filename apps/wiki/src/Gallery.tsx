@@ -15,11 +15,7 @@ export function Gallery() {
   const ActiveComponent = active.component;
 
   return (
-    <AppShell
-      header={{ height: 56 }}
-      navbar={{ width: 240, breakpoint: "sm" }}
-      padding="md"
-    >
+    <AppShell header={{ height: 56 }} navbar={{ width: 240, breakpoint: "sm" }} padding="md">
       <AppShell.Header>
         <Group h="100%" px="md" justify="space-between">
           <Title order={4}>JianArtifact 验收站</Title>

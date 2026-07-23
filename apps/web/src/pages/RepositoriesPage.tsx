@@ -1,5 +1,15 @@
 // 仓库管理：列表 + 新建（格式/类型/可见性）+ 切换可见性 + 删除 + 进入访问控制。
-import { ActionIcon, Badge, Button, Group, Modal, MultiSelect, Select, Table, TextInput } from "@mantine/core";
+import {
+  ActionIcon,
+  Badge,
+  Button,
+  Group,
+  Modal,
+  MultiSelect,
+  Select,
+  Table,
+  TextInput,
+} from "@mantine/core";
 import { useForm } from "@mantine/form";
 import { useDisclosure } from "@mantine/hooks";
 import { IconTrash } from "@tabler/icons-react";
@@ -9,7 +19,12 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
 import { AsyncBoundary } from "../components/AsyncBoundary";
-import { createRepository, deleteRepository, listRepositories, updateRepository } from "../api/endpoints";
+import {
+  createRepository,
+  deleteRepository,
+  listRepositories,
+  updateRepository,
+} from "../api/endpoints";
 import type { RepoFormat, RepoType, Repository, RepoVisibility } from "../api/types";
 import { useAsync } from "../hooks/useAsync";
 import { confirmDanger, notifyError, notifySuccess } from "../lib/feedback";
@@ -36,7 +51,9 @@ export function RepositoriesPage() {
     validate: {
       name: (v) => (v.trim() ? null : t("repositories.name")),
       remoteUrl: (v, values) =>
-        values.type === "proxy" && !/^https?:\/\/.+/.test(v.trim()) ? t("repositories.remoteUrlRequired") : null,
+        values.type === "proxy" && !/^https?:\/\/.+/.test(v.trim())
+          ? t("repositories.remoteUrlRequired")
+          : null,
       members: (v, values) =>
         values.type === "group" && v.length === 0 ? t("repositories.membersRequired") : null,
     },
@@ -145,13 +162,26 @@ export function RepositoriesPage() {
                     </Table.Td>
                     <Table.Td>
                       <Group gap="xs">
-                        <Button size="xs" variant="light" onClick={() => navigate(`/repositories/${repo.name}`)}>
+                        <Button
+                          size="xs"
+                          variant="light"
+                          onClick={() => navigate(`/repositories/${repo.name}`)}
+                        >
                           {t("repositories.browse")}
                         </Button>
-                        <Button size="xs" variant="light" onClick={() => navigate(`/repositories/${repo.name}/acl`)}>
+                        <Button
+                          size="xs"
+                          variant="light"
+                          onClick={() => navigate(`/repositories/${repo.name}/acl`)}
+                        >
                           {t("repositories.manageAcl")}
                         </Button>
-                        <ActionIcon color="red" variant="subtle" onClick={() => handleDelete(repo)} aria-label={t("common.delete")}>
+                        <ActionIcon
+                          color="red"
+                          variant="subtle"
+                          onClick={() => handleDelete(repo)}
+                          aria-label={t("common.delete")}
+                        >
                           <IconTrash size={16} />
                         </ActionIcon>
                       </Group>
@@ -167,8 +197,20 @@ export function RepositoriesPage() {
       <Modal opened={createOpened} onClose={createModal.close} title={t("repositories.create")}>
         <form onSubmit={handleCreate}>
           <TextInput label={t("repositories.name")} withAsterisk {...form.getInputProps("name")} />
-          <Select mt="sm" label={t("repositories.format")} data={FORMAT_OPTIONS} allowDeselect={false} {...form.getInputProps("format")} />
-          <Select mt="sm" label={t("repositories.type")} data={TYPE_OPTIONS} allowDeselect={false} {...form.getInputProps("type")} />
+          <Select
+            mt="sm"
+            label={t("repositories.format")}
+            data={FORMAT_OPTIONS}
+            allowDeselect={false}
+            {...form.getInputProps("format")}
+          />
+          <Select
+            mt="sm"
+            label={t("repositories.type")}
+            data={TYPE_OPTIONS}
+            allowDeselect={false}
+            {...form.getInputProps("type")}
+          />
           {form.values.type === "proxy" && (
             <TextInput
               mt="sm"
@@ -189,12 +231,20 @@ export function RepositoriesPage() {
               {...form.getInputProps("members")}
             />
           )}
-          <Select mt="sm" label={t("repositories.visibility")} data={visibilityOptions} allowDeselect={false} {...form.getInputProps("visibility")} />
+          <Select
+            mt="sm"
+            label={t("repositories.visibility")}
+            data={visibilityOptions}
+            allowDeselect={false}
+            {...form.getInputProps("visibility")}
+          />
           <Group justify="flex-end" mt="md">
             <Button variant="default" onClick={createModal.close}>
               {t("common.cancel")}
             </Button>
-            <Button type="submit" loading={creating}>{t("common.create")}</Button>
+            <Button type="submit" loading={creating}>
+              {t("common.create")}
+            </Button>
           </Group>
         </form>
       </Modal>

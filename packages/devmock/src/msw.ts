@@ -75,7 +75,10 @@ export const handlers = [
     return HttpResponse.json({ token: MOCK_TOKEN, user }, { status: 200 });
   }),
 
-  http.post("*/api/v1/auth/logout", ({ request }) => unauthorized(request) ?? new HttpResponse(null, { status: 204 })),
+  http.post(
+    "*/api/v1/auth/logout",
+    ({ request }) => unauthorized(request) ?? new HttpResponse(null, { status: 204 }),
+  ),
 
   // —— 用户 ——
   http.get("*/api/v1/users", ({ request }) => {
@@ -84,7 +87,9 @@ export const handlers = [
       return denied;
     }
     const url = new URL(request.url);
-    return HttpResponse.json(store.listUsers(intParam(url, "page", 1), intParam(url, "page_size", 20)));
+    return HttpResponse.json(
+      store.listUsers(intParam(url, "page", 1), intParam(url, "page_size", 20)),
+    );
   }),
 
   http.post("*/api/v1/users", async ({ request }) => {
@@ -138,7 +143,10 @@ export const handlers = [
   }),
 
   // —— API Token ——
-  http.get("*/api/v1/tokens", ({ request }) => unauthorized(request) ?? HttpResponse.json(store.listTokens())),
+  http.get(
+    "*/api/v1/tokens",
+    ({ request }) => unauthorized(request) ?? HttpResponse.json(store.listTokens()),
+  ),
 
   http.post("*/api/v1/tokens", async ({ request }) => {
     const denied = unauthorized(request);
@@ -169,7 +177,9 @@ export const handlers = [
       return denied;
     }
     const url = new URL(request.url);
-    return HttpResponse.json(store.listRepositories(intParam(url, "page", 1), intParam(url, "page_size", 20)));
+    return HttpResponse.json(
+      store.listRepositories(intParam(url, "page", 1), intParam(url, "page_size", 20)),
+    );
   }),
 
   http.post("*/api/v1/repositories", async ({ request }) => {

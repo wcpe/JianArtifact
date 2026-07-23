@@ -1,0 +1,52 @@
+# 质量门：PR 与任意分支推送均跑通；与本地 scripts/check.sh 对齐。
+name: CI
+
+on:
+  pull_request:
+  push:
+    # main 由 release.yml 统一跑质量门 + 发预览，避免重复
+    branches-ignore:
+      - main
+    tags-ignore:
+      - "**"
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: 质量门
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: apps/server/go.mod
+          cache-dependency-path: apps/server/go.sum
+
+      - name: 安装 Go 质量工具
+        run: |
+          go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: 运行统一质量门
+        run: bash scripts/check.sh

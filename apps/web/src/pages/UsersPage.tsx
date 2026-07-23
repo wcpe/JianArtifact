@@ -1,5 +1,15 @@
 // 用户管理：列表 + 新建 / 改角色状态 / 重置口令 / 删除。
-import { ActionIcon, Badge, Button, Group, Modal, PasswordInput, Select, Table, TextInput } from "@mantine/core";
+import {
+  ActionIcon,
+  Badge,
+  Button,
+  Group,
+  Modal,
+  PasswordInput,
+  Select,
+  Table,
+  TextInput,
+} from "@mantine/core";
 import { useForm } from "@mantine/form";
 import { useDisclosure } from "@mantine/hooks";
 import { IconKey, IconTrash } from "@tabler/icons-react";
@@ -148,15 +158,26 @@ export function UsersPage() {
                         style={{ cursor: "pointer" }}
                         onClick={() => handleToggleStatus(user)}
                       >
-                        {user.status === "active" ? t("users.statusActive") : t("users.statusDisabled")}
+                        {user.status === "active"
+                          ? t("users.statusActive")
+                          : t("users.statusDisabled")}
                       </Badge>
                     </Table.Td>
                     <Table.Td>
                       <Group gap="xs">
-                        <ActionIcon variant="subtle" onClick={() => setPwdUser(user)} aria-label={t("users.changePassword")}>
+                        <ActionIcon
+                          variant="subtle"
+                          onClick={() => setPwdUser(user)}
+                          aria-label={t("users.changePassword")}
+                        >
                           <IconKey size={16} />
                         </ActionIcon>
-                        <ActionIcon color="red" variant="subtle" onClick={() => handleDelete(user)} aria-label={t("common.delete")}>
+                        <ActionIcon
+                          color="red"
+                          variant="subtle"
+                          onClick={() => handleDelete(user)}
+                          aria-label={t("common.delete")}
+                        >
                           <IconTrash size={16} />
                         </ActionIcon>
                       </Group>
@@ -171,26 +192,53 @@ export function UsersPage() {
 
       <Modal opened={createOpened} onClose={createModal.close} title={t("users.create")}>
         <form onSubmit={handleCreate}>
-          <TextInput label={t("users.username")} withAsterisk {...createForm.getInputProps("username")} />
-          <PasswordInput mt="sm" label={t("auth.password")} withAsterisk {...createForm.getInputProps("password")} />
-          <Select mt="sm" label={t("users.role")} data={roleOptions} allowDeselect={false} {...createForm.getInputProps("role")} />
+          <TextInput
+            label={t("users.username")}
+            withAsterisk
+            {...createForm.getInputProps("username")}
+          />
+          <PasswordInput
+            mt="sm"
+            label={t("auth.password")}
+            withAsterisk
+            {...createForm.getInputProps("password")}
+          />
+          <Select
+            mt="sm"
+            label={t("users.role")}
+            data={roleOptions}
+            allowDeselect={false}
+            {...createForm.getInputProps("role")}
+          />
           <Group justify="flex-end" mt="md">
             <Button variant="default" onClick={createModal.close}>
               {t("common.cancel")}
             </Button>
-            <Button type="submit" loading={creating}>{t("common.create")}</Button>
+            <Button type="submit" loading={creating}>
+              {t("common.create")}
+            </Button>
           </Group>
         </form>
       </Modal>
 
-      <Modal opened={pwdUser !== null} onClose={() => setPwdUser(null)} title={t("users.changePassword")}>
+      <Modal
+        opened={pwdUser !== null}
+        onClose={() => setPwdUser(null)}
+        title={t("users.changePassword")}
+      >
         <form onSubmit={handleChangePassword}>
-          <PasswordInput label={t("auth.password")} withAsterisk {...pwdForm.getInputProps("password")} />
+          <PasswordInput
+            label={t("auth.password")}
+            withAsterisk
+            {...pwdForm.getInputProps("password")}
+          />
           <Group justify="flex-end" mt="md">
             <Button variant="default" onClick={() => setPwdUser(null)}>
               {t("common.cancel")}
             </Button>
-            <Button type="submit" loading={savingPwd}>{t("common.save")}</Button>
+            <Button type="submit" loading={savingPwd}>
+              {t("common.save")}
+            </Button>
           </Group>
         </form>
       </Modal>

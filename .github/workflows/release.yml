@@ -1,0 +1,285 @@
+# 发布：
+# - push 到 main  → 开发预览版（固定 prerelease tag: dev-preview，每次覆盖更新）
+# - push vX.Y.Z  tag → 正式 Release（不可变，对应 VERSION 契约）
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-*"
+
+concurrency:
+  # 同 ref 串行，避免预览版资产互相覆盖打架
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  quality:
+    name: 质量门
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: apps/server/go.mod
+          cache-dependency-path: apps/server/go.sum
+
+      - name: 安装 Go 质量工具
+        run: |
+          go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: 运行统一质量门
+        run: bash scripts/check.sh
+
+  resolve-meta:
+    name: 解析版本元数据
+    runs-on: ubuntu-latest
+    needs: quality
+    outputs:
+      is_preview: ${{ steps.meta.outputs.is_preview }}
+      version: ${{ steps.meta.outputs.version }}
+      release_tag: ${{ steps.meta.outputs.release_tag }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+      release_name: ${{ steps.meta.outputs.release_name }}
+      make_latest: ${{ steps.meta.outputs.make_latest }}
+      image_name: ${{ steps.meta.outputs.image_name }}
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 计算版本与发布目标
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="$(tr -d '[:space:]' < VERSION)"
+          SHORT_SHA="$(git rev-parse --short=7 HEAD)"
+          # GHCR 镜像名必须全小写
+          IMAGE_NAME="$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')"
+          echo "image_name=$IMAGE_NAME" >> "$GITHUB_OUTPUT"
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            TAG="${GITHUB_REF_NAME}"
+            VER="${TAG#v}"
+            if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              if [[ "$VER" != "$BASE" ]]; then
+                echo "正式 tag $TAG 与 VERSION($BASE) 不一致，请先发版提交对齐。" >&2
+                exit 1
+              fi
+            fi
+            echo "is_preview=false" >> "$GITHUB_OUTPUT"
+            echo "version=$VER" >> "$GITHUB_OUTPUT"
+            echo "release_tag=$TAG" >> "$GITHUB_OUTPUT"
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "release_name=v$VER" >> "$GITHUB_OUTPUT"
+            echo "make_latest=true" >> "$GITHUB_OUTPUT"
+          else
+            VER="${BASE}-dev.${SHORT_SHA}"
+            echo "is_preview=true" >> "$GITHUB_OUTPUT"
+            echo "version=$VER" >> "$GITHUB_OUTPUT"
+            echo "release_tag=dev-preview" >> "$GITHUB_OUTPUT"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "release_name=开发预览版 (dev-preview)" >> "$GITHUB_OUTPUT"
+            echo "make_latest=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "BASE=$BASE SHORT_SHA=$SHORT_SHA IMAGE=$IMAGE_NAME"
+          cat "$GITHUB_OUTPUT"
+
+  build-assets:
+    name: 构建发布资产
+    runs-on: ubuntu-latest
+    needs: resolve-meta
+    timeout-minutes: 40
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: apps/server/go.mod
+          cache-dependency-path: apps/server/go.sum
+
+      - name: 构建多平台二进制
+        run: bash scripts/build-release-assets.sh "${{ needs.resolve-meta.outputs.version }}" dist/release
+
+      - name: 上传资产 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: dist/release/
+          if-no-files-found: error
+          retention-days: 14
+
+  docker:
+    name: 构建并推送镜像
+    runs-on: ubuntu-latest
+    needs: resolve-meta
+    timeout-minutes: 40
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 登录 GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 镜像元数据
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ needs.resolve-meta.outputs.image_name }}
+          tags: |
+            type=raw,value=${{ needs.resolve-meta.outputs.version }}
+            type=raw,value=dev-preview,enable=${{ needs.resolve-meta.outputs.is_preview }}
+            type=raw,value=latest,enable=${{ needs.resolve-meta.outputs.is_preview == 'false' }}
+            type=sha,prefix=sha-,format=short
+
+      - name: 设置 Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 构建并推送
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ needs.resolve-meta.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  github-release:
+    name: 发布 GitHub Release
+    runs-on: ubuntu-latest
+    needs: [resolve-meta, build-assets, docker]
+    timeout-minutes: 15
+    steps:
+      - name: 检出代码（供 CHANGELOG 摘录 / 移动预览 tag）
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # 预览版需 force-push tag，使用默认 GITHUB_TOKEN 即可（contents:write）
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 预览版：将 dev-preview tag 强制指向当前提交
+        if: needs.resolve-meta.outputs.is_preview == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f dev-preview "${GITHUB_SHA}"
+          git push -f origin refs/tags/dev-preview
+
+      - name: 下载资产
+        uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: dist/release
+
+      - name: 生成发布说明
+        id: notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          VER="${{ needs.resolve-meta.outputs.version }}"
+          IS_PREVIEW="${{ needs.resolve-meta.outputs.is_preview }}"
+          IMAGE="${{ env.REGISTRY }}/${{ needs.resolve-meta.outputs.image_name }}"
+          NOTES_FILE="$RUNNER_TEMP/release-notes.md"
+          {
+            if [[ "$IS_PREVIEW" == "true" ]]; then
+              echo "## 开发预览版"
+              echo ""
+              echo "由 \`main\` 每次推送自动覆盖更新（git tag / GitHub Release：\`dev-preview\`，prerelease）。"
+              echo ""
+              echo "- **版本号**：\`${VER}\`"
+              echo "- **提交**：\`${GITHUB_SHA}\`"
+              echo "- **镜像**："
+              echo "  - \`${IMAGE}:dev-preview\`"
+              echo "  - \`${IMAGE}:${VER}\`"
+              echo ""
+              echo "> 非正式版本，API / 存储布局可能随时变化；生产请使用正式 \`vX.Y.Z\` 发布物。"
+            else
+              echo "## v${VER}"
+              echo ""
+              echo "正式发布。镜像：\`${IMAGE}:${VER}\` / \`${IMAGE}:latest\`"
+              echo ""
+              if [[ -f CHANGELOG.md ]]; then
+                echo "### 变更摘要"
+                echo ""
+                awk -v ver="$VER" '
+                  $0 ~ "^## \\[" ver "\\]" {p=1; next}
+                  p && $0 ~ /^## / {exit}
+                  p {print}
+                ' CHANGELOG.md || true
+              fi
+            fi
+            echo ""
+            echo "### 资产校验"
+            echo ""
+            echo '```'
+            cat dist/release/SHA256SUMS
+            echo '```'
+          } > "$NOTES_FILE"
+          echo "path=$NOTES_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: 创建 / 更新 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.resolve-meta.outputs.release_tag }}
+          name: ${{ needs.resolve-meta.outputs.release_name }}
+          prerelease: ${{ needs.resolve-meta.outputs.prerelease }}
+          make_latest: ${{ needs.resolve-meta.outputs.make_latest }}
+          target_commitish: ${{ github.sha }}
+          body_path: ${{ steps.notes.outputs.path }}
+          files: |
+            dist/release/*
+          fail_on_unmatched_files: true
+          # 预览版固定 tag，允许覆盖已有 Release 资产
+          overwrite_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

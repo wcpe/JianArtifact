@@ -44,14 +44,48 @@ function seed(): State {
     version: MOCK_VERSION,
     migrationVersion: "0001_init",
     users: [
-      { id: 1, username: "admin", role: "admin", status: "active", createdAt: "2026-01-01T00:00:00Z" },
-      { id: 2, username: "developer", role: "user", status: "active", createdAt: "2026-01-02T00:00:00Z" },
+      {
+        id: 1,
+        username: "admin",
+        role: "admin",
+        status: "active",
+        createdAt: "2026-01-01T00:00:00Z",
+      },
+      {
+        id: 2,
+        username: "developer",
+        role: "user",
+        status: "active",
+        createdAt: "2026-01-02T00:00:00Z",
+      },
     ],
     tokens: [{ id: 1, name: "ci", createdAt: "2026-01-03T00:00:00Z", plaintext: "jat_seedci" }],
     repositories: [
-      { id: 1, name: "maven-releases", format: "maven", type: "hosted", visibility: "private", createdAt: "2026-01-01T00:00:00Z" },
-      { id: 2, name: "npm-proxy", format: "npm", type: "proxy", visibility: "public", remoteUrl: "https://registry.npmjs.org", createdAt: "2026-01-02T00:00:00Z" },
-      { id: 3, name: "raw-hosted", format: "raw", type: "hosted", visibility: "private", createdAt: "2026-01-03T00:00:00Z" },
+      {
+        id: 1,
+        name: "maven-releases",
+        format: "maven",
+        type: "hosted",
+        visibility: "private",
+        createdAt: "2026-01-01T00:00:00Z",
+      },
+      {
+        id: 2,
+        name: "npm-proxy",
+        format: "npm",
+        type: "proxy",
+        visibility: "public",
+        remoteUrl: "https://registry.npmjs.org",
+        createdAt: "2026-01-02T00:00:00Z",
+      },
+      {
+        id: 3,
+        name: "raw-hosted",
+        format: "raw",
+        type: "hosted",
+        visibility: "private",
+        createdAt: "2026-01-03T00:00:00Z",
+      },
     ],
     acls: { "maven-releases": [{ subjectId: 2, action: "read" }] },
     assets: {
@@ -151,7 +185,13 @@ export const store = {
     if (state.users.some((u) => u.username === username)) {
       return null;
     }
-    const user: User = { id: ++state.seq.user, username, role, status: "active", createdAt: nowIso() };
+    const user: User = {
+      id: ++state.seq.user,
+      username,
+      role,
+      status: "active",
+      createdAt: nowIso(),
+    };
     state.users.push(user);
     return user;
   },
@@ -202,7 +242,10 @@ export const store = {
   },
 
   listRepositories(page: number, pageSize: number): { items: Repository[]; total: number } {
-    return { items: pageSlice(state.repositories, page, pageSize), total: state.repositories.length };
+    return {
+      items: pageSlice(state.repositories, page, pageSize),
+      total: state.repositories.length,
+    };
   },
 
   findRepository(name: string): Repository | undefined {
@@ -257,7 +300,6 @@ export const store = {
     return repo;
   },
 
-
   deleteRepository(name: string): boolean {
     const before = state.repositories.length;
     state.repositories = state.repositories.filter((r) => r.name !== name);
@@ -308,30 +350,62 @@ function buildUsage(repo: Repository, base: string): UsageSnippet[] {
   const repoURL = `${base}/repository/${repo.name}`;
   if (repo.format === "maven") {
     const snippets: UsageSnippet[] = [
-      { title: "认证（~/.m2/settings.xml）", description: "在 <servers> 中配置凭据。", code: `<server>\n  <id>${repo.name}</id>\n  <username><user></username>\n  <password><token></password>\n</server>` },
-      { title: "解析依赖（pom.xml）", description: "在 <repositories> 中声明该仓库。", code: `<repository>\n  <id>${repo.name}</id>\n  <url>${repoURL}</url>\n</repository>` },
+      {
+        title: "认证（~/.m2/settings.xml）",
+        description: "在 <servers> 中配置凭据。",
+        code: `<server>\n  <id>${repo.name}</id>\n  <username><user></username>\n  <password><token></password>\n</server>`,
+      },
+      {
+        title: "解析依赖（pom.xml）",
+        description: "在 <repositories> 中声明该仓库。",
+        code: `<repository>\n  <id>${repo.name}</id>\n  <url>${repoURL}</url>\n</repository>`,
+      },
     ];
     if (writable) {
-      snippets.push({ title: "发布制品（pom.xml + mvn deploy）", description: "在 <distributionManagement> 声明部署目标（仅 hosted 可写）。", code: `<distributionManagement>\n  <repository>\n    <id>${repo.name}</id>\n    <url>${repoURL}</url>\n  </repository>\n</distributionManagement>` });
+      snippets.push({
+        title: "发布制品（pom.xml + mvn deploy）",
+        description: "在 <distributionManagement> 声明部署目标（仅 hosted 可写）。",
+        code: `<distributionManagement>\n  <repository>\n    <id>${repo.name}</id>\n    <url>${repoURL}</url>\n  </repository>\n</distributionManagement>`,
+      });
     }
     return snippets;
   }
   if (repo.format === "npm") {
     const registryURL = `${base}/npm/${repo.name}/`;
     const snippets: UsageSnippet[] = [
-      { title: "配置 registry", description: "将该仓库设为 npm registry。", code: `npm config set registry ${registryURL}` },
-      { title: "安装依赖", description: "从该 registry 安装包。", code: `npm install <package> --registry ${registryURL}` },
+      {
+        title: "配置 registry",
+        description: "将该仓库设为 npm registry。",
+        code: `npm config set registry ${registryURL}`,
+      },
+      {
+        title: "安装依赖",
+        description: "从该 registry 安装包。",
+        code: `npm install <package> --registry ${registryURL}`,
+      },
     ];
     if (writable) {
-      snippets.push({ title: "发布包（npm publish）", description: "发布到该仓库（仅 hosted 可写）。", code: `npm publish --registry ${registryURL}` });
+      snippets.push({
+        title: "发布包（npm publish）",
+        description: "发布到该仓库（仅 hosted 可写）。",
+        code: `npm publish --registry ${registryURL}`,
+      });
     }
     return snippets;
   }
   const snippets: UsageSnippet[] = [
-    { title: "下载制品（curl）", description: "以 API Token 作口令（公开仓库可匿名读）。", code: `curl -u <user>:<token> -O ${repoURL}/path/to/artifact` },
+    {
+      title: "下载制品（curl）",
+      description: "以 API Token 作口令（公开仓库可匿名读）。",
+      code: `curl -u <user>:<token> -O ${repoURL}/path/to/artifact`,
+    },
   ];
   if (writable) {
-    snippets.push({ title: "上传制品（curl）", description: "PUT 上传到指定路径（仅 hosted 可写）。", code: `curl -u <user>:<token> --upload-file ./artifact ${repoURL}/path/to/artifact` });
+    snippets.push({
+      title: "上传制品（curl）",
+      description: "PUT 上传到指定路径（仅 hosted 可写）。",
+      code: `curl -u <user>:<token> --upload-file ./artifact ${repoURL}/path/to/artifact`,
+    });
   }
   return snippets;
 }

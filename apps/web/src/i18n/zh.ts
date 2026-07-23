@@ -55,7 +55,8 @@ export const zh = {
     stepAdmin: "创建管理员",
     stepDone: "完成",
     welcomeTitle: "欢迎使用 JianArtifact",
-    welcomeDesc: "这是本实例的首次启动。接下来将创建第一个管理员账户，用于登录管理端并管理仓库、用户与访问令牌。",
+    welcomeDesc:
+      "这是本实例的首次启动。接下来将创建第一个管理员账户，用于登录管理端并管理仓库、用户与访问令牌。",
     welcomeNote: "管理员拥有最高权限，请妥善保管账户口令。",
     start: "开始初始化",
     back: "上一步",

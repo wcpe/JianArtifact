@@ -1,5 +1,15 @@
 // 访问令牌：列表 + 新建（明文仅回显一次）+ 吊销。
-import { ActionIcon, Alert, Button, Code, CopyButton, Group, Modal, Table, TextInput } from "@mantine/core";
+import {
+  ActionIcon,
+  Alert,
+  Button,
+  Code,
+  CopyButton,
+  Group,
+  Modal,
+  Table,
+  TextInput,
+} from "@mantine/core";
 import { useForm } from "@mantine/form";
 import { useDisclosure } from "@mantine/hooks";
 import { IconCheck, IconCopy, IconTrash } from "@tabler/icons-react";
@@ -84,7 +94,12 @@ export function TokensPage() {
                     <Table.Td>{token.name}</Table.Td>
                     <Table.Td>{new Date(token.createdAt).toLocaleString()}</Table.Td>
                     <Table.Td>
-                      <ActionIcon color="red" variant="subtle" onClick={() => handleDelete(token.id)} aria-label={t("common.delete")}>
+                      <ActionIcon
+                        color="red"
+                        variant="subtle"
+                        onClick={() => handleDelete(token.id)}
+                        aria-label={t("common.delete")}
+                      >
                         <IconTrash size={16} />
                       </ActionIcon>
                     </Table.Td>
@@ -103,12 +118,18 @@ export function TokensPage() {
             <Button variant="default" onClick={createModal.close}>
               {t("common.cancel")}
             </Button>
-            <Button type="submit" loading={creating}>{t("common.create")}</Button>
+            <Button type="submit" loading={creating}>
+              {t("common.create")}
+            </Button>
           </Group>
         </form>
       </Modal>
 
-      <Modal opened={created !== null} onClose={() => setCreated(null)} title={t("tokens.plaintextTitle")}>
+      <Modal
+        opened={created !== null}
+        onClose={() => setCreated(null)}
+        title={t("tokens.plaintextTitle")}
+      >
         <Alert color="yellow" variant="light" mb="sm">
           {t("tokens.plaintextHint")}
         </Alert>

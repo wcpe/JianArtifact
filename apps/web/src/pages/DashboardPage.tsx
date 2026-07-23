@@ -32,7 +32,10 @@ export function DashboardPage() {
         {(status) => (
           <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing={density.gridSpacing}>
             <StatCard label={t("dashboard.version")} value={status.version} />
-            <StatCard label={t("dashboard.ready")} value={status.ready ? t("dashboard.yes") : t("dashboard.no")} />
+            <StatCard
+              label={t("dashboard.ready")}
+              value={status.ready ? t("dashboard.yes") : t("dashboard.no")}
+            />
             <StatCard
               label={t("dashboard.initialized")}
               value={status.initialized ? t("dashboard.yes") : t("dashboard.no")}

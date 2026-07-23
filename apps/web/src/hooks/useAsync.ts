@@ -36,9 +36,7 @@ export function useAsync<T>(fetcher: () => Promise<T>, deps: unknown[] = []): As
       })
       .catch((err: unknown) => {
         if (active) {
-          setError(
-            err instanceof ApiError ? err : new ApiError("unknown", String(err), 0),
-          );
+          setError(err instanceof ApiError ? err : new ApiError("unknown", String(err), 0));
         }
       })
       .finally(() => {

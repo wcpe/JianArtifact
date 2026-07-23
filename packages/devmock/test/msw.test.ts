@@ -81,7 +81,9 @@ describe("devmock MSW 端点行为", () => {
     });
     expect(put.status).toBe(200);
 
-    const get = await fetch("http://localhost/api/v1/repositories/maven-releases/acl", { headers: auth });
+    const get = await fetch("http://localhost/api/v1/repositories/maven-releases/acl", {
+      headers: auth,
+    });
     const body = (await get.json()) as { items: { action: string }[] };
     expect(body.items[0]?.action).toBe("write");
   });
@@ -92,7 +94,9 @@ describe("devmock MSW 端点行为", () => {
   });
 
   it("制品浏览：分页与前缀过滤", async () => {
-    const res = await fetch("http://localhost/api/v1/repositories/maven-releases/assets", { headers: auth });
+    const res = await fetch("http://localhost/api/v1/repositories/maven-releases/assets", {
+      headers: auth,
+    });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { items: { path: string }[]; total: number };
     expect(body.total).toBe(2);
@@ -107,15 +111,23 @@ describe("devmock MSW 端点行为", () => {
   });
 
   it("制品浏览缺令牌 401、未知仓库 404", async () => {
-    expect((await fetch("http://localhost/api/v1/repositories/maven-releases/assets")).status).toBe(401);
+    expect((await fetch("http://localhost/api/v1/repositories/maven-releases/assets")).status).toBe(
+      401,
+    );
     const nf = await fetch("http://localhost/api/v1/repositories/nope/assets", { headers: auth });
     expect(nf.status).toBe(404);
   });
 
   it("使用片段：据 format 返回接入命令", async () => {
-    const res = await fetch("http://localhost/api/v1/repositories/npm-proxy/usage", { headers: auth });
+    const res = await fetch("http://localhost/api/v1/repositories/npm-proxy/usage", {
+      headers: auth,
+    });
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { format: string; type: string; snippets: { code: string }[] };
+    const body = (await res.json()) as {
+      format: string;
+      type: string;
+      snippets: { code: string }[];
+    };
     expect(body.format).toBe("npm");
     expect(body.snippets.length).toBeGreaterThan(0);
     expect(body.snippets.some((s) => s.code.includes("npm config set registry"))).toBe(true);

@@ -265,8 +265,8 @@ func TestRawHostedAccessControl(t *testing.T) {
 		t.Fatalf("public 仓 PUT 状态码 = %d", rec.Code)
 	}
 	rec := e.rawReq(http.MethodGet, "/repository/raw-public/p.txt", "", "", nil)
-	if rec.Code != http.StatusOK || string(rec.Body.Bytes()) != "hello public" {
-		t.Errorf("public 仓匿名读状态码 = %d，内容 = %q", rec.Code, rec.Body.Bytes())
+	if rec.Code != http.StatusOK || rec.Body.String() != "hello public" {
+		t.Errorf("public 仓匿名读状态码 = %d，内容 = %q", rec.Code, rec.Body.String())
 	}
 }
 
@@ -392,8 +392,8 @@ func TestRawGroupAggregatesReads(t *testing.T) {
 
 	// group 命中 hosted 成员。
 	rec := e.rawReq(http.MethodGet, "/repository/raw-all/local.txt", "Bearer "+adminToken, "", nil)
-	if rec.Code != http.StatusOK || string(rec.Body.Bytes()) != "local hit" {
-		t.Fatalf("group 读 hosted 成员状态码 = %d，内容 = %q", rec.Code, rec.Body.Bytes())
+	if rec.Code != http.StatusOK || rec.Body.String() != "local hit" {
+		t.Fatalf("group 读 hosted 成员状态码 = %d，内容 = %q", rec.Code, rec.Body.String())
 	}
 
 	// group 回退命中 proxy 成员（经回源）。
