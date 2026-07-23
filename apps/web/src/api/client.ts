@@ -43,6 +43,8 @@ interface RequestOptions {
   body?: unknown;
   /** 查询参数（值为 undefined 时跳过）。 */
   query?: Record<string, string | number | undefined>;
+  /** 可选中止信号（超时 / 用户取消）。 */
+  signal?: AbortSignal;
 }
 
 function buildUrl(path: string, query?: RequestOptions["query"]): string {
@@ -73,7 +75,7 @@ async function parseError(response: Response): Promise<ApiError> {
 
 /** 发起请求；2xx 返回解析后的 JSON（204 返回 undefined），否则抛出 ApiError。 */
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const { method = "GET", body, query } = options;
+  const { method = "GET", body, query, signal } = options;
   const headers: Record<string, string> = {};
   const token = getToken();
   if (token) {
@@ -85,7 +87,15 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     payload = JSON.stringify(body);
   }
 
-  const response = await fetch(buildUrl(path, query), { method, headers, body: payload });
+  let response: Response;
+  try {
+    response = await fetch(buildUrl(path, query), { method, headers, body: payload, signal });
+  } catch (e) {
+    if (signal?.aborted || (e instanceof DOMException && e.name === "AbortError")) {
+      throw new ApiError("aborted", "请求已取消或超时", 0);
+    }
+    throw new ApiError("network", e instanceof Error ? e.message : "网络错误", 0);
+  }
   if (!response.ok) {
     throw await parseError(response);
   }

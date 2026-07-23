@@ -163,14 +163,21 @@ func run() error {
 	dispatcher := protocol.NewDispatcher(svc.repoSvc, rawHandler, mavenHandler)
 	npmHandler := protocol.NewNpmHandler(rawHandler)
 
+	apiHandlers := svc.handlers(version, checks)
 	srv := httpserver.New(version,
 		httpserver.WithReadinessCheck(svc.db.Ping),
 		httpserver.WithReadinessCheck(blobWritableCheck(cfg.BlobDir)),
-		httpserver.WithHandlers(svc.handlers(version, checks)),
+		httpserver.WithHandlers(apiHandlers),
 		httpserver.WithMiddleware(api.MiddlewareFunc(authenticator.Optional())),
 		httpserver.WithProtocolRoutes(func(r gin.IRouter) {
-			protocol.RegisterRoutes(r, dispatcher, authenticator.Optional())
-			protocol.RegisterNpmRoutes(r, npmHandler, authenticator.Optional())
+			authMW := authenticator.Optional()
+			protocol.RegisterRoutes(r, dispatcher, authMW)
+			protocol.RegisterNpmRoutes(r, npmHandler, authMW)
+			// 迁移辅助（不进 OpenAPI 生成；主体由 Optional 注入，admin 在 handler 内校验）
+			r.POST("/api/v1/migrations/remote-repositories", authMW, apiHandlers.ListRemoteNexusRepositories)
+			r.POST("/api/v1/migrations/offline-index/scan", authMW, apiHandlers.StartOfflineDirIndex)
+			r.GET("/api/v1/migrations/offline-index", authMW, apiHandlers.GetOfflineDirIndex)
+			r.POST("/api/v1/migrations/offline-index/cancel", authMW, apiHandlers.CancelOfflineDirIndex)
 		}),
 	)
 	httpServer := &http.Server{

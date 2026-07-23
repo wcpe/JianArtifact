@@ -11,6 +11,148 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
+// StartOfflineDirIndex 启动离线目录前置索引扫描（admin only）。
+// body: { "path": "...", "mode": "full|update|rebuild" }
+func (h *Handlers) StartOfflineDirIndex(c *gin.Context) {
+	if _, ok := requireAdmin(c); !ok {
+		return
+	}
+	if h.migrations == nil {
+		auth.WriteError(c, http.StatusServiceUnavailable, "unavailable", "迁移服务未启用")
+		return
+	}
+	var req struct {
+		Path string `json:"path"`
+		Mode string `json:"mode"`
+	}
+	if !bindJSON(c, &req) {
+		return
+	}
+	if err := h.migrations.StartOfflineIndexScan(req.Path, req.Mode); err != nil {
+		writeDomainErr(c, err)
+		return
+	}
+	meta, counts, err := h.migrations.OfflineIndexStatus(req.Path)
+	if err != nil {
+		writeDomainErr(c, err)
+		return
+	}
+	c.JSON(http.StatusAccepted, offlineIndexJSON(meta, counts))
+}
+
+// GetOfflineDirIndex 查询离线目录索引状态（admin only）。query: path=
+func (h *Handlers) GetOfflineDirIndex(c *gin.Context) {
+	if _, ok := requireAdmin(c); !ok {
+		return
+	}
+	if h.migrations == nil {
+		auth.WriteError(c, http.StatusServiceUnavailable, "unavailable", "迁移服务未启用")
+		return
+	}
+	path := c.Query("path")
+	meta, counts, err := h.migrations.OfflineIndexStatus(path)
+	if err != nil {
+		writeDomainErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, offlineIndexJSON(meta, counts))
+}
+
+// CancelOfflineDirIndex 取消索引扫描（admin only）。
+func (h *Handlers) CancelOfflineDirIndex(c *gin.Context) {
+	if _, ok := requireAdmin(c); !ok {
+		return
+	}
+	if h.migrations == nil {
+		auth.WriteError(c, http.StatusServiceUnavailable, "unavailable", "迁移服务未启用")
+		return
+	}
+	var req struct {
+		Path string `json:"path"`
+	}
+	if !bindJSON(c, &req) {
+		return
+	}
+	if err := h.migrations.CancelOfflineIndexScan(req.Path); err != nil {
+		writeDomainErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func offlineIndexJSON(meta *repository.OfflineDirIndex, counts map[string]int64) gin.H {
+	if meta == nil {
+		return gin.H{"status": "idle"}
+	}
+	errMsg := ""
+	if meta.ErrorMessage.Valid {
+		errMsg = meta.ErrorMessage.String
+	}
+	started, finished := "", ""
+	if meta.StartedAt.Valid {
+		started = meta.StartedAt.String
+	}
+	if meta.FinishedAt.Valid {
+		finished = meta.FinishedAt.String
+	}
+	repos := make([]gin.H, 0, len(counts))
+	for name, n := range counts {
+		repos = append(repos, gin.H{"name": name, "assets": n})
+	}
+	return gin.H{
+		"path":         meta.RootPath,
+		"status":       meta.Status,
+		"mode":         meta.Mode,
+		"totalEntries": meta.TotalEntries,
+		"scannedProps": meta.ScannedProps,
+		"repoCount":    meta.RepoCount,
+		"message":      meta.Message,
+		"errorMessage": errMsg,
+		"startedAt":    started,
+		"finishedAt":   finished,
+		"updatedAt":    meta.UpdatedAt,
+		"repositories": repos,
+	}
+}
+
+// ListRemoteNexusRepositories 从在线 Nexus 拉取仓库索引（admin only）。
+// 不创建迁移任务、不扫 blob；供离线目录迁移勾选 includeRepositories。
+// 路由在 httpserver 额外注册（非 OpenAPI 生成，避免改契约生成链）。
+func (h *Handlers) ListRemoteNexusRepositories(c *gin.Context) {
+	if _, ok := requireAdmin(c); !ok {
+		return
+	}
+	if h.migrations == nil {
+		auth.WriteError(c, http.StatusServiceUnavailable, "unavailable", "迁移服务未启用")
+		return
+	}
+	var req struct {
+		URL           string `json:"url"`
+		CredentialRef string `json:"credentialRef"`
+	}
+	if !bindJSON(c, &req) {
+		return
+	}
+	items, err := h.migrations.ListRemoteRepositories(c.Request.Context(), req.URL, req.CredentialRef)
+	if err != nil {
+		writeDomainErr(c, err)
+		return
+	}
+	type item struct {
+		Name   string `json:"name"`
+		Format string `json:"format"`
+		Type   string `json:"type"`
+	}
+	out := make([]item, 0, len(items))
+	for _, r := range items {
+		out = append(out, item{Name: r.Name, Format: r.Format, Type: r.Type})
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"items": out,
+		"total": len(out),
+	})
+}
+
 // ListMigrations 迁移任务列表（admin only）。
 func (h *Handlers) ListMigrations(c *gin.Context, params ListMigrationsParams) {
 	if _, ok := requireAdmin(c); !ok {
@@ -324,7 +466,7 @@ func toAPIMigrationReport(t *repository.MigrationTask) MigrationReport {
 		s := t.FinishedAt.String
 		out.FinishedAt = &s
 	}
-	// Runner 写入的 report_json 为 {copied,skipped,failed,failures}
+	// Runner 写入的 report_json 为 {copied,skipped,failed,failures,phase,total}
 	if t.ReportJSON != "" && t.ReportJSON != "{}" {
 		var raw map[string]interface{}
 		if err := json.Unmarshal([]byte(t.ReportJSON), &raw); err == nil {
@@ -337,6 +479,17 @@ func toAPIMigrationReport(t *repository.MigrationTask) MigrationReport {
 			}
 			if v, ok := raw["failed"]; ok {
 				out.Totals["failed"] = v
+			}
+			if v, ok := raw["phase"]; ok {
+				out.Totals["phase"] = v
+			}
+			if v, ok := raw["total"]; ok {
+				out.Totals["total"] = v
+			}
+			for _, k := range []string{"found", "processed", "total", "percent", "phase", "message", "currentRepo"} {
+				if v, ok := raw[k]; ok {
+					out.Totals[k] = v
+				}
 			}
 			if totals, ok := raw["totals"].(map[string]interface{}); ok {
 				for k, v := range totals {

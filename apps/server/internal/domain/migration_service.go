@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/migration/discover"
+	"github.com/wcpe/jianartifact/apps/server/internal/migration/offindex"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
@@ -17,6 +18,16 @@ import (
 type MigrationService struct {
 	tasks  *repository.MigrationTaskRepo
 	runner MigrationRunner // 可选；nil 时 Start/Resume 仅更新状态
+	// 离线目录索引（可选）：就绪时 discover 走索引，避免反复扫 blob
+	offlineIndex *repository.OfflineIndexRepo
+	offlineScan  OfflineIndexScanner
+}
+
+// OfflineIndexScanner 前置扫描接口。
+type OfflineIndexScanner interface {
+	StartScan(root string, mode string) error
+	Cancel(root string)
+	Status(root string) (*repository.OfflineDirIndex, error)
 }
 
 // MigrationRunner 异步执行钩子；nil 时 Start/Resume 仅更新状态。
@@ -36,6 +47,57 @@ type MigrationFinalizerRunner interface {
 // NewMigrationService 构造 MigrationService。
 func NewMigrationService(tasks *repository.MigrationTaskRepo, runner MigrationRunner) *MigrationService {
 	return &MigrationService{tasks: tasks, runner: runner}
+}
+
+// SetOfflineIndex 注入离线目录索引与扫描器。
+func (s *MigrationService) SetOfflineIndex(idx *repository.OfflineIndexRepo, scan OfflineIndexScanner) {
+	s.offlineIndex = idx
+	s.offlineScan = scan
+}
+
+// StartOfflineIndexScan 启动离线目录前置索引（full/update/rebuild）。
+func (s *MigrationService) StartOfflineIndexScan(root, mode string) error {
+	if s.offlineScan == nil {
+		return fmt.Errorf("%w: 离线索引服务未启用", ErrValidation)
+	}
+	if strings.TrimSpace(root) == "" {
+		return fmt.Errorf("%w: path 不能为空", ErrValidation)
+	}
+	if err := s.offlineScan.StartScan(root, mode); err != nil {
+		return fmt.Errorf("%w: %v", ErrValidation, err)
+	}
+	return nil
+}
+
+// CancelOfflineIndexScan 取消扫描。
+func (s *MigrationService) CancelOfflineIndexScan(root string) error {
+	if s.offlineScan == nil {
+		return fmt.Errorf("%w: 离线索引服务未启用", ErrValidation)
+	}
+	s.offlineScan.Cancel(root)
+	return nil
+}
+
+// OfflineIndexStatus 查询索引状态；repos 为索引内仓计数摘要。
+func (s *MigrationService) OfflineIndexStatus(root string) (*repository.OfflineDirIndex, map[string]int64, error) {
+	if s.offlineScan == nil || s.offlineIndex == nil {
+		return nil, nil, fmt.Errorf("%w: 离线索引服务未启用", ErrValidation)
+	}
+	if strings.TrimSpace(root) == "" {
+		return nil, nil, fmt.Errorf("%w: path 不能为空", ErrValidation)
+	}
+	meta, err := s.offlineScan.Status(root)
+	if err != nil {
+		return nil, nil, err
+	}
+	counts := map[string]int64{}
+	if meta.Status == repository.OfflineIndexReady {
+		abs := meta.RootPath
+		if c, err := s.offlineIndex.CountByRepo(abs); err == nil {
+			counts = c
+		}
+	}
+	return meta, counts, nil
 }
 
 // MigrationCreateInput 创建 planned 任务的入参。
@@ -217,10 +279,6 @@ func (s *MigrationService) Discover(ctx context.Context, in MigrationDiscoverInp
 		return nil, err
 	}
 
-	src, err := discover.NewSource(in.SourceType)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrValidation, err)
-	}
 	cfg := discover.Config{}
 	if in.SourceConfig != nil {
 		if v, ok := in.SourceConfig["url"].(string); ok {
@@ -239,9 +297,28 @@ func (s *MigrationService) Discover(ctx context.Context, in MigrationDiscoverInp
 		cfg.Credential = cred
 	}
 
-	plan, err := src.Discover(ctx, cfg)
-	if err != nil {
-		return nil, mapDiscoverErr(err)
+	// 离线目录且索引就绪：直接用索引生成 plan，跳过 blob 扫描
+	var plan discover.Plan
+	usedIndex := false
+	if in.SourceType == repository.MigrationSourceOfflineDir && s.offlineIndex != nil && cfg.Path != "" {
+		p, ok, err := offindex.PlanFromIndex(s.offlineIndex, cfg.Path, cfg.IncludeRepositories)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			plan = p
+			usedIndex = true
+		}
+	}
+	if !usedIndex {
+		src, err := discover.NewSource(in.SourceType)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrValidation, err)
+		}
+		plan, err = src.Discover(ctx, cfg)
+		if err != nil {
+			return nil, mapDiscoverErr(err)
+		}
 	}
 	planJSON, err := json.Marshal(plan)
 	if err != nil {
@@ -382,6 +459,28 @@ func parseIncludeRepos(raw any) []string {
 	default:
 		return nil
 	}
+}
+
+// ListRemoteRepositories 从在线 Nexus 仅拉仓库索引（不落库、不扫资产）。
+// 用于离线 blob 迁移前勾选 includeRepositories。
+func (s *MigrationService) ListRemoteRepositories(ctx context.Context, url, credentialRef string) ([]discover.RemoteRepository, error) {
+	if strings.TrimSpace(url) == "" {
+		return nil, fmt.Errorf("%w: url 不能为空", ErrValidation)
+	}
+	cred := ""
+	if strings.TrimSpace(credentialRef) != "" {
+		var err error
+		cred, err = ResolveCredential(credentialRef)
+		if err != nil {
+			return nil, err
+		}
+	}
+	src := discover.NewOnlineREST(nil)
+	items, err := src.ListRemoteRepositories(ctx, url, cred, true)
+	if err != nil {
+		return nil, mapDiscoverErr(err)
+	}
+	return items, nil
 }
 
 // ResolveCredential 读取 credentialRef 对应环境变量；缺失返回 ErrValidation。

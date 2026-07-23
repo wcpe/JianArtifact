@@ -64,6 +64,33 @@ func TestOnlineRESTDiscover(t *testing.T) {
 	}
 }
 
+func TestOnlineRESTListRemoteRepositories(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/service/rest/v1/repositories", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode([]map[string]string{
+			{"name": "r3d", "format": "maven2", "type": "hosted"},
+			{"name": "r3d-mixed", "format": "maven2", "type": "hosted"},
+			{"name": "docker-hub", "format": "docker", "type": "proxy"},
+		})
+	})
+	// 故意不注册 assets：List 不应访问
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	items, err := discover.NewOnlineREST(srv.Client()).ListRemoteRepositories(
+		context.Background(), srv.URL, "", true,
+	)
+	if err != nil {
+		t.Fatalf("ListRemoteRepositories：%v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("items = %+v, want 2 (docker 应过滤)", items)
+	}
+	if items[0].Name != "r3d" || items[0].Format != "maven" {
+		t.Fatalf("items[0] = %+v", items[0])
+	}
+}
+
 func TestOnlineRESTAuthFailure(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)

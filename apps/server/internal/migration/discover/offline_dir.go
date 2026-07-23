@@ -1,22 +1,27 @@
 package discover
 
 import (
+	"bufio"
 	"context"
 	"os"
 	"path/filepath"
 	"strings"
 )
 
-// OfflineDir 扫描 Nexus 原生存储目录的简化夹具布局（验收用）：
+// OfflineDir 扫描离线源。支持两种布局：
 //
-//	<root>/
-//	  repositories/
-//	    <repo-name>/
-//	      .format          # 内容为 raw|maven|maven2|npm|docker…
-//	      content/         # 制品文件树
+// 1) 验收夹具：
 //
-// 若无 .format，则 format 默认 raw 并 warning。
-// 真实 3.70 blob store 布局可在后续用录制样例替换，不静默猜。
+//	<root>/repositories/<repo>/.format + content/
+//
+// 2) Nexus 3.x 原生 blob store（用户真机）：
+//
+//	<root>/content/vol-*/chap-*/{uuid}.properties
+//	  @Bucket.repo-name=...
+//	  @BlobStore.blob-name=...
+//	同 stem 的 .bytes 为内容
+//
+// 当存在 content/vol-* 时走 blob store 路径；否则走夹具布局。
 type OfflineDir struct{}
 
 // Discover 实现 Source。
@@ -37,9 +42,83 @@ func (OfflineDir) Discover(ctx context.Context, cfg Config) (Plan, error) {
 		return Plan{}, &ErrInvalidConfig{Msg: "离线路径须为目录"}
 	}
 
+	// Nexus blob store：path 为 .../blobs/default 或 .../blobs/default/content 的父
+	if isNexusBlobStore(root) {
+		return discoverNexusBlobStore(root, cfg.IncludeRepositories)
+	}
+
+	return discoverFixtureDir(root, cfg.IncludeRepositories)
+}
+
+func isNexusBlobStore(root string) bool {
+	// 常见：.../blobs/default 下有 content/vol-*
+	content := filepath.Join(root, "content")
+	if st, err := os.Stat(content); err == nil && st.IsDir() {
+		entries, _ := os.ReadDir(content)
+		for _, e := range entries {
+			if e.IsDir() && strings.HasPrefix(e.Name(), "vol-") {
+				return true
+			}
+		}
+	}
+	// 直接传入 content 目录
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.IsDir() && strings.HasPrefix(e.Name(), "vol-") {
+			return true
+		}
+	}
+	return false
+}
+
+func discoverNexusBlobStore(root string, include []string) (Plan, error) {
+	contentRoot := root
+	if st, err := os.Stat(filepath.Join(root, "content")); err == nil && st.IsDir() {
+		contentRoot = filepath.Join(root, "content")
+	}
+	allow := includeSet(include)
+	// 真机 blob 极大：必须带 include，否则拒绝全盘扫描以免卡住
+	if len(allow) == 0 {
+		return Plan{}, &ErrInvalidConfig{Msg: "Nexus blob store 发现必须指定 includeRepositories（避免全量扫描占满磁盘/时间）"}
+	}
+
+	repos := make([]string, 0, len(allow))
+	for name := range allow {
+		repos = append(repos, name)
+	}
+	assets, err := EnumerateNexusBlobAssets(contentRoot, repos)
+	if err != nil {
+		return Plan{}, &ErrInvalidConfig{Msg: "扫描 blob store 失败: " + err.Error()}
+	}
+	counts := map[string]int64{}
+	for _, a := range assets {
+		counts[a.Repo]++
+	}
+
+	plan := emptyPlan()
+	plan.Estimated = false
+	for name, n := range counts {
+		plan.Repositories = append(plan.Repositories, PlanRepository{
+			Name:            name,
+			Format:          FormatMaven,
+			Type:            "hosted",
+			EstimatedAssets: n,
+		})
+	}
+	if len(plan.Repositories) == 0 {
+		plan.Warnings = append(plan.Warnings, "blob store 中未匹配到 includeRepositories 内仓库")
+	} else {
+		plan.Warnings = append(plan.Warnings, "Nexus blob store：format 默认 maven；已跳过 deleted 资产")
+	}
+	return finalizePlan(plan), nil
+}
+
+func discoverFixtureDir(root string, include []string) (Plan, error) {
 	reposRoot := filepath.Join(root, "repositories")
 	if st, err := os.Stat(reposRoot); err != nil || !st.IsDir() {
-		// 兼容：直接把 path 当作 repositories 父级的平铺
 		reposRoot = root
 	}
 
@@ -49,12 +128,11 @@ func (OfflineDir) Discover(ctx context.Context, cfg Config) (Plan, error) {
 	}
 
 	plan := emptyPlan()
-	allow := includeSet(cfg.IncludeRepositories)
+	allow := includeSet(include)
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
-		// 跳过常见非仓库名
 		name := e.Name()
 		if name == "content" || name == "blobs" || strings.HasPrefix(name, ".") {
 			continue
@@ -78,7 +156,6 @@ func (OfflineDir) Discover(ctx context.Context, cfg Config) (Plan, error) {
 			content = repoDir
 		}
 		count := countFilesUnder(content)
-		// 不把 .format 计入资产
 		if _, err := os.Stat(filepath.Join(repoDir, ".format")); err == nil && content == repoDir {
 			count--
 			if count < 0 {
@@ -102,4 +179,32 @@ func readFormatFile(path string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(b))
+}
+
+// readBlobProperties 解析 Nexus blob .properties（Java Properties 风格 key=value）。
+func readBlobProperties(path string) (map[string]string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	out := map[string]string{}
+	sc := bufio.NewScanner(f)
+	// 个别 properties 可能较长
+	buf := make([]byte, 0, 64*1024)
+	sc.Buffer(buf, 1024*1024)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		i := strings.IndexByte(line, '=')
+		if i <= 0 {
+			continue
+		}
+		k := strings.TrimSpace(line[:i])
+		v := strings.TrimSpace(line[i+1:])
+		out[k] = v
+	}
+	return out, sc.Err()
 }

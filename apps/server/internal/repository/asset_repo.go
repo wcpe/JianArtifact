@@ -74,6 +74,13 @@ func (r *AssetRepo) CountByRepo(repoID int64, prefix string) (int, error) {
 	return n, err
 }
 
+// ListAllPaths 返回仓库内全部资产路径（迁移 skip 预加载用，避免逐条 Exists）。
+func (r *AssetRepo) ListAllPaths(repoID int64) ([]string, error) {
+	var paths []string
+	err := r.db.Select(&paths, `SELECT path FROM asset WHERE repository_id = ?`, repoID)
+	return paths, err
+}
+
 // likePrefix 把路径前缀转为 LIKE 模式：转义 %/_/\ 后追加通配 %（配合 ESCAPE '\'），
 // 空前缀匹配全部。
 func likePrefix(prefix string) string {

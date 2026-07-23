@@ -41,8 +41,14 @@ load_env() {
 
 DEPLOY_PORT="${DEPLOY_PORT:-22}"
 DEPLOY_SSH_KEY="${DEPLOY_SSH_KEY:-${DEFAULT_KEY}}"
-RELEASE_DIR="${RELEASE_DIR:-/opt/jianartifact}"
+# 无 root 时默认装到部署用户 home（可用 RELEASE_DIR 覆盖）
+RELEASE_DIR="${RELEASE_DIR:-}"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:8080/readyz}"
+
+if [[ -z "${RELEASE_DIR}" ]]; then
+  # 延后到 resolve 后填；先占位，cmd_deploy 内再设
+  RELEASE_DIR=""
+fi
 
 resolve_host() {
   local host="${DEPLOY_HOST:-}"
@@ -106,51 +112,75 @@ cmd_show_pubkey() {
 }
 
 cmd_build() {
-  log "构建后端二进制（CGO_ENABLED=0）…"
+  # 始终交叉编译 Linux amd64（本机可能是 Windows/macOS）
+  local out="${ROOT_DIR}/apps/server/bin/jianartifact-linux-amd64"
+  log "构建 Linux amd64 二进制（CGO_ENABLED=0 GOOS=linux）…"
   (
     cd "${ROOT_DIR}/apps/server"
-    CGO_ENABLED=0 go build -trimpath -o bin/jianartifact ./cmd/jianartifact
+    GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o bin/jianartifact-linux-amd64 ./cmd/jianartifact
   )
-  [[ -f "${ROOT_DIR}/apps/server/bin/jianartifact" ]] \
-    || die "构建失败：未找到 apps/server/bin/jianartifact"
-  log "构建完成。"
+  [[ -f "${out}" ]] || die "构建失败：未找到 ${out}"
+  # 兼容 scp 路径名
+  cp "${out}" "${ROOT_DIR}/apps/server/bin/jianartifact" 2>/dev/null \
+    || cp "${out}" "${ROOT_DIR}/apps/server/bin/jianartifact"
+  log "构建完成：${out}"
 }
 
 cmd_deploy() {
   load_env
   cmd_build
-  local stamp release host
+  local stamp release host remote_home
+  host="$(resolve_host)"
+  remote_home="$(run_ssh 'echo $HOME')"
+  if [[ -z "${RELEASE_DIR}" ]]; then
+    RELEASE_DIR="${remote_home}/jianartifact"
+  fi
   stamp="$(date +%Y%m%d%H%M%S)"
   release="${RELEASE_DIR}/releases/${stamp}"
-  host="$(resolve_host)"
   log "部署到 ${host}:${release}"
 
-  run_ssh "mkdir -p '${release}' '${RELEASE_DIR}/data' '${RELEASE_DIR}/bin'"
+  run_ssh "mkdir -p '${release}' '${RELEASE_DIR}/data' '${RELEASE_DIR}/bin' '${RELEASE_DIR}/logs'"
   run_scp "${ROOT_DIR}/apps/server/bin/jianartifact" "${release}/jianartifact"
   run_ssh "chmod +x '${release}/jianartifact' && ln -sfn '${release}' '${RELEASE_DIR}/current'"
 
-  # 若存在用户级 systemd unit 则重启；否则提示手动 run
-  if run_ssh "systemctl --user is-enabled jianartifact >/dev/null 2>&1"; then
-    run_ssh "systemctl --user restart jianartifact"
-  elif run_ssh "systemctl is-enabled jianartifact >/dev/null 2>&1"; then
-    run_ssh "sudo systemctl restart jianartifact"
-  else
-    log "未检测到 jianartifact systemd unit；请在远端手动启动："
-    log "  ${RELEASE_DIR}/current/jianartifact run"
-    log "  或安装 deploy/systemd/jianartifact.service"
-  fi
+  local jwt="${JIAN_JWT_SECRET:-change-me-in-production-please-32b}"
+  local addr="${JIAN_HTTP_ADDR:-0.0.0.0:8080}"
+  # 写 env、停旧进程、后台启动
+  # shellcheck disable=SC2086
+  ssh $(ssh_opts) "${host}" bash -s <<REMOTE
+set -euo pipefail
+RD='${RELEASE_DIR}'
+cat > "\${RD}/run.env" <<EOF
+JIAN_HTTP_ADDR=${addr}
+JIAN_DATA_DIR=\${RD}/data
+JIAN_JWT_SECRET=${jwt}
+EOF
+chmod 600 "\${RD}/run.env" || true
+if [[ -f "\${RD}/jianartifact.pid" ]]; then
+  kill "\$(cat "\${RD}/jianartifact.pid")" 2>/dev/null || true
+  sleep 1
+fi
+pkill -f "\${RD}/current/jianartifact" 2>/dev/null || true
+sleep 1
+set -a
+. "\${RD}/run.env"
+set +a
+nohup "\${RD}/current/jianartifact" run >>"\${RD}/logs/server.log" 2>&1 &
+echo \$! > "\${RD}/jianartifact.pid"
+echo "started pid=\$(cat "\${RD}/jianartifact.pid")"
+REMOTE
 
   log "等待探活 ${HEALTH_URL} …"
   local ok=0
-  for i in $(seq 1 30); do
+  for i in $(seq 1 45); do
     if run_ssh "curl -fsS -o /dev/null '${HEALTH_URL}'"; then
       ok=1
       break
     fi
     sleep 2
   done
-  [[ "${ok}" -eq 1 ]] || die "远程探活失败，请检查进程与端口。"
-  log "部署成功。current → ${stamp}"
+  [[ "${ok}" -eq 1 ]] || die "远程探活失败，请检查 ${RELEASE_DIR}/logs/server.log"
+  log "部署成功。current → ${stamp}  RELEASE_DIR=${RELEASE_DIR}"
 }
 
 cmd_health() {

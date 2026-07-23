@@ -172,15 +172,80 @@ export function createMigration(input: {
   return request<MigrationTask>("/migrations", { method: "POST", body: input });
 }
 
-export function discoverMigrations(input: {
-  sourceType: MigrationSourceType;
-  sourceConfig?: Record<string, unknown>;
-  credentialRef?: string;
-  conflictPolicy?: MigrationConflictPolicy;
-}): Promise<MigrationDiscoverResponse> {
+export function discoverMigrations(
+  input: {
+    sourceType: MigrationSourceType;
+    sourceConfig?: Record<string, unknown>;
+    credentialRef?: string;
+    conflictPolicy?: MigrationConflictPolicy;
+  },
+  opts?: { signal?: AbortSignal },
+): Promise<MigrationDiscoverResponse> {
   return request<MigrationDiscoverResponse>("/migrations/discover", {
     method: "POST",
     body: input,
+    signal: opts?.signal,
+  });
+}
+
+/** 从在线 Nexus 仅拉仓库索引（不创建迁移任务、不扫资产）。 */
+export function listRemoteNexusRepositories(
+  input: { url: string; credentialRef?: string },
+  opts?: { signal?: AbortSignal },
+): Promise<{ items: { name: string; format: string; type: string }[]; total: number }> {
+  return request("/migrations/remote-repositories", {
+    method: "POST",
+    body: {
+      url: input.url,
+      credentialRef: input.credentialRef || undefined,
+    },
+    signal: opts?.signal,
+  });
+}
+
+/** 离线目录持久化索引状态。 */
+export interface OfflineDirIndexStatus {
+  path?: string;
+  status: "idle" | "scanning" | "ready" | "failed" | string;
+  mode?: string;
+  totalEntries?: number;
+  scannedProps?: number;
+  repoCount?: number;
+  message?: string;
+  errorMessage?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  updatedAt?: string;
+  repositories?: { name: string; assets: number }[];
+}
+
+/** 启动离线目录前置扫描（full / update / rebuild）。 */
+export function startOfflineDirIndex(input: {
+  path: string;
+  mode?: "full" | "update" | "rebuild";
+}): Promise<OfflineDirIndexStatus> {
+  return request("/migrations/offline-index/scan", {
+    method: "POST",
+    body: { path: input.path, mode: input.mode ?? "full" },
+  });
+}
+
+/** 查询离线目录索引状态。 */
+export function getOfflineDirIndex(
+  path: string,
+  opts?: { signal?: AbortSignal },
+): Promise<OfflineDirIndexStatus> {
+  return request("/migrations/offline-index", {
+    query: { path },
+    signal: opts?.signal,
+  });
+}
+
+/** 取消离线目录索引扫描。 */
+export function cancelOfflineDirIndex(path: string): Promise<{ ok: boolean }> {
+  return request("/migrations/offline-index/cancel", {
+    method: "POST",
+    body: { path },
   });
 }
 

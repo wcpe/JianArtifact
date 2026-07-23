@@ -8,6 +8,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/blobstore"
 	"github.com/wcpe/jianartifact/apps/server/internal/config"
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
+	"github.com/wcpe/jianartifact/apps/server/internal/migration/offindex"
 	"github.com/wcpe/jianartifact/apps/server/internal/migration/runner"
 	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
@@ -53,12 +54,17 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	repoSvc := domain.NewRepositoryService(repoRepo, aclRepo, assetRepo)
 	assetSvc := domain.NewAssetService(repoRepo, assetRepo, blobs, upstreamClient)
 
+	offlineIndexRepo := repository.NewOfflineIndexRepo(db)
+	offlineScanner := offindex.New(offlineIndexRepo)
+
 	migRunner := runner.New(
 		runner.TaskStoreAdapter{Repo: migrationTaskRepo},
 		runner.AssetServiceAdapter{Assets: assetSvc, Repos: repoRepo, AssetR: assetRepo},
 		runner.RepoAdminAdapter{Repos: repoSvc},
 	)
+	migRunner.SetOfflineIndex(offlineIndexRepo)
 	migrationSvc := domain.NewMigrationService(migrationTaskRepo, migRunner)
+	migrationSvc.SetOfflineIndex(offlineIndexRepo, offlineScanner)
 
 	// 进程崩溃回收：残留 running → failed，等人 resume（ADR-0012）。
 	if _, err := migrationSvc.FailInterruptedRunning(); err != nil {
