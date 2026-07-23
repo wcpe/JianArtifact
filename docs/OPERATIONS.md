@@ -60,9 +60,16 @@ bundle/
 
 真实 3.70 blob store 布局可后续用录制样例替换。
 
-### 1.1.4 真机小范围迁移（推荐）
+### 1.1.4 真机小范围 / 多选仓库迁移（推荐）
 
-全量迁移可能占满磁盘。请用 `sourceConfig.includeRepositories` **只迁一个小仓库**：
+全量迁移可能占满磁盘。支持 **多选** 仓库（在线 REST 与离线包/目录均适用）：
+
+1. **发现前预过滤**（可选）：`sourceConfig.includeRepositories: ["repo-a","repo-b"]`  
+2. **启动时多选**（推荐）：`POST /api/v1/migrations/{id}/start` body：
+   ```json
+   { "includeRepositories": ["repo-a", "repo-b"] }
+   ```
+3. 管理端向导：配置步 TagsInput 预过滤；预览步 **Checkbox 多选** 后点「开始迁移」。
 
 ```json
 {
@@ -76,8 +83,17 @@ bundle/
 }
 ```
 
-- 管理端向导「仅迁移这些仓库」字段会写入该配置。  
-- 复测前可在管理端 **删除** 目标仓库（`DELETE /api/v1/repositories/{name}`）：`asset` 表有 `ON DELETE CASCADE`，元数据会一并清除；blob 文件暂不 GC（内容寻址可残留，后续 GC 版本处理）。
+- 复测前可在管理端 **删除** 目标仓库（`DELETE /api/v1/repositories/{name}`）：`asset` 表有 `ON DELETE CASCADE`，元数据会一并清除；blob 文件暂不 GC。
+
+### 1.1.4b 远程 SSH 部署（真机验收）
+
+```bash
+bash deploy/remote-ssh.sh setup-key   # 生成 deploy/ssh/jianartifact_ed25519（不入库）
+# 将公钥写入目标机 authorized_keys
+cp deploy/.env.example deploy/.env    # 填 DEPLOY_HOST / DEPLOY_PORT / JIAN_JWT_SECRET
+bash deploy/remote-ssh.sh deploy
+bash deploy/remote-ssh.sh health
+```
 
 ### 1.1.5 迁移切换（cutover）检查清单
 

@@ -159,6 +159,7 @@ func (h *Handlers) GetMigration(c *gin.Context, id MigrationIdParam) {
 }
 
 // StartMigration planned → running（admin only）。
+// 可选 body.includeRepositories：启动前多选收窄 plan（在线/离线均适用）。
 func (h *Handlers) StartMigration(c *gin.Context, id MigrationIdParam) {
 	if _, ok := requireAdmin(c); !ok {
 		return
@@ -167,7 +168,15 @@ func (h *Handlers) StartMigration(c *gin.Context, id MigrationIdParam) {
 		auth.WriteError(c, http.StatusServiceUnavailable, "unavailable", "迁移服务未启用")
 		return
 	}
-	task, err := h.migrations.Start(id)
+	var include []string
+	// body 可选；空 body / 非法 JSON 均按不收窄处理（兼容旧客户端）
+	var req StartMigrationRequest
+	if c.Request.Body != nil && c.Request.ContentLength != 0 {
+		if err := c.ShouldBindJSON(&req); err == nil && req.IncludeRepositories != nil {
+			include = *req.IncludeRepositories
+		}
+	}
+	task, err := h.migrations.Start(id, include)
 	if err != nil {
 		writeDomainErr(c, err)
 		return

@@ -643,6 +643,12 @@ type RepositoryList struct {
 	Total int          `json:"total"`
 }
 
+// StartMigrationRequest defines model for StartMigrationRequest.
+type StartMigrationRequest struct {
+	// IncludeRepositories 启动前收窄 plan，仅迁移这些仓库；空或省略表示全部
+	IncludeRepositories *[]string `json:"includeRepositories,omitempty"`
+}
+
 // StatusInfo defines model for StatusInfo.
 type StatusInfo struct {
 	Initialized      bool   `json:"initialized"`
@@ -808,6 +814,9 @@ type CreateMigrationJSONRequestBody = CreateMigrationRequest
 
 // DiscoverMigrationsJSONRequestBody defines body for DiscoverMigrations for application/json ContentType.
 type DiscoverMigrationsJSONRequestBody = MigrationDiscoverRequest
+
+// StartMigrationJSONRequestBody defines body for StartMigration for application/json ContentType.
+type StartMigrationJSONRequestBody = StartMigrationRequest
 
 // CreateRepositoryJSONRequestBody defines body for CreateRepository for application/json ContentType.
 type CreateRepositoryJSONRequestBody = CreateRepositoryRequest

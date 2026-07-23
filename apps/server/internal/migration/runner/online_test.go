@@ -68,7 +68,7 @@ func TestRunnerOnlineRESTWithIncludeFilter(t *testing.T) {
 		t.Fatalf("plan 应仅含 raw-small：%+v", result.Plan.Repositories)
 	}
 
-	if _, err := mig.Start(result.Task.ID); err != nil {
+	if _, err := mig.Start(result.Task.ID, nil); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(5 * time.Second)

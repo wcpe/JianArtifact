@@ -387,13 +387,30 @@ export const store = {
     return task;
   },
 
-  startMigration(id: number): MigrationTask | "not_found" | "conflict" {
+  startMigration(
+    id: number,
+    includeRepositories?: string[],
+  ): MigrationTask | "not_found" | "conflict" {
     const task = state.migrations.find((m) => m.id === id);
     if (!task) {
       return "not_found";
     }
     if (task.status !== "planned") {
       return "conflict";
+    }
+    // 可选收窄 plan
+    if (includeRepositories && includeRepositories.length > 0 && task.plan) {
+      const allow = new Set(includeRepositories);
+      task.plan = {
+        ...task.plan,
+        repositories: task.plan.repositories.filter((r) => allow.has(r.name)),
+      };
+      if (task.sourceConfig && typeof task.sourceConfig === "object") {
+        task.sourceConfig = {
+          ...(task.sourceConfig as Record<string, unknown>),
+          includeRepositories,
+        };
+      }
     }
     task.status = "running";
     task.startedAt = nowIso();

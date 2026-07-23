@@ -346,12 +346,15 @@ export const handlers = [
     return task ? HttpResponse.json(task) : err("not_found", "任务不存在", 404);
   }),
 
-  http.post("*/api/v1/migrations/:id/start", ({ request, params }) => {
+  http.post("*/api/v1/migrations/:id/start", async ({ request, params }) => {
     const denied = unauthorized(request);
     if (denied) {
       return denied;
     }
-    const result = store.startMigration(Number(params.id));
+    const body = (await request.json().catch(() => ({}))) as {
+      includeRepositories?: string[];
+    };
+    const result = store.startMigration(Number(params.id), body.includeRepositories);
     if (result === "not_found") {
       return err("not_found", "任务不存在", 404);
     }

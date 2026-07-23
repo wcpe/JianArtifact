@@ -526,8 +526,17 @@ paths:
     post:
       operationId: startMigration
       summary: 显式启动（planned → running）
+      description: |
+        可选 body.includeRepositories：启动前收窄 plan，仅迁移选中仓库（在线/离线均适用）。
+        省略或空数组表示按当前 plan 全部仓库执行。
       parameters:
         - $ref: "#/components/parameters/MigrationIdParam"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartMigrationRequest"
       responses:
         "200":
           description: 已进入 running
@@ -535,6 +544,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/MigrationTask"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -1125,6 +1136,14 @@ components:
           $ref: "#/components/schemas/MigrationConflictPolicy"
         plan:
           $ref: "#/components/schemas/MigrationPlan"
+    StartMigrationRequest:
+      type: object
+      properties:
+        includeRepositories:
+          type: array
+          items:
+            type: string
+          description: 启动前收窄 plan，仅迁移这些仓库；空或省略表示全部
     MigrationDiscoverRequest:
       type: object
       required: [sourceType]

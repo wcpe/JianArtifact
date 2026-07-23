@@ -1,7 +1,8 @@
-// 迁移向导：选来源 → 配置 → discover 预览 → 确认 start（显式，不自动跑）。
+// 迁移向导：选来源 → 配置 → discover 预览并多选仓库 → 显式 start。
 import {
   Alert,
   Button,
+  Checkbox,
   Group,
   Select,
   Stack,
@@ -9,10 +10,11 @@ import {
   Table,
   Text,
   TextInput,
+  TagsInput,
 } from "@mantine/core";
 import { useForm } from "@mantine/form";
 import { PageHeader } from "@jianartifact/ui";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
@@ -30,6 +32,8 @@ export function MigrationWizardPage() {
   const [active, setActive] = useState(0);
   const [busy, setBusy] = useState(false);
   const [discoverResult, setDiscoverResult] = useState<MigrationDiscoverResponse | null>(null);
+  /** 预览页多选：默认全选 plan 中仓库，可取消部分以小范围验收 */
+  const [selectedRepos, setSelectedRepos] = useState<string[]>([]);
 
   const form = useForm({
     initialValues: {
@@ -38,8 +42,8 @@ export function MigrationWizardPage() {
       path: "",
       credentialRef: "",
       conflictPolicy: "skip" as MigrationConflictPolicy,
-      /** 逗号分隔仓库名；真机小范围验收必填建议 */
-      includeRepositories: "",
+      /** 发现前可选预过滤（Tags）；与预览多选可叠加 */
+      includeRepositories: [] as string[],
     },
     validate: {
       url: (v, values) =>
@@ -51,18 +55,19 @@ export function MigrationWizardPage() {
     },
   });
 
+  const planRepoNames = useMemo(
+    () => discoverResult?.plan.repositories.map((r) => r.name) ?? [],
+    [discoverResult],
+  );
+
   const runDiscover = form.onSubmit((values) => {
     setBusy(true);
-    const include = values.includeRepositories
-      .split(/[,，\s]+/)
-      .map((s) => s.trim())
-      .filter(Boolean);
     const sourceConfig: Record<string, unknown> =
       values.sourceType === "online_rest"
         ? { url: values.url.trim() }
         : { path: values.path.trim() };
-    if (include.length > 0) {
-      sourceConfig.includeRepositories = include;
+    if (values.includeRepositories.length > 0) {
+      sourceConfig.includeRepositories = values.includeRepositories;
     }
     discoverMigrations({
       sourceType: values.sourceType,
@@ -72,6 +77,8 @@ export function MigrationWizardPage() {
     })
       .then((res) => {
         setDiscoverResult(res);
+        // 默认全选，方便「多选后取消不需要的」
+        setSelectedRepos(res.plan.repositories.map((r) => r.name));
         setActive(2);
         notifySuccess(t("migrations.discoverOk"));
       })
@@ -79,12 +86,26 @@ export function MigrationWizardPage() {
       .finally(() => setBusy(false));
   });
 
+  const toggleRepo = (name: string) => {
+    setSelectedRepos((prev) =>
+      prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name],
+    );
+  };
+
+  const selectAll = () => setSelectedRepos([...planRepoNames]);
+  const selectNone = () => setSelectedRepos([]);
+
   const runStart = () => {
     if (!discoverResult) {
       return;
     }
+    if (selectedRepos.length === 0) {
+      notifyError(t("migrations.needSelectRepos"));
+      return;
+    }
     setBusy(true);
-    startMigration(discoverResult.taskId)
+    // 传选中列表；若与 plan 全量相同也显式传入，保证后端写入 include 审计一致
+    startMigration(discoverResult.taskId, { includeRepositories: selectedRepos })
       .then(() => {
         notifySuccess(t("migrations.started"));
         navigate(`/migrations/${discoverResult.taskId}`);
@@ -145,10 +166,11 @@ export function MigrationWizardPage() {
               ]}
               {...form.getInputProps("conflictPolicy")}
             />
-            <TextInput
+            <TagsInput
               label={t("migrations.includeRepos")}
               description={t("migrations.includeReposHint")}
-              placeholder="maven-releases"
+              placeholder={t("migrations.includeReposPlaceholder")}
+              clearable
               {...form.getInputProps("includeRepositories")}
             />
             <Group>
@@ -177,9 +199,21 @@ export function MigrationWizardPage() {
                   </ul>
                 </Alert>
               )}
+              <Group>
+                <Text size="sm" fw={600}>
+                  {t("migrations.selectRepos")}（{selectedRepos.length}/{planRepoNames.length}）
+                </Text>
+                <Button size="compact-xs" variant="light" onClick={selectAll}>
+                  {t("migrations.selectAll")}
+                </Button>
+                <Button size="compact-xs" variant="light" onClick={selectNone}>
+                  {t("migrations.selectNone")}
+                </Button>
+              </Group>
               <Table striped>
                 <Table.Thead>
                   <Table.Tr>
+                    <Table.Th w={48} />
                     <Table.Th>{t("migrations.repoName")}</Table.Th>
                     <Table.Th>{t("migrations.repoFormat")}</Table.Th>
                     <Table.Th>{t("migrations.repoType")}</Table.Th>
@@ -189,6 +223,13 @@ export function MigrationWizardPage() {
                 <Table.Tbody>
                   {discoverResult.plan.repositories.map((r) => (
                     <Table.Tr key={r.name}>
+                      <Table.Td>
+                        <Checkbox
+                          checked={selectedRepos.includes(r.name)}
+                          onChange={() => toggleRepo(r.name)}
+                          aria-label={r.name}
+                        />
+                      </Table.Td>
                       <Table.Td>{r.name}</Table.Td>
                       <Table.Td>{r.format}</Table.Td>
                       <Table.Td>{r.type ?? "hosted"}</Table.Td>
@@ -204,8 +245,13 @@ export function MigrationWizardPage() {
                 <Button variant="default" onClick={() => setActive(1)}>
                   {t("setup.back")}
                 </Button>
-                <Button color="green" loading={busy} onClick={runStart}>
-                  {t("migrations.start")}
+                <Button
+                  color="green"
+                  loading={busy}
+                  disabled={selectedRepos.length === 0}
+                  onClick={runStart}
+                >
+                  {t("migrations.start")}（{selectedRepos.length}）
                 </Button>
                 <Button
                   variant="subtle"

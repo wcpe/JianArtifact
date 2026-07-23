@@ -368,12 +368,16 @@ func enumerateOfflineBundle(root string, plan discover.Plan) ([]sourceItem, erro
 		return nil, errors.New("sourceConfig.path 为空")
 	}
 	contentRoot := filepath.Join(root, "content")
+	// 仅处理 plan 中的仓库（支持 includeRepositories 多选后收窄）
 	formatByRepo := map[string]string{}
 	for _, r := range plan.Repositories {
 		formatByRepo[r.Name] = r.Format
 		if formatByRepo[r.Name] == "" {
 			formatByRepo[r.Name] = "raw"
 		}
+	}
+	if len(formatByRepo) == 0 {
+		return nil, nil
 	}
 	var items []sourceItem
 	err := filepath.WalkDir(contentRoot, func(p string, d os.DirEntry, err error) error {
@@ -393,9 +397,10 @@ func enumerateOfflineBundle(root string, plan discover.Plan) ([]sourceItem, erro
 			return nil
 		}
 		repo, assetPath := parts[0], parts[1]
-		format := formatByRepo[repo]
-		if format == "" {
-			format = "raw"
+		format, ok := formatByRepo[repo]
+		if !ok {
+			// 不在 plan 内的仓库整仓跳过
+			return nil
 		}
 		full := p
 		items = append(items, sourceItem{

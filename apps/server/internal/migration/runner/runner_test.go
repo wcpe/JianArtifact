@@ -95,7 +95,7 @@ func TestRunnerOfflineBundleEndToEnd(t *testing.T) {
 		t.Fatal("discover 后不应有资产")
 	}
 
-	if _, err := mig.Start(result.Task.ID); err != nil {
+	if _, err := mig.Start(result.Task.ID, nil); err != nil {
 		t.Fatal(err)
 	}
 	task := waitStatus(t, mig, result.Task.ID, repository.MigrationStatusCompleted)
@@ -136,7 +136,7 @@ func TestRunnerConflictSkip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := mig.Start(result.Task.ID); err != nil {
+	if _, err := mig.Start(result.Task.ID, nil); err != nil {
 		t.Fatal(err)
 	}
 	waitStatus(t, mig, result.Task.ID, repository.MigrationStatusCompleted)
@@ -168,7 +168,7 @@ func TestRunnerConflictOverwrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := mig.Start(result.Task.ID); err != nil {
+	if _, err := mig.Start(result.Task.ID, nil); err != nil {
 		t.Fatal(err)
 	}
 	waitStatus(t, mig, result.Task.ID, repository.MigrationStatusCompleted)
@@ -200,7 +200,7 @@ func TestRunnerConflictFail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := mig.Start(result.Task.ID); err != nil {
+	if _, err := mig.Start(result.Task.ID, nil); err != nil {
 		t.Fatal(err)
 	}
 	waitStatus(t, mig, result.Task.ID, repository.MigrationStatusFailed)
@@ -216,7 +216,7 @@ func TestRunnerFinalizeDelta(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := mig.Start(result.Task.ID); err != nil {
+	if _, err := mig.Start(result.Task.ID, nil); err != nil {
 		t.Fatal(err)
 	}
 	waitStatus(t, mig, result.Task.ID, repository.MigrationStatusCompleted)

@@ -382,9 +382,9 @@ func TestMigrationFoundationAPI(t *testing.T) {
 		t.Errorf("GET status = %q", got.Status)
 	}
 
-	// start → running
+	// start → running（空 body 兼容）
 	var started api.MigrationTask
-	if code := e.do(t, http.MethodPost, "/api/v1/migrations/"+itoa64(created.Id)+"/start", adminToken, nil, &started); code != http.StatusOK {
+	if code := e.do(t, http.MethodPost, "/api/v1/migrations/"+itoa64(created.Id)+"/start", adminToken, map[string]any{}, &started); code != http.StatusOK {
 		t.Fatalf("start 状态码 = %d，期望 200", code)
 	}
 	if started.Status != api.Running {
@@ -392,7 +392,7 @@ func TestMigrationFoundationAPI(t *testing.T) {
 	}
 
 	// 再 start → 409
-	if code := e.do(t, http.MethodPost, "/api/v1/migrations/"+itoa64(created.Id)+"/start", adminToken, nil, nil); code != http.StatusConflict {
+	if code := e.do(t, http.MethodPost, "/api/v1/migrations/"+itoa64(created.Id)+"/start", adminToken, map[string]any{}, nil); code != http.StatusConflict {
 		t.Errorf("二次 start 状态码 = %d，期望 409", code)
 	}
 

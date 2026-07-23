@@ -347,7 +347,11 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** 显式启动（planned → running） */
+        /**
+         * 显式启动（planned → running）
+         * @description 可选 body.includeRepositories：启动前收窄 plan，仅迁移选中仓库（在线/离线均适用）。
+         *     省略或空数组表示按当前 plan 全部仓库执行。
+         */
         post: operations["startMigration"];
         delete?: never;
         options?: never;
@@ -648,6 +652,10 @@ export interface components {
             credentialRef?: string;
             conflictPolicy?: components["schemas"]["MigrationConflictPolicy"];
             plan?: components["schemas"]["MigrationPlan"];
+        };
+        StartMigrationRequest: {
+            /** @description 启动前收窄 plan，仅迁移这些仓库；空或省略表示全部 */
+            includeRepositories?: string[];
         };
         MigrationDiscoverRequest: {
             sourceType: components["schemas"]["MigrationSourceType"];
@@ -1438,7 +1446,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["StartMigrationRequest"];
+            };
+        };
         responses: {
             /** @description 已进入 running */
             200: {
@@ -1449,6 +1461,7 @@ export interface operations {
                     "application/json": components["schemas"]["MigrationTask"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];

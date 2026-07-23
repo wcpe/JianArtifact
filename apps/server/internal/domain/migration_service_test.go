@@ -26,7 +26,7 @@ func TestMigrationServiceCreatePlannedAndStart(t *testing.T) {
 		t.Fatalf("创建后 status = %q，期望 planned", task.Status)
 	}
 
-	started, err := svc.Start(task.ID)
+	started, err := svc.Start(task.ID, nil)
 	if err != nil {
 		t.Fatalf("Start：%v", err)
 	}
@@ -35,7 +35,7 @@ func TestMigrationServiceCreatePlannedAndStart(t *testing.T) {
 	}
 
 	// 再次 start → 409 语义 ErrConflict
-	if _, err := svc.Start(task.ID); !errors.Is(err, domain.ErrConflict) {
+	if _, err := svc.Start(task.ID, nil); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("二次 start err = %v，期望 ErrConflict", err)
 	}
 }
@@ -111,7 +111,7 @@ func TestMigrationServiceIllegalTransitions(t *testing.T) {
 	if err := repo.UpdateStatus(task.ID, repository.MigrationStatusCompleted, &msg, true, true); err != nil {
 		t.Fatalf("UpdateStatus：%v", err)
 	}
-	if _, err := svc.Start(task.ID); !errors.Is(err, domain.ErrConflict) {
+	if _, err := svc.Start(task.ID, nil); !errors.Is(err, domain.ErrConflict) {
 		t.Errorf("completed start：%v", err)
 	}
 	if _, err := svc.Resume(task.ID); !errors.Is(err, domain.ErrConflict) {
@@ -130,7 +130,7 @@ func TestMigrationServiceFailInterrupted(t *testing.T) {
 		SourceType:   repository.MigrationSourceOfflineDir,
 		SourceConfig: map[string]any{"path": "/x"},
 	})
-	if _, err := svc.Start(task.ID); err != nil {
+	if _, err := svc.Start(task.ID, nil); err != nil {
 		t.Fatalf("Start：%v", err)
 	}
 	n, err := svc.FailInterruptedRunning()

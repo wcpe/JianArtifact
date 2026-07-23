@@ -184,8 +184,14 @@ export function discoverMigrations(input: {
   });
 }
 
-export function startMigration(id: number): Promise<MigrationTask> {
-  return request<MigrationTask>(`/migrations/${id}/start`, { method: "POST" });
+export function startMigration(
+  id: number,
+  body?: { includeRepositories?: string[] },
+): Promise<MigrationTask> {
+  return request<MigrationTask>(`/migrations/${id}/start`, {
+    method: "POST",
+    body: body ?? {},
+  });
 }
 
 export function resumeMigration(id: number): Promise<MigrationTask> {

@@ -25,6 +25,23 @@ bash deploy/deploy.sh deploy          # 构建镜像并启动，探活 /readyz
 
 远程部署：设置 `DEPLOY_HOST=user@host` 后执行同一命令。
 
+## 远程 SSH 二进制部署（真机验收）
+
+```bash
+# 1. 生成本地密钥（私钥在 deploy/ssh/，已 gitignore）
+bash deploy/remote-ssh.sh setup-key
+# 2. 把打印的公钥追加到目标机 ~/.ssh/authorized_keys
+# 3. 配置 deploy/.env：
+#    DEPLOY_HOST=root@你的IP
+#    DEPLOY_PORT=22
+# 4. 部署
+bash deploy/remote-ssh.sh deploy
+# 5. 探活
+bash deploy/remote-ssh.sh health
+```
+
+详见 `deploy/remote-ssh.sh` 头部注释。
+
 ## 可选路径（Helm）
 
 ```bash

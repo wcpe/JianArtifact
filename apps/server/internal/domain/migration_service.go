@@ -102,13 +102,19 @@ func (s *MigrationService) List(limit, offset int) ([]repository.MigrationTask, 
 }
 
 // Start 将 planned → running 并触发 Runner（若有）。其它状态 → ErrConflict。
-func (s *MigrationService) Start(id int64) (*repository.MigrationTask, error) {
+// include 非空时先收窄 plan 再启动（支持预览后多选仓库）。
+func (s *MigrationService) Start(id int64, include []string) (*repository.MigrationTask, error) {
 	t, err := s.Get(id)
 	if err != nil {
 		return nil, err
 	}
 	if t.Status != repository.MigrationStatusPlanned {
 		return nil, fmt.Errorf("%w: 仅 planned 可 start，当前 %s", ErrConflict, t.Status)
+	}
+	if len(include) > 0 {
+		if _, err := s.ApplyIncludeFilter(id, include); err != nil {
+			return nil, err
+		}
 	}
 	if err := s.tasks.UpdateStatus(id, repository.MigrationStatusRunning, nil, true, false); err != nil {
 		return nil, mapNotFound(err)

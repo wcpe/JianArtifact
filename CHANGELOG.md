@@ -24,8 +24,10 @@
   - 侧栏「迁移」入口（admin）；列表 / 向导（discover→planned→显式 start）/ 详情（轮询、取消、续传、finalize、报告与 cutover 清单）。
 - 迁移真机可用性增强：
   - `online_rest` 执行：按 plan 枚举 Nexus assets 并流式下载 `downloadUrl` 写入 hosted。
-  - `sourceConfig.includeRepositories`：发现/执行仅处理名单内仓库（避免全量占盘）。
+  - `sourceConfig.includeRepositories` + `POST .../start` body `includeRepositories`：发现前/启动前均可多选仓库（在线+离线）。
+  - 向导预览页 Checkbox 多选 + TagsInput 预过滤；离线枚举严格按 plan 白名单。
   - 仓库删除级联清理 asset 元数据（复测前可删仓重建）；补充删除单测。
+  - `deploy/remote-ssh.sh`：SSH 密钥生成、远程二进制部署与探活（密钥目录 `deploy/ssh/` 不入库）。
 
 ### 变更
 
