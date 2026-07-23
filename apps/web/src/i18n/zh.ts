@@ -194,6 +194,8 @@ export const zh = {
     pathRequired: "请填写路径",
     credentialRef: "凭据引用名",
     credentialRefHint: "环境变量名，如 NEXUS_BASIC；明文密钥不入库",
+    includeRepos: "仅迁移这些仓库",
+    includeReposHint: "逗号分隔仓库名；真机请只填一个小仓，避免全量占满磁盘。留空表示 plan 中全部。",
     runDiscover: "发现并落库",
     discoverOk: "发现成功，已落库为 planned",
     plannedHint: "任务已落库，状态为 planned",

@@ -45,6 +45,7 @@ func (OfflineBundle) Discover(ctx context.Context, cfg Config) (Plan, error) {
 	plan := emptyPlan()
 	contentDir := filepath.Join(root, "content")
 	manifestPath := filepath.Join(root, "manifest.json")
+	allow := includeSet(cfg.IncludeRepositories)
 
 	// 优先 manifest
 	if raw, err := os.ReadFile(manifestPath); err == nil {
@@ -53,6 +54,9 @@ func (OfflineBundle) Discover(ctx context.Context, cfg Config) (Plan, error) {
 			return Plan{}, &ErrInvalidConfig{Msg: "manifest.json 解析失败"}
 		}
 		for _, r := range m.Repositories {
+			if len(allow) > 0 && !allow[r.Name] {
+				continue
+			}
 			format, ok := mapNexusFormat(strings.ToLower(r.Format))
 			if !ok || !supportedFormat(format) {
 				plan.Warnings = append(plan.Warnings, "跳过不支持的 format: "+r.Name+" ("+r.Format+")")
@@ -88,6 +92,9 @@ func (OfflineBundle) Discover(ctx context.Context, cfg Config) (Plan, error) {
 			continue
 		}
 		name := e.Name()
+		if len(allow) > 0 && !allow[name] {
+			continue
+		}
 		count := countFilesUnder(filepath.Join(contentDir, name))
 		plan.Repositories = append(plan.Repositories, PlanRepository{
 			Name:            name,

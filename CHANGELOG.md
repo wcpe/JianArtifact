@@ -22,6 +22,10 @@
   - `GET .../report` 组装 totals/failures/cutover checklist；`POST .../finalize` 仅 completed，差量复制并写 `report.delta`。
 - 管理端迁移向导（见 `docs/specs/0.4.0-migration-web-wizard.md`）：
   - 侧栏「迁移」入口（admin）；列表 / 向导（discover→planned→显式 start）/ 详情（轮询、取消、续传、finalize、报告与 cutover 清单）。
+- 迁移真机可用性增强：
+  - `online_rest` 执行：按 plan 枚举 Nexus assets 并流式下载 `downloadUrl` 写入 hosted。
+  - `sourceConfig.includeRepositories`：发现/执行仅处理名单内仓库（避免全量占盘）。
+  - 仓库删除级联清理 asset 元数据（复测前可删仓重建）；补充删除单测。
 
 ### 变更
 

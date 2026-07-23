@@ -60,7 +60,26 @@ bundle/
 
 真实 3.70 blob store 布局可后续用录制样例替换。
 
-### 1.1.4 迁移切换（cutover）检查清单
+### 1.1.4 真机小范围迁移（推荐）
+
+全量迁移可能占满磁盘。请用 `sourceConfig.includeRepositories` **只迁一个小仓库**：
+
+```json
+{
+  "sourceType": "online_rest",
+  "sourceConfig": {
+    "url": "http://nexus:8081",
+    "includeRepositories": ["raw-hosted-small"]
+  },
+  "credentialRef": "NEXUS_BASIC",
+  "conflictPolicy": "skip"
+}
+```
+
+- 管理端向导「仅迁移这些仓库」字段会写入该配置。  
+- 复测前可在管理端 **删除** 目标仓库（`DELETE /api/v1/repositories/{name}`）：`asset` 表有 `ON DELETE CASCADE`，元数据会一并清除；blob 文件暂不 GC（内容寻址可残留，后续 GC 版本处理）。
+
+### 1.1.5 迁移切换（cutover）检查清单
 
 1. 将 CI / 客户端 registry 指向本 JianArtifact 实例  
 2. 将源 Nexus 置为只读（或断开写入）  

@@ -199,6 +199,18 @@ func (r *MigrationTaskRepo) SavePlan(id int64, planJSON string) error {
 	return affected(res, err)
 }
 
+// SaveSourceConfig 覆盖写入 source_config（无密钥）。
+func (r *MigrationTaskRepo) SaveSourceConfig(id int64, sourceConfig string) error {
+	if sourceConfig == "" {
+		sourceConfig = "{}"
+	}
+	res, err := r.db.Exec(
+		`UPDATE migration_task SET source_config = ?, updated_at = datetime('now') WHERE id = ?`,
+		sourceConfig, id,
+	)
+	return affected(res, err)
+}
+
 // FailInterruptedRunning 将所有 running 任务标为 failed（进程崩溃回收）。
 // 返回受影响行数。
 func (r *MigrationTaskRepo) FailInterruptedRunning(message string) (int64, error) {

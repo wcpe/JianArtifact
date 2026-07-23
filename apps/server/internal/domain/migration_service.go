@@ -223,6 +223,7 @@ func (s *MigrationService) Discover(ctx context.Context, in MigrationDiscoverInp
 		if v, ok := in.SourceConfig["path"].(string); ok {
 			cfg.Path = v
 		}
+		cfg.IncludeRepositories = parseIncludeRepos(in.SourceConfig["includeRepositories"])
 	}
 	if strings.TrimSpace(in.CredentialRef) != "" {
 		cred, err := ResolveCredential(in.CredentialRef)
@@ -293,6 +294,88 @@ func (s *MigrationService) Finalize(ctx context.Context, id int64) (*repository.
 // Report 返回任务（report_json 由 api 层组装）。
 func (s *MigrationService) Report(id int64) (*repository.MigrationTask, error) {
 	return s.Get(id)
+}
+
+// ApplyIncludeFilter 在 start 前可选收窄 plan：仅保留 include 中的仓库并写回 plan_json。
+// include 为空则不改动。
+func (s *MigrationService) ApplyIncludeFilter(id int64, include []string) (*repository.MigrationTask, error) {
+	if len(include) == 0 {
+		return s.Get(id)
+	}
+	t, err := s.Get(id)
+	if err != nil {
+		return nil, err
+	}
+	if t.Status != repository.MigrationStatusPlanned {
+		return nil, fmt.Errorf("%w: 仅 planned 可收窄 plan，当前 %s", ErrConflict, t.Status)
+	}
+	var plan discover.Plan
+	if t.PlanJSON != "" && t.PlanJSON != "{}" {
+		if err := json.Unmarshal([]byte(t.PlanJSON), &plan); err != nil {
+			return nil, fmt.Errorf("%w: plan 解析失败", ErrValidation)
+		}
+	}
+	allow := map[string]bool{}
+	for _, n := range include {
+		if n != "" {
+			allow[n] = true
+		}
+	}
+	filtered := make([]discover.PlanRepository, 0)
+	for _, r := range plan.Repositories {
+		if allow[r.Name] {
+			filtered = append(filtered, r)
+		}
+	}
+	if len(filtered) == 0 {
+		return nil, fmt.Errorf("%w: includeRepositories 未匹配 plan 中任何仓库", ErrValidation)
+	}
+	plan.Repositories = filtered
+	if plan.Stats == nil {
+		plan.Stats = map[string]any{}
+	}
+	plan.Stats["repositoryCount"] = len(filtered)
+	b, err := json.Marshal(plan)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.tasks.SavePlan(id, string(b)); err != nil {
+		return nil, mapNotFound(err)
+	}
+	// 同步写入 source_config.includeRepositories，便于 resume/finalize 一致
+	var cfg map[string]any
+	_ = json.Unmarshal([]byte(t.SourceConfig), &cfg)
+	if cfg == nil {
+		cfg = map[string]any{}
+	}
+	cfg["includeRepositories"] = include
+	cfgJSON, _ := json.Marshal(cfg)
+	// 直接 SQL 更新 source_config：经 UpdateStatus 不支持，用 SavePlan 后额外 Exec 不合适。
+	// 用 Create 字段不可；扩展 Repo 或复用 SaveCheckpoint 旁路——在 repo 加 SaveSourceConfig。
+	if err := s.tasks.SaveSourceConfig(id, string(cfgJSON)); err != nil {
+		return nil, mapNotFound(err)
+	}
+	return s.Get(id)
+}
+
+func parseIncludeRepos(raw any) []string {
+	if raw == nil {
+		return nil
+	}
+	switch v := raw.(type) {
+	case []string:
+		return v
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, x := range v {
+			if s, ok := x.(string); ok && s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 // ResolveCredential 读取 credentialRef 对应环境变量；缺失返回 ErrValidation。

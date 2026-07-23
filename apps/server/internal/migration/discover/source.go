@@ -41,6 +41,8 @@ type Config struct {
 	Credential string
 	// MaxAssetPages 在线资产分页上限（每仓）；0 表示默认 5。
 	MaxAssetPages int
+	// IncludeRepositories 非空时仅把名单内仓库纳入 plan（真机小范围验收）。
+	IncludeRepositories []string
 }
 
 // Source 三来源统一接口。
@@ -132,6 +134,22 @@ func requireURL(u string) error {
 		return &ErrInvalidConfig{Msg: "sourceConfig.url 不能为空"}
 	}
 	return nil
+}
+
+func includeSet(names []string) map[string]bool {
+	if len(names) == 0 {
+		return nil
+	}
+	m := make(map[string]bool, len(names))
+	for _, n := range names {
+		if n != "" {
+			m[n] = true
+		}
+	}
+	if len(m) == 0 {
+		return nil
+	}
+	return m
 }
 
 // NewSource 按 sourceType 构造 Source。

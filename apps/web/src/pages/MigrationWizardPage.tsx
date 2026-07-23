@@ -38,6 +38,8 @@ export function MigrationWizardPage() {
       path: "",
       credentialRef: "",
       conflictPolicy: "skip" as MigrationConflictPolicy,
+      /** 逗号分隔仓库名；真机小范围验收必填建议 */
+      includeRepositories: "",
     },
     validate: {
       url: (v, values) =>
@@ -51,10 +53,17 @@ export function MigrationWizardPage() {
 
   const runDiscover = form.onSubmit((values) => {
     setBusy(true);
+    const include = values.includeRepositories
+      .split(/[,，\s]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
     const sourceConfig: Record<string, unknown> =
       values.sourceType === "online_rest"
         ? { url: values.url.trim() }
         : { path: values.path.trim() };
+    if (include.length > 0) {
+      sourceConfig.includeRepositories = include;
+    }
     discoverMigrations({
       sourceType: values.sourceType,
       sourceConfig,
@@ -135,6 +144,12 @@ export function MigrationWizardPage() {
                 { value: "fail", label: "fail" },
               ]}
               {...form.getInputProps("conflictPolicy")}
+            />
+            <TextInput
+              label={t("migrations.includeRepos")}
+              description={t("migrations.includeReposHint")}
+              placeholder="maven-releases"
+              {...form.getInputProps("includeRepositories")}
             />
             <Group>
               <Button variant="default" onClick={() => setActive(0)}>

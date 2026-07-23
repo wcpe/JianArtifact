@@ -297,16 +297,70 @@ func (r *Runner) enumerate(task *repository.MigrationTask) ([]sourceItem, error)
 	path, _ := cfg["path"].(string)
 	urlStr, _ := cfg["url"].(string)
 
+	// 仅迁移白名单仓库，避免全量占满磁盘（真机验收常用）
+	plan.Repositories = filterPlanRepos(plan.Repositories, includeReposFromConfig(cfg))
+
 	switch task.SourceType {
 	case repository.MigrationSourceOfflineBundle:
 		return enumerateOfflineBundle(path, plan)
 	case repository.MigrationSourceOfflineDir:
 		return enumerateOfflineDir(path, plan)
 	case repository.MigrationSourceOnlineREST:
-		return enumerateOnlineREST(urlStr, task.CredentialRef.String, plan)
+		cred := ""
+		if task.CredentialRef.Valid && task.CredentialRef.String != "" {
+			var err error
+			cred, err = resolveCred(task.CredentialRef.String)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return enumerateOnlineREST(urlStr, cred, plan)
 	default:
 		return nil, fmt.Errorf("不支持的 sourceType %s", task.SourceType)
 	}
+}
+
+// includeReposFromConfig 读取 sourceConfig.includeRepositories（字符串数组）。
+func includeReposFromConfig(cfg map[string]any) []string {
+	if cfg == nil {
+		return nil
+	}
+	raw, ok := cfg["includeRepositories"]
+	if !ok || raw == nil {
+		return nil
+	}
+	switch v := raw.(type) {
+	case []string:
+		return v
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, x := range v {
+			if s, ok := x.(string); ok && s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+// filterPlanRepos 若 include 非空，仅保留名单内仓库。
+func filterPlanRepos(repos []discover.PlanRepository, include []string) []discover.PlanRepository {
+	if len(include) == 0 {
+		return repos
+	}
+	allow := make(map[string]bool, len(include))
+	for _, n := range include {
+		allow[n] = true
+	}
+	out := make([]discover.PlanRepository, 0, len(include))
+	for _, r := range repos {
+		if allow[r.Name] {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 func enumerateOfflineBundle(root string, plan discover.Plan) ([]sourceItem, error) {
@@ -405,17 +459,6 @@ func enumerateOfflineDir(root string, plan discover.Plan) ([]sourceItem, error) 
 		})
 	}
 	return items, nil
-}
-
-func enumerateOnlineREST(baseURL, credRef string, plan discover.Plan) ([]sourceItem, error) {
-	// MVP：在线执行依赖 downloadUrl 列表；若无详细资产清单，返回明确错误引导先用离线或后续增强。
-	// 为可测性：若 plan 为空仍报错。
-	if baseURL == "" {
-		return nil, errors.New("sourceConfig.url 为空")
-	}
-	_ = credRef
-	// 在线完整枚举+下载在 execute 增强；当前若无本地夹具则返回错误
-	return nil, errors.New("online_rest 执行请使用后续完整下载器；当前 MVP 请用 offline_bundle/offline_dir 验收")
 }
 
 type checkpoint struct {

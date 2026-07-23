@@ -49,6 +49,7 @@ func (OfflineDir) Discover(ctx context.Context, cfg Config) (Plan, error) {
 	}
 
 	plan := emptyPlan()
+	allow := includeSet(cfg.IncludeRepositories)
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -56,6 +57,9 @@ func (OfflineDir) Discover(ctx context.Context, cfg Config) (Plan, error) {
 		// 跳过常见非仓库名
 		name := e.Name()
 		if name == "content" || name == "blobs" || strings.HasPrefix(name, ".") {
+			continue
+		}
+		if len(allow) > 0 && !allow[name] {
 			continue
 		}
 		repoDir := filepath.Join(reposRoot, name)

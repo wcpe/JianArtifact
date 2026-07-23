@@ -51,9 +51,20 @@ func (s *OnlineREST) Discover(ctx context.Context, cfg Config) (Plan, error) {
 		return Plan{}, err
 	}
 
+	allow := map[string]bool{}
+	for _, n := range cfg.IncludeRepositories {
+		if n != "" {
+			allow[n] = true
+		}
+	}
+	filterOn := len(allow) > 0
+
 	plan := emptyPlan()
 	plan.Estimated = true
 	for _, r := range repos {
+		if filterOn && !allow[r.Name] {
+			continue
+		}
 		mapped, ok := mapNexusFormat(strings.ToLower(r.Format))
 		if !ok || !supportedFormat(mapped) {
 			plan.Warnings = append(plan.Warnings, "跳过不支持的 format: "+r.Name+" ("+r.Format+")")
@@ -77,6 +88,9 @@ func (s *OnlineREST) Discover(ctx context.Context, cfg Config) (Plan, error) {
 			Type:            typ,
 			EstimatedAssets: count,
 		})
+	}
+	if filterOn && len(plan.Repositories) == 0 {
+		plan.Warnings = append(plan.Warnings, "includeRepositories 未匹配到任何可迁移仓库")
 	}
 	return finalizePlan(plan), nil
 }
