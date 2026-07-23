@@ -8,6 +8,24 @@
 
 ### 新增
 
+- 暂无。
+
+### 变更
+
+- 暂无。
+
+### 修复
+
+- 暂无。
+
+### 移除
+
+- 暂无。
+
+## [0.3.0] - 2026-07-23
+
+### 新增
+
 - Raw hosted 协议纵切贯通（FR-13 部分 / FR-18，见 `docs/specs/0.3.0-raw-hosted.md` 与 `docs/adr/0009-protocol-auth-and-blob-layout.md`）：
   - `internal/blobstore` 文件系统内容寻址存储：sha256 两级分片布局 `<root>/ab/cd/<hash>`，临时文件 + 边写边算哈希 + 原子 rename 落盘，相同内容天然去重（`config` 补建 `blob/tmp` 目录）。
   - `0002_asset.sql` 迁移新增 `asset` 表（`UNIQUE(repository_id, path)` + 外键级联）与 `AssetRepo`（`Upsert`/`GetByPath`/`DeleteByPath`）；`domain.AssetService` 编排「校验 raw-hosted → 流式入 blob → upsert 元数据」的发布 / 拉取 / 删除。
@@ -34,19 +52,7 @@
   - `AssetRepo` 增 `ListByRepo`/`CountByRepo`（SQLite `LIKE ... ESCAPE '\'` 前缀过滤，转义 `%`/`_`/`\`）；`RepositoryService` 增 `ListAssets`/`Usage`，`buildUsage` 据 format/type 组装 maven/npm/raw 客户端接入片段（writable=hosted 才含写入片段），对外基址由 `X-Forwarded-Proto`/`Host` 推断（maven/raw→`<base>/repository/<name>`、npm→`<base>/npm/<name>/`）。
   - `api/openapi.yaml` 增两端点与 `AssetSummary`/`AssetList`/`UsageInfo`/`UsageSnippet` schema 及 `prefix` 参数，`oapi-codegen` 与 `openapi-typescript` 重生成；devmock store 补 `assets` 种子与 `listAssets`/`usage`（`buildUsage` 与后端一致）、msw 增两 handler、契约一致性测试覆盖新 schema。
   - `apps/web` 新增仓库详情页 `RepositoryDetailPage`（路由 `/repositories/:name`）：制品浏览表（路径/大小/哈希/更新时间 + 前缀过滤）与使用说明卡片（`CopyButton` 可复制），仓库列表页增「浏览」入口 + i18n `repoDetail` 文案。
-- 原生客户端真机验收脚手架（FR-19，见 `scripts/e2e-smoke.mjs`）：跨平台 Node 冒烟脚本（`node scripts/e2e-smoke.mjs`，仅依赖 Node 内置 fetch）扩 0.3.0 全链路 roundtrip——Raw hosted 发布/拉取、制品浏览 + 使用片段（含 prefix 过滤与权限）、Maven hosted deploy/resolve（含缺失校验和现算）、npm publish/install（含 packument tarball 重写与字节一致）；原生 `mvn`/`npm` 客户端按可用性自动探测提示，proxy/group 外网回源经 `--include-proxy` 可选开启。真机验收由用户本地执行，通过后方由发版流程标注 FR 状态。
-
-### 变更
-
-- 暂无。
-
-### 修复
-
-- 暂无。
-
-### 移除
-
-- 暂无。
+- 原生客户端真机验收脚手架（FR-19，见 `scripts/e2e-smoke.mjs`）：跨平台 Node 冒烟脚本（`node scripts/e2e-smoke.mjs`，仅依赖 Node 内置 fetch）扩 0.3.0 全链路 roundtrip——Raw hosted 发布/拉取、制品浏览 + 使用片段（含 prefix 过滤与权限）、Maven hosted deploy/resolve（含缺失校验和现算）、npm publish/install（含 packument tarball 重写与字节一致）；原生 `mvn`/`npm` 客户端按可用性自动探测提示，proxy/group 外网回源经 `--include-proxy` 可选开启。发版前已完成 curl/mvn/npm 原生客户端真机互通验收。
 
 ## [0.2.0] - 2026-07-22
 

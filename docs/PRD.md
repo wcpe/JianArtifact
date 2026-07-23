@@ -55,13 +55,13 @@ JianArtifact 是一个**自托管、单二进制交付的多格式制品仓库**
 | FR-10 | 仓库管理 + 可见性 / 读写 ACL                                                      | P1     | 已交付@v0.2.0 |
 | FR-11 | 管理端 web 全页面（Mantine 7 + i18next）对 devmock 完成                           | P1     | 已交付@v0.2.0 |
 | FR-12 | wiki UI 组件 / 业务模式验收站                                                     | P1     | 已交付@v0.2.0 |
-| FR-13 | Raw 协议：hosted + proxy + group                                                  | P1     | 计划   |
-| FR-14 | Maven 协议：hosted + proxy + group（含元数据）                                    | P1     | 计划   |
-| FR-15 | npm 协议：hosted + proxy + group                                                  | P1     | 计划   |
-| FR-16 | hosted/proxy 通用能力：浏览、使用片段、健康检查 / 就绪自检                        | P1     | 计划   |
-| FR-17 | 并发下载单飞合并（single-flight）+ 大文件流式处理                                 | P1     | 计划   |
-| FR-18 | 内容寻址 blob 存储（文件系统）+ 校验和校验                                        | P1     | 计划   |
-| FR-19 | 原生客户端（curl/mvn/npm）互通真机验收                                            | P1     | 计划   |
+| FR-13 | Raw 协议：hosted + proxy + group                                                  | P1     | 已交付@v0.3.0 |
+| FR-14 | Maven 协议：hosted + proxy + group（含元数据）                                    | P1     | 已交付@v0.3.0 |
+| FR-15 | npm 协议：hosted + proxy + group                                                  | P1     | 已交付@v0.3.0 |
+| FR-16 | hosted/proxy 通用能力：浏览、使用片段、健康检查 / 就绪自检                        | P1     | 已交付@v0.3.0 |
+| FR-17 | 并发下载单飞合并（single-flight）+ 大文件流式处理                                 | P1     | 已交付@v0.3.0 |
+| FR-18 | 内容寻址 blob 存储（文件系统）+ 校验和校验                                        | P1     | 已交付@v0.3.0 |
+| FR-19 | 原生客户端（curl/mvn/npm）互通真机验收                                            | P1     | 已交付@v0.3.0 |
 | FR-20 | Nexus 迁移：三来源发现（在线 REST / 离线原生目录 / 自有离线包）                   | P1     | 计划   |
 | FR-21 | Nexus 迁移：计划预览 + 异步任务状态机                                             | P1     | 计划   |
 | FR-22 | Nexus 迁移：持久化与幂等续传 + 冲突策略                                           | P1     | 计划   |

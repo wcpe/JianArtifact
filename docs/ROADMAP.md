@@ -39,6 +39,7 @@
 
 - Raw / Maven / npm 的 hosted + proxy + group；通用能力（浏览、使用片段、健康检查 / 就绪自检）；single-flight + 大文件流式；内容寻址 blob + 校验。
 - 门禁（实机·须用户确认）：curl / mvn / npm 原生客户端互通验收通过；并发与大文件测试穷举通过。
+- 状态：**已交付@v0.3.0**（FR-13–19 验收门全绿：Go/前端测试全绿、e2e smoke 58/0、原生 curl/mvn/npm 互通真机通过）。
 
 ### 0.4.0 Nexus 迁移域
 
