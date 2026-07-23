@@ -8,7 +8,33 @@
 
 ### 新增
 
-- 暂无。
+- Raw hosted 协议纵切贯通（FR-13 部分 / FR-18，见 `docs/specs/0.3.0-raw-hosted.md` 与 `docs/adr/0009-protocol-auth-and-blob-layout.md`）：
+  - `internal/blobstore` 文件系统内容寻址存储：sha256 两级分片布局 `<root>/ab/cd/<hash>`，临时文件 + 边写边算哈希 + 原子 rename 落盘，相同内容天然去重（`config` 补建 `blob/tmp` 目录）。
+  - `0002_asset.sql` 迁移新增 `asset` 表（`UNIQUE(repository_id, path)` + 外键级联）与 `AssetRepo`（`Upsert`/`GetByPath`/`DeleteByPath`）；`domain.AssetService` 编排「校验 raw-hosted → 流式入 blob → upsert 元数据」的发布 / 拉取 / 删除。
+  - `internal/protocol` Raw handler + router：`GET|HEAD|PUT|DELETE /repository/{repo}/{path...}`，GET 回写 `Content-Type`/`Content-Length`/`ETag`(=blob sha256)；错误映射 401/403/404/409；经 `httpserver.WithProtocolRoutes` 注册于契约路由之后、SPA 回退之前。
+  - 鉴权：auth 中间件补 `Authorization: Basic` 解析（token 作 password，为空则 username），仅接受 `jat_` API Token（不启用口令登录），Bearer 行为不变；协议端点复用 `CanAccess`（public read 匿名放行）。
+- 仓库配置基座：proxy/group 契约扩展与校验（FR-13 proxy/group 前置，见 `docs/specs/0.3.0-repository-config.md`）：
+  - proxy/group 配置复用 `repository` 表既有 `config` JSON 列（`{"remoteUrl":...,"members":[...]}`），不新增迁移；`repository` 新增 `RepositoryConfig` 结构与 `DecodeConfig`/`EncodeRepositoryConfig` 编解码，`RepoRepo.Create` 增 config 入参、`GetByName`/`List` 读回 config、新增 `UpdateConfig`。
+  - `domain.RepositoryService.Create`/`Update` 改为结构化配置签名并新增 `validateConfig`：hosted 两字段须空、proxy 必填合法 http/https `remoteUrl`、group 必填 `members`（成员均存在、同 format、禁自引用），违规返回新增语义 `ErrValidation`（经 `writeDomainErr` 映射 400）。
+  - `api/openapi.yaml` 的 `Repository`/`CreateRepositoryRequest`/`UpdateRepositoryRequest` 增可选 `remoteUrl`/`members`，`oapi-codegen` 与 `openapi-typescript` 重生成；devmock store/handlers 透传字段并补 npm-proxy 种子 `remoteUrl`；web 仓库创建表单据 `type` 条件渲染 remoteUrl（proxy）与 members 多选（group）+ i18n 文案。
+- Raw proxy/group 回源与聚合读（FR-13 proxy/group 全 / FR-17 / FR-18 复验，见 `docs/specs/0.3.0-raw-proxy-group.md` 与 `docs/adr/0010-proxy-cache-singleflight-group-routing.md`）：
+  - 新增 `internal/upstream` 回源客户端：`Client.Fetch(ctx, baseURL, path)` 流式返回上游内容 + 响应头，上游 404→`ErrNotFound`、非 2xx→`StatusError`、支持 `IsTimeout` 超时判定；超时可配（`JIAN_UPSTREAM_TIMEOUT` 秒，默认 30s），`config`/wiring 装配注入 `AssetService`。
+  - `domain.AssetService` 新增 `Resolve(ctx, repoName, path)` 按 `repo.Type` 分派读路径：hosted 读本地；proxy 命中即返回、未命中经 upstream 回源**流式**落 blob（不整体入内存）并 upsert 缓存后返回；group 按 `members` 有序递归解析、首个命中即返回、全未命中→404（深度上限遏制环引用）。以 `golang.org/x/sync/singleflight`（键 `repoID\x00path`）收敛并发首次回源，同一未命中路径只回源一次。
+  - 新增领域错误 `ErrUpstream`（→502）、`ErrUpstreamTimeout`（→504）；`protocol/raw.go` 的 `GET/HEAD` 改用 `Resolve`（支持 hosted/proxy/group 读），`writeAssetErr` 补 `upstream_error`/`upstream_timeout` 映射；`PUT`/`DELETE` 仍仅 hosted（proxy/group 写→409）。proxy 暂不做缓存失效/TTL、GC 仍不即时。
+- Maven 全类型 hosted/proxy/group（FR-14，见 `docs/specs/0.3.0-maven.md`）：
+  - `/repository/:repo/*artifactPath` 端点改由单一路由 + `protocol.Dispatcher` 按仓库 `format` 分派（`maven`→`MavenHandler`，其余→`RawHandler`）；`RegisterRoutes` 签名泛化为 `artifactHandler` 接口。制品字节的发布/拉取/删除与鉴权复用既有内容寻址存储与 `AssetService.Resolve`（hosted 本地 / proxy 回源缓存 / group 有序聚合），`MavenHandler` 经 Go 嵌入 `RawHandler` 仅覆盖 GET。
+  - Maven 语义补两点：校验和文件 `.md5/.sha1/.sha256` 缺失时据去后缀的底层制品字节现算摘要以 `text/plain` 返回（已部署则原样优先命中）；group 的 `maven-metadata.xml` 按 `members` 有序合并各成员 `versions`（去重）并重算 `latest`/`release`/`lastUpdated`，全成员皆无→404。
+  - `domain.AssetService.Put` 校验由 raw-hosted 放宽为 **hosted-only**（格式路由上移至协议层）；无新增表/迁移。SNAPSHOT 唯一时间戳版本按路径原样存取，group metadata 版本顺序采成员出现顺序而非语义化比较（边界见 spec）。
+- npm registry 全类型 hosted/proxy/group（FR-15，见 `docs/specs/0.3.0-npm.md` 与 `docs/adr/0011-npm-registry-layout-and-tarball-rewrite.md`）：
+  - 新增 `internal/protocol/npm.go` + `RegisterNpmRoutes`：registry 基址 `<server>/npm/:repo/`，单 catch-all `/:repo/*rest` 在 handler 内解析 packument（`GET <pkg>`）/tarball（`GET <pkg>/-/<file>`）/publish（`PUT <pkg>`），支持 scoped `@scope/name`；与 `/api/v1`、`/repository`、SPA 回退互不冲突。`NpmHandler` 经 Go 嵌入 `RawHandler` 复用鉴权与制品存取。
+  - 复用内容寻址 blob + `asset` 表（无新增表）：packument 整份文档存于路径 `<pkg>`、tarball 存于 `<pkg>/-/<file>`。publish 解码 `_attachments` base64 落各 tarball、与已存 packument 合并（versions/dist-tags/time 逐键 last-writer-wins）后覆盖写；install 经 `AssetService.Resolve` 拉取。
+  - 服务端统一把 packument 各版本 `dist.tarball` 重写为 `<请求基址>/npm/<本仓>/<pkg>/-/<原文件名>`（依 `X-Forwarded-Proto`/`Host`）：proxy 回源上游 packument/tarball 并缓存、group 合并成员 packument（versions 并集、dist-tags 首成员优先）并经有序命中回落 tarball，客户端始终经本仓拉取。publish 仍仅 hosted（proxy/group 写→409）。
+- 制品浏览与使用说明（FR-16，见 `docs/specs/0.3.0-browse-usage.md`）：
+  - 新增只读管理面端点 `GET /api/v1/repositories/{name}/assets`（分页 + 可选 `prefix` 前缀过滤，返回 `AssetList{items:[AssetSummary{path,size,hash,contentType?,updatedAt}],total}`，按 path 升序）与 `GET /api/v1/repositories/{name}/usage`（据 format/type 返回 `UsageInfo{format,type,snippets:[UsageSnippet{title,description?,code}]}`）；均经 `requireRepoRead` 授权（admin/`CanAccess(read)`，public 匿名可读），未认证 401、越权 403、仓库不存在 404。
+  - `AssetRepo` 增 `ListByRepo`/`CountByRepo`（SQLite `LIKE ... ESCAPE '\'` 前缀过滤，转义 `%`/`_`/`\`）；`RepositoryService` 增 `ListAssets`/`Usage`，`buildUsage` 据 format/type 组装 maven/npm/raw 客户端接入片段（writable=hosted 才含写入片段），对外基址由 `X-Forwarded-Proto`/`Host` 推断（maven/raw→`<base>/repository/<name>`、npm→`<base>/npm/<name>/`）。
+  - `api/openapi.yaml` 增两端点与 `AssetSummary`/`AssetList`/`UsageInfo`/`UsageSnippet` schema 及 `prefix` 参数，`oapi-codegen` 与 `openapi-typescript` 重生成；devmock store 补 `assets` 种子与 `listAssets`/`usage`（`buildUsage` 与后端一致）、msw 增两 handler、契约一致性测试覆盖新 schema。
+  - `apps/web` 新增仓库详情页 `RepositoryDetailPage`（路由 `/repositories/:name`）：制品浏览表（路径/大小/哈希/更新时间 + 前缀过滤）与使用说明卡片（`CopyButton` 可复制），仓库列表页增「浏览」入口 + i18n `repoDetail` 文案。
+- 原生客户端真机验收脚手架（FR-19，见 `scripts/e2e-smoke.mjs`）：跨平台 Node 冒烟脚本（`node scripts/e2e-smoke.mjs`，仅依赖 Node 内置 fetch）扩 0.3.0 全链路 roundtrip——Raw hosted 发布/拉取、制品浏览 + 使用片段（含 prefix 过滤与权限）、Maven hosted deploy/resolve（含缺失校验和现算）、npm publish/install（含 packument tarball 重写与字节一致）；原生 `mvn`/`npm` 客户端按可用性自动探测提示，proxy/group 外网回源经 `--include-proxy` 可选开启。真机验收由用户本地执行，通过后方由发版流程标注 FR 状态。
 
 ### 变更
 

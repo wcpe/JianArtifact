@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   mockAclList,
+  mockAssetList,
   mockHealthz,
   mockLoginResponse,
   mockReadyz,
@@ -15,6 +16,7 @@ import {
   mockTokenCreated,
   mockTokenList,
   mockUnavailable,
+  mockUsageInfo,
   mockUser,
   mockUserList,
 } from "../src/handlers";
@@ -62,6 +64,11 @@ describe("devmock ↔ OpenAPI 契约一致性", () => {
     expectValid("Repository", mockRepository());
     expectValid("RepositoryList", mockRepositoryList());
     expectValid("AclList", mockAclList());
+  });
+
+  it("制品浏览 / 使用片段响应满足契约", () => {
+    expectValid("AssetList", mockAssetList());
+    expectValid("UsageInfo", mockUsageInfo());
   });
 
   it("契约漂移可被检出：缺 required 字段或非法枚举的响应校验失败", () => {

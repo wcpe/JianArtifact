@@ -15,6 +15,10 @@ export type RepositoryList = Schemas["RepositoryList"];
 export type AclEntry = Schemas["AclEntry"];
 export type AclList = Schemas["AclList"];
 export type LoginResponse = Schemas["LoginResponse"];
+export type AssetSummary = Schemas["AssetSummary"];
+export type AssetList = Schemas["AssetList"];
+export type UsageSnippet = Schemas["UsageSnippet"];
+export type UsageInfo = Schemas["UsageInfo"];
 
 export type UserRole = User["role"];
 export type UserStatus = User["status"];

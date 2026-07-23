@@ -27,6 +27,11 @@ if (!window.ResizeObserver) {
   window.ResizeObserver = ResizeObserverStub;
 }
 
+// jsdom 未实现 scrollIntoView；Mantine Combobox（Select/MultiSelect）选项聚焦时会调用它。
+if (!Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = () => {};
+}
+
 beforeAll(() => {
   server.listen({ onUnhandledRequest: "error" });
 });

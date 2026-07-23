@@ -50,7 +50,7 @@ func newTestEnv(t *testing.T) *testEnv {
 		Auth:      domain.NewAuthService(userRepo, revokedRepo, jwtMgr),
 		Users:     domain.NewUserService(userRepo),
 		Tokens:    domain.NewTokenService(tokenRepo),
-		Repos:     domain.NewRepositoryService(repoRepo, aclRepo),
+		Repos:     domain.NewRepositoryService(repoRepo, aclRepo, repository.NewAssetRepo(db)),
 	})
 
 	srv := httpserver.New("test",
@@ -198,6 +198,87 @@ func TestAuthFlowEndToEnd(t *testing.T) {
 	}
 	if code := e.do(t, http.MethodGet, "/api/v1/users", adminToken, nil, nil); code != http.StatusUnauthorized {
 		t.Errorf("登出后旧令牌列用户状态码 = %d，期望 401", code)
+	}
+}
+
+// TestBrowseAndUsageEndpoints 覆盖制品浏览与使用片段（FR-16）：
+// 管理员建 public maven 仓库后，usage 按 format 返回接入片段、assets 空列表；
+// 无 read 权限的私有仓库对非授权用户返回 403。
+func TestBrowseAndUsageEndpoints(t *testing.T) {
+	e := newTestEnv(t)
+
+	var boot api.LoginResponse
+	if code := e.do(t, http.MethodPost, "/api/v1/auth/bootstrap", "",
+		api.BootstrapRequest{Username: "admin", Password: "admin-pass-123"}, &boot); code != http.StatusCreated {
+		t.Fatalf("自举状态码 = %d，期望 201", code)
+	}
+	adminToken := boot.Token
+
+	// 建 public maven hosted 仓库（public 便于验证 read 放行）。
+	public := api.CreateRepositoryRequestVisibilityPublic
+	if code := e.do(t, http.MethodPost, "/api/v1/repositories", adminToken,
+		api.CreateRepositoryRequest{Name: "mvn-pub", Format: "maven", Type: "hosted", Visibility: &public}, nil); code != http.StatusCreated {
+		t.Fatalf("建仓库状态码 = %d，期望 201", code)
+	}
+
+	// usage：format=maven、type=hosted，含若干片段。
+	var usage api.UsageInfo
+	if code := e.do(t, http.MethodGet, "/api/v1/repositories/mvn-pub/usage", adminToken, nil, &usage); code != http.StatusOK {
+		t.Fatalf("usage 状态码 = %d，期望 200", code)
+	}
+	if usage.Format != "maven" || usage.Type != "hosted" {
+		t.Errorf("usage format/type 异常：%+v", usage)
+	}
+	if len(usage.Snippets) == 0 {
+		t.Error("usage 应返回至少一段接入片段")
+	}
+
+	// assets：新仓库为空列表，total=0。
+	var assets api.AssetList
+	if code := e.do(t, http.MethodGet, "/api/v1/repositories/mvn-pub/assets", adminToken, nil, &assets); code != http.StatusOK {
+		t.Fatalf("assets 状态码 = %d，期望 200", code)
+	}
+	if assets.Total != 0 || len(assets.Items) != 0 {
+		t.Errorf("空仓库 assets 应为空，得 total=%d len=%d", assets.Total, len(assets.Items))
+	}
+
+	// public 仓库匿名可读 usage/assets → 200（与协议层匿名 public 读一致）。
+	if code := e.do(t, http.MethodGet, "/api/v1/repositories/mvn-pub/usage", "", nil, nil); code != http.StatusOK {
+		t.Errorf("匿名读 public usage 状态码 = %d，期望 200", code)
+	}
+	if code := e.do(t, http.MethodGet, "/api/v1/repositories/mvn-pub/assets", "", nil, nil); code != http.StatusOK {
+		t.Errorf("匿名读 public assets 状态码 = %d，期望 200", code)
+	}
+
+	// 未知仓库 → 404。
+	if code := e.do(t, http.MethodGet, "/api/v1/repositories/ghost/usage", adminToken, nil, nil); code != http.StatusNotFound {
+		t.Errorf("未知仓库 usage 状态码 = %d，期望 404", code)
+	}
+
+	// 建私有仓库，非授权用户读 assets/usage → 403。
+	if code := e.do(t, http.MethodPost, "/api/v1/repositories", adminToken,
+		api.CreateRepositoryRequest{Name: "mvn-priv", Format: "maven", Type: "hosted"}, nil); code != http.StatusCreated {
+		t.Fatalf("建私有仓库状态码 = %d，期望 201", code)
+	}
+	var alice api.User
+	if code := e.do(t, http.MethodPost, "/api/v1/users", adminToken,
+		api.CreateUserRequest{Username: "alice", Password: "alice-pass-123"}, &alice); code != http.StatusCreated {
+		t.Fatalf("建用户状态码 = %d，期望 201", code)
+	}
+	var aliceLogin api.LoginResponse
+	if code := e.do(t, http.MethodPost, "/api/v1/auth/login", "",
+		api.LoginRequest{Username: "alice", Password: "alice-pass-123"}, &aliceLogin); code != http.StatusOK {
+		t.Fatalf("alice 登录状态码 = %d，期望 200", code)
+	}
+	if code := e.do(t, http.MethodGet, "/api/v1/repositories/mvn-priv/assets", aliceLogin.Token, nil, nil); code != http.StatusForbidden {
+		t.Errorf("alice 无 read 权读 assets 状态码 = %d，期望 403", code)
+	}
+	if code := e.do(t, http.MethodGet, "/api/v1/repositories/mvn-priv/usage", aliceLogin.Token, nil, nil); code != http.StatusForbidden {
+		t.Errorf("alice 无 read 权读 usage 状态码 = %d，期望 403", code)
+	}
+	// 私有仓库匿名读 → 401（未认证），区别于已认证越权的 403。
+	if code := e.do(t, http.MethodGet, "/api/v1/repositories/mvn-priv/usage", "", nil, nil); code != http.StatusUnauthorized {
+		t.Errorf("匿名读 private usage 状态码 = %d，期望 401", code)
 	}
 }
 

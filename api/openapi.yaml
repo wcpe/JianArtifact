@@ -390,6 +390,47 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+  /api/v1/repositories/{name}/assets:
+    get:
+      operationId: listRepositoryAssets
+      summary: 列出仓库制品（分页，可按路径前缀过滤）
+      parameters:
+        - $ref: "#/components/parameters/RepoNameParam"
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/PageSizeParam"
+        - $ref: "#/components/parameters/PrefixParam"
+      responses:
+        "200":
+          description: 制品列表
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/v1/repositories/{name}/usage:
+    get:
+      operationId: getRepositoryUsage
+      summary: 仓库客户端使用片段（据 format/type 返回接入命令）
+      parameters:
+        - $ref: "#/components/parameters/RepoNameParam"
+      responses:
+        "200":
+          description: 使用片段
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsageInfo"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
 components:
   securitySchemes:
     bearerAuth:
@@ -432,6 +473,13 @@ components:
       name: name
       in: path
       required: true
+      schema:
+        type: string
+    PrefixParam:
+      name: prefix
+      in: query
+      required: false
+      description: 按制品路径前缀过滤
       schema:
         type: string
   responses:
@@ -641,6 +689,14 @@ components:
         visibility:
           type: string
           enum: [public, private]
+        remoteUrl:
+          type: string
+          description: proxy 仓库的上游地址（仅 type=proxy）
+        members:
+          type: array
+          items:
+            type: string
+          description: group 仓库的成员仓库名（有序，仅 type=group）
         createdAt:
           type: string
     RepositoryList:
@@ -670,12 +726,28 @@ components:
           type: string
           enum: [public, private]
           default: private
+        remoteUrl:
+          type: string
+          description: proxy 仓库的上游地址（type=proxy 时必填）
+        members:
+          type: array
+          items:
+            type: string
+          description: group 仓库的成员仓库名（有序，type=group 时必填）
     UpdateRepositoryRequest:
       type: object
       properties:
         visibility:
           type: string
           enum: [public, private]
+        remoteUrl:
+          type: string
+          description: 更新 proxy 上游地址（仅 type=proxy）
+        members:
+          type: array
+          items:
+            type: string
+          description: 更新 group 成员仓库名（仅 type=group）
     AclEntry:
       type: object
       required: [subjectId, action]
@@ -702,3 +774,51 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/AclEntry"
+    AssetSummary:
+      type: object
+      required: [path, size, hash, updatedAt]
+      properties:
+        path:
+          type: string
+        size:
+          type: integer
+          format: int64
+        hash:
+          type: string
+          description: 内容寻址 blob 的 sha256 摘要
+        contentType:
+          type: string
+        updatedAt:
+          type: string
+    AssetList:
+      type: object
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AssetSummary"
+        total:
+          type: integer
+    UsageSnippet:
+      type: object
+      required: [title, code]
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        code:
+          type: string
+    UsageInfo:
+      type: object
+      required: [format, type, snippets]
+      properties:
+        format:
+          type: string
+        type:
+          type: string
+        snippets:
+          type: array
+          items:
+            $ref: "#/components/schemas/UsageSnippet"

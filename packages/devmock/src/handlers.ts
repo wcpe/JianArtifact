@@ -16,6 +16,8 @@ export type TokenCreated = Schemas["TokenCreated"];
 export type Repository = Schemas["Repository"];
 export type RepositoryList = Schemas["RepositoryList"];
 export type AclList = Schemas["AclList"];
+export type AssetList = Schemas["AssetList"];
+export type UsageInfo = Schemas["UsageInfo"];
 
 const MOCK_VERSION = "0.2.0-mock";
 const MOCK_TIME = "2026-01-01T00:00:00Z";
@@ -102,4 +104,31 @@ export function mockRepositoryList(): RepositoryList {
 /** 仓库 ACL 的契约响应。 */
 export function mockAclList(): AclList {
   return { items: [{ subjectId: 1, action: "read" }] };
+}
+
+/** GET /api/v1/repositories/{name}/assets 的契约响应。 */
+export function mockAssetList(): AssetList {
+  return {
+    items: [
+      {
+        path: "com/example/app/1.0.0/app-1.0.0.jar",
+        size: 20480,
+        hash: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+        contentType: "application/java-archive",
+        updatedAt: MOCK_TIME,
+      },
+    ],
+    total: 1,
+  };
+}
+
+/** GET /api/v1/repositories/{name}/usage 的契约响应。 */
+export function mockUsageInfo(): UsageInfo {
+  return {
+    format: "maven",
+    type: "hosted",
+    snippets: [
+      { title: "解析依赖（pom.xml）", description: "在 <repositories> 中声明该仓库。", code: "<repository>...</repository>" },
+    ],
+  };
 }

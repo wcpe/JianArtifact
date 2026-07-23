@@ -4,6 +4,7 @@ import { request } from "./client";
 import type {
   AclEntry,
   AclList,
+  AssetList,
   LoginResponse,
   Repository,
   RepositoryList,
@@ -13,6 +14,7 @@ import type {
   StatusInfo,
   TokenCreated,
   TokenList,
+  UsageInfo,
   User,
   UserList,
   UserRole,
@@ -100,13 +102,15 @@ export function createRepository(input: {
   format: RepoFormat;
   type: RepoType;
   visibility: RepoVisibility;
+  remoteUrl?: string;
+  members?: string[];
 }): Promise<Repository> {
   return request<Repository>("/repositories", { method: "POST", body: input });
 }
 
 export function updateRepository(
   name: string,
-  patch: { visibility?: RepoVisibility },
+  patch: { visibility?: RepoVisibility; remoteUrl?: string; members?: string[] },
 ): Promise<Repository> {
   return request<Repository>(`/repositories/${name}`, { method: "PATCH", body: patch });
 }
@@ -121,4 +125,20 @@ export function getAcl(name: string): Promise<AclList> {
 
 export function setAcl(name: string, items: AclEntry[]): Promise<AclList> {
   return request<AclList>(`/repositories/${name}/acl`, { method: "PUT", body: { items } });
+}
+
+export interface AssetQuery extends Pagination {
+  prefix?: string;
+}
+
+/** 制品浏览：分页列出仓库内 asset 路径/大小/hash/更新时间，支持前缀过滤。 */
+export function listRepositoryAssets(name: string, params: AssetQuery = {}): Promise<AssetList> {
+  return request<AssetList>(`/repositories/${name}/assets`, {
+    query: { page: params.page, page_size: params.page_size, prefix: params.prefix },
+  });
+}
+
+/** 使用说明：据 format/type 返回 curl/mvn/npm 客户端配置片段。 */
+export function getRepositoryUsage(name: string): Promise<UsageInfo> {
+  return request<UsageInfo>(`/repositories/${name}/usage`);
 }

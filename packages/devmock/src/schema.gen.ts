@@ -248,6 +248,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/repositories/{name}/assets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 列出仓库制品（分页，可按路径前缀过滤） */
+        get: operations["listRepositoryAssets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/repositories/{name}/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 仓库客户端使用片段（据 format/type 返回接入命令） */
+        get: operations["getRepositoryUsage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -344,6 +378,10 @@ export interface components {
             type: "hosted" | "proxy" | "group";
             /** @enum {string} */
             visibility: "public" | "private";
+            /** @description proxy 仓库的上游地址（仅 type=proxy） */
+            remoteUrl?: string;
+            /** @description group 仓库的成员仓库名（有序，仅 type=group） */
+            members?: string[];
             createdAt: string;
         };
         RepositoryList: {
@@ -361,10 +399,18 @@ export interface components {
              * @enum {string}
              */
             visibility: "public" | "private";
+            /** @description proxy 仓库的上游地址（type=proxy 时必填） */
+            remoteUrl?: string;
+            /** @description group 仓库的成员仓库名（有序，type=group 时必填） */
+            members?: string[];
         };
         UpdateRepositoryRequest: {
             /** @enum {string} */
             visibility?: "public" | "private";
+            /** @description 更新 proxy 上游地址（仅 type=proxy） */
+            remoteUrl?: string;
+            /** @description 更新 group 成员仓库名（仅 type=group） */
+            members?: string[];
         };
         AclEntry: {
             /** Format: int64 */
@@ -377,6 +423,29 @@ export interface components {
         };
         PutAclRequest: {
             items: components["schemas"]["AclEntry"][];
+        };
+        AssetSummary: {
+            path: string;
+            /** Format: int64 */
+            size: number;
+            /** @description 内容寻址 blob 的 sha256 摘要 */
+            hash: string;
+            contentType?: string;
+            updatedAt: string;
+        };
+        AssetList: {
+            items: components["schemas"]["AssetSummary"][];
+            total: number;
+        };
+        UsageSnippet: {
+            title: string;
+            description?: string;
+            code: string;
+        };
+        UsageInfo: {
+            format: string;
+            type: string;
+            snippets: components["schemas"]["UsageSnippet"][];
         };
     };
     responses: {
@@ -432,6 +501,8 @@ export interface components {
         UserIdParam: number;
         TokenIdParam: number;
         RepoNameParam: string;
+        /** @description 按制品路径前缀过滤 */
+        PrefixParam: string;
     };
     requestBodies: never;
     headers: never;
@@ -945,6 +1016,61 @@ export interface operations {
                 };
             };
             400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listRepositoryAssets: {
+        parameters: {
+            query?: {
+                page?: components["parameters"]["PageParam"];
+                page_size?: components["parameters"]["PageSizeParam"];
+                /** @description 按制品路径前缀过滤 */
+                prefix?: components["parameters"]["PrefixParam"];
+            };
+            header?: never;
+            path: {
+                name: components["parameters"]["RepoNameParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 制品列表 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssetList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    getRepositoryUsage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: components["parameters"]["RepoNameParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 使用片段 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageInfo"];
+                };
+            };
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];

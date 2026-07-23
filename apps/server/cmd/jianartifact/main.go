@@ -18,10 +18,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gin-gonic/gin"
+
 	"github.com/wcpe/jianartifact/apps/server/internal/api"
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 	"github.com/wcpe/jianartifact/apps/server/internal/config"
 	"github.com/wcpe/jianartifact/apps/server/internal/httpserver"
+	"github.com/wcpe/jianartifact/apps/server/internal/protocol"
 	"github.com/wcpe/jianartifact/apps/server/web"
 )
 
@@ -152,11 +155,23 @@ func run() error {
 	checks := []func() error{svc.db.Ping, blobWritableCheck(cfg.BlobDir)}
 	authenticator := auth.NewAuthenticator(svc.jwt, svc.store)
 
+	// 协议层（Raw / Maven 等）经原生客户端访问，不在 OpenAPI 契约内；
+	// 复用支持 Basic + Bearer 的 Optional() 中间件解析主体，鉴权在 handler 内判定。
+	// Dispatcher 按仓库 format 将 /repository 端点分派到对应格式处理器。
+	rawHandler := protocol.NewRawHandler(svc.assetSvc, svc.repoSvc)
+	mavenHandler := protocol.NewMavenHandler(rawHandler)
+	dispatcher := protocol.NewDispatcher(svc.repoSvc, rawHandler, mavenHandler)
+	npmHandler := protocol.NewNpmHandler(rawHandler)
+
 	srv := httpserver.New(version,
 		httpserver.WithReadinessCheck(svc.db.Ping),
 		httpserver.WithReadinessCheck(blobWritableCheck(cfg.BlobDir)),
 		httpserver.WithHandlers(svc.handlers(version, checks)),
 		httpserver.WithMiddleware(api.MiddlewareFunc(authenticator.Optional())),
+		httpserver.WithProtocolRoutes(func(r gin.IRouter) {
+			protocol.RegisterRoutes(r, dispatcher, authenticator.Optional())
+			protocol.RegisterNpmRoutes(r, npmHandler, authenticator.Optional())
+		}),
 	)
 	httpServer := &http.Server{
 		Addr:              cfg.HTTPAddr,

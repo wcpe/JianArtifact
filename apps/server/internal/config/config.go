@@ -9,16 +9,20 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"time"
 )
 
 // 默认值与环境变量名。
 const (
-	EnvDataDir   = "JIAN_DATA_DIR"
-	EnvHTTPAddr  = "JIAN_HTTP_ADDR"
-	EnvJWTSecret = "JIAN_JWT_SECRET"
+	EnvDataDir         = "JIAN_DATA_DIR"
+	EnvHTTPAddr        = "JIAN_HTTP_ADDR"
+	EnvJWTSecret       = "JIAN_JWT_SECRET"
+	EnvUpstreamTimeout = "JIAN_UPSTREAM_TIMEOUT" // proxy 回源整体超时，单位秒
 
-	defaultDataDir  = "./data"
-	defaultHTTPAddr = ":8080"
+	defaultDataDir         = "./data"
+	defaultHTTPAddr        = ":8080"
+	defaultUpstreamTimeout = 30 * time.Second
 
 	dbFileName     = "jianartifact.db"
 	blobDirName    = "blobs"
@@ -27,11 +31,12 @@ const (
 
 // Config 是解析后的运行配置。路径均为绝对化后的结果，便于日志与探错一致。
 type Config struct {
-	DataDir   string // 数据根目录（SQLite 与 blob 存放）
-	HTTPAddr  string // HTTP 监听地址
-	DBPath    string // SQLite 文件路径（DataDir/jianartifact.db）
-	BlobDir   string // blob 存储目录（DataDir/blobs）
-	JWTSecret []byte // JWT HS256 签名密钥（不入库、不打印）
+	DataDir         string        // 数据根目录（SQLite 与 blob 存放）
+	HTTPAddr        string        // HTTP 监听地址
+	DBPath          string        // SQLite 文件路径（DataDir/jianartifact.db）
+	BlobDir         string        // blob 存储目录（DataDir/blobs）
+	JWTSecret       []byte        // JWT HS256 签名密钥（不入库、不打印）
+	UpstreamTimeout time.Duration // proxy 回源整体超时
 }
 
 // Load 从环境变量解析配置并确保 data / blob 目录存在。
@@ -44,7 +49,7 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("解析 data 目录：%w", err)
 	}
 	blobDir := filepath.Join(absData, blobDirName)
-	for _, dir := range []string{absData, blobDir} {
+	for _, dir := range []string{absData, blobDir, filepath.Join(blobDir, "tmp")} {
 		if err := os.MkdirAll(dir, 0o750); err != nil {
 			return nil, fmt.Errorf("创建目录 %s：%w", dir, err)
 		}
@@ -56,11 +61,12 @@ func Load() (*Config, error) {
 	}
 
 	return &Config{
-		DataDir:   absData,
-		HTTPAddr:  envOr(EnvHTTPAddr, defaultHTTPAddr),
-		DBPath:    filepath.Join(absData, dbFileName),
-		BlobDir:   blobDir,
-		JWTSecret: secret,
+		DataDir:         absData,
+		HTTPAddr:        envOr(EnvHTTPAddr, defaultHTTPAddr),
+		DBPath:          filepath.Join(absData, dbFileName),
+		BlobDir:         blobDir,
+		JWTSecret:       secret,
+		UpstreamTimeout: upstreamTimeout(),
 	}, nil
 }
 
@@ -89,4 +95,17 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// upstreamTimeout 解析 JIAN_UPSTREAM_TIMEOUT（秒）；缺省或非法（<=0）时取默认值。
+func upstreamTimeout() time.Duration {
+	v := os.Getenv(EnvUpstreamTimeout)
+	if v == "" {
+		return defaultUpstreamTimeout
+	}
+	secs, err := strconv.Atoi(v)
+	if err != nil || secs <= 0 {
+		return defaultUpstreamTimeout
+	}
+	return time.Duration(secs) * time.Second
 }

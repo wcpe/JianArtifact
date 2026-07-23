@@ -295,6 +295,23 @@ type AclList struct {
 	Items []AclEntry `json:"items"`
 }
 
+// AssetList defines model for AssetList.
+type AssetList struct {
+	Items []AssetSummary `json:"items"`
+	Total int            `json:"total"`
+}
+
+// AssetSummary defines model for AssetSummary.
+type AssetSummary struct {
+	ContentType *string `json:"contentType,omitempty"`
+
+	// Hash 内容寻址 blob 的 sha256 摘要
+	Hash      string `json:"hash"`
+	Path      string `json:"path"`
+	Size      int64  `json:"size"`
+	UpdatedAt string `json:"updatedAt"`
+}
+
 // BootstrapRequest defines model for BootstrapRequest.
 type BootstrapRequest struct {
 	Password string `json:"password"`
@@ -303,8 +320,14 @@ type BootstrapRequest struct {
 
 // CreateRepositoryRequest defines model for CreateRepositoryRequest.
 type CreateRepositoryRequest struct {
-	Format     CreateRepositoryRequestFormat      `json:"format"`
-	Name       string                             `json:"name"`
+	Format CreateRepositoryRequestFormat `json:"format"`
+
+	// Members group 仓库的成员仓库名（有序，type=group 时必填）
+	Members *[]string `json:"members,omitempty"`
+	Name    string    `json:"name"`
+
+	// RemoteUrl proxy 仓库的上游地址（type=proxy 时必填）
+	RemoteUrl  *string                            `json:"remoteUrl,omitempty"`
 	Type       CreateRepositoryRequestType        `json:"type"`
 	Visibility *CreateRepositoryRequestVisibility `json:"visibility,omitempty"`
 }
@@ -374,10 +397,16 @@ type PutAclRequest struct {
 
 // Repository defines model for Repository.
 type Repository struct {
-	CreatedAt  string               `json:"createdAt"`
-	Format     RepositoryFormat     `json:"format"`
-	Id         int64                `json:"id"`
-	Name       string               `json:"name"`
+	CreatedAt string           `json:"createdAt"`
+	Format    RepositoryFormat `json:"format"`
+	Id        int64            `json:"id"`
+
+	// Members group 仓库的成员仓库名（有序，仅 type=group）
+	Members *[]string `json:"members,omitempty"`
+	Name    string    `json:"name"`
+
+	// RemoteUrl proxy 仓库的上游地址（仅 type=proxy）
+	RemoteUrl  *string              `json:"remoteUrl,omitempty"`
 	Type       RepositoryType       `json:"type"`
 	Visibility RepositoryVisibility `json:"visibility"`
 }
@@ -430,6 +459,11 @@ type TokenList struct {
 
 // UpdateRepositoryRequest defines model for UpdateRepositoryRequest.
 type UpdateRepositoryRequest struct {
+	// Members 更新 group 成员仓库名（仅 type=group）
+	Members *[]string `json:"members,omitempty"`
+
+	// RemoteUrl 更新 proxy 上游地址（仅 type=proxy）
+	RemoteUrl  *string                            `json:"remoteUrl,omitempty"`
 	Visibility *UpdateRepositoryRequestVisibility `json:"visibility,omitempty"`
 }
 
@@ -447,6 +481,20 @@ type UpdateUserRequestRole string
 
 // UpdateUserRequestStatus defines model for UpdateUserRequest.Status.
 type UpdateUserRequestStatus string
+
+// UsageInfo defines model for UsageInfo.
+type UsageInfo struct {
+	Format   string         `json:"format"`
+	Snippets []UsageSnippet `json:"snippets"`
+	Type     string         `json:"type"`
+}
+
+// UsageSnippet defines model for UsageSnippet.
+type UsageSnippet struct {
+	Code        string  `json:"code"`
+	Description *string `json:"description,omitempty"`
+	Title       string  `json:"title"`
+}
 
 // User defines model for User.
 type User struct {
@@ -474,6 +522,9 @@ type PageParam = int
 
 // PageSizeParam defines model for PageSizeParam.
 type PageSizeParam = int
+
+// PrefixParam defines model for PrefixParam.
+type PrefixParam = string
 
 // RepoNameParam defines model for RepoNameParam.
 type RepoNameParam = string
@@ -503,6 +554,15 @@ type Unauthorized = Error
 type ListRepositoriesParams struct {
 	Page     *PageParam     `form:"page,omitempty" json:"page,omitempty"`
 	PageSize *PageSizeParam `form:"page_size,omitempty" json:"page_size,omitempty"`
+}
+
+// ListRepositoryAssetsParams defines parameters for ListRepositoryAssets.
+type ListRepositoryAssetsParams struct {
+	Page     *PageParam     `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *PageSizeParam `form:"page_size,omitempty" json:"page_size,omitempty"`
+
+	// Prefix 按制品路径前缀过滤
+	Prefix *PrefixParam `form:"prefix,omitempty" json:"prefix,omitempty"`
 }
 
 // ListUsersParams defines parameters for ListUsers.
@@ -567,6 +627,12 @@ type ServerInterface interface {
 	// SetRepositoryAcl 覆盖写入仓库 ACL
 	// (PUT /api/v1/repositories/{name}/acl)
 	SetRepositoryAcl(c *gin.Context, name RepoNameParam)
+	// ListRepositoryAssets 列出仓库制品（分页，可按路径前缀过滤）
+	// (GET /api/v1/repositories/{name}/assets)
+	ListRepositoryAssets(c *gin.Context, name RepoNameParam, params ListRepositoryAssetsParams)
+	// GetRepositoryUsage 仓库客户端使用片段（据 format/type 返回接入命令）
+	// (GET /api/v1/repositories/{name}/usage)
+	GetRepositoryUsage(c *gin.Context, name RepoNameParam)
 	// GetStatus 运行时状态（版本、就绪、迁移版本、初始化标志、用户数）
 	// (GET /api/v1/status)
 	GetStatus(c *gin.Context)
@@ -796,6 +862,83 @@ func (siw *ServerInterfaceWrapper) SetRepositoryAcl(c *gin.Context) {
 	}
 
 	siw.Handler.SetRepositoryAcl(c, name)
+}
+
+// ListRepositoryAssets operation middleware
+func (siw *ServerInterfaceWrapper) ListRepositoryAssets(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "name" -------------
+	var name RepoNameParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "name", c.Param("name"), &name, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter name: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListRepositoryAssetsParams
+
+	// ------------- Optional query parameter "page" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page", c.Request.URL.Query(), &params.Page, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter page: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "page_size" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page_size", c.Request.URL.Query(), &params.PageSize, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter page_size: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "prefix" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "prefix", c.Request.URL.Query(), &params.Prefix, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter prefix: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ListRepositoryAssets(c, name, params)
+}
+
+// GetRepositoryUsage operation middleware
+func (siw *ServerInterfaceWrapper) GetRepositoryUsage(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "name" -------------
+	var name RepoNameParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "name", c.Param("name"), &name, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter name: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetRepositoryUsage(c, name)
 }
 
 // GetStatus operation middleware
@@ -1058,4 +1201,6 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.PATCH(options.BaseURL+"/api/v1/repositories/:name", wrapper.UpdateRepository)
 	router.GET(options.BaseURL+"/api/v1/repositories/:name/acl", wrapper.GetRepositoryAcl)
 	router.PUT(options.BaseURL+"/api/v1/repositories/:name/acl", wrapper.SetRepositoryAcl)
+	router.GET(options.BaseURL+"/api/v1/repositories/:name/assets", wrapper.ListRepositoryAssets)
+	router.GET(options.BaseURL+"/api/v1/repositories/:name/usage", wrapper.GetRepositoryUsage)
 }

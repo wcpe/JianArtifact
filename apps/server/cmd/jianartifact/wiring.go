@@ -5,10 +5,12 @@ import (
 
 	"github.com/wcpe/jianartifact/apps/server/internal/api"
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
+	"github.com/wcpe/jianartifact/apps/server/internal/blobstore"
 	"github.com/wcpe/jianartifact/apps/server/internal/config"
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
 	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
+	"github.com/wcpe/jianartifact/apps/server/internal/upstream"
 )
 
 // appServices 汇集装配后的持久化连接、领域服务与鉴权依赖，供 run 及 CLI 子命令复用。
@@ -19,6 +21,7 @@ type appServices struct {
 	userSvc  *domain.UserService
 	tokenSvc *domain.TokenService
 	repoSvc  *domain.RepositoryService
+	assetSvc *domain.AssetService
 	store    auth.Store
 	jwt      *auth.JWTManager
 }
@@ -39,8 +42,11 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	revokedRepo := repository.NewRevokedRepo(db)
 	repoRepo := repository.NewRepoRepo(db)
 	aclRepo := repository.NewAclRepo(db)
+	assetRepo := repository.NewAssetRepo(db)
 
 	jwtMgr := auth.NewJWTManager(cfg.JWTSecret)
+	blobs := blobstore.NewStore(cfg.BlobDir)
+	upstreamClient := upstream.NewClient(cfg.UpstreamTimeout)
 
 	return &appServices{
 		db:       db,
@@ -48,7 +54,8 @@ func openServices(cfg *config.Config) (*appServices, error) {
 		authSvc:  domain.NewAuthService(userRepo, revokedRepo, jwtMgr),
 		userSvc:  domain.NewUserService(userRepo),
 		tokenSvc: domain.NewTokenService(tokenRepo),
-		repoSvc:  domain.NewRepositoryService(repoRepo, aclRepo),
+		repoSvc:  domain.NewRepositoryService(repoRepo, aclRepo, assetRepo),
+		assetSvc: domain.NewAssetService(repoRepo, assetRepo, blobs, upstreamClient),
 		store:    domain.NewAuthStore(userRepo, tokenRepo, revokedRepo),
 		jwt:      jwtMgr,
 	}, nil

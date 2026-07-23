@@ -11,6 +11,10 @@ export type TokenCreated = Schemas["TokenCreated"];
 export type Repository = Schemas["Repository"];
 export type AclEntry = Schemas["AclEntry"];
 export type StatusInfo = Schemas["StatusInfo"];
+export type AssetSummary = Schemas["AssetSummary"];
+export type AssetList = Schemas["AssetList"];
+export type UsageInfo = Schemas["UsageInfo"];
+export type UsageSnippet = Schemas["UsageSnippet"];
 
 /** 开发/测试态签发的固定会话令牌明文；鉴权守卫据此放行。 */
 export const MOCK_TOKEN = "mock.jwt.token";
@@ -28,6 +32,7 @@ interface State {
   tokens: StoredToken[];
   repositories: Repository[];
   acls: Record<string, AclEntry[]>;
+  assets: Record<string, AssetSummary[]>;
   seq: { user: number; token: number; repo: number };
 }
 
@@ -45,10 +50,28 @@ function seed(): State {
     tokens: [{ id: 1, name: "ci", createdAt: "2026-01-03T00:00:00Z", plaintext: "jat_seedci" }],
     repositories: [
       { id: 1, name: "maven-releases", format: "maven", type: "hosted", visibility: "private", createdAt: "2026-01-01T00:00:00Z" },
-      { id: 2, name: "npm-proxy", format: "npm", type: "proxy", visibility: "public", createdAt: "2026-01-02T00:00:00Z" },
+      { id: 2, name: "npm-proxy", format: "npm", type: "proxy", visibility: "public", remoteUrl: "https://registry.npmjs.org", createdAt: "2026-01-02T00:00:00Z" },
       { id: 3, name: "raw-hosted", format: "raw", type: "hosted", visibility: "private", createdAt: "2026-01-03T00:00:00Z" },
     ],
     acls: { "maven-releases": [{ subjectId: 2, action: "read" }] },
+    assets: {
+      "maven-releases": [
+        {
+          path: "com/example/app/1.0.0/app-1.0.0.jar",
+          size: 20480,
+          hash: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+          contentType: "application/java-archive",
+          updatedAt: "2026-01-04T00:00:00Z",
+        },
+        {
+          path: "com/example/app/1.0.0/app-1.0.0.pom",
+          size: 512,
+          hash: "b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3",
+          contentType: "application/xml",
+          updatedAt: "2026-01-04T00:00:00Z",
+        },
+      ],
+    },
     seq: { user: 2, token: 1, repo: 3 },
   };
 }
@@ -186,7 +209,13 @@ export const store = {
     return state.repositories.find((r) => r.name === name);
   },
 
-  createRepository(input: Pick<Repository, "name" | "format" | "type"> & { visibility?: Repository["visibility"] }): Repository | null {
+  createRepository(
+    input: Pick<Repository, "name" | "format" | "type"> & {
+      visibility?: Repository["visibility"];
+      remoteUrl?: string;
+      members?: string[];
+    },
+  ): Repository | null {
     if (state.repositories.some((r) => r.name === input.name)) {
       return null;
     }
@@ -198,11 +227,20 @@ export const store = {
       visibility: input.visibility ?? "private",
       createdAt: nowIso(),
     };
+    if (input.remoteUrl) {
+      repo.remoteUrl = input.remoteUrl;
+    }
+    if (input.members && input.members.length > 0) {
+      repo.members = input.members;
+    }
     state.repositories.push(repo);
     return repo;
   },
 
-  updateRepository(name: string, patch: { visibility?: Repository["visibility"] }): Repository | null {
+  updateRepository(
+    name: string,
+    patch: { visibility?: Repository["visibility"]; remoteUrl?: string; members?: string[] },
+  ): Repository | null {
     const repo = state.repositories.find((r) => r.name === name);
     if (!repo) {
       return null;
@@ -210,13 +248,21 @@ export const store = {
     if (patch.visibility) {
       repo.visibility = patch.visibility;
     }
+    if (patch.remoteUrl !== undefined) {
+      repo.remoteUrl = patch.remoteUrl;
+    }
+    if (patch.members !== undefined) {
+      repo.members = patch.members;
+    }
     return repo;
   },
+
 
   deleteRepository(name: string): boolean {
     const before = state.repositories.length;
     state.repositories = state.repositories.filter((r) => r.name !== name);
     delete state.acls[name];
+    delete state.assets[name];
     return state.repositories.length < before;
   },
 
@@ -234,4 +280,58 @@ export const store = {
     state.acls[name] = items;
     return items;
   },
+
+  /** 列出仓库制品（分页 + 可选路径前缀过滤），仓库不存在返回 null。 */
+  listAssets(name: string, prefix: string, page: number, pageSize: number): AssetList | null {
+    if (!state.repositories.some((r) => r.name === name)) {
+      return null;
+    }
+    const all = (state.assets[name] ?? [])
+      .filter((a) => (prefix ? a.path.startsWith(prefix) : true))
+      .sort((a, b) => a.path.localeCompare(b.path));
+    return { items: pageSlice(all, page, pageSize), total: all.length };
+  },
+
+  /** 据仓库 format/type 与对外基址组装客户端接入片段，仓库不存在返回 null。 */
+  usage(name: string, baseURL: string): UsageInfo | null {
+    const repo = state.repositories.find((r) => r.name === name);
+    if (!repo) {
+      return null;
+    }
+    return { format: repo.format, type: repo.type, snippets: buildUsage(repo, baseURL) };
+  },
 };
+
+/** buildUsage 依仓库 format/type 与对外基址组装接入片段（与后端 domain 层一致）。 */
+function buildUsage(repo: Repository, base: string): UsageSnippet[] {
+  const writable = repo.type === "hosted";
+  const repoURL = `${base}/repository/${repo.name}`;
+  if (repo.format === "maven") {
+    const snippets: UsageSnippet[] = [
+      { title: "认证（~/.m2/settings.xml）", description: "在 <servers> 中配置凭据。", code: `<server>\n  <id>${repo.name}</id>\n  <username><user></username>\n  <password><token></password>\n</server>` },
+      { title: "解析依赖（pom.xml）", description: "在 <repositories> 中声明该仓库。", code: `<repository>\n  <id>${repo.name}</id>\n  <url>${repoURL}</url>\n</repository>` },
+    ];
+    if (writable) {
+      snippets.push({ title: "发布制品（pom.xml + mvn deploy）", description: "在 <distributionManagement> 声明部署目标（仅 hosted 可写）。", code: `<distributionManagement>\n  <repository>\n    <id>${repo.name}</id>\n    <url>${repoURL}</url>\n  </repository>\n</distributionManagement>` });
+    }
+    return snippets;
+  }
+  if (repo.format === "npm") {
+    const registryURL = `${base}/npm/${repo.name}/`;
+    const snippets: UsageSnippet[] = [
+      { title: "配置 registry", description: "将该仓库设为 npm registry。", code: `npm config set registry ${registryURL}` },
+      { title: "安装依赖", description: "从该 registry 安装包。", code: `npm install <package> --registry ${registryURL}` },
+    ];
+    if (writable) {
+      snippets.push({ title: "发布包（npm publish）", description: "发布到该仓库（仅 hosted 可写）。", code: `npm publish --registry ${registryURL}` });
+    }
+    return snippets;
+  }
+  const snippets: UsageSnippet[] = [
+    { title: "下载制品（curl）", description: "以 API Token 作口令（公开仓库可匿名读）。", code: `curl -u <user>:<token> -O ${repoURL}/path/to/artifact` },
+  ];
+  if (writable) {
+    snippets.push({ title: "上传制品（curl）", description: "PUT 上传到指定路径（仅 hosted 可写）。", code: `curl -u <user>:<token> --upload-file ./artifact ${repoURL}/path/to/artifact` });
+  }
+  return snippets;
+}

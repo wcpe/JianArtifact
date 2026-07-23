@@ -24,9 +24,10 @@ type ReadinessCheck func() error
 type Server struct {
 	api.ServerInterface // 管理 + 状态 handler（WithHandlers 注入；未注入时仅健康探针可用）
 
-	version     string
-	checks      []ReadinessCheck
-	middlewares []api.MiddlewareFunc
+	version        string
+	checks         []ReadinessCheck
+	middlewares    []api.MiddlewareFunc
+	protocolRoutes func(gin.IRouter)
 }
 
 // Option 配置 Server。
@@ -45,6 +46,13 @@ func WithHandlers(h api.ServerInterface) Option {
 // WithMiddleware 追加应用到全部契约路由的 Gin 中间件（如鉴权主体解析）。
 func WithMiddleware(m ...api.MiddlewareFunc) Option {
 	return func(s *Server) { s.middlewares = append(s.middlewares, m...) }
+}
+
+// WithProtocolRoutes 注入协议层路由注册闭包（如 Raw/Maven/npm）。
+// 这些端点不在 OpenAPI 契约内，注册在契约路由之后、静态 SPA 回退之前，
+// 因此不与 /api/v1、/healthz 冲突，且优先于前端回退。
+func WithProtocolRoutes(register func(gin.IRouter)) Option {
+	return func(s *Server) { s.protocolRoutes = register }
 }
 
 // New 构造 Server。
@@ -83,6 +91,10 @@ func (s *Server) Handler(assets fs.FS) http.Handler {
 	r.Use(gin.Recovery())
 
 	api.RegisterHandlersWithOptions(r, s, api.GinServerOptions{Middlewares: s.middlewares})
+
+	if s.protocolRoutes != nil {
+		s.protocolRoutes(r)
+	}
 
 	if assets != nil {
 		s.mountStatic(r, assets)

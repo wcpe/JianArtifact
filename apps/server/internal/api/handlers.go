@@ -182,7 +182,7 @@ func toAPIUser(u *repository.User) User {
 
 // toAPIRepository 把行模型转为契约 Repository。
 func toAPIRepository(r *repository.Repository) Repository {
-	return Repository{
+	out := Repository{
 		Id:         r.ID,
 		Name:       r.Name,
 		Format:     RepositoryFormat(r.Format),
@@ -190,11 +190,46 @@ func toAPIRepository(r *repository.Repository) Repository {
 		Visibility: RepositoryVisibility(r.Visibility),
 		CreatedAt:  r.CreatedAt,
 	}
+	if cfg, err := r.DecodeConfig(); err == nil {
+		if cfg.RemoteURL != "" {
+			out.RemoteUrl = &cfg.RemoteURL
+		}
+		if len(cfg.Members) > 0 {
+			members := cfg.Members
+			out.Members = &members
+		}
+	}
+	return out
 }
 
 // toAPIToken 把行模型转为契约 Token。
 func toAPIToken(t repository.Token) Token {
 	return Token{Id: t.ID, Name: t.Name, CreatedAt: t.CreatedAt}
+}
+
+// toAPIAsset 把 asset 行模型转为契约 AssetSummary。
+func toAPIAsset(a *repository.Asset) AssetSummary {
+	out := AssetSummary{
+		Path:      a.Path,
+		Size:      a.Size,
+		Hash:      a.BlobHash,
+		UpdatedAt: a.UpdatedAt,
+	}
+	if a.ContentType != "" {
+		ct := a.ContentType
+		out.ContentType = &ct
+	}
+	return out
+}
+
+// toAPIUsageSnippet 把领域使用片段转为契约 UsageSnippet。
+func toAPIUsageSnippet(s domain.UsageSnippet) UsageSnippet {
+	out := UsageSnippet{Title: s.Title, Code: s.Code}
+	if s.Description != "" {
+		d := s.Description
+		out.Description = &d
+	}
+	return out
 }
 
 // toAPIAcl 把行模型转为契约 AclEntry。

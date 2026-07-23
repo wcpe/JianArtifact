@@ -13,11 +13,14 @@ type RepoRepo struct{ db *persistence.DB }
 // NewRepoRepo 构造 RepoRepo。
 func NewRepoRepo(db *persistence.DB) *RepoRepo { return &RepoRepo{db: db} }
 
-// Create 插入仓库，返回新 ID。
-func (r *RepoRepo) Create(name, format, typ, visibility string) (int64, error) {
+// Create 插入仓库，返回新 ID。config 为结构化配置 JSON（空则传 "{}"）。
+func (r *RepoRepo) Create(name, format, typ, visibility, config string) (int64, error) {
+	if config == "" {
+		config = "{}"
+	}
 	res, err := r.db.Exec(
-		`INSERT INTO repository (name, format, type, visibility) VALUES (?, ?, ?, ?)`,
-		name, format, typ, visibility,
+		`INSERT INTO repository (name, format, type, visibility, config) VALUES (?, ?, ?, ?, ?)`,
+		name, format, typ, visibility, config,
 	)
 	if err != nil {
 		return 0, err
@@ -28,7 +31,7 @@ func (r *RepoRepo) Create(name, format, typ, visibility string) (int64, error) {
 // GetByName 按名取仓库；不存在返回 ErrNotFound。
 func (r *RepoRepo) GetByName(name string) (*Repository, error) {
 	var repo Repository
-	err := r.db.Get(&repo, `SELECT id, name, format, type, visibility, created_at FROM repository WHERE name = ?`, name)
+	err := r.db.Get(&repo, `SELECT id, name, format, type, visibility, config, created_at FROM repository WHERE name = ?`, name)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -41,7 +44,7 @@ func (r *RepoRepo) GetByName(name string) (*Repository, error) {
 // List 返回分页仓库（按 id 升序）。
 func (r *RepoRepo) List(limit, offset int) ([]Repository, error) {
 	var repos []Repository
-	err := r.db.Select(&repos, `SELECT id, name, format, type, visibility, created_at FROM repository ORDER BY id LIMIT ? OFFSET ?`, limit, offset)
+	err := r.db.Select(&repos, `SELECT id, name, format, type, visibility, config, created_at FROM repository ORDER BY id LIMIT ? OFFSET ?`, limit, offset)
 	return repos, err
 }
 
@@ -60,6 +63,18 @@ func (r *RepoRepo) UpdateVisibility(name, visibility string) error {
 			updated_at = datetime('now')
 		WHERE name = ?`,
 		visibility, name,
+	)
+	return affected(res, err)
+}
+
+// UpdateConfig 覆盖写入仓库的结构化配置 JSON（config 列）。
+func (r *RepoRepo) UpdateConfig(name, config string) error {
+	if config == "" {
+		config = "{}"
+	}
+	res, err := r.db.Exec(
+		`UPDATE repository SET config = ?, updated_at = datetime('now') WHERE name = ?`,
+		config, name,
 	)
 	return affected(res, err)
 }

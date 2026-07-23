@@ -45,7 +45,7 @@ protocol     Raw / Maven / npm 协议适配（请求解析、元数据、客户�
   ↓
 domain       仓库、制品、迁移等领域逻辑（编排能力域）
   ↓
-repository · storage · migration · auth   能力域
+repository · storage · migration · auth · upstream   能力域
   ↓
 persistence（SQLite 访问）  +  blob 存储（文件系统，内容寻址）
 config       横切，供各层读取，不反向依赖业务层
@@ -60,17 +60,17 @@ web          go:embed 前端 dist（由构建注入）
 
 ## 3. 数据模型
 
-**元数据真源 = SQLite**（`modernc.org/sqlite`，纯 Go 无 CGO），经 sqlx 访问，开启 WAL、`foreign_keys=ON`、`busy_timeout`；schema 由 `internal/persistence/migrations/*.sql` 迁移脚本管理，内置极简迁移器按文件名字典序前向执行，`schema_migrations` 表记录已应用版本。0.2.0 已落地的表：
+**元数据真源 = SQLite**（`modernc.org/sqlite`，纯 Go 无 CGO），经 sqlx 访问，开启 WAL、`foreign_keys=ON`、`busy_timeout`；schema 由 `internal/persistence/migrations/*.sql` 迁移脚本管理，内置极简迁移器按文件名字典序前向执行，`schema_migrations` 表记录已应用版本。已落地的表：
 
 - **user**：账号（唯一）、argon2id 口令哈希、角色（admin/user）、状态（active/disabled）、创建 / 更新时间。明文口令不落库。
 - **api_token**：仅存 sha256 摘要（唯一）、所属用户、名称、创建 / 吊销时间；明文令牌仅签发时返回一次，不入库。
 - **revoked_token**：登出会话 JWT 的 `jti` 与过期时间，直至过期前拒绝复用（无状态 JWT 的短期黑名单）。
-- **repository**：名称（唯一）、格式（raw/maven/npm）、类型（hosted/proxy/group）、可见性（public/private）、配置（JSON 文本，上游 URL / 成员列表等）、创建 / 更新时间。
+- **repository**：名称（唯一）、格式（raw/maven/npm）、类型（hosted/proxy/group）、可见性（public/private）、配置（JSON 文本，proxy 的 `remoteUrl` / group 的 `members` 等）、创建 / 更新时间。
 - **acl**：主体（用户）× 仓库 × 动作（read/write/admin），唯一约束去重；admin 蕴含 read/write，write 蕴含 read。
+- **asset**（0.3.0）：仓库内制品路径元数据——路径、blob 内容哈希、大小、Content-Type、创建 / 更新时间；`UNIQUE(repository_id, path)`，所属仓库删除时级联。
 
 后续版本引入：
 
-- **artifact / component / asset**：制品坐标、路径、大小、内容哈希（指向 blob）、所属仓库、时间戳。
 - **migration_task**：迁移任务状态机、来源、进度、断点、冲突策略、报告。
 
 **blob 内容真源 = 文件系统**：按内容哈希（如 sha256）分片目录寻址；元数据 asset 记录哈希引用。一致性约束：元数据事务提交成功后 blob 才对外可见（见 §5）。

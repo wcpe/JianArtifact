@@ -90,4 +90,36 @@ describe("devmock MSW 端点行为", () => {
     const res = await fetch("http://localhost/api/v1/repositories/nope/acl", { headers: auth });
     expect(res.status).toBe(404);
   });
+
+  it("制品浏览：分页与前缀过滤", async () => {
+    const res = await fetch("http://localhost/api/v1/repositories/maven-releases/assets", { headers: auth });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { items: { path: string }[]; total: number };
+    expect(body.total).toBe(2);
+
+    const filtered = await fetch(
+      "http://localhost/api/v1/repositories/maven-releases/assets?prefix=com/example/app/1.0.0/app-1.0.0.jar",
+      { headers: auth },
+    );
+    const fbody = (await filtered.json()) as { items: { path: string }[]; total: number };
+    expect(fbody.total).toBe(1);
+    expect(fbody.items[0]?.path).toContain(".jar");
+  });
+
+  it("制品浏览缺令牌 401、未知仓库 404", async () => {
+    expect((await fetch("http://localhost/api/v1/repositories/maven-releases/assets")).status).toBe(401);
+    const nf = await fetch("http://localhost/api/v1/repositories/nope/assets", { headers: auth });
+    expect(nf.status).toBe(404);
+  });
+
+  it("使用片段：据 format 返回接入命令", async () => {
+    const res = await fetch("http://localhost/api/v1/repositories/npm-proxy/usage", { headers: auth });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { format: string; type: string; snippets: { code: string }[] };
+    expect(body.format).toBe("npm");
+    expect(body.snippets.length).toBeGreaterThan(0);
+    expect(body.snippets.some((s) => s.code.includes("npm config set registry"))).toBe(true);
+    // proxy 不可写：不应含 publish 片段。
+    expect(body.snippets.some((s) => s.code.includes("npm publish"))).toBe(false);
+  });
 });

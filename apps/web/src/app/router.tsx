@@ -8,6 +8,7 @@ import { AclPage } from "../pages/AclPage";
 import { DashboardPage } from "../pages/DashboardPage";
 import { LoginPage } from "../pages/LoginPage";
 import { RepositoriesPage } from "../pages/RepositoriesPage";
+import { RepositoryDetailPage } from "../pages/RepositoryDetailPage";
 import { SetupPage } from "../pages/SetupPage";
 import { TokensPage } from "../pages/TokensPage";
 import { UsersPage } from "../pages/UsersPage";
@@ -37,6 +38,7 @@ export function AppRoutes() {
         <Route path="/users" element={<UsersPage />} />
         <Route path="/tokens" element={<TokensPage />} />
         <Route path="/repositories" element={<RepositoriesPage />} />
+        <Route path="/repositories/:name" element={<RepositoryDetailPage />} />
         <Route path="/repositories/:name/acl" element={<AclPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/dashboard" replace />} />

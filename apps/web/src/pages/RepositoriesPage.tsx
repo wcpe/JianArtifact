@@ -1,5 +1,5 @@
 // 仓库管理：列表 + 新建（格式/类型/可见性）+ 切换可见性 + 删除 + 进入访问控制。
-import { ActionIcon, Badge, Button, Group, Modal, Select, Table, TextInput } from "@mantine/core";
+import { ActionIcon, Badge, Button, Group, Modal, MultiSelect, Select, Table, TextInput } from "@mantine/core";
 import { useForm } from "@mantine/form";
 import { useDisclosure } from "@mantine/hooks";
 import { IconTrash } from "@tabler/icons-react";
@@ -30,8 +30,16 @@ export function RepositoriesPage() {
       format: "maven" as RepoFormat,
       type: "hosted" as RepoType,
       visibility: "private" as RepoVisibility,
+      remoteUrl: "",
+      members: [] as string[],
     },
-    validate: { name: (v) => (v.trim() ? null : t("repositories.name")) },
+    validate: {
+      name: (v) => (v.trim() ? null : t("repositories.name")),
+      remoteUrl: (v, values) =>
+        values.type === "proxy" && !/^https?:\/\/.+/.test(v.trim()) ? t("repositories.remoteUrlRequired") : null,
+      members: (v, values) =>
+        values.type === "group" && v.length === 0 ? t("repositories.membersRequired") : null,
+    },
   });
 
   const visibilityOptions = [
@@ -39,9 +47,22 @@ export function RepositoriesPage() {
     { value: "private", label: t("repositories.visibilityPrivate") },
   ];
 
+  // group 成员候选：已加载仓库中与当前所选格式一致、且非自身者。
+  const memberOptions = (state.data?.items ?? [])
+    .filter((r) => r.format === form.values.format && r.name !== form.values.name)
+    .map((r) => r.name);
+
   const handleCreate = form.onSubmit((values) => {
     setCreating(true);
-    createRepository(values)
+    const payload = {
+      name: values.name,
+      format: values.format,
+      type: values.type,
+      visibility: values.visibility,
+      ...(values.type === "proxy" ? { remoteUrl: values.remoteUrl.trim() } : {}),
+      ...(values.type === "group" ? { members: values.members } : {}),
+    };
+    createRepository(payload)
       .then(() => {
         createModal.close();
         form.reset();
@@ -124,6 +145,9 @@ export function RepositoriesPage() {
                     </Table.Td>
                     <Table.Td>
                       <Group gap="xs">
+                        <Button size="xs" variant="light" onClick={() => navigate(`/repositories/${repo.name}`)}>
+                          {t("repositories.browse")}
+                        </Button>
                         <Button size="xs" variant="light" onClick={() => navigate(`/repositories/${repo.name}/acl`)}>
                           {t("repositories.manageAcl")}
                         </Button>
@@ -145,6 +169,26 @@ export function RepositoriesPage() {
           <TextInput label={t("repositories.name")} withAsterisk {...form.getInputProps("name")} />
           <Select mt="sm" label={t("repositories.format")} data={FORMAT_OPTIONS} allowDeselect={false} {...form.getInputProps("format")} />
           <Select mt="sm" label={t("repositories.type")} data={TYPE_OPTIONS} allowDeselect={false} {...form.getInputProps("type")} />
+          {form.values.type === "proxy" && (
+            <TextInput
+              mt="sm"
+              label={t("repositories.remoteUrl")}
+              placeholder={t("repositories.remoteUrlPlaceholder")}
+              withAsterisk
+              {...form.getInputProps("remoteUrl")}
+            />
+          )}
+          {form.values.type === "group" && (
+            <MultiSelect
+              mt="sm"
+              label={t("repositories.members")}
+              description={t("repositories.membersHint")}
+              data={memberOptions}
+              searchable
+              withAsterisk
+              {...form.getInputProps("members")}
+            />
+          )}
           <Select mt="sm" label={t("repositories.visibility")} data={visibilityOptions} allowDeselect={false} {...form.getInputProps("visibility")} />
           <Group justify="flex-end" mt="md">
             <Button variant="default" onClick={createModal.close}>

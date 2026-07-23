@@ -40,6 +40,8 @@ interface CreateRepoBody {
   format?: Repository["format"];
   type?: Repository["type"];
   visibility?: Repository["visibility"];
+  remoteUrl?: string;
+  members?: string[];
 }
 
 export const handlers = [
@@ -184,6 +186,8 @@ export const handlers = [
       format: body.format,
       type: body.type,
       visibility: body.visibility,
+      remoteUrl: body.remoteUrl,
+      members: body.members,
     });
     if (!repo) {
       return err("conflict", "仓库名已存在", 409);
@@ -196,7 +200,11 @@ export const handlers = [
     if (denied) {
       return denied;
     }
-    const body = (await request.json().catch(() => ({}))) as { visibility?: Repository["visibility"] };
+    const body = (await request.json().catch(() => ({}))) as {
+      visibility?: Repository["visibility"];
+      remoteUrl?: string;
+      members?: string[];
+    };
     const repo = store.updateRepository(String(params.name), body);
     return repo ? HttpResponse.json(repo) : err("not_found", "仓库不存在", 404);
   }),
@@ -231,5 +239,30 @@ export const handlers = [
     }
     const items = store.setAcl(String(params.name), body.items);
     return items ? HttpResponse.json({ items }) : err("not_found", "仓库不存在", 404);
+  }),
+
+  http.get("*/api/v1/repositories/:name/assets", ({ request, params }) => {
+    const denied = unauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const url = new URL(request.url);
+    const result = store.listAssets(
+      String(params.name),
+      url.searchParams.get("prefix") ?? "",
+      intParam(url, "page", 1),
+      intParam(url, "page_size", 20),
+    );
+    return result ? HttpResponse.json(result) : err("not_found", "仓库不存在", 404);
+  }),
+
+  http.get("*/api/v1/repositories/:name/usage", ({ request, params }) => {
+    const denied = unauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const url = new URL(request.url);
+    const result = store.usage(String(params.name), `${url.protocol}//${url.host}`);
+    return result ? HttpResponse.json(result) : err("not_found", "仓库不存在", 404);
   }),
 ];
