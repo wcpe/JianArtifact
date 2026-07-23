@@ -15,6 +15,9 @@ export type AssetSummary = Schemas["AssetSummary"];
 export type AssetList = Schemas["AssetList"];
 export type UsageInfo = Schemas["UsageInfo"];
 export type UsageSnippet = Schemas["UsageSnippet"];
+export type MigrationTask = Schemas["MigrationTask"];
+export type MigrationPlan = Schemas["MigrationPlan"];
+export type MigrationReport = Schemas["MigrationReport"];
 
 /** 开发/测试态签发的固定会话令牌明文；鉴权守卫据此放行。 */
 export const MOCK_TOKEN = "mock.jwt.token";
@@ -33,7 +36,8 @@ interface State {
   repositories: Repository[];
   acls: Record<string, AclEntry[]>;
   assets: Record<string, AssetSummary[]>;
-  seq: { user: number; token: number; repo: number };
+  migrations: MigrationTask[];
+  seq: { user: number; token: number; repo: number; migration: number };
 }
 
 const MOCK_VERSION = "0.2.0-mock";
@@ -106,7 +110,8 @@ function seed(): State {
         },
       ],
     },
-    seq: { user: 2, token: 1, repo: 3 },
+    migrations: [],
+    seq: { user: 2, token: 1, repo: 3, migration: 0 },
   };
 }
 
@@ -123,7 +128,8 @@ export function emptyStore(): void {
   state.users = [];
   state.tokens = [];
   state.initialized = false;
-  state.seq = { user: 0, token: 0, repo: 3 };
+  state.migrations = [];
+  state.seq = { user: 0, token: 0, repo: 3, migration: 0 };
 }
 
 function nowIso(): string {
@@ -341,6 +347,151 @@ export const store = {
       return null;
     }
     return { format: repo.format, type: repo.type, snippets: buildUsage(repo, baseURL) };
+  },
+
+  listMigrations(page: number, pageSize: number): { items: MigrationTask[]; total: number } {
+    const sorted = [...state.migrations].sort((a, b) => b.id - a.id);
+    return { items: pageSlice(sorted, page, pageSize), total: state.migrations.length };
+  },
+
+  findMigration(id: number): MigrationTask | undefined {
+    return state.migrations.find((m) => m.id === id);
+  },
+
+  createMigration(input: {
+    sourceType: MigrationTask["sourceType"];
+    sourceConfig?: Record<string, unknown>;
+    credentialRef?: string;
+    conflictPolicy?: MigrationTask["conflictPolicy"];
+    plan?: MigrationPlan;
+  }): MigrationTask {
+    const now = nowIso();
+    const task: MigrationTask = {
+      id: ++state.seq.migration,
+      status: "planned",
+      sourceType: input.sourceType,
+      conflictPolicy: input.conflictPolicy ?? "skip",
+      createdAt: now,
+      updatedAt: now,
+    };
+    if (input.sourceConfig) {
+      task.sourceConfig = input.sourceConfig;
+    }
+    if (input.credentialRef) {
+      task.credentialRef = input.credentialRef;
+    }
+    if (input.plan) {
+      task.plan = input.plan;
+    }
+    state.migrations.push(task);
+    return task;
+  },
+
+  startMigration(id: number): MigrationTask | "not_found" | "conflict" {
+    const task = state.migrations.find((m) => m.id === id);
+    if (!task) {
+      return "not_found";
+    }
+    if (task.status !== "planned") {
+      return "conflict";
+    }
+    task.status = "running";
+    task.startedAt = nowIso();
+    task.updatedAt = nowIso();
+    return task;
+  },
+
+  resumeMigration(id: number): MigrationTask | "not_found" | "conflict" {
+    const task = state.migrations.find((m) => m.id === id);
+    if (!task) {
+      return "not_found";
+    }
+    if (task.status !== "failed" && task.status !== "cancelled") {
+      return "conflict";
+    }
+    task.status = "running";
+    task.startedAt = task.startedAt ?? nowIso();
+    task.updatedAt = nowIso();
+    delete task.errorMessage;
+    return task;
+  },
+
+  cancelMigration(id: number): MigrationTask | "not_found" | "conflict" {
+    const task = state.migrations.find((m) => m.id === id);
+    if (!task) {
+      return "not_found";
+    }
+    if (task.status !== "planned" && task.status !== "running") {
+      return "conflict";
+    }
+    task.status = "cancelled";
+    task.finishedAt = nowIso();
+    task.updatedAt = nowIso();
+    task.errorMessage = "用户取消";
+    return task;
+  },
+
+  migrationReport(id: number): MigrationReport | null {
+    const task = state.migrations.find((m) => m.id === id);
+    if (!task) {
+      return null;
+    }
+    return {
+      taskId: task.id,
+      status: task.status,
+      sourceType: task.sourceType,
+      conflictPolicy: task.conflictPolicy,
+      startedAt: task.startedAt,
+      finishedAt: task.finishedAt,
+      totals: { copied: 0, skipped: 0, failed: 0 },
+      cutover: {
+        checklist: [
+          "将 CI / 客户端 registry 指向本 JianArtifact 实例",
+          "将源 Nexus 置为只读（或断开写入）",
+          "执行 finalize 增量补齐切换窗口新增制品",
+        ],
+        delta: null,
+      },
+      raw: {},
+    };
+  },
+
+  finalizeMigration(id: number): MigrationTask | "not_found" | "conflict" {
+    const task = state.migrations.find((m) => m.id === id);
+    if (!task) {
+      return "not_found";
+    }
+    if (task.status !== "completed") {
+      return "conflict";
+    }
+    task.updatedAt = nowIso();
+    return task;
+  },
+
+  /** discover：同步假计划并落库 planned。 */
+  discoverMigration(input: {
+    sourceType: MigrationTask["sourceType"];
+    sourceConfig?: Record<string, unknown>;
+    credentialRef?: string;
+    conflictPolicy?: MigrationTask["conflictPolicy"];
+  }): { taskId: number; plan: MigrationPlan } {
+    const plan: MigrationPlan = {
+      repositories: [
+        { name: "maven-releases", format: "maven", type: "hosted", estimatedAssets: 2 },
+        { name: "npm-hosted", format: "npm", type: "hosted", estimatedAssets: 1 },
+      ],
+      warnings: ["docker 仓库已忽略"],
+      stats: { repositoryCount: 2, estimatedAssets: 3 },
+      estimated: true,
+    };
+    const task = this.createMigration({
+      sourceType: input.sourceType,
+      sourceConfig: input.sourceConfig,
+      credentialRef: input.credentialRef,
+      conflictPolicy: input.conflictPolicy,
+      plan,
+    });
+    return { taskId: task.id, plan };
   },
 };
 

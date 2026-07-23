@@ -282,6 +282,150 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/migrations/discover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 三来源发现并落库为 planned 任务（不同步执行）
+         * @description 同步执行发现；成功写入一条 status=planned 的 migration_task，返回 taskId 与 plan。
+         *     失败不落库。真正搬运须 POST /migrations/{id}/start。仅 admin。
+         */
+        post: operations["discoverMigrations"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/migrations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 迁移任务列表（分页） */
+        get: operations["listMigrations"];
+        put?: never;
+        /** 创建 planned 迁移任务（不自动执行） */
+        post: operations["createMigration"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/migrations/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 迁移任务详情 */
+        get: operations["getMigration"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/migrations/{id}/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 显式启动（planned → running） */
+        post: operations["startMigration"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/migrations/{id}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 自 failed/cancelled 断点续传 */
+        post: operations["resumeMigration"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/migrations/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 取消 planned 或协作取消 running */
+        post: operations["cancelMigration"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/migrations/{id}/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 迁移报告 */
+        get: operations["getMigrationReport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/migrations/{id}/finalize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 切换窗口最终增量扫描（仅 completed）
+         * @description 对同一来源再枚举，仅复制目标不存在的路径；更新 report.delta。
+         */
+        post: operations["finalizeMigration"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -447,6 +591,101 @@ export interface components {
             type: string;
             snippets: components["schemas"]["UsageSnippet"][];
         };
+        /** @enum {string} */
+        MigrationSourceType: "online_rest" | "offline_dir" | "offline_bundle";
+        /**
+         * @default skip
+         * @enum {string}
+         */
+        MigrationConflictPolicy: "skip" | "overwrite" | "fail";
+        /** @enum {string} */
+        MigrationTaskStatus: "planned" | "running" | "completed" | "failed" | "cancelled";
+        /** @description 来源配置（url/path 等），不得含密钥明文 */
+        MigrationSourceConfig: {
+            [key: string]: unknown;
+        };
+        MigrationPlanRepository: {
+            name: string;
+            /** @enum {string} */
+            format: "raw" | "maven" | "npm";
+            /** @enum {string} */
+            type?: "hosted" | "proxy" | "group";
+            /** Format: int64 */
+            estimatedAssets?: number;
+        };
+        MigrationPlan: {
+            repositories: components["schemas"]["MigrationPlanRepository"][];
+            warnings: string[];
+            stats: {
+                [key: string]: unknown;
+            };
+            /** @description 资产数是否为估算 */
+            estimated?: boolean;
+        };
+        MigrationTask: {
+            /** Format: int64 */
+            id: number;
+            status: components["schemas"]["MigrationTaskStatus"];
+            sourceType: components["schemas"]["MigrationSourceType"];
+            sourceConfig?: components["schemas"]["MigrationSourceConfig"];
+            /** @description 环境变量引用名，非密钥明文 */
+            credentialRef?: string;
+            conflictPolicy: components["schemas"]["MigrationConflictPolicy"];
+            plan?: components["schemas"]["MigrationPlan"];
+            errorMessage?: string;
+            createdAt: string;
+            updatedAt: string;
+            startedAt?: string;
+            finishedAt?: string;
+        };
+        MigrationTaskList: {
+            items: components["schemas"]["MigrationTask"][];
+            total: number;
+        };
+        CreateMigrationRequest: {
+            sourceType: components["schemas"]["MigrationSourceType"];
+            sourceConfig?: components["schemas"]["MigrationSourceConfig"];
+            credentialRef?: string;
+            conflictPolicy?: components["schemas"]["MigrationConflictPolicy"];
+            plan?: components["schemas"]["MigrationPlan"];
+        };
+        MigrationDiscoverRequest: {
+            sourceType: components["schemas"]["MigrationSourceType"];
+            sourceConfig?: components["schemas"]["MigrationSourceConfig"];
+            credentialRef?: string;
+            conflictPolicy?: components["schemas"]["MigrationConflictPolicy"];
+        };
+        MigrationDiscoverResponse: {
+            /** Format: int64 */
+            taskId: number;
+            plan: components["schemas"]["MigrationPlan"];
+        };
+        MigrationReport: {
+            /** Format: int64 */
+            taskId: number;
+            status: components["schemas"]["MigrationTaskStatus"];
+            sourceType?: components["schemas"]["MigrationSourceType"];
+            conflictPolicy?: components["schemas"]["MigrationConflictPolicy"];
+            startedAt?: string;
+            finishedAt?: string;
+            totals: {
+                [key: string]: unknown;
+            };
+            repositories?: {
+                [key: string]: unknown;
+            }[];
+            failures?: {
+                [key: string]: unknown;
+            }[];
+            warnings?: string[];
+            cutover?: {
+                [key: string]: unknown;
+            };
+            /** @description 任务 report_json 原文透传（foundation 可为空对象） */
+            raw?: {
+                [key: string]: unknown;
+            };
+        };
     };
     responses: {
         /** @description 参数错误 */
@@ -501,6 +740,7 @@ export interface components {
         UserIdParam: number;
         TokenIdParam: number;
         RepoNameParam: string;
+        MigrationIdParam: number;
         /** @description 按制品路径前缀过滤 */
         PrefixParam: string;
     };
@@ -1074,6 +1314,248 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+        };
+    };
+    discoverMigrations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MigrationDiscoverRequest"];
+            };
+        };
+        responses: {
+            /** @description 发现成功并已落库 planned */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MigrationDiscoverResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description 上游 Nexus 不可达 */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listMigrations: {
+        parameters: {
+            query?: {
+                page?: components["parameters"]["PageParam"];
+                page_size?: components["parameters"]["PageSizeParam"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 任务列表 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MigrationTaskList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    createMigration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateMigrationRequest"];
+            };
+        };
+        responses: {
+            /** @description 已创建 planned 任务 */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MigrationTask"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    getMigration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["MigrationIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 任务详情 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MigrationTask"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    startMigration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["MigrationIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 已进入 running */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MigrationTask"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    resumeMigration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["MigrationIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 已恢复 running */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MigrationTask"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    cancelMigration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["MigrationIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 已取消 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MigrationTask"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    getMigrationReport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["MigrationIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 结构化报告 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MigrationReport"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    finalizeMigration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["MigrationIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 增量完成，返回任务 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MigrationTask"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
 }

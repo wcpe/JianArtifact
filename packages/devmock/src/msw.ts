@@ -4,7 +4,7 @@
 import { http, HttpResponse } from "msw";
 
 import { MOCK_TOKEN, store } from "./store";
-import type { AclEntry, Repository, User } from "./store";
+import type { AclEntry, MigrationPlan, MigrationTask, Repository, User } from "./store";
 
 function err(code: string, message: string, status: number) {
   return HttpResponse.json({ error: { code, message } }, { status });
@@ -274,5 +274,144 @@ export const handlers = [
     const url = new URL(request.url);
     const result = store.usage(String(params.name), `${url.protocol}//${url.host}`);
     return result ? HttpResponse.json(result) : err("not_found", "仓库不存在", 404);
+  }),
+
+  // —— 迁移任务（0.4.0 foundation）——
+  http.get("*/api/v1/migrations", ({ request }) => {
+    const denied = unauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const url = new URL(request.url);
+    return HttpResponse.json(
+      store.listMigrations(intParam(url, "page", 1), intParam(url, "page_size", 20)),
+    );
+  }),
+
+  http.post("*/api/v1/migrations", async ({ request }) => {
+    const denied = unauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const body = (await request.json().catch(() => ({}))) as {
+      sourceType?: MigrationTask["sourceType"];
+      sourceConfig?: Record<string, unknown>;
+      credentialRef?: string;
+      conflictPolicy?: MigrationTask["conflictPolicy"];
+      plan?: MigrationPlan;
+    };
+    if (!body.sourceType) {
+      return err("bad_request", "sourceType 必填", 400);
+    }
+    const task = store.createMigration({
+      sourceType: body.sourceType,
+      sourceConfig: body.sourceConfig,
+      credentialRef: body.credentialRef,
+      conflictPolicy: body.conflictPolicy,
+      plan: body.plan,
+    });
+    return HttpResponse.json(task, { status: 201 });
+  }),
+
+  http.post("*/api/v1/migrations/discover", async ({ request }) => {
+    const denied = unauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const body = (await request.json().catch(() => ({}))) as {
+      sourceType?: MigrationTask["sourceType"];
+      sourceConfig?: Record<string, unknown>;
+      credentialRef?: string;
+      conflictPolicy?: MigrationTask["conflictPolicy"];
+    };
+    if (!body.sourceType) {
+      return err("bad_request", "sourceType 必填", 400);
+    }
+    return HttpResponse.json(
+      store.discoverMigration({
+        sourceType: body.sourceType,
+        sourceConfig: body.sourceConfig,
+        credentialRef: body.credentialRef,
+        conflictPolicy: body.conflictPolicy,
+      }),
+    );
+  }),
+
+  http.get("*/api/v1/migrations/:id", ({ request, params }) => {
+    const denied = unauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const task = store.findMigration(Number(params.id));
+    return task ? HttpResponse.json(task) : err("not_found", "任务不存在", 404);
+  }),
+
+  http.post("*/api/v1/migrations/:id/start", ({ request, params }) => {
+    const denied = unauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const result = store.startMigration(Number(params.id));
+    if (result === "not_found") {
+      return err("not_found", "任务不存在", 404);
+    }
+    if (result === "conflict") {
+      return err("conflict", "仅 planned 可 start", 409);
+    }
+    return HttpResponse.json(result);
+  }),
+
+  http.post("*/api/v1/migrations/:id/resume", ({ request, params }) => {
+    const denied = unauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const result = store.resumeMigration(Number(params.id));
+    if (result === "not_found") {
+      return err("not_found", "任务不存在", 404);
+    }
+    if (result === "conflict") {
+      return err("conflict", "仅 failed/cancelled 可 resume", 409);
+    }
+    return HttpResponse.json(result);
+  }),
+
+  http.post("*/api/v1/migrations/:id/cancel", ({ request, params }) => {
+    const denied = unauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const result = store.cancelMigration(Number(params.id));
+    if (result === "not_found") {
+      return err("not_found", "任务不存在", 404);
+    }
+    if (result === "conflict") {
+      return err("conflict", "当前状态不可 cancel", 409);
+    }
+    return HttpResponse.json(result);
+  }),
+
+  http.get("*/api/v1/migrations/:id/report", ({ request, params }) => {
+    const denied = unauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const report = store.migrationReport(Number(params.id));
+    return report ? HttpResponse.json(report) : err("not_found", "任务不存在", 404);
+  }),
+
+  http.post("*/api/v1/migrations/:id/finalize", ({ request, params }) => {
+    const denied = unauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const result = store.finalizeMigration(Number(params.id));
+    if (result === "not_found") {
+      return err("not_found", "任务不存在", 404);
+    }
+    if (result === "conflict") {
+      return err("conflict", "仅 completed 可 finalize", 409);
+    }
+    return HttpResponse.json(result);
   }),
 ];

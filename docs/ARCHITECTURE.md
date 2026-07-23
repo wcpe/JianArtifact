@@ -69,9 +69,7 @@ web          go:embed 前端 dist（由构建注入）
 - **acl**：主体（用户）× 仓库 × 动作（read/write/admin），唯一约束去重；admin 蕴含 read/write，write 蕴含 read。
 - **asset**（0.3.0）：仓库内制品路径元数据——路径、blob 内容哈希、大小、Content-Type、创建 / 更新时间；`UNIQUE(repository_id, path)`，所属仓库删除时级联。
 
-后续版本引入：
-
-- **migration_task**：迁移任务状态机、来源、进度、断点、冲突策略、报告。
+- **migration_task**（0.4.0）：Nexus 迁移任务——状态（planned/running/completed/failed/cancelled）、来源类型与配置 JSON、凭据引用名（无明文）、冲突策略、plan/checkpoint/report JSON、错误摘要与时间戳。状态机与 discover 落库 / 显式 start / 崩溃标 failed 见 ADR-0012。
 
 **blob 内容真源 = 文件系统**：按内容哈希（如 sha256）分片目录寻址；元数据 asset 记录哈希引用。一致性约束：元数据事务提交成功后 blob 才对外可见（见 §5）。
 

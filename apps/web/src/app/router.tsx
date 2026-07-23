@@ -7,6 +7,9 @@ import { AppLayout } from "./AppLayout";
 import { AclPage } from "../pages/AclPage";
 import { DashboardPage } from "../pages/DashboardPage";
 import { LoginPage } from "../pages/LoginPage";
+import { MigrationDetailPage } from "../pages/MigrationDetailPage";
+import { MigrationsPage } from "../pages/MigrationsPage";
+import { MigrationWizardPage } from "../pages/MigrationWizardPage";
 import { RepositoriesPage } from "../pages/RepositoriesPage";
 import { RepositoryDetailPage } from "../pages/RepositoryDetailPage";
 import { SetupPage } from "../pages/SetupPage";
@@ -40,6 +43,9 @@ export function AppRoutes() {
         <Route path="/repositories" element={<RepositoriesPage />} />
         <Route path="/repositories/:name" element={<RepositoryDetailPage />} />
         <Route path="/repositories/:name/acl" element={<AclPage />} />
+        <Route path="/migrations" element={<MigrationsPage />} />
+        <Route path="/migrations/new" element={<MigrationWizardPage />} />
+        <Route path="/migrations/:id" element={<MigrationDetailPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>

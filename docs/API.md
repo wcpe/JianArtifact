@@ -49,13 +49,16 @@
 - `GET /api/v1/repositories/{name}/browse`：浏览目录 / 组件。
 - `GET /api/v1/repositories/{name}/usage`：使用片段（客户端接入示例）。
 
-### Nexus 迁移
+### Nexus 迁移（0.4.0；见 ADR-0012）
 
-- `POST /api/v1/migrations/discover`：三来源发现，产出计划预览。
-- `POST /api/v1/migrations`：创建迁移任务（含冲突策略）。
-- `GET /api/v1/migrations/{id}`：任务状态 / 进度。
-- `POST /api/v1/migrations/{id}/resume`：断点续传。
+- `POST /api/v1/migrations/discover`：三来源发现；成功后 **落库为 `planned` 任务**，返回 `taskId` + 计划预览（不自动执行）。
+- `POST /api/v1/migrations`：创建 **`planned`** 任务（含冲突策略 / plan 或 source）；不自动执行。
+- `GET /api/v1/migrations` / `GET /api/v1/migrations/{id}`：列表与任务状态 / 进度。
+- `POST /api/v1/migrations/{id}/start`：**显式启动**（`planned → running`）。
+- `POST /api/v1/migrations/{id}/resume`：自 `failed`/`cancelled` 断点续传。
+- `POST /api/v1/migrations/{id}/cancel`：取消 planned 或协作取消 running。
 - `GET /api/v1/migrations/{id}/report`：迁移报告。
+- 进程崩溃后残留 `running` 启动时标 `failed`，须 resume；仅 **admin**。
 
 ### 健康
 

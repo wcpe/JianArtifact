@@ -18,36 +18,39 @@ import (
 // Deps 汇集 Handlers 的依赖。健康 / 就绪端点仅用 Version 与 Checks，
 // 管理端点用各 domain 服务；Migration 供 /status 报告迁移版本。
 type Deps struct {
-	Version   string
-	Checks    []func() error
-	Migration func() (string, error)
-	Auth      *domain.AuthService
-	Users     *domain.UserService
-	Tokens    *domain.TokenService
-	Repos     *domain.RepositoryService
+	Version    string
+	Checks     []func() error
+	Migration  func() (string, error)
+	Auth       *domain.AuthService
+	Users      *domain.UserService
+	Tokens     *domain.TokenService
+	Repos      *domain.RepositoryService
+	Migrations *domain.MigrationService
 }
 
 // Handlers 实现 ServerInterface 的全部端点。
 type Handlers struct {
-	version   string
-	checks    []func() error
-	migration func() (string, error)
-	auth      *domain.AuthService
-	users     *domain.UserService
-	tokens    *domain.TokenService
-	repos     *domain.RepositoryService
+	version    string
+	checks     []func() error
+	migration  func() (string, error)
+	auth       *domain.AuthService
+	users      *domain.UserService
+	tokens     *domain.TokenService
+	repos      *domain.RepositoryService
+	migrations *domain.MigrationService
 }
 
 // NewHandlers 构造 Handlers。
 func NewHandlers(d Deps) *Handlers {
 	return &Handlers{
-		version:   d.Version,
-		checks:    d.Checks,
-		migration: d.Migration,
-		auth:      d.Auth,
-		users:     d.Users,
-		tokens:    d.Tokens,
-		repos:     d.Repos,
+		version:    d.Version,
+		checks:     d.Checks,
+		migration:  d.Migration,
+		auth:       d.Auth,
+		users:      d.Users,
+		tokens:     d.Tokens,
+		repos:      d.Repos,
+		migrations: d.Migrations,
 	}
 }
 
@@ -139,7 +142,11 @@ func writeDomainErr(c *gin.Context, err error) {
 	case errors.Is(err, domain.ErrNotFound):
 		auth.WriteError(c, http.StatusNotFound, "not_found", "资源不存在")
 	case errors.Is(err, domain.ErrValidation):
-		auth.WriteError(c, http.StatusBadRequest, "validation_error", "参数校验失败")
+		auth.WriteError(c, http.StatusBadRequest, "validation_error", err.Error())
+	case errors.Is(err, domain.ErrUpstream):
+		auth.WriteError(c, http.StatusBadGateway, "upstream_error", "上游不可达或返回错误")
+	case errors.Is(err, domain.ErrUpstreamTimeout):
+		auth.WriteError(c, http.StatusGatewayTimeout, "upstream_timeout", "上游超时")
 	default:
 		auth.WriteError(c, http.StatusInternalServerError, "internal_error", "内部错误")
 	}

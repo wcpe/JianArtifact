@@ -6,6 +6,13 @@ import type {
   AclList,
   AssetList,
   LoginResponse,
+  MigrationConflictPolicy,
+  MigrationDiscoverResponse,
+  MigrationPlan,
+  MigrationReport,
+  MigrationSourceType,
+  MigrationTask,
+  MigrationTaskList,
   Repository,
   RepositoryList,
   RepoFormat,
@@ -141,4 +148,58 @@ export function listRepositoryAssets(name: string, params: AssetQuery = {}): Pro
 /** 使用说明：据 format/type 返回 curl/mvn/npm 客户端配置片段。 */
 export function getRepositoryUsage(name: string): Promise<UsageInfo> {
   return request<UsageInfo>(`/repositories/${name}/usage`);
+}
+
+// —— Nexus 迁移（0.4.0）——
+
+export function listMigrations(params: Pagination = {}): Promise<MigrationTaskList> {
+  return request<MigrationTaskList>("/migrations", {
+    query: { page: params.page, page_size: params.page_size },
+  });
+}
+
+export function getMigration(id: number): Promise<MigrationTask> {
+  return request<MigrationTask>(`/migrations/${id}`);
+}
+
+export function createMigration(input: {
+  sourceType: MigrationSourceType;
+  sourceConfig?: Record<string, unknown>;
+  credentialRef?: string;
+  conflictPolicy?: MigrationConflictPolicy;
+  plan?: MigrationPlan;
+}): Promise<MigrationTask> {
+  return request<MigrationTask>("/migrations", { method: "POST", body: input });
+}
+
+export function discoverMigrations(input: {
+  sourceType: MigrationSourceType;
+  sourceConfig?: Record<string, unknown>;
+  credentialRef?: string;
+  conflictPolicy?: MigrationConflictPolicy;
+}): Promise<MigrationDiscoverResponse> {
+  return request<MigrationDiscoverResponse>("/migrations/discover", {
+    method: "POST",
+    body: input,
+  });
+}
+
+export function startMigration(id: number): Promise<MigrationTask> {
+  return request<MigrationTask>(`/migrations/${id}/start`, { method: "POST" });
+}
+
+export function resumeMigration(id: number): Promise<MigrationTask> {
+  return request<MigrationTask>(`/migrations/${id}/resume`, { method: "POST" });
+}
+
+export function cancelMigration(id: number): Promise<MigrationTask> {
+  return request<MigrationTask>(`/migrations/${id}/cancel`, { method: "POST" });
+}
+
+export function getMigrationReport(id: number): Promise<MigrationReport> {
+  return request<MigrationReport>(`/migrations/${id}/report`);
+}
+
+export function finalizeMigration(id: number): Promise<MigrationTask> {
+  return request<MigrationTask>(`/migrations/${id}/finalize`, { method: "POST" });
 }

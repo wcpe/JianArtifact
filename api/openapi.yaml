@@ -1,10 +1,10 @@
 # JianArtifact API 契约 —— 唯一真源（设计优先，见 docs/adr/0004-design-first-openapi.md）。
-# 变更此文件后运行 `task gen` 重生成 Go 接口与前端 client；生成产物不得手改。
-# 0.2.0：认证授权 + 用户 / 令牌 / 仓库 / ACL 管理面。协议端点与 Nexus 迁移随后续版本补齐。
+# 变更此文件后运行 `task gen` 重生成 Go 接口与类型；生成产物不得手改。
+# 0.4.0：Nexus 迁移管理面（discover / planned / start / resume / report）。
 openapi: 3.0.3
 info:
   title: JianArtifact API
-  version: 0.2.0
+  version: 0.4.0
   description: 自托管多格式制品仓库的管理 API。协议端点（Raw/Maven/npm 等原生客户端交互）以协议兼容测试保障，不在此契约内描述。
   license:
     name: MIT
@@ -431,6 +431,201 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+  /api/v1/migrations/discover:
+    post:
+      operationId: discoverMigrations
+      summary: 三来源发现并落库为 planned 任务（不同步执行）
+      description: |
+        同步执行发现；成功写入一条 status=planned 的 migration_task，返回 taskId 与 plan。
+        失败不落库。真正搬运须 POST /migrations/{id}/start。仅 admin。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MigrationDiscoverRequest"
+      responses:
+        "200":
+          description: 发现成功并已落库 planned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MigrationDiscoverResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "502":
+          description: 上游 Nexus 不可达
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/migrations:
+    get:
+      operationId: listMigrations
+      summary: 迁移任务列表（分页）
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/PageSizeParam"
+      responses:
+        "200":
+          description: 任务列表
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MigrationTaskList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      operationId: createMigration
+      summary: 创建 planned 迁移任务（不自动执行）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateMigrationRequest"
+      responses:
+        "201":
+          description: 已创建 planned 任务
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MigrationTask"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /api/v1/migrations/{id}:
+    get:
+      operationId: getMigration
+      summary: 迁移任务详情
+      parameters:
+        - $ref: "#/components/parameters/MigrationIdParam"
+      responses:
+        "200":
+          description: 任务详情
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MigrationTask"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/v1/migrations/{id}/start:
+    post:
+      operationId: startMigration
+      summary: 显式启动（planned → running）
+      parameters:
+        - $ref: "#/components/parameters/MigrationIdParam"
+      responses:
+        "200":
+          description: 已进入 running
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MigrationTask"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/migrations/{id}/resume:
+    post:
+      operationId: resumeMigration
+      summary: 自 failed/cancelled 断点续传
+      parameters:
+        - $ref: "#/components/parameters/MigrationIdParam"
+      responses:
+        "200":
+          description: 已恢复 running
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MigrationTask"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/migrations/{id}/cancel:
+    post:
+      operationId: cancelMigration
+      summary: 取消 planned 或协作取消 running
+      parameters:
+        - $ref: "#/components/parameters/MigrationIdParam"
+      responses:
+        "200":
+          description: 已取消
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MigrationTask"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/migrations/{id}/report:
+    get:
+      operationId: getMigrationReport
+      summary: 迁移报告
+      parameters:
+        - $ref: "#/components/parameters/MigrationIdParam"
+      responses:
+        "200":
+          description: 结构化报告
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MigrationReport"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/v1/migrations/{id}/finalize:
+    post:
+      operationId: finalizeMigration
+      summary: 切换窗口最终增量扫描（仅 completed）
+      description: 对同一来源再枚举，仅复制目标不存在的路径；更新 report.delta。
+      parameters:
+        - $ref: "#/components/parameters/MigrationIdParam"
+      responses:
+        "200":
+          description: 增量完成，返回任务
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MigrationTask"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
 components:
   securitySchemes:
     bearerAuth:
@@ -475,6 +670,13 @@ components:
       required: true
       schema:
         type: string
+    MigrationIdParam:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int64
     PrefixParam:
       name: prefix
       in: query
@@ -822,3 +1024,166 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/UsageSnippet"
+    MigrationSourceType:
+      type: string
+      enum: [online_rest, offline_dir, offline_bundle]
+    MigrationConflictPolicy:
+      type: string
+      enum: [skip, overwrite, fail]
+      default: skip
+    MigrationTaskStatus:
+      type: string
+      enum: [planned, running, completed, failed, cancelled]
+    MigrationSourceConfig:
+      type: object
+      additionalProperties: true
+      description: 来源配置（url/path 等），不得含密钥明文
+    MigrationPlanRepository:
+      type: object
+      required: [name, format]
+      properties:
+        name:
+          type: string
+        format:
+          type: string
+          enum: [raw, maven, npm]
+        type:
+          type: string
+          enum: [hosted, proxy, group]
+        estimatedAssets:
+          type: integer
+          format: int64
+    MigrationPlan:
+      type: object
+      required: [repositories, warnings, stats]
+      properties:
+        repositories:
+          type: array
+          items:
+            $ref: "#/components/schemas/MigrationPlanRepository"
+        warnings:
+          type: array
+          items:
+            type: string
+        stats:
+          type: object
+          additionalProperties: true
+        estimated:
+          type: boolean
+          description: 资产数是否为估算
+    MigrationTask:
+      type: object
+      required: [id, status, sourceType, conflictPolicy, createdAt, updatedAt]
+      properties:
+        id:
+          type: integer
+          format: int64
+        status:
+          $ref: "#/components/schemas/MigrationTaskStatus"
+        sourceType:
+          $ref: "#/components/schemas/MigrationSourceType"
+        sourceConfig:
+          $ref: "#/components/schemas/MigrationSourceConfig"
+        credentialRef:
+          type: string
+          description: 环境变量引用名，非密钥明文
+        conflictPolicy:
+          $ref: "#/components/schemas/MigrationConflictPolicy"
+        plan:
+          $ref: "#/components/schemas/MigrationPlan"
+        errorMessage:
+          type: string
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+        startedAt:
+          type: string
+        finishedAt:
+          type: string
+    MigrationTaskList:
+      type: object
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/MigrationTask"
+        total:
+          type: integer
+    CreateMigrationRequest:
+      type: object
+      required: [sourceType]
+      properties:
+        sourceType:
+          $ref: "#/components/schemas/MigrationSourceType"
+        sourceConfig:
+          $ref: "#/components/schemas/MigrationSourceConfig"
+        credentialRef:
+          type: string
+        conflictPolicy:
+          $ref: "#/components/schemas/MigrationConflictPolicy"
+        plan:
+          $ref: "#/components/schemas/MigrationPlan"
+    MigrationDiscoverRequest:
+      type: object
+      required: [sourceType]
+      properties:
+        sourceType:
+          $ref: "#/components/schemas/MigrationSourceType"
+        sourceConfig:
+          $ref: "#/components/schemas/MigrationSourceConfig"
+        credentialRef:
+          type: string
+        conflictPolicy:
+          $ref: "#/components/schemas/MigrationConflictPolicy"
+    MigrationDiscoverResponse:
+      type: object
+      required: [taskId, plan]
+      properties:
+        taskId:
+          type: integer
+          format: int64
+        plan:
+          $ref: "#/components/schemas/MigrationPlan"
+    MigrationReport:
+      type: object
+      required: [taskId, status, totals]
+      properties:
+        taskId:
+          type: integer
+          format: int64
+        status:
+          $ref: "#/components/schemas/MigrationTaskStatus"
+        sourceType:
+          $ref: "#/components/schemas/MigrationSourceType"
+        conflictPolicy:
+          $ref: "#/components/schemas/MigrationConflictPolicy"
+        startedAt:
+          type: string
+        finishedAt:
+          type: string
+        totals:
+          type: object
+          additionalProperties: true
+        repositories:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        failures:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        warnings:
+          type: array
+          items:
+            type: string
+        cutover:
+          type: object
+          additionalProperties: true
+        raw:
+          type: object
+          additionalProperties: true
+          description: 任务 report_json 原文透传（foundation 可为空对象）

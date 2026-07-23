@@ -131,6 +131,117 @@ func (e HealthStatusStatus) Valid() bool {
 	}
 }
 
+// Defines values for MigrationConflictPolicy.
+const (
+	Fail      MigrationConflictPolicy = "fail"
+	Overwrite MigrationConflictPolicy = "overwrite"
+	Skip      MigrationConflictPolicy = "skip"
+)
+
+// Valid indicates whether the value is a known member of the MigrationConflictPolicy enum.
+func (e MigrationConflictPolicy) Valid() bool {
+	switch e {
+	case Fail:
+		return true
+	case Overwrite:
+		return true
+	case Skip:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MigrationPlanRepositoryFormat.
+const (
+	MigrationPlanRepositoryFormatMaven MigrationPlanRepositoryFormat = "maven"
+	MigrationPlanRepositoryFormatNpm   MigrationPlanRepositoryFormat = "npm"
+	MigrationPlanRepositoryFormatRaw   MigrationPlanRepositoryFormat = "raw"
+)
+
+// Valid indicates whether the value is a known member of the MigrationPlanRepositoryFormat enum.
+func (e MigrationPlanRepositoryFormat) Valid() bool {
+	switch e {
+	case MigrationPlanRepositoryFormatMaven:
+		return true
+	case MigrationPlanRepositoryFormatNpm:
+		return true
+	case MigrationPlanRepositoryFormatRaw:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MigrationPlanRepositoryType.
+const (
+	MigrationPlanRepositoryTypeGroup  MigrationPlanRepositoryType = "group"
+	MigrationPlanRepositoryTypeHosted MigrationPlanRepositoryType = "hosted"
+	MigrationPlanRepositoryTypeProxy  MigrationPlanRepositoryType = "proxy"
+)
+
+// Valid indicates whether the value is a known member of the MigrationPlanRepositoryType enum.
+func (e MigrationPlanRepositoryType) Valid() bool {
+	switch e {
+	case MigrationPlanRepositoryTypeGroup:
+		return true
+	case MigrationPlanRepositoryTypeHosted:
+		return true
+	case MigrationPlanRepositoryTypeProxy:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MigrationSourceType.
+const (
+	OfflineBundle MigrationSourceType = "offline_bundle"
+	OfflineDir    MigrationSourceType = "offline_dir"
+	OnlineRest    MigrationSourceType = "online_rest"
+)
+
+// Valid indicates whether the value is a known member of the MigrationSourceType enum.
+func (e MigrationSourceType) Valid() bool {
+	switch e {
+	case OfflineBundle:
+		return true
+	case OfflineDir:
+		return true
+	case OnlineRest:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MigrationTaskStatus.
+const (
+	Cancelled MigrationTaskStatus = "cancelled"
+	Completed MigrationTaskStatus = "completed"
+	Failed    MigrationTaskStatus = "failed"
+	Planned   MigrationTaskStatus = "planned"
+	Running   MigrationTaskStatus = "running"
+)
+
+// Valid indicates whether the value is a known member of the MigrationTaskStatus enum.
+func (e MigrationTaskStatus) Valid() bool {
+	switch e {
+	case Cancelled:
+		return true
+	case Completed:
+		return true
+	case Failed:
+		return true
+	case Planned:
+		return true
+	case Running:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RepositoryFormat.
 const (
 	RepositoryFormatMaven RepositoryFormat = "maven"
@@ -318,6 +429,17 @@ type BootstrapRequest struct {
 	Username string `json:"username"`
 }
 
+// CreateMigrationRequest defines model for CreateMigrationRequest.
+type CreateMigrationRequest struct {
+	ConflictPolicy *MigrationConflictPolicy `json:"conflictPolicy,omitempty"`
+	CredentialRef  *string                  `json:"credentialRef,omitempty"`
+	Plan           *MigrationPlan           `json:"plan,omitempty"`
+
+	// SourceConfig 来源配置（url/path 等），不得含密钥明文
+	SourceConfig *MigrationSourceConfig `json:"sourceConfig,omitempty"`
+	SourceType   MigrationSourceType    `json:"sourceType"`
+}
+
 // CreateRepositoryRequest defines model for CreateRepositoryRequest.
 type CreateRepositoryRequest struct {
 	Format CreateRepositoryRequestFormat `json:"format"`
@@ -384,6 +506,101 @@ type LoginResponse struct {
 	Token string `json:"token"`
 	User  User   `json:"user"`
 }
+
+// MigrationConflictPolicy defines model for MigrationConflictPolicy.
+type MigrationConflictPolicy string
+
+// MigrationDiscoverRequest defines model for MigrationDiscoverRequest.
+type MigrationDiscoverRequest struct {
+	ConflictPolicy *MigrationConflictPolicy `json:"conflictPolicy,omitempty"`
+	CredentialRef  *string                  `json:"credentialRef,omitempty"`
+
+	// SourceConfig 来源配置（url/path 等），不得含密钥明文
+	SourceConfig *MigrationSourceConfig `json:"sourceConfig,omitempty"`
+	SourceType   MigrationSourceType    `json:"sourceType"`
+}
+
+// MigrationDiscoverResponse defines model for MigrationDiscoverResponse.
+type MigrationDiscoverResponse struct {
+	Plan   MigrationPlan `json:"plan"`
+	TaskId int64         `json:"taskId"`
+}
+
+// MigrationPlan defines model for MigrationPlan.
+type MigrationPlan struct {
+	// Estimated 资产数是否为估算
+	Estimated    *bool                     `json:"estimated,omitempty"`
+	Repositories []MigrationPlanRepository `json:"repositories"`
+	Stats        map[string]interface{}    `json:"stats"`
+	Warnings     []string                  `json:"warnings"`
+}
+
+// MigrationPlanRepository defines model for MigrationPlanRepository.
+type MigrationPlanRepository struct {
+	EstimatedAssets *int64                        `json:"estimatedAssets,omitempty"`
+	Format          MigrationPlanRepositoryFormat `json:"format"`
+	Name            string                        `json:"name"`
+	Type            *MigrationPlanRepositoryType  `json:"type,omitempty"`
+}
+
+// MigrationPlanRepositoryFormat defines model for MigrationPlanRepository.Format.
+type MigrationPlanRepositoryFormat string
+
+// MigrationPlanRepositoryType defines model for MigrationPlanRepository.Type.
+type MigrationPlanRepositoryType string
+
+// MigrationReport defines model for MigrationReport.
+type MigrationReport struct {
+	ConflictPolicy *MigrationConflictPolicy  `json:"conflictPolicy,omitempty"`
+	Cutover        *map[string]interface{}   `json:"cutover,omitempty"`
+	Failures       *[]map[string]interface{} `json:"failures,omitempty"`
+	FinishedAt     *string                   `json:"finishedAt,omitempty"`
+
+	// Raw 任务 report_json 原文透传（foundation 可为空对象）
+	Raw          *map[string]interface{}   `json:"raw,omitempty"`
+	Repositories *[]map[string]interface{} `json:"repositories,omitempty"`
+	SourceType   *MigrationSourceType      `json:"sourceType,omitempty"`
+	StartedAt    *string                   `json:"startedAt,omitempty"`
+	Status       MigrationTaskStatus       `json:"status"`
+	TaskId       int64                     `json:"taskId"`
+	Totals       map[string]interface{}    `json:"totals"`
+	Warnings     *[]string                 `json:"warnings,omitempty"`
+}
+
+// MigrationSourceConfig 来源配置（url/path 等），不得含密钥明文
+type MigrationSourceConfig map[string]interface{}
+
+// MigrationSourceType defines model for MigrationSourceType.
+type MigrationSourceType string
+
+// MigrationTask defines model for MigrationTask.
+type MigrationTask struct {
+	ConflictPolicy MigrationConflictPolicy `json:"conflictPolicy"`
+	CreatedAt      string                  `json:"createdAt"`
+
+	// CredentialRef 环境变量引用名，非密钥明文
+	CredentialRef *string        `json:"credentialRef,omitempty"`
+	ErrorMessage  *string        `json:"errorMessage,omitempty"`
+	FinishedAt    *string        `json:"finishedAt,omitempty"`
+	Id            int64          `json:"id"`
+	Plan          *MigrationPlan `json:"plan,omitempty"`
+
+	// SourceConfig 来源配置（url/path 等），不得含密钥明文
+	SourceConfig *MigrationSourceConfig `json:"sourceConfig,omitempty"`
+	SourceType   MigrationSourceType    `json:"sourceType"`
+	StartedAt    *string                `json:"startedAt,omitempty"`
+	Status       MigrationTaskStatus    `json:"status"`
+	UpdatedAt    string                 `json:"updatedAt"`
+}
+
+// MigrationTaskList defines model for MigrationTaskList.
+type MigrationTaskList struct {
+	Items []MigrationTask `json:"items"`
+	Total int             `json:"total"`
+}
+
+// MigrationTaskStatus defines model for MigrationTaskStatus.
+type MigrationTaskStatus string
 
 // PasswordChangeRequest defines model for PasswordChangeRequest.
 type PasswordChangeRequest struct {
@@ -517,6 +734,9 @@ type UserList struct {
 	Total int    `json:"total"`
 }
 
+// MigrationIdParam defines model for MigrationIdParam.
+type MigrationIdParam = int64
+
 // PageParam defines model for PageParam.
 type PageParam = int
 
@@ -550,6 +770,12 @@ type NotFound = Error
 // Unauthorized defines model for Unauthorized.
 type Unauthorized = Error
 
+// ListMigrationsParams defines parameters for ListMigrations.
+type ListMigrationsParams struct {
+	Page     *PageParam     `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *PageSizeParam `form:"page_size,omitempty" json:"page_size,omitempty"`
+}
+
 // ListRepositoriesParams defines parameters for ListRepositories.
 type ListRepositoriesParams struct {
 	Page     *PageParam     `form:"page,omitempty" json:"page,omitempty"`
@@ -576,6 +802,12 @@ type BootstrapJSONRequestBody = BootstrapRequest
 
 // LoginJSONRequestBody defines body for Login for application/json ContentType.
 type LoginJSONRequestBody = LoginRequest
+
+// CreateMigrationJSONRequestBody defines body for CreateMigration for application/json ContentType.
+type CreateMigrationJSONRequestBody = CreateMigrationRequest
+
+// DiscoverMigrationsJSONRequestBody defines body for DiscoverMigrations for application/json ContentType.
+type DiscoverMigrationsJSONRequestBody = MigrationDiscoverRequest
 
 // CreateRepositoryJSONRequestBody defines body for CreateRepository for application/json ContentType.
 type CreateRepositoryJSONRequestBody = CreateRepositoryRequest
@@ -609,6 +841,33 @@ type ServerInterface interface {
 	// Logout 注销当前会话（当前 JWT 记入吊销名单直至过期）
 	// (POST /api/v1/auth/logout)
 	Logout(c *gin.Context)
+	// ListMigrations 迁移任务列表（分页）
+	// (GET /api/v1/migrations)
+	ListMigrations(c *gin.Context, params ListMigrationsParams)
+	// CreateMigration 创建 planned 迁移任务（不自动执行）
+	// (POST /api/v1/migrations)
+	CreateMigration(c *gin.Context)
+	// DiscoverMigrations 三来源发现并落库为 planned 任务（不同步执行）
+	// (POST /api/v1/migrations/discover)
+	DiscoverMigrations(c *gin.Context)
+	// GetMigration 迁移任务详情
+	// (GET /api/v1/migrations/{id})
+	GetMigration(c *gin.Context, id MigrationIdParam)
+	// CancelMigration 取消 planned 或协作取消 running
+	// (POST /api/v1/migrations/{id}/cancel)
+	CancelMigration(c *gin.Context, id MigrationIdParam)
+	// FinalizeMigration 切换窗口最终增量扫描（仅 completed）
+	// (POST /api/v1/migrations/{id}/finalize)
+	FinalizeMigration(c *gin.Context, id MigrationIdParam)
+	// GetMigrationReport 迁移报告
+	// (GET /api/v1/migrations/{id}/report)
+	GetMigrationReport(c *gin.Context, id MigrationIdParam)
+	// ResumeMigration 自 failed/cancelled 断点续传
+	// (POST /api/v1/migrations/{id}/resume)
+	ResumeMigration(c *gin.Context, id MigrationIdParam)
+	// StartMigration 显式启动（planned → running）
+	// (POST /api/v1/migrations/{id}/start)
+	StartMigration(c *gin.Context, id MigrationIdParam)
 	// ListRepositories 仓库列表（分页，按可见性 / ACL 过滤）
 	// (GET /api/v1/repositories)
 	ListRepositories(c *gin.Context, params ListRepositoriesParams)
@@ -714,6 +973,217 @@ func (siw *ServerInterfaceWrapper) Logout(c *gin.Context) {
 	}
 
 	siw.Handler.Logout(c)
+}
+
+// ListMigrations operation middleware
+func (siw *ServerInterfaceWrapper) ListMigrations(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListMigrationsParams
+
+	// ------------- Optional query parameter "page" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page", c.Request.URL.Query(), &params.Page, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter page: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "page_size" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page_size", c.Request.URL.Query(), &params.PageSize, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter page_size: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ListMigrations(c, params)
+}
+
+// CreateMigration operation middleware
+func (siw *ServerInterfaceWrapper) CreateMigration(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.CreateMigration(c)
+}
+
+// DiscoverMigrations operation middleware
+func (siw *ServerInterfaceWrapper) DiscoverMigrations(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.DiscoverMigrations(c)
+}
+
+// GetMigration operation middleware
+func (siw *ServerInterfaceWrapper) GetMigration(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id MigrationIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetMigration(c, id)
+}
+
+// CancelMigration operation middleware
+func (siw *ServerInterfaceWrapper) CancelMigration(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id MigrationIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.CancelMigration(c, id)
+}
+
+// FinalizeMigration operation middleware
+func (siw *ServerInterfaceWrapper) FinalizeMigration(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id MigrationIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.FinalizeMigration(c, id)
+}
+
+// GetMigrationReport operation middleware
+func (siw *ServerInterfaceWrapper) GetMigrationReport(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id MigrationIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetMigrationReport(c, id)
+}
+
+// ResumeMigration operation middleware
+func (siw *ServerInterfaceWrapper) ResumeMigration(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id MigrationIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ResumeMigration(c, id)
+}
+
+// StartMigration operation middleware
+func (siw *ServerInterfaceWrapper) StartMigration(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id MigrationIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.StartMigration(c, id)
 }
 
 // ListRepositories operation middleware
@@ -1203,4 +1673,13 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.PUT(options.BaseURL+"/api/v1/repositories/:name/acl", wrapper.SetRepositoryAcl)
 	router.GET(options.BaseURL+"/api/v1/repositories/:name/assets", wrapper.ListRepositoryAssets)
 	router.GET(options.BaseURL+"/api/v1/repositories/:name/usage", wrapper.GetRepositoryUsage)
+	router.POST(options.BaseURL+"/api/v1/migrations/discover", wrapper.DiscoverMigrations)
+	router.GET(options.BaseURL+"/api/v1/migrations", wrapper.ListMigrations)
+	router.POST(options.BaseURL+"/api/v1/migrations", wrapper.CreateMigration)
+	router.GET(options.BaseURL+"/api/v1/migrations/:id", wrapper.GetMigration)
+	router.POST(options.BaseURL+"/api/v1/migrations/:id/start", wrapper.StartMigration)
+	router.POST(options.BaseURL+"/api/v1/migrations/:id/resume", wrapper.ResumeMigration)
+	router.POST(options.BaseURL+"/api/v1/migrations/:id/cancel", wrapper.CancelMigration)
+	router.GET(options.BaseURL+"/api/v1/migrations/:id/report", wrapper.GetMigrationReport)
+	router.POST(options.BaseURL+"/api/v1/migrations/:id/finalize", wrapper.FinalizeMigration)
 }

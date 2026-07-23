@@ -24,6 +24,7 @@ import {
   IconLayoutSidebarLeftExpand,
   IconLogout,
   IconPackage,
+  IconTransfer,
   IconUsers,
 } from "@tabler/icons-react";
 import { useEffect, useState } from "react";
@@ -75,6 +76,12 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { labelKey: "nav.users", path: "/users", icon: <IconUsers size={18} />, adminOnly: true },
       { labelKey: "nav.tokens", path: "/tokens", icon: <IconKey size={18} /> },
+      {
+        labelKey: "nav.migrations",
+        path: "/migrations",
+        icon: <IconTransfer size={18} />,
+        adminOnly: true,
+      },
     ],
   },
 ];

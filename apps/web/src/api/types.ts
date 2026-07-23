@@ -19,6 +19,14 @@ export type AssetSummary = Schemas["AssetSummary"];
 export type AssetList = Schemas["AssetList"];
 export type UsageSnippet = Schemas["UsageSnippet"];
 export type UsageInfo = Schemas["UsageInfo"];
+export type MigrationTask = Schemas["MigrationTask"];
+export type MigrationTaskList = Schemas["MigrationTaskList"];
+export type MigrationPlan = Schemas["MigrationPlan"];
+export type MigrationReport = Schemas["MigrationReport"];
+export type MigrationDiscoverResponse = Schemas["MigrationDiscoverResponse"];
+export type MigrationSourceType = Schemas["MigrationSourceType"];
+export type MigrationConflictPolicy = Schemas["MigrationConflictPolicy"];
+export type MigrationTaskStatus = Schemas["MigrationTaskStatus"];
 
 export type UserRole = User["role"];
 export type UserStatus = User["status"];

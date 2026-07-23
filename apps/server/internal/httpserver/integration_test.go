@@ -3,8 +3,10 @@ package httpserver_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -39,18 +41,20 @@ func newTestEnv(t *testing.T) *testEnv {
 	revokedRepo := repository.NewRevokedRepo(db)
 	repoRepo := repository.NewRepoRepo(db)
 	aclRepo := repository.NewAclRepo(db)
+	migrationSvc := domain.NewMigrationService(repository.NewMigrationTaskRepo(db), nil)
 
 	jwtMgr := auth.NewJWTManager([]byte("integration-test-secret-key-32byte!!"))
 	authenticator := auth.NewAuthenticator(jwtMgr, domain.NewAuthStore(userRepo, tokenRepo, revokedRepo))
 
 	handlers := api.NewHandlers(api.Deps{
-		Version:   "test",
-		Checks:    []func() error{db.Ping},
-		Migration: db.CurrentVersion,
-		Auth:      domain.NewAuthService(userRepo, revokedRepo, jwtMgr),
-		Users:     domain.NewUserService(userRepo),
-		Tokens:    domain.NewTokenService(tokenRepo),
-		Repos:     domain.NewRepositoryService(repoRepo, aclRepo, repository.NewAssetRepo(db)),
+		Version:    "test",
+		Checks:     []func() error{db.Ping},
+		Migration:  db.CurrentVersion,
+		Auth:       domain.NewAuthService(userRepo, revokedRepo, jwtMgr),
+		Users:      domain.NewUserService(userRepo),
+		Tokens:     domain.NewTokenService(tokenRepo),
+		Repos:      domain.NewRepositoryService(repoRepo, aclRepo, repository.NewAssetRepo(db)),
+		Migrations: migrationSvc,
 	})
 
 	srv := httpserver.New("test",
@@ -308,5 +312,155 @@ func TestStatusReportsInitialized(t *testing.T) {
 	}
 	if !after.Initialized || after.UserCount != 1 {
 		t.Errorf("自举后 status 应已初始化且用户数 1，实得 %+v", after)
+	}
+}
+
+// TestMigrationFoundationAPI 覆盖迁移地基：admin 创建 planned、start、非法态 409、401/403、未知凭据 400。
+func TestMigrationFoundationAPI(t *testing.T) {
+	e := newTestEnv(t)
+
+	var boot api.LoginResponse
+	if code := e.do(t, http.MethodPost, "/api/v1/auth/bootstrap", "",
+		api.BootstrapRequest{Username: "admin", Password: "admin-pass-123"}, &boot); code != http.StatusCreated {
+		t.Fatalf("自举状态码 = %d，期望 201", code)
+	}
+	adminToken := boot.Token
+
+	// 未认证 → 401
+	if code := e.do(t, http.MethodGet, "/api/v1/migrations", "", nil, nil); code != http.StatusUnauthorized {
+		t.Errorf("未认证列迁移 状态码 = %d，期望 401", code)
+	}
+
+	// 普通用户 → 403
+	if code := e.do(t, http.MethodPost, "/api/v1/users", adminToken,
+		api.CreateUserRequest{Username: "bob", Password: "bob-pass-123"}, nil); code != http.StatusCreated {
+		t.Fatalf("建用户状态码 = %d", code)
+	}
+	var bobLogin api.LoginResponse
+	if code := e.do(t, http.MethodPost, "/api/v1/auth/login", "",
+		api.LoginRequest{Username: "bob", Password: "bob-pass-123"}, &bobLogin); code != http.StatusOK {
+		t.Fatalf("bob 登录状态码 = %d", code)
+	}
+	if code := e.do(t, http.MethodGet, "/api/v1/migrations", bobLogin.Token, nil, nil); code != http.StatusForbidden {
+		t.Errorf("非 admin 列迁移 状态码 = %d，期望 403", code)
+	}
+
+	// 未知 credentialRef → 400
+	badRef := "JIAN_TEST_MISSING_MIGRATION_CRED"
+	if code := e.do(t, http.MethodPost, "/api/v1/migrations", adminToken,
+		api.CreateMigrationRequest{
+			SourceType:    api.OnlineRest,
+			CredentialRef: &badRef,
+			SourceConfig:  &api.MigrationSourceConfig{"url": "http://nexus.example"},
+		}, nil); code != http.StatusBadRequest {
+		t.Errorf("未知 credentialRef 状态码 = %d，期望 400", code)
+	}
+
+	// 创建 planned
+	cfg := api.MigrationSourceConfig{"path": "/data/bundle"}
+	var created api.MigrationTask
+	if code := e.do(t, http.MethodPost, "/api/v1/migrations", adminToken,
+		api.CreateMigrationRequest{
+			SourceType:   api.OfflineBundle,
+			SourceConfig: &cfg,
+		}, &created); code != http.StatusCreated {
+		t.Fatalf("创建迁移 状态码 = %d，期望 201", code)
+	}
+	if created.Status != api.Planned {
+		t.Fatalf("创建后 status = %q，期望 planned", created.Status)
+	}
+	if created.Id <= 0 {
+		t.Fatal("期望正数 task id")
+	}
+
+	// GET 详情
+	var got api.MigrationTask
+	if code := e.do(t, http.MethodGet, "/api/v1/migrations/"+itoa64(created.Id), adminToken, nil, &got); code != http.StatusOK {
+		t.Fatalf("GET 迁移 状态码 = %d", code)
+	}
+	if got.Status != api.Planned {
+		t.Errorf("GET status = %q", got.Status)
+	}
+
+	// start → running
+	var started api.MigrationTask
+	if code := e.do(t, http.MethodPost, "/api/v1/migrations/"+itoa64(created.Id)+"/start", adminToken, nil, &started); code != http.StatusOK {
+		t.Fatalf("start 状态码 = %d，期望 200", code)
+	}
+	if started.Status != api.Running {
+		t.Fatalf("start 后 status = %q", started.Status)
+	}
+
+	// 再 start → 409
+	if code := e.do(t, http.MethodPost, "/api/v1/migrations/"+itoa64(created.Id)+"/start", adminToken, nil, nil); code != http.StatusConflict {
+		t.Errorf("二次 start 状态码 = %d，期望 409", code)
+	}
+
+	// report 可 GET
+	if code := e.do(t, http.MethodGet, "/api/v1/migrations/"+itoa64(created.Id)+"/report", adminToken, nil, nil); code != http.StatusOK {
+		t.Errorf("report 状态码 = %d，期望 200", code)
+	}
+}
+
+func itoa64(id int64) string {
+	return fmt.Sprintf("%d", id)
+}
+
+// TestMigrationDiscoverAPI 覆盖 discover 落库 planned、坏路径不落库、非 admin 403。
+func TestMigrationDiscoverAPI(t *testing.T) {
+	e := newTestEnv(t)
+
+	var boot api.LoginResponse
+	if code := e.do(t, http.MethodPost, "/api/v1/auth/bootstrap", "",
+		api.BootstrapRequest{Username: "admin", Password: "admin-pass-123"}, &boot); code != http.StatusCreated {
+		t.Fatalf("自举 %d", code)
+	}
+	adminToken := boot.Token
+
+	root := t.TempDir()
+	// 最小 offline bundle
+	if err := os.WriteFile(filepath.Join(root, "manifest.json"), []byte(`{"repositories":[{"name":"raw-data","format":"raw","type":"hosted"}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "content", "raw-data"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "content", "raw-data", "a.bin"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := api.MigrationSourceConfig{"path": root}
+	var disc api.MigrationDiscoverResponse
+	if code := e.do(t, http.MethodPost, "/api/v1/migrations/discover", adminToken,
+		api.MigrationDiscoverRequest{SourceType: api.OfflineBundle, SourceConfig: &cfg}, &disc); code != http.StatusOK {
+		t.Fatalf("discover 状态码 = %d，期望 200", code)
+	}
+	if disc.TaskId <= 0 {
+		t.Fatal("期望 taskId")
+	}
+	if len(disc.Plan.Repositories) != 1 {
+		t.Fatalf("plan = %+v", disc.Plan)
+	}
+
+	var task api.MigrationTask
+	if code := e.do(t, http.MethodGet, "/api/v1/migrations/"+itoa64(disc.TaskId), adminToken, nil, &task); code != http.StatusOK {
+		t.Fatalf("GET task %d", code)
+	}
+	if task.Status != api.Planned {
+		t.Fatalf("status = %q", task.Status)
+	}
+
+	// 坏路径：400 且列表不增加
+	var listBefore api.MigrationTaskList
+	_ = e.do(t, http.MethodGet, "/api/v1/migrations", adminToken, nil, &listBefore)
+	bad := api.MigrationSourceConfig{"path": filepath.Join(root, "nope")}
+	if code := e.do(t, http.MethodPost, "/api/v1/migrations/discover", adminToken,
+		api.MigrationDiscoverRequest{SourceType: api.OfflineBundle, SourceConfig: &bad}, nil); code != http.StatusBadRequest {
+		t.Errorf("坏路径 discover 状态码 = %d，期望 400", code)
+	}
+	var listAfter api.MigrationTaskList
+	_ = e.do(t, http.MethodGet, "/api/v1/migrations", adminToken, nil, &listAfter)
+	if listAfter.Total != listBefore.Total {
+		t.Errorf("失败不应新增任务：before=%d after=%d", listBefore.Total, listAfter.Total)
 	}
 }

@@ -21,6 +21,55 @@
 
 > 代理上游凭据用引用名 → 环境变量注入 `Authorization`，不硬编码、不入库、不进日志（见 `SECURITY.md`）。
 
+### 1.1.1 Nexus 迁移凭据引用（0.4.0）
+
+迁移任务 **只存凭据引用名**（如 `NEXUS_BASIC`），运行时从**同名环境变量**读取实际用户名/口令或 Token：
+
+| 约定 | 说明 |
+| ---- | ---- |
+| 请求字段 | `credentialRef`：环境变量名，可出现在 API/DB |
+| 环境变量值 | 明文密钥（Basic 的 `user:pass` 或 Token），**永不入库、不进日志、不进报告** |
+| 缺失引用 | 创建/discover 时若引用名在环境中不存在或为空 → `400 validation_error` |
+| 离线源 | `offline_dir` / `offline_bundle` 通常无需 `credentialRef` |
+
+进程启动时会将残留 `running` 迁移任务标为 `failed`（提示 resume），**不会自动续跑**（见 ADR-0012）。
+
+### 1.1.2 自有离线包布局（offline_bundle）
+
+```
+bundle/
+  manifest.json   # { "repositories": [ { "name", "format", "type" } ] }
+  content/
+    <repo>/<path...>   # 原始制品文件
+```
+
+- `format` 支持 `raw` / `maven` / `maven2` / `npm`；其它进 warnings，不纳入可执行计划。
+- 无 `manifest.json` 时扫描 `content/*` 一级目录为仓库名，format 默认 `raw` 并 warning。
+
+### 1.1.3 离线 Nexus 目录夹具（offline_dir）
+
+验收/简化布局：
+
+```
+<data>/
+  repositories/
+    <repo-name>/
+      .format          # raw|maven2|npm|…
+      content/         # 制品树
+```
+
+真实 3.70 blob store 布局可后续用录制样例替换。
+
+### 1.1.4 迁移切换（cutover）检查清单
+
+1. 将 CI / 客户端 registry 指向本 JianArtifact 实例  
+2. 将源 Nexus 置为只读（或断开写入）  
+3. 调用 `POST /api/v1/migrations/{id}/finalize` 做最终增量  
+4. 抽样校验关键路径可下载且校验和一致  
+5. 确认备份覆盖 SQLite 与 blob 目录  
+
+报告 `GET .../report` 的 `cutover.checklist` 与此对齐；`cutover.delta` 记录 finalize 增量计数。
+
 ### 1.2 Docker / Compose 部署（主路径）
 
 1. 复制 `deploy/.env.example` 为 `deploy/.env`，填入 `JIAN_JWT_SECRET` 等配置。

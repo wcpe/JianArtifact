@@ -8,7 +8,20 @@
 
 ### 新增
 
-- 暂无。
+- Nexus 迁移域地基（FR-21/22/23 部分，见 `docs/specs/0.4.0-migration-foundation.md` 与 `docs/adr/0012-nexus-migration-state-machine.md`）：
+  - `0003_migration.sql` 新增 `migration_task` 表；`MigrationTaskRepo` + `domain.MigrationService` 状态机骨架（创建 **planned**、显式 **start**、cancel/resume 守卫、启动时 **running→failed**）。
+  - OpenAPI 管理面：`/api/v1/migrations` 列表/创建、`/{id}`、`/start`、`/resume`、`/cancel`、`/report`、`/discover`；仅 admin；凭据仅 `credentialRef`。
+  - devmock 内存任务状态机与契约测试对齐；OPERATIONS 补充迁移凭据引用约定。
+- Nexus 三来源发现（FR-20 / FR-21 计划预览，见 `docs/specs/0.4.0-migration-discover.md`）：
+  - `internal/migration/discover`：`OnlineREST`（Nexus REST 仓库列表 + 有限页资产估算）、`OfflineDir`（夹具布局）、`OfflineBundle`（manifest + content）。
+  - `POST /migrations/discover` 同步发现，成功落库 **planned** 返回 `taskId`+`plan`；失败不落库；不自动 start。
+- Nexus 迁移异步执行（FR-21/22，见 `docs/specs/0.4.0-migration-execute.md`）：
+  - `internal/migration/runner`：planned→start 后台搬运、冲突 skip/overwrite/fail、checkpoint 断点、协作 cancel、启动 running→failed。
+  - offline_bundle/offline_dir 流式 Put；wiring 注入 Runner。
+- Nexus 迁移报告与切换增量（FR-23，见 `docs/specs/0.4.0-migration-report-cutover.md`）：
+  - `GET .../report` 组装 totals/failures/cutover checklist；`POST .../finalize` 仅 completed，差量复制并写 `report.delta`。
+- 管理端迁移向导（见 `docs/specs/0.4.0-migration-web-wizard.md`）：
+  - 侧栏「迁移」入口（admin）；列表 / 向导（discover→planned→显式 start）/ 详情（轮询、取消、续传、finalize、报告与 cutover 清单）。
 
 ### 变更
 
