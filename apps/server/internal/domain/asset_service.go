@@ -61,6 +61,45 @@ func (s *AssetService) Put(repoName, path string, r io.Reader, contentType strin
 	return s.assets.GetByPath(repo.ID, path)
 }
 
+// BackfillChecksumsResult 是历史资产 sha1/md5 回填的统计。
+type BackfillChecksumsResult struct {
+	Scanned  int // 本批扫描条数
+	Updated  int // 成功写回条数
+	Skipped  int // blob 缺失或校验失败跳过
+	Remaining int // 库内仍缺校验和的条数
+}
+
+// BackfillChecksums 对 sha1/md5 为空的历史资产从 blob 流式补算并写回（不现算读路径）。
+// batch 为单批上限（≤0 默认 500）。可重复调用直至 Remaining=0。
+func (s *AssetService) BackfillChecksums(batch int) (*BackfillChecksumsResult, error) {
+	if batch <= 0 {
+		batch = 500
+	}
+	list, err := s.assets.ListMissingChecksums(batch)
+	if err != nil {
+		return nil, err
+	}
+	res := &BackfillChecksumsResult{Scanned: len(list)}
+	for i := range list {
+		a := &list[i]
+		sha1sum, md5sum, err := s.blobs.Checksums(a.BlobHash)
+		if err != nil {
+			res.Skipped++
+			continue
+		}
+		if err := s.assets.UpdateChecksums(a.ID, sha1sum, md5sum); err != nil {
+			return res, err
+		}
+		res.Updated++
+	}
+	remain, err := s.assets.CountMissingChecksums()
+	if err != nil {
+		return res, err
+	}
+	res.Remaining = remain
+	return res, nil
+}
+
 // Get 从 hosted 仓库拉取一件制品（仅本地缓存读），返回元数据与内容可读流（调用方负责关闭）。
 // 仓库或路径不存在均返回 ErrNotFound。proxy/group 的读路径请用 Resolve。
 func (s *AssetService) Get(repoName, path string) (*repository.Asset, io.ReadCloser, error) {

@@ -2,6 +2,8 @@ package blobstore
 
 import (
 	"bytes"
+	"crypto/md5"
+	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -69,6 +71,40 @@ func TestPutDedup(t *testing.T) {
 	if err == nil && len(entries) != 0 {
 		t.Fatalf("临时目录应为空，残留 %d 项", len(entries))
 	}
+}
+
+func TestChecksumsMatchesPut(t *testing.T) {
+	s := NewStore(t.TempDir())
+	content := []byte("backfill-checksum-probe")
+	wantSHA1 := hex.EncodeToString(sha1Sum(content))
+	wantMD5 := hex.EncodeToString(md5Sum(content))
+
+	hash, sha1Put, md5Put, _, err := s.Put(bytes.NewReader(content))
+	if err != nil {
+		t.Fatalf("Put 失败：%v", err)
+	}
+	if sha1Put != wantSHA1 || md5Put != wantMD5 {
+		t.Fatalf("Put 返回校验和不符：sha1=%s md5=%s", sha1Put, md5Put)
+	}
+	gotSHA1, gotMD5, err := s.Checksums(hash)
+	if err != nil {
+		t.Fatalf("Checksums 失败：%v", err)
+	}
+	if gotSHA1 != wantSHA1 || gotMD5 != wantMD5 {
+		t.Fatalf("Checksums 不符：sha1=%s md5=%s", gotSHA1, gotMD5)
+	}
+}
+
+func sha1Sum(b []byte) []byte {
+	h := sha1.New()
+	_, _ = h.Write(b)
+	return h.Sum(nil)
+}
+
+func md5Sum(b []byte) []byte {
+	h := md5.New()
+	_, _ = h.Write(b)
+	return h.Sum(nil)
 }
 
 func TestOpenMissing(t *testing.T) {

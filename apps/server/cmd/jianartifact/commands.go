@@ -19,12 +19,62 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// adminCmd 分发 admin 子命令。当前仅支持 reset。
+// adminCmd 分发 admin 子命令：reset / backfill-checksums。
 func adminCmd(args []string) error {
-	if len(args) == 0 || args[0] != "reset" {
-		return fmt.Errorf("用法：jianartifact admin reset [--username <名>] [--password <口令>]")
+	if len(args) == 0 {
+		return fmt.Errorf("用法：jianartifact admin <reset|backfill-checksums> [参数]")
 	}
-	return adminReset(args[1:])
+	switch args[0] {
+	case "reset":
+		return adminReset(args[1:])
+	case "backfill-checksums":
+		return adminBackfillChecksums(args[1:])
+	default:
+		return fmt.Errorf("未知 admin 子命令：%s（支持 reset / backfill-checksums）", args[0])
+	}
+}
+
+// adminBackfillChecksums 离线回填 asset 表中缺失的 sha1/md5：从内容寻址 blob 流式计算并写库。
+// --batch 控制单批上限；--all 循环直到无剩余（或本批无更新）。
+func adminBackfillChecksums(args []string) error {
+	fs := flag.NewFlagSet("admin backfill-checksums", flag.ContinueOnError)
+	batch := fs.Int("batch", 500, "单批最多处理条数")
+	all := fs.Bool("all", false, "循环处理直至无剩余")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("加载配置：%w", err)
+	}
+	svc, err := openServices(cfg)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = svc.db.Close() }()
+
+	totalUpdated, totalSkipped := 0, 0
+	for {
+		res, err := svc.assetSvc.BackfillChecksums(*batch)
+		if err != nil {
+			return fmt.Errorf("回填校验和：%w", err)
+		}
+		totalUpdated += res.Updated
+		totalSkipped += res.Skipped
+		fmt.Printf("本批：扫描 %d，更新 %d，跳过 %d，剩余 %d\n",
+			res.Scanned, res.Updated, res.Skipped, res.Remaining)
+		if !*all || res.Remaining == 0 || res.Scanned == 0 {
+			break
+		}
+		// 本批全跳过且仍有剩余 → 避免死循环（blob 缺失无法补）
+		if res.Updated == 0 {
+			fmt.Println("本批无成功更新，停止（可能 blob 缺失）。")
+			break
+		}
+	}
+	fmt.Printf("合计：更新 %d，跳过 %d。\n", totalUpdated, totalSkipped)
+	return nil
 }
 
 // adminReset 离线直连 SQLite 重置 / 创建管理员账号与口令：

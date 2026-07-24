@@ -92,6 +92,36 @@ type RepoStats struct {
 	TotalSize    int64 `db:"total_size"`
 }
 
+// ListMissingChecksums 返回 sha1 或 md5 为空的资产（历史数据回填用）。
+func (r *AssetRepo) ListMissingChecksums(limit int) ([]Asset, error) {
+	if limit <= 0 {
+		limit = 500
+	}
+	var assets []Asset
+	err := r.db.Select(&assets,
+		`SELECT id, repository_id, path, blob_hash, size, content_type, sha1, md5, created_at, updated_at
+			FROM asset WHERE sha1 = '' OR md5 = '' ORDER BY id LIMIT ?`,
+		limit,
+	)
+	return assets, err
+}
+
+// UpdateChecksums 按资产 id 更新已登记的 sha1/md5（仅回填路径使用）。
+func (r *AssetRepo) UpdateChecksums(id int64, sha1, md5 string) error {
+	_, err := r.db.Exec(
+		`UPDATE asset SET sha1 = ?, md5 = ?, updated_at = datetime('now') WHERE id = ?`,
+		sha1, md5, id,
+	)
+	return err
+}
+
+// CountMissingChecksums 返回仍缺 sha1/md5 的资产数量。
+func (r *AssetRepo) CountMissingChecksums() (int, error) {
+	var n int
+	err := r.db.Get(&n, `SELECT COUNT(*) FROM asset WHERE sha1 = '' OR md5 = ''`)
+	return n, err
+}
+
 // CountAndSizeByRepo 返回单个仓库的制品数量与总字节数。
 func (r *AssetRepo) CountAndSizeByRepo(repoID int64) (count int64, totalSize int64, err error) {
 	var s RepoStats

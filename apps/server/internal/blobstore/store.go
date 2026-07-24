@@ -117,6 +117,28 @@ func (s *Store) Open(hash string) (io.ReadCloser, int64, error) {
 	return f, info.Size(), nil
 }
 
+// Checksums 对已落盘 blob 流式计算 sha1 与 md5（并复验 sha256 与寻址键一致）。
+// 供历史资产回填使用；不改变内容寻址布局。
+func (s *Store) Checksums(hash string) (sha1sum, md5sum string, err error) {
+	rc, _, err := s.Open(hash)
+	if err != nil {
+		return "", "", err
+	}
+	defer func() { _ = rc.Close() }()
+
+	sha256Hasher := sha256.New()
+	sha1Hasher := sha1.New()
+	md5Hasher := md5.New()
+	if _, err = io.Copy(io.MultiWriter(sha256Hasher, sha1Hasher, md5Hasher), rc); err != nil {
+		return "", "", fmt.Errorf("读取 blob 计算校验和：%w", err)
+	}
+	got := hex.EncodeToString(sha256Hasher.Sum(nil))
+	if got != hash {
+		return "", "", fmt.Errorf("blob 内容 sha256 与寻址键不一致：期望 %s 实际 %s", hash, got)
+	}
+	return hex.EncodeToString(sha1Hasher.Sum(nil)), hex.EncodeToString(md5Hasher.Sum(nil)), nil
+}
+
 // Exists 报告指定哈希的 blob 是否已落盘。非法哈希恒返回 false。
 func (s *Store) Exists(hash string) bool {
 	if !hashPattern.MatchString(hash) {

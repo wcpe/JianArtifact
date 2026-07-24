@@ -82,6 +82,9 @@ func usage(w io.Writer) {
   status             打印运行时状态（服务在跑）或离线静态信息
   admin reset        重置 / 创建管理员账号与口令（离线直连 SQLite）
                      [--username <名>] [--password <口令>]
+  admin backfill-checksums
+                     回填历史资产缺失的 sha1/md5（从 blob 流式计算并写库）
+                     [--batch <N>] [--all]
   healthcheck        对本地 /readyz 探活，供容器健康检查
   help               显示本帮助
 
@@ -93,6 +96,7 @@ func usage(w io.Writer) {
 示例：
   jianartifact run
   jianartifact admin reset --username admin
+  jianartifact admin backfill-checksums --all
   jianartifact status
 `, version)
 }
