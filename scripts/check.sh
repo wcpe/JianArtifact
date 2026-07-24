@@ -16,6 +16,11 @@ pnpm typecheck
 pnpm test # 含 devmock ↔ OpenAPI 契约一致性（对齐 AC-06）
 pnpm build # 产出 apps/web/dist 供后端 embed
 
+echo "==> [1.5/3] 同步前端产物到后端 embed 目录（apps/server/web/dist；//go:embed all:dist 依赖非空目录）"
+rm -rf apps/server/web/dist
+mkdir -p apps/server/web/dist
+cp -a apps/web/dist/. apps/server/web/dist/
+
 echo "==> [2/3] 后端质量门（格式 / 静态 / 漏洞 / 测试 / 构建）"
 (
   cd apps/server

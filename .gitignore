@@ -34,11 +34,11 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-# ===== 前端内嵌产物（由构建注入 apps/server，不入库；保留占位 index.html 以保证 //go:embed 可编译）=====
-# 先重新纳入该目录（覆盖上面全局 dist/ 规则），再忽略其内容，最后放行占位 index.html。
-!/apps/server/web/dist/
-/apps/server/web/dist/*
-!/apps/server/web/dist/index.html
+# ===== 前端内嵌产物（apps/server/web/dist）=====
+# 全部不入库：由构建期注入（scripts/check.sh、顶层 Makefile build、deploy/Dockerfile
+# 在编译前把 apps/web/dist 同步/复制到此处），不保留任何占位文件。
+# 全局 dist/ 规则已覆盖此目录，这里显式重申以便查阅。
+/apps/server/web/dist/
 
 # ===== 运行期数据（不入库）=====
 # SQLite 元数据库
@@ -72,3 +72,4 @@ Thumbs.db
 deploy/.env
 # 远程部署专用 SSH 密钥（deploy/remote-ssh.sh setup-key 生成）
 deploy/ssh/
+/.playwright-cli/

@@ -30,6 +30,9 @@ check: ## 在 Docker 中运行全部质量门
 
 build: ## 前端构建 + 后端 embed 编译
 	pnpm build
+	rm -rf apps/server/web/dist
+	mkdir -p apps/server/web/dist
+	cp -a apps/web/dist/. apps/server/web/dist/
 	cd apps/server && task build
 
 release: ## 多平台发布物

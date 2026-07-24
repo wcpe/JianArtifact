@@ -20,10 +20,7 @@ echo "==> [1/3] 安装前端依赖并构建（供 Go embed）"
 pnpm install --frozen-lockfile
 pnpm build
 
-echo "==> [2/3] 同步 web dist 到 apps/server/web/dist（覆盖占位）"
-# 保留目录本身，清空除 .gitkeep 外的内容后拷入正式产物
-find apps/server/web/dist -mindepth 1 ! -name 'index.html' -exec rm -rf {} + 2>/dev/null || true
-# 用 rsync/cp 覆盖：先删再拷，保证无残留旧资源
+echo "==> [2/3] 同步 web dist 到 apps/server/web/dist（构建期注入，先删再拷保证无残留）"
 rm -rf apps/server/web/dist
 mkdir -p apps/server/web/dist
 cp -a apps/web/dist/. apps/server/web/dist/
