@@ -243,18 +243,15 @@ export function MigrationWizardPage() {
   const firstPlanned = plannedOthers[0];
   const previewEst = planEstimatedAssets(discoverResult?.plan.repositories);
 
-  const refreshOfflineIndex = useCallback(
-    (path: string) => {
-      if (!path.trim()) {
-        setOfflineIdx(null);
-        return;
-      }
-      getOfflineDirIndex(path.trim())
-        .then(setOfflineIdx)
-        .catch(() => setOfflineIdx(null));
-    },
-    [],
-  );
+  const refreshOfflineIndex = useCallback((path: string) => {
+    if (!path.trim()) {
+      setOfflineIdx(null);
+      return;
+    }
+    getOfflineDirIndex(path.trim())
+      .then(setOfflineIdx)
+      .catch(() => setOfflineIdx(null));
+  }, []);
 
   // path / 离线源变化时拉索引状态；scanning 时 1s 轮询
   useEffect(() => {
@@ -371,15 +368,10 @@ export function MigrationWizardPage() {
   const offlineIndexReady =
     form.values.sourceType === "offline_dir" && offlineIdx?.status === "ready";
   const indexRepoList = offlineIdx?.repositories;
-  const indexRepoNames = useMemo(
-    () => (indexRepoList ?? []).map((r) => r.name),
-    [indexRepoList],
-  );
+  const indexRepoNames = useMemo(() => (indexRepoList ?? []).map((r) => r.name), [indexRepoList]);
   const includeSelectedCount = form.values.includeRepositories.length;
   const offlineNeedPickRepos =
-    form.values.sourceType === "offline_dir" &&
-    !offlineIndexReady &&
-    includeSelectedCount === 0;
+    form.values.sourceType === "offline_dir" && !offlineIndexReady && includeSelectedCount === 0;
 
   // 索引刚就绪（或进入页面已是 ready 且尚未勾选）时默认全选，便于一键发现
   const prevOfflineStatusRef = useRef<string | undefined>(undefined);
@@ -405,8 +397,7 @@ export function MigrationWizardPage() {
       form.setFieldValue("includeRepositories", names);
       autoPickedIndexPathRef.current = pathKey;
     }
-    // form 引用稳定，仅在 status / 仓列表边沿触发
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // form 引用稳定，仅在 status / 仓列表边沿触发（本项目 ESLint 未启用 react-hooks 规则集）
   }, [offlineIdx?.status, offlineIdx?.repositories, form.values.sourceType, form.values.path]);
 
   const toggleIncludeRepo = (name: string) => {
@@ -779,7 +770,8 @@ export function MigrationWizardPage() {
                           </ThemeIcon>
                           <div>
                             <Text fw={600} size="sm">
-                              {t("migrations.offlineFlowStepIndex")} · {t("migrations.offlineIndexTitle")}
+                              {t("migrations.offlineFlowStepIndex")} ·{" "}
+                              {t("migrations.offlineIndexTitle")}
                             </Text>
                             <Text size="xs" c="dimmed">
                               {t("migrations.offlineIndexHint")}
@@ -813,9 +805,7 @@ export function MigrationWizardPage() {
                           {offlineIdx.status === "scanning" && offlineIdx.scannedProps
                             ? ` · props ${offlineIdx.scannedProps}`
                             : ""}
-                          {offlineIdx.totalEntries
-                            ? ` · entries ${offlineIdx.totalEntries}`
-                            : ""}
+                          {offlineIdx.totalEntries ? ` · entries ${offlineIdx.totalEntries}` : ""}
                           {offlineIdx.repoCount ? ` · repos ${offlineIdx.repoCount}` : ""}
                         </Text>
                       )}
@@ -959,11 +949,7 @@ export function MigrationWizardPage() {
                                   <Table.Tr
                                     key={r.name}
                                     style={{ cursor: "pointer" }}
-                                    bg={
-                                      checked
-                                        ? "var(--mantine-color-violet-light)"
-                                        : undefined
-                                    }
+                                    bg={checked ? "var(--mantine-color-violet-light)" : undefined}
                                     onClick={() => toggleIncludeRepo(r.name)}
                                   >
                                     <Table.Td onClick={(e) => e.stopPropagation()}>
@@ -1094,11 +1080,7 @@ export function MigrationWizardPage() {
                                       <Table.Tr
                                         key={r.name}
                                         style={{ cursor: "pointer" }}
-                                        bg={
-                                          checked
-                                            ? "var(--mantine-color-blue-light)"
-                                            : undefined
-                                        }
+                                        bg={checked ? "var(--mantine-color-blue-light)" : undefined}
                                         onClick={() => toggleIncludeRepo(r.name)}
                                       >
                                         <Table.Td onClick={(e) => e.stopPropagation()}>
@@ -1191,7 +1173,13 @@ export function MigrationWizardPage() {
                       {t("migrations.discoverProgressHint", { seconds: discoverElapsed })}
                     </Text>
                     <Progress value={progressPct} animated striped />
-                    <Button size="xs" color="red" variant="light" w="fit-content" onClick={cancelDiscover}>
+                    <Button
+                      size="xs"
+                      color="red"
+                      variant="light"
+                      w="fit-content"
+                      onClick={cancelDiscover}
+                    >
                       {t("migrations.cancelDiscover")}
                     </Button>
                   </Stack>
@@ -1205,14 +1193,10 @@ export function MigrationWizardPage() {
                 <Button
                   leftSection={<IconSearch size={16} />}
                   loading={busy}
-                  disabled={
-                    (Boolean(firstPlanned) && !discoverResult) || offlineNeedPickRepos
-                  }
+                  disabled={(Boolean(firstPlanned) && !discoverResult) || offlineNeedPickRepos}
                   onClick={() => runDiscover()}
                 >
-                  {offlineIndexReady &&
-                  includeSelectedCount === 0 &&
-                  indexRepoNames.length > 0
+                  {offlineIndexReady && includeSelectedCount === 0 && indexRepoNames.length > 0
                     ? t("migrations.offlineDiscoverAllFromIndex")
                     : offlineIndexReady && includeSelectedCount > 0
                       ? `${t("migrations.runDiscover")}（${includeSelectedCount}）`
@@ -1248,11 +1232,11 @@ export function MigrationWizardPage() {
                     label={t("migrations.estimatedAssets")}
                     value={previewEst > 0 ? previewEst.toLocaleString() : "—"}
                   />
+                  <MiniStat label={t("migrations.selectRepos")} value={`${selectedRepos.length}`} />
                   <MiniStat
-                    label={t("migrations.selectRepos")}
-                    value={`${selectedRepos.length}`}
+                    label={t("migrations.conflictPolicy")}
+                    value={form.values.conflictPolicy}
                   />
-                  <MiniStat label={t("migrations.conflictPolicy")} value={form.values.conflictPolicy} />
                 </SimpleGrid>
 
                 {(discoverResult.plan.warnings?.length ?? 0) > 0 && (
@@ -1274,7 +1258,12 @@ export function MigrationWizardPage() {
                       <Button size="compact-xs" variant="light" onClick={selectAll} disabled={busy}>
                         {t("migrations.selectAll")}
                       </Button>
-                      <Button size="compact-xs" variant="light" onClick={selectNone} disabled={busy}>
+                      <Button
+                        size="compact-xs"
+                        variant="light"
+                        onClick={selectNone}
+                        disabled={busy}
+                      >
                         {t("migrations.selectNone")}
                       </Button>
                     </Group>

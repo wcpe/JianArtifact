@@ -28,11 +28,7 @@ import { useNavigate } from "react-router-dom";
 
 import { listMigrations } from "../api/endpoints";
 import type { MigrationTask } from "../api/types";
-import {
-  planEstimatedAssets,
-  sourceColor,
-  statusColor,
-} from "../components/migration/status";
+import { planEstimatedAssets, sourceColor, statusColor } from "../components/migration/status";
 import { AsyncBoundary } from "../components/AsyncBoundary";
 import { useAsync } from "../hooks/useAsync";
 import { density } from "../theme/density";
@@ -55,10 +51,7 @@ export function MigrationsPage() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
 
-  const state = useAsync(
-    () => listMigrations({ page, page_size: pageSize }),
-    [page, pageSize],
-  );
+  const state = useAsync(() => listMigrations({ page, page_size: pageSize }), [page, pageSize]);
 
   // 活跃任务横幅：额外拉一页靠前任务（id 降序），覆盖多数近期 running/planned
   const gate = useAsync(() => listMigrations({ page: 1, page_size: 50 }), []);
@@ -145,9 +138,7 @@ export function MigrationsPage() {
               }
               onClick={onNew}
             >
-              {activeHint?.kind === "running"
-                ? t("migrations.gotoDetail")
-                : t("migrations.new")}
+              {activeHint?.kind === "running" ? t("migrations.gotoDetail") : t("migrations.new")}
             </Button>
           </Group>
         }
@@ -279,9 +270,7 @@ function TaskCard({ task, onOpen }: { task: MigrationTask; onOpen: () => void })
   const est = planEstimatedAssets(repos);
   const cfg = task.sourceConfig as Record<string, unknown> | undefined;
   const target =
-    (typeof cfg?.url === "string" && cfg.url) ||
-    (typeof cfg?.path === "string" && cfg.path) ||
-    "—";
+    (typeof cfg?.url === "string" && cfg.url) || (typeof cfg?.path === "string" && cfg.path) || "—";
 
   return (
     <Card
@@ -293,12 +282,7 @@ function TaskCard({ task, onOpen }: { task: MigrationTask; onOpen: () => void })
     >
       <Group justify="space-between" align="flex-start" wrap="wrap" gap="md">
         <Group align="flex-start" gap="md" wrap="nowrap" style={{ flex: 1, minWidth: 0 }}>
-          <ThemeIcon
-            size={44}
-            radius="md"
-            variant="light"
-            color={sourceColor(task.sourceType)}
-          >
+          <ThemeIcon size={44} radius="md" variant="light" color={sourceColor(task.sourceType)}>
             <SourceIcon type={task.sourceType} />
           </ThemeIcon>
           <Stack gap={4} style={{ minWidth: 0, flex: 1 }}>

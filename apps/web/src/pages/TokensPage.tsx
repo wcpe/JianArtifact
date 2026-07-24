@@ -1,14 +1,5 @@
 // 访问令牌：列表 + 新建（明文仅回显一次）+ 吊销。
-import {
-  ActionIcon,
-  Alert,
-  Button,
-  Code,
-  Group,
-  Modal,
-  Table,
-  TextInput,
-} from "@mantine/core";
+import { ActionIcon, Alert, Button, Code, Group, Modal, Table, TextInput } from "@mantine/core";
 import { useForm } from "@mantine/form";
 import { useDisclosure } from "@mantine/hooks";
 import { IconTrash } from "@tabler/icons-react";

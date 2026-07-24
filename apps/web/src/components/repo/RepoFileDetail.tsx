@@ -1,16 +1,6 @@
 // 文件详情：元数据 + 多校验和 + 下载/HTML View + 依赖坐标 + usage 片段可复制。点文件夹时不渲染。
 import { useState } from "react";
-import {
-  Badge,
-  Button,
-  Card,
-  Code,
-  Group,
-  Select,
-  Stack,
-  Text,
-  Title,
-} from "@mantine/core";
+import { Badge, Button, Card, Code, Group, Select, Stack, Text, Title } from "@mantine/core";
 import { IconDownload, IconExternalLink } from "@tabler/icons-react";
 import { useTranslation } from "react-i18next";
 
@@ -28,13 +18,7 @@ interface Props {
   showDownload?: boolean;
 }
 
-export function RepoFileDetail({
-  repoName,
-  format,
-  asset,
-  usage,
-  showDownload = true,
-}: Props) {
+export function RepoFileDetail({ repoName, format, asset, usage, showDownload = true }: Props) {
   const { t } = useTranslation();
   const downloadUrl = assetDownloadUrl(repoName, format, asset.path);
   const viewUrl = htmlViewUrl(repoName, asset.path);
@@ -121,9 +105,7 @@ export function RepoFileDetail({
                     </Text>
                   )}
                 </div>
-                <CopyTextButton
-                  value={snippet.code.replace("path/to/artifact", asset.path)}
-                />
+                <CopyTextButton value={snippet.code.replace("path/to/artifact", asset.path)} />
               </Group>
               <Code block style={{ whiteSpace: "pre-wrap" }}>
                 {snippet.code.replace("path/to/artifact", asset.path)}

@@ -78,8 +78,8 @@ func TestOfflineDirNexusBlobStore(t *testing.T) {
 	}
 
 	plan, err := discover.OfflineDir{}.Discover(context.Background(), discover.Config{
-		Path:                 root,
-		IncludeRepositories:  []string{"r3d"},
+		Path:                root,
+		IncludeRepositories: []string{"r3d"},
 	})
 	if err != nil {
 		t.Fatalf("Discover：%v", err)

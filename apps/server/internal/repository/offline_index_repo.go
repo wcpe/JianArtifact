@@ -111,7 +111,7 @@ ON CONFLICT(root_path, repo, asset_path) DO UPDATE SET
 	if err != nil {
 		return err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 	for _, e := range entries {
 		if _, err := stmt.Exec(e.RootPath, e.Repo, e.AssetPath, e.BytesPath, e.PropPath, e.PropMtime); err != nil {
 			return err

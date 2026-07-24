@@ -91,7 +91,7 @@ func listAllAssets(client *http.Client, base, repo, cred string) ([]onlineAsset,
 			return nil, err
 		}
 		if status == http.StatusUnauthorized || status == http.StatusForbidden {
-			return nil, fmt.Errorf("Nexus 认证失败")
+			return nil, fmt.Errorf("向 Nexus 认证失败")
 		}
 		if status == http.StatusNotFound {
 			return all, nil
@@ -141,7 +141,7 @@ func httpGet(client *http.Client, rawURL, cred string) ([]byte, int, error) {
 	if err != nil {
 		return nil, 0, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	// 列表响应限制 32MB
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 	if err != nil {

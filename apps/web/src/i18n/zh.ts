@@ -200,7 +200,8 @@ export const zh = {
     uploadNeedPath: "请填写目标路径或选择带文件名的文件",
     uploadOk: "上传成功",
     uploadClientOnlyTitle: "请用客户端发布",
-    uploadClientOnly: "Maven / npm 请使用下方使用说明中的客户端命令发布，管理端仅支持 Raw hosted 单文件上传。",
+    uploadClientOnly:
+      "Maven / npm 请使用下方使用说明中的客户端命令发布，管理端仅支持 Raw hosted 单文件上传。",
     publicTitle: "公开仓库",
     publicHint: "无需登录即可浏览公开仓库中的制品。",
     publicBadge: "公开浏览",
@@ -300,13 +301,16 @@ export const zh = {
     runDiscover: "发现并落库",
     discoverOk: "发现成功，已落库为 planned",
     discoverInProgress: "正在发现仓库…",
-    discoverProgressHint: "已等待 {{seconds}} 秒。在线源通常数秒内返回；若超时请检查地址/网络或缩小仓库范围。",
-    discoverTimeout: "发现超时（约 90 秒）。请检查 Nexus 地址是否可达，或填写 include 仓库名后重试。",
+    discoverProgressHint:
+      "已等待 {{seconds}} 秒。在线源通常数秒内返回；若超时请检查地址/网络或缩小仓库范围。",
+    discoverTimeout:
+      "发现超时（约 90 秒）。请检查 Nexus 地址是否可达，或填写 include 仓库名后重试。",
     discoverCancelled: "已取消发现请求",
     cancelDiscover: "取消发现",
     checkingActive: "正在检查是否有未完成的迁移任务…",
     activeTaskTitle: "存在未完成的计划任务",
-    activeTaskHint: "当前有 {{count}} 个 planned 任务（最近 #{{id}}）。请先继续或取消后再新建，避免重复派发。",
+    activeTaskHint:
+      "当前有 {{count}} 个 planned 任务（最近 #{{id}}）。请先继续或取消后再新建，避免重复派发。",
     continuePlanned: "继续上次计划",
     gotoDetail: "查看详情",
     blockRunning: "任务 #{{id}} 正在执行，请等待完成或取消后再新建。",
@@ -347,8 +351,7 @@ export const zh = {
     progressFailed: "失败",
     runningHint: "任务执行中，每 2 秒自动刷新进度。请勿重复新建迁移。",
     phaseEnumeratingTitle: "正在枚举源",
-    phaseEnumeratingBody:
-      "离线 blob 按仓扫描属性文件；下方「已发现」会持续增加，不是卡死。",
+    phaseEnumeratingBody: "离线 blob 按仓扫描属性文件；下方「已发现」会持续增加，不是卡死。",
     phaseEnumeratingProgress: "已发现 {{found}} / 估算 {{total}}",
     phaseCopyingTitle: "正在搬运 / 跳过",
     phaseTotal: "源项 {{n}}",

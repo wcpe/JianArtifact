@@ -56,10 +56,7 @@ export function RepoBrowser({
   const [uploading, setUploading] = useState(false);
   const [reloadNonce, setReloadNonce] = useState(0);
 
-  const assetsState = useAsync(
-    () => listAllRepositoryAssets(repoName),
-    [repoName, reloadNonce],
-  );
+  const assetsState = useAsync(() => listAllRepositoryAssets(repoName), [repoName, reloadNonce]);
   const usageState = useAsync(() => getRepositoryUsage(repoName), [repoName]);
   const repoState = useAsync(
     () =>
@@ -71,14 +68,9 @@ export function RepoBrowser({
     [repoName, publicMode],
   );
 
-  const format =
-    forcedFormat ||
-    repoState.data?.format ||
-    usageState.data?.format ||
-    "raw";
+  const format = forcedFormat || repoState.data?.format || usageState.data?.format || "raw";
   const repoType = forcedType || repoState.data?.type || usageState.data?.type || "hosted";
-  const canUpload =
-    allowUpload && format === "raw" && repoType === "hosted" && !publicMode;
+  const canUpload = allowUpload && format === "raw" && repoType === "hosted" && !publicMode;
 
   const tree = useMemo(() => {
     if (!assetsState.data) {
@@ -126,10 +118,7 @@ export function RepoBrowser({
           </Badge>
         )}
         {repoState.data?.visibility && (
-          <Badge
-            variant="light"
-            color={repoState.data.visibility === "public" ? "blue" : "gray"}
-          >
+          <Badge variant="light" color={repoState.data.visibility === "public" ? "blue" : "gray"}>
             {repoState.data.visibility === "public"
               ? t("repositories.visibilityPublic")
               : t("repositories.visibilityPrivate")}
@@ -160,11 +149,7 @@ export function RepoBrowser({
             <Group>
               <FileButton onChange={handleUpload} disabled={uploading}>
                 {(props) => (
-                  <Button
-                    {...props}
-                    leftSection={<IconUpload size={16} />}
-                    loading={uploading}
-                  >
+                  <Button {...props} leftSection={<IconUpload size={16} />} loading={uploading}>
                     {t("repoDetail.uploadPick")}
                   </Button>
                 )}
@@ -190,7 +175,9 @@ export function RepoBrowser({
           ) : (
             <Stack gap="sm">
               {data.truncated && (
-                <Alert color="yellow">{t("repoDetail.treeTruncated", { n: data.items.length, total: data.total })}</Alert>
+                <Alert color="yellow">
+                  {t("repoDetail.treeTruncated", { n: data.items.length, total: data.total })}
+                </Alert>
               )}
               <Text size="sm" c="dimmed">
                 {t("repoDetail.assetCount", { n: data.total })}

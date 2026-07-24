@@ -236,7 +236,9 @@ export function RepositoriesPage() {
                             <Button
                               size="xs"
                               variant="subtle"
-                              onClick={() => window.open(`/p/${encodeURIComponent(repo.name)}`, "_blank")}
+                              onClick={() =>
+                                window.open(`/p/${encodeURIComponent(repo.name)}`, "_blank")
+                              }
                             >
                               {t("repositories.publicLink")}
                             </Button>

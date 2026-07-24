@@ -228,7 +228,7 @@ func (s *OnlineREST) get(ctx context.Context, rawURL, credential string) ([]byte
 	if err != nil {
 		return nil, 0, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
 	if err != nil {
 		return nil, resp.StatusCode, err

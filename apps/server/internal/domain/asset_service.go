@@ -63,9 +63,9 @@ func (s *AssetService) Put(repoName, path string, r io.Reader, contentType strin
 
 // BackfillChecksumsResult 是历史资产 sha1/md5 回填的统计。
 type BackfillChecksumsResult struct {
-	Scanned  int // 本批扫描条数
-	Updated  int // 成功写回条数
-	Skipped  int // blob 缺失或校验失败跳过
+	Scanned   int // 本批扫描条数
+	Updated   int // 成功写回条数
+	Skipped   int // blob 缺失或校验失败跳过
 	Remaining int // 库内仍缺校验和的条数
 }
 

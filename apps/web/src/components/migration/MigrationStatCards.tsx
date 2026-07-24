@@ -49,9 +49,7 @@ export function MigrationStatCards({ totals, estimated }: Props) {
       color: "blue",
       icon: IconStack2,
       hint:
-        estimated && estimated > 0
-          ? t("migrations.statEstimated", { n: estimated })
-          : undefined,
+        estimated && estimated > 0 ? t("migrations.statEstimated", { n: estimated }) : undefined,
     },
   ] as const;
 

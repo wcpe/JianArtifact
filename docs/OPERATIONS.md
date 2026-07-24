@@ -25,12 +25,12 @@
 
 迁移任务 **只存凭据引用名**（如 `NEXUS_BASIC`），运行时从**同名环境变量**读取实际用户名/口令或 Token：
 
-| 约定 | 说明 |
-| ---- | ---- |
-| 请求字段 | `credentialRef`：环境变量名，可出现在 API/DB |
+| 约定       | 说明                                                                        |
+| ---------- | --------------------------------------------------------------------------- |
+| 请求字段   | `credentialRef`：环境变量名，可出现在 API/DB                                |
 | 环境变量值 | 明文密钥（Basic 的 `user:pass` 或 Token），**永不入库、不进日志、不进报告** |
-| 缺失引用 | 创建/discover 时若引用名在环境中不存在或为空 → `400 validation_error` |
-| 离线源 | `offline_dir` / `offline_bundle` 通常无需 `credentialRef` |
+| 缺失引用   | 创建/discover 时若引用名在环境中不存在或为空 → `400 validation_error`       |
+| 离线源     | `offline_dir` / `offline_bundle` 通常无需 `credentialRef`                   |
 
 进程启动时会将残留 `running` 迁移任务标为 `failed`（提示 resume），**不会自动续跑**（见 ADR-0012）。
 
@@ -64,7 +64,7 @@ bundle/
 
 全量迁移可能占满磁盘。支持 **多选** 仓库（在线 REST 与离线包/目录均适用）：
 
-1. **发现前预过滤**（可选）：`sourceConfig.includeRepositories: ["repo-a","repo-b"]`  
+1. **发现前预过滤**（可选）：`sourceConfig.includeRepositories: ["repo-a","repo-b"]`
 2. **启动时多选**（推荐）：`POST /api/v1/migrations/{id}/start` body：
    ```json
    { "includeRepositories": ["repo-a", "repo-b"] }
@@ -114,11 +114,11 @@ jianartifact admin backfill-checksums --batch 500
 
 ### 1.1.5 迁移切换（cutover）检查清单
 
-1. 将 CI / 客户端 registry 指向本 JianArtifact 实例  
-2. 将源 Nexus 置为只读（或断开写入）  
-3. 调用 `POST /api/v1/migrations/{id}/finalize` 做最终增量  
-4. 抽样校验关键路径可下载且校验和一致  
-5. 确认备份覆盖 SQLite 与 blob 目录  
+1. 将 CI / 客户端 registry 指向本 JianArtifact 实例
+2. 将源 Nexus 置为只读（或断开写入）
+3. 调用 `POST /api/v1/migrations/{id}/finalize` 做最终增量
+4. 抽样校验关键路径可下载且校验和一致
+5. 确认备份覆盖 SQLite 与 blob 目录
 
 报告 `GET .../report` 的 `cutover.checklist` 与此对齐；`cutover.delta` 记录 finalize 增量计数。
 
@@ -126,12 +126,12 @@ jianartifact admin backfill-checksums --batch 500
 
 协议路径与 **Nexus 3 默认形态一致**，客户端一般只需改 host，不必改 path：
 
-| 用途 | URL 形态 |
-| ---- | -------- |
-| Maven / Raw 制品 | `{base}/repository/{repoName}/{artifactPath}` |
-| npm | `{base}/npm/{repoName}/…`（与 Nexus npm 宿主路径不同，npm 需单独改 registry） |
-| 管理端浏览 | `{base}/repositories/{name}`（需登录） |
-| 浏览器公开预览 | `{base}/p/{name}`（仅 visibility=public） |
+| 用途             | URL 形态                                                                      |
+| ---------------- | ----------------------------------------------------------------------------- |
+| Maven / Raw 制品 | `{base}/repository/{repoName}/{artifactPath}`                                 |
+| npm              | `{base}/npm/{repoName}/…`（与 Nexus npm 宿主路径不同，npm 需单独改 registry） |
+| 管理端浏览       | `{base}/repositories/{name}`（需登录）                                        |
+| 浏览器公开预览   | `{base}/p/{name}`（仅 visibility=public）                                     |
 
 **鉴权（与 Nexus 公开仓习惯对齐）**
 
@@ -147,11 +147,11 @@ jianartifact admin backfill-checksums --batch 500
 
 **替换 Nexus `maven-public` 的推荐步骤**
 
-1. 迁移时把各 **hosted** 源仓迁入同名 hosted（如 `maven-releases` / 业务仓）。  
-2. 若迁移把 Nexus 的 **group 名**（常见 `maven-public`）落成了 **hosted**（本实例即如此）：  
-   - **方案 A（推荐保留数据）**：把该 hosted 设为 `public`，另建 group（如 `maven-all`），`members` 含该 hosted + 其它成员；客户端改为 group 名，或反代把旧名指到 group。  
-   - **方案 B（严格同名 group）**：内容先落到成员仓后，**删除** 占名的 hosted，再创建 `type=group, name=maven-public, visibility=public`（删除 hosted 会 CASCADE 清其 asset 元数据，慎用）。  
-3. 需要匿名 `mvn` 解析：group 与各只读成员均设 `visibility=public`。  
+1. 迁移时把各 **hosted** 源仓迁入同名 hosted（如 `maven-releases` / 业务仓）。
+2. 若迁移把 Nexus 的 **group 名**（常见 `maven-public`）落成了 **hosted**（本实例即如此）：
+   - **方案 A（推荐保留数据）**：把该 hosted 设为 `public`，另建 group（如 `maven-all`），`members` 含该 hosted + 其它成员；客户端改为 group 名，或反代把旧名指到 group。
+   - **方案 B（严格同名 group）**：内容先落到成员仓后，**删除** 占名的 hosted，再创建 `type=group, name=maven-public, visibility=public`（删除 hosted 会 CASCADE 清其 asset 元数据，慎用）。
+3. 需要匿名 `mvn` 解析：group 与各只读成员均设 `visibility=public`。
 4. 抽样：
 
 ```bash
@@ -163,8 +163,8 @@ curl -fsS -o /tmp/a.jar "{base}/repository/maven-all/com/example/demo/1.0.0/demo
 
 **真机当前示例（tmp）**
 
-- `maven-public`：迁移来的 **hosted**，已可设为 public，路径 `/repository/maven-public/...` 匿名可读。  
-- `maven-releases` / `maven-snapshots`：public hosted 成员。  
+- `maven-public`：迁移来的 **hosted**，已可设为 public，路径 `/repository/maven-public/...` 匿名可读。
+- `maven-releases` / `maven-snapshots`：public hosted 成员。
 - `maven-all`：public **group**，members=`maven-releases,maven-snapshots,maven-public`，匿名聚合读已验收。
 
 ### 1.2 Docker / Compose 部署（主路径）

@@ -318,7 +318,7 @@ func readProps(path string) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	out := map[string]string{}
 	sc := bufio.NewScanner(f)
 	buf := make([]byte, 0, 64*1024)

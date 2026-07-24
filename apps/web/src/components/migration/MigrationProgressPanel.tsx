@@ -116,19 +116,13 @@ export function MigrationProgressPanel({ totals, status, meta, animated }: Props
           radius="xl"
           animated={animated ?? status === "running"}
           striped={status === "running"}
-          color={
-            status === "failed" ? "red" : status === "completed" ? "green" : "blue"
-          }
+          color={status === "failed" ? "red" : status === "completed" ? "green" : "blue"}
         />
 
         {/* 大数字：枚举 / 搬运 */}
         {status === "running" && enumerating && (
           <Group gap="xl" justify="center">
-            <StatBig
-              label={t("migrations.foundLabel")}
-              value={found}
-              color="blue"
-            />
+            <StatBig label={t("migrations.foundLabel")} value={found} color="blue" />
             <Text size="xl" c="dimmed" fw={300}>
               /
             </Text>
@@ -198,15 +192,7 @@ export function MigrationProgressPanel({ totals, status, meta, animated }: Props
   );
 }
 
-function StatBig({
-  label,
-  value,
-  color,
-}: {
-  label: string;
-  value: number;
-  color: string;
-}) {
+function StatBig({ label, value, color }: { label: string; value: number; color: string }) {
   return (
     <Stack gap={0} align="center">
       <Text fw={800} size="1.75rem" lh={1.1} c={color}>

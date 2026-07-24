@@ -54,13 +54,10 @@ export function MigrationRepoTable({
     );
   }, [repositories, filter]);
 
-  const totalPages =
-    pageSize > 0 ? Math.max(1, Math.ceil(filtered.length / pageSize) || 1) : 1;
+  const totalPages = pageSize > 0 ? Math.max(1, Math.ceil(filtered.length / pageSize) || 1) : 1;
   const safePage = Math.min(page, totalPages);
   const pageItems =
-    pageSize > 0
-      ? filtered.slice((safePage - 1) * pageSize, safePage * pageSize)
-      : filtered;
+    pageSize > 0 ? filtered.slice((safePage - 1) * pageSize, safePage * pageSize) : filtered;
 
   if (repositories.length === 0) {
     return (
@@ -116,16 +113,8 @@ export function MigrationRepoTable({
                 return (
                   <Table.Tr
                     key={r.name}
-                    bg={
-                      selectable && checked
-                        ? "var(--mantine-color-blue-light)"
-                        : undefined
-                    }
-                    style={
-                      selectable
-                        ? { cursor: disabled ? "default" : "pointer" }
-                        : undefined
-                    }
+                    bg={selectable && checked ? "var(--mantine-color-blue-light)" : undefined}
+                    style={selectable ? { cursor: disabled ? "default" : "pointer" } : undefined}
                     onClick={() => {
                       if (selectable && !disabled) {
                         onToggle(r.name);

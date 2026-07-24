@@ -65,10 +65,7 @@ export function RepositoryDetailPage() {
           <Badge variant="outline" color="gray">
             {repo.type}
           </Badge>
-          <Badge
-            variant="light"
-            color={repo.visibility === "public" ? "blue" : "gray"}
-          >
+          <Badge variant="light" color={repo.visibility === "public" ? "blue" : "gray"}>
             {repo.visibility === "public"
               ? t("repositories.visibilityPublic")
               : t("repositories.visibilityPrivate")}
@@ -192,9 +189,10 @@ function AclPanel({ repoName }: { repoName: string }) {
   // 并行拉取 ACL 条目与用户列表（page_size: 100 足够覆盖常见规模）
   const state = useAsync(
     () =>
-      Promise.all([getAcl(repoName), listUsers({ page_size: 100 })]).then(
-        ([acl, users]) => ({ acl, users }),
-      ),
+      Promise.all([getAcl(repoName), listUsers({ page_size: 100 })]).then(([acl, users]) => ({
+        acl,
+        users,
+      })),
     [repoName],
   );
 
@@ -227,10 +225,7 @@ function AclPanel({ repoName }: { repoName: string }) {
   );
 
   // 已添加条目中已被占用的用户 id，新增时从下拉里排除，避免重复授权
-  const usedIds = useMemo(
-    () => new Set(entries.map((e) => e.subjectId)),
-    [entries],
-  );
+  const usedIds = useMemo(() => new Set(entries.map((e) => e.subjectId)), [entries]);
   const availableUserOptions = useMemo(
     () => userOptions.filter((o) => !usedIds.has(Number(o.value))),
     [userOptions, usedIds],

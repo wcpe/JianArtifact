@@ -44,7 +44,13 @@ export function MigrationLifecycle({
   const { t } = useTranslation();
   const idx = activeIndex(status);
   const endColor =
-    status === "completed" ? "green" : status === "failed" ? "red" : status === "cancelled" ? "gray" : "blue";
+    status === "completed"
+      ? "green"
+      : status === "failed"
+        ? "red"
+        : status === "cancelled"
+          ? "gray"
+          : "blue";
   const EndIcon =
     status === "completed"
       ? IconCircleCheck
@@ -55,7 +61,12 @@ export function MigrationLifecycle({
           : IconPlayerPlay;
 
   return (
-    <Timeline active={idx} bulletSize={28} lineWidth={2} color={status === "running" ? "blue" : endColor}>
+    <Timeline
+      active={idx}
+      bulletSize={28}
+      lineWidth={2}
+      color={status === "running" ? "blue" : endColor}
+    >
       <Timeline.Item
         bullet={<IconFileDescription size={14} />}
         title={t("migrations.status_planned")}
@@ -100,10 +111,7 @@ export function MigrationLifecycle({
   );
 }
 
-function endTitle(
-  status: MigrationTaskStatus,
-  t: (k: string) => string,
-): string {
+function endTitle(status: MigrationTaskStatus, t: (k: string) => string): string {
   if (status === "completed" || status === "failed" || status === "cancelled") {
     return t(`migrations.status_${status}`);
   }

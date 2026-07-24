@@ -44,9 +44,7 @@ export function CopyTextButton({
     });
   }, [value, timeoutMs]);
 
-  const text = copied
-    ? (copiedLabel ?? t("common.copied"))
-    : (label ?? t("common.copy"));
+  const text = copied ? (copiedLabel ?? t("common.copied")) : (label ?? t("common.copy"));
   const a11y = ariaLabel ?? t("common.copy");
 
   if (variant === "icon") {
@@ -71,9 +69,7 @@ export function CopyTextButton({
       variant={copied ? "filled" : "light"}
       onClick={onCopy}
       aria-label={a11y}
-      leftSection={
-        copied ? <IconCheck size={14} /> : <IconCopy size={14} />
-      }
+      leftSection={copied ? <IconCheck size={14} /> : <IconCopy size={14} />}
     >
       {text}
     </Button>

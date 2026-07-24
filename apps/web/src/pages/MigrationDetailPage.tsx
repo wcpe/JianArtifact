@@ -39,11 +39,7 @@ import { MigrationProgressPanel } from "../components/migration/MigrationProgres
 import { MigrationRepoTable } from "../components/migration/MigrationRepoTable";
 import { MigrationSourceCard } from "../components/migration/MigrationSourceCard";
 import { MigrationStatCards } from "../components/migration/MigrationStatCards";
-import {
-  parseTotals,
-  planEstimatedAssets,
-  statusColor,
-} from "../components/migration/status";
+import { parseTotals, planEstimatedAssets, statusColor } from "../components/migration/status";
 import { confirmDanger, notifyError, notifySuccess } from "../lib/feedback";
 import { density } from "../theme/density";
 
@@ -219,8 +215,7 @@ export function MigrationDetailPage() {
                     message: t("migrations.cancelConfirm"),
                     confirmLabel: t("common.confirm"),
                     cancelLabel: t("common.cancel"),
-                    onConfirm: () =>
-                      act(() => cancelMigration(task.id), t("migrations.cancelled")),
+                    onConfirm: () => act(() => cancelMigration(task.id), t("migrations.cancelled")),
                   });
                 }}
               >
@@ -343,7 +338,13 @@ export function MigrationDetailPage() {
           </Group>
           <Stack gap="xs">
             {failures.slice(0, 50).map((f, i) => (
-              <Card key={`${f.repo}-${f.path}-${i}`} withBorder padding="sm" radius="sm" bg="var(--mantine-color-red-0)">
+              <Card
+                key={`${f.repo}-${f.path}-${i}`}
+                withBorder
+                padding="sm"
+                radius="sm"
+                bg="var(--mantine-color-red-0)"
+              >
                 <Text size="sm" fw={600}>
                   {f.repo || "—"}
                   {f.path ? ` / ${f.path}` : ""}

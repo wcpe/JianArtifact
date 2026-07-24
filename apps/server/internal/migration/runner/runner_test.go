@@ -107,7 +107,7 @@ func TestRunnerOfflineBundleEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get 资产：%v", err)
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 	body, _ := io.ReadAll(rc)
 	if string(body) != "hello-migration" {
 		t.Fatalf("内容 = %q", body)
@@ -144,7 +144,7 @@ func TestRunnerConflictSkip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 	body, _ := io.ReadAll(rc)
 	if string(body) != "OLD" {
 		t.Fatalf("skip 应保留 OLD，得 %q", body)
@@ -176,7 +176,7 @@ func TestRunnerConflictOverwrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 	body, _ := io.ReadAll(rc)
 	if string(body) != "hello-migration" {
 		t.Fatalf("overwrite 应得新内容，得 %q", body)
@@ -233,7 +233,7 @@ func TestRunnerFinalizeDelta(t *testing.T) {
 	if err != nil {
 		t.Fatalf("增量资产：%v", err)
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 	body, _ := io.ReadAll(rc)
 	if string(body) != "extra" {
 		t.Fatalf("内容 = %q", body)
