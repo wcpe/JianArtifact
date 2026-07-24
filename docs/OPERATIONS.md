@@ -95,6 +95,23 @@ bash deploy/remote-ssh.sh deploy
 bash deploy/remote-ssh.sh health
 ```
 
+`deploy/remote-ssh.sh` 构建时读取仓库根 `VERSION` 文件，经 `-ldflags -X main.version=…` 注入二进制；`/api/v1/status` 与管理端展示的版本与此一致。
+
+### 1.1.4c 历史资产 sha1/md5 回填
+
+`0005_asset_checksums` 之后**新写入**的制品在 PUT 时已登记 sha1/md5；升级前已存在的行可能仍为空。运维可离线回填（读 blob 流式计算并写库，**不在读路径现算**）：
+
+```bash
+# 与进程相同的 JIAN_DATA_DIR / 环境
+jianartifact admin backfill-checksums --all
+# 或单批
+jianartifact admin backfill-checksums --batch 500
+```
+
+- `--all`：循环直到剩余为 0，或本批无成功更新（blob 缺失时会跳过并停止，避免死循环）。
+- 输出：每批扫描/更新/跳过/剩余条数。
+- 真机示例：在部署用户 home 下 `set -a; . ~/jianartifact/run.env; set +a; ~/jianartifact/current/jianartifact admin backfill-checksums --all`。
+
 ### 1.1.5 迁移切换（cutover）检查清单
 
 1. 将 CI / 客户端 registry 指向本 JianArtifact 实例  
