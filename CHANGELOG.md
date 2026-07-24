@@ -8,6 +8,24 @@
 
 ### 新增
 
+- 暂无。
+
+### 变更
+
+- 暂无。
+
+### 修复
+
+- 暂无。
+
+### 移除
+
+- 暂无。
+
+## [0.4.0] - 2026-07-24
+
+### 新增
+
 - 仓库浏览增强（FR-16a）：管理端文件树左右分栏、点文件看详情/usage/下载；Raw hosted 单文件上传；未登录公开页 `/p/:name`（仅 public 仓）。
 - Nexus 迁移域地基（FR-21/22/23 部分，见 `docs/specs/0.4.0-migration-foundation.md` 与 `docs/adr/0012-nexus-migration-state-machine.md`）：
   - `0003_migration.sql` 新增 `migration_task` 表；`MigrationTaskRepo` + `domain.MigrationService` 状态机骨架（创建 **planned**、显式 **start**、cancel/resume 守卫、启动时 **running→failed**）。
@@ -44,11 +62,13 @@
 
 ### 变更
 
-- 暂无。
+- 部署：`deploy/remote-ssh.sh` 构建时从仓库根 `VERSION` 注入 `-X main.version`，管理端/status 展示与文件一致。
+- 运维：补充历史资产 `sha1/md5` 回填命令说明（`admin backfill-checksums`），见 `docs/OPERATIONS.md` §1.1.4c。
 
 ### 修复
 
-- 暂无。
+- 管理端复制：HTTP 非安全上下文下降级 `execCommand`，避免 `navigator.clipboard` 不可用导致复制失败（`CopyTextButton` / `copyToClipboard`）。
+- 历史制品：提供 `jianartifact admin backfill-checksums`，从 blob 流式补算并写回空的 sha1/md5。
 
 ### 移除
 
