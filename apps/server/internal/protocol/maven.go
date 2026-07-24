@@ -78,10 +78,13 @@ func NewMavenHandler(raw *RawHandler) *MavenHandler {
 // 校验和文件缺失则据底层制品现算返回。
 func (h *MavenHandler) Get(c *gin.Context) {
 	repoName := c.Param("repo")
-	artPath := cleanArtifactPath(c.Param("artifactPath"))
 	if !h.authorize(c, repoName, "read") {
 		return
 	}
+	if h.tryBrowse(c) {
+		return
+	}
+	artPath := cleanArtifactPath(c.Param("artifactPath"))
 
 	repo, err := h.repoSvc.Get(repoName)
 	if err != nil {

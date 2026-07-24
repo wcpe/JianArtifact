@@ -417,10 +417,16 @@ type AssetSummary struct {
 	ContentType *string `json:"contentType,omitempty"`
 
 	// Hash 内容寻址 blob 的 sha256 摘要
-	Hash      string `json:"hash"`
-	Path      string `json:"path"`
-	Size      int64  `json:"size"`
-	UpdatedAt string `json:"updatedAt"`
+	Hash string `json:"hash"`
+
+	// Md5 制品内容的 MD5 摘要（写入时计算登记）
+	Md5  *string `json:"md5,omitempty"`
+	Path string  `json:"path"`
+
+	// Sha1 制品内容的 SHA-1 摘要（写入时计算登记）
+	Sha1      *string `json:"sha1,omitempty"`
+	Size      int64   `json:"size"`
+	UpdatedAt string  `json:"updatedAt"`
 }
 
 // BootstrapRequest defines model for BootstrapRequest.
@@ -614,16 +620,21 @@ type PutAclRequest struct {
 
 // Repository defines model for Repository.
 type Repository struct {
-	CreatedAt string           `json:"createdAt"`
-	Format    RepositoryFormat `json:"format"`
-	Id        int64            `json:"id"`
+	// ArtifactCount 仓库内制品数量（只读统计字段）
+	ArtifactCount *int             `json:"artifactCount,omitempty"`
+	CreatedAt     string           `json:"createdAt"`
+	Format        RepositoryFormat `json:"format"`
+	Id            int64            `json:"id"`
 
 	// Members group 仓库的成员仓库名（有序，仅 type=group）
 	Members *[]string `json:"members,omitempty"`
 	Name    string    `json:"name"`
 
 	// RemoteUrl proxy 仓库的上游地址（仅 type=proxy）
-	RemoteUrl  *string              `json:"remoteUrl,omitempty"`
+	RemoteUrl *string `json:"remoteUrl,omitempty"`
+
+	// TotalSize 仓库内制品总字节数（只读统计字段）
+	TotalSize  *int64               `json:"totalSize,omitempty"`
 	Type       RepositoryType       `json:"type"`
 	Visibility RepositoryVisibility `json:"visibility"`
 }

@@ -12,13 +12,14 @@ import (
 )
 
 // ListRepositories 仓库列表（分页）。管理员可见全部；普通用户仅见可读（public 或经 ACL 授权）者。
+// 响应中每个仓库附带 artifactCount/totalSize 统计（GROUP BY 一次查出，避免 N+1）。
 func (h *Handlers) ListRepositories(c *gin.Context, params ListRepositoriesParams) {
 	p, ok := requirePrincipal(c)
 	if !ok {
 		return
 	}
 	limit, offset := pageOffset(params.Page, params.PageSize)
-	rows, total, err := h.repos.List(limit, offset)
+	rows, statsMap, total, err := h.repos.ListWithStats(limit, offset)
 	if err != nil {
 		writeDomainErr(c, err)
 		return
@@ -31,7 +32,8 @@ func (h *Handlers) ListRepositories(c *gin.Context, params ListRepositoriesParam
 				continue
 			}
 		}
-		items = append(items, toAPIRepository(&rows[i]))
+		stats := statsMap[rows[i].ID]
+		items = append(items, toAPIRepository(&rows[i], &stats))
 	}
 	if !p.IsAdmin() {
 		total = len(items)
@@ -68,7 +70,7 @@ func (h *Handlers) CreateRepository(c *gin.Context) {
 		writeDomainErr(c, err)
 		return
 	}
-	c.JSON(http.StatusCreated, toAPIRepository(repo))
+	c.JSON(http.StatusCreated, toAPIRepository(repo, nil))
 }
 
 // UpdateRepository 更新仓库可见性，仅管理员。
@@ -103,7 +105,7 @@ func (h *Handlers) UpdateRepository(c *gin.Context, name RepoNameParam) {
 		writeDomainErr(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, toAPIRepository(repo))
+	c.JSON(http.StatusOK, toAPIRepository(repo, nil))
 }
 
 // DeleteRepository 删除仓库，仅管理员。

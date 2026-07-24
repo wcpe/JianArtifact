@@ -3,16 +3,20 @@ import {
   ActionIcon,
   Badge,
   Button,
+  Code,
+  CopyButton,
   Group,
   Modal,
   MultiSelect,
   Select,
   Table,
+  Text,
   TextInput,
+  Tooltip,
 } from "@mantine/core";
 import { useForm } from "@mantine/form";
 import { useDisclosure } from "@mantine/hooks";
-import { IconTrash } from "@tabler/icons-react";
+import { IconCopy, IconTrash } from "@tabler/icons-react";
 import { EmptyState, PageHeader } from "@jianartifact/ui";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -28,9 +32,22 @@ import {
 import type { RepoFormat, RepoType, Repository, RepoVisibility } from "../api/types";
 import { useAsync } from "../hooks/useAsync";
 import { confirmDanger, notifyError, notifySuccess } from "../lib/feedback";
+import { formatBytes } from "../lib/assetTree";
 
 const FORMAT_OPTIONS = ["raw", "maven", "npm"];
 const TYPE_OPTIONS = ["hosted", "proxy", "group"];
+
+const TYPE_COLOR: Record<string, string> = {
+  hosted: "green",
+  proxy: "cyan",
+  group: "violet",
+};
+
+function protocolBaseFor(repo: Pick<Repository, "format" | "name">): string {
+  return repo.format === "npm"
+    ? `${window.location.origin}/npm/${encodeURIComponent(repo.name)}/`
+    : `${window.location.origin}/repository/${encodeURIComponent(repo.name)}`;
+}
 
 export function RepositoriesPage() {
   const { t } = useTranslation();
@@ -137,57 +154,128 @@ export function RepositoriesPage() {
                   <Table.Th>{t("repositories.format")}</Table.Th>
                   <Table.Th>{t("repositories.type")}</Table.Th>
                   <Table.Th>{t("repositories.visibility")}</Table.Th>
+                  <Table.Th>{t("repositories.url")}</Table.Th>
+                  <Table.Th>{t("repositories.members")}</Table.Th>
+                  <Table.Th>{t("repositories.artifactCount")}</Table.Th>
+                  <Table.Th>{t("repositories.totalSize")}</Table.Th>
                   <Table.Th>{t("common.actions")}</Table.Th>
                 </Table.Tr>
               </Table.Thead>
               <Table.Tbody>
-                {list.items.map((repo) => (
-                  <Table.Tr key={repo.id}>
-                    <Table.Td>{repo.name}</Table.Td>
-                    <Table.Td>
-                      <Badge variant="light">{repo.format}</Badge>
-                    </Table.Td>
-                    <Table.Td>{repo.type}</Table.Td>
-                    <Table.Td>
-                      <Badge
-                        color={repo.visibility === "public" ? "blue" : "gray"}
-                        variant="light"
-                        style={{ cursor: "pointer" }}
-                        onClick={() => handleToggleVisibility(repo)}
-                      >
-                        {repo.visibility === "public"
-                          ? t("repositories.visibilityPublic")
-                          : t("repositories.visibilityPrivate")}
-                      </Badge>
-                    </Table.Td>
-                    <Table.Td>
-                      <Group gap="xs">
-                        <Button
-                          size="xs"
+                {list.items.map((repo) => {
+                  const protoUrl = protocolBaseFor(repo);
+                  return (
+                    <Table.Tr key={repo.id}>
+                      <Table.Td>
+                        <Text fw={600}>{repo.name}</Text>
+                      </Table.Td>
+                      <Table.Td>
+                        <Badge variant="light">{repo.format}</Badge>
+                      </Table.Td>
+                      <Table.Td>
+                        <Badge variant="light" color={TYPE_COLOR[repo.type] ?? "gray"}>
+                          {repo.type}
+                        </Badge>
+                      </Table.Td>
+                      <Table.Td>
+                        <Badge
+                          color={repo.visibility === "public" ? "blue" : "gray"}
                           variant="light"
-                          onClick={() => navigate(`/repositories/${repo.name}`)}
+                          style={{ cursor: "pointer" }}
+                          onClick={() => handleToggleVisibility(repo)}
                         >
-                          {t("repositories.browse")}
-                        </Button>
-                        <Button
-                          size="xs"
-                          variant="light"
-                          onClick={() => navigate(`/repositories/${repo.name}/acl`)}
-                        >
-                          {t("repositories.manageAcl")}
-                        </Button>
-                        <ActionIcon
-                          color="red"
-                          variant="subtle"
-                          onClick={() => handleDelete(repo)}
-                          aria-label={t("common.delete")}
-                        >
-                          <IconTrash size={16} />
-                        </ActionIcon>
-                      </Group>
-                    </Table.Td>
-                  </Table.Tr>
-                ))}
+                          {repo.visibility === "public"
+                            ? t("repositories.visibilityPublic")
+                            : t("repositories.visibilityPrivate")}
+                        </Badge>
+                      </Table.Td>
+                      <Table.Td>
+                        <Group gap={4} wrap="nowrap">
+                          <Code style={{ fontSize: 11 }}>{protoUrl}</Code>
+                          <CopyButton value={protoUrl} timeout={1500}>
+                            {({ copied, copy }) => (
+                              <Tooltip label={copied ? t("common.copied") : t("common.copy")} withArrow>
+                                <ActionIcon
+                                  size="sm"
+                                  variant="subtle"
+                                  color={copied ? "teal" : "gray"}
+                                  onClick={copy}
+                                  aria-label={t("common.copy")}
+                                >
+                                  <IconCopy size={14} />
+                                </ActionIcon>
+                              </Tooltip>
+                            )}
+                          </CopyButton>
+                        </Group>
+                      </Table.Td>
+                      <Table.Td>
+                        {repo.type === "group" && repo.members && repo.members.length > 0 ? (
+                          <Group gap={4}>
+                            {repo.members.map((m) => (
+                              <Badge key={m} size="sm" variant="outline" color="violet">
+                                {m}
+                              </Badge>
+                            ))}
+                          </Group>
+                        ) : repo.type === "proxy" && repo.remoteUrl ? (
+                          <Text size="xs" c="dimmed" lineClamp={1} title={repo.remoteUrl}>
+                            {repo.remoteUrl}
+                          </Text>
+                        ) : (
+                          <Text size="xs" c="dimmed">
+                            —
+                          </Text>
+                        )}
+                      </Table.Td>
+                      <Table.Td>
+                        <Text size="sm" ta="right">
+                          {repo.artifactCount ?? 0}
+                        </Text>
+                      </Table.Td>
+                      <Table.Td>
+                        <Text size="sm" ta="right">
+                          {formatBytes(repo.totalSize ?? 0)}
+                        </Text>
+                      </Table.Td>
+                      <Table.Td>
+                        <Group gap="xs">
+                          <Button
+                            size="xs"
+                            variant="light"
+                            onClick={() => navigate(`/repositories/${repo.name}`)}
+                          >
+                            {t("repositories.browse")}
+                          </Button>
+                          {repo.visibility === "public" && (
+                            <Button
+                              size="xs"
+                              variant="subtle"
+                              onClick={() => window.open(`/p/${encodeURIComponent(repo.name)}`, "_blank")}
+                            >
+                              {t("repositories.publicLink")}
+                            </Button>
+                          )}
+                          <Button
+                            size="xs"
+                            variant="light"
+                            onClick={() => navigate(`/repositories/${repo.name}/acl`)}
+                          >
+                            {t("repositories.manageAcl")}
+                          </Button>
+                          <ActionIcon
+                            color="red"
+                            variant="subtle"
+                            onClick={() => handleDelete(repo)}
+                            aria-label={t("common.delete")}
+                          >
+                            <IconTrash size={16} />
+                          </ActionIcon>
+                        </Group>
+                      </Table.Td>
+                    </Table.Tr>
+                  );
+                })}
               </Table.Tbody>
             </Table>
           )
@@ -223,7 +311,7 @@ export function RepositoriesPage() {
           {form.values.type === "group" && (
             <MultiSelect
               mt="sm"
-              label={t("repositories.members")}
+              label={t("repositories.membersLabel")}
               description={t("repositories.membersHint")}
               data={memberOptions}
               searchable

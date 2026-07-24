@@ -76,6 +76,8 @@ type Asset struct {
 	BlobHash     string `db:"blob_hash"`
 	Size         int64  `db:"size"`
 	ContentType  string `db:"content_type"`
+	Sha1         string `db:"sha1"`
+	Md5          string `db:"md5"`
 	CreatedAt    string `db:"created_at"`
 	UpdatedAt    string `db:"updated_at"`
 }

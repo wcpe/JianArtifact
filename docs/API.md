@@ -46,8 +46,10 @@
 
 ### 制品浏览
 
-- `GET /api/v1/repositories/{name}/browse`：浏览目录 / 组件。
-- `GET /api/v1/repositories/{name}/usage`：使用片段（客户端接入示例）。
+- `GET /api/v1/repositories/{name}/assets`：分页列出制品（`page` / `page_size` / 可选 `prefix`）；**public 仓匿名可读**，私有需 read 权限。
+- `GET /api/v1/repositories/{name}/usage`：使用片段（客户端接入示例）；权限同 assets。
+- 管理端 SPA：`/repositories/:name` 文件树左右分栏 + Raw hosted 上传（PUT 协议层）。
+- 公开 SPA（无需登录）：`/p/:name` 浏览 public 仓；私有返回 401/403 友好页。
 
 ### Nexus 迁移（0.4.0；见 ADR-0012）
 

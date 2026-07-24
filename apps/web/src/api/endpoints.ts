@@ -1,6 +1,6 @@
 // 端点封装：按 api/openapi.yaml 的 0.2.0 管理面路径提供 typed 调用。
 // 页面与数据钩子仅依赖此模块，不直接拼 URL。
-import { request } from "./client";
+import { putProtocolAsset, request } from "./client";
 import type {
   AclEntry,
   AclList,
@@ -145,9 +145,58 @@ export function listRepositoryAssets(name: string, params: AssetQuery = {}): Pro
   });
 }
 
+/**
+ * 拉取仓库全部资产（分页拼合，用于前端拼树）。
+ * 单页上限 100（与后端 pageOffset 一致）；超过 maxItems 截断并返回 truncated。
+ */
+export async function listAllRepositoryAssets(
+  name: string,
+  opts?: { prefix?: string; maxItems?: number },
+): Promise<{ items: AssetList["items"]; total: number; truncated: boolean }> {
+  const maxItems = opts?.maxItems ?? 5000;
+  const pageSize = 100;
+  const all: AssetList["items"] = [];
+  let page = 1;
+  let total = 0;
+  for (;;) {
+    const res = await listRepositoryAssets(name, {
+      page,
+      page_size: pageSize,
+      prefix: opts?.prefix,
+    });
+    total = res.total;
+    all.push(...res.items);
+    if (all.length >= total || res.items.length === 0 || all.length >= maxItems) {
+      break;
+    }
+    page += 1;
+  }
+  const items = all.slice(0, maxItems);
+  return {
+    items,
+    total,
+    truncated: items.length < total,
+  };
+}
+
 /** 使用说明：据 format/type 返回 curl/mvn/npm 客户端配置片段。 */
 export function getRepositoryUsage(name: string): Promise<UsageInfo> {
   return request<UsageInfo>(`/repositories/${name}/usage`);
+}
+
+/** Raw hosted 协议上传（PUT /repository/{name}/{path}）。 */
+export function uploadRawAsset(
+  repo: string,
+  path: string,
+  file: File,
+): Promise<{ repository: string; path: string; hash: string; size: number; contentType: string }> {
+  const enc = path
+    .split("/")
+    .filter(Boolean)
+    .map((s) => encodeURIComponent(s))
+    .join("/");
+  const url = `/repository/${encodeURIComponent(repo)}/${enc}`;
+  return putProtocolAsset(url, file, file.type || "application/octet-stream");
 }
 
 // —— Nexus 迁移（0.4.0）——

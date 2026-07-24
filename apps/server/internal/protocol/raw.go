@@ -43,10 +43,13 @@ type assetSummary struct {
 // HEAD 不写 body。
 func (h *RawHandler) Get(c *gin.Context) {
 	repo := c.Param("repo")
-	artPath := cleanArtifactPath(c.Param("artifactPath"))
 	if !h.authorize(c, repo, "read") {
 		return
 	}
+	if h.tryBrowse(c) {
+		return
+	}
+	artPath := cleanArtifactPath(c.Param("artifactPath"))
 	asset, rc, err := h.assets.Resolve(c.Request.Context(), repo, artPath)
 	if err != nil {
 		writeAssetErr(c, err)

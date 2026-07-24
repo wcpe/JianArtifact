@@ -29,6 +29,46 @@ func (s *RepositoryService) List(limit, offset int) ([]repository.Repository, in
 	return items, total, err
 }
 
+// RepoStats 是单仓库的制品统计（数量与总大小）。
+type RepoStats struct {
+	Count     int64
+	TotalSize int64
+}
+
+// ListWithStats 返回分页仓库及其制品统计（数量、总大小），避免逐仓 N+1 查询。
+func (s *RepositoryService) ListWithStats(limit, offset int) ([]repository.Repository, map[int64]RepoStats, int, error) {
+	total, err := s.repos.Count()
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	items, err := s.repos.List(limit, offset)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	ids := make([]int64, len(items))
+	for i := range items {
+		ids[i] = items[i].ID
+	}
+	rawStats, err := s.assets.CountAndSizeByRepos(ids)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	stats := make(map[int64]RepoStats, len(rawStats))
+	for id, rs := range rawStats {
+		stats[id] = RepoStats{Count: rs.Count, TotalSize: rs.TotalSize}
+	}
+	return items, stats, total, nil
+}
+
+// Stats 返回单个仓库的制品统计（数量、总大小）。
+func (s *RepositoryService) Stats(repoID int64) (RepoStats, error) {
+	count, totalSize, err := s.assets.CountAndSizeByRepo(repoID)
+	if err != nil {
+		return RepoStats{}, err
+	}
+	return RepoStats{Count: count, TotalSize: totalSize}, nil
+}
+
 // Get 按名取仓库。
 func (s *RepositoryService) Get(name string) (*repository.Repository, error) {
 	r, err := s.repos.GetByName(name)

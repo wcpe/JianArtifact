@@ -187,8 +187,8 @@ func toAPIUser(u *repository.User) User {
 	}
 }
 
-// toAPIRepository 把行模型转为契约 Repository。
-func toAPIRepository(r *repository.Repository) Repository {
+// toAPIRepository 把行模型转为契约 Repository。stats 非 nil 时填入统计字段。
+func toAPIRepository(r *repository.Repository, stats *domain.RepoStats) Repository {
 	out := Repository{
 		Id:         r.ID,
 		Name:       r.Name,
@@ -206,6 +206,12 @@ func toAPIRepository(r *repository.Repository) Repository {
 			out.Members = &members
 		}
 	}
+	if stats != nil {
+		count := int(stats.Count)
+		totalSize := stats.TotalSize
+		out.ArtifactCount = &count
+		out.TotalSize = &totalSize
+	}
 	return out
 }
 
@@ -220,6 +226,8 @@ func toAPIAsset(a *repository.Asset) AssetSummary {
 		Path:      a.Path,
 		Size:      a.Size,
 		Hash:      a.BlobHash,
+		Sha1:      &a.Sha1,
+		Md5:       &a.Md5,
 		UpdatedAt: a.UpdatedAt,
 	}
 	if a.ContentType != "" {

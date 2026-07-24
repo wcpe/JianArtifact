@@ -18,7 +18,7 @@ func TestPutAndOpenRoundtrip(t *testing.T) {
 	want := sha256.Sum256(content)
 	wantHash := hex.EncodeToString(want[:])
 
-	hash, size, err := s.Put(bytes.NewReader(content))
+	hash, _, _, size, err := s.Put(bytes.NewReader(content))
 	if err != nil {
 		t.Fatalf("Put 失败：%v", err)
 	}
@@ -53,11 +53,11 @@ func TestPutDedup(t *testing.T) {
 	s := NewStore(t.TempDir())
 	content := []byte("dedup me")
 
-	h1, _, err := s.Put(bytes.NewReader(content))
+	h1, _, _, _, err := s.Put(bytes.NewReader(content))
 	if err != nil {
 		t.Fatalf("首次 Put 失败：%v", err)
 	}
-	h2, _, err := s.Put(bytes.NewReader(content))
+	h2, _, _, _, err := s.Put(bytes.NewReader(content))
 	if err != nil {
 		t.Fatalf("再次 Put 失败：%v", err)
 	}
@@ -104,7 +104,7 @@ func TestPutConcurrentSameContent(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			h, _, err := s.Put(bytes.NewReader(content))
+			h, _, _, _, err := s.Put(bytes.NewReader(content))
 			hashes[idx] = h
 			errs[idx] = err
 		}(i)

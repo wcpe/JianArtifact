@@ -162,7 +162,7 @@ func TestListAssetsPaginationAndPrefix(t *testing.T) {
 	// 造数据：com/ 前缀 3 个，org/ 前缀 1 个。
 	paths := []string{"com/a/1.txt", "com/a/2.txt", "com/b/3.txt", "org/c/4.txt"}
 	for _, p := range paths {
-		if err := assetRepo.Upsert(repo.ID, p, "hash-"+p, 10, "text/plain"); err != nil {
+		if err := assetRepo.Upsert(repo.ID, p, "hash-"+p, 10, "text/plain", "sha1-"+p, "md5-"+p); err != nil {
 			t.Fatalf("写资产 %s：%v", p, err)
 		}
 	}

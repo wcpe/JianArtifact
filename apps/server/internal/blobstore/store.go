@@ -10,6 +10,8 @@
 package blobstore
 
 import (
+	"crypto/md5"
+	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -39,16 +41,17 @@ func NewStore(root string) *Store {
 	return &Store{root: root}
 }
 
-// Put 将 r 的全部内容流式写入存储，返回内容 sha256 摘要与字节数。
-// 写入过程：临时文件 + 边写边算哈希 → 命中已有内容则去重丢弃 → 否则原子 rename 落盘。
-func (s *Store) Put(r io.Reader) (hash string, size int64, err error) {
+// Put 将 r 的全部内容流式写入存储，返回内容 sha256 摘要、sha1、md5 与字节数。
+// 写入过程：临时文件 + 边写边算哈希（sha256/sha1/md5 三路并行）-> 命中已有内容则去重丢弃 -> 否则原子 rename 落盘。
+// sha256 仍为内容寻址键，sha1/md5 供 asset 表登记，均在写入时一次算完，不在读路径现算。
+func (s *Store) Put(r io.Reader) (hash, sha1sum, md5sum string, size int64, err error) {
 	tmpDir := filepath.Join(s.root, tmpDirName)
 	if err := os.MkdirAll(tmpDir, 0o750); err != nil {
-		return "", 0, fmt.Errorf("创建临时目录：%w", err)
+		return "", "", "", 0, fmt.Errorf("创建临时目录：%w", err)
 	}
 	tmp, err := os.CreateTemp(tmpDir, "blob-*")
 	if err != nil {
-		return "", 0, fmt.Errorf("创建临时文件：%w", err)
+		return "", "", "", 0, fmt.Errorf("创建临时文件：%w", err)
 	}
 	tmpName := tmp.Name()
 	// 失败路径统一清理临时文件；成功 rename 后临时文件已不存在，Remove 无害。
@@ -58,27 +61,31 @@ func (s *Store) Put(r io.Reader) (hash string, size int64, err error) {
 		}
 	}()
 
-	hasher := sha256.New()
-	size, err = io.Copy(io.MultiWriter(tmp, hasher), r)
+	sha256Hasher := sha256.New()
+	sha1Hasher := sha1.New()
+	md5Hasher := md5.New()
+	size, err = io.Copy(io.MultiWriter(tmp, sha256Hasher, sha1Hasher, md5Hasher), r)
 	if err != nil {
 		_ = tmp.Close()
-		return "", 0, fmt.Errorf("写入临时 blob：%w", err)
+		return "", "", "", 0, fmt.Errorf("写入临时 blob：%w", err)
 	}
 	if err = tmp.Close(); err != nil {
-		return "", 0, fmt.Errorf("关闭临时 blob：%w", err)
+		return "", "", "", 0, fmt.Errorf("关闭临时 blob：%w", err)
 	}
 
-	hash = hex.EncodeToString(hasher.Sum(nil))
+	hash = hex.EncodeToString(sha256Hasher.Sum(nil))
+	sha1sum = hex.EncodeToString(sha1Hasher.Sum(nil))
+	md5sum = hex.EncodeToString(md5Hasher.Sum(nil))
 	final := s.pathFor(hash)
 
 	// 内容已存在则去重：删除临时文件，直接复用既有 blob。
 	if _, statErr := os.Stat(final); statErr == nil {
 		_ = os.Remove(tmpName)
-		return hash, size, nil
+		return hash, sha1sum, md5sum, size, nil
 	}
 
 	if err = os.MkdirAll(filepath.Dir(final), 0o750); err != nil {
-		return "", 0, fmt.Errorf("创建 blob 分片目录：%w", err)
+		return "", "", "", 0, fmt.Errorf("创建 blob 分片目录：%w", err)
 	}
 	if err = os.Rename(tmpName, final); err != nil {
 		// 并发写入同一内容时，另一写者可能已抢先落盘。Windows 上 rename 到已存在
@@ -86,11 +93,11 @@ func (s *Store) Put(r io.Reader) (hash string, size int64, err error) {
 		if _, statErr := os.Stat(final); statErr == nil {
 			_ = os.Remove(tmpName)
 			err = nil
-			return hash, size, nil
+			return hash, sha1sum, md5sum, size, nil
 		}
-		return "", 0, fmt.Errorf("落盘 blob：%w", err)
+		return "", "", "", 0, fmt.Errorf("落盘 blob：%w", err)
 	}
-	return hash, size, nil
+	return hash, sha1sum, md5sum, size, nil
 }
 
 // Open 打开指定哈希的 blob，返回可读流与字节数；不存在返回 os.ErrNotExist。

@@ -104,3 +104,35 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   }
   return (await response.json()) as T;
 }
+
+/** 协议层 PUT 上传（Raw hosted）：Bearer + 原始 body，非 /api/v1 JSON。 */
+export async function putProtocolAsset(
+  url: string,
+  body: Blob | ArrayBuffer | File,
+  contentType?: string,
+): Promise<{ repository: string; path: string; hash: string; size: number; contentType: string }> {
+  const headers: Record<string, string> = {};
+  const token = getToken();
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+  if (contentType) {
+    headers["Content-Type"] = contentType;
+  }
+  let response: Response;
+  try {
+    response = await fetch(url, { method: "PUT", headers, body });
+  } catch (e) {
+    throw new ApiError("network", e instanceof Error ? e.message : "网络错误", 0);
+  }
+  if (!response.ok) {
+    throw await parseError(response);
+  }
+  return (await response.json()) as {
+    repository: string;
+    path: string;
+    hash: string;
+    size: number;
+    contentType: string;
+  };
+}

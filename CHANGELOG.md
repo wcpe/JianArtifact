@@ -8,6 +8,7 @@
 
 ### 新增
 
+- 仓库浏览增强（FR-16a）：管理端文件树左右分栏、点文件看详情/usage/下载；Raw hosted 单文件上传；未登录公开页 `/p/:name`（仅 public 仓）。
 - Nexus 迁移域地基（FR-21/22/23 部分，见 `docs/specs/0.4.0-migration-foundation.md` 与 `docs/adr/0012-nexus-migration-state-machine.md`）：
   - `0003_migration.sql` 新增 `migration_task` 表；`MigrationTaskRepo` + `domain.MigrationService` 状态机骨架（创建 **planned**、显式 **start**、cancel/resume 守卫、启动时 **running→failed**）。
   - OpenAPI 管理面：`/api/v1/migrations` 列表/创建、`/{id}`、`/start`、`/resume`、`/cancel`、`/report`、`/discover`；仅 admin；凭据仅 `credentialRef`。
@@ -22,12 +23,24 @@
   - `GET .../report` 组装 totals/failures/cutover checklist；`POST .../finalize` 仅 completed，差量复制并写 `report.delta`。
 - 管理端迁移向导（见 `docs/specs/0.4.0-migration-web-wizard.md`）：
   - 侧栏「迁移」入口（admin）；列表 / 向导（discover→planned→显式 start）/ 详情（轮询、取消、续传、finalize、报告与 cutover 清单）。
-- 迁移真机可用性增强：
+- Nexus 迁移真机可用性增强：
   - `online_rest` 执行：按 plan 枚举 Nexus assets 并流式下载 `downloadUrl` 写入 hosted。
   - `sourceConfig.includeRepositories` + `POST .../start` body `includeRepositories`：发现前/启动前均可多选仓库（在线+离线）。
   - 向导预览页 Checkbox 多选 + TagsInput 预过滤；离线枚举严格按 plan 白名单。
   - 仓库删除级联清理 asset 元数据（复测前可删仓重建）；补充删除单测。
   - `deploy/remote-ssh.sh`：SSH 密钥生成、远程二进制部署与探活（密钥目录 `deploy/ssh/` 不入库）。
+- Nexus drop-in URL 兼容与公开读入口（FR-24a，见 `docs/specs/0.4.0-nexus-dropin.md`）：
+  - 路径与 Nexus 3 同形（Raw/Maven `/repository/{repo}/…`），迁移后客户端只改 host；npm 走 `/npm/{repo}/`（差异已文档标注）。
+  - `visibility=public` 仓库协议层匿名 GET/HEAD 可读；浏览器公开预览 `/p/{name}`。
+  - group 跨成员有序聚合读，Maven `maven-metadata.xml` 合并 versions。
+  - 管理端仓库列表新增「访问 URL」（一键复制）、「成员/上游」列、type 着色 Badge。
+  - OPERATIONS §1.1.6 Nexus drop-in 替换步骤与同名 group 冲突处理方案。
+- 仓库页面与权限完善（FR-25a~e，见 `docs/specs/0.4.0-repo-pages-acl-enhance.md`）：
+  - FR-25a：ACL 页面用户下拉框（可搜索，显示用户名，替代手填 ID）
+  - FR-25b：asset 表扩展 sha1/md5 列（0005 迁移），上传时登记；详情面板展示多校验和 + Maven 8 种依赖坐标 + HTML View 外链
+  - FR-25c：后端 HTML 目录索引页（`/repository/{repo}/{dir}/` 尾斜杠渲染目录列表，public 匿名可读）
+  - FR-25d：仓库列表新增「制品数」「总大小」列（后端 GROUP BY 聚合，避免 N+1）
+  - FR-25e：仓库详情页 Tab 布局（浏览/配置/ACL，管理员可见配置与 ACL）
 
 ### 变更
 

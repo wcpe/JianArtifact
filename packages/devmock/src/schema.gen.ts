@@ -531,6 +531,13 @@ export interface components {
             /** @description group 仓库的成员仓库名（有序，仅 type=group） */
             members?: string[];
             createdAt: string;
+            /** @description 仓库内制品数量（只读统计字段） */
+            artifactCount?: number;
+            /**
+             * Format: int64
+             * @description 仓库内制品总字节数（只读统计字段）
+             */
+            totalSize?: number;
         };
         RepositoryList: {
             items: components["schemas"]["Repository"][];
@@ -578,6 +585,10 @@ export interface components {
             size: number;
             /** @description 内容寻址 blob 的 sha256 摘要 */
             hash: string;
+            /** @description 制品内容的 SHA-1 摘要（写入时计算登记） */
+            sha1?: string;
+            /** @description 制品内容的 MD5 摘要（写入时计算登记） */
+            md5?: string;
             contentType?: string;
             updatedAt: string;
         };

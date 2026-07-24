@@ -51,11 +51,11 @@ func (s *AssetService) Put(repoName, path string, r io.Reader, contentType strin
 		contentType = "application/octet-stream"
 	}
 
-	hash, size, err := s.blobs.Put(r)
+	hash, sha1sum, md5sum, size, err := s.blobs.Put(r)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.assets.Upsert(repo.ID, path, hash, size, contentType); err != nil {
+	if err := s.assets.Upsert(repo.ID, path, hash, size, contentType, sha1sum, md5sum); err != nil {
 		return nil, err
 	}
 	return s.assets.GetByPath(repo.ID, path)
@@ -140,7 +140,7 @@ func (s *AssetService) proxyGet(ctx context.Context, repo *repository.Repository
 			return nil, mapUpstreamErr(ferr)
 		}
 		defer func() { _ = body.Close() }()
-		hash, size, ferr := s.blobs.Put(body)
+		hash, sha1sum, md5sum, size, ferr := s.blobs.Put(body)
 		if ferr != nil {
 			return nil, ferr
 		}
@@ -148,7 +148,7 @@ func (s *AssetService) proxyGet(ctx context.Context, repo *repository.Repository
 		if ct == "" {
 			ct = "application/octet-stream"
 		}
-		return nil, s.assets.Upsert(repo.ID, path, hash, size, ct)
+		return nil, s.assets.Upsert(repo.ID, path, hash, size, ct, sha1sum, md5sum)
 	})
 	if err != nil {
 		return nil, nil, err

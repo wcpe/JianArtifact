@@ -105,6 +105,51 @@ bash deploy/remote-ssh.sh health
 
 报告 `GET .../report` 的 `cutover.checklist` 与此对齐；`cutover.delta` 记录 finalize 增量计数。
 
+### 1.1.6 Nexus URL drop-in（Maven / Raw 公开读 + group）
+
+协议路径与 **Nexus 3 默认形态一致**，客户端一般只需改 host，不必改 path：
+
+| 用途 | URL 形态 |
+| ---- | -------- |
+| Maven / Raw 制品 | `{base}/repository/{repoName}/{artifactPath}` |
+| npm | `{base}/npm/{repoName}/…`（与 Nexus npm 宿主路径不同，npm 需单独改 registry） |
+| 管理端浏览 | `{base}/repositories/{name}`（需登录） |
+| 浏览器公开预览 | `{base}/p/{name}`（仅 visibility=public） |
+
+**鉴权（与 Nexus 公开仓习惯对齐）**
+
+- `visibility=public`：协议层 **匿名 GET/HEAD** 可读（无需 Basic/Token）。
+- `private`：匿名 401；需 `Authorization: Bearer <jat_…>` 或 Basic（API Token 作 password）。
+- group / proxy **写**（PUT/DELETE）固定 409，仅 hosted 可写。
+
+**group 聚合（已实现）**
+
+- 创建：`POST /api/v1/repositories`，`type=group`，`members` 为同 format 仓库名有序列表。
+- 读：按 `members` 顺序首个命中返回；Maven `maven-metadata.xml` 跨成员合并 versions。
+- 管理端「新建仓库」可选 type=group 并勾选 members。
+
+**替换 Nexus `maven-public` 的推荐步骤**
+
+1. 迁移时把各 **hosted** 源仓迁入同名 hosted（如 `maven-releases` / 业务仓）。  
+2. 若迁移把 Nexus 的 **group 名**（常见 `maven-public`）落成了 **hosted**（本实例即如此）：  
+   - **方案 A（推荐保留数据）**：把该 hosted 设为 `public`，另建 group（如 `maven-all`），`members` 含该 hosted + 其它成员；客户端改为 group 名，或反代把旧名指到 group。  
+   - **方案 B（严格同名 group）**：内容先落到成员仓后，**删除** 占名的 hosted，再创建 `type=group, name=maven-public, visibility=public`（删除 hosted 会 CASCADE 清其 asset 元数据，慎用）。  
+3. 需要匿名 `mvn` 解析：group 与各只读成员均设 `visibility=public`。  
+4. 抽样：
+
+```bash
+# 匿名拉 jar（应 200）
+curl -fsS -o /tmp/a.jar "{base}/repository/maven-all/com/example/demo/1.0.0/demo-1.0.0.jar"
+# pom 片段
+# <repository><id>maven-all</id><url>{base}/repository/maven-all</url></repository>
+```
+
+**真机当前示例（tmp）**
+
+- `maven-public`：迁移来的 **hosted**，已可设为 public，路径 `/repository/maven-public/...` 匿名可读。  
+- `maven-releases` / `maven-snapshots`：public hosted 成员。  
+- `maven-all`：public **group**，members=`maven-releases,maven-snapshots,maven-public`，匿名聚合读已验收。
+
 ### 1.2 Docker / Compose 部署（主路径）
 
 1. 复制 `deploy/.env.example` 为 `deploy/.env`，填入 `JIAN_JWT_SECRET` 等配置。

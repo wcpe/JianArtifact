@@ -31,26 +31,26 @@ func TestAssetUpsertInsertThenOverwrite(t *testing.T) {
 	}
 
 	// 首次插入。
-	if err := assets.Upsert(repoID, "a/b.txt", "hash1", 11, "text/plain"); err != nil {
+	if err := assets.Upsert(repoID, "a/b.txt", "hash1", 11, "text/plain", "sha1-1", "md5-1"); err != nil {
 		t.Fatalf("首次 Upsert：%v", err)
 	}
 	got, err := assets.GetByPath(repoID, "a/b.txt")
 	if err != nil {
 		t.Fatalf("GetByPath：%v", err)
 	}
-	if got.BlobHash != "hash1" || got.Size != 11 || got.ContentType != "text/plain" {
+	if got.BlobHash != "hash1" || got.Size != 11 || got.ContentType != "text/plain" || got.Sha1 != "sha1-1" || got.Md5 != "md5-1" {
 		t.Fatalf("首次插入内容不符：%+v", got)
 	}
 
 	// 覆盖写同路径。
-	if err := assets.Upsert(repoID, "a/b.txt", "hash2", 22, "application/json"); err != nil {
+	if err := assets.Upsert(repoID, "a/b.txt", "hash2", 22, "application/json", "sha1-2", "md5-2"); err != nil {
 		t.Fatalf("覆盖 Upsert：%v", err)
 	}
 	got, err = assets.GetByPath(repoID, "a/b.txt")
 	if err != nil {
 		t.Fatalf("GetByPath（覆盖后）：%v", err)
 	}
-	if got.BlobHash != "hash2" || got.Size != 22 || got.ContentType != "application/json" {
+	if got.BlobHash != "hash2" || got.Size != 22 || got.ContentType != "application/json" || got.Sha1 != "sha1-2" || got.Md5 != "md5-2" {
 		t.Fatalf("覆盖写未生效：%+v", got)
 	}
 }
@@ -72,7 +72,7 @@ func TestAssetDeleteByPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("建仓库：%v", err)
 	}
-	if err := assets.Upsert(repoID, "x.bin", "h", 1, "application/octet-stream"); err != nil {
+	if err := assets.Upsert(repoID, "x.bin", "h", 1, "application/octet-stream", "s1", "m1"); err != nil {
 		t.Fatalf("Upsert：%v", err)
 	}
 	if err := assets.DeleteByPath(repoID, "x.bin"); err != nil {

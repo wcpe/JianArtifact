@@ -1,4 +1,4 @@
-// 路由表：登录/自举为公开路由，其余业务页由 AppLayout 包裹并受鉴权守卫保护。
+// 路由表：登录/自举/公开浏览为公开路由，其余业务页由 AppLayout 包裹并受鉴权守卫保护。
 import { Navigate, Route, Routes } from "react-router-dom";
 import type { ReactNode } from "react";
 
@@ -10,6 +10,7 @@ import { LoginPage } from "../pages/LoginPage";
 import { MigrationDetailPage } from "../pages/MigrationDetailPage";
 import { MigrationsPage } from "../pages/MigrationsPage";
 import { MigrationWizardPage } from "../pages/MigrationWizardPage";
+import { PublicRepoPage } from "../pages/PublicRepoPage";
 import { RepositoriesPage } from "../pages/RepositoriesPage";
 import { RepositoryDetailPage } from "../pages/RepositoryDetailPage";
 import { SetupPage } from "../pages/SetupPage";
@@ -30,6 +31,8 @@ export function AppRoutes() {
     <Routes>
       <Route path="/setup" element={<SetupPage />} />
       <Route path="/login" element={<LoginPage />} />
+      {/* 公开仓库浏览：无需登录 */}
+      <Route path="/p/:name" element={<PublicRepoPage />} />
       <Route
         element={
           <RequireAuth>
