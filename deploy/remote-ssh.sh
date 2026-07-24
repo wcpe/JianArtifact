@@ -113,17 +113,25 @@ cmd_show_pubkey() {
 
 cmd_build() {
   # 始终交叉编译 Linux amd64（本机可能是 Windows/macOS）
+  # 版本号优先读仓库根 VERSION 文件，注入 main.version（管理端 /status 展示）
   local out="${ROOT_DIR}/apps/server/bin/jianartifact-linux-amd64"
-  log "构建 Linux amd64 二进制（CGO_ENABLED=0 GOOS=linux）…"
+  local ver="0.0.0-dev"
+  if [[ -f "${ROOT_DIR}/VERSION" ]]; then
+    ver="$(tr -d '[:space:]' < "${ROOT_DIR}/VERSION")"
+    [[ -n "${ver}" ]] || ver="0.0.0-dev"
+  fi
+  log "构建 Linux amd64 二进制（CGO_ENABLED=0 GOOS=linux version=${ver}）…"
   (
     cd "${ROOT_DIR}/apps/server"
-    GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o bin/jianartifact-linux-amd64 ./cmd/jianartifact
+    GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath \
+      -ldflags="-s -w -X main.version=${ver}" \
+      -o bin/jianartifact-linux-amd64 ./cmd/jianartifact
   )
   [[ -f "${out}" ]] || die "构建失败：未找到 ${out}"
   # 兼容 scp 路径名
   cp "${out}" "${ROOT_DIR}/apps/server/bin/jianartifact" 2>/dev/null \
     || cp "${out}" "${ROOT_DIR}/apps/server/bin/jianartifact"
-  log "构建完成：${out}"
+  log "构建完成：${out}（version=${ver}）"
 }
 
 cmd_deploy() {
