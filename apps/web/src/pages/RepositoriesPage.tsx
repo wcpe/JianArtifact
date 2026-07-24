@@ -4,7 +4,6 @@ import {
   Badge,
   Button,
   Code,
-  CopyButton,
   Group,
   Modal,
   MultiSelect,
@@ -12,17 +11,17 @@ import {
   Table,
   Text,
   TextInput,
-  Tooltip,
 } from "@mantine/core";
 import { useForm } from "@mantine/form";
 import { useDisclosure } from "@mantine/hooks";
-import { IconCopy, IconTrash } from "@tabler/icons-react";
+import { IconTrash } from "@tabler/icons-react";
 import { EmptyState, PageHeader } from "@jianartifact/ui";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
 import { AsyncBoundary } from "../components/AsyncBoundary";
+import { CopyTextButton } from "../components/CopyTextButton";
 import {
   createRepository,
   deleteRepository,
@@ -192,21 +191,7 @@ export function RepositoriesPage() {
                       <Table.Td>
                         <Group gap={4} wrap="nowrap">
                           <Code style={{ fontSize: 11 }}>{protoUrl}</Code>
-                          <CopyButton value={protoUrl} timeout={1500}>
-                            {({ copied, copy }) => (
-                              <Tooltip label={copied ? t("common.copied") : t("common.copy")} withArrow>
-                                <ActionIcon
-                                  size="sm"
-                                  variant="subtle"
-                                  color={copied ? "teal" : "gray"}
-                                  onClick={copy}
-                                  aria-label={t("common.copy")}
-                                >
-                                  <IconCopy size={14} />
-                                </ActionIcon>
-                              </Tooltip>
-                            )}
-                          </CopyButton>
+                          <CopyTextButton value={protoUrl} variant="icon" />
                         </Group>
                       </Table.Td>
                       <Table.Td>

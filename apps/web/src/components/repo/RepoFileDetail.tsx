@@ -5,7 +5,6 @@ import {
   Button,
   Card,
   Code,
-  CopyButton,
   Group,
   Select,
   Stack,
@@ -18,6 +17,7 @@ import { useTranslation } from "react-i18next";
 import type { AssetSummary, RepoFormat, UsageInfo } from "../../api/types";
 import { assetDownloadUrl, formatBytes } from "../../lib/assetTree";
 import { buildCoordinateSnippets, htmlViewUrl } from "../../lib/coordinates";
+import { CopyTextButton } from "../CopyTextButton";
 
 interface Props {
   repoName: string;
@@ -68,30 +68,14 @@ export function RepoFileDetail({
         </Text>
         <Group gap="xs" wrap="nowrap">
           <Code style={{ flex: 1, wordBreak: "break-all" }}>{asset.hash}</Code>
-          <CopyButton value={asset.hash}>
-            {({ copied, copy }) => (
-              <Button size="xs" variant={copied ? "filled" : "light"} onClick={copy}>
-                {copied ? t("common.copied") : t("common.copy")}
-              </Button>
-            )}
-          </CopyButton>
+          <CopyTextButton value={asset.hash} />
         </Group>
-        {asset.sha1 && (
-          <ChecksumRow label={t("repoDetail.assetSha1")} value={asset.sha1} t={t} />
-        )}
-        {asset.md5 && (
-          <ChecksumRow label={t("repoDetail.assetMd5")} value={asset.md5} t={t} />
-        )}
+        {asset.sha1 && <ChecksumRow label={t("repoDetail.assetSha1")} value={asset.sha1} />}
+        {asset.md5 && <ChecksumRow label={t("repoDetail.assetMd5")} value={asset.md5} />}
       </Stack>
 
       <Group gap="xs">
-        <CopyButton value={asset.path}>
-          {({ copied, copy }) => (
-            <Button size="xs" variant={copied ? "filled" : "light"} onClick={copy}>
-              {copied ? t("common.copied") : t("repoDetail.copyPath")}
-            </Button>
-          )}
-        </CopyButton>
+        <CopyTextButton value={asset.path} label={t("repoDetail.copyPath")} />
         {showDownload && (
           <Button
             size="xs"
@@ -137,13 +121,9 @@ export function RepoFileDetail({
                     </Text>
                   )}
                 </div>
-                <CopyButton value={snippet.code.replace("path/to/artifact", asset.path)}>
-                  {({ copied, copy }) => (
-                    <Button size="xs" variant={copied ? "filled" : "light"} onClick={copy}>
-                      {copied ? t("common.copied") : t("common.copy")}
-                    </Button>
-                  )}
-                </CopyButton>
+                <CopyTextButton
+                  value={snippet.code.replace("path/to/artifact", asset.path)}
+                />
               </Group>
               <Code block style={{ whiteSpace: "pre-wrap" }}>
                 {snippet.code.replace("path/to/artifact", asset.path)}
@@ -157,28 +137,14 @@ export function RepoFileDetail({
 }
 
 /** 校验和行（标签 + 值 + 复制按钮）。 */
-function ChecksumRow({
-  label,
-  value,
-  t,
-}: {
-  label: string;
-  value: string;
-  t: (key: string) => string;
-}) {
+function ChecksumRow({ label, value }: { label: string; value: string }) {
   return (
     <Group gap="xs" wrap="nowrap">
       <Text size="xs" c="dimmed" fw={600} style={{ width: 48, flexShrink: 0 }}>
         {label}
       </Text>
       <Code style={{ flex: 1, wordBreak: "break-all" }}>{value}</Code>
-      <CopyButton value={value}>
-        {({ copied, copy }) => (
-          <Button size="xs" variant={copied ? "filled" : "light"} onClick={copy}>
-            {copied ? t("common.copied") : t("common.copy")}
-          </Button>
-        )}
-      </CopyButton>
+      <CopyTextButton value={value} />
     </Group>
   );
 }
@@ -208,13 +174,7 @@ function CoordinatesCard({
         />
       </Group>
       <Group justify="flex-end" mb={4}>
-        <CopyButton value={current.content}>
-          {({ copied, copy }) => (
-            <Button size="xs" variant={copied ? "filled" : "light"} onClick={copy}>
-              {copied ? t("common.copied") : t("common.copy")}
-            </Button>
-          )}
-        </CopyButton>
+        <CopyTextButton value={current.content} />
       </Group>
       <Code block style={{ whiteSpace: "pre-wrap" }}>
         {current.content}

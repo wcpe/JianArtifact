@@ -4,7 +4,6 @@ import {
   Alert,
   Button,
   Code,
-  CopyButton,
   Group,
   Modal,
   Table,
@@ -12,12 +11,13 @@ import {
 } from "@mantine/core";
 import { useForm } from "@mantine/form";
 import { useDisclosure } from "@mantine/hooks";
-import { IconCheck, IconCopy, IconTrash } from "@tabler/icons-react";
+import { IconTrash } from "@tabler/icons-react";
 import { EmptyState, PageHeader } from "@jianartifact/ui";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { AsyncBoundary } from "../components/AsyncBoundary";
+import { CopyTextButton } from "../components/CopyTextButton";
 import { createToken, deleteToken, listTokens } from "../api/endpoints";
 import type { TokenCreated } from "../api/types";
 import { useAsync } from "../hooks/useAsync";
@@ -135,19 +135,7 @@ export function TokensPage() {
         </Alert>
         <Group justify="space-between" wrap="nowrap">
           <Code style={{ wordBreak: "break-all" }}>{created?.token}</Code>
-          <CopyButton value={created?.token ?? ""}>
-            {({ copied, copy }) => (
-              <Button
-                size="xs"
-                variant="light"
-                color={copied ? "teal" : undefined}
-                leftSection={copied ? <IconCheck size={14} /> : <IconCopy size={14} />}
-                onClick={copy}
-              >
-                {copied ? t("common.copied") : t("common.copy")}
-              </Button>
-            )}
-          </CopyButton>
+          <CopyTextButton value={created?.token ?? ""} />
         </Group>
         <Group justify="flex-end" mt="md">
           <Button onClick={() => setCreated(null)}>{t("common.close")}</Button>
