@@ -323,3 +323,15 @@ export function getMigrationReport(id: number): Promise<MigrationReport> {
 export function finalizeMigration(id: number): Promise<MigrationTask> {
   return request<MigrationTask>(`/migrations/${id}/finalize`, { method: "POST" });
 }
+
+// —— 运维端点（非契约）——
+
+/** 清理 Maven 仓库中无 jar 的 GAV 目录（仅 maven hosted）。 */
+export function cleanupEmptyArtifacts(repoName: string): Promise<{ deleted: number }> {
+  return request<{ deleted: number }>(`/repositories/${repoName}/cleanup`, { method: "POST" });
+}
+
+/** 公开仓库列表（无需认证，仅返回 visibility=public 的仓库）。 */
+export function listPublicRepositories(): Promise<RepositoryList> {
+  return request<RepositoryList>("/public/repositories");
+}

@@ -1,12 +1,13 @@
-// 仓库浏览器：左树右详情；可选 Raw 上传；管理端与公开页共用。
+// 仓库浏览器：左树右详情两栏固定布局；可选 Raw 上传；管理端与公开页共用。
 import {
   Alert,
   Badge,
+  Box,
   Button,
   Card,
   FileButton,
   Group,
-  SimpleGrid,
+  ScrollArea,
   Stack,
   Text,
   TextInput,
@@ -182,77 +183,103 @@ export function RepoBrowser({
               <Text size="sm" c="dimmed">
                 {t("repoDetail.assetCount", { n: data.total })}
               </Text>
-              <SimpleGrid cols={{ base: 1, md: 2 }} spacing="md">
-                <Card withBorder padding={density.cardPadding} radius="md">
+
+              {/* 左右两栏固定布局 */}
+              <Box
+                style={{
+                  display: "flex",
+                  gap: "var(--mantine-spacing-md)",
+                  height: "calc(100vh - 280px)",
+                  minHeight: 400,
+                }}
+              >
+                {/* 左侧：文件树 */}
+                <Card
+                  withBorder
+                  padding={density.cardPadding}
+                  radius="md"
+                  style={{ width: 360, minWidth: 280, flexShrink: 0, display: "flex", flexDirection: "column" }}
+                >
                   <Title order={5} mb="sm">
                     {t("repoDetail.treeTitle")}
                   </Title>
-                  <RepoAssetTree
-                    nodes={tree}
-                    selectedPath={selected?.path ?? null}
-                    onSelectFile={onSelectFile}
-                    onSelectDir={onSelectDir}
-                  />
-                </Card>
-                <Card withBorder padding={density.cardPadding} radius="md">
-                  {selected ? (
-                    <RepoFileDetail
-                      repoName={repoName}
-                      format={format}
-                      asset={selected}
-                      usage={usageState.data}
-                      showDownload
+                  <ScrollArea style={{ flex: 1 }} type="auto" offsetScrollbars>
+                    <RepoAssetTree
+                      nodes={tree}
+                      selectedPath={selected?.path ?? null}
+                      onSelectFile={onSelectFile}
+                      onSelectDir={onSelectDir}
+                      maxHeight="none"
                     />
-                  ) : (
-                    <Stack gap="xs" py="xl" align="center">
-                      <Text c="dimmed" size="sm">
-                        {t("repoDetail.selectFileHint")}
-                      </Text>
-                    </Stack>
-                  )}
+                  </ScrollArea>
                 </Card>
-              </SimpleGrid>
+
+                {/* 右侧：文件详情 / 使用说明 */}
+                <Card
+                  withBorder
+                  padding={density.cardPadding}
+                  radius="md"
+                  style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}
+                >
+                  <ScrollArea style={{ flex: 1 }} type="auto" offsetScrollbars>
+                    {selected ? (
+                      <RepoFileDetail
+                        repoName={repoName}
+                        format={format}
+                        asset={selected}
+                        usage={usageState.data}
+                        showDownload
+                      />
+                    ) : (
+                      <UsagePanel usageState={usageState} />
+                    )}
+                  </ScrollArea>
+                </Card>
+              </Box>
             </Stack>
           )
         }
       </AsyncBoundary>
-
-      {/* 仓级 usage 总览（未选文件时也可看） */}
-      {!selected && (
-        <AsyncBoundary state={usageState}>
-          {(usage: UsageInfo) => (
-            <Stack gap="sm">
-              <Title order={5}>{t("repoDetail.usageTitle")}</Title>
-              {usage.snippets.map((snippet, index) => (
-                <Card key={index} withBorder padding="sm" radius="md">
-                  <Text fw={600} size="sm" mb={4}>
-                    {snippet.title}
-                  </Text>
-                  {snippet.description && (
-                    <Text size="xs" c="dimmed" mb={6}>
-                      {snippet.description}
-                    </Text>
-                  )}
-                  <Text
-                    component="pre"
-                    size="xs"
-                    ff="monospace"
-                    style={{
-                      whiteSpace: "pre-wrap",
-                      margin: 0,
-                      background: "var(--mantine-color-default-hover)",
-                      padding: 8,
-                      borderRadius: 4,
-                    }}
-                  >
-                    {snippet.code}
-                  </Text>
-                </Card>
-              ))}
-            </Stack>
-          )}
-        </AsyncBoundary>
-      )}
     </Stack>
+  );
+}
+
+/** 使用说明面板：右侧无选中文件时展示。 */
+function UsagePanel({ usageState }: { usageState: ReturnType<typeof useAsync<UsageInfo>> }) {
+  const { t } = useTranslation();
+  return (
+    <AsyncBoundary state={usageState}>
+      {(usage: UsageInfo) => (
+        <Stack gap="sm">
+          <Title order={5}>{t("repoDetail.usageTitle")}</Title>
+          {usage.snippets.map((snippet, index) => (
+            <Card key={index} withBorder padding="sm" radius="md">
+              <Text fw={600} size="sm" mb={4}>
+                {snippet.title}
+              </Text>
+              {snippet.description && (
+                <Text size="xs" c="dimmed" mb={6}>
+                  {snippet.description}
+                </Text>
+              )}
+              <Text
+                component="pre"
+                size="xs"
+                ff="monospace"
+                style={{
+                  whiteSpace: "pre-wrap",
+                  margin: 0,
+                  background: "var(--mantine-color-default-hover)",
+                  padding: 8,
+                  borderRadius: 4,
+                }}
+              >
+                {snippet.code}
+              </Text>
+            </Card>
+          ))}
+        </Stack>
+      )}
+    </AsyncBoundary>
   );
 }
