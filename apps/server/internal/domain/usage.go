@@ -47,7 +47,7 @@ func rawUsage(name, base string, writable bool) []UsageSnippet {
 	return snippets
 }
 
-// mavenUsage 组装 Maven 仓库的 settings.xml 认证与 pom.xml 解析 / 发布片段。
+// mavenUsage 组装 Maven 仓库的 settings.xml 认证与 pom.xml / Gradle 解析 / 发布片段。
 func mavenUsage(name, base string, writable bool) []UsageSnippet {
 	repoURL := fmt.Sprintf("%s/repository/%s", base, name)
 	snippets := []UsageSnippet{
@@ -68,6 +68,20 @@ func mavenUsage(name, base string, writable bool) []UsageSnippet {
   <url>%s</url>
 </repository>`, name, repoURL),
 		},
+		{
+			Title:       "解析依赖（Gradle）",
+			Description: "在 build.gradle(.kts) 的 repositories 块中添加仓库。",
+			Code: fmt.Sprintf(`// build.gradle.kts
+repositories {
+    maven {
+        url = uri("%s")
+        credentials {
+            username = "<user>"
+            password = "<token>"
+        }
+    }
+}`, repoURL),
+		},
 	}
 	if writable {
 		snippets = append(snippets, UsageSnippet{
@@ -79,6 +93,22 @@ func mavenUsage(name, base string, writable bool) []UsageSnippet {
     <url>%s</url>
   </repository>
 </distributionManagement>`, name, repoURL),
+		})
+		snippets = append(snippets, UsageSnippet{
+			Title:       "发布制品（Gradle）",
+			Description: "在 build.gradle(.kts) 的 publishing 块中配置部署仓库。",
+			Code: fmt.Sprintf(`// build.gradle.kts
+publishing {
+    repositories {
+        maven {
+            url = uri("%s")
+            credentials {
+                username = "<user>"
+                password = "<token>"
+            }
+        }
+    }
+}`, repoURL),
 		})
 	}
 	return snippets

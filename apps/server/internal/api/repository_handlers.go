@@ -262,6 +262,41 @@ func apiBaseURL(c *gin.Context) string {
 	return scheme + "://" + c.Request.Host
 }
 
+// CleanupEmptyMavenArtifacts 清理 Maven 仓库中无 jar 的 GAV 目录。
+// 非契约端点，经 WithProtocolRoutes 注册。
+func (h *Handlers) CleanupEmptyMavenArtifacts(c *gin.Context) {
+	name := c.Param("name")
+	if _, ok := h.requireRepoAdmin(c, name); !ok {
+		return
+	}
+	deleted, err := h.repos.CleanupEmptyMavenArtifacts(name)
+	if err != nil {
+		writeDomainErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"deleted": deleted})
+}
+
+// ListPublicRepositories 公开仓库列表（无需认证），仅返回 visibility=public 的仓库。
+// 非契约端点，经 WithProtocolRoutes 注册。
+func (h *Handlers) ListPublicRepositories(c *gin.Context) {
+	limit, offset := pageOffset(nil, nil)
+	rows, statsMap, _, err := h.repos.ListWithStats(limit, offset)
+	if err != nil {
+		writeDomainErr(c, err)
+		return
+	}
+	items := make([]Repository, 0, len(rows))
+	for i := range rows {
+		if rows[i].Visibility != "public" {
+			continue
+		}
+		stats := statsMap[rows[i].ID]
+		items = append(items, toAPIRepository(&rows[i], &stats))
+	}
+	c.JSON(http.StatusOK, RepositoryList{Items: items, Total: len(items)})
+}
+
 // aclEntries 把行模型批量转为契约 AclEntry。
 func aclEntries(rows []repository.Acl) []AclEntry {
 	items := make([]AclEntry, 0, len(rows))

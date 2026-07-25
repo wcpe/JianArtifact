@@ -182,6 +182,10 @@ func run() error {
 			r.POST("/api/v1/migrations/offline-index/scan", authMW, apiHandlers.StartOfflineDirIndex)
 			r.GET("/api/v1/migrations/offline-index", authMW, apiHandlers.GetOfflineDirIndex)
 			r.POST("/api/v1/migrations/offline-index/cancel", authMW, apiHandlers.CancelOfflineDirIndex)
+			// 运维端点
+			r.POST("/api/v1/repositories/:name/cleanup", authMW, apiHandlers.CleanupEmptyMavenArtifacts)
+			// 公开接口（无需认证）
+			r.GET("/api/v1/public/repositories", apiHandlers.ListPublicRepositories)
 		}),
 	)
 	httpServer := &http.Server{
