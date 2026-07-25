@@ -22,6 +22,17 @@
 
 - 暂无。
 
+## [0.5.0] - 2026-07-25
+
+### 新增
+
+- M1 整期验收通过，首个稳定 MVP 发布。
+- Nexus 迁移实机验收（FR-20~23）：离线目录直读 55,325 资产从 5 hosted 仓零丢失迁入；17 proxy + 1 group 重建并公开匿名读可用。
+- AC-01 原生客户端验收：Drop-in URL `/repository/{name}/{path}` 经 HTTPS 全部 HTTP 200，group 聚合读 + proxy pass-through 正常。
+- AC-02 零丢失对账：迁移报告 55,325/0/0，逐仓计数精确匹配，抽样 sha256 字节一致。
+- AC-08 部署演练：二进制 symlink 升级/回滚 ~1s 探活通过；Docker/Compose 可用。
+- NFR 基线冻结：大文件流式 cold 2.7ms；并发 10x max 17.5ms；P95 0.97ms；RSS 19.3MB。55k 资产稳态。
+
 ## [0.4.0] - 2026-07-24
 
 ### 新增
