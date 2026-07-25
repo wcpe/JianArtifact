@@ -3,6 +3,7 @@ package domain
 import (
 	"errors"
 	"net/url"
+	"strings"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
@@ -76,17 +77,63 @@ func (s *RepositoryService) Get(name string) (*repository.Repository, error) {
 }
 
 // ListAssets 返回仓库内制品的分页列表与总数；prefix 非空时按路径前缀过滤。
+// 对于 group 仓库，聚合其所有 hosted/proxy 成员的制品。
 // 仓库不存在返回 ErrNotFound。
 func (s *RepositoryService) ListAssets(name, prefix string, limit, offset int) ([]repository.Asset, int, error) {
 	repo, err := s.repos.GetByName(name)
 	if err != nil {
 		return nil, 0, mapNotFound(err)
 	}
+	if repo.Type == "group" {
+		return s.listGroupAssets(repo, prefix, limit, offset)
+	}
 	total, err := s.assets.CountByRepo(repo.ID, prefix)
 	if err != nil {
 		return nil, 0, err
 	}
 	items, err := s.assets.ListByRepo(repo.ID, prefix, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	return items, total, nil
+}
+
+// listGroupAssets 聚合 group 仓库所有成员的制品列表。
+func (s *RepositoryService) listGroupAssets(repo *repository.Repository, prefix string, limit, offset int) ([]repository.Asset, int, error) {
+	cfg, err := repo.DecodeConfig()
+	if err != nil {
+		return nil, 0, err
+	}
+	// 收集所有成员仓库 ID（仅一层，不递归嵌套 group）
+	var memberIDs []int64
+	for _, mname := range cfg.Members {
+		m, err := s.repos.GetByName(mname)
+		if err != nil {
+			continue // 成员不存在则跳过
+		}
+		if m.Type == "group" {
+			// 递归展开嵌套 group 成员
+			nestedCfg, err := m.DecodeConfig()
+			if err == nil {
+				for _, nn := range nestedCfg.Members {
+					nm, err := s.repos.GetByName(nn)
+					if err == nil && nm.Type != "group" {
+						memberIDs = append(memberIDs, nm.ID)
+					}
+				}
+			}
+			continue
+		}
+		memberIDs = append(memberIDs, m.ID)
+	}
+	if len(memberIDs) == 0 {
+		return nil, 0, nil
+	}
+	total, err := s.assets.CountByRepos(memberIDs, prefix)
+	if err != nil {
+		return nil, 0, err
+	}
+	items, err := s.assets.ListByRepos(memberIDs, prefix, limit, offset)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -219,6 +266,63 @@ func (s *RepositoryService) SetAcl(name string, entries []repository.Acl) ([]rep
 		return nil, err
 	}
 	return s.acls.ListByRepo(r.ID)
+}
+
+// CleanupEmptyMavenArtifacts 清理 Maven 仓库中没有 .jar 文件的 GAV 目录。
+// 返回删除的资产数量。仓库不存在返回 ErrNotFound，非 Maven 仓库返回 ErrValidation。
+func (s *RepositoryService) CleanupEmptyMavenArtifacts(name string) (int, error) {
+	repo, err := s.repos.GetByName(name)
+	if err != nil {
+		return 0, mapNotFound(err)
+	}
+	if repo.Format != "maven" {
+		return 0, ErrValidation
+	}
+
+	// 拉取全部资产路径
+	paths, err := s.assets.ListAllPaths(repo.ID)
+	if err != nil {
+		return 0, err
+	}
+
+	// 按版本目录（倒数第二层以上）分组，判断是否包含 .jar 文件
+	type gavInfo struct {
+		hasJar bool
+		paths  []string
+	}
+	gavMap := make(map[string]*gavInfo)
+	for _, p := range paths {
+		segs := strings.Split(p, "/")
+		if len(segs) < 4 {
+			continue // 不是合法 GAV 结构
+		}
+		// 版本目录 = 倒数第二层以上的路径
+		versionDir := strings.Join(segs[:len(segs)-1], "/")
+		info, ok := gavMap[versionDir]
+		if !ok {
+			info = &gavInfo{}
+			gavMap[versionDir] = info
+		}
+		info.paths = append(info.paths, p)
+		if strings.HasSuffix(p, ".jar") {
+			info.hasJar = true
+		}
+	}
+
+	// 删除没有 jar 的版本目录下所有资产
+	deleted := 0
+	for _, info := range gavMap {
+		if info.hasJar {
+			continue
+		}
+		for _, p := range info.paths {
+			if err := s.assets.DeleteByPath(repo.ID, p); err != nil {
+				continue // 跳过单个删除失败
+			}
+			deleted++
+		}
+	}
+	return deleted, nil
 }
 
 // CanAccess 判定主体对仓库是否可执行动作（read/write/admin）。

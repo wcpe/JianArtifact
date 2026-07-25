@@ -122,6 +122,41 @@ func (r *AssetRepo) CountMissingChecksums() (int, error) {
 	return n, err
 }
 
+// ListByRepos 返回多个仓库内资产（按 path 升序分页）；prefix 非空时按路径前缀过滤。
+func (r *AssetRepo) ListByRepos(repoIDs []int64, prefix string, limit, offset int) ([]Asset, error) {
+	if len(repoIDs) == 0 {
+		return nil, nil
+	}
+	query, args, err := sqlx.In(
+		`SELECT id, repository_id, path, blob_hash, size, content_type, sha1, md5, created_at, updated_at
+			FROM asset WHERE repository_id IN (?) AND path LIKE ? ESCAPE '\' ORDER BY path LIMIT ? OFFSET ?`,
+		repoIDs, likePrefix(prefix), limit, offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	var assets []Asset
+	err = r.db.Select(&assets, r.db.Rebind(query), args...)
+	return assets, err
+}
+
+// CountByRepos 返回多个仓库内资产总数；prefix 非空时按路径前缀过滤。
+func (r *AssetRepo) CountByRepos(repoIDs []int64, prefix string) (int, error) {
+	if len(repoIDs) == 0 {
+		return 0, nil
+	}
+	query, args, err := sqlx.In(
+		`SELECT COUNT(*) FROM asset WHERE repository_id IN (?) AND path LIKE ? ESCAPE '\'`,
+		repoIDs, likePrefix(prefix),
+	)
+	if err != nil {
+		return 0, err
+	}
+	var n int
+	err = r.db.Get(&n, r.db.Rebind(query), args...)
+	return n, err
+}
+
 // CountAndSizeByRepo 返回单个仓库的制品数量与总字节数。
 func (r *AssetRepo) CountAndSizeByRepo(repoID int64) (count int64, totalSize int64, err error) {
 	var s RepoStats
