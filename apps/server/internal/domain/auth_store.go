@@ -47,6 +47,20 @@ func (s *authStore) PrincipalByTokenDigest(digest string) (*auth.Principal, erro
 	return principalOf(u), nil
 }
 
+func (s *authStore) PrincipalByPassword(username, password string) (*auth.Principal, error) {
+	u, err := s.users.GetByUsername(username)
+	if err != nil {
+		return nil, auth.ErrUnauthenticated
+	}
+	if u.Status != "active" {
+		return nil, auth.ErrUnauthenticated
+	}
+	if err := auth.VerifyPassword(password, u.PasswordHash); err != nil {
+		return nil, auth.ErrUnauthenticated
+	}
+	return principalOf(u), nil
+}
+
 func principalOf(u *repository.User) *auth.Principal {
 	return &auth.Principal{UserID: u.ID, Username: u.Username, Role: u.Role}
 }

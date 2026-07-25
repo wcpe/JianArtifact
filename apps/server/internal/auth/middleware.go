@@ -43,6 +43,8 @@ type Store interface {
 	PrincipalByID(id int64) (*Principal, error)
 	// PrincipalByTokenDigest 按 API Token 摘要载入主体；无匹配或已吊销返回错误。
 	PrincipalByTokenDigest(digest string) (*Principal, error)
+	// PrincipalByPassword 按用户名+口令验证并载入主体；验证失败返回错误。
+	PrincipalByPassword(username, password string) (*Principal, error)
 }
 
 // ErrUnauthenticated 表示凭据缺失或无效。
@@ -85,7 +87,8 @@ func (a *Authenticator) Optional() gin.HandlerFunc {
 }
 
 // resolve 从请求头解析出主体：优先 Authorization: Bearer（jat_ 前缀走 API Token，
-// 否则按 JWT 会话处理）；无 Bearer 时回落 Authorization: Basic，其凭据仅接受 API Token。
+// 否则按 JWT 会话处理）；无 Bearer 时回落 Authorization: Basic，先尝试 API Token，
+// 若不以 jat_ 开头则尝试用户名+口令验证。
 func (a *Authenticator) resolve(r *http.Request) (*Principal, error) {
 	if raw := bearerToken(r); raw != "" {
 		if strings.HasPrefix(raw, tokenPrefix) {
@@ -93,8 +96,19 @@ func (a *Authenticator) resolve(r *http.Request) (*Principal, error) {
 		}
 		return a.resolveSession(raw)
 	}
-	if cred := basicCredential(r); cred != "" {
-		return a.resolveToken(cred)
+	user, pass := basicCredentials(r)
+	if pass != "" {
+		if strings.HasPrefix(pass, tokenPrefix) {
+			return a.resolveToken(pass)
+		}
+		// 尝试用户名+口令认证
+		if user != "" {
+			return a.store.PrincipalByPassword(user, pass)
+		}
+	}
+	// 回落：token 放在 username 字段（如 curl -u jat_xxx:）
+	if user != "" && strings.HasPrefix(user, tokenPrefix) {
+		return a.resolveToken(user)
 	}
 	return nil, ErrUnauthenticated
 }
@@ -149,27 +163,23 @@ func bearerToken(r *http.Request) string {
 	return strings.TrimSpace(h[len(prefix):])
 }
 
-// basicCredential 抽取 Authorization: Basic 中的候选凭据：base64 解码 "user:pass" 后
-// 取 password；password 为空则回落取 username。仅用于承载 API Token，便于 curl 等
-// 原生客户端以 `-u <token>:` 或 `-u :<token>` 呈递。解析失败返回空串。
-func basicCredential(r *http.Request) string {
+// basicCredentials 抽取 Authorization: Basic 中的 username 和 password。
+// 解析失败返回空串。
+func basicCredentials(r *http.Request) (user, pass string) {
 	h := r.Header.Get("Authorization")
 	const prefix = "Basic "
 	if len(h) <= len(prefix) || !strings.EqualFold(h[:len(prefix)], prefix) {
-		return ""
+		return "", ""
 	}
 	decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(h[len(prefix):]))
 	if err != nil {
-		return ""
+		return "", ""
 	}
 	user, pass, found := strings.Cut(string(decoded), ":")
 	if !found {
-		return ""
+		return "", ""
 	}
-	if pass != "" {
-		return pass
-	}
-	return user
+	return user, pass
 }
 
 // PrincipalFrom 从 gin.Context 取回已注入的主体；不存在返回 nil, false。

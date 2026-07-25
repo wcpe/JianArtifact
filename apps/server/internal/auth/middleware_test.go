@@ -11,6 +11,10 @@ import (
 type stubStore struct {
 	tokenDigest    string
 	tokenPrincipal *Principal
+	// 口令认证测试用
+	passUser string
+	passPass string
+	passPrin *Principal
 }
 
 func (s *stubStore) IsTokenRevoked(string) (bool, error) { return false, nil }
@@ -22,6 +26,12 @@ func (s *stubStore) PrincipalByTokenDigest(digest string) (*Principal, error) {
 		return s.tokenPrincipal, nil
 	}
 	return nil, errors.New("无匹配 token")
+}
+func (s *stubStore) PrincipalByPassword(username, password string) (*Principal, error) {
+	if s.passPrin != nil && username == s.passUser && password == s.passPass {
+		return s.passPrin, nil
+	}
+	return nil, ErrUnauthenticated
 }
 
 // newTestAuthenticator 构造一个仅支持指定 API Token 的 Authenticator。
@@ -105,11 +115,32 @@ func TestResolveBasicWrongToken(t *testing.T) {
 }
 
 func TestResolveBasicNonTokenRejected(t *testing.T) {
-	// Basic 凭据不以 jat_ 开头（口令登录）应被拒绝：协议层不启用口令登录。
+	// Basic 凭据不以 jat_ 开头且口令验证失败应被拒绝。
 	a := newTestAuthenticator("jat_x", &Principal{UserID: 1})
 	r, _ := http.NewRequest(http.MethodGet, "/", nil)
 	r.Header.Set("Authorization", basicHeader("alice", "plaintext-password"))
 	if _, err := a.resolve(r); !errors.Is(err, ErrUnauthenticated) {
 		t.Fatalf("口令凭据应被拒绝，实际：%v", err)
+	}
+}
+
+func TestResolveBasicPasswordAuth(t *testing.T) {
+	// 用户名+口令认证成功场景。
+	store := &stubStore{
+		tokenDigest:    DigestToken("jat_x"),
+		tokenPrincipal: &Principal{UserID: 1},
+		passUser:       "release",
+		passPass:       "releasereleaserelease",
+		passPrin:       &Principal{UserID: 2, Username: "release", Role: "user"},
+	}
+	a := NewAuthenticator(NewJWTManager([]byte("test-secret")), store)
+	r, _ := http.NewRequest(http.MethodGet, "/", nil)
+	r.Header.Set("Authorization", basicHeader("release", "releasereleaserelease"))
+	p, err := a.resolve(r)
+	if err != nil {
+		t.Fatalf("口令认证应成功：%v", err)
+	}
+	if p.Username != "release" || p.UserID != 2 {
+		t.Fatalf("主体不匹配，实际：%+v", p)
 	}
 }
