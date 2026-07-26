@@ -95,7 +95,9 @@ bash deploy/remote-ssh.sh deploy
 bash deploy/remote-ssh.sh health
 ```
 
-`deploy/remote-ssh.sh` 构建时读取仓库根 `VERSION` 文件，经 `-ldflags -X main.version=…` 注入二进制；`/api/v1/status` 与管理端展示的版本与此一致。
+`deploy/remote-ssh.sh` 构建时读取仓库根 `VERSION` 文件，经 `-ldflags -X main.version=…` 注入二进制；`/api/v1/status` 与管理端展示的版本与此一致。未发版的开发部署用 `<下一版本>-dev+<commit>` 命名（如 `0.6.0-dev+7188354`）以与正式版区分。
+
+**远端重启安全规范**：重启只允许经部署用户 home 下的 `start.sh`（内含绝对路径 `JIAN_DATA_DIR` 导出，直接 `./jianartifact run` 会把数据落错目录）；找旧进程必须 `pgrep -u <部署用户> -x jianartifact` 限定用户——同一主机可能存在**其他用户**的同名进程（tmp 真机曾有他人实例，已由机主停用），无差别 `pkill` 会误杀他人服务。tmp 真机现状：部署用户 `jianartifact-deploy` 监听 8080（openresty 反代 `jianartifact-openresty-proxy.service` 对外提供 tmp.wcpe.top，勿动）；8081 为无关 Docker 容器（1Panel-nexus）。
 
 ### 1.1.4c 历史资产 sha1/md5 回填
 
