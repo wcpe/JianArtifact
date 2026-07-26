@@ -171,15 +171,37 @@ export const handlers = [
   }),
 
   // —— 仓库 ——
+  // FR-66：匿名（无 Bearer）也可列仓库——开关开时返回匿名可读集合，关时 401。
   http.get("*/api/v1/repositories", ({ request }) => {
+    const url = new URL(request.url);
+    const page = intParam(url, "page", 1);
+    const pageSize = intParam(url, "page_size", 20);
+    if (unauthorized(request)) {
+      if (!store.anonymousAccess()) {
+        return err("unauthorized", "匿名访问已关闭", 401);
+      }
+      return HttpResponse.json(store.listAnonymousRepositories(page, pageSize));
+    }
+    return HttpResponse.json(store.listRepositories(page, pageSize));
+  }),
+
+  // —— 匿名访问全局开关（FR-66，admin）——
+  http.get(
+    "*/api/v1/settings/anonymous-access",
+    ({ request }) =>
+      unauthorized(request) ?? HttpResponse.json({ enabled: store.anonymousAccess() }),
+  ),
+
+  http.put("*/api/v1/settings/anonymous-access", async ({ request }) => {
     const denied = unauthorized(request);
     if (denied) {
       return denied;
     }
-    const url = new URL(request.url);
-    return HttpResponse.json(
-      store.listRepositories(intParam(url, "page", 1), intParam(url, "page_size", 20)),
-    );
+    const body = (await request.json().catch(() => ({}))) as { enabled?: boolean };
+    if (typeof body.enabled !== "boolean") {
+      return err("bad_request", "enabled 必填", 400);
+    }
+    return HttpResponse.json({ enabled: store.setAnonymousAccess(body.enabled) });
   }),
 
   http.post("*/api/v1/repositories", async ({ request }) => {
@@ -264,6 +286,20 @@ export const handlers = [
       intParam(url, "page_size", 20),
     );
     return result ? HttpResponse.json(result) : err("not_found", "仓库不存在", 404);
+  }),
+
+  // FR-54：目录懒加载。匿名仅在全局开关开启且仓库 public 时可读。
+  http.get("*/api/v1/repositories/:name/tree", ({ request, params }) => {
+    const name = String(params.name);
+    if (unauthorized(request)) {
+      const repo = store.findRepository(name);
+      if (!store.anonymousAccess() || !repo || repo.visibility !== "public") {
+        return err("unauthorized", "未认证", 401);
+      }
+    }
+    const url = new URL(request.url);
+    const entry = store.listDirectory(name, url.searchParams.get("prefix") ?? "");
+    return entry ? HttpResponse.json(entry) : err("not_found", "仓库不存在", 404);
   }),
 
   http.get("*/api/v1/repositories/:name/usage", ({ request, params }) => {

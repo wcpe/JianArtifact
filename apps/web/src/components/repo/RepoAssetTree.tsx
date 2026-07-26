@@ -1,5 +1,6 @@
 // 仓库资产目录树：点目录仅展开；点文件回调选中。文件类型图标多态化。
-import { Group, ScrollArea, Text, UnstyledButton } from "@mantine/core";
+// FR-54: 支持 onExpandDir 懒加载回调——目录首次展开时触发。
+import { Group, Loader, ScrollArea, Text, UnstyledButton } from "@mantine/core";
 import {
   IconBrandJavascript,
   IconBrandNpm,
@@ -22,6 +23,8 @@ interface Props {
   selectedPath: string | null;
   onSelectFile: (node: AssetTreeNode) => void;
   onSelectDir: (node: AssetTreeNode) => void;
+  /** FR-54: 目录首次展开时触发懒加载；返回 Promise 表示加载中。 */
+  onExpandDir?: (node: AssetTreeNode) => void;
   maxHeight?: number | string;
 }
 
@@ -30,6 +33,7 @@ export function RepoAssetTree({
   selectedPath,
   onSelectFile,
   onSelectDir,
+  onExpandDir,
   maxHeight = 480,
 }: Props) {
   const content = (
@@ -42,6 +46,7 @@ export function RepoAssetTree({
           selectedPath={selectedPath}
           onSelectFile={onSelectFile}
           onSelectDir={onSelectDir}
+          onExpandDir={onExpandDir}
         />
       ))}
     </div>
@@ -65,17 +70,21 @@ function TreeNodeRow({
   selectedPath,
   onSelectFile,
   onSelectDir,
+  onExpandDir,
 }: {
   node: AssetTreeNode;
   depth: number;
   selectedPath: string | null;
   onSelectFile: (node: AssetTreeNode) => void;
   onSelectDir: (node: AssetTreeNode) => void;
+  onExpandDir?: (node: AssetTreeNode) => void;
 }) {
   const [open, setOpen] = useState(false);
   const isDir = node.kind === "dir";
   const selected = !isDir && selectedPath === node.path;
   const pad = 8 + depth * 14;
+  // FR-54: 目录未加载子节点时 children === undefined
+  const isLoading = isDir && open && node.children === undefined;
 
   return (
     <>
@@ -84,8 +93,13 @@ function TreeNodeRow({
         aria-expanded={isDir ? open : undefined}
         onClick={() => {
           if (isDir) {
-            setOpen((v) => !v);
+            const willOpen = !open;
+            setOpen(willOpen);
             onSelectDir(node);
+            // FR-54: 首次展开且无 children 时触发懒加载
+            if (willOpen && node.children === undefined && onExpandDir) {
+              onExpandDir(node);
+            }
           } else {
             onSelectFile(node);
           }
@@ -122,18 +136,25 @@ function TreeNodeRow({
           </Text>
         </Group>
       </UnstyledButton>
-      {isDir && open && node.children && node.children.length > 0 && (
+      {isDir && open && (
         <div role="group">
-          {node.children.map((c) => (
-            <TreeNodeRow
-              key={c.path}
-              node={c}
-              depth={depth + 1}
-              selectedPath={selectedPath}
-              onSelectFile={onSelectFile}
-              onSelectDir={onSelectDir}
-            />
-          ))}
+          {isLoading && (
+            <div style={{ paddingLeft: pad + 20, paddingTop: 4 }}>
+              <Loader size={14} />
+            </div>
+          )}
+          {node.children &&
+            node.children.map((c) => (
+              <TreeNodeRow
+                key={c.path}
+                node={c}
+                depth={depth + 1}
+                selectedPath={selectedPath}
+                onSelectFile={onSelectFile}
+                onSelectDir={onSelectDir}
+                onExpandDir={onExpandDir}
+              />
+            ))}
         </div>
       )}
     </>
@@ -160,21 +181,13 @@ function FileIcon({ name }: { name: string }) {
   ) {
     return <IconFingerprint size={16} color="var(--mantine-color-gray-5)" />;
   }
-  if (
-    lower.endsWith(".gradle") ||
-    lower.endsWith(".kts") ||
-    lower.endsWith(".gradle.kts")
-  ) {
+  if (lower.endsWith(".gradle") || lower.endsWith(".kts") || lower.endsWith(".gradle.kts")) {
     return <IconPackage size={16} color="var(--mantine-color-green-6)" />;
   }
   if (lower.endsWith(".js") || lower.endsWith(".mjs")) {
     return <IconBrandJavascript size={16} color="var(--mantine-color-yellow-6)" />;
   }
-  if (
-    lower.endsWith(".tgz") ||
-    lower.endsWith(".tar.gz") ||
-    lower.endsWith(".zip")
-  ) {
+  if (lower.endsWith(".tgz") || lower.endsWith(".tar.gz") || lower.endsWith(".zip")) {
     return <IconFileZip size={16} color="var(--mantine-color-grape-5)" />;
   }
   if (lower.endsWith(".npm") || lower === "package.json") {

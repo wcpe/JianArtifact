@@ -26,6 +26,7 @@ export const zh = {
     deleted: "删除成功",
     saved: "保存成功",
     refresh: "刷新",
+    anonymous: "匿名",
   },
   nav: {
     sectionBrowse: "浏览",
@@ -102,6 +103,9 @@ export const zh = {
     changePassword: "重置口令",
     deleteConfirm: "确定删除该用户？此操作不可撤销。",
     empty: "暂无用户",
+    anonymousAccessLabel: "允许匿名访问",
+    anonymousAccessHint: "关闭后所有未登录请求（含公开仓库与协议端点）一律拒绝",
+    anonymousRowHint: "内置匿名主体，用于 ACL 授权，不可登录或管理",
   },
   tokens: {
     title: "访问令牌",
@@ -129,7 +133,6 @@ export const zh = {
     create: "新建仓库",
     manageAcl: "访问控制",
     browse: "浏览",
-    publicLink: "公开页",
     url: "访问 URL",
     members: "成员 / 上游",
     artifactCount: "制品数",

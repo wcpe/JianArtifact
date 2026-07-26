@@ -38,6 +38,8 @@ interface State {
   assets: Record<string, AssetSummary[]>;
   migrations: MigrationTask[];
   seq: { user: number; token: number; repo: number; migration: number };
+  /** FR-66：实例级匿名访问开关（默认开）。 */
+  anonymousAccessEnabled: boolean;
 }
 
 const MOCK_VERSION = "0.2.0-mock";
@@ -112,6 +114,7 @@ function seed(): State {
     },
     migrations: [],
     seq: { user: 2, token: 1, repo: 3, migration: 0 },
+    anonymousAccessEnabled: true,
   };
 }
 
@@ -254,6 +257,28 @@ export const store = {
     };
   },
 
+  /** FR-66：匿名可读仓库列表（mock 近似：public 即匿名可读）。 */
+  listAnonymousRepositories(
+    page: number,
+    pageSize: number,
+  ): { items: Repository[]; total: number } {
+    const readable = state.repositories.filter((r) => r.visibility === "public");
+    return {
+      items: pageSlice(readable, page, pageSize),
+      total: readable.length,
+    };
+  },
+
+  /** FR-66：匿名访问全局开关。 */
+  anonymousAccess(): boolean {
+    return state.anonymousAccessEnabled;
+  },
+
+  setAnonymousAccess(enabled: boolean): boolean {
+    state.anonymousAccessEnabled = enabled;
+    return state.anonymousAccessEnabled;
+  },
+
   findRepository(name: string): Repository | undefined {
     return state.repositories.find((r) => r.name === name);
   },
@@ -338,6 +363,34 @@ export const store = {
       .filter((a) => (prefix ? a.path.startsWith(prefix) : true))
       .sort((a, b) => a.path.localeCompare(b.path));
     return { items: pageSlice(all, page, pageSize), total: all.length };
+  },
+
+  /** FR-54：按目录懒加载——返回指定前缀下当前层的目录（全路径带尾斜杠）与文件，仓库不存在返回 null。 */
+  listDirectory(
+    name: string,
+    prefix: string,
+  ): { directories: string[]; files: AssetSummary[] } | null {
+    if (!state.repositories.some((r) => r.name === name)) {
+      return null;
+    }
+    const dirs = new Set<string>();
+    const files: AssetSummary[] = [];
+    for (const asset of state.assets[name] ?? []) {
+      if (prefix && !asset.path.startsWith(prefix)) {
+        continue;
+      }
+      const rest = asset.path.slice(prefix.length);
+      const slash = rest.indexOf("/");
+      if (slash >= 0) {
+        dirs.add(prefix + rest.slice(0, slash + 1));
+      } else {
+        files.push(asset);
+      }
+    }
+    return {
+      directories: [...dirs].sort(),
+      files: files.sort((a, b) => a.path.localeCompare(b.path)),
+    };
   },
 
   /** 据仓库 format/type 与对外基址组装客户端接入片段，仓库不存在返回 null。 */

@@ -1,4 +1,6 @@
 // 仓库浏览器：左树右详情两栏固定布局；可选 Raw 上传；管理端与公开页共用。
+// FR-54: 文件树懒加载（基于 tree API 按目录按需加载）。
+// FR-57: 浏览页内搜索（调用 searchAssets 带 repository 过滤）。
 import {
   Alert,
   Badge,
@@ -7,6 +9,7 @@ import {
   Card,
   FileButton,
   Group,
+  Loader,
   ScrollArea,
   Stack,
   Text,
@@ -14,19 +17,20 @@ import {
   Title,
 } from "@mantine/core";
 import { EmptyState } from "@jianartifact/ui";
-import { IconUpload } from "@tabler/icons-react";
-import { useMemo, useState } from "react";
+import { IconSearch, IconUpload, IconX } from "@tabler/icons-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import {
+  getRepositoryTree,
   getRepositoryUsage,
-  listAllRepositoryAssets,
   listRepositories,
+  searchAssets,
   uploadRawAsset,
 } from "../../api/endpoints";
 import type { AssetSummary, Repository, UsageInfo } from "../../api/types";
 import { useAsync } from "../../hooks/useAsync";
-import { buildAssetTree, type AssetTreeNode } from "../../lib/assetTree";
+import type { AssetTreeNode } from "../../lib/assetTree";
 import { notifyError, notifySuccess } from "../../lib/feedback";
 import { density } from "../../theme/density";
 import { AsyncBoundary } from "../AsyncBoundary";
@@ -44,6 +48,39 @@ interface Props {
   forcedType?: string;
 }
 
+/** 将 tree API 响应转为 AssetTreeNode[] （目录 children=undefined 表示未加载）。 */
+function treeEntryToNodes(
+  dirs: string[],
+  files: { path: string; size: number; hash: string; contentType?: string; updatedAt: string }[],
+): AssetTreeNode[] {
+  const nodes: AssetTreeNode[] = [];
+  for (const d of dirs) {
+    const name = d.endsWith("/") ? d.slice(0, -1).split("/").pop()! : d.split("/").pop()!;
+    nodes.push({ name, path: d.replace(/\/$/, ""), kind: "dir", children: undefined });
+  }
+  for (const f of files) {
+    const name = f.path.split("/").pop()!;
+    nodes.push({
+      name,
+      path: f.path,
+      kind: "file",
+      asset: {
+        path: f.path,
+        size: f.size,
+        hash: f.hash,
+        contentType: f.contentType ?? "application/octet-stream",
+        updatedAt: f.updatedAt,
+      },
+    });
+  }
+  // 目录优先，字母排序
+  nodes.sort((a, b) => {
+    if (a.kind !== b.kind) return a.kind === "dir" ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+  return nodes;
+}
+
 export function RepoBrowser({
   repoName,
   allowUpload = false,
@@ -57,7 +94,16 @@ export function RepoBrowser({
   const [uploading, setUploading] = useState(false);
   const [reloadNonce, setReloadNonce] = useState(0);
 
-  const assetsState = useAsync(() => listAllRepositoryAssets(repoName), [repoName, reloadNonce]);
+  // FR-54: 懒加载树状态
+  const [treeNodes, setTreeNodes] = useState<AssetTreeNode[]>([]);
+  const [treeLoading, setTreeLoading] = useState(true);
+  const [treeError, setTreeError] = useState<string | null>(null);
+
+  // FR-57: 仓库内搜索
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<AssetTreeNode[] | null>(null);
+  const [searching, setSearching] = useState(false);
+
   const usageState = useAsync(() => getRepositoryUsage(repoName), [repoName]);
   const repoState = useAsync(
     () =>
@@ -73,12 +119,85 @@ export function RepoBrowser({
   const repoType = forcedType || repoState.data?.type || usageState.data?.type || "hosted";
   const canUpload = allowUpload && format === "raw" && repoType === "hosted" && !publicMode;
 
-  const tree = useMemo(() => {
-    if (!assetsState.data) {
-      return [] as AssetTreeNode[];
+  // FR-54: 加载根目录
+  useEffect(() => {
+    setTreeLoading(true);
+    setTreeError(null);
+    setTreeNodes([]);
+    setSelected(null);
+    setSearchResults(null);
+    setSearchQuery("");
+    getRepositoryTree(repoName, "")
+      .then((entry) => {
+        setTreeNodes(treeEntryToNodes(entry.directories, entry.files));
+      })
+      .catch((e: Error) => setTreeError(e.message))
+      .finally(() => setTreeLoading(false));
+  }, [repoName, reloadNonce]);
+
+  // FR-54: 目录懒加载回调——递归更新树状态
+  const updateNodeChildren = useCallback(
+    (nodes: AssetTreeNode[], targetPath: string, children: AssetTreeNode[]): AssetTreeNode[] =>
+      nodes.map((n) => {
+        if (n.path === targetPath) {
+          return { ...n, children };
+        }
+        if (n.kind === "dir" && n.children && targetPath.startsWith(n.path + "/")) {
+          return { ...n, children: updateNodeChildren(n.children, targetPath, children) };
+        }
+        return n;
+      }),
+    [],
+  );
+
+  const handleExpandDir = useCallback(
+    (node: AssetTreeNode) => {
+      const prefix = node.path.endsWith("/") ? node.path : node.path + "/";
+      getRepositoryTree(repoName, prefix)
+        .then((entry) => {
+          const children = treeEntryToNodes(entry.directories, entry.files);
+          setTreeNodes((prev) => updateNodeChildren(prev, node.path, children));
+        })
+        .catch(() => {
+          // 加载失败时设为空数组（显示无内容）
+          setTreeNodes((prev) => updateNodeChildren(prev, node.path, []));
+        });
+    },
+    [repoName, updateNodeChildren],
+  );
+
+  // FR-57: 仓库内搜索
+  const handleInRepoSearch = () => {
+    const q = searchQuery.trim();
+    if (!q) {
+      setSearchResults(null);
+      return;
     }
-    return buildAssetTree(assetsState.data.items);
-  }, [assetsState.data]);
+    setSearching(true);
+    searchAssets({ q, repository: repoName, page_size: 200 })
+      .then((res) => {
+        const nodes: AssetTreeNode[] = res.items.map((item) => ({
+          name: item.path.split("/").pop()!,
+          path: item.path,
+          kind: "file" as const,
+          asset: {
+            path: item.path,
+            size: item.size,
+            hash: item.hash,
+            contentType: "application/octet-stream",
+            updatedAt: item.updatedAt,
+          },
+        }));
+        setSearchResults(nodes);
+      })
+      .catch(() => setSearchResults([]))
+      .finally(() => setSearching(false));
+  };
+
+  const clearSearch = () => {
+    setSearchQuery("");
+    setSearchResults(null);
+  };
 
   const onSelectFile = (node: AssetTreeNode) => {
     if (node.asset) {
@@ -108,6 +227,19 @@ export function RepoBrowser({
       .catch((e: Error) => notifyError(e.message || t("common.error")))
       .finally(() => setUploading(false));
   };
+
+  // 文件树展示内容（搜索结果 or 懒加载树）
+  const displayNodes = searchResults ?? treeNodes;
+  const isEmpty = !treeLoading && !treeError && treeNodes.length === 0;
+
+  // 全局刷新事件监听
+  const reloadNonceRef = useRef(reloadNonce);
+  reloadNonceRef.current = reloadNonce;
+  useEffect(() => {
+    const handler = () => setReloadNonce((n) => n + 1);
+    window.addEventListener("jianartifact:refresh", handler);
+    return () => window.removeEventListener("jianartifact:refresh", handler);
+  }, []);
 
   return (
     <Stack gap="md">
@@ -166,80 +298,109 @@ export function RepoBrowser({
         </Alert>
       )}
 
-      <AsyncBoundary state={assetsState}>
-        {(data) =>
-          data.items.length === 0 ? (
-            <EmptyState
-              message={t("repoDetail.assetsEmpty")}
-              description={canUpload ? t("repoDetail.assetsEmptyUploadHint") : undefined}
+      {treeError && <Alert color="red">{treeError}</Alert>}
+
+      {treeLoading && (
+        <Group justify="center" py="xl">
+          <Loader size="sm" />
+          <Text size="sm" c="dimmed">
+            {t("common.loading", { defaultValue: "加载中..." })}
+          </Text>
+        </Group>
+      )}
+
+      {isEmpty && (
+        <EmptyState
+          message={t("repoDetail.assetsEmpty")}
+          description={canUpload ? t("repoDetail.assetsEmptyUploadHint") : undefined}
+        />
+      )}
+
+      {!treeLoading && !treeError && treeNodes.length > 0 && (
+        <Box
+          style={{
+            display: "flex",
+            gap: "var(--mantine-spacing-md)",
+            height: "calc(100vh - 280px)",
+            minHeight: 400,
+          }}
+        >
+          {/* 左侧：文件树 + 搜索 */}
+          <Card
+            withBorder
+            padding={density.cardPadding}
+            radius="md"
+            style={{
+              width: 360,
+              minWidth: 280,
+              flexShrink: 0,
+              display: "flex",
+              flexDirection: "column",
+            }}
+          >
+            {/* FR-57: 仓库内搜索栏 */}
+            <TextInput
+              size="xs"
+              placeholder={t("repoDetail.searchPlaceholder", { defaultValue: "搜索制品..." })}
+              leftSection={<IconSearch size={14} />}
+              rightSection={
+                searchQuery ? (
+                  <IconX size={14} style={{ cursor: "pointer" }} onClick={clearSearch} />
+                ) : undefined
+              }
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.currentTarget.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleInRepoSearch()}
+              mb="xs"
             />
-          ) : (
-            <Stack gap="sm">
-              {data.truncated && (
-                <Alert color="yellow">
-                  {t("repoDetail.treeTruncated", { n: data.items.length, total: data.total })}
-                </Alert>
-              )}
-              <Text size="sm" c="dimmed">
-                {t("repoDetail.assetCount", { n: data.total })}
+            {searching && (
+              <Group justify="center" py="xs">
+                <Loader size={14} />
+              </Group>
+            )}
+            {searchResults !== null && (
+              <Text size="xs" c="dimmed" mb="xs">
+                {t("repoDetail.searchResultCount", {
+                  count: searchResults.length,
+                  defaultValue: `找到 ${searchResults.length} 条结果`,
+                })}
               </Text>
+            )}
+            <ScrollArea style={{ flex: 1 }} type="auto" offsetScrollbars>
+              <RepoAssetTree
+                nodes={displayNodes}
+                selectedPath={selected?.path ?? null}
+                onSelectFile={onSelectFile}
+                onSelectDir={onSelectDir}
+                onExpandDir={searchResults === null ? handleExpandDir : undefined}
+                maxHeight="none"
+              />
+            </ScrollArea>
+          </Card>
 
-              {/* 左右两栏固定布局 */}
-              <Box
-                style={{
-                  display: "flex",
-                  gap: "var(--mantine-spacing-md)",
-                  height: "calc(100vh - 280px)",
-                  minHeight: 400,
-                }}
-              >
-                {/* 左侧：文件树 */}
-                <Card
-                  withBorder
-                  padding={density.cardPadding}
-                  radius="md"
-                  style={{ width: 360, minWidth: 280, flexShrink: 0, display: "flex", flexDirection: "column" }}
-                >
-                  <Title order={5} mb="sm">
-                    {t("repoDetail.treeTitle")}
-                  </Title>
-                  <ScrollArea style={{ flex: 1 }} type="auto" offsetScrollbars>
-                    <RepoAssetTree
-                      nodes={tree}
-                      selectedPath={selected?.path ?? null}
-                      onSelectFile={onSelectFile}
-                      onSelectDir={onSelectDir}
-                      maxHeight="none"
-                    />
-                  </ScrollArea>
-                </Card>
-
-                {/* 右侧：文件详情 / 使用说明 */}
-                <Card
-                  withBorder
-                  padding={density.cardPadding}
-                  radius="md"
-                  style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}
-                >
-                  <ScrollArea style={{ flex: 1 }} type="auto" offsetScrollbars>
-                    {selected ? (
-                      <RepoFileDetail
-                        repoName={repoName}
-                        format={format}
-                        asset={selected}
-                        usage={usageState.data}
-                        showDownload
-                      />
-                    ) : (
-                      <UsagePanel usageState={usageState} />
-                    )}
-                  </ScrollArea>
-                </Card>
-              </Box>
-            </Stack>
-          )
-        }
-      </AsyncBoundary>
+          {/* 右侧：文件详情 / 使用说明 */}
+          <Card
+            withBorder
+            padding={density.cardPadding}
+            radius="md"
+            style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}
+          >
+            <ScrollArea style={{ flex: 1 }} type="auto" offsetScrollbars>
+              {selected ? (
+                <RepoFileDetail
+                  repoName={repoName}
+                  format={format}
+                  asset={selected}
+                  usage={usageState.data}
+                  showDownload
+                />
+              ) : (
+                <UsagePanel usageState={usageState} />
+              )}
+            </ScrollArea>
+          </Card>
+        </Box>
+      )}
     </Stack>
   );
 }

@@ -335,3 +335,75 @@ export function cleanupEmptyArtifacts(repoName: string): Promise<{ deleted: numb
 export function listPublicRepositories(): Promise<RepositoryList> {
   return request<RepositoryList>("/public/repositories");
 }
+
+// —— FR-66: 匿名访问全局开关（admin）——
+
+/** 查询实例级匿名访问开关。 */
+export function getAnonymousAccessSetting(): Promise<{ enabled: boolean }> {
+  return request<{ enabled: boolean }>("/settings/anonymous-access");
+}
+
+/** 更新实例级匿名访问开关（仅 admin）。 */
+export function putAnonymousAccessSetting(enabled: boolean): Promise<{ enabled: boolean }> {
+  return request<{ enabled: boolean }>("/settings/anonymous-access", {
+    method: "PUT",
+    body: { enabled },
+  });
+}
+
+// ---- FR-54: Tree API ----
+
+export interface TreeEntry {
+  directories: string[];
+  files: { path: string; size: number; hash: string; contentType?: string; updatedAt: string }[];
+}
+
+/** 目录懒加载：获取仓库指定前缀下的目录和文件。 */
+export function getRepositoryTree(name: string, prefix?: string): Promise<TreeEntry> {
+  return request<TreeEntry>(`/repositories/${encodeURIComponent(name)}/tree`, {
+    query: { prefix },
+  });
+}
+
+// ---- FR-30: Search API ----
+
+export interface SearchResult {
+  items: { repository: string; path: string; size: number; hash: string; updatedAt: string }[];
+  total: number;
+}
+
+/** 全局跨仓库制品搜索。 */
+export function searchAssets(params: {
+  q: string;
+  repository?: string;
+  page?: number;
+  page_size?: number;
+}): Promise<SearchResult> {
+  return request<SearchResult>("/search", {
+    query: {
+      q: params.q,
+      repository: params.repository,
+      page: params.page,
+      page_size: params.page_size,
+    },
+  });
+}
+
+// ---- FR-56: Sorted repo list ----
+
+export interface RepoListParams extends Pagination {
+  sort?: string;
+  order?: string;
+}
+
+/** 仓库列表（支持排序）。 */
+export function listRepositoriesSorted(params: RepoListParams = {}): Promise<RepositoryList> {
+  return request<RepositoryList>("/repositories", {
+    query: {
+      page: params.page,
+      page_size: params.page_size,
+      sort: params.sort,
+      order: params.order,
+    },
+  });
+}

@@ -14,6 +14,26 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * 全局 401 事件名：当任何请求收到 HTTP 401 时触发，
+ * AuthContext 监听此事件并自动清除本地会话（退出登录）。
+ */
+export const AUTH_EXPIRED_EVENT = "jianartifact:auth-expired";
+
+const USER_KEY_FOR_CHECK = "jianartifact.user";
+
+/**
+ * 触发全局 401 事件。当存在 token 或 user 快照时触发（表明本地仍认为已登录），
+ * 避免纯匿名端点的 401 重复触发。
+ */
+function emitAuthExpired() {
+  const hasToken = Boolean(getToken());
+  const hasUser = Boolean(localStorage.getItem(USER_KEY_FOR_CHECK));
+  if (hasToken || hasUser) {
+    window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT));
+  }
+}
+
 const TOKEN_KEY = "jianartifact.token";
 
 /** 读取持久化的会话令牌（localStorage）。 */
@@ -97,6 +117,9 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     throw new ApiError("network", e instanceof Error ? e.message : "网络错误", 0);
   }
   if (!response.ok) {
+    if (response.status === 401) {
+      emitAuthExpired();
+    }
     throw await parseError(response);
   }
   if (response.status === 204) {

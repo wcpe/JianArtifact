@@ -1,4 +1,4 @@
-// 仓库详情集成测试：目录树逐级展开点选文件后渲染详情/使用说明；未鉴权进入错误态。
+// 仓库详情集成测试：目录树逐级展开点选文件后渲染详情/使用说明；匿名访问 private 仓库报未认证。
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
@@ -20,7 +20,8 @@ describe("仓库详情", () => {
   it("目录树点选文件后渲染详情与使用说明", async () => {
     const user = userEvent.setup();
     renderDetail("maven-releases", true);
-    // FR-16a 目录树：根节点 com 默认展开，逐级点开 maven 坐标目录（buildAssetTree 不压缩单子目录）
+    // FR-54 懒加载目录树：根层仅有 com，逐级点开 maven 坐标目录
+    await user.click(await screen.findByText("com"));
     await user.click(await screen.findByText("example"));
     await user.click(await screen.findByText("app"));
     await user.click(await screen.findByText("1.0.0"));
@@ -31,8 +32,9 @@ describe("仓库详情", () => {
     expect((await screen.findAllByRole("button", { name: "复制" })).length).toBeGreaterThan(0);
   });
 
-  it("未鉴权进入错误态", async () => {
+  it("匿名访问 private 仓库展示未认证错误", async () => {
     renderDetail("maven-releases", false);
-    expect((await screen.findAllByTestId("state-error")).length).toBeGreaterThan(0);
+    // FR-66：匿名仅可读 public 仓库，private 目录树请求 401 → 错误提示
+    expect((await screen.findAllByText("未认证")).length).toBeGreaterThan(0);
   });
 });

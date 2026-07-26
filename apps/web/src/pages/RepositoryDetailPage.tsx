@@ -20,9 +20,17 @@ import { useNavigate, useParams } from "react-router-dom";
 
 import { RepoBrowser } from "../components/repo/RepoBrowser";
 import { AsyncBoundary } from "../components/AsyncBoundary";
-import { getAcl, listRepositories, listUsers, setAcl, updateRepository } from "../api/endpoints";
+import {
+  getAcl,
+  getRepositoryUsage,
+  listRepositories,
+  listUsers,
+  setAcl,
+  updateRepository,
+} from "../api/endpoints";
 import type { AclAction, AclEntry, RepoVisibility, Repository, User } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
+import { useLoginModal } from "../auth/LoginModal";
 import { useAsync } from "../hooks/useAsync";
 import { notifyError, notifySuccess } from "../lib/feedback";
 import { density } from "../theme/density";
@@ -32,18 +40,30 @@ export function RepositoryDetailPage() {
   const navigate = useNavigate();
   const { name = "" } = useParams();
   const { user } = useAuth();
+  const { openLogin } = useLoginModal();
   const isAdmin = user?.role === "admin";
-  // 有登录即可尝试上传（后端校验 write）；公开页另走 PublicRepoPage
+  // 有登录即可尝试上传（后端校验 write）
   const allowUpload = Boolean(user);
 
-  // 拉取仓库信息（供页头 Badge 与配置 Tab 使用）
-  const repoState = useAsync(
-    () =>
-      listRepositories({ page_size: 100 }).then(
+  // 拉取仓库信息：已登录用户走 listRepositories，未登录用户走 getRepositoryUsage（公开 API）
+  const repoState = useAsync(() => {
+    if (user) {
+      return listRepositories({ page_size: 100 }).then(
         (list) => list.items.find((r) => r.name === name) ?? null,
-      ),
-    [name],
-  );
+      );
+    }
+    // 未登录：用公开端点获取仓库基本信息，构造精简 Repository 对象
+    return getRepositoryUsage(name).then(
+      (usage) =>
+        ({
+          name,
+          format: usage.format ?? "raw",
+          type: usage.type ?? "hosted",
+          visibility: "public" as RepoVisibility,
+          createdAt: "",
+        }) as Repository,
+    );
+  }, [name, user]);
   const repo = repoState.data ?? null;
 
   return (
@@ -52,9 +72,15 @@ export function RepositoryDetailPage() {
         title={`${t("repoDetail.title")} · ${name}`}
         description={t("repoDetail.description")}
         actions={
-          <Button variant="default" onClick={() => navigate("/repositories")}>
-            {t("common.close")}
-          </Button>
+          user ? (
+            <Button variant="default" onClick={() => navigate("/repositories")}>
+              {t("common.close")}
+            </Button>
+          ) : (
+            <Button variant="light" onClick={() => openLogin()}>
+              {t("auth.login", { defaultValue: "登录" })}
+            </Button>
+          )
         }
       />
 
@@ -82,7 +108,7 @@ export function RepositoryDetailPage() {
 
         {/* 浏览 Tab：嵌入现有 RepoBrowser */}
         <Tabs.Panel value="browse" pt="md">
-          <RepoBrowser repoName={name} allowUpload={allowUpload} publicMode={false} />
+          <RepoBrowser repoName={name} allowUpload={allowUpload} publicMode={!user} />
         </Tabs.Panel>
 
         {/* 配置 Tab：仅管理员，展示仓库信息 + 可修改 visibility */}
