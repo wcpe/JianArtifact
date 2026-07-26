@@ -67,9 +67,9 @@ export function SetupPage() {
     return <LoadingState message={t("common.loading")} />;
   }
 
-  // 已初始化实例不应停留在初始化页：回登录页。
+  // 已初始化实例不应停留在初始化页：回仓库列表（FR-67 整页登录已删除）。
   if (status.data && status.data.userCount > 0) {
-    return <Navigate to="/login" replace />;
+    return <Navigate to="/repositories" replace />;
   }
 
   const strength = passwordStrength(form.values.password);

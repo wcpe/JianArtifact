@@ -3,6 +3,7 @@
 // 收起态仅图标（Tooltip + aria-label 可达）、段间以分隔线代替段头；据角色显隐管理入口。
 // 视觉沿用旧项目控制台外壳（AppShell layout="alt"）。
 import {
+  ActionIcon,
   AppShell,
   Box,
   Burger,
@@ -13,6 +14,7 @@ import {
   ScrollArea,
   Stack,
   Text,
+  TextInput,
   Tooltip,
   UnstyledButton,
 } from "@mantine/core";
@@ -22,8 +24,11 @@ import {
   IconLayoutDashboard,
   IconLayoutSidebarLeftCollapse,
   IconLayoutSidebarLeftExpand,
+  IconLogin,
   IconLogout,
   IconPackage,
+  IconRefresh,
+  IconSearch,
   IconTransfer,
   IconUsers,
 } from "@tabler/icons-react";
@@ -32,10 +37,12 @@ import type { KeyboardEvent, ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 
-import { getStatus } from "../api/endpoints";
+import { getStatus, listPublicRepositories } from "../api/endpoints";
 import { useAuth } from "../auth/AuthContext";
+import { useLoginModal } from "../auth/LoginModal";
 import { BrandLogo } from "../components/BrandLogo";
 import { density } from "../theme/density";
+import type { Repository } from "../api/types";
 
 /** 导航项定义。 */
 interface NavItem {
@@ -121,48 +128,67 @@ function NavItemLink({
   );
 }
 
-/** 应用外壳：logo 区 + 分段导航 + 左下 footer + 固定 max-width 内容区。 */
+/** 应用外壳：logo 区 + 分段导航 + 左下 footer + 固定 max-width 内容区。
+ * 未登录用户看到精简侧边栏（仅公开仓库列表 + 搜索 + 登录入口）。
+ */
 export function AppLayout() {
   const { t } = useTranslation();
   const { user, logout } = useAuth();
+  const { openLogin } = useLoginModal();
   const navigate = useNavigate();
   const location = useLocation();
+  const isAuthenticated = Boolean(user);
   // mobileOpened：移动端抽屉开合。
   const [mobileOpened, { toggle: toggleMobile, close: closeMobile }] = useDisclosure();
-  // navExpanded：桌面侧栏窄/宽偏好，持久化到 localStorage（默认展开，比旧项目默认收起更利于发现导航）。
+  // navExpanded：桌面侧栏窄/宽偏好，持久化到 localStorage。
   const [navExpanded, setNavExpanded] = useLocalStorage<boolean>({
     key: "jianartifact.navExpanded",
     defaultValue: true,
     getInitialValueInEffect: false,
   });
-  // isMobile：是否处于移动端（< sm 断点）。移动端抽屉恒以展开态渲染，避免只剩 64px 图标条。
+  // isMobile：是否处于移动端。
   const isMobile = useMediaQuery("(max-width: 48em)") ?? false;
   const toggleNav = () => setNavExpanded((value) => !value);
-  // 控制台版本展示：logo 区下方小灰字常显当前版本号（取自 /status）。
   const [version, setVersion] = useState<string | null>(null);
+  // FR-55: 未登录时拉取公开仓库列表供侧边栏展示
+  const [publicRepos, setPublicRepos] = useState<Repository[]>([]);
+  // FR-59: 搜索栏状态
+  const [searchQuery, setSearchQuery] = useState("");
 
   const isAdmin = user?.role === "admin";
-  // 渲染用展开标志：桌面看持久化偏好，移动端抽屉恒展开（显完整文字标签）。
   const expanded = isMobile ? true : navExpanded;
 
-  // 挂载时查一次实例状态取版本号；失败静默（版本号区不渲染），不阻塞外壳渲染。
+  // 挂载时查一次实例状态取版本号；空库实例导向 /setup 引导自举（整页登录已删除，FR-67）。
   useEffect(() => {
     let cancelled = false;
     getStatus()
       .then((info) => {
-        if (!cancelled) setVersion(info.version);
+        if (cancelled) return;
+        setVersion(info.version);
+        if (info.userCount === 0) {
+          navigate("/setup", { replace: true });
+        }
       })
-      .catch(() => {
-        /* 状态查询失败：静默降级，不显版本号 */
-      });
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
+    // navigate 引用稳定，仅挂载时执行一次。
   }, []);
 
+  // FR-55: 未登录时加载公开仓库列表
+  useEffect(() => {
+    if (!isAuthenticated) {
+      listPublicRepositories()
+        .then((res) => setPublicRepos(res.items))
+        .catch(() => setPublicRepos([]));
+    }
+  }, [isAuthenticated]);
+
+  // FR-67：登出后落地仓库列表（匿名视图），不再有整页登录。
   const handleLogout = () => {
     void logout().then(() => {
-      navigate("/login", { replace: true });
+      navigate("/repositories", { replace: true });
     });
   };
 
@@ -184,18 +210,34 @@ export function AppLayout() {
   // 角色感知导航过滤：非管理员隐藏 adminOnly 项。
   const isItemVisible = (item: NavItem): boolean => !item.adminOnly || isAdmin;
 
-  // 按段过滤后仅保留含可见项的段（空段不渲染段头 / 分隔线）。
+  // 按段过滤后仅保留含可见项的段。
   const visibleSections = NAV_SECTIONS.map((section) => ({
     titleKey: section.titleKey,
     items: section.items.filter(isItemVisible),
   })).filter((section) => section.items.length > 0);
 
-  // 侧栏宽度：桌面按展开偏好在 64 / 240 间切换；移动端抽屉恒用展开宽度（显完整标签）。
+  // 侧栏宽度
   const navbarWidth = {
     base: density.navbarWidth.expanded,
     sm: navExpanded ? density.navbarWidth.expanded : density.navbarWidth.collapsed,
   };
   const roleLabel = isAdmin ? t("common.roleAdmin") : t("common.roleUser");
+
+  // FR-59: Header 搜索提交
+  const handleSearch = () => {
+    if (searchQuery.trim()) {
+      navigate(`/search?q=${encodeURIComponent(searchQuery.trim())}`);
+      setSearchQuery("");
+    }
+  };
+
+  // FR-59: 刷新当前页
+  const handleRefresh = () => {
+    // 触发页面组件重新加载（通过导航到当前路径不会刷新，用 key trick）
+    navigate(location.pathname + location.search, { replace: true });
+    // 强制刷新：通过全局事件通知子组件
+    window.dispatchEvent(new CustomEvent("jianartifact:refresh"));
+  };
 
   return (
     <AppShell
@@ -208,7 +250,6 @@ export function AppLayout() {
         <Group h="100%" px="md" wrap="nowrap" justify="space-between">
           <Group gap="sm" wrap="nowrap" style={{ flex: 1, minWidth: 0 }}>
             <Burger opened={mobileOpened} onClick={toggleMobile} hiddenFrom="sm" size="sm" />
-            {/* 移动端 header 显品牌（侧栏收起时不至于空荡）。 */}
             <Group gap="xs" wrap="nowrap" hiddenFrom="sm">
               <BrandLogo size={24} />
               <Text fw={700} size="sm">
@@ -216,7 +257,25 @@ export function AppLayout() {
               </Text>
             </Group>
           </Group>
+          {/* FR-59: Header 搜索栏 */}
+          <Group gap="sm" wrap="nowrap" style={{ flex: 2, minWidth: 0 }} justify="center">
+            <TextInput
+              placeholder={t("search.placeholder", { defaultValue: "搜索制品..." })}
+              size="xs"
+              leftSection={<IconSearch size={14} />}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.currentTarget.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+              style={{ maxWidth: 320, flex: 1 }}
+            />
+          </Group>
           <Group gap="sm" wrap="nowrap" justify="flex-end" style={{ flex: 1, minWidth: 0 }}>
+            {/* FR-59: 刷新按钮 */}
+            <Tooltip label={t("common.refresh", { defaultValue: "刷新" })}>
+              <ActionIcon variant="subtle" onClick={handleRefresh}>
+                <IconRefresh size={18} />
+              </ActionIcon>
+            </Tooltip>
             {user ? (
               <Group gap="sm" wrap="nowrap">
                 <Text size="sm" c="dimmed" truncate>
@@ -232,14 +291,22 @@ export function AppLayout() {
                   {t("common.logout")}
                 </Button>
               </Group>
-            ) : null}
+            ) : (
+              <Button
+                variant="light"
+                size="xs"
+                leftSection={<IconLogin size={16} />}
+                onClick={() => openLogin()}
+              >
+                {t("auth.login", { defaultValue: "登录" })}
+              </Button>
+            )}
           </Group>
         </Group>
       </AppShell.Header>
 
       <AppShell.Navbar p="xs">
-        {/* 左上 logo 区：点击「logo + 文字」整体切换导航展开/收起；
-            展开态显品牌文字 + 小灰字版本号，收起态只留可点击 SVG。 */}
+        {/* logo 区 */}
         <Group
           gap="xs"
           wrap="nowrap"
@@ -268,33 +335,58 @@ export function AppLayout() {
         </Group>
 
         <ScrollArea style={{ flex: 1 }}>
-          {visibleSections.map((section, index) => (
-            <Box key={section.titleKey} mt={index === 0 ? 0 : "xs"}>
-              {expanded ? (
+          {/* FR-55: 未登录 — 精简侧边栏 */}
+          {!isAuthenticated ? (
+            <Box>
+              {expanded && (
                 <Text size="xs" c="dimmed" fw={600} px="xs" py={4}>
-                  {t(section.titleKey)}
+                  {t("nav.publicRepos", { defaultValue: "公开仓库" })}
                 </Text>
-              ) : (
-                index > 0 && <Divider my={6} />
               )}
-              {section.items.map((item) => (
+              {publicRepos.map((repo) => (
                 <NavItemLink
-                  key={item.path}
-                  label={t(item.labelKey)}
-                  icon={item.icon}
+                  key={repo.name}
+                  label={repo.name}
+                  icon={<IconPackage size={18} />}
                   expanded={expanded}
-                  active={isNavActive(location.pathname, item.path)}
+                  active={isNavActive(location.pathname, `/repositories/${repo.name}`)}
                   onSelect={() => {
-                    navigate(item.path);
+                    navigate(`/repositories/${repo.name}`);
                     if (mobileOpened) closeMobile();
                   }}
                 />
               ))}
             </Box>
-          ))}
+          ) : (
+            /* 已登录 — 完整导航 */
+            visibleSections.map((section, index) => (
+              <Box key={section.titleKey} mt={index === 0 ? 0 : "xs"}>
+                {expanded ? (
+                  <Text size="xs" c="dimmed" fw={600} px="xs" py={4}>
+                    {t(section.titleKey)}
+                  </Text>
+                ) : (
+                  index > 0 && <Divider my={6} />
+                )}
+                {section.items.map((item) => (
+                  <NavItemLink
+                    key={item.path}
+                    label={t(item.labelKey)}
+                    icon={item.icon}
+                    expanded={expanded}
+                    active={isNavActive(location.pathname, item.path)}
+                    onSelect={() => {
+                      navigate(item.path);
+                      if (mobileOpened) closeMobile();
+                    }}
+                  />
+                ))}
+              </Box>
+            ))
+          )}
         </ScrollArea>
 
-        {/* 左下 footer：折叠 / 展开切换按钮。 */}
+        {/* 左下 footer */}
         <Box
           mt="xs"
           pt="xs"
