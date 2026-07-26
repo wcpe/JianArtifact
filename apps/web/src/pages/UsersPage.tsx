@@ -3,25 +3,83 @@ import {
   ActionIcon,
   Badge,
   Button,
+  Card,
   Group,
   Modal,
   PasswordInput,
   Select,
+  Switch,
   Table,
+  Text,
   TextInput,
+  Tooltip,
 } from "@mantine/core";
 import { useForm } from "@mantine/form";
 import { useDisclosure } from "@mantine/hooks";
 import { IconKey, IconTrash } from "@tabler/icons-react";
 import { EmptyState, PageHeader } from "@jianartifact/ui";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { AsyncBoundary } from "../components/AsyncBoundary";
-import { createUser, deleteUser, changePassword, listUsers, updateUser } from "../api/endpoints";
+import {
+  createUser,
+  deleteUser,
+  changePassword,
+  getAnonymousAccessSetting,
+  listUsers,
+  putAnonymousAccessSetting,
+  updateUser,
+} from "../api/endpoints";
 import type { User, UserRole, UserStatus } from "../api/types";
 import { useAsync } from "../hooks/useAsync";
 import { confirmDanger, notifyError, notifySuccess } from "../lib/feedback";
+
+/** FR-66 内置匿名主体用户名（与后端 domain.AnonymousUsername 一致）。 */
+const ANONYMOUS_USERNAME = "anonymous";
+
+/** FR-66 匿名访问全局开关卡片：加载现值，切换即保存。 */
+function AnonymousAccessCard() {
+  const { t } = useTranslation();
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    getAnonymousAccessSetting()
+      .then((res) => setEnabled(res.enabled))
+      .catch(notifyError);
+  }, []);
+
+  const handleToggle = (next: boolean) => {
+    setSaving(true);
+    putAnonymousAccessSetting(next)
+      .then((res) => {
+        setEnabled(res.enabled);
+        notifySuccess(t("common.saved"));
+      })
+      .catch(notifyError)
+      .finally(() => setSaving(false));
+  };
+
+  return (
+    <Card withBorder mb="md" padding="md">
+      <Group justify="space-between" wrap="nowrap">
+        <div>
+          <Text fw={500}>{t("users.anonymousAccessLabel")}</Text>
+          <Text size="sm" c="dimmed">
+            {t("users.anonymousAccessHint")}
+          </Text>
+        </div>
+        <Switch
+          checked={enabled ?? true}
+          disabled={enabled === null || saving}
+          onChange={(e) => handleToggle(e.currentTarget.checked)}
+          aria-label={t("users.anonymousAccessLabel")}
+        />
+      </Group>
+    </Card>
+  );
+}
 
 export function UsersPage() {
   const { t } = useTranslation();
@@ -121,6 +179,8 @@ export function UsersPage() {
         actions={<Button onClick={createModal.open}>{t("users.create")}</Button>}
       />
 
+      <AnonymousAccessCard />
+
       <AsyncBoundary state={state}>
         {(list) =>
           list.items.length === 0 ? (
@@ -137,53 +197,76 @@ export function UsersPage() {
                 </Table.Tr>
               </Table.Thead>
               <Table.Tbody>
-                {list.items.map((user) => (
-                  <Table.Tr key={user.id}>
-                    <Table.Td>{user.id}</Table.Td>
-                    <Table.Td>{user.username}</Table.Td>
-                    <Table.Td>
-                      <Select
-                        size="xs"
-                        w={120}
-                        data={roleOptions}
-                        value={user.role}
-                        allowDeselect={false}
-                        onChange={(v) => v && handleChangeRole(user, v as UserRole)}
-                      />
-                    </Table.Td>
-                    <Table.Td>
-                      <Badge
-                        color={user.status === "active" ? "green" : "gray"}
-                        variant="light"
-                        style={{ cursor: "pointer" }}
-                        onClick={() => handleToggleStatus(user)}
-                      >
-                        {user.status === "active"
-                          ? t("users.statusActive")
-                          : t("users.statusDisabled")}
-                      </Badge>
-                    </Table.Td>
-                    <Table.Td>
-                      <Group gap="xs">
-                        <ActionIcon
-                          variant="subtle"
-                          onClick={() => setPwdUser(user)}
-                          aria-label={t("users.changePassword")}
+                {list.items.map((user) => {
+                  // FR-66：内置匿名主体不可登录/管理，隐藏其管理操作。
+                  const isAnonymous = user.username === ANONYMOUS_USERNAME;
+                  return (
+                    <Table.Tr key={user.id}>
+                      <Table.Td>{user.id}</Table.Td>
+                      <Table.Td>
+                        <Group gap="xs" wrap="nowrap">
+                          {user.username}
+                          {isAnonymous && (
+                            <Tooltip label={t("users.anonymousRowHint")}>
+                              <Badge variant="light" color="gray">
+                                {t("common.anonymous")}
+                              </Badge>
+                            </Tooltip>
+                          )}
+                        </Group>
+                      </Table.Td>
+                      <Table.Td>
+                        {isAnonymous ? (
+                          <Badge variant="light" color="gray">
+                            {t("users.roleUser")}
+                          </Badge>
+                        ) : (
+                          <Select
+                            size="xs"
+                            w={120}
+                            data={roleOptions}
+                            value={user.role}
+                            allowDeselect={false}
+                            onChange={(v) => v && handleChangeRole(user, v as UserRole)}
+                          />
+                        )}
+                      </Table.Td>
+                      <Table.Td>
+                        <Badge
+                          color={user.status === "active" ? "green" : "gray"}
+                          variant="light"
+                          style={isAnonymous ? undefined : { cursor: "pointer" }}
+                          onClick={isAnonymous ? undefined : () => handleToggleStatus(user)}
                         >
-                          <IconKey size={16} />
-                        </ActionIcon>
-                        <ActionIcon
-                          color="red"
-                          variant="subtle"
-                          onClick={() => handleDelete(user)}
-                          aria-label={t("common.delete")}
-                        >
-                          <IconTrash size={16} />
-                        </ActionIcon>
-                      </Group>
-                    </Table.Td>
-                  </Table.Tr>
-                ))}
+                          {user.status === "active"
+                            ? t("users.statusActive")
+                            : t("users.statusDisabled")}
+                        </Badge>
+                      </Table.Td>
+                      <Table.Td>
+                        {!isAnonymous && (
+                          <Group gap="xs">
+                            <ActionIcon
+                              variant="subtle"
+                              onClick={() => setPwdUser(user)}
+                              aria-label={t("users.changePassword")}
+                            >
+                              <IconKey size={16} />
+                            </ActionIcon>
+                            <ActionIcon
+                              color="red"
+                              variant="subtle"
+                              onClick={() => handleDelete(user)}
+                              aria-label={t("common.delete")}
+                            >
+                              <IconTrash size={16} />
+                            </ActionIcon>
+                          </Group>
+                        )}
+                      </Table.Td>
+                    </Table.Tr>
+                  );
+                })}
               </Table.Tbody>
             </Table>
           )

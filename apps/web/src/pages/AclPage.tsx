@@ -1,5 +1,5 @@
 // 仓库访问控制：编辑某仓库的 ACL 条目（用户 + 权限），整表 PUT 保存。
-import { ActionIcon, Button, Group, Select, Table } from "@mantine/core";
+import { ActionIcon, Badge, Button, Group, Select, Table } from "@mantine/core";
 import { IconTrash } from "@tabler/icons-react";
 import { EmptyState, PageHeader } from "@jianartifact/ui";
 import { useEffect, useMemo, useState } from "react";
@@ -50,9 +50,15 @@ export function AclPage() {
   }, [users]);
 
   // 用户下拉选项：值用字符串 id（Mantine Select 统一字符串），提交时转回 number。
+  // FR-66：内置匿名主体加「匿名」标注，授 read 即开放匿名读取。
   const userOptions = useMemo(
-    () => users.map((u) => ({ value: String(u.id), label: u.username })),
-    [users],
+    () =>
+      users.map((u) => ({
+        value: String(u.id),
+        label:
+          u.username === "anonymous" ? `${u.username}（${t("common.anonymous")}）` : u.username,
+      })),
+    [users, t],
   );
 
   // 已添加条目中已被占用的用户 id，新增时从下拉里排除，避免重复授权。
@@ -130,7 +136,14 @@ export function AclPage() {
                     <Table.Tr key={entry.subjectId}>
                       <Table.Td>
                         {/* 展示用户名；若用户列表中查不到（如已删除）则回退显示 id */}
-                        {nameById.get(entry.subjectId) ?? `#${entry.subjectId}`}
+                        <Group gap="xs" wrap="nowrap">
+                          {nameById.get(entry.subjectId) ?? `#${entry.subjectId}`}
+                          {nameById.get(entry.subjectId) === "anonymous" && (
+                            <Badge variant="light" color="gray">
+                              {t("common.anonymous")}
+                            </Badge>
+                          )}
+                        </Group>
                       </Table.Td>
                       <Table.Td>
                         <Select
