@@ -26,6 +26,7 @@ type Deps struct {
 	Tokens     *domain.TokenService
 	Repos      *domain.RepositoryService
 	Migrations *domain.MigrationService
+	Settings   *domain.SettingService
 }
 
 // Handlers 实现 ServerInterface 的全部端点。
@@ -38,6 +39,7 @@ type Handlers struct {
 	tokens     *domain.TokenService
 	repos      *domain.RepositoryService
 	migrations *domain.MigrationService
+	settings   *domain.SettingService
 }
 
 // NewHandlers 构造 Handlers。
@@ -51,6 +53,7 @@ func NewHandlers(d Deps) *Handlers {
 		tokens:     d.Tokens,
 		repos:      d.Repos,
 		migrations: d.Migrations,
+		settings:   d.Settings,
 	}
 }
 

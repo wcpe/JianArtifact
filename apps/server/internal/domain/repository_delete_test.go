@@ -17,7 +17,7 @@ func TestDeleteRepositoryCascadesAssets(t *testing.T) {
 	assetRepo := repository.NewAssetRepo(db)
 	aclRepo := repository.NewAclRepo(db)
 	blobs := blobstore.NewStore(filepath.Join(t.TempDir(), "blobs"))
-	repoSvc := domain.NewRepositoryService(repoRepo, aclRepo, assetRepo)
+	repoSvc := domain.NewRepositoryService(repoRepo, aclRepo, assetRepo, domain.NewSettingService(repository.NewSettingRepo(db)), repository.NewUserRepo(db))
 	assetSvc := domain.NewAssetService(repoRepo, assetRepo, blobs, nil)
 
 	if _, err := repoSvc.Create("to-delete", "raw", "hosted", "private", repository.RepositoryConfig{}); err != nil {

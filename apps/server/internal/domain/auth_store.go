@@ -48,6 +48,10 @@ func (s *authStore) PrincipalByTokenDigest(digest string) (*auth.Principal, erro
 }
 
 func (s *authStore) PrincipalByPassword(username, password string) (*auth.Principal, error) {
+	// 内置 anonymous 主体禁止口令登录（FR-66；其哈希本不合法，此处显式拦截）。
+	if username == AnonymousUsername {
+		return nil, auth.ErrUnauthenticated
+	}
 	u, err := s.users.GetByUsername(username)
 	if err != nil {
 		return nil, auth.ErrUnauthenticated

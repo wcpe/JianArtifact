@@ -20,9 +20,10 @@ func NewAuthService(users *repository.UserRepo, revoked *repository.RevokedRepo,
 	return &AuthService{users: users, revoked: revoked, jwt: jwtMgr}
 }
 
-// Bootstrap 在 user 表为空时创建首个管理员并返回会话令牌；否则 ErrAlreadyInitialized。
+// Bootstrap 在 user 表为空（不含内置 anonymous）时创建首个管理员并返回会话令牌；
+// 否则 ErrAlreadyInitialized。
 func (s *AuthService) Bootstrap(username, password string) (token string, user *repository.User, err error) {
-	n, err := s.users.Count()
+	n, err := s.users.CountExcluding(AnonymousUsername)
 	if err != nil {
 		return "", nil, err
 	}
@@ -33,7 +34,11 @@ func (s *AuthService) Bootstrap(username, password string) (token string, user *
 }
 
 // Login 校验口令并签发会话令牌。用户不存在 / 停用 / 口令错误统一返回 ErrInvalidCredentials。
+// 内置 anonymous 主体禁止登录（FR-66）。
 func (s *AuthService) Login(username, password string) (token string, user *repository.User, err error) {
+	if username == AnonymousUsername {
+		return "", nil, ErrInvalidCredentials
+	}
 	u, err := s.users.GetByUsername(username)
 	if errors.Is(err, repository.ErrNotFound) {
 		return "", nil, ErrInvalidCredentials

@@ -41,15 +41,16 @@
 
 ### 仓库与 ACL
 
-- `GET/POST/PATCH/DELETE /api/v1/repositories`：仓库管理（格式 raw/maven/npm、类型 hosted/proxy/group、可见性、上游 / 成员配置）。
-- `GET/PUT /api/v1/repositories/{name}/acl`：读写 ACL。
+- `GET/POST/PATCH/DELETE /api/v1/repositories`：仓库管理（格式 raw/maven/npm、类型 hosted/proxy/group、可见性、上游 / 成员配置）。列表接口可选鉴权（FR-66）：匿名请求受全局开关约束（关则 401），开则返回匿名可读集合（public ∪ anonymous 主体被授 read 的仓库）。
+- `GET/PUT /api/v1/repositories/{name}/acl`：读写 ACL；内置 `anonymous` 用户可作为普通主体授权（FR-66）。
+- `GET/PUT /api/v1/settings/anonymous-access`：实例级匿名访问全局开关（仅管理员；默认开；非契约端点，经 WithProtocolRoutes 注册）。
 
 ### 制品浏览
 
-- `GET /api/v1/repositories/{name}/assets`：分页列出制品（`page` / `page_size` / 可选 `prefix`）；**public 仓匿名可读**，私有需 read 权限。
+- `GET /api/v1/repositories/{name}/assets`：分页列出制品（`page` / `page_size` / 可选 `prefix`）；**public 仓匿名可读**，私有需 read 权限（或 anonymous 主体被授 read）。
 - `GET /api/v1/repositories/{name}/usage`：使用片段（客户端接入示例）；权限同 assets。
 - 管理端 SPA：`/repositories/:name` 文件树左右分栏 + Raw hosted 上传（PUT 协议层）。
-- 公开 SPA（无需登录）：`/p/:name` 浏览 public 仓；私有返回 401/403 友好页。
+- 匿名浏览合并入主布局（FR-67/68）：未登录直接落 `/repositories` 查看匿名可读仓库；独立公开页 `/p/:name` 已移除。
 
 ### Nexus 迁移（0.4.0；见 ADR-0012）
 

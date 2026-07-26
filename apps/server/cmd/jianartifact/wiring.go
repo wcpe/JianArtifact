@@ -25,6 +25,7 @@ type appServices struct {
 	repoSvc      *domain.RepositoryService
 	assetSvc     *domain.AssetService
 	migrationSvc *domain.MigrationService
+	settingSvc   *domain.SettingService
 	store        auth.Store
 	jwt          *auth.JWTManager
 }
@@ -51,7 +52,8 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	jwtMgr := auth.NewJWTManager(cfg.JWTSecret)
 	blobs := blobstore.NewStore(cfg.BlobDir)
 	upstreamClient := upstream.NewClient(cfg.UpstreamTimeout)
-	repoSvc := domain.NewRepositoryService(repoRepo, aclRepo, assetRepo)
+	settingSvc := domain.NewSettingService(repository.NewSettingRepo(db))
+	repoSvc := domain.NewRepositoryService(repoRepo, aclRepo, assetRepo, settingSvc, userRepo)
 	assetSvc := domain.NewAssetService(repoRepo, assetRepo, blobs, upstreamClient)
 
 	offlineIndexRepo := repository.NewOfflineIndexRepo(db)
@@ -81,6 +83,7 @@ func openServices(cfg *config.Config) (*appServices, error) {
 		repoSvc:      repoSvc,
 		assetSvc:     assetSvc,
 		migrationSvc: migrationSvc,
+		settingSvc:   settingSvc,
 		store:        domain.NewAuthStore(userRepo, tokenRepo, revokedRepo),
 		jwt:          jwtMgr,
 	}, nil
@@ -97,5 +100,6 @@ func (s *appServices) handlers(version string, checks []func() error) *api.Handl
 		Tokens:     s.tokenSvc,
 		Repos:      s.repoSvc,
 		Migrations: s.migrationSvc,
+		Settings:   s.settingSvc,
 	})
 }

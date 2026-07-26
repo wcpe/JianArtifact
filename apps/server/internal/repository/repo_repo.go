@@ -3,6 +3,7 @@ package repository
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
 )
@@ -41,10 +42,50 @@ func (r *RepoRepo) GetByName(name string) (*Repository, error) {
 	return &repo, nil
 }
 
+// GetByID 按 ID 取仓库；不存在返回 ErrNotFound。
+func (r *RepoRepo) GetByID(id int64) (*Repository, error) {
+	var repo Repository
+	err := r.db.Get(&repo, `SELECT id, name, format, type, visibility, config, created_at FROM repository WHERE id = ?`, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &repo, nil
+}
+
 // List 返回分页仓库（按 id 升序）。
 func (r *RepoRepo) List(limit, offset int) ([]Repository, error) {
 	var repos []Repository
 	err := r.db.Select(&repos, `SELECT id, name, format, type, visibility, config, created_at FROM repository ORDER BY id LIMIT ? OFFSET ?`, limit, offset)
+	return repos, err
+}
+
+// ListSorted 返回分页仓库，支持排序字段与方向。
+// sortBy 可选: name, created_at；order 可选: asc, desc。
+func (r *RepoRepo) ListSorted(limit, offset int, sortBy, order string) ([]Repository, error) {
+	col := "id"
+	switch sortBy {
+	case "name":
+		col = "name"
+	case "created_at":
+		col = "created_at"
+	}
+	dir := "ASC"
+	if order == "desc" {
+		dir = "DESC"
+	}
+	var repos []Repository
+	q := fmt.Sprintf(`SELECT id, name, format, type, visibility, config, created_at FROM repository ORDER BY %s %s LIMIT ? OFFSET ?`, col, dir)
+	err := r.db.Select(&repos, q, limit, offset)
+	return repos, err
+}
+
+// ListPublic 返回所有 visibility=public 的仓库。
+func (r *RepoRepo) ListPublic() ([]Repository, error) {
+	var repos []Repository
+	err := r.db.Select(&repos, `SELECT id, name, format, type, visibility, config, created_at FROM repository WHERE visibility = 'public' ORDER BY name`)
 	return repos, err
 }
 

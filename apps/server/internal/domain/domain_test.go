@@ -32,7 +32,7 @@ func TestCanAccessImplicationMatrix(t *testing.T) {
 	repoRepo := repository.NewRepoRepo(db)
 	aclRepo := repository.NewAclRepo(db)
 	userRepo := repository.NewUserRepo(db)
-	svc := domain.NewRepositoryService(repoRepo, aclRepo, repository.NewAssetRepo(db))
+	svc := domain.NewRepositoryService(repoRepo, aclRepo, repository.NewAssetRepo(db), domain.NewSettingService(repository.NewSettingRepo(db)), userRepo)
 
 	// 建一个用户作为 ACL 主体。
 	uid, err := userRepo.Create("bob", "hash-placeholder", "user")
@@ -75,7 +75,7 @@ func TestCanAccessImplicationMatrix(t *testing.T) {
 // TestCanAccessPublicRead public 仓库对无 ACL 主体的 read 放行，write/admin 仍拒绝。
 func TestCanAccessPublicRead(t *testing.T) {
 	db := newTestDB(t)
-	svc := domain.NewRepositoryService(repository.NewRepoRepo(db), repository.NewAclRepo(db), repository.NewAssetRepo(db))
+	svc := domain.NewRepositoryService(repository.NewRepoRepo(db), repository.NewAclRepo(db), repository.NewAssetRepo(db), domain.NewSettingService(repository.NewSettingRepo(db)), repository.NewUserRepo(db))
 	if _, err := svc.Create("public-repo", "raw", "hosted", "public", repository.RepositoryConfig{}); err != nil {
 		t.Fatalf("建仓库：%v", err)
 	}
@@ -91,7 +91,7 @@ func TestCanAccessPublicRead(t *testing.T) {
 // TestCanAccessNotFound 未知仓库返回 ErrNotFound。
 func TestCanAccessNotFound(t *testing.T) {
 	db := newTestDB(t)
-	svc := domain.NewRepositoryService(repository.NewRepoRepo(db), repository.NewAclRepo(db), repository.NewAssetRepo(db))
+	svc := domain.NewRepositoryService(repository.NewRepoRepo(db), repository.NewAclRepo(db), repository.NewAssetRepo(db), domain.NewSettingService(repository.NewSettingRepo(db)), repository.NewUserRepo(db))
 	if _, err := svc.CanAccess("ghost", 1, "read"); err != domain.ErrNotFound {
 		t.Errorf("未知仓库应返回 ErrNotFound，得 %v", err)
 	}
@@ -101,7 +101,7 @@ func TestCanAccessNotFound(t *testing.T) {
 // proxy 必填合法 remoteUrl；group 必填成员且均存在、同 format、禁止自引用。
 func TestCreateConfigValidation(t *testing.T) {
 	db := newTestDB(t)
-	svc := domain.NewRepositoryService(repository.NewRepoRepo(db), repository.NewAclRepo(db), repository.NewAssetRepo(db))
+	svc := domain.NewRepositoryService(repository.NewRepoRepo(db), repository.NewAclRepo(db), repository.NewAssetRepo(db), domain.NewSettingService(repository.NewSettingRepo(db)), repository.NewUserRepo(db))
 
 	// 前置：一个 raw hosted 与一个 maven hosted，供 group 成员校验用。
 	if _, err := svc.Create("raw-hosted", "raw", "hosted", "private", repository.RepositoryConfig{}); err != nil {
@@ -150,7 +150,7 @@ func TestListAssetsPaginationAndPrefix(t *testing.T) {
 	db := newTestDB(t)
 	repoRepo := repository.NewRepoRepo(db)
 	assetRepo := repository.NewAssetRepo(db)
-	svc := domain.NewRepositoryService(repoRepo, repository.NewAclRepo(db), assetRepo)
+	svc := domain.NewRepositoryService(repoRepo, repository.NewAclRepo(db), assetRepo, domain.NewSettingService(repository.NewSettingRepo(db)), repository.NewUserRepo(db))
 
 	if _, err := svc.Create("raw-store", "raw", "hosted", "private", repository.RepositoryConfig{}); err != nil {
 		t.Fatalf("建仓库：%v", err)
@@ -204,7 +204,7 @@ func TestListAssetsPaginationAndPrefix(t *testing.T) {
 // hosted 含发布 / 上传片段，proxy 仅含下载 / 解析片段。
 func TestUsageByFormat(t *testing.T) {
 	db := newTestDB(t)
-	svc := domain.NewRepositoryService(repository.NewRepoRepo(db), repository.NewAclRepo(db), repository.NewAssetRepo(db))
+	svc := domain.NewRepositoryService(repository.NewRepoRepo(db), repository.NewAclRepo(db), repository.NewAssetRepo(db), domain.NewSettingService(repository.NewSettingRepo(db)), repository.NewUserRepo(db))
 
 	if _, err := svc.Create("mvn", "maven", "hosted", "private", repository.RepositoryConfig{}); err != nil {
 		t.Fatalf("建 maven 仓库：%v", err)
@@ -215,13 +215,13 @@ func TestUsageByFormat(t *testing.T) {
 
 	const base = "https://artifact.example.com"
 
-	// maven hosted：含 settings.xml、pom、distributionManagement 三段。
+	// maven hosted：settings.xml、pom 解析、Gradle 解析 + mvn/Gradle 两段发布，共五段。
 	repo, mvnSnips, err := svc.Usage("mvn", base)
 	if err != nil {
 		t.Fatalf("Usage maven：%v", err)
 	}
-	if repo.Format != "maven" || len(mvnSnips) != 3 {
-		t.Fatalf("maven hosted 应 3 段，得 format=%s len=%d", repo.Format, len(mvnSnips))
+	if repo.Format != "maven" || len(mvnSnips) != 5 {
+		t.Fatalf("maven hosted 应 5 段，得 format=%s len=%d", repo.Format, len(mvnSnips))
 	}
 	joined := ""
 	for _, s := range mvnSnips {

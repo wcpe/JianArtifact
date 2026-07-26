@@ -23,6 +23,13 @@ func (r *UserRepo) Count() (int, error) {
 	return n, err
 }
 
+// CountExcluding 返回不含指定用户名的用户数（自举 / 初始化判断需排除内置 anonymous）。
+func (r *UserRepo) CountExcluding(username string) (int, error) {
+	var n int
+	err := r.db.Get(&n, `SELECT COUNT(*) FROM user WHERE username != ?`, username)
+	return n, err
+}
+
 // Create 插入用户，返回新 ID。
 func (r *UserRepo) Create(username, passwordHash, role string) (int64, error) {
 	res, err := r.db.Exec(

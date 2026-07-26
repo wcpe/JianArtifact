@@ -30,7 +30,7 @@ func setup(t *testing.T) (*domain.MigrationService, *domain.AssetService, *domai
 	assetRepo := repository.NewAssetRepo(db)
 	taskRepo := repository.NewMigrationTaskRepo(db)
 	blobs := blobstore.NewStore(filepath.Join(t.TempDir(), "blobs"))
-	repoSvc := domain.NewRepositoryService(repoRepo, repository.NewAclRepo(db), assetRepo)
+	repoSvc := domain.NewRepositoryService(repoRepo, repository.NewAclRepo(db), assetRepo, domain.NewSettingService(repository.NewSettingRepo(db)), repository.NewUserRepo(db))
 	assetSvc := domain.NewAssetService(repoRepo, assetRepo, blobs, nil)
 	r := runner.New(
 		runner.TaskStoreAdapter{Repo: taskRepo},

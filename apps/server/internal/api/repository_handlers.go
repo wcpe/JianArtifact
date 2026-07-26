@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -12,22 +13,37 @@ import (
 )
 
 // ListRepositories 仓库列表（分页）。管理员可见全部；普通用户仅见可读（public 或经 ACL 授权）者。
+// 可选鉴权（FR-66）：匿名请求受全局开关约束（关则 401），开则返回匿名可读集合。
 // 响应中每个仓库附带 artifactCount/totalSize 统计（GROUP BY 一次查出，避免 N+1）。
 func (h *Handlers) ListRepositories(c *gin.Context, params ListRepositoriesParams) {
-	p, ok := requirePrincipal(c)
-	if !ok {
+	p, authed := auth.PrincipalFrom(c)
+	if !authed && !h.anonymousAllowed(c) {
 		return
 	}
 	limit, offset := pageOffset(params.Page, params.PageSize)
-	rows, statsMap, total, err := h.repos.ListWithStats(limit, offset)
+	// 排序参数（可选）
+	sortBy := ""
+	order := ""
+	if s := c.Query("sort"); s != "" {
+		sortBy = s
+	}
+	if o := c.Query("order"); o != "" {
+		order = o
+	}
+	rows, statsMap, total, err := h.repos.ListWithStats(limit, offset, sortBy, order)
 	if err != nil {
 		writeDomainErr(c, err)
 		return
 	}
+	isAdmin := authed && p.IsAdmin()
+	var subjectID int64
+	if authed {
+		subjectID = p.UserID
+	}
 	items := make([]Repository, 0, len(rows))
 	for i := range rows {
-		if !p.IsAdmin() {
-			allowed, err := h.repos.CanAccess(rows[i].Name, p.UserID, "read")
+		if !isAdmin {
+			allowed, err := h.repos.CanAccess(rows[i].Name, subjectID, "read")
 			if err != nil || !allowed {
 				continue
 			}
@@ -35,7 +51,7 @@ func (h *Handlers) ListRepositories(c *gin.Context, params ListRepositoriesParam
 		stats := statsMap[rows[i].ID]
 		items = append(items, toAPIRepository(&rows[i], &stats))
 	}
-	if !p.IsAdmin() {
+	if !isAdmin {
 		total = len(items)
 	}
 	c.JSON(http.StatusOK, RepositoryList{Items: items, Total: total})
@@ -277,9 +293,13 @@ func (h *Handlers) CleanupEmptyMavenArtifacts(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"deleted": deleted})
 }
 
-// ListPublicRepositories 公开仓库列表（无需认证），仅返回 visibility=public 的仓库。
+// ListPublicRepositories 匿名可读仓库列表（无需认证）：public ∪ anonymous 主体
+// 被授 read 的仓库（FR-66）。全局开关关闭时 401。
 // 非契约端点，经 WithProtocolRoutes 注册。
 func (h *Handlers) ListPublicRepositories(c *gin.Context) {
+	if !h.anonymousAllowed(c) {
+		return
+	}
 	limit, offset := pageOffset(nil, nil)
 	rows, statsMap, _, err := h.repos.ListWithStats(limit, offset)
 	if err != nil {
@@ -288,13 +308,156 @@ func (h *Handlers) ListPublicRepositories(c *gin.Context) {
 	}
 	items := make([]Repository, 0, len(rows))
 	for i := range rows {
-		if rows[i].Visibility != "public" {
+		allowed, err := h.repos.CanAccess(rows[i].Name, 0, "read")
+		if err != nil || !allowed {
 			continue
 		}
 		stats := statsMap[rows[i].ID]
 		items = append(items, toAPIRepository(&rows[i], &stats))
 	}
 	c.JSON(http.StatusOK, RepositoryList{Items: items, Total: len(items)})
+}
+
+// anonymousAllowed 校验匿名访问全局开关；关闭则写 401 并返回 false（FR-66）。
+func (h *Handlers) anonymousAllowed(c *gin.Context) bool {
+	enabled, err := h.settings.AnonymousAccessEnabled()
+	if err != nil {
+		writeDomainErr(c, err)
+		return false
+	}
+	if !enabled {
+		auth.WriteError(c, http.StatusUnauthorized, "unauthenticated", "匿名访问已关闭")
+		return false
+	}
+	return true
+}
+
+// ListRepositoryTree 按目录懒加载：返回仓库指定前缀下当前层的目录和文件。
+// 非契约端点，经 WithProtocolRoutes 注册。
+func (h *Handlers) ListRepositoryTree(c *gin.Context) {
+	name := c.Param("name")
+	if _, ok := h.requireRepoRead(c, name); !ok {
+		return
+	}
+	prefix := c.Query("prefix")
+	entry, err := h.repos.ListDirectory(name, prefix)
+	if err != nil {
+		writeDomainErr(c, err)
+		return
+	}
+	type fileItem struct {
+		Path        string `json:"path"`
+		Size        int64  `json:"size"`
+		Hash        string `json:"hash"`
+		ContentType string `json:"contentType,omitempty"`
+		UpdatedAt   string `json:"updatedAt"`
+	}
+	files := make([]fileItem, 0, len(entry.Files))
+	for _, f := range entry.Files {
+		files = append(files, fileItem{
+			Path:        f.Path,
+			Size:        f.Size,
+			Hash:        f.BlobHash,
+			ContentType: f.ContentType,
+			UpdatedAt:   f.UpdatedAt,
+		})
+	}
+	dirs := entry.Dirs
+	if dirs == nil {
+		dirs = []string{}
+	}
+	c.JSON(http.StatusOK, gin.H{"directories": dirs, "files": files})
+}
+
+// SearchAssets 全局跨仓库制品搜索。
+// 非契约端点，经 WithProtocolRoutes 注册。
+func (h *Handlers) SearchAssets(c *gin.Context) {
+	q := c.Query("q")
+	if q == "" {
+		auth.WriteError(c, http.StatusBadRequest, "bad_request", "搜索关键词不能为空")
+		return
+	}
+	page := 1
+	pageSize := 20
+	if v := c.Query("page"); v != "" {
+		if n, err := parseIntQuery(v); err == nil && n > 0 {
+			page = n
+		}
+	}
+	if v := c.Query("page_size"); v != "" {
+		if n, err := parseIntQuery(v); err == nil && n > 0 && n <= 100 {
+			pageSize = n
+		}
+	}
+	limit := pageSize
+	offset := (page - 1) * pageSize
+
+	// 解析主体（可能匿名）；匿名受全局开关约束（FR-66）
+	p, authed := auth.PrincipalFrom(c)
+	if !authed && !h.anonymousAllowed(c) {
+		return
+	}
+	var subjectID int64
+	var isAdmin bool
+	if authed {
+		subjectID = p.UserID
+		isAdmin = p.IsAdmin()
+	}
+
+	// 仓库范围过滤
+	repoFilter := c.Query("repository")
+	if repoFilter != "" {
+		// 单仓库内搜索：检查读权限后复用 ListAssets
+		allowed, err := h.repos.CanAccess(repoFilter, subjectID, "read")
+		if err != nil {
+			writeDomainErr(c, err)
+			return
+		}
+		if !allowed && !isAdmin {
+			if !authed {
+				auth.WriteError(c, http.StatusUnauthorized, "unauthenticated", "未认证")
+			} else {
+				auth.WriteError(c, http.StatusForbidden, "forbidden", "无权访问")
+			}
+			return
+		}
+	}
+
+	results, total, err := h.repos.SearchAssets(q, subjectID, isAdmin, limit, offset)
+	if err != nil {
+		writeDomainErr(c, err)
+		return
+	}
+
+	type searchItem struct {
+		Repository string `json:"repository"`
+		Path       string `json:"path"`
+		Size       int64  `json:"size"`
+		Hash       string `json:"hash"`
+		UpdatedAt  string `json:"updatedAt"`
+	}
+	items := make([]searchItem, 0, len(results))
+	for _, r := range results {
+		// 如果指定了 repository 过滤，只返回匹配仓库的
+		if repoFilter != "" && r.RepoName != repoFilter {
+			continue
+		}
+		items = append(items, searchItem{
+			Repository: r.RepoName,
+			Path:       r.Asset.Path,
+			Size:       r.Asset.Size,
+			Hash:       r.Asset.BlobHash,
+			UpdatedAt:  r.Asset.UpdatedAt,
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items, "total": total})
+}
+
+// parseIntQuery 尝试将字符串解析为 int。
+func parseIntQuery(s string) (int, error) {
+	var n int
+	_, err := fmt.Sscanf(s, "%d", &n)
+	return n, err
 }
 
 // aclEntries 把行模型批量转为契约 AclEntry。

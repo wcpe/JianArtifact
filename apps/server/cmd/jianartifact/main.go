@@ -29,7 +29,7 @@ import (
 )
 
 // version 由构建时注入（-ldflags "-X main.version=..."）；默认与 VERSION 文件一致。
-var version = "0.4.0"
+var version = "0.5.0"
 
 func main() {
 	// 子命令分发器：run/serve（启动 HTTP 服务）/ status（在线探测或离线静态信息）/
@@ -184,8 +184,15 @@ func run() error {
 			r.POST("/api/v1/migrations/offline-index/cancel", authMW, apiHandlers.CancelOfflineDirIndex)
 			// 运维端点
 			r.POST("/api/v1/repositories/:name/cleanup", authMW, apiHandlers.CleanupEmptyMavenArtifacts)
+			// FR-54: 目录懒加载 tree API
+			r.GET("/api/v1/repositories/:name/tree", authMW, apiHandlers.ListRepositoryTree)
 			// 公开接口（无需认证）
 			r.GET("/api/v1/public/repositories", apiHandlers.ListPublicRepositories)
+			// FR-30: 全局搜索
+			r.GET("/api/v1/search", authMW, apiHandlers.SearchAssets)
+			// FR-66: 匿名访问全局开关（admin，主体由 Optional 注入，handler 内校验）
+			r.GET("/api/v1/settings/anonymous-access", authMW, apiHandlers.GetAnonymousAccessSetting)
+			r.PUT("/api/v1/settings/anonymous-access", authMW, apiHandlers.PutAnonymousAccessSetting)
 		}),
 	)
 	httpServer := &http.Server{

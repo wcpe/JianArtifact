@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 
 	"golang.org/x/sync/singleflight"
 
@@ -195,8 +196,13 @@ func (s *AssetService) proxyGet(ctx context.Context, repo *repository.Repository
 	return s.localGet(repo, path)
 }
 
+// groupMemberTimeout 是 group 仓库逐成员解析时每个成员的最大等待时间。
+// 防止单个不可达 proxy 成员阻塞后续成员的探测。
+const groupMemberTimeout = 10 * time.Second
+
 // groupGet 处理 group 仓库读：按 Members 顺序逐一解析，首个命中即返回；全未命中返回 ErrNotFound。
 // 成员报 ErrNotFound 则继续下一成员；成员回源等其它错误亦跳过（不因单个成员故障阻断聚合读）。
+// 每个成员限时 groupMemberTimeout 以防不可达上游拖慢整体响应。
 func (s *AssetService) groupGet(ctx context.Context, repo *repository.Repository, path string, depth int) (*repository.Asset, io.ReadCloser, error) {
 	cfg, err := repo.DecodeConfig()
 	if err != nil {
@@ -207,10 +213,13 @@ func (s *AssetService) groupGet(ctx context.Context, repo *repository.Repository
 		if err != nil {
 			continue
 		}
-		asset, rc, err := s.resolve(ctx, member, path, depth+1)
+		memberCtx, cancel := context.WithTimeout(ctx, groupMemberTimeout)
+		asset, rc, err := s.resolve(memberCtx, member, path, depth+1)
 		if err == nil {
+			cancel()
 			return asset, rc, nil
 		}
+		cancel()
 	}
 	return nil, nil, ErrNotFound
 }

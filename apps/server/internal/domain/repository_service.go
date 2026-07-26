@@ -3,21 +3,29 @@ package domain
 import (
 	"errors"
 	"net/url"
+	"sort"
 	"strings"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
+// AnonymousUsername 是内置匿名主体的用户名（FR-66）：迁移脚本创建，
+// 不可登录、不可删除 / 改密 / 停用；ACL 中作为普通主体承接匿名授权。
+const AnonymousUsername = "anonymous"
+
 // RepositoryService 处理仓库管理、ACL 与授权判定。
 type RepositoryService struct {
-	repos  *repository.RepoRepo
-	acls   *repository.AclRepo
-	assets *repository.AssetRepo
+	repos    *repository.RepoRepo
+	acls     *repository.AclRepo
+	assets   *repository.AssetRepo
+	settings *SettingService
+	users    *repository.UserRepo
 }
 
-// NewRepositoryService 构造 RepositoryService。
-func NewRepositoryService(repos *repository.RepoRepo, acls *repository.AclRepo, assets *repository.AssetRepo) *RepositoryService {
-	return &RepositoryService{repos: repos, acls: acls, assets: assets}
+// NewRepositoryService 构造 RepositoryService。settings 与 users 供匿名判定
+// （全局开关 + anonymous 主体 ACL，FR-66）使用。
+func NewRepositoryService(repos *repository.RepoRepo, acls *repository.AclRepo, assets *repository.AssetRepo, settings *SettingService, users *repository.UserRepo) *RepositoryService {
+	return &RepositoryService{repos: repos, acls: acls, assets: assets, settings: settings, users: users}
 }
 
 // List 返回分页仓库与总数。
@@ -37,12 +45,18 @@ type RepoStats struct {
 }
 
 // ListWithStats 返回分页仓库及其制品统计（数量、总大小），避免逐仓 N+1 查询。
-func (s *RepositoryService) ListWithStats(limit, offset int) ([]repository.Repository, map[int64]RepoStats, int, error) {
+// sortBy/order 可选：空串表示默认排序。
+func (s *RepositoryService) ListWithStats(limit, offset int, sortBy ...string) ([]repository.Repository, map[int64]RepoStats, int, error) {
 	total, err := s.repos.Count()
 	if err != nil {
 		return nil, nil, 0, err
 	}
-	items, err := s.repos.List(limit, offset)
+	var items []repository.Repository
+	if len(sortBy) >= 2 && sortBy[0] != "" {
+		items, err = s.repos.ListSorted(limit, offset, sortBy[0], sortBy[1])
+	} else {
+		items, err = s.repos.List(limit, offset)
+	}
 	if err != nil {
 		return nil, nil, 0, err
 	}
@@ -100,32 +114,7 @@ func (s *RepositoryService) ListAssets(name, prefix string, limit, offset int) (
 
 // listGroupAssets 聚合 group 仓库所有成员的制品列表。
 func (s *RepositoryService) listGroupAssets(repo *repository.Repository, prefix string, limit, offset int) ([]repository.Asset, int, error) {
-	cfg, err := repo.DecodeConfig()
-	if err != nil {
-		return nil, 0, err
-	}
-	// 收集所有成员仓库 ID（仅一层，不递归嵌套 group）
-	var memberIDs []int64
-	for _, mname := range cfg.Members {
-		m, err := s.repos.GetByName(mname)
-		if err != nil {
-			continue // 成员不存在则跳过
-		}
-		if m.Type == "group" {
-			// 递归展开嵌套 group 成员
-			nestedCfg, err := m.DecodeConfig()
-			if err == nil {
-				for _, nn := range nestedCfg.Members {
-					nm, err := s.repos.GetByName(nn)
-					if err == nil && nm.Type != "group" {
-						memberIDs = append(memberIDs, nm.ID)
-					}
-				}
-			}
-			continue
-		}
-		memberIDs = append(memberIDs, m.ID)
-	}
+	memberIDs := s.collectMemberIDs(repo)
 	if len(memberIDs) == 0 {
 		return nil, 0, nil
 	}
@@ -326,7 +315,9 @@ func (s *RepositoryService) CleanupEmptyMavenArtifacts(name string) (int, error)
 }
 
 // CanAccess 判定主体对仓库是否可执行动作（read/write/admin）。
-// public 仓库对 read 放行；其余按 ACL 判定。仓库不存在返回 ErrNotFound。
+// subjectID==0 表示匿名：受全局开关约束，开启时 public read 放行，
+// 否则按内置 anonymous 主体的 ACL 判定（FR-66）。
+// 已认证主体：public 仓库对 read 放行；其余按 ACL 判定。仓库不存在返回 ErrNotFound。
 func (s *RepositoryService) CanAccess(name string, subjectID int64, action string) (bool, error) {
 	r, err := s.repos.GetByName(name)
 	if errors.Is(err, repository.ErrNotFound) {
@@ -335,8 +326,183 @@ func (s *RepositoryService) CanAccess(name string, subjectID int64, action strin
 	if err != nil {
 		return false, err
 	}
+	if subjectID == 0 {
+		return s.canAccessAnonymous(r, action)
+	}
 	if action == "read" && r.Visibility == "public" {
 		return true, nil
 	}
 	return s.acls.HasPermission(r.ID, subjectID, action)
+}
+
+// canAccessAnonymous 判定匿名请求对仓库的访问：全局开关关闭一律拒绝；
+// 开启时 public read 放行，其余按 anonymous 主体的 ACL 判定。
+func (s *RepositoryService) canAccessAnonymous(r *repository.Repository, action string) (bool, error) {
+	enabled, err := s.settings.AnonymousAccessEnabled()
+	if err != nil {
+		return false, err
+	}
+	if !enabled {
+		return false, nil
+	}
+	if action == "read" && r.Visibility == "public" {
+		return true, nil
+	}
+	anonID, err := s.anonymousSubjectID()
+	if err != nil || anonID == 0 {
+		return false, err
+	}
+	return s.acls.HasPermission(r.ID, anonID, action)
+}
+
+// anonymousSubjectID 解析内置 anonymous 用户 ID；用户缺失返回 0（视为无授权）。
+func (s *RepositoryService) anonymousSubjectID() (int64, error) {
+	u, err := s.users.GetByUsername(AnonymousUsername)
+	if errors.Is(err, repository.ErrNotFound) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return u.ID, nil
+}
+
+// ---- FR-54: Tree API ----
+
+// DirectoryEntry 目录懒加载返回结构。
+type DirectoryEntry struct {
+	Dirs  []string
+	Files []repository.Asset
+}
+
+// ListDirectory 列出仓库指定前缀的当前层级目录与文件（不递归）。
+func (s *RepositoryService) ListDirectory(name, prefix string) (*DirectoryEntry, error) {
+	repo, err := s.repos.GetByName(name)
+	if err != nil {
+		return nil, mapNotFound(err)
+	}
+	var repoIDs []int64
+	if repo.Type == "group" {
+		repoIDs = s.collectMemberIDs(repo)
+	} else {
+		repoIDs = []int64{repo.ID}
+	}
+	if len(repoIDs) == 0 {
+		return &DirectoryEntry{}, nil
+	}
+	dirs, files, err := s.assets.ListDirectoryEntries(repoIDs, prefix)
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(dirs)
+	return &DirectoryEntry{Dirs: dirs, Files: files}, nil
+}
+
+// ---- FR-30: Search API ----
+
+// SearchResult 全局搜索结果条目。
+type SearchResult struct {
+	RepoName string
+	Asset    repository.Asset
+}
+
+// SearchAssets 跨仓库搜索制品路径，按可读权限过滤。
+// subjectID==0 表示匿名：受全局开关约束，可搜范围 = public ∪ anonymous 主体
+// 被授 read 的仓库（FR-66）；isAdmin 则搜全部。
+func (s *RepositoryService) SearchAssets(keyword string, subjectID int64, isAdmin bool, limit, offset int) ([]SearchResult, int, error) {
+	// 匿名请求：开关关闭直接返回空集（handler 另拦 401，此处兜底）。
+	aclSubject := subjectID
+	if subjectID == 0 && !isAdmin {
+		enabled, err := s.settings.AnonymousAccessEnabled()
+		if err != nil {
+			return nil, 0, err
+		}
+		if !enabled {
+			return nil, 0, nil
+		}
+		if aclSubject, err = s.anonymousSubjectID(); err != nil {
+			return nil, 0, err
+		}
+	}
+	// 收集可读仓库 ID
+	var repoIDs []int64
+	if isAdmin {
+		// 管理员搜全部，传空 repoIDs
+		repoIDs = nil
+	} else {
+		pubRepos, err := s.repos.ListPublic()
+		if err != nil {
+			return nil, 0, err
+		}
+		for _, r := range pubRepos {
+			repoIDs = append(repoIDs, r.ID)
+		}
+		// 已登录主体或匿名映射到的 anonymous 主体：加上 ACL 授权的私有仓库
+		if aclSubject > 0 {
+			allRepos, _ := s.repos.List(1000, 0)
+			pubSet := make(map[int64]bool)
+			for _, r := range pubRepos {
+				pubSet[r.ID] = true
+			}
+			for _, r := range allRepos {
+				if pubSet[r.ID] {
+					continue
+				}
+				if ok, _ := s.acls.HasPermission(r.ID, aclSubject, "read"); ok {
+					repoIDs = append(repoIDs, r.ID)
+				}
+			}
+		}
+		if len(repoIDs) == 0 {
+			return nil, 0, nil
+		}
+	}
+	assets, total, err := s.assets.SearchByPath(keyword, repoIDs, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	// 构建 repoID -> name 映射
+	idNameMap := make(map[int64]string)
+	results := make([]SearchResult, 0, len(assets))
+	for i := range assets {
+		rName, ok := idNameMap[assets[i].RepositoryID]
+		if !ok {
+			r, _ := s.repos.GetByID(assets[i].RepositoryID)
+			if r != nil {
+				rName = r.Name
+			}
+			idNameMap[assets[i].RepositoryID] = rName
+		}
+		results = append(results, SearchResult{RepoName: rName, Asset: assets[i]})
+	}
+	return results, total, nil
+}
+
+// collectMemberIDs 收集 group 仓库的所有成员 ID（一层展开）。
+func (s *RepositoryService) collectMemberIDs(repo *repository.Repository) []int64 {
+	cfg, err := repo.DecodeConfig()
+	if err != nil {
+		return nil
+	}
+	var memberIDs []int64
+	for _, mname := range cfg.Members {
+		m, err := s.repos.GetByName(mname)
+		if err != nil {
+			continue
+		}
+		if m.Type == "group" {
+			nestedCfg, err := m.DecodeConfig()
+			if err == nil {
+				for _, nn := range nestedCfg.Members {
+					nm, err := s.repos.GetByName(nn)
+					if err == nil && nm.Type != "group" {
+						memberIDs = append(memberIDs, nm.ID)
+					}
+				}
+			}
+			continue
+		}
+		memberIDs = append(memberIDs, m.ID)
+	}
+	return memberIDs
 }

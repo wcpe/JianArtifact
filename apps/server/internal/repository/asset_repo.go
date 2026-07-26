@@ -196,6 +196,97 @@ func (r *AssetRepo) CountAndSizeByRepos(repoIDs []int64) (map[int64]RepoStats, e
 	return result, nil
 }
 
+// SearchByPath 跨仓库搜索制品路径（全局 LIKE）。repoIDs 为空搜全部，keyword 必填。
+func (r *AssetRepo) SearchByPath(keyword string, repoIDs []int64, limit, offset int) ([]Asset, int, error) {
+	pattern := "%" + escapeLike(keyword) + "%"
+	var total int
+	var assets []Asset
+	if len(repoIDs) == 0 {
+		err := r.db.Get(&total, `SELECT COUNT(*) FROM asset WHERE path LIKE ? ESCAPE '\'`, pattern)
+		if err != nil {
+			return nil, 0, err
+		}
+		err = r.db.Select(&assets,
+			`SELECT id, repository_id, path, blob_hash, size, content_type, sha1, md5, created_at, updated_at
+				FROM asset WHERE path LIKE ? ESCAPE '\' ORDER BY path LIMIT ? OFFSET ?`,
+			pattern, limit, offset,
+		)
+		return assets, total, err
+	}
+	query, args, err := sqlx.In(
+		`SELECT COUNT(*) FROM asset WHERE repository_id IN (?) AND path LIKE ? ESCAPE '\'`,
+		repoIDs, pattern,
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+	if err := r.db.Get(&total, r.db.Rebind(query), args...); err != nil {
+		return nil, 0, err
+	}
+	query2, args2, err := sqlx.In(
+		`SELECT id, repository_id, path, blob_hash, size, content_type, sha1, md5, created_at, updated_at
+			FROM asset WHERE repository_id IN (?) AND path LIKE ? ESCAPE '\' ORDER BY path LIMIT ? OFFSET ?`,
+		repoIDs, pattern, limit, offset,
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+	err = r.db.Select(&assets, r.db.Rebind(query2), args2...)
+	return assets, total, err
+}
+
+// ListDirectoryEntries 列出指定前缀下的「当前层级」目录与文件（用于 tree endpoint 按目录懒加载）。
+// 返回去重后的目录名列表与文件 Asset 列表（不递归子目录）。
+func (r *AssetRepo) ListDirectoryEntries(repoIDs []int64, prefix string) (dirs []string, files []Asset, err error) {
+	var assets []Asset
+	if len(repoIDs) == 0 {
+		return nil, nil, nil
+	}
+	query, args, qErr := sqlx.In(
+		`SELECT id, repository_id, path, blob_hash, size, content_type, sha1, md5, created_at, updated_at
+			FROM asset WHERE repository_id IN (?) AND path LIKE ? ESCAPE '\' ORDER BY path`,
+		repoIDs, likePrefix(prefix),
+	)
+	if qErr != nil {
+		return nil, nil, qErr
+	}
+	if err = r.db.Select(&assets, r.db.Rebind(query), args...); err != nil {
+		return nil, nil, err
+	}
+	dirSet := make(map[string]struct{})
+	prefixLen := len(prefix)
+	for i := range assets {
+		rel := assets[i].Path[prefixLen:] // path after prefix
+		slashIdx := strings.Index(rel, "/")
+		if slashIdx == -1 {
+			// 直接子文件
+			files = append(files, assets[i])
+		} else {
+			// 子目录：返回自仓库根起算的完整路径（与文件 path 一致），
+			// 避免前端将相对目录名误当完整路径，导致嵌套目录展开时前缀错误。
+			dirName := prefix + rel[:slashIdx]
+			dirSet[dirName] = struct{}{}
+		}
+	}
+	for d := range dirSet {
+		dirs = append(dirs, d)
+	}
+	return dirs, files, nil
+}
+
+// escapeLike 转义 LIKE 特殊字符。
+func escapeLike(s string) string {
+	var b strings.Builder
+	for _, ch := range s {
+		switch ch {
+		case '\\', '%', '_':
+			b.WriteByte('\\')
+		}
+		b.WriteRune(ch)
+	}
+	return b.String()
+}
+
 // likePrefix 把路径前缀转为 LIKE 模式：转义 %/_/\ 后追加通配 %（配合 ESCAPE '\'），
 // 空前缀匹配全部。
 func likePrefix(prefix string) string {
