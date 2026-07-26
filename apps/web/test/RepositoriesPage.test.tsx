@@ -1,4 +1,4 @@
-// 仓库管理集成测试：渲染种子仓库；未鉴权时列表进入错误态。
+// 仓库管理集成测试：渲染种子仓库；匿名（FR-68）仅见 public 仓库且无管理操作。
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
@@ -14,9 +14,14 @@ describe("仓库管理", () => {
     expect(await screen.findByText("raw-hosted")).toBeTruthy();
   });
 
-  it("未鉴权进入错误态", async () => {
+  it("匿名仅见 public 仓库且无管理操作", async () => {
     renderWithProviders(<RepositoriesPage />, { route: "/repositories", authenticated: false });
-    expect(await screen.findByTestId("state-error")).toBeTruthy();
+    expect(await screen.findByText("npm-proxy")).toBeTruthy();
+    // private 仓库不出现在匿名列表。
+    expect(screen.queryByText("maven-releases")).toBeNull();
+    // 管理操作（新建/删除/清理）对匿名隐藏。
+    expect(screen.queryByRole("button", { name: "新建仓库" })).toBeNull();
+    expect(screen.queryByLabelText("删除")).toBeNull();
   });
 
   it("选择 proxy 类型后填上游地址并新建", async () => {
