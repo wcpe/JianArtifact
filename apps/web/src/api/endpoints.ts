@@ -1,6 +1,6 @@
 // 端点封装：按 api/openapi.yaml 的 0.2.0 管理面路径提供 typed 调用。
 // 页面与数据钩子仅依赖此模块，不直接拼 URL。
-import { putProtocolAsset, request } from "./client";
+import { postProtocolForm, putProtocolAsset, request } from "./client";
 import type {
   AclEntry,
   AclList,
@@ -197,6 +197,35 @@ export function uploadRawAsset(
     .join("/");
   const url = `/repository/${encodeURIComponent(repo)}/${enc}`;
   return putProtocolAsset(url, file, file.type || "application/octet-stream");
+}
+
+/** FR-73: Maven 网页上传表单字段。 */
+export interface MavenUploadForm {
+  groupId: string;
+  artifactId: string;
+  version: string;
+  packaging: string;
+  file: File;
+}
+
+/** FR-73: Maven 网页上传（POST multipart，服务端生成 pom.xml/.md5/.sha1/maven-metadata.xml）。 */
+export function uploadMavenArtifact(
+  repo: string,
+  form: MavenUploadForm,
+): Promise<{
+  repository: string;
+  groupId: string;
+  artifactId: string;
+  version: string;
+  files: string[];
+}> {
+  const fd = new FormData();
+  fd.set("groupId", form.groupId);
+  fd.set("artifactId", form.artifactId);
+  fd.set("version", form.version);
+  fd.set("packaging", form.packaging);
+  fd.set("file", form.file);
+  return postProtocolForm(`/api/v1/repositories/${encodeURIComponent(repo)}/maven-upload`, fd);
 }
 
 // —— Nexus 迁移（0.4.0）——

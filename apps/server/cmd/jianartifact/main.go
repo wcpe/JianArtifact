@@ -184,6 +184,8 @@ func run() error {
 			r.POST("/api/v1/migrations/offline-index/cancel", authMW, apiHandlers.CancelOfflineDirIndex)
 			// 运维端点
 			r.POST("/api/v1/repositories/:name/cleanup", authMW, apiHandlers.CleanupEmptyMavenArtifacts)
+			// FR-73: Maven 网页上传（GAV 表单，服务端生成 pom/校验和/metadata；权限 handler 内校验）
+			r.POST("/api/v1/repositories/:name/maven-upload", authMW, mavenHandler.UploadForm)
 			// FR-54: 目录懒加载 tree API
 			r.GET("/api/v1/repositories/:name/tree", authMW, apiHandlers.ListRepositoryTree)
 			// 公开接口（无需认证）

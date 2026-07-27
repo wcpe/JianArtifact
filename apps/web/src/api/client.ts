@@ -159,3 +159,22 @@ export async function putProtocolAsset(
     contentType: string;
   };
 }
+
+/** 协议层 multipart POST（FR-73 Maven 网页上传）：Bearer + FormData，非契约 JSON 请求。 */
+export async function postProtocolForm<T>(url: string, form: FormData): Promise<T> {
+  const headers: Record<string, string> = {};
+  const token = getToken();
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+  let response: Response;
+  try {
+    response = await fetch(url, { method: "POST", headers, body: form });
+  } catch (e) {
+    throw new ApiError("network", e instanceof Error ? e.message : "网络错误", 0);
+  }
+  if (!response.ok) {
+    throw await parseError(response);
+  }
+  return (await response.json()) as T;
+}

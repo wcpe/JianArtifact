@@ -35,6 +35,7 @@ import type { AssetTreeNode } from "../../lib/assetTree";
 import { notifyError, notifySuccess } from "../../lib/feedback";
 import { density } from "../../theme/density";
 import { AsyncBoundary } from "../AsyncBoundary";
+import { MavenUploadCard } from "./MavenUploadCard";
 import { RepoAssetTree } from "./RepoAssetTree";
 import { RepoFileDetail } from "./RepoFileDetail";
 
@@ -119,6 +120,8 @@ export function RepoBrowser({
   const format = forcedFormat || repoState.data?.format || usageState.data?.format || "raw";
   const repoType = forcedType || repoState.data?.type || usageState.data?.type || "hosted";
   const canUpload = allowUpload && format === "raw" && repoType === "hosted" && !publicMode;
+  // FR-73: Maven hosted 走 GAV 表单网页上传
+  const canMavenUpload = allowUpload && format === "maven" && repoType === "hosted" && !publicMode;
 
   // FR-54: 加载根目录；FR-69: 仅仓库切换时清空重置，刷新（上传/全局刷新）保留旧树避免整页重刷
   const prevRepoRef = useRef<string | null>(null);
@@ -298,7 +301,12 @@ export function RepoBrowser({
         </Card>
       )}
 
-      {allowUpload && !canUpload && (
+      {/* FR-73: Maven hosted 网页上传（GAV 表单，服务端生成 pom/校验和/metadata） */}
+      {canMavenUpload && (
+        <MavenUploadCard repoName={repoName} onUploaded={() => setReloadNonce((n) => n + 1)} />
+      )}
+
+      {allowUpload && !canUpload && !canMavenUpload && (
         <Alert color="gray" title={t("repoDetail.uploadClientOnlyTitle")}>
           {t("repoDetail.uploadClientOnly")}
         </Alert>

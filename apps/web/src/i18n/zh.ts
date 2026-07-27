@@ -217,7 +217,12 @@ export const zh = {
     uploadOk: "上传成功",
     uploadClientOnlyTitle: "请用客户端发布",
     uploadClientOnly:
-      "Maven / npm 请使用下方使用说明中的客户端命令发布，管理端仅支持 Raw hosted 单文件上传。",
+      "该仓库类型请使用下方使用说明中的客户端命令发布；管理端网页上传支持 Raw / Maven hosted 仓库。",
+    mavenUploadTitle: "上传制品（Maven hosted）",
+    mavenUploadHint:
+      "填写 GAV 坐标并选择文件，服务端自动生成 pom.xml、校验和（.md5/.sha1）与 maven-metadata.xml。仅限 release 版本。",
+    mavenUploadNeedFields: "请完整填写 GroupId / ArtifactId / Version",
+    mavenSnapshotNotSupported: "网页上传仅限 release 版本，SNAPSHOT 请使用 mvn deploy 发布",
     publicTitle: "公开仓库",
     publicHint: "无需登录即可浏览公开仓库中的制品。",
     publicBadge: "公开浏览",

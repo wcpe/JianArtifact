@@ -312,6 +312,41 @@ export const handlers = [
     return result ? HttpResponse.json(result) : err("not_found", "仓库不存在", 404);
   }),
 
+  // FR-73：Maven 网页上传（服务端生成 pom/校验和/metadata；mock 仅登记 asset 摘要）。
+  http.post("*/api/v1/repositories/:name/maven-upload", async ({ request, params }) => {
+    const denied = unauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const form = await request.formData();
+    const groupId = String(form.get("groupId") ?? "").trim();
+    const artifactId = String(form.get("artifactId") ?? "").trim();
+    const version = String(form.get("version") ?? "").trim();
+    const packaging = String(form.get("packaging") ?? "").trim() || "jar";
+    const file = form.get("file");
+    if (!groupId || !artifactId || !version || !(file instanceof File)) {
+      return err("invalid_gav", "groupId/artifactId/version 与 file 必填", 400);
+    }
+    if (version.toUpperCase().includes("-SNAPSHOT")) {
+      return err("snapshot_not_supported", "网页上传仅限 release 版本", 400);
+    }
+    const result = store.uploadMavenArtifact(
+      String(params.name),
+      groupId,
+      artifactId,
+      version,
+      packaging,
+      file.size,
+    );
+    if (result === null) {
+      return err("not_found", "仓库不存在", 404);
+    }
+    if (result === "conflict") {
+      return err("not_maven_hosted", "仅 Maven hosted 仓库支持网页上传", 409);
+    }
+    return HttpResponse.json(result, { status: 201 });
+  }),
+
   // —— 迁移任务（0.4.0 foundation）——
   http.get("*/api/v1/migrations", ({ request }) => {
     const denied = unauthorized(request);

@@ -76,6 +76,8 @@ func newProtocolEnv(t *testing.T) *protocolEnv {
 		httpserver.WithProtocolRoutes(func(r gin.IRouter) {
 			protocol.RegisterRoutes(r, dispatcher, authenticator.Optional())
 			protocol.RegisterNpmRoutes(r, npmHandler, authenticator.Optional())
+			// FR-73: Maven 网页上传（与 main.go 同款注册）
+			r.POST("/api/v1/repositories/:name/maven-upload", authenticator.Optional(), mavenHandler.UploadForm)
 		}),
 	)
 	return &protocolEnv{h: srv.Handler(nil)}

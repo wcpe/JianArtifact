@@ -393,6 +393,76 @@ export const store = {
     };
   },
 
+  /** FR-73：Maven 网页上传——登记主文件/pom/metadata 及各自校验和的 asset 摘要。
+   * 仓库不存在返回 null；非 maven hosted 返回 "conflict"。 */
+  uploadMavenArtifact(
+    name: string,
+    groupId: string,
+    artifactId: string,
+    version: string,
+    packaging: string,
+    size: number,
+  ):
+    | { repository: string; groupId: string; artifactId: string; version: string; files: string[] }
+    | "conflict"
+    | null {
+    const repo = state.repositories.find((r) => r.name === name);
+    if (!repo) {
+      return null;
+    }
+    if (repo.format !== "maven" || repo.type !== "hosted") {
+      return "conflict";
+    }
+    const artifactDir = `${groupId.replaceAll(".", "/")}/${artifactId}`;
+    const versionDir = `${artifactDir}/${version}`;
+    const bases: { path: string; size: number; contentType: string }[] = [
+      {
+        path: `${versionDir}/${artifactId}-${version}.${packaging}`,
+        size,
+        contentType: "application/java-archive",
+      },
+    ];
+    if (packaging !== "pom") {
+      bases.push({
+        path: `${versionDir}/${artifactId}-${version}.pom`,
+        size: 512,
+        contentType: "application/xml",
+      });
+    }
+    bases.push({
+      path: `${artifactDir}/maven-metadata.xml`,
+      size: 256,
+      contentType: "application/xml",
+    });
+
+    const now = new Date().toISOString();
+    const list = (state.assets[name] ??= []);
+    const files: string[] = [];
+    for (const base of bases) {
+      for (const entry of [
+        base,
+        { path: `${base.path}.md5`, size: 32, contentType: "text/plain" },
+        { path: `${base.path}.sha1`, size: 40, contentType: "text/plain" },
+      ]) {
+        const summary: AssetSummary = {
+          path: entry.path,
+          size: entry.size,
+          hash: "f0e1d2c3b4a5f0e1d2c3b4a5f0e1d2c3b4a5f0e1d2c3b4a5f0e1d2c3b4a5f0e1",
+          contentType: entry.contentType,
+          updatedAt: now,
+        };
+        const idx = list.findIndex((a) => a.path === entry.path);
+        if (idx >= 0) {
+          list[idx] = summary;
+        } else {
+          list.push(summary);
+        }
+        files.push(entry.path);
+      }
+    }
+    return { repository: name, groupId, artifactId, version, files };
+  },
+
   /** 据仓库 format/type 与对外基址组装客户端接入片段，仓库不存在返回 null。 */
   usage(name: string, baseURL: string): UsageInfo | null {
     const repo = state.repositories.find((r) => r.name === name);
