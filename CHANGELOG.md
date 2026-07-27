@@ -14,7 +14,7 @@
   - `GET /api/v1/repositories` 改可选鉴权：匿名返回"匿名可读"仓库集合；新增 `GET/PUT /api/v1/settings/anonymous-access`（仅管理员，非契约端点）。
 - 登录模态框化（FR-67）：删除 `/login` 整页，Header「登录」与受保护页均弹模态框（取消回仓库列表）；`/` 与任意未知路径统一落 `/repositories`，不再强制跳转登录页。
 - 异步加载体验重构（FR-69）：`AsyncBoundary` 与仓库文件树在刷新/翻页/上传后保留旧数据并叠加局部 LoadingOverlay，仅首载显示整块骨架，消灭整页重刷。
-- 开源协议页（FR-72，见 `docs/specs/0.6.0-license-page.md`）：`/licenses` 公开页面展示 Go/npm 依赖协议清单（搜索过滤 + 协议徽章），侧边栏左下角入口；清单由 `scripts/generate-licenses.mjs` 构建时自动生成。
+- 开源协议页（FR-72，见 `docs/specs/0.6.0-license-page.md`）：`/licenses` 展示 Go/npm 依赖协议清单（搜索过滤 + 协议徽章）；清单由 `scripts/generate-licenses.mjs` 构建时生成并内嵌到后端二进制，经 admin 专属端点 `GET /api/v1/licenses` 返回（不打进前端 bundle）；入口位于侧边栏「管理」段（仅管理员可见），匿名/普通用户不展示。
 - Maven 网页上传（FR-73，见 `docs/specs/0.6.0-maven-web-upload.md`）：Maven hosted 仓库管理端 GAV 表单上传，服务端自动生成 pom.xml、各文件 `.md5`/`.sha1` 并读改写 `maven-metadata.xml`（含 checksum）；仅限 release 版本，SNAPSHOT 提示走 `mvn deploy`；新增非契约端点 `POST /api/v1/repositories/{name}/maven-upload`。
 - 首屏加载性能（FR-70）：全部页面组件路由级 `React.lazy` 代码分割，主 chunk 683.98 kB → 474.59 kB（gzip 206.40 → 152.98 kB，约 -26%）；懒加载在布局内挂 Suspense 占位，路由切换侧栏/页眉不闪、不白屏。
 - 页眉打磨（FR-71）：刷新按钮点击后旋转动画并禁用，随全局网络活动计数归零（含最短旋转时长防闪烁）恢复；登出按钮登出期间呈 loading；`useAsync` 统一响应页眉刷新事件，刷新对所有数据页面生效。

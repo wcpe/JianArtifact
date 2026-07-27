@@ -380,6 +380,26 @@ export function putAnonymousAccessSetting(enabled: boolean): Promise<{ enabled: 
   });
 }
 
+// —— 开源协议清单（admin 专属，非契约）——
+
+export interface LicenseEntry {
+  name: string;
+  version: string;
+  license: string;
+  author: string;
+}
+
+export interface LicenseManifest {
+  generatedAt: string;
+  go: LicenseEntry[];
+  npm: LicenseEntry[];
+}
+
+/** 依赖协议清单：由后端内嵌 JSON 返回（仅管理员；不再打进前端 bundle）。 */
+export function getLicenses(): Promise<LicenseManifest> {
+  return request<LicenseManifest>("/licenses");
+}
+
 // ---- FR-54: Tree API ----
 
 export interface TreeEntry {

@@ -82,9 +82,16 @@ export function AppRoutes() {
           <Route path="/repositories" element={<RepositoriesPage />} />
           <Route path="/repositories/:name" element={<RepositoryDetailPage />} />
           <Route path="/search" element={<SearchPage />} />
-          {/* FR-72：开源协议页（公开，匿名可访问） */}
-          <Route path="/licenses" element={<LicensesPage />} />
           {/* 受保护路由 */}
+          {/* FR-72：开源协议页收敛为登录可见（导航入口仅 admin；清单数据由 admin 端点返回） */}
+          <Route
+            path="/licenses"
+            element={
+              <RequireAuth>
+                <LicensesPage />
+              </RequireAuth>
+            }
+          />
           <Route
             path="/dashboard"
             element={

@@ -16,6 +16,19 @@ function unauthorized(request: Request) {
   return header.startsWith("Bearer ") ? null : err("unauthorized", "未认证", 401);
 }
 
+/** 开源协议清单 mock（admin 端点；真实数据由后端内嵌 JSON 返回）。 */
+const MOCK_LICENSES = {
+  generatedAt: "2026-01-01T00:00:00Z",
+  go: [
+    { name: "github.com/gin-gonic/gin", version: "v1.10.0", license: "MIT", author: "gin-gonic" },
+    { name: "modernc.org/sqlite", version: "v1.34.0", license: "BSD-3-Clause", author: "modernc" },
+  ],
+  npm: [
+    { name: "@mantine/core", version: "7.15.0", license: "MIT", author: "Mantine" },
+    { name: "react", version: "18.3.1", license: "MIT", author: "Meta" },
+  ],
+};
+
 function intParam(url: URL, key: string, fallback: number): number {
   const raw = url.searchParams.get(key);
   const n = raw === null ? NaN : Number.parseInt(raw, 10);
@@ -49,6 +62,12 @@ export const handlers = [
   http.get("*/healthz", () => HttpResponse.json({ status: "ok", version: store.status().version })),
   http.get("*/readyz", () => HttpResponse.json({ status: "ok", version: store.status().version })),
   http.get("*/api/v1/status", () => HttpResponse.json(store.status())),
+
+  // —— 开源协议清单（admin 专属，非契约）——
+  http.get(
+    "*/api/v1/licenses",
+    ({ request }) => unauthorized(request) ?? HttpResponse.json(MOCK_LICENSES),
+  ),
 
   // —— 认证（公开）——
   http.post("*/api/v1/auth/bootstrap", async ({ request }) => {

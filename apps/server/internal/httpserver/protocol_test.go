@@ -78,6 +78,8 @@ func newProtocolEnv(t *testing.T) *protocolEnv {
 			protocol.RegisterNpmRoutes(r, npmHandler, authenticator.Optional())
 			// FR-73: Maven 网页上传（与 main.go 同款注册）
 			r.POST("/api/v1/repositories/:name/maven-upload", authenticator.Optional(), mavenHandler.UploadForm)
+			// 开源协议清单（admin 专属，与 main.go 同款注册）
+			r.GET("/api/v1/licenses", authenticator.Optional(), handlers.GetLicenses)
 		}),
 	)
 	return &protocolEnv{h: srv.Handler(nil)}

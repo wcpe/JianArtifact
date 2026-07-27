@@ -195,6 +195,8 @@ func run() error {
 			// FR-66: 匿名访问全局开关（admin，主体由 Optional 注入，handler 内校验）
 			r.GET("/api/v1/settings/anonymous-access", authMW, apiHandlers.GetAnonymousAccessSetting)
 			r.PUT("/api/v1/settings/anonymous-access", authMW, apiHandlers.PutAnonymousAccessSetting)
+			// 开源协议清单（admin 专属；清单不再打进前端 bundle，见 internal/licenses）
+			r.GET("/api/v1/licenses", authMW, apiHandlers.GetLicenses)
 		}),
 	)
 	httpServer := &http.Server{

@@ -1,6 +1,7 @@
-// FR-72: 开源协议页——展示项目 Go / npm 依赖的协议清单（构建时生成的静态数据）。
-// 数据由 scripts/generate-licenses.mjs 产出；匿名与登录用户均可访问，
-// 但版本列仅登录用户可见（匿名脱敏，降低依赖版本信息的公开暴露面）。
+// FR-72: 开源协议页——展示项目 Go / npm 依赖的协议清单。
+// 数据由 scripts/generate-licenses.mjs 构建时产出并内嵌到后端二进制，
+// 经 admin 专属端点 GET /api/v1/licenses 运行时拉取（不打进前端 bundle，
+// 避免依赖名与精确版本清单随静态资源公开暴露）。
 import {
   Anchor,
   Badge,
@@ -13,19 +14,14 @@ import {
 } from "@mantine/core";
 import { EmptyState, PageHeader } from "@jianartifact/ui";
 import { IconSearch } from "@tabler/icons-react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import licenses from "../generated/licenses.json";
-import { useAuth } from "../auth/AuthContext";
+import { AsyncBoundary } from "../components/AsyncBoundary";
+import { getLicenses } from "../api/endpoints";
+import type { LicenseEntry } from "../api/endpoints";
+import { useAsync } from "../hooks/useAsync";
 import { density } from "../theme/density";
-
-interface DependencyRow {
-  name: string;
-  version: string;
-  license: string;
-  author: string;
-}
 
 /** 协议徽章配色：常见宽松协议蓝色系，Unknown 灰色。 */
 function licenseColor(license: string): string {
@@ -34,7 +30,7 @@ function licenseColor(license: string): string {
   return "blue";
 }
 
-function matchRow(row: DependencyRow, q: string): boolean {
+function matchRow(row: LicenseEntry, q: string): boolean {
   return (
     row.name.toLowerCase().includes(q) ||
     row.license.toLowerCase().includes(q) ||
@@ -46,13 +42,10 @@ function DependencyTable({
   title,
   rows,
   linkBase,
-  showVersion,
 }: {
   title: string;
-  rows: DependencyRow[];
+  rows: LicenseEntry[];
   linkBase: (name: string) => string;
-  /** 是否展示版本列：匿名隐藏，降低已知漏洞被针对性利用的侦察价值。 */
-  showVersion: boolean;
 }) {
   const { t } = useTranslation();
   return (
@@ -66,7 +59,7 @@ function DependencyTable({
             <Table.Thead>
               <Table.Tr>
                 <Table.Th>{t("licenses.colPackage")}</Table.Th>
-                {showVersion ? <Table.Th>{t("licenses.colVersion")}</Table.Th> : null}
+                <Table.Th>{t("licenses.colVersion")}</Table.Th>
                 <Table.Th>{t("licenses.colLicense")}</Table.Th>
                 <Table.Th>{t("licenses.colAuthor")}</Table.Th>
               </Table.Tr>
@@ -84,13 +77,11 @@ function DependencyTable({
                       {row.name}
                     </Anchor>
                   </Table.Td>
-                  {showVersion ? (
-                    <Table.Td>
-                      <Text size="sm" c="dimmed">
-                        {row.version}
-                      </Text>
-                    </Table.Td>
-                  ) : null}
+                  <Table.Td>
+                    <Text size="sm" c="dimmed">
+                      {row.version}
+                    </Text>
+                  </Table.Td>
                   <Table.Td>
                     <Badge variant="light" color={licenseColor(row.license)} size="sm">
                       {row.license}
@@ -111,43 +102,41 @@ function DependencyTable({
 
 export function LicensesPage() {
   const { t } = useTranslation();
-  const { isAuthenticated } = useAuth();
   const [query, setQuery] = useState("");
+  const state = useAsync(getLicenses, []);
 
   const q = query.trim().toLowerCase();
-  const goRows = useMemo(
-    () => (q ? licenses.go.filter((r) => matchRow(r, q)) : licenses.go),
-    [q],
-  );
-  const npmRows = useMemo(
-    () => (q ? licenses.npm.filter((r) => matchRow(r, q)) : licenses.npm),
-    [q],
-  );
 
   return (
     <>
       <PageHeader title={t("licenses.title")} description={t("licenses.description")} />
-      <Stack gap="md">
-        <TextInput
-          placeholder={t("licenses.searchPlaceholder")}
-          leftSection={<IconSearch size={16} />}
-          value={query}
-          onChange={(e) => setQuery(e.currentTarget.value)}
-          maw={420}
-        />
-        <DependencyTable
-          title={t("licenses.goSection", { count: goRows.length })}
-          rows={goRows}
-          linkBase={(name) => `https://pkg.go.dev/${name}`}
-          showVersion={isAuthenticated}
-        />
-        <DependencyTable
-          title={t("licenses.npmSection", { count: npmRows.length })}
-          rows={npmRows}
-          linkBase={(name) => `https://www.npmjs.com/package/${name}`}
-          showVersion={isAuthenticated}
-        />
-      </Stack>
+      <AsyncBoundary state={state}>
+        {(licenses) => {
+          const goRows = q ? licenses.go.filter((r) => matchRow(r, q)) : licenses.go;
+          const npmRows = q ? licenses.npm.filter((r) => matchRow(r, q)) : licenses.npm;
+          return (
+            <Stack gap="md">
+              <TextInput
+                placeholder={t("licenses.searchPlaceholder")}
+                leftSection={<IconSearch size={16} />}
+                value={query}
+                onChange={(e) => setQuery(e.currentTarget.value)}
+                maw={420}
+              />
+              <DependencyTable
+                title={t("licenses.goSection", { count: goRows.length })}
+                rows={goRows}
+                linkBase={(name) => `https://pkg.go.dev/${name}`}
+              />
+              <DependencyTable
+                title={t("licenses.npmSection", { count: npmRows.length })}
+                rows={npmRows}
+                linkBase={(name) => `https://www.npmjs.com/package/${name}`}
+              />
+            </Stack>
+          );
+        }}
+      </AsyncBoundary>
     </>
   );
 }

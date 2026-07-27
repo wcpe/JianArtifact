@@ -93,6 +93,13 @@ const NAV_SECTIONS: NavSection[] = [
         icon: <IconTransfer size={18} />,
         adminOnly: true,
       },
+      // FR-72: 开源协议清单收敛为 admin 专属（依赖版本属侦察情报，不对公开暴露）
+      {
+        labelKey: "nav.licenses",
+        path: "/licenses",
+        icon: <IconLicense size={18} />,
+        adminOnly: true,
+      },
     ],
   },
 ];
@@ -429,7 +436,8 @@ export function AppLayout() {
           )}
         </ScrollArea>
 
-        {/* 左下 footer */}
+        {/* 左下 footer：仅侧栏折叠/展开开关。
+         * 开源协议入口已移入「管理」导航段（admin 专属），footer 不再放业务入口。 */}
         <Box
           mt="xs"
           pt="xs"
@@ -437,21 +445,7 @@ export function AppLayout() {
           style={{ borderTop: "1px solid var(--mantine-color-default-border)" }}
         >
           {expanded ? (
-            <Group justify="space-between" wrap="nowrap">
-              {/* FR-72: 开源协议入口（登录/匿名均可见） */}
-              <UnstyledButton
-                aria-label={t("nav.licenses")}
-                onClick={() => {
-                  navigate("/licenses");
-                  if (mobileOpened) closeMobile();
-                }}
-                style={{ display: "flex", alignItems: "center", gap: 6 }}
-              >
-                <IconLicense size={16} />
-                <Text size="xs" c="dimmed">
-                  {t("nav.licenses")}
-                </Text>
-              </UnstyledButton>
+            <Group justify="flex-end" wrap="nowrap">
               <Tooltip label={t("nav.collapseNav")} position="right" withArrow>
                 <UnstyledButton
                   aria-label={t("nav.collapseNav")}
@@ -464,16 +458,6 @@ export function AppLayout() {
             </Group>
           ) : (
             <Stack gap="xs" align="center">
-              {/* FR-72: 折叠态开源协议入口（仅图标） */}
-              <Tooltip label={t("nav.licenses")} position="right" withArrow>
-                <UnstyledButton
-                  aria-label={t("nav.licenses")}
-                  onClick={() => navigate("/licenses")}
-                  style={{ display: "flex" }}
-                >
-                  <IconLicense size={16} />
-                </UnstyledButton>
-              </Tooltip>
               <Tooltip label={t("nav.expandNav")} position="right" withArrow>
                 <UnstyledButton
                   aria-label={t("nav.expandNav")}

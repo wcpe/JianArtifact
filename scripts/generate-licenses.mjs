@@ -1,4 +1,5 @@
-// FR-72: 构建时生成开源依赖协议清单（Go + npm），供 /licenses 页面静态引用。
+// FR-72: 构建时生成开源依赖协议清单（Go + npm），内嵌到后端二进制并经
+// admin 专属端点 GET /api/v1/licenses 返回（不再打进前端 bundle）。
 // 用法：node scripts/generate-licenses.mjs（工作目录任意，路径以本文件定位）。
 // 软失败：任一侧工具不可用时保留现有 JSON 并告警，不中断构建。
 import { execFileSync, execSync } from "node:child_process";
@@ -8,7 +9,7 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const serverDir = join(repoRoot, "apps", "server");
-const outFile = join(repoRoot, "apps", "web", "src", "generated", "licenses.json");
+const outFile = join(serverDir, "internal", "licenses", "licenses.json");
 
 /** 运行命令返回 stdout；失败返回 null（软失败）。 */
 function run(cmd, args, cwd) {
