@@ -1,9 +1,11 @@
 // 仓库详情集成测试：目录树逐级展开点选文件后渲染详情/使用说明；匿名访问 private 仓库报未认证。
+// FR-74：整页固定布局（面板内滚）、未登录仅页眉一个登录入口、客户端发布提示收纳为紧凑小字。
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { Route, Routes } from "react-router-dom";
 
+import { AppRoutes } from "../src/app/router";
 import { RepositoryDetailPage } from "../src/pages/RepositoryDetailPage";
 import { renderWithProviders } from "./harness";
 
@@ -36,5 +38,28 @@ describe("仓库详情", () => {
     renderDetail("maven-releases", false);
     // FR-66：匿名仅可读 public 仓库，private 目录树请求 401 → 错误提示
     expect((await screen.findAllByText("未认证")).length).toBeGreaterThan(0);
+  });
+
+  it("未登录访问详情页仅页眉一个登录入口（FR-74）", async () => {
+    renderWithProviders(<AppRoutes />, { route: "/repositories/npm-proxy" });
+    // 等详情页渲染完成（页头标题含仓库名）
+    expect(await screen.findByText("仓库详情 · npm-proxy")).toBeTruthy();
+    // 登录按钮只剩页眉一个，内容区不再重复
+    expect(screen.getAllByRole("button", { name: "登录" })).toHaveLength(1);
+  });
+
+  it("非网页上传仓库的客户端发布提示收纳为紧凑小字（FR-74）", async () => {
+    renderDetail("npm-proxy", true);
+    // 紧凑提示 + 跳使用说明链接取代大块 Alert
+    expect(await screen.findByText("查看使用说明")).toBeTruthy();
+    expect(screen.queryByText("请用客户端发布")).toBeNull();
+  });
+
+  it("详情页外壳为固定高度布局，面板内滚（FR-74）", async () => {
+    renderDetail("maven-releases", true);
+    await screen.findByText("com");
+    const shell = screen.getByTestId("repo-detail-shell");
+    expect(shell.style.overflow).toBe("hidden");
+    expect(shell.style.height).toContain("100vh");
   });
 });

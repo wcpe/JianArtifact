@@ -30,7 +30,6 @@ import {
 } from "../api/endpoints";
 import type { AclAction, AclEntry, RepoVisibility, Repository, User } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
-import { useLoginModal } from "../auth/LoginModal";
 import { useAsync } from "../hooks/useAsync";
 import { notifyError, notifySuccess } from "../lib/feedback";
 import { density } from "../theme/density";
@@ -40,7 +39,6 @@ export function RepositoryDetailPage() {
   const navigate = useNavigate();
   const { name = "" } = useParams();
   const { user } = useAuth();
-  const { openLogin } = useLoginModal();
   const isAdmin = user?.role === "admin";
   // 有登录即可尝试上传（后端校验 write）
   const allowUpload = Boolean(user);
@@ -67,20 +65,24 @@ export function RepositoryDetailPage() {
   const repo = repoState.data ?? null;
 
   return (
-    <>
+    <Stack
+      gap={0}
+      data-testid="repo-detail-shell"
+      style={{
+        // FR-74：对齐 FR-68 手法——整页固定高度不滚动，浏览面板内滚。
+        height:
+          "calc(100vh - var(--app-shell-header-offset, 56px) - 2 * var(--app-shell-padding, 12px))",
+        overflow: "hidden",
+      }}
+    >
       <PageHeader
         title={`${t("repoDetail.title")} · ${name}`}
         description={t("repoDetail.description")}
         actions={
-          user ? (
-            <Button variant="default" onClick={() => navigate("/repositories")}>
-              {t("common.close")}
-            </Button>
-          ) : (
-            <Button variant="light" onClick={() => openLogin()}>
-              {t("auth.login", { defaultValue: "登录" })}
-            </Button>
-          )
+          // FR-74：未登录的登录入口收敛到页眉（AppLayout），此处仅保留返回。
+          <Button variant="default" onClick={() => navigate("/repositories")}>
+            {t("common.close")}
+          </Button>
         }
       />
 
@@ -99,33 +101,36 @@ export function RepositoryDetailPage() {
         </Group>
       )}
 
-      <Tabs defaultValue="browse">
+      <Tabs
+        defaultValue="browse"
+        style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
+      >
         <Tabs.List>
           <Tabs.Tab value="browse">{t("repoDetail.tabBrowse")}</Tabs.Tab>
           {isAdmin && <Tabs.Tab value="config">{t("repoDetail.tabConfig")}</Tabs.Tab>}
           {isAdmin && <Tabs.Tab value="acl">{t("repoDetail.tabAcl")}</Tabs.Tab>}
         </Tabs.List>
 
-        {/* 浏览 Tab：嵌入现有 RepoBrowser */}
-        <Tabs.Panel value="browse" pt="md">
+        {/* 浏览 Tab：嵌入现有 RepoBrowser（填满剩余高度，内部面板各自滚动） */}
+        <Tabs.Panel value="browse" pt="md" style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
           <RepoBrowser repoName={name} allowUpload={allowUpload} publicMode={!user} />
         </Tabs.Panel>
 
         {/* 配置 Tab：仅管理员，展示仓库信息 + 可修改 visibility */}
         {isAdmin && (
-          <Tabs.Panel value="config" pt="md">
+          <Tabs.Panel value="config" pt="md" style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
             <ConfigTab repoName={name} repo={repo} onUpdated={repoState.reload} />
           </Tabs.Panel>
         )}
 
         {/* ACL Tab：仅管理员，内联 ACL 管理 */}
         {isAdmin && (
-          <Tabs.Panel value="acl" pt="md">
+          <Tabs.Panel value="acl" pt="md" style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
             <AclPanel repoName={name} />
           </Tabs.Panel>
         )}
       </Tabs>
-    </>
+    </Stack>
   );
 }
 

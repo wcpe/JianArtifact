@@ -215,9 +215,8 @@ export const zh = {
     uploadPick: "选择文件并上传",
     uploadNeedPath: "请填写目标路径或选择带文件名的文件",
     uploadOk: "上传成功",
-    uploadClientOnlyTitle: "请用客户端发布",
-    uploadClientOnly:
-      "该仓库类型请使用下方使用说明中的客户端命令发布；管理端网页上传支持 Raw / Maven hosted 仓库。",
+    uploadClientOnly: "该仓库类型请使用客户端命令发布（网页上传支持 Raw / Maven hosted）。",
+    uploadClientOnlyLink: "查看使用说明",
     mavenUploadTitle: "上传制品（Maven hosted）",
     mavenUploadHint:
       "填写 GAV 坐标并选择文件，服务端自动生成 pom.xml、校验和（.md5/.sha1）与 maven-metadata.xml。仅限 release 版本。",

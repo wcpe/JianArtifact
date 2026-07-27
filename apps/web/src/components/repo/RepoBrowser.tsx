@@ -3,6 +3,7 @@
 // FR-57: 浏览页内搜索（调用 searchAssets 带 repository 过滤）。
 import {
   Alert,
+  Anchor,
   Badge,
   Box,
   Button,
@@ -251,7 +252,7 @@ export function RepoBrowser({
   }, []);
 
   return (
-    <Stack gap="md">
+    <Stack gap="md" style={{ height: "100%", overflow: "hidden" }}>
       <Group gap="xs">
         {format && <Badge variant="light">{format}</Badge>}
         {repoType && (
@@ -306,10 +307,14 @@ export function RepoBrowser({
         <MavenUploadCard repoName={repoName} onUploaded={() => setReloadNonce((n) => n + 1)} />
       )}
 
+      {/* FR-74：客户端发布提示收纳为紧凑小字 + 跳使用说明链接，不占大块 */}
       {allowUpload && !canUpload && !canMavenUpload && (
-        <Alert color="gray" title={t("repoDetail.uploadClientOnlyTitle")}>
-          {t("repoDetail.uploadClientOnly")}
-        </Alert>
+        <Text size="xs" c="dimmed">
+          {t("repoDetail.uploadClientOnly")}{" "}
+          <Anchor size="xs" component="button" type="button" onClick={() => setSelected(null)}>
+            {t("repoDetail.uploadClientOnlyLink")}
+          </Anchor>
+        </Text>
       )}
 
       {treeError && <Alert color="red">{treeError}</Alert>}
@@ -336,8 +341,9 @@ export function RepoBrowser({
           style={{
             display: "flex",
             gap: "var(--mantine-spacing-md)",
-            height: "calc(100vh - 280px)",
-            minHeight: 400,
+            // FR-74：填满页面固定高外壳的剩余空间，树/详情各自内滚。
+            flex: 1,
+            minHeight: 240,
           }}
         >
           {/* 左侧：文件树 + 搜索 */}
