@@ -33,7 +33,7 @@ import {
   IconTransfer,
   IconUsers,
 } from "@tabler/icons-react";
-import { useEffect, useState } from "react";
+import { useEffect, useState, Suspense } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
@@ -42,6 +42,7 @@ import { getStatus, listPublicRepositories } from "../api/endpoints";
 import { useAuth } from "../auth/AuthContext";
 import { useLoginModal } from "../auth/LoginModal";
 import { BrandLogo } from "../components/BrandLogo";
+import { RouteFallback } from "../components/RouteFallback";
 import { density } from "../theme/density";
 import type { Repository } from "../api/types";
 
@@ -452,7 +453,10 @@ export function AppLayout() {
           data-testid="content-shell"
           style={{ maxWidth: density.contentMaxWidth, marginInline: "auto" }}
         >
-          <Outlet />
+          {/* FR-70：懒加载页面在布局内挂 Suspense，路由切换保持侧栏/页眉不闪。 */}
+          <Suspense fallback={<RouteFallback />}>
+            <Outlet />
+          </Suspense>
         </Box>
       </AppShell.Main>
     </AppShell>

@@ -185,6 +185,14 @@ export const handlers = [
     return HttpResponse.json(store.listRepositories(page, pageSize));
   }),
 
+  // 公开仓库列表（侧边栏公开导航；开关关时与真实端点一致返回 401）。
+  http.get("*/api/v1/public/repositories", () => {
+    if (!store.anonymousAccess()) {
+      return err("unauthorized", "匿名访问已关闭", 401);
+    }
+    return HttpResponse.json(store.listAnonymousRepositories(1, 100));
+  }),
+
   // —— 匿名访问全局开关（FR-66，admin）——
   http.get(
     "*/api/v1/settings/anonymous-access",
