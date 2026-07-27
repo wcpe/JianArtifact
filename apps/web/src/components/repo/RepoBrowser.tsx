@@ -10,6 +10,7 @@ import {
   FileButton,
   Group,
   Loader,
+  LoadingOverlay,
   ScrollArea,
   Stack,
   Text,
@@ -119,14 +120,19 @@ export function RepoBrowser({
   const repoType = forcedType || repoState.data?.type || usageState.data?.type || "hosted";
   const canUpload = allowUpload && format === "raw" && repoType === "hosted" && !publicMode;
 
-  // FR-54: 加载根目录
+  // FR-54: 加载根目录；FR-69: 仅仓库切换时清空重置，刷新（上传/全局刷新）保留旧树避免整页重刷
+  const prevRepoRef = useRef<string | null>(null);
   useEffect(() => {
+    const repoChanged = prevRepoRef.current !== repoName;
+    prevRepoRef.current = repoName;
+    if (repoChanged) {
+      setTreeNodes([]);
+      setSelected(null);
+      setSearchResults(null);
+      setSearchQuery("");
+    }
     setTreeLoading(true);
     setTreeError(null);
-    setTreeNodes([]);
-    setSelected(null);
-    setSearchResults(null);
-    setSearchQuery("");
     getRepositoryTree(repoName, "")
       .then((entry) => {
         setTreeNodes(treeEntryToNodes(entry.directories, entry.files));
@@ -300,7 +306,8 @@ export function RepoBrowser({
 
       {treeError && <Alert color="red">{treeError}</Alert>}
 
-      {treeLoading && (
+      {/* FR-69: 中央 Loader 仅首载（无旧树可展示）时出现 */}
+      {treeLoading && treeNodes.length === 0 && (
         <Group justify="center" py="xl">
           <Loader size="sm" />
           <Text size="sm" c="dimmed">
@@ -316,7 +323,7 @@ export function RepoBrowser({
         />
       )}
 
-      {!treeLoading && !treeError && treeNodes.length > 0 && (
+      {!treeError && treeNodes.length > 0 && (
         <Box
           style={{
             display: "flex",
@@ -336,8 +343,17 @@ export function RepoBrowser({
               flexShrink: 0,
               display: "flex",
               flexDirection: "column",
+              position: "relative",
             }}
           >
+            {/* FR-69: 刷新期间保留旧树，仅叠加覆盖层 */}
+            <LoadingOverlay
+              visible={treeLoading}
+              zIndex={10}
+              overlayProps={{ radius: "sm", blur: 1 }}
+              loaderProps={{ size: "sm" }}
+              transitionProps={{ duration: 150 }}
+            />
             {/* FR-57: 仓库内搜索栏 */}
             <TextInput
               size="xs"
