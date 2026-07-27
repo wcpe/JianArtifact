@@ -174,8 +174,10 @@ func (h *MavenHandler) serveComputedChecksum(c *gin.Context, repoName, artPath, 
 const metadataMemberTimeout = 5 * time.Second
 
 // serveGroupMetadata 合并 group 各成员的 maven-metadata.xml：并行请求所有成员（限时
-// metadataMemberTimeout），合并 versions、重算 latest/release/lastUpdated 后返回；
-// 全成员皆无该文件返回 404。并行化使总耗时为 max(成员耗时) 而非 sum。
+// metadataMemberTimeout），再严格按 Members 配置顺序合并 versions、重算
+// latest/release/lastUpdated 后返回；全成员皆无该文件返回 404。
+// 并行化使总耗时为 max(成员耗时) 而非 sum；结果按成员下标写入预分配切片，
+// 保证合并顺序确定（latest 取合并列表末项，顺序即契约，见 spec）。
 func (h *MavenHandler) serveGroupMetadata(c *gin.Context, repo *repository.Repository, artPath string) {
 	cfg, err := repo.DecodeConfig()
 	if err != nil {
@@ -183,15 +185,12 @@ func (h *MavenHandler) serveGroupMetadata(c *gin.Context, repo *repository.Repos
 		return
 	}
 
-	// 并行请求所有成员的 metadata
-	type memberResult struct {
-		data []byte
-	}
-	results := make(chan memberResult, len(cfg.Members))
+	// 并行请求所有成员的 metadata，每个 goroutine 只写自己下标位（无竞争）
+	results := make([][]byte, len(cfg.Members))
 	var wg sync.WaitGroup
-	for _, member := range cfg.Members {
+	for i, member := range cfg.Members {
 		wg.Add(1)
-		go func(m string) {
+		go func(idx int, m string) {
 			defer wg.Done()
 			ctx, cancel := context.WithTimeout(c.Request.Context(), metadataMemberTimeout)
 			defer cancel()
@@ -204,19 +203,18 @@ func (h *MavenHandler) serveGroupMetadata(c *gin.Context, repo *repository.Repos
 			if rerr != nil {
 				return
 			}
-			results <- memberResult{data: data}
-		}(member)
+			results[idx] = data
+		}(i, member)
 	}
-	// 等待所有 goroutine 完成后关闭 channel
-	go func() {
-		wg.Wait()
-		close(results)
-	}()
+	wg.Wait()
 
 	var merged mavenMetadata
 	found := false
-	for r := range results {
-		if merged.merge(r.data) {
+	for _, data := range results {
+		if data == nil {
+			continue
+		}
+		if merged.merge(data) {
 			found = true
 		}
 	}
