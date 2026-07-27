@@ -272,6 +272,42 @@ func TestRawHostedAccessControl(t *testing.T) {
 	}
 }
 
+// 协议端点 401 必须携带 WWW-Authenticate: Basic 质询头：Maven/Gradle 等客户端
+// 默认非抢占式认证，收不到 Basic 质询就不会带凭据重试，私有仓库将无法拉取。
+// API 端点（/api/*）不得携带该头，否则浏览器会弹出原生 Basic 登录框。
+func TestProtocolUnauthorizedChallengesBasic(t *testing.T) {
+	e := newProtocolEnv(t)
+	adminToken := e.bootstrapAdmin(t)
+	e.createRawRepo(t, adminToken, "raw-hosted", "private")
+
+	// 私有仓匿名读 → 401 + Basic 质询。
+	rec := e.rawReq(http.MethodGet, "/repository/raw-hosted/f.txt", "", "", nil)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("私有仓匿名读状态码 = %d，期望 401", rec.Code)
+	}
+	if got := rec.Header().Get("WWW-Authenticate"); got != `Basic realm="JianArtifact"` {
+		t.Errorf("协议端点 401 WWW-Authenticate = %q，期望 Basic realm=\"JianArtifact\"", got)
+	}
+
+	// 私有仓匿名写 → 401 + Basic 质询（mvn deploy 同样依赖质询）。
+	rec = e.rawReq(http.MethodPut, "/repository/raw-hosted/g.txt", "", "text/plain", []byte("x"))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("私有仓匿名写状态码 = %d，期望 401", rec.Code)
+	}
+	if got := rec.Header().Get("WWW-Authenticate"); got != `Basic realm="JianArtifact"` {
+		t.Errorf("匿名写 401 WWW-Authenticate = %q，期望 Basic 质询", got)
+	}
+
+	// 对照：API 端点 401 不得携带质询头（避免浏览器原生弹框）。
+	rec = e.rawReq(http.MethodGet, "/api/v1/users", "", "", nil)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("API 匿名读状态码 = %d，期望 401", rec.Code)
+	}
+	if got := rec.Header().Get("WWW-Authenticate"); got != "" {
+		t.Errorf("API 端点 401 不应携带 WWW-Authenticate，实得 %q", got)
+	}
+}
+
 func TestMavenHostedDispatchedNotRejected(t *testing.T) {
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)

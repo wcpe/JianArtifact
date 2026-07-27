@@ -131,11 +131,19 @@ func (h *RawHandler) authorize(c *gin.Context, repo, action string) bool {
 		if hasPrincipal {
 			auth.WriteError(c, http.StatusForbidden, "forbidden", "无权访问该仓库")
 		} else {
-			auth.WriteError(c, http.StatusUnauthorized, "unauthenticated", "未认证或凭据无效")
+			writeUnauthorized(c)
 		}
 		return false
 	}
 	return true
+}
+
+// writeUnauthorized 写出协议端点的 401，并携带 WWW-Authenticate: Basic 质询头：
+// Maven/Gradle 等客户端默认非抢占式认证，收不到 Basic 质询就不会带凭据重试。
+// 仅限 /repository/* 协议端点使用；/api/* 不得携带该头，否则浏览器会弹原生登录框。
+func writeUnauthorized(c *gin.Context) {
+	c.Header("WWW-Authenticate", `Basic realm="JianArtifact"`)
+	auth.WriteError(c, http.StatusUnauthorized, "unauthenticated", "未认证或凭据无效")
 }
 
 // writeAssetErr 把领域错误映射为协议层 HTTP 状态：不存在 404、非 raw-hosted / 写只读仓库 409、

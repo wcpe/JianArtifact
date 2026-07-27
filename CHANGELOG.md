@@ -33,7 +33,7 @@
 
 ### 修复
 
-- 暂无。
+- 协议端点（`/repository/*`）匿名 401 响应补充 `WWW-Authenticate: Basic realm="JianArtifact"` 质询头：修复 Maven/Gradle 等非抢占式认证客户端对私有仓库拉取 / 发布时无法带凭据重试的问题（`/api/*` 不受影响，不会触发浏览器原生登录框）。
 
 ### 移除
 
