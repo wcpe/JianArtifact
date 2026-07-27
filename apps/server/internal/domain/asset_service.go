@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"golang.org/x/sync/singleflight"
@@ -114,7 +115,12 @@ func (s *AssetService) Get(repoName, path string) (*repository.Asset, io.ReadClo
 // Resolve 按仓库 Type 解析读请求：hosted 读本地；proxy 命中即返回、未命中回源缓存后返回；
 // group 按成员有序解析、首个命中即返回。返回元数据与内容可读流（调用方负责关闭）。
 // 全未命中返回 ErrNotFound；回源失败返回 ErrUpstream / ErrUpstreamTimeout。
+// 目录形路径（空串或以 / 结尾）不是制品，直接 ErrNotFound：否则 proxy 会把上游
+// 返回的 HTML 目录索引页当成制品缓存（文件树出现空白名的 text/html 假文件）。
 func (s *AssetService) Resolve(ctx context.Context, repoName, path string) (*repository.Asset, io.ReadCloser, error) {
+	if path == "" || strings.HasSuffix(path, "/") {
+		return nil, nil, ErrNotFound
+	}
 	repo, err := s.repos.GetByName(repoName)
 	if err != nil {
 		return nil, nil, mapNotFound(err)

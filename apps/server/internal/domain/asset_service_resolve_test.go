@@ -87,6 +87,31 @@ func TestResolveProxyCacheMissThenHit(t *testing.T) {
 	}
 }
 
+// 目录形路径（空串或以 / 结尾）不是制品：proxy 不得回源，否则上游返回的 HTML
+// 目录索引页会被当成制品缓存（path 以 / 结尾、text/html），前端文件树出现空白名假文件。
+func TestResolveRejectsDirectoryLikePath(t *testing.T) {
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte("<html>directory index</html>"))
+	}))
+	defer srv.Close()
+
+	svc, repos := newAssetService(t)
+	if _, err := repos.Create("raw-proxy", "raw", "proxy", "private", proxyConfigJSON(t, srv.URL)); err != nil {
+		t.Fatalf("建 proxy 仓库：%v", err)
+	}
+	for _, p := range []string{"", "com/alibaba/druid/", "com/alibaba/druid/1.2.9/"} {
+		if _, _, err := svc.Resolve(context.Background(), "raw-proxy", p); !errors.Is(err, domain.ErrNotFound) {
+			t.Fatalf("目录形路径 %q 应返回 ErrNotFound，实际：%v", p, err)
+		}
+	}
+	if n := atomic.LoadInt32(&hits); n != 0 {
+		t.Fatalf("目录形路径不应回源，实际回源 %d 次", n)
+	}
+}
+
 func TestResolveProxyUpstreamNotFound(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
