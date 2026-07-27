@@ -286,7 +286,8 @@ func TestBrowseAndUsageEndpoints(t *testing.T) {
 	}
 }
 
-// TestStatusReportsInitialized 自举后 /api/v1/status 反映已初始化与用户数。
+// TestStatusReportsInitialized 自举后 /api/v1/status 反映已初始化与用户数；
+// 版本与迁移版本对匿名脱敏、对已认证请求返回。
 func TestStatusReportsInitialized(t *testing.T) {
 	e := newTestEnv(t)
 
@@ -297,12 +298,13 @@ func TestStatusReportsInitialized(t *testing.T) {
 	if before.Initialized || before.UserCount != 0 {
 		t.Errorf("空库 status 应未初始化且用户数 0，实得 %+v", before)
 	}
-	if before.MigrationVersion == "" {
-		t.Error("status 应报告迁移版本")
+	if before.Version != "" || before.MigrationVersion != "" {
+		t.Errorf("匿名 status 应脱敏版本信息，实得 %+v", before)
 	}
 
+	var boot api.LoginResponse
 	if code := e.do(t, http.MethodPost, "/api/v1/auth/bootstrap", "",
-		api.BootstrapRequest{Username: "admin", Password: "admin-pass-123"}, nil); code != http.StatusCreated {
+		api.BootstrapRequest{Username: "admin", Password: "admin-pass-123"}, &boot); code != http.StatusCreated {
 		t.Fatalf("自举状态码 = %d，期望 201", code)
 	}
 
@@ -312,6 +314,36 @@ func TestStatusReportsInitialized(t *testing.T) {
 	}
 	if !after.Initialized || after.UserCount != 1 {
 		t.Errorf("自举后 status 应已初始化且用户数 1，实得 %+v", after)
+	}
+	if after.Version != "" || after.MigrationVersion != "" {
+		t.Errorf("自举后匿名 status 仍应脱敏版本信息，实得 %+v", after)
+	}
+
+	// 已认证请求返回完整版本与迁移版本。
+	var authed api.StatusInfo
+	if code := e.do(t, http.MethodGet, "/api/v1/status", boot.Token, nil, &authed); code != http.StatusOK {
+		t.Fatalf("已认证 status 状态码 = %d，期望 200", code)
+	}
+	if authed.Version != "test" {
+		t.Errorf("已认证 status 应返回版本 test，实得 %q", authed.Version)
+	}
+	if authed.MigrationVersion == "" {
+		t.Error("已认证 status 应报告迁移版本")
+	}
+
+	// 健康 / 就绪探针同样对匿名脱敏版本。
+	var health api.HealthStatus
+	if code := e.do(t, http.MethodGet, "/readyz", "", nil, &health); code != http.StatusOK {
+		t.Fatalf("readyz 状态码 = %d，期望 200", code)
+	}
+	if health.Version != "" {
+		t.Errorf("匿名 readyz 应脱敏版本，实得 %q", health.Version)
+	}
+	if code := e.do(t, http.MethodGet, "/readyz", boot.Token, nil, &health); code != http.StatusOK {
+		t.Fatalf("已认证 readyz 状态码 = %d，期望 200", code)
+	}
+	if health.Version != "test" {
+		t.Errorf("已认证 readyz 应返回版本 test，实得 %q", health.Version)
 	}
 }
 

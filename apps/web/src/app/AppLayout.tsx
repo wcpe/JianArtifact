@@ -162,13 +162,14 @@ export function AppLayout() {
   const isAdmin = user?.role === "admin";
   const expanded = isMobile ? true : navExpanded;
 
-  // 挂载时查一次实例状态取版本号；空库实例导向 /setup 引导自举（整页登录已删除，FR-67）。
+  // 挂载与登录态变化时查实例状态：版本号仅登录后由后端返回（匿名脱敏）；
+  // 空库实例导向 /setup 引导自举（整页登录已删除，FR-67）。
   useEffect(() => {
     let cancelled = false;
     getStatus()
       .then((info) => {
         if (cancelled) return;
-        setVersion(info.version);
+        setVersion(info.version || null);
         if (info.userCount === 0) {
           navigate("/setup", { replace: true });
         }
@@ -177,8 +178,9 @@ export function AppLayout() {
     return () => {
       cancelled = true;
     };
-    // navigate 引用稳定，仅挂载时执行一次。
-  }, []);
+    // navigate 引用稳定；登录 / 登出后重取以刷新版本号展示。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated]);
 
   // FR-55: 未登录时加载公开仓库列表
   useEffect(() => {
@@ -366,7 +368,7 @@ export function AppLayout() {
               <Text fw={700} size="sm" lh={1.2}>
                 {t("common.appName")}
               </Text>
-              {version ? (
+              {isAuthenticated && version ? (
                 <Text size="xs" c="dimmed" lh={1.2}>
                   v{version}
                 </Text>

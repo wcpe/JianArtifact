@@ -1,5 +1,6 @@
 // FR-72: 开源协议页——展示项目 Go / npm 依赖的协议清单（构建时生成的静态数据）。
-// 数据由 scripts/generate-licenses.mjs 产出；匿名与登录用户均可访问。
+// 数据由 scripts/generate-licenses.mjs 产出；匿名与登录用户均可访问，
+// 但版本列仅登录用户可见（匿名脱敏，降低依赖版本信息的公开暴露面）。
 import {
   Anchor,
   Badge,
@@ -16,6 +17,7 @@ import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import licenses from "../generated/licenses.json";
+import { useAuth } from "../auth/AuthContext";
 import { density } from "../theme/density";
 
 interface DependencyRow {
@@ -44,10 +46,13 @@ function DependencyTable({
   title,
   rows,
   linkBase,
+  showVersion,
 }: {
   title: string;
   rows: DependencyRow[];
   linkBase: (name: string) => string;
+  /** 是否展示版本列：匿名隐藏，降低已知漏洞被针对性利用的侦察价值。 */
+  showVersion: boolean;
 }) {
   const { t } = useTranslation();
   return (
@@ -61,7 +66,7 @@ function DependencyTable({
             <Table.Thead>
               <Table.Tr>
                 <Table.Th>{t("licenses.colPackage")}</Table.Th>
-                <Table.Th>{t("licenses.colVersion")}</Table.Th>
+                {showVersion ? <Table.Th>{t("licenses.colVersion")}</Table.Th> : null}
                 <Table.Th>{t("licenses.colLicense")}</Table.Th>
                 <Table.Th>{t("licenses.colAuthor")}</Table.Th>
               </Table.Tr>
@@ -79,11 +84,13 @@ function DependencyTable({
                       {row.name}
                     </Anchor>
                   </Table.Td>
-                  <Table.Td>
-                    <Text size="sm" c="dimmed">
-                      {row.version}
-                    </Text>
-                  </Table.Td>
+                  {showVersion ? (
+                    <Table.Td>
+                      <Text size="sm" c="dimmed">
+                        {row.version}
+                      </Text>
+                    </Table.Td>
+                  ) : null}
                   <Table.Td>
                     <Badge variant="light" color={licenseColor(row.license)} size="sm">
                       {row.license}
@@ -104,6 +111,7 @@ function DependencyTable({
 
 export function LicensesPage() {
   const { t } = useTranslation();
+  const { isAuthenticated } = useAuth();
   const [query, setQuery] = useState("");
 
   const q = query.trim().toLowerCase();
@@ -131,11 +139,13 @@ export function LicensesPage() {
           title={t("licenses.goSection", { count: goRows.length })}
           rows={goRows}
           linkBase={(name) => `https://pkg.go.dev/${name}`}
+          showVersion={isAuthenticated}
         />
         <DependencyTable
           title={t("licenses.npmSection", { count: npmRows.length })}
           rows={npmRows}
           linkBase={(name) => `https://www.npmjs.com/package/${name}`}
+          showVersion={isAuthenticated}
         />
       </Stack>
     </>

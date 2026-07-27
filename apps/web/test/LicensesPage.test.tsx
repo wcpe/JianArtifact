@@ -18,6 +18,17 @@ describe("开源协议页（FR-72）", () => {
     expect(screen.getByText("@mantine/core")).toBeTruthy();
   });
 
+  it("匿名隐藏版本列，登录后展示", () => {
+    const { unmount } = renderWithProviders(<LicensesPage />, { route: "/licenses" });
+    // 匿名：无版本列表头，也不渲染具体版本号
+    expect(screen.queryByText("版本")).toBeNull();
+    expect(screen.queryByText(licenses.go[0].version)).toBeNull();
+    unmount();
+
+    renderWithProviders(<LicensesPage />, { route: "/licenses", authenticated: true });
+    expect(screen.getAllByText("版本").length).toBeGreaterThan(0);
+  });
+
   it("搜索过滤后不匹配行消失且分段计数更新", async () => {
     const user = userEvent.setup();
     renderWithProviders(<LicensesPage />, { route: "/licenses" });

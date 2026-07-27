@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/api"
+	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 )
 
 // ReadinessCheck 是就绪自检钩子：返回非 nil 错误表示某依赖未就绪。
@@ -67,20 +68,29 @@ func New(version string, opts ...Option) *Server {
 // 编译期断言：Server 满足契约生成的接口。
 var _ api.ServerInterface = (*Server)(nil)
 
-// GetHealthz 存活探针：进程存活即 200。
-func (s *Server) GetHealthz(c *gin.Context) {
-	c.JSON(http.StatusOK, api.HealthStatus{Status: api.Ok, Version: s.version})
+// versionFor 按认证状态返回版本号：匿名请求脱敏为空串（与 api.Handlers 同策略），
+// 避免向公网暴露精确版本信息。
+func (s *Server) versionFor(c *gin.Context) string {
+	if _, ok := auth.PrincipalFrom(c); ok {
+		return s.version
+	}
+	return ""
 }
 
-// GetReadyz 就绪探针：全部就绪自检通过才 200，任一未过返回 503。
+// GetHealthz 存活探针：进程存活即 200；版本号仅对已认证请求返回。
+func (s *Server) GetHealthz(c *gin.Context) {
+	c.JSON(http.StatusOK, api.HealthStatus{Status: api.Ok, Version: s.versionFor(c)})
+}
+
+// GetReadyz 就绪探针：全部就绪自检通过才 200，任一未过返回 503；版本号仅对已认证请求返回。
 func (s *Server) GetReadyz(c *gin.Context) {
 	for _, check := range s.checks {
 		if err := check(); err != nil {
-			c.JSON(http.StatusServiceUnavailable, api.HealthStatus{Status: api.Unavailable, Version: s.version})
+			c.JSON(http.StatusServiceUnavailable, api.HealthStatus{Status: api.Unavailable, Version: s.versionFor(c)})
 			return
 		}
 	}
-	c.JSON(http.StatusOK, api.HealthStatus{Status: api.Ok, Version: s.version})
+	c.JSON(http.StatusOK, api.HealthStatus{Status: api.Ok, Version: s.versionFor(c)})
 }
 
 // Handler 装配并返回完整的 gin.Engine：契约路由优先，其余交给内嵌前端静态资源

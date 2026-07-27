@@ -60,41 +60,52 @@ func NewHandlers(d Deps) *Handlers {
 // 编译期断言：Handlers 满足契约生成的接口。
 var _ ServerInterface = (*Handlers)(nil)
 
-// GetHealthz 存活探针：进程存活即 200。
-func (h *Handlers) GetHealthz(c *gin.Context) {
-	c.JSON(http.StatusOK, HealthStatus{Status: Ok, Version: h.version})
+// versionFor 按认证状态返回版本号：匿名请求脱敏为空串，
+// 避免向公网暴露精确版本信息（降低已知漏洞被针对性利用的侦察价值）。
+func (h *Handlers) versionFor(c *gin.Context) string {
+	if _, ok := auth.PrincipalFrom(c); ok {
+		return h.version
+	}
+	return ""
 }
 
-// GetReadyz 就绪探针：全部就绪自检通过才 200，任一未过返回 503。
+// GetHealthz 存活探针：进程存活即 200；版本号仅对已认证请求返回。
+func (h *Handlers) GetHealthz(c *gin.Context) {
+	c.JSON(http.StatusOK, HealthStatus{Status: Ok, Version: h.versionFor(c)})
+}
+
+// GetReadyz 就绪探针：全部就绪自检通过才 200，任一未过返回 503；版本号仅对已认证请求返回。
 func (h *Handlers) GetReadyz(c *gin.Context) {
 	if !h.ready() {
-		c.JSON(http.StatusServiceUnavailable, HealthStatus{Status: Unavailable, Version: h.version})
+		c.JSON(http.StatusServiceUnavailable, HealthStatus{Status: Unavailable, Version: h.versionFor(c)})
 		return
 	}
-	c.JSON(http.StatusOK, HealthStatus{Status: Ok, Version: h.version})
+	c.JSON(http.StatusOK, HealthStatus{Status: Ok, Version: h.versionFor(c)})
 }
 
-// GetStatus 运行时状态：版本、就绪、迁移版本、初始化标志与用户数。
+// GetStatus 运行时状态：就绪、初始化标志与用户数匿名可见（前端自举引导依赖），
+// 版本与迁移版本仅对已认证请求返回（匿名脱敏为空串）。
 func (h *Handlers) GetStatus(c *gin.Context) {
-	migration := ""
-	if h.migration != nil {
-		if v, err := h.migration(); err == nil {
-			migration = v
-		}
-	}
 	count := 0
 	if h.users != nil {
 		if n, err := h.users.Count(); err == nil {
 			count = n
 		}
 	}
-	c.JSON(http.StatusOK, StatusInfo{
-		Version:          h.version,
-		Ready:            h.ready(),
-		MigrationVersion: migration,
-		Initialized:      count > 0,
-		UserCount:        count,
-	})
+	info := StatusInfo{
+		Ready:       h.ready(),
+		Initialized: count > 0,
+		UserCount:   count,
+	}
+	if _, ok := auth.PrincipalFrom(c); ok {
+		info.Version = h.version
+		if h.migration != nil {
+			if v, err := h.migration(); err == nil {
+				info.MigrationVersion = v
+			}
+		}
+	}
+	c.JSON(http.StatusOK, info)
 }
 
 // ready 判断全部就绪自检是否通过。

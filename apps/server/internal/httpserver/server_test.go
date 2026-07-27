@@ -34,8 +34,9 @@ func TestGetHealthz(t *testing.T) {
 	if hs.Status != api.Ok {
 		t.Errorf("status = %q，期望 ok", hs.Status)
 	}
-	if hs.Version != "test-version" {
-		t.Errorf("version = %q，期望 test-version", hs.Version)
+	// 匿名请求版本号脱敏为空串（认证路径的完整版本断言见 integration_test）。
+	if hs.Version != "" {
+		t.Errorf("匿名 healthz version = %q，期望空串", hs.Version)
 	}
 }
 
