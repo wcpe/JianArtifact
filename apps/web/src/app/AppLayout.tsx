@@ -24,6 +24,7 @@ import {
   IconLayoutDashboard,
   IconLayoutSidebarLeftCollapse,
   IconLayoutSidebarLeftExpand,
+  IconLicense,
   IconLogin,
   IconLogout,
   IconPackage,
@@ -394,7 +395,21 @@ export function AppLayout() {
           style={{ borderTop: "1px solid var(--mantine-color-default-border)" }}
         >
           {expanded ? (
-            <Group justify="flex-end" wrap="nowrap">
+            <Group justify="space-between" wrap="nowrap">
+              {/* FR-72: 开源协议入口（登录/匿名均可见） */}
+              <UnstyledButton
+                aria-label={t("nav.licenses")}
+                onClick={() => {
+                  navigate("/licenses");
+                  if (mobileOpened) closeMobile();
+                }}
+                style={{ display: "flex", alignItems: "center", gap: 6 }}
+              >
+                <IconLicense size={16} />
+                <Text size="xs" c="dimmed">
+                  {t("nav.licenses")}
+                </Text>
+              </UnstyledButton>
               <Tooltip label={t("nav.collapseNav")} position="right" withArrow>
                 <UnstyledButton
                   aria-label={t("nav.collapseNav")}
@@ -406,7 +421,17 @@ export function AppLayout() {
               </Tooltip>
             </Group>
           ) : (
-            <Group justify="center">
+            <Stack gap="xs" align="center">
+              {/* FR-72: 折叠态开源协议入口（仅图标） */}
+              <Tooltip label={t("nav.licenses")} position="right" withArrow>
+                <UnstyledButton
+                  aria-label={t("nav.licenses")}
+                  onClick={() => navigate("/licenses")}
+                  style={{ display: "flex" }}
+                >
+                  <IconLicense size={16} />
+                </UnstyledButton>
+              </Tooltip>
               <Tooltip label={t("nav.expandNav")} position="right" withArrow>
                 <UnstyledButton
                   aria-label={t("nav.expandNav")}
@@ -416,7 +441,7 @@ export function AppLayout() {
                   <IconLayoutSidebarLeftExpand size={18} />
                 </UnstyledButton>
               </Tooltip>
-            </Group>
+            </Stack>
           )}
         </Box>
       </AppShell.Navbar>

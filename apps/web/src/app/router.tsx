@@ -7,6 +7,7 @@ import { useEffect } from "react";
 import { AppLayout } from "./AppLayout";
 import { AclPage } from "../pages/AclPage";
 import { DashboardPage } from "../pages/DashboardPage";
+import { LicensesPage } from "../pages/LicensesPage";
 import { MigrationDetailPage } from "../pages/MigrationDetailPage";
 import { MigrationsPage } from "../pages/MigrationsPage";
 import { MigrationWizardPage } from "../pages/MigrationWizardPage";
@@ -57,6 +58,8 @@ export function AppRoutes() {
         <Route path="/repositories" element={<RepositoriesPage />} />
         <Route path="/repositories/:name" element={<RepositoryDetailPage />} />
         <Route path="/search" element={<SearchPage />} />
+        {/* FR-72：开源协议页（公开，匿名可访问） */}
+        <Route path="/licenses" element={<LicensesPage />} />
         {/* 受保护路由 */}
         <Route
           path="/dashboard"

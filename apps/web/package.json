@@ -6,7 +6,8 @@
   "description": "JianArtifact 管理端（React + Mantine 7 + i18next）。",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "licenses:gen": "node ../../scripts/generate-licenses.mjs",
+    "build": "node ../../scripts/generate-licenses.mjs && tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run"

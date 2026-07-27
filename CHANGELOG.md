@@ -14,6 +14,7 @@
   - `GET /api/v1/repositories` 改可选鉴权：匿名返回"匿名可读"仓库集合；新增 `GET/PUT /api/v1/settings/anonymous-access`（仅管理员，非契约端点）。
 - 登录模态框化（FR-67）：删除 `/login` 整页，Header「登录」与受保护页均弹模态框（取消回仓库列表）；`/` 与任意未知路径统一落 `/repositories`，不再强制跳转登录页。
 - 异步加载体验重构（FR-69）：`AsyncBoundary` 与仓库文件树在刷新/翻页/上传后保留旧数据并叠加局部 LoadingOverlay，仅首载显示整块骨架，消灭整页重刷。
+- 开源协议页（FR-72，见 `docs/specs/0.6.0-license-page.md`）：`/licenses` 公开页面展示 Go/npm 依赖协议清单（搜索过滤 + 协议徽章），侧边栏左下角入口；清单由 `scripts/generate-licenses.mjs` 构建时自动生成。
 - 仓库列表页优化（FR-68）：页头/筛选/分页固定、表格区内滚 + sticky 表头（body 不滚）；操作列删「公开页」留「浏览」；匿名视图隐藏新建/删除/清理等管理操作。
 - 协议端点 Basic Auth 支持用户名 + 口令认证（此前仅 API Token 作 password），兼容 Maven/Gradle 账号密码推送。
 - group 仓库 assets 列表聚合成员制品（管理端浏览 group 仓库可见聚合内容）。
