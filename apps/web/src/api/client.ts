@@ -36,6 +36,34 @@ function emitAuthExpired() {
 
 const TOKEN_KEY = "jianartifact.token";
 
+// —— 全局网络活动计数（FR-71）——
+// 页眉刷新按钮据此判断"数据是否已返回"：请求开始 +1、落定 -1，归零即空闲。
+let activeRequestCount = 0;
+const activityListeners = new Set<(count: number) => void>();
+
+function trackRequestStart() {
+  activeRequestCount += 1;
+  for (const listener of activityListeners) listener(activeRequestCount);
+}
+
+function trackRequestEnd() {
+  activeRequestCount -= 1;
+  for (const listener of activityListeners) listener(activeRequestCount);
+}
+
+/** 当前进行中的请求数（含协议层上传）。 */
+export function getNetworkActivityCount(): number {
+  return activeRequestCount;
+}
+
+/** 订阅网络活动计数变化；返回取消订阅函数。 */
+export function subscribeNetworkActivity(listener: (count: number) => void): () => void {
+  activityListeners.add(listener);
+  return () => {
+    activityListeners.delete(listener);
+  };
+}
+
 /** 读取持久化的会话令牌（localStorage）。 */
 export function getToken(): string | null {
   try {
@@ -107,25 +135,30 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     payload = JSON.stringify(body);
   }
 
-  let response: Response;
+  trackRequestStart();
   try {
-    response = await fetch(buildUrl(path, query), { method, headers, body: payload, signal });
-  } catch (e) {
-    if (signal?.aborted || (e instanceof DOMException && e.name === "AbortError")) {
-      throw new ApiError("aborted", "请求已取消或超时", 0);
+    let response: Response;
+    try {
+      response = await fetch(buildUrl(path, query), { method, headers, body: payload, signal });
+    } catch (e) {
+      if (signal?.aborted || (e instanceof DOMException && e.name === "AbortError")) {
+        throw new ApiError("aborted", "请求已取消或超时", 0);
+      }
+      throw new ApiError("network", e instanceof Error ? e.message : "网络错误", 0);
     }
-    throw new ApiError("network", e instanceof Error ? e.message : "网络错误", 0);
-  }
-  if (!response.ok) {
-    if (response.status === 401) {
-      emitAuthExpired();
+    if (!response.ok) {
+      if (response.status === 401) {
+        emitAuthExpired();
+      }
+      throw await parseError(response);
     }
-    throw await parseError(response);
+    if (response.status === 204) {
+      return undefined as T;
+    }
+    return (await response.json()) as T;
+  } finally {
+    trackRequestEnd();
   }
-  if (response.status === 204) {
-    return undefined as T;
-  }
-  return (await response.json()) as T;
 }
 
 /** 协议层 PUT 上传（Raw hosted）：Bearer + 原始 body，非 /api/v1 JSON。 */
@@ -142,22 +175,27 @@ export async function putProtocolAsset(
   if (contentType) {
     headers["Content-Type"] = contentType;
   }
-  let response: Response;
+  trackRequestStart();
   try {
-    response = await fetch(url, { method: "PUT", headers, body });
-  } catch (e) {
-    throw new ApiError("network", e instanceof Error ? e.message : "网络错误", 0);
+    let response: Response;
+    try {
+      response = await fetch(url, { method: "PUT", headers, body });
+    } catch (e) {
+      throw new ApiError("network", e instanceof Error ? e.message : "网络错误", 0);
+    }
+    if (!response.ok) {
+      throw await parseError(response);
+    }
+    return (await response.json()) as {
+      repository: string;
+      path: string;
+      hash: string;
+      size: number;
+      contentType: string;
+    };
+  } finally {
+    trackRequestEnd();
   }
-  if (!response.ok) {
-    throw await parseError(response);
-  }
-  return (await response.json()) as {
-    repository: string;
-    path: string;
-    hash: string;
-    size: number;
-    contentType: string;
-  };
 }
 
 /** 协议层 multipart POST（FR-73 Maven 网页上传）：Bearer + FormData，非契约 JSON 请求。 */
@@ -167,14 +205,19 @@ export async function postProtocolForm<T>(url: string, form: FormData): Promise<
   if (token) {
     headers.Authorization = `Bearer ${token}`;
   }
-  let response: Response;
+  trackRequestStart();
   try {
-    response = await fetch(url, { method: "POST", headers, body: form });
-  } catch (e) {
-    throw new ApiError("network", e instanceof Error ? e.message : "网络错误", 0);
+    let response: Response;
+    try {
+      response = await fetch(url, { method: "POST", headers, body: form });
+    } catch (e) {
+      throw new ApiError("network", e instanceof Error ? e.message : "网络错误", 0);
+    }
+    if (!response.ok) {
+      throw await parseError(response);
+    }
+    return (await response.json()) as T;
+  } finally {
+    trackRequestEnd();
   }
-  if (!response.ok) {
-    throw await parseError(response);
-  }
-  return (await response.json()) as T;
 }

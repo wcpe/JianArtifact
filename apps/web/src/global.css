@@ -6,3 +6,13 @@
 html {
   scrollbar-gutter: stable;
 }
+
+/* FR-71：页眉刷新按钮旋转指示。 */
+@keyframes ja-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}

@@ -30,7 +30,7 @@ import {
   uploadRawAsset,
 } from "../../api/endpoints";
 import type { AssetSummary, Repository, UsageInfo } from "../../api/types";
-import { useAsync } from "../../hooks/useAsync";
+import { useAsync, REFRESH_EVENT } from "../../hooks/useAsync";
 import type { AssetTreeNode } from "../../lib/assetTree";
 import { notifyError, notifySuccess } from "../../lib/feedback";
 import { density } from "../../theme/density";
@@ -246,8 +246,8 @@ export function RepoBrowser({
   reloadNonceRef.current = reloadNonce;
   useEffect(() => {
     const handler = () => setReloadNonce((n) => n + 1);
-    window.addEventListener("jianartifact:refresh", handler);
-    return () => window.removeEventListener("jianartifact:refresh", handler);
+    window.addEventListener(REFRESH_EVENT, handler);
+    return () => window.removeEventListener(REFRESH_EVENT, handler);
   }, []);
 
   return (

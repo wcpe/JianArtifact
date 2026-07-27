@@ -39,10 +39,12 @@ import { useTranslation } from "react-i18next";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { getStatus, listPublicRepositories } from "../api/endpoints";
+import { getNetworkActivityCount, subscribeNetworkActivity } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { useLoginModal } from "../auth/LoginModal";
 import { BrandLogo } from "../components/BrandLogo";
 import { RouteFallback } from "../components/RouteFallback";
+import { REFRESH_EVENT } from "../hooks/useAsync";
 import { density } from "../theme/density";
 import type { Repository } from "../api/types";
 
@@ -188,10 +190,15 @@ export function AppLayout() {
   }, [isAuthenticated]);
 
   // FR-67：登出后落地仓库列表（匿名视图），不再有整页登录。
+  // FR-71：登出为异步操作，期间按钮呈 loading 防重复点击。
+  const [loggingOut, setLoggingOut] = useState(false);
   const handleLogout = () => {
-    void logout().then(() => {
-      navigate("/repositories", { replace: true });
-    });
+    setLoggingOut(true);
+    void logout()
+      .then(() => {
+        navigate("/repositories", { replace: true });
+      })
+      .finally(() => setLoggingOut(false));
   };
 
   // 点 logo 区：桌面切换导航展开/收起；移动端关闭抽屉（键盘 Enter / Space 等效）。
@@ -233,13 +240,36 @@ export function AppLayout() {
     }
   };
 
-  // FR-59: 刷新当前页
+  // FR-59/FR-71: 刷新当前页——派发全局刷新事件，useAsync 与自管数据组件重新拉取；
+  // 按钮进入旋转态，待网络活动归零（且满足最短时长防闪烁）后恢复。
+  const [refreshing, setRefreshing] = useState(false);
   const handleRefresh = () => {
-    // 触发页面组件重新加载（通过导航到当前路径不会刷新，用 key trick）
-    navigate(location.pathname + location.search, { replace: true });
-    // 强制刷新：通过全局事件通知子组件
-    window.dispatchEvent(new CustomEvent("jianartifact:refresh"));
+    if (refreshing) return;
+    setRefreshing(true);
+    window.dispatchEvent(new CustomEvent(REFRESH_EVENT));
   };
+
+  useEffect(() => {
+    if (!refreshing) return;
+    let minElapsed = false;
+    let idle = getNetworkActivityCount() === 0;
+    const tryFinish = () => {
+      if (minElapsed && idle) setRefreshing(false);
+    };
+    // 最短旋转 400ms：即便请求瞬间返回也有可感知的反馈，避免图标闪烁。
+    const timer = window.setTimeout(() => {
+      minElapsed = true;
+      tryFinish();
+    }, 400);
+    const unsubscribe = subscribeNetworkActivity((count) => {
+      idle = count === 0;
+      tryFinish();
+    });
+    return () => {
+      window.clearTimeout(timer);
+      unsubscribe();
+    };
+  }, [refreshing]);
 
   return (
     <AppShell
@@ -272,10 +302,18 @@ export function AppLayout() {
             />
           </Group>
           <Group gap="sm" wrap="nowrap" justify="flex-end" style={{ flex: 1, minWidth: 0 }}>
-            {/* FR-59: 刷新按钮 */}
+            {/* FR-59/FR-71: 刷新按钮——刷新期间禁用并旋转 */}
             <Tooltip label={t("common.refresh", { defaultValue: "刷新" })}>
-              <ActionIcon variant="subtle" onClick={handleRefresh}>
-                <IconRefresh size={18} />
+              <ActionIcon
+                variant="subtle"
+                aria-label={t("common.refresh", { defaultValue: "刷新" })}
+                onClick={handleRefresh}
+                disabled={refreshing}
+              >
+                <IconRefresh
+                  size={18}
+                  style={refreshing ? { animation: "ja-spin 0.9s linear infinite" } : undefined}
+                />
               </ActionIcon>
             </Tooltip>
             {user ? (
@@ -289,6 +327,7 @@ export function AppLayout() {
                   size="xs"
                   leftSection={<IconLogout size={16} />}
                   onClick={handleLogout}
+                  loading={loggingOut}
                 >
                   {t("common.logout")}
                 </Button>

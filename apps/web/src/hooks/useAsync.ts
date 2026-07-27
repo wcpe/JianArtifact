@@ -4,6 +4,9 @@ import { useCallback, useEffect, useState } from "react";
 
 import { ApiError } from "../api/client";
 
+/** 全局刷新事件名：页眉刷新按钮派发，所有 useAsync 实例（及自管数据的组件）重新拉取。 */
+export const REFRESH_EVENT = "jianartifact:refresh";
+
 export interface AsyncState<T> {
   data: T | null;
   loading: boolean;
@@ -22,6 +25,13 @@ export function useAsync<T>(fetcher: () => Promise<T>, deps: unknown[] = []): As
 
   const reload = useCallback(() => {
     setNonce((n) => n + 1);
+  }, []);
+
+  // FR-71：响应页眉刷新按钮的全局刷新事件。
+  useEffect(() => {
+    const handler = () => setNonce((n) => n + 1);
+    window.addEventListener(REFRESH_EVENT, handler);
+    return () => window.removeEventListener(REFRESH_EVENT, handler);
   }, []);
 
   useEffect(() => {
