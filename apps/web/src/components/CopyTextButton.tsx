@@ -19,6 +19,8 @@ interface Props {
   copiedLabel?: string;
   timeoutMs?: number;
   "aria-label"?: string;
+  /** 是否显示自带的“复制/已复制”提示气泡；外层已包裹 Tooltip 时应关闭以避免重叠。默认 true */
+  withTooltip?: boolean;
 }
 
 /** 带降级复制的按钮 / 图标按钮。 */
@@ -30,6 +32,7 @@ export function CopyTextButton({
   copiedLabel,
   timeoutMs = 1500,
   "aria-label": ariaLabel,
+  withTooltip = true,
 }: Props) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
@@ -48,17 +51,23 @@ export function CopyTextButton({
   const a11y = ariaLabel ?? t("common.copy");
 
   if (variant === "icon") {
+    const iconBtn = (
+      <ActionIcon
+        size={size === "xs" ? "sm" : size}
+        variant="subtle"
+        color={copied ? "teal" : "gray"}
+        onClick={onCopy}
+        aria-label={a11y}
+      >
+        {copied ? <IconCheck size={14} /> : <IconCopy size={14} />}
+      </ActionIcon>
+    );
+    if (!withTooltip) {
+      return iconBtn;
+    }
     return (
       <Tooltip label={text} withArrow>
-        <ActionIcon
-          size={size === "xs" ? "sm" : size}
-          variant="subtle"
-          color={copied ? "teal" : "gray"}
-          onClick={onCopy}
-          aria-label={a11y}
-        >
-          {copied ? <IconCheck size={14} /> : <IconCopy size={14} />}
-        </ActionIcon>
+        {iconBtn}
       </Tooltip>
     );
   }

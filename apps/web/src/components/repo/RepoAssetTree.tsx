@@ -17,6 +17,7 @@ import {
 } from "@tabler/icons-react";
 import { useState } from "react";
 import type { AssetTreeNode } from "../../lib/assetTree";
+import { formatBytes } from "../../lib/assetTree";
 
 interface Props {
   nodes: AssetTreeNode[];
@@ -26,6 +27,10 @@ interface Props {
   /** FR-54: 目录首次展开时触发懒加载；返回 Promise 表示加载中。 */
   onExpandDir?: (node: AssetTreeNode) => void;
   maxHeight?: number | string;
+  /** 目录默认展开（搜索结果树等已全量加载的场景）。 */
+  defaultExpanded?: boolean;
+  /** 文件行右侧显示大小（搜索结果等需要直观信息的场景）。 */
+  showSize?: boolean;
 }
 
 export function RepoAssetTree({
@@ -35,6 +40,8 @@ export function RepoAssetTree({
   onSelectDir,
   onExpandDir,
   maxHeight = 480,
+  defaultExpanded = false,
+  showSize = false,
 }: Props) {
   const content = (
     <div role="tree">
@@ -47,6 +54,8 @@ export function RepoAssetTree({
           onSelectFile={onSelectFile}
           onSelectDir={onSelectDir}
           onExpandDir={onExpandDir}
+          defaultExpanded={defaultExpanded}
+          showSize={showSize}
         />
       ))}
     </div>
@@ -71,6 +80,8 @@ function TreeNodeRow({
   onSelectFile,
   onSelectDir,
   onExpandDir,
+  defaultExpanded = false,
+  showSize = false,
 }: {
   node: AssetTreeNode;
   depth: number;
@@ -78,8 +89,10 @@ function TreeNodeRow({
   onSelectFile: (node: AssetTreeNode) => void;
   onSelectDir: (node: AssetTreeNode) => void;
   onExpandDir?: (node: AssetTreeNode) => void;
+  defaultExpanded?: boolean;
+  showSize?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultExpanded);
   const isDir = node.kind === "dir";
   const selected = !isDir && selectedPath === node.path;
   const pad = 8 + depth * 14;
@@ -131,9 +144,14 @@ function TreeNodeRow({
           ) : (
             <FileIcon name={node.name} />
           )}
-          <Text size="sm" lineClamp={1} fw={selected ? 600 : 400}>
+          <Text size="sm" lineClamp={1} fw={selected ? 600 : 400} style={{ flex: 1, minWidth: 0 }}>
             {node.name}
           </Text>
+          {showSize && !isDir && node.asset && (
+            <Text size="xs" c="dimmed" style={{ flexShrink: 0 }}>
+              {formatBytes(node.asset.size)}
+            </Text>
+          )}
         </Group>
       </UnstyledButton>
       {isDir && open && (
@@ -153,6 +171,8 @@ function TreeNodeRow({
                 onSelectFile={onSelectFile}
                 onSelectDir={onSelectDir}
                 onExpandDir={onExpandDir}
+                defaultExpanded={defaultExpanded}
+                showSize={showSize}
               />
             ))}
         </div>

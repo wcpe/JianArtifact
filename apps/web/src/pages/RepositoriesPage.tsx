@@ -212,8 +212,10 @@ export function RepositoriesPage() {
         }}
       >
         <PageHeader
-          title={t("repositories.title")}
-          description={t("repositories.description")}
+          title={canManage ? t("repositories.title") : t("repositories.publicTitle")}
+          description={
+            canManage ? t("repositories.description") : t("repositories.publicDescription")
+          }
           actions={
             canManage ? (
               <Button onClick={createModal.open}>{t("repositories.create")}</Button>
@@ -296,12 +298,22 @@ export function RepositoriesPage() {
                               <Table.Td>
                                 <Group gap={8} wrap="nowrap">
                                   <FormatIcon format={repo.format} />
-                                  <Text fw={600} size="sm">
+                                  <Text
+                                    fw={600}
+                                    size="sm"
+                                    c="blue"
+                                    style={{ cursor: "pointer" }}
+                                    onClick={() => navigate(`/repositories/${repo.name}`)}
+                                  >
                                     {repo.name}
                                   </Text>
                                   <Tooltip label={protoUrl} position="top" withArrow>
                                     <span>
-                                      <CopyTextButton value={protoUrl} variant="icon" />
+                                      <CopyTextButton
+                                        value={protoUrl}
+                                        variant="icon"
+                                        withTooltip={false}
+                                      />
                                     </span>
                                   </Tooltip>
                                 </Group>

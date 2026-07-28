@@ -7,6 +7,7 @@ import {
   Box,
   Button,
   Card,
+  Collapse,
   FileButton,
   Group,
   Loader,
@@ -18,7 +19,7 @@ import {
   Title,
 } from "@mantine/core";
 import { EmptyState } from "@jianartifact/ui";
-import { IconSearch, IconUpload, IconX } from "@tabler/icons-react";
+import { IconChevronDown, IconChevronUp, IconSearch, IconUpload, IconX } from "@tabler/icons-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -32,6 +33,7 @@ import {
 import type { AssetSummary, Repository, UsageInfo } from "../../api/types";
 import { useAsync, REFRESH_EVENT } from "../../hooks/useAsync";
 import type { AssetTreeNode } from "../../lib/assetTree";
+import { buildAssetTree } from "../../lib/assetTree";
 import { notifyError, notifySuccess } from "../../lib/feedback";
 import { density } from "../../theme/density";
 import { AsyncBoundary } from "../AsyncBoundary";
@@ -107,6 +109,8 @@ export function RepoBrowser({
   const [uploadPath, setUploadPath] = useState("");
   const [uploading, setUploading] = useState(false);
   const [reloadNonce, setReloadNonce] = useState(0);
+  // 上传区默认收起，点击按钮展开（避免常驻占位挤压文件树）。
+  const [uploadOpen, setUploadOpen] = useState(false);
 
   // FR-54: 懒加载树状态
   const [treeNodes, setTreeNodes] = useState<AssetTreeNode[]>([]);
@@ -116,6 +120,7 @@ export function RepoBrowser({
   // FR-57: 仓库内搜索
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<AssetTreeNode[] | null>(null);
+  const [searchCount, setSearchCount] = useState(0);
   const [searching, setSearching] = useState(false);
 
   const usageState = useAsync(() => getRepositoryUsage(repoName), [repoName]);
@@ -187,7 +192,7 @@ export function RepoBrowser({
     [repoName, updateNodeChildren],
   );
 
-  // FR-57: 仓库内搜索
+  // FR-57: 仓库内搜索（结果拼成目录树展示，而非拍平列表）
   const handleInRepoSearch = () => {
     const q = searchQuery.trim();
     if (!q) {
@@ -197,27 +202,27 @@ export function RepoBrowser({
     setSearching(true);
     searchAssets({ q, repository: repoName, page_size: 200 })
       .then((res) => {
-        const nodes: AssetTreeNode[] = res.items.map((item) => ({
-          name: item.path.split("/").pop()!,
+        const assets: AssetSummary[] = res.items.map((item) => ({
           path: item.path,
-          kind: "file" as const,
-          asset: {
-            path: item.path,
-            size: item.size,
-            hash: item.hash,
-            contentType: "application/octet-stream",
-            updatedAt: item.updatedAt,
-          },
+          size: item.size,
+          hash: item.hash,
+          contentType: "application/octet-stream",
+          updatedAt: item.updatedAt,
         }));
-        setSearchResults(nodes);
+        setSearchCount(assets.length);
+        setSearchResults(buildAssetTree(assets));
       })
-      .catch(() => setSearchResults([]))
+      .catch(() => {
+        setSearchCount(0);
+        setSearchResults([]);
+      })
       .finally(() => setSearching(false));
   };
 
   const clearSearch = () => {
     setSearchQuery("");
     setSearchResults(null);
+    setSearchCount(0);
   };
 
   const onSelectFile = (node: AssetTreeNode) => {
@@ -266,37 +271,61 @@ export function RepoBrowser({
     <Stack gap="md" style={{ height: "100%", overflow: "hidden" }}>
       {/* FR-81：format/type/visibility 徽章由详情页页头统一渲染，此处不再重复一层。 */}
 
-      {canUpload && (
-        <Card withBorder padding={density.cardPadding} radius="md">
-          <Stack gap="sm">
-            <Title order={5}>{t("repoDetail.uploadTitle")}</Title>
-            <Text size="xs" c="dimmed">
-              {t("repoDetail.uploadHint")}
-            </Text>
-            <TextInput
-              label={t("repoDetail.uploadPath")}
-              description={t("repoDetail.uploadPathHint")}
-              placeholder="path/to/file.bin"
-              value={uploadPath}
-              onChange={(e) => setUploadPath(e.currentTarget.value)}
-              disabled={uploading}
-            />
-            <Group>
-              <FileButton onChange={handleUpload} disabled={uploading}>
-                {(props) => (
-                  <Button {...props} leftSection={<IconUpload size={16} />} loading={uploading}>
-                    {t("repoDetail.uploadPick")}
-                  </Button>
-                )}
-              </FileButton>
-            </Group>
-          </Stack>
-        </Card>
-      )}
-
-      {/* FR-73: Maven hosted 网页上传（GAV 表单，服务端生成 pom/校验和/metadata） */}
-      {canMavenUpload && (
-        <MavenUploadCard repoName={repoName} onUploaded={() => setReloadNonce((n) => n + 1)} />
+      {/* 上传区默认收起：点击按钮展开（Raw / Maven hosted），不挤占文件树空间 */}
+      {(canUpload || canMavenUpload) && (
+        <Box>
+          <Button
+            size="xs"
+            variant={uploadOpen ? "filled" : "light"}
+            leftSection={<IconUpload size={14} />}
+            rightSection={uploadOpen ? <IconChevronUp size={14} /> : <IconChevronDown size={14} />}
+            onClick={() => setUploadOpen((o) => !o)}
+          >
+            {t("repoDetail.uploadToggle", { defaultValue: "上传制品" })}
+          </Button>
+          <Collapse in={uploadOpen}>
+            <Box mt="xs">
+              {canUpload && (
+                <Card withBorder padding={density.cardPadding} radius="md">
+                  <Stack gap="sm">
+                    <Title order={5}>{t("repoDetail.uploadTitle")}</Title>
+                    <Text size="xs" c="dimmed">
+                      {t("repoDetail.uploadHint")}
+                    </Text>
+                    <TextInput
+                      label={t("repoDetail.uploadPath")}
+                      description={t("repoDetail.uploadPathHint")}
+                      placeholder="path/to/file.bin"
+                      value={uploadPath}
+                      onChange={(e) => setUploadPath(e.currentTarget.value)}
+                      disabled={uploading}
+                    />
+                    <Group>
+                      <FileButton onChange={handleUpload} disabled={uploading}>
+                        {(props) => (
+                          <Button
+                            {...props}
+                            leftSection={<IconUpload size={16} />}
+                            loading={uploading}
+                          >
+                            {t("repoDetail.uploadPick")}
+                          </Button>
+                        )}
+                      </FileButton>
+                    </Group>
+                  </Stack>
+                </Card>
+              )}
+              {/* FR-73: Maven hosted 网页上传（GAV 表单，服务端生成 pom/校验和/metadata） */}
+              {canMavenUpload && (
+                <MavenUploadCard
+                  repoName={repoName}
+                  onUploaded={() => setReloadNonce((n) => n + 1)}
+                />
+              )}
+            </Box>
+          </Collapse>
+        </Box>
       )}
 
       {/* FR-74：客户端发布提示收纳为紧凑小字 + 跳使用说明链接，不占大块 */}
@@ -363,7 +392,9 @@ export function RepoBrowser({
             {/* FR-57: 仓库内搜索栏 */}
             <TextInput
               size="xs"
-              placeholder={t("repoDetail.searchPlaceholder", { defaultValue: "搜索制品..." })}
+              placeholder={t("repoDetail.searchPlaceholder", {
+                defaultValue: "搜索制品，支持 -排除词 ext:jar 等表达式",
+              })}
               leftSection={<IconSearch size={14} />}
               rightSection={
                 searchQuery ? (
@@ -383,19 +414,22 @@ export function RepoBrowser({
             {searchResults !== null && (
               <Text size="xs" c="dimmed" mb="xs">
                 {t("repoDetail.searchResultCount", {
-                  count: searchResults.length,
-                  defaultValue: `找到 ${searchResults.length} 条结果`,
+                  count: searchCount,
+                  defaultValue: `找到 ${searchCount} 条结果`,
                 })}
               </Text>
             )}
             <ScrollArea style={{ flex: 1 }} type="auto" offsetScrollbars>
               <RepoAssetTree
+                key={searchResults === null ? "browse" : `search:${searchQuery}`}
                 nodes={displayNodes}
                 selectedPath={selected?.path ?? null}
                 onSelectFile={onSelectFile}
                 onSelectDir={onSelectDir}
                 onExpandDir={searchResults === null ? handleExpandDir : undefined}
                 maxHeight="none"
+                defaultExpanded={searchResults !== null}
+                showSize={searchResults !== null}
               />
             </ScrollArea>
           </Card>
