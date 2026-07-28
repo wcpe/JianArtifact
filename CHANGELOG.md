@@ -18,6 +18,7 @@
 - Maven 网页上传（FR-73，见 `docs/specs/0.6.0-maven-web-upload.md`）：Maven hosted 仓库管理端 GAV 表单上传，服务端自动生成 pom.xml、各文件 `.md5`/`.sha1` 并读改写 `maven-metadata.xml`（含 checksum）；仅限 release 版本，SNAPSHOT 提示走 `mvn deploy`；新增非契约端点 `POST /api/v1/repositories/{name}/maven-upload`。
 - 首屏加载性能（FR-70）：全部页面组件路由级 `React.lazy` 代码分割，主 chunk 683.98 kB → 474.59 kB（gzip 206.40 → 152.98 kB，约 -26%）；懒加载在布局内挂 Suspense 占位，路由切换侧栏/页眉不闪、不白屏。
 - 页眉打磨（FR-71）：刷新按钮点击后旋转动画并禁用，随全局网络活动计数归零（含最短旋转时长防闪烁）恢复；登出按钮登出期间呈 loading；`useAsync` 统一响应页眉刷新事件，刷新对所有数据页面生效。
+- 仓库描述可配置（FR-81）：`repository` 表新增 `description` 列（迁移 `0009`），建仓表单与详情页配置 Tab 可编辑描述；详情页页头副标题改为展示描述（原固定说明文案移除），匿名详情页经 `usage` 端点带出描述；浏览面板去掉与页头重复的 format/type/visibility 徽章层；文件详情改结构化元数据（大小含精确字节、类型、创建/更新时间），树 API 补 `sha1`/`md5`/`createdAt` 透传。
 - 仓库详情页打磨（FR-74）：整页固定高度布局（对齐 FR-68，树/详情面板内滚不再整页滚动）；未登录登录入口收敛到页眉一处；客户端发布提示由大块 Alert 收纳为紧凑小字 + 跳使用说明链接。
 - 仓库列表页优化（FR-68）：页头/筛选/分页固定、表格区内滚 + sticky 表头（body 不滚）；操作列删「公开页」留「浏览」；匿名视图隐藏新建/删除/清理等管理操作。
 - 协议端点 Basic Auth 支持用户名 + 口令认证（此前仅 API Token 作 password），兼容 Maven/Gradle 账号密码推送。

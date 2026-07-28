@@ -211,6 +211,10 @@ func toAPIRepository(r *repository.Repository, stats *domain.RepoStats) Reposito
 		Visibility: RepositoryVisibility(r.Visibility),
 		CreatedAt:  r.CreatedAt,
 	}
+	if r.Description != "" {
+		desc := r.Description
+		out.Description = &desc
+	}
 	if cfg, err := r.DecodeConfig(); err == nil {
 		if cfg.RemoteURL != "" {
 			out.RemoteUrl = &cfg.RemoteURL
@@ -247,6 +251,10 @@ func toAPIAsset(a *repository.Asset) AssetSummary {
 	if a.ContentType != "" {
 		ct := a.ContentType
 		out.ContentType = &ct
+	}
+	if a.CreatedAt != "" {
+		created := a.CreatedAt
+		out.CreatedAt = &created
 	}
 	return out
 }

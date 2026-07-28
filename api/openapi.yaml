@@ -902,6 +902,9 @@ components:
         visibility:
           type: string
           enum: [public, private]
+        description:
+          type: string
+          description: 仓库描述（管理后台可配置，详情页展示）
         remoteUrl:
           type: string
           description: proxy 仓库的上游地址（仅 type=proxy）
@@ -946,6 +949,9 @@ components:
           type: string
           enum: [public, private]
           default: private
+        description:
+          type: string
+          description: 仓库描述（可选）
         remoteUrl:
           type: string
           description: proxy 仓库的上游地址（type=proxy 时必填）
@@ -960,6 +966,9 @@ components:
         visibility:
           type: string
           enum: [public, private]
+        description:
+          type: string
+          description: 更新仓库描述（传空串表示清空）
         remoteUrl:
           type: string
           description: 更新 proxy 上游地址（仅 type=proxy）
@@ -1014,6 +1023,9 @@ components:
           description: 制品内容的 MD5 摘要（写入时计算登记）
         contentType:
           type: string
+        createdAt:
+          type: string
+          description: 首次写入时间
         updatedAt:
           type: string
     AssetList:
@@ -1044,6 +1056,9 @@ components:
           type: string
         type:
           type: string
+        description:
+          type: string
+          description: 仓库描述（匿名详情页页头展示）
         snippets:
           type: array
           items:

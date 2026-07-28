@@ -1,6 +1,6 @@
 // 文件详情：元数据 + 多校验和 + 下载/HTML View + 依赖坐标 + usage 片段可复制。点文件夹时不渲染。
 import { useState } from "react";
-import { Badge, Button, Card, Code, Group, Select, Stack, Text, Title } from "@mantine/core";
+import { Button, Card, Code, Group, Select, Stack, Text, Title } from "@mantine/core";
 import { IconDownload, IconExternalLink } from "@tabler/icons-react";
 import { useTranslation } from "react-i18next";
 
@@ -33,17 +33,26 @@ export function RepoFileDetail({ repoName, format, asset, usage, showDownload = 
         </Text>
       </div>
 
-      <Group gap="xs">
-        <Badge variant="light">{formatBytes(asset.size)}</Badge>
+      {/* FR-81：结构化元数据（大小含精确字节、类型、创建/更新时间），比徽章承载更多信息 */}
+      <Stack gap={4}>
+        <MetaRow
+          label={t("repoDetail.assetSize")}
+          value={`${formatBytes(asset.size)}（${asset.size.toLocaleString()} B）`}
+        />
         {asset.contentType && (
-          <Badge variant="outline" color="gray">
-            {asset.contentType}
-          </Badge>
+          <MetaRow label={t("repoDetail.assetContentType")} value={asset.contentType} />
         )}
-        <Badge variant="light" color="gray">
-          {asset.updatedAt}
-        </Badge>
-      </Group>
+        {asset.createdAt && (
+          <MetaRow
+            label={t("repoDetail.assetCreatedAt")}
+            value={new Date(asset.createdAt).toLocaleString()}
+          />
+        )}
+        <MetaRow
+          label={t("repoDetail.assetUpdatedAt")}
+          value={new Date(asset.updatedAt).toLocaleString()}
+        />
+      </Stack>
 
       {/* 多校验和区域：SHA-256 / SHA-1 / MD5，各带复制按钮 */}
       <Stack gap={4}>
@@ -115,6 +124,20 @@ export function RepoFileDetail({ repoName, format, asset, usage, showDownload = 
         </Stack>
       )}
     </Stack>
+  );
+}
+
+/** 元数据行（标签 + 值），FR-81 文件详情结构化展示。 */
+function MetaRow({ label, value }: { label: string; value: string }) {
+  return (
+    <Group gap="xs" wrap="nowrap">
+      <Text size="xs" c="dimmed" fw={600} style={{ width: 64, flexShrink: 0 }}>
+        {label}
+      </Text>
+      <Text size="xs" style={{ wordBreak: "break-all" }}>
+        {value}
+      </Text>
+    </Group>
   );
 }
 

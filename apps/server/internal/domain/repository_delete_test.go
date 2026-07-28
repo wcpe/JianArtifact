@@ -20,7 +20,7 @@ func TestDeleteRepositoryCascadesAssets(t *testing.T) {
 	repoSvc := domain.NewRepositoryService(repoRepo, aclRepo, assetRepo, domain.NewSettingService(repository.NewSettingRepo(db)), repository.NewUserRepo(db))
 	assetSvc := domain.NewAssetService(repoRepo, assetRepo, blobs, nil)
 
-	if _, err := repoSvc.Create("to-delete", "raw", "hosted", "private", repository.RepositoryConfig{}); err != nil {
+	if _, err := repoSvc.Create("to-delete", "raw", "hosted", "private", "", repository.RepositoryConfig{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := assetSvc.Put("to-delete", "x.bin", bytes.NewReader([]byte("data")), ""); err != nil {
@@ -40,7 +40,7 @@ func TestDeleteRepositoryCascadesAssets(t *testing.T) {
 		t.Fatal("仓库应已删除")
 	}
 	// 同名重建应成功且无旧资产
-	if _, err := repoSvc.Create("to-delete", "raw", "hosted", "private", repository.RepositoryConfig{}); err != nil {
+	if _, err := repoSvc.Create("to-delete", "raw", "hosted", "private", "", repository.RepositoryConfig{}); err != nil {
 		t.Fatalf("重建：%v", err)
 	}
 	if _, _, err := assetSvc.Get("to-delete", "x.bin"); err == nil {

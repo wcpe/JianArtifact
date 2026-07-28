@@ -526,6 +526,8 @@ export interface components {
             type: "hosted" | "proxy" | "group";
             /** @enum {string} */
             visibility: "public" | "private";
+            /** @description 仓库描述（管理后台可配置，详情页展示） */
+            description?: string;
             /** @description proxy 仓库的上游地址（仅 type=proxy） */
             remoteUrl?: string;
             /** @description group 仓库的成员仓库名（有序，仅 type=group） */
@@ -554,6 +556,8 @@ export interface components {
              * @enum {string}
              */
             visibility: "public" | "private";
+            /** @description 仓库描述（可选） */
+            description?: string;
             /** @description proxy 仓库的上游地址（type=proxy 时必填） */
             remoteUrl?: string;
             /** @description group 仓库的成员仓库名（有序，type=group 时必填） */
@@ -562,6 +566,8 @@ export interface components {
         UpdateRepositoryRequest: {
             /** @enum {string} */
             visibility?: "public" | "private";
+            /** @description 更新仓库描述（传空串表示清空） */
+            description?: string;
             /** @description 更新 proxy 上游地址（仅 type=proxy） */
             remoteUrl?: string;
             /** @description 更新 group 成员仓库名（仅 type=group） */
@@ -590,6 +596,8 @@ export interface components {
             /** @description 制品内容的 MD5 摘要（写入时计算登记） */
             md5?: string;
             contentType?: string;
+            /** @description 首次写入时间 */
+            createdAt?: string;
             updatedAt: string;
         };
         AssetList: {
@@ -604,6 +612,8 @@ export interface components {
         UsageInfo: {
             format: string;
             type: string;
+            /** @description 仓库描述（匿名详情页页头展示） */
+            description?: string;
             snippets: components["schemas"]["UsageSnippet"][];
         };
         /** @enum {string} */

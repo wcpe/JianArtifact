@@ -53,7 +53,7 @@ func TestCanAccessImplicationMatrix(t *testing.T) {
 	for _, c := range cases {
 		t.Run("granted="+c.granted, func(t *testing.T) {
 			name := "private-" + c.granted
-			if _, err := svc.Create(name, "raw", "hosted", "private", repository.RepositoryConfig{}); err != nil {
+			if _, err := svc.Create(name, "raw", "hosted", "private", "", repository.RepositoryConfig{}); err != nil {
 				t.Fatalf("建仓库：%v", err)
 			}
 			if _, err := svc.SetAcl(name, []repository.Acl{{SubjectID: uid, Action: c.granted}}); err != nil {
@@ -76,7 +76,7 @@ func TestCanAccessImplicationMatrix(t *testing.T) {
 func TestCanAccessPublicRead(t *testing.T) {
 	db := newTestDB(t)
 	svc := domain.NewRepositoryService(repository.NewRepoRepo(db), repository.NewAclRepo(db), repository.NewAssetRepo(db), domain.NewSettingService(repository.NewSettingRepo(db)), repository.NewUserRepo(db))
-	if _, err := svc.Create("public-repo", "raw", "hosted", "public", repository.RepositoryConfig{}); err != nil {
+	if _, err := svc.Create("public-repo", "raw", "hosted", "public", "", repository.RepositoryConfig{}); err != nil {
 		t.Fatalf("建仓库：%v", err)
 	}
 	const strangerID = int64(999)
@@ -104,10 +104,10 @@ func TestCreateConfigValidation(t *testing.T) {
 	svc := domain.NewRepositoryService(repository.NewRepoRepo(db), repository.NewAclRepo(db), repository.NewAssetRepo(db), domain.NewSettingService(repository.NewSettingRepo(db)), repository.NewUserRepo(db))
 
 	// 前置：一个 raw hosted 与一个 maven hosted，供 group 成员校验用。
-	if _, err := svc.Create("raw-hosted", "raw", "hosted", "private", repository.RepositoryConfig{}); err != nil {
+	if _, err := svc.Create("raw-hosted", "raw", "hosted", "private", "", repository.RepositoryConfig{}); err != nil {
 		t.Fatalf("建 raw-hosted：%v", err)
 	}
-	if _, err := svc.Create("maven-hosted", "maven", "hosted", "private", repository.RepositoryConfig{}); err != nil {
+	if _, err := svc.Create("maven-hosted", "maven", "hosted", "private", "", repository.RepositoryConfig{}); err != nil {
 		t.Fatalf("建 maven-hosted：%v", err)
 	}
 
@@ -131,7 +131,7 @@ func TestCreateConfigValidation(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			_, err := svc.Create(c.repo, c.format, c.typ, "private", c.cfg)
+			_, err := svc.Create(c.repo, c.format, c.typ, "private", "", c.cfg)
 			if c.wantErr {
 				if !errors.Is(err, domain.ErrValidation) {
 					t.Fatalf("期望 ErrValidation，得 %v", err)
@@ -152,7 +152,7 @@ func TestListAssetsPaginationAndPrefix(t *testing.T) {
 	assetRepo := repository.NewAssetRepo(db)
 	svc := domain.NewRepositoryService(repoRepo, repository.NewAclRepo(db), assetRepo, domain.NewSettingService(repository.NewSettingRepo(db)), repository.NewUserRepo(db))
 
-	if _, err := svc.Create("raw-store", "raw", "hosted", "private", repository.RepositoryConfig{}); err != nil {
+	if _, err := svc.Create("raw-store", "raw", "hosted", "private", "", repository.RepositoryConfig{}); err != nil {
 		t.Fatalf("建仓库：%v", err)
 	}
 	repo, err := repoRepo.GetByName("raw-store")
@@ -206,10 +206,10 @@ func TestUsageByFormat(t *testing.T) {
 	db := newTestDB(t)
 	svc := domain.NewRepositoryService(repository.NewRepoRepo(db), repository.NewAclRepo(db), repository.NewAssetRepo(db), domain.NewSettingService(repository.NewSettingRepo(db)), repository.NewUserRepo(db))
 
-	if _, err := svc.Create("mvn", "maven", "hosted", "private", repository.RepositoryConfig{}); err != nil {
+	if _, err := svc.Create("mvn", "maven", "hosted", "private", "", repository.RepositoryConfig{}); err != nil {
 		t.Fatalf("建 maven 仓库：%v", err)
 	}
-	if _, err := svc.Create("npm-proxy", "npm", "proxy", "private", repository.RepositoryConfig{RemoteURL: "https://registry.npmjs.org"}); err != nil {
+	if _, err := svc.Create("npm-proxy", "npm", "proxy", "private", "", repository.RepositoryConfig{RemoteURL: "https://registry.npmjs.org"}); err != nil {
 		t.Fatalf("建 npm proxy 仓库：%v", err)
 	}
 

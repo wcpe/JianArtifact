@@ -24,14 +24,14 @@ func newAnonTestSvc(t *testing.T) (*domain.RepositoryService, *domain.SettingSer
 func TestAnonymousAclRead(t *testing.T) {
 	svc, _, userRepo, aclRepo := newAnonTestSvc(t)
 
-	granted, err := svc.Create("anon-granted", "raw", "hosted", "private", repository.RepositoryConfig{})
+	granted, err := svc.Create("anon-granted", "raw", "hosted", "private", "", repository.RepositoryConfig{})
 	if err != nil {
 		t.Fatalf("建仓库：%v", err)
 	}
-	if _, err := svc.Create("anon-denied", "raw", "hosted", "private", repository.RepositoryConfig{}); err != nil {
+	if _, err := svc.Create("anon-denied", "raw", "hosted", "private", "", repository.RepositoryConfig{}); err != nil {
 		t.Fatalf("建仓库：%v", err)
 	}
-	if _, err := svc.Create("anon-public", "raw", "hosted", "public", repository.RepositoryConfig{}); err != nil {
+	if _, err := svc.Create("anon-public", "raw", "hosted", "public", "", repository.RepositoryConfig{}); err != nil {
 		t.Fatalf("建仓库：%v", err)
 	}
 
@@ -69,7 +69,7 @@ func TestAnonymousAclRead(t *testing.T) {
 func TestAnonymousGlobalSwitch(t *testing.T) {
 	svc, settings, userRepo, aclRepo := newAnonTestSvc(t)
 
-	repo, err := svc.Create("switch-pub", "raw", "hosted", "public", repository.RepositoryConfig{})
+	repo, err := svc.Create("switch-pub", "raw", "hosted", "public", "", repository.RepositoryConfig{})
 	if err != nil {
 		t.Fatalf("建仓库：%v", err)
 	}

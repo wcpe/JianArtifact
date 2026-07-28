@@ -416,6 +416,9 @@ type AssetList struct {
 type AssetSummary struct {
 	ContentType *string `json:"contentType,omitempty"`
 
+	// CreatedAt 首次写入时间
+	CreatedAt *string `json:"createdAt,omitempty"`
+
 	// Hash 内容寻址 blob 的 sha256 摘要
 	Hash string `json:"hash"`
 
@@ -448,7 +451,9 @@ type CreateMigrationRequest struct {
 
 // CreateRepositoryRequest defines model for CreateRepositoryRequest.
 type CreateRepositoryRequest struct {
-	Format CreateRepositoryRequestFormat `json:"format"`
+	// Description 仓库描述（可选）
+	Description *string                       `json:"description,omitempty"`
+	Format      CreateRepositoryRequestFormat `json:"format"`
 
 	// Members group 仓库的成员仓库名（有序，type=group 时必填）
 	Members *[]string `json:"members,omitempty"`
@@ -621,10 +626,13 @@ type PutAclRequest struct {
 // Repository defines model for Repository.
 type Repository struct {
 	// ArtifactCount 仓库内制品数量（只读统计字段）
-	ArtifactCount *int             `json:"artifactCount,omitempty"`
-	CreatedAt     string           `json:"createdAt"`
-	Format        RepositoryFormat `json:"format"`
-	Id            int64            `json:"id"`
+	ArtifactCount *int   `json:"artifactCount,omitempty"`
+	CreatedAt     string `json:"createdAt"`
+
+	// Description 仓库描述（管理后台可配置，详情页展示）
+	Description *string          `json:"description,omitempty"`
+	Format      RepositoryFormat `json:"format"`
+	Id          int64            `json:"id"`
 
 	// Members group 仓库的成员仓库名（有序，仅 type=group）
 	Members *[]string `json:"members,omitempty"`
@@ -693,6 +701,9 @@ type TokenList struct {
 
 // UpdateRepositoryRequest defines model for UpdateRepositoryRequest.
 type UpdateRepositoryRequest struct {
+	// Description 更新仓库描述（传空串表示清空）
+	Description *string `json:"description,omitempty"`
+
 	// Members 更新 group 成员仓库名（仅 type=group）
 	Members *[]string `json:"members,omitempty"`
 
@@ -718,9 +729,11 @@ type UpdateUserRequestStatus string
 
 // UsageInfo defines model for UsageInfo.
 type UsageInfo struct {
-	Format   string         `json:"format"`
-	Snippets []UsageSnippet `json:"snippets"`
-	Type     string         `json:"type"`
+	// Description 仓库描述（匿名详情页页头展示）
+	Description *string        `json:"description,omitempty"`
+	Format      string         `json:"format"`
+	Snippets    []UsageSnippet `json:"snippets"`
+	Type        string         `json:"type"`
 }
 
 // UsageSnippet defines model for UsageSnippet.

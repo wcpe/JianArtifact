@@ -109,6 +109,7 @@ export function createRepository(input: {
   format: RepoFormat;
   type: RepoType;
   visibility: RepoVisibility;
+  description?: string;
   remoteUrl?: string;
   members?: string[];
 }): Promise<Repository> {
@@ -117,7 +118,12 @@ export function createRepository(input: {
 
 export function updateRepository(
   name: string,
-  patch: { visibility?: RepoVisibility; remoteUrl?: string; members?: string[] },
+  patch: {
+    visibility?: RepoVisibility;
+    description?: string;
+    remoteUrl?: string;
+    members?: string[];
+  },
 ): Promise<Repository> {
   return request<Repository>(`/repositories/${name}`, { method: "PATCH", body: patch });
 }
@@ -404,7 +410,16 @@ export function getLicenses(): Promise<LicenseManifest> {
 
 export interface TreeEntry {
   directories: string[];
-  files: { path: string; size: number; hash: string; contentType?: string; updatedAt: string }[];
+  files: {
+    path: string;
+    size: number;
+    hash: string;
+    sha1?: string;
+    md5?: string;
+    contentType?: string;
+    createdAt?: string;
+    updatedAt: string;
+  }[];
 }
 
 /** 目录懒加载：获取仓库指定前缀下的目录和文件。 */

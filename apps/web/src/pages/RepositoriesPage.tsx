@@ -13,6 +13,7 @@ import {
   Stack,
   Table,
   Text,
+  Textarea,
   TextInput,
   Tooltip,
 } from "@mantine/core";
@@ -99,6 +100,7 @@ export function RepositoriesPage() {
       format: "maven" as RepoFormat,
       type: "hosted" as RepoType,
       visibility: "private" as RepoVisibility,
+      description: "",
       remoteUrl: "",
       members: [] as string[],
     },
@@ -130,6 +132,8 @@ export function RepositoriesPage() {
       format: values.format,
       type: values.type,
       visibility: values.visibility,
+      // FR-81：仓库描述（可选），详情页页头展示。
+      ...(values.description.trim() ? { description: values.description.trim() } : {}),
       ...(values.type === "proxy" ? { remoteUrl: values.remoteUrl.trim() } : {}),
       ...(values.type === "group" ? { members: values.members } : {}),
     };
@@ -442,6 +446,16 @@ export function RepositoriesPage() {
             data={visibilityOptions}
             allowDeselect={false}
             {...form.getInputProps("visibility")}
+          />
+          {/* FR-81：仓库描述（可选），详情页页头展示 */}
+          <Textarea
+            mt="sm"
+            label={t("repositories.descriptionLabel")}
+            placeholder={t("repositories.descriptionPlaceholder")}
+            autosize
+            minRows={2}
+            maxRows={4}
+            {...form.getInputProps("description")}
           />
           <Group justify="flex-end" mt="md">
             <Button variant="default" onClick={createModal.close}>

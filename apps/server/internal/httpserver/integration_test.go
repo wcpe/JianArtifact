@@ -220,9 +220,26 @@ func TestBrowseAndUsageEndpoints(t *testing.T) {
 
 	// 建 public maven hosted 仓库（public 便于验证 read 放行）。
 	public := api.CreateRepositoryRequestVisibilityPublic
+	desc := "团队 Maven 制品库"
+	var created api.Repository
 	if code := e.do(t, http.MethodPost, "/api/v1/repositories", adminToken,
-		api.CreateRepositoryRequest{Name: "mvn-pub", Format: "maven", Type: "hosted", Visibility: &public}, nil); code != http.StatusCreated {
+		api.CreateRepositoryRequest{Name: "mvn-pub", Format: "maven", Type: "hosted", Visibility: &public, Description: &desc}, &created); code != http.StatusCreated {
 		t.Fatalf("建仓库状态码 = %d，期望 201", code)
+	}
+	// FR-81：description 建仓即回显。
+	if created.Description == nil || *created.Description != desc {
+		t.Errorf("建仓返回 description = %v，期望 %q", created.Description, desc)
+	}
+
+	// FR-81：PATCH 更新描述后列表与 usage 均带出新值。
+	newDesc := "更新后的描述"
+	var patched api.Repository
+	if code := e.do(t, http.MethodPatch, "/api/v1/repositories/mvn-pub", adminToken,
+		api.UpdateRepositoryRequest{Description: &newDesc}, &patched); code != http.StatusOK {
+		t.Fatalf("更新描述状态码 = %d，期望 200", code)
+	}
+	if patched.Description == nil || *patched.Description != newDesc {
+		t.Errorf("更新后 description = %v，期望 %q", patched.Description, newDesc)
 	}
 
 	// usage：format=maven、type=hosted，含若干片段。
@@ -232,6 +249,10 @@ func TestBrowseAndUsageEndpoints(t *testing.T) {
 	}
 	if usage.Format != "maven" || usage.Type != "hosted" {
 		t.Errorf("usage format/type 异常：%+v", usage)
+	}
+	// FR-81：匿名详情页数据来源 usage 也带描述。
+	if usage.Description == nil || *usage.Description != newDesc {
+		t.Errorf("usage description = %v，期望 %q", usage.Description, newDesc)
 	}
 	if len(usage.Snippets) == 0 {
 		t.Error("usage 应返回至少一段接入片段")

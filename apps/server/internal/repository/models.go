@@ -26,13 +26,14 @@ type Token struct {
 
 // Repository 是 repository 表的行模型。
 type Repository struct {
-	ID         int64  `db:"id"`
-	Name       string `db:"name"`
-	Format     string `db:"format"`
-	Type       string `db:"type"`
-	Visibility string `db:"visibility"`
-	Config     string `db:"config"` // 结构化配置 JSON（上游 URL、成员列表等）
-	CreatedAt  string `db:"created_at"`
+	ID          int64  `db:"id"`
+	Name        string `db:"name"`
+	Format      string `db:"format"`
+	Type        string `db:"type"`
+	Visibility  string `db:"visibility"`
+	Description string `db:"description"` // 仓库描述（管理后台可配置，详情页展示）
+	Config      string `db:"config"`      // 结构化配置 JSON（上游 URL、成员列表等）
+	CreatedAt   string `db:"created_at"`
 }
 
 // RepositoryConfig 是 repository.config 列的结构化视图：

@@ -10,6 +10,7 @@ import {
   Table,
   Tabs,
   Text,
+  Textarea,
   Title,
 } from "@mantine/core";
 import { IconTrash } from "@tabler/icons-react";
@@ -58,6 +59,7 @@ export function RepositoryDetailPage() {
           format: usage.format ?? "raw",
           type: usage.type ?? "hosted",
           visibility: "public" as RepoVisibility,
+          description: usage.description,
           createdAt: "",
         }) as Repository,
     );
@@ -75,9 +77,10 @@ export function RepositoryDetailPage() {
         overflow: "hidden",
       }}
     >
+      {/* FR-81：副标题展示后台可配置的仓库描述（无描述则留空，不再放固定说明文案）。 */}
       <PageHeader
         title={`${t("repoDetail.title")} · ${name}`}
-        description={t("repoDetail.description")}
+        description={repo?.description || undefined}
         actions={
           // FR-74：未登录的登录入口收敛到页眉（AppLayout），此处仅保留返回。
           <Button variant="default" onClick={() => navigate("/repositories")}>
@@ -134,7 +137,7 @@ export function RepositoryDetailPage() {
   );
 }
 
-/** 配置 Tab：展示仓库基本信息，可修改 visibility 并保存。 */
+/** 配置 Tab：展示仓库基本信息，可修改 visibility 与描述并保存。 */
 function ConfigTab({
   repoName,
   repo,
@@ -146,18 +149,20 @@ function ConfigTab({
 }) {
   const { t } = useTranslation();
   const [visibility, setVisibility] = useState<RepoVisibility>("private");
+  const [description, setDescription] = useState("");
   const [saving, setSaving] = useState(false);
 
-  // 仓库信息就绪后同步初始 visibility
+  // 仓库信息就绪后同步初始 visibility/描述
   useEffect(() => {
     if (repo) {
       setVisibility(repo.visibility);
+      setDescription(repo.description ?? "");
     }
   }, [repo]);
 
   const handleSave = () => {
     setSaving(true);
-    updateRepository(repoName, { visibility })
+    updateRepository(repoName, { visibility, description })
       .then(() => {
         notifySuccess(t("common.saved"));
         onUpdated();
@@ -198,6 +203,17 @@ function ConfigTab({
           value={visibility}
           onChange={(v) => v && setVisibility(v as RepoVisibility)}
           allowDeselect={false}
+        />
+
+        {/* FR-81：仓库描述，详情页页头展示 */}
+        <Textarea
+          label={t("repoDetail.configDescription")}
+          placeholder={t("repoDetail.configDescriptionPlaceholder")}
+          autosize
+          minRows={2}
+          maxRows={4}
+          value={description}
+          onChange={(e) => setDescription(e.currentTarget.value)}
         />
 
         <Group justify="flex-end">

@@ -862,7 +862,7 @@ func (a RepoAdminAdapter) EnsureHosted(name, format string) error {
 	if format == "" {
 		format = "raw"
 	}
-	_, err = a.Repos.Create(name, format, "hosted", "private", repository.RepositoryConfig{})
+	_, err = a.Repos.Create(name, format, "hosted", "private", "", repository.RepositoryConfig{})
 	return err
 }
 

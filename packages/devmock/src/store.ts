@@ -73,6 +73,7 @@ function seed(): State {
         format: "maven",
         type: "hosted",
         visibility: "private",
+        description: "团队 Maven release 制品库",
         createdAt: "2026-01-01T00:00:00Z",
       },
       {
@@ -286,6 +287,7 @@ export const store = {
   createRepository(
     input: Pick<Repository, "name" | "format" | "type"> & {
       visibility?: Repository["visibility"];
+      description?: string;
       remoteUrl?: string;
       members?: string[];
     },
@@ -301,6 +303,9 @@ export const store = {
       visibility: input.visibility ?? "private",
       createdAt: nowIso(),
     };
+    if (input.description) {
+      repo.description = input.description;
+    }
     if (input.remoteUrl) {
       repo.remoteUrl = input.remoteUrl;
     }
@@ -313,7 +318,12 @@ export const store = {
 
   updateRepository(
     name: string,
-    patch: { visibility?: Repository["visibility"]; remoteUrl?: string; members?: string[] },
+    patch: {
+      visibility?: Repository["visibility"];
+      description?: string;
+      remoteUrl?: string;
+      members?: string[];
+    },
   ): Repository | null {
     const repo = state.repositories.find((r) => r.name === name);
     if (!repo) {
@@ -321,6 +331,10 @@ export const store = {
     }
     if (patch.visibility) {
       repo.visibility = patch.visibility;
+    }
+    // FR-81：description 传空串表示清空。
+    if (patch.description !== undefined) {
+      repo.description = patch.description;
     }
     if (patch.remoteUrl !== undefined) {
       repo.remoteUrl = patch.remoteUrl;
@@ -469,7 +483,13 @@ export const store = {
     if (!repo) {
       return null;
     }
-    return { format: repo.format, type: repo.type, snippets: buildUsage(repo, baseURL) };
+    // FR-81：usage 带出描述，供匿名详情页页头展示。
+    return {
+      format: repo.format,
+      type: repo.type,
+      ...(repo.description ? { description: repo.description } : {}),
+      snippets: buildUsage(repo, baseURL),
+    };
   },
 
   listMigrations(page: number, pageSize: number): { items: MigrationTask[]; total: number } {

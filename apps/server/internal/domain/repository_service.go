@@ -141,8 +141,9 @@ func (s *RepositoryService) Usage(name, baseURL string) (*repository.Repository,
 
 // Create 创建仓库（默认可见性 private）。cfg 为结构化配置：
 // proxy 必填合法 remoteUrl；group 必填 members（均存在且同 format、禁止自引用）。
+// description 为仓库描述（可为空）。
 // 校验不过返回 ErrValidation；仓库名重复返回 ErrConflict。
-func (s *RepositoryService) Create(name, format, typ, visibility string, cfg repository.RepositoryConfig) (*repository.Repository, error) {
+func (s *RepositoryService) Create(name, format, typ, visibility, description string, cfg repository.RepositoryConfig) (*repository.Repository, error) {
 	if visibility == "" {
 		visibility = "private"
 	}
@@ -159,12 +160,18 @@ func (s *RepositoryService) Create(name, format, typ, visibility string, cfg rep
 		}
 		return nil, err
 	}
+	if description != "" {
+		if err := s.repos.UpdateDescription(name, description); err != nil {
+			return nil, err
+		}
+	}
 	return s.repos.GetByName(name)
 }
 
-// Update 更新仓库可见性与/或结构化配置。visibility 为空表示不改；cfg 非 nil 时
+// Update 更新仓库可见性、描述与/或结构化配置。visibility 为空表示不改；
+// description 为 nil 表示不改（指向空串表示清空）；cfg 非 nil 时
 // 按仓库当前 format/type 重新校验并覆盖写 config。仓库不存在返回 ErrNotFound。
-func (s *RepositoryService) Update(name, visibility string, cfg *repository.RepositoryConfig) (*repository.Repository, error) {
+func (s *RepositoryService) Update(name, visibility string, description *string, cfg *repository.RepositoryConfig) (*repository.Repository, error) {
 	repo, err := s.repos.GetByName(name)
 	if err != nil {
 		return nil, mapNotFound(err)
@@ -178,6 +185,11 @@ func (s *RepositoryService) Update(name, visibility string, cfg *repository.Repo
 			return nil, err
 		}
 		if err := s.repos.UpdateConfig(name, configJSON); err != nil {
+			return nil, mapNotFound(err)
+		}
+	}
+	if description != nil {
+		if err := s.repos.UpdateDescription(name, *description); err != nil {
 			return nil, mapNotFound(err)
 		}
 	}

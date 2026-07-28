@@ -121,7 +121,7 @@ func TestRunnerConflictSkip(t *testing.T) {
 	mig, assets, repos, _, _ := setup(t)
 	root := writeBundle(t)
 	// 预先写入冲突内容
-	if _, err := repos.Create("raw-data", "raw", "hosted", "private", repository.RepositoryConfig{}); err != nil {
+	if _, err := repos.Create("raw-data", "raw", "hosted", "private", "", repository.RepositoryConfig{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := assets.Put("raw-data", "hello.bin", bytes.NewReader([]byte("OLD")), ""); err != nil {
@@ -154,7 +154,7 @@ func TestRunnerConflictSkip(t *testing.T) {
 func TestRunnerConflictOverwrite(t *testing.T) {
 	mig, assets, repos, _, _ := setup(t)
 	root := writeBundle(t)
-	if _, err := repos.Create("raw-data", "raw", "hosted", "private", repository.RepositoryConfig{}); err != nil {
+	if _, err := repos.Create("raw-data", "raw", "hosted", "private", "", repository.RepositoryConfig{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := assets.Put("raw-data", "hello.bin", bytes.NewReader([]byte("OLD")), ""); err != nil {
@@ -186,7 +186,7 @@ func TestRunnerConflictOverwrite(t *testing.T) {
 func TestRunnerConflictFail(t *testing.T) {
 	mig, assets, repos, _, _ := setup(t)
 	root := writeBundle(t)
-	if _, err := repos.Create("raw-data", "raw", "hosted", "private", repository.RepositoryConfig{}); err != nil {
+	if _, err := repos.Create("raw-data", "raw", "hosted", "private", "", repository.RepositoryConfig{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := assets.Put("raw-data", "hello.bin", bytes.NewReader([]byte("OLD")), ""); err != nil {

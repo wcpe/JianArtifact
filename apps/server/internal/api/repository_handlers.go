@@ -74,6 +74,10 @@ func (h *Handlers) CreateRepository(c *gin.Context) {
 	if req.Visibility != nil {
 		visibility = string(*req.Visibility)
 	}
+	description := ""
+	if req.Description != nil {
+		description = *req.Description
+	}
 	cfg := repository.RepositoryConfig{}
 	if req.RemoteUrl != nil {
 		cfg.RemoteURL = *req.RemoteUrl
@@ -81,7 +85,7 @@ func (h *Handlers) CreateRepository(c *gin.Context) {
 	if req.Members != nil {
 		cfg.Members = *req.Members
 	}
-	repo, err := h.repos.Create(req.Name, string(req.Format), string(req.Type), visibility, cfg)
+	repo, err := h.repos.Create(req.Name, string(req.Format), string(req.Type), visibility, description, cfg)
 	if err != nil {
 		writeDomainErr(c, err)
 		return
@@ -89,7 +93,7 @@ func (h *Handlers) CreateRepository(c *gin.Context) {
 	c.JSON(http.StatusCreated, toAPIRepository(repo, nil))
 }
 
-// UpdateRepository 更新仓库可见性，仅管理员。
+// UpdateRepository 更新仓库可见性/描述/配置，仅管理员。
 func (h *Handlers) UpdateRepository(c *gin.Context, name RepoNameParam) {
 	if _, ok := requireAdmin(c); !ok {
 		return
@@ -98,7 +102,7 @@ func (h *Handlers) UpdateRepository(c *gin.Context, name RepoNameParam) {
 	if !bindJSON(c, &req) {
 		return
 	}
-	if req.Visibility == nil && req.RemoteUrl == nil && req.Members == nil {
+	if req.Visibility == nil && req.Description == nil && req.RemoteUrl == nil && req.Members == nil {
 		auth.WriteError(c, http.StatusBadRequest, "bad_request", "缺少可更新字段")
 		return
 	}
@@ -116,7 +120,7 @@ func (h *Handlers) UpdateRepository(c *gin.Context, name RepoNameParam) {
 			cfg.Members = *req.Members
 		}
 	}
-	repo, err := h.repos.Update(name, visibility, cfg)
+	repo, err := h.repos.Update(name, visibility, req.Description, cfg)
 	if err != nil {
 		writeDomainErr(c, err)
 		return
@@ -172,7 +176,13 @@ func (h *Handlers) GetRepositoryUsage(c *gin.Context, name RepoNameParam) {
 	for _, s := range snippets {
 		items = append(items, toAPIUsageSnippet(s))
 	}
-	c.JSON(http.StatusOK, UsageInfo{Format: repo.Format, Type: repo.Type, Snippets: items})
+	out := UsageInfo{Format: repo.Format, Type: repo.Type, Snippets: items}
+	// 匿名详情页经 usage 端点取仓库基本信息，描述一并带出。
+	if repo.Description != "" {
+		desc := repo.Description
+		out.Description = &desc
+	}
+	c.JSON(http.StatusOK, out)
 }
 
 // GetRepositoryAcl 读取仓库 ACL：需全局管理员或对该仓库有 admin 授权。
@@ -349,7 +359,10 @@ func (h *Handlers) ListRepositoryTree(c *gin.Context) {
 		Path        string `json:"path"`
 		Size        int64  `json:"size"`
 		Hash        string `json:"hash"`
+		Sha1        string `json:"sha1,omitempty"`
+		Md5         string `json:"md5,omitempty"`
 		ContentType string `json:"contentType,omitempty"`
+		CreatedAt   string `json:"createdAt,omitempty"`
 		UpdatedAt   string `json:"updatedAt"`
 	}
 	files := make([]fileItem, 0, len(entry.Files))
@@ -358,7 +371,10 @@ func (h *Handlers) ListRepositoryTree(c *gin.Context) {
 			Path:        f.Path,
 			Size:        f.Size,
 			Hash:        f.BlobHash,
+			Sha1:        f.Sha1,
+			Md5:         f.Md5,
 			ContentType: f.ContentType,
+			CreatedAt:   f.CreatedAt,
 			UpdatedAt:   f.UpdatedAt,
 		})
 	}

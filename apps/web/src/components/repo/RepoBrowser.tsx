@@ -4,7 +4,6 @@
 import {
   Alert,
   Anchor,
-  Badge,
   Box,
   Button,
   Card,
@@ -54,7 +53,16 @@ interface Props {
 /** 将 tree API 响应转为 AssetTreeNode[] （目录 children=undefined 表示未加载）。 */
 function treeEntryToNodes(
   dirs: string[],
-  files: { path: string; size: number; hash: string; contentType?: string; updatedAt: string }[],
+  files: {
+    path: string;
+    size: number;
+    hash: string;
+    sha1?: string;
+    md5?: string;
+    contentType?: string;
+    createdAt?: string;
+    updatedAt: string;
+  }[],
 ): AssetTreeNode[] {
   const nodes: AssetTreeNode[] = [];
   for (const d of dirs) {
@@ -71,7 +79,10 @@ function treeEntryToNodes(
         path: f.path,
         size: f.size,
         hash: f.hash,
+        sha1: f.sha1,
+        md5: f.md5,
         contentType: f.contentType ?? "application/octet-stream",
+        createdAt: f.createdAt,
         updatedAt: f.updatedAt,
       },
     });
@@ -253,26 +264,7 @@ export function RepoBrowser({
 
   return (
     <Stack gap="md" style={{ height: "100%", overflow: "hidden" }}>
-      <Group gap="xs">
-        {format && <Badge variant="light">{format}</Badge>}
-        {repoType && (
-          <Badge variant="outline" color="gray">
-            {repoType}
-          </Badge>
-        )}
-        {repoState.data?.visibility && (
-          <Badge variant="light" color={repoState.data.visibility === "public" ? "blue" : "gray"}>
-            {repoState.data.visibility === "public"
-              ? t("repositories.visibilityPublic")
-              : t("repositories.visibilityPrivate")}
-          </Badge>
-        )}
-        {publicMode && (
-          <Badge variant="light" color="teal">
-            {t("repoDetail.publicBadge")}
-          </Badge>
-        )}
-      </Group>
+      {/* FR-81：format/type/visibility 徽章由详情页页头统一渲染，此处不再重复一层。 */}
 
       {canUpload && (
         <Card withBorder padding={density.cardPadding} radius="md">

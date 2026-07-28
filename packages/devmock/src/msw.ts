@@ -53,6 +53,7 @@ interface CreateRepoBody {
   format?: Repository["format"];
   type?: Repository["type"];
   visibility?: Repository["visibility"];
+  description?: string;
   remoteUrl?: string;
   members?: string[];
 }
@@ -245,6 +246,7 @@ export const handlers = [
       format: body.format,
       type: body.type,
       visibility: body.visibility,
+      description: body.description,
       remoteUrl: body.remoteUrl,
       members: body.members,
     });
@@ -261,6 +263,7 @@ export const handlers = [
     }
     const body = (await request.json().catch(() => ({}))) as {
       visibility?: Repository["visibility"];
+      description?: string;
       remoteUrl?: string;
       members?: string[];
     };
