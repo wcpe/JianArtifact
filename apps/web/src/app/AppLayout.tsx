@@ -16,7 +16,6 @@ import {
   Text,
   TextInput,
   Tooltip,
-  UnstyledButton,
 } from "@mantine/core";
 import { useDisclosure, useLocalStorage, useMediaQuery } from "@mantine/hooks";
 import {
@@ -436,7 +435,8 @@ export function AppLayout() {
           )}
         </ScrollArea>
 
-        {/* 左下 footer：仅侧栏折叠/展开开关。
+        {/* 左下 footer：侧栏折叠/展开开关，做成与导航项同款的整行 NavLink
+         * （展开态图标+文字占满整行，收起态单图标 + Tooltip），点击目标大且视觉统一。
          * 开源协议入口已移入「管理」导航段（admin 专属），footer 不再放业务入口。 */}
         <Box
           mt="xs"
@@ -445,29 +445,20 @@ export function AppLayout() {
           style={{ borderTop: "1px solid var(--mantine-color-default-border)" }}
         >
           {expanded ? (
-            <Group justify="flex-end" wrap="nowrap">
-              <Tooltip label={t("nav.collapseNav")} position="right" withArrow>
-                <UnstyledButton
-                  aria-label={t("nav.collapseNav")}
-                  onClick={toggleNav}
-                  style={{ display: "flex" }}
-                >
-                  <IconLayoutSidebarLeftCollapse size={18} />
-                </UnstyledButton>
-              </Tooltip>
-            </Group>
+            <NavLink
+              label={t("nav.collapseNav")}
+              aria-label={t("nav.collapseNav")}
+              leftSection={<IconLayoutSidebarLeftCollapse size={18} />}
+              onClick={toggleNav}
+            />
           ) : (
-            <Stack gap="xs" align="center">
-              <Tooltip label={t("nav.expandNav")} position="right" withArrow>
-                <UnstyledButton
-                  aria-label={t("nav.expandNav")}
-                  onClick={toggleNav}
-                  style={{ display: "flex" }}
-                >
-                  <IconLayoutSidebarLeftExpand size={18} />
-                </UnstyledButton>
-              </Tooltip>
-            </Stack>
+            <Tooltip label={t("nav.expandNav")} position="right" withArrow>
+              <NavLink
+                aria-label={t("nav.expandNav")}
+                leftSection={<IconLayoutSidebarLeftExpand size={18} />}
+                onClick={toggleNav}
+              />
+            </Tooltip>
           )}
         </Box>
       </AppShell.Navbar>
