@@ -3,6 +3,7 @@ package domain
 import (
 	"errors"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 
@@ -418,22 +419,41 @@ type SearchResult struct {
 	Asset    repository.Asset
 }
 
+// SearchFacetResult 搜索结果按仓库聚合的计数（含仓库名，按命中数降序）。
+type SearchFacetResult struct {
+	RepoName string
+	Count    int
+}
+
+// SearchOutput 全局搜索的完整返回：分页条目 + 精确总数 + 仓库聚合。
+type SearchOutput struct {
+	Items  []SearchResult
+	Total  int
+	Facets []SearchFacetResult
+}
+
 // SearchAssets 跨仓库搜索制品路径，按可读权限过滤。
+// keyword 支持高级表达式（见 search_query.go）：-词 负筛选、repo:/-repo: 仓库
+// 限定、format:/-format: 格式筛选、ext:/-ext: 扩展名筛选、"引号短语"。
+// repoScope 非空时限定单仓库（浏览页内搜索，条件下推保证 total 精确）。
 // subjectID==0 表示匿名：受全局开关约束，可搜范围 = public ∪ anonymous 主体
 // 被授 read 的仓库（FR-66）；isAdmin 则搜全部。
-func (s *RepositoryService) SearchAssets(keyword string, subjectID int64, isAdmin bool, limit, offset int) ([]SearchResult, int, error) {
+// sort/order 控制结果排序，取值见 AssetRepo.SearchByFilter。
+func (s *RepositoryService) SearchAssets(keyword, repoScope string, subjectID int64, isAdmin bool, sort, order string, limit, offset int) (*SearchOutput, error) {
+	empty := &SearchOutput{Items: []SearchResult{}, Facets: []SearchFacetResult{}}
+	parsed := parseSearchQuery(keyword)
 	// 匿名请求：开关关闭直接返回空集（handler 另拦 401，此处兜底）。
 	aclSubject := subjectID
 	if subjectID == 0 && !isAdmin {
 		enabled, err := s.settings.AnonymousAccessEnabled()
 		if err != nil {
-			return nil, 0, err
+			return nil, err
 		}
 		if !enabled {
-			return nil, 0, nil
+			return empty, nil
 		}
 		if aclSubject, err = s.anonymousSubjectID(); err != nil {
-			return nil, 0, err
+			return nil, err
 		}
 	}
 	// 收集可读仓库 ID
@@ -444,7 +464,7 @@ func (s *RepositoryService) SearchAssets(keyword string, subjectID int64, isAdmi
 	} else {
 		pubRepos, err := s.repos.ListPublic()
 		if err != nil {
-			return nil, 0, err
+			return nil, err
 		}
 		for _, r := range pubRepos {
 			repoIDs = append(repoIDs, r.ID)
@@ -466,28 +486,93 @@ func (s *RepositoryService) SearchAssets(keyword string, subjectID int64, isAdmi
 			}
 		}
 		if len(repoIDs) == 0 {
-			return nil, 0, nil
+			return empty, nil
 		}
 	}
-	assets, total, err := s.assets.SearchByPath(keyword, repoIDs, limit, offset)
-	if err != nil {
-		return nil, 0, err
-	}
-	// 构建 repoID -> name 映射
-	idNameMap := make(map[int64]string)
-	results := make([]SearchResult, 0, len(assets))
-	for i := range assets {
-		rName, ok := idNameMap[assets[i].RepositoryID]
-		if !ok {
-			r, _ := s.repos.GetByID(assets[i].RepositoryID)
-			if r != nil {
-				rName = r.Name
+	// repo:/format: 表达式或单仓库限定：按仓库元数据收窄搜索范围。
+	// facetIDs 是聚合统计用的范围：忽略 repo: 正向限定（保留 -repo:/format: 等），
+	// 让用户点选某仓库钻取后，聚合条上仍能看到其他仓库的命中数以便切换。
+	facetIDs := repoIDs
+	if repoScope != "" || parsed.hasRepoMeta() {
+		allRepos, err := s.repos.List(1000, 0)
+		if err != nil {
+			return nil, err
+		}
+		allowed := make(map[int64]bool, len(repoIDs))
+		for _, id := range repoIDs {
+			allowed[id] = true
+		}
+		narrow := func(withPositiveRepos bool) []int64 {
+			var out []int64
+			for _, r := range allRepos {
+				if !isAdmin && !allowed[r.ID] {
+					continue
+				}
+				if repoScope != "" && r.Name != repoScope {
+					continue
+				}
+				if withPositiveRepos && len(parsed.repos) > 0 && !slices.Contains(parsed.repos, r.Name) {
+					continue
+				}
+				if slices.Contains(parsed.notRepos, r.Name) {
+					continue
+				}
+				if len(parsed.formats) > 0 && !slices.Contains(parsed.formats, r.Format) {
+					continue
+				}
+				if slices.Contains(parsed.notFormats, r.Format) {
+					continue
+				}
+				out = append(out, r.ID)
 			}
-			idNameMap[assets[i].RepositoryID] = rName
+			return out
 		}
-		results = append(results, SearchResult{RepoName: rName, Asset: assets[i]})
+		repoIDs = narrow(true)
+		facetIDs = narrow(false)
+		if len(facetIDs) == 0 {
+			return empty, nil
+		}
 	}
-	return results, total, nil
+	var (
+		assets []repository.Asset
+		total  int
+	)
+	if len(repoIDs) > 0 || (isAdmin && repoScope == "" && !parsed.hasRepoMeta()) {
+		var err error
+		assets, total, err = s.assets.SearchByFilter(parsed.filter, repoIDs, sort, order, limit, offset)
+		if err != nil {
+			return nil, err
+		}
+	}
+	// 同一路径条件的按仓库聚合（钻取导航用）
+	rawFacets, err := s.assets.SearchFacetsByFilter(parsed.filter, facetIDs)
+	if err != nil {
+		return nil, err
+	}
+	// 构建 repoID -> name 映射（结果条目与 facets 共用）
+	idNameMap := make(map[int64]string)
+	repoName := func(id int64) string {
+		name, ok := idNameMap[id]
+		if !ok {
+			if r, _ := s.repos.GetByID(id); r != nil {
+				name = r.Name
+			}
+			idNameMap[id] = name
+		}
+		return name
+	}
+	out := &SearchOutput{
+		Items:  make([]SearchResult, 0, len(assets)),
+		Total:  total,
+		Facets: make([]SearchFacetResult, 0, len(rawFacets)),
+	}
+	for i := range assets {
+		out.Items = append(out.Items, SearchResult{RepoName: repoName(assets[i].RepositoryID), Asset: assets[i]})
+	}
+	for _, f := range rawFacets {
+		out.Facets = append(out.Facets, SearchFacetResult{RepoName: repoName(f.RepositoryID), Count: f.Count})
+	}
+	return out, nil
 }
 
 // collectMemberIDs 收集 group 仓库的所有成员 ID（一层展开）。

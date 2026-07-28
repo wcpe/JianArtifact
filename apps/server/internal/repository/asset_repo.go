@@ -196,43 +196,111 @@ func (r *AssetRepo) CountAndSizeByRepos(repoIDs []int64) (map[int64]RepoStats, e
 	return result, nil
 }
 
-// SearchByPath 跨仓库搜索制品路径（全局 LIKE）。repoIDs 为空搜全部，keyword 必填。
-func (r *AssetRepo) SearchByPath(keyword string, repoIDs []int64, limit, offset int) ([]Asset, int, error) {
-	pattern := "%" + escapeLike(keyword) + "%"
-	var total int
-	var assets []Asset
-	if len(repoIDs) == 0 {
-		err := r.db.Get(&total, `SELECT COUNT(*) FROM asset WHERE path LIKE ? ESCAPE '\'`, pattern)
-		if err != nil {
-			return nil, 0, err
+// SearchFilter 路径搜索的结构化条件（由 domain 解析高级表达式得到）。
+// 各字段间为 AND 语义；IncludeExts 内部为 OR（任一扩展名命中即可）。
+type SearchFilter struct {
+	IncludeTerms []string // path 必须包含的子串
+	ExcludeTerms []string // path 不得包含的子串（负筛选）
+	IncludeExts  []string // 扩展名白名单（不含点，小写）
+	ExcludeExts  []string // 扩展名黑名单（不含点，小写）
+}
+
+// buildSearchWhere 把结构化搜索条件拼成 WHERE 子句与参数（SearchByFilter / SearchFacets 共用）。
+func buildSearchWhere(f SearchFilter, repoIDs []int64) (string, []any) {
+	conds := make([]string, 0, 8)
+	args := make([]any, 0, 8)
+	for _, t := range f.IncludeTerms {
+		conds = append(conds, `path LIKE ? ESCAPE '\'`)
+		args = append(args, "%"+escapeLike(t)+"%")
+	}
+	for _, t := range f.ExcludeTerms {
+		conds = append(conds, `path NOT LIKE ? ESCAPE '\'`)
+		args = append(args, "%"+escapeLike(t)+"%")
+	}
+	if len(f.IncludeExts) > 0 {
+		ors := make([]string, 0, len(f.IncludeExts))
+		for _, e := range f.IncludeExts {
+			ors = append(ors, `path LIKE ? ESCAPE '\'`)
+			args = append(args, "%."+escapeLike(e))
 		}
-		err = r.db.Select(&assets,
-			`SELECT id, repository_id, path, blob_hash, size, content_type, sha1, md5, created_at, updated_at
-				FROM asset WHERE path LIKE ? ESCAPE '\' ORDER BY path LIMIT ? OFFSET ?`,
-			pattern, limit, offset,
-		)
-		return assets, total, err
+		conds = append(conds, "("+strings.Join(ors, " OR ")+")")
 	}
-	query, args, err := sqlx.In(
-		`SELECT COUNT(*) FROM asset WHERE repository_id IN (?) AND path LIKE ? ESCAPE '\'`,
-		repoIDs, pattern,
-	)
-	if err != nil {
+	for _, e := range f.ExcludeExts {
+		conds = append(conds, `path NOT LIKE ? ESCAPE '\'`)
+		args = append(args, "%."+escapeLike(e))
+	}
+	if len(repoIDs) > 0 {
+		ph := strings.TrimSuffix(strings.Repeat("?,", len(repoIDs)), ",")
+		conds = append(conds, "repository_id IN ("+ph+")")
+		for _, id := range repoIDs {
+			args = append(args, id)
+		}
+	}
+	if len(conds) == 0 {
+		return "1=1", args
+	}
+	return strings.Join(conds, " AND "), args
+}
+
+// searchOrderBy 把排序键映射为 ORDER BY 表达式（白名单，防注入）。
+// name 用 SQLite 技巧提取路径 basename；repo 用子查询取仓库名。
+func searchOrderBy(sort, order string) string {
+	col := "path"
+	switch sort {
+	case "name":
+		col = `replace(path, rtrim(path, replace(path, '/', '')), '')`
+	case "repo":
+		col = `(SELECT name FROM repository WHERE id = asset.repository_id)`
+	case "size":
+		col = "size"
+	case "updated":
+		col = "updated_at"
+	}
+	dir := "ASC"
+	if order == "desc" {
+		dir = "DESC"
+	}
+	// path 作次级排序，保证分页稳定
+	if col == "path" {
+		return "path " + dir
+	}
+	return col + " " + dir + ", path ASC"
+}
+
+// SearchByFilter 跨仓库搜索制品路径，全部条件下推 SQL。repoIDs 为空搜全部。
+// sort 取值 name/repo/path/size/updated（其余按 path），order 取值 asc/desc。
+func (r *AssetRepo) SearchByFilter(f SearchFilter, repoIDs []int64, sort, order string, limit, offset int) ([]Asset, int, error) {
+	where, args := buildSearchWhere(f, repoIDs)
+	var total int
+	if err := r.db.Get(&total, `SELECT COUNT(*) FROM asset WHERE `+where, args...); err != nil {
 		return nil, 0, err
 	}
-	if err := r.db.Get(&total, r.db.Rebind(query), args...); err != nil {
-		return nil, 0, err
-	}
-	query2, args2, err := sqlx.In(
+	var assets []Asset
+	err := r.db.Select(&assets,
 		`SELECT id, repository_id, path, blob_hash, size, content_type, sha1, md5, created_at, updated_at
-			FROM asset WHERE repository_id IN (?) AND path LIKE ? ESCAPE '\' ORDER BY path LIMIT ? OFFSET ?`,
-		repoIDs, pattern, limit, offset,
+			FROM asset WHERE `+where+` ORDER BY `+searchOrderBy(sort, order)+` LIMIT ? OFFSET ?`,
+		append(args, limit, offset)...,
 	)
-	if err != nil {
-		return nil, 0, err
-	}
-	err = r.db.Select(&assets, r.db.Rebind(query2), args2...)
 	return assets, total, err
+}
+
+// SearchFacet 是搜索结果按仓库聚合的单条计数。
+type SearchFacet struct {
+	RepositoryID int64 `db:"repository_id"`
+	Count        int   `db:"count"`
+}
+
+// SearchFacetsByFilter 返回同一搜索条件下各仓库的命中数（按命中数降序），
+// 供前端做「按仓库聚合」的钻取导航。repoIDs 为空统计全部仓库。
+func (r *AssetRepo) SearchFacetsByFilter(f SearchFilter, repoIDs []int64) ([]SearchFacet, error) {
+	where, args := buildSearchWhere(f, repoIDs)
+	var facets []SearchFacet
+	err := r.db.Select(&facets,
+		`SELECT repository_id, COUNT(*) AS count FROM asset WHERE `+where+
+			` GROUP BY repository_id ORDER BY count DESC`,
+		args...,
+	)
+	return facets, err
 }
 
 // ListDirectoryEntries 列出指定前缀下的「当前层级」目录与文件（用于 tree endpoint 按目录懒加载）。

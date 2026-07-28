@@ -434,12 +434,16 @@ export function getRepositoryTree(name: string, prefix?: string): Promise<TreeEn
 export interface SearchResult {
   items: { repository: string; path: string; size: number; hash: string; updatedAt: string }[];
   total: number;
+  /** 按仓库聚合的命中数（钻取导航用，按命中数降序）。 */
+  facets?: { repository: string; count: number }[];
 }
 
 /** 全局跨仓库制品搜索。 */
 export function searchAssets(params: {
   q: string;
   repository?: string;
+  sort?: string;
+  order?: "asc" | "desc";
   page?: number;
   page_size?: number;
 }): Promise<SearchResult> {
@@ -447,6 +451,8 @@ export function searchAssets(params: {
     query: {
       q: params.q,
       repository: params.repository,
+      sort: params.sort,
+      order: params.order,
       page: params.page,
       page_size: params.page_size,
     },

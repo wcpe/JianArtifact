@@ -99,8 +99,8 @@ func TestAnonymousGlobalSwitch(t *testing.T) {
 		t.Error("开关关闭不应影响已认证主体")
 	}
 	// 匿名搜索兜底：开关关闭返回空集。
-	if results, total, err := svc.SearchAssets("any", 0, false, 10, 0); err != nil || total != 0 || len(results) != 0 {
-		t.Errorf("开关关闭时匿名搜索应空集，得 total=%d err=%v", total, err)
+	if out, err := svc.SearchAssets("any", "", 0, false, "", "asc", 10, 0); err != nil || out.Total != 0 || len(out.Items) != 0 {
+		t.Errorf("开关关闭时匿名搜索应空集，得 out=%+v err=%v", out, err)
 	}
 
 	if err := settings.SetAnonymousAccessEnabled(true); err != nil {

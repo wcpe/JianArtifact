@@ -408,6 +408,18 @@ func (h *Handlers) SearchAssets(c *gin.Context) {
 	limit := pageSize
 	offset := (page - 1) * pageSize
 
+	// 排序参数白名单（非法值静默回落默认 path asc）
+	sort := c.Query("sort")
+	switch sort {
+	case "name", "repo", "path", "size", "updated":
+	default:
+		sort = ""
+	}
+	order := c.Query("order")
+	if order != "desc" {
+		order = "asc"
+	}
+
 	// 解析主体（可能匿名）；匿名受全局开关约束（FR-66）
 	p, authed := auth.PrincipalFrom(c)
 	if !authed && !h.anonymousAllowed(c) {
@@ -420,10 +432,10 @@ func (h *Handlers) SearchAssets(c *gin.Context) {
 		isAdmin = p.IsAdmin()
 	}
 
-	// 仓库范围过滤
+	// 仓库范围过滤（下推到服务层，保证 total 精确）
 	repoFilter := c.Query("repository")
 	if repoFilter != "" {
-		// 单仓库内搜索：检查读权限后复用 ListAssets
+		// 单仓库内搜索：先检查读权限
 		allowed, err := h.repos.CanAccess(repoFilter, subjectID, "read")
 		if err != nil {
 			writeDomainErr(c, err)
@@ -439,7 +451,7 @@ func (h *Handlers) SearchAssets(c *gin.Context) {
 		}
 	}
 
-	results, total, err := h.repos.SearchAssets(q, subjectID, isAdmin, limit, offset)
+	out, err := h.repos.SearchAssets(q, repoFilter, subjectID, isAdmin, sort, order, limit, offset)
 	if err != nil {
 		writeDomainErr(c, err)
 		return
@@ -452,12 +464,12 @@ func (h *Handlers) SearchAssets(c *gin.Context) {
 		Hash       string `json:"hash"`
 		UpdatedAt  string `json:"updatedAt"`
 	}
-	items := make([]searchItem, 0, len(results))
-	for _, r := range results {
-		// 如果指定了 repository 过滤，只返回匹配仓库的
-		if repoFilter != "" && r.RepoName != repoFilter {
-			continue
-		}
+	type searchFacet struct {
+		Repository string `json:"repository"`
+		Count      int    `json:"count"`
+	}
+	items := make([]searchItem, 0, len(out.Items))
+	for _, r := range out.Items {
 		items = append(items, searchItem{
 			Repository: r.RepoName,
 			Path:       r.Asset.Path,
@@ -466,7 +478,11 @@ func (h *Handlers) SearchAssets(c *gin.Context) {
 			UpdatedAt:  r.Asset.UpdatedAt,
 		})
 	}
-	c.JSON(http.StatusOK, gin.H{"items": items, "total": total})
+	facets := make([]searchFacet, 0, len(out.Facets))
+	for _, f := range out.Facets {
+		facets = append(facets, searchFacet{Repository: f.RepoName, Count: f.Count})
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items, "total": out.Total, "facets": facets})
 }
 
 // parseIntQuery 尝试将字符串解析为 int。
