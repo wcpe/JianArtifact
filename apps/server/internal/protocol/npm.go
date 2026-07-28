@@ -29,40 +29,53 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
+	"github.com/wcpe/jianartifact/apps/server/internal/domain"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
 // NpmHandler 处理 npm registry 格式仓库。鉴权与制品存取复用内嵌 RawHandler 的
 // assets/repoSvc/authorize，GET/PUT 按 npm 端点形态自行解析与组装。
+// store/tokens 供 registry 级端点使用：login 验口令并签发 API Token（FR-82）。
 type NpmHandler struct {
 	*RawHandler
+	store  auth.Store
+	tokens *domain.TokenService
 }
 
 // NewNpmHandler 构造 NpmHandler。
-func NewNpmHandler(raw *RawHandler) *NpmHandler {
-	return &NpmHandler{RawHandler: raw}
+func NewNpmHandler(raw *RawHandler, store auth.Store, tokens *domain.TokenService) *NpmHandler {
+	return &NpmHandler{RawHandler: raw, store: store, tokens: tokens}
 }
 
 // RegisterNpmRoutes 在 r 上挂载 npm registry 端点（前缀 /npm，不与 /api/v1、/repository 冲突）：
 //
-//	GET|HEAD /npm/:repo/*rest   （packument 或 tarball，由 rest 是否含 /-/ 判定）
-//	PUT      /npm/:repo/*rest   （publish）
+//	GET|HEAD /npm/:repo/*rest   （packument / tarball / registry 级只读端点）
+//	PUT      /npm/:repo/*rest   （publish / login / dist-tag / unpublish 修订写）
+//	POST     /npm/:repo/*rest   （audit 兜底）
+//	DELETE   /npm/:repo/*rest   （dist-tag 删除 / unpublish 删除）
 //
+// rest 以 `-/` 开头的路径分派到 registry 级端点（见 npm_registry.go）。
 // mw 通常为 authenticator.Optional()（支持 Basic + Bearer）。
 func RegisterNpmRoutes(r gin.IRouter, h *NpmHandler, mw ...gin.HandlerFunc) {
 	grp := r.Group("/npm", mw...)
 	grp.GET("/:repo/*rest", h.Get)
 	grp.HEAD("/:repo/*rest", h.Get)
 	grp.PUT("/:repo/*rest", h.Put)
+	grp.POST("/:repo/*rest", h.Post)
+	grp.DELETE("/:repo/*rest", h.Delete)
 }
 
-// Get 处理 GET/HEAD：rest 含 `/-/` 视为 tarball，否则视为 packument。
+// Get 处理 GET/HEAD：`-/` 开头走 registry 级端点；rest 含 `/-/` 视为 tarball，否则视为 packument。
 func (h *NpmHandler) Get(c *gin.Context) {
 	repoName := c.Param("repo")
+	rest := strings.TrimPrefix(c.Param("rest"), "/")
+	if strings.HasPrefix(rest, "-/") {
+		h.registryGet(c, repoName, rest)
+		return
+	}
 	if !h.authorize(c, repoName, "read") {
 		return
 	}
-	rest := strings.TrimPrefix(c.Param("rest"), "/")
 	if pkg, file, ok := splitTarball(rest); ok {
 		h.serveTarball(c, repoName, pkg, file)
 		return
@@ -70,18 +83,66 @@ func (h *NpmHandler) Get(c *gin.Context) {
 	h.servePackument(c, repoName, rest)
 }
 
-// Put 处理 PUT：发布到 hosted 仓库（proxy/group 经 AssetService.Put 返回 409）。
+// Put 处理 PUT：`-/` 开头走 registry 级端点（login/dist-tag）；含 `/-rev/` 为
+// unpublish 修订写（替换 packument）；否则为发布到 hosted 仓库。
 func (h *NpmHandler) Put(c *gin.Context) {
 	repoName := c.Param("repo")
+	rest := strings.TrimPrefix(c.Param("rest"), "/")
+	if strings.HasPrefix(rest, "-/") {
+		h.registryPut(c, repoName, rest)
+		return
+	}
 	if !h.authorize(c, repoName, "write") {
 		return
 	}
-	pkg := strings.TrimPrefix(c.Param("rest"), "/")
-	if pkg == "" {
+	if pkg, ok := splitRev(rest); ok {
+		h.unpublishRevPut(c, repoName, pkg)
+		return
+	}
+	if rest == "" {
 		auth.WriteError(c, http.StatusBadRequest, "invalid_path", "包名不能为空")
 		return
 	}
-	h.publish(c, repoName, pkg)
+	h.publish(c, repoName, rest)
+}
+
+// Post 处理 POST：仅 registry 级端点（audit 兜底）；其余 404（含 /-/v1/login，
+// 让 npm≥9 的 web 登录流回落 legacy adduser）。
+func (h *NpmHandler) Post(c *gin.Context) {
+	repoName := c.Param("repo")
+	rest := strings.TrimPrefix(c.Param("rest"), "/")
+	if strings.HasPrefix(rest, "-/") {
+		h.registryPost(c, repoName, rest)
+		return
+	}
+	auth.WriteError(c, http.StatusNotFound, "not_found", "资源不存在")
+}
+
+// Delete 处理 DELETE：`-/` 开头为 dist-tag 删除；含 `/-rev/` 为 unpublish
+// （tarball 或整包删除）；其余 404。
+func (h *NpmHandler) Delete(c *gin.Context) {
+	repoName := c.Param("repo")
+	rest := strings.TrimPrefix(c.Param("rest"), "/")
+	if strings.HasPrefix(rest, "-/") {
+		h.registryDelete(c, repoName, rest)
+		return
+	}
+	target, ok := splitRev(rest)
+	if !ok {
+		auth.WriteError(c, http.StatusNotFound, "not_found", "资源不存在")
+		return
+	}
+	if !h.authorize(c, repoName, "write") {
+		return
+	}
+	if !h.requireHosted(c, repoName) {
+		return
+	}
+	if pkg, file, isTarball := splitTarball(target); isTarball {
+		h.unpublishTarball(c, repoName, pkg, file)
+		return
+	}
+	h.unpublishPackage(c, repoName, target)
 }
 
 // serveTarball 流式回写 tarball 字节（经 Resolve：hosted 本地 / proxy 回源 / group 有序命中）。
@@ -124,7 +185,30 @@ func (h *NpmHandler) servePackument(c *gin.Context, repoName, pkg string) {
 		auth.WriteError(c, http.StatusInternalServerError, "internal", "内部错误")
 		return
 	}
-	writePackument(c, rewritePackumentBytes(c, data, repoName, pkg))
+	var doc map[string]any
+	if json.Unmarshal(data, &doc) != nil {
+		// 解析失败原样透传，保证代理场景健壮性。
+		writePackument(c, data, "application/json")
+		return
+	}
+	rewritePackument(doc, requestBaseURL(c), repoName, pkg)
+	h.writePackumentDoc(c, doc)
+}
+
+// writePackumentDoc 按 Accept 协商序列化并回写 packument：客户端要求
+// install-v1 精简媒体类型时裁剪为 abbreviated 文档（FR-82）。
+func (h *NpmHandler) writePackumentDoc(c *gin.Context, doc map[string]any) {
+	contentType := "application/json"
+	if wantsAbbreviated(c) {
+		doc = abbreviatePackument(doc)
+		contentType = npmInstallMediaType
+	}
+	out, err := json.Marshal(doc)
+	if err != nil {
+		auth.WriteError(c, http.StatusInternalServerError, "internal", "内部错误")
+		return
+	}
+	writePackument(c, out, contentType)
 }
 
 // serveGroupPackument 合并 group 各成员 packument：versions 并集（首成员优先）、
@@ -159,12 +243,7 @@ func (h *NpmHandler) serveGroupPackument(c *gin.Context, repo *repository.Reposi
 		return
 	}
 	rewritePackument(merged, requestBaseURL(c), repo.Name, pkg)
-	out, err := json.Marshal(merged)
-	if err != nil {
-		auth.WriteError(c, http.StatusInternalServerError, "internal", "内部错误")
-		return
-	}
-	writePackument(c, out)
+	h.writePackumentDoc(c, merged)
 }
 
 // publish 解析发布体：落各 _attachments tarball，合并进已存 packument（last-writer-wins），
@@ -237,6 +316,29 @@ func splitTarball(rest string) (pkg, file string, ok bool) {
 	return rest[:idx], rest[idx+len("/-/"):], true
 }
 
+// splitRev 从 rest 解析 unpublish 修订路径：以尾部 `/-rev/` 分隔，返回其前段。
+func splitRev(rest string) (target string, ok bool) {
+	idx := strings.LastIndex(rest, "/-rev/")
+	if idx < 0 {
+		return "", false
+	}
+	return rest[:idx], true
+}
+
+// requireHosted 校验仓库为 hosted，否则写 409（与 publish 冲突语义一致）。
+func (h *NpmHandler) requireHosted(c *gin.Context, repoName string) bool {
+	repo, err := h.repoSvc.Get(repoName)
+	if err != nil {
+		writeAssetErr(c, err)
+		return false
+	}
+	if repo.Type != "hosted" {
+		auth.WriteError(c, http.StatusConflict, "conflict", "仅 hosted 仓库支持该操作")
+		return false
+	}
+	return true
+}
+
 // requestBaseURL 据请求还原对外基址（scheme://host），供 dist.tarball 重写。
 func requestBaseURL(c *gin.Context) string {
 	scheme := "http"
@@ -247,21 +349,6 @@ func requestBaseURL(c *gin.Context) string {
 		scheme = p
 	}
 	return scheme + "://" + c.Request.Host
-}
-
-// rewritePackumentBytes 解析 packument 字节、把各版本 dist.tarball 重写为本仓地址后重新序列化；
-// 解析或序列化失败则原样返回，保证代理透传的健壮性。
-func rewritePackumentBytes(c *gin.Context, data []byte, repoName, pkg string) []byte {
-	var doc map[string]any
-	if json.Unmarshal(data, &doc) != nil {
-		return data
-	}
-	rewritePackument(doc, requestBaseURL(c), repoName, pkg)
-	out, err := json.Marshal(doc)
-	if err != nil {
-		return data
-	}
-	return out
 }
 
 // rewritePackument 把 doc 内每个 version 的 dist.tarball 重写为
@@ -338,13 +425,13 @@ func subMap(m map[string]any, key string) map[string]any {
 	return nil
 }
 
-// writePackument 以 application/json 回写 packument 字节；HEAD 不写 body。
-func writePackument(c *gin.Context, data []byte) {
-	c.Header("Content-Type", "application/json")
+// writePackument 以 contentType 回写 packument 字节；HEAD 不写 body。
+func writePackument(c *gin.Context, data []byte, contentType string) {
+	c.Header("Content-Type", contentType)
 	c.Header("Content-Length", strconv.Itoa(len(data)))
 	if c.Request.Method == http.MethodHead {
 		c.Status(http.StatusOK)
 		return
 	}
-	c.Data(http.StatusOK, "application/json", data)
+	c.Data(http.StatusOK, contentType, data)
 }

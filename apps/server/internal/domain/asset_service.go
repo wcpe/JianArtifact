@@ -230,6 +230,23 @@ func (s *AssetService) groupGet(ctx context.Context, repo *repository.Repository
 	return nil, nil, ErrNotFound
 }
 
+// ListPathsByPrefix 列出仓库内以 prefix 开头的全部资产路径（npm unpublish 整包删除用）。
+func (s *AssetService) ListPathsByPrefix(repoName, prefix string) ([]string, error) {
+	repo, err := s.repos.GetByName(repoName)
+	if err != nil {
+		return nil, mapNotFound(err)
+	}
+	assets, err := s.assets.ListByRepo(repo.ID, prefix, 10000, 0)
+	if err != nil {
+		return nil, err
+	}
+	paths := make([]string, 0, len(assets))
+	for _, a := range assets {
+		paths = append(paths, a.Path)
+	}
+	return paths, nil
+}
+
 // Delete 删除制品元数据（blob 内容不即时清理）。
 // 仓库或路径不存在均返回 ErrNotFound。
 func (s *AssetService) Delete(repoName, path string) error {

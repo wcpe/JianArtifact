@@ -50,14 +50,16 @@ func newProtocolEnv(t *testing.T) *protocolEnv {
 	assetRepo := repository.NewAssetRepo(db)
 
 	jwtMgr := auth.NewJWTManager([]byte("integration-test-secret-key-32byte!!"))
-	authenticator := auth.NewAuthenticator(jwtMgr, domain.NewAuthStore(userRepo, tokenRepo, revokedRepo))
+	authStore := domain.NewAuthStore(userRepo, tokenRepo, revokedRepo)
+	authenticator := auth.NewAuthenticator(jwtMgr, authStore)
+	tokenSvc := domain.NewTokenService(tokenRepo)
 
 	repoSvc := domain.NewRepositoryService(repoRepo, aclRepo, assetRepo, domain.NewSettingService(repository.NewSettingRepo(db)), userRepo)
 	assetSvc := domain.NewAssetService(repoRepo, assetRepo, blobstore.NewStore(t.TempDir()), upstream.NewClient(5*time.Second))
 	rawHandler := protocol.NewRawHandler(assetSvc, repoSvc)
 	mavenHandler := protocol.NewMavenHandler(rawHandler)
 	dispatcher := protocol.NewDispatcher(repoSvc, rawHandler, mavenHandler)
-	npmHandler := protocol.NewNpmHandler(rawHandler)
+	npmHandler := protocol.NewNpmHandler(rawHandler, authStore, tokenSvc)
 
 	handlers := api.NewHandlers(api.Deps{
 		Version:   "test",
@@ -65,7 +67,7 @@ func newProtocolEnv(t *testing.T) *protocolEnv {
 		Migration: db.CurrentVersion,
 		Auth:      domain.NewAuthService(userRepo, revokedRepo, jwtMgr),
 		Users:     domain.NewUserService(userRepo),
-		Tokens:    domain.NewTokenService(tokenRepo),
+		Tokens:    tokenSvc,
 		Repos:     repoSvc,
 	})
 

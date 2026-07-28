@@ -8,6 +8,7 @@
 
 ### 新增
 
+- npm 标准 registry 端点补齐（FR-82，见 `docs/specs/npm-registry-endpoints.md`）：`npm login`（legacy adduser 流，验证账号口令后签发 jat_ API Token，后台可见可吊销）、`whoami`、`ping`、`dist-tag ls/add/rm`（latest 拒删）、`unpublish` 单版本与整包（write 权限即可，hosted 限定）、`deprecate`（复用 publish 合并路径）、`search`（`/-/v1/search`，group 按成员合并）、audit 兜底（空报告）与 abbreviated packument（`Accept: application/vnd.npm.install-v1+json` 白名单裁剪）。
 - 内置 anonymous ACL 主体 + 实例级「允许匿名访问」全局开关（FR-66，见 `docs/specs/0.6.0-anonymous-access.md`）：
   - 迁移 `0007`：`setting` 表 + 内置 `anonymous` 用户（不可登录/删除/改密/停用）；ACL 页可为其授 `read`（含 private 仓库）。
   - 开关默认开；关闭后一切匿名请求 401（public 仓库也不例外）；用户管理页顶部提供开关卡片（仅管理员）。
