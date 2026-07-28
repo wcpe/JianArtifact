@@ -2,16 +2,7 @@
 // 数据由 scripts/generate-licenses.mjs 构建时产出并内嵌到后端二进制，
 // 经 admin 专属端点 GET /api/v1/licenses 运行时拉取（不打进前端 bundle，
 // 避免依赖名与精确版本清单随静态资源公开暴露）。
-import {
-  Anchor,
-  Badge,
-  Card,
-  Stack,
-  Table,
-  Text,
-  TextInput,
-  Title,
-} from "@mantine/core";
+import { Anchor, Badge, Card, Stack, Table, Text, TextInput, Title } from "@mantine/core";
 import { EmptyState, PageHeader } from "@jianartifact/ui";
 import { IconSearch } from "@tabler/icons-react";
 import { useState } from "react";

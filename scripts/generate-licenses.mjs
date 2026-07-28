@@ -25,9 +25,17 @@ function run(cmd, args, cwd) {
 function collectNpm() {
   // pnpm 可能不在 PATH（如 corepack 托管），逐个候选尝试
   let raw = null;
-  for (const cmd of ["pnpm licenses list --json --prod", "corepack pnpm licenses list --json --prod"]) {
+  for (const cmd of [
+    "pnpm licenses list --json --prod",
+    "corepack pnpm licenses list --json --prod",
+  ]) {
     try {
-      raw = execSync(cmd, { cwd: repoRoot, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] });
+      raw = execSync(cmd, {
+        cwd: repoRoot,
+        encoding: "utf8",
+        maxBuffer: 64 * 1024 * 1024,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
       break;
     } catch {
       raw = null;

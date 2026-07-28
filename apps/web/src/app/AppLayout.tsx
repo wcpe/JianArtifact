@@ -185,7 +185,6 @@ export function AppLayout() {
       cancelled = true;
     };
     // navigate 引用稳定；登录 / 登出后重取以刷新版本号展示。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthenticated]);
 
   // FR-55: 未登录时加载公开仓库列表
