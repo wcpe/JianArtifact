@@ -2,20 +2,46 @@
 
 > 自托管、单二进制交付的多格式制品仓库（artifact repository），用 Go 重写，支持从 Nexus OSS 平滑迁移。
 
-## 状态
+[![CI](https://github.com/wcpe/JianArtifact/actions/workflows/ci.yml/badge.svg)](https://github.com/wcpe/JianArtifact/actions/workflows/ci.yml)
+[![Release](https://github.com/wcpe/JianArtifact/actions/workflows/release.yml/badge.svg)](https://github.com/wcpe/JianArtifact/actions/workflows/release.yml)
+![版本](https://img.shields.io/badge/version-0.6.0-blue.svg)
+![许可](https://img.shields.io/badge/license-MIT-green.svg)
+![语言](https://img.shields.io/badge/language-Go%20%2B%20React-blue.svg)
 
-开发中 · v0.1.0（工程基座与契约骨架阶段）。版本路线图见 [`docs/ROADMAP.md`](docs/ROADMAP.md)（0.1.0 → 1.0.0-rc）。
+一个二进制、开箱即用、可从 Nexus 迁移的轻量私有制品库——默认无需外部数据库 / 对象存储 / 中间件即可跑起来，同时保留向企业场景（OIDC/LDAP、S3、HA）演进的路径。
 
-## 架构一览
+## 截图（mock 模式）
 
-前后端同处一个 monorepo：Go 后端（Gin + sqlx + `modernc.org/sqlite`）承载协议端点、管理 API 与 Nexus 迁移，元数据落 SQLite、制品内容落文件系统 blob；React 管理端（Mantine 7 + i18next）构建产物经 Go `embed` 内嵌，**单二进制交付、零外部依赖**。API 以 `api/openapi.yaml` 为唯一真源，`oapi-codegen` 生成后端接口、前端生成 client、devmock 据同一契约比对防漂移。详见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
+管理端与制品浏览界面，数据由 devmock 内存态模拟（不依赖真实后端）：
 
-## 能力
+| 仓库管理 | 制品浏览 |
+| --- | --- |
+| ![仓库管理列表](docs/images/screenshot-repositories.png) | ![仓库详情与制品树](docs/images/screenshot-repo-browse.png) |
 
-- 多格式仓库：Raw / Maven / npm 起步（hosted + proxy + group），逐步扩展 Docker/Cargo/PyPI/Go/NuGet 等。
-- 从 Nexus OSS 迁移：在线 REST / 离线原生目录 / 自有离线包三来源，计划预览、幂等续传、冲突策略、迁移报告。
-- 认证授权：管理员自举、JWT 会话、API Token、用户 / 仓库 / ACL 管理。
-- 单二进制 / 单容器部署，Docker / Compose / Helm / rootless systemd 多路径。
+| 用户与匿名访问 | 匿名公开浏览 |
+| --- | --- |
+| ![用户管理与匿名开关](docs/images/screenshot-users.png) | ![匿名公开仓库列表](docs/images/screenshot-public.png) |
+
+## 特性
+
+- **多格式仓库**：Raw / Maven / npm（hosted + proxy + group），按路线图逐步扩展 Docker / Cargo / PyPI / Go / NuGet。
+- **从 Nexus OSS 平滑迁移**：在线 REST / 离线原生目录 / 自有离线包三来源，计划预览、幂等续传、冲突策略与迁移报告；drop-in URL 兼容让客户端只改 host。
+- **认证与授权**：管理员网页自举、JWT 会话、API Token（CI/CLI 鉴权）、用户 / 仓库 / ACL 管理，内置 anonymous 主体 + 实例级匿名访问开关。
+- **全局搜索**：跨仓库制品搜索 + Header 搜索栏，支持 `repo:` / `format:` / `ext:` 等高级表达式与浏览页内过滤。
+- **制品治理**：内容寻址 blob 存储 + 校验和，single-flight 并发合并，大文件全程流式。
+- **单二进制交付**：前端产物经 Go embed 内嵌，`CGO_ENABLED=0` 静态编译，零外部依赖；Docker / Compose / systemd 多路径部署。
+
+## 快速开始
+
+```bash
+make install    # 安装前端依赖（pnpm workspace）
+make dev        # 本地开发（前端 + 后端）
+make check      # 在 Docker 中运行全部质量门
+make build      # 前端构建 + 后端 embed 编译单二进制
+make release    # 产出多平台发布物（校验和 / 签名 / SBOM）
+```
+
+后端任务经 Go Task 编排（`task gen`=oapi-codegen、`task lint/test/vet/vuln`、`task build`）。部署见 [`docs/OPERATIONS.md`](docs/OPERATIONS.md)。
 
 ## 结构
 
@@ -23,7 +49,7 @@
 apps/{server,web,wiki}        后端 / 管理端 / 组件验收站
 packages/{ui,devmock,eslint-config,typescript-config}  前端共享
 api/openapi.yaml              API 契约唯一真源
-deploy/                       Dockerfile / compose / .env.example / 部署脚本 / helm
+deploy/                       Dockerfile / compose / .env.example / 部署脚本 / helm / k8s / systemd
 docs/                         PRD / ARCHITECTURE / API / ROADMAP / ADR / specs / OPERATIONS
 scripts/                      质量门与容器化开发入口
 Makefile · Taskfile.yml       前端顶层入口 / 后端任务编排
@@ -41,22 +67,9 @@ Makefile · Taskfile.yml       前端顶层入口 / 后端任务编排
 - 演进与维护：[`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md)
 - 变更史：[`CHANGELOG.md`](CHANGELOG.md)
 
-## 快速开始
-
-> 代码实现随 M1 迭代逐步落地；当前为脚手架阶段。工具链就绪后：
-
-```bash
-make install        # 安装前端依赖（pnpm）
-make dev            # 本地开发
-make check          # 在 Docker 中跑全部质量门
-make build          # 前端构建 + 后端 embed 编译单二进制
-```
-
-后端任务经 Go Task 编排（`task gen`=oapi-codegen、`task lint/test/vet/vuln`、`task build`）。部署见 [`docs/OPERATIONS.md`](docs/OPERATIONS.md)。
-
 ## 约定
 
-提交、分支、文档同步等约定见 [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) 与 `.claude/rules/`。本项目遵循 SDD（规格驱动开发）：需求先行、文档即代码、跨会话不漂移。
+提交、分支、文档同步等约定见 [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) 与 `.claude/rules/`。本项目遵循 SDD（规格驱动开发）：需求先行、文档即代码、跨会话不漂移；API 以 `api/openapi.yaml` 为唯一真源，`oapi-codegen` 生成后端接口、前端生成 client、devmock 据同一契约比对防漂移。
 
 ## 许可
 
