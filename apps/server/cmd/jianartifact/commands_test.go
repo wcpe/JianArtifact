@@ -2,8 +2,12 @@ package main
 
 import (
 	"bytes"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/gin-gonic/gin"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/config"
 )
@@ -109,5 +113,51 @@ func TestReplicationCmdNoPeer(t *testing.T) {
 	// 不设置 JIAN_SYNC_PEER_URL。
 	if err := replicationCmd([]string{"status"}); err != nil {
 		t.Errorf("未配置对端时 status 应正常提示而非报错：%v", err)
+	}
+}
+
+// TestSyncTokenMiddlewareDynamic 复制端点中间件从运行时令牌动态读取（FR-84/88）：
+// 未配置 404（对外表现为端点未注册）、错令牌 401、正确令牌放行、动态配置后立即可用。
+func TestSyncTokenMiddlewareDynamic(t *testing.T) {
+	token := "shared-sync-token"
+	current := "" // 模拟 setting repl:peer_token（web 配置前后）
+	handler := syncTokenMiddleware(func() string { return current })
+
+	do := func(auth string) int {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/cluster/sync/pull", nil)
+		if auth != "" {
+			req.Header.Set("Authorization", "Bearer "+auth)
+		}
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = req
+		handler(c)
+		return rec.Code
+	}
+
+	// 未配置令牌 → 404（端点未注册的外部语义）。
+	if code := do(""); code != http.StatusNotFound {
+		t.Errorf("未配置令牌应 404，得 %d", code)
+	}
+	// 配置令牌后（模拟 web 写入 setting）：错令牌 401，正确令牌放行。
+	current = token
+	if code := do("wrong-token"); code != http.StatusUnauthorized {
+		t.Errorf("错令牌应 401，得 %d", code)
+	}
+	if code := do(token); code != http.StatusOK {
+		t.Errorf("正确令牌应放行，得 %d", code)
+	}
+	// 动态更新令牌（web 改配置）：旧令牌 401，新令牌放行。
+	current = token + "-rotated"
+	if code := do(token); code != http.StatusUnauthorized {
+		t.Errorf("轮换后旧令牌应 401，得 %d", code)
+	}
+	if code := do(current); code != http.StatusOK {
+		t.Errorf("轮换后新令牌应放行，得 %d", code)
+	}
+	// 清空令牌（web 清空配置）→ 恢复 404。
+	current = ""
+	if code := do(""); code != http.StatusNotFound {
+		t.Errorf("清空令牌后应 404，得 %d", code)
 	}
 }

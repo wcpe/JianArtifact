@@ -149,10 +149,17 @@ func blobWritableCheck(blobDir string) httpserver.ReadinessCheck {
 	}
 }
 
-// syncTokenMiddleware 校验节点间复制端点（FR-84）请求的 Bearer 令牌与同步令牌一致。
+// syncTokenMiddleware 校验节点间复制端点（FR-84）请求的 Bearer 令牌与当前同步令牌一致。
+// 令牌从运行时配置（setting repl:peer_token，FR-88 web 可配）动态读取：
+// 未配置 → 404（对外表现为端点未注册）；不匹配 → 401。
 // 使用常量时间比较防时序侧信道；令牌不进日志。
-func syncTokenMiddleware(want string) gin.HandlerFunc {
+func syncTokenMiddleware(tokenProvider func() string) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		want := tokenProvider()
+		if want == "" {
+			c.AbortWithStatus(http.StatusNotFound)
+			return
+		}
 		got := ""
 		if h := c.GetHeader("Authorization"); strings.HasPrefix(h, "Bearer ") {
 			got = strings.TrimPrefix(h, "Bearer ")
@@ -223,12 +230,14 @@ func run() error {
 			r.PUT("/api/v1/settings/anonymous-access", authMW, apiHandlers.PutAnonymousAccessSetting)
 			// 开源协议清单（admin 专属；清单不再打进前端 bundle，见 internal/licenses）
 			r.GET("/api/v1/licenses", authMW, apiHandlers.GetLicenses)
-			// FR-84: 节点间复制协议（全程 GET 拉取，规避上传限制）。同步令牌未配置时端点不注册。
-			if cfg.SyncToken != "" {
-				sync := r.Group("/api/v1/cluster/sync", syncTokenMiddleware(cfg.SyncToken))
-				sync.GET("/pull", apiHandlers.GetClusterSyncPull)
-				sync.GET("/blob/:hash", apiHandlers.GetClusterSyncBlob)
-			}
+			// FR-84: 节点间复制协议（全程 GET 拉取，规避上传限制）。
+			// 端点始终注册；令牌从 setting 运行时读取（FR-88 web 可配），未配置时中间件返回 404（对外表现为端点未注册）。
+			sync := r.Group("/api/v1/cluster/sync", syncTokenMiddleware(func() string {
+				_, token, _ := svc.replSvc.PeerConfig()
+				return token
+			}))
+			sync.GET("/pull", apiHandlers.GetClusterSyncPull)
+			sync.GET("/blob/:hash", apiHandlers.GetClusterSyncBlob)
 			// FR-86: 集群管理端点（仅管理员，主体经 Optional 注入，handler 内校验）
 			r.GET("/api/v1/cluster", authMW, apiHandlers.GetClusterStatus)
 			r.PUT("/api/v1/cluster", authMW, apiHandlers.PutClusterStatus)

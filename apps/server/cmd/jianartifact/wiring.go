@@ -74,14 +74,17 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	settingSvc.SetChangeRecorder(replSvc)
 
 	// FR-88：对端配置从 setting 读取（web 可配置），调度器常驻。
-	// 环境变量作为初始默认：若 setting 尚无对端配置则写入（可被 web 覆盖）。
+	// 环境变量作为初始默认：若 setting 尚无对应配置则写入（可被 web 覆盖）。
+	// 令牌写入不依赖对端 URL：只配 JIAN_SYNC_TOKEN（未配对端）也应启用复制端点并让 tokenSet 如实反映。
 	settingRepo := repository.NewSettingRepo(db)
 	if cfg.SyncPeerURL != "" {
 		if _, err := settingRepo.Get(domain.SettingKeyReplPeerURL); err != nil {
 			_ = settingRepo.Set(domain.SettingKeyReplPeerURL, cfg.SyncPeerURL)
-			if cfg.SyncToken != "" {
-				_ = settingRepo.Set(domain.SettingKeyReplPeerToken, cfg.SyncToken)
-			}
+		}
+	}
+	if cfg.SyncToken != "" {
+		if _, err := settingRepo.Get(domain.SettingKeyReplPeerToken); err != nil {
+			_ = settingRepo.Set(domain.SettingKeyReplPeerToken, cfg.SyncToken)
 		}
 	}
 	client := domain.NewReplicationClient(cfg.SyncPeerURL, cfg.SyncToken, replSvc, blobs)
