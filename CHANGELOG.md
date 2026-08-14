@@ -37,6 +37,10 @@
   - 新增 `POST /api/v1/cluster/sync-now`「立即同步」：手动触发一次不受开关限制（web 按钮 / API 均可，最长等待 30s）。
   - `PUT /api/v1/cluster` 支持可选字段（`peerUrl` / `peerToken` / `enabled`，传哪个改哪个）；令牌不回显。
   - 调度器常驻（不再依赖 `JIAN_SYNC_PEER_URL` 是否设置），每轮从 setting 读对端；环境变量仅作首启初始默认写入（web 可覆盖）。
+- 历史数据全量回填（复制对齐存量数据）：
+  - 启动时 `ReplicationService.BackfillHistory` 一次性为存量实体（用户 / 令牌 / 仓库 / ACL / 制品）生成 put 变更日志，对端 `since=0` 全量拉取即可同步集群启用前写入的历史数据。
+  - 回填顺序满足 Apply 依赖（用户 → 令牌 → 仓库 → ACL → 制品）；`repl:backfill_done` 幂等标记，失败不阻塞启动、下次重启重试（对端重复应用由 LWW 兜底）。
+  - 排除内置 anonymous 用户与已吊销令牌；不回填 setting（避免覆盖对端显式配置）。
 
 ## [0.6.0] - 2026-07-29
 

@@ -12,11 +12,12 @@ import (
 
 // 复制状态持久化键（FR-86 / FR-88）。对端水位键由 ReplicationWatermarkKey 派生。
 const (
-	SettingKeyReplEnabled   = "repl:enabled"      // 自动同步开关（true/false；缺省视为 true）
-	SettingKeyReplLastSync  = "repl:last_sync_at" // 最近成功同步时间（RFC3339）
-	SettingKeyReplLastError = "repl:last_error"   // 最近同步失败摘要（成功同步后清空）
-	SettingKeyReplPeerURL   = "repl:peer_url"     // 对端基址（FR-88，web 可配置）
-	SettingKeyReplPeerToken = "repl:peer_token"   // 对端同步令牌（FR-88，web 可配置）
+	SettingKeyReplEnabled   = "repl:enabled"       // 自动同步开关（true/false；缺省视为 true）
+	SettingKeyReplLastSync  = "repl:last_sync_at"  // 最近成功同步时间（RFC3339）
+	SettingKeyReplLastError = "repl:last_error"    // 最近同步失败摘要（成功同步后清空）
+	SettingKeyReplPeerURL   = "repl:peer_url"      // 对端基址（FR-88，web 可配置）
+	SettingKeyReplPeerToken = "repl:peer_token"    // 对端同步令牌（FR-88，web 可配置）
+	SettingKeyReplBackfill  = "repl:backfill_done" // 历史数据回填完成标记（"true" 表示已完成）
 )
 
 // ReplicationWatermarkKey 返回对端水位在 setting 表中的键。

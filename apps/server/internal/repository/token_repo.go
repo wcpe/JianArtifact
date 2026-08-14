@@ -34,6 +34,15 @@ func (r *TokenRepo) ListByUser(userID int64) ([]Token, error) {
 	return ts, err
 }
 
+// ListStoredByUser 返回某用户未吊销的令牌（含摘要，供复制历史回填使用）。
+func (r *TokenRepo) ListStoredByUser(userID int64) ([]StoredToken, error) {
+	var ts []StoredToken
+	err := r.db.Select(&ts,
+		`SELECT id, user_id, name, token_digest, revoked_at FROM api_token
+		 WHERE user_id = ? AND revoked_at IS NULL ORDER BY id`, userID)
+	return ts, err
+}
+
 // Delete 吊销某用户名下的 Token（置 revoked_at）。
 func (r *TokenRepo) Delete(id, userID int64) error {
 	res, err := r.db.Exec(

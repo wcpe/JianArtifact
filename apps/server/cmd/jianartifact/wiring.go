@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/api"
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
@@ -89,6 +90,13 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	}
 	client := domain.NewReplicationClient(cfg.SyncPeerURL, cfg.SyncToken, replSvc, blobs)
 	scheduler := domain.NewReplicationScheduler(client, settingRepo, cfg.SyncInterval)
+
+	// 历史数据全量回填（全量对齐）：为迁移 0010 之前写入的存量实体生成变更日志，
+	// 使对端经 since=0 全量拉取即可对齐历史数据。幂等（repl:backfill_done），
+	// 失败不阻塞启动（对端重复应用由 LWW 幂等兜底），下次重启重试。
+	if err := replSvc.BackfillHistory(); err != nil {
+		log.Printf("复制历史回填失败（下次重启重试）：%v", err)
+	}
 
 	offlineIndexRepo := repository.NewOfflineIndexRepo(db)
 	offlineScanner := offindex.New(offlineIndexRepo)

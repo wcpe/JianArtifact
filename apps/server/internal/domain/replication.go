@@ -37,8 +37,13 @@ const (
 	keyPrefixUser    = "user:"
 	keyPrefixToken   = "token:"
 	keyPrefixSetting = "setting:"
-
 	settingKeyNodeID = "node_id"
+)
+
+// 历史数据回填（全量对齐）的分页大小。
+const (
+	backfillPageSize      = 100 // 用户 / 仓库分页大小
+	backfillAssetPageSize = 500 // 制品每仓库分页大小
 )
 
 // ChangeRecorder 是写路径记录变更日志的接口（FR-83）。
@@ -228,6 +233,192 @@ func (s *ReplicationService) Record(entityType, entityKey, op string, data any) 
 	_, err = s.repl.Append(s.NodeID(), op, entityType, entityKey, string(raw),
 		time.Now().UTC().Format(time.RFC3339Nano))
 	return err
+}
+
+// BackfillHistory 为存量数据生成复制变更日志（历史数据全量对齐，FR-88）。
+//
+// 集群启用前（迁移 0010 之前）写入的历史实体没有 repl_change 日志，增量复制不会
+// 同步到对端；本方法在启动时一次性遍历各实体当前状态生成 put 日志，对端经
+// since=0 全量拉取即可对齐。回填顺序满足 Apply 依赖：用户 → 令牌 → 仓库 → ACL → 制品。
+//
+// 幂等：成功后写 setting 键 repl:backfill_done=true，重复调用直接跳过；
+// 失败不写标记，下次启动重试（对端重复应用由 LWW 幂等兜底）。
+//
+// 边界：排除内置 anonymous 用户与已吊销令牌；不回填 setting（可同步键两端缺省一致，
+// 回填反而有覆盖对端显式配置的风险，该键增量同步已覆盖后续变更）。
+func (s *ReplicationService) BackfillHistory() error {
+	if v, err := s.settings.Get(SettingKeyReplBackfill); err == nil && v == "true" {
+		return nil
+	}
+	ts := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := s.backfillUsers(ts); err != nil {
+		return err
+	}
+	if err := s.backfillTokens(ts); err != nil {
+		return err
+	}
+	if err := s.backfillRepos(ts); err != nil {
+		return err
+	}
+	if err := s.backfillAcls(ts); err != nil {
+		return err
+	}
+	if err := s.backfillAssets(ts); err != nil {
+		return err
+	}
+	return s.settings.Set(SettingKeyReplBackfill, "true")
+}
+
+// appendBackfill 追加一条历史回填日志（与写路径同款 data 结构，op=put）。
+func (s *ReplicationService) appendBackfill(entityType, entityKey, ts string, data any) error {
+	raw, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+	_, err = s.repl.Append(s.NodeID(), OpPut, entityType, entityKey, string(raw), ts)
+	return err
+}
+
+// backfillUsers 回填普通用户（排除内置 anonymous：两端自举固有，不走写路径 Record）。
+func (s *ReplicationService) backfillUsers(ts string) error {
+	for offset := 0; ; offset += backfillPageSize {
+		users, err := s.users.List(backfillPageSize, offset)
+		if err != nil {
+			return err
+		}
+		for i := range users {
+			u := &users[i]
+			if u.Username == "anonymous" {
+				continue
+			}
+			if err := s.appendBackfill(EntityUser, UserKey(u.Username), ts, UserChangeData{
+				Username: u.Username, Role: u.Role, Status: u.Status,
+				PasswordHash: u.PasswordHash, CreatedAt: u.CreatedAt,
+			}); err != nil {
+				return err
+			}
+		}
+		if len(users) < backfillPageSize {
+			return nil
+		}
+	}
+}
+
+// backfillTokens 回填各用户未吊销令牌（摘要 sha256，明文不出现）。
+func (s *ReplicationService) backfillTokens(ts string) error {
+	for offset := 0; ; offset += backfillPageSize {
+		users, err := s.users.List(backfillPageSize, offset)
+		if err != nil {
+			return err
+		}
+		for i := range users {
+			u := &users[i]
+			if u.Username == "anonymous" {
+				continue
+			}
+			tokens, err := s.tokens.ListStoredByUser(u.ID)
+			if err != nil {
+				return err
+			}
+			for _, t := range tokens {
+				if err := s.appendBackfill(EntityToken, TokenKey(t.Digest), ts, TokenChangeData{
+					Hash: t.Digest, Username: u.Username, Name: t.Name,
+				}); err != nil {
+					return err
+				}
+			}
+		}
+		if len(users) < backfillPageSize {
+			return nil
+		}
+	}
+}
+
+// backfillRepos 回填全部仓库。
+func (s *ReplicationService) backfillRepos(ts string) error {
+	for offset := 0; ; offset += backfillPageSize {
+		repos, err := s.repos.List(backfillPageSize, offset)
+		if err != nil {
+			return err
+		}
+		for i := range repos {
+			r := &repos[i]
+			if err := s.appendBackfill(EntityRepository, RepoKey(r.Name), ts, RepoChangeData{
+				Name: r.Name, Format: r.Format, Type: r.Type,
+				Visibility: r.Visibility, Description: r.Description, Config: r.Config,
+			}); err != nil {
+				return err
+			}
+		}
+		if len(repos) < backfillPageSize {
+			return nil
+		}
+	}
+}
+
+// backfillAcls 回填各仓库 ACL 整仓快照（以 username 编址，主体不存在跳过）。
+func (s *ReplicationService) backfillAcls(ts string) error {
+	for offset := 0; ; offset += backfillPageSize {
+		repos, err := s.repos.List(backfillPageSize, offset)
+		if err != nil {
+			return err
+		}
+		for i := range repos {
+			r := &repos[i]
+			entries, err := s.acls.ListByRepo(r.ID)
+			if err != nil {
+				return err
+			}
+			data := AclChangeData{RepoName: r.Name, Entries: make([]AclEntryData, 0, len(entries))}
+			for _, e := range entries {
+				u, err := s.users.GetByID(e.SubjectID)
+				if err != nil {
+					continue // 主体不存在（如已删除用户），跳过该条
+				}
+				data.Entries = append(data.Entries, AclEntryData{Username: u.Username, Action: e.Action})
+			}
+			if err := s.appendBackfill(EntityAcl, AclKey(r.Name), ts, data); err != nil {
+				return err
+			}
+		}
+		if len(repos) < backfillPageSize {
+			return nil
+		}
+	}
+}
+
+// backfillAssets 回填各仓库全部制品（blob 由对端按缺失补拉，见 FR-84）。
+func (s *ReplicationService) backfillAssets(ts string) error {
+	for offset := 0; ; offset += backfillPageSize {
+		repos, err := s.repos.List(backfillPageSize, offset)
+		if err != nil {
+			return err
+		}
+		for i := range repos {
+			r := &repos[i]
+			for ao := 0; ; ao += backfillAssetPageSize {
+				assets, err := s.assets.ListByRepo(r.ID, "", backfillAssetPageSize, ao)
+				if err != nil {
+					return err
+				}
+				for j := range assets {
+					a := &assets[j]
+					if err := s.appendBackfill(EntityAsset, AssetKey(r.Name, a.Path), ts, AssetChangeData{
+						Path: a.Path, BlobHash: a.BlobHash, Size: a.Size,
+						ContentType: a.ContentType, Sha1: a.Sha1, Md5: a.Md5,
+					}); err != nil {
+						return err
+					}
+				}
+				if len(assets) < backfillAssetPageSize {
+					break
+				}
+			}
+		}
+		if len(repos) < backfillPageSize {
+			return nil
+		}
+	}
 }
 
 // NodeID 返回本节点唯一标识：优先环境变量 JIAN_NODE_ID；未设则读取 / 生成

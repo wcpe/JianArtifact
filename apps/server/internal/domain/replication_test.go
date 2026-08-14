@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -280,4 +281,147 @@ func TestReplicationRecordAllWritePaths(t *testing.T) {
 		t.Errorf("变更日志应含 put 与 delete 操作，得 %v", ops)
 	}
 	_ = r
+}
+
+// seedHistoryData 构造历史回填所需的存量数据：普通用户 alice（内置 anonymous 由迁移创建）、
+// 一枚未吊销与一枚已吊销令牌、raw 仓库、ACL 与制品。
+func seedHistoryData(t *testing.T, userRepo *repository.UserRepo, tokenRepo *repository.TokenRepo, repoRepo *repository.RepoRepo, aclRepo *repository.AclRepo, assetRepo *repository.AssetRepo) {
+	t.Helper()
+	aliceID, err := userRepo.Create("alice", "argon2-hash-alice", "admin")
+	if err != nil {
+		t.Fatalf("建用户 alice：%v", err)
+	}
+	// 未吊销令牌。
+	if _, err := tokenRepo.Create(aliceID, "active-token", "digest-active"); err != nil {
+		t.Fatalf("建令牌：%v", err)
+	}
+	// 已吊销令牌。
+	revokedID, err := tokenRepo.Create(aliceID, "revoked-token", "digest-revoked")
+	if err != nil {
+		t.Fatalf("建待吊销令牌：%v", err)
+	}
+	if err := tokenRepo.Delete(revokedID, aliceID); err != nil {
+		t.Fatalf("吊销令牌：%v", err)
+	}
+	repoID, err := repoRepo.Create("raw", "raw", "hosted", "private", `{"remoteUrl":""}`)
+	if err != nil {
+		t.Fatalf("建仓库：%v", err)
+	}
+	if err := aclRepo.Replace(repoID, []repository.Acl{{SubjectID: aliceID, Action: "read"}}); err != nil {
+		t.Fatalf("写 ACL：%v", err)
+	}
+	if err := assetRepo.Upsert(repoID, "a/b.txt", "blob-hash-1", 10, "text/plain", "sha1-1", "md5-1"); err != nil {
+		t.Fatalf("写制品：%v", err)
+	}
+}
+
+// TestBackfillHistory 历史回填生成 put 日志，顺序为用户 → 令牌 → 仓库 → ACL → 制品。
+func TestBackfillHistory(t *testing.T) {
+	svc, db, assetRepo, repoRepo, aclRepo, userRepo, tokenRepo := newTestReplSvc(t)
+	repl := repository.NewReplChangeRepo(db)
+	seedHistoryData(t, userRepo, tokenRepo, repoRepo, aclRepo, assetRepo)
+
+	if err := svc.BackfillHistory(); err != nil {
+		t.Fatalf("BackfillHistory：%v", err)
+	}
+
+	// 完成标记。
+	v, err := repository.NewSettingRepo(db).Get(domain.SettingKeyReplBackfill)
+	if err != nil || v != "true" {
+		t.Errorf("回填后应写完成标记 repl:backfill_done=true，得 %q err=%v", v, err)
+	}
+
+	changes, err := repl.ListSince(0, 0)
+	if err != nil {
+		t.Fatalf("ListSince：%v", err)
+	}
+
+	// 实体类型首次出现顺序 = 用户 → 令牌 → 仓库 → ACL → 制品（满足 Apply 依赖）。
+	var order []string
+	seen := map[string]bool{}
+	for _, c := range changes {
+		if !seen[c.EntityType] {
+			seen[c.EntityType] = true
+			order = append(order, c.EntityType)
+		}
+		if c.Op != domain.OpPut {
+			t.Errorf("回填日志应为 put，得 %s（%s:%s）", c.Op, c.EntityType, c.EntityKey)
+		}
+		if !json.Valid([]byte(c.Data)) {
+			t.Errorf("回填 data 非法 JSON：%s", c.Data)
+		}
+	}
+	wantOrder := []string{domain.EntityUser, domain.EntityToken, domain.EntityRepository, domain.EntityAcl, domain.EntityAsset}
+	if !reflect.DeepEqual(order, wantOrder) {
+		t.Errorf("回填顺序应 %v，得 %v", wantOrder, order)
+	}
+
+	// 各实体日志存在（按自然键）。
+	for _, key := range []string{
+		domain.UserKey("alice"),
+		domain.TokenKey("digest-active"),
+		domain.RepoKey("raw"),
+		domain.AclKey("raw"),
+		domain.AssetKey("raw", "a/b.txt"),
+	} {
+		if !hasChangeKey(t, changes, key) {
+			t.Errorf("回填缺实体日志：%s", key)
+		}
+	}
+}
+
+// TestBackfillHistoryIdempotent 重复回填不新增日志（完成标记生效）。
+func TestBackfillHistoryIdempotent(t *testing.T) {
+	svc, db, assetRepo, repoRepo, aclRepo, userRepo, tokenRepo := newTestReplSvc(t)
+	repl := repository.NewReplChangeRepo(db)
+	seedHistoryData(t, userRepo, tokenRepo, repoRepo, aclRepo, assetRepo)
+
+	if err := svc.BackfillHistory(); err != nil {
+		t.Fatalf("首次回填：%v", err)
+	}
+	first, err := repl.LatestSeq()
+	if err != nil {
+		t.Fatalf("LatestSeq：%v", err)
+	}
+	if err := svc.BackfillHistory(); err != nil {
+		t.Fatalf("重复回填：%v", err)
+	}
+	second, _ := repl.LatestSeq()
+	if second != first {
+		t.Errorf("重复回填不应新增日志：seq %d → %d", first, second)
+	}
+}
+
+// TestBackfillHistoryExcludes 回填排除内置 anonymous 用户与已吊销令牌。
+func TestBackfillHistoryExcludes(t *testing.T) {
+	svc, db, assetRepo, repoRepo, aclRepo, userRepo, tokenRepo := newTestReplSvc(t)
+	repl := repository.NewReplChangeRepo(db)
+	seedHistoryData(t, userRepo, tokenRepo, repoRepo, aclRepo, assetRepo)
+
+	if err := svc.BackfillHistory(); err != nil {
+		t.Fatalf("BackfillHistory：%v", err)
+	}
+	changes, err := repl.ListSince(0, 0)
+	if err != nil {
+		t.Fatalf("ListSince：%v", err)
+	}
+	for _, c := range changes {
+		if c.EntityType == domain.EntityUser && strings.TrimPrefix(c.EntityKey, "user:") == "anonymous" {
+			t.Errorf("回填不应含内置 anonymous 用户：%s", c.EntityKey)
+		}
+		if c.EntityType == domain.EntityToken && strings.Contains(c.EntityKey, "digest-revoked") {
+			t.Errorf("回填不应含已吊销令牌：%s", c.EntityKey)
+		}
+	}
+}
+
+// hasChangeKey 判断变更列表中是否存在指定实体键。
+func hasChangeKey(t *testing.T, changes []repository.Change, key string) bool {
+	t.Helper()
+	for _, c := range changes {
+		if c.EntityKey == key {
+			return true
+		}
+	}
+	return false
 }
