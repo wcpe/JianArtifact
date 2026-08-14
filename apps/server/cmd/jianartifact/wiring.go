@@ -27,6 +27,7 @@ type appServices struct {
 	migrationSvc *domain.MigrationService
 	settingSvc   *domain.SettingService
 	replSvc      *domain.ReplicationService
+	scheduler    *domain.ReplicationScheduler // FR-85：配置了对端 URL 时非 nil
 	store        auth.Store
 	jwt          *auth.JWTManager
 }
@@ -69,6 +70,13 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	tokenSvc.SetChangeRecorder(replSvc)
 	settingSvc.SetChangeRecorder(replSvc)
 
+	// FR-85：同步调度。配置了对端 URL 即启用后台复制调度（首启自动全量初始化）。
+	var scheduler *domain.ReplicationScheduler
+	if cfg.SyncPeerURL != "" {
+		client := domain.NewReplicationClient(cfg.SyncPeerURL, cfg.SyncToken, replSvc, blobs)
+		scheduler = domain.NewReplicationScheduler(client, repository.NewSettingRepo(db), cfg.SyncPeerURL, cfg.SyncInterval)
+	}
+
 	offlineIndexRepo := repository.NewOfflineIndexRepo(db)
 	offlineScanner := offindex.New(offlineIndexRepo)
 
@@ -98,6 +106,7 @@ func openServices(cfg *config.Config) (*appServices, error) {
 		migrationSvc: migrationSvc,
 		settingSvc:   settingSvc,
 		replSvc:      replSvc,
+		scheduler:    scheduler,
 		store:        domain.NewAuthStore(userRepo, tokenRepo, revokedRepo),
 		jwt:          jwtMgr,
 	}, nil

@@ -20,10 +20,13 @@ const (
 	EnvJWTSecret       = "JIAN_JWT_SECRET"
 	EnvUpstreamTimeout = "JIAN_UPSTREAM_TIMEOUT" // proxy 回源整体超时，单位秒
 	EnvSyncToken       = "JIAN_SYNC_TOKEN"       // 节点间复制专用令牌（FR-84）；未设置则复制端点禁用
+	EnvSyncPeerURL     = "JIAN_SYNC_PEER_URL"    // 复制对端基址（FR-85）；设置即启用同步调度
+	EnvSyncInterval    = "JIAN_SYNC_INTERVAL"    // 同步轮询间隔（FR-85），单位秒
 
 	defaultDataDir         = "./data"
 	defaultHTTPAddr        = ":8080"
 	defaultUpstreamTimeout = 30 * time.Second
+	defaultSyncInterval    = 5 * time.Second // 复制轮询间隔默认 5s（近实时）
 
 	dbFileName     = "jianartifact.db"
 	blobDirName    = "blobs"
@@ -39,6 +42,8 @@ type Config struct {
 	JWTSecret       []byte        // JWT HS256 签名密钥（不入库、不打印）
 	UpstreamTimeout time.Duration // proxy 回源整体超时
 	SyncToken       string        // 节点间复制专用令牌（FR-84）；空则复制端点禁用
+	SyncPeerURL     string        // 复制对端基址（FR-85）；空则启用同步调度
+	SyncInterval    time.Duration // 复制轮询间隔（FR-85）
 }
 
 // Load 从环境变量解析配置并确保 data / blob 目录存在。
@@ -70,7 +75,22 @@ func Load() (*Config, error) {
 		JWTSecret:       secret,
 		UpstreamTimeout: upstreamTimeout(),
 		SyncToken:       os.Getenv(EnvSyncToken),
+		SyncPeerURL:     os.Getenv(EnvSyncPeerURL),
+		SyncInterval:    syncInterval(),
 	}, nil
+}
+
+// syncInterval 解析 JIAN_SYNC_INTERVAL（秒）；缺省或非法（<=0）时取默认值。
+func syncInterval() time.Duration {
+	v := os.Getenv(EnvSyncInterval)
+	if v == "" {
+		return defaultSyncInterval
+	}
+	secs, err := strconv.Atoi(v)
+	if err != nil || secs <= 0 {
+		return defaultSyncInterval
+	}
+	return time.Duration(secs) * time.Second
 }
 
 // loadOrCreateSecret 解析 JWT 签名密钥：环境变量 > 本地持久化文件 > 新生成并落盘。

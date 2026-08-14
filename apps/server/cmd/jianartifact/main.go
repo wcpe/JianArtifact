@@ -233,6 +233,11 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// FR-85：启动后台复制调度（配置了对端 URL 时）。
+	if svc.scheduler != nil {
+		svc.scheduler.Start(ctx)
+	}
+
 	errCh := make(chan error, 1)
 	go func() {
 		fmt.Printf("JianArtifact %s 正在监听 %s\n", version, addr)

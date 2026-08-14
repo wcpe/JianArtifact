@@ -94,6 +94,7 @@ web          go:embed 前端 dist（由构建注入）
 - **配置**：环境变量 / 配置文件注入；凭据引用名 → 环境变量注入，不入库不进日志。
 - **复制变更日志（FR-83，见 ADR-0013）**：domain 层各写路径（制品 / 仓库 / ACL / 用户 / 令牌 / 配置）在业务写成功后经 `ChangeRecorder` 接口落一条 `repl_change`（记录失败不阻断业务，靠对账兜底）；`ReplicationService.Apply` 按 `(ts, node_id)` 后写覆盖（LWW）把对端变更应用到本地业务表，删除以 tombstone 表达。复制通道全走 GET 拉取、禁止 PUT 推送（规避 Cloudflare Tunnel / CDN 上传体积限制）；传输与调度由 FR-84 / FR-85 落地。
 - **复制协议（FR-84）**：`GET /api/v1/cluster/sync/pull`（按 seq 增量拉取，`since=0` 即全量）+ `GET /api/v1/cluster/sync/blob/{hash}`（blob 流式，只传缺失）；专用同步令牌 `JIAN_SYNC_TOKEN` 鉴权（Bearer，常量时间比较，未配置则端点 404）。拉取方 `ReplicationClient.Sync` 一站式：循环 Pull → Apply → 缺失 blob 补拉（`blobstore.Exists` 命中跳过），返回推进后水位供调度器（FR-85）存本地。端点为非契约，经 `WithProtocolRoutes` 注册。
+- **复制调度（FR-85）**：`ReplicationScheduler` 后台循环按 `JIAN_SYNC_INTERVAL`（默认 5s）从对端 `Sync` 一次（拉取模型下轮询既是近实时同步、也是定期对账兜底）；本地无对端水位（`setting` 键 `repl:watermark:<peerURL>`）时自动 `since=0` 全量初始化；同步成功后持久化水位，重启续拉不重拉全量。配置 `JIAN_SYNC_PEER_URL` 即启动；两端各自配对方即双向。
 
 ## 6. 部署
 

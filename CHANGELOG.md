@@ -18,6 +18,11 @@
   - 专用同步令牌 `JIAN_SYNC_TOKEN`（Bearer 鉴权、常量时间比较）；未配置令牌时复制端点不注册（404）。
   - `ReplicationClient`（domain 层）：`Pull` / `FetchBlob` / `Sync` 一站式同步（拉变更 → Apply → 缺失 blob 补拉），返回推进后水位供调度器（FR-85）使用。
   - 全程 GET、零 PUT 推送；端点为非契约，经 `WithProtocolRoutes` 注册。
+- 同步调度（FR-85，见 `docs/specs/0.7.0-replication-scheduler.md`）：
+  - `ReplicationScheduler` 后台循环按 `JIAN_SYNC_INTERVAL`（默认 5s）从对端 Sync 一次——拉取模型下轮询既是近实时同步也是定期对账兜底。
+  - 配置 `JIAN_SYNC_PEER_URL` 即启用调度；首次（本地无对端水位）自动全量初始化（`since=0`）。
+  - 同步水位持久化于 `setting`（键 `repl:watermark:<peerURL>`），重启续拉不重拉全量。
+  - 双向：两端各自配置对方基址 + 相同 `JIAN_SYNC_TOKEN`，互相同步最终一致。
 
 ## [0.6.0] - 2026-07-29
 
