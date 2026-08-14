@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -139,6 +141,22 @@ func blobWritableCheck(blobDir string) httpserver.ReadinessCheck {
 	}
 }
 
+// syncTokenMiddleware 校验节点间复制端点（FR-84）请求的 Bearer 令牌与同步令牌一致。
+// 使用常量时间比较防时序侧信道；令牌不进日志。
+func syncTokenMiddleware(want string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		got := ""
+		if h := c.GetHeader("Authorization"); strings.HasPrefix(h, "Bearer ") {
+			got = strings.TrimPrefix(h, "Bearer ")
+		}
+		if subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
+			c.AbortWithStatus(http.StatusUnauthorized)
+			return
+		}
+		c.Next()
+	}
+}
+
 func run() error {
 	cfg, err := config.Load()
 	if err != nil {
@@ -197,6 +215,12 @@ func run() error {
 			r.PUT("/api/v1/settings/anonymous-access", authMW, apiHandlers.PutAnonymousAccessSetting)
 			// 开源协议清单（admin 专属；清单不再打进前端 bundle，见 internal/licenses）
 			r.GET("/api/v1/licenses", authMW, apiHandlers.GetLicenses)
+			// FR-84: 节点间复制协议（全程 GET 拉取，规避上传限制）。同步令牌未配置时端点不注册。
+			if cfg.SyncToken != "" {
+				sync := r.Group("/api/v1/cluster/sync", syncTokenMiddleware(cfg.SyncToken))
+				sync.GET("/pull", apiHandlers.GetClusterSyncPull)
+				sync.GET("/blob/:hash", apiHandlers.GetClusterSyncBlob)
+			}
 		}),
 	)
 	httpServer := &http.Server{

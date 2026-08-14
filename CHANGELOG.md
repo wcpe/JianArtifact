@@ -13,6 +13,11 @@
   - 全部写路径（制品 / 仓库 / ACL / 用户 / 令牌 / 配置）业务写成功后各记一条变更日志，经 `ChangeRecorder` 接口注入（记录失败不阻断业务，靠对账兜底）。
   - `ReplicationService`：`Record`（落日志）、`Apply`（按 `(ts, node_id)` last-writer-wins 后写覆盖 + 删除 tombstone）、`NodeID`（env `JIAN_NODE_ID` 优先，否则生成持久化）、`LatestSeq` / `ListSince`（seq 断点续传水位）。
   - 令牌仅同步 sha256 摘要、口令同步 argon2id 哈希（明文不出现）；复制通道全走 GET 拉取、禁止 PUT 推送（规避 Cloudflare Tunnel / CDN 上传体积限制）。
+- 节点间复制协议（FR-84，见 `docs/specs/0.7.0-replication-protocol.md`）：
+  - `GET /api/v1/cluster/sync/pull`（按 seq 增量拉取，`since=0` 即全量初始化）+ `GET /api/v1/cluster/sync/blob/{hash}`（blob 流式，只传缺失）。
+  - 专用同步令牌 `JIAN_SYNC_TOKEN`（Bearer 鉴权、常量时间比较）；未配置令牌时复制端点不注册（404）。
+  - `ReplicationClient`（domain 层）：`Pull` / `FetchBlob` / `Sync` 一站式同步（拉变更 → Apply → 缺失 blob 补拉），返回推进后水位供调度器（FR-85）使用。
+  - 全程 GET、零 PUT 推送；端点为非契约，经 `WithProtocolRoutes` 注册。
 
 ## [0.6.0] - 2026-07-29
 

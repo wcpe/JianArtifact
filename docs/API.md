@@ -70,6 +70,13 @@
 - `GET /readyz`：就绪探针（SQLite + blob 目录自检）。
 - `GET /api/v1/status`：运行时状态（版本、就绪、迁移版本、初始化标志、用户数），供 CLI `status` 与首启 web 设置页判定实例是否已初始化。
 
+### 节点间复制（0.7.0，FR-84；非 OpenAPI）
+
+> 复制通道全程 GET 拉取、禁止 PUT 推送（规避 Cloudflare Tunnel / CDN 上传体积限制，见 ADR-0013）。鉴权用专用同步令牌（`JIAN_SYNC_TOKEN`，`Authorization: Bearer`）；未配置令牌时端点不注册（404）。
+
+- `GET /api/v1/cluster/sync/pull?since=&limit=`：返回 `seq > since` 的变更（按 seq 升序，最多 limit 条）与 `latestSeq`；`since=0` 即全量初始化（重放全部日志）。
+- `GET /api/v1/cluster/sync/blob/{hash}`：按内容哈希流式返回 blob；哈希不存在 404。
+
 ### 协议端点（非 OpenAPI，按格式规范）
 
 - **Raw**：`GET/PUT/DELETE /repository/{repo}/{path}`。

@@ -31,7 +31,7 @@ func newTestReplSvc(t *testing.T) (*domain.ReplicationService, *persistence.DB, 
 	userRepo := repository.NewUserRepo(db)
 	tokenRepo := repository.NewTokenRepo(db)
 	repl := repository.NewReplChangeRepo(db)
-	svc := domain.NewReplicationService(repl, assetRepo, repoRepo, aclRepo, userRepo, tokenRepo, repository.NewSettingRepo(db))
+	svc := domain.NewReplicationService(repl, assetRepo, repoRepo, aclRepo, userRepo, tokenRepo, repository.NewSettingRepo(db), mustBlobStore(t))
 	return svc, db, assetRepo, repoRepo, aclRepo, userRepo, tokenRepo
 }
 
@@ -46,7 +46,7 @@ func TestReplicationNodeID(t *testing.T) {
 	first := svc.NodeID()
 	// 重建服务实例（同一 DB）：应读到持久化的相同 ID。
 	repl := repository.NewReplChangeRepo(db)
-	svc2 := domain.NewReplicationService(repl, repository.NewAssetRepo(db), repository.NewRepoRepo(db), repository.NewAclRepo(db), repository.NewUserRepo(db), repository.NewTokenRepo(db), repository.NewSettingRepo(db))
+	svc2 := domain.NewReplicationService(repl, repository.NewAssetRepo(db), repository.NewRepoRepo(db), repository.NewAclRepo(db), repository.NewUserRepo(db), repository.NewTokenRepo(db), repository.NewSettingRepo(db), mustBlobStore(t))
 	if second := svc2.NodeID(); second != first {
 		t.Errorf("重启后 NodeID 应一致，得 %q != %q", second, first)
 	}
@@ -54,7 +54,7 @@ func TestReplicationNodeID(t *testing.T) {
 	// 环境变量优先。
 	t.Setenv("JIAN_NODE_ID", "explicit-node")
 	repl3 := repository.NewReplChangeRepo(db)
-	svc3 := domain.NewReplicationService(repl3, repository.NewAssetRepo(db), repository.NewRepoRepo(db), repository.NewAclRepo(db), repository.NewUserRepo(db), repository.NewTokenRepo(db), repository.NewSettingRepo(db))
+	svc3 := domain.NewReplicationService(repl3, repository.NewAssetRepo(db), repository.NewRepoRepo(db), repository.NewAclRepo(db), repository.NewUserRepo(db), repository.NewTokenRepo(db), repository.NewSettingRepo(db), mustBlobStore(t))
 	if id := svc3.NodeID(); id != "explicit-node" {
 		t.Errorf("环境变量应优先，得 %q", id)
 	}
@@ -120,7 +120,7 @@ func TestReplicationApplyLWW(t *testing.T) {
 	db := newTestDB(t)
 	userRepo := repository.NewUserRepo(db)
 	repl := repository.NewReplChangeRepo(db)
-	replSvc := domain.NewReplicationService(repl, repository.NewAssetRepo(db), repository.NewRepoRepo(db), repository.NewAclRepo(db), userRepo, repository.NewTokenRepo(db), repository.NewSettingRepo(db))
+	replSvc := domain.NewReplicationService(repl, repository.NewAssetRepo(db), repository.NewRepoRepo(db), repository.NewAclRepo(db), userRepo, repository.NewTokenRepo(db), repository.NewSettingRepo(db), mustBlobStore(t))
 	userSvc := domain.NewUserService(userRepo)
 	userSvc.SetChangeRecorder(replSvc)
 
@@ -209,7 +209,7 @@ func TestReplicationRecordAllWritePaths(t *testing.T) {
 	assetRepo := repository.NewAssetRepo(db)
 	aclRepo := repository.NewAclRepo(db)
 	repl := repository.NewReplChangeRepo(db)
-	replSvc := domain.NewReplicationService(repl, assetRepo, repoRepo, aclRepo, userRepo, tokenRepo, repository.NewSettingRepo(db))
+	replSvc := domain.NewReplicationService(repl, assetRepo, repoRepo, aclRepo, userRepo, tokenRepo, repository.NewSettingRepo(db), mustBlobStore(t))
 
 	// 各写路径 service 注入 recorder。
 	userSvc := domain.NewUserService(userRepo)

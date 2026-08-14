@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/wcpe/jianartifact/apps/server/internal/blobstore"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
@@ -119,11 +121,12 @@ type ReplicationService struct {
 	users    *repository.UserRepo
 	tokens   *repository.TokenRepo
 	settings *repository.SettingRepo
+	blobs    *blobstore.Store
 
 	nodeID string // 惰性初始化缓存
 }
 
-// NewReplicationService 构造 ReplicationService。
+// NewReplicationService 构造 ReplicationService。blobs 供复制协议 blob 流式提供（FR-84）。
 func NewReplicationService(
 	repl *repository.ReplChangeRepo,
 	assets *repository.AssetRepo,
@@ -132,11 +135,19 @@ func NewReplicationService(
 	users *repository.UserRepo,
 	tokens *repository.TokenRepo,
 	settings *repository.SettingRepo,
+	blobs *blobstore.Store,
 ) *ReplicationService {
 	return &ReplicationService{
 		repl: repl, assets: assets, repos: repos,
 		acls: acls, users: users, tokens: tokens, settings: settings,
+		blobs: blobs,
 	}
+}
+
+// OpenBlob 按内容哈希打开 blob 读取流（供复制协议 GET blob 端点流式返回，FR-84）。
+// blob 不存在返回 blobstore 的 not found 错误。
+func (s *ReplicationService) OpenBlob(hash string) (io.ReadCloser, int64, error) {
+	return s.blobs.Open(hash)
 }
 
 // Record 落一条变更日志（ChangeRecorder 接口实现）。

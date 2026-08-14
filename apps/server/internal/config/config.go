@@ -19,6 +19,7 @@ const (
 	EnvHTTPAddr        = "JIAN_HTTP_ADDR"
 	EnvJWTSecret       = "JIAN_JWT_SECRET"
 	EnvUpstreamTimeout = "JIAN_UPSTREAM_TIMEOUT" // proxy 回源整体超时，单位秒
+	EnvSyncToken       = "JIAN_SYNC_TOKEN"       // 节点间复制专用令牌（FR-84）；未设置则复制端点禁用
 
 	defaultDataDir         = "./data"
 	defaultHTTPAddr        = ":8080"
@@ -37,6 +38,7 @@ type Config struct {
 	BlobDir         string        // blob 存储目录（DataDir/blobs）
 	JWTSecret       []byte        // JWT HS256 签名密钥（不入库、不打印）
 	UpstreamTimeout time.Duration // proxy 回源整体超时
+	SyncToken       string        // 节点间复制专用令牌（FR-84）；空则复制端点禁用
 }
 
 // Load 从环境变量解析配置并确保 data / blob 目录存在。
@@ -67,6 +69,7 @@ func Load() (*Config, error) {
 		BlobDir:         blobDir,
 		JWTSecret:       secret,
 		UpstreamTimeout: upstreamTimeout(),
+		SyncToken:       os.Getenv(EnvSyncToken),
 	}, nil
 }
 

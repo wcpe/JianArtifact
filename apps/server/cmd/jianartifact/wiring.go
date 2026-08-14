@@ -61,7 +61,7 @@ func openServices(cfg *config.Config) (*appServices, error) {
 
 	// FR-83：复制变更日志。ReplicationService 作为 ChangeRecorder 注入各写路径 service。
 	replSvc := domain.NewReplicationService(
-		repository.NewReplChangeRepo(db), assetRepo, repoRepo, aclRepo, userRepo, tokenRepo, repository.NewSettingRepo(db),
+		repository.NewReplChangeRepo(db), assetRepo, repoRepo, aclRepo, userRepo, tokenRepo, repository.NewSettingRepo(db), blobs,
 	)
 	assetSvc.SetChangeRecorder(replSvc)
 	repoSvc.SetChangeRecorder(replSvc)
@@ -106,14 +106,15 @@ func openServices(cfg *config.Config) (*appServices, error) {
 // handlers 用给定版本与就绪检查构造 api.Handlers。
 func (s *appServices) handlers(version string, checks []func() error) *api.Handlers {
 	return api.NewHandlers(api.Deps{
-		Version:    version,
-		Checks:     checks,
-		Migration:  s.db.CurrentVersion,
-		Auth:       s.authSvc,
-		Users:      s.userSvc,
-		Tokens:     s.tokenSvc,
-		Repos:      s.repoSvc,
-		Migrations: s.migrationSvc,
-		Settings:   s.settingSvc,
+		Version:     version,
+		Checks:      checks,
+		Migration:   s.db.CurrentVersion,
+		Auth:        s.authSvc,
+		Users:       s.userSvc,
+		Tokens:      s.tokenSvc,
+		Repos:       s.repoSvc,
+		Migrations:  s.migrationSvc,
+		Settings:    s.settingSvc,
+		Replication: s.replSvc,
 	})
 }

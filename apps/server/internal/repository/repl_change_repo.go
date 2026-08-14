@@ -9,14 +9,15 @@ import (
 
 // Change 是 repl_change 表的行模型：一条本地写操作的变更日志（FR-83）。
 // seq 本地单调递增；entity_key 为跨节点自然键（不依赖 SQLite 数值 ID）。
+// JSON tag 供复制协议传输（FR-84 pull 端点）。
 type Change struct {
-	Seq        int64  `db:"seq"`
-	NodeID     string `db:"node_id"`
-	Op         string `db:"op"` // put | delete
-	EntityType string `db:"entity_type"`
-	EntityKey  string `db:"entity_key"`
-	Data       string `db:"data"` // 变更后数据 JSON；delete 时为 tombstone
-	TS         string `db:"ts"`   // 写入节点本地时钟（RFC3339Nano）
+	Seq        int64  `db:"seq" json:"seq"`
+	NodeID     string `db:"node_id" json:"nodeId"`
+	Op         string `db:"op" json:"op"` // put | delete
+	EntityType string `db:"entity_type" json:"entityType"`
+	EntityKey  string `db:"entity_key" json:"entityKey"`
+	Data       string `db:"data" json:"data"` // 变更后数据 JSON；delete 时为 tombstone
+	TS         string `db:"ts" json:"ts"`     // 写入节点本地时钟（RFC3339Nano）
 }
 
 // ReplChangeRepo 读写 repl_change 表。
