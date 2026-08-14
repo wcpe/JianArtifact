@@ -41,6 +41,10 @@
   - 启动时 `ReplicationService.BackfillHistory` 一次性为存量实体（用户 / 令牌 / 仓库 / ACL / 制品）生成 put 变更日志，对端 `since=0` 全量拉取即可同步集群启用前写入的历史数据。
   - 回填顺序满足 Apply 依赖（用户 → 令牌 → 仓库 → ACL → 制品）；`repl:backfill_done` 幂等标记，失败不阻塞启动、下次重启重试（对端重复应用由 LWW 兜底）。
   - 排除内置 anonymous 用户与已吊销令牌；不回填 setting（避免覆盖对端显式配置）。
+- 同步历史可视化（复制记录与进度）：
+  - 迁移 `0011`：`repl_sync_log` 表——每次同步一条（时间 / 对端 / 进行中-成功-失败 / 起始-结束水位 / 变更·应用·失败条数 / 补拉 blob 数 / 变更实体构成 `entity_counts` JSON / 错误摘要），开始即写进行中记录，结束回写结果。
+  - `ReplicationClient.Sync` 返回 `SyncStats` 统计（拉取 / 应用 / 失败 / blob / 按实体类型计数）；`ReplicationScheduler.doSync` 每轮落日志。
+  - 新增 `GET /api/v1/cluster/sync-logs`（仅 admin，分页，按开始时间倒序）；web「集群」页「同步历史」卡片表格展示：时间 / 对端 / 状态徽章 / 变更构成（如「用户2 · 仓库1 · 制品5」）/ 变更·应用·失败 / Blob / 水位 / 错误详情，带分页。
 
 ## [0.6.0] - 2026-07-29
 

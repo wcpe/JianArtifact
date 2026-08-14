@@ -279,3 +279,92 @@ func TestClusterEndpoints(t *testing.T) {
 		t.Errorf("非 admin PUT 应 403，得 %d", rec.Code)
 	}
 }
+
+// TestClusterSyncLogs 同步历史端点（FR-88）：非 admin 403，admin 返回分页列表（含实体构成）。
+func TestClusterSyncLogs(t *testing.T) {
+	db, err := persistence.Open(filepath.Join(t.TempDir(), "sync-logs-handler.db"))
+	if err != nil {
+		t.Fatalf("打开数据库：%v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := db.Migrate(); err != nil {
+		t.Fatalf("迁移：%v", err)
+	}
+	syncLogs := repository.NewSyncLogRepo(db)
+	logID, err := syncLogs.Start("https://repo.wcpe.top", 0)
+	if err != nil {
+		t.Fatalf("Start：%v", err)
+	}
+	if err := syncLogs.Finish(logID, true, 3, 3, 3, 0, 1, map[string]int{"repository": 3, "user": 1}, ""); err != nil {
+		t.Fatalf("Finish：%v", err)
+	}
+
+	handlers := api.NewHandlers(api.Deps{SyncLogs: syncLogs})
+
+	gin.SetMode(gin.ReleaseMode)
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		if c.GetHeader("X-Test-Role") == "admin" {
+			c.Set("auth.principal", &auth.Principal{Role: "admin", Username: "admin", UserID: 1})
+		} else {
+			c.Set("auth.principal", &auth.Principal{Role: "user", Username: "u", UserID: 2})
+		}
+		c.Next()
+	})
+	r.GET("/api/v1/cluster/sync-logs", handlers.GetClusterSyncLogs)
+
+	// 非 admin → 403。
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/cluster/sync-logs", nil)
+	req.Header.Set("X-Test-Role", "user")
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("非 admin 应 403，得 %d", rec.Code)
+	}
+
+	// admin → 200，返回记录列表与总数。
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/cluster/sync-logs", nil)
+	req.Header.Set("X-Test-Role", "admin")
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("admin 应 200，得 %d", rec.Code)
+	}
+	var out struct {
+		Items []repository.SyncLogEntry `json:"items"`
+		Total int                       `json:"total"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("解析响应：%v", err)
+	}
+	if out.Total != 1 || len(out.Items) != 1 {
+		t.Fatalf("应 1 条记录 total=%d items=%d", out.Total, len(out.Items))
+	}
+	e := out.Items[0]
+	if e.PeerURL != "https://repo.wcpe.top" || e.Success == nil || !*e.Success {
+		t.Errorf("记录字段不符：peer=%s success=%v", e.PeerURL, e.Success)
+	}
+	if e.Changes != 3 || e.Blobs != 1 {
+		t.Errorf("统计不符：changes=%d blobs=%d", e.Changes, e.Blobs)
+	}
+	var counts map[string]int
+	if err := json.Unmarshal([]byte(e.EntityCounts), &counts); err != nil || counts["repository"] != 3 {
+		t.Errorf("实体构成不符：%v err=%v", counts, err)
+	}
+
+	// 分页参数：limit=1 只回 1 条。
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/cluster/sync-logs?limit=1", nil)
+	req.Header.Set("X-Test-Role", "admin")
+	r.ServeHTTP(rec, req)
+	var page struct {
+		Items []repository.SyncLogEntry `json:"items"`
+		Total int                       `json:"total"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+		t.Fatalf("解析分页响应：%v", err)
+	}
+	if len(page.Items) != 1 || page.Total != 1 {
+		t.Errorf("limit=1 应回 1 条且 total=1，得 items=%d total=%d", len(page.Items), page.Total)
+	}
+}

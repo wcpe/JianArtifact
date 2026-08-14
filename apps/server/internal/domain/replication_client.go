@@ -97,33 +97,48 @@ func (c *ReplicationClient) FetchBlob(hash string) (io.ReadCloser, error) {
 	return resp.Body, nil
 }
 
+// SyncStats 是一轮同步的统计（供同步历史日志可视化）。
+type SyncStats struct {
+	FromSeq  int64          // 起始水位
+	ToSeq    int64          // 结束水位（失败时为已推进水位）
+	Changes  int            // 拉取变更条数
+	Applied  int            // 成功应用条数
+	Failed   int            // 应用失败条数
+	Blobs    int            // 补拉 blob 数
+	ByEntity map[string]int // 变更实体构成（entity_type → 条数）
+}
+
 // Sync 执行一轮同步：从 since 开始循环拉取变更 → 应用到本地 → blob 缺失补拉，
-// 返回推进后的对端最新 seq（调度器存为本地水位）。
+// 返回推进后的统计（含对端最新 seq 于 ToSeq，调度器存为本地水位）。
 // 单条 Apply 失败不阻塞整批（记录日志，靠 FR-85 对账兜底）。
-func (c *ReplicationClient) Sync(since int64) (int64, error) {
-	latest := since
+func (c *ReplicationClient) Sync(since int64) (SyncStats, error) {
+	stats := SyncStats{FromSeq: since, ToSeq: since, ByEntity: map[string]int{}}
 	for {
-		changes, newSeq, err := c.Pull(latest, syncBatchLimit)
+		changes, newSeq, err := c.Pull(stats.ToSeq, syncBatchLimit)
 		if err != nil {
-			return latest, err
+			return stats, err
 		}
 		for _, ch := range changes {
-			c.applyChange(ch)
+			c.applyChange(ch, &stats)
 		}
-		latest = newSeq
+		stats.ToSeq = newSeq
 		if len(changes) < syncBatchLimit {
 			break
 		}
 	}
-	return latest, nil
+	return stats, nil
 }
 
-// applyChange 应用一条对端变更，并在 asset put 时按需补拉 blob。
-func (c *ReplicationClient) applyChange(ch repository.Change) {
+// applyChange 应用一条对端变更，并在 asset put 时按需补拉 blob；累计统计。
+func (c *ReplicationClient) applyChange(ch repository.Change, stats *SyncStats) {
+	stats.Changes++
+	stats.ByEntity[ch.EntityType]++
 	if err := c.repl.Apply(ch); err != nil {
+		stats.Failed++
 		log.Printf("复制应用变更失败 seq=%d entity=%s key=%s：%v", ch.Seq, ch.EntityType, ch.EntityKey, err)
 		return
 	}
+	stats.Applied++
 	if ch.EntityType != EntityAsset || ch.Op != OpPut {
 		return
 	}
@@ -134,11 +149,11 @@ func (c *ReplicationClient) applyChange(ch repository.Change) {
 	if c.blobs.Exists(d.BlobHash) {
 		return // blob 已有，不重复拉取
 	}
-	c.fetchAndStoreBlob(d.BlobHash)
+	c.fetchAndStoreBlob(d.BlobHash, stats)
 }
 
-// fetchAndStoreBlob 从对端拉取缺失 blob 并落盘（内容寻址，返回哈希须与期望一致）。
-func (c *ReplicationClient) fetchAndStoreBlob(wantHash string) {
+// fetchAndStoreBlob 从对端拉取缺失 blob 并落盘（内容寻址，返回哈希须与期望一致）；成功计入统计。
+func (c *ReplicationClient) fetchAndStoreBlob(wantHash string, stats *SyncStats) {
 	rc, err := c.FetchBlob(wantHash)
 	if err != nil {
 		log.Printf("复制补拉 blob 失败 hash=%s：%v", wantHash, err)
@@ -151,6 +166,7 @@ func (c *ReplicationClient) fetchAndStoreBlob(wantHash string) {
 		log.Printf("复制落盘 blob 失败 hash=%s：%v", wantHash, err)
 		return
 	}
+	stats.Blobs++
 	if gotHash != wantHash {
 		// 传输损坏会以实际内容哈希落盘（孤儿 blob，本期不清理）；记录日志暴露问题。
 		log.Printf("复制 blob 哈希不匹配 期望=%s 实得=%s", wantHash, gotHash)

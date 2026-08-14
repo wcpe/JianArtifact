@@ -43,6 +43,7 @@ type syncRequest struct {
 type ReplicationScheduler struct {
 	client    *ReplicationClient
 	settings  *repository.SettingRepo
+	logs      *repository.SyncLogRepo // 同步历史日志（FR-88 可视化）
 	interval  time.Duration
 	syncNowCh chan syncRequest
 
@@ -51,10 +52,11 @@ type ReplicationScheduler struct {
 
 // NewReplicationScheduler 构造 ReplicationScheduler。interval 为轮询间隔。
 // 对端配置从 setting 读取（FR-88），无需在构造时指定。
-func NewReplicationScheduler(client *ReplicationClient, settings *repository.SettingRepo, interval time.Duration) *ReplicationScheduler {
+func NewReplicationScheduler(client *ReplicationClient, settings *repository.SettingRepo, logs *repository.SyncLogRepo, interval time.Duration) *ReplicationScheduler {
 	return &ReplicationScheduler{
 		client:    client,
 		settings:  settings,
+		logs:      logs,
 		interval:  interval,
 		syncNowCh: make(chan syncRequest, 1),
 	}
@@ -116,26 +118,29 @@ func (s *ReplicationScheduler) syncOnceManual() {
 	s.doSync(peerURL, token)
 }
 
-// doSync 执行一轮同步：设置对端 → 从水位拉取变更 → 持久化水位与状态。
+// doSync 执行一轮同步：设置对端 → 从水位拉取变更 → 持久化水位与状态；同步历史落日志。
 func (s *ReplicationScheduler) doSync(peerURL, token string) {
 	s.syncMu.Lock()
 	defer s.syncMu.Unlock()
 
 	s.client.SetPeer(peerURL, token)
 	watermark, _ := s.readWatermark(peerURL)
-	newSeq, err := s.client.Sync(watermark)
+	logID, _ := s.logs.Start(peerURL, watermark)
+	stats, err := s.client.Sync(watermark)
 	if err != nil {
+		_ = s.logs.Finish(logID, false, stats.ToSeq, stats.Changes, stats.Applied, stats.Failed, stats.Blobs, stats.ByEntity, err.Error())
 		_ = s.settings.Set(SettingKeyReplLastError, err.Error())
 		log.Printf("复制调度：同步失败（对端 %s，水位 %d）：%v", peerURL, watermark, err)
 		return
 	}
-	if err := s.settings.Set(ReplicationWatermarkKey(peerURL), strconv.FormatInt(newSeq, 10)); err != nil {
+	_ = s.logs.Finish(logID, true, stats.ToSeq, stats.Changes, stats.Applied, stats.Failed, stats.Blobs, stats.ByEntity, "")
+	if err := s.settings.Set(ReplicationWatermarkKey(peerURL), strconv.FormatInt(stats.ToSeq, 10)); err != nil {
 		log.Printf("复制调度：水位持久化失败（对端 %s）：%v", peerURL, err)
 	}
-	_ = s.settings.Set(SettingKeyReplLastSync, time.Now().UTC().Format(time.RFC3339))
+	_ = s.settings.Set(SettingKeyReplLastSync, time.Now().UTC().Format(time.RFC3339Nano))
 	_ = s.settings.Set(SettingKeyReplLastError, "")
-	if newSeq != watermark {
-		log.Printf("复制调度：同步完成（对端 %s，水位 %d → %d）", peerURL, watermark, newSeq)
+	if stats.ToSeq != watermark {
+		log.Printf("复制调度：同步完成（对端 %s，水位 %d → %d）", peerURL, watermark, stats.ToSeq)
 	}
 }
 

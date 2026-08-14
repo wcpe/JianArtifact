@@ -29,6 +29,7 @@ type appServices struct {
 	settingSvc   *domain.SettingService
 	replSvc      *domain.ReplicationService
 	scheduler    *domain.ReplicationScheduler // FR-85：配置了对端 URL 时非 nil
+	syncLogs     *repository.SyncLogRepo      // FR-88：同步历史日志
 	peerURL      string                       // FR-86：复制对端基址（cfg.SyncPeerURL）
 	syncTokenSet bool                         // FR-86：同步令牌是否已配置（不暴露明文）
 	publicURL    string                       // FR-87：对外基础 URL（cfg.PublicURL，CDN 域名）
@@ -89,7 +90,8 @@ func openServices(cfg *config.Config) (*appServices, error) {
 		}
 	}
 	client := domain.NewReplicationClient(cfg.SyncPeerURL, cfg.SyncToken, replSvc, blobs)
-	scheduler := domain.NewReplicationScheduler(client, settingRepo, cfg.SyncInterval)
+	syncLogRepo := repository.NewSyncLogRepo(db)
+	scheduler := domain.NewReplicationScheduler(client, settingRepo, syncLogRepo, cfg.SyncInterval)
 
 	// 历史数据全量回填（全量对齐）：为迁移 0010 之前写入的存量实体生成变更日志，
 	// 使对端经 since=0 全量拉取即可对齐历史数据。幂等（repl:backfill_done），
@@ -128,6 +130,7 @@ func openServices(cfg *config.Config) (*appServices, error) {
 		settingSvc:   settingSvc,
 		replSvc:      replSvc,
 		scheduler:    scheduler,
+		syncLogs:     syncLogRepo,
 		peerURL:      cfg.SyncPeerURL,
 		syncTokenSet: cfg.SyncToken != "",
 		publicURL:    cfg.PublicURL,
@@ -150,6 +153,7 @@ func (s *appServices) handlers(version string, checks []func() error) *api.Handl
 		Settings:         s.settingSvc,
 		Replication:      s.replSvc,
 		ReplicationSched: s.scheduler,
+		SyncLogs:         s.syncLogs,
 		ClusterPeerURL:   s.peerURL,
 		ClusterTokenSet:  s.syncTokenSet,
 		PublicURL:        s.publicURL,

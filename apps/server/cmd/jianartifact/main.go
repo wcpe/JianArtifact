@@ -243,6 +243,8 @@ func run() error {
 			r.PUT("/api/v1/cluster", authMW, apiHandlers.PutClusterStatus)
 			// FR-88: 立即同步（手动触发一次，无论自动开关，仅管理员）
 			r.POST("/api/v1/cluster/sync-now", authMW, apiHandlers.PostClusterSyncNow)
+			// FR-88: 同步历史记录（分页，仅管理员）
+			r.GET("/api/v1/cluster/sync-logs", authMW, apiHandlers.GetClusterSyncLogs)
 		}),
 	)
 	httpServer := &http.Server{

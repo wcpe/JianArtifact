@@ -133,10 +133,11 @@ func TestReplicationClientSync(t *testing.T) {
 	dstReplSvc := domain.NewReplicationService(dstRepl, dstAssetRepo, dstRepoRepo, dstAclRepo, dstUserRepo, dstTokenRepo, repository.NewSettingRepo(dstDB), dstBlobs)
 
 	client := domain.NewReplicationClient(ts.URL, "sync-token", dstReplSvc, dstBlobs)
-	latest, err := client.Sync(0)
+	stats, err := client.Sync(0)
 	if err != nil {
 		t.Fatalf("Sync(0)：%v", err)
 	}
+	latest := stats.ToSeq
 	if latest == 0 {
 		t.Fatalf("Sync 后 latestSeq 应为正数，得 %d", latest)
 	}
@@ -226,7 +227,7 @@ func TestReplicationClientSyncIncremental(t *testing.T) {
 		repository.NewAclRepo(dstDB), repository.NewUserRepo(dstDB), repository.NewTokenRepo(dstDB),
 		repository.NewSettingRepo(dstDB), blobstore.NewStore(filepath.Join(t.TempDir(), "dst-blobs")))
 	client := domain.NewReplicationClient(ts.URL, "t", dstReplSvc, blobstore.NewStore(filepath.Join(t.TempDir(), "dst-blobs2")))
-	first, err := client.Sync(0)
+	firstStats, err := client.Sync(0)
 	if err != nil {
 		t.Fatalf("首次 Sync：%v", err)
 	}
@@ -239,7 +240,7 @@ func TestReplicationClientSyncIncremental(t *testing.T) {
 	}
 
 	// 增量 Sync：从 first 续拉。
-	if _, err := client.Sync(first); err != nil {
+	if _, err := client.Sync(firstStats.ToSeq); err != nil {
 		t.Fatalf("增量 Sync：%v", err)
 	}
 	var n int

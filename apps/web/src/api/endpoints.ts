@@ -443,6 +443,34 @@ export function triggerClusterSync(): Promise<ClusterStatus> {
   });
 }
 
+/** 同步历史记录条目（FR-88 可视化）：success 为 null 表示进行中。 */
+export interface SyncLogEntry {
+  id: number;
+  peerUrl: string;
+  startedAt: string;
+  finishedAt?: string;
+  success: boolean | null;
+  fromSeq: number;
+  toSeq: number;
+  changes: number;
+  applied: number;
+  failed: number;
+  blobs: number;
+  /** 变更实体构成 JSON 文本，如 {"asset":5,"repository":2,"user":1}。 */
+  entityCounts: string;
+  errorText?: string;
+}
+
+export interface SyncLogList {
+  items: SyncLogEntry[];
+  total: number;
+}
+
+/** 同步历史记录（FR-88，分页，按开始时间倒序）。 */
+export function getClusterSyncLogs(limit = 50, offset = 0): Promise<SyncLogList> {
+  return request<SyncLogList>(`/cluster/sync-logs?limit=${limit}&offset=${offset}`);
+}
+
 // ---- FR-54: Tree API ----
 
 export interface TreeEntry {

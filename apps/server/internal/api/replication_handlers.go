@@ -127,3 +127,40 @@ func (h *Handlers) PostClusterSyncNow(c *gin.Context) {
 	h.replicationSched.SyncNow(30 * time.Second)
 	c.JSON(http.StatusOK, h.replication.ClusterStatus())
 }
+
+// SyncLogListResponse 是同步历史列表响应（FR-88 可视化）。
+type SyncLogListResponse struct {
+	Items []repository.SyncLogEntry `json:"items"`
+	Total int                       `json:"total"`
+}
+
+// GetClusterSyncLogs 返回同步历史记录（按开始时间倒序分页），仅管理员。
+// 非契约端点，经 WithProtocolRoutes 注册。
+func (h *Handlers) GetClusterSyncLogs(c *gin.Context) {
+	if _, ok := requireAdmin(c); !ok {
+		return
+	}
+	if h.syncLogs == nil {
+		auth.WriteError(c, http.StatusConflict, "conflict", "同步日志存储未就绪")
+		return
+	}
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	if offset < 0 {
+		offset = 0
+	}
+	items, err := h.syncLogs.List(limit, offset)
+	if err != nil {
+		writeDomainErr(c, err)
+		return
+	}
+	total, err := h.syncLogs.Count()
+	if err != nil {
+		writeDomainErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, SyncLogListResponse{Items: items, Total: total})
+}

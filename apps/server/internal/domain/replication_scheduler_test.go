@@ -2,6 +2,7 @@ package domain_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
@@ -80,7 +81,7 @@ func TestReplicationSchedulerSync(t *testing.T) {
 	settingsRepo := repository.NewSettingRepo(dstDB)
 	_ = settingsRepo.Set(domain.SettingKeyReplPeerURL, ts.URL)
 	_ = settingsRepo.Set(domain.SettingKeyReplPeerToken, "sync-token")
-	scheduler := domain.NewReplicationScheduler(client, settingsRepo, 100*time.Millisecond)
+	scheduler := domain.NewReplicationScheduler(client, settingsRepo, repository.NewSyncLogRepo(dstDB), 100*time.Millisecond)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	scheduler.Start(ctx)
@@ -157,7 +158,7 @@ func TestReplicationSchedulerReconcile(t *testing.T) {
 	settingsRepo := repository.NewSettingRepo(dstDB)
 	_ = settingsRepo.Set(domain.SettingKeyReplPeerURL, ts.URL)
 	_ = settingsRepo.Set(domain.SettingKeyReplPeerToken, "t")
-	scheduler := domain.NewReplicationScheduler(client, settingsRepo, 100*time.Millisecond)
+	scheduler := domain.NewReplicationScheduler(client, settingsRepo, repository.NewSyncLogRepo(dstDB), 100*time.Millisecond)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	scheduler.Start(ctx)
@@ -184,7 +185,7 @@ func TestReplicationSchedulerReconcile(t *testing.T) {
 	client2 := domain.NewReplicationClient(ts2.URL, "t", dstReplSvc, blobstore.NewStore(filepath.Join(t.TempDir(), "rec-dst-blobs3")))
 	_ = settingsRepo.Set(domain.SettingKeyReplPeerURL, ts2.URL)
 	_ = settingsRepo.Set(domain.SettingKeyReplPeerToken, "t")
-	sched2 := domain.NewReplicationScheduler(client2, settingsRepo, 100*time.Millisecond)
+	sched2 := domain.NewReplicationScheduler(client2, settingsRepo, repository.NewSyncLogRepo(dstDB), 100*time.Millisecond)
 	sched2.Start(ctx)
 	defer cancel()
 
@@ -196,8 +197,8 @@ func TestReplicationSchedulerReconcile(t *testing.T) {
 
 // TestReplicationSchedulerBidirectional 双向：A 有 alice、B 有 bob，互相对端各自调度，最终两节点用户集一致。
 func TestReplicationSchedulerBidirectional(t *testing.T) {
-	// 构造一个节点：返回用户仓库、用户服务（写路径）、复制服务（供对端拉）、mock 服务端、设置仓库。
-	makeNode := func(t *testing.T, name string) (*repository.UserRepo, *domain.UserService, *domain.ReplicationService, *mockSyncServer, *repository.SettingRepo) {
+	// 构造一个节点：返回用户仓库、用户服务（写路径）、复制服务（供对端拉）、mock 服务端、设置仓库、同步日志仓库。
+	makeNode := func(t *testing.T, name string) (*repository.UserRepo, *domain.UserService, *domain.ReplicationService, *mockSyncServer, *repository.SettingRepo, *repository.SyncLogRepo) {
 		t.Helper()
 		db, err := persistence.Open(filepath.Join(t.TempDir(), "bi-"+name+".db"))
 		if err != nil {
@@ -218,11 +219,11 @@ func TestReplicationSchedulerBidirectional(t *testing.T) {
 		userSvc := domain.NewUserService(userRepo)
 		userSvc.SetChangeRecorder(replSvc)
 		srv := &mockSyncServer{repl: repl, blobs: blobs}
-		return userRepo, userSvc, replSvc, srv, repository.NewSettingRepo(db)
+		return userRepo, userSvc, replSvc, srv, repository.NewSettingRepo(db), repository.NewSyncLogRepo(db)
 	}
 
 	// 节点 A：初始有 alice。
-	userRepoA, userSvcA, replSvcA, srvA, settingsA := makeNode(t, "a")
+	userRepoA, userSvcA, replSvcA, srvA, settingsA, logsA := makeNode(t, "a")
 	if _, err := userSvcA.Create("alice", "pw12345", "user"); err != nil {
 		t.Fatalf("A 建用户：%v", err)
 	}
@@ -230,7 +231,7 @@ func TestReplicationSchedulerBidirectional(t *testing.T) {
 	t.Cleanup(tsA.Close)
 
 	// 节点 B：初始有 bob。
-	userRepoB, userSvcB, replSvcB, srvB, settingsB := makeNode(t, "b")
+	userRepoB, userSvcB, replSvcB, srvB, settingsB, logsB := makeNode(t, "b")
 	if _, err := userSvcB.Create("bob", "pw12345", "user"); err != nil {
 		t.Fatalf("B 建用户：%v", err)
 	}
@@ -241,7 +242,7 @@ func TestReplicationSchedulerBidirectional(t *testing.T) {
 	clientA := domain.NewReplicationClient(tsB.URL, "t", replSvcA, blobstore.NewStore(filepath.Join(t.TempDir(), "bi-a2-blobs")))
 	_ = settingsA.Set(domain.SettingKeyReplPeerURL, tsB.URL)
 	_ = settingsA.Set(domain.SettingKeyReplPeerToken, "t")
-	schedA := domain.NewReplicationScheduler(clientA, settingsA, 100*time.Millisecond)
+	schedA := domain.NewReplicationScheduler(clientA, settingsA, logsA, 100*time.Millisecond)
 	ctxA, cancelA := context.WithCancel(context.Background())
 	schedA.Start(ctxA)
 	defer cancelA()
@@ -249,7 +250,7 @@ func TestReplicationSchedulerBidirectional(t *testing.T) {
 	clientB := domain.NewReplicationClient(tsA.URL, "t", replSvcB, blobstore.NewStore(filepath.Join(t.TempDir(), "bi-b2-blobs")))
 	_ = settingsB.Set(domain.SettingKeyReplPeerURL, tsA.URL)
 	_ = settingsB.Set(domain.SettingKeyReplPeerToken, "t")
-	schedB := domain.NewReplicationScheduler(clientB, settingsB, 100*time.Millisecond)
+	schedB := domain.NewReplicationScheduler(clientB, settingsB, logsB, 100*time.Millisecond)
 	ctxB, cancelB := context.WithCancel(context.Background())
 	schedB.Start(ctxB)
 	defer cancelB()
@@ -262,6 +263,25 @@ func TestReplicationSchedulerBidirectional(t *testing.T) {
 		_, errB2 := userRepoB.GetByUsername("bob")
 		return errA1 == nil && errA2 == nil && errB1 == nil && errB2 == nil
 	}, "双向同步后两节点用户集应一致（各有 alice 与 bob）")
+
+	// 同步历史已记录：两端各有一条成功日志，拉取到 user 变更（ByEntity 含 user）。
+	eventually(t, 3*time.Second, func() bool {
+		itemsA, errA := logsA.List(5, 0)
+		itemsB, errB := logsB.List(5, 0)
+		if errA != nil || errB != nil || len(itemsA) == 0 || len(itemsB) == 0 {
+			return false
+		}
+		for _, it := range append(itemsA, itemsB...) {
+			if it.Success == nil || !*it.Success || it.Changes == 0 {
+				return false
+			}
+			var counts map[string]int
+			if err := json.Unmarshal([]byte(it.EntityCounts), &counts); err != nil || counts["user"] == 0 {
+				return false
+			}
+		}
+		return true
+	}, "同步历史应记录成功且 ByEntity 含 user 变更")
 }
 
 // TestReplicationSchedulerEnabledSwitch 启停开关（FR-86）：stop 后跳过同步，start 后恢复。
@@ -305,7 +325,7 @@ func TestReplicationSchedulerEnabledSwitch(t *testing.T) {
 	client := domain.NewReplicationClient(ts.URL, "t", dstReplSvc, blobstore.NewStore(filepath.Join(t.TempDir(), "es-dst-blobs2")))
 	_ = settingsRepo.Set(domain.SettingKeyReplPeerURL, ts.URL)
 	_ = settingsRepo.Set(domain.SettingKeyReplPeerToken, "t")
-	scheduler := domain.NewReplicationScheduler(client, settingsRepo, 100*time.Millisecond)
+	scheduler := domain.NewReplicationScheduler(client, settingsRepo, repository.NewSyncLogRepo(dstDB), 100*time.Millisecond)
 	ctx, cancel := context.WithCancel(context.Background())
 	scheduler.Start(ctx)
 	defer cancel()
@@ -393,7 +413,7 @@ func TestReplicationSchedulerAssetBlob(t *testing.T) {
 	settingsRepo := repository.NewSettingRepo(dstDB)
 	_ = settingsRepo.Set(domain.SettingKeyReplPeerURL, ts.URL)
 	_ = settingsRepo.Set(domain.SettingKeyReplPeerToken, "t")
-	scheduler := domain.NewReplicationScheduler(client, settingsRepo, 100*time.Millisecond)
+	scheduler := domain.NewReplicationScheduler(client, settingsRepo, repository.NewSyncLogRepo(dstDB), 100*time.Millisecond)
 	ctx, cancel := context.WithCancel(context.Background())
 	scheduler.Start(ctx)
 	defer cancel()

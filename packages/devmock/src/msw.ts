@@ -29,6 +29,55 @@ function mockClusterStatus() {
   };
 }
 
+/** 同步历史 mock（FR-88，admin 端点）：含成功 / 进行中 / 失败样本与实体构成。 */
+const mockSyncLogs = [
+  {
+    id: 3,
+    peerUrl: "https://repo1.wcpe.top",
+    startedAt: new Date(Date.now() - 30_000).toISOString(),
+    finishedAt: new Date(Date.now() - 29_000).toISOString(),
+    success: true,
+    fromSeq: 10,
+    toSeq: 15,
+    changes: 5,
+    applied: 5,
+    failed: 0,
+    blobs: 2,
+    entityCounts: JSON.stringify({ repository: 2, user: 1, asset: 2 }),
+    errorText: "",
+  },
+  {
+    id: 2,
+    peerUrl: "https://repo1.wcpe.top",
+    startedAt: new Date(Date.now() - 5_000).toISOString(),
+    finishedAt: null,
+    success: null, // 进行中
+    fromSeq: 15,
+    toSeq: 15,
+    changes: 0,
+    applied: 0,
+    failed: 0,
+    blobs: 0,
+    entityCounts: "{}",
+    errorText: "",
+  },
+  {
+    id: 1,
+    peerUrl: "https://repo1.wcpe.top",
+    startedAt: new Date(Date.now() - 120_000).toISOString(),
+    finishedAt: new Date(Date.now() - 119_000).toISOString(),
+    success: false,
+    fromSeq: 5,
+    toSeq: 5,
+    changes: 0,
+    applied: 0,
+    failed: 0,
+    blobs: 0,
+    entityCounts: "{}",
+    errorText: "拉取复制变更失败：HTTP 401",
+  },
+];
+
 /** 开源协议清单 mock（admin 端点；真实数据由后端内嵌 JSON 返回）。 */
 const MOCK_LICENSES = {
   generatedAt: "2026-01-01T00:00:00Z",
@@ -277,6 +326,19 @@ export const handlers = [
       return denied;
     }
     return HttpResponse.json(mockClusterStatus());
+  }),
+
+  // FR-88：同步历史记录（分页，admin）。
+  http.get("*/api/v1/cluster/sync-logs", ({ request }) => {
+    const denied = unauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const url = new URL(request.url);
+    const limit = Number(url.searchParams.get("limit") ?? 50);
+    const offset = Number(url.searchParams.get("offset") ?? 0);
+    const items = mockSyncLogs.slice(offset, offset + limit);
+    return HttpResponse.json({ items, total: mockSyncLogs.length });
   }),
 
   http.post("*/api/v1/repositories", async ({ request }) => {
