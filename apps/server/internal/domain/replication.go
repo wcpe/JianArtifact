@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -148,6 +149,50 @@ func NewReplicationService(
 // blob 不存在返回 blobstore 的 not found 错误。
 func (s *ReplicationService) OpenBlob(hash string) (io.ReadCloser, int64, error) {
 	return s.blobs.Open(hash)
+}
+
+// ClusterStatus 是集群同步状态（FR-86，供 CLI / web 管理面）。
+type ClusterStatus struct {
+	NodeID       string `json:"nodeId"`
+	PeerURL      string `json:"peerUrl,omitempty"`
+	TokenSet     bool   `json:"tokenSet"`
+	Enabled      bool   `json:"enabled"`
+	Watermark    int64  `json:"watermark"`
+	HasWatermark bool   `json:"hasWatermark"`
+	LastSyncAt   string `json:"lastSyncAt,omitempty"`
+	LastError    string `json:"lastError,omitempty"`
+}
+
+// ClusterStatus 读取集群同步状态（FR-86）。peerURL 为对端基址（部署配置）；
+// tokenSet 由调用方按环境变量判定（不暴露令牌明文）。
+func (s *ReplicationService) ClusterStatus(peerURL string, tokenSet bool) ClusterStatus {
+	st := ClusterStatus{
+		NodeID:   s.NodeID(),
+		PeerURL:  peerURL,
+		TokenSet: tokenSet,
+		Enabled:  true, // 缺省启用
+	}
+	if v, err := s.settings.Get(SettingKeyReplEnabled); err == nil {
+		st.Enabled = v != "false"
+	}
+	if w, err := s.settings.Get(ReplicationWatermarkKey(peerURL)); err == nil {
+		if seq, perr := strconv.ParseInt(w, 10, 64); perr == nil {
+			st.Watermark = seq
+			st.HasWatermark = true
+		}
+	}
+	st.LastSyncAt, _ = s.settings.Get(SettingKeyReplLastSync)
+	st.LastError, _ = s.settings.Get(SettingKeyReplLastError)
+	return st
+}
+
+// SetSyncEnabled 设置同步调度启停开关（FR-86）。
+func (s *ReplicationService) SetSyncEnabled(enabled bool) error {
+	v := "false"
+	if enabled {
+		v = "true"
+	}
+	return s.settings.Set(SettingKeyReplEnabled, v)
 }
 
 // Record 落一条变更日志（ChangeRecorder 接口实现）。

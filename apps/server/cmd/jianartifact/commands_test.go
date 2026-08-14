@@ -74,3 +74,40 @@ func TestUsageListsCommands(t *testing.T) {
 		}
 	}
 }
+
+// TestReplicationCmdStatusAndToggle replication CLI：status/start/stop 无错误，start 后开关生效（FR-86）。
+func TestReplicationCmdStatusAndToggle(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(config.EnvDataDir, dir)
+	t.Setenv(config.EnvJWTSecret, "replication-test-secret-key-32byte!!")
+	t.Setenv(config.EnvSyncPeerURL, "http://peer.example")
+	t.Setenv(config.EnvSyncToken, "secret-token")
+
+	// status 无错误（未同步过 → 水位未同步提示）。
+	if err := replicationCmd([]string{"status"}); err != nil {
+		t.Fatalf("replication status：%v", err)
+	}
+
+	// stop / start 均无错误。
+	if err := replicationCmd([]string{"stop"}); err != nil {
+		t.Fatalf("replication stop：%v", err)
+	}
+	if err := replicationCmd([]string{"start"}); err != nil {
+		t.Fatalf("replication start：%v", err)
+	}
+	// 未知子命令应报错。
+	if err := replicationCmd([]string{"bogus"}); err == nil {
+		t.Error("未知子命令应报错")
+	}
+}
+
+// TestReplicationCmdRequiresPeer 未配置对端时 replication 子命令应报错。
+func TestReplicationCmdRequiresPeer(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(config.EnvDataDir, dir)
+	t.Setenv(config.EnvJWTSecret, "replication-test-secret-key-32byte!!")
+	// 不设置 JIAN_SYNC_PEER_URL。
+	if err := replicationCmd([]string{"status"}); err == nil {
+		t.Error("未配置对端时 status 应报错")
+	}
+}

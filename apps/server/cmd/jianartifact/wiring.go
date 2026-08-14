@@ -28,6 +28,8 @@ type appServices struct {
 	settingSvc   *domain.SettingService
 	replSvc      *domain.ReplicationService
 	scheduler    *domain.ReplicationScheduler // FR-85：配置了对端 URL 时非 nil
+	peerURL      string                        // FR-86：复制对端基址（cfg.SyncPeerURL）
+	syncTokenSet bool                          // FR-86：同步令牌是否已配置（不暴露明文）
 	store        auth.Store
 	jwt          *auth.JWTManager
 }
@@ -107,6 +109,8 @@ func openServices(cfg *config.Config) (*appServices, error) {
 		settingSvc:   settingSvc,
 		replSvc:      replSvc,
 		scheduler:    scheduler,
+		peerURL:      cfg.SyncPeerURL,
+		syncTokenSet: cfg.SyncToken != "",
 		store:        domain.NewAuthStore(userRepo, tokenRepo, revokedRepo),
 		jwt:          jwtMgr,
 	}, nil
@@ -115,15 +119,17 @@ func openServices(cfg *config.Config) (*appServices, error) {
 // handlers 用给定版本与就绪检查构造 api.Handlers。
 func (s *appServices) handlers(version string, checks []func() error) *api.Handlers {
 	return api.NewHandlers(api.Deps{
-		Version:     version,
-		Checks:      checks,
-		Migration:   s.db.CurrentVersion,
-		Auth:        s.authSvc,
-		Users:       s.userSvc,
-		Tokens:      s.tokenSvc,
-		Repos:       s.repoSvc,
-		Migrations:  s.migrationSvc,
-		Settings:    s.settingSvc,
-		Replication: s.replSvc,
+		Version:         version,
+		Checks:          checks,
+		Migration:       s.db.CurrentVersion,
+		Auth:            s.authSvc,
+		Users:           s.userSvc,
+		Tokens:          s.tokenSvc,
+		Repos:           s.repoSvc,
+		Migrations:      s.migrationSvc,
+		Settings:        s.settingSvc,
+		Replication:     s.replSvc,
+		ClusterPeerURL:  s.peerURL,
+		ClusterTokenSet: s.syncTokenSet,
 	})
 }

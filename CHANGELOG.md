@@ -23,6 +23,11 @@
   - 配置 `JIAN_SYNC_PEER_URL` 即启用调度；首次（本地无对端水位）自动全量初始化（`since=0`）。
   - 同步水位持久化于 `setting`（键 `repl:watermark:<peerURL>`），重启续拉不重拉全量。
   - 双向：两端各自配置对方基址 + 相同 `JIAN_SYNC_TOKEN`，互相同步最终一致。
+- 集群配置与管理面（FR-86，见 `docs/specs/0.7.0-replication-console.md`）：
+  - `ReplicationScheduler` 支持持久化启停开关（`repl:enabled`，缺省 true）+ 最近同步状态（`repl:last_sync_at` / `repl:last_error`）。
+  - CLI `jianartifact replication status/start/stop`：查看对端配置 / 同步水位 / 最近同步与错误，启停调度。
+  - 管理端点 `GET/PUT /api/v1/cluster`（仅 admin）+ web「集群」页（侧边栏管理段，仅管理员）：展示节点 ID / 对端 / 令牌配置态 / 水位 / 最近同步与错误 + 启停开关。
+  - 对端 URL 与令牌保持部署期环境变量（`JIAN_SYNC_PEER_URL` / `JIAN_SYNC_TOKEN`），不在运行时编辑。
 
 ## [0.6.0] - 2026-07-29
 

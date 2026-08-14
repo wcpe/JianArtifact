@@ -19,6 +19,9 @@ const DashboardPage = lazy(() =>
 const LicensesPage = lazy(() =>
   import("../pages/LicensesPage").then((m) => ({ default: m.LicensesPage })),
 );
+const ClusterPage = lazy(() =>
+  import("../pages/ClusterPage").then((m) => ({ default: m.ClusterPage })),
+);
 const MigrationDetailPage = lazy(() =>
   import("../pages/MigrationDetailPage").then((m) => ({ default: m.MigrationDetailPage })),
 );
@@ -89,6 +92,15 @@ export function AppRoutes() {
             element={
               <RequireAuth>
                 <LicensesPage />
+              </RequireAuth>
+            }
+          />
+          {/* FR-86：集群页（入口仅管理员可见；RequireAuth 兜底） */}
+          <Route
+            path="/cluster"
+            element={
+              <RequireAuth>
+                <ClusterPage />
               </RequireAuth>
             }
           />

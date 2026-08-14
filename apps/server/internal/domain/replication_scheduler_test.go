@@ -254,6 +254,78 @@ func TestReplicationSchedulerBidirectional(t *testing.T) {
 	}, "双向同步后两节点用户集应一致（各有 alice 与 bob）")
 }
 
+// TestReplicationSchedulerEnabledSwitch 启停开关（FR-86）：stop 后跳过同步，start 后恢复。
+func TestReplicationSchedulerEnabledSwitch(t *testing.T) {
+	// 对端：初始有 alice。
+	srvDB, err := persistence.Open(filepath.Join(t.TempDir(), "es-src.db"))
+	if err != nil {
+		t.Fatalf("打开源库：%v", err)
+	}
+	t.Cleanup(func() { _ = srvDB.Close() })
+	if err := srvDB.Migrate(); err != nil {
+		t.Fatalf("源库迁移：%v", err)
+	}
+	srcUserRepo := repository.NewUserRepo(srvDB)
+	srcRepl := repository.NewReplChangeRepo(srvDB)
+	srcReplSvc := domain.NewReplicationService(srcRepl, repository.NewAssetRepo(srvDB), repository.NewRepoRepo(srvDB), repository.NewAclRepo(srvDB), srcUserRepo, repository.NewTokenRepo(srvDB), repository.NewSettingRepo(srvDB), blobstore.NewStore(filepath.Join(t.TempDir(), "es-src-blobs")))
+	srcUserSvc := domain.NewUserService(srcUserRepo)
+	srcUserSvc.SetChangeRecorder(srcReplSvc)
+	if _, err := srcUserSvc.Create("alice", "pw12345", "user"); err != nil {
+		t.Fatalf("源建用户：%v", err)
+	}
+	server := &mockSyncServer{repl: srcRepl, blobs: blobstore.NewStore(filepath.Join(t.TempDir(), "es-src-blobs2"))}
+	ts := httptest.NewServer(server.handler())
+	t.Cleanup(ts.Close)
+
+	// 拉取方 + 调度器（100ms）。
+	dstDB, err := persistence.Open(filepath.Join(t.TempDir(), "es-dst.db"))
+	if err != nil {
+		t.Fatalf("打开目标库：%v", err)
+	}
+	t.Cleanup(func() { _ = dstDB.Close() })
+	if err := dstDB.Migrate(); err != nil {
+		t.Fatalf("目标库迁移：%v", err)
+	}
+	dstUserRepo := repository.NewUserRepo(dstDB)
+	dstReplSvc := domain.NewReplicationService(
+		repository.NewReplChangeRepo(dstDB), repository.NewAssetRepo(dstDB), repository.NewRepoRepo(dstDB),
+		repository.NewAclRepo(dstDB), dstUserRepo, repository.NewTokenRepo(dstDB),
+		repository.NewSettingRepo(dstDB), blobstore.NewStore(filepath.Join(t.TempDir(), "es-dst-blobs")))
+	settingsRepo := repository.NewSettingRepo(dstDB)
+	client := domain.NewReplicationClient(ts.URL, "t", dstReplSvc, blobstore.NewStore(filepath.Join(t.TempDir(), "es-dst-blobs2")))
+	scheduler := domain.NewReplicationScheduler(client, settingsRepo, ts.URL, 100*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	scheduler.Start(ctx)
+	defer cancel()
+
+	// 首启全量拉到 alice。
+	eventually(t, 3*time.Second, func() bool {
+		_, err := dstUserRepo.GetByUsername("alice")
+		return err == nil
+	}, "首启未拉到 alice")
+
+	// 停用：设置 repl:enabled=false → 对端新增 bob → 等待若干轮，本地不应有 bob。
+	if err := settingsRepo.Set(domain.SettingKeyReplEnabled, "false"); err != nil {
+		t.Fatalf("写停用开关：%v", err)
+	}
+	if _, err := srcUserSvc.Create("bob", "pw12345", "user"); err != nil {
+		t.Fatalf("源新增用户 bob：%v", err)
+	}
+	time.Sleep(500 * time.Millisecond) // 数个轮询周期
+	if _, err := dstUserRepo.GetByUsername("bob"); err == nil {
+		t.Fatal("停用后不应同步到 bob")
+	}
+
+	// 启用：设置 repl:enabled=true → 下一轮询拉到 bob。
+	if err := settingsRepo.Set(domain.SettingKeyReplEnabled, "true"); err != nil {
+		t.Fatalf("写启用开关：%v", err)
+	}
+	eventually(t, 3*time.Second, func() bool {
+		_, err := dstUserRepo.GetByUsername("bob")
+		return err == nil
+	}, "启用后未同步到 bob")
+}
+
 // TestReplicationSchedulerAssetBlob 制品同步：asset 变更 + blob 补拉随调度完成。
 func TestReplicationSchedulerAssetBlob(t *testing.T) {
 	// 对端：仓库 + asset + blob。

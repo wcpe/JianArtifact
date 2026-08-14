@@ -11,6 +11,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/wcpe/jianartifact/apps/server/internal/api"
+	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 	"github.com/wcpe/jianartifact/apps/server/internal/blobstore"
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
 	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
@@ -181,4 +183,89 @@ func TestReplicationEndpointPullAndBlob(t *testing.T) {
 	}
 
 	_ = replSvc
+}
+
+// TestClusterEndpoints 集群管理端点（FR-86）：GET 返回状态、PUT 写 enabled、非 admin 403。
+func TestClusterEndpoints(t *testing.T) {
+	_, _, _, replSvc := newReplicationServer(t, "secret")
+	handlers := api.NewHandlers(api.Deps{
+		Version:         "test",
+		Replication:     replSvc,
+		ClusterPeerURL:  "http://peer.example",
+		ClusterTokenSet: true,
+	})
+
+	gin.SetMode(gin.ReleaseMode)
+	r := gin.New()
+	// 测试用鉴权中间件：按请求头模拟 admin / user 主体。
+	r.Use(func(c *gin.Context) {
+		if c.GetHeader("X-Test-Role") == "admin" {
+			c.Set("auth.principal", &auth.Principal{Role: "admin", Username: "admin", UserID: 1})
+		} else {
+			c.Set("auth.principal", &auth.Principal{Role: "user", Username: "u", UserID: 2})
+		}
+		c.Next()
+	})
+	r.GET("/api/v1/cluster", handlers.GetClusterStatus)
+	r.PUT("/api/v1/cluster", handlers.PutClusterStatus)
+
+	// 非 admin GET → 403。
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/cluster", nil)
+	req.Header.Set("X-Test-Role", "user")
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("非 admin GET 应 403，得 %d", rec.Code)
+	}
+
+	// admin GET → 200 且状态字段正确。
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/cluster", nil)
+	req.Header.Set("X-Test-Role", "admin")
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("admin GET 应 200，得 %d", rec.Code)
+	}
+	var st struct {
+		NodeID    string `json:"nodeId"`
+		PeerURL   string `json:"peerUrl"`
+		TokenSet  bool   `json:"tokenSet"`
+		Enabled   bool   `json:"enabled"`
+		Watermark int64  `json:"watermark"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &st); err != nil {
+		t.Fatalf("解析响应：%v", err)
+	}
+	if st.PeerURL != "http://peer.example" || !st.TokenSet || !st.Enabled || st.NodeID == "" {
+		t.Errorf("集群状态字段不符：%+v", st)
+	}
+
+	// admin PUT enabled=false → 200 且 enabled=false。
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/cluster", strings.NewReader(`{"enabled":false}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Test-Role", "admin")
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("admin PUT 应 200，得 %d", rec.Code)
+	}
+	var after struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &after); err != nil {
+		t.Fatalf("解析响应：%v", err)
+	}
+	if after.Enabled {
+		t.Error("PUT enabled=false 后状态应 enabled=false")
+	}
+
+	// 非 admin PUT → 403。
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/cluster", strings.NewReader(`{"enabled":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Test-Role", "user")
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("非 admin PUT 应 403，得 %d", rec.Code)
+	}
 }

@@ -18,45 +18,51 @@ import (
 // Deps 汇集 Handlers 的依赖。健康 / 就绪端点仅用 Version 与 Checks，
 // 管理端点用各 domain 服务；Migration 供 /status 报告迁移版本。
 type Deps struct {
-	Version     string
-	Checks      []func() error
-	Migration   func() (string, error)
-	Auth        *domain.AuthService
-	Users       *domain.UserService
-	Tokens      *domain.TokenService
-	Repos       *domain.RepositoryService
-	Migrations  *domain.MigrationService
-	Settings    *domain.SettingService
-	Replication *domain.ReplicationService // FR-84：节点间复制协议端点
+	Version          string
+	Checks           []func() error
+	Migration        func() (string, error)
+	Auth             *domain.AuthService
+	Users            *domain.UserService
+	Tokens           *domain.TokenService
+	Repos            *domain.RepositoryService
+	Migrations       *domain.MigrationService
+	Settings         *domain.SettingService
+	Replication      *domain.ReplicationService // FR-84：节点间复制协议端点
+	ClusterPeerURL   string                     // FR-86：复制对端基址（来自 JIAN_SYNC_PEER_URL）
+	ClusterTokenSet  bool                       // FR-86：同步令牌是否已配置（不暴露明文）
 }
 
 // Handlers 实现 ServerInterface 的全部端点。
 type Handlers struct {
-	version     string
-	checks      []func() error
-	migration   func() (string, error)
-	auth        *domain.AuthService
-	users       *domain.UserService
-	tokens      *domain.TokenService
-	repos       *domain.RepositoryService
-	migrations  *domain.MigrationService
-	settings    *domain.SettingService
-	replication *domain.ReplicationService
+	version          string
+	checks           []func() error
+	migration        func() (string, error)
+	auth             *domain.AuthService
+	users            *domain.UserService
+	tokens           *domain.TokenService
+	repos            *domain.RepositoryService
+	migrations       *domain.MigrationService
+	settings         *domain.SettingService
+	replication      *domain.ReplicationService
+	clusterPeerURL   string
+	clusterTokenSet  bool
 }
 
 // NewHandlers 构造 Handlers。
 func NewHandlers(d Deps) *Handlers {
 	return &Handlers{
-		version:     d.Version,
-		checks:      d.Checks,
-		migration:   d.Migration,
-		auth:        d.Auth,
-		users:       d.Users,
-		tokens:      d.Tokens,
-		repos:       d.Repos,
-		migrations:  d.Migrations,
-		settings:    d.Settings,
-		replication: d.Replication,
+		version:         d.Version,
+		checks:          d.Checks,
+		migration:       d.Migration,
+		auth:            d.Auth,
+		users:           d.Users,
+		tokens:          d.Tokens,
+		repos:           d.Repos,
+		migrations:      d.Migrations,
+		settings:        d.Settings,
+		replication:     d.Replication,
+		clusterPeerURL:  d.ClusterPeerURL,
+		clusterTokenSet: d.ClusterTokenSet,
 	}
 }
 

@@ -29,6 +29,7 @@ import {
   IconPackage,
   IconRefresh,
   IconSearch,
+  IconServer,
   IconTransfer,
   IconUsers,
 } from "@tabler/icons-react";
@@ -97,6 +98,13 @@ const NAV_SECTIONS: NavSection[] = [
         labelKey: "nav.licenses",
         path: "/licenses",
         icon: <IconLicense size={18} />,
+        adminOnly: true,
+      },
+      // FR-86: 集群页（节点间复制同步状态，仅管理员）
+      {
+        labelKey: "nav.cluster",
+        path: "/cluster",
+        icon: <IconServer size={18} />,
         adminOnly: true,
       },
     ],

@@ -16,6 +16,19 @@ function unauthorized(request: Request) {
   return header.startsWith("Bearer ") ? null : err("unauthorized", "未认证", 401);
 }
 
+/** 集群状态 mock（FR-86，admin 端点）。 */
+function mockClusterStatus(enabled: boolean) {
+  return {
+    nodeId: "mock-node",
+    peerUrl: "http://peer.example",
+    tokenSet: true,
+    enabled,
+    watermark: 12,
+    hasWatermark: true,
+    lastSyncAt: "2026-08-13T00:00:00Z",
+  };
+}
+
 /** 开源协议清单 mock（admin 端点；真实数据由后端内嵌 JSON 返回）。 */
 const MOCK_LICENSES = {
   generatedAt: "2026-01-01T00:00:00Z",
@@ -230,6 +243,25 @@ export const handlers = [
       return err("bad_request", "enabled 必填", 400);
     }
     return HttpResponse.json({ enabled: store.setAnonymousAccess(body.enabled) });
+  }),
+
+  // —— 集群状态（FR-86，admin）——
+  http.get(
+    "*/api/v1/cluster",
+    ({ request }) =>
+      unauthorized(request) ?? HttpResponse.json(mockClusterStatus(store.replicationEnabledState())),
+  ),
+
+  http.put("*/api/v1/cluster", async ({ request }) => {
+    const denied = unauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const body = (await request.json().catch(() => ({}))) as { enabled?: boolean };
+    if (typeof body.enabled !== "boolean") {
+      return err("bad_request", "enabled 必填", 400);
+    }
+    return HttpResponse.json(mockClusterStatus(store.setReplicationEnabled(body.enabled)));
   }),
 
   http.post("*/api/v1/repositories", async ({ request }) => {

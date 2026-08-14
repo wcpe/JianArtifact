@@ -58,6 +58,11 @@ func main() {
 			fmt.Fprintln(os.Stderr, "admin 子命令失败：", err)
 			os.Exit(1)
 		}
+	case "replication":
+		if err := replicationCmd(args[1:]); err != nil {
+			fmt.Fprintln(os.Stderr, "replication 子命令失败：", err)
+			os.Exit(1)
+		}
 	case "healthcheck":
 		if err := healthcheck(); err != nil {
 			fmt.Fprintln(os.Stderr, "探活失败：", err)
@@ -87,6 +92,9 @@ func usage(w io.Writer) {
   admin backfill-checksums
                      回填历史资产缺失的 sha1/md5（从 blob 流式计算并写库）
                      [--batch <N>] [--all]
+  replication status 查看复制对端配置与同步状态（FR-86）
+  replication start  启用复制同步调度
+  replication stop   停用复制同步调度
   healthcheck        对本地 /readyz 探活，供容器健康检查
   help               显示本帮助
 
@@ -221,6 +229,9 @@ func run() error {
 				sync.GET("/pull", apiHandlers.GetClusterSyncPull)
 				sync.GET("/blob/:hash", apiHandlers.GetClusterSyncBlob)
 			}
+			// FR-86: 集群管理端点（仅管理员，主体经 Optional 注入，handler 内校验）
+			r.GET("/api/v1/cluster", authMW, apiHandlers.GetClusterStatus)
+			r.PUT("/api/v1/cluster", authMW, apiHandlers.PutClusterStatus)
 		}),
 	)
 	httpServer := &http.Server{

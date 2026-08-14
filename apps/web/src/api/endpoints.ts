@@ -406,6 +406,32 @@ export function getLicenses(): Promise<LicenseManifest> {
   return request<LicenseManifest>("/licenses");
 }
 
+// ---- FR-86: 集群状态（非契约端点，仅管理员）----
+
+export interface ClusterStatus {
+  nodeId: string;
+  peerUrl?: string;
+  tokenSet: boolean;
+  enabled: boolean;
+  watermark: number;
+  hasWatermark: boolean;
+  lastSyncAt?: string;
+  lastError?: string;
+}
+
+/** 集群同步状态（FR-86）。 */
+export function getClusterStatus(): Promise<ClusterStatus> {
+  return request<ClusterStatus>("/cluster");
+}
+
+/** 设置集群同步调度启停（FR-86）。 */
+export function setClusterEnabled(enabled: boolean): Promise<ClusterStatus> {
+  return request<ClusterStatus>("/cluster", {
+    method: "PUT",
+    body: { enabled },
+  });
+}
+
 // ---- FR-54: Tree API ----
 
 export interface TreeEntry {

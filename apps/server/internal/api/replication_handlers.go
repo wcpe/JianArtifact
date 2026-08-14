@@ -59,3 +59,38 @@ func (h *Handlers) GetClusterSyncBlob(c *gin.Context) {
 	defer func() { _ = rc.Close() }()
 	c.DataFromReader(http.StatusOK, -1, "application/octet-stream", rc, nil)
 }
+
+// SetSyncEnabledRequest 是集群启停端点（FR-86）的请求体。
+type SetSyncEnabledRequest struct {
+	Enabled *bool `json:"enabled"`
+}
+
+// GetClusterStatus 返回集群同步状态（FR-86），仅管理员。
+// 非契约端点，经 WithProtocolRoutes 注册。
+func (h *Handlers) GetClusterStatus(c *gin.Context) {
+	if _, ok := requireAdmin(c); !ok {
+		return
+	}
+	c.JSON(http.StatusOK, h.replication.ClusterStatus(h.clusterPeerURL, h.clusterTokenSet))
+}
+
+// PutClusterStatus 更新同步调度启停开关（FR-86），仅管理员。
+// 非契约端点，经 WithProtocolRoutes 注册。
+func (h *Handlers) PutClusterStatus(c *gin.Context) {
+	if _, ok := requireAdmin(c); !ok {
+		return
+	}
+	var req SetSyncEnabledRequest
+	if !bindJSON(c, &req) {
+		return
+	}
+	if req.Enabled == nil {
+		auth.WriteError(c, http.StatusBadRequest, "bad_request", "缺少 enabled 字段")
+		return
+	}
+	if err := h.replication.SetSyncEnabled(*req.Enabled); err != nil {
+		writeDomainErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, h.replication.ClusterStatus(h.clusterPeerURL, h.clusterTokenSet))
+}

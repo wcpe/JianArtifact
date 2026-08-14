@@ -40,6 +40,8 @@ interface State {
   seq: { user: number; token: number; repo: number; migration: number };
   /** FR-66：实例级匿名访问开关（默认开）。 */
   anonymousAccessEnabled: boolean;
+  /** FR-86：复制同步调度启停（默认开）。 */
+  replicationEnabled: boolean;
 }
 
 const MOCK_VERSION = "0.2.0-mock";
@@ -116,6 +118,7 @@ function seed(): State {
     migrations: [],
     seq: { user: 2, token: 1, repo: 3, migration: 0 },
     anonymousAccessEnabled: true,
+    replicationEnabled: true,
   };
 }
 
@@ -278,6 +281,16 @@ export const store = {
   setAnonymousAccess(enabled: boolean): boolean {
     state.anonymousAccessEnabled = enabled;
     return state.anonymousAccessEnabled;
+  },
+
+  /** FR-86：复制同步调度启停。 */
+  replicationEnabledState(): boolean {
+    return state.replicationEnabled;
+  },
+
+  setReplicationEnabled(enabled: boolean): boolean {
+    state.replicationEnabled = enabled;
+    return state.replicationEnabled;
   },
 
   findRepository(name: string): Repository | undefined {
