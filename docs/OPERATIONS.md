@@ -21,7 +21,7 @@
 | `JIAN_SYNC_INTERVAL`    | 复制轮询间隔（秒，FR-85）         | `5`                         |
 | `JIAN_PUBLIC_URL`       | 对外基础 URL（FR-87，CDN 域名）   | （设置后所有对外 URL 用它） |
 
-> 复制（0.7.0，见 ADR-0013）：两端配置相同 `JIAN_SYNC_TOKEN` 即可互认；对端基址与令牌可在运行时经 web「集群」页（或 `PUT /api/v1/cluster`、`sync-now`）配置并持久化——**配置对端不自动开始同步（FR-88）**，须开启"自动同步"开关（默认开）或点"立即同步"。环境变量 `JIAN_SYNC_PEER_URL` / `JIAN_SYNC_TOKEN` 仅作首启初始默认写入（web 可覆盖）。调度器按 `JIAN_SYNC_INTERVAL` 轮询拉取对端增量——首次自动全量初始化（`since=0`），此后增量；复制通道全走 GET，规避 CDN / Tunnel 上传体积限制。同步水位持久化于 setting，重启续拉不重拉全量。
+> 复制（0.7.0，见 ADR-0013）：两端配置相同 `JIAN_SYNC_TOKEN` 即可互认；对端基址与令牌可在运行时经 web「集群」页（或 `PUT /api/v1/cluster`、`sync-now`）配置并持久化——**配置对端不自动开始同步（FR-88）**，须开启"自动同步"开关（默认开）或点"立即同步"。环境变量 `JIAN_SYNC_PEER_URL` / `JIAN_SYNC_TOKEN` 仅作首启初始默认写入（web 可覆盖）。调度器按 `JIAN_SYNC_INTERVAL` 轮询拉取对端增量——首次自动全量初始化（`since=0`），此后增量；复制通道全走 GET，规避 CDN / Tunnel 上传体积限制。同步水位持久化于 setting，重启续拉不重拉全量。**历史数据全量对齐**：集群启用前写入的存量实体（用户 / 令牌 / 仓库 / ACL / 制品）由启动时 `BackfillHistory` 回填为变更日志（`repl:backfill_done` 幂等），对端 `since=0` 全量拉取即可同步历史数据。
 
 > 派生约定（不单独配置）：SQLite 元数据库固定为 `${JIAN_DATA_DIR}/jianartifact.db`，blob 目录为 `${JIAN_DATA_DIR}/blobs`，二者随进程启动自动创建。`JIAN_JWT_SECRET` 缺省时进程生成随机密钥并持久化到数据目录（附告警），生产务必显式配置。首个管理员不再经环境变量引导，改为经网页自举端点或 CLI `admin reset` 创建（见 §1.2、§1.5）。
 
