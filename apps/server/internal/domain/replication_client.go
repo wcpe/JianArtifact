@@ -39,6 +39,13 @@ func NewReplicationClient(peerURL, token string, repl *ReplicationService, blobs
 	}
 }
 
+// SetPeer 更新对端基址与同步令牌（FR-88：对端配置 web 可改，调度器每轮动态更新）。
+// 仅在调度器单 goroutine 内调用，无需加锁。
+func (c *ReplicationClient) SetPeer(peerURL, token string) {
+	c.peerURL = peerURL
+	c.token = token
+}
+
 // pullResponse 是 GET /api/v1/cluster/sync/pull 的响应体。
 type pullResponse struct {
 	Changes   []repository.Change `json:"changes"`

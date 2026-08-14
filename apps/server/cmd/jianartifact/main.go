@@ -232,6 +232,8 @@ func run() error {
 			// FR-86: 集群管理端点（仅管理员，主体经 Optional 注入，handler 内校验）
 			r.GET("/api/v1/cluster", authMW, apiHandlers.GetClusterStatus)
 			r.PUT("/api/v1/cluster", authMW, apiHandlers.PutClusterStatus)
+			// FR-88: 立即同步（手动触发一次，无论自动开关，仅管理员）
+			r.POST("/api/v1/cluster/sync-now", authMW, apiHandlers.PostClusterSyncNow)
 		}),
 	)
 	httpServer := &http.Server{

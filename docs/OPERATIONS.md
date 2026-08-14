@@ -17,11 +17,11 @@
 | `JIAN_JWT_SECRET`       | JWT(HS256) 签名密钥               | （建议必填，强随机）        |
 | `JIAN_UPSTREAM_TIMEOUT` | proxy 回源上游 HTTP 超时（秒）    | `30`                        |
 | `JIAN_SYNC_TOKEN`       | 节点间复制专用令牌（FR-84）       | （设置即启用复制端点）      |
-| `JIAN_SYNC_PEER_URL`    | 复制对端基址（FR-85）             | （设置即启用同步调度）      |
+| `JIAN_SYNC_PEER_URL`    | 复制对端基址（FR-85）             | （仅首启初始默认）          |
 | `JIAN_SYNC_INTERVAL`    | 复制轮询间隔（秒，FR-85）         | `5`                         |
 | `JIAN_PUBLIC_URL`       | 对外基础 URL（FR-87，CDN 域名）   | （设置后所有对外 URL 用它） |
 
-> 复制（0.7.0，见 ADR-0013）：两端配置相同 `JIAN_SYNC_TOKEN` 即可互认；任一节点设置 `JIAN_SYNC_PEER_URL`（对方基址）后自动启动后台同步调度——首次自动全量初始化，此后按 `JIAN_SYNC_INTERVAL` 轮询拉取对端增量（复制通道全走 GET，规避 CDN / Tunnel 上传体积限制）。
+> 复制（0.7.0，见 ADR-0013）：两端配置相同 `JIAN_SYNC_TOKEN` 即可互认；对端基址与令牌可在运行时经 web「集群」页（或 `PUT /api/v1/cluster`、`sync-now`）配置并持久化——**配置对端不自动开始同步（FR-88）**，须开启"自动同步"开关（默认开）或点"立即同步"。环境变量 `JIAN_SYNC_PEER_URL` / `JIAN_SYNC_TOKEN` 仅作首启初始默认写入（web 可覆盖）。调度器按 `JIAN_SYNC_INTERVAL` 轮询拉取对端增量——首次自动全量初始化（`since=0`），此后增量；复制通道全走 GET，规避 CDN / Tunnel 上传体积限制。同步水位持久化于 setting，重启续拉不重拉全量。
 
 > 派生约定（不单独配置）：SQLite 元数据库固定为 `${JIAN_DATA_DIR}/jianartifact.db`，blob 目录为 `${JIAN_DATA_DIR}/blobs`，二者随进程启动自动创建。`JIAN_JWT_SECRET` 缺省时进程生成随机密钥并持久化到数据目录（附告警），生产务必显式配置。首个管理员不再经环境变量引导，改为经网页自举端点或 CLI `admin reset` 创建（见 §1.2、§1.5）。
 

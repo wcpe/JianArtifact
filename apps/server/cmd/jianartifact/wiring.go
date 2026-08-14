@@ -28,9 +28,9 @@ type appServices struct {
 	settingSvc   *domain.SettingService
 	replSvc      *domain.ReplicationService
 	scheduler    *domain.ReplicationScheduler // FR-85：配置了对端 URL 时非 nil
-	peerURL      string                        // FR-86：复制对端基址（cfg.SyncPeerURL）
-	syncTokenSet bool                          // FR-86：同步令牌是否已配置（不暴露明文）
-	publicURL    string                        // FR-87：对外基础 URL（cfg.PublicURL，CDN 域名）
+	peerURL      string                       // FR-86：复制对端基址（cfg.SyncPeerURL）
+	syncTokenSet bool                         // FR-86：同步令牌是否已配置（不暴露明文）
+	publicURL    string                       // FR-87：对外基础 URL（cfg.PublicURL，CDN 域名）
 	store        auth.Store
 	jwt          *auth.JWTManager
 }
@@ -73,12 +73,19 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	tokenSvc.SetChangeRecorder(replSvc)
 	settingSvc.SetChangeRecorder(replSvc)
 
-	// FR-85：同步调度。配置了对端 URL 即启用后台复制调度（首启自动全量初始化）。
-	var scheduler *domain.ReplicationScheduler
+	// FR-88：对端配置从 setting 读取（web 可配置），调度器常驻。
+	// 环境变量作为初始默认：若 setting 尚无对端配置则写入（可被 web 覆盖）。
+	settingRepo := repository.NewSettingRepo(db)
 	if cfg.SyncPeerURL != "" {
-		client := domain.NewReplicationClient(cfg.SyncPeerURL, cfg.SyncToken, replSvc, blobs)
-		scheduler = domain.NewReplicationScheduler(client, repository.NewSettingRepo(db), cfg.SyncPeerURL, cfg.SyncInterval)
+		if _, err := settingRepo.Get(domain.SettingKeyReplPeerURL); err != nil {
+			_ = settingRepo.Set(domain.SettingKeyReplPeerURL, cfg.SyncPeerURL)
+			if cfg.SyncToken != "" {
+				_ = settingRepo.Set(domain.SettingKeyReplPeerToken, cfg.SyncToken)
+			}
+		}
 	}
+	client := domain.NewReplicationClient(cfg.SyncPeerURL, cfg.SyncToken, replSvc, blobs)
+	scheduler := domain.NewReplicationScheduler(client, settingRepo, cfg.SyncInterval)
 
 	offlineIndexRepo := repository.NewOfflineIndexRepo(db)
 	offlineScanner := offindex.New(offlineIndexRepo)
@@ -121,18 +128,19 @@ func openServices(cfg *config.Config) (*appServices, error) {
 // handlers 用给定版本与就绪检查构造 api.Handlers。
 func (s *appServices) handlers(version string, checks []func() error) *api.Handlers {
 	return api.NewHandlers(api.Deps{
-		Version:         version,
-		Checks:          checks,
-		Migration:       s.db.CurrentVersion,
-		Auth:            s.authSvc,
-		Users:           s.userSvc,
-		Tokens:          s.tokenSvc,
-		Repos:           s.repoSvc,
-		Migrations:      s.migrationSvc,
-		Settings:        s.settingSvc,
-		Replication:     s.replSvc,
-		ClusterPeerURL:  s.peerURL,
-		ClusterTokenSet: s.syncTokenSet,
-		PublicURL:       s.publicURL,
+		Version:          version,
+		Checks:           checks,
+		Migration:        s.db.CurrentVersion,
+		Auth:             s.authSvc,
+		Users:            s.userSvc,
+		Tokens:           s.tokenSvc,
+		Repos:            s.repoSvc,
+		Migrations:       s.migrationSvc,
+		Settings:         s.settingSvc,
+		Replication:      s.replSvc,
+		ReplicationSched: s.scheduler,
+		ClusterPeerURL:   s.peerURL,
+		ClusterTokenSet:  s.syncTokenSet,
+		PublicURL:        s.publicURL,
 	})
 }

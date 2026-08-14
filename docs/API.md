@@ -70,12 +70,15 @@
 - `GET /readyz`：就绪探针（SQLite + blob 目录自检）。
 - `GET /api/v1/status`：运行时状态（版本、就绪、迁移版本、初始化标志、用户数），供 CLI `status` 与首启 web 设置页判定实例是否已初始化。
 
-### 节点间复制（0.7.0，FR-84；非 OpenAPI）
+### 节点间复制（0.7.0，FR-84/86/88；非 OpenAPI）
 
-> 复制通道全程 GET 拉取、禁止 PUT 推送（规避 Cloudflare Tunnel / CDN 上传体积限制，见 ADR-0013）。鉴权用专用同步令牌（`JIAN_SYNC_TOKEN`，`Authorization: Bearer`）；未配置令牌时端点不注册（404）。
+> 复制通道全程 GET 拉取、禁止 PUT 推送（规避 Cloudflare Tunnel / CDN 上传体积限制，见 ADR-0013）。鉴权用专用同步令牌（`JIAN_SYNC_TOKEN`，`Authorization: Bearer`）；未配置令牌时端点不注册（404）。管理端点（集群状态 / 配置 / 立即同步）仅 **admin**。
 
 - `GET /api/v1/cluster/sync/pull?since=&limit=`：返回 `seq > since` 的变更（按 seq 升序，最多 limit 条）与 `latestSeq`；`since=0` 即全量初始化（重放全部日志）。
 - `GET /api/v1/cluster/sync/blob/{hash}`：按内容哈希流式返回 blob；哈希不存在 404。
+- `GET /api/v1/cluster`：集群同步状态（节点 ID / 对端基址 / 令牌配置态 / 自动同步开关 / 水位 / 最近同步与错误）。
+- `PUT /api/v1/cluster`：更新集群配置，请求体字段均可选、传哪个改哪个：`peerUrl`（对端基址，空串清空）、`peerToken`（对端同步令牌）、`enabled`（自动同步开关）。**仅保存配置，不开始同步**（自动同步由开关控制，手动由 sync-now 触发）。
+- `POST /api/v1/cluster/sync-now`：立即同步一次（无论自动开关状态），等待完成（最长 30s），返回同步后状态。
 
 ### 协议端点（非 OpenAPI，按格式规范）
 

@@ -78,7 +78,9 @@ func TestReplicationSchedulerSync(t *testing.T) {
 
 	client := domain.NewReplicationClient(ts.URL, "sync-token", dstReplSvc, dstBlobs)
 	settingsRepo := repository.NewSettingRepo(dstDB)
-	scheduler := domain.NewReplicationScheduler(client, settingsRepo, ts.URL, 100*time.Millisecond)
+	_ = settingsRepo.Set(domain.SettingKeyReplPeerURL, ts.URL)
+	_ = settingsRepo.Set(domain.SettingKeyReplPeerToken, "sync-token")
+	scheduler := domain.NewReplicationScheduler(client, settingsRepo, 100*time.Millisecond)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	scheduler.Start(ctx)
@@ -153,7 +155,9 @@ func TestReplicationSchedulerReconcile(t *testing.T) {
 		repository.NewSettingRepo(dstDB), blobstore.NewStore(filepath.Join(t.TempDir(), "rec-dst-blobs")))
 	client := domain.NewReplicationClient(ts.URL, "t", dstReplSvc, blobstore.NewStore(filepath.Join(t.TempDir(), "rec-dst-blobs2")))
 	settingsRepo := repository.NewSettingRepo(dstDB)
-	scheduler := domain.NewReplicationScheduler(client, settingsRepo, ts.URL, 100*time.Millisecond)
+	_ = settingsRepo.Set(domain.SettingKeyReplPeerURL, ts.URL)
+	_ = settingsRepo.Set(domain.SettingKeyReplPeerToken, "t")
+	scheduler := domain.NewReplicationScheduler(client, settingsRepo, 100*time.Millisecond)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	scheduler.Start(ctx)
@@ -178,7 +182,9 @@ func TestReplicationSchedulerReconcile(t *testing.T) {
 	// 拉取方仍连旧 ts.URL（已关闭）→ 对账会失败。重建指向 ts2 的调度器验证补齐。
 	// 为简洁，直接验证：把 client 改为 ts2 后手动 Sync 一次能补齐。
 	client2 := domain.NewReplicationClient(ts2.URL, "t", dstReplSvc, blobstore.NewStore(filepath.Join(t.TempDir(), "rec-dst-blobs3")))
-	sched2 := domain.NewReplicationScheduler(client2, settingsRepo, ts2.URL, 100*time.Millisecond)
+	_ = settingsRepo.Set(domain.SettingKeyReplPeerURL, ts2.URL)
+	_ = settingsRepo.Set(domain.SettingKeyReplPeerToken, "t")
+	sched2 := domain.NewReplicationScheduler(client2, settingsRepo, 100*time.Millisecond)
 	sched2.Start(ctx)
 	defer cancel()
 
@@ -233,13 +239,17 @@ func TestReplicationSchedulerBidirectional(t *testing.T) {
 
 	// A 的调度器：从 B 拉（B 有 bob）。B 的调度器：从 A 拉（A 有 alice）。
 	clientA := domain.NewReplicationClient(tsB.URL, "t", replSvcA, blobstore.NewStore(filepath.Join(t.TempDir(), "bi-a2-blobs")))
-	schedA := domain.NewReplicationScheduler(clientA, settingsA, tsB.URL, 100*time.Millisecond)
+	_ = settingsA.Set(domain.SettingKeyReplPeerURL, tsB.URL)
+	_ = settingsA.Set(domain.SettingKeyReplPeerToken, "t")
+	schedA := domain.NewReplicationScheduler(clientA, settingsA, 100*time.Millisecond)
 	ctxA, cancelA := context.WithCancel(context.Background())
 	schedA.Start(ctxA)
 	defer cancelA()
 
 	clientB := domain.NewReplicationClient(tsA.URL, "t", replSvcB, blobstore.NewStore(filepath.Join(t.TempDir(), "bi-b2-blobs")))
-	schedB := domain.NewReplicationScheduler(clientB, settingsB, tsA.URL, 100*time.Millisecond)
+	_ = settingsB.Set(domain.SettingKeyReplPeerURL, tsA.URL)
+	_ = settingsB.Set(domain.SettingKeyReplPeerToken, "t")
+	schedB := domain.NewReplicationScheduler(clientB, settingsB, 100*time.Millisecond)
 	ctxB, cancelB := context.WithCancel(context.Background())
 	schedB.Start(ctxB)
 	defer cancelB()
@@ -293,7 +303,9 @@ func TestReplicationSchedulerEnabledSwitch(t *testing.T) {
 		repository.NewSettingRepo(dstDB), blobstore.NewStore(filepath.Join(t.TempDir(), "es-dst-blobs")))
 	settingsRepo := repository.NewSettingRepo(dstDB)
 	client := domain.NewReplicationClient(ts.URL, "t", dstReplSvc, blobstore.NewStore(filepath.Join(t.TempDir(), "es-dst-blobs2")))
-	scheduler := domain.NewReplicationScheduler(client, settingsRepo, ts.URL, 100*time.Millisecond)
+	_ = settingsRepo.Set(domain.SettingKeyReplPeerURL, ts.URL)
+	_ = settingsRepo.Set(domain.SettingKeyReplPeerToken, "t")
+	scheduler := domain.NewReplicationScheduler(client, settingsRepo, 100*time.Millisecond)
 	ctx, cancel := context.WithCancel(context.Background())
 	scheduler.Start(ctx)
 	defer cancel()
@@ -379,7 +391,9 @@ func TestReplicationSchedulerAssetBlob(t *testing.T) {
 		repository.NewUserRepo(dstDB), repository.NewTokenRepo(dstDB), repository.NewSettingRepo(dstDB), dstBlobs)
 	client := domain.NewReplicationClient(ts.URL, "t", dstReplSvc, dstBlobs)
 	settingsRepo := repository.NewSettingRepo(dstDB)
-	scheduler := domain.NewReplicationScheduler(client, settingsRepo, ts.URL, 100*time.Millisecond)
+	_ = settingsRepo.Set(domain.SettingKeyReplPeerURL, ts.URL)
+	_ = settingsRepo.Set(domain.SettingKeyReplPeerToken, "t")
+	scheduler := domain.NewReplicationScheduler(client, settingsRepo, 100*time.Millisecond)
 	ctx, cancel := context.WithCancel(context.Background())
 	scheduler.Start(ctx)
 	defer cancel()

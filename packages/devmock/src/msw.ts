@@ -17,12 +17,12 @@ function unauthorized(request: Request) {
 }
 
 /** 集群状态 mock（FR-86，admin 端点）。 */
-function mockClusterStatus(enabled: boolean) {
+function mockClusterStatus() {
   return {
     nodeId: "mock-node",
-    peerUrl: "http://peer.example",
-    tokenSet: true,
-    enabled,
+    peerUrl: store.peerURLState(),
+    tokenSet: store.peerTokenSet(),
+    enabled: store.replicationEnabledState(),
     watermark: 12,
     hasWatermark: true,
     lastSyncAt: "2026-08-13T00:00:00Z",
@@ -245,11 +245,10 @@ export const handlers = [
     return HttpResponse.json({ enabled: store.setAnonymousAccess(body.enabled) });
   }),
 
-  // —— 集群状态（FR-86，admin）——
+  // —— 集群状态（FR-86/88，admin）——
   http.get(
     "*/api/v1/cluster",
-    ({ request }) =>
-      unauthorized(request) ?? HttpResponse.json(mockClusterStatus(store.replicationEnabledState())),
+    ({ request }) => unauthorized(request) ?? HttpResponse.json(mockClusterStatus()),
   ),
 
   http.put("*/api/v1/cluster", async ({ request }) => {
@@ -257,11 +256,27 @@ export const handlers = [
     if (denied) {
       return denied;
     }
-    const body = (await request.json().catch(() => ({}))) as { enabled?: boolean };
-    if (typeof body.enabled !== "boolean") {
-      return err("bad_request", "enabled 必填", 400);
+    const body = (await request.json().catch(() => ({}))) as {
+      peerUrl?: string;
+      peerToken?: string;
+      enabled?: boolean;
+    };
+    if (body.peerUrl !== undefined || body.peerToken !== undefined) {
+      store.setPeerConfig(body.peerUrl ?? store.peerURLState(), body.peerToken ?? "");
     }
-    return HttpResponse.json(mockClusterStatus(store.setReplicationEnabled(body.enabled)));
+    if (body.enabled !== undefined) {
+      store.setReplicationEnabled(body.enabled);
+    }
+    return HttpResponse.json(mockClusterStatus());
+  }),
+
+  // FR-88：立即同步（手动触发一次）。
+  http.post("*/api/v1/cluster/sync-now", async ({ request }) => {
+    const denied = unauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    return HttpResponse.json(mockClusterStatus());
   }),
 
   http.post("*/api/v1/repositories", async ({ request }) => {

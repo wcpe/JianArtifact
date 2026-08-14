@@ -27,10 +27,11 @@ type Deps struct {
 	Repos            *domain.RepositoryService
 	Migrations       *domain.MigrationService
 	Settings         *domain.SettingService
-	Replication      *domain.ReplicationService // FR-84：节点间复制协议端点
-	ClusterPeerURL   string                     // FR-86：复制对端基址（来自 JIAN_SYNC_PEER_URL）
-	ClusterTokenSet  bool                       // FR-86：同步令牌是否已配置（不暴露明文）
-	PublicURL        string                     // FR-87：对外基础 URL（CDN 域名，隐藏源站 IP）
+	Replication      *domain.ReplicationService   // FR-84：节点间复制协议端点
+	ReplicationSched *domain.ReplicationScheduler // FR-88：手动同步触发
+	ClusterPeerURL   string                       // FR-86：复制对端基址（来自 JIAN_SYNC_PEER_URL）
+	ClusterTokenSet  bool                         // FR-86：同步令牌是否已配置（不暴露明文）
+	PublicURL        string                       // FR-87：对外基础 URL（CDN 域名，隐藏源站 IP）
 }
 
 // Handlers 实现 ServerInterface 的全部端点。
@@ -45,6 +46,7 @@ type Handlers struct {
 	migrations       *domain.MigrationService
 	settings         *domain.SettingService
 	replication      *domain.ReplicationService
+	replicationSched *domain.ReplicationScheduler
 	clusterPeerURL   string
 	clusterTokenSet  bool
 	publicURL        string // FR-87：对外基础 URL（CDN 域名）
@@ -53,19 +55,20 @@ type Handlers struct {
 // NewHandlers 构造 Handlers。
 func NewHandlers(d Deps) *Handlers {
 	return &Handlers{
-		version:         d.Version,
-		checks:          d.Checks,
-		migration:       d.Migration,
-		auth:            d.Auth,
-		users:           d.Users,
-		tokens:          d.Tokens,
-		repos:           d.Repos,
-		migrations:      d.Migrations,
-		settings:        d.Settings,
-		replication:     d.Replication,
-		clusterPeerURL:  d.ClusterPeerURL,
-		clusterTokenSet: d.ClusterTokenSet,
-		publicURL:       d.PublicURL,
+		version:          d.Version,
+		checks:           d.Checks,
+		migration:        d.Migration,
+		auth:             d.Auth,
+		users:            d.Users,
+		tokens:           d.Tokens,
+		repos:            d.Repos,
+		migrations:       d.Migrations,
+		settings:         d.Settings,
+		replication:      d.Replication,
+		replicationSched: d.ReplicationSched,
+		clusterPeerURL:   d.ClusterPeerURL,
+		clusterTokenSet:  d.ClusterTokenSet,
+		publicURL:        d.PublicURL,
 	}
 }
 

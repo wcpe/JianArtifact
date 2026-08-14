@@ -424,11 +424,22 @@ export function getClusterStatus(): Promise<ClusterStatus> {
   return request<ClusterStatus>("/cluster");
 }
 
-/** 设置集群同步调度启停（FR-86）。 */
-export function setClusterEnabled(enabled: boolean): Promise<ClusterStatus> {
+/** 集群配置（FR-88）：可选字段，传哪个改哪个（对端 URL/令牌/自动同步开关）。 */
+export function setClusterConfig(config: {
+  peerUrl?: string;
+  peerToken?: string;
+  enabled?: boolean;
+}): Promise<ClusterStatus> {
   return request<ClusterStatus>("/cluster", {
     method: "PUT",
-    body: { enabled },
+    body: config,
+  });
+}
+
+/** 立即同步一次（FR-88，无论自动开关状态）。 */
+export function triggerClusterSync(): Promise<ClusterStatus> {
+  return request<ClusterStatus>("/cluster/sync-now", {
+    method: "POST",
   });
 }
 

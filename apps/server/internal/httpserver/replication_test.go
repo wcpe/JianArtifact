@@ -218,7 +218,17 @@ func TestClusterEndpoints(t *testing.T) {
 		t.Errorf("非 admin GET 应 403，得 %d", rec.Code)
 	}
 
-	// admin GET → 200 且状态字段正确。
+	// admin PUT 配置对端（FR-88：peerUrl + peerToken 入库）。
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/cluster", strings.NewReader(`{"peerUrl":"http://peer.example","peerToken":"secret"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Test-Role", "admin")
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("admin PUT 配置对端应 200，得 %d", rec.Code)
+	}
+
+	// admin GET → 200 且状态字段正确（对端自 setting 读，FR-88）。
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/cluster", nil)
 	req.Header.Set("X-Test-Role", "admin")

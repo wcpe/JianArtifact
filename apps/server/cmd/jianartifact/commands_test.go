@@ -101,13 +101,13 @@ func TestReplicationCmdStatusAndToggle(t *testing.T) {
 	}
 }
 
-// TestReplicationCmdRequiresPeer 未配置对端时 replication 子命令应报错。
-func TestReplicationCmdRequiresPeer(t *testing.T) {
+// TestReplicationCmdNoPeer 未配置对端时 replication 子命令应正常提示（FR-88：对端配置与同步解耦）。
+func TestReplicationCmdNoPeer(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv(config.EnvDataDir, dir)
 	t.Setenv(config.EnvJWTSecret, "replication-test-secret-key-32byte!!")
 	// 不设置 JIAN_SYNC_PEER_URL。
-	if err := replicationCmd([]string{"status"}); err == nil {
-		t.Error("未配置对端时 status 应报错")
+	if err := replicationCmd([]string{"status"}); err != nil {
+		t.Errorf("未配置对端时 status 应正常提示而非报错：%v", err)
 	}
 }

@@ -163,13 +163,15 @@ type ClusterStatus struct {
 	LastError    string `json:"lastError,omitempty"`
 }
 
-// ClusterStatus 读取集群同步状态（FR-86）。peerURL 为对端基址（部署配置）；
-// tokenSet 由调用方按环境变量判定（不暴露令牌明文）。
-func (s *ReplicationService) ClusterStatus(peerURL string, tokenSet bool) ClusterStatus {
+// ClusterStatus 读取集群同步状态（FR-86，FR-88 改造）。
+// 对端配置从 setting 读取（web 可配置），令牌仅返回是否已配置（不暴露明文）。
+func (s *ReplicationService) ClusterStatus() ClusterStatus {
+	peerURL, _ := s.settings.Get(SettingKeyReplPeerURL)
+	token, _ := s.settings.Get(SettingKeyReplPeerToken)
 	st := ClusterStatus{
 		NodeID:   s.NodeID(),
 		PeerURL:  peerURL,
-		TokenSet: tokenSet,
+		TokenSet: token != "",
 		Enabled:  true, // 缺省启用
 	}
 	if v, err := s.settings.Get(SettingKeyReplEnabled); err == nil {
@@ -184,6 +186,28 @@ func (s *ReplicationService) ClusterStatus(peerURL string, tokenSet bool) Cluste
 	st.LastSyncAt, _ = s.settings.Get(SettingKeyReplLastSync)
 	st.LastError, _ = s.settings.Get(SettingKeyReplLastError)
 	return st
+}
+
+// PeerConfig 返回当前对端配置（URL/令牌，来自 setting，FR-88）。
+func (s *ReplicationService) PeerConfig() (peerURL, token string, err error) {
+	peerURL, err = s.settings.Get(SettingKeyReplPeerURL)
+	if err != nil && !errors.Is(err, repository.ErrNotFound) {
+		return "", "", err
+	}
+	token, terr := s.settings.Get(SettingKeyReplPeerToken)
+	if terr != nil && !errors.Is(terr, repository.ErrNotFound) {
+		return "", "", terr
+	}
+	return peerURL, token, nil
+}
+
+// SetPeerConfig 保存对端配置（URL/令牌，web 可配置，FR-88）。
+// 仅保存配置，不开始同步（自动同步由开关控制，手动由 SyncNow 触发）。
+func (s *ReplicationService) SetPeerConfig(peerURL, token string) error {
+	if err := s.settings.Set(SettingKeyReplPeerURL, peerURL); err != nil {
+		return err
+	}
+	return s.settings.Set(SettingKeyReplPeerToken, token)
 }
 
 // SetSyncEnabled 设置同步调度启停开关（FR-86）。

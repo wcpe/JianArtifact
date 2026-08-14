@@ -42,6 +42,9 @@ interface State {
   anonymousAccessEnabled: boolean;
   /** FR-86：复制同步调度启停（默认开）。 */
   replicationEnabled: boolean;
+  /** FR-88：对端配置（URL/令牌，web 可配置）。 */
+  peerURL: string;
+  peerToken: string;
 }
 
 const MOCK_VERSION = "0.2.0-mock";
@@ -119,6 +122,8 @@ function seed(): State {
     seq: { user: 2, token: 1, repo: 3, migration: 0 },
     anonymousAccessEnabled: true,
     replicationEnabled: true,
+    peerURL: "http://peer.example",
+    peerToken: "mock-token",
   };
 }
 
@@ -291,6 +296,20 @@ export const store = {
   setReplicationEnabled(enabled: boolean): boolean {
     state.replicationEnabled = enabled;
     return state.replicationEnabled;
+  },
+
+  /** FR-88：对端配置。 */
+  peerURLState(): string {
+    return state.peerURL;
+  },
+
+  peerTokenSet(): boolean {
+    return state.peerToken !== "";
+  },
+
+  setPeerConfig(peerURL: string, peerToken: string): void {
+    state.peerURL = peerURL;
+    state.peerToken = peerToken;
   },
 
   findRepository(name: string): Repository | undefined {

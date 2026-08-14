@@ -27,11 +27,16 @@
   - `ReplicationScheduler` 支持持久化启停开关（`repl:enabled`，缺省 true）+ 最近同步状态（`repl:last_sync_at` / `repl:last_error`）。
   - CLI `jianartifact replication status/start/stop`：查看对端配置 / 同步水位 / 最近同步与错误，启停调度。
   - 管理端点 `GET/PUT /api/v1/cluster`（仅 admin）+ web「集群」页（侧边栏管理段，仅管理员）：展示节点 ID / 对端 / 令牌配置态 / 水位 / 最近同步与错误 + 启停开关。
-  - 对端 URL 与令牌保持部署期环境变量（`JIAN_SYNC_PEER_URL` / `JIAN_SYNC_TOKEN`），不在运行时编辑。
+  - 对端 URL 与令牌初始经环境变量（`JIAN_SYNC_PEER_URL` / `JIAN_SYNC_TOKEN`）注入；FR-88 起可在运行时经 web「集群」页配置并入库（令牌不入日志、不回显）。
 - 对外基础 URL 配置（FR-87，见 `docs/specs/0.7.0-public-url.md`）：
   - 新增 `JIAN_PUBLIC_URL` 环境变量（对外 CDN 域名）；所有对外 URL（npm `dist.tarball`、usage 复制片段）优先使用它。
   - 适配 CDN 回源：源站收到回源 Host 而非客户端域名时 URL 依然正确，且隐藏源站 IP。
   - 未配置时回退 `X-Forwarded-Proto` + 请求 Host 推断（兼容非 CDN 部署）。
+- 对端配置 web 可视化（FR-88，见 `docs/specs/0.7.0-peer-web-config.md`）：
+  - 对端基址/令牌入库（`setting` 键 `repl:peer_url` / `repl:peer_token`），web「集群」页可配置；**配置对端 ≠ 开始同步**——保存仅入库，轮询由「自动同步」开关（`repl:enabled`，默认开）控制。
+  - 新增 `POST /api/v1/cluster/sync-now`「立即同步」：手动触发一次不受开关限制（web 按钮 / API 均可，最长等待 30s）。
+  - `PUT /api/v1/cluster` 支持可选字段（`peerUrl` / `peerToken` / `enabled`，传哪个改哪个）；令牌不回显。
+  - 调度器常驻（不再依赖 `JIAN_SYNC_PEER_URL` 是否设置），每轮从 setting 读对端；环境变量仅作首启初始默认写入（web 可覆盖）。
 
 ## [0.6.0] - 2026-07-29
 
