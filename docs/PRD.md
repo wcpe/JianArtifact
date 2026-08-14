@@ -109,6 +109,8 @@ JianArtifact 是一个**自托管、单二进制交付的多格式制品仓库**
 | FR-83 | 复制变更日志与冲突解决：制品/仓库/用户/ACL/令牌/配置全写路径接入变更日志（全局递增 seq + 写入节点 + 时间戳），last-writer-wins 后写覆盖，删除落 tombstone，按 seq 断点续传           | P2     | 开发中 |
 | FR-84 | 节点间复制协议：`GET /api/v1/cluster/sync/pull` 按 watermark 增量拉取 + 首启全量初始化，blob 流式只传缺失，专用同步令牌鉴权，全程无 PUT 推送（双向：备→主直连、主→备经 Tunnel 域名） | P2     | 开发中 |
 | FR-85 | 同步调度：写入/删除事件触发双向拉取 + 定期兜底对账（watermark 比对补漏）+ 配置对端后自动首启全量                                                                                     | P2     | 开发中 |
+| FR-87 | 对外基础 URL 配置：新增 `JIAN_PUBLIC_URL` 环境变量，所有对外 URL（npm tarball / usage 片段 / 公开页）优先使用它，未配置回退请求 Host 推断；解决 CDN 回源下 URL 错误并隐藏源站 IP     | P2     | 开发中 |
+| FR-88 | 对端配置 web 可视化：对端 URL/令牌入库（setting），web 集群页可配置；自动同步开关 + 立即同步按钮；配置对端不自动开始同步（需显式开启或手动触发）                                     | P2     | 计划   |
 | FR-86 | 集群配置与管理面：web 集群页（对端 URL/令牌/开关配置 + 同步状态/延迟/错误展示）+ CLI `replication status/start/stop`                                                                 | P2     | 开发中 |
 
 ### 4.4 M2 · 高频格式扩展 + 工程能力（P2，0.8.0，顺延）

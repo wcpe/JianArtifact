@@ -220,3 +220,30 @@ func TestNpmGroupMergesPackument(t *testing.T) {
 		t.Errorf("group tarball 状态码 = %d，内容 = %q", rec.Code, rec.Body.String())
 	}
 }
+
+// TestNpmPublicURLOverridesHost 配置对外基础 URL（FR-87）后，packument 的 tarball URL 用 public URL，
+// 而非请求 Host（隐藏源站 IP，适配 CDN 回源）。
+func TestNpmPublicURLOverridesHost(t *testing.T) {
+	const publicURL = "https://repo.wcpe.top"
+	e := newProtocolEnvWithPublicURL(t, publicURL)
+	adminToken := e.bootstrapAdmin(t)
+	e.createNpmRepo(t, adminToken, "npm-public", "hosted", "", nil)
+
+	tarball := []byte("public url tgz bytes")
+	body := npmPublishBody(t, "pkg", "1.0.0", "pkg-1.0.0.tgz", tarball)
+	if rec := e.rawReq(http.MethodPut, "/npm/npm-public/pkg", "Bearer "+adminToken, "application/json", body); rec.Code != http.StatusCreated {
+		t.Fatalf("publish 状态码 = %d", rec.Code)
+	}
+
+	rec := e.rawReq(http.MethodGet, "/npm/npm-public/pkg", "Bearer "+adminToken, "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("packument 状态码 = %d", rec.Code)
+	}
+	url := npmTarballURL(t, rec.Body.Bytes(), "1.0.0")
+	if !strings.HasPrefix(url, publicURL) {
+		t.Fatalf("tarball URL 应使用 public URL %q，得 %q", publicURL, url)
+	}
+	if strings.Contains(url, "127.0.0.1") || strings.Contains(url, "localhost") {
+		t.Fatalf("tarball URL 不应含源站地址：%q", url)
+	}
+}

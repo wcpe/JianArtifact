@@ -30,6 +30,7 @@ type appServices struct {
 	scheduler    *domain.ReplicationScheduler // FR-85：配置了对端 URL 时非 nil
 	peerURL      string                        // FR-86：复制对端基址（cfg.SyncPeerURL）
 	syncTokenSet bool                          // FR-86：同步令牌是否已配置（不暴露明文）
+	publicURL    string                        // FR-87：对外基础 URL（cfg.PublicURL，CDN 域名）
 	store        auth.Store
 	jwt          *auth.JWTManager
 }
@@ -111,6 +112,7 @@ func openServices(cfg *config.Config) (*appServices, error) {
 		scheduler:    scheduler,
 		peerURL:      cfg.SyncPeerURL,
 		syncTokenSet: cfg.SyncToken != "",
+		publicURL:    cfg.PublicURL,
 		store:        domain.NewAuthStore(userRepo, tokenRepo, revokedRepo),
 		jwt:          jwtMgr,
 	}, nil
@@ -131,5 +133,6 @@ func (s *appServices) handlers(version string, checks []func() error) *api.Handl
 		Replication:     s.replSvc,
 		ClusterPeerURL:  s.peerURL,
 		ClusterTokenSet: s.syncTokenSet,
+		PublicURL:       s.publicURL,
 	})
 }

@@ -191,7 +191,7 @@ func run() error {
 	rawHandler := protocol.NewRawHandler(svc.assetSvc, svc.repoSvc)
 	mavenHandler := protocol.NewMavenHandler(rawHandler)
 	dispatcher := protocol.NewDispatcher(svc.repoSvc, rawHandler, mavenHandler)
-	npmHandler := protocol.NewNpmHandler(rawHandler, svc.store, svc.tokenSvc)
+	npmHandler := protocol.NewNpmHandler(rawHandler, svc.store, svc.tokenSvc, svc.publicURL)
 
 	apiHandlers := svc.handlers(version, checks)
 	srv := httpserver.New(version,

@@ -22,6 +22,7 @@ const (
 	EnvSyncToken       = "JIAN_SYNC_TOKEN"       // 节点间复制专用令牌（FR-84）；未设置则复制端点禁用
 	EnvSyncPeerURL     = "JIAN_SYNC_PEER_URL"    // 复制对端基址（FR-85）；设置即启用同步调度
 	EnvSyncInterval    = "JIAN_SYNC_INTERVAL"    // 同步轮询间隔（FR-85），单位秒
+	EnvPublicURL       = "JIAN_PUBLIC_URL"       // 对外基础 URL（FR-87）；CDN 域名，隐藏源站 IP
 
 	defaultDataDir         = "./data"
 	defaultHTTPAddr        = ":8080"
@@ -44,6 +45,7 @@ type Config struct {
 	SyncToken       string        // 节点间复制专用令牌（FR-84）；空则复制端点禁用
 	SyncPeerURL     string        // 复制对端基址（FR-85）；空则启用同步调度
 	SyncInterval    time.Duration // 复制轮询间隔（FR-85）
+	PublicURL       string        // 对外基础 URL（FR-87，如 https://repo.wcpe.top）；空则回退请求 Host 推断
 }
 
 // Load 从环境变量解析配置并确保 data / blob 目录存在。
@@ -77,6 +79,7 @@ func Load() (*Config, error) {
 		SyncToken:       os.Getenv(EnvSyncToken),
 		SyncPeerURL:     os.Getenv(EnvSyncPeerURL),
 		SyncInterval:    syncInterval(),
+		PublicURL:       os.Getenv(EnvPublicURL),
 	}, nil
 }
 

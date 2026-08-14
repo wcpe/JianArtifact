@@ -167,7 +167,7 @@ func (h *Handlers) GetRepositoryUsage(c *gin.Context, name RepoNameParam) {
 	if _, ok := h.requireRepoRead(c, name); !ok {
 		return
 	}
-	repo, snippets, err := h.repos.Usage(name, apiBaseURL(c))
+	repo, snippets, err := h.repos.Usage(name, h.apiBaseURL(c))
 	if err != nil {
 		writeDomainErr(c, err)
 		return
@@ -275,9 +275,13 @@ func (h *Handlers) requireRepoRead(c *gin.Context, name RepoNameParam) (*auth.Pr
 	return p, true
 }
 
-// apiBaseURL 依请求推断对外基址（scheme + host），供使用片段拼接客户端地址。
-// 反代部署经 X-Forwarded-Proto 修正 scheme；Host 直接取请求头。
-func apiBaseURL(c *gin.Context) string {
+// apiBaseURL 返回对外基址（scheme + host），供使用片段拼接客户端地址。
+// FR-87：配置了 publicURL（对外 CDN 域名）则优先使用，隐藏源站地址；
+// 否则按请求推断（X-Forwarded-Proto 修正 scheme + 请求 Host）。
+func (h *Handlers) apiBaseURL(c *gin.Context) string {
+	if h.publicURL != "" {
+		return h.publicURL
+	}
 	scheme := "http"
 	if c.Request.TLS != nil {
 		scheme = "https"

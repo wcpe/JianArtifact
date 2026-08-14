@@ -38,13 +38,14 @@ import (
 // store/tokens 供 registry 级端点使用：login 验口令并签发 API Token（FR-82）。
 type NpmHandler struct {
 	*RawHandler
-	store  auth.Store
-	tokens *domain.TokenService
+	store     auth.Store
+	tokens    *domain.TokenService
+	publicURL string // FR-87：对外基础 URL（CDN 域名）；空则回退请求 Host 推断
 }
 
-// NewNpmHandler 构造 NpmHandler。
-func NewNpmHandler(raw *RawHandler, store auth.Store, tokens *domain.TokenService) *NpmHandler {
-	return &NpmHandler{RawHandler: raw, store: store, tokens: tokens}
+// NewNpmHandler 构造 NpmHandler。publicURL 为对外基础 URL（FR-87，可空）。
+func NewNpmHandler(raw *RawHandler, store auth.Store, tokens *domain.TokenService, publicURL string) *NpmHandler {
+	return &NpmHandler{RawHandler: raw, store: store, tokens: tokens, publicURL: publicURL}
 }
 
 // RegisterNpmRoutes 在 r 上挂载 npm registry 端点（前缀 /npm，不与 /api/v1、/repository 冲突）：
@@ -191,7 +192,7 @@ func (h *NpmHandler) servePackument(c *gin.Context, repoName, pkg string) {
 		writePackument(c, data, "application/json")
 		return
 	}
-	rewritePackument(doc, requestBaseURL(c), repoName, pkg)
+	rewritePackument(doc, h.requestBaseURL(c), repoName, pkg)
 	h.writePackumentDoc(c, doc)
 }
 
@@ -242,7 +243,7 @@ func (h *NpmHandler) serveGroupPackument(c *gin.Context, repo *repository.Reposi
 		auth.WriteError(c, http.StatusNotFound, "not_found", "资源不存在")
 		return
 	}
-	rewritePackument(merged, requestBaseURL(c), repo.Name, pkg)
+	rewritePackument(merged, h.requestBaseURL(c), repo.Name, pkg)
 	h.writePackumentDoc(c, merged)
 }
 
@@ -339,8 +340,13 @@ func (h *NpmHandler) requireHosted(c *gin.Context, repoName string) bool {
 	return true
 }
 
-// requestBaseURL 据请求还原对外基址（scheme://host），供 dist.tarball 重写。
-func requestBaseURL(c *gin.Context) string {
+// requestBaseURL 返回对外基址（scheme://host），供 dist.tarball 重写。
+// FR-87：配置了 publicURL（对外 CDN 域名）则优先使用，隐藏源站地址；
+// 否则按请求推断（X-Forwarded-Proto 修正 scheme + 请求 Host）。
+func (h *NpmHandler) requestBaseURL(c *gin.Context) string {
+	if h.publicURL != "" {
+		return h.publicURL
+	}
 	scheme := "http"
 	if c.Request.TLS != nil {
 		scheme = "https"

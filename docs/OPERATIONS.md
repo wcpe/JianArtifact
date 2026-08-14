@@ -10,15 +10,16 @@
 
 配置经环境变量注入（`deploy/.env.example` 为无真实值模板，`.env` 不入库）：
 
-| 变量                    | 含义                              | 示例 / 默认             |
-| ----------------------- | --------------------------------- | ----------------------- |
-| `JIAN_HTTP_ADDR`        | HTTP 监听地址:端口                | `:8080`                 |
-| `JIAN_DATA_DIR`         | 数据根目录（SQLite 与 blob 存放） | `/var/lib/jianartifact` |
-| `JIAN_JWT_SECRET`       | JWT(HS256) 签名密钥               | （建议必填，强随机）    |
-| `JIAN_UPSTREAM_TIMEOUT` | proxy 回源上游 HTTP 超时（秒）    | `30`                    |
-| `JIAN_SYNC_TOKEN`       | 节点间复制专用令牌（FR-84）       | （设置即启用复制端点）  |
-| `JIAN_SYNC_PEER_URL`    | 复制对端基址（FR-85）             | （设置即启用同步调度）  |
-| `JIAN_SYNC_INTERVAL`    | 复制轮询间隔（秒，FR-85）         | `5`                     |
+| 变量                    | 含义                              | 示例 / 默认                 |
+| ----------------------- | --------------------------------- | --------------------------- |
+| `JIAN_HTTP_ADDR`        | HTTP 监听地址:端口                | `:8080`                     |
+| `JIAN_DATA_DIR`         | 数据根目录（SQLite 与 blob 存放） | `/var/lib/jianartifact`     |
+| `JIAN_JWT_SECRET`       | JWT(HS256) 签名密钥               | （建议必填，强随机）        |
+| `JIAN_UPSTREAM_TIMEOUT` | proxy 回源上游 HTTP 超时（秒）    | `30`                        |
+| `JIAN_SYNC_TOKEN`       | 节点间复制专用令牌（FR-84）       | （设置即启用复制端点）      |
+| `JIAN_SYNC_PEER_URL`    | 复制对端基址（FR-85）             | （设置即启用同步调度）      |
+| `JIAN_SYNC_INTERVAL`    | 复制轮询间隔（秒，FR-85）         | `5`                         |
+| `JIAN_PUBLIC_URL`       | 对外基础 URL（FR-87，CDN 域名）   | （设置后所有对外 URL 用它） |
 
 > 复制（0.7.0，见 ADR-0013）：两端配置相同 `JIAN_SYNC_TOKEN` 即可互认；任一节点设置 `JIAN_SYNC_PEER_URL`（对方基址）后自动启动后台同步调度——首次自动全量初始化，此后按 `JIAN_SYNC_INTERVAL` 轮询拉取对端增量（复制通道全走 GET，规避 CDN / Tunnel 上传体积限制）。
 

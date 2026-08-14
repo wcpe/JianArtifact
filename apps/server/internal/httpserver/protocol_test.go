@@ -32,6 +32,15 @@ type protocolEnv struct {
 
 // newProtocolEnv 装配完整服务端：契约路由 + Raw 协议路由（真实持久化 + blob 存储）。
 func newProtocolEnv(t *testing.T) *protocolEnv {
+	return newProtocolEnvOpts(t, "")
+}
+
+// newProtocolEnvWithPublicURL 构造带对外基础 URL（FR-87）的协议测试环境。
+func newProtocolEnvWithPublicURL(t *testing.T, publicURL string) *protocolEnv {
+	return newProtocolEnvOpts(t, publicURL)
+}
+
+func newProtocolEnvOpts(t *testing.T, publicURL string) *protocolEnv {
 	t.Helper()
 	db, err := persistence.Open(filepath.Join(t.TempDir(), "proto.db"))
 	if err != nil {
@@ -59,7 +68,7 @@ func newProtocolEnv(t *testing.T) *protocolEnv {
 	rawHandler := protocol.NewRawHandler(assetSvc, repoSvc)
 	mavenHandler := protocol.NewMavenHandler(rawHandler)
 	dispatcher := protocol.NewDispatcher(repoSvc, rawHandler, mavenHandler)
-	npmHandler := protocol.NewNpmHandler(rawHandler, authStore, tokenSvc)
+	npmHandler := protocol.NewNpmHandler(rawHandler, authStore, tokenSvc, publicURL)
 
 	handlers := api.NewHandlers(api.Deps{
 		Version:   "test",
@@ -69,6 +78,7 @@ func newProtocolEnv(t *testing.T) *protocolEnv {
 		Users:     domain.NewUserService(userRepo),
 		Tokens:    tokenSvc,
 		Repos:     repoSvc,
+		PublicURL: publicURL,
 	})
 
 	srv := httpserver.New("test",
