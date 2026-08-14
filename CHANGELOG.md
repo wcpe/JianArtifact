@@ -4,11 +4,21 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## 未发布版本
+
+### 新增
+
+- 复制变更日志与冲突解决（FR-83，见 `docs/specs/0.7.0-replication-core.md` 与 `docs/adr/0013-multi-node-replication.md`）：
+  - 迁移 `0010`：`repl_change` 变更日志表（seq / node_id / op / entity_type / entity_key / data / ts）。
+  - 全部写路径（制品 / 仓库 / ACL / 用户 / 令牌 / 配置）业务写成功后各记一条变更日志，经 `ChangeRecorder` 接口注入（记录失败不阻断业务，靠对账兜底）。
+  - `ReplicationService`：`Record`（落日志）、`Apply`（按 `(ts, node_id)` last-writer-wins 后写覆盖 + 删除 tombstone）、`NodeID`（env `JIAN_NODE_ID` 优先，否则生成持久化）、`LatestSeq` / `ListSince`（seq 断点续传水位）。
+  - 令牌仅同步 sha256 摘要、口令同步 argon2id 哈希（明文不出现）；复制通道全走 GET 拉取、禁止 PUT 推送（规避 Cloudflare Tunnel / CDN 上传体积限制）。
+
 ## [0.6.0] - 2026-07-29
 
 ### 新增
 
-- npm 标准 registry 端点补齐（FR-82，见 `docs/specs/npm-registry-endpoints.md`）：`npm login`（legacy adduser 流，验证账号口令后签发 jat_ API Token，后台可见可吊销）、`whoami`、`ping`、`dist-tag ls/add/rm`（latest 拒删）、`unpublish` 单版本与整包（write 权限即可，hosted 限定）、`deprecate`（复用 publish 合并路径）、`search`（`/-/v1/search`，group 按成员合并）、audit 兜底（空报告）与 abbreviated packument（`Accept: application/vnd.npm.install-v1+json` 白名单裁剪）。
+- npm 标准 registry 端点补齐（FR-82，见 `docs/specs/npm-registry-endpoints.md`）：`npm login`（legacy adduser 流，验证账号口令后签发 jat\_ API Token，后台可见可吊销）、`whoami`、`ping`、`dist-tag ls/add/rm`（latest 拒删）、`unpublish` 单版本与整包（write 权限即可，hosted 限定）、`deprecate`（复用 publish 合并路径）、`search`（`/-/v1/search`，group 按成员合并）、audit 兜底（空报告）与 abbreviated packument（`Accept: application/vnd.npm.install-v1+json` 白名单裁剪）。
 - 内置 anonymous ACL 主体 + 实例级「允许匿名访问」全局开关（FR-66，见 `docs/specs/0.6.0-anonymous-access.md`）：
   - 迁移 `0007`：`setting` 表 + 内置 `anonymous` 用户（不可登录/删除/改密/停用）；ACL 页可为其授 `read`（含 private 仓库）。
   - 开关默认开；关闭后一切匿名请求 401（public 仓库也不例外）；用户管理页顶部提供开关卡片（仅管理员）。

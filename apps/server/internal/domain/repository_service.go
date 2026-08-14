@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"log"
 	"net/url"
 	"slices"
 	"sort"
@@ -21,12 +22,26 @@ type RepositoryService struct {
 	assets   *repository.AssetRepo
 	settings *SettingService
 	users    *repository.UserRepo
+	recorder ChangeRecorder
 }
 
 // NewRepositoryService 构造 RepositoryService。settings 与 users 供匿名判定
 // （全局开关 + anonymous 主体 ACL，FR-66）使用。
 func NewRepositoryService(repos *repository.RepoRepo, acls *repository.AclRepo, assets *repository.AssetRepo, settings *SettingService, users *repository.UserRepo) *RepositoryService {
 	return &RepositoryService{repos: repos, acls: acls, assets: assets, settings: settings, users: users}
+}
+
+// SetChangeRecorder 注入复制变更日志记录器（FR-83）；nil 表示不记录。
+func (s *RepositoryService) SetChangeRecorder(r ChangeRecorder) { s.recorder = r }
+
+// recordChange 记录复制变更日志；记录失败不阻断业务写（对账兜底，见 ADR-0013）。
+func (s *RepositoryService) recordChange(entityType, entityKey, op string, data any) {
+	if s.recorder == nil {
+		return
+	}
+	if err := s.recorder.Record(entityType, entityKey, op, data); err != nil {
+		log.Printf("复制变更日志记录失败 entity=%s key=%s op=%s：%v", entityType, entityKey, op, err)
+	}
 }
 
 // List 返回分页仓库与总数。
@@ -166,7 +181,15 @@ func (s *RepositoryService) Create(name, format, typ, visibility, description st
 			return nil, err
 		}
 	}
-	return s.repos.GetByName(name)
+	repo, err := s.repos.GetByName(name)
+	if err != nil {
+		return nil, err
+	}
+	s.recordChange(EntityRepository, RepoKey(name), OpPut, RepoChangeData{
+		Name: name, Format: repo.Format, Type: repo.Type,
+		Visibility: repo.Visibility, Description: repo.Description, Config: repo.Config,
+	})
+	return repo, nil
 }
 
 // Update 更新仓库可见性、描述与/或结构化配置。visibility 为空表示不改；
@@ -199,7 +222,15 @@ func (s *RepositoryService) Update(name, visibility string, description *string,
 			return nil, mapNotFound(err)
 		}
 	}
-	return s.repos.GetByName(name)
+	updated, err := s.repos.GetByName(name)
+	if err != nil {
+		return nil, mapNotFound(err)
+	}
+	s.recordChange(EntityRepository, RepoKey(name), OpPut, RepoChangeData{
+		Name: name, Format: updated.Format, Type: updated.Type,
+		Visibility: updated.Visibility, Description: updated.Description, Config: updated.Config,
+	})
+	return updated, nil
 }
 
 // validateConfig 按仓库类型校验结构化配置：
@@ -246,7 +277,11 @@ func (s *RepositoryService) validateConfig(name, format, typ string, cfg reposit
 
 // Delete 删除仓库。
 func (s *RepositoryService) Delete(name string) error {
-	return mapNotFound(s.repos.Delete(name))
+	if err := s.repos.Delete(name); err != nil {
+		return mapNotFound(err)
+	}
+	s.recordChange(EntityRepository, RepoKey(name), OpDelete, TombstoneData{Deleted: true})
+	return nil
 }
 
 // GetAcl 返回仓库 ACL；仓库不存在返回 ErrNotFound。
@@ -267,7 +302,26 @@ func (s *RepositoryService) SetAcl(name string, entries []repository.Acl) ([]rep
 	if err := s.acls.Replace(r.ID, entries); err != nil {
 		return nil, err
 	}
+	s.recordAclChange(name, entries)
 	return s.acls.ListByRepo(r.ID)
+}
+
+// recordAclChange 记录仓库 ACL 整仓快照变更（以 username 编址，跨节点一致）。
+func (s *RepositoryService) recordAclChange(repoName string, entries []repository.Acl) {
+	if s.recorder == nil {
+		return
+	}
+	data := AclChangeData{RepoName: repoName, Entries: make([]AclEntryData, 0, len(entries))}
+	for _, e := range entries {
+		u, err := s.users.GetByID(e.SubjectID)
+		if err != nil {
+			continue // 主体不存在（如已删除用户），跳过该条
+		}
+		data.Entries = append(data.Entries, AclEntryData{Username: u.Username, Action: e.Action})
+	}
+	if err := s.recorder.Record(EntityAcl, AclKey(repoName), OpPut, data); err != nil {
+		log.Printf("复制变更日志记录失败 entity=%s key=%s op=%s：%v", EntityAcl, AclKey(repoName), OpPut, err)
+	}
 }
 
 // CleanupEmptyMavenArtifacts 清理 Maven 仓库中没有 .jar 文件的 GAV 目录。

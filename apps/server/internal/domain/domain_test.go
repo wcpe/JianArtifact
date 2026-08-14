@@ -290,7 +290,7 @@ func TestTokenDigestNotPlaintext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("建用户：%v", err)
 	}
-	svc := domain.NewTokenService(tokenRepo)
+	svc := domain.NewTokenService(tokenRepo, userRepo)
 	plain, tok, err := svc.Create(uid, "ci")
 	if err != nil {
 		t.Fatalf("签发 Token：%v", err)

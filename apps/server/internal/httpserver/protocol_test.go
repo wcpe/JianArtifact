@@ -52,7 +52,7 @@ func newProtocolEnv(t *testing.T) *protocolEnv {
 	jwtMgr := auth.NewJWTManager([]byte("integration-test-secret-key-32byte!!"))
 	authStore := domain.NewAuthStore(userRepo, tokenRepo, revokedRepo)
 	authenticator := auth.NewAuthenticator(jwtMgr, authStore)
-	tokenSvc := domain.NewTokenService(tokenRepo)
+	tokenSvc := domain.NewTokenService(tokenRepo, userRepo)
 
 	repoSvc := domain.NewRepositoryService(repoRepo, aclRepo, assetRepo, domain.NewSettingService(repository.NewSettingRepo(db)), userRepo)
 	assetSvc := domain.NewAssetService(repoRepo, assetRepo, blobstore.NewStore(t.TempDir()), upstream.NewClient(5*time.Second))

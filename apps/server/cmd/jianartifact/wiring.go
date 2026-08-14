@@ -26,6 +26,7 @@ type appServices struct {
 	assetSvc     *domain.AssetService
 	migrationSvc *domain.MigrationService
 	settingSvc   *domain.SettingService
+	replSvc      *domain.ReplicationService
 	store        auth.Store
 	jwt          *auth.JWTManager
 }
@@ -55,6 +56,18 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	settingSvc := domain.NewSettingService(repository.NewSettingRepo(db))
 	repoSvc := domain.NewRepositoryService(repoRepo, aclRepo, assetRepo, settingSvc, userRepo)
 	assetSvc := domain.NewAssetService(repoRepo, assetRepo, blobs, upstreamClient)
+	userSvc := domain.NewUserService(userRepo)
+	tokenSvc := domain.NewTokenService(tokenRepo, userRepo)
+
+	// FR-83：复制变更日志。ReplicationService 作为 ChangeRecorder 注入各写路径 service。
+	replSvc := domain.NewReplicationService(
+		repository.NewReplChangeRepo(db), assetRepo, repoRepo, aclRepo, userRepo, tokenRepo, repository.NewSettingRepo(db),
+	)
+	assetSvc.SetChangeRecorder(replSvc)
+	repoSvc.SetChangeRecorder(replSvc)
+	userSvc.SetChangeRecorder(replSvc)
+	tokenSvc.SetChangeRecorder(replSvc)
+	settingSvc.SetChangeRecorder(replSvc)
 
 	offlineIndexRepo := repository.NewOfflineIndexRepo(db)
 	offlineScanner := offindex.New(offlineIndexRepo)
@@ -78,12 +91,13 @@ func openServices(cfg *config.Config) (*appServices, error) {
 		db:           db,
 		users:        userRepo,
 		authSvc:      domain.NewAuthService(userRepo, revokedRepo, jwtMgr),
-		userSvc:      domain.NewUserService(userRepo),
-		tokenSvc:     domain.NewTokenService(tokenRepo),
+		userSvc:      userSvc,
+		tokenSvc:     tokenSvc,
 		repoSvc:      repoSvc,
 		assetSvc:     assetSvc,
 		migrationSvc: migrationSvc,
 		settingSvc:   settingSvc,
+		replSvc:      replSvc,
 		store:        domain.NewAuthStore(userRepo, tokenRepo, revokedRepo),
 		jwt:          jwtMgr,
 	}, nil

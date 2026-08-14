@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"strings"
 	"time"
 
@@ -31,12 +32,16 @@ type AssetService struct {
 	blobs    *blobstore.Store
 	upstream *upstream.Client
 	sf       singleflight.Group
+	recorder ChangeRecorder
 }
 
 // NewAssetService 构造 AssetService。upstream 供 proxy 回源使用（hosted-only 部署可传 nil）。
 func NewAssetService(repos *repository.RepoRepo, assets *repository.AssetRepo, blobs *blobstore.Store, up *upstream.Client) *AssetService {
 	return &AssetService{repos: repos, assets: assets, blobs: blobs, upstream: up}
 }
+
+// SetChangeRecorder 注入复制变更日志记录器（FR-83）；nil 表示不记录。
+func (s *AssetService) SetChangeRecorder(r ChangeRecorder) { s.recorder = r }
 
 // Put 向 hosted 仓库发布一件制品：流式写入 blob，再覆盖写 asset 元数据。
 // 仓库不存在返回 ErrNotFound；非 hosted 仓库（proxy/group）返回 ErrConflict。
@@ -60,7 +65,20 @@ func (s *AssetService) Put(repoName, path string, r io.Reader, contentType strin
 	if err := s.assets.Upsert(repo.ID, path, hash, size, contentType, sha1sum, md5sum); err != nil {
 		return nil, err
 	}
+	s.recordChange(EntityAsset, AssetKey(repoName, path), OpPut, AssetChangeData{
+		Path: path, BlobHash: hash, Size: size, ContentType: contentType, Sha1: sha1sum, Md5: md5sum,
+	})
 	return s.assets.GetByPath(repo.ID, path)
+}
+
+// recordChange 记录复制变更日志；记录失败不阻断业务写（复制尽力最终一致，对账兜底，见 ADR-0013）。
+func (s *AssetService) recordChange(entityType, entityKey, op string, data any) {
+	if s.recorder == nil {
+		return
+	}
+	if err := s.recorder.Record(entityType, entityKey, op, data); err != nil {
+		log.Printf("复制变更日志记录失败 entity=%s key=%s op=%s：%v", entityType, entityKey, op, err)
+	}
 }
 
 // BackfillChecksumsResult 是历史资产 sha1/md5 回填的统计。
@@ -254,7 +272,11 @@ func (s *AssetService) Delete(repoName, path string) error {
 	if err != nil {
 		return mapNotFound(err)
 	}
-	return mapNotFound(s.assets.DeleteByPath(repo.ID, path))
+	if err := s.assets.DeleteByPath(repo.ID, path); err != nil {
+		return mapNotFound(err)
+	}
+	s.recordChange(EntityAsset, AssetKey(repoName, path), OpDelete, TombstoneData{Deleted: true})
+	return nil
 }
 
 // mapUpstreamErr 把 upstream 层错误映射为领域错误：404 视为未命中（ErrNotFound）、

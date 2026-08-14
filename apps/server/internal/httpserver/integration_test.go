@@ -52,7 +52,7 @@ func newTestEnv(t *testing.T) *testEnv {
 		Migration:  db.CurrentVersion,
 		Auth:       domain.NewAuthService(userRepo, revokedRepo, jwtMgr),
 		Users:      domain.NewUserService(userRepo),
-		Tokens:     domain.NewTokenService(tokenRepo),
+		Tokens:     domain.NewTokenService(tokenRepo, userRepo),
 		Repos:      domain.NewRepositoryService(repoRepo, aclRepo, repository.NewAssetRepo(db), domain.NewSettingService(repository.NewSettingRepo(db)), userRepo),
 		Migrations: migrationSvc,
 	})

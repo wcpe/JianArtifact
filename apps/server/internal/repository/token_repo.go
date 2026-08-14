@@ -54,3 +54,40 @@ func (r *TokenRepo) UserIDByDigest(digest string) (int64, error) {
 	}
 	return uid, err
 }
+
+// StoredToken 是 api_token 表含摘要的完整行模型（仅内部/复制应用用，不对外暴露摘要）。
+type StoredToken struct {
+	ID        int64   `db:"id"`
+	UserID    int64   `db:"user_id"`
+	Name      string  `db:"name"`
+	Digest    string  `db:"token_digest"`
+	RevokedAt *string `db:"revoked_at"`
+}
+
+// GetByDigest 按摘要查 Token（含已吊销），供复制应用（FR-83）定位本地记录；无匹配返回 ErrNotFound。
+func (r *TokenRepo) GetByDigest(digest string) (*StoredToken, error) {
+	var t StoredToken
+	err := r.db.Get(&t,
+		`SELECT id, user_id, name, token_digest, revoked_at FROM api_token WHERE token_digest = ?`, digest)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
+// GetByIDAndUser 按 ID + 所属用户查 Token（含摘要与吊销状态），供吊销时记录变更日志；无匹配返回 ErrNotFound。
+func (r *TokenRepo) GetByIDAndUser(id, userID int64) (*StoredToken, error) {
+	var t StoredToken
+	err := r.db.Get(&t,
+		`SELECT id, user_id, name, token_digest, revoked_at FROM api_token WHERE id = ? AND user_id = ?`, id, userID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &t, nil
+}

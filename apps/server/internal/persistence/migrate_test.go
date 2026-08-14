@@ -23,7 +23,7 @@ func TestMigrateCreatesSchema(t *testing.T) {
 		t.Fatalf("Migrate：%v", err)
 	}
 	// 关键表应存在且可查询。
-	tables := []string{"user", "api_token", "revoked_token", "repository", "acl", "asset", "migration_task"}
+	tables := []string{"user", "api_token", "revoked_token", "repository", "acl", "asset", "migration_task", "setting", "repl_change"}
 	for _, tbl := range tables {
 		var count int
 		if err := db.Get(&count, "SELECT COUNT(*) FROM "+tbl); err != nil {
@@ -44,16 +44,16 @@ func TestMigrateIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CurrentVersion：%v", err)
 	}
-	if version != "0009" {
-		t.Errorf("迁移版本 = %q，期望 0009", version)
+	if version != "0010" {
+		t.Errorf("迁移版本 = %q，期望 0010", version)
 	}
 	// 重复迁移不应产生多余记录。
 	var applied int
 	if err := db.Get(&applied, "SELECT COUNT(*) FROM schema_migrations"); err != nil {
 		t.Fatalf("统计迁移记录：%v", err)
 	}
-	if applied != 9 {
-		t.Errorf("已应用迁移数 = %d，期望 9", applied)
+	if applied != 10 {
+		t.Errorf("已应用迁移数 = %d，期望 10", applied)
 	}
 }
 

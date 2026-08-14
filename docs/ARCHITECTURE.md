@@ -71,6 +71,7 @@ web          go:embed 前端 dist（由构建注入）
 - **setting**（0.6.0）：实例级键值设置（key 主键 + value 文本）；当前仅 `anonymous_access_enabled`（默认 `true`）。匿名鉴权单点收敛于 `RepositoryService.CanAccess`（`subjectID==0` 即匿名：开关关一律拒绝；开则 public read 放行，否则按 anonymous 用户 ID 查 ACL），协议层与 API 层共用。
 
 - **migration_task**（0.4.0）：Nexus 迁移任务——状态（planned/running/completed/failed/cancelled）、来源类型与配置 JSON、凭据引用名（无明文）、冲突策略、plan/checkpoint/report JSON、错误摘要与时间戳。状态机与 discover 落库 / 显式 start / 崩溃标 failed 见 ADR-0012。
+- **repl_change**（0.7.0，FR-83）：复制变更日志——本地每次写操作（制品 / 仓库 / ACL / 用户 / 令牌 / 配置的 put/delete）落一条日志：全局递增 `seq`、写入节点 `node_id`、操作 `op`、实体类型与跨节点自然键 `entity_key`、变更后数据 JSON `data`、时间戳 `ts`。供节点间复制（ADR-0013）；`idx_repl_change_entity(entity_type, entity_key, ts)` 支撑 LWW 冲突裁决。
 
 **blob 内容真源 = 文件系统**：按内容哈希（如 sha256）分片目录寻址；元数据 asset 记录哈希引用。一致性约束：元数据事务提交成功后 blob 才对外可见（见 §5）。
 
@@ -91,6 +92,7 @@ web          go:embed 前端 dist（由构建注入）
 - **迁移状态机**：迁移任务持久化于 SQLite，支持中断续传、幂等、冲突策略；异步执行、进度可查、产出报告。
 - **鉴权**：JWT(HS256) 会话 + API Token；中间件统一校验，ACL 在后端判定（前端不替代授权）。
 - **配置**：环境变量 / 配置文件注入；凭据引用名 → 环境变量注入，不入库不进日志。
+- **复制变更日志（FR-83，见 ADR-0013）**：domain 层各写路径（制品 / 仓库 / ACL / 用户 / 令牌 / 配置）在业务写成功后经 `ChangeRecorder` 接口落一条 `repl_change`（记录失败不阻断业务，靠对账兜底）；`ReplicationService.Apply` 按 `(ts, node_id)` 后写覆盖（LWW）把对端变更应用到本地业务表，删除以 tombstone 表达。复制通道全走 GET 拉取、禁止 PUT 推送（规避 Cloudflare Tunnel / CDN 上传体积限制）；传输与调度由 FR-84 / FR-85 落地。
 
 ## 6. 部署
 
