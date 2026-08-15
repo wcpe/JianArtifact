@@ -425,3 +425,55 @@ func hasChangeKey(t *testing.T, changes []repository.Change, key string) bool {
 	}
 	return false
 }
+
+// TestReplicationApplySettingRejectsClusterKey 应用对端变更时拒绝 repl:* 集群键（用户约束：
+// 集群同步设置坚决不能同步，避免对端配置互相覆盖造成混乱）。
+func TestReplicationApplySettingRejectsClusterKey(t *testing.T) {
+	db := newTestDB(t)
+	settings := repository.NewSettingRepo(db)
+	replSvc := domain.NewReplicationService(
+		repository.NewReplChangeRepo(db), repository.NewAssetRepo(db), repository.NewRepoRepo(db),
+		repository.NewAclRepo(db), repository.NewUserRepo(db), repository.NewTokenRepo(db), settings,
+		mustBlobStore(t))
+
+	// 本地先写一个集群键值。
+	if err := settings.Set(domain.SettingKeyReplEnabled, "false"); err != nil {
+		t.Fatalf("本地写集群键：%v", err)
+	}
+
+	// 对端发来 repl:enabled=true 的变更（无论时间戳多新）→ 应被拒绝应用，本地保持 false。
+	late := repository.Change{
+		TS: time.Now().Add(time.Hour).Format(time.RFC3339Nano), NodeID: "node-remote",
+		Op: domain.OpPut, EntityType: domain.EntitySetting,
+		EntityKey: domain.SettingKey(domain.SettingKeyReplEnabled),
+		Data:      `{"key":"repl:enabled","value":"true"}`,
+	}
+	if err := replSvc.Apply(late); err != nil {
+		t.Fatalf("Apply 集群键：%v", err)
+	}
+	v, err := settings.Get(domain.SettingKeyReplEnabled)
+	if err != nil {
+		t.Fatalf("读取集群键：%v", err)
+	}
+	if v != "false" {
+		t.Fatalf("集群键不应被对端覆盖，得 %q，期望 false", v)
+	}
+
+	// 对照：非集群业务设置仍可被应用。
+	ch := repository.Change{
+		TS: time.Now().Format(time.RFC3339Nano), NodeID: "node-remote",
+		Op: domain.OpPut, EntityType: domain.EntitySetting,
+		EntityKey: domain.SettingKey(domain.SettingKeyPublicURL),
+		Data:      `{"key":"public_url","value":"https://example.com"}`,
+	}
+	if err := replSvc.Apply(ch); err != nil {
+		t.Fatalf("Apply 业务设置：%v", err)
+	}
+	got, err := settings.Get(domain.SettingKeyPublicURL)
+	if err != nil {
+		t.Fatalf("读取业务设置：%v", err)
+	}
+	if got != "https://example.com" {
+		t.Fatalf("业务设置应被应用，得 %q", got)
+	}
+}

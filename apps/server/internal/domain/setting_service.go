@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log"
 	"strconv"
+	"strings"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
@@ -119,11 +120,15 @@ func (s *SettingService) secsSetting(key string) int {
 	return secs
 }
 
-// setIntSetting 写入整数秒设置并记录复制变更日志。
+// setIntSetting 写入整数秒设置。集群相关键（repl:*）不记录复制变更日志，
+// 避免同步间隔等集群配置被复制到对端造成混乱（见 applySetting 的同类过滤）。
 func (s *SettingService) setIntSetting(key string, secs int) error {
 	v := strconv.Itoa(secs)
 	if err := s.settings.Set(key, v); err != nil {
 		return err
+	}
+	if strings.HasPrefix(key, SettingKeyClusterPrefix) {
+		return nil
 	}
 	s.recordChange(EntitySetting, SettingKey(key), OpPut, SettingChangeData{Key: key, Value: v})
 	return nil

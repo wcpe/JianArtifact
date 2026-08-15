@@ -616,6 +616,10 @@ func (s *ReplicationService) applyToken(ch repository.Change) error {
 
 func (s *ReplicationService) applySetting(ch repository.Change) error {
 	key := strings.TrimPrefix(ch.EntityKey, keyPrefixSetting)
+	// 集群配置键（repl:*）为节点本地设置，绝不应用对端变更，避免配置互相覆盖造成混乱。
+	if strings.HasPrefix(key, SettingKeyClusterPrefix) {
+		return nil
+	}
 	var d SettingChangeData
 	if err := json.Unmarshal([]byte(ch.Data), &d); err != nil {
 		return err

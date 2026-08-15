@@ -95,3 +95,29 @@ func TestSettingsWriteRecordsChange(t *testing.T) {
 		t.Errorf("变更日志字段不符：%+v", rec.records[0])
 	}
 }
+
+// TestSettingsClusterKeyNotReplicated 集群配置键（repl:*）绝不记录复制变更日志，
+// 避免同步间隔等节点本地配置被复制到对端造成混乱（用户约束）。
+func TestSettingsClusterKeyNotReplicated(t *testing.T) {
+	db := newTestDB(t)
+	settings := repository.NewSettingRepo(db)
+	svc := domain.NewSettingService(settings)
+	rec := &recordingRecorder{}
+	svc.SetChangeRecorder(rec)
+
+	// SetSyncInterval 写 repl:sync_interval（集群键）→ 不应记录变更日志。
+	if err := svc.SetSyncInterval(10); err != nil {
+		t.Fatalf("SetSyncInterval：%v", err)
+	}
+	if len(rec.records) != 0 {
+		t.Fatalf("集群键 repl:sync_interval 不应记录复制变更，得 %d 条：%+v", len(rec.records), rec.records)
+	}
+
+	// 对照：业务键 SetUpstreamTimeout 仍应记录。
+	if err := svc.SetUpstreamTimeout(45); err != nil {
+		t.Fatalf("SetUpstreamTimeout：%v", err)
+	}
+	if len(rec.records) != 1 {
+		t.Fatalf("业务键应记录 1 条变更，得 %d", len(rec.records))
+	}
+}
