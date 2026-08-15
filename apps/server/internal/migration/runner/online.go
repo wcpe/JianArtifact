@@ -28,24 +28,25 @@ type onlineAssetsPage struct {
 
 // enumerateOnlineREST 枚举 plan 中各仓库的资产，Open 时流式 HTTP GET downloadUrl。
 // cred 为已解析的凭据明文（user:pass 或 token）；空表示匿名。
-func enumerateOnlineREST(baseURL, cred string, plan discover.Plan) ([]sourceItem, error) {
+func enumerateOnlineREST(ctx context.Context, baseURL, cred string, plan discover.Plan, onProg discover.EnumProgress) ([]sourceItem, error) {
 	if baseURL == "" {
 		return nil, fmt.Errorf("sourceConfig.url 为空")
 	}
 	base := strings.TrimRight(baseURL, "/")
-	client := &http.Client{Timeout: 0} // 单请求不整体超时；依赖 ctx（Open 时用 Background 短超时客户端）
 	// 下载用独立超时客户端
 	dlClient := &http.Client{Timeout: 5 * time.Minute}
 	listClient := &http.Client{Timeout: 60 * time.Second}
-	_ = client
 
 	var items []sourceItem
 	for _, repo := range plan.Repositories {
+		if err := ctx.Err(); err != nil {
+			return nil, ctx.Err()
+		}
 		format := repo.Format
 		if format == "" {
 			format = "raw"
 		}
-		assets, err := listAllAssets(listClient, base, repo.Name, cred)
+		assets, err := listAllAssets(ctx, listClient, base, repo.Name, cred, onProg)
 		if err != nil {
 			return nil, fmt.Errorf("枚举仓库 %s：%w", repo.Name, err)
 		}
@@ -74,12 +75,15 @@ func enumerateOnlineREST(baseURL, cred string, plan discover.Plan) ([]sourceItem
 	return items, nil
 }
 
-func listAllAssets(client *http.Client, base, repo, cred string) ([]onlineAsset, error) {
+func listAllAssets(ctx context.Context, client *http.Client, base, repo, cred string, onProg discover.EnumProgress) ([]onlineAsset, error) {
 	var all []onlineAsset
 	token := ""
 	// 防护：单仓最多 10000 页 × 默认页大小，避免失控
 	const maxPages = 10000
 	for page := 0; page < maxPages; page++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		q := url.Values{}
 		q.Set("repository", repo)
 		if token != "" {
@@ -104,6 +108,9 @@ func listAllAssets(client *http.Client, base, repo, cred string) ([]onlineAsset,
 			return nil, fmt.Errorf("解析资产列表：%w", err)
 		}
 		all = append(all, pg.Items...)
+		if onProg != nil {
+			onProg(int64(len(all)), repo)
+		}
 		if pg.ContinuationToken == "" {
 			break
 		}

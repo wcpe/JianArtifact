@@ -441,7 +441,7 @@ func (r *Runner) enumerate(ctx context.Context, task *repository.MigrationTask, 
 				return nil, err
 			}
 		}
-		return enumerateOnlineREST(urlStr, cred, plan)
+		return enumerateOnlineREST(ctx, urlStr, cred, plan, onProg)
 	default:
 		return nil, fmt.Errorf("不支持的 sourceType %s", task.SourceType)
 	}
