@@ -114,9 +114,16 @@ func (s *Server) Handler(assets fs.FS) http.Handler {
 
 // mountStatic 把未命中契约路由的 GET/HEAD 请求交给前端静态资源；
 // 资源不存在时回退到 index.html，支持前端客户端路由（SPA）。
+//
+// 缓存策略（根治"前端发版后浏览器仍显示旧版"）：
+//   - index.html（含 SPA 回退）→ Cache-Control: no-cache：每次请求回源验证，
+//     发版后刷新立即拿到引用最新 content-hash 资源的入口页；
+//   - /assets/*（构建产物带 content-hash，内容变则文件名变）→ 长缓存 + immutable；
+//   - 其他静态文件（favicon 等无 hash）→ no-cache，避免误缓存导致更新不生效。
 func (s *Server) mountStatic(r *gin.Engine, assets fs.FS) {
 	fileServer := http.FileServer(http.FS(assets))
 	serveIndex := func(c *gin.Context) {
+		c.Header("Cache-Control", "no-cache")
 		c.Request.URL.Path = "/"
 		fileServer.ServeHTTP(c.Writer, c.Request)
 	}
@@ -132,6 +139,11 @@ func (s *Server) mountStatic(r *gin.Engine, assets fs.FS) {
 		}
 		if f, err := assets.Open(name); err == nil {
 			_ = f.Close()
+			if strings.HasPrefix(name, "assets/") {
+				c.Header("Cache-Control", "public, max-age=31536000, immutable")
+			} else {
+				c.Header("Cache-Control", "no-cache")
+			}
 			fileServer.ServeHTTP(c.Writer, c.Request)
 			return
 		}

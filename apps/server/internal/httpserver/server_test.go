@@ -81,14 +81,15 @@ func TestStaticAndSPAFallback(t *testing.T) {
 	h := New("v").Handler(assets)
 
 	tests := []struct {
-		name     string
-		path     string
-		wantCode int
-		wantBody string
+		name      string
+		path      string
+		wantCode  int
+		wantBody  string
+		wantCache string
 	}{
-		{name: "根路径返回index", path: "/", wantCode: http.StatusOK, wantBody: "<!doctype html><title>jian</title>"},
-		{name: "静态资源命中", path: "/assets/app.js", wantCode: http.StatusOK, wantBody: "console.log(1)"},
-		{name: "未知前端路由回退index", path: "/repositories/maven", wantCode: http.StatusOK, wantBody: "<!doctype html><title>jian</title>"},
+		{name: "根路径返回index", path: "/", wantCode: http.StatusOK, wantBody: "<!doctype html><title>jian</title>", wantCache: "no-cache"},
+		{name: "静态资源命中", path: "/assets/app.js", wantCode: http.StatusOK, wantBody: "console.log(1)", wantCache: "public, max-age=31536000, immutable"},
+		{name: "未知前端路由回退index", path: "/repositories/maven", wantCode: http.StatusOK, wantBody: "<!doctype html><title>jian</title>", wantCache: "no-cache"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -100,6 +101,9 @@ func TestStaticAndSPAFallback(t *testing.T) {
 			}
 			if got := rec.Body.String(); got != tt.wantBody {
 				t.Errorf("体 = %q，期望 %q", got, tt.wantBody)
+			}
+			if got := rec.Header().Get("Cache-Control"); got != tt.wantCache {
+				t.Errorf("Cache-Control = %q，期望 %q", got, tt.wantCache)
 			}
 		})
 	}
