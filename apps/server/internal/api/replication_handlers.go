@@ -162,5 +162,9 @@ func (h *Handlers) GetClusterSyncLogs(c *gin.Context) {
 		writeDomainErr(c, err)
 		return
 	}
+	// 空数据时返回 [] 而非 null：前端渲染依赖数组（list.items.length），null 会崩溃。
+	if items == nil {
+		items = []repository.SyncLogEntry{}
+	}
 	c.JSON(http.StatusOK, SyncLogListResponse{Items: items, Total: total})
 }

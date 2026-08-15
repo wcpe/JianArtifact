@@ -177,7 +177,7 @@ export function ClusterPage() {
               </Text>
               <AsyncBoundary state={syncState}>
                 {(list) =>
-                  list.items.length === 0 ? (
+                  (list.items ?? []).length === 0 ? (
                     <EmptyState message={t("cluster.syncLogEmpty")} />
                   ) : (
                     <>

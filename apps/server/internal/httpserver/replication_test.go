@@ -368,3 +368,44 @@ func TestClusterSyncLogs(t *testing.T) {
 		t.Errorf("limit=1 应回 1 条且 total=1，得 items=%d total=%d", len(page.Items), page.Total)
 	}
 }
+
+// TestClusterSyncLogsEmpty 空数据（无同步记录）时 items 应为 JSON 数组 [] 而非 null——
+// 前端同步历史渲染依赖数组（list.items.length），null 会导致页面崩溃。
+func TestClusterSyncLogsEmpty(t *testing.T) {
+	db, err := persistence.Open(filepath.Join(t.TempDir(), "sync-logs-empty.db"))
+	if err != nil {
+		t.Fatalf("打开数据库：%v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := db.Migrate(); err != nil {
+		t.Fatalf("迁移：%v", err)
+	}
+	handlers := api.NewHandlers(api.Deps{SyncLogs: repository.NewSyncLogRepo(db)})
+
+	gin.SetMode(gin.ReleaseMode)
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("auth.principal", &auth.Principal{Role: "admin", Username: "admin", UserID: 1})
+		c.Next()
+	})
+	r.GET("/api/v1/cluster/sync-logs", handlers.GetClusterSyncLogs)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/cluster/sync-logs", nil)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("应 200，得 %d", rec.Code)
+	}
+	// 断言 items 为 JSON 数组（[]）而非 null。
+	var raw map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("解析响应：%v", err)
+	}
+	items, ok := raw["items"].([]any)
+	if !ok {
+		t.Fatalf("items 应为数组 []，得 %v（体：%s）", raw["items"], rec.Body.String())
+	}
+	if len(items) != 0 {
+		t.Errorf("空库 items 长度应为 0，得 %d", len(items))
+	}
+}

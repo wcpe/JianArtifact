@@ -58,6 +58,8 @@
 - 静态资源缓存头（修复"前端发版后浏览器仍显示旧版"）：
   - `index.html`（含 SPA 回退）响应加 `Cache-Control: no-cache`，每次请求回源验证，发版后刷新立即拿到引用最新 content-hash 资源的入口页。
   - `/assets/*`（构建产物带 content-hash，内容变则文件名变）加 `Cache-Control: public, max-age=31536000, immutable` 长缓存；其他无 hash 静态文件（如 favicon）保持 `no-cache`，避免误缓存导致更新不生效。
+- 同步历史空数据崩溃（`GET /api/v1/cluster/sync-logs` 无记录时 `items` 返回 `null` 而非 `[]`，web 集群页同步历史渲染 `list.items.length` 崩溃）：
+  - 后端空数据时返回空数组 `[]`（复现测试 `TestClusterSyncLogsEmpty`）；前端 `list.items` 加空值防御（`?? []`）。
 
 ## [0.6.0] - 2026-07-29
 
