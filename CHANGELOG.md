@@ -49,6 +49,9 @@
   - 基础配置四项入库 `setting`（`public_url` / `upstream_timeout` / `repl:sync_interval`，复用 `anonymous_access_enabled`）；env 值仅首启兜底写入，web 可运行时覆盖。
   - 新增 `GET/PUT /api/v1/settings`（仅 admin）：GET 返回生效值，PUT 字段可选、传哪个改哪个；校验 `publicUrl` 为 http/https 绝对 URL 或空、秒级取值 1–3600，非法 400。
   - **运行时生效（不重启）**：同步间隔由 `ReplicationScheduler` 每轮读 setting（变化则重置 ticker，缺省回退 env/默认 5s）；对外 URL 由 usage 与 npm `dist.tarball` 生成处动态读；回源超时经 `OnUpstreamTimeoutChange` 回调即时同步到 `upstream.Client.SetTimeout`（RWMutex 保护，Fetch 与 SetTimeout 并发安全）。
+- 设置页统一化（FR-90，见 `docs/specs/0.7.0-settings-page.md`）：
+  - 侧边栏「管理」新增「设置」入口（仅管理员），一级 tab：基础设置（匿名开关 / 对外 URL / 回源超时 / 同步间隔，接 FR-89 设置端点）与集群（对端 URL / 令牌 / 自动同步开关，接既有集群端点）。
+  - 配置迁移：匿名访问开关自用户页、对端配置自集群页迁入设置页；集群页保留同步状态、同步历史与「立即同步」按钮。
 
 ### 修复
 

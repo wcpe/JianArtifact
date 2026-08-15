@@ -30,6 +30,7 @@ import {
   IconRefresh,
   IconSearch,
   IconServer,
+  IconSettings,
   IconTransfer,
   IconUsers,
 } from "@tabler/icons-react";
@@ -98,6 +99,13 @@ const NAV_SECTIONS: NavSection[] = [
         labelKey: "nav.licenses",
         path: "/licenses",
         icon: <IconLicense size={18} />,
+        adminOnly: true,
+      },
+      // FR-90: 设置页（实例级基础配置与集群同步配置，仅管理员）
+      {
+        labelKey: "nav.settings",
+        path: "/settings",
+        icon: <IconSettings size={18} />,
         adminOnly: true,
       },
       // FR-86: 集群页（节点间复制同步状态，仅管理员）

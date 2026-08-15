@@ -1,6 +1,7 @@
-// FR-86/88: 集群页——「集群」tab（对端配置、自动同步开关、立即同步按钮、同步状态）与
-// 「同步历史」tab（复制记录与进度可视化，仅记录有变更/失败的事件）。仅管理员。
-// 数据来自非契约端点 GET/PUT /api/v1/cluster、POST /api/v1/cluster/sync-now、GET /api/v1/cluster/sync-logs（复制引擎见 FR-83~85）。
+// FR-86/88/90: 集群页——「集群」tab（同步状态 + 立即同步按钮；对端配置与自动同步
+// 开关已迁至设置页「集群」tab）与「同步历史」tab（复制记录与进度可视化，仅记录有
+// 变更/失败的事件）。仅管理员。
+// 数据来自非契约端点 GET /api/v1/cluster、POST /api/v1/cluster/sync-now、GET /api/v1/cluster/sync-logs（复制引擎见 FR-83~85）。
 import {
   Badge,
   Button,
@@ -8,11 +9,9 @@ import {
   Group,
   Pagination,
   Stack,
-  Switch,
   Table,
   Tabs,
   Text,
-  TextInput,
   Title,
 } from "@mantine/core";
 import { EmptyState, PageHeader } from "@jianartifact/ui";
@@ -23,7 +22,6 @@ import { AsyncBoundary } from "../components/AsyncBoundary";
 import {
   getClusterStatus,
   getClusterSyncLogs,
-  setClusterConfig,
   triggerClusterSync,
   type SyncLogEntry,
 } from "../api/endpoints";
@@ -93,11 +91,6 @@ export function ClusterPage() {
   const { t } = useTranslation();
   const state = useAsync(getClusterStatus, []);
   const [, force] = useReducer((x) => x + 1, 0);
-
-  // 对端配置表单（令牌不回显，留空保持不变）。
-  const [peerUrl, setPeerUrl] = useState("");
-  const [peerToken, setPeerToken] = useState("");
-  const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
 
   // 同步历史（FR-88）：独立分页加载，不阻塞主状态。
@@ -116,55 +109,11 @@ export function ClusterPage() {
           <Tabs.Tab value="history">{t("cluster.syncHistoryTitle")}</Tabs.Tab>
         </Tabs.List>
 
-        {/* 集群 tab：对端配置 / 状态 / 同步控制。 */}
+        {/* 集群 tab：同步状态 + 立即同步（对端配置与自动同步开关已迁设置页）。 */}
         <Tabs.Panel value="cluster" pt="md">
           <AsyncBoundary state={state}>
             {(st) => (
               <Stack gap="md" maw={640}>
-                {/* 对端配置表单（FR-88）：保存仅入库，不自动开始同步。 */}
-                <Card withBorder radius="md" padding={density.cardPadding}>
-                  <Stack gap="sm">
-                    <Title order={5}>{t("cluster.peerConfigTitle")}</Title>
-                    <TextInput
-                      label={t("cluster.peerUrlLabel")}
-                      placeholder="https://repo1.wcpe.top"
-                      value={peerUrl || st.peerUrl || ""}
-                      onChange={(e) => setPeerUrl(e.currentTarget.value)}
-                    />
-                    <TextInput
-                      label={t("cluster.peerTokenLabel")}
-                      placeholder={t("cluster.peerTokenPlaceholder")}
-                      value={peerToken}
-                      onChange={(e) => setPeerToken(e.currentTarget.value)}
-                    />
-                    <Group justify="space-between" align="center">
-                      <Text size="xs" c="dimmed">
-                        {t("cluster.peerConfigHint")}
-                      </Text>
-                      <Button
-                        size="xs"
-                        variant="default"
-                        loading={saving}
-                        onClick={async () => {
-                          setSaving(true);
-                          try {
-                            await setClusterConfig({
-                              peerUrl: peerUrl || undefined,
-                              peerToken: peerToken || undefined,
-                            });
-                            setPeerToken(""); // 令牌不回显
-                            force();
-                          } finally {
-                            setSaving(false);
-                          }
-                        }}
-                      >
-                        {t("cluster.saveConfig")}
-                      </Button>
-                    </Group>
-                  </Stack>
-                </Card>
-
                 {!st.peerUrl ? (
                   <Card withBorder radius="md" padding={density.cardPadding}>
                     <EmptyState message={t("cluster.notConfigured")} />
@@ -172,7 +121,26 @@ export function ClusterPage() {
                 ) : (
                   <Card withBorder radius="md" padding={density.cardPadding}>
                     <Stack gap="xs">
-                      <Title order={5}>{t("cluster.title")}</Title>
+                      <Group justify="space-between" align="center" wrap="nowrap">
+                        <Title order={5}>{t("cluster.title")}</Title>
+                        <Button
+                          size="xs"
+                          variant="default"
+                          loading={syncing}
+                          disabled={!st.peerUrl}
+                          onClick={async () => {
+                            setSyncing(true);
+                            try {
+                              await triggerClusterSync();
+                              force();
+                            } finally {
+                              setSyncing(false);
+                            }
+                          }}
+                        >
+                          {t("cluster.syncNow")}
+                        </Button>
+                      </Group>
                       <StatRow label={t("cluster.nodeId")} value={st.nodeId} />
                       <StatRow label={t("cluster.peerUrl")} value={st.peerUrl} />
                       <StatRow
@@ -195,56 +163,6 @@ export function ClusterPage() {
                     </Stack>
                   </Card>
                 )}
-
-                {/* 同步控制：自动同步开关 + 立即同步（FR-88）。 */}
-                <Card withBorder radius="md" padding={density.cardPadding}>
-                  <Group justify="space-between" gap="md" wrap="nowrap">
-                    <Stack gap={0}>
-                      <Text size="sm" fw={500}>
-                        {t("cluster.enabledLabel")}
-                      </Text>
-                      <Text size="xs" c="dimmed">
-                        {t("cluster.enabledHint")}
-                      </Text>
-                    </Stack>
-                    <Badge color={st.enabled ? "green" : "gray"} variant="light">
-                      {st.enabled ? t("common.yes") : t("common.no")}
-                    </Badge>
-                    <Group gap="xs" wrap="nowrap">
-                      <Button
-                        size="xs"
-                        variant="default"
-                        loading={syncing}
-                        disabled={!st.peerUrl}
-                        onClick={async () => {
-                          setSyncing(true);
-                          try {
-                            await triggerClusterSync();
-                            force();
-                          } finally {
-                            setSyncing(false);
-                          }
-                        }}
-                      >
-                        {t("cluster.syncNow")}
-                      </Button>
-                      <Switch
-                        checked={st.enabled}
-                        disabled={saving}
-                        aria-label={t("cluster.enabledLabel")}
-                        onChange={async (e) => {
-                          setSaving(true);
-                          try {
-                            await setClusterConfig({ enabled: e.currentTarget.checked });
-                            force();
-                          } finally {
-                            setSaving(false);
-                          }
-                        }}
-                      />
-                    </Group>
-                  </Group>
-                </Card>
               </Stack>
             )}
           </AsyncBoundary>

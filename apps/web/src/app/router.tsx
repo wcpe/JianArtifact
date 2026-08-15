@@ -40,6 +40,9 @@ const RepositoryDetailPage = lazy(() =>
 const SearchPage = lazy(() =>
   import("../pages/SearchPage").then((m) => ({ default: m.SearchPage })),
 );
+const SettingsPage = lazy(() =>
+  import("../pages/SettingsPage").then((m) => ({ default: m.SettingsPage })),
+);
 const SetupPage = lazy(() => import("../pages/SetupPage").then((m) => ({ default: m.SetupPage })));
 const TokensPage = lazy(() =>
   import("../pages/TokensPage").then((m) => ({ default: m.TokensPage })),
@@ -101,6 +104,15 @@ export function AppRoutes() {
             element={
               <RequireAuth>
                 <ClusterPage />
+              </RequireAuth>
+            }
+          />
+          {/* FR-90：设置页（入口仅管理员可见；RequireAuth 兜底） */}
+          <Route
+            path="/settings"
+            element={
+              <RequireAuth>
+                <SettingsPage />
               </RequireAuth>
             }
           />
