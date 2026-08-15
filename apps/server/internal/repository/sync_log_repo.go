@@ -72,6 +72,12 @@ func (r *SyncLogRepo) List(limit, offset int) ([]SyncLogEntry, error) {
 	return entries, err
 }
 
+// Delete 删除一条同步记录（用于空同步不留痕：无变更且成功时移除进行中记录）。
+func (r *SyncLogRepo) Delete(id int64) error {
+	_, err := r.db.Exec(`DELETE FROM repl_sync_log WHERE id = ?`, id)
+	return err
+}
+
 // Count 返回同步历史总条数。
 func (r *SyncLogRepo) Count() (int, error) {
 	var n int

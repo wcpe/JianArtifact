@@ -158,3 +158,30 @@ func TestSyncLogListOrderAndPaging(t *testing.T) {
 		t.Errorf("Count 应为 3，得 %d", n)
 	}
 }
+
+// TestSyncLogDelete 删除记录（空同步不留痕：进行中记录被移除后列表为空）。
+func TestSyncLogDelete(t *testing.T) {
+	logs := newTestSyncLog(t)
+	id, err := logs.Start("https://repo.wcpe.top", 3)
+	if err != nil {
+		t.Fatalf("Start：%v", err)
+	}
+	// 删除（模拟空同步移除进行中记录）。
+	if err := logs.Delete(id); err != nil {
+		t.Fatalf("Delete：%v", err)
+	}
+	items, err := logs.List(10, 0)
+	if err != nil {
+		t.Fatalf("List：%v", err)
+	}
+	if len(items) != 0 {
+		t.Errorf("删除后应无记录，得 %d", len(items))
+	}
+	n, err := logs.Count()
+	if err != nil {
+		t.Fatalf("Count：%v", err)
+	}
+	if n != 0 {
+		t.Errorf("删除后 Count 应为 0，得 %d", n)
+	}
+}

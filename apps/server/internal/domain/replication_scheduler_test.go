@@ -282,6 +282,13 @@ func TestReplicationSchedulerBidirectional(t *testing.T) {
 		}
 		return true
 	}, "同步历史应记录成功且 ByEntity 含 user 变更")
+
+	// 空同步不留痕：双向已收敛，后续轮询（无新变更）不应新增同步记录（进行中记录被删除）。
+	eventually(t, 2*time.Second, func() bool {
+		itemsA2, _ := logsA.List(10, 0)
+		itemsB2, _ := logsB.List(10, 0)
+		return len(itemsA2) == 1 && len(itemsB2) == 1
+	}, "收敛后空轮询不应新增同步记录")
 }
 
 // TestReplicationSchedulerEnabledSwitch 启停开关（FR-86）：stop 后跳过同步，start 后恢复。

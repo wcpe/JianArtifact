@@ -118,7 +118,9 @@ func (s *ReplicationScheduler) syncOnceManual() {
 	s.doSync(peerURL, token)
 }
 
-// doSync 执行一轮同步：设置对端 → 从水位拉取变更 → 持久化水位与状态；同步历史落日志。
+// doSync 执行一轮同步：设置对端 → 从水位拉取变更 → 持久化水位与状态。
+// 同步历史仅记录"有变更或失败"的事件：开始写进行中记录，空同步（无变更且成功）删除不留痕，
+// 有变更回写成功统计，失败回写错误摘要。
 func (s *ReplicationScheduler) doSync(peerURL, token string) {
 	s.syncMu.Lock()
 	defer s.syncMu.Unlock()
@@ -131,6 +133,16 @@ func (s *ReplicationScheduler) doSync(peerURL, token string) {
 		_ = s.logs.Finish(logID, false, stats.ToSeq, stats.Changes, stats.Applied, stats.Failed, stats.Blobs, stats.ByEntity, err.Error())
 		_ = s.settings.Set(SettingKeyReplLastError, err.Error())
 		log.Printf("复制调度：同步失败（对端 %s，水位 %d）：%v", peerURL, watermark, err)
+		return
+	}
+	if stats.Changes == 0 {
+		// 空同步：无变更，删除进行中记录，不留痕（水位/状态仍照常更新）。
+		_ = s.logs.Delete(logID)
+		if err := s.settings.Set(ReplicationWatermarkKey(peerURL), strconv.FormatInt(stats.ToSeq, 10)); err != nil {
+			log.Printf("复制调度：水位持久化失败（对端 %s）：%v", peerURL, err)
+		}
+		_ = s.settings.Set(SettingKeyReplLastSync, time.Now().UTC().Format(time.RFC3339Nano))
+		_ = s.settings.Set(SettingKeyReplLastError, "")
 		return
 	}
 	_ = s.logs.Finish(logID, true, stats.ToSeq, stats.Changes, stats.Applied, stats.Failed, stats.Blobs, stats.ByEntity, "")
