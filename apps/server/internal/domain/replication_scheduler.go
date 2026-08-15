@@ -12,6 +12,10 @@ import (
 
 // 复制状态持久化键（FR-86 / FR-88）。对端水位键由 ReplicationWatermarkKey 派生。
 const (
+	// SettingKeyClusterPrefix 集群配置键前缀。所有 repl:* 键都是**节点本地**配置，
+	// 绝不参与复制同步（写路径不记录变更、应用路径拒绝应用），避免对端配置互相覆盖造成混乱。
+	SettingKeyClusterPrefix = "repl:"
+
 	SettingKeyReplEnabled      = "repl:enabled"       // 自动同步开关（true/false；缺省视为 true）
 	SettingKeyReplLastSync     = "repl:last_sync_at"  // 最近成功同步时间（RFC3339）
 	SettingKeyReplLastError    = "repl:last_error"    // 最近同步失败摘要（成功同步后清空）
@@ -49,7 +53,15 @@ type ReplicationScheduler struct {
 	syncNowCh chan syncRequest
 
 	syncMu sync.Mutex // 同一时刻只跑一次 doSync
+
+	// 连续失败收缩状态：相同错误持续时不逐条刷屏，恢复/变化时打汇总（起始→终止 + 次数）。
+	lastErrKey string    // 上次错误摘要（识别"相同错误"）
+	errStart   time.Time // 连续失败开始时间
+	errCount   int       // 连续失败次数
 }
+
+// errProgressEvery 连续失败每多少次打一条进度，避免完全静默太久（默认 20）。
+const errProgressEvery = 20
 
 // NewReplicationScheduler 构造 ReplicationScheduler。interval 为轮询间隔。
 // 对端配置从 setting 读取（FR-88），无需在构造时指定。
@@ -141,6 +153,39 @@ func (s *ReplicationScheduler) syncOnceManual() {
 	s.doSync(peerURL, token)
 }
 
+// logSyncErr 记录一次同步失败，并对连续相同错误做收缩：
+//   - 首次失败：打印完整日志并记录错误状态；
+//   - 相同错误持续：递增计数，每 errProgressEvery 次打一条进度；
+//   - 错误变化：先汇总上一次连续失败（起始→终止 + 次数），再打印新错误。
+func (s *ReplicationScheduler) logSyncErr(peerURL string, watermark int64, err error) {
+	key := err.Error()
+	now := time.Now()
+	if key == s.lastErrKey && !s.errStart.IsZero() {
+		s.errCount++
+		if s.errCount%errProgressEvery == 0 {
+			log.Printf("复制调度：同步持续失败（对端 %s）：%s（已连续失败 %d 次，自 %s）", peerURL, key, s.errCount, s.errStart.Format(time.RFC3339))
+		}
+		return
+	}
+	if s.lastErrKey != "" && s.errCount > 0 {
+		log.Printf("复制调度：同步失败告一段落（对端 %s）：%s（自 %s 至 %s，共 %d 次）", peerURL, s.lastErrKey, s.errStart.Format(time.RFC3339), now.Format(time.RFC3339), s.errCount)
+	}
+	s.lastErrKey = key
+	s.errStart = now
+	s.errCount = 1
+	log.Printf("复制调度：同步失败（对端 %s，水位 %d）：%v", peerURL, watermark, err)
+}
+
+// logSyncOK 记录同步成功；若此前有连续失败，打印恢复汇总并清空错误状态。
+func (s *ReplicationScheduler) logSyncOK(peerURL string) {
+	if s.lastErrKey != "" && s.errCount > 0 {
+		log.Printf("复制调度：同步恢复（对端 %s）：此前连续失败 %s（自 %s 至 %s，共 %d 次）", peerURL, s.lastErrKey, s.errStart.Format(time.RFC3339), time.Now().Format(time.RFC3339), s.errCount)
+		s.lastErrKey = ""
+		s.errStart = time.Time{}
+		s.errCount = 0
+	}
+}
+
 // doSync 执行一轮同步：设置对端 → 从水位拉取变更 → 持久化水位与状态。
 // 同步历史仅记录"有变更或失败"的事件：开始写进行中记录，空同步（无变更且成功）删除不留痕，
 // 有变更回写成功统计，失败回写错误摘要。
@@ -155,7 +200,7 @@ func (s *ReplicationScheduler) doSync(peerURL, token string) {
 	if err != nil {
 		_ = s.logs.Finish(logID, false, stats.ToSeq, stats.Changes, stats.Applied, stats.Failed, stats.Blobs, stats.ByEntity, err.Error())
 		_ = s.settings.Set(SettingKeyReplLastError, err.Error())
-		log.Printf("复制调度：同步失败（对端 %s，水位 %d）：%v", peerURL, watermark, err)
+		s.logSyncErr(peerURL, watermark, err)
 		return
 	}
 	if stats.Changes == 0 {
@@ -164,6 +209,7 @@ func (s *ReplicationScheduler) doSync(peerURL, token string) {
 		if err := s.settings.Set(ReplicationWatermarkKey(peerURL), strconv.FormatInt(stats.ToSeq, 10)); err != nil {
 			log.Printf("复制调度：水位持久化失败（对端 %s）：%v", peerURL, err)
 		}
+		s.logSyncOK(peerURL)
 		_ = s.settings.Set(SettingKeyReplLastSync, time.Now().UTC().Format(time.RFC3339Nano))
 		_ = s.settings.Set(SettingKeyReplLastError, "")
 		return
@@ -172,6 +218,7 @@ func (s *ReplicationScheduler) doSync(peerURL, token string) {
 	if err := s.settings.Set(ReplicationWatermarkKey(peerURL), strconv.FormatInt(stats.ToSeq, 10)); err != nil {
 		log.Printf("复制调度：水位持久化失败（对端 %s）：%v", peerURL, err)
 	}
+	s.logSyncOK(peerURL)
 	_ = s.settings.Set(SettingKeyReplLastSync, time.Now().UTC().Format(time.RFC3339Nano))
 	_ = s.settings.Set(SettingKeyReplLastError, "")
 	if stats.ToSeq != watermark {
