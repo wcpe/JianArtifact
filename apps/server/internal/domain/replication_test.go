@@ -1,8 +1,10 @@
 package domain_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"net/http/httptest"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -476,4 +478,128 @@ func TestReplicationApplySettingRejectsClusterKey(t *testing.T) {
 	if got != "https://example.com" {
 		t.Fatalf("业务设置应被应用，得 %q", got)
 	}
+}
+
+// TestReplicationPeers 多对端（FR-D）：Peers/SetPeers 读写、空回退单值、令牌不回显。
+func TestReplicationPeers(t *testing.T) {
+	db := newTestDB(t)
+	settings := repository.NewSettingRepo(db)
+	replSvc := domain.NewReplicationService(
+		repository.NewReplChangeRepo(db), repository.NewAssetRepo(db), repository.NewRepoRepo(db),
+		repository.NewAclRepo(db), repository.NewUserRepo(db), repository.NewTokenRepo(db), settings,
+		mustBlobStore(t))
+
+	// 初始：无对端。
+	peers, err := replSvc.Peers()
+	if err != nil {
+		t.Fatalf("Peers 初始：%v", err)
+	}
+	if len(peers) != 0 {
+		t.Fatalf("初始应无对端，得 %+v", peers)
+	}
+
+	// 设置多对端。
+	if err := replSvc.SetPeers([]domain.Peer{
+		{URL: "http://node-a:50020", Token: "tok-a"},
+		{URL: "http://node-b:50020", Token: "tok-b"},
+	}); err != nil {
+		t.Fatalf("SetPeers：%v", err)
+	}
+
+	// Peers 读回：两个对端、URL 正确、令牌不回显。
+	peers, err = replSvc.Peers()
+	if err != nil {
+		t.Fatalf("Peers：%v", err)
+	}
+	if len(peers) != 2 || peers[0].URL != "http://node-a:50020" || peers[1].URL != "http://node-b:50020" {
+		t.Fatalf("Peers 内容不符：%+v", peers)
+	}
+	if peers[0].Token != "" || peers[1].Token != "" {
+		t.Fatalf("Peers 不应返回令牌明文：%+v", peers)
+	}
+
+	// PeerToken 内部取明文。
+	if got := replSvc.PeerToken("http://node-b:50020"); got != "tok-b" {
+		t.Fatalf("PeerToken(node-b) = %q，期望 tok-b", got)
+	}
+	// 未知对端回退单值令牌（此时单值=首对端）。
+	if got := replSvc.PeerToken("http://unknown"); got != "tok-a" {
+		t.Fatalf("PeerToken(unknown) = %q，期望回退 tok-a", got)
+	}
+
+	// 单值兼容：repl:peer_url 与 repl:peers 首对端一致（SetPeers 同步）。
+	v, err := settings.Get(domain.SettingKeyReplPeerURL)
+	if err != nil {
+		t.Fatalf("单值对端：%v", err)
+	}
+	if v != "http://node-a:50020" {
+		t.Fatalf("单值对端 = %q，期望 node-a", v)
+	}
+}
+
+// TestReplicationSchedulerMultiPeer 多对端调度（FR-D）：readPeers 返回全部对端，
+// syncOnceAuto 对每个对端各同步一轮。
+func TestReplicationSchedulerMultiPeer(t *testing.T) {
+	// 对端 A：有 alice。
+	mkSrc := func(t *testing.T, name string) (*httptest.Server, *mockSyncServer) {
+		db, err := persistence.Open(filepath.Join(t.TempDir(), "mp-"+name+".db"))
+		if err != nil {
+			t.Fatalf("打开源库：%v", err)
+		}
+		t.Cleanup(func() { _ = db.Close() })
+		if err := db.Migrate(); err != nil {
+			t.Fatalf("迁移：%v", err)
+		}
+		userRepo := repository.NewUserRepo(db)
+		repl := repository.NewReplChangeRepo(db)
+		replSvc := domain.NewReplicationService(
+			repl, repository.NewAssetRepo(db), repository.NewRepoRepo(db),
+			repository.NewAclRepo(db), userRepo, repository.NewTokenRepo(db),
+			repository.NewSettingRepo(db), blobstore.NewStore(filepath.Join(t.TempDir(), "mp-"+name+"-blobs")))
+		userSvc := domain.NewUserService(userRepo)
+		userSvc.SetChangeRecorder(replSvc)
+		if _, err := userSvc.Create(name, "pw12345", "user"); err != nil {
+			t.Fatalf("建用户：%v", err)
+		}
+		srv := &mockSyncServer{repl: repl, blobs: blobstore.NewStore(filepath.Join(t.TempDir(), "mp-"+name+"-blobs2"))}
+		ts := httptest.NewServer(srv.handler())
+		t.Cleanup(ts.Close)
+		return ts, srv
+	}
+	tsA, _ := mkSrc(t, "alice")
+	tsB, _ := mkSrc(t, "bob")
+
+	// 拉取方：配置两个对端（A、B）。
+	dstDB, err := persistence.Open(filepath.Join(t.TempDir(), "mp-dst.db"))
+	if err != nil {
+		t.Fatalf("打开目标库：%v", err)
+	}
+	t.Cleanup(func() { _ = dstDB.Close() })
+	if err := dstDB.Migrate(); err != nil {
+		t.Fatalf("迁移：%v", err)
+	}
+	dstUserRepo := repository.NewUserRepo(dstDB)
+	dstBlobs := blobstore.NewStore(filepath.Join(t.TempDir(), "mp-dst-blobs"))
+	dstReplSvc := domain.NewReplicationService(
+		repository.NewReplChangeRepo(dstDB), repository.NewAssetRepo(dstDB), repository.NewRepoRepo(dstDB),
+		repository.NewAclRepo(dstDB), dstUserRepo, repository.NewTokenRepo(dstDB),
+		repository.NewSettingRepo(dstDB), dstBlobs)
+	client := domain.NewReplicationClient("", "t", dstReplSvc, dstBlobs)
+	settingsRepo := repository.NewSettingRepo(dstDB)
+	if err := settingsRepo.Set(domain.SettingKeyReplPeers,
+		`[{"url":"`+tsA.URL+`","token":"t"},{"url":"`+tsB.URL+`","token":"t"}]`); err != nil {
+		t.Fatalf("写多对端：%v", err)
+	}
+	scheduler := domain.NewReplicationScheduler(client, settingsRepo, repository.NewSyncLogRepo(dstDB), 100*time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	scheduler.Start(ctx)
+	defer cancel()
+
+	// 两个对端的用户都应同步到本地（全互连多对端同步）。
+	eventually(t, 4*time.Second, func() bool {
+		_, errA := dstUserRepo.GetByUsername("alice")
+		_, errB := dstUserRepo.GetByUsername("bob")
+		return errA == nil && errB == nil
+	}, "多对端同步后应同时有 alice 与 bob")
 }

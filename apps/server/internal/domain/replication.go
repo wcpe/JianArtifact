@@ -160,6 +160,7 @@ func (s *ReplicationService) OpenBlob(hash string) (io.ReadCloser, int64, error)
 type ClusterStatus struct {
 	NodeID       string `json:"nodeId"`
 	PeerURL      string `json:"peerUrl,omitempty"`
+	Peers        []Peer `json:"peers,omitempty"` // 多对端列表（FR-D；不含令牌明文）
 	TokenSet     bool   `json:"tokenSet"`
 	Enabled      bool   `json:"enabled"`
 	Watermark    int64  `json:"watermark"`
@@ -197,6 +198,10 @@ func (s *ReplicationService) ClusterStatus() ClusterStatus {
 		TokenSet: token != "",
 		Enabled:  true, // 缺省启用
 	}
+	// FR-D：多对端列表（不含令牌明文；为空回退单值语义）。
+	if peers, err := s.Peers(); err == nil {
+		st.Peers = peers
+	}
 	if v, err := s.settings.Get(SettingKeyReplEnabled); err == nil {
 		st.Enabled = v != "false"
 	}
@@ -209,6 +214,73 @@ func (s *ReplicationService) ClusterStatus() ClusterStatus {
 	st.LastSyncAt, _ = s.settings.Get(SettingKeyReplLastSync)
 	st.LastError, _ = s.settings.Get(SettingKeyReplLastError)
 	return st
+}
+
+// Peer 是一个复制对端（FR-D 多对端）。Token 仅保存时携带，读回时不暴露明文。
+type Peer struct {
+	URL   string `json:"url"`
+	Token string `json:"token,omitempty"`
+}
+
+// Peers 返回对端列表（优先 repl:peers JSON 多对端；为空回退旧单值 repl:peer_url）。
+// 令牌明文不返回（Token 字段读回时清空），调度器经 PeerToken 单独取明文。
+func (s *ReplicationService) Peers() ([]Peer, error) {
+	if v, err := s.settings.Get(SettingKeyReplPeers); err == nil && v != "" {
+		var peers []Peer
+		if json.Unmarshal([]byte(v), &peers) == nil && len(peers) > 0 {
+			for i := range peers {
+				peers[i].Token = "" // 不暴露令牌明文
+			}
+			return peers, nil
+		}
+	}
+	peerURL, _, err := s.PeerConfig()
+	if err != nil {
+		return nil, err
+	}
+	if peerURL == "" {
+		return nil, nil
+	}
+	return []Peer{{URL: peerURL}}, nil
+}
+
+// SetPeers 全量保存多对端列表到 repl:peers（并同步首对端到旧单值，保持水位键兼容）。
+// 空列表表示清空全部对端配置。
+func (s *ReplicationService) SetPeers(peers []Peer) error {
+	if len(peers) == 0 {
+		_ = s.settings.Set(SettingKeyReplPeers, "")
+		_ = s.settings.Set(SettingKeyReplPeerURL, "")
+		_ = s.settings.Set(SettingKeyReplPeerToken, "")
+		return nil
+	}
+	b, err := json.Marshal(peers)
+	if err != nil {
+		return err
+	}
+	if err := s.settings.Set(SettingKeyReplPeers, string(b)); err != nil {
+		return err
+	}
+	// 首对端同步到单值（兼容旧逻辑与水位键 repl:watermark:<url>）。
+	if err := s.settings.Set(SettingKeyReplPeerURL, peers[0].URL); err != nil {
+		return err
+	}
+	return s.settings.Set(SettingKeyReplPeerToken, peers[0].Token)
+}
+
+// PeerToken 返回指定对端的同步令牌明文（内部使用）；对端不在列表时回退单值令牌。
+func (s *ReplicationService) PeerToken(peerURL string) string {
+	if v, err := s.settings.Get(SettingKeyReplPeers); err == nil && v != "" {
+		var peers []Peer
+		if json.Unmarshal([]byte(v), &peers) == nil {
+			for _, p := range peers {
+				if p.URL == peerURL && p.Token != "" {
+					return p.Token
+				}
+			}
+		}
+	}
+	_, token, _ := s.PeerConfig()
+	return token
 }
 
 // PeerConfig 返回当前对端配置（URL/令牌，来自 setting，FR-88）。

@@ -125,7 +125,7 @@ function BasicSettingsForm({ initial, onSaved }: { initial: SettingsConfig; onSa
   );
 }
 
-/** 集群配置表单：读 getClusterStatus 初始化，保存走 setClusterConfig（令牌留空不变）。 */
+/** 集群配置表单（FR-D 多对端）：读 getClusterStatus 初始化，保存走 setClusterConfig（令牌留空不变）。 */
 function ClusterSettingsForm({
   initial,
   onSaved,
@@ -134,20 +134,33 @@ function ClusterSettingsForm({
   onSaved: () => void;
 }) {
   const { t } = useTranslation();
-  const [peerUrl, setPeerUrl] = useState(initial.peerUrl ?? "");
-  const [peerToken, setPeerToken] = useState("");
+  // 多对端列表：优先 initial.peers（不含令牌明文），回退旧单值 peerUrl。
+  const [peers, setPeers] = useState<{ url: string; token: string }[]>(
+    initial.peers && initial.peers.length > 0
+      ? initial.peers.map((p) => ({ url: p.url, token: "" }))
+      : initial.peerUrl
+        ? [{ url: initial.peerUrl, token: "" }]
+        : [{ url: "", token: "" }],
+  );
   const [enabled, setEnabled] = useState(initial.enabled);
   const [saving, setSaving] = useState(false);
 
+  const updatePeer = (idx: number, patch: Partial<{ url: string; token: string }>) => {
+    setPeers((prev) => prev.map((p, i) => (i === idx ? { ...p, ...patch } : p)));
+  };
+
+  const addPeer = () => setPeers((prev) => [...prev, { url: "", token: "" }]);
+  const removePeer = (idx: number) => setPeers((prev) => prev.filter((_, i) => i !== idx));
+
   const save = () => {
     setSaving(true);
+    // 过滤空 URL 行；token 留空 = 不变（后端对空 token 保留原值）。
+    const valid = peers.filter((p) => p.url.trim() !== "");
     setClusterConfig({
-      peerUrl: peerUrl || undefined, // 空串 = 不变（与集群页原逻辑一致）
-      peerToken: peerToken || undefined,
+      peers: valid.map((p) => ({ url: p.url.trim(), token: p.token || undefined })),
       enabled,
     })
       .then(() => {
-        setPeerToken(""); // 令牌不回显
         notifySuccess(t("common.saved"));
         onSaved();
       })
@@ -156,23 +169,46 @@ function ClusterSettingsForm({
   };
 
   return (
-    <Card withBorder radius="md" padding={density.cardPadding} maw={640}>
+    <Card withBorder radius="md" padding={density.cardPadding} maw={760}>
       <Stack gap="sm">
         <Title order={5}>{t("settings.clusterTitle")}</Title>
-        <TextInput
-          label={t("cluster.peerUrlLabel")}
-          placeholder="https://repo1.wcpe.top"
-          value={peerUrl}
-          disabled={saving}
-          onChange={(e) => setPeerUrl(e.currentTarget.value)}
-        />
-        <PasswordInput
-          label={t("cluster.peerTokenLabel")}
-          placeholder={t("settings.peerTokenPlaceholder")}
-          value={peerToken}
-          disabled={saving}
-          onChange={(e) => setPeerToken(e.currentTarget.value)}
-        />
+        <Text size="xs" c="dimmed">
+          {t("settings.clusterPeersHint")}
+        </Text>
+        {peers.map((p, idx) => (
+          <Group key={idx} gap="sm" align="flex-end" wrap="nowrap">
+            <TextInput
+              label={idx === 0 ? t("cluster.peerUrlLabel") : undefined}
+              placeholder="https://repo1.wcpe.top"
+              value={p.url}
+              disabled={saving}
+              style={{ flex: 1 }}
+              onChange={(e) => updatePeer(idx, { url: e.currentTarget.value })}
+            />
+            <PasswordInput
+              label={idx === 0 ? t("cluster.peerTokenLabel") : undefined}
+              placeholder={t("settings.peerTokenPlaceholder")}
+              value={p.token}
+              disabled={saving}
+              style={{ flex: 1 }}
+              onChange={(e) => updatePeer(idx, { token: e.currentTarget.value })}
+            />
+            <Button
+              size="xs"
+              variant="subtle"
+              color="red"
+              disabled={saving || peers.length <= 1}
+              onClick={() => removePeer(idx)}
+            >
+              {t("common.delete")}
+            </Button>
+          </Group>
+        ))}
+        <Group>
+          <Button size="xs" variant="default" disabled={saving} onClick={addPeer}>
+            {t("settings.addPeer")}
+          </Button>
+        </Group>
         <Group justify="space-between" gap="md" wrap="nowrap">
           <Stack gap={0}>
             <Text size="sm" fw={500}>

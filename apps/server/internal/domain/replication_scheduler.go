@@ -2,6 +2,7 @@ package domain
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"strconv"
 	"sync"
@@ -19,8 +20,9 @@ const (
 	SettingKeyReplEnabled      = "repl:enabled"       // 自动同步开关（true/false；缺省视为 true）
 	SettingKeyReplLastSync     = "repl:last_sync_at"  // 最近成功同步时间（RFC3339）
 	SettingKeyReplLastError    = "repl:last_error"    // 最近同步失败摘要（成功同步后清空）
-	SettingKeyReplPeerURL      = "repl:peer_url"      // 对端基址（FR-88，web 可配置）
-	SettingKeyReplPeerToken    = "repl:peer_token"    // 对端同步令牌（FR-88，web 可配置）
+	SettingKeyReplPeerURL      = "repl:peer_url"      // 对端基址（FR-88，web 可配置；单值兼容）
+	SettingKeyReplPeerToken    = "repl:peer_token"    // 对端同步令牌（FR-88，web 可配置；单值兼容）
+	SettingKeyReplPeers        = "repl:peers"         // 多对端列表（FR-D，JSON 数组 [{url,token}]；优先于单值）
 	SettingKeyReplBackfill     = "repl:backfill_done" // 历史数据回填完成标记（"true" 表示已完成）
 	SettingKeyReplSyncInterval = "repl:sync_interval" // 同步轮询间隔（秒，FR-89，web 可配置；缺省回退 env/默认 5s）
 )
@@ -135,22 +137,27 @@ func (s *ReplicationScheduler) ReadSyncInterval() time.Duration {
 	return time.Duration(secs) * time.Second
 }
 
-// syncOnceAuto 自动轮询：需已配置对端且自动开关开启。
+// syncOnceAuto 自动轮询：需已配置对端且自动开关开启；对每个对端同步一轮。
 func (s *ReplicationScheduler) syncOnceAuto() {
-	peerURL, token := s.readPeerConfig()
-	if peerURL == "" || !s.syncEnabled() {
+	if !s.syncEnabled() {
 		return
 	}
-	s.doSync(peerURL, token)
+	for _, p := range s.readPeers() {
+		if p.URL == "" {
+			continue
+		}
+		s.doSync(p.URL, p.Token)
+	}
 }
 
-// syncOnceManual 手动立即同步：需已配置对端（无论开关状态）。
+// syncOnceManual 手动立即同步：对每个对端同步一轮（无论开关状态）。
 func (s *ReplicationScheduler) syncOnceManual() {
-	peerURL, token := s.readPeerConfig()
-	if peerURL == "" {
-		return
+	for _, p := range s.readPeers() {
+		if p.URL == "" {
+			continue
+		}
+		s.doSync(p.URL, p.Token)
 	}
-	s.doSync(peerURL, token)
 }
 
 // logSyncErr 记录一次同步失败，并对连续相同错误做收缩：
@@ -226,11 +233,21 @@ func (s *ReplicationScheduler) doSync(peerURL, token string) {
 	}
 }
 
-// readPeerConfig 读取对端配置（URL/令牌，来自 setting，FR-88）。
-func (s *ReplicationScheduler) readPeerConfig() (peerURL, token string) {
-	peerURL, _ = s.settings.Get(SettingKeyReplPeerURL)
-	token, _ = s.settings.Get(SettingKeyReplPeerToken)
-	return peerURL, token
+// readPeers 返回全部对端（URL + 令牌明文，供同步使用），
+// 优先 repl:peers 多对端 JSON，为空回退旧单值 repl:peer_url / repl:peer_token（FR-D）。
+func (s *ReplicationScheduler) readPeers() []Peer {
+	if v, err := s.settings.Get(SettingKeyReplPeers); err == nil && v != "" {
+		var peers []Peer
+		if json.Unmarshal([]byte(v), &peers) == nil && len(peers) > 0 {
+			return peers
+		}
+	}
+	peerURL, _ := s.settings.Get(SettingKeyReplPeerURL)
+	token, _ := s.settings.Get(SettingKeyReplPeerToken)
+	if peerURL == "" {
+		return nil
+	}
+	return []Peer{{URL: peerURL, Token: token}}
 }
 
 // syncEnabled 读取自动同步开关（FR-86）；缺省 / 读取失败视为启用。

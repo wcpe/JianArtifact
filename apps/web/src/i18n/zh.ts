@@ -104,6 +104,8 @@ export const zh = {
     syncIntervalHint: "本节点从对端拉取变更的轮询间隔。",
     saveConfig: "保存配置",
     peerTokenPlaceholder: "留空保持不变",
+    clusterPeersHint: "多个对端间全互连复制；令牌留空保持不变。",
+    addPeer: "添加对端",
     basicLoading: "基础配置加载中…",
     clusterLoading: "集群配置加载中…",
     validationRange: "取值须在 1–3600 之间",

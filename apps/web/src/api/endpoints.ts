@@ -434,6 +434,8 @@ export function getLicenses(): Promise<LicenseManifest> {
 export interface ClusterStatus {
   nodeId: string;
   peerUrl?: string;
+  /** 多对端列表（FR-D）；不含令牌明文。 */
+  peers?: PeerConfig[];
   tokenSet: boolean;
   enabled: boolean;
   watermark: number;
@@ -442,6 +444,12 @@ export interface ClusterStatus {
   lastError?: string;
   /** 最近一次同步的进度/构成摘要（FR-C）。 */
   lastSync?: LastSyncSummary;
+}
+
+/** 复制对端配置（FR-D 多对端）：保存时携带 token，读回时省略。 */
+export interface PeerConfig {
+  url: string;
+  token?: string;
 }
 
 /** 最近一次同步的摘要（FR-C）：变更量、构成、成功/失败/进行中。 */
@@ -464,11 +472,12 @@ export function getClusterStatus(): Promise<ClusterStatus> {
   return request<ClusterStatus>("/cluster");
 }
 
-/** 集群配置（FR-88）：可选字段，传哪个改哪个（对端 URL/令牌/自动同步开关）。 */
+/** 集群配置（FR-88）：可选字段，传哪个改哪个（对端 URL/令牌/自动同步开关；FR-D 支持多对端列表）。 */
 export function setClusterConfig(config: {
   peerUrl?: string;
   peerToken?: string;
   enabled?: boolean;
+  peers?: PeerConfig[];
 }): Promise<ClusterStatus> {
   return request<ClusterStatus>("/cluster", {
     method: "PUT",

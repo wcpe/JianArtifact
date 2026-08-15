@@ -64,9 +64,10 @@ func (h *Handlers) GetClusterSyncBlob(c *gin.Context) {
 
 // ClusterConfigRequest 是集群配置端点（FR-88）的请求体：可选字段，传哪个改哪个。
 type ClusterConfigRequest struct {
-	PeerURL   *string `json:"peerUrl,omitempty"`   // 对端基址（空串表示清空）
-	PeerToken *string `json:"peerToken,omitempty"` // 对端同步令牌
-	Enabled   *bool   `json:"enabled,omitempty"`   // 自动同步开关
+	PeerURL   *string        `json:"peerUrl,omitempty"`   // 对端基址（空串表示清空；单值兼容）
+	PeerToken *string        `json:"peerToken,omitempty"` // 对端同步令牌（单值兼容）
+	Enabled   *bool          `json:"enabled,omitempty"`   // 自动同步开关
+	Peers     *[]domain.Peer `json:"peers,omitempty"`     // 多对端列表（FR-D：传则全量替换对端配置）
 }
 
 // GetClusterStatus 返回集群同步状态（FR-86），仅管理员。
@@ -117,7 +118,13 @@ func (h *Handlers) PutClusterStatus(c *gin.Context) {
 	if !bindJSON(c, &req) {
 		return
 	}
-	if req.PeerURL != nil || req.PeerToken != nil {
+	// FR-D：传多对端列表则全量替换（优先于单值 peerUrl/peerToken）。
+	if req.Peers != nil {
+		if err := h.replication.SetPeers(*req.Peers); err != nil {
+			writeDomainErr(c, err)
+			return
+		}
+	} else if req.PeerURL != nil || req.PeerToken != nil {
 		peerURL, token, err := h.replication.PeerConfig()
 		if err != nil {
 			writeDomainErr(c, err)
