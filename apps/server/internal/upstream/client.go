@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -33,7 +34,10 @@ func (e *StatusError) Error() string {
 }
 
 // Client 是回源 HTTP 客户端，持有带超时的 *http.Client。
+// 超时可在运行时经 SetTimeout 调整（FR-89 回源超时动态配置）；
+// 内部用 RWMutex 保护 http.Client 的替换，Fetch 与 SetTimeout 并发安全。
 type Client struct {
+	mu   sync.RWMutex
 	http *http.Client
 }
 
@@ -43,6 +47,16 @@ func NewClient(timeout time.Duration) *Client {
 		timeout = DefaultTimeout
 	}
 	return &Client{http: &http.Client{Timeout: timeout}}
+}
+
+// SetTimeout 运行时更新回源整体超时；timeout<=0 时取 DefaultTimeout。
+func (c *Client) SetTimeout(timeout time.Duration) {
+	if timeout <= 0 {
+		timeout = DefaultTimeout
+	}
+	c.mu.Lock()
+	c.http = &http.Client{Timeout: timeout}
+	c.mu.Unlock()
 }
 
 // Fetch 以 GET 拉取 baseURL 与 path 拼接后的资源，返回响应体（调用方负责关闭）与响应头。
@@ -56,7 +70,10 @@ func (c *Client) Fetch(ctx context.Context, baseURL, path string) (io.ReadCloser
 	if err != nil {
 		return nil, nil, fmt.Errorf("upstream: 构造请求：%w", err)
 	}
-	resp, err := c.http.Do(req)
+	c.mu.RLock()
+	hc := c.http
+	c.mu.RUnlock()
+	resp, err := hc.Do(req)
 	if err != nil {
 		return nil, nil, err
 	}

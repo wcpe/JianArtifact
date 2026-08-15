@@ -38,15 +38,19 @@ import (
 // store/tokens 供 registry 级端点使用：login 验口令并签发 API Token（FR-82）。
 type NpmHandler struct {
 	*RawHandler
-	store     auth.Store
-	tokens    *domain.TokenService
-	publicURL string // FR-87：对外基础 URL（CDN 域名）；空则回退请求 Host 推断
+	store       auth.Store
+	tokens      *domain.TokenService
+	publicURL   string        // FR-87：对外基础 URL（CDN 域名）；空则回退请求 Host 推断
+	publicURLFn func() string // FR-89：动态对外 URL（web 可运行时修改），优先于 publicURL
 }
 
 // NewNpmHandler 构造 NpmHandler。publicURL 为对外基础 URL（FR-87，可空）。
 func NewNpmHandler(raw *RawHandler, store auth.Store, tokens *domain.TokenService, publicURL string) *NpmHandler {
 	return &NpmHandler{RawHandler: raw, store: store, tokens: tokens, publicURL: publicURL}
 }
+
+// SetPublicURLFn 注入动态对外 URL 读取回调（FR-89，wiring 传入；nil 表示不启用）。
+func (h *NpmHandler) SetPublicURLFn(fn func() string) { h.publicURLFn = fn }
 
 // RegisterNpmRoutes 在 r 上挂载 npm registry 端点（前缀 /npm，不与 /api/v1、/repository 冲突）：
 //
@@ -342,8 +346,13 @@ func (h *NpmHandler) requireHosted(c *gin.Context, repoName string) bool {
 
 // requestBaseURL 返回对外基址（scheme://host），供 dist.tarball 重写。
 // FR-87：配置了 publicURL（对外 CDN 域名）则优先使用，隐藏源站地址；
-// 否则按请求推断（X-Forwarded-Proto 修正 scheme + 请求 Host）。
+// FR-89：优先读动态回调（web 可运行时修改），未配置回退启动值 / 请求推断。
 func (h *NpmHandler) requestBaseURL(c *gin.Context) string {
+	if h.publicURLFn != nil {
+		if u := h.publicURLFn(); u != "" {
+			return u
+		}
+	}
 	if h.publicURL != "" {
 		return h.publicURL
 	}

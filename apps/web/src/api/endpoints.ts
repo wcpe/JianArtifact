@@ -386,6 +386,29 @@ export function putAnonymousAccessSetting(enabled: boolean): Promise<{ enabled: 
   });
 }
 
+// —— FR-89: 基础设置（admin，非契约）——
+
+export interface SettingsConfig {
+  /** 匿名访问全局开关。 */
+  anonymousAccess: boolean;
+  /** 对外基础 URL（CDN 域名，空 = 未配置，回退请求推断）。 */
+  publicUrl: string;
+  /** 回源整体超时（秒）。 */
+  upstreamTimeout: number;
+  /** 同步轮询间隔（秒）。 */
+  syncInterval: number;
+}
+
+/** 读取实例级基础配置（匿名开关 / 对外 URL / 回源超时 / 同步间隔，仅 admin）。 */
+export function getSettings(): Promise<SettingsConfig> {
+  return request<SettingsConfig>("/settings");
+}
+
+/** 部分更新实例级基础配置（仅 admin，传哪个改哪个，写后运行时生效）。 */
+export function putSettings(patch: Partial<SettingsConfig>): Promise<SettingsConfig> {
+  return request<SettingsConfig>("/settings", { method: "PUT", body: patch });
+}
+
 // —— 开源协议清单（admin 专属，非契约）——
 
 export interface LicenseEntry {

@@ -45,6 +45,16 @@
   - 迁移 `0011`：`repl_sync_log` 表——每次同步一条（时间 / 对端 / 进行中-成功-失败 / 起始-结束水位 / 变更·应用·失败条数 / 补拉 blob 数 / 变更实体构成 `entity_counts` JSON / 错误摘要），开始即写进行中记录，结束回写结果。
   - `ReplicationClient.Sync` 返回 `SyncStats` 统计（拉取 / 应用 / 失败 / blob / 按实体类型计数）；`ReplicationScheduler.doSync` 每轮落日志。
   - 新增 `GET /api/v1/cluster/sync-logs`（仅 admin，分页，按开始时间倒序）；web「集群」页「同步历史」卡片表格展示：时间 / 对端 / 状态徽章 / 变更构成（如「用户2 · 仓库1 · 制品5」）/ 变更·应用·失败 / Blob / 水位 / 错误详情，带分页。
+- 设置 API 与基础配置动态生效（FR-89，见 `docs/specs/0.7.0-settings-api.md`）：
+  - 基础配置四项入库 `setting`（`public_url` / `upstream_timeout` / `repl:sync_interval`，复用 `anonymous_access_enabled`）；env 值仅首启兜底写入，web 可运行时覆盖。
+  - 新增 `GET/PUT /api/v1/settings`（仅 admin）：GET 返回生效值，PUT 字段可选、传哪个改哪个；校验 `publicUrl` 为 http/https 绝对 URL 或空、秒级取值 1–3600，非法 400。
+  - **运行时生效（不重启）**：同步间隔由 `ReplicationScheduler` 每轮读 setting（变化则重置 ticker，缺省回退 env/默认 5s）；对外 URL 由 usage 与 npm `dist.tarball` 生成处动态读；回源超时经 `OnUpstreamTimeoutChange` 回调即时同步到 `upstream.Client.SetTimeout`（RWMutex 保护，Fetch 与 SetTimeout 并发安全）。
+
+### 修复
+
+- 静态资源缓存头（修复"前端发版后浏览器仍显示旧版"）：
+  - `index.html`（含 SPA 回退）响应加 `Cache-Control: no-cache`，每次请求回源验证，发版后刷新立即拿到引用最新 content-hash 资源的入口页。
+  - `/assets/*`（构建产物带 content-hash，内容变则文件名变）加 `Cache-Control: public, max-age=31536000, immutable` 长缓存；其他无 hash 静态文件（如 favicon）保持 `no-cache`，避免误缓存导致更新不生效。
 
 ## [0.6.0] - 2026-07-29
 

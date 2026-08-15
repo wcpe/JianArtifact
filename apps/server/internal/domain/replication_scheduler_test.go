@@ -438,3 +438,116 @@ func TestReplicationSchedulerAssetBlob(t *testing.T) {
 		return dstBlobs.Exists(asset.BlobHash)
 	}, "制品 + blob 未随调度同步")
 }
+
+// TestReplicationSchedulerReadSyncInterval 同步间隔读取（FR-89）：缺省 0、有效值秒转 duration、脏数据归零。
+func TestReplicationSchedulerReadSyncInterval(t *testing.T) {
+	db := newTestDB(t)
+	settingsRepo := repository.NewSettingRepo(db)
+	scheduler := domain.NewReplicationScheduler(nil, settingsRepo, nil, 100*time.Millisecond)
+
+	// 缺省：无 setting → 0（保持当前，由构造 interval 兜底）。
+	if got := scheduler.ReadSyncInterval(); got != 0 {
+		t.Errorf("缺省 ReadSyncInterval = %v，期望 0", got)
+	}
+	// 有效值 "5" → 5s。
+	if err := settingsRepo.Set(domain.SettingKeyReplSyncInterval, "5"); err != nil {
+		t.Fatalf("写设置：%v", err)
+	}
+	if got := scheduler.ReadSyncInterval(); got != 5*time.Second {
+		t.Errorf("ReadSyncInterval = %v，期望 5s", got)
+	}
+	// 脏数据 → 0（保持当前）。
+	for _, bad := range []string{"abc", "0", "-3"} {
+		if err := settingsRepo.Set(domain.SettingKeyReplSyncInterval, bad); err != nil {
+			t.Fatalf("写脏数据 %q：%v", bad, err)
+		}
+		if got := scheduler.ReadSyncInterval(); got != 0 {
+			t.Errorf("脏值 %q 时 ReadSyncInterval = %v，期望 0", bad, got)
+		}
+	}
+}
+
+// TestReplicationSchedulerDynamicInterval 同步间隔动态生效（FR-89）：运行中写 setting
+// 后，下一轮 ticker 按新间隔调度（500ms 窗口内不出现新同步，随后按 1s 周期拉到）。
+func TestReplicationSchedulerDynamicInterval(t *testing.T) {
+	// ===== 对端（数据源）=====
+	srvDB, err := persistence.Open(filepath.Join(t.TempDir(), "dyn-src.db"))
+	if err != nil {
+		t.Fatalf("打开源库：%v", err)
+	}
+	t.Cleanup(func() { _ = srvDB.Close() })
+	if err := srvDB.Migrate(); err != nil {
+		t.Fatalf("源库迁移：%v", err)
+	}
+	srcUserRepo := repository.NewUserRepo(srvDB)
+	srcReplSvc := domain.NewReplicationService(
+		repository.NewReplChangeRepo(srvDB), repository.NewAssetRepo(srvDB), repository.NewRepoRepo(srvDB),
+		repository.NewAclRepo(srvDB), srcUserRepo, repository.NewTokenRepo(srvDB), repository.NewSettingRepo(srvDB),
+		blobstore.NewStore(filepath.Join(t.TempDir(), "dyn-src-blobs")))
+	srcUserSvc := domain.NewUserService(srcUserRepo)
+	srcUserSvc.SetChangeRecorder(srcReplSvc)
+	if _, err := srcUserSvc.Create("alice", "pw12345", "user"); err != nil {
+		t.Fatalf("源建用户 alice：%v", err)
+	}
+
+	server := &mockSyncServer{repl: repository.NewReplChangeRepo(srvDB), blobs: blobstore.NewStore(filepath.Join(t.TempDir(), "dyn-src-blobs"))}
+	ts := httptest.NewServer(server.handler())
+	t.Cleanup(ts.Close)
+
+	// ===== 拉取方：100ms 轮询调度器 =====
+	dstDB, err := persistence.Open(filepath.Join(t.TempDir(), "dyn-dst.db"))
+	if err != nil {
+		t.Fatalf("打开目标库：%v", err)
+	}
+	t.Cleanup(func() { _ = dstDB.Close() })
+	if err := dstDB.Migrate(); err != nil {
+		t.Fatalf("目标库迁移：%v", err)
+	}
+	dstUserRepo := repository.NewUserRepo(dstDB)
+	dstBlobs := blobstore.NewStore(filepath.Join(t.TempDir(), "dyn-dst-blobs"))
+	dstReplSvc := domain.NewReplicationService(
+		repository.NewReplChangeRepo(dstDB), repository.NewAssetRepo(dstDB), repository.NewRepoRepo(dstDB),
+		repository.NewAclRepo(dstDB), dstUserRepo, repository.NewTokenRepo(dstDB), repository.NewSettingRepo(dstDB), dstBlobs)
+	client := domain.NewReplicationClient(ts.URL, "t", dstReplSvc, dstBlobs)
+	settingsRepo := repository.NewSettingRepo(dstDB)
+	_ = settingsRepo.Set(domain.SettingKeyReplPeerURL, ts.URL)
+	_ = settingsRepo.Set(domain.SettingKeyReplPeerToken, "t")
+	scheduler := domain.NewReplicationScheduler(client, settingsRepo, repository.NewSyncLogRepo(dstDB), 100*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	scheduler.Start(ctx)
+	defer cancel()
+
+	// 首启全量 + 100ms 轮询确认正常。
+	eventually(t, 3*time.Second, func() bool {
+		_, err := dstUserRepo.GetByUsername("alice")
+		return err == nil
+	}, "首启全量未拉到 alice")
+	if _, err := srcUserSvc.Create("bob", "pw12345", "user"); err != nil {
+		t.Fatalf("源新增用户 bob：%v", err)
+	}
+	eventually(t, 3*time.Second, func() bool {
+		_, err := dstUserRepo.GetByUsername("bob")
+		return err == nil
+	}, "100ms 轮询未同步到 bob")
+
+	// 动态改间隔为 1s：下一轮 ticker 起按新间隔调度。
+	if err := settingsRepo.Set(domain.SettingKeyReplSyncInterval, "1"); err != nil {
+		t.Fatalf("写同步间隔设置：%v", err)
+	}
+	if _, err := srcUserSvc.Create("carol", "pw12345", "user"); err != nil {
+		t.Fatalf("源新增用户 carol：%v", err)
+	}
+	// 500ms（< 新间隔 1s）窗口内 carol 不应被同步。
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if _, err := dstUserRepo.GetByUsername("carol"); err == nil {
+			t.Fatal("改间隔为 1s 后 500ms 内不应同步到 carol")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	// 随后按 1s 周期最终同步到 carol。
+	eventually(t, 3*time.Second, func() bool {
+		_, err := dstUserRepo.GetByUsername("carol")
+		return err == nil
+	}, "改间隔后未在后续周期同步到 carol")
+}

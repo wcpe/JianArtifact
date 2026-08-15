@@ -12,12 +12,13 @@ import (
 
 // 复制状态持久化键（FR-86 / FR-88）。对端水位键由 ReplicationWatermarkKey 派生。
 const (
-	SettingKeyReplEnabled   = "repl:enabled"       // 自动同步开关（true/false；缺省视为 true）
-	SettingKeyReplLastSync  = "repl:last_sync_at"  // 最近成功同步时间（RFC3339）
-	SettingKeyReplLastError = "repl:last_error"    // 最近同步失败摘要（成功同步后清空）
-	SettingKeyReplPeerURL   = "repl:peer_url"      // 对端基址（FR-88，web 可配置）
-	SettingKeyReplPeerToken = "repl:peer_token"    // 对端同步令牌（FR-88，web 可配置）
-	SettingKeyReplBackfill  = "repl:backfill_done" // 历史数据回填完成标记（"true" 表示已完成）
+	SettingKeyReplEnabled      = "repl:enabled"       // 自动同步开关（true/false；缺省视为 true）
+	SettingKeyReplLastSync     = "repl:last_sync_at"  // 最近成功同步时间（RFC3339）
+	SettingKeyReplLastError    = "repl:last_error"    // 最近同步失败摘要（成功同步后清空）
+	SettingKeyReplPeerURL      = "repl:peer_url"      // 对端基址（FR-88，web 可配置）
+	SettingKeyReplPeerToken    = "repl:peer_token"    // 对端同步令牌（FR-88，web 可配置）
+	SettingKeyReplBackfill     = "repl:backfill_done" // 历史数据回填完成标记（"true" 表示已完成）
+	SettingKeyReplSyncInterval = "repl:sync_interval" // 同步轮询间隔（秒，FR-89，web 可配置；缺省回退 env/默认 5s）
 )
 
 // ReplicationWatermarkKey 返回对端水位在 setting 表中的键。
@@ -82,7 +83,8 @@ func (s *ReplicationScheduler) SyncNow(timeout time.Duration) {
 }
 
 func (s *ReplicationScheduler) run(ctx context.Context) {
-	ticker := time.NewTicker(s.interval)
+	interval := s.interval
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -95,9 +97,30 @@ func (s *ReplicationScheduler) run(ctx context.Context) {
 				close(req.done)
 			}
 		case <-ticker.C:
+			// FR-89：同步间隔可 web 配置、运行时生效——每轮先读 setting，
+			// 变化则重置 ticker 并按新间隔等下一轮（本轮跳过，避免旧节奏下多同步一次）。
+			if next := s.ReadSyncInterval(); next > 0 && next != interval {
+				interval = next
+				ticker.Reset(interval)
+				log.Printf("复制调度：同步间隔调整为 %s", interval)
+				continue
+			}
 			s.syncOnceAuto() // 自动：受开关控制
 		}
 	}
+}
+
+// ReadSyncInterval 读取 setting 中的同步间隔（FR-89，秒）；未配置 / 非法返回 0（保持当前间隔）。
+func (s *ReplicationScheduler) ReadSyncInterval() time.Duration {
+	v, err := s.settings.Get(SettingKeyReplSyncInterval)
+	if err != nil {
+		return 0
+	}
+	secs, err := strconv.Atoi(v)
+	if err != nil || secs <= 0 {
+		return 0
+	}
+	return time.Duration(secs) * time.Second
 }
 
 // syncOnceAuto 自动轮询：需已配置对端且自动开关开启。

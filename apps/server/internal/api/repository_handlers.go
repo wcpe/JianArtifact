@@ -277,8 +277,13 @@ func (h *Handlers) requireRepoRead(c *gin.Context, name RepoNameParam) (*auth.Pr
 
 // apiBaseURL 返回对外基址（scheme + host），供使用片段拼接客户端地址。
 // FR-87：配置了 publicURL（对外 CDN 域名）则优先使用，隐藏源站地址；
-// 否则按请求推断（X-Forwarded-Proto 修正 scheme + 请求 Host）。
+// FR-89：改为优先读 setting（web 可运行时修改），未配置回退启动值 / 请求推断。
 func (h *Handlers) apiBaseURL(c *gin.Context) string {
+	if h.settings != nil {
+		if u := h.settings.PublicURL(); u != "" {
+			return u
+		}
+	}
 	if h.publicURL != "" {
 		return h.publicURL
 	}

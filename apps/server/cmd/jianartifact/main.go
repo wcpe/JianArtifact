@@ -199,6 +199,8 @@ func run() error {
 	mavenHandler := protocol.NewMavenHandler(rawHandler)
 	dispatcher := protocol.NewDispatcher(svc.repoSvc, rawHandler, mavenHandler)
 	npmHandler := protocol.NewNpmHandler(rawHandler, svc.store, svc.tokenSvc, svc.publicURL)
+	// FR-89：对外 URL 改为运行时动态读取（web 设置页可改），npm tarball 随配置生效。
+	npmHandler.SetPublicURLFn(func() string { return svc.settingSvc.PublicURL() })
 
 	apiHandlers := svc.handlers(version, checks)
 	srv := httpserver.New(version,
@@ -228,6 +230,9 @@ func run() error {
 			// FR-66: 匿名访问全局开关（admin，主体由 Optional 注入，handler 内校验）
 			r.GET("/api/v1/settings/anonymous-access", authMW, apiHandlers.GetAnonymousAccessSetting)
 			r.PUT("/api/v1/settings/anonymous-access", authMW, apiHandlers.PutAnonymousAccessSetting)
+			// FR-89: 设置读写端点（admin，基础配置四项：匿名开关/对外 URL/回源超时/同步间隔）
+			r.GET("/api/v1/settings", authMW, apiHandlers.GetSettings)
+			r.PUT("/api/v1/settings", authMW, apiHandlers.PutSettings)
 			// 开源协议清单（admin 专属；清单不再打进前端 bundle，见 internal/licenses）
 			r.GET("/api/v1/licenses", authMW, apiHandlers.GetLicenses)
 			// FR-84: 节点间复制协议（全程 GET 拉取，规避上传限制）。

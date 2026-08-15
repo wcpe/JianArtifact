@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"log"
+	"strconv"
+	"time"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/api"
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
@@ -18,23 +20,24 @@ import (
 
 // appServices 汇集装配后的持久化连接、领域服务与鉴权依赖，供 run 及 CLI 子命令复用。
 type appServices struct {
-	db           *persistence.DB
-	users        *repository.UserRepo
-	authSvc      *domain.AuthService
-	userSvc      *domain.UserService
-	tokenSvc     *domain.TokenService
-	repoSvc      *domain.RepositoryService
-	assetSvc     *domain.AssetService
-	migrationSvc *domain.MigrationService
-	settingSvc   *domain.SettingService
-	replSvc      *domain.ReplicationService
-	scheduler    *domain.ReplicationScheduler // FR-85：配置了对端 URL 时非 nil
-	syncLogs     *repository.SyncLogRepo      // FR-88：同步历史日志
-	peerURL      string                       // FR-86：复制对端基址（cfg.SyncPeerURL）
-	syncTokenSet bool                         // FR-86：同步令牌是否已配置（不暴露明文）
-	publicURL    string                       // FR-87：对外基础 URL（cfg.PublicURL，CDN 域名）
-	store        auth.Store
-	jwt          *auth.JWTManager
+	db             *persistence.DB
+	users          *repository.UserRepo
+	authSvc        *domain.AuthService
+	userSvc        *domain.UserService
+	tokenSvc       *domain.TokenService
+	repoSvc        *domain.RepositoryService
+	assetSvc       *domain.AssetService
+	migrationSvc   *domain.MigrationService
+	settingSvc     *domain.SettingService
+	replSvc        *domain.ReplicationService
+	scheduler      *domain.ReplicationScheduler // FR-85：配置了对端 URL 时非 nil
+	syncLogs       *repository.SyncLogRepo      // FR-88：同步历史日志
+	peerURL        string                       // FR-86：复制对端基址（cfg.SyncPeerURL）
+	syncTokenSet   bool                         // FR-86：同步令牌是否已配置（不暴露明文）
+	publicURL      string                       // FR-87：对外基础 URL（cfg.PublicURL，CDN 域名）
+	upstreamClient *upstream.Client             // FR-89：回源客户端（web 改回源超时时 SetTimeout）
+	store          auth.Store
+	jwt            *auth.JWTManager
 }
 
 // openServices 打开数据库、执行迁移并装配领域服务。调用方负责在返回的 db 上 Close。
@@ -89,6 +92,17 @@ func openServices(cfg *config.Config) (*appServices, error) {
 			_ = settingRepo.Set(domain.SettingKeyReplPeerToken, cfg.SyncToken)
 		}
 	}
+	// FR-89：基础配置 env 兜底写 setting（web 可运行时覆盖），缺省由读取侧回退。
+	// 仅当 setting 缺失或为空时写入，web 显式配置优先（与对端 URL/令牌同待遇）。
+	if v, err := settingRepo.Get(domain.SettingKeyPublicURL); err != nil || v == "" {
+		_ = settingRepo.Set(domain.SettingKeyPublicURL, cfg.PublicURL)
+	}
+	if v, err := settingRepo.Get(domain.SettingKeyUpstreamTimeout); err != nil || v == "" {
+		_ = settingRepo.Set(domain.SettingKeyUpstreamTimeout, strconv.Itoa(int(cfg.UpstreamTimeout.Seconds())))
+	}
+	if v, err := settingRepo.Get(domain.SettingKeyReplSyncInterval); err != nil || v == "" {
+		_ = settingRepo.Set(domain.SettingKeyReplSyncInterval, strconv.Itoa(int(cfg.SyncInterval.Seconds())))
+	}
 	client := domain.NewReplicationClient(cfg.SyncPeerURL, cfg.SyncToken, replSvc, blobs)
 	syncLogRepo := repository.NewSyncLogRepo(db)
 	scheduler := domain.NewReplicationScheduler(client, settingRepo, syncLogRepo, cfg.SyncInterval)
@@ -119,23 +133,24 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	}
 
 	return &appServices{
-		db:           db,
-		users:        userRepo,
-		authSvc:      domain.NewAuthService(userRepo, revokedRepo, jwtMgr),
-		userSvc:      userSvc,
-		tokenSvc:     tokenSvc,
-		repoSvc:      repoSvc,
-		assetSvc:     assetSvc,
-		migrationSvc: migrationSvc,
-		settingSvc:   settingSvc,
-		replSvc:      replSvc,
-		scheduler:    scheduler,
-		syncLogs:     syncLogRepo,
-		peerURL:      cfg.SyncPeerURL,
-		syncTokenSet: cfg.SyncToken != "",
-		publicURL:    cfg.PublicURL,
-		store:        domain.NewAuthStore(userRepo, tokenRepo, revokedRepo),
-		jwt:          jwtMgr,
+		db:             db,
+		users:          userRepo,
+		authSvc:        domain.NewAuthService(userRepo, revokedRepo, jwtMgr),
+		userSvc:        userSvc,
+		tokenSvc:       tokenSvc,
+		repoSvc:        repoSvc,
+		assetSvc:       assetSvc,
+		migrationSvc:   migrationSvc,
+		settingSvc:     settingSvc,
+		replSvc:        replSvc,
+		scheduler:      scheduler,
+		syncLogs:       syncLogRepo,
+		peerURL:        cfg.SyncPeerURL,
+		syncTokenSet:   cfg.SyncToken != "",
+		publicURL:      cfg.PublicURL,
+		upstreamClient: upstreamClient,
+		store:          domain.NewAuthStore(userRepo, tokenRepo, revokedRepo),
+		jwt:            jwtMgr,
 	}, nil
 }
 
@@ -157,5 +172,10 @@ func (s *appServices) handlers(version string, checks []func() error) *api.Handl
 		ClusterPeerURL:   s.peerURL,
 		ClusterTokenSet:  s.syncTokenSet,
 		PublicURL:        s.publicURL,
+		OnUpstreamTimeoutChange: func(d time.Duration) {
+			if s.upstreamClient != nil {
+				s.upstreamClient.SetTimeout(d)
+			}
+		},
 	})
 }
