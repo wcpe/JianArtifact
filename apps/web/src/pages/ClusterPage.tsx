@@ -6,6 +6,7 @@ import {
   Badge,
   Button,
   Card,
+  Divider,
   Group,
   Pagination,
   Stack,
@@ -159,6 +160,59 @@ export function ClusterPage() {
                       />
                       {st.lastError && (
                         <StatRow label={t("cluster.lastError")} value={st.lastError} />
+                      )}
+                      {st.lastSync && (
+                        <>
+                          <Divider my={4} />
+                          <Text size="sm" fw={600}>
+                            {t("cluster.lastSyncSummary")}
+                          </Text>
+                          <StatRow
+                            label={t("cluster.syncLogChanges")}
+                            value={String(st.lastSync.changes)}
+                          />
+                          <StatRow
+                            label={t("cluster.syncLogApplied")}
+                            value={String(st.lastSync.applied)}
+                          />
+                          <StatRow
+                            label={t("cluster.syncLogFailed")}
+                            value={String(st.lastSync.failed)}
+                          />
+                          <StatRow
+                            label={t("cluster.syncLogBlobs")}
+                            value={String(st.lastSync.blobs)}
+                          />
+                          {st.lastSync.entityCounts !== "{}" && (
+                            <StatRow
+                              label={t("cluster.syncLogEntities")}
+                              value={entitySummary(st.lastSync.entityCounts, t)}
+                            />
+                          )}
+                          <Group gap="xs" mt={4}>
+                            {statusBadge(
+                              {
+                                success: st.lastSync.success,
+                                startedAt: st.lastSync.startedAt,
+                                finishedAt: st.lastSync.finishedAt,
+                                fromSeq: st.lastSync.fromSeq,
+                                toSeq: st.lastSync.toSeq,
+                                changes: st.lastSync.changes,
+                                applied: st.lastSync.applied,
+                                failed: st.lastSync.failed,
+                                blobs: st.lastSync.blobs,
+                                entityCounts: st.lastSync.entityCounts,
+                                errorText: st.lastSync.errorText,
+                              } as SyncLogEntry,
+                              t,
+                            )}
+                            {st.lastSync.errorText && (
+                              <Text size="xs" c="red">
+                                {st.lastSync.errorText}
+                              </Text>
+                            )}
+                          </Group>
+                        </>
                       )}
                     </Stack>
                   </Card>

@@ -166,6 +166,24 @@ type ClusterStatus struct {
 	HasWatermark bool   `json:"hasWatermark"`
 	LastSyncAt   string `json:"lastSyncAt,omitempty"`
 	LastError    string `json:"lastError,omitempty"`
+	// LastSync 最近一次同步的摘要（成功或失败），由管理面 handler 从同步历史组装（FR-C 进度显示）。
+	LastSync *LastSyncSummary `json:"lastSync,omitempty"`
+}
+
+// LastSyncSummary 是最近一次同步的进度/构成摘要（FR-C）：
+// 供管理面展示"上次同步了多少变更、构成如何、是否成功/进行中"。
+type LastSyncSummary struct {
+	StartedAt    string `json:"startedAt"`
+	FinishedAt   string `json:"finishedAt,omitempty"`
+	Success      *bool  `json:"success"` // nil=进行中 / true=成功 / false=失败
+	FromSeq      int64  `json:"fromSeq"`
+	ToSeq        int64  `json:"toSeq"`
+	Changes      int    `json:"changes"`
+	Applied      int    `json:"applied"`
+	Failed       int    `json:"failed"`
+	Blobs        int    `json:"blobs"`
+	EntityCounts string `json:"entityCounts"`
+	ErrorText    string `json:"errorText,omitempty"`
 }
 
 // ClusterStatus 读取集群同步状态（FR-86，FR-88 改造）。

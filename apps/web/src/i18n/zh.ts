@@ -65,6 +65,7 @@ export const zh = {
     watermarkNone: "未同步",
     lastSync: "最近同步",
     lastSyncNever: "从未",
+    lastSyncSummary: "最近同步摘要",
     lastError: "最近错误",
     empty: "暂无集群信息",
     syncHistoryTitle: "同步历史",

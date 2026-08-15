@@ -440,6 +440,23 @@ export interface ClusterStatus {
   hasWatermark: boolean;
   lastSyncAt?: string;
   lastError?: string;
+  /** 最近一次同步的进度/构成摘要（FR-C）。 */
+  lastSync?: LastSyncSummary;
+}
+
+/** 最近一次同步的摘要（FR-C）：变更量、构成、成功/失败/进行中。 */
+export interface LastSyncSummary {
+  startedAt: string;
+  finishedAt?: string;
+  success: boolean | null;
+  fromSeq: number;
+  toSeq: number;
+  changes: number;
+  applied: number;
+  failed: number;
+  blobs: number;
+  entityCounts: string;
+  errorText?: string;
 }
 
 /** 集群同步状态（FR-86）。 */

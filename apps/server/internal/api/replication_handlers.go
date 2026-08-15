@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
+	"github.com/wcpe/jianartifact/apps/server/internal/domain"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
@@ -74,7 +75,35 @@ func (h *Handlers) GetClusterStatus(c *gin.Context) {
 	if _, ok := requireAdmin(c); !ok {
 		return
 	}
-	c.JSON(http.StatusOK, h.replication.ClusterStatus())
+	st := h.replication.ClusterStatus()
+	// FR-C：附加最近一次同步的进度/构成摘要（同步历史最新一条，若有）。
+	if h.syncLogs != nil {
+		if entries, err := h.syncLogs.List(1, 0); err == nil && len(entries) > 0 {
+			e := entries[0]
+			st.LastSync = &domain.LastSyncSummary{
+				StartedAt:    e.StartedAt,
+				FinishedAt:   orEmpty(e.FinishedAt),
+				Success:      e.Success,
+				FromSeq:      e.FromSeq,
+				ToSeq:        e.ToSeq,
+				Changes:      e.Changes,
+				Applied:      e.Applied,
+				Failed:       e.Failed,
+				Blobs:        e.Blobs,
+				EntityCounts: e.EntityCounts,
+				ErrorText:    e.ErrorText,
+			}
+		}
+	}
+	c.JSON(http.StatusOK, st)
+}
+
+// orEmpty 返回指针值或空串（可选字符串字段兜底）。
+func orEmpty(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }
 
 // PutClusterStatus 更新集群配置（对端 URL/令牌/自动同步开关，FR-88），仅管理员。
