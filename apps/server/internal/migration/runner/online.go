@@ -14,15 +14,17 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/migration/discover"
 )
 
-// onlineAsset 是 Nexus assets API 中与下载相关的字段（容错解析）。
-type onlineAsset struct {
-	Path        string `json:"path"`
-	DownloadURL string `json:"downloadUrl"`
-	ContentType string `json:"contentType"`
+// OnlineAsset 是 Nexus assets API 中资产元数据字段（含创建/更新时间，供迁移与时间回填复用）。
+type OnlineAsset struct {
+	Path         string `json:"path"`
+	DownloadURL  string `json:"downloadUrl"`
+	ContentType  string `json:"contentType"`
+	BlobCreated  string `json:"blobCreated"`
+	LastModified string `json:"lastModified"`
 }
 
 type onlineAssetsPage struct {
-	Items             []onlineAsset `json:"items"`
+	Items             []OnlineAsset `json:"items"`
 	ContinuationToken string        `json:"continuationToken"`
 }
 
@@ -75,8 +77,15 @@ func enumerateOnlineREST(ctx context.Context, baseURL, cred string, plan discove
 	return items, nil
 }
 
-func listAllAssets(ctx context.Context, client *http.Client, base, repo, cred string, onProg discover.EnumProgress) ([]onlineAsset, error) {
-	var all []onlineAsset
+// ListAllAssets 分页拉取源 Nexus 仓库的全部资产元数据（含 blobCreated/lastModified），
+// 供迁移枚举与时间回填（admin backfill-times）复用。cred 为 user:pass 或 token，空表示匿名。
+func ListAllAssets(ctx context.Context, base, repo, cred string) ([]OnlineAsset, error) {
+	client := &http.Client{Timeout: 60 * time.Second}
+	return listAllAssets(ctx, client, base, repo, cred, nil)
+}
+
+func listAllAssets(ctx context.Context, client *http.Client, base, repo, cred string, onProg discover.EnumProgress) ([]OnlineAsset, error) {
+	var all []OnlineAsset
 	token := ""
 	// 防护：单仓最多 10000 页 × 默认页大小，避免失控
 	const maxPages = 10000

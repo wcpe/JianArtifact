@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -10,27 +11,34 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/term"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/api"
 	"github.com/wcpe/jianartifact/apps/server/internal/config"
+	"github.com/wcpe/jianartifact/apps/server/internal/domain"
+	"github.com/wcpe/jianartifact/apps/server/internal/migration/runner"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// adminCmd 分发 admin 子命令：reset / backfill-checksums。
+// adminCmd 分发 admin 子命令：reset / backfill-checksums / backfill-times。
 func adminCmd(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("用法：jianartifact admin <reset|backfill-checksums> [参数]")
+		return fmt.Errorf("用法：jianartifact admin <reset|backfill-checksums|backfill-times> [参数]")
 	}
 	switch args[0] {
 	case "reset":
 		return adminReset(args[1:])
 	case "backfill-checksums":
 		return adminBackfillChecksums(args[1:])
+	case "backfill-times":
+		return adminBackfillTimes(args[1:])
+	case "emit-asset-times":
+		return adminEmitAssetTimes(args[1:])
 	default:
-		return fmt.Errorf("未知 admin 子命令：%s（支持 reset / backfill-checksums）", args[0])
+		return fmt.Errorf("未知 admin 子命令：%s（支持 reset / backfill-checksums / backfill-times / emit-asset-times）", args[0])
 	}
 }
 
@@ -75,6 +83,140 @@ func adminBackfillChecksums(args []string) error {
 	}
 	fmt.Printf("合计：更新 %d，跳过 %d。\n", totalUpdated, totalSkipped)
 	return nil
+}
+
+// adminBackfillTimes 从源 Nexus 拉取资产元数据（blobCreated/lastModified），
+// 回填本地 asset 的 created_at/updated_at，使时间与源完全对齐。
+// --url 必填；--repos 逗号分隔（默认取本机全部 hosted 仓库）；--cred user:pass 可选；--batch 单批上限。
+func adminBackfillTimes(args []string) error {
+	fs := flag.NewFlagSet("admin backfill-times", flag.ContinueOnError)
+	baseURL := fs.String("url", "", "源 Nexus 基址（如 https://maven.wcpe.top）")
+	repoList := fs.String("repos", "", "仓库名逗号分隔；空则取本机全部 hosted 仓库")
+	cred := fs.String("cred", "", "源凭据 user:pass 或 token（可选，匿名拉取可省）")
+	batch := fs.Int("batch", 1000, "单批最多处理条数")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *baseURL == "" {
+		return errors.New("--url 必填（源 Nexus 基址）")
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("加载配置：%w", err)
+	}
+	svc, err := openServices(cfg)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = svc.db.Close() }()
+
+	// 确定仓库列表：--repos 优先，否则本机全部 hosted 仓库。
+	var repoNames []string
+	if *repoList != "" {
+		for _, n := range strings.Split(*repoList, ",") {
+			if n = strings.TrimSpace(n); n != "" {
+				repoNames = append(repoNames, n)
+			}
+		}
+	} else {
+		repos, _, err := svc.repoSvc.List(1000, 0)
+		if err != nil {
+			return fmt.Errorf("列出仓库：%w", err)
+		}
+		for _, r := range repos {
+			if r.Type == "hosted" {
+				repoNames = append(repoNames, r.Name)
+			}
+		}
+	}
+	if len(repoNames) == 0 {
+		return errors.New("没有可回填的仓库（--repos 未指定且本机无 hosted 仓库）")
+	}
+
+	ctx := context.Background()
+	// 并行拉取各仓库源清单（分页经隧道较慢，仓库间并发可显著缩短总耗时）。
+	var mu sync.Mutex
+	var entries []domain.AssetTimeEntry
+	var wg sync.WaitGroup
+	for _, name := range repoNames {
+		wg.Add(1)
+		go func(repo string) {
+			defer wg.Done()
+			assets, err := runner.ListAllAssets(ctx, *baseURL, repo, *cred)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "仓库 %s 拉取清单失败：%v\n", repo, err)
+				return
+			}
+			local := make([]domain.AssetTimeEntry, 0, len(assets))
+			for _, a := range assets {
+				created, err1 := parseNexusTime(a.BlobCreated)
+				updated, err2 := parseNexusTime(a.LastModified)
+				if err1 != nil || err2 != nil {
+					continue
+				}
+				local = append(local, domain.AssetTimeEntry{
+					RepoName: repo, Path: a.Path, CreatedAt: created, UpdatedAt: updated,
+				})
+			}
+			mu.Lock()
+			entries = append(entries, local...)
+			mu.Unlock()
+			fmt.Printf("仓库 %s：源清单 %d 条，有效时间 %d 条\n", repo, len(assets), len(local))
+		}(name)
+	}
+	wg.Wait()
+
+	if len(entries) == 0 {
+		return errors.New("未拉取到任何带有效时间的资产（检查 --url/--repos/--cred）")
+	}
+
+	res, err := svc.assetSvc.BackfillTimes(entries, *batch)
+	if err != nil {
+		return fmt.Errorf("回填时间：%w", err)
+	}
+	fmt.Printf("回填完成：源条目 %d，更新时间 %d，跳过 %d（本地无此资产/时间非法）。\n",
+		res.Scanned, res.Updated, res.Skipped)
+	return nil
+}
+
+// adminEmitAssetTimes 为全部资产重新记录带创建/更新时间的 put 变更，
+// 对端复制应用后自动同步 created_at/updated_at（无需在对端单独回填）。
+func adminEmitAssetTimes(args []string) error {
+	fs := flag.NewFlagSet("admin emit-asset-times", flag.ContinueOnError)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("加载配置：%w", err)
+	}
+	svc, err := openServices(cfg)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = svc.db.Close() }()
+
+	res, err := svc.assetSvc.EmitTimeChanges()
+	if err != nil {
+		return fmt.Errorf("登记时间变更：%w", err)
+	}
+	fmt.Printf("已登记 %d 条带时间的资产变更，对端复制应用后时间自动同步。\n", res.Updated)
+	return nil
+}
+
+// parseNexusTime 把 Nexus 的 RFC3339（如 2021-12-01T08:03:30.570+00:00）转为
+// 与库内一致的 UTC "YYYY-MM-DD HH:MM:SS"；空或非法返回错误。
+func parseNexusTime(s string) (string, error) {
+	if s == "" {
+		return "", errors.New("时间字段为空")
+	}
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return "", err
+	}
+	return t.UTC().Format("2006-01-02 15:04:05"), nil
 }
 
 // adminReset 离线直连 SQLite 重置 / 创建管理员账号与口令：

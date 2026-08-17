@@ -112,3 +112,35 @@ func TestAssetServicePutOverwrite(t *testing.T) {
 		t.Fatalf("覆盖写未生效：%q", body)
 	}
 }
+
+func TestAssetServiceBackfillTimes(t *testing.T) {
+	svc, repos := newAssetService(t)
+	if _, err := repos.Create("raw-hosted", "raw", "hosted", "private", ""); err != nil {
+		t.Fatalf("建仓库：%v", err)
+	}
+	if _, err := svc.Put("raw-hosted", "dir/file.txt", bytes.NewReader([]byte("hello")), "text/plain"); err != nil {
+		t.Fatalf("Put：%v", err)
+	}
+
+	entries := []domain.AssetTimeEntry{
+		{RepoName: "raw-hosted", Path: "dir/file.txt", CreatedAt: "2021-01-01 00:00:00", UpdatedAt: "2022-02-02 03:04:05"},
+		{RepoName: "raw-hosted", Path: "no-such-path", CreatedAt: "2021-01-01 00:00:00", UpdatedAt: "2022-02-02 03:04:05"},
+		{RepoName: "ghost-repo", Path: "x.txt", CreatedAt: "2021-01-01 00:00:00", UpdatedAt: "2022-02-02 03:04:05"},
+	}
+	res, err := svc.BackfillTimes(entries, 10)
+	if err != nil {
+		t.Fatalf("BackfillTimes：%v", err)
+	}
+	if res.Scanned != 3 || res.Updated != 1 || res.Skipped != 2 {
+		t.Fatalf("统计不符：%+v", res)
+	}
+
+	asset, rc, err := svc.Get("raw-hosted", "dir/file.txt")
+	if err != nil {
+		t.Fatalf("Get：%v", err)
+	}
+	defer func() { _ = rc.Close() }()
+	if asset.CreatedAt != "2021-01-01 00:00:00" || asset.UpdatedAt != "2022-02-02 03:04:05" {
+		t.Fatalf("时间未回填：created=%q updated=%q", asset.CreatedAt, asset.UpdatedAt)
+	}
+}

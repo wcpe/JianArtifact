@@ -17,19 +17,27 @@ type AssetRepo struct{ db *persistence.DB }
 func NewAssetRepo(db *persistence.DB) *AssetRepo { return &AssetRepo{db: db} }
 
 // Upsert 覆盖写入仓库内某路径的资产：路径已存在则更新 blob/大小/类型/校验和与 updated_at，
-// 否则插入新行。以 (repository_id, path) 唯一约束实现 last-writer-wins。
+// 否则插入新行。以 (repository_id, path) 唯一约束实现 last-writer-wins。时间取数据库当前值。
 func (r *AssetRepo) Upsert(repoID int64, path, blobHash string, size int64, contentType, sha1, md5 string) error {
+	return r.UpsertWithTime(repoID, path, blobHash, size, contentType, sha1, md5, "", "")
+}
+
+// UpsertWithTime 覆盖写入资产，并按源端时间回填 created_at/updated_at：
+// createdAt/updatedAt 非空（UTC "YYYY-MM-DD HH:MM:SS"）时使用该值，否则回退 datetime('now')。
+// 已存在路径的 created_at 仅在提供新值（非空）时更新，用于复制时间同步 / 回填场景。
+func (r *AssetRepo) UpsertWithTime(repoID int64, path, blobHash string, size int64, contentType, sha1, md5, createdAt, updatedAt string) error {
 	_, err := r.db.Exec(
-		`INSERT INTO asset (repository_id, path, blob_hash, size, content_type, sha1, md5)
-			VALUES (?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO asset (repository_id, path, blob_hash, size, content_type, sha1, md5, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?,''), datetime('now')), COALESCE(NULLIF(?,''), datetime('now')))
 		ON CONFLICT (repository_id, path) DO UPDATE SET
 			blob_hash    = excluded.blob_hash,
 			size         = excluded.size,
 			content_type = excluded.content_type,
 			sha1         = excluded.sha1,
 			md5          = excluded.md5,
-			updated_at   = datetime('now')`,
-		repoID, path, blobHash, size, contentType, sha1, md5,
+			created_at   = COALESCE(NULLIF(excluded.created_at,''), asset.created_at),
+			updated_at   = COALESCE(NULLIF(excluded.updated_at,''), datetime('now'))`,
+		repoID, path, blobHash, size, contentType, sha1, md5, createdAt, updatedAt,
 	)
 	return err
 }
@@ -113,6 +121,19 @@ func (r *AssetRepo) UpdateChecksums(id int64, sha1, md5 string) error {
 		sha1, md5, id,
 	)
 	return err
+}
+
+// UpdateTimes 回填资产时间（created_at/updated_at，均为 UTC "YYYY-MM-DD HH:MM:SS"）；
+// 仓库内路径不存在则影响 0 行。返回受影响行数。
+func (r *AssetRepo) UpdateTimes(repoID int64, path, createdAt, updatedAt string) (int64, error) {
+	res, err := r.db.Exec(
+		`UPDATE asset SET created_at = ?, updated_at = ? WHERE repository_id = ? AND path = ?`,
+		createdAt, updatedAt, repoID, path,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 // CountMissingChecksums 返回仍缺 sha1/md5 的资产数量。

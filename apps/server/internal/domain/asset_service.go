@@ -65,10 +65,16 @@ func (s *AssetService) Put(repoName, path string, r io.Reader, contentType strin
 	if err := s.assets.Upsert(repo.ID, path, hash, size, contentType, sha1sum, md5sum); err != nil {
 		return nil, err
 	}
+	asset, err := s.assets.GetByPath(repo.ID, path)
+	if err != nil {
+		return nil, err
+	}
+	// 变更数据携带创建/更新时间，对端应用时回填，保证复制两侧时间一致。
 	s.recordChange(EntityAsset, AssetKey(repoName, path), OpPut, AssetChangeData{
 		Path: path, BlobHash: hash, Size: size, ContentType: contentType, Sha1: sha1sum, Md5: md5sum,
+		CreatedAt: asset.CreatedAt, UpdatedAt: asset.UpdatedAt,
 	})
-	return s.assets.GetByPath(repo.ID, path)
+	return asset, nil
 }
 
 // recordChange 记录复制变更日志；记录失败不阻断业务写（复制尽力最终一致，对账兜底，见 ADR-0013）。
@@ -117,6 +123,106 @@ func (s *AssetService) BackfillChecksums(batch int) (*BackfillChecksumsResult, e
 		return res, err
 	}
 	res.Remaining = remain
+	return res, nil
+}
+
+// AssetTimeEntry 是待回填时间的资产条目（时间已格式化为 UTC "YYYY-MM-DD HH:MM:SS"）。
+type AssetTimeEntry struct {
+	RepoName  string
+	Path      string
+	CreatedAt string
+	UpdatedAt string
+}
+
+// BackfillTimesResult 是时间回填的统计。
+type BackfillTimesResult struct {
+	Scanned int // 传入源条目数
+	Updated int // 成功更新时间条数
+	Skipped int // 本地无此资产 / 仓库不存在 / 更新失败跳过
+}
+
+// BackfillTimes 按 仓库名+路径 回填资产 created_at/updated_at，与源 Nexus 时间对齐。
+// batch 为单批上限（≤0 默认 1000）；幂等可重复执行。
+func (s *AssetService) BackfillTimes(entries []AssetTimeEntry, batch int) (*BackfillTimesResult, error) {
+	if batch <= 0 {
+		batch = 1000
+	}
+	res := &BackfillTimesResult{Scanned: len(entries)}
+	repoIDs := make(map[string]int64, 8)
+	lookup := func(name string) (int64, bool) {
+		if id, ok := repoIDs[name]; ok {
+			return id, true
+		}
+		repo, err := s.repos.GetByName(name)
+		if err != nil {
+			return 0, false
+		}
+		repoIDs[name] = repo.ID
+		return repo.ID, true
+	}
+	for i := 0; i < len(entries); i += batch {
+		end := i + batch
+		if end > len(entries) {
+			end = len(entries)
+		}
+		for _, e := range entries[i:end] {
+			repoID, ok := lookup(e.RepoName)
+			if !ok {
+				res.Skipped++
+				continue
+			}
+			n, err := s.assets.UpdateTimes(repoID, e.Path, e.CreatedAt, e.UpdatedAt)
+			if err != nil || n == 0 {
+				res.Skipped++
+				continue
+			}
+			res.Updated++
+		}
+	}
+	return res, nil
+}
+
+// EmitTimeChanges 为全部 hosted 仓库资产重新记录带创建/更新时间的 put 变更，
+// 供对端复制应用后同步时间（幂等：对端已有则更新时间为源值）。返回统计。
+func (s *AssetService) EmitTimeChanges() (*BackfillTimesResult, error) {
+	res := &BackfillTimesResult{}
+	offset := 0
+	const pageSize = 100
+	for {
+		repos, err := s.repos.List(pageSize, offset)
+		if err != nil {
+			return nil, err
+		}
+		for i := range repos {
+			r := &repos[i]
+			if r.Type != "hosted" {
+				continue
+			}
+			for ao := 0; ; ao += 1000 {
+				assets, err := s.assets.ListByRepo(r.ID, "", 1000, ao)
+				if err != nil {
+					return nil, err
+				}
+				for j := range assets {
+					a := &assets[j]
+					s.recordChange(EntityAsset, AssetKey(r.Name, a.Path), OpPut, AssetChangeData{
+						Path: a.Path, BlobHash: a.BlobHash, Size: a.Size,
+						ContentType: a.ContentType, Sha1: a.Sha1, Md5: a.Md5,
+						CreatedAt: a.CreatedAt, UpdatedAt: a.UpdatedAt,
+					})
+					res.Updated++
+				}
+				if len(assets) < 1000 {
+					break
+				}
+			}
+		}
+		if len(repos) < pageSize {
+			break
+		}
+		offset += pageSize
+	}
+	res.Scanned = res.Updated
 	return res, nil
 }
 

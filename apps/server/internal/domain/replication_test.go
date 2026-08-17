@@ -603,3 +603,43 @@ func TestReplicationSchedulerMultiPeer(t *testing.T) {
 		return errA == nil && errB == nil
 	}, "多对端同步后应同时有 alice 与 bob")
 }
+
+// TestReplicationApplyAssetCarriesTimes 变更携带创建/更新时间时，Apply 后应回填到资产表。
+func TestReplicationApplyAssetCarriesTimes(t *testing.T) {
+	svc, _, assetRepo, repoRepo, _, _, _ := newTestReplSvc(t)
+	if _, err := repoRepo.Create("raw", "raw", "hosted", "private", "{}"); err != nil {
+		t.Fatalf("建仓库：%v", err)
+	}
+
+	if err := svc.Record(domain.EntityAsset, domain.AssetKey("raw", "a/b.txt"), domain.OpPut,
+		domain.AssetChangeData{
+			Path: "a/b.txt", BlobHash: "h1", Size: 10, ContentType: "text/plain",
+			CreatedAt: "2021-01-01 00:00:00", UpdatedAt: "2022-02-02 03:04:05",
+		}); err != nil {
+		t.Fatalf("Record：%v", err)
+	}
+	ch := mustLastChange(t, svc, domain.EntityAsset, domain.AssetKey("raw", "a/b.txt"))
+	if err := svc.Apply(ch); err != nil {
+		t.Fatalf("Apply：%v", err)
+	}
+	repo, err := repoRepo.GetByName("raw")
+	if err != nil {
+		t.Fatalf("取仓库：%v", err)
+	}
+	got, err := assetRepo.GetByPath(repo.ID, "a/b.txt")
+	if err != nil {
+		t.Fatalf("查 asset：%v", err)
+	}
+	if got.CreatedAt != "2021-01-01 00:00:00" || got.UpdatedAt != "2022-02-02 03:04:05" {
+		t.Fatalf("复制应用后时间未同步：created=%q updated=%q", got.CreatedAt, got.UpdatedAt)
+	}
+
+	// 再次 Apply（覆盖写，同时间）应保持时间一致。
+	if err := svc.Apply(ch); err != nil {
+		t.Fatalf("再次 Apply：%v", err)
+	}
+	got2, _ := assetRepo.GetByPath(repo.ID, "a/b.txt")
+	if got2.CreatedAt != "2021-01-01 00:00:00" || got2.UpdatedAt != "2022-02-02 03:04:05" {
+		t.Fatalf("重复应用后时间漂移：created=%q updated=%q", got2.CreatedAt, got2.UpdatedAt)
+	}
+}

@@ -132,14 +132,18 @@ type SyncStats struct {
 func (c *ReplicationClient) Sync(since int64) (SyncStats, error) {
 	stats := SyncStats{FromSeq: since, ToSeq: since, ByEntity: map[string]int{}, pendingBlobs: map[string]struct{}{}}
 	for {
-		changes, newSeq, err := c.Pull(stats.ToSeq, syncBatchLimit)
+		changes, _, err := c.Pull(stats.ToSeq, syncBatchLimit)
 		if err != nil {
 			return stats, err
 		}
 		for _, ch := range changes {
 			c.applyChange(ch, &stats)
 		}
-		stats.ToSeq = newSeq
+		// 水位推进到本批最后一条的 seq（而非对端最新 seq）：对端一次性积压大量变更时，
+		// 若直接跳到对端最新会跳过中间未拉取的变更，导致数据缺失（FR-85 回归修复）。
+		if len(changes) > 0 {
+			stats.ToSeq = changes[len(changes)-1].Seq
+		}
 		if len(changes) < syncBatchLimit {
 			break
 		}

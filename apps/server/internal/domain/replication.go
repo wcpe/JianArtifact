@@ -68,7 +68,8 @@ type AssetChangeData struct {
 	ContentType string `json:"contentType"`
 	Sha1        string `json:"sha1,omitempty"`
 	Md5         string `json:"md5,omitempty"`
-	UpdatedAt   string `json:"updatedAt,omitempty"`
+	CreatedAt   string `json:"createdAt,omitempty"` // UTC "YYYY-MM-DD HH:MM:SS"，源端创建时间（对端应用时回填）
+	UpdatedAt   string `json:"updatedAt,omitempty"` // UTC "YYYY-MM-DD HH:MM:SS"，源端最后修改时间
 }
 
 // RepoChangeData 是仓库 put 变更的 data。
@@ -496,6 +497,7 @@ func (s *ReplicationService) backfillAssets(ts string) error {
 					if err := s.appendBackfill(EntityAsset, AssetKey(r.Name, a.Path), ts, AssetChangeData{
 						Path: a.Path, BlobHash: a.BlobHash, Size: a.Size,
 						ContentType: a.ContentType, Sha1: a.Sha1, Md5: a.Md5,
+						CreatedAt: a.CreatedAt, UpdatedAt: a.UpdatedAt,
 					}); err != nil {
 						return err
 					}
@@ -592,7 +594,8 @@ func (s *ReplicationService) applyAsset(ch repository.Change) error {
 	if err := json.Unmarshal([]byte(ch.Data), &d); err != nil {
 		return err
 	}
-	return s.assets.Upsert(repo.ID, path, d.BlobHash, d.Size, d.ContentType, d.Sha1, d.Md5)
+	// 变更携带源端创建/更新时间时一并回填，保证复制两侧时间一致。
+	return s.assets.UpsertWithTime(repo.ID, path, d.BlobHash, d.Size, d.ContentType, d.Sha1, d.Md5, d.CreatedAt, d.UpdatedAt)
 }
 
 func (s *ReplicationService) applyRepository(ch repository.Change) error {

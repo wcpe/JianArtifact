@@ -92,6 +92,13 @@ func usage(w io.Writer) {
   admin backfill-checksums
                      回填历史资产缺失的 sha1/md5（从 blob 流式计算并写库）
                      [--batch <N>] [--all]
+  admin backfill-times
+                     从源 Nexus 拉取资产时间（blobCreated/lastModified）回填
+                     created_at/updated_at，与源完全对齐
+                     --url <源基址> [--repos <a,b>] [--cred <user:pass>] [--batch <N>]
+  admin emit-asset-times
+                     为全部资产重新登记带创建/更新时间的变更，对端复制应用后
+                     自动同步时间（无需在对端单独回填）
   replication status 查看复制对端配置与同步状态（FR-86）
   replication start  启用复制同步调度
   replication stop   停用复制同步调度
