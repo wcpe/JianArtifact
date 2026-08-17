@@ -341,6 +341,34 @@ func TestMavenHostedDispatchedNotRejected(t *testing.T) {
 	}
 }
 
+// TestMavenHostedSnapshotLiteralFallback 验证 SNAPSHOT 字面文件在无 maven-metadata.xml
+// （无顶层 <snapshot> timestamp/buildNumber）时仍可被 GET：时间戳解析失败后回退字面路径。
+func TestMavenHostedSnapshotLiteralFallback(t *testing.T) {
+	e := newProtocolEnv(t)
+	adminToken := e.bootstrapAdmin(t)
+
+	vis := api.CreateRepositoryRequestVisibility("private")
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/repositories", adminToken, api.CreateRepositoryRequest{
+		Name:       "maven-snapshots",
+		Format:     api.CreateRepositoryRequestFormat("maven"),
+		Type:       api.CreateRepositoryRequestType("hosted"),
+		Visibility: &vis,
+	}, nil); code != http.StatusCreated {
+		t.Fatalf("建 maven 仓库状态码 = %d，期望 201", code)
+	}
+
+	// 仅 PUT 字面 -SNAPSHOT.pom，不 PUT maven-metadata.xml。
+	path := "/repository/maven-snapshots/com/example/demo/1.0.0-SNAPSHOT/demo-1.0.0-SNAPSHOT.pom"
+	if rec := e.rawReq(http.MethodPut, path, "Bearer "+adminToken, "application/xml", []byte("<project/>")); rec.Code != http.StatusCreated {
+		t.Fatalf("PUT 状态码 = %d，期望 201", rec.Code)
+	}
+
+	// 无 metadata 时 GET -SNAPSHOT 应回退字面路径返回 200。
+	if rec := e.rawReq(http.MethodGet, path, "Bearer "+adminToken, "", nil); rec.Code != http.StatusOK {
+		t.Fatalf("GET 状态码 = %d，期望 200（SNAPSHOT 回退字面路径）", rec.Code)
+	}
+}
+
 // createRawProxyRepo 以管理员身份创建指向 remoteURL 的 raw proxy 仓库。
 func (e *protocolEnv) createRawProxyRepo(t *testing.T, adminToken, name, remoteURL string) {
 	t.Helper()

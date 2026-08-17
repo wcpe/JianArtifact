@@ -117,6 +117,14 @@ func (h *MavenHandler) Get(c *gin.Context) {
 		if ext, ok := checksumExt(artPath); ok && h.serveComputedChecksum(c, repoName, artPath, ext) {
 			return
 		}
+		// SNAPSHOT 时间戳解析与校验和现算均失败时，回退按字面路径解析：
+		// 客户端可能直接发布了 artifact-version-SNAPSHOT.ext 字面文件（Gradle 快照发布），
+		// 其 maven-metadata.xml 未必带顶层 <snapshot> timestamp/buildNumber，直接 Resolve 命中即返回。
+		if asset, rc, err := h.assets.Resolve(c.Request.Context(), repoName, artPath); err == nil {
+			defer func() { _ = rc.Close() }()
+			writeArtifact(c, asset.ContentType, asset.Size, asset.BlobHash, rc)
+			return
+		}
 		auth.WriteError(c, http.StatusNotFound, "not_found", "资源不存在")
 		return
 	}
