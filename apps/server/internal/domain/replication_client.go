@@ -2,9 +2,11 @@ package domain
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -19,6 +21,13 @@ const syncBatchLimit = 500
 // blobFetchWorkers 是 blob 并发拉取的工作协程数（FR-A 性能修复）：
 // 批量 asset 同步时并行补拉缺失 blob，避免串行逐个拉取导致整批卡死。
 const blobFetchWorkers = 8
+
+// pullMaxRetries 是拉取变更的瞬时网络错误重试次数（修复：对端经 CDN/隧道
+// 偶发 connection reset，直接失败会在同步历史留下噪声失败）。
+const pullMaxRetries = 2
+
+// pullRetryBase 是重试退避基准时长（依次 200ms、400ms）。
+const pullRetryBase = 200 * time.Millisecond
 
 // ReplicationClient 是复制拉取方的 HTTP 客户端（FR-84）：从对端 GET 拉取变更、
 // 应用到本地（ReplicationService.Apply）、blob 只传缺失。
@@ -35,13 +44,19 @@ type ReplicationClient struct {
 
 // NewReplicationClient 构造 ReplicationClient。
 func NewReplicationClient(peerURL, token string, repl *ReplicationService, blobs *blobstore.Store) *ReplicationClient {
+	// 变更列表拉取用适中超时；blob 下载用 blobHTTP 客户端（更宽松超时，见下）。
+	// 对端可能经 CDN/隧道（如 repo1.wcpe.top → EdgeOne），CDN 会按空闲策略关闭 keep-alive
+	// 连接，默认 Transport 复用失效连接会偶发 connection reset；故设置较短 IdleConnTimeout，
+	// 让空闲连接主动重建（修复间歇同步失败）。
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConnsPerHost = 2
+	transport.IdleConnTimeout = 30 * time.Second
 	return &ReplicationClient{
 		peerURL: peerURL,
 		token:   token,
 		repl:    repl,
 		blobs:   blobs,
-		// 变更列表拉取用适中超时；blob 下载用 blobHTTP 客户端（更宽松超时，见下）。
-		http: &http.Client{Timeout: 60 * time.Second},
+		http:    &http.Client{Timeout: 60 * time.Second, Transport: transport},
 	}
 }
 
@@ -65,8 +80,27 @@ type pullResponse struct {
 }
 
 // Pull 从对端拉取 seq 大于 since 的变更（最多 limit 条），返回变更与对端最新 seq。
+// 对瞬时网络错误（CDN/隧道偶发 connection reset、超时、EOF 等）做有界重试：
+// GET 幂等安全，重试不产生副作用（修复间歇同步失败）。
 func (c *ReplicationClient) Pull(since int64, limit int) ([]repository.Change, int64, error) {
 	u := fmt.Sprintf("%s/api/v1/cluster/sync/pull?since=%d&limit=%d", c.peerURL, since, limit)
+	var lastErr error
+	for attempt := 0; attempt <= pullMaxRetries; attempt++ {
+		changes, latest, err := c.pullOnce(u)
+		if err == nil {
+			return changes, latest, nil
+		}
+		lastErr = err
+		if !isRetryableNetErr(err) || attempt == pullMaxRetries {
+			break
+		}
+		time.Sleep(pullRetryBase * time.Duration(1<<attempt))
+	}
+	return nil, 0, fmt.Errorf("拉取复制变更：%w", lastErr)
+}
+
+// pullOnce 执行一次拉取请求；返回变更与对端最新 seq，或 Do/解码阶段的错误。
+func (c *ReplicationClient) pullOnce(u string) ([]repository.Change, int64, error) {
 	req, err := http.NewRequest(http.MethodGet, u, nil)
 	if err != nil {
 		return nil, 0, err
@@ -75,7 +109,7 @@ func (c *ReplicationClient) Pull(since int64, limit int) ([]repository.Change, i
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, 0, fmt.Errorf("拉取复制变更：%w", err)
+		return nil, 0, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -87,6 +121,20 @@ func (c *ReplicationClient) Pull(since int64, limit int) ([]repository.Change, i
 		return nil, 0, fmt.Errorf("解析复制变更响应：%w", err)
 	}
 	return out.Changes, out.LatestSeq, nil
+}
+
+// isRetryableNetErr 判断是否为可重试的瞬时网络错误：
+// 网络层错误（连接重置、超时、拒绝等，实现 net.Error）或响应中途 EOF。
+// HTTP 状态码错误不在此列（401/404 等重试无意义；5xx 由下一轮调度兜底）。
+func isRetryableNetErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	var ne net.Error
+	if errors.As(err, &ne) {
+		return true
+	}
+	return errors.Is(err, io.ErrUnexpectedEOF)
 }
 
 // FetchBlob 从对端按内容哈希流式拉取 blob；调用方负责关闭返回流。

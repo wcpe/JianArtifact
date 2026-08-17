@@ -250,3 +250,47 @@ func TestReplicationClientSyncIncremental(t *testing.T) {
 		t.Errorf("增量同步后目标库缺 bob，count=%d", n)
 	}
 }
+
+// TestReplicationClientPullRetriesOnReset 对端首次请求中断连接（模拟 CDN/隧道偶发
+// connection reset），Pull 应通过有界重试最终成功，而不是直接失败（修复间歇同步失败）。
+func TestReplicationClientPullRetriesOnReset(t *testing.T) {
+	var mu sync.Mutex
+	attempts := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		attempts++
+		first := attempts == 1
+		mu.Unlock()
+		if first {
+			// 中断连接：hijack 后立即关闭，客户端读响应时收到连接重置。
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				t.Errorf("测试服务端不支持 Hijack")
+				return
+			}
+			conn, _, err := hj.Hijack()
+			if err != nil {
+				return
+			}
+			_ = conn.Close()
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"changes":[],"latestSeq":101417}`))
+	}))
+	t.Cleanup(ts.Close)
+
+	client := domain.NewReplicationClient(ts.URL, "t", nil, nil)
+	changes, latest, err := client.Pull(101417, 500)
+	if err != nil {
+		t.Fatalf("Pull 应在重试后成功，得 %v", err)
+	}
+	if len(changes) != 0 || latest != 101417 {
+		t.Errorf("返回内容不符：changes=%d latest=%d", len(changes), latest)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if attempts < 2 {
+		t.Errorf("应至少请求 2 次（1 次中断 + 重试），实际 %d 次", attempts)
+	}
+}
