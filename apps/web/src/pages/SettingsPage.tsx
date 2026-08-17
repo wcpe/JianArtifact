@@ -243,7 +243,8 @@ export function SettingsPage() {
   return (
     <>
       <PageHeader title={t("settings.title")} description={t("settings.description")} />
-      <Tabs defaultValue="basic" maw={900}>
+      {/* 内容区宽度由全局 contentMaxWidth 控制，页面内不再二次限宽（FR-90 布局修复）。 */}
+      <Tabs defaultValue="basic">
         <Tabs.List>
           <Tabs.Tab value="basic">{t("settings.basicTitle")}</Tabs.Tab>
           <Tabs.Tab value="cluster">{t("settings.clusterTitle")}</Tabs.Tab>

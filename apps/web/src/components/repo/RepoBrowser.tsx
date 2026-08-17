@@ -20,6 +20,7 @@ import {
 } from "@mantine/core";
 import { EmptyState } from "@jianartifact/ui";
 import { IconChevronDown, IconChevronUp, IconSearch, IconUpload, IconX } from "@tabler/icons-react";
+import { useLocalStorage } from "@mantine/hooks";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -111,6 +112,34 @@ export function RepoBrowser({
   const [reloadNonce, setReloadNonce] = useState(0);
   // 上传区默认收起，点击按钮展开（避免常驻占位挤压文件树）。
   const [uploadOpen, setUploadOpen] = useState(false);
+
+  // FR-99: 左树宽度可拖拽调整（分割条），偏好本地持久化；min 280 / max 720。
+  const [treeWidth, setTreeWidth] = useLocalStorage<number>({
+    key: "jianartifact.treeWidth",
+    defaultValue: 360,
+    getInitialValueInEffect: false,
+  });
+  const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const onSplitterMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    dragRef.current = { startX: e.clientX, startWidth: treeWidth };
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    const onMove = (ev: MouseEvent) => {
+      if (!dragRef.current) return;
+      const delta = ev.clientX - dragRef.current.startX;
+      setTreeWidth(Math.min(720, Math.max(280, dragRef.current.startWidth + delta)));
+    };
+    const onUp = () => {
+      dragRef.current = null;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
 
   // FR-54: 懒加载树状态
   const [treeNodes, setTreeNodes] = useState<AssetTreeNode[]>([]);
@@ -373,8 +402,9 @@ export function RepoBrowser({
             padding={density.cardPadding}
             radius="md"
             style={{
-              width: 360,
+              width: treeWidth,
               minWidth: 280,
+              maxWidth: 720,
               flexShrink: 0,
               display: "flex",
               flexDirection: "column",
@@ -433,6 +463,22 @@ export function RepoBrowser({
               />
             </ScrollArea>
           </Card>
+
+          {/* FR-99: 拖拽分割条——左右面板宽度自由调整 */}
+          <Box
+            onMouseDown={onSplitterMouseDown}
+            aria-label="调整文件树宽度"
+            role="separator"
+            aria-orientation="vertical"
+            style={{
+              width: 8,
+              marginInline: -4,
+              cursor: "col-resize",
+              alignSelf: "stretch",
+              flexShrink: 0,
+              borderRadius: 4,
+            }}
+          />
 
           {/* 右侧：文件详情 / 使用说明 */}
           <Card

@@ -5,6 +5,7 @@ import {
   Button,
   Card,
   Group,
+  MultiSelect,
   Select,
   Stack,
   Table,
@@ -150,19 +151,31 @@ function ConfigTab({
   const { t } = useTranslation();
   const [visibility, setVisibility] = useState<RepoVisibility>("private");
   const [description, setDescription] = useState("");
+  const [members, setMembers] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+  // group 成员候选：当前列表中同格式、非本仓的仓库名。
+  const reposState = useAsync(() => listRepositories({ page_size: 100 }), []);
+  const memberOptions = (reposState.data?.items ?? [])
+    .filter((r) => r.format === repo?.format && r.name !== repo?.name)
+    .map((r) => r.name);
 
-  // 仓库信息就绪后同步初始 visibility/描述
+  // 仓库信息就绪后同步初始 visibility/描述/members
   useEffect(() => {
     if (repo) {
       setVisibility(repo.visibility);
       setDescription(repo.description ?? "");
+      setMembers(repo.members ?? []);
     }
   }, [repo]);
 
   const handleSave = () => {
     setSaving(true);
-    updateRepository(repoName, { visibility, description })
+    const patch: { visibility: RepoVisibility; description: string; members?: string[] } = {
+      visibility,
+      description,
+      ...(repo?.type === "group" ? { members } : {}),
+    };
+    updateRepository(repoName, patch)
       .then(() => {
         notifySuccess(t("common.saved"));
         onUpdated();
@@ -215,6 +228,20 @@ function ConfigTab({
           value={description}
           onChange={(e) => setDescription(e.currentTarget.value)}
         />
+
+        {/* group 仓库：成员仓库（members）编辑 */}
+        {repo.type === "group" && (
+          <MultiSelect
+            label={t("repoDetail.configMembers", { defaultValue: "成员仓库" })}
+            description={t("repoDetail.configMembersHint", {
+              defaultValue: "选择聚合进本 group 的仓库",
+            })}
+            data={memberOptions}
+            searchable
+            value={members}
+            onChange={setMembers}
+          />
+        )}
 
         <Group justify="flex-end">
           <Button onClick={handleSave} loading={saving}>

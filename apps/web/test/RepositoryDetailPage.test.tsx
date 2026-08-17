@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { Route, Routes } from "react-router-dom";
 
+import { store } from "@jianartifact/devmock";
 import { AppRoutes } from "../src/app/router";
 import { RepositoryDetailPage } from "../src/pages/RepositoryDetailPage";
 import { renderWithProviders } from "./harness";
@@ -61,5 +62,22 @@ describe("仓库详情", () => {
     const shell = screen.getByTestId("repo-detail-shell");
     expect(shell.style.overflow).toBe("hidden");
     expect(shell.style.height).toContain("100vh");
+  });
+
+  it("group 仓库配置 tab 可编辑成员仓库（members）", async () => {
+    // 复现：group 仓库 config tab 应提供成员仓库编辑控件；缺失则本测试失败。
+    store.createRepository({
+      name: "npm-public",
+      format: "npm",
+      type: "group",
+      visibility: "private",
+      members: ["npm-release"],
+    });
+    const user = userEvent.setup();
+    renderDetail("npm-public", true);
+    // 等详情页渲染，切到配置 tab
+    await user.click(await screen.findByText("配置"));
+    // group 仓库应能编辑成员仓库（members 多选/输入）；修复前不存在，修复后渲染（label 可能多处匹配）
+    expect((await screen.findAllByLabelText(/成员仓库/)).length).toBeGreaterThan(0);
   });
 });
