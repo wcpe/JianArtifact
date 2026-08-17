@@ -63,6 +63,10 @@
 - 同步进度/构成摘要（FR-95，代码代号 FR-C）：`GET /api/v1/cluster` 返回最近一次同步摘要（`LastSync`：起始/结束水位、变更·应用·失败、blob、按实体类型计数 `entityCounts`）；同步历史 `entity_counts` 落 `repl_sync_log`，集群页展示变更构成（如「用户2 · 仓库1 · 制品5」）。
 - 集群配置键隔离（FR-96）：`repl:*` 集群配置键写路径不记录变更、应用路径拒绝应用（`SettingService`/复制应用侧过滤），避免对端配置互相覆盖。
 - 复制调度失败日志收缩（FR-97）：`ReplicationScheduler` 对连续相同错误合并记录（起始→终止 + 次数），每 `errProgressEvery` 次打一条进度，错误变化/恢复时输出汇总，避免持续失败刷屏。
+- 审计日志（FR-38）：新增 `audit_log` 表（迁移 0012）+ 全部管理写操作记录（制品上传/删除、仓库/ACL、用户、令牌、设置），含操作者/时间/对象/仓库/结果/IP；`GET /api/v1/audit-logs`（分页 + actor/action/repo/时间筛选）+ 管理端「审计日志」页（侧边栏入口）。
+- 集群同步历史二级页（FR-98）：`GET /api/v1/cluster/sync-logs/:id/changes` 按 fromSeq→toSeq 从 `repl_change` 反推某次同步的具体变更；集群页同步历史行可点击进入详情页（变更列表 + 操作/实体徽章 + 分页）。
+- 仓库详情左右宽度拖拽（FR-99）：浏览页左树/右详情加拖拽分割条，宽度自由调整（min 280/max 720）并本地持久化。
+- 管理端布局与图标：设置页/集群页移除页面内 maw=900 二次限宽（内容区由全局 contentMaxWidth 控制）；favicon 与品牌 logo 统一为单一文件 `public/favicon.svg`（index.html 与 BrandLogo 均引用文件，去除内联 SVG/data URI）。
 
 ### 修复
 
@@ -71,6 +75,9 @@
   - `/assets/*`（构建产物带 content-hash，内容变则文件名变）加 `Cache-Control: public, max-age=31536000, immutable` 长缓存；其他无 hash 静态文件（如 favicon）保持 `no-cache`，避免误缓存导致更新不生效。
 - 同步历史空数据崩溃（`GET /api/v1/cluster/sync-logs` 无记录时 `items` 返回 `null` 而非 `[]`，web 集群页同步历史渲染 `list.items.length` 崩溃）：
   - 后端空数据时返回空数组 `[]`（复现测试 `TestClusterSyncLogsEmpty`）；前端 `list.items` 加空值防御（`?? []`）。
+- group 仓库无法编辑成员：仓库详情配置 tab 增加 group 类型分支（members MultiSelect，选同格式仓库），修复 group 成员无法编辑（组件测试 `Test` group 配置可编辑成员仓库）。
+- 双斜杠路径下载 404：`cleanArtifactPath` 改用 `TrimLeft` 去全部前导斜杠并折叠连续斜杠（`//→/`），兼容客户端拼 `baseUrl + "/" + path` 产生的双斜杠 URL（复现测试 `TestDoubleSlashPathCompat`）。
+- Maven SNAPSHOT 字面路径回退：`MavenHandler.Get` 对 `-SNAPSHOT` 文件时间戳解析失败后回退按字面路径解析，支持 Gradle 快照发布（metadata 无顶层 `<snapshot>` 标签）场景。
 
 ## [0.6.0] - 2026-07-29
 
