@@ -58,6 +58,11 @@
   - `admin emit-asset-times`：为全部 hosted 仓库资产重新登记带时间的 put 变更，对端复制应用后自动同步时间（无需在对端单独回填）。
   - `ReplicationClient.Sync` 水位推进修复：推进到本批最后一条 seq（而非对端最新），避免对端一次性积压大量变更时跳过未拉取部分。
 - Maven SNAPSHOT 字面路径回退（FR-92）：GET `artifact-version-SNAPSHOT.ext` 时间戳解析失败时回退按字面路径解析，支持 Gradle 快照发布（metadata 无顶层 `<snapshot>` 标签）场景。
+- 多对端全互连集群（FR-93，代码代号 FR-D）：对端配置支持多对端列表（`setting` 键 `repl:peers`，JSON 数组 `[{url,token}]`，优先于单值 `repl:peer_url`/`repl:peer_token`）；`PUT /api/v1/cluster` 传 `peers` 则全量替换；调度器对每个对端各同步一轮，节点间可全互连双向复制。
+- 复制性能增强（FR-94，代码代号 FR-A/B）：`ReplicationClient.Sync` 资产元数据先落库（不阻塞），缺失 blob 用工作协程池（`blobFetchWorkers`）并发补拉，避免逐个串行拉 blob（单个可能 30s 超时）导致批量同步卡死；blob 拉取用更宽松超时。
+- 同步进度/构成摘要（FR-95，代码代号 FR-C）：`GET /api/v1/cluster` 返回最近一次同步摘要（`LastSync`：起始/结束水位、变更·应用·失败、blob、按实体类型计数 `entityCounts`）；同步历史 `entity_counts` 落 `repl_sync_log`，集群页展示变更构成（如「用户2 · 仓库1 · 制品5」）。
+- 集群配置键隔离（FR-96）：`repl:*` 集群配置键写路径不记录变更、应用路径拒绝应用（`SettingService`/复制应用侧过滤），避免对端配置互相覆盖。
+- 复制调度失败日志收缩（FR-97）：`ReplicationScheduler` 对连续相同错误合并记录（起始→终止 + 次数），每 `errProgressEvery` 次打一条进度，错误变化/恢复时输出汇总，避免持续失败刷屏。
 
 ### 修复
 
