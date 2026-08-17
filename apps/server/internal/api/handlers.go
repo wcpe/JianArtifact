@@ -31,6 +31,7 @@ type Deps struct {
 	Replication             *domain.ReplicationService   // FR-84：节点间复制协议端点
 	ReplicationSched        *domain.ReplicationScheduler // FR-88：手动同步触发
 	SyncLogs                *repository.SyncLogRepo      // FR-88：同步历史日志
+	AuditLogs               *repository.AuditLogRepo     // FR-38：审计日志
 	ClusterPeerURL          string                       // FR-86：复制对端基址（来自 JIAN_SYNC_PEER_URL）
 	ClusterTokenSet         bool                         // FR-86：同步令牌是否已配置（不暴露明文）
 	PublicURL               string                       // FR-87：对外基础 URL（CDN 域名，隐藏源站 IP）
@@ -51,6 +52,7 @@ type Handlers struct {
 	replication             *domain.ReplicationService
 	replicationSched        *domain.ReplicationScheduler
 	syncLogs                *repository.SyncLogRepo
+	auditLogs               *repository.AuditLogRepo // FR-38：审计日志
 	clusterPeerURL          string
 	clusterTokenSet         bool
 	publicURL               string              // FR-87：对外基础 URL（CDN 域名）
@@ -72,6 +74,7 @@ func NewHandlers(d Deps) *Handlers {
 		replication:             d.Replication,
 		replicationSched:        d.ReplicationSched,
 		syncLogs:                d.SyncLogs,
+		auditLogs:               d.AuditLogs,
 		clusterPeerURL:          d.ClusterPeerURL,
 		clusterTokenSet:         d.ClusterTokenSet,
 		publicURL:               d.PublicURL,

@@ -23,9 +23,16 @@ import (
 type RawHandler struct {
 	assets  *domain.AssetService
 	repoSvc *domain.RepositoryService
+	audit   AuditFunc // FR-38：审计记录回调（main 注入；nil 不记录）
 }
 
-// NewRawHandler 构造 RawHandler。
+// AuditFunc 是审计记录回调（FR-38）：写操作成功后记录一条审计日志。
+// 由 main 组装时注入（闭包绑定 api.Handlers.AuditLog），避免 protocol 依赖 api 包。
+type AuditFunc func(c *gin.Context, action, entityType, entityKey, repo, detail, result string)
+
+// SetAudit 注入审计记录回调（FR-38）；nil 表示不记录。
+func (h *RawHandler) SetAudit(f AuditFunc) { h.audit = f }
+
 func NewRawHandler(assets *domain.AssetService, repoSvc *domain.RepositoryService) *RawHandler {
 	return &RawHandler{assets: assets, repoSvc: repoSvc}
 }
@@ -84,6 +91,10 @@ func (h *RawHandler) Put(c *gin.Context) {
 		writeAssetErr(c, err)
 		return
 	}
+	if h.audit != nil {
+		h.audit(c, "asset.put", "asset", repo+"/"+asset.Path, repo,
+			"size="+strconv.FormatInt(asset.Size, 10), "ok")
+	}
 	c.JSON(http.StatusCreated, assetSummary{
 		Repository:  repo,
 		Path:        asset.Path,
@@ -103,6 +114,9 @@ func (h *RawHandler) Delete(c *gin.Context) {
 	if err := h.assets.Delete(repo, artPath); err != nil {
 		writeAssetErr(c, err)
 		return
+	}
+	if h.audit != nil {
+		h.audit(c, "asset.delete", "asset", repo+"/"+artPath, repo, "", "ok")
 	}
 	c.Status(http.StatusNoContent)
 }
@@ -163,7 +177,13 @@ func writeAssetErr(c *gin.Context, err error) {
 	}
 }
 
-// cleanArtifactPath 归一化 gin 通配段 *artifactPath：去除前导斜杠。
+// cleanArtifactPath 归一化 gin 通配段 *artifactPath：去除全部前导斜杠并折叠连续斜杠（// → /）。
+// 客户端拼接 baseUrl + "/" + path 可能产生双斜杠（如 /repository/maven-public//io/...），
+// gin 的 * 通配符会保留其（如 "//io/..."），折叠并去前导斜杠后与库内存储路径一致，避免 404。
 func cleanArtifactPath(raw string) string {
-	return strings.TrimPrefix(raw, "/")
+	s := strings.TrimLeft(raw, "/")
+	for strings.Contains(s, "//") {
+		s = strings.ReplaceAll(s, "//", "/")
+	}
+	return s
 }

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 
@@ -90,6 +91,7 @@ func (h *Handlers) CreateRepository(c *gin.Context) {
 		writeDomainErr(c, err)
 		return
 	}
+	h.AuditLog(c, "repo.create", "repository", req.Name, req.Name, "format="+string(req.Format)+" type="+string(req.Type), "ok")
 	c.JSON(http.StatusCreated, toAPIRepository(repo, nil))
 }
 
@@ -137,6 +139,7 @@ func (h *Handlers) DeleteRepository(c *gin.Context, name RepoNameParam) {
 		writeDomainErr(c, err)
 		return
 	}
+	h.AuditLog(c, "repo.delete", "repository", name, name, "", "ok")
 	c.Status(http.StatusNoContent)
 }
 
@@ -216,6 +219,7 @@ func (h *Handlers) SetRepositoryAcl(c *gin.Context, name RepoNameParam) {
 		writeDomainErr(c, err)
 		return
 	}
+	h.AuditLog(c, "acl.set", "acl", name, name, "entries="+strconv.Itoa(len(rows)), "ok")
 	c.JSON(http.StatusOK, AclList{Items: aclEntries(rows)})
 }
 

@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 
@@ -45,6 +46,7 @@ func (h *Handlers) CreateToken(c *gin.Context) {
 		writeDomainErr(c, err)
 		return
 	}
+	h.AuditLog(c, "token.create", "token", tok.Name, "", "tokenId="+strconv.FormatInt(tok.ID, 10), "ok")
 	c.JSON(http.StatusCreated, TokenCreated{
 		Id:        tok.ID,
 		Name:      tok.Name,
@@ -63,5 +65,6 @@ func (h *Handlers) DeleteToken(c *gin.Context, id TokenIdParam) {
 		writeDomainErr(c, err)
 		return
 	}
+	h.AuditLog(c, "token.revoke", "token", strconv.FormatInt(id, 10), "", "", "ok")
 	c.Status(http.StatusNoContent)
 }

@@ -520,6 +520,70 @@ export function getClusterSyncLogs(limit = 50, offset = 0): Promise<SyncLogList>
   return request<SyncLogList>(`/cluster/sync-logs?limit=${limit}&offset=${offset}`);
 }
 
+/** 复制变更日志条目（FR-98 同步历史详情：repl_change 反推）。 */
+export interface ReplChangeEntry {
+  seq: number;
+  nodeId: string;
+  op: string; // put | delete
+  entityType: string;
+  entityKey: string;
+  data: string;
+  ts: string;
+}
+
+export interface SyncLogChangeList {
+  items: ReplChangeEntry[];
+  total: number;
+}
+
+/** 某次同步的具体变更列表（FR-98，分页）。 */
+export function getClusterSyncLogChanges(id: number, limit = 100, offset = 0): Promise<SyncLogChangeList> {
+  return request<SyncLogChangeList>(`/cluster/sync-logs/${id}/changes?limit=${limit}&offset=${offset}`);
+}
+
+/** 审计日志条目（FR-38）。 */
+export interface AuditLogEntry {
+  id: number;
+  ts: string;
+  actor: string;
+  action: string;
+  entityType: string;
+  entityKey: string;
+  repo: string;
+  detail: string;
+  result: string;
+  ip: string;
+}
+
+export interface AuditLogList {
+  items: AuditLogEntry[];
+  total: number;
+}
+
+/** 审计日志查询参数（FR-38，全可选）。 */
+export interface AuditLogQuery {
+  actor?: string;
+  action?: string;
+  repo?: string;
+  from?: string;
+  to?: string;
+  limit?: number;
+  offset?: number;
+}
+
+/** 审计日志（FR-38，分页 + 筛选，仅管理员）。 */
+export function getAuditLogs(q: AuditLogQuery = {}): Promise<AuditLogList> {
+  const params = new URLSearchParams();
+  if (q.actor) params.set("actor", q.actor);
+  if (q.action) params.set("action", q.action);
+  if (q.repo) params.set("repo", q.repo);
+  if (q.from) params.set("from", q.from);
+  if (q.to) params.set("to", q.to);
+  params.set("limit", String(q.limit ?? 50));
+  params.set("offset", String(q.offset ?? 0));
+  return request<AuditLogList>(`/audit-logs?${params.toString()}`);
+}
+
 // ---- FR-54: Tree API ----
 
 export interface TreeEntry {

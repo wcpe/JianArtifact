@@ -210,6 +210,8 @@ func run() error {
 	npmHandler.SetPublicURLFn(func() string { return svc.settingSvc.PublicURL() })
 
 	apiHandlers := svc.handlers(version, checks)
+	// FR-38：资产上传/删除接入审计日志（闭包绑定 apiHandlers.AuditLog）
+	rawHandler.SetAudit(apiHandlers.AuditLog)
 	srv := httpserver.New(version,
 		httpserver.WithReadinessCheck(svc.db.Ping),
 		httpserver.WithReadinessCheck(blobWritableCheck(cfg.BlobDir)),
@@ -257,6 +259,10 @@ func run() error {
 			r.POST("/api/v1/cluster/sync-now", authMW, apiHandlers.PostClusterSyncNow)
 			// FR-88: 同步历史记录（分页，仅管理员）
 			r.GET("/api/v1/cluster/sync-logs", authMW, apiHandlers.GetClusterSyncLogs)
+			// FR-98: 某次同步的具体变更列表（repl_change 反推，仅管理员）
+			r.GET("/api/v1/cluster/sync-logs/:id/changes", authMW, apiHandlers.GetClusterSyncLogChanges)
+			// FR-38: 审计日志（分页 + 筛选：actor/action/repo/from/to，仅管理员）
+			r.GET("/api/v1/audit-logs", authMW, apiHandlers.GetAuditLogs)
 		}),
 	)
 	httpServer := &http.Server{

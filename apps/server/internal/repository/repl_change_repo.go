@@ -82,3 +82,22 @@ func (r *ReplChangeRepo) ListSince(since int64, limit int) ([]Change, error) {
 	}
 	return changes, err
 }
+
+// ListRange 分页返回 seq 区间 (from, to] 的变更（FR-98 同步历史详情：从 repl_change 反推某次同步拉取的具体变更）。
+func (r *ReplChangeRepo) ListRange(from, to int64, limit, offset int) ([]Change, error) {
+	var changes []Change
+	err := r.db.Select(&changes,
+		`SELECT seq, node_id, op, entity_type, entity_key, data, ts FROM repl_change
+		 WHERE seq > ? AND seq <= ? ORDER BY seq LIMIT ? OFFSET ?`,
+		from, to, limit, offset)
+	return changes, err
+}
+
+// CountRange 返回 seq 区间 (from, to] 的变更总数（FR-98 分页用）。
+func (r *ReplChangeRepo) CountRange(from, to int64) (int, error) {
+	var n int
+	err := r.db.Get(&n,
+		`SELECT COUNT(*) FROM repl_change WHERE seq > ? AND seq <= ?`,
+		from, to)
+	return n, err
+}

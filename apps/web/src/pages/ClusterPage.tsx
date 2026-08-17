@@ -3,6 +3,7 @@
 // 变更/失败的事件）。仅管理员。
 // 数据来自非契约端点 GET /api/v1/cluster、POST /api/v1/cluster/sync-now、GET /api/v1/cluster/sync-logs（复制引擎见 FR-83~85）。
 import {
+  Anchor,
   Badge,
   Button,
   Card,
@@ -18,6 +19,7 @@ import {
 import { EmptyState, PageHeader } from "@jianartifact/ui";
 import { useReducer, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useNavigate } from "react-router-dom";
 
 import { AsyncBoundary } from "../components/AsyncBoundary";
 import {
@@ -92,6 +94,7 @@ export function ClusterPage() {
   const { t } = useTranslation();
   const state = useAsync(getClusterStatus, []);
   const [, force] = useReducer((x) => x + 1, 0);
+  const navigate = useNavigate(); // FR-98：跳转同步历史详情二级页
   const [syncing, setSyncing] = useState(false);
 
   // 同步历史（FR-88）：独立分页加载，不阻塞主状态。
@@ -104,7 +107,8 @@ export function ClusterPage() {
   return (
     <>
       <PageHeader title={t("cluster.title")} description={t("cluster.description")} />
-      <Tabs defaultValue="cluster" maw={900}>
+      {/* 内容区宽度由全局 contentMaxWidth 控制，页面内不再二次限宽（FR-86 布局修复）。 */}
+      <Tabs defaultValue="cluster">
         <Tabs.List>
           <Tabs.Tab value="cluster">{t("cluster.title")}</Tabs.Tab>
           <Tabs.Tab value="history">{t("cluster.syncHistoryTitle")}</Tabs.Tab>
@@ -114,7 +118,7 @@ export function ClusterPage() {
         <Tabs.Panel value="cluster" pt="md">
           <AsyncBoundary state={state}>
             {(st) => (
-              <Stack gap="md" maw={640}>
+              <Stack gap="md" maw={900}>
                 {!st.peerUrl ? (
                   <Card withBorder radius="md" padding={density.cardPadding}>
                     <EmptyState message={t("cluster.notConfigured")} />
@@ -247,6 +251,7 @@ export function ClusterPage() {
                             <Table.Th>{t("cluster.syncLogFailed")}</Table.Th>
                             <Table.Th>{t("cluster.syncLogBlobs")}</Table.Th>
                             <Table.Th>{t("cluster.syncLogWatermark")}</Table.Th>
+                            <Table.Th>{t("cluster.syncLogDetail", { defaultValue: "详情" })}</Table.Th>
                             <Table.Th>{t("cluster.lastError")}</Table.Th>
                           </Table.Tr>
                         </Table.Thead>
@@ -262,6 +267,17 @@ export function ClusterPage() {
                               <Table.Td>{e.failed}</Table.Td>
                               <Table.Td>{e.blobs}</Table.Td>
                               <Table.Td>{`${e.fromSeq} → ${e.toSeq}`}</Table.Td>
+                              <Table.Td>
+                                {/* FR-98：跳转同步历史详情二级页（该次同步的具体变更） */}
+                                <Anchor
+                                  size="xs"
+                                  component="button"
+                                  type="button"
+                                  onClick={() => navigate(`/cluster/sync-logs/${e.id}`)}
+                                >
+                                  {t("cluster.syncLogDetail", { defaultValue: "详情" })}
+                                </Anchor>
+                              </Table.Td>
                               <Table.Td>
                                 {e.errorText ? (
                                   <Text

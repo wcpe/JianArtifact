@@ -124,6 +124,7 @@ func (h *Handlers) PutSettings(c *gin.Context) {
 			return
 		}
 	}
+	h.AuditLog(c, "setting.set", "setting", "settings", "", "基础设置更新", "ok")
 	c.JSON(http.StatusOK, h.settingsSnapshot())
 }
 

@@ -1,7 +1,9 @@
 package repository
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
@@ -70,6 +72,21 @@ func (r *SyncLogRepo) List(limit, offset int) ([]SyncLogEntry, error) {
 		`SELECT id, peer_url, started_at, finished_at, success, from_seq, to_seq, changes, applied, failed, blobs, entity_counts, error_text
 		 FROM repl_sync_log ORDER BY started_at DESC, id DESC LIMIT ? OFFSET ?`, limit, offset)
 	return entries, err
+}
+
+// Get 按 id 返回单条同步记录；不存在返回 ErrNotFound。
+func (r *SyncLogRepo) Get(id int64) (*SyncLogEntry, error) {
+	var e SyncLogEntry
+	err := r.db.Get(&e,
+		`SELECT id, peer_url, started_at, finished_at, success, from_seq, to_seq, changes, applied, failed, blobs, entity_counts, error_text
+		 FROM repl_sync_log WHERE id = ?`, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &e, nil
 }
 
 // Delete 删除一条同步记录（用于空同步不留痕：无变更且成功时移除进行中记录）。

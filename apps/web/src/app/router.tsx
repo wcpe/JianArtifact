@@ -22,6 +22,12 @@ const LicensesPage = lazy(() =>
 const ClusterPage = lazy(() =>
   import("../pages/ClusterPage").then((m) => ({ default: m.ClusterPage })),
 );
+const ClusterSyncLogDetailPage = lazy(() =>
+  import("../pages/ClusterSyncLogDetailPage").then((m) => ({ default: m.ClusterSyncLogDetailPage })),
+);
+const AuditLogPage = lazy(() =>
+  import("../pages/AuditLogPage").then((m) => ({ default: m.AuditLogPage })),
+);
 const MigrationDetailPage = lazy(() =>
   import("../pages/MigrationDetailPage").then((m) => ({ default: m.MigrationDetailPage })),
 );
@@ -107,12 +113,30 @@ export function AppRoutes() {
               </RequireAuth>
             }
           />
+          {/* FR-98：集群同步历史详情二级页（某次同步的具体变更） */}
+          <Route
+            path="/cluster/sync-logs/:id"
+            element={
+              <RequireAuth>
+                <ClusterSyncLogDetailPage />
+              </RequireAuth>
+            }
+          />
           {/* FR-90：设置页（入口仅管理员可见；RequireAuth 兜底） */}
           <Route
             path="/settings"
             element={
               <RequireAuth>
                 <SettingsPage />
+              </RequireAuth>
+            }
+          />
+          {/* FR-38：审计日志页（入口仅管理员可见；RequireAuth 兜底） */}
+          <Route
+            path="/audit-logs"
+            element={
+              <RequireAuth>
+                <AuditLogPage />
               </RequireAuth>
             }
           />

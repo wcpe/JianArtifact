@@ -542,6 +542,16 @@ func (s *ReplicationService) ListSince(since int64, limit int) ([]repository.Cha
 	return s.repl.ListSince(since, limit)
 }
 
+// ListChangeRange 分页返回 seq 区间 (from, to] 的变更（FR-98 同步历史详情：反推某次同步拉取的具体变更）。
+func (s *ReplicationService) ListChangeRange(from, to int64, limit, offset int) ([]repository.Change, error) {
+	return s.repl.ListRange(from, to, limit, offset)
+}
+
+// CountChangeRange 返回 seq 区间 (from, to] 的变更总数（FR-98 分页用）。
+func (s *ReplicationService) CountChangeRange(from, to int64) (int, error) {
+	return s.repl.CountRange(from, to)
+}
+
 // Apply 把一条远端变更应用到本地业务表（LWW 裁决 + tombstone 识别）。
 // LWW：本地对该实体已有更晚写入（ts,node_id 更大）则跳过；否则应用。
 // 应用成功后不落本地 repl_change（复制协议按 seq 顺序应用保证 tombstone

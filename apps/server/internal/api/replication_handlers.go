@@ -204,3 +204,54 @@ func (h *Handlers) GetClusterSyncLogs(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, SyncLogListResponse{Items: items, Total: total})
 }
+
+// SyncLogChangeListResponse 是某次同步的具体变更列表响应（FR-98）。
+type SyncLogChangeListResponse struct {
+	Items []repository.Change `json:"items"`
+	Total int                 `json:"total"`
+}
+
+// GetClusterSyncLogChanges 返回某次同步记录（:id）对应的具体变更列表（FR-98）：
+// 按该次同步的 fromSeq→toSeq 区间从 repl_change 反推（分页），仅管理员。
+// 非契约端点，经 WithProtocolRoutes 注册。
+func (h *Handlers) GetClusterSyncLogChanges(c *gin.Context) {
+	if _, ok := requireAdmin(c); !ok {
+		return
+	}
+	if h.syncLogs == nil {
+		auth.WriteError(c, http.StatusConflict, "conflict", "同步日志存储未就绪")
+		return
+	}
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		auth.WriteError(c, http.StatusBadRequest, "bad_request", "同步记录 id 非法")
+		return
+	}
+	entry, err := h.syncLogs.Get(id)
+	if err != nil {
+		writeDomainErr(c, err)
+		return
+	}
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "100"))
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	if offset < 0 {
+		offset = 0
+	}
+	items, err := h.replication.ListChangeRange(entry.FromSeq, entry.ToSeq, limit, offset)
+	if err != nil {
+		writeDomainErr(c, err)
+		return
+	}
+	total, err := h.replication.CountChangeRange(entry.FromSeq, entry.ToSeq)
+	if err != nil {
+		writeDomainErr(c, err)
+		return
+	}
+	if items == nil {
+		items = []repository.Change{}
+	}
+	c.JSON(http.StatusOK, SyncLogChangeListResponse{Items: items, Total: total})
+}

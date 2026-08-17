@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 
@@ -48,6 +49,7 @@ func (h *Handlers) CreateUser(c *gin.Context) {
 		writeDomainErr(c, err)
 		return
 	}
+	h.AuditLog(c, "user.create", "user", user.Username, "", "role="+role, "ok")
 	c.JSON(http.StatusCreated, toAPIUser(user))
 }
 
@@ -72,6 +74,7 @@ func (h *Handlers) UpdateUser(c *gin.Context, id UserIdParam) {
 		writeDomainErr(c, err)
 		return
 	}
+	h.AuditLog(c, "user.update", "user", user.Username, "", "role="+role+" status="+status, "ok")
 	c.JSON(http.StatusOK, toAPIUser(user))
 }
 
@@ -84,6 +87,7 @@ func (h *Handlers) DeleteUser(c *gin.Context, id UserIdParam) {
 		writeDomainErr(c, err)
 		return
 	}
+	h.AuditLog(c, "user.delete", "user", strconv.FormatInt(id, 10), "", "", "ok")
 	c.Status(http.StatusNoContent)
 }
 
@@ -109,5 +113,6 @@ func (h *Handlers) ChangePassword(c *gin.Context, id UserIdParam) {
 		writeDomainErr(c, err)
 		return
 	}
+	h.AuditLog(c, "user.password", "user", strconv.FormatInt(id, 10), "", "", "ok")
 	c.Status(http.StatusNoContent)
 }

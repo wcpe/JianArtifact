@@ -23,6 +23,7 @@ import {
   IconLayoutDashboard,
   IconLayoutSidebarLeftCollapse,
   IconLayoutSidebarLeftExpand,
+  IconFileReport,
   IconLicense,
   IconLogin,
   IconLogout,
@@ -106,6 +107,13 @@ const NAV_SECTIONS: NavSection[] = [
         labelKey: "nav.settings",
         path: "/settings",
         icon: <IconSettings size={18} />,
+        adminOnly: true,
+      },
+      // FR-38: 审计日志页（全部管理写操作记录，仅管理员）
+      {
+        labelKey: "nav.auditLogs",
+        path: "/audit-logs",
+        icon: <IconFileReport size={18} />,
         adminOnly: true,
       },
       // FR-86: 集群页（节点间复制同步状态，仅管理员）
