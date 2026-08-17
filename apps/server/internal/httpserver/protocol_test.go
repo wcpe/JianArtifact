@@ -509,3 +509,24 @@ func TestRawWriteRejectedOnProxyAndGroup(t *testing.T) {
 		t.Errorf("写 group 状态码 = %d，期望 409", rec.Code)
 	}
 }
+
+// TestDoubleSlashPathCompat 客户端拼接 baseUrl + "/" + path 产生双斜杠（如 /repository/raw//dir/a.txt）时应正常解析。
+func TestDoubleSlashPathCompat(t *testing.T) {
+	e := newProtocolEnv(t)
+	adminToken := e.bootstrapAdmin(t)
+	e.createRawRepo(t, adminToken, "raw-hosted", "private")
+
+	payload := []byte("double slash compat")
+	path := "/repository/raw-hosted/dir/a.txt"
+	if rec := e.rawReq(http.MethodPut, path, "Bearer "+adminToken, "text/plain", payload); rec.Code != http.StatusCreated {
+		t.Fatalf("PUT 状态码 = %d，期望 201", rec.Code)
+	}
+
+	// 双斜杠（baseUrl 尾 / + 路径首 /）应返回 200 而非 404。
+	doublePath := "/repository/raw-hosted//dir/a.txt"
+	if rec := e.rawReq(http.MethodGet, doublePath, "Bearer "+adminToken, "", nil); rec.Code != http.StatusOK {
+		t.Fatalf("双斜杠路径 GET 状态码 = %d，期望 200（体：%s）", rec.Code, rec.Body.String())
+	} else if !bytes.Equal(rec.Body.Bytes(), payload) {
+		t.Fatalf("双斜杠路径 GET 内容与写入不一致：%q", rec.Body.Bytes())
+	}
+}
