@@ -11,6 +11,7 @@ import {
   Card,
   Group,
   Pagination,
+  SegmentedControl,
   Stack,
   Table,
   Text,
@@ -48,12 +49,14 @@ export function ClusterSyncLogDetailPage() {
   const navigate = useNavigate();
   const logId = Number(id);
   const [page, setPage] = useState(1);
+  // FR-98：按实体类型分类展示（空串=全部）
+  const [entityType, setEntityType] = useState("");
   // 同步记录本身（取标题信息：时间/对端/水位/统计）
   const logsState = useAsync(() => getClusterSyncLogs(200, 0), []);
-  // 该次同步的变更列表（分页）
+  // 该次同步的变更列表（分页 + 按实体类型过滤）
   const changesState = useAsync(
-    () => getClusterSyncLogChanges(logId, PAGE_SIZE, (page - 1) * PAGE_SIZE),
-    [logId, page],
+    () => getClusterSyncLogChanges(logId, PAGE_SIZE, (page - 1) * PAGE_SIZE, entityType || undefined),
+    [logId, page, entityType],
   );
   useEffect(() => {
     const reload = () => {
@@ -64,6 +67,17 @@ export function ClusterSyncLogDetailPage() {
     return () => window.removeEventListener(REFRESH_EVENT, reload);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // 实体类型分类选项（全部 + 各实体）
+  const typeOptions = [
+    { value: "", label: t("cluster.syncLogAllTypes", { defaultValue: "全部" }) },
+    { value: "asset", label: t("cluster.entityAsset", { defaultValue: "制品" }) },
+    { value: "repository", label: t("cluster.entityRepository", { defaultValue: "仓库" }) },
+    { value: "user", label: t("cluster.entityUser", { defaultValue: "用户" }) },
+    { value: "acl", label: t("cluster.entityAcl", { defaultValue: "ACL" }) },
+    { value: "token", label: t("cluster.entityToken", { defaultValue: "令牌" }) },
+    { value: "setting", label: t("cluster.entitySetting", { defaultValue: "配置" }) },
+  ];
 
   const entry: SyncLogEntry | undefined =
     logsState.data?.items.find((e) => e.id === logId) ?? undefined;
@@ -114,6 +128,16 @@ export function ClusterSyncLogDetailPage() {
                 />
               ) : (
                 <>
+                  {/* FR-98：按实体类型分类展示 */}
+                  <SegmentedControl
+                    size="xs"
+                    value={entityType}
+                    onChange={(v) => {
+                      setEntityType(v);
+                      setPage(1);
+                    }}
+                    data={typeOptions}
+                  />
                   <Table striped highlightOnHover withTableBorder>
                     <Table.Thead>
                       <Table.Tr>

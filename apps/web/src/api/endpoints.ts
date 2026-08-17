@@ -536,9 +536,16 @@ export interface SyncLogChangeList {
   total: number;
 }
 
-/** 某次同步的具体变更列表（FR-98，分页）。 */
-export function getClusterSyncLogChanges(id: number, limit = 100, offset = 0): Promise<SyncLogChangeList> {
-  return request<SyncLogChangeList>(`/cluster/sync-logs/${id}/changes?limit=${limit}&offset=${offset}`);
+/** 某次同步的具体变更列表（FR-98，分页；entityType 非空时按实体类型过滤分类展示）。 */
+export function getClusterSyncLogChanges(
+  id: number,
+  limit = 100,
+  offset = 0,
+  entityType?: string,
+): Promise<SyncLogChangeList> {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  if (entityType) params.set("entityType", entityType);
+  return request<SyncLogChangeList>(`/cluster/sync-logs/${id}/changes?${params.toString()}`);
 }
 
 /** 审计日志条目（FR-38）。 */

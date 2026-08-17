@@ -240,12 +240,14 @@ func (h *Handlers) GetClusterSyncLogChanges(c *gin.Context) {
 	if offset < 0 {
 		offset = 0
 	}
-	items, err := h.replication.ListChangeRange(entry.FromSeq, entry.ToSeq, limit, offset)
+	// FR-98 增强：按实体类型分类展示（entityType 非空时后端过滤，保证分类统计准确）。
+	entityType := c.Query("entityType")
+	items, err := h.replication.ListChangeRange(entry.FromSeq, entry.ToSeq, limit, offset, entityType)
 	if err != nil {
 		writeDomainErr(c, err)
 		return
 	}
-	total, err := h.replication.CountChangeRange(entry.FromSeq, entry.ToSeq)
+	total, err := h.replication.CountChangeRange(entry.FromSeq, entry.ToSeq, entityType)
 	if err != nil {
 		writeDomainErr(c, err)
 		return

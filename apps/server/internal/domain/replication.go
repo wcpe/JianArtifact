@@ -543,13 +543,14 @@ func (s *ReplicationService) ListSince(since int64, limit int) ([]repository.Cha
 }
 
 // ListChangeRange 分页返回 seq 区间 (from, to] 的变更（FR-98 同步历史详情：反推某次同步拉取的具体变更）。
-func (s *ReplicationService) ListChangeRange(from, to int64, limit, offset int) ([]repository.Change, error) {
-	return s.repl.ListRange(from, to, limit, offset)
+// entityType 非空时按实体类型过滤（分类展示）。
+func (s *ReplicationService) ListChangeRange(from, to int64, limit, offset int, entityType string) ([]repository.Change, error) {
+	return s.repl.ListRange(from, to, limit, offset, entityType)
 }
 
-// CountChangeRange 返回 seq 区间 (from, to] 的变更总数（FR-98 分页用）。
-func (s *ReplicationService) CountChangeRange(from, to int64) (int, error) {
-	return s.repl.CountRange(from, to)
+// CountChangeRange 返回 seq 区间 (from, to] 的变更总数（FR-98 分页用）；entityType 非空时按实体类型过滤。
+func (s *ReplicationService) CountChangeRange(from, to int64, entityType string) (int, error) {
+	return s.repl.CountRange(from, to, entityType)
 }
 
 // Apply 把一条远端变更应用到本地业务表（LWW 裁决 + tombstone 识别）。
