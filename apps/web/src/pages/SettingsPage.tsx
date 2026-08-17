@@ -16,8 +16,9 @@ import {
   Title,
 } from "@mantine/core";
 import { PageHeader } from "@jianartifact/ui";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useLocation } from "react-router-dom";
 
 import { AsyncBoundary } from "../components/AsyncBoundary";
 import {
@@ -237,14 +238,29 @@ function ClusterSettingsForm({
 
 export function SettingsPage() {
   const { t } = useTranslation();
+  const location = useLocation();
   const basicState = useAsync(getSettings, []);
   const clusterState = useAsync(getClusterStatus, []);
+  // tab 接 URL 锚点（#basic / #cluster）：刷新/回退/分享可定位到对应 tab。
+  const [tab, setTab] = useState(() => location.hash.replace("#", "") || "basic");
+  useEffect(() => {
+    const onHash = () => setTab(window.location.hash.replace("#", "") || "basic");
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
 
   return (
     <>
       <PageHeader title={t("settings.title")} description={t("settings.description")} />
       {/* 内容区宽度由全局 contentMaxWidth 控制，页面内不再二次限宽（FR-90 布局修复）。 */}
-      <Tabs defaultValue="basic">
+      <Tabs
+        value={tab}
+        onChange={(v) => {
+          const next = v ?? "basic";
+          setTab(next);
+          window.location.hash = next;
+        }}
+      >
         <Tabs.List>
           <Tabs.Tab value="basic">{t("settings.basicTitle")}</Tabs.Tab>
           <Tabs.Tab value="cluster">{t("settings.clusterTitle")}</Tabs.Tab>

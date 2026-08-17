@@ -17,9 +17,9 @@ import {
   Title,
 } from "@mantine/core";
 import { EmptyState, PageHeader } from "@jianartifact/ui";
-import { useReducer, useState } from "react";
+import { useEffect, useReducer, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 
 import { AsyncBoundary } from "../components/AsyncBoundary";
 import {
@@ -92,10 +92,18 @@ function statusBadge(entry: SyncLogEntry, t: (key: string) => string) {
 
 export function ClusterPage() {
   const { t } = useTranslation();
+  const location = useLocation();
   const state = useAsync(getClusterStatus, []);
   const [, force] = useReducer((x) => x + 1, 0);
   const navigate = useNavigate(); // FR-98：跳转同步历史详情二级页
   const [syncing, setSyncing] = useState(false);
+  // tab 接 URL 锚点（#cluster / #history）：刷新/回退/分享可定位到对应 tab。
+  const [tab, setTab] = useState(() => location.hash.replace("#", "") || "cluster");
+  useEffect(() => {
+    const onHash = () => setTab(window.location.hash.replace("#", "") || "cluster");
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
 
   // 同步历史（FR-88）：独立分页加载，不阻塞主状态。
   const [syncPage, setSyncPage] = useState(0);
@@ -108,7 +116,14 @@ export function ClusterPage() {
     <>
       <PageHeader title={t("cluster.title")} description={t("cluster.description")} />
       {/* 内容区宽度由全局 contentMaxWidth 控制，页面内不再二次限宽（FR-86 布局修复）。 */}
-      <Tabs defaultValue="cluster">
+      <Tabs
+        value={tab}
+        onChange={(v) => {
+          const next = v ?? "cluster";
+          setTab(next);
+          window.location.hash = next;
+        }}
+      >
         <Tabs.List>
           <Tabs.Tab value="cluster">{t("cluster.title")}</Tabs.Tab>
           <Tabs.Tab value="history">{t("cluster.syncHistoryTitle")}</Tabs.Tab>

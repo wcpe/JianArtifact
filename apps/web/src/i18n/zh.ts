@@ -44,6 +44,7 @@ export const zh = {
     licenses: "开源协议",
     cluster: "集群",
     settings: "设置",
+    auditLogs: "审计日志",
     userSuffix: "（{{role}}）",
   },
   cluster: {
@@ -89,6 +90,15 @@ export const zh = {
     entityToken: "令牌",
     entityAsset: "制品",
     entitySetting: "配置",
+    backToCluster: "返回集群页",
+    syncLogDetailTitle: "同步历史详情",
+    syncLogChangesEmpty: "该次同步无变更记录",
+    syncLogSeq: "序号",
+    syncLogOp: "操作",
+    syncLogEntityType: "实体",
+    syncLogEntityKey: "对象",
+    syncLogTs: "时间",
+    syncLogAllTypes: "全部",
   },
   settings: {
     title: "设置",
