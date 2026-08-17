@@ -85,9 +85,16 @@ export function AuditLogPage() {
   }, []);
 
   return (
-    <>
+    /* 固定布局：页面撑满内容区高度，body 不滚；页头/筛选/分页固定，表格区内滚（对齐仓库列表页 FR-68）。 */
+    <Stack
+      gap="sm"
+      style={{
+        height:
+          "calc(100vh - var(--app-shell-header-offset, 56px) - 2 * var(--app-shell-padding, 12px))",
+        overflow: "hidden",
+      }}
+    >
       <PageHeader title={t("audit.title", { defaultValue: "审计日志" })} description={t("audit.description", { defaultValue: "全部管理操作记录：谁在何时上传/删除/修改了什么" })} />
-      {/* 固定布局：撑满内容区高度，筛选/分页固定，表格区内滚 + sticky 表头（对齐仓库列表页 FR-68）。 */}
       <Card withBorder radius="md" padding={density.cardPadding} style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
         <Stack gap="sm" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
           {/* FR-38：筛选栏（操作者 / 操作类型 / 仓库） */}
@@ -178,6 +185,6 @@ export function AuditLogPage() {
           </AsyncBoundary>
         </Stack>
       </Card>
-    </>
+    </Stack>
   );
 }
