@@ -3,6 +3,7 @@ import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Badge,
+  Box,
   Button,
   Card,
   Group,
@@ -86,8 +87,9 @@ export function AuditLogPage() {
   return (
     <>
       <PageHeader title={t("audit.title", { defaultValue: "审计日志" })} description={t("audit.description", { defaultValue: "全部管理操作记录：谁在何时上传/删除/修改了什么" })} />
-      <Card withBorder radius="md" padding={density.cardPadding}>
-        <Stack gap="sm">
+      {/* 固定布局：撑满内容区高度，筛选/分页固定，表格区内滚 + sticky 表头（对齐仓库列表页 FR-68）。 */}
+      <Card withBorder radius="md" padding={density.cardPadding} style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+        <Stack gap="sm" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
           {/* FR-38：筛选栏（操作者 / 操作类型 / 仓库） */}
           <Group gap="sm" align="flex-end" wrap="wrap">
             <Input.Wrapper label={t("audit.filterActor", { defaultValue: "操作者" })} w={180}>
@@ -128,42 +130,46 @@ export function AuditLogPage() {
                 <EmptyState message={t("audit.empty", { defaultValue: "暂无审计记录" })} />
               ) : (
                 <>
-                  <Table striped highlightOnHover withTableBorder>
-                    <Table.Thead>
-                      <Table.Tr>
-                        <Table.Th>{t("audit.ts", { defaultValue: "时间" })}</Table.Th>
-                        <Table.Th>{t("audit.actor", { defaultValue: "操作者" })}</Table.Th>
-                        <Table.Th>{t("audit.action", { defaultValue: "操作" })}</Table.Th>
-                        <Table.Th>{t("audit.entityKey", { defaultValue: "对象" })}</Table.Th>
-                        <Table.Th>{t("audit.repo", { defaultValue: "仓库" })}</Table.Th>
-                        <Table.Th>{t("audit.result", { defaultValue: "结果" })}</Table.Th>
-                        <Table.Th>{t("audit.ip", { defaultValue: "来源" })}</Table.Th>
-                      </Table.Tr>
-                    </Table.Thead>
-                    <Table.Tbody>
-                      {list.items.map((e: AuditLogEntry) => (
-                        <Table.Tr key={e.id}>
-                          <Table.Td>{new Date(e.ts).toLocaleString()}</Table.Td>
-                          <Table.Td>{e.actor || "-"}</Table.Td>
-                          <Table.Td>{actionLabel(e.action)}</Table.Td>
-                          <Table.Td>
-                            <Text size="xs" style={{ wordBreak: "break-all" }}>
-                              {e.entityKey || "-"}
-                            </Text>
-                          </Table.Td>
-                          <Table.Td>{e.repo || "-"}</Table.Td>
-                          <Table.Td>{resultBadge(e.result)}</Table.Td>
-                          <Table.Td>{e.ip || "-"}</Table.Td>
+                  {/* 内容区：表格区内滚 + sticky 表头，分页固定底部（内容大小自适应）。 */}
+                  <Box style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+                    <Table striped highlightOnHover withTableBorder stickyHeader>
+                      <Table.Thead>
+                        <Table.Tr>
+                          <Table.Th>{t("audit.ts", { defaultValue: "时间" })}</Table.Th>
+                          <Table.Th>{t("audit.actor", { defaultValue: "操作者" })}</Table.Th>
+                          <Table.Th>{t("audit.action", { defaultValue: "操作" })}</Table.Th>
+                          <Table.Th>{t("audit.entityKey", { defaultValue: "对象" })}</Table.Th>
+                          <Table.Th>{t("audit.repo", { defaultValue: "仓库" })}</Table.Th>
+                          <Table.Th>{t("audit.result", { defaultValue: "结果" })}</Table.Th>
+                          <Table.Th>{t("audit.ip", { defaultValue: "来源" })}</Table.Th>
                         </Table.Tr>
-                      ))}
-                    </Table.Tbody>
-                  </Table>
+                      </Table.Thead>
+                      <Table.Tbody>
+                        {list.items.map((e: AuditLogEntry) => (
+                          <Table.Tr key={e.id}>
+                            <Table.Td>{new Date(e.ts).toLocaleString()}</Table.Td>
+                            <Table.Td>{e.actor || "-"}</Table.Td>
+                            <Table.Td>{actionLabel(e.action)}</Table.Td>
+                            <Table.Td>
+                              <Text size="xs" style={{ wordBreak: "break-all" }}>
+                                {e.entityKey || "-"}
+                              </Text>
+                            </Table.Td>
+                            <Table.Td>{e.repo || "-"}</Table.Td>
+                            <Table.Td>{resultBadge(e.result)}</Table.Td>
+                            <Table.Td>{e.ip || "-"}</Table.Td>
+                          </Table.Tr>
+                        ))}
+                      </Table.Tbody>
+                    </Table>
+                  </Box>
                   {list.total > PAGE_SIZE && (
                     <Pagination
                       total={Math.ceil(list.total / PAGE_SIZE)}
                       value={page}
                       onChange={setPage}
                       size="sm"
+                      style={{ flexShrink: 0 }}
                     />
                   )}
                 </>
