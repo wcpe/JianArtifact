@@ -52,6 +52,12 @@
 - 设置页统一化（FR-90，见 `docs/specs/0.7.0-settings-page.md`）：
   - 侧边栏「管理」新增「设置」入口（仅管理员），一级 tab：基础设置（匿名开关 / 对外 URL / 回源超时 / 同步间隔，接 FR-89 设置端点）与集群（对端 URL / 令牌 / 自动同步开关，接既有集群端点）。
   - 配置迁移：匿名访问开关自用户页、对端配置自集群页迁入设置页；集群页保留同步状态、同步历史与「立即同步」按钮。
+- 制品创建/更新时间与源 Nexus 对齐（FR-91，见 `docs/specs/0.7.0-asset-time-sync.md`）：
+  - `admin backfill-times`：从源 Nexus assets API 分页拉取 `blobCreated`/`lastModified`（RFC3339Nano→UTC `YYYY-MM-DD HH:MM:SS`），按 仓库+路径 回填本地 `asset.created_at/updated_at`；多仓库并行拉取，幂等可重复。
+  - 复制变更携带时间：`AssetChangeData` 增加 `CreatedAt`；`AssetService.Put` 变更数据携带资产实际时间；`ReplicationService.applyAsset` 经 `AssetRepo.UpsertWithTime` 回填 created/updated；`backfillAssets` 同样携带时间——复制两侧资产时间一致。
+  - `admin emit-asset-times`：为全部 hosted 仓库资产重新登记带时间的 put 变更，对端复制应用后自动同步时间（无需在对端单独回填）。
+  - `ReplicationClient.Sync` 水位推进修复：推进到本批最后一条 seq（而非对端最新），避免对端一次性积压大量变更时跳过未拉取部分。
+- Maven SNAPSHOT 字面路径回退（FR-92）：GET `artifact-version-SNAPSHOT.ext` 时间戳解析失败时回退按字面路径解析，支持 Gradle 快照发布（metadata 无顶层 `<snapshot>` 标签）场景。
 
 ### 修复
 
