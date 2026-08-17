@@ -16,23 +16,33 @@ import { AsyncBoundary } from "../../components/AsyncBoundary";
 const PAGE_SIZE = 100;
 
 /** 变更操作徽章：put / delete。 */
-function opBadge(op: string) {
+function opBadge(op: string, t: (key: string, options?: { defaultValue: string }) => string) {
   const color = op === "delete" ? "red" : "blue";
-  return <Badge color={color} size="xs">{op}</Badge>;
+  const label = op === "delete"
+    ? t("cluster.syncLogOpDelete", { defaultValue: "删除" })
+    : t("cluster.syncLogOpPut", { defaultValue: "写入" });
+  return <Badge color={color} size="xs">{label}</Badge>;
 }
 
-/** 变更实体类型徽章（简化显示）。 */
-function entityBadge(entityType: string) {
+/** 变更实体类型徽章。 */
+function entityBadge(entityType: string, t: (key: string, options?: { defaultValue: string }) => string) {
   const color =
     entityType === "asset" ? "blue" : entityType === "repository" ? "grape" : entityType === "user" ? "teal" : "gray";
-  return <Badge color={color} variant="light" size="xs">{entityType}</Badge>;
+  const labelKey = `cluster.entity${entityType.slice(0, 1).toUpperCase()}${entityType.slice(1)}`;
+  return <Badge color={color} variant="light" size="xs">{t(labelKey, { defaultValue: entityType })}</Badge>;
 }
 
 /**
  * 同步历史变更明细：传入某次同步的 logId，展示该次同步的具体变更（分类 + 分页）。
  * 用于集群页详情模态框（FR-98 增强：点击详情弹出层，可正常关闭返回）。
  */
-export function SyncLogChangesView({ logId }: { logId: number }) {
+export function SyncLogChangesView({
+  logId,
+  hasChanges = true,
+}: {
+  logId: number;
+  hasChanges?: boolean;
+}) {
   const { t } = useTranslation();
   const [page, setPage] = useState(1);
   // 按实体类型分类展示（空串=全部）
@@ -41,8 +51,11 @@ export function SyncLogChangesView({ logId }: { logId: number }) {
   const logsState = useAsync(() => getClusterSyncLogs(200, 0), []);
   // 该次同步的变更列表（分页 + 按实体类型过滤）
   const changesState = useAsync(
-    () => getClusterSyncLogChanges(logId, PAGE_SIZE, (page - 1) * PAGE_SIZE, entityType || undefined),
-    [logId, page, entityType],
+    () =>
+      hasChanges
+        ? getClusterSyncLogChanges(logId, PAGE_SIZE, (page - 1) * PAGE_SIZE, entityType || undefined)
+        : Promise.resolve({ items: [], total: 0 }),
+    [logId, page, entityType, hasChanges],
   );
   useEffect(() => {
     const reload = () => {
@@ -51,7 +64,6 @@ export function SyncLogChangesView({ logId }: { logId: number }) {
     };
     window.addEventListener(REFRESH_EVENT, reload);
     return () => window.removeEventListener(REFRESH_EVENT, reload);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // 实体类型分类选项（全部 + 各实体）
@@ -69,11 +81,11 @@ export function SyncLogChangesView({ logId }: { logId: number }) {
     logsState.data?.items.find((e) => e.id === logId) ?? undefined;
 
   return (
-    <Stack gap="sm" style={{ height: "100%", minHeight: 0, display: "flex", flexDirection: "column" }}>
+    <Stack gap="sm" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
       {entry && (
         <Group gap="sm">
           <Text size="xs" c="dimmed">
-            {t("cluster.syncLogStatus", { defaultValue: "状态" })}:{" "}
+            {t("cluster.syncLogStatus", { defaultValue: "状态" })}: {" "}
             {entry.success === null
               ? t("cluster.syncLogRunning", { defaultValue: "进行中" })
               : entry.success
@@ -94,66 +106,71 @@ export function SyncLogChangesView({ logId }: { logId: number }) {
           </Text>
         </Group>
       )}
-      <AsyncBoundary state={changesState}>
+      <Box style={{ flexShrink: 0, overflowX: "auto" }}>
+        <SegmentedControl
+          size="xs"
+          value={entityType}
+          onChange={(v) => {
+            setEntityType(v);
+            setPage(1);
+          }}
+          data={typeOptions}
+          style={{ minWidth: 460 }}
+        />
+      </Box>
+      <AsyncBoundary
+        state={changesState}
+        style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
+      >
         {(list) =>
           (list.items ?? []).length === 0 ? (
-            <EmptyState
-              message={t("cluster.syncLogChangesEmpty", { defaultValue: "该次同步无变更记录" })}
-            />
-          ) : (
-            <>
-              {/* 按实体类型分类展示 */}
-              <SegmentedControl
-                size="xs"
-                value={entityType}
-                onChange={(v) => {
-                  setEntityType(v);
-                  setPage(1);
-                }}
-                data={typeOptions}
+            <Box style={{ flex: 1, minHeight: 0, display: "grid", placeItems: "center" }}>
+              <EmptyState
+                message={t("cluster.syncLogChangesEmpty", { defaultValue: "该次同步无变更记录" })}
               />
-              {/* 内容区：表格区内滚 + sticky 表头，分页固定底部（内容大小自适应）。 */}
-              <Box style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
-                <Table striped highlightOnHover withTableBorder stickyHeader>
-                  <Table.Thead>
-                    <Table.Tr>
-                      <Table.Th>{t("cluster.syncLogSeq", { defaultValue: "seq" })}</Table.Th>
-                      <Table.Th>{t("cluster.syncLogOp", { defaultValue: "操作" })}</Table.Th>
-                      <Table.Th>{t("cluster.syncLogEntityType", { defaultValue: "实体" })}</Table.Th>
-                      <Table.Th>{t("cluster.syncLogEntityKey", { defaultValue: "对象" })}</Table.Th>
-                      <Table.Th>{t("cluster.syncLogTs", { defaultValue: "时间" })}</Table.Th>
+            </Box>
+          ) : (
+            <Box style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+              <Table striped highlightOnHover withTableBorder stickyHeader style={{ minWidth: 720 }}>
+                <Table.Thead>
+                  <Table.Tr>
+                    <Table.Th style={{ whiteSpace: "nowrap" }}>{t("cluster.syncLogSeq", { defaultValue: "seq" })}</Table.Th>
+                    <Table.Th style={{ whiteSpace: "nowrap" }}>{t("cluster.syncLogOp", { defaultValue: "操作" })}</Table.Th>
+                    <Table.Th style={{ whiteSpace: "nowrap" }}>{t("cluster.syncLogEntityType", { defaultValue: "实体" })}</Table.Th>
+                    <Table.Th style={{ whiteSpace: "nowrap" }}>{t("cluster.syncLogEntityKey", { defaultValue: "对象" })}</Table.Th>
+                    <Table.Th style={{ whiteSpace: "nowrap" }}>{t("cluster.syncLogTs", { defaultValue: "时间" })}</Table.Th>
+                  </Table.Tr>
+                </Table.Thead>
+                <Table.Tbody>
+                  {list.items.map((ch: ReplChangeEntry) => (
+                    <Table.Tr key={ch.seq}>
+                      <Table.Td style={{ whiteSpace: "nowrap" }}>{ch.seq}</Table.Td>
+                      <Table.Td>{opBadge(ch.op, t)}</Table.Td>
+                      <Table.Td>{entityBadge(ch.entityType, t)}</Table.Td>
+                      <Table.Td>
+                        <Text size="xs" style={{ minWidth: 240, wordBreak: "break-word" }}>
+                          {ch.entityKey}
+                        </Text>
+                      </Table.Td>
+                      <Table.Td style={{ whiteSpace: "nowrap" }}>{new Date(ch.ts).toLocaleString()}</Table.Td>
                     </Table.Tr>
-                  </Table.Thead>
-                  <Table.Tbody>
-                    {list.items.map((ch: ReplChangeEntry) => (
-                      <Table.Tr key={ch.seq}>
-                        <Table.Td>{ch.seq}</Table.Td>
-                        <Table.Td>{opBadge(ch.op)}</Table.Td>
-                        <Table.Td>{entityBadge(ch.entityType)}</Table.Td>
-                        <Table.Td>
-                          <Text size="xs" style={{ wordBreak: "break-all" }}>
-                            {ch.entityKey}
-                          </Text>
-                        </Table.Td>
-                        <Table.Td>{new Date(ch.ts).toLocaleString()}</Table.Td>
-                      </Table.Tr>
-                    ))}
-                  </Table.Tbody>
-                </Table>
-              </Box>
-              {list.total > PAGE_SIZE && (
-                <Pagination
-                  total={Math.ceil(list.total / PAGE_SIZE)}
-                  value={page}
-                  onChange={setPage}
-                  size="sm"
-                  style={{ flexShrink: 0 }}
-                />
-              )}
-            </>
+                  ))}
+                </Table.Tbody>
+              </Table>
+            </Box>
           )
         }
       </AsyncBoundary>
+      {changesState.data && (
+        <Group justify="flex-end" style={{ flexShrink: 0 }}>
+          <Pagination
+            total={Math.max(1, Math.ceil(changesState.data.total / PAGE_SIZE))}
+            value={page}
+            onChange={setPage}
+            size="xs"
+          />
+        </Group>
+      )}
     </Stack>
   );
 }

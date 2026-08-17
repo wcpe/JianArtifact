@@ -229,7 +229,15 @@ func (h *Handlers) GetClusterSyncLogChanges(c *gin.Context) {
 	}
 	entry, err := h.syncLogs.Get(id)
 	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			auth.WriteError(c, http.StatusNotFound, "not_found", "同步记录不存在")
+			return
+		}
 		writeDomainErr(c, err)
+		return
+	}
+	if entry.Changes == 0 {
+		c.JSON(http.StatusOK, SyncLogChangeListResponse{Items: []repository.Change{}, Total: 0})
 		return
 	}
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "100"))

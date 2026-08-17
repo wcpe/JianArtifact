@@ -21,7 +21,7 @@ import {
 import { EmptyState, PageHeader } from "@jianartifact/ui";
 import { useEffect, useReducer, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useLocation } from "react-router-dom";
 
 import { AsyncBoundary } from "../components/AsyncBoundary";
 import { SyncLogChangesView } from "../components/repo/SyncLogChangesView";
@@ -98,7 +98,6 @@ export function ClusterPage() {
   const location = useLocation();
   const state = useAsync(getClusterStatus, []);
   const [, force] = useReducer((x) => x + 1, 0);
-  const navigate = useNavigate(); // FR-98：跳转同步历史详情二级页
   const [syncing, setSyncing] = useState(false);
   // tab 接 URL 锚点（#cluster / #history）：刷新/回退/分享可定位到对应 tab。
   const [tab, setTab] = useState(() => location.hash.replace("#", "") || "cluster");
@@ -108,7 +107,7 @@ export function ClusterPage() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
   // FR-98：同步历史详情以模态框/弹出层展示（点击详情打开，可正常关闭返回，不做路由跳转）。
-  const [detailLogId, setDetailLogId] = useState<number | null>(null);
+  const [detailLog, setDetailLog] = useState<Pick<SyncLogEntry, "id" | "changes"> | null>(null);
 
   // 同步历史（FR-88）：独立分页加载，不阻塞主状态。
   const [syncPage, setSyncPage] = useState(0);
@@ -262,49 +261,60 @@ export function ClusterPage() {
               <Text size="xs" c="dimmed">
                 {t("cluster.syncHistoryDesc")}
               </Text>
-              <AsyncBoundary state={syncState}>
+              <AsyncBoundary
+                state={syncState}
+                style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
+              >
                 {(list) =>
                   (list.items ?? []).length === 0 ? (
-                    <EmptyState message={t("cluster.syncLogEmpty")} />
+                    <Box style={{ flex: 1, minHeight: 0, display: "grid", placeItems: "center" }}>
+                      <EmptyState message={t("cluster.syncLogEmpty")} />
+                    </Box>
                   ) : (
-                    <>
-                      {/* 内容区：表格区内滚 + sticky 表头，分页固定底部（对齐仓库列表页 FR-68）。 */}
-                      <Box style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
-                      <Table striped highlightOnHover withTableBorder stickyHeader>
+                    <Box style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+                      <Table striped highlightOnHover withTableBorder stickyHeader style={{ minWidth: 1280 }}>
                         <Table.Thead>
                           <Table.Tr>
-                            <Table.Th>{t("cluster.syncLogTime")}</Table.Th>
-                            <Table.Th>{t("cluster.syncLogPeer")}</Table.Th>
-                            <Table.Th>{t("cluster.syncLogStatus")}</Table.Th>
-                            <Table.Th>{t("cluster.syncLogEntities")}</Table.Th>
-                            <Table.Th>{t("cluster.syncLogChanges")}</Table.Th>
-                            <Table.Th>{t("cluster.syncLogApplied")}</Table.Th>
-                            <Table.Th>{t("cluster.syncLogFailed")}</Table.Th>
-                            <Table.Th>{t("cluster.syncLogBlobs")}</Table.Th>
-                            <Table.Th>{t("cluster.syncLogWatermark")}</Table.Th>
-                            <Table.Th>{t("cluster.syncLogDetail", { defaultValue: "详情" })}</Table.Th>
-                            <Table.Th>{t("cluster.lastError")}</Table.Th>
+                            <Table.Th style={{ whiteSpace: "nowrap" }}>{t("cluster.syncLogTime")}</Table.Th>
+                            <Table.Th style={{ whiteSpace: "nowrap" }}>{t("cluster.syncLogPeer")}</Table.Th>
+                            <Table.Th style={{ whiteSpace: "nowrap" }}>{t("cluster.syncLogStatus")}</Table.Th>
+                            <Table.Th style={{ whiteSpace: "nowrap" }}>{t("cluster.syncLogEntities")}</Table.Th>
+                            <Table.Th style={{ whiteSpace: "nowrap" }}>{t("cluster.syncLogChanges")}</Table.Th>
+                            <Table.Th style={{ whiteSpace: "nowrap" }}>{t("cluster.syncLogApplied")}</Table.Th>
+                            <Table.Th style={{ whiteSpace: "nowrap" }}>{t("cluster.syncLogFailed")}</Table.Th>
+                            <Table.Th style={{ whiteSpace: "nowrap" }}>{t("cluster.syncLogBlobs")}</Table.Th>
+                            <Table.Th style={{ whiteSpace: "nowrap" }}>{t("cluster.syncLogWatermark")}</Table.Th>
+                            <Table.Th style={{ whiteSpace: "nowrap" }}>{t("cluster.syncLogDetail", { defaultValue: "详情" })}</Table.Th>
+                            <Table.Th style={{ whiteSpace: "nowrap" }}>{t("cluster.lastError")}</Table.Th>
                           </Table.Tr>
                         </Table.Thead>
                         <Table.Tbody>
                           {list.items.map((e) => (
                             <Table.Tr key={e.id}>
-                              <Table.Td>{new Date(e.startedAt).toLocaleString()}</Table.Td>
-                              <Table.Td>{e.peerUrl}</Table.Td>
+                              <Table.Td style={{ whiteSpace: "nowrap" }}>{new Date(e.startedAt).toLocaleString()}</Table.Td>
+                              <Table.Td>
+                                <Text size="xs" title={e.peerUrl} truncate="end" style={{ maxWidth: 220 }}>
+                                  {e.peerUrl}
+                                </Text>
+                              </Table.Td>
                               <Table.Td>{statusBadge(e, t)}</Table.Td>
-                              <Table.Td>{entitySummary(e.entityCounts, t)}</Table.Td>
+                              <Table.Td>
+                                <Text size="xs" style={{ minWidth: 140 }}>
+                                  {entitySummary(e.entityCounts, t)}
+                                </Text>
+                              </Table.Td>
                               <Table.Td>{e.changes}</Table.Td>
                               <Table.Td>{e.applied}</Table.Td>
                               <Table.Td>{e.failed}</Table.Td>
                               <Table.Td>{e.blobs}</Table.Td>
-                              <Table.Td>{`${e.fromSeq} → ${e.toSeq}`}</Table.Td>
+                              <Table.Td style={{ whiteSpace: "nowrap" }}>{`${e.fromSeq} → ${e.toSeq}`}</Table.Td>
                               <Table.Td>
                                 {/* FR-98：详情以模态框弹出（该次同步的具体变更），可正常关闭返回 */}
                                 <Anchor
                                   size="xs"
                                   component="button"
                                   type="button"
-                                  onClick={() => setDetailLogId(e.id)}
+                                  onClick={() => setDetailLog({ id: e.id, changes: e.changes })}
                                 >
                                   {t("cluster.syncLogDetail", { defaultValue: "详情" })}
                                 </Anchor>
@@ -315,7 +325,7 @@ export function ClusterPage() {
                                     size="xs"
                                     c="red"
                                     title={e.errorText}
-                                    truncate
+                                    truncate="end"
                                     style={{ maxWidth: 200 }}
                                   >
                                     {e.errorText}
@@ -326,19 +336,20 @@ export function ClusterPage() {
                           ))}
                         </Table.Tbody>
                       </Table>
-                      </Box>
-                      <Group justify="flex-end" style={{ flexShrink: 0 }}>
-                        <Pagination
-                          value={syncPage + 1}
-                          total={Math.max(1, Math.ceil(list.total / SYNC_PAGE_SIZE))}
-                          onChange={(p) => setSyncPage(p - 1)}
-                          size="xs"
-                        />
-                      </Group>
-                    </>
+                    </Box>
                   )
                 }
               </AsyncBoundary>
+              {syncState.data && (
+                <Group justify="flex-end" style={{ flexShrink: 0 }}>
+                  <Pagination
+                    value={syncPage + 1}
+                    total={Math.max(1, Math.ceil(syncState.data.total / SYNC_PAGE_SIZE))}
+                    onChange={(p) => setSyncPage(p - 1)}
+                    size="xs"
+                  />
+                </Group>
+              )}
             </Stack>
           </Card>
         </Tabs.Panel>
@@ -346,14 +357,16 @@ export function ClusterPage() {
 
       {/* FR-98：同步历史详情模态框（弹出层展示该次同步的具体变更，可正常关闭返回） */}
       <Modal
-        opened={detailLogId !== null}
-        onClose={() => setDetailLogId(null)}
+        opened={detailLog !== null}
+        onClose={() => setDetailLog(null)}
         title={t("cluster.syncLogDetailTitle", { defaultValue: "同步历史详情" })}
         size="xl"
         centered
         styles={{ body: { height: "70vh", overflow: "hidden", display: "flex", flexDirection: "column" } }}
       >
-        {detailLogId !== null && <SyncLogChangesView logId={detailLogId} />}
+        {detailLog !== null && (
+          <SyncLogChangesView logId={detailLog.id} hasChanges={detailLog.changes > 0} />
+        )}
       </Modal>
     </Stack>
   );

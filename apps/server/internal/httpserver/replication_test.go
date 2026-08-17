@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -407,5 +408,62 @@ func TestClusterSyncLogsEmpty(t *testing.T) {
 	}
 	if len(items) != 0 {
 		t.Errorf("空库 items 长度应为 0，得 %d", len(items))
+	}
+}
+
+// TestClusterSyncLogChangesEmptyAndMissing 确保零变更记录可展示空状态，失效记录不会误报 500。
+func TestClusterSyncLogChangesEmptyAndMissing(t *testing.T) {
+	db, err := persistence.Open(filepath.Join(t.TempDir(), "sync-log-changes.db"))
+	if err != nil {
+		t.Fatalf("打开数据库：%v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := db.Migrate(); err != nil {
+		t.Fatalf("迁移：%v", err)
+	}
+	syncLogs := repository.NewSyncLogRepo(db)
+	logID, err := syncLogs.Start("https://repo.wcpe.top", 12)
+	if err != nil {
+		t.Fatalf("创建零变更日志：%v", err)
+	}
+	handlers := api.NewHandlers(api.Deps{SyncLogs: syncLogs})
+
+	gin.SetMode(gin.ReleaseMode)
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("auth.principal", &auth.Principal{Role: "admin", Username: "admin", UserID: 1})
+		c.Next()
+	})
+	r.GET("/api/v1/cluster/sync-logs/:id/changes", handlers.GetClusterSyncLogChanges)
+
+	assertSyncLogChangesEmpty(t, r, "/api/v1/cluster/sync-logs/"+strconv.FormatInt(logID, 10)+"/changes")
+	assertSyncLogChangesMissing(t, r, "/api/v1/cluster/sync-logs/999/changes")
+}
+
+func assertSyncLogChangesEmpty(t *testing.T, r http.Handler, target string) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, target, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("零变更日志应返回 200，得 %d（体：%s）", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Items []repository.Change `json:"items"`
+		Total int                 `json:"total"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("解析响应：%v", err)
+	}
+	if out.Items == nil || len(out.Items) != 0 || out.Total != 0 {
+		t.Fatalf("零变更应返回 items=[]、total=0，得 items=%v total=%d", out.Items, out.Total)
+	}
+}
+
+func assertSyncLogChangesMissing(t *testing.T, r http.Handler, target string) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, target, nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("不存在日志应返回 404，得 %d（体：%s）", rec.Code, rec.Body.String())
 	}
 }

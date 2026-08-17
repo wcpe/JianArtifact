@@ -4,7 +4,7 @@
 // 仅首载（尚无数据）才显示整块骨架，消灭"整页重刷"。
 import { Box, LoadingOverlay } from "@mantine/core";
 import { ErrorState, ForbiddenState, LoadingState } from "@jianartifact/ui";
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { AsyncState } from "../hooks/useAsync";
@@ -12,10 +12,11 @@ import type { AsyncState } from "../hooks/useAsync";
 interface AsyncBoundaryProps<T> {
   state: AsyncState<T>;
   children: (data: T) => ReactNode;
+  style?: CSSProperties;
 }
 
 /** 依据 async 状态渲染占位或数据视图。 */
-export function AsyncBoundary<T>({ state, children }: AsyncBoundaryProps<T>) {
+export function AsyncBoundary<T>({ state, children, style }: AsyncBoundaryProps<T>) {
   const { t } = useTranslation();
 
   if (state.forbidden) {
@@ -37,7 +38,7 @@ export function AsyncBoundary<T>({ state, children }: AsyncBoundaryProps<T>) {
   }
   // 已有数据：刷新期间保留旧内容，仅叠加半透明覆盖层
   return (
-    <Box pos="relative">
+    <Box pos="relative" style={style}>
       <LoadingOverlay
         visible={state.loading}
         zIndex={10}
