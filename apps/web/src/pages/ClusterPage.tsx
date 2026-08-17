@@ -118,7 +118,15 @@ export function ClusterPage() {
   );
 
   return (
-    <>
+    /* 固定布局：页面撑满内容区高度，body 不滚；页头/tab 固定，内容区 flex 自适应（对齐仓库列表页 FR-68）。 */
+    <Stack
+      gap="sm"
+      style={{
+        height:
+          "calc(100vh - var(--app-shell-header-offset, 56px) - 2 * var(--app-shell-padding, 12px))",
+        overflow: "hidden",
+      }}
+    >
       <PageHeader title={t("cluster.title")} description={t("cluster.description")} />
       {/* 内容区宽度由全局 contentMaxWidth 控制，页面内不再二次限宽（FR-86 布局修复）。 */}
       <Tabs
@@ -128,6 +136,7 @@ export function ClusterPage() {
           setTab(next);
           window.location.hash = next;
         }}
+        style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
       >
         <Tabs.List>
           <Tabs.Tab value="cluster">{t("cluster.title")}</Tabs.Tab>
@@ -135,7 +144,7 @@ export function ClusterPage() {
         </Tabs.List>
 
         {/* 集群 tab：同步状态 + 立即同步（对端配置与自动同步开关已迁设置页）。 */}
-        <Tabs.Panel value="cluster" pt="md">
+        <Tabs.Panel value="cluster" pt="md" style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
           <AsyncBoundary state={state}>
             {(st) => (
               <Stack gap="md" maw={900}>
@@ -346,6 +355,6 @@ export function ClusterPage() {
       >
         {detailLogId !== null && <SyncLogChangesView logId={detailLogId} />}
       </Modal>
-    </>
+    </Stack>
   );
 }
