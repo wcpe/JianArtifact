@@ -37,6 +37,7 @@
 make install    # 安装前端依赖（pnpm workspace）
 make dev        # 本地开发（前端 + 后端）
 make check      # 在 Docker 中运行全部质量门
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/check.ps1  # Windows 原生质量门
 make build      # 前端构建 + 后端 embed 编译单二进制
 make release    # 产出多平台发布物（校验和 / 签名 / SBOM）
 ```

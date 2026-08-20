@@ -69,7 +69,7 @@ Thumbs.db
 .env
 .env.local
 .env.*.local
-deploy/.env
+
 # 远程部署专用 SSH 密钥（deploy/remote-ssh.sh setup-key 生成）
 deploy/ssh/
 /.playwright-cli/

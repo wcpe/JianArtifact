@@ -25,8 +25,13 @@ dev: ## 本地开发
 gen: ## 生成契约代码
 	cd apps/server && task gen
 
+ifeq ($(OS),Windows_NT)
+check: ## 在 Windows 中运行全部质量门
+	powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/check.ps1
+else
 check: ## 在 Docker 中运行全部质量门
 	bash scripts/check.sh
+endif
 
 build: ## 前端构建 + 后端 embed 编译
 	pnpm build
