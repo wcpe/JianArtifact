@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/wcpe/JianArtifact/actions/workflows/ci.yml/badge.svg)](https://github.com/wcpe/JianArtifact/actions/workflows/ci.yml)
 [![Release](https://github.com/wcpe/JianArtifact/actions/workflows/release.yml/badge.svg)](https://github.com/wcpe/JianArtifact/actions/workflows/release.yml)
-![版本](https://img.shields.io/badge/version-0.6.0-blue.svg)
+![版本](https://img.shields.io/badge/version-0.7.0-blue.svg)
 ![许可](https://img.shields.io/badge/license-MIT-green.svg)
 ![语言](https://img.shields.io/badge/language-Go%20%2B%20React-blue.svg)
 
