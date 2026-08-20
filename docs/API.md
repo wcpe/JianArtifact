@@ -45,7 +45,7 @@
 - `GET/POST/PATCH/DELETE /api/v1/repositories`：仓库管理（格式 raw/maven/npm、类型 hosted/proxy/group、可见性、上游 / 成员配置）。列表接口可选鉴权（FR-66）：匿名请求受全局开关约束（关则 401），开则返回匿名可读集合（public ∪ anonymous 主体被授 read 的仓库）。
 - `GET/PUT /api/v1/repositories/{name}/acl`：读写 ACL；内置 `anonymous` 用户可作为普通主体授权（FR-66）。
 - `GET/PUT /api/v1/settings/anonymous-access`：实例级匿名访问全局开关（仅管理员；默认开；非契约端点，经 WithProtocolRoutes 注册）。
-- `GET/PUT /api/v1/settings`（0.7.0，FR-89）：实例级基础配置四项（仅管理员；非契约端点）——`GET` 返回生效值 `{anonymousAccess, publicUrl, upstreamTimeout(秒), syncInterval(秒)}`；`PUT` 字段均可选、传哪个改哪个，写后**运行时生效**（不重启）。校验：`publicUrl` 须为 http/https 绝对 URL 或空串，`upstreamTimeout` / `syncInterval` 取值 1–3600，非法 400。
+- `GET/PUT /api/v1/settings`（0.7.0，FR-89）：实例级基础配置四项（仅管理员；非契约端点）——`GET` 返回生效值 `{anonymousAccess, publicUrl, upstreamTimeout(秒), syncInterval(秒)}`；`PUT` 字段均可选、传哪个改哪个，写后**运行时生效**（不重启）。校验：`publicUrl` 须为 http/https 绝对 URL 或空串，`upstreamTimeout` / `syncInterval` 取值 1–3600，非法 400。`publicUrl` 是节点本地对外域名，不参与节点间复制。
 
 ### 制品浏览
 
@@ -83,7 +83,7 @@
 
 ### 协议端点（非 OpenAPI，按格式规范）
 
-- **Raw**：`GET/PUT/DELETE /repository/{repo}/{path}`。
+- **Raw**：`GET/PUT/DELETE /repository/{repo}/{path}`；DELETE 仅全局管理员可调用，删除制品元数据并保留 blob，同时写入 `asset.delete` 审计与复制 tombstone。
 - **Maven**：`GET/PUT /repository/{repo}/{group-path}/{artifact}/{version}/...`（含 `maven-metadata.xml`）。
 - **npm**：`GET /repository/{repo}/{package}`、`PUT /repository/{repo}/{package}`（publish）、dist-tags 等。
 

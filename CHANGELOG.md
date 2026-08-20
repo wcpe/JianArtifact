@@ -49,6 +49,7 @@
   - 基础配置四项入库 `setting`（`public_url` / `upstream_timeout` / `repl:sync_interval`，复用 `anonymous_access_enabled`）；env 值仅首启兜底写入，web 可运行时覆盖。
   - 新增 `GET/PUT /api/v1/settings`（仅 admin）：GET 返回生效值，PUT 字段可选、传哪个改哪个；校验 `publicUrl` 为 http/https 绝对 URL 或空、秒级取值 1–3600，非法 400。
   - **运行时生效（不重启）**：同步间隔由 `ReplicationScheduler` 每轮读 setting（变化则重置 ticker，缺省回退 env/默认 5s）；对外 URL 由 usage 与 npm `dist.tarball` 生成处动态读；回源超时经 `OnUpstreamTimeoutChange` 回调即时同步到 `upstream.Client.SetTimeout`（RWMutex 保护，Fetch 与 SetTimeout 并发安全）。
+  - 多节点部署时 `public_url` 保持节点本地，不写入复制变更日志、不应用对端值，避免 CDN/Tunnel 域名相互覆盖。
 - 设置页统一化（FR-90，见 `docs/specs/0.7.0-settings-page.md`）：
   - 侧边栏「管理」新增「设置」入口（仅管理员），一级 tab：基础设置（匿名开关 / 对外 URL / 回源超时 / 同步间隔，接 FR-89 设置端点）与集群（对端 URL / 令牌 / 自动同步开关，接既有集群端点）。
   - 配置迁移：匿名访问开关自用户页、对端配置自集群页迁入设置页；集群页保留同步状态、同步历史与「立即同步」按钮。
@@ -59,6 +60,7 @@
   - `ReplicationClient.Sync` 水位推进修复：推进到本批最后一条 seq（而非对端最新），避免对端一次性积压大量变更时跳过未拉取部分。
 - Maven SNAPSHOT 字面路径回退（FR-92）：GET `artifact-version-SNAPSHOT.ext` 时间戳解析失败时回退按字面路径解析，支持 Gradle 快照发布（metadata 无顶层 `<snapshot>` 标签）场景。
 - 多对端全互连集群（FR-93，代码代号 FR-D）：对端配置支持多对端列表（`setting` 键 `repl:peers`，JSON 数组 `[{url,token}]`，优先于单值 `repl:peer_url`/`repl:peer_token`）；`PUT /api/v1/cluster` 传 `peers` 则全量替换；调度器对每个对端各同步一轮，节点间可全互连双向复制。
+  - 复制客户端对 CDN/Tunnel 对端固定使用 HTTP/1.1，规避部分代理对 HTTP/2 复制流返回 `INTERNAL_ERROR`。
 - 复制性能增强（FR-94，代码代号 FR-A/B）：`ReplicationClient.Sync` 资产元数据先落库（不阻塞），缺失 blob 用工作协程池（`blobFetchWorkers`）并发补拉，避免逐个串行拉 blob（单个可能 30s 超时）导致批量同步卡死；blob 拉取用更宽松超时。
 - 同步进度/构成摘要（FR-95，代码代号 FR-C）：`GET /api/v1/cluster` 返回最近一次同步摘要（`LastSync`：起始/结束水位、变更·应用·失败、blob、按实体类型计数 `entityCounts`）；同步历史 `entity_counts` 落 `repl_sync_log`，集群页展示变更构成（如「用户2 · 仓库1 · 制品5」）。
 - 集群配置键隔离（FR-96）：`repl:*` 集群配置键写路径不记录变更、应用路径拒绝应用（`SettingService`/复制应用侧过滤），避免对端配置互相覆盖。
@@ -67,9 +69,15 @@
 - 集群同步历史二级页（FR-98）：`GET /api/v1/cluster/sync-logs/:id/changes` 按 fromSeq→toSeq 从 `repl_change` 反推某次同步的具体变更；集群页同步历史行可点击进入详情页（变更列表 + 操作/实体徽章 + 分页）。
 - 仓库详情左右宽度拖拽（FR-99）：浏览页左树/右详情加拖拽分割条，宽度自由调整（min 280/max 720）并本地持久化。
 - 管理端布局与图标：设置页/集群页移除页面内 maw=900 二次限宽（内容区由全局 contentMaxWidth 控制）；favicon 与品牌 logo 统一为单一文件 `public/favicon.svg`（index.html 与 BrandLogo 均引用文件，去除内联 SVG/data URI）。
+- 制品单个删除（FR-102）：管理端文件详情面板新增「删除」按钮（仅管理员，危险操作确认），删除后刷新文件树；复用协议 `DELETE /repository/{repo}/{path}`（元数据删 + blob 保留 + `asset.delete` 审计 + 复制 tombstone 联动）。
+- 制品批量删除（FR-103，见 `docs/specs/0.7.0-batch-delete-assets.md`）：文件树新增复选框多选（限定当前目录内文件行，仅管理员）+ 工具栏「删除所选」批量删除；新增管理端点 `POST /api/v1/repositories/{name}/assets/batch-delete`（paths ≤500、响应 `deleted/failed`、部分失败不整体回滚），逐条复用 `AssetService.Delete` 并写 `asset.delete` 审计与复制 tombstone。
 
 ### 修复
 
+- 制品删除权限与范围：协议单删在服务端强制全局管理员，拥有仓库 write ACL 的普通用户不能绕过管理端限制；批删在切换目录或搜索上下文时清空勾选，避免跨目录提交删除。
+- 开发态审计日志：devmock 补齐 `GET /api/v1/audit-logs` 的管理员鉴权、筛选与分页响应，审计页不再因未处理请求落到 Vite HTML 而加载失败。
+- 后端质量门：Go toolchain 升至 1.26.6，规避已报告的标准库可达漏洞；修正 npm 协议分流的静态检查问题。
+- Windows 质量门：新增 `scripts/check.ps1`，使用原生 PowerShell 执行前端、Go、漏洞与构建检查，避免依赖 WSL 质量工具安装。
 - 静态资源缓存头（修复"前端发版后浏览器仍显示旧版"）：
   - `index.html`（含 SPA 回退）响应加 `Cache-Control: no-cache`，每次请求回源验证，发版后刷新立即拿到引用最新 content-hash 资源的入口页。
   - `/assets/*`（构建产物带 content-hash，内容变则文件名变）加 `Cache-Control: public, max-age=31536000, immutable` 长缓存；其他无 hash 静态文件（如 favicon）保持 `no-cache`，避免误缓存导致更新不生效。
@@ -78,6 +86,16 @@
 - group 仓库无法编辑成员：仓库详情配置 tab 增加 group 类型分支（members MultiSelect，选同格式仓库），修复 group 成员无法编辑（组件测试 `Test` group 配置可编辑成员仓库）。
 - 双斜杠路径下载 404：`cleanArtifactPath` 改用 `TrimLeft` 去全部前导斜杠并折叠连续斜杠（`//→/`），兼容客户端拼 `baseUrl + "/" + path` 产生的双斜杠 URL（复现测试 `TestDoubleSlashPathCompat`）。
 - Maven SNAPSHOT 字面路径回退：`MavenHandler.Get` 对 `-SNAPSHOT` 文件时间戳解析失败后回退按字面路径解析，支持 Gradle 快照发布（metadata 无顶层 `<snapshot>` 标签）场景。
+- 复制同步失败项水位语义：Apply / blob 下载 / 哈希不匹配失败不再越过失败变更推进水位，后续轮询可重试补齐（回归测试覆盖 Apply 失败、blob 404、传输中断、哈希错误、批次续拉）。
+- 多对端 LWW 版本状态：新增已应用版本表（迁移 0013），本地与远端成功写入均更新，避免旧远端变更覆盖新写入（回归测试覆盖新→旧远端覆盖场景）。
+- 集群配置保存令牌保留：更新 peers / URL / enabled 时，token 缺失或留空保留已有值，不再被覆盖清空（`sync-now` 不受自动同步开关限制并有 handler 测试）。
+- 设置动态生效补齐：启动时应用持久化回源超时；public URL 清空正确回退请求 Host；`PUT /settings` 先整体校验再写入，避免部分写。
+- 失败日志收缩按对端隔离：连续相同错误按 peer 分组合并，避免多对端互相串扰。
+- 同步历史详情改为模态框：PRD FR-98 与 spec 同步为「详情模态框」交互，支持分类、正向分页与失败摘要；详情端点补正向区间、404、403 测试。
+- 审计日志补齐：仓库更新与集群配置变更写入审计，审计页新增起止时间筛选（组件测试覆盖）。
+- 小屏页眉响应式登录/退出：按移动/桌面只渲染一组控件，消除重复登录入口（回归测试覆盖 480px 与桌面象限）。
+- 审计日志页分页条被裁切（FR-101）：管理/复制两 tab 的滚动区容器改为纵向 flex，分页条固定在表格下方、不再被固定高度容器 `overflow:hidden` 裁切（布局回归测试覆盖两 tab）。
+- 批量删除不存在仓库的 404 语义（FR-103 收尾）：`POST /api/v1/repositories/{name}/assets/batch-delete` 循环前预检仓库存在性，不存在返回 404（与契约及 devmock 行为一致），避免 200+全 failed 假象；补 404 与 blob 保留断言测试。
 
 ## [0.6.0] - 2026-07-29
 
