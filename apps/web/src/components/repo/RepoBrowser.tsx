@@ -19,12 +19,20 @@ import {
   Title,
 } from "@mantine/core";
 import { EmptyState } from "@jianartifact/ui";
-import { IconChevronDown, IconChevronUp, IconSearch, IconUpload, IconX } from "@tabler/icons-react";
+import {
+  IconChevronDown,
+  IconChevronUp,
+  IconSearch,
+  IconTrash,
+  IconUpload,
+  IconX,
+} from "@tabler/icons-react";
 import { useLocalStorage } from "@mantine/hooks";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import {
+  batchDeleteAssets,
   getRepositoryTree,
   getRepositoryUsage,
   listRepositories,
@@ -35,7 +43,8 @@ import type { AssetSummary, Repository, UsageInfo } from "../../api/types";
 import { useAsync, REFRESH_EVENT } from "../../hooks/useAsync";
 import type { AssetTreeNode } from "../../lib/assetTree";
 import { buildAssetTree } from "../../lib/assetTree";
-import { notifyError, notifySuccess } from "../../lib/feedback";
+import { confirmDanger, notifyError, notifySuccess } from "../../lib/feedback";
+import { useAuth } from "../../auth/AuthContext";
 import { density } from "../../theme/density";
 import { AsyncBoundary } from "../AsyncBoundary";
 import { MavenUploadCard } from "./MavenUploadCard";
@@ -106,7 +115,13 @@ export function RepoBrowser({
   forcedType,
 }: Props) {
   const { t } = useTranslation();
+  const { user } = useAuth();
+  // FR-103：批量删除仅管理员可见可用（与 FR-102 单删一致）。
+  const isAdmin = user?.role === "admin";
   const [selected, setSelected] = useState<AssetSummary | null>(null);
+  // FR-103：已勾选待删除的文件路径集合（仅文件行，限定当前已加载树内）。
+  const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
+  const [batchDeleting, setBatchDeleting] = useState(false);
   const [uploadPath, setUploadPath] = useState("");
   const [uploading, setUploading] = useState(false);
   const [reloadNonce, setReloadNonce] = useState(0);
@@ -177,6 +192,7 @@ export function RepoBrowser({
     if (repoChanged) {
       setTreeNodes([]);
       setSelected(null);
+      setSelectedPaths(new Set());
       setSearchResults(null);
       setSearchQuery("");
     }
@@ -224,6 +240,7 @@ export function RepoBrowser({
   // FR-57: 仓库内搜索（结果拼成目录树展示，而非拍平列表）
   const handleInRepoSearch = () => {
     const q = searchQuery.trim();
+    setSelectedPaths(new Set());
     if (!q) {
       setSearchResults(null);
       return;
@@ -252,6 +269,7 @@ export function RepoBrowser({
     setSearchQuery("");
     setSearchResults(null);
     setSearchCount(0);
+    setSelectedPaths(new Set());
   };
 
   const onSelectFile = (node: AssetTreeNode) => {
@@ -261,6 +279,55 @@ export function RepoBrowser({
   };
   const onSelectDir = () => {
     setSelected(null);
+    setSelectedPaths(new Set());
+  };
+
+  // FR-103：勾选 / 取消勾选文件行（仅文件行；目录不含递归勾选）。
+  const onToggleSelect = (node: AssetTreeNode) => {
+    if (node.kind !== "file") {
+      return;
+    }
+    setSelectedPaths((prev) => {
+      const next = new Set(prev);
+      if (next.has(node.path)) {
+        next.delete(node.path);
+      } else {
+        next.add(node.path);
+      }
+      return next;
+    });
+  };
+
+  // FR-103：危险操作二次确认后调批量删除 API；成功刷新文件树并清空勾选，
+  // 部分失败以失败明细提示，成功部分照常生效。
+  const handleBatchDelete = () => {
+    const paths = [...selectedPaths];
+    if (paths.length === 0) {
+      notifyError(t("repoDetail.batchDeleteEmptySelection"));
+      return;
+    }
+    confirmDanger({
+      title: t("common.delete"),
+      message: t("repoDetail.batchDeleteConfirm", { count: paths.length }),
+      confirmLabel: t("common.delete"),
+      cancelLabel: t("common.cancel"),
+      onConfirm: () => {
+        setBatchDeleting(true);
+        batchDeleteAssets(repoName, paths)
+          .then((res) => {
+            if (res.failed.length > 0) {
+              const detail = res.failed.map((f) => `${f.path}：${f.error}`).join("；");
+              notifyError(`${t("repoDetail.batchDeletePartial")} ${detail}`);
+            } else {
+              notifySuccess(t("repoDetail.batchDeleteOk", { count: res.deleted }));
+            }
+            setSelectedPaths(new Set());
+            setReloadNonce((n) => n + 1);
+          })
+          .catch(notifyError)
+          .finally(() => setBatchDeleting(false));
+      },
+    });
   };
 
   const handleUpload = (file: File | null) => {
@@ -449,6 +516,21 @@ export function RepoBrowser({
                 })}
               </Text>
             )}
+            {/* FR-103：勾选数 >0 且管理员时显示「删除所选」工具栏按钮 */}
+            {isAdmin && selectedPaths.size > 0 && (
+              <Group justify="flex-end" mb="xs">
+                <Button
+                  size="xs"
+                  color="red"
+                  variant="light"
+                  leftSection={<IconTrash size={14} />}
+                  loading={batchDeleting}
+                  onClick={handleBatchDelete}
+                >
+                  {t("repoDetail.batchDeleteWithCount", { count: selectedPaths.size })}
+                </Button>
+              </Group>
+            )}
             <ScrollArea style={{ flex: 1 }} type="auto" offsetScrollbars>
               <RepoAssetTree
                 key={searchResults === null ? "browse" : `search:${searchQuery}`}
@@ -460,6 +542,9 @@ export function RepoBrowser({
                 maxHeight="none"
                 defaultExpanded={searchResults !== null}
                 showSize={searchResults !== null}
+                selectable={isAdmin}
+                selectedPaths={selectedPaths}
+                onToggleSelect={onToggleSelect}
               />
             </ScrollArea>
           </Card>
@@ -495,6 +580,16 @@ export function RepoBrowser({
                   asset={selected}
                   usage={usageState.data}
                   showDownload
+                  // FR-102：删除成功后清空选中态并复用 reloadNonce 触发文件树刷新
+                  onDeleted={() => {
+                    setSelected(null);
+                    setSelectedPaths((prev) => {
+                      const next = new Set(prev);
+                      next.delete(selected.path);
+                      return next;
+                    });
+                    setReloadNonce((n) => n + 1);
+                  }}
                 />
               ) : (
                 <UsagePanel usageState={usageState} />

@@ -55,6 +55,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/replication-apply-logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 复制接收审计记录（仅管理员） */
+        get: operations["getReplicationApplyLogs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/bootstrap": {
         parameters: {
             query?: never;
@@ -265,6 +282,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/repositories/{name}/assets/batch-delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 批量删除仓库制品（仅管理员）
+         * @description 对每个 path 复用单条删除语义（元数据删 + 复制 tombstone）并逐条写 asset.delete 审计。
+         *     逐条尽力：部分失败进入 failed 明细，不做整体回滚。
+         */
+        post: operations["batchDeleteRepositoryAssets"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/repositories/{name}/usage": {
         parameters: {
             query?: never;
@@ -445,6 +483,27 @@ export interface components {
                 message: string;
             };
         };
+        ReplicationApplyLog: {
+            sourceNode: string;
+            /** Format: int64 */
+            sourceSeq: number;
+            peerUrl: string;
+            entityType: string;
+            entityKey: string;
+            op: string;
+            /** @enum {string} */
+            result: "applied" | "metadata_applied_pending_blob" | "lww_skipped" | "pending_parent" | "blob_failed" | "skipped_permanent" | "failed";
+            detail: string;
+            lastError?: string;
+            lastErrorAt?: string;
+            firstSeenAt: string;
+            lastSeenAt: string;
+            attemptCount: number;
+        };
+        ReplicationApplyLogList: {
+            items: components["schemas"]["ReplicationApplyLog"][];
+            total: number;
+        };
         StatusInfo: {
             version: string;
             ready: boolean;
@@ -603,6 +662,20 @@ export interface components {
         AssetList: {
             items: components["schemas"]["AssetSummary"][];
             total: number;
+        };
+        BatchDeleteAssetsRequest: {
+            /** @description 待删除的制品路径列表（单条非空，上限 500 条） */
+            paths: string[];
+        };
+        BatchDeleteAssetFailure: {
+            path: string;
+            error: string;
+        };
+        BatchDeleteAssetsResponse: {
+            /** @description 成功删除的制品数 */
+            deleted: number;
+            /** @description 删除失败的路径与原因明细（成功数不受其影响） */
+            failed: components["schemas"]["BatchDeleteAssetFailure"][];
         };
         UsageSnippet: {
             title: string;
@@ -846,6 +919,39 @@ export interface operations {
                     "application/json": components["schemas"]["StatusInfo"];
                 };
             };
+        };
+    };
+    getReplicationApplyLogs: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+                sourceNode?: string;
+                sourceSeq?: number;
+                peerURL?: string;
+                entityType?: string;
+                entityKey?: string;
+                op?: string;
+                result?: "applied" | "metadata_applied_pending_blob" | "lww_skipped" | "pending_parent" | "blob_failed" | "skipped_permanent" | "failed";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 复制接收审计分页结果 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReplicationApplyLogList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
         };
     };
     bootstrap: {
@@ -1315,6 +1421,36 @@ export interface operations {
                     "application/json": components["schemas"]["AssetList"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    batchDeleteRepositoryAssets: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: components["parameters"]["RepoNameParam"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BatchDeleteAssetsRequest"];
+            };
+        };
+        responses: {
+            /** @description 批量删除结果（部分失败以 failed 明细返回） */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BatchDeleteAssetsResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];

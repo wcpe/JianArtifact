@@ -439,6 +439,28 @@ export const store = {
     };
   },
 
+  /** FR-103：批量删除——逐条尽力：存在的路径删除并计入 deleted，不存在的进 failed。仓库不存在返回 null。 */
+  batchDeleteAssets(
+    name: string,
+    paths: string[],
+  ): { deleted: number; failed: { path: string; error: string }[] } | null {
+    if (!state.repositories.some((r) => r.name === name)) {
+      return null;
+    }
+    const list = state.assets[name] ?? [];
+    const result = { deleted: 0, failed: [] as { path: string; error: string }[] };
+    for (const p of paths) {
+      const idx = list.findIndex((a) => a.path === p);
+      if (idx < 0) {
+        result.failed.push({ path: p, error: "资源不存在" });
+        continue;
+      }
+      list.splice(idx, 1);
+      result.deleted += 1;
+    }
+    return result;
+  },
+
   /** FR-73：Maven 网页上传——登记主文件/pom/metadata 及各自校验和的 asset 摘要。
    * 仓库不存在返回 null；非 maven hosted 返回 "conflict"。 */
   uploadMavenArtifact(

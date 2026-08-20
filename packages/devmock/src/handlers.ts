@@ -17,7 +17,31 @@ export type Repository = Schemas["Repository"];
 export type RepositoryList = Schemas["RepositoryList"];
 export type AclList = Schemas["AclList"];
 export type AssetList = Schemas["AssetList"];
+export type BatchDeleteAssetsRequest = Schemas["BatchDeleteAssetsRequest"];
+export type BatchDeleteAssetFailure = Schemas["BatchDeleteAssetFailure"];
+export type BatchDeleteAssetsResponse = Schemas["BatchDeleteAssetsResponse"];
 export type UsageInfo = Schemas["UsageInfo"];
+export type ReplicationApplyLog = Schemas["ReplicationApplyLog"];
+export type ReplicationApplyLogList = Schemas["ReplicationApplyLogList"];
+
+/** GET /api/v1/audit-logs 的非 OpenAPI 管理面响应。 */
+export interface MockAuditLogEntry {
+  id: number;
+  ts: string;
+  actor: string;
+  action: string;
+  entityType: string;
+  entityKey: string;
+  repo: string;
+  detail: string;
+  result: string;
+  ip: string;
+}
+
+export interface MockAuditLogList {
+  items: MockAuditLogEntry[];
+  total: number;
+}
 
 const MOCK_VERSION = "0.2.0-mock";
 const MOCK_TIME = "2026-01-01T00:00:00Z";
@@ -120,6 +144,93 @@ export function mockAssetList(): AssetList {
     ],
     total: 1,
   };
+}
+
+/** POST /api/v1/repositories/{name}/assets/batch-delete 的契约响应（全成功）。 */
+export function mockBatchDeleteAssets(): BatchDeleteAssetsResponse {
+  return {
+    deleted: 2,
+    failed: [{ path: "no/such.txt", error: "资源不存在" }],
+  };
+}
+
+/** GET /api/v1/replication-apply-logs 的契约响应。 */
+export function mockReplicationApplyLogList(): ReplicationApplyLogList {
+  return {
+    items: [
+      {
+        sourceNode: "node-a",
+        sourceSeq: 1,
+        peerUrl: "https://peer.example",
+        entityType: "asset",
+        entityKey: "asset:raw/a.txt",
+        op: "put",
+        result: "applied",
+        detail: "元数据与 blob 已应用",
+        firstSeenAt: MOCK_TIME,
+        lastSeenAt: MOCK_TIME,
+        attemptCount: 1,
+      },
+    ],
+    total: 1,
+  };
+}
+
+/** GET /api/v1/audit-logs 的稳定样本（该端点尚未纳入 OpenAPI）。 */
+export function mockAuditLogList(): MockAuditLogList {
+  const items: MockAuditLogEntry[] = [
+    {
+      id: 3,
+      ts: "2026-01-03T00:00:00Z",
+      actor: "admin",
+      action: "user.create",
+      entityType: "user",
+      entityKey: "bob",
+      repo: "",
+      detail: "role=user",
+      result: "ok",
+      ip: "127.0.0.1",
+    },
+    {
+      id: 2,
+      ts: "2026-01-02T00:00:00Z",
+      actor: "alice",
+      action: "asset.delete",
+      entityType: "asset",
+      entityKey: "maven-releases/app.jar",
+      repo: "maven-releases",
+      detail: "",
+      result: "ok",
+      ip: "127.0.0.1",
+    },
+    {
+      id: 1,
+      ts: "2025-12-31T00:00:00Z",
+      actor: "admin",
+      action: "repo.create",
+      entityType: "repository",
+      entityKey: "npm-proxy",
+      repo: "npm-proxy",
+      detail: "format=npm",
+      result: "ok",
+      ip: "127.0.0.1",
+    },
+  ];
+  items.push(
+    ...Array.from({ length: 48 }, (_, index) => ({
+      id: index + 4,
+      ts: `2026-01-${String((index % 28) + 4).padStart(2, "0")}T00:00:00Z`,
+      actor: `user-${index + 4}`,
+      action: "asset.read",
+      entityType: "asset",
+      entityKey: `maven-releases/app-${index + 4}.jar`,
+      repo: "maven-releases",
+      detail: "",
+      result: "ok",
+      ip: "127.0.0.1",
+    })),
+  );
+  return { items, total: items.length };
 }
 
 /** GET /api/v1/repositories/{name}/usage 的契约响应。 */

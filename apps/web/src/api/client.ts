@@ -221,3 +221,26 @@ export async function postProtocolForm<T>(url: string, form: FormData): Promise<
     trackRequestEnd();
   }
 }
+
+/** 协议层 DELETE（制品删除）：Bearer + 无 body，非 /api/v1 JSON 请求；204 视为成功。 */
+export async function deleteProtocolAsset(url: string): Promise<void> {
+  const headers: Record<string, string> = {};
+  const token = getToken();
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+  trackRequestStart();
+  try {
+    let response: Response;
+    try {
+      response = await fetch(url, { method: "DELETE", headers });
+    } catch (e) {
+      throw new ApiError("network", e instanceof Error ? e.message : "网络错误", 0);
+    }
+    if (!response.ok) {
+      throw await parseError(response);
+    }
+  } finally {
+    trackRequestEnd();
+  }
+}

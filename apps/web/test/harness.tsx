@@ -1,6 +1,7 @@
 // 测试渲染夹具：在共享 Provider（Mantine 主题 / i18n / 路由 / 鉴权）下挂载被测组件。
 import { AppProvider } from "@jianartifact/ui";
 import { ModalsProvider } from "@mantine/modals";
+import { Notifications } from "@mantine/notifications";
 import { render } from "@testing-library/react";
 import type { ReactElement, ReactNode } from "react";
 import { MemoryRouter } from "react-router-dom";
@@ -8,6 +9,7 @@ import { MemoryRouter } from "react-router-dom";
 import { AuthProvider } from "../src/auth/AuthContext";
 import { LoginModalProvider } from "../src/auth/LoginModal";
 import { setToken } from "../src/api/client";
+import type { User } from "../src/api/types";
 import "../src/i18n";
 
 interface RenderOptions {
@@ -15,11 +17,14 @@ interface RenderOptions {
   route?: string;
   /** 预置会话令牌以通过受保护端点鉴权。 */
   authenticated?: boolean;
+  /** 自定义登录用户快照（默认管理员）；仅 authenticated=true 时生效。 */
+  user?: User;
 }
 
 function Providers({ children, route }: { children: ReactNode; route: string }) {
   return (
     <AppProvider>
+      <Notifications position="top-right" />
       <ModalsProvider>
         <AuthProvider>
           <LoginModalProvider>
@@ -47,10 +52,10 @@ const MOCK_USER = {
 
 /** 在完整 Provider 链下渲染组件；authenticated=true 时预置令牌与用户快照。 */
 export function renderWithProviders(ui: ReactElement, options: RenderOptions = {}) {
-  const { route = "/", authenticated = false } = options;
+  const { route = "/", authenticated = false, user } = options;
   if (authenticated) {
     setToken("mock.jwt.token");
-    localStorage.setItem("jianartifact.user", JSON.stringify(MOCK_USER));
+    localStorage.setItem("jianartifact.user", JSON.stringify(user ?? MOCK_USER));
   } else {
     setToken(null);
     localStorage.removeItem("jianartifact.user");

@@ -4,6 +4,7 @@ import { Blob as NodeBlob, File as NodeFile } from "node:buffer";
 
 import { server } from "@jianartifact/devmock/node";
 import { resetStore } from "@jianartifact/devmock";
+import { notifications } from "@mantine/notifications";
 import { afterAll, afterEach, beforeAll } from "vitest";
 
 // jsdom 的 FormData/File/Blob 与 Node fetch（undici）不同源：undici 不认 jsdom 的
@@ -54,6 +55,8 @@ afterEach(() => {
   server.resetHandlers();
   resetStore();
   localStorage.clear();
+  // 清空 Mantine 通知，避免上一个用例的通知泄漏到下一用例的 DOM。
+  notifications.clean();
 });
 
 afterAll(() => {

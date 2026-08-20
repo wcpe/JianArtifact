@@ -18,18 +18,36 @@ const PAGE_SIZE = 100;
 /** 变更操作徽章：put / delete。 */
 function opBadge(op: string, t: (key: string, options?: { defaultValue: string }) => string) {
   const color = op === "delete" ? "red" : "blue";
-  const label = op === "delete"
-    ? t("cluster.syncLogOpDelete", { defaultValue: "删除" })
-    : t("cluster.syncLogOpPut", { defaultValue: "写入" });
-  return <Badge color={color} size="xs">{label}</Badge>;
+  const label =
+    op === "delete"
+      ? t("cluster.syncLogOpDelete", { defaultValue: "删除" })
+      : t("cluster.syncLogOpPut", { defaultValue: "写入" });
+  return (
+    <Badge color={color} size="xs">
+      {label}
+    </Badge>
+  );
 }
 
 /** 变更实体类型徽章。 */
-function entityBadge(entityType: string, t: (key: string, options?: { defaultValue: string }) => string) {
+function entityBadge(
+  entityType: string,
+  t: (key: string, options?: { defaultValue: string }) => string,
+) {
   const color =
-    entityType === "asset" ? "blue" : entityType === "repository" ? "grape" : entityType === "user" ? "teal" : "gray";
+    entityType === "asset"
+      ? "blue"
+      : entityType === "repository"
+        ? "grape"
+        : entityType === "user"
+          ? "teal"
+          : "gray";
   const labelKey = `cluster.entity${entityType.slice(0, 1).toUpperCase()}${entityType.slice(1)}`;
-  return <Badge color={color} variant="light" size="xs">{t(labelKey, { defaultValue: entityType })}</Badge>;
+  return (
+    <Badge color={color} variant="light" size="xs">
+      {t(labelKey, { defaultValue: entityType })}
+    </Badge>
+  );
 }
 
 /**
@@ -53,7 +71,12 @@ export function SyncLogChangesView({
   const changesState = useAsync(
     () =>
       hasChanges
-        ? getClusterSyncLogChanges(logId, PAGE_SIZE, (page - 1) * PAGE_SIZE, entityType || undefined)
+        ? getClusterSyncLogChanges(
+            logId,
+            PAGE_SIZE,
+            (page - 1) * PAGE_SIZE,
+            entityType || undefined,
+          )
         : Promise.resolve({ items: [], total: 0 }),
     [logId, page, entityType, hasChanges],
   );
@@ -85,7 +108,7 @@ export function SyncLogChangesView({
       {entry && (
         <Group gap="sm">
           <Text size="xs" c="dimmed">
-            {t("cluster.syncLogStatus", { defaultValue: "状态" })}: {" "}
+            {t("cluster.syncLogStatus", { defaultValue: "状态" })}:{" "}
             {entry.success === null
               ? t("cluster.syncLogRunning", { defaultValue: "进行中" })
               : entry.success
@@ -131,14 +154,30 @@ export function SyncLogChangesView({
             </Box>
           ) : (
             <Box style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
-              <Table striped highlightOnHover withTableBorder stickyHeader style={{ minWidth: 720 }}>
+              <Table
+                striped
+                highlightOnHover
+                withTableBorder
+                stickyHeader
+                style={{ minWidth: 720 }}
+              >
                 <Table.Thead>
                   <Table.Tr>
-                    <Table.Th style={{ whiteSpace: "nowrap" }}>{t("cluster.syncLogSeq", { defaultValue: "seq" })}</Table.Th>
-                    <Table.Th style={{ whiteSpace: "nowrap" }}>{t("cluster.syncLogOp", { defaultValue: "操作" })}</Table.Th>
-                    <Table.Th style={{ whiteSpace: "nowrap" }}>{t("cluster.syncLogEntityType", { defaultValue: "实体" })}</Table.Th>
-                    <Table.Th style={{ whiteSpace: "nowrap" }}>{t("cluster.syncLogEntityKey", { defaultValue: "对象" })}</Table.Th>
-                    <Table.Th style={{ whiteSpace: "nowrap" }}>{t("cluster.syncLogTs", { defaultValue: "时间" })}</Table.Th>
+                    <Table.Th style={{ whiteSpace: "nowrap" }}>
+                      {t("cluster.syncLogSeq", { defaultValue: "seq" })}
+                    </Table.Th>
+                    <Table.Th style={{ whiteSpace: "nowrap" }}>
+                      {t("cluster.syncLogOp", { defaultValue: "操作" })}
+                    </Table.Th>
+                    <Table.Th style={{ whiteSpace: "nowrap" }}>
+                      {t("cluster.syncLogEntityType", { defaultValue: "实体" })}
+                    </Table.Th>
+                    <Table.Th style={{ whiteSpace: "nowrap" }}>
+                      {t("cluster.syncLogEntityKey", { defaultValue: "对象" })}
+                    </Table.Th>
+                    <Table.Th style={{ whiteSpace: "nowrap" }}>
+                      {t("cluster.syncLogTs", { defaultValue: "时间" })}
+                    </Table.Th>
                   </Table.Tr>
                 </Table.Thead>
                 <Table.Tbody>
@@ -152,7 +191,9 @@ export function SyncLogChangesView({
                           {ch.entityKey}
                         </Text>
                       </Table.Td>
-                      <Table.Td style={{ whiteSpace: "nowrap" }}>{new Date(ch.ts).toLocaleString()}</Table.Td>
+                      <Table.Td style={{ whiteSpace: "nowrap" }}>
+                        {new Date(ch.ts).toLocaleString()}
+                      </Table.Td>
                     </Table.Tr>
                   ))}
                 </Table.Tbody>

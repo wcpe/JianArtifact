@@ -1,6 +1,7 @@
 // 仓库资产目录树：点目录仅展开；点文件回调选中。文件类型图标多态化。
 // FR-54: 支持 onExpandDir 懒加载回调——目录首次展开时触发。
-import { Group, Loader, ScrollArea, Text, UnstyledButton } from "@mantine/core";
+// FR-103: 支持管理员多选复选框——仅文件行可勾选，选中态由父组件维护。
+import { Checkbox, Group, Loader, ScrollArea, Text, UnstyledButton } from "@mantine/core";
 import {
   IconBrandJavascript,
   IconBrandNpm,
@@ -31,6 +32,12 @@ interface Props {
   defaultExpanded?: boolean;
   /** 文件行右侧显示大小（搜索结果等需要直观信息的场景）。 */
   showSize?: boolean;
+  /** FR-103: 是否渲染多选复选框（仅管理员）。 */
+  selectable?: boolean;
+  /** FR-103: 已勾选的文件路径集合。 */
+  selectedPaths?: Set<string>;
+  /** FR-103: 勾选 / 取消勾选文件行回调。 */
+  onToggleSelect?: (node: AssetTreeNode) => void;
 }
 
 export function RepoAssetTree({
@@ -42,6 +49,9 @@ export function RepoAssetTree({
   maxHeight = 480,
   defaultExpanded = false,
   showSize = false,
+  selectable = false,
+  selectedPaths,
+  onToggleSelect,
 }: Props) {
   const content = (
     <div role="tree">
@@ -56,6 +66,9 @@ export function RepoAssetTree({
           onExpandDir={onExpandDir}
           defaultExpanded={defaultExpanded}
           showSize={showSize}
+          selectable={selectable}
+          selectedPaths={selectedPaths}
+          onToggleSelect={onToggleSelect}
         />
       ))}
     </div>
@@ -82,6 +95,9 @@ function TreeNodeRow({
   onExpandDir,
   defaultExpanded = false,
   showSize = false,
+  selectable = false,
+  selectedPaths,
+  onToggleSelect,
 }: {
   node: AssetTreeNode;
   depth: number;
@@ -91,10 +107,14 @@ function TreeNodeRow({
   onExpandDir?: (node: AssetTreeNode) => void;
   defaultExpanded?: boolean;
   showSize?: boolean;
+  selectable?: boolean;
+  selectedPaths?: Set<string>;
+  onToggleSelect?: (node: AssetTreeNode) => void;
 }) {
   const [open, setOpen] = useState(defaultExpanded);
   const isDir = node.kind === "dir";
   const selected = !isDir && selectedPath === node.path;
+  const checked = selectable && !isDir && selectedPaths?.has(node.path) === true;
   const pad = 8 + depth * 14;
   // FR-54: 目录未加载子节点时 children === undefined
   const isLoading = isDir && open && node.children === undefined;
@@ -126,6 +146,18 @@ function TreeNodeRow({
         }}
       >
         <Group gap={6} wrap="nowrap">
+          {selectable && !isDir ? (
+            // FR-103: 文件行复选框；点击不冒泡到行选中，仅切换勾选态。
+            <Checkbox
+              size="xs"
+              checked={checked}
+              onChange={() => onToggleSelect?.(node)}
+              onClick={(e) => e.stopPropagation()}
+              aria-label={`选择 ${node.name}`}
+            />
+          ) : (
+            <span style={{ width: 14 }} />
+          )}
           {isDir ? (
             open ? (
               <IconChevronDown size={14} />
@@ -173,6 +205,9 @@ function TreeNodeRow({
                 onExpandDir={onExpandDir}
                 defaultExpanded={defaultExpanded}
                 showSize={showSize}
+                selectable={selectable}
+                selectedPaths={selectedPaths}
+                onToggleSelect={onToggleSelect}
               />
             ))}
         </div>

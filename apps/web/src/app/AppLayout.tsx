@@ -321,7 +321,13 @@ export function AppLayout() {
             </Group>
           </Group>
           {/* FR-59: Header 搜索栏 */}
-          <Group gap="sm" wrap="nowrap" style={{ flex: 2, minWidth: 0 }} justify="center" visibleFrom="sm">
+          <Group
+            gap="sm"
+            wrap="nowrap"
+            style={{ flex: 2, minWidth: 0 }}
+            justify="center"
+            visibleFrom="sm"
+          >
             <TextInput
               placeholder={t("search.placeholder", { defaultValue: "搜索制品..." })}
               size="xs"
@@ -349,52 +355,54 @@ export function AppLayout() {
             </Tooltip>
             {user ? (
               <Group gap="sm" wrap="nowrap">
-                <Text size="sm" c="dimmed" truncate visibleFrom="sm" style={{ maxWidth: 160 }}>
-                  {user.username}
-                  {t("nav.userSuffix", { role: roleLabel })}
-                </Text>
-                <Button
-                  variant="subtle"
-                  size="xs"
-                  leftSection={<IconLogout size={16} />}
-                  onClick={handleLogout}
-                  loading={loggingOut}
-                  visibleFrom="sm"
-                >
-                  {t("common.logout")}
-                </Button>
-                <Tooltip label={t("common.logout")} hiddenFrom="sm">
-                  <ActionIcon
-                    variant="subtle"
-                    aria-label={t("common.logout")}
-                    onClick={handleLogout}
-                    loading={loggingOut}
-                  >
-                    <IconLogout size={18} />
-                  </ActionIcon>
-                </Tooltip>
+                {isMobile ? (
+                  <Tooltip label={t("common.logout")}>
+                    <ActionIcon
+                      variant="subtle"
+                      aria-label={t("common.logout")}
+                      onClick={handleLogout}
+                      loading={loggingOut}
+                    >
+                      <IconLogout size={18} />
+                    </ActionIcon>
+                  </Tooltip>
+                ) : (
+                  <>
+                    <Text size="sm" c="dimmed" truncate style={{ maxWidth: 160 }}>
+                      {user.username}
+                      {t("nav.userSuffix", { role: roleLabel })}
+                    </Text>
+                    <Button
+                      variant="subtle"
+                      size="xs"
+                      leftSection={<IconLogout size={16} />}
+                      onClick={handleLogout}
+                      loading={loggingOut}
+                    >
+                      {t("common.logout")}
+                    </Button>
+                  </>
+                )}
               </Group>
-            ) : (
-              <>
-                <Button
+            ) : isMobile ? (
+              <Tooltip label={t("auth.login", { defaultValue: "登录" })}>
+                <ActionIcon
                   variant="light"
-                  size="xs"
-                  leftSection={<IconLogin size={16} />}
+                  aria-label={t("auth.login", { defaultValue: "登录" })}
                   onClick={() => openLogin()}
-                  visibleFrom="sm"
                 >
-                  {t("auth.login", { defaultValue: "登录" })}
-                </Button>
-                <Tooltip label={t("auth.login", { defaultValue: "登录" })} hiddenFrom="sm">
-                  <ActionIcon
-                    variant="light"
-                    aria-label={t("auth.login", { defaultValue: "登录" })}
-                    onClick={() => openLogin()}
-                  >
-                    <IconLogin size={18} />
-                  </ActionIcon>
-                </Tooltip>
-              </>
+                  <IconLogin size={18} />
+                </ActionIcon>
+              </Tooltip>
+            ) : (
+              <Button
+                variant="light"
+                size="xs"
+                leftSection={<IconLogin size={16} />}
+                onClick={() => openLogin()}
+              >
+                {t("auth.login", { defaultValue: "登录" })}
+              </Button>
             )}
           </Group>
         </Group>

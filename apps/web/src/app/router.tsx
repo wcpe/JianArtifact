@@ -23,7 +23,9 @@ const ClusterPage = lazy(() =>
   import("../pages/ClusterPage").then((m) => ({ default: m.ClusterPage })),
 );
 const ClusterSyncLogDetailPage = lazy(() =>
-  import("../pages/ClusterSyncLogDetailPage").then((m) => ({ default: m.ClusterSyncLogDetailPage })),
+  import("../pages/ClusterSyncLogDetailPage").then((m) => ({
+    default: m.ClusterSyncLogDetailPage,
+  })),
 );
 const AuditLogPage = lazy(() =>
   import("../pages/AuditLogPage").then((m) => ({ default: m.AuditLogPage })),

@@ -255,9 +255,27 @@ export function ClusterPage() {
         </Tabs.Panel>
 
         {/* 同步历史 tab（FR-88）：完整记录 + 进度 + 详细信息可视化。 */}
-        <Tabs.Panel value="history" pt="md" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-          <Card withBorder radius="md" padding={density.cardPadding} style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-            <Stack gap="sm" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+        <Tabs.Panel
+          value="history"
+          pt="md"
+          style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
+        >
+          <Card
+            withBorder
+            radius="md"
+            padding={density.cardPadding}
+            style={{
+              flex: 1,
+              minHeight: 0,
+              display: "flex",
+              flexDirection: "column",
+              overflow: "hidden",
+            }}
+          >
+            <Stack
+              gap="sm"
+              style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
+            >
               <Text size="xs" c="dimmed">
                 {t("cluster.syncHistoryDesc")}
               </Text>
@@ -272,28 +290,63 @@ export function ClusterPage() {
                     </Box>
                   ) : (
                     <Box style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
-                      <Table striped highlightOnHover withTableBorder stickyHeader style={{ minWidth: 1280 }}>
+                      <Table
+                        striped
+                        highlightOnHover
+                        withTableBorder
+                        stickyHeader
+                        style={{ minWidth: 1280 }}
+                      >
                         <Table.Thead>
                           <Table.Tr>
-                            <Table.Th style={{ whiteSpace: "nowrap" }}>{t("cluster.syncLogTime")}</Table.Th>
-                            <Table.Th style={{ whiteSpace: "nowrap" }}>{t("cluster.syncLogPeer")}</Table.Th>
-                            <Table.Th style={{ whiteSpace: "nowrap" }}>{t("cluster.syncLogStatus")}</Table.Th>
-                            <Table.Th style={{ whiteSpace: "nowrap" }}>{t("cluster.syncLogEntities")}</Table.Th>
-                            <Table.Th style={{ whiteSpace: "nowrap" }}>{t("cluster.syncLogChanges")}</Table.Th>
-                            <Table.Th style={{ whiteSpace: "nowrap" }}>{t("cluster.syncLogApplied")}</Table.Th>
-                            <Table.Th style={{ whiteSpace: "nowrap" }}>{t("cluster.syncLogFailed")}</Table.Th>
-                            <Table.Th style={{ whiteSpace: "nowrap" }}>{t("cluster.syncLogBlobs")}</Table.Th>
-                            <Table.Th style={{ whiteSpace: "nowrap" }}>{t("cluster.syncLogWatermark")}</Table.Th>
-                            <Table.Th style={{ whiteSpace: "nowrap" }}>{t("cluster.syncLogDetail", { defaultValue: "详情" })}</Table.Th>
-                            <Table.Th style={{ whiteSpace: "nowrap" }}>{t("cluster.lastError")}</Table.Th>
+                            <Table.Th style={{ whiteSpace: "nowrap" }}>
+                              {t("cluster.syncLogTime")}
+                            </Table.Th>
+                            <Table.Th style={{ whiteSpace: "nowrap" }}>
+                              {t("cluster.syncLogPeer")}
+                            </Table.Th>
+                            <Table.Th style={{ whiteSpace: "nowrap" }}>
+                              {t("cluster.syncLogStatus")}
+                            </Table.Th>
+                            <Table.Th style={{ whiteSpace: "nowrap" }}>
+                              {t("cluster.syncLogEntities")}
+                            </Table.Th>
+                            <Table.Th style={{ whiteSpace: "nowrap" }}>
+                              {t("cluster.syncLogChanges")}
+                            </Table.Th>
+                            <Table.Th style={{ whiteSpace: "nowrap" }}>
+                              {t("cluster.syncLogApplied")}
+                            </Table.Th>
+                            <Table.Th style={{ whiteSpace: "nowrap" }}>
+                              {t("cluster.syncLogFailed")}
+                            </Table.Th>
+                            <Table.Th style={{ whiteSpace: "nowrap" }}>
+                              {t("cluster.syncLogBlobs")}
+                            </Table.Th>
+                            <Table.Th style={{ whiteSpace: "nowrap" }}>
+                              {t("cluster.syncLogWatermark")}
+                            </Table.Th>
+                            <Table.Th style={{ whiteSpace: "nowrap" }}>
+                              {t("cluster.syncLogDetail", { defaultValue: "详情" })}
+                            </Table.Th>
+                            <Table.Th style={{ whiteSpace: "nowrap" }}>
+                              {t("cluster.lastError")}
+                            </Table.Th>
                           </Table.Tr>
                         </Table.Thead>
                         <Table.Tbody>
                           {list.items.map((e) => (
                             <Table.Tr key={e.id}>
-                              <Table.Td style={{ whiteSpace: "nowrap" }}>{new Date(e.startedAt).toLocaleString()}</Table.Td>
+                              <Table.Td style={{ whiteSpace: "nowrap" }}>
+                                {new Date(e.startedAt).toLocaleString()}
+                              </Table.Td>
                               <Table.Td>
-                                <Text size="xs" title={e.peerUrl} truncate="end" style={{ maxWidth: 220 }}>
+                                <Text
+                                  size="xs"
+                                  title={e.peerUrl}
+                                  truncate="end"
+                                  style={{ maxWidth: 220 }}
+                                >
                                   {e.peerUrl}
                                 </Text>
                               </Table.Td>
@@ -307,7 +360,9 @@ export function ClusterPage() {
                               <Table.Td>{e.applied}</Table.Td>
                               <Table.Td>{e.failed}</Table.Td>
                               <Table.Td>{e.blobs}</Table.Td>
-                              <Table.Td style={{ whiteSpace: "nowrap" }}>{`${e.fromSeq} → ${e.toSeq}`}</Table.Td>
+                              <Table.Td
+                                style={{ whiteSpace: "nowrap" }}
+                              >{`${e.fromSeq} → ${e.toSeq}`}</Table.Td>
                               <Table.Td>
                                 {/* FR-98：详情以模态框弹出（该次同步的具体变更），可正常关闭返回 */}
                                 <Anchor
@@ -362,7 +417,9 @@ export function ClusterPage() {
         title={t("cluster.syncLogDetailTitle", { defaultValue: "同步历史详情" })}
         size="xl"
         centered
-        styles={{ body: { height: "70vh", overflow: "hidden", display: "flex", flexDirection: "column" } }}
+        styles={{
+          body: { height: "70vh", overflow: "hidden", display: "flex", flexDirection: "column" },
+        }}
       >
         {detailLog !== null && (
           <SyncLogChangesView logId={detailLog.id} hasChanges={detailLog.changes > 0} />

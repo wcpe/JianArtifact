@@ -17,6 +17,9 @@ export type AclList = Schemas["AclList"];
 export type LoginResponse = Schemas["LoginResponse"];
 export type AssetSummary = Schemas["AssetSummary"];
 export type AssetList = Schemas["AssetList"];
+export type BatchDeleteAssetsRequest = Schemas["BatchDeleteAssetsRequest"];
+export type BatchDeleteAssetFailure = Schemas["BatchDeleteAssetFailure"];
+export type BatchDeleteAssetsResponse = Schemas["BatchDeleteAssetsResponse"];
 export type UsageSnippet = Schemas["UsageSnippet"];
 export type UsageInfo = Schemas["UsageInfo"];
 export type MigrationTask = Schemas["MigrationTask"];
@@ -34,3 +37,25 @@ export type RepoFormat = Repository["format"];
 export type RepoType = Repository["type"];
 export type RepoVisibility = Repository["visibility"];
 export type AclAction = AclEntry["action"];
+
+/** 复制应用日志条目。 */
+export interface ReplicationApplyLog {
+  sourceNode: string;
+  sourceSeq: number;
+  peerUrl: string;
+  entityType: string;
+  entityKey: string;
+  op: string;
+  result: string;
+  detail: string;
+  lastError?: string;
+  lastErrorAt?: string;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  attemptCount: number;
+}
+
+export interface ReplicationApplyLogList {
+  items: ReplicationApplyLog[];
+  total: number;
+}

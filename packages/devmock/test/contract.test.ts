@@ -7,11 +7,13 @@ import { describe, expect, it } from "vitest";
 import {
   mockAclList,
   mockAssetList,
+  mockBatchDeleteAssets,
   mockHealthz,
   mockLoginResponse,
   mockReadyz,
   mockRepository,
   mockRepositoryList,
+  mockReplicationApplyLogList,
   mockStatus,
   mockTokenCreated,
   mockTokenList,
@@ -69,6 +71,19 @@ describe("devmock ↔ OpenAPI 契约一致性", () => {
   it("制品浏览 / 使用片段响应满足契约", () => {
     expectValid("AssetList", mockAssetList());
     expectValid("UsageInfo", mockUsageInfo());
+  });
+
+  it("批量删除响应满足契约", () => {
+    expectValid("BatchDeleteAssetsResponse", mockBatchDeleteAssets());
+    expectValid("BatchDeleteAssetsRequest", { paths: ["a/1.txt", "a/2.txt"] });
+  });
+
+  it("复制接收审计响应满足契约并接受真实状态枚举", () => {
+    expectValid("ReplicationApplyLogList", mockReplicationApplyLogList());
+    const validate = ajv.compile(schemaFor("ReplicationApplyLog"));
+    expect(
+      validate({ ...mockReplicationApplyLogList().items[0], result: "not-a-real-result" }),
+    ).toBe(false);
   });
 
   it("契约漂移可被检出：缺 required 字段或非法枚举的响应校验失败", () => {

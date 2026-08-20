@@ -3,6 +3,7 @@
 // 保证 web 开发态脱离后端可跑、vitest 集成测试与真实 fetch 链路同源。
 import { http, HttpResponse } from "msw";
 
+import { mockAuditLogList, mockReplicationApplyLogList } from "./handlers";
 import { MOCK_TOKEN, store } from "./store";
 import type { AclEntry, MigrationPlan, MigrationTask, Repository, User } from "./store";
 
@@ -10,10 +11,40 @@ function err(code: string, message: string, status: number) {
   return HttpResponse.json({ error: { code, message } }, { status });
 }
 
-/** 受保护端点统一鉴权：无 `Authorization: Bearer` 即 401。 */
-function unauthorized(request: Request) {
+const MOCK_USER_TOKEN = "mock.jwt.token:user";
+
+function bearerToken(request: Request) {
   const header = request.headers.get("Authorization") ?? "";
-  return header.startsWith("Bearer ") ? null : err("unauthorized", "未认证", 401);
+  return header.startsWith("Bearer ") ? header.slice("Bearer ".length) : "";
+}
+
+/** 受保护端点统一鉴权：仅接受 mock 管理员或普通用户令牌。 */
+function unauthorized(request: Request) {
+  const token = bearerToken(request);
+  return token === MOCK_TOKEN || token === MOCK_USER_TOKEN
+    ? null
+    : err("unauthorized", "未认证", 401);
+}
+
+/** 管理员端点鉴权：未知令牌未认证，普通用户令牌无权限。 */
+function adminUnauthorized(request: Request) {
+  const token = bearerToken(request);
+  if (token !== MOCK_TOKEN && token !== MOCK_USER_TOKEN) {
+    return err("unauthorized", "未认证", 401);
+  }
+  return token === MOCK_TOKEN ? null : err("forbidden", "需要管理员权限", 403);
+}
+
+function integerQuery(url: URL, key: string): { value?: number; invalid: boolean } {
+  const raw = url.searchParams.get(key);
+  if (raw === null) {
+    return { invalid: false };
+  }
+  if (!/^[+-]?\d+$/.test(raw)) {
+    return { invalid: true };
+  }
+  const value = Number(raw);
+  return { value, invalid: !Number.isInteger(value) };
 }
 
 /** 集群状态 mock（FR-86，admin 端点）。 */
@@ -259,8 +290,8 @@ export const handlers = [
     const page = intParam(url, "page", 1);
     const pageSize = intParam(url, "page_size", 20);
     if (unauthorized(request)) {
-      if (!store.anonymousAccess()) {
-        return err("unauthorized", "匿名访问已关闭", 401);
+      if (request.headers.has("Authorization") || !store.anonymousAccess()) {
+        return err("unauthorized", "未认证", 401);
       }
       return HttpResponse.json(store.listAnonymousRepositories(page, pageSize));
     }
@@ -339,6 +370,83 @@ export const handlers = [
     const offset = Number(url.searchParams.get("offset") ?? 0);
     const items = mockSyncLogs.slice(offset, offset + limit);
     return HttpResponse.json({ items, total: mockSyncLogs.length });
+  }),
+
+  // 复制接收审计记录（管理员端点，支持筛选与分页）。
+  http.get("*/api/v1/replication-apply-logs", ({ request }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const url = new URL(request.url);
+    const limitParam = integerQuery(url, "limit");
+    const offsetParam = integerQuery(url, "offset");
+    const sourceSeqParam = integerQuery(url, "sourceSeq");
+    if (limitParam.invalid || offsetParam.invalid || sourceSeqParam.invalid) {
+      return err("bad_request", "limit、offset、sourceSeq 须为整数", 400);
+    }
+    const sourceSeq = sourceSeqParam.value;
+    if (sourceSeq !== undefined && sourceSeq < 0) {
+      return err("bad_request", "sourceSeq 须为非负整数", 400);
+    }
+    const { items } = mockReplicationApplyLogList();
+    const sourceNode = url.searchParams.get("sourceNode");
+    const peerURL = url.searchParams.get("peerURL");
+    const entityType = url.searchParams.get("entityType");
+    const entityKey = url.searchParams.get("entityKey");
+    const op = url.searchParams.get("op");
+    const result = url.searchParams.get("result");
+    const filtered = items.filter(
+      (item) =>
+        (!sourceNode || item.sourceNode === sourceNode) &&
+        (sourceSeq === undefined || item.sourceSeq === sourceSeq) &&
+        (!peerURL || item.peerUrl === peerURL) &&
+        (!entityType || item.entityType === entityType) &&
+        (!entityKey || item.entityKey === entityKey) &&
+        (!op || item.op === op) &&
+        (!result || item.result === result),
+    );
+    const requestedLimit = limitParam.value ?? 50;
+    const limit = requestedLimit > 0 && requestedLimit <= 200 ? requestedLimit : 50;
+    const requestedOffset = offsetParam.value ?? 0;
+    const offset = requestedOffset >= 0 ? requestedOffset : 0;
+    return HttpResponse.json({
+      items: filtered.slice(offset, offset + limit),
+      total: filtered.length,
+    });
+  }),
+
+  // FR-38：管理审计日志（非 OpenAPI 端点，仅管理员可读）。
+  http.get("*/api/v1/audit-logs", ({ request }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const url = new URL(request.url);
+    const limitParam = integerQuery(url, "limit");
+    const offsetParam = integerQuery(url, "offset");
+    if (limitParam.invalid || offsetParam.invalid) {
+      return err("bad_request", "limit、offset 须为整数", 400);
+    }
+    const { items } = mockAuditLogList();
+    const from = url.searchParams.get("from");
+    const to = url.searchParams.get("to");
+    const filtered = items.filter(
+      (item) =>
+        (!url.searchParams.get("actor") || item.actor === url.searchParams.get("actor")) &&
+        (!url.searchParams.get("action") || item.action === url.searchParams.get("action")) &&
+        (!url.searchParams.get("repo") || item.repo === url.searchParams.get("repo")) &&
+        (!from || item.ts >= from) &&
+        (!to || item.ts <= to),
+    );
+    const requestedLimit = limitParam.value ?? 50;
+    const limit = requestedLimit > 0 && requestedLimit <= 200 ? requestedLimit : 50;
+    const requestedOffset = offsetParam.value ?? 0;
+    const offset = requestedOffset >= 0 ? requestedOffset : 0;
+    return HttpResponse.json({
+      items: filtered.slice(offset, offset + limit),
+      total: filtered.length,
+    });
   }),
 
   http.post("*/api/v1/repositories", async ({ request }) => {
@@ -424,6 +532,26 @@ export const handlers = [
       intParam(url, "page", 1),
       intParam(url, "page_size", 20),
     );
+    return result ? HttpResponse.json(result) : err("not_found", "仓库不存在", 404);
+  }),
+
+  // FR-103：批量删除（仅管理员；逐条尽力，部分失败以 failed 明细返回）。
+  http.post("*/api/v1/repositories/:name/assets/batch-delete", async ({ request, params }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const body = (await request.json().catch(() => ({}))) as { paths?: string[] };
+    if (!Array.isArray(body.paths) || body.paths.length === 0) {
+      return err("bad_request", "paths 不能为空", 400);
+    }
+    if (body.paths.length > 500) {
+      return err("bad_request", "paths 单次最多 500 条", 400);
+    }
+    if (body.paths.some((p) => typeof p !== "string" || p === "")) {
+      return err("bad_request", "paths 中存在空路径", 400);
+    }
+    const result = store.batchDeleteAssets(String(params.name), body.paths);
     return result ? HttpResponse.json(result) : err("not_found", "仓库不存在", 404);
   }),
 

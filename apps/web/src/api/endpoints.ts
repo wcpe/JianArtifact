@@ -1,10 +1,11 @@
 // 端点封装：按 api/openapi.yaml 的 0.2.0 管理面路径提供 typed 调用。
 // 页面与数据钩子仅依赖此模块，不直接拼 URL。
-import { postProtocolForm, putProtocolAsset, request } from "./client";
+import { deleteProtocolAsset, postProtocolForm, putProtocolAsset, request } from "./client";
 import type {
   AclEntry,
   AclList,
   AssetList,
+  BatchDeleteAssetsResponse,
   LoginResponse,
   MigrationConflictPolicy,
   MigrationDiscoverResponse,
@@ -15,6 +16,7 @@ import type {
   MigrationTaskList,
   Repository,
   RepositoryList,
+  ReplicationApplyLogList,
   RepoFormat,
   RepoType,
   RepoVisibility,
@@ -203,6 +205,31 @@ export function uploadRawAsset(
     .join("/");
   const url = `/repository/${encodeURIComponent(repo)}/${enc}`;
   return putProtocolAsset(url, file, file.type || "application/octet-stream");
+}
+
+/** FR-102: 协议层删除制品（DELETE /repository/{name}/{path}；元数据删除，blob 内容保留）。 */
+export function deleteAsset(repo: string, path: string): Promise<void> {
+  const enc = path
+    .split("/")
+    .filter(Boolean)
+    .map((s) => encodeURIComponent(s))
+    .join("/");
+  const url = `/repository/${encodeURIComponent(repo)}/${enc}`;
+  return deleteProtocolAsset(url);
+}
+
+/** FR-103: 管理端批量删除制品（仅管理员；逐条尽力，返回成功数与失败明细）。 */
+export function batchDeleteAssets(
+  repo: string,
+  paths: string[],
+): Promise<BatchDeleteAssetsResponse> {
+  return request<BatchDeleteAssetsResponse>(
+    `/repositories/${encodeURIComponent(repo)}/assets/batch-delete`,
+    {
+      method: "POST",
+      body: { paths },
+    },
+  );
 }
 
 /** FR-73: Maven 网页上传表单字段。 */
@@ -589,6 +616,27 @@ export function getAuditLogs(q: AuditLogQuery = {}): Promise<AuditLogList> {
   params.set("limit", String(q.limit ?? 50));
   params.set("offset", String(q.offset ?? 0));
   return request<AuditLogList>(`/audit-logs?${params.toString()}`);
+}
+
+export interface ReplicationApplyLogQuery {
+  result?: string;
+  entityType?: string;
+  sourceNode?: string;
+  limit?: number;
+  offset?: number;
+}
+
+/** 复制应用日志（分页及结果、实体、来源节点筛选）。 */
+export function getReplicationApplyLogs(
+  q: ReplicationApplyLogQuery = {},
+): Promise<ReplicationApplyLogList> {
+  const params = new URLSearchParams();
+  if (q.result) params.set("result", q.result);
+  if (q.entityType) params.set("entityType", q.entityType);
+  if (q.sourceNode) params.set("sourceNode", q.sourceNode);
+  params.set("limit", String(q.limit ?? 50));
+  params.set("offset", String(q.offset ?? 0));
+  return request<ReplicationApplyLogList>(`/replication-apply-logs?${params.toString()}`);
 }
 
 // ---- FR-54: Tree API ----

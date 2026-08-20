@@ -1,6 +1,6 @@
 // 仓库详情集成测试：目录树逐级展开点选文件后渲染详情/使用说明；匿名访问 private 仓库报未认证。
 // FR-74：整页固定布局（面板内滚）、未登录仅页眉一个登录入口、客户端发布提示收纳为紧凑小字。
-import { screen } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { Route, Routes } from "react-router-dom";
@@ -62,6 +62,24 @@ describe("仓库详情", () => {
     const shell = screen.getByTestId("repo-detail-shell");
     expect(shell.style.overflow).toBe("hidden");
     expect(shell.style.height).toContain("100vh");
+  });
+
+  it("拖拽分割条调整树宽并持久化到 localStorage", async () => {
+    localStorage.setItem("jianartifact.treeWidth", JSON.stringify(420));
+    renderDetail("maven-releases", true);
+
+    const splitter = await screen.findByRole("separator", { name: "调整文件树宽度" });
+    const treePanel = splitter.previousElementSibling as HTMLElement;
+    expect(treePanel.style.width).toBe("420px");
+
+    fireEvent.mouseDown(splitter, { clientX: 500 });
+    fireEvent.mouseMove(window, { clientX: 580 });
+    fireEvent.mouseUp(window);
+
+    await waitFor(() => expect(treePanel.style.width).toBe("500px"));
+    await waitFor(() =>
+      expect(JSON.parse(localStorage.getItem("jianartifact.treeWidth") ?? "0")).toBe(500),
+    );
   });
 
   it("group 仓库配置 tab 可编辑成员仓库（members）", async () => {
