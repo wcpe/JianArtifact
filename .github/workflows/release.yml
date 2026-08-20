@@ -44,7 +44,7 @@ jobs:
       - name: 安装 Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: apps/server/go.mod
+          go-version: "1.26.6"
           cache-dependency-path: apps/server/go.sum
 
       - name: 安装 Go 质量工具
@@ -131,7 +131,7 @@ jobs:
       - name: 安装 Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: apps/server/go.mod
+          go-version: "1.26.6"
           cache-dependency-path: apps/server/go.sum
 
       - name: 构建多平台二进制
