@@ -36,13 +36,13 @@ func (h *Handlers) GetAuditLogs(c *gin.Context) {
 		offset = 0
 	}
 	f := repository.AuditFilter{
-		Actor:    c.Query("actor"),
-		Action:   c.Query("action"),
-		Repo:     c.Query("repo"),
-		From:     c.Query("from"),
-		To:       c.Query("to"),
-		Limit:    limit,
-		Offset:   offset,
+		Actor:  c.Query("actor"),
+		Action: c.Query("action"),
+		Repo:   c.Query("repo"),
+		From:   c.Query("from"),
+		To:     c.Query("to"),
+		Limit:  limit,
+		Offset: offset,
 	}
 	items, err := h.auditLogs.List(f)
 	if err != nil {

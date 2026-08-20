@@ -26,16 +26,18 @@ type Deps struct {
 	Users                   *domain.UserService
 	Tokens                  *domain.TokenService
 	Repos                   *domain.RepositoryService
+	Assets                  *domain.AssetService // FR-103：制品批量删除
 	Migrations              *domain.MigrationService
 	Settings                *domain.SettingService
-	Replication             *domain.ReplicationService   // FR-84：节点间复制协议端点
-	ReplicationSched        *domain.ReplicationScheduler // FR-88：手动同步触发
-	SyncLogs                *repository.SyncLogRepo      // FR-88：同步历史日志
-	AuditLogs               *repository.AuditLogRepo     // FR-38：审计日志
-	ClusterPeerURL          string                       // FR-86：复制对端基址（来自 JIAN_SYNC_PEER_URL）
-	ClusterTokenSet         bool                         // FR-86：同步令牌是否已配置（不暴露明文）
-	PublicURL               string                       // FR-87：对外基础 URL（CDN 域名，隐藏源站 IP）
-	OnUpstreamTimeoutChange func(time.Duration)          // FR-89：回源超时设置变更回调（wiring 注入 upstream.Client.SetTimeout；nil 不触发）
+	Replication             *domain.ReplicationService          // FR-84：节点间复制协议端点
+	ReplicationSched        *domain.ReplicationScheduler        // FR-88：手动同步触发
+	SyncLogs                *repository.SyncLogRepo             // FR-88：同步历史日志
+	ReplicationApplyLogs    *repository.ReplicationApplyLogRepo // 复制接收审计
+	AuditLogs               *repository.AuditLogRepo            // FR-38：审计日志
+	ClusterPeerURL          string                              // FR-86：复制对端基址（来自 JIAN_SYNC_PEER_URL）
+	ClusterTokenSet         bool                                // FR-86：同步令牌是否已配置（不暴露明文）
+	PublicURL               string                              // FR-87：对外基础 URL（CDN 域名，隐藏源站 IP）
+	OnUpstreamTimeoutChange func(time.Duration)                 // FR-89：回源超时设置变更回调（wiring 注入 upstream.Client.SetTimeout；nil 不触发）
 }
 
 // Handlers 实现 ServerInterface 的全部端点。
@@ -47,11 +49,13 @@ type Handlers struct {
 	users                   *domain.UserService
 	tokens                  *domain.TokenService
 	repos                   *domain.RepositoryService
+	assets                  *domain.AssetService
 	migrations              *domain.MigrationService
 	settings                *domain.SettingService
 	replication             *domain.ReplicationService
 	replicationSched        *domain.ReplicationScheduler
 	syncLogs                *repository.SyncLogRepo
+	replicationApplyLogs    *repository.ReplicationApplyLogRepo
 	auditLogs               *repository.AuditLogRepo // FR-38：审计日志
 	clusterPeerURL          string
 	clusterTokenSet         bool
@@ -69,11 +73,13 @@ func NewHandlers(d Deps) *Handlers {
 		users:                   d.Users,
 		tokens:                  d.Tokens,
 		repos:                   d.Repos,
+		assets:                  d.Assets,
 		migrations:              d.Migrations,
 		settings:                d.Settings,
 		replication:             d.Replication,
 		replicationSched:        d.ReplicationSched,
 		syncLogs:                d.SyncLogs,
+		replicationApplyLogs:    d.ReplicationApplyLogs,
 		auditLogs:               d.AuditLogs,
 		clusterPeerURL:          d.ClusterPeerURL,
 		clusterTokenSet:         d.ClusterTokenSet,

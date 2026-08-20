@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -113,6 +114,49 @@ func TestReplicationCmdNoPeer(t *testing.T) {
 	// 不设置 JIAN_SYNC_PEER_URL。
 	if err := replicationCmd([]string{"status"}); err != nil {
 		t.Errorf("未配置对端时 status 应正常提示而非报错：%v", err)
+	}
+}
+
+// TestOpenServicesAppliesPersistedSettings 启动装配应优先应用持久化设置：
+// 回源超时覆盖环境默认，public URL 显式清空后重启仍保持清空。
+func TestOpenServicesAppliesPersistedSettings(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(config.EnvDataDir, dir)
+	t.Setenv(config.EnvJWTSecret, "settings-startup-test-secret-32bytes!")
+	t.Setenv(config.EnvUpstreamTimeout, "30")
+	t.Setenv(config.EnvPublicURL, "https://env.example")
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("加载配置：%v", err)
+	}
+	first, err := openServices(cfg)
+	if err != nil {
+		t.Fatalf("首次装配服务：%v", err)
+	}
+	if err := first.settingSvc.SetUpstreamTimeout(1); err != nil {
+		t.Fatalf("持久化回源超时：%v", err)
+	}
+	if err := first.settingSvc.SetPublicURL(""); err != nil {
+		t.Fatalf("清空 public URL：%v", err)
+	}
+	if err := first.db.Close(); err != nil {
+		t.Fatalf("关闭首次数据库：%v", err)
+	}
+
+	second, err := openServices(cfg)
+	if err != nil {
+		t.Fatalf("再次装配服务：%v", err)
+	}
+	t.Cleanup(func() { _ = second.db.Close() })
+	if got := second.upstreamClient.Timeout(); got != time.Second {
+		t.Errorf("启动后回源超时 = %s，期望 1s", got)
+	}
+	if got := second.settingSvc.PublicURL(); got != "" {
+		t.Errorf("显式清空的 public URL 重启后应保持空串，得 %q", got)
+	}
+	if second.publicURL != "" {
+		t.Errorf("handler 静态 public URL 应为空以允许请求 Host 回退，得 %q", second.publicURL)
 	}
 }
 

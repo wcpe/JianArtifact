@@ -26,13 +26,13 @@ func NewAuditLogRepo(db *persistence.DB) *AuditLogRepo { return &AuditLogRepo{db
 
 // AuditFilter 是审计日志查询筛选（FR-38）：全可选，空值不参与过滤。
 type AuditFilter struct {
-	Actor    string // 操作者（精确）
-	Action   string // 操作类型（精确，如 asset.put）
-	Repo     string // 关联仓库（精确）
-	From     string // 起始时间（RFC3339Nano，含）
-	To       string // 结束时间（RFC3339Nano，含）
-	Limit    int    // 分页上限（≤0 默认 50，上限 200）
-	Offset   int    // 分页偏移
+	Actor  string // 操作者（精确）
+	Action string // 操作类型（精确，如 asset.put）
+	Repo   string // 关联仓库（精确）
+	From   string // 起始时间（RFC3339Nano，含）
+	To     string // 结束时间（RFC3339Nano，含）
+	Limit  int    // 分页上限（≤0 默认 50，上限 200）
+	Offset int    // 分页偏移
 }
 
 // Insert 记录一条审计日志；记录失败不阻断业务写（审计尽力而为，见 FR-38）。

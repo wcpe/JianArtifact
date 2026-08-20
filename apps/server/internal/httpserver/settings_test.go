@@ -116,6 +116,28 @@ func TestSettingsEndpoints(t *testing.T) {
 		t.Errorf("写后读回不符：%+v", reread)
 	}
 
+	// 混合请求中任一字段非法时，全部设置保持不变，运行时回调也不得提前触发。
+	timeoutUpdated = nil
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/settings",
+		strings.NewReader(`{"anonymousAccess":true,"publicUrl":"https://partial.example","upstreamTimeout":60,"syncInterval":0}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Test-Role", "admin")
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("含非法字段的 PUT 应 400，得 %d", rec.Code)
+	}
+	if anonymous, err := settingSvc.AnonymousAccessEnabled(); err != nil || anonymous {
+		t.Errorf("非法 PUT 后匿名开关不应变化，值=%v err=%v", anonymous, err)
+	}
+	if settingSvc.PublicURL() != "https://cdn.example" || settingSvc.UpstreamTimeoutSecs() != 45 || settingSvc.SyncIntervalSecs() != 10 {
+		t.Errorf("非法 PUT 后设置不应部分写入：URL=%q timeout=%d interval=%d",
+			settingSvc.PublicURL(), settingSvc.UpstreamTimeoutSecs(), settingSvc.SyncIntervalSecs())
+	}
+	if timeoutUpdated != nil {
+		t.Errorf("非法 PUT 不应触发回源超时回调，得 %v", *timeoutUpdated)
+	}
+
 	// 非法值 → 400：超时越界、间隔越界、非 http URL。
 	for _, body := range []string{
 		`{"upstreamTimeout":0}`,
@@ -216,5 +238,17 @@ func TestSettingsPublicURLDynamicEffect(t *testing.T) {
 	}
 	if !strings.Contains(usage.Snippets[0].Code, "https://cdn.example") {
 		t.Errorf("写 publicUrl 后 usage 应使用新值，得：%s", usage.Snippets[0].Code)
+	}
+
+	// 清空 publicUrl 后必须回退当前请求 Host，不能继续沿用旧配置。
+	if code := e.do(t, http.MethodPut, "/api/v1/settings", adminToken,
+		map[string]any{"publicUrl": ""}, nil); code != http.StatusOK {
+		t.Fatalf("清空 publicUrl 状态码 = %d，期望 200", code)
+	}
+	if code := e.do(t, http.MethodGet, "/api/v1/repositories/raw-pub/usage", adminToken, nil, &usage); code != http.StatusOK {
+		t.Fatalf("清空后 usage 状态码 = %d，期望 200", code)
+	}
+	if !strings.Contains(usage.Snippets[0].Code, "http://example.com") {
+		t.Errorf("清空 publicUrl 后 usage 应回退请求 Host，得：%s", usage.Snippets[0].Code)
 	}
 }

@@ -127,6 +127,7 @@ func (h *Handlers) UpdateRepository(c *gin.Context, name RepoNameParam) {
 		writeDomainErr(c, err)
 		return
 	}
+	h.AuditLog(c, "repo.update", "repository", name, name, "", "ok")
 	c.JSON(http.StatusOK, toAPIRepository(repo, nil))
 }
 

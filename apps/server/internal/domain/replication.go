@@ -27,6 +27,14 @@ const (
 
 	OpPut    = "put"
 	OpDelete = "delete"
+
+	ApplyResultApplied             = "applied"
+	ApplyResultMetadataPendingBlob = "metadata_applied_pending_blob"
+	ApplyResultLWWSkipped          = "lww_skipped"
+	ApplyResultPendingParent       = "pending_parent"
+	ApplyResultBlobFailed          = "blob_failed"
+	ApplyResultSkippedPermanent    = "skipped_permanent"
+	ApplyResultFailed              = "failed"
 )
 
 // 自然键前缀（跨节点一致，不依赖 SQLite 数值 ID）。
@@ -553,15 +561,54 @@ func (s *ReplicationService) CountChangeRange(from, to int64, entityType string)
 	return s.repl.CountRange(from, to, entityType)
 }
 
-// Apply 把一条远端变更应用到本地业务表（LWW 裁决 + tombstone 识别）。
-// LWW：本地对该实体已有更晚写入（ts,node_id 更大）则跳过；否则应用。
-// 应用成功后不落本地 repl_change（复制协议按 seq 顺序应用保证 tombstone
-// 不被乱序覆盖；本地 seq 只反映本地自身的写，避免对端回声）。
-func (s *ReplicationService) Apply(ch repository.Change) error {
-	last, err := s.repl.LastChangeOf(ch.EntityType, ch.EntityKey)
+// ApplyOutcome 是一条远端变更的本地应用结果。
+// ReplicationService 只负责业务应用与详细结果，不持有对端地址，也不写接收审计。
+type ApplyOutcome struct {
+	Result   string
+	Detail   string
+	BlobHash string
+	Err      error
+}
+
+// ApplyOutcome 应用一条远端变更并返回可供接收方审计的详细结果。
+// 成功应用后只更新实体版本状态，不写 repl_change，避免对端回声。
+func (s *ReplicationService) ApplyOutcome(ch repository.Change) ApplyOutcome {
+	last, err := s.repl.LastVersionOf(ch.EntityType, ch.EntityKey)
 	if err == nil && newer(last.TS, last.NodeID, ch.TS, ch.NodeID) {
-		return nil // 本地已有更新写入，后写覆盖（LWW）
+		return ApplyOutcome{Result: ApplyResultLWWSkipped, Detail: "本地已有更新版本"}
 	}
+	if err != nil && !errors.Is(err, repository.ErrNotFound) {
+		return ApplyOutcome{Result: ApplyResultFailed, Detail: err.Error(), Err: err}
+	}
+	if err := s.applyEntity(ch); err != nil {
+		return ApplyOutcome{Result: applyErrorResult(err), Detail: err.Error(), Err: err}
+	}
+	if err := s.repl.UpsertVersion(ch.EntityType, ch.EntityKey, ch.NodeID, ch.TS); err != nil {
+		return ApplyOutcome{Result: ApplyResultFailed, Detail: err.Error(), Err: err}
+	}
+	out := ApplyOutcome{Result: ApplyResultApplied, Detail: "元数据已应用"}
+	if ch.EntityType == EntityAsset && ch.Op == OpPut {
+		var d AssetChangeData
+		if err := json.Unmarshal([]byte(ch.Data), &d); err == nil {
+			out.BlobHash = d.BlobHash
+		}
+	}
+	return out
+}
+
+// Apply 保留原有错误返回接口，供本地领域测试与兼容调用方使用。
+func (s *ReplicationService) Apply(ch repository.Change) error {
+	return s.ApplyOutcome(ch).Err
+}
+
+func applyErrorResult(err error) string {
+	if errors.Is(err, repository.ErrNotFound) {
+		return ApplyResultPendingParent
+	}
+	return ApplyResultFailed
+}
+
+func (s *ReplicationService) applyEntity(ch repository.Change) error {
 	switch ch.EntityType {
 	case EntityAsset:
 		return s.applyAsset(ch)
@@ -720,8 +767,8 @@ func (s *ReplicationService) applyToken(ch repository.Change) error {
 
 func (s *ReplicationService) applySetting(ch repository.Change) error {
 	key := strings.TrimPrefix(ch.EntityKey, keyPrefixSetting)
-	// 集群配置键（repl:*）为节点本地设置，绝不应用对端变更，避免配置互相覆盖造成混乱。
-	if strings.HasPrefix(key, SettingKeyClusterPrefix) {
+	// 集群配置与对外域名均为节点本地设置，绝不应用对端变更，避免配置互相覆盖造成混乱。
+	if isNodeLocalSetting(key) {
 		return nil
 	}
 	var d SettingChangeData
@@ -729,6 +776,93 @@ func (s *ReplicationService) applySetting(ch repository.Change) error {
 		return err
 	}
 	return s.settings.Set(key, d.Value)
+}
+
+// ParentKeyOf 返回一条变更的父实体自然键（如 repo:xxx / user:xxx）；无父依赖返回空串。
+// 资产/ACL 依赖仓库，令牌依赖用户；用户/仓库/设置独立。
+func (s *ReplicationService) ParentKeyOf(ch repository.Change) string {
+	switch ch.EntityType {
+	case EntityAsset:
+		repoName, _, ok := splitAssetKey(ch.EntityKey)
+		if !ok {
+			return ""
+		}
+		return RepoKey(repoName)
+	case EntityAcl:
+		return RepoKey(strings.TrimPrefix(ch.EntityKey, keyPrefixAcl))
+	case EntityToken:
+		var d TokenChangeData
+		if err := json.Unmarshal([]byte(ch.Data), &d); err != nil {
+			return ""
+		}
+		return UserKey(d.Username)
+	default:
+		return ""
+	}
+}
+
+// ParentExists 判断父实体是否存在（用于父就绪后触发待重试重放）。
+func (s *ReplicationService) ParentExists(parentKey string) (bool, error) {
+	switch {
+	case strings.HasPrefix(parentKey, keyPrefixRepo):
+		_, err := s.repos.GetByName(strings.TrimPrefix(parentKey, keyPrefixRepo))
+		if err == nil {
+			return true, nil
+		}
+		if errors.Is(err, repository.ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	case strings.HasPrefix(parentKey, keyPrefixUser):
+		_, err := s.users.GetByUsername(strings.TrimPrefix(parentKey, keyPrefixUser))
+		if err == nil {
+			return true, nil
+		}
+		if errors.Is(err, repository.ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	default:
+		return true, nil
+	}
+}
+
+// SkippedKey 返回对端已跳过 seq 集合在 setting 中的键（持久化，重启保留）。
+func SkippedKey(peerURL string) string { return "repl:skipped:" + peerURL }
+
+// ReadSkipped 读取对端已跳过 seq 集合（JSON 数组）；无记录返回空集。
+func (s *ReplicationService) ReadSkipped(peerURL string) (map[int64]struct{}, error) {
+	v, err := s.settings.Get(SkippedKey(peerURL))
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return map[int64]struct{}{}, nil
+		}
+		return nil, err
+	}
+	var arr []int64
+	if v != "" {
+		if err := json.Unmarshal([]byte(v), &arr); err != nil {
+			return nil, err
+		}
+	}
+	out := make(map[int64]struct{}, len(arr))
+	for _, seq := range arr {
+		out[seq] = struct{}{}
+	}
+	return out, nil
+}
+
+// WriteSkipped 持久化对端已跳过 seq 集合（覆盖写）。
+func (s *ReplicationService) WriteSkipped(peerURL string, skipped map[int64]struct{}) error {
+	arr := make([]int64, 0, len(skipped))
+	for seq := range skipped {
+		arr = append(arr, seq)
+	}
+	raw, err := json.Marshal(arr)
+	if err != nil {
+		return err
+	}
+	return s.settings.Set(SkippedKey(peerURL), string(raw))
 }
 
 // --- 自然键编解码 ---

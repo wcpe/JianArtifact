@@ -1,6 +1,7 @@
 package httpserver_test
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -270,6 +272,32 @@ func TestClusterEndpoints(t *testing.T) {
 		t.Error("PUT enabled=false 后状态应 enabled=false")
 	}
 
+	// 多对端保存时，空令牌表示保持原值；即使同时修改 URL 与 enabled 也不能擦除令牌。
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/cluster", strings.NewReader(
+		`{"peers":[{"url":"http://peer.example","token":"secret"},{"url":"http://peer-two.example","token":"secret-two"}],"enabled":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Test-Role", "admin")
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("保存多对端应 200，得 %d（体：%s）", rec.Code, rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/cluster", strings.NewReader(
+		`{"peers":[{"url":"http://peer-renamed.example"},{"url":"http://peer-two.example"}],"enabled":false}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Test-Role", "admin")
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("更新多对端 URL/开关应 200，得 %d（体：%s）", rec.Code, rec.Body.String())
+	}
+	if token := replSvc.PeerToken("http://peer-renamed.example"); token != "secret" {
+		t.Errorf("修改 URL 时首对端令牌应保留，得 %q", token)
+	}
+	if token := replSvc.PeerToken("http://peer-two.example"); token != "secret-two" {
+		t.Errorf("保存空令牌时同 URL 对端令牌应保留，得 %q", token)
+	}
+
 	// 非 admin PUT → 403。
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPut, "/api/v1/cluster", strings.NewReader(`{"enabled":true}`))
@@ -278,6 +306,73 @@ func TestClusterEndpoints(t *testing.T) {
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("非 admin PUT 应 403，得 %d", rec.Code)
+	}
+}
+
+// TestClusterSyncNow 立即同步端点应触发调度器，并且不受自动同步开关限制。
+func TestClusterSyncNow(t *testing.T) {
+	peerHandler, peerChanges, _, _ := newReplicationServer(t, "secret-token")
+	if _, err := peerChanges.Append("peer-node", domain.OpPut, domain.EntitySetting, "setting:sync-now-test",
+		`{"key":"sync-now-test","value":"ok"}`, "2026-08-17T00:00:00Z"); err != nil {
+		t.Fatalf("构造对端变更：%v", err)
+	}
+	peerServer := httptest.NewServer(peerHandler)
+	t.Cleanup(peerServer.Close)
+
+	db, err := persistence.Open(filepath.Join(t.TempDir(), "sync-now-handler.db"))
+	if err != nil {
+		t.Fatalf("打开数据库：%v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := db.Migrate(); err != nil {
+		t.Fatalf("迁移：%v", err)
+	}
+	settings := repository.NewSettingRepo(db)
+	blobs := blobstore.NewStore(filepath.Join(t.TempDir(), "local-blobs"))
+	replSvc := domain.NewReplicationService(
+		repository.NewReplChangeRepo(db), repository.NewAssetRepo(db), repository.NewRepoRepo(db),
+		repository.NewAclRepo(db), repository.NewUserRepo(db), repository.NewTokenRepo(db), settings, blobs,
+	)
+	if err := replSvc.SetPeerConfig(peerServer.URL, "secret-token"); err != nil {
+		t.Fatalf("设置对端：%v", err)
+	}
+	if err := replSvc.SetSyncEnabled(false); err != nil {
+		t.Fatalf("关闭自动同步：%v", err)
+	}
+	syncLogs := repository.NewSyncLogRepo(db)
+	scheduler := domain.NewReplicationScheduler(
+		domain.NewReplicationClient("", "", replSvc, blobs), settings, syncLogs, time.Hour,
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	scheduler.Start(ctx)
+
+	handlers := api.NewHandlers(api.Deps{Replication: replSvc, ReplicationSched: scheduler})
+	gin.SetMode(gin.ReleaseMode)
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		if c.GetHeader("X-Test-Role") == "admin" {
+			c.Set("auth.principal", &auth.Principal{Role: "admin", Username: "admin", UserID: 1})
+		} else {
+			c.Set("auth.principal", &auth.Principal{Role: "user", Username: "u", UserID: 2})
+		}
+		c.Next()
+	})
+	r.POST("/api/v1/cluster/sync-now", handlers.PostClusterSyncNow)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/cluster/sync-now", nil)
+	req.Header.Set("X-Test-Role", "admin")
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("admin sync-now 应 200，得 %d（体：%s）", rec.Code, rec.Body.String())
+	}
+	entries, err := syncLogs.List(10, 0)
+	if err != nil {
+		t.Fatalf("读取同步日志：%v", err)
+	}
+	if len(entries) != 1 || entries[0].Success == nil || !*entries[0].Success {
+		t.Fatalf("sync-now 应产生成功同步日志，得 %+v", entries)
 	}
 }
 

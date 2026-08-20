@@ -1,6 +1,7 @@
 package domain_test
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
@@ -77,6 +78,26 @@ func TestSettingsDynamicConfig(t *testing.T) {
 	}
 }
 
+// TestSettingsSetManyRollback 验证多设置写入任一失败时整体回滚，不留下部分值。
+func TestSettingsSetManyRollback(t *testing.T) {
+	db := newTestDB(t)
+	settings := repository.NewSettingRepo(db)
+	if _, err := db.Exec(`CREATE TRIGGER reject_setting BEFORE INSERT ON setting
+		WHEN NEW.key = 'reject' BEGIN SELECT RAISE(ABORT, '拒绝测试写入'); END`); err != nil {
+		t.Fatalf("创建失败触发器：%v", err)
+	}
+	err := settings.SetMany([]repository.SettingValue{
+		{Key: "first", Value: "written-before-failure"},
+		{Key: "reject", Value: "failure"},
+	})
+	if err == nil {
+		t.Fatal("事务中第二项失败时应返回错误")
+	}
+	if _, err := settings.Get("first"); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("事务失败后第一项应回滚，得 %v", err)
+	}
+}
+
 // TestSettingsWriteRecordsChange 设置写入记录复制变更日志（FR-83 链路）。
 func TestSettingsWriteRecordsChange(t *testing.T) {
 	db := newTestDB(t)
@@ -119,5 +140,13 @@ func TestSettingsClusterKeyNotReplicated(t *testing.T) {
 	}
 	if len(rec.records) != 1 {
 		t.Fatalf("业务键应记录 1 条变更，得 %d", len(rec.records))
+	}
+
+	// public_url 是节点本地域名，不应进入复制变更日志。
+	if err := svc.SetPublicURL("https://node-a.example"); err != nil {
+		t.Fatalf("SetPublicURL：%v", err)
+	}
+	if len(rec.records) != 1 {
+		t.Fatalf("节点本地 public_url 不应记录复制变更，得 %d 条", len(rec.records))
 	}
 }

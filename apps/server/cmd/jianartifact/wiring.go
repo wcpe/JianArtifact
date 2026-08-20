@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"strconv"
@@ -20,25 +21,26 @@ import (
 
 // appServices 汇集装配后的持久化连接、领域服务与鉴权依赖，供 run 及 CLI 子命令复用。
 type appServices struct {
-	db             *persistence.DB
-	users          *repository.UserRepo
-	authSvc        *domain.AuthService
-	userSvc        *domain.UserService
-	tokenSvc       *domain.TokenService
-	repoSvc        *domain.RepositoryService
-	assetSvc       *domain.AssetService
-	migrationSvc   *domain.MigrationService
-	settingSvc     *domain.SettingService
-	replSvc        *domain.ReplicationService
-	scheduler      *domain.ReplicationScheduler // FR-85：配置了对端 URL 时非 nil
-	syncLogs       *repository.SyncLogRepo      // FR-88：同步历史日志
-	auditLogs      *repository.AuditLogRepo     // FR-38：审计日志
-	peerURL        string                       // FR-86：复制对端基址（cfg.SyncPeerURL）
-	syncTokenSet   bool                         // FR-86：同步令牌是否已配置（不暴露明文）
-	publicURL      string                       // FR-87：对外基础 URL（cfg.PublicURL，CDN 域名）
-	upstreamClient *upstream.Client             // FR-89：回源客户端（web 改回源超时时 SetTimeout）
-	store          auth.Store
-	jwt            *auth.JWTManager
+	db                   *persistence.DB
+	users                *repository.UserRepo
+	authSvc              *domain.AuthService
+	userSvc              *domain.UserService
+	tokenSvc             *domain.TokenService
+	repoSvc              *domain.RepositoryService
+	assetSvc             *domain.AssetService
+	migrationSvc         *domain.MigrationService
+	settingSvc           *domain.SettingService
+	replSvc              *domain.ReplicationService
+	scheduler            *domain.ReplicationScheduler        // FR-85：配置了对端 URL 时非 nil
+	syncLogs             *repository.SyncLogRepo             // FR-88：同步历史日志
+	replicationApplyLogs *repository.ReplicationApplyLogRepo // 复制接收审计
+	auditLogs            *repository.AuditLogRepo            // FR-38：审计日志
+	peerURL              string                              // FR-86：复制对端基址（cfg.SyncPeerURL）
+	syncTokenSet         bool                                // FR-86：同步令牌是否已配置（不暴露明文）
+	publicURL            string                              // FR-89：静态回退保持空，统一由 setting 动态读取
+	upstreamClient       *upstream.Client                    // FR-89：回源客户端（web 改回源超时时 SetTimeout）
+	store                auth.Store
+	jwt                  *auth.JWTManager
 }
 
 // openServices 打开数据库、执行迁移并装配领域服务。调用方负责在返回的 db 上 Close。
@@ -63,7 +65,8 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	jwtMgr := auth.NewJWTManager(cfg.JWTSecret)
 	blobs := blobstore.NewStore(cfg.BlobDir)
 	upstreamClient := upstream.NewClient(cfg.UpstreamTimeout)
-	settingSvc := domain.NewSettingService(repository.NewSettingRepo(db))
+	settingRepo := repository.NewSettingRepo(db)
+	settingSvc := domain.NewSettingService(settingRepo)
 	repoSvc := domain.NewRepositoryService(repoRepo, aclRepo, assetRepo, settingSvc, userRepo)
 	assetSvc := domain.NewAssetService(repoRepo, assetRepo, blobs, upstreamClient)
 	userSvc := domain.NewUserService(userRepo)
@@ -79,34 +82,27 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	tokenSvc.SetChangeRecorder(replSvc)
 	settingSvc.SetChangeRecorder(replSvc)
 
-	// FR-88：对端配置从 setting 读取（web 可配置），调度器常驻。
-	// 环境变量作为初始默认：setting 中不存在或值为空时写入（可被 web 覆盖）。
-	// 空字符串不代表有效配置（web 保存对端 URL 时可能留下空令牌），需被环境变量兜底。
-	settingRepo := repository.NewSettingRepo(db)
-	if cfg.SyncPeerURL != "" {
-		if v, err := settingRepo.Get(domain.SettingKeyReplPeerURL); err != nil || v == "" {
-			_ = settingRepo.Set(domain.SettingKeyReplPeerURL, cfg.SyncPeerURL)
+	// FR-88/89：环境变量仅在 setting 键不存在时写入初始默认；显式清空必须跨重启保留。
+	defaults := []repository.SettingValue{
+		{Key: domain.SettingKeyReplPeerURL, Value: cfg.SyncPeerURL},
+		{Key: domain.SettingKeyReplPeerToken, Value: cfg.SyncToken},
+		{Key: domain.SettingKeyPublicURL, Value: cfg.PublicURL},
+		{Key: domain.SettingKeyUpstreamTimeout, Value: strconv.Itoa(int(cfg.UpstreamTimeout.Seconds()))},
+		{Key: domain.SettingKeyReplSyncInterval, Value: strconv.Itoa(int(cfg.SyncInterval.Seconds()))},
+	}
+	for _, value := range defaults {
+		if err := seedSettingDefault(settingRepo, value.Key, value.Value); err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("初始化设置 %s：%w", value.Key, err)
 		}
 	}
-	if cfg.SyncToken != "" {
-		if v, err := settingRepo.Get(domain.SettingKeyReplPeerToken); err != nil || v == "" {
-			_ = settingRepo.Set(domain.SettingKeyReplPeerToken, cfg.SyncToken)
-		}
+	if secs := settingSvc.UpstreamTimeoutSecs(); secs > 0 {
+		upstreamClient.SetTimeout(time.Duration(secs) * time.Second)
 	}
-	// FR-89：基础配置 env 兜底写 setting（web 可运行时覆盖），缺省由读取侧回退。
-	// 仅当 setting 缺失或为空时写入，web 显式配置优先（与对端 URL/令牌同待遇）。
-	if v, err := settingRepo.Get(domain.SettingKeyPublicURL); err != nil || v == "" {
-		_ = settingRepo.Set(domain.SettingKeyPublicURL, cfg.PublicURL)
-	}
-	if v, err := settingRepo.Get(domain.SettingKeyUpstreamTimeout); err != nil || v == "" {
-		_ = settingRepo.Set(domain.SettingKeyUpstreamTimeout, strconv.Itoa(int(cfg.UpstreamTimeout.Seconds())))
-	}
-	if v, err := settingRepo.Get(domain.SettingKeyReplSyncInterval); err != nil || v == "" {
-		_ = settingRepo.Set(domain.SettingKeyReplSyncInterval, strconv.Itoa(int(cfg.SyncInterval.Seconds())))
-	}
-	client := domain.NewReplicationClient(cfg.SyncPeerURL, cfg.SyncToken, replSvc, blobs)
 	syncLogRepo := repository.NewSyncLogRepo(db)
+	replicationApplyLogRepo := repository.NewReplicationApplyLogRepo(db)
 	auditLogRepo := repository.NewAuditLogRepo(db)
+	client := domain.NewReplicationClient(cfg.SyncPeerURL, cfg.SyncToken, replSvc, blobs, replicationApplyLogRepo)
 	scheduler := domain.NewReplicationScheduler(client, settingRepo, syncLogRepo, cfg.SyncInterval)
 
 	// 历史数据全量回填（全量对齐）：为迁移 0010 之前写入的存量实体生成变更日志，
@@ -135,47 +131,63 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	}
 
 	return &appServices{
-		db:             db,
-		users:          userRepo,
-		authSvc:        domain.NewAuthService(userRepo, revokedRepo, jwtMgr),
-		userSvc:        userSvc,
-		tokenSvc:       tokenSvc,
-		repoSvc:        repoSvc,
-		assetSvc:       assetSvc,
-		migrationSvc:   migrationSvc,
-		settingSvc:     settingSvc,
-		replSvc:        replSvc,
-		scheduler:      scheduler,
-		syncLogs:       syncLogRepo,
-		auditLogs:      auditLogRepo,
-		peerURL:        cfg.SyncPeerURL,
-		syncTokenSet:   cfg.SyncToken != "",
-		publicURL:      cfg.PublicURL,
-		upstreamClient: upstreamClient,
-		store:          domain.NewAuthStore(userRepo, tokenRepo, revokedRepo),
-		jwt:            jwtMgr,
+		db:                   db,
+		users:                userRepo,
+		authSvc:              domain.NewAuthService(userRepo, revokedRepo, jwtMgr),
+		userSvc:              userSvc,
+		tokenSvc:             tokenSvc,
+		repoSvc:              repoSvc,
+		assetSvc:             assetSvc,
+		migrationSvc:         migrationSvc,
+		settingSvc:           settingSvc,
+		replSvc:              replSvc,
+		scheduler:            scheduler,
+		syncLogs:             syncLogRepo,
+		replicationApplyLogs: replicationApplyLogRepo,
+		auditLogs:            auditLogRepo,
+		peerURL:              cfg.SyncPeerURL,
+		syncTokenSet:         cfg.SyncToken != "",
+		publicURL:            "",
+		upstreamClient:       upstreamClient,
+		store:                domain.NewAuthStore(userRepo, tokenRepo, revokedRepo),
+		jwt:                  jwtMgr,
 	}, nil
+}
+
+// seedSettingDefault 仅在键缺失且默认值非空时写入，显式空串配置保持不变。
+func seedSettingDefault(settings *repository.SettingRepo, key, value string) error {
+	if value == "" {
+		return nil
+	}
+	if _, err := settings.Get(key); err == nil {
+		return nil
+	} else if !errors.Is(err, repository.ErrNotFound) {
+		return err
+	}
+	return settings.Set(key, value)
 }
 
 // handlers 用给定版本与就绪检查构造 api.Handlers。
 func (s *appServices) handlers(version string, checks []func() error) *api.Handlers {
 	return api.NewHandlers(api.Deps{
-		Version:          version,
-		Checks:           checks,
-		Migration:        s.db.CurrentVersion,
-		Auth:             s.authSvc,
-		Users:            s.userSvc,
-		Tokens:           s.tokenSvc,
-		Repos:            s.repoSvc,
-		Migrations:       s.migrationSvc,
-		Settings:         s.settingSvc,
-		Replication:      s.replSvc,
-		ReplicationSched: s.scheduler,
-		SyncLogs:         s.syncLogs,
-		AuditLogs:        s.auditLogs,
-		ClusterPeerURL:   s.peerURL,
-		ClusterTokenSet:  s.syncTokenSet,
-		PublicURL:        s.publicURL,
+		Version:              version,
+		Checks:               checks,
+		Migration:            s.db.CurrentVersion,
+		Auth:                 s.authSvc,
+		Users:                s.userSvc,
+		Tokens:               s.tokenSvc,
+		Repos:                s.repoSvc,
+		Assets:               s.assetSvc, // FR-103：制品批量删除
+		Migrations:           s.migrationSvc,
+		Settings:             s.settingSvc,
+		Replication:          s.replSvc,
+		ReplicationSched:     s.scheduler,
+		SyncLogs:             s.syncLogs,
+		ReplicationApplyLogs: s.replicationApplyLogs,
+		AuditLogs:            s.auditLogs,
+		ClusterPeerURL:       s.peerURL,
+		ClusterTokenSet:      s.syncTokenSet,
+		PublicURL:            s.publicURL,
 		OnUpstreamTimeoutChange: func(d time.Duration) {
 			if s.upstreamClient != nil {
 				s.upstreamClient.SetTimeout(d)

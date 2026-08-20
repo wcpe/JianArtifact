@@ -59,6 +59,13 @@ func (c *Client) SetTimeout(timeout time.Duration) {
 	c.mu.Unlock()
 }
 
+// Timeout 返回当前回源整体超时。
+func (c *Client) Timeout() time.Duration {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.http.Timeout
+}
+
 // Fetch 以 GET 拉取 baseURL 与 path 拼接后的资源，返回响应体（调用方负责关闭）与响应头。
 // 上游 404 返回 ErrNotFound；其余非 2xx 返回 *StatusError；传输 / 超时错误原样返回。
 func (c *Client) Fetch(ctx context.Context, baseURL, path string) (io.ReadCloser, http.Header, error) {

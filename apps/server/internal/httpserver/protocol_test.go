@@ -27,7 +27,12 @@ import (
 
 // protocolEnv 汇集含协议层路由的服务端句柄。
 type protocolEnv struct {
-	h http.Handler
+	h           http.Handler
+	repoRepo    *repository.RepoRepo
+	assetRepo   *repository.AssetRepo
+	auditLogs   *repository.AuditLogRepo
+	replChanges *repository.ReplChangeRepo
+	blobs       *blobstore.Store
 }
 
 // newProtocolEnv 装配完整服务端：契约路由 + Raw 协议路由（真实持久化 + blob 存储）。
@@ -57,14 +62,21 @@ func newProtocolEnvOpts(t *testing.T, publicURL string) *protocolEnv {
 	repoRepo := repository.NewRepoRepo(db)
 	aclRepo := repository.NewAclRepo(db)
 	assetRepo := repository.NewAssetRepo(db)
+	settings := repository.NewSettingRepo(db)
+	auditLogs := repository.NewAuditLogRepo(db)
+	replChanges := repository.NewReplChangeRepo(db)
+	blobs := blobstore.NewStore(t.TempDir())
 
 	jwtMgr := auth.NewJWTManager([]byte("integration-test-secret-key-32byte!!"))
 	authStore := domain.NewAuthStore(userRepo, tokenRepo, revokedRepo)
 	authenticator := auth.NewAuthenticator(jwtMgr, authStore)
 	tokenSvc := domain.NewTokenService(tokenRepo, userRepo)
 
-	repoSvc := domain.NewRepositoryService(repoRepo, aclRepo, assetRepo, domain.NewSettingService(repository.NewSettingRepo(db)), userRepo)
-	assetSvc := domain.NewAssetService(repoRepo, assetRepo, blobstore.NewStore(t.TempDir()), upstream.NewClient(5*time.Second))
+	repoSvc := domain.NewRepositoryService(repoRepo, aclRepo, assetRepo, domain.NewSettingService(settings), userRepo)
+	replSvc := domain.NewReplicationService(replChanges, assetRepo, repoRepo, aclRepo, userRepo, tokenRepo, settings, blobs)
+	repoSvc.SetChangeRecorder(replSvc)
+	assetSvc := domain.NewAssetService(repoRepo, assetRepo, blobs, upstream.NewClient(5*time.Second))
+	assetSvc.SetChangeRecorder(replSvc)
 	rawHandler := protocol.NewRawHandler(assetSvc, repoSvc)
 	mavenHandler := protocol.NewMavenHandler(rawHandler)
 	dispatcher := protocol.NewDispatcher(repoSvc, rawHandler, mavenHandler)
@@ -78,8 +90,10 @@ func newProtocolEnvOpts(t *testing.T, publicURL string) *protocolEnv {
 		Users:     domain.NewUserService(userRepo),
 		Tokens:    tokenSvc,
 		Repos:     repoSvc,
+		AuditLogs: auditLogs,
 		PublicURL: publicURL,
 	})
+	rawHandler.SetAudit(handlers.AuditLog)
 
 	srv := httpserver.New("test",
 		httpserver.WithReadinessCheck(db.Ping),
@@ -94,7 +108,10 @@ func newProtocolEnvOpts(t *testing.T, publicURL string) *protocolEnv {
 			r.GET("/api/v1/licenses", authenticator.Optional(), handlers.GetLicenses)
 		}),
 	)
-	return &protocolEnv{h: srv.Handler(nil)}
+	return &protocolEnv{
+		h: srv.Handler(nil), repoRepo: repoRepo, assetRepo: assetRepo,
+		auditLogs: auditLogs, replChanges: replChanges, blobs: blobs,
+	}
 }
 
 // jsonReq 发起契约 API 请求（JSON）；token 非空带 Bearer 头。返回状态码。
@@ -284,6 +301,78 @@ func TestRawHostedAccessControl(t *testing.T) {
 	if rec.Code != http.StatusOK || rec.Body.String() != "hello public" {
 		t.Errorf("public 仓匿名读状态码 = %d，内容 = %q", rec.Code, rec.Body.String())
 	}
+}
+
+// TestRawDeleteRequiresGlobalAdmin 验证仓库 write ACL 不可替代制品删除的全局管理员权限。
+func TestRawDeleteRequiresGlobalAdmin(t *testing.T) {
+	e := newProtocolEnv(t)
+	adminToken := e.bootstrapAdmin(t)
+	e.createRawRepo(t, adminToken, "raw-delete", "private")
+	if rec := e.rawReq(http.MethodPut, "/repository/raw-delete/f.txt", "Bearer "+adminToken, "text/plain", []byte("keep")); rec.Code != http.StatusCreated {
+		t.Fatalf("准备制品失败：%d（体：%s）", rec.Code, rec.Body.String())
+	}
+
+	var writer api.User
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/users", adminToken,
+		api.CreateUserRequest{Username: "writer", Password: "writer-pass-123"}, &writer); code != http.StatusCreated {
+		t.Fatalf("建 write 用户状态码 = %d，期望 201", code)
+	}
+	var writerLogin api.LoginResponse
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/auth/login", "",
+		api.LoginRequest{Username: "writer", Password: "writer-pass-123"}, &writerLogin); code != http.StatusOK {
+		t.Fatalf("write 用户登录状态码 = %d，期望 200", code)
+	}
+	if code := e.jsonReq(t, http.MethodPut, "/api/v1/repositories/raw-delete/acl", adminToken,
+		api.PutAclRequest{Items: []api.AclEntry{{SubjectId: writer.Id, Action: api.AclEntryActionWrite}}}, nil); code != http.StatusOK {
+		t.Fatalf("授予 write ACL 状态码 = %d，期望 200", code)
+	}
+
+	if rec := e.rawReq(http.MethodDelete, "/repository/raw-delete/f.txt", "", "", nil); rec.Code != http.StatusUnauthorized {
+		t.Errorf("未认证删除状态码 = %d，期望 401（体：%s）", rec.Code, rec.Body.String())
+	}
+	if rec := e.rawReq(http.MethodDelete, "/repository/raw-delete/f.txt", "Bearer "+writerLogin.Token, "", nil); rec.Code != http.StatusForbidden {
+		t.Errorf("拥有 write ACL 的非管理员删除状态码 = %d，期望 403（体：%s）", rec.Code, rec.Body.String())
+	}
+	if rec := e.rawReq(http.MethodGet, "/repository/raw-delete/f.txt", "Bearer "+adminToken, "", nil); rec.Code != http.StatusOK || rec.Body.String() != "keep" {
+		t.Errorf("拒绝删除后制品应保留，状态码 = %d，内容 = %q", rec.Code, rec.Body.String())
+	}
+
+	repo, err := e.repoRepo.GetByName("raw-delete")
+	if err != nil {
+		t.Fatalf("读取仓库：%v", err)
+	}
+	asset, err := e.assetRepo.GetByPath(repo.ID, "f.txt")
+	if err != nil {
+		t.Fatalf("读取待删制品：%v", err)
+	}
+	if rec := e.rawReq(http.MethodDelete, "/repository/raw-delete/f.txt", "Bearer "+adminToken, "", nil); rec.Code != http.StatusNoContent {
+		t.Fatalf("管理员删除状态码 = %d，期望 204（体：%s）", rec.Code, rec.Body.String())
+	}
+	if _, err := e.assetRepo.GetByPath(repo.ID, "f.txt"); err != repository.ErrNotFound {
+		t.Errorf("删除后制品元数据错误 = %v，期望 ErrNotFound", err)
+	}
+	if !e.blobs.Exists(asset.BlobHash) {
+		t.Errorf("删除制品后 blob 应保留，哈希 %s 不存在", asset.BlobHash)
+	}
+
+	entries, err := e.auditLogs.List(repository.AuditFilter{Action: "asset.delete", Repo: "raw-delete"})
+	if err != nil {
+		t.Fatalf("读取删除审计：%v", err)
+	}
+	if len(entries) != 1 || entries[0].EntityKey != "raw-delete/f.txt" || entries[0].Actor != "admin" || entries[0].Result != "ok" {
+		t.Errorf("删除审计记录不正确：%+v", entries)
+	}
+
+	changes, err := e.replChanges.ListSince(0, 0)
+	if err != nil {
+		t.Fatalf("读取复制变更：%v", err)
+	}
+	for _, change := range changes {
+		if change.EntityType == domain.EntityAsset && change.EntityKey == domain.AssetKey("raw-delete", "f.txt") && change.Op == domain.OpDelete && change.Data == `{"deleted":true}` {
+			return
+		}
+	}
+	t.Errorf("删除应写入制品 tombstone，实际变更：%+v", changes)
 }
 
 // 协议端点 401 必须携带 WWW-Authenticate: Basic 质询头：Maven/Gradle 等客户端

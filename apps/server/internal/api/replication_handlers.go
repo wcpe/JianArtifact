@@ -120,6 +120,10 @@ func (h *Handlers) PutClusterStatus(c *gin.Context) {
 	}
 	// FR-D：传多对端列表则全量替换（优先于单值 peerUrl/peerToken）。
 	if req.Peers != nil {
+		if err := h.preservePeerTokens(*req.Peers); err != nil {
+			writeDomainErr(c, err)
+			return
+		}
 		if err := h.replication.SetPeers(*req.Peers); err != nil {
 			writeDomainErr(c, err)
 			return
@@ -147,7 +151,45 @@ func (h *Handlers) PutClusterStatus(c *gin.Context) {
 			return
 		}
 	}
+	peersN := 0
+	if req.Peers != nil {
+		peersN = len(*req.Peers)
+	}
+	h.AuditLog(c, "cluster.config", "cluster", "cluster", "", "peers="+strconv.Itoa(peersN)+" enabled="+orEmptyBool(req.Enabled), "ok")
 	c.JSON(http.StatusOK, h.replication.ClusterStatus())
+}
+
+// orEmptyBool 返回指针布尔值或 "unset"（可选字段兜底，用于审计 detail）。
+func orEmptyBool(p *bool) string {
+	if p == nil {
+		return "unset"
+	}
+	return strconv.FormatBool(*p)
+}
+
+// preservePeerTokens 为未提交新令牌的对端保留原令牌；优先按 URL 匹配，URL 修改时按原位置继承。
+func (h *Handlers) preservePeerTokens(peers []domain.Peer) error {
+	current, err := h.replication.Peers()
+	if err != nil {
+		return err
+	}
+	byURL := make(map[string]string, len(current))
+	for _, peer := range current {
+		byURL[peer.URL] = h.replication.PeerToken(peer.URL)
+	}
+	for i := range peers {
+		if peers[i].Token != "" {
+			continue
+		}
+		if token := byURL[peers[i].URL]; token != "" {
+			peers[i].Token = token
+			continue
+		}
+		if i < len(current) {
+			peers[i].Token = h.replication.PeerToken(current[i].URL)
+		}
+	}
+	return nil
 }
 
 // PostClusterSyncNow 触发一次立即同步（FR-88），无论自动开关状态，仅管理员。

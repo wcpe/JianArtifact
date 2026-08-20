@@ -78,8 +78,9 @@ func NewMavenHandler(raw *RawHandler) *MavenHandler {
 	return &MavenHandler{RawHandler: raw}
 }
 
-// Get 处理 GET/HEAD：group 的 maven-metadata.xml 走成员合并；普通制品走 Resolve；
-// SNAPSHOT 制品优先尝试时间戳解析（跳过慢速的字面路径轮询）；校验和文件缺失则据底层制品现算返回。
+// Get 处理 GET/HEAD：group 的 maven-metadata.xml 走成员合并；Gradle marker JAR 先检查同坐标 POM；
+// 普通制品走 Resolve；SNAPSHOT 制品优先尝试时间戳解析（跳过慢速的字面路径轮询）；
+// 校验和文件缺失则据底层制品现算返回。
 func (h *MavenHandler) Get(c *gin.Context) {
 	repoName := c.Param("repo")
 	if !h.authorize(c, repoName, "read") {
@@ -99,6 +100,10 @@ func (h *MavenHandler) Get(c *gin.Context) {
 	// SNAPSHOT 级别的 metadata（含 <snapshot> timestamp/buildNumber）不合并，直接走 Resolve。
 	if repo.Type == "group" && isMavenMetadataFile(artPath) && !isSnapshotMetadata(artPath) {
 		h.serveGroupMetadata(c, repo, artPath)
+		return
+	}
+	if repo.Type == "group" && h.markerPomHasPomPackaging(c, repoName, artPath) {
+		auth.WriteError(c, http.StatusNotFound, "not_found", "资源不存在")
 		return
 	}
 
@@ -345,6 +350,49 @@ type snapshotMetadata struct {
 			BuildNumber string `xml:"buildNumber"`
 		} `xml:"snapshot"`
 	} `xml:"versioning"`
+}
+
+// markerPomHasPomPackaging 判断 group 中的 Gradle plugin marker JAR 同坐标 POM 是否声明 packaging=pom。
+// POM 不存在、解析失败或 packaging 非 pom 均返回 false，保留原有 JAR 解析行为。
+func (h *MavenHandler) markerPomHasPomPackaging(c *gin.Context, repoName, artPath string) bool {
+	pomPath, ok := gradlePluginMarkerPomPath(artPath)
+	if !ok {
+		return false
+	}
+	_, rc, err := h.assets.Resolve(c.Request.Context(), repoName, pomPath)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = rc.Close() }()
+	data, err := io.ReadAll(rc)
+	if err != nil {
+		return false
+	}
+	var pom struct {
+		Packaging string `xml:"packaging"`
+	}
+	if err := xml.Unmarshal(data, &pom); err != nil {
+		return false
+	}
+	return strings.TrimSpace(pom.Packaging) == "pom"
+}
+
+// gradlePluginMarkerPomPath 返回 marker JAR 对应的同坐标 POM 路径。
+func gradlePluginMarkerPomPath(artPath string) (string, bool) {
+	parts := strings.Split(strings.Trim(artPath, "/"), "/")
+	if len(parts) < 4 {
+		return "", false
+	}
+	artifactID := parts[len(parts)-3]
+	version := parts[len(parts)-2]
+	filename := parts[len(parts)-1]
+	if !strings.HasSuffix(artifactID, ".gradle.plugin") || version == "" {
+		return "", false
+	}
+	if filename != artifactID+"-"+version+".jar" {
+		return "", false
+	}
+	return strings.TrimSuffix(artPath, ".jar") + ".pom", true
 }
 
 // checksumExt 返回路径的 Maven 校验和后缀（.md5/.sha1/.sha256）及是否命中。

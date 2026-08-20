@@ -23,12 +23,29 @@ type Change struct {
 // ReplChangeRepo 读写 repl_change 表。
 type ReplChangeRepo struct{ db *persistence.DB }
 
+// EntityVersion 是实体已接受的最新 LWW 版本。
+type EntityVersion struct {
+	NodeID string `db:"node_id"`
+	TS     string `db:"ts"`
+}
+
+const upsertEntityVersionSQL = `INSERT INTO repl_entity_version (entity_type, entity_key, node_id, ts)
+	VALUES (?, ?, ?, ?)
+	ON CONFLICT(entity_type, entity_key) DO UPDATE SET node_id=excluded.node_id, ts=excluded.ts
+	WHERE excluded.ts > repl_entity_version.ts
+	   OR (excluded.ts = repl_entity_version.ts AND excluded.node_id > repl_entity_version.node_id)`
+
 // NewReplChangeRepo 构造 ReplChangeRepo。
 func NewReplChangeRepo(db *persistence.DB) *ReplChangeRepo { return &ReplChangeRepo{db: db} }
 
-// Append 追加一条变更日志，返回新 seq。
+// Append 追加一条变更日志，并在同一事务更新实体版本，返回新 seq。
 func (r *ReplChangeRepo) Append(nodeID, op, entityType, entityKey, data, ts string) (int64, error) {
-	res, err := r.db.Exec(
+	tx, err := r.db.Beginx()
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	res, err := tx.Exec(
 		`INSERT INTO repl_change (node_id, op, entity_type, entity_key, data, ts)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		nodeID, op, entityType, entityKey, data, ts,
@@ -36,7 +53,17 @@ func (r *ReplChangeRepo) Append(nodeID, op, entityType, entityKey, data, ts stri
 	if err != nil {
 		return 0, err
 	}
-	return res.LastInsertId()
+	seq, err := res.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(upsertEntityVersionSQL, entityType, entityKey, nodeID, ts); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return seq, nil
 }
 
 // LatestSeq 返回本地最新变更序号；空表返回 0（供复制协议 since 水位）。
@@ -62,6 +89,29 @@ func (r *ReplChangeRepo) LastChangeOf(entityType, entityKey string) (*Change, er
 		return nil, err
 	}
 	return &c, nil
+}
+
+// LastVersionOf 返回本地日志或已应用远端状态中的最新实体版本。
+func (r *ReplChangeRepo) LastVersionOf(entityType, entityKey string) (*EntityVersion, error) {
+	var v EntityVersion
+	err := r.db.Get(&v, `SELECT node_id, ts FROM (
+		SELECT node_id, ts FROM repl_entity_version WHERE entity_type = ? AND entity_key = ?
+		UNION ALL
+		SELECT node_id, ts FROM repl_change WHERE entity_type = ? AND entity_key = ?
+	) ORDER BY ts DESC, node_id DESC LIMIT 1`, entityType, entityKey, entityType, entityKey)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &v, nil
+}
+
+// UpsertVersion 仅在传入版本更新时推进实体的 LWW 状态。
+func (r *ReplChangeRepo) UpsertVersion(entityType, entityKey, nodeID, ts string) error {
+	_, err := r.db.Exec(upsertEntityVersionSQL, entityType, entityKey, nodeID, ts)
+	return err
 }
 
 // ListSince 返回 seq 大于 since 的变更（按 seq 升序）；limit ≤ 0 表示不限制。

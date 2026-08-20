@@ -104,11 +104,11 @@ func (h *RawHandler) Put(c *gin.Context) {
 	})
 }
 
-// Delete 处理 DELETE：鉴权 write → 删除制品元数据（blob 内容保留）。
+// Delete 处理 DELETE：仅全局管理员可删除制品元数据（blob 内容保留）。
 func (h *RawHandler) Delete(c *gin.Context) {
 	repo := c.Param("repo")
 	artPath := cleanArtifactPath(c.Param("artifactPath"))
-	if !h.authorize(c, repo, "write") {
+	if !h.requireAdmin(c) {
 		return
 	}
 	if err := h.assets.Delete(repo, artPath); err != nil {
@@ -119,6 +119,20 @@ func (h *RawHandler) Delete(c *gin.Context) {
 		h.audit(c, "asset.delete", "asset", repo+"/"+artPath, repo, "", "ok")
 	}
 	c.Status(http.StatusNoContent)
+}
+
+// requireAdmin 要求全局管理员权限；协议端点的未认证响应须保留 Basic 质询头。
+func (h *RawHandler) requireAdmin(c *gin.Context) bool {
+	principal, ok := auth.PrincipalFrom(c)
+	if !ok {
+		writeUnauthorized(c)
+		return false
+	}
+	if !principal.IsAdmin() {
+		auth.WriteError(c, http.StatusForbidden, "forbidden", "仅管理员可删除制品")
+		return false
+	}
+	return true
 }
 
 // authorize 判定主体对仓库是否可执行动作。全局管理员放行；否则按 ACL（含 public read）判定。

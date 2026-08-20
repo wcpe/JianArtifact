@@ -55,6 +55,96 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/StatusInfo"
+  /api/v1/replication-apply-logs:
+    get:
+      operationId: getReplicationApplyLogs
+      summary: 复制接收审计记录（仅管理员）
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: sourceNode
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: sourceSeq
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+        - name: peerURL
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: entityType
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: entityKey
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: op
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: result
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              [
+                applied,
+                metadata_applied_pending_blob,
+                lww_skipped,
+                pending_parent,
+                blob_failed,
+                skipped_permanent,
+                failed,
+              ]
+            x-enum-varnames:
+              [
+                ReplicationApplied,
+                ReplicationMetadataAppliedPendingBlob,
+                ReplicationLwwSkipped,
+                ReplicationPendingParent,
+                ReplicationBlobFailed,
+                ReplicationSkippedPermanent,
+                ReplicationFailed,
+              ]
+      responses:
+        "200":
+          description: 复制接收审计分页结果
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReplicationApplyLogList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
   /api/v1/auth/bootstrap:
     post:
       operationId: bootstrap
@@ -412,6 +502,36 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+  /api/v1/repositories/{name}/assets/batch-delete:
+    post:
+      operationId: batchDeleteRepositoryAssets
+      summary: 批量删除仓库制品（仅管理员）
+      description: |
+        对每个 path 复用单条删除语义（元数据删 + 复制 tombstone）并逐条写 asset.delete 审计。
+        逐条尽力：部分失败进入 failed 明细，不做整体回滚。
+      parameters:
+        - $ref: "#/components/parameters/RepoNameParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BatchDeleteAssetsRequest"
+      responses:
+        "200":
+          description: 批量删除结果（部分失败以 failed 明细返回）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchDeleteAssetsResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
   /api/v1/repositories/{name}/usage:
     get:
       operationId: getRepositoryUsage
@@ -748,6 +868,81 @@ components:
               type: string
             message:
               type: string
+    ReplicationApplyLog:
+      type: object
+      required:
+        [
+          sourceNode,
+          sourceSeq,
+          peerUrl,
+          entityType,
+          entityKey,
+          op,
+          result,
+          detail,
+          firstSeenAt,
+          lastSeenAt,
+          attemptCount,
+        ]
+      properties:
+        sourceNode:
+          type: string
+        sourceSeq:
+          type: integer
+          format: int64
+          minimum: 0
+        peerUrl:
+          type: string
+        entityType:
+          type: string
+        entityKey:
+          type: string
+        op:
+          type: string
+        result:
+          type: string
+          enum:
+            [
+              applied,
+              metadata_applied_pending_blob,
+              lww_skipped,
+              pending_parent,
+              blob_failed,
+              skipped_permanent,
+              failed,
+            ]
+          x-enum-varnames:
+            [
+              ReplicationApplied,
+              ReplicationMetadataAppliedPendingBlob,
+              ReplicationLwwSkipped,
+              ReplicationPendingParent,
+              ReplicationBlobFailed,
+              ReplicationSkippedPermanent,
+              ReplicationFailed,
+            ]
+        detail:
+          type: string
+        lastError:
+          type: string
+        lastErrorAt:
+          type: string
+        firstSeenAt:
+          type: string
+        lastSeenAt:
+          type: string
+        attemptCount:
+          type: integer
+    ReplicationApplyLogList:
+      type: object
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReplicationApplyLog"
+        total:
+          type: integer
     StatusInfo:
       type: object
       required: [version, ready, initialized, migrationVersion, userCount]
@@ -1038,6 +1233,37 @@ components:
             $ref: "#/components/schemas/AssetSummary"
         total:
           type: integer
+    BatchDeleteAssetsRequest:
+      type: object
+      required: [paths]
+      properties:
+        paths:
+          type: array
+          description: 待删除的制品路径列表（单条非空，上限 500 条）
+          minItems: 1
+          maxItems: 500
+          items:
+            type: string
+    BatchDeleteAssetFailure:
+      type: object
+      required: [path, error]
+      properties:
+        path:
+          type: string
+        error:
+          type: string
+    BatchDeleteAssetsResponse:
+      type: object
+      required: [deleted, failed]
+      properties:
+        deleted:
+          type: integer
+          description: 成功删除的制品数
+        failed:
+          type: array
+          items:
+            $ref: "#/components/schemas/BatchDeleteAssetFailure"
+          description: 删除失败的路径与原因明细（成功数不受其影响）
     UsageSnippet:
       type: object
       required: [title, code]

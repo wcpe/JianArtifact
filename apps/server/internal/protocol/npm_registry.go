@@ -30,17 +30,17 @@ const npmInstallMediaType = "application/vnd.npm.install-v1+json"
 
 // registryGet 分派 GET/HEAD 的 registry 级端点。
 func (h *NpmHandler) registryGet(c *gin.Context, repoName, rest string) {
-	switch {
-	case rest == "-/ping":
+	switch rest {
+	case "-/ping":
 		c.JSON(http.StatusOK, gin.H{})
-	case rest == "-/whoami":
+	case "-/whoami":
 		p, ok := auth.PrincipalFrom(c)
 		if !ok {
 			writeUnauthorized(c)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"username": p.Username})
-	case rest == "-/v1/search":
+	case "-/v1/search":
 		h.registrySearch(c, repoName)
 	default:
 		if pkg, tag, ok := splitDistTags(rest); ok && tag == "" {

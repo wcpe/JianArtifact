@@ -22,6 +22,14 @@ type SettingService struct {
 	recorder ChangeRecorder
 }
 
+// SettingsUpdate 表示一次原子基础设置更新；nil 字段保持不变。
+type SettingsUpdate struct {
+	AnonymousAccess *bool
+	PublicURL       *string
+	UpstreamTimeout *int
+	SyncInterval    *int
+}
+
 // NewSettingService 构造 SettingService。
 func NewSettingService(settings *repository.SettingRepo) *SettingService {
 	return &SettingService{settings: settings}
@@ -54,17 +62,7 @@ func (s *SettingService) AnonymousAccessEnabled() (bool, error) {
 
 // SetAnonymousAccessEnabled 写入匿名访问全局开关。
 func (s *SettingService) SetAnonymousAccessEnabled(enabled bool) error {
-	v := "false"
-	if enabled {
-		v = "true"
-	}
-	if err := s.settings.Set(settingKeyAnonymousAccess, v); err != nil {
-		return err
-	}
-	s.recordChange(EntitySetting, SettingKey(settingKeyAnonymousAccess), OpPut, SettingChangeData{
-		Key: settingKeyAnonymousAccess, Value: v,
-	})
-	return nil
+	return s.UpdateSettings(SettingsUpdate{AnonymousAccess: &enabled})
 }
 
 // PublicURL 返回对外基础 URL（FR-89，读 setting）；未配置返回空串（回退请求 Host 推断）。
@@ -78,13 +76,7 @@ func (s *SettingService) PublicURL() string {
 
 // SetPublicURL 写入对外基础 URL（空串表示未配置，回退请求推断）。
 func (s *SettingService) SetPublicURL(v string) error {
-	if err := s.settings.Set(SettingKeyPublicURL, v); err != nil {
-		return err
-	}
-	s.recordChange(EntitySetting, SettingKey(SettingKeyPublicURL), OpPut, SettingChangeData{
-		Key: SettingKeyPublicURL, Value: v,
-	})
-	return nil
+	return s.UpdateSettings(SettingsUpdate{PublicURL: &v})
 }
 
 // SyncIntervalSecs 返回同步轮询间隔（秒，FR-89）；未配置或非法返回 0（调度器回退构造值）。
@@ -94,7 +86,7 @@ func (s *SettingService) SyncIntervalSecs() int {
 
 // SetSyncInterval 写入同步轮询间隔（秒）。
 func (s *SettingService) SetSyncInterval(secs int) error {
-	return s.setIntSetting(SettingKeyReplSyncInterval, secs)
+	return s.UpdateSettings(SettingsUpdate{SyncInterval: &secs})
 }
 
 // UpstreamTimeoutSecs 返回回源整体超时（秒，FR-89）；未配置或非法返回 0。
@@ -104,7 +96,7 @@ func (s *SettingService) UpstreamTimeoutSecs() int {
 
 // SetUpstreamTimeout 写入回源整体超时（秒）。
 func (s *SettingService) SetUpstreamTimeout(secs int) error {
-	return s.setIntSetting(SettingKeyUpstreamTimeout, secs)
+	return s.UpdateSettings(SettingsUpdate{UpstreamTimeout: &secs})
 }
 
 // secsSetting 读取整数秒设置；缺失 / 非数字 / 非正数返回 0。
@@ -120,16 +112,42 @@ func (s *SettingService) secsSetting(key string) int {
 	return secs
 }
 
-// setIntSetting 写入整数秒设置。集群相关键（repl:*）不记录复制变更日志，
-// 避免同步间隔等集群配置被复制到对端造成混乱（见 applySetting 的同类过滤）。
-func (s *SettingService) setIntSetting(key string, secs int) error {
-	v := strconv.Itoa(secs)
-	if err := s.settings.Set(key, v); err != nil {
+// UpdateSettings 在同一数据库事务内写入全部基础设置，提交后再记录复制变更。
+func (s *SettingService) UpdateSettings(update SettingsUpdate) error {
+	values := settingValues(update)
+	if err := s.settings.SetMany(values); err != nil {
 		return err
 	}
-	if strings.HasPrefix(key, SettingKeyClusterPrefix) {
-		return nil
+	for _, value := range values {
+		if isNodeLocalSetting(value.Key) {
+			continue
+		}
+		s.recordChange(EntitySetting, SettingKey(value.Key), OpPut, SettingChangeData{
+			Key: value.Key, Value: value.Value,
+		})
 	}
-	s.recordChange(EntitySetting, SettingKey(key), OpPut, SettingChangeData{Key: key, Value: v})
 	return nil
+}
+
+// isNodeLocalSetting 返回不应跨节点复制的设置键。
+func isNodeLocalSetting(key string) bool {
+	return key == SettingKeyPublicURL || strings.HasPrefix(key, SettingKeyClusterPrefix)
+}
+
+// settingValues 将可选更新转换为稳定顺序的持久化键值列表。
+func settingValues(update SettingsUpdate) []repository.SettingValue {
+	values := make([]repository.SettingValue, 0, 4)
+	if update.AnonymousAccess != nil {
+		values = append(values, repository.SettingValue{Key: settingKeyAnonymousAccess, Value: strconv.FormatBool(*update.AnonymousAccess)})
+	}
+	if update.PublicURL != nil {
+		values = append(values, repository.SettingValue{Key: SettingKeyPublicURL, Value: *update.PublicURL})
+	}
+	if update.UpstreamTimeout != nil {
+		values = append(values, repository.SettingValue{Key: SettingKeyUpstreamTimeout, Value: strconv.Itoa(*update.UpstreamTimeout)})
+	}
+	if update.SyncInterval != nil {
+		values = append(values, repository.SettingValue{Key: SettingKeyReplSyncInterval, Value: strconv.Itoa(*update.SyncInterval)})
+	}
+	return values
 }

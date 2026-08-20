@@ -7,7 +7,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/api"
 )
@@ -98,6 +101,107 @@ func TestMavenProxyFetchesUpstream(t *testing.T) {
 	// 上游无该路径 → 404。
 	if rec := e.rawReq(http.MethodGet, "/repository/mvn-central/com/example/app/1.0.0/missing.pom", "Bearer "+adminToken, "", nil); rec.Code != http.StatusNotFound {
 		t.Errorf("上游缺失状态码 = %d，期望 404", rec.Code)
+	}
+}
+
+func TestMavenGroupGradlePluginMarkerPomPackaging404BeforeJar(t *testing.T) {
+	const (
+		markerPom = "/com/example/demo.gradle.plugin/1.0.0/demo.gradle.plugin-1.0.0.pom"
+		markerJar = "/com/example/demo.gradle.plugin/1.0.0/demo.gradle.plugin-1.0.0.jar"
+	)
+	var pomHits atomic.Int32
+	var jarHits atomic.Int32
+	jarRelease := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseJar := func() { releaseOnce.Do(func() { close(jarRelease) }) }
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case markerPom:
+			pomHits.Add(1)
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = w.Write([]byte("<project><packaging>pom</packaging></project>"))
+		case markerJar:
+			jarHits.Add(1)
+			<-jarRelease
+			_, _ = w.Write([]byte("不应被读取的 marker jar"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer func() {
+		releaseJar()
+		srv.Close()
+	}()
+
+	e := newProtocolEnv(t)
+	adminToken := e.bootstrapAdmin(t)
+	e.createMavenRepo(t, adminToken, "mvn-marker-proxy", "proxy", srv.URL, nil)
+	e.createMavenRepo(t, adminToken, "mvn-marker-group", "group", "", []string{"mvn-marker-proxy"})
+	path := "/repository/mvn-marker-group" + markerJar
+
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		done := make(chan *httptest.ResponseRecorder, 1)
+		go func() { done <- e.rawReq(method, path, "Bearer "+adminToken, "", nil) }()
+		select {
+		case rec := <-done:
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("group %s marker jar 状态码 = %d，期望 404", method, rec.Code)
+			}
+		case <-time.After(500 * time.Millisecond):
+			releaseJar()
+			t.Fatalf("group %s marker jar 未快速返回 404", method)
+		}
+	}
+	if got := jarHits.Load(); got != 0 {
+		t.Fatalf("marker jar 上游命中次数 = %d，期望 0", got)
+	}
+	if got := pomHits.Load(); got == 0 {
+		t.Fatal("marker jar 请求未先解析同坐标 POM")
+	}
+}
+
+func TestMavenGroupGradlePluginMarkerJarPackagingAndNonMarkerJar(t *testing.T) {
+	const (
+		markerPom = "/com/example/demo.gradle.plugin/1.0.0/demo.gradle.plugin-1.0.0.pom"
+		markerJar = "/com/example/demo.gradle.plugin/1.0.0/demo.gradle.plugin-1.0.0.jar"
+		normalJar = "/com/example/demo/1.0.0/demo-1.0.0.jar"
+	)
+	markerBytes := []byte("marker jar")
+	normalBytes := []byte("normal jar")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case markerPom:
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = w.Write([]byte("<project><packaging>jar</packaging></project>"))
+		case markerJar:
+			_, _ = w.Write(markerBytes)
+		case normalJar:
+			_, _ = w.Write(normalBytes)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	e := newProtocolEnv(t)
+	adminToken := e.bootstrapAdmin(t)
+	e.createMavenRepo(t, adminToken, "mvn-marker-jar-proxy", "proxy", srv.URL, nil)
+	e.createMavenRepo(t, adminToken, "mvn-marker-jar-group", "group", "", []string{"mvn-marker-jar-proxy"})
+
+	for _, tc := range []struct {
+		name string
+		path string
+		want []byte
+	}{
+		{name: "marker", path: markerJar, want: markerBytes},
+		{name: "非 marker", path: normalJar, want: normalBytes},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := e.rawReq(http.MethodGet, "/repository/mvn-marker-jar-group"+tc.path, "Bearer "+adminToken, "", nil)
+			if rec.Code != http.StatusOK || !bytes.Equal(rec.Body.Bytes(), tc.want) {
+				t.Fatalf("%s jar 状态码 = %d，内容一致 = %v", tc.name, rec.Code, bytes.Equal(rec.Body.Bytes(), tc.want))
+			}
+		})
 	}
 }
 

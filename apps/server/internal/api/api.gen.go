@@ -242,6 +242,39 @@ func (e MigrationTaskStatus) Valid() bool {
 	}
 }
 
+// Defines values for ReplicationApplyLogResult.
+const (
+	ReplicationApplyLogResultReplicationApplied                    ReplicationApplyLogResult = "applied"
+	ReplicationApplyLogResultReplicationBlobFailed                 ReplicationApplyLogResult = "blob_failed"
+	ReplicationApplyLogResultReplicationFailed                     ReplicationApplyLogResult = "failed"
+	ReplicationApplyLogResultReplicationLwwSkipped                 ReplicationApplyLogResult = "lww_skipped"
+	ReplicationApplyLogResultReplicationMetadataAppliedPendingBlob ReplicationApplyLogResult = "metadata_applied_pending_blob"
+	ReplicationApplyLogResultReplicationPendingParent              ReplicationApplyLogResult = "pending_parent"
+	ReplicationApplyLogResultReplicationSkippedPermanent           ReplicationApplyLogResult = "skipped_permanent"
+)
+
+// Valid indicates whether the value is a known member of the ReplicationApplyLogResult enum.
+func (e ReplicationApplyLogResult) Valid() bool {
+	switch e {
+	case ReplicationApplyLogResultReplicationApplied:
+		return true
+	case ReplicationApplyLogResultReplicationBlobFailed:
+		return true
+	case ReplicationApplyLogResultReplicationFailed:
+		return true
+	case ReplicationApplyLogResultReplicationLwwSkipped:
+		return true
+	case ReplicationApplyLogResultReplicationMetadataAppliedPendingBlob:
+		return true
+	case ReplicationApplyLogResultReplicationPendingParent:
+		return true
+	case ReplicationApplyLogResultReplicationSkippedPermanent:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RepositoryFormat.
 const (
 	RepositoryFormatMaven RepositoryFormat = "maven"
@@ -392,6 +425,39 @@ func (e UserStatus) Valid() bool {
 	}
 }
 
+// Defines values for GetReplicationApplyLogsParamsResult.
+const (
+	GetReplicationApplyLogsParamsResultReplicationApplied                    GetReplicationApplyLogsParamsResult = "applied"
+	GetReplicationApplyLogsParamsResultReplicationBlobFailed                 GetReplicationApplyLogsParamsResult = "blob_failed"
+	GetReplicationApplyLogsParamsResultReplicationFailed                     GetReplicationApplyLogsParamsResult = "failed"
+	GetReplicationApplyLogsParamsResultReplicationLwwSkipped                 GetReplicationApplyLogsParamsResult = "lww_skipped"
+	GetReplicationApplyLogsParamsResultReplicationMetadataAppliedPendingBlob GetReplicationApplyLogsParamsResult = "metadata_applied_pending_blob"
+	GetReplicationApplyLogsParamsResultReplicationPendingParent              GetReplicationApplyLogsParamsResult = "pending_parent"
+	GetReplicationApplyLogsParamsResultReplicationSkippedPermanent           GetReplicationApplyLogsParamsResult = "skipped_permanent"
+)
+
+// Valid indicates whether the value is a known member of the GetReplicationApplyLogsParamsResult enum.
+func (e GetReplicationApplyLogsParamsResult) Valid() bool {
+	switch e {
+	case GetReplicationApplyLogsParamsResultReplicationApplied:
+		return true
+	case GetReplicationApplyLogsParamsResultReplicationBlobFailed:
+		return true
+	case GetReplicationApplyLogsParamsResultReplicationFailed:
+		return true
+	case GetReplicationApplyLogsParamsResultReplicationLwwSkipped:
+		return true
+	case GetReplicationApplyLogsParamsResultReplicationMetadataAppliedPendingBlob:
+		return true
+	case GetReplicationApplyLogsParamsResultReplicationPendingParent:
+		return true
+	case GetReplicationApplyLogsParamsResultReplicationSkippedPermanent:
+		return true
+	default:
+		return false
+	}
+}
+
 // AclEntry defines model for AclEntry.
 type AclEntry struct {
 	Action    AclEntryAction `json:"action"`
@@ -430,6 +496,27 @@ type AssetSummary struct {
 	Sha1      *string `json:"sha1,omitempty"`
 	Size      int64   `json:"size"`
 	UpdatedAt string  `json:"updatedAt"`
+}
+
+// BatchDeleteAssetFailure defines model for BatchDeleteAssetFailure.
+type BatchDeleteAssetFailure struct {
+	Error string `json:"error"`
+	Path  string `json:"path"`
+}
+
+// BatchDeleteAssetsRequest defines model for BatchDeleteAssetsRequest.
+type BatchDeleteAssetsRequest struct {
+	// Paths 待删除的制品路径列表（单条非空，上限 500 条）
+	Paths []string `json:"paths"`
+}
+
+// BatchDeleteAssetsResponse defines model for BatchDeleteAssetsResponse.
+type BatchDeleteAssetsResponse struct {
+	// Deleted 成功删除的制品数
+	Deleted int `json:"deleted"`
+
+	// Failed 删除失败的路径与原因明细（成功数不受其影响）
+	Failed []BatchDeleteAssetFailure `json:"failed"`
 }
 
 // BootstrapRequest defines model for BootstrapRequest.
@@ -623,6 +710,32 @@ type PutAclRequest struct {
 	Items []AclEntry `json:"items"`
 }
 
+// ReplicationApplyLog defines model for ReplicationApplyLog.
+type ReplicationApplyLog struct {
+	AttemptCount int                       `json:"attemptCount"`
+	Detail       string                    `json:"detail"`
+	EntityKey    string                    `json:"entityKey"`
+	EntityType   string                    `json:"entityType"`
+	FirstSeenAt  string                    `json:"firstSeenAt"`
+	LastError    *string                   `json:"lastError,omitempty"`
+	LastErrorAt  *string                   `json:"lastErrorAt,omitempty"`
+	LastSeenAt   string                    `json:"lastSeenAt"`
+	Op           string                    `json:"op"`
+	PeerUrl      string                    `json:"peerUrl"`
+	Result       ReplicationApplyLogResult `json:"result"`
+	SourceNode   string                    `json:"sourceNode"`
+	SourceSeq    int64                     `json:"sourceSeq"`
+}
+
+// ReplicationApplyLogResult defines model for ReplicationApplyLog.Result.
+type ReplicationApplyLogResult string
+
+// ReplicationApplyLogList defines model for ReplicationApplyLogList.
+type ReplicationApplyLogList struct {
+	Items []ReplicationApplyLog `json:"items"`
+	Total int                   `json:"total"`
+}
+
 // Repository defines model for Repository.
 type Repository struct {
 	// ArtifactCount 仓库内制品数量（只读统计字段）
@@ -806,6 +919,22 @@ type ListMigrationsParams struct {
 	PageSize *PageSizeParam `form:"page_size,omitempty" json:"page_size,omitempty"`
 }
 
+// GetReplicationApplyLogsParams defines parameters for GetReplicationApplyLogs.
+type GetReplicationApplyLogsParams struct {
+	Limit      *int                                 `form:"limit,omitempty" json:"limit,omitempty"`
+	Offset     *int                                 `form:"offset,omitempty" json:"offset,omitempty"`
+	SourceNode *string                              `form:"sourceNode,omitempty" json:"sourceNode,omitempty"`
+	SourceSeq  *int64                               `form:"sourceSeq,omitempty" json:"sourceSeq,omitempty"`
+	PeerURL    *string                              `form:"peerURL,omitempty" json:"peerURL,omitempty"`
+	EntityType *string                              `form:"entityType,omitempty" json:"entityType,omitempty"`
+	EntityKey  *string                              `form:"entityKey,omitempty" json:"entityKey,omitempty"`
+	Op         *string                              `form:"op,omitempty" json:"op,omitempty"`
+	Result     *GetReplicationApplyLogsParamsResult `form:"result,omitempty" json:"result,omitempty"`
+}
+
+// GetReplicationApplyLogsParamsResult defines parameters for GetReplicationApplyLogs.
+type GetReplicationApplyLogsParamsResult string
+
 // ListRepositoriesParams defines parameters for ListRepositories.
 type ListRepositoriesParams struct {
 	Page     *PageParam     `form:"page,omitempty" json:"page,omitempty"`
@@ -850,6 +979,9 @@ type UpdateRepositoryJSONRequestBody = UpdateRepositoryRequest
 
 // SetRepositoryAclJSONRequestBody defines body for SetRepositoryAcl for application/json ContentType.
 type SetRepositoryAclJSONRequestBody = PutAclRequest
+
+// BatchDeleteRepositoryAssetsJSONRequestBody defines body for BatchDeleteRepositoryAssets for application/json ContentType.
+type BatchDeleteRepositoryAssetsJSONRequestBody = BatchDeleteAssetsRequest
 
 // CreateTokenJSONRequestBody defines body for CreateToken for application/json ContentType.
 type CreateTokenJSONRequestBody = CreateTokenRequest
@@ -901,6 +1033,9 @@ type ServerInterface interface {
 	// StartMigration 显式启动（planned → running）
 	// (POST /api/v1/migrations/{id}/start)
 	StartMigration(c *gin.Context, id MigrationIdParam)
+	// GetReplicationApplyLogs 复制接收审计记录（仅管理员）
+	// (GET /api/v1/replication-apply-logs)
+	GetReplicationApplyLogs(c *gin.Context, params GetReplicationApplyLogsParams)
 	// ListRepositories 仓库列表（分页，按可见性 / ACL 过滤）
 	// (GET /api/v1/repositories)
 	ListRepositories(c *gin.Context, params ListRepositoriesParams)
@@ -922,6 +1057,9 @@ type ServerInterface interface {
 	// ListRepositoryAssets 列出仓库制品（分页，可按路径前缀过滤）
 	// (GET /api/v1/repositories/{name}/assets)
 	ListRepositoryAssets(c *gin.Context, name RepoNameParam, params ListRepositoryAssetsParams)
+	// BatchDeleteRepositoryAssets 批量删除仓库制品（仅管理员）
+	// (POST /api/v1/repositories/{name}/assets/batch-delete)
+	BatchDeleteRepositoryAssets(c *gin.Context, name RepoNameParam)
 	// GetRepositoryUsage 仓库客户端使用片段（据 format/type 返回接入命令）
 	// (GET /api/v1/repositories/{name}/usage)
 	GetRepositoryUsage(c *gin.Context, name RepoNameParam)
@@ -1219,6 +1357,97 @@ func (siw *ServerInterfaceWrapper) StartMigration(c *gin.Context) {
 	siw.Handler.StartMigration(c, id)
 }
 
+// GetReplicationApplyLogs operation middleware
+func (siw *ServerInterfaceWrapper) GetReplicationApplyLogs(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetReplicationApplyLogsParams
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", c.Request.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter limit: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "offset" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "offset", c.Request.URL.Query(), &params.Offset, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter offset: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "sourceNode" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "sourceNode", c.Request.URL.Query(), &params.SourceNode, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter sourceNode: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "sourceSeq" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "sourceSeq", c.Request.URL.Query(), &params.SourceSeq, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter sourceSeq: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "peerURL" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "peerURL", c.Request.URL.Query(), &params.PeerURL, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter peerURL: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "entityType" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "entityType", c.Request.URL.Query(), &params.EntityType, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter entityType: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "entityKey" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "entityKey", c.Request.URL.Query(), &params.EntityKey, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter entityKey: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "op" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "op", c.Request.URL.Query(), &params.Op, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter op: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "result" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "result", c.Request.URL.Query(), &params.Result, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter result: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetReplicationApplyLogs(c, params)
+}
+
 // ListRepositories operation middleware
 func (siw *ServerInterfaceWrapper) ListRepositories(c *gin.Context) {
 
@@ -1417,6 +1646,31 @@ func (siw *ServerInterfaceWrapper) ListRepositoryAssets(c *gin.Context) {
 	}
 
 	siw.Handler.ListRepositoryAssets(c, name, params)
+}
+
+// BatchDeleteRepositoryAssets operation middleware
+func (siw *ServerInterfaceWrapper) BatchDeleteRepositoryAssets(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "name" -------------
+	var name RepoNameParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "name", c.Param("name"), &name, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter name: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.BatchDeleteRepositoryAssets(c, name)
 }
 
 // GetRepositoryUsage operation middleware
@@ -1687,6 +1941,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/healthz", wrapper.GetHealthz)
 	router.GET(options.BaseURL+"/readyz", wrapper.GetReadyz)
 	router.GET(options.BaseURL+"/api/v1/status", wrapper.GetStatus)
+	router.GET(options.BaseURL+"/api/v1/replication-apply-logs", wrapper.GetReplicationApplyLogs)
 	router.POST(options.BaseURL+"/api/v1/auth/bootstrap", wrapper.Bootstrap)
 	router.POST(options.BaseURL+"/api/v1/auth/login", wrapper.Login)
 	router.POST(options.BaseURL+"/api/v1/auth/logout", wrapper.Logout)
@@ -1705,6 +1960,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/api/v1/repositories/:name/acl", wrapper.GetRepositoryAcl)
 	router.PUT(options.BaseURL+"/api/v1/repositories/:name/acl", wrapper.SetRepositoryAcl)
 	router.GET(options.BaseURL+"/api/v1/repositories/:name/assets", wrapper.ListRepositoryAssets)
+	router.POST(options.BaseURL+"/api/v1/repositories/:name/assets/batch-delete", wrapper.BatchDeleteRepositoryAssets)
 	router.GET(options.BaseURL+"/api/v1/repositories/:name/usage", wrapper.GetRepositoryUsage)
 	router.POST(options.BaseURL+"/api/v1/migrations/discover", wrapper.DiscoverMigrations)
 	router.GET(options.BaseURL+"/api/v1/migrations", wrapper.ListMigrations)

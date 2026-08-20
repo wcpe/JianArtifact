@@ -163,6 +163,35 @@ func TestReplicationApplyLWW(t *testing.T) {
 	}
 }
 
+// TestReplicationApplyRemoteLWW 多对端顺序下，先应用的较新远端版本不得被后到的旧版本覆盖。
+func TestReplicationApplyRemoteLWW(t *testing.T) {
+	svc, _, _, _, _, userRepo, _ := newTestReplSvc(t)
+	newerChange := repository.Change{
+		TS: "2026-08-13T00:00:02Z", NodeID: "node-b", Op: domain.OpPut,
+		EntityType: domain.EntityUser, EntityKey: domain.UserKey("multi-peer-user"),
+		Data: `{"username":"multi-peer-user","role":"admin","status":"active","passwordHash":"new"}`,
+	}
+	olderChange := repository.Change{
+		TS: "2026-08-13T00:00:01Z", NodeID: "node-c", Op: domain.OpPut,
+		EntityType: domain.EntityUser, EntityKey: domain.UserKey("multi-peer-user"),
+		Data: `{"username":"multi-peer-user","role":"user","status":"active","passwordHash":"old"}`,
+	}
+
+	if err := svc.Apply(newerChange); err != nil {
+		t.Fatalf("应用较新远端变更：%v", err)
+	}
+	if err := svc.Apply(olderChange); err != nil {
+		t.Fatalf("应用较旧远端变更：%v", err)
+	}
+	got, err := userRepo.GetByUsername("multi-peer-user")
+	if err != nil {
+		t.Fatalf("读取用户：%v", err)
+	}
+	if got.Role != "admin" || got.PasswordHash != "new" {
+		t.Fatalf("旧远端变更覆盖了新版本：%+v", got)
+	}
+}
+
 // TestReplicationApplyTombstone 删除 tombstone：Apply delete 删本地实体；更晚 put 可复活。
 func TestReplicationApplyTombstone(t *testing.T) {
 	svc, _, _, repoRepo, _, userRepo, _ := newTestReplSvc(t)
@@ -428,8 +457,8 @@ func hasChangeKey(t *testing.T, changes []repository.Change, key string) bool {
 	return false
 }
 
-// TestReplicationApplySettingRejectsClusterKey 应用对端变更时拒绝 repl:* 集群键（用户约束：
-// 集群同步设置坚决不能同步，避免对端配置互相覆盖造成混乱）。
+// TestReplicationApplySettingRejectsNodeLocalKey 应用对端变更时拒绝节点本地设置，
+// 避免集群配置与各节点对外域名互相覆盖造成混乱。
 func TestReplicationApplySettingRejectsClusterKey(t *testing.T) {
 	db := newTestDB(t)
 	settings := repository.NewSettingRepo(db)
@@ -461,7 +490,7 @@ func TestReplicationApplySettingRejectsClusterKey(t *testing.T) {
 		t.Fatalf("集群键不应被对端覆盖，得 %q，期望 false", v)
 	}
 
-	// 对照：非集群业务设置仍可被应用。
+	// 对端 public_url 也不得覆盖本节点域名。
 	ch := repository.Change{
 		TS: time.Now().Format(time.RFC3339Nano), NodeID: "node-remote",
 		Op: domain.OpPut, EntityType: domain.EntitySetting,
@@ -469,14 +498,14 @@ func TestReplicationApplySettingRejectsClusterKey(t *testing.T) {
 		Data:      `{"key":"public_url","value":"https://example.com"}`,
 	}
 	if err := replSvc.Apply(ch); err != nil {
-		t.Fatalf("Apply 业务设置：%v", err)
+		t.Fatalf("Apply 节点本地设置：%v", err)
 	}
 	got, err := settings.Get(domain.SettingKeyPublicURL)
-	if err != nil {
-		t.Fatalf("读取业务设置：%v", err)
+	if !errors.Is(err, repository.ErrNotFound) && err != nil {
+		t.Fatalf("读取节点本地设置：%v", err)
 	}
-	if got != "https://example.com" {
-		t.Fatalf("业务设置应被应用，得 %q", got)
+	if err == nil && got != "" {
+		t.Fatalf("节点本地 public_url 不应被对端覆盖，得 %q", got)
 	}
 }
 

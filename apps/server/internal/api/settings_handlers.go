@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
+	"github.com/wcpe/jianartifact/apps/server/internal/domain"
 )
 
 // 设置端点的边界（FR-89）：秒级配置允许范围与缺省展示值。
@@ -85,47 +86,42 @@ func (h *Handlers) PutSettings(c *gin.Context) {
 	if !bindJSON(c, &req) {
 		return
 	}
-	if req.AnonymousAccess != nil {
-		if err := h.settings.SetAnonymousAccessEnabled(*req.AnonymousAccess); err != nil {
-			writeDomainErr(c, err)
-			return
-		}
+	if err := validateSettingsRequest(req); err != nil {
+		auth.WriteError(c, http.StatusBadRequest, "bad_request", err.Error())
+		return
 	}
+	if err := h.settings.UpdateSettings(domain.SettingsUpdate{
+		AnonymousAccess: req.AnonymousAccess,
+		PublicURL:       req.PublicURL,
+		UpstreamTimeout: req.UpstreamTimeout,
+		SyncInterval:    req.SyncInterval,
+	}); err != nil {
+		writeDomainErr(c, err)
+		return
+	}
+	if req.UpstreamTimeout != nil && h.onUpstreamTimeoutChange != nil {
+		h.onUpstreamTimeoutChange(time.Duration(*req.UpstreamTimeout) * time.Second)
+	}
+	h.AuditLog(c, "setting.set", "setting", "settings", "", "基础设置更新", "ok")
+	c.JSON(http.StatusOK, h.settingsSnapshot())
+}
+
+// validateSettingsRequest 在写入前完成全部字段校验，避免非法请求产生部分更新。
+func validateSettingsRequest(req SettingsRequest) error {
 	if req.PublicURL != nil {
 		if err := validatePublicURL(*req.PublicURL); err != nil {
-			auth.WriteError(c, http.StatusBadRequest, "bad_request", err.Error())
-			return
-		}
-		if err := h.settings.SetPublicURL(*req.PublicURL); err != nil {
-			writeDomainErr(c, err)
-			return
+			return err
 		}
 	}
 	if req.UpstreamTimeout != nil {
 		if err := validateSecs(*req.UpstreamTimeout); err != nil {
-			auth.WriteError(c, http.StatusBadRequest, "bad_request", err.Error())
-			return
-		}
-		if err := h.settings.SetUpstreamTimeout(*req.UpstreamTimeout); err != nil {
-			writeDomainErr(c, err)
-			return
-		}
-		if h.onUpstreamTimeoutChange != nil {
-			h.onUpstreamTimeoutChange(time.Duration(*req.UpstreamTimeout) * time.Second)
+			return err
 		}
 	}
 	if req.SyncInterval != nil {
-		if err := validateSecs(*req.SyncInterval); err != nil {
-			auth.WriteError(c, http.StatusBadRequest, "bad_request", err.Error())
-			return
-		}
-		if err := h.settings.SetSyncInterval(*req.SyncInterval); err != nil {
-			writeDomainErr(c, err)
-			return
-		}
+		return validateSecs(*req.SyncInterval)
 	}
-	h.AuditLog(c, "setting.set", "setting", "settings", "", "基础设置更新", "ok")
-	c.JSON(http.StatusOK, h.settingsSnapshot())
+	return nil
 }
 
 // validateSecs 校验秒级配置取值范围（1–3600）。

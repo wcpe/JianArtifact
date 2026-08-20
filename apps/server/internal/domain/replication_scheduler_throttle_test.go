@@ -10,6 +10,32 @@ import (
 	"time"
 )
 
+// TestReplicationSchedulerErrorThrottleIsolatedByPeer 验证不同对端的成功/失败互不重置收缩状态。
+func TestReplicationSchedulerErrorThrottleIsolatedByPeer(t *testing.T) {
+	s := NewReplicationScheduler(nil, nil, nil, time.Millisecond)
+	var buf bytes.Buffer
+	old := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(old)
+
+	peerA := "http://peer-a"
+	peerB := "http://peer-b"
+	err := errors.New("拉取复制变更失败：HTTP 521")
+	s.logSyncErr(peerA, 0, err)
+	s.logSyncErr(peerA, 0, err)
+
+	buf.Reset()
+	s.logSyncOK(peerB)
+	if strings.Contains(buf.String(), "同步恢复") {
+		t.Fatalf("对端 B 成功不得汇总对端 A 的失败：%s", buf.String())
+	}
+
+	s.logSyncErr(peerA, 0, err)
+	if strings.Contains(buf.String(), "同步失败（对端") {
+		t.Fatalf("对端 A 的连续失败状态不应被对端 B 重置：%s", buf.String())
+	}
+}
+
 // TestReplicationSchedulerErrorThrottle 验证连续相同错误的日志收缩：
 //   - 首次失败打印一条完整日志；
 //   - 后续相同失败不逐条打印（仅每 errProgressEvery 次打一条进度）；
@@ -69,7 +95,7 @@ func TestReplicationSchedulerErrorThrottle(t *testing.T) {
 	if !strings.Contains(buf.String(), "复制调度：同步恢复") {
 		t.Fatalf("恢复应打印汇总，实际：%s", buf.String())
 	}
-	if s.lastErrKey != "" || s.errCount != 0 || !s.errStart.IsZero() {
+	if _, exists := s.errStates[peer]; exists {
 		t.Fatal("恢复后应清空连续失败状态")
 	}
 
