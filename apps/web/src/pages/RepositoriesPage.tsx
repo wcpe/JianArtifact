@@ -351,9 +351,7 @@ export function RepositoriesPage() {
                                 {repo.connectionStatus ? (
                                   <Badge
                                     variant="light"
-                                    color={
-                                      CONN_COLOR[repo.connectionStatus.status] ?? "gray"
-                                    }
+                                    color={CONN_COLOR[repo.connectionStatus.status] ?? "gray"}
                                     size="sm"
                                   >
                                     {t(

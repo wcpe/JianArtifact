@@ -346,9 +346,7 @@ describe("devmock MSW 端点行为", () => {
       items: { name: string; type: string; online?: boolean; connectionStatus?: unknown }[];
     };
     const npmProxy = body.items.find((r) => r.name === "npm-proxy");
-    expect(npmProxy?.connectionStatus).toEqual(
-      expect.objectContaining({ status: "AVAILABLE" }),
-    );
+    expect(npmProxy?.connectionStatus).toEqual(expect.objectContaining({ status: "AVAILABLE" }));
     const hosted = body.items.find((r) => r.name === "maven-releases");
     expect(hosted?.connectionStatus).toBeUndefined();
   });
@@ -377,9 +375,11 @@ describe("devmock MSW 端点行为", () => {
   it("手动重测：仅管理员、仅 online proxy，重测后返回最新状态", async () => {
     // 未认证 → 401。
     expect(
-      (await fetch("http://localhost/api/v1/repositories/npm-proxy/recheck-connection", {
-        method: "POST",
-      })).status,
+      (
+        await fetch("http://localhost/api/v1/repositories/npm-proxy/recheck-connection", {
+          method: "POST",
+        })
+      ).status,
     ).toBe(401);
     // 普通用户 → 403。
     expect(

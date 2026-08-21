@@ -33,7 +33,14 @@ import {
   setRepositoryOnline,
   updateRepository,
 } from "../api/endpoints";
-import type { ConnectionStatusValue, AclAction, AclEntry, RepoVisibility, Repository, User } from "../api/types";
+import type {
+  ConnectionStatusValue,
+  AclAction,
+  AclEntry,
+  RepoVisibility,
+  Repository,
+  User,
+} from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { useAsync } from "../hooks/useAsync";
 import { CONN_COLOR, CONN_LABEL_KEY } from "../lib/connectionStatus";
