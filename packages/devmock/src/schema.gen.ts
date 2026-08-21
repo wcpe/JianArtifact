@@ -265,6 +265,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/repositories/{name}/online": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * 设置仓库 online/offline 状态（仅管理员）
+         * @description 仅管理员可操作。online 是节点本地运维状态：不参与复制（M-2），
+         *     对端复制应用仓库变更不会覆盖本地 online，SetOnline 亦不产生复制变更日志。
+         */
+        put: operations["setRepositoryOnline"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/repositories/{name}/recheck-connection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 手动重测仓库上游连接（仅管理员）
+         * @description 仅管理员可操作；仅 online 的 proxy 仓库可重测。立即发起一次上游 HEAD 探测，
+         *     更新 auto-block 状态并返回最新连接状态（不等待自动阻止窗口）。
+         */
+        post: operations["recheckRepositoryConnection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/repositories/{name}/assets": {
         parameters: {
             query?: never;
@@ -585,6 +627,10 @@ export interface components {
             type: "hosted" | "proxy" | "group";
             /** @enum {string} */
             visibility: "public" | "private";
+            /** @description 仓库是否在线（管理员可手动置离线；offline 不参与复制） */
+            online?: boolean;
+            /** @description 上游连接状态（仅 proxy/group 返回；可选字段，向后兼容） */
+            connectionStatus?: components["schemas"]["ConnectionStatus"];
             /** @description 仓库描述（管理后台可配置，详情页展示） */
             description?: string;
             /** @description proxy 仓库的上游地址（仅 type=proxy） */
@@ -631,6 +677,24 @@ export interface components {
             remoteUrl?: string;
             /** @description 更新 group 成员仓库名（仅 type=group） */
             members?: string[];
+        };
+        SetRepositoryOnlineRequest: {
+            /** @description 是否在线（true=在线，false=离线；必填） */
+            online?: boolean;
+        };
+        ConnectionStatus: {
+            /**
+             * @description 上游连接状态（READY=尚未探测，AVAILABLE=可用，AUTO_BLOCKED=自动阻止，UNAVAILABLE=不可用，OFFLINE=手动离线）
+             * @enum {string}
+             */
+            status: "READY" | "AVAILABLE" | "UNAVAILABLE" | "AUTO_BLOCKED" | "OFFLINE";
+            /**
+             * Format: date-time
+             * @description 自动阻止窗口截止时间（非阻止状态为 null）
+             */
+            blockedUntil?: string | null;
+            /** @description 状态说明（供展示） */
+            description?: string;
         };
         AclEntry: {
             /** Format: int64 */
@@ -1388,6 +1452,62 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AclList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    setRepositoryOnline: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: components["parameters"]["RepoNameParam"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetRepositoryOnlineRequest"];
+            };
+        };
+        responses: {
+            /** @description 已更新 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Repository"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    recheckRepositoryConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: components["parameters"]["RepoNameParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 重测完成，返回最新连接状态 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionStatus"];
                 };
             };
             400: components["responses"]["BadRequest"];

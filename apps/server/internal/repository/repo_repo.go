@@ -32,7 +32,7 @@ func (r *RepoRepo) Create(name, format, typ, visibility, config string) (int64, 
 // GetByName 按名取仓库；不存在返回 ErrNotFound。
 func (r *RepoRepo) GetByName(name string) (*Repository, error) {
 	var repo Repository
-	err := r.db.Get(&repo, `SELECT id, name, format, type, visibility, description, config, created_at FROM repository WHERE name = ?`, name)
+	err := r.db.Get(&repo, `SELECT id, name, format, type, visibility, description, config, online, created_at FROM repository WHERE name = ?`, name)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -45,7 +45,7 @@ func (r *RepoRepo) GetByName(name string) (*Repository, error) {
 // GetByID 按 ID 取仓库；不存在返回 ErrNotFound。
 func (r *RepoRepo) GetByID(id int64) (*Repository, error) {
 	var repo Repository
-	err := r.db.Get(&repo, `SELECT id, name, format, type, visibility, description, config, created_at FROM repository WHERE id = ?`, id)
+	err := r.db.Get(&repo, `SELECT id, name, format, type, visibility, description, config, online, created_at FROM repository WHERE id = ?`, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -58,7 +58,7 @@ func (r *RepoRepo) GetByID(id int64) (*Repository, error) {
 // List 返回分页仓库（按 id 升序）。
 func (r *RepoRepo) List(limit, offset int) ([]Repository, error) {
 	var repos []Repository
-	err := r.db.Select(&repos, `SELECT id, name, format, type, visibility, description, config, created_at FROM repository ORDER BY id LIMIT ? OFFSET ?`, limit, offset)
+	err := r.db.Select(&repos, `SELECT id, name, format, type, visibility, description, config, online, created_at FROM repository ORDER BY id LIMIT ? OFFSET ?`, limit, offset)
 	return repos, err
 }
 
@@ -77,7 +77,7 @@ func (r *RepoRepo) ListSorted(limit, offset int, sortBy, order string) ([]Reposi
 		dir = "DESC"
 	}
 	var repos []Repository
-	q := fmt.Sprintf(`SELECT id, name, format, type, visibility, description, config, created_at FROM repository ORDER BY %s %s LIMIT ? OFFSET ?`, col, dir)
+	q := fmt.Sprintf(`SELECT id, name, format, type, visibility, description, config, online, created_at FROM repository ORDER BY %s %s LIMIT ? OFFSET ?`, col, dir)
 	err := r.db.Select(&repos, q, limit, offset)
 	return repos, err
 }
@@ -85,7 +85,7 @@ func (r *RepoRepo) ListSorted(limit, offset int, sortBy, order string) ([]Reposi
 // ListPublic 返回所有 visibility=public 的仓库。
 func (r *RepoRepo) ListPublic() ([]Repository, error) {
 	var repos []Repository
-	err := r.db.Select(&repos, `SELECT id, name, format, type, visibility, description, config, created_at FROM repository WHERE visibility = 'public' ORDER BY name`)
+	err := r.db.Select(&repos, `SELECT id, name, format, type, visibility, description, config, online, created_at FROM repository WHERE visibility = 'public' ORDER BY name`)
 	return repos, err
 }
 
@@ -125,6 +125,16 @@ func (r *RepoRepo) UpdateConfig(name, config string) error {
 	res, err := r.db.Exec(
 		`UPDATE repository SET config = ?, updated_at = datetime('now') WHERE name = ?`,
 		config, name,
+	)
+	return affected(res, err)
+}
+
+// SetOnline 设置仓库 online/offline 状态并直接落库（FR-113）。
+// 仅更新 online 列，不动 config / description 等复制字段。
+func (r *RepoRepo) SetOnline(name string, online bool) error {
+	res, err := r.db.Exec(
+		`UPDATE repository SET online = ?, updated_at = datetime('now') WHERE name = ?`,
+		online, name,
 	)
 	return affected(res, err)
 }

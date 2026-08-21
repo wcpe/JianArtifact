@@ -8,6 +8,7 @@ import {
   mockAclList,
   mockAssetList,
   mockBatchDeleteAssets,
+  mockConnectionStatus,
   mockHealthz,
   mockLoginResponse,
   mockReadyz,
@@ -66,6 +67,17 @@ describe("devmock ↔ OpenAPI 契约一致性", () => {
     expectValid("Repository", mockRepository());
     expectValid("RepositoryList", mockRepositoryList());
     expectValid("AclList", mockAclList());
+  });
+
+  it("连接状态响应满足契约并接受真实枚举", () => {
+    expectValid("ConnectionStatus", mockConnectionStatus());
+    expectValid("ConnectionStatus", { status: "AVAILABLE", description: "上游可用" });
+    expectValid("ConnectionStatus", { status: "OFFLINE", description: "已手动离线" });
+    const validate = ajv.compile(schemaFor("ConnectionStatus"));
+    // 非法枚举应被契约拒绝（漂移可检出）。
+    expect(validate({ status: "UNKNOWN_STATE" })).toBe(false);
+    // 缺 required 的 status 应被契约拒绝。
+    expect(validate({ description: "缺少状态" })).toBe(false);
   });
 
   it("制品浏览 / 使用片段响应满足契约", () => {

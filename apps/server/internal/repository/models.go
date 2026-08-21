@@ -33,6 +33,7 @@ type Repository struct {
 	Visibility  string `db:"visibility"`
 	Description string `db:"description"` // 仓库描述（管理后台可配置，详情页展示）
 	Config      string `db:"config"`      // 结构化配置 JSON（上游 URL、成员列表等）
+	Online      bool   `db:"online"`      // 是否在线（默认 true；管理员可手动置 offline，FR-113）
 	CreatedAt   string `db:"created_at"`
 }
 

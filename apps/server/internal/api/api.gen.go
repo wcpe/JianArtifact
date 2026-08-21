@@ -6,6 +6,7 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/oapi-codegen/runtime"
@@ -26,6 +27,33 @@ func (e AclEntryAction) Valid() bool {
 	case AclEntryActionRead:
 		return true
 	case AclEntryActionWrite:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ConnectionStatusStatus.
+const (
+	AUTOBLOCKED ConnectionStatusStatus = "AUTO_BLOCKED"
+	AVAILABLE   ConnectionStatusStatus = "AVAILABLE"
+	OFFLINE     ConnectionStatusStatus = "OFFLINE"
+	READY       ConnectionStatusStatus = "READY"
+	UNAVAILABLE ConnectionStatusStatus = "UNAVAILABLE"
+)
+
+// Valid indicates whether the value is a known member of the ConnectionStatusStatus enum.
+func (e ConnectionStatusStatus) Valid() bool {
+	switch e {
+	case AUTOBLOCKED:
+		return true
+	case AVAILABLE:
+		return true
+	case OFFLINE:
+		return true
+	case READY:
+		return true
+	case UNAVAILABLE:
 		return true
 	default:
 		return false
@@ -525,6 +553,21 @@ type BootstrapRequest struct {
 	Username string `json:"username"`
 }
 
+// ConnectionStatus defines model for ConnectionStatus.
+type ConnectionStatus struct {
+	// BlockedUntil 自动阻止窗口截止时间（非阻止状态为 null）
+	BlockedUntil *time.Time `json:"blockedUntil,omitempty"`
+
+	// Description 状态说明（供展示）
+	Description *string `json:"description,omitempty"`
+
+	// Status 上游连接状态（READY=尚未探测，AVAILABLE=可用，AUTO_BLOCKED=自动阻止，UNAVAILABLE=不可用，OFFLINE=手动离线）
+	Status ConnectionStatusStatus `json:"status"`
+}
+
+// ConnectionStatusStatus 上游连接状态（READY=尚未探测，AVAILABLE=可用，AUTO_BLOCKED=自动阻止，UNAVAILABLE=不可用，OFFLINE=手动离线）
+type ConnectionStatusStatus string
+
 // CreateMigrationRequest defines model for CreateMigrationRequest.
 type CreateMigrationRequest struct {
 	ConflictPolicy *MigrationConflictPolicy `json:"conflictPolicy,omitempty"`
@@ -739,8 +782,9 @@ type ReplicationApplyLogList struct {
 // Repository defines model for Repository.
 type Repository struct {
 	// ArtifactCount 仓库内制品数量（只读统计字段）
-	ArtifactCount *int   `json:"artifactCount,omitempty"`
-	CreatedAt     string `json:"createdAt"`
+	ArtifactCount    *int              `json:"artifactCount,omitempty"`
+	ConnectionStatus *ConnectionStatus `json:"connectionStatus,omitempty"`
+	CreatedAt        string            `json:"createdAt"`
 
 	// Description 仓库描述（管理后台可配置，详情页展示）
 	Description *string          `json:"description,omitempty"`
@@ -750,6 +794,9 @@ type Repository struct {
 	// Members group 仓库的成员仓库名（有序，仅 type=group）
 	Members *[]string `json:"members,omitempty"`
 	Name    string    `json:"name"`
+
+	// Online 仓库是否在线（管理员可手动置离线；offline 不参与复制）
+	Online *bool `json:"online,omitempty"`
 
 	// RemoteUrl proxy 仓库的上游地址（仅 type=proxy）
 	RemoteUrl *string `json:"remoteUrl,omitempty"`
@@ -773,6 +820,12 @@ type RepositoryVisibility string
 type RepositoryList struct {
 	Items []Repository `json:"items"`
 	Total int          `json:"total"`
+}
+
+// SetRepositoryOnlineRequest defines model for SetRepositoryOnlineRequest.
+type SetRepositoryOnlineRequest struct {
+	// Online 是否在线（true=在线，false=离线；必填）
+	Online *bool `json:"online,omitempty"`
 }
 
 // StartMigrationRequest defines model for StartMigrationRequest.
@@ -983,6 +1036,9 @@ type SetRepositoryAclJSONRequestBody = PutAclRequest
 // BatchDeleteRepositoryAssetsJSONRequestBody defines body for BatchDeleteRepositoryAssets for application/json ContentType.
 type BatchDeleteRepositoryAssetsJSONRequestBody = BatchDeleteAssetsRequest
 
+// SetRepositoryOnlineJSONRequestBody defines body for SetRepositoryOnline for application/json ContentType.
+type SetRepositoryOnlineJSONRequestBody = SetRepositoryOnlineRequest
+
 // CreateTokenJSONRequestBody defines body for CreateToken for application/json ContentType.
 type CreateTokenJSONRequestBody = CreateTokenRequest
 
@@ -1060,6 +1116,12 @@ type ServerInterface interface {
 	// BatchDeleteRepositoryAssets 批量删除仓库制品（仅管理员）
 	// (POST /api/v1/repositories/{name}/assets/batch-delete)
 	BatchDeleteRepositoryAssets(c *gin.Context, name RepoNameParam)
+	// SetRepositoryOnline 设置仓库 online/offline 状态（仅管理员）
+	// (PUT /api/v1/repositories/{name}/online)
+	SetRepositoryOnline(c *gin.Context, name RepoNameParam)
+	// RecheckRepositoryConnection 手动重测仓库上游连接（仅管理员）
+	// (POST /api/v1/repositories/{name}/recheck-connection)
+	RecheckRepositoryConnection(c *gin.Context, name RepoNameParam)
 	// GetRepositoryUsage 仓库客户端使用片段（据 format/type 返回接入命令）
 	// (GET /api/v1/repositories/{name}/usage)
 	GetRepositoryUsage(c *gin.Context, name RepoNameParam)
@@ -1673,6 +1735,56 @@ func (siw *ServerInterfaceWrapper) BatchDeleteRepositoryAssets(c *gin.Context) {
 	siw.Handler.BatchDeleteRepositoryAssets(c, name)
 }
 
+// SetRepositoryOnline operation middleware
+func (siw *ServerInterfaceWrapper) SetRepositoryOnline(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "name" -------------
+	var name RepoNameParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "name", c.Param("name"), &name, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter name: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.SetRepositoryOnline(c, name)
+}
+
+// RecheckRepositoryConnection operation middleware
+func (siw *ServerInterfaceWrapper) RecheckRepositoryConnection(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "name" -------------
+	var name RepoNameParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "name", c.Param("name"), &name, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter name: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.RecheckRepositoryConnection(c, name)
+}
+
 // GetRepositoryUsage operation middleware
 func (siw *ServerInterfaceWrapper) GetRepositoryUsage(c *gin.Context) {
 
@@ -1959,6 +2071,8 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.PATCH(options.BaseURL+"/api/v1/repositories/:name", wrapper.UpdateRepository)
 	router.GET(options.BaseURL+"/api/v1/repositories/:name/acl", wrapper.GetRepositoryAcl)
 	router.PUT(options.BaseURL+"/api/v1/repositories/:name/acl", wrapper.SetRepositoryAcl)
+	router.PUT(options.BaseURL+"/api/v1/repositories/:name/online", wrapper.SetRepositoryOnline)
+	router.POST(options.BaseURL+"/api/v1/repositories/:name/recheck-connection", wrapper.RecheckRepositoryConnection)
 	router.GET(options.BaseURL+"/api/v1/repositories/:name/assets", wrapper.ListRepositoryAssets)
 	router.POST(options.BaseURL+"/api/v1/repositories/:name/assets/batch-delete", wrapper.BatchDeleteRepositoryAssets)
 	router.GET(options.BaseURL+"/api/v1/repositories/:name/usage", wrapper.GetRepositoryUsage)

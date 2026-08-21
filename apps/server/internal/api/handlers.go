@@ -240,6 +240,7 @@ func toAPIRepository(r *repository.Repository, stats *domain.RepoStats) Reposito
 		Format:     RepositoryFormat(r.Format),
 		Type:       RepositoryType(r.Type),
 		Visibility: RepositoryVisibility(r.Visibility),
+		Online:     &r.Online,
 		CreatedAt:  r.CreatedAt,
 	}
 	if r.Description != "" {
@@ -262,6 +263,54 @@ func toAPIRepository(r *repository.Repository, stats *domain.RepoStats) Reposito
 		out.TotalSize = &totalSize
 	}
 	return out
+}
+
+// toRepo 把行模型转为契约 Repository，并按 MD-2 规则填充连接状态（FR-114）。
+func (h *Handlers) toRepo(r *repository.Repository, stats *domain.RepoStats) Repository {
+	out := toAPIRepository(r, stats)
+	out.ConnectionStatus = h.connectionStatus(r)
+	return out
+}
+
+// connectionStatus 返回仓库连接状态（FR-114）：assets 未注入或 hosted 仓库返回 nil。
+func (h *Handlers) connectionStatus(r *repository.Repository) *ConnectionStatus {
+	if h.assets == nil {
+		return nil
+	}
+	return toAPIConnectionStatus(r, h.assets.Status(r.ID))
+}
+
+// toAPIConnectionStatus 按 MD-2 状态合并规则生成契约 ConnectionStatus：
+//   - hosted 不展示连接状态（返回 nil）；
+//   - online=false（离线）优先覆盖其它状态：无论内存态为何一律 OFFLINE；
+//   - 仅 online=true 显示内存态连接状态（READY/AVAILABLE/AUTO_BLOCKED/UNAVAILABLE）；
+//   - group 无独立上游，online 时显示 READY（未连接）。
+func toAPIConnectionStatus(r *repository.Repository, h domain.RemoteHealth) *ConnectionStatus {
+	if r.Type == "hosted" {
+		return nil
+	}
+	if !r.Online {
+		return &ConnectionStatus{Status: ConnectionStatusStatus(domain.StatusOffline), Description: optionalString("已手动离线")}
+	}
+	switch h.Status {
+	case domain.StatusAutoBlocked:
+		out := &ConnectionStatus{Status: ConnectionStatusStatus(domain.StatusAutoBlocked), Description: optionalString("上游不可用，自动阻止中")}
+		if !h.BlockedUntil.IsZero() {
+			until := h.BlockedUntil
+			out.BlockedUntil = &until
+		}
+		return out
+	case domain.StatusUnavailable:
+		return &ConnectionStatus{Status: ConnectionStatusStatus(domain.StatusUnavailable), Description: optionalString("上游不可用")}
+	case domain.StatusAvailable:
+		return &ConnectionStatus{Status: ConnectionStatusStatus(domain.StatusAvailable), Description: optionalString("上游可用")}
+	default:
+		// READY 及未知状态：尚未探测（未连接）。
+		if r.Type == "group" {
+			return &ConnectionStatus{Status: ConnectionStatusStatus(domain.StatusReady), Description: optionalString("尚未探测（group 无独立上游）")}
+		}
+		return &ConnectionStatus{Status: ConnectionStatusStatus(domain.StatusReady), Description: optionalString("尚未探测")}
+	}
 }
 
 // toAPIToken 把行模型转为契约 Token。

@@ -480,6 +480,60 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+  /api/v1/repositories/{name}/online:
+    put:
+      operationId: setRepositoryOnline
+      summary: 设置仓库 online/offline 状态（仅管理员）
+      description: |
+        仅管理员可操作。online 是节点本地运维状态：不参与复制（M-2），
+        对端复制应用仓库变更不会覆盖本地 online，SetOnline 亦不产生复制变更日志。
+      parameters:
+        - $ref: "#/components/parameters/RepoNameParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetRepositoryOnlineRequest"
+      responses:
+        "200":
+          description: 已更新
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Repository"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/v1/repositories/{name}/recheck-connection:
+    post:
+      operationId: recheckRepositoryConnection
+      summary: 手动重测仓库上游连接（仅管理员）
+      description: |
+        仅管理员可操作；仅 online 的 proxy 仓库可重测。立即发起一次上游 HEAD 探测，
+        更新 auto-block 状态并返回最新连接状态（不等待自动阻止窗口）。
+      parameters:
+        - $ref: "#/components/parameters/RepoNameParam"
+      responses:
+        "200":
+          description: 重测完成，返回最新连接状态
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConnectionStatus"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
   /api/v1/repositories/{name}/assets:
     get:
       operationId: listRepositoryAssets
@@ -1097,6 +1151,12 @@ components:
         visibility:
           type: string
           enum: [public, private]
+        online:
+          type: boolean
+          description: 仓库是否在线（管理员可手动置离线；offline 不参与复制）
+        connectionStatus:
+          $ref: "#/components/schemas/ConnectionStatus"
+          description: 上游连接状态（仅 proxy/group 返回；可选字段，向后兼容）
         description:
           type: string
           description: 仓库描述（管理后台可配置，详情页展示）
@@ -1172,6 +1232,28 @@ components:
           items:
             type: string
           description: 更新 group 成员仓库名（仅 type=group）
+    SetRepositoryOnlineRequest:
+      type: object
+      properties:
+        online:
+          type: boolean
+          description: 是否在线（true=在线，false=离线；必填）
+    ConnectionStatus:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [READY, AVAILABLE, UNAVAILABLE, AUTO_BLOCKED, OFFLINE]
+          description: 上游连接状态（READY=尚未探测，AVAILABLE=可用，AUTO_BLOCKED=自动阻止，UNAVAILABLE=不可用，OFFLINE=手动离线）
+        blockedUntil:
+          type: string
+          format: date-time
+          nullable: true
+          description: 自动阻止窗口截止时间（非阻止状态为 null）
+        description:
+          type: string
+          description: 状态说明（供展示）
     AclEntry:
       type: object
       required: [subjectId, action]

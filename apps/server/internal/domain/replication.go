@@ -139,6 +139,10 @@ type ReplicationService struct {
 	blobs    *blobstore.Store
 
 	nodeID string // 惰性初始化缓存
+
+	// negCache 是 AssetService 的 404 负缓存（FR-111），经 AssetService.SetChangeRecorder
+	// 反向注入共享；复制应用 asset 成功后失效对应键。nil（未装配）时失效为 no-op。
+	negCache *negativeCache
 }
 
 // NewReplicationService 构造 ReplicationService。blobs 供复制协议 blob 流式提供（FR-84）。
@@ -157,6 +161,20 @@ func NewReplicationService(
 		acls: acls, users: users, tokens: tokens, settings: settings,
 		blobs: blobs,
 	}
+}
+
+// SetNegativeCache 注入 404 负缓存（FR-111）：由 AssetService.SetChangeRecorder 装配时
+// 反向注入，复制应用 asset 成功后失效对应负缓存键。nil 表示不失效（no-op）。
+func (s *ReplicationService) SetNegativeCache(c *negativeCache) {
+	s.negCache = c
+}
+
+// invalidateNegative 失效 (repoID, path) 的负缓存；未装配负缓存时静默跳过。
+func (s *ReplicationService) invalidateNegative(repoID int64, path string) {
+	if s.negCache == nil {
+		return
+	}
+	s.negCache.remove(repoID, path)
 }
 
 // OpenBlob 按内容哈希打开 blob 读取流（供复制协议 GET blob 端点流式返回，FR-84）。
@@ -646,14 +664,24 @@ func (s *ReplicationService) applyAsset(ch repository.Change) error {
 		return err // 仓库未同步：对账兜底
 	}
 	if ch.Op == OpDelete {
-		return s.assets.DeleteByPath(repo.ID, path)
+		if err := s.assets.DeleteByPath(repo.ID, path); err != nil {
+			return err
+		}
+		// 复制应用删除成功：失效同路径负缓存（FR-111）。
+		s.invalidateNegative(repo.ID, path)
+		return nil
 	}
 	var d AssetChangeData
 	if err := json.Unmarshal([]byte(ch.Data), &d); err != nil {
 		return err
 	}
 	// 变更携带源端创建/更新时间时一并回填，保证复制两侧时间一致。
-	return s.assets.UpsertWithTime(repo.ID, path, d.BlobHash, d.Size, d.ContentType, d.Sha1, d.Md5, d.CreatedAt, d.UpdatedAt)
+	if err := s.assets.UpsertWithTime(repo.ID, path, d.BlobHash, d.Size, d.ContentType, d.Sha1, d.Md5, d.CreatedAt, d.UpdatedAt); err != nil {
+		return err
+	}
+	// 复制应用写入成功：失效同路径负缓存（FR-111），对端同步进来的新制品立即可见。
+	s.invalidateNegative(repo.ID, path)
+	return nil
 }
 
 func (s *ReplicationService) applyRepository(ch repository.Change) error {

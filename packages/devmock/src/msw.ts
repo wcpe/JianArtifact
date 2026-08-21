@@ -498,6 +498,40 @@ export const handlers = [
       : err("not_found", "仓库不存在", 404);
   }),
 
+  // FR-113：仓库 online/offline 开关（仅管理员；本地运维状态，不参与复制）。
+  http.put("*/api/v1/repositories/:name/online", async ({ request, params }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const body = (await request.json().catch(() => ({}))) as { online?: boolean };
+    if (typeof body.online !== "boolean") {
+      return err("bad_request", "online 必填", 400);
+    }
+    const repo = store.setOnline(String(params.name), body.online);
+    return repo ? HttpResponse.json(repo) : err("not_found", "仓库不存在", 404);
+  }),
+
+  // FR-114：手动重测仓库上游连接（仅管理员；仅 online 的 proxy 可重测）。
+  http.post("*/api/v1/repositories/:name/recheck-connection", ({ request, params }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const repo = store.findRepository(String(params.name));
+    if (!repo) {
+      return err("not_found", "仓库不存在", 404);
+    }
+    if (repo.type !== "proxy") {
+      return err("bad_request", "仅 proxy 仓库可重测连接", 400);
+    }
+    if (repo.online === false) {
+      return err("bad_request", "仓库已离线，请先上线后再重测", 400);
+    }
+    const status = store.recheckConnection(String(params.name));
+    return status ? HttpResponse.json(status) : err("bad_request", "无法重测连接", 400);
+  }),
+
   http.get("*/api/v1/repositories/:name/acl", ({ request, params }) => {
     const denied = unauthorized(request);
     if (denied) {

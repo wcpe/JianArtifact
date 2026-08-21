@@ -233,6 +233,16 @@ func (s *RepositoryService) Update(name, visibility string, description *string,
 	return updated, nil
 }
 
+// SetOnline 设置仓库 online/offline 状态（FR-113）。
+// 直接落库、不写复制变更日志：online 是节点本地运维状态（M-2 硬约束），
+// 不得经复制传播到对端覆盖其本地状态。仓库不存在返回 ErrNotFound。
+func (s *RepositoryService) SetOnline(name string, online bool) error {
+	if err := s.repos.SetOnline(name, online); err != nil {
+		return mapNotFound(err)
+	}
+	return nil
+}
+
 // validateConfig 按仓库类型校验结构化配置：
 //   - hosted：remoteUrl 与 members 均须为空；
 //   - proxy：remoteUrl 必填且为合法 http/https 绝对地址，members 须为空；

@@ -50,7 +50,12 @@ func (h *Handlers) ListRepositories(c *gin.Context, params ListRepositoriesParam
 			}
 		}
 		stats := statsMap[rows[i].ID]
-		items = append(items, toAPIRepository(&rows[i], &stats))
+		item := toAPIRepository(&rows[i], &stats)
+		// 连接状态为管理面信息（FR-114），仅管理员可见。
+		if isAdmin {
+			item.ConnectionStatus = h.connectionStatus(&rows[i])
+		}
+		items = append(items, item)
 	}
 	if !isAdmin {
 		total = len(items)
@@ -92,7 +97,7 @@ func (h *Handlers) CreateRepository(c *gin.Context) {
 		return
 	}
 	h.AuditLog(c, "repo.create", "repository", req.Name, req.Name, "format="+string(req.Format)+" type="+string(req.Type), "ok")
-	c.JSON(http.StatusCreated, toAPIRepository(repo, nil))
+	c.JSON(http.StatusCreated, h.toRepo(repo, nil))
 }
 
 // UpdateRepository 更新仓库可见性/描述/配置，仅管理员。
@@ -128,7 +133,72 @@ func (h *Handlers) UpdateRepository(c *gin.Context, name RepoNameParam) {
 		return
 	}
 	h.AuditLog(c, "repo.update", "repository", name, name, "", "ok")
-	c.JSON(http.StatusOK, toAPIRepository(repo, nil))
+	c.JSON(http.StatusOK, h.toRepo(repo, nil))
+}
+
+// SetRepositoryOnline 设置仓库 online/offline 状态，仅管理员（FR-113）。
+// online 为节点本地运维状态：不写复制变更日志（M-2），对端复制不会覆盖。
+func (h *Handlers) SetRepositoryOnline(c *gin.Context, name RepoNameParam) {
+	if _, ok := requireAdmin(c); !ok {
+		return
+	}
+	var req SetRepositoryOnlineRequest
+	if !bindJSON(c, &req) {
+		return
+	}
+	if req.Online == nil {
+		auth.WriteError(c, http.StatusBadRequest, "bad_request", "缺少 online 字段")
+		return
+	}
+	online := *req.Online
+	if err := h.repos.SetOnline(name, online); err != nil {
+		writeDomainErr(c, err)
+		return
+	}
+	repo, err := h.repos.Get(name)
+	if err != nil {
+		writeDomainErr(c, err)
+		return
+	}
+	state := "offline"
+	if online {
+		state = "online"
+	}
+	h.AuditLog(c, "repo.online", "repository", name, name, "online="+state, "ok")
+	c.JSON(http.StatusOK, h.toRepo(repo, nil))
+}
+
+// RecheckRepositoryConnection 手动重测仓库上游连接，仅管理员（FR-114）。
+// 仅 online 的 proxy 仓库可重测：立即 HEAD 探测并更新 auto-block 状态，返回最新状态。
+func (h *Handlers) RecheckRepositoryConnection(c *gin.Context, name RepoNameParam) {
+	if _, ok := requireAdmin(c); !ok {
+		return
+	}
+	if h.assets == nil {
+		auth.WriteError(c, http.StatusInternalServerError, "internal_error", "连接探测未启用")
+		return
+	}
+	repo, err := h.repos.Get(name)
+	if err != nil {
+		writeDomainErr(c, err)
+		return
+	}
+	if repo.Type != "proxy" {
+		auth.WriteError(c, http.StatusBadRequest, "bad_request", "仅 proxy 仓库可重测连接")
+		return
+	}
+	if !repo.Online {
+		auth.WriteError(c, http.StatusBadRequest, "bad_request", "仓库已离线，请先上线后再重测")
+		return
+	}
+	cfg, err := repo.DecodeConfig()
+	if err != nil || cfg.RemoteURL == "" {
+		auth.WriteError(c, http.StatusBadRequest, "bad_request", "仓库未配置上游地址")
+		return
+	}
+	h.AuditLog(c, "repo.recheck", "repository", name, name, "remote="+cfg.RemoteURL, "ok")
+	status := h.assets.RecheckConnection(repo.ID, cfg.RemoteURL)
+	c.JSON(http.StatusOK, toAPIConnectionStatus(repo, status))
 }
 
 // DeleteRepository 删除仓库，仅管理员。

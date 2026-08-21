@@ -336,4 +336,100 @@ describe("devmock MSW 端点行为", () => {
     // proxy 不可写：不应含 publish 片段。
     expect(body.snippets.some((s) => s.code.includes("npm publish"))).toBe(false);
   });
+
+  it("仓库列表为 proxy 返回连接状态、hosted 不返回（FR-114）", async () => {
+    const res = await fetch("http://localhost/api/v1/repositories?page_size=100", {
+      headers: auth,
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      items: { name: string; type: string; online?: boolean; connectionStatus?: unknown }[];
+    };
+    const npmProxy = body.items.find((r) => r.name === "npm-proxy");
+    expect(npmProxy?.connectionStatus).toEqual(
+      expect.objectContaining({ status: "AVAILABLE" }),
+    );
+    const hosted = body.items.find((r) => r.name === "maven-releases");
+    expect(hosted?.connectionStatus).toBeUndefined();
+  });
+
+  it("offline 仓库连接状态优先覆盖为 OFFLINE（MD-2）", async () => {
+    const put = await fetch("http://localhost/api/v1/repositories/npm-proxy/online", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...auth },
+      body: JSON.stringify({ online: false }),
+    });
+    expect(put.status).toBe(200);
+    const off = (await put.json()) as { connectionStatus?: { status: string } };
+    expect(off.connectionStatus?.status).toBe("OFFLINE");
+
+    // 列表同样带 OFFLINE。
+    const list = await fetch("http://localhost/api/v1/repositories?page_size=100", {
+      headers: auth,
+    });
+    const listBody = (await list.json()) as {
+      items: { name: string; connectionStatus?: { status: string } }[];
+    };
+    const npmProxy = listBody.items.find((r) => r.name === "npm-proxy");
+    expect(npmProxy?.connectionStatus?.status).toBe("OFFLINE");
+  });
+
+  it("手动重测：仅管理员、仅 online proxy，重测后返回最新状态", async () => {
+    // 未认证 → 401。
+    expect(
+      (await fetch("http://localhost/api/v1/repositories/npm-proxy/recheck-connection", {
+        method: "POST",
+      })).status,
+    ).toBe(401);
+    // 普通用户 → 403。
+    expect(
+      (
+        await fetch("http://localhost/api/v1/repositories/npm-proxy/recheck-connection", {
+          method: "POST",
+          headers: userAuth,
+        })
+      ).status,
+    ).toBe(403);
+    // hosted 仓库 → 400。
+    expect(
+      (
+        await fetch("http://localhost/api/v1/repositories/maven-releases/recheck-connection", {
+          method: "POST",
+          headers: auth,
+        })
+      ).status,
+    ).toBe(400);
+    // 未知仓库 → 404。
+    expect(
+      (
+        await fetch("http://localhost/api/v1/repositories/nope/recheck-connection", {
+          method: "POST",
+          headers: auth,
+        })
+      ).status,
+    ).toBe(404);
+    // 管理员重测 online proxy → 200 且 AVAILABLE。
+    const ok = await fetch("http://localhost/api/v1/repositories/npm-proxy/recheck-connection", {
+      method: "POST",
+      headers: auth,
+    });
+    expect(ok.status).toBe(200);
+    const body = (await ok.json()) as { status: string };
+    expect(body.status).toBe("AVAILABLE");
+
+    // offline 仓库 → 400。
+    await fetch("http://localhost/api/v1/repositories/npm-proxy/online", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...auth },
+      body: JSON.stringify({ online: false }),
+    });
+    expect(
+      (
+        await fetch("http://localhost/api/v1/repositories/npm-proxy/recheck-connection", {
+          method: "POST",
+          headers: auth,
+        })
+      ).status,
+    ).toBe(400);
+  });
 });

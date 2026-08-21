@@ -15,6 +15,7 @@ export type TokenList = Schemas["TokenList"];
 export type TokenCreated = Schemas["TokenCreated"];
 export type Repository = Schemas["Repository"];
 export type RepositoryList = Schemas["RepositoryList"];
+export type ConnectionStatus = Schemas["ConnectionStatus"];
 export type AclList = Schemas["AclList"];
 export type AssetList = Schemas["AssetList"];
 export type BatchDeleteAssetsRequest = Schemas["BatchDeleteAssetsRequest"];
@@ -123,6 +124,15 @@ export function mockRepository(): Repository {
 /** GET /api/v1/repositories 的契约响应。 */
 export function mockRepositoryList(): RepositoryList {
   return { items: [mockRepository()], total: 1 };
+}
+
+/** FR-114：仓库连接状态的契约响应（AUTO_BLOCKED 示例，含阻止窗口）。 */
+export function mockConnectionStatus(): ConnectionStatus {
+  return {
+    status: "AUTO_BLOCKED",
+    blockedUntil: "2026-01-05T00:00:00Z",
+    description: "上游不可用，自动阻止中",
+  };
 }
 
 /** 仓库 ACL 的契约响应。 */

@@ -9,6 +9,7 @@ export type User = Schemas["User"];
 export type Token = Schemas["Token"];
 export type TokenCreated = Schemas["TokenCreated"];
 export type Repository = Schemas["Repository"];
+export type ConnectionStatus = Schemas["ConnectionStatus"];
 export type AclEntry = Schemas["AclEntry"];
 export type StatusInfo = Schemas["StatusInfo"];
 export type AssetSummary = Schemas["AssetSummary"];
@@ -34,6 +35,8 @@ interface State {
   users: User[];
   tokens: StoredToken[];
   repositories: Repository[];
+  /** FR-114：proxy 仓库上游连接状态（内存态，按仓库名；hosted/group 不维护）。 */
+  connStatus: Record<string, ConnectionStatus>;
   acls: Record<string, AclEntry[]>;
   assets: Record<string, AssetSummary[]>;
   migrations: MigrationTask[];
@@ -79,6 +82,7 @@ function seed(): State {
         type: "hosted",
         visibility: "private",
         description: "团队 Maven release 制品库",
+        online: true,
         createdAt: "2026-01-01T00:00:00Z",
       },
       {
@@ -88,6 +92,7 @@ function seed(): State {
         type: "proxy",
         visibility: "public",
         remoteUrl: "https://registry.npmjs.org",
+        online: true,
         createdAt: "2026-01-02T00:00:00Z",
       },
       {
@@ -96,10 +101,15 @@ function seed(): State {
         format: "raw",
         type: "hosted",
         visibility: "private",
+        online: true,
         createdAt: "2026-01-03T00:00:00Z",
       },
     ],
     acls: { "maven-releases": [{ subjectId: 2, action: "read" }] },
+    connStatus: {
+      // FR-114：npm-proxy 上游可达（AVAILABLE），演示列表徽章效果。
+      "npm-proxy": { status: "AVAILABLE", description: "上游可用" },
+    },
     assets: {
       "maven-releases": [
         {
@@ -151,6 +161,23 @@ function nowIso(): string {
 function pageSlice<T>(items: T[], page: number, pageSize: number): T[] {
   const start = (page - 1) * pageSize;
   return items.slice(start, start + pageSize);
+}
+
+/** FR-114：MD-2 状态合并——offline 优先覆盖为 OFFLINE；hosted 不返回；online 的 proxy 返回内存态。 */
+function statusFor(repo: Repository): ConnectionStatus | undefined {
+  if (repo.type === "hosted") {
+    return undefined;
+  }
+  if (repo.online === false) {
+    return { status: "OFFLINE", description: "已手动离线" };
+  }
+  return state.connStatus[repo.name] ?? { status: "READY", description: "尚未探测" };
+}
+
+/** FR-114：为仓库响应附加连接状态（不修改内部数据）。 */
+function decorate(repo: Repository): Repository {
+  const status = statusFor(repo);
+  return status ? { ...repo, connectionStatus: status } : { ...repo };
 }
 
 export const store = {
@@ -261,7 +288,7 @@ export const store = {
 
   listRepositories(page: number, pageSize: number): { items: Repository[]; total: number } {
     return {
-      items: pageSlice(state.repositories, page, pageSize),
+      items: pageSlice(state.repositories, page, pageSize).map(decorate),
       total: state.repositories.length,
     };
   },
@@ -273,7 +300,7 @@ export const store = {
   ): { items: Repository[]; total: number } {
     const readable = state.repositories.filter((r) => r.visibility === "public");
     return {
-      items: pageSlice(readable, page, pageSize),
+      items: pageSlice(readable, page, pageSize).map(decorate),
       total: readable.length,
     };
   },
@@ -313,7 +340,8 @@ export const store = {
   },
 
   findRepository(name: string): Repository | undefined {
-    return state.repositories.find((r) => r.name === name);
+    const repo = state.repositories.find((r) => r.name === name);
+    return repo ? decorate(repo) : undefined;
   },
 
   createRepository(
@@ -333,6 +361,7 @@ export const store = {
       format: input.format,
       type: input.type,
       visibility: input.visibility ?? "private",
+      online: true,
       createdAt: nowIso(),
     };
     if (input.description) {
@@ -345,7 +374,7 @@ export const store = {
       repo.members = input.members;
     }
     state.repositories.push(repo);
-    return repo;
+    return decorate(repo);
   },
 
   updateRepository(
@@ -374,7 +403,29 @@ export const store = {
     if (patch.members !== undefined) {
       repo.members = patch.members;
     }
-    return repo;
+    return decorate(repo);
+  },
+
+  /** FR-113：设置仓库 online/offline（节点本地运维状态，不参与复制）。 */
+  setOnline(name: string, online: boolean): Repository | null {
+    const repo = state.repositories.find((r) => r.name === name);
+    if (!repo) {
+      return null;
+    }
+    repo.online = online;
+    return decorate(repo);
+  },
+
+  /** FR-114：手动重测 proxy 仓库上游连接（仅 online proxy）。mock 视上游恒可达，
+   *  重测后置为 AVAILABLE 并返回最新状态；非 proxy/offline 返回 null。 */
+  recheckConnection(name: string): ConnectionStatus | null {
+    const repo = state.repositories.find((r) => r.name === name);
+    if (!repo || repo.type !== "proxy" || repo.online === false) {
+      return null;
+    }
+    const status: ConnectionStatus = { status: "AVAILABLE", description: "上游可用" };
+    state.connStatus[name] = status;
+    return status;
   },
 
   deleteRepository(name: string): boolean {
@@ -382,6 +433,7 @@ export const store = {
     state.repositories = state.repositories.filter((r) => r.name !== name);
     delete state.acls[name];
     delete state.assets[name];
+    delete state.connStatus[name];
     return state.repositories.length < before;
   },
 

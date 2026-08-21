@@ -44,16 +44,16 @@ func TestMigrateIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CurrentVersion：%v", err)
 	}
-	if version != "0014" {
-		t.Errorf("迁移版本 = %q，期望 0014", version)
+	if version != "0015" {
+		t.Errorf("迁移版本 = %q，期望 0015", version)
 	}
 	// 重复迁移不应产生多余记录。
 	var applied int
 	if err := db.Get(&applied, "SELECT COUNT(*) FROM schema_migrations"); err != nil {
 		t.Fatalf("统计迁移记录：%v", err)
 	}
-	if applied != 14 {
-		t.Errorf("已应用迁移数 = %d，期望 14", applied)
+	if applied != 15 {
+		t.Errorf("已应用迁移数 = %d，期望 15", applied)
 	}
 }
 

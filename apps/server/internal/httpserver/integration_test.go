@@ -9,13 +9,16 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/api"
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
+	"github.com/wcpe/jianartifact/apps/server/internal/blobstore"
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
 	"github.com/wcpe/jianartifact/apps/server/internal/httpserver"
 	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
+	"github.com/wcpe/jianartifact/apps/server/internal/upstream"
 )
 
 // testEnv 汇集集成测试的服务端句柄。
@@ -41,10 +44,14 @@ func newTestEnv(t *testing.T) *testEnv {
 	revokedRepo := repository.NewRevokedRepo(db)
 	repoRepo := repository.NewRepoRepo(db)
 	aclRepo := repository.NewAclRepo(db)
+	assetRepo := repository.NewAssetRepo(db)
 	migrationSvc := domain.NewMigrationService(repository.NewMigrationTaskRepo(db), nil)
 
 	jwtMgr := auth.NewJWTManager([]byte("integration-test-secret-key-32byte!!"))
 	authenticator := auth.NewAuthenticator(jwtMgr, domain.NewAuthStore(userRepo, tokenRepo, revokedRepo))
+
+	// FR-114：注入 AssetService（连接探测），供连接状态填充与手动重测端点使用。
+	assetSvc := domain.NewAssetService(repoRepo, assetRepo, blobstore.NewStore(t.TempDir()), upstream.NewClient(5*time.Second))
 
 	handlers := api.NewHandlers(api.Deps{
 		Version:    "test",
@@ -53,7 +60,8 @@ func newTestEnv(t *testing.T) *testEnv {
 		Auth:       domain.NewAuthService(userRepo, revokedRepo, jwtMgr),
 		Users:      domain.NewUserService(userRepo),
 		Tokens:     domain.NewTokenService(tokenRepo, userRepo),
-		Repos:      domain.NewRepositoryService(repoRepo, aclRepo, repository.NewAssetRepo(db), domain.NewSettingService(repository.NewSettingRepo(db)), userRepo),
+		Repos:      domain.NewRepositoryService(repoRepo, aclRepo, assetRepo, domain.NewSettingService(repository.NewSettingRepo(db)), userRepo),
+		Assets:     assetSvc,
 		Migrations: migrationSvc,
 	})
 

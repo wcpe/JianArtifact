@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -41,12 +42,33 @@ type Client struct {
 	http *http.Client
 }
 
+// ipv4FirstDialer 固定走 IPv4（tcp4）的 Dialer：规避部分宿主无 IPv6 出口、
+// 而上游 DNS 返回 AAAA 优先导致"先试 IPv6 失败再回退 IPv4"的额外延迟。
+// 通用 Maven 仓库回源场景下，制品上游几乎都支持 IPv4，固定 tcp4 是稳的。
+var ipv4FirstDialer = &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
+
+// newUpstreamHTTP 构造带 IPv4 优先 Dialer 的 *http.Client。
+func newUpstreamHTTP(timeout time.Duration) *http.Client {
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
+			return ipv4FirstDialer.DialContext(ctx, "tcp4", addr)
+		},
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   8,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: time.Second,
+	}
+	return &http.Client{Timeout: timeout, Transport: transport}
+}
+
 // NewClient 构造回源客户端；timeout<=0 时取 DefaultTimeout。
 func NewClient(timeout time.Duration) *Client {
 	if timeout <= 0 {
 		timeout = DefaultTimeout
 	}
-	return &Client{http: &http.Client{Timeout: timeout}}
+	return &Client{http: newUpstreamHTTP(timeout)}
 }
 
 // SetTimeout 运行时更新回源整体超时；timeout<=0 时取 DefaultTimeout。
@@ -55,7 +77,7 @@ func (c *Client) SetTimeout(timeout time.Duration) {
 		timeout = DefaultTimeout
 	}
 	c.mu.Lock()
-	c.http = &http.Client{Timeout: timeout}
+	c.http = newUpstreamHTTP(timeout)
 	c.mu.Unlock()
 }
 
