@@ -6,6 +6,16 @@
 
 ## 未发布版本
 
+## 0.7.1（2026-08-21）
+
+### 新增
+
+- group 聚合读性能（FR-110，见 `docs/specs/0.7.1-group-read-latency.md`）：group 读路径改为「本地快查命中优先 + 未命中并行回源」（首个成功即取消其余），成员超时缩短（10s→3s），proxy 回源失败进入短窗熔断（30s 内跳过不可达上游）；回源客户端 IPv4 优先（tcp4 Dialer），规避无 IPv6 出口宿主被 DNS AAAA 优先拖慢。修复 maven group 聚合大量 proxy 成员时缺失制品 20+ 秒/超时才返回的问题（现稳定快速 404，Gradle 可回退下一仓库）。
+- proxy/group 404 负缓存（FR-111，见 `docs/specs/0.7.1-404-negative-cache.md`）：对明确 404 做短窗缓存（TTL 60s），同路径缺失制品后续请求秒级 404；上游故障（非 404）不写负缓存、有成员被 auto-block/offline 跳过时不缓存（不可判定）、复制请求跳过、成功/上传后失效。
+- proxy 上游 auto-block 主动探测恢复（FR-112，见 `docs/specs/0.7.1-proxy-auto-block.md`）：上游失败进入 AUTO_BLOCKED（翻倍退避 40s→80s→…），阻止窗口内零连接快速失败；后台 HEAD 探测成功自动恢复可用。
+- 仓库级 online/offline 开关（FR-113，见 `docs/specs/0.7.1-repository-online-offline.md`）：proxy/group 仓库可手动置 offline，group 读跳过 offline 成员、offline proxy 单独读不回源；online 持久化且不参与复制（守护测试保障）。
+- 仓库列表上游连接状态展示（FR-114，见 `docs/specs/0.7.1-repository-connection-status-ui.md`）：proxy 仓库列表显示连接状态徽章（可用/自动阻止/离线/错误），详情页 online/offline 开关 + 手动重新探测按钮；offline 优先覆盖展示。
+
 ## 0.7.0（2026-08-20）
 
 ### 验收
