@@ -74,3 +74,4 @@ Thumbs.db
 deploy/ssh/
 /.playwright-cli/
 /.narrafork/
+/apps/server/data/
