@@ -6,6 +6,7 @@ import type {
   AclList,
   AssetList,
   BatchDeleteAssetsResponse,
+  ConnectionStatus,
   LoginResponse,
   MigrationConflictPolicy,
   MigrationDiscoverResponse,
@@ -132,6 +133,18 @@ export function updateRepository(
 
 export function deleteRepository(name: string): Promise<void> {
   return request<void>(`/repositories/${name}`, { method: "DELETE" });
+}
+
+/** FR-113：设置仓库 online/offline 状态（仅管理员；本地运维状态，不参与复制）。 */
+export function setRepositoryOnline(name: string, online: boolean): Promise<Repository> {
+  return request<Repository>(`/repositories/${name}/online`, { method: "PUT", body: { online } });
+}
+
+/** FR-114：手动重测仓库上游连接（仅管理员；仅 online proxy 可重测），返回最新状态。 */
+export function recheckConnection(name: string): Promise<ConnectionStatus> {
+  return request<ConnectionStatus>(`/repositories/${name}/recheck-connection`, {
+    method: "POST",
+  });
 }
 
 export function getAcl(name: string): Promise<AclList> {

@@ -41,4 +41,13 @@ describe("仓库管理", () => {
     await user.click(within(dialog).getByRole("button", { name: "新建" }));
     await waitFor(() => expect(screen.getByText("my-proxy")).toBeTruthy());
   });
+
+  it("proxy 仓库行显示连接状态徽章（FR-114）", async () => {
+    renderWithProviders(<RepositoriesPage />, { route: "/repositories", authenticated: true });
+    // devmock 种子：npm-proxy 上游可达 → 「可用」徽章。
+    expect(await screen.findByText("npm-proxy")).toBeTruthy();
+    expect(await screen.findByText("可用")).toBeTruthy();
+    // hosted 仓库不返回 connectionStatus → 占位符「—」。
+    expect(screen.getAllByText("—").length).toBeGreaterThan(0);
+  });
 });

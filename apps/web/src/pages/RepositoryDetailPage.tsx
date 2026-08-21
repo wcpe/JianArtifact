@@ -8,6 +8,7 @@ import {
   MultiSelect,
   Select,
   Stack,
+  Switch,
   Table,
   Tabs,
   Text,
@@ -27,12 +28,15 @@ import {
   getRepositoryUsage,
   listRepositories,
   listUsers,
+  recheckConnection,
   setAcl,
+  setRepositoryOnline,
   updateRepository,
 } from "../api/endpoints";
-import type { AclAction, AclEntry, RepoVisibility, Repository, User } from "../api/types";
+import type { ConnectionStatusValue, AclAction, AclEntry, RepoVisibility, Repository, User } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { useAsync } from "../hooks/useAsync";
+import { CONN_COLOR, CONN_LABEL_KEY } from "../lib/connectionStatus";
 import { notifyError, notifySuccess } from "../lib/feedback";
 import { density } from "../theme/density";
 
@@ -153,20 +157,55 @@ function ConfigTab({
   const [description, setDescription] = useState("");
   const [members, setMembers] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+  const [online, setOnline] = useState(true);
+  const [togglingOnline, setTogglingOnline] = useState(false);
+  const [rechecking, setRechecking] = useState(false);
+  // FR-114：连接状态（本地 state 承载重测后的即时更新，避免等待整页刷新）
+  const [connStatus, setConnStatus] = useState<ConnectionStatusValue | null>(null);
   // group 成员候选：当前列表中同格式、非本仓的仓库名。
   const reposState = useAsync(() => listRepositories({ page_size: 100 }), []);
   const memberOptions = (reposState.data?.items ?? [])
     .filter((r) => r.format === repo?.format && r.name !== repo?.name)
     .map((r) => r.name);
 
-  // 仓库信息就绪后同步初始 visibility/描述/members
+  // 仓库信息就绪后同步初始 visibility/描述/members/online/连接状态
   useEffect(() => {
     if (repo) {
       setVisibility(repo.visibility);
       setDescription(repo.description ?? "");
       setMembers(repo.members ?? []);
+      setOnline(repo.online ?? true);
+      setConnStatus(repo.connectionStatus?.status ?? null);
     }
   }, [repo]);
+
+  // FR-113：online/offline 开关（仅管理员；本地运维状态，不参与复制）。
+  const handleToggleOnline = (next: boolean) => {
+    setTogglingOnline(true);
+    setRepositoryOnline(repoName, next)
+      .then(() => {
+        setOnline(next);
+        // FR-114：离线后状态优先显示「离线」；上线后回到内存态。
+        setConnStatus(next ? (repo?.connectionStatus?.status ?? "READY") : "OFFLINE");
+        onUpdated();
+        notifySuccess(t("common.saved"));
+      })
+      .catch(notifyError)
+      .finally(() => setTogglingOnline(false));
+  };
+
+  // FR-114：手动重测上游连接（仅 online proxy），成功后用返回状态即时更新。
+  const handleRecheck = () => {
+    setRechecking(true);
+    recheckConnection(repoName)
+      .then((status) => {
+        setConnStatus(status.status);
+        onUpdated();
+        notifySuccess(t("repoDetail.configRecheckOk"));
+      })
+      .catch(notifyError)
+      .finally(() => setRechecking(false));
+  };
 
   const handleSave = () => {
     setSaving(true);
@@ -205,6 +244,46 @@ function ConfigTab({
             {t("repoDetail.configType")}：{repo.type}
           </Text>
         </Stack>
+
+        {/* FR-113：online/offline 开关（本地运维状态，不参与复制） */}
+        <Switch
+          label={t("repoDetail.configOnlineLabel", { defaultValue: "在线" })}
+          description={t("repoDetail.configOnlineHint", {
+            defaultValue: "离线后 group 读将跳过该仓库；本状态不随复制传播",
+          })}
+          checked={online}
+          disabled={togglingOnline}
+          onChange={(e) => handleToggleOnline(e.currentTarget.checked)}
+        />
+
+        {/* FR-114：连接状态展示 + 手动重测（仅 proxy 仓库可重测） */}
+        <Group gap="sm" align="center" wrap="wrap">
+          <Text size="sm" c="dimmed">
+            {t("repoDetail.configConnection", { defaultValue: "上游连接状态" })}：
+          </Text>
+          {connStatus ? (
+            <Badge variant="light" color={CONN_COLOR[connStatus] ?? "gray"} size="sm">
+              {t(CONN_LABEL_KEY[connStatus] ?? "repositories.statusReady")}
+            </Badge>
+          ) : (
+            <Text size="sm" c="dimmed">
+              {t("repositories.statusNone", { defaultValue: "—" })}
+            </Text>
+          )}
+          {repo.type === "proxy" && (
+            <Button
+              size="xs"
+              variant="light"
+              loading={rechecking}
+              disabled={!online}
+              onClick={handleRecheck}
+            >
+              {rechecking
+                ? t("repoDetail.configRechecking", { defaultValue: "探测中…" })
+                : t("repoDetail.configRecheck", { defaultValue: "重新探测" })}
+            </Button>
+          )}
+        </Group>
 
         {/* 可见性修改 */}
         <Select

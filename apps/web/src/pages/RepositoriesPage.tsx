@@ -37,6 +37,7 @@ import {
 import type { RepoFormat, RepoType, Repository, RepoVisibility } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { useAsync } from "../hooks/useAsync";
+import { CONN_COLOR, CONN_LABEL_KEY } from "../lib/connectionStatus";
 import { confirmDanger, notifyError, notifySuccess } from "../lib/feedback";
 import { formatBytes } from "../lib/assetTree";
 
@@ -282,6 +283,9 @@ export function RepositoriesPage() {
                           <Table.Th>{t("repositories.name")}</Table.Th>
                           <Table.Th>{t("repositories.type")}</Table.Th>
                           <Table.Th>{t("repositories.visibility")}</Table.Th>
+                          <Table.Th>
+                            {t("repositories.connectionStatus", { defaultValue: "连接状态" })}
+                          </Table.Th>
                           <Table.Th>{t("repositories.artifactCount")}</Table.Th>
                           <Table.Th>{t("repositories.totalSize")}</Table.Th>
                           <Table.Th>
@@ -341,6 +345,27 @@ export function RepositoriesPage() {
                                     ? t("repositories.visibilityPublic")
                                     : t("repositories.visibilityPrivate")}
                                 </Badge>
+                              </Table.Td>
+                              <Table.Td>
+                                {/* FR-114：连接状态徽章（仅 proxy/group 有 connectionStatus） */}
+                                {repo.connectionStatus ? (
+                                  <Badge
+                                    variant="light"
+                                    color={
+                                      CONN_COLOR[repo.connectionStatus.status] ?? "gray"
+                                    }
+                                    size="sm"
+                                  >
+                                    {t(
+                                      CONN_LABEL_KEY[repo.connectionStatus.status] ??
+                                        "repositories.statusReady",
+                                    )}
+                                  </Badge>
+                                ) : (
+                                  <Text size="sm" c="dimmed">
+                                    {t("repositories.statusNone", { defaultValue: "—" })}
+                                  </Text>
+                                )}
                               </Table.Td>
                               <Table.Td>
                                 <Text size="sm" ta="right">

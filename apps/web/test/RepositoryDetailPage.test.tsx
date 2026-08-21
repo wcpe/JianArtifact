@@ -98,4 +98,40 @@ describe("仓库详情", () => {
     // group 仓库应能编辑成员仓库（members 多选/输入）；修复前不存在，修复后渲染（label 可能多处匹配）
     expect((await screen.findAllByLabelText(/成员仓库/)).length).toBeGreaterThan(0);
   });
+
+  it("proxy 仓库配置 tab 显示连接状态并支持手动重测（FR-114）", async () => {
+    const user = userEvent.setup();
+    renderDetail("npm-proxy", true);
+    await user.click(await screen.findByText("配置"));
+    // devmock 种子：npm-proxy 上游可达 → 「可用」徽章。
+    expect(await screen.findByText("可用")).toBeTruthy();
+    // 重测按钮存在且可点击（online proxy）。
+    const recheck = await screen.findByRole("button", { name: "重新探测" });
+    expect(recheck).toBeTruthy();
+    await user.click(recheck);
+    // 重测后通知「重测完成」，状态仍为「可用」。
+    expect(await screen.findByText("重测完成")).toBeTruthy();
+    expect(screen.getByText("可用")).toBeTruthy();
+  });
+
+  it("offline 开关切换后连接状态显示离线（MD-2）", async () => {
+    const user = userEvent.setup();
+    renderDetail("npm-proxy", true);
+    await user.click(await screen.findByText("配置"));
+    expect(await screen.findByText("可用")).toBeTruthy();
+
+    // 关掉在线开关 → 显示「离线」。
+    await user.click(screen.getByRole("switch", { name: /在线/ }));
+    expect(await screen.findByText("离线")).toBeTruthy();
+    // offline 时重测按钮禁用。
+    const recheck = await screen.findByRole("button", { name: "重新探测" });
+    expect((recheck as HTMLButtonElement).disabled).toBe(true);
+
+    // 重新打开在线开关 → 恢复内存态（mock 上游可达 → 可用）。
+    await user.click(screen.getByRole("switch", { name: /在线/ }));
+    expect(await screen.findByText("可用")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "重新探测" }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+  });
 });
