@@ -43,26 +43,35 @@ func TestReplicationOperationOutboxUsesGlobalSeqAndAtomicRecord(t *testing.T) {
 	if seq != 1 {
 		t.Fatalf("operation seq=%d，期望首条全局 seq=1", seq)
 	}
+	// FR-138 退役复制通道后，每个 operation 仅在 repl_change 写一条 op='operation' 行，
+	// 不再单独写 change 行；该记录即作为不可分割的 v2 operation record 返回。
 	records, err := outbox.ListRecordsSince(0, 1)
 	if err != nil {
 		t.Fatalf("读取 v2 第一页：%v", err)
 	}
-	if len(records) != 1 || records[0].Type != "change" || records[0].Seq != 1 {
-		t.Fatalf("第一条应为普通 change：%+v", records)
+	if len(records) != 1 || records[0].Type != "operation" || records[0].Seq != 1 {
+		t.Fatalf("operation 必须作为单条 record：%+v", records)
+	}
+	if records[0].Operation == nil || len(records[0].Operation.Items) != 1 {
+		t.Fatalf("operation 必须携带清单：%+v", records)
+	}
+	if records[0].Operation.OperationID != "op-test-001" || records[0].Operation.Seq != 1 {
+		t.Fatalf("operation envelope 字段不符：%+v", records[0].Operation)
 	}
 	records, err = outbox.ListRecordsSince(1, 1)
 	if err != nil {
-		t.Fatalf("读取 v2 operation 页：%v", err)
+		t.Fatalf("读取 v2 后续页：%v", err)
 	}
-	if len(records) != 1 || records[0].Type != "operation" || records[0].Operation == nil || len(records[0].Operation.Items) != 1 {
-		t.Fatalf("operation 必须作为单条不可拆分 record：%+v", records)
+	if len(records) != 0 {
+		t.Fatalf("seq>1 不应有更多 record：%+v", records)
 	}
-	if records[0].Operation.OperationID != "op-test-001" || records[0].Operation.Seq != 2 {
-		t.Fatalf("operation envelope 字段不符：%+v", records[0].Operation)
-	}
-	has, err := outbox.HasAfter(1)
+	has, err := outbox.HasAfter(0)
 	if err != nil || !has {
-		t.Fatalf("since=1 应检测到 operation，has=%v err=%v", has, err)
+		t.Fatalf("since=0 应检测到 operation，has=%v err=%v", has, err)
+	}
+	has, err = outbox.HasAfter(1)
+	if err != nil || has {
+		t.Fatalf("since=1 不应再有 operation，has=%v err=%v", has, err)
 	}
 }
 

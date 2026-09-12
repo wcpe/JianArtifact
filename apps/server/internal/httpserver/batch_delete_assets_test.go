@@ -167,7 +167,16 @@ func TestAssetOperationAPIDeletesDirectoryAtomically(t *testing.T) {
 func TestAssetOperationAPIAuditFailureRollsBackOperation(t *testing.T) {
 	e := newBatchDeleteEnv(t, "admin")
 	e.seedBatchAssets(t)
-	beforeSeq := int64(0)
+	// 以 seed 完成后的水位为基线：FR-138 后 Put 自身也写 v2 outbox，基线已含若干记录。
+	opRepo := repository.NewReplicationOperationRepo(e.db)
+	base, err := opRepo.ListRecordsSince(0, 100)
+	if err != nil {
+		t.Fatalf("列 seed 后 operation outbox：%v", err)
+	}
+	var baseSeq int64
+	if len(base) > 0 {
+		baseSeq = base[len(base)-1].Seq
+	}
 	if _, err := e.db.Exec(`CREATE TRIGGER reject_asset_operation_audit BEFORE INSERT ON audit_log
 		WHEN NEW.action = 'asset.delete' BEGIN SELECT RAISE(ABORT, '注入审计失败'); END`); err != nil {
 		t.Fatalf("创建审计失败触发器：%v", err)
@@ -178,7 +187,8 @@ func TestAssetOperationAPIAuditFailureRollsBackOperation(t *testing.T) {
 	})
 	assertAssetOperationFailure(t, rec, http.StatusInternalServerError, "internal_error")
 	e.assertAssetsRemain(t, "a/1.txt", "a/2.txt")
-	records, err := repository.NewReplicationOperationRepo(e.db).ListRecordsSince(beforeSeq, 10)
+	// 审计失败必须让资产视图与 outbox 在同一事务回滚：失败操作不得产生任何新增 outbox 记录。
+	records, err := opRepo.ListRecordsSince(baseSeq, 10)
 	if err != nil || len(records) != 0 {
 		t.Fatalf("审计失败不得写 operation outbox：records=%+v err=%v", records, err)
 	}
@@ -350,6 +360,18 @@ func TestBatchDeleteAssetsAdminDeletes(t *testing.T) {
 	e := newBatchDeleteEnv(t, "admin")
 	e.seedBatchAssets(t)
 
+	// FR-138 退役复制通道后，AssetService.Put 自身也会写 v2 outbox 记录，
+	// 故以 seed 完成后的水位为基线，只度量批量删除产生的增量 operation。
+	opRepo := repository.NewReplicationOperationRepo(e.db)
+	base, err := opRepo.ListRecordsSince(0, 100)
+	if err != nil {
+		t.Fatalf("列 seed 后 operation outbox：%v", err)
+	}
+	var baseSeq int64
+	if len(base) > 0 {
+		baseSeq = base[len(base)-1].Seq
+	}
+
 	rec, out := e.postBatchDelete([]string{"a/1.txt", "a/2.txt"})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("批量删除应 200，得 %d（体：%s）", rec.Code, rec.Body.String())
@@ -388,16 +410,17 @@ func TestBatchDeleteAssetsAdminDeletes(t *testing.T) {
 	}
 
 	// 复制操作必须作为单条 v2 envelope 发布，不能拆成逐制品 v1 tombstone。
-	records, err := repository.NewReplicationOperationRepo(e.db).ListRecordsSince(0, 0)
+	// 以 seed 完成后的水位为基线，只度量批量删除产生的增量 operation。
+	records, err := opRepo.ListRecordsSince(baseSeq, 10)
 	if err != nil {
-		t.Fatalf("列 operation outbox：%v", err)
+		t.Fatalf("列增量 v2 operation outbox：%v", err)
 	}
 	if len(records) != 1 || records[0].Change != nil {
-		t.Fatalf("批删应仅写一条 v2 operation，不得拆成 v1 tombstone，得 %+v", records)
+		t.Fatalf("批删应仅新增一条 v2 operation，不得拆成 v1 tombstone，得 %+v", records)
 	}
-	records, err = repository.NewReplicationOperationRepo(e.db).ListRecordsSince(0, 10)
+	records, err = opRepo.ListRecordsSince(baseSeq, 10)
 	if err != nil {
-		t.Fatalf("读取 v2 operation outbox：%v", err)
+		t.Fatalf("读取增量 v2 operation outbox：%v", err)
 	}
 	if len(records) != 1 || records[0].Operation == nil || len(records[0].Operation.Items) != 2 {
 		t.Fatalf("批删应发布包含 2 项的 v2 operation，得 %+v", records)

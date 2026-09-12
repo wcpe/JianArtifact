@@ -60,14 +60,14 @@ func TestAuditObservabilitySnapshotAndAtomicAcknowledgement(t *testing.T) {
 	if rec := get("/api/v1/observability/audit/summary", &summary); rec.Code != http.StatusOK {
 		t.Fatalf("summary 状态码=%d，体=%s", rec.Code, rec.Body.String())
 	}
-	if summary.TotalCount != 3 || summary.FailureCount != 1 || summary.Snapshot == "" || summary.SnapshotAt.IsZero() {
+	if summary.TotalCount != 2 || summary.FailureCount != 1 || summary.Snapshot == "" || summary.SnapshotAt.IsZero() {
 		t.Fatalf("summary 统计不符：%+v", summary)
 	}
 	var events api.AuditEventPage
 	if rec := get("/api/v1/observability/audit/events", &events); rec.Code != http.StatusOK {
 		t.Fatalf("events 状态码=%d，体=%s", rec.Code, rec.Body.String())
 	}
-	if events.Snapshot == "" || len(events.Items) != 3 {
+	if events.Snapshot == "" || len(events.Items) != 2 {
 		t.Fatalf("事件快照或条目不符：%+v", events)
 	}
 	attentionID := ""

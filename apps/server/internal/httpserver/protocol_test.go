@@ -862,19 +862,29 @@ func TestRawDeleteAuditFailureLeavesAssetAndOutboxUntouched(t *testing.T) {
 	if rec := e.rawReq(http.MethodPut, "/repository/raw-audit-failure/keep.txt", "Bearer "+adminToken, "text/plain", []byte("keep")); rec.Code != http.StatusCreated {
 		t.Fatalf("准备 Raw 制品状态码 = %d", rec.Code)
 	}
+	// 以审计失败前的水位为基线：FR-138 后 Put 自身也会写 v2 outbox，
+	// 只验证失败操作不新增任何 outbox 记录（资产视图与 outbox 同事务回滚）。
+	opRepo := repository.NewReplicationOperationRepo(e.db)
+	base, err := opRepo.ListRecordsSince(0, 100)
+	if err != nil {
+		t.Fatalf("列审计失败前 operation outbox：%v", err)
+	}
+	var baseSeq int64
+	if len(base) > 0 {
+		baseSeq = base[len(base)-1].Seq
+	}
 	e.rawHandler.SetOperationAudit(func(_ *gin.Context, _, _ string) domain.AssetOperationAudit {
 		return domain.AssetOperationAudit{Commit: func(string, []repository.AssetMutationItem) repository.MutationCompletionHook {
 			return func(*sqlx.Tx) error { return errors.New("注入 Raw 审计失败") }
 		}}
 	})
-	beforeSeq := int64(0)
 	if rec := e.rawReq(http.MethodDelete, "/repository/raw-audit-failure/keep.txt", "Bearer "+adminToken, "", nil); rec.Code != http.StatusInternalServerError {
 		t.Fatalf("审计失败删除状态码 = %d，期望 500", rec.Code)
 	}
 	if rec := e.rawReq(http.MethodGet, "/repository/raw-audit-failure/keep.txt", "Bearer "+adminToken, "", nil); rec.Code != http.StatusOK || rec.Body.String() != "keep" {
 		t.Fatalf("审计失败不得删除 Raw 制品：状态=%d 内容=%q", rec.Code, rec.Body.String())
 	}
-	records, err := repository.NewReplicationOperationRepo(e.db).ListRecordsSince(beforeSeq, 10)
+	records, err := opRepo.ListRecordsSince(baseSeq, 10)
 	if err != nil || len(records) != 0 {
 		t.Fatalf("审计失败不得写 v2 outbox：records=%+v err=%v", records, err)
 	}

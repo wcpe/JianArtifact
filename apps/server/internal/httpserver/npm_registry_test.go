@@ -153,7 +153,6 @@ func TestNpmUnpublish(t *testing.T) {
 			},
 		},
 	}
-	beforeSeq := int64(0)
 	if _, code := e.npmJSON(t, http.MethodPut, "/npm/npm-up/lodash/-rev/1-abc", auth, replaced); code != http.StatusCreated {
 		t.Fatalf("修订 PUT 状态码 = %d，期望 201", code)
 	}
@@ -163,6 +162,17 @@ func TestNpmUnpublish(t *testing.T) {
 	}
 	if rec := e.rawReq(http.MethodGet, "/npm/npm-up/lodash/-/lodash-2.0.0.tgz", auth, "", nil); rec.Code != http.StatusOK {
 		t.Fatalf("修订 PUT 后 tarball 必须仍可读，状态码 = %d", rec.Code)
+	}
+	// 以 unpublish 前的水位为基线：FR-138 后 publish/修订 PUT 都会写 v2 outbox，
+	// 只度量 unpublish DELETE 产生的增量 operation。
+	opRepo := repository.NewReplicationOperationRepo(e.db)
+	base, err := opRepo.ListRecordsSince(0, 100)
+	if err != nil {
+		t.Fatalf("列 unpublish 前 operation outbox：%v", err)
+	}
+	var baseSeq int64
+	if len(base) > 0 {
+		baseSeq = base[len(base)-1].Seq
 	}
 	if _, code := e.npmJSON(t, http.MethodDelete, "/npm/npm-up/lodash/-/lodash-2.0.0.tgz/-rev/1-abc", auth, nil); code != http.StatusOK {
 		t.Fatalf("删 tarball 状态码 = %d，期望 200", code)
@@ -174,7 +184,7 @@ func TestNpmUnpublish(t *testing.T) {
 	if rec := e.rawReq(http.MethodGet, "/npm/npm-up/lodash/-/lodash-2.0.0.tgz", auth, "", nil); rec.Code != http.StatusNotFound {
 		t.Fatalf("已删 tarball 状态码 = %d，期望 404", rec.Code)
 	}
-	records, err := repository.NewReplicationOperationRepo(e.db).ListRecordsSince(beforeSeq, 10)
+	records, err := opRepo.ListRecordsSince(baseSeq, 10)
 	if err != nil || len(records) != 1 || records[0].Operation == nil {
 		t.Fatalf("单版本 unpublish 必须只写一条 v2 operation：records=%+v err=%v", records, err)
 	}
@@ -229,9 +239,19 @@ func TestNpmUnpublishAuditFailureLeavesPackumentAndTarballUntouched(t *testing.T
 			return func(*sqlx.Tx) error { return errors.New("注入 npm 审计失败") }
 		}}
 	})
-	beforeSeq := int64(0)
 	if _, code := e.npmJSON(t, http.MethodPut, "/npm/npm-audit-failure/demo/-rev/1-abc", authHeader, map[string]any{"name": "demo"}); code != http.StatusCreated {
 		t.Fatalf("修订 PUT 状态码 = %d，期望 201", code)
+	}
+	// 以审计失败前的水位为基线：FR-138 后 publish/修订 PUT 都会写 v2 outbox，
+	// 只验证失败操作不新增任何 outbox 记录（资产视图与 outbox 同事务回滚）。
+	opRepo := repository.NewReplicationOperationRepo(e.db)
+	base, err := opRepo.ListRecordsSince(0, 100)
+	if err != nil {
+		t.Fatalf("列审计失败前 operation outbox：%v", err)
+	}
+	var baseSeq int64
+	if len(base) > 0 {
+		baseSeq = base[len(base)-1].Seq
 	}
 	if _, code := e.npmJSON(t, http.MethodDelete, "/npm/npm-audit-failure/demo/-/demo-1.0.0.tgz/-rev/1-abc", authHeader, nil); code != http.StatusInternalServerError {
 		t.Fatalf("审计失败删除状态码 = %d，期望 500", code)
@@ -243,7 +263,7 @@ func TestNpmUnpublishAuditFailureLeavesPackumentAndTarballUntouched(t *testing.T
 	if rec := e.rawReq(http.MethodGet, "/npm/npm-audit-failure/demo/-/demo-1.0.0.tgz", authHeader, "", nil); rec.Code != http.StatusOK {
 		t.Fatalf("失败后 tarball 必须保留，状态码 = %d", rec.Code)
 	}
-	records, err := repository.NewReplicationOperationRepo(e.db).ListRecordsSince(beforeSeq, 10)
+	records, err := opRepo.ListRecordsSince(baseSeq, 10)
 	if err != nil || len(records) != 0 {
 		t.Fatalf("失败操作不得写 v2 outbox：records=%+v err=%v", records, err)
 	}

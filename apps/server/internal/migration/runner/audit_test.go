@@ -120,14 +120,16 @@ func assertMigrationReplication(t *testing.T, operations *repository.Replication
 	if err != nil {
 		t.Fatal(err)
 	}
-	foundRepository := false
+	// 复制退役后迁移写入只产生 v2 operation 信封（v1 change 不再写），
+	// 断言存在含资产条目的 operation 信封（目标仓库由 EnsureMigrationRepository 在信封外建）。
+	foundOperation := false
 	for _, row := range rows {
-		if row.Change != nil && row.Change.EntityType == domain.EntityRepository && row.Change.Op == domain.OpPut {
-			foundRepository = true
+		if row.Operation != nil && len(row.Operation.Items) > 0 {
+			foundOperation = true
 		}
 	}
-	if !foundRepository {
-		t.Fatalf("迁移缺少仓库复制变更：全部=%+v", rows)
+	if !foundOperation {
+		t.Fatalf("迁移缺少原子 operation 信封：全部=%+v", rows)
 	}
 	records, err := operations.ListRecordsSince(0, 100)
 	if err != nil {
