@@ -15,7 +15,7 @@ func TestOfflineDirFixture(t *testing.T) {
 	repo := filepath.Join(root, "repositories", "maven-releases")
 	mustWrite(t, filepath.Join(repo, ".format"), []byte("maven2"))
 	mustWrite(t, filepath.Join(repo, "content", "com/a.jar"), []byte("x"))
-	// docker 应 warning
+	// docker proxy 只迁移配置
 	docker := filepath.Join(root, "repositories", "docker-local")
 	mustWrite(t, filepath.Join(docker, ".format"), []byte("docker"))
 	mustWrite(t, filepath.Join(docker, "content", "layer"), []byte("y"))
@@ -37,8 +37,8 @@ func TestOfflineDirFixture(t *testing.T) {
 	if names["raw-files"] != "raw" {
 		t.Errorf("raw format = %q", names["raw-files"])
 	}
-	if _, ok := names["docker-local"]; ok {
-		t.Error("docker 不应进入 repositories")
+	if names["docker-local"] != "docker" {
+		t.Error("docker proxy 应进入 repositories")
 	}
 	if len(plan.Warnings) < 1 {
 		t.Error("期望 warnings")
@@ -80,6 +80,8 @@ func TestOfflineDirNexusBlobStore(t *testing.T) {
 	plan, err := discover.OfflineDir{}.Discover(context.Background(), discover.Config{
 		Path:                root,
 		IncludeRepositories: []string{"r3d"},
+		RepositoryFormats:   map[string]string{"r3d": "maven2"},
+		RepositoryTypes:     map[string]string{"r3d": "hosted"},
 	})
 	if err != nil {
 		t.Fatalf("Discover：%v", err)

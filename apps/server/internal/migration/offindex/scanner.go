@@ -338,7 +338,7 @@ func readProps(path string) (map[string]string, error) {
 }
 
 // PlanFromIndex 用索引生成 discover Plan（ready 时）。
-func PlanFromIndex(repo *repository.OfflineIndexRepo, root string, include []string) (discover.Plan, bool, error) {
+func PlanFromIndex(repo *repository.OfflineIndexRepo, root string, include []string, formats, types map[string]string) (discover.Plan, bool, error) {
 	abs, err := filepath.Abs(root)
 	if err != nil {
 		return discover.Plan{}, false, err
@@ -369,16 +369,34 @@ func PlanFromIndex(repo *repository.OfflineIndexRepo, root string, include []str
 		Stats:        map[string]any{},
 		Estimated:    false,
 	}
+	if len(formats) == 0 {
+		return discover.Plan{}, false, &discover.ErrInvalidConfig{Msg: "离线目录索引缺少可信 repositoryFormats 映射"}
+	}
 	for name, n := range counts {
 		if len(allow) > 0 && !allow[name] {
 			continue
 		}
-		plan.Repositories = append(plan.Repositories, discover.PlanRepository{
-			Name:            name,
-			Format:          discover.FormatMaven,
-			Type:            "hosted",
-			EstimatedAssets: n,
-		})
+		format, ok := discover.MapNexusFormatForIndex(formats[name])
+		if !ok {
+			plan.Warnings = append(plan.Warnings, "索引跳过缺少可信 format 映射的仓库："+name)
+			continue
+		}
+		typ := types[name]
+		if typ == "" {
+			typ = "hosted"
+		}
+		if format == discover.FormatGoMod && typ != "proxy" {
+			plan.Warnings = append(plan.Warnings, "索引跳过不支持的 Go modules 仓库类型："+name)
+			continue
+		}
+		mode := "assets"
+		switch typ {
+		case "proxy":
+			mode = "proxy_config"
+		case "group":
+			mode = "group_config"
+		}
+		plan.Repositories = append(plan.Repositories, discover.PlanRepository{Name: name, Format: format, Type: typ, EstimatedAssets: n, MigrationMode: mode})
 	}
 	if len(plan.Repositories) == 0 && len(allow) > 0 {
 		plan.Warnings = append(plan.Warnings, "索引中未匹配 includeRepositories")

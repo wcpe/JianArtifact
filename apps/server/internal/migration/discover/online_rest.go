@@ -3,23 +3,26 @@ package discover
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
+
+	"github.com/wcpe/jianartifact/apps/server/internal/migration/credential"
+	"github.com/wcpe/jianartifact/apps/server/internal/upstream"
 )
 
 // OnlineREST 通过 Nexus REST API 发现仓库与资产规模估算。
 type OnlineREST struct {
-	HTTP *http.Client
+	HTTP *upstream.Client
 }
 
-// NewOnlineREST 构造；client 为 nil 时用 30s 超时默认客户端。
-func NewOnlineREST(client *http.Client) *OnlineREST {
+// NewOnlineREST 构造在线 Nexus 发现器；所有来源访问均经统一安全出站客户端。
+func NewOnlineREST(client *upstream.Client) *OnlineREST {
 	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
+		client = upstream.NewClient(upstream.DefaultTimeout)
 	}
 	return &OnlineREST{HTTP: client}
 }
@@ -41,12 +44,13 @@ func (s *OnlineREST) Discover(ctx context.Context, cfg Config) (Plan, error) {
 		return Plan{}, err
 	}
 	base := strings.TrimRight(cfg.URL, "/")
+	auth := cfg.auth()
 	maxPages := cfg.MaxAssetPages
 	if maxPages <= 0 {
 		maxPages = 5
 	}
 
-	repos, err := s.listRepositories(ctx, base, cfg.Credential)
+	repos, err := s.listRepositories(ctx, base, auth)
 	if err != nil {
 		return Plan{}, err
 	}
@@ -61,6 +65,7 @@ func (s *OnlineREST) Discover(ctx context.Context, cfg Config) (Plan, error) {
 
 	plan := emptyPlan()
 	plan.Estimated = true
+	plan.SourceRef = cfg.SourceRef
 	// 未指定 include 时只列仓、不逐仓拉资产（全量计数极易卡住 UI）；
 	// 指定 include 后才对命中仓做有限页估算。
 	countAssets := filterOn
@@ -79,9 +84,22 @@ func (s *OnlineREST) Discover(ctx context.Context, cfg Config) (Plan, error) {
 			plan.Warnings = append(plan.Warnings, "跳过不支持的 format: "+r.Name+" ("+r.Format+")")
 			continue
 		}
+		typ := normalizeRepoType(r.Type)
+		mode := migrationMode(mapped, typ)
+		if mode == "unsupported" {
+			plan.Warnings = append(plan.Warnings, "跳过不支持的仓库类型："+r.Name+"（Go modules 仅允许 proxy）")
+			continue
+		}
+		config, configMode, configWarning := s.repositoryConfig(ctx, base, r, typ, auth)
+		if configWarning != "" {
+			plan.Warnings = append(plan.Warnings, r.Name+": "+configWarning)
+		}
+		if configMode == "unsupported" {
+			mode = configMode
+		}
 		var count int64
-		if countAssets {
-			n, truncated, err := s.countAssets(ctx, base, r.Name, cfg.Credential, maxPages)
+		if countAssets && mode == "assets" {
+			n, truncated, err := s.countAssets(ctx, base, r.Name, auth, maxPages)
 			if err != nil {
 				plan.Warnings = append(plan.Warnings, r.Name+": 资产枚举失败")
 				count = 0
@@ -92,21 +110,44 @@ func (s *OnlineREST) Discover(ctx context.Context, cfg Config) (Plan, error) {
 				}
 			}
 		}
-		typ := strings.ToLower(r.Type)
-		if typ == "" {
-			typ = "hosted"
-		}
 		plan.Repositories = append(plan.Repositories, PlanRepository{
 			Name:            r.Name,
 			Format:          mapped,
 			Type:            typ,
 			EstimatedAssets: count,
+			Config:          config,
+			MigrationMode:   mode,
 		})
 	}
 	if filterOn && len(plan.Repositories) == 0 {
 		plan.Warnings = append(plan.Warnings, "includeRepositories 未匹配到任何可迁移仓库")
 	}
 	return finalizePlan(plan), nil
+}
+
+func (s *OnlineREST) repositoryConfig(ctx context.Context, base string, repo nexusRepo, typ string, auth credential.SourceAuth) (map[string]any, string, string) {
+	if typ == "hosted" {
+		return map[string]any{}, "assets", ""
+	}
+	endpoint := base + "/service/rest/v1/repositories/" + url.PathEscape(repo.Format) + "/" + url.PathEscape(typ) + "/" + url.PathEscape(repo.Name)
+	body, status, err := s.get(ctx, endpoint, auth)
+	if err != nil || status < http.StatusOK || status >= http.StatusMultipleChoices {
+		return map[string]any{}, "unsupported", "无法读取安全的仓库配置"
+	}
+	var payload struct {
+		Proxy struct {
+			RemoteURL string `json:"remoteUrl"`
+		} `json:"proxy"`
+		Group struct {
+			MemberNames []string `json:"memberNames"`
+		} `json:"group"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return map[string]any{}, "unsupported", "仓库配置解析失败"
+	}
+	source := TargetRepositoryConfig{RemoteURL: payload.Proxy.RemoteURL, Members: payload.Group.MemberNames}
+	config, mode, warning := migrationConfigSummary(typ, source)
+	return config, mode, warning
 }
 
 // RemoteRepository 是 Nexus REST 列出的远程仓库摘要（仅索引，无资产枚举）。
@@ -119,12 +160,17 @@ type RemoteRepository struct {
 // ListRemoteRepositories 仅调用 /service/rest/v1/repositories，不落库、不扫资产。
 // 供离线 blob 迁移前勾选 includeRepositories，避免全盘 Walk。
 // supportedOnly=true 时仅返回本产品可迁移 format（maven/npm/raw）。
-func (s *OnlineREST) ListRemoteRepositories(ctx context.Context, baseURL, credential string, supportedOnly bool) ([]RemoteRepository, error) {
+func (s *OnlineREST) ListRemoteRepositories(ctx context.Context, baseURL, rawCredential string, supportedOnly bool) ([]RemoteRepository, error) {
+	return s.ListRemoteRepositoriesWithAuth(ctx, baseURL, credential.FromLegacy(rawCredential), supportedOnly)
+}
+
+// ListRemoteRepositoriesWithAuth 以显式认证仅拉取 Nexus 仓库索引，不落库。
+func (s *OnlineREST) ListRemoteRepositoriesWithAuth(ctx context.Context, baseURL string, auth credential.SourceAuth, supportedOnly bool) ([]RemoteRepository, error) {
 	if err := requireURL(baseURL); err != nil {
 		return nil, err
 	}
 	base := strings.TrimRight(baseURL, "/")
-	repos, err := s.listRepositories(ctx, base, credential)
+	repos, err := s.listRepositories(ctx, base, auth)
 	if err != nil {
 		return nil, err
 	}
@@ -151,11 +197,11 @@ func (s *OnlineREST) ListRemoteRepositories(ctx context.Context, baseURL, creden
 	return out, nil
 }
 
-func (s *OnlineREST) listRepositories(ctx context.Context, base, credential string) ([]nexusRepo, error) {
+func (s *OnlineREST) listRepositories(ctx context.Context, base string, auth credential.SourceAuth) ([]nexusRepo, error) {
 	u := base + "/service/rest/v1/repositories"
-	body, status, err := s.get(ctx, u, credential)
+	body, status, err := s.get(ctx, u, auth)
 	if err != nil {
-		return nil, &ErrUpstream{Msg: "无法连接 Nexus REST"}
+		return nil, outboundError("无法连接 Nexus REST", err)
 	}
 	if status == http.StatusUnauthorized || status == http.StatusForbidden {
 		return nil, &ErrAuth{Msg: "Nexus 认证失败"}
@@ -170,7 +216,7 @@ func (s *OnlineREST) listRepositories(ctx context.Context, base, credential stri
 	return repos, nil
 }
 
-func (s *OnlineREST) countAssets(ctx context.Context, base, repo, credential string, maxPages int) (int64, bool, error) {
+func (s *OnlineREST) countAssets(ctx context.Context, base, repo string, auth credential.SourceAuth, maxPages int) (int64, bool, error) {
 	var total int64
 	token := ""
 	truncated := false
@@ -181,9 +227,9 @@ func (s *OnlineREST) countAssets(ctx context.Context, base, repo, credential str
 			q.Set("continuationToken", token)
 		}
 		u := base + "/service/rest/v1/assets?" + q.Encode()
-		body, status, err := s.get(ctx, u, credential)
+		body, status, err := s.get(ctx, u, auth)
 		if err != nil {
-			return total, truncated, &ErrUpstream{Msg: "资产列表请求失败"}
+			return total, truncated, outboundError("资产列表请求失败", err)
 		}
 		if status == http.StatusUnauthorized || status == http.StatusForbidden {
 			return 0, false, &ErrAuth{Msg: "Nexus 认证失败"}
@@ -210,20 +256,12 @@ func (s *OnlineREST) countAssets(ctx context.Context, base, repo, credential str
 	return total, truncated, nil
 }
 
-func (s *OnlineREST) get(ctx context.Context, rawURL, credential string) ([]byte, int, error) {
+func (s *OnlineREST) get(ctx context.Context, rawURL string, auth credential.SourceAuth) ([]byte, int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, 0, err
 	}
-	if credential != "" {
-		// 含 ":" 视为 Basic user:pass；否则 Bearer token
-		if strings.Contains(credential, ":") {
-			parts := strings.SplitN(credential, ":", 2)
-			req.SetBasicAuth(parts[0], parts[1])
-		} else {
-			req.Header.Set("Authorization", "Bearer "+credential)
-		}
-	}
+	auth.Apply(req)
 	resp, err := s.HTTP.Do(req)
 	if err != nil {
 		return nil, 0, err
@@ -234,4 +272,11 @@ func (s *OnlineREST) get(ctx context.Context, rawURL, credential string) ([]byte
 		return nil, resp.StatusCode, err
 	}
 	return body, resp.StatusCode, nil
+}
+
+func outboundError(message string, err error) *ErrUpstream {
+	if errors.Is(err, upstream.ErrUnsafeURL) {
+		return &ErrUpstream{Msg: "Nexus 来源被出站安全策略拒绝", Cause: upstream.ErrUnsafeURL}
+	}
+	return &ErrUpstream{Msg: message}
 }

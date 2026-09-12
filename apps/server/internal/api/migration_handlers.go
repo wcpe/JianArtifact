@@ -2,12 +2,16 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
+	"github.com/wcpe/jianartifact/apps/server/internal/migration/discover"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
@@ -117,7 +121,7 @@ func offlineIndexJSON(meta *repository.OfflineDirIndex, counts map[string]int64)
 
 // ListRemoteNexusRepositories 从在线 Nexus 拉取仓库索引（admin only）。
 // 不创建迁移任务、不扫 blob；供离线目录迁移勾选 includeRepositories。
-// 路由在 httpserver 额外注册（非 OpenAPI 生成，避免改契约生成链）。
+// 路由由 OpenAPI 生成链注册，主体由统一 Optional 中间件注入。
 func (h *Handlers) ListRemoteNexusRepositories(c *gin.Context) {
 	if _, ok := requireAdmin(c); !ok {
 		return
@@ -126,17 +130,32 @@ func (h *Handlers) ListRemoteNexusRepositories(c *gin.Context) {
 		auth.WriteError(c, http.StatusServiceUnavailable, "unavailable", "迁移服务未启用")
 		return
 	}
-	var req struct {
-		URL           string `json:"url"`
-		CredentialRef string `json:"credentialRef"`
-	}
+	var req RemoteNexusRepositoryRequest
 	if !bindJSON(c, &req) {
 		return
 	}
-	items, err := h.migrations.ListRemoteRepositories(c.Request.Context(), req.URL, req.CredentialRef)
+	sourceConfig, err := migrationSourceConfigInput(req.SourceConfig)
+	if err != nil {
+		auth.WriteError(c, http.StatusBadRequest, "bad_request", "来源配置无效")
+		return
+	}
+	sourceAuth, err := migrationSourceAuthInput(req.SourceAuth)
+	if err != nil {
+		auth.WriteError(c, http.StatusBadRequest, "bad_request", "来源认证无效")
+		return
+	}
+	credentialRef := ""
+	if req.CredentialRef != nil {
+		credentialRef = *req.CredentialRef
+	}
+	items, err := h.migrations.ListRemoteRepositoriesWithSource(c.Request.Context(), sourceConfig, credentialRef, sourceAuth)
 	if err != nil {
 		writeDomainErr(c, err)
 		return
+	}
+	// FR-109：记录本次远程索引读取使用了哪个逻辑凭据引用（不含明文）。
+	if detail := migrationCredentialAuditDetail(credentialRef, sourceAuth); detail != "" {
+		h.AuditLog(c, "migration.credential_ref", "migration_source", "remote-repositories", "", detail, "ok")
 	}
 	type item struct {
 		Name   string `json:"name"`
@@ -177,7 +196,8 @@ func (h *Handlers) ListMigrations(c *gin.Context, params ListMigrationsParams) {
 
 // CreateMigration 创建 planned 任务（admin only）。
 func (h *Handlers) CreateMigration(c *gin.Context) {
-	if _, ok := requireAdmin(c); !ok {
+	p, ok := requireAdmin(c)
+	if !ok {
 		return
 	}
 	if h.migrations == nil {
@@ -190,10 +210,22 @@ func (h *Handlers) CreateMigration(c *gin.Context) {
 	}
 	in := domain.MigrationCreateInput{
 		SourceType: string(req.SourceType),
+		Initiator:  migrationInitiator(p),
 	}
 	if req.SourceConfig != nil {
-		in.SourceConfig = map[string]any(*req.SourceConfig)
+		sourceConfig, err := migrationSourceConfigInput(*req.SourceConfig)
+		if err != nil {
+			auth.WriteError(c, http.StatusBadRequest, "bad_request", "来源配置无效")
+			return
+		}
+		in.SourceConfig = sourceConfig
 	}
+	sourceAuth, err := migrationSourceAuthInput(req.SourceAuth)
+	if err != nil {
+		auth.WriteError(c, http.StatusBadRequest, "bad_request", "来源认证无效")
+		return
+	}
+	in.SourceAuth = sourceAuth
 	if req.CredentialRef != nil {
 		in.CredentialRef = *req.CredentialRef
 	}
@@ -218,7 +250,8 @@ func (h *Handlers) CreateMigration(c *gin.Context) {
 
 // DiscoverMigrations 同步三来源发现并落库 planned（admin only）。
 func (h *Handlers) DiscoverMigrations(c *gin.Context) {
-	if _, ok := requireAdmin(c); !ok {
+	p, ok := requireAdmin(c)
+	if !ok {
 		return
 	}
 	if h.migrations == nil {
@@ -231,10 +264,22 @@ func (h *Handlers) DiscoverMigrations(c *gin.Context) {
 	}
 	in := domain.MigrationDiscoverInput{
 		SourceType: string(req.SourceType),
+		Initiator:  migrationInitiator(p),
 	}
 	if req.SourceConfig != nil {
-		in.SourceConfig = map[string]any(*req.SourceConfig)
+		sourceConfig, err := migrationSourceConfigInput(*req.SourceConfig)
+		if err != nil {
+			auth.WriteError(c, http.StatusBadRequest, "bad_request", "来源配置无效")
+			return
+		}
+		in.SourceConfig = sourceConfig
 	}
+	sourceAuth, err := migrationSourceAuthInput(req.SourceAuth)
+	if err != nil {
+		auth.WriteError(c, http.StatusBadRequest, "bad_request", "来源认证无效")
+		return
+	}
+	in.SourceAuth = sourceAuth
 	if req.CredentialRef != nil {
 		in.CredentialRef = *req.CredentialRef
 	}
@@ -251,6 +296,9 @@ func (h *Handlers) DiscoverMigrations(c *gin.Context) {
 		Repositories: make([]MigrationPlanRepository, 0, len(result.Plan.Repositories)),
 		Warnings:     result.Plan.Warnings,
 		Stats:        result.Plan.Stats,
+	}
+	if result.Plan.SourceRef != "" {
+		apiPlan.SourceRef = &result.Plan.SourceRef
 	}
 	if result.Plan.Estimated {
 		est := true
@@ -269,6 +317,20 @@ func (h *Handlers) DiscoverMigrations(c *gin.Context) {
 			n := r.EstimatedAssets
 			item.EstimatedAssets = &n
 		}
+		if r.Config != nil {
+			cfg := map[string]interface{}{}
+			for key, value := range r.Config {
+				cfg[key] = value
+			}
+			item.Config = &cfg
+		}
+		if r.MigrationMode != "" {
+			mode := MigrationPlanRepositoryMigrationMode(r.MigrationMode)
+			item.MigrationMode = &mode
+		}
+		if r.Warnings != nil {
+			item.Warnings = &r.Warnings
+		}
 		apiPlan.Repositories = append(apiPlan.Repositories, item)
 	}
 	if apiPlan.Warnings == nil {
@@ -277,10 +339,31 @@ func (h *Handlers) DiscoverMigrations(c *gin.Context) {
 	if apiPlan.Stats == nil {
 		apiPlan.Stats = map[string]interface{}{}
 	}
+	// FR-109：凭据引用与来源认证方式审计——只记录逻辑名称与类型，不记录任何明文或摘要。
+	if detail := migrationCredentialAuditDetail(in.CredentialRef, in.SourceAuth); detail != "" {
+		h.AuditLog(c, "migration.credential_ref", "migration", fmt.Sprintf("%d", result.Task.ID), "", detail, "ok")
+	}
 	c.JSON(http.StatusOK, MigrationDiscoverResponse{
 		TaskId: result.Task.ID,
 		Plan:   apiPlan,
 	})
+}
+
+// migrationCredentialAuditDetail 组装凭据引用审计明细；无凭据使用时返回空串。
+// 仅允许逻辑 credentialRef 名称与认证类型（anonymous/basic/bearer），不得包含明文凭据。
+func migrationCredentialAuditDetail(credentialRef string, sourceAuth *domain.SourceAuth) string {
+	parts := make([]string, 0, 2)
+	if credentialRef != "" {
+		parts = append(parts, "credentialRef="+credentialRef)
+	}
+	if sourceAuth != nil {
+		parts = append(parts, "sourceAuth="+sourceAuth.Type)
+	}
+	return strings.Join(parts, " ")
+}
+
+func migrationInitiator(p *auth.Principal) domain.MigrationInitiator {
+	return domain.MigrationInitiator{Username: p.Username, UserID: p.UserID, AuthSource: p.AuthSource}
 }
 
 // GetMigration 任务详情（admin only）。
@@ -323,7 +406,29 @@ func (h *Handlers) StartMigration(c *gin.Context, id MigrationIdParam) {
 		writeDomainErr(c, err)
 		return
 	}
+	// FR-109：启动审计附带任务使用的逻辑凭据引用/来源认证类型（不含明文）。
+	detail := "includeCount=" + strconv.Itoa(len(include))
+	if credentialDetail := migrationCredentialAuditDetail(credentialRefOf(task), sourceAuthTypeOf(task)); credentialDetail != "" {
+		detail += " " + credentialDetail
+	}
+	h.AuditLog(c, "migration.start", "migration", fmt.Sprintf("%d", task.ID), "", detail, "ok")
 	c.JSON(http.StatusOK, toAPIMigrationTask(task))
+}
+
+// credentialRefOf 读取迁移任务上的逻辑凭据引用（可空）。
+func credentialRefOf(task *repository.MigrationTask) string {
+	if task.CredentialRef.Valid {
+		return task.CredentialRef.String
+	}
+	return ""
+}
+
+// sourceAuthTypeOf 读取迁移任务保存的来源认证类型（可空；仅类型，不含材料）。
+func sourceAuthTypeOf(task *repository.MigrationTask) *domain.SourceAuth {
+	if !task.SourceAuthType.Valid || task.SourceAuthType.String == "" {
+		return nil
+	}
+	return &domain.SourceAuth{Type: task.SourceAuthType.String}
 }
 
 // ResumeMigration failed/cancelled → running（admin only）。
@@ -407,6 +512,10 @@ func toAPIMigrationTask(t *repository.MigrationTask) MigrationTask {
 		ref := t.CredentialRef.String
 		out.CredentialRef = &ref
 	}
+	if t.SourceAuthType.Valid && t.SourceAuthType.String != "" {
+		typ := MigrationSourceAuthType(t.SourceAuthType.String)
+		out.SourceAuthType = &typ
+	}
 	if t.ErrorMessage.Valid && t.ErrorMessage.String != "" {
 		msg := t.ErrorMessage.String
 		out.ErrorMessage = &msg
@@ -420,9 +529,11 @@ func toAPIMigrationTask(t *repository.MigrationTask) MigrationTask {
 		out.FinishedAt = &s
 	}
 	if t.SourceConfig != "" && t.SourceConfig != "{}" {
-		var cfg MigrationSourceConfig
-		if err := json.Unmarshal([]byte(t.SourceConfig), &cfg); err == nil {
-			out.SourceConfig = &cfg
+		var raw map[string]any
+		if err := json.Unmarshal([]byte(t.SourceConfig), &raw); err == nil {
+			if cfg, err := discover.PersistedSourceConfig(t.SourceType, raw); err == nil {
+				out.SourceConfig = migrationSourceConfigOutput(t.SourceType, cfg)
+			}
 		}
 	}
 	if t.PlanJSON != "" && t.PlanJSON != "{}" {
@@ -442,6 +553,71 @@ func toAPIMigrationTask(t *repository.MigrationTask) MigrationTask {
 		}
 	}
 	return out
+}
+
+func migrationSourceConfigInput(config json.Marshaler) (map[string]any, error) {
+	encoded, err := config.MarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	var out map[string]any
+	if err := json.Unmarshal(encoded, &out); err != nil || out == nil {
+		return nil, fmt.Errorf("迁移来源配置无效")
+	}
+	return out, nil
+}
+
+func migrationSourceAuthInput(authConfig *MigrationSourceAuth) (*domain.SourceAuth, error) {
+	if authConfig == nil {
+		return nil, nil
+	}
+	value, err := authConfig.ValueByDiscriminator()
+	if err != nil {
+		return nil, err
+	}
+	switch auth := value.(type) {
+	case MigrationSourceAuthAnonymous:
+		return &domain.SourceAuth{Type: string(auth.Type)}, nil
+	case MigrationSourceAuthBasic:
+		if auth.Username == nil || auth.Password == nil {
+			return nil, fmt.Errorf("Basic 认证缺少用户名或密码")
+		}
+		return &domain.SourceAuth{Type: string(auth.Type), Username: *auth.Username, Password: *auth.Password}, nil
+	case MigrationSourceAuthBearer:
+		if auth.Token == nil {
+			return nil, fmt.Errorf("Bearer 认证缺少令牌")
+		}
+		return &domain.SourceAuth{Type: string(auth.Type), Token: *auth.Token}, nil
+	default:
+		return nil, fmt.Errorf("迁移来源认证无效")
+	}
+}
+
+func migrationSourceConfigOutput(sourceType string, config map[string]any) *MigrationSourceConfig {
+	var out MigrationSourceConfig
+	var err error
+	switch {
+	case sourceType == repository.MigrationSourceOnlineREST:
+		if url, ok := config["url"].(string); ok {
+			err = out.FromMigrationOnlineURLSourceConfig(MigrationOnlineURLSourceConfig{Url: url})
+		} else if ref, ok := config["sourceRef"].(string); ok {
+			err = out.FromMigrationOnlineSourceRefConfig(MigrationOnlineSourceRefConfig{SourceRef: ref})
+		} else {
+			return nil
+		}
+	case sourceType == repository.MigrationSourceOfflineDir || sourceType == repository.MigrationSourceOfflineBundle:
+		path, ok := config["path"].(string)
+		if !ok {
+			return nil
+		}
+		err = out.FromMigrationOfflineSourceConfig(MigrationOfflineSourceConfig{Path: path})
+	default:
+		return nil
+	}
+	if err != nil {
+		return nil
+	}
+	return &out
 }
 
 func toAPIMigrationReport(t *repository.MigrationTask) MigrationReport {

@@ -3,11 +3,14 @@ package discover_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/migration/discover"
+	"github.com/wcpe/jianartifact/apps/server/internal/upstream"
 )
 
 func TestOnlineRESTDiscover(t *testing.T) {
@@ -36,18 +39,25 @@ func TestOnlineRESTDiscover(t *testing.T) {
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"items": items, "continuationToken": ""})
 	})
+	mux.HandleFunc("/service/rest/v1/repositories/npm/proxy/npm-proxy", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"proxy":{"remoteUrl":"https://registry.npmjs.org"}}`))
+	})
+	mux.HandleFunc("/service/rest/v1/repositories/docker/proxy/docker-hub", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"proxy":{"remoteUrl":"https://registry.example"}}`))
+	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	src := discover.NewOnlineREST(srv.Client())
+	src := discover.NewOnlineREST(upstream.NewTestClient(time.Second))
 	plan, err := src.Discover(context.Background(), discover.Config{
 		URL:        srv.URL,
+		SourceRef:  "NEXUS_TEST",
 		Credential: "admin:secret",
 	})
 	if err != nil {
 		t.Fatalf("Discover：%v", err)
 	}
-	if len(plan.Repositories) != 2 {
+	if len(plan.Repositories) != 3 {
 		t.Fatalf("repos = %+v", plan.Repositories)
 	}
 	if !plan.Estimated {
@@ -59,8 +69,11 @@ func TestOnlineRESTDiscover(t *testing.T) {
 			foundDockerWarn = true
 		}
 	}
-	if !foundDockerWarn {
-		t.Errorf("warnings = %v", plan.Warnings)
+	if foundDockerWarn {
+		t.Errorf("docker proxy 不应再被 warning 跳过：%v", plan.Warnings)
+	}
+	if plan.SourceRef != "NEXUS_TEST" || contains(plan.SourceRef, srv.URL) {
+		t.Errorf("sourceRef 不应暴露来源地址：%q", plan.SourceRef)
 	}
 }
 
@@ -77,14 +90,14 @@ func TestOnlineRESTListRemoteRepositories(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	items, err := discover.NewOnlineREST(srv.Client()).ListRemoteRepositories(
+	items, err := discover.NewOnlineREST(upstream.NewTestClient(time.Second)).ListRemoteRepositories(
 		context.Background(), srv.URL, "", true,
 	)
 	if err != nil {
 		t.Fatalf("ListRemoteRepositories：%v", err)
 	}
-	if len(items) != 2 {
-		t.Fatalf("items = %+v, want 2 (docker 应过滤)", items)
+	if len(items) != 3 {
+		t.Fatalf("items = %+v, want 3", items)
 	}
 	if items[0].Name != "r3d" || items[0].Format != "maven" {
 		t.Fatalf("items[0] = %+v", items[0])
@@ -96,7 +109,7 @@ func TestOnlineRESTAuthFailure(t *testing.T) {
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
 	t.Cleanup(srv.Close)
-	_, err := discover.NewOnlineREST(srv.Client()).Discover(context.Background(), discover.Config{
+	_, err := discover.NewOnlineREST(upstream.NewTestClient(time.Second)).Discover(context.Background(), discover.Config{
 		URL:        srv.URL,
 		Credential: "bad:cred",
 	})
@@ -111,6 +124,37 @@ func TestOnlineRESTUnreachable(t *testing.T) {
 	})
 	if _, ok := err.(*discover.ErrUpstream); !ok {
 		t.Fatalf("err = %T %v", err, err)
+	}
+}
+
+func TestOnlineRESTRejectsPrivateSourceAddress(t *testing.T) {
+	_, err := discover.NewOnlineREST(nil).Discover(context.Background(), discover.Config{
+		URL:        "http://127.0.0.1:8081",
+		Credential: "admin:不应泄露",
+	})
+	if !errors.Is(err, upstream.ErrUnsafeURL) {
+		t.Fatalf("私网来源应被统一出站策略拒绝，得 %v", err)
+	}
+	if contains(err.Error(), "不应泄露") || contains(err.Error(), "127.0.0.1") {
+		t.Fatalf("错误不得泄露凭据或来源地址：%v", err)
+	}
+}
+
+func TestOnlineRESTRejectsDangerousRedirect(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "ftp://127.0.0.1/metadata", http.StatusFound)
+	}))
+	t.Cleanup(srv.Close)
+
+	_, err := discover.NewOnlineREST(upstream.NewTestClient(time.Second)).Discover(context.Background(), discover.Config{
+		URL:        srv.URL,
+		Credential: "admin:不应泄露",
+	})
+	if !errors.Is(err, upstream.ErrUnsafeURL) {
+		t.Fatalf("危险重定向应被统一出站策略拒绝，得 %v", err)
+	}
+	if contains(err.Error(), "不应泄露") || contains(err.Error(), "127.0.0.1") {
+		t.Fatalf("错误不得泄露凭据或来源地址：%v", err)
 	}
 }
 

@@ -16,12 +16,16 @@ import (
 //	    <repo>/<path...>
 type OfflineBundle struct{}
 
+type bundleRepository struct {
+	Name      string   `json:"name"`
+	Format    string   `json:"format"`
+	Type      string   `json:"type"`
+	RemoteURL string   `json:"remoteUrl,omitempty"`
+	Members   []string `json:"members,omitempty"`
+}
+
 type bundleManifest struct {
-	Repositories []struct {
-		Name   string `json:"name"`
-		Format string `json:"format"`
-		Type   string `json:"type"`
-	} `json:"repositories"`
+	Repositories []bundleRepository `json:"repositories"`
 }
 
 // Discover 实现 Source。
@@ -53,6 +57,10 @@ func (OfflineBundle) Discover(ctx context.Context, cfg Config) (Plan, error) {
 		if err := json.Unmarshal(raw, &m); err != nil {
 			return Plan{}, &ErrInvalidConfig{Msg: "manifest.json 解析失败"}
 		}
+		byName := make(map[string]bundleRepository, len(m.Repositories))
+		for _, item := range m.Repositories {
+			byName[item.Name] = item
+		}
 		for _, r := range m.Repositories {
 			if len(allow) > 0 && !allow[r.Name] {
 				continue
@@ -62,16 +70,44 @@ func (OfflineBundle) Discover(ctx context.Context, cfg Config) (Plan, error) {
 				plan.Warnings = append(plan.Warnings, "跳过不支持的 format: "+r.Name+" ("+r.Format+")")
 				continue
 			}
-			typ := r.Type
-			if typ == "" {
-				typ = "hosted"
+			typ := normalizeRepoType(r.Type)
+			mode := migrationMode(format, typ)
+			if mode == "unsupported" {
+				plan.Warnings = append(plan.Warnings, "跳过不支持的仓库类型："+r.Name+"（Go modules 仅允许 proxy）")
+				continue
 			}
-			count := countFilesUnder(filepath.Join(contentDir, r.Name))
+			count := int64(0)
+			if mode == "assets" {
+				count = countFilesUnder(filepath.Join(contentDir, r.Name))
+			}
+			config := map[string]any{}
+			if typ == "group" {
+				config["members"] = append([]string(nil), r.Members...)
+			}
+			if typ == "proxy" && strings.TrimSpace(r.RemoteURL) == "" {
+				mode = "unsupported"
+				plan.Warnings = append(plan.Warnings, r.Name+": proxy 缺少上游配置，需管理员补充")
+			} else if typ == "proxy" {
+				if _, err := validateSourceURL(r.RemoteURL); err != nil {
+					mode = "unsupported"
+					plan.Warnings = append(plan.Warnings, r.Name+": proxy 上游配置无效，需管理员补充")
+				} else {
+					config["remoteUrl"] = strings.TrimRight(strings.TrimSpace(r.RemoteURL), "/")
+				}
+			}
+			if typ == "group" {
+				if warning := validateGroup(r, byName); warning != "" {
+					mode = "unsupported"
+					plan.Warnings = append(plan.Warnings, r.Name+": "+warning)
+				}
+			}
 			plan.Repositories = append(plan.Repositories, PlanRepository{
 				Name:            r.Name,
 				Format:          format,
 				Type:            typ,
 				EstimatedAssets: count,
+				Config:          config,
+				MigrationMode:   mode,
 			})
 		}
 		plan.Estimated = false
@@ -119,4 +155,48 @@ func countFilesUnder(dir string) int64 {
 		return nil
 	})
 	return n
+}
+
+func validateGroup(group bundleRepository, byName map[string]bundleRepository) string {
+	if len(group.Members) == 0 {
+		return "group 缺少成员"
+	}
+	for _, memberName := range group.Members {
+		member, ok := byName[memberName]
+		if !ok {
+			return "group 成员不存在：" + memberName
+		}
+		memberFormat, mapped := mapNexusFormat(strings.ToLower(member.Format))
+		groupFormat, _ := mapNexusFormat(strings.ToLower(group.Format))
+		if !mapped || memberFormat != groupFormat {
+			return "group 成员必须全部存在且同 format"
+		}
+		if memberName == group.Name {
+			return "group 不允许自引用"
+		}
+		if normalizeRepoType(member.Type) == "group" && groupCycle(memberName, group.Name, byName, map[string]bool{}) {
+			return "group 存在循环成员"
+		}
+	}
+	return ""
+}
+
+func groupCycle(current, target string, byName map[string]bundleRepository, seen map[string]bool) bool {
+	if current == target {
+		return true
+	}
+	if seen[current] {
+		return false
+	}
+	seen[current] = true
+	item, ok := byName[current]
+	if !ok || normalizeRepoType(item.Type) != "group" {
+		return false
+	}
+	for _, member := range item.Members {
+		if groupCycle(member, target, byName, seen) {
+			return true
+		}
+	}
+	return false
 }

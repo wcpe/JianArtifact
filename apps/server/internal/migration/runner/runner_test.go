@@ -11,12 +11,22 @@ import (
 
 	"github.com/wcpe/jianartifact/apps/server/internal/blobstore"
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
+	"github.com/wcpe/jianartifact/apps/server/internal/migration/credential"
 	"github.com/wcpe/jianartifact/apps/server/internal/migration/runner"
 	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
+	"github.com/wcpe/jianartifact/apps/server/internal/upstream"
 )
 
 func setup(t *testing.T) (*domain.MigrationService, *domain.AssetService, *domain.RepositoryService, *repository.MigrationTaskRepo, *persistence.DB) {
+	return setupWithOnlineHTTP(t, upstream.NewTestClient(upstream.DefaultTimeout))
+}
+
+func setupSecure(t *testing.T) (*domain.MigrationService, *domain.AssetService, *domain.RepositoryService, *repository.MigrationTaskRepo, *persistence.DB) {
+	return setupWithOnlineHTTP(t, nil)
+}
+
+func setupWithOnlineHTTP(t *testing.T, onlineHTTP *upstream.Client) (*domain.MigrationService, *domain.AssetService, *domain.RepositoryService, *repository.MigrationTaskRepo, *persistence.DB) {
 	t.Helper()
 	db, err := persistence.Open(filepath.Join(t.TempDir(), "r.db"))
 	if err != nil {
@@ -32,12 +42,24 @@ func setup(t *testing.T) (*domain.MigrationService, *domain.AssetService, *domai
 	blobs := blobstore.NewStore(filepath.Join(t.TempDir(), "blobs"))
 	repoSvc := domain.NewRepositoryService(repoRepo, repository.NewAclRepo(db), assetRepo, domain.NewSettingService(repository.NewSettingRepo(db)), repository.NewUserRepo(db))
 	assetSvc := domain.NewAssetService(repoRepo, assetRepo, blobs, nil)
+	repoSvc.SetMutationCoordinator(assetSvc.MutationCoordinator())
+	formatMetadataSvc := domain.NewFormatMetadataService(assetSvc, repoRepo, repository.NewFormatMetadataRepo(db), nil)
+	cargoSvc := domain.NewCargoService(assetSvc, repoSvc)
+	ociSvc := domain.NewOCIService(assetSvc, repoSvc)
 	r := runner.New(
 		runner.TaskStoreAdapter{Repo: taskRepo},
 		runner.AssetServiceAdapter{Assets: assetSvc, Repos: repoRepo, AssetR: assetRepo},
 		runner.RepoAdminAdapter{Repos: repoSvc},
 	)
+	r.SetFormatImporter(domain.NewMigrationFormatImporter(formatMetadataSvc, cargoSvc, ociSvc))
+	r.SetOnlineHTTP(onlineHTTP)
 	mig := domain.NewMigrationService(taskRepo, r)
+	sealer, err := credential.NewSealer([]byte("01234567890123456789012345678901"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.SetCredentialSealer(sealer)
+	mig.SetCredentialSealer(sealer)
 	return mig, assetSvc, repoSvc, taskRepo, db
 }
 
@@ -180,6 +202,38 @@ func TestRunnerConflictOverwrite(t *testing.T) {
 	body, _ := io.ReadAll(rc)
 	if string(body) != "hello-migration" {
 		t.Fatalf("overwrite 应得新内容，得 %q", body)
+	}
+}
+
+func TestRunnerConflictOverwriteRejectsImmutableRelease(t *testing.T) {
+	mig, assets, repos, _, _ := setup(t)
+	root := writeBundle(t)
+	if _, err := repos.Create("raw-data", "raw", "hosted", "private", "", repository.RepositoryConfig{ImmutableRelease: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := assets.Put("raw-data", "hello.bin", bytes.NewReader([]byte("OLD")), ""); err != nil {
+		t.Fatal(err)
+	}
+	result, err := mig.Discover(context.Background(), domain.MigrationDiscoverInput{
+		SourceType:     repository.MigrationSourceOfflineBundle,
+		SourceConfig:   map[string]any{"path": root},
+		ConflictPolicy: repository.MigrationConflictOverwrite,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mig.Start(result.Task.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	waitStatus(t, mig, result.Task.ID, repository.MigrationStatusFailed)
+	_, rc, err := assets.Get("raw-data", "hello.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rc.Close() }()
+	body, _ := io.ReadAll(rc)
+	if string(body) != "OLD" {
+		t.Fatalf("不可变 Release 不得被迁移覆盖，得 %q", body)
 	}
 }
 

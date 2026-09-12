@@ -10,13 +10,16 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
+	"github.com/wcpe/jianartifact/apps/server/internal/migration/credential"
 	"github.com/wcpe/jianartifact/apps/server/internal/migration/discover"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
+	"github.com/wcpe/jianartifact/apps/server/internal/upstream"
 )
 
 // AssetWriter 写入目标 hosted 仓库（由 domain.AssetService 满足）。
@@ -26,11 +29,20 @@ type AssetWriter interface {
 	Exists(repoName, path string) (bool, error)
 	// LoadPathSet 一次加载仓库全部路径集合（skip 策略批量预检，可返回 nil 表示不支持）。
 	LoadPathSet(repoName string) (map[string]bool, error)
+	// ImmutableRelease 返回仓库是否禁止迁移覆盖已有制品。
+	ImmutableRelease(repoName string) (bool, error)
 }
 
 // RepoAdmin 确保目标 hosted 仓库存在。
 type RepoAdmin interface {
-	EnsureHosted(name, format string) error
+	PreflightMigration([]domain.MigrationRepositorySpec) error
+	EnsureMigrationRepository(domain.MigrationRepositorySpec) error
+}
+
+type migrationRollbackAdmin interface {
+	RepoAdmin
+	RepositoryExists(name string) (bool, error)
+	DeleteMigrationRepository(name string) error
 }
 
 // TaskStore 任务读写。
@@ -43,11 +55,16 @@ type TaskStore interface {
 
 // Runner 后台执行器。
 type Runner struct {
-	tasks  TaskStore
-	assets AssetWriter
-	repos  RepoAdmin
+	tasks    TaskStore
+	assets   AssetWriter
+	repos    RepoAdmin
+	importer domain.MigrationFormatImporter
+	audit    *repository.AuditLogRepo
 	// 离线目录持久化索引（可选）：就绪时枚举走索引
 	offlineIndex *repository.OfflineIndexRepo
+	// onlineHTTP 是在线 Nexus 列表与下载共用的安全出站客户端。
+	onlineHTTP       *upstream.Client
+	credentialSealer *credential.Sealer
 
 	mu      sync.Mutex
 	running map[int64]context.CancelFunc
@@ -58,21 +75,51 @@ type Runner struct {
 // New 构造 Runner。
 func New(tasks TaskStore, assets AssetWriter, repos RepoAdmin) *Runner {
 	return &Runner{
-		tasks:   tasks,
-		assets:  assets,
-		repos:   repos,
-		running: make(map[int64]context.CancelFunc),
+		tasks:      tasks,
+		assets:     assets,
+		repos:      repos,
+		running:    make(map[int64]context.CancelFunc),
+		onlineHTTP: upstream.NewClient(5 * time.Minute),
 	}
 }
+
+// SetOnlineHTTP 在启动任务前替换在线迁移出站客户端，测试可传 NewTestClient。
+func (r *Runner) SetOnlineHTTP(client *upstream.Client) {
+	if client == nil {
+		client = upstream.NewClient(5 * time.Minute)
+	}
+	r.onlineHTTP = client
+}
+
+// SetCredentialSealer 注入 online REST 任务认证的 AES-256-GCM 密封器。
+func (r *Runner) SetCredentialSealer(sealer *credential.Sealer) { r.credentialSealer = sealer }
 
 // SetOfflineIndex 注入离线索引（可空）。
 func (r *Runner) SetOfflineIndex(idx *repository.OfflineIndexRepo) {
 	r.offlineIndex = idx
 }
 
+// SetFormatImporter 注入需要协议元数据的格式迁移器。
+func (r *Runner) SetFormatImporter(importer domain.MigrationFormatImporter) {
+	r.importer = importer
+}
+
+// SetAuditLogRepo 注入异步迁移结果审计仓储；nil 表示不记录，保持测试与旧装配兼容。
+func (r *Runner) SetAuditLogRepo(audit *repository.AuditLogRepo) { r.audit = audit }
+
 // StartAsync 实现 domain.MigrationRunner：后台 goroutine 执行。
 func (r *Runner) StartAsync(taskID int64) {
 	go r.run(taskID)
+}
+
+// Preflight 在任务状态改为 running 前校验计划，不写入仓库或资产。
+func (r *Runner) Preflight(task *repository.MigrationTask) error {
+	plan, err := migrationPlan(task)
+	if err != nil {
+		return err
+	}
+	_, err = r.topology(plan, false)
+	return err
 }
 
 // Finalize 对 completed 任务同步做增量：再枚举源，仅复制目标不存在的路径，写入 report.delta。
@@ -91,19 +138,24 @@ func (r *Runner) Finalize(ctx context.Context, taskID int64) error {
 		return fmt.Errorf("仅 completed 可 finalize，当前 %s", task.Status)
 	}
 
+	plan, err := migrationPlan(task)
+	if err != nil {
+		return err
+	}
+	if _, err := r.topology(plan, true); err != nil {
+		return err
+	}
 	items, err := r.enumerate(ctx, task, nil)
 	if err != nil {
 		return err
 	}
+	orderMigrationItems(items)
 	var copied, skipped int64
 	for _, item := range items {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
-		}
-		if err := r.repos.EnsureHosted(item.Repo, item.Format); err != nil {
-			return err
 		}
 		exists, err := r.assets.Exists(item.Repo, item.Path)
 		if err != nil {
@@ -113,14 +165,8 @@ func (r *Runner) Finalize(ctx context.Context, taskID int64) error {
 			skipped++
 			continue
 		}
-		rc, err := item.Open()
-		if err != nil {
+		if err := r.importItem(item); err != nil {
 			return err
-		}
-		_, putErr := r.assets.Put(item.Repo, item.Path, rc, "application/octet-stream")
-		_ = rc.Close()
-		if putErr != nil {
-			return putErr
 		}
 		copied++
 	}
@@ -182,6 +228,20 @@ func (r *Runner) run(taskID int64) {
 		log.Printf("迁移任务 %d 状态为 %s，跳过执行", taskID, task.Status)
 		return
 	}
+	plan, err := migrationPlan(task)
+	if err != nil {
+		r.fail(taskID, err.Error(), loadReport(task.ReportJSON))
+		return
+	}
+	createdRepos, err := r.plannedNewRepositories(plan)
+	if err != nil {
+		r.fail(taskID, err.Error(), loadReport(task.ReportJSON))
+		return
+	}
+	if _, err := r.topology(plan, true); err != nil {
+		r.failAfterRollback(taskID, err.Error(), loadReport(task.ReportJSON), createdRepos)
+		return
+	}
 
 	report := loadReport(task.ReportJSON)
 	cp := loadCheckpoint(task.CheckpointJSON)
@@ -237,9 +297,10 @@ func (r *Runner) run(taskID int64) {
 		flushReport(false)
 	})
 	if err != nil {
-		r.fail(taskID, fmt.Sprintf("枚举源失败：%v", err), report)
+		r.failAfterRollback(taskID, fmt.Sprintf("枚举源失败：%v", err), report, createdRepos)
 		return
 	}
+	orderMigrationItems(items)
 	nItems := int64(len(items))
 	report.Phase = "copying"
 	report.Found = nItems
@@ -309,19 +370,11 @@ func (r *Runner) run(taskID int64) {
 		}
 
 		report.CurrentRepo = item.Repo
-		if err := r.repos.EnsureHosted(item.Repo, item.Format); err != nil {
-			report.Failed++
-			report.Failures = appendLimited(report.Failures, failEntry(item, err.Error()))
-			flushCP(true)
-			r.fail(taskID, fmt.Sprintf("创建仓库 %s 失败：%v", item.Repo, err), report)
-			return
-		}
-
 		exists, err := pathExists(item.Repo, item.Path)
 		if err != nil {
 			report.Failed++
 			flushCP(true)
-			r.fail(taskID, err.Error(), report)
+			r.failAfterRollback(taskID, err.Error(), report, createdRepos)
 			return
 		}
 		switch task.ConflictPolicy {
@@ -345,29 +398,34 @@ func (r *Runner) run(taskID int64) {
 				report.Failed++
 				report.Failures = appendLimited(report.Failures, failEntry(item, "目标路径已存在"))
 				flushCP(true)
-				r.fail(taskID, fmt.Sprintf("冲突：%s/%s", item.Repo, item.Path), report)
+				r.failAfterRollback(taskID, fmt.Sprintf("冲突：%s/%s", item.Repo, item.Path), report, createdRepos)
 				return
 			}
 		case repository.MigrationConflictOverwrite:
-			// 直接 Put
+			if exists {
+				immutable, immutableErr := r.assets.ImmutableRelease(item.Repo)
+				if immutableErr != nil {
+					report.Failed++
+					flushCP(true)
+					r.failAfterRollback(taskID, immutableErr.Error(), report, createdRepos)
+					return
+				}
+				if immutable {
+					report.Failed++
+					report.Failures = appendLimited(report.Failures, failEntry(item, "不可变 Release 不允许覆盖"))
+					flushCP(true)
+					r.failAfterRollback(taskID, fmt.Sprintf("不可变 Release 冲突：%s/%s", item.Repo, item.Path), report, createdRepos)
+					return
+				}
+			}
 		}
 
 		report.Message = "写入 " + item.Repo + "（已复制 " + itoa(report.Copied) + "）"
-		rc, err := item.Open()
-		if err != nil {
+		if err := r.importItem(item); err != nil {
 			report.Failed++
 			report.Failures = appendLimited(report.Failures, failEntry(item, err.Error()))
 			flushCP(true)
-			r.fail(taskID, fmt.Sprintf("打开源 %s/%s：%v", item.Repo, item.Path, err), report)
-			return
-		}
-		_, putErr := r.assets.Put(item.Repo, item.Path, rc, "application/octet-stream")
-		_ = rc.Close()
-		if putErr != nil {
-			report.Failed++
-			report.Failures = appendLimited(report.Failures, failEntry(item, putErr.Error()))
-			flushCP(true)
-			r.fail(taskID, fmt.Sprintf("写入 %s/%s：%v", item.Repo, item.Path, putErr), report)
+			r.failAfterRollback(taskID, fmt.Sprintf("写入 %s/%s：%v", item.Repo, item.Path, err), report, createdRepos)
 			return
 		}
 		// overwrite 时同步缓存
@@ -395,13 +453,86 @@ func (r *Runner) run(taskID int64) {
 	_ = r.tasks.SaveReportMeta(taskID, mustJSON(report))
 	_ = r.tasks.SaveCheckpoint(taskID, mustJSON(checkpoint{Done: cp.Done, Complete: true}))
 	_ = r.tasks.UpdateStatus(taskID, repository.MigrationStatusCompleted, nil, false, true)
+	r.auditResult(task, repository.MigrationStatusCompleted, false)
 	log.Printf("迁移任务 %d 完成：copied=%d skipped=%d failed=%d", taskID, report.Copied, report.Skipped, report.Failed)
 }
 
 func (r *Runner) fail(taskID int64, msg string, report *execReport) {
+	r.failWithRollback(taskID, msg, report, false)
+}
+
+func (r *Runner) failWithRollback(taskID int64, msg string, report *execReport, rollback bool) {
 	_ = r.tasks.SaveReportMeta(taskID, mustJSON(report))
 	_ = r.tasks.UpdateStatus(taskID, repository.MigrationStatusFailed, &msg, false, true)
+	if task, err := r.tasks.GetByID(taskID); err == nil {
+		r.auditResult(task, repository.MigrationStatusFailed, rollback)
+	} else {
+		log.Printf("迁移任务 %d 读取失败，无法写结果审计：%v", taskID, err)
+	}
 	log.Printf("迁移任务 %d 失败：%s", taskID, msg)
+}
+
+func (r *Runner) failAfterRollback(taskID int64, msg string, report *execReport, names []string) {
+	if err := r.rollbackCreatedRepositories(names); err != nil {
+		msg += "；回滚本轮仓库失败：" + err.Error()
+	}
+	r.failWithRollback(taskID, msg, report, len(names) > 0)
+}
+
+func (r *Runner) auditResult(task *repository.MigrationTask, result string, rollback bool) {
+	if r.audit == nil || task == nil {
+		return
+	}
+	var userID *int64
+	if task.InitiatorUserID.Valid {
+		id := task.InitiatorUserID.Int64
+		userID = &id
+	}
+	detail := fmt.Sprintf("taskId=%d result=%s rollback=%t", task.ID, result, rollback)
+	if err := r.audit.Insert(repository.AuditLogEntry{
+		TS:         time.Now().UTC().Format(time.RFC3339Nano),
+		Actor:      task.InitiatorUsername,
+		Action:     "migration.result",
+		EntityType: "migration",
+		EntityKey:  itoa(task.ID),
+		Detail:     detail,
+		Result:     result,
+		UserID:     userID,
+		AuthSource: task.InitiatorAuthSource,
+	}); err != nil {
+		log.Printf("迁移任务 %d 结果审计写入失败：%v", task.ID, err)
+	}
+}
+
+func (r *Runner) plannedNewRepositories(plan discover.Plan) ([]string, error) {
+	admin, ok := r.repos.(migrationRollbackAdmin)
+	if !ok {
+		return nil, nil
+	}
+	var names []string
+	for _, spec := range plan.Repositories {
+		exists, err := admin.RepositoryExists(spec.Name)
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			names = append(names, spec.Name)
+		}
+	}
+	return names, nil
+}
+
+func (r *Runner) rollbackCreatedRepositories(names []string) error {
+	admin, ok := r.repos.(migrationRollbackAdmin)
+	if !ok {
+		return nil
+	}
+	for i := len(names) - 1; i >= 0; i-- {
+		if err := admin.DeleteMigrationRepository(names[i]); err != nil && !errors.Is(err, domain.ErrNotFound) {
+			return err
+		}
+	}
+	return nil
 }
 
 // sourceItem 待复制的一项。
@@ -410,6 +541,64 @@ type sourceItem struct {
 	Path   string
 	Format string
 	Open   func() (io.ReadCloser, error)
+}
+
+func orderMigrationItems(items []sourceItem) {
+	positions := make([]int, 0)
+	cargoItems := make([]sourceItem, 0)
+	for i, item := range items {
+		if item.Format == "cargo" {
+			positions = append(positions, i)
+			cargoItems = append(cargoItems, item)
+		}
+	}
+	sort.SliceStable(cargoItems, func(i, j int) bool {
+		return cargoMigrationOrder(cargoItems[i]) < cargoMigrationOrder(cargoItems[j])
+	})
+	for i, position := range positions {
+		items[position] = cargoItems[i]
+	}
+}
+
+func cargoMigrationOrder(item sourceItem) int {
+	if item.Format != "cargo" {
+		return 0
+	}
+	path := strings.Trim(item.Path, "/")
+	if strings.HasPrefix(path, "cargo/crates/") || strings.HasPrefix(path, "api/v1/crates/") {
+		return 0
+	}
+	return 1
+}
+
+func (r *Runner) importItem(item sourceItem) error {
+	switch item.Format {
+	case "pypi", "nuget", "cargo", "docker":
+		if r.importer == nil {
+			return fmt.Errorf("%w: %s 迁移器未配置", domain.ErrValidation, item.Format)
+		}
+		rc, err := item.Open()
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rc.Close() }()
+		return r.importer.ImportMigrationAsset(domain.MigrationAsset{
+			Repository: item.Repo,
+			Format:     item.Format,
+			SourcePath: item.Path,
+			Body:       rc,
+		})
+	case "gomod":
+		return fmt.Errorf("%w: %s 迁移尚未支持安全导入", domain.ErrValidation, item.Format)
+	default:
+		rc, err := item.Open()
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rc.Close() }()
+		_, err = r.assets.Put(item.Repo, item.Path, rc, "application/octet-stream")
+		return err
+	}
 }
 
 func (r *Runner) enumerate(ctx context.Context, task *repository.MigrationTask, onProg discover.EnumProgress) ([]sourceItem, error) {
@@ -421,11 +610,24 @@ func (r *Runner) enumerate(ctx context.Context, task *repository.MigrationTask, 
 	}
 	var cfg map[string]any
 	_ = json.Unmarshal([]byte(task.SourceConfig), &cfg)
+	cfg, err := discover.PersistedSourceConfig(task.SourceType, cfg)
+	if err != nil {
+		return nil, errors.New("迁移任务来源配置无效")
+	}
 	path, _ := cfg["path"].(string)
-	urlStr, _ := cfg["url"].(string)
-
-	// 仅迁移白名单仓库，避免全量占满磁盘（真机验收常用）
-	plan.Repositories = filterPlanRepos(plan.Repositories, includeReposFromConfig(cfg))
+	urlStr := ""
+	if task.SourceType == repository.MigrationSourceOnlineREST {
+		if directURL, ok := cfg["url"].(string); ok {
+			urlStr = directURL
+		} else {
+			ref, _ := cfg["sourceRef"].(string)
+			resolved, err := discover.ResolveSourceRef(ref)
+			if err != nil {
+				return nil, err
+			}
+			urlStr = resolved
+		}
+	}
 
 	switch task.SourceType {
 	case repository.MigrationSourceOfflineBundle:
@@ -433,61 +635,38 @@ func (r *Runner) enumerate(ctx context.Context, task *repository.MigrationTask, 
 	case repository.MigrationSourceOfflineDir:
 		return r.enumerateOfflineDir(ctx, path, plan, onProg)
 	case repository.MigrationSourceOnlineREST:
-		cred := ""
-		if task.CredentialRef.Valid && task.CredentialRef.String != "" {
-			var err error
-			cred, err = resolveCred(task.CredentialRef.String)
-			if err != nil {
-				return nil, err
-			}
+		auth, err := r.sourceAuth(task)
+		if err != nil {
+			return nil, err
 		}
-		return enumerateOnlineREST(ctx, urlStr, cred, plan, onProg)
+		return enumerateOnlineREST(ctx, r.onlineHTTP, urlStr, auth, plan, onProg)
 	default:
 		return nil, fmt.Errorf("不支持的 sourceType %s", task.SourceType)
 	}
 }
 
-// includeReposFromConfig 读取 sourceConfig.includeRepositories（字符串数组）。
-func includeReposFromConfig(cfg map[string]any) []string {
-	if cfg == nil {
-		return nil
-	}
-	raw, ok := cfg["includeRepositories"]
-	if !ok || raw == nil {
-		return nil
-	}
-	switch v := raw.(type) {
-	case []string:
-		return v
-	case []any:
-		out := make([]string, 0, len(v))
-		for _, x := range v {
-			if s, ok := x.(string); ok && s != "" {
-				out = append(out, s)
-			}
+func (r *Runner) sourceAuth(task *repository.MigrationTask) (credential.SourceAuth, error) {
+	if task.CredentialRef.Valid && task.CredentialRef.String != "" {
+		raw, err := resolveCred(task.CredentialRef.String)
+		if err != nil {
+			return credential.SourceAuth{}, err
 		}
-		return out
-	default:
-		return nil
+		return credential.FromLegacy(raw), nil
 	}
-}
-
-// filterPlanRepos 若 include 非空，仅保留名单内仓库。
-func filterPlanRepos(repos []discover.PlanRepository, include []string) []discover.PlanRepository {
-	if len(include) == 0 {
-		return repos
+	if !task.SourceAuthType.Valid || task.SourceAuthType.String == "" {
+		return credential.SourceAuth{Type: credential.TypeAnonymous}, nil
 	}
-	allow := make(map[string]bool, len(include))
-	for _, n := range include {
-		allow[n] = true
+	if task.SourceAuthType.String == credential.TypeAnonymous {
+		return credential.SourceAuth{Type: credential.TypeAnonymous}, nil
 	}
-	out := make([]discover.PlanRepository, 0, len(include))
-	for _, r := range repos {
-		if allow[r.Name] {
-			out = append(out, r)
-		}
+	if r.credentialSealer == nil || len(task.SourceAuthCiphertext) == 0 {
+		return credential.SourceAuth{}, errors.New("迁移任务认证材料不可用")
 	}
-	return out
+	auth, err := r.credentialSealer.Open(task.SourceAuthCiphertext, domain.MigrationCredentialAAD(task))
+	if err != nil || auth.Type != task.SourceAuthType.String {
+		return credential.SourceAuth{}, errors.New("迁移任务认证材料不可用")
+	}
+	return auth, nil
 }
 
 func enumerateOfflineBundle(root string, plan discover.Plan) ([]sourceItem, error) {
@@ -498,6 +677,9 @@ func enumerateOfflineBundle(root string, plan discover.Plan) ([]sourceItem, erro
 	// 仅处理 plan 中的仓库（支持 includeRepositories 多选后收窄）
 	formatByRepo := map[string]string{}
 	for _, r := range plan.Repositories {
+		if r.MigrationMode != "" && r.MigrationMode != "assets" {
+			continue
+		}
 		formatByRepo[r.Name] = r.Format
 		if formatByRepo[r.Name] == "" {
 			formatByRepo[r.Name] = "raw"
@@ -549,6 +731,9 @@ func (r *Runner) enumerateOfflineDir(ctx context.Context, root string, plan disc
 	}
 	formatByRepo := map[string]string{}
 	for _, pr := range plan.Repositories {
+		if pr.MigrationMode != "" && pr.MigrationMode != "assets" {
+			continue
+		}
 		formatByRepo[pr.Name] = pr.Format
 		if formatByRepo[pr.Name] == "" {
 			formatByRepo[pr.Name] = "maven"
@@ -798,6 +983,138 @@ func appendLimited(list []map[string]interface{}, item map[string]interface{}) [
 	return append(list, item)
 }
 
+func migrationPlan(task *repository.MigrationTask) (discover.Plan, error) {
+	plan := discover.Plan{}
+	if task == nil || task.PlanJSON == "" || task.PlanJSON == "{}" {
+		return plan, nil
+	}
+	if err := json.Unmarshal([]byte(task.PlanJSON), &plan); err != nil {
+		return discover.Plan{}, fmt.Errorf("解析 plan：%w", err)
+	}
+	return plan, nil
+}
+
+// topology 先校验全量计划，再按 hosted/proxy、group 的顺序创建目标仓库。
+// 这样 group 永远不会在其成员之前出现，也避免错误计划先写入部分资产。
+func (r *Runner) topology(plan discover.Plan, create bool) ([]domain.MigrationRepositorySpec, error) {
+	specs, err := migrationTopologySpecs(plan)
+	if err != nil {
+		return nil, err
+	}
+	if err := r.repos.PreflightMigration(specs); err != nil {
+		return nil, err
+	}
+	if !create {
+		return specs, nil
+	}
+	for _, spec := range specs {
+		if spec.Type == "group" {
+			continue
+		}
+		if err := r.repos.EnsureMigrationRepository(spec); err != nil {
+			return nil, fmt.Errorf("创建仓库 %s 失败：%w", spec.Name, err)
+		}
+	}
+	groups := make(map[string]domain.MigrationRepositorySpec, len(specs))
+	for _, spec := range specs {
+		if spec.Type == "group" {
+			groups[spec.Name] = spec
+		}
+	}
+	created := map[string]bool{}
+	var createGroup func(string) error
+	createGroup = func(name string) error {
+		if created[name] {
+			return nil
+		}
+		spec := groups[name]
+		for _, member := range spec.Config.Members {
+			if _, isGroup := groups[member]; isGroup {
+				if err := createGroup(member); err != nil {
+					return err
+				}
+			}
+		}
+		if err := r.repos.EnsureMigrationRepository(spec); err != nil {
+			return fmt.Errorf("创建仓库 %s 失败：%w", spec.Name, err)
+		}
+		created[name] = true
+		return nil
+	}
+	for _, spec := range specs {
+		if spec.Type == "group" {
+			if err := createGroup(spec.Name); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return specs, nil
+}
+
+func migrationTopologySpecs(plan discover.Plan) ([]domain.MigrationRepositorySpec, error) {
+	specs := make([]domain.MigrationRepositorySpec, 0, len(plan.Repositories))
+	for _, item := range plan.Repositories {
+		if item.MigrationMode == "unsupported" {
+			return nil, fmt.Errorf("%w: 迁移计划含不可执行仓库 %s", domain.ErrValidation, item.Name)
+		}
+		typ := item.Type
+		if typ == "" {
+			typ = "hosted"
+		}
+		cfg, err := migrationRepositoryConfig(item.Config)
+		if err != nil {
+			return nil, fmt.Errorf("%w: 迁移计划仓库 %s 配置无效：%v", domain.ErrValidation, item.Name, err)
+		}
+		specs = append(specs, domain.MigrationRepositorySpec{Name: item.Name, Format: item.Format, Type: typ, Config: cfg})
+	}
+	return specs, nil
+}
+
+func migrationRepositoryConfig(raw map[string]any) (repository.RepositoryConfig, error) {
+	if len(raw) == 0 {
+		return repository.RepositoryConfig{}, nil
+	}
+	var cfg repository.RepositoryConfig
+	for key, value := range raw {
+		switch key {
+		case "remoteUrl":
+			text, ok := value.(string)
+			if !ok {
+				return repository.RepositoryConfig{}, errors.New("remoteUrl 必须为字符串")
+			}
+			cfg.RemoteURL = text
+		case "members":
+			members, err := migrationMembers(value)
+			if err != nil {
+				return repository.RepositoryConfig{}, err
+			}
+			cfg.Members = members
+		default:
+			return repository.RepositoryConfig{}, fmt.Errorf("不支持配置项 %q", key)
+		}
+	}
+	return cfg, nil
+}
+
+func migrationMembers(raw any) ([]string, error) {
+	switch values := raw.(type) {
+	case []string:
+		return append([]string(nil), values...), nil
+	case []any:
+		out := make([]string, 0, len(values))
+		for _, value := range values {
+			text, ok := value.(string)
+			if !ok {
+				return nil, errors.New("members 必须为字符串数组")
+			}
+			out = append(out, text)
+		}
+		return out, nil
+	default:
+		return nil, errors.New("members 必须为数组")
+	}
+}
+
 // AssetServiceAdapter 适配 domain.AssetService。
 type AssetServiceAdapter struct {
 	Assets *domain.AssetService
@@ -846,24 +1163,52 @@ func (a AssetServiceAdapter) LoadPathSet(repoName string) (map[string]bool, erro
 	return set, nil
 }
 
+func (a AssetServiceAdapter) ImmutableRelease(repoName string) (bool, error) {
+	repo, err := a.Repos.GetByName(repoName)
+	if err != nil {
+		return false, err
+	}
+	cfg, err := repo.DecodeConfig()
+	if err != nil {
+		return false, err
+	}
+	return cfg.ImmutableRelease, nil
+}
+
 // RepoAdminAdapter 确保 hosted 仓库。
 type RepoAdminAdapter struct {
 	Repos *domain.RepositoryService
 }
 
-func (a RepoAdminAdapter) EnsureHosted(name, format string) error {
-	_, err := a.Repos.Get(name)
+func (a RepoAdminAdapter) PreflightMigration(specs []domain.MigrationRepositorySpec) error {
+	return a.Repos.ValidateMigrationPlan(specs)
+}
+
+func (a RepoAdminAdapter) EnsureMigrationRepository(spec domain.MigrationRepositorySpec) error {
+	_, err := a.Repos.Get(spec.Name)
 	if err == nil {
 		return nil
 	}
 	if !errors.Is(err, domain.ErrNotFound) {
 		return err
 	}
-	if format == "" {
-		format = "raw"
+	if spec.Format == "" {
+		spec.Format = "raw"
 	}
-	_, err = a.Repos.Create(name, format, "hosted", "private", "", repository.RepositoryConfig{})
+	_, err = a.Repos.Create(spec.Name, spec.Format, spec.Type, "private", "", spec.Config)
 	return err
+}
+
+func (a RepoAdminAdapter) RepositoryExists(name string) (bool, error) {
+	_, err := a.Repos.Get(name)
+	if errors.Is(err, domain.ErrNotFound) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+func (a RepoAdminAdapter) DeleteMigrationRepository(name string) error {
+	return a.Repos.Delete(name)
 }
 
 // TaskStoreAdapter 适配 MigrationTaskRepo。

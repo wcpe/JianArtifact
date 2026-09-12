@@ -11,7 +11,9 @@ import (
 	"testing"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
+	"github.com/wcpe/jianartifact/apps/server/internal/migration/discover"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
+	"github.com/wcpe/jianartifact/apps/server/internal/upstream"
 )
 
 func TestMigrationServiceDiscoverOfflineBundlePersist(t *testing.T) {
@@ -82,20 +84,29 @@ func TestMigrationServiceDiscoverOnlineREST(t *testing.T) {
 	mux.HandleFunc("/service/rest/v1/assets", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{map[string]string{"p": "1"}}, "continuationToken": ""})
 	})
+	mux.HandleFunc("/service/rest/v1/repositories/docker/proxy/docker-hub", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"proxy":{"remoteUrl":"https://registry.example"}}`))
+	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
+	t.Setenv("JIAN_MIGRATION_SOURCE_NEXUS_TEST", srv.URL)
 
 	db := newTestDB(t)
-	svc := domain.NewMigrationService(repository.NewMigrationTaskRepo(db), nil)
+	svc := domain.NewMigrationService(repository.NewMigrationTaskRepo(db), nil, func(sourceType string) (discover.Source, error) {
+		if sourceType == repository.MigrationSourceOnlineREST {
+			return discover.NewOnlineREST(upstream.NewTestClient(upstream.DefaultTimeout)), nil
+		}
+		return discover.NewSource(sourceType)
+	})
 	result, err := svc.Discover(context.Background(), domain.MigrationDiscoverInput{
 		SourceType:   repository.MigrationSourceOnlineREST,
-		SourceConfig: map[string]any{"url": srv.URL},
+		SourceConfig: map[string]any{"sourceRef": "NEXUS_TEST"},
 	})
 	if err != nil {
 		t.Fatalf("Discover：%v", err)
 	}
-	if len(result.Plan.Repositories) != 1 {
-		t.Fatalf("期望仅 maven，得 %+v", result.Plan.Repositories)
+	if len(result.Plan.Repositories) != 2 {
+		t.Fatalf("期望 maven 与 docker proxy，得 %+v", result.Plan.Repositories)
 	}
 	if result.Task.Status != repository.MigrationStatusPlanned {
 		t.Fatal(result.Task.Status)

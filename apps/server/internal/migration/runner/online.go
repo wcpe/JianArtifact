@@ -2,16 +2,23 @@ package runner
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
+	"github.com/wcpe/jianartifact/apps/server/internal/migration/credential"
 	"github.com/wcpe/jianartifact/apps/server/internal/migration/discover"
+	"github.com/wcpe/jianartifact/apps/server/internal/upstream"
 )
 
 // OnlineAsset 是 Nexus assets API 中资产元数据字段（含创建/更新时间，供迁移与时间回填复用）。
@@ -29,26 +36,29 @@ type onlineAssetsPage struct {
 }
 
 // enumerateOnlineREST 枚举 plan 中各仓库的资产，Open 时流式 HTTP GET downloadUrl。
-// cred 为已解析的凭据明文（user:pass 或 token）；空表示匿名。
-func enumerateOnlineREST(ctx context.Context, baseURL, cred string, plan discover.Plan, onProg discover.EnumProgress) ([]sourceItem, error) {
+// auth 为已解析的显式来源认证；不得写入任务、报告或日志。
+func enumerateOnlineREST(ctx context.Context, client *upstream.Client, baseURL string, auth credential.SourceAuth, plan discover.Plan, onProg discover.EnumProgress) ([]sourceItem, error) {
 	if baseURL == "" {
-		return nil, fmt.Errorf("sourceConfig.url 为空")
+		return nil, fmt.Errorf("online_rest 来源基址为空")
+	}
+	if client == nil {
+		client = upstream.NewClient(5 * time.Minute)
 	}
 	base := strings.TrimRight(baseURL, "/")
-	// 下载用独立超时客户端
-	dlClient := &http.Client{Timeout: 5 * time.Minute}
-	listClient := &http.Client{Timeout: 60 * time.Second}
 
 	var items []sourceItem
 	for _, repo := range plan.Repositories {
 		if err := ctx.Err(); err != nil {
 			return nil, ctx.Err()
 		}
+		if repo.MigrationMode != "" && repo.MigrationMode != "assets" {
+			continue
+		}
 		format := repo.Format
 		if format == "" {
 			format = "raw"
 		}
-		assets, err := listAllAssets(ctx, listClient, base, repo.Name, cred, onProg)
+		assets, err := listAllAssets(ctx, client, base, repo.Name, auth, onProg)
 		if err != nil {
 			return nil, fmt.Errorf("枚举仓库 %s：%w", repo.Name, err)
 		}
@@ -61,6 +71,9 @@ func enumerateOnlineREST(ctx context.Context, baseURL, cred string, plan discove
 				continue
 			}
 			path := strings.TrimPrefix(a.Path, "/")
+			if skipOnlineMigrationAsset(format, path) {
+				continue
+			}
 			dlURL := a.DownloadURL
 			ct := a.ContentType
 			repoName := repo.Name
@@ -69,22 +82,48 @@ func enumerateOnlineREST(ctx context.Context, baseURL, cred string, plan discove
 				Path:   path,
 				Format: format,
 				Open: func() (io.ReadCloser, error) {
-					return openDownload(dlClient, dlURL, cred, ct)
+					return openDownload(ctx, client, base, dlURL, auth, ct)
 				},
 			})
 		}
 	}
+	sort.SliceStable(items, func(i, j int) bool {
+		return onlineMigrationAssetRank(items[i]) < onlineMigrationAssetRank(items[j])
+	})
 	return items, nil
 }
 
-// ListAllAssets 分页拉取源 Nexus 仓库的全部资产元数据（含 blobCreated/lastModified），
-// 供迁移枚举与时间回填（admin backfill-times）复用。cred 为 user:pass 或 token，空表示匿名。
-func ListAllAssets(ctx context.Context, base, repo, cred string) ([]OnlineAsset, error) {
-	client := &http.Client{Timeout: 60 * time.Second}
-	return listAllAssets(ctx, client, base, repo, cred, nil)
+func skipOnlineMigrationAsset(format, path string) bool {
+	return format == "pypi" && strings.HasSuffix(path, ".metadata") ||
+		format == "cargo" && (strings.Trim(path, "/") == "config.json" || !isCargoCrateAsset(path))
 }
 
-func listAllAssets(ctx context.Context, client *http.Client, base, repo, cred string, onProg discover.EnumProgress) ([]OnlineAsset, error) {
+func isCargoCrateAsset(path string) bool {
+	path = strings.Trim(path, "/")
+	return strings.HasPrefix(path, "api/v1/crates/") ||
+		strings.HasPrefix(path, "crates/") ||
+		strings.HasPrefix(path, "cargo/crates/")
+}
+
+func onlineMigrationAssetRank(item sourceItem) int {
+	if item.Format != "cargo" {
+		return 0
+	}
+	path := strings.Trim(item.Path, "/")
+	if strings.HasPrefix(path, "api/v1/crates/") || strings.HasPrefix(path, "cargo/crates/") {
+		return 0
+	}
+	return 1
+}
+
+// ListAllAssets 分页拉取源 Nexus 仓库的全部资产元数据（含 blobCreated/lastModified），
+// 供迁移枚举与时间回填（admin backfill-times）复用。保留旧字符串凭据兼容。
+func ListAllAssets(ctx context.Context, base, repo, cred string) ([]OnlineAsset, error) {
+	client := upstream.NewClient(60 * time.Second)
+	return listAllAssets(ctx, client, base, repo, credential.FromLegacy(cred), nil)
+}
+
+func listAllAssets(ctx context.Context, client *upstream.Client, base, repo string, auth credential.SourceAuth, onProg discover.EnumProgress) ([]OnlineAsset, error) {
 	var all []OnlineAsset
 	token := ""
 	// 防护：单仓最多 10000 页 × 默认页大小，避免失控
@@ -99,9 +138,9 @@ func listAllAssets(ctx context.Context, client *http.Client, base, repo, cred st
 			q.Set("continuationToken", token)
 		}
 		u := base + "/service/rest/v1/assets?" + q.Encode()
-		body, status, err := httpGet(client, u, cred)
+		body, status, err := httpGet(ctx, client, u, auth)
 		if err != nil {
-			return nil, err
+			return nil, onlineRequestError(err)
 		}
 		if status == http.StatusUnauthorized || status == http.StatusForbidden {
 			return nil, fmt.Errorf("向 Nexus 认证失败")
@@ -128,15 +167,18 @@ func listAllAssets(ctx context.Context, client *http.Client, base, repo, cred st
 	return all, nil
 }
 
-func openDownload(client *http.Client, downloadURL, cred, contentType string) (io.ReadCloser, error) {
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, downloadURL, nil)
-	if err != nil {
-		return nil, err
+func openDownload(ctx context.Context, client *upstream.Client, sourceBase, downloadURL string, auth credential.SourceAuth, contentType string) (io.ReadCloser, error) {
+	if !sameOrigin(sourceBase, downloadURL) {
+		return nil, onlineRequestError(upstream.ErrUnsafeURL)
 	}
-	applyCredential(req, cred)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
+	if err != nil {
+		return nil, onlineRequestError(err)
+	}
+	applyCredential(req, auth)
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, onlineRequestError(err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		_ = resp.Body.Close()
@@ -147,12 +189,41 @@ func openDownload(client *http.Client, downloadURL, cred, contentType string) (i
 	return resp.Body, nil
 }
 
-func httpGet(client *http.Client, rawURL, cred string) ([]byte, int, error) {
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, rawURL, nil)
+// sameOrigin 仅允许 Nexus 资产下载回到同一来源，避免将来源凭据发送给资产列表返回的跨站地址。
+func sameOrigin(sourceBase, downloadURL string) bool {
+	source, err := url.Parse(sourceBase)
 	if err != nil {
-		return nil, 0, err
+		return false
 	}
-	applyCredential(req, cred)
+	download, err := url.Parse(downloadURL)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(source.Scheme, download.Scheme) &&
+		strings.EqualFold(source.Hostname(), download.Hostname()) &&
+		effectivePort(source) == effectivePort(download)
+}
+
+func effectivePort(u *url.URL) string {
+	if port := u.Port(); port != "" {
+		return port
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http":
+		return "80"
+	case "https":
+		return "443"
+	default:
+		return ""
+	}
+}
+
+func httpGet(ctx context.Context, client *upstream.Client, rawURL string, auth credential.SourceAuth) ([]byte, int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, 0, onlineRequestError(err)
+	}
+	applyCredential(req, auth)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, 0, err
@@ -166,16 +237,34 @@ func httpGet(client *http.Client, rawURL, cred string) ([]byte, int, error) {
 	return body, resp.StatusCode, nil
 }
 
-func applyCredential(req *http.Request, cred string) {
-	if cred == "" {
-		return
+func onlineRequestError(err error) error {
+	if errors.Is(err, upstream.ErrUnsafeURL) {
+		return fmt.Errorf("出站安全策略拒绝 Nexus 来源：%w", upstream.ErrUnsafeURL)
 	}
-	if strings.Contains(cred, ":") {
-		parts := strings.SplitN(cred, ":", 2)
-		req.SetBasicAuth(parts[0], parts[1])
-		return
+	if upstream.IsTimeout(err) {
+		return errors.New("Nexus 来源连接超时")
 	}
-	req.Header.Set("Authorization", "Bearer "+cred)
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return errors.New("Nexus 来源域名解析失败")
+	}
+	var tlsRecordErr *tls.RecordHeaderError
+	var tlsVerifyErr *tls.CertificateVerificationError
+	var unknownAuthority x509.UnknownAuthorityError
+	var invalidCertificate x509.CertificateInvalidError
+	if errors.As(err, &tlsRecordErr) || errors.As(err, &tlsVerifyErr) ||
+		errors.As(err, &unknownAuthority) || errors.As(err, &invalidCertificate) {
+		return errors.New("Nexus 来源 TLS 握手失败")
+	}
+	var netErr *net.OpError
+	if errors.As(err, &netErr) {
+		return errors.New("Nexus 来源网络连接失败")
+	}
+	return errors.New("Nexus 来源网络请求失败")
+}
+
+func applyCredential(req *http.Request, auth credential.SourceAuth) {
+	auth.Apply(req)
 }
 
 // resolveCred 从 credential_ref 读环境变量；空 ref 返回空串。

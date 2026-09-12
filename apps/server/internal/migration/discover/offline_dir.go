@@ -44,10 +44,10 @@ func (OfflineDir) Discover(ctx context.Context, cfg Config) (Plan, error) {
 
 	// Nexus blob store：path 为 .../blobs/default 或 .../blobs/default/content 的父
 	if isNexusBlobStore(root) {
-		return discoverNexusBlobStore(root, cfg.IncludeRepositories)
+		return discoverNexusBlobStore(root, cfg.IncludeRepositories, cfg.RepositoryFormats, cfg.RepositoryTypes, cfg.RepositoryConfigs)
 	}
 
-	return discoverFixtureDir(root, cfg.IncludeRepositories)
+	return discoverFixtureDir(root, cfg.IncludeRepositories, cfg.RepositoryFormats, cfg.RepositoryTypes, cfg.RepositoryConfigs)
 }
 
 func isNexusBlobStore(root string) bool {
@@ -74,7 +74,7 @@ func isNexusBlobStore(root string) bool {
 	return false
 }
 
-func discoverNexusBlobStore(root string, include []string) (Plan, error) {
+func discoverNexusBlobStore(root string, include []string, formats, types map[string]string, configs map[string]TargetRepositoryConfig) (Plan, error) {
 	contentRoot := root
 	if st, err := os.Stat(filepath.Join(root, "content")); err == nil && st.IsDir() {
 		contentRoot = filepath.Join(root, "content")
@@ -83,6 +83,9 @@ func discoverNexusBlobStore(root string, include []string) (Plan, error) {
 	// 真机 blob 极大：必须带 include，否则拒绝全盘扫描以免卡住
 	if len(allow) == 0 {
 		return Plan{}, &ErrInvalidConfig{Msg: "Nexus blob store 发现必须指定 includeRepositories（避免全量扫描占满磁盘/时间）"}
+	}
+	if len(formats) == 0 {
+		return Plan{}, &ErrInvalidConfig{Msg: "Nexus blob store 缺少可信 repositoryFormats 映射"}
 	}
 
 	repos := make([]string, 0, len(allow))
@@ -101,22 +104,42 @@ func discoverNexusBlobStore(root string, include []string) (Plan, error) {
 	plan := emptyPlan()
 	plan.Estimated = false
 	for name, n := range counts {
+		format, ok := mapNexusFormat(strings.ToLower(strings.TrimSpace(formats[name])))
+		if !ok || !supportedFormat(format) {
+			plan.Warnings = append(plan.Warnings, "跳过缺少可信 format 映射的仓库："+name)
+			continue
+		}
+		typ := normalizeRepoType(types[name])
+		mode := migrationMode(format, typ)
+		if mode == "unsupported" {
+			plan.Warnings = append(plan.Warnings, "跳过不支持的仓库类型："+name+"（Go modules 仅允许 proxy）")
+			continue
+		}
+		config, configuredMode, warning := migrationConfigSummary(typ, configs[name])
+		if warning != "" {
+			plan.Warnings = append(plan.Warnings, name+": "+warning)
+		}
+		if configuredMode == "unsupported" {
+			mode = configuredMode
+		}
 		plan.Repositories = append(plan.Repositories, PlanRepository{
 			Name:            name,
-			Format:          FormatMaven,
-			Type:            "hosted",
+			Format:          format,
+			Type:            typ,
 			EstimatedAssets: n,
+			Config:          config,
+			MigrationMode:   mode,
 		})
 	}
 	if len(plan.Repositories) == 0 {
 		plan.Warnings = append(plan.Warnings, "blob store 中未匹配到 includeRepositories 内仓库")
 	} else {
-		plan.Warnings = append(plan.Warnings, "Nexus blob store：format 默认 maven；已跳过 deleted 资产")
+		plan.Warnings = append(plan.Warnings, "Nexus blob store：已按可信 format/type 映射；已跳过 deleted 资产")
 	}
 	return finalizePlan(plan), nil
 }
 
-func discoverFixtureDir(root string, include []string) (Plan, error) {
+func discoverFixtureDir(root string, include []string, formats, types map[string]string, configs map[string]TargetRepositoryConfig) (Plan, error) {
 	reposRoot := filepath.Join(root, "repositories")
 	if st, err := os.Stat(reposRoot); err != nil || !st.IsDir() {
 		reposRoot = root
@@ -141,7 +164,10 @@ func discoverFixtureDir(root string, include []string) (Plan, error) {
 			continue
 		}
 		repoDir := filepath.Join(reposRoot, name)
-		format := readFormatFile(filepath.Join(repoDir, ".format"))
+		format := formats[name]
+		if format == "" {
+			format = readFormatFile(filepath.Join(repoDir, ".format"))
+		}
 		if format == "" {
 			format = FormatRaw
 			plan.Warnings = append(plan.Warnings, name+": 无 .format，默认 raw")
@@ -149,6 +175,16 @@ func discoverFixtureDir(root string, include []string) (Plan, error) {
 		mapped, ok := mapNexusFormat(strings.ToLower(format))
 		if !ok || !supportedFormat(mapped) {
 			plan.Warnings = append(plan.Warnings, "跳过不支持的 format: "+name+" ("+format+")")
+			continue
+		}
+		typValue := types[name]
+		if typValue == "" {
+			typValue = readFormatFile(filepath.Join(repoDir, ".type"))
+		}
+		typ := normalizeRepoType(typValue)
+		mode := migrationMode(mapped, typ)
+		if mode == "unsupported" {
+			plan.Warnings = append(plan.Warnings, "跳过不支持的仓库类型："+name+"（Go modules 仅允许 proxy）")
 			continue
 		}
 		content := filepath.Join(repoDir, "content")
@@ -162,11 +198,20 @@ func discoverFixtureDir(root string, include []string) (Plan, error) {
 				count = 0
 			}
 		}
+		config, configuredMode, warning := migrationConfigSummary(typ, configs[name])
+		if warning != "" {
+			plan.Warnings = append(plan.Warnings, name+": "+warning)
+		}
+		if configuredMode == "unsupported" {
+			mode = configuredMode
+		}
 		plan.Repositories = append(plan.Repositories, PlanRepository{
 			Name:            name,
 			Format:          mapped,
-			Type:            "hosted",
+			Type:            typ,
 			EstimatedAssets: count,
+			Config:          config,
+			MigrationMode:   mode,
 		})
 	}
 	plan.Estimated = false
