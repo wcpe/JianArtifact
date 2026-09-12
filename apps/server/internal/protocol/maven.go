@@ -31,22 +31,35 @@ import (
 
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
+	"github.com/wcpe/jianartifact/apps/server/internal/formats"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
 // Dispatcher 按仓库 format 将 /repository/:repo/*artifactPath 分派到对应格式处理器：
-// maven→MavenHandler，其余（含 raw、未知类型与不存在的仓库）→ RawHandler，
-// 仓库不存在等由目标处理器内 authorize 统一产出 401/404。
+// maven→MavenHandler、npm→NpmHandler（经 SetNpm 注入），其余（含 raw、未知类型与
+// 不存在的仓库）→ RawHandler，仓库不存在等由目标处理器内 authorize 统一产出 401/404。
 type Dispatcher struct {
 	repoSvc *domain.RepositoryService
 	raw     *RawHandler
 	maven   *MavenHandler
+	enabled formats.Set
+	// npm 为 npm 仓库处理器；npm 格式启用时经 SetNpm 注入。缺省时 npm 仓库经
+	// /repository/ 路径一律 404——宁可拒绝也不能把 packument 当普通文件写入
+	// （会静默丢失 `_attachments` 内的 tarball，见 0.8.0 验收 BUG-1）。
+	npm *NpmHandler
 }
 
 // NewDispatcher 构造 Dispatcher。
-func NewDispatcher(repoSvc *domain.RepositoryService, raw *RawHandler, maven *MavenHandler) *Dispatcher {
-	return &Dispatcher{repoSvc: repoSvc, raw: raw, maven: maven}
+func NewDispatcher(repoSvc *domain.RepositoryService, raw *RawHandler, maven *MavenHandler, enabled ...formats.Set) *Dispatcher {
+	set := formats.Default()
+	if len(enabled) > 0 {
+		set = enabled[0]
+	}
+	return &Dispatcher{repoSvc: repoSvc, raw: raw, maven: maven, enabled: set}
 }
+
+// SetNpm 注入 npm 仓库处理器（npm 格式启用时由装配层调用）。
+func (d *Dispatcher) SetNpm(npm *NpmHandler) { d.npm = npm }
 
 // route 依据仓库 format 选择处理器；仓库不存在则回退 raw（其 authorize 会产出 404）。
 func (d *Dispatcher) route(repoName string) artifactHandler {
@@ -54,13 +67,28 @@ func (d *Dispatcher) route(repoName string) artifactHandler {
 	if err != nil {
 		return d.raw
 	}
+	if !d.enabled.Has(repo.Format) {
+		return disabledArtifactHandler{}
+	}
 	switch repo.Format {
 	case "maven":
 		return d.maven
+	case "npm":
+		if d.npm != nil {
+			return npmArtifactAdapter{npm: d.npm}
+		}
+		return disabledArtifactHandler{}
 	default:
 		return d.raw
 	}
 }
+
+// disabledArtifactHandler 用统一 404 隐藏已禁用格式，不读取 blob 或访问上游。
+type disabledArtifactHandler struct{}
+
+func (disabledArtifactHandler) Get(c *gin.Context)    { c.Status(http.StatusNotFound) }
+func (disabledArtifactHandler) Put(c *gin.Context)    { c.Status(http.StatusNotFound) }
+func (disabledArtifactHandler) Delete(c *gin.Context) { c.Status(http.StatusNotFound) }
 
 // Get/Put/Delete 按仓库 format 委派到对应处理器。
 func (d *Dispatcher) Get(c *gin.Context)    { d.route(c.Param("repo")).Get(c) }

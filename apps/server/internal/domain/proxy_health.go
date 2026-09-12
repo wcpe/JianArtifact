@@ -48,9 +48,9 @@ type RemoteHealth struct {
 // AVAILABLE 并重置退避。内存态、并发安全；探测线程生命周期由状态机统一管理。
 type proxyHealth struct {
 	mu    sync.Mutex
-	check func(ctx context.Context, remoteURL string) error // 上游连通性探测（HEAD），由 AssetService 注入
-	base  time.Duration                                     // 退避起始时长（默认 autoBlockInitial，测试可调小）
-	repos map[int64]*remoteState                            // repoID -> 该仓库上游状态
+	check func(ctx context.Context, remoteURL, credentialRef string) error // 上游连通性探测（HEAD），由 AssetService 注入
+	base  time.Duration                                                    // 退避起始时长（默认 autoBlockInitial，测试可调小）
+	repos map[int64]*remoteState                                           // repoID -> 该仓库上游状态
 }
 
 // remoteState 是单个 proxy 仓库上游的连接状态。
@@ -63,7 +63,7 @@ type remoteState struct {
 }
 
 // newProxyHealth 构造状态机容器。check 为探测函数，由 AssetService 注入。
-func newProxyHealth(check func(ctx context.Context, remoteURL string) error) *proxyHealth {
+func newProxyHealth(check func(ctx context.Context, remoteURL, credentialRef string) error) *proxyHealth {
 	return &proxyHealth{check: check, base: autoBlockInitial, repos: map[int64]*remoteState{}}
 }
 
@@ -106,7 +106,7 @@ func (h *proxyHealth) shouldBlock(repoID int64) bool {
 
 // recordFailure 记录一次上游失败：进入 AUTO_BLOCKED，blockedUntil = now + 下一退避档，
 // 并确保后台探测线程在运行（首次失败时启动）。
-func (h *proxyHealth) recordFailure(repoID int64, remoteURL string) {
+func (h *proxyHealth) recordFailure(repoID int64, remoteURL, credentialRef string) {
 	h.mu.Lock()
 	st := h.repos[repoID]
 	if st == nil {
@@ -122,7 +122,7 @@ func (h *proxyHealth) recordFailure(repoID int64, remoteURL string) {
 	}
 	h.mu.Unlock()
 	if needStart {
-		go h.checkStatus(st, remoteURL)
+		go h.checkStatus(st, remoteURL, credentialRef)
 	}
 }
 
@@ -156,11 +156,11 @@ func (h *proxyHealth) status(repoID int64) RemoteHealth {
 // recheck 手动立即探测上游并更新状态（FR-114 手动重测）：成功恢复 AVAILABLE 并中断
 // 后台探测线程；失败进入 AUTO_BLOCKED 并开启退避窗口（同 recordFailure 语义，线程由
 // 状态机保证在跑）。返回最新状态视图，不等待自动阻止窗口。
-func (h *proxyHealth) recheck(repoID int64, remoteURL string) RemoteHealth {
+func (h *proxyHealth) recheck(repoID int64, remoteURL, credentialRef string) RemoteHealth {
 	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
 	defer cancel()
-	if err := h.check(ctx, remoteURL); err != nil {
-		h.recordFailure(repoID, remoteURL)
+	if err := h.check(ctx, remoteURL, credentialRef); err != nil {
+		h.recordFailure(repoID, remoteURL, credentialRef)
 	} else {
 		h.recordSuccess(repoID)
 	}
@@ -171,7 +171,7 @@ func (h *proxyHealth) recheck(repoID int64, remoteURL string) RemoteHealth {
 // 成功恢复 AVAILABLE 并重置退避（线程退出）；失败延长窗口继续等待。
 // 线程生命周期与 stopCh 绑定：recordSuccess 关闭 stopCh 即中断；线程退出时
 // 自行关闭并清空 stopCh（锁内），保证不变量"AUTO_BLOCKED ⇒ 必有探测线程在跑"。
-func (h *proxyHealth) checkStatus(st *remoteState, remoteURL string) {
+func (h *proxyHealth) checkStatus(st *remoteState, remoteURL, credentialRef string) {
 	for {
 		// 等待到窗口截止（不持锁，允许 recordSuccess 中断）。
 		h.mu.Lock()
@@ -194,7 +194,7 @@ func (h *proxyHealth) checkStatus(st *remoteState, remoteURL string) {
 
 		// 已到窗口截止：探测上游（不持锁，探测可能耗时）。
 		ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
-		err := h.check(ctx, remoteURL)
+		err := h.check(ctx, remoteURL, credentialRef)
 		cancel()
 
 		h.mu.Lock()

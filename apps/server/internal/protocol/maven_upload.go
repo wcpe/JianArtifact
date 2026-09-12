@@ -18,6 +18,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
+	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
 // gavPattern 限定 GAV 与 packaging 的合法字符（拒绝路径分隔符与空白）。
@@ -74,8 +75,8 @@ func buildMinimalPom(groupID, artifactID, version, packaging string) string {
 }
 
 // UploadForm 处理管理端 Maven 表单上传。校验顺序：字段 400 → SNAPSHOT 400 →
-// 鉴权 write（401/403/404）→ 仓库须 maven hosted（409）。多文件顺序写入不引入事务，
-// 中途失败可能留下部分文件——重传即自愈（Upsert 覆盖），与 mvn deploy 多次 PUT 行为一致。
+// 鉴权 write（401/403/404）→ 仓库须 maven hosted（409）。主文件、校验和、POM 和
+// 元数据统一暂存，最后作为一个资产操作公开，失败时不暴露半套 Maven 版本。
 func (h *MavenHandler) UploadForm(c *gin.Context) {
 	repoName := c.Param("name")
 	groupID := strings.TrimSpace(c.PostForm("groupId"))
@@ -115,19 +116,47 @@ func (h *MavenHandler) UploadForm(c *gin.Context) {
 
 	artifactDir := strings.ReplaceAll(groupID, ".", "/") + "/" + artifactID
 	versionDir := artifactDir + "/" + version
+	cfg, err := repo.DecodeConfig()
+	if err != nil {
+		writeAssetErr(c, err)
+		return
+	}
+	if cfg.ImmutableRelease {
+		existing, listErr := h.assets.ListAssetsByPrefix(repoName, versionDir+"/", 1)
+		if listErr != nil {
+			writeAssetErr(c, listErr)
+			return
+		}
+		if len(existing) > 0 {
+			auth.WriteError(c, http.StatusConflict, "immutable_release", "不可变 Release 不允许覆盖")
+			return
+		}
+	}
 
-	// putWithChecksums 写入一个文件及其 .md5/.sha1（校验和直接取 Put 返回的 Asset 列，无需重算）。
+	// stageWithChecksums 暂存一个文件及其 .md5/.sha1，所有资产准备完成后一次提交。
 	var files []string
-	putWithChecksums := func(path, contentType string, r io.Reader) error {
-		asset, perr := h.assets.Put(repoName, path, r, contentType)
+	planned := make([]*repository.Asset, 0, 9)
+	committed := false
+	defer func() {
+		if !committed {
+			_ = h.assets.DiscardStagedAssets(planned)
+		}
+	}()
+	stageWithChecksums := func(path, contentType string, r io.Reader) error {
+		asset, perr := h.assets.StageBlob(r, contentType)
 		if perr != nil {
 			return perr
 		}
+		asset.Path = path
+		planned = append(planned, asset)
 		files = append(files, path)
 		for _, cs := range []struct{ ext, sum string }{{".md5", asset.Md5}, {".sha1", asset.Sha1}} {
-			if _, perr := h.assets.Put(repoName, path+cs.ext, strings.NewReader(cs.sum), "text/plain"); perr != nil {
+			checksum, perr := h.assets.StageBlob(strings.NewReader(cs.sum), "text/plain")
+			if perr != nil {
 				return perr
 			}
+			checksum.Path = path + cs.ext
+			planned = append(planned, checksum)
 			files = append(files, path+cs.ext)
 		}
 		return nil
@@ -141,7 +170,7 @@ func (h *MavenHandler) UploadForm(c *gin.Context) {
 	}
 	defer func() { _ = f.Close() }()
 	mainPath := versionDir + "/" + artifactID + "-" + version + "." + packaging
-	if err := putWithChecksums(mainPath, mainContentType(packaging), f); err != nil {
+	if err := stageWithChecksums(mainPath, mainContentType(packaging), f); err != nil {
 		writeAssetErr(c, err)
 		return
 	}
@@ -150,14 +179,13 @@ func (h *MavenHandler) UploadForm(c *gin.Context) {
 	if packaging != "pom" {
 		pom := buildMinimalPom(groupID, artifactID, version, packaging)
 		pomPath := versionDir + "/" + artifactID + "-" + version + ".pom"
-		if err := putWithChecksums(pomPath, "application/xml", strings.NewReader(pom)); err != nil {
+		if err := stageWithChecksums(pomPath, "application/xml", strings.NewReader(pom)); err != nil {
 			writeAssetErr(c, err)
 			return
 		}
 	}
 
-	// 3) artifact 级 maven-metadata.xml 读-改-写 + 校验和（无锁：管理端低频操作，
-	// 与客户端 deploy 一致不加并发保护，见 spec 风险节）。
+	// 3) artifact 级 maven-metadata.xml 读-改-写 + 校验和。
 	metaPath := artifactDir + "/maven-metadata.xml"
 	var meta mavenMetadata
 	if _, rc, rerr := h.assets.Resolve(c.Request.Context(), repoName, metaPath); rerr == nil {
@@ -188,10 +216,15 @@ func (h *MavenHandler) UploadForm(c *gin.Context) {
 		auth.WriteError(c, http.StatusInternalServerError, "internal", "生成 maven-metadata.xml 失败")
 		return
 	}
-	if err := putWithChecksums(metaPath, "application/xml", bytes.NewReader(out)); err != nil {
+	if err := stageWithChecksums(metaPath, "application/xml", bytes.NewReader(out)); err != nil {
 		writeAssetErr(c, err)
 		return
 	}
+	if _, err := h.assets.PublishAssets(repoName, planned); err != nil {
+		writeAssetErr(c, err)
+		return
+	}
+	committed = true
 
 	c.JSON(http.StatusCreated, gin.H{
 		"repository": repoName,

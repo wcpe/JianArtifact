@@ -98,9 +98,13 @@ func (h *NpmHandler) Put(c *gin.Context) {
 		return
 	}
 	if !h.authorize(c, repoName, "write") {
+		h.auditRejected(c, "npm.publish", repoName, rest, "authorization_denied")
 		return
 	}
 	if pkg, ok := splitRev(rest); ok {
+		if !h.requireHosted(c, repoName) {
+			return
+		}
 		h.unpublishRevPut(c, repoName, pkg)
 		return
 	}
@@ -251,8 +255,8 @@ func (h *NpmHandler) serveGroupPackument(c *gin.Context, repo *repository.Reposi
 	h.writePackumentDoc(c, merged)
 }
 
-// publish 解析发布体：落各 _attachments tarball，合并进已存 packument（last-writer-wins），
-// 覆盖写 packument 文档。仓库非 hosted 时 AssetService.Put 返回 ErrConflict→409。
+// publish 解析发布体，先暂存全部 tarball 和 packument，再一次公开整个 npm 版本批次。
+// 仓库非 hosted 时 AssetService.PublishAssets 返回 ErrConflict→409。
 func (h *NpmHandler) publish(c *gin.Context, repoName, pkg string) {
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
@@ -265,7 +269,12 @@ func (h *NpmHandler) publish(c *gin.Context, repoName, pkg string) {
 		return
 	}
 
-	// 1) 落 tarball（base64 解码）。
+	// 1) 解码全部 tarball，任何请求体错误均发生在写入前。
+	type attachment struct {
+		name string
+		body []byte
+	}
+	attachments := make([]attachment, 0)
 	if atts, ok := incoming["_attachments"].(map[string]any); ok {
 		for name, raw := range atts {
 			att, ok := raw.(map[string]any)
@@ -281,21 +290,56 @@ func (h *NpmHandler) publish(c *gin.Context, repoName, pkg string) {
 				auth.WriteError(c, http.StatusBadRequest, "invalid_body", "_attachments 非法 base64")
 				return
 			}
-			if _, perr := h.assets.Put(repoName, pkg+"/-/"+name, bytes.NewReader(blob), "application/octet-stream"); perr != nil {
-				writeAssetErr(c, perr)
-				return
-			}
+			attachments = append(attachments, attachment{name: name, body: blob})
 		}
 	}
 	delete(incoming, "_attachments")
 
-	// 2) 与已存 packument 合并（累积历史 versions），覆盖写。
+	// 1.5) 对齐 tarball 存储名与 packument 声明名。npm 客户端在「子路径 registry」
+	// （如 …/repository/<repo>/）下发布 scoped 包时，`_attachments` 键带 scope 前缀
+	// （@scope/name-ver.tgz）而 versions[].dist.tarball 的 basename 是裸名
+	// （name-ver.tgz）；两者不一致时存储名取 packument 声明的 basename，保证
+	// servePackument 重写出的 dist.tarball 与 serveTarball 的解析路径一致。
+	tarballBase := map[string]string{}
+	if versions, ok := incoming["versions"].(map[string]any); ok {
+		for _, raw := range versions {
+			vm, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			dist, _ := vm["dist"].(map[string]any)
+			t, _ := dist["tarball"].(string)
+			if t != "" {
+				tarballBase[path.Base(t)] = path.Base(t)
+			}
+		}
+	}
+	tarballFileName := func(attachmentKey string) string {
+		if _, ok := tarballBase[attachmentKey]; ok || len(tarballBase) == 0 {
+			return attachmentKey
+		}
+		for base := range tarballBase {
+			// 附件键带 scope 前缀（@acc/probe-…）而声明名是裸名（probe-…）时对齐。
+			if strings.HasSuffix(attachmentKey, base) {
+				return base
+			}
+		}
+		return attachmentKey
+	}
+
+	// 2) 与已存 packument 合并（累积历史 versions），并在不可变 Release 中拒绝
+	// 已存在逻辑版本的覆盖；packument 本身是派生元数据，不作为逻辑制品判断。
 	merged := incoming
+	var existing map[string]any
 	if _, rc, gerr := h.assets.Get(repoName, pkg); gerr == nil {
 		existingBytes, _ := io.ReadAll(rc)
 		_ = rc.Close()
-		var existing map[string]any
 		if json.Unmarshal(existingBytes, &existing) == nil {
+			if h.npmImmutableVersionExists(repoName, existing, incoming) {
+				h.auditRejected(c, "npm.publish", repoName, pkg, "immutable_release")
+				writePublishErr(c, domain.ErrImmutableRelease)
+				return
+			}
 			mergePackumentLastWins(existing, incoming)
 			merged = existing
 		}
@@ -305,11 +349,112 @@ func (h *NpmHandler) publish(c *gin.Context, repoName, pkg string) {
 		auth.WriteError(c, http.StatusInternalServerError, "internal", "内部错误")
 		return
 	}
-	if _, err := h.assets.Put(repoName, pkg, bytes.NewReader(out), "application/json"); err != nil {
+	// 每次 npm 发布的 v2 operation 都携带该包当前全部 tarball。后续 packument
+	// 覆盖回收旧 blob 时，延迟同步的备用节点仍可跳过旧批次并原子获得完整快照。
+	existingTarballs, err := h.assets.ListAssetsByPrefix(repoName, pkg+"/-/", 500)
+	if err != nil {
 		writeAssetErr(c, err)
 		return
 	}
+
+	// 3) 所有发布约束先预留。存在 tarball 时它们才是新增制品；仅更新
+	// packument 的兼容请求沿用 packument 路径校验。
+	settles := make([]func(bool), 0, len(attachments))
+	for _, item := range attachments {
+		assetPath := pkg + "/-/" + tarballFileName(item.name)
+		settle, perr := h.beginPublish(c, repoName, assetPath, int64(len(item.body)))
+		if perr != nil {
+			for _, release := range settles {
+				release(false)
+			}
+			h.auditRejected(c, "npm.publish", repoName, assetPath, publishRejectionDetail(perr))
+			writePublishErr(c, perr)
+			return
+		}
+		settles = append(settles, settle)
+	}
+	if len(attachments) == 0 {
+		settle, perr := h.beginPublish(c, repoName, pkg, int64(len(out)))
+		if perr != nil {
+			h.auditRejected(c, "npm.publish", repoName, pkg, publishRejectionDetail(perr))
+			writePublishErr(c, perr)
+			return
+		}
+		settles = append(settles, settle)
+	}
+	published := false
+	planned := make([]*repository.Asset, 0, len(existingTarballs)+len(attachments)+1)
+	defer func() {
+		if published {
+			return
+		}
+		for _, settle := range settles {
+			settle(false)
+		}
+		_ = h.assets.DiscardStagedAssets(planned)
+	}()
+	for _, item := range attachments {
+		asset, stageErr := h.assets.StageBlob(bytes.NewReader(item.body), "application/octet-stream")
+		if stageErr != nil {
+			h.auditRejected(c, "npm.publish", repoName, pkg+"/-/"+item.name, publishRejectionDetail(stageErr))
+			writeAssetErr(c, stageErr)
+			return
+		}
+		asset.Path = pkg + "/-/" + tarballFileName(item.name)
+		planned = append(planned, asset)
+	}
+	plannedPaths := make(map[string]struct{}, len(planned))
+	for _, asset := range planned {
+		plannedPaths[asset.Path] = struct{}{}
+	}
+	for i := range existingTarballs {
+		asset := existingTarballs[i]
+		if _, exists := plannedPaths[asset.Path]; exists {
+			continue
+		}
+		planned = append(planned, &asset)
+	}
+	packument, stageErr := h.assets.StageBlob(bytes.NewReader(out), "application/json")
+	if stageErr != nil {
+		h.auditRejected(c, "npm.publish", repoName, pkg, publishRejectionDetail(stageErr))
+		writeAssetErr(c, stageErr)
+		return
+	}
+	packument.Path = pkg
+	planned = append(planned, packument)
+	if _, err := h.assets.PublishAssets(repoName, planned); err != nil {
+		h.auditRejected(c, "npm.publish", repoName, pkg, publishRejectionDetail(err))
+		writeAssetErr(c, err)
+		return
+	}
+	published = true
+	for _, settle := range settles {
+		settle(true)
+	}
+	for _, item := range attachments {
+		h.auditPublish(c, "npm.publish", repoName, pkg+"/-/"+item.name, int64(len(item.body)))
+	}
+	h.auditPublish(c, "npm.publish", repoName, pkg, int64(len(out)))
 	c.JSON(http.StatusCreated, gin.H{"ok": true, "id": pkg})
+}
+
+// npmImmutableVersionExists 判断不可变 Release 是否会覆盖既有 npm 逻辑版本。
+func (h *NpmHandler) npmImmutableVersionExists(repoName string, existing, incoming map[string]any) bool {
+	repo, err := h.repoSvc.Get(repoName)
+	if err != nil {
+		return false
+	}
+	cfg, err := repo.DecodeConfig()
+	if err != nil || !cfg.ImmutableRelease {
+		return false
+	}
+	existingVersions := subMap(existing, "versions")
+	for version := range subMap(incoming, "versions") {
+		if _, exists := existingVersions[version]; exists {
+			return true
+		}
+	}
+	return false
 }
 
 // splitTarball 从 rest 解析 tarball 请求：以首个 `/-/` 分隔为 pkg 与文件名。

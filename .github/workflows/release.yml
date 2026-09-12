@@ -30,19 +30,19 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: 安装 pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
 
       - name: 安装 Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: pnpm
 
       - name: 安装 Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: "1.26.6"
           cache-dependency-path: apps/server/go.sum
@@ -69,7 +69,7 @@ jobs:
       image_name: ${{ steps.meta.outputs.image_name }}
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -117,19 +117,19 @@ jobs:
     timeout-minutes: 40
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: 安装 pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
 
       - name: 安装 Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: pnpm
 
       - name: 安装 Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: "1.26.6"
           cache-dependency-path: apps/server/go.sum
@@ -137,13 +137,69 @@ jobs:
       - name: 构建多平台二进制
         run: bash scripts/build-release-assets.sh "${{ needs.resolve-meta.outputs.version }}" dist/release
 
+      - name: 校验 arm64 发布资产
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist/release
+          sha256sum -c SHA256SUMS
+          ARM64="jianartifact-${{ needs.resolve-meta.outputs.version }}-linux-arm64"
+          file "$ARM64" | grep -Eq 'ELF 64-bit.*ARM aarch64'
+          if readelf -d "$ARM64" | grep -q 'NEEDED'; then
+            echo "arm64 资产包含动态依赖" >&2
+            exit 1
+          fi
+
       - name: 上传资产 artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-assets
           path: dist/release/
           if-no-files-found: error
           retention-days: 14
+
+  arm64-native-smoke:
+    name: Linux arm64 原生冒烟
+    runs-on: ubuntu-24.04-arm
+    needs: [resolve-meta, build-assets]
+    timeout-minutes: 15
+    steps:
+      - name: 下载同次构建资产
+        uses: actions/download-artifact@v8
+        with:
+          name: release-assets
+          path: dist/release
+
+      - name: 校验并启动 arm64 服务
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist/release
+          sha256sum -c SHA256SUMS
+          BIN="jianartifact-${{ needs.resolve-meta.outputs.version }}-linux-arm64"
+          chmod +x "$BIN"
+          "$PWD/$BIN" help >/dev/null
+          DATA_DIR="$(mktemp -d)"
+          LOG_FILE="$RUNNER_TEMP/jianartifact-arm64.log"
+          PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
+          cleanup() {
+            if [[ -n "${PID:-}" ]] && kill -0 "$PID" 2>/dev/null; then kill "$PID" 2>/dev/null || true; fi
+            wait "${PID:-}" 2>/dev/null || true
+            rm -rf "$DATA_DIR"
+          }
+          trap cleanup EXIT
+          JIAN_DATA_DIR="$DATA_DIR" JIAN_HTTP_ADDR="127.0.0.1:$PORT" JIAN_ENABLED_FORMATS=raw \
+            "$PWD/$BIN" run >"$LOG_FILE" 2>&1 &
+          PID=$!
+          ready=0
+          for _ in $(seq 1 30); do
+            if curl --fail --silent "http://127.0.0.1:$PORT/readyz" >/dev/null; then ready=1; break; fi
+            sleep 1
+          done
+          if [[ "$ready" != 1 ]]; then
+            echo "arm64 服务未在超时内就绪" >&2
+            exit 1
+          fi
 
   docker:
     name: 构建并推送镜像
@@ -152,10 +208,10 @@ jobs:
     timeout-minutes: 40
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: 登录 GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -163,7 +219,7 @@ jobs:
 
       - name: 镜像元数据
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ needs.resolve-meta.outputs.image_name }}
           tags: |
@@ -173,10 +229,10 @@ jobs:
             type=sha,prefix=sha-,format=short
 
       - name: 设置 Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: 构建并推送
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: deploy/Dockerfile
@@ -191,11 +247,11 @@ jobs:
   github-release:
     name: 发布 GitHub Release
     runs-on: ubuntu-latest
-    needs: [resolve-meta, build-assets, docker]
+    needs: [resolve-meta, build-assets, arm64-native-smoke, docker]
     timeout-minutes: 15
     steps:
       - name: 检出代码（供 CHANGELOG 摘录 / 移动预览 tag）
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           # 预览版需 force-push tag，使用默认 GITHUB_TOKEN 即可（contents:write）
@@ -212,7 +268,7 @@ jobs:
           git push -f origin refs/tags/dev-preview
 
       - name: 下载资产
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: release-assets
           path: dist/release
@@ -264,7 +320,7 @@ jobs:
           echo "path=$NOTES_FILE" >> "$GITHUB_OUTPUT"
 
       - name: 创建 / 更新 GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.resolve-meta.outputs.release_tag }}
           name: ${{ needs.resolve-meta.outputs.release_name }}

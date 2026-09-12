@@ -23,6 +23,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
+	"github.com/wcpe/jianartifact/apps/server/internal/domain"
 )
 
 // npmInstallMediaType 是 abbreviated packument 的媒体类型（install 加速）。
@@ -240,8 +241,8 @@ func (h *NpmHandler) distTagDelete(c *gin.Context, repoName, pkg, tag string) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
-// unpublishRevPut 处理 `npm unpublish <pkg>@<ver>` 的修订写：body 为剔除目标
-// 版本后的完整 packument，替换写（非合并）；随后客户端会单独 DELETE tarball。
+// unpublishRevPut 处理 `npm unpublish <pkg>@<ver>` 的修订写。npm 客户端随后会
+// 单独 DELETE tarball，因此此阶段只校验并确认请求，不得单独修改 packument。
 func (h *NpmHandler) unpublishRevPut(c *gin.Context, repoName, pkg string) {
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
@@ -253,38 +254,43 @@ func (h *NpmHandler) unpublishRevPut(c *gin.Context, repoName, pkg string) {
 		auth.WriteError(c, http.StatusBadRequest, "invalid_body", "请求体非合法 JSON")
 		return
 	}
-	delete(doc, "_attachments")
-	if !h.savePackument(c, repoName, pkg, doc) {
+	if doc == nil {
+		auth.WriteError(c, http.StatusBadRequest, "invalid_body", "请求体必须为 JSON 对象")
 		return
 	}
 	c.JSON(http.StatusCreated, gin.H{"ok": true})
 }
 
-// unpublishTarball 删除单个 tarball（unpublish 单版本第三步）。
+// unpublishTarball 在 unpublish 单版本最后一步按 tarball 路径解析唯一逻辑版本，
+// 将 packument 更新、tarball 删除、审计与 v2 operation 合入同一原子事务。
 func (h *NpmHandler) unpublishTarball(c *gin.Context, repoName, pkg, file string) {
-	// file 尾部的 /-rev/<rev> 已由调用方剥离，此处 file 即 tarball 文件名。
-	if err := h.assets.Delete(repoName, pkg+"/-/"+file); err != nil {
-		writeAssetErr(c, err)
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"ok": true})
-}
-
-// unpublishPackage 整包删除（`npm unpublish <pkg> --force`）：删 packument 与全部 tarball。
-func (h *NpmHandler) unpublishPackage(c *gin.Context, repoName, pkg string) {
-	paths, err := h.assets.ListPathsByPrefix(repoName, pkg+"/-/")
+	result, err := h.assets.ApplyOperation(repoName, domain.AssetOperation{
+		Action: domain.AssetOperationDelete,
+		Targets: []domain.AssetOperationTarget{{
+			Type: domain.AssetTargetAssetPath,
+			Path: pkg + "/-/" + file,
+		}},
+		Audit: h.nativeOperationAudit(c, "npm.unpublish", repoName),
+	})
 	if err != nil {
 		writeAssetErr(c, err)
 		return
 	}
-	for _, p := range paths {
-		_ = h.assets.Delete(repoName, p)
-	}
-	if err := h.assets.Delete(repoName, pkg); err != nil {
+	c.JSON(http.StatusOK, gin.H{"ok": true, "operationId": result.OperationID})
+}
+
+// unpublishPackage 整包删除（`npm unpublish <pkg> --force`）：删 packument 与全部 tarball。
+func (h *NpmHandler) unpublishPackage(c *gin.Context, repoName, pkg string) {
+	result, err := h.assets.ApplyOperation(repoName, domain.AssetOperation{
+		Action:  domain.AssetOperationDelete,
+		Targets: []domain.AssetOperationTarget{{Type: domain.AssetTargetNpmPackage, Path: pkg}},
+		Audit:   h.nativeOperationAudit(c, "npm.unpublish", repoName),
+	})
+	if err != nil {
 		writeAssetErr(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"ok": true})
+	c.JSON(http.StatusOK, gin.H{"ok": true, "operationId": result.OperationID})
 }
 
 // registrySearch 处理 `npm search`（GET /-/v1/search?text=&size=&from=）：
