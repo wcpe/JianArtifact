@@ -21,7 +21,7 @@ import {
   IconRefresh,
   IconRocket,
 } from "@tabler/icons-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useParams } from "react-router-dom";
 
@@ -51,33 +51,47 @@ export function MigrationDetailPage() {
   const [report, setReport] = useState<MigrationReport | null>(null);
   const [loadError, setLoadError] = useState<Error | null>(null);
   const [reportError, setReportError] = useState<Error | null>(null);
-  const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const loadedRef = useRef(false);
+  const seqRef = useRef(0);
 
   const reload = useCallback(() => {
     if (!Number.isFinite(taskId) || taskId <= 0) {
       return;
     }
-    setLoading(true);
-    setLoadError(null);
+    const seq = ++seqRef.current;
+    // 后台轮询失败保留旧数据静默重试（迁移写库期间偶发 SQLite 锁竞争，
+    // 不能因此整页切换错误态）；响应内容未变时不触发重渲染；过期响应丢弃。
     getMigration(taskId)
       .then((next) => {
-        setTask(next);
+        if (seq !== seqRef.current) return;
+        setTask((prev) =>
+          JSON.stringify(prev) === JSON.stringify(next) ? prev : next,
+        );
         setLoadError(null);
+        loadedRef.current = true;
       })
       .catch((e: Error) => {
-        setTask(null);
-        setLoadError(e);
-      })
-      .finally(() => setLoading(false));
+        if (seq !== seqRef.current) return;
+        if (!loadedRef.current) {
+          setTask(null);
+          setLoadError(e);
+        }
+      });
     getMigrationReport(taskId)
       .then((next) => {
-        setReport(next);
+        if (seq !== seqRef.current) return;
+        setReport((prev) =>
+          JSON.stringify(prev) === JSON.stringify(next) ? prev : next,
+        );
         setReportError(null);
       })
       .catch((e: Error) => {
-        setReport(null);
-        setReportError(e);
+        if (seq !== seqRef.current) return;
+        if (!loadedRef.current) {
+          setReport(null);
+          setReportError(e);
+        }
       });
   }, [taskId]);
 
@@ -159,7 +173,7 @@ export function MigrationDetailPage() {
     );
   }
 
-  if (loading || !task) {
+  if (!task) {
     return <LoadingState message={t("common.loading")} />;
   }
 
