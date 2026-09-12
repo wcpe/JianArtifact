@@ -31,32 +31,42 @@ const (
 )
 
 // MigrationTask 是 migration_task 表的行模型。
-// 注意：无明文密钥字段；CredentialRef 仅为环境变量引用名。
+// CredentialRef 仅为旧环境变量引用名；直接来源认证仅保存类型和 AES-GCM 密文。
 type MigrationTask struct {
-	ID             int64          `db:"id"`
-	Status         string         `db:"status"`
-	SourceType     string         `db:"source_type"`
-	SourceConfig   string         `db:"source_config"`
-	CredentialRef  sql.NullString `db:"credential_ref"`
-	ConflictPolicy string         `db:"conflict_policy"`
-	PlanJSON       string         `db:"plan_json"`
-	CheckpointJSON string         `db:"checkpoint_json"`
-	ReportJSON     string         `db:"report_json"`
-	ErrorMessage   sql.NullString `db:"error_message"`
-	CreatedAt      string         `db:"created_at"`
-	UpdatedAt      string         `db:"updated_at"`
-	StartedAt      sql.NullString `db:"started_at"`
-	FinishedAt     sql.NullString `db:"finished_at"`
+	ID                   int64          `db:"id"`
+	Status               string         `db:"status"`
+	SourceType           string         `db:"source_type"`
+	SourceConfig         string         `db:"source_config"`
+	CredentialRef        sql.NullString `db:"credential_ref"`
+	SourceAuthType       sql.NullString `db:"source_auth_type"`
+	SourceAuthCiphertext []byte         `db:"source_auth_ciphertext"`
+	ConflictPolicy       string         `db:"conflict_policy"`
+	PlanJSON             string         `db:"plan_json"`
+	CheckpointJSON       string         `db:"checkpoint_json"`
+	ReportJSON           string         `db:"report_json"`
+	ErrorMessage         sql.NullString `db:"error_message"`
+	InitiatorUsername    string         `db:"initiator_username"`
+	InitiatorUserID      sql.NullInt64  `db:"initiator_user_id"`
+	InitiatorAuthSource  string         `db:"initiator_auth_source"`
+	CreatedAt            string         `db:"created_at"`
+	UpdatedAt            string         `db:"updated_at"`
+	StartedAt            sql.NullString `db:"started_at"`
+	FinishedAt           sql.NullString `db:"finished_at"`
 }
 
 // MigrationTaskCreate 创建任务时的输入（状态固定由调用方传入，一般为 planned）。
 type MigrationTaskCreate struct {
-	Status         string
-	SourceType     string
-	SourceConfig   string // JSON
-	CredentialRef  string // 可空
-	ConflictPolicy string
-	PlanJSON       string
+	Status               string
+	SourceType           string
+	SourceConfig         string // JSON
+	CredentialRef        string // 可空
+	SourceAuthType       string // 可空；anonymous/basic/bearer
+	SourceAuthCiphertext []byte // 可空；仅非匿名的直接认证写入
+	ConflictPolicy       string
+	PlanJSON             string
+	InitiatorUsername    string
+	InitiatorUserID      sql.NullInt64
+	InitiatorAuthSource  string
 }
 
 // MigrationTaskRepo 读写 migration_task 表。
@@ -67,8 +77,9 @@ func NewMigrationTaskRepo(db *persistence.DB) *MigrationTaskRepo {
 	return &MigrationTaskRepo{db: db}
 }
 
-const migrationTaskSelect = `SELECT id, status, source_type, source_config, credential_ref,
+const migrationTaskSelect = `SELECT id, status, source_type, source_config, credential_ref, source_auth_type, source_auth_ciphertext,
 	conflict_policy, plan_json, checkpoint_json, report_json, error_message,
+	initiator_username, initiator_user_id, initiator_auth_source,
 	created_at, updated_at, started_at, finished_at FROM migration_task`
 
 // Create 插入任务，返回新 ID。
@@ -86,10 +97,20 @@ func (r *MigrationTaskRepo) Create(in MigrationTaskCreate) (int64, error) {
 	if in.CredentialRef != "" {
 		cred = in.CredentialRef
 	}
+	var authType any
+	if in.SourceAuthType != "" {
+		authType = in.SourceAuthType
+	}
+	var authCiphertext any
+	if len(in.SourceAuthCiphertext) > 0 {
+		authCiphertext = in.SourceAuthCiphertext
+	}
 	res, err := r.db.Exec(
-		`INSERT INTO migration_task (status, source_type, source_config, credential_ref, conflict_policy, plan_json)
-			VALUES (?, ?, ?, ?, ?, ?)`,
-		in.Status, in.SourceType, in.SourceConfig, cred, in.ConflictPolicy, in.PlanJSON,
+		`INSERT INTO migration_task (status, source_type, source_config, credential_ref, source_auth_type, source_auth_ciphertext, conflict_policy, plan_json,
+			initiator_username, initiator_user_id, initiator_auth_source)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		in.Status, in.SourceType, in.SourceConfig, cred, authType, authCiphertext, in.ConflictPolicy, in.PlanJSON,
+		in.InitiatorUsername, nullInt(in.InitiatorUserID), in.InitiatorAuthSource,
 	)
 	if err != nil {
 		return 0, err
@@ -241,4 +262,11 @@ func nullStr(p *string) any {
 		return nil
 	}
 	return *p
+}
+
+func nullInt(value sql.NullInt64) any {
+	if !value.Valid {
+		return nil
+	}
+	return value.Int64
 }

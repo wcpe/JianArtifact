@@ -167,6 +167,25 @@ func TestMavenWebUploadSecondVersionUpdatesMetadata(t *testing.T) {
 	}
 }
 
+func TestMavenWebUploadRejectsImmutableReleaseOverwrite(t *testing.T) {
+	e := newProtocolEnv(t)
+	adminToken := e.bootstrapAdmin(t)
+	e.createMavenRepo(t, adminToken, "mvn-immutable", "hosted", "", nil)
+	if err := e.repoRepo.UpdateConfig("mvn-immutable", `{"immutableRelease":true}`); err != nil {
+		t.Fatalf("启用不可变 Release：%v", err)
+	}
+	fields := map[string]string{"groupId": "com.example", "artifactId": "immutable", "version": "1.0.0"}
+	if rec := e.mavenUpload(t, adminToken, "mvn-immutable", fields, "immutable.jar", []byte("first")); rec.Code != http.StatusCreated {
+		t.Fatalf("首次上传状态码=%d，期望 201：%s", rec.Code, rec.Body.String())
+	}
+	if rec := e.mavenUpload(t, adminToken, "mvn-immutable", fields, "immutable.jar", []byte("overwrite")); rec.Code != http.StatusConflict {
+		t.Fatalf("不可变 Release 重传状态码=%d，期望 409：%s", rec.Code, rec.Body.String())
+	}
+	if got := e.getBody(t, adminToken, "mvn-immutable", "com/example/immutable/1.0.0/immutable-1.0.0.jar"); got != "first" {
+		t.Fatalf("不可变 Release 内容被覆盖：%q", got)
+	}
+}
+
 func TestMavenWebUploadRejections(t *testing.T) {
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
@@ -266,5 +285,36 @@ func TestMavenWebUploadPomPackaging(t *testing.T) {
 	// 主文件保留用户上传字节（未被生成骨架覆盖）。
 	if got := e.getBody(t, adminToken, "mvn-pom", "com/example/bom/2.0.0/bom-2.0.0.pom"); got != string(userPom) {
 		t.Errorf("pom 内容被覆盖：%q", got)
+	}
+}
+
+// TestMavenWebUploadRollsBackWholeBatchOnMetadataFailure 确保网页上传的主文件、
+// 校验和、POM 与 Maven 元数据必须作为同一批次可见。
+func TestMavenWebUploadRollsBackWholeBatchOnMetadataFailure(t *testing.T) {
+	e := newProtocolEnv(t)
+	adminToken := e.bootstrapAdmin(t)
+	e.createMavenRepo(t, adminToken, "mvn-atomic", "hosted", "", nil)
+	if _, err := e.assetRepo.DB().Exec(`CREATE TRIGGER reject_maven_metadata BEFORE INSERT ON asset
+		WHEN NEW.path = 'com/example/app/maven-metadata.xml'
+		BEGIN SELECT RAISE(ABORT, '注入 Maven 元数据失败'); END`); err != nil {
+		t.Fatalf("创建失败注入：%v", err)
+	}
+
+	rec := e.mavenUpload(t, adminToken, "mvn-atomic", map[string]string{
+		"groupId": "com.example", "artifactId": "app", "version": "1.0.0",
+	}, "app.jar", []byte("atomic-maven"))
+	if rec.Code < http.StatusInternalServerError {
+		t.Fatalf("元数据失败状态码=%d，期望 5xx：%s", rec.Code, rec.Body.String())
+	}
+	repo, err := e.repoRepo.GetByName("mvn-atomic")
+	if err != nil {
+		t.Fatalf("读取 Maven 仓库：%v", err)
+	}
+	assets, err := e.assetRepo.ListByRepo(repo.ID, "", 20, 0)
+	if err != nil {
+		t.Fatalf("读取 Maven 资产：%v", err)
+	}
+	if len(assets) != 0 {
+		t.Fatalf("批次失败不得留下任何 Maven 资产：%+v", assets)
 	}
 }

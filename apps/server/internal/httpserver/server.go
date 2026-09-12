@@ -12,7 +12,9 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/api"
+	"github.com/wcpe/jianartifact/apps/server/internal/auditctx"
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
+	"github.com/wcpe/jianartifact/apps/server/internal/domain"
 )
 
 // ReadinessCheck 是就绪自检钩子：返回非 nil 错误表示某依赖未就绪。
@@ -25,10 +27,16 @@ type ReadinessCheck func() error
 type Server struct {
 	api.ServerInterface // 管理 + 状态 handler（WithHandlers 注入；未注入时仅健康探针可用）
 
-	version        string
-	checks         []ReadinessCheck
-	middlewares    []api.MiddlewareFunc
-	protocolRoutes func(gin.IRouter)
+	version                 string
+	checks                  []ReadinessCheck
+	middlewares             []api.MiddlewareFunc
+	protocolRoutes          func(gin.IRouter)
+	protocolPrefixes        []string
+	writeFreeze             func() domain.FreezeState // FR-135：运行时写入冻结窗口状态读取器（nil 表示不启用）
+	managementSecurityAudit SecurityAuditFunc
+	protocolMetric          func(*gin.Context)
+	allowedHosts            func() []string  // 允许访问的域名白名单（nil 表示不启用限制）
+	originToken             originTokenGuard // 回源 Token 校验配置读取器（nil 表示不启用）
 }
 
 // Option 配置 Server。
@@ -56,6 +64,29 @@ func WithProtocolRoutes(register func(gin.IRouter)) Option {
 	return func(s *Server) { s.protocolRoutes = register }
 }
 
+// WithProtocolPrefixes 声明协议保留前缀，未装配的前缀不得回退到 SPA 首页。
+func WithProtocolPrefixes(prefixes ...string) Option {
+	return func(s *Server) { s.protocolPrefixes = append(s.protocolPrefixes, prefixes...) }
+}
+
+// WithProtocolMetric 在制品协议请求完成后接收最终状态，管理与静态请求不会调用它。
+func WithProtocolMetric(metric func(*gin.Context)) Option {
+	return func(s *Server) { s.protocolMetric = metric }
+}
+
+// WithAllowedHosts 注入允许访问的域名白名单读取器（运行时读取最新值，如后台设置）。
+// 非 nil 时，所有非回环请求的 Host 必须命中白名单，否则 404；空列表表示不限制。
+// nil 表示完全关闭该检查（保持旧行为）。
+func WithAllowedHosts(provider func() []string) Option {
+	return func(s *Server) { s.allowedHosts = provider }
+}
+
+// WithOriginTokenGuard 注入回源 Token 校验配置读取器（FR-130，运行时读取最新值）。
+// 非 nil 时启用校验中间件：开启状态下非回环请求必须携带匹配的 Token 头，否则 404。
+func WithOriginTokenGuard(guard originTokenGuard) Option {
+	return func(s *Server) { s.originToken = guard }
+}
+
 // New 构造 Server。
 func New(version string, opts ...Option) *Server {
 	s := &Server{version: version}
@@ -79,18 +110,18 @@ func (s *Server) versionFor(c *gin.Context) string {
 
 // GetHealthz 存活探针：进程存活即 200；版本号仅对已认证请求返回。
 func (s *Server) GetHealthz(c *gin.Context) {
-	c.JSON(http.StatusOK, api.HealthStatus{Status: api.Ok, Version: s.versionFor(c)})
+	c.JSON(http.StatusOK, api.HealthStatus{Status: api.HealthStatusStatusOk, Version: s.versionFor(c)})
 }
 
 // GetReadyz 就绪探针：全部就绪自检通过才 200，任一未过返回 503；版本号仅对已认证请求返回。
 func (s *Server) GetReadyz(c *gin.Context) {
 	for _, check := range s.checks {
 		if err := check(); err != nil {
-			c.JSON(http.StatusServiceUnavailable, api.HealthStatus{Status: api.Unavailable, Version: s.versionFor(c)})
+			c.JSON(http.StatusServiceUnavailable, api.HealthStatus{Status: api.HealthStatusStatusUnavailable, Version: s.versionFor(c)})
 			return
 		}
 	}
-	c.JSON(http.StatusOK, api.HealthStatus{Status: api.Ok, Version: s.versionFor(c)})
+	c.JSON(http.StatusOK, api.HealthStatus{Status: api.HealthStatusStatusOk, Version: s.versionFor(c)})
 }
 
 // Handler 装配并返回完整的 gin.Engine：契约路由优先，其余交给内嵌前端静态资源
@@ -99,6 +130,31 @@ func (s *Server) Handler(assets fs.FS) http.Handler {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 	r.Use(gin.Recovery())
+	r.Use(requestIDMiddleware())
+	if s.allowedHosts != nil {
+		r.Use(hostFilterMiddleware(s.allowedHosts))
+	}
+	if s.originToken != nil {
+		r.Use(originTokenMiddleware(s.originToken))
+	}
+	if s.protocolMetric != nil {
+		r.Use(func(c *gin.Context) {
+			c.Next()
+			if s.isProtocolPath(c.Request.URL.Path) {
+				s.protocolMetric(c)
+			}
+		})
+	}
+	// 审计上下文中间件：记录请求耗时并捕获脱敏请求体（仅管理写请求），
+	// 供审计写入方填充 http_method/http_path/status_code/duration_ms/body_preview。
+	r.Use(auditctx.TimingMiddleware())
+	r.Use(auditctx.BodyPreviewMiddleware(auditctx.IsManagementWrite))
+	if s.managementSecurityAudit != nil {
+		r.Use(managementSecurityAuditMiddleware(s.managementSecurityAudit))
+	}
+	if s.writeFreeze != nil {
+		r.Use(writeFreezeMiddleware(s.writeFreeze))
+	}
 
 	api.RegisterHandlersWithOptions(r, s, api.GinServerOptions{Middlewares: s.middlewares})
 
@@ -110,6 +166,15 @@ func (s *Server) Handler(assets fs.FS) http.Handler {
 		s.mountStatic(r, assets)
 	}
 	return r
+}
+
+func (s *Server) isProtocolPath(requestPath string) bool {
+	for _, prefix := range s.protocolPrefixes {
+		if requestPath == prefix || strings.HasPrefix(requestPath, prefix+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // mountStatic 把未命中契约路由的 GET/HEAD 请求交给前端静态资源；
@@ -131,6 +196,12 @@ func (s *Server) mountStatic(r *gin.Engine, assets fs.FS) {
 		if c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead {
 			c.Status(http.StatusNotFound)
 			return
+		}
+		for _, prefix := range s.protocolPrefixes {
+			if c.Request.URL.Path == prefix || strings.HasPrefix(c.Request.URL.Path, prefix+"/") {
+				c.Status(http.StatusNotFound)
+				return
+			}
 		}
 		name := strings.TrimPrefix(path.Clean(c.Request.URL.Path), "/")
 		if name == "" {

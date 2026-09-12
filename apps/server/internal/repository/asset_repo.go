@@ -16,6 +16,9 @@ type AssetRepo struct{ db *persistence.DB }
 // NewAssetRepo 构造 AssetRepo。
 func NewAssetRepo(db *persistence.DB) *AssetRepo { return &AssetRepo{db: db} }
 
+// DB 返回底层数据库连接，供同一领域操作协调器复用事务边界。
+func (r *AssetRepo) DB() *persistence.DB { return r.db }
+
 // Upsert 覆盖写入仓库内某路径的资产：路径已存在则更新 blob/大小/类型/校验和与 updated_at，
 // 否则插入新行。以 (repository_id, path) 唯一约束实现 last-writer-wins。时间取数据库当前值。
 func (r *AssetRepo) Upsert(repoID int64, path, blobHash string, size int64, contentType, sha1, md5 string) error {

@@ -45,7 +45,7 @@ func (r *UserRepo) Create(username, passwordHash, role string) (int64, error) {
 // GetByID 按 ID 取用户；不存在返回 ErrNotFound。
 func (r *UserRepo) GetByID(id int64) (*User, error) {
 	var u User
-	err := r.db.Get(&u, `SELECT id, username, password_hash, role, status, created_at FROM user WHERE id = ?`, id)
+	err := r.db.Get(&u, `SELECT id, username, password_hash, role, status, web_login_disabled, created_at, email FROM user WHERE id = ?`, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -58,7 +58,7 @@ func (r *UserRepo) GetByID(id int64) (*User, error) {
 // GetByUsername 按用户名取用户；不存在返回 ErrNotFound。
 func (r *UserRepo) GetByUsername(username string) (*User, error) {
 	var u User
-	err := r.db.Get(&u, `SELECT id, username, password_hash, role, status, created_at FROM user WHERE username = ?`, username)
+	err := r.db.Get(&u, `SELECT id, username, password_hash, role, status, web_login_disabled, created_at, email FROM user WHERE username = ?`, username)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -71,21 +71,36 @@ func (r *UserRepo) GetByUsername(username string) (*User, error) {
 // List 返回分页用户（按 id 升序）。
 func (r *UserRepo) List(limit, offset int) ([]User, error) {
 	var us []User
-	err := r.db.Select(&us, `SELECT id, username, password_hash, role, status, created_at FROM user ORDER BY id LIMIT ? OFFSET ?`, limit, offset)
+	err := r.db.Select(&us, `SELECT id, username, password_hash, role, status, web_login_disabled, created_at, email FROM user ORDER BY id LIMIT ? OFFSET ?`, limit, offset)
 	return us, err
 }
 
 // Update 更新角色与状态（空串表示不改）。
-func (r *UserRepo) Update(id int64, role, status string) error {
+func (r *UserRepo) Update(id int64, role, status string, webLoginDisabled ...*bool) error {
+	var disabled *bool
+	if len(webLoginDisabled) > 0 {
+		disabled = webLoginDisabled[0]
+	}
 	res, err := r.db.Exec(
 		`UPDATE user SET
 			role = COALESCE(NULLIF(?, ''), role),
 			status = COALESCE(NULLIF(?, ''), status),
+			web_login_disabled = COALESCE(?, web_login_disabled),
 			updated_at = datetime('now')
 		WHERE id = ?`,
-		role, status, id,
+		role, status, nullableBool(disabled), id,
 	)
 	return affected(res, err)
+}
+
+func nullableBool(value *bool) any {
+	if value == nil {
+		return nil
+	}
+	if *value {
+		return 1
+	}
+	return 0
 }
 
 // UpdatePassword 重置口令哈希。

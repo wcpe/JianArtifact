@@ -96,6 +96,8 @@ func TestBrowsePrivateRepoRequiresAuth(t *testing.T) {
 
 	// 管理员可浏览。
 	req := httptest.NewRequest(http.MethodGet, "/repository/raw-private/", nil)
+	req.Host = "127.0.0.1"
+	req.RemoteAddr = "127.0.0.1:1234"
 	req.Header.Set("Accept", "text/html")
 	req.Header.Set("User-Agent", "Mozilla/5.0")
 	req.Header.Set("Authorization", "Bearer "+adminToken)

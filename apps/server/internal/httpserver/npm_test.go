@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -31,6 +32,35 @@ func (e *protocolEnv) createNpmRepo(t *testing.T, adminToken, name, typ, remoteU
 	if code := e.jsonReq(t, http.MethodPost, "/api/v1/repositories", adminToken, req, nil); code != http.StatusCreated {
 		t.Fatalf("建 npm %s 仓库 %s 状态码 = %d，期望 201", typ, name, code)
 	}
+}
+
+func TestNpmPublishPolicyAuditRecordsSuccessAndRejection(t *testing.T) {
+	e := newProtocolEnv(t)
+	admin := e.bootstrapAdmin(t)
+	e.createNpmRepo(t, admin, "npm-policy-audit", "hosted", "", nil)
+	const username = "npm-policy-audit-user"
+	const password = "npm-policy-audit-password"
+	var user api.User
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/users", admin, api.CreateUserRequest{Username: username, Password: password}, &user); code != http.StatusCreated {
+		t.Fatalf("创建发布账号状态码=%d", code)
+	}
+	if code := e.jsonReq(t, http.MethodPut, "/api/v1/repositories/npm-policy-audit/acl", admin,
+		api.PutAclRequest{Items: []api.AclEntry{{SubjectId: user.Id, Action: api.AclEntryActionWrite}}}, nil); code != http.StatusOK {
+		t.Fatalf("授予 write ACL 状态码=%d", code)
+	}
+	if code := e.jsonReq(t, http.MethodPut, "/api/v1/users/"+strconv.FormatInt(user.Id, 10)+"/publish-policies/npm-policy-audit", admin,
+		map[string]any{"allowedPrefixes": []string{"allowed"}}, nil); code != http.StatusOK {
+		t.Fatalf("保存发布策略状态码=%d", code)
+	}
+	basic := basicUserPasswordHeader(username, password)
+	if rec := e.rawReq(http.MethodPut, "/npm/npm-policy-audit/blocked", basic, "application/json", []byte(`{"name":"blocked"}`)); rec.Code != http.StatusForbidden {
+		t.Fatalf("越前缀发布状态码=%d，期望 403", rec.Code)
+	}
+	if rec := e.rawReq(http.MethodPut, "/npm/npm-policy-audit/allowed", basic, "application/json", []byte(`{"name":"allowed"}`)); rec.Code != http.StatusCreated {
+		t.Fatalf("允许前缀发布状态码=%d，期望 201：%s", rec.Code, rec.Body.String())
+	}
+	assertProtocolAudit(t, e, username, user.Id, "npm.publish", "rejected", "publish_path_denied")
+	assertProtocolAudit(t, e, username, user.Id, "npm.publish", "ok", "size=18")
 }
 
 // npmPublishBody 构造 npm publish PUT 体：单版本 + 内联 base64 tarball（_attachments）。
@@ -114,6 +144,34 @@ func TestNpmPublishAndInstall(t *testing.T) {
 	// 缺失包 → 404。
 	if rec := e.rawReq(http.MethodGet, "/npm/npm-hosted/missing-pkg", "Bearer "+adminToken, "", nil); rec.Code != http.StatusNotFound {
 		t.Errorf("缺失 packument 状态码 = %d，期望 404", rec.Code)
+	}
+}
+
+// TestNpmPublishRollsBackTarballsWhenPackumentCommitFails 确保 tarball 与
+// packument 同一事务公开，不能在 packument 写入失败时留下孤立 tarball。
+func TestNpmPublishRollsBackTarballsWhenPackumentCommitFails(t *testing.T) {
+	e := newProtocolEnv(t)
+	adminToken := e.bootstrapAdmin(t)
+	e.createNpmRepo(t, adminToken, "npm-atomic", "hosted", "", nil)
+	if _, err := e.assetRepo.DB().Exec(`CREATE TRIGGER reject_npm_packument BEFORE INSERT ON asset
+		WHEN NEW.path = 'atomic-package'
+		BEGIN SELECT RAISE(ABORT, '注入 npm packument 失败'); END`); err != nil {
+		t.Fatalf("创建失败注入：%v", err)
+	}
+	body := npmPublishBody(t, "atomic-package", "1.0.0", "atomic-package-1.0.0.tgz", []byte("atomic-npm"))
+	if rec := e.rawReq(http.MethodPut, "/npm/npm-atomic/atomic-package", "Bearer "+adminToken, "application/json", body); rec.Code < http.StatusInternalServerError {
+		t.Fatalf("packument 失败状态码=%d，期望 5xx：%s", rec.Code, rec.Body.String())
+	}
+	repo, err := e.repoRepo.GetByName("npm-atomic")
+	if err != nil {
+		t.Fatalf("读取 npm 仓库：%v", err)
+	}
+	assets, err := e.assetRepo.ListByRepo(repo.ID, "", 20, 0)
+	if err != nil {
+		t.Fatalf("读取 npm 资产：%v", err)
+	}
+	if len(assets) != 0 {
+		t.Fatalf("批次失败不得留下 tarball 或 packument：%+v", assets)
 	}
 }
 

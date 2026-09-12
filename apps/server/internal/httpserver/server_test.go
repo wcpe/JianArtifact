@@ -31,7 +31,7 @@ func TestGetHealthz(t *testing.T) {
 		t.Fatalf("状态码 = %d，期望 200", rec.Code)
 	}
 	hs := decodeHealth(t, rec.Body.Bytes())
-	if hs.Status != api.Ok {
+	if hs.Status != api.HealthStatusStatusOk {
 		t.Errorf("status = %q，期望 ok", hs.Status)
 	}
 	// 匿名请求版本号脱敏为空串（认证路径的完整版本断言见 integration_test）。
@@ -47,12 +47,12 @@ func TestGetReadyz(t *testing.T) {
 		wantCode int
 		wantStat api.HealthStatusStatus
 	}{
-		{name: "无依赖恒就绪", wantCode: http.StatusOK, wantStat: api.Ok},
+		{name: "无依赖恒就绪", wantCode: http.StatusOK, wantStat: api.HealthStatusStatusOk},
 		{
 			name:     "任一依赖未就绪返回503",
 			opts:     []Option{WithReadinessCheck(func() error { return nil }), WithReadinessCheck(func() error { return errors.New("依赖未就绪") })},
 			wantCode: http.StatusServiceUnavailable,
-			wantStat: api.Unavailable,
+			wantStat: api.HealthStatusStatusUnavailable,
 		},
 	}
 	for _, tt := range tests {
@@ -109,6 +109,22 @@ func TestStaticAndSPAFallback(t *testing.T) {
 	}
 }
 
+func TestReservedProtocolPrefixDoesNotFallbackToSPA(t *testing.T) {
+	assets := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("index")}}
+	h := New("v", WithProtocolPrefixes("/repository", "/npm")).Handler(assets)
+	for _, path := range []string{"/repository/raw/a.txt", "/npm/demo", "/npm"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("%s 状态码 = %d，期望 404", path, rec.Code)
+		}
+		if rec.Body.String() == "index" {
+			t.Errorf("%s 不应回退到 SPA 首页", path)
+		}
+	}
+}
+
 // 契约路由优先于静态回退：即便挂了前端资源，/healthz 仍走契约处理器。
 func TestContractRouteTakesPrecedenceOverStatic(t *testing.T) {
 	assets := fstest.MapFS{
@@ -121,7 +137,7 @@ func TestContractRouteTakesPrecedenceOverStatic(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("状态码 = %d，期望 200", rec.Code)
 	}
-	if hs := decodeHealth(t, rec.Body.Bytes()); hs.Status != api.Ok {
+	if hs := decodeHealth(t, rec.Body.Bytes()); hs.Status != api.HealthStatusStatusOk {
 		t.Errorf("status = %q，期望 ok（应命中契约路由而非静态资源）", hs.Status)
 	}
 }

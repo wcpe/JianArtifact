@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
 )
 
@@ -142,5 +143,11 @@ func (r *RepoRepo) SetOnline(name string, online bool) error {
 // Delete 删除仓库（级联删除其 ACL）。
 func (r *RepoRepo) Delete(name string) error {
 	res, err := r.db.Exec(`DELETE FROM repository WHERE name = ?`, name)
+	return affected(res, err)
+}
+
+// DeleteTx 在调用方事务中删除仓库，供资产生命周期协调器统一提交。
+func (r *RepoRepo) DeleteTx(tx *sqlx.Tx, name string) error {
+	res, err := tx.Exec(`DELETE FROM repository WHERE name = ?`, name)
 	return affected(res, err)
 }

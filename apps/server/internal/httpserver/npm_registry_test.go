@@ -2,10 +2,17 @@ package httpserver_test
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/gin-gonic/gin"
+	"github.com/jmoiron/sqlx"
+
+	"github.com/wcpe/jianartifact/apps/server/internal/domain"
+	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
 // putJSON 便捷封装：构造 JSON 体发起协议层请求。
@@ -135,7 +142,7 @@ func TestNpmUnpublish(t *testing.T) {
 		}
 	}
 
-	// 单版本 unpublish：修订 PUT 替换写（剔除 2.0.0）→ DELETE tarball。
+	// 单版本 unpublish：修订 PUT 仅确认协议阶段，DELETE 时再原子删除 packument 与 tarball。
 	replaced := map[string]any{
 		"name":      "lodash",
 		"dist-tags": map[string]any{"latest": "1.0.0"},
@@ -146,18 +153,48 @@ func TestNpmUnpublish(t *testing.T) {
 			},
 		},
 	}
+	beforeSeq := int64(0)
 	if _, code := e.npmJSON(t, http.MethodPut, "/npm/npm-up/lodash/-rev/1-abc", auth, replaced); code != http.StatusCreated {
 		t.Fatalf("修订 PUT 状态码 = %d，期望 201", code)
+	}
+	body, code := e.npmJSON(t, http.MethodGet, "/npm/npm-up/lodash", auth, nil)
+	if code != http.StatusOK || !strings.Contains(string(body), "2.0.0") {
+		t.Fatalf("修订 PUT 不得单独留下 packument 半状态：%d %s", code, body)
+	}
+	if rec := e.rawReq(http.MethodGet, "/npm/npm-up/lodash/-/lodash-2.0.0.tgz", auth, "", nil); rec.Code != http.StatusOK {
+		t.Fatalf("修订 PUT 后 tarball 必须仍可读，状态码 = %d", rec.Code)
 	}
 	if _, code := e.npmJSON(t, http.MethodDelete, "/npm/npm-up/lodash/-/lodash-2.0.0.tgz/-rev/1-abc", auth, nil); code != http.StatusOK {
 		t.Fatalf("删 tarball 状态码 = %d，期望 200", code)
 	}
-	body, code := e.npmJSON(t, http.MethodGet, "/npm/npm-up/lodash", auth, nil)
+	body, code = e.npmJSON(t, http.MethodGet, "/npm/npm-up/lodash", auth, nil)
 	if code != http.StatusOK || strings.Contains(string(body), "2.0.0") {
 		t.Fatalf("unpublish 后 packument 仍含 2.0.0：%d %s", code, body)
 	}
 	if rec := e.rawReq(http.MethodGet, "/npm/npm-up/lodash/-/lodash-2.0.0.tgz", auth, "", nil); rec.Code != http.StatusNotFound {
 		t.Fatalf("已删 tarball 状态码 = %d，期望 404", rec.Code)
+	}
+	records, err := repository.NewReplicationOperationRepo(e.db).ListRecordsSince(beforeSeq, 10)
+	if err != nil || len(records) != 1 || records[0].Operation == nil {
+		t.Fatalf("单版本 unpublish 必须只写一条 v2 operation：records=%+v err=%v", records, err)
+	}
+	operation := records[0].Operation
+	if len(operation.Items) != 2 || operation.Actor.Username != "admin" || operation.Actor.UserID == nil || operation.Actor.AuthSource == "" {
+		t.Fatalf("v2 operation 必须同时携带 packument/tarball 与主体快照：%+v", operation)
+	}
+	entries, err := e.auditLogs.List(repository.AuditFilter{Action: "npm.unpublish", Repo: "npm-up", Limit: 20})
+	if err != nil {
+		t.Fatalf("读取 npm 删除审计：%v", err)
+	}
+	auditFound := false
+	for _, entry := range entries {
+		if entry.Result == "ok" && entry.Actor == "admin" && entry.UserID != nil && entry.AuthSource != "" && strings.Contains(entry.Detail, "operationId="+operation.OperationID) {
+			auditFound = true
+			break
+		}
+	}
+	if !auditFound {
+		t.Fatalf("单版本 unpublish 缺少同事务主体审计：%+v", entries)
 	}
 
 	// 整包 unpublish：packument 与全部 tarball 一并删除。
@@ -175,6 +212,40 @@ func TestNpmUnpublish(t *testing.T) {
 	e.createNpmRepo(t, adminToken, "npm-up-proxy", "proxy", "http://upstream.invalid", nil)
 	if _, code := e.npmJSON(t, http.MethodDelete, "/npm/npm-up-proxy/lodash/-rev/1-a", auth, nil); code != http.StatusConflict {
 		t.Fatalf("proxy 仓 unpublish 状态码 = %d，期望 409", code)
+	}
+}
+
+func TestNpmUnpublishAuditFailureLeavesPackumentAndTarballUntouched(t *testing.T) {
+	e := newProtocolEnv(t)
+	adminToken := e.bootstrapAdmin(t)
+	authHeader := "Bearer " + adminToken
+	e.createNpmRepo(t, adminToken, "npm-audit-failure", "hosted", "", nil)
+	if rec := e.rawReq(http.MethodPut, "/npm/npm-audit-failure/demo", authHeader, "application/json",
+		npmPublishBody(t, "demo", "1.0.0", "demo-1.0.0.tgz", []byte("tgz"))); rec.Code != http.StatusCreated {
+		t.Fatalf("准备 npm 制品状态码 = %d", rec.Code)
+	}
+	e.rawHandler.SetOperationAudit(func(_ *gin.Context, _, _ string) domain.AssetOperationAudit {
+		return domain.AssetOperationAudit{Commit: func(string, []repository.AssetMutationItem) repository.MutationCompletionHook {
+			return func(*sqlx.Tx) error { return errors.New("注入 npm 审计失败") }
+		}}
+	})
+	beforeSeq := int64(0)
+	if _, code := e.npmJSON(t, http.MethodPut, "/npm/npm-audit-failure/demo/-rev/1-abc", authHeader, map[string]any{"name": "demo"}); code != http.StatusCreated {
+		t.Fatalf("修订 PUT 状态码 = %d，期望 201", code)
+	}
+	if _, code := e.npmJSON(t, http.MethodDelete, "/npm/npm-audit-failure/demo/-/demo-1.0.0.tgz/-rev/1-abc", authHeader, nil); code != http.StatusInternalServerError {
+		t.Fatalf("审计失败删除状态码 = %d，期望 500", code)
+	}
+	body, code := e.npmJSON(t, http.MethodGet, "/npm/npm-audit-failure/demo", authHeader, nil)
+	if code != http.StatusOK || !strings.Contains(string(body), "1.0.0") {
+		t.Fatalf("失败后 packument 不得变化：%d %s", code, body)
+	}
+	if rec := e.rawReq(http.MethodGet, "/npm/npm-audit-failure/demo/-/demo-1.0.0.tgz", authHeader, "", nil); rec.Code != http.StatusOK {
+		t.Fatalf("失败后 tarball 必须保留，状态码 = %d", rec.Code)
+	}
+	records, err := repository.NewReplicationOperationRepo(e.db).ListRecordsSince(beforeSeq, 10)
+	if err != nil || len(records) != 0 {
+		t.Fatalf("失败操作不得写 v2 outbox：records=%+v err=%v", records, err)
 	}
 }
 
@@ -274,6 +345,7 @@ func TestNpmAbbreviatedPackument(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/npm/npm-ab/lodash", nil)
+	req.RemoteAddr = "127.0.0.1:43210"
 	req.Header.Set("Authorization", "Bearer "+adminToken)
 	req.Header.Set("Accept", "application/vnd.npm.install-v1+json")
 	rec := httptest.NewRecorder()

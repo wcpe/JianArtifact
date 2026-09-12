@@ -1,6 +1,8 @@
 package repository_test
 
 import (
+	"bytes"
+	"database/sql"
 	"path/filepath"
 	"testing"
 
@@ -24,14 +26,18 @@ func openMigrationTestDB(t *testing.T) *persistence.DB {
 func TestMigrationTaskRepoCRUD(t *testing.T) {
 	db := openMigrationTestDB(t)
 	repo := repository.NewMigrationTaskRepo(db)
+	initiatorID := int64(42)
 
 	id, err := repo.Create(repository.MigrationTaskCreate{
-		Status:         repository.MigrationStatusPlanned,
-		SourceType:     repository.MigrationSourceOfflineBundle,
-		SourceConfig:   `{"path":"/data/bundle"}`,
-		CredentialRef:  "",
-		ConflictPolicy: repository.MigrationConflictSkip,
-		PlanJSON:       `{"repositories":[]}`,
+		Status:              repository.MigrationStatusPlanned,
+		SourceType:          repository.MigrationSourceOfflineBundle,
+		SourceConfig:        `{"path":"/data/bundle"}`,
+		CredentialRef:       "",
+		ConflictPolicy:      repository.MigrationConflictSkip,
+		PlanJSON:            `{"repositories":[]}`,
+		InitiatorUsername:   "migration-admin",
+		InitiatorUserID:     sql.NullInt64{Int64: initiatorID, Valid: true},
+		InitiatorAuthSource: "web_jwt",
 	})
 	if err != nil {
 		t.Fatalf("Create：%v", err)
@@ -56,6 +62,9 @@ func TestMigrationTaskRepoCRUD(t *testing.T) {
 	// 确保无密钥列：表结构仅有 credential_ref 文本引用。
 	if got.ConflictPolicy != repository.MigrationConflictSkip {
 		t.Errorf("conflict = %q", got.ConflictPolicy)
+	}
+	if got.InitiatorUsername != "migration-admin" || !got.InitiatorUserID.Valid || got.InitiatorUserID.Int64 != initiatorID || got.InitiatorAuthSource != "web_jwt" {
+		t.Fatalf("发起人持久化不符：%+v", got)
 	}
 
 	if err := repo.UpdateStatus(id, repository.MigrationStatusRunning, nil, true, false); err != nil {
@@ -107,12 +116,36 @@ func TestMigrationTaskRepoCRUD(t *testing.T) {
 		t.Errorf("credential_ref = %+v", got2.CredentialRef)
 	}
 
+	ciphertext := []byte{1, 2, 3, 4, 5}
+	id3, err := repo.Create(repository.MigrationTaskCreate{
+		Status:               repository.MigrationStatusPlanned,
+		SourceType:           repository.MigrationSourceOnlineREST,
+		SourceConfig:         `{"url":"https://nexus.example"}`,
+		SourceAuthType:       "basic",
+		SourceAuthCiphertext: ciphertext,
+		ConflictPolicy:       repository.MigrationConflictSkip,
+		PlanJSON:             `{}`,
+	})
+	if err != nil {
+		t.Fatalf("Create encrypted auth：%v", err)
+	}
+	got3, err := repo.GetByID(id3)
+	if err != nil {
+		t.Fatalf("GetByID encrypted auth：%v", err)
+	}
+	if !got3.SourceAuthType.Valid || got3.SourceAuthType.String != "basic" {
+		t.Fatalf("source_auth_type = %+v", got3.SourceAuthType)
+	}
+	if !bytes.Equal(got3.SourceAuthCiphertext, ciphertext) {
+		t.Fatalf("source_auth_ciphertext = %v", got3.SourceAuthCiphertext)
+	}
+
 	total, err := repo.Count()
-	if err != nil || total != 2 {
+	if err != nil || total != 3 {
 		t.Fatalf("Count = %d, err=%v", total, err)
 	}
 	list, err := repo.List(10, 0)
-	if err != nil || len(list) != 2 {
+	if err != nil || len(list) != 3 {
 		t.Fatalf("List len=%d err=%v", len(list), err)
 	}
 }

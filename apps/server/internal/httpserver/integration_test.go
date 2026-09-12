@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/blobstore"
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
 	"github.com/wcpe/jianartifact/apps/server/internal/httpserver"
+	"github.com/wcpe/jianartifact/apps/server/internal/migration/credential"
 	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 	"github.com/wcpe/jianartifact/apps/server/internal/upstream"
@@ -23,7 +25,10 @@ import (
 
 // testEnv 汇集集成测试的服务端句柄。
 type testEnv struct {
-	h http.Handler
+	h      http.Handler
+	repos  *repository.RepoRepo
+	audits *repository.AuditLogRepo
+	tasks  *repository.MigrationTaskRepo
 }
 
 // newTestEnv 用临时 SQLite 装配完整服务端（真实持久化 + 领域服务 + 鉴权中间件）。
@@ -45,13 +50,20 @@ func newTestEnv(t *testing.T) *testEnv {
 	repoRepo := repository.NewRepoRepo(db)
 	aclRepo := repository.NewAclRepo(db)
 	assetRepo := repository.NewAssetRepo(db)
-	migrationSvc := domain.NewMigrationService(repository.NewMigrationTaskRepo(db), nil)
+	auditLogs := repository.NewAuditLogRepo(db)
+	tasks := repository.NewMigrationTaskRepo(db)
+	migrationSvc := domain.NewMigrationService(tasks, nil)
+	migrationSealer, err := credential.NewSealer(bytes.Repeat([]byte{7}, 32))
+	if err != nil {
+		t.Fatalf("创建迁移凭据加密器：%v", err)
+	}
+	migrationSvc.SetCredentialSealer(migrationSealer)
 
 	jwtMgr := auth.NewJWTManager([]byte("integration-test-secret-key-32byte!!"))
 	authenticator := auth.NewAuthenticator(jwtMgr, domain.NewAuthStore(userRepo, tokenRepo, revokedRepo))
 
 	// FR-114：注入 AssetService（连接探测），供连接状态填充与手动重测端点使用。
-	assetSvc := domain.NewAssetService(repoRepo, assetRepo, blobstore.NewStore(t.TempDir()), upstream.NewClient(5*time.Second))
+	assetSvc := domain.NewAssetService(repoRepo, assetRepo, blobstore.NewStore(t.TempDir()), upstream.NewTestClient(5*time.Second))
 
 	handlers := api.NewHandlers(api.Deps{
 		Version:    "test",
@@ -63,14 +75,16 @@ func newTestEnv(t *testing.T) *testEnv {
 		Repos:      domain.NewRepositoryService(repoRepo, aclRepo, assetRepo, domain.NewSettingService(repository.NewSettingRepo(db)), userRepo),
 		Assets:     assetSvc,
 		Migrations: migrationSvc,
+		AuditLogs:  auditLogs,
 	})
 
 	srv := httpserver.New("test",
 		httpserver.WithReadinessCheck(db.Ping),
 		httpserver.WithHandlers(handlers),
+		httpserver.WithManagementSecurityAudit(handlers.AuditLog),
 		httpserver.WithMiddleware(api.MiddlewareFunc(authenticator.Optional())),
 	)
-	return &testEnv{h: srv.Handler(nil)}
+	return &testEnv{h: srv.Handler(nil), repos: repoRepo, audits: auditLogs, tasks: tasks}
 }
 
 // do 发起一次请求；token 非空则带上 Bearer 头。out 非 nil 时解析响应体。
@@ -212,6 +226,170 @@ func TestAuthFlowEndToEnd(t *testing.T) {
 		t.Errorf("登出后旧令牌列用户状态码 = %d，期望 401", code)
 	}
 }
+
+func TestRemoteNexusRepositoriesUsesOpenAPIRoute(t *testing.T) {
+	e := newTestEnv(t)
+	request := map[string]string{"sourceRef": "NEXUS_TEST"}
+	if code := e.do(t, http.MethodPost, "/api/v1/migrations/remote-repositories", "", request, nil); code != http.StatusUnauthorized {
+		t.Fatalf("未认证远程仓库索引状态码 = %d，期望 401", code)
+	}
+
+	var boot api.LoginResponse
+	if code := e.do(t, http.MethodPost, "/api/v1/auth/bootstrap", "", api.BootstrapRequest{Username: "admin", Password: "admin-pass-123"}, &boot); code != http.StatusCreated {
+		t.Fatalf("自举状态码 = %d，期望 201", code)
+	}
+	if code := e.do(t, http.MethodPost, "/api/v1/migrations/remote-repositories", boot.Token, request, nil); code != http.StatusBadRequest {
+		t.Fatalf("未配置来源引用状态码 = %d，期望 400", code)
+	}
+}
+
+// TestProxyCredentialRefAPIContract 校验管理面仅保存并返回引用名，绝不读取或回显凭据值。
+func TestProxyCredentialRefAPIContract(t *testing.T) {
+	e := newTestEnv(t)
+	var boot api.LoginResponse
+	if code := e.do(t, http.MethodPost, "/api/v1/auth/bootstrap", "",
+		api.BootstrapRequest{Username: "admin", Password: "admin-pass-123"}, &boot); code != http.StatusCreated {
+		t.Fatalf("自举状态码 = %d，期望 201", code)
+	}
+
+	const ref = "JIAN_TEST_PROXY_CREDENTIAL"
+	const credentialValue = "credential-value-must-not-appear"
+	t.Setenv(ref, credentialValue)
+	remoteURL := "https://repo.example.com/raw"
+	credentialRef := ref
+	var response api.Repository
+	if code := e.do(t, http.MethodPost, "/api/v1/repositories", boot.Token, api.CreateRepositoryRequest{
+		Name:          "credential-proxy",
+		Format:        api.CreateRepositoryRequestFormat("raw"),
+		Type:          api.CreateRepositoryRequestType("proxy"),
+		RemoteUrl:     &remoteURL,
+		CredentialRef: &credentialRef,
+	}, &response); code != http.StatusCreated {
+		t.Fatalf("创建 proxy 状态码 = %d，期望 201", code)
+	}
+	if response.CredentialRef == nil || *response.CredentialRef != ref {
+		t.Fatalf("响应 credentialRef = %v，期望 %q", response.CredentialRef, ref)
+	}
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		t.Fatalf("编码响应：%v", err)
+	}
+	if bytes.Contains(encoded, []byte(credentialValue)) {
+		t.Fatalf("响应不得包含凭据值：%s", encoded)
+	}
+
+	updatedRef := "JIAN_TEST_PROXY_CREDENTIAL_NEXT"
+	if code := e.do(t, http.MethodPatch, "/api/v1/repositories/credential-proxy", boot.Token,
+		api.UpdateRepositoryRequest{CredentialRef: &updatedRef}, &response); code != http.StatusOK {
+		t.Fatalf("仅更新 credentialRef 状态码 = %d，期望 200", code)
+	}
+	if response.RemoteUrl == nil || *response.RemoteUrl != remoteURL {
+		t.Errorf("仅更新 credentialRef 后 remoteUrl = %v，期望 %q", response.RemoteUrl, remoteURL)
+	}
+	if response.CredentialRef == nil || *response.CredentialRef != updatedRef {
+		t.Errorf("更新后 credentialRef = %v，期望 %q", response.CredentialRef, updatedRef)
+	}
+
+	for _, tc := range []struct {
+		name string
+		body api.CreateRepositoryRequest
+	}{
+		{
+			name: "hosted 拒绝引用名",
+			body: api.CreateRepositoryRequest{
+				Name: "credential-hosted", Format: "raw", Type: "hosted", CredentialRef: &credentialRef,
+			},
+		},
+		{
+			name: "非法引用名拒绝",
+			body: api.CreateRepositoryRequest{
+				Name: "credential-invalid", Format: "raw", Type: "proxy", RemoteUrl: &remoteURL, CredentialRef: stringPointer("BAD REF"),
+			},
+		},
+		{
+			name: "上游地址 userinfo 拒绝",
+			body: api.CreateRepositoryRequest{
+				Name: "credential-userinfo", Format: "raw", Type: "proxy", RemoteUrl: stringPointer("https://release-user:private-password@repo.example.com/raw"),
+			},
+		},
+		{
+			name: "上游地址查询参数拒绝",
+			body: api.CreateRepositoryRequest{
+				Name: "credential-query", Format: "raw", Type: "proxy", RemoteUrl: stringPointer("https://repo.example.com/raw?token=private-token"),
+			},
+		},
+		{
+			name: "上游地址片段拒绝",
+			body: api.CreateRepositoryRequest{
+				Name: "credential-fragment", Format: "raw", Type: "proxy", RemoteUrl: stringPointer("https://repo.example.com/raw#private-token"),
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if code := e.do(t, http.MethodPost, "/api/v1/repositories", boot.Token, tc.body, nil); code != http.StatusBadRequest {
+				t.Errorf("创建状态码 = %d，期望 400", code)
+			}
+		})
+	}
+	for _, remoteURL := range []string{
+		"https://release-user:private-password@repo.example.com/raw",
+		"https://repo.example.com/raw?token=private-token",
+		"https://repo.example.com/raw#private-token",
+	} {
+		if code := e.do(t, http.MethodPatch, "/api/v1/repositories/credential-proxy", boot.Token,
+			api.UpdateRepositoryRequest{RemoteUrl: &remoteURL}, nil); code != http.StatusBadRequest {
+			t.Errorf("更新不安全上游地址状态码 = %d，期望 400", code)
+		}
+	}
+	var listed api.RepositoryList
+	if code := e.do(t, http.MethodGet, "/api/v1/repositories", boot.Token, nil, &listed); code != http.StatusOK {
+		t.Fatalf("列出 proxy 状态码 = %d，期望 200", code)
+	}
+	for _, repo := range listed.Items {
+		if repo.Name == "credential-proxy" && (repo.RemoteUrl == nil || *repo.RemoteUrl != remoteURL) {
+			t.Errorf("拒绝后 remoteUrl = %v，期望保留 %q", repo.RemoteUrl, remoteURL)
+		}
+	}
+}
+
+func TestLegacyProxyURLUserinfoNeverAppearsInRepositoryAPI(t *testing.T) {
+	e := newTestEnv(t)
+	var boot api.LoginResponse
+	if code := e.do(t, http.MethodPost, "/api/v1/auth/bootstrap", "",
+		api.BootstrapRequest{Username: "admin", Password: "admin-pass-123"}, &boot); code != http.StatusCreated {
+		t.Fatalf("自举状态码 = %d，期望 201", code)
+	}
+
+	const secret = "private-password"
+	if _, err := e.repos.Create("legacy-userinfo", "raw", "proxy", "public", `{"remoteUrl":"https://release-user:private-password@repo.example.com/raw"}`); err != nil {
+		t.Fatalf("写入遗留 proxy 配置：%v", err)
+	}
+
+	var listed api.RepositoryList
+	if code := e.do(t, http.MethodGet, "/api/v1/repositories", boot.Token, nil, &listed); code != http.StatusOK {
+		t.Fatalf("列表状态码 = %d，期望 200", code)
+	}
+	for _, repo := range listed.Items {
+		if repo.Name == "legacy-userinfo" && repo.RemoteUrl != nil {
+			t.Fatalf("列表不得回显遗留 userinfo：%q", *repo.RemoteUrl)
+		}
+	}
+
+	description := "更新遗留仓库描述"
+	var got api.Repository
+	if code := e.do(t, http.MethodPatch, "/api/v1/repositories/legacy-userinfo", boot.Token,
+		api.UpdateRepositoryRequest{Description: &description}, &got); code != http.StatusOK {
+		t.Fatalf("更新状态码 = %d，期望 200", code)
+	}
+	if got.RemoteUrl != nil {
+		t.Fatalf("更新响应不得回显遗留 userinfo：%q", *got.RemoteUrl)
+	}
+	if encoded, err := json.Marshal(got); err != nil || bytes.Contains(encoded, []byte(secret)) {
+		t.Fatalf("更新响应不得包含遗留秘密：%s，err=%v", encoded, err)
+	}
+}
+
+func stringPointer(value string) *string { return &value }
 
 // TestBrowseAndUsageEndpoints 覆盖制品浏览与使用片段（FR-16）：
 // 管理员建 public maven 仓库后，usage 按 format 返回接入片段、assets 空列表；
@@ -412,13 +590,13 @@ func TestMigrationFoundationAPI(t *testing.T) {
 		api.CreateMigrationRequest{
 			SourceType:    api.OnlineRest,
 			CredentialRef: &badRef,
-			SourceConfig:  &api.MigrationSourceConfig{"url": "http://nexus.example"},
+			SourceConfig:  ptrMigrationOnlineURLConfig(t, "http://nexus.example"),
 		}, nil); code != http.StatusBadRequest {
 		t.Errorf("未知 credentialRef 状态码 = %d，期望 400", code)
 	}
 
 	// 创建 planned
-	cfg := api.MigrationSourceConfig{"path": "/data/bundle"}
+	cfg := migrationOfflineConfig(t, "/data/bundle")
 	var created api.MigrationTask
 	if code := e.do(t, http.MethodPost, "/api/v1/migrations", adminToken,
 		api.CreateMigrationRequest{
@@ -427,7 +605,7 @@ func TestMigrationFoundationAPI(t *testing.T) {
 		}, &created); code != http.StatusCreated {
 		t.Fatalf("创建迁移 状态码 = %d，期望 201", code)
 	}
-	if created.Status != api.Planned {
+	if created.Status != api.MigrationTaskStatusPlanned {
 		t.Fatalf("创建后 status = %q，期望 planned", created.Status)
 	}
 	if created.Id <= 0 {
@@ -439,7 +617,7 @@ func TestMigrationFoundationAPI(t *testing.T) {
 	if code := e.do(t, http.MethodGet, "/api/v1/migrations/"+itoa64(created.Id), adminToken, nil, &got); code != http.StatusOK {
 		t.Fatalf("GET 迁移 状态码 = %d", code)
 	}
-	if got.Status != api.Planned {
+	if got.Status != api.MigrationTaskStatusPlanned {
 		t.Errorf("GET status = %q", got.Status)
 	}
 
@@ -448,7 +626,7 @@ func TestMigrationFoundationAPI(t *testing.T) {
 	if code := e.do(t, http.MethodPost, "/api/v1/migrations/"+itoa64(created.Id)+"/start", adminToken, map[string]any{}, &started); code != http.StatusOK {
 		t.Fatalf("start 状态码 = %d，期望 200", code)
 	}
-	if started.Status != api.Running {
+	if started.Status != api.MigrationTaskStatusRunning {
 		t.Fatalf("start 后 status = %q", started.Status)
 	}
 
@@ -460,6 +638,139 @@ func TestMigrationFoundationAPI(t *testing.T) {
 	// report 可 GET
 	if code := e.do(t, http.MethodGet, "/api/v1/migrations/"+itoa64(created.Id)+"/report", adminToken, nil, nil); code != http.StatusOK {
 		t.Errorf("report 状态码 = %d，期望 200", code)
+	}
+}
+
+func TestMigrationStartAuditsInitiatorWithoutSourceSecrets(t *testing.T) {
+	e := newTestEnv(t)
+	var boot api.LoginResponse
+	if code := e.do(t, http.MethodPost, "/api/v1/auth/bootstrap", "", api.BootstrapRequest{Username: "migration-admin", Password: "admin-pass-123"}, &boot); code != http.StatusCreated {
+		t.Fatal(code)
+	}
+	config := migrationOfflineConfig(t, "/private/source/secret-token")
+	var task api.MigrationTask
+	if code := e.do(t, http.MethodPost, "/api/v1/migrations", boot.Token, api.CreateMigrationRequest{SourceType: api.OfflineBundle, SourceConfig: &config}, &task); code != http.StatusCreated {
+		t.Fatal(code)
+	}
+	if code := e.do(t, http.MethodPost, "/api/v1/migrations/"+itoa64(task.Id)+"/start", boot.Token, map[string]any{}, nil); code != http.StatusOK {
+		t.Fatal(code)
+	}
+	entries, err := e.audits.List(repository.AuditFilter{Action: "migration.start", Limit: 10})
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("迁移启动审计异常：entries=%+v err=%v", entries, err)
+	}
+	entry := entries[0]
+	if entry.Actor != "migration-admin" || entry.UserID == nil || entry.AuthSource == "" {
+		t.Fatalf("迁移审计未记录发起人：%+v", entry)
+	}
+	if strings.Contains(entry.Detail, "secret-token") || strings.Contains(entry.Detail, "/private/source") {
+		t.Fatalf("迁移审计不得写入来源或凭据：%q", entry.Detail)
+	}
+}
+
+func TestMigrationAPIDirectURLPersistsEncryptedBasicAuth(t *testing.T) {
+	e := newTestEnv(t)
+	var boot api.LoginResponse
+	if code := e.do(t, http.MethodPost, "/api/v1/auth/bootstrap", "", api.BootstrapRequest{Username: "migration-admin", Password: "admin-pass-123"}, &boot); code != http.StatusCreated {
+		t.Fatal(code)
+	}
+	const username = "nexus-user"
+	const password = "nexus-password"
+	var created api.MigrationTask
+	if code := e.do(t, http.MethodPost, "/api/v1/migrations", boot.Token, api.CreateMigrationRequest{
+		SourceType:   api.OnlineRest,
+		SourceConfig: ptrMigrationOnlineURLConfig(t, "https://private.nexus.example"),
+		SourceAuth:   migrationBasicAuth(t, username, password),
+	}, &created); code != http.StatusCreated {
+		t.Fatalf("创建直接认证迁移状态码 = %d", code)
+	}
+	if created.SourceAuthType == nil || *created.SourceAuthType != api.MigrationSourceAuthTypeBasic {
+		t.Fatalf("响应认证类型 = %#v", created.SourceAuthType)
+	}
+	encoded, err := json.Marshal(created)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), username) || strings.Contains(string(encoded), password) {
+		t.Fatalf("响应回显了来源凭据：%s", encoded)
+	}
+	stored, err := e.tasks.GetByID(created.Id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stored.SourceAuthType.Valid || stored.SourceAuthType.String != "basic" || len(stored.SourceAuthCiphertext) == 0 {
+		t.Fatalf("任务未保存加密认证：%+v", stored)
+	}
+	if strings.Contains(stored.SourceConfig, username) || strings.Contains(string(stored.SourceAuthCiphertext), password) {
+		t.Fatal("任务保存了明文来源凭据")
+	}
+}
+
+func TestMigrationAPIPersistsRequestPrincipalForCreateAndDiscover(t *testing.T) {
+	e := newTestEnv(t)
+	var boot api.LoginResponse
+	if code := e.do(t, http.MethodPost, "/api/v1/auth/bootstrap", "", api.BootstrapRequest{Username: "migration-admin", Password: "admin-pass-123"}, &boot); code != http.StatusCreated {
+		t.Fatal(code)
+	}
+
+	var created api.MigrationTask
+	createConfig := migrationOfflineConfig(t, t.TempDir())
+	if code := e.do(t, http.MethodPost, "/api/v1/migrations", boot.Token, api.CreateMigrationRequest{SourceType: api.OfflineBundle, SourceConfig: &createConfig}, &created); code != http.StatusCreated {
+		t.Fatal(code)
+	}
+	createdTask, err := e.tasks.GetByID(created.Id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPersistedMigrationPrincipal(t, createdTask, "migration-admin")
+
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "manifest.json"), []byte(`{"repositories":[]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	discoverConfig := migrationOfflineConfig(t, root)
+	var discovered api.MigrationDiscoverResponse
+	if code := e.do(t, http.MethodPost, "/api/v1/migrations/discover", boot.Token, api.MigrationDiscoverRequest{SourceType: api.OfflineBundle, SourceConfig: &discoverConfig}, &discovered); code != http.StatusOK {
+		t.Fatal(code)
+	}
+	discoveredTask, err := e.tasks.GetByID(discovered.TaskId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPersistedMigrationPrincipal(t, discoveredTask, "migration-admin")
+}
+
+func ptrMigrationOnlineURLConfig(t *testing.T, url string) *api.MigrationSourceConfig {
+	t.Helper()
+	var config api.MigrationSourceConfig
+	if err := config.FromMigrationOnlineURLSourceConfig(api.MigrationOnlineURLSourceConfig{Url: url}); err != nil {
+		t.Fatalf("构造在线来源配置：%v", err)
+	}
+	return &config
+}
+
+func migrationBasicAuth(t *testing.T, username, password string) *api.MigrationSourceAuth {
+	t.Helper()
+	var authConfig api.MigrationSourceAuth
+	if err := authConfig.FromMigrationSourceAuthBasic(api.MigrationSourceAuthBasic{Username: &username, Password: &password}); err != nil {
+		t.Fatalf("构造 Basic 来源认证：%v", err)
+	}
+	return &authConfig
+}
+
+func migrationOfflineConfig(t *testing.T, path string) api.MigrationSourceConfig {
+	t.Helper()
+	var config api.MigrationSourceConfig
+	if err := config.FromMigrationOfflineSourceConfig(api.MigrationOfflineSourceConfig{Path: path}); err != nil {
+		t.Fatalf("构造离线来源配置：%v", err)
+	}
+	return config
+}
+
+func assertPersistedMigrationPrincipal(t *testing.T, task *repository.MigrationTask, username string) {
+	t.Helper()
+	if task.InitiatorUsername != username || !task.InitiatorUserID.Valid || task.InitiatorAuthSource != auth.AuthSourceWebJWT {
+		t.Fatalf("任务发起人 = %+v", task)
 	}
 }
 
@@ -490,7 +801,7 @@ func TestMigrationDiscoverAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cfg := api.MigrationSourceConfig{"path": root}
+	cfg := migrationOfflineConfig(t, root)
 	var disc api.MigrationDiscoverResponse
 	if code := e.do(t, http.MethodPost, "/api/v1/migrations/discover", adminToken,
 		api.MigrationDiscoverRequest{SourceType: api.OfflineBundle, SourceConfig: &cfg}, &disc); code != http.StatusOK {
@@ -507,14 +818,14 @@ func TestMigrationDiscoverAPI(t *testing.T) {
 	if code := e.do(t, http.MethodGet, "/api/v1/migrations/"+itoa64(disc.TaskId), adminToken, nil, &task); code != http.StatusOK {
 		t.Fatalf("GET task %d", code)
 	}
-	if task.Status != api.Planned {
+	if task.Status != api.MigrationTaskStatusPlanned {
 		t.Fatalf("status = %q", task.Status)
 	}
 
 	// 坏路径：400 且列表不增加
 	var listBefore api.MigrationTaskList
 	_ = e.do(t, http.MethodGet, "/api/v1/migrations", adminToken, nil, &listBefore)
-	bad := api.MigrationSourceConfig{"path": filepath.Join(root, "nope")}
+	bad := migrationOfflineConfig(t, filepath.Join(root, "nope"))
 	if code := e.do(t, http.MethodPost, "/api/v1/migrations/discover", adminToken,
 		api.MigrationDiscoverRequest{SourceType: api.OfflineBundle, SourceConfig: &bad}, nil); code != http.StatusBadRequest {
 		t.Errorf("坏路径 discover 状态码 = %d，期望 400", code)
