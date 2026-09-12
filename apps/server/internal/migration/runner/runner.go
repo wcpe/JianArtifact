@@ -25,6 +25,9 @@ import (
 // AssetWriter 写入目标 hosted 仓库（由 domain.AssetService 满足）。
 type AssetWriter interface {
 	Put(repoName, path string, r io.Reader, contentType string) (*repository.Asset, error)
+	// PutWithTimestamps 在写入资产的同时将 created_at/updated_at 固定为源端时间（在线迁移保留源时间戳）；
+	// sourceModified 为零值时行为等同 Put。
+	PutWithTimestamps(repoName, path string, r io.Reader, contentType string, sourceModified time.Time) (*repository.Asset, error)
 	// Exists 返回路径是否已存在。
 	Exists(repoName, path string) (bool, error)
 	// LoadPathSet 一次加载仓库全部路径集合（skip 策略批量预检，可返回 nil 表示不支持）。
@@ -541,6 +544,9 @@ type sourceItem struct {
 	Path   string
 	Format string
 	Open   func() (io.ReadCloser, error)
+	// SourceModified 源端最后修改时间（在线迁移从 Nexus lastModified/blobCreated 解析）；
+	// 离线或缺失时间戳时为零值，调用方据此回退到 Put 的本地时间语义。
+	SourceModified time.Time
 }
 
 func orderMigrationItems(items []sourceItem) {
@@ -596,7 +602,8 @@ func (r *Runner) importItem(item sourceItem) error {
 			return err
 		}
 		defer func() { _ = rc.Close() }()
-		_, err = r.assets.Put(item.Repo, item.Path, rc, "application/octet-stream")
+		// 在线迁移保留源资产时间戳：把从 Nexus 解析的源端时间回填到 created_at/updated_at。
+		_, err = r.assets.PutWithTimestamps(item.Repo, item.Path, rc, "application/octet-stream", item.SourceModified)
 		return err
 	}
 }
@@ -1124,6 +1131,11 @@ type AssetServiceAdapter struct {
 
 func (a AssetServiceAdapter) Put(repoName, path string, r io.Reader, contentType string) (*repository.Asset, error) {
 	return a.Assets.Put(repoName, path, r, contentType)
+}
+
+// PutWithTimestamps 透传到 domain.AssetService：在线迁移保留源资产时间戳。
+func (a AssetServiceAdapter) PutWithTimestamps(repoName, path string, r io.Reader, contentType string, sourceModified time.Time) (*repository.Asset, error) {
+	return a.Assets.PutWithTimestamps(repoName, path, r, contentType, sourceModified)
 }
 
 func (a AssetServiceAdapter) Exists(repoName, path string) (bool, error) {

@@ -78,9 +78,10 @@ func enumerateOnlineREST(ctx context.Context, client *upstream.Client, baseURL s
 			ct := a.ContentType
 			repoName := repo.Name
 			items = append(items, sourceItem{
-				Repo:   repoName,
-				Path:   path,
-				Format: format,
+				Repo:           repoName,
+				Path:           path,
+				Format:         format,
+				SourceModified: parseNexusTime(a.LastModified, a.BlobCreated),
 				Open: func() (io.ReadCloser, error) {
 					return openDownload(ctx, client, base, dlURL, auth, ct)
 				},
@@ -265,6 +266,21 @@ func onlineRequestError(err error) error {
 
 func applyCredential(req *http.Request, auth credential.SourceAuth) {
 	auth.Apply(req)
+}
+
+// parseNexusTime 从 Nexus 资产元数据的 lastModified / blobCreated（RFC3339 字符串）解析源端时间，
+// 优先 lastModified，缺失或解析失败则回退 blobCreated。两者皆空或解析失败返回零值，
+// 调用方据此回退到 Put 的本地时间语义。
+func parseNexusTime(lastModified, blobCreated string) time.Time {
+	for _, s := range []string{lastModified, blobCreated} {
+		if s == "" {
+			continue
+		}
+		if t, err := time.Parse(time.RFC3339, s); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
 }
 
 // resolveCred 从 credential_ref 读环境变量；空 ref 返回空串。

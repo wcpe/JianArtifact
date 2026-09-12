@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jmoiron/sqlx"
 	"golang.org/x/sync/singleflight"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/blobstore"
@@ -181,6 +182,23 @@ func (s *AssetService) putWithPrimaryOperation(repoName string, repo *repository
 	}
 	s.negCache.remove(repo.ID, path)
 	return stored, nil
+}
+
+// PutWithTimestamps 与 Put 语义相同，但将资产 created_at/updated_at 固定为源端时间，
+// 用于在线迁移保留源 Nexus 资产的时间戳。sourceModified 为零值时回退到 Put（使用本地当前时间），
+// 离线路径或缺失时间戳时语义等同 Put。时间按 UTC "YYYY-MM-DD HH:MM:SS" 写入，
+// 与 asset 表 datetime('now') 默认值格式一致。
+func (s *AssetService) PutWithTimestamps(repoName, path string, r io.Reader, contentType string, sourceModified time.Time) (*repository.Asset, error) {
+	if sourceModified.IsZero() {
+		return s.Put(repoName, path, r, contentType)
+	}
+	return s.PutWithCommitHook(repoName, path, r, contentType, func(asset *repository.Asset) repository.MutationCompletionHook {
+		// 源端时间写入资产行：created_at 与 updated_at 均与源一致（用户要求迁移后两时间都对齐源）。
+		ts := sourceModified.UTC().Format("2006-01-02 15:04:05")
+		asset.CreatedAt = ts
+		asset.UpdatedAt = ts
+		return func(tx *sqlx.Tx) error { return nil }
+	})
 }
 
 // PutWithCommitHook 将内容写入 blob 后，与调用方的同库元数据一起完成资产事务。
