@@ -97,6 +97,16 @@ func NewTestClient(timeout time.Duration) *Client {
 	return newClient(timeout, true, nil, nil)
 }
 
+// NewClientWithPolicy 构造回源客户端并显式指定是否放行回环/私网地址。
+//
+// 仅用于用户显式声明的可信内网站来源（如本机或内网 Nexus）：allowPrivate=true 会绕过
+// SSRF 私网地址校验，因此调用方必须确保该来源由用户在迁移任务中显式声明（allowPrivateSource），
+// 且绝不用于来自不可信输入的地址。生产默认使用 NewClient（allowPrivate=false）。
+// 注意：此开关只影响在线迁移回源，不影响代理回源（proxy 仓库远程地址）的安全校验。
+func NewClientWithPolicy(timeout time.Duration, allowPrivate bool) *Client {
+	return newClient(timeout, allowPrivate, nil, nil)
+}
+
 func newClient(timeout time.Duration, allowPrivate bool, lookup lookupIPAddrFunc, dial dialContextFunc) *Client {
 	if timeout <= 0 {
 		timeout = DefaultTimeout

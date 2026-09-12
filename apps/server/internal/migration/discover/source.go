@@ -76,6 +76,9 @@ type Config struct {
 	RepositoryTypes   map[string]string
 	// RepositoryConfigs 是离线来源提供的可信非敏感配置映射。
 	RepositoryConfigs map[string]TargetRepositoryConfig
+	// AllowPrivateSource 为 true 时，本发现使用的出站客户端放行回环/私网地址。
+	// 仅当用户在迁移来源中显式声明（allowPrivateSource）时置位；默认 false 保持 SSRF 防护。
+	AllowPrivateSource bool
 }
 
 func (c Config) auth() credential.SourceAuth {

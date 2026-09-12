@@ -646,7 +646,12 @@ func (r *Runner) enumerate(ctx context.Context, task *repository.MigrationTask, 
 		if err != nil {
 			return nil, err
 		}
-		return enumerateOnlineREST(ctx, r.onlineHTTP, urlStr, auth, plan, onProg)
+		// allowPrivateSource 仅当用户在来源中显式声明可信内网站时放行，默认用安全出站客户端。
+		client := r.onlineHTTP
+		if allowPriv, _ := cfg["allowPrivateSource"].(bool); allowPriv {
+			client = upstream.NewClientWithPolicy(5*time.Minute, true)
+		}
+		return enumerateOnlineREST(ctx, client, urlStr, auth, plan, onProg)
 	default:
 		return nil, fmt.Errorf("不支持的 sourceType %s", task.SourceType)
 	}

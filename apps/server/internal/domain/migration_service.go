@@ -483,6 +483,9 @@ func (s *MigrationService) Discover(ctx context.Context, in MigrationDiscoverInp
 		cfg.RepositoryTypes = parseStringMap(safeSourceConfig["repositoryTypes"])
 		cfg.RepositoryConfigs = parseMigrationRepositoryConfigs(safeSourceConfig["repositoryConfigs"])
 		cfg.IncludeRepositories = parseIncludeRepos(safeSourceConfig["includeRepositories"])
+		if v, ok := safeSourceConfig["allowPrivateSource"].(bool); ok {
+			cfg.AllowPrivateSource = v
+		}
 	}
 	if in.SourceType == repository.MigrationSourceOnlineREST {
 		persisted, err := discover.PersistedSourceConfig(in.SourceType, safeSourceConfig)
@@ -726,17 +729,19 @@ func (s *MigrationService) ListRemoteRepositoriesWithSource(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
+	// allowPrivateSource 仅当用户在来源中显式声明可信内网站时放行，默认保持 SSRF 防护。
+	allowPrivate, _ := persisted["allowPrivateSource"].(bool)
 	src, err := s.sourceFactory(repository.MigrationSourceOnlineREST)
 	if err != nil {
 		return nil, err
 	}
 	lister, ok := src.(interface {
-		ListRemoteRepositoriesWithAuth(context.Context, string, credential.SourceAuth, bool) ([]discover.RemoteRepository, error)
+		ListRemoteRepositoriesWithAuth(context.Context, string, credential.SourceAuth, bool, bool) ([]discover.RemoteRepository, error)
 	})
 	if !ok {
 		return nil, fmt.Errorf("%w: 在线来源不支持仓库索引", ErrValidation)
 	}
-	items, err := lister.ListRemoteRepositoriesWithAuth(ctx, url, auth, true)
+	items, err := lister.ListRemoteRepositoriesWithAuth(ctx, url, auth, true, allowPrivate)
 	if err != nil {
 		return nil, mapDiscoverErr(err)
 	}

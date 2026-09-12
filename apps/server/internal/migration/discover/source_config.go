@@ -12,17 +12,24 @@ func PersistedSourceConfig(sourceType string, cfg map[string]any) (map[string]an
 		if hasRef == hasURL {
 			return nil, fmt.Errorf("online_rest 须且只能提供 sourceRef 或 url")
 		}
+		out := make(map[string]any)
 		if hasRef {
 			if !IsSourceRef(ref) {
 				return nil, fmt.Errorf("来源引用无效")
 			}
-			return map[string]any{"sourceRef": ref}, nil
+			out["sourceRef"] = ref
+		} else {
+			url, err := validateSourceURL(rawURL)
+			if err != nil {
+				return nil, err
+			}
+			out["url"] = url
 		}
-		url, err := validateSourceURL(rawURL)
-		if err != nil {
-			return nil, err
+		// allowPrivateSource 仅当用户显式声明可信内网站来源时保存；默认不持久化，保持 SSRF 防护。
+		if v, ok := cfg["allowPrivateSource"].(bool); ok && v {
+			out["allowPrivateSource"] = true
 		}
-		return map[string]any{"url": url}, nil
+		return out, nil
 	case "offline_dir", "offline_bundle":
 		path, ok := cfg["path"].(string)
 		if !ok {

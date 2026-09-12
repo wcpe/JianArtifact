@@ -173,6 +173,53 @@ func TestRunnerConflictSkip(t *testing.T) {
 	}
 }
 
+// TestRunnerConflictSkipCoversMetadataPaths 验证 skip 策略对元数据类路径（如 maven-metadata.xml、
+// *-SNAPSHOT.pom）同样生效：目标已存在同名路径时绝不覆盖。迁移 skip 仅按路径判定，不区分制品与元数据。
+func TestRunnerConflictSkipCoversMetadataPaths(t *testing.T) {
+	mig, assets, repos, _, _ := setup(t)
+	root := t.TempDir()
+	manifest := `{"repositories":[{"name":"raw-data","format":"raw","type":"hosted"}]}`
+	if err := os.WriteFile(filepath.Join(root, "manifest.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(root, "content", "raw-data", "maven-metadata.xml")
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte("NEW-META"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// 预先写入同名冲突资产（模拟目标仓库已有更新的 maven 元数据）。
+	if _, err := repos.Create("raw-data", "raw", "hosted", "private", "", repository.RepositoryConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := assets.Put("raw-data", "maven-metadata.xml", bytes.NewReader([]byte("OLD-META")), ""); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := mig.Discover(context.Background(), domain.MigrationDiscoverInput{
+		SourceType:     repository.MigrationSourceOfflineBundle,
+		SourceConfig:   map[string]any{"path": root},
+		ConflictPolicy: repository.MigrationConflictSkip,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mig.Start(result.Task.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	waitStatus(t, mig, result.Task.ID, repository.MigrationStatusCompleted)
+	_, rc, err := assets.Get("raw-data", "maven-metadata.xml")
+	if err != nil {
+		t.Fatalf("Get 元数据：%v", err)
+	}
+	defer func() { _ = rc.Close() }()
+	body, _ := io.ReadAll(rc)
+	if string(body) != "OLD-META" {
+		t.Fatalf("skip 应保留已有的 maven-metadata.xml，得 %q", body)
+	}
+}
+
 func TestRunnerConflictOverwrite(t *testing.T) {
 	mig, assets, repos, _, _ := setup(t)
 	root := writeBundle(t)

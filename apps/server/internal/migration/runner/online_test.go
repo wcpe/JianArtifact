@@ -294,6 +294,65 @@ func TestRunnerDirectBasicAuthSupportsStartResumeAndFinalize(t *testing.T) {
 	}
 }
 
+func TestRunnerOnlineRESTAllowsPrivateSourceWhenFlagged(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/service/rest/v1/assets", func(w http.ResponseWriter, r *http.Request) {
+		host := "http://" + r.Host
+		_ = json.NewEncoder(w).Encode(map[string]any{"items": []map[string]string{
+			{"path": "a.bin", "downloadUrl": host + "/dl/a.bin", "contentType": "application/octet-stream"},
+		}})
+	})
+	mux.HandleFunc("/dl/", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("payload-a"))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	// setupSecure 默认使用安全出站客户端（拒绝私网）；来源显式声明 allowPrivateSource 后应放行。
+	mig, assets, _, _, _ := setupSecure(t)
+	created, err := mig.Create(domain.MigrationCreateInput{
+		SourceType:   repository.MigrationSourceOnlineREST,
+		SourceConfig: map[string]any{"url": srv.URL, "allowPrivateSource": true},
+		PlanJSON:     `{"repositories":[{"name":"raw","format":"raw"}]}`,
+	})
+	if err != nil {
+		t.Fatalf("Create：%v", err)
+	}
+	if _, err := mig.Start(created.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	waitStatus(t, mig, created.ID, repository.MigrationStatusCompleted)
+	if _, rc, err := assets.Get("raw", "a.bin"); err != nil {
+		t.Fatalf("私网来源资产未迁入：%v", err)
+	} else {
+		_ = rc.Close()
+	}
+}
+
+func TestRunnerOnlineRESTRejectsPrivateSourceByDefault(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/service/rest/v1/assets", func(w http.ResponseWriter, r *http.Request) {})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	mig, _, _, _, _ := setupSecure(t)
+	created, err := mig.Create(domain.MigrationCreateInput{
+		SourceType:   repository.MigrationSourceOnlineREST,
+		SourceConfig: map[string]any{"url": srv.URL},
+		PlanJSON:     `{"repositories":[{"name":"raw","format":"raw"}]}`,
+	})
+	if err != nil {
+		t.Fatalf("Create：%v", err)
+	}
+	if _, err := mig.Start(created.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	task := waitStatus(t, mig, created.ID, repository.MigrationStatusFailed)
+	if !strings.Contains(task.ErrorMessage.String, "出站安全策略拒绝") {
+		t.Fatalf("默认应拒绝私网来源，error=%q", task.ErrorMessage.String)
+	}
+}
+
 func TestRunnerDropsLegacyInlineTokenBeforeExecutingURL(t *testing.T) {
 	mig, _, _, tasks, _ := setup(t)
 	const secret = "旧任务密钥不得执行或泄露"

@@ -20,10 +20,9 @@ type OnlineREST struct {
 }
 
 // NewOnlineREST 构造在线 Nexus 发现器；所有来源访问均经统一安全出站客户端。
+// client 为 nil 时延迟构建：Discover/ListRemoteRepositoriesWithAuth 按本次请求的 allowPrivateSource
+// 决定私网放行策略，确保默认仍执行 SSRF 防护。
 func NewOnlineREST(client *upstream.Client) *OnlineREST {
-	if client == nil {
-		client = upstream.NewClient(upstream.DefaultTimeout)
-	}
 	return &OnlineREST{HTTP: client}
 }
 
@@ -42,6 +41,10 @@ type nexusAssetsPage struct {
 func (s *OnlineREST) Discover(ctx context.Context, cfg Config) (Plan, error) {
 	if err := requireURL(cfg.URL); err != nil {
 		return Plan{}, err
+	}
+	if s.HTTP == nil {
+		// 仅在未注入显式客户端时按来源声明决定私网放行策略，确保 SSRF 防护默认生效。
+		s.HTTP = upstream.NewClientWithPolicy(upstream.DefaultTimeout, cfg.AllowPrivateSource)
 	}
 	base := strings.TrimRight(cfg.URL, "/")
 	auth := cfg.auth()
@@ -161,13 +164,17 @@ type RemoteRepository struct {
 // 供离线 blob 迁移前勾选 includeRepositories，避免全盘 Walk。
 // supportedOnly=true 时仅返回本产品可迁移 format（maven/npm/raw）。
 func (s *OnlineREST) ListRemoteRepositories(ctx context.Context, baseURL, rawCredential string, supportedOnly bool) ([]RemoteRepository, error) {
-	return s.ListRemoteRepositoriesWithAuth(ctx, baseURL, credential.FromLegacy(rawCredential), supportedOnly)
+	return s.ListRemoteRepositoriesWithAuth(ctx, baseURL, credential.FromLegacy(rawCredential), supportedOnly, false)
 }
 
 // ListRemoteRepositoriesWithAuth 以显式认证仅拉取 Nexus 仓库索引，不落库。
-func (s *OnlineREST) ListRemoteRepositoriesWithAuth(ctx context.Context, baseURL string, auth credential.SourceAuth, supportedOnly bool) ([]RemoteRepository, error) {
+// allowPrivateSource=true 时放行回环/私网来源地址（仅当用户在迁移来源中显式声明）。
+func (s *OnlineREST) ListRemoteRepositoriesWithAuth(ctx context.Context, baseURL string, auth credential.SourceAuth, supportedOnly bool, allowPrivateSource bool) ([]RemoteRepository, error) {
 	if err := requireURL(baseURL); err != nil {
 		return nil, err
+	}
+	if s.HTTP == nil {
+		s.HTTP = upstream.NewClientWithPolicy(upstream.DefaultTimeout, allowPrivateSource)
 	}
 	base := strings.TrimRight(baseURL, "/")
 	repos, err := s.listRepositories(ctx, base, auth)

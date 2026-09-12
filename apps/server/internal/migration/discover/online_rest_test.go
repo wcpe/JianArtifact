@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wcpe/jianartifact/apps/server/internal/migration/credential"
 	"github.com/wcpe/jianartifact/apps/server/internal/migration/discover"
 	"github.com/wcpe/jianartifact/apps/server/internal/upstream"
 )
@@ -155,6 +156,68 @@ func TestOnlineRESTRejectsDangerousRedirect(t *testing.T) {
 	}
 	if contains(err.Error(), "不应泄露") || contains(err.Error(), "127.0.0.1") {
 		t.Fatalf("错误不得泄露凭据或来源地址：%v", err)
+	}
+}
+
+// TestOnlineRESTAllowsPrivateSourceAddress 验证：当用户显式声明 allowPrivateSource，
+// 回环/私网来源地址（如本机/内网 Nexus）可被放行，SSRF 防护按来源维度关闭。
+func TestOnlineRESTAllowsPrivateSourceAddress(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/service/rest/v1/repositories", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode([]map[string]string{
+			{"name": "maven-snapshots", "format": "maven2", "type": "hosted"},
+		})
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	// NewOnlineREST(nil) 表示未注入显式客户端：以 allowPrivateSource=true 构造放行私网的客户端。
+	plan, err := discover.NewOnlineREST(nil).Discover(context.Background(), discover.Config{
+		URL:                srv.URL,
+		AllowPrivateSource: true,
+	})
+	if err != nil {
+		t.Fatalf("私网来源（显式放行）应成功，得 %v", err)
+	}
+	if len(plan.Repositories) != 1 || plan.Repositories[0].Name != "maven-snapshots" {
+		t.Fatalf("repos = %+v", plan.Repositories)
+	}
+}
+
+// TestOnlineRESTListAllowsPrivateSourceAddress 验证 ListRemoteRepositoriesWithAuth
+// 在 allowPrivateSource=true 时放行私网来源。
+func TestOnlineRESTListAllowsPrivateSourceAddress(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/service/rest/v1/repositories", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode([]map[string]string{
+			{"name": "r3d", "format": "maven2", "type": "hosted"},
+		})
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	items, err := discover.NewOnlineREST(nil).ListRemoteRepositoriesWithAuth(
+		context.Background(), srv.URL, credential.SourceAuth{}, true, true,
+	)
+	if err != nil {
+		t.Fatalf("私网来源索引（显式放行）应成功，得 %v", err)
+	}
+	if len(items) != 1 || items[0].Name != "r3d" {
+		t.Fatalf("items = %+v", items)
+	}
+}
+
+// TestOnlineRESTListRejectsPrivateSourceByDefault 验证默认（allowPrivateSource=false）
+// 仍拒绝私网来源地址，确保私网放行开关默认关闭、不削弱 SSRF 防护。
+func TestOnlineRESTListRejectsPrivateSourceByDefault(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	t.Cleanup(srv.Close)
+
+	_, err := discover.NewOnlineREST(nil).ListRemoteRepositoriesWithAuth(
+		context.Background(), srv.URL, credential.SourceAuth{}, true, false,
+	)
+	if !errors.Is(err, upstream.ErrUnsafeURL) {
+		t.Fatalf("默认应拒绝私网来源，得 %v", err)
 	}
 }
 
