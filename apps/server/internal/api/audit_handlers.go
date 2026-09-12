@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/wcpe/jianartifact/apps/server/internal/auditctx"
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
@@ -36,13 +37,18 @@ func (h *Handlers) GetAuditLogs(c *gin.Context) {
 		offset = 0
 	}
 	f := repository.AuditFilter{
-		Actor:  c.Query("actor"),
-		Action: c.Query("action"),
-		Repo:   c.Query("repo"),
-		From:   c.Query("from"),
-		To:     c.Query("to"),
-		Limit:  limit,
-		Offset: offset,
+		Actor:      c.Query("actor"),
+		UserID:     c.Query("userId"),
+		AuthSource: c.Query("authSource"),
+		TokenID:    c.Query("tokenId"),
+		Action:     c.Query("action"),
+		Repo:       c.Query("repo"),
+		Result:     c.Query("result"),
+		IP:         c.Query("ip"),
+		From:       c.Query("from"),
+		To:         c.Query("to"),
+		Limit:      limit,
+		Offset:     offset,
 	}
 	items, err := h.auditLogs.List(f)
 	if err != nil {
@@ -63,12 +69,37 @@ func (h *Handlers) AuditLog(c *gin.Context, action, entityType, entityKey, repo,
 	if h.auditLogs == nil {
 		return
 	}
+	_ = h.auditLogs.Insert(h.auditLogEntry(c, action, entityType, entityKey, repo, detail, result))
+}
+
+func (h *Handlers) auditLogEntry(c *gin.Context, action, entityType, entityKey, repo, detail, result string) repository.AuditLogEntry {
 	actor := ""
+	var userID, tokenID *int64
+	authSource, tokenName := "", ""
 	if p, ok := auth.PrincipalFrom(c); ok {
 		actor = p.Username
+		userID = &p.UserID
+		authSource = p.AuthSource
+		if p.TokenID > 0 {
+			tokenID = &p.TokenID
+			tokenName = p.TokenName
+		}
 	}
 	ip := c.ClientIP()
-	_ = h.auditLogs.Insert(repository.AuditLogEntry{
+	email := ""
+	if p, ok := auth.PrincipalFrom(c); ok {
+		email = p.Email
+	}
+	// 路由模板而非原始路径：不含查询串与具体 ID，符合契约的脱敏要求。
+	httpPath := c.FullPath()
+	if httpPath == "" {
+		httpPath = c.Request.URL.Path
+	}
+	status := c.Writer.Status()
+	if status == 0 {
+		status = http.StatusOK
+	}
+	return repository.AuditLogEntry{
 		TS:         time.Now().UTC().Format(time.RFC3339Nano),
 		Actor:      actor,
 		Action:     action,
@@ -78,5 +109,32 @@ func (h *Handlers) AuditLog(c *gin.Context, action, entityType, entityKey, repo,
 		Detail:     detail,
 		Result:     result,
 		IP:         ip,
-	})
+		UserID:     userID,
+		AuthSource: authSource,
+		TokenID:    tokenID,
+		TokenName:  tokenName,
+		UserAgent:  c.GetHeader("User-Agent"),
+		RequestID:  requestID(c),
+		SourceNode: h.auditSourceNode,
+
+		HTTPMethod:   c.Request.Method,
+		HTTPPath:     httpPath,
+		StatusCode:   status,
+		DurationMs:   auditctx.DurationMs(c),
+		TokenPreview: auditctx.TokenPreview(c.GetHeader("Authorization")),
+		BodyPreview:  auditctx.BodyFrom(c),
+		ActorEmail:   email,
+	}
+}
+
+func requestID(c *gin.Context) string {
+	if value := c.GetHeader("X-Request-ID"); value != "" {
+		return value
+	}
+	if value, ok := c.Get("request_id"); ok {
+		if id, ok := value.(string); ok {
+			return id
+		}
+	}
+	return ""
 }
