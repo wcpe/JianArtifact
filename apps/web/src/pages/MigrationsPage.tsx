@@ -9,10 +9,11 @@ import {
   Select,
   SimpleGrid,
   Stack,
+  Tabs,
   Text,
   ThemeIcon,
 } from "@mantine/core";
-import { EmptyState, PageHeader } from "@jianartifact/ui";
+import { EmptyState } from "@jianartifact/ui";
 import {
   IconArrowRight,
   IconClock,
@@ -24,11 +25,12 @@ import {
 } from "@tabler/icons-react";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { listMigrations } from "../api/endpoints";
 import type { MigrationTask } from "../api/types";
 import { planEstimatedAssets, sourceColor, statusColor } from "../components/migration/status";
+import { BackupsTab } from "../components/backup/BackupsTab";
 import { AsyncBoundary } from "../components/AsyncBoundary";
 import { useAsync } from "../hooks/useAsync";
 import { density } from "../theme/density";
@@ -47,14 +49,50 @@ function SourceIcon({ type }: { type: MigrationTask["sourceType"] }) {
 
 export function MigrationsPage() {
   const { t } = useTranslation();
+  const [params, setParams] = useSearchParams();
+  // Tab 走查询参数（与集群页 ?tab= 同约定），便于直链与刷新后保持位置。
+  const tab = params.get("tab") === "backups" ? "backups" : "external";
+
+  const changeTab = (value: string | null) => {
+    const next = new URLSearchParams(params);
+    if (value === "backups") {
+      next.set("tab", "backups");
+    } else {
+      next.delete("tab");
+    }
+    setParams(next, { replace: true });
+  };
+
+  return (
+    <Tabs value={tab} onChange={changeTab} keepMounted={false}>
+      <Tabs.List>
+        <Tabs.Tab value="external">{t("backups.tabExternal")}</Tabs.Tab>
+        <Tabs.Tab value="backups">{t("backups.tabBackup")}</Tabs.Tab>
+      </Tabs.List>
+      <Tabs.Panel value="external" pt="md">
+        <MigrationsTab />
+      </Tabs.Panel>
+      <Tabs.Panel value="backups" pt="md">
+        <BackupsTab />
+      </Tabs.Panel>
+    </Tabs>
+  );
+}
+
+function MigrationsTab() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
 
-  const state = useAsync(() => listMigrations({ page, page_size: pageSize }), [page, pageSize]);
+  const state = useAsync(() => listMigrations({ page, page_size: pageSize }), [page, pageSize], {
+    cacheKey: `migrations:list:${page}:${pageSize}`,
+  });
 
   // 活跃任务横幅：额外拉一页靠前任务（id 降序），覆盖多数近期 running/planned
-  const gate = useAsync(() => listMigrations({ page: 1, page_size: 50 }), []);
+  const gate = useAsync(() => listMigrations({ page: 1, page_size: 50 }), [], {
+    cacheKey: "migrations:gate",
+  });
 
   const activeHint = useMemo(() => {
     if (gate.loading || !gate.data) {
@@ -112,37 +150,27 @@ export function MigrationsPage() {
 
   return (
     <Stack gap="md">
-      <PageHeader
-        title={t("migrations.title")}
-        description={t("migrations.description")}
-        actions={
-          <Group gap="xs">
-            <Button
-              variant="default"
-              leftSection={<IconRefresh size={16} />}
-              onClick={() => {
-                state.reload();
-                gate.reload();
-              }}
-              loading={state.loading || gate.loading}
-            >
-              {t("common.refresh")}
-            </Button>
-            <Button
-              leftSection={
-                activeHint?.kind === "running" ? (
-                  <IconArrowRight size={16} />
-                ) : (
-                  <IconPlus size={16} />
-                )
-              }
-              onClick={onNew}
-            >
-              {activeHint?.kind === "running" ? t("migrations.gotoDetail") : t("migrations.new")}
-            </Button>
-          </Group>
-        }
-      />
+      <Group justify="flex-end" gap="xs">
+        <Button
+          variant="default"
+          leftSection={<IconRefresh size={16} />}
+          onClick={() => {
+            state.reload();
+            gate.reload();
+          }}
+          loading={state.loading || gate.loading}
+        >
+          {t("common.refresh")}
+        </Button>
+        <Button
+          leftSection={
+            activeHint?.kind === "running" ? <IconArrowRight size={16} /> : <IconPlus size={16} />
+          }
+          onClick={onNew}
+        >
+          {activeHint?.kind === "running" ? t("migrations.gotoDetail") : t("migrations.new")}
+        </Button>
+      </Group>
 
       {state.data && total > 0 && (
         <SimpleGrid cols={{ base: 2, sm: 5 }} spacing={density.gridSpacing}>
