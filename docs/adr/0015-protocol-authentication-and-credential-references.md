@@ -2,7 +2,7 @@
 
 ## 状态
 
-已接受
+已接受（第 4、6 项的运行时引用命名空间约束由 [ADR-0022](0022-restricted-runtime-reference-namespaces.md) 取代；online REST 迁移的直接 URL 与加密任务凭据由 [ADR-0025](0025-direct-online-migration-url.md) 部分取代）
 
 ## 背景
 
@@ -15,12 +15,15 @@ Docker、Cargo、PyPI、NuGet 等代理格式还需要私有上游凭据。凭�
 1. 取代 ADR-0009 的协议认证部分：原生协议可使用 `Authorization: Basic <用户名:口令>` 或既有 `jat_` API Token（Basic/Bearer）；Web 会话 JWT 仅用于 Web/管理 API，不作为协议发布凭据。携带 Basic、Bearer 或 API Token 的协议请求必须经 HTTPS；仅明确的 loopback 监听或 Unix socket 部署可例外，反向代理场景只能信任已配置代理注入的 scheme。所有认证最终解析为同一种主体与认证来源。
 2. 普通账号的 `web_login_disabled` 仅拒绝 Web 会话建立和管理 API 身份使用；不影响其在原生协议中使用 Basic 用户名口令。该开关在每次 Web/管理 API 鉴权时检查，因此既有 JWT、既有 API Token 和既有浏览器会话立即失效于管理面，但仍可按协议策略访问原生端点。发布策略、ACL、仓库级不可变规则、前缀和额度对 Basic 口令与 API Token 一视同仁。
 3. 发布策略是用户×hosted 仓库的附加限制；仓库级 `immutable_release` 独立于用户。该仓库任何既有逻辑发布对象均不可被普通账号覆盖，删除、移动和重命名只允许全局管理员。管理员只可经统一管理操作 API 对不可变 Release 覆盖、删除、移动或重命名，并必须提交 `overrideReason`；原生协议、迁移和复制不得执行覆盖，迁移仅能 skip/fail 已有逻辑对象，复制仅可创建新对象或走 ADR-0014 的冲突 successor。每次管理 override 都写审计。
-4. 私有上游凭据只以不透明 `credentialRef` 保存。运行时由既有安全凭据解析器从进程环境取得值；配置、错误、审计与报告只出现引用名或脱敏状态，不出现值。出站访问还必须执行统一的地址、DNS 和重定向安全策略。
-5. 审计在认证上下文中固化稳定用户 ID、用户名快照、认证方式、适用时的 Token ID/名称、来源 IP、User-Agent、请求 ID、来源节点和结果；绝不记录口令、令牌正文或其摘要。
-6. Cargo 原生客户端的注册表发布凭据为其标准 registry token 通道，不能可靠携带 Basic 用户名口令；该格式以长期 API Token 作为兼容性例外，其发布策略和审计语义不变。其他支持 HTTP Basic 的原生客户端可继续使用账号密码。
+4. 私有上游凭据只以受限逻辑名称 `credentialRef` 保存。仓库 `credentialRef` 仅允许 proxy：hosted 与 group 创建、更新时一律拒绝。运行时只从 `JIAN_UPSTREAM_CREDENTIAL_<名称>` 读取值；值含 `:` 时作为 HTTP Basic 的 `用户名:口令`，否则作为 Bearer Token。配置、错误、审计与报告只出现引用名或脱敏状态，不出现值；引用缺失或为空时安全失败且不得发起上游请求。
+5. 所有 proxy 回源、上游健康探测、online REST 迁移发现与在线下载共用统一出站策略：仅允许无用户信息的 `http`/`https` 绝对 URL；初始目标、每一跳重定向和每次连接前均解析并校验 DNS；拒绝环回、私网、链路本地、多播、未指定、共享地址空间、基准测试网段和云元数据地址。连接必须拨向本次复核后的安全 IP，避免 DNS 重绑定绕过。格式专属客户端不得绕过该传输层。
+6. 在线迁移只持久化受限逻辑名称 `sourceRef`；运行时只从 `JIAN_MIGRATION_SOURCE_<名称>` 解析来源基址，任务的 `credentialRef` 独立从专用凭据命名空间解析认证值。任务、checkpoint、报告、错误与日志不得回写来源 URL、主机名、IP 或凭据；未知或失效引用安全失败并保留可重试状态。
+7. 审计在认证上下文中固化稳定用户 ID、用户名快照、认证方式、适用时的 Token ID/名称、来源 IP、User-Agent、请求 ID、来源节点和结果；绝不记录口令、令牌正文或其摘要。
+8. Cargo 原生客户端的注册表发布凭据为其标准 registry token 通道，不能可靠携带 Basic 用户名口令；该格式以长期 API Token 作为兼容性例外，其发布策略和审计语义不变。其他支持 HTTP Basic 的原生客户端可继续使用账号密码。
 
 ## 后果
 
 - 用户可保留账号密码发布工作流，同时可按账号禁用 Web/管理入口，并以不可变 Release、路径前缀和额度缩小泄露影响；明文协议凭据不会在非 TLS 网络上传输。
 - 协议认证兼容面扩大，所有格式实现必须复用统一认证适配层，禁止在 handler 中自行解析凭据。
-- 仓库配置增加只保存引用的私有上游凭据模型；实现与文档必须证明任何持久化或诊断输出不泄露秘密。
+- 仓库配置增加只保存引用的私有上游凭据模型；实现与文档必须证明任何持久化或诊断输出不泄露秘密，并证明地址策略不能被重定向或 DNS 重绑定绕过。
+- 受控私有上游的真实 proxy/group、online migration 重启恢复与无泄露验证仍是 v0.8.0 发布验收门；自动化覆盖不替代该真机门。

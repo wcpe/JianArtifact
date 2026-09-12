@@ -6,6 +6,72 @@
 
 ## 未发布版本
 
+### 新增
+
+- 节点备份包与搬迁（FR-132～FR-136，见 `docs/specs/0.8.0-node-backup-and-relocation.md` 与 ADR-0027）：搬迁的传输单位从实时复制流改为**一致性备份包**（tar.gz 内封 `manifest.json` + `VACUUM INTO` 快照 + `blobs.index` + 内容寻址 blob），流程退化为「生成包 → 传包 → 导入包 → 校验」，不再需要节点角色、水位、代次或拓扑。包内**仅含数据，不含任何密钥或节点本地配置**（排除复制凭据密钥、JWT 密钥、迁移凭据密钥、`-wal`/`-shm` 与 blob 临时/隔离目录），`manifest.kind` 固定为 `jianartifact-node-backup` 以与 Nexus 迁移 bundle 区分。
+- 备份生成（FR-133）：支持**热备份**（不停服，独立连接的 `VACUUM INTO` 取一致性快照，不占用业务主连接池）与**冻结窗口**两种模式；blob 集合以快照库 `asset` 表为准而非扫描目录，因此未被引用的残留 blob 不会进包；同一时刻仅允许一个生成任务，失败会清理半成品并把登记置为 failed，服务重启会清理遗留的「生成中」包。
+- 备份列表与下载导出（FR-136）：新增 `/api/v1/backups` 系列端点与「迁移与搬迁」页面（与既有 Nexus 迁移合并为双 Tab，`?tab=backups` 可深链）。列表用 Mantine Table 呈现状态 / 方式 / 大小 / 规模 / 创建时间，状态走 OpsKit `StatusPill`；生成中在页内轮询进度。**下载提供带时效的签名链接**（HMAC 令牌绑定单个包与截止时间，签名密钥由启动密钥派生），使普通 `<a href>` 与新机器无需登录即可拉取，并支持 Range 断点续传。支持完整性校验（浅校验查 db 与索引摘要，深度校验逐 blob 比对内容摘要）与被增量包引用的基线不可删除。
+- 搬迁备份 CLI（FR-132）：`jianartifact backup create [--mode hot|frozen] [--label …]`、`backup list [--json]`、`backup verify <包标识|归档路径> [--deep]`、`backup link <包标识> [--ttl 30m] [--base https://…]`、`backup delete <包标识>`。
+- 写入冻结窗口（FR-135）：写栅栏从「静态角色只读」扩展为「运行时可冻结」。`POST /api/v1/maintenance/freeze`（body `{until?, ttlSeconds?, reason?}`）冻结节点写入，`GET` 查询状态、`DELETE` 解冻（幂等，未冻结也返 200）。**窗口必须有界**：给 `until` 须晚于当前且不超过 `now+24h`（否则 400），否则用 `ttlSeconds`（缺省 7200，钳到 [60, 86400]）；**故意不提供无限期冻结**——忘记解冻会让服务退化成假死。冻结期间拒绝本地业务与管理写入（503 + `write_frozen`），但放行：读方法、`POST /api/v1/auth/login`、维护命名空间 `/api/v1/maintenance/`、以及备份导入/上传路径（`/api/v1/backups/import{s}`、`/api/v1/backups/uploads`）——它们只写 `restore-staging/` 与 `restore.pending`、重启才生效。响应 `WriteFreezeState{frozen, until?, frozenAt?, reason?}`，未冻结时省略 `until`/`frozenAt`。
+- URL 拉取导入与导入记录（FR-137，分片上传未开始）：`POST /api/v1/backups/import` 由服务端从 `sourceUrl`（http/https，必填）拉取并异步导入（202 + 记录），`GET /api/v1/backups/imports`（分页，最近优先）与 `GET /api/v1/backups/imports/{id}` 查进度与详情；另支持 CLI `jianartifact backup import <归档路径> [--overwrite] [--deep] [--yes]`。状态机 `queued → fetching → staging → pending_restart → done`，失败转 `failed`。**SSRF 防护**：拒绝回环/私网/链路本地/云元数据地址，每次拨号重新解析（防 DNS 重绑定），重定向重新校验。**导入规模护栏**（防解压炸弹，写盘前校验）：快照 8 GiB、blob 总量 50 GiB、blob 条目 500 万。错误码：`fetch_failed` / `package_oversize` / `sha256_mismatch` / `manifest_invalid` / `target_not_empty`（409）/ `incompatible` / `restore_pending`（409）/ `internal`；增量差包导入当前不支持（见 FR-134）。目标「非空」判据排除内置 `anonymous` 主体（迁移 0007 无条件植入，否则任何全新实例都会被误判非空）。
+- 分片上传导入（FR-137 第三通道）：Web 把 GB 级备份包按服务端约定的 **8 MiB** 分片顺序上传，服务端落盘后组装并交本地导入状态机（仍需重启生效）。`POST /api/v1/backups/uploads`（init，201，返回 `uploadId`/`chunkSize`/`uploadedChunks`/`status`/`expiresAt`）、`PUT /api/v1/backups/uploads/{id}/chunks/{index}`（`application/octet-stream` 二进制体，200 返回当前会话）、`GET /api/v1/backups/uploads/{id}`（查询，供续传）、`POST /api/v1/backups/uploads/{id}/complete`（202，body `{sha256?, overwrite?, deep?}`）、`POST /api/v1/backups/uploads/{id}/abort`（204）。状态机 `initialized → receiving → completed`，随时可 `aborted`；会话有效期 24 小时，单包上限 50 GiB（与 URL 拉取同一护栏）。**续传按磁盘推导**：`uploadedChunks` 以磁盘上真实存在的分片为准，缺哪片补哪片、重复片幂等覆盖；`complete` 缺片会带缺失序号、不符声明 sha256 删除半成品；`abort` 仅删磁盘目录、记录保留 `aborted`（故 `GET` 返回 200 而非 404）。客户端输入类错误（片号越界 / 单片超额 / 缺失 / 空体）统一 400；`complete` 的 `overwrite`/`deep` 已支持。
+- 增量差包与短停机切换（FR-134）：`jianartifact backup create --base <packageId>` 以某基线包生成差包，只携带新增 blob + 新 db，把停机窗口从"传整个包"缩到"只传新增 blob + 新 db"，可压到分钟级。每个包生成时额外写侧车索引 `${JIAN_DATA_DIR}/backups/<packageId>.index`（与包内 `blobs.index` 同格式）：全量包侧车 = 完整集合，差包侧车 = 应用后的完整并集（差包可再派生差包）。差包 manifest 新增可选 `expected`（`{count,totalBytes,indexSha256}`，全量包不写、`omitempty` 向后兼容），导入端算本地集合 ∪ 包内差集与其比对——一致才继续，不一致报"缺少基线包，请先导入基线包 <id>"且不留任何文件/标记；`basePackageId` 非空但 `expected` 为空（畸形手工包）仍报"增量包导入尚未支持"。被差包引用的基线不可删。
+- 首个二进制契约响应：`GET /api/v1/backups/{id}/download` 以 `application/gzip` 直接流式返回归档，为后续分片上传 / 大文件导出确立二进制端点范式。
+
+- 允许访问域名白名单（FR-129，见 `docs/specs/0.8.0-*` 与运维文档）：管理端设置页配置逗号分隔域名，配置后仅白名单 Host 可访问、IP:端口 直连返回 404；协议凭据按白名单放行 CDN 回源；节点本地即时生效。
+- 回源 Token 校验（FR-130，见 `docs/specs/0.8.0-origin-token-guard.md`）：后台「安全防护」配置请求头名与随机 Token（默认关闭），开启后非回环请求必须携带 CDN 回源注入的 Token，直连源站一律 404；与 Host 白名单并存，节点本地。
+- 服务内置 TLS（FR-131，见 `docs/specs/0.8.0-server-tls.md`）：`JIAN_TLS_ADDR` / `JIAN_TLS_CERT` / `JIAN_TLS_KEY` 环境变量配置后 HTTP 与 HTTPS 双监听（共用同一 handler），自签证书即可，供 CDN 回源 HTTPS 加密。
+- 管理控制台页面数据缓存（FR-128）：仓库、ACL、用户、令牌、迁移、设置、搜索、仓库详情/浏览、页眉通知与消息中心、集群概览等页面在会话内缓存最近一次成功数据，路由切换即时回放并后台静默刷新，不再每次切换整页转圈；登录/登出/切换账号即清空缓存。
+- 主节点同步观测增强（FR-119，见 `docs/specs/primary-sync-view.md`）：备用节点在既有认证 GET 拉取请求上捎带脱敏观测快照；父节点按鉴权 child 分开保存，relay 同时展示直接父边与多个直接子边，不跨级代理查询，不影响复制链路。
+- 消息中心页面（FR-117，见 `docs/specs/notification-center.md`）：`GET /api/v1/observability/audit/notifications` 扩展 `from`/`to`/`status`/`limit`/`cursor` 可选参数，支持跨 24 小时的全量风险批次分页与确认状态筛选（缺省请求保持页眉口径不变）；新增仅管理员可见的消息中心页与侧栏入口，支持按确认状态筛选、游标分页与「去处理」跳转审计定位。
+- 管理控制台完整开发态 Mock 验收矩阵（FR-122）：18 条页面路由均可按 URL 复现正常、空态、加载和失败；集群观测场景补齐未配对、子节点离线、分支落后与能力拒绝（离线边不再伪造最近请求/最近成功时间），集群同步事件/同步历史、公开仓库列表、复制接收审计与管理审计日志补齐 empty 场景空数据；仓库、账户、设置与迁移的关键写操作提供成功和失败反馈，加载请求与内存状态在测试后显式复位。审计默认以失败/高风险关注队列置顶，普通成功按时间展示且完整记录保持原始时序。
+- 主备同步诊断（FR-119）：新增当前节点安全概览、可筛选时间线、事件详情和关联变更摘要四个只读接口；每轮同步（含无变更）记录触发方式、发起人快照、水位、阶段化脱敏错误与恢复提示。管理台以真实接口展示固定 Tab 时间线；开发态由同契约 Mock 返回场景数据。
+- 管理控制台信息架构与账户菜单（FR-117）：侧栏按概览、运维、管理分区，开源协议固定置底；页眉将身份与退出收敛为账户菜单，并为全局管理员提供当前节点最近 24 小时风险通知中心及 `attentionId` 审计跳转。
+- 当前节点审计中心（FR-118）：迁移 `0026` 为审计增加关联标识，并新增追加式复制应用事件与确认身份快照；提供脱敏的概览、趋势、完整分页记录、风险批次、原子确认和至多 20 条通知预览。聚合读取限制为 5,000 条源事件，完整记录分页限制为每页 1–100 条。
+- v0.8.0 制品格式与迁移扩展：Docker/OCI、Cargo sparse、PyPI Simple、Go modules proxy、NuGet，以及声明式格式启停和 Nexus 扩展迁移。
+- 统一制品操作与生命周期协调器：Raw hosted 支持目录递归删除、多选移动、单项重命名；Maven/npm 执行格式感知删除；引用归零后在成功响应前完成物理回收，任一步失败整批恢复资产与 blob，并记录审计与集群操作批次。
+- 发布账号防护与审计身份：普通账号可配置 Web 登录开关、多个路径前缀、并发安全的制品数/字节额度和 Hosted Release 不可变策略；协议审计记录用户、认证来源、Token、IP、User-Agent、请求 ID 与结果，并支持管理页筛选。
+- 集群原子制品操作复制、冲突 successor、Linux arm64 静态构建资产与 Windows PowerShell 发布检查入口。
+- 主备级联复制与受控人工提升（FR-115）：primary 成为唯一业务写节点；standby 强制 v2 GET pull 并拒绝业务、管理与协议写入；开启 relay 的 standby 可向多个直接 child 提供已经完整应用的原始 record/blob，保留根源 stream/source seq，旧主经围栏后人工切换、以全新数据目录回接。
+- 管理员可直接填写外部 Nexus URL 创建在线迁移，支持匿名、Basic（含 User Token）和 Bearer 认证；任务凭据使用 AES-256-GCM 加密保存以支持断点续传，历史来源引用任务保持兼容。
+- 主备节点专属拉取凭据（FR-121）：废止 `JIAN_SYNC_TOKEN` 运行期依赖；直接父节点仅存加盐摘要，standby 以独立数据目录密钥密封保存。CLI 支持一次性交付、标准输入导入、验证、撤销与受控轮换，relay 可为多个直接 child 分别配对，复制授权严格限制为能力协商、v2 pull 与 blob 三类 GET。
+- 级联复制核心（FR-105/115）：新增 `JIAN_REPLICATION_RELAY_ENABLED`、`replication_relay_record` 和 blob 引用保留；relay standby 可从直接父节点拉取并向多个直接 child 原样转发 v2 change/operation，保持根源 stream generation/source seq，不生成本地业务回声；新增四跳和多子边自动化验证。
+- 集群邻接控制台（FR-119/124/126）：集群页面与监控改为当前节点、直接父边、多条直接子边的模型；DevMock 覆盖 root、relay、leaf、disabled、未配对、父边离线、子节点离线、子边错误、分支落后和能力拒绝全量场景，生产监控读取真实邻接观测接口。
+- 凭据引用审计补齐（FR-109）：迁移 discover/远程仓库索引读取实际使用凭据引用时写入 `migration.credential_ref` 审计（仅逻辑名称与认证类型）；`migration.start` 审计附带任务凭据引用；proxy 仓库创建/更新审计附带 `credentialRef` 配置与清除记录。全程不记录明文、摘要或环境变量全名。
+
+### 变更
+
+- 集群页重构为「总览 / 同步记录」双 Tab 工作台，并与集群监控完成合并：侧栏收敛为单入口（旧 /cluster-monitor 保留 301），移除遗留监控视图与布局选型组件约 900 行；总览由拓扑管线（点节点卡开边详情抽屉，吸收原「边与节点明细」）、需要关注锚点列表（边问题开抽屉、同步失败跳记录 Tab）、本节点参数卡与旧版备用节点上报兼容卡组成；同步记录承接原诊断流（筛选/统计/时间线/详情抽屉）并支持 `?tab=sync&eventId=…` 深链；页头新增角色/水位/积压/最近同步健康摘要。
+- 当前节点审计页改为「概览 / 记录」双 Tab 信息架构：指标卡与事件趋势收纳进概览 Tab，筛选与记录列表首屏直达，不再纵向长页堆叠；`attentionId` 跳转自动落在记录 Tab，数据口径、快照与确认行为不变。
+- 旧批量删除接口保留兼容路径并转发到统一事务引擎，不再返回部分成功语义；管理操作仅全局管理员可执行。
+- 孤立 blob 不再在服务启动时扫描删除；仅 primary 在 `JIAN_BLOB_GC_INTERVAL` 指定的周期执行清理（默认 24 小时，`0` 禁用），避免重启过程误影响待同步数据。
+- 管理端趋势图改为 `@mantine/charts`（recharts）实现：Y 轴刻度与数值、X 轴标签自动抽稀、网格与平滑曲线由图表库接管；对外渲染契约（`role="img"`、aria-label、悬停汇总文本与常驻占位）保持不变，仪表盘 / 主机监控 / 审计概览趋势一次升级。
+- 仪表盘与主机监控加载态从纯文字升级为骨架屏（指标卡 + 图表占位）；主机监控页全部文案接入 i18n（含不可用回退与 `/s` 单位），不再硬编码中文。
+
+### 修复
+
+- 开发态 Mock 版本与真实版本脱节：`/api/v1/status` 长期返回 `0.2.0-mock`、迁移版本停在 `0001_init`、备份包元数据为 `0.7.1` / schema 34，均与当前 0.8.0 开发版（迁移 `0036_audit_http_context`）不符。现由 `packages/devmock/src/version.ts` 统一提供版本锚点；「开源协议」页原先手工维护的 4 条样例（`@mantine/core` 版本也已过期）改为构建期从后端内嵌清单生成，与真实的 44 条 Go + 240 条 npm 依赖同源，不再随发版漂移。
+- 开发态「迁移与搬迁」页在浏览器中恒为空态：夹具注入的判定直接读取请求头，而浏览器仅在 URL 携带 `?__mock=` 时才发送场景头，正常访问被误判为未知场景而跳过注入。现复用统一的场景解析（未声明即 `normal`），并同步为迁移向导测试显式声明前置条件——存在 running 任务时向导会提示并跳转到该任务（不允许并发迁移，属正确产品行为），此前测试依赖了种子的偶然状态。
+- 开发态仓库列表的「制品数 / 总大小」恒为 0：种子未填写 `artifactCount` / `totalSize`，且 9 个仓库中只有 1 个有可浏览制品，导致列表、目录树与全局搜索都接近空白。现补全仓库规模（合计 28,416 制品 / 86.4 GB，与仪表盘 KPI 严格同源）与各仓库的可浏览制品样本，并修正 `seq.repo` 落后于实际仓库数、新建仓库可能拿到重复 id 的问题；用户与令牌种子补充停用 / 禁 Web 登录 / 多令牌等状态多样性。
+- standby 全量同步遇到上游已回收/丢失的 blob 时永久卡死（FR-115 验收发现）：同一记录连续 3 轮 404 后按「上游数据丢失」跳过并推进水位，失败证据保留在接收审计；移除缺 blob 记录逐页向服务端前向扫描的 O(N²) 路径（跨页覆盖判定改为顺序流缓冲）。服务重启时自动把遗留 running 轮次标记为「服务重启，轮次被中断」，不再出现永久 running 的幻影轮次；`replication` 全部子命令在 CLI 未读取到角色环境变量（按 disabled 执行）时输出显式提示，避免与服务实际角色混淆。
+- 业务仪表盘容量口径（FR-53）：仓库总数按资产行放大统计（LEFT JOIN 资产后未去重，测试站实机 3 仓库被计成 7）；现按 DISTINCT 仓库去重，资产数与字节数口径不变。
+- npm 协议经「用户配置的 registry 基址」（`…/repository/<repo>/`）发布时，仓库被分派到 Raw 处理器：packument 被当普通文件覆盖写入、`_attachments` 内的 tarball 静默丢失（真实 npm 客户端全新安装 404 tarball）。现 Dispatcher 按 format 分派 npm 仓库到 npm 处理器（两条前缀语义一致），并对齐 scoped 包在子路径 registry 下「附件键带 scope 前缀、dist.tarball basename 为裸名」的存储名差异；新增真实 npm 客户端 publish→install 端到端测试与 `/repository/` 前缀回归测试。standby 提供的 packument 中 `dist.tarball` 现按请求基址重写，不再指回主节点。
+- 消息中心及各主列表页在后台刷新失败时保留已加载数据并展示非阻断警告（可重试），不再因一次网络抖动或场景模拟失败把整页打成死胡同；无任何可用数据时仍显式报错。
+- 页眉风险通知中心：下拉列表改为独立滚动容器并阻断滚动穿透（滚到底不再带动整页滚动）；按 FR-117 口径缩略展示最近 20 条（未确认优先）并提供「查看全部消息」与空态入口；新增 60 秒轮询并联动页眉刷新事件，未读计数不再停留旧值；加载中/加载失败/零未读三种红点状态可区分；组件文案接入 i18n。
+- 修复真实控制台中集群监控刷新按钮显示原始翻译键、用户列表“允许 Web 登录”开关的无障碍名称与开关状态语义相反、移动端导航按钮缺少名称、仪表盘关注项无法定位风险批次或混入已确认批次、资产操作刷新后已展开目录暂时丢失仍存在子项，以及消息中心首屏计数已出现但分页按钮晚一帧渲染的竞态。
+- 原生协议仅接受实际 TLS、实际回环或显式 Host 白名单的 CDN HTTP 回源兼容链路中的凭据，拒绝伪造的 `X-Forwarded-Proto` 绕过；兼容链路须叠加回源 Token 或 HTTPS 回源。
+- 回环来源只按服务端看到的 TCP 对端地址判定，外部连接伪造 `Host: localhost/127.0.0.1/::1` 不再能绕过 Host 白名单、回源 Token 或原生协议明文凭据保护。
+- 修复 OCI 分块上传的最终块计费与限额；Cargo、PyPI、NuGet 在写入临时文件前预留发布额度，拒绝超限内容不再占满临时磁盘。
+- Go modules proxy 对上游 410 下架响应保持逐请求的 410 语义，不再把永久下架误判为仓库级故障触发 auto-block，保证真实 Go 客户端可以按 GOPROXY 逗号链路继续回退。
+- 修复 fresh 备用节点从水位 0 重放 `put → move → delete` 历史时永久卡在已回收 blob 404 的问题：仅压缩已有完整后继覆盖证明的历史 put，并继续原子应用同批 source delete，避免多文件 move 静默残留旧路径；原始 operation receipt、全部 applied/skipped 审计和执行子集同事务提交，重复 ID 的不同 manifest 被拒绝。relay 新增整轮成功后才推进的 `forwardable_seq`，record 与 blob 均受该前缀限制；父流 generation/watermark/valid 原子保存，失效围栏跨重启保持；同 stream/seq 的不同载荷不再可覆盖。standby 启动只恢复带原始 receipt 身份的 received intent；完成事务后的回滚快照删除改为可重试清理，不再撤销已提交资产/outbox/receipt/审计；旧开发 relay 历史升级时清空并从水位 0 重建；凭据撤销与并发校验以实际更新行数关门。
+- 修复运行期孤立 Blob GC 与发布交错时删除尚未建立引用内容的竞态。
+- 修复 NuGet 不存在包精确搜索返回 500，并以压缩包、条目数、总解压与 NuSpec 预算替代对普通大二进制条目的错误 1 MiB 限制。
+- 修复 standby 自动同步停用、同步令牌启动校验与 CLI 水位展示。
+- 设置页在旧后端 / 旧 Mock 缺少 `allowedHosts` 或 `originToken*` 字段时渲染崩溃（对 undefined 调 `join`）；表单初始化与设置读取均做字段归一化兜底。
+- 修复全量并行跑 web 测试偶发超时：懒加载路由 + 图表重页面超过 `findBy*` 默认 1s 等待；统一放宽 testing-library 异步等待并给 jsdom 的 ResizeObserver 固定尺寸 stub，避免 recharts 容器 0×0 空跑。
+
+> v0.8.0 尚未发布；未发布段只记录当前工作树的实际变更。每条 FR 的当前状态以 `docs/PRD.md` 为准，级联复制、邻接集群页面/监控和逐跳凭据已完成工作区实现，真实整期验收、版本提交、tag、远程 CI 与 Release 尚未执行。
+
 ## 0.7.1（2026-08-21）
 
 ### 新增

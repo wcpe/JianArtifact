@@ -2,7 +2,7 @@
 
 ## 状态
 
-已接受
+已被 ADR-0024 取代。
 
 ## 背景
 
@@ -13,10 +13,10 @@ ADR-0014 要求物理永久删除失败时回滚整批操作。然而一个批�
 ## 决策
 
 1. 取代 ADR-0014。引用归零的同步回收定义为：blob 通过同一卷原子移动离开活动 blobstore，进入持久隔离区；移动成功后该字节立即不再被任何正常读路径、下载、审计查询或复制拉取视为活动制品内容。
-2. 资产、格式元数据、审计、操作 intent 与操作 outbox 在完成状态转换的同一短 SQLite 事务中提交。outbox 保存 `operationId`、来源节点、排序实体键、项目数、清单摘要、版本元组、逐项变更和原始操作者快照，并在同一事务分配既有全局复制 `seq`。复制拉取将 completed outbox 作为单个不可分割 operation envelope 按该 `seq` 排序；逐项变更不独立进入按 `since` 分页的流。
+2. 资产、审计、操作 intent 与操作 outbox 在完成状态转换的同一短 SQLite 事务中提交。outbox 只保存当前 hosted 仓库内的 `asset` 项，包含 `operationId`、来源节点、排序实体键、项目数、清单摘要、版本元组、逐项变更和原始操作者快照，并在同一事务分配既有全局复制 `seq`。格式元数据不作为 wire item，由格式感知删除/重建路径在源端和目标端维护。复制拉取将 completed outbox 作为单个不可分割 operation envelope 按该 `seq` 排序；逐项资产变更不独立进入按 `since` 分页的流。
 3. 隔离移动失败、数据库事务失败或操作在 `completed` 前崩溃时，按持久前镜像恢复 blob 和业务状态，整批不对外可见。`completed` 后隔离区的永久 unlink 是可重试 GC：失败只保留隔离垃圾记录并告警，不回滚已经完成的业务操作，也不将隔离内容重新暴露为 blob。
 4. 协调器继续覆盖所有本地 `asset.blob_hash` 引用变更，包括协议发布/覆盖、proxy cache、格式派生 metadata 关联 asset、管理操作、仓库删除、迁移与复制。文件 IO 一律在 SQLite 写锁外完成；`prepared`、`staged`、`committing`、`completed`、`rolling_back` intent 与读门保证请求只读取一个完整视图或等待终态。
-5. 对端按 outbox 完整清单收齐、校验、补齐 blob 后原子应用。`sync/pull` 的页大小不得拆分一个 operation envelope；即使其项目数超过普通单页变更数，也须完整返回该至多 500 项的 envelope，watermark 只可在其完整交付后推进到该 `seq`。若发生版本冲突，接收节点按逐项版本元组产生完整 successor 操作；successor 同样以本地 outbox 原子发布，不依赖 ADR-0013 的业务写后非事务日志追加。
+5. 对端按 outbox 完整清单收齐、校验、补齐 blob 后原子应用。`sync/pull` 的页大小不得拆分一个 operation envelope；一次业务规划最多影响 500 个实际制品，移动可产生 delete+put，故 envelope 最多 1000 个 wire asset 项，并且须完整返回；watermark 只可在其完整交付后推进到该 `seq`。在 `disabled` 历史对等兼容模式发生版本冲突时，接收节点按逐项版本元组产生完整 successor 操作；successor 同样以本地 outbox 原子发布，不依赖 ADR-0013 的业务写后非事务日志追加。ADR-0023 主备拓扑是明确例外：primary 是唯一权威，standby 的更高本地遗留版本由 primary 原批整批覆盖，不生成 successor、普通变更或 outbox；相等版本元组而内容不同视为损坏，拒绝该批且不前进 watermark。
 
 ## 理由
 

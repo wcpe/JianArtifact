@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/wcpe/JianArtifact/actions/workflows/ci.yml/badge.svg)](https://github.com/wcpe/JianArtifact/actions/workflows/ci.yml)
 [![Release](https://github.com/wcpe/JianArtifact/actions/workflows/release.yml/badge.svg)](https://github.com/wcpe/JianArtifact/actions/workflows/release.yml)
-![版本](https://img.shields.io/badge/version-0.7.0-blue.svg)
+![版本](https://img.shields.io/badge/version-0.7.1-blue.svg)
 ![许可](https://img.shields.io/badge/license-MIT-green.svg)
 ![语言](https://img.shields.io/badge/language-Go%20%2B%20React-blue.svg)
 
@@ -30,6 +30,7 @@
 - **全局搜索**：跨仓库制品搜索 + Header 搜索栏，支持 `repo:` / `format:` / `ext:` 等高级表达式与浏览页内过滤。
 - **制品治理**：内容寻址 blob 存储 + 校验和，single-flight 并发合并，大文件全程流式。
 - **单二进制交付**：前端产物经 Go embed 内嵌，`CGO_ENABLED=0` 静态编译，零外部依赖；Docker / Compose / systemd 多路径部署。
+- **主备复制（0.8.0 开发中）**：工作区已实现 root primary、单父 standby、多子 relay standby 的单向 GET pull；级联中继、逐跳凭据和邻接监控已接入代码与 Mock，但 0.8.0 仍需真实多节点/浏览器验收，尚未发布。
 
 ## 快速开始
 
@@ -58,6 +59,7 @@ Makefile · Taskfile.yml       前端顶层入口 / 后端任务编排
 
 ## 文档导航
 
+- 文档总览：[`docs/README.md`](docs/README.md)
 - 需求：[`docs/PRD.md`](docs/PRD.md)
 - 架构：[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 - 接口：[`docs/API.md`](docs/API.md)

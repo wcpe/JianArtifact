@@ -1,125 +1,115 @@
 # 架构设计：JianArtifact
 
-> 系统当前真貌（HOW）。始终原地更新到现状；结构 / 机制变了就改它。决策的"为什么"见 `docs/adr/`。
+> 本文是当前代码的架构真源（HOW）。它区分已落地实现和发布状态：当前发布版本由根目录 `VERSION` 标记；`0.8.0` 尚未发布，但本工作区已落地级联 relay 与邻接控制台实现，仍需整期真实环境验收后才能发布。
 
 ## 1. 定位与边界
 
-JianArtifact 是一个**自托管、单二进制交付的多格式制品仓库**。它：
+JianArtifact 是自托管、单二进制交付的多格式制品仓库，提供：
 
-- **是**：托管（hosted）+ 代理（proxy）+ 聚合（group）制品的服务，含管理端、原生协议端点与 Nexus 迁移能力。
-- **不是**：CI/CD 平台、代码托管、制品构建器、公共 SaaS。
+- Raw、Maven、npm、Docker/OCI、Cargo、PyPI、Go modules、NuGet 等制品托管、代理和聚合；
+- 管理端、原生协议端点、用户/仓库/ACL 和 API Token；
+- Nexus OSS 在线 REST、离线目录和离线包迁移；
+- SQLite 元数据、文件系统 blob、单机部署和开发中的主备复制。
 
-外部边界：
+它不是 CI/CD 平台、代码托管平台、制品构建器或公共 SaaS。
 
-- **北向**：原生包客户端（curl/mvn/npm…）走各格式协议端点；管理员 / CI 走管理 REST API 与内嵌 web 管理端。
-- **南向**：proxy 仓库回源到远程上游（Maven Central、npmjs 等）；迁移域读取 Nexus OSS（REST / 原生目录 / 离线包）。
-- **落地**：元数据落 SQLite，制品内容落文件系统 blob 存储。默认无外部依赖。
+## 2. 当前运行形态
 
-## 2. 模块与依赖
+每个实例都是一个独立的 Go 进程或容器，前端静态资源由 Go embed 内嵌。实例本地持有自己的 SQLite 和 blob 目录，不共享数据库、文件卷或进程内状态。
 
-单 monorepo，前后端分置，共享契约。
-
-```
-JianArtifact/
-├─ apps/
-│  ├─ server/   Go 后端（Gin + sqlx + embed）
-│  ├─ web/      React 管理端（Mantine 7 + i18next）
-│  └─ wiki/     UI 组件 / 业务模式验收站
-├─ packages/
-│  ├─ ui/                共享 Mantine 组件库、主题、设计令牌
-│  ├─ devmock/           浏览器 + Node 双端 Mock、场景包
-│  ├─ eslint-config/     前端共享严格 ESLint
-│  └─ typescript-config/ 前端共享严格 TS
-├─ api/        OpenAPI 契约真源（openapi.yaml）+ 生成配置
-├─ deploy/     Dockerfile / compose / .env.example / 部署脚本 / helm
-├─ docs/       PRD / ARCHITECTURE / API / ROADMAP / ADR / specs / OPERATIONS
-└─ scripts/    质量门与容器化开发入口
+```text
+原生客户端 / CI / 管理员
+          │
+          ▼
+HTTP(S) 入口（可选 CDN / 反向代理）
+          │
+          ▼
+JianArtifact 单进程
+   ├── 管理 REST + 内嵌 Web
+   ├── Raw/Maven/npm/OCI/Cargo/PyPI/Go/NuGet 协议
+   ├── SQLite 元数据
+   └── 文件系统内容寻址 blob
 ```
 
-### 2.1 后端分层（`apps/server/internal/`，依赖单向向下）
+当前工作区实现为静态级联树：root primary 唯一可写；每个 standby 只配置一个直接父节点，子节点主动 GET 拉取；开启 relay 的 standby 可服务多个直接子节点。节点不共享数据库、文件卷或全局拓扑。
 
+## 3. 模块与依赖方向
+
+后端位于 `apps/server/internal/`，依赖单向向下：
+
+```text
+api（HTTP handler / 中间件）
+  → protocol（Raw/Maven/npm/OCI/Cargo/PyPI/Go/NuGet）
+  → domain（仓库、制品、复制、迁移、观测）
+  → repository / storage / migration / auth / upstream
+  → persistence（SQLite） + blobstore（文件系统） + archive（备份包格式，纯叶子层）
+
+config 为横切配置层；web 是 go:embed 的前端静态资源。
 ```
-api          HTTP 路由、中间件（鉴权 / 限流 / 日志）、管理端点
-  ↓
-protocol     Raw / Maven / npm 协议适配（请求解析、元数据、客户端语义）
-  ↓
-domain       仓库、制品、迁移等领域逻辑（编排能力域）
-  ↓
-repository · storage · migration · auth · upstream   能力域
-  ↓
-persistence（SQLite 访问）  +  blob 存储（文件系统，内容寻址）
-config       横切，供各层读取，不反向依赖业务层
-web          go:embed 前端 dist（由构建注入）
-```
 
-**依赖规则（不变量，见 `.claude/rules/architecture-invariants.md`）**：上层依赖下层，禁止反向穿透；`protocol` / `api` 不得直连 `persistence`；无循环依赖。
+`api` 和 `protocol` 不直接访问 SQLite；鉴权和 ACL 在后端完成，前端只负责展示和交互。前端依赖方向为 `packages/ui` → `apps/web` / `apps/wiki`，不得反向依赖应用。
 
-### 2.2 前端依赖
+技术栈固定为 Go、Gin、sqlx、纯 Go SQLite、React、TypeScript、Vite、Mantine 和 i18next；API 设计真源为 `api/openapi.yaml`。
 
-`packages/ui`（真源）→ 被 `apps/web`、`apps/wiki` 消费；`packages/ui` 不反向依赖 `apps/*`。`apps/web` 为管理端全页面（Mantine 7 + i18next + react-router + typed API client + 鉴权上下文），控制台外壳沿用旧项目视觉（`AppShell layout="alt"` 可折叠分段侧栏 + 密度令牌 + 品牌蓝 logo，对齐 ADR-0003，主色 Mantine 原生蓝、色彩模式 `auto`）；开发/测试期经 `packages/devmock` 的 MSW 双端拦截（浏览器 worker + Node server + 内存态 store）脱离后端运行，并经子路径 `@jianartifact/devmock/schema` 仅做类型级契约复用；生产构建不含 MSW/devmock。`apps/wiki` 为组件 / 业务模式验收站（AppShell 画廊 + 展台注册表），复用 `packages/ui` 组件核验共享主题与状态态一致性，脱离后端且不内嵌进后端二进制。共享 `eslint-config` / `typescript-config` 供各前端工程继承。
+## 4. 数据真源与主要模型
 
-## 3. 数据模型
+- **元数据真源**：纯 Go `modernc.org/sqlite`，WAL、外键和 busy timeout；迁移位于 `apps/server/internal/persistence/migrations/`。
+- **内容真源**：文件系统内容寻址 blob。`asset` 只保存路径、哈希、大小、类型和时间；blob 校验通过、元数据事务提交后才对外可见。
+- **身份与权限**：`user`、`api_token`、`revoked_token`、`acl`；口令和令牌只保存哈希/摘要，不保存明文。
+- **仓库与制品**：`repository`、`asset`、格式元数据和发布策略；仓库配置中的私有上游只保存受限逻辑引用，实际凭据运行时读取。
+- **迁移**：`migration_task` 保存状态、计划、检查点、报告和加密来源凭据；任务重启不自动续跑，按运维流程显式恢复。
+- **备份与搬迁**：`backup_package` 只登记包的元数据与规模，包体是 `${JIAN_DATA_DIR}/backups/` 下的 tar.gz（`manifest.json` + `VACUUM INTO` 快照 + `blobs.index` + 内容寻址 blob）。搬迁的传输单位是包而非实时复制流，包内不含任何密钥或节点本地配置（见 `docs/adr/0027`）。每个包生成时额外写**侧车索引** `${JIAN_DATA_DIR}/backups/<packageId>.index`（与包内 `blobs.index` 同格式，每行 `<sha256> <size>`）：全量包的侧车 = 该包完整 blob 集合，**差包的侧车 = 应用后的完整并集**（因此差包可再派生差包）。作用：算基线 blob 集合若靠流式扫描整个基线归档是 O(基线大小)，侧车把它降到 O(索引大小)。差包 manifest 含可选 `expected` 字段（`{count,totalBytes,indexSha256}`，全量包不写 → `omitempty` 向后兼容），表达"应用后应有的完整集合摘要"，导入端据其与本地 ∪ 差集比对判断基线是否就位。
+- **导入记录**：`backup_import` 记录每次「从 URL 拉取 / CLI 直传 / 分片上传备份包并导入」的尝试，异步执行、跨重启可查；状态机 `queued → fetching → staging → pending_restart → done`，失败为 `failed` 并带 `error_code`。它只登记进度与结果，真正的数据库替换由启动期 `ApplyPendingRestore` 在 `persistence.Open` 之前完成（先做 `pre-restore-<ts>/` 回滚备份、再原子替换）。
+- **分片上传会话**：`backup_upload` 记录一次 Web 分片上传会话（`upload_id`/`file_name`/`total_bytes`/`chunk_size`/`status`/`sha256`/`operator`/`created_at`/`updated_at`/`expires_at`），状态机 `initialized → receiving → completed`，随时可 `aborted`；`backup_upload_chunk` 记录每个已落盘分片（`upload_id`+`chunk_index` 主键、`size`、`sha256`），与 `backup_upload` 外键级联删除。`uploadedChunks` 以磁盘上真实存在的分片为准（续传不依赖库记录是否完好）；`abort` 只删磁盘目录、库记录保留为 `aborted` 供审计，由启动期 `ReconcileExpired` 按 `expires_at` 清理过期会话。
+- **当前复制基础**：`repl_change` 保存 root primary 业务写入的根源序列；`replication_operation_outbox` 保存完整 operation envelope；relay standby 另以 `replication_relay_record` 保存已经成功应用的原始 v2 record 作为 inbox，并以 `replication_relay_frontier.forwardable_seq` 限制直接下级只能读取整轮成功后的 record/blob 连续前缀；`replication_operation_receipt` 固化原始 generation/source/seq/operationId/manifest，`repl_sync_log`、`replication_apply_log` 保存各节点本地同步和接收结果。
+- **当前观测**：`replication_sync_event`、`replication_apply_event`、`audit_log` 和风险确认表只表达当前实例事实，不参与业务复制。
+- **当前凭据**：primary 保存 `replication_pull_credential` 的不可逆摘要，standby 保存绑定本地数据目录密钥的密文；`replication-credential.key` 不复用 JWT 或迁移密钥。
+- **级联边界**：父节点只按逐跳凭据服务直接子节点；观测以本节点父边、子边和有界上报快照为范围，不读取孙节点。relay blob 当前采用保守保留策略，待直接子边确认回收语义进一步完善后再做定向清理。
 
-**元数据真源 = SQLite**（`modernc.org/sqlite`，纯 Go 无 CGO），经 sqlx 访问，开启 WAL、`foreign_keys=ON`、`busy_timeout`；schema 由 `internal/persistence/migrations/*.sql` 迁移脚本管理，内置极简迁移器按文件名字典序前向执行，`schema_migrations` 表记录已应用版本。已落地的表：
+## 5. 已落地的通用机制
 
-- **user**：账号（唯一）、argon2id 口令哈希、角色（admin/user）、状态（active/disabled）、创建 / 更新时间。明文口令不落库。内置 `anonymous` 用户（0.6.0，迁移创建，口令哈希为非法值 `!` 永不通过验证）：作为 ACL 匿名主体，不可登录 / 删除 / 改密 / 停用。
-- **api_token**：仅存 sha256 摘要（唯一）、所属用户、名称、创建 / 吊销时间；明文令牌仅签发时返回一次，不入库。
-- **revoked_token**：登出会话 JWT 的 `jti` 与过期时间，直至过期前拒绝复用（无状态 JWT 的短期黑名单）。
-- **repository**：名称（唯一）、格式（raw/maven/npm）、类型（hosted/proxy/group）、可见性（public/private）、配置（JSON 文本，proxy 的 `remoteUrl` / group 的 `members` 等）、创建 / 更新时间。
-- **acl**：主体（用户）× 仓库 × 动作（read/write/admin），唯一约束去重；admin 蕴含 read/write，write 蕴含 read。
-- **asset**（0.3.0）：仓库内制品路径元数据——路径、blob 内容哈希、大小、Content-Type、创建 / 更新时间；`UNIQUE(repository_id, path)`，所属仓库删除时级联。
-- **setting**（0.6.0，0.7.0 扩展）：实例级键值设置（key 主键 + value 文本）。键包括 `anonymous_access_enabled`（匿名开关，默认 `true`）、`public_url`（对外基础 URL，FR-87/89，节点本地，不参与复制）、`upstream_timeout`（回源超时秒，FR-89）、`repl:enabled` / `repl:peer_url` / `repl:peer_token` / `repl:sync_interval`（复制开关 / 对端 / 同步间隔，FR-88/89）与 `repl:watermark:*` / `repl:last_*`（复制状态，FR-85/86）。匿名鉴权单点收敛于 `RepositoryService.CanAccess`（`subjectID==0` 即匿名：开关关一律拒绝；开则 public read 放行，否则按 anonymous 用户 ID 查 ACL），协议层与 API 层共用。基础配置（匿名开关 / 对外 URL / 回源超时 / 同步间隔）经 `GET/PUT /api/v1/settings` 由 web 设置页读写、**运行时生效**（FR-89）。
+- **流式处理**：上传、下载、回源和 blob 复制使用流，不把大文件整体读入内存。
+- **内容校验**：blob 按哈希校验后落盘；原子制品操作通过统一协调器维护引用、隔离回收和失败恢复。`asset_mutation.origin=received` 固化入站 intent 身份，standby 重启只恢复当前复制接收 intent；业务完成事务提交后，回滚快照仅作可重试清理，不再反向撤销已发布的 outbox/receipt/审计。
+- **协议鉴权**：管理会话使用 JWT；机器/协议访问使用 API Token 或对应协议凭据；ACL 由后端统一判断。
+- **代理回源**：proxy 按需回源并缓存；出站 URL、DNS、重定向和凭据头按安全策略校验，防止内网访问、DNS 重绑定和凭据外泄。
+- **格式启停**：`JIAN_ENABLED_FORMATS` 在启动时决定协议路由和格式后台任务；未启用格式返回 404。
+- **部署探活**：`/healthz` 表示存活，`/readyz` 检查 SQLite 和 blob 目录是否就绪。
 
-- **migration_task**（0.4.0）：Nexus 迁移任务——状态（planned/running/completed/failed/cancelled）、来源类型与配置 JSON、凭据引用名（无明文）、冲突策略、plan/checkpoint/report JSON、错误摘要与时间戳。状态机与 discover 落库 / 显式 start / 崩溃标 failed 见 ADR-0012。
-- **repl_change**（0.7.0，FR-83）：复制变更日志——本地每次写操作（制品 / 仓库 / ACL / 用户 / 令牌 / 配置的 put/delete）落一条日志：全局递增 `seq`、写入节点 `node_id`、操作 `op`、实体类型与跨节点自然键 `entity_key`、变更后数据 JSON `data`、时间戳 `ts`。供节点间复制（ADR-0013）；`idx_repl_change_entity(entity_type, entity_key, ts)` 支撑 LWW 冲突裁决。
-- **repl_sync_log**（0.7.0，FR-88/95）：复制同步历史——每次同步（`doSync`）落一条：时间 / 对端 / 进行中-成功-失败 / 起始-结束水位 / 变更与应用与失败条数 / 补拉 blob 数 / 变更实体构成 `entity_counts` / 错误摘要；供集群页同步历史可视化与二级页（FR-98，按 fromSeq→toSeq 反推 `repl_change` 明细）。
-- **audit_log**（0.7.0，FR-38）：审计日志——全部管理写操作（制品上传/删除、仓库/ACL、用户、令牌、设置）落一条：操作者 `actor` / 时间 `ts` / 操作类型 `action` / 对象 `entity_type`/`entity_key` / 关联仓库 `repo` / 补充 `detail` / 结果 `result` / 来源 IP `ip`；服务管理端「审计日志」页（不参与复制，仅本节点本地写操作记录）。
+## 6. 当前已落地的主备级联复制
 
-**blob 内容真源 = 文件系统**：按内容哈希（如 sha256）分片目录寻址；元数据 asset 记录哈希引用。一致性约束：元数据事务提交成功后 blob 才对外可见（见 §5）。
+当前代码支持 `disabled`、`primary`、`standby` 三种静态角色：
 
-## 4. 接口
+- `primary` 是唯一业务写节点，提供能力协商、v2 records 和 blob 三类复制 GET；不运行出站复制调度器。
+- `standby` 可读、可登录、可健康检查，但业务、管理和协议写入由 HTTP 栅栏及领域写门拒绝；导入直接父凭据后，调度器只向该父节点拉取。
+- **写入冻结窗口（FR-135）**：写栅栏已从「静态角色只读」扩展为运行时可冻结。所有写服务（仓库、设置、制品、格式元数据、发布策略、用户、令牌、迁移、认证）共用同一个 `FreezeController` 实例；冻结期间 HTTP 层以 503 + `write_frozen` 拒绝本地业务与管理写入，仅放行读方法、登录、维护命名空间与备份导入/上传出口。只替换其中一部分写路径会让"停写"语义漏网，故必须统一走同一控制器。
+- 开启 `JIAN_REPLICATION_RELAY_ENABLED=true` 的 standby 可作为复制源，为任意多个直接 child 提供原样 v2 records/blob；relay 不写本地业务 `repl_change`，每条成功应用后先写 `replication_relay_record` inbox，整轮 records 与 blob 全部成功后才推进可转发前缀。
+- 复制使用 v2 operation envelope；缺失 blob 流式补齐，完整应用成功后才推进源 stream watermark；复制接收、同步历史和观测事件写在各节点本地。
+- 当前复制传输固定 GET/HTTP/1.1；`streamGeneration`、源节点和源序号在 relay 间保持不变，凭据按父子边绑定。
+- `public_url`、角色、复制配置、复制状态、审计和观测均按节点本地处理，不作为业务变更复制。
 
-- **管理 REST API**：用户 / 令牌 / 仓库 / ACL / 迁移任务的 CRUD 与操作，契约见 `docs/API.md` 概览、`api/openapi.yaml` 为唯一真源。制品删除（FR-102/103）：单条经协议 `DELETE /repository/{repo}/{path}`（仅全局管理员，管理端文件详情面板提供删除按钮）；批量经管理端点 `POST /api/v1/repositories/{name}/assets/batch-delete`（仅 admin，body `paths` ≤500，响应 `deleted/failed`，逐条复用 `AssetService.Delete` 并写 `asset.delete` 审计，部分失败不整体回滚）。
-- **协议端点**：Raw / Maven / npm 各按其原生协议暴露路径（GET 拉取、PUT/POST 发布、元数据端点）；不进 OpenAPI 契约（由各格式规范定义），但受同一鉴权 / ACL 中间件保护。
-- **健康端点**：`/healthz`（存活）、`/readyz`（就绪，含 SQLite 与 blob 目录自检）。
-- **前端 client**：据 `api/openapi.yaml` 生成，与 devmock 比对防漂移。
+## 7. 0.8.0 级联树实现与发布边界
 
-## 5. 关键机制
+目标拓扑为有向树：根 primary 唯一可写，每个非根节点只有一个直接父节点，每个节点可挂多个直接子节点。子节点主动向直接父节点 GET 拉取；具备 relay 能力的 standby 只向直接子节点提供已经完整接收、校验和原子应用的根源记录。
 
-- **契约优先生成**：`api/openapi.yaml`（唯一真源）→ `oapi-codegen` 生成 Go server 接口与类型；前端生成 client；devmock 据同一契约比对。改契约 → 重生成 → 契约测试守护。
-- **单飞合并（single-flight）**：同一制品并发回源合并为一次上游拉取，其余等待者复用结果；上游失败时等待者一致失败并可回退缓存。
-- **流式传输**：上传 / 下载 / 回源全程 `io.Reader` 流式，边收边校验哈希边落盘，不整体入内存。
-- **内容寻址与校验**：blob 按哈希存储，读取时可校验；写入 → 校验和匹配 → 落盘 → 元数据事务提交 → 对外可见。
-- **代理回源与缓存**：proxy 按需回源、缓存 blob 与元数据；上游超时 / 5xx / 断连时重试与降级，不因单上游阻塞整体（M3 引入断路器 FR-43）。**回源 IPv4 优先**（tcp4 Dialer），规避宿主无 IPv6 出口而 DNS 返回 AAAA 优先导致的连接延迟。
-- **group 聚合读**（FR-110~114）：先串行快查全部成员本地缓存（hosted/已缓存 proxy 命中即返回，保持成员顺序语义；跳过 offline 成员）；本地全未命中则对未被阻止的 proxy 成员**并行回源**（首个成功即取消其余），全部失败快速 404。每个成员限时 `groupMemberTimeout`（3s）。**404 负缓存**（FR-111）：对明确 404 做短窗缓存（TTL 60s），同路径缺失制品秒级 404；上游故障/成员被跳过导致的「不可判定 404」不缓存。**auto-block 状态机**（FR-112）：proxy 上游失败进入 AUTO_BLOCKED（翻倍退避 40s→80s→…），阻止窗口内零连接快速失败，后台 HEAD 探测成功自动恢复。**online/offline 开关**（FR-113）：proxy/group 仓库可手动置 offline，持久化且不参与复制，group 读跳过 offline 成员、offline proxy 单独读不回源。**连接状态展示**（FR-114）：管理端仓库列表显示上游连接状态徽章，详情页 online 开关 + 手动重测。
-- **迁移状态机**：迁移任务持久化于 SQLite，支持中断续传、幂等、冲突策略；异步执行、进度可查、产出报告。
-- **鉴权**：JWT(HS256) 会话 + API Token；中间件统一校验，ACL 在后端判定（前端不替代授权）。
-- **配置**：环境变量 / 配置文件注入；凭据引用名 → 环境变量注入，不入库不进日志。
-- **复制变更日志（FR-83，见 ADR-0013）**：domain 层各写路径（制品 / 仓库 / ACL / 用户 / 令牌 / 可复制配置）在业务写成功后经 `ChangeRecorder` 接口落一条 `repl_change`（记录失败不阻断业务，靠对账兜底）；节点本地配置（`public_url` 与 `repl:*`）不记录、不应用对端变更，避免不同节点的域名、令牌和调度状态互相覆盖；`ReplicationService.Apply` 按 `(ts, node_id)` 后写覆盖（LWW）把对端变更应用到本地业务表，删除以 tombstone 表达。复制通道全走 GET 拉取、禁止 PUT 推送（规避 Cloudflare Tunnel / CDN 上传体积限制）；传输与调度由 FR-84 / FR-85 落地。**历史数据全量对齐**：启动时 `ReplicationService.BackfillHistory` 一次性为存量实体（用户 / 令牌 / 仓库 / ACL / 制品，顺序满足 Apply 依赖）生成 put 日志，使对端 `since=0` 全量拉取覆盖集群启用前的历史数据；`repl:backfill_done` 幂等，排除内置 anonymous 与已吊销令牌，不回填 setting。
-- **复制协议（FR-84）**：`GET /api/v1/cluster/sync/pull`（按 seq 增量拉取，`since=0` 即全量）+ `GET /api/v1/cluster/sync/blob/{hash}`（blob 流式，只传缺失）；专用同步令牌 `JIAN_SYNC_TOKEN` 鉴权（Bearer，常量时间比较，未配置则端点 404）。拉取方 `ReplicationClient.Sync` 一站式：循环 Pull → Apply → 缺失 blob 补拉（`blobstore.Exists` 命中跳过），返回推进后水位供调度器（FR-85）存本地。复制客户端强制 HTTP/1.1，规避部分 CDN 对 HTTP/2 流的 `INTERNAL_ERROR`；端点为非契约，经 `WithProtocolRoutes` 注册。
-- **复制调度（FR-85）**：`ReplicationScheduler` 后台循环按 `JIAN_SYNC_INTERVAL`（默认 5s）从对端 `Sync` 一次（拉取模型下轮询既是近实时同步、也是定期对账兜底）；本地无对端水位（`setting` 键 `repl:watermark:<peerURL>`）时自动 `since=0` 全量初始化；同步成功后持久化水位，重启续拉不重拉全量。配置 `JIAN_SYNC_PEER_URL` 即启动；两端各自配对方即双向。
-- **集群管理面（FR-86/88/90）**：`ReplicationScheduler` 每轮检查持久化启停开关 `repl:enabled`（缺省 true），关闭时跳过同步；同步结果写 `repl:last_sync_at` / `repl:last_error`；对端配置（基址 `repl:peer_url` / 令牌 `repl:peer_token`）与开关均持久化于 setting，调度器每轮从 setting 读取。CLI `jianartifact replication status/start/stop` 查看状态与启停；管理端点 `GET/PUT /api/v1/cluster`、`POST /api/v1/cluster/sync-now`、`GET /api/v1/cluster/sync-logs`（仅 admin）。web 侧配置统一收敛于「设置」页（FR-90，仅 admin）：基础设置 tab（匿名开关 / 对外 URL / 回源超时 / 同步间隔）与集群 tab（对端 URL / 令牌 / 自动同步开关）；「集群」页专注同步状态（节点 ID / 对端 / 令牌配置态 / 水位 / 最近同步与错误）+「立即同步」按钮 + 同步历史。**同步历史可视化**：每次同步（`doSync`）落一条 `repl_sync_log`（时间 / 对端 / 进行中-成功-失败 / 起始-结束水位 / 变更与应用与失败条数 / 补拉 blob 数 / 变更实体构成 `entity_counts` / 错误摘要），web 集群页按时间倒序分页展示，实时看到"同步了什么、进度与结果"。**同步历史二级页（FR-98）**：`GET /api/v1/cluster/sync-logs/:id/changes` 按该次同步的 `fromSeq→toSeq` 从 `repl_change` 分页反推具体变更（实体类型 / 操作 / 对象 / 时间），集群页同步历史行可点击进入详情页查看。**审计日志（FR-38）**：全部管理写操作经 handler 层 `Handlers.AuditLog`（协议层经 `RawHandler.SetAudit` 注入 `AuditFunc`）落 `audit_log` 表，`GET /api/v1/audit-logs`（分页 + actor/action/repo/时间筛选，仅 admin）供管理端「审计日志」页查看；审计不参与复制。**配置对端 ≠ 开始同步（FR-88）**：PUT 只入库，调度器据 `repl:enabled` 决定是否轮询；`sync-now` 手动触发不受开关限制。环境变量 `JIAN_SYNC_PEER_URL` / `JIAN_SYNC_TOKEN` 仅作首启初始默认写入 setting（web 可覆盖）。
-- **对外基础 URL（FR-87/89）**：对外域名（如 `https://repo.wcpe.top`）配置于 `JIAN_PUBLIC_URL` 环境变量（首启兜底写入节点本地 `setting` 键 `public_url`）。所有对外 URL 生成（npm `dist.tarball` 重写、各格式 usage 片段）优先读本节点 setting（web 设置页可运行时修改），其次回退环境变量 / `X-Forwarded-Proto` + 请求 Host 推断——适配 CDN 回源（源站收到回源 Host 而非客户端域名），隐藏源站 IP；`public_url` 不参与复制，每个节点必须配置自己的公开域名。
-- **基础配置动态生效（FR-89）**：匿名开关 / 对外 URL / 回源超时 / 同步间隔入库 `setting`，经 `GET/PUT /api/v1/settings`（仅 admin，非契约端点）读写，写后**不重启即生效**：同步间隔由 `ReplicationScheduler` 每轮读 setting（变化则重置 ticker，缺省回退 env/默认 5s）；对外 URL 由 usage 与 npm 生成处动态读；回源超时经 `Handlers` 的 `OnUpstreamTimeoutChange` 回调即时同步到 `upstream.Client`（RWMutex 保护替换 `http.Client`）。env 值仅首启兜底写入，web 可覆盖（与对端配置同待遇）。
+当前实现与发布前仍需保持的边界：
 
-## 6. 部署
+- 中继记录与本地业务 `repl_change` 分离，保留根源 stream generation、source node、seq 和 operationId；
+- 每条父子边独立持有凭据、watermark 和观测状态；子边观测按 node ID 分开保存，不以单个 standby 快照覆盖其他 child；
+- operation envelope 不拆批、不重编号、不生成本地 successor；relay blob 当前采用保守保留策略；
+- 父节点只知道直接子节点，页面只展示本节点和直接邻接边，不声称掌握全局拓扑；
+- 不做自动选主、自动换父、双主写入或跨分支合并；提升/重新挂接必须人工围栏并生成新的 stream generation。
 
-- **默认形态**：单静态二进制（`CGO_ENABLED=0`，前端 dist 经 `go:embed` 内嵌），或单容器。数据 = SQLite 文件 + blob 目录，用命名卷 / 主机目录持久化。
-- **容器**：多阶段 Dockerfile（node 构建前端 → golang 编译内嵌 → distroless/static 运行，非 root，`HEALTHCHECK` 打 `/readyz`）。
-- **编排**：docker-compose（单服务 + 命名卷 + `.env`）；远程部署脚本（SSH：Docker/Compose 或 rootless systemd 二进制，原子切换 + 回滚）；Helm/K8s（M3 交付，单实例 RWO 卷 + `Recreate`）。
-- **拓扑**：默认单进程单实例；无外部中间件。M5 才评估多节点 / 外部存储（需 ADR）。
-- 运维细节见 `docs/OPERATIONS.md`，部署交付物见 `deploy/`。
+实现与验收见 [`docs/specs/0.8.0-primary-standby-replication.md`](specs/0.8.0-primary-standby-replication.md)、[`docs/specs/0.8.0-atomic-asset-replication.md`](specs/0.8.0-atomic-asset-replication.md) 和 [`docs/specs/0.8.0-cluster-observability.md`](specs/0.8.0-cluster-observability.md)。自动化已覆盖多跳、多子边、失败轮次隔离和已回收历史压缩；本地真实进程已覆盖水位 0 的 fresh relay→child 重建、operation、单子边断网恢复、relay/child 重启、逐跳凭据轮换和单 relay 双子边。外部网络、Linux arm64、远程 CI 与发布门仍需独立证据。
 
-## 7. 关键裁决与不做项
+## 8. 接口与部署
 
-重大取舍见对应 ADR：
+- 管理 REST 的字段和路径以 `api/openapi.yaml` 为唯一真源；生成 Go 接口、前端 client 和 devmock 后再更新概览文档。
+- 原生协议端点不进入 OpenAPI，由各格式规格定义，但复用后端鉴权、ACL、写门和生命周期协调器。
+- 当前部署路径是单二进制、Docker/Compose、rootless systemd 或单实例 RWO Helm/Kubernetes；多节点实例使用独立数据目录。
+- `JIAN_REPLICATION_PRIMARY_URL` 在当前代码中表示 standby 的直接父节点基址（历史变量名保留）；`JIAN_REPLICATION_RELAY_ENABLED` 控制 standby 是否向多个直接 child 提供 relay。自动选主、自动换父和运行时拓扑编辑仍不支持。
 
-- **ADR-0001**：后端选 Go（替代旧 Rust 方案）。
-- **ADR-0002**：元数据用纯 Go SQLite（`modernc.org/sqlite`）+ 文件系统 blob，非外部 DB / 对象存储；与 NORA「文件系统即真源、无数据库」路线不同（本项目取 SQLite 元数据真源，向前追加迁移）。
-- **ADR-0003**：前端沿用旧项目 UI 栈 Mantine 7 + i18next。
-- **ADR-0004**：API 设计优先，手写 OpenAPI + oapi-codegen。
-- **ADR-0005**：单二进制交付，前端经 Go embed 内嵌。
-- **ADR-0006**：monorepo 工作区——前端 pnpm + Turborepo + Makefile，后端 Go Task。
-- **ADR-0007**：部署编排（Docker/Compose 主路径 + Helm/K8s + rootless systemd 可选）。
+## 9. 活跃决策与明确不做
 
-**当前不做**：外部数据库 / 对象存储默认后端、消息队列、分布式协调、多节点 HA、CGO 依赖——均属后续期可选方案，须先立 ADR 再引入。
+活跃决策见 [`docs/adr/README.md`](adr/README.md)，重点包括 SQLite/blob（ADR-0002）、OpenAPI-first（ADR-0004）、单二进制（ADR-0005）、部署编排（ADR-0007）、v2 operation envelope（ADR-0020）以及 0.8.0 开发版已实现的主备/级联边界（ADR-0023、ADR-0026）。
+
+当前不做：外部数据库作为默认后端、S3 作为默认 blob、消息队列、全局分布式协调、自动选主、自动换父、双主写入、跨节点主机监控和 CGO 依赖。改变这些边界必须先更新对应架构决策。

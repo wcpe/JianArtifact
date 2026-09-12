@@ -10,7 +10,7 @@ ADR-0020 定义了 v2 的普通变更/操作信封联合流，但未冻结分页
 
 ## 决策
 
-1. `protocol=v2` 响应固定为 `{"records":[...],"latestSeq":N,"hasMore":bool}`。`records` 按全局 seq 升序，普通 change 与完整 operation envelope 均计作一个 record；envelope 不受普通 `limit` 拆分限制，最大为 500 项。`hasMore` 表示在同一读取快照中是否仍存在 seq 大于最后返回 record 的记录；`latestSeq` 仅是远端观察值。
+1. `protocol=v2` 响应固定为 `{"records":[...],"latestSeq":N,"hasMore":bool}`。`records` 按全局 seq 升序，普通 change 与完整 operation envelope 均计作一个 record；一次业务规划最多影响 500 个实际制品，移动可产生 delete+put，因此 envelope 不受普通 `limit` 拆分限制且最大为 1000 个 wire asset 项。`hasMore` 表示在同一读取快照中是否仍存在 seq 大于最后返回 record 的记录；`latestSeq` 仅是远端观察值。
 2. v2 客户端逐 record 成功应用后才持久化该 record 的 seq。它以 `hasMore` 决定是否继续拉取，不得用 `latestSeq`、满页或空页直接跳过未应用记录；空 `records` 且 `hasMore=false` 才表示本次快照已追平。
 3. 任一 v1 `sync/pull` 的 `since` 范围若包含 completed operation envelope，服务端必须返回 `409 cluster_peer_upgrade_required`，不返回跨越该 envelope 的 `changes` 或 `latestSeq`。该规则同样用于新增、恢复或降级为 v1 的已配置对端检查。
 4. ADR-0020 的 v2 协商与“提交前所有活动对端支持 v2”规则保持不变；本 ADR 是其分页和旧节点安全边界的补充。

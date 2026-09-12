@@ -11,8 +11,8 @@ ADR-0019 要求 completed 操作 outbox 分配全局复制序号并以不可分�
 ## 决策
 
 1. 保持 FR-84 的 v1 `changes: repl_change[]` 响应不变，继续只承载普通变更。新增 `GET /api/v1/cluster/sync/pull?...&protocol=v2`：响应按全局 `seq` 排序的 `records` 联合数组，元素为普通 `change` 或单个不可分割的 `operation` envelope。
-2. completed operation outbox 在与业务视图同一事务中分配一个全局 `seq`。其中的逐项变更不单独出现在 `records`；一个 envelope 即使含至多 500 项，也不得被普通 `limit` 分页拆分。v2 客户端仅在整个 envelope 校验、补 blob、原子应用成功后，才将 watermark 推进到该 `seq`。
-3. v0.8 节点使用 v2 拉取并通过响应形态确认对端能力。发起原子资产操作前，所有已配置活动对端必须支持 v2；任一对端不支持时返回 `409 cluster_peer_upgrade_required`，不创建本地操作、不分配 outbox seq。v1 客户端只可继续同步不含原子操作的普通变更。
+2. completed operation outbox 在与业务视图同一事务中分配一个全局 `seq`。其中的逐项资产变更不单独出现在 `records`；一次业务规划最多 500 个实际制品，移动的 delete+put 使 envelope 至多含 1000 个 wire asset 项，且不得被普通 `limit` 分页拆分。v2 客户端仅在整个 envelope 校验、补 blob、原子应用成功后，才将 watermark 推进到该 `seq`。
+3. v0.8 节点使用 v2 拉取并通过响应形态确认对端能力。发起原子资产操作前，所有已配置活动对端必须支持 v2，且 `maxOperationItems` 不小于实际 envelope `itemCount`；任一对端不支持或容量不足时返回 `409 cluster_peer_upgrade_required`，不创建本地操作、不分配 outbox seq。v1 客户端只可继续同步不含原子操作的普通变更。
 4. v2 响应中普通 change 与 operation envelope 使用同一全局序列排序。断网、分页、重试和重复拉取均以最后完整成功 record 的 seq 作为 cursor；不得以 `latestSeq` 跳过尚未成功应用的 envelope。
 
 ## 理由
