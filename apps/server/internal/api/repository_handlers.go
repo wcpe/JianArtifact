@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -88,15 +89,26 @@ func (h *Handlers) CreateRepository(c *gin.Context) {
 	if req.RemoteUrl != nil {
 		cfg.RemoteURL = *req.RemoteUrl
 	}
+	if req.CredentialRef != nil {
+		cfg.CredentialRef = *req.CredentialRef
+	}
 	if req.Members != nil {
 		cfg.Members = *req.Members
+	}
+	if req.ImmutableRelease != nil {
+		cfg.ImmutableRelease = *req.ImmutableRelease
 	}
 	repo, err := h.repos.Create(req.Name, string(req.Format), string(req.Type), visibility, description, cfg)
 	if err != nil {
 		writeDomainErr(c, err)
 		return
 	}
-	h.AuditLog(c, "repo.create", "repository", req.Name, req.Name, "format="+string(req.Format)+" type="+string(req.Type), "ok")
+	// FR-109：审计附带逻辑凭据引用名称（只记名称，绝不记录环境变量名或解析结果）。
+	detail := "format=" + string(req.Format) + " type=" + string(req.Type)
+	if cfg.CredentialRef != "" {
+		detail += " credentialRef=" + cfg.CredentialRef
+	}
+	h.AuditLog(c, "repo.create", "repository", req.Name, req.Name, detail, "ok")
 	c.JSON(http.StatusCreated, h.toRepo(repo, nil))
 }
 
@@ -109,7 +121,7 @@ func (h *Handlers) UpdateRepository(c *gin.Context, name RepoNameParam) {
 	if !bindJSON(c, &req) {
 		return
 	}
-	if req.Visibility == nil && req.Description == nil && req.RemoteUrl == nil && req.Members == nil {
+	if req.Visibility == nil && req.Description == nil && req.RemoteUrl == nil && req.CredentialRef == nil && req.ImmutableRelease == nil && req.Members == nil {
 		auth.WriteError(c, http.StatusBadRequest, "bad_request", "缺少可更新字段")
 		return
 	}
@@ -118,13 +130,29 @@ func (h *Handlers) UpdateRepository(c *gin.Context, name RepoNameParam) {
 		visibility = string(*req.Visibility)
 	}
 	var cfg *repository.RepositoryConfig
-	if req.RemoteUrl != nil || req.Members != nil {
-		cfg = &repository.RepositoryConfig{}
+	if req.RemoteUrl != nil || req.CredentialRef != nil || req.ImmutableRelease != nil || req.Members != nil {
+		existing, err := h.repos.Get(name)
+		if err != nil {
+			writeDomainErr(c, err)
+			return
+		}
+		current, err := existing.DecodeConfig()
+		if err != nil {
+			auth.WriteError(c, http.StatusInternalServerError, "internal_error", "仓库配置解析失败")
+			return
+		}
+		cfg = &current
 		if req.RemoteUrl != nil {
 			cfg.RemoteURL = *req.RemoteUrl
 		}
+		if req.CredentialRef != nil {
+			cfg.CredentialRef = *req.CredentialRef
+		}
 		if req.Members != nil {
 			cfg.Members = *req.Members
+		}
+		if req.ImmutableRelease != nil {
+			cfg.ImmutableRelease = *req.ImmutableRelease
 		}
 	}
 	repo, err := h.repos.Update(name, visibility, req.Description, cfg)
@@ -132,7 +160,20 @@ func (h *Handlers) UpdateRepository(c *gin.Context, name RepoNameParam) {
 		writeDomainErr(c, err)
 		return
 	}
-	h.AuditLog(c, "repo.update", "repository", name, name, "", "ok")
+	// FR-109：审计附带逻辑凭据引用变更（配置或清除），只记名称不记明文。
+	detailParts := make([]string, 0, 2)
+	if req.ImmutableRelease != nil {
+		detailParts = append(detailParts, "immutableRelease="+strconv.FormatBool(*req.ImmutableRelease))
+	}
+	if req.CredentialRef != nil {
+		if *req.CredentialRef != "" {
+			detailParts = append(detailParts, "credentialRef="+*req.CredentialRef)
+		} else {
+			detailParts = append(detailParts, "credentialRef=(cleared)")
+		}
+	}
+	detail := strings.Join(detailParts, " ")
+	h.AuditLog(c, "repo.update", "repository", name, name, detail, "ok")
 	c.JSON(http.StatusOK, h.toRepo(repo, nil))
 }
 
@@ -196,7 +237,7 @@ func (h *Handlers) RecheckRepositoryConnection(c *gin.Context, name RepoNamePara
 		auth.WriteError(c, http.StatusBadRequest, "bad_request", "仓库未配置上游地址")
 		return
 	}
-	h.AuditLog(c, "repo.recheck", "repository", name, name, "remote="+cfg.RemoteURL, "ok")
+	h.AuditLog(c, "repo.recheck", "repository", name, name, "上游已配置", "ok")
 	status := h.assets.RecheckConnection(repo.ID, cfg.RemoteURL)
 	c.JSON(http.StatusOK, toAPIConnectionStatus(repo, status))
 }

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
+	"github.com/wcpe/jianartifact/apps/server/internal/formats"
 	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
@@ -23,6 +24,18 @@ func newTestDB(t *testing.T) *persistence.DB {
 		t.Fatalf("迁移：%v", err)
 	}
 	return db
+}
+
+func TestCreateRejectsKnownDisabledFormat(t *testing.T) {
+	db := newTestDB(t)
+	svc := domain.NewRepositoryService(repository.NewRepoRepo(db), repository.NewAclRepo(db), repository.NewAssetRepo(db), domain.NewSettingService(repository.NewSettingRepo(db)), repository.NewUserRepo(db))
+	svc.SetEnabledFormats(formats.New("raw"))
+	if _, err := svc.Create("disabled-maven", "maven", "hosted", "private", "", repository.RepositoryConfig{}); !errors.Is(err, domain.ErrFormatDisabled) {
+		t.Fatalf("禁用格式应返回 ErrFormatDisabled，得 %v", err)
+	}
+	if _, err := svc.Create("unknown", "does-not-exist", "hosted", "private", "", repository.RepositoryConfig{}); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("未知格式应返回 ErrValidation，得 %v", err)
+	}
 }
 
 // TestCanAccessImplicationMatrix 校验 ACL 蕴含矩阵：
@@ -140,6 +153,124 @@ func TestCreateConfigValidation(t *testing.T) {
 			}
 			if err != nil {
 				t.Fatalf("期望通过，得 %v", err)
+			}
+		})
+	}
+}
+
+func TestGoModOnlyAllowsProxyForCreateAndMigration(t *testing.T) {
+	db := newTestDB(t)
+	svc := domain.NewRepositoryService(repository.NewRepoRepo(db), repository.NewAclRepo(db), repository.NewAssetRepo(db), domain.NewSettingService(repository.NewSettingRepo(db)), repository.NewUserRepo(db))
+	svc.SetEnabledFormats(formats.New(formats.Known...))
+	if _, err := svc.Create("go-proxy", "gomod", "proxy", "private", "", repository.RepositoryConfig{RemoteURL: "https://proxy.example.test"}); err != nil {
+		t.Fatalf("创建 Go proxy 前置仓库：%v", err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		typ  string
+		cfg  repository.RepositoryConfig
+	}{
+		{name: "hosted", typ: "hosted"},
+		{name: "group", typ: "group", cfg: repository.RepositoryConfig{Members: []string{"go-proxy"}}},
+	} {
+		t.Run("创建"+tc.name, func(t *testing.T) {
+			_, err := svc.Create("gomod-"+tc.name, "gomod", tc.typ, "private", "", tc.cfg)
+			if !errors.Is(err, domain.ErrValidation) {
+				t.Fatalf("gomod %s 创建应拒绝，得 %v", tc.typ, err)
+			}
+		})
+		t.Run("迁移"+tc.name, func(t *testing.T) {
+			plan := []domain.MigrationRepositorySpec{{
+				Name: "go-proxy-migration", Format: "gomod", Type: "proxy", Config: repository.RepositoryConfig{RemoteURL: "https://proxy.example.test"},
+			}, {
+				Name: "gomod-migration-" + tc.name, Format: "gomod", Type: tc.typ, Config: tc.cfg,
+			}}
+			err := svc.ValidateMigrationPlan(plan)
+			if !errors.Is(err, domain.ErrValidation) {
+				t.Fatalf("gomod %s 迁移计划应拒绝，得 %v", tc.typ, err)
+			}
+		})
+	}
+}
+
+// TestProxyCredentialRefValidationAndPersistence 校验 proxy 只能保存合法的环境变量引用名。
+// 服务层只持久化引用名，不在创建或更新时解析环境变量值。
+func TestProxyCredentialRefValidationAndPersistence(t *testing.T) {
+	db := newTestDB(t)
+	repoRepo := repository.NewRepoRepo(db)
+	svc := domain.NewRepositoryService(repoRepo, repository.NewAclRepo(db), repository.NewAssetRepo(db), domain.NewSettingService(repository.NewSettingRepo(db)), repository.NewUserRepo(db))
+
+	valid := repository.RepositoryConfig{
+		RemoteURL:     "https://repo.example.com/raw",
+		CredentialRef: "PRIVATE_ARTIFACTS",
+	}
+	const credentialValue = "credential-value-must-not-persist"
+	t.Setenv("JIAN_UPSTREAM_CREDENTIAL_"+valid.CredentialRef, credentialValue)
+	if _, err := svc.Create("credential-proxy", "raw", "proxy", "private", "", valid); err != nil {
+		t.Fatalf("合法 proxy credentialRef 应通过：%v", err)
+	}
+	stored, err := repoRepo.GetByName("credential-proxy")
+	if err != nil {
+		t.Fatalf("读取 proxy 仓库：%v", err)
+	}
+	decoded, err := stored.DecodeConfig()
+	if err != nil {
+		t.Fatalf("解析 proxy 配置：%v", err)
+	}
+	if decoded.CredentialRef != valid.CredentialRef {
+		t.Errorf("credentialRef 持久化 = %q，期望 %q", decoded.CredentialRef, valid.CredentialRef)
+	}
+	if strings.Contains(stored.Config, credentialValue) {
+		t.Fatalf("仓库配置不得包含凭据值：%s", stored.Config)
+	}
+
+	cases := []struct {
+		name string
+		typ  string
+		cfg  repository.RepositoryConfig
+	}{
+		{
+			name: "hosted 不允许 credentialRef",
+			typ:  "hosted",
+			cfg:  repository.RepositoryConfig{CredentialRef: "PRIVATE_ARTIFACTS"},
+		},
+		{
+			name: "group 不允许 credentialRef",
+			typ:  "group",
+			cfg:  repository.RepositoryConfig{Members: []string{"credential-proxy"}, CredentialRef: "PRIVATE_ARTIFACTS"},
+		},
+		{
+			name: "credentialRef 不允许空白",
+			typ:  "proxy",
+			cfg:  repository.RepositoryConfig{RemoteURL: "https://repo.example.com/raw", CredentialRef: "BAD REF"},
+		},
+		{
+			name: "credentialRef 不允许数字开头",
+			typ:  "proxy",
+			cfg:  repository.RepositoryConfig{RemoteURL: "https://repo.example.com/raw", CredentialRef: "1BAD"},
+		},
+		{
+			name: "proxy 上游地址不允许 userinfo",
+			typ:  "proxy",
+			cfg:  repository.RepositoryConfig{RemoteURL: "https://release-user:private-password@repo.example.com/raw"},
+		},
+		{
+			name: "proxy 上游地址不允许查询参数",
+			typ:  "proxy",
+			cfg:  repository.RepositoryConfig{RemoteURL: "https://repo.example.com/raw?token=private-token"},
+		},
+		{
+			name: "proxy 上游地址不允许片段",
+			typ:  "proxy",
+			cfg:  repository.RepositoryConfig{RemoteURL: "https://repo.example.com/raw#private-token"},
+		},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := svc.Create("invalid-credential-"+string(rune('a'+i)), "raw", tc.typ, "private", "", tc.cfg)
+			if !errors.Is(err, domain.ErrValidation) {
+				t.Fatalf("应拒绝非法 credentialRef，得 %v", err)
 			}
 		})
 	}

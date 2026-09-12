@@ -35,9 +35,14 @@ endif
 
 build: ## 前端构建 + 后端 embed 编译
 	pnpm build
+
+ifeq ($(OS),Windows_NT)
+	powershell.exe -NoProfile -Command "Remove-Item -LiteralPath 'apps/server/web/dist' -Recurse -Force -ErrorAction SilentlyContinue; New-Item -ItemType Directory -Path 'apps/server/web/dist' -Force | Out-Null; Copy-Item -Path 'apps/web/dist/*' -Destination 'apps/server/web/dist' -Recurse -Force"
+else
 	rm -rf apps/server/web/dist
 	mkdir -p apps/server/web/dist
 	cp -a apps/web/dist/. apps/server/web/dist/
+endif
 	cd apps/server && task build
 
 release: ## 多平台发布物

@@ -1,3 +1,9 @@
+-- 0014：复制接收审计日志
+-- 引入版本：0.7.0
+-- 影响：新增 replication_apply_log 表及索引
+-- 数据处理：创建接收审计结构，无历史数据回填；预计耗时：毫秒级
+-- 回滚：不支持 down migration；需要恢复升级前备份
+-- 相关：FR-115 / ADR-0023
 -- 0014：复制接收审计日志。仅记录本节点接收远端变更的应用结果，不写入 repl_change。
 CREATE TABLE replication_apply_log (
   source_node    TEXT    NOT NULL,

@@ -1,15 +1,12 @@
 // 文件详情：元数据 + 多校验和 + 下载/HTML View + 依赖坐标 + usage 片段可复制。点文件夹时不渲染。
 import { useState } from "react";
 import { Button, Card, Code, Group, Select, Stack, Text, Title } from "@mantine/core";
-import { IconDownload, IconExternalLink, IconTrash } from "@tabler/icons-react";
+import { IconDownload, IconExternalLink } from "@tabler/icons-react";
 import { useTranslation } from "react-i18next";
 
-import { deleteAsset } from "../../api/endpoints";
 import type { AssetSummary, RepoFormat, UsageInfo } from "../../api/types";
-import { useAuth } from "../../auth/AuthContext";
 import { assetDownloadUrl, formatBytes } from "../../lib/assetTree";
 import { buildCoordinateSnippets, htmlViewUrl } from "../../lib/coordinates";
-import { confirmDanger, notifyError, notifySuccess } from "../../lib/feedback";
 import { CopyTextButton } from "../CopyTextButton";
 
 interface Props {
@@ -19,46 +16,13 @@ interface Props {
   usage: UsageInfo | null;
   /** 是否展示下载按钮（协议可读） */
   showDownload?: boolean;
-  /** 删除成功后回调（父级触发文件树刷新） */
-  onDeleted?: () => void;
 }
 
-export function RepoFileDetail({
-  repoName,
-  format,
-  asset,
-  usage,
-  showDownload = true,
-  onDeleted,
-}: Props) {
+export function RepoFileDetail({ repoName, format, asset, usage, showDownload = true }: Props) {
   const { t } = useTranslation();
-  const { user } = useAuth();
-  // FR-102：删除仅管理员可见可用；非管理员 / 匿名不显示。
-  const isAdmin = user?.role === "admin";
-  const [deleting, setDeleting] = useState(false);
   const downloadUrl = assetDownloadUrl(repoName, format, asset.path);
   const viewUrl = htmlViewUrl(repoName, asset.path);
   const coordinates = buildCoordinateSnippets(format as RepoFormat, asset.path);
-
-  // FR-102：危险操作二次确认后调协议 DELETE，成功由父级刷新文件树。
-  const handleDelete = () => {
-    confirmDanger({
-      title: t("common.delete"),
-      message: t("repoDetail.deleteAssetConfirm"),
-      confirmLabel: t("common.delete"),
-      cancelLabel: t("common.cancel"),
-      onConfirm: () => {
-        setDeleting(true);
-        deleteAsset(repoName, asset.path)
-          .then(() => {
-            notifySuccess(t("common.deleted"));
-            onDeleted?.();
-          })
-          .catch(notifyError)
-          .finally(() => setDeleting(false));
-      },
-    });
-  };
 
   return (
     <Stack gap="md">
@@ -129,18 +93,6 @@ export function RepoFileDetail({
         >
           {t("repoDetail.htmlView")}
         </Button>
-        {isAdmin && (
-          <Button
-            size="xs"
-            color="red"
-            variant="light"
-            leftSection={<IconTrash size={14} />}
-            loading={deleting}
-            onClick={handleDelete}
-          >
-            {t("common.delete")}
-          </Button>
-        )}
       </Group>
 
       {/* Maven 制品的多格式依赖坐标卡片（下拉切换 + 复制） */}

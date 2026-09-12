@@ -6,6 +6,7 @@ import {
   ActionIcon,
   AppShell,
   Box,
+  Breadcrumbs,
   Burger,
   Button,
   Divider,
@@ -24,13 +25,12 @@ import {
   IconLayoutSidebarLeftCollapse,
   IconLayoutSidebarLeftExpand,
   IconFileReport,
+  IconActivity,
   IconLicense,
   IconLogin,
-  IconLogout,
   IconPackage,
   IconRefresh,
   IconSearch,
-  IconServer,
   IconSettings,
   IconTransfer,
   IconUsers,
@@ -45,6 +45,7 @@ import { getNetworkActivityCount, subscribeNetworkActivity } from "../api/client
 import { useAuth } from "../auth/AuthContext";
 import { useLoginModal } from "../auth/LoginModal";
 import { BrandLogo } from "../components/BrandLogo";
+import { AccountMenu } from "../components/account/AccountMenu";
 import { RouteFallback } from "../components/RouteFallback";
 import { REFRESH_EVENT } from "../hooks/useAsync";
 import { density } from "../theme/density";
@@ -65,27 +66,50 @@ interface NavSection {
   items: NavItem[];
 }
 
-/**
- * 判定导航项是否对应当前路由：按路径段精确匹配，避免前缀串台。
+/** 判定导航项是否对应当前路由：按路径段精确匹配，避免前缀串台。
  * 仅当当前路径等于该项路径、或为其子路径（以「该项路径 + /」开头）时高亮。
  */
 function isNavActive(pathname: string, itemPath: string): boolean {
   return pathname === itemPath || pathname.startsWith(`${itemPath}/`);
 }
 
-// 分段导航（仅 0.2.0 已有页面）：
-// - 浏览：仪表盘 / 仓库
-// - 管理：用户（仅 Admin）/ 访问令牌
+/** 页眉面包屑的末级文案覆盖：导航项标签之外更准确的页面名。 */
+const NAV_BREADCRUMB_OVERRIDES: Record<string, string> = {
+  "/dashboard": "业务仪表盘",
+};
+
 const NAV_SECTIONS: NavSection[] = [
   {
-    titleKey: "nav.sectionBrowse",
+    titleKey: "nav.sectionOverview",
     items: [
-      { labelKey: "nav.dashboard", path: "/dashboard", icon: <IconLayoutDashboard size={18} /> },
+      {
+        labelKey: "nav.dashboard",
+        path: "/dashboard",
+        icon: <IconLayoutDashboard size={18} />,
+        adminOnly: true,
+      },
       { labelKey: "nav.repositories", path: "/repositories", icon: <IconPackage size={18} /> },
     ],
   },
   {
-    titleKey: "nav.sectionManage",
+    titleKey: "nav.sectionOperations",
+    items: [
+      {
+        labelKey: "nav.auditLogs",
+        path: "/audit-logs",
+        icon: <IconFileReport size={18} />,
+        adminOnly: true,
+      },
+      {
+        labelKey: "nav.hostMonitoring",
+        path: "/host-monitoring",
+        icon: <IconActivity size={18} />,
+        adminOnly: true,
+      },
+    ],
+  },
+  {
+    titleKey: "nav.sectionAdministration",
     items: [
       { labelKey: "nav.users", path: "/users", icon: <IconUsers size={18} />, adminOnly: true },
       { labelKey: "nav.tokens", path: "/tokens", icon: <IconKey size={18} /> },
@@ -95,32 +119,10 @@ const NAV_SECTIONS: NavSection[] = [
         icon: <IconTransfer size={18} />,
         adminOnly: true,
       },
-      // FR-72: 开源协议清单收敛为 admin 专属（依赖版本属侦察情报，不对公开暴露）
-      {
-        labelKey: "nav.licenses",
-        path: "/licenses",
-        icon: <IconLicense size={18} />,
-        adminOnly: true,
-      },
-      // FR-90: 设置页（实例级基础配置与集群同步配置，仅管理员）
       {
         labelKey: "nav.settings",
         path: "/settings",
         icon: <IconSettings size={18} />,
-        adminOnly: true,
-      },
-      // FR-38: 审计日志页（全部管理写操作记录，仅管理员）
-      {
-        labelKey: "nav.auditLogs",
-        path: "/audit-logs",
-        icon: <IconFileReport size={18} />,
-        adminOnly: true,
-      },
-      // FR-86: 集群页（节点间复制同步状态，仅管理员）
-      {
-        labelKey: "nav.cluster",
-        path: "/cluster",
-        icon: <IconServer size={18} />,
         adminOnly: true,
       },
     ],
@@ -193,14 +195,14 @@ export function AppLayout() {
   const expanded = isMobile ? true : navExpanded;
 
   // 挂载与登录态变化时查实例状态：版本号仅登录后由后端返回（匿名脱敏）；
-  // 空库实例导向 /setup 引导自举（整页登录已删除，FR-67）。
+  // 仅后端明确允许自举时才导向 /setup，备用节点空库保持只读浏览。
   useEffect(() => {
     let cancelled = false;
     getStatus()
       .then((info) => {
         if (cancelled) return;
         setVersion(info.version || null);
-        if (info.userCount === 0) {
+        if (info.bootstrapAllowed === true) {
           navigate("/setup", { replace: true });
         }
       })
@@ -249,6 +251,44 @@ export function AppLayout() {
 
   // 角色感知导航过滤：非管理员隐藏 adminOnly 项。
   const isItemVisible = (item: NavItem): boolean => !item.adminOnly || isAdmin;
+
+  // 页眉面包屑：由当前路由推导，覆盖全部页面（导航页 / 详情页 / 搜索 / 开源协议）。
+  const crumbs: string[] = (() => {
+    const p = location.pathname;
+    // 仓库详情 / 仓库权限：概览 / 仓库 / <name> [/ 访问控制]
+    if (p.startsWith("/repositories/")) {
+      const rest = decodeURIComponent(p.slice("/repositories/".length));
+      const segments = rest.split("/");
+      const name = segments[0] ?? "";
+      const sub = segments[1];
+      const items = [t("nav.sectionOverview"), t("nav.repositories"), name];
+      if (sub === "acl") items.push(t("acl.title", { defaultValue: "访问控制" }));
+      return items;
+    }
+    // 迁移向导 / 迁移详情：管理 / 迁移 / <new|#id>
+    if (p.startsWith("/migrations/")) {
+      const rest = p.slice("/migrations/".length);
+      const last = rest === "new" ? t("migrations.new", { defaultValue: "新建迁移" }) : `#${rest}`;
+      return [t("nav.sectionAdministration"), t("nav.migrations"), last];
+    }
+    // 搜索（不在侧栏导航内）：制品搜索
+    if (p === "/search" || p.startsWith("/search?") || p.startsWith("/search/")) {
+      return [t("search.title", { defaultValue: "制品搜索" })];
+    }
+    // 开源协议（侧栏底部独立入口）：开源协议
+    if (p.startsWith("/licenses")) {
+      return [t("nav.licenses", { defaultValue: "开源协议" })];
+    }
+    // 其余命中侧栏导航的页面：段标题 + 页面名
+    for (const section of NAV_SECTIONS) {
+      for (const item of section.items) {
+        if (isNavActive(p, item.path)) {
+          return [t(section.titleKey), NAV_BREADCRUMB_OVERRIDES[item.path] ?? t(item.labelKey)];
+        }
+      }
+    }
+    return [];
+  })();
 
   // 按段过滤后仅保留含可见项的段。
   const visibleSections = NAV_SECTIONS.map((section) => ({
@@ -312,13 +352,45 @@ export function AppLayout() {
       <AppShell.Header>
         <Group h="100%" px={{ base: "xs", sm: "md" }} wrap="nowrap" justify="space-between">
           <Group gap="sm" wrap="nowrap" style={{ flex: 1, minWidth: 0 }}>
-            <Burger opened={mobileOpened} onClick={toggleMobile} hiddenFrom="sm" size="sm" />
-            <Group gap="xs" wrap="nowrap" hiddenFrom="sm">
-              <BrandLogo size={24} />
-              <Text fw={700} size="sm">
-                {t("common.appName")}
-              </Text>
-            </Group>
+            <Burger
+              opened={mobileOpened}
+              onClick={toggleMobile}
+              aria-label={t("nav.toggleNav")}
+              hiddenFrom="sm"
+              size="sm"
+            />
+            {/* 页眉面包屑（全端）：概览 / 业务仪表盘 等；移动端替代品牌文案，末级常显 */}
+            {crumbs.length > 0 ? (
+              <Breadcrumbs
+                separator="/"
+                data-testid="app-breadcrumbs"
+                style={{ minWidth: 0, flex: 1, overflow: "hidden" }}
+              >
+                {crumbs.map((crumb, index) => {
+                  const isLast = index === crumbs.length - 1;
+                  return (
+                    <Text
+                      key={`${crumb}-${index}`}
+                      size="sm"
+                      c={isLast ? undefined : "dimmed"}
+                      fw={isLast ? 600 : 500}
+                      lh={1.2}
+                      truncate
+                      style={isLast ? { flexShrink: 0 } : { minWidth: 0 }}
+                    >
+                      {crumb}
+                    </Text>
+                  );
+                })}
+              </Breadcrumbs>
+            ) : (
+              <Group gap="xs" wrap="nowrap" hiddenFrom="sm">
+                <BrandLogo size={24} />
+                <Text fw={700} size="sm">
+                  {t("common.appName")}
+                </Text>
+              </Group>
+            )}
           </Group>
           {/* FR-59: Header 搜索栏 */}
           <Group
@@ -339,6 +411,17 @@ export function AppLayout() {
             />
           </Group>
           <Group gap="sm" wrap="nowrap" justify="flex-end" style={{ flex: 1, minWidth: 0 }}>
+            {/* 移动端搜索入口：页眉放不下完整输入框，用图标跳转搜索页 */}
+            <Tooltip label={t("search.placeholder", { defaultValue: "搜索制品..." })}>
+              <ActionIcon
+                variant="subtle"
+                aria-label={t("search.placeholder", { defaultValue: "搜索制品..." })}
+                onClick={() => navigate("/search")}
+                hiddenFrom="sm"
+              >
+                <IconSearch size={18} />
+              </ActionIcon>
+            </Tooltip>
             {/* FR-59/FR-71: 刷新按钮——刷新期间禁用并旋转 */}
             <Tooltip label={t("common.refresh", { defaultValue: "刷新" })}>
               <ActionIcon
@@ -354,36 +437,15 @@ export function AppLayout() {
               </ActionIcon>
             </Tooltip>
             {user ? (
-              <Group gap="sm" wrap="nowrap">
-                {isMobile ? (
-                  <Tooltip label={t("common.logout")}>
-                    <ActionIcon
-                      variant="subtle"
-                      aria-label={t("common.logout")}
-                      onClick={handleLogout}
-                      loading={loggingOut}
-                    >
-                      <IconLogout size={18} />
-                    </ActionIcon>
-                  </Tooltip>
-                ) : (
-                  <>
-                    <Text size="sm" c="dimmed" truncate style={{ maxWidth: 160 }}>
-                      {user.username}
-                      {t("nav.userSuffix", { role: roleLabel })}
-                    </Text>
-                    <Button
-                      variant="subtle"
-                      size="xs"
-                      leftSection={<IconLogout size={16} />}
-                      onClick={handleLogout}
-                      loading={loggingOut}
-                    >
-                      {t("common.logout")}
-                    </Button>
-                  </>
-                )}
-              </Group>
+              <AccountMenu
+                user={user}
+                roleLabel={roleLabel}
+                accountLabel={t("nav.accountLabel")}
+                logoutLabel={t("common.logout")}
+                loggingOutLabel={t("nav.loggingOut")}
+                loggingOut={loggingOut}
+                onLogout={handleLogout}
+              />
             ) : isMobile ? (
               <Tooltip label={t("auth.login", { defaultValue: "登录" })}>
                 <ActionIcon
@@ -489,9 +551,26 @@ export function AppLayout() {
           )}
         </ScrollArea>
 
-        {/* 左下 footer：侧栏折叠/展开开关，做成与导航项同款的整行 NavLink
-         * （展开态图标+文字占满整行，收起态单图标 + Tooltip），点击目标大且视觉统一。
-         * 开源协议入口已移入「管理」导航段（admin 专属），footer 不再放业务入口。 */}
+        {isAuthenticated && isAdmin ? (
+          <Box
+            mt="xs"
+            pt="xs"
+            style={{ borderTop: "1px solid var(--mantine-color-default-border)" }}
+          >
+            <NavItemLink
+              label={t("nav.licenses")}
+              icon={<IconLicense size={18} />}
+              expanded={expanded}
+              active={isNavActive(location.pathname, "/licenses")}
+              onSelect={() => {
+                navigate("/licenses");
+                if (mobileOpened) closeMobile();
+              }}
+            />
+          </Box>
+        ) : null}
+
+        {/* 左下仅保留导航展开控制，开源协议独立置于其上方。 */}
         <Box
           mt="xs"
           pt="xs"
@@ -519,10 +598,7 @@ export function AppLayout() {
 
       <AppShell.Main>
         {/* 固定 max-width 居中内容容器：新内容出现不再撑变形整体布局。 */}
-        <Box
-          data-testid="content-shell"
-          style={{ maxWidth: density.contentMaxWidth, marginInline: "auto" }}
-        >
+        <Box data-testid="content-shell" style={{ width: "100%" }}>
           {/* FR-70：懒加载页面在布局内挂 Suspense，路由切换保持侧栏/页眉不闪。 */}
           <Suspense fallback={<RouteFallback />}>
             <Outlet />

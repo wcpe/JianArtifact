@@ -32,7 +32,7 @@ import {
   IconSearch,
   IconSelector,
 } from "@tabler/icons-react";
-import { PageHeader } from "@jianartifact/ui";
+import { ErrorState, ForbiddenState, LoadingState } from "@jianartifact/ui";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -112,6 +112,7 @@ export function SearchPage() {
         ? searchAssets({ q, sort: sortBy, order: sortOrder, page, page_size: PAGE_SIZE })
         : Promise.resolve({ items: [], total: 0, facets: [] }),
     [q, page, sortBy, sortOrder],
+    { cacheKey: `search:${q}:${page}:${sortBy}:${sortOrder}` },
   );
 
   const totalPages = Math.ceil((state.data?.total ?? 0) / PAGE_SIZE);
@@ -155,11 +156,6 @@ export function SearchPage() {
 
   return (
     <>
-      <PageHeader
-        title={t("search.title", { defaultValue: "制品搜索" })}
-        description={t("search.description", { defaultValue: "跨仓库搜索制品路径" })}
-      />
-
       <Stack gap="md">
         <Group gap="xs" wrap="nowrap" align="flex-start">
           <TextInput
@@ -268,6 +264,19 @@ export function SearchPage() {
             />
           </Paper>
         </Collapse>
+
+        {q && state.forbidden && <ForbiddenState message={t("common.forbidden")} />}
+        {q && state.error && !state.forbidden && (
+          <ErrorState
+            message={t("common.error")}
+            description={state.error.message}
+            onRetry={state.reload}
+            retryLabel={t("common.retry")}
+          />
+        )}
+        {q && state.data === null && !state.error && !state.forbidden && (
+          <LoadingState message={t("common.loading")} />
+        )}
 
         {/* 仓库聚合钻取条：全部 + 各仓库命中数（点击限定 / 还原） */}
         {q && facets.length > 0 && (

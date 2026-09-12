@@ -2,8 +2,11 @@ package domain_test
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -13,6 +16,20 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/upstream"
 )
 
+type recordedChange struct {
+	entityType string
+	entityKey  string
+	op         string
+	data       any
+}
+
+type testChangeRecorder struct{ changes []recordedChange }
+
+func (r *testChangeRecorder) Record(entityType, entityKey, op string, data any) error {
+	r.changes = append(r.changes, recordedChange{entityType: entityType, entityKey: entityKey, op: op, data: data})
+	return nil
+}
+
 // newAssetService 装配一个基于临时目录的 AssetService 及其仓库 Repo。
 func newAssetService(t *testing.T) (*domain.AssetService, *repository.RepoRepo) {
 	t.Helper()
@@ -20,7 +37,7 @@ func newAssetService(t *testing.T) (*domain.AssetService, *repository.RepoRepo) 
 	repos := repository.NewRepoRepo(db)
 	assets := repository.NewAssetRepo(db)
 	blobs := blobstore.NewStore(t.TempDir())
-	return domain.NewAssetService(repos, assets, blobs, upstream.NewClient(5*time.Second)), repos
+	return domain.NewAssetService(repos, assets, blobs, upstream.NewTestClient(5*time.Second)), repos
 }
 
 func TestAssetServicePutGetRoundtrip(t *testing.T) {
@@ -78,6 +95,41 @@ func TestAssetServicePutRepoNotFound(t *testing.T) {
 	svc, _ := newAssetService(t)
 	if _, err := svc.Put("ghost", "a.txt", bytes.NewReader([]byte("x")), ""); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("仓库不存在应返回 ErrNotFound，实际：%v", err)
+	}
+}
+
+func TestAssetServiceProxyCacheRecordsReplicationChange(t *testing.T) {
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/example.com/demo/@v/v1.0.0.mod" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write([]byte("module example.com/demo\n"))
+	}))
+	t.Cleanup(upstreamServer.Close)
+
+	svc, repos := newAssetService(t)
+	if _, err := repos.Create("go-proxy", "gomod", "proxy", "public", `{"remoteUrl":"`+upstreamServer.URL+`"}`); err != nil {
+		t.Fatalf("创建代理仓库：%v", err)
+	}
+	recorder := &testChangeRecorder{}
+	svc.SetChangeRecorder(recorder)
+	asset, rc, err := svc.Resolve(context.Background(), "go-proxy", "example.com/demo/@v/v1.0.0.mod")
+	if err != nil {
+		t.Fatalf("代理冷缓存：%v", err)
+	}
+	_ = rc.Close()
+	if len(recorder.changes) != 1 {
+		t.Fatalf("代理冷缓存应记录一条复制变更，实际 %d 条", len(recorder.changes))
+	}
+	change := recorder.changes[0]
+	if change.entityType != domain.EntityAsset || change.entityKey != domain.AssetKey("go-proxy", asset.Path) || change.op != domain.OpPut {
+		t.Fatalf("代理缓存复制变更不符：%+v", change)
+	}
+	data, ok := change.data.(domain.AssetChangeData)
+	if !ok || data.BlobHash != asset.BlobHash || data.Size != asset.Size || data.Path != asset.Path {
+		t.Fatalf("代理缓存复制载荷不符：%+v", change.data)
 	}
 }
 

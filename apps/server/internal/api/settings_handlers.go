@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -21,28 +22,39 @@ const (
 	defaultUpstreamTimeout  = 30
 )
 
-// SettingsResponse 是设置端点（FR-89）的响应体：基础配置四项的当前生效值。
+// SettingsResponse 是设置端点（FR-89）的响应体：基础配置的当前生效值。
 type SettingsResponse struct {
-	AnonymousAccess bool   `json:"anonymousAccess"`
-	PublicURL       string `json:"publicUrl"`
-	UpstreamTimeout int    `json:"upstreamTimeout"`
-	SyncInterval    int    `json:"syncInterval"`
+	AnonymousAccess    bool     `json:"anonymousAccess"`
+	PublicURL          string   `json:"publicUrl"`
+	UpstreamTimeout    int      `json:"upstreamTimeout"`
+	SyncInterval       int      `json:"syncInterval"`
+	AllowedHosts       []string `json:"allowedHosts"`
+	OriginTokenEnabled bool     `json:"originTokenEnabled"`
+	OriginTokenHeader  string   `json:"originTokenHeader"`
+	OriginTokenValue   string   `json:"originTokenValue"`
 }
 
 // SettingsRequest 是设置端点的请求体：可选字段，传哪个改哪个（对齐 cluster 端点风格）。
 type SettingsRequest struct {
-	AnonymousAccess *bool   `json:"anonymousAccess,omitempty"`
-	PublicURL       *string `json:"publicUrl,omitempty"`
-	UpstreamTimeout *int    `json:"upstreamTimeout,omitempty"`
-	SyncInterval    *int    `json:"syncInterval,omitempty"`
+	AnonymousAccess    *bool     `json:"anonymousAccess,omitempty"`
+	PublicURL          *string   `json:"publicUrl,omitempty"`
+	UpstreamTimeout    *int      `json:"upstreamTimeout,omitempty"`
+	SyncInterval       *int      `json:"syncInterval,omitempty"`
+	AllowedHosts       *[]string `json:"allowedHosts,omitempty"`
+	OriginTokenEnabled *bool     `json:"originTokenEnabled,omitempty"`
+	OriginTokenHeader  *string   `json:"originTokenHeader,omitempty"`
+	OriginTokenValue   *string   `json:"originTokenValue,omitempty"`
 }
 
-// settingsSnapshot 读取基础配置四项的当前生效值（未配置的间隔 / 超时回退默认值）。
+// settingsSnapshot 读取基础配置的当前生效值（未配置的间隔 / 超时回退默认值）。
 func (h *Handlers) settingsSnapshot() SettingsResponse {
 	anonymous := true
 	publicURL := ""
 	syncSecs := defaultSyncIntervalSecs
 	timeoutSecs := defaultUpstreamTimeout
+	var allowedHosts []string
+	var tokenEnabled bool
+	var tokenHeader, tokenValue string
 	if h.settings != nil {
 		if v, err := h.settings.AnonymousAccessEnabled(); err == nil {
 			anonymous = v
@@ -54,12 +66,18 @@ func (h *Handlers) settingsSnapshot() SettingsResponse {
 		if v := h.settings.UpstreamTimeoutSecs(); v > 0 {
 			timeoutSecs = v
 		}
+		allowedHosts = h.settings.AllowedHostsList()
+		tokenEnabled, tokenHeader, tokenValue = h.settings.OriginTokenGuard()
 	}
 	return SettingsResponse{
-		AnonymousAccess: anonymous,
-		PublicURL:       publicURL,
-		UpstreamTimeout: timeoutSecs,
-		SyncInterval:    syncSecs,
+		AnonymousAccess:    anonymous,
+		PublicURL:          publicURL,
+		UpstreamTimeout:    timeoutSecs,
+		SyncInterval:       syncSecs,
+		AllowedHosts:       allowedHosts,
+		OriginTokenEnabled: tokenEnabled,
+		OriginTokenHeader:  tokenHeader,
+		OriginTokenValue:   tokenValue,
 	}
 }
 
@@ -91,10 +109,14 @@ func (h *Handlers) PutSettings(c *gin.Context) {
 		return
 	}
 	if err := h.settings.UpdateSettings(domain.SettingsUpdate{
-		AnonymousAccess: req.AnonymousAccess,
-		PublicURL:       req.PublicURL,
-		UpstreamTimeout: req.UpstreamTimeout,
-		SyncInterval:    req.SyncInterval,
+		AnonymousAccess:    req.AnonymousAccess,
+		PublicURL:          req.PublicURL,
+		UpstreamTimeout:    req.UpstreamTimeout,
+		SyncInterval:       req.SyncInterval,
+		AllowedHosts:       req.AllowedHosts,
+		OriginTokenEnabled: req.OriginTokenEnabled,
+		OriginTokenHeader:  req.OriginTokenHeader,
+		OriginTokenValue:   req.OriginTokenValue,
 	}); err != nil {
 		writeDomainErr(c, err)
 		return
@@ -119,7 +141,65 @@ func validateSettingsRequest(req SettingsRequest) error {
 		}
 	}
 	if req.SyncInterval != nil {
-		return validateSecs(*req.SyncInterval)
+		if err := validateSecs(*req.SyncInterval); err != nil {
+			return err
+		}
+	}
+	if req.AllowedHosts != nil {
+		if err := validateHostList(*req.AllowedHosts); err != nil {
+			return err
+		}
+	}
+	if req.OriginTokenEnabled != nil && *req.OriginTokenEnabled {
+		if req.OriginTokenHeader == nil || strings.TrimSpace(*req.OriginTokenHeader) == "" {
+			return errors.New("开启回源 Token 校验必须提供请求头名")
+		}
+		if req.OriginTokenValue == nil || strings.TrimSpace(*req.OriginTokenValue) == "" {
+			return errors.New("开启回源 Token 校验必须提供 Token 值")
+		}
+	}
+	if req.OriginTokenHeader != nil {
+		if err := validateHTTPHeaderName(*req.OriginTokenHeader); err != nil {
+			return err
+		}
+	}
+	if req.OriginTokenValue != nil {
+		if len(strings.TrimSpace(*req.OriginTokenValue)) < 16 {
+			return errors.New("回源 Token 值至少 16 个字符")
+		}
+	}
+	return nil
+}
+
+// validateHTTPHeaderName 校验合法的 HTTP 头名（token 除外）：不含空白、冒号、控制字符。
+func validateHTTPHeaderName(name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return errors.New("请求头名不能为空")
+	}
+	if strings.ContainsAny(name, " :\t\r\n") {
+		return fmt.Errorf("请求头名 %q 含非法字符（不允许空格/冒号/换行）", name)
+	}
+	return nil
+}
+
+// validateHostList 校验允许访问的域名白名单：空列表合法（不限制）；
+// 每项必须是合法 Host（域名或 IP，可带端口），禁止空格、路径或 scheme。
+func validateHostList(hosts []string) error {
+	for _, item := range hosts {
+		host := strings.TrimSpace(item)
+		if host == "" {
+			return errors.New("允许访问域名不能包含空项")
+		}
+		if strings.ContainsAny(host, " /\\\t") {
+			return fmt.Errorf("允许访问域名 %q 含非法字符", host)
+		}
+		if u, err := url.Parse("http://" + host); err != nil || u.Host == "" || strings.Contains(u.Host, "..") {
+			return fmt.Errorf("允许访问域名 %q 非法", host)
+		}
+		if strings.HasPrefix(host, "http://") || strings.HasPrefix(host, "https://") {
+			return fmt.Errorf("允许访问域名 %q 不应包含协议前缀", host)
+		}
 	}
 	return nil
 }

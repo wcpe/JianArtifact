@@ -21,4 +21,6 @@ export const density = {
   gridSpacing: "sm" as MantineSpacing,
   /** 紧凑徽章 / 内联元素间距。 */
   inlineGap: "xs" as MantineSpacing,
+  /** 页眉通知下拉滚动区最大高度（px）：超出即内部滚动。 */
+  notificationDropdownMaxHeight: 320,
 } as const;

@@ -47,7 +47,7 @@ tasks:
   release:
     desc: 多平台发布物（arm64/amd64 + Windows，含校验和）
     cmds:
-      - echo "TODO(M3)：多平台交叉编译 + 校验和 / cosign 签名 / SBOM"
+      - go run ./cmd/release-assets --root ../.. --output ../../dist/release
 
   migrate:
     desc: 应用数据库迁移（向前追加）

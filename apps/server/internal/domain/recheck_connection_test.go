@@ -76,3 +76,38 @@ func TestRecheckConnectionUnavailableRepo(t *testing.T) {
 		t.Fatalf("不可达地址重测应 AUTO_BLOCKED，实际 %s", got.Status)
 	}
 }
+
+func TestRecheckConnectionUsesCredentialRef(t *testing.T) {
+	const credentialRef = "HEALTHCHECK"
+	t.Setenv("JIAN_UPSTREAM_CREDENTIAL_"+credentialRef, "health-user:health-password")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, password, ok := r.BasicAuth()
+		if !ok || user != "health-user" || password != "health-password" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	svc, repos := newAssetService(t)
+	repoID, err := repos.Create("credential-recheck", "raw", "proxy", "private", proxyConfigWithCredentialJSON(t, srv.URL, credentialRef))
+	if err != nil {
+		t.Fatalf("建带凭据的 proxy 仓库：%v", err)
+	}
+	if got := svc.RecheckConnection(repoID, srv.URL); got.Status == domain.StatusAutoBlocked {
+		t.Fatalf("带 credentialRef 的重测不应因 401 被阻止，实际 %s", got.Status)
+	}
+}
+
+// 旧库可能遗留在校验收紧前写入的配置；重测必须仍由安全出站客户端拦截。
+func TestRecheckConnectionRejectsLegacyUserinfoURL(t *testing.T) {
+	svc, repos := newAssetService(t)
+	repoID, err := repos.Create("legacy-userinfo-proxy", "raw", "proxy", "private", `{"remoteUrl":"https://release-user:private-password@repo.example.com/raw"}`)
+	if err != nil {
+		t.Fatalf("写入旧 proxy 配置：%v", err)
+	}
+	if got := svc.RecheckConnection(repoID, "https://repo.example.com/raw"); got.Status != domain.StatusAutoBlocked {
+		t.Fatalf("遗留 userinfo 地址重测应被安全阻止，实际 %s", got.Status)
+	}
+}

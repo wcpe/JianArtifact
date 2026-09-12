@@ -1,23 +1,49 @@
 // 端点封装：按 api/openapi.yaml 的 0.2.0 管理面路径提供 typed 调用。
 // 页面与数据钩子仅依赖此模块，不直接拼 URL。
-import { deleteProtocolAsset, postProtocolForm, putProtocolAsset, request } from "./client";
+import { deleteProtocolAsset, postProtocolForm, putProtocolAsset, request, requestBinary } from "./client";
 import type {
+  AssetOperationInput,
+  AssetOperationResponse,
+  AcknowledgeAuditAttentionResponse,
   AclEntry,
   AclList,
+  AuditAttentionDetail,
+  AuditAttentionPage,
+  AuditAttentionNotificationList,
+  AuditCategory,
+  AuditEventDetail,
+  AuditEventPage,
+  AuditNotificationStatus,
+  AuditObservabilitySummary,
+  HostMonitoring,
+  AuditResult,
   AssetList,
   BatchDeleteAssetsResponse,
+  BackupLink,
+  BackupPackage,
+  BackupPackageList,
+  BackupPackageMode,
+  BackupVerification,
+  BackupImport,
+  BackupImportList,
+  BackupUploadSession,
+  WriteFreezeState,
   ConnectionStatus,
+  EnabledFormats,
   LoginResponse,
   MigrationConflictPolicy,
+  OperationsDashboard,
   MigrationDiscoverResponse,
+  MigrationSourceAuth,
   MigrationPlan,
   MigrationReport,
   MigrationSourceType,
   MigrationTask,
   MigrationTaskList,
+  RemoteNexusRepositoryList,
+  RemoteNexusRepositoryRequest,
   Repository,
   RepositoryList,
-  ReplicationApplyLogList,
   RepoFormat,
   RepoType,
   RepoVisibility,
@@ -31,14 +57,48 @@ import type {
   UserStatus,
 } from "./types";
 
+export interface OperationsObservabilityQuery {
+  from?: string;
+  to?: string;
+}
+
+function operationsObservabilityPath(path: string, query: OperationsObservabilityQuery): string {
+  const params = new URLSearchParams();
+  if (query.from) params.set("from", query.from);
+  if (query.to) params.set("to", query.to);
+  const suffix = params.toString();
+  return suffix ? `${path}?${suffix}` : path;
+}
+
+/** 读取当前节点真实业务指标，不含主机或其他节点数据。 */
+export function getOperationsDashboard(
+  query: OperationsObservabilityQuery = {},
+): Promise<OperationsDashboard> {
+  return request<OperationsDashboard>(
+    operationsObservabilityPath("/observability/dashboard", query),
+  );
+}
+
+/** 读取当前实例所在主机的持久化分钟样本。 */
+export function getHostMonitoring(
+  query: OperationsObservabilityQuery = {},
+): Promise<HostMonitoring> {
+  return request<HostMonitoring>(operationsObservabilityPath("/observability/host", query));
+}
+
 export interface Pagination {
   page?: number;
   page_size?: number;
 }
 
-/** 实例状态：版本、就绪、是否已初始化、用户数（自举判定依据）。 */
+/** 实例状态：版本、就绪、是否已初始化、用户数与自举许可。 */
 export function getStatus(): Promise<StatusInfo> {
   return request<StatusInfo>("/status");
+}
+
+/** FR-32：读取本进程启动时启用的格式（仅管理员）。 */
+export function getEnabledFormats(): Promise<EnabledFormats> {
+  return request<EnabledFormats>("/formats/enabled");
 }
 
 /** 空库自举：创建首个管理员并返回会话令牌。 */
@@ -76,7 +136,7 @@ export function createUser(input: {
 
 export function updateUser(
   id: number,
-  patch: { role?: UserRole; status?: UserStatus },
+  patch: { role?: UserRole; status?: UserStatus; webLoginDisabled?: boolean },
 ): Promise<User> {
   return request<User>(`/users/${id}`, { method: "PATCH", body: patch });
 }
@@ -87,6 +147,38 @@ export function deleteUser(id: number): Promise<void> {
 
 export function changePassword(id: number, password: string): Promise<void> {
   return request<void>(`/users/${id}/password`, { method: "POST", body: { password } });
+}
+
+/** FR-109：管理员读取指定用户在 hosted 仓库的发布策略。 */
+export interface PublishPolicy {
+  userId: number;
+  username: string;
+  webLoginDisabled: boolean;
+  repository: string;
+  allowedPrefixes: string[];
+  maxAssetsHour: number;
+  maxBytesDay: number;
+  maxFileBytes: number;
+  immutableRelease: boolean;
+}
+
+/** FR-109：读取发布账号策略与 hosted Release 不可变开关。 */
+export function getPublishPolicy(userId: number, repository: string): Promise<PublishPolicy> {
+  return request<PublishPolicy>(
+    `/users/${userId}/publish-policies/${encodeURIComponent(repository)}`,
+  );
+}
+
+/** FR-109：全量保存发布账号策略；空前缀数组表示允许全部路径。 */
+export function updatePublishPolicy(
+  userId: number,
+  repository: string,
+  policy: Omit<PublishPolicy, "userId" | "username" | "repository">,
+): Promise<PublishPolicy> {
+  return request<PublishPolicy>(
+    `/users/${userId}/publish-policies/${encodeURIComponent(repository)}`,
+    { method: "PUT", body: policy },
+  );
 }
 
 export function listTokens(): Promise<TokenList> {
@@ -240,7 +332,24 @@ export function batchDeleteAssets(
     `/repositories/${encodeURIComponent(repo)}/assets/batch-delete`,
     {
       method: "POST",
-      body: { paths },
+      body: { paths, overrideReason: "管理员批量删除制品" },
+    },
+  );
+}
+
+/** FR-105：调用统一资产操作事务（删除、移动、重命名）。 */
+export function applyAssetOperation(
+  repo: string,
+  input: AssetOperationInput,
+): Promise<AssetOperationResponse> {
+  return request<AssetOperationResponse>(
+    `/repositories/${encodeURIComponent(repo)}/assets/operations`,
+    {
+      method: "POST",
+      body: {
+        ...input,
+        overrideReason: input.overrideReason?.trim() || "管理员资产操作",
+      },
     },
   );
 }
@@ -300,6 +409,7 @@ export function discoverMigrations(
   input: {
     sourceType: MigrationSourceType;
     sourceConfig?: Record<string, unknown>;
+    sourceAuth?: MigrationSourceAuth;
     credentialRef?: string;
     conflictPolicy?: MigrationConflictPolicy;
   },
@@ -314,14 +424,15 @@ export function discoverMigrations(
 
 /** 从在线 Nexus 仅拉仓库索引（不创建迁移任务、不扫资产）。 */
 export function listRemoteNexusRepositories(
-  input: { url: string; credentialRef?: string },
+  input: RemoteNexusRepositoryRequest,
   opts?: { signal?: AbortSignal },
-): Promise<{ items: { name: string; format: string; type: string }[]; total: number }> {
-  return request("/migrations/remote-repositories", {
+): Promise<RemoteNexusRepositoryList> {
+  return request<RemoteNexusRepositoryList>("/migrations/remote-repositories", {
     method: "POST",
     body: {
-      url: input.url,
+      sourceConfig: input.sourceConfig,
       credentialRef: input.credentialRef || undefined,
+      sourceAuth: input.sourceAuth,
     },
     signal: opts?.signal,
   });
@@ -399,6 +510,149 @@ export function finalizeMigration(id: number): Promise<MigrationTask> {
   return request<MigrationTask>(`/migrations/${id}/finalize`, { method: "POST" });
 }
 
+// —— 节点备份与搬迁（FR-132）——
+// 备份包是搬迁的传输单位：生成 → 取签名链接 → 新机拉取 → 导入。
+
+/** 备份包列表（分页）。 */
+export function listBackups(params: Pagination = {}): Promise<BackupPackageList> {
+  return request<BackupPackageList>("/backups", {
+    query: { page: params.page, page_size: params.page_size },
+  });
+}
+
+export function getBackup(packageId: string): Promise<BackupPackage> {
+  return request<BackupPackage>(`/backups/${encodeURIComponent(packageId)}`);
+}
+
+/** 发起备份生成。生成耗时与包体积同阶，返回后需轮询列表看进度。 */
+export function createBackup(input: {
+  mode: BackupPackageMode;
+  label?: string;
+}): Promise<BackupPackage> {
+  return request<BackupPackage>("/backups", { method: "POST", body: input });
+}
+
+export function deleteBackup(packageId: string): Promise<void> {
+  return request<void>(`/backups/${encodeURIComponent(packageId)}`, { method: "DELETE" });
+}
+
+/** 签发带时效的下载链接，供新机器直接拉取。 */
+export function createBackupLink(
+  packageId: string,
+  ttlSeconds?: number,
+): Promise<BackupLink> {
+  return request<BackupLink>(`/backups/${encodeURIComponent(packageId)}/link`, {
+    method: "POST",
+    body: ttlSeconds ? { ttlSeconds } : {},
+  });
+}
+
+/** 校验备份包完整性；deep 会逐 blob 比对内容摘要，耗时与包体积同阶。 */
+export function verifyBackup(packageId: string, deep = false): Promise<BackupVerification> {
+  return request<BackupVerification>(`/backups/${encodeURIComponent(packageId)}/verify`, {
+    method: "POST",
+    query: { deep: deep ? "true" : "false" },
+    // 深度校验可能持续数分钟，需放宽请求超时。
+    timeoutMs: deep ? 30 * 60 * 1000 : undefined,
+  });
+}
+
+// —— 写入冻结窗口（FR-134）——
+// 搬迁切换用：冻结 → 生成差包/导入 → 起服 → 解冻。窗口必须有界，不允许无限期。
+
+/** 查询当前写入冻结状态。 */
+export function getWriteFreeze(): Promise<WriteFreezeState> {
+  return request<WriteFreezeState>("/maintenance/freeze");
+}
+
+/** 冻结节点写入；传 until（绝对时间）或 ttlSeconds（相对秒数），二者都缺省时用默认 7200。 */
+export function freezeWrites(input: {
+  until?: string;
+  ttlSeconds?: number;
+  reason?: string;
+}): Promise<WriteFreezeState> {
+  return request<WriteFreezeState>("/maintenance/freeze", { method: "POST", body: input });
+}
+
+/** 解冻节点写入（幂等）。 */
+export function unfreezeWrites(): Promise<WriteFreezeState> {
+  return request<WriteFreezeState>("/maintenance/freeze", { method: "DELETE" });
+}
+
+// —— 从 URL 导入备份包（FR-137）——
+// 仅接受 http/https，由服务端拉取；校验/暂存完成后需重启服务替换。
+
+/** 从 URL 拉取并导入备份包；返回受理记录（202），导入进度随后由列表轮询可见。 */
+export function importBackupFromURL(input: {
+  sourceUrl: string;
+  overwrite?: boolean;
+  deep?: boolean;
+  expectedSha256?: string;
+}): Promise<BackupImport> {
+  return request<BackupImport>("/backups/import", { method: "POST", body: input });
+}
+
+/** 导入记录列表（分页，最近优先）。 */
+export function listBackupImports(params: Pagination = {}): Promise<BackupImportList> {
+  return request<BackupImportList>("/backups/imports", {
+    query: { page: params.page, page_size: params.page_size },
+  });
+}
+
+/** 导入记录详情；id 为 importId。 */
+export function getBackupImport(id: string): Promise<BackupImport> {
+  return request<BackupImport>(`/backups/imports/${encodeURIComponent(id)}`);
+}
+
+// —— 分片上传备份包（FR-137 第三通道）——
+// 浏览器内传 GB 级包：init 取服务端 chunkSize → 按 File.slice(chunkSize) 逐片 PUT → complete 触发导入。
+// 支持续传（GET 拉回 uploadedChunks，只补缺失片）与取消（abort 置 aborted 并清分片）。
+
+/** 发起分片上传会话；返回服务端决定的 chunkSize，前端据此切分。 */
+export function createBackupUpload(input: {
+  fileName: string;
+  totalBytes: number;
+  sha256?: string;
+}): Promise<BackupUploadSession> {
+  return request<BackupUploadSession>("/backups/uploads", { method: "POST", body: input });
+}
+
+/** 上传单个分片：请求体为原始字节（octet-stream），经 requestBinary 绕过 JSON 序列化。 */
+export function uploadBackupChunk(
+  uploadId: string,
+  index: number,
+  body: Blob | File,
+  opts?: { signal?: AbortSignal },
+): Promise<BackupUploadSession> {
+  return requestBinary<BackupUploadSession>(
+    `/backups/uploads/${encodeURIComponent(uploadId)}/chunks/${index}`,
+    { method: "PUT", body, signal: opts?.signal },
+  );
+}
+
+/** 查询上传会话（续传用）；abort 后仍返回 200 + status=aborted（审计保留，非 404）。 */
+export function getBackupUpload(uploadId: string): Promise<BackupUploadSession> {
+  return request<BackupUploadSession>(`/backups/uploads/${encodeURIComponent(uploadId)}`);
+}
+
+/** 拼装并触发本地导入；返回受理记录（202），导入进度随后由导入记录列表轮询可见，需重启服务生效。 */
+export function completeBackupUpload(
+  uploadId: string,
+  input?: { sha256?: string; overwrite?: boolean; deep?: boolean },
+): Promise<BackupImport> {
+  return request<BackupImport>(`/backups/uploads/${encodeURIComponent(uploadId)}/complete`, {
+    method: "POST",
+    body: input ?? {},
+  });
+}
+
+/** 取消上传会话：置 aborted 并清分片；返回 204。 */
+export function abortBackupUpload(uploadId: string): Promise<void> {
+  return request<void>(`/backups/uploads/${encodeURIComponent(uploadId)}/abort`, {
+    method: "POST",
+  });
+}
+
 // —— 运维端点（非契约）——
 
 /** 清理 Maven 仓库中无 jar 的 GAV 目录（仅 maven hosted）。 */
@@ -437,16 +691,44 @@ export interface SettingsConfig {
   upstreamTimeout: number;
   /** 同步轮询间隔（秒）。 */
   syncInterval: number;
+  /** 允许访问的域名白名单（空数组 = 不限制；仅白名单内的 Host 可访问，节点本地）。 */
+  allowedHosts: string[];
+  /** 回源 Token 校验开关（FR-130，节点本地）。 */
+  originTokenEnabled: boolean;
+  /** 回源 Token 请求头名（CDN 回源时注入）。 */
+  originTokenHeader: string;
+  /** 回源 Token 值（粘贴到 CDN 回源请求头规则）。 */
+  originTokenValue: string;
 }
 
-/** 读取实例级基础配置（匿名开关 / 对外 URL / 回源超时 / 同步间隔，仅 admin）。 */
+/**
+ * 归一化设置响应：旧后端 / 旧 devmock 场景可能缺少
+ * allowedHosts 与 originToken* 字段（FR-129/130 后新增），补齐默认值，
+ * 避免表单层对 undefined 调 join 等方法崩溃。
+ */
+function normalizeSettings(raw: SettingsConfig): SettingsConfig {
+  return {
+    anonymousAccess: raw.anonymousAccess ?? false,
+    publicUrl: raw.publicUrl ?? "",
+    upstreamTimeout: raw.upstreamTimeout ?? 30,
+    syncInterval: raw.syncInterval ?? 5,
+    allowedHosts: Array.isArray(raw.allowedHosts) ? raw.allowedHosts : [],
+    originTokenEnabled: raw.originTokenEnabled ?? false,
+    originTokenHeader: raw.originTokenHeader ?? "",
+    originTokenValue: raw.originTokenValue ?? "",
+  };
+}
+
+/** 读取实例级基础配置（匿名开关 / 对外 URL / 回源超时 / 同步间隔 / 域名白名单 / 回源 Token，仅 admin）。 */
 export function getSettings(): Promise<SettingsConfig> {
-  return request<SettingsConfig>("/settings");
+  return request<SettingsConfig>("/settings").then(normalizeSettings);
 }
 
 /** 部分更新实例级基础配置（仅 admin，传哪个改哪个，写后运行时生效）。 */
 export function putSettings(patch: Partial<SettingsConfig>): Promise<SettingsConfig> {
-  return request<SettingsConfig>("/settings", { method: "PUT", body: patch });
+  return request<SettingsConfig>("/settings", { method: "PUT", body: patch }).then(
+    normalizeSettings,
+  );
 }
 
 // —— 开源协议清单（admin 专属，非契约）——
@@ -469,126 +751,6 @@ export function getLicenses(): Promise<LicenseManifest> {
   return request<LicenseManifest>("/licenses");
 }
 
-// ---- FR-86: 集群状态（非契约端点，仅管理员）----
-
-export interface ClusterStatus {
-  nodeId: string;
-  peerUrl?: string;
-  /** 多对端列表（FR-D）；不含令牌明文。 */
-  peers?: PeerConfig[];
-  tokenSet: boolean;
-  enabled: boolean;
-  watermark: number;
-  hasWatermark: boolean;
-  lastSyncAt?: string;
-  lastError?: string;
-  /** 最近一次同步的进度/构成摘要（FR-C）。 */
-  lastSync?: LastSyncSummary;
-}
-
-/** 复制对端配置（FR-D 多对端）：保存时携带 token，读回时省略。 */
-export interface PeerConfig {
-  url: string;
-  token?: string;
-}
-
-/** 最近一次同步的摘要（FR-C）：变更量、构成、成功/失败/进行中。 */
-export interface LastSyncSummary {
-  startedAt: string;
-  finishedAt?: string;
-  success: boolean | null;
-  fromSeq: number;
-  toSeq: number;
-  changes: number;
-  applied: number;
-  failed: number;
-  blobs: number;
-  entityCounts: string;
-  errorText?: string;
-}
-
-/** 集群同步状态（FR-86）。 */
-export function getClusterStatus(): Promise<ClusterStatus> {
-  return request<ClusterStatus>("/cluster");
-}
-
-/** 集群配置（FR-88）：可选字段，传哪个改哪个（对端 URL/令牌/自动同步开关；FR-D 支持多对端列表）。 */
-export function setClusterConfig(config: {
-  peerUrl?: string;
-  peerToken?: string;
-  enabled?: boolean;
-  peers?: PeerConfig[];
-}): Promise<ClusterStatus> {
-  return request<ClusterStatus>("/cluster", {
-    method: "PUT",
-    body: config,
-  });
-}
-
-/** 立即同步一次（FR-88，无论自动开关状态）。 */
-export function triggerClusterSync(): Promise<ClusterStatus> {
-  return request<ClusterStatus>("/cluster/sync-now", {
-    method: "POST",
-  });
-}
-
-/** 同步历史记录条目（FR-88 可视化）：success 为 null 表示进行中。 */
-export interface SyncLogEntry {
-  id: number;
-  peerUrl: string;
-  startedAt: string;
-  finishedAt?: string;
-  success: boolean | null;
-  fromSeq: number;
-  toSeq: number;
-  changes: number;
-  applied: number;
-  failed: number;
-  blobs: number;
-  /** 变更实体构成 JSON 文本，如 {"asset":5,"repository":2,"user":1}。 */
-  entityCounts: string;
-  errorText?: string;
-}
-
-export interface SyncLogList {
-  items: SyncLogEntry[];
-  total: number;
-}
-
-/** 同步历史记录（FR-88，分页，按开始时间倒序）。 */
-export function getClusterSyncLogs(limit = 50, offset = 0): Promise<SyncLogList> {
-  return request<SyncLogList>(`/cluster/sync-logs?limit=${limit}&offset=${offset}`);
-}
-
-/** 复制变更日志条目（FR-98 同步历史详情：repl_change 反推）。 */
-export interface ReplChangeEntry {
-  seq: number;
-  nodeId: string;
-  op: string; // put | delete
-  entityType: string;
-  entityKey: string;
-  data: string;
-  ts: string;
-}
-
-export interface SyncLogChangeList {
-  items: ReplChangeEntry[];
-  total: number;
-}
-
-/** 某次同步的具体变更列表（FR-98，分页；entityType 非空时按实体类型过滤分类展示）。 */
-export function getClusterSyncLogChanges(
-  id: number,
-  limit = 100,
-  offset = 0,
-  entityType?: string,
-): Promise<SyncLogChangeList> {
-  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
-  if (entityType) params.set("entityType", entityType);
-  return request<SyncLogChangeList>(`/cluster/sync-logs/${id}/changes?${params.toString()}`);
-}
-
-/** 审计日志条目（FR-38）。 */
 export interface AuditLogEntry {
   id: number;
   ts: string;
@@ -600,6 +762,13 @@ export interface AuditLogEntry {
   detail: string;
   result: string;
   ip: string;
+  userId?: number;
+  authSource?: string;
+  tokenId?: number;
+  tokenName?: string;
+  userAgent?: string;
+  requestId?: string;
+  sourceNode?: string;
 }
 
 export interface AuditLogList {
@@ -610,8 +779,13 @@ export interface AuditLogList {
 /** 审计日志查询参数（FR-38，全可选）。 */
 export interface AuditLogQuery {
   actor?: string;
+  userId?: string;
+  authSource?: string;
+  tokenId?: string;
   action?: string;
   repo?: string;
+  result?: string;
+  ip?: string;
   from?: string;
   to?: string;
   limit?: number;
@@ -622,8 +796,13 @@ export interface AuditLogQuery {
 export function getAuditLogs(q: AuditLogQuery = {}): Promise<AuditLogList> {
   const params = new URLSearchParams();
   if (q.actor) params.set("actor", q.actor);
+  if (q.userId) params.set("userId", q.userId);
+  if (q.authSource) params.set("authSource", q.authSource);
+  if (q.tokenId) params.set("tokenId", q.tokenId);
   if (q.action) params.set("action", q.action);
   if (q.repo) params.set("repo", q.repo);
+  if (q.result) params.set("result", q.result);
+  if (q.ip) params.set("ip", q.ip);
   if (q.from) params.set("from", q.from);
   if (q.to) params.set("to", q.to);
   params.set("limit", String(q.limit ?? 50));
@@ -631,25 +810,130 @@ export function getAuditLogs(q: AuditLogQuery = {}): Promise<AuditLogList> {
   return request<AuditLogList>(`/audit-logs?${params.toString()}`);
 }
 
-export interface ReplicationApplyLogQuery {
-  result?: string;
-  entityType?: string;
-  sourceNode?: string;
-  limit?: number;
+/** FR-118：统一审计观测筛选。category/result 可多选；时间为空时由服务端固定为最近 24 小时。 */
+export interface AuditObservabilityQuery {
+  from?: string;
+  to?: string;
+  category?: AuditCategory[];
+  result?: AuditResult[];
+  actor?: string;
+  repository?: string;
+  /** 关键字：服务端按事件 ID / 动作 / 摘要 / 目标 / 操作者匹配。 */
+  q?: string;
+  /** 风险状态：pending（未确认批次）/ acknowledged（已确认批次）。 */
+  attention?: "pending" | "acknowledged";
+  /** HTTP 请求方法（GET/POST/...）。 */
+  method?: string;
+  /** 操作名称（精确匹配）。 */
+  action?: string;
+  /** 客户端 IP 前缀。 */
+  clientIp?: string;
+  /** 认证方式（jwt / api_key / web / system）。 */
+  authSource?: string;
+  /** 显式偏移：分页器直达指定页（优先级高于 cursor）。 */
   offset?: number;
 }
 
-/** 复制应用日志（分页及结果、实体、来源节点筛选）。 */
-export function getReplicationApplyLogs(
-  q: ReplicationApplyLogQuery = {},
-): Promise<ReplicationApplyLogList> {
+function auditObservabilityPath(
+  path: string,
+  query: AuditObservabilityQuery & {
+    snapshot?: string;
+    cursor?: string;
+    limit?: number;
+    status?: string;
+  },
+): string {
   const params = new URLSearchParams();
-  if (q.result) params.set("result", q.result);
-  if (q.entityType) params.set("entityType", q.entityType);
-  if (q.sourceNode) params.set("sourceNode", q.sourceNode);
-  params.set("limit", String(q.limit ?? 50));
-  params.set("offset", String(q.offset ?? 0));
-  return request<ReplicationApplyLogList>(`/replication-apply-logs?${params.toString()}`);
+  if (query.from) params.set("from", query.from);
+  if (query.to) params.set("to", query.to);
+  for (const category of query.category ?? []) params.append("category", category);
+  for (const result of query.result ?? []) params.append("result", result);
+  if (query.actor) params.set("actor", query.actor);
+  if (query.repository) params.set("repository", query.repository);
+  if (query.q) params.set("q", query.q);
+  if (query.attention) params.set("attention", query.attention);
+  if (query.method) params.set("method", query.method);
+  if (query.action) params.set("action", query.action);
+  if (query.clientIp) params.set("clientIp", query.clientIp);
+  if (query.authSource) params.set("authSource", query.authSource);
+  if (query.offset !== undefined) params.set("offset", String(query.offset));
+  if (query.snapshot) params.set("snapshot", query.snapshot);
+  if (query.cursor) params.set("cursor", query.cursor);
+  if (query.limit !== undefined) params.set("limit", String(query.limit));
+  if (query.status) params.set("status", query.status);
+  const suffix = params.toString();
+  return suffix ? `${path}?${suffix}` : path;
+}
+
+/** 读取当前节点统一审计概览，并取得与事件页共享的稳定快照。 */
+export function getAuditSummary(
+  query: AuditObservabilityQuery = {},
+): Promise<AuditObservabilitySummary> {
+  return request<AuditObservabilitySummary>(
+    auditObservabilityPath("/observability/audit/summary", query),
+  );
+}
+
+/** 按服务端快照分页读取安全审计事件，客户端不得解析 snapshot 或 cursor。 */
+export function listAuditEvents(
+  query: AuditObservabilityQuery & { snapshot?: string; cursor?: string; limit?: number } = {},
+): Promise<AuditEventPage> {
+  return request<AuditEventPage>(auditObservabilityPath("/observability/audit/events", query));
+}
+
+/** 按稳定审计快照分页读取服务端权威的风险关注批次。 */
+export function listAuditAttentions(
+  query: AuditObservabilityQuery & { snapshot?: string; cursor?: string; limit?: number } = {},
+): Promise<AuditAttentionPage> {
+  return request<AuditAttentionPage>(
+    auditObservabilityPath("/observability/audit/attentions", query),
+  );
+}
+
+/** 读取一条只含脱敏详情的统一审计事件。 */
+export function getAuditEvent(eventId: string): Promise<AuditEventDetail> {
+  return request<AuditEventDetail>(`/observability/audit/events/${encodeURIComponent(eventId)}`);
+}
+
+/** 读取服务端签发的风险关注批次详情；attentionId 不由客户端拼装。 */
+export function getAuditAttention(
+  attentionId: string,
+  query: { cursor?: string; limit?: number } = {},
+): Promise<AuditAttentionDetail> {
+  return request<AuditAttentionDetail>(
+    auditObservabilityPath(
+      `/observability/audit/attention/${encodeURIComponent(attentionId)}`,
+      query,
+    ),
+  );
+}
+
+/** 原子确认整个服务端风险批次；重复确认保留第一次的确认身份快照。 */
+export function acknowledgeAuditAttention(
+  attentionId: string,
+): Promise<AcknowledgeAuditAttentionResponse> {
+  return request<AcknowledgeAuditAttentionResponse>(
+    "/observability/audit/attention-acknowledgements",
+    { method: "PUT", body: { attentionId } },
+  );
+}
+
+/** FR-117：通知查询参数。缺省为页眉口径（最近 24 小时未确认风险预览）。 */
+export interface AuditNotificationQuery {
+  from?: string;
+  to?: string;
+  status?: AuditNotificationStatus;
+  limit?: number;
+  cursor?: string;
+}
+
+/** 读取风险通知批次分页：缺省为页眉徽标口径；携带筛选时返回与 status 同口径的分页列表。 */
+export function getAuditAttentionNotifications(
+  query: AuditNotificationQuery = {},
+): Promise<AuditAttentionNotificationList> {
+  return request<AuditAttentionNotificationList>(
+    auditObservabilityPath("/observability/audit/notifications", query),
+  );
 }
 
 // ---- FR-54: Tree API ----

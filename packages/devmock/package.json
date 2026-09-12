@@ -10,12 +10,13 @@
     ".": "./src/index.ts",
     "./schema": "./src/schema.gen.ts",
     "./msw": "./src/msw.ts",
+    "./scenario": "./src/scenario.ts",
     "./store": "./src/store.ts",
     "./browser": "./src/browser.ts",
     "./node": "./src/node.ts"
   },
   "scripts": {
-    "gen": "openapi-typescript ../../api/openapi.yaml -o src/schema.gen.ts",
+    "gen": "openapi-typescript ../../api/openapi.yaml -o src/schema.gen.ts && node scripts/emit-licenses.mjs",
     "build": "pnpm run gen && tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",

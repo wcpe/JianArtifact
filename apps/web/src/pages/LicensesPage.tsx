@@ -3,7 +3,7 @@
 // 经 admin 专属端点 GET /api/v1/licenses 运行时拉取（不打进前端 bundle，
 // 避免依赖名与精确版本清单随静态资源公开暴露）。
 import { Anchor, Badge, Card, Stack, Table, Text, TextInput, Title } from "@mantine/core";
-import { EmptyState, PageHeader } from "@jianartifact/ui";
+import { EmptyState } from "@jianartifact/ui";
 import { IconSearch } from "@tabler/icons-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -94,13 +94,12 @@ function DependencyTable({
 export function LicensesPage() {
   const { t } = useTranslation();
   const [query, setQuery] = useState("");
-  const state = useAsync(getLicenses, []);
+  const state = useAsync(getLicenses, [], { cacheKey: "licenses" });
 
   const q = query.trim().toLowerCase();
 
   return (
     <>
-      <PageHeader title={t("licenses.title")} description={t("licenses.description")} />
       <AsyncBoundary state={state}>
         {(licenses) => {
           const goRows = q ? licenses.go.filter((r) => matchRow(r, q)) : licenses.go;

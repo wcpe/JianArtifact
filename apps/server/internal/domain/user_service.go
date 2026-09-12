@@ -10,8 +10,9 @@ import (
 
 // UserService 处理用户管理与口令。
 type UserService struct {
-	users    *repository.UserRepo
-	recorder ChangeRecorder
+	users     *repository.UserRepo
+	recorder  ChangeRecorder
+	writeGate BusinessWriteGate
 }
 
 // NewUserService 构造 UserService。
@@ -21,6 +22,9 @@ func NewUserService(users *repository.UserRepo) *UserService {
 
 // SetChangeRecorder 注入复制变更日志记录器（FR-83）；nil 表示不记录。
 func (s *UserService) SetChangeRecorder(r ChangeRecorder) { s.recorder = r }
+
+// SetBusinessWriteGate 注入备用节点本地业务写栅栏；nil 保持兼容行为。
+func (s *UserService) SetBusinessWriteGate(gate BusinessWriteGate) { s.writeGate = gate }
 
 // recordChange 记录复制变更日志；记录失败不阻断业务写（对账兜底，见 ADR-0013）。
 func (s *UserService) recordChange(entityType, entityKey, op string, data any) {
@@ -35,6 +39,15 @@ func (s *UserService) recordChange(entityType, entityKey, op string, data any) {
 // Count 返回用户总数（不含内置 anonymous，供初始化判断与状态统计）。
 func (s *UserService) Count() (int, error) { return s.users.CountExcluding(AnonymousUsername) }
 
+// Get 按用户 ID 返回用户信息，供管理员策略接口组合用户与仓库配置。
+func (s *UserService) Get(id int64) (*repository.User, error) {
+	u, err := s.users.GetByID(id)
+	if err != nil {
+		return nil, mapNotFound(err)
+	}
+	return u, nil
+}
+
 // List 返回分页用户与总数。
 func (s *UserService) List(limit, offset int) ([]repository.User, int, error) {
 	total, err := s.users.Count()
@@ -47,6 +60,9 @@ func (s *UserService) List(limit, offset int) ([]repository.User, int, error) {
 
 // Create 创建用户（默认角色 user）。role 为空则取 user。
 func (s *UserService) Create(username, password, role string) (*repository.User, error) {
+	if err := requireBusinessWrite(s.writeGate); err != nil {
+		return nil, err
+	}
 	if role == "" {
 		role = "user"
 	}
@@ -66,17 +82,24 @@ func (s *UserService) Create(username, password, role string) (*repository.User,
 		return nil, err
 	}
 	s.recordChange(EntityUser, UserKey(username), OpPut, UserChangeData{
-		Username: username, Role: role, Status: u.Status, PasswordHash: hash, CreatedAt: u.CreatedAt,
+		Username: username, Role: role, Status: u.Status, PasswordHash: hash, WebLoginDisabled: u.WebLoginDisabled, CreatedAt: u.CreatedAt,
 	})
 	return u, nil
 }
 
 // Update 更新角色 / 状态（空串不改）。内置 anonymous 用户不可修改。
-func (s *UserService) Update(id int64, role, status string) (*repository.User, error) {
+func (s *UserService) Update(id int64, role, status string, webLoginDisabled ...*bool) (*repository.User, error) {
+	if err := requireBusinessWrite(s.writeGate); err != nil {
+		return nil, err
+	}
 	if err := s.rejectAnonymous(id); err != nil {
 		return nil, err
 	}
-	if err := s.users.Update(id, role, status); err != nil {
+	var disabled *bool
+	if len(webLoginDisabled) > 0 {
+		disabled = webLoginDisabled[0]
+	}
+	if err := s.users.Update(id, role, status, disabled); err != nil {
 		return nil, mapNotFound(err)
 	}
 	u, err := s.users.GetByID(id)
@@ -84,13 +107,16 @@ func (s *UserService) Update(id int64, role, status string) (*repository.User, e
 		return nil, err
 	}
 	s.recordChange(EntityUser, UserKey(u.Username), OpPut, UserChangeData{
-		Username: u.Username, Role: u.Role, Status: u.Status, PasswordHash: u.PasswordHash, CreatedAt: u.CreatedAt,
+		Username: u.Username, Role: u.Role, Status: u.Status, PasswordHash: u.PasswordHash, WebLoginDisabled: u.WebLoginDisabled, CreatedAt: u.CreatedAt,
 	})
 	return u, nil
 }
 
 // Delete 删除用户。内置 anonymous 用户不可删除。
 func (s *UserService) Delete(id int64) error {
+	if err := requireBusinessWrite(s.writeGate); err != nil {
+		return err
+	}
 	if err := s.rejectAnonymous(id); err != nil {
 		return err
 	}
@@ -107,6 +133,9 @@ func (s *UserService) Delete(id int64) error {
 
 // ChangePassword 重置用户口令。内置 anonymous 用户不可改密。
 func (s *UserService) ChangePassword(id int64, password string) error {
+	if err := requireBusinessWrite(s.writeGate); err != nil {
+		return err
+	}
 	if err := s.rejectAnonymous(id); err != nil {
 		return err
 	}
@@ -122,7 +151,7 @@ func (s *UserService) ChangePassword(id int64, password string) error {
 		return mapNotFound(err)
 	}
 	s.recordChange(EntityUser, UserKey(u.Username), OpPut, UserChangeData{
-		Username: u.Username, Role: u.Role, Status: u.Status, PasswordHash: hash, CreatedAt: u.CreatedAt,
+		Username: u.Username, Role: u.Role, Status: u.Status, PasswordHash: hash, WebLoginDisabled: u.WebLoginDisabled, CreatedAt: u.CreatedAt,
 	})
 	return nil
 }

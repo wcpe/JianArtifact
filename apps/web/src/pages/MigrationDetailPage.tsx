@@ -13,7 +13,7 @@ import {
   ThemeIcon,
   Title,
 } from "@mantine/core";
-import { PageHeader } from "@jianartifact/ui";
+import { ErrorState, LoadingState } from "@jianartifact/ui";
 import {
   IconAlertTriangle,
   IconPlayerPlay,
@@ -40,7 +40,7 @@ import { MigrationRepoTable } from "../components/migration/MigrationRepoTable";
 import { MigrationSourceCard } from "../components/migration/MigrationSourceCard";
 import { MigrationStatCards } from "../components/migration/MigrationStatCards";
 import { parseTotals, planEstimatedAssets, statusColor } from "../components/migration/status";
-import { confirmDanger, notifyError, notifySuccess } from "../lib/feedback";
+import { confirmAction, confirmDanger, notifyError, notifySuccess } from "../lib/feedback";
 import { density } from "../theme/density";
 
 export function MigrationDetailPage() {
@@ -49,18 +49,36 @@ export function MigrationDetailPage() {
   const taskId = Number(id);
   const [task, setTask] = useState<MigrationTask | null>(null);
   const [report, setReport] = useState<MigrationReport | null>(null);
+  const [loadError, setLoadError] = useState<Error | null>(null);
+  const [reportError, setReportError] = useState<Error | null>(null);
+  const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
 
   const reload = useCallback(() => {
     if (!Number.isFinite(taskId) || taskId <= 0) {
       return;
     }
+    setLoading(true);
+    setLoadError(null);
     getMigration(taskId)
-      .then(setTask)
-      .catch((e: Error) => notifyError(e.message));
+      .then((next) => {
+        setTask(next);
+        setLoadError(null);
+      })
+      .catch((e: Error) => {
+        setTask(null);
+        setLoadError(e);
+      })
+      .finally(() => setLoading(false));
     getMigrationReport(taskId)
-      .then(setReport)
-      .catch(() => setReport(null));
+      .then((next) => {
+        setReport(next);
+        setReportError(null);
+      })
+      .catch((e: Error) => {
+        setReport(null);
+        setReportError(e);
+      });
   }, [taskId]);
 
   useEffect(() => {
@@ -124,13 +142,25 @@ export function MigrationDetailPage() {
   }, [report]);
   const warnings = task?.plan?.warnings ?? [];
   const repos = task?.plan?.repositories ?? [];
+  const hasNoMigrationCandidates = task?.status === "planned" && repos.length === 0;
 
   if (!Number.isFinite(taskId) || taskId <= 0) {
     return <Text c="red">{t("common.error")}</Text>;
   }
 
-  if (!task) {
-    return <Text>{t("common.loading")}</Text>;
+  if (loadError) {
+    return (
+      <ErrorState
+        message={t("common.error")}
+        description={loadError.message}
+        onRetry={reload}
+        retryLabel={t("common.retry")}
+      />
+    );
+  }
+
+  if (loading || !task) {
+    return <LoadingState message={t("common.loading")} />;
   }
 
   const act = (fn: () => Promise<unknown>, okMsg: string) => {
@@ -146,30 +176,27 @@ export function MigrationDetailPage() {
 
   return (
     <Stack gap="md">
-      <PageHeader
-        title={`${t("migrations.detail")} #${task.id}`}
-        description={t("migrations.detailDesc")}
-        actions={
-          <Group gap="xs">
-            <Button
-              variant="default"
-              leftSection={<IconRefresh size={16} />}
-              onClick={reload}
-              disabled={busy}
-            >
-              {t("common.retry")}
-            </Button>
-            <Button component={Link} to="/migrations" variant="default">
-              {t("migrations.backList")}
-            </Button>
-          </Group>
-        }
-      />
+      <Group justify="flex-end" gap="xs">
+        <Button
+          variant="default"
+          leftSection={<IconRefresh size={16} />}
+          onClick={reload}
+          disabled={busy}
+        >
+          {t("common.retry")}
+        </Button>
+        <Button component={Link} to="/migrations" variant="default">
+          {t("migrations.backList")}
+        </Button>
+      </Group>
 
       {/* 状态条 + 操作 */}
       <Card withBorder padding={density.cardPadding} radius="md">
         <Group justify="space-between" align="flex-start" wrap="wrap">
           <Group gap="sm">
+            <Text fw={600} size="md">
+              {`${t("migrations.detail")} #${task.id}`}
+            </Text>
             <Badge size="xl" variant="light" color={statusColor(task.status)} tt="none">
               {t(`migrations.status_${task.status}`)}
             </Badge>
@@ -185,11 +212,19 @@ export function MigrationDetailPage() {
             </div>
           </Group>
           <Group gap="xs">
-            {task.status === "planned" && (
+            {task.status === "planned" && !hasNoMigrationCandidates && (
               <Button
                 leftSection={<IconPlayerPlay size={16} />}
                 loading={busy}
-                onClick={() => act(() => startMigration(task.id), t("migrations.started"))}
+                onClick={() => {
+                  confirmAction({
+                    title: t("migrations.startConfirmTitle"),
+                    message: t("migrations.startConfirm"),
+                    confirmLabel: t("common.confirm"),
+                    cancelLabel: t("common.cancel"),
+                    onConfirm: () => act(() => startMigration(task.id), t("migrations.started")),
+                  });
+                }}
               >
                 {t("migrations.start")}
               </Button>
@@ -198,12 +233,21 @@ export function MigrationDetailPage() {
               <Button
                 leftSection={<IconRocket size={16} />}
                 loading={busy}
-                onClick={() => act(() => resumeMigration(task.id), t("migrations.resumed"))}
+                onClick={() => {
+                  confirmAction({
+                    title: t("migrations.resumeConfirmTitle"),
+                    message: t("migrations.resumeConfirm"),
+                    confirmLabel: t("common.confirm"),
+                    cancelLabel: t("common.cancel"),
+                    onConfirm: () => act(() => resumeMigration(task.id), t("migrations.resumed")),
+                  });
+                }}
               >
                 {t("migrations.resume")}
               </Button>
             )}
-            {(task.status === "planned" || task.status === "running") && (
+            {((task.status === "planned" && !hasNoMigrationCandidates) ||
+              task.status === "running") && (
               <Button
                 color="red"
                 variant="light"
@@ -252,9 +296,14 @@ export function MigrationDetailPage() {
             {task.errorMessage}
           </Alert>
         )}
-        {task.status === "planned" && (
+        {task.status === "planned" && !hasNoMigrationCandidates && (
           <Alert mt="md" color="yellow" title={t("migrations.plannedHint")}>
             {t("migrations.explicitStartHint")}
+          </Alert>
+        )}
+        {task.status === "planned" && repos.length === 0 && (
+          <Alert mt="md" color="gray" title="暂无迁移候选">
+            当前没有可迁移仓库，也尚无执行报告。
           </Alert>
         )}
         {task.status === "completed" &&
@@ -268,6 +317,11 @@ export function MigrationDetailPage() {
         {task.status === "completed" && (
           <Alert mt="md" color="gray" title={t("migrations.finalizeWhat")}>
             {t("migrations.finalizeExplain")}
+          </Alert>
+        )}
+        {reportError && (
+          <Alert mt="md" color="yellow" title={t("migrations.report")}>
+            {reportError.message}
           </Alert>
         )}
       </Card>

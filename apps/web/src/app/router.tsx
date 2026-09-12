@@ -3,8 +3,9 @@
 // /login 与 catch-all 统一落 /repositories（不分登录态）。
 // FR-70：页面组件全部 React.lazy 按路由分割 chunk；AppLayout 保持静态，
 // 页内懒加载挂到 AppLayout 内的 Suspense（布局不闪），/setup 等布局外路由由此处兜底。
-import { Navigate, Route, Routes, useNavigate, useParams } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 import { Suspense, lazy, useEffect } from "react";
+import { ForbiddenState } from "@jianartifact/ui";
 
 import { AppLayout } from "./AppLayout";
 import { RouteFallback } from "../components/RouteFallback";
@@ -16,16 +17,11 @@ const AclPage = lazy(() => import("../pages/AclPage").then((m) => ({ default: m.
 const DashboardPage = lazy(() =>
   import("../pages/DashboardPage").then((m) => ({ default: m.DashboardPage })),
 );
+const HostMonitoringPage = lazy(() =>
+  import("../pages/HostMonitoringPage").then((m) => ({ default: m.HostMonitoringPage })),
+);
 const LicensesPage = lazy(() =>
   import("../pages/LicensesPage").then((m) => ({ default: m.LicensesPage })),
-);
-const ClusterPage = lazy(() =>
-  import("../pages/ClusterPage").then((m) => ({ default: m.ClusterPage })),
-);
-const ClusterSyncLogDetailPage = lazy(() =>
-  import("../pages/ClusterSyncLogDetailPage").then((m) => ({
-    default: m.ClusterSyncLogDetailPage,
-  })),
 );
 const AuditLogPage = lazy(() =>
   import("../pages/AuditLogPage").then((m) => ({ default: m.AuditLogPage })),
@@ -75,6 +71,16 @@ function RequireAuth({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
+/** 管理观测页面即使被普通用户直链访问，也必须保持管理权限边界。 */
+function RequireAdmin({ children }: { children: ReactNode }) {
+  const { user } = useAuth();
+
+  if (user?.role !== "admin") {
+    return <ForbiddenState />;
+  }
+  return <>{children}</>;
+}
+
 /** catch-all 与 / 统一落仓库列表（FR-67：不分登录态）。 */
 function CatchAllRedirect() {
   return <Navigate to="/repositories" replace />;
@@ -106,24 +112,6 @@ export function AppRoutes() {
               </RequireAuth>
             }
           />
-          {/* FR-86：集群页（入口仅管理员可见；RequireAuth 兜底） */}
-          <Route
-            path="/cluster"
-            element={
-              <RequireAuth>
-                <ClusterPage />
-              </RequireAuth>
-            }
-          />
-          {/* FR-98：集群同步历史详情二级页（某次同步的具体变更） */}
-          <Route
-            path="/cluster/sync-logs/:id"
-            element={
-              <RequireAuth>
-                <ClusterSyncLogDetailPage />
-              </RequireAuth>
-            }
-          />
           {/* FR-90：设置页（入口仅管理员可见；RequireAuth 兜底） */}
           <Route
             path="/settings"
@@ -138,7 +126,19 @@ export function AppRoutes() {
             path="/audit-logs"
             element={
               <RequireAuth>
-                <AuditLogPage />
+                <RequireAdmin>
+                  <AuditLogPage />
+                </RequireAdmin>
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/host-monitoring"
+            element={
+              <RequireAuth>
+                <RequireAdmin>
+                  <HostMonitoringPage />
+                </RequireAdmin>
               </RequireAuth>
             }
           />
@@ -146,7 +146,9 @@ export function AppRoutes() {
             path="/dashboard"
             element={
               <RequireAuth>
-                <DashboardPage />
+                <RequireAdmin>
+                  <DashboardPage />
+                </RequireAdmin>
               </RequireAuth>
             }
           />
@@ -206,7 +208,12 @@ export function AppRoutes() {
 }
 
 /** /p/:name 别名重定向：将旧的公开链接导向内嵌布局的仓库详情页。 */
+export function publicRepositoryRedirectPath(name: string, search: string): string {
+  return `/repositories/${encodeURIComponent(name)}${search}`;
+}
+
 function PublicRedirect() {
   const { name = "" } = useParams();
-  return <Navigate to={`/repositories/${name}`} replace />;
+  const location = useLocation();
+  return <Navigate to={publicRepositoryRedirectPath(name, location.search)} replace />;
 }

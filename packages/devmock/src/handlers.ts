@@ -1,6 +1,7 @@
 // Mock 处理器：产出符合契约的响应体。类型绑定到 openapi-typescript 生成的
 // schema.gen.ts（编译期），运行期再由 contract 测试用 ajv 对同一契约做校验。
 import type { components } from "./schema.gen";
+import { MOCK_APP_VERSION } from "./version";
 
 type Schemas = components["schemas"];
 
@@ -37,6 +38,12 @@ export interface MockAuditLogEntry {
   detail: string;
   result: string;
   ip: string;
+  userId?: number;
+  authSource?: string;
+  tokenId?: number;
+  tokenName?: string;
+  userAgent?: string;
+  requestId?: string;
 }
 
 export interface MockAuditLogList {
@@ -44,16 +51,15 @@ export interface MockAuditLogList {
   total: number;
 }
 
-const MOCK_VERSION = "0.2.0-mock";
 const MOCK_TIME = "2026-01-01T00:00:00Z";
 
 /** GET /healthz 的契约响应。 */
-export function mockHealthz(version = MOCK_VERSION): HealthStatus {
+export function mockHealthz(version = MOCK_APP_VERSION): HealthStatus {
   return { status: "ok", version };
 }
 
 /** GET /readyz 就绪时的契约响应。 */
-export function mockReadyz(version = MOCK_VERSION): HealthStatus {
+export function mockReadyz(version = MOCK_APP_VERSION): HealthStatus {
   return { status: "ok", version };
 }
 
@@ -68,13 +74,14 @@ export function mockError(code: string, message: string): ApiError {
 }
 
 /** GET /api/v1/status 的契约响应。 */
-export function mockStatus(version = MOCK_VERSION): StatusInfo {
+export function mockStatus(version = MOCK_APP_VERSION): StatusInfo {
   return {
     version,
     ready: true,
     initialized: true,
     migrationVersion: "0001_init",
     userCount: 1,
+    bootstrapAllowed: false,
   };
 }
 
@@ -85,6 +92,7 @@ export function mockUser(): User {
     username: "admin",
     role: "admin",
     status: "active",
+    webLoginDisabled: false,
     createdAt: MOCK_TIME,
   };
 }
@@ -171,6 +179,9 @@ export function mockReplicationApplyLogList(): ReplicationApplyLogList {
       {
         sourceNode: "node-a",
         sourceSeq: 1,
+        sourceActor: "同步管理员",
+        sourceAuthSource: "password",
+        operationId: "op-0123456789abcdef0123456789abcdef",
         peerUrl: "https://peer.example",
         entityType: "asset",
         entityKey: "asset:raw/a.txt",

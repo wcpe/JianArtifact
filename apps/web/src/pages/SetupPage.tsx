@@ -22,12 +22,11 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Navigate, useNavigate } from "react-router-dom";
 
-import { ApiError } from "../api/client";
 import { getStatus } from "../api/endpoints";
 import { useAuth } from "../auth/AuthContext";
 import { BrandLogo } from "../components/BrandLogo";
 import { useAsync } from "../hooks/useAsync";
-import { LoadingState } from "@jianartifact/ui";
+import { ErrorState, ForbiddenState, LoadingState } from "@jianartifact/ui";
 
 interface FormValues {
   username: string;
@@ -67,8 +66,46 @@ export function SetupPage() {
     return <LoadingState message={t("common.loading")} />;
   }
 
+  if (status.forbidden) {
+    return (
+      <Center mih="100vh" p="md">
+        <ForbiddenState message={t("common.forbidden")} />
+      </Center>
+    );
+  }
+
+  if (status.error || !status.data) {
+    return (
+      <Center mih="100vh" p="md">
+        <ErrorState
+          message={t("setup.statusUnavailable")}
+          onRetry={status.reload}
+          retryLabel={t("common.retry")}
+        />
+      </Center>
+    );
+  }
+
+  if (status.data.bootstrapAllowed !== true) {
+    if (status.data.userCount > 0) {
+      return <Navigate to="/repositories" replace />;
+    }
+    return (
+      <Center mih="100vh" p="md">
+        <Card withBorder shadow="md" radius="md" p="xl" w={560} maw="100%">
+          <Stack gap="sm">
+            <Title order={3}>{t("setup.bootstrapUnavailable")}</Title>
+            <Text c="dimmed" size="sm">
+              {t("setup.bootstrapUnavailableHint")}
+            </Text>
+          </Stack>
+        </Card>
+      </Center>
+    );
+  }
+
   // 已初始化实例不应停留在初始化页：回仓库列表（FR-67 整页登录已删除）。
-  if (status.data && status.data.userCount > 0) {
+  if (status.data.userCount > 0) {
     return <Navigate to="/repositories" replace />;
   }
 
@@ -88,8 +125,8 @@ export function SetupPage() {
       .then(() => {
         setActive(2);
       })
-      .catch((err: unknown) => {
-        setError(err instanceof ApiError ? err.message : String(err));
+      .catch(() => {
+        setError(t("setup.bootstrapFailed"));
       })
       .finally(() => {
         setSubmitting(false);

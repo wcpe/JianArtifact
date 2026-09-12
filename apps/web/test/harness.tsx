@@ -19,6 +19,8 @@ interface RenderOptions {
   authenticated?: boolean;
   /** 自定义登录用户快照（默认管理员）；仅 authenticated=true 时生效。 */
   user?: User;
+  /** 自定义会话令牌，用于校验不同角色的真实 Mock 鉴权路径。 */
+  token?: string;
 }
 
 function Providers({ children, route }: { children: ReactNode; route: string }) {
@@ -52,9 +54,9 @@ const MOCK_USER = {
 
 /** 在完整 Provider 链下渲染组件；authenticated=true 时预置令牌与用户快照。 */
 export function renderWithProviders(ui: ReactElement, options: RenderOptions = {}) {
-  const { route = "/", authenticated = false, user } = options;
+  const { route = "/", authenticated = false, user, token } = options;
   if (authenticated) {
-    setToken("mock.jwt.token");
+    setToken(token ?? "mock.jwt.token");
     localStorage.setItem("jianartifact.user", JSON.stringify(user ?? MOCK_USER));
   } else {
     setToken(null);

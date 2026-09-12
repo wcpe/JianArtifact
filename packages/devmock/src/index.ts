@@ -4,5 +4,16 @@
 // 浏览器 / Node worker 分别经子路径 "./browser" "./node" 导出，避免交叉引入运行时。
 export * from "./handlers";
 export { loadOpenApi, schemaFor } from "./openapi";
-export { handlers } from "./msw";
+export { handlers, resetMockBackups } from "./msw";
+export {
+  DEV_MOCK_ROUTE_HEADER,
+  DEV_MOCK_SCENARIO_HEADER,
+  pendingDevMockRequests,
+  releaseDevMockPendingRequests,
+  resetDevMockScenario,
+  setDevMockScenario,
+  waitForDevMockPendingRequest,
+} from "./scenario";
+export type { DevMockScenario } from "./scenario";
+export { MOCK_APP_VERSION, MOCK_MIGRATION_VERSION, MOCK_SCHEMA_VERSION } from "./version";
 export { store, resetStore, emptyStore, MOCK_TOKEN } from "./store";

@@ -1,0 +1,121 @@
+// 审计工作台（单列表 + 顶部 KPI）：滚动限制、KPI 卡片、动作翻译、筛选与批次抽屉的回归覆盖。
+import { screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it } from "vitest";
+
+import { AuditWorkbenchView } from "../src/components/audit/AuditWorkbenchView";
+import { renderWithProviders } from "./harness";
+
+function renderWorkbench(route = "/audit-logs") {
+  return renderWithProviders(<AuditWorkbenchView />, { route, authenticated: true });
+}
+
+describe("审计工作台（单列表 + 顶部 KPI）", () => {
+  it("锁定视口高度：外层不滚动，列表在剩余高度内滚动", async () => {
+    renderWorkbench();
+
+    const workbench = await screen.findByTestId("audit-workbench");
+    expect(workbench).toBeTruthy();
+    const outerStyle = workbench.style;
+    expect(outerStyle.height).toContain("calc(100dvh");
+    expect(outerStyle.overflow).toBe("hidden");
+
+    const recordsScroll = screen.getByTestId("audit-records-scroll");
+    expect(recordsScroll.style.overflowY).toBe("auto");
+    // 右栏已移除：待处理风险改为筛选维度。
+    expect(screen.queryByTestId("audit-risk-sidebar")).toBeNull();
+  });
+
+  it("顶部展示 KPI 卡片指标", async () => {
+    renderWorkbench();
+
+    // KPI 卡片 label（与列表结果列文案重名，用 All 变体断言存在）。
+    expect(await screen.findByText("审计事件")).toBeTruthy();
+    expect(screen.getAllByText("成功").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("失败").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("高危").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("待确认批次").length).toBeGreaterThan(0);
+  });
+
+  it("记录区为 OpsSection 分区卡：标题行含时间范围，无重复页面标题", async () => {
+    renderWorkbench();
+
+    // 页面标题只出现在页眉面包屑，页面内不重复渲染大标题。
+    expect(screen.queryByRole("heading", { name: "审计中心" })).toBeNull();
+    expect(await screen.findByText("审计记录")).toBeTruthy();
+    // 时间范围 SegmentedControl（渲染为 radio）
+    expect(screen.getByRole("radio", { name: "24h" })).toBeTruthy();
+    expect(screen.getByRole("radio", { name: "7d" })).toBeTruthy();
+    expect(screen.getByRole("radio", { name: "30d" })).toBeTruthy();
+  });
+
+  it("动作列展示 i18n 中文标签而非契约值", async () => {
+    renderWorkbench();
+
+    // 契约值 auth.login_rejected → 中文标签
+    expect(await screen.findByText("管理登录被拒绝")).toBeTruthy();
+    expect(screen.queryByText("auth.login_rejected")).toBeNull();
+  });
+
+  it("点击行内展开脱敏详情", async () => {
+    const user = userEvent.setup();
+    renderWorkbench();
+
+    const rows = await screen.findAllByRole("button", { name: /审计事件：/ });
+    expect(rows.length).toBeGreaterThan(0);
+    await user.click(rows[0]!);
+    expect(await screen.findByText("请求 ID")).toBeTruthy();
+    expect(screen.getByText("User-Agent")).toBeTruthy();
+    expect(screen.getByText("请求体（已脱敏）")).toBeTruthy();
+  });
+});
+
+describe("审计工作台（筛选与搜索）", () => {
+  it("关键字搜索过滤列表，清除筛选可恢复", async () => {
+    const user = userEvent.setup();
+    renderWorkbench();
+
+    const box = await screen.findByPlaceholderText("路径 / 动作 / 操作者邮箱");
+    await user.type(box, "不存在的对象");
+    await user.click(screen.getByRole("button", { name: "筛选" }));
+
+    expect(await screen.findByText(/共 \d+ 条/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "清除筛选" }));
+    expect((await screen.findAllByRole("button", { name: /审计事件：/ })).length).toBeGreaterThan(0);
+  });
+
+  it("风险状态筛选：待处理 / 已确认", async () => {
+    const user = userEvent.setup();
+    renderWorkbench();
+
+    await screen.findByText("审计记录");
+    expect(screen.getByRole("radio", { name: "待处理" })).toBeTruthy();
+    await user.click(screen.getByRole("radio", { name: "已确认" }));
+    // 已确认口径下不再出现未确认批次的「待处理」标记行。
+    expect(await screen.findByText(/共 \d+ 条/)).toBeTruthy();
+  });
+});
+
+describe("审计工作台（风险批次抽屉）", () => {
+  it("行内展开后经「查看风险批次」打开抽屉，确认动作需二次确认", async () => {
+    const user = userEvent.setup();
+    renderWorkbench();
+
+    const rows = await screen.findAllByRole("button", { name: /审计事件：/ });
+    await user.click(rows[0]!);
+    await user.click(await screen.findByRole("button", { name: "查看批次" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "风险批次详情" });
+    expect(dialog).toBeTruthy();
+
+    // 防误触：第一次点击只出现确认气泡，需再次点击「确认」才生效。
+    await user.click(screen.getByRole("button", { name: "确认已处理" }));
+    expect(
+      await screen.findByText("确认该批次全部风险记录已处理？确认后写入确认人与时间。"),
+    ).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "确认", exact: true }));
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "确认已处理" })).toBeNull();
+    });
+  });
+});

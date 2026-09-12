@@ -5,6 +5,7 @@ import {
   Badge,
   Box,
   Button,
+  Center,
   Group,
   Modal,
   MultiSelect,
@@ -16,12 +17,24 @@ import {
   Textarea,
   TextInput,
   Tooltip,
+  UnstyledButton,
 } from "@mantine/core";
 import { useForm } from "@mantine/form";
-import { useDisclosure } from "@mantine/hooks";
-import { IconBrandNpm, IconEraser, IconFile, IconPackage, IconTrash } from "@tabler/icons-react";
-import { EmptyState, PageHeader } from "@jianartifact/ui";
-import { useState } from "react";
+import { useDisclosure, useLocalStorage } from "@mantine/hooks";
+import {
+  IconArrowDown,
+  IconArrowUp,
+  IconBrandNpm,
+  IconEraser,
+  IconFile,
+  IconPackage,
+  IconPinned,
+  IconPinnedOff,
+  IconSearch,
+  IconTrash,
+} from "@tabler/icons-react";
+import { EmptyState } from "@jianartifact/ui";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
@@ -31,19 +44,29 @@ import {
   cleanupEmptyArtifacts,
   createRepository,
   deleteRepository,
+  getEnabledFormats,
   listRepositoriesSorted,
   updateRepository,
 } from "../api/endpoints";
 import type { RepoFormat, RepoType, Repository, RepoVisibility } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
+import { usePinnedRepos } from "../hooks/usePinnedRepos";
 import { useAsync } from "../hooks/useAsync";
 import { CONN_COLOR, CONN_LABEL_KEY } from "../lib/connectionStatus";
 import { confirmDanger, notifyError, notifySuccess } from "../lib/feedback";
 import { formatBytes } from "../lib/assetTree";
 
 const PAGE_SIZE = 10;
-const FORMAT_OPTIONS = ["raw", "maven", "npm"];
 const TYPE_OPTIONS = ["hosted", "proxy", "group"];
+
+/** 仓库列表视图偏好（排序/方向/分组/名称筛选），持久化到 localStorage 跨会话记忆。 */
+interface RepoViewPrefs {
+  sortBy: string;
+  sortOrder: "asc" | "desc";
+  groupBy: string;
+  nameFilter: string;
+}
+const REPO_VIEW_KEY = "jianartifact.repoView";
 
 const TYPE_COLOR: Record<string, string> = {
   hosted: "green",
@@ -69,24 +92,81 @@ function protocolBaseFor(repo: Pick<Repository, "format" | "name">): string {
     : `${window.location.origin}/repository/${encodeURIComponent(repo.name)}`;
 }
 
+/** 可排序表头：点击切换排序（同列翻转升降序），激活列显示方向箭头并加粗。 */
+function SortableTh({
+  label,
+  field,
+  sortBy,
+  sortOrder,
+  onSort,
+}: {
+  label: string;
+  field: string;
+  sortBy: string;
+  sortOrder: "asc" | "desc";
+  onSort: (field: string) => void;
+}) {
+  const active = sortBy === field;
+  return (
+    <Table.Th aria-sort={active ? (sortOrder === "asc" ? "ascending" : "descending") : "none"}>
+      <UnstyledButton
+        onClick={() => onSort(field)}
+        style={{ display: "inline-flex", alignItems: "center", gap: 4 }}
+      >
+        <Text size="sm" fw={active ? 700 : 500}>
+          {label}
+        </Text>
+        {active ? (
+          sortOrder === "asc" ? (
+            <IconArrowUp size={12} />
+          ) : (
+            <IconArrowDown size={12} />
+          )
+        ) : null}
+      </UnstyledButton>
+    </Table.Th>
+  );
+}
+
 export function RepositoriesPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { user } = useAuth();
-  // FR-68：匿名视图隐藏管理操作（新建/删除/清理/可见性切换），后端仍兜底鉴权。
-  const canManage = Boolean(user);
+  // 仓库创建、配置、清理与删除均为全局管理员操作，前端仅按会话快照展示。
+  const canManage = user?.role === "admin";
+  // 置顶：本地偏好（localStorage），置顶仓库排到列表最前（分页语义内）。
+  const { isPinned, toggle: togglePin, sortPinnedFirst } = usePinnedRepos();
   const [page, setPage] = useState(1);
-  // FR-56: 排序与分组
-  const [sortBy, setSortBy] = useState<string>("name");
-  const [sortOrder, setSortOrder] = useState<string>("asc");
-  const [groupBy, setGroupBy] = useState<string>("none");
+  // FR-56: 排序与分组；视图偏好（排序/方向/分组/名称筛选）持久化到 localStorage，跨会话记忆。
+  const [view, setView] = useLocalStorage<RepoViewPrefs>({
+    key: REPO_VIEW_KEY,
+    defaultValue: { sortBy: "name", sortOrder: "asc", groupBy: "none", nameFilter: "" },
+    getInitialValueInEffect: false,
+  });
+  const { sortBy, sortOrder, groupBy, nameFilter } = view;
+  const patchView = (patch: Partial<RepoViewPrefs>): void =>
+    setView((current) => ({ ...current, ...patch }));
+  /** 表头排序：同列切换升降序，新列默认升序，并回到第 1 页。 */
+  const handleHeaderSort = (field: string): void => {
+    if (sortBy === field) {
+      patchView({ sortBy: field, sortOrder: sortOrder === "asc" ? "desc" : "asc" });
+    } else {
+      patchView({ sortBy: field, sortOrder: "asc" });
+    }
+    setPage(1);
+  };
   const state = useAsync(
     () => listRepositoriesSorted({ page, page_size: PAGE_SIZE, sort: sortBy, order: sortOrder }),
     // FR-67：登录态变化（模态框登录成功/登出）后重拉列表，匿名与全量集合不同。
     [page, sortBy, sortOrder, user],
+    { cacheKey: `repositories:list:${page}:${sortBy}:${sortOrder}:${user?.id ?? "anon"}` },
   );
   const [createOpened, createModal] = useDisclosure(false);
   const [creating, setCreating] = useState(false);
+  const enabledFormatsState = useAsync(() => getEnabledFormats(), [user], {
+    cacheKey: `repositories:formats:${user?.id ?? "anon"}`,
+  });
+  const formatOptions = enabledFormatsState.data?.formats ?? [];
 
   const totalPages = Math.ceil((state.data?.total ?? 0) / PAGE_SIZE);
 
@@ -115,6 +195,13 @@ export function RepositoriesPage() {
         values.type === "group" && v.length === 0 ? t("repositories.membersRequired") : null,
     },
   });
+
+  useEffect(() => {
+    const first = formatOptions[0];
+    if (first && !formatOptions.includes(form.values.format)) {
+      form.setFieldValue("format", first);
+    }
+  }, [formatOptions, form]);
 
   const visibilityOptions = [
     { value: "public", label: t("repositories.visibilityPublic") },
@@ -212,96 +299,176 @@ export function RepositoriesPage() {
           overflow: "hidden",
         }}
       >
-        <PageHeader
-          title={canManage ? t("repositories.title") : t("repositories.publicTitle")}
-          description={
-            canManage ? t("repositories.description") : t("repositories.publicDescription")
-          }
-          actions={
-            canManage ? (
-              <Button onClick={createModal.open}>{t("repositories.create")}</Button>
-            ) : undefined
-          }
-        />
-
-        {/* FR-56: 排序与分组控件 */}
-        <Group gap="sm" mb="md" wrap="wrap">
-          <Select
-            size="xs"
-            label={t("repositories.sortBy", { defaultValue: "排序" })}
-            data={[
-              { value: "name", label: t("repositories.sortName", { defaultValue: "名称" }) },
-              {
-                value: "created_at",
-                label: t("repositories.sortCreatedAt", { defaultValue: "创建时间" }),
-              },
-            ]}
-            value={sortBy}
-            onChange={(v) => v && setSortBy(v)}
-            allowDeselect={false}
-            w={120}
-          />
-          <Select
-            size="xs"
-            label={t("repositories.sortOrder", { defaultValue: "方向" })}
-            data={[
-              { value: "asc", label: t("repositories.orderAsc", { defaultValue: "升序" }) },
-              { value: "desc", label: t("repositories.orderDesc", { defaultValue: "降序" }) },
-            ]}
-            value={sortOrder}
-            onChange={(v) => v && setSortOrder(v)}
-            allowDeselect={false}
-            w={100}
-          />
-          <Select
-            size="xs"
-            label={t("repositories.groupBy", { defaultValue: "分组" })}
-            data={[
-              { value: "none", label: t("repositories.groupNone", { defaultValue: "不分组" }) },
-              { value: "format", label: t("repositories.groupFormat", { defaultValue: "按格式" }) },
-              { value: "type", label: t("repositories.groupType", { defaultValue: "按类型" }) },
-            ]}
-            value={groupBy}
-            onChange={(v) => v && setGroupBy(v)}
-            allowDeselect={false}
-            w={120}
-          />
+        {/* FR-56: 排序与分组控件 + 名称筛选；右侧为新建仓库入口（与筛选同一行，避免多余空白带） */}
+        <Group gap="sm" mb="md" wrap="wrap" justify="space-between">
+          <Group gap="sm" wrap="wrap">
+            <Select
+              size="xs"
+              label={t("repositories.sortBy", { defaultValue: "排序" })}
+              data={[
+                { value: "name", label: t("repositories.sortName", { defaultValue: "名称" }) },
+                { value: "type", label: t("repositories.type", { defaultValue: "类型" }) },
+                {
+                  value: "artifact_count",
+                  label: t("repositories.artifactCount", { defaultValue: "制品数" }),
+                },
+                {
+                  value: "total_size",
+                  label: t("repositories.totalSize", { defaultValue: "总大小" }),
+                },
+                {
+                  value: "created_at",
+                  label: t("repositories.sortCreatedAt", { defaultValue: "创建时间" }),
+                },
+              ]}
+              value={sortBy}
+              onChange={(v) => {
+                if (!v) return;
+                patchView({ sortBy: v });
+                setPage(1);
+              }}
+              allowDeselect={false}
+              w={120}
+            />
+            <Select
+              size="xs"
+              label={t("repositories.sortOrder", { defaultValue: "方向" })}
+              data={[
+                { value: "asc", label: t("repositories.orderAsc", { defaultValue: "升序" }) },
+                { value: "desc", label: t("repositories.orderDesc", { defaultValue: "降序" }) },
+              ]}
+              value={sortOrder}
+              onChange={(v) => {
+                if (!v) return;
+                patchView({ sortOrder: v as RepoViewPrefs["sortOrder"] });
+                setPage(1);
+              }}
+              allowDeselect={false}
+              w={100}
+            />
+            <Select
+              size="xs"
+              label={t("repositories.groupBy", { defaultValue: "分组" })}
+              data={[
+                { value: "none", label: t("repositories.groupNone", { defaultValue: "不分组" }) },
+                {
+                  value: "format",
+                  label: t("repositories.groupFormat", { defaultValue: "按格式" }),
+                },
+                { value: "type", label: t("repositories.groupType", { defaultValue: "按类型" }) },
+              ]}
+              value={groupBy}
+              onChange={(v) => v && patchView({ groupBy: v })}
+              allowDeselect={false}
+              w={120}
+            />
+            <TextInput
+              size="xs"
+              leftSection={<IconSearch size={14} />}
+              placeholder={t("repositories.filterName", { defaultValue: "按名称筛选" })}
+              value={nameFilter}
+              onChange={(e) => patchView({ nameFilter: e.currentTarget.value })}
+              w={190}
+            />
+          </Group>
+          {canManage ? (
+            <Button onClick={createModal.open}>{t("repositories.create")}</Button>
+          ) : null}
         </Group>
 
         {/* 表格区：占余高、内部滚动；空态/加载态同区展示 */}
         <Box style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
           <AsyncBoundary state={state}>
-            {(list) =>
-              list.items.length === 0 && page === 1 ? (
-                <EmptyState message={t("repositories.empty")} />
+            {(list) => {
+              const visibleItems = sortPinnedFirst(list.items).filter((repo) =>
+                repo.name.toLowerCase().includes(nameFilter.trim().toLowerCase()),
+              );
+              return list.items.length === 0 && page === 1 ? (
+                <Stack gap="sm" align="center" justify="center" style={{ flex: 1 }}>
+                  <EmptyState
+                    message={t("repositories.empty")}
+                    description={
+                      canManage
+                        ? t("repositories.emptyCreateHint", {
+                            defaultValue: "创建第一个仓库开始托管制品。",
+                          })
+                        : undefined
+                    }
+                  />
+                  {canManage ? (
+                    <Button onClick={createModal.open}>{t("repositories.create")}</Button>
+                  ) : null}
+                </Stack>
+              ) : visibleItems.length === 0 ? (
+                <Center style={{ flex: 1 }}>
+                  <Text size="sm" c="dimmed">
+                    {t("repositories.filterNoMatch", { defaultValue: "没有匹配的仓库" })}
+                  </Text>
+                </Center>
               ) : (
                 <Stack gap="md" style={{ flex: 1, minHeight: 0 }}>
                   <Box style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
                     <Table striped highlightOnHover stickyHeader>
                       <Table.Thead>
                         <Table.Tr>
-                          <Table.Th>{t("repositories.name")}</Table.Th>
-                          <Table.Th>{t("repositories.type")}</Table.Th>
+                          <SortableTh
+                            label={t("repositories.name")}
+                            field="name"
+                            sortBy={sortBy}
+                            sortOrder={sortOrder}
+                            onSort={handleHeaderSort}
+                          />
+                          <SortableTh
+                            label={t("repositories.type")}
+                            field="type"
+                            sortBy={sortBy}
+                            sortOrder={sortOrder}
+                            onSort={handleHeaderSort}
+                          />
                           <Table.Th>{t("repositories.visibility")}</Table.Th>
                           <Table.Th>
                             {t("repositories.connectionStatus", { defaultValue: "连接状态" })}
                           </Table.Th>
-                          <Table.Th>{t("repositories.artifactCount")}</Table.Th>
-                          <Table.Th>{t("repositories.totalSize")}</Table.Th>
-                          <Table.Th>
-                            {t("repositories.createdAt", { defaultValue: "创建时间" })}
-                          </Table.Th>
+                          <SortableTh
+                            label={t("repositories.artifactCount")}
+                            field="artifact_count"
+                            sortBy={sortBy}
+                            sortOrder={sortOrder}
+                            onSort={handleHeaderSort}
+                          />
+                          <SortableTh
+                            label={t("repositories.totalSize")}
+                            field="total_size"
+                            sortBy={sortBy}
+                            sortOrder={sortOrder}
+                            onSort={handleHeaderSort}
+                          />
+                          <SortableTh
+                            label={t("repositories.createdAt", { defaultValue: "创建时间" })}
+                            field="created_at"
+                            sortBy={sortBy}
+                            sortOrder={sortOrder}
+                            onSort={handleHeaderSort}
+                          />
                           <Table.Th>{t("common.actions")}</Table.Th>
                         </Table.Tr>
                       </Table.Thead>
                       <Table.Tbody>
-                        {list.items.map((repo) => {
+                        {visibleItems.map((repo) => {
                           const protoUrl = protocolBaseFor(repo);
+                          const pinned = isPinned(repo.name);
                           return (
                             <Table.Tr key={repo.id}>
                               <Table.Td>
                                 <Group gap={8} wrap="nowrap">
                                   <FormatIcon format={repo.format} />
+                                  {pinned ? (
+                                    <IconPinned
+                                      size={14}
+                                      color="var(--mantine-color-amber-6)"
+                                      aria-hidden
+                                    />
+                                  ) : null}
                                   <Text
                                     fw={600}
                                     size="sm"
@@ -391,6 +558,28 @@ export function RepositoriesPage() {
                                   >
                                     {t("repositories.browse")}
                                   </Button>
+                                  {user ? (
+                                    <Tooltip
+                                      label={
+                                        pinned ? t("repositories.unpin") : t("repositories.pin")
+                                      }
+                                    >
+                                      <ActionIcon
+                                        variant="subtle"
+                                        color={pinned ? "amber" : "gray"}
+                                        onClick={() => togglePin(repo.name)}
+                                        aria-label={
+                                          pinned ? t("repositories.unpin") : t("repositories.pin")
+                                        }
+                                      >
+                                        {pinned ? (
+                                          <IconPinned size={16} />
+                                        ) : (
+                                          <IconPinnedOff size={16} />
+                                        )}
+                                      </ActionIcon>
+                                    </Tooltip>
+                                  ) : null}
                                   {canManage &&
                                     repo.format === "maven" &&
                                     repo.type === "hosted" && (
@@ -403,6 +592,9 @@ export function RepositoriesPage() {
                                           color="orange"
                                           variant="subtle"
                                           onClick={() => handleCleanup(repo)}
+                                          aria-label={t("repositories.cleanupTooltip", {
+                                            defaultValue: "清理无 Jar 制品",
+                                          })}
                                         >
                                           <IconEraser size={16} />
                                         </ActionIcon>
@@ -432,8 +624,8 @@ export function RepositoriesPage() {
                     </Group>
                   )}
                 </Stack>
-              )
-            }
+              );
+            }}
           </AsyncBoundary>
         </Box>
       </Stack>
@@ -444,7 +636,7 @@ export function RepositoriesPage() {
           <Select
             mt="sm"
             label={t("repositories.format")}
-            data={FORMAT_OPTIONS}
+            data={formatOptions}
             allowDeselect={false}
             {...form.getInputProps("format")}
           />

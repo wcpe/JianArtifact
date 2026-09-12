@@ -1,7 +1,6 @@
 package domain_test
 
 import (
-	"encoding/json"
 	"testing"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
@@ -48,50 +47,3 @@ func TestRepositorySetOnlineNoReplChange(t *testing.T) {
 
 // TestRepoOnlineNotReplicated 守护测试（M-2 硬约束）：复制应用 RepoChangeData
 // （不含 online 字段）不得覆盖本地 online 状态。
-func TestRepoOnlineNotReplicated(t *testing.T) {
-	replSvc, _, _, repoRepo, _, _, _ := newTestReplSvc(t)
-
-	// 本地建仓库并置 offline。
-	if _, err := repoRepo.Create("raw-proxy", "raw", "proxy", "private", "{}"); err != nil {
-		t.Fatalf("建仓库：%v", err)
-	}
-	if err := repoRepo.SetOnline("raw-proxy", false); err != nil {
-		t.Fatalf("SetOnline(false)：%v", err)
-	}
-	before, err := repoRepo.GetByName("raw-proxy")
-	if err != nil {
-		t.Fatalf("取仓库：%v", err)
-	}
-	if before.Online {
-		t.Fatalf("前置：应 offline，得 %v", before.Online)
-	}
-
-	// 对端应用一条仓库 put 变更（RepoChangeData 无 online 字段）。
-	raw, err := json.Marshal(domain.RepoChangeData{
-		Name: "raw-proxy", Format: "raw", Type: "proxy",
-		Visibility: "private", Description: "来自对端", Config: "{}",
-	})
-	if err != nil {
-		t.Fatalf("编码变更数据：%v", err)
-	}
-	change := repository.Change{
-		NodeID: "peer", EntityType: domain.EntityRepository,
-		EntityKey: domain.RepoKey("raw-proxy"), Op: domain.OpPut, Data: string(raw),
-	}
-	if err := replSvc.Apply(change); err != nil {
-		t.Fatalf("Apply：%v", err)
-	}
-
-	// 本地 online 保持不变（不被对端覆盖）。
-	after, err := repoRepo.GetByName("raw-proxy")
-	if err != nil {
-		t.Fatalf("取仓库：%v", err)
-	}
-	if after.Online {
-		t.Errorf("复制应用后本地 online 应保持 offline=false，得 %v", after.Online)
-	}
-	// 描述应已应用（证明复制确实生效，排除测试误判）。
-	if after.Description != "来自对端" {
-		t.Errorf("复制应用后 description 应生效，得 %q", after.Description)
-	}
-}

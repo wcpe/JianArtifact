@@ -3,20 +3,18 @@ package domain_test
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/wcpe/jianartifact/apps/server/internal/blobstore"
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
-	"github.com/wcpe/jianartifact/apps/server/internal/upstream"
 )
 
 // proxyConfigJSON 构造仅含 remoteUrl 的仓库配置 JSON。
@@ -25,6 +23,18 @@ func proxyConfigJSON(t *testing.T, remoteURL string) string {
 	s, err := repository.EncodeRepositoryConfig(repository.RepositoryConfig{RemoteURL: remoteURL})
 	if err != nil {
 		t.Fatalf("编码 proxy 配置：%v", err)
+	}
+	return s
+}
+
+// proxyConfigWithCredentialJSON 构造带运行时凭据引用的 proxy 配置。
+func proxyConfigWithCredentialJSON(t *testing.T, remoteURL, credentialRef string) string {
+	t.Helper()
+	s, err := repository.EncodeRepositoryConfig(repository.RepositoryConfig{
+		RemoteURL: remoteURL, CredentialRef: credentialRef,
+	})
+	if err != nil {
+		t.Fatalf("编码带凭据的 proxy 配置：%v", err)
 	}
 	return s
 }
@@ -87,6 +97,64 @@ func TestResolveProxyCacheMissThenHit(t *testing.T) {
 	}
 	if n := atomic.LoadInt32(&hits); n != 1 {
 		t.Fatalf("期望仅回源 1 次，实际 %d 次", n)
+	}
+}
+
+func TestResolveProxyUsesCredentialRefWithoutLeakage(t *testing.T) {
+	const credentialRef = "PRIVATE_ARTIFACTS"
+	const credential = "release-user:very-secret-password"
+	t.Setenv("JIAN_UPSTREAM_CREDENTIAL_"+credentialRef, credential)
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		user, password, ok := r.BasicAuth()
+		if !ok || user != "release-user" || password != "very-secret-password" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		_, _ = w.Write([]byte("private artifact"))
+	}))
+	defer srv.Close()
+
+	svc, repos := newAssetService(t)
+	if _, err := repos.Create("private-proxy", "raw", "proxy", "private", proxyConfigWithCredentialJSON(t, srv.URL, credentialRef)); err != nil {
+		t.Fatalf("建私有 proxy 仓库：%v", err)
+	}
+	_, rc, err := svc.Resolve(context.Background(), "private-proxy", "secure.jar")
+	if err != nil {
+		t.Fatalf("带 credentialRef 的回源应成功：%v", err)
+	}
+	if got := string(readClose(t, rc)); got != "private artifact" {
+		t.Fatalf("私有上游内容 = %q", got)
+	}
+	if got := atomic.LoadInt32(&hits); got != 1 {
+		t.Fatalf("私有上游请求次数 = %d，期望 1", got)
+	}
+}
+
+func TestResolveProxyRejectsUnknownCredentialRefWithoutLeakage(t *testing.T) {
+	const missingRef = "MISSING_PRIVATE_ARTIFACTS"
+	const secret = "must-not-appear-in-error"
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		_, _ = w.Write([]byte(secret))
+	}))
+	defer srv.Close()
+
+	svc, repos := newAssetService(t)
+	if _, err := repos.Create("missing-credential-proxy", "raw", "proxy", "private", proxyConfigWithCredentialJSON(t, srv.URL, missingRef)); err != nil {
+		t.Fatalf("建带未知凭据引用的 proxy 仓库：%v", err)
+	}
+	_, _, err := svc.Resolve(context.Background(), "missing-credential-proxy", "secure.jar")
+	if !errors.Is(err, domain.ErrUpstream) {
+		t.Fatalf("未知 credentialRef 应安全回源失败，实际：%v", err)
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("错误不得泄露凭据：%v", err)
+	}
+	if got := atomic.LoadInt32(&hits); got != 0 {
+		t.Fatalf("未知 credentialRef 不得访问上游，实际请求 %d 次", got)
 	}
 }
 
@@ -804,157 +872,5 @@ func TestNegativeCacheGroupAutoBlockSkippedNotCached(t *testing.T) {
 	// 若写入了，此处 group 直接命中负缓存，boom 不会被探测。
 	if n := atomic.LoadInt32(&boomHits); n != 2 {
 		t.Fatalf("恢复后应重新探测 boom（共 2 次），实际 %d 次", n)
-	}
-}
-
-// TestNegativeCacheInvalidatedByReplicationApply 验证复制应用成功后失效负缓存：
-// proxy 404 写负缓存后，对端同步（复制应用）写入同路径，立即读取到新制品。
-func TestNegativeCacheInvalidatedByReplicationApply(t *testing.T) {
-	var hits int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		atomic.AddInt32(&hits, 1)
-		http.NotFound(w, nil)
-	}))
-	defer srv.Close()
-
-	db := newTestDB(t)
-	repos := repository.NewRepoRepo(db)
-	assets := repository.NewAssetRepo(db)
-	blobs := blobstore.NewStore(t.TempDir())
-	svc := domain.NewAssetService(repos, assets, blobs, upstream.NewClient(5*time.Second))
-
-	if _, err := repos.Create("seed-hosted", "raw", "hosted", "private", ""); err != nil {
-		t.Fatalf("建 seed 仓库：%v", err)
-	}
-	if _, err := repos.Create("sync-proxy", "raw", "proxy", "private", proxyConfigJSON(t, srv.URL)); err != nil {
-		t.Fatalf("建 proxy 仓库：%v", err)
-	}
-
-	// 用 seed hosted 仓库产生一个真实 blob，供复制变更引用。
-	payload := []byte("synced artifact")
-	seed, err := svc.Put("seed-hosted", "seed.txt", bytes.NewReader(payload), "text/plain")
-	if err != nil {
-		t.Fatalf("Put seed：%v", err)
-	}
-
-	// 首次：proxy 404 → 写负缓存。
-	if _, _, err := svc.Resolve(context.Background(), "sync-proxy", "lib/synced.jar"); err != domain.ErrNotFound {
-		t.Fatalf("首次应 ErrNotFound，实际：%v", err)
-	}
-
-	// 装配 ReplicationService 并注入负缓存（模拟生产 SetChangeRecorder 装配路径）。
-	replSvc := domain.NewReplicationService(
-		repository.NewReplChangeRepo(db), assets, repos,
-		repository.NewAclRepo(db), repository.NewUserRepo(db), repository.NewTokenRepo(db),
-		repository.NewSettingRepo(db), blobs,
-	)
-	svc.SetChangeRecorder(replSvc)
-
-	// 复制应用：对端同步一个 asset put 到 sync-proxy。
-	data, _ := json.Marshal(domain.AssetChangeData{
-		Path: "lib/synced.jar", BlobHash: seed.BlobHash, Size: seed.Size, ContentType: seed.ContentType,
-	})
-	ch := repository.Change{
-		NodeID: "peer-node", Op: domain.OpPut, EntityType: domain.EntityAsset,
-		EntityKey: domain.AssetKey("sync-proxy", "lib/synced.jar"),
-		Data:      string(data), TS: time.Now().UTC().Format(time.RFC3339Nano),
-	}
-	if out := replSvc.ApplyOutcome(ch); out.Err != nil {
-		t.Fatalf("复制应用失败：%v", out.Err)
-	}
-
-	// 负缓存已失效：立即读到对端同步的制品，不再回源。
-	_, rc, err := svc.Resolve(context.Background(), "sync-proxy", "lib/synced.jar")
-	if err != nil {
-		t.Fatalf("复制应用后应能读到制品，实际：%v", err)
-	}
-	if got := readClose(t, rc); !bytes.Equal(got, payload) {
-		t.Fatalf("复制应用后内容不符：%q", got)
-	}
-	if n := atomic.LoadInt32(&hits); n != 1 {
-		t.Fatalf("复制应用失效负缓存后不应再回源，实际 %d 次", n)
-	}
-}
-
-// TestNegativeCacheTTLExpiry 验证负缓存 TTL 过期后重新回源/探测。
-func TestNegativeCacheTTLExpiry(t *testing.T) {
-	var hits int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		atomic.AddInt32(&hits, 1)
-		http.NotFound(w, nil)
-	}))
-	defer srv.Close()
-
-	svc, repos := newAssetService(t)
-	svc.SetNegativeCacheTTL(50 * time.Millisecond)
-	if _, err := repos.Create("ttl-proxy", "raw", "proxy", "private", proxyConfigJSON(t, srv.URL)); err != nil {
-		t.Fatalf("建 proxy 仓库：%v", err)
-	}
-
-	if _, _, err := svc.Resolve(context.Background(), "ttl-proxy", "missing.jar"); err != domain.ErrNotFound {
-		t.Fatalf("首次应 ErrNotFound，实际：%v", err)
-	}
-	if n := atomic.LoadInt32(&hits); n != 1 {
-		t.Fatalf("首次应回源 1 次，实际 %d", n)
-	}
-	// TTL 内命中负缓存。
-	if _, _, err := svc.Resolve(context.Background(), "ttl-proxy", "missing.jar"); err != domain.ErrNotFound {
-		t.Fatalf("TTL 内应命中负缓存 404，实际：%v", err)
-	}
-	if n := atomic.LoadInt32(&hits); n != 1 {
-		t.Fatalf("TTL 内不应回源，实际 %d 次", n)
-	}
-	// 等待 TTL 过期后重新回源。
-	time.Sleep(80 * time.Millisecond)
-	if _, _, err := svc.Resolve(context.Background(), "ttl-proxy", "missing.jar"); err != domain.ErrNotFound {
-		t.Fatalf("TTL 过期后应重新探测返回 404，实际：%v", err)
-	}
-	if n := atomic.LoadInt32(&hits); n != 2 {
-		t.Fatalf("TTL 过期后应重新回源（共 2 次），实际 %d 次", n)
-	}
-}
-
-// TestResolveProxyOfflineNoUpstream 验证 FR-113：手动 offline 的 proxy 仓库单独读
-// 直接 404，不发起回源（upstream 零命中）。
-func TestResolveProxyOfflineNoUpstream(t *testing.T) {
-	var hits int32
-	payload := []byte("should-not-fetch")
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&hits, 1)
-		_, _ = w.Write(payload)
-	}))
-	defer srv.Close()
-
-	svc, repos := newAssetService(t)
-	if _, err := repos.Create("off-proxy", "raw", "proxy", "private", proxyConfigJSON(t, srv.URL)); err != nil {
-		t.Fatalf("建 proxy：%v", err)
-	}
-	// 置 offline。
-	if err := repos.SetOnline("off-proxy", false); err != nil {
-		t.Fatalf("SetOnline(false)：%v", err)
-	}
-
-	// 单独读 offline proxy：本地未命中 → 应 404 且不回源。
-	if _, _, err := svc.Resolve(context.Background(), "off-proxy", "lib/missing.jar"); err != domain.ErrNotFound {
-		t.Fatalf("offline proxy 单独读应 ErrNotFound，实际：%v", err)
-	}
-	if n := atomic.LoadInt32(&hits); n != 0 {
-		t.Fatalf("offline proxy 不应回源上游，实际命中 %d 次", n)
-	}
-
-	// 置回 online 后可正常回源。
-	if err := repos.SetOnline("off-proxy", true); err != nil {
-		t.Fatalf("SetOnline(true)：%v", err)
-	}
-	_, rc, err := svc.Resolve(context.Background(), "off-proxy", "lib/missing.jar")
-	if err != nil {
-		t.Fatalf("online 后应回源（该上游总是 200），实际：%v", err)
-	}
-	defer func() { _ = rc.Close() }()
-	if got := readClose(t, rc); !bytes.Equal(got, payload) {
-		t.Fatalf("回源内容不符：%q", got)
-	}
-	if n := atomic.LoadInt32(&hits); n != 1 {
-		t.Fatalf("online 后应回源 1 次，实际 %d 次", n)
 	}
 }

@@ -33,18 +33,21 @@ func (s *authStore) PrincipalByID(id int64) (*auth.Principal, error) {
 }
 
 func (s *authStore) PrincipalByTokenDigest(digest string) (*auth.Principal, error) {
-	uid, err := s.tokens.UserIDByDigest(digest)
+	token, err := s.tokens.GetByDigest(digest)
 	if err != nil {
 		return nil, err
 	}
-	u, err := s.users.GetByID(uid)
+	u, err := s.users.GetByID(token.UserID)
 	if err != nil {
 		return nil, err
 	}
 	if u.Status != "active" {
 		return nil, auth.ErrUnauthenticated
 	}
-	return principalOf(u), nil
+	p := principalOf(u)
+	p.TokenID = token.ID
+	p.TokenName = token.Name
+	return p, nil
 }
 
 func (s *authStore) PrincipalByPassword(username, password string) (*auth.Principal, error) {
@@ -66,5 +69,5 @@ func (s *authStore) PrincipalByPassword(username, password string) (*auth.Princi
 }
 
 func principalOf(u *repository.User) *auth.Principal {
-	return &auth.Principal{UserID: u.ID, Username: u.Username, Role: u.Role}
+	return &auth.Principal{UserID: u.ID, Username: u.Username, Role: u.Role, Email: u.Email, WebLoginDisabled: u.WebLoginDisabled}
 }

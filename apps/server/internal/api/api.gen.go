@@ -4,6 +4,8 @@
 package api
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -27,6 +29,408 @@ func (e AclEntryAction) Valid() bool {
 	case AclEntryActionRead:
 		return true
 	case AclEntryActionWrite:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AssetOperationRequestAction.
+const (
+	Delete AssetOperationRequestAction = "delete"
+	Move   AssetOperationRequestAction = "move"
+	Rename AssetOperationRequestAction = "rename"
+)
+
+// Valid indicates whether the value is a known member of the AssetOperationRequestAction enum.
+func (e AssetOperationRequestAction) Valid() bool {
+	switch e {
+	case Delete:
+		return true
+	case Move:
+		return true
+	case Rename:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AssetOperationTargetType.
+const (
+	AssetPath     AssetOperationTargetType = "asset_path"
+	MavenArtifact AssetOperationTargetType = "maven_artifact"
+	MavenVersion  AssetOperationTargetType = "maven_version"
+	NpmPackage    AssetOperationTargetType = "npm_package"
+	NpmVersion    AssetOperationTargetType = "npm_version"
+	RawPath       AssetOperationTargetType = "raw_path"
+)
+
+// Valid indicates whether the value is a known member of the AssetOperationTargetType enum.
+func (e AssetOperationTargetType) Valid() bool {
+	switch e {
+	case AssetPath:
+		return true
+	case MavenArtifact:
+		return true
+	case MavenVersion:
+		return true
+	case NpmPackage:
+		return true
+	case NpmVersion:
+		return true
+	case RawPath:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AuditActorSnapshotSubjectType.
+const (
+	AuditActorAnonymous   AuditActorSnapshotSubjectType = "anonymous"
+	AuditActorReplication AuditActorSnapshotSubjectType = "replication"
+	AuditActorSystem      AuditActorSnapshotSubjectType = "system"
+	AuditActorUser        AuditActorSnapshotSubjectType = "user"
+)
+
+// Valid indicates whether the value is a known member of the AuditActorSnapshotSubjectType enum.
+func (e AuditActorSnapshotSubjectType) Valid() bool {
+	switch e {
+	case AuditActorAnonymous:
+		return true
+	case AuditActorReplication:
+		return true
+	case AuditActorSystem:
+		return true
+	case AuditActorUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AuditAttentionResult.
+const (
+	AuditAttentionResultFailure AuditAttentionResult = "failure"
+	AuditAttentionResultMixed   AuditAttentionResult = "mixed"
+	AuditAttentionResultPending AuditAttentionResult = "pending"
+	AuditAttentionResultSuccess AuditAttentionResult = "success"
+	AuditAttentionResultUnknown AuditAttentionResult = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the AuditAttentionResult enum.
+func (e AuditAttentionResult) Valid() bool {
+	switch e {
+	case AuditAttentionResultFailure:
+		return true
+	case AuditAttentionResultMixed:
+		return true
+	case AuditAttentionResultPending:
+		return true
+	case AuditAttentionResultSuccess:
+		return true
+	case AuditAttentionResultUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AuditAttentionState.
+const (
+	AuditAttentionStateAcknowledged   AuditAttentionState = "acknowledged"
+	AuditAttentionStateUnacknowledged AuditAttentionState = "unacknowledged"
+)
+
+// Valid indicates whether the value is a known member of the AuditAttentionState enum.
+func (e AuditAttentionState) Valid() bool {
+	switch e {
+	case AuditAttentionStateAcknowledged:
+		return true
+	case AuditAttentionStateUnacknowledged:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AuditCategory.
+const (
+	AuditCategoryAssetChange      AuditCategory = "asset_change"
+	AuditCategoryManagementChange AuditCategory = "management_change"
+	AuditCategoryReplication      AuditCategory = "replication"
+	AuditCategorySecurityEvent    AuditCategory = "security_event"
+)
+
+// Valid indicates whether the value is a known member of the AuditCategory enum.
+func (e AuditCategory) Valid() bool {
+	switch e {
+	case AuditCategoryAssetChange:
+		return true
+	case AuditCategoryManagementChange:
+		return true
+	case AuditCategoryReplication:
+		return true
+	case AuditCategorySecurityEvent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AuditHttpContextMethod.
+const (
+	AuditHttpContextMethodDELETE  AuditHttpContextMethod = "DELETE"
+	AuditHttpContextMethodGET     AuditHttpContextMethod = "GET"
+	AuditHttpContextMethodHEAD    AuditHttpContextMethod = "HEAD"
+	AuditHttpContextMethodOPTIONS AuditHttpContextMethod = "OPTIONS"
+	AuditHttpContextMethodPATCH   AuditHttpContextMethod = "PATCH"
+	AuditHttpContextMethodPOST    AuditHttpContextMethod = "POST"
+	AuditHttpContextMethodPUT     AuditHttpContextMethod = "PUT"
+)
+
+// Valid indicates whether the value is a known member of the AuditHttpContextMethod enum.
+func (e AuditHttpContextMethod) Valid() bool {
+	switch e {
+	case AuditHttpContextMethodDELETE:
+		return true
+	case AuditHttpContextMethodGET:
+		return true
+	case AuditHttpContextMethodHEAD:
+		return true
+	case AuditHttpContextMethodOPTIONS:
+		return true
+	case AuditHttpContextMethodPATCH:
+		return true
+	case AuditHttpContextMethodPOST:
+		return true
+	case AuditHttpContextMethodPUT:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AuditNotificationStatus.
+const (
+	AuditNotificationStatusAcknowledged   AuditNotificationStatus = "acknowledged"
+	AuditNotificationStatusAll            AuditNotificationStatus = "all"
+	AuditNotificationStatusUnacknowledged AuditNotificationStatus = "unacknowledged"
+)
+
+// Valid indicates whether the value is a known member of the AuditNotificationStatus enum.
+func (e AuditNotificationStatus) Valid() bool {
+	switch e {
+	case AuditNotificationStatusAcknowledged:
+		return true
+	case AuditNotificationStatusAll:
+		return true
+	case AuditNotificationStatusUnacknowledged:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AuditResult.
+const (
+	AuditResultFailure AuditResult = "failure"
+	AuditResultPending AuditResult = "pending"
+	AuditResultSuccess AuditResult = "success"
+	AuditResultUnknown AuditResult = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the AuditResult enum.
+func (e AuditResult) Valid() bool {
+	switch e {
+	case AuditResultFailure:
+		return true
+	case AuditResultPending:
+		return true
+	case AuditResultSuccess:
+		return true
+	case AuditResultUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AuditSeverity.
+const (
+	AuditSeverityCritical AuditSeverity = "critical"
+	AuditSeverityHigh     AuditSeverity = "high"
+	AuditSeverityNormal   AuditSeverity = "normal"
+)
+
+// Valid indicates whether the value is a known member of the AuditSeverity enum.
+func (e AuditSeverity) Valid() bool {
+	switch e {
+	case AuditSeverityCritical:
+		return true
+	case AuditSeverityHigh:
+		return true
+	case AuditSeverityNormal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AuditTargetKind.
+const (
+	AuditTargetAcl        AuditTargetKind = "acl"
+	AuditTargetArtifact   AuditTargetKind = "artifact"
+	AuditTargetCluster    AuditTargetKind = "cluster"
+	AuditTargetMigration  AuditTargetKind = "migration"
+	AuditTargetOther      AuditTargetKind = "other"
+	AuditTargetRepository AuditTargetKind = "repository"
+	AuditTargetSetting    AuditTargetKind = "setting"
+	AuditTargetToken      AuditTargetKind = "token"
+	AuditTargetUser       AuditTargetKind = "user"
+)
+
+// Valid indicates whether the value is a known member of the AuditTargetKind enum.
+func (e AuditTargetKind) Valid() bool {
+	switch e {
+	case AuditTargetAcl:
+		return true
+	case AuditTargetArtifact:
+		return true
+	case AuditTargetCluster:
+		return true
+	case AuditTargetMigration:
+		return true
+	case AuditTargetOther:
+		return true
+	case AuditTargetRepository:
+		return true
+	case AuditTargetSetting:
+		return true
+	case AuditTargetToken:
+		return true
+	case AuditTargetUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BackupImportOrigin.
+const (
+	Cli    BackupImportOrigin = "cli"
+	Upload BackupImportOrigin = "upload"
+	Url    BackupImportOrigin = "url"
+)
+
+// Valid indicates whether the value is a known member of the BackupImportOrigin enum.
+func (e BackupImportOrigin) Valid() bool {
+	switch e {
+	case Cli:
+		return true
+	case Upload:
+		return true
+	case Url:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BackupImportStatus.
+const (
+	BackupImportStatusDone           BackupImportStatus = "done"
+	BackupImportStatusFailed         BackupImportStatus = "failed"
+	BackupImportStatusFetching       BackupImportStatus = "fetching"
+	BackupImportStatusPendingRestart BackupImportStatus = "pending_restart"
+	BackupImportStatusQueued         BackupImportStatus = "queued"
+	BackupImportStatusStaging        BackupImportStatus = "staging"
+)
+
+// Valid indicates whether the value is a known member of the BackupImportStatus enum.
+func (e BackupImportStatus) Valid() bool {
+	switch e {
+	case BackupImportStatusDone:
+		return true
+	case BackupImportStatusFailed:
+		return true
+	case BackupImportStatusFetching:
+		return true
+	case BackupImportStatusPendingRestart:
+		return true
+	case BackupImportStatusQueued:
+		return true
+	case BackupImportStatusStaging:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BackupPackageMode.
+const (
+	BackupPackageModeFrozen BackupPackageMode = "frozen"
+	BackupPackageModeHot    BackupPackageMode = "hot"
+)
+
+// Valid indicates whether the value is a known member of the BackupPackageMode enum.
+func (e BackupPackageMode) Valid() bool {
+	switch e {
+	case BackupPackageModeFrozen:
+		return true
+	case BackupPackageModeHot:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BackupPackageStatus.
+const (
+	BackupPackageStatusDone         BackupPackageStatus = "done"
+	BackupPackageStatusFailed       BackupPackageStatus = "failed"
+	BackupPackageStatusPacking      BackupPackageStatus = "packing"
+	BackupPackageStatusQueued       BackupPackageStatus = "queued"
+	BackupPackageStatusSnapshotting BackupPackageStatus = "snapshotting"
+)
+
+// Valid indicates whether the value is a known member of the BackupPackageStatus enum.
+func (e BackupPackageStatus) Valid() bool {
+	switch e {
+	case BackupPackageStatusDone:
+		return true
+	case BackupPackageStatusFailed:
+		return true
+	case BackupPackageStatusPacking:
+		return true
+	case BackupPackageStatusQueued:
+		return true
+	case BackupPackageStatusSnapshotting:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BackupUploadStatus.
+const (
+	BackupUploadStatusAborted     BackupUploadStatus = "aborted"
+	BackupUploadStatusCompleted   BackupUploadStatus = "completed"
+	BackupUploadStatusInitialized BackupUploadStatus = "initialized"
+	BackupUploadStatusReceiving   BackupUploadStatus = "receiving"
+)
+
+// Valid indicates whether the value is a known member of the BackupUploadStatus enum.
+func (e BackupUploadStatus) Valid() bool {
+	switch e {
+	case BackupUploadStatusAborted:
+		return true
+	case BackupUploadStatusCompleted:
+		return true
+	case BackupUploadStatusInitialized:
+		return true
+	case BackupUploadStatusReceiving:
 		return true
 	default:
 		return false
@@ -60,19 +464,52 @@ func (e ConnectionStatusStatus) Valid() bool {
 	}
 }
 
+// Defines values for CreateBackupRequestMode.
+const (
+	CreateBackupRequestModeFrozen CreateBackupRequestMode = "frozen"
+	CreateBackupRequestModeHot    CreateBackupRequestMode = "hot"
+)
+
+// Valid indicates whether the value is a known member of the CreateBackupRequestMode enum.
+func (e CreateBackupRequestMode) Valid() bool {
+	switch e {
+	case CreateBackupRequestModeFrozen:
+		return true
+	case CreateBackupRequestModeHot:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CreateRepositoryRequestFormat.
 const (
-	CreateRepositoryRequestFormatMaven CreateRepositoryRequestFormat = "maven"
-	CreateRepositoryRequestFormatNpm   CreateRepositoryRequestFormat = "npm"
-	CreateRepositoryRequestFormatRaw   CreateRepositoryRequestFormat = "raw"
+	CreateRepositoryRequestFormatCargo  CreateRepositoryRequestFormat = "cargo"
+	CreateRepositoryRequestFormatDocker CreateRepositoryRequestFormat = "docker"
+	CreateRepositoryRequestFormatGomod  CreateRepositoryRequestFormat = "gomod"
+	CreateRepositoryRequestFormatMaven  CreateRepositoryRequestFormat = "maven"
+	CreateRepositoryRequestFormatNpm    CreateRepositoryRequestFormat = "npm"
+	CreateRepositoryRequestFormatNuget  CreateRepositoryRequestFormat = "nuget"
+	CreateRepositoryRequestFormatPypi   CreateRepositoryRequestFormat = "pypi"
+	CreateRepositoryRequestFormatRaw    CreateRepositoryRequestFormat = "raw"
 )
 
 // Valid indicates whether the value is a known member of the CreateRepositoryRequestFormat enum.
 func (e CreateRepositoryRequestFormat) Valid() bool {
 	switch e {
+	case CreateRepositoryRequestFormatCargo:
+		return true
+	case CreateRepositoryRequestFormatDocker:
+		return true
+	case CreateRepositoryRequestFormatGomod:
+		return true
 	case CreateRepositoryRequestFormatMaven:
 		return true
 	case CreateRepositoryRequestFormatNpm:
+		return true
+	case CreateRepositoryRequestFormatNuget:
+		return true
+	case CreateRepositoryRequestFormatPypi:
 		return true
 	case CreateRepositoryRequestFormatRaw:
 		return true
@@ -138,21 +575,102 @@ func (e CreateUserRequestRole) Valid() bool {
 	}
 }
 
+// Defines values for EnabledFormatsFormats.
+const (
+	EnabledFormatsFormatsCargo  EnabledFormatsFormats = "cargo"
+	EnabledFormatsFormatsDocker EnabledFormatsFormats = "docker"
+	EnabledFormatsFormatsGomod  EnabledFormatsFormats = "gomod"
+	EnabledFormatsFormatsMaven  EnabledFormatsFormats = "maven"
+	EnabledFormatsFormatsNpm    EnabledFormatsFormats = "npm"
+	EnabledFormatsFormatsNuget  EnabledFormatsFormats = "nuget"
+	EnabledFormatsFormatsPypi   EnabledFormatsFormats = "pypi"
+	EnabledFormatsFormatsRaw    EnabledFormatsFormats = "raw"
+)
+
+// Valid indicates whether the value is a known member of the EnabledFormatsFormats enum.
+func (e EnabledFormatsFormats) Valid() bool {
+	switch e {
+	case EnabledFormatsFormatsCargo:
+		return true
+	case EnabledFormatsFormatsDocker:
+		return true
+	case EnabledFormatsFormatsGomod:
+		return true
+	case EnabledFormatsFormatsMaven:
+		return true
+	case EnabledFormatsFormatsNpm:
+		return true
+	case EnabledFormatsFormatsNuget:
+		return true
+	case EnabledFormatsFormatsPypi:
+		return true
+	case EnabledFormatsFormatsRaw:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for HealthStatusStatus.
 const (
-	Degraded    HealthStatusStatus = "degraded"
-	Ok          HealthStatusStatus = "ok"
-	Unavailable HealthStatusStatus = "unavailable"
+	HealthStatusStatusDegraded    HealthStatusStatus = "degraded"
+	HealthStatusStatusOk          HealthStatusStatus = "ok"
+	HealthStatusStatusUnavailable HealthStatusStatus = "unavailable"
 )
 
 // Valid indicates whether the value is a known member of the HealthStatusStatus enum.
 func (e HealthStatusStatus) Valid() bool {
 	switch e {
-	case Degraded:
+	case HealthStatusStatusDegraded:
 		return true
-	case Ok:
+	case HealthStatusStatusOk:
 		return true
-	case Unavailable:
+	case HealthStatusStatusUnavailable:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HostMonitoringHostState.
+const (
+	Healthy HostMonitoringHostState = "healthy"
+	Stale   HostMonitoringHostState = "stale"
+	Unknown HostMonitoringHostState = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the HostMonitoringHostState enum.
+func (e HostMonitoringHostState) Valid() bool {
+	switch e {
+	case Healthy:
+		return true
+	case Stale:
+		return true
+	case Unknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MetricGroupState.
+const (
+	MetricGroupStateError       MetricGroupState = "error"
+	MetricGroupStateOk          MetricGroupState = "ok"
+	MetricGroupStateUnavailable MetricGroupState = "unavailable"
+	MetricGroupStateUnsupported MetricGroupState = "unsupported"
+)
+
+// Valid indicates whether the value is a known member of the MetricGroupState enum.
+func (e MetricGroupState) Valid() bool {
+	switch e {
+	case MetricGroupStateError:
+		return true
+	case MetricGroupStateOk:
+		return true
+	case MetricGroupStateUnavailable:
+		return true
+	case MetricGroupStateUnsupported:
 		return true
 	default:
 		return false
@@ -182,19 +700,58 @@ func (e MigrationConflictPolicy) Valid() bool {
 
 // Defines values for MigrationPlanRepositoryFormat.
 const (
-	MigrationPlanRepositoryFormatMaven MigrationPlanRepositoryFormat = "maven"
-	MigrationPlanRepositoryFormatNpm   MigrationPlanRepositoryFormat = "npm"
-	MigrationPlanRepositoryFormatRaw   MigrationPlanRepositoryFormat = "raw"
+	MigrationPlanRepositoryFormatCargo  MigrationPlanRepositoryFormat = "cargo"
+	MigrationPlanRepositoryFormatDocker MigrationPlanRepositoryFormat = "docker"
+	MigrationPlanRepositoryFormatGomod  MigrationPlanRepositoryFormat = "gomod"
+	MigrationPlanRepositoryFormatMaven  MigrationPlanRepositoryFormat = "maven"
+	MigrationPlanRepositoryFormatNpm    MigrationPlanRepositoryFormat = "npm"
+	MigrationPlanRepositoryFormatNuget  MigrationPlanRepositoryFormat = "nuget"
+	MigrationPlanRepositoryFormatPypi   MigrationPlanRepositoryFormat = "pypi"
+	MigrationPlanRepositoryFormatRaw    MigrationPlanRepositoryFormat = "raw"
 )
 
 // Valid indicates whether the value is a known member of the MigrationPlanRepositoryFormat enum.
 func (e MigrationPlanRepositoryFormat) Valid() bool {
 	switch e {
+	case MigrationPlanRepositoryFormatCargo:
+		return true
+	case MigrationPlanRepositoryFormatDocker:
+		return true
+	case MigrationPlanRepositoryFormatGomod:
+		return true
 	case MigrationPlanRepositoryFormatMaven:
 		return true
 	case MigrationPlanRepositoryFormatNpm:
 		return true
+	case MigrationPlanRepositoryFormatNuget:
+		return true
+	case MigrationPlanRepositoryFormatPypi:
+		return true
 	case MigrationPlanRepositoryFormatRaw:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MigrationPlanRepositoryMigrationMode.
+const (
+	MigrationPlanRepositoryMigrationModeAssets      MigrationPlanRepositoryMigrationMode = "assets"
+	MigrationPlanRepositoryMigrationModeGroupConfig MigrationPlanRepositoryMigrationMode = "group_config"
+	MigrationPlanRepositoryMigrationModeProxyConfig MigrationPlanRepositoryMigrationMode = "proxy_config"
+	MigrationPlanRepositoryMigrationModeUnsupported MigrationPlanRepositoryMigrationMode = "unsupported"
+)
+
+// Valid indicates whether the value is a known member of the MigrationPlanRepositoryMigrationMode enum.
+func (e MigrationPlanRepositoryMigrationMode) Valid() bool {
+	switch e {
+	case MigrationPlanRepositoryMigrationModeAssets:
+		return true
+	case MigrationPlanRepositoryMigrationModeGroupConfig:
+		return true
+	case MigrationPlanRepositoryMigrationModeProxyConfig:
+		return true
+	case MigrationPlanRepositoryMigrationModeUnsupported:
 		return true
 	default:
 		return false
@@ -216,6 +773,72 @@ func (e MigrationPlanRepositoryType) Valid() bool {
 	case MigrationPlanRepositoryTypeHosted:
 		return true
 	case MigrationPlanRepositoryTypeProxy:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MigrationSourceAuthAnonymousType.
+const (
+	MigrationSourceAuthAnonymousTypeAnonymous MigrationSourceAuthAnonymousType = "anonymous"
+)
+
+// Valid indicates whether the value is a known member of the MigrationSourceAuthAnonymousType enum.
+func (e MigrationSourceAuthAnonymousType) Valid() bool {
+	switch e {
+	case MigrationSourceAuthAnonymousTypeAnonymous:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MigrationSourceAuthBasicType.
+const (
+	MigrationSourceAuthBasicTypeBasic MigrationSourceAuthBasicType = "basic"
+)
+
+// Valid indicates whether the value is a known member of the MigrationSourceAuthBasicType enum.
+func (e MigrationSourceAuthBasicType) Valid() bool {
+	switch e {
+	case MigrationSourceAuthBasicTypeBasic:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MigrationSourceAuthBearerType.
+const (
+	MigrationSourceAuthBearerTypeBearer MigrationSourceAuthBearerType = "bearer"
+)
+
+// Valid indicates whether the value is a known member of the MigrationSourceAuthBearerType enum.
+func (e MigrationSourceAuthBearerType) Valid() bool {
+	switch e {
+	case MigrationSourceAuthBearerTypeBearer:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MigrationSourceAuthType.
+const (
+	MigrationSourceAuthTypeAnonymous MigrationSourceAuthType = "anonymous"
+	MigrationSourceAuthTypeBasic     MigrationSourceAuthType = "basic"
+	MigrationSourceAuthTypeBearer    MigrationSourceAuthType = "bearer"
+)
+
+// Valid indicates whether the value is a known member of the MigrationSourceAuthType enum.
+func (e MigrationSourceAuthType) Valid() bool {
+	switch e {
+	case MigrationSourceAuthTypeAnonymous:
+		return true
+	case MigrationSourceAuthTypeBasic:
+		return true
+	case MigrationSourceAuthTypeBearer:
 		return true
 	default:
 		return false
@@ -245,58 +868,85 @@ func (e MigrationSourceType) Valid() bool {
 
 // Defines values for MigrationTaskStatus.
 const (
-	Cancelled MigrationTaskStatus = "cancelled"
-	Completed MigrationTaskStatus = "completed"
-	Failed    MigrationTaskStatus = "failed"
-	Planned   MigrationTaskStatus = "planned"
-	Running   MigrationTaskStatus = "running"
+	MigrationTaskStatusCancelled MigrationTaskStatus = "cancelled"
+	MigrationTaskStatusCompleted MigrationTaskStatus = "completed"
+	MigrationTaskStatusFailed    MigrationTaskStatus = "failed"
+	MigrationTaskStatusPlanned   MigrationTaskStatus = "planned"
+	MigrationTaskStatusRunning   MigrationTaskStatus = "running"
 )
 
 // Valid indicates whether the value is a known member of the MigrationTaskStatus enum.
 func (e MigrationTaskStatus) Valid() bool {
 	switch e {
-	case Cancelled:
+	case MigrationTaskStatusCancelled:
 		return true
-	case Completed:
+	case MigrationTaskStatusCompleted:
 		return true
-	case Failed:
+	case MigrationTaskStatusFailed:
 		return true
-	case Planned:
+	case MigrationTaskStatusPlanned:
 		return true
-	case Running:
+	case MigrationTaskStatusRunning:
 		return true
 	default:
 		return false
 	}
 }
 
-// Defines values for ReplicationApplyLogResult.
+// Defines values for ObservabilityBucket.
 const (
-	ReplicationApplyLogResultReplicationApplied                    ReplicationApplyLogResult = "applied"
-	ReplicationApplyLogResultReplicationBlobFailed                 ReplicationApplyLogResult = "blob_failed"
-	ReplicationApplyLogResultReplicationFailed                     ReplicationApplyLogResult = "failed"
-	ReplicationApplyLogResultReplicationLwwSkipped                 ReplicationApplyLogResult = "lww_skipped"
-	ReplicationApplyLogResultReplicationMetadataAppliedPendingBlob ReplicationApplyLogResult = "metadata_applied_pending_blob"
-	ReplicationApplyLogResultReplicationPendingParent              ReplicationApplyLogResult = "pending_parent"
-	ReplicationApplyLogResultReplicationSkippedPermanent           ReplicationApplyLogResult = "skipped_permanent"
+	Day    ObservabilityBucket = "day"
+	Hour   ObservabilityBucket = "hour"
+	Minute ObservabilityBucket = "minute"
 )
 
-// Valid indicates whether the value is a known member of the ReplicationApplyLogResult enum.
-func (e ReplicationApplyLogResult) Valid() bool {
+// Valid indicates whether the value is a known member of the ObservabilityBucket enum.
+func (e ObservabilityBucket) Valid() bool {
 	switch e {
-	case ReplicationApplyLogResultReplicationApplied:
+	case Day:
 		return true
-	case ReplicationApplyLogResultReplicationBlobFailed:
+	case Hour:
 		return true
-	case ReplicationApplyLogResultReplicationFailed:
+	case Minute:
 		return true
-	case ReplicationApplyLogResultReplicationLwwSkipped:
+	default:
+		return false
+	}
+}
+
+// Defines values for OperationsAlertSeverity.
+const (
+	Critical OperationsAlertSeverity = "critical"
+	Warning  OperationsAlertSeverity = "warning"
+)
+
+// Valid indicates whether the value is a known member of the OperationsAlertSeverity enum.
+func (e OperationsAlertSeverity) Valid() bool {
+	switch e {
+	case Critical:
 		return true
-	case ReplicationApplyLogResultReplicationMetadataAppliedPendingBlob:
+	case Warning:
 		return true
-	case ReplicationApplyLogResultReplicationPendingParent:
+	default:
+		return false
+	}
+}
+
+// Defines values for RemoteNexusRepositoryType.
+const (
+	RemoteNexusRepositoryTypeGroup  RemoteNexusRepositoryType = "group"
+	RemoteNexusRepositoryTypeHosted RemoteNexusRepositoryType = "hosted"
+	RemoteNexusRepositoryTypeProxy  RemoteNexusRepositoryType = "proxy"
+)
+
+// Valid indicates whether the value is a known member of the RemoteNexusRepositoryType enum.
+func (e RemoteNexusRepositoryType) Valid() bool {
+	switch e {
+	case RemoteNexusRepositoryTypeGroup:
 		return true
-	case ReplicationApplyLogResultReplicationSkippedPermanent:
+	case RemoteNexusRepositoryTypeHosted:
+		return true
+	case RemoteNexusRepositoryTypeProxy:
 		return true
 	default:
 		return false
@@ -305,17 +955,32 @@ func (e ReplicationApplyLogResult) Valid() bool {
 
 // Defines values for RepositoryFormat.
 const (
-	RepositoryFormatMaven RepositoryFormat = "maven"
-	RepositoryFormatNpm   RepositoryFormat = "npm"
-	RepositoryFormatRaw   RepositoryFormat = "raw"
+	RepositoryFormatCargo  RepositoryFormat = "cargo"
+	RepositoryFormatDocker RepositoryFormat = "docker"
+	RepositoryFormatGomod  RepositoryFormat = "gomod"
+	RepositoryFormatMaven  RepositoryFormat = "maven"
+	RepositoryFormatNpm    RepositoryFormat = "npm"
+	RepositoryFormatNuget  RepositoryFormat = "nuget"
+	RepositoryFormatPypi   RepositoryFormat = "pypi"
+	RepositoryFormatRaw    RepositoryFormat = "raw"
 )
 
 // Valid indicates whether the value is a known member of the RepositoryFormat enum.
 func (e RepositoryFormat) Valid() bool {
 	switch e {
+	case RepositoryFormatCargo:
+		return true
+	case RepositoryFormatDocker:
+		return true
+	case RepositoryFormatGomod:
+		return true
 	case RepositoryFormatMaven:
 		return true
 	case RepositoryFormatNpm:
+		return true
+	case RepositoryFormatNuget:
+		return true
+	case RepositoryFormatPypi:
 		return true
 	case RepositoryFormatRaw:
 		return true
@@ -453,37 +1118,227 @@ func (e UserStatus) Valid() bool {
 	}
 }
 
-// Defines values for GetReplicationApplyLogsParamsResult.
+// Defines values for AuditAttentionParam.
 const (
-	GetReplicationApplyLogsParamsResultReplicationApplied                    GetReplicationApplyLogsParamsResult = "applied"
-	GetReplicationApplyLogsParamsResultReplicationBlobFailed                 GetReplicationApplyLogsParamsResult = "blob_failed"
-	GetReplicationApplyLogsParamsResultReplicationFailed                     GetReplicationApplyLogsParamsResult = "failed"
-	GetReplicationApplyLogsParamsResultReplicationLwwSkipped                 GetReplicationApplyLogsParamsResult = "lww_skipped"
-	GetReplicationApplyLogsParamsResultReplicationMetadataAppliedPendingBlob GetReplicationApplyLogsParamsResult = "metadata_applied_pending_blob"
-	GetReplicationApplyLogsParamsResultReplicationPendingParent              GetReplicationApplyLogsParamsResult = "pending_parent"
-	GetReplicationApplyLogsParamsResultReplicationSkippedPermanent           GetReplicationApplyLogsParamsResult = "skipped_permanent"
+	AuditAttentionParamAcknowledged AuditAttentionParam = "acknowledged"
+	AuditAttentionParamPending      AuditAttentionParam = "pending"
 )
 
-// Valid indicates whether the value is a known member of the GetReplicationApplyLogsParamsResult enum.
-func (e GetReplicationApplyLogsParamsResult) Valid() bool {
+// Valid indicates whether the value is a known member of the AuditAttentionParam enum.
+func (e AuditAttentionParam) Valid() bool {
 	switch e {
-	case GetReplicationApplyLogsParamsResultReplicationApplied:
+	case AuditAttentionParamAcknowledged:
 		return true
-	case GetReplicationApplyLogsParamsResultReplicationBlobFailed:
-		return true
-	case GetReplicationApplyLogsParamsResultReplicationFailed:
-		return true
-	case GetReplicationApplyLogsParamsResultReplicationLwwSkipped:
-		return true
-	case GetReplicationApplyLogsParamsResultReplicationMetadataAppliedPendingBlob:
-		return true
-	case GetReplicationApplyLogsParamsResultReplicationPendingParent:
-		return true
-	case GetReplicationApplyLogsParamsResultReplicationSkippedPermanent:
+	case AuditAttentionParamPending:
 		return true
 	default:
 		return false
 	}
+}
+
+// Defines values for AuditMethodParam.
+const (
+	AuditMethodParamDELETE  AuditMethodParam = "DELETE"
+	AuditMethodParamGET     AuditMethodParam = "GET"
+	AuditMethodParamHEAD    AuditMethodParam = "HEAD"
+	AuditMethodParamOPTIONS AuditMethodParam = "OPTIONS"
+	AuditMethodParamPATCH   AuditMethodParam = "PATCH"
+	AuditMethodParamPOST    AuditMethodParam = "POST"
+	AuditMethodParamPUT     AuditMethodParam = "PUT"
+)
+
+// Valid indicates whether the value is a known member of the AuditMethodParam enum.
+func (e AuditMethodParam) Valid() bool {
+	switch e {
+	case AuditMethodParamDELETE:
+		return true
+	case AuditMethodParamGET:
+		return true
+	case AuditMethodParamHEAD:
+		return true
+	case AuditMethodParamOPTIONS:
+		return true
+	case AuditMethodParamPATCH:
+		return true
+	case AuditMethodParamPOST:
+		return true
+	case AuditMethodParamPUT:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListAuditAttentionsParamsAttention.
+const (
+	ListAuditAttentionsParamsAttentionAcknowledged ListAuditAttentionsParamsAttention = "acknowledged"
+	ListAuditAttentionsParamsAttentionPending      ListAuditAttentionsParamsAttention = "pending"
+)
+
+// Valid indicates whether the value is a known member of the ListAuditAttentionsParamsAttention enum.
+func (e ListAuditAttentionsParamsAttention) Valid() bool {
+	switch e {
+	case ListAuditAttentionsParamsAttentionAcknowledged:
+		return true
+	case ListAuditAttentionsParamsAttentionPending:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListAuditAttentionsParamsMethod.
+const (
+	ListAuditAttentionsParamsMethodDELETE  ListAuditAttentionsParamsMethod = "DELETE"
+	ListAuditAttentionsParamsMethodGET     ListAuditAttentionsParamsMethod = "GET"
+	ListAuditAttentionsParamsMethodHEAD    ListAuditAttentionsParamsMethod = "HEAD"
+	ListAuditAttentionsParamsMethodOPTIONS ListAuditAttentionsParamsMethod = "OPTIONS"
+	ListAuditAttentionsParamsMethodPATCH   ListAuditAttentionsParamsMethod = "PATCH"
+	ListAuditAttentionsParamsMethodPOST    ListAuditAttentionsParamsMethod = "POST"
+	ListAuditAttentionsParamsMethodPUT     ListAuditAttentionsParamsMethod = "PUT"
+)
+
+// Valid indicates whether the value is a known member of the ListAuditAttentionsParamsMethod enum.
+func (e ListAuditAttentionsParamsMethod) Valid() bool {
+	switch e {
+	case ListAuditAttentionsParamsMethodDELETE:
+		return true
+	case ListAuditAttentionsParamsMethodGET:
+		return true
+	case ListAuditAttentionsParamsMethodHEAD:
+		return true
+	case ListAuditAttentionsParamsMethodOPTIONS:
+		return true
+	case ListAuditAttentionsParamsMethodPATCH:
+		return true
+	case ListAuditAttentionsParamsMethodPOST:
+		return true
+	case ListAuditAttentionsParamsMethodPUT:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListAuditObservabilityEventsParamsAttention.
+const (
+	ListAuditObservabilityEventsParamsAttentionAcknowledged ListAuditObservabilityEventsParamsAttention = "acknowledged"
+	ListAuditObservabilityEventsParamsAttentionPending      ListAuditObservabilityEventsParamsAttention = "pending"
+)
+
+// Valid indicates whether the value is a known member of the ListAuditObservabilityEventsParamsAttention enum.
+func (e ListAuditObservabilityEventsParamsAttention) Valid() bool {
+	switch e {
+	case ListAuditObservabilityEventsParamsAttentionAcknowledged:
+		return true
+	case ListAuditObservabilityEventsParamsAttentionPending:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListAuditObservabilityEventsParamsMethod.
+const (
+	ListAuditObservabilityEventsParamsMethodDELETE  ListAuditObservabilityEventsParamsMethod = "DELETE"
+	ListAuditObservabilityEventsParamsMethodGET     ListAuditObservabilityEventsParamsMethod = "GET"
+	ListAuditObservabilityEventsParamsMethodHEAD    ListAuditObservabilityEventsParamsMethod = "HEAD"
+	ListAuditObservabilityEventsParamsMethodOPTIONS ListAuditObservabilityEventsParamsMethod = "OPTIONS"
+	ListAuditObservabilityEventsParamsMethodPATCH   ListAuditObservabilityEventsParamsMethod = "PATCH"
+	ListAuditObservabilityEventsParamsMethodPOST    ListAuditObservabilityEventsParamsMethod = "POST"
+	ListAuditObservabilityEventsParamsMethodPUT     ListAuditObservabilityEventsParamsMethod = "PUT"
+)
+
+// Valid indicates whether the value is a known member of the ListAuditObservabilityEventsParamsMethod enum.
+func (e ListAuditObservabilityEventsParamsMethod) Valid() bool {
+	switch e {
+	case ListAuditObservabilityEventsParamsMethodDELETE:
+		return true
+	case ListAuditObservabilityEventsParamsMethodGET:
+		return true
+	case ListAuditObservabilityEventsParamsMethodHEAD:
+		return true
+	case ListAuditObservabilityEventsParamsMethodOPTIONS:
+		return true
+	case ListAuditObservabilityEventsParamsMethodPATCH:
+		return true
+	case ListAuditObservabilityEventsParamsMethodPOST:
+		return true
+	case ListAuditObservabilityEventsParamsMethodPUT:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GetAuditObservabilitySummaryParamsAttention.
+const (
+	GetAuditObservabilitySummaryParamsAttentionAcknowledged GetAuditObservabilitySummaryParamsAttention = "acknowledged"
+	GetAuditObservabilitySummaryParamsAttentionPending      GetAuditObservabilitySummaryParamsAttention = "pending"
+)
+
+// Valid indicates whether the value is a known member of the GetAuditObservabilitySummaryParamsAttention enum.
+func (e GetAuditObservabilitySummaryParamsAttention) Valid() bool {
+	switch e {
+	case GetAuditObservabilitySummaryParamsAttentionAcknowledged:
+		return true
+	case GetAuditObservabilitySummaryParamsAttentionPending:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GetAuditObservabilitySummaryParamsMethod.
+const (
+	GetAuditObservabilitySummaryParamsMethodDELETE  GetAuditObservabilitySummaryParamsMethod = "DELETE"
+	GetAuditObservabilitySummaryParamsMethodGET     GetAuditObservabilitySummaryParamsMethod = "GET"
+	GetAuditObservabilitySummaryParamsMethodHEAD    GetAuditObservabilitySummaryParamsMethod = "HEAD"
+	GetAuditObservabilitySummaryParamsMethodOPTIONS GetAuditObservabilitySummaryParamsMethod = "OPTIONS"
+	GetAuditObservabilitySummaryParamsMethodPATCH   GetAuditObservabilitySummaryParamsMethod = "PATCH"
+	GetAuditObservabilitySummaryParamsMethodPOST    GetAuditObservabilitySummaryParamsMethod = "POST"
+	GetAuditObservabilitySummaryParamsMethodPUT     GetAuditObservabilitySummaryParamsMethod = "PUT"
+)
+
+// Valid indicates whether the value is a known member of the GetAuditObservabilitySummaryParamsMethod enum.
+func (e GetAuditObservabilitySummaryParamsMethod) Valid() bool {
+	switch e {
+	case GetAuditObservabilitySummaryParamsMethodDELETE:
+		return true
+	case GetAuditObservabilitySummaryParamsMethodGET:
+		return true
+	case GetAuditObservabilitySummaryParamsMethodHEAD:
+		return true
+	case GetAuditObservabilitySummaryParamsMethodOPTIONS:
+		return true
+	case GetAuditObservabilitySummaryParamsMethodPATCH:
+		return true
+	case GetAuditObservabilitySummaryParamsMethodPOST:
+		return true
+	case GetAuditObservabilitySummaryParamsMethodPUT:
+		return true
+	default:
+		return false
+	}
+}
+
+// AcknowledgeAuditAttentionRequest 只接受服务端签发的风险关注批次标识；身份从当前会话取得，客户端不得提交确认人、时间或成员事件。
+type AcknowledgeAuditAttentionRequest struct {
+	AttentionId string `json:"attentionId"`
+}
+
+// AcknowledgeAuditAttentionResponse 原子确认结果。重复或并发请求返回同一批次最先成功的确认身份快照和时间；
+// `newlyAcknowledgedCount` 为本请求实际新增确认的风险事件数。
+type AcknowledgeAuditAttentionResponse struct {
+	AttentionId string `json:"attentionId"`
+
+	// FirstAcknowledgement 最先成功确认时固化的管理员身份和时间。该快照不因确认人随后被删除而变化，也不参与节点复制。
+	FirstAcknowledgement   AuditAcknowledgement `json:"firstAcknowledgement"`
+	NewlyAcknowledgedCount int                  `json:"newlyAcknowledgedCount"`
+
+	// TotalRiskEventCount attentionId 绑定快照内风险成员总数，不受本次是否重复确认影响。
+	TotalRiskEventCount          int `json:"totalRiskEventCount"`
+	UnacknowledgedRiskEventCount int `json:"unacknowledgedRiskEventCount"`
 }
 
 // AclEntry defines model for AclEntry.
@@ -506,6 +1361,52 @@ type AssetList struct {
 	Total int            `json:"total"`
 }
 
+// AssetOperationError defines model for AssetOperationError.
+type AssetOperationError struct {
+	Error struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	} `json:"error"`
+
+	// OperationId 统一制品操作失败的追踪标识
+	OperationId string `json:"operationId"`
+}
+
+// AssetOperationRequest defines model for AssetOperationRequest.
+type AssetOperationRequest struct {
+	Action AssetOperationRequestAction `json:"action"`
+
+	// DestinationPath move 的目标目录；保留所选文件名和相对层级
+	DestinationPath *string `json:"destinationPath,omitempty"`
+
+	// NewPath rename 的新完整路径，仅允许单项
+	NewPath *string `json:"newPath,omitempty"`
+
+	// OverrideReason 管理员执行资产变更的原因，协议端点不要求此字段
+	OverrideReason string                 `json:"overrideReason"`
+	Targets        []AssetOperationTarget `json:"targets"`
+}
+
+// AssetOperationRequestAction defines model for AssetOperationRequest.Action.
+type AssetOperationRequestAction string
+
+// AssetOperationResponse defines model for AssetOperationResponse.
+type AssetOperationResponse struct {
+	// Affected 实际变更的资产数量
+	Affected    int    `json:"affected"`
+	OperationId string `json:"operationId"`
+}
+
+// AssetOperationTarget defines model for AssetOperationTarget.
+type AssetOperationTarget struct {
+	// Path 目标路径或格式逻辑标识；npm_version 使用 package@version
+	Path string                   `json:"path"`
+	Type AssetOperationTargetType `json:"type"`
+}
+
+// AssetOperationTargetType defines model for AssetOperationTarget.Type.
+type AssetOperationTargetType string
+
 // AssetSummary defines model for AssetSummary.
 type AssetSummary struct {
 	ContentType *string `json:"contentType,omitempty"`
@@ -526,6 +1427,466 @@ type AssetSummary struct {
 	UpdatedAt string  `json:"updatedAt"`
 }
 
+// AuditAcknowledgement 最先成功确认时固化的管理员身份和时间。该快照不因确认人随后被删除而变化，也不参与节点复制。
+type AuditAcknowledgement struct {
+	AcknowledgedAt time.Time `json:"acknowledgedAt"`
+
+	// AcknowledgedBy 记录时固化的安全身份快照。用户名、认证来源和可选用户 ID 均不依赖用户当前是否仍存在；
+	// 不包含令牌标识或认证材料。
+	AcknowledgedBy AuditActorSnapshot `json:"acknowledgedBy"`
+}
+
+// AuditActorSnapshot 记录时固化的安全身份快照。用户名、认证来源和可选用户 ID 均不依赖用户当前是否仍存在；
+// 不包含令牌标识或认证材料。
+type AuditActorSnapshot struct {
+	AuthSource  string `json:"authSource"`
+	DisplayName string `json:"displayName"`
+
+	// Email 记录时固化的操作者邮箱（若账号已绑定），用于审计检索与人工对照。
+	Email       *string                       `json:"email,omitempty"`
+	SubjectType AuditActorSnapshotSubjectType `json:"subjectType"`
+	UserId      *int64                        `json:"userId,omitempty"`
+}
+
+// AuditActorSnapshotSubjectType defines model for AuditActorSnapshot.SubjectType.
+type AuditActorSnapshotSubjectType string
+
+// AuditAttention defines model for AuditAttention.
+type AuditAttention struct {
+	AcknowledgedRiskEventCount int `json:"acknowledgedRiskEventCount"`
+
+	// Action 服务端按失败、严重性、发生时间和稳定事件标识优先级选出的风险批次主要操作名称。
+	Action        string `json:"action"`
+	AffectedCount int    `json:"affectedCount"`
+
+	// AttentionId 服务端签发的不透明风险关注批次标识，客户端不得解析或拼装。
+	AttentionId string `json:"attentionId"`
+
+	// CategoryCounts 批次成员按固定审计分类汇总；至少包含一个分类，按审计分类枚举顺序返回。
+	CategoryCounts []AuditCategoryCount `json:"categoryCounts"`
+	FailureCount   int                  `json:"failureCount"`
+
+	// FirstAcknowledgement 最先成功确认时固化的管理员身份和时间。该快照不因确认人随后被删除而变化，也不参与节点复制。
+	FirstAcknowledgement *AuditAcknowledgement `json:"firstAcknowledgement,omitempty"`
+	FirstOccurredAt      time.Time             `json:"firstOccurredAt"`
+	LatestOccurredAt     time.Time             `json:"latestOccurredAt"`
+
+	// OperationId 可选的本节点操作关联标识；仅供管理员跨节点人工对照，不表示远端已应用。
+	OperationId *string `json:"operationId,omitempty"`
+
+	// Result 风险关注批次的聚合结果；mixed 表示同时存在多种单条结果。
+	Result         AuditAttentionResult `json:"result"`
+	RiskEventCount int                  `json:"riskEventCount"`
+
+	// Severity 服务端按固定风险映射给出的严重性。
+	Severity AuditSeverity `json:"severity"`
+
+	// State 风险关注批次中是否仍存在未确认风险来源。
+	State        AuditAttentionState `json:"state"`
+	SuccessCount int                 `json:"successCount"`
+
+	// Summary 服务端脱敏的可行动摘要。
+	Summary string `json:"summary"`
+
+	// Target 服务端脱敏后的审计对象；label 不得包含内部地址、凭据或原始诊断内容。
+	Target                       AuditTarget `json:"target"`
+	UnacknowledgedRiskEventCount int         `json:"unacknowledgedRiskEventCount"`
+}
+
+// AuditAttentionDetail 当前节点风险关注批次详情和安全成员分页。
+type AuditAttentionDetail struct {
+	Attention AuditAttention `json:"attention"`
+	Items     []AuditEvent   `json:"items"`
+
+	// NextCursor 下一页的不透明游标；没有下一页时省略。
+	NextCursor *string `json:"nextCursor,omitempty"`
+	TotalCount int     `json:"totalCount"`
+}
+
+// AuditAttentionNotificationList 当前节点风险通知批次分页。缺省请求（未携带任何筛选参数）保持页眉通知口径：最近 24 小时、
+// 仅未确认批次、失败优先排序、最多 20 条预览，并返回 `totalUnacknowledged`（等于该请求下的
+// `total`）供页眉徽标使用；携带 `from`/`to`/`status`/`limit`/`cursor` 时返回与 `status`
+// 同口径的分页列表（时间排序），`items` 可包含已确认批次。
+type AuditAttentionNotificationList struct {
+	// HasMore 是否还有下一页；由 `limit` 与匹配总数决定。
+	HasMore bool                    `json:"hasMore"`
+	Items   []AuditAttentionPreview `json:"items"`
+
+	// NextCursor 下一页的不透明游标；没有下一页时省略。
+	NextCursor *string `json:"nextCursor,omitempty"`
+
+	// Total 与请求 `status` 筛选同口径的通知批次总数（分页权威总数）。
+	Total int `json:"total"`
+
+	// TotalUnacknowledged 最近 24 小时未确认风险批次总数（页眉徽标口径）。仅缺省请求返回，
+	// 与缺省请求下的 `total` 相等；保留该字段是为了兼容既有页眉客户端。
+	TotalUnacknowledged *int `json:"totalUnacknowledged,omitempty"`
+}
+
+// AuditAttentionPage 与审计概览和原始事件共享稳定快照的服务端风险关注批次分页。
+type AuditAttentionPage struct {
+	Items []AuditAttention `json:"items"`
+
+	// NextCursor 下一页不透明游标；没有下一页时省略。
+	NextCursor *string `json:"nextCursor,omitempty"`
+
+	// Snapshot 与审计概览和原始事件共享的不透明稳定读取边界。
+	Snapshot   string    `json:"snapshot"`
+	SnapshotAt time.Time `json:"snapshotAt"`
+	TotalCount int       `json:"totalCount"`
+}
+
+// AuditAttentionPreview 当前节点风险关注批次的安全摘要。该批次由服务端定义；客户端不得按操作、时间桶或事件列表
+// 自行构造确认边界。
+type AuditAttentionPreview struct {
+	// Action 服务端按失败、严重性、发生时间和稳定事件标识优先级选出的风险批次主要操作名称。
+	Action        string `json:"action"`
+	AffectedCount int    `json:"affectedCount"`
+
+	// AttentionId 服务端签发的不透明风险关注批次标识，客户端不得解析或拼装。
+	AttentionId string `json:"attentionId"`
+
+	// CategoryCounts 批次成员按固定审计分类汇总；至少包含一个分类，按审计分类枚举顺序返回。
+	CategoryCounts []AuditCategoryCount `json:"categoryCounts"`
+	FailureCount   int                  `json:"failureCount"`
+
+	// FirstAcknowledgement 最先成功确认时固化的管理员身份和时间。该快照不因确认人随后被删除而变化，也不参与节点复制。
+	FirstAcknowledgement *AuditAcknowledgement `json:"firstAcknowledgement,omitempty"`
+	FirstOccurredAt      time.Time             `json:"firstOccurredAt"`
+	LatestOccurredAt     time.Time             `json:"latestOccurredAt"`
+
+	// OperationId 可选的本节点操作关联标识；仅供管理员跨节点人工对照，不表示远端已应用。
+	OperationId *string `json:"operationId,omitempty"`
+
+	// Result 风险关注批次的聚合结果；mixed 表示同时存在多种单条结果。
+	Result AuditAttentionResult `json:"result"`
+
+	// Severity 服务端按固定风险映射给出的严重性。
+	Severity AuditSeverity `json:"severity"`
+
+	// State 风险关注批次中是否仍存在未确认风险来源。
+	State        AuditAttentionState `json:"state"`
+	SuccessCount int                 `json:"successCount"`
+
+	// Summary 服务端脱敏的可行动摘要。
+	Summary string `json:"summary"`
+
+	// Target 服务端脱敏后的审计对象；label 不得包含内部地址、凭据或原始诊断内容。
+	Target                       AuditTarget `json:"target"`
+	UnacknowledgedRiskEventCount int         `json:"unacknowledgedRiskEventCount"`
+}
+
+// AuditAttentionResult 风险关注批次的聚合结果；mixed 表示同时存在多种单条结果。
+type AuditAttentionResult string
+
+// AuditAttentionState 风险关注批次中是否仍存在未确认风险来源。
+type AuditAttentionState string
+
+// AuditCategory 服务端归一化的审计分类，不以底层技术来源作为主分类。
+type AuditCategory string
+
+// AuditCategoryCount defines model for AuditCategoryCount.
+type AuditCategoryCount struct {
+	// Category 服务端归一化的审计分类，不以底层技术来源作为主分类。
+	Category AuditCategory `json:"category"`
+	Count    int           `json:"count"`
+}
+
+// AuditEvent 当前节点统一审计事件的安全展示字段。客户端 IP 仅在管理员审计视图按策略返回（可关闭）；
+// 不得以本对象返回 User-Agent、请求标识、原始响应体、内部地址、令牌标识或任何凭据。
+type AuditEvent struct {
+	// Action 服务端映射的稳定操作名称。
+	Action string `json:"action"`
+
+	// Actor 记录时固化的安全身份快照。用户名、认证来源和可选用户 ID 均不依赖用户当前是否仍存在；
+	// 不包含令牌标识或认证材料。
+	Actor AuditActorSnapshot `json:"actor"`
+
+	// Attention 单条风险事件在其服务端风险关注批次中的确认状态。
+	Attention *AuditEventAttention `json:"attention,omitempty"`
+
+	// Category 服务端归一化的审计分类，不以底层技术来源作为主分类。
+	Category AuditCategory `json:"category"`
+
+	// ClientIp 发起请求的客户端 IP。仅管理员审计视图按策略返回（可配置关闭），
+	// 不得用于凭据用途，也不得在复制/导出通道外传播。
+	ClientIp *string `json:"clientIp,omitempty"`
+
+	// DurationMs 服务端处理耗时（毫秒）。
+	DurationMs *int64 `json:"durationMs,omitempty"`
+
+	// EventId 服务端签发的不透明事件标识，客户端不得解析或拼装。
+	EventId string `json:"eventId"`
+
+	// Http 脱敏后的 HTTP 上下文：请求方法、归一化路由模板、响应状态码与排障辅助信息。
+	// 路径为路由模板（如 /api/v1/admin/accounts/{id}），不含查询串或内部地址。
+	// 请求体与令牌预览必须脱敏（掩码/截断），不得出现凭据原文。
+	Http       *AuditHttpContext `json:"http,omitempty"`
+	OccurredAt time.Time         `json:"occurredAt"`
+
+	// OperationId 可选的本节点操作关联标识；仅供管理员跨节点人工对照，不表示远端已应用。
+	OperationId *string `json:"operationId,omitempty"`
+
+	// Result 服务端归一化的单条审计结果。
+	Result AuditResult `json:"result"`
+
+	// Severity 服务端按固定风险映射给出的严重性。
+	Severity AuditSeverity `json:"severity"`
+
+	// Summary 服务端脱敏的可行动摘要。
+	Summary string `json:"summary"`
+
+	// Target 服务端脱敏后的审计对象；label 不得包含内部地址、凭据或原始诊断内容。
+	Target AuditTarget `json:"target"`
+}
+
+// AuditEventAttention 单条风险事件在其服务端风险关注批次中的确认状态。
+type AuditEventAttention struct {
+	// Acknowledgement 最先成功确认时固化的管理员身份和时间。该快照不因确认人随后被删除而变化，也不参与节点复制。
+	Acknowledgement *AuditAcknowledgement `json:"acknowledgement,omitempty"`
+
+	// AttentionId 服务端签发的不透明风险关注批次标识，客户端不得解析或拼装。
+	AttentionId string `json:"attentionId"`
+
+	// State 风险关注批次中是否仍存在未确认风险来源。
+	State AuditAttentionState `json:"state"`
+}
+
+// AuditEventDetail 当前节点统一审计事件详情；只返回安全字段。
+type AuditEventDetail struct {
+	// Details 事件详情允许扩展的脱敏字段。不得回显原始 detail、堆栈、原始响应体、内部地址、
+	// 请求标识、IP、User-Agent 或任何凭据。
+	Details AuditEventSafeDetails `json:"details"`
+
+	// Event 当前节点统一审计事件的安全展示字段。客户端 IP 仅在管理员审计视图按策略返回（可关闭）；
+	// 不得以本对象返回 User-Agent、请求标识、原始响应体、内部地址、令牌标识或任何凭据。
+	Event AuditEvent `json:"event"`
+}
+
+// AuditEventPage defines model for AuditEventPage.
+type AuditEventPage struct {
+	Items []AuditEvent `json:"items"`
+
+	// NextCursor 下一页的不透明游标；没有下一页时省略。
+	NextCursor *string `json:"nextCursor,omitempty"`
+
+	// Snapshot 与审计概览和同筛选事件页共享的不透明稳定读取边界。
+	Snapshot   string    `json:"snapshot"`
+	SnapshotAt time.Time `json:"snapshotAt"`
+	TotalCount int       `json:"totalCount"`
+}
+
+// AuditEventSafeDetails 事件详情允许扩展的脱敏字段。不得回显原始 detail、堆栈、原始响应体、内部地址、
+// 请求标识、IP、User-Agent 或任何凭据。
+type AuditEventSafeDetails struct {
+	AffectedCount int `json:"affectedCount"`
+
+	// ErrorClass 服务端归一化错误分类，不包含原始错误文本。
+	ErrorClass    *string `json:"errorClass,omitempty"`
+	ResultSummary string  `json:"resultSummary"`
+}
+
+// AuditHttpContext 脱敏后的 HTTP 上下文：请求方法、归一化路由模板、响应状态码与排障辅助信息。
+// 路径为路由模板（如 /api/v1/admin/accounts/{id}），不含查询串或内部地址。
+// 请求体与令牌预览必须脱敏（掩码/截断），不得出现凭据原文。
+type AuditHttpContext struct {
+	// BodyPreview 脱敏后的请求体（JSON 文本，敏感字段已掩码）。
+	// 仅管理员审计视图返回，不得包含凭据、令牌或个人信息原文。
+	BodyPreview *string                `json:"bodyPreview,omitempty"`
+	Method      AuditHttpContextMethod `json:"method"`
+	Path        string                 `json:"path"`
+
+	// RequestId 服务端请求标识（可用于工单/日志对照，不承载鉴权语义）。
+	RequestId *string `json:"requestId,omitempty"`
+
+	// StatusCode HTTP 响应状态码。
+	StatusCode *int `json:"statusCode,omitempty"`
+
+	// TokenPreview 认证令牌的脱敏预览（形如 Bearer eyJhbG****1dnM）。
+	TokenPreview *string `json:"tokenPreview,omitempty"`
+
+	// UserAgent 客户端 User-Agent 原文（仅管理员审计视图返回）。
+	UserAgent *string `json:"userAgent,omitempty"`
+}
+
+// AuditHttpContextMethod defines model for AuditHttpContext.Method.
+type AuditHttpContextMethod string
+
+// AuditNotificationStatus 通知中心按批次确认状态的筛选口径。
+type AuditNotificationStatus string
+
+// AuditObservabilitySummary 当前节点统一审计的筛选范围概览和稳定读取边界。
+type AuditObservabilitySummary struct {
+	// AverageDurationMs 平均处理耗时（毫秒；无样本时为 0）。
+	AverageDurationMs *int64               `json:"averageDurationMs,omitempty"`
+	CategoryCounts    []AuditCategoryCount `json:"categoryCounts"`
+
+	// ClientErrorCount 4xx 客户端错误数。
+	ClientErrorCount *int `json:"clientErrorCount,omitempty"`
+
+	// DistinctActorCount 仅按稳定用户 ID 或非空身份快照去重的账号数；系统、匿名和复制来源不计入。
+	DistinctActorCount int `json:"distinctActorCount"`
+
+	// DistinctClientIpCount 客户端 IP 去重数量（客户端 IP 按策略可用时统计，否则为 0）。
+	DistinctClientIpCount *int `json:"distinctClientIpCount,omitempty"`
+	FailureCount          int  `json:"failureCount"`
+
+	// FailureRate 最终结果为成功或失败的事件中，失败事件所占比例。
+	FailureRate   float64 `json:"failureRate"`
+	HighRiskCount int     `json:"highRiskCount"`
+
+	// ServerErrorCount 5xx 服务端错误数。
+	ServerErrorCount *int `json:"serverErrorCount,omitempty"`
+
+	// SlowRequestCount 慢请求数（处理耗时 ≥ 阈值，默认 1000ms）。
+	SlowRequestCount *int `json:"slowRequestCount,omitempty"`
+
+	// Snapshot 服务端签发的不透明稳定读取边界；不得解析、修改或跨筛选条件复用。
+	Snapshot     string    `json:"snapshot"`
+	SnapshotAt   time.Time `json:"snapshotAt"`
+	SuccessCount int       `json:"successCount"`
+	TotalCount   int       `json:"totalCount"`
+
+	// Trend 服务端按范围固定粒度返回的趋势桶。
+	Trend []AuditTrendPoint `json:"trend"`
+}
+
+// AuditResult 服务端归一化的单条审计结果。
+type AuditResult string
+
+// AuditSeverity 服务端按固定风险映射给出的严重性。
+type AuditSeverity string
+
+// AuditTarget 服务端脱敏后的审计对象；label 不得包含内部地址、凭据或原始诊断内容。
+type AuditTarget struct {
+	Kind       AuditTargetKind `json:"kind"`
+	Label      string          `json:"label"`
+	Repository *string         `json:"repository,omitempty"`
+}
+
+// AuditTargetKind defines model for AuditTarget.Kind.
+type AuditTargetKind string
+
+// AuditTrendPoint defines model for AuditTrendPoint.
+type AuditTrendPoint struct {
+	CategoryCounts []AuditCategoryCount `json:"categoryCounts"`
+	FailureCount   int                  `json:"failureCount"`
+	From           time.Time            `json:"from"`
+	To             time.Time            `json:"to"`
+	TotalCount     int                  `json:"totalCount"`
+}
+
+// BackupCounts 包内各实体记录数，供导入端核对规模。
+type BackupCounts struct {
+	Acls           *int `json:"acls,omitempty"`
+	Assets         *int `json:"assets,omitempty"`
+	FormatMetadata *int `json:"formatMetadata,omitempty"`
+	Repositories   *int `json:"repositories,omitempty"`
+	Tokens         *int `json:"tokens,omitempty"`
+	Users          *int `json:"users,omitempty"`
+}
+
+// BackupImport 一次导入的记录。pending_restart 表示校验与暂存已完成、restore.pending 已写入，
+// 需重启服务才会替换数据库并转为 done。
+type BackupImport struct {
+	BlobCount    *int               `json:"blobCount,omitempty"`
+	CreatedAt    string             `json:"createdAt"`
+	Deep         bool               `json:"deep"`
+	Error        *string            `json:"error,omitempty"`
+	ErrorCode    *string            `json:"errorCode,omitempty"`
+	FetchedBytes *int64             `json:"fetchedBytes,omitempty"`
+	FinishedAt   *string            `json:"finishedAt,omitempty"`
+	ImportId     string             `json:"importId"`
+	Operator     string             `json:"operator"`
+	Origin       BackupImportOrigin `json:"origin"`
+	Overwrite    bool               `json:"overwrite"`
+
+	// PackageId 包内 manifest 的 packageId（校验通过后才有值）。
+	PackageId        *string `json:"packageId,omitempty"`
+	RestorePendingAt *string `json:"restorePendingAt,omitempty"`
+
+	// SourceUrl URL 拉取通道的来源地址；其它通道缺省。
+	SourceUrl  *string            `json:"sourceUrl,omitempty"`
+	Status     BackupImportStatus `json:"status"`
+	TotalBytes *int64             `json:"totalBytes,omitempty"`
+	UpdatedAt  string             `json:"updatedAt"`
+}
+
+// BackupImportList defines model for BackupImportList.
+type BackupImportList struct {
+	Items []BackupImport `json:"items"`
+	Total int            `json:"total"`
+}
+
+// BackupImportOrigin defines model for BackupImportOrigin.
+type BackupImportOrigin string
+
+// BackupImportStatus defines model for BackupImportStatus.
+type BackupImportStatus string
+
+// BackupLink defines model for BackupLink.
+type BackupLink struct {
+	ExpiresAt string `json:"expiresAt"`
+	Url       string `json:"url"`
+}
+
+// BackupPackage 节点备份包登记（包体为 tar.gz，不含密钥与节点本地配置）。
+type BackupPackage struct {
+	AppVersion *string `json:"appVersion,omitempty"`
+
+	// BasePackageId 非空表示这是基于该基线包生成的增量差包。
+	BasePackageId *string `json:"basePackageId,omitempty"`
+
+	// Counts 包内各实体记录数，供导入端核对规模。
+	Counts          *BackupCounts       `json:"counts,omitempty"`
+	CreatedAt       string              `json:"createdAt"`
+	DbSchemaVersion *int                `json:"dbSchemaVersion,omitempty"`
+	ErrorSummary    *string             `json:"errorSummary,omitempty"`
+	FinishedAt      *string             `json:"finishedAt,omitempty"`
+	Label           *string             `json:"label,omitempty"`
+	Mode            BackupPackageMode   `json:"mode"`
+	NodeId          *string             `json:"nodeId,omitempty"`
+	PackageId       string              `json:"packageId"`
+	SizeBytes       int64               `json:"sizeBytes"`
+	Status          BackupPackageStatus `json:"status"`
+}
+
+// BackupPackageMode defines model for BackupPackage.Mode.
+type BackupPackageMode string
+
+// BackupPackageStatus defines model for BackupPackage.Status.
+type BackupPackageStatus string
+
+// BackupPackageList defines model for BackupPackageList.
+type BackupPackageList struct {
+	Items []BackupPackage `json:"items"`
+	Total int             `json:"total"`
+}
+
+// BackupUploadSession 一次分片上传会话的视图。uploadedChunks 由磁盘上真实存在的分片推导（以磁盘为准，可续传）。
+type BackupUploadSession struct {
+	ChunkSize      int64              `json:"chunkSize"`
+	ExpiresAt      time.Time          `json:"expiresAt"`
+	FileName       string             `json:"fileName"`
+	Status         BackupUploadStatus `json:"status"`
+	TotalBytes     int64              `json:"totalBytes"`
+	UploadId       string             `json:"uploadId"`
+	UploadedChunks []int              `json:"uploadedChunks"`
+}
+
+// BackupUploadStatus defines model for BackupUploadStatus.
+type BackupUploadStatus string
+
+// BackupVerification defines model for BackupVerification.
+type BackupVerification struct {
+	Assets    *int    `json:"assets,omitempty"`
+	Blobs     *int    `json:"blobs,omitempty"`
+	Deep      *bool   `json:"deep,omitempty"`
+	Error     *string `json:"error,omitempty"`
+	Ok        bool    `json:"ok"`
+	PackageId *string `json:"packageId,omitempty"`
+}
+
 // BatchDeleteAssetFailure defines model for BatchDeleteAssetFailure.
 type BatchDeleteAssetFailure struct {
 	Error string `json:"error"`
@@ -534,6 +1895,9 @@ type BatchDeleteAssetFailure struct {
 
 // BatchDeleteAssetsRequest defines model for BatchDeleteAssetsRequest.
 type BatchDeleteAssetsRequest struct {
+	// OverrideReason 管理员执行批量删除的原因
+	OverrideReason string `json:"overrideReason"`
+
 	// Paths 待删除的制品路径列表（单条非空，上限 500 条）
 	Paths []string `json:"paths"`
 }
@@ -543,7 +1907,7 @@ type BatchDeleteAssetsResponse struct {
 	// Deleted 成功删除的制品数
 	Deleted int `json:"deleted"`
 
-	// Failed 删除失败的路径与原因明细（成功数不受其影响）
+	// Failed 兼容字段；统一事务成功时始终为空数组
 	Failed []BatchDeleteAssetFailure `json:"failed"`
 }
 
@@ -551,6 +1915,27 @@ type BatchDeleteAssetsResponse struct {
 type BootstrapRequest struct {
 	Password string `json:"password"`
 	Username string `json:"username"`
+}
+
+// CapacityPoint defines model for CapacityPoint.
+type CapacityPoint struct {
+	AssetCount      int64     `json:"assetCount"`
+	From            time.Time `json:"from"`
+	LogicalBytes    int64     `json:"logicalBytes"`
+	RepositoryCount int64     `json:"repositoryCount"`
+	To              time.Time `json:"to"`
+}
+
+// CompleteBackupUploadRequest defines model for CompleteBackupUploadRequest.
+type CompleteBackupUploadRequest struct {
+	// Deep 逐 blob 比对内容摘要（耗时与包体积同阶）。
+	Deep *bool `json:"deep,omitempty"`
+
+	// Overwrite 目标实例非空时需显式置真。内置 anonymous 主体不计入「非空」。
+	Overwrite *bool `json:"overwrite,omitempty"`
+
+	// Sha256 可选：客户端侧声明的归档摘要，拼装完成后核对。
+	Sha256 *string `json:"sha256,omitempty"`
 }
 
 // ConnectionStatus defines model for ConnectionStatus.
@@ -568,22 +1953,72 @@ type ConnectionStatus struct {
 // ConnectionStatusStatus 上游连接状态（READY=尚未探测，AVAILABLE=可用，AUTO_BLOCKED=自动阻止，UNAVAILABLE=不可用，OFFLINE=手动离线）
 type ConnectionStatusStatus string
 
+// CreateBackupImportRequest defines model for CreateBackupImportRequest.
+type CreateBackupImportRequest struct {
+	// Deep 逐 blob 比对内容摘要（耗时与包体积同阶）。
+	Deep *bool `json:"deep,omitempty"`
+
+	// ExpectedSha256 可选：拉取完成后核对的归档摘要。
+	ExpectedSha256 *string `json:"expectedSha256,omitempty"`
+
+	// Overwrite 目标实例非空时需显式置真。内置 anonymous 主体不计入「非空」。
+	Overwrite *bool `json:"overwrite,omitempty"`
+
+	// SourceUrl 备份包归档的 http/https 地址。
+	SourceUrl string `json:"sourceUrl"`
+}
+
+// CreateBackupLinkRequest defines model for CreateBackupLinkRequest.
+type CreateBackupLinkRequest struct {
+	// TtlSeconds 链接有效期（秒），默认 1800，上限 86400。
+	TtlSeconds *int `json:"ttlSeconds,omitempty"`
+}
+
+// CreateBackupRequest defines model for CreateBackupRequest.
+type CreateBackupRequest struct {
+	Label *string                 `json:"label,omitempty"`
+	Mode  CreateBackupRequestMode `json:"mode"`
+}
+
+// CreateBackupRequestMode defines model for CreateBackupRequest.Mode.
+type CreateBackupRequestMode string
+
+// CreateBackupUploadRequest defines model for CreateBackupUploadRequest.
+type CreateBackupUploadRequest struct {
+	FileName string `json:"fileName"`
+
+	// Sha256 可选：归档整体摘要（64 位小写 hex），拼装完成后核对。
+	Sha256     *string `json:"sha256,omitempty"`
+	TotalBytes int64   `json:"totalBytes"`
+}
+
 // CreateMigrationRequest defines model for CreateMigrationRequest.
 type CreateMigrationRequest struct {
 	ConflictPolicy *MigrationConflictPolicy `json:"conflictPolicy,omitempty"`
-	CredentialRef  *string                  `json:"credentialRef,omitempty"`
-	Plan           *MigrationPlan           `json:"plan,omitempty"`
 
-	// SourceConfig 来源配置（url/path 等），不得含密钥明文
+	// CredentialRef 兼容已有在线来源的上游凭据逻辑名称；与 sourceAuth 互斥。
+	CredentialRef *string        `json:"credentialRef,omitempty"`
+	Plan          *MigrationPlan `json:"plan,omitempty"`
+
+	// SourceAuth 在线 Nexus 来源认证材料；仅请求写入，服务端加密保存，永不在响应、任务、报告或日志中返回。
+	SourceAuth *MigrationSourceAuth `json:"sourceAuth,omitempty"`
+
+	// SourceConfig 来源配置。online_rest 提供 url 或 sourceRef 二选一；offline_dir 与 offline_bundle 仅提供 path。禁止认证材料和其他字段。
 	SourceConfig *MigrationSourceConfig `json:"sourceConfig,omitempty"`
 	SourceType   MigrationSourceType    `json:"sourceType"`
 }
 
 // CreateRepositoryRequest defines model for CreateRepositoryRequest.
 type CreateRepositoryRequest struct {
+	// CredentialRef proxy 上游凭据的受限逻辑名称；运行时仅从 JIAN_UPSTREAM_CREDENTIAL_<名称> 读取（仅 type=proxy，非密钥明文）
+	CredentialRef *string `json:"credentialRef,omitempty"`
+
 	// Description 仓库描述（可选）
 	Description *string                       `json:"description,omitempty"`
 	Format      CreateRepositoryRequestFormat `json:"format"`
+
+	// ImmutableRelease 创建 hosted 仓库时是否拒绝覆盖已存在的 Release
+	ImmutableRelease *bool `json:"immutableRelease,omitempty"`
 
 	// Members group 仓库的成员仓库名（有序，type=group 时必填）
 	Members *[]string `json:"members,omitempty"`
@@ -619,12 +2054,31 @@ type CreateUserRequest struct {
 // CreateUserRequestRole defines model for CreateUserRequest.Role.
 type CreateUserRequestRole string
 
+// EnabledFormats defines model for EnabledFormats.
+type EnabledFormats struct {
+	// Formats 当前进程启动时启用的格式，按字典序返回
+	Formats []EnabledFormatsFormats `json:"formats"`
+}
+
+// EnabledFormatsFormats defines model for EnabledFormats.Formats.
+type EnabledFormatsFormats string
+
 // Error defines model for Error.
 type Error struct {
 	Error struct {
 		Code    string `json:"code"`
 		Message string `json:"message"`
 	} `json:"error"`
+
+	// OperationId 统一制品操作失败时返回的追踪标识
+	OperationId *string `json:"operationId,omitempty"`
+}
+
+// FreezeWritesRequest until 与 ttlSeconds 二选一；都给时 until 优先。都不给则用 ttlSeconds 默认 7200。窗口上限 24 小时。
+type FreezeWritesRequest struct {
+	Reason     *string    `json:"reason,omitempty"`
+	TtlSeconds *int       `json:"ttlSeconds,omitempty"`
+	Until      *time.Time `json:"until,omitempty"`
 }
 
 // HealthStatus defines model for HealthStatus.
@@ -635,6 +2089,44 @@ type HealthStatus struct {
 
 // HealthStatusStatus defines model for HealthStatus.Status.
 type HealthStatusStatus string
+
+// HostMetricGroup defines model for HostMetricGroup.
+type HostMetricGroup struct {
+	ErrorCode *string          `json:"errorCode,omitempty"`
+	State     MetricGroupState `json:"state"`
+}
+
+// HostMetricPoint defines model for HostMetricPoint.
+type HostMetricPoint struct {
+	CpuPercent                    *float64        `json:"cpuPercent,omitempty"`
+	DiskAvailableBytes            *int64          `json:"diskAvailableBytes,omitempty"`
+	From                          time.Time       `json:"from"`
+	GoroutineCount                *int64          `json:"goroutineCount,omitempty"`
+	HostState                     HostMetricGroup `json:"hostState"`
+	MemoryAvailableBytes          *int64          `json:"memoryAvailableBytes,omitempty"`
+	MemoryTotalBytes              *int64          `json:"memoryTotalBytes,omitempty"`
+	NetworkReceiveBytesPerSecond  *float64        `json:"networkReceiveBytesPerSecond,omitempty"`
+	NetworkState                  HostMetricGroup `json:"networkState"`
+	NetworkTransmitBytesPerSecond *float64        `json:"networkTransmitBytesPerSecond,omitempty"`
+	OpenFileDescriptors           *int64          `json:"openFileDescriptors,omitempty"`
+	ProcessCpuPercent             *float64        `json:"processCpuPercent,omitempty"`
+	ProcessRssBytes               *int64          `json:"processRssBytes,omitempty"`
+	ProcessState                  HostMetricGroup `json:"processState"`
+	ReadinessState                HostMetricGroup `json:"readinessState"`
+	To                            time.Time       `json:"to"`
+}
+
+// HostMonitoring defines model for HostMonitoring.
+type HostMonitoring struct {
+	EffectiveBucket ObservabilityBucket     `json:"effectiveBucket"`
+	HostState       HostMonitoringHostState `json:"hostState"`
+	Latest          *HostMetricPoint        `json:"latest,omitempty"`
+	LatestSampleAt  *time.Time              `json:"latestSampleAt,omitempty"`
+	Samples         []HostMetricPoint       `json:"samples"`
+}
+
+// HostMonitoringHostState defines model for HostMonitoring.HostState.
+type HostMonitoringHostState string
 
 // LoginRequest defines model for LoginRequest.
 type LoginRequest struct {
@@ -648,15 +2140,23 @@ type LoginResponse struct {
 	User  User   `json:"user"`
 }
 
+// MetricGroupState defines model for MetricGroupState.
+type MetricGroupState string
+
 // MigrationConflictPolicy defines model for MigrationConflictPolicy.
 type MigrationConflictPolicy string
 
 // MigrationDiscoverRequest defines model for MigrationDiscoverRequest.
 type MigrationDiscoverRequest struct {
 	ConflictPolicy *MigrationConflictPolicy `json:"conflictPolicy,omitempty"`
-	CredentialRef  *string                  `json:"credentialRef,omitempty"`
 
-	// SourceConfig 来源配置（url/path 等），不得含密钥明文
+	// CredentialRef 兼容已有在线来源的上游凭据逻辑名称；与 sourceAuth 互斥。
+	CredentialRef *string `json:"credentialRef,omitempty"`
+
+	// SourceAuth 在线 Nexus 来源认证材料；仅请求写入，服务端加密保存，永不在响应、任务、报告或日志中返回。
+	SourceAuth *MigrationSourceAuth `json:"sourceAuth,omitempty"`
+
+	// SourceConfig 来源配置。online_rest 提供 url 或 sourceRef 二选一；offline_dir 与 offline_bundle 仅提供 path。禁止认证材料和其他字段。
 	SourceConfig *MigrationSourceConfig `json:"sourceConfig,omitempty"`
 	SourceType   MigrationSourceType    `json:"sourceType"`
 }
@@ -667,25 +2167,53 @@ type MigrationDiscoverResponse struct {
 	TaskId int64         `json:"taskId"`
 }
 
+// MigrationOfflineSourceConfig defines model for MigrationOfflineSourceConfig.
+type MigrationOfflineSourceConfig struct {
+	// Path 离线目录或离线导出包路径。
+	Path string `json:"path"`
+}
+
+// MigrationOnlineSourceRefConfig defines model for MigrationOnlineSourceRefConfig.
+type MigrationOnlineSourceRefConfig struct {
+	// SourceRef 兼容已有任务的受限逻辑来源名称；运行时仅从 JIAN_MIGRATION_SOURCE_<名称> 读取。
+	SourceRef string `json:"sourceRef"`
+}
+
+// MigrationOnlineURLSourceConfig defines model for MigrationOnlineURLSourceConfig.
+type MigrationOnlineURLSourceConfig struct {
+	// Url 外部 Nexus REST 基址；仅允许无用户信息、查询参数和片段的绝对 http 或 https URL。
+	Url string `json:"url"`
+}
+
 // MigrationPlan defines model for MigrationPlan.
 type MigrationPlan struct {
 	// Estimated 资产数是否为估算
 	Estimated    *bool                     `json:"estimated,omitempty"`
 	Repositories []MigrationPlanRepository `json:"repositories"`
-	Stats        map[string]interface{}    `json:"stats"`
-	Warnings     []string                  `json:"warnings"`
+
+	// SourceRef online_rest 的受限逻辑来源名称；运行时仅从 JIAN_MIGRATION_SOURCE_<名称> 读取，不包含 URL、主机名、IP 或凭据
+	SourceRef *string                `json:"sourceRef,omitempty"`
+	Stats     map[string]interface{} `json:"stats"`
+	Warnings  []string               `json:"warnings"`
 }
 
 // MigrationPlanRepository defines model for MigrationPlanRepository.
 type MigrationPlanRepository struct {
-	EstimatedAssets *int64                        `json:"estimatedAssets,omitempty"`
-	Format          MigrationPlanRepositoryFormat `json:"format"`
-	Name            string                        `json:"name"`
-	Type            *MigrationPlanRepositoryType  `json:"type,omitempty"`
+	// Config 无敏感的目标配置摘要
+	Config          *map[string]interface{}               `json:"config,omitempty"`
+	EstimatedAssets *int64                                `json:"estimatedAssets,omitempty"`
+	Format          MigrationPlanRepositoryFormat         `json:"format"`
+	MigrationMode   *MigrationPlanRepositoryMigrationMode `json:"migrationMode,omitempty"`
+	Name            string                                `json:"name"`
+	Type            *MigrationPlanRepositoryType          `json:"type,omitempty"`
+	Warnings        *[]string                             `json:"warnings,omitempty"`
 }
 
 // MigrationPlanRepositoryFormat defines model for MigrationPlanRepository.Format.
 type MigrationPlanRepositoryFormat string
+
+// MigrationPlanRepositoryMigrationMode defines model for MigrationPlanRepository.MigrationMode.
+type MigrationPlanRepositoryMigrationMode string
 
 // MigrationPlanRepositoryType defines model for MigrationPlanRepository.Type.
 type MigrationPlanRepositoryType string
@@ -708,8 +2236,49 @@ type MigrationReport struct {
 	Warnings     *[]string                 `json:"warnings,omitempty"`
 }
 
-// MigrationSourceConfig 来源配置（url/path 等），不得含密钥明文
-type MigrationSourceConfig map[string]interface{}
+// MigrationSourceAuth 在线 Nexus 来源认证材料；仅请求写入，服务端加密保存，永不在响应、任务、报告或日志中返回。
+type MigrationSourceAuth struct {
+	union json.RawMessage
+}
+
+// MigrationSourceAuthAnonymous defines model for MigrationSourceAuthAnonymous.
+type MigrationSourceAuthAnonymous struct {
+	Type MigrationSourceAuthAnonymousType `json:"type"`
+}
+
+// MigrationSourceAuthAnonymousType defines model for MigrationSourceAuthAnonymous.Type.
+type MigrationSourceAuthAnonymousType string
+
+// MigrationSourceAuthBasic defines model for MigrationSourceAuthBasic.
+type MigrationSourceAuthBasic struct {
+	// Password Nexus 密码或 User Token Passcode；仅写入。
+	Password *string                      `json:"password,omitempty"`
+	Type     MigrationSourceAuthBasicType `json:"type"`
+
+	// Username Nexus 用户名或 User Token 名称；仅写入。
+	Username *string `json:"username,omitempty"`
+}
+
+// MigrationSourceAuthBasicType defines model for MigrationSourceAuthBasic.Type.
+type MigrationSourceAuthBasicType string
+
+// MigrationSourceAuthBearer defines model for MigrationSourceAuthBearer.
+type MigrationSourceAuthBearer struct {
+	// Token Nexus JWT、Access Token 或 npm Token；仅写入。
+	Token *string                       `json:"token,omitempty"`
+	Type  MigrationSourceAuthBearerType `json:"type"`
+}
+
+// MigrationSourceAuthBearerType defines model for MigrationSourceAuthBearer.Type.
+type MigrationSourceAuthBearerType string
+
+// MigrationSourceAuthType 在线 Nexus 来源认证方式；不包含用户名、密码或令牌。
+type MigrationSourceAuthType string
+
+// MigrationSourceConfig 来源配置。online_rest 提供 url 或 sourceRef 二选一；offline_dir 与 offline_bundle 仅提供 path。禁止认证材料和其他字段。
+type MigrationSourceConfig struct {
+	union json.RawMessage
+}
 
 // MigrationSourceType defines model for MigrationSourceType.
 type MigrationSourceType string
@@ -719,14 +2288,17 @@ type MigrationTask struct {
 	ConflictPolicy MigrationConflictPolicy `json:"conflictPolicy"`
 	CreatedAt      string                  `json:"createdAt"`
 
-	// CredentialRef 环境变量引用名，非密钥明文
+	// CredentialRef 上游凭据的受限逻辑名称；运行时仅从 JIAN_UPSTREAM_CREDENTIAL_<名称> 读取，非密钥明文
 	CredentialRef *string        `json:"credentialRef,omitempty"`
 	ErrorMessage  *string        `json:"errorMessage,omitempty"`
 	FinishedAt    *string        `json:"finishedAt,omitempty"`
 	Id            int64          `json:"id"`
 	Plan          *MigrationPlan `json:"plan,omitempty"`
 
-	// SourceConfig 来源配置（url/path 等），不得含密钥明文
+	// SourceAuthType 在线 Nexus 来源认证方式；不包含用户名、密码或令牌。
+	SourceAuthType *MigrationSourceAuthType `json:"sourceAuthType,omitempty"`
+
+	// SourceConfig 来源配置。online_rest 提供 url 或 sourceRef 二选一；offline_dir 与 offline_bundle 仅提供 path。禁止认证材料和其他字段。
 	SourceConfig *MigrationSourceConfig `json:"sourceConfig,omitempty"`
 	SourceType   MigrationSourceType    `json:"sourceType"`
 	StartedAt    *string                `json:"startedAt,omitempty"`
@@ -743,9 +2315,102 @@ type MigrationTaskList struct {
 // MigrationTaskStatus defines model for MigrationTaskStatus.
 type MigrationTaskStatus string
 
+// ObservabilityBucket defines model for ObservabilityBucket.
+type ObservabilityBucket string
+
+// OperationsAlert defines model for OperationsAlert.
+type OperationsAlert struct {
+	BlockedUntil    *time.Time              `json:"blockedUntil,omitempty"`
+	Code            string                  `json:"code"`
+	FirstObservedAt *time.Time              `json:"firstObservedAt,omitempty"`
+	ObservedAt      time.Time               `json:"observedAt"`
+	Severity        OperationsAlertSeverity `json:"severity"`
+	Source          string                  `json:"source"`
+}
+
+// OperationsAlertSeverity defines model for OperationsAlert.Severity.
+type OperationsAlertSeverity string
+
+// OperationsDashboard defines model for OperationsDashboard.
+type OperationsDashboard struct {
+	Alerts          []OperationsAlert   `json:"alerts"`
+	CapacityTrend   []CapacityPoint     `json:"capacityTrend"`
+	Current         CapacityPoint       `json:"current"`
+	EffectiveBucket ObservabilityBucket `json:"effectiveBucket"`
+	From            time.Time           `json:"from"`
+
+	// Kpi 服务端按当前范围聚合的权威仪表盘 KPI；客户端不得自行从趋势重新计算。
+	Kpi          OperationsDashboardKpi `json:"kpi"`
+	RequestTrend []ProtocolMetricPoint  `json:"requestTrend"`
+	To           time.Time              `json:"to"`
+}
+
+// OperationsDashboardKpi 服务端按当前范围聚合的权威仪表盘 KPI；客户端不得自行从趋势重新计算。
+type OperationsDashboardKpi struct {
+	AssetCount int64 `json:"assetCount"`
+
+	// CacheHitRate 命中数除以命中与未命中样本数；无缓存样本时为 null。
+	CacheHitRate    *float64 `json:"cacheHitRate"`
+	DownloadCount   int64    `json:"downloadCount"`
+	FailureCount    int64    `json:"failureCount"`
+	LogicalBytes    int64    `json:"logicalBytes"`
+	RepositoryCount int64    `json:"repositoryCount"`
+	RequestCount    int64    `json:"requestCount"`
+}
+
 // PasswordChangeRequest defines model for PasswordChangeRequest.
 type PasswordChangeRequest struct {
 	Password string `json:"password"`
+}
+
+// ProtocolMetricPoint defines model for ProtocolMetricPoint.
+type ProtocolMetricPoint struct {
+	CacheHitCount  int64     `json:"cacheHitCount"`
+	CacheMissCount int64     `json:"cacheMissCount"`
+	DownloadCount  int64     `json:"downloadCount"`
+	FailureCount   int64     `json:"failureCount"`
+	From           time.Time `json:"from"`
+	RequestCount   int64     `json:"requestCount"`
+	To             time.Time `json:"to"`
+}
+
+// PublishPolicyRequest defines model for PublishPolicyRequest.
+type PublishPolicyRequest struct {
+	// AllowedPrefixes 可选的发布路径前缀；空数组表示不限制前缀
+	AllowedPrefixes *[]string `json:"allowedPrefixes,omitempty"`
+
+	// ImmutableRelease 已废弃，只读兼容字段；写入会被拒绝，请改用仓库 immutableRelease 配置
+	ImmutableRelease *bool `json:"immutableRelease,omitempty"`
+
+	// MaxAssetsHour 每小时新增制品数上限；零表示不限制
+	MaxAssetsHour *int64 `json:"maxAssetsHour,omitempty"`
+
+	// MaxBytesDay 每日上传总字节上限；零表示不限制
+	MaxBytesDay *int64 `json:"maxBytesDay,omitempty"`
+
+	// MaxFileBytes 单文件字节上限；零表示不限制
+	MaxFileBytes *int64 `json:"maxFileBytes,omitempty"`
+
+	// PathPrefixes allowedPrefixes 的兼容别名
+	PathPrefixes *[]string `json:"pathPrefixes,omitempty"`
+
+	// WebLoginDisabled 是否禁止该账号登录 Web 与管理 API
+	WebLoginDisabled *bool `json:"webLoginDisabled,omitempty"`
+}
+
+// PublishPolicyResponse defines model for PublishPolicyResponse.
+type PublishPolicyResponse struct {
+	AllowedPrefixes []string `json:"allowedPrefixes"`
+
+	// ImmutableRelease 只读兼容字段，值来自仓库 immutableRelease 配置
+	ImmutableRelease bool   `json:"immutableRelease"`
+	MaxAssetsHour    int64  `json:"maxAssetsHour"`
+	MaxBytesDay      int64  `json:"maxBytesDay"`
+	MaxFileBytes     int64  `json:"maxFileBytes"`
+	Repository       string `json:"repository"`
+	UserId           int64  `json:"userId"`
+	Username         string `json:"username"`
+	WebLoginDisabled bool   `json:"webLoginDisabled"`
 }
 
 // PutAclRequest defines model for PutAclRequest.
@@ -753,30 +2418,37 @@ type PutAclRequest struct {
 	Items []AclEntry `json:"items"`
 }
 
-// ReplicationApplyLog defines model for ReplicationApplyLog.
-type ReplicationApplyLog struct {
-	AttemptCount int                       `json:"attemptCount"`
-	Detail       string                    `json:"detail"`
-	EntityKey    string                    `json:"entityKey"`
-	EntityType   string                    `json:"entityType"`
-	FirstSeenAt  string                    `json:"firstSeenAt"`
-	LastError    *string                   `json:"lastError,omitempty"`
-	LastErrorAt  *string                   `json:"lastErrorAt,omitempty"`
-	LastSeenAt   string                    `json:"lastSeenAt"`
-	Op           string                    `json:"op"`
-	PeerUrl      string                    `json:"peerUrl"`
-	Result       ReplicationApplyLogResult `json:"result"`
-	SourceNode   string                    `json:"sourceNode"`
-	SourceSeq    int64                     `json:"sourceSeq"`
+// RemoteNexusRepository defines model for RemoteNexusRepository.
+type RemoteNexusRepository struct {
+	Format string                    `json:"format"`
+	Name   string                    `json:"name"`
+	Type   RemoteNexusRepositoryType `json:"type"`
 }
 
-// ReplicationApplyLogResult defines model for ReplicationApplyLog.Result.
-type ReplicationApplyLogResult string
+// RemoteNexusRepositoryType defines model for RemoteNexusRepository.Type.
+type RemoteNexusRepositoryType string
 
-// ReplicationApplyLogList defines model for ReplicationApplyLogList.
-type ReplicationApplyLogList struct {
-	Items []ReplicationApplyLog `json:"items"`
-	Total int                   `json:"total"`
+// RemoteNexusRepositoryList defines model for RemoteNexusRepositoryList.
+type RemoteNexusRepositoryList struct {
+	Items []RemoteNexusRepository `json:"items"`
+	Total int                     `json:"total"`
+}
+
+// RemoteNexusRepositoryRequest defines model for RemoteNexusRepositoryRequest.
+type RemoteNexusRepositoryRequest struct {
+	// CredentialRef 兼容已有在线来源的上游凭据逻辑名称；与 sourceAuth 互斥。
+	CredentialRef *string `json:"credentialRef,omitempty"`
+
+	// SourceAuth 在线 Nexus 来源认证材料；仅请求写入，服务端加密保存，永不在响应、任务、报告或日志中返回。
+	SourceAuth *MigrationSourceAuth `json:"sourceAuth,omitempty"`
+
+	// SourceConfig 在线 Nexus 来源配置；直填 URL 或兼容 sourceRef 二选一，禁止认证材料和离线路径。
+	SourceConfig RemoteNexusSourceConfig `json:"sourceConfig"`
+}
+
+// RemoteNexusSourceConfig 在线 Nexus 来源配置；直填 URL 或兼容 sourceRef 二选一，禁止认证材料和离线路径。
+type RemoteNexusSourceConfig struct {
+	union json.RawMessage
 }
 
 // Repository defines model for Repository.
@@ -786,10 +2458,16 @@ type Repository struct {
 	ConnectionStatus *ConnectionStatus `json:"connectionStatus,omitempty"`
 	CreatedAt        string            `json:"createdAt"`
 
+	// CredentialRef proxy 上游凭据的受限逻辑名称；运行时仅从 JIAN_UPSTREAM_CREDENTIAL_<名称> 读取（仅 type=proxy，非密钥明文）
+	CredentialRef *string `json:"credentialRef,omitempty"`
+
 	// Description 仓库描述（管理后台可配置，详情页展示）
 	Description *string          `json:"description,omitempty"`
 	Format      RepositoryFormat `json:"format"`
 	Id          int64            `json:"id"`
+
+	// ImmutableRelease hosted 仓库是否拒绝覆盖已存在的 Release
+	ImmutableRelease *bool `json:"immutableRelease,omitempty"`
 
 	// Members group 仓库的成员仓库名（有序，仅 type=group）
 	Members *[]string `json:"members,omitempty"`
@@ -836,6 +2514,8 @@ type StartMigrationRequest struct {
 
 // StatusInfo defines model for StatusInfo.
 type StatusInfo struct {
+	// BootstrapAllowed 当前实例是否允许首个管理员自举；备用节点即使空库也始终为 false
+	BootstrapAllowed bool   `json:"bootstrapAllowed"`
 	Initialized      bool   `json:"initialized"`
 	MigrationVersion string `json:"migrationVersion"`
 	Ready            bool   `json:"ready"`
@@ -867,8 +2547,14 @@ type TokenList struct {
 
 // UpdateRepositoryRequest defines model for UpdateRepositoryRequest.
 type UpdateRepositoryRequest struct {
+	// CredentialRef 更新 proxy 上游凭据的受限逻辑名称；运行时仅从 JIAN_UPSTREAM_CREDENTIAL_<名称> 读取（仅 type=proxy，非密钥明文）
+	CredentialRef *string `json:"credentialRef,omitempty"`
+
 	// Description 更新仓库描述（传空串表示清空）
 	Description *string `json:"description,omitempty"`
+
+	// ImmutableRelease 更新 hosted 仓库是否拒绝覆盖已存在的 Release
+	ImmutableRelease *bool `json:"immutableRelease,omitempty"`
 
 	// Members 更新 group 成员仓库名（仅 type=group）
 	Members *[]string `json:"members,omitempty"`
@@ -885,6 +2571,9 @@ type UpdateRepositoryRequestVisibility string
 type UpdateUserRequest struct {
 	Role   *UpdateUserRequestRole   `json:"role,omitempty"`
 	Status *UpdateUserRequestStatus `json:"status,omitempty"`
+
+	// WebLoginDisabled 是否禁止该账号登录 Web 与管理 API；不影响原生协议账号密码发布
+	WebLoginDisabled *bool `json:"webLoginDisabled,omitempty"`
 }
 
 // UpdateUserRequestRole defines model for UpdateUserRequest.Role.
@@ -916,6 +2605,9 @@ type User struct {
 	Role      UserRole   `json:"role"`
 	Status    UserStatus `json:"status"`
 	Username  string     `json:"username"`
+
+	// WebLoginDisabled 是否禁止该账号登录 Web 与管理 API；不影响原生协议账号密码发布
+	WebLoginDisabled bool `json:"webLoginDisabled"`
 }
 
 // UserRole defines model for User.Role.
@@ -930,8 +2622,99 @@ type UserList struct {
 	Total int    `json:"total"`
 }
 
+// WriteFreezeState 节点写入冻结状态。未冻结时 until/frozenAt 缺省（表示当前无生效窗口）。
+type WriteFreezeState struct {
+	Frozen   bool       `json:"frozen"`
+	FrozenAt *time.Time `json:"frozenAt,omitempty"`
+	Reason   *string    `json:"reason,omitempty"`
+
+	// Until 冻结自动解除的时刻；手动冻结且无窗口时缺省。
+	Until *time.Time `json:"until,omitempty"`
+}
+
+// AuditActionParam defines model for AuditActionParam.
+type AuditActionParam = string
+
+// AuditActorEmailParam defines model for AuditActorEmailParam.
+type AuditActorEmailParam = string
+
+// AuditActorParam defines model for AuditActorParam.
+type AuditActorParam = string
+
+// AuditAttentionIdParam defines model for AuditAttentionIdParam.
+type AuditAttentionIdParam = string
+
+// AuditAttentionParam defines model for AuditAttentionParam.
+type AuditAttentionParam string
+
+// AuditAuthSourceParam defines model for AuditAuthSourceParam.
+type AuditAuthSourceParam = string
+
+// AuditCategoryParam defines model for AuditCategoryParam.
+type AuditCategoryParam = []AuditCategory
+
+// AuditClientIpParam defines model for AuditClientIpParam.
+type AuditClientIpParam = string
+
+// AuditCursorParam defines model for AuditCursorParam.
+type AuditCursorParam = string
+
+// AuditEventIdParam defines model for AuditEventIdParam.
+type AuditEventIdParam = string
+
+// AuditFromParam defines model for AuditFromParam.
+type AuditFromParam = time.Time
+
+// AuditLimitParam defines model for AuditLimitParam.
+type AuditLimitParam = int
+
+// AuditMethodParam defines model for AuditMethodParam.
+type AuditMethodParam string
+
+// AuditNotificationLimitParam defines model for AuditNotificationLimitParam.
+type AuditNotificationLimitParam = int
+
+// AuditNotificationStatusParam 通知中心按批次确认状态的筛选口径。
+type AuditNotificationStatusParam = AuditNotificationStatus
+
+// AuditOffsetParam defines model for AuditOffsetParam.
+type AuditOffsetParam = int
+
+// AuditQueryParam defines model for AuditQueryParam.
+type AuditQueryParam = string
+
+// AuditRepositoryParam defines model for AuditRepositoryParam.
+type AuditRepositoryParam = string
+
+// AuditResultParam defines model for AuditResultParam.
+type AuditResultParam = []AuditResult
+
+// AuditSnapshotParam defines model for AuditSnapshotParam.
+type AuditSnapshotParam = string
+
+// AuditToParam defines model for AuditToParam.
+type AuditToParam = time.Time
+
+// BackupIdParam defines model for BackupIdParam.
+type BackupIdParam = string
+
+// BackupImportIdParam defines model for BackupImportIdParam.
+type BackupImportIdParam = string
+
+// BackupUploadChunkIndexParam defines model for BackupUploadChunkIndexParam.
+type BackupUploadChunkIndexParam = int
+
+// BackupUploadIdParam defines model for BackupUploadIdParam.
+type BackupUploadIdParam = string
+
 // MigrationIdParam defines model for MigrationIdParam.
 type MigrationIdParam = int64
+
+// ObservabilityFromParam defines model for ObservabilityFromParam.
+type ObservabilityFromParam = time.Time
+
+// ObservabilityToParam defines model for ObservabilityToParam.
+type ObservabilityToParam = time.Time
 
 // PageParam defines model for PageParam.
 type PageParam = int
@@ -951,6 +2734,24 @@ type TokenIdParam = int64
 // UserIdParam defines model for UserIdParam.
 type UserIdParam = int64
 
+// AssetOperationBadRequest defines model for AssetOperationBadRequest.
+type AssetOperationBadRequest = AssetOperationError
+
+// AssetOperationConflict defines model for AssetOperationConflict.
+type AssetOperationConflict = AssetOperationError
+
+// AssetOperationForbidden defines model for AssetOperationForbidden.
+type AssetOperationForbidden = AssetOperationError
+
+// AssetOperationInternalError defines model for AssetOperationInternalError.
+type AssetOperationInternalError = AssetOperationError
+
+// AssetOperationNotFound defines model for AssetOperationNotFound.
+type AssetOperationNotFound = AssetOperationError
+
+// AssetOperationUnauthorized defines model for AssetOperationUnauthorized.
+type AssetOperationUnauthorized = AssetOperationError
+
 // BadRequest defines model for BadRequest.
 type BadRequest = Error
 
@@ -966,27 +2767,252 @@ type NotFound = Error
 // Unauthorized defines model for Unauthorized.
 type Unauthorized = Error
 
+// ListBackupsParams defines parameters for ListBackups.
+type ListBackupsParams struct {
+	Page     *PageParam     `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *PageSizeParam `form:"page_size,omitempty" json:"page_size,omitempty"`
+}
+
+// ListBackupImportsParams defines parameters for ListBackupImports.
+type ListBackupImportsParams struct {
+	Page     *PageParam     `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *PageSizeParam `form:"page_size,omitempty" json:"page_size,omitempty"`
+}
+
+// DownloadBackupParams defines parameters for DownloadBackup.
+type DownloadBackupParams struct {
+	// Token 签名令牌（由 /link 下发）。
+	Token *string `form:"token,omitempty" json:"token,omitempty"`
+
+	// Exp 签名有效期截止（Unix 秒）。
+	Exp *string `form:"exp,omitempty" json:"exp,omitempty"`
+}
+
+// VerifyBackupParams defines parameters for VerifyBackup.
+type VerifyBackupParams struct {
+	// Deep 为 true 时逐 blob 比对内容摘要（全量读取，耗时与包等大）。
+	Deep *bool `form:"deep,omitempty" json:"deep,omitempty"`
+}
+
 // ListMigrationsParams defines parameters for ListMigrations.
 type ListMigrationsParams struct {
 	Page     *PageParam     `form:"page,omitempty" json:"page,omitempty"`
 	PageSize *PageSizeParam `form:"page_size,omitempty" json:"page_size,omitempty"`
 }
 
-// GetReplicationApplyLogsParams defines parameters for GetReplicationApplyLogs.
-type GetReplicationApplyLogsParams struct {
-	Limit      *int                                 `form:"limit,omitempty" json:"limit,omitempty"`
-	Offset     *int                                 `form:"offset,omitempty" json:"offset,omitempty"`
-	SourceNode *string                              `form:"sourceNode,omitempty" json:"sourceNode,omitempty"`
-	SourceSeq  *int64                               `form:"sourceSeq,omitempty" json:"sourceSeq,omitempty"`
-	PeerURL    *string                              `form:"peerURL,omitempty" json:"peerURL,omitempty"`
-	EntityType *string                              `form:"entityType,omitempty" json:"entityType,omitempty"`
-	EntityKey  *string                              `form:"entityKey,omitempty" json:"entityKey,omitempty"`
-	Op         *string                              `form:"op,omitempty" json:"op,omitempty"`
-	Result     *GetReplicationApplyLogsParamsResult `form:"result,omitempty" json:"result,omitempty"`
+// GetAuditAttentionParams defines parameters for GetAuditAttention.
+type GetAuditAttentionParams struct {
+	// Cursor 从上一页响应取得的不透明游标；不得解析或改写。
+	Cursor *AuditCursorParam `form:"cursor,omitempty" json:"cursor,omitempty"`
+
+	// Limit 单页安全事件数量。
+	Limit *AuditLimitParam `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
-// GetReplicationApplyLogsParamsResult defines parameters for GetReplicationApplyLogs.
-type GetReplicationApplyLogsParamsResult string
+// ListAuditAttentionsParams defines parameters for ListAuditAttentions.
+type ListAuditAttentionsParams struct {
+	// From UTC 时间范围下界（含）。与 `to` 同时提供或同时省略；省略时服务端使用最近 24 小时。
+	From *AuditFromParam `form:"from,omitempty" json:"from,omitempty"`
+
+	// To UTC 时间范围上界（不含）。与 `from` 同时提供或同时省略；范围最长 30 天。
+	To *AuditToParam `form:"to,omitempty" json:"to,omitempty"`
+
+	// Category 按固定审计分类筛选；可重复传入多个值。
+	Category *AuditCategoryParam `form:"category,omitempty" json:"category,omitempty"`
+
+	// Result 按服务端归一化结果筛选；可重复传入多个值。
+	Result *AuditResultParam `form:"result,omitempty" json:"result,omitempty"`
+
+	// Actor 按审计身份快照的显示名称精确筛选。
+	Actor *AuditActorParam `form:"actor,omitempty" json:"actor,omitempty"`
+
+	// Repository 按安全展示的仓库名称精确筛选。
+	Repository *AuditRepositoryParam `form:"repository,omitempty" json:"repository,omitempty"`
+
+	// Q 关键字：服务端按事件 ID、动作、摘要、目标路径与操作者邮箱匹配（不区分大小写）。
+	Q *AuditQueryParam `form:"q,omitempty" json:"q,omitempty"`
+
+	// Attention 按风险批次状态筛选：pending（未确认）/ acknowledged（已确认）。
+	Attention *ListAuditAttentionsParamsAttention `form:"attention,omitempty" json:"attention,omitempty"`
+
+	// Method 按 HTTP 请求方法筛选。
+	Method *ListAuditAttentionsParamsMethod `form:"method,omitempty" json:"method,omitempty"`
+
+	// Action 按服务端映射的操作名称精确筛选。
+	Action *AuditActionParam `form:"action,omitempty" json:"action,omitempty"`
+
+	// ActorEmail 按操作者邮箱精确筛选（记录时固化的身份快照）。
+	ActorEmail *AuditActorEmailParam `form:"actorEmail,omitempty" json:"actorEmail,omitempty"`
+
+	// ClientIp 按客户端 IP 前缀筛选。
+	ClientIp *AuditClientIpParam `form:"clientIp,omitempty" json:"clientIp,omitempty"`
+
+	// AuthSource 按认证方式筛选（如 jwt、api_key、web）。
+	AuthSource *AuditAuthSourceParam `form:"authSource,omitempty" json:"authSource,omitempty"`
+
+	// Offset 显式偏移量（分页器直达指定页，优先于 cursor）。
+	Offset *AuditOffsetParam `form:"offset,omitempty" json:"offset,omitempty"`
+
+	// Snapshot 从审计概览取得的不透明稳定读取边界；不得解析或改写。
+	Snapshot *AuditSnapshotParam `form:"snapshot,omitempty" json:"snapshot,omitempty"`
+
+	// Cursor 从上一页响应取得的不透明游标；不得解析或改写。
+	Cursor *AuditCursorParam `form:"cursor,omitempty" json:"cursor,omitempty"`
+
+	// Limit 单页安全事件数量。
+	Limit *AuditLimitParam `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// ListAuditAttentionsParamsAttention defines parameters for ListAuditAttentions.
+type ListAuditAttentionsParamsAttention string
+
+// ListAuditAttentionsParamsMethod defines parameters for ListAuditAttentions.
+type ListAuditAttentionsParamsMethod string
+
+// ListAuditObservabilityEventsParams defines parameters for ListAuditObservabilityEvents.
+type ListAuditObservabilityEventsParams struct {
+	// From UTC 时间范围下界（含）。与 `to` 同时提供或同时省略；省略时服务端使用最近 24 小时。
+	From *AuditFromParam `form:"from,omitempty" json:"from,omitempty"`
+
+	// To UTC 时间范围上界（不含）。与 `from` 同时提供或同时省略；范围最长 30 天。
+	To *AuditToParam `form:"to,omitempty" json:"to,omitempty"`
+
+	// Category 按固定审计分类筛选；可重复传入多个值。
+	Category *AuditCategoryParam `form:"category,omitempty" json:"category,omitempty"`
+
+	// Result 按服务端归一化结果筛选；可重复传入多个值。
+	Result *AuditResultParam `form:"result,omitempty" json:"result,omitempty"`
+
+	// Actor 按审计身份快照的显示名称精确筛选。
+	Actor *AuditActorParam `form:"actor,omitempty" json:"actor,omitempty"`
+
+	// Repository 按安全展示的仓库名称精确筛选。
+	Repository *AuditRepositoryParam `form:"repository,omitempty" json:"repository,omitempty"`
+
+	// Q 关键字：服务端按事件 ID、动作、摘要、目标路径与操作者邮箱匹配（不区分大小写）。
+	Q *AuditQueryParam `form:"q,omitempty" json:"q,omitempty"`
+
+	// Attention 按风险批次状态筛选：pending（未确认）/ acknowledged（已确认）。
+	Attention *ListAuditObservabilityEventsParamsAttention `form:"attention,omitempty" json:"attention,omitempty"`
+
+	// Method 按 HTTP 请求方法筛选。
+	Method *ListAuditObservabilityEventsParamsMethod `form:"method,omitempty" json:"method,omitempty"`
+
+	// Action 按服务端映射的操作名称精确筛选。
+	Action *AuditActionParam `form:"action,omitempty" json:"action,omitempty"`
+
+	// ActorEmail 按操作者邮箱精确筛选（记录时固化的身份快照）。
+	ActorEmail *AuditActorEmailParam `form:"actorEmail,omitempty" json:"actorEmail,omitempty"`
+
+	// ClientIp 按客户端 IP 前缀筛选。
+	ClientIp *AuditClientIpParam `form:"clientIp,omitempty" json:"clientIp,omitempty"`
+
+	// AuthSource 按认证方式筛选（如 jwt、api_key、web）。
+	AuthSource *AuditAuthSourceParam `form:"authSource,omitempty" json:"authSource,omitempty"`
+
+	// Offset 显式偏移量（分页器直达指定页，优先于 cursor）。
+	Offset *AuditOffsetParam `form:"offset,omitempty" json:"offset,omitempty"`
+
+	// Snapshot 从审计概览取得的不透明稳定读取边界；不得解析或改写。
+	Snapshot *AuditSnapshotParam `form:"snapshot,omitempty" json:"snapshot,omitempty"`
+
+	// Cursor 从上一页响应取得的不透明游标；不得解析或改写。
+	Cursor *AuditCursorParam `form:"cursor,omitempty" json:"cursor,omitempty"`
+
+	// Limit 单页安全事件数量。
+	Limit *AuditLimitParam `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// ListAuditObservabilityEventsParamsAttention defines parameters for ListAuditObservabilityEvents.
+type ListAuditObservabilityEventsParamsAttention string
+
+// ListAuditObservabilityEventsParamsMethod defines parameters for ListAuditObservabilityEvents.
+type ListAuditObservabilityEventsParamsMethod string
+
+// ListAuditAttentionNotificationsParams defines parameters for ListAuditAttentionNotifications.
+type ListAuditAttentionNotificationsParams struct {
+	// From UTC 时间范围下界（含）。与 `to` 同时提供或同时省略；省略时服务端使用最近 24 小时。
+	From *AuditFromParam `form:"from,omitempty" json:"from,omitempty"`
+
+	// To UTC 时间范围上界（不含）。与 `from` 同时提供或同时省略；范围最长 30 天。
+	To *AuditToParam `form:"to,omitempty" json:"to,omitempty"`
+
+	// Status 按批次确认状态筛选。`unacknowledged`（缺省）仅返回仍有未确认风险来源的批次；
+	// `acknowledged` 仅返回全部风险来源均已确认的批次；`all` 不筛选确认状态。
+	Status *AuditNotificationStatusParam `form:"status,omitempty" json:"status,omitempty"`
+
+	// Limit 单页通知批次数数量。
+	Limit *AuditNotificationLimitParam `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Cursor 从上一页响应取得的不透明游标；不得解析或改写。
+	Cursor *AuditCursorParam `form:"cursor,omitempty" json:"cursor,omitempty"`
+}
+
+// GetAuditObservabilitySummaryParams defines parameters for GetAuditObservabilitySummary.
+type GetAuditObservabilitySummaryParams struct {
+	// From UTC 时间范围下界（含）。与 `to` 同时提供或同时省略；省略时服务端使用最近 24 小时。
+	From *AuditFromParam `form:"from,omitempty" json:"from,omitempty"`
+
+	// To UTC 时间范围上界（不含）。与 `from` 同时提供或同时省略；范围最长 30 天。
+	To *AuditToParam `form:"to,omitempty" json:"to,omitempty"`
+
+	// Category 按固定审计分类筛选；可重复传入多个值。
+	Category *AuditCategoryParam `form:"category,omitempty" json:"category,omitempty"`
+
+	// Result 按服务端归一化结果筛选；可重复传入多个值。
+	Result *AuditResultParam `form:"result,omitempty" json:"result,omitempty"`
+
+	// Actor 按审计身份快照的显示名称精确筛选。
+	Actor *AuditActorParam `form:"actor,omitempty" json:"actor,omitempty"`
+
+	// Repository 按安全展示的仓库名称精确筛选。
+	Repository *AuditRepositoryParam `form:"repository,omitempty" json:"repository,omitempty"`
+
+	// Q 关键字：服务端按事件 ID、动作、摘要、目标路径与操作者邮箱匹配（不区分大小写）。
+	Q *AuditQueryParam `form:"q,omitempty" json:"q,omitempty"`
+
+	// Attention 按风险批次状态筛选：pending（未确认）/ acknowledged（已确认）。
+	Attention *GetAuditObservabilitySummaryParamsAttention `form:"attention,omitempty" json:"attention,omitempty"`
+
+	// Method 按 HTTP 请求方法筛选。
+	Method *GetAuditObservabilitySummaryParamsMethod `form:"method,omitempty" json:"method,omitempty"`
+
+	// Action 按服务端映射的操作名称精确筛选。
+	Action *AuditActionParam `form:"action,omitempty" json:"action,omitempty"`
+
+	// ActorEmail 按操作者邮箱精确筛选（记录时固化的身份快照）。
+	ActorEmail *AuditActorEmailParam `form:"actorEmail,omitempty" json:"actorEmail,omitempty"`
+
+	// ClientIp 按客户端 IP 前缀筛选。
+	ClientIp *AuditClientIpParam `form:"clientIp,omitempty" json:"clientIp,omitempty"`
+
+	// AuthSource 按认证方式筛选（如 jwt、api_key、web）。
+	AuthSource *AuditAuthSourceParam `form:"authSource,omitempty" json:"authSource,omitempty"`
+}
+
+// GetAuditObservabilitySummaryParamsAttention defines parameters for GetAuditObservabilitySummary.
+type GetAuditObservabilitySummaryParamsAttention string
+
+// GetAuditObservabilitySummaryParamsMethod defines parameters for GetAuditObservabilitySummary.
+type GetAuditObservabilitySummaryParamsMethod string
+
+// GetOperationsDashboardParams defines parameters for GetOperationsDashboard.
+type GetOperationsDashboardParams struct {
+	// From UTC 时间范围下界（含）。与 to 同时提供或同时省略；省略时为最近 24 小时。
+	From *ObservabilityFromParam `form:"from,omitempty" json:"from,omitempty"`
+
+	// To UTC 时间范围上界（不含），最长 30 天。
+	To *ObservabilityToParam `form:"to,omitempty" json:"to,omitempty"`
+}
+
+// GetHostMonitoringParams defines parameters for GetHostMonitoring.
+type GetHostMonitoringParams struct {
+	// From UTC 时间范围下界（含）。与 to 同时提供或同时省略；省略时为最近 24 小时。
+	From *ObservabilityFromParam `form:"from,omitempty" json:"from,omitempty"`
+
+	// To UTC 时间范围上界（不含），最长 30 天。
+	To *ObservabilityToParam `form:"to,omitempty" json:"to,omitempty"`
+}
 
 // ListRepositoriesParams defines parameters for ListRepositories.
 type ListRepositoriesParams struct {
@@ -1015,14 +3041,38 @@ type BootstrapJSONRequestBody = BootstrapRequest
 // LoginJSONRequestBody defines body for Login for application/json ContentType.
 type LoginJSONRequestBody = LoginRequest
 
+// CreateBackupJSONRequestBody defines body for CreateBackup for application/json ContentType.
+type CreateBackupJSONRequestBody = CreateBackupRequest
+
+// ImportBackupFromURLJSONRequestBody defines body for ImportBackupFromURL for application/json ContentType.
+type ImportBackupFromURLJSONRequestBody = CreateBackupImportRequest
+
+// CreateBackupUploadJSONRequestBody defines body for CreateBackupUpload for application/json ContentType.
+type CreateBackupUploadJSONRequestBody = CreateBackupUploadRequest
+
+// CompleteBackupUploadJSONRequestBody defines body for CompleteBackupUpload for application/json ContentType.
+type CompleteBackupUploadJSONRequestBody = CompleteBackupUploadRequest
+
+// CreateBackupLinkJSONRequestBody defines body for CreateBackupLink for application/json ContentType.
+type CreateBackupLinkJSONRequestBody = CreateBackupLinkRequest
+
+// FreezeWritesJSONRequestBody defines body for FreezeWrites for application/json ContentType.
+type FreezeWritesJSONRequestBody = FreezeWritesRequest
+
 // CreateMigrationJSONRequestBody defines body for CreateMigration for application/json ContentType.
 type CreateMigrationJSONRequestBody = CreateMigrationRequest
 
 // DiscoverMigrationsJSONRequestBody defines body for DiscoverMigrations for application/json ContentType.
 type DiscoverMigrationsJSONRequestBody = MigrationDiscoverRequest
 
+// ListRemoteNexusRepositoriesJSONRequestBody defines body for ListRemoteNexusRepositories for application/json ContentType.
+type ListRemoteNexusRepositoriesJSONRequestBody = RemoteNexusRepositoryRequest
+
 // StartMigrationJSONRequestBody defines body for StartMigration for application/json ContentType.
 type StartMigrationJSONRequestBody = StartMigrationRequest
+
+// AcknowledgeAuditAttentionJSONRequestBody defines body for AcknowledgeAuditAttention for application/json ContentType.
+type AcknowledgeAuditAttentionJSONRequestBody = AcknowledgeAuditAttentionRequest
 
 // CreateRepositoryJSONRequestBody defines body for CreateRepository for application/json ContentType.
 type CreateRepositoryJSONRequestBody = CreateRepositoryRequest
@@ -1034,7 +3084,12 @@ type UpdateRepositoryJSONRequestBody = UpdateRepositoryRequest
 type SetRepositoryAclJSONRequestBody = PutAclRequest
 
 // BatchDeleteRepositoryAssetsJSONRequestBody defines body for BatchDeleteRepositoryAssets for application/json ContentType.
+//
+// Deprecated: this type has been marked as deprecated upstream, but no `x-deprecated-reason` was set
 type BatchDeleteRepositoryAssetsJSONRequestBody = BatchDeleteAssetsRequest
+
+// ApplyRepositoryAssetOperationJSONRequestBody defines body for ApplyRepositoryAssetOperation for application/json ContentType.
+type ApplyRepositoryAssetOperationJSONRequestBody = AssetOperationRequest
 
 // SetRepositoryOnlineJSONRequestBody defines body for SetRepositoryOnline for application/json ContentType.
 type SetRepositoryOnlineJSONRequestBody = SetRepositoryOnlineRequest
@@ -1051,9 +3106,299 @@ type UpdateUserJSONRequestBody = UpdateUserRequest
 // ChangePasswordJSONRequestBody defines body for ChangePassword for application/json ContentType.
 type ChangePasswordJSONRequestBody = PasswordChangeRequest
 
+// PutPublishPolicyJSONRequestBody defines body for PutPublishPolicy for application/json ContentType.
+type PutPublishPolicyJSONRequestBody = PublishPolicyRequest
+
+// AsMigrationSourceAuthAnonymous returns the union data inside the MigrationSourceAuth as a MigrationSourceAuthAnonymous
+func (t MigrationSourceAuth) AsMigrationSourceAuthAnonymous() (MigrationSourceAuthAnonymous, error) {
+	var body MigrationSourceAuthAnonymous
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromMigrationSourceAuthAnonymous overwrites any union data inside the MigrationSourceAuth as the provided MigrationSourceAuthAnonymous
+func (t *MigrationSourceAuth) FromMigrationSourceAuthAnonymous(v MigrationSourceAuthAnonymous) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	b, err = runtime.JSONMerge(b, []byte(`{"type":"anonymous"}`))
+	t.union = b
+	return err
+}
+
+// MergeMigrationSourceAuthAnonymous performs a merge with any union data inside the MigrationSourceAuth, using the provided MigrationSourceAuthAnonymous
+func (t *MigrationSourceAuth) MergeMigrationSourceAuthAnonymous(v MigrationSourceAuthAnonymous) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	b, err = runtime.JSONMerge(b, []byte(`{"type":"anonymous"}`))
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsMigrationSourceAuthBasic returns the union data inside the MigrationSourceAuth as a MigrationSourceAuthBasic
+func (t MigrationSourceAuth) AsMigrationSourceAuthBasic() (MigrationSourceAuthBasic, error) {
+	var body MigrationSourceAuthBasic
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromMigrationSourceAuthBasic overwrites any union data inside the MigrationSourceAuth as the provided MigrationSourceAuthBasic
+func (t *MigrationSourceAuth) FromMigrationSourceAuthBasic(v MigrationSourceAuthBasic) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	b, err = runtime.JSONMerge(b, []byte(`{"type":"basic"}`))
+	t.union = b
+	return err
+}
+
+// MergeMigrationSourceAuthBasic performs a merge with any union data inside the MigrationSourceAuth, using the provided MigrationSourceAuthBasic
+func (t *MigrationSourceAuth) MergeMigrationSourceAuthBasic(v MigrationSourceAuthBasic) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	b, err = runtime.JSONMerge(b, []byte(`{"type":"basic"}`))
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsMigrationSourceAuthBearer returns the union data inside the MigrationSourceAuth as a MigrationSourceAuthBearer
+func (t MigrationSourceAuth) AsMigrationSourceAuthBearer() (MigrationSourceAuthBearer, error) {
+	var body MigrationSourceAuthBearer
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromMigrationSourceAuthBearer overwrites any union data inside the MigrationSourceAuth as the provided MigrationSourceAuthBearer
+func (t *MigrationSourceAuth) FromMigrationSourceAuthBearer(v MigrationSourceAuthBearer) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	b, err = runtime.JSONMerge(b, []byte(`{"type":"bearer"}`))
+	t.union = b
+	return err
+}
+
+// MergeMigrationSourceAuthBearer performs a merge with any union data inside the MigrationSourceAuth, using the provided MigrationSourceAuthBearer
+func (t *MigrationSourceAuth) MergeMigrationSourceAuthBearer(v MigrationSourceAuthBearer) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	b, err = runtime.JSONMerge(b, []byte(`{"type":"bearer"}`))
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t MigrationSourceAuth) Discriminator() (string, error) {
+	var discriminator struct {
+		Discriminator string `json:"type"`
+	}
+	err := json.Unmarshal(t.union, &discriminator)
+	return discriminator.Discriminator, err
+}
+
+func (t MigrationSourceAuth) ValueByDiscriminator() (interface{}, error) {
+	discriminator, err := t.Discriminator()
+	if err != nil {
+		return nil, err
+	}
+	switch discriminator {
+	case "anonymous":
+		return t.AsMigrationSourceAuthAnonymous()
+	case "basic":
+		return t.AsMigrationSourceAuthBasic()
+	case "bearer":
+		return t.AsMigrationSourceAuthBearer()
+	default:
+		return nil, errors.New("unknown discriminator value: " + discriminator)
+	}
+}
+
+func (t MigrationSourceAuth) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *MigrationSourceAuth) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsMigrationOnlineURLSourceConfig returns the union data inside the MigrationSourceConfig as a MigrationOnlineURLSourceConfig
+func (t MigrationSourceConfig) AsMigrationOnlineURLSourceConfig() (MigrationOnlineURLSourceConfig, error) {
+	var body MigrationOnlineURLSourceConfig
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromMigrationOnlineURLSourceConfig overwrites any union data inside the MigrationSourceConfig as the provided MigrationOnlineURLSourceConfig
+func (t *MigrationSourceConfig) FromMigrationOnlineURLSourceConfig(v MigrationOnlineURLSourceConfig) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeMigrationOnlineURLSourceConfig performs a merge with any union data inside the MigrationSourceConfig, using the provided MigrationOnlineURLSourceConfig
+func (t *MigrationSourceConfig) MergeMigrationOnlineURLSourceConfig(v MigrationOnlineURLSourceConfig) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsMigrationOnlineSourceRefConfig returns the union data inside the MigrationSourceConfig as a MigrationOnlineSourceRefConfig
+func (t MigrationSourceConfig) AsMigrationOnlineSourceRefConfig() (MigrationOnlineSourceRefConfig, error) {
+	var body MigrationOnlineSourceRefConfig
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromMigrationOnlineSourceRefConfig overwrites any union data inside the MigrationSourceConfig as the provided MigrationOnlineSourceRefConfig
+func (t *MigrationSourceConfig) FromMigrationOnlineSourceRefConfig(v MigrationOnlineSourceRefConfig) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeMigrationOnlineSourceRefConfig performs a merge with any union data inside the MigrationSourceConfig, using the provided MigrationOnlineSourceRefConfig
+func (t *MigrationSourceConfig) MergeMigrationOnlineSourceRefConfig(v MigrationOnlineSourceRefConfig) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsMigrationOfflineSourceConfig returns the union data inside the MigrationSourceConfig as a MigrationOfflineSourceConfig
+func (t MigrationSourceConfig) AsMigrationOfflineSourceConfig() (MigrationOfflineSourceConfig, error) {
+	var body MigrationOfflineSourceConfig
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromMigrationOfflineSourceConfig overwrites any union data inside the MigrationSourceConfig as the provided MigrationOfflineSourceConfig
+func (t *MigrationSourceConfig) FromMigrationOfflineSourceConfig(v MigrationOfflineSourceConfig) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeMigrationOfflineSourceConfig performs a merge with any union data inside the MigrationSourceConfig, using the provided MigrationOfflineSourceConfig
+func (t *MigrationSourceConfig) MergeMigrationOfflineSourceConfig(v MigrationOfflineSourceConfig) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t MigrationSourceConfig) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *MigrationSourceConfig) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsMigrationOnlineURLSourceConfig returns the union data inside the RemoteNexusSourceConfig as a MigrationOnlineURLSourceConfig
+func (t RemoteNexusSourceConfig) AsMigrationOnlineURLSourceConfig() (MigrationOnlineURLSourceConfig, error) {
+	var body MigrationOnlineURLSourceConfig
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromMigrationOnlineURLSourceConfig overwrites any union data inside the RemoteNexusSourceConfig as the provided MigrationOnlineURLSourceConfig
+func (t *RemoteNexusSourceConfig) FromMigrationOnlineURLSourceConfig(v MigrationOnlineURLSourceConfig) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeMigrationOnlineURLSourceConfig performs a merge with any union data inside the RemoteNexusSourceConfig, using the provided MigrationOnlineURLSourceConfig
+func (t *RemoteNexusSourceConfig) MergeMigrationOnlineURLSourceConfig(v MigrationOnlineURLSourceConfig) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsMigrationOnlineSourceRefConfig returns the union data inside the RemoteNexusSourceConfig as a MigrationOnlineSourceRefConfig
+func (t RemoteNexusSourceConfig) AsMigrationOnlineSourceRefConfig() (MigrationOnlineSourceRefConfig, error) {
+	var body MigrationOnlineSourceRefConfig
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromMigrationOnlineSourceRefConfig overwrites any union data inside the RemoteNexusSourceConfig as the provided MigrationOnlineSourceRefConfig
+func (t *RemoteNexusSourceConfig) FromMigrationOnlineSourceRefConfig(v MigrationOnlineSourceRefConfig) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeMigrationOnlineSourceRefConfig performs a merge with any union data inside the RemoteNexusSourceConfig, using the provided MigrationOnlineSourceRefConfig
+func (t *RemoteNexusSourceConfig) MergeMigrationOnlineSourceRefConfig(v MigrationOnlineSourceRefConfig) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t RemoteNexusSourceConfig) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *RemoteNexusSourceConfig) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
-	// Bootstrap 首启管理员自举（仅在未初始化，即 user 表为空时可用）
+	// Bootstrap 首启管理员自举（仅空库且状态接口 bootstrapAllowed 为 true 时可用）
 	// (POST /api/v1/auth/bootstrap)
 	Bootstrap(c *gin.Context)
 	// Login 用户名 + 口令换取会话 JWT
@@ -1062,6 +3407,63 @@ type ServerInterface interface {
 	// Logout 注销当前会话（当前 JWT 记入吊销名单直至过期）
 	// (POST /api/v1/auth/logout)
 	Logout(c *gin.Context)
+	// ListBackups 备份包列表（分页，仅管理员）
+	// (GET /api/v1/backups)
+	ListBackups(c *gin.Context, params ListBackupsParams)
+	// CreateBackup 生成备份包（仅管理员）
+	// (POST /api/v1/backups)
+	CreateBackup(c *gin.Context)
+	// ImportBackupFromURL 从 URL 拉取并导入备份包（仅管理员）
+	// (POST /api/v1/backups/import)
+	ImportBackupFromURL(c *gin.Context)
+	// ListBackupImports 导入记录列表（分页，仅管理员）
+	// (GET /api/v1/backups/imports)
+	ListBackupImports(c *gin.Context, params ListBackupImportsParams)
+	// GetBackupImport 导入记录详情（仅管理员）
+	// (GET /api/v1/backups/imports/{id})
+	GetBackupImport(c *gin.Context, id BackupImportIdParam)
+	// CreateBackupUpload 发起分片上传会话（仅管理员）
+	// (POST /api/v1/backups/uploads)
+	CreateBackupUpload(c *gin.Context)
+	// GetBackupUpload 查询上传会话（续传用，仅管理员）
+	// (GET /api/v1/backups/uploads/{id})
+	GetBackupUpload(c *gin.Context, id BackupUploadIdParam)
+	// AbortBackupUpload 取消上传会话（仅管理员）
+	// (POST /api/v1/backups/uploads/{id}/abort)
+	AbortBackupUpload(c *gin.Context, id BackupUploadIdParam)
+	// UploadBackupChunk 上传单个分片（仅管理员）
+	// (PUT /api/v1/backups/uploads/{id}/chunks/{index})
+	UploadBackupChunk(c *gin.Context, id BackupUploadIdParam, index BackupUploadChunkIndexParam)
+	// CompleteBackupUpload 拼装并触发本地导入（仅管理员）
+	// (POST /api/v1/backups/uploads/{id}/complete)
+	CompleteBackupUpload(c *gin.Context, id BackupUploadIdParam)
+	// DeleteBackup 删除备份包（仅管理员）
+	// (DELETE /api/v1/backups/{id})
+	DeleteBackup(c *gin.Context, id BackupIdParam)
+	// GetBackup 备份包详情（仅管理员）
+	// (GET /api/v1/backups/{id})
+	GetBackup(c *gin.Context, id BackupIdParam)
+	// DownloadBackup 下载备份包归档
+	// (GET /api/v1/backups/{id}/download)
+	DownloadBackup(c *gin.Context, id BackupIdParam, params DownloadBackupParams)
+	// CreateBackupLink 生成带时效的下载链接（仅管理员）
+	// (POST /api/v1/backups/{id}/link)
+	CreateBackupLink(c *gin.Context, id BackupIdParam)
+	// VerifyBackup 校验备份包完整性（仅管理员）
+	// (POST /api/v1/backups/{id}/verify)
+	VerifyBackup(c *gin.Context, id BackupIdParam, params VerifyBackupParams)
+	// GetEnabledFormats 当前进程启用的协议格式（仅管理员）
+	// (GET /api/v1/formats/enabled)
+	GetEnabledFormats(c *gin.Context)
+	// UnfreezeWrites 解冻节点写入（仅管理员）
+	// (DELETE /api/v1/maintenance/freeze)
+	UnfreezeWrites(c *gin.Context)
+	// GetWriteFreezeState 查询写入冻结状态（仅管理员）
+	// (GET /api/v1/maintenance/freeze)
+	GetWriteFreezeState(c *gin.Context)
+	// FreezeWrites 冻结节点写入（仅管理员）
+	// (POST /api/v1/maintenance/freeze)
+	FreezeWrites(c *gin.Context)
 	// ListMigrations 迁移任务列表（分页）
 	// (GET /api/v1/migrations)
 	ListMigrations(c *gin.Context, params ListMigrationsParams)
@@ -1071,6 +3473,9 @@ type ServerInterface interface {
 	// DiscoverMigrations 三来源发现并落库为 planned 任务（不同步执行）
 	// (POST /api/v1/migrations/discover)
 	DiscoverMigrations(c *gin.Context)
+	// ListRemoteNexusRepositories 枚举在线 Nexus 仓库索引（仅管理员）
+	// (POST /api/v1/migrations/remote-repositories)
+	ListRemoteNexusRepositories(c *gin.Context)
 	// GetMigration 迁移任务详情
 	// (GET /api/v1/migrations/{id})
 	GetMigration(c *gin.Context, id MigrationIdParam)
@@ -1089,9 +3494,33 @@ type ServerInterface interface {
 	// StartMigration 显式启动（planned → running）
 	// (POST /api/v1/migrations/{id}/start)
 	StartMigration(c *gin.Context, id MigrationIdParam)
-	// GetReplicationApplyLogs 复制接收审计记录（仅管理员）
-	// (GET /api/v1/replication-apply-logs)
-	GetReplicationApplyLogs(c *gin.Context, params GetReplicationApplyLogsParams)
+	// AcknowledgeAuditAttention 确认当前节点风险关注批次（仅管理员）
+	// (PUT /api/v1/observability/audit/attention-acknowledgements)
+	AcknowledgeAuditAttention(c *gin.Context)
+	// GetAuditAttention 当前节点风险关注批次详情（仅管理员）
+	// (GET /api/v1/observability/audit/attention/{attentionId})
+	GetAuditAttention(c *gin.Context, attentionId AuditAttentionIdParam, params GetAuditAttentionParams)
+	// ListAuditAttentions 当前节点风险关注批次（仅管理员）
+	// (GET /api/v1/observability/audit/attentions)
+	ListAuditAttentions(c *gin.Context, params ListAuditAttentionsParams)
+	// ListAuditObservabilityEvents 当前节点统一审计事件（仅管理员）
+	// (GET /api/v1/observability/audit/events)
+	ListAuditObservabilityEvents(c *gin.Context, params ListAuditObservabilityEventsParams)
+	// GetAuditObservabilityEvent 当前节点统一审计事件详情（仅管理员）
+	// (GET /api/v1/observability/audit/events/{eventId})
+	GetAuditObservabilityEvent(c *gin.Context, eventId AuditEventIdParam)
+	// ListAuditAttentionNotifications 当前节点风险通知批次分页（仅管理员）
+	// (GET /api/v1/observability/audit/notifications)
+	ListAuditAttentionNotifications(c *gin.Context, params ListAuditAttentionNotificationsParams)
+	// GetAuditObservabilitySummary 当前节点统一审计概览（仅管理员）
+	// (GET /api/v1/observability/audit/summary)
+	GetAuditObservabilitySummary(c *gin.Context, params GetAuditObservabilitySummaryParams)
+	// GetOperationsDashboard 当前节点业务仪表盘（仅管理员）
+	// (GET /api/v1/observability/dashboard)
+	GetOperationsDashboard(c *gin.Context, params GetOperationsDashboardParams)
+	// GetHostMonitoring 当前主机监控（仅管理员）
+	// (GET /api/v1/observability/host)
+	GetHostMonitoring(c *gin.Context, params GetHostMonitoringParams)
 	// ListRepositories 仓库列表（分页，按可见性 / ACL 过滤）
 	// (GET /api/v1/repositories)
 	ListRepositories(c *gin.Context, params ListRepositoriesParams)
@@ -1115,7 +3544,12 @@ type ServerInterface interface {
 	ListRepositoryAssets(c *gin.Context, name RepoNameParam, params ListRepositoryAssetsParams)
 	// BatchDeleteRepositoryAssets 批量删除仓库制品（仅管理员）
 	// (POST /api/v1/repositories/{name}/assets/batch-delete)
+	//
+	// Deprecated: this operation has been marked as deprecated upstream, but no `x-deprecated-reason` was set
 	BatchDeleteRepositoryAssets(c *gin.Context, name RepoNameParam)
+	// ApplyRepositoryAssetOperation 原子应用仓库制品操作（仅全局管理员）
+	// (POST /api/v1/repositories/{name}/assets/operations)
+	ApplyRepositoryAssetOperation(c *gin.Context, name RepoNameParam)
 	// SetRepositoryOnline 设置仓库 online/offline 状态（仅管理员）
 	// (PUT /api/v1/repositories/{name}/online)
 	SetRepositoryOnline(c *gin.Context, name RepoNameParam)
@@ -1125,7 +3559,7 @@ type ServerInterface interface {
 	// GetRepositoryUsage 仓库客户端使用片段（据 format/type 返回接入命令）
 	// (GET /api/v1/repositories/{name}/usage)
 	GetRepositoryUsage(c *gin.Context, name RepoNameParam)
-	// GetStatus 运行时状态（版本、就绪、迁移版本、初始化标志、用户数）
+	// GetStatus 运行时状态（版本、就绪、迁移版本、初始化标志、用户数与自举许可）
 	// (GET /api/v1/status)
 	GetStatus(c *gin.Context)
 	// ListTokens 当前用户的 API Token 列表（不含明文）
@@ -1152,6 +3586,12 @@ type ServerInterface interface {
 	// ChangePassword 修改 / 重置用户口令
 	// (POST /api/v1/users/{id}/password)
 	ChangePassword(c *gin.Context, id UserIdParam)
+	// GetPublishPolicy 获取用户在 Hosted 仓库的发布策略
+	// (GET /api/v1/users/{id}/publish-policies/{repo})
+	GetPublishPolicy(c *gin.Context, id UserIdParam, repo string)
+	// PutPublishPolicy 更新用户在 Hosted 仓库的发布策略
+	// (PUT /api/v1/users/{id}/publish-policies/{repo})
+	PutPublishPolicy(c *gin.Context, id UserIdParam, repo string)
 	// GetHealthz 存活探针
 	// (GET /healthz)
 	GetHealthz(c *gin.Context)
@@ -1206,6 +3646,456 @@ func (siw *ServerInterfaceWrapper) Logout(c *gin.Context) {
 	}
 
 	siw.Handler.Logout(c)
+}
+
+// ListBackups operation middleware
+func (siw *ServerInterfaceWrapper) ListBackups(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListBackupsParams
+
+	// ------------- Optional query parameter "page" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page", c.Request.URL.Query(), &params.Page, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter page: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "page_size" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page_size", c.Request.URL.Query(), &params.PageSize, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter page_size: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ListBackups(c, params)
+}
+
+// CreateBackup operation middleware
+func (siw *ServerInterfaceWrapper) CreateBackup(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.CreateBackup(c)
+}
+
+// ImportBackupFromURL operation middleware
+func (siw *ServerInterfaceWrapper) ImportBackupFromURL(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ImportBackupFromURL(c)
+}
+
+// ListBackupImports operation middleware
+func (siw *ServerInterfaceWrapper) ListBackupImports(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListBackupImportsParams
+
+	// ------------- Optional query parameter "page" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page", c.Request.URL.Query(), &params.Page, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter page: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "page_size" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page_size", c.Request.URL.Query(), &params.PageSize, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter page_size: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ListBackupImports(c, params)
+}
+
+// GetBackupImport operation middleware
+func (siw *ServerInterfaceWrapper) GetBackupImport(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id BackupImportIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetBackupImport(c, id)
+}
+
+// CreateBackupUpload operation middleware
+func (siw *ServerInterfaceWrapper) CreateBackupUpload(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.CreateBackupUpload(c)
+}
+
+// GetBackupUpload operation middleware
+func (siw *ServerInterfaceWrapper) GetBackupUpload(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id BackupUploadIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetBackupUpload(c, id)
+}
+
+// AbortBackupUpload operation middleware
+func (siw *ServerInterfaceWrapper) AbortBackupUpload(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id BackupUploadIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.AbortBackupUpload(c, id)
+}
+
+// UploadBackupChunk operation middleware
+func (siw *ServerInterfaceWrapper) UploadBackupChunk(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id BackupUploadIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Path parameter "index" -------------
+	var index BackupUploadChunkIndexParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "index", c.Param("index"), &index, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter index: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.UploadBackupChunk(c, id, index)
+}
+
+// CompleteBackupUpload operation middleware
+func (siw *ServerInterfaceWrapper) CompleteBackupUpload(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id BackupUploadIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.CompleteBackupUpload(c, id)
+}
+
+// DeleteBackup operation middleware
+func (siw *ServerInterfaceWrapper) DeleteBackup(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id BackupIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.DeleteBackup(c, id)
+}
+
+// GetBackup operation middleware
+func (siw *ServerInterfaceWrapper) GetBackup(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id BackupIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetBackup(c, id)
+}
+
+// DownloadBackup operation middleware
+func (siw *ServerInterfaceWrapper) DownloadBackup(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id BackupIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params DownloadBackupParams
+
+	// ------------- Optional query parameter "token" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "token", c.Request.URL.Query(), &params.Token, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter token: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "exp" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "exp", c.Request.URL.Query(), &params.Exp, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter exp: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.DownloadBackup(c, id, params)
+}
+
+// CreateBackupLink operation middleware
+func (siw *ServerInterfaceWrapper) CreateBackupLink(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id BackupIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.CreateBackupLink(c, id)
+}
+
+// VerifyBackup operation middleware
+func (siw *ServerInterfaceWrapper) VerifyBackup(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id BackupIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params VerifyBackupParams
+
+	// ------------- Optional query parameter "deep" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "deep", c.Request.URL.Query(), &params.Deep, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter deep: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.VerifyBackup(c, id, params)
+}
+
+// GetEnabledFormats operation middleware
+func (siw *ServerInterfaceWrapper) GetEnabledFormats(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetEnabledFormats(c)
+}
+
+// UnfreezeWrites operation middleware
+func (siw *ServerInterfaceWrapper) UnfreezeWrites(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.UnfreezeWrites(c)
+}
+
+// GetWriteFreezeState operation middleware
+func (siw *ServerInterfaceWrapper) GetWriteFreezeState(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetWriteFreezeState(c)
+}
+
+// FreezeWrites operation middleware
+func (siw *ServerInterfaceWrapper) FreezeWrites(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.FreezeWrites(c)
 }
 
 // ListMigrations operation middleware
@@ -1267,6 +4157,19 @@ func (siw *ServerInterfaceWrapper) DiscoverMigrations(c *gin.Context) {
 	}
 
 	siw.Handler.DiscoverMigrations(c)
+}
+
+// ListRemoteNexusRepositories operation middleware
+func (siw *ServerInterfaceWrapper) ListRemoteNexusRepositories(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ListRemoteNexusRepositories(c)
 }
 
 // GetMigration operation middleware
@@ -1419,20 +4322,173 @@ func (siw *ServerInterfaceWrapper) StartMigration(c *gin.Context) {
 	siw.Handler.StartMigration(c, id)
 }
 
-// GetReplicationApplyLogs operation middleware
-func (siw *ServerInterfaceWrapper) GetReplicationApplyLogs(c *gin.Context) {
+// AcknowledgeAuditAttention operation middleware
+func (siw *ServerInterfaceWrapper) AcknowledgeAuditAttention(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.AcknowledgeAuditAttention(c)
+}
+
+// GetAuditAttention operation middleware
+func (siw *ServerInterfaceWrapper) GetAuditAttention(c *gin.Context) {
 
 	var err error
 	_ = err
 
+	// ------------- Path parameter "attentionId" -------------
+	var attentionId AuditAttentionIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "attentionId", c.Param("attentionId"), &attentionId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter attentionId: %w", err), http.StatusBadRequest)
+		return
+	}
+
 	// Parameter object where we will unmarshal all parameters from the context
-	var params GetReplicationApplyLogsParams
+	var params GetAuditAttentionParams
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", c.Request.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter cursor: %w", err), http.StatusBadRequest)
+		return
+	}
 
 	// ------------- Optional query parameter "limit" -------------
 
 	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", c.Request.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
 	if err != nil {
 		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter limit: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetAuditAttention(c, attentionId, params)
+}
+
+// ListAuditAttentions operation middleware
+func (siw *ServerInterfaceWrapper) ListAuditAttentions(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListAuditAttentionsParams
+
+	// ------------- Optional query parameter "from" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "from", c.Request.URL.Query(), &params.From, runtime.BindQueryParameterOptions{Type: "string", Format: "date-time"})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter from: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "to" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "to", c.Request.URL.Query(), &params.To, runtime.BindQueryParameterOptions{Type: "string", Format: "date-time"})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter to: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "category" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "category", c.Request.URL.Query(), &params.Category, runtime.BindQueryParameterOptions{Type: "array", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter category: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "result" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "result", c.Request.URL.Query(), &params.Result, runtime.BindQueryParameterOptions{Type: "array", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter result: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "actor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "actor", c.Request.URL.Query(), &params.Actor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter actor: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "repository" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "repository", c.Request.URL.Query(), &params.Repository, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter repository: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "q" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "q", c.Request.URL.Query(), &params.Q, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter q: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "attention" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "attention", c.Request.URL.Query(), &params.Attention, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter attention: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "method" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "method", c.Request.URL.Query(), &params.Method, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter method: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "action" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "action", c.Request.URL.Query(), &params.Action, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter action: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "actorEmail" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "actorEmail", c.Request.URL.Query(), &params.ActorEmail, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter actorEmail: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "clientIp" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "clientIp", c.Request.URL.Query(), &params.ClientIp, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter clientIp: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "authSource" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "authSource", c.Request.URL.Query(), &params.AuthSource, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter authSource: %w", err), http.StatusBadRequest)
 		return
 	}
 
@@ -1444,59 +4500,27 @@ func (siw *ServerInterfaceWrapper) GetReplicationApplyLogs(c *gin.Context) {
 		return
 	}
 
-	// ------------- Optional query parameter "sourceNode" -------------
+	// ------------- Optional query parameter "snapshot" -------------
 
-	err = runtime.BindQueryParameterWithOptions("form", true, false, "sourceNode", c.Request.URL.Query(), &params.SourceNode, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "snapshot", c.Request.URL.Query(), &params.Snapshot, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
 	if err != nil {
-		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter sourceNode: %w", err), http.StatusBadRequest)
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter snapshot: %w", err), http.StatusBadRequest)
 		return
 	}
 
-	// ------------- Optional query parameter "sourceSeq" -------------
+	// ------------- Optional query parameter "cursor" -------------
 
-	err = runtime.BindQueryParameterWithOptions("form", true, false, "sourceSeq", c.Request.URL.Query(), &params.SourceSeq, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", c.Request.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
 	if err != nil {
-		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter sourceSeq: %w", err), http.StatusBadRequest)
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter cursor: %w", err), http.StatusBadRequest)
 		return
 	}
 
-	// ------------- Optional query parameter "peerURL" -------------
+	// ------------- Optional query parameter "limit" -------------
 
-	err = runtime.BindQueryParameterWithOptions("form", true, false, "peerURL", c.Request.URL.Query(), &params.PeerURL, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", c.Request.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
 	if err != nil {
-		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter peerURL: %w", err), http.StatusBadRequest)
-		return
-	}
-
-	// ------------- Optional query parameter "entityType" -------------
-
-	err = runtime.BindQueryParameterWithOptions("form", true, false, "entityType", c.Request.URL.Query(), &params.EntityType, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
-	if err != nil {
-		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter entityType: %w", err), http.StatusBadRequest)
-		return
-	}
-
-	// ------------- Optional query parameter "entityKey" -------------
-
-	err = runtime.BindQueryParameterWithOptions("form", true, false, "entityKey", c.Request.URL.Query(), &params.EntityKey, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
-	if err != nil {
-		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter entityKey: %w", err), http.StatusBadRequest)
-		return
-	}
-
-	// ------------- Optional query parameter "op" -------------
-
-	err = runtime.BindQueryParameterWithOptions("form", true, false, "op", c.Request.URL.Query(), &params.Op, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
-	if err != nil {
-		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter op: %w", err), http.StatusBadRequest)
-		return
-	}
-
-	// ------------- Optional query parameter "result" -------------
-
-	err = runtime.BindQueryParameterWithOptions("form", true, false, "result", c.Request.URL.Query(), &params.Result, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
-	if err != nil {
-		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter result: %w", err), http.StatusBadRequest)
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter limit: %w", err), http.StatusBadRequest)
 		return
 	}
 
@@ -1507,7 +4531,439 @@ func (siw *ServerInterfaceWrapper) GetReplicationApplyLogs(c *gin.Context) {
 		}
 	}
 
-	siw.Handler.GetReplicationApplyLogs(c, params)
+	siw.Handler.ListAuditAttentions(c, params)
+}
+
+// ListAuditObservabilityEvents operation middleware
+func (siw *ServerInterfaceWrapper) ListAuditObservabilityEvents(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListAuditObservabilityEventsParams
+
+	// ------------- Optional query parameter "from" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "from", c.Request.URL.Query(), &params.From, runtime.BindQueryParameterOptions{Type: "string", Format: "date-time"})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter from: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "to" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "to", c.Request.URL.Query(), &params.To, runtime.BindQueryParameterOptions{Type: "string", Format: "date-time"})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter to: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "category" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "category", c.Request.URL.Query(), &params.Category, runtime.BindQueryParameterOptions{Type: "array", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter category: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "result" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "result", c.Request.URL.Query(), &params.Result, runtime.BindQueryParameterOptions{Type: "array", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter result: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "actor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "actor", c.Request.URL.Query(), &params.Actor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter actor: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "repository" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "repository", c.Request.URL.Query(), &params.Repository, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter repository: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "q" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "q", c.Request.URL.Query(), &params.Q, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter q: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "attention" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "attention", c.Request.URL.Query(), &params.Attention, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter attention: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "method" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "method", c.Request.URL.Query(), &params.Method, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter method: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "action" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "action", c.Request.URL.Query(), &params.Action, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter action: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "actorEmail" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "actorEmail", c.Request.URL.Query(), &params.ActorEmail, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter actorEmail: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "clientIp" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "clientIp", c.Request.URL.Query(), &params.ClientIp, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter clientIp: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "authSource" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "authSource", c.Request.URL.Query(), &params.AuthSource, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter authSource: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "offset" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "offset", c.Request.URL.Query(), &params.Offset, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter offset: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "snapshot" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "snapshot", c.Request.URL.Query(), &params.Snapshot, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter snapshot: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", c.Request.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter cursor: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", c.Request.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter limit: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ListAuditObservabilityEvents(c, params)
+}
+
+// GetAuditObservabilityEvent operation middleware
+func (siw *ServerInterfaceWrapper) GetAuditObservabilityEvent(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "eventId" -------------
+	var eventId AuditEventIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "eventId", c.Param("eventId"), &eventId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter eventId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetAuditObservabilityEvent(c, eventId)
+}
+
+// ListAuditAttentionNotifications operation middleware
+func (siw *ServerInterfaceWrapper) ListAuditAttentionNotifications(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListAuditAttentionNotificationsParams
+
+	// ------------- Optional query parameter "from" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "from", c.Request.URL.Query(), &params.From, runtime.BindQueryParameterOptions{Type: "string", Format: "date-time"})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter from: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "to" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "to", c.Request.URL.Query(), &params.To, runtime.BindQueryParameterOptions{Type: "string", Format: "date-time"})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter to: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "status" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "status", c.Request.URL.Query(), &params.Status, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter status: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", c.Request.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter limit: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", c.Request.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter cursor: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ListAuditAttentionNotifications(c, params)
+}
+
+// GetAuditObservabilitySummary operation middleware
+func (siw *ServerInterfaceWrapper) GetAuditObservabilitySummary(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetAuditObservabilitySummaryParams
+
+	// ------------- Optional query parameter "from" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "from", c.Request.URL.Query(), &params.From, runtime.BindQueryParameterOptions{Type: "string", Format: "date-time"})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter from: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "to" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "to", c.Request.URL.Query(), &params.To, runtime.BindQueryParameterOptions{Type: "string", Format: "date-time"})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter to: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "category" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "category", c.Request.URL.Query(), &params.Category, runtime.BindQueryParameterOptions{Type: "array", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter category: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "result" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "result", c.Request.URL.Query(), &params.Result, runtime.BindQueryParameterOptions{Type: "array", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter result: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "actor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "actor", c.Request.URL.Query(), &params.Actor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter actor: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "repository" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "repository", c.Request.URL.Query(), &params.Repository, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter repository: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "q" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "q", c.Request.URL.Query(), &params.Q, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter q: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "attention" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "attention", c.Request.URL.Query(), &params.Attention, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter attention: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "method" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "method", c.Request.URL.Query(), &params.Method, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter method: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "action" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "action", c.Request.URL.Query(), &params.Action, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter action: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "actorEmail" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "actorEmail", c.Request.URL.Query(), &params.ActorEmail, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter actorEmail: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "clientIp" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "clientIp", c.Request.URL.Query(), &params.ClientIp, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter clientIp: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "authSource" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "authSource", c.Request.URL.Query(), &params.AuthSource, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter authSource: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetAuditObservabilitySummary(c, params)
+}
+
+// GetOperationsDashboard operation middleware
+func (siw *ServerInterfaceWrapper) GetOperationsDashboard(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetOperationsDashboardParams
+
+	// ------------- Optional query parameter "from" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "from", c.Request.URL.Query(), &params.From, runtime.BindQueryParameterOptions{Type: "string", Format: "date-time"})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter from: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "to" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "to", c.Request.URL.Query(), &params.To, runtime.BindQueryParameterOptions{Type: "string", Format: "date-time"})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter to: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetOperationsDashboard(c, params)
+}
+
+// GetHostMonitoring operation middleware
+func (siw *ServerInterfaceWrapper) GetHostMonitoring(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetHostMonitoringParams
+
+	// ------------- Optional query parameter "from" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "from", c.Request.URL.Query(), &params.From, runtime.BindQueryParameterOptions{Type: "string", Format: "date-time"})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter from: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "to" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "to", c.Request.URL.Query(), &params.To, runtime.BindQueryParameterOptions{Type: "string", Format: "date-time"})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter to: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetHostMonitoring(c, params)
 }
 
 // ListRepositories operation middleware
@@ -1733,6 +5189,31 @@ func (siw *ServerInterfaceWrapper) BatchDeleteRepositoryAssets(c *gin.Context) {
 	}
 
 	siw.Handler.BatchDeleteRepositoryAssets(c, name)
+}
+
+// ApplyRepositoryAssetOperation operation middleware
+func (siw *ServerInterfaceWrapper) ApplyRepositoryAssetOperation(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "name" -------------
+	var name RepoNameParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "name", c.Param("name"), &name, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter name: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ApplyRepositoryAssetOperation(c, name)
 }
 
 // SetRepositoryOnline operation middleware
@@ -1997,6 +5478,74 @@ func (siw *ServerInterfaceWrapper) ChangePassword(c *gin.Context) {
 	siw.Handler.ChangePassword(c, id)
 }
 
+// GetPublishPolicy operation middleware
+func (siw *ServerInterfaceWrapper) GetPublishPolicy(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id UserIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Path parameter "repo" -------------
+	var repo string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "repo", c.Param("repo"), &repo, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter repo: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetPublishPolicy(c, id, repo)
+}
+
+// PutPublishPolicy operation middleware
+func (siw *ServerInterfaceWrapper) PutPublishPolicy(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id UserIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Path parameter "repo" -------------
+	var repo string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "repo", c.Param("repo"), &repo, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter repo: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.PutPublishPolicy(c, id, repo)
+}
+
 // GetHealthz operation middleware
 func (siw *ServerInterfaceWrapper) GetHealthz(c *gin.Context) {
 
@@ -2053,7 +5602,16 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/healthz", wrapper.GetHealthz)
 	router.GET(options.BaseURL+"/readyz", wrapper.GetReadyz)
 	router.GET(options.BaseURL+"/api/v1/status", wrapper.GetStatus)
-	router.GET(options.BaseURL+"/api/v1/replication-apply-logs", wrapper.GetReplicationApplyLogs)
+	router.GET(options.BaseURL+"/api/v1/formats/enabled", wrapper.GetEnabledFormats)
+	router.GET(options.BaseURL+"/api/v1/observability/audit/summary", wrapper.GetAuditObservabilitySummary)
+	router.GET(options.BaseURL+"/api/v1/observability/audit/events", wrapper.ListAuditObservabilityEvents)
+	router.GET(options.BaseURL+"/api/v1/observability/audit/attentions", wrapper.ListAuditAttentions)
+	router.GET(options.BaseURL+"/api/v1/observability/audit/events/:eventId", wrapper.GetAuditObservabilityEvent)
+	router.GET(options.BaseURL+"/api/v1/observability/audit/attention/:attentionId", wrapper.GetAuditAttention)
+	router.PUT(options.BaseURL+"/api/v1/observability/audit/attention-acknowledgements", wrapper.AcknowledgeAuditAttention)
+	router.GET(options.BaseURL+"/api/v1/observability/audit/notifications", wrapper.ListAuditAttentionNotifications)
+	router.GET(options.BaseURL+"/api/v1/observability/dashboard", wrapper.GetOperationsDashboard)
+	router.GET(options.BaseURL+"/api/v1/observability/host", wrapper.GetHostMonitoring)
 	router.POST(options.BaseURL+"/api/v1/auth/bootstrap", wrapper.Bootstrap)
 	router.POST(options.BaseURL+"/api/v1/auth/login", wrapper.Login)
 	router.POST(options.BaseURL+"/api/v1/auth/logout", wrapper.Logout)
@@ -2062,6 +5620,8 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.DELETE(options.BaseURL+"/api/v1/users/:id", wrapper.DeleteUser)
 	router.PATCH(options.BaseURL+"/api/v1/users/:id", wrapper.UpdateUser)
 	router.POST(options.BaseURL+"/api/v1/users/:id/password", wrapper.ChangePassword)
+	router.GET(options.BaseURL+"/api/v1/users/:id/publish-policies/:repo", wrapper.GetPublishPolicy)
+	router.PUT(options.BaseURL+"/api/v1/users/:id/publish-policies/:repo", wrapper.PutPublishPolicy)
 	router.GET(options.BaseURL+"/api/v1/tokens", wrapper.ListTokens)
 	router.POST(options.BaseURL+"/api/v1/tokens", wrapper.CreateToken)
 	router.DELETE(options.BaseURL+"/api/v1/tokens/:id", wrapper.DeleteToken)
@@ -2075,8 +5635,10 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.POST(options.BaseURL+"/api/v1/repositories/:name/recheck-connection", wrapper.RecheckRepositoryConnection)
 	router.GET(options.BaseURL+"/api/v1/repositories/:name/assets", wrapper.ListRepositoryAssets)
 	router.POST(options.BaseURL+"/api/v1/repositories/:name/assets/batch-delete", wrapper.BatchDeleteRepositoryAssets)
+	router.POST(options.BaseURL+"/api/v1/repositories/:name/assets/operations", wrapper.ApplyRepositoryAssetOperation)
 	router.GET(options.BaseURL+"/api/v1/repositories/:name/usage", wrapper.GetRepositoryUsage)
 	router.POST(options.BaseURL+"/api/v1/migrations/discover", wrapper.DiscoverMigrations)
+	router.POST(options.BaseURL+"/api/v1/migrations/remote-repositories", wrapper.ListRemoteNexusRepositories)
 	router.GET(options.BaseURL+"/api/v1/migrations", wrapper.ListMigrations)
 	router.POST(options.BaseURL+"/api/v1/migrations", wrapper.CreateMigration)
 	router.GET(options.BaseURL+"/api/v1/migrations/:id", wrapper.GetMigration)
@@ -2085,4 +5647,22 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.POST(options.BaseURL+"/api/v1/migrations/:id/cancel", wrapper.CancelMigration)
 	router.GET(options.BaseURL+"/api/v1/migrations/:id/report", wrapper.GetMigrationReport)
 	router.POST(options.BaseURL+"/api/v1/migrations/:id/finalize", wrapper.FinalizeMigration)
+	router.GET(options.BaseURL+"/api/v1/backups", wrapper.ListBackups)
+	router.POST(options.BaseURL+"/api/v1/backups", wrapper.CreateBackup)
+	router.DELETE(options.BaseURL+"/api/v1/backups/:id", wrapper.DeleteBackup)
+	router.GET(options.BaseURL+"/api/v1/backups/:id", wrapper.GetBackup)
+	router.GET(options.BaseURL+"/api/v1/backups/:id/download", wrapper.DownloadBackup)
+	router.POST(options.BaseURL+"/api/v1/backups/:id/link", wrapper.CreateBackupLink)
+	router.POST(options.BaseURL+"/api/v1/backups/:id/verify", wrapper.VerifyBackup)
+	router.DELETE(options.BaseURL+"/api/v1/maintenance/freeze", wrapper.UnfreezeWrites)
+	router.GET(options.BaseURL+"/api/v1/maintenance/freeze", wrapper.GetWriteFreezeState)
+	router.POST(options.BaseURL+"/api/v1/maintenance/freeze", wrapper.FreezeWrites)
+	router.POST(options.BaseURL+"/api/v1/backups/import", wrapper.ImportBackupFromURL)
+	router.GET(options.BaseURL+"/api/v1/backups/imports", wrapper.ListBackupImports)
+	router.GET(options.BaseURL+"/api/v1/backups/imports/:id", wrapper.GetBackupImport)
+	router.POST(options.BaseURL+"/api/v1/backups/uploads", wrapper.CreateBackupUpload)
+	router.PUT(options.BaseURL+"/api/v1/backups/uploads/:id/chunks/:index", wrapper.UploadBackupChunk)
+	router.GET(options.BaseURL+"/api/v1/backups/uploads/:id", wrapper.GetBackupUpload)
+	router.POST(options.BaseURL+"/api/v1/backups/uploads/:id/complete", wrapper.CompleteBackupUpload)
+	router.POST(options.BaseURL+"/api/v1/backups/uploads/:id/abort", wrapper.AbortBackupUpload)
 }

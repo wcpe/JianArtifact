@@ -1,7 +1,7 @@
-// 仓库资产目录树：点目录仅展开；点文件回调选中。文件类型图标多态化。
+// 仓库资产目录树：点目录展开并可作为资产目标选择；点文件回调选中。文件类型图标多态化。
 // FR-54: 支持 onExpandDir 懒加载回调——目录首次展开时触发。
-// FR-103: 支持管理员多选复选框——仅文件行可勾选，选中态由父组件维护。
-import { Checkbox, Group, Loader, ScrollArea, Text, UnstyledButton } from "@mantine/core";
+// FR-105: 管理员可选择文件和目录，选择状态由父组件维护。
+import { Group, Loader, ScrollArea, Text, UnstyledButton } from "@mantine/core";
 import {
   IconBrandJavascript,
   IconBrandNpm,
@@ -16,7 +16,8 @@ import {
   IconFolderOpen,
   IconPackage,
 } from "@tabler/icons-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import type { MouseEvent as ReactMouseEvent } from "react";
 import type { AssetTreeNode } from "../../lib/assetTree";
 import { formatBytes } from "../../lib/assetTree";
 
@@ -32,11 +33,15 @@ interface Props {
   defaultExpanded?: boolean;
   /** 文件行右侧显示大小（搜索结果等需要直观信息的场景）。 */
   showSize?: boolean;
-  /** FR-103: 是否渲染多选复选框（仅管理员）。 */
+  /** FR-105: 管理员启用文件和目录选择。 */
   selectable?: boolean;
-  /** FR-103: 已勾选的文件路径集合。 */
+  /** FR-105: 当前选中的文件和目录路径集合。 */
   selectedPaths?: Set<string>;
-  /** FR-103: 勾选 / 取消勾选文件行回调。 */
+  /** FR-105: 普通、Ctrl/Meta、Shift 点击选择回调。 */
+  onNodeInteraction?: (node: AssetTreeNode, event: ReactMouseEvent<HTMLButtonElement>) => void;
+  /** FR-105: 右键菜单回调。 */
+  onContextMenu?: (node: AssetTreeNode, event: ReactMouseEvent<HTMLButtonElement>) => void;
+  /** 兼容旧调用方的选择回调。 */
   onToggleSelect?: (node: AssetTreeNode) => void;
 }
 
@@ -51,6 +56,8 @@ export function RepoAssetTree({
   showSize = false,
   selectable = false,
   selectedPaths,
+  onNodeInteraction,
+  onContextMenu,
   onToggleSelect,
 }: Props) {
   const content = (
@@ -68,6 +75,8 @@ export function RepoAssetTree({
           showSize={showSize}
           selectable={selectable}
           selectedPaths={selectedPaths}
+          onNodeInteraction={onNodeInteraction}
+          onContextMenu={onContextMenu}
           onToggleSelect={onToggleSelect}
         />
       ))}
@@ -97,6 +106,8 @@ function TreeNodeRow({
   showSize = false,
   selectable = false,
   selectedPaths,
+  onNodeInteraction,
+  onContextMenu,
   onToggleSelect,
 }: {
   node: AssetTreeNode;
@@ -109,34 +120,45 @@ function TreeNodeRow({
   showSize?: boolean;
   selectable?: boolean;
   selectedPaths?: Set<string>;
+  onNodeInteraction?: (node: AssetTreeNode, event: ReactMouseEvent<HTMLButtonElement>) => void;
+  onContextMenu?: (node: AssetTreeNode, event: ReactMouseEvent<HTMLButtonElement>) => void;
   onToggleSelect?: (node: AssetTreeNode) => void;
 }) {
   const [open, setOpen] = useState(defaultExpanded);
   const isDir = node.kind === "dir";
-  const selected = !isDir && selectedPath === node.path;
-  const checked = selectable && !isDir && selectedPaths?.has(node.path) === true;
+  const selected =
+    selectedPath === node.path || (selectable && selectedPaths?.has(node.path) === true);
   const pad = 8 + depth * 14;
   // FR-54: 目录未加载子节点时 children === undefined
   const isLoading = isDir && open && node.children === undefined;
+
+  useEffect(() => {
+    if (isDir && open && node.children === undefined && onExpandDir) {
+      onExpandDir(node);
+    }
+  }, [isDir, node, onExpandDir, open]);
 
   return (
     <>
       <UnstyledButton
         role="treeitem"
+        data-path={node.path}
+        data-kind={node.kind}
         aria-expanded={isDir ? open : undefined}
-        onClick={() => {
+        onClick={(event) => {
           if (isDir) {
             const willOpen = !open;
             setOpen(willOpen);
+          }
+          if (onNodeInteraction) {
+            onNodeInteraction(node, event);
+          } else if (isDir) {
             onSelectDir(node);
-            // FR-54: 首次展开且无 children 时触发懒加载
-            if (willOpen && node.children === undefined && onExpandDir) {
-              onExpandDir(node);
-            }
           } else {
             onSelectFile(node);
           }
         }}
+        onContextMenu={(event) => onContextMenu?.(node, event)}
         style={{
           display: "block",
           width: "100%",
@@ -146,18 +168,7 @@ function TreeNodeRow({
         }}
       >
         <Group gap={6} wrap="nowrap">
-          {selectable && !isDir ? (
-            // FR-103: 文件行复选框；点击不冒泡到行选中，仅切换勾选态。
-            <Checkbox
-              size="xs"
-              checked={checked}
-              onChange={() => onToggleSelect?.(node)}
-              onClick={(e) => e.stopPropagation()}
-              aria-label={`选择 ${node.name}`}
-            />
-          ) : (
-            <span style={{ width: 14 }} />
-          )}
+          <span style={{ width: 14 }} />
           {isDir ? (
             open ? (
               <IconChevronDown size={14} />
@@ -207,6 +218,8 @@ function TreeNodeRow({
                 showSize={showSize}
                 selectable={selectable}
                 selectedPaths={selectedPaths}
+                onNodeInteraction={onNodeInteraction}
+                onContextMenu={onContextMenu}
                 onToggleSelect={onToggleSelect}
               />
             ))}

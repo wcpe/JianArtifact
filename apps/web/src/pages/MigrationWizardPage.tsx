@@ -7,6 +7,7 @@ import {
   Checkbox,
   Group,
   Loader,
+  PasswordInput,
   Progress,
   ScrollArea,
   Select,
@@ -22,7 +23,7 @@ import {
   UnstyledButton,
 } from "@mantine/core";
 import { useForm } from "@mantine/form";
-import { PageHeader } from "@jianartifact/ui";
+import { ErrorState, ForbiddenState } from "@jianartifact/ui";
 import {
   IconCloudDownload,
   IconDatabase,
@@ -52,12 +53,14 @@ import {
 import type {
   MigrationConflictPolicy,
   MigrationDiscoverResponse,
+  MigrationSourceAuth,
+  MigrationSourceAuthType,
   MigrationSourceType,
   MigrationTask,
 } from "../api/types";
 import { MigrationRepoTable } from "../components/migration/MigrationRepoTable";
 import { formatColor, planEstimatedAssets, sourceColor } from "../components/migration/status";
-import { notifyError, notifySuccess } from "../lib/feedback";
+import { confirmAction, notifyError, notifySuccess } from "../lib/feedback";
 import { density } from "../theme/density";
 
 interface RemoteRepoItem {
@@ -113,6 +116,21 @@ function isActiveStatus(status: string): boolean {
   return status === "planned" || status === "running";
 }
 
+function isNexusURL(value: string): boolean {
+  try {
+    const url = new URL(value.trim());
+    return (
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      !url.username &&
+      !url.password &&
+      !url.search &&
+      !url.hash
+    );
+  } catch {
+    return false;
+  }
+}
+
 const SOURCE_OPTIONS: {
   value: MigrationSourceType;
   icon: typeof IconLink;
@@ -138,10 +156,20 @@ export function MigrationWizardPage() {
   const [selectedRepos, setSelectedRepos] = useState<string[]>(draft?.selectedRepos ?? []);
   const [gateTasks, setGateTasks] = useState<MigrationTask[] | null>(null);
   const [gateLoading, setGateLoading] = useState(true);
+  const [gateError, setGateError] = useState<Error | null>(null);
   /** 离线目录：从在线 Nexus 拉到的仓库索引（不落库） */
   const [remoteRepos, setRemoteRepos] = useState<RemoteRepoItem[]>([]);
   const [remoteBusy, setRemoteBusy] = useState(false);
-  const [indexUrl, setIndexUrl] = useState(draft?.url ?? "");
+  const [indexSourceRef, setIndexSourceRef] = useState("");
+  const [sourceAuthType, setSourceAuthType] = useState<MigrationSourceAuthType>("anonymous");
+  const [sourceUsername, setSourceUsername] = useState("");
+  const [sourcePassword, setSourcePassword] = useState("");
+  const [sourceToken, setSourceToken] = useState("");
+  const clearSourceAuth = useCallback(() => {
+    setSourceUsername("");
+    setSourcePassword("");
+    setSourceToken("");
+  }, []);
   /** 离线目录持久化索引状态 */
   const [offlineIdx, setOfflineIdx] = useState<OfflineDirIndexStatus | null>(null);
   const [offlineIdxBusy, setOfflineIdxBusy] = useState(false);
@@ -160,9 +188,7 @@ export function MigrationWizardPage() {
     },
     validate: {
       url: (v, values) =>
-        values.sourceType === "online_rest" && !/^https?:\/\/.+/.test(v.trim())
-          ? t("migrations.urlRequired")
-          : null,
+        values.sourceType === "online_rest" && !isNexusURL(v) ? t("migrations.urlRequired") : null,
       path: (v, values) =>
         values.sourceType !== "online_rest" && !v.trim() ? t("migrations.pathRequired") : null,
     },
@@ -184,6 +210,7 @@ export function MigrationWizardPage() {
 
   const refreshGate = useCallback(() => {
     setGateLoading(true);
+    setGateError(null);
     listMigrations({ page_size: 100 })
       .then(async (list) => {
         const activeTasks = list.items.filter((x) => isActiveStatus(x.status));
@@ -219,7 +246,9 @@ export function MigrationWizardPage() {
           navigate(`/migrations/${running.id}`, { replace: true });
         }
       })
-      .catch((e: Error) => notifyError(e.message || t("common.error")))
+      .catch((e: unknown) => {
+        setGateError(e instanceof Error ? e : new Error(t("common.error")));
+      })
       .finally(() => setGateLoading(false));
   }, [draft?.taskId, draft?.selectedRepos, navigate, t]);
 
@@ -232,6 +261,8 @@ export function MigrationWizardPage() {
       }
     };
   }, [refreshGate]);
+
+  useEffect(() => () => clearSourceAuth(), [clearSourceAuth]);
 
   const planRepoNames = useMemo(
     () => discoverResult?.plan.repositories.map((r) => r.name) ?? [],
@@ -421,9 +452,9 @@ export function MigrationWizardPage() {
   };
 
   const fetchRemoteIndex = () => {
-    const url = indexUrl.trim() || form.values.url.trim();
-    if (!/^https?:\/\/.+/.test(url)) {
-      notifyError(t("migrations.urlRequired"));
+    const sourceRef = indexSourceRef.trim();
+    if (!/^[A-Z][A-Z0-9_]{0,62}$/.test(sourceRef)) {
+      notifyError(t("migrations.sourceRefRequired"));
       return;
     }
     setRemoteBusy(true);
@@ -431,14 +462,13 @@ export function MigrationWizardPage() {
     const timeout = window.setTimeout(() => ac.abort(), 30_000);
     listRemoteNexusRepositories(
       {
-        url,
+        sourceConfig: { sourceRef },
         credentialRef: form.values.credentialRef.trim() || undefined,
       },
       { signal: ac.signal },
     )
       .then((res) => {
         setRemoteRepos(res.items);
-        form.setFieldValue("url", url);
         notifySuccess(t("migrations.remoteIndexOk", { n: res.total }));
       })
       .catch((e: unknown) => {
@@ -452,6 +482,34 @@ export function MigrationWizardPage() {
         window.clearTimeout(timeout);
         setRemoteBusy(false);
       });
+  };
+
+  const selectSourceAuthType = (next: MigrationSourceAuthType) => {
+    if (next === sourceAuthType) {
+      return;
+    }
+    clearSourceAuth();
+    setSourceAuthType(next);
+  };
+
+  const onlineSourceAuth = (): MigrationSourceAuth | null => {
+    if (sourceAuthType === "anonymous") {
+      return { type: "anonymous" };
+    }
+    if (sourceAuthType === "basic") {
+      const username = sourceUsername.trim();
+      if (!username || !sourcePassword) {
+        notifyError(t("migrations.authBasicRequired"));
+        return null;
+      }
+      return { type: "basic", username, password: sourcePassword };
+    }
+    const token = sourceToken.trim();
+    if (!token) {
+      notifyError(t("migrations.authBearerRequired"));
+      return null;
+    }
+    return { type: "bearer", token };
   };
 
   const runDiscover = form.onSubmit((values) => {
@@ -472,6 +530,11 @@ export function MigrationWizardPage() {
       offlineIdx?.status !== "ready"
     ) {
       notifyError(t("migrations.offlineNeedInclude"));
+      return;
+    }
+
+    const sourceAuth = values.sourceType === "online_rest" ? onlineSourceAuth() : undefined;
+    if (sourceAuth === null) {
       return;
     }
 
@@ -498,11 +561,17 @@ export function MigrationWizardPage() {
       sourceConfig.includeRepositories = values.includeRepositories;
     }
 
+    // 认证信息只在此次请求的闭包中保留，绝不写入 sessionStorage 草稿。
+    clearSourceAuth();
     discoverMigrations(
       {
         sourceType: values.sourceType,
         sourceConfig,
-        credentialRef: values.credentialRef.trim() || undefined,
+        sourceAuth,
+        credentialRef:
+          values.sourceType === "online_rest"
+            ? undefined
+            : values.credentialRef.trim() || undefined,
         conflictPolicy: values.conflictPolicy,
       },
       { signal: ac.signal },
@@ -522,7 +591,13 @@ export function MigrationWizardPage() {
         if (e instanceof ApiError && e.code === "aborted") {
           notifyError(t("migrations.discoverTimeout"));
         } else {
-          notifyError(e instanceof Error ? e.message : t("common.error"));
+          notifyError(
+            values.sourceType === "online_rest"
+              ? t("migrations.discoverFailed")
+              : e instanceof Error
+                ? e.message
+                : t("common.error"),
+          );
         }
       })
       .finally(() => {
@@ -568,6 +643,21 @@ export function MigrationWizardPage() {
       .finally(() => setBusy(false));
   };
 
+  const startDiscoveredMigration = () => {
+    if (!discoverResult) {
+      return;
+    }
+    setBusy(true);
+    startMigration(discoverResult.taskId, { includeRepositories: selectedRepos })
+      .then(() => {
+        clearDraft();
+        notifySuccess(t("migrations.started"));
+        navigate(`/migrations/${discoverResult.taskId}`);
+      })
+      .catch((e: Error) => notifyError(e.message || t("common.error")))
+      .finally(() => setBusy(false));
+  };
+
   const runStart = () => {
     if (!discoverResult) {
       return;
@@ -582,15 +672,13 @@ export function MigrationWizardPage() {
       navigate(`/migrations/${running.id}`);
       return;
     }
-    setBusy(true);
-    startMigration(discoverResult.taskId, { includeRepositories: selectedRepos })
-      .then(() => {
-        clearDraft();
-        notifySuccess(t("migrations.started"));
-        navigate(`/migrations/${discoverResult.taskId}`);
-      })
-      .catch((e: Error) => notifyError(e.message || t("common.error")))
-      .finally(() => setBusy(false));
+    confirmAction({
+      title: t("migrations.startConfirmTitle"),
+      message: t("migrations.startConfirm"),
+      confirmLabel: t("common.confirm"),
+      cancelLabel: t("common.cancel"),
+      onConfirm: startDiscoveredMigration,
+    });
   };
 
   const progressPct = Math.min(
@@ -607,17 +695,27 @@ export function MigrationWizardPage() {
     );
   }
 
+  if (gateError) {
+    if (gateError instanceof ApiError && gateError.status === 403) {
+      return <ForbiddenState message={t("common.forbidden")} />;
+    }
+    return (
+      <ErrorState
+        message={t("common.error")}
+        description={gateError.message}
+        onRetry={refreshGate}
+        retryLabel={t("common.retry")}
+      />
+    );
+  }
+
   return (
     <Stack gap="md">
-      <PageHeader
-        title={t("migrations.wizardTitle")}
-        description={t("migrations.wizardCardHint")}
-        actions={
-          <Button component={Link} to="/migrations" variant="default">
-            {t("migrations.backList")}
-          </Button>
-        }
-      />
+      <Group justify="flex-end">
+        <Button component={Link} to="/migrations" variant="default">
+          {t("migrations.backList")}
+        </Button>
+      </Group>
 
       {firstPlanned && (
         <Alert color="orange" title={t("migrations.activeTaskTitle")}>
@@ -675,7 +773,12 @@ export function MigrationWizardPage() {
                     <UnstyledButton
                       key={opt.value}
                       disabled={busy}
-                      onClick={() => form.setFieldValue("sourceType", opt.value)}
+                      onClick={() => {
+                        form.setFieldValue("sourceType", opt.value);
+                        if (opt.value !== "online_rest") {
+                          clearSourceAuth();
+                        }
+                      }}
                       style={{
                         borderRadius: "var(--mantine-radius-md)",
                         border: selected
@@ -723,17 +826,54 @@ export function MigrationWizardPage() {
                 <>
                   <TextInput
                     label={t("migrations.url")}
-                    placeholder="https://maven.example.com"
+                    description={t("migrations.urlHint")}
+                    placeholder="https://bak.maven.wcpe.top"
                     disabled={busy}
                     {...form.getInputProps("url")}
                   />
-                  <TextInput
-                    label={t("migrations.credentialRef")}
-                    description={t("migrations.credentialRefHint")}
-                    placeholder="NEXUS_BASIC"
+                  <Select
+                    label={t("migrations.authType")}
+                    data={[
+                      { value: "anonymous", label: t("migrations.authAnonymous") },
+                      { value: "basic", label: t("migrations.authBasic") },
+                      { value: "bearer", label: t("migrations.authBearer") },
+                    ]}
+                    value={sourceAuthType}
+                    onChange={(value) =>
+                      selectSourceAuthType((value ?? "anonymous") as MigrationSourceAuthType)
+                    }
                     disabled={busy}
-                    {...form.getInputProps("credentialRef")}
                   />
+                  {sourceAuthType === "basic" && (
+                    <>
+                      <TextInput
+                        label={t("migrations.authUsername")}
+                        value={sourceUsername}
+                        onChange={(event) => setSourceUsername(event.currentTarget.value)}
+                        autoComplete="off"
+                        disabled={busy}
+                      />
+                      <PasswordInput
+                        label={t("migrations.authPassword")}
+                        value={sourcePassword}
+                        onChange={(event) => setSourcePassword(event.currentTarget.value)}
+                        autoComplete="new-password"
+                        disabled={busy}
+                      />
+                    </>
+                  )}
+                  {sourceAuthType === "bearer" && (
+                    <PasswordInput
+                      label={t("migrations.authToken")}
+                      value={sourceToken}
+                      onChange={(event) => setSourceToken(event.currentTarget.value)}
+                      autoComplete="new-password"
+                      disabled={busy}
+                    />
+                  )}
+                  <Text size="xs" c="dimmed">
+                    {t("migrations.authHint")}
+                  </Text>
                 </>
               ) : (
                 <TextInput
@@ -1005,12 +1145,12 @@ export function MigrationWizardPage() {
                             </div>
                           </Group>
                           <TextInput
-                            label={t("migrations.remoteIndexUrl")}
-                            placeholder="https://maven.wcpe.top"
-                            description={t("migrations.remoteIndexUrlHint")}
+                            label={t("migrations.remoteIndexSourceRef")}
+                            placeholder="NEXUS_PRIMARY"
+                            description={t("migrations.remoteIndexSourceRefHint")}
                             disabled={busy || remoteBusy}
-                            value={indexUrl}
-                            onChange={(e) => setIndexUrl(e.currentTarget.value)}
+                            value={indexSourceRef}
+                            onChange={(e) => setIndexSourceRef(e.currentTarget.value)}
                           />
                           <TextInput
                             label={t("migrations.credentialRef")}

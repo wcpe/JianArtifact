@@ -24,6 +24,8 @@ dist/
 build/
 .cache/
 *.tsbuildinfo
+# Vite/Vitest 生成的临时配置快照
+*.config.ts.timestamp-*.mjs
 
 # Turborepo
 .turbo/
@@ -64,6 +66,8 @@ Thumbs.db
 
 # ===== 过程性文档与临时文件（不入库）=====
 /.tmp/
+# 本地工具生成的过程稿（如 plans），不入库
+/.zcode/
 
 # ===== 环境与密钥（不入库）=====
 .env
@@ -75,3 +79,6 @@ deploy/ssh/
 /.playwright-cli/
 /.narrafork/
 /apps/server/data/
+/.workbuddy/
+apps/web/*.png
+apps/web/*.png

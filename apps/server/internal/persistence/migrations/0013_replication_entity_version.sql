@@ -1,3 +1,9 @@
+-- 0013：复制实体最新 LWW 版本
+-- 引入版本：0.7.0
+-- 影响：新增 repl_entity_version 表
+-- 数据处理：从既有 repl_change 回填每个实体的最新版本；预计耗时：随复制日志行数增长
+-- 回滚：不支持 down migration；需要恢复升级前备份
+-- 相关：FR-83 / ADR-0013
 -- 0013：记录每个复制实体已接受的最新 LWW 版本，防止多对端旧变更覆盖新变更。
 CREATE TABLE repl_entity_version (
   entity_type TEXT NOT NULL,

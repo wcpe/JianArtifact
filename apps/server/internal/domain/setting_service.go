@@ -11,23 +11,32 @@ import (
 
 // 实例级基础配置的设置键（FR-89：web 可读可改，运行时生效）。同步间隔复用复制命名空间键。
 const (
-	settingKeyAnonymousAccess = "anonymous_access_enabled"
-	SettingKeyPublicURL       = "public_url"
-	SettingKeyUpstreamTimeout = "upstream_timeout"
+	settingKeyAnonymousAccess   = "anonymous_access_enabled"
+	SettingKeyPublicURL         = "public_url"
+	SettingKeyUpstreamTimeout   = "upstream_timeout"
+	SettingKeyAllowedHosts      = "allowed_hosts"        // 允许访问的域名白名单（逗号分隔；节点本地）
+	SettingKeyOriginTokenEnable = "origin_token_enabled" // 回源 Token 校验开关（FR-130；节点本地）
+	SettingKeyOriginTokenHeader = "origin_token_header"  // 回源 Token 请求头名（FR-130；节点本地）
+	SettingKeyOriginTokenValue  = "origin_token_value"   // 回源 Token 值（FR-130；节点本地）
 )
 
 // SettingService 处理实例级全局设置。无缓存：SQLite 直查，写后即生效。
 type SettingService struct {
-	settings *repository.SettingRepo
-	recorder ChangeRecorder
+	settings  *repository.SettingRepo
+	recorder  ChangeRecorder
+	writeGate BusinessWriteGate
 }
 
 // SettingsUpdate 表示一次原子基础设置更新；nil 字段保持不变。
 type SettingsUpdate struct {
-	AnonymousAccess *bool
-	PublicURL       *string
-	UpstreamTimeout *int
-	SyncInterval    *int
+	AnonymousAccess    *bool
+	PublicURL          *string
+	UpstreamTimeout    *int
+	SyncInterval       *int
+	AllowedHosts       *[]string
+	OriginTokenEnabled *bool
+	OriginTokenHeader  *string
+	OriginTokenValue   *string
 }
 
 // NewSettingService 构造 SettingService。
@@ -37,6 +46,9 @@ func NewSettingService(settings *repository.SettingRepo) *SettingService {
 
 // SetChangeRecorder 注入复制变更日志记录器（FR-83）；nil 表示不记录。
 func (s *SettingService) SetChangeRecorder(r ChangeRecorder) { s.recorder = r }
+
+// SetBusinessWriteGate 注入备用节点本地业务写栅栏；nil 保持兼容行为。
+func (s *SettingService) SetBusinessWriteGate(gate BusinessWriteGate) { s.writeGate = gate }
 
 // recordChange 记录复制变更日志；记录失败不阻断业务写（对账兜底，见 ADR-0013）。
 func (s *SettingService) recordChange(entityType, entityKey, op string, data any) {
@@ -80,6 +92,13 @@ func (s *SettingService) SetPublicURL(v string) error {
 }
 
 // SyncIntervalSecs 返回同步轮询间隔（秒，FR-89）；未配置或非法返回 0（调度器回退构造值）。
+// SettingKeyReplSyncInterval 是设置页「同步间隔」的存储键（FR-89，用户可见配置；
+// 名字里的 repl: 是历史遗留，复制退役后由该键继续承载此配置项）。
+const SettingKeyReplSyncInterval = "repl:sync_interval"
+
+// SettingKeyClusterPrefix 是「节点本地设置」的前缀判定键（历史遗留，保留）。
+const SettingKeyClusterPrefix = "repl:"
+
 func (s *SettingService) SyncIntervalSecs() int {
 	return s.secsSetting(SettingKeyReplSyncInterval)
 }
@@ -99,6 +118,48 @@ func (s *SettingService) SetUpstreamTimeout(secs int) error {
 	return s.UpdateSettings(SettingsUpdate{UpstreamTimeout: &secs})
 }
 
+// AllowedHostsList 返回允许访问的域名白名单；未配置或空值返回空切片（不限制）。
+// 条目经逗号分隔、按首尾空白归一化，空项忽略。节点本地配置，不参与复制。
+func (s *SettingService) AllowedHostsList() []string {
+	v, err := s.settings.Get(SettingKeyAllowedHosts)
+	if err != nil {
+		return nil
+	}
+	raw := strings.Split(v, ",")
+	hosts := make([]string, 0, len(raw))
+	for _, item := range raw {
+		if host := strings.TrimSpace(item); host != "" {
+			hosts = append(hosts, host)
+		}
+	}
+	return hosts
+}
+
+// SetAllowedHosts 写入允许访问的域名白名单（空切片表示不限制）。
+func (s *SettingService) SetAllowedHosts(hosts []string) error {
+	return s.UpdateSettings(SettingsUpdate{AllowedHosts: &hosts})
+}
+
+// OriginTokenGuard 返回回源 Token 校验配置：开关、请求头名与 Token 值；未配置返回零值（不启用）。
+// 节点本地，不参与复制；重新生成 Token 后旧值立即失效。
+func (s *SettingService) OriginTokenGuard() (enabled bool, header, value string) {
+	if v, err := s.settings.Get(SettingKeyOriginTokenEnable); err == nil {
+		enabled = v == "true"
+	}
+	header, _ = s.settings.Get(SettingKeyOriginTokenHeader)
+	value, _ = s.settings.Get(SettingKeyOriginTokenValue)
+	return enabled, strings.TrimSpace(header), strings.TrimSpace(value)
+}
+
+// SetOriginTokenGuard 写入回源 Token 校验配置；空 value 表示清空（关闭后重新开启需重新生成）。
+func (s *SettingService) SetOriginTokenGuard(enabled bool, header, value string) error {
+	return s.UpdateSettings(SettingsUpdate{
+		OriginTokenEnabled: &enabled,
+		OriginTokenHeader:  &header,
+		OriginTokenValue:   &value,
+	})
+}
+
 // secsSetting 读取整数秒设置；缺失 / 非数字 / 非正数返回 0。
 func (s *SettingService) secsSetting(key string) int {
 	v, err := s.settings.Get(key)
@@ -114,6 +175,9 @@ func (s *SettingService) secsSetting(key string) int {
 
 // UpdateSettings 在同一数据库事务内写入全部基础设置，提交后再记录复制变更。
 func (s *SettingService) UpdateSettings(update SettingsUpdate) error {
+	if err := requireBusinessWrite(s.writeGate); err != nil {
+		return err
+	}
 	values := settingValues(update)
 	if err := s.settings.SetMany(values); err != nil {
 		return err
@@ -131,12 +195,17 @@ func (s *SettingService) UpdateSettings(update SettingsUpdate) error {
 
 // isNodeLocalSetting 返回不应跨节点复制的设置键。
 func isNodeLocalSetting(key string) bool {
-	return key == SettingKeyPublicURL || strings.HasPrefix(key, SettingKeyClusterPrefix)
+	switch key {
+	case SettingKeyPublicURL, SettingKeyAllowedHosts,
+		SettingKeyOriginTokenEnable, SettingKeyOriginTokenHeader, SettingKeyOriginTokenValue:
+		return true
+	}
+	return strings.HasPrefix(key, SettingKeyClusterPrefix)
 }
 
 // settingValues 将可选更新转换为稳定顺序的持久化键值列表。
 func settingValues(update SettingsUpdate) []repository.SettingValue {
-	values := make([]repository.SettingValue, 0, 4)
+	values := make([]repository.SettingValue, 0, 8)
 	if update.AnonymousAccess != nil {
 		values = append(values, repository.SettingValue{Key: settingKeyAnonymousAccess, Value: strconv.FormatBool(*update.AnonymousAccess)})
 	}
@@ -148,6 +217,18 @@ func settingValues(update SettingsUpdate) []repository.SettingValue {
 	}
 	if update.SyncInterval != nil {
 		values = append(values, repository.SettingValue{Key: SettingKeyReplSyncInterval, Value: strconv.Itoa(*update.SyncInterval)})
+	}
+	if update.AllowedHosts != nil {
+		values = append(values, repository.SettingValue{Key: SettingKeyAllowedHosts, Value: strings.Join(*update.AllowedHosts, ",")})
+	}
+	if update.OriginTokenEnabled != nil {
+		values = append(values, repository.SettingValue{Key: SettingKeyOriginTokenEnable, Value: strconv.FormatBool(*update.OriginTokenEnabled)})
+	}
+	if update.OriginTokenHeader != nil {
+		values = append(values, repository.SettingValue{Key: SettingKeyOriginTokenHeader, Value: *update.OriginTokenHeader})
+	}
+	if update.OriginTokenValue != nil {
+		values = append(values, repository.SettingValue{Key: SettingKeyOriginTokenValue, Value: *update.OriginTokenValue})
 	}
 	return values
 }

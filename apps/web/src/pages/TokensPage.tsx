@@ -3,7 +3,7 @@ import { ActionIcon, Alert, Button, Code, Group, Modal, Table, TextInput } from 
 import { useForm } from "@mantine/form";
 import { useDisclosure } from "@mantine/hooks";
 import { IconTrash } from "@tabler/icons-react";
-import { EmptyState, PageHeader } from "@jianartifact/ui";
+import { EmptyState } from "@jianartifact/ui";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -16,7 +16,7 @@ import { confirmDanger, notifyError, notifySuccess } from "../lib/feedback";
 
 export function TokensPage() {
   const { t } = useTranslation();
-  const state = useAsync(listTokens, []);
+  const state = useAsync(listTokens, [], { cacheKey: "tokens:list" });
   const [createOpened, createModal] = useDisclosure(false);
   const [creating, setCreating] = useState(false);
   const [created, setCreated] = useState<TokenCreated | null>(null);
@@ -58,11 +58,9 @@ export function TokensPage() {
 
   return (
     <>
-      <PageHeader
-        title={t("tokens.title")}
-        description={t("tokens.description")}
-        actions={<Button onClick={createModal.open}>{t("tokens.create")}</Button>}
-      />
+      <Group justify="flex-end" mb="md">
+        <Button onClick={createModal.open}>{t("tokens.create")}</Button>
+      </Group>
 
       <AsyncBoundary state={state}>
         {(list) =>

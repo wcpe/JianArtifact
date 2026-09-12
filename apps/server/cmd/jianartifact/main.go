@@ -7,10 +7,12 @@ package main
 
 import (
 	"context"
-	"crypto/subtle"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -25,6 +27,8 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/api"
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 	"github.com/wcpe/jianartifact/apps/server/internal/config"
+	"github.com/wcpe/jianartifact/apps/server/internal/domain"
+	"github.com/wcpe/jianartifact/apps/server/internal/formats"
 	"github.com/wcpe/jianartifact/apps/server/internal/httpserver"
 	"github.com/wcpe/jianartifact/apps/server/internal/protocol"
 	"github.com/wcpe/jianartifact/apps/server/web"
@@ -58,9 +62,9 @@ func main() {
 			fmt.Fprintln(os.Stderr, "admin 子命令失败：", err)
 			os.Exit(1)
 		}
-	case "replication":
-		if err := replicationCmd(args[1:]); err != nil {
-			fmt.Fprintln(os.Stderr, "replication 子命令失败：", err)
+	case "backup":
+		if err := backupCmd(args[1:]); err != nil {
+			fmt.Fprintln(os.Stderr, "backup 子命令失败：", err)
 			os.Exit(1)
 		}
 	case "healthcheck":
@@ -99,9 +103,23 @@ func usage(w io.Writer) {
   admin emit-asset-times
                      为全部资产重新登记带创建/更新时间的变更，对端复制应用后
                      自动同步时间（无需在对端单独回填）
-  replication status 查看复制对端配置与同步状态（FR-86）
-  replication start  启用复制同步调度
-  replication stop   停用复制同步调度
+  backup create      生成节点备份包（SQLite 一致性快照 + 内容寻址 blob）
+                     [--mode hot|frozen] [--label <备注>]
+                     frozen 假定本地写入已停止；运行中请改用 Web 的冻结窗口
+  backup list        列出本机备份包 [--json]
+  backup verify <包标识|归档路径>
+                     校验备份包完整性 [--deep]（deep 逐 blob 比对内容摘要）
+  backup link <包标识>
+                     签发带时效的下载链接，供新机器直接拉取
+                     [--ttl 30m] [--base https://对外地址]
+  backup delete <包标识>
+                     删除备份包（被增量包引用的基线不可删）
+  backup import <归档路径>
+                     导入节点备份包（校验 → 暂存 → 重启替换，循环闭合搬迁）
+                     [--overwrite] [--deep] [--yes]
+                     目标非空需 --overwrite；--deep 逐 blob 比对内容摘要；
+                     交互终端下目标非空会二次确认，--yes 跳过；无 TTY 时
+                     --overwrite 即视为已确认。导入后需重启服务方可生效。
   healthcheck        对本地 /readyz 探活，供容器健康检查
   help               显示本帮助
 
@@ -109,6 +127,9 @@ func usage(w io.Writer) {
   JIAN_HTTP_ADDR     HTTP 监听地址:端口（默认 :8080）
   JIAN_DATA_DIR      数据根目录（默认 ./data；存放 SQLite 与 blob）
   JIAN_JWT_SECRET    JWT(HS256) 签名密钥（缺省时生成并持久化到数据目录）
+  JIAN_REPLICATION_ROLE 复制角色：disabled、primary、standby
+  JIAN_REPLICATION_PRIMARY_URL standby 的直接父节点基址（历史变量名保留）
+  JIAN_REPLICATION_RELAY_ENABLED standby 是否向多个直接子节点 relay（默认 false）
 
 示例：
   jianartifact run
@@ -156,80 +177,119 @@ func blobWritableCheck(blobDir string) httpserver.ReadinessCheck {
 	}
 }
 
-// syncTokenMiddleware 校验节点间复制端点（FR-84）请求的 Bearer 令牌与当前同步令牌一致。
-// 令牌从运行时配置（setting repl:peer_token，FR-88 web 可配）动态读取：
-// 未配置 → 404（对外表现为端点未注册）；不匹配 → 401。
-// 使用常量时间比较防时序侧信道；令牌不进日志。
-func syncTokenMiddleware(tokenProvider func() string) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		want := tokenProvider()
-		if want == "" {
-			c.AbortWithStatus(http.StatusNotFound)
-			return
-		}
-		got := ""
-		if h := c.GetHeader("Authorization"); strings.HasPrefix(h, "Bearer ") {
-			got = strings.TrimPrefix(h, "Bearer ")
-		}
-		if subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
-			c.AbortWithStatus(http.StatusUnauthorized)
-			return
-		}
-		c.Next()
-	}
-}
-
-func run() error {
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("加载配置：%w", err)
-	}
-
-	svc, err := openServices(cfg)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = svc.db.Close() }()
-
-	assets, err := web.Assets()
-	if err != nil {
-		return fmt.Errorf("加载内嵌前端资源：%w", err)
-	}
-
+// newApplicationHandler 按启动期格式集合构造完整 HTTP 服务。
+// 未启用格式不构造其专属 handler，也不注册其原生协议路由。
+func newApplicationHandler(cfg *config.Config, svc *appServices, assets fs.FS) http.Handler {
 	checks := []func() error{svc.db.Ping, blobWritableCheck(cfg.BlobDir)}
-	authenticator := auth.NewAuthenticator(svc.jwt, svc.store)
-
-	// 协议层（Raw / Maven 等）经原生客户端访问，不在 OpenAPI 契约内；
-	// 复用支持 Basic + Bearer 的 Optional() 中间件解析主体，鉴权在 handler 内判定。
-	// Dispatcher 按仓库 format 将 /repository 端点分派到对应格式处理器。
-	rawHandler := protocol.NewRawHandler(svc.assetSvc, svc.repoSvc)
-	mavenHandler := protocol.NewMavenHandler(rawHandler)
-	dispatcher := protocol.NewDispatcher(svc.repoSvc, rawHandler, mavenHandler)
-	npmHandler := protocol.NewNpmHandler(rawHandler, svc.store, svc.tokenSvc, svc.publicURL)
-	// FR-89：对外 URL 改为运行时动态读取（web 设置页可改），npm tarball 随配置生效。
-	npmHandler.SetPublicURLFn(func() string { return svc.settingSvc.PublicURL() })
-
+	// 允许访问的域名白名单（后台设置，节点本地；空列表不限制）。
+	allowedHosts := func() []string { return svc.settingSvc.AllowedHostsList() }
+	// FR-130：回源 Token 校验（后台「设置-安全防护」；节点本地，运行时生效）。
+	originTokenGuard := func() (bool, string, string) { return svc.settingSvc.OriginTokenGuard() }
+	authenticator := auth.NewAuthenticator(svc.jwt, svc.store, auth.WithAllowedHosts(allowedHosts))
 	apiHandlers := svc.handlers(version, checks)
-	// FR-38：资产上传/删除接入审计日志（闭包绑定 apiHandlers.AuditLog）
-	rawHandler.SetAudit(apiHandlers.AuditLog)
+
+	// 各格式协议共享基础资产处理器；空格式列表时不创建任何协议处理对象。
+	var rawHandler *protocol.RawHandler
+	if cfg.EnabledFormats.Any() {
+		rawHandler = protocol.NewRawHandler(svc.assetSvc, svc.repoSvc)
+		rawHandler.SetPublishPolicy(svc.publishPolicySvc)
+		rawHandler.SetAudit(apiHandlers.AuditLog)
+		rawHandler.SetOperationAudit(apiHandlers.ProtocolAssetOperationAudit)
+	}
+
+	var dispatcher *protocol.Dispatcher
+	var mavenHandler *protocol.MavenHandler
+	if cfg.EnabledFormats.Has("raw") || cfg.EnabledFormats.Has("maven") {
+		if cfg.EnabledFormats.Has("maven") {
+			mavenHandler = protocol.NewMavenHandler(rawHandler)
+		}
+		dispatcher = protocol.NewDispatcher(svc.repoSvc, rawHandler, mavenHandler, cfg.EnabledFormats)
+	}
+
+	var npmHandler *protocol.NpmHandler
+	if cfg.EnabledFormats.Has("npm") {
+		npmHandler = protocol.NewNpmHandler(rawHandler, svc.store, svc.tokenSvc, svc.publicURL)
+		npmHandler.SetPublicURLFn(func() string { return svc.settingSvc.PublicURL() })
+		// npm 仓库经 /repository/ 通用路径时保持完整 npm 语义（发布 tarball、
+		// 版本合并与 dist.tarball 重写），与 /npm/ 前缀一致。
+		if dispatcher != nil {
+			dispatcher.SetNpm(npmHandler)
+		}
+	}
+
+	var ociHandler *protocol.OCIHandler
+	if cfg.EnabledFormats.Has("docker") {
+		ociHandler = protocol.NewOCIHandler(rawHandler, svc.ociSvc)
+	}
+
+	var cargoHandler *protocol.CargoHandler
+	if cfg.EnabledFormats.Has("cargo") {
+		cargoHandler = protocol.NewCargoHandler(rawHandler, svc.cargoSvc, cfg.PublicURL)
+	}
+
+	var pypiHandler *protocol.PypiHandler
+	if cfg.EnabledFormats.Has("pypi") {
+		pypiHandler = protocol.NewPypiHandler(rawHandler, svc.formatMetadataSvc, svc.publicURL)
+	}
+
+	var goProxyHandler *protocol.GoProxyHandler
+	if cfg.EnabledFormats.Has("gomod") {
+		goProxyHandler = protocol.NewGoProxyHandler(rawHandler)
+	}
+
+	var nugetHandler *protocol.NuGetHandler
+	if cfg.EnabledFormats.Has("nuget") {
+		nugetHandler = protocol.NewNuGetHandler(rawHandler, svc.formatMetadataSvc, svc.publicURL)
+	}
+
 	srv := httpserver.New(version,
 		httpserver.WithReadinessCheck(svc.db.Ping),
 		httpserver.WithReadinessCheck(blobWritableCheck(cfg.BlobDir)),
+		httpserver.WithWriteFreeze(svc.freeze.State), // FR-135：运行时写入冻结窗口（未冻结时中间件为空操作）
 		httpserver.WithHandlers(apiHandlers),
+		httpserver.WithManagementSecurityAudit(apiHandlers.AuditLog),
+		httpserver.WithAllowedHosts(allowedHosts),
+		httpserver.WithOriginTokenGuard(originTokenGuard),
 		httpserver.WithMiddleware(api.MiddlewareFunc(authenticator.Optional())),
+		httpserver.WithProtocolMetric(func(c *gin.Context) {
+			cacheResult, _ := c.Get("jianartifact.protocol.cache_result")
+			svc.dashboardSvc.RecordProtocol(domain.ProtocolMetric{CompletedAt: time.Now().UTC(), Method: c.Request.Method, Status: c.Writer.Status(), CacheResult: cacheResultString(cacheResult)})
+		}),
 		httpserver.WithProtocolRoutes(func(r gin.IRouter) {
+			protocolMW := authenticator.Protocol().Optional()
+			cargoProtocolMW := authenticator.CargoProtocol().Optional()
 			authMW := authenticator.Optional()
-			protocol.RegisterRoutes(r, dispatcher, authMW)
-			protocol.RegisterNpmRoutes(r, npmHandler, authMW)
-			// 迁移辅助（不进 OpenAPI 生成；主体由 Optional 注入，admin 在 handler 内校验）
-			r.POST("/api/v1/migrations/remote-repositories", authMW, apiHandlers.ListRemoteNexusRepositories)
+			if dispatcher != nil {
+				protocol.RegisterRoutes(r, dispatcher, protocolMW)
+			}
+			if npmHandler != nil {
+				protocol.RegisterNpmRoutes(r, npmHandler, protocolMW)
+			}
+			if ociHandler != nil {
+				protocol.RegisterOCIRoutes(r, ociHandler, protocolMW)
+			}
+			if cargoHandler != nil {
+				protocol.RegisterCargoRoutes(r, cargoHandler, cargoProtocolMW)
+			}
+			if pypiHandler != nil {
+				protocol.RegisterPypiRoutes(r, pypiHandler, protocolMW)
+			}
+			if goProxyHandler != nil {
+				protocol.RegisterGoProxyRoutes(r, goProxyHandler, protocolMW)
+			}
+			if nugetHandler != nil {
+				protocol.RegisterNuGetRoutes(r, nugetHandler, protocolMW)
+			}
+			// 迁移辅助（主体由 Optional 注入，admin 在 handler 内校验）。
 			r.POST("/api/v1/migrations/offline-index/scan", authMW, apiHandlers.StartOfflineDirIndex)
 			r.GET("/api/v1/migrations/offline-index", authMW, apiHandlers.GetOfflineDirIndex)
 			r.POST("/api/v1/migrations/offline-index/cancel", authMW, apiHandlers.CancelOfflineDirIndex)
 			// 运维端点
 			r.POST("/api/v1/repositories/:name/cleanup", authMW, apiHandlers.CleanupEmptyMavenArtifacts)
-			// FR-73: Maven 网页上传（GAV 表单，服务端生成 pom/校验和/metadata；权限 handler 内校验）
-			r.POST("/api/v1/repositories/:name/maven-upload", authMW, mavenHandler.UploadForm)
+			// FR-73: Maven 网页上传仅在 Maven 启用时注册。
+			if mavenHandler != nil {
+				r.POST("/api/v1/repositories/:name/maven-upload", authMW, mavenHandler.UploadForm)
+			}
 			// FR-54: 目录懒加载 tree API
 			r.GET("/api/v1/repositories/:name/tree", authMW, apiHandlers.ListRepositoryTree)
 			// 公开接口（无需认证）
@@ -244,30 +304,50 @@ func run() error {
 			r.PUT("/api/v1/settings", authMW, apiHandlers.PutSettings)
 			// 开源协议清单（admin 专属；清单不再打进前端 bundle，见 internal/licenses）
 			r.GET("/api/v1/licenses", authMW, apiHandlers.GetLicenses)
-			// FR-84: 节点间复制协议（全程 GET 拉取，规避上传限制）。
-			// 端点始终注册；令牌从 setting 运行时读取（FR-88 web 可配），未配置时中间件返回 404（对外表现为端点未注册）。
-			sync := r.Group("/api/v1/cluster/sync", syncTokenMiddleware(func() string {
-				_, token, _ := svc.replSvc.PeerConfig()
-				return token
-			}))
-			sync.GET("/pull", apiHandlers.GetClusterSyncPull)
-			sync.GET("/blob/:hash", apiHandlers.GetClusterSyncBlob)
-			// FR-86: 集群管理端点（仅管理员，主体经 Optional 注入，handler 内校验）
-			r.GET("/api/v1/cluster", authMW, apiHandlers.GetClusterStatus)
-			r.PUT("/api/v1/cluster", authMW, apiHandlers.PutClusterStatus)
-			// FR-88: 立即同步（手动触发一次，无论自动开关，仅管理员）
-			r.POST("/api/v1/cluster/sync-now", authMW, apiHandlers.PostClusterSyncNow)
-			// FR-88: 同步历史记录（分页，仅管理员）
-			r.GET("/api/v1/cluster/sync-logs", authMW, apiHandlers.GetClusterSyncLogs)
-			// FR-98: 某次同步的具体变更列表（repl_change 反推，仅管理员）
-			r.GET("/api/v1/cluster/sync-logs/:id/changes", authMW, apiHandlers.GetClusterSyncLogChanges)
+			// 复制退役：数据面 /api/v1/cluster/sync/* 与管理面 /api/v1/cluster* 均已摘除。
 			// FR-38: 审计日志（分页 + 筛选：actor/action/repo/from/to，仅管理员）
 			r.GET("/api/v1/audit-logs", authMW, apiHandlers.GetAuditLogs)
 		}),
+		httpserver.WithProtocolPrefixes(formats.AllPrefixes()...),
 	)
+	return srv.Handler(assets)
+}
+
+func cacheResultString(value any) string {
+	result, _ := value.(string)
+	if result == "hit" || result == "miss" {
+		return result
+	}
+	return ""
+}
+
+func run() error {
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("加载配置：%w", err)
+	}
+
+	// FR-137：在打开数据库连接之前应用待生效的备份恢复（替换 db 文件时不能有打开的连接）。
+	if applied, outcome, err := domain.ApplyPendingRestore(cfg.DataDir, cfg.DBPath, cfg.BlobDir); err != nil {
+		return fmt.Errorf("应用待生效的备份恢复：%w", err)
+	} else if applied {
+		fmt.Fprintf(os.Stderr, "已应用待生效的备份恢复：%s\n", outcome.Summary())
+	}
+
+	svc, err := openServices(cfg)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = svc.db.Close() }()
+
+	assets, err := web.Assets()
+	if err != nil {
+		return fmt.Errorf("加载内嵌前端资源：%w", err)
+	}
+
 	httpServer := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           srv.Handler(assets),
+		Handler:           newApplicationHandler(cfg, svc, assets),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	addr := cfg.HTTPAddr
@@ -275,10 +355,26 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// FR-85：启动后台复制调度（配置了对端 URL 时）。
-	if svc.scheduler != nil {
-		svc.scheduler.Start(ctx)
+	// 复制退役：出站同步调度器已随集群功能移除。
+	// FR-132：收尾上次进程遗留的"生成中"备份包，避免列表里留下永久幻影。
+	if n, err := svc.backupSvc.ReconcileStartup(); err == nil && n > 0 {
+		fmt.Fprintf(os.Stderr, "备份：标记 %d 个服务重启遗留的生成中包为失败\n", n)
 	}
+	// FR-137：清理崩在导入中途留下的暂存目录（有 restore.pending 时不清理，
+	// 那是等待本次启动替换数据库的正品，由 ApplyPendingRestore 处理）。
+	if err := svc.restoreSvc.ReconcileStaleStaging(); err != nil {
+		fmt.Fprintf(os.Stderr, "导入：清理残留暂存目录失败：%v\n", err)
+	}
+	// FR-137：清理到期未完成的分片上传会话（磁盘 + 记录）；失败仅记日志，不影响启动。
+	if n, err := svc.backupUploads.ReconcileExpired(time.Now()); err != nil {
+		fmt.Fprintf(os.Stderr, "分片上传：清理过期会话失败：%v\n", err)
+	} else if n > 0 {
+		fmt.Fprintf(os.Stderr, "分片上传：清理 %d 个过期上传会话\n", n)
+	}
+	// FR-53/120：分钟聚合与当前主机采样只由运行期定时任务驱动，启动不扫描历史数据。
+	svc.dashboardSvc.Start(ctx, time.Now)
+	svc.hostMonitoringSvc.Start(ctx, time.Now)
+	startBlobGCTask(ctx, cfg.BlobGCInterval, svc.assetSvc.CleanupUnreferencedBlobs)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -287,6 +383,21 @@ func run() error {
 			errCh <- err
 		}
 	}()
+	// FR-131：服务内置 TLS 双监听（与 HTTP 共用同一 handler），供 CDN 回源 HTTPS。
+	// 显式配置了 TLS 地址但证书缺失 / 格式错误 → 启动失败并明确报错，
+	// 防止"以为加密了实际没有"的静默降级；未配置 TLS 地址时保持纯 HTTP。
+	if cfg.TLSAddr != "" {
+		tlsServer, err := buildTLSServer(cfg, newApplicationHandler(cfg, svc, assets))
+		if err != nil {
+			return fmt.Errorf("配置了 %s 但 TLS 启动失败：%w", config.EnvTLSAddr, err)
+		}
+		go func() {
+			fmt.Printf("JianArtifact %s TLS 正在监听 %s\n", version, cfg.TLSAddr)
+			if err := tlsServer.ListenAndServeTLS(cfg.TLSCert, cfg.TLSKey); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				errCh <- err
+			}
+		}()
+	}
 
 	select {
 	case err := <-errCh:
@@ -301,4 +412,49 @@ func run() error {
 		fmt.Println("已关停。")
 		return nil
 	}
+}
+
+// startBlobGCTask 仅在 primary 节点按固定间隔清理未引用 blob；启动阶段不立即扫描。
+func startBlobGCTask(ctx context.Context, interval time.Duration, cleanup func() (int, error)) {
+	// 复制退役后不再有 standby（此前 standby 不 GC 以免误删对端仍引用的 blob）；
+	// 单节点视角下未引用 blob 即可回收。
+	if interval <= 0 || cleanup == nil {
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if ctx.Err() != nil {
+					return
+				}
+				removed, err := cleanup()
+				if err != nil {
+					log.Printf("blob 定时清理失败：%v", err)
+				} else if removed > 0 {
+					log.Printf("blob 定时清理完成：回收 %d 个未引用 blob", removed)
+				}
+			}
+		}
+	}()
+}
+
+// buildTLSServer 构造服务内置 TLS 的 http.Server(FR-131)。
+// 先加载并校验 PEM 证书对;失败返回错误,由调用方决定整体启动失败(防静默降级)。
+func buildTLSServer(cfg *config.Config, handler http.Handler) (*http.Server, error) {
+	if strings.TrimSpace(cfg.TLSCert) == "" || strings.TrimSpace(cfg.TLSKey) == "" {
+		return nil, fmt.Errorf("配置了 %s 但缺少 %s / %s", config.EnvTLSAddr, config.EnvTLSCert, config.EnvTLSKey)
+	}
+	if _, err := tls.LoadX509KeyPair(cfg.TLSCert, cfg.TLSKey); err != nil {
+		return nil, fmt.Errorf("加载 TLS 证书失败(%s/%s)：%w", cfg.TLSCert, cfg.TLSKey, err)
+	}
+	return &http.Server{
+		Addr:              cfg.TLSAddr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+	}, nil
 }

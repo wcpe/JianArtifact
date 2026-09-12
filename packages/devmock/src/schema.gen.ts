@@ -45,7 +45,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** 运行时状态（版本、就绪、迁移版本、初始化标志、用户数） */
+        /** 运行时状态（版本、就绪、迁移版本、初始化标志、用户数与自举许可） */
         get: operations["getStatus"];
         put?: never;
         post?: never;
@@ -55,15 +55,213 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/replication-apply-logs": {
+    "/api/v1/formats/enabled": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** 复制接收审计记录（仅管理员） */
-        get: operations["getReplicationApplyLogs"];
+        /** 当前进程启用的协议格式（仅管理员） */
+        get: operations["getEnabledFormats"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/observability/audit/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 当前节点统一审计概览（仅管理员）
+         * @description 目标契约，待实现。仅全局管理员可读取。统一当前节点的不可变管理审计和复制尝试审计；不跨节点读取、
+         *     不返回原始诊断字段或任何凭据。`from` 与 `to` 必须同时提供或同时省略；省略时服务端
+         *     使用最近 24 小时。时间范围为 UTC `[from,to)`，最长 30 天。响应中的 `snapshot` 只能
+         *     与相同范围和筛选条件的事件查询共同使用。
+         */
+        get: operations["getAuditObservabilitySummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/observability/audit/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 当前节点统一审计事件（仅管理员）
+         * @description 目标契约，待实现。仅全局管理员可读取。返回主列表可安全展示的字段；客户端 IP 按策略返回（可关闭），
+         *     不得返回 User-Agent、请求标识、原始响应体、内部地址或任何凭据。`snapshot`、`cursor` 和 `eventId` 均为不透明服务端值，
+         *     客户端不得解析。携带 `snapshot` 时，时间范围与筛选条件必须与其签发请求一致。
+         */
+        get: operations["listAuditObservabilityEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/observability/audit/attentions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 当前节点风险关注批次（仅管理员）
+         * @description 仅全局管理员可读取。使用与审计概览、原始事件相同的稳定快照和筛选条件，返回服务端权威的
+         *     风险关注批次分页。`snapshot`、`cursor` 与 `attentionId` 均为不透明服务端值，客户端不得解析。
+         *     不返回原始审计详情、IP、User-Agent、请求标识、内部地址或凭据。
+         */
+        get: operations["listAuditAttentions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/observability/audit/events/{eventId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 当前节点统一审计事件详情（仅管理员）
+         * @description 目标契约，待实现。仅全局管理员可读取。详情只扩展服务端脱敏后的结果分类和变更摘要，不返回原始审计详情、
+         *     IP、User-Agent、请求标识、内部地址或任何凭据。
+         */
+        get: operations["getAuditObservabilityEvent"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/observability/audit/attention/{attentionId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 当前节点风险关注批次详情（仅管理员）
+         * @description 目标契约，待实现。仅全局管理员可读取。`attentionId` 是服务端签发的当前节点风险批次标识，客户端不得以
+         *     事件标识、时间桶或浏览器本地状态拼装它。响应安全分页列出该批次成员，并给出服务端
+         *     权威的未确认计数和确认身份快照；已确认批次仍可读取，供完整审计追溯。
+         */
+        get: operations["getAuditAttention"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/observability/audit/attention-acknowledgements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * 确认当前节点风险关注批次（仅管理员）
+         * @description 目标契约，待实现。仅全局管理员可写。请求只提交服务端签发的 `attentionId`，服务端在一个短 SQLite 事务内
+         *     展开并确认该标识绑定的不可变快照内全部未确认风险事件；签发后新增的风险事件不属于该次确认。
+         *     客户端不得枚举成员事件。重复或并发请求幂等，最先成功的确认身份快照和时间保持不变。确认状态与确认审计均不参与复制；备用节点按
+         *     既有只读规则返回 `503`。
+         */
+        put: operations["acknowledgeAuditAttention"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/observability/audit/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 当前节点风险通知批次分页（仅管理员）
+         * @description 仅全局管理员可读取。缺省请求（未携带任何筛选参数）保持页眉通知口径：服务端固定以当前时刻向前
+         *     24 小时筛选未确认风险批次，按失败优先、严重性和最新时间排序，`items` 最多返回 20 条预览，
+         *     `totalUnacknowledged` 表示全部数量，超过预览上限时 `hasMore` 为 true。携带
+         *     `from`/`to`/`status`/`limit`/`cursor` 时返回与 `status` 同口径的分页列表（时间排序），
+         *     `items` 可包含已确认批次，`total` 为该口径的权威总数。不得返回 IP、User-Agent、请求标识、
+         *     来源节点、内部地址或任何凭据。
+         */
+        get: operations["listAuditAttentionNotifications"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/observability/dashboard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 当前节点业务仪表盘（仅管理员）
+         * @description 只返回当前实例的真实协议聚合和逻辑制品容量，不含主机或其他节点数据。
+         */
+        get: operations["getOperationsDashboard"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/observability/host": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 当前主机监控（仅管理员）
+         * @description 只返回当前实例所在主机的持久化分钟样本，不读取或汇总其他节点。
+         */
+        get: operations["getHostMonitoring"];
         put?: never;
         post?: never;
         delete?: never;
@@ -81,7 +279,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** 首启管理员自举（仅在未初始化，即 user 表为空时可用） */
+        /** 首启管理员自举（仅空库且状态接口 bootstrapAllowed 为 true 时可用） */
         post: operations["bootstrap"];
         delete?: never;
         options?: never;
@@ -170,6 +368,24 @@ export interface paths {
         put?: never;
         /** 修改 / 重置用户口令 */
         post: operations["changePassword"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/{id}/publish-policies/{repo}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 获取用户在 Hosted 仓库的发布策略 */
+        get: operations["getPublishPolicy"];
+        /** 更新用户在 Hosted 仓库的发布策略 */
+        put: operations["putPublishPolicy"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -335,10 +551,31 @@ export interface paths {
         put?: never;
         /**
          * 批量删除仓库制品（仅管理员）
-         * @description 对每个 path 复用单条删除语义（元数据删 + 复制 tombstone）并逐条写 asset.delete 审计。
-         *     逐条尽力：部分失败进入 failed 明细，不做整体回滚。
+         * @deprecated
+         * @description 兼容入口。请求会委托统一资产操作事务引擎，整批成功或失败，不再部分成功。
          */
         post: operations["batchDeleteRepositoryAssets"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/repositories/{name}/assets/operations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 原子应用仓库制品操作（仅全局管理员）
+         * @description hosted 仓库的格式感知删除，以及 Raw 文件/目录移动和单项重命名。
+         *     递归展开后的实际制品（含派生 metadata）不得超过 500 个；整批失败时不产生部分变更。
+         */
+        post: operations["applyRepositoryAssetOperation"];
         delete?: never;
         options?: never;
         head?: never;
@@ -374,9 +611,31 @@ export interface paths {
         /**
          * 三来源发现并落库为 planned 任务（不同步执行）
          * @description 同步执行发现；成功写入一条 status=planned 的 migration_task，返回 taskId 与 plan。
+         *     online_rest 可提交 Nexus 基址与仅写入的 sourceAuth；认证材料只用于加密保存，绝不出现在响应。
          *     失败不落库。真正搬运须 POST /migrations/{id}/start。仅 admin。
          */
         post: operations["discoverMigrations"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/migrations/remote-repositories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 枚举在线 Nexus 仓库索引（仅管理员）
+         * @description 不创建迁移任务、不扫描资产。在线来源通过 sourceConfig 提供直填 Nexus 基址或兼容的 sourceRef。
+         *     可选 sourceAuth 仅用于本次请求，不会落库或出现在响应；credentialRef 仅兼容已有部署配置。
+         */
+        post: operations["listRemoteNexusRepositories"];
         delete?: never;
         options?: never;
         head?: never;
@@ -510,16 +769,581 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/backups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 备份包列表（分页，仅管理员） */
+        get: operations["listBackups"];
+        put?: never;
+        /**
+         * 生成备份包（仅管理员）
+         * @description hot：热备份，用 SQLite 一致性快照（VACUUM INTO）在不停服的前提下取快照。
+         *     frozen：冻结窗口备份，另需先经 freeze 端点停写。
+         *     包内只含 SQLite 快照与内容寻址 blob，不含任何密钥或节点本地配置。
+         */
+        post: operations["createBackup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/backups/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 备份包详情（仅管理员） */
+        get: operations["getBackup"];
+        put?: never;
+        post?: never;
+        /** 删除备份包（仅管理员） */
+        delete: operations["deleteBackup"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/backups/{id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 下载备份包归档
+         * @description 通过 /link 取得带时效的签名地址后使用，此时不要求会话；
+         *     已认证的管理员也可直接下载。签名令牌只对该包、该有效期有效。
+         */
+        get: operations["downloadBackup"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/backups/{id}/link": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 生成带时效的下载链接（仅管理员） */
+        post: operations["createBackupLink"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/backups/{id}/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 校验备份包完整性（仅管理员） */
+        post: operations["verifyBackup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/maintenance/freeze": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 查询写入冻结状态（仅管理员）
+         * @description 冻结期间节点拒绝本地业务与管理写入，但放行：读方法、登录、本维护命名空间，
+         *     以及备份导入/上传路径（否则冻结窗口内无法完成搬迁切换）。
+         */
+        get: operations["getWriteFreezeState"];
+        put?: never;
+        /**
+         * 冻结节点写入（仅管理员）
+         * @description 搬迁切换用：冻结 → 生成差包/导入 → 起服 → 解冻。
+         *     窗口必须有界：可给 until（绝对时间）或 ttlSeconds（相对秒数），两者都省略时用 ttlSeconds 默认 7200；
+         *     上限 24 小时。故意不提供「无限期冻结」——忘记解冻会让服务退化成假死。
+         */
+        post: operations["freezeWrites"];
+        /**
+         * 解冻节点写入（仅管理员）
+         * @description 幂等：未冻结时调用同样返回 200 与当前状态。
+         */
+        delete: operations["unfreezeWrites"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/backups/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 从 URL 拉取并导入备份包（仅管理员）
+         * @description 拉取 → 校验 → 合并 blob → 暂存 db → 写 restore.pending；**需重启服务后才生效**。
+         *     仅接受 http/https；拒绝回环、私网、链路本地与云元数据地址，并在每次拨号时重新解析地址
+         *     （防 DNS 重绑定）。
+         */
+        post: operations["importBackupFromURL"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/backups/imports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 导入记录列表（分页，仅管理员） */
+        get: operations["listBackupImports"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/backups/imports/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 导入记录详情（仅管理员） */
+        get: operations["getBackupImport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/backups/uploads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 发起分片上传会话（仅管理员）
+         * @description 返回服务端决定的分片大小（chunkSize）；前端据此切分。支持续传：会话以磁盘上真实存在的
+         *     分片为准，缺哪片补哪片，重复片幂等覆盖。
+         */
+        post: operations["createBackupUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/backups/uploads/{id}/chunks/{index}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * 上传单个分片（仅管理员）
+         * @description 请求体为原始分片字节（application/octet-stream）。分片大小必须 > 0 且 <= 服务端 chunkSize；
+         *     序号越界、累计超额、终态会话均被拒。成功返回当前会话（含已落盘分片），便于前端更新进度。
+         */
+        put: operations["uploadBackupChunk"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/backups/uploads/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 查询上传会话（续传用，仅管理员） */
+        get: operations["getBackupUpload"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/backups/uploads/{id}/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 拼装并触发本地导入（仅管理员）
+         * @description 校验分片齐全后按序拼成归档并核对摘要，再交给本地导入状态机（queued → staging → pending_restart）。
+         *     需重启服务才生效。目标非空需 overwrite=true。
+         */
+        post: operations["completeBackupUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/backups/uploads/{id}/abort": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 取消上传会话（仅管理员） */
+        post: operations["abortBackupUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description 当前节点的一次安全同步诊断事件；不含来源地址、令牌或原始错误。 */
+        ClusterSyncEvent: {
+            eventId: string;
+            /** @enum {string} */
+            triggerType: "automatic" | "manual" | "recovery";
+            actorUsername: string;
+            /** Format: int64 */
+            actorUserId?: number;
+            actorAuthSource: string;
+            /** @enum {string} */
+            direction: "primary_to_current_standby" | "parent_to_current" | "current_to_child";
+            /** Format: date-time */
+            startedAt: string;
+            /** Format: date-time */
+            finishedAt?: string;
+            /** @enum {string} */
+            result: "running" | "success" | "failure";
+            /** Format: int64 */
+            fromSeq: number;
+            /** Format: int64 */
+            toSeq: number;
+            /** Format: int64 */
+            observedPrimarySeq: number;
+            changes: number;
+            applied: number;
+            failed: number;
+            blobs: number;
+            stage: string;
+            errorCode: string;
+            errorSummary: string;
+            recoveryHint: string;
+        };
+        ClusterSyncEventPage: {
+            items: components["schemas"]["ClusterSyncEvent"][];
+            total: number;
+        };
+        /** @description 同步关联变更的安全摘要；不返回复制原始数据。 */
+        ClusterSyncChange: {
+            /** Format: int64 */
+            seq: number;
+            /** @enum {string} */
+            op: "put" | "delete";
+            entityType: string;
+            target: string;
+            /** Format: date-time */
+            occurredAt: string;
+        };
+        ClusterSyncChangePage: {
+            items: components["schemas"]["ClusterSyncChange"][];
+            total: number;
+        };
+        /** @description 当前节点与一个直接邻接节点之间的复制边状态；不表示全局拓扑。 */
+        ClusterNeighbor: {
+            edgeId: string;
+            /** @enum {string} */
+            relation: "parent" | "child";
+            nodeId: string;
+            relayEnabled: boolean;
+            /** @enum {string} */
+            state: "disabled" | "not_applicable" | "unpaired" | "paused" | "syncing" | "failed" | "stale" | "healthy" | "unknown";
+            stateReason: string;
+            /** @enum {string} */
+            direction: "parent_to_current" | "current_to_child";
+            fresh?: boolean;
+            /** Format: int64 */
+            watermark: number;
+            hasWatermark: boolean;
+            /** Format: int64 */
+            pending: number;
+            /** Format: int64 */
+            readyRecords: number;
+            /** Format: int64 */
+            pendingRecords: number;
+            /** Format: int64 */
+            readyOperations?: number;
+            /** Format: int64 */
+            pendingBlobs?: number;
+            /** Format: date-time */
+            lastRequestAt?: string;
+            /** Format: date-time */
+            lastSuccessAt?: string;
+            lastErrorStage?: string;
+            lastErrorCode?: string;
+            lastErrorSummary?: string;
+            /** @enum {string} */
+            credentialState?: "unpaired" | "verified" | "revoked" | "invalid";
+        };
+        /** @description 当前节点及直接邻接复制边概览；不返回全局拓扑、令牌、环境变量或原始错误。 */
+        ClusterObservability: {
+            /** @enum {string} */
+            role: "primary" | "standby" | "disabled";
+            writeEnabled: boolean;
+            relayEnabled: boolean;
+            /** @enum {string} */
+            scope: "local_neighbors";
+            sourceConfigured: boolean;
+            /** @enum {string} */
+            state: "disabled" | "not_applicable" | "unpaired" | "paused" | "syncing" | "failed" | "stale" | "healthy" | "unknown";
+            stateReason: string;
+            effectiveSyncIntervalSeconds: number;
+            /** Format: int64 */
+            watermark: number;
+            hasWatermark: boolean;
+            /** Format: date-time */
+            lastSyncAt?: string;
+            /** Format: int64 */
+            observedPending?: number;
+            streamGeneration?: string;
+            latestEvent?: components["schemas"]["ClusterSyncEvent"];
+            parent?: components["schemas"]["ClusterNeighbor"];
+            children: components["schemas"]["ClusterNeighbor"][];
+            events: components["schemas"]["ClusterSyncEvent"][];
+            standbyReport?: components["schemas"]["StandbySyncReport"];
+        };
+        /**
+         * @description FR-119：primary 经现有复制互信通道（仅 GET 拉取）收到的备用节点观测快照聚合。
+         *     仅 role=primary 且至少收到一次上报时返回；不含凭据、令牌、环境变量或对端地址。
+         */
+        StandbySyncReport: {
+            /** @description 备用节点稳定 ID；取自鉴权请求头，不信任快照内自报身份。 */
+            nodeId: string;
+            /**
+             * Format: date-time
+             * @description primary 收到最近一次快照的时间。
+             */
+            lastReportAt: string;
+            /** @description 服务端判定最近上报是否新鲜（距 lastReportAt 未超过 3 个有效同步间隔）；前端不得自行计算。 */
+            fresh: boolean;
+            /** Format: int64 */
+            watermark: number;
+            hasWatermark: boolean;
+            /** @description 备用节点最近上报的复制接收审计窗口（按最近看到时间倒序，最多 15 条）。 */
+            applyLogs: components["schemas"]["StandbySyncApplyLog"][];
+            /** @description 备用节点最近上报的同步事件窗口（按开始时间倒序，最多 15 条）。 */
+            syncEvents: components["schemas"]["ClusterSyncEvent"][];
+        };
+        /** @description 备用节点接收审计的安全瘦身投影（FR-119）；不含 peer URL、令牌或原始错误。 */
+        StandbySyncApplyLog: {
+            sourceNode: string;
+            /** Format: int64 */
+            sourceSeq: number;
+            sourceActor: string;
+            sourceAuthSource: string;
+            operationId: string;
+            entityType: string;
+            entityKey: string;
+            op: string;
+            /** @enum {string} */
+            result: "applied" | "metadata_applied_pending_blob" | "lww_skipped" | "pending_parent" | "blob_failed" | "skipped_permanent" | "failed";
+            detail: string;
+            lastError?: string;
+            lastErrorAt?: string;
+            firstSeenAt: string;
+            lastSeenAt: string;
+            attemptCount: number;
+        };
+        /** @enum {string} */
+        ObservabilityBucket: "minute" | "hour" | "day";
+        ProtocolMetricPoint: {
+            /** Format: date-time */
+            from: string;
+            /** Format: date-time */
+            to: string;
+            /** Format: int64 */
+            requestCount: number;
+            /** Format: int64 */
+            downloadCount: number;
+            /** Format: int64 */
+            failureCount: number;
+            /** Format: int64 */
+            cacheHitCount: number;
+            /** Format: int64 */
+            cacheMissCount: number;
+        };
+        CapacityPoint: {
+            /** Format: date-time */
+            from: string;
+            /** Format: date-time */
+            to: string;
+            /** Format: int64 */
+            repositoryCount: number;
+            /** Format: int64 */
+            assetCount: number;
+            /** Format: int64 */
+            logicalBytes: number;
+        };
+        OperationsAlert: {
+            code: string;
+            /** @enum {string} */
+            severity: "warning" | "critical";
+            source: string;
+            /** Format: date-time */
+            observedAt: string;
+            /** Format: date-time */
+            firstObservedAt?: string;
+            /** Format: date-time */
+            blockedUntil?: string;
+        };
+        OperationsDashboard: {
+            /** Format: date-time */
+            from: string;
+            /** Format: date-time */
+            to: string;
+            effectiveBucket: components["schemas"]["ObservabilityBucket"];
+            current: components["schemas"]["CapacityPoint"];
+            kpi: components["schemas"]["OperationsDashboardKpi"];
+            requestTrend: components["schemas"]["ProtocolMetricPoint"][];
+            capacityTrend: components["schemas"]["CapacityPoint"][];
+            alerts: components["schemas"]["OperationsAlert"][];
+        };
+        /** @description 服务端按当前范围聚合的权威仪表盘 KPI；客户端不得自行从趋势重新计算。 */
+        OperationsDashboardKpi: {
+            /** Format: int64 */
+            repositoryCount: number;
+            /** Format: int64 */
+            assetCount: number;
+            /** Format: int64 */
+            logicalBytes: number;
+            /** Format: int64 */
+            requestCount: number;
+            /** Format: int64 */
+            downloadCount: number;
+            /** Format: int64 */
+            failureCount: number;
+            /**
+             * Format: double
+             * @description 命中数除以命中与未命中样本数；无缓存样本时为 null。
+             */
+            cacheHitRate: number | null;
+        };
+        /** @enum {string} */
+        MetricGroupState: "ok" | "unavailable" | "unsupported" | "error";
+        HostMetricGroup: {
+            state: components["schemas"]["MetricGroupState"];
+            errorCode?: string;
+        };
+        HostMetricPoint: {
+            /** Format: date-time */
+            from: string;
+            /** Format: date-time */
+            to: string;
+            hostState: components["schemas"]["HostMetricGroup"];
+            networkState: components["schemas"]["HostMetricGroup"];
+            processState: components["schemas"]["HostMetricGroup"];
+            readinessState: components["schemas"]["HostMetricGroup"];
+            /** Format: double */
+            cpuPercent?: number | null;
+            /** Format: int64 */
+            memoryTotalBytes?: number | null;
+            /** Format: int64 */
+            memoryAvailableBytes?: number | null;
+            /** Format: int64 */
+            diskAvailableBytes?: number | null;
+            /** Format: double */
+            networkReceiveBytesPerSecond?: number | null;
+            /** Format: double */
+            networkTransmitBytesPerSecond?: number | null;
+            /** Format: int64 */
+            processRssBytes?: number | null;
+            /** Format: double */
+            processCpuPercent?: number | null;
+            /** Format: int64 */
+            goroutineCount?: number | null;
+            /** Format: int64 */
+            openFileDescriptors?: number | null;
+        };
+        HostMonitoring: {
+            /** @enum {string} */
+            hostState: "healthy" | "stale" | "unknown";
+            /** Format: date-time */
+            latestSampleAt?: string;
+            effectiveBucket: components["schemas"]["ObservabilityBucket"];
+            latest?: components["schemas"]["HostMetricPoint"];
+            samples: components["schemas"]["HostMetricPoint"][];
+        };
         HealthStatus: {
             /** @enum {string} */
             status: "ok" | "degraded" | "unavailable";
             version: string;
         };
         Error: {
+            /** @description 统一制品操作失败时返回的追踪标识 */
+            operationId?: string;
+            error: {
+                code: string;
+                message: string;
+            };
+        };
+        AssetOperationError: {
+            /** @description 统一制品操作失败的追踪标识 */
+            operationId: string;
             error: {
                 code: string;
                 message: string;
@@ -529,6 +1353,11 @@ export interface components {
             sourceNode: string;
             /** Format: int64 */
             sourceSeq: number;
+            sourceActor: string;
+            /** Format: int64 */
+            sourceUserId?: number;
+            sourceAuthSource: string;
+            operationId: string;
             peerUrl: string;
             entityType: string;
             entityKey: string;
@@ -546,12 +1375,298 @@ export interface components {
             items: components["schemas"]["ReplicationApplyLog"][];
             total: number;
         };
+        /**
+         * @description 服务端归一化的审计分类，不以底层技术来源作为主分类。
+         * @enum {string}
+         */
+        AuditCategory: "management_change" | "asset_change" | "security_event" | "replication";
+        /**
+         * @description 服务端归一化的单条审计结果。
+         * @enum {string}
+         */
+        AuditResult: "success" | "failure" | "pending" | "unknown";
+        /**
+         * @description 风险关注批次的聚合结果；mixed 表示同时存在多种单条结果。
+         * @enum {string}
+         */
+        AuditAttentionResult: "success" | "failure" | "pending" | "unknown" | "mixed";
+        /**
+         * @description 服务端按固定风险映射给出的严重性。
+         * @enum {string}
+         */
+        AuditSeverity: "normal" | "high" | "critical";
+        /**
+         * @description 风险关注批次中是否仍存在未确认风险来源。
+         * @enum {string}
+         */
+        AuditAttentionState: "unacknowledged" | "acknowledged";
+        /**
+         * @description 通知中心按批次确认状态的筛选口径。
+         * @enum {string}
+         */
+        AuditNotificationStatus: "unacknowledged" | "acknowledged" | "all";
+        /** @description 服务端脱敏后的审计对象；label 不得包含内部地址、凭据或原始诊断内容。 */
+        AuditTarget: {
+            /** @enum {string} */
+            kind: "repository" | "artifact" | "user" | "token" | "acl" | "setting" | "migration" | "cluster" | "other";
+            label: string;
+            repository?: string;
+        };
+        /**
+         * @description 记录时固化的安全身份快照。用户名、认证来源和可选用户 ID 均不依赖用户当前是否仍存在；
+         *     不包含令牌标识或认证材料。
+         */
+        AuditActorSnapshot: {
+            displayName: string;
+            /** @enum {string} */
+            subjectType: "user" | "system" | "anonymous" | "replication";
+            /** Format: int64 */
+            userId?: number;
+            authSource: string;
+            /** @description 记录时固化的操作者邮箱（若账号已绑定），用于审计检索与人工对照。 */
+            email?: string;
+        };
+        /** @description 最先成功确认时固化的管理员身份和时间。该快照不因确认人随后被删除而变化，也不参与节点复制。 */
+        AuditAcknowledgement: {
+            acknowledgedBy: components["schemas"]["AuditActorSnapshot"];
+            /** Format: date-time */
+            acknowledgedAt: string;
+        };
+        /** @description 单条风险事件在其服务端风险关注批次中的确认状态。 */
+        AuditEventAttention: {
+            /** @description 服务端签发的不透明风险关注批次标识，客户端不得解析或拼装。 */
+            attentionId: string;
+            state: components["schemas"]["AuditAttentionState"];
+            acknowledgement?: components["schemas"]["AuditAcknowledgement"];
+        };
+        /**
+         * @description 当前节点统一审计事件的安全展示字段。客户端 IP 仅在管理员审计视图按策略返回（可关闭）；
+         *     不得以本对象返回 User-Agent、请求标识、原始响应体、内部地址、令牌标识或任何凭据。
+         */
+        AuditEvent: {
+            /** @description 服务端签发的不透明事件标识，客户端不得解析或拼装。 */
+            eventId: string;
+            /** Format: date-time */
+            occurredAt: string;
+            category: components["schemas"]["AuditCategory"];
+            severity: components["schemas"]["AuditSeverity"];
+            result: components["schemas"]["AuditResult"];
+            /** @description 服务端映射的稳定操作名称。 */
+            action: string;
+            target: components["schemas"]["AuditTarget"];
+            actor: components["schemas"]["AuditActorSnapshot"];
+            /** @description 服务端脱敏的可行动摘要。 */
+            summary: string;
+            /** @description 可选的本节点操作关联标识；仅供管理员跨节点人工对照，不表示远端已应用。 */
+            operationId?: string;
+            attention?: components["schemas"]["AuditEventAttention"];
+            http?: components["schemas"]["AuditHttpContext"];
+            /**
+             * Format: int64
+             * @description 服务端处理耗时（毫秒）。
+             */
+            durationMs?: number;
+            /**
+             * @description 发起请求的客户端 IP。仅管理员审计视图按策略返回（可配置关闭），
+             *     不得用于凭据用途，也不得在复制/导出通道外传播。
+             */
+            clientIp?: string;
+        };
+        /**
+         * @description 脱敏后的 HTTP 上下文：请求方法、归一化路由模板、响应状态码与排障辅助信息。
+         *     路径为路由模板（如 /api/v1/admin/accounts/{id}），不含查询串或内部地址。
+         *     请求体与令牌预览必须脱敏（掩码/截断），不得出现凭据原文。
+         */
+        AuditHttpContext: {
+            /** @enum {string} */
+            method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS";
+            path: string;
+            /** @description HTTP 响应状态码。 */
+            statusCode?: number;
+            /** @description 服务端请求标识（可用于工单/日志对照，不承载鉴权语义）。 */
+            requestId?: string;
+            /** @description 客户端 User-Agent 原文（仅管理员审计视图返回）。 */
+            userAgent?: string;
+            /** @description 认证令牌的脱敏预览（形如 Bearer eyJhbG****1dnM）。 */
+            tokenPreview?: string;
+            /**
+             * @description 脱敏后的请求体（JSON 文本，敏感字段已掩码）。
+             *     仅管理员审计视图返回，不得包含凭据、令牌或个人信息原文。
+             */
+            bodyPreview?: string;
+        };
+        /**
+         * @description 事件详情允许扩展的脱敏字段。不得回显原始 detail、堆栈、原始响应体、内部地址、
+         *     请求标识、IP、User-Agent 或任何凭据。
+         */
+        AuditEventSafeDetails: {
+            resultSummary: string;
+            /** @description 服务端归一化错误分类，不包含原始错误文本。 */
+            errorClass?: string;
+            affectedCount: number;
+        };
+        /** @description 当前节点统一审计事件详情；只返回安全字段。 */
+        AuditEventDetail: {
+            event: components["schemas"]["AuditEvent"];
+            details: components["schemas"]["AuditEventSafeDetails"];
+        };
+        AuditCategoryCount: {
+            category: components["schemas"]["AuditCategory"];
+            count: number;
+        };
+        AuditTrendPoint: {
+            /** Format: date-time */
+            from: string;
+            /** Format: date-time */
+            to: string;
+            totalCount: number;
+            failureCount: number;
+            categoryCounts: components["schemas"]["AuditCategoryCount"][];
+        };
+        /** @description 当前节点统一审计的筛选范围概览和稳定读取边界。 */
+        AuditObservabilitySummary: {
+            /** @description 服务端签发的不透明稳定读取边界；不得解析、修改或跨筛选条件复用。 */
+            snapshot: string;
+            /** Format: date-time */
+            snapshotAt: string;
+            totalCount: number;
+            successCount: number;
+            failureCount: number;
+            /**
+             * Format: double
+             * @description 最终结果为成功或失败的事件中，失败事件所占比例。
+             */
+            failureRate: number;
+            /** @description 仅按稳定用户 ID 或非空身份快照去重的账号数；系统、匿名和复制来源不计入。 */
+            distinctActorCount: number;
+            /** @description 客户端 IP 去重数量（客户端 IP 按策略可用时统计，否则为 0）。 */
+            distinctClientIpCount?: number;
+            /**
+             * Format: int64
+             * @description 平均处理耗时（毫秒；无样本时为 0）。
+             */
+            averageDurationMs?: number;
+            /** @description 慢请求数（处理耗时 ≥ 阈值，默认 1000ms）。 */
+            slowRequestCount?: number;
+            /** @description 4xx 客户端错误数。 */
+            clientErrorCount?: number;
+            /** @description 5xx 服务端错误数。 */
+            serverErrorCount?: number;
+            highRiskCount: number;
+            categoryCounts: components["schemas"]["AuditCategoryCount"][];
+            /** @description 服务端按范围固定粒度返回的趋势桶。 */
+            trend: components["schemas"]["AuditTrendPoint"][];
+        };
+        AuditEventPage: {
+            items: components["schemas"]["AuditEvent"][];
+            totalCount: number;
+            /** @description 下一页的不透明游标；没有下一页时省略。 */
+            nextCursor?: string;
+            /** @description 与审计概览和同筛选事件页共享的不透明稳定读取边界。 */
+            snapshot: string;
+            /** Format: date-time */
+            snapshotAt: string;
+        };
+        /** @description 与审计概览和原始事件共享稳定快照的服务端风险关注批次分页。 */
+        AuditAttentionPage: {
+            items: components["schemas"]["AuditAttention"][];
+            totalCount: number;
+            /** @description 下一页不透明游标；没有下一页时省略。 */
+            nextCursor?: string;
+            /** @description 与审计概览和原始事件共享的不透明稳定读取边界。 */
+            snapshot: string;
+            /** Format: date-time */
+            snapshotAt: string;
+        };
+        /**
+         * @description 当前节点风险关注批次的安全摘要。该批次由服务端定义；客户端不得按操作、时间桶或事件列表
+         *     自行构造确认边界。
+         */
+        AuditAttentionPreview: {
+            /** @description 服务端签发的不透明风险关注批次标识，客户端不得解析或拼装。 */
+            attentionId: string;
+            state: components["schemas"]["AuditAttentionState"];
+            /** @description 批次成员按固定审计分类汇总；至少包含一个分类，按审计分类枚举顺序返回。 */
+            categoryCounts: components["schemas"]["AuditCategoryCount"][];
+            severity: components["schemas"]["AuditSeverity"];
+            /** Format: date-time */
+            firstOccurredAt: string;
+            /** Format: date-time */
+            latestOccurredAt: string;
+            result: components["schemas"]["AuditAttentionResult"];
+            /** @description 服务端按失败、严重性、发生时间和稳定事件标识优先级选出的风险批次主要操作名称。 */
+            action: string;
+            target: components["schemas"]["AuditTarget"];
+            /** @description 服务端脱敏的可行动摘要。 */
+            summary: string;
+            successCount: number;
+            failureCount: number;
+            affectedCount: number;
+            unacknowledgedRiskEventCount: number;
+            /** @description 可选的本节点操作关联标识；仅供管理员跨节点人工对照，不表示远端已应用。 */
+            operationId?: string;
+            firstAcknowledgement?: components["schemas"]["AuditAcknowledgement"];
+        };
+        AuditAttention: components["schemas"]["AuditAttentionPreview"] & {
+            riskEventCount: number;
+            acknowledgedRiskEventCount: number;
+        };
+        /** @description 当前节点风险关注批次详情和安全成员分页。 */
+        AuditAttentionDetail: {
+            attention: components["schemas"]["AuditAttention"];
+            items: components["schemas"]["AuditEvent"][];
+            totalCount: number;
+            /** @description 下一页的不透明游标；没有下一页时省略。 */
+            nextCursor?: string;
+        };
+        /** @description 只接受服务端签发的风险关注批次标识；身份从当前会话取得，客户端不得提交确认人、时间或成员事件。 */
+        AcknowledgeAuditAttentionRequest: {
+            attentionId: string;
+        };
+        /**
+         * @description 原子确认结果。重复或并发请求返回同一批次最先成功的确认身份快照和时间；
+         *     `newlyAcknowledgedCount` 为本请求实际新增确认的风险事件数。
+         */
+        AcknowledgeAuditAttentionResponse: {
+            attentionId: string;
+            firstAcknowledgement: components["schemas"]["AuditAcknowledgement"];
+            /** @description attentionId 绑定快照内风险成员总数，不受本次是否重复确认影响。 */
+            totalRiskEventCount: number;
+            newlyAcknowledgedCount: number;
+            unacknowledgedRiskEventCount: number;
+        };
+        /**
+         * @description 当前节点风险通知批次分页。缺省请求（未携带任何筛选参数）保持页眉通知口径：最近 24 小时、
+         *     仅未确认批次、失败优先排序、最多 20 条预览，并返回 `totalUnacknowledged`（等于该请求下的
+         *     `total`）供页眉徽标使用；携带 `from`/`to`/`status`/`limit`/`cursor` 时返回与 `status`
+         *     同口径的分页列表（时间排序），`items` 可包含已确认批次。
+         */
+        AuditAttentionNotificationList: {
+            items: components["schemas"]["AuditAttentionPreview"][];
+            /** @description 与请求 `status` 筛选同口径的通知批次总数（分页权威总数）。 */
+            total: number;
+            /**
+             * @description 最近 24 小时未确认风险批次总数（页眉徽标口径）。仅缺省请求返回，
+             *     与缺省请求下的 `total` 相等；保留该字段是为了兼容既有页眉客户端。
+             */
+            totalUnacknowledged?: number;
+            /** @description 是否还有下一页；由 `limit` 与匹配总数决定。 */
+            hasMore: boolean;
+            /** @description 下一页的不透明游标；没有下一页时省略。 */
+            nextCursor?: string;
+        };
         StatusInfo: {
             version: string;
             ready: boolean;
             initialized: boolean;
             migrationVersion: string;
             userCount: number;
+            /** @description 当前实例是否允许首个管理员自举；备用节点即使空库也始终为 false */
+            bootstrapAllowed: boolean;
+        };
+        EnabledFormats: {
+            /** @description 当前进程启动时启用的格式，按字典序返回 */
+            formats: ("raw" | "maven" | "npm" | "docker" | "cargo" | "pypi" | "gomod" | "nuget")[];
         };
         BootstrapRequest: {
             username: string;
@@ -573,6 +1688,8 @@ export interface components {
             role: "admin" | "user";
             /** @enum {string} */
             status: "active" | "disabled";
+            /** @description 是否禁止该账号登录 Web 与管理 API；不影响原生协议账号密码发布 */
+            webLoginDisabled: boolean;
             createdAt: string;
         };
         UserList: {
@@ -593,6 +1710,49 @@ export interface components {
             role?: "admin" | "user";
             /** @enum {string} */
             status?: "active" | "disabled";
+            /** @description 是否禁止该账号登录 Web 与管理 API；不影响原生协议账号密码发布 */
+            webLoginDisabled?: boolean;
+        };
+        PublishPolicyRequest: {
+            /** @description 是否禁止该账号登录 Web 与管理 API */
+            webLoginDisabled?: boolean;
+            /** @description 可选的发布路径前缀；空数组表示不限制前缀 */
+            allowedPrefixes?: string[];
+            /** @description allowedPrefixes 的兼容别名 */
+            pathPrefixes?: string[];
+            /**
+             * Format: int64
+             * @description 每小时新增制品数上限；零表示不限制
+             */
+            maxAssetsHour?: number;
+            /**
+             * Format: int64
+             * @description 每日上传总字节上限；零表示不限制
+             */
+            maxBytesDay?: number;
+            /**
+             * Format: int64
+             * @description 单文件字节上限；零表示不限制
+             */
+            maxFileBytes?: number;
+            /** @description 已废弃，只读兼容字段；写入会被拒绝，请改用仓库 immutableRelease 配置 */
+            immutableRelease?: boolean;
+        };
+        PublishPolicyResponse: {
+            /** Format: int64 */
+            userId: number;
+            username: string;
+            webLoginDisabled: boolean;
+            repository: string;
+            allowedPrefixes: string[];
+            /** Format: int64 */
+            maxAssetsHour: number;
+            /** Format: int64 */
+            maxBytesDay: number;
+            /** Format: int64 */
+            maxFileBytes: number;
+            /** @description 只读兼容字段，值来自仓库 immutableRelease 配置 */
+            immutableRelease: boolean;
         };
         PasswordChangeRequest: {
             password: string;
@@ -622,7 +1782,7 @@ export interface components {
             id: number;
             name: string;
             /** @enum {string} */
-            format: "raw" | "maven" | "npm";
+            format: "raw" | "maven" | "npm" | "docker" | "cargo" | "pypi" | "gomod" | "nuget";
             /** @enum {string} */
             type: "hosted" | "proxy" | "group";
             /** @enum {string} */
@@ -635,6 +1795,10 @@ export interface components {
             description?: string;
             /** @description proxy 仓库的上游地址（仅 type=proxy） */
             remoteUrl?: string;
+            /** @description proxy 上游凭据的受限逻辑名称；运行时仅从 JIAN_UPSTREAM_CREDENTIAL_<名称> 读取（仅 type=proxy，非密钥明文） */
+            credentialRef?: string;
+            /** @description hosted 仓库是否拒绝覆盖已存在的 Release */
+            immutableRelease?: boolean;
             /** @description group 仓库的成员仓库名（有序，仅 type=group） */
             members?: string[];
             createdAt: string;
@@ -653,7 +1817,7 @@ export interface components {
         CreateRepositoryRequest: {
             name: string;
             /** @enum {string} */
-            format: "raw" | "maven" | "npm";
+            format: "raw" | "maven" | "npm" | "docker" | "cargo" | "pypi" | "gomod" | "nuget";
             /** @enum {string} */
             type: "hosted" | "proxy" | "group";
             /**
@@ -665,6 +1829,10 @@ export interface components {
             description?: string;
             /** @description proxy 仓库的上游地址（type=proxy 时必填） */
             remoteUrl?: string;
+            /** @description proxy 上游凭据的受限逻辑名称；运行时仅从 JIAN_UPSTREAM_CREDENTIAL_<名称> 读取（仅 type=proxy，非密钥明文） */
+            credentialRef?: string;
+            /** @description 创建 hosted 仓库时是否拒绝覆盖已存在的 Release */
+            immutableRelease?: boolean;
             /** @description group 仓库的成员仓库名（有序，type=group 时必填） */
             members?: string[];
         };
@@ -675,6 +1843,10 @@ export interface components {
             description?: string;
             /** @description 更新 proxy 上游地址（仅 type=proxy） */
             remoteUrl?: string;
+            /** @description 更新 proxy 上游凭据的受限逻辑名称；运行时仅从 JIAN_UPSTREAM_CREDENTIAL_<名称> 读取（仅 type=proxy，非密钥明文） */
+            credentialRef?: string;
+            /** @description 更新 hosted 仓库是否拒绝覆盖已存在的 Release */
+            immutableRelease?: boolean;
             /** @description 更新 group 成员仓库名（仅 type=group） */
             members?: string[];
         };
@@ -730,6 +1902,8 @@ export interface components {
         BatchDeleteAssetsRequest: {
             /** @description 待删除的制品路径列表（单条非空，上限 500 条） */
             paths: string[];
+            /** @description 管理员执行批量删除的原因 */
+            overrideReason: string;
         };
         BatchDeleteAssetFailure: {
             path: string;
@@ -738,8 +1912,30 @@ export interface components {
         BatchDeleteAssetsResponse: {
             /** @description 成功删除的制品数 */
             deleted: number;
-            /** @description 删除失败的路径与原因明细（成功数不受其影响） */
+            /** @description 兼容字段；统一事务成功时始终为空数组 */
             failed: components["schemas"]["BatchDeleteAssetFailure"][];
+        };
+        AssetOperationRequest: {
+            /** @enum {string} */
+            action: "delete" | "move" | "rename";
+            targets: components["schemas"]["AssetOperationTarget"][];
+            /** @description move 的目标目录；保留所选文件名和相对层级 */
+            destinationPath?: string;
+            /** @description rename 的新完整路径，仅允许单项 */
+            newPath?: string;
+            /** @description 管理员执行资产变更的原因，协议端点不要求此字段 */
+            overrideReason: string;
+        };
+        AssetOperationTarget: {
+            /** @enum {string} */
+            type: "raw_path" | "maven_version" | "maven_artifact" | "npm_package" | "npm_version" | "asset_path";
+            /** @description 目标路径或格式逻辑标识；npm_version 使用 package@version */
+            path: string;
+        };
+        AssetOperationResponse: {
+            operationId: string;
+            /** @description 实际变更的资产数量 */
+            affected: number;
         };
         UsageSnippet: {
             title: string;
@@ -762,18 +1958,90 @@ export interface components {
         MigrationConflictPolicy: "skip" | "overwrite" | "fail";
         /** @enum {string} */
         MigrationTaskStatus: "planned" | "running" | "completed" | "failed" | "cancelled";
-        /** @description 来源配置（url/path 等），不得含密钥明文 */
-        MigrationSourceConfig: {
-            [key: string]: unknown;
+        /**
+         * @description 在线 Nexus 来源认证方式；不包含用户名、密码或令牌。
+         * @enum {string}
+         */
+        MigrationSourceAuthType: "anonymous" | "basic" | "bearer";
+        MigrationSourceAuthAnonymous: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "anonymous";
+        };
+        MigrationSourceAuthBasic: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "basic";
+            /** @description Nexus 用户名或 User Token 名称；仅写入。 */
+            username: string;
+            /** @description Nexus 密码或 User Token Passcode；仅写入。 */
+            password: string;
+        };
+        MigrationSourceAuthBearer: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "bearer";
+            /** @description Nexus JWT、Access Token 或 npm Token；仅写入。 */
+            token: string;
+        };
+        /** @description 在线 Nexus 来源认证材料；仅请求写入，服务端加密保存，永不在响应、任务、报告或日志中返回。 */
+        MigrationSourceAuth: components["schemas"]["MigrationSourceAuthAnonymous"] | components["schemas"]["MigrationSourceAuthBasic"] | components["schemas"]["MigrationSourceAuthBearer"];
+        RemoteNexusRepositoryRequest: {
+            sourceConfig: components["schemas"]["RemoteNexusSourceConfig"];
+            /** @description 兼容已有在线来源的上游凭据逻辑名称；与 sourceAuth 互斥。 */
+            credentialRef?: string;
+            sourceAuth?: components["schemas"]["MigrationSourceAuth"];
+        };
+        /** @description 在线 Nexus 来源配置；直填 URL 或兼容 sourceRef 二选一，禁止认证材料和离线路径。 */
+        RemoteNexusSourceConfig: components["schemas"]["MigrationOnlineURLSourceConfig"] | components["schemas"]["MigrationOnlineSourceRefConfig"];
+        RemoteNexusRepository: {
+            name: string;
+            format: string;
+            /** @enum {string} */
+            type: "hosted" | "proxy" | "group";
+        };
+        RemoteNexusRepositoryList: {
+            items: components["schemas"]["RemoteNexusRepository"][];
+            total: number;
+        };
+        /** @description 来源配置。online_rest 提供 url 或 sourceRef 二选一；offline_dir 与 offline_bundle 仅提供 path。禁止认证材料和其他字段。 */
+        MigrationSourceConfig: components["schemas"]["MigrationOnlineURLSourceConfig"] | components["schemas"]["MigrationOnlineSourceRefConfig"] | components["schemas"]["MigrationOfflineSourceConfig"];
+        MigrationOnlineURLSourceConfig: {
+            /**
+             * Format: uri
+             * @description 外部 Nexus REST 基址；仅允许无用户信息、查询参数和片段的绝对 http 或 https URL。
+             */
+            url: string;
+        };
+        MigrationOnlineSourceRefConfig: {
+            /** @description 兼容已有任务的受限逻辑来源名称；运行时仅从 JIAN_MIGRATION_SOURCE_<名称> 读取。 */
+            sourceRef: string;
+        };
+        MigrationOfflineSourceConfig: {
+            /** @description 离线目录或离线导出包路径。 */
+            path: string;
         };
         MigrationPlanRepository: {
             name: string;
             /** @enum {string} */
-            format: "raw" | "maven" | "npm";
+            format: "raw" | "maven" | "npm" | "docker" | "cargo" | "pypi" | "gomod" | "nuget";
             /** @enum {string} */
             type?: "hosted" | "proxy" | "group";
             /** Format: int64 */
             estimatedAssets?: number;
+            /** @description 无敏感的目标配置摘要 */
+            config?: {
+                [key: string]: unknown;
+            };
+            /** @enum {string} */
+            migrationMode?: "assets" | "proxy_config" | "group_config" | "unsupported";
+            warnings?: string[];
         };
         MigrationPlan: {
             repositories: components["schemas"]["MigrationPlanRepository"][];
@@ -783,6 +2051,8 @@ export interface components {
             };
             /** @description 资产数是否为估算 */
             estimated?: boolean;
+            /** @description online_rest 的受限逻辑来源名称；运行时仅从 JIAN_MIGRATION_SOURCE_<名称> 读取，不包含 URL、主机名、IP 或凭据 */
+            sourceRef?: string;
         };
         MigrationTask: {
             /** Format: int64 */
@@ -790,8 +2060,9 @@ export interface components {
             status: components["schemas"]["MigrationTaskStatus"];
             sourceType: components["schemas"]["MigrationSourceType"];
             sourceConfig?: components["schemas"]["MigrationSourceConfig"];
-            /** @description 环境变量引用名，非密钥明文 */
+            /** @description 上游凭据的受限逻辑名称；运行时仅从 JIAN_UPSTREAM_CREDENTIAL_<名称> 读取，非密钥明文 */
             credentialRef?: string;
+            sourceAuthType?: components["schemas"]["MigrationSourceAuthType"];
             conflictPolicy: components["schemas"]["MigrationConflictPolicy"];
             plan?: components["schemas"]["MigrationPlan"];
             errorMessage?: string;
@@ -807,7 +2078,9 @@ export interface components {
         CreateMigrationRequest: {
             sourceType: components["schemas"]["MigrationSourceType"];
             sourceConfig?: components["schemas"]["MigrationSourceConfig"];
+            /** @description 兼容已有在线来源的上游凭据逻辑名称；与 sourceAuth 互斥。 */
             credentialRef?: string;
+            sourceAuth?: components["schemas"]["MigrationSourceAuth"];
             conflictPolicy?: components["schemas"]["MigrationConflictPolicy"];
             plan?: components["schemas"]["MigrationPlan"];
         };
@@ -818,7 +2091,9 @@ export interface components {
         MigrationDiscoverRequest: {
             sourceType: components["schemas"]["MigrationSourceType"];
             sourceConfig?: components["schemas"]["MigrationSourceConfig"];
+            /** @description 兼容已有在线来源的上游凭据逻辑名称；与 sourceAuth 互斥。 */
             credentialRef?: string;
+            sourceAuth?: components["schemas"]["MigrationSourceAuth"];
             conflictPolicy?: components["schemas"]["MigrationConflictPolicy"];
         };
         MigrationDiscoverResponse: {
@@ -851,6 +2126,154 @@ export interface components {
             raw?: {
                 [key: string]: unknown;
             };
+        };
+        /** @description 包内各实体记录数，供导入端核对规模。 */
+        BackupCounts: {
+            users?: number;
+            tokens?: number;
+            repositories?: number;
+            acls?: number;
+            assets?: number;
+            formatMetadata?: number;
+        };
+        /** @description 节点备份包登记（包体为 tar.gz，不含密钥与节点本地配置）。 */
+        BackupPackage: {
+            packageId: string;
+            /** @enum {string} */
+            mode: "hot" | "frozen";
+            /** @description 非空表示这是基于该基线包生成的增量差包。 */
+            basePackageId?: string;
+            /** @enum {string} */
+            status: "queued" | "snapshotting" | "packing" | "done" | "failed";
+            label?: string;
+            /** Format: int64 */
+            sizeBytes: number;
+            counts?: components["schemas"]["BackupCounts"];
+            nodeId?: string;
+            appVersion?: string;
+            dbSchemaVersion?: number;
+            createdAt: string;
+            finishedAt?: string;
+            errorSummary?: string;
+        };
+        BackupPackageList: {
+            items: components["schemas"]["BackupPackage"][];
+            total: number;
+        };
+        CreateBackupRequest: {
+            /** @enum {string} */
+            mode: "hot" | "frozen";
+            label?: string;
+        };
+        CreateBackupLinkRequest: {
+            /** @description 链接有效期（秒），默认 1800，上限 86400。 */
+            ttlSeconds?: number;
+        };
+        BackupLink: {
+            url: string;
+            expiresAt: string;
+        };
+        BackupVerification: {
+            ok: boolean;
+            packageId?: string;
+            deep?: boolean;
+            blobs?: number;
+            assets?: number;
+            error?: string;
+        };
+        /** @description 节点写入冻结状态。未冻结时 until/frozenAt 缺省（表示当前无生效窗口）。 */
+        WriteFreezeState: {
+            frozen: boolean;
+            /**
+             * Format: date-time
+             * @description 冻结自动解除的时刻；手动冻结且无窗口时缺省。
+             */
+            until?: string;
+            /** Format: date-time */
+            frozenAt?: string;
+            reason?: string;
+        };
+        /** @description until 与 ttlSeconds 二选一；都给时 until 优先。都不给则用 ttlSeconds 默认 7200。窗口上限 24 小时。 */
+        FreezeWritesRequest: {
+            /** Format: date-time */
+            until?: string;
+            ttlSeconds?: number;
+            reason?: string;
+        };
+        /** @enum {string} */
+        BackupImportOrigin: "url" | "upload" | "cli";
+        /** @enum {string} */
+        BackupUploadStatus: "initialized" | "receiving" | "completed" | "aborted";
+        /** @description 一次分片上传会话的视图。uploadedChunks 由磁盘上真实存在的分片推导（以磁盘为准，可续传）。 */
+        BackupUploadSession: {
+            uploadId: string;
+            fileName: string;
+            /** Format: int64 */
+            totalBytes: number;
+            /** Format: int64 */
+            chunkSize: number;
+            uploadedChunks: number[];
+            status: components["schemas"]["BackupUploadStatus"];
+            /** Format: date-time */
+            expiresAt: string;
+        };
+        CreateBackupUploadRequest: {
+            fileName: string;
+            /** Format: int64 */
+            totalBytes: number;
+            /** @description 可选：归档整体摘要（64 位小写 hex），拼装完成后核对。 */
+            sha256?: string;
+        };
+        CompleteBackupUploadRequest: {
+            /** @description 可选：客户端侧声明的归档摘要，拼装完成后核对。 */
+            sha256?: string;
+            /** @description 目标实例非空时需显式置真。内置 anonymous 主体不计入「非空」。 */
+            overwrite?: boolean;
+            /** @description 逐 blob 比对内容摘要（耗时与包体积同阶）。 */
+            deep?: boolean;
+        };
+        /** @enum {string} */
+        BackupImportStatus: "queued" | "fetching" | "staging" | "pending_restart" | "done" | "failed";
+        /**
+         * @description 一次导入的记录。pending_restart 表示校验与暂存已完成、restore.pending 已写入，
+         *     需重启服务才会替换数据库并转为 done。
+         */
+        BackupImport: {
+            importId: string;
+            origin: components["schemas"]["BackupImportOrigin"];
+            status: components["schemas"]["BackupImportStatus"];
+            /** @description URL 拉取通道的来源地址；其它通道缺省。 */
+            sourceUrl?: string;
+            operator: string;
+            overwrite: boolean;
+            deep: boolean;
+            /** Format: int64 */
+            totalBytes?: number;
+            /** Format: int64 */
+            fetchedBytes?: number;
+            blobCount?: number;
+            /** @description 包内 manifest 的 packageId（校验通过后才有值）。 */
+            packageId?: string;
+            errorCode?: string;
+            error?: string;
+            createdAt: string;
+            updatedAt: string;
+            finishedAt?: string;
+            restorePendingAt?: string;
+        };
+        BackupImportList: {
+            items: components["schemas"]["BackupImport"][];
+            total: number;
+        };
+        CreateBackupImportRequest: {
+            /** @description 备份包归档的 http/https 地址。 */
+            sourceUrl: string;
+            /** @description 目标实例非空时需显式置真。内置 anonymous 主体不计入「非空」。 */
+            overwrite?: boolean;
+            /** @description 逐 blob 比对内容摘要（耗时与包体积同阶）。 */
+            deep?: boolean;
+            /** @description 可选：拉取完成后核对的归档摘要。 */
+            expectedSha256?: string;
         };
     };
     responses: {
@@ -899,6 +2322,60 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
+        /** @description 统一制品操作请求错误 */
+        AssetOperationBadRequest: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["AssetOperationError"];
+            };
+        };
+        /** @description 统一制品操作未认证 */
+        AssetOperationUnauthorized: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["AssetOperationError"];
+            };
+        };
+        /** @description 统一制品操作越权 */
+        AssetOperationForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["AssetOperationError"];
+            };
+        };
+        /** @description 统一制品操作目标不存在 */
+        AssetOperationNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["AssetOperationError"];
+            };
+        };
+        /** @description 统一制品操作冲突 */
+        AssetOperationConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["AssetOperationError"];
+            };
+        };
+        /** @description 统一制品操作内部失败 */
+        AssetOperationInternalError: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["AssetOperationError"];
+            };
+        };
     };
     parameters: {
         PageParam: number;
@@ -909,6 +2386,63 @@ export interface components {
         MigrationIdParam: number;
         /** @description 按制品路径前缀过滤 */
         PrefixParam: string;
+        /** @description UTC 时间范围下界（含）。与 `to` 同时提供或同时省略；省略时服务端使用最近 24 小时。 */
+        AuditFromParam: string;
+        /** @description UTC 时间范围上界（不含）。与 `from` 同时提供或同时省略；范围最长 30 天。 */
+        AuditToParam: string;
+        /** @description 按固定审计分类筛选；可重复传入多个值。 */
+        AuditCategoryParam: components["schemas"]["AuditCategory"][];
+        /** @description 按服务端归一化结果筛选；可重复传入多个值。 */
+        AuditResultParam: components["schemas"]["AuditResult"][];
+        /** @description 按审计身份快照的显示名称精确筛选。 */
+        AuditActorParam: string;
+        /** @description 按安全展示的仓库名称精确筛选。 */
+        AuditRepositoryParam: string;
+        /** @description 关键字：服务端按事件 ID、动作、摘要、目标路径与操作者邮箱匹配（不区分大小写）。 */
+        AuditQueryParam: string;
+        /** @description 按风险批次状态筛选：pending（未确认）/ acknowledged（已确认）。 */
+        AuditAttentionParam: "pending" | "acknowledged";
+        /** @description 按 HTTP 请求方法筛选。 */
+        AuditMethodParam: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS";
+        /** @description 按服务端映射的操作名称精确筛选。 */
+        AuditActionParam: string;
+        /** @description 按操作者邮箱精确筛选（记录时固化的身份快照）。 */
+        AuditActorEmailParam: string;
+        /** @description 按客户端 IP 前缀筛选。 */
+        AuditClientIpParam: string;
+        /** @description 按认证方式筛选（如 jwt、api_key、web）。 */
+        AuditAuthSourceParam: string;
+        /** @description 显式偏移量（分页器直达指定页，优先于 cursor）。 */
+        AuditOffsetParam: number;
+        /** @description 从审计概览取得的不透明稳定读取边界；不得解析或改写。 */
+        AuditSnapshotParam: string;
+        /** @description 从上一页响应取得的不透明游标；不得解析或改写。 */
+        AuditCursorParam: string;
+        /** @description 单页安全事件数量。 */
+        AuditLimitParam: number;
+        /**
+         * @description 按批次确认状态筛选。`unacknowledged`（缺省）仅返回仍有未确认风险来源的批次；
+         *     `acknowledged` 仅返回全部风险来源均已确认的批次；`all` 不筛选确认状态。
+         */
+        AuditNotificationStatusParam: components["schemas"]["AuditNotificationStatus"];
+        /** @description 单页通知批次数数量。 */
+        AuditNotificationLimitParam: number;
+        /** @description 当前节点统一审计事件的不透明服务端标识。 */
+        AuditEventIdParam: string;
+        /** @description 当前节点风险关注批次的不透明服务端标识。 */
+        AuditAttentionIdParam: string;
+        /** @description UTC 时间范围下界（含）。与 to 同时提供或同时省略；省略时为最近 24 小时。 */
+        ObservabilityFromParam: string;
+        /** @description UTC 时间范围上界（不含），最长 30 天。 */
+        ObservabilityToParam: string;
+        /** @description 备份包标识（形如 bk-20260910-162701-a1b2c3）。 */
+        BackupIdParam: string;
+        /** @description 导入记录标识。 */
+        BackupImportIdParam: string;
+        /** @description 分片上传会话标识（形如 up-20260910-162701-a1b2c3）。 */
+        BackupUploadIdParam: string;
+        /** @description 分片序号，从 0 开始。 */
+        BackupUploadChunkIndexParam: number;
     };
     requestBodies: never;
     headers: never;
@@ -985,18 +2519,57 @@ export interface operations {
             };
         };
     };
-    getReplicationApplyLogs: {
+    getEnabledFormats: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 启用格式清单 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnabledFormats"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    getAuditObservabilitySummary: {
         parameters: {
             query?: {
-                limit?: number;
-                offset?: number;
-                sourceNode?: string;
-                sourceSeq?: number;
-                peerURL?: string;
-                entityType?: string;
-                entityKey?: string;
-                op?: string;
-                result?: "applied" | "metadata_applied_pending_blob" | "lww_skipped" | "pending_parent" | "blob_failed" | "skipped_permanent" | "failed";
+                /** @description UTC 时间范围下界（含）。与 `to` 同时提供或同时省略；省略时服务端使用最近 24 小时。 */
+                from?: components["parameters"]["AuditFromParam"];
+                /** @description UTC 时间范围上界（不含）。与 `from` 同时提供或同时省略；范围最长 30 天。 */
+                to?: components["parameters"]["AuditToParam"];
+                /** @description 按固定审计分类筛选；可重复传入多个值。 */
+                category?: components["parameters"]["AuditCategoryParam"];
+                /** @description 按服务端归一化结果筛选；可重复传入多个值。 */
+                result?: components["parameters"]["AuditResultParam"];
+                /** @description 按审计身份快照的显示名称精确筛选。 */
+                actor?: components["parameters"]["AuditActorParam"];
+                /** @description 按安全展示的仓库名称精确筛选。 */
+                repository?: components["parameters"]["AuditRepositoryParam"];
+                /** @description 关键字：服务端按事件 ID、动作、摘要、目标路径与操作者邮箱匹配（不区分大小写）。 */
+                q?: components["parameters"]["AuditQueryParam"];
+                /** @description 按风险批次状态筛选：pending（未确认）/ acknowledged（已确认）。 */
+                attention?: components["parameters"]["AuditAttentionParam"];
+                /** @description 按 HTTP 请求方法筛选。 */
+                method?: components["parameters"]["AuditMethodParam"];
+                /** @description 按服务端映射的操作名称精确筛选。 */
+                action?: components["parameters"]["AuditActionParam"];
+                /** @description 按操作者邮箱精确筛选（记录时固化的身份快照）。 */
+                actorEmail?: components["parameters"]["AuditActorEmailParam"];
+                /** @description 按客户端 IP 前缀筛选。 */
+                clientIp?: components["parameters"]["AuditClientIpParam"];
+                /** @description 按认证方式筛选（如 jwt、api_key、web）。 */
+                authSource?: components["parameters"]["AuditAuthSourceParam"];
             };
             header?: never;
             path?: never;
@@ -1004,13 +2577,342 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description 复制接收审计分页结果 */
+            /** @description 当前节点统一审计概览和稳定快照 */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ReplicationApplyLogList"];
+                    "application/json": components["schemas"]["AuditObservabilitySummary"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    listAuditObservabilityEvents: {
+        parameters: {
+            query?: {
+                /** @description UTC 时间范围下界（含）。与 `to` 同时提供或同时省略；省略时服务端使用最近 24 小时。 */
+                from?: components["parameters"]["AuditFromParam"];
+                /** @description UTC 时间范围上界（不含）。与 `from` 同时提供或同时省略；范围最长 30 天。 */
+                to?: components["parameters"]["AuditToParam"];
+                /** @description 按固定审计分类筛选；可重复传入多个值。 */
+                category?: components["parameters"]["AuditCategoryParam"];
+                /** @description 按服务端归一化结果筛选；可重复传入多个值。 */
+                result?: components["parameters"]["AuditResultParam"];
+                /** @description 按审计身份快照的显示名称精确筛选。 */
+                actor?: components["parameters"]["AuditActorParam"];
+                /** @description 按安全展示的仓库名称精确筛选。 */
+                repository?: components["parameters"]["AuditRepositoryParam"];
+                /** @description 关键字：服务端按事件 ID、动作、摘要、目标路径与操作者邮箱匹配（不区分大小写）。 */
+                q?: components["parameters"]["AuditQueryParam"];
+                /** @description 按风险批次状态筛选：pending（未确认）/ acknowledged（已确认）。 */
+                attention?: components["parameters"]["AuditAttentionParam"];
+                /** @description 按 HTTP 请求方法筛选。 */
+                method?: components["parameters"]["AuditMethodParam"];
+                /** @description 按服务端映射的操作名称精确筛选。 */
+                action?: components["parameters"]["AuditActionParam"];
+                /** @description 按操作者邮箱精确筛选（记录时固化的身份快照）。 */
+                actorEmail?: components["parameters"]["AuditActorEmailParam"];
+                /** @description 按客户端 IP 前缀筛选。 */
+                clientIp?: components["parameters"]["AuditClientIpParam"];
+                /** @description 按认证方式筛选（如 jwt、api_key、web）。 */
+                authSource?: components["parameters"]["AuditAuthSourceParam"];
+                /** @description 显式偏移量（分页器直达指定页，优先于 cursor）。 */
+                offset?: components["parameters"]["AuditOffsetParam"];
+                /** @description 从审计概览取得的不透明稳定读取边界；不得解析或改写。 */
+                snapshot?: components["parameters"]["AuditSnapshotParam"];
+                /** @description 从上一页响应取得的不透明游标；不得解析或改写。 */
+                cursor?: components["parameters"]["AuditCursorParam"];
+                /** @description 单页安全事件数量。 */
+                limit?: components["parameters"]["AuditLimitParam"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 当前节点统一审计事件分页 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditEventPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    listAuditAttentions: {
+        parameters: {
+            query?: {
+                /** @description UTC 时间范围下界（含）。与 `to` 同时提供或同时省略；省略时服务端使用最近 24 小时。 */
+                from?: components["parameters"]["AuditFromParam"];
+                /** @description UTC 时间范围上界（不含）。与 `from` 同时提供或同时省略；范围最长 30 天。 */
+                to?: components["parameters"]["AuditToParam"];
+                /** @description 按固定审计分类筛选；可重复传入多个值。 */
+                category?: components["parameters"]["AuditCategoryParam"];
+                /** @description 按服务端归一化结果筛选；可重复传入多个值。 */
+                result?: components["parameters"]["AuditResultParam"];
+                /** @description 按审计身份快照的显示名称精确筛选。 */
+                actor?: components["parameters"]["AuditActorParam"];
+                /** @description 按安全展示的仓库名称精确筛选。 */
+                repository?: components["parameters"]["AuditRepositoryParam"];
+                /** @description 关键字：服务端按事件 ID、动作、摘要、目标路径与操作者邮箱匹配（不区分大小写）。 */
+                q?: components["parameters"]["AuditQueryParam"];
+                /** @description 按风险批次状态筛选：pending（未确认）/ acknowledged（已确认）。 */
+                attention?: components["parameters"]["AuditAttentionParam"];
+                /** @description 按 HTTP 请求方法筛选。 */
+                method?: components["parameters"]["AuditMethodParam"];
+                /** @description 按服务端映射的操作名称精确筛选。 */
+                action?: components["parameters"]["AuditActionParam"];
+                /** @description 按操作者邮箱精确筛选（记录时固化的身份快照）。 */
+                actorEmail?: components["parameters"]["AuditActorEmailParam"];
+                /** @description 按客户端 IP 前缀筛选。 */
+                clientIp?: components["parameters"]["AuditClientIpParam"];
+                /** @description 按认证方式筛选（如 jwt、api_key、web）。 */
+                authSource?: components["parameters"]["AuditAuthSourceParam"];
+                /** @description 显式偏移量（分页器直达指定页，优先于 cursor）。 */
+                offset?: components["parameters"]["AuditOffsetParam"];
+                /** @description 从审计概览取得的不透明稳定读取边界；不得解析或改写。 */
+                snapshot?: components["parameters"]["AuditSnapshotParam"];
+                /** @description 从上一页响应取得的不透明游标；不得解析或改写。 */
+                cursor?: components["parameters"]["AuditCursorParam"];
+                /** @description 单页安全事件数量。 */
+                limit?: components["parameters"]["AuditLimitParam"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 当前节点风险关注批次分页 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditAttentionPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description 快照无效或筛选条件不一致（error.code 为 attention_stale） */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getAuditObservabilityEvent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 当前节点统一审计事件的不透明服务端标识。 */
+                eventId: components["parameters"]["AuditEventIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 当前节点安全审计事件详情 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditEventDetail"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    getAuditAttention: {
+        parameters: {
+            query?: {
+                /** @description 从上一页响应取得的不透明游标；不得解析或改写。 */
+                cursor?: components["parameters"]["AuditCursorParam"];
+                /** @description 单页安全事件数量。 */
+                limit?: components["parameters"]["AuditLimitParam"];
+            };
+            header?: never;
+            path: {
+                /** @description 当前节点风险关注批次的不透明服务端标识。 */
+                attentionId: components["parameters"]["AuditAttentionIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 当前节点风险关注批次详情和安全成员分页 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditAttentionDetail"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description attentionId 无效或对应快照不可重建（error.code 为 attention_stale） */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    acknowledgeAuditAttention: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AcknowledgeAuditAttentionRequest"];
+            };
+        };
+        responses: {
+            /** @description 已原子确认，或返回既有的最先确认结果 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AcknowledgeAuditAttentionResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description attentionId 无效、对应快照不可重建或批次成员不再满足确认条件（error.code 为 attention_stale） */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description 备用节点只读，拒绝确认写入 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listAuditAttentionNotifications: {
+        parameters: {
+            query?: {
+                /** @description UTC 时间范围下界（含）。与 `to` 同时提供或同时省略；省略时服务端使用最近 24 小时。 */
+                from?: components["parameters"]["AuditFromParam"];
+                /** @description UTC 时间范围上界（不含）。与 `from` 同时提供或同时省略；范围最长 30 天。 */
+                to?: components["parameters"]["AuditToParam"];
+                /**
+                 * @description 按批次确认状态筛选。`unacknowledged`（缺省）仅返回仍有未确认风险来源的批次；
+                 *     `acknowledged` 仅返回全部风险来源均已确认的批次；`all` 不筛选确认状态。
+                 */
+                status?: components["parameters"]["AuditNotificationStatusParam"];
+                /** @description 单页通知批次数数量。 */
+                limit?: components["parameters"]["AuditNotificationLimitParam"];
+                /** @description 从上一页响应取得的不透明游标；不得解析或改写。 */
+                cursor?: components["parameters"]["AuditCursorParam"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 当前节点风险通知批次分页（缺省为最近 24 小时未确认风险预览） */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditAttentionNotificationList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    getOperationsDashboard: {
+        parameters: {
+            query?: {
+                /** @description UTC 时间范围下界（含）。与 to 同时提供或同时省略；省略时为最近 24 小时。 */
+                from?: components["parameters"]["ObservabilityFromParam"];
+                /** @description UTC 时间范围上界（不含），最长 30 天。 */
+                to?: components["parameters"]["ObservabilityToParam"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 当前节点业务概览 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationsDashboard"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    getHostMonitoring: {
+        parameters: {
+            query?: {
+                /** @description UTC 时间范围下界（含）。与 to 同时提供或同时省略；省略时为最近 24 小时。 */
+                from?: components["parameters"]["ObservabilityFromParam"];
+                /** @description UTC 时间范围上界（不含），最长 30 天。 */
+                to?: components["parameters"]["ObservabilityToParam"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 当前主机概览和趋势 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HostMonitoring"];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -1229,6 +3131,64 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+        };
+    };
+    getPublishPolicy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["UserIdParam"];
+                repo: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 发布策略 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublishPolicyResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    putPublishPolicy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["UserIdParam"];
+                repo: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PublishPolicyRequest"];
+            };
+        };
+        responses: {
+            /** @description 已更新的发布策略 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublishPolicyResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
     listTokens: {
@@ -1561,7 +3521,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description 批量删除结果（部分失败以 failed 明细返回） */
+            /** @description 批量删除结果（统一事务成功时 failed 为空；失败以 4xx/5xx 返回） */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -1570,10 +3530,44 @@ export interface operations {
                     "application/json": components["schemas"]["BatchDeleteAssetsResponse"];
                 };
             };
-            400: components["responses"]["BadRequest"];
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
+            400: components["responses"]["AssetOperationBadRequest"];
+            401: components["responses"]["AssetOperationUnauthorized"];
+            403: components["responses"]["AssetOperationForbidden"];
+            404: components["responses"]["AssetOperationNotFound"];
+            409: components["responses"]["AssetOperationConflict"];
+            500: components["responses"]["AssetOperationInternalError"];
+        };
+    };
+    applyRepositoryAssetOperation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: components["parameters"]["RepoNameParam"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AssetOperationRequest"];
+            };
+        };
+        responses: {
+            /** @description 操作已原子完成 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssetOperationResponse"];
+                };
+            };
+            400: components["responses"]["AssetOperationBadRequest"];
+            401: components["responses"]["AssetOperationUnauthorized"];
+            403: components["responses"]["AssetOperationForbidden"];
+            404: components["responses"]["AssetOperationNotFound"];
+            409: components["responses"]["AssetOperationConflict"];
+            500: components["responses"]["AssetOperationInternalError"];
         };
     };
     getRepositoryUsage: {
@@ -1621,6 +3615,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MigrationDiscoverResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description 上游 Nexus 不可达 */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listRemoteNexusRepositories: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RemoteNexusRepositoryRequest"];
+            };
+        };
+        responses: {
+            /** @description 可迁移仓库索引 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemoteNexusRepositoryList"];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -1846,6 +3876,499 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+        };
+    };
+    listBackups: {
+        parameters: {
+            query?: {
+                page?: components["parameters"]["PageParam"];
+                page_size?: components["parameters"]["PageSizeParam"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 备份包列表 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupPackageList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    createBackup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateBackupRequest"];
+            };
+        };
+        responses: {
+            /** @description 已登记并开始生成 */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupPackage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    getBackup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 备份包标识（形如 bk-20260910-162701-a1b2c3）。 */
+                id: components["parameters"]["BackupIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 备份包详情 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupPackage"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    deleteBackup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 备份包标识（形如 bk-20260910-162701-a1b2c3）。 */
+                id: components["parameters"]["BackupIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 已删除 */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    downloadBackup: {
+        parameters: {
+            query?: {
+                /** @description 签名令牌（由 /link 下发）。 */
+                token?: string;
+                /** @description 签名有效期截止（Unix 秒）。 */
+                exp?: string;
+            };
+            header?: never;
+            path: {
+                /** @description 备份包标识（形如 bk-20260910-162701-a1b2c3）。 */
+                id: components["parameters"]["BackupIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 备份包归档（tar.gz） */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/gzip": string;
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createBackupLink: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 备份包标识（形如 bk-20260910-162701-a1b2c3）。 */
+                id: components["parameters"]["BackupIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["CreateBackupLinkRequest"];
+            };
+        };
+        responses: {
+            /** @description 签名下载链接 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupLink"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    verifyBackup: {
+        parameters: {
+            query?: {
+                /** @description 为 true 时逐 blob 比对内容摘要（全量读取，耗时与包等大）。 */
+                deep?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description 备份包标识（形如 bk-20260910-162701-a1b2c3）。 */
+                id: components["parameters"]["BackupIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 校验结果 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupVerification"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description 包内容校验未通过 */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupVerification"];
+                };
+            };
+        };
+    };
+    getWriteFreezeState: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 当前冻结状态 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WriteFreezeState"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    freezeWrites: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FreezeWritesRequest"];
+            };
+        };
+        responses: {
+            /** @description 冻结已生效 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WriteFreezeState"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    unfreezeWrites: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 解冻后的状态 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WriteFreezeState"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    importBackupFromURL: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateBackupImportRequest"];
+            };
+        };
+        responses: {
+            /** @description 已受理并开始拉取 */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupImport"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    listBackupImports: {
+        parameters: {
+            query?: {
+                page?: components["parameters"]["PageParam"];
+                page_size?: components["parameters"]["PageSizeParam"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 导入记录列表 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupImportList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    getBackupImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 导入记录标识。 */
+                id: components["parameters"]["BackupImportIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 导入记录详情 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupImport"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createBackupUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateBackupUploadRequest"];
+            };
+        };
+        responses: {
+            /** @description 已创建上传会话 */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupUploadSession"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    uploadBackupChunk: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 分片上传会话标识（形如 up-20260910-162701-a1b2c3）。 */
+                id: components["parameters"]["BackupUploadIdParam"];
+                /** @description 分片序号，从 0 开始。 */
+                index: components["parameters"]["BackupUploadChunkIndexParam"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+            };
+        };
+        responses: {
+            /** @description 已接收分片 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupUploadSession"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    getBackupUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 分片上传会话标识（形如 up-20260910-162701-a1b2c3）。 */
+                id: components["parameters"]["BackupUploadIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 上传会话（含已落盘分片序号） */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupUploadSession"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    completeBackupUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 分片上传会话标识（形如 up-20260910-162701-a1b2c3）。 */
+                id: components["parameters"]["BackupUploadIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["CompleteBackupUploadRequest"];
+            };
+        };
+        responses: {
+            /** @description 已受理并开始导入 */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupImport"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    abortBackupUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 分片上传会话标识（形如 up-20260910-162701-a1b2c3）。 */
+                id: components["parameters"]["BackupUploadIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 已取消并清理磁盘 */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
 }

@@ -9,9 +9,10 @@ import (
 
 // TokenService 处理 API Token 的签发、列表与吊销。
 type TokenService struct {
-	tokens   *repository.TokenRepo
-	users    *repository.UserRepo
-	recorder ChangeRecorder
+	tokens    *repository.TokenRepo
+	users     *repository.UserRepo
+	recorder  ChangeRecorder
+	writeGate BusinessWriteGate
 }
 
 // NewTokenService 构造 TokenService。
@@ -21,6 +22,9 @@ func NewTokenService(tokens *repository.TokenRepo, users *repository.UserRepo) *
 
 // SetChangeRecorder 注入复制变更日志记录器（FR-83）；nil 表示不记录。
 func (s *TokenService) SetChangeRecorder(r ChangeRecorder) { s.recorder = r }
+
+// SetBusinessWriteGate 注入备用节点本地业务写栅栏；nil 保持兼容行为。
+func (s *TokenService) SetBusinessWriteGate(gate BusinessWriteGate) { s.writeGate = gate }
 
 // recordChange 记录复制变更日志；记录失败不阻断业务写（对账兜底，见 ADR-0013）。
 func (s *TokenService) recordChange(entityType, entityKey, op string, data any) {
@@ -39,6 +43,9 @@ func (s *TokenService) List(userID int64) ([]repository.Token, error) {
 
 // Create 生成一枚 Token，仅存摘要，返回明文（仅此次）与记录。
 func (s *TokenService) Create(userID int64, name string) (plaintext string, tok *repository.Token, err error) {
+	if err := requireBusinessWrite(s.writeGate); err != nil {
+		return "", nil, err
+	}
 	plain, digest := auth.GenerateToken()
 	id, err := s.tokens.Create(userID, name, digest)
 	if err != nil {
@@ -55,6 +62,9 @@ func (s *TokenService) Create(userID int64, name string) (plaintext string, tok 
 
 // Delete 吊销用户名下的 Token。
 func (s *TokenService) Delete(id, userID int64) error {
+	if err := requireBusinessWrite(s.writeGate); err != nil {
+		return err
+	}
 	stored, err := s.tokens.GetByIDAndUser(id, userID)
 	if err != nil {
 		return mapNotFound(err)

@@ -1,236 +1,256 @@
-import { screen, waitFor } from "@testing-library/react";
+// FR-118：真实审计读模型的页面状态、批次确认和 attention_stale 回归。
+import { HttpResponse, http } from "msw";
+import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
-const api = vi.hoisted(() => ({
-  getAuditLogs: vi.fn(),
-  getReplicationApplyLogs: vi.fn(),
-}));
-
-vi.mock("../src/api/endpoints", () => api);
+import { describe, expect, it } from "vitest";
 
 import { AuditLogPage } from "../src/pages/AuditLogPage";
+import { AppRoutes } from "../src/app/router";
+import { server } from "@jianartifact/devmock/node";
+import {
+  releaseDevMockPendingRequests,
+  waitForDevMockPendingRequest,
+} from "@jianartifact/devmock/scenario";
 import { renderWithProviders } from "./harness";
 
-const replicationItem = {
-  sourceNode: "node-a",
-  sourceSeq: 7,
-  peerUrl: "http://peer",
-  entityType: "repository",
-  entityKey: "central",
-  op: "put",
-  result: "applied",
-  detail: "已应用",
-  lastError: "",
-  lastErrorAt: "",
-  firstSeenAt: "2026-08-17T00:00:00Z",
-  lastSeenAt: "2026-08-17T00:00:00Z",
-  attemptCount: 2,
+const emptySummary = {
+  snapshot: "empty-snapshot",
+  snapshotAt: "2026-08-27T00:00:00.000Z",
+  totalCount: 0,
+  successCount: 0,
+  failureCount: 0,
+  failureRate: 0,
+  distinctActorCount: 0,
+  highRiskCount: 0,
+  categoryCounts: [
+    { category: "management_change", count: 0 },
+    { category: "asset_change", count: 0 },
+    { category: "security_event", count: 0 },
+    { category: "replication", count: 0 },
+  ],
+  trend: [],
 };
 
-const managementItem = {
-  id: 1,
-  ts: "2026-08-17T00:00:00Z",
-  actor: "admin",
-  action: "asset.put",
-  entityKey: "k1",
-  repo: "central",
-  result: "ok",
-  ip: "127.0.0.1",
-};
-
-// FR-101 分页布局回归：分页条须与表格滚动区同处纵向 flex 容器，
-// 否则表格会全部展开把分页条挤出固定高度可视区，导致用户看不到分页条。
-// 从表格向上找到第一个 overflowY:auto 的滚动容器（只包裹表格）。
-function scrollContainerOf(el: HTMLElement): HTMLElement | null {
-  let node = el.parentElement;
-  while (node) {
-    if (getComputedStyle(node).overflowY === "auto") return node;
-    node = node.parentElement;
-  }
-  return null;
-}
-
-// 断言分页条位于表格滚动区之外、且与滚动区共处纵向 flex 容器（稳定显示在表格下方）。
-function expectPaginationBelowScrollTable() {
-  const pagination = document.querySelector(".mantine-Pagination-root");
-  const scrollContainer = scrollContainerOf(screen.getByRole("table"));
-  expect(scrollContainer, "表格应位于内部滚动容器中").not.toBeNull();
-  expect(scrollContainer!.contains(pagination), "分页条不应被滚动容器包裹/裁切").toBe(false);
-  // 滚动容器的直接父级（AsyncBoundary 容器）必须是纵向 flex：滚动区占满余高、分页条固定在底部。
-  const flexParent = scrollContainer!.parentElement!;
-  expect(getComputedStyle(flexParent).display, "分页条所在容器应为 flex").toBe("flex");
-  expect(getComputedStyle(flexParent).flexDirection, "分页条所在容器应为纵向排列").toBe("column");
-  expect(flexParent.contains(pagination), "分页条应与滚动区同处该 flex 容器").toBe(true);
-}
-
-beforeEach(() => {
-  api.getAuditLogs.mockReset().mockResolvedValue({ items: [], total: 0 });
-  api.getReplicationApplyLogs.mockReset().mockResolvedValue({ items: [], total: 0 });
-});
-
-describe("审计日志页", () => {
-  it("保留管理操作页签并切换到复制应用", async () => {
+describe("当前节点审计中心（方案 A · 双栏工作台）", () => {
+  it("始终保留筛选器与搜索框，清除筛选按钮常驻", async () => {
     const user = userEvent.setup();
-    renderWithProviders(<AuditLogPage />, { authenticated: true });
-    expect(screen.getByRole("tab", { name: "管理操作" })).toBeTruthy();
-    await user.click(screen.getByRole("tab", { name: "复制应用" }));
-    expect(await screen.findByText("暂无复制应用记录")).toBeTruthy();
-    expect(api.getReplicationApplyLogs).toHaveBeenCalledWith({ limit: 50, offset: 0 });
+    renderWithProviders(<AuditLogPage />, { route: "/audit-logs", authenticated: true });
+
+    expect((await screen.findAllByLabelText("类别")).length).toBeGreaterThan(0);
+    expect(screen.getAllByLabelText("结果")[0]).toBeTruthy();
+    expect(screen.getAllByLabelText("操作者").length).toBeGreaterThan(0);
+    expect(
+      screen.getByLabelText("路径 / 动作 / 操作者邮箱"),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "清除筛选" })).toBeTruthy();
+
+    await user.type(
+      screen.getByLabelText("路径 / 动作 / 操作者邮箱"),
+      "不存在的仓库",
+    );
+    expect(
+      screen.getByLabelText("路径 / 动作 / 操作者邮箱"),
+    ).toBeTruthy();
   });
 
-  it("提交真实结果、实体和来源节点筛选", async () => {
+  it("展示真实统一事件流的 KPI、筛选与列表（无 Tab 切换）", async () => {
+    renderWithProviders(<AuditLogPage />, { route: "/audit-logs", authenticated: true });
+
+    // 顶部 KPI 卡片 + OpsSection 记录表（页面标题由页眉面包屑承担，页面内不重复）。
+    expect(await screen.findByText("审计事件")).toBeTruthy();
+    expect(screen.getByText("待确认批次")).toBeTruthy();
+    expect(await screen.findByText("审计记录")).toBeTruthy();
+
+    // 记录流的筛选器常驻：风险状态 / 类别 / 结果 / 操作者。
+    expect(screen.getByLabelText("风险状态")).toBeTruthy();
+    expect(screen.getAllByLabelText("类别")[0]).toBeTruthy();
+    expect(screen.getAllByLabelText("结果")[0]).toBeTruthy();
+    expect(screen.getAllByLabelText("操作者").length).toBeGreaterThan(0);
+  });
+
+  it("通过 URL attentionId 打开批次详情，确认需二次确认后刷新当前节点数据", async () => {
     const user = userEvent.setup();
-    renderWithProviders(<AuditLogPage />, { authenticated: true });
-    await user.click(screen.getByRole("tab", { name: "复制应用" }));
-    await screen.findByText("暂无复制应用记录");
-    await user.click(screen.getByRole("textbox", { name: "结果" }));
-    await user.click(screen.getByRole("option", { name: "应用失败" }));
-    await user.type(screen.getByLabelText("实体"), "asset");
-    await user.type(screen.getByLabelText("来源节点"), "node-a");
-    await user.click(screen.getByRole("button", { name: "筛选" }));
-    await waitFor(() =>
-      expect(api.getReplicationApplyLogs).toHaveBeenLastCalledWith({
-        result: "failed",
-        entityType: "asset",
-        sourceNode: "node-a",
-        limit: 50,
-        offset: 0,
+    renderWithProviders(<AuditLogPage />, {
+      route: "/audit-logs?attentionId=attention-asset-delete",
+      authenticated: true,
+    });
+
+    const dialog = await screen.findByRole("dialog", { name: "风险批次详情" });
+    expect(dialog.textContent).toContain("制品删除事务未完成，未提交任何变更");
+
+    // 防误触：第一次点击只出现确认气泡。
+    await user.click(screen.getByRole("button", { name: "确认已处理" }));
+    await screen.findByText("确认该批次全部风险记录已处理？确认后写入确认人与时间。");
+    await user.click(screen.getByRole("button", { name: "确认", exact: true }));
+    await screen.findByText(/已确认处理 \d+ 条风险记录/);
+    await waitFor(() => expect(screen.queryByText("确认已处理")).toBeNull());
+  });
+
+  it("风险批次详情可继续加载完整成员", async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.get("*/api/v1/observability/audit/attention/attention-asset-delete", ({ request }) => {
+        const cursor = new URL(request.url).searchParams.get("cursor");
+        return HttpResponse.json(
+          attentionPage(
+            cursor === "next" ? ["第二个成员"] : ["第一个成员"],
+            cursor ? undefined : "next",
+          ),
+        );
       }),
     );
-  });
-
-  it("按真实复制结果显示徽章颜色", async () => {
-    const user = userEvent.setup();
-    const results = [
-      "applied",
-      "lww_skipped",
-      "metadata_applied_pending_blob",
-      "pending_parent",
-      "blob_failed",
-      "skipped_permanent",
-      "failed",
-    ];
-    api.getReplicationApplyLogs.mockResolvedValue({
-      items: results.map((result, index) => ({ ...replicationItem, sourceSeq: index + 1, result })),
-      total: results.length,
+    renderWithProviders(<AuditLogPage />, {
+      route: "/audit-logs?attentionId=attention-asset-delete",
+      authenticated: true,
     });
-    renderWithProviders(<AuditLogPage />, { authenticated: true });
-    await user.click(screen.getByRole("tab", { name: "复制应用" }));
-    await screen.findByText("failed");
 
-    const badgeStyle = (result: string) =>
-      screen.getByText(result).closest("[class*='mantine-Badge-root']")?.getAttribute("style") ??
-      "";
-    expect(badgeStyle("applied")).toContain(
-      "--badge-color: var(--mantine-color-green-light-color)",
-    );
-    expect(badgeStyle("lww_skipped")).toContain(
-      "--badge-color: var(--mantine-color-green-light-color)",
-    );
-    expect(badgeStyle("metadata_applied_pending_blob")).toContain(
-      "--badge-color: var(--mantine-color-yellow-light-color)",
-    );
-    expect(badgeStyle("pending_parent")).toContain(
-      "--badge-color: var(--mantine-color-yellow-light-color)",
-    );
-    expect(badgeStyle("blob_failed")).toContain(
-      "--badge-color: var(--mantine-color-red-light-color)",
-    );
-    expect(badgeStyle("skipped_permanent")).toContain(
-      "--badge-color: var(--mantine-color-red-light-color)",
-    );
-    expect(badgeStyle("failed")).toContain("--badge-color: var(--mantine-color-red-light-color)");
+    expect(await screen.findByText("第一个成员")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "继续加载批次成员" }));
+    expect(await screen.findByText("第二个成员")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "继续加载批次成员" })).toBeNull();
   });
 
-  it("复制记录为空时显示专用空态", async () => {
+  it("确认失败后保留风险抽屉与错误提示", async () => {
     const user = userEvent.setup();
-    renderWithProviders(<AuditLogPage />, { authenticated: true });
-    await user.click(screen.getByRole("tab", { name: "复制应用" }));
-    expect(await screen.findByText("暂无复制应用记录")).toBeTruthy();
-    expect(screen.queryByRole("columnheader", { name: "来源节点" })).toBeNull();
-  });
-
-  it("分页请求使用 limit 和 offset", async () => {
-    const user = userEvent.setup();
-    api.getReplicationApplyLogs.mockResolvedValue({ items: [replicationItem], total: 51 });
-    renderWithProviders(<AuditLogPage />, { authenticated: true });
-    await user.click(screen.getByRole("tab", { name: "复制应用" }));
-    await screen.findByText("node-a");
-    await user.click(screen.getByRole("button", { name: "2" }));
-    await waitFor(() =>
-      expect(api.getReplicationApplyLogs).toHaveBeenLastCalledWith({
-        limit: 50,
-        offset: 50,
-      }),
-    );
-  });
-
-  it("管理操作：分页条固定在表格滚动区下方且可交互（FR-101）", async () => {
-    const user = userEvent.setup();
-    api.getAuditLogs.mockResolvedValue({
-      items: Array.from({ length: 50 }, (_, i) => ({
-        ...managementItem,
-        id: i + 1,
-        entityKey: `k${i + 1}`,
-      })),
-      total: 51,
-    });
-    renderWithProviders(<AuditLogPage />, { authenticated: true });
-    await waitFor(() => expect(document.querySelector(".mantine-Pagination-root")).not.toBeNull());
-    expectPaginationBelowScrollTable();
-    // 分页条可交互：点击第 2 页以 offset=50 重新请求
-    await user.click(screen.getByRole("button", { name: "2" }));
-    await waitFor(() =>
-      expect(api.getAuditLogs).toHaveBeenLastCalledWith(
-        expect.objectContaining({ limit: 50, offset: 50 }),
+    server.use(
+      http.put("*/api/v1/observability/audit/attention-acknowledgements", () =>
+        HttpResponse.json(
+          { error: { code: "temporary_failure", message: "确认暂时失败，请重试" } },
+          { status: 503 },
+        ),
       ),
     );
-  });
-
-  it("复制应用：分页条固定在表格滚动区下方且可交互（FR-101）", async () => {
-    const user = userEvent.setup();
-    api.getReplicationApplyLogs.mockResolvedValue({
-      items: Array.from({ length: 50 }, (_, i) => ({ ...replicationItem, sourceSeq: i + 1 })),
-      total: 51,
+    renderWithProviders(<AppRoutes />, {
+      route: "/audit-logs?attentionId=attention-asset-delete",
+      authenticated: true,
     });
-    renderWithProviders(<AuditLogPage />, { authenticated: true });
-    await user.click(screen.getByRole("tab", { name: "复制应用" }));
-    await waitFor(() => expect(document.querySelector(".mantine-Pagination-root")).not.toBeNull());
-    expectPaginationBelowScrollTable();
+
+    // 页眉通知入口已退役（统一收敛到审计日志）。
+    expect(screen.queryByRole("button", { name: /风险通知/ })).toBeNull();
+    expect(await screen.findByRole("dialog", { name: "风险批次详情" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "确认已处理" }));
+    await screen.findByText("确认该批次全部风险记录已处理？确认后写入确认人与时间。");
+    await user.click(screen.getByRole("button", { name: "确认", exact: true }));
+
+    expect(await screen.findByText("确认暂时失败，请重试")).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "风险批次详情" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "确认已处理" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /风险通知/ })).toBeNull();
+  });
+
+  it("将 attention_stale 明确提示为刷新审计，而不是伪装为不存在", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<AuditLogPage />, {
+      route: "/audit-logs?attentionId=attention-stale",
+      authenticated: true,
+    });
+
+    expect(await screen.findByText("审计快照已变化，请刷新审计后重新读取。")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "刷新审计" }));
+    await waitFor(() =>
+      expect(screen.queryByText("审计快照已变化，请刷新审计后重新读取。")).toBeNull(),
+    );
+  });
+
+  it("读取事件页遇到 attention_stale 时提示重新读取审计快照", async () => {
+    server.use(
+      http.get("*/api/v1/observability/audit/events", () =>
+        HttpResponse.json(
+          { error: { code: "attention_stale", message: "审计快照与当前筛选条件不匹配" } },
+          { status: 409 },
+        ),
+      ),
+    );
+
+    renderWithProviders(<AuditLogPage />, { route: "/audit-logs", authenticated: true });
+    expect(await screen.findByText("审计快照已变化，请刷新审计后重新读取。")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "刷新审计" })).toBeTruthy();
+  });
+
+  it("展示加载、失败和空态，不以预览数据替代真实结果", async () => {
+    window.history.replaceState({}, "", "/audit-logs?__mock=loading");
+    const { unmount } = renderWithProviders(<AuditLogPage />, {
+      route: "/audit-logs",
+      authenticated: true,
+    });
+    await waitForDevMockPendingRequest();
+    expect(screen.getByText("正在加载当前节点审计…")).toBeTruthy();
+    await act(async () => {
+      releaseDevMockPendingRequests();
+    });
+    // 方案 A 数据层仅在页面可见时低频刷新（不再有 5s 轮询），一次释放后首屏数据即可达。
+    expect(await screen.findByText("审计记录")).toBeTruthy();
+    unmount();
+
+    window.history.replaceState({}, "", "/audit-logs?__mock=error");
+    renderWithProviders(<AuditLogPage />, {
+      route: "/audit-logs",
+      authenticated: true,
+    });
+    expect(await screen.findByText("当前节点审计暂时不可用")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "重试" })).toBeTruthy();
+  });
+
+  it("在服务端返回零事件时展示空态", async () => {
+    server.use(
+      http.get("*/api/v1/observability/audit/summary", () => HttpResponse.json(emptySummary)),
+      http.get("*/api/v1/observability/audit/events", () =>
+        HttpResponse.json({
+          items: [],
+          totalCount: 0,
+          snapshot: emptySummary.snapshot,
+          snapshotAt: emptySummary.snapshotAt,
+        }),
+      ),
+      http.get("*/api/v1/observability/audit/attentions", () =>
+        HttpResponse.json({
+          items: [],
+          totalCount: 0,
+          snapshot: emptySummary.snapshot,
+          snapshotAt: emptySummary.snapshotAt,
+        }),
+      ),
+    );
+
+    renderWithProviders(<AuditLogPage />, { route: "/audit-logs", authenticated: true });
+    expect(await screen.findByText("当前筛选条件下没有审计事件")).toBeTruthy();
+    expect(screen.getAllByLabelText("类别")[0]).toBeTruthy();
+    expect(screen.getByRole("button", { name: "清除筛选" })).toBeTruthy();
   });
 });
 
-describe("审计日志时间筛选", () => {
-  it("提交并重置起止时间", async () => {
-    const user = userEvent.setup();
-    renderWithProviders(<AuditLogPage />, { authenticated: true });
-    await screen.findByText("暂无审计记录");
-    await user.type(screen.getByLabelText("开始时间"), "2026-08-01");
-    await user.type(screen.getByLabelText("结束时间"), "2026-08-17");
-    await user.click(screen.getByRole("button", { name: "筛选" }));
-    await waitFor(() =>
-      expect(api.getAuditLogs).toHaveBeenLastCalledWith({
-        actor: undefined,
-        action: undefined,
-        repo: undefined,
-        from: "2026-08-01T00:00:00.000Z",
-        to: "2026-08-17T23:59:59.999Z",
-        limit: 50,
-        offset: 0,
-      }),
-    );
-    await user.click(screen.getByRole("button", { name: "重置" }));
-    await waitFor(() =>
-      expect(api.getAuditLogs).toHaveBeenLastCalledWith({
-        actor: undefined,
-        action: undefined,
-        repo: undefined,
-        from: undefined,
-        to: undefined,
-        limit: 50,
-        offset: 0,
-      }),
-    );
-  });
-});
+function attentionPage(summaries: string[], nextCursor?: string) {
+  return {
+    attention: {
+      attentionId: "attention-asset-delete",
+      state: "unacknowledged",
+      categoryCounts: [{ category: "asset_change", count: 2 }],
+      severity: "high",
+      firstOccurredAt: "2026-08-30T10:00:00.000Z",
+      latestOccurredAt: "2026-08-30T10:01:00.000Z",
+      result: "failure",
+      action: "asset.delete",
+      target: { kind: "artifact", label: "待处理制品" },
+      summary: "风险批次",
+      successCount: 0,
+      failureCount: 2,
+      affectedCount: 2,
+      unacknowledgedRiskEventCount: 2,
+      riskEventCount: 2,
+      acknowledgedRiskEventCount: 0,
+    },
+    items: summaries.map((summary, index) => ({
+      eventId: `attention-member-${summary}`,
+      occurredAt: `2026-08-30T10:0${index}:00.000Z`,
+      action: "asset.delete",
+      actor: { displayName: "admin", subjectType: "user", userId: 1, authSource: "web" },
+      category: "asset_change",
+      result: "failure",
+      severity: "high",
+      summary,
+      target: { kind: "artifact", label: "待处理制品" },
+    })),
+    totalCount: 2,
+    ...(nextCursor ? { nextCursor } : {}),
+  };
+}

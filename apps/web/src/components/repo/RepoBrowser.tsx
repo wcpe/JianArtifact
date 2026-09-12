@@ -12,6 +12,7 @@ import {
   Group,
   Loader,
   LoadingOverlay,
+  Modal,
   ScrollArea,
   Stack,
   Text,
@@ -19,20 +20,13 @@ import {
   Title,
 } from "@mantine/core";
 import { EmptyState } from "@jianartifact/ui";
-import {
-  IconChevronDown,
-  IconChevronUp,
-  IconSearch,
-  IconTrash,
-  IconUpload,
-  IconX,
-} from "@tabler/icons-react";
+import { IconChevronDown, IconChevronUp, IconSearch, IconUpload, IconX } from "@tabler/icons-react";
 import { useLocalStorage } from "@mantine/hooks";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import {
-  batchDeleteAssets,
+  applyAssetOperation,
   getRepositoryTree,
   getRepositoryUsage,
   listRepositories,
@@ -43,6 +37,7 @@ import type { AssetSummary, Repository, UsageInfo } from "../../api/types";
 import { useAsync, REFRESH_EVENT } from "../../hooks/useAsync";
 import type { AssetTreeNode } from "../../lib/assetTree";
 import { buildAssetTree } from "../../lib/assetTree";
+import { assetOperationTarget, operationSupportsPathMutation } from "../../lib/assetOperations";
 import { confirmDanger, notifyError, notifySuccess } from "../../lib/feedback";
 import { useAuth } from "../../auth/AuthContext";
 import { density } from "../../theme/density";
@@ -107,6 +102,38 @@ function treeEntryToNodes(
   return nodes;
 }
 
+function visibleTreePaths(event: React.MouseEvent<HTMLButtonElement>, fallback: string): string[] {
+  const tree = event.currentTarget.closest('[role="tree"]');
+  if (!tree) return [fallback];
+  return [...tree.querySelectorAll<HTMLElement>('[role="treeitem"][data-path]')]
+    .map((element) => element.dataset.path)
+    .filter((path): path is string => Boolean(path));
+}
+
+function selectTreePaths(
+  nodePath: string,
+  visiblePaths: string[],
+  selectedPaths: Set<string>,
+  anchor: string | null,
+  event: React.MouseEvent<HTMLButtonElement>,
+): { paths: Set<string>; anchor: string } {
+  const index = visiblePaths.indexOf(nodePath);
+  const anchorIndex = anchor ? visiblePaths.indexOf(anchor) : -1;
+  if (event.shiftKey && index >= 0 && anchorIndex >= 0) {
+    const start = Math.min(index, anchorIndex);
+    const end = Math.max(index, anchorIndex);
+    return { paths: new Set(visiblePaths.slice(start, end + 1)), anchor: anchor ?? nodePath };
+  }
+  const next = event.ctrlKey || event.metaKey ? new Set(selectedPaths) : new Set<string>();
+  if (event.ctrlKey || event.metaKey) {
+    if (next.has(nodePath)) next.delete(nodePath);
+    else next.add(nodePath);
+  } else {
+    next.add(nodePath);
+  }
+  return { paths: next, anchor: nodePath };
+}
+
 export function RepoBrowser({
   repoName,
   allowUpload = false,
@@ -116,12 +143,16 @@ export function RepoBrowser({
 }: Props) {
   const { t } = useTranslation();
   const { user } = useAuth();
-  // FR-103：批量删除仅管理员可见可用（与 FR-102 单删一致）。
+  // FR-105：资产操作仅全局管理员可见可用。
   const isAdmin = user?.role === "admin";
   const [selected, setSelected] = useState<AssetSummary | null>(null);
-  // FR-103：已勾选待删除的文件路径集合（仅文件行，限定当前已加载树内）。
+  // FR-105：文件和目录的选择路径集合。
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
-  const [batchDeleting, setBatchDeleting] = useState(false);
+  const [selectionAnchor, setSelectionAnchor] = useState<string | null>(null);
+  const [operationBusy, setOperationBusy] = useState(false);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const [pathOperation, setPathOperation] = useState<"move" | "rename" | null>(null);
+  const [pathInput, setPathInput] = useState("");
   const [uploadPath, setUploadPath] = useState("");
   const [uploading, setUploading] = useState(false);
   const [reloadNonce, setReloadNonce] = useState(0);
@@ -160,6 +191,7 @@ export function RepoBrowser({
   const [treeNodes, setTreeNodes] = useState<AssetTreeNode[]>([]);
   const [treeLoading, setTreeLoading] = useState(true);
   const [treeError, setTreeError] = useState<string | null>(null);
+  const [treeActionError, setTreeActionError] = useState<string | null>(null);
 
   // FR-57: 仓库内搜索
   const [searchQuery, setSearchQuery] = useState("");
@@ -167,7 +199,9 @@ export function RepoBrowser({
   const [searchCount, setSearchCount] = useState(0);
   const [searching, setSearching] = useState(false);
 
-  const usageState = useAsync(() => getRepositoryUsage(repoName), [repoName]);
+  const usageState = useAsync(() => getRepositoryUsage(repoName), [repoName], {
+    cacheKey: `repo:usage:${repoName}`,
+  });
   const repoState = useAsync(
     () =>
       publicMode
@@ -176,6 +210,7 @@ export function RepoBrowser({
             (list) => list.items.find((r) => r.name === repoName) ?? null,
           ),
     [repoName, publicMode],
+    { cacheKey: `repo:detail:${repoName}:${publicMode ? "public" : "managed"}` },
   );
 
   const format = forcedFormat || repoState.data?.format || usageState.data?.format || "raw";
@@ -191,8 +226,10 @@ export function RepoBrowser({
     prevRepoRef.current = repoName;
     if (repoChanged) {
       setTreeNodes([]);
+      setTreeActionError(null);
       setSelected(null);
       setSelectedPaths(new Set());
+      setSelectionAnchor(null);
       setSearchResults(null);
       setSearchQuery("");
     }
@@ -224,27 +261,29 @@ export function RepoBrowser({
   const handleExpandDir = useCallback(
     (node: AssetTreeNode) => {
       const prefix = node.path.endsWith("/") ? node.path : node.path + "/";
+      setTreeActionError(null);
       getRepositoryTree(repoName, prefix)
         .then((entry) => {
           const children = treeEntryToNodes(entry.directories, entry.files);
           setTreeNodes((prev) => updateNodeChildren(prev, node.path, children));
         })
-        .catch(() => {
-          // 加载失败时设为空数组（显示无内容）
-          setTreeNodes((prev) => updateNodeChildren(prev, node.path, []));
+        .catch((error: unknown) => {
+          setTreeActionError(error instanceof Error ? error.message : t("common.error"));
         });
     },
-    [repoName, updateNodeChildren],
+    [repoName, t, updateNodeChildren],
   );
 
   // FR-57: 仓库内搜索（结果拼成目录树展示，而非拍平列表）
   const handleInRepoSearch = () => {
     const q = searchQuery.trim();
     setSelectedPaths(new Set());
+    setSelectionAnchor(null);
     if (!q) {
       setSearchResults(null);
       return;
     }
+    setTreeActionError(null);
     setSearching(true);
     searchAssets({ q, repository: repoName, page_size: 200 })
       .then((res) => {
@@ -258,9 +297,8 @@ export function RepoBrowser({
         setSearchCount(assets.length);
         setSearchResults(buildAssetTree(assets));
       })
-      .catch(() => {
-        setSearchCount(0);
-        setSearchResults([]);
+      .catch((error: unknown) => {
+        setTreeActionError(error instanceof Error ? error.message : t("common.error"));
       })
       .finally(() => setSearching(false));
   };
@@ -269,7 +307,9 @@ export function RepoBrowser({
     setSearchQuery("");
     setSearchResults(null);
     setSearchCount(0);
+    setTreeActionError(null);
     setSelectedPaths(new Set());
+    setSelectionAnchor(null);
   };
 
   const onSelectFile = (node: AssetTreeNode) => {
@@ -282,24 +322,68 @@ export function RepoBrowser({
     setSelectedPaths(new Set());
   };
 
-  // FR-103：勾选 / 取消勾选文件行（仅文件行；目录不含递归勾选）。
-  const onToggleSelect = (node: AssetTreeNode) => {
-    if (node.kind !== "file") {
-      return;
-    }
-    setSelectedPaths((prev) => {
-      const next = new Set(prev);
-      if (next.has(node.path)) {
-        next.delete(node.path);
-      } else {
-        next.add(node.path);
+  const findNode = (path: string, nodes: AssetTreeNode[]): AssetTreeNode | null => {
+    for (const node of nodes) {
+      if (node.path === path) return node;
+      if (node.children) {
+        const found = findNode(path, node.children);
+        if (found) return found;
       }
-      return next;
-    });
+    }
+    return null;
   };
 
-  // FR-103：危险操作二次确认后调批量删除 API；成功刷新文件树并清空勾选，
-  // 部分失败以失败明细提示，成功部分照常生效。
+  const selectedTargets = (paths: string[]) =>
+    paths.map((path) => {
+      const node = findNode(path, displayNodes) ?? { path, kind: "file" as const };
+      return assetOperationTarget(format, node.path, node.kind);
+    });
+
+  // FR-105：在当前可见树顺序中处理普通、Ctrl/Meta、Shift 选择。
+  const onNodeInteraction = (node: AssetTreeNode, event: React.MouseEvent<HTMLButtonElement>) => {
+    if (!isAdmin) {
+      if (node.kind === "dir") onSelectDir();
+      else onSelectFile(node);
+      return;
+    }
+    const selection = selectTreePaths(
+      node.path,
+      visibleTreePaths(event, node.path),
+      selectedPaths,
+      selectionAnchor,
+      event,
+    );
+    setSelectedPaths(selection.paths);
+    setSelectionAnchor(selection.anchor);
+    setSelected(node.kind === "file" ? (node.asset ?? null) : null);
+  };
+
+  const handleContextMenu = (node: AssetTreeNode, event: React.MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    if (!isAdmin) return;
+    if (!selectedPaths.has(node.path)) {
+      setSelectedPaths(new Set([node.path]));
+      setSelectionAnchor(node.path);
+      setSelected(node.kind === "file" ? (node.asset ?? null) : null);
+    }
+    setContextMenu({ x: event.clientX, y: event.clientY });
+  };
+
+  const submitDelete = (paths: string[]) => {
+    setOperationBusy(true);
+    applyAssetOperation(repoName, { action: "delete", targets: selectedTargets(paths) })
+      .then((res) => {
+        notifySuccess(t("repoDetail.batchDeleteOk", { count: res.affected }));
+        setSelectedPaths(new Set());
+        setSelectionAnchor(null);
+        setSelected(null);
+        setReloadNonce((n) => n + 1);
+      })
+      .catch(notifyError)
+      .finally(() => setOperationBusy(false));
+  };
+
+  // FR-105：统一删除事务成功后才清空选择；失败时保留选择以便重试。
   const handleBatchDelete = () => {
     const paths = [...selectedPaths];
     if (paths.length === 0) {
@@ -311,23 +395,38 @@ export function RepoBrowser({
       message: t("repoDetail.batchDeleteConfirm", { count: paths.length }),
       confirmLabel: t("common.delete"),
       cancelLabel: t("common.cancel"),
-      onConfirm: () => {
-        setBatchDeleting(true);
-        batchDeleteAssets(repoName, paths)
-          .then((res) => {
-            if (res.failed.length > 0) {
-              const detail = res.failed.map((f) => `${f.path}：${f.error}`).join("；");
-              notifyError(`${t("repoDetail.batchDeletePartial")} ${detail}`);
-            } else {
-              notifySuccess(t("repoDetail.batchDeleteOk", { count: res.deleted }));
-            }
-            setSelectedPaths(new Set());
-            setReloadNonce((n) => n + 1);
-          })
-          .catch(notifyError)
-          .finally(() => setBatchDeleting(false));
-      },
+      onConfirm: () => submitDelete(paths),
     });
+  };
+
+  const openPathOperation = (action: "move" | "rename") => {
+    setContextMenu(null);
+    const first = [...selectedPaths][0] ?? "";
+    setPathOperation(action);
+    setPathInput(action === "rename" ? first : "");
+  };
+
+  const submitPathOperation = () => {
+    if (!pathOperation || !pathInput.trim()) return;
+    const paths = [...selectedPaths];
+    setOperationBusy(true);
+    applyAssetOperation(repoName, {
+      action: pathOperation,
+      targets: selectedTargets(paths),
+      ...(pathOperation === "move"
+        ? { destinationPath: pathInput.trim() }
+        : { newPath: pathInput.trim() }),
+    })
+      .then((res) => {
+        notifySuccess(t("repoDetail.assetOperationOk", { count: res.affected }));
+        setPathOperation(null);
+        setSelectedPaths(new Set());
+        setSelectionAnchor(null);
+        setSelected(null);
+        setReloadNonce((n) => n + 1);
+      })
+      .catch(notifyError)
+      .finally(() => setOperationBusy(false));
   };
 
   const handleUpload = (file: File | null) => {
@@ -434,7 +533,16 @@ export function RepoBrowser({
         </Text>
       )}
 
-      {treeError && <Alert color="red">{treeError}</Alert>}
+      {treeError && (
+        <Alert color="red">
+          <Group justify="space-between" wrap="wrap">
+            <Text size="sm">{treeError}</Text>
+            <Button size="xs" variant="light" onClick={() => setReloadNonce((value) => value + 1)}>
+              {t("common.retry")}
+            </Button>
+          </Group>
+        </Alert>
+      )}
 
       {/* FR-69: 中央 Loader 仅首载（无旧树可展示）时出现 */}
       {treeLoading && treeNodes.length === 0 && (
@@ -516,20 +624,10 @@ export function RepoBrowser({
                 })}
               </Text>
             )}
-            {/* FR-103：勾选数 >0 且管理员时显示「删除所选」工具栏按钮 */}
-            {isAdmin && selectedPaths.size > 0 && (
-              <Group justify="flex-end" mb="xs">
-                <Button
-                  size="xs"
-                  color="red"
-                  variant="light"
-                  leftSection={<IconTrash size={14} />}
-                  loading={batchDeleting}
-                  onClick={handleBatchDelete}
-                >
-                  {t("repoDetail.batchDeleteWithCount", { count: selectedPaths.size })}
-                </Button>
-              </Group>
+            {treeActionError && (
+              <Alert color="red" py="xs" mb="xs">
+                {treeActionError}
+              </Alert>
             )}
             <ScrollArea style={{ flex: 1 }} type="auto" offsetScrollbars>
               <RepoAssetTree
@@ -544,7 +642,8 @@ export function RepoBrowser({
                 showSize={searchResults !== null}
                 selectable={isAdmin}
                 selectedPaths={selectedPaths}
-                onToggleSelect={onToggleSelect}
+                onNodeInteraction={isAdmin ? onNodeInteraction : undefined}
+                onContextMenu={isAdmin ? handleContextMenu : undefined}
               />
             </ScrollArea>
           </Card>
@@ -580,16 +679,6 @@ export function RepoBrowser({
                   asset={selected}
                   usage={usageState.data}
                   showDownload
-                  // FR-102：删除成功后清空选中态并复用 reloadNonce 触发文件树刷新
-                  onDeleted={() => {
-                    setSelected(null);
-                    setSelectedPaths((prev) => {
-                      const next = new Set(prev);
-                      next.delete(selected.path);
-                      return next;
-                    });
-                    setReloadNonce((n) => n + 1);
-                  }}
                 />
               ) : (
                 <UsagePanel usageState={usageState} />
@@ -598,6 +687,91 @@ export function RepoBrowser({
           </Card>
         </Box>
       )}
+
+      {contextMenu && (
+        <Box
+          role="menu"
+          onMouseLeave={() => setContextMenu(null)}
+          style={{
+            position: "fixed",
+            left: contextMenu.x,
+            top: contextMenu.y,
+            zIndex: 1000,
+            display: "flex",
+            flexDirection: "column",
+            gap: 2,
+            padding: 6,
+            minWidth: 132,
+            background: "var(--mantine-color-body)",
+            border: "1px solid var(--mantine-color-default-border)",
+            borderRadius: 6,
+            boxShadow: "var(--mantine-shadow-md)",
+          }}
+        >
+          <Button
+            role="menuitem"
+            variant="subtle"
+            size="xs"
+            justify="flex-start"
+            onClick={() => {
+              setContextMenu(null);
+              handleBatchDelete();
+            }}
+          >
+            {t("common.delete")}
+          </Button>
+          {repoType === "hosted" && operationSupportsPathMutation(format) && (
+            <>
+              <Button
+                role="menuitem"
+                variant="subtle"
+                size="xs"
+                justify="flex-start"
+                onClick={() => openPathOperation("move")}
+              >
+                {t("repoDetail.assetMove")}
+              </Button>
+              <Button
+                role="menuitem"
+                variant="subtle"
+                size="xs"
+                justify="flex-start"
+                disabled={selectedPaths.size !== 1}
+                onClick={() => openPathOperation("rename")}
+              >
+                {t("repoDetail.assetRename")}
+              </Button>
+            </>
+          )}
+        </Box>
+      )}
+
+      <Modal
+        opened={pathOperation !== null}
+        onClose={() => setPathOperation(null)}
+        title={pathOperation === "move" ? t("repoDetail.assetMove") : t("repoDetail.assetRename")}
+      >
+        <Stack gap="sm">
+          <TextInput
+            label={
+              pathOperation === "move"
+                ? t("repoDetail.assetDestinationPath")
+                : t("repoDetail.assetNewPath")
+            }
+            value={pathInput}
+            onChange={(event) => setPathInput(event.currentTarget.value)}
+            disabled={operationBusy}
+          />
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => setPathOperation(null)}>
+              {t("common.cancel")}
+            </Button>
+            <Button loading={operationBusy} onClick={submitPathOperation}>
+              {pathOperation === "move" ? t("repoDetail.assetMove") : t("repoDetail.assetRename")}
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
     </Stack>
   );
 }

@@ -69,7 +69,7 @@ func (h *Handlers) UpdateUser(c *gin.Context, id UserIdParam) {
 	if req.Status != nil {
 		status = string(*req.Status)
 	}
-	user, err := h.users.Update(id, role, status)
+	user, err := h.users.Update(id, role, status, req.WebLoginDisabled)
 	if err != nil {
 		writeDomainErr(c, err)
 		return

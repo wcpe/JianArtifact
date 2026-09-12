@@ -1,7 +1,7 @@
 // 仓库访问控制：编辑某仓库的 ACL 条目（用户 + 权限），整表 PUT 保存。
-import { ActionIcon, Badge, Button, Group, Select, Table } from "@mantine/core";
+import { ActionIcon, Alert, Badge, Button, Group, Select, Table } from "@mantine/core";
 import { IconTrash } from "@tabler/icons-react";
-import { EmptyState, PageHeader } from "@jianartifact/ui";
+import { EmptyState } from "@jianartifact/ui";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "react-router-dom";
@@ -17,15 +17,11 @@ export function AclPage() {
   const navigate = useNavigate();
   const { name = "" } = useParams();
 
-  // 并行拉取 ACL 条目与用户列表（page_size: 100 足够覆盖常见规模）。
-  const state = useAsync(
-    () =>
-      Promise.all([getAcl(name), listUsers({ page_size: 100 })]).then(([acl, users]) => ({
-        acl,
-        users,
-      })),
-    [name],
-  );
+  // 仓库 admin 可读取并编辑 ACL，但仅全局管理员可枚举全部用户。
+  const state = useAsync(() => getAcl(name), [name], { cacheKey: `acl:${name}` });
+  const usersState = useAsync(() => listUsers({ page_size: 100 }), [name], {
+    cacheKey: "users:list",
+  });
 
   const [entries, setEntries] = useState<AclEntry[]>([]);
   const [users, setUsers] = useState<User[]>([]);
@@ -37,10 +33,13 @@ export function AclPage() {
 
   useEffect(() => {
     if (state.data) {
-      setEntries(state.data.acl.items);
-      setUsers(state.data.users.items);
+      setEntries(state.data.items);
     }
   }, [state.data]);
+
+  useEffect(() => {
+    setUsers(usersState.data?.items ?? []);
+  }, [usersState.data]);
 
   // id → username 映射；列表中用用户名展示，映射缺失时回退到 id。
   const nameById = useMemo(() => {
@@ -103,19 +102,14 @@ export function AclPage() {
 
   return (
     <>
-      <PageHeader
-        title={`${t("acl.title")} · ${name}`}
-        actions={
-          <Group gap="xs">
-            <Button variant="default" onClick={() => navigate("/repositories")}>
-              {t("common.close")}
-            </Button>
-            <Button onClick={handleSave} loading={saving}>
-              {t("acl.save")}
-            </Button>
-          </Group>
-        }
-      />
+      <Group justify="flex-end" mb="md" gap="xs">
+        <Button variant="default" onClick={() => navigate("/repositories")}>
+          {t("common.close")}
+        </Button>
+        <Button onClick={handleSave} loading={saving}>
+          {t("acl.save")}
+        </Button>
+      </Group>
 
       <AsyncBoundary state={state}>
         {() => (
@@ -171,29 +165,37 @@ export function AclPage() {
             )}
 
             {/* 新增条目行：选用户 + 选权限 + 添加按钮 */}
-            <Group mt="md" align="flex-end" gap="sm">
-              <Select
-                label={t("acl.user")}
-                placeholder={t("acl.userPlaceholder")}
-                data={availableUserOptions}
-                value={newSubjectId}
-                onChange={setNewSubjectId}
-                searchable
-                w={240}
-                nothingFoundMessage={t("common.empty")}
-              />
-              <Select
-                label={t("acl.action")}
-                data={actionOptions}
-                allowDeselect={false}
-                value={newAction}
-                onChange={(v) => v && setNewAction(v as AclAction)}
-                w={140}
-              />
-              <Button variant="light" onClick={addEntry} disabled={!newSubjectId}>
-                {t("acl.addEntry")}
-              </Button>
-            </Group>
+            {usersState.error ? (
+              <Alert color="blue" mt="md">
+                {t("acl.userListUnavailable", {
+                  defaultValue: "无法加载可授权用户，仍可编辑已有访问控制条目。",
+                })}
+              </Alert>
+            ) : (
+              <Group mt="md" align="flex-end" gap="sm">
+                <Select
+                  label={t("acl.user")}
+                  placeholder={t("acl.userPlaceholder")}
+                  data={availableUserOptions}
+                  value={newSubjectId}
+                  onChange={setNewSubjectId}
+                  searchable
+                  w={240}
+                  nothingFoundMessage={t("common.empty")}
+                />
+                <Select
+                  label={t("acl.action")}
+                  data={actionOptions}
+                  allowDeselect={false}
+                  value={newAction}
+                  onChange={(v) => v && setNewAction(v as AclAction)}
+                  w={140}
+                />
+                <Button variant="light" onClick={addEntry} disabled={!newSubjectId}>
+                  {t("acl.addEntry")}
+                </Button>
+              </Group>
+            )}
           </>
         )}
       </AsyncBoundary>

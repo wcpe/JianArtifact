@@ -16,7 +16,7 @@ import {
   Title,
 } from "@mantine/core";
 import { IconTrash } from "@tabler/icons-react";
-import { EmptyState, PageHeader } from "@jianartifact/ui";
+import { EmptyState } from "@jianartifact/ui";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "react-router-dom";
@@ -57,25 +57,29 @@ export function RepositoryDetailPage() {
   const allowUpload = Boolean(user);
 
   // 拉取仓库信息：已登录用户走 listRepositories，未登录用户走 getRepositoryUsage（公开 API）
-  const repoState = useAsync(() => {
-    if (user) {
-      return listRepositories({ page_size: 100 }).then(
-        (list) => list.items.find((r) => r.name === name) ?? null,
+  const repoState = useAsync(
+    () => {
+      if (user) {
+        return listRepositories({ page_size: 100 }).then(
+          (list) => list.items.find((r) => r.name === name) ?? null,
+        );
+      }
+      // 未登录：用公开端点获取仓库基本信息，构造精简 Repository 对象
+      return getRepositoryUsage(name).then(
+        (usage) =>
+          ({
+            name,
+            format: usage.format ?? "raw",
+            type: usage.type ?? "hosted",
+            visibility: "public" as RepoVisibility,
+            description: usage.description,
+            createdAt: "",
+          }) as Repository,
       );
-    }
-    // 未登录：用公开端点获取仓库基本信息，构造精简 Repository 对象
-    return getRepositoryUsage(name).then(
-      (usage) =>
-        ({
-          name,
-          format: usage.format ?? "raw",
-          type: usage.type ?? "hosted",
-          visibility: "public" as RepoVisibility,
-          description: usage.description,
-          createdAt: "",
-        }) as Repository,
-    );
-  }, [name, user]);
+    },
+    [name, user],
+    { cacheKey: `repo:detail:${name}:${user ? "managed" : "public"}` },
+  );
   const repo = repoState.data ?? null;
 
   return (
@@ -89,17 +93,18 @@ export function RepositoryDetailPage() {
         overflow: "hidden",
       }}
     >
-      {/* FR-81：副标题展示后台可配置的仓库描述（无描述则留空，不再放固定说明文案）。 */}
-      <PageHeader
-        title={`${t("repoDetail.title")} · ${name}`}
-        description={repo?.description || undefined}
-        actions={
-          // FR-74：未登录的登录入口收敛到页眉（AppLayout），此处仅保留返回。
-          <Button variant="default" onClick={() => navigate("/repositories")}>
-            {t("common.close")}
-          </Button>
-        }
-      />
+      {/* FR-81：仓库后台描述以轻量副文本呈现（不再用页头大标题）。 */}
+      <Group justify="flex-end" mb="xs">
+        {/* FR-74：未登录的登录入口收敛到页眉（AppLayout），此处仅保留返回。 */}
+        <Button variant="default" onClick={() => navigate("/repositories")}>
+          {t("common.close")}
+        </Button>
+      </Group>
+      {repo?.description ? (
+        <Text size="sm" c="dimmed" mb="sm">
+          {repo.description}
+        </Text>
+      ) : null}
 
       {/* 页头 Badge：format/type/visibility */}
       {repo && (
@@ -120,7 +125,17 @@ export function RepositoryDetailPage() {
         defaultValue="browse"
         style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
       >
-        <Tabs.List>
+        <Tabs.List
+          data-testid="repo-detail-tabs"
+          style={{
+            position: "sticky",
+            top: 0,
+            zIndex: 1,
+            flexWrap: "nowrap",
+            overflowX: "auto",
+            background: "var(--mantine-color-body)",
+          }}
+        >
           <Tabs.Tab value="browse">{t("repoDetail.tabBrowse")}</Tabs.Tab>
           {isAdmin && <Tabs.Tab value="config">{t("repoDetail.tabConfig")}</Tabs.Tab>}
           {isAdmin && <Tabs.Tab value="acl">{t("repoDetail.tabAcl")}</Tabs.Tab>}
@@ -170,7 +185,9 @@ function ConfigTab({
   // FR-114：连接状态（本地 state 承载重测后的即时更新，避免等待整页刷新）
   const [connStatus, setConnStatus] = useState<ConnectionStatusValue | null>(null);
   // group 成员候选：当前列表中同格式、非本仓的仓库名。
-  const reposState = useAsync(() => listRepositories({ page_size: 100 }), []);
+  const reposState = useAsync(() => listRepositories({ page_size: 100 }), [], {
+    cacheKey: "repositories:options",
+  });
   const memberOptions = (reposState.data?.items ?? [])
     .filter((r) => r.format === repo?.format && r.name !== repo?.name)
     .map((r) => r.name);
@@ -354,6 +371,7 @@ function AclPanel({ repoName }: { repoName: string }) {
         users,
       })),
     [repoName],
+    { cacheKey: `repo:acl-editor:${repoName}` },
   );
 
   const [entries, setEntries] = useState<AclEntry[]>([]);

@@ -1,11 +1,20 @@
 // 鉴权上下文：持有当前用户与会话令牌，暴露登录 / 自举 / 登出。
 // 令牌与用户快照持久化到 localStorage，刷新后免重新登录（后端无 /me，故快照用户）。
 // 监听全局 401 事件（AUTH_EXPIRED_EVENT），token 过期时自动清除本地会话。
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { ReactNode } from "react";
 
 import * as api from "../api/endpoints";
 import { AUTH_EXPIRED_EVENT, setToken } from "../api/client";
+import { clearAsyncCache } from "../hooks/useAsync";
 import type { User } from "../api/types";
 
 const USER_KEY = "jianartifact.user";
@@ -43,6 +52,15 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(() => readStoredUser());
+  // 页面数据缓存按会话身份隔离：登录/登出/切换账号即清空，避免回放他人数据。
+  const identityRef = useRef<string | null>(null);
+  useEffect(() => {
+    const identity = user ? `user:${user.id}` : null;
+    if (identityRef.current !== identity) {
+      identityRef.current = identity;
+      clearAsyncCache();
+    }
+  }, [user]);
 
   const persist = useCallback((token: string, nextUser: User) => {
     setToken(token);

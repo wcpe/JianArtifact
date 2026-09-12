@@ -27,23 +27,29 @@ export interface ConfirmOptions {
   onConfirm: () => void;
 }
 
-/**
- * 危险操作二次确认弹窗：确认按钮红色，替代原生 window.confirm，
- * 与 Mantine 主题 / 暗色一致，且可本地化按钮文案。
- */
-export function confirmDanger({
-  title,
-  message,
-  confirmLabel,
-  cancelLabel,
-  onConfirm,
-}: ConfirmOptions): void {
+function openConfirm(
+  { title, message, confirmLabel, cancelLabel, onConfirm }: ConfirmOptions,
+  dangerous: boolean,
+): void {
   modals.openConfirmModal({
     title,
     centered: true,
     children: <Text size="sm">{message}</Text>,
     labels: { confirm: confirmLabel, cancel: cancelLabel },
-    confirmProps: { color: "red" },
+    ...(dangerous ? { confirmProps: { color: "red" } } : {}),
     onConfirm,
   });
+}
+
+/** 普通写操作确认弹窗：保留中性强调色，避免把启动或续传误示为危险操作。 */
+export function confirmAction(options: ConfirmOptions): void {
+  openConfirm(options, false);
+}
+
+/**
+ * 危险操作二次确认弹窗：确认按钮红色，替代原生 window.confirm，
+ * 与 Mantine 主题 / 暗色一致，且可本地化按钮文案。
+ */
+export function confirmDanger(options: ConfirmOptions): void {
+  openConfirm(options, true);
 }

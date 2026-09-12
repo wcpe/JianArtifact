@@ -73,6 +73,37 @@ func TestPutDedup(t *testing.T) {
 	}
 }
 
+func TestCleanupOCIUploadTempsKeepsOtherTempFiles(t *testing.T) {
+	s := NewStore(t.TempDir())
+	ociFile, err := s.CreateOCIUploadTemp()
+	if err != nil {
+		t.Fatalf("创建 OCI 上传暂存：%v", err)
+	}
+	if _, err := ociFile.WriteString("partial"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ociFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+	otherDir := filepath.Join(s.root, tmpDirName, "other")
+	if err := os.MkdirAll(otherDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	otherFile := filepath.Join(otherDir, "keep")
+	if err := os.WriteFile(otherFile, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CleanupOCIUploadTemps(); err != nil {
+		t.Fatalf("清理 OCI 上传暂存：%v", err)
+	}
+	if _, err := os.Stat(ociFile.Name()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("OCI 上传暂存应删除，err=%v", err)
+	}
+	if _, err := os.Stat(otherFile); err != nil {
+		t.Fatalf("其它临时文件不得删除：%v", err)
+	}
+}
+
 func TestChecksumsMatchesPut(t *testing.T) {
 	s := NewStore(t.TempDir())
 	content := []byte("backfill-checksum-probe")
@@ -156,5 +187,45 @@ func TestPutConcurrentSameContent(t *testing.T) {
 	}
 	if !s.Exists(wantHash) {
 		t.Fatalf("并发写后 blob 应存在")
+	}
+}
+
+func TestStageRestoreAndFinalizeQuarantine(t *testing.T) {
+	s := NewStore(t.TempDir())
+	hash, _, _, _, err := s.Put(bytes.NewReader([]byte("quarantine me")))
+	if err != nil {
+		t.Fatalf("Put 失败：%v", err)
+	}
+	entry, err := s.Stage(hash, "op-1")
+	if err != nil {
+		t.Fatalf("Stage 失败：%v", err)
+	}
+	if s.Exists(hash) {
+		t.Fatal("隔离后活动 blob 不应存在")
+	}
+	rc, _, err := s.OpenQuarantine(entry)
+	if err != nil {
+		t.Fatalf("隔离区 blob 不可读：%v", err)
+	}
+	got, _ := io.ReadAll(rc)
+	_ = rc.Close()
+	if string(got) != "quarantine me" {
+		t.Fatalf("隔离区内容不符：%q", got)
+	}
+	if err := s.Restore(entry); err != nil {
+		t.Fatalf("Restore 失败：%v", err)
+	}
+	if !s.Exists(hash) {
+		t.Fatal("恢复后活动 blob 应存在")
+	}
+	entry, err = s.Stage(hash, "op-2")
+	if err != nil {
+		t.Fatalf("再次 Stage 失败：%v", err)
+	}
+	if err := s.Finalize(entry); err != nil {
+		t.Fatalf("Finalize 失败：%v", err)
+	}
+	if _, _, err := s.OpenQuarantine(entry); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Finalize 后隔离 blob 应不存在：%v", err)
 	}
 }

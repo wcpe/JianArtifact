@@ -1,5 +1,7 @@
 // 入口：加载 Mantine 样式与 i18n，开发态启动 MSW 后再挂载应用。
 import "@mantine/core/styles.css";
+import "@mantine/dates/styles.css";
+import "@mantine/charts/styles.css";
 import "@mantine/notifications/styles.css";
 import "./global.css";
 

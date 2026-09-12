@@ -86,17 +86,5 @@ export function assetDownloadUrl(repo: string, format: string, path: string): st
   return `/repository/${encodeURIComponent(repo)}/${enc}`;
 }
 
-/** 人类可读文件大小。 */
-export function formatBytes(bytes: number): string {
-  if (bytes < 1024) {
-    return `${bytes} B`;
-  }
-  const units = ["KB", "MB", "GB", "TB"];
-  let value = bytes / 1024;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  return `${value.toFixed(1)} ${units[unit]}`;
-}
+/** 人类可读文件大小（实现迁移至 lib/format，此处保留导出以兼容既有引用）。 */
+export { formatBytes } from "./format";

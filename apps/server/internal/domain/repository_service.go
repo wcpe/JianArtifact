@@ -2,13 +2,17 @@ package domain
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"net/url"
 	"slices"
 	"sort"
 	"strings"
 
+	"github.com/jmoiron/sqlx"
+	"github.com/wcpe/jianartifact/apps/server/internal/formats"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
+	"github.com/wcpe/jianartifact/apps/server/internal/upstream"
 )
 
 // AnonymousUsername 是内置匿名主体的用户名（FR-66）：迁移脚本创建，
@@ -17,22 +21,41 @@ const AnonymousUsername = "anonymous"
 
 // RepositoryService 处理仓库管理、ACL 与授权判定。
 type RepositoryService struct {
-	repos    *repository.RepoRepo
-	acls     *repository.AclRepo
-	assets   *repository.AssetRepo
-	settings *SettingService
-	users    *repository.UserRepo
-	recorder ChangeRecorder
+	repos     *repository.RepoRepo
+	acls      *repository.AclRepo
+	assets    *repository.AssetRepo
+	metadata  *repository.FormatMetadataRepo
+	settings  *SettingService
+	users     *repository.UserRepo
+	mutator   *AssetMutationCoordinator
+	recorder  ChangeRecorder
+	writeGate BusinessWriteGate
+	enabled   formats.Set
 }
 
 // NewRepositoryService 构造 RepositoryService。settings 与 users 供匿名判定
 // （全局开关 + anonymous 主体 ACL，FR-66）使用。
 func NewRepositoryService(repos *repository.RepoRepo, acls *repository.AclRepo, assets *repository.AssetRepo, settings *SettingService, users *repository.UserRepo) *RepositoryService {
-	return &RepositoryService{repos: repos, acls: acls, assets: assets, settings: settings, users: users}
+	return &RepositoryService{repos: repos, acls: acls, assets: assets, settings: settings, users: users, enabled: formats.Default()}
 }
+
+// SetEnabledFormats 注入启动期格式能力集合。集合仅在装配阶段设置，运行中不切换。
+func (s *RepositoryService) SetEnabledFormats(enabled formats.Set) { s.enabled = enabled }
+
+// EnabledFormats 返回当前进程启用的格式，供管理面展示。
+func (s *RepositoryService) EnabledFormats() []string { return s.enabled.List() }
 
 // SetChangeRecorder 注入复制变更日志记录器（FR-83）；nil 表示不记录。
 func (s *RepositoryService) SetChangeRecorder(r ChangeRecorder) { s.recorder = r }
+
+// SetBusinessWriteGate 注入备用节点本地业务写栅栏；nil 保持兼容行为。
+func (s *RepositoryService) SetBusinessWriteGate(gate BusinessWriteGate) { s.writeGate = gate }
+
+// SetMutationCoordinator 注入节点级资产生命周期协调器，供仓库删除和 Maven 清理复用。
+func (s *RepositoryService) SetMutationCoordinator(c *AssetMutationCoordinator) { s.mutator = c }
+
+// SetFormatMetadataRepo 注入格式索引仓储，供仓库级删除持久化回滚快照。
+func (s *RepositoryService) SetFormatMetadataRepo(r *repository.FormatMetadataRepo) { s.metadata = r }
 
 // recordChange 记录复制变更日志；记录失败不阻断业务写（对账兜底，见 ADR-0013）。
 func (s *RepositoryService) recordChange(entityType, entityKey, op string, data any) {
@@ -152,14 +175,31 @@ func (s *RepositoryService) Usage(name, baseURL string) (*repository.Repository,
 	if err != nil {
 		return nil, nil, mapNotFound(err)
 	}
+	if !s.enabled.Has(repo.Format) {
+		return nil, nil, fmt.Errorf("%w: %s", ErrFormatDisabled, repo.Format)
+	}
 	return repo, buildUsage(repo, baseURL), nil
 }
 
 // Create 创建仓库（默认可见性 private）。cfg 为结构化配置：
-// proxy 必填合法 remoteUrl；group 必填 members（均存在且同 format、禁止自引用）。
+// proxy 必填合法 remoteUrl，可选 credentialRef（环境变量引用名）；
+// group 必填 members（均存在且同 format、禁止自引用）。
 // description 为仓库描述（可为空）。
 // 校验不过返回 ErrValidation；仓库名重复返回 ErrConflict。
 func (s *RepositoryService) Create(name, format, typ, visibility, description string, cfg repository.RepositoryConfig) (*repository.Repository, error) {
+	if err := requireBusinessWrite(s.writeGate); err != nil {
+		return nil, err
+	}
+	format = strings.ToLower(strings.TrimSpace(format))
+	if !slices.Contains(formats.Known, format) {
+		return nil, fmt.Errorf("%w: 未知格式 %q", ErrValidation, format)
+	}
+	if !s.enabled.Has(format) {
+		return nil, fmt.Errorf("%w: %s", ErrFormatDisabled, format)
+	}
+	if err := validateFormatType(format, typ); err != nil {
+		return nil, err
+	}
 	if visibility == "" {
 		visibility = "private"
 	}
@@ -196,6 +236,9 @@ func (s *RepositoryService) Create(name, format, typ, visibility, description st
 // description 为 nil 表示不改（指向空串表示清空）；cfg 非 nil 时
 // 按仓库当前 format/type 重新校验并覆盖写 config。仓库不存在返回 ErrNotFound。
 func (s *RepositoryService) Update(name, visibility string, description *string, cfg *repository.RepositoryConfig) (*repository.Repository, error) {
+	if err := requireBusinessWrite(s.writeGate); err != nil {
+		return nil, err
+	}
 	repo, err := s.repos.GetByName(name)
 	if err != nil {
 		return nil, mapNotFound(err)
@@ -237,6 +280,9 @@ func (s *RepositoryService) Update(name, visibility string, description *string,
 // 直接落库、不写复制变更日志：online 是节点本地运维状态（M-2 硬约束），
 // 不得经复制传播到对端覆盖其本地状态。仓库不存在返回 ErrNotFound。
 func (s *RepositoryService) SetOnline(name string, online bool) error {
+	if err := requireBusinessWrite(s.writeGate); err != nil {
+		return err
+	}
 	if err := s.repos.SetOnline(name, online); err != nil {
 		return mapNotFound(err)
 	}
@@ -244,27 +290,30 @@ func (s *RepositoryService) SetOnline(name string, online bool) error {
 }
 
 // validateConfig 按仓库类型校验结构化配置：
-//   - hosted：remoteUrl 与 members 均须为空；
-//   - proxy：remoteUrl 必填且为合法 http/https 绝对地址，members 须为空；
-//   - group：members 必填（≥1），每个成员须存在、与本仓 format 一致且非自引用，remoteUrl 须为空。
+//   - hosted：remoteUrl、credentialRef 与 members 均须为空；
+//   - proxy：remoteUrl 必填且为合法 http/https 绝对地址，members 与 immutableRelease 须为空或 false，credentialRef 可选且必须是环境变量引用名；
+//   - group：members 必填（≥1），每个成员须存在、与本仓 format 一致且非自引用，remoteUrl、credentialRef 与 immutableRelease 须为空或 false。
 //
 // 违规返回 ErrValidation。
 func (s *RepositoryService) validateConfig(name, format, typ string, cfg repository.RepositoryConfig) error {
 	switch typ {
 	case "hosted":
-		if cfg.RemoteURL != "" || len(cfg.Members) > 0 {
+		if cfg.RemoteURL != "" || cfg.CredentialRef != "" || len(cfg.Members) > 0 {
 			return ErrValidation
 		}
 	case "proxy":
-		if len(cfg.Members) > 0 || cfg.RemoteURL == "" {
+		if len(cfg.Members) > 0 || cfg.RemoteURL == "" || cfg.ImmutableRelease {
 			return ErrValidation
 		}
 		u, err := url.Parse(cfg.RemoteURL)
-		if err != nil || !u.IsAbs() || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		if err != nil || !u.IsAbs() || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+			return ErrValidation
+		}
+		if cfg.CredentialRef != "" && !validCredentialRef(cfg.CredentialRef) {
 			return ErrValidation
 		}
 	case "group":
-		if cfg.RemoteURL != "" || len(cfg.Members) == 0 {
+		if cfg.RemoteURL != "" || cfg.CredentialRef != "" || cfg.ImmutableRelease || len(cfg.Members) == 0 {
 			return ErrValidation
 		}
 		for _, m := range cfg.Members {
@@ -285,9 +334,184 @@ func (s *RepositoryService) validateConfig(name, format, typ string, cfg reposit
 	return nil
 }
 
+func validateFormatType(format, typ string) error {
+	if format == "gomod" && typ != "proxy" {
+		return ErrValidation
+	}
+	return nil
+}
+
+// MigrationRepositorySpec 是迁移启动前的目标仓库拓扑描述。
+// 它只包含已经过来源层白名单筛选的非敏感配置。
+type MigrationRepositorySpec struct {
+	Name   string
+	Format string
+	Type   string
+	Config repository.RepositoryConfig
+}
+
+// ValidateMigrationPlan 在迁移任务进入 running 前校验格式能力和目标拓扑，避免异步任务
+// 先写入一部分仓库后才发现格式禁用、代理缺上游或 group 成员无效。
+func (s *RepositoryService) ValidateMigrationPlan(specs []MigrationRepositorySpec) error {
+	byName := make(map[string]MigrationRepositorySpec, len(specs))
+	for _, spec := range specs {
+		format := strings.ToLower(strings.TrimSpace(spec.Format))
+		if !slices.Contains(formats.Known, format) {
+			return fmt.Errorf("%w: 未知格式 %q", ErrValidation, format)
+		}
+		if !s.enabled.Has(format) {
+			return fmt.Errorf("%w: %s", ErrFormatDisabled, format)
+		}
+		if spec.Name == "" || spec.Type == "" {
+			return ErrValidation
+		}
+		switch spec.Type {
+		case "hosted", "proxy", "group":
+		default:
+			return ErrValidation
+		}
+		if err := validateFormatType(format, spec.Type); err != nil {
+			return err
+		}
+		spec.Format = format
+		if _, exists := byName[spec.Name]; exists {
+			return ErrValidation
+		}
+		byName[spec.Name] = spec
+	}
+	for _, spec := range specs {
+		if spec.Type != "group" {
+			if err := s.validateConfig(spec.Name, strings.ToLower(strings.TrimSpace(spec.Format)), spec.Type, spec.Config); err != nil {
+				return err
+			}
+			continue
+		}
+		if spec.Config.RemoteURL != "" || spec.Config.CredentialRef != "" || len(spec.Config.Members) == 0 {
+			return ErrValidation
+		}
+		for _, memberName := range spec.Config.Members {
+			if memberName == "" || memberName == spec.Name {
+				return ErrValidation
+			}
+			member, ok := byName[memberName]
+			if !ok {
+				var err error
+				memberRepo, err := s.repos.GetByName(memberName)
+				if err != nil {
+					return ErrValidation
+				}
+				member = MigrationRepositorySpec{Format: memberRepo.Format}
+			}
+			if member.Format != strings.ToLower(strings.TrimSpace(spec.Format)) {
+				return ErrValidation
+			}
+		}
+	}
+	visiting := map[string]bool{}
+	visited := map[string]bool{}
+	var visit func(string) error
+	visit = func(name string) error {
+		if visited[name] {
+			return nil
+		}
+		if visiting[name] {
+			return ErrValidation
+		}
+		item, ok := byName[name]
+		if !ok || item.Type != "group" {
+			return nil
+		}
+		visiting[name] = true
+		for _, member := range item.Config.Members {
+			if err := visit(member); err != nil {
+				return err
+			}
+		}
+		delete(visiting, name)
+		visited[name] = true
+		return nil
+	}
+	for name, spec := range byName {
+		if spec.Type == "group" {
+			if err := visit(name); err != nil {
+				return err
+			}
+		}
+	}
+	for _, spec := range specs {
+		existing, err := s.repos.GetByName(spec.Name)
+		if errors.Is(err, repository.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if existing.Format != strings.ToLower(strings.TrimSpace(spec.Format)) || existing.Type != spec.Type {
+			return ErrConflict
+		}
+		current, err := existing.DecodeConfig()
+		if err != nil {
+			return err
+		}
+		if current.RemoteURL != spec.Config.RemoteURL || current.CredentialRef != spec.Config.CredentialRef || !slices.Equal(current.Members, spec.Config.Members) {
+			return ErrConflict
+		}
+	}
+	return nil
+}
+
+// validCredentialRef 仅接受专用凭据命名空间的逻辑名称。
+// 此处绝不读取环境变量，避免凭据值进入领域模型、数据库或管理面响应。
+func validCredentialRef(ref string) bool {
+	return upstream.IsCredentialRef(ref)
+}
+
 // Delete 删除仓库。
 func (s *RepositoryService) Delete(name string) error {
-	if err := s.repos.Delete(name); err != nil {
+	if err := requireBusinessWrite(s.writeGate); err != nil {
+		return err
+	}
+	repo, err := s.repos.GetByName(name)
+	if err != nil {
+		return mapNotFound(err)
+	}
+	if repo.Type != "hosted" {
+		return ErrConflict
+	}
+	assets, err := s.assets.ListByRepo(repo.ID, "", maxAssetOperationItems+1, 0)
+	if err != nil {
+		return err
+	}
+	if len(assets) > maxAssetOperationItems {
+		return ErrOperationLimit
+	}
+	if len(assets) > 0 {
+		if s.mutator == nil {
+			return fmt.Errorf("%w: 资产事务引擎未就绪", ErrConflict)
+		}
+		acls, err := s.acls.ListByRepo(repo.ID)
+		if err != nil {
+			return err
+		}
+		var metadata []repository.FormatMetadata
+		if s.metadata != nil {
+			metadata, err = s.metadata.ListAll(repo.ID, repo.Format)
+			if err != nil {
+				return err
+			}
+		}
+		operationID := NewOperationID()
+		snapshot := repository.RepositoryDeleteJournal{Repository: *repo, ACL: acls, FormatMetadata: metadata}
+		_, err = s.mutator.ApplyWithOperationIDAndHook(operationID, deleteMutationItems(assets), func(tx *sqlx.Tx) error {
+			if err := repository.PutRepositoryDeleteJournal(tx, operationID, snapshot); err != nil {
+				return err
+			}
+			return s.repos.DeleteTx(tx, name)
+		})
+		if err != nil {
+			return err
+		}
+	} else if err := s.repos.Delete(name); err != nil {
 		return mapNotFound(err)
 	}
 	s.recordChange(EntityRepository, RepoKey(name), OpDelete, TombstoneData{Deleted: true})
@@ -305,6 +529,9 @@ func (s *RepositoryService) GetAcl(name string) ([]repository.Acl, error) {
 
 // SetAcl 覆盖写入仓库 ACL；仓库不存在返回 ErrNotFound。
 func (s *RepositoryService) SetAcl(name string, entries []repository.Acl) ([]repository.Acl, error) {
+	if err := requireBusinessWrite(s.writeGate); err != nil {
+		return nil, err
+	}
 	r, err := s.repos.GetByName(name)
 	if err != nil {
 		return nil, mapNotFound(err)
@@ -337,6 +564,9 @@ func (s *RepositoryService) recordAclChange(repoName string, entries []repositor
 // CleanupEmptyMavenArtifacts 清理 Maven 仓库中没有 .jar 文件的 GAV 目录。
 // 返回删除的资产数量。仓库不存在返回 ErrNotFound，非 Maven 仓库返回 ErrValidation。
 func (s *RepositoryService) CleanupEmptyMavenArtifacts(name string) (int, error) {
+	if err := requireBusinessWrite(s.writeGate); err != nil {
+		return 0, err
+	}
 	repo, err := s.repos.GetByName(name)
 	if err != nil {
 		return 0, mapNotFound(err)
@@ -344,21 +574,26 @@ func (s *RepositoryService) CleanupEmptyMavenArtifacts(name string) (int, error)
 	if repo.Format != "maven" {
 		return 0, ErrValidation
 	}
+	if !s.enabled.Has(repo.Format) {
+		return 0, fmt.Errorf("%w: %s", ErrFormatDisabled, repo.Format)
+	}
 
-	// 拉取全部资产路径
-	paths, err := s.assets.ListAllPaths(repo.ID)
+	assets, err := s.assets.ListByRepo(repo.ID, "", maxAssetOperationItems+1, 0)
 	if err != nil {
 		return 0, err
+	}
+	if len(assets) > maxAssetOperationItems {
+		return 0, ErrOperationLimit
 	}
 
 	// 按版本目录（倒数第二层以上）分组，判断是否包含 .jar 文件
 	type gavInfo struct {
 		hasJar bool
-		paths  []string
+		assets []repository.Asset
 	}
 	gavMap := make(map[string]*gavInfo)
-	for _, p := range paths {
-		segs := strings.Split(p, "/")
+	for _, asset := range assets {
+		segs := strings.Split(asset.Path, "/")
 		if len(segs) < 4 {
 			continue // 不是合法 GAV 结构
 		}
@@ -369,26 +604,29 @@ func (s *RepositoryService) CleanupEmptyMavenArtifacts(name string) (int, error)
 			info = &gavInfo{}
 			gavMap[versionDir] = info
 		}
-		info.paths = append(info.paths, p)
-		if strings.HasSuffix(p, ".jar") {
+		info.assets = append(info.assets, asset)
+		if strings.HasSuffix(asset.Path, ".jar") {
 			info.hasJar = true
 		}
 	}
 
-	// 删除没有 jar 的版本目录下所有资产
-	deleted := 0
+	var toDelete []repository.Asset
 	for _, info := range gavMap {
 		if info.hasJar {
 			continue
 		}
-		for _, p := range info.paths {
-			if err := s.assets.DeleteByPath(repo.ID, p); err != nil {
-				continue // 跳过单个删除失败
-			}
-			deleted++
-		}
+		toDelete = append(toDelete, info.assets...)
 	}
-	return deleted, nil
+	if len(toDelete) == 0 {
+		return 0, nil
+	}
+	if s.mutator == nil {
+		return 0, fmt.Errorf("%w: 资产事务引擎未就绪", ErrConflict)
+	}
+	if err := s.mutator.Apply(deleteMutationItems(toDelete)); err != nil {
+		return 0, err
+	}
+	return len(toDelete), nil
 }
 
 // CanAccess 判定主体对仓库是否可执行动作（read/write/admin）。

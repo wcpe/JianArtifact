@@ -7,20 +7,35 @@ import {
   Modal,
   PasswordInput,
   Select,
+  NumberInput,
+  Stack,
+  Switch,
   Table,
+  Textarea,
   TextInput,
+  Text,
   Tooltip,
 } from "@mantine/core";
 import { useForm } from "@mantine/form";
 import { useDisclosure } from "@mantine/hooks";
-import { IconKey, IconTrash } from "@tabler/icons-react";
-import { EmptyState, PageHeader } from "@jianartifact/ui";
+import { IconAdjustments, IconKey, IconTrash } from "@tabler/icons-react";
+import { EmptyState } from "@jianartifact/ui";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { AsyncBoundary } from "../components/AsyncBoundary";
-import { createUser, deleteUser, changePassword, listUsers, updateUser } from "../api/endpoints";
-import type { User, UserRole, UserStatus } from "../api/types";
+import {
+  changePassword,
+  createUser,
+  deleteUser,
+  getPublishPolicy,
+  listRepositories,
+  listUsers,
+  updatePublishPolicy,
+  updateUser,
+  type PublishPolicy,
+} from "../api/endpoints";
+import type { Repository, User, UserRole, UserStatus } from "../api/types";
 import { useAsync } from "../hooks/useAsync";
 import { confirmDanger, notifyError, notifySuccess } from "../lib/feedback";
 
@@ -29,12 +44,20 @@ const ANONYMOUS_USERNAME = "anonymous";
 
 export function UsersPage() {
   const { t } = useTranslation();
-  const state = useAsync(() => listUsers({ page_size: 100 }), []);
+  const state = useAsync(() => listUsers({ page_size: 100 }), [], { cacheKey: "users:list" });
 
   const [createOpened, createModal] = useDisclosure(false);
   const [creating, setCreating] = useState(false);
   const [pwdUser, setPwdUser] = useState<User | null>(null);
   const [savingPwd, setSavingPwd] = useState(false);
+  const [policyUser, setPolicyUser] = useState<User | null>(null);
+  const [policyOpened, setPolicyOpened] = useState(false);
+  const [policyRepos, setPolicyRepos] = useState<Repository[]>([]);
+  const [policyRepo, setPolicyRepo] = useState("");
+  const [policy, setPolicy] = useState<PublishPolicy | null>(null);
+  const [policyPrefixes, setPolicyPrefixes] = useState("");
+  const [policyLoading, setPolicyLoading] = useState(false);
+  const [policySaving, setPolicySaving] = useState(false);
 
   const createForm = useForm({
     initialValues: { username: "", password: "", role: "user" as UserRole },
@@ -85,6 +108,74 @@ export function UsersPage() {
       .catch(notifyError);
   };
 
+  const handleToggleWebLogin = (user: User, checked: boolean) => {
+    updateUser(user.id, { webLoginDisabled: checked })
+      .then(() => {
+        notifySuccess(t("common.updated"));
+        state.reload();
+      })
+      .catch(notifyError);
+  };
+
+  const loadPolicy = (userID: number, repository: string) => {
+    if (!repository) {
+      setPolicy(null);
+      return;
+    }
+    setPolicyLoading(true);
+    getPublishPolicy(userID, repository)
+      .then((value) => {
+        setPolicy(value);
+        setPolicyPrefixes(value.allowedPrefixes.join("\n"));
+      })
+      .catch(notifyError)
+      .finally(() => setPolicyLoading(false));
+  };
+
+  const openPolicy = (user: User) => {
+    setPolicyUser(user);
+    setPolicyOpened(true);
+    setPolicy(null);
+    setPolicyRepo("");
+    setPolicyLoading(true);
+    listRepositories({ page_size: 100 })
+      .then((list) => {
+        const hosted = list.items.filter((repo) => repo.type === "hosted");
+        setPolicyRepos(hosted);
+        const first = hosted[0]?.name ?? "";
+        setPolicyRepo(first);
+        if (first) {
+          loadPolicy(user.id, first);
+        }
+      })
+      .catch(notifyError)
+      .finally(() => setPolicyLoading(false));
+  };
+
+  const savePolicy = () => {
+    if (!policyUser || !policy || !policyRepo) return;
+    setPolicySaving(true);
+    updatePublishPolicy(policyUser.id, policyRepo, {
+      webLoginDisabled: policy.webLoginDisabled,
+      allowedPrefixes: policyPrefixes
+        .split(/\r?\n/)
+        .map((prefix) => prefix.trim())
+        .filter(Boolean),
+      maxAssetsHour: policy.maxAssetsHour,
+      maxBytesDay: policy.maxBytesDay,
+      maxFileBytes: policy.maxFileBytes,
+      immutableRelease: policy.immutableRelease,
+    })
+      .then((value) => {
+        setPolicy(value);
+        setPolicyPrefixes(value.allowedPrefixes.join("\n"));
+        notifySuccess(t("common.saved"));
+        state.reload();
+      })
+      .catch(notifyError)
+      .finally(() => setPolicySaving(false));
+  };
+
   const handleDelete = (user: User) => {
     confirmDanger({
       title: t("common.delete"),
@@ -119,11 +210,9 @@ export function UsersPage() {
 
   return (
     <>
-      <PageHeader
-        title={t("users.title")}
-        description={t("users.description")}
-        actions={<Button onClick={createModal.open}>{t("users.create")}</Button>}
-      />
+      <Group justify="flex-end" mb="md">
+        <Button onClick={createModal.open}>{t("users.create")}</Button>
+      </Group>
 
       <AsyncBoundary state={state}>
         {(list) =>
@@ -137,6 +226,7 @@ export function UsersPage() {
                   <Table.Th>{t("users.username")}</Table.Th>
                   <Table.Th>{t("users.role")}</Table.Th>
                   <Table.Th>{t("users.status")}</Table.Th>
+                  <Table.Th>{t("users.webLogin")}</Table.Th>
                   <Table.Th>{t("common.actions")}</Table.Th>
                 </Table.Tr>
               </Table.Thead>
@@ -188,8 +278,26 @@ export function UsersPage() {
                         </Badge>
                       </Table.Td>
                       <Table.Td>
+                        <Switch
+                          size="sm"
+                          aria-label={`${t("users.webLoginEnabled")} ${user.username}`}
+                          checked={!user.webLoginDisabled}
+                          disabled={isAnonymous}
+                          onChange={(event) =>
+                            handleToggleWebLogin(user, !event.currentTarget.checked)
+                          }
+                        />
+                      </Table.Td>
+                      <Table.Td>
                         {!isAnonymous && (
                           <Group gap="xs">
+                            <ActionIcon
+                              variant="subtle"
+                              onClick={() => openPolicy(user)}
+                              aria-label={t("users.publishPolicy")}
+                            >
+                              <IconAdjustments size={16} />
+                            </ActionIcon>
                             <ActionIcon
                               variant="subtle"
                               onClick={() => setPwdUser(user)}
@@ -268,6 +376,90 @@ export function UsersPage() {
             </Button>
           </Group>
         </form>
+      </Modal>
+
+      <Modal
+        opened={policyOpened}
+        onClose={() => setPolicyOpened(false)}
+        title={t("users.publishPolicy")}
+        size="lg"
+      >
+        {!policyUser || policyRepos.length === 0 ? (
+          <EmptyState message={t("users.noHostedRepositories")} />
+        ) : (
+          <Stack gap="sm">
+            <Select
+              label={t("users.publishRepository")}
+              data={policyRepos.map((repo) => ({ value: repo.name, label: repo.name }))}
+              value={policyRepo}
+              allowDeselect={false}
+              onChange={(value) => {
+                const next = value ?? "";
+                setPolicyRepo(next);
+                loadPolicy(policyUser.id, next);
+              }}
+            />
+            {policyLoading ? (
+              <Text size="sm">{t("common.loading")}</Text>
+            ) : policy ? (
+              <>
+                <Switch
+                  label={t("users.webLoginDisabled")}
+                  description={t("users.webLoginDisabledHint")}
+                  checked={policy.webLoginDisabled}
+                  onChange={(event) =>
+                    setPolicy({ ...policy, webLoginDisabled: event.currentTarget.checked })
+                  }
+                />
+                <Textarea
+                  label={t("users.allowedPrefixes")}
+                  description={t("users.allowedPrefixesHint")}
+                  minRows={3}
+                  value={policyPrefixes}
+                  onChange={(event) => setPolicyPrefixes(event.currentTarget.value)}
+                />
+                <Group grow>
+                  <NumberInput
+                    label={t("users.maxAssetsHour")}
+                    min={0}
+                    value={policy.maxAssetsHour}
+                    onChange={(value) =>
+                      setPolicy({ ...policy, maxAssetsHour: Number(value) || 0 })
+                    }
+                  />
+                  <NumberInput
+                    label={t("users.maxBytesDay")}
+                    min={0}
+                    value={policy.maxBytesDay}
+                    onChange={(value) => setPolicy({ ...policy, maxBytesDay: Number(value) || 0 })}
+                  />
+                  <NumberInput
+                    label={t("users.maxFileBytes")}
+                    min={0}
+                    value={policy.maxFileBytes}
+                    onChange={(value) => setPolicy({ ...policy, maxFileBytes: Number(value) || 0 })}
+                  />
+                </Group>
+                <Switch
+                  label={t("users.immutableRelease")}
+                  description={t("users.immutableReleaseHint")}
+                  checked={policy.immutableRelease}
+                  onChange={(event) =>
+                    setPolicy({ ...policy, immutableRelease: event.currentTarget.checked })
+                  }
+                />
+                <Group justify="flex-end">
+                  <Button variant="default" onClick={() => setPolicyOpened(false)}>
+                    {t("common.cancel")}
+                  </Button>
+                  <Button onClick={savePolicy} loading={policySaving}>
+                    {t("common.save")}
+                  </Button>
+                </Group>
+              </>
+            ) : null}
+          </Stack>
+        )}
       </Modal>
     </>
   );

@@ -258,7 +258,8 @@ func adminReset(args []string) error {
 		if err := svc.userSvc.ChangePassword(existing.ID, pw); err != nil {
 			return fmt.Errorf("重置口令：%w", err)
 		}
-		if _, err := svc.userSvc.Update(existing.ID, "admin", "active"); err != nil {
+		webLoginDisabled := false
+		if _, err := svc.userSvc.Update(existing.ID, "admin", "active", &webLoginDisabled); err != nil {
 			return fmt.Errorf("恢复管理员角色 / 状态：%w", err)
 		}
 		fmt.Printf("已重置管理员 %q 的口令。\n", *username)

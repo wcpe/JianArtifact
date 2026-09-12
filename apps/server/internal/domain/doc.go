@@ -18,8 +18,12 @@ var (
 	ErrNotFound = errors.New("资源不存在")
 	// ErrValidation 入参不满足业务约束。
 	ErrValidation = errors.New("参数校验失败")
+	// ErrFormatDisabled 表示格式已登记但未在本进程启动配置中启用。
+	ErrFormatDisabled = errors.New("格式未启用")
 	// ErrUpstream proxy 回源时上游返回错误状态或传输失败（映射 502）。
 	ErrUpstream = errors.New("上游回源失败")
 	// ErrUpstreamTimeout proxy 回源超时（映射 504）。
 	ErrUpstreamTimeout = errors.New("上游回源超时")
+	// ErrUpstreamGone proxy 回源明确返回 410，由需保留该语义的协议映射。
+	ErrUpstreamGone = errors.New("上游资源已下架")
 )
