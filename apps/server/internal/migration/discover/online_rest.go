@@ -283,7 +283,7 @@ func (s *OnlineREST) get(ctx context.Context, rawURL string, auth credential.Sou
 
 func outboundError(message string, err error) *ErrUpstream {
 	if errors.Is(err, upstream.ErrUnsafeURL) {
-		return &ErrUpstream{Msg: "Nexus 来源被出站安全策略拒绝", Cause: upstream.ErrUnsafeURL}
+		return &ErrUpstream{Msg: "Nexus 来源被出站安全策略拒绝：该地址可能是本机或内网地址，若确认可信请在迁移任务勾选「来源是本机/内网地址（允许私网回源）」后重试", Cause: upstream.ErrUnsafeURL}
 	}
 	return &ErrUpstream{Msg: message}
 }

@@ -2800,6 +2800,12 @@ type ListMigrationsParams struct {
 	PageSize *PageSizeParam `form:"page_size,omitempty" json:"page_size,omitempty"`
 }
 
+// UpdateMigrationSourceConfigJSONBody defines parameters for UpdateMigrationSourceConfig.
+type UpdateMigrationSourceConfigJSONBody struct {
+	// AllowPrivateSource 来源是本机/内网地址时允许私网回源
+	AllowPrivateSource bool `json:"allowPrivateSource"`
+}
+
 // GetAuditAttentionParams defines parameters for GetAuditAttention.
 type GetAuditAttentionParams struct {
 	// Cursor 从上一页响应取得的不透明游标；不得解析或改写。
@@ -3067,6 +3073,9 @@ type DiscoverMigrationsJSONRequestBody = MigrationDiscoverRequest
 
 // ListRemoteNexusRepositoriesJSONRequestBody defines body for ListRemoteNexusRepositories for application/json ContentType.
 type ListRemoteNexusRepositoriesJSONRequestBody = RemoteNexusRepositoryRequest
+
+// UpdateMigrationSourceConfigJSONRequestBody defines body for UpdateMigrationSourceConfig for application/json ContentType.
+type UpdateMigrationSourceConfigJSONRequestBody UpdateMigrationSourceConfigJSONBody
 
 // StartMigrationJSONRequestBody defines body for StartMigration for application/json ContentType.
 type StartMigrationJSONRequestBody = StartMigrationRequest
@@ -3491,6 +3500,9 @@ type ServerInterface interface {
 	// ResumeMigration 自 failed/cancelled 断点续传
 	// (POST /api/v1/migrations/{id}/resume)
 	ResumeMigration(c *gin.Context, id MigrationIdParam)
+	// UpdateMigrationSourceConfig 修改迁移任务来源配置（仅非终态）
+	// (PATCH /api/v1/migrations/{id}/source-config)
+	UpdateMigrationSourceConfig(c *gin.Context, id MigrationIdParam)
 	// StartMigration 显式启动（planned → running）
 	// (POST /api/v1/migrations/{id}/start)
 	StartMigration(c *gin.Context, id MigrationIdParam)
@@ -4295,6 +4307,31 @@ func (siw *ServerInterfaceWrapper) ResumeMigration(c *gin.Context) {
 	}
 
 	siw.Handler.ResumeMigration(c, id)
+}
+
+// UpdateMigrationSourceConfig operation middleware
+func (siw *ServerInterfaceWrapper) UpdateMigrationSourceConfig(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id MigrationIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.UpdateMigrationSourceConfig(c, id)
 }
 
 // StartMigration operation middleware
@@ -5647,6 +5684,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.POST(options.BaseURL+"/api/v1/migrations/:id/cancel", wrapper.CancelMigration)
 	router.GET(options.BaseURL+"/api/v1/migrations/:id/report", wrapper.GetMigrationReport)
 	router.POST(options.BaseURL+"/api/v1/migrations/:id/finalize", wrapper.FinalizeMigration)
+	router.PATCH(options.BaseURL+"/api/v1/migrations/:id/source-config", wrapper.UpdateMigrationSourceConfig)
 	router.GET(options.BaseURL+"/api/v1/backups", wrapper.ListBackups)
 	router.POST(options.BaseURL+"/api/v1/backups", wrapper.CreateBackup)
 	router.DELETE(options.BaseURL+"/api/v1/backups/:id", wrapper.DeleteBackup)

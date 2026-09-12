@@ -499,6 +499,28 @@ func (h *Handlers) FinalizeMigration(c *gin.Context, id MigrationIdParam) {
 	c.JSON(http.StatusOK, toAPIMigrationTask(task))
 }
 
+// UpdateMigrationSourceConfig 修改非终态任务的来源配置（仅 allowPrivateSource）。
+// planned / failed 可改并持久化；running/completed/cancelled 拒绝 → 409。
+func (h *Handlers) UpdateMigrationSourceConfig(c *gin.Context, id MigrationIdParam) {
+	if _, ok := requireAdmin(c); !ok {
+		return
+	}
+	if h.migrations == nil {
+		auth.WriteError(c, http.StatusServiceUnavailable, "unavailable", "迁移服务未启用")
+		return
+	}
+	var req UpdateMigrationSourceConfigJSONRequestBody
+	if !bindJSON(c, &req) {
+		return
+	}
+	task, err := h.migrations.UpdateSourceConfig(c.Request.Context(), id, req.AllowPrivateSource)
+	if err != nil {
+		writeDomainErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, toAPIMigrationTask(task))
+}
+
 func toAPIMigrationTask(t *repository.MigrationTask) MigrationTask {
 	out := MigrationTask{
 		Id:             t.ID,

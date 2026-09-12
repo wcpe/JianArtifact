@@ -1150,6 +1150,45 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
+  /api/v1/migrations/{id}/source-config:
+    patch:
+      operationId: updateMigrationSourceConfig
+      summary: 修改迁移任务来源配置（仅非终态）
+      description: |
+        仅允许 planned 或 failed（失败待重试）状态的任务修改来源配置。
+        当前仅支持更新 allowPrivateSource（是否允许私网/本机地址回源）。
+        修改会持久化到任务 SourceConfig，之后可 start 或 resume 重试。
+      parameters:
+        - $ref: "#/components/parameters/MigrationIdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                allowPrivateSource:
+                  type: boolean
+                  description: 来源是本机/内网地址时允许私网回源
+              required:
+                - allowPrivateSource
+      responses:
+        "200":
+          description: 已更新来源配置
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MigrationTask"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
   /api/v1/backups:
     get:
       operationId: listBackups

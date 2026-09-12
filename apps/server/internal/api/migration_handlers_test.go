@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
 	"github.com/wcpe/jianartifact/apps/server/internal/migration/discover"
+	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 	"github.com/wcpe/jianartifact/apps/server/internal/upstream"
 )

@@ -647,6 +647,38 @@ func (s *MigrationService) Report(id int64) (*repository.MigrationTask, error) {
 	return s.Get(id)
 }
 
+// UpdateSourceConfig 修改非终态（planned / failed）任务的来源配置并持久化。
+// 仅允许调整 allowPrivateSource：把被私网安全策略拒绝的来源显式标记为可信内网地址。
+// running/completed/cancelled 等终态拒绝修改 → ErrConflict。
+func (s *MigrationService) UpdateSourceConfig(ctx context.Context, id int64, allowPrivateSource bool) (*repository.MigrationTask, error) {
+	if err := requireBusinessWrite(s.writeGate); err != nil {
+		return nil, err
+	}
+	t, err := s.Get(id)
+	if err != nil {
+		return nil, err
+	}
+	if t.Status != repository.MigrationStatusPlanned && t.Status != repository.MigrationStatusFailed {
+		return nil, fmt.Errorf("%w: 仅 planned/failed 可修改来源配置，当前 %s", ErrConflict, t.Status)
+	}
+	cfg := map[string]any{}
+	if t.SourceConfig != "" && t.SourceConfig != "{}" {
+		var raw map[string]any
+		if err := json.Unmarshal([]byte(t.SourceConfig), &raw); err == nil && raw != nil {
+			cfg = raw
+		}
+	}
+	cfg["allowPrivateSource"] = allowPrivateSource
+	encoded, err := encodeSourceConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("%w: sourceConfig", ErrValidation)
+	}
+	if err := s.tasks.SaveSourceConfig(id, encoded); err != nil {
+		return nil, mapNotFound(err)
+	}
+	return s.Get(id)
+}
+
 // ApplyIncludeFilter 在 start 前可选收窄 plan：仅保留 include 中的仓库并写回 plan_json。
 // include 为空则不改动。
 func (s *MigrationService) ApplyIncludeFilter(id int64, include []string) (*repository.MigrationTask, error) {

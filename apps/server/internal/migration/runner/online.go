@@ -240,7 +240,7 @@ func httpGet(ctx context.Context, client *upstream.Client, rawURL string, auth c
 
 func onlineRequestError(err error) error {
 	if errors.Is(err, upstream.ErrUnsafeURL) {
-		return fmt.Errorf("出站安全策略拒绝 Nexus 来源：%w", upstream.ErrUnsafeURL)
+		return errors.New("出站安全策略拒绝 Nexus 来源：该来源地址可能是本机或内网地址。若确认来源可信，请在迁移任务中勾选「来源是本机/内网地址（允许私网回源）」后重试")
 	}
 	if upstream.IsTimeout(err) {
 		return errors.New("Nexus 来源连接超时")

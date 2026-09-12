@@ -90,6 +90,75 @@ func assertMigrationInitiator(t *testing.T, task *repository.MigrationTask, want
 	}
 }
 
+func TestMigrationServiceUpdateSourceConfigNonTerminal(t *testing.T) {
+	db := newTestDB(t)
+	repo := repository.NewMigrationTaskRepo(db)
+	svc := domain.NewMigrationService(repo, nil)
+
+	task, err := svc.Create(domain.MigrationCreateInput{
+		SourceType:     repository.MigrationSourceOfflineDir,
+		SourceConfig:   map[string]any{"path": "/data/nexus"},
+		ConflictPolicy: repository.MigrationConflictSkip,
+		PlanJSON:       `{"repositories":[]}`,
+	})
+	if err != nil {
+		t.Fatalf("Create：%v", err)
+	}
+
+	// planned 可改，持久化 allowPrivateSource
+	updated, err := svc.UpdateSourceConfig(context.Background(), task.ID, true)
+	if err != nil {
+		t.Fatalf("UpdateSourceConfig(true)：%v", err)
+	}
+	assertAllowPrivate(t, updated.SourceConfig, true)
+
+	// 关闭同样可写回
+	updated, err = svc.UpdateSourceConfig(context.Background(), task.ID, false)
+	if err != nil {
+		t.Fatalf("UpdateSourceConfig(false)：%v", err)
+	}
+	assertAllowPrivate(t, updated.SourceConfig, false)
+
+	// running 终态拒绝修改
+	if _, err := svc.Start(task.ID, nil); err != nil {
+		t.Fatalf("Start：%v", err)
+	}
+	if _, err := svc.UpdateSourceConfig(context.Background(), task.ID, true); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("running 应拒绝修改，err = %v，期望 ErrConflict", err)
+	}
+
+	// failed 非终态允许修改
+	failedMsg := "私网被拒"
+	if err := repo.UpdateStatus(task.ID, repository.MigrationStatusFailed, &failedMsg, true, true); err != nil {
+		t.Fatal(err)
+	}
+	updated, err = svc.UpdateSourceConfig(context.Background(), task.ID, true)
+	if err != nil {
+		t.Fatalf("failed 应允许修改：%v", err)
+	}
+	assertAllowPrivate(t, updated.SourceConfig, true)
+
+	// completed / cancelled 终态拒绝修改
+	if err := repo.UpdateStatus(task.ID, repository.MigrationStatusCompleted, nil, true, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.UpdateSourceConfig(context.Background(), task.ID, true); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("completed 应拒绝修改，err = %v，期望 ErrConflict", err)
+	}
+}
+
+func assertAllowPrivate(t *testing.T, raw string, want bool) {
+	t.Helper()
+	var cfg map[string]any
+	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+		t.Fatalf("解析 SourceConfig %q：%v", raw, err)
+	}
+	got, ok := cfg["allowPrivateSource"].(bool)
+	if !ok || got != want {
+		t.Fatalf("allowPrivateSource = %v (ok=%v)，期望 %v；原文 %q", got, ok, want, raw)
+	}
+}
+
 func TestMigrationServiceCredentialRef(t *testing.T) {
 	db := newTestDB(t)
 	svc := domain.NewMigrationService(repository.NewMigrationTaskRepo(db), nil)
