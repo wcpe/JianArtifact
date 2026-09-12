@@ -1061,6 +1061,9 @@ export const zh = {
     sourcePickOfflineBundle: "读取导出的离线迁移包（repositories/content 结构）。",
     previewSummary: "任务 #{{id}} 已落库，勾选要迁移的仓库后开始。",
     wizardCardHint: "按步骤完成：选来源 → 填配置 → 预览勾选 → 显式启动",
+    allowPrivateSource: "来源是本机/内网地址（允许私网回源）",
+    allowPrivateSourceHint:
+      "仅在你信任该来源时勾选。当来源解析到回环或私网地址（如与本服务同机的 Nexus）时必勾，否则会被出站安全策略拒绝。",
   },
 } as const;
 

@@ -80,6 +80,7 @@ interface WizardDraft {
   credentialRef: string;
   conflictPolicy: MigrationConflictPolicy;
   includeRepositories: string[];
+  allowPrivateSource: boolean;
   taskId?: number;
   selectedRepos?: string[];
 }
@@ -185,6 +186,7 @@ export function MigrationWizardPage() {
       credentialRef: draft?.credentialRef ?? "",
       conflictPolicy: (draft?.conflictPolicy ?? "skip") as MigrationConflictPolicy,
       includeRepositories: draft?.includeRepositories ?? ([] as string[]),
+      allowPrivateSource: draft?.allowPrivateSource ?? false,
     },
     validate: {
       url: (v, values) =>
@@ -203,6 +205,7 @@ export function MigrationWizardPage() {
       credentialRef: form.values.credentialRef,
       conflictPolicy: form.values.conflictPolicy,
       includeRepositories: form.values.includeRepositories,
+      allowPrivateSource: form.values.allowPrivateSource,
       taskId: discoverResult?.taskId,
       selectedRepos,
     });
@@ -560,6 +563,9 @@ export function MigrationWizardPage() {
     if (values.includeRepositories.length > 0) {
       sourceConfig.includeRepositories = values.includeRepositories;
     }
+    if (values.allowPrivateSource) {
+      sourceConfig.allowPrivateSource = true;
+    }
 
     // 认证信息只在此次请求的闭包中保留，绝不写入 sessionStorage 草稿。
     clearSourceAuth();
@@ -874,6 +880,13 @@ export function MigrationWizardPage() {
                   <Text size="xs" c="dimmed">
                     {t("migrations.authHint")}
                   </Text>
+                  <Checkbox
+                    label={t("migrations.allowPrivateSource")}
+                    description={t("migrations.allowPrivateSourceHint")}
+                    checked={form.values.allowPrivateSource}
+                    onChange={(event) => form.setFieldValue("allowPrivateSource", event.currentTarget.checked)}
+                    disabled={busy}
+                  />
                 </>
               ) : (
                 <TextInput

@@ -438,6 +438,17 @@ export function listRemoteNexusRepositories(
   });
 }
 
+/** 修改迁移任务来源配置（仅非终态）：allowPrivateSource 用于放行可信内网/本机来源。 */
+export function updateMigrationSourceConfig(
+  id: number,
+  input: { allowPrivateSource: boolean },
+): Promise<MigrationTask> {
+  return request<MigrationTask>(`/migrations/${id}/source-config`, {
+    method: "PATCH",
+    body: input,
+  });
+}
+
 /** 离线目录持久化索引状态。 */
 export interface OfflineDirIndexStatus {
   path?: string;

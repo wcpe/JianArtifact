@@ -4,6 +4,7 @@ import {
   Badge,
   Button,
   Card,
+  Checkbox,
   Divider,
   Group,
   List,
@@ -32,6 +33,7 @@ import {
   getMigrationReport,
   resumeMigration,
   startMigration,
+  updateMigrationSourceConfig,
 } from "../api/endpoints";
 import type { MigrationReport, MigrationTask } from "../api/types";
 import { MigrationLifecycle } from "../components/migration/MigrationLifecycle";
@@ -42,6 +44,44 @@ import { MigrationStatCards } from "../components/migration/MigrationStatCards";
 import { parseTotals, planEstimatedAssets, statusColor } from "../components/migration/status";
 import { confirmAction, confirmDanger, notifyError, notifySuccess } from "../lib/feedback";
 import { density } from "../theme/density";
+
+// 既存（planned/failed）迁移任务：勾选「来源是本机/内网地址」后写回来源配置，
+// 保存成功即可 start / resume 重试被私网安全策略拒绝的来源。
+function PrivateSourceToggle({
+  taskId,
+  initial,
+  onSaved,
+}: {
+  taskId: number;
+  initial: boolean;
+  onSaved?: () => void;
+}) {
+  const { t } = useTranslation();
+  const [checked, setChecked] = useState(initial);
+  const [busy, setBusy] = useState(false);
+  const save = (value: boolean) => {
+    setBusy(true);
+    updateMigrationSourceConfig(taskId, { allowPrivateSource: value })
+      .then(() => {
+        setChecked(value);
+        notifySuccess(t("migrations.saved"));
+        onSaved?.();
+      })
+      .catch((e: unknown) => {
+        notifyError(e instanceof Error ? e.message : t("common.error"));
+      })
+      .finally(() => setBusy(false));
+  };
+  return (
+    <Checkbox
+      label={t("migrations.allowPrivateSource")}
+      description={t("migrations.allowPrivateSourceHint")}
+      checked={checked}
+      onChange={(event) => save(event.currentTarget.checked)}
+      disabled={busy}
+    />
+  );
+}
 
 export function MigrationDetailPage() {
   const { t } = useTranslation();
@@ -358,6 +398,17 @@ export function MigrationDetailPage() {
             sourceConfig={task.sourceConfig as Record<string, unknown> | undefined}
             credentialRef={task.credentialRef}
           />
+          {(task.status === "planned" || task.status === "failed") && (
+            <Card withBorder padding="sm" radius="md">
+              <PrivateSourceToggle
+                taskId={task.id}
+                initial={Boolean(
+                  (task.sourceConfig as Record<string, unknown> | undefined)?.allowPrivateSource,
+                )}
+                onSaved={reload}
+              />
+            </Card>
+          )}
           <Title order={5}>{t("migrations.sectionLifecycle")}</Title>
           <Card withBorder padding={density.cardPadding} radius="md">
             <MigrationLifecycle
