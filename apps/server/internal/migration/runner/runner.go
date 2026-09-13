@@ -589,10 +589,11 @@ func (r *Runner) importItem(item sourceItem) error {
 		}
 		defer func() { _ = rc.Close() }()
 		return r.importer.ImportMigrationAsset(domain.MigrationAsset{
-			Repository: item.Repo,
-			Format:     item.Format,
-			SourcePath: item.Path,
-			Body:       rc,
+			Repository:     item.Repo,
+			Format:         item.Format,
+			SourcePath:     item.Path,
+			Body:           rc,
+			SourceModified: item.SourceModified,
 		})
 	case "gomod":
 		return fmt.Errorf("%w: %s 迁移尚未支持安全导入", domain.ErrValidation, item.Format)

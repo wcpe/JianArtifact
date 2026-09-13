@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
@@ -86,6 +87,13 @@ func (s *CargoService) Publish(ctx context.Context, repoName string, r io.Reader
 
 // PublishWithGuard 在解析出规范 crate 路径及实际字节数后、写入任何资产前执行发布策略。
 func (s *CargoService) PublishWithGuard(ctx context.Context, repoName string, r io.Reader, guard CargoPublishGuard) (*CargoPublishResult, error) {
+	return s.publishCargo(ctx, repoName, r, guard, time.Time{})
+}
+
+// publishCargo 是 Publish 的共享实现；sourceModified 非零时将 crate 资产行
+// created_at/updated_at 固定为源端时间（在线迁移保留源时间戳）。
+// 索引资产是既有索引与新版本行合并后的衍生内容，保持本地时间语义。
+func (s *CargoService) publishCargo(ctx context.Context, repoName string, r io.Reader, guard CargoPublishGuard, sourceModified time.Time) (*CargoPublishResult, error) {
 	repo, err := s.repos.Get(repoName)
 	if err != nil {
 		return nil, err
@@ -148,6 +156,8 @@ func (s *CargoService) PublishWithGuard(ctx context.Context, repoName string, r 
 	if err != nil {
 		return nil, err
 	}
+	// crate 字节与源端资产一一对应，标注源端时间；索引为合并衍生行，保持本地时间。
+	applySourceTimestamp(crateAsset, sourceModified)
 	old, err := s.readAsset(repoName, indexPath)
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		return nil, s.assets.cleanupFailedWrite(crateAsset.BlobHash, err)

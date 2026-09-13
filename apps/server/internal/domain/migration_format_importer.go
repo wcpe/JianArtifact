@@ -6,6 +6,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/nugetpackage"
 )
@@ -18,6 +19,9 @@ type MigrationAsset struct {
 	Format     string
 	SourcePath string
 	Body       io.Reader
+	// SourceModified 源端最后修改时间（在线迁移保留源时间戳）；
+	// 零值时各格式服务回退本地时间语义，与离线迁移一致。
+	SourceModified time.Time
 }
 
 // MigrationFormatImporter 以格式语义写入迁移制品，禁止降级为裸资产写入。
@@ -80,7 +84,7 @@ func (s *FormatMetadataService) importMigrationPyPI(asset MigrationAsset) error 
 	if err != nil {
 		return err
 	}
-	_, err = s.PublishPyPI(asset.Repository, project, version, filename, "", "", asset.Body)
+	_, err = s.PublishPyPIWithSourceTime(asset.Repository, project, version, filename, "", "", asset.Body, asset.SourceModified)
 	return err
 }
 
@@ -107,7 +111,7 @@ func (s *FormatMetadataService) importMigrationNuGet(asset MigrationAsset) error
 	if !validPackageFilename(filename) {
 		return fmt.Errorf("%w: nupkg 文件名非法", ErrValidation)
 	}
-	_, err = s.PublishNuGet(asset.Repository, id, version, filename, metadata, file)
+	_, err = s.PublishNuGetWithSourceTime(asset.Repository, id, version, filename, metadata, file, asset.SourceModified)
 	return err
 }
 

@@ -95,8 +95,18 @@ func (s *FormatMetadataService) PublishPyPI(repoName, project, version, filename
 	return s.PublishPyPIWithAudit(repoName, project, version, filename, requiresPython, yanked, body, AssetOperationAudit{})
 }
 
+// PublishPyPIWithSourceTime 与 PublishPyPI 相同，但将资产行 created_at/updated_at
+// 固定为源端时间（在线迁移保留源时间戳）。sourceModified 为零值时回退 PublishPyPI 语义。
+func (s *FormatMetadataService) PublishPyPIWithSourceTime(repoName, project, version, filename, requiresPython, yanked string, body io.Reader, sourceModified time.Time) (*PypiFile, error) {
+	return s.publishPyPI(repoName, project, version, filename, requiresPython, yanked, body, AssetOperationAudit{}, sourceModified)
+}
+
 // PublishPyPIWithAudit 将 PyPI 文件、Simple 元数据、源端审计和 v2 operation 置于同一提交边界。
 func (s *FormatMetadataService) PublishPyPIWithAudit(repoName, project, version, filename, requiresPython, yanked string, body io.Reader, audit AssetOperationAudit) (*PypiFile, error) {
+	return s.publishPyPI(repoName, project, version, filename, requiresPython, yanked, body, audit, time.Time{})
+}
+
+func (s *FormatMetadataService) publishPyPI(repoName, project, version, filename, requiresPython, yanked string, body io.Reader, audit AssetOperationAudit, sourceModified time.Time) (*PypiFile, error) {
 	if err := s.requireBusinessWrite(); err != nil {
 		return nil, err
 	}
@@ -118,6 +128,8 @@ func (s *FormatMetadataService) PublishPyPIWithAudit(repoName, project, version,
 		return nil, err
 	}
 	asset.Path = "pypi/packages/" + project + "/" + filename
+	// 在信封与发布批次构造前标注源端时间，资产行与复制信封携带同一时间。
+	applySourceTimestamp(asset, sourceModified)
 	meta := repository.FormatMetadata{
 		RepositoryID: r.ID, Format: "pypi", NameNormalized: project, NameDisplay: project,
 		Version: version, VersionNormalized: version, Filename: filename, AssetPath: asset.Path,
@@ -652,6 +664,16 @@ func NormalizeNuGetVersion(version string) string { return strings.ToLower(strin
 
 // PublishNuGet 写入一个已验证的 NuGet 元数据。包内容校验由协议层完成，服务负责资产与索引登记。
 func (s *FormatMetadataService) PublishNuGet(repoName, id, version, filename, metadataJSON string, body io.Reader) (*NuGetPackage, error) {
+	return s.publishNuGet(repoName, id, version, filename, metadataJSON, body, time.Time{})
+}
+
+// PublishNuGetWithSourceTime 与 PublishNuGet 相同，但将资产行 created_at/updated_at
+// 固定为源端时间（在线迁移保留源时间戳）。sourceModified 为零值时回退 PublishNuGet 语义。
+func (s *FormatMetadataService) PublishNuGetWithSourceTime(repoName, id, version, filename, metadataJSON string, body io.Reader, sourceModified time.Time) (*NuGetPackage, error) {
+	return s.publishNuGet(repoName, id, version, filename, metadataJSON, body, sourceModified)
+}
+
+func (s *FormatMetadataService) publishNuGet(repoName, id, version, filename, metadataJSON string, body io.Reader, sourceModified time.Time) (*NuGetPackage, error) {
 	if err := s.requireBusinessWrite(); err != nil {
 		return nil, err
 	}
@@ -677,6 +699,8 @@ func (s *FormatMetadataService) PublishNuGet(repoName, id, version, filename, me
 		return nil, err
 	}
 	asset.Path = "nuget/" + idNorm + "/" + versionNorm + "/" + filename
+	// 在信封与发布批次构造前标注源端时间，资产行与复制信封携带同一时间。
+	applySourceTimestamp(asset, sourceModified)
 	meta := repository.FormatMetadata{RepositoryID: r.ID, Format: "nuget", NameNormalized: idNorm, NameDisplay: id, Version: version, VersionNormalized: versionNorm, Filename: filename, AssetPath: asset.Path, Sha256: asset.BlobHash, Size: asset.Size, MetadataJSON: metadataJSON, SourceKind: "hosted"}
 	if err := s.publishHostedFormatAsset(repoName, r, asset, meta, AssetOperationAudit{}); err != nil {
 		return nil, s.assets.cleanupFailedWrite(asset.BlobHash, err)

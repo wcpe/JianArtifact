@@ -194,11 +194,22 @@ func (s *AssetService) PutWithTimestamps(repoName, path string, r io.Reader, con
 	}
 	return s.PutWithCommitHook(repoName, path, r, contentType, func(asset *repository.Asset) repository.MutationCompletionHook {
 		// 源端时间写入资产行：created_at 与 updated_at 均与源一致（用户要求迁移后两时间都对齐源）。
-		ts := sourceModified.UTC().Format("2006-01-02 15:04:05")
-		asset.CreatedAt = ts
-		asset.UpdatedAt = ts
+		applySourceTimestamp(asset, sourceModified)
 		return func(tx *sqlx.Tx) error { return nil }
 	})
+}
+
+// applySourceTimestamp 将资产行 created_at/updated_at 固定为源端时间的 UTC
+// "YYYY-MM-DD HH:MM:SS"（与 asset 表 datetime('now') 默认值格式一致）；
+// 零值不修改，保持 datetime('now') 本地时间语义。供各格式迁移导入器在
+// PublishAssets 批次发布前标注资产行时间。
+func applySourceTimestamp(asset *repository.Asset, sourceModified time.Time) {
+	if asset == nil || sourceModified.IsZero() {
+		return
+	}
+	ts := sourceModified.UTC().Format("2006-01-02 15:04:05")
+	asset.CreatedAt = ts
+	asset.UpdatedAt = ts
 }
 
 // PutWithCommitHook 将内容写入 blob 后，与调用方的同库元数据一起完成资产事务。

@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
@@ -20,7 +21,7 @@ func (s *CargoService) ImportMigrationAsset(asset MigrationAsset) error {
 		return fmt.Errorf("%w: Cargo 迁移制品内容不能为空", ErrValidation)
 	}
 	if name, version, ok := cargoMigrationCratePath(asset.SourcePath); ok {
-		return s.importMigrationCrate(asset.Repository, name, version, asset.Body)
+		return s.importMigrationCrate(asset.Repository, name, version, asset.Body, asset.SourceModified)
 	}
 	if name, ok := cargoMigrationIndexName(asset.SourcePath); ok {
 		return s.importMigrationIndex(asset.Repository, name, asset.Body)
@@ -28,7 +29,7 @@ func (s *CargoService) ImportMigrationAsset(asset MigrationAsset) error {
 	return fmt.Errorf("%w: Cargo 迁移路径不受支持", ErrValidation)
 }
 
-func (s *CargoService) importMigrationCrate(repo, name, version string, body io.Reader) error {
+func (s *CargoService) importMigrationCrate(repo, name, version string, body io.Reader, sourceModified time.Time) error {
 	file, size, err := spoolMigrationCargo(body)
 	if err != nil {
 		return err
@@ -41,7 +42,7 @@ func (s *CargoService) importMigrationCrate(repo, name, version string, body io.
 	if err != nil {
 		return err
 	}
-	_, err = s.Publish(context.Background(), repo, frame)
+	_, err = s.publishCargo(context.Background(), repo, frame, nil, sourceModified)
 	return err
 }
 

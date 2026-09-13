@@ -10,11 +10,11 @@ import (
 func (s *OCIService) ImportMigrationAsset(asset MigrationAsset) error {
 	path := strings.Trim(asset.SourcePath, "/")
 	if digest, ok := strings.CutPrefix(path, "oci/blobs/sha256/"); ok {
-		_, err := s.PutBlob(asset.Repository, "sha256:"+digest, asset.Body)
+		_, err := s.putBlob(asset.Repository, "sha256:"+digest, asset.Body, asset.SourceModified)
 		return err
 	}
 	if _, digest, ok := migrationNexusOCIBlob(path); ok {
-		_, err := s.PutBlob(asset.Repository, "sha256:"+digest, asset.Body)
+		_, err := s.putBlob(asset.Repository, "sha256:"+digest, asset.Body, asset.SourceModified)
 		return err
 	}
 	if image, digest, ok := migrationOCIPath(path, "oci/manifests/"); ok {
@@ -22,7 +22,7 @@ func (s *OCIService) ImportMigrationAsset(asset MigrationAsset) error {
 		if err != nil || len(body) > maxOCIManifestBytes {
 			return ErrValidation
 		}
-		_, err = s.PutManifest(asset.Repository, image, "sha256:"+digest, body, "application/vnd.oci.image.manifest.v1+json")
+		_, err = s.putManifest(asset.Repository, image, "sha256:"+digest, body, "application/vnd.oci.image.manifest.v1+json", asset.SourceModified)
 		return err
 	}
 	if image, tag, ok := migrationOCIPath(path, "oci/tags/"); ok {
@@ -43,7 +43,7 @@ func (s *OCIService) ImportMigrationAsset(asset MigrationAsset) error {
 		if err != nil || len(body) > maxOCIManifestBytes {
 			return ErrValidation
 		}
-		_, err = s.PutManifest(asset.Repository, image, tag, body, "application/vnd.oci.image.manifest.v1+json")
+		_, err = s.putManifest(asset.Repository, image, tag, body, "application/vnd.oci.image.manifest.v1+json", asset.SourceModified)
 		return err
 	}
 	if rest, ok := strings.CutPrefix(path, "v2/"); ok {
@@ -56,7 +56,7 @@ func (s *OCIService) ImportMigrationAsset(asset MigrationAsset) error {
 			if err != nil || len(body) > maxOCIManifestBytes {
 				return ErrValidation
 			}
-			_, err = s.PutManifest(asset.Repository, image, reference, body, "application/vnd.oci.image.manifest.v1+json")
+			_, err = s.putManifest(asset.Repository, image, reference, body, "application/vnd.oci.image.manifest.v1+json", asset.SourceModified)
 			return err
 		}
 	}
