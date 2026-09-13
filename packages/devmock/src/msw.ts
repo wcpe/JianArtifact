@@ -3,7 +3,7 @@
 // 保证 web 开发态脱离后端可跑、vitest 集成测试与真实 fetch 链路同源。
 import { http, HttpResponse } from "msw";
 
-import { mockAuditLogList, mockReplicationApplyLogList } from "./handlers";
+import { mockAuditLogList } from "./handlers";
 import {
   observabilityStore,
   type AuditCategory,
@@ -1006,54 +1006,6 @@ export const handlers = [
             : current.originTokenValue,
       }),
     );
-  }),
-
-
-  // 复制接收审计记录（管理员端点，支持筛选与分页）。
-  http.get("*/api/v1/replication-apply-logs", ({ request }) => {
-    const denied = adminUnauthorized(request);
-    if (denied) {
-      return denied;
-    }
-    if (isEmptyScenario(request)) {
-      return HttpResponse.json({ items: [], total: 0 });
-    }
-    const url = new URL(request.url);
-    const limitParam = integerQuery(url, "limit");
-    const offsetParam = integerQuery(url, "offset");
-    const sourceSeqParam = integerQuery(url, "sourceSeq");
-    if (limitParam.invalid || offsetParam.invalid || sourceSeqParam.invalid) {
-      return err("bad_request", "limit、offset、sourceSeq 须为整数", 400);
-    }
-    const sourceSeq = sourceSeqParam.value;
-    if (sourceSeq !== undefined && sourceSeq < 0) {
-      return err("bad_request", "sourceSeq 须为非负整数", 400);
-    }
-    const { items } = mockReplicationApplyLogList();
-    const sourceNode = url.searchParams.get("sourceNode");
-    const peerURL = url.searchParams.get("peerURL");
-    const entityType = url.searchParams.get("entityType");
-    const entityKey = url.searchParams.get("entityKey");
-    const op = url.searchParams.get("op");
-    const result = url.searchParams.get("result");
-    const filtered = items.filter(
-      (item) =>
-        (!sourceNode || item.sourceNode === sourceNode) &&
-        (sourceSeq === undefined || item.sourceSeq === sourceSeq) &&
-        (!peerURL || item.peerUrl === peerURL) &&
-        (!entityType || item.entityType === entityType) &&
-        (!entityKey || item.entityKey === entityKey) &&
-        (!op || item.op === op) &&
-        (!result || item.result === result),
-    );
-    const requestedLimit = limitParam.value ?? 50;
-    const limit = requestedLimit > 0 && requestedLimit <= 200 ? requestedLimit : 50;
-    const requestedOffset = offsetParam.value ?? 0;
-    const offset = requestedOffset >= 0 ? requestedOffset : 0;
-    return HttpResponse.json({
-      items: filtered.slice(offset, offset + limit),
-      total: filtered.length,
-    });
   }),
 
   // FR-118：当前节点统一审计观测。旧 /audit-logs 仍保留在下方兼容既有页面。

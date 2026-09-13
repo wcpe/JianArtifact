@@ -516,35 +516,6 @@ describe("devmock MSW 端点行为", () => {
     expect(page.items).toHaveLength(50);
   });
 
-  it("复制应用日志缺令牌返回 401", async () => {
-    const res = await fetch("http://localhost/api/v1/replication-apply-logs");
-    expect(res.status).toBe(401);
-  });
-
-  it("复制应用日志管理员鉴权区分 401 与 403", async () => {
-    expect((await fetch("http://localhost/api/v1/replication-apply-logs")).status).toBe(401);
-    expect(
-      (
-        await fetch("http://localhost/api/v1/replication-apply-logs", {
-          headers: { Authorization: "Bearer " },
-        })
-      ).status,
-    ).toBe(401);
-    expect(
-      (
-        await fetch("http://localhost/api/v1/replication-apply-logs", {
-          headers: { Authorization: "Bearer unknown-token" },
-        })
-      ).status,
-    ).toBe(401);
-    expect(
-      (await fetch("http://localhost/api/v1/replication-apply-logs", { headers: userAuth })).status,
-    ).toBe(403);
-    expect(
-      (await fetch("http://localhost/api/v1/replication-apply-logs", { headers: auth })).status,
-    ).toBe(200);
-  });
-
   it("用户 CRUD 仅管理员可用，普通用户与未知令牌均不能读取", async () => {
     expect((await fetch("http://localhost/api/v1/users", { headers: userAuth })).status).toBe(403);
     expect(
@@ -554,74 +525,6 @@ describe("devmock MSW 端点行为", () => {
         })
       ).status,
     ).toBe(401);
-  });
-
-  it("复制应用日志支持契约筛选参数", async () => {
-    const filters: [string, string][] = [
-      ["sourceNode", "node-b"],
-      ["sourceSeq", "2"],
-      ["peerURL", "https://other.example"],
-      ["entityType", "repository"],
-      ["entityKey", "asset:other"],
-      ["op", "delete"],
-      ["result", "failed"],
-    ];
-    for (const [key, value] of filters) {
-      const res = await fetch(
-        `http://localhost/api/v1/replication-apply-logs?${key}=${encodeURIComponent(value)}`,
-        { headers: auth },
-      );
-      expect(res.status).toBe(200);
-      const body = (await res.json()) as { items: unknown[]; total: number };
-      expect(body.total, `${key} 应参与筛选`).toBe(0);
-      expect(body.items).toHaveLength(0);
-    }
-
-    const res = await fetch(
-      "http://localhost/api/v1/replication-apply-logs?sourceNode=node-a&sourceSeq=1&peerURL=https%3A%2F%2Fpeer.example&entityType=asset&entityKey=asset%3Araw%2Fa.txt&op=put&result=applied",
-      { headers: auth },
-    );
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as {
-      items: { sourceSeq: number; peerUrl: string }[];
-      total: number;
-    };
-    expect(body.total).toBe(1);
-    expect(body.items[0]).toEqual(
-      expect.objectContaining({ sourceSeq: 1, peerUrl: "https://peer.example" }),
-    );
-  });
-
-  it("复制应用日志非法整数查询参数返回 400", async () => {
-    const invalidParams: [string, string][] = [
-      ["limit", "1.5"],
-      ["limit", ""],
-      ["offset", "1.5"],
-      ["offset", ""],
-      ["sourceSeq", "-1"],
-      ["sourceSeq", "1.5"],
-      ["sourceSeq", ""],
-      ["sourceSeq", "not-a-number"],
-    ];
-    for (const [key, value] of invalidParams) {
-      const res = await fetch(
-        `http://localhost/api/v1/replication-apply-logs?${key}=${encodeURIComponent(value)}`,
-        { headers: auth },
-      );
-      expect(res.status, `${key}=${value} 应返回 400`).toBe(400);
-    }
-  });
-
-  it("复制应用日志分页参数按后端默认值与范围钳制", async () => {
-    for (const query of ["limit=0", "limit=-1", "limit=201", "offset=-1"]) {
-      const res = await fetch(`http://localhost/api/v1/replication-apply-logs?${query}`, {
-        headers: auth,
-      });
-      expect(res.status).toBe(200);
-      const body = (await res.json()) as { items: unknown[]; total: number };
-      expect(body.total).toBe(1);
-      expect(body.items).toHaveLength(1);
-    }
   });
 
   it("登录成功返回会话令牌", async () => {
@@ -771,11 +674,6 @@ describe("devmock MSW 端点行为", () => {
       headers: { ...emptyHeaders, [DEV_MOCK_ROUTE_HEADER]: "/audit-logs" },
     });
     await expect(auditLogs.json()).resolves.toEqual({ items: [], total: 0 });
-
-    const replicationLogs = await fetch("http://localhost/api/v1/replication-apply-logs", {
-      headers: { ...emptyHeaders, [DEV_MOCK_ROUTE_HEADER]: "/audit-logs" },
-    });
-    await expect(replicationLogs.json()).resolves.toEqual({ items: [], total: 0 });
   });
 
   it("Raw 协议上传和统一资产操作会更新 Mock 树，失败前不提交部分变更", async () => {

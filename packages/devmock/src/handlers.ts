@@ -23,8 +23,6 @@ export type BatchDeleteAssetsRequest = Schemas["BatchDeleteAssetsRequest"];
 export type BatchDeleteAssetFailure = Schemas["BatchDeleteAssetFailure"];
 export type BatchDeleteAssetsResponse = Schemas["BatchDeleteAssetsResponse"];
 export type UsageInfo = Schemas["UsageInfo"];
-export type ReplicationApplyLog = Schemas["ReplicationApplyLog"];
-export type ReplicationApplyLogList = Schemas["ReplicationApplyLogList"];
 
 /** GET /api/v1/audit-logs 的非 OpenAPI 管理面响应。 */
 export interface MockAuditLogEntry {
@@ -169,31 +167,6 @@ export function mockBatchDeleteAssets(): BatchDeleteAssetsResponse {
   return {
     deleted: 2,
     failed: [{ path: "no/such.txt", error: "资源不存在" }],
-  };
-}
-
-/** GET /api/v1/replication-apply-logs 的契约响应。 */
-export function mockReplicationApplyLogList(): ReplicationApplyLogList {
-  return {
-    items: [
-      {
-        sourceNode: "node-a",
-        sourceSeq: 1,
-        sourceActor: "同步管理员",
-        sourceAuthSource: "password",
-        operationId: "op-0123456789abcdef0123456789abcdef",
-        peerUrl: "https://peer.example",
-        entityType: "asset",
-        entityKey: "asset:raw/a.txt",
-        op: "put",
-        result: "applied",
-        detail: "元数据与 blob 已应用",
-        firstSeenAt: MOCK_TIME,
-        lastSeenAt: MOCK_TIME,
-        attemptCount: 1,
-      },
-    ],
-    total: 1,
   };
 }
 

@@ -14,7 +14,6 @@ import {
   mockReadyz,
   mockRepository,
   mockRepositoryList,
-  mockReplicationApplyLogList,
   mockStatus,
   mockTokenCreated,
   mockTokenList,
@@ -118,14 +117,6 @@ describe("devmock ↔ OpenAPI 契约一致性", () => {
         expect(responses?.[status]?.$ref).toContain("AssetOperation");
       }
     }
-  });
-
-  it("复制接收审计响应满足契约并接受真实状态枚举", () => {
-    expectValid("ReplicationApplyLogList", mockReplicationApplyLogList());
-    const validate = ajv.compile(schemaFor("ReplicationApplyLog"));
-    expect(
-      validate({ ...mockReplicationApplyLogList().items[0], result: "not-a-real-result" }),
-    ).toBe(false);
   });
 
   it("统一审计概览、事件、风险批次确认和通知均满足 OpenAPI 契约", () => {

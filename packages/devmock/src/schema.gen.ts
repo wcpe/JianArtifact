@@ -769,6 +769,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/migrations/{id}/source-config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * 修改迁移任务来源配置（仅非终态）
+         * @description 仅允许 planned 或 failed（失败待重试）状态的任务修改来源配置。
+         *     当前仅支持更新 allowPrivateSource（是否允许私网/本机地址回源）。
+         *     修改会持久化到任务 SourceConfig，之后可 start 或 resume 重试。
+         */
+        patch: operations["updateMigrationSourceConfig"];
+        trace?: never;
+    };
     "/api/v1/backups": {
         parameters: {
             query?: never;
@@ -1348,32 +1370,6 @@ export interface components {
                 code: string;
                 message: string;
             };
-        };
-        ReplicationApplyLog: {
-            sourceNode: string;
-            /** Format: int64 */
-            sourceSeq: number;
-            sourceActor: string;
-            /** Format: int64 */
-            sourceUserId?: number;
-            sourceAuthSource: string;
-            operationId: string;
-            peerUrl: string;
-            entityType: string;
-            entityKey: string;
-            op: string;
-            /** @enum {string} */
-            result: "applied" | "metadata_applied_pending_blob" | "lww_skipped" | "pending_parent" | "blob_failed" | "skipped_permanent" | "failed";
-            detail: string;
-            lastError?: string;
-            lastErrorAt?: string;
-            firstSeenAt: string;
-            lastSeenAt: string;
-            attemptCount: number;
-        };
-        ReplicationApplyLogList: {
-            items: components["schemas"]["ReplicationApplyLog"][];
-            total: number;
         };
         /**
          * @description 服务端归一化的审计分类，不以底层技术来源作为主分类。
@@ -3872,6 +3868,40 @@ export interface operations {
                     "application/json": components["schemas"]["MigrationTask"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    updateMigrationSourceConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["MigrationIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description 来源是本机/内网地址时允许私网回源 */
+                    allowPrivateSource: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description 已更新来源配置 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MigrationTask"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
