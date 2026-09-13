@@ -10,6 +10,7 @@ import {
   NumberInput,
   Stack,
   Switch,
+  TagsInput,
   Text,
   TextInput,
   Title,
@@ -132,19 +133,17 @@ function ServiceSettingsForm({
           disabled={saving}
           onChange={(value) => setForm({ ...form, upstreamTimeout: Number(value) || 0 })}
         />
-        <TextInput
+        <TagsInput
           label={t("settings.allowedHostsLabel")}
           description={t("settings.allowedHostsHint")}
-          placeholder="maven.example.com, repo.example.com"
-          value={form.allowedHosts.join(", ")}
+          placeholder="repo.example.com"
+          value={form.allowedHosts}
           disabled={saving}
-          onChange={(event) =>
+          clearable
+          onChange={(value) =>
             setForm({
               ...form,
-              allowedHosts: event.currentTarget.value
-                .split(",")
-                .map((item) => item.trim())
-                .filter(Boolean),
+              allowedHosts: value.map((item) => item.trim()).filter(Boolean),
             })
           }
         />

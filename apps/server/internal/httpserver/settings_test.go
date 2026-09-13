@@ -166,6 +166,111 @@ func TestSettingsEndpoints(t *testing.T) {
 	}
 }
 
+// TestSettingsOriginTokenAndAllowedHosts 回源 Token 与域名白名单的保存规则：
+// 未开启 Token 时空头名/空值必须放行（设置页全字段提交的历史 bug），
+// 开启时必须齐备且合法；白名单支持多域名写入回读。
+func TestSettingsOriginTokenAndAllowedHosts(t *testing.T) {
+	db, err := persistence.Open(filepath.Join(t.TempDir(), "settings-token.db"))
+	if err != nil {
+		t.Fatalf("打开数据库：%v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := db.Migrate(); err != nil {
+		t.Fatalf("迁移：%v", err)
+	}
+	settingSvc := domain.NewSettingService(repository.NewSettingRepo(db))
+	handlers := api.NewHandlers(api.Deps{Settings: settingSvc})
+
+	gin.SetMode(gin.ReleaseMode)
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set("auth.principal", &auth.Principal{Role: "admin", Username: "admin", UserID: 1})
+		c.Next()
+	})
+	r.GET("/api/v1/settings", handlers.GetSettings)
+	r.PUT("/api/v1/settings", handlers.PutSettings)
+
+	do := func(body string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/settings", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Test-Role", "admin")
+		r.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// 未开启 Token：全字段提交（含空头名/空值）→ 200。设置页历史 bug 场景。
+	if rec := do(`{"anonymousAccess":true,"publicUrl":"","upstreamTimeout":30,"allowedHosts":[],"originTokenEnabled":false,"originTokenHeader":"","originTokenValue":""}`); rec.Code != http.StatusOK {
+		t.Fatalf("关闭 Token 时空头名/空值应放行，得 %d（体：%s）", rec.Code, rec.Body.String())
+	}
+
+	// 域名白名单多域名写入 → 回读一致。
+	rec := do(`{"allowedHosts":["mirror.example.com","repo.example.com:8443","10.0.0.3"]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("多域名白名单 PUT 应 200，得 %d（体：%s）", rec.Code, rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/settings", nil)
+	req.Header.Set("X-Test-Role", "admin")
+	r.ServeHTTP(rec, req)
+	var snap api.SettingsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &snap); err != nil {
+		t.Fatalf("解析响应：%v", err)
+	}
+	if len(snap.AllowedHosts) != 3 || snap.AllowedHosts[0] != "mirror.example.com" {
+		t.Errorf("白名单回读不符：%v", snap.AllowedHosts)
+	}
+
+	// 白名单非法项 → 400。
+	for _, body := range []string{
+		`{"allowedHosts":["https://x.example.com"]}`,
+		`{"allowedHosts":["a b.example.com"]}`,
+	} {
+		if rec := do(body); rec.Code != http.StatusBadRequest {
+			t.Errorf("PUT %s 应 400，得 %d", body, rec.Code)
+		}
+	}
+
+	// 开启 Token 但头名/值缺失 → 400（生效状态校验）。
+	if rec := do(`{"originTokenEnabled":true,"originTokenHeader":"","originTokenValue":""}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("开启 Token 空头名应 400，得 %d", rec.Code)
+	}
+	// Token 值过短 → 400。
+	if rec := do(`{"originTokenEnabled":true,"originTokenHeader":"X-Jian-Origin-Token","originTokenValue":"short"}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("开启 Token 短值应 400，得 %d", rec.Code)
+	}
+
+	// 开启 Token 齐备 → 200，回读开启状态。
+	if rec := do(`{"originTokenEnabled":true,"originTokenHeader":"X-Jian-Origin-Token","originTokenValue":"0123456789abcdef0123456789abcdef"}`); rec.Code != http.StatusOK {
+		t.Fatalf("开启 Token 齐备应 200，得 %d（体：%s）", rec.Code, rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/settings", nil)
+	req.Header.Set("X-Test-Role", "admin")
+	r.ServeHTTP(rec, req)
+	if err := json.Unmarshal(rec.Body.Bytes(), &snap); err != nil {
+		t.Fatalf("解析响应：%v", err)
+	}
+	if !snap.OriginTokenEnabled || snap.OriginTokenHeader != "X-Jian-Origin-Token" {
+		t.Errorf("Token 开启回读不符：%+v", snap)
+	}
+
+	// 关闭 Token（全字段提交，header/value 原样带回）→ 200，回读关闭。
+	if rec := do(`{"originTokenEnabled":false,"originTokenHeader":"X-Jian-Origin-Token","originTokenValue":"0123456789abcdef0123456789abcdef"}`); rec.Code != http.StatusOK {
+		t.Fatalf("关闭 Token 应 200，得 %d（体：%s）", rec.Code, rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/settings", nil)
+	req.Header.Set("X-Test-Role", "admin")
+	r.ServeHTTP(rec, req)
+	if err := json.Unmarshal(rec.Body.Bytes(), &snap); err != nil {
+		t.Fatalf("解析响应：%v", err)
+	}
+	if snap.OriginTokenEnabled {
+		t.Errorf("Token 关闭回读不符：%+v", snap)
+	}
+}
+
 // TestSettingsPublicURLDynamicEffect 写 publicUrl 后 usage 立即用新值（FR-89 对外 URL 动态生效）。
 func TestSettingsPublicURLDynamicEffect(t *testing.T) {
 	db, err := persistence.Open(filepath.Join(t.TempDir(), "settings-usage.db"))

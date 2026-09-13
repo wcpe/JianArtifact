@@ -104,7 +104,10 @@ func (h *Handlers) PutSettings(c *gin.Context) {
 	if !bindJSON(c, &req) {
 		return
 	}
-	if err := validateSettingsRequest(req); err != nil {
+	// 回源 Token 校验需要当前生效值兜底：请求未携带 header/value 时沿用存量配置，
+	// 否则"未开启 Token 的实例保存任意字段"会被空头名误判（header 默认空）。
+	curEnabled, curHeader, curValue := h.settings.OriginTokenGuard()
+	if err := validateSettingsRequest(req, curEnabled, curHeader, curValue); err != nil {
 		auth.WriteError(c, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
@@ -129,7 +132,10 @@ func (h *Handlers) PutSettings(c *gin.Context) {
 }
 
 // validateSettingsRequest 在写入前完成全部字段校验，避免非法请求产生部分更新。
-func validateSettingsRequest(req SettingsRequest) error {
+// 回源 Token 按"请求应用后的生效状态"校验：开启时头名与值必须齐备，关闭时允许
+// 留空（清除）；但显式给出的非空值仍须格式合法。cur* 为当前生效值，用于补齐
+// 请求未携带的字段（可选字段语义：传哪个改哪个）。
+func validateSettingsRequest(req SettingsRequest, curEnabled bool, curHeader, curValue string) error {
 	if req.PublicURL != nil {
 		if err := validatePublicURL(*req.PublicURL); err != nil {
 			return err
@@ -150,22 +156,33 @@ func validateSettingsRequest(req SettingsRequest) error {
 			return err
 		}
 	}
-	if req.OriginTokenEnabled != nil && *req.OriginTokenEnabled {
-		if req.OriginTokenHeader == nil || strings.TrimSpace(*req.OriginTokenHeader) == "" {
+
+	enabled := curEnabled
+	if req.OriginTokenEnabled != nil {
+		enabled = *req.OriginTokenEnabled
+	}
+	header := curHeader
+	if req.OriginTokenHeader != nil {
+		header = *req.OriginTokenHeader
+		if trimmed := strings.TrimSpace(header); trimmed != "" {
+			if err := validateHTTPHeaderName(header); err != nil {
+				return err
+			}
+		}
+	}
+	value := curValue
+	if req.OriginTokenValue != nil {
+		value = *req.OriginTokenValue
+		if v := strings.TrimSpace(value); v != "" && len(v) < 16 {
+			return errors.New("回源 Token 值至少 16 个字符")
+		}
+	}
+	if enabled {
+		if strings.TrimSpace(header) == "" {
 			return errors.New("开启回源 Token 校验必须提供请求头名")
 		}
-		if req.OriginTokenValue == nil || strings.TrimSpace(*req.OriginTokenValue) == "" {
+		if strings.TrimSpace(value) == "" {
 			return errors.New("开启回源 Token 校验必须提供 Token 值")
-		}
-	}
-	if req.OriginTokenHeader != nil {
-		if err := validateHTTPHeaderName(*req.OriginTokenHeader); err != nil {
-			return err
-		}
-	}
-	if req.OriginTokenValue != nil {
-		if len(strings.TrimSpace(*req.OriginTokenValue)) < 16 {
-			return errors.New("回源 Token 值至少 16 个字符")
 		}
 	}
 	return nil

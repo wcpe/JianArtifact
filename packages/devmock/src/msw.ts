@@ -972,18 +972,38 @@ export const handlers = [
       anonymousAccess?: boolean;
       publicUrl?: string;
       upstreamTimeout?: number;
+      allowedHosts?: string[];
+      originTokenEnabled?: boolean;
+      originTokenHeader?: string;
+      originTokenValue?: string;
     };
+    const current = store.settings();
     return HttpResponse.json(
       store.updateSettings({
         anonymousAccess:
           typeof body.anonymousAccess === "boolean"
             ? body.anonymousAccess
-            : store.settings().anonymousAccess,
-        publicUrl: typeof body.publicUrl === "string" ? body.publicUrl : store.settings().publicUrl,
+            : current.anonymousAccess,
+        publicUrl: typeof body.publicUrl === "string" ? body.publicUrl : current.publicUrl,
         upstreamTimeout:
           typeof body.upstreamTimeout === "number"
             ? body.upstreamTimeout
-            : store.settings().upstreamTimeout,
+            : current.upstreamTimeout,
+        allowedHosts: Array.isArray(body.allowedHosts)
+          ? body.allowedHosts.map((item) => String(item).trim()).filter(Boolean)
+          : current.allowedHosts,
+        originTokenEnabled:
+          typeof body.originTokenEnabled === "boolean"
+            ? body.originTokenEnabled
+            : current.originTokenEnabled,
+        originTokenHeader:
+          typeof body.originTokenHeader === "string"
+            ? body.originTokenHeader
+            : current.originTokenHeader,
+        originTokenValue:
+          typeof body.originTokenValue === "string"
+            ? body.originTokenValue
+            : current.originTokenValue,
       }),
     );
   }),

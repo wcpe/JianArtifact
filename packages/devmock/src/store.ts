@@ -56,6 +56,12 @@ export interface ServiceSettings {
   publicUrl: string;
   upstreamTimeout: number;
   syncInterval: number;
+  /** 允许访问的域名白名单（空数组表示不限制）；与真实后端一致按列表存储。 */
+  allowedHosts: string[];
+  /** 回源 Token 校验（FR-130）；节点本地配置。 */
+  originTokenEnabled: boolean;
+  originTokenHeader: string;
+  originTokenValue: string;
 }
 
 /** 开发/测试态签发的固定会话令牌明文；鉴权守卫据此放行。 */
@@ -656,6 +662,10 @@ function seed(): State {
       publicUrl: "https://repo.example.com",
       upstreamTimeout: 30,
       syncInterval: 5,
+      allowedHosts: [],
+      originTokenEnabled: false,
+      originTokenHeader: "",
+      originTokenValue: "",
     },
   };
 }
@@ -1038,11 +1048,15 @@ export const store = {
 
   /** 保存管理端服务设置；同步间隔保持只读，不由设置页写入。 */
   updateSettings(
-    patch: Pick<ServiceSettings, "anonymousAccess" | "publicUrl" | "upstreamTimeout">,
+    patch: Omit<ServiceSettings, "syncInterval">,
   ): ServiceSettings {
     state.anonymousAccessEnabled = patch.anonymousAccess;
     state.serviceSettings.publicUrl = patch.publicUrl;
     state.serviceSettings.upstreamTimeout = patch.upstreamTimeout;
+    state.serviceSettings.allowedHosts = [...patch.allowedHosts];
+    state.serviceSettings.originTokenEnabled = patch.originTokenEnabled;
+    state.serviceSettings.originTokenHeader = patch.originTokenHeader;
+    state.serviceSettings.originTokenValue = patch.originTokenValue;
     return this.settings();
   },
 
