@@ -1,6 +1,8 @@
 # ===== Go 构建产物 =====
 /bin/
 apps/server/bin/
+# Git Bash 下 `> dev/null` 会把 34MB 二进制落到磁盘（误提交过一次），整目录忽略
+apps/server/dev/
 *.exe
 *.exe~
 *.dll
