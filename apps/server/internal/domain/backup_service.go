@@ -202,10 +202,73 @@ func (s *BackupService) Delete(packageID string) error {
 	return s.repo.Delete(packageID)
 }
 
-// ReconcileStartup 把进程重启遗留的生成中包标记为失败。
-// 与复制轮次孤儿清理同理：不能让列表里留下永久"生成中"的幻影。
+// ReconcileStartup 收口进程重启遗留的生成中包，不让列表里留下永久"生成中"幻影：
+//   - 归档完整可读（manifest 身份正确）→ 判为 done。还原进来的包正是这种形态：它的内嵌
+//     快照取自生成过程中，登记行仍是生成中，但包体在本节点可用；误标 failed 会让目标节点
+//     无法基于它继续生成增量差包（FR-134 要求基线为 done）。
+//   - 归档缺失或不可读 → 判为 failed（真中断）。
 func (s *BackupService) ReconcileStartup() (int64, error) {
-	return s.repo.MarkInterrupted("服务重启，备份生成被中断")
+	const pageSize = 200
+	var recovered int64
+	for offset := 0; ; offset += pageSize {
+		rows, err := s.repo.List(pageSize, offset)
+		if err != nil {
+			return recovered, fmt.Errorf("列出备份包：%w", err)
+		}
+		for _, rec := range rows {
+			if !isBackupInFlight(rec.Status) {
+				continue
+			}
+			manifest, ok := s.readPackageManifest(rec.PackageID)
+			if !ok {
+				continue
+			}
+			counts, err := json.Marshal(manifest.Counts)
+			if err != nil {
+				continue
+			}
+			var size int64
+			if info, err := os.Stat(s.PackagePath(rec.PackageID)); err == nil {
+				size = info.Size()
+			}
+			if err := s.repo.Finish(rec.PackageID, true, size, string(counts), ""); err != nil {
+				continue
+			}
+			recovered++
+		}
+		if len(rows) < pageSize {
+			break
+		}
+	}
+	n, err := s.repo.MarkInterrupted("服务重启，备份生成被中断")
+	if err != nil {
+		return recovered, err
+	}
+	return recovered + n, nil
+}
+
+// isBackupInFlight 判断登记状态是否属于"生成中"（与 MarkInterrupted 的口径一致）。
+func isBackupInFlight(status string) bool {
+	return status == repository.BackupStatusQueued ||
+		status == repository.BackupStatusSnapshotting ||
+		status == repository.BackupStatusPacking
+}
+
+// readPackageManifest 读取归档内的 manifest；归档缺失 / 半截 / 非本产品包时返回 false。
+func (s *BackupService) readPackageManifest(packageID string) (archive.Manifest, bool) {
+	path := s.PackagePath(packageID)
+	if _, err := os.Stat(path); err != nil {
+		return archive.Manifest{}, false
+	}
+	r, m, err := archive.Open(path)
+	if err != nil {
+		return archive.Manifest{}, false
+	}
+	_ = r
+	if m.PackageID == "" || m.Kind != archive.Kind {
+		return archive.Manifest{}, false
+	}
+	return m, true
 }
 
 // Create 登记并启动后台生成，立即返回 queued 记录。

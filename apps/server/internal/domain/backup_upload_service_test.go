@@ -160,6 +160,52 @@ func TestBackupUploadRoundTrip(t *testing.T) {
 	}
 }
 
+// TestBackupUploadRetransmitSameChunkIsIdempotent 覆盖分片重传：
+// 网络抖动后重发同一序号分片是覆盖语义（契约写明「重复片幂等覆盖」），
+// 不应被"累计分片 + 本次 超过声明总字节"误拒。
+func TestBackupUploadRetransmitSameChunkIsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	uploadSvc, _, _, _, _ := newUploadFixture(t)
+
+	src := newBackupFixture(t)
+	src.seedAssets(t, "alpha", "beta", "gamma")
+	rec, err := src.svc.Generate(ctx, CreateBackupOptions{Mode: archive.ModeHot})
+	if err != nil {
+		t.Fatalf("Generate：%v", err)
+	}
+	data, err := os.ReadFile(src.svc.PackagePath(rec.PackageID))
+	if err != nil {
+		t.Fatalf("读取源包：%v", err)
+	}
+
+	initRes, err := uploadSvc.Init(ctx, InitUploadOptions{
+		FileName: "pkg.tar.gz", TotalBytes: int64(len(data)), Operator: "tester",
+	})
+	if err != nil {
+		t.Fatalf("Init：%v", err)
+	}
+	uploadID := initRes.Upload.UploadID
+	chunks := chunkData(t, data, int(uploadChunkSize))
+	for i, c := range chunks {
+		if _, err := uploadSvc.PutChunk(ctx, uploadID, i, bytes.NewReader(c), int64(len(c))); err != nil {
+			t.Fatalf("PutChunk(%d)：%v", i, err)
+		}
+	}
+
+	// 全部传完后重传最后一片：累计已等于声明总字节，覆盖语义应仍被接受。
+	last := len(chunks) - 1
+	if _, err := uploadSvc.PutChunk(ctx, uploadID, last, bytes.NewReader(chunks[last]), int64(len(chunks[last]))); err != nil {
+		t.Fatalf("重传同一分片应幂等成功（当前实现会误报累计超额）：%v", err)
+	}
+	view, err := uploadSvc.Get(ctx, uploadID)
+	if err != nil {
+		t.Fatalf("Get：%v", err)
+	}
+	if len(view.UploadedChunks) != len(chunks) {
+		t.Fatalf("重传不应改变已上传分片集合：%+v，期望 %d 片", view.UploadedChunks, len(chunks))
+	}
+}
+
 // TestBackupUploadValidation 覆盖片号越界 / 单片超额 / 累计超额 → ErrValidation 且不留半成品分片。
 func TestBackupUploadValidation(t *testing.T) {
 	ctx := context.Background()

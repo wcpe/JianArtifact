@@ -338,6 +338,53 @@ func TestBackupReconcileStartupMarksInterrupted(t *testing.T) {
 	}
 }
 
+// TestBackupReconcileStartupKeepsRestoredPackageDone 覆盖「还原进来的包」：
+// 它的内嵌快照取自生成过程中，登记行仍是生成中；但归档在本节点完整可用。
+// 启动收口必须判为 done，否则目标节点无法基于它继续生成增量差包（会报基线状态 failed）。
+func TestBackupReconcileStartupKeepsRestoredPackageDone(t *testing.T) {
+	f := newBackupFixture(t)
+	f.seedAssets(t, "alpha", "beta")
+
+	rec, err := f.svc.Generate(context.Background(), CreateBackupOptions{Mode: archive.ModeHot})
+	if err != nil {
+		t.Fatalf("Generate：%v", err)
+	}
+	// 模拟"快照即生成中时刻"：包文件在，登记行回到生成中。
+	if err := f.repo.UpdateProgress(rec.PackageID, repository.BackupStatusSnapshotting, 0, ""); err != nil {
+		t.Fatalf("回退登记状态：%v", err)
+	}
+	// 同时造一条归档缺失的真中断记录，应照旧判失败。
+	if err := f.repo.Create(repository.BackupPackage{
+		PackageID: "bk-broken", Mode: repository.BackupModeHot, Status: repository.BackupStatusPacking,
+	}); err != nil {
+		t.Fatalf("Create bk-broken：%v", err)
+	}
+
+	if _, err := f.svc.ReconcileStartup(); err != nil {
+		t.Fatalf("ReconcileStartup：%v", err)
+	}
+	got, err := f.svc.Get(rec.PackageID)
+	if err != nil {
+		t.Fatalf("Get：%v", err)
+	}
+	if got.Status != repository.BackupStatusDone {
+		t.Fatalf("归档完整的包应收口为 done，实际 %s", got.Status)
+	}
+	if got.SizeBytes <= 0 {
+		t.Fatalf("收口后应回填包体大小，实际 %d", got.SizeBytes)
+	}
+	if got.FinishedAt == nil {
+		t.Fatal("收口后应有 finishedAt")
+	}
+	broken, err := f.svc.Get("bk-broken")
+	if err != nil {
+		t.Fatalf("Get bk-broken：%v", err)
+	}
+	if broken.Status != repository.BackupStatusFailed {
+		t.Fatalf("归档缺失的生成中包应判 failed，实际 %s", broken.Status)
+	}
+}
+
 func TestBackupListReflectsGeneratedPackages(t *testing.T) {
 	f := newBackupFixture(t)
 	f.seedAssets(t, "x")

@@ -83,6 +83,19 @@ func NewBackupUploadService(repo *repository.BackupUploadRepo, imports *BackupIm
 func (s *BackupUploadService) sessionDir(uploadID string) string {
 	return filepath.Join(s.dataDir, backupUploadDirName, uploadID)
 }
+
+// chunkSize 返回磁盘上某序号分片的既有字节数；不存在返回 0（重传判定用）。
+func (s *BackupUploadService) chunkSize(uploadID string, index int) (int64, error) {
+	info, err := os.Stat(s.chunkPath(uploadID, index))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("读取分片 %d：%w", index, err)
+	}
+	return info.Size(), nil
+}
+
 func (s *BackupUploadService) chunksDir(uploadID string) string {
 	return filepath.Join(s.sessionDir(uploadID), "chunks")
 }
@@ -154,10 +167,17 @@ func (s *BackupUploadService) PutChunk(ctx context.Context, uploadID string, ind
 		return repository.BackupUpload{}, fmt.Errorf("%w：分片大小必须 > 0 且 <= %d，实际 %d", ErrValidation, rec.ChunkSize, size)
 	}
 	// 累计已上传字节 + 本片 不得超过声明总字节（防超额灌盘打满磁盘）。
+	// 重传同一序号是覆盖语义：先扣除该序号在磁盘上的既有字节，否则任何重试都会被
+	// "累计超额"误拒（契约要求「重复片幂等覆盖」）。
 	uploaded, err := s.sumChunkBytes(uploadID)
 	if err != nil {
 		return repository.BackupUpload{}, err
 	}
+	existing, err := s.chunkSize(uploadID, index)
+	if err != nil {
+		return repository.BackupUpload{}, err
+	}
+	uploaded -= existing
 	if uploaded+size > rec.TotalBytes {
 		return repository.BackupUpload{}, fmt.Errorf("%w：累计分片 %d + 本次 %d 超过声明总字节 %d", ErrValidation, uploaded, size, rec.TotalBytes)
 	}
