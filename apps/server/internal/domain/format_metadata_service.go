@@ -136,10 +136,25 @@ func (s *FormatMetadataService) publishPyPI(repoName, project, version, filename
 		Sha256: asset.BlobHash, Size: asset.Size, RequiresPython: requiresPython, Yanked: yanked,
 		MetadataJSON: "{}", SourceKind: "hosted",
 	}
+	// format_metadata 行时间同样对齐源端时间（保持 RFC3339Nano 表内约定）。
+	applyFormatMetadataSourceTimestamp(&meta, sourceModified)
 	if err := s.publishHostedFormatAsset(repoName, r, asset, meta, audit); err != nil {
 		return nil, s.assets.cleanupFailedWrite(asset.BlobHash, err)
 	}
 	return &PypiFile{Project: project, ProjectDisplay: project, Version: version, Filename: filename, AssetPath: asset.Path, Sha256: asset.BlobHash, Size: asset.Size, RequiresPython: requiresPython, Yanked: yanked}, nil
+}
+
+// applyFormatMetadataSourceTimestamp 将 format_metadata 行的 created_at/updated_at
+// 固定为源端时间的 UTC RFC3339Nano（该表的既有时间约定）；零值不修改，
+// 保持 publishHostedFormatAsset 的本地时间默认语义。仅在线迁移路径传入非零值，
+// 协议直传（twine/dotnet publish 等）不受影响。
+func applyFormatMetadataSourceTimestamp(meta *repository.FormatMetadata, sourceModified time.Time) {
+	if meta == nil || sourceModified.IsZero() {
+		return
+	}
+	ts := sourceModified.UTC().Format(time.RFC3339Nano)
+	meta.CreatedAt = ts
+	meta.UpdatedAt = ts
 }
 
 func (s *FormatMetadataService) publishHostedFormatAsset(repoName string, repo *repository.Repository, asset *repository.Asset, meta repository.FormatMetadata, audit AssetOperationAudit) error {
@@ -702,6 +717,8 @@ func (s *FormatMetadataService) publishNuGet(repoName, id, version, filename, me
 	// 在信封与发布批次构造前标注源端时间，资产行与复制信封携带同一时间。
 	applySourceTimestamp(asset, sourceModified)
 	meta := repository.FormatMetadata{RepositoryID: r.ID, Format: "nuget", NameNormalized: idNorm, NameDisplay: id, Version: version, VersionNormalized: versionNorm, Filename: filename, AssetPath: asset.Path, Sha256: asset.BlobHash, Size: asset.Size, MetadataJSON: metadataJSON, SourceKind: "hosted"}
+	// format_metadata 行时间同样对齐源端时间（保持 RFC3339Nano 表内约定）。
+	applyFormatMetadataSourceTimestamp(&meta, sourceModified)
 	if err := s.publishHostedFormatAsset(repoName, r, asset, meta, AssetOperationAudit{}); err != nil {
 		return nil, s.assets.cleanupFailedWrite(asset.BlobHash, err)
 	}

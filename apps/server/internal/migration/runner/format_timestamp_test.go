@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
 	"github.com/wcpe/jianartifact/apps/server/internal/formats"
@@ -103,7 +104,7 @@ func TestRunnerOnlineFormatImportersPreserveSourceTimestamps(t *testing.T) {
 	source := httptest.NewServer(mux)
 	t.Cleanup(source.Close)
 
-	mig, assets, repos, _, _ := setup(t)
+	mig, assets, repos, _, db := setup(t)
 	repos.SetEnabledFormats(formats.New(formats.Known...))
 	for _, spec := range []struct{ name, format string }{
 		{"pypi-releases", "pypi"},
@@ -169,5 +170,28 @@ func TestRunnerOnlineFormatImportersPreserveSourceTimestamps(t *testing.T) {
 	_ = rc.Close()
 	if index.CreatedAt == "" || index.UpdatedAt == "" {
 		t.Fatalf("cargo 索引行时间不应为空：created_at=%q updated_at=%q", index.CreatedAt, index.UpdatedAt)
+	}
+
+	// format_metadata 行（Simple/registration 索引元数据）时间同样对齐源端时间，
+	// 按该表的 RFC3339Nano 约定格式化。
+	sourceParsed, err := time.Parse(time.RFC3339, sourceLastModified)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantMetaTimestamp := sourceParsed.UTC().Format(time.RFC3339Nano)
+	for _, spec := range []struct{ repo, format, filename string }{
+		{"pypi-releases", "pypi", "demo-1.0.0-py3-none-any.whl"},
+		{"nuget-releases", "nuget", "demo-package.1.0.0.nupkg"},
+	} {
+		var createdAt, updatedAt string
+		if err := db.Get(&createdAt, `SELECT fm.created_at FROM format_metadata fm JOIN repository r ON r.id = fm.repository_id WHERE r.name = ? AND fm.format = ? AND fm.filename = ?`, spec.repo, spec.format, spec.filename); err != nil {
+			t.Fatalf("读取 %s format_metadata 行：%v", spec.repo, err)
+		}
+		if err := db.Get(&updatedAt, `SELECT fm.updated_at FROM format_metadata fm JOIN repository r ON r.id = fm.repository_id WHERE r.name = ? AND fm.format = ? AND fm.filename = ?`, spec.repo, spec.format, spec.filename); err != nil {
+			t.Fatalf("读取 %s format_metadata 行：%v", spec.repo, err)
+		}
+		if createdAt != wantMetaTimestamp || updatedAt != wantMetaTimestamp {
+			t.Errorf("%s format_metadata created_at=%q updated_at=%q，期望源端时间 %q", spec.repo, createdAt, updatedAt, wantMetaTimestamp)
+		}
 	}
 }
