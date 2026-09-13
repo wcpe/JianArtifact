@@ -40,6 +40,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { searchAssets } from "../api/endpoints";
 import { useAsync } from "../hooks/useAsync";
 import { assetDownloadUrl, formatBytes } from "../lib/assetTree";
+import { formatUtcToLocal } from "../lib/timeFormat";
 import {
   buildSearchExpression,
   CHECKSUM_EXTS,
@@ -395,7 +396,7 @@ export function SearchPage() {
                           </Table.Td>
                           <Table.Td style={{ whiteSpace: "nowrap" }}>
                             <Text size="xs" c="dimmed">
-                              {new Date(item.updatedAt).toLocaleString()}
+                              {formatUtcToLocal(item.updatedAt)}
                             </Text>
                           </Table.Td>
                           <Table.Td onClick={(e) => e.stopPropagation()}>

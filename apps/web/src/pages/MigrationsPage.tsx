@@ -33,6 +33,7 @@ import { planEstimatedAssets, sourceColor, statusColor } from "../components/mig
 import { BackupsTab } from "../components/backup/BackupsTab";
 import { AsyncBoundary } from "../components/AsyncBoundary";
 import { useAsync } from "../hooks/useAsync";
+import { formatUtcToLocal } from "../lib/timeFormat";
 import { density } from "../theme/density";
 
 const PAGE_SIZE_OPTIONS = ["10", "20", "50"] as const;
@@ -338,7 +339,7 @@ function TaskCard({ task, onOpen }: { task: MigrationTask; onOpen: () => void })
               <Group gap={4}>
                 <IconClock size={12} />
                 <Text size="xs" c="dimmed">
-                  {task.createdAt}
+                  {formatUtcToLocal(task.createdAt)}
                 </Text>
               </Group>
             </Group>

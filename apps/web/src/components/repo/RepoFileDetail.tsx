@@ -7,6 +7,7 @@ import { useTranslation } from "react-i18next";
 import type { AssetSummary, RepoFormat, UsageInfo } from "../../api/types";
 import { assetDownloadUrl, formatBytes } from "../../lib/assetTree";
 import { buildCoordinateSnippets, htmlViewUrl } from "../../lib/coordinates";
+import { formatUtcToLocal } from "../../lib/timeFormat";
 import { CopyTextButton } from "../CopyTextButton";
 
 interface Props {
@@ -45,12 +46,12 @@ export function RepoFileDetail({ repoName, format, asset, usage, showDownload = 
         {asset.createdAt && (
           <MetaRow
             label={t("repoDetail.assetCreatedAt")}
-            value={new Date(asset.createdAt).toLocaleString()}
+            value={formatUtcToLocal(asset.createdAt)}
           />
         )}
         <MetaRow
           label={t("repoDetail.assetUpdatedAt")}
-          value={new Date(asset.updatedAt).toLocaleString()}
+          value={formatUtcToLocal(asset.updatedAt)}
         />
       </Stack>
 

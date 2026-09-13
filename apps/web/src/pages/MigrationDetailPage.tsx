@@ -43,6 +43,7 @@ import { MigrationSourceCard } from "../components/migration/MigrationSourceCard
 import { MigrationStatCards } from "../components/migration/MigrationStatCards";
 import { parseTotals, planEstimatedAssets, statusColor } from "../components/migration/status";
 import { confirmAction, confirmDanger, notifyError, notifySuccess } from "../lib/feedback";
+import { formatUtcToLocal } from "../lib/timeFormat";
 import { density } from "../theme/density";
 
 // 既存（planned/failed）迁移任务：勾选「来源是本机/内网地址」后写回来源配置，
@@ -259,9 +260,13 @@ export function MigrationDetailPage() {
                 {t(`migrations.source_${task.sourceType}`)} · {task.conflictPolicy}
               </Text>
               <Text size="xs" c="dimmed">
-                {t("migrations.createdAt")}: {task.createdAt}
-                {task.startedAt ? ` · ${t("migrations.startedAt")}: ${task.startedAt}` : ""}
-                {task.finishedAt ? ` · ${t("migrations.finishedAt")}: ${task.finishedAt}` : ""}
+                {t("migrations.createdAt")}: {formatUtcToLocal(task.createdAt)}
+                {task.startedAt
+                  ? ` · ${t("migrations.startedAt")}: ${formatUtcToLocal(task.startedAt)}`
+                  : ""}
+                {task.finishedAt
+                  ? ` · ${t("migrations.finishedAt")}: ${formatUtcToLocal(task.finishedAt)}`
+                  : ""}
               </Text>
             </div>
           </Group>

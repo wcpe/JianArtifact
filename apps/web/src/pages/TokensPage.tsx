@@ -13,6 +13,7 @@ import { createToken, deleteToken, listTokens } from "../api/endpoints";
 import type { TokenCreated } from "../api/types";
 import { useAsync } from "../hooks/useAsync";
 import { confirmDanger, notifyError, notifySuccess } from "../lib/feedback";
+import { formatUtcToLocal } from "../lib/timeFormat";
 
 export function TokensPage() {
   const { t } = useTranslation();
@@ -81,7 +82,7 @@ export function TokensPage() {
                   <Table.Tr key={token.id}>
                     <Table.Td>{token.id}</Table.Td>
                     <Table.Td>{token.name}</Table.Td>
-                    <Table.Td>{new Date(token.createdAt).toLocaleString()}</Table.Td>
+                    <Table.Td>{formatUtcToLocal(token.createdAt)}</Table.Td>
                     <Table.Td>
                       <ActionIcon
                         color="red"

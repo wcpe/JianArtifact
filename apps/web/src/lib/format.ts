@@ -1,4 +1,5 @@
 // 通用数值格式化（图表坐标轴 / KPI / 悬停读数共用）。
+import { parseUtc } from "./timeFormat";
 
 /**
  * 人类可读文件大小（B/KB/MB/GB/TB，一位小数）。
@@ -31,8 +32,9 @@ export function formatCount(value: number): string {
  * 注意必须同时给 hour 与 minute——只给 hour 时 zh-CN 会输出「16时」而不是「16:00」。
  */
 export function formatStamp(iso: string): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "—";
+  // 后端时间可能是 SQLite naive UTC（YYYY-MM-DD HH:MM:SS）或 RFC3339，统一解析。
+  const date = parseUtc(iso);
+  if (!date) return "—";
   const sameDay = date.toDateString() === new Date().toDateString();
   return sameDay
     ? date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })

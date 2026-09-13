@@ -10,6 +10,7 @@ import {
 import { useTranslation } from "react-i18next";
 
 import type { MigrationTaskStatus } from "../../api/types";
+import { formatUtcToLocal } from "../../lib/timeFormat";
 
 interface Props {
   status: MigrationTaskStatus;
@@ -86,7 +87,8 @@ export function MigrationLifecycle({
         lineVariant={status === "planned" ? "dashed" : "solid"}
       >
         <Text size="xs" c="dimmed">
-          {startedAt || (status === "planned" ? t("migrations.lifecycleNotStarted") : "—")}
+          {formatUtcToLocal(startedAt) ||
+            (status === "planned" ? t("migrations.lifecycleNotStarted") : "—")}
         </Text>
         {status === "running" && (
           <Text size="xs" c="blue">
@@ -96,7 +98,7 @@ export function MigrationLifecycle({
       </Timeline.Item>
       <Timeline.Item bullet={<EndIcon size={14} />} title={endTitle(status, t)} color={endColor}>
         <Text size="xs" c="dimmed">
-          {finishedAt ||
+          {formatUtcToLocal(finishedAt) ||
             (status === "planned" || status === "running"
               ? t("migrations.lifecycleNotFinished")
               : "—")}

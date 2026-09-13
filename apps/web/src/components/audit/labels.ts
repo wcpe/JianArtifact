@@ -1,6 +1,7 @@
 // 审计工作台（方案 A）共享字典与格式化：类别/结果/严重度/认证来源的
 // i18n 键映射与语义色，供左右栏与抽屉共用，避免魔法字符串散落。
 import type { AuditCategory, AuditResult } from "../../api/types";
+import { parseUtc } from "../../lib/timeFormat";
 
 /** 类别 → i18n 键（标签统一走 auditWorkbench 命名空间）。 */
 export const CATEGORY_LABEL_KEYS: Record<string, string> = {
@@ -192,8 +193,9 @@ export function requestMethod(method: unknown): string {
 }
 
 export function parseTime(value: unknown): number {
-  const t = typeof value === "string" ? Date.parse(value) : Number.NaN;
-  return Number.isNaN(t) ? 0 : t;
+  // 统一走 UTC 解析（兼容 SQLite naive 与 RFC3339 输入），避免 naive 串被当本地时间。
+  const date = typeof value === "string" ? parseUtc(value) : null;
+  return date ? date.getTime() : 0;
 }
 
 const timeFormatter = new Intl.DateTimeFormat("zh-CN", {

@@ -55,6 +55,7 @@ import { useAsync } from "../hooks/useAsync";
 import { CONN_COLOR, CONN_LABEL_KEY } from "../lib/connectionStatus";
 import { confirmDanger, notifyError, notifySuccess } from "../lib/feedback";
 import { formatBytes } from "../lib/assetTree";
+import { formatUtcToLocalDate } from "../lib/timeFormat";
 
 const PAGE_SIZE = 10;
 const TYPE_OPTIONS = ["hosted", "proxy", "group"];
@@ -545,7 +546,7 @@ export function RepositoriesPage() {
                               <Table.Td>
                                 <Text size="xs" c="dimmed">
                                   {repo.createdAt
-                                    ? new Date(repo.createdAt).toLocaleDateString()
+                                    ? formatUtcToLocalDate(repo.createdAt)
                                     : "-"}
                                 </Text>
                               </Table.Td>
