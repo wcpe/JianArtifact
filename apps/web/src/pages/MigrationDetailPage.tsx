@@ -47,7 +47,7 @@ import { density } from "../theme/density";
 
 // 既存（planned/failed）迁移任务：勾选「来源是本机/内网地址」后写回来源配置，
 // 保存成功即可 start / resume 重试被私网安全策略拒绝的来源。
-function PrivateSourceToggle({
+export function PrivateSourceToggle({
   taskId,
   initial,
   onSaved,

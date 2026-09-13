@@ -91,6 +91,73 @@ func TestAPIRepositoryHidesUnsafeLegacyRemoteURL(t *testing.T) {
 	}
 }
 
+func TestUpdateMigrationSourceConfigAllowsPlannedAndRejectsRunning(t *testing.T) {
+	db := openAPITestDB(t)
+	migrations := domain.NewMigrationService(repository.NewMigrationTaskRepo(db), nil)
+	handler := NewHandlers(Deps{Migrations: migrations})
+
+	created, err := migrations.Create(domain.MigrationCreateInput{
+		SourceType:     repository.MigrationSourceOfflineDir,
+		SourceConfig:   map[string]any{"path": "/data/nexus"},
+		ConflictPolicy: repository.MigrationConflictSkip,
+		PlanJSON:       `{"repositories":[]}`,
+	})
+	if err != nil {
+		t.Fatalf("Create：%v", err)
+	}
+
+	// planned：允许修改并持久化 allowPrivateSource
+	rec := servePatchSourceConfig(handler, created.ID, true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("planned PATCH 状态码 = %d，响应 = %s", rec.Code, rec.Body.String())
+	}
+	persisted, err := migrations.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(persisted.SourceConfig, `"allowPrivateSource":true`) {
+		t.Fatalf("allowPrivateSource 未持久化：%s", persisted.SourceConfig)
+	}
+
+	// 终态 running：拒绝修改 → 409
+	if _, err := migrations.Start(created.ID, nil); err != nil {
+		t.Fatalf("Start：%v", err)
+	}
+	rec = servePatchSourceConfig(handler, created.ID, true)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("running PATCH 应返回 409，得 %d，响应 = %s", rec.Code, rec.Body.String())
+	}
+}
+
+// servePatchSourceConfig 以管理员身份调用 PATCH /api/v1/migrations/{id}/source-config。
+func servePatchSourceConfig(handler *Handlers, id int64, allowPrivate bool) *httptest.ResponseRecorder {
+	router := gin.New()
+	router.PATCH("/:id/source-config", func(c *gin.Context) {
+		c.Set("auth.principal", &auth.Principal{Role: "admin"})
+		handler.UpdateMigrationSourceConfig(c, MigrationIdParam(id))
+	})
+	rec := httptest.NewRecorder()
+	body := fmt.Sprintf(`{"allowPrivateSource":%t}`, allowPrivate)
+	req := httptest.NewRequest(http.MethodPatch, fmt.Sprintf("/%d/source-config", id), bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
+	return rec
+}
+
+// openAPITestDB 在 api 包内打开临时 SQLite 并执行迁移。
+func openAPITestDB(t *testing.T) *persistence.DB {
+	t.Helper()
+	db, err := persistence.Open(filepath.Join(t.TempDir(), "api.db"))
+	if err != nil {
+		t.Fatalf("打开数据库：%v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := db.Migrate(); err != nil {
+		t.Fatalf("迁移：%v", err)
+	}
+	return db
+}
+
 func TestListRemoteNexusRepositoriesRejectsInvalidURL(t *testing.T) {
 	factoryCalls := 0
 	migrations := domain.NewMigrationService(nil, nil, func(string) (discover.Source, error) {
