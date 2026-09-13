@@ -3,7 +3,9 @@ package api
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"time"
@@ -104,6 +106,12 @@ func (h *Handlers) PutSettings(c *gin.Context) {
 	if !bindJSON(c, &req) {
 		return
 	}
+	// 域名白名单先归一化再校验：容忍粘贴完整 URL（剥离协议/路径/端口），
+	// 避免 https://repo.example.com 这类输入被误判为「含非法字符」。
+	if req.AllowedHosts != nil {
+		hosts := normalizeHostList(*req.AllowedHosts)
+		req.AllowedHosts = &hosts
+	}
 	// 回源 Token 校验需要当前生效值兜底：请求未携带 header/value 时沿用存量配置，
 	// 否则"未开启 Token 的实例保存任意字段"会被空头名误判（header 默认空）。
 	curEnabled, curHeader, curValue := h.settings.OriginTokenGuard()
@@ -200,22 +208,83 @@ func validateHTTPHeaderName(name string) error {
 	return nil
 }
 
+// normalizeHostList 归一化域名白名单（保留条目数量，空项交由校验阶段报错）。
+func normalizeHostList(items []string) []string {
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		out = append(out, normalizeHostEntry(item))
+	}
+	return out
+}
+
+// normalizeHostEntry 归一化单条白名单：支持粘贴 https://repo.example.com/path 这类完整地址，
+// 只保留主机名（域名或 IP）并统一小写。端口一并剥离——请求侧 hostAllowed 比较的是去掉
+// 端口后的 Host，存了端口的条目永远命中不了，剥离后「填什么就是什么」。
+func normalizeHostEntry(item string) string {
+	host := strings.TrimSpace(item)
+	if host == "" {
+		return ""
+	}
+	if idx := strings.Index(host, "://"); idx >= 0 {
+		// 带协议：只取 authority 段（容忍 user@ 前缀与路径/查询）。
+		rest := host[idx+3:]
+		if cut := strings.IndexAny(rest, "/?#"); cut >= 0 {
+			rest = rest[:cut]
+		}
+		if at := strings.LastIndex(rest, "@"); at >= 0 {
+			rest = rest[at+1:]
+		}
+		rest = strings.TrimSpace(rest)
+		if rest == "" {
+			// 只有协议没有主机名（如 "https://"）：归一化为空项交由校验阶段报错。
+			return ""
+		}
+		host = rest
+	} else if cut := strings.IndexAny(host, "/?#"); cut >= 0 {
+		host = host[:cut]
+	}
+	if h, port, err := net.SplitHostPort(host); err == nil {
+		if port != "" {
+			host = h
+		}
+	}
+	host = strings.Trim(strings.TrimSpace(host), "[]")
+	return strings.ToLower(host)
+}
+
 // validateHostList 校验允许访问的域名白名单：空列表合法（不限制）；
-// 每项必须是合法 Host（域名或 IP，可带端口），禁止空格、路径或 scheme。
+// 每项须为域名或 IP 字面量（协议前缀 / 路径 / 端口已在归一化阶段剥离）。
 func validateHostList(hosts []string) error {
 	for _, item := range hosts {
 		host := strings.TrimSpace(item)
 		if host == "" {
-			return errors.New("允许访问域名不能包含空项")
+			return errors.New("允许访问域名不能为空项（只允许域名或 IP）")
 		}
-		if strings.ContainsAny(host, " /\\\t") {
-			return fmt.Errorf("允许访问域名 %q 含非法字符", host)
+		if _, err := netip.ParseAddr(host); err == nil {
+			continue
 		}
-		if u, err := url.Parse("http://" + host); err != nil || u.Host == "" || strings.Contains(u.Host, "..") {
+		if err := validateHostname(host); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateHostname 校验域名字面量：只允许字母数字与 - _ .；
+// 不得为空标签、不得以点或连字符开头结尾，纯数字加点（写错的 IP）也拒绝。
+func validateHostname(host string) error {
+	if strings.ContainsAny(host, " :/\\\t?#@[]%") {
+		return fmt.Errorf("允许访问域名 %q 含非法字符（只允许域名或 IP）", host)
+	}
+	if strings.Contains(host, "..") || strings.HasPrefix(host, ".") || strings.HasSuffix(host, ".") {
+		return fmt.Errorf("允许访问域名 %q 非法", host)
+	}
+	if strings.Trim(host, "0123456789.") == "" {
+		return fmt.Errorf("允许访问域名 %q 不是合法 IP", host)
+	}
+	for _, label := range strings.Split(host, ".") {
+		if label == "" || strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
 			return fmt.Errorf("允许访问域名 %q 非法", host)
-		}
-		if strings.HasPrefix(host, "http://") || strings.HasPrefix(host, "https://") {
-			return fmt.Errorf("允许访问域名 %q 不应包含协议前缀", host)
 		}
 	}
 	return nil

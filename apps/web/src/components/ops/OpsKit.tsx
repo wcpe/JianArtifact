@@ -163,9 +163,15 @@ export function OpsSection({
             {title}
           </Text>
           {meta ? (
-            <Text size="xs" c="dimmed">
-              {meta}
-            </Text>
+            // meta 支持 ReactNode：文本走 dimmed Text，徽章等节点用 Box 承载，
+            // 避免 <div>（Badge）被塞进 <p>（Text 默认标签）触发非法嵌套告警。
+            typeof meta === "string" || typeof meta === "number" ? (
+              <Text size="xs" c="dimmed">
+                {meta}
+              </Text>
+            ) : (
+              <Box>{meta}</Box>
+            )
           ) : null}
         </Group>
         {actions}

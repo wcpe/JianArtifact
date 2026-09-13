@@ -204,10 +204,10 @@ func TestSettingsOriginTokenAndAllowedHosts(t *testing.T) {
 		t.Fatalf("关闭 Token 时空头名/空值应放行，得 %d（体：%s）", rec.Code, rec.Body.String())
 	}
 
-	// 域名白名单多域名写入 → 回读一致。
-	rec := do(`{"allowedHosts":["mirror.example.com","repo.example.com:8443","10.0.0.3"]}`)
+	// 域名白名单：粘贴完整 URL / 带端口 / 大写 一律归一化为主机名后写入。
+	rec := do(`{"allowedHosts":["https://repo.wcpe.top","https://repo.example.com/path","repo.example.com:8443","10.0.0.3","REPO.Upper.Top"]}`)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("多域名白名单 PUT 应 200，得 %d（体：%s）", rec.Code, rec.Body.String())
+		t.Fatalf("带协议前缀的白名单 PUT 应 200，得 %d（体：%s）", rec.Code, rec.Body.String())
 	}
 	rec = httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/settings", nil)
@@ -217,14 +217,22 @@ func TestSettingsOriginTokenAndAllowedHosts(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &snap); err != nil {
 		t.Fatalf("解析响应：%v", err)
 	}
-	if len(snap.AllowedHosts) != 3 || snap.AllowedHosts[0] != "mirror.example.com" {
-		t.Errorf("白名单回读不符：%v", snap.AllowedHosts)
+	wantHosts := []string{"repo.wcpe.top", "repo.example.com", "repo.example.com", "10.0.0.3", "repo.upper.top"}
+	if len(snap.AllowedHosts) != len(wantHosts) {
+		t.Fatalf("白名单回读条数不符：%v", snap.AllowedHosts)
+	}
+	for i, want := range wantHosts {
+		if snap.AllowedHosts[i] != want {
+			t.Errorf("白名单第 %d 项 = %q，期望 %q（整体：%v）", i, snap.AllowedHosts[i], want, snap.AllowedHosts)
+		}
 	}
 
-	// 白名单非法项 → 400。
+	// 白名单非法项 → 400（空项、空格、写错的 IP）。
 	for _, body := range []string{
-		`{"allowedHosts":["https://x.example.com"]}`,
 		`{"allowedHosts":["a b.example.com"]}`,
+		`{"allowedHosts":["10.0.0.300"]}`,
+		`{"allowedHosts":[""]}`,
+		`{"allowedHosts":["https://"]}`,
 	} {
 		if rec := do(body); rec.Code != http.StatusBadRequest {
 			t.Errorf("PUT %s 应 400，得 %d", body, rec.Code)
