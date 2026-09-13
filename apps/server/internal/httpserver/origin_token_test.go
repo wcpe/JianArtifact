@@ -16,7 +16,7 @@ func TestOriginTokenMiddleware(t *testing.T) {
 
 	// 未携带 Token（非回环）→ 404
 	req := httptest.NewRequest("GET", "/readyz", nil)
-	req.Host = "maven.wcpe.top"
+	req.Host = "maven.example.com"
 	req.RemoteAddr = "198.51.100.9:43210"
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -26,7 +26,7 @@ func TestOriginTokenMiddleware(t *testing.T) {
 
 	// 携带错误 Token → 404
 	req = httptest.NewRequest("GET", "/readyz", nil)
-	req.Host = "maven.wcpe.top"
+	req.Host = "maven.example.com"
 	req.RemoteAddr = "198.51.100.9:43210"
 	req.Header.Set("X-Jian-Origin-Token", "wrong-token")
 	rec = httptest.NewRecorder()
@@ -37,7 +37,7 @@ func TestOriginTokenMiddleware(t *testing.T) {
 
 	// 携带正确 Token → 200
 	req = httptest.NewRequest("GET", "/readyz", nil)
-	req.Host = "maven.wcpe.top"
+	req.Host = "maven.example.com"
 	req.RemoteAddr = "198.51.100.9:43210"
 	req.Header.Set("X-Jian-Origin-Token", "secret-token-value-123456")
 	rec = httptest.NewRecorder()

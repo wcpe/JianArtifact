@@ -36,7 +36,7 @@ export const en = {
       "Logical name configured in deploy env JIAN_MIGRATION_SOURCE_<ref>; address is never submitted through the admin UI",
     sourceRefRequired: "Enter a source ref name starting with an uppercase letter",
     url: "Nexus URL",
-    urlHint: "Enter the external Nexus base URL, e.g. https://bak.maven.wcpe.top",
+    urlHint: "Enter the external Nexus base URL, e.g. https://bak.maven.example.com",
     urlRequired: "Enter a valid http:// or https:// Nexus URL (no username, password, query or fragment)",
     authType: "Auth Type",
     authAnonymous: "Anonymous",

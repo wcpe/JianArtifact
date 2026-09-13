@@ -58,7 +58,7 @@ type Config struct {
 	UpstreamTimeout        time.Duration // proxy 回源整体超时
 	SyncPeerURL            string        // 遗留复制对端基址；仅为兼容旧配置保留，不驱动主备调度
 	SyncInterval           time.Duration // 复制轮询间隔（FR-85）
-	PublicURL              string        // 对外基础 URL（FR-87，如 https://repo.wcpe.top）；空则回退请求 Host 推断
+	PublicURL              string        // 对外基础 URL（FR-87，如 https://repo.example.com）；空则回退请求 Host 推断
 	EnabledFormats         formats.Set   // 启动时启用的协议格式（FR-32）
 	BlobGCInterval         time.Duration // primary 孤立 blob 定时清理间隔；0 禁用
 	TLSAddr                string        // 服务内置 TLS 监听地址（FR-131）；空 = 不启用

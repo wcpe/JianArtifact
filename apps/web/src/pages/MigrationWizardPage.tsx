@@ -833,7 +833,7 @@ export function MigrationWizardPage() {
                   <TextInput
                     label={t("migrations.url")}
                     description={t("migrations.urlHint")}
-                    placeholder="https://bak.maven.wcpe.top"
+                    placeholder="https://bak.maven.example.com"
                     disabled={busy}
                     {...form.getInputProps("url")}
                   />

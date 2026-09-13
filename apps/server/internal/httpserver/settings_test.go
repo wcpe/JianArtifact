@@ -205,7 +205,7 @@ func TestSettingsOriginTokenAndAllowedHosts(t *testing.T) {
 	}
 
 	// 域名白名单：粘贴完整 URL / 带端口 / 大写 一律归一化为主机名后写入。
-	rec := do(`{"allowedHosts":["https://repo.wcpe.top","https://repo.example.com/path","repo.example.com:8443","10.0.0.3","REPO.Upper.Top"]}`)
+	rec := do(`{"allowedHosts":["https://repo.example.com","https://cdn.example.net/path","repo.example.com:8443","10.0.0.3","REPO.Upper.Top"]}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("带协议前缀的白名单 PUT 应 200，得 %d（体：%s）", rec.Code, rec.Body.String())
 	}
@@ -217,7 +217,7 @@ func TestSettingsOriginTokenAndAllowedHosts(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &snap); err != nil {
 		t.Fatalf("解析响应：%v", err)
 	}
-	wantHosts := []string{"repo.wcpe.top", "repo.example.com", "repo.example.com", "10.0.0.3", "repo.upper.top"}
+	wantHosts := []string{"repo.example.com", "cdn.example.net", "repo.example.com", "10.0.0.3", "repo.upper.top"}
 	if len(snap.AllowedHosts) != len(wantHosts) {
 		t.Fatalf("白名单回读条数不符：%v", snap.AllowedHosts)
 	}

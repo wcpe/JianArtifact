@@ -138,7 +138,7 @@ function seedEvents(now: Date): StoredAuditEvent[] {
 }`,
       },
       durationMs: 96,
-      clientIp: "218.73.204.205",
+      clientIp: "203.0.113.7",
       attentionId: "attention-security-login",
       details: {
         resultSummary: "连续失败的管理登录已被拦截",
@@ -207,7 +207,7 @@ function seedEvents(now: Date): StoredAuditEvent[] {
 }`,
       },
       durationMs: 3310,
-      clientIp: "172.20.10.7",
+      clientIp: "192.168.1.27",
       operationId: "op-audit-replication-1",
       attentionId: "attention-replication-apply",
       details: {
@@ -317,7 +317,7 @@ function seedEvents(now: Date): StoredAuditEvent[] {
 }`,
         },
         durationMs: 90 + ((index * 173) % 1400),
-        clientIp: ["218.73.204.205", "10.12.3.44", "192.168.31.8"][index % 3]!,
+        clientIp: ["203.0.113.7", "10.12.3.44", "192.168.1.8"][index % 3]!,
         attentionId: `attention-notification-${index + 1}`,
         details: {
           resultSummary: failed ? "风险操作保留完整审计记录" : "操作已按当前节点策略完成",

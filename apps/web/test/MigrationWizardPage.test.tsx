@@ -103,9 +103,9 @@ describe("在线 Nexus 迁移向导", () => {
     const user = userEvent.setup();
 
     await openOnlineConfig(user);
-    await user.type(screen.getByLabelText("Nexus 地址"), "https://bak.maven.wcpe.top");
+    await user.type(screen.getByLabelText("Nexus 地址"), "https://bak.maven.example.com");
     expect((screen.getByLabelText("Nexus 地址") as HTMLInputElement).value).toBe(
-      "https://bak.maven.wcpe.top",
+      "https://bak.maven.example.com",
     );
     const discoverButton = screen.getByRole("button", { name: "发现并落库" });
     expect((discoverButton as HTMLButtonElement).disabled).toBe(false);
@@ -114,7 +114,7 @@ describe("在线 Nexus 迁移向导", () => {
     await waitFor(() => expect(api.discoverMigrations).toHaveBeenCalledTimes(1));
     expect(discoverInput()).toMatchObject({
       sourceType: "online_rest",
-      sourceConfig: { url: "https://bak.maven.wcpe.top" },
+      sourceConfig: { url: "https://bak.maven.example.com" },
       sourceAuth: { type: "anonymous" },
       conflictPolicy: "skip",
     });
@@ -140,7 +140,7 @@ describe("在线 Nexus 迁移向导", () => {
     const password = "user-token-password";
 
     await openOnlineConfig(user);
-    await user.type(screen.getByLabelText("Nexus 地址"), "https://bak.maven.wcpe.top");
+    await user.type(screen.getByLabelText("Nexus 地址"), "https://bak.maven.example.com");
     await user.click(sourceAuthSelect());
     await user.click(
       await screen.findByRole("option", { name: "Basic（用户名/密码或 User Token）" }),
@@ -167,7 +167,7 @@ describe("在线 Nexus 迁移向导", () => {
     const user = userEvent.setup();
 
     await openOnlineConfig(user);
-    await user.type(screen.getByLabelText("Nexus 地址"), "https://bak.maven.wcpe.top");
+    await user.type(screen.getByLabelText("Nexus 地址"), "https://bak.maven.example.com");
     await user.click(sourceAuthSelect());
     await user.click(
       await screen.findByRole("option", { name: "Basic（用户名/密码或 User Token）" }),
@@ -193,7 +193,7 @@ describe("在线 Nexus 迁移向导", () => {
     const user = userEvent.setup();
 
     await openOnlineConfig(user);
-    await user.type(screen.getByLabelText("Nexus 地址"), "https://bak.maven.wcpe.top");
+    await user.type(screen.getByLabelText("Nexus 地址"), "https://bak.maven.example.com");
     await user.click(sourceAuthSelect());
     await user.click(await screen.findByRole("option", { name: "Bearer Token" }));
     await screen.findByLabelText("令牌");

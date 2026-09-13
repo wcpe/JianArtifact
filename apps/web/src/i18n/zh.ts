@@ -896,7 +896,7 @@ export const zh = {
       "部署环境变量 JIAN_MIGRATION_SOURCE_<引用名> 中配置的逻辑名称，地址不通过管理端提交",
     sourceRefRequired: "请填写大写字母开头的来源引用名",
     url: "Nexus 地址",
-    urlHint: "请输入外部 Nexus 服务基址，例如 https://bak.maven.wcpe.top",
+    urlHint: "请输入外部 Nexus 服务基址，例如 https://bak.maven.example.com",
     urlRequired: "请输入有效的 http:// 或 https:// Nexus 地址（不含用户名、密码、查询参数或片段）",
     authType: "认证方式",
     authAnonymous: "匿名访问",

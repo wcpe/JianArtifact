@@ -87,7 +87,7 @@
 ### 验收
 
 - 发布门通过：Windows 原生 `make check` 全绿；GitHub Actions `Release` 的质量门、版本解析、多平台资产、容器镜像和 GitHub Release 预览链路 5/5 全绿。
-- 三节点实机通过：103（`maven.wcpe.top`）、108（`repo1.wcpe.top`）、124（`t2.wcpe.top`）全互联，双向上传/删除与断网恢复一致；100 MiB+1 blob 三端哈希一致；复制端点全程 GET-only；CDN/Tunnel 对外 URL 不泄露源站 IP。
+- 三节点实机通过：103（`maven.example.com`）、108（`repo1.example.com`）、124（`t2.example.com`）全互联，双向上传/删除与断网恢复一致；100 MiB+1 blob 三端哈希一致；复制端点全程 GET-only；CDN/Tunnel 对外 URL 不泄露源站 IP。
 
 ### 新增
 

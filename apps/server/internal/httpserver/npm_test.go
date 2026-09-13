@@ -282,7 +282,7 @@ func TestNpmGroupMergesPackument(t *testing.T) {
 // TestNpmPublicURLOverridesHost 配置对外基础 URL（FR-87）后，packument 的 tarball URL 用 public URL，
 // 而非请求 Host（隐藏源站 IP，适配 CDN 回源）。
 func TestNpmPublicURLOverridesHost(t *testing.T) {
-	const publicURL = "https://repo.wcpe.top"
+	const publicURL = "https://repo.example.com"
 	e := newProtocolEnvWithPublicURL(t, publicURL)
 	adminToken := e.bootstrapAdmin(t)
 	e.createNpmRepo(t, adminToken, "npm-public", "hosted", "", nil)

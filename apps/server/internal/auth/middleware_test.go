@@ -281,13 +281,13 @@ func TestProtocolCredentialsAllowedByHostAllowlist(t *testing.T) {
 	}
 
 	// 配置白名单：命中放行，未命中拒绝。
-	allowed := []string{"maven.wcpe.top", "repo.wcpe.top"}
+	allowed := []string{"maven.example.com", "repo.example.com"}
 	withLimit := NewAuthenticator(NewJWTManager([]byte("test-secret")), store,
 		WithAllowedHosts(func() []string { return allowed }))
-	if _, err := withLimit.Protocol().resolveFor(newReq("maven.wcpe.top"), true); err != nil {
+	if _, err := withLimit.Protocol().resolveFor(newReq("maven.example.com"), true); err != nil {
 		t.Fatalf("白名单命中应放行：%v", err)
 	}
-	if _, err := withLimit.Protocol().resolveFor(newReq("maven.wcpe.top:443"), true); err != nil {
+	if _, err := withLimit.Protocol().resolveFor(newReq("maven.example.com:443"), true); err != nil {
 		t.Fatalf("白名单命中（带端口）应放行：%v", err)
 	}
 	if _, err := withLimit.Protocol().resolveFor(newReq("evil.example.com"), true); !errors.Is(err, ErrUnauthenticated) {
@@ -307,7 +307,7 @@ func TestProtocolCredentialsAllowedByHostAllowlist(t *testing.T) {
 
 func TestProtocolCredentialsLoopbackAllowedEvenWhenHostBlocked(t *testing.T) {
 	a := NewAuthenticator(NewJWTManager([]byte("test-secret")), &stubStore{},
-		WithAllowedHosts(func() []string { return []string{"maven.wcpe.top"} }))
+		WithAllowedHosts(func() []string { return []string{"maven.example.com"} }))
 	r, _ := http.NewRequest(http.MethodGet, "/", nil)
 	r.Host = "127.0.0.1:50020"
 	r.RemoteAddr = "127.0.0.1:1234"

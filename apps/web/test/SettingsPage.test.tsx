@@ -27,7 +27,7 @@ const baseSettings = {
 
 describe("normalizeHostInput", () => {
   it("剥离协议 / 路径 / 端口并统一小写", () => {
-    expect(normalizeHostInput("https://repo.wcpe.top")).toBe("repo.wcpe.top");
+    expect(normalizeHostInput("https://mirror.example.net")).toBe("mirror.example.net");
     expect(normalizeHostInput("http://Repo.Example.COM:8080/path?x=1")).toBe("repo.example.com");
     expect(normalizeHostInput("repo.example.com:8443")).toBe("repo.example.com");
     expect(normalizeHostInput("10.0.0.3")).toBe("10.0.0.3");
@@ -68,17 +68,17 @@ describe("设置页", () => {
     renderWithProviders(<SettingsPage />, { route: "/settings", authenticated: true });
 
     const input = await screen.findByPlaceholderText("repo.example.com");
-    await user.type(input, "https://repo.wcpe.top/path");
+    await user.type(input, "https://mirror.example.net/path");
     await user.keyboard("{Enter}");
 
     // 列表里显示的是归一化后的主机名，且计数随之更新。
-    expect(await screen.findByText("repo.wcpe.top")).toBeTruthy();
+    expect(await screen.findByText("mirror.example.net")).toBeTruthy();
     expect(screen.getByText("共 1 条")).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "保存设置" }));
     await waitFor(() => expect(api.putSettings).toHaveBeenCalledTimes(1));
     expect(api.putSettings).toHaveBeenCalledWith(
-      expect.objectContaining({ allowedHosts: ["repo.wcpe.top"] }),
+      expect.objectContaining({ allowedHosts: ["mirror.example.net"] }),
     );
   });
 

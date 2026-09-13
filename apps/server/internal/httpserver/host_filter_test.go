@@ -9,13 +9,13 @@ import (
 
 func TestHostFilterMiddleware(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	allowed := []string{"maven.wcpe.top", "repo.wcpe.top"}
+	allowed := []string{"maven.example.com", "repo.example.com"}
 	router := gin.New()
 	router.Use(hostFilterMiddleware(func() []string { return allowed }))
 	router.GET("/readyz", func(c *gin.Context) { c.Status(200) })
 
 	req := httptest.NewRequest("GET", "/readyz", nil)
-	req.Host = "maven.wcpe.top"
+	req.Host = "maven.example.com"
 	req.RemoteAddr = "198.51.100.9:43210"
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -58,7 +58,7 @@ func TestHostFilterMiddleware(t *testing.T) {
 func TestHostFilterRejectsSpoofedLoopbackHostFromExternalPeer(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	router.Use(hostFilterMiddleware(func() []string { return []string{"maven.wcpe.top"} }))
+	router.Use(hostFilterMiddleware(func() []string { return []string{"maven.example.com"} }))
 	router.GET("/readyz", func(c *gin.Context) { c.Status(200) })
 
 	req := httptest.NewRequest("GET", "/readyz", nil)

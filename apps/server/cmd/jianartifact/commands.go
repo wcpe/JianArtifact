@@ -90,7 +90,7 @@ func adminBackfillChecksums(args []string) error {
 // --url 必填；--repos 逗号分隔（默认取本机全部 hosted 仓库）；--cred user:pass 可选；--batch 单批上限。
 func adminBackfillTimes(args []string) error {
 	fs := flag.NewFlagSet("admin backfill-times", flag.ContinueOnError)
-	baseURL := fs.String("url", "", "源 Nexus 基址（如 https://maven.wcpe.top）")
+	baseURL := fs.String("url", "", "源 Nexus 基址（如 https://maven.example.com）")
 	repoList := fs.String("repos", "", "仓库名逗号分隔；空则取本机全部 hosted 仓库")
 	cred := fs.String("cred", "", "源凭据 user:pass 或 token（可选，匿名拉取可省）")
 	batch := fs.Int("batch", 1000, "单批最多处理条数")

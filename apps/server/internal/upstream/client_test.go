@@ -135,7 +135,7 @@ func TestFetchAllowsPublicAddressAndResolvesAgainBeforeDial(t *testing.T) {
 			t.Fatalf("意外解析主机：%s", host)
 		}
 		lookups++
-		return []net.IPAddr{{IP: net.ParseIP("93.184.216.34")}}, nil
+		return []net.IPAddr{{IP: net.ParseIP("203.0.113.9")}}, nil
 	}
 	c := newClient(time.Second, false, resolver, testDialer(srv.Listener.Addr().String()))
 	body, _, err := c.Fetch(context.Background(), "http://packages.example.test", "/artifact")
@@ -153,7 +153,7 @@ func TestFetchRejectsDNSRebindingBeforeDial(t *testing.T) {
 	resolver := func(_ context.Context, _ string) ([]net.IPAddr, error) {
 		lookups++
 		if lookups == 1 {
-			return []net.IPAddr{{IP: net.ParseIP("93.184.216.34")}}, nil
+			return []net.IPAddr{{IP: net.ParseIP("203.0.113.9")}}, nil
 		}
 		return []net.IPAddr{{IP: net.ParseIP("127.0.0.1")}}, nil
 	}
@@ -423,7 +423,7 @@ func newCrossOriginRedirectTestClient(t *testing.T, checkInitial func(*http.Requ
 }
 
 func publicTestResolver(_ context.Context, _ string) ([]net.IPAddr, error) {
-	return []net.IPAddr{{IP: net.ParseIP("93.184.216.34")}}, nil
+	return []net.IPAddr{{IP: net.ParseIP("203.0.113.9")}}, nil
 }
 
 func testDialer(target string) dialContextFunc {

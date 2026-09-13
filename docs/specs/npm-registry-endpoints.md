@@ -73,7 +73,7 @@ FR-15 已交付 npm 协议最小闭环（packument GET/HEAD、tarball GET/HEAD�
 8. `npm search` 命中本仓包名/描述；size/from 分页生效
 9. install 时 audit 请求返回空报告，客户端无 audit 报错
 10. Accept install-v1+json 返回 abbreviated packument，install 正常
-11. **真机验收（需用户确认）**：线上 tmp.wcpe.top 用真实 npm + corepack pnpm 跑全部命令（测试绿 ≠ 真能用）
+11. **真机验收（需用户确认）**：线上 tmp.example.com 用真实 npm + corepack pnpm 跑全部命令（测试绿 ≠ 真能用）
 
 ## 6. 风险 / 待定
 

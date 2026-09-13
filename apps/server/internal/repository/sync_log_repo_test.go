@@ -28,7 +28,7 @@ func newTestSyncLog(t *testing.T) *repository.SyncLogRepo {
 func TestSyncLogStartFinish(t *testing.T) {
 	logs := newTestSyncLog(t)
 
-	id, err := logs.Start("https://repo.wcpe.top", 5)
+	id, err := logs.Start("https://repo.example.com", 5)
 	if err != nil {
 		t.Fatalf("Start：%v", err)
 	}
@@ -87,7 +87,7 @@ func TestSyncLogStartFinish(t *testing.T) {
 // TestSyncLogFail 失败记录：success=false 且带错误摘要。
 func TestSyncLogFail(t *testing.T) {
 	logs := newTestSyncLog(t)
-	id, err := logs.Start("https://repo.wcpe.top", 0)
+	id, err := logs.Start("https://repo.example.com", 0)
 	if err != nil {
 		t.Fatalf("Start：%v", err)
 	}
@@ -115,7 +115,7 @@ func TestSyncLogListOrderAndPaging(t *testing.T) {
 	logs := newTestSyncLog(t)
 	// 写入 3 条（Start 时间递增，List 应倒序返回最新在前）。
 	for i := 0; i < 3; i++ {
-		id, err := logs.Start("https://repo.wcpe.top", int64(i))
+		id, err := logs.Start("https://repo.example.com", int64(i))
 		if err != nil {
 			t.Fatalf("Start：%v", err)
 		}
@@ -162,7 +162,7 @@ func TestSyncLogListOrderAndPaging(t *testing.T) {
 // TestSyncLogDelete 删除记录（空同步不留痕：进行中记录被移除后列表为空）。
 func TestSyncLogDelete(t *testing.T) {
 	logs := newTestSyncLog(t)
-	id, err := logs.Start("https://repo.wcpe.top", 3)
+	id, err := logs.Start("https://repo.example.com", 3)
 	if err != nil {
 		t.Fatalf("Start：%v", err)
 	}

@@ -28,7 +28,7 @@ func seedAuditEvents(t *testing.T, db *persistence.DB) {
 			TS:    now.Add(-30 * time.Second).Format(time.RFC3339Nano),
 			Actor: "admin-a", ActorEmail: "admin@example.com", Action: "asset.delete",
 			EntityType: "asset", EntityKey: "release/a.jar", Repo: "release", Result: "error",
-			IP: "218.73.204.205", AuthSource: "jwt", UserAgent: "Mozilla/5.0 (Windows NT 10.0)",
+			IP: "203.0.113.7", AuthSource: "jwt", UserAgent: "Mozilla/5.0 (Windows NT 10.0)",
 			RequestID: "req-seed-1", SourceNode: "node-a",
 			HTTPMethod: "DELETE", HTTPPath: "/api/v1/artifacts/:id", StatusCode: 500, DurationMs: 1240,
 			TokenPreview: "Bearer eyJhbG****1dnM", BodyPreview: "{\n  \"force\": true\n}",
@@ -44,7 +44,7 @@ func seedAuditEvents(t *testing.T, db *persistence.DB) {
 		{
 			TS:    now.Add(-10 * time.Second).Format(time.RFC3339Nano),
 			Actor: "sync-service", Action: "replication.apply", EntityType: "batch",
-			EntityKey: "repl-batch-118", Result: "ok", IP: "172.20.10.7", AuthSource: "system",
+			EntityKey: "repl-batch-118", Result: "ok", IP: "192.168.1.27", AuthSource: "system",
 			SourceNode: "node-a", HTTPMethod: "POST", HTTPPath: "/api/v1/replication/apply",
 			StatusCode: 204, DurationMs: 8420,
 		},
@@ -125,8 +125,8 @@ func TestAuditEventsExposeHTTPContextAndFilters(t *testing.T) {
 		if newest.DurationMs == nil || *newest.DurationMs != 8420 {
 			t.Fatalf("期望耗时 8420ms，实际 %v", newest.DurationMs)
 		}
-		if newest.ClientIp == nil || *newest.ClientIp != "172.20.10.7" {
-			t.Fatalf("期望客户端 IP 172.20.10.7，实际 %v", newest.ClientIp)
+		if newest.ClientIp == nil || *newest.ClientIp != "192.168.1.27" {
+			t.Fatalf("期望客户端 IP 192.168.1.27，实际 %v", newest.ClientIp)
 		}
 
 		oldest := page.Items[2]

@@ -36,11 +36,11 @@ func TestSettingsDynamicConfig(t *testing.T) {
 	}
 
 	// 写后读一致。
-	if err := svc.SetPublicURL("https://repo.wcpe.top"); err != nil {
+	if err := svc.SetPublicURL("https://repo.example.com"); err != nil {
 		t.Fatalf("SetPublicURL：%v", err)
 	}
-	if got := svc.PublicURL(); got != "https://repo.wcpe.top" {
-		t.Errorf("PublicURL = %q，期望 https://repo.wcpe.top", got)
+	if got := svc.PublicURL(); got != "https://repo.example.com" {
+		t.Errorf("PublicURL = %q，期望 https://repo.example.com", got)
 	}
 	if err := svc.SetSyncInterval(10); err != nil {
 		t.Fatalf("SetSyncInterval：%v", err)
