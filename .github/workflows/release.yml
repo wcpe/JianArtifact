@@ -303,10 +303,23 @@ jobs:
               if [[ -f CHANGELOG.md ]]; then
                 echo "### 变更摘要"
                 echo ""
+                # 兼容两种版本标题写法：Keep a Changelog 的 "## [X.Y.Z] - 日期"，
+                # 以及简写的 "## X.Y.Z（日期）" / "## X.Y.Z (日期)" / "## X.Y.Z"。
                 awk -v ver="$VER" '
-                  $0 ~ "^## \\[" ver "\\]" {p=1; next}
-                  p && $0 ~ /^## / {exit}
-                  p {print}
+                  function heading_version(line,   h) {
+                    h = line
+                    sub(/^##[[:space:]]+/, "", h)
+                    gsub(/[\[\]]/, "", h)
+                    sub(/[[:space:]]+-.*$/, "", h)
+                    sub(/（.*$/, "", h)
+                    sub(/[(].*$/, "", h)
+                    return h
+                  }
+                  /^## / {
+                    if (p) exit
+                    if (heading_version($0) == ver) { p = 1; next }
+                  }
+                  p { print }
                 ' CHANGELOG.md || true
               fi
             fi
