@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/wcpe/JianArtifact/actions/workflows/ci.yml/badge.svg)](https://github.com/wcpe/JianArtifact/actions/workflows/ci.yml)
 [![Release](https://github.com/wcpe/JianArtifact/actions/workflows/release.yml/badge.svg)](https://github.com/wcpe/JianArtifact/actions/workflows/release.yml)
-![版本](https://img.shields.io/badge/version-0.7.1-blue.svg)
+![版本](https://img.shields.io/badge/version-0.8.0-blue.svg)
 ![许可](https://img.shields.io/badge/license-MIT-green.svg)
 ![语言](https://img.shields.io/badge/language-Go%20%2B%20React-blue.svg)
 
@@ -24,13 +24,16 @@
 
 ## 特性
 
-- **多格式仓库**：Raw / Maven / npm（hosted + proxy + group），按路线图逐步扩展 Docker / Cargo / PyPI / Go / NuGet。
+- **多格式仓库**：Raw / Maven / npm / Docker(OCI) / Cargo / PyPI / Go modules / NuGet，均为 hosted + proxy + group（group 视格式支持）；支持按格式声明式启停（未启用格式零路由零后台任务）。
 - **从 Nexus OSS 平滑迁移**：在线 REST / 离线原生目录 / 自有离线包三来源，计划预览、幂等续传、冲突策略与迁移报告；drop-in URL 兼容让客户端只改 host。
 - **认证与授权**：管理员网页自举、JWT 会话、API Token（CI/CLI 鉴权）、用户 / 仓库 / ACL 管理，内置 anonymous 主体 + 实例级匿名访问开关。
 - **全局搜索**：跨仓库制品搜索 + Header 搜索栏，支持 `repo:` / `format:` / `ext:` 等高级表达式与浏览页内过滤。
 - **制品治理**：内容寻址 blob 存储 + 校验和，single-flight 并发合并，大文件全程流式。
 - **单二进制交付**：前端产物经 Go embed 内嵌，`CGO_ENABLED=0` 静态编译，零外部依赖；Docker / Compose / systemd 多路径部署。
-- **主备复制（0.8.0 开发中）**：工作区已实现 root primary、单父 standby、多子 relay standby 的单向 GET pull；级联中继、逐跳凭据和邻接监控已接入代码与 Mock，但 0.8.0 仍需真实多节点/浏览器验收，尚未发布。
+- **搬迁与备份（0.8.0 起）**：节点搬迁以**一致性备份包**为传输单位（`manifest.json` + `VACUUM INTO` 快照 + `blobs.index` + 内容寻址 blob，包内不含任何密钥）；支持热备份与冻结窗口两种生成模式、增量差包、带时效签名的**无登录下载**（支持 Range 续传）、三通道导入（CLI / URL 拉取含 SSRF 防护 / 8 MiB 分片上传）与「暂存 + 重启原子替换」。
+- **写入冻结窗口**：运行时可冻结写入（有界 TTL、超时自动解冻），冻结期业务写返回 `503 write_frozen`、读与登录放行，界面显著提示，用于搬迁的短停机切换。
+- **运维可观测**：当前节点审计中心（八维筛选 + 风险批次确认）、业务仪表盘、当前主机监控（每分钟采样、保留 30 天）、管理端页面数据缓存。
+- **端口防护**：允许访问域名白名单、回源 Token 校验与服务内置 TLS 双监听。
 
 ## 快速开始
 
