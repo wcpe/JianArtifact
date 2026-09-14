@@ -60,7 +60,7 @@ export const zh = {
     anonymousLabel: "允许匿名访问",
     anonymousHint: "关闭后一切匿名请求返回 401（public 仓库也不例外）。",
     publicUrlLabel: "对外基础 URL",
-    publicUrlHint: "对外 CDN 域名；留空则按请求域名推断。",
+    publicUrlHint: "对外访问入口（含协议，如 https://repo.example.com）；留空则按请求域名推断。",
     publicUrlEmpty: "尚未配置对外基础 URL，当前将按请求域名推断。",
     upstreamTimeoutLabel: "回源超时（秒）",
     allowedHostsLabel: "允许访问的域名",

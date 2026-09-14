@@ -696,7 +696,7 @@ export function putAnonymousAccessSetting(enabled: boolean): Promise<{ enabled: 
 export interface SettingsConfig {
   /** 匿名访问全局开关。 */
   anonymousAccess: boolean;
-  /** 对外基础 URL（CDN 域名，空 = 未配置，回退请求推断）。 */
+  /** 对外基础 URL（对外访问入口，空 = 未配置，回退请求推断）。 */
   publicUrl: string;
   /** 回源整体超时（秒）。 */
   upstreamTimeout: number;
