@@ -68,7 +68,13 @@ export function ImportFromUrlCard() {
     <OpsSection
       title={t("backups.importCardTitle")}
       meta={state.data ? formatCount(state.data.total) : undefined}
-      style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}
+      style={{
+        flex: 1,
+        minHeight: 0,
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+      }}
       bodyStyle={{ flex: 1, minHeight: 0, overflow: "auto" }}
       bodyPadding={0}
       actions={

@@ -49,10 +49,7 @@ export function RepoFileDetail({ repoName, format, asset, usage, showDownload = 
             value={formatUtcToLocal(asset.createdAt)}
           />
         )}
-        <MetaRow
-          label={t("repoDetail.assetUpdatedAt")}
-          value={formatUtcToLocal(asset.updatedAt)}
-        />
+        <MetaRow label={t("repoDetail.assetUpdatedAt")} value={formatUtcToLocal(asset.updatedAt)} />
       </Stack>
 
       {/* 多校验和区域：SHA-256 / SHA-1 / MD5，各带复制按钮 */}

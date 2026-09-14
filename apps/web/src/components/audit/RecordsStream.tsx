@@ -306,10 +306,7 @@ export function RecordsStream({ model, onInvestigate, onOpenAttention }: Records
         </Group>
       </Box>
 
-      <Box
-        data-testid="audit-records-scroll"
-        style={{ flex: 1, minHeight: 0, overflowY: "auto" }}
-      >
+      <Box data-testid="audit-records-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
         {model.searchMode ? (
           <Text size="xs" c="dimmed" px="md" pt="xs">
             {t("auditWorkbench.searchModeHint", { query: model.search })}
@@ -468,7 +465,10 @@ function EventRow({
               </Badge>
             ) : null}
           </Group>
-          <Text size="xs" c="dimmed" truncate
+          <Text
+            size="xs"
+            c="dimmed"
+            truncate
             title={http?.path ? `${requestMethod(http.method)} ${http.path}` : targetText}
           >
             {http?.path ? `${requestMethod(http.method)} ${http.path}` : targetText}

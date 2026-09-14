@@ -263,13 +263,7 @@ export async function requestBinary<T>(
     timeoutMs?: number;
   },
 ): Promise<T> {
-  const {
-    method = "PUT",
-    body,
-    contentType,
-    signal,
-    timeoutMs = DEFAULT_TIMEOUT_MS,
-  } = options;
+  const { method = "PUT", body, contentType, signal, timeoutMs = DEFAULT_TIMEOUT_MS } = options;
   const requestUrl = buildUrl(path);
   const headers: Record<string, string> = devMockHeaders(requestUrl);
   const token = getToken();

@@ -47,9 +47,7 @@ beforeEach(() => {
   // 向导页首屏会做"初始迁移检查"：一旦存在 running 任务会提示并重定向到该任务详情
   // （不允许并发迁移，属正确产品行为）。本文件验证的是"可新建"路径，
   // 故显式声明前置为无进行中任务，不依赖 devmock 种子夹具的偶然状态。
-  server.use(
-    http.get("*/api/v1/migrations", () => HttpResponse.json({ items: [], total: 0 })),
-  );
+  server.use(http.get("*/api/v1/migrations", () => HttpResponse.json({ items: [], total: 0 })));
 });
 
 afterEach(() => {

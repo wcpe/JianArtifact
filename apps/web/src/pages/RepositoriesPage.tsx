@@ -545,9 +545,7 @@ export function RepositoriesPage() {
                               </Table.Td>
                               <Table.Td>
                                 <Text size="xs" c="dimmed">
-                                  {repo.createdAt
-                                    ? formatUtcToLocalDate(repo.createdAt)
-                                    : "-"}
+                                  {repo.createdAt ? formatUtcToLocalDate(repo.createdAt) : "-"}
                                 </Text>
                               </Table.Td>
                               <Table.Td>

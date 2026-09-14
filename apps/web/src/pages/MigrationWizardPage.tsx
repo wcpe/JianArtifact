@@ -884,7 +884,9 @@ export function MigrationWizardPage() {
                     label={t("migrations.allowPrivateSource")}
                     description={t("migrations.allowPrivateSourceHint")}
                     checked={form.values.allowPrivateSource}
-                    onChange={(event) => form.setFieldValue("allowPrivateSource", event.currentTarget.checked)}
+                    onChange={(event) =>
+                      form.setFieldValue("allowPrivateSource", event.currentTarget.checked)
+                    }
                     disabled={busy}
                   />
                 </>

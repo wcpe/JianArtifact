@@ -126,12 +126,11 @@ export function BackupTable({
                       aria-label={t("backups.copyCommand")}
                       disabled={!done}
                       onClick={() =>
-                        void copyToClipboard(
-                          `jianartifact backup link ${item.packageId}`,
-                        ).then((ok) =>
-                          ok
-                            ? notifySuccess(t("backups.commandCopied"))
-                            : notifyError(t("backups.copyFailed")),
+                        void copyToClipboard(`jianartifact backup link ${item.packageId}`).then(
+                          (ok) =>
+                            ok
+                              ? notifySuccess(t("backups.commandCopied"))
+                              : notifyError(t("backups.copyFailed")),
                         )
                       }
                     >

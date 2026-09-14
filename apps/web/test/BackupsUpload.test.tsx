@@ -102,8 +102,7 @@ describe("分片上传备份包", () => {
     await waitFor(
       async () => {
         const created = createSpy.mock.results[0]?.value as
-          | Promise<{ uploadId: string }>
-          | undefined;
+          Promise<{ uploadId: string }> | undefined;
         expect(created).toBeTruthy();
         const id = (await created!).uploadId;
         const s = await endpoints.getBackupUpload(id);

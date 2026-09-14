@@ -106,9 +106,7 @@ export function MigrationDetailPage() {
     getMigration(taskId)
       .then((next) => {
         if (seq !== seqRef.current) return;
-        setTask((prev) =>
-          JSON.stringify(prev) === JSON.stringify(next) ? prev : next,
-        );
+        setTask((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
         setLoadError(null);
         loadedRef.current = true;
       })
@@ -122,9 +120,7 @@ export function MigrationDetailPage() {
     getMigrationReport(taskId)
       .then((next) => {
         if (seq !== seqRef.current) return;
-        setReport((prev) =>
-          JSON.stringify(prev) === JSON.stringify(next) ? prev : next,
-        );
+        setReport((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
         setReportError(null);
       })
       .catch((e: Error) => {

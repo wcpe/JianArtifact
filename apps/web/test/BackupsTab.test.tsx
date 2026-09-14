@@ -168,4 +168,3 @@ describe("备份与搬迁", () => {
     expect(within(row).getByText(/schemaVersion/)).toBeTruthy();
   });
 });
-

@@ -39,18 +39,11 @@ describe("当前节点审计中心（方案 A · 双栏工作台）", () => {
     expect((await screen.findAllByLabelText("类别")).length).toBeGreaterThan(0);
     expect(screen.getAllByLabelText("结果")[0]).toBeTruthy();
     expect(screen.getAllByLabelText("操作者").length).toBeGreaterThan(0);
-    expect(
-      screen.getByLabelText("路径 / 动作 / 操作者邮箱"),
-    ).toBeTruthy();
+    expect(screen.getByLabelText("路径 / 动作 / 操作者邮箱")).toBeTruthy();
     expect(screen.getByRole("button", { name: "清除筛选" })).toBeTruthy();
 
-    await user.type(
-      screen.getByLabelText("路径 / 动作 / 操作者邮箱"),
-      "不存在的仓库",
-    );
-    expect(
-      screen.getByLabelText("路径 / 动作 / 操作者邮箱"),
-    ).toBeTruthy();
+    await user.type(screen.getByLabelText("路径 / 动作 / 操作者邮箱"), "不存在的仓库");
+    expect(screen.getByLabelText("路径 / 动作 / 操作者邮箱")).toBeTruthy();
   });
 
   it("展示真实统一事件流的 KPI、筛选与列表（无 Tab 切换）", async () => {

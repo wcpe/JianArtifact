@@ -220,8 +220,6 @@ function integerQuery(url: URL, key: string): { value?: number; invalid: boolean
   return { value, invalid: !Number.isInteger(value) };
 }
 
-
-
 function intParam(url: URL, key: string, fallback: number): number {
   const raw = url.searchParams.get(key);
   const n = raw === null ? NaN : Number.parseInt(raw, 10);
@@ -986,9 +984,7 @@ export const handlers = [
             : current.anonymousAccess,
         publicUrl: typeof body.publicUrl === "string" ? body.publicUrl : current.publicUrl,
         upstreamTimeout:
-          typeof body.upstreamTimeout === "number"
-            ? body.upstreamTimeout
-            : current.upstreamTimeout,
+          typeof body.upstreamTimeout === "number" ? body.upstreamTimeout : current.upstreamTimeout,
         allowedHosts: Array.isArray(body.allowedHosts)
           ? body.allowedHosts.map((item) => String(item).trim()).filter(Boolean)
           : current.allowedHosts,
@@ -2012,9 +2008,7 @@ export const handlers = [
     }
     const session = mockUploads[String(params.id)];
     // abort 后记录保留供审计：仍返回 200 + status=aborted，而非 404。
-    return session
-      ? HttpResponse.json(session)
-      : err("not_found", "上传会话不存在", 404);
+    return session ? HttpResponse.json(session) : err("not_found", "上传会话不存在", 404);
   }),
 
   http.post("*/api/v1/backups/uploads/:id/complete", async ({ request, params }) => {

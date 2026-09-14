@@ -2,15 +2,7 @@
 // 流程：选文件 → init（取服务端 chunkSize）→ 按 File.slice(chunkSize) 逐片 PUT → 进度条 → complete 触发导入。
 // 支持取消（abort，二次确认）与续传（uploadId 持久化到 localStorage；重开页面时 GET 拉回 uploadedChunks，只补缺失片）。
 // 与从 URL 导入卡平级：本卡只负责上传进度，complete 后派发全局刷新让导入记录列表呈现 pending_restart。
-import {
-  Alert,
-  Box,
-  Button,
-  Group,
-  Progress,
-  Stack,
-  Text,
-} from "@mantine/core";
+import { Alert, Box, Button, Group, Progress, Stack, Text } from "@mantine/core";
 import { IconUpload } from "@tabler/icons-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -67,11 +59,7 @@ function clearPersisted(): void {
 type Phase = "idle" | "active" | "resuming" | "finished";
 
 /** 已落盘分片对应的字节数（末片可能不满 chunkSize）。 */
-function uploadedBytes(
-  uploadedChunks: number[],
-  chunkSize: number,
-  totalBytes: number,
-): number {
+function uploadedBytes(uploadedChunks: number[], chunkSize: number, totalBytes: number): number {
   const totalChunks = Math.ceil(totalBytes / chunkSize);
   if (totalChunks === 0) return 0;
   let bytes = 0;
@@ -280,7 +268,13 @@ export function BackupUploadCard() {
   return (
     <OpsSection
       title={t("backups.uploadCardTitle")}
-      style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}
+      style={{
+        flex: 1,
+        minHeight: 0,
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+      }}
       bodyStyle={{ flex: 1, minHeight: 0, overflow: "auto" }}
       bodyPadding={0}
       actions={
@@ -312,7 +306,9 @@ export function BackupUploadCard() {
             data-testid="upload-resume-callout"
           >
             <Stack gap="xs">
-              <Text size="sm">{t("backups.uploadResumableHint", { fileName: resumable.fileName })}</Text>
+              <Text size="sm">
+                {t("backups.uploadResumableHint", { fileName: resumable.fileName })}
+              </Text>
               <Group gap="xs">
                 <Button size="xs" onClick={() => fileInputRef.current?.click()}>
                   {t("backups.uploadResume")}
@@ -361,7 +357,11 @@ export function BackupUploadCard() {
         ) : null}
 
         {errorMsg ? (
-          <Alert color="red" title={t("backups.uploadMissingChunkTitle")} data-testid="upload-error">
+          <Alert
+            color="red"
+            title={t("backups.uploadMissingChunkTitle")}
+            data-testid="upload-error"
+          >
             <Text size="sm">{errorMsg}</Text>
           </Alert>
         ) : null}

@@ -74,7 +74,6 @@ describe("devmock MSW 端点行为", () => {
     expect(after.total).toBe(before.total);
   });
 
-
   it("备用只读场景与真实服务一致地拒绝协议写入和退出登录", async () => {
     const before = store.status();
     const standbyHeaders = {
@@ -483,8 +482,6 @@ describe("devmock MSW 端点行为", () => {
     expect(res.status).toBe(401);
   });
 
-
-
   it("审计日志缺令牌 401、普通用户 403、管理员可按筛选与分页读取", async () => {
     expect((await fetch("http://localhost/api/v1/audit-logs")).status).toBe(401);
     expect((await fetch("http://localhost/api/v1/audit-logs", { headers: userAuth })).status).toBe(
@@ -668,7 +665,6 @@ describe("devmock MSW 端点行为", () => {
       headers: emptyHeaders,
     });
     await expect(publicRepositories.json()).resolves.toEqual({ items: [], total: 0 });
-
 
     const auditLogs = await fetch("http://localhost/api/v1/audit-logs", {
       headers: { ...emptyHeaders, [DEV_MOCK_ROUTE_HEADER]: "/audit-logs" },

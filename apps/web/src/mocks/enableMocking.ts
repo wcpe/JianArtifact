@@ -25,8 +25,7 @@ export async function enableMocking(): Promise<void> {
     return;
   }
   const devmock = await import("@jianartifact/devmock/browser");
-  const { store, emptyStore, resetStore } =
-    await import("@jianartifact/devmock/store");
+  const { store, emptyStore, resetStore } = await import("@jianartifact/devmock/store");
   const { releaseDevMockPendingRequests } = await import("@jianartifact/devmock/scenario");
   // 开发/联调用：暴露 store 复位钩子，便于手动验收「空库初始化」与「已初始化登录」两条路径。
   // 例如控制台执行 `__devmock.emptyStore()` 后刷新，即可进入 /setup 首次初始化引导。

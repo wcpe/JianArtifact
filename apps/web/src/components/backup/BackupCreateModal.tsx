@@ -197,7 +197,9 @@ export function BackupCreateModal({ opened, onClose, onCreated }: BackupCreateMo
             {t("backups.back")}
           </Button>
           <Group gap="xs">
-            {active === 0 ? <Button onClick={() => setActive(1)}>{t("backups.next")}</Button> : null}
+            {active === 0 ? (
+              <Button onClick={() => setActive(1)}>{t("backups.next")}</Button>
+            ) : null}
             {active === 1 ? (
               <Button loading={busy} onClick={() => void start()}>
                 {t("backups.start")}

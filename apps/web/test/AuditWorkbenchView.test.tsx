@@ -81,7 +81,9 @@ describe("审计工作台（筛选与搜索）", () => {
 
     expect(await screen.findByText(/共 \d+ 条/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "清除筛选" }));
-    expect((await screen.findAllByRole("button", { name: /审计事件：/ })).length).toBeGreaterThan(0);
+    expect((await screen.findAllByRole("button", { name: /审计事件：/ })).length).toBeGreaterThan(
+      0,
+    );
   });
 
   it("风险状态筛选：待处理 / 已确认", async () => {

@@ -844,8 +844,7 @@ export const store = {
       initialized: state.initialized,
       migrationVersion: state.migrationVersion,
       userCount: state.users.length,
-      bootstrapAllowed:
-        !state.initialized && state.users.length === 0,
+      bootstrapAllowed: !state.initialized && state.users.length === 0,
     };
   },
 
@@ -1047,9 +1046,7 @@ export const store = {
   },
 
   /** 保存管理端服务设置；同步间隔保持只读，不由设置页写入。 */
-  updateSettings(
-    patch: Omit<ServiceSettings, "syncInterval">,
-  ): ServiceSettings {
+  updateSettings(patch: Omit<ServiceSettings, "syncInterval">): ServiceSettings {
     state.anonymousAccessEnabled = patch.anonymousAccess;
     state.serviceSettings.publicUrl = patch.publicUrl;
     state.serviceSettings.upstreamTimeout = patch.upstreamTimeout;
@@ -1059,7 +1056,6 @@ export const store = {
     state.serviceSettings.originTokenValue = patch.originTokenValue;
     return this.settings();
   },
-
 
   findRepository(name: string): Repository | undefined {
     const repo = state.repositories.find((r) => r.name === name);

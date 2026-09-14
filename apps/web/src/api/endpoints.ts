@@ -1,6 +1,12 @@
 // 端点封装：按 api/openapi.yaml 的 0.2.0 管理面路径提供 typed 调用。
 // 页面与数据钩子仅依赖此模块，不直接拼 URL。
-import { deleteProtocolAsset, postProtocolForm, putProtocolAsset, request, requestBinary } from "./client";
+import {
+  deleteProtocolAsset,
+  postProtocolForm,
+  putProtocolAsset,
+  request,
+  requestBinary,
+} from "./client";
 import type {
   AssetOperationInput,
   AssetOperationResponse,
@@ -548,10 +554,7 @@ export function deleteBackup(packageId: string): Promise<void> {
 }
 
 /** 签发带时效的下载链接，供新机器直接拉取。 */
-export function createBackupLink(
-  packageId: string,
-  ttlSeconds?: number,
-): Promise<BackupLink> {
+export function createBackupLink(packageId: string, ttlSeconds?: number): Promise<BackupLink> {
   return request<BackupLink>(`/backups/${encodeURIComponent(packageId)}/link`, {
     method: "POST",
     body: ttlSeconds ? { ttlSeconds } : {},

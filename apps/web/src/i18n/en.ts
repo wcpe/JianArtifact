@@ -37,7 +37,8 @@ export const en = {
     sourceRefRequired: "Enter a source ref name starting with an uppercase letter",
     url: "Nexus URL",
     urlHint: "Enter the external Nexus base URL, e.g. https://bak.maven.example.com",
-    urlRequired: "Enter a valid http:// or https:// Nexus URL (no username, password, query or fragment)",
+    urlRequired:
+      "Enter a valid http:// or https:// Nexus URL (no username, password, query or fragment)",
     authType: "Auth Type",
     authAnonymous: "Anonymous",
     authBasic: "Basic (username/password or User Token)",
@@ -47,7 +48,8 @@ export const en = {
     authToken: "Token",
     authBasicRequired: "Enter username and password",
     authBearerRequired: "Enter a Bearer Token",
-    authHint: "Credentials are used only for this migration connection and never shown in task details.",
+    authHint:
+      "Credentials are used only for this migration connection and never shown in task details.",
     discoverFailed: "Discovery failed. Check the Nexus URL, auth method and network",
     path: "Server Path",
     pathHint: "Must be a path visible to the server (not a local file picker)",
@@ -102,10 +104,14 @@ export const en = {
     offlineIndexStatusFailed: "Index failed",
     offlineIndexNeedPath: "Enter the server offline path first",
     offlineIndexStarted: "Index scan started",
-    offlineIndexBusy: "Index scan in progress; wait for completion or cancel before other operations",
-    offlineIndexReadyHint: "Index ready: pick repositories to discover; empty or all reads the index, no blob scan needed.",
-    offlineIndexScanningHint: "Scan in progress; other index operations are locked; the repository list updates automatically when done.",
-    offlineIndexIdleHint: "No index built yet. Click Build Index for the first scan, then discover from the index.",
+    offlineIndexBusy:
+      "Index scan in progress; wait for completion or cancel before other operations",
+    offlineIndexReadyHint:
+      "Index ready: pick repositories to discover; empty or all reads the index, no blob scan needed.",
+    offlineIndexScanningHint:
+      "Scan in progress; other index operations are locked; the repository list updates automatically when done.",
+    offlineIndexIdleHint:
+      "No index built yet. Click Build Index for the first scan, then discover from the index.",
     selectRepos: "Select repositories to migrate",
     selectAll: "Select All",
     selectNone: "Select None",
@@ -115,7 +121,8 @@ export const en = {
     discoverInProgress: "Discovering repositories…",
     discoverProgressHint:
       "Waited {{seconds}} seconds. Online sources usually return within seconds; if it times out, check source config or narrow the repository scope.",
-    discoverTimeout: "Discovery timed out (~90s). Check the Nexus source config, or fill in include repo names and retry.",
+    discoverTimeout:
+      "Discovery timed out (~90s). Check the Nexus source config, or fill in include repo names and retry.",
     discoverCancelled: "Discovery request cancelled",
     cancelDiscover: "Cancel Discovery",
     checkingActive: "Checking for unfinished migration tasks…",
@@ -124,8 +131,10 @@ export const en = {
       "There are {{count}} planned tasks (latest #{{id}}). Continue or cancel it before creating a new one to avoid duplicate dispatch.",
     continuePlanned: "Continue Previous Plan",
     gotoDetail: "View Details",
-    blockRunning: "Task #{{id}} is running. Wait for it to finish or cancel before creating a new one.",
-    blockPlanned: "A planned task #{{id}} already exists. Continue it or cancel it on the detail page.",
+    blockRunning:
+      "Task #{{id}} is running. Wait for it to finish or cancel before creating a new one.",
+    blockPlanned:
+      "A planned task #{{id}} already exists. Continue it or cancel it on the detail page.",
     mustHandlePlannedFirst: "Handle the planned task above before starting a new discovery.",
     restoredPlanned: "Restored planned task #{{id}}",
     resumeRunningRedirect: "Running task detected, redirected to detail page",
@@ -139,7 +148,8 @@ export const en = {
     start: "Start Migration",
     started: "Migration started",
     startConfirmTitle: "Confirm Start Migration",
-    startConfirm: "Confirm starting migration with the current plan? Repositories will be copied per selection.",
+    startConfirm:
+      "Confirm starting migration with the current plan? Repositories will be copied per selection.",
     savePlanned: "Start Later (save plan only)",
     needDiscover: "Complete the discovery step first",
     resume: "Resume",
@@ -164,9 +174,11 @@ export const en = {
     progressCopied: "Copied",
     progressSkipped: "Skipped",
     progressFailed: "Failed",
-    runningHint: "Task running, auto-refresh progress every 2s. Do not create duplicate migrations.",
+    runningHint:
+      "Task running, auto-refresh progress every 2s. Do not create duplicate migrations.",
     phaseEnumeratingTitle: "Enumerating source",
-    phaseEnumeratingBody: "Offline blob scans property files per repo; the Discovered count below keeps growing, not stuck.",
+    phaseEnumeratingBody:
+      "Offline blob scans property files per repo; the Discovered count below keeps growing, not stuck.",
     phaseEnumeratingProgress: "Discovered {{found}} / Estimated {{total}}",
     phaseCopyingTitle: "Copying / Skipping",
     phaseTotal: "Source items {{n}}",
@@ -203,9 +215,12 @@ export const en = {
     lifecycleNotFinished: "Not finished",
     lifecycleEndPending: "Terminal",
     sourcePickTitle: "Choose discovery method",
-    sourcePickOnline: "Connect to a live Nexus REST, pull the public repo list then pick what to migrate.",
-    sourcePickOfflineDir: "Read Nexus blob / directory layout on the server (must specify repo names).",
-    sourcePickOfflineBundle: "Read an exported offline migration package (repositories/content structure).",
+    sourcePickOnline:
+      "Connect to a live Nexus REST, pull the public repo list then pick what to migrate.",
+    sourcePickOfflineDir:
+      "Read Nexus blob / directory layout on the server (must specify repo names).",
+    sourcePickOfflineBundle:
+      "Read an exported offline migration package (repositories/content structure).",
     previewSummary: "Task #{{id}} saved; select repositories to migrate then start.",
     wizardCardHint: "Step by step: pick source → fill config → preview & pick → explicit start",
     allowPrivateSource: "Source is on this host / internal network (allow private network fetch)",

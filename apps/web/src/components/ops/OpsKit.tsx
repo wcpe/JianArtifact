@@ -15,15 +15,7 @@ import {
 } from "@mantine/core";
 
 export type OpsTone =
-  | "green"
-  | "blue"
-  | "orange"
-  | "red"
-  | "gray"
-  | "teal"
-  | "cyan"
-  | "yellow"
-  | "indigo";
+  "green" | "blue" | "orange" | "red" | "gray" | "teal" | "cyan" | "yellow" | "indigo";
 
 /** 复制/同步状态 → 语义色与文案。 */
 export const OPS_STATE_TEXT: Record<string, string> = {
