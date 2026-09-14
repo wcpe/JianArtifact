@@ -197,6 +197,9 @@ func TestGoProxyRealGoClientFallsBackAfter410(t *testing.T) {
 		"GOTOOLCHAIN=local",
 		"GOWORK=off",
 		"GOMODCACHE="+t.TempDir(),
+		// go 默认会把模块缓存文件置为只读，临时目录清理时 unlink 会 permission denied（Linux CI 必现）；
+		// -modcacherw 让新写入的缓存文件保持可写，保证 t.TempDir 能正常回收。
+		"GOFLAGS=-modcacherw",
 		"NO_PROXY=127.0.0.1,localhost",
 		"no_proxy=127.0.0.1,localhost",
 	)
