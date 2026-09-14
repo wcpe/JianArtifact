@@ -1,6 +1,6 @@
 # 运维手册：JianArtifact
 
-> 本文只记录当前可执行的部署、升级、备份、恢复、回滚和排障流程。版本真源是根目录 `VERSION`；当前发布版本为 `0.7.1`，`0.8.0` 尚未发布。级联复制与邻接控制台已在工作区实现，但未完成整期真实验收前不得宣称已发布。
+> 本文只记录当前可执行的部署、升级、备份、恢复、回滚和排障流程。版本真源是根目录 `VERSION`；当前发布版本为 `0.8.0`。节点搬迁与备份以一致性备份包为单位（见 §3.2、§3.3、§5）；实时复制通道已随 FR-138 整体退役，本文不含任何复制拓扑、角色或凭据操作。
 
 ## 1. 运行与配置
 
@@ -8,61 +8,33 @@
 
 配置通过环境变量、部署 Secret 或 systemd 环境文件注入；真实环境文件不入库。
 
-| 变量                             | 作用                                       | 默认/约束                                                            |
-| -------------------------------- | ------------------------------------------ | -------------------------------------------------------------------- |
-| `JIAN_HTTP_ADDR`                 | HTTP 监听地址                              | `:8080`                                                              |
-| `JIAN_DATA_DIR`                  | SQLite 与 blob 数据根目录                  | `./data`；生产必须使用持久化绝对路径                                 |
-| `JIAN_JWT_SECRET`                | JWT(HS256) 签名密钥                        | 生产必填、强随机、不得打印                                           |
-| `JIAN_MIGRATION_CREDENTIAL_KEY`  | 在线迁移凭据 AES-256-GCM 密钥              | Base64 编码 32 字节；生产应显式固定                                  |
-| `JIAN_UPSTREAM_TIMEOUT`          | proxy 回源整体超时（秒）                   | `30`                                                                 |
-| `JIAN_ENABLED_FORMATS`           | 启用的协议格式                             | 缺省 `raw,maven,npm`；显式空值关闭全部                               |
-| `JIAN_PUBLIC_URL`                | 对外基础 URL                               | 节点本地配置，不参与复制                                             |
-| `JIAN_REPLICATION_ROLE`          | 复制角色                                   | `disabled`、`primary` 或 `standby`；缺省 `disabled`                  |
-| `JIAN_REPLICATION_PRIMARY_URL`   | standby 的直接父节点地址（历史变量名）     | 当前代码中仅 standby 必填，必须是不含路径/查询/凭据的 HTTP(S) 根地址 |
-| `JIAN_REPLICATION_RELAY_ENABLED` | standby 是否向多个直接 child 提供 relay    | `true` 开启；缺省/非法值为 `false`                                   |
-| `JIAN_SYNC_INTERVAL`             | standby 轮询间隔（秒）                     | `5`                                                                  |
-| `JIAN_BLOB_GC_INTERVAL`          | primary 清理失败写入遗留 blob 的间隔（秒） | `86400`；`0` 禁用                                                    |
-| `JIAN_TLS_ADDR`                  | 内置 HTTPS 监听地址                        | 为空表示不启用                                                       |
-| `JIAN_TLS_CERT` / `JIAN_TLS_KEY` | TLS 证书和私钥路径                         | 配置 `JIAN_TLS_ADDR` 时必填                                          |
+| 变量                             | 作用                                 | 默认/约束                                                          |
+| -------------------------------- | ------------------------------------ | ------------------------------------------------------------------ |
+| `JIAN_HTTP_ADDR`                 | HTTP 监听地址                        | `:8080`                                                            |
+| `JIAN_DATA_DIR`                  | SQLite 与 blob 数据根目录            | `./data`；生产必须使用持久化绝对路径                               |
+| `JIAN_JWT_SECRET`                | JWT(HS256) 签名密钥                  | 生产必填、强随机、不得打印                                         |
+| `JIAN_MIGRATION_CREDENTIAL_KEY`  | 在线迁移凭据 AES-256-GCM 密钥        | Base64 编码 32 字节；生产应显式固定                                |
+| `JIAN_UPSTREAM_TIMEOUT`          | proxy 回源整体超时（秒）             | `30`                                                               |
+| `JIAN_ENABLED_FORMATS`           | 启用的协议格式                       | 缺省 `raw,maven,npm`；显式空值关闭全部                             |
+| `JIAN_PUBLIC_URL`                | 对外基础 URL                         | 节点本地配置；影响下载链接与 usage 片段                            |
+| `JIAN_SYNC_INTERVAL`             | 设置页「同步间隔」的初始默认值（秒） | `5`；仅在 setting 键不存在时写入，当前无调度器消费（复制退役遗留） |
+| `JIAN_BLOB_GC_INTERVAL`          | 清理遗留 / 孤儿 blob 的间隔（秒）    | `86400`；`0` 禁用                                                  |
+| `JIAN_TLS_ADDR`                  | 内置 HTTPS 监听地址                  | 为空表示不启用                                                     |
+| `JIAN_TLS_CERT` / `JIAN_TLS_KEY` | TLS 证书和私钥路径                   | 配置 `JIAN_TLS_ADDR` 时必填                                        |
 
-派生路径固定为 `${JIAN_DATA_DIR}/jianartifact.db` 和 `${JIAN_DATA_DIR}/blobs`。启动会创建数据目录并执行 schema 迁移；不会在启动时扫描活动 blob。只有 primary 运行孤立 blob 定时清理，standby 和 disabled 不运行该任务。
+派生路径固定为 `${JIAN_DATA_DIR}/jianartifact.db` 和 `${JIAN_DATA_DIR}/blobs`。启动会创建数据目录并执行 schema 迁移；不会在启动时扫描活动 blob；遗留 / 孤儿 blob 的定时清理由本实例按 `JIAN_BLOB_GC_INTERVAL` 独立运行。
 
-### 1.2 当前已支持的主备级联复制
+**已废弃的环境变量**：`JIAN_REPLICATION_ROLE`、`JIAN_REPLICATION_PRIMARY_URL`、`JIAN_REPLICATION_RELAY_ENABLED` 自复制通道退役（FR-138）起不再被解析；旧环境文件里残留这些键不影响启动（未知键被忽略），可直接删除。
 
-当前代码是静态一主多级联树模型：
+### 1.2 节点搬迁（替代原主备复制）
 
-- primary 是唯一业务写节点，只提供节点专属凭据保护的 v2 capabilities、pull 和 blob GET；不发起出站同步。
-- standby 可读、可登录、可健康检查；业务、管理和协议写入口返回 `503 standby_read_only`。内部复制应用、水位、同步历史和接收审计仍可写入本地。
-- standby 配置 `JIAN_REPLICATION_PRIMARY_URL` 后，导入直接父节点复制凭据，启动轮询并从该父节点按根源 stream watermark 续拉；默认间隔为 5 秒。
-- relay standby 开启 `JIAN_REPLICATION_RELAY_ENABLED=true` 后，可通过逐跳凭据为任意多个直接 child 提供已完整应用的 v2 record/blob；record 与 blob 都受整轮确认的 `forwardable_seq` 限制，relay 不生成本地业务 outbox。
-- 复制固定使用 v2、GET-only 和 HTTP/1.1；完整 operation、缺失 blob 和校验成功后才推进 watermark。
-- 角色、来源和复制凭据不是 Web 运行时配置。`JIAN_SYNC_PEER_URL` 是旧配置，当前主备模式不读取、不参与调度。
+节点搬迁的唯一手段是**一致性备份包**：旧实例生成包 → 传输 → 新实例导入 → 重启替换 → 校验。没有节点角色、配对仪式、水位或复制凭据。操作步骤见 §3.2（包格式与生成）、§3.3（Cutover 顺序）、§5.2（备份）与 §5.3（导入）。
 
-### 1.3 级联树运行边界
+原「主备级联树 + 逐跳凭据 + 人工提升」流程（FR-115/119/121）已随 FR-138 整体退役，本文不再保留其可执行步骤；决策与退役范围见 [`adr/0027`](adr/0027-package-based-node-backup-and-relocation.md)，历史实现见 [`specs/0.8.0-primary-standby-replication.md`](specs/0.8.0-primary-standby-replication.md)。
 
-当前模型是有向级联树：根 primary 唯一可写；每个非根节点只有一个直接上级；每个节点可挂多个直接下级；下级主动向直接上级 GET 拉取。
+包内**只含数据、不含密钥**，因此新实例导入后必须自行配置：`JIAN_JWT_SECRET`、`JIAN_MIGRATION_CREDENTIAL_KEY`、数据目录与对外地址（`JIAN_PUBLIC_URL` / TLS / 域名白名单 / 回源 Token）。
 
-具备 relay 能力的 standby 才能向直接下级提供已经完整接收、校验并原子应用的根源记录。中继不生成本地业务 `repl_change`、不改变根源 seq/operationId、不允许业务写入。
-
-当前实现以 `replication_relay_record` 保存已经完整应用的上游原始 record，以 `replication_relay_frontier` 限制下游可见连续前缀，并以 `streamGeneration/sourceNode/sourceSeq` 作为下游续拉身份；同 stream/seq 的载荷不可改写。父流 generation、watermark 和 valid 围栏原子持久化，发现代次变化或“非零 watermark 无 generation”时关闭 relay 出口并要求清理旧水位后重新配对。relay blob 采用保守保留，防止慢 child 在父节点先处理删除后无法回补。每个节点只保存一个直接父配置，父节点只通过各自的逐跳凭据认识直接 child。
-
-0.8.0 开发数据库首次应用迁移 0033 时会丢弃旧版未经不可变 provenance 验证的 relay inbox/frontier 和父边 watermark，并自动从直接父节点水位 0 重建；这是未发布开发版的一次性安全迁移，不适用于已发布版本的常规数据保留承诺。standby 崩溃恢复只处理标记为 `received` 且带原始 receipt 身份的 intent，旧角色本地 intent 不会被自动执行。
-
-当前仍不支持自动选主、自动换父、运行时拓扑编辑、跨节点主机监控和双主合并；人工提升/重新挂接必须按规格先围栏、核验并重新建立 stream。真实多进程级联、浏览器和发布门仍是 0.8.0 整期验收项。详细边界见 [`specs/0.8.0-primary-standby-replication.md`](specs/0.8.0-primary-standby-replication.md)。
-
-### 1.4 当前主备凭据配对
-
-当前已支持的节点专属凭据流程如下；级联按每条直接父子边重复执行。
-
-1. 在 standby 执行 `jianartifact replication credential node-id`，初始化稳定 node ID。
-2. 在直接父节点执行 `jianartifact replication credential create --node-id <standby-node-id>`，令牌只在本地终端显示一次；relay standby 也可执行该命令。
-3. 通过受保护通道交付令牌；在 standby 执行 `jianartifact replication credential import --credential-id <credential-id>`，令牌只能从标准输入提供。
-4. 在 standby 执行 `jianartifact replication credential verify`，确认能力协商成功后再启动服务同步。
-5. 轮换时由直接父节点执行 `rotate`，standby 导入并 `verify` 新凭据，确认成功后由该直接父节点执行 `revoke` 撤销旧凭据。
-
-primary 只保存加盐不可逆摘要；standby 使用数据目录独立的 `replication-credential.key` 密封保存。令牌、密文、密钥、Authorization 头和命令参数不得写入日志、审计、工单、截图或备份明文。
-
-### 1.5 对外访问安全
+### 1.3 对外访问安全
 
 #### Host 白名单
 
@@ -105,7 +77,7 @@ bash deploy/remote-ssh.sh health
 
 `deploy/helm/` 和 `deploy/k8s/` 当前是单实例、RWO 持久卷和 `Recreate` 策略；它们不是多副本 HA 模板。生产 Secret 通过 Secret 管理系统注入，不在清单中提交真实值。探针使用 `/healthz` 和 `/readyz`。
 
-### 2.4 多节点测试隔离
+### 2.4 测试实例隔离
 
 测试站必须使用独立的服务单元、发布目录、环境文件、`JIAN_DATA_DIR`、SQLite、blob、日志和测试制品。不得挂载、复制、清理或复用生产数据目录。真实域名、端口、密钥和远端目录只能写入部署机忽略的本地环境文件。
 
@@ -151,7 +123,7 @@ jianartifact-backup-<packageId>.tar.gz
   blobs/<xx>/<yy>/<hash> # 仅快照库 asset 表引用到的 blob
 ```
 
-包内**仅含数据，不含任何密钥或节点本地配置**：排除复制凭据密钥、JWT 密钥、迁移凭据密钥、环境文件、`*.db-wal`、`*.db-shm`、`blobs/tmp/`、`blobs/quarantine/`。因此新机器导入后必须自行配置密钥与对外地址。
+包内**仅含数据，不含任何密钥或节点本地配置**：排除各类密钥文件（JWT / 迁移凭据 / 历史复制凭据密钥）、环境文件、`*.db-wal`、`*.db-shm`、`blobs/tmp/`、`blobs/quarantine/`。因此新机器导入后必须自行配置密钥与对外地址。
 
 包落在 `${JIAN_DATA_DIR}/backups/`。两种生成模式：
 
@@ -195,10 +167,7 @@ jianartifact-backup-<packageId>.tar.gz
 - `jianartifact admin reset`：离线创建或重置管理员。
 - `jianartifact admin backfill-checksums`：流式补齐历史资产校验和。
 - `jianartifact admin backfill-times`：按 Nexus 时间回填资产时间。
-- `jianartifact admin emit-asset-times`：为存量资产重新登记带时间的复制变更。
-- `jianartifact replication status/start/stop`：查看或控制当前支持的 standby 同步调度。
-- `jianartifact replication backfill`：仅受控提升后的 primary 可执行，重建新的根源复制历史。
-- `jianartifact replication credential node-id/create/import/verify/revoke/rotate`：管理当前支持的主备凭据；级联实现后按直接父子边使用。
+- `jianartifact admin emit-asset-times`：为存量资产重新登记带创建/更新时间的资产变更记录（FR-91 遗留能力，当前无复制对端消费）。
 - `jianartifact backup create [--mode hot|frozen] [--label <备注>]`：生成节点备份包并登记。`frozen` 假定本地写入已停止。
 - `jianartifact backup create --base <packageId> [--mode hot|frozen] [--label <备注>]`：以某基线包生成**增量差包**，只携带新增 blob + 新 db，把搬迁停机窗口从"传整个包"缩到"只传新增 blob + 新 db"（分钟级）。基线必须存在、状态 `done`、且其**侧车索引** `${JIAN_DATA_DIR}/backups/<packageId>.index` 存在，否则明确报错。
 - `jianartifact backup list [--json]`：列出本机备份包（状态、大小、创建时间、失败摘要）。
@@ -230,10 +199,7 @@ jianartifact backup verify <包标识> --deep     # 可选的深度校验
 
 包落在 `${JIAN_DATA_DIR}/backups/`，也可从管理台「迁移与搬迁 → 备份与搬迁」生成与下载。热备份不停服，适合例行备份；要求严格一致性时改用冻结窗口。
 
-**包内不含密钥**，因此除包之外仍必须另行受保护地保存：
-
-- 生产显式配置的 JWT 密钥、迁移凭据密钥与服务环境文件；
-- 复制凭据密钥（若该节点仍参与复制通道）与其密封凭据必须处于同一受保护恢复边界，不能复制给另一节点，也不得跨节点搬运。
+**包内不含密钥**，因此除包之外仍必须另行受保护地保存：生产显式配置的 `JIAN_JWT_SECRET`、`JIAN_MIGRATION_CREDENTIAL_KEY` 与服务环境文件（`deploy/.env`、systemd 环境文件）。这些密钥不随包迁移，新实例必须自行注入。
 
 若不用备份包而手工兜底，需一致备份：
 
@@ -263,32 +229,17 @@ jianartifact backup verify <包标识> --deep     # 可选的深度校验
 
 失败处置：任何阶段失败都**不留下待生效标记、不写 `restore.pending`、不留暂存目录**，记录以 `failed` 终态表达错误码；运维按错误码排查——`target_not_empty` 需加 `--overwrite` 或先重启已有 `restore_pending` 的实例；`incompatible` 需先升级本程序；`fetch_failed` 检查来源可达性与 SSRF 策略；`sha256_mismatch` 核对 `expectedSha256` 与来源完整性；`restore_pending` 表示已存在待生效恢复，先重启使其生效或清掉标记。重启后启动日志会打印已应用的恢复，并保留 `pre-restore-<ts>/` 作为回滚退路。
 
-### 5.4 当前主备人工提升
-
-> **即将退役**：搬迁与备份已改为以节点备份包为单位（见 §3.2/§3.3 与 `docs/adr/0027`）。下列复制通道的提升流程仅在复制通道尚未退役的过渡期适用，新部署请优先使用备份包搬迁。
-> 二者不可混用：备份包内含 SQLite 快照与 blob，**不含复制凭据密钥**；用备份包搬到新机后不需要、也不应再参与原复制通道。
-
-仍在使用复制通道时，提升流程仍是人工单主：
-
-1. 停止或网络围栏旧 primary。
-2. 在 standby 核验 watermark、接收审计、制品计数和抽样 SHA-256。
-3. 将 standby 改为 primary，移除 `JIAN_REPLICATION_PRIMARY_URL`，执行受控 `replication backfill`。
-4. 重启并验证健康、读写和审计后再开放流量。
-5. 旧 primary 回接时使用全新 standby 数据目录重新同步，禁止直接复用旧 SQLite/blob。
-
-中间 relay 的提升/重新挂接仍必须人工围栏和生成新的 stream generation；本期不做自动换父。
-
 ## 6. 回滚
 
 - 二进制/镜像回滚到上一个已知良好版本；systemd 回切 `current`，Compose 回切镜像 tag。
 - 若新版本执行了不可逆 schema 迁移，必须同时恢复对应数据备份，不能只回滚代码。
-- 复制拓扑或凭据变更回滚前先停止相关同步边，避免旧 watermark 或旧凭据继续写入新流。
+- 搬迁后回滚：导入时留下的 `pre-restore-<ts>/` 是数据库回滚点；未消费的 `restore.pending` 可在重启前删除以放弃本次恢复。切 DNS 前的旧实例保持冻结即可随时切回，一旦解冻并恢复写入就不再是可回滚的一致点。
 
 ## 7. CI、发布与排障
 
 ### 7.1 质量门与发布
 
-本地质量入口是 Windows 原生 `make check` / `scripts/check.ps1`；应覆盖前端格式、类型、lint、测试、构建、Go vet/lint/race/vuln、契约和静态构建。`0.8.0` 在版本提交、tag、远程 CI 和 Release 完成前都不得标正式交付。
+本地质量入口是 Windows 原生 `make check` / `scripts/check.ps1`；应覆盖前端格式、类型、lint、测试、构建、Go vet/lint/race/vuln、契约和静态构建。当前发布版本为 `0.8.0`；下一个版本在版本提交、tag、远程 CI 和 Release 完成前都不得标正式交付。
 
 开发预览和正式发布使用不同版本标识；发布资产必须有对应校验和。交叉编译成功不能代替原生运行或真实服务验收。
 
@@ -296,10 +247,9 @@ jianartifact backup verify <包标识> --deep     # 可选的深度校验
 
 - **启动失败**：检查数据目录权限、SQLite 路径、blob 目录、TLS 证书和必要密钥；不要打印密钥值。
 - **`/readyz` 失败**：检查 SQLite 是否可打开、blob 目录是否可写、磁盘空间和服务用户权限。
-- **standby 写入返回 503**：这是预期只读栅栏；业务写入必须回到 primary，复制应用不经过业务写入口。
-- **复制未启动**：确认角色为 standby、直接父地址有效、本地凭据已导入并通过 `credential verify`；父节点必须是 primary 或已开启 relay 的 standby。
-- **复制失败**：查看集群同步事件的脱敏阶段和错误码；认证失败检查凭据状态，网络失败检查 HTTPS/Host/防火墙，blob 失败检查来源存储和哈希。
-- **级联 relay 未生效**：确认直接父节点设置 `JIAN_REPLICATION_RELAY_ENABLED=true`、已完成上游同步并已为 child 创建逐跳凭据；不要让 child 越级连接祖父节点。
+- **业务写入返回 503 `write_frozen`**：实例处于写入冻结窗口（搬迁切换中）。查询 `GET /api/v1/maintenance/freeze` 看 `until`，确认搬迁完成后 `DELETE` 解冻，或等待到期自动解冻。冻结期间读方法、登录、维护命名空间与备份导入/上传放行。
+- **备份包导入未生效**：导入只写暂存与 `restore.pending`，**必须重启服务**才替换数据库；重启前可查看导入记录状态（`pending_restart` 即已就绪）。
+- **备份包导入被拒**：按 `error_code` 排查——`target_not_empty` 需 `--overwrite`，`incompatible` 需先升级本程序，`sha256_mismatch` 核对包完整性，`fetch_failed` 检查来源可达性与 SSRF 策略，`restore_pending` 表示已有待生效恢复。
 - **迁移卡住**：检查任务状态、报告和密钥是否保持不变，使用显式恢复，不要把来源凭据或内部地址复制到工单。
 
 排障输出只保留稳定错误码、阶段、脱敏原因、恢复提示和必要时间/序号；禁止粘贴令牌、Authorization、环境变量值、内部地址或系统路径。

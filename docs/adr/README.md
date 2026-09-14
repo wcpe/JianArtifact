@@ -4,9 +4,9 @@
 
 ## 当前阅读口径
 
-- 已发布版本的架构基线是 `0.7.1`；0.7.0 的双向全互联复制只保留作历史决策。
-- `ADR-0020` 仍是当前 v2 operation envelope 的已接受基础决策。
-- `ADR-0023` 与 `ADR-0026` 在 `0.8.0` 未发布开发窗口内记录当前已实现的级联树拓扑和逐跳凭据；真实发布验收仍以 PRD §6/§7 门禁为准。
+- 当前发布版本是 `0.8.0`；已退役能力的决策史（`ADR-0013`、`ADR-0023`、`ADR-0026`）只供追溯。
+- `ADR-0020` 仍是当前 v2 operation envelope 的已接受基础决策（envelope 机制随 FR-138 退役被保留复用）。
+- `ADR-0023` 与 `ADR-0026` 描述的主备级联树与逐跳凭据已随 FR-138 整体退役，两者**已被 `ADR-0027` 取代**（就节点搬迁用途）；搬迁现以一致性备份包为单位。
 - 当前实现与未实现目标的综合边界以 [`../ARCHITECTURE.md`](../ARCHITECTURE.md) 为准，需求状态以 [`../PRD.md`](../PRD.md) 为准。
 
 | 编号                                                              | 决策                                                                        | 状态                                      |
@@ -23,7 +23,7 @@
 | [0010](0010-proxy-cache-singleflight-group-routing.md)            | proxy 回源缓存、single-flight 与 group 有序路由                             | 已接受                                    |
 | [0011](0011-npm-registry-layout-and-tarball-rewrite.md)           | npm registry 路径布局与 packument tarball 重写                              | 已接受                                    |
 | [0012](0012-nexus-migration-state-machine.md)                     | Nexus 迁移任务状态机、三来源发现与凭据引用                                  | 已接受                                    |
-| [0013](0013-multi-node-replication.md)                            | 多节点复制架构：双向拉取、变更日志与 LWW                                    | 已被 0023 取代                            |
+| [0013](0013-multi-node-replication.md)                            | 多节点复制架构：双向拉取、变更日志与 LWW                                    | 已被 0023 取代（0023 又由 0027 取代）     |
 | [0014](0014-atomic-asset-operations-and-blob-reclamation.md)      | 原子制品操作、Blob 回收与批次复制可见性                                     | 已被 0019 取代                            |
 | [0015](0015-protocol-authentication-and-credential-references.md) | 协议鉴权、凭据引用与发布账号安全边界                                        | 已接受；第 4、6 项命名空间由 0022 取代    |
 | [0016](0016-oci-registry-model.md)                                | OCI Distribution 路由与发布边界                                             | 已接受                                    |
@@ -33,10 +33,11 @@
 | [0020](0020-versioned-operation-envelope-replication.md)          | 版本化原子操作复制信封与 v1 兼容                                            | 已接受                                    |
 | [0021](0021-operation-envelope-pagination-and-v1-blocking.md)     | 操作信封分页、水位与 v1 阻断                                                | 已接受                                    |
 | [0022](0022-restricted-runtime-reference-namespaces.md)           | 受限运行时凭据与迁移来源引用命名空间                                        | 已接受；取代 0015 第 4、6 项命名空间约束  |
-| [0023](0023-primary-standby-replication.md)                       | 主备级联树单向复制与受控人工提升                                            | 待用户验收；取代 0013                     |
+| [0023](0023-primary-standby-replication.md)                       | 主备级联树单向复制与受控人工提升                                            | 已被 0027 取代；随 FR-138 退役            |
 | [0024](0024-atomic-physical-blob-reclamation.md)                  | 原子物理 Blob 回收                                                          | 已接受；取代 0019 第 3 项                 |
 | [0025](0025-direct-online-migration-url.md)                       | 管理员直填在线 Nexus 来源与加密凭据                                         | 已接受                                    |
-| [0026](0026-primary-standby-pull-credentials.md)                  | 级联树逐跳拉取凭据的密封存储与轮换                                          | 待用户验收，FR-121 待用户验收             |
+| [0026](0026-primary-standby-pull-credentials.md)                  | 级联树逐跳拉取凭据的密封存储与轮换                                          | 已被 0027 取代；随 FR-138 退役            |
+| [0027](0027-package-based-node-backup-and-relocation.md)          | 以一致性备份包取代实时复制通道作为节点搬迁手段                              | 已接受；取代 0023、0026 的搬迁定位        |
 
 > 模板：状态 / 背景 / 决策 / 理由 / 后果 / 备选方案。
 

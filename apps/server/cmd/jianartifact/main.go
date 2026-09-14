@@ -101,11 +101,11 @@ func usage(w io.Writer) {
                      created_at/updated_at，与源完全对齐
                      --url <源基址> [--repos <a,b>] [--cred <user:pass>] [--batch <N>]
   admin emit-asset-times
-                     为全部资产重新登记带创建/更新时间的变更，对端复制应用后
-                     自动同步时间（无需在对端单独回填）
+                     为全部资产重新登记带创建/更新时间的资产变更记录
   backup create      生成节点备份包（SQLite 一致性快照 + 内容寻址 blob）
-                     [--mode hot|frozen] [--label <备注>]
+                     [--mode hot|frozen] [--label <备注>] [--base <基线包标识>]
                      frozen 假定本地写入已停止；运行中请改用 Web 的冻结窗口
+                     --base 以该基线包生成增量差包（只含新增 blob 与新 db）
   backup list        列出本机备份包 [--json]
   backup verify <包标识|归档路径>
                      校验备份包完整性 [--deep]（deep 逐 blob 比对内容摘要）
@@ -127,9 +127,18 @@ func usage(w io.Writer) {
   JIAN_HTTP_ADDR     HTTP 监听地址:端口（默认 :8080）
   JIAN_DATA_DIR      数据根目录（默认 ./data；存放 SQLite 与 blob）
   JIAN_JWT_SECRET    JWT(HS256) 签名密钥（缺省时生成并持久化到数据目录）
-  JIAN_REPLICATION_ROLE 复制角色：disabled、primary、standby
-  JIAN_REPLICATION_PRIMARY_URL standby 的直接父节点基址（历史变量名保留）
-  JIAN_REPLICATION_RELAY_ENABLED standby 是否向多个直接子节点 relay（默认 false）
+  JIAN_PUBLIC_URL    对外基础 URL（下载链接与 usage 片段使用）
+  JIAN_ENABLED_FORMATS
+                     启用的协议格式，逗号分隔（缺省 raw,maven,npm）
+  JIAN_UPSTREAM_TIMEOUT
+                     proxy 回源整体超时（秒，默认 30）
+  JIAN_BLOB_GC_INTERVAL
+                     遗留 blob 清理间隔（秒，默认 86400；0 禁用）
+  JIAN_MIGRATION_CREDENTIAL_KEY
+                     在线迁移凭据 AES-256-GCM 密钥（Base64 32 字节）
+  JIAN_TLS_ADDR      HTTPS 监听地址（为空则不启用 HTTPS）
+  JIAN_TLS_CERT      TLS 证书 PEM 路径（配置 JIAN_TLS_ADDR 时必填）
+  JIAN_TLS_KEY       TLS 私钥 PEM 路径（配置 JIAN_TLS_ADDR 时必填）
 
 示例：
   jianartifact run

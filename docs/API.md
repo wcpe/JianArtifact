@@ -1,6 +1,6 @@
 # 接口契约：JianArtifact
 
-> 本文只提供接口分组和行为概览。管理 REST 的唯一契约是 [`../api/openapi.yaml`](../api/openapi.yaml)；生成 Go 接口、前端 client 和 devmock 时必须以该文件为输入。0.8.0 尚未发布，但当前工作区的级联接口已经按直接邻接模型实现。
+> 本文只提供接口分组和行为概览。管理 REST 的唯一契约是 [`../api/openapi.yaml`](../api/openapi.yaml)；生成 Go 接口、前端 client 和 devmock 时必须以该文件为输入。当前发布版本为 `0.8.0`；实时复制通道已随 FR-138 整体退役，`/api/v1/cluster/*` 与 `/api/v1/replication-apply-logs` 等端点已从契约与代码中移除。
 
 ## 1. 通用约定
 
@@ -8,13 +8,13 @@
 - 网页会话使用 `Authorization: Bearer <jwt>`；机器和原生协议凭据按各格式约定处理。
 - 列表接口统一使用分页参数和总数/游标语义，具体字段以 OpenAPI 为准。
 - 错误响应使用稳定错误码和可读消息；不得回显口令、令牌、Authorization、内部地址、原始上游错误或文件系统路径。
-- 读取请求不因为访问本身产生业务审计；鉴权、授权和 standby 只读拒绝按安全审计规则记录。
+- 读取请求不因为访问本身产生业务审计；鉴权、授权失败与写入冻结拒绝按安全审计规则记录。
 
 ## 2. 当前管理 API 分组
 
 ### 认证与状态
 
-- `POST /api/v1/auth/bootstrap`：空库创建首个管理员；standby 不允许自举。
+- `POST /api/v1/auth/bootstrap`：空库创建首个管理员（仅未初始化时开放）。
 - `POST /api/v1/auth/login`、`POST /api/v1/auth/logout`：登录和会话退出。
 - `GET /api/v1/status`：版本、就绪、迁移版本、用户数和非敏感初始化状态。
 - `GET /healthz`、`GET /readyz`：存活与就绪探测。
@@ -29,7 +29,7 @@
 
 ### 设置与审计
 
-- `GET/PUT /api/v1/settings`：实例基础设置；角色、父边、复制凭据和拓扑不通过此接口编辑。
+- `GET/PUT /api/v1/settings`：实例基础设置（匿名访问开关、对外基础 URL、上游超时、域名白名单、回源 Token 与遗留的同步间隔项）；全部为节点本地配置，不参与任何跨实例传播。
 - `/api/v1/observability/audit/*`：当前节点审计概览、记录、风险批次、通知和确认；只读或按确认接口定义的最小写入。
 - `GET /api/v1/licenses`：管理员读取内嵌依赖协议清单。
 
@@ -77,37 +77,25 @@ Web 把 GB 级备份包按服务端约定的 **8 MiB** 分片顺序上传，落�
 
 包内 `manifest.json` 字段：`schemaVersion`、`kind`（固定 `jianartifact-node-backup`）、`packageId`、`mode`、`basePackageId`、`createdAt`、`nodeId`、`appVersion`、`dbSchemaVersion`、`counts{users,tokens,repositories,acls,assets,formatMetadata}`、`db{file,sizeBytes,sha256}`、`blobs{file,count,totalBytes,indexSha256}`。
 
-## 3. 当前 0.8.0 开发代码中的主备级联复制
+## 3. 已退役：复制与集群接口（FR-138）
 
-`0.8.0` 尚未发布；当前工作区已实现 root primary 与 relay standby 复制源：
+0.7.0 的对等复制与 0.8.0 的主备级联树接口已整体退役，**当前契约与代码中不再存在**：
 
-- `GET /api/v1/cluster/sync/capabilities`：primary 或开启 relay 的 standby 提供 v2、operation envelope、`sourceNode`、`streamGeneration` 和 `relayEnabled` 能力声明。
-- `GET /api/v1/cluster/sync/pull?protocol=v2&since=&limit=`：复制源提供 `{records,latestSeq,hasMore}`；relay 从本地已成功应用的原始日志读取，operation envelope 不可拆分且保留根源 seq。
-- `GET /api/v1/cluster/sync/blob/{hash}`：primary 或 relay 按内容哈希流式提供 blob；所有复制传输均为 GET。
-- `GET /api/v1/replication-apply-logs`：管理员查询当前节点复制接收审计。
-- `GET /api/v1/cluster`：管理员查询当前静态角色、来源配置态、watermark、同步历史和错误；不回显令牌。
-- `POST /api/v1/cluster/sync-now`：仅 standby 向配置的直接父节点触发一次受控同步。
-- `GET /api/v1/observability/cluster`、`/sync-events`、`/{eventId}`、`/{eventId}/changes`：读取当前节点同步诊断；概览返回 `scope=local_neighbors`、可选 `parent` 和 `children[]`，每条边只表示直接邻接。
+- 已移除的数据面端点：`/api/v1/cluster/sync/capabilities`、`/cluster/sync/pull`、`/cluster/sync/blob/{hash}`。
+- 已移除的管理端点：`/api/v1/cluster`、`/api/v1/cluster/sync-now`、`/api/v1/replication-apply-logs`、`/api/v1/observability/cluster*`。
+- 已移除的行为：`standby` 只读栅栏与 `503 standby_read_only`、节点角色与来源配置、逐跳复制凭据及其 CLI、水位 / 代次续拉。
+- 旧的 `standby` 写入拒绝语义现由**写入冻结窗口**的统一写栅栏表达（见下节）。
 
-standby 的业务、管理和协议写入口统一返回 `503 standby_read_only`；健康、登录、GET/HEAD 和内部复制应用保持可用。
+决策与退役范围见 [`adr/0027`](adr/0027-package-based-node-backup-and-relocation.md)；历史接口形状见 [`specs/0.8.0-primary-standby-replication.md`](specs/0.8.0-primary-standby-replication.md) 与
+[`specs/0.8.0-cluster-observability.md`](specs/0.8.0-cluster-observability.md)。
 
-节点专属复制凭据通过本地 CLI 创建、标准输入导入、验证、撤销和轮换；复制中间件只授权 capabilities、pull、blob 三类 GET。
+## 4. 节点搬迁相关接口
 
-## 4. 0.8.0 级联树接口边界
-
-FR-115/105/119/121/126 已把当前主备扩展为级联树，当前 OpenAPI 与运行时读模型遵循以下边界：
-
-- 每个非根节点只有一个直接父节点，每个节点可有多个直接子节点；子节点主动拉取直接父节点。
-- relay standby 只提供已经完整接收、校验和原子应用的连续根源流，不产生本地业务 change/outbox。
-- 父子边使用逐跳凭据；水位以根源 `streamGeneration/sourceNode/sourceSeq` 续拉，relay 日志与本地业务变更分离。
-- 集群接口返回 `parent`、`children[]` 和 `scope=local_neighbors`；`children[]` 同时包括已上报和已配对但暂未上报的直接 child。
-- `standbyReport` 仅保留为旧客户端兼容字段；新页面以 `parent`/`children[]` 邻接边为主，不显示全局拓扑。
-
-详细目标见 [`specs/0.8.0-primary-standby-replication.md`](specs/0.8.0-primary-standby-replication.md)、[`specs/0.8.0-cluster-observability.md`](specs/0.8.0-cluster-observability.md) 和 [`specs/primary-sync-view.md`](specs/primary-sync-view.md)。
+搬迁不使用任何专用数据面端点：包体通过 `POST /api/v1/backups` 生成、经签名链接或分片上传搬运、由导入端点落盘为待生效恢复。接口清单见上节「节点备份与搬迁」「写入冻结窗口」「备份包导入」「分片上传」。
 
 ## 5. 原生协议端点
 
-协议端点不进入 OpenAPI，由格式规格定义，但复用后端鉴权、ACL、standby 写门和资产生命周期协调器：
+协议端点不进入 OpenAPI，由格式规格定义，但复用后端鉴权、ACL、写入冻结写门和资产生命周期协调器：
 
 - Raw：`/repository/{repo}/{path}`，支持托管读写和受保护删除。
 - Maven/npm：保留各自原生 registry 语义和格式感知读取/删除。

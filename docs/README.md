@@ -16,21 +16,25 @@
 
 ## 2. 当前版本口径
 
-- 版本真源是仓库根目录 [`../VERSION`](../VERSION)，当前发布版本为 `0.7.1`。
-- `0.8.0` 是开发窗口，尚未发布；开发完成或自动化通过不等于已经完成所有真实验收门。
-- 当前工作区已落地“root primary → relay/leaf standby”的静态级联复制；每个非根节点只配置一个直接父节点，relay standby 可服务多个直接 child。本地四进程初始传播、relay 重启续传和单 relay 双子节点已有证据，完整外部客户端/发布验收仍未完成。
-- 0.7.0 的全互联双向复制只保留为历史背景，当前新部署不得按它配置。
+- 版本真源是仓库根目录 [`../VERSION`](../VERSION)，当前发布版本为 `0.8.0`（release 提交 + 附注 tag `v0.8.0`）。
+- 当前开发窗口是 `0.9.0`（M3：企业认证、存储与运维）；已发布版本的 FR 状态以 [`PRD.md`](PRD.md) 为准。
+- 运行时是**单实例独立部署**：实例本地持有自己的 SQLite 与 blob，不共享数据库、文件卷或进程内状态，也没有节点角色、拓扑或复制通道。
+- 节点搬迁/备份以**一致性备份包**为传输单位：生成 → 传输 → 导入 → 重启替换 → 校验（见 [`OPERATIONS.md`](OPERATIONS.md) §3.2/§3.3/§5）。0.7.0 的全互联双向复制、0.8.0 的主备级联复制均属历史交付，已随 FR-138 整体退役（决策见 [`adr/0027`](adr/0027-package-based-node-backup-and-relocation.md)），新部署不得按它们配置。
 
-## 3. 当前主备级联实现与边界
+## 3. 当前搬迁与备份形态
 
 ```text
-根 primary（唯一业务写入源）
-        │ 直接父子边，子节点主动 GET pull
-        ├── relay standby ── leaf / relay standby ...
-        └── relay standby ── leaf / relay standby ...
+旧实例（唯一数据边界：SQLite + 内容寻址 blob）
+        │ 1. 生成备份包（热备份 / 冻结窗口）
+        │ 2. 传输（签名链接无登录下载 / 人工拷贝）
+        ▼
+新实例（独立数据目录）
+        │ 3. 导入（CLI / URL 拉取 / 分片上传）→ 暂存 + restore.pending
+        │ 4. 重启替换（先留 pre-restore-<ts>/ 回滚点）
+        └── 5. 校验规模与登录 → 切 DNS
 ```
 
-级联树的当前约束：每个非根节点只有一个直接父节点，每个节点可有多个直接子节点；中继只转发已完整接收、校验和原子应用的根源记录；页面和监控只展示本节点及直接邻接边；不做自动选主、自动换父或双主写入。详细实现与未完成发布门见 [`specs/0.8.0-primary-standby-replication.md`](specs/0.8.0-primary-standby-replication.md)。
+切换窗口可用**增量差包**压缩到分钟级（冻结 → 生成差包 → 传输 → 导入 → 起服 → 解冻）。包内**只含数据、不含任何密钥或节点本地配置**，因此新实例导入后必须自行配置密钥与对外地址。详细流程见 [`OPERATIONS.md`](OPERATIONS.md) §3 与 §5，包格式见 [`specs/0.8.0-node-backup-and-relocation.md`](specs/0.8.0-node-backup-and-relocation.md)。
 
 ## 4. 文档状态标记
 
