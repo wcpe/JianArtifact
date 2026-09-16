@@ -196,11 +196,13 @@ describe("仓库管理", () => {
     expect(screen.getByText("maven-releases")).toBeTruthy();
   });
 
-  it("proxy 仓库行显示连接状态徽章（FR-114）", async () => {
+  it("proxy 仓库行的连接状态收敛为状态图标，文字经无障碍标签可达（FR-114）", async () => {
     renderWithProviders(<RepositoriesPage />, { route: "/repositories", authenticated: true });
-    // devmock 种子：npm-proxy / gomod-proxy 上游可达 → 「可用」徽章（多个，用 getAllByText）。
+    // devmock 种子：npm-proxy / gomod-proxy 上游可达 → 「可用」（多个）。
+    // 列表 8 列在 1152 视口只有 ~870px，文字徽章会把类型/可见性列压成「P...」「公.」，
+    // 所以状态在列表里只用图标承载，文字走 aria-label（Tooltip 同源文案）。
     expect(await screen.findByText("npm-proxy")).toBeTruthy();
-    expect(screen.getAllByText("可用").length).toBeGreaterThan(0);
+    expect(screen.getAllByLabelText("连接状态：可用").length).toBeGreaterThan(0);
     // hosted 仓库不返回 connectionStatus → 占位符「—」。
     expect(screen.getAllByText("—").length).toBeGreaterThan(0);
   });

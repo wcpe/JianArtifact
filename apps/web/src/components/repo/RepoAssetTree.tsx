@@ -2,6 +2,7 @@
 // FR-54: 支持 onExpandDir 懒加载回调——目录首次展开时触发。
 // FR-105: 管理员可选择文件和目录，选择状态由父组件维护。
 import { Group, Loader, ScrollArea, Text, UnstyledButton } from "@mantine/core";
+import { useMediaQuery } from "@mantine/hooks";
 import {
   IconBrandJavascript,
   IconBrandNpm,
@@ -125,6 +126,8 @@ function TreeNodeRow({
   onToggleSelect?: (node: AssetTreeNode) => void;
 }) {
   const [open, setOpen] = useState(defaultExpanded);
+  // 窄屏放大行高：树节点在手机上要够点（桌面保持紧凑，一屏能看更多节点）。
+  const isNarrow = useMediaQuery("(max-width: 48em)") ?? false;
   const isDir = node.kind === "dir";
   const selected =
     selectedPath === node.path || (selectable && selectedPaths?.has(node.path) === true);
@@ -162,7 +165,9 @@ function TreeNodeRow({
         style={{
           display: "block",
           width: "100%",
-          padding: `4px 8px 4px ${pad}px`,
+          // 窄屏行高按触控目标给足（4px 上下内边距在手机上太密，一行只有 ~24px）；
+          // 桌面鼠标精度足够，保持紧凑以免一屏能看的节点太少。
+          padding: isNarrow ? `9px 8px 9px ${pad}px` : `4px 8px 4px ${pad}px`,
           borderRadius: 4,
           background: selected ? "var(--mantine-color-blue-light)" : undefined,
         }}

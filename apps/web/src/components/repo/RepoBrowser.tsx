@@ -20,8 +20,17 @@ import {
   Title,
 } from "@mantine/core";
 import { EmptyState } from "@jianartifact/ui";
-import { IconChevronDown, IconChevronUp, IconSearch, IconUpload, IconX } from "@tabler/icons-react";
-import { useLocalStorage } from "@mantine/hooks";
+import { ContentSkeleton } from "../AsyncBoundary";
+import {
+  IconChevronDown,
+  IconChevronUp,
+  IconRefresh,
+  IconSearch,
+  IconTrash,
+  IconUpload,
+  IconX,
+} from "@tabler/icons-react";
+import { useLocalStorage, useMediaQuery } from "@mantine/hooks";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -165,6 +174,9 @@ export function RepoBrowser({
     defaultValue: 360,
     getInitialValueInEffect: false,
   });
+  // 窄屏（< 48em）：左右并排会把两栏都压到不可读——树宽 280px 起步，390px 手机上
+  // 详情栏只剩几十像素（文字竖排溢出）。此宽度起改为上下堆叠，各自内滚。
+  const isNarrow = useMediaQuery("(max-width: 48em)") ?? false;
   const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const onSplitterMouseDown = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -210,7 +222,10 @@ export function RepoBrowser({
             (list) => list.items.find((r) => r.name === repoName) ?? null,
           ),
     [repoName, publicMode],
-    { cacheKey: `repo:detail:${repoName}:${publicMode ? "public" : "managed"}` },
+    // 公开态不发请求，**不能**与管理态共用缓存键：useAsync 的同键在途去重会把
+    // 「立刻 resolve(null)」的 Promise 复用给真正要仓库数据的调用方（详情页页头），
+    // 表现为仓库信息永远停在骨架、徽章不出现。
+    publicMode ? undefined : { cacheKey: `repo:detail:${repoName}:managed` },
   );
 
   const format = forcedFormat || repoState.data?.format || usageState.data?.format || "raw";
@@ -463,7 +478,7 @@ export function RepoBrowser({
   }, []);
 
   return (
-    <Stack gap="md" style={{ height: "100%", overflow: "hidden" }}>
+    <Stack gap={isNarrow ? "sm" : "md"} style={{ height: "100%", overflow: "hidden" }}>
       {/* FR-81：format/type/visibility 徽章由详情页页头统一渲染，此处不再重复一层。 */}
 
       {/* 上传区默认收起：点击按钮展开（Raw / Maven hosted），不挤占文件树空间 */}
@@ -523,10 +538,13 @@ export function RepoBrowser({
         </Box>
       )}
 
-      {/* FR-74：客户端发布提示收纳为紧凑小字 + 跳使用说明链接，不占大块 */}
+      {/* FR-74：客户端发布提示收纳为紧凑小字 + 跳使用说明链接，不占大块。
+          窄屏用短文案（完整版要折两行、约 48px；短版本一行约 22px），链接照旧可点。 */}
       {allowUpload && !canUpload && !canMavenUpload && (
         <Text size="xs" c="dimmed">
-          {t("repoDetail.uploadClientOnly")}{" "}
+          {isNarrow
+            ? t("repoDetail.uploadClientOnlyShort", { defaultValue: "仅支持客户端发布" })
+            : t("repoDetail.uploadClientOnly")}{" "}
           <Anchor size="xs" component="button" type="button" onClick={() => setSelected(null)}>
             {t("repoDetail.uploadClientOnlyLink")}
           </Anchor>
@@ -537,22 +555,21 @@ export function RepoBrowser({
         <Alert color="red">
           <Group justify="space-between" wrap="wrap">
             <Text size="sm">{treeError}</Text>
-            <Button size="xs" variant="light" onClick={() => setReloadNonce((value) => value + 1)}>
+            <Button
+              size="xs"
+              variant="light"
+              onClick={() => setReloadNonce((value) => value + 1)}
+              leftSection={<IconRefresh size={14} />}
+            >
               {t("common.retry")}
             </Button>
           </Group>
         </Alert>
       )}
 
-      {/* FR-69: 中央 Loader 仅首载（无旧树可展示）时出现 */}
-      {treeLoading && treeNodes.length === 0 && (
-        <Group justify="center" py="xl">
-          <Loader size="sm" />
-          <Text size="sm" c="dimmed">
-            {t("common.loading", { defaultValue: "加载中..." })}
-          </Text>
-        </Group>
-      )}
+      {/* 首载：目录树还没到。用结构化骨架而不是居中转圈——慢接口下居中转圈会让
+          右侧详情区看起来是空的，与列表页的首载口径保持一致。 */}
+      {treeLoading && treeNodes.length === 0 && <ContentSkeleton rows={6} />}
 
       {isEmpty && (
         <EmptyState
@@ -565,111 +582,139 @@ export function RepoBrowser({
         <Box
           style={{
             display: "flex",
+            // 窄屏改为上下堆叠（见 isNarrow 说明），宽屏保持左右并排。
+            flexDirection: isNarrow ? "column" : "row",
             gap: "var(--mantine-spacing-md)",
             // FR-74：填满页面固定高外壳的剩余空间，树/详情各自内滚。
             flex: 1,
             minHeight: 240,
           }}
         >
-          {/* 左侧：文件树 + 搜索 */}
+          {/* 左侧：文件树 + 搜索。
+              窄屏按内容高度自适应（最多 45vh，超出时树内滚动），不再与详情平分高度——
+              2 行的树平分后会白占半屏空白，而"选中后收起"又要多点一次「换文件」，得不偿失。 */}
           <Card
             withBorder
             padding={density.cardPadding}
             radius="md"
             style={{
-              width: treeWidth,
-              minWidth: 280,
-              maxWidth: 720,
+              // 窄屏：全宽 + 按内容自适应（不参与拉伸，最多 45vh）；宽屏：可拖拽的固定宽侧栏。
+              width: isNarrow ? "100%" : treeWidth,
+              minWidth: isNarrow ? 0 : 280,
+              maxWidth: isNarrow ? "100%" : 720,
+              flex: isNarrow ? "0 0 auto" : undefined,
+              maxHeight: isNarrow ? "45vh" : undefined,
+              overflow: isNarrow ? "hidden" : undefined,
               flexShrink: 0,
+              minHeight: 0,
               display: "flex",
               flexDirection: "column",
               position: "relative",
             }}
           >
-            {/* FR-69: 刷新期间保留旧树，仅叠加覆盖层 */}
-            <LoadingOverlay
-              visible={treeLoading}
-              zIndex={10}
-              overlayProps={{ radius: "sm", blur: 1 }}
-              loaderProps={{ size: "sm" }}
-              transitionProps={{ duration: 150 }}
-            />
-            {/* FR-57: 仓库内搜索栏 */}
-            <TextInput
-              size="xs"
-              placeholder={t("repoDetail.searchPlaceholder", {
-                defaultValue: "搜索制品，支持 -排除词 ext:jar 等表达式",
-              })}
-              leftSection={<IconSearch size={14} />}
-              rightSection={
-                searchQuery ? (
-                  <IconX size={14} style={{ cursor: "pointer" }} onClick={clearSearch} />
-                ) : undefined
-              }
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.currentTarget.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleInRepoSearch()}
-              mb="xs"
-            />
-            {searching && (
-              <Group justify="center" py="xs">
-                <Loader size={14} />
-              </Group>
-            )}
-            {searchResults !== null && (
-              <Text size="xs" c="dimmed" mb="xs">
-                {t("repoDetail.searchResultCount", {
-                  count: searchCount,
-                  defaultValue: `找到 ${searchCount} 条结果`,
-                })}
-              </Text>
-            )}
-            {treeActionError && (
-              <Alert color="red" py="xs" mb="xs">
-                {treeActionError}
-              </Alert>
-            )}
-            <ScrollArea style={{ flex: 1 }} type="auto" offsetScrollbars>
-              <RepoAssetTree
-                key={searchResults === null ? "browse" : `search:${searchQuery}`}
-                nodes={displayNodes}
-                selectedPath={selected?.path ?? null}
-                onSelectFile={onSelectFile}
-                onSelectDir={onSelectDir}
-                onExpandDir={searchResults === null ? handleExpandDir : undefined}
-                maxHeight="none"
-                defaultExpanded={searchResults !== null}
-                showSize={searchResults !== null}
-                selectable={isAdmin}
-                selectedPaths={selectedPaths}
-                onNodeInteraction={isAdmin ? onNodeInteraction : undefined}
-                onContextMenu={isAdmin ? handleContextMenu : undefined}
+            <Box
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                flex: 1,
+                minHeight: 0,
+              }}
+            >
+              {/* FR-69: 刷新期间保留旧树，仅叠加覆盖层 */}
+              <LoadingOverlay
+                visible={treeLoading}
+                zIndex={10}
+                overlayProps={{ radius: "sm", blur: 1 }}
+                loaderProps={{ size: "sm" }}
+                transitionProps={{ duration: 150 }}
               />
-            </ScrollArea>
+              {/* FR-57: 仓库内搜索栏 */}
+              <TextInput
+                size="xs"
+                placeholder={t("repoDetail.searchPlaceholder", {
+                  defaultValue: "搜索制品，支持 -排除词 ext:jar 等表达式",
+                })}
+                leftSection={<IconSearch size={14} />}
+                rightSection={
+                  searchQuery ? (
+                    <IconX size={14} style={{ cursor: "pointer" }} onClick={clearSearch} />
+                  ) : undefined
+                }
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.currentTarget.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleInRepoSearch()}
+                mb="xs"
+              />
+              {searching && (
+                <Group justify="center" py="xs">
+                  <Loader size={14} />
+                </Group>
+              )}
+              {searchResults !== null && (
+                <Text size="xs" c="dimmed" mb="xs">
+                  {t("repoDetail.searchResultCount", {
+                    count: searchCount,
+                    defaultValue: `找到 ${searchCount} 条结果`,
+                  })}
+                </Text>
+              )}
+              {treeActionError && (
+                <Alert color="red" py="xs" mb="xs">
+                  {treeActionError}
+                </Alert>
+              )}
+              {/* 窄屏树卡是"按内容自适应"高度：超出 maxHeight（45vh）时要靠内层滚动，
+                所以这里必须 minHeight: 0，否则 ScrollArea 会撑破卡片。 */}
+              <ScrollArea style={{ flex: 1, minHeight: 0 }} type="auto" offsetScrollbars>
+                <RepoAssetTree
+                  key={searchResults === null ? "browse" : `search:${searchQuery}`}
+                  nodes={displayNodes}
+                  selectedPath={selected?.path ?? null}
+                  onSelectFile={onSelectFile}
+                  onSelectDir={onSelectDir}
+                  onExpandDir={searchResults === null ? handleExpandDir : undefined}
+                  maxHeight="none"
+                  defaultExpanded={searchResults !== null}
+                  showSize={searchResults !== null}
+                  selectable={isAdmin}
+                  selectedPaths={selectedPaths}
+                  onNodeInteraction={isAdmin ? onNodeInteraction : undefined}
+                  onContextMenu={isAdmin ? handleContextMenu : undefined}
+                />
+              </ScrollArea>
+            </Box>
           </Card>
 
-          {/* FR-99: 拖拽分割条——左右面板宽度自由调整 */}
-          <Box
-            onMouseDown={onSplitterMouseDown}
-            aria-label="调整文件树宽度"
-            role="separator"
-            aria-orientation="vertical"
-            style={{
-              width: 8,
-              marginInline: -4,
-              cursor: "col-resize",
-              alignSelf: "stretch",
-              flexShrink: 0,
-              borderRadius: 4,
-            }}
-          />
+          {/* FR-99: 拖拽分割条——左右面板宽度自由调整（窄屏上下堆叠时无意义，不渲染） */}
+          {isNarrow ? null : (
+            <Box
+              onMouseDown={onSplitterMouseDown}
+              aria-label="调整文件树宽度"
+              role="separator"
+              aria-orientation="vertical"
+              style={{
+                width: 8,
+                marginInline: -4,
+                cursor: "col-resize",
+                alignSelf: "stretch",
+                flexShrink: 0,
+                borderRadius: 4,
+              }}
+            />
+          )}
 
           {/* 右侧：文件详情 / 使用说明 */}
           <Card
             withBorder
             padding={density.cardPadding}
             radius="md"
-            style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}
+            style={{
+              flex: 1,
+              minHeight: 0,
+              display: "flex",
+              flexDirection: "column",
+              overflow: "hidden",
+            }}
           >
             <ScrollArea style={{ flex: 1 }} type="auto" offsetScrollbars>
               {selected ? (
@@ -717,6 +762,7 @@ export function RepoBrowser({
               setContextMenu(null);
               handleBatchDelete();
             }}
+            leftSection={<IconTrash size={14} />}
           >
             {t("common.delete")}
           </Button>

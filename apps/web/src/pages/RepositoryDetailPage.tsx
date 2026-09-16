@@ -1,12 +1,12 @@
 // 仓库详情：Tab 布局（浏览/配置/ACL）。管理员可见配置与 ACL，普通用户仅浏览。
 import {
-  ActionIcon,
   Badge,
   Button,
   Card,
   Group,
   MultiSelect,
   Select,
+  Skeleton,
   Stack,
   Switch,
   Table,
@@ -15,12 +15,14 @@ import {
   Textarea,
   Title,
 } from "@mantine/core";
-import { IconTrash } from "@tabler/icons-react";
+import { IconDeviceFloppy, IconPlus, IconRefresh, IconTrash, IconX } from "@tabler/icons-react";
+import { useMediaQuery } from "@mantine/hooks";
 import { EmptyState } from "@jianartifact/ui";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "react-router-dom";
 
+import { PageShell } from "../app/PageShell";
 import { RepoBrowser } from "../components/repo/RepoBrowser";
 import { AsyncBoundary } from "../components/AsyncBoundary";
 import {
@@ -44,6 +46,7 @@ import type {
 import { useAuth } from "../auth/AuthContext";
 import { useAsync } from "../hooks/useAsync";
 import { CONN_COLOR, CONN_LABEL_KEY } from "../lib/connectionStatus";
+import { formatBytes } from "../lib/format";
 import { notifyError, notifySuccess } from "../lib/feedback";
 import { density } from "../theme/density";
 
@@ -81,86 +84,152 @@ export function RepositoryDetailPage() {
     { cacheKey: `repo:detail:${name}:${user ? "managed" : "public"}` },
   );
   const repo = repoState.data ?? null;
+  // 窄屏（< 48em）：页签与徽章必然折成两行，面板上边距也收一档，尽可能把高度留给内容。
+  const isNarrow = useMediaQuery("(max-width: 48em)") ?? false;
 
   return (
-    <Stack
-      gap={0}
-      data-testid="repo-detail-shell"
-      style={{
-        // FR-74：对齐 FR-68 手法——整页固定高度不滚动，浏览面板内滚。
-        height:
-          "calc(100vh - var(--app-shell-header-offset, 56px) - 2 * var(--app-shell-padding, 12px))",
-        overflow: "hidden",
-      }}
-    >
-      {/* FR-81：仓库后台描述以轻量副文本呈现（不再用页头大标题）。 */}
-      <Group justify="flex-end" mb="xs">
-        {/* FR-74：未登录的登录入口收敛到页眉（AppLayout），此处仅保留返回。 */}
-        <Button variant="default" onClick={() => navigate("/repositories")}>
-          {t("common.close")}
-        </Button>
-      </Group>
-      {repo?.description ? (
-        <Text size="sm" c="dimmed" mb="sm">
-          {repo.description}
-        </Text>
-      ) : null}
-
-      {/* 页头 Badge：format/type/visibility */}
-      {repo && (
-        <Group gap="xs" mb="sm">
-          <Badge variant="light">{repo.format}</Badge>
-          <Badge variant="outline" color="gray">
-            {repo.type}
-          </Badge>
-          <Badge variant="light" color={repo.visibility === "public" ? "blue" : "gray"}>
-            {repo.visibility === "public"
-              ? t("repositories.visibilityPublic")
-              : t("repositories.visibilityPrivate")}
-          </Badge>
-        </Group>
-      )}
-
+    <PageShell testId="repo-detail-shell">
       <Tabs
         defaultValue="browse"
+        styles={{ tab: { paddingTop: 6, paddingBottom: 6 } }}
         style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
       >
-        <Tabs.List
-          data-testid="repo-detail-tabs"
-          style={{
-            position: "sticky",
-            top: 0,
-            zIndex: 1,
-            flexWrap: "nowrap",
-            overflowX: "auto",
-            background: "var(--mantine-color-body)",
-          }}
-        >
-          <Tabs.Tab value="browse">{t("repoDetail.tabBrowse")}</Tabs.Tab>
-          {isAdmin && <Tabs.Tab value="config">{t("repoDetail.tabConfig")}</Tabs.Tab>}
-          {isAdmin && <Tabs.Tab value="acl">{t("repoDetail.tabAcl")}</Tabs.Tab>}
-        </Tabs.List>
+        {/* 页头与页签并排：宽屏一行放得下（省掉整整一行），窄屏自动折成
+            「页签 / 徽章 + 关闭」两行。仓库名由页眉面包屑承担，此处只表达仓库属性。 */}
+        <Group justify="space-between" align="center" wrap="wrap" gap="xs" mb="xs">
+          <Tabs.List
+            data-testid="repo-detail-tabs"
+            style={{
+              position: "sticky",
+              top: 0,
+              zIndex: 1,
+              flexWrap: "nowrap",
+              overflowX: "auto",
+              background: "var(--mantine-color-body)",
+            }}
+          >
+            <Tabs.Tab value="browse">{t("repoDetail.tabBrowse")}</Tabs.Tab>
+            {isAdmin && <Tabs.Tab value="config">{t("repoDetail.tabConfig")}</Tabs.Tab>}
+            {isAdmin && <Tabs.Tab value="acl">{t("repoDetail.tabAcl")}</Tabs.Tab>}
+          </Tabs.List>
+
+          {/* 中间概览：页签与右侧徽章之间原本是 900px 空白带（1440 实测），
+              用仓库自身的只读统计填上，顺便让「这个仓库多大/多新/上游通不通」一眼可见。
+              窄屏（<48em）隐藏——那里空间要留给页签与徽章。 */}
+          {repo ? (
+            <Group
+              gap="lg"
+              wrap="nowrap"
+              align="center"
+              visibleFrom="md"
+              style={{ flex: 1, justifyContent: "center", minWidth: 0 }}
+            >
+              <DetailStat
+                label={t("repoDetail.statArtifacts")}
+                value={(repo.artifactCount ?? 0).toLocaleString("zh-CN")}
+              />
+              <DetailStat
+                label={t("repoDetail.statSize")}
+                value={formatBytes(repo.totalSize ?? 0)}
+              />
+              {/* 上游连接状态不在这里重复展示：它属于「配置」页签的正交信息，
+                  同一文案在两个位置出现既冗余、也让按文本定位的用例产生歧义。 */}
+              <DetailStat
+                label={t("repoDetail.statCreatedAt")}
+                value={(repo.createdAt ?? "").slice(0, 10)}
+              />
+            </Group>
+          ) : null}
+
+          {/* 徽章与「关闭」都取紧凑尺寸：它们只是属性标注与返回入口，不该占掉一行。 */}
+          <Group gap={4} wrap="wrap" align="center">
+            {repo ? (
+              <>
+                <Badge size="xs" variant="light">
+                  {repo.format}
+                </Badge>
+                <Badge size="xs" variant="outline" color="gray">
+                  {repo.type}
+                </Badge>
+                <Badge
+                  size="xs"
+                  variant="light"
+                  color={repo.visibility === "public" ? "blue" : "gray"}
+                >
+                  {repo.visibility === "public"
+                    ? t("repositories.visibilityPublic")
+                    : t("repositories.visibilityPrivate")}
+                </Badge>
+              </>
+            ) : (
+              // 慢接口下也保持页头有形，避免左侧长时间是空的。
+              <Skeleton height={20} width={150} radius="sm" />
+            )}
+            {/* FR-74：未登录的登录入口收敛到页眉（AppLayout），此处仅保留返回。 */}
+            <Button
+              size="compact-xs"
+              variant="default"
+              leftSection={<IconX size={14} />}
+              onClick={() => navigate("/repositories")}
+            >
+              {t("common.close")}
+            </Button>
+          </Group>
+        </Group>
+
+        {/* FR-81：描述独立成一行，最多一行高（不再用页头大标题）。 */}
+        {repo?.description ? (
+          <Text size="xs" c="dimmed" lineClamp={1} mb="xs">
+            {repo.description}
+          </Text>
+        ) : null}
 
         {/* 浏览 Tab：嵌入现有 RepoBrowser（填满剩余高度，内部面板各自滚动） */}
-        <Tabs.Panel value="browse" pt="md" style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
+        <Tabs.Panel
+          value="browse"
+          pt={isNarrow ? "xs" : "sm"}
+          style={{ flex: 1, minHeight: 0, overflow: "hidden" }}
+        >
           <RepoBrowser repoName={name} allowUpload={allowUpload} publicMode={!user} />
         </Tabs.Panel>
 
         {/* 配置 Tab：仅管理员，展示仓库信息 + 可修改 visibility */}
         {isAdmin && (
-          <Tabs.Panel value="config" pt="md" style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+          <Tabs.Panel
+            value="config"
+            pt={isNarrow ? "xs" : "sm"}
+            style={{ flex: 1, minHeight: 0, overflowY: "auto" }}
+          >
             <ConfigTab repoName={name} repo={repo} onUpdated={repoState.reload} />
           </Tabs.Panel>
         )}
 
         {/* ACL Tab：仅管理员，内联 ACL 管理 */}
         {isAdmin && (
-          <Tabs.Panel value="acl" pt="md" style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+          <Tabs.Panel
+            value="acl"
+            pt={isNarrow ? "xs" : "sm"}
+            style={{ flex: 1, minHeight: 0, overflowY: "auto" }}
+          >
             <AclPanel repoName={name} />
           </Tabs.Panel>
         )}
       </Tabs>
-    </Stack>
+    </PageShell>
+  );
+}
+
+/** 页头中间的紧凑统计项：小字灰标签 + 加粗值，用于填掉页签与徽章之间的空白带。 */
+function DetailStat({ label, value, color }: { label: string; value: string; color?: string }) {
+  return (
+    <Group gap={6} wrap="nowrap" align="baseline">
+      <Text size="xs" c="dimmed">
+        {label}
+      </Text>
+      <Text size="sm" fw={600} c={color}>
+        {value}
+      </Text>
+    </Group>
   );
 }
 
@@ -301,6 +370,7 @@ function ConfigTab({
               loading={rechecking}
               disabled={!online}
               onClick={handleRecheck}
+              leftSection={<IconRefresh size={14} />}
             >
               {rechecking
                 ? t("repoDetail.configRechecking", { defaultValue: "探测中…" })
@@ -347,7 +417,11 @@ function ConfigTab({
         )}
 
         <Group justify="flex-end">
-          <Button onClick={handleSave} loading={saving}>
+          <Button
+            onClick={handleSave}
+            loading={saving}
+            leftSection={<IconDeviceFloppy size={16} />}
+          >
             {t("repoDetail.configSave")}
           </Button>
         </Group>
@@ -471,14 +545,16 @@ function AclPanel({ repoName }: { repoName: string }) {
                         />
                       </Table.Td>
                       <Table.Td>
-                        <ActionIcon
-                          color="red"
+                        <Button
+                          size="compact-xs"
                           variant="subtle"
-                          onClick={() => removeEntry(index)}
+                          color="red"
+                          leftSection={<IconTrash size={14} />}
                           aria-label={t("common.delete")}
+                          onClick={() => removeEntry(index)}
                         >
-                          <IconTrash size={16} />
-                        </ActionIcon>
+                          {t("common.delete")}
+                        </Button>
                       </Table.Td>
                     </Table.Tr>
                   ))}
@@ -506,13 +582,22 @@ function AclPanel({ repoName }: { repoName: string }) {
                 onChange={(v) => v && setNewAction(v as AclAction)}
                 w={140}
               />
-              <Button variant="light" onClick={addEntry} disabled={!newSubjectId}>
+              <Button
+                variant="light"
+                onClick={addEntry}
+                disabled={!newSubjectId}
+                leftSection={<IconPlus size={14} />}
+              >
                 {t("acl.addEntry")}
               </Button>
             </Group>
 
             <Group justify="flex-end">
-              <Button onClick={handleSave} loading={saving}>
+              <Button
+                onClick={handleSave}
+                loading={saving}
+                leftSection={<IconDeviceFloppy size={16} />}
+              >
                 {t("acl.save")}
               </Button>
             </Group>

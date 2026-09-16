@@ -103,7 +103,7 @@ describe("仓库详情", () => {
     await screen.findByText("com");
     const shell = screen.getByTestId("repo-detail-shell");
     expect(shell.style.overflow).toBe("hidden");
-    expect(shell.style.height).toContain("100vh");
+    expect(shell.style.height).toContain("100dvh");
   });
 
   it("语义 Tab 固定在页头下方，窄屏可横向滚动（FR-122）", async () => {
