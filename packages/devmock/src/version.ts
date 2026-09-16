@@ -1,11 +1,11 @@
 // DevMock 版本锚点。
 //
-// `VERSION` 文件是**发布边界**（保持上一个已发布版本，发布前不动）；
-// DevMock 表达的是「当前正在开发、尚未发布的版本」，因此在这里单独维护，
-// 由 store（`/api/v1/status`）、handlers（契约测试）与备份包元数据共同引用，
+// `VERSION` 文件与这里必须一致：开发期两者都写 `<下一版>-dev`（发布时同步改为正式号），
+// 用于云构建产物命名（曾产出 `jianartifact-0.8.0-dev-<日期>-<平台>`）与部署脚本注入
+// `main.version`；由 store（`/api/v1/status`）、handlers（契约测试）与备份包元数据共同引用，
 // 避免版本号散落成三份各自过期的字面量。
-/** 当前开发版版本号（v0.8.0 开发线）。 */
-export const MOCK_APP_VERSION = "0.8.0-dev";
+/** 当前开发版版本号（v0.8.1 开发线）。 */
+export const MOCK_APP_VERSION = "0.8.1-dev";
 
 /**
  * 当前数据库 schema 版本与迁移标识。
