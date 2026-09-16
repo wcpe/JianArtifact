@@ -32,7 +32,9 @@ function Providers({ children, route }: { children: ReactNode; route: string }) 
           <LoginModalProvider>
             <MemoryRouter
               initialEntries={[route]}
-              future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
+              // 与 App.tsx 保持一致：关闭 startTransition，让懒加载切换立即回退到骨架
+              // （开启时 React 会保留旧页面内容，测试里也会掩盖"切换无反馈"这类问题）。
+              future={{ v7_startTransition: false, v7_relativeSplatPath: true }}
             >
               {children}
             </MemoryRouter>

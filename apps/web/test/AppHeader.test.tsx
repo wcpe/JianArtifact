@@ -2,11 +2,13 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AppRoutes } from "../src/app/router";
 import { useAsync, REFRESH_EVENT } from "../src/hooks/useAsync";
 import { renderWithProviders } from "./harness";
+
+afterEach(() => vi.restoreAllMocks());
 
 /** 使用 useAsync 的最小组件：暴露 fetcher 调用次数。 */
 function AsyncProbe({ onFetch }: { onFetch: () => void }) {
@@ -82,6 +84,30 @@ describe("页眉打磨（FR-71）", () => {
     dispatchSpy.mockRestore();
     // 触发的重新拉取归零后（含最短旋转时长）恢复可用
     await waitFor(() => expect(refreshButton.disabled).toBe(false), { timeout: 3000 });
+  });
+
+  it("窄屏页眉的搜索与刷新退化为纯图标，文字经提示可达", async () => {
+    // 强制窄屏：测试替身默认所有媒体查询都不命中（等价桌面），这里只让 max-width 查询命中。
+    vi.spyOn(window, "matchMedia").mockImplementation(
+      (query: string) =>
+        ({
+          matches: /max-width: 48em/.test(query),
+          media: query,
+          onchange: null,
+          addListener: () => {},
+          removeListener: () => {},
+          addEventListener: () => {},
+          removeEventListener: () => {},
+          dispatchEvent: () => false,
+        }) as MediaQueryList,
+    );
+    renderWithProviders(<AppRoutes />, { route: "/repositories", authenticated: true });
+
+    // 图标按钮：可访问名（读屏 / aria-label）仍在，但按钮内不再有会被页眉裁掉的文字节点。
+    const refresh = await screen.findByRole("button", { name: "刷新" });
+    expect(refresh.textContent).toBe("");
+    const search = await screen.findByRole("button", { name: "搜索" });
+    expect(search.textContent).toBe("");
   });
 
   it("useAsync 响应全局刷新事件重新拉取", async () => {

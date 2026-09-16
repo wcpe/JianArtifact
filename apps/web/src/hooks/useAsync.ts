@@ -77,6 +77,40 @@ export function writeAsyncCache(key: string, value: unknown): void {
 }
 
 /**
+ * 同键在途请求去重：同一 cacheKey 正在飞行时复用同一个 Promise。
+ *
+ * 观测页（仪表盘 / 主机监控）会在一次进入时并发拉多个不同端点，而这些端点又会被多个
+ * 组件按同一口径重复订阅；全局刷新按钮与 60s 静默轮询还会叠加上来。若不去重，慢接口下
+ * 会出现"同一 URL 同时挂起 N 份"，请求数随挂起时长线性增长——这正是"接口一卡，前端跟着
+ * 卡死"的放大器。去重后同键始终只有一份在途请求。
+ *
+ * 无 cacheKey 的调用不参与去重（口径无法判定），保持原样直发。
+ *
+ * 约束：**同键必须同语义**。若两个组件用同一 cacheKey 但 fetcher 含义不同
+ * （典型反例：一个返回 `null` 占位、一个真去取数），去重会把前者的 Promise
+ * 复用给后者，现象是"该数据永远加载不出来"。语义不同就必须用不同键，
+ * 或干脆不传 cacheKey。
+ */
+const inflightRequests = new Map<string, Promise<unknown>>();
+
+function fetchOnce<T>(key: string | undefined, fetcher: () => Promise<T>): Promise<T> {
+  if (key === undefined) {
+    return fetcher();
+  }
+  const existing = inflightRequests.get(key);
+  if (existing) {
+    return existing as Promise<T>;
+  }
+  const tracked: Promise<T> = fetcher().finally(() => {
+    if (inflightRequests.get(key) === tracked) {
+      inflightRequests.delete(key);
+    }
+  });
+  inflightRequests.set(key, tracked);
+  return tracked;
+}
+
+/**
  * 失效页面数据缓存：不带参数清空全部；带前缀只移除匹配的键。
  * 变更操作（创建/删除/可见性切换等）成功后调用，防止下一帧回放过期数据。
  */
@@ -92,31 +126,38 @@ export function invalidateAsyncCache(prefix?: string): void {
   }
 }
 
-/** 清空缓存（测试隔离用）。 */
+/** 清空缓存（测试隔离用）。同时在途去重表一并清空，避免测试间串用同一挂起请求。 */
 export function clearAsyncCache(): void {
   asyncCache.clear();
+  inflightRequests.clear();
 }
 
 /**
  * 仅在页面可见时按固定间隔刷新，并在标签页重新获得可见性时立即补拉一次。
  * 观测页使用该钩子，避免后台标签页无意义轮询。
+ *
+ * reload 经 ref 持有：调用方常传内联函数（每次渲染新引用），若直接进 effect 依赖，
+ * 定时器会被反复重建——页面只要有一帧重渲染，60s 定时刷新就永远等不到触发，
+ * 同时 visibilitychange 监听器反复增删。这里只在 intervalMs 变化时重建。
  */
 export function useVisibleRefresh(
   reload: () => void,
   intervalMs: number = OBSERVABILITY_REFRESH_MS,
 ): void {
+  const reloadRef = useRef(reload);
+  reloadRef.current = reload;
+
   useEffect(() => {
     const refreshIfVisible = () => {
-      if (document.visibilityState === "visible") reload();
+      if (document.visibilityState === "visible") reloadRef.current();
     };
-    const onVisibilityChange = () => refreshIfVisible();
     const timer = window.setInterval(refreshIfVisible, intervalMs);
-    document.addEventListener("visibilitychange", onVisibilityChange);
+    document.addEventListener("visibilitychange", refreshIfVisible);
     return () => {
       window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisibilityChange);
+      document.removeEventListener("visibilitychange", refreshIfVisible);
     };
-  }, [intervalMs, reload]);
+  }, [intervalMs]);
 }
 
 /** 组件挂载即执行 fetcher；deps 变化重新拉取；返回状态与手动 reload。 */
@@ -170,7 +211,7 @@ export function useAsync<T>(
       setRefreshError(null);
       setLoading(true);
     }
-    fetcher()
+    fetchOnce(cacheKey, fetcher)
       .then((result) => {
         if (!active) return;
         // null 占位（如“快照就绪后再拉事件”的等待分支）不算数据在场，也不写缓存。

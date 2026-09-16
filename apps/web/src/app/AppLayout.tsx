@@ -4,6 +4,7 @@
 // 视觉沿用旧项目控制台外壳（AppShell layout="alt"）。
 import {
   ActionIcon,
+  Anchor,
   AppShell,
   Box,
   Breadcrumbs,
@@ -22,6 +23,7 @@ import { useDisclosure, useLocalStorage, useMediaQuery } from "@mantine/hooks";
 import {
   IconKey,
   IconLayoutDashboard,
+  IconLayoutList,
   IconLayoutSidebarLeftCollapse,
   IconLayoutSidebarLeftExpand,
   IconFileReport,
@@ -38,7 +40,7 @@ import {
 import { useEffect, useState, Suspense } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { Outlet, useLocation, useNavigate } from "react-router-dom";
+import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { getStatus, listPublicRepositories } from "../api/endpoints";
 import { getNetworkActivityCount, subscribeNetworkActivity } from "../api/client";
@@ -46,9 +48,11 @@ import { useAuth } from "../auth/AuthContext";
 import { useLoginModal } from "../auth/LoginModal";
 import { BrandLogo } from "../components/BrandLogo";
 import { AccountMenu } from "../components/account/AccountMenu";
+import { RouteErrorBoundary } from "../components/RouteErrorBoundary";
 import { RouteFallback } from "../components/RouteFallback";
 import { REFRESH_EVENT } from "../hooks/useAsync";
 import { density } from "../theme/density";
+import { preloadRoute } from "./preloadRoute";
 import type { Repository } from "../api/types";
 
 /** 导航项定义。 */
@@ -77,6 +81,12 @@ function isNavActive(pathname: string, itemPath: string): boolean {
 const NAV_BREADCRUMB_OVERRIDES: Record<string, string> = {
   "/dashboard": "业务仪表盘",
 };
+
+/** 面包屑项：label 必填；to 存在时渲染为可点击链接（末级始终不可点）。 */
+interface Crumb {
+  label: string;
+  to?: string;
+}
 
 const NAV_SECTIONS: NavSection[] = [
   {
@@ -135,31 +145,89 @@ const NAV_SECTIONS: NavSection[] = [
  */
 function NavItemLink({
   label,
+  path,
   icon,
   expanded,
   active,
   onSelect,
 }: {
   label: string;
+  /**
+   * 目标路由。既用于 hover / 聚焦时预取该页 chunk，也用于渲染成真正的 `<a href>`——
+   * 只用 onClick 导航时链接没有 href，中键新开、复制链接地址、爬虫跟进全都失效。
+   */
+  path: string;
   icon: ReactNode;
   expanded: boolean;
   active: boolean;
   onSelect: () => void;
 }) {
+  const prefetch = () => preloadRoute(path);
   if (expanded) {
     return (
       <NavLink
+        component={Link}
+        to={path}
         label={label}
         aria-label={label}
         leftSection={icon}
         active={active}
         onClick={onSelect}
+        onMouseEnter={prefetch}
+        onFocus={prefetch}
       />
     );
   }
   return (
     <Tooltip label={label} position="right" withArrow>
-      <NavLink aria-label={label} leftSection={icon} active={active} onClick={onSelect} />
+      <NavLink
+        component={Link}
+        to={path}
+        aria-label={label}
+        leftSection={icon}
+        active={active}
+        onClick={onSelect}
+        onMouseEnter={prefetch}
+        onFocus={prefetch}
+      />
+    </Tooltip>
+  );
+}
+
+/**
+ * 页眉图标按钮（窄屏专用）：页眉在窄屏放不下「图标 + 文字」——文字会被裁掉只剩半个字，
+ * 反而看不出是哪个操作。这里只渲染图标，文字经悬停 / **触摸长按**（`events.touch` 让
+ * Tooltip 响应 touchstart）与 aria-label 可达，读屏与键盘名不缺。
+ */
+function HeaderIconAction({
+  label,
+  onClick,
+  disabled,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <Tooltip
+      label={label}
+      position="bottom"
+      openDelay={200}
+      // hover 必须显式保留：Tooltip 的 events 是整体替换而非深合并，只写 touch 会把悬停开提示一起关掉。
+      events={{ hover: true, focus: false, touch: true }}
+    >
+      <ActionIcon
+        size="md"
+        radius="md"
+        variant="subtle"
+        aria-label={label}
+        onClick={onClick}
+        disabled={disabled}
+      >
+        {children}
+      </ActionIcon>
     </Tooltip>
   );
 }
@@ -253,42 +321,62 @@ export function AppLayout() {
   const isItemVisible = (item: NavItem): boolean => !item.adminOnly || isAdmin;
 
   // 页眉面包屑：由当前路由推导，覆盖全部页面（导航页 / 详情页 / 搜索 / 开源协议）。
-  const crumbs: string[] = (() => {
+  // 非末级带上 to，渲染为可点击链接——此前一律是纯文本，用户从列表进详情后
+  // 既点不动面包屑、侧栏也没有回列表的入口，等于"进去就出不来"。
+  const crumbs: Crumb[] = (() => {
     const p = location.pathname;
-    // 仓库详情 / 仓库权限：概览 / 仓库 / <name> [/ 访问控制]
+    // 仓库详情 / 仓库权限：概览 / 仓库(可点) / <name> [/ 访问控制]
     if (p.startsWith("/repositories/")) {
       const rest = decodeURIComponent(p.slice("/repositories/".length));
       const segments = rest.split("/");
       const name = segments[0] ?? "";
       const sub = segments[1];
-      const items = [t("nav.sectionOverview"), t("nav.repositories"), name];
-      if (sub === "acl") items.push(t("acl.title", { defaultValue: "访问控制" }));
+      const items: Crumb[] = [
+        { label: t("nav.sectionOverview") },
+        { label: t("nav.repositories"), to: "/repositories" },
+        { label: name },
+      ];
+      if (sub === "acl") items.push({ label: t("acl.title", { defaultValue: "访问控制" }) });
       return items;
     }
-    // 迁移向导 / 迁移详情：管理 / 迁移 / <new|#id>
+    // 迁移向导 / 迁移详情：管理 / 迁移(可点) / <new|#id>
     if (p.startsWith("/migrations/")) {
       const rest = p.slice("/migrations/".length);
       const last = rest === "new" ? t("migrations.new", { defaultValue: "新建迁移" }) : `#${rest}`;
-      return [t("nav.sectionAdministration"), t("nav.migrations"), last];
+      return [
+        { label: t("nav.sectionAdministration") },
+        { label: t("nav.migrations"), to: "/migrations" },
+        { label: last },
+      ];
     }
     // 搜索（不在侧栏导航内）：制品搜索
     if (p === "/search" || p.startsWith("/search?") || p.startsWith("/search/")) {
-      return [t("search.title", { defaultValue: "制品搜索" })];
+      return [{ label: t("search.title", { defaultValue: "制品搜索" }) }];
     }
     // 开源协议（侧栏底部独立入口）：开源协议
     if (p.startsWith("/licenses")) {
-      return [t("nav.licenses", { defaultValue: "开源协议" })];
+      return [{ label: t("nav.licenses", { defaultValue: "开源协议" }) }];
     }
-    // 其余命中侧栏导航的页面：段标题 + 页面名
+    // 其余命中侧栏导航的页面：段标题 + 页面名(可点)
     for (const section of NAV_SECTIONS) {
       for (const item of section.items) {
         if (isNavActive(p, item.path)) {
-          return [t(section.titleKey), NAV_BREADCRUMB_OVERRIDES[item.path] ?? t(item.labelKey)];
+          return [
+            { label: t(section.titleKey) },
+            {
+              label: NAV_BREADCRUMB_OVERRIDES[item.path] ?? t(item.labelKey),
+              to: item.path,
+            },
+          ];
         }
       }
     }
     return [];
   })();
+
+  // 窄屏只保留末两级面包屑：手机整条会被 truncate 成「概…」，
+  // 保留「父级 + 当前页」既有定位感，又留出可点的返回入口。
+  const visibleCrumbs = isMobile && crumbs.length > 2 ? crumbs.slice(-2) : crumbs;
 
   // 按段过滤后仅保留含可见项的段。
   const visibleSections = NAV_SECTIONS.map((section) => ({
@@ -324,20 +412,31 @@ export function AppLayout() {
     if (!refreshing) return;
     let minElapsed = false;
     let idle = getNetworkActivityCount() === 0;
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      setRefreshing(false);
+    };
     const tryFinish = () => {
-      if (minElapsed && idle) setRefreshing(false);
+      if (minElapsed && idle) finish();
     };
     // 最短旋转 400ms：即便请求瞬间返回也有可感知的反馈，避免图标闪烁。
-    const timer = window.setTimeout(() => {
+    const minTimer = window.setTimeout(() => {
       minElapsed = true;
       tryFinish();
     }, 400);
+    // 最长 10s 兜底：全局网络计数会被**任何**在途请求占用（含其他组件的后台轮询），
+    // 只等计数归零时，一个挂起的慢请求就能把刷新按钮永久锁在禁用旋转态——
+    // 用户看到的就是"卡住了，连刷新都点不动"。
+    const maxTimer = window.setTimeout(finish, 10_000);
     const unsubscribe = subscribeNetworkActivity((count) => {
       idle = count === 0;
       tryFinish();
     });
     return () => {
-      window.clearTimeout(timer);
+      window.clearTimeout(minTimer);
+      window.clearTimeout(maxTimer);
       unsubscribe();
     };
   }, [refreshing]);
@@ -366,11 +465,30 @@ export function AppLayout() {
                 data-testid="app-breadcrumbs"
                 style={{ minWidth: 0, flex: 1, overflow: "hidden" }}
               >
-                {crumbs.map((crumb, index) => {
-                  const isLast = index === crumbs.length - 1;
+                {visibleCrumbs.map((crumb, index) => {
+                  const isLast = index === visibleCrumbs.length - 1;
+                  const key = `${crumb.label}-${index}`;
+                  // 非末级且有目标路由 → 可点击链接（回上级列表）；末级是当前页，保持纯文本。
+                  if (crumb.to && !isLast) {
+                    return (
+                      <Anchor
+                        key={key}
+                        component={Link}
+                        to={crumb.to}
+                        size="sm"
+                        c="dimmed"
+                        fw={500}
+                        underline="hover"
+                        truncate
+                        style={{ minWidth: 0 }}
+                      >
+                        {crumb.label}
+                      </Anchor>
+                    );
+                  }
                   return (
                     <Text
-                      key={`${crumb}-${index}`}
+                      key={key}
                       size="sm"
                       c={isLast ? undefined : "dimmed"}
                       fw={isLast ? 600 : 500}
@@ -378,7 +496,7 @@ export function AppLayout() {
                       truncate
                       style={isLast ? { flexShrink: 0 } : { minWidth: 0 }}
                     >
-                      {crumb}
+                      {crumb.label}
                     </Text>
                   );
                 })}
@@ -410,32 +528,53 @@ export function AppLayout() {
               style={{ maxWidth: 320, flex: 1 }}
             />
           </Group>
-          <Group gap="sm" wrap="nowrap" justify="flex-end" style={{ flex: 1, minWidth: 0 }}>
-            {/* 移动端搜索入口：页眉放不下完整输入框，用图标跳转搜索页 */}
-            <Tooltip label={t("search.placeholder", { defaultValue: "搜索制品..." })}>
-              <ActionIcon
+          {/* flexShrink: 0：页眉右侧按钮带文字后不该被压缩截断，让面包屑去占剩余空间
+              （面包屑已按窄屏 slice(-2) 收敛）。 */}
+          <Group
+            gap="xs"
+            wrap="nowrap"
+            justify="flex-end"
+            style={{ flex: 1, minWidth: 0, flexShrink: 0 }}
+          >
+            {/* 窄屏：搜索 / 刷新退化为纯图标（页眉放不下文字，硬塞会被裁成半个字），
+                文字经悬停或长按 Tooltip 可达；桌面仍按全站约定「图标 + 文字」。 */}
+            {isMobile ? (
+              <>
+                <HeaderIconAction
+                  label={t("common.search", { defaultValue: "搜索" })}
+                  onClick={() => navigate("/search")}
+                >
+                  <IconSearch size={16} />
+                </HeaderIconAction>
+                <HeaderIconAction
+                  label={t("common.refresh", { defaultValue: "刷新" })}
+                  onClick={handleRefresh}
+                  disabled={refreshing}
+                >
+                  <IconRefresh
+                    size={16}
+                    style={refreshing ? { animation: "ja-spin 0.9s linear infinite" } : undefined}
+                  />
+                </HeaderIconAction>
+              </>
+            ) : (
+              /* FR-59/FR-71: 刷新按钮——刷新期间禁用并旋转 */
+              <Button
+                size="compact-sm"
                 variant="subtle"
-                aria-label={t("search.placeholder", { defaultValue: "搜索制品..." })}
-                onClick={() => navigate("/search")}
-                hiddenFrom="sm"
-              >
-                <IconSearch size={18} />
-              </ActionIcon>
-            </Tooltip>
-            {/* FR-59/FR-71: 刷新按钮——刷新期间禁用并旋转 */}
-            <Tooltip label={t("common.refresh", { defaultValue: "刷新" })}>
-              <ActionIcon
-                variant="subtle"
+                leftSection={
+                  <IconRefresh
+                    size={16}
+                    style={refreshing ? { animation: "ja-spin 0.9s linear infinite" } : undefined}
+                  />
+                }
                 aria-label={t("common.refresh", { defaultValue: "刷新" })}
                 onClick={handleRefresh}
                 disabled={refreshing}
               >
-                <IconRefresh
-                  size={18}
-                  style={refreshing ? { animation: "ja-spin 0.9s linear infinite" } : undefined}
-                />
-              </ActionIcon>
-            </Tooltip>
+                {t("common.refresh", { defaultValue: "刷新" })}
+              </Button>
+            )}
             {user ? (
               <AccountMenu
                 user={user}
@@ -447,15 +586,15 @@ export function AppLayout() {
                 onLogout={handleLogout}
               />
             ) : isMobile ? (
-              <Tooltip label={t("auth.login", { defaultValue: "登录" })}>
-                <ActionIcon
-                  variant="light"
-                  aria-label={t("auth.login", { defaultValue: "登录" })}
-                  onClick={() => openLogin()}
-                >
-                  <IconLogin size={18} />
-                </ActionIcon>
-              </Tooltip>
+              <Button
+                size="compact-sm"
+                variant="light"
+                leftSection={<IconLogin size={16} />}
+                aria-label={t("auth.login", { defaultValue: "登录" })}
+                onClick={() => openLogin()}
+              >
+                {t("auth.login", { defaultValue: "登录" })}
+              </Button>
             ) : (
               <Button
                 variant="light"
@@ -500,7 +639,9 @@ export function AppLayout() {
         </Group>
 
         <ScrollArea style={{ flex: 1 }}>
-          {/* FR-55: 未登录 — 精简侧边栏 */}
+          {/* FR-55: 未登录 — 精简侧边栏。
+              补「全部仓库」固定入口：此前匿名侧栏只列公开仓库名，进入某个仓库详情后
+              没有任何路径回到列表（面包屑当时也不可点），等于"进去就出不来"。 */}
           {!isAuthenticated ? (
             <Box>
               {expanded && (
@@ -508,19 +649,39 @@ export function AppLayout() {
                   {t("nav.publicRepos", { defaultValue: "公开仓库" })}
                 </Text>
               )}
-              {publicRepos.map((repo) => (
-                <NavItemLink
-                  key={repo.name}
-                  label={repo.name}
-                  icon={<IconPackage size={18} />}
-                  expanded={expanded}
-                  active={isNavActive(location.pathname, `/repositories/${repo.name}`)}
-                  onSelect={() => {
-                    navigate(`/repositories/${repo.name}`);
-                    if (mobileOpened) closeMobile();
-                  }}
-                />
-              ))}
+              <NavItemLink
+                label={t("nav.allRepositories", { defaultValue: "全部仓库" })}
+                path="/repositories"
+                icon={<IconLayoutList size={18} />}
+                expanded={expanded}
+                active={location.pathname === "/repositories"}
+                onSelect={() => {
+                  navigate("/repositories");
+                  if (mobileOpened) closeMobile();
+                }}
+              />
+              {publicRepos.length === 0 ? (
+                expanded ? (
+                  <Text size="xs" c="dimmed" px="xs" py={4}>
+                    {t("nav.noPublicRepos", { defaultValue: "暂无公开仓库" })}
+                  </Text>
+                ) : null
+              ) : (
+                publicRepos.map((repo) => (
+                  <NavItemLink
+                    key={repo.name}
+                    label={repo.name}
+                    path={`/repositories/${repo.name}`}
+                    icon={<IconPackage size={18} />}
+                    expanded={expanded}
+                    active={isNavActive(location.pathname, `/repositories/${repo.name}`)}
+                    onSelect={() => {
+                      navigate(`/repositories/${repo.name}`);
+                      if (mobileOpened) closeMobile();
+                    }}
+                  />
+                ))
+              )}
             </Box>
           ) : (
             /* 已登录 — 完整导航 */
@@ -537,6 +698,7 @@ export function AppLayout() {
                   <NavItemLink
                     key={item.path}
                     label={t(item.labelKey)}
+                    path={item.path}
                     icon={item.icon}
                     expanded={expanded}
                     active={isNavActive(location.pathname, item.path)}
@@ -559,6 +721,7 @@ export function AppLayout() {
           >
             <NavItemLink
               label={t("nav.licenses")}
+              path="/licenses"
               icon={<IconLicense size={18} />}
               expanded={expanded}
               active={isNavActive(location.pathname, "/licenses")}
@@ -597,12 +760,22 @@ export function AppLayout() {
       </AppShell.Navbar>
 
       <AppShell.Main>
-        {/* 固定 max-width 居中内容容器：新内容出现不再撑变形整体布局。 */}
-        <Box data-testid="content-shell" style={{ width: "100%" }}>
+        {/* 内容容器：限定最大宽度并居中，超宽屏下不再把表格与卡片无节制拉长。
+            此前该容器只有注释声称「固定 max-width」，实际仅 width:100%，
+            导致 density.contentMaxWidth 长期空转、各页各自写 maw。 */}
+        <Box
+          data-testid="content-shell"
+          style={{ width: "100%", maxWidth: density.contentMaxWidth, marginInline: "auto" }}
+        >
           {/* FR-70：懒加载页面在布局内挂 Suspense，路由切换保持侧栏/页眉不闪。 */}
-          <Suspense fallback={<RouteFallback />}>
-            <Outlet />
-          </Suspense>
+          {/* 错误边界按路径强制重建：否则一次懒加载失败会把错误态带到后续所有页面。
+              没有它时，chunk 加载失败（发版后旧 chunk 404、网络抖动、dev 依赖重构建 504）
+              会让整棵树崩成白屏。 */}
+          <RouteErrorBoundary key={location.pathname}>
+            <Suspense fallback={<RouteFallback />}>
+              <Outlet />
+            </Suspense>
+          </RouteErrorBoundary>
         </Box>
       </AppShell.Main>
     </AppShell>
