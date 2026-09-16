@@ -188,6 +188,29 @@ describe("业务仪表盘（真实读模型）", () => {
     expect(screen.getByText("共 9 个仓库")).toBeTruthy();
   });
 
+  it("仓库状态明细限高滚动，超出可视行数时给出查看全部出口", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <>
+        <DashboardPage />
+        <LocationProbe />
+      </>,
+      { route: "/dashboard", authenticated: true },
+    );
+
+    // 限高：仓库再多（档位 ×16 可达上百个）也不会把左侧主区无限拉长。
+    const list = await screen.findByTestId("repo-status-list");
+    const maxHeight = Number.parseInt(list.style.maxHeight, 10);
+    expect(Number.isInteger(maxHeight)).toBe(true);
+    expect(maxHeight).toBeLessThanOrEqual(400);
+    // 明细仍是全量（区域内滚动即可看全），不是截断成前 N 个。
+    expect(within(list).getAllByRole("button")).toHaveLength(9);
+
+    // 页眉出口：去仓库列表看全量（种子 9 个 > 一屏可视行数）。
+    await user.click(screen.getByRole("button", { name: "查看全部仓库" }));
+    expect(screen.getByTestId("location-probe").textContent).toBe("/repositories");
+  });
+
   it("切换到 7 天范围时同步更新选择器文本", async () => {
     const user = userEvent.setup();
     renderWithProviders(<DashboardPage />, { route: "/dashboard", authenticated: true });

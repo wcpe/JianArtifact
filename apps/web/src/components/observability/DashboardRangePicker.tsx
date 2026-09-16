@@ -2,7 +2,7 @@
 // 预设：24 小时 / 三天 / 七天 / 三十天 / 半年 / 一年；也可自由选起止日期。
 import { Button, Group, Popover, Stack, Text } from "@mantine/core";
 import { DatePicker } from "@mantine/dates";
-import { IconCalendar, IconChevronDown } from "@tabler/icons-react";
+import { IconCalendar, IconCheck, IconChevronDown } from "@tabler/icons-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -157,7 +157,12 @@ export function DashboardRangePicker({
             numberOfColumns={2}
             size="xs"
           />
-          <Button size="xs" onClick={applyCustom} disabled={!custom[0] || !custom[1]}>
+          <Button
+            size="xs"
+            onClick={applyCustom}
+            disabled={!custom[0] || !custom[1]}
+            leftSection={<IconCheck size={14} />}
+          >
             {t("dashboard.rangeApply")}
           </Button>
         </Stack>

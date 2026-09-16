@@ -3,7 +3,6 @@
 // - 8 张 KPI 卡压缩为一条「指标带」（数值内联 + 悬停提示），首屏信息密度前置；
 // - 主区（8/12）：请求趋势主图 → 容量趋势 → 仓库状态；右栏（4/12）：需要处理 + 最近活跃贯穿全页。
 import {
-  ActionIcon,
   Alert,
   Badge,
   Button,
@@ -30,20 +29,21 @@ import {
   IconClipboardCheck,
   IconDatabase,
   IconDownload,
+  IconEye,
   IconHistory,
   IconPackage,
   IconRefresh,
 } from "@tabler/icons-react";
-import { useEffect, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
 import {
   getOperationsDashboard,
   getStatus,
+  listAllRepositories,
   listAuditAttentions,
   listAuditEvents,
-  listRepositories,
 } from "../../api/endpoints";
 import type {
   AuditAttention,
@@ -57,6 +57,7 @@ import { useAsync, useVisibleRefresh } from "../../hooks/useAsync";
 import { formatBytes, formatCount, formatStamp } from "../../lib/format";
 import { UPSTREAM_BLOCKED_CODE } from "../../lib/connectionStatus";
 import { density } from "../../theme/density";
+import { OpsKpiBand } from "../ops/OpsKit";
 import { TrendChart } from "./TrendChart";
 import { RepositoryStatusPanel } from "./RepositoryStatusPanel";
 import { DashboardRangePicker, type DashboardRange } from "./DashboardRangePicker";
@@ -111,17 +112,25 @@ export function DashboardLive() {
     { cacheKey: `dashboard:recent:${range.from}:${range.to}` },
   );
   // 仓库状态面板：全量仓库（含连接状态），供环形图与状态明细。
-  const repos = useAsync(() => listRepositories({ page_size: 50 }), [], {
+  // 必须拉全量（而不是写死 page_size）：面板上的「共 N 个仓库」与环形图分布都要与
+  // 仓库列表一致，档位放大后不能出现"面板说 50、列表说 144"。
+  const repos = useAsync(() => listAllRepositories(), [], {
     cacheKey: "dashboard:repos",
   });
 
-  const reloadAll = () => {
+  // 任一子请求在途即视为"忙"：慢接口下用它挡住轮询与手动刷新，避免请求在挂起期间累积。
+  const busy = dashboard.refreshing || status.refreshing || recent.refreshing;
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
+
+  const reloadAll = useCallback(() => {
+    if (busyRef.current) return;
     dashboard.reload();
     status.reload();
     attentions.reload();
     recent.reload();
     repos.reload();
-  };
+  }, [dashboard.reload, status.reload, attentions.reload, recent.reload, repos.reload]);
   useVisibleRefresh(reloadAll);
 
   useEffect(() => {
@@ -146,8 +155,6 @@ export function DashboardLive() {
   const alertList = (dashboard.data?.alerts ?? []) as OperationsAlert[];
   const otherAlerts = alertList.filter((alert) => alert.code !== UPSTREAM_BLOCKED_CODE);
 
-  const busy = dashboard.refreshing || status.refreshing || recent.refreshing;
-
   return (
     <Stack gap={density.gridSpacing}>
       {/* 顶栏：范围选择 + 状态徽章 + 快捷下拉 + 刷新 */}
@@ -161,19 +168,6 @@ export function DashboardLive() {
               {t("dashboard.lastUpdated", { time: lastUpdated.toLocaleTimeString("zh-CN") })}
             </Text>
           ) : null}
-          <Tooltip label={t("common.refresh")}>
-            <ActionIcon
-              variant="subtle"
-              aria-label={t("common.refresh")}
-              onClick={reloadAll}
-              disabled={busy}
-            >
-              <IconRefresh
-                size={16}
-                style={busy ? { animation: "ja-spin 0.9s linear infinite" } : undefined}
-              />
-            </ActionIcon>
-          </Tooltip>
         </Group>
       </Group>
 
@@ -181,7 +175,13 @@ export function DashboardLive() {
         <Alert color="red" title={t("dashboard.title")} icon={<IconAlertTriangle size={18} />}>
           <Stack gap="sm">
             <Text size="sm">{dashboard.error?.message ?? t("common.retryLater")}</Text>
-            <Button size="xs" variant="light" w="fit-content" onClick={dashboard.reload}>
+            <Button
+              size="xs"
+              variant="light"
+              w="fit-content"
+              onClick={dashboard.reload}
+              leftSection={<IconRefresh size={14} />}
+            >
               {t("common.retry")}
             </Button>
           </Stack>
@@ -280,37 +280,12 @@ function KpiBand({ data, blockedRepos }: { data: OperationsDashboard; blockedRep
     },
   ];
   return (
-    <Card
-      withBorder
-      radius="md"
-      padding="sm"
-      aria-label={t("dashboard.kpiStripLabel")}
-      component="section"
-    >
-      <SimpleGrid cols={{ base: 2, xs: 4, lg: 8 }} verticalSpacing="sm" spacing={0}>
-        {items.map((item) => (
-          <Tooltip key={item.label} label={item.hint} position="top" openDelay={300}>
-            <Stack gap={2} px="sm">
-              <Group gap={4} wrap="nowrap">
-                {item.icon}
-                <Text size="xs" c="dimmed" fw={600} lh={1.2} truncate>
-                  {item.label}
-                </Text>
-              </Group>
-              <Text
-                size="lg"
-                fw={700}
-                lh={1.2}
-                c={item.danger ? "red" : undefined}
-                style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
-              >
-                {item.value}
-              </Text>
-            </Stack>
-          </Tooltip>
-        ))}
-      </SimpleGrid>
-    </Card>
+    <OpsKpiBand
+      label={t("dashboard.kpiStripLabel")}
+      variant="strip"
+      cols={{ base: 2, xs: 4, lg: 8 }}
+      items={items}
+    />
   );
 }
 
@@ -549,6 +524,7 @@ function AttentionPanel({
             size="xs"
             onClick={() => onOpen("")}
             aria-label={t("dashboard.attentionViewAll")}
+            leftSection={<IconEye size={14} />}
           >
             {t("dashboard.attentionViewAll", { count: actionable.length })}
           </Button>
@@ -685,6 +661,7 @@ function RecentActivity({
             size="xs"
             onClick={onOpen}
             aria-label={t("dashboard.recentViewAll")}
+            leftSection={<IconEye size={14} />}
           >
             {t("dashboard.recentViewAll")}
           </Button>

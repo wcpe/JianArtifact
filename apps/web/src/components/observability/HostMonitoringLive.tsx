@@ -22,10 +22,11 @@ import {
   IconAlertTriangle,
   IconCircleCheck,
   IconCpu,
+  IconRefresh,
   IconServer,
   IconStack2,
 } from "@tabler/icons-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { getHostMonitoring } from "../../api/endpoints";
@@ -290,7 +291,14 @@ export function HostMonitoringLive() {
     [range],
     { cacheKey: `host-monitoring:${range}` },
   );
-  useVisibleRefresh(state.reload);
+  // 慢接口保护：上一轮采样还没落地时跳过本轮轮询，避免请求在挂起期间累积成雪崩。
+  const refreshingRef = useRef(state.refreshing);
+  refreshingRef.current = state.refreshing;
+  const pollRefresh = useCallback(() => {
+    if (refreshingRef.current) return;
+    state.reload();
+  }, [state.reload]);
+  useVisibleRefresh(pollRefresh);
 
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   useEffect(() => {
@@ -308,7 +316,13 @@ export function HostMonitoringLive() {
       >
         <Stack gap="sm">
           <Text size="sm">{state.error.message}</Text>
-          <Button size="xs" variant="light" w="fit-content" onClick={state.reload}>
+          <Button
+            size="xs"
+            variant="light"
+            w="fit-content"
+            onClick={state.reload}
+            leftSection={<IconRefresh size={14} />}
+          >
             {t("common.retry", { defaultValue: "重试" })}
           </Button>
         </Stack>
@@ -422,7 +436,14 @@ export function HostMonitoringLive() {
             <Text size="sm">
               {t("hostMonitoring.refreshFailedDescription")} {state.refreshError.message}
             </Text>
-            <Button size="xs" variant="light" color="yellow" w="fit-content" onClick={state.reload}>
+            <Button
+              size="xs"
+              variant="light"
+              color="yellow"
+              w="fit-content"
+              onClick={state.reload}
+              leftSection={<IconRefresh size={14} />}
+            >
               {t("common.retry", { defaultValue: "重试" })}
             </Button>
           </Stack>

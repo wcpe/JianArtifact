@@ -26,7 +26,7 @@ import {
   VisuallyHidden,
   useComputedColorScheme,
 } from "@mantine/core";
-import { useCallback, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type {
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
@@ -34,6 +34,7 @@ import type {
 } from "react";
 import { useTranslation } from "react-i18next";
 
+import { downsampleIndexes, pickByIndexes } from "../../lib/downsample";
 import { formatBytes, formatCount } from "../../lib/format";
 import type { PreviewTrendPoint } from "../../mocks/observabilityPreview";
 
@@ -61,6 +62,13 @@ interface TrendChartProps {
 }
 
 const CHART_HEIGHT = 200;
+
+/**
+ * 悬停读数节流阈值：点数超过该值才把 pointermove 按帧合并。
+ * 小序列逐事件处理即可（recharts 重算成本与点数成正比），保持既有同步行为；
+ * 只有大序列才需要节流，否则"移动鼠标就卡"。
+ */
+const HOVER_THROTTLE_THRESHOLD = 60;
 
 /** 主/次系列在 data 行中的字段名（必须彼此不同且不与 label 冲突）。 */
 const PRIMARY_KEY = "__primary__";
@@ -237,33 +245,61 @@ export function TrendChart({
   const [keyboardAnchor, setKeyboardAnchor] = useState<number | null>(null);
   // drag 的同步镜像：mouse 事件可能同一宏任务连续派发（闭包陈旧），ref 保证读到最新值。
   const dragRef = useRef<{ anchor: number; end: number } | null>(null);
+  /** 悬停读数的 rAF 句柄：把同一帧内的多次 pointermove 合并成一次 setState。 */
+  const hoverFrameRef = useRef<number | null>(null);
   const gradientId = useId();
   // useId 返回值含 ":"，不宜直接当查询用 id，这里去掉冒号。
   const keyboardHintId = `${gradientId.replace(/:/g, "")}-keyboard`;
 
+  // 卸载时撤销未执行的悬停帧，避免对已卸载组件 setState。
+  useEffect(
+    () => () => {
+      if (hoverFrameRef.current !== null) window.cancelAnimationFrame(hoverFrameRef.current);
+    },
+    [],
+  );
+
   const hasSecondary = Boolean(secondary && secondaryLabel);
   const hasTertiary = Boolean(tertiary && tertiaryLabel);
 
-  /** 聚焦切片在原始序列中的起始索引；未聚焦时为 0。 */
+  // 渲染护栏：三条序列先按**同一组索引**降采样，再做聚焦切片。
+  // 顺序不可颠倒——聚焦区间与拖选索引都以"当前序列"为基准，先降采样才能保持索引自洽。
+  // 点数不超限时原样透传（零开销），超限时把主线程成本封顶，与后端采样粒度解耦。
+  const series = useMemo(() => {
+    const indexes = downsampleIndexes(primary.length);
+    if (indexes.length === primary.length) {
+      return { primary, secondary, tertiary };
+    }
+    return {
+      primary: pickByIndexes(primary, indexes) ?? [],
+      secondary: pickByIndexes(secondary, indexes),
+      tertiary: pickByIndexes(tertiary, indexes),
+    };
+  }, [primary, secondary, tertiary]);
+
+  /** 聚焦切片在渲染序列中的起始索引；未聚焦时为 0。 */
   const viewOffset = useMemo(() => {
-    if (!focus || primary.length === 0) return 0;
+    if (!focus || series.primary.length === 0) return 0;
     const lo = Math.min(focus.start, focus.end);
-    return Math.max(0, Math.min(lo, primary.length - 1));
-  }, [focus, primary.length]);
+    return Math.max(0, Math.min(lo, series.primary.length - 1));
+  }, [focus, series.primary.length]);
 
   // 聚焦提交后把主/次/第三系列同步切片（索引对齐保持不变）。
   const view = useMemo(() => {
-    if (!focus || primary.length === 0) {
-      return { primary, secondary, tertiary };
+    if (!focus || series.primary.length === 0) {
+      return series;
     }
     const start = viewOffset;
-    const end = Math.max(start, Math.min(Math.max(focus.start, focus.end), primary.length - 1));
+    const end = Math.max(
+      start,
+      Math.min(Math.max(focus.start, focus.end), series.primary.length - 1),
+    );
     return {
-      primary: primary.slice(start, end + 1),
-      secondary: secondary?.slice(start, end + 1),
-      tertiary: tertiary?.slice(start, end + 1),
+      primary: series.primary.slice(start, end + 1),
+      secondary: series.secondary?.slice(start, end + 1),
+      tertiary: series.tertiary?.slice(start, end + 1),
     };
-  }, [focus, primary, secondary, tertiary, viewOffset]);
+  }, [focus, series, viewOffset]);
 
   const stats = useMemo(() => computeStats(view.primary, unit), [view.primary, unit]);
 
@@ -296,6 +332,8 @@ export function TrendChart({
   const empty = view.primary.length === 0;
   const viewLength = view.primary.length;
   const canFocus = viewLength > 1;
+  /** 仅大序列启用悬停节流；小序列保持逐事件同步响应。 */
+  const throttleHover = viewLength > HOVER_THROTTLE_THRESHOLD;
   /** 合法下标上界：clientX → 索引换算的乘数（单点时为 0，任何位置都落在唯一点上）。 */
   const maxIndex = Math.max(0, viewLength - 1);
   /** 百分比换算的除数：单点时退化为 1，仅用于高亮宽度，避免除零。 */
@@ -474,10 +512,20 @@ export function TrendChart({
               setDrag(next);
               return;
             }
+            // 大序列才按帧合并悬停读数：指针事件频率远高于渲染帧，逐事件 setState 会让
+            // recharts 每帧重算整条 path——这是大序列下"移动鼠标就卡"的直接来源。
             const rect = event.currentTarget.getBoundingClientRect();
             const ratio = Math.min(Math.max((event.clientX - rect.left) / rect.width, 0), 1);
             const index = Math.round(ratio * maxIndex);
-            setHoverIndex((currentIndex) => (currentIndex === index ? currentIndex : index));
+            if (!throttleHover) {
+              setHoverIndex((currentIndex) => (currentIndex === index ? currentIndex : index));
+              return;
+            }
+            if (hoverFrameRef.current !== null) return;
+            hoverFrameRef.current = window.requestAnimationFrame(() => {
+              hoverFrameRef.current = null;
+              setHoverIndex((currentIndex) => (currentIndex === index ? currentIndex : index));
+            });
           }}
           onMouseUp={() => commitDrag()}
           onMouseLeave={() => {
@@ -486,11 +534,17 @@ export function TrendChart({
               commitDrag();
               return;
             }
+            if (hoverFrameRef.current !== null) {
+              window.cancelAnimationFrame(hoverFrameRef.current);
+              hoverFrameRef.current = null;
+            }
             setHoverIndex(null);
           }}
           onDoubleClick={clearAll}
         >
-          <ResponsiveContainer width="100%" height={CHART_HEIGHT}>
+          {/* debounce 合并 ResizeObserver 抖动：容器高度由 flex 决定时，
+              连续 resize 会让 recharts 反复重建 svg（与固定视口布局叠加时尤其明显）。 */}
+          <ResponsiveContainer width="100%" height={CHART_HEIGHT} debounce={120}>
             <AreaChart
               data={data}
               margin={{ top: 10, right: hasTertiary ? 12 : 8, bottom: 0, left: 0 }}
