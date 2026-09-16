@@ -1,7 +1,7 @@
 // 从 URL 导入卡（FR-137）：分区卡右上「从 URL 导入」按钮 → Modal 表单；
 // 卡体为导入记录表。提交成功后关闭并刷新记录列表，存在非终态记录时按 1500ms 轮询。
 import { Button, Group, Modal, Stack, Switch, TextInput } from "@mantine/core";
-import { IconWorldDownload } from "@tabler/icons-react";
+import { IconPlayerPlay, IconWorldDownload } from "@tabler/icons-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -125,7 +125,9 @@ export function ImportFromUrlCard() {
             <Button variant="default" onClick={() => setOpened(false)}>
               {t("common.cancel")}
             </Button>
-            <Button onClick={() => void onImport()}>{t("backups.importSubmit")}</Button>
+            <Button onClick={() => void onImport()} leftSection={<IconPlayerPlay size={16} />}>
+              {t("backups.importSubmit")}
+            </Button>
           </Group>
         </Stack>
       </Modal>

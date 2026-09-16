@@ -17,7 +17,7 @@ import {
   Title,
 } from "@mantine/core";
 import { useForm } from "@mantine/form";
-import { IconArrowRight, IconCircleCheck, IconInfoCircle } from "@tabler/icons-react";
+import { IconArrowRight, IconCheck, IconCircleCheck, IconInfoCircle } from "@tabler/icons-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Navigate, useNavigate } from "react-router-dom";
@@ -205,7 +205,11 @@ export function SetupPage() {
                     <Button variant="default" onClick={() => setActive(0)}>
                       {t("setup.back")}
                     </Button>
-                    <Button type="submit" loading={submitting}>
+                    <Button
+                      type="submit"
+                      loading={submitting}
+                      leftSection={<IconCheck size={16} />}
+                    >
                       {t("setup.submit")}
                     </Button>
                   </Group>

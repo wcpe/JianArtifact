@@ -3,7 +3,7 @@
 // 支持取消（abort，二次确认）与续传（uploadId 持久化到 localStorage；重开页面时 GET 拉回 uploadedChunks，只补缺失片）。
 // 与从 URL 导入卡平级：本卡只负责上传进度，complete 后派发全局刷新让导入记录列表呈现 pending_restart。
 import { Alert, Box, Button, Group, Progress, Stack, Text } from "@mantine/core";
-import { IconUpload } from "@tabler/icons-react";
+import { IconArrowRight, IconPlayerStop, IconUpload } from "@tabler/icons-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -310,10 +310,20 @@ export function BackupUploadCard() {
                 {t("backups.uploadResumableHint", { fileName: resumable.fileName })}
               </Text>
               <Group gap="xs">
-                <Button size="xs" onClick={() => fileInputRef.current?.click()}>
+                <Button
+                  size="xs"
+                  onClick={() => fileInputRef.current?.click()}
+                  leftSection={<IconArrowRight size={14} />}
+                >
                   {t("backups.uploadResume")}
                 </Button>
-                <Button size="xs" variant="default" color="red" onClick={onDiscard}>
+                <Button
+                  size="xs"
+                  variant="default"
+                  color="red"
+                  onClick={onDiscard}
+                  leftSection={<IconPlayerStop size={14} />}
+                >
                   {t("backups.uploadDiscard")}
                 </Button>
               </Group>

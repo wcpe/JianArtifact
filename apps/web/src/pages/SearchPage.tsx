@@ -2,8 +2,8 @@
 // 支持高级表达式（-排除词 / repo: / format: / ext: / 引号短语），配筛选面板双向同步；
 // 结果按仓库聚合（facet 钻取条）+ Everything 风格扁平表格（名称/仓库/路径/大小/时间）。
 import {
-  ActionIcon,
   Badge,
+  Box,
   Button,
   Checkbox,
   Chip,
@@ -13,14 +13,12 @@ import {
   Pagination,
   Paper,
   Popover,
-  ScrollArea,
   Select,
   SimpleGrid,
   Stack,
   Table,
   Text,
   TextInput,
-  Tooltip,
 } from "@mantine/core";
 import {
   IconChevronDown,
@@ -32,11 +30,13 @@ import {
   IconSearch,
   IconSelector,
 } from "@tabler/icons-react";
-import { ErrorState, ForbiddenState, LoadingState } from "@jianartifact/ui";
+import { ErrorState, ForbiddenState } from "@jianartifact/ui";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
+import { PageShell } from "../app/PageShell";
+import { ContentSkeleton } from "../components/AsyncBoundary";
 import { searchAssets } from "../api/endpoints";
 import { useAsync } from "../hooks/useAsync";
 import { assetDownloadUrl, formatBytes } from "../lib/assetTree";
@@ -156,160 +156,177 @@ export function SearchPage() {
   const items = state.data?.items ?? [];
 
   return (
-    <>
-      <Stack gap="md">
-        <Group gap="xs" wrap="nowrap" align="flex-start">
-          <TextInput
-            placeholder={t("search.placeholder", { defaultValue: "搜索制品..." })}
-            leftSection={<IconSearch size={16} />}
-            rightSection={
-              <Popover width={340} position="bottom-end" shadow="md">
-                <Popover.Target>
-                  <ActionIcon
-                    variant="subtle"
-                    color="gray"
-                    aria-label={t("search.syntaxHelp", { defaultValue: "语法帮助" })}
-                  >
-                    <IconHelp size={16} />
-                  </ActionIcon>
-                </Popover.Target>
-                <Popover.Dropdown>
-                  <Stack gap={6}>
-                    <Text size="sm" fw={600}>
-                      {t("search.syntaxHelp", { defaultValue: "语法帮助" })}
-                    </Text>
-                    {SYNTAX_ROWS.map(([example, key, fallback]) => (
-                      <Group key={example} gap={8} wrap="nowrap" align="flex-start">
-                        <Code style={{ flexShrink: 0 }}>{example}</Code>
-                        <Text size="xs" c="dimmed">
-                          {t(key, { defaultValue: fallback })}
-                        </Text>
-                      </Group>
-                    ))}
-                  </Stack>
-                </Popover.Dropdown>
-              </Popover>
-            }
-            value={input}
-            onChange={(e) => setInput(e.currentTarget.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
-            style={{ flex: 1, maxWidth: 560 }}
-          />
-          <Button
-            variant={filtersOpen ? "filled" : "light"}
-            leftSection={<IconFilter size={14} />}
-            rightSection={filtersOpen ? <IconChevronUp size={14} /> : <IconChevronDown size={14} />}
-            onClick={() => setFiltersOpen((o) => !o)}
-          >
-            {t("search.filters", { defaultValue: "筛选" })}
-          </Button>
-          <Button onClick={handleSubmit}>{t("common.search", { defaultValue: "搜索" })}</Button>
-        </Group>
-
-        <Collapse in={filtersOpen}>
-          <Paper withBorder radius="md" p="sm">
-            <SimpleGrid cols={{ base: 1, sm: 2, lg: 3 }} spacing="sm">
-              <Select
-                label={t("search.filterFormat", { defaultValue: "仓库格式" })}
-                placeholder={t("search.filterFormatAll", { defaultValue: "全部格式" })}
-                data={FORMAT_OPTIONS}
-                value={expr.formats[0] ?? null}
-                onChange={(v) => updateExpr({ formats: v ? [v] : [] })}
-                clearable
-                size="xs"
-              />
-              <TextInput
-                label={t("search.filterRepo", { defaultValue: "限定仓库" })}
-                placeholder={t("search.filterCsvHint", { defaultValue: "多个用逗号分隔" })}
-                value={expr.repos.join(", ")}
-                onChange={(e) => updateExpr({ repos: splitCsv(e.currentTarget.value) })}
-                size="xs"
-              />
-              <TextInput
-                label={t("search.filterNotRepo", { defaultValue: "排除仓库" })}
-                placeholder={t("search.filterCsvHint", { defaultValue: "多个用逗号分隔" })}
-                value={expr.notRepos.join(", ")}
-                onChange={(e) => updateExpr({ notRepos: splitCsv(e.currentTarget.value) })}
-                size="xs"
-              />
-              <TextInput
-                label={t("search.filterExcludeTerms", { defaultValue: "排除关键词" })}
-                placeholder={t("search.filterCsvHint", { defaultValue: "多个用逗号分隔" })}
-                value={expr.excludeTerms.join(", ")}
-                onChange={(e) => updateExpr({ excludeTerms: splitCsv(e.currentTarget.value) })}
-                size="xs"
-              />
-              <TextInput
-                label={t("search.filterIncludeExt", { defaultValue: "包含扩展名" })}
-                placeholder={t("search.filterExtHint", { defaultValue: "如 jar,pom" })}
-                value={expr.exts.join(", ")}
-                onChange={(e) => updateExpr({ exts: splitCsv(e.currentTarget.value) })}
-                size="xs"
-              />
-              <TextInput
-                label={t("search.filterExcludeExt", { defaultValue: "排除扩展名" })}
-                placeholder={t("search.filterExtHint", { defaultValue: "如 sha1,md5" })}
-                value={expr.notExts.join(", ")}
-                onChange={(e) => updateExpr({ notExts: splitCsv(e.currentTarget.value) })}
-                size="xs"
-              />
-            </SimpleGrid>
-            <Checkbox
-              mt="sm"
-              size="xs"
-              label={t("search.hideChecksums", {
-                defaultValue: "隐藏校验和 / 签名文件（sha1、md5、sha256、sha512、asc）",
-              })}
-              checked={checksumsHidden}
-              onChange={(e) => toggleChecksums(e.currentTarget.checked)}
+    // 列表页统一范式：整页固定在视口内，结果区在容器内滚动（纵向）+ 表头吸顶；
+    // 表格横向溢出由同一容器承担，不再嵌套 ScrollArea（嵌套会让 sticky 表头失效）。
+    <PageShell>
+      <Box style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+        <Stack gap="md">
+          {/* wrap：窄屏把按钮换到第二行，否则输入框会被挤到只剩几十像素宽没法输入。
+              输入框给 minWidth 200 保底，放不下时让按钮先换行而不是压缩输入框。 */}
+          <Group gap="xs" wrap="wrap" align="flex-start">
+            <TextInput
+              placeholder={t("search.placeholder", { defaultValue: "搜索制品..." })}
+              leftSection={<IconSearch size={16} />}
+              value={input}
+              onChange={(e) => setInput(e.currentTarget.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
+              style={{ flex: 1, minWidth: 200, maxWidth: 560 }}
             />
-          </Paper>
-        </Collapse>
+            {/* 语法帮助从输入框右侧的裸图标移出为「图标 + 文字」按钮：右槽里塞不下文字，
+                而裸图标（问号）看不出点开是语法说明还是别的帮助。 */}
+            <Popover width={340} position="bottom-end" shadow="md">
+              <Popover.Target>
+                <Button
+                  variant="light"
+                  leftSection={<IconHelp size={14} />}
+                  aria-label={t("search.syntaxHelp", { defaultValue: "语法帮助" })}
+                >
+                  {t("search.syntaxHelp", { defaultValue: "语法帮助" })}
+                </Button>
+              </Popover.Target>
+              <Popover.Dropdown>
+                <Stack gap={6}>
+                  <Text size="sm" fw={600}>
+                    {t("search.syntaxHelp", { defaultValue: "语法帮助" })}
+                  </Text>
+                  {SYNTAX_ROWS.map(([example, key, fallback]) => (
+                    <Group key={example} gap={8} wrap="nowrap" align="flex-start">
+                      <Code style={{ flexShrink: 0 }}>{example}</Code>
+                      <Text size="xs" c="dimmed">
+                        {t(key, { defaultValue: fallback })}
+                      </Text>
+                    </Group>
+                  ))}
+                </Stack>
+              </Popover.Dropdown>
+            </Popover>
+            <Button
+              variant={filtersOpen ? "filled" : "light"}
+              leftSection={<IconFilter size={14} />}
+              rightSection={
+                filtersOpen ? <IconChevronUp size={14} /> : <IconChevronDown size={14} />
+              }
+              onClick={() => setFiltersOpen((o) => !o)}
+            >
+              {t("search.filters", { defaultValue: "筛选" })}
+            </Button>
+            <Button onClick={handleSubmit} leftSection={<IconSearch size={16} />}>
+              {t("common.search", { defaultValue: "搜索" })}
+            </Button>
+          </Group>
 
-        {q && state.forbidden && <ForbiddenState message={t("common.forbidden")} />}
-        {q && state.error && !state.forbidden && (
-          <ErrorState
-            message={t("common.error")}
-            description={state.error.message}
-            onRetry={state.reload}
-            retryLabel={t("common.retry")}
-          />
-        )}
-        {q && state.data === null && !state.error && !state.forbidden && (
-          <LoadingState message={t("common.loading")} />
-        )}
+          <Collapse in={filtersOpen}>
+            <Paper withBorder radius="md" p="sm">
+              <SimpleGrid cols={{ base: 1, sm: 2, lg: 3 }} spacing="sm">
+                <Select
+                  label={t("search.filterFormat", { defaultValue: "仓库格式" })}
+                  placeholder={t("search.filterFormatAll", { defaultValue: "全部格式" })}
+                  data={FORMAT_OPTIONS}
+                  value={expr.formats[0] ?? null}
+                  onChange={(v) => updateExpr({ formats: v ? [v] : [] })}
+                  clearable
+                  size="xs"
+                />
+                <TextInput
+                  label={t("search.filterRepo", { defaultValue: "限定仓库" })}
+                  placeholder={t("search.filterCsvHint", { defaultValue: "多个用逗号分隔" })}
+                  value={expr.repos.join(", ")}
+                  onChange={(e) => updateExpr({ repos: splitCsv(e.currentTarget.value) })}
+                  size="xs"
+                />
+                <TextInput
+                  label={t("search.filterNotRepo", { defaultValue: "排除仓库" })}
+                  placeholder={t("search.filterCsvHint", { defaultValue: "多个用逗号分隔" })}
+                  value={expr.notRepos.join(", ")}
+                  onChange={(e) => updateExpr({ notRepos: splitCsv(e.currentTarget.value) })}
+                  size="xs"
+                />
+                <TextInput
+                  label={t("search.filterExcludeTerms", { defaultValue: "排除关键词" })}
+                  placeholder={t("search.filterCsvHint", { defaultValue: "多个用逗号分隔" })}
+                  value={expr.excludeTerms.join(", ")}
+                  onChange={(e) => updateExpr({ excludeTerms: splitCsv(e.currentTarget.value) })}
+                  size="xs"
+                />
+                <TextInput
+                  label={t("search.filterIncludeExt", { defaultValue: "包含扩展名" })}
+                  placeholder={t("search.filterExtHint", { defaultValue: "如 jar,pom" })}
+                  value={expr.exts.join(", ")}
+                  onChange={(e) => updateExpr({ exts: splitCsv(e.currentTarget.value) })}
+                  size="xs"
+                />
+                <TextInput
+                  label={t("search.filterExcludeExt", { defaultValue: "排除扩展名" })}
+                  placeholder={t("search.filterExtHint", { defaultValue: "如 sha1,md5" })}
+                  value={expr.notExts.join(", ")}
+                  onChange={(e) => updateExpr({ notExts: splitCsv(e.currentTarget.value) })}
+                  size="xs"
+                />
+              </SimpleGrid>
+              <Checkbox
+                mt="sm"
+                size="xs"
+                label={t("search.hideChecksums", {
+                  defaultValue: "隐藏校验和 / 签名文件（sha1、md5、sha256、sha512、asc）",
+                })}
+                checked={checksumsHidden}
+                onChange={(e) => toggleChecksums(e.currentTarget.checked)}
+              />
+            </Paper>
+          </Collapse>
 
-        {/* 仓库聚合钻取条：全部 + 各仓库命中数（点击限定 / 还原） */}
-        {q && facets.length > 0 && (
-          <Group gap={8}>
-            <Chip checked={!activeRepo} onChange={() => drillRepo(null)} size="xs" variant="light">
-              {t("search.facetAll", { defaultValue: "全部" })} {facetTotal.toLocaleString()}
-            </Chip>
-            {facets.map((f) => (
+          {q && state.forbidden && <ForbiddenState message={t("common.forbidden")} />}
+          {q && state.error && !state.forbidden && (
+            <ErrorState
+              message={t("common.error")}
+              description={state.error.message}
+              onRetry={state.reload}
+              retryLabel={t("common.retry")}
+            />
+          )}
+          {q && state.data === null && !state.error && !state.forbidden && <ContentSkeleton />}
+
+          {/* 仓库聚合钻取条：全部 + 各仓库命中数（点击限定 / 还原） */}
+          {q && facets.length > 0 && (
+            <Group gap={8}>
               <Chip
-                key={f.repository}
-                checked={activeRepo === f.repository}
-                onChange={() => drillRepo(activeRepo === f.repository ? null : f.repository)}
+                checked={!activeRepo}
+                onChange={() => drillRepo(null)}
                 size="xs"
                 variant="light"
               >
-                {f.repository} {f.count.toLocaleString()}
+                {t("search.facetAll", { defaultValue: "全部" })} {facetTotal.toLocaleString()}
               </Chip>
-            ))}
-          </Group>
-        )}
+              {facets.map((f) => (
+                <Chip
+                  key={f.repository}
+                  checked={activeRepo === f.repository}
+                  onChange={() => drillRepo(activeRepo === f.repository ? null : f.repository)}
+                  size="xs"
+                  variant="light"
+                >
+                  {f.repository} {f.count.toLocaleString()}
+                </Chip>
+              ))}
+            </Group>
+          )}
 
-        {q && state.data && items.length > 0 && (
-          <>
-            <Text size="sm" c="dimmed">
-              {t("search.resultCount", {
-                count: state.data.total,
-                defaultValue: `共 ${state.data.total} 条结果`,
-              })}
-            </Text>
-            <Paper withBorder radius="md">
-              <ScrollArea>
-                <Table highlightOnHover verticalSpacing={4} horizontalSpacing="sm" fz="xs">
+          {q && state.data && items.length > 0 && (
+            <>
+              <Text size="sm" c="dimmed">
+                {t("search.resultCount", {
+                  count: state.data.total,
+                  defaultValue: `共 ${state.data.total} 条结果`,
+                })}
+              </Text>
+              <Paper withBorder radius="md">
+                <Table
+                  highlightOnHover
+                  verticalSpacing={4}
+                  horizontalSpacing="sm"
+                  fz="xs"
+                  stickyHeader
+                >
                   <Table.Thead>
                     <Table.Tr>
                       <Table.Th
@@ -400,39 +417,38 @@ export function SearchPage() {
                             </Text>
                           </Table.Td>
                           <Table.Td onClick={(e) => e.stopPropagation()}>
-                            <Tooltip label={t("repoDetail.download", { defaultValue: "下载" })}>
-                              <ActionIcon
-                                component="a"
-                                href={assetDownloadUrl(item.repository, "", item.path)}
-                                target="_blank"
-                                rel="noreferrer"
-                                variant="subtle"
-                                color="gray"
-                                size="sm"
-                              >
-                                <IconDownload size={14} />
-                              </ActionIcon>
-                            </Tooltip>
+                            <Button
+                              component="a"
+                              href={assetDownloadUrl(item.repository, "", item.path)}
+                              target="_blank"
+                              rel="noreferrer"
+                              size="compact-xs"
+                              variant="subtle"
+                              leftSection={<IconDownload size={14} />}
+                              aria-label={t("repoDetail.download", { defaultValue: "下载" })}
+                            >
+                              {t("repoDetail.download", { defaultValue: "下载" })}
+                            </Button>
                           </Table.Td>
                         </Table.Tr>
                       );
                     })}
                   </Table.Tbody>
                 </Table>
-              </ScrollArea>
-            </Paper>
-            {totalPages > 1 && (
-              <Group justify="center">
-                <Pagination value={page} onChange={setPage} total={totalPages} />
-              </Group>
-            )}
-          </>
-        )}
+              </Paper>
+              {totalPages > 1 && (
+                <Group justify="center">
+                  <Pagination value={page} onChange={setPage} total={totalPages} />
+                </Group>
+              )}
+            </>
+          )}
 
-        {q && state.data && items.length === 0 && !state.loading && (
-          <Text c="dimmed">{t("search.noResults", { defaultValue: "未找到匹配的制品" })}</Text>
-        )}
-      </Stack>
-    </>
+          {q && state.data && items.length === 0 && !state.loading && (
+            <Text c="dimmed">{t("search.noResults", { defaultValue: "未找到匹配的制品" })}</Text>
+          )}
+        </Stack>
+      </Box>
+    </PageShell>
   );
 }

@@ -14,17 +14,12 @@ import {
   ThemeIcon,
   Title,
 } from "@mantine/core";
-import { ErrorState, LoadingState } from "@jianartifact/ui";
-import {
-  IconAlertTriangle,
-  IconPlayerPlay,
-  IconPlayerStop,
-  IconRefresh,
-  IconRocket,
-} from "@tabler/icons-react";
+import { ErrorState } from "@jianartifact/ui";
+import { IconAlertTriangle, IconPlayerPlay, IconPlayerStop, IconRocket } from "@tabler/icons-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useParams } from "react-router-dom";
+import { ContentSkeleton } from "../components/AsyncBoundary";
 
 import {
   cancelMigration,
@@ -211,7 +206,8 @@ export function MigrationDetailPage() {
   }
 
   if (!task) {
-    return <LoadingState message={t("common.loading")} />;
+    // 与列表页口径一致：首载用结构化骨架，而不是居中转圈（慢接口下会显得页面是空的）。
+    return <ContentSkeleton rows={5} />;
   }
 
   const act = (fn: () => Promise<unknown>, okMsg: string) => {
@@ -227,15 +223,8 @@ export function MigrationDetailPage() {
 
   return (
     <Stack gap="md">
+      {/* 刷新统一由页眉承担：详情页的数据都订阅了全局刷新事件，页内不再重复放按钮。 */}
       <Group justify="flex-end" gap="xs">
-        <Button
-          variant="default"
-          leftSection={<IconRefresh size={16} />}
-          onClick={reload}
-          disabled={busy}
-        >
-          {t("common.retry")}
-        </Button>
         <Button component={Link} to="/migrations" variant="default">
           {t("migrations.backList")}
         </Button>

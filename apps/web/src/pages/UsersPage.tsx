@@ -1,7 +1,7 @@
 // 用户管理：列表 + 新建 / 改角色状态 / 重置口令 / 删除。
 import {
-  ActionIcon,
   Badge,
+  Box,
   Button,
   Group,
   Modal,
@@ -17,13 +17,24 @@ import {
   Tooltip,
 } from "@mantine/core";
 import { useForm } from "@mantine/form";
-import { useDisclosure } from "@mantine/hooks";
-import { IconAdjustments, IconKey, IconTrash } from "@tabler/icons-react";
+import { useDisclosure, useMediaQuery } from "@mantine/hooks";
+import {
+  IconAdjustments,
+  IconKey,
+  IconLock,
+  IconPlus,
+  IconTrash,
+  IconUserOff,
+  IconUserShield,
+  IconUsers,
+} from "@tabler/icons-react";
 import { EmptyState } from "@jianartifact/ui";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { PageShell } from "../app/PageShell";
 import { AsyncBoundary } from "../components/AsyncBoundary";
+import { OpsHelpButton, OpsKpiBand } from "../components/ops/OpsKit";
 import {
   changePassword,
   createUser,
@@ -46,6 +57,18 @@ export function UsersPage() {
   const { t } = useTranslation();
   const state = useAsync(() => listUsers({ page_size: 100 }), [], { cacheKey: "users:list" });
 
+  // 顶部概览带口径：直接由当前列表派生，保证与表格同源；数据未就绪时显示「—」而不是假 0。
+  // 内置匿名主体不计入「管理员 / 禁止网页登录」，它是授权占位而不是可管理的账号。
+  const rows = state.data?.items ?? [];
+  const ready = state.data !== null;
+  const adminCount = rows.filter(
+    (user) => user.role === "admin" && user.username !== ANONYMOUS_USERNAME,
+  ).length;
+  const disabledCount = rows.filter((user) => user.status === "disabled").length;
+  const noWebLoginCount = rows.filter(
+    (user) => user.webLoginDisabled && user.username !== ANONYMOUS_USERNAME,
+  ).length;
+
   const [createOpened, createModal] = useDisclosure(false);
   const [creating, setCreating] = useState(false);
   const [pwdUser, setPwdUser] = useState<User | null>(null);
@@ -58,6 +81,9 @@ export function UsersPage() {
   const [policyPrefixes, setPolicyPrefixes] = useState("");
   const [policyLoading, setPolicyLoading] = useState(false);
   const [policySaving, setPolicySaving] = useState(false);
+  // 窄屏（< 48em）：6 列在手机上会把角色下拉与操作图标一起挤到换行，
+  // 此时只留「用户名 / 角色 / 操作」，被裁的 id 与启用状态改由用户名下方副文本承载。
+  const isNarrow = useMediaQuery("(max-width: 48em)") ?? false;
 
   const createForm = useForm({
     initialValues: { username: "", password: "", role: "user" as UserRole },
@@ -210,120 +236,212 @@ export function UsersPage() {
 
   return (
     <>
-      <Group justify="flex-end" mb="md">
-        <Button onClick={createModal.open}>{t("users.create")}</Button>
-      </Group>
+      {/* 列表页统一范式：页头操作固定，表格在视口内滚动 + 表头吸顶。
+          此前整页下滚，长列表滚动后列名会丢出视口。 */}
+      <PageShell>
+        <Stack gap="md" style={{ flex: 1, minHeight: 0 }}>
+          {/* 顶部概览带：页内大标题移除后，由它承担原来标题的视觉重量——左侧是账号构成
+              （口径来自当前列表，未就绪时显示「—」而不是假的 0），右侧是唯一的主操作。 */}
+          <OpsKpiBand
+            variant="strip"
+            label={t("users.summaryLabel")}
+            cols={{ base: 2, sm: 4 }}
+            items={[
+              {
+                label: t("users.summaryTotal"),
+                value: ready ? String(rows.length) : "—",
+                icon: <IconUsers size={16} />,
+                tone: "blue",
+                hint: t("users.summaryAnonymousHint"),
+              },
+              {
+                label: t("users.summaryAdmin"),
+                value: ready ? String(adminCount) : "—",
+                icon: <IconUserShield size={16} />,
+                tone: "indigo",
+                hint: t("users.rolesAdminHint"),
+              },
+              {
+                label: t("users.summaryDisabled"),
+                value: ready ? String(disabledCount) : "—",
+                icon: <IconUserOff size={16} />,
+                tone: "gray",
+              },
+              {
+                label: t("users.summaryNoWebLogin"),
+                value: ready ? String(noWebLoginCount) : "—",
+                icon: <IconLock size={16} />,
+                tone: "yellow",
+                hint: t("users.webLoginDisabledHint"),
+              },
+            ]}
+            actions={
+              <>
+                {/* 角色口径说明搬到工具栏按钮上（气泡里），不再占页面布局。 */}
+                <OpsHelpButton
+                  title={t("users.rolesTitle")}
+                  items={[
+                    { label: t("users.rolesAdmin"), value: t("users.rolesAdminHint") },
+                    { label: t("users.rolesUser"), value: t("users.rolesUserHint") },
+                    { label: t("users.rolesAnonymous"), value: t("users.rolesAnonymousHint") },
+                  ]}
+                />
+                <Button leftSection={<IconPlus size={14} />} onClick={createModal.open}>
+                  {t("users.create")}
+                </Button>
+              </>
+            }
+          />
 
-      <AsyncBoundary state={state}>
-        {(list) =>
-          list.items.length === 0 ? (
-            <EmptyState message={t("users.empty")} />
-          ) : (
-            <Table striped highlightOnHover>
-              <Table.Thead>
-                <Table.Tr>
-                  <Table.Th>{t("users.id")}</Table.Th>
-                  <Table.Th>{t("users.username")}</Table.Th>
-                  <Table.Th>{t("users.role")}</Table.Th>
-                  <Table.Th>{t("users.status")}</Table.Th>
-                  <Table.Th>{t("users.webLogin")}</Table.Th>
-                  <Table.Th>{t("common.actions")}</Table.Th>
-                </Table.Tr>
-              </Table.Thead>
-              <Table.Tbody>
-                {list.items.map((user) => {
-                  // FR-66：内置匿名主体不可登录/管理，隐藏其管理操作。
-                  const isAnonymous = user.username === ANONYMOUS_USERNAME;
-                  return (
-                    <Table.Tr key={user.id}>
-                      <Table.Td>{user.id}</Table.Td>
-                      <Table.Td>
-                        <Group gap="xs" wrap="nowrap">
-                          {user.username}
-                          {isAnonymous && (
-                            <Tooltip label={t("users.anonymousRowHint")}>
-                              <Badge variant="light" color="gray">
-                                {t("common.anonymous")}
-                              </Badge>
-                            </Tooltip>
-                          )}
-                        </Group>
-                      </Table.Td>
-                      <Table.Td>
-                        {isAnonymous ? (
-                          <Badge variant="light" color="gray">
-                            {t("users.roleUser")}
-                          </Badge>
-                        ) : (
-                          <Select
-                            size="xs"
-                            w={120}
-                            data={roleOptions}
-                            value={user.role}
-                            allowDeselect={false}
-                            onChange={(v) => v && handleChangeRole(user, v as UserRole)}
-                          />
-                        )}
-                      </Table.Td>
-                      <Table.Td>
-                        <Badge
-                          color={user.status === "active" ? "green" : "gray"}
-                          variant="light"
-                          style={isAnonymous ? undefined : { cursor: "pointer" }}
-                          onClick={isAnonymous ? undefined : () => handleToggleStatus(user)}
-                        >
-                          {user.status === "active"
-                            ? t("users.statusActive")
-                            : t("users.statusDisabled")}
-                        </Badge>
-                      </Table.Td>
-                      <Table.Td>
-                        <Switch
-                          size="sm"
-                          aria-label={`${t("users.webLoginEnabled")} ${user.username}`}
-                          checked={!user.webLoginDisabled}
-                          disabled={isAnonymous}
-                          onChange={(event) =>
-                            handleToggleWebLogin(user, !event.currentTarget.checked)
-                          }
-                        />
-                      </Table.Td>
-                      <Table.Td>
-                        {!isAnonymous && (
-                          <Group gap="xs">
-                            <ActionIcon
+          <Box style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+            <AsyncBoundary state={state}>
+              {(list) =>
+                list.items.length === 0 ? (
+                  <EmptyState message={t("users.empty")} />
+                ) : (
+                  <Table
+                    striped={!isNarrow}
+                    withRowBorders
+                    highlightOnHover
+                    stickyHeader
+                    verticalSpacing={isNarrow ? "md" : "xs"}
+                  >
+                    <Table.Thead>
+                      <Table.Tr>
+                        {/* 窄屏只留「用户名 / 角色 / 操作」：6 列在手机上会把角色下拉与操作
+                            图标一起挤到换行；被裁的 id 与启用状态改由用户名下方副文本承载。 */}
+                        {isNarrow ? null : <Table.Th>{t("users.id")}</Table.Th>}
+                        <Table.Th>{t("users.username")}</Table.Th>
+                        <Table.Th>{t("users.role")}</Table.Th>
+                        {isNarrow ? null : <Table.Th>{t("users.status")}</Table.Th>}
+                        {isNarrow ? null : <Table.Th>{t("users.webLogin")}</Table.Th>}
+                        {isNarrow ? null : <Table.Th>{t("common.actions")}</Table.Th>}
+                      </Table.Tr>
+                    </Table.Thead>
+                    <Table.Tbody>
+                      {list.items.map((user) => {
+                        // FR-66：内置匿名主体不可登录/管理，隐藏其管理操作。
+                        const isAnonymous = user.username === ANONYMOUS_USERNAME;
+                        // 行内操作统一「图标 + 文字」；抽成变量是因为窄屏要把它从「操作」列
+                        // 挪到用户名下方——那里有整行宽度，三个按钮能一行放下，不必竖排撑高。
+                        const rowActions = !isAnonymous ? (
+                          <Group gap={isNarrow ? 8 : 4} wrap="wrap">
+                            <Button
+                              size={isNarrow ? "xs" : "compact-xs"}
                               variant="subtle"
-                              onClick={() => openPolicy(user)}
+                              leftSection={<IconAdjustments size={14} />}
                               aria-label={t("users.publishPolicy")}
+                              onClick={() => openPolicy(user)}
                             >
-                              <IconAdjustments size={16} />
-                            </ActionIcon>
-                            <ActionIcon
+                              {t("users.publishPolicy")}
+                            </Button>
+                            <Button
+                              size={isNarrow ? "xs" : "compact-xs"}
                               variant="subtle"
-                              onClick={() => setPwdUser(user)}
+                              leftSection={<IconKey size={14} />}
                               aria-label={t("users.changePassword")}
+                              onClick={() => setPwdUser(user)}
                             >
-                              <IconKey size={16} />
-                            </ActionIcon>
-                            <ActionIcon
-                              color="red"
+                              {t("users.changePassword")}
+                            </Button>
+                            <Button
+                              size={isNarrow ? "xs" : "compact-xs"}
                               variant="subtle"
-                              onClick={() => handleDelete(user)}
+                              color="red"
+                              leftSection={<IconTrash size={14} />}
                               aria-label={t("common.delete")}
+                              onClick={() => handleDelete(user)}
                             >
-                              <IconTrash size={16} />
-                            </ActionIcon>
+                              {t("common.delete")}
+                            </Button>
                           </Group>
-                        )}
-                      </Table.Td>
-                    </Table.Tr>
-                  );
-                })}
-              </Table.Tbody>
-            </Table>
-          )
-        }
-      </AsyncBoundary>
+                        ) : null;
+                        return (
+                          <Table.Tr key={user.id}>
+                            {isNarrow ? null : <Table.Td>{user.id}</Table.Td>}
+                            <Table.Td>
+                              <Stack gap={isNarrow ? 12 : 2}>
+                                <Group gap="xs" wrap="nowrap">
+                                  {user.username}
+                                  {isAnonymous && (
+                                    <Tooltip label={t("users.anonymousRowHint")}>
+                                      <Badge variant="light" color="gray">
+                                        {t("common.anonymous")}
+                                      </Badge>
+                                    </Tooltip>
+                                  )}
+                                </Group>
+                                {/* 窄屏被裁的 id / 状态 / 网页登录开关集中到这里。 */}
+                                {isNarrow ? (
+                                  <Text size="xs" c="dimmed" truncate>
+                                    #{user.id} ·{" "}
+                                    {user.status === "active"
+                                      ? t("users.statusActive")
+                                      : t("users.statusDisabled")}
+                                    {" · "}
+                                    {user.webLoginDisabled
+                                      ? t("users.webLoginDisabled")
+                                      : t("users.webLoginEnabled")}
+                                  </Text>
+                                ) : null}
+                                {isNarrow ? rowActions : null}
+                              </Stack>
+                            </Table.Td>
+                            <Table.Td>
+                              {isAnonymous ? (
+                                <Badge variant="light" color="gray">
+                                  {t("users.roleUser")}
+                                </Badge>
+                              ) : (
+                                <Select
+                                  size="xs"
+                                  w={isNarrow ? 96 : 120}
+                                  data={roleOptions}
+                                  value={user.role}
+                                  allowDeselect={false}
+                                  onChange={(v) => v && handleChangeRole(user, v as UserRole)}
+                                />
+                              )}
+                            </Table.Td>
+                            {isNarrow ? null : (
+                              <Table.Td>
+                                <Badge
+                                  color={user.status === "active" ? "green" : "gray"}
+                                  variant="light"
+                                  style={isAnonymous ? undefined : { cursor: "pointer" }}
+                                  onClick={isAnonymous ? undefined : () => handleToggleStatus(user)}
+                                >
+                                  {user.status === "active"
+                                    ? t("users.statusActive")
+                                    : t("users.statusDisabled")}
+                                </Badge>
+                              </Table.Td>
+                            )}
+                            {isNarrow ? null : (
+                              <Table.Td>
+                                <Switch
+                                  size="sm"
+                                  aria-label={`${t("users.webLoginEnabled")} ${user.username}`}
+                                  checked={!user.webLoginDisabled}
+                                  disabled={isAnonymous}
+                                  onChange={(event) =>
+                                    handleToggleWebLogin(user, !event.currentTarget.checked)
+                                  }
+                                />
+                              </Table.Td>
+                            )}
+                            {isNarrow ? null : <Table.Td>{rowActions}</Table.Td>}
+                          </Table.Tr>
+                        );
+                      })}
+                    </Table.Tbody>
+                  </Table>
+                )
+              }
+            </AsyncBoundary>
+          </Box>
+        </Stack>
+      </PageShell>
 
       <Modal opened={createOpened} onClose={createModal.close} title={t("users.create")}>
         <form onSubmit={handleCreate}>

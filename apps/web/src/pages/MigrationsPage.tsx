@@ -7,7 +7,6 @@ import {
   Group,
   Pagination,
   Select,
-  SimpleGrid,
   Stack,
   Tabs,
   Text,
@@ -15,13 +14,17 @@ import {
 } from "@mantine/core";
 import { EmptyState } from "@jianartifact/ui";
 import {
+  IconAlertTriangle,
   IconArrowRight,
+  IconCircleCheck,
   IconClock,
+  IconEye,
   IconFolder,
   IconLink,
   IconPackage,
+  IconPlayerPlay,
   IconPlus,
-  IconRefresh,
+  IconStack2,
 } from "@tabler/icons-react";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -31,6 +34,7 @@ import { listMigrations } from "../api/endpoints";
 import type { MigrationTask } from "../api/types";
 import { planEstimatedAssets, sourceColor, statusColor } from "../components/migration/status";
 import { BackupsTab } from "../components/backup/BackupsTab";
+import { OpsKpiBand } from "../components/ops/OpsKit";
 import { AsyncBoundary } from "../components/AsyncBoundary";
 import { useAsync } from "../hooks/useAsync";
 import { formatUtcToLocal } from "../lib/timeFormat";
@@ -151,76 +155,61 @@ function MigrationsTab() {
 
   return (
     <Stack gap="md">
-      <Group justify="flex-end" gap="xs">
-        <Button
-          variant="default"
-          leftSection={<IconRefresh size={16} />}
-          onClick={() => {
-            state.reload();
-            gate.reload();
-          }}
-          loading={state.loading || gate.loading}
-        >
-          {t("common.refresh")}
-        </Button>
-        <Button
-          leftSection={
-            activeHint?.kind === "running" ? <IconArrowRight size={16} /> : <IconPlus size={16} />
-          }
-          onClick={onNew}
-        >
-          {activeHint?.kind === "running" ? t("migrations.gotoDetail") : t("migrations.new")}
-        </Button>
-      </Group>
-
-      {state.data && total > 0 && (
-        <SimpleGrid cols={{ base: 2, sm: 5 }} spacing={density.gridSpacing}>
-          {(
-            [
-              { label: t("migrations.summaryTotal"), value: total, color: "blue" },
-              {
-                label: t("migrations.status_running"),
-                value: pageSummary.running,
-                color: "cyan",
-                pageOnly: true,
-              },
-              {
-                label: t("migrations.status_planned"),
-                value: pageSummary.planned,
-                color: "yellow",
-                pageOnly: true,
-              },
-              {
-                label: t("migrations.status_completed"),
-                value: pageSummary.completed,
-                color: "green",
-                pageOnly: true,
-              },
-              {
-                label: t("migrations.status_failed"),
-                value: pageSummary.failed,
-                color: "red",
-                pageOnly: true,
-              },
-            ] as const
-          ).map((s) => (
-            <Card key={s.label} withBorder padding="sm" radius="md">
-              <Text size="xs" c="dimmed" fw={600}>
-                {s.label}
-                {"pageOnly" in s && s.pageOnly ? (
-                  <Text span size="xs" c="dimmed" fw={400}>
-                    {" "}
-                    ({t("migrations.summaryPageOnly")})
-                  </Text>
-                ) : null}
-              </Text>
-              <Text fw={700} size="xl" c={s.color}>
-                {s.value}
-              </Text>
-            </Card>
-          ))}
-        </SimpleGrid>
-      )}
+      {/* 刷新统一由页眉承担，页面内不再重复放刷新按钮；
+          下方两个列表各自订阅全局刷新事件，点页眉刷新即可一并更新。
+          主操作并入概览带右侧：页内大标题移除后，单独一行只有右对齐按钮会显得空。 */}
+      <OpsKpiBand
+        variant="strip"
+        label={t("migrations.summaryTotal")}
+        cols={{ base: 2, sm: 3, lg: 5 }}
+        items={[
+          {
+            label: t("migrations.summaryTotal"),
+            value: state.data ? total.toLocaleString("zh-CN") : "—",
+            icon: <IconStack2 size={18} />,
+            tone: "blue",
+          },
+          {
+            label: t("migrations.status_running"),
+            value: state.data ? pageSummary.running.toLocaleString("zh-CN") : "—",
+            icon: <IconPlayerPlay size={18} />,
+            tone: "cyan",
+            hint: t("migrations.summaryPageOnly"),
+          },
+          {
+            label: t("migrations.status_planned"),
+            value: state.data ? pageSummary.planned.toLocaleString("zh-CN") : "—",
+            icon: <IconClock size={18} />,
+            tone: "yellow",
+            hint: t("migrations.summaryPageOnly"),
+          },
+          {
+            label: t("migrations.status_completed"),
+            value: state.data ? pageSummary.completed.toLocaleString("zh-CN") : "—",
+            icon: <IconCircleCheck size={18} />,
+            tone: "green",
+            hint: t("migrations.summaryPageOnly"),
+          },
+          {
+            label: t("migrations.status_failed"),
+            value: state.data ? pageSummary.failed.toLocaleString("zh-CN") : "—",
+            icon: <IconAlertTriangle size={18} />,
+            tone: "red",
+            danger: pageSummary.failed > 0,
+            hint: t("migrations.summaryPageOnly"),
+          },
+        ]}
+        actions={
+          <Button
+            leftSection={
+              activeHint?.kind === "running" ? <IconArrowRight size={16} /> : <IconPlus size={16} />
+            }
+            onClick={onNew}
+          >
+            {activeHint?.kind === "running" ? t("migrations.gotoDetail") : t("migrations.new")}
+          </Button>
+        }
+      />
 
       {activeHint && (
         <Alert
@@ -232,7 +221,11 @@ function MigrationsTab() {
               #{activeHint.task.id} · {t(`migrations.status_${activeHint.task.status}`)} ·{" "}
               {t(`migrations.source_${activeHint.task.sourceType}`)}
             </Text>
-            <Button size="xs" onClick={() => navigate(`/migrations/${activeHint.task.id}`)}>
+            <Button
+              size="xs"
+              onClick={() => navigate(`/migrations/${activeHint.task.id}`)}
+              leftSection={<IconEye size={14} />}
+            >
               {t("migrations.gotoDetail")}
             </Button>
           </Group>

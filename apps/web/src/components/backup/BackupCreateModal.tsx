@@ -13,7 +13,14 @@ import {
   Text,
   TextInput,
 } from "@mantine/core";
-import { IconAlertTriangle, IconCheck, IconCopy, IconDownload } from "@tabler/icons-react";
+import {
+  IconAlertTriangle,
+  IconArrowRight,
+  IconCheck,
+  IconCopy,
+  IconDownload,
+  IconPlayerPlay,
+} from "@tabler/icons-react";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -198,10 +205,16 @@ export function BackupCreateModal({ opened, onClose, onCreated }: BackupCreateMo
           </Button>
           <Group gap="xs">
             {active === 0 ? (
-              <Button onClick={() => setActive(1)}>{t("backups.next")}</Button>
+              <Button onClick={() => setActive(1)} leftSection={<IconArrowRight size={14} />}>
+                {t("backups.next")}
+              </Button>
             ) : null}
             {active === 1 ? (
-              <Button loading={busy} onClick={() => void start()}>
+              <Button
+                loading={busy}
+                onClick={() => void start()}
+                leftSection={<IconPlayerPlay size={14} />}
+              >
                 {t("backups.start")}
               </Button>
             ) : null}

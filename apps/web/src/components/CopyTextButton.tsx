@@ -1,38 +1,33 @@
 // 通用复制按钮：HTTP 下用 execCommand 降级，避免 navigator.clipboard 不可用。
-import { ActionIcon, Button, Tooltip } from "@mantine/core";
+//
+// 统一为「图标 + 文字」按钮：曾经有个 `variant="icon"` 的纯图标分支，但裸图标看不出
+// 复制的是什么（协议地址？文件路径？哈希？），已删除——需要更明确的场景请直接给 label。
+import { Button } from "@mantine/core";
 import { IconCheck, IconCopy } from "@tabler/icons-react";
 import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { copyToClipboard } from "../lib/clipboard";
 
-type Variant = "button" | "icon";
-
 interface Props {
   value: string;
-  /** button：文字按钮；icon：仅图标（列表 URL 等） */
-  variant?: Variant;
-  size?: "xs" | "sm" | "md";
+  size?: "compact-xs" | "xs" | "sm" | "md";
   /** 按钮文案（复制前）；默认 common.copy */
   label?: string;
   /** 复制成功文案；默认 common.copied */
   copiedLabel?: string;
   timeoutMs?: number;
   "aria-label"?: string;
-  /** 是否显示自带的“复制/已复制”提示气泡；外层已包裹 Tooltip 时应关闭以避免重叠。默认 true */
-  withTooltip?: boolean;
 }
 
-/** 带降级复制的按钮 / 图标按钮。 */
+/** 带降级复制的「图标 + 文字」按钮。 */
 export function CopyTextButton({
   value,
-  variant = "button",
   size = "xs",
   label,
   copiedLabel,
   timeoutMs = 1500,
   "aria-label": ariaLabel,
-  withTooltip = true,
 }: Props) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
@@ -49,28 +44,6 @@ export function CopyTextButton({
 
   const text = copied ? (copiedLabel ?? t("common.copied")) : (label ?? t("common.copy"));
   const a11y = ariaLabel ?? t("common.copy");
-
-  if (variant === "icon") {
-    const iconBtn = (
-      <ActionIcon
-        size={size === "xs" ? "sm" : size}
-        variant="subtle"
-        color={copied ? "teal" : "gray"}
-        onClick={onCopy}
-        aria-label={a11y}
-      >
-        {copied ? <IconCheck size={14} /> : <IconCopy size={14} />}
-      </ActionIcon>
-    );
-    if (!withTooltip) {
-      return iconBtn;
-    }
-    return (
-      <Tooltip label={text} withArrow>
-        {iconBtn}
-      </Tooltip>
-    );
-  }
 
   return (
     <Button

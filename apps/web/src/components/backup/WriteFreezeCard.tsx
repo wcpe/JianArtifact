@@ -2,7 +2,7 @@
 // 冻结档位仅给 30 分钟 / 2 小时 / 4 小时 / 24 小时——契约与后端都不接受无限期冻结，
 // UI 也只暴露有界选项。解冻走 confirmDanger 二次确认。
 import { Button, Group, Modal, Radio, Stack, Text, TextInput } from "@mantine/core";
-import { IconLock, IconLockOpen } from "@tabler/icons-react";
+import { IconLock, IconLockOpen, IconSnowflake } from "@tabler/icons-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -143,7 +143,9 @@ export function WriteFreezeCard() {
             <Button variant="default" onClick={() => setOpened(false)}>
               {t("common.cancel")}
             </Button>
-            <Button onClick={() => void onFreeze()}>{t("backups.freezeConfirm")}</Button>
+            <Button onClick={() => void onFreeze()} leftSection={<IconSnowflake size={14} />}>
+              {t("backups.freezeConfirm")}
+            </Button>
           </Group>
         </Stack>
       </Modal>

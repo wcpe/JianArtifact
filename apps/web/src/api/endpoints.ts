@@ -1021,3 +1021,31 @@ export function listRepositoriesSorted(params: RepoListParams = {}): Promise<Rep
     },
   });
 }
+
+/** 契约允许的单页上限（`page_size` maximum: 100）。 */
+export const REPO_PAGE_SIZE_MAX = 100;
+
+/**
+ * 拉取**全量**仓库（单页上限 100，超出按页拼接）。
+ *
+ * 为什么需要它：置顶是本地偏好、名称筛选是客户端条件，两者都要求前端持有全量集合；
+ * 仪表盘「仓库状态」面板的环形图与「共 N 个仓库」也要按全量统计。各页面各写一遍分页拼接
+ * 迟早会漂移（曾经仪表盘写死 `page_size: 50`，大量档下面板说 50、列表说 144），
+ * 这里收敛成唯一入口。
+ */
+export async function listAllRepositories(
+  params: { sort?: string; order?: string } = {},
+): Promise<RepositoryList> {
+  const first = await listRepositoriesSorted({ ...params, page: 1, page_size: REPO_PAGE_SIZE_MAX });
+  const items = [...first.items];
+  const pages = Math.ceil(first.total / REPO_PAGE_SIZE_MAX);
+  for (let next = 2; next <= pages; next += 1) {
+    const page = await listRepositoriesSorted({
+      ...params,
+      page: next,
+      page_size: REPO_PAGE_SIZE_MAX,
+    });
+    items.push(...page.items);
+  }
+  return { items, total: first.total };
+}

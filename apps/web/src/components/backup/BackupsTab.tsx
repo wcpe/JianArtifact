@@ -3,13 +3,14 @@
 // 页内不重复渲染大标题（标题由页眉面包屑承担）。
 import { Box, Button, Code, CopyButton, Group, Modal, Stack, Text } from "@mantine/core";
 import { EmptyState } from "@jianartifact/ui";
-import { IconCopy, IconDownload, IconPlus, IconRefresh } from "@tabler/icons-react";
+import { IconCopy, IconDownload, IconPlus } from "@tabler/icons-react";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { createBackupLink, deleteBackup, listBackups, verifyBackup } from "../../api/endpoints";
 import type { BackupPackage } from "../../api/types";
 import { AsyncBoundary } from "../AsyncBoundary";
+import { PageShell } from "../../app/PageShell";
 import { OpsSection } from "../ops/OpsKit";
 import { confirmDanger, notifyError, notifySuccess } from "../../lib/feedback";
 import { formatCount } from "../../lib/format";
@@ -85,17 +86,7 @@ export function BackupsTab() {
   };
 
   return (
-    <Box
-      data-testid="backups-tab"
-      style={{
-        height: "calc(100dvh - var(--app-shell-header-height) - var(--app-shell-padding) * 2)",
-        minHeight: 480,
-        display: "flex",
-        flexDirection: "column",
-        gap: 12,
-        overflow: "hidden",
-      }}
-    >
+    <PageShell testId="backups-tab" gap={12}>
       <WriteFreezeCard />
 
       <OpsSection
@@ -112,15 +103,6 @@ export function BackupsTab() {
         bodyPadding={0}
         actions={
           <Group gap="xs">
-            <Button
-              variant="default"
-              size="xs"
-              leftSection={<IconRefresh size={14} />}
-              loading={state.loading || state.refreshing}
-              onClick={reload}
-            >
-              {t("backups.refresh")}
-            </Button>
             <Button
               size="xs"
               leftSection={<IconPlus size={14} />}
@@ -196,6 +178,6 @@ export function BackupsTab() {
           </Group>
         </Stack>
       </Modal>
-    </Box>
+    </PageShell>
   );
 }

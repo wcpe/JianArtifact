@@ -1,9 +1,17 @@
 // FR-117：设置页只保留可在管理端保存的服务配置。
-// 布局（v0.8.x）：双栏分区卡——左「服务设置」，右「安全防护」+「允许访问的域名」，
-// 顶部一条操作行承载保存与「有未保存的改动」提示；窄屏自动回落单栏。
-import { IconCopy, IconDeviceFloppy, IconRefresh } from "@tabler/icons-react";
+// 布局（v0.8.x）：顶部概览带（当前生效值 + 已保存/未保存 + 保存）→ 双栏分区卡
+// （左「服务设置」，右「安全防护」+「允许访问的域名」）→ 底部「生效与回滚」说明（默认收起）；
+// 窄屏自动回落单栏。
 import {
-  ActionIcon,
+  IconClock,
+  IconCopy,
+  IconDeviceFloppy,
+  IconKey,
+  IconRefresh,
+  IconShieldCheck,
+  IconWorld,
+} from "@tabler/icons-react";
+import {
   Alert,
   Button,
   Group,
@@ -20,7 +28,7 @@ import { useTranslation } from "react-i18next";
 
 import { getSettings, putSettings, type SettingsConfig } from "../api/endpoints";
 import { AsyncBoundary } from "../components/AsyncBoundary";
-import { OpsSection, StatusPill } from "../components/ops/OpsKit";
+import { OpsHelpButton, OpsKpiBand, OpsSection, StatusPill } from "../components/ops/OpsKit";
 import { useAsync } from "../hooks/useAsync";
 import { notifyError, notifySuccess } from "../lib/feedback";
 
@@ -103,6 +111,9 @@ function ServiceSettingsForm({
   const [savedSignature, setSavedSignature] = useState(() => formSignature(normalizeForm(initial)));
   const [saving, setSaving] = useState(false);
   const dirty = formSignature(form) !== savedSignature;
+  // 概览带口径：展示「已保存 / 生效」值（来自 normalizeForm(initial)），不随未保存的
+  // 表单改动跳动——改配置时能一眼对照当前线上口径。
+  const effective = normalizeForm(initial);
 
   const save = () => {
     if (form.upstreamTimeout < MIN_SECS || form.upstreamTimeout > MAX_SECS) {
@@ -131,22 +142,82 @@ function ServiceSettingsForm({
   };
 
   return (
-    <Stack gap="md" maw={1080}>
-      {/* 操作行：状态提示 + 保存（表单较长时不必滚到底部找按钮） */}
-      <Group justify="space-between" align="center" wrap="wrap" gap="sm">
-        <StatusPill
-          tone={dirty ? "yellow" : "gray"}
-          text={dirty ? t("settings.unsaved") : t("settings.saved")}
-        />
-        <Button
-          size="sm"
-          leftSection={<IconDeviceFloppy size={16} />}
-          loading={saving}
-          onClick={save}
-        >
-          {t("settings.save")}
-        </Button>
-      </Group>
+    // 不再自造 maw：宽度口径统一由 AppLayout 内容容器（density.contentMaxWidth）承担。
+    <Stack gap="md">
+      {/* 顶部概览带：把「当前生效值」前置，改表单时能一眼对照已保存的口径。
+          数据口径来自 normalizeForm(initial)（已保存/生效值），不随未保存的改动跳动。 */}
+      <OpsKpiBand
+        variant="strip"
+        label={t("settings.summaryLabel")}
+        cols={{ base: 2, sm: 4 }}
+        items={[
+          {
+            label: t("settings.summaryAnonymous"),
+            value: effective.anonymousAccess
+              ? t("settings.summaryAnonymousOn")
+              : t("settings.summaryAnonymousOff"),
+            icon: <IconWorld size={16} />,
+            hint: t("settings.summaryHint"),
+          },
+          {
+            label: t("settings.summaryAllowedHosts"),
+            value:
+              effective.allowedHosts.length === 0
+                ? t("settings.summaryAllowedHostsAll")
+                : t("settings.allowedHostsCount", { count: effective.allowedHosts.length }),
+            icon: <IconShieldCheck size={16} />,
+            hint: t("settings.summaryHint"),
+          },
+          {
+            label: t("settings.summaryOriginToken"),
+            value: effective.originTokenEnabled
+              ? t("settings.summaryOriginTokenOn")
+              : t("settings.summaryOriginTokenOff"),
+            icon: <IconKey size={16} />,
+            hint: t("settings.summaryHint"),
+          },
+          {
+            label: t("settings.summaryUpstreamTimeout"),
+            value: t("settings.summaryTimeoutValue", { secs: effective.upstreamTimeout }),
+            icon: <IconClock size={16} />,
+            hint: t("settings.summaryHint"),
+          },
+        ]}
+        actions={
+          <>
+            {/* 生效与回滚说明搬到工具栏按钮上（气泡里），不再占页面布局。 */}
+            <OpsHelpButton
+              title={t("settings.effectsTitle")}
+              items={[
+                {
+                  label: t("settings.effectsImmediateLabel", { defaultValue: "立即生效" }),
+                  value: t("settings.effectsImmediate"),
+                },
+                {
+                  label: t("settings.effectsLocalScopeLabel", { defaultValue: "节点本地" }),
+                  value: t("settings.effectsLocalScope"),
+                },
+                {
+                  label: t("settings.effectsLockoutLabel", { defaultValue: "锁死风险" }),
+                  value: t("settings.effectsLockout"),
+                },
+              ]}
+            />
+            <StatusPill
+              tone={dirty ? "yellow" : "gray"}
+              text={dirty ? t("settings.unsaved") : t("settings.saved")}
+            />
+            <Button
+              size="sm"
+              leftSection={<IconDeviceFloppy size={16} />}
+              loading={saving}
+              onClick={save}
+            >
+              {t("settings.save")}
+            </Button>
+          </>
+        }
+      />
 
       <SimpleGrid cols={{ base: 1, lg: 2 }} spacing="md" verticalSpacing="md">
         {/* 左栏：服务设置 */}
@@ -247,33 +318,35 @@ function ServiceSettingsForm({
                 onChange={(event) =>
                   setForm({ ...form, originTokenValue: event.currentTarget.value })
                 }
-                rightSection={
-                  <Group gap={4} wrap="nowrap">
-                    <ActionIcon
-                      variant="light"
-                      size="sm"
-                      aria-label={t("settings.originTokenGenerate")}
-                      disabled={!form.originTokenEnabled}
-                      onClick={() => setForm({ ...form, originTokenValue: generateOriginToken() })}
-                    >
-                      <IconRefresh size={16} />
-                    </ActionIcon>
-                    <ActionIcon
-                      variant="light"
-                      size="sm"
-                      aria-label={t("settings.originTokenCopy")}
-                      disabled={!form.originTokenValue}
-                      onClick={() =>
-                        navigator.clipboard
-                          ?.writeText(form.originTokenValue)
-                          .then(() => notifySuccess(t("common.copied")))
-                      }
-                    >
-                      <IconCopy size={16} />
-                    </ActionIcon>
-                  </Group>
-                }
               />
+              {/* 生成 / 复制从输入框右侧图标移出为「图标 + 文字」按钮：
+                  图标-only 看不出是生成还是复制，且 rightSection 里也塞不下文字。 */}
+              <Group gap="xs" wrap="wrap">
+                <Button
+                  size="compact-xs"
+                  variant="light"
+                  leftSection={<IconRefresh size={14} />}
+                  aria-label={t("settings.originTokenGenerate")}
+                  disabled={!form.originTokenEnabled}
+                  onClick={() => setForm({ ...form, originTokenValue: generateOriginToken() })}
+                >
+                  {t("settings.originTokenGenerate")}
+                </Button>
+                <Button
+                  size="compact-xs"
+                  variant="light"
+                  leftSection={<IconCopy size={14} />}
+                  aria-label={t("settings.originTokenCopy")}
+                  disabled={!form.originTokenValue}
+                  onClick={() =>
+                    navigator.clipboard
+                      ?.writeText(form.originTokenValue)
+                      .then(() => notifySuccess(t("common.copied")))
+                  }
+                >
+                  {t("settings.originTokenCopy")}
+                </Button>
+              </Group>
             </Stack>
           </OpsSection>
 

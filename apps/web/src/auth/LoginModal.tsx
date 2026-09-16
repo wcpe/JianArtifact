@@ -2,7 +2,7 @@
 // 登录成功后关闭并停留当前页；取消时执行调用方传入的 onCancel（如受保护页回落仓库列表）。
 import { Alert, Button, Group, Modal, PasswordInput, Stack, Text, TextInput } from "@mantine/core";
 import { useForm } from "@mantine/form";
-import { IconAlertCircle } from "@tabler/icons-react";
+import { IconAlertCircle, IconLogin } from "@tabler/icons-react";
 import { createContext, useCallback, useContext, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
@@ -103,7 +103,7 @@ export function LoginModalProvider({ children }: { children: ReactNode }) {
                 <Button variant="default" onClick={handleCancel}>
                   {t("common.cancel")}
                 </Button>
-                <Button type="submit" loading={submitting}>
+                <Button type="submit" loading={submitting} leftSection={<IconLogin size={16} />}>
                   {t("auth.login")}
                 </Button>
               </Group>

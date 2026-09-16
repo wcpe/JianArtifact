@@ -25,8 +25,12 @@ import {
 import { useForm } from "@mantine/form";
 import { ErrorState, ForbiddenState } from "@jianartifact/ui";
 import {
+  IconArrowRight,
+  IconCheck,
   IconCloudDownload,
   IconDatabase,
+  IconDeviceFloppy,
+  IconEye,
   IconFolder,
   IconLink,
   IconPackage,
@@ -732,7 +736,12 @@ export function MigrationWizardPage() {
             })}
           </Text>
           <Group gap="xs">
-            <Button size="xs" onClick={() => resumePlanned(firstPlanned.id)} loading={busy}>
+            <Button
+              size="xs"
+              onClick={() => resumePlanned(firstPlanned.id)}
+              loading={busy}
+              leftSection={<IconArrowRight size={14} />}
+            >
               {t("migrations.continuePlanned")}
             </Button>
             <Button
@@ -740,6 +749,7 @@ export function MigrationWizardPage() {
               variant="light"
               component={Link}
               to={`/migrations/${firstPlanned.id}`}
+              leftSection={<IconEye size={14} />}
             >
               {t("migrations.gotoDetail")}
             </Button>
@@ -816,7 +826,11 @@ export function MigrationWizardPage() {
                 })}
               </SimpleGrid>
               <Group>
-                <Button disabled={busy} onClick={() => setActive(1)}>
+                <Button
+                  disabled={busy}
+                  onClick={() => setActive(1)}
+                  leftSection={<IconCheck size={16} />}
+                >
                   {t("common.confirm")}
                 </Button>
               </Group>
@@ -1452,6 +1466,7 @@ export function MigrationWizardPage() {
                     variant="subtle"
                     disabled={busy}
                     onClick={() => navigate(`/migrations/${discoverResult.taskId}`)}
+                    leftSection={<IconDeviceFloppy size={16} />}
                   >
                     {t("migrations.savePlanned")}
                   </Button>

@@ -1,6 +1,6 @@
 // 备份包列表：Mantine Table（layout fixed + highlightOnHover + 吸顶表头）。
 // 项目约定：列表一律用 Table 而非卡片堆，状态一律 StatusPill。
-import { ActionIcon, Badge, Group, Loader, Table, Text, Tooltip } from "@mantine/core";
+import { Badge, Button, Group, Loader, Table, Text } from "@mantine/core";
 import {
   IconCircleCheck,
   IconDownload,
@@ -109,66 +109,66 @@ export function BackupTable({
                 </Text>
               </Table.Td>
               <Table.Td>
-                <Group gap={4} wrap="nowrap">
-                  <Tooltip label={t("backups.getLink")}>
-                    <ActionIcon
-                      variant="subtle"
-                      aria-label={t("backups.getLink")}
-                      disabled={!done}
-                      onClick={() => onGetLink(item.packageId)}
-                    >
-                      <IconDownload size={16} />
-                    </ActionIcon>
-                  </Tooltip>
-                  <Tooltip label={t("backups.copyCommand")}>
-                    <ActionIcon
-                      variant="subtle"
-                      aria-label={t("backups.copyCommand")}
-                      disabled={!done}
-                      onClick={() =>
-                        void copyToClipboard(`jianartifact backup link ${item.packageId}`).then(
-                          (ok) =>
-                            ok
-                              ? notifySuccess(t("backups.commandCopied"))
-                              : notifyError(t("backups.copyFailed")),
-                        )
-                      }
-                    >
-                      <IconLink size={16} />
-                    </ActionIcon>
-                  </Tooltip>
-                  <Tooltip label={t("backups.verify")}>
-                    <ActionIcon
-                      variant="subtle"
-                      aria-label={t("backups.verify")}
-                      disabled={!done}
-                      loading={verifyingId === item.packageId}
-                      onClick={() => onVerify(item.packageId, false)}
-                    >
-                      <IconCircleCheck size={16} />
-                    </ActionIcon>
-                  </Tooltip>
-                  <Tooltip label={t("backups.verifyDeep")}>
-                    <ActionIcon
-                      variant="subtle"
-                      aria-label={t("backups.verifyDeep")}
-                      disabled={!done}
-                      onClick={() => onVerify(item.packageId, true)}
-                    >
-                      <IconReload size={16} />
-                    </ActionIcon>
-                  </Tooltip>
-                  <Tooltip label={t("backups.delete")}>
-                    <ActionIcon
-                      variant="subtle"
-                      color="red"
-                      aria-label={t("backups.delete")}
-                      disabled={running}
-                      onClick={() => onDelete(item)}
-                    >
-                      <IconTrash size={16} />
-                    </ActionIcon>
-                  </Tooltip>
+                <Group gap={4} wrap="wrap">
+                  <Button
+                    size="compact-xs"
+                    variant="subtle"
+                    leftSection={<IconDownload size={14} />}
+                    aria-label={t("backups.getLink")}
+                    disabled={!done}
+                    onClick={() => onGetLink(item.packageId)}
+                  >
+                    {t("backups.getLink")}
+                  </Button>
+                  <Button
+                    size="compact-xs"
+                    variant="subtle"
+                    leftSection={<IconLink size={14} />}
+                    aria-label={t("backups.copyCommand")}
+                    disabled={!done}
+                    onClick={() =>
+                      void copyToClipboard(`jianartifact backup link ${item.packageId}`).then(
+                        (ok) =>
+                          ok
+                            ? notifySuccess(t("backups.commandCopied"))
+                            : notifyError(t("backups.copyFailed")),
+                      )
+                    }
+                  >
+                    {t("backups.copyCommand")}
+                  </Button>
+                  <Button
+                    size="compact-xs"
+                    variant="subtle"
+                    leftSection={<IconCircleCheck size={14} />}
+                    aria-label={t("backups.verify")}
+                    disabled={!done}
+                    loading={verifyingId === item.packageId}
+                    onClick={() => onVerify(item.packageId, false)}
+                  >
+                    {t("backups.verify")}
+                  </Button>
+                  <Button
+                    size="compact-xs"
+                    variant="subtle"
+                    leftSection={<IconReload size={14} />}
+                    aria-label={t("backups.verifyDeep")}
+                    disabled={!done}
+                    onClick={() => onVerify(item.packageId, true)}
+                  >
+                    {t("backups.verifyDeep")}
+                  </Button>
+                  <Button
+                    size="compact-xs"
+                    variant="subtle"
+                    color="red"
+                    leftSection={<IconTrash size={14} />}
+                    aria-label={t("backups.delete")}
+                    disabled={running}
+                    onClick={() => onDelete(item)}
+                  >
+                    {t("backups.delete")}
+                  </Button>
                 </Group>
               </Table.Td>
             </Table.Tr>

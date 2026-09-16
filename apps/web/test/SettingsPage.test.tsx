@@ -57,7 +57,8 @@ describe("设置页", () => {
     expect(await screen.findByText("服务设置")).toBeTruthy();
     expect(screen.getByText("安全防护")).toBeTruthy();
     expect(screen.getByText("允许访问的域名")).toBeTruthy();
-    expect(screen.getByText("未限制")).toBeTruthy();
+    // 「未限制」现在同时出现在白名单分区与顶部概览带的「域名白名单」取值上，故用 getAllByText。
+    expect(screen.getAllByText("未限制").length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "保存设置" })).toBeTruthy();
     expect(screen.queryByText("集群")).toBeNull();
     expect(screen.queryByText(/JIAN_/)).toBeNull();

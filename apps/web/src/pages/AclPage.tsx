@@ -1,6 +1,6 @@
 // 仓库访问控制：编辑某仓库的 ACL 条目（用户 + 权限），整表 PUT 保存。
-import { ActionIcon, Alert, Badge, Button, Group, Select, Table } from "@mantine/core";
-import { IconTrash } from "@tabler/icons-react";
+import { Alert, Badge, Button, Group, Select, Table } from "@mantine/core";
+import { IconDeviceFloppy, IconPlus, IconTrash } from "@tabler/icons-react";
 import { EmptyState } from "@jianartifact/ui";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -106,7 +106,7 @@ export function AclPage() {
         <Button variant="default" onClick={() => navigate("/repositories")}>
           {t("common.close")}
         </Button>
-        <Button onClick={handleSave} loading={saving}>
+        <Button onClick={handleSave} loading={saving} leftSection={<IconDeviceFloppy size={16} />}>
           {t("acl.save")}
         </Button>
       </Group>
@@ -149,14 +149,16 @@ export function AclPage() {
                         />
                       </Table.Td>
                       <Table.Td>
-                        <ActionIcon
-                          color="red"
+                        <Button
+                          size="compact-xs"
                           variant="subtle"
-                          onClick={() => removeEntry(index)}
+                          color="red"
+                          leftSection={<IconTrash size={14} />}
                           aria-label={t("common.delete")}
+                          onClick={() => removeEntry(index)}
                         >
-                          <IconTrash size={16} />
-                        </ActionIcon>
+                          {t("common.delete")}
+                        </Button>
                       </Table.Td>
                     </Table.Tr>
                   ))}
@@ -191,7 +193,12 @@ export function AclPage() {
                   onChange={(v) => v && setNewAction(v as AclAction)}
                   w={140}
                 />
-                <Button variant="light" onClick={addEntry} disabled={!newSubjectId}>
+                <Button
+                  variant="light"
+                  onClick={addEntry}
+                  disabled={!newSubjectId}
+                  leftSection={<IconPlus size={14} />}
+                >
                   {t("acl.addEntry")}
                 </Button>
               </Group>
