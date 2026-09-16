@@ -8,6 +8,9 @@ export const en = {
     title: "Nexus Migration",
     description: "Discover and migrate artifacts from Nexus (admin only)",
     new: "New Migration",
+    // 与 zh.migrations.saved 同步；en 只翻译 migrations 域，键集必须逐个对齐
+    // （MigrationDetailPage.test.tsx 有「en 与 zh 的 migrations 键集合一致」的断言）。
+    saved: "Saved",
     emptyHint: "No migration tasks yet. Discover from an offline package or online REST.",
     status: "Status",
     sourceType: "Source",

@@ -1,6 +1,8 @@
 // 中文文案资源（默认语言）。键名按领域分组，供 react-i18next 消费。
 export const zh = {
   common: {
+    // 以下键此前缺失（t 未命中时静默回退 defaultValue），补录以保持 i18n 完整。
+    retryLater: "加载失败，请稍后重试",
     appName: "JianArtifact",
     loading: "加载中…",
     empty: "暂无数据",
@@ -28,11 +30,18 @@ export const zh = {
     deleted: "删除成功",
     saved: "保存成功",
     refresh: "刷新",
+    help: "说明",
+    expand: "展开",
+    collapse: "收起",
     anonymous: "匿名",
     refreshFailedTitle: "刷新失败",
     refreshFailedDescription: "仍展示上次数据，可重试刷新。",
   },
   nav: {
+    // 以下键此前缺失（t 未命中时静默回退 defaultValue），补录以保持 i18n 完整。
+    publicRepos: "公开仓库",
+    allRepositories: "全部仓库",
+    noPublicRepos: "暂无公开仓库",
     sectionOverview: "概览",
     sectionOperations: "运维",
     sectionAdministration: "管理",
@@ -53,6 +62,10 @@ export const zh = {
     loggingOut: "正在退出…",
   },
   settings: {
+    // 以下键此前缺失（t 未命中时静默回退 defaultValue），补录以保持 i18n 完整。
+    effectsImmediateLabel: "立即生效",
+    effectsLocalScopeLabel: "节点本地",
+    effectsLockoutLabel: "锁死风险",
     title: "设置",
     description: "管理可在运行中保存的服务配置。",
     serviceTitle: "服务设置",
@@ -83,6 +96,24 @@ export const zh = {
     saved: "已保存",
     unsaved: "有未保存的改动",
     validationRange: "取值须在 1–3600 之间",
+    // 顶部概览带：把「当前生效值」前置，改表单时能一眼对照已保存的口径。
+    summaryLabel: "当前生效配置",
+    summaryAnonymous: "匿名访问",
+    summaryAnonymousOn: "已开启",
+    summaryAnonymousOff: "已关闭",
+    summaryAllowedHosts: "域名白名单",
+    summaryAllowedHostsAll: "未限制",
+    summaryOriginToken: "回源 Token",
+    summaryOriginTokenOn: "已启用",
+    summaryOriginTokenOff: "未启用",
+    summaryUpstreamTimeout: "回源超时",
+    summaryTimeoutValue: "{{secs}} 秒",
+    summaryHint: "以下为已保存并生效的值，未保存的改动不计入",
+    effectsTitle: "生效与回滚",
+    effectsImmediate: "保存后立即在当前节点生效，无需重启服务；页眉刷新不会回滚配置。",
+    effectsLocalScope: "域名白名单与回源 Token 属节点本地配置，不随一致性备份包搬迁到其它节点。",
+    effectsLockout:
+      "改白名单前先确认新域名解析已生效：名单外的请求会直接返回 404，包括你自己的访问。",
   },
   licenses: {
     title: "开源协议",
@@ -198,6 +229,7 @@ export const zh = {
     // —— v0.8.0 仓库状态面板（替代上游自动阻止面板） ——
     repoStatusTitle: "仓库状态",
     repoStatusTotal: "共 {{count}} 个仓库",
+    repoStatusViewAll: "查看全部仓库",
     repoType_hosted: "本地",
     repoType_proxy: "代理",
     repoType_group: "聚合",
@@ -224,6 +256,8 @@ export const zh = {
     keyboardHint: "方向键移动光标，Shift+方向键选区间，Enter 聚焦，Esc 还原",
   },
   hostMonitoring: {
+    // 以下键此前缺失（t 未命中时静默回退 defaultValue），补录以保持 i18n 完整。
+    rangeLabel: "采样时间范围",
     loading: "正在加载主机监控…",
     unavailable: "不可用",
     perSecond: "/s",
@@ -308,8 +342,28 @@ export const zh = {
     deleteConfirm: "确定删除该用户？此操作不可撤销。",
     empty: "暂无用户",
     anonymousRowHint: "内置匿名主体，用于 ACL 授权，不可登录或管理",
+    // 顶部概览带（页内大标题移除后，用它承担原来标题的视觉重量与信息密度）。
+    summaryLabel: "用户概览",
+    summaryTotal: "用户总数",
+    summaryAdmin: "管理员",
+    summaryDisabled: "已停用",
+    summaryNoWebLogin: "禁止 Web 登录",
+    summaryAnonymousHint: "用户总数含内置匿名主体",
+    rolesTitle: "角色与权限",
+    rolesAdmin: "管理员",
+    rolesAdminHint: "可管理用户、仓库与实例设置，并访问审计、主机监控等运维功能。",
+    rolesUser: "普通用户",
+    rolesUserHint: "可登录控制台；对具体仓库的读写由 ACL 与发布策略决定。",
+    rolesAnonymous: "匿名主体（anonymous）",
+    rolesAnonymousHint: "内置主体，仅为公开仓库的匿名读取授权而存在，不可登录或管理。",
   },
   tokens: {
+    // 以下键此前缺失（t 未命中时静默回退 defaultValue），补录以保持 i18n 完整。
+    usageAuthLabel: "如何认证",
+    usageOnceLabel: "明文只显示一次",
+    usageRevokeLabel: "吊销即失效",
+    usageScopeLabel: "权限范围",
+    revoke: "吊销",
     title: "访问令牌",
     description: "签发用于自动化的 API 令牌",
     id: "ID",
@@ -320,8 +374,40 @@ export const zh = {
     plaintextHint: "明文仅显示一次，请妥善保存：",
     deleteConfirm: "确定吊销该令牌？依赖它的自动化将失效。",
     empty: "暂无令牌",
+    // 顶部概览带 + 使用说明（同「用户」页口径）。
+    summaryLabel: "令牌概览",
+    summaryTotal: "令牌数",
+    summaryLatest: "最近签发",
+    summaryEarliest: "最早签发",
+    summaryHint: "仅统计当前登录用户名下的令牌",
+    usageTitle: "使用与安全",
+    usageAuth:
+      "在客户端以「用户名 + 令牌」作口令使用，例如 mvn deploy 时把令牌填进 settings.xml 的 password。",
+    usageOnce: "明文只在创建时显示一次，关闭弹窗后无法再次查看，丢失只能吊销重签。",
+    usageRevoke: "吊销后立即失效，依赖该令牌的流水线会同步中断，请先替换流水线里的凭据。",
+    usageScope: "令牌继承所属用户的权限，不能越过仓库 ACL 与发布策略。",
   },
   repositories: {
+    // 以下键此前缺失（t 未命中时静默回退 defaultValue），补录以保持 i18n 完整。
+    cleanupTitle: "清理无 Jar 制品",
+    cleanupConfirm:
+      "将删除仓库中没有 .jar 文件的 Maven 制品目录（仅保留含 jar 的完整构件）。此操作不可撤销。",
+    cleanupConfirmBtn: "执行清理",
+    cleanupDone: "已清理 {{n}} 个空制品目录",
+    cleanupTooltip: "清理无 Jar 制品",
+    cleanupAction: "清理",
+    sortBy: "排序",
+    sortName: "名称",
+    sortCreatedAt: "创建时间",
+    sortOrder: "方向",
+    orderAsc: "升序",
+    orderDesc: "降序",
+    groupBy: "分组",
+    groupNone: "不分组",
+    groupFormat: "按格式",
+    groupType: "按类型",
+    filterLabel: "筛选",
+    emptyCreateHint: "创建第一个仓库开始托管制品。",
     title: "仓库管理",
     description: "管理各格式制品仓库与访问控制",
     publicTitle: "公开仓库",
@@ -342,7 +428,9 @@ export const zh = {
     url: "访问 URL",
     members: "成员 / 上游",
     artifactCount: "制品数",
+    artifactCountTooltip: "制品数：{{count}}",
     totalSize: "总大小",
+    totalSizeTooltip: "总大小：{{size}}（{{bytes}} 字节）",
     deleteConfirm: "确定删除该仓库？其访问控制将一并移除。",
     empty: "暂无仓库",
     remoteUrl: "上游地址",
@@ -401,6 +489,8 @@ export const zh = {
     colUpdated: "修改时间",
   },
   acl: {
+    // 以下键此前缺失（t 未命中时静默回退 defaultValue），补录以保持 i18n 完整。
+    userListUnavailable: "无法加载可授权用户，仍可编辑已有访问控制条目。",
     title: "访问控制",
     user: "用户",
     userPlaceholder: "搜索或选择用户",
@@ -413,8 +503,17 @@ export const zh = {
     empty: "尚未配置任何条目",
   },
   repoDetail: {
+    // 以下键此前缺失（t 未命中时静默回退 defaultValue），补录以保持 i18n 完整。
+    searchResultCount: "找到 {{count}} 条结果",
+    configOnlineHint: "离线后 group 读将跳过该仓库；本状态不随复制传播",
+    configMembers: "成员仓库",
+    configMembersHint: "选择聚合进本 group 的仓库",
     title: "仓库详情",
     tabBrowse: "浏览",
+    // 页头中间的仓库概览统计（宽屏可见；窄屏空间留给页签与徽章）
+    statArtifacts: "制品数",
+    statSize: "体积",
+    statCreatedAt: "创建于",
     tabConfig: "配置",
     tabAcl: "ACL",
     configTitle: "仓库配置",
@@ -484,6 +583,8 @@ export const zh = {
     uploadNeedPath: "请填写目标路径或选择带文件名的文件",
     uploadOk: "上传成功",
     uploadClientOnly: "该仓库类型请使用客户端命令发布（网页上传支持 Raw / Maven hosted）。",
+    // 窄屏用的短版本：完整文案要折两行（约 48px），短版本一行放下（约 22px）。
+    uploadClientOnlyShort: "仅支持客户端发布",
     uploadClientOnlyLink: "查看使用说明",
     mavenUploadTitle: "上传制品（Maven hosted）",
     mavenUploadHint:
@@ -672,6 +773,13 @@ export const zh = {
     colTarget: "目标",
     colResult: "结果",
     loadErrorTitle: "当前节点审计暂时不可用",
+    // 「聚合范围过大」是后端 409 audit_query_too_large，属可自解错误：说清原因并给出缩小范围的动作。
+    tooLargeTitle: "当前时间范围内的审计事件过多",
+    tooLargeAction: "改用近 1 小时",
+    // 窄屏：高级筛选收进抽屉，工具条只留关键字行。
+    filtersMore: "更多筛选",
+    filtersLess: "收起筛选",
+    moreFiltersTitle: "筛选条件",
     refreshErrorTitle: "最近一次刷新失败",
     refreshErrorBody: "已保留当前数据；网络恢复后可再次刷新。",
     staleTitle: "审计快照已过期",
@@ -688,6 +796,10 @@ export const zh = {
     emptyRecords: "当前筛选条件下没有审计事件",
     loadMore: "加载更多",
     detailTitle: "事件详情（脱敏契约字段）",
+    detailDrawerTitle: "事件详情",
+    // 窄屏 KPI 带默认只显示 6 个主指标，这两个键控制展开/收起全部 12 项。
+    kpiMore: "更多指标",
+    kpiLess: "收起指标",
     detailResultSummary: "结果概述 {{summary}} · 错误类别 {{errorClass}} · 影响 {{affected}} 项",
     detailLoading: "加载详情…",
     detailInvestigate: "调查该目标",
@@ -767,6 +879,8 @@ export const zh = {
     linkHint: "该链接自带时效签名，可直接在新机器上粘贴使用，无需登录本机。",
     linkCopied: "链接已复制",
     commandCopied: "命令已复制",
+    // 此前只有「已复制」提示、没有按钮文案键：按钮化之后会直接把 key 显示出来，补上。
+    copyCommand: "复制命令",
     copyFailed: "复制失败",
     verify: "校验",
     verifyDeep: "深度校验",
@@ -865,6 +979,8 @@ export const zh = {
     uploadMissingChunkTitle: "分片缺失",
   },
   migrations: {
+    // 以下键此前缺失（t 未命中时静默回退 defaultValue），补录以保持 i18n 完整。
+    saved: "保存成功",
     title: "Nexus 迁移",
     description: "从 Nexus 发现并迁移制品（仅管理员）",
     new: "新建迁移",
