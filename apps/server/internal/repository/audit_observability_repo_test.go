@@ -1,7 +1,9 @@
 package repository
 
 import (
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -133,5 +135,81 @@ func TestAcknowledgeAndAuditRollsBackTogether(t *testing.T) {
 	}
 	if acknowledgements != 0 {
 		t.Fatalf("审计插入失败后不得遗留确认行：%d", acknowledgements)
+	}
+}
+
+// TestAuditAggregateReadUsesNarrowProjection 覆盖线上 bug 的根因：
+// 聚合读取以前用全量投影 + 5000 上限，而线上 24h 窗口早就过万级事件量
+// （实测：上线第 3 天 24h 已有 5900 条），默认审计总览因此直接 409。
+// 现在聚合走窄投影（不读 detail / body_preview / user_agent），上限提高一个数量级；
+// 详情路径继续用全量投影，两条路径的取舍必须各自成立。
+func TestAuditAggregateReadUsesNarrowProjection(t *testing.T) {
+	db, err := persistence.Open(filepath.Join(t.TempDir(), "observability-aggregate.db"))
+	if err != nil {
+		t.Fatalf("打开数据库：%v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := db.Migrate(); err != nil {
+		t.Fatalf("迁移数据库：%v", err)
+	}
+
+	const seeded = 6000
+	now := time.Now().UTC()
+	tx, err := db.Beginx()
+	if err != nil {
+		t.Fatalf("开启事务：%v", err)
+	}
+	stmt, err := tx.Prepare(`INSERT INTO audit_log
+		(ts, actor, action, entity_type, entity_key, repo, detail, result, ip, source_node,
+		 status_code, duration_ms, user_agent, body_preview)
+		VALUES (?, 'admin', 'asset.put', 'asset', ?, 'release', ?, 'ok', '203.0.113.7', '',
+		 200, 12, 'agent/1.0', ?)`)
+	if err != nil {
+		t.Fatalf("准备插入语句：%v", err)
+	}
+	for index := 0; index < seeded; index++ {
+		at := now.Add(-time.Duration(index) * time.Second).Format(time.RFC3339Nano)
+		if _, err := stmt.Exec(at, fmt.Sprintf("release/pkg-%d.jar", index), strings.Repeat("x", 1024), strings.Repeat("y", 1024)); err != nil {
+			t.Fatalf("插入第 %d 条审计事件：%v", index, err)
+		}
+	}
+	if err := stmt.Close(); err != nil {
+		t.Fatalf("关闭插入语句：%v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("提交事务：%v", err)
+	}
+
+	repo := NewAuditObservabilityRepo(db)
+	filter := ObservabilityFilter{
+		From:       now.Add(-24 * time.Hour).Format(time.RFC3339Nano),
+		To:         now.Add(time.Minute).Format(time.RFC3339Nano),
+		AuditMaxID: seeded,
+	}
+
+	// 护栏语义未被削弱：超过传入上限仍判定超限。
+	if _, tooLarge, err := repo.ListAggregateEventsLimited(filter, 5000); err != nil || !tooLarge {
+		t.Fatalf("聚合读取超过上限时应判定超限：tooLarge=%v err=%v", tooLarge, err)
+	}
+	// 提高后的上限下取全量：默认 24h 视图可用。
+	events, tooLarge, err := repo.ListAggregateEventsLimited(filter, 50000)
+	if err != nil {
+		t.Fatalf("聚合读取：%v", err)
+	}
+	if tooLarge || len(events) != seeded {
+		t.Fatalf("聚合读取应取到 %d 条且不超限：got=%d tooLarge=%v", seeded, len(events), tooLarge)
+	}
+	for _, event := range events {
+		if event.Detail != "" || event.BodyPreview != "" || event.UserAgent != "" {
+			t.Fatalf("窄投影不得读取大字段：detail=%d body=%d userAgent=%d", len(event.Detail), len(event.BodyPreview), len(event.UserAgent))
+		}
+	}
+	// 详情路径（全量投影）仍能拿到大字段。
+	full, _, err := repo.ListEventsLimited(filter, 10)
+	if err != nil {
+		t.Fatalf("详情读取：%v", err)
+	}
+	if len(full) != 10 || full[0].BodyPreview == "" || full[0].UserAgent == "" {
+		t.Fatalf("详情读取必须保留大字段：count=%d body=%q userAgent=%q", len(full), full[0].BodyPreview, full[0].UserAgent)
 	}
 }

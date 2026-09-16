@@ -20,13 +20,22 @@ import (
 )
 
 const (
-	auditSource               = "audit"
-	replicationSource         = "replication"
-	defaultAuditLimit         = 50
-	maxAuditLimit             = 100
-	maxAuditRange             = 30 * 24 * time.Hour
-	maxAuditAggregationEvents = 5000
-	auditAttentionAction      = "audit.attention_acknowledge"
+	auditSource       = "audit"
+	replicationSource = "replication"
+	defaultAuditLimit = 50
+	maxAuditLimit     = 100
+	maxAuditRange     = 30 * 24 * time.Hour
+	// maxAuditAggregationEvents 是**聚合读**（概览 KPI/趋势、关注批次列表、通知）的事件上限。
+	// 聚合走窄投影（repository.observabilityAggregateSelect，不含 detail/body_preview/user_agent
+	// 这些大字段），同内存预算下能覆盖的事件量比全量投影高一个数量级，因此这里设 5 万：
+	// 线上一个活跃节点 24h 的审计事件在万级（实测：上线第 3 天 24h 已达 5900 条），
+	// 原来按全量投影设 5000 会让**默认的 24h 视图**直接 409「审计聚合范围过大」。
+	maxAuditAggregationEvents = 50000
+	// maxAuditAttentionEvents 是**关注批次详情**的上限：那条路径会把事件原样序列化给前端
+	// （含 detail/body_preview/user_agent），用全量投影，故维持较低上限；且其查询范围
+	// 已被限定在单个关注批次内，正常远达不到。
+	maxAuditAttentionEvents = 5000
+	auditAttentionAction    = "audit.attention_acknowledge"
 )
 
 type auditReadSnapshot struct {
@@ -448,7 +457,8 @@ func (h *Handlers) loadAuditSnapshot(c *gin.Context, filter auditViewFilter, raw
 	if !ok {
 		return auditReadSnapshot{}, nil, false
 	}
-	events, tooLarge, err := h.auditObservability.ListEventsLimited(repositoryObservabilityFilter(snapshot, filter), maxAuditAggregationEvents)
+	// 聚合读取窄投影：这些事件只用于统计与分组，不进前端（见 ListAggregateEventsLimited）。
+	events, tooLarge, err := h.auditObservability.ListAggregateEventsLimited(repositoryObservabilityFilter(snapshot, filter), maxAuditAggregationEvents)
 	if err != nil {
 		writeDomainErr(c, err)
 		return auditReadSnapshot{}, nil, false
@@ -495,7 +505,8 @@ func (h *Handlers) loadAttention(c *gin.Context, attentionID string) (auditAtten
 		auth.WriteError(c, http.StatusConflict, "attention_stale", "风险关注批次已失效，请刷新")
 		return auditAttentionPayload{}, auditAttentionGroup{}, nil, false
 	}
-	events, tooLarge, err := h.auditObservability.ListEventsLimited(repositoryObservabilityFilter(payload.Snapshot, filter), maxAuditAggregationEvents)
+	// 关注批次详情：事件会原样进前端（含 detail / body_preview），用全量投影 + 较低上限。
+	events, tooLarge, err := h.auditObservability.ListEventsLimited(repositoryObservabilityFilter(payload.Snapshot, filter), maxAuditAttentionEvents)
 	if err != nil {
 		writeDomainErr(c, err)
 		return auditAttentionPayload{}, auditAttentionGroup{}, nil, false

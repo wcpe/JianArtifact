@@ -110,9 +110,23 @@ func (r *AuditObservabilityRepo) ListEvents(f ObservabilityFilter) ([]Observabil
 	return events, nil
 }
 
-// ListEventsLimited 为聚合和风险分组读取设定硬上限，防止把大范围审计历史载入内存。
+// ListEventsLimited 为**关注批次详情**（会把事件原样序列化给前端看证据）读取设定硬上限，
+// 防止把大范围审计历史载入内存；用全量投影。
 func (r *AuditObservabilityRepo) ListEventsLimited(f ObservabilityFilter, limit int) ([]ObservabilityEvent, bool, error) {
-	query, args := observabilityEventsQuery(f, observabilityEventSelect)
+	return r.listEventsLimited(f, limit, observabilityEventSelect)
+}
+
+// ListAggregateEventsLimited 是**聚合路径**（概览 KPI/趋势、关注批次列表、通知）的读取入口：
+// 同样的"取 limit+1 判是否超限"约定，但用窄投影（见 observabilityAggregateSelect）——
+// 同内存预算下能覆盖的事件量比全量投影高一个数量级。线上 24h 窗口轻松过万条事件
+// （实测生产库上线第三天 24h 已达 5900 条），若聚合仍按全量投影设 5000 上限，
+// 默认视图会直接 409「审计聚合范围过大」——这正是线上那个 bug。
+func (r *AuditObservabilityRepo) ListAggregateEventsLimited(f ObservabilityFilter, limit int) ([]ObservabilityEvent, bool, error) {
+	return r.listEventsLimited(f, limit, observabilityAggregateSelect)
+}
+
+func (r *AuditObservabilityRepo) listEventsLimited(f ObservabilityFilter, limit int, selectClause string) ([]ObservabilityEvent, bool, error) {
+	query, args := observabilityEventsQuery(f, selectClause)
 	args = append(args, limit+1)
 	var events []ObservabilityEvent
 	if err := r.db.Select(&events, query+` ORDER BY occurred_at DESC, source DESC, source_event_id DESC LIMIT ?`, args...); err != nil {
@@ -155,6 +169,21 @@ const observabilityEventSelect = `SELECT source, source_event_id, occurred_at, a
 	action, entity_type, entity_key, repository, result, correlation_id, detail, error_class,
 	http_method, http_path, status_code, duration_ms, client_ip, user_agent, request_id,
 	token_preview, body_preview, actor_email`
+
+// observabilityAggregateSelect 是**聚合读**用的窄投影：只取统计与分组真正读到的列。
+//
+// 聚合路径（概览 KPI/趋势、关注批次列表、通知）只读 occurred_at / action / result /
+// actor / status_code / duration_ms / client_ip 这类字段，`detail`、`body_preview`、
+// `user_agent`、`token_preview`、`request_id`、`actor_email` 体积大却完全不参与聚合——
+// 单条 `detail` / `body_preview` 可能是数百字节到数 KB，去掉后单行内存降一个数量级，
+// 因此聚合事件上限可以设在量级更高的位置（见 api.maxAuditAggregationEvents）。
+//
+// 注意：**关注批次详情**会把事件原样序列化给前端看证据（含 detail/body_preview/user_agent），
+// 那条路径必须继续用全量投影 observabilityEventSelect。
+const observabilityAggregateSelect = `SELECT source, source_event_id, occurred_at, actor, user_id, auth_source,
+	action, entity_type, entity_key, repository, result, correlation_id, '' AS detail, error_class,
+	http_method, http_path, status_code, duration_ms, client_ip, '' AS user_agent, '' AS request_id,
+	'' AS token_preview, '' AS body_preview, '' AS actor_email`
 
 func observabilityEventsQuery(f ObservabilityFilter, selectClause string) (string, []any) {
 	query := `WITH observability_events AS (
