@@ -2,6 +2,7 @@
 // 仅用于开发态（浏览器 worker）与测试（Node server）Mock，不进入生产构建。
 // 类型绑定 schema.gen.ts（与 api/openapi.yaml 同源），保证 mock 数据不偏离契约。
 import type { components } from "./schema.gen";
+import { mockVolumeFactor, subscribeMockConsole } from "./console";
 import { resetObservabilityStore } from "./observability";
 import { MOCK_APP_VERSION, MOCK_MIGRATION_VERSION } from "./version";
 
@@ -83,6 +84,13 @@ interface State {
   users: User[];
   tokens: StoredToken[];
   repositories: Repository[];
+  /**
+   * 数据量档位克隆出的仓库名（`<seed>-v<r>`）。它们是**真实存在于 store** 的仓库
+   * （不是只在响应里改名的假条目），档位切换时按这份账本回收重放。
+   */
+  volumeClones: string[];
+  /** 上一次物化的档位倍数；1 = 仅种子。用于避免同档重复物化（也会复活被删掉的克隆）。 */
+  volumeFactor: number;
   /** FR-114：proxy 仓库上游连接状态（内存态，按仓库名；hosted/group 不维护）。 */
   connStatus: Record<string, ConnectionStatus>;
   acls: Record<string, AclEntry[]>;
@@ -288,6 +296,8 @@ function seed(): State {
     ],
     // 只保留 maven-releases 一条：ACL 直接决定"普通用户可读仓库"与"私有仓库 403"的权限语义，
     // 契约测试按此断言（可读仓库数、raw-hosted 拒绝读），不宜为了列表好看而增补。
+    volumeClones: [],
+    volumeFactor: 1,
     acls: { "maven-releases": [{ subjectId: 2, action: "read" }] },
     connStatus: {
       // FR-114：各 proxy 上游连接状态内存态——2 可用 / 4 自动阻止 / 1 不可用，供列表徽章与状态面板演示。
@@ -672,10 +682,51 @@ function seed(): State {
 
 let state: State = seed();
 
+/** 观测数据的快照通道：各端点独立计数，互不干扰。 */
+export type SnapshotChannel = "dashboard" | "host";
+
+/**
+ * 快照序号：每次对应端点被请求时递增，驱动一个确定性抖动。
+ *
+ * 存在的意义：mock 数值若恒定，点页眉刷新后画面没有任何变化，就无法判断刷新是否真的
+ * 生效。序号让每次刷新都产生可见的数据变动。
+ *
+ * **两点约束**：
+ * 1. 各端点**独立计数**——同一个页面里先发的列表请求不该吃掉仪表盘的基线序号；
+ * 2. **序号 0 是确定性基线快照**，契约测试与前端断言都基于它，因此 `resetStore`
+ *    必须把所有通道一并归零，否则同一文件内的后续用例会拿到抖动后的值而断言失败。
+ */
+const snapshotTicks: Record<SnapshotChannel, number> = {
+  dashboard: 0,
+  host: 0,
+};
+
+/** 取某通道的当前快照序号并前移；该通道首次调用恒返回 0（基线快照）。 */
+export function nextSnapshotTick(channel: SnapshotChannel): number {
+  const current = snapshotTicks[channel];
+  snapshotTicks[channel] = current + 1;
+  return current;
+}
+
+/**
+ * 以快照序号为种子的确定性抖动：返回 `[-amplitude, amplitude]` 的整数，序号 0 恒为 0。
+ * 用确定性哈希而非 Math.random，保证同一快照序号内多次渲染结果一致（不闪烁）。
+ */
+export function snapshotJitter(tick: number, salt: number, amplitude: number): number {
+  if (tick === 0 || amplitude === 0) return 0;
+  const noise = Math.sin(tick * 12.9898 + salt * 78.233) * 43758.5453;
+  const unit = noise - Math.floor(noise);
+  return Math.round((unit * 2 - 1) * amplitude);
+}
+
 /** 重置为初始种子数据；测试用例间隔离状态时调用。 */
 export function resetStore(): void {
   state = seed();
+  snapshotTicks.dashboard = 0;
+  snapshotTicks.host = 0;
   resetObservabilityStore();
+  // 种子重建后按当前档位重新物化，避免"档位是大量、store 只剩种子"的不一致。
+  reconcileVolumeRepositories(mockVolumeFactor());
 }
 
 /** 清空 user 表并复位为未初始化，用于验收“空库自举”路径。 */
@@ -686,6 +737,7 @@ export function emptyStore(): void {
   state.initialized = false;
   state.migrations = [];
   state.seq = { user: 0, token: 0, repo: 3, migration: 0, operation: 0 };
+  reconcileVolumeRepositories(mockVolumeFactor());
 }
 
 function nowIso(): string {
@@ -781,6 +833,11 @@ function normalizedPath(path: string): string {
   return path.replace(/^\/+|\/+$/g, "");
 }
 
+/** 转义正则元字符：仓库名允许 `+.` 等字符，拼进 RegExp 前必须转义。 */
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 const accessRank = { read: 0, write: 1, admin: 2 } as const;
 
 function canAccessRepository(
@@ -796,6 +853,49 @@ function canAccessRepository(
   if (subjectId === 0) return false;
   const granted = (state.acls[name] ?? []).find((item) => item.subjectId === subjectId);
   return granted ? accessRank[granted.action] >= accessRank[action] : false;
+}
+
+/**
+ * 数据量档位物化（实现见 `store.reconcileVolumeRepositories` 的说明）：把种子仓库展开成
+ * **真实存在**的克隆仓库，让「列表里有的东西」都能被按名接口解析。
+ *
+ * 触发点只有两个：模块加载时按当前档位对账一次、`subscribeMockConsole` 收到档位变更时对账。
+ * 不做在请求里（曾经这么干过）：深链直接进仓库详情页时第一条请求就是按名查询
+ * （`/usage`、`/tree`），而列表请求可能还没发出来 → 竞态 404。
+ */
+function reconcileVolumeRepositories(factor: number): void {
+  if (state.volumeFactor === factor) return;
+  // 1) 回收上一轮克隆。
+  for (const clone of state.volumeClones) {
+    state.repositories = state.repositories.filter((r) => r.name !== clone);
+    delete state.acls[clone];
+    delete state.assets[clone];
+    delete state.connStatus[clone];
+  }
+  state.volumeClones = [];
+  state.volumeFactor = factor;
+  if (factor <= 1) return;
+  // 2) 从当前种子（此刻 repositories 里只剩种子）物化。
+  const seeds = [...state.repositories];
+  for (let round = 1; round < factor; round += 1) {
+    for (const seed of seeds) {
+      const name = `${seed.name}-v${round}`;
+      state.repositories.push({ ...seed, id: seed.id + round * 1_000_000, name });
+      const assets = state.assets[seed.name];
+      if (assets) {
+        state.assets[name] = assets.map((asset) => ({ ...asset }));
+      }
+      const conn = state.connStatus[seed.name];
+      if (conn) {
+        state.connStatus[name] = { ...conn };
+      }
+      const acl = state.acls[seed.name];
+      if (acl) {
+        state.acls[name] = acl.map((entry) => ({ ...entry }));
+      }
+      state.volumeClones.push(name);
+    }
+  }
 }
 
 function targetAssetPaths(assets: AssetSummary[], target: MockAssetOperationTarget): string[] {
@@ -997,6 +1097,24 @@ export const store = {
     return state.tokens.length < before;
   },
 
+  /**
+   * 数据量档位：把种子仓库**物化**成真实的克隆仓库（`<name>-v<r>`，id 偏移 `r*1_000_000`），
+   * 并复制各自的制品树 / 连接状态 / ACL，使所有按名查询（详情、树、清单、ACL、用量、
+   * 上传、清理、删除）都能命中。
+   *
+   * 为什么不沿用「只放大列表响应」的 `scaleList` 做法：那样列表里会出现 store 中并不存在的
+   * 仓库，用户点进去后所有按名接口一律 404「仓库不存在」——本方法就是为了消灭这类假条目。
+   *
+   * 幂等且可回收：档位不变时直接返回（避免同档重复物化，也不会复活已被删除的克隆）；
+   * 档位变化时先按账本回收上一轮克隆，再从当前种子重新物化；factor ≤ 1 即只留种子。
+   *
+   * 局限（有意为之）：克隆是物化时的一份快照，之后对种子做可见性 / 在线状态 / 内容变更
+   * 不会自动传播到已存在的克隆；切换档位会按最新种子重建。
+   */
+  reconcileVolumeRepositories(factor: number): void {
+    reconcileVolumeRepositories(factor);
+  },
+
   listRepositories(page: number, pageSize: number): { items: Repository[]; total: number } {
     return {
       items: pageSlice(state.repositories, page, pageSize).map(decorate),
@@ -1148,10 +1266,19 @@ export const store = {
 
   deleteRepository(name: string): boolean {
     const before = state.repositories.length;
-    state.repositories = state.repositories.filter((r) => r.name !== name);
-    delete state.acls[name];
-    delete state.assets[name];
-    delete state.connStatus[name];
+    // 档位克隆（`<name>-v<r>`）是种子的派生物：种子删掉后它们必须一起消失，
+    // 否则列表里会留下点击即 404 的孤儿。
+    const clonePattern = new RegExp(`^${escapeRegExp(name)}-v\\d+$`);
+    const doomed = state.repositories
+      .filter((r) => r.name === name || clonePattern.test(r.name))
+      .map((r) => r.name);
+    state.repositories = state.repositories.filter((r) => !doomed.includes(r.name));
+    for (const doomedName of doomed) {
+      delete state.acls[doomedName];
+      delete state.assets[doomedName];
+      delete state.connStatus[doomedName];
+    }
+    state.volumeClones = state.volumeClones.filter((clone) => !doomed.includes(clone));
     return state.repositories.length < before;
   },
 
@@ -1858,3 +1985,12 @@ function buildUsage(repo: Repository, base: string): UsageSnippet[] {
   }
   return snippets;
 }
+
+// —— 档位物化：模块加载即按当前档位对账，并订阅档位变更 ——
+// 必须发生在「第一条请求之前」而不是「列表请求里」：深链直接进仓库详情页时，
+// 第一个打到后端的请求可能是 `/usage` 或 `/tree`（按名查询），等列表请求触发就会竞态
+// 404。档位不变时 reconcile 直接返回，零开销。
+reconcileVolumeRepositories(mockVolumeFactor());
+subscribeMockConsole(() => {
+  reconcileVolumeRepositories(mockVolumeFactor());
+});

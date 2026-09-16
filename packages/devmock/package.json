@@ -11,6 +11,7 @@
     "./schema": "./src/schema.gen.ts",
     "./msw": "./src/msw.ts",
     "./scenario": "./src/scenario.ts",
+    "./console": "./src/console.ts",
     "./store": "./src/store.ts",
     "./browser": "./src/browser.ts",
     "./node": "./src/node.ts"

@@ -12,12 +12,19 @@ import {
   type NotificationQuery,
 } from "./observability";
 import { MOCK_LICENSES } from "./licenses.gen";
+import { mockNetworkDelayMs, mockVolumeFactor } from "./console";
 import {
   DEV_MOCK_ROUTE_HEADER,
   currentDevMockScenario,
   interceptDevMockScenario,
 } from "./scenario";
-import { MOCK_SECOND_ADMIN_TOKEN, MOCK_TOKEN, store } from "./store";
+import {
+  MOCK_SECOND_ADMIN_TOKEN,
+  MOCK_TOKEN,
+  nextSnapshotTick,
+  snapshotJitter,
+  store,
+} from "./store";
 import { MOCK_APP_VERSION, MOCK_SCHEMA_VERSION } from "./version";
 import type {
   AclEntry,
@@ -648,7 +655,17 @@ function isValidAssetOperationBody(body: AssetOperationBody): body is ValidAsset
 
 export const handlers = [
   // 开发态通用场景必须先于业务 handler 处理；undefined 时继续走既有路由。
-  http.all("*", ({ request }) => interceptDevMockScenario(request)),
+  // 同一个前置守卫顺带承担"网速"模拟：按控制台档位在放行前等待一段延迟，
+  // 这样任何端点都受网速档位影响，无需逐 handler 改造。
+  http.all("*", async ({ request }) => {
+    const scenarioResponse = await interceptDevMockScenario(request);
+    if (scenarioResponse) return scenarioResponse;
+    const delay = mockNetworkDelayMs();
+    if (delay > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+    return undefined;
+  }),
 
   // —— 健康 / 状态（公开）——
   http.get("*/healthz", () => HttpResponse.json({ status: "ok", version: store.status().version })),
@@ -888,6 +905,9 @@ export const handlers = [
     const url = new URL(request.url);
     const page = intParam(url, "page", 1);
     const pageSize = intParam(url, "page_size", 20);
+    // 数据量档位由 store 自己物化（`store.reconcileVolumeRepositories`：模块加载 + 档位变更时
+    // 各对账一次），这里不再需要放大列表——克隆仓库是 store 里真实存在的条目，列表与按名查询
+    // 看到的是同一份数据。
     const userId = mockUserId(request);
     if (userId === undefined) {
       if (request.headers.has("Authorization") || !store.anonymousAccess()) {
@@ -926,6 +946,7 @@ export const handlers = [
     if (isEmptyScenario(request)) {
       return HttpResponse.json({ items: [], total: 0 });
     }
+    // 档位克隆同样是真实仓库，公开导航与登录态列表口径一致。
     return HttpResponse.json(store.listAnonymousRepositories(1, 100));
   }),
 
@@ -1109,8 +1130,13 @@ export const handlers = [
     const blockedAt = (minutesAgo: number) =>
       new Date(now.getTime() - minutesAgo * 60_000).toISOString();
     const blockedUntil = new Date(now.getTime() + 40 * 60_000).toISOString();
+    // 每次请求前移快照序号：让页眉刷新后 KPI 与趋势都有可见变化（此前数值恒定，
+    // 刷新完全看不出区别）。序号 0 为确定性基线——测试断言与 resetStore 都依赖它。
+    const tick = nextSnapshotTick("dashboard");
+    const jitter = (salt: number, amplitude: number) => snapshotJitter(tick, salt, amplitude);
     // 趋势样例：12 个桶（每桶 5 分钟），让趋势图呈真实曲线而非单点。
-    const BUCKETS = 12;
+    // 数据量档位会放大桶数（大档 192 桶），用于验证前端渲染护栏。
+    const BUCKETS = 12 * mockVolumeFactor();
     const bucketRange = (i: number) => {
       const end = new Date(now.getTime() - (BUCKETS - 1 - i) * 5 * 60_000);
       const start = new Date(end.getTime() - 5 * 60_000);
@@ -1118,23 +1144,27 @@ export const handlers = [
     };
     const trendBuckets = Array.from({ length: BUCKETS }, (_, i) => {
       const wave = Math.sin(i / 1.8);
-      const requestCount = Math.max(6, Math.round(96 + wave * 26 + i * 2));
-      const downloadCount = Math.max(4, Math.round(requestCount * 0.72));
+      // 每个桶用独立 salt 抖动，整条曲线形状每次刷新都会变。
+      const requestCount = Math.max(6, Math.round(96 + wave * 26 + i * 2) + jitter(100 + i, 7));
+      const downloadCount = Math.max(4, Math.round(requestCount * 0.72) + jitter(200 + i, 5));
       const cacheHitCount = Math.round(downloadCount * 0.85);
       return {
         ...bucketRange(i),
         requestCount,
         downloadCount,
-        failureCount: i % 5 === 3 ? 2 : i % 3 === 0 ? 1 : 0,
+        failureCount: Math.max(0, (i % 5 === 3 ? 2 : i % 3 === 0 ? 1 : 0) + jitter(300 + i, 1)),
         cacheHitCount,
         cacheMissCount: Math.max(0, downloadCount - cacheHitCount),
       };
     });
+    // 仓库数必须与列表同源：档位放大会把种子物化成更多真实仓库，
+    // 写死 9 会让「仪表盘说 9、仓库列表说 144」当场对不上。
+    const repositoryTotal = store.listRepositories(1, 1).total;
     const capacityTrendBuckets = Array.from({ length: BUCKETS }, (_, i) => ({
       ...bucketRange(i),
-      repositoryCount: 14,
-      assetCount: 28416,
-      logicalBytes: 86_000_000_000 + i * 620_000_000,
+      repositoryCount: repositoryTotal,
+      assetCount: 28416 + jitter(400 + i, 260),
+      logicalBytes: 86_000_000_000 + i * 620_000_000 + jitter(500 + i, 3_000_000_000),
     }));
     return HttpResponse.json({
       from: new Date(now.getTime() - 86_400_000).toISOString(),
@@ -1143,18 +1173,19 @@ export const handlers = [
       current: {
         from: minute,
         to: now.toISOString(),
-        repositoryCount: 9,
-        assetCount: 28416,
-        logicalBytes: 92771293542,
+        repositoryCount: repositoryTotal,
+        assetCount: 28416 + jitter(1, 240),
+        logicalBytes: 92771293542 + jitter(2, 6_000_000_000),
       },
       kpi: {
-        repositoryCount: 9,
-        assetCount: 28416,
-        logicalBytes: 92771293542,
-        requestCount: 128,
-        downloadCount: 92,
-        failureCount: 1,
-        cacheHitRate: 78 / 84,
+        repositoryCount: repositoryTotal,
+        assetCount: 28416 + jitter(1, 240),
+        logicalBytes: 92771293542 + jitter(2, 6_000_000_000),
+        requestCount: 128 + jitter(3, 22),
+        downloadCount: 92 + jitter(4, 16),
+        failureCount: Math.max(0, 1 + jitter(5, 2)),
+        // 沿用 78/84 的分母口径，只抖分子（幅度远小于 84，不会越界成 >100%）。
+        cacheHitRate: (78 + jitter(6, 5)) / 84,
       },
       requestTrend: trendBuckets,
       capacityTrend: capacityTrendBuckets,
@@ -1208,6 +1239,9 @@ export const handlers = [
     if (denied) return denied;
     const now = new Date();
     const minute = new Date(now.getTime() - 60_000).toISOString();
+    // 与 dashboard 同源：每次请求前移快照序号，让刷新后 CPU/内存/网络曲线都有可见变化。
+    const tick = nextSnapshotTick("host");
+    const jitter = (salt: number, amplitude: number) => snapshotJitter(tick, salt, amplitude);
     // 按请求窗口自适应生成 48 个采样桶（桶宽 = 窗口/48），任何档位都有足够样本支撑拖选聚焦。
     const url = new URL(request.url);
     const parsedFrom = Date.parse(url.searchParams.get("from") ?? "");
@@ -1217,13 +1251,16 @@ export const handlers = [
       ? Math.min(parsedFrom, windowTo - 3_600_000)
       : windowTo - 86_400_000;
     const span = Math.max(windowTo - windowFrom, 3_600_000);
-    const SAMPLES = 48;
+    const SAMPLES = 48 * mockVolumeFactor();
     const step = span / SAMPLES;
     const samples = Array.from({ length: SAMPLES }, (_, i) => {
       const end = new Date(windowFrom + step * (i + 1));
       const start = new Date(end.getTime() - step);
       const wave = Math.sin(i / 3.2);
       const drift = Math.sin(i / 11);
+      // 采样序号取模 48：数据量档位会放大桶数（大档 768），若不取模，
+      // 单调递减的内存 / 磁盘序列会穿过 0 变成负数，曲线形状也不对。
+      const slot = i % 48;
       return {
         from: start.toISOString(),
         to: end.toISOString(),
@@ -1231,15 +1268,28 @@ export const handlers = [
         networkState: { state: "ok" },
         processState: { state: "ok" },
         readinessState: { state: "ok" },
-        cpuPercent: Math.round(Math.max(5, Math.min(95, 42 + wave * 14 + drift * 10)) * 10) / 10,
+        cpuPercent:
+          Math.round(
+            Math.max(5, Math.min(95, 42 + wave * 14 + drift * 10 + jitter(10 + slot, 6))) * 10,
+          ) / 10,
         memoryTotalBytes: 17179869184,
-        memoryAvailableBytes: 6871947673 - i * 1024 * 1024 * 37,
-        diskAvailableBytes: 536870912000 - i * 1024 * 1024 * 173,
-        networkReceiveBytesPerSecond: Math.round(8192 + wave * 4096 + i * 96),
-        networkTransmitBytesPerSecond: Math.round(4096 + wave * 2048 + i * 48),
-        processRssBytes: 67108864 + i * 1024 * 512,
-        processCpuPercent: Math.round((1.2 + wave * 0.5 + drift * 0.8) * 100) / 100,
-        goroutineCount: 37 + (i % 4),
+        memoryAvailableBytes:
+          6871947673 - slot * 1024 * 1024 * 37 + jitter(100 + slot, 120 * 1024 * 1024),
+        diskAvailableBytes:
+          536870912000 - slot * 1024 * 1024 * 173 + jitter(200 + slot, 400 * 1024 * 1024),
+        networkReceiveBytesPerSecond: Math.max(
+          0,
+          Math.round(8192 + wave * 4096 + slot * 96) + jitter(300 + slot, 900),
+        ),
+        networkTransmitBytesPerSecond: Math.max(
+          0,
+          Math.round(4096 + wave * 2048 + slot * 48) + jitter(400 + slot, 500),
+        ),
+        processRssBytes: 67108864 + slot * 1024 * 512 + jitter(500 + slot, 3 * 1024 * 1024),
+        processCpuPercent:
+          Math.round(Math.max(0, 1.2 + wave * 0.5 + drift * 0.8 + jitter(600 + slot, 0.4)) * 100) /
+          100,
+        goroutineCount: Math.max(1, 37 + (slot % 4) + jitter(700 + slot, 3)),
       };
     });
     const latest = samples[SAMPLES - 1];
@@ -1290,6 +1340,9 @@ export const handlers = [
     const limit = requestedLimit > 0 && requestedLimit <= 200 ? requestedLimit : 50;
     const requestedOffset = offsetParam.value ?? 0;
     const offset = requestedOffset >= 0 ? requestedOffset : 0;
+    // 不做档位放大：该端点当前**无前端消费者**（审计中心走 observability 端点），
+    // 而"只在响应里放大"会产出与种子共享 eventId 的克隆（`scaleList` 只偏移数值 id），
+    // 一旦被接线就是「按 id 钻取命中另一条事件」的陷阱。域放大统一走 store 物化。
     return HttpResponse.json({
       items: filtered.slice(offset, offset + limit),
       total: filtered.length,
