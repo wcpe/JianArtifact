@@ -25,7 +25,9 @@ import { actorText, parseTime } from "./labels";
 export const AUDIT_PAGE_SIZE = 20;
 export const AUDIT_PAGE_SIZES = ["20", "50", "100"];
 
-export type AuditRange = "24h" | "7d" | "30d";
+// 1h 档是"聚合范围过大"时的兜底选择：事件量按量级增长，24h 窗口在活跃节点上
+// 也可能触到后端聚合上限（返回 audit_query_too_large），此时一键切到最小窗口仍能看数据。
+export type AuditRange = "1h" | "24h" | "7d" | "30d";
 /** 风险状态筛选：待处理（未确认）/ 已确认。 */
 export type AuditAttentionFilter = "pending" | "acknowledged";
 
@@ -47,12 +49,13 @@ export interface AuditFilters {
 }
 
 const RANGE_MS: Record<AuditRange, number> = {
+  "1h": 60 * 60_000,
   "24h": 24 * 60 * 60_000,
   "7d": 7 * 24 * 60 * 60_000,
   "30d": 30 * 24 * 60 * 60_000,
 };
 
-const RANGES: AuditRange[] = ["24h", "7d", "30d"];
+const RANGES: AuditRange[] = ["1h", "24h", "7d", "30d"];
 const ATTENTIONS: AuditAttentionFilter[] = ["pending", "acknowledged"];
 
 /** 从 URL 恢复筛选与分页状态（深链 / 刷新不丢视图）。 */

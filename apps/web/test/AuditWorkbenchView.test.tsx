@@ -1,7 +1,10 @@
 // 审计工作台（单列表 + 顶部 KPI）：滚动限制、KPI 卡片、动作翻译、筛选与批次抽屉的回归覆盖。
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { HttpResponse, http } from "msw";
 import { describe, expect, it } from "vitest";
+
+import { server } from "@jianartifact/devmock/node";
 
 import { AuditWorkbenchView } from "../src/components/audit/AuditWorkbenchView";
 import { renderWithProviders } from "./harness";
@@ -118,6 +121,39 @@ describe("审计工作台（风险批次抽屉）", () => {
     await user.click(screen.getByRole("button", { name: "确认", exact: true }));
     await waitFor(() => {
       expect(screen.queryByRole("button", { name: "确认已处理" })).toBeNull();
+    });
+  });
+});
+
+describe("审计工作台（聚合范围过大）", () => {
+  it("后端 409 时说明原因并给出一键缩小范围，而不是笼统的「暂时不可用」", async () => {
+    // 线上 bug 的用户可见形态：24h 窗口事件量超过后端聚合上限 → 409
+    // audit_query_too_large → 前端原来一律显示「当前节点审计暂时不可用」，
+    // 用户既不知道原因也无从下手（重试必然同一结果）。
+    server.use(
+      http.get("*/api/v1/observability/audit/summary", () =>
+        HttpResponse.json(
+          {
+            error: {
+              code: "audit_query_too_large",
+              message: "审计聚合范围过大，请缩小时间范围或筛选条件",
+            },
+          },
+          { status: 409 },
+        ),
+      ),
+    );
+    const user = userEvent.setup();
+    renderWorkbench();
+
+    expect(await screen.findByText("当前时间范围内的审计事件过多")).toBeTruthy();
+    expect(screen.queryByText("当前节点审计暂时不可用")).toBeNull();
+    expect(screen.getByText("审计聚合范围过大，请缩小时间范围或筛选条件")).toBeTruthy();
+
+    // 一键切到近 1 小时：范围控件随之切到 1h。
+    await user.click(screen.getByRole("button", { name: "改用近 1 小时" }));
+    await waitFor(() => {
+      expect((screen.getByRole("radio", { name: "1h" }) as HTMLInputElement).checked).toBe(true);
     });
   });
 });

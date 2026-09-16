@@ -1,6 +1,7 @@
 // 风险批次详情抽屉（FR-118）：完整成员分页加载 + 二次确认防误触。
 // 深链 attentionId、attention_stale 处理与确认流语义与旧实现保持一致。
 import { useEffect, useRef, useState } from "react";
+import { IconCheck, IconRefresh } from "@tabler/icons-react";
 import { useTranslation } from "react-i18next";
 import {
   Alert,
@@ -128,7 +129,12 @@ export function AttentionDrawer({
       !(state.error instanceof ApiError && state.error.code === "attention_stale") ? (
         <Alert color="red" title={t("auditWorkbench.drawerLoadError")}>
           <Box mt="sm">
-            <Button size="xs" variant="light" onClick={state.reload}>
+            <Button
+              size="xs"
+              variant="light"
+              onClick={state.reload}
+              leftSection={<IconRefresh size={14} />}
+            >
               {t("common.retry", { defaultValue: "重试" })}
             </Button>
           </Box>
@@ -174,7 +180,11 @@ export function AttentionDrawer({
               shadow="md"
             >
               <Popover.Target>
-                <Button loading={acknowledging} onClick={() => setConfirmOpen((open) => !open)}>
+                <Button
+                  loading={acknowledging}
+                  onClick={() => setConfirmOpen((open) => !open)}
+                  leftSection={<IconCheck size={16} />}
+                >
                   {t("auditWorkbench.confirmTitle")}
                 </Button>
               </Popover.Target>
@@ -182,7 +192,11 @@ export function AttentionDrawer({
                 <Stack gap="xs">
                   <Text size="xs">{t("auditWorkbench.confirmPopover")}</Text>
                   <Group gap="xs">
-                    <Button size="xs" onClick={() => void acknowledge()}>
+                    <Button
+                      size="xs"
+                      leftSection={<IconCheck size={14} />}
+                      onClick={() => void acknowledge()}
+                    >
                       {t("auditWorkbench.confirmYes")}
                     </Button>
                     <Button size="xs" variant="default" onClick={() => setConfirmOpen(false)}>

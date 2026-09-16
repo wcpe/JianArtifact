@@ -208,6 +208,22 @@ export function formatTime(value: unknown): string {
   return t ? timeFormatter.format(new Date(t)) : "—";
 }
 
+const clockFormatter = new Intl.DateTimeFormat("zh-CN", {
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: false,
+});
+
+/**
+ * 只取时刻（hh:mm:ss）。窄屏审计表的时间列只有 ~78px，带日期会折成三行；
+ * 日期在分区标题的时间范围里已经表达过，这里只留时刻。
+ */
+export function formatClock(value: unknown): string {
+  const t = parseTime(value);
+  return t ? clockFormatter.format(new Date(t)) : "—";
+}
+
 const sameDay = (a: Date, b: Date) =>
   a.getFullYear() === b.getFullYear() &&
   a.getMonth() === b.getMonth() &&
