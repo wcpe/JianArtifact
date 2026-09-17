@@ -4,6 +4,10 @@
 // 渲染该目录的直接子项列表（子目录在前、文件在后），供人用浏览器浏览仓库内容。
 // 鉴权复用 RawHandler.authorize(read)：public 匿名放行、private 需登录。
 // 触发判定见 tryBrowse，渲染见 serveBrowse；不引入新依赖、不改 domain 接口。
+//
+// 规模口径：子目录**全量**展示，只有直接文件分页。目录项规模只与「同层目录数」相关，
+// 而对取数做条数截断会让同层的其它子目录整片消失（列表既不完整也不正确），因此分页
+// 只作用于直接文件；单次响应规模与子树规模解耦。
 package protocol
 
 import (
@@ -21,8 +25,22 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// browseMaxEntries 限制单次目录浏览拉取的制品条数，防止超大目录拖慢响应。
-const browseMaxEntries = 1000
+// browseFilePageSize 是目录索引页默认每页展示的直接文件行数。
+const browseFilePageSize = 500
+
+// browseFilePageSizeMin / browseFilePageSizeMax 是 ?per_page= 的允许区间：
+// 给「一屏想多看些」留出口，同时封住单个请求渲染上万行的风险。
+const (
+	browseFilePageSizeMin = 50
+	browseFilePageSizeMax = 5000
+)
+
+// browseMaxPage 是 ?page= 的解析护栏（真实页数另按文件总数收敛），
+// 用于避免 (page-1)*pageSize 在 32 位上溢出。
+const browseMaxPage = 100000
+
+// browseFilePageSizes 是页脚提供的每页条数切换项。
+var browseFilePageSizes = []int{500, 2000, 5000}
 
 // browseTmpl 是目录索引页模板；html/template 自动按上下文转义，防 XSS。
 var browseTmpl = template.Must(template.New("browse").Parse(`<!DOCTYPE html>
@@ -32,38 +50,73 @@ var browseTmpl = template.Must(template.New("browse").Parse(`<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{.Title}}</title>
 <style>
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;max-width:960px;margin:1.5rem auto;padding:0 1rem;color:#24292f}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;max-width:1180px;margin:1.5rem auto;padding:0 1rem;color:#24292f}
 h1{font-size:1rem;font-weight:600;margin:1.5rem 0 .75rem;word-break:break-all}
 .crumbs a{color:#0969da;text-decoration:none}
 .crumbs a:hover{text-decoration:underline}
 .crumbs .sep{color:#57606a;margin:0 .25rem}
-table{border-collapse:collapse;width:100%;font-size:.9rem}
-th,td{text-align:left;padding:.4rem .6rem;border-bottom:1px solid #d0d7de}
-th{color:#57606a;font-weight:600}
+.tablewrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;min-width:780px;font-size:.9rem}
+th,td{text-align:left;padding:.4rem .6rem;border-bottom:1px solid #d0d7de;vertical-align:top}
+th{color:#57606a;font-weight:600;white-space:nowrap}
 td.name a{color:#0969da;text-decoration:none;word-break:break-all}
 td.name a:hover{text-decoration:underline}
 tr.dir td.name a{font-weight:600}
 td.size{color:#57606a;font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+td.time{color:#57606a;font-variant-numeric:tabular-nums;white-space:nowrap;font-size:.82rem}
+td.sum{font-size:.78rem;color:#57606a;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+td.sum details summary{cursor:pointer;white-space:nowrap}
+td.sum dl{margin:.35rem 0 0;font-size:.72rem}
+td.sum dt{color:#57606a}
+td.sum dd{margin:.1rem 0 .35rem;color:#24292f;word-break:break-all}
 .empty{color:#57606a;padding:1rem 0}
-.hint{color:#57606a;font-size:.8rem;margin-top:.5rem}
+.summary{display:flex;flex-wrap:wrap;gap:.25rem 1rem;color:#57606a;font-size:.8rem;margin-top:.75rem}
+.pager{display:flex;flex-wrap:wrap;gap:.5rem 1rem;align-items:baseline;font-size:.85rem;margin-top:.75rem}
+.pager a{color:#0969da;text-decoration:none}
+.pager a:hover{text-decoration:underline}
+.pager .current{color:#57606a}
+.sizes{display:flex;flex-wrap:wrap;gap:.25rem .5rem;align-items:baseline;color:#57606a;font-size:.8rem;margin-top:.5rem}
+.sizes a{color:#0969da;text-decoration:none}
+.sizes a:hover{text-decoration:underline}
+.sizes .on{color:#24292f;font-weight:600}
 footer{margin-top:2rem;color:#57606a;font-size:.75rem}
 </style>
 </head>
 <body>
 <h1 class="crumbs">{{range $i, $c := .Crumbs}}{{if $i}}<span class="sep">/</span>{{end}}<a href="{{$c.Href}}">{{$c.Name}}</a>{{end}}</h1>
 {{if .Rows}}
+<div class="tablewrap">
 <table>
-<thead><tr><th>名称</th><th>大小</th></tr></thead>
+<thead><tr><th>名称</th><th>大小</th><th>创建时间 (UTC)</th><th>修改时间 (UTC)</th><th>校验和</th></tr></thead>
 <tbody>
 {{range .Rows}}
 <tr class="{{if .IsDir}}dir{{end}}">
 <td class="name"><a href="{{.Href}}">{{.Name}}</a></td>
-<td class="size">{{if .IsDir}}-{{else}}{{.SizeStr}}{{end}}</td>
+<td class="size"{{if .SizeTitle}} title="{{.SizeTitle}}"{{end}}>{{.SizeStr}}</td>
+<td class="time">{{.CreatedStr}}</td>
+<td class="time"{{if .UpdatedTitle}} title="{{.UpdatedTitle}}"{{end}}>{{.UpdatedStr}}</td>
+<td class="sum">{{if .HasChecksum}}<details><summary title="{{.Sha256}}">{{.Sha256Short}}</summary><dl><dt>SHA-256</dt><dd>{{.Sha256}}</dd><dt>SHA-1</dt><dd>{{.Sha1}}</dd><dt>MD5</dt><dd>{{.Md5}}</dd></dl></details>{{else}}-{{end}}</td>
 </tr>
 {{end}}
 </tbody>
 </table>
-{{if .Truncated}}<p class="hint">目录较大（共 {{.Total}} 项），仅显示前 {{.Shown}} 项。</p>{{end}}
+</div>
+<div class="summary">
+<span>目录 {{.DirCount}} 个</span>
+<span>文件 {{.FileTotal}} 项</span>
+<span>合计 {{.FileBytesStr}}</span>
+{{if .Paged}}<span>当前显示第 {{.Pager.From}}–{{.Pager.To}} 项</span>{{end}}
+</div>
+{{if gt .Pager.PageCount 1}}
+<nav class="pager">
+<a href="{{.Pager.FirstHref}}">首页</a>
+{{if .Pager.HasPrev}}<a href="{{.Pager.PrevHref}}">上一页</a>{{end}}
+<span class="current">第 {{.Pager.Page}} / {{.Pager.PageCount}} 页</span>
+{{if .Pager.HasNext}}<a href="{{.Pager.NextHref}}">下一页</a>{{end}}
+<a href="{{.Pager.LastHref}}">末页</a>
+</nav>
+{{end}}
+<p class="sizes">每页：{{range $i, $s := .Pager.SizeLinks}}{{if $i}}·{{end}}{{if $s.Active}}<span class="on">{{$s.Size}}</span>{{else}}<a href="{{$s.Href}}">{{$s.Size}}</a>{{end}}{{end}}</p>
 {{else}}
 <p class="empty">此目录为空。</p>
 {{end}}
@@ -78,21 +131,57 @@ type browseCrumb struct {
 }
 
 // browseRow 是目录列表中的一行：子目录或文件。
+// 时间字段是 asset 表存的 UTC "YYYY-MM-DD HH:MM:SS"，原样展示并在表头标注 UTC。
+// 目录行的「大小」是子树内制品总数、「修改时间」是子树内最近一次更新时间（目录没有
+// 自身的创建/修改时间），故用 title 说明该差异。
 type browseRow struct {
-	Name    string
-	Href    string
-	IsDir   bool
-	SizeStr string
+	Name         string
+	Href         string
+	IsDir        bool
+	SizeStr      string
+	SizeTitle    string
+	CreatedStr   string
+	UpdatedStr   string
+	UpdatedTitle string
+	Sha256       string
+	Sha256Short  string
+	Sha1         string
+	Md5          string
+	HasChecksum  bool
+}
+
+// browseSizeLink 是页脚「每页条数」的一个切换项。
+type browseSizeLink struct {
+	Size   int
+	Href   string
+	Active bool
+}
+
+// browsePager 是直接文件的分页状态（子目录不参与分页）。
+type browsePager struct {
+	Page      int
+	PageCount int
+	From      int // 本页首条序号（1-based；本页无文件时为 0）
+	To        int // 本页末条序号
+	FirstHref string
+	PrevHref  string
+	NextHref  string
+	LastHref  string
+	HasPrev   bool
+	HasNext   bool
+	SizeLinks []browseSizeLink
 }
 
 // browsePage 是目录索引页的模板数据。
 type browsePage struct {
-	Title     string
-	Crumbs    []browseCrumb
-	Rows      []browseRow
-	Total     int
-	Shown     int
-	Truncated bool
+	Title        string
+	Crumbs       []browseCrumb
+	Rows         []browseRow
+	DirCount     int
+	FileTotal    int
+	FileBytesStr string
+	Paged        bool
+	Pager        browsePager
 }
 
 // tryBrowse 检测浏览器目录浏览请求（GET + 尾斜杠 + 期望 HTML 的客户端）。
@@ -132,31 +221,85 @@ func acceptsHTML(accept string) bool {
 	return false
 }
 
-// serveBrowse 渲染当前目录的 HTML 索引页：按 artPath 前缀取制品，推导直接子项。
+// serveBrowse 渲染当前目录的 HTML 索引页：子目录全量、直接文件分页。
 func (h *RawHandler) serveBrowse(c *gin.Context) {
 	repoName := c.Param("repo")
 	artPath := cleanArtifactPath(c.Param("artifactPath")) // 形如 "dir/" 或 ""（根）
 
-	assets, total, err := h.repoSvc.ListAssets(repoName, artPath, browseMaxEntries, 0)
+	pageSize := clampAtoi(c.Query("per_page"), browseFilePageSize, browseFilePageSizeMin, browseFilePageSizeMax)
+	page := clampAtoi(c.Query("page"), 1, 1, browseMaxPage)
+
+	children, err := h.repoSvc.ListDirectoryPage(repoName, artPath, pageSize, (page-1)*pageSize)
 	if err != nil {
 		writeAssetErr(c, err)
 		return
 	}
+	// 已知直接文件总数后再收敛页码，避免落在末页之后显示空页。
+	pageCount := (children.FileTotal + pageSize - 1) / pageSize
+	if pageCount < 1 {
+		pageCount = 1
+	}
+	if page > pageCount {
+		page = pageCount
+		if children, err = h.repoSvc.ListDirectoryPage(repoName, artPath, pageSize, (page-1)*pageSize); err != nil {
+			writeAssetErr(c, err)
+			return
+		}
+	}
 
-	page := browsePage{
-		Title:     repoName + "/" + artPath,
-		Crumbs:    buildBrowseCrumbs(repoName, artPath),
-		Rows:      collectBrowseRows(c, artPath, assets),
-		Total:     total,
-		Shown:     len(assets),
-		Truncated: total > browseMaxEntries,
+	pager := browsePager{
+		Page:      page,
+		PageCount: pageCount,
+		FirstHref: browseHref(c, 1, pageSize),
+		PrevHref:  browseHref(c, page-1, pageSize),
+		NextHref:  browseHref(c, page+1, pageSize),
+		LastHref:  browseHref(c, pageCount, pageSize),
+		HasPrev:   page > 1,
+		HasNext:   page < pageCount,
+		SizeLinks: buildBrowseSizeLinks(c, pageSize),
+	}
+	if n := len(children.Files); n > 0 {
+		pager.From = (page-1)*pageSize + 1
+		pager.To = pager.From + n - 1
+	}
+
+	data := browsePage{
+		Title:        repoName + "/" + artPath,
+		Crumbs:       buildBrowseCrumbs(repoName, artPath),
+		Rows:         collectBrowseRows(c, children.Dirs, children.DirStats, children.Files),
+		DirCount:     len(children.Dirs),
+		FileTotal:    children.FileTotal,
+		FileBytesStr: formatSize(children.FileBytes),
+		Paged:        pageCount > 1,
+		Pager:        pager,
 	}
 	var buf bytes.Buffer
-	if err := browseTmpl.Execute(&buf, page); err != nil {
+	if err := browseTmpl.Execute(&buf, data); err != nil {
 		c.Status(http.StatusInternalServerError)
 		return
 	}
 	c.Data(http.StatusOK, "text/html; charset=utf-8", buf.Bytes())
+}
+
+// browseHref 构造同目录下的翻页链接：保留当前请求的既有查询参数，只覆盖 page 与 per_page。
+func browseHref(c *gin.Context, page, pageSize int) string {
+	q := c.Request.URL.Query()
+	q.Set("page", strconv.Itoa(page))
+	q.Set("per_page", strconv.Itoa(pageSize))
+	return c.Request.URL.EscapedPath() + "?" + q.Encode()
+}
+
+// buildBrowseSizeLinks 生成「每页条数」切换链接；切换后回到第 1 页。
+func buildBrowseSizeLinks(c *gin.Context, current int) []browseSizeLink {
+	links := make([]browseSizeLink, 0, len(browseFilePageSizes))
+	for _, size := range browseFilePageSizes {
+		links = append(links, browseSizeLink{
+			Size:   size,
+			Href:   browseHref(c, 1, size),
+			Active: size == current,
+		})
+	}
+	return links
 }
 
 // buildBrowseCrumbs 构造面包屑：仓库根 → 各级目录，每段单独 URL 编码。
@@ -170,46 +313,82 @@ func buildBrowseCrumbs(repoName, artPath string) []browseCrumb {
 	return crumbs
 }
 
-// collectBrowseRows 从前缀下的制品推导直接子目录与直接文件，生成有序列表行。
-// 子项 href 以当前请求路径（编码形式）为基址，子项名逐段 URL 编码。
-func collectBrowseRows(c *gin.Context, artPath string, assets []repository.Asset) []browseRow {
+// collectBrowseRows 把当前层级的子目录与直接文件整理成表格行。
+// dirs 为自仓库根起算的完整路径（取末段作显示名），dirStats 与 dirs 同序给出子树计数与
+// 最近更新时间；files 已是当前层的直接文件。
+// 子项 href 以当前请求路径（编码形式）为基址，子项名单独 URL 编码。
+func collectBrowseRows(c *gin.Context, dirs []string, dirStats []repository.DirStat, files []repository.Asset) []browseRow {
 	base := c.Request.URL.EscapedPath()
 	if !strings.HasSuffix(base, "/") {
 		base += "/"
 	}
-	// artPath 末尾含 "/"（根为 ""），作前缀去除得相对路径。
-	prefix := artPath
-	dirSeen := make(map[string]struct{})
-	rows := make([]browseRow, 0, len(assets))
-	for _, a := range assets {
-		rel := strings.TrimPrefix(a.Path, prefix)
-		if rel == "" {
+	stats := make(map[string]repository.DirStat, len(dirStats))
+	for _, st := range dirStats {
+		stats[st.Path] = st
+	}
+	rows := make([]browseRow, 0, len(dirs)+len(files))
+	for _, dir := range dirs {
+		name := lastSegment(dir)
+		if name == "" {
 			continue
 		}
-		if i := strings.Index(rel, "/"); i >= 0 {
-			sub := rel[:i]
-			if sub == "" {
-				continue
-			}
-			if _, ok := dirSeen[sub]; ok {
-				continue
-			}
-			dirSeen[sub] = struct{}{}
-			rows = append(rows, browseRow{
-				Name:  sub + "/",
-				Href:  base + url.PathEscape(sub) + "/",
-				IsDir: true,
-			})
-		} else {
-			rows = append(rows, browseRow{
-				Name:    rel,
-				Href:    base + url.PathEscape(rel),
-				SizeStr: formatSize(a.Size),
-			})
+		st := stats[dir]
+		rows = append(rows, browseRow{
+			Name:         name + "/",
+			Href:         base + url.PathEscape(name) + "/",
+			IsDir:        true,
+			SizeStr:      fmt.Sprintf("%d 项", st.Count),
+			SizeTitle:    "目录内制品总数（含子目录）",
+			CreatedStr:   "-", // 目录没有自身的创建时间
+			UpdatedStr:   orDash(st.Latest),
+			UpdatedTitle: "目录内最近一次更新时间",
+		})
+	}
+	for _, f := range files {
+		name := lastSegment(f.Path)
+		if name == "" {
+			continue
 		}
+		rows = append(rows, browseRow{
+			Name:        name,
+			Href:        base + url.PathEscape(name),
+			SizeStr:     formatSize(f.Size),
+			CreatedStr:  orDash(f.CreatedAt),
+			UpdatedStr:  orDash(f.UpdatedAt),
+			Sha256:      f.BlobHash, // 内容寻址键，即内容 SHA-256（与下载 ETag 同值）
+			Sha256Short: shortHash(f.BlobHash),
+			Sha1:        orDash(f.Sha1),
+			Md5:         orDash(f.Md5),
+			HasChecksum: f.BlobHash != "",
+		})
 	}
 	sortBrowseRows(rows)
 	return rows
+}
+
+// shortHash 取摘要前 12 位作折叠摘要（完整值在展开区与 title 里给出）。
+func shortHash(hash string) string {
+	const keep = 12
+	if len(hash) <= keep {
+		return hash
+	}
+	return hash[:keep] + "…"
+}
+
+// orDash 空值回退为占位符（历史数据可能未登记 sha1/md5）。
+func orDash(s string) string {
+	if s == "" {
+		return "—"
+	}
+	return s
+}
+
+// lastSegment 返回路径的最后一段（无分隔符时返回原值）。
+func lastSegment(path string) string {
+	if i := strings.LastIndex(path, "/"); i >= 0 {
+		return path[i+1:]
+	}
+	return path
 }
 
 // sortBrowseRows 排序：目录在前、文件在后，各自按名称升序。

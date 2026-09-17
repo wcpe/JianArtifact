@@ -684,14 +684,27 @@ func (s *RepositoryService) anonymousSubjectID() (int64, error) {
 
 // ---- FR-54: Tree API ----
 
-// DirectoryEntry 目录懒加载返回结构。
+// DirectoryEntry 目录懒加载返回结构：当前层级的子目录（全量）与直接文件。
+// FileTotal / FileBytes 是直接文件的总数与体积合计；Files 可能只是其中一页
+// （fileLimit <= 0 时取全部）。DirStats 与 Dirs 同序，给出每个子目录子树内的
+// 制品总数与最近更新时间（UTC "YYYY-MM-DD HH:MM:SS"）。
 type DirectoryEntry struct {
-	Dirs  []string
-	Files []repository.Asset
+	Dirs      []string
+	DirStats  []repository.DirStat
+	Files     []repository.Asset
+	FileTotal int
+	FileBytes int64
 }
 
-// ListDirectory 列出仓库指定前缀的当前层级目录与文件（不递归）。
+// ListDirectory 列出仓库指定前缀的当前层级目录与文件（不递归，文件取全部）。
 func (s *RepositoryService) ListDirectory(name, prefix string) (*DirectoryEntry, error) {
+	return s.ListDirectoryPage(name, prefix, 0, 0)
+}
+
+// ListDirectoryPage 列出仓库指定前缀的当前层级子目录（全量）与直接文件（分页）及文件总数。
+// 子目录不参与分页：目录项规模只与「同层目录数」相关，而对取数做条数截断会让同层的
+// 其它子目录整片消失（列表既不完整也不正确），故只对直接文件分页。
+func (s *RepositoryService) ListDirectoryPage(name, prefix string, fileLimit, fileOffset int) (*DirectoryEntry, error) {
 	repo, err := s.repos.GetByName(name)
 	if err != nil {
 		return nil, mapNotFound(err)
@@ -705,12 +718,21 @@ func (s *RepositoryService) ListDirectory(name, prefix string) (*DirectoryEntry,
 	if len(repoIDs) == 0 {
 		return &DirectoryEntry{}, nil
 	}
-	dirs, files, err := s.assets.ListDirectoryEntries(repoIDs, prefix)
+	children, err := s.assets.ListDirectChildren(repoIDs, prefix, fileLimit, fileOffset)
 	if err != nil {
 		return nil, err
 	}
+	dirs := children.Dirs
+	dirStats := children.DirStats
 	sort.Strings(dirs)
-	return &DirectoryEntry{Dirs: dirs, Files: files}, nil
+	sort.Slice(dirStats, func(i, j int) bool { return dirStats[i].Path < dirStats[j].Path })
+	return &DirectoryEntry{
+		Dirs:      dirs,
+		DirStats:  dirStats,
+		Files:     children.Files,
+		FileTotal: children.FileTotal,
+		FileBytes: children.FileBytes,
+	}, nil
 }
 
 // ---- FR-30: Search API ----

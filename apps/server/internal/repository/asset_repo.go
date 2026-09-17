@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/jmoiron/sqlx"
 
@@ -327,43 +328,125 @@ func (r *AssetRepo) SearchFacetsByFilter(f SearchFilter, repoIDs []int64) ([]Sea
 	return facets, err
 }
 
+// DirStat 是某前缀下单个直接子目录的聚合信息：其子树内的制品总数与最近一次更新时间
+// （UTC "YYYY-MM-DD HH:MM:SS"）。目录页据此在目录行上直接给出「多少项 / 最近何时改动」，
+// 无需为每个目录再发一次查询。
+type DirStat struct {
+	Path   string `db:"path"`   // 自仓库根起算的完整目录路径（与文件 path 同口径）
+	Count  int    `db:"count"`  // 子树内制品总数（含更深层级）
+	Latest string `db:"latest"` // 子树内最大的 updated_at；无数据时为空串
+}
+
+// DirectChildren 是某前缀下的「当前层级」子项：直接子目录与直接文件。
+// Dirs / DirStats 为自仓库根起算的完整目录路径，始终全量且同序；FileTotal / FileBytes 是
+// 直接文件的总数与体积合计，不受 Files 分页影响，供调用方给出精确计数。
+type DirectChildren struct {
+	Dirs      []string
+	DirStats  []DirStat
+	Files     []Asset
+	FileTotal int
+	FileBytes int64
+}
+
+// ListDirectChildren 返回前缀下的直接子目录与直接文件（不递归）。
+//
+// 子目录由 SQL 侧聚合出层级段名——只回传去重后的段名与其子树计数/最近更新时间，不把子树里的
+// 制品行读进内存——并始终全量返回；直接文件单独计数并按 path 升序分页，fileLimit <= 0 表示取全部。
+// 旧实现先把前缀下的**所有**制品行取出、再在内存里去重目录：十万级目录会把整棵子树读进
+// 内存，而且一旦对取数做条数截断，同层的其它子目录就会整片消失（列表既不完整也不正确）。
+// 本方法从数据层消除该根因，无论目录多大，返回规模都只与「同层项数」相关。
+func (r *AssetRepo) ListDirectChildren(repoIDs []int64, prefix string, fileLimit, fileOffset int) (*DirectChildren, error) {
+	out := &DirectChildren{Dirs: []string{}, Files: []Asset{}}
+	if len(repoIDs) == 0 {
+		return out, nil
+	}
+	// SQLite 的 substr/instr 对 TEXT 按**字符**计数，故层级起点取前缀的字符数 + 1（不是字节数）。
+	start := utf8.RuneCountInString(prefix) + 1
+	prefixLike := likePrefix(prefix)
+
+	// 一次聚合拿到直接子目录的段名、子树制品数与最近更新时间：段名来自 DISTINCT 的
+	// 等价写法，GROUP BY 不改变分组键集合，故省掉一次单独的 DISTINCT 查询。
+	statQuery, statArgs, err := sqlx.In(
+		`SELECT seg AS path, COUNT(*) AS count, COALESCE(MAX(updated_at), '') AS latest
+			FROM (
+				SELECT substr(path, ?, instr(substr(path, ?), '/') - 1) AS seg, updated_at
+				FROM asset
+				WHERE repository_id IN (?) AND path LIKE ? ESCAPE '\'
+					AND instr(substr(path, ?), '/') > 0
+			)
+			GROUP BY seg
+			ORDER BY seg`,
+		start, start, repoIDs, prefixLike, start,
+	)
+	if err != nil {
+		return nil, err
+	}
+	var segStats []DirStat
+	if err := r.db.Select(&segStats, r.db.Rebind(statQuery), statArgs...); err != nil {
+		return nil, err
+	}
+	if len(segStats) > 0 {
+		// 子目录返回自仓库根起算的完整路径（与文件 path 一致），避免前端把相对目录名
+		// 误当完整路径、导致嵌套目录展开时前缀错误。
+		dirs := make([]string, 0, len(segStats))
+		stats := make([]DirStat, 0, len(segStats))
+		for _, s := range segStats {
+			s.Path = prefix + s.Path
+			dirs = append(dirs, s.Path)
+			stats = append(stats, s)
+		}
+		out.Dirs, out.DirStats = dirs, stats
+	}
+
+	var stat struct {
+		Count int   `db:"count"`
+		Bytes int64 `db:"bytes"`
+	}
+	countQuery, countArgs, err := sqlx.In(
+		`SELECT COUNT(*) AS count, COALESCE(SUM(size), 0) AS bytes FROM asset
+			WHERE repository_id IN (?) AND path LIKE ? ESCAPE '\'
+				AND instr(substr(path, ?), '/') = 0 AND path <> ?`,
+		repoIDs, prefixLike, start, prefix,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if err := r.db.Get(&stat, r.db.Rebind(countQuery), countArgs...); err != nil {
+		return nil, err
+	}
+	out.FileTotal, out.FileBytes = stat.Count, stat.Bytes
+
+	fileQuery := `SELECT id, repository_id, path, blob_hash, size, content_type, sha1, md5, created_at, updated_at
+		FROM asset
+		WHERE repository_id IN (?) AND path LIKE ? ESCAPE '\'
+			AND instr(substr(path, ?), '/') = 0 AND path <> ?
+		ORDER BY path`
+	fileArgs := []any{repoIDs, prefixLike, start, prefix}
+	if fileLimit > 0 {
+		fileQuery += ` LIMIT ? OFFSET ?`
+		fileArgs = append(fileArgs, fileLimit, fileOffset)
+	}
+	query, args, err := sqlx.In(fileQuery, fileArgs...)
+	if err != nil {
+		return nil, err
+	}
+	if err := r.db.Select(&out.Files, r.db.Rebind(query), args...); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ListDirectoryEntries 列出指定前缀下的「当前层级」目录与文件（用于 tree endpoint 按目录懒加载）。
-// 返回去重后的目录名列表与文件 Asset 列表（不递归子目录）。
+// 返回自仓库根起算的完整目录路径列表与直接文件 Asset 列表（不递归子目录）。
 func (r *AssetRepo) ListDirectoryEntries(repoIDs []int64, prefix string) (dirs []string, files []Asset, err error) {
-	var assets []Asset
 	if len(repoIDs) == 0 {
 		return nil, nil, nil
 	}
-	query, args, qErr := sqlx.In(
-		`SELECT id, repository_id, path, blob_hash, size, content_type, sha1, md5, created_at, updated_at
-			FROM asset WHERE repository_id IN (?) AND path LIKE ? ESCAPE '\' ORDER BY path`,
-		repoIDs, likePrefix(prefix),
-	)
-	if qErr != nil {
-		return nil, nil, qErr
-	}
-	if err = r.db.Select(&assets, r.db.Rebind(query), args...); err != nil {
+	children, err := r.ListDirectChildren(repoIDs, prefix, 0, 0)
+	if err != nil {
 		return nil, nil, err
 	}
-	dirSet := make(map[string]struct{})
-	prefixLen := len(prefix)
-	for i := range assets {
-		rel := assets[i].Path[prefixLen:] // path after prefix
-		slashIdx := strings.Index(rel, "/")
-		if slashIdx == -1 {
-			// 直接子文件
-			files = append(files, assets[i])
-		} else {
-			// 子目录：返回自仓库根起算的完整路径（与文件 path 一致），
-			// 避免前端将相对目录名误当完整路径，导致嵌套目录展开时前缀错误。
-			dirName := prefix + rel[:slashIdx]
-			dirSet[dirName] = struct{}{}
-		}
-	}
-	for d := range dirSet {
-		dirs = append(dirs, d)
-	}
-	return dirs, files, nil
+	return children.Dirs, children.Files, nil
 }
 
 // escapeLike 转义 LIKE 特殊字符。
