@@ -52,8 +52,29 @@ jobs:
           go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8
           go install golang.org/x/vuln/cmd/govulncheck@latest
 
+      # 慢用例观测的历史采样（scripts/watch-slow-tests.mjs 用它算跨运行 P95）。
+      # actions/cache 的 key 不可变：restore 用稳定前缀 + restore-keys 回落读最近一次；
+      # save 的 key 带 run_id 才能每次写入新条目（否则首次之后全部静默命中、不再更新）。
+      # 注意：GitHub cache 是尽力而为的，可能 miss 或被清理——脚本在样本不足时会明确提示，
+      # 不会把「没有历史」粉饰成「性能正常」。
+      - name: 恢复慢用例历史
+        id: slow-history
+        uses: actions/cache@v4
+        with:
+          path: .tmp/slow-history.json
+          key: slow-history-${{ github.run_id }}
+          restore-keys: |
+            slow-history-
+
       - name: 运行统一质量门
         run: bash scripts/check.sh
+
+      - name: 保存慢用例历史
+        if: always()
+        uses: actions/cache@v4
+        with:
+          path: .tmp/slow-history.json
+          key: slow-history-${{ github.run_id }}
 
   resolve-meta:
     name: 解析版本元数据
