@@ -13,6 +13,7 @@ import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { MigrationPlan } from "../../api/types";
+import { currentLocaleTag } from "../../i18n/current";
 import { formatColor } from "./status";
 
 type Repo = MigrationPlan["repositories"][number];
@@ -149,7 +150,7 @@ export function MigrationRepoTable({
                     <Table.Td ta="right">
                       <Text size="sm" ff="monospace">
                         {r.estimatedAssets != null && r.estimatedAssets > 0
-                          ? r.estimatedAssets.toLocaleString()
+                          ? r.estimatedAssets.toLocaleString(currentLocaleTag())
                           : "—"}
                       </Text>
                     </Table.Td>

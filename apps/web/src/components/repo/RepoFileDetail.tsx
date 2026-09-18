@@ -8,6 +8,7 @@ import type { AssetSummary, RepoFormat, UsageInfo } from "../../api/types";
 import { assetDownloadUrl, formatBytes } from "../../lib/assetTree";
 import { buildCoordinateSnippets, htmlViewUrl } from "../../lib/coordinates";
 import { formatUtcToLocal } from "../../lib/timeFormat";
+import { currentLocaleTag } from "../../i18n/current";
 import { CopyTextButton } from "../CopyTextButton";
 
 interface Props {
@@ -38,7 +39,7 @@ export function RepoFileDetail({ repoName, format, asset, usage, showDownload = 
       <Stack gap={4}>
         <MetaRow
           label={t("repoDetail.assetSize")}
-          value={`${formatBytes(asset.size)}（${asset.size.toLocaleString()} B）`}
+          value={`${formatBytes(asset.size)}（${asset.size.toLocaleString(currentLocaleTag())} B）`}
         />
         {asset.contentType && (
           <MetaRow label={t("repoDetail.assetContentType")} value={asset.contentType} />

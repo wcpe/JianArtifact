@@ -48,6 +48,7 @@ import {
   splitCsv,
   type SearchExpression,
 } from "../lib/searchQuery";
+import { currentLocaleTag } from "../i18n/current";
 
 const PAGE_SIZE = 50;
 const FORMAT_OPTIONS = ["maven", "raw", "npm"];
@@ -295,7 +296,7 @@ export function SearchPage() {
                 size="xs"
                 variant="light"
               >
-                {t("search.facetAll", { defaultValue: "全部" })} {facetTotal.toLocaleString()}
+                {t("search.facetAll")} {facetTotal.toLocaleString(currentLocaleTag())}
               </Chip>
               {facets.map((f) => (
                 <Chip
@@ -305,7 +306,7 @@ export function SearchPage() {
                   size="xs"
                   variant="light"
                 >
-                  {f.repository} {f.count.toLocaleString()}
+                  {f.repository} {f.count.toLocaleString(currentLocaleTag())}
                 </Chip>
               ))}
             </Group>

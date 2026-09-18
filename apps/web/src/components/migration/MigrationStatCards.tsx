@@ -9,6 +9,7 @@ import {
 import { useTranslation } from "react-i18next";
 
 import { OpsKpiBand } from "../ops/OpsKit";
+import { currentLocaleTag } from "../../i18n/current";
 import type { Totals } from "./status";
 
 interface Props {
@@ -28,26 +29,26 @@ export function MigrationStatCards({ totals, estimated }: Props) {
       items={[
         {
           label: t("migrations.progressCopied"),
-          value: totals.copied.toLocaleString(),
+          value: totals.copied.toLocaleString(currentLocaleTag()),
           icon: <IconCircleCheck size={18} />,
           tone: "green",
         },
         {
           label: t("migrations.progressSkipped"),
-          value: totals.skipped.toLocaleString(),
+          value: totals.skipped.toLocaleString(currentLocaleTag()),
           icon: <IconPlayerSkipForward size={18} />,
           tone: "gray",
         },
         {
           label: t("migrations.progressFailed"),
-          value: totals.failed.toLocaleString(),
+          value: totals.failed.toLocaleString(currentLocaleTag()),
           icon: <IconAlertTriangle size={18} />,
           tone: "red",
           danger: totals.failed > 0,
         },
         {
           label: t("migrations.statProcessed"),
-          value: sum.toLocaleString(),
+          value: sum.toLocaleString(currentLocaleTag()),
           icon: <IconStack2 size={18} />,
           tone: "blue",
           hint:

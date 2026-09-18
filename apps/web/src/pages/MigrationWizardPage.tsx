@@ -65,6 +65,7 @@ import type {
 import { MigrationRepoTable } from "../components/migration/MigrationRepoTable";
 import { formatColor, planEstimatedAssets, sourceColor } from "../components/migration/status";
 import { confirmAction, notifyError, notifySuccess } from "../lib/feedback";
+import { currentLocaleTag } from "../i18n/current";
 import { density } from "../theme/density";
 
 interface RemoteRepoItem {
@@ -1136,7 +1137,7 @@ export function MigrationWizardPage() {
                                     </Table.Td>
                                     <Table.Td>
                                       <Text size="sm" c="dimmed">
-                                        {r.assets.toLocaleString()}
+                                        {r.assets.toLocaleString(currentLocaleTag())}
                                       </Text>
                                     </Table.Td>
                                   </Table.Tr>
@@ -1399,7 +1400,7 @@ export function MigrationWizardPage() {
                   />
                   <MiniStat
                     label={t("migrations.estimatedAssets")}
-                    value={previewEst > 0 ? previewEst.toLocaleString() : "—"}
+                    value={previewEst > 0 ? previewEst.toLocaleString(currentLocaleTag()) : "—"}
                   />
                   <MiniStat label={t("migrations.selectRepos")} value={`${selectedRepos.length}`} />
                   <MiniStat

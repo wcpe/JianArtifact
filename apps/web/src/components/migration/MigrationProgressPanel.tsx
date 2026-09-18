@@ -4,6 +4,7 @@ import { IconSearch, IconTransfer } from "@tabler/icons-react";
 import { useTranslation } from "react-i18next";
 
 import { density } from "../../theme/density";
+import { currentLocaleTag } from "../../i18n/current";
 import type { Totals } from "./status";
 import type { MigrationTaskStatus } from "../../api/types";
 
@@ -196,7 +197,7 @@ function StatBig({ label, value, color }: { label: string; value: number; color:
   return (
     <Stack gap={0} align="center">
       <Text fw={800} size="1.75rem" lh={1.1} c={color}>
-        {value.toLocaleString()}
+        {value.toLocaleString(currentLocaleTag())}
       </Text>
       <Text size="xs" c="dimmed" tt="uppercase" fw={600}>
         {label}

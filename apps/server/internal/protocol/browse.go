@@ -421,7 +421,7 @@ func orDash(s string) string {
 // 因此下载校验、日志比对与人工核对仍以同一口径为准。
 // 形态不符（含空值与历史脏数据）返回空串，模板据此退化为纯文本而不渲染 <time>。
 func toISOUTC(s string) string {
-	at, err := time.Parse(assetTimeLayout, s)
+	at, err := time.ParseInLocation(assetTimeLayout, s, time.UTC)
 	if err != nil {
 		return ""
 	}
