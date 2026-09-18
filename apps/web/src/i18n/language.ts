@@ -66,13 +66,17 @@ export function writeStoredLanguage(language: Language): void {
  * 公开路径（按浏览器语言）：匿名即可访问的浏览面。
  * 用显式路径表而不是「是否已登录」判定——被 RequireAuth 拦在公开页之外的匿名用户，
  * 与真正登录后的管理页用户，默认语言应当不同。
+ * 统一去掉尾斜杠存储（`/p/`），比对时再补回，以免出现 `/p//maven-public` 双斜杠失配。
  */
-const PUBLIC_PREFIXES = ["/repositories", "/search", "/p/"];
+const PUBLIC_PREFIXES = ["/repositories", "/search", "/p"];
 
 /** 判断路径是否为公开浏览路径（`/repositories/:name/acl` 例外，它是管理页）。 */
 export function isPublicPath(pathname: string): boolean {
   if (/^\/repositories\/[^/]+\/acl(\/|$)/.test(pathname)) return false;
-  return PUBLIC_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(prefix));
+  // 精确等于前缀，或前缀后紧跟斜杠——避免 /repositoriesXYZ 这类不存在的路径被误判公开。
+  return PUBLIC_PREFIXES.some(
+    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
+  );
 }
 
 /**

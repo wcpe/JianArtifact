@@ -260,6 +260,11 @@ export const zh = {
   hostMonitoring: {
     // 以下键此前缺失（t 未命中时静默回退 defaultValue），补录以保持 i18n 完整。
     rangeLabel: "采样时间范围",
+    range1h: "近 1 小时",
+    range6h: "近 6 小时",
+    range24h: "近 24 小时",
+    range7d: "近 7 天",
+    range30d: "近 30 天",
     loading: "正在加载主机监控…",
     unavailable: "不可用",
     perSecond: "/s",

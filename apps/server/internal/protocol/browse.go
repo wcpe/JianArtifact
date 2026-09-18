@@ -455,8 +455,9 @@ func formatSize(n int64) string {
 	if n < unit {
 		return strconv.FormatInt(n, 10) + " B"
 	}
+	const maxExp = len("KMGTPE") - 1 // 单位后缀只到 EiB，避免 "KMGTPE"[exp] 越界。
 	div, exp := int64(unit), 0
-	for d := n / unit; d >= unit; d /= unit {
+	for d := n / unit; d >= unit && exp < maxExp; d /= unit {
 		div *= unit
 		exp++
 	}

@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { server } from "@jianartifact/devmock/node";
 import { HostMonitoringPage } from "../src/pages/HostMonitoringPage";
+import i18n from "../src/i18n";
 import { renderWithProviders } from "./harness";
 
 describe("当前主机监控", () => {
@@ -41,5 +42,19 @@ describe("当前主机监控", () => {
 
     expect(await screen.findByText("无法读取主机监控")).toBeTruthy();
     expect(screen.getByRole("button", { name: "重试" })).toBeTruthy();
+  });
+
+  it("采样范围档位跟随语言，而非硬编码中文", async () => {
+    await i18n.changeLanguage("en");
+    renderWithProviders(<HostMonitoringPage />, { route: "/host-monitoring", authenticated: true });
+
+    // 该页全部文案（含状态行）都跟随语言，故等待英文版状态文本即代表已切到英文。
+    expect(
+      await screen.findByText("Sampling OK, host metrics available", undefined, { timeout: 5000 }),
+    ).toBeTruthy();
+    // 5 个档位由 hostMonitoring.range* 键提供，切英文后应显示英文且不再残留中文。
+    expect(screen.getByRole("button", { name: "Last 24 hours" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Last 7 days" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "近 24 小时" })).toBeNull();
   });
 });

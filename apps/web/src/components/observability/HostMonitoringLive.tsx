@@ -49,12 +49,12 @@ const rangeMillis: Record<Range, number> = {
   "30d": 2_592_000_000,
 };
 
-const rangeOptions: Array<{ value: Range; label: string }> = [
-  { value: "1h", label: "近 1 小时" },
-  { value: "6h", label: "近 6 小时" },
-  { value: "24h", label: "近 24 小时" },
-  { value: "7d", label: "近 7 天" },
-  { value: "30d", label: "近 30 天" },
+const rangeOptions: Array<{ value: Range; labelKey: string }> = [
+  { value: "1h", labelKey: "hostMonitoring.range1h" },
+  { value: "6h", labelKey: "hostMonitoring.range6h" },
+  { value: "24h", labelKey: "hostMonitoring.range24h" },
+  { value: "7d", labelKey: "hostMonitoring.range7d" },
+  { value: "30d", labelKey: "hostMonitoring.range30d" },
 ];
 
 // 主机指标可能缺采样，统一用「有值走共享格式化、无值回退占位」的容错包装，
@@ -393,7 +393,10 @@ export function HostMonitoringLive() {
         </Group>
         <PreviewRangeControls
           value={range}
-          options={rangeOptions}
+          options={rangeOptions.map((option) => ({
+            value: option.value,
+            label: t(option.labelKey),
+          }))}
           onChange={(value) => setRange(value as Range)}
           ariaLabel={t("hostMonitoring.rangeLabel", { defaultValue: "采样时间范围" })}
         />

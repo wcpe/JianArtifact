@@ -264,6 +264,11 @@ export const en = {
   hostMonitoring: {
     // The following keys were missing before (t silently fell back to defaultValue on miss); added back to keep i18n complete.
     rangeLabel: "Sample Time Range",
+    range1h: "Last 1 hour",
+    range6h: "Last 6 hours",
+    range24h: "Last 24 hours",
+    range7d: "Last 7 days",
+    range30d: "Last 30 days",
     loading: "Loading host monitoring…",
     unavailable: "Unavailable",
     perSecond: "/s",

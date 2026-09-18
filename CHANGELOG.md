@@ -81,6 +81,9 @@
 - **两个历史不稳定用例修复**：①`test/ViteMockIsolation.test.ts` 的生产构建用例超时预算 `60s` 偏短——实测 `vite build` 真实耗时 56–75s，全量并行时 build 子进程还与测试进程抢 CPU，原预算会误杀未跑完的构建；提到 `120s`。②`test/AppRoutes.test.tsx` 的「登录访问 /host-monitoring」用例在 42 文件并行争抢下偶发超 `asyncUtilTimeout`（该页含 recharts 实时图表，首屏需路由懒加载 + MSW 首请求落库 + 图表 measure 三连）；图表就绪文本等待上限提到 `12s` 并加用例级 `testTimeout: 20s`。两处均为对齐真实耗时与并行负载，非掩盖信号（真回归仍会稳定断言失败）。
 - **i18n 收口遗漏补齐（FR-139 收尾）**：此前把「无 locale 参数的 `toLocaleString()`」收敛到 `currentLocaleTag()` 只覆盖了审计中心、仪表盘、仓库列表等页面，迁移与搜索相关组件漏了 11 处裸调用（迁移进度/计划仓库表/结果四宫格/向导统计、搜索聚合计数、文件详情字节数），数字仍按浏览器默认 locale 渲染，与中/英界面语言分叉。现统一改为 `toLocaleString(currentLocaleTag())`，全仓前端零处裸调用残留。搜索页「全部」文案也不再冗余带 `defaultValue`（键已录入）。
 - **HTML 目录页 `<time datetime>` 真正恒为 UTC**：`browse.go` 的 `toISOUTC` 原先用 `time.Parse`（按服务器进程时区解析无时区后缀的存储串），在 UTC 服务器上「Parse+Format 同一 Local」巧合正确，但机器可读值语义并非真 UTC，与文档「恒为 UTC」承诺不符且脆弱（`ParseInLocation(..., Local)` 一旦被改就会偏移）。现改用 `time.ParseInLocation(assetTimeLayout, s, time.UTC)`，显式产出真正 UTC 的 RFC3339，消除对进程时区的隐式依赖。
+- **公开路径判定收紧，修掉一处隐性误判**：`isPublicPath` 原先用 `pathname.startsWith(prefix)` 宽松匹配，`/repositoriesXYZ` 这类不成路径也会被判为公开浏览面（落到「跟随浏览器语言」分支）。改为「等于前缀，或前缀后紧跟斜杠」的精确匹配。注意 `PUBLIC_PREFIXES` 原先写成 `/p/`（自带尾斜杠），若直接照搬 `prefix + "/"` 会拼出 `/p//maven-public` 双斜杠、把真实公开 ` /p/:name` 路由判成管理面——故前缀统一改为不带尾斜杠（`/p`）存储、比对时再补回。既有 `/p/maven-public` 用例因此修正而过。
+- **主机监控采样范围档位改走 i18n**：`HostMonitoringLive` 的 5 个档位（近 1 小时/6 小时/24 小时/7 天/30 天）此前是硬编码中文，与同页 `DashboardRangePicker` 走 `labelKey` 的口径不一致；现新增 `hostMonitoring.range1h..range30d` 键、渲染时经 `t()` 取文案，并补一条「切英文后档位显示英文、无中文残留」的回归守卫（该用例原本没有，属于「改了但无守护」的缺口）。
+- **目录页 `formatSize` 加单位上限保护**：字节格式化在 `exp ≥ 6`（体积超过约 1.1 ZiB）时 `"KMGTPE"[exp]` 会索引越界 panic。真实资产体积远不及此，但异常数据会直接panic；现循环条件加上限，更大体积夹到 EiB 档。
 
 ### 文档
 
