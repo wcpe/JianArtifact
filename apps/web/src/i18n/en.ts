@@ -9,6 +9,10 @@ export const en = {
     retryLater: "Failed to load, please try again later",
     appName: "JianArtifact",
     loading: "Loading…",
+    // Fallback copy for the route-level error boundary (e.g. failed chunk load).
+    loadFailedTitle: "Page failed to load",
+    loadFailedHint: "This may be caused by a version update that invalidated cached resources. Reloading should fix it.",
+    reload: "Reload",
     empty: "No data",
     error: "Failed to load",
     retry: "Retry",
@@ -175,6 +179,8 @@ export const en = {
   dashboard: {
     title: "Dashboard",
     loading: "Loading dashboard…",
+    /** Placeholder shown when the range delta is below the change threshold. */
+    deltaFlat: "Flat",
     // —— Business dashboard redesigned in v0.8.0 ——
     rangeToday: "Today",
     rangeYesterday: "Yesterday",
@@ -1000,6 +1006,9 @@ export const en = {
     status: "Status",
     sourceType: "Source",
     conflictPolicy: "Conflict Policy",
+    conflictSkip: "skip — skip if it already exists",
+    conflictOverwrite: "overwrite — overwrite",
+    conflictFail: "fail — abort on conflict",
     createdAt: "Created At",
     detail: "Details",
     backList: "Back to List",
@@ -1127,6 +1136,8 @@ export const en = {
     restoredPlanned: "Restored planned task #{{id}}",
     resumeRunningRedirect: "Running task detected, redirected to detail page",
     plannedHint: "Task saved, status is planned",
+    noCandidateTitle: "No migration candidates",
+    noCandidateHint: "There are no repositories to migrate and no execution report yet.",
     warnings: "Warnings",
     repoName: "Repository",
     repoFormat: "Format",

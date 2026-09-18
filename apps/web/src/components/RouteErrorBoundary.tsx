@@ -11,6 +11,7 @@ import { Component } from "react";
 import type { ErrorInfo, ReactNode } from "react";
 import { Button, Center, Stack, Text, Title } from "@mantine/core";
 import { IconRefresh } from "@tabler/icons-react";
+import { t as translate } from "i18next";
 
 interface RouteErrorBoundaryProps {
   children: ReactNode;
@@ -42,9 +43,10 @@ export class RouteErrorBoundary extends Component<
     return (
       <Center mih={280} p="md">
         <Stack gap="xs" align="center">
-          <Title order={4}>页面加载失败</Title>
+          {/* class 组件拿不到 useTranslation hook，直接调 i18next 的 t 取值。 */}
+          <Title order={4}>{translate("common.loadFailedTitle")}</Title>
           <Text size="sm" c="dimmed" ta="center" maw={420}>
-            可能是版本更新导致的资源失效，重新加载即可恢复。
+            {translate("common.loadFailedHint")}
           </Text>
           <Button
             size="xs"
@@ -52,7 +54,7 @@ export class RouteErrorBoundary extends Component<
             onClick={() => window.location.reload()}
             leftSection={<IconRefresh size={14} />}
           >
-            重新加载
+            {translate("common.reload")}
           </Button>
         </Stack>
       </Center>

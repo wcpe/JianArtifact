@@ -813,8 +813,11 @@ export function RepositoriesPage() {
                                         </Badge>
                                       ) : null}
                                       <Text size="xs" c="dimmed" truncate>
-                                        {repo.type} · {repo.artifactCount ?? 0} 个制品 ·{" "}
-                                        {formatBytes(repo.totalSize ?? 0)}
+                                        {repo.type} ·{" "}
+                                        {t("repositories.assetCount", {
+                                          n: repo.artifactCount ?? 0,
+                                        })}{" "}
+                                        · {formatBytes(repo.totalSize ?? 0)}
                                       </Text>
                                     </Group>
                                   ) : null}

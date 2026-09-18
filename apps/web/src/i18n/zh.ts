@@ -5,6 +5,10 @@ export const zh = {
     retryLater: "加载失败，请稍后重试",
     appName: "JianArtifact",
     loading: "加载中…",
+    // 路由级错误边界（chunk 加载失败等）的兜底文案。
+    loadFailedTitle: "页面加载失败",
+    loadFailedHint: "可能是版本更新导致的资源失效，重新加载即可恢复。",
+    reload: "重新加载",
     empty: "暂无数据",
     error: "加载失败",
     retry: "重试",
@@ -171,6 +175,8 @@ export const zh = {
   dashboard: {
     title: "仪表盘",
     loading: "正在加载仪表盘…",
+    /** 区间剖析里「首尾变动不足阈值」时的占位文案。 */
+    deltaFlat: "持平",
     // —— v0.8.0 重新设计的业务仪表盘 ——
     rangeToday: "今天",
     rangeYesterday: "昨天",
@@ -995,6 +1001,9 @@ export const zh = {
     status: "状态",
     sourceType: "来源",
     conflictPolicy: "冲突策略",
+    conflictSkip: "skip — 已存在则跳过",
+    conflictOverwrite: "overwrite — 覆盖",
+    conflictFail: "fail — 冲突即失败",
     createdAt: "创建时间",
     detail: "详情",
     backList: "返回列表",
@@ -1113,6 +1122,8 @@ export const zh = {
     restoredPlanned: "已恢复 planned 任务 #{{id}}",
     resumeRunningRedirect: "检测到执行中任务，已跳转详情页",
     plannedHint: "任务已落库，状态为 planned",
+    noCandidateTitle: "暂无迁移候选",
+    noCandidateHint: "当前没有可迁移仓库，也尚无执行报告。",
     warnings: "警告",
     repoName: "仓库",
     repoFormat: "格式",

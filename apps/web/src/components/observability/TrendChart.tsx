@@ -128,7 +128,11 @@ interface TrendStats {
   deltaAbs: string;
 }
 
-function computeStats(points: PreviewTrendPoint[], unit: TrendUnit): TrendStats | null {
+function computeStats(
+  points: PreviewTrendPoint[],
+  unit: TrendUnit,
+  flatLabel: string,
+): TrendStats | null {
   const finite = points.filter(
     (point) => typeof point.value === "number" && Number.isFinite(point.value),
   );
@@ -155,7 +159,7 @@ function computeStats(points: PreviewTrendPoint[], unit: TrendUnit): TrendStats 
   if (first !== 0) {
     const pct = ((last - first) / Math.abs(first)) * 100;
     if (Math.abs(pct) < 0.05) {
-      delta = "持平";
+      delta = flatLabel;
     } else {
       delta = `${pct > 0 ? "+" : ""}${pct.toFixed(1)}% ${pct > 0 ? "▲" : "▼"}`;
     }
@@ -301,7 +305,10 @@ export function TrendChart({
     };
   }, [focus, series, viewOffset]);
 
-  const stats = useMemo(() => computeStats(view.primary, unit), [view.primary, unit]);
+  const stats = useMemo(
+    () => computeStats(view.primary, unit, t("dashboard.deltaFlat")),
+    [view.primary, unit, t],
+  );
 
   // 合并主/次/第三系列为 recharts 的行数据（按索引对齐，标签以主系列为准）。
   const data = useMemo(

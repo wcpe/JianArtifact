@@ -1201,8 +1201,9 @@ func toAPIAuditTarget(event repository.ObservabilityEvent) AuditTarget {
 	if event.Repository != "" {
 		repo := event.Repository
 		target.Repository = &repo
-		target.Label = event.Repository
-		target.Kind = AuditTargetRepository
+		// 注意：这里**不要**把 Label 覆盖成仓库名——asset 操作的 EntityKey 本身就是
+		// "repo/path"（含具体制品路径），覆盖后审计里只剩仓库名，看不出动了哪个文件。
+		// Kind 由下面的 switch 按 EntityType 判定。
 	}
 	switch event.EntityType {
 	case "asset":

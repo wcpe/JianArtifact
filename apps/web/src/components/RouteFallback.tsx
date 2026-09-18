@@ -5,10 +5,16 @@
 // 这里用「页头一行 + 内容若干行」的结构，与列表页 / 工作台页整体近似，
 // 切换时视觉上是「骨架 → 内容」，而不是「空白 → 内容」。
 import { Group, Skeleton, Stack } from "@mantine/core";
+import { t as translate } from "i18next";
 
 export function RouteFallback() {
   return (
-    <Stack gap="sm" data-testid="route-fallback" aria-busy="true" aria-label="页面加载中">
+    <Stack
+      gap="sm"
+      data-testid="route-fallback"
+      aria-busy="true"
+      aria-label={translate("common.loading")}
+    >
       <Group justify="space-between" wrap="nowrap">
         <Skeleton height={28} width={200} radius="sm" />
         <Skeleton height={28} width={128} radius="sm" />

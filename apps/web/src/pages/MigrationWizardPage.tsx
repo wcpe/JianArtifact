@@ -1314,9 +1314,9 @@ export function MigrationWizardPage() {
                     : t("migrations.conflictPolicy")
                 }
                 data={[
-                  { value: "skip", label: "skip — 已存在则跳过" },
-                  { value: "overwrite", label: "overwrite — 覆盖" },
-                  { value: "fail", label: "fail — 冲突即失败" },
+                  { value: "skip", label: t("migrations.conflictSkip") },
+                  { value: "overwrite", label: t("migrations.conflictOverwrite") },
+                  { value: "fail", label: t("migrations.conflictFail") },
                 ]}
                 disabled={busy}
                 {...form.getInputProps("conflictPolicy")}

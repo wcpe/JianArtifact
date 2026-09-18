@@ -1,33 +1,29 @@
 import { Button, Group } from "@mantine/core";
 
-import type { PreviewRange } from "../../mocks/observabilityPreview";
-
 export interface RangeOption<T extends string = string> {
   value: T;
   label: string;
 }
 
-const DEFAULT_RANGES: Array<{ value: PreviewRange; label: string }> = [
-  { value: "24h", label: "近 24 小时" },
-  { value: "7d", label: "近 7 天" },
-  { value: "30d", label: "近 30 天" },
-];
-
 interface PreviewRangeControlsProps<T extends string = string> {
   /** 当前选中档位。 */
   value: T;
   onChange: (value: T) => void;
-  /** 自定义档位列表；缺省为静态预览的 24h/7d/30d 三档。 */
-  options?: Array<{ value: T; label: string }>;
-  /** 无障碍组标签。 */
-  ariaLabel?: string;
+  /**
+   * 档位列表（必填）。此前有「缺省为静态预览 24h/7d/30d」的内置默认值，但唯一调用点
+   * 始终自行传入经 i18n 翻译的档位——那份内置默认值是永不生效的死代码，且带着硬编码
+   * 中文会绕过翻译，故删除、改为必填。
+   */
+  options: Array<{ value: T; label: string }>;
+  /** 无障碍组标签（必填，同理由调用方提供翻译后的文案）。 */
+  ariaLabel: string;
 }
 
 export function PreviewRangeControls<T extends string = string>({
   value,
   onChange,
-  options = DEFAULT_RANGES as Array<{ value: T; label: string }>,
-  ariaLabel = "时间范围",
+  options,
+  ariaLabel,
 }: PreviewRangeControlsProps<T>) {
   return (
     <Group gap="xs" role="group" aria-label={ariaLabel}>

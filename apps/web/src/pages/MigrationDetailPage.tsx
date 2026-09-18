@@ -346,8 +346,8 @@ export function MigrationDetailPage() {
           </Alert>
         )}
         {task.status === "planned" && repos.length === 0 && (
-          <Alert mt="md" color="gray" title="暂无迁移候选">
-            当前没有可迁移仓库，也尚无执行报告。
+          <Alert mt="md" color="gray" title={t("migrations.noCandidateTitle")}>
+            {t("migrations.noCandidateHint")}
           </Alert>
         )}
         {task.status === "completed" &&
