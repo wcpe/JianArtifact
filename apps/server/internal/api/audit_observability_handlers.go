@@ -1221,10 +1221,29 @@ func toAPIAuditTarget(event repository.ObservabilityEvent) AuditTarget {
 	case "migration":
 		target.Kind = AuditTargetMigration
 	}
+	// EntityType 不在映射表内但事件关联了仓库（如 publish_policy.update）时回落 repository：
+	// 这是改动前的既有语义，不因"label 不再被仓库名覆盖"而连带把 kind 漂移到 other。
+	if target.Kind == AuditTargetOther && event.Repository != "" {
+		target.Kind = AuditTargetRepository
+	}
 	if target.Label == "" {
 		target.Label = event.EntityType
 	}
+	// 契约给 label 定 maxLength=512，而制品路径在契约里没有长度上限，
+	// 长路径会把 label 顶穿上限（oapi-codegen 不校验响应，CI 也发现不了），故服务端自行截断。
+	target.Label = truncateAuditLabel(target.Label)
 	return target
+}
+
+const auditLabelMaxRunes = 512
+
+// 超长审计目标截断到契约上限，尾部留省略号以便看出被截。
+func truncateAuditLabel(label string) string {
+	runes := []rune(label)
+	if len(runes) <= auditLabelMaxRunes {
+		return label
+	}
+	return string(runes[:auditLabelMaxRunes-1]) + "…"
 }
 func toAPIActor(event repository.ObservabilityEvent) AuditActorSnapshot {
 	actor := AuditActorSnapshot{DisplayName: event.Actor, AuthSource: event.AuthSource, SubjectType: AuditActorSystem}

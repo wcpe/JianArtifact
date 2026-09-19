@@ -13,12 +13,16 @@ export interface PreviewMetric {
 }
 
 /**
- * 审计事件的 result 枚举值（数据契约的单一真源）。
+ * 固定预览夹具里审计事件的 result 枚举值。
+ *
+ * 注意：这里的 `成功 / 失败 / 已应用` 是**这套预览夹具自己的值域**，不是 API 契约——
+ * 契约的审计结果枚举由 `api/openapi.yaml` 定义、经 schema 生成（见 `api/types.ts` 的
+ * `AuditResult`，值域为 success/failure/pending/unknown）。两者同名而异域，故本类型
+ * 加 `Preview` 前缀以免混淆。
  *
  * 这些值是**内部判定用**的数据标识，不是展示文案——聚合逻辑（成功数/失败数）依赖它们做
  * 等号比较，因此不能写成 `t("...")` 之类的翻译取值：翻译文案一旦改动，判定会静默失效
  * （例如把「失败」改成「未成功」会让所有失败事件被计成成功）。
- * 展示用的中文标签走 i18n 键（见 zh.ts 的 auditResult.*），与这里的键名对应但值独立。
  */
 export const AUDIT_RESULT = {
   success: "成功",
@@ -26,7 +30,7 @@ export const AUDIT_RESULT = {
   applied: "已应用",
 } as const;
 
-export type AuditResult = (typeof AUDIT_RESULT)[keyof typeof AUDIT_RESULT];
+export type AuditPreviewResult = (typeof AUDIT_RESULT)[keyof typeof AUDIT_RESULT];
 
 export interface AuditPreviewEvent {
   id: string;
@@ -38,7 +42,7 @@ export interface AuditPreviewEvent {
   authSource: string;
   action: string;
   target: string;
-  result: AuditResult;
+  result: AuditPreviewResult;
   operationId?: string;
   risk?: boolean;
   summary?: string;

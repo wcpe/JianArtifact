@@ -155,15 +155,16 @@ export function actionLabel(action: unknown, t: (key: string) => string): string
   return key ? t(key) : value;
 }
 
-/** 完整时间：2026/9/10 16:37:19（审计列表主时间列）。 */
+/** 完整时间（审计列表主时间列）：随当前语言格式化，不再手写拼接。 */
 export function formatFullTime(value: unknown): string {
-  const date = new Date(typeof value === "string" ? value : "");
-  if (Number.isNaN(date.getTime())) return "—";
-  const pad = (input: number) => String(input).padStart(2, "0");
+  const t = parseTime(value);
+  if (!t) return "—";
   return (
-    `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()} ` +
-    `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
-  );
+    localizedFormatter(
+      (locale) => new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "medium" }),
+      "audit.fullTime",
+    ) as Intl.DateTimeFormat
+  ).format(new Date(t));
 }
 
 /** 耗时：907 ms / 1.24 s。 */
@@ -252,7 +253,8 @@ const shortDateFormatter = () =>
   ) as Intl.DateTimeFormat;
 const fullDateFormatter = () =>
   localizedFormatter(
-    (locale) => new Intl.DateTimeFormat(locale, { year: "numeric", month: "numeric", day: "numeric" }),
+    (locale) =>
+      new Intl.DateTimeFormat(locale, { year: "numeric", month: "numeric", day: "numeric" }),
     "audit.fullDate",
   ) as Intl.DateTimeFormat;
 

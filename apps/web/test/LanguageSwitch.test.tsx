@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { AppRoutes } from "../src/app/router";
-import { formatTime } from "../src/components/audit/labels";
+import { formatFullTime, formatTime } from "../src/components/audit/labels";
 import { currentLocaleTag } from "../src/i18n/current";
 import { LANGUAGE_STORAGE_KEY } from "../src/i18n/language";
 import i18n from "../src/i18n";
@@ -76,6 +76,21 @@ describe("格式化输出跟随语言", () => {
     expect(enTime).not.toBe("—");
     // 计数型指标仍是千分位（两种 locale 的分组符都是逗号），确认入口切换后依然可用。
     expect(formatCount(12345)).toBe("12,345");
+  });
+
+  it("审计列表主时间列（formatFullTime）也跟随语言，而非手写拼接固定格式", async () => {
+    renderWithProviders(<AppRoutes />, { route: "/repositories" });
+    await screen.findByRole("button", { name: "刷新" });
+    const zhFull = formatFullTime("2026-01-05T08:00:00Z");
+
+    await userEvent.click(languageButton());
+    await screen.findByRole("button", { name: "Refresh" });
+
+    const enFull = formatFullTime("2026-01-05T08:00:00Z");
+    // 宽屏审计表的时间列走 formatFullTime：它此前是手写 getFullYear/getMonth 拼接，
+    // 完全绕过 locale，是本次收敛唯一的漏网路径。
+    expect(enFull).not.toBe(zhFull);
+    expect(enFull).not.toBe("—");
   });
 
   it("偏好被记住：重新挂载后仍是用户选择的语言", async () => {

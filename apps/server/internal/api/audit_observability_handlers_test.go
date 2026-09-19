@@ -120,3 +120,91 @@ func seedAuditEvents(t *testing.T, db *persistence.DB, n int) {
 		t.Fatalf("提交事务：%v", err)
 	}
 }
+
+// toAPIAuditTarget 的回归守卫：审计目标既要保留被操作对象的具体路径，
+// 也不能因为「不再用仓库名覆盖 label」而连带改变 target.kind 的语义。
+func TestToAPIAuditTargetKeepsPathAndKindSemantics(t *testing.T) {
+	cases := []struct {
+		name      string
+		event     repository.ObservabilityEvent
+		wantKind  AuditTargetKind
+		wantLabel string
+		wantRepo  string
+	}{
+		{
+			name: "asset 操作保留 repo/path 且 kind 为 artifact",
+			event: repository.ObservabilityEvent{
+				Action: "asset.delete", EntityType: "asset",
+				EntityKey:  "maven-releases/com/example/demo/1.4.2/demo-1.4.2.jar",
+				Repository: "maven-releases",
+			},
+			wantKind:  AuditTargetArtifact,
+			wantLabel: "maven-releases/com/example/demo/1.4.2/demo-1.4.2.jar",
+			wantRepo:  "maven-releases",
+		},
+		{
+			name: "仓库实体 label 为仓库名且 kind 为 repository",
+			event: repository.ObservabilityEvent{
+				Action: "repository.create", EntityType: "repository",
+				EntityKey: "raw-hosted", Repository: "raw-hosted",
+			},
+			wantKind:  AuditTargetRepository,
+			wantLabel: "raw-hosted",
+			wantRepo:  "raw-hosted",
+		},
+		{
+			// publish_policy 的 EntityType 不在映射表内，但关联了仓库：
+			// 旧行为是 kind=repository，改为 other 属未声明的语义漂移。
+			name: "publish_policy 关联仓库时仍回落 repository",
+			event: repository.ObservabilityEvent{
+				Action: "publish_policy.update", EntityType: "publish_policy",
+				EntityKey: "1/raw-hosted", Repository: "raw-hosted",
+			},
+			wantKind:  AuditTargetRepository,
+			wantLabel: "1/raw-hosted",
+			wantRepo:  "raw-hosted",
+		},
+		{
+			name: "无仓库的非映射实体落 other",
+			event: repository.ObservabilityEvent{
+				Action: "setting.update", EntityType: "publish_policy", EntityKey: "anonymous",
+			},
+			wantKind:  AuditTargetOther,
+			wantLabel: "anonymous",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := toAPIAuditTarget(tc.event)
+			if got.Kind != tc.wantKind {
+				t.Errorf("kind = %q，期望 %q", got.Kind, tc.wantKind)
+			}
+			if got.Label != tc.wantLabel {
+				t.Errorf("label = %q，期望 %q", got.Label, tc.wantLabel)
+			}
+			repo := ""
+			if got.Repository != nil {
+				repo = *got.Repository
+			}
+			if repo != tc.wantRepo {
+				t.Errorf("repository = %q，期望 %q", repo, tc.wantRepo)
+			}
+		})
+	}
+}
+
+// 契约约束：AuditTarget.label 有 maxLength=512，而制品路径在契约里没有长度上限，
+// 因此服务端必须自行截断，否则会产出违反自身契约的响应。
+func TestToAPIAuditTargetTruncatesOverlongLabel(t *testing.T) {
+	longPath := "maven-releases/" + strings.Repeat("segment/", 400) + "demo-1.4.2.jar"
+	got := toAPIAuditTarget(repository.ObservabilityEvent{
+		Action: "asset.put", EntityType: "asset", EntityKey: longPath, Repository: "maven-releases",
+	})
+	if len([]rune(got.Label)) > 512 {
+		t.Errorf("label 长度 %d 超过契约上限 512", len([]rune(got.Label)))
+	}
+	if got.Kind != AuditTargetArtifact {
+		t.Errorf("kind = %q，期望 artifact", got.Kind)
+	}
+}

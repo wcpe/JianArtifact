@@ -61,10 +61,11 @@ describe("路由懒加载（FR-70）", () => {
     const breadcrumbs = await screen.findByTestId("app-breadcrumbs");
     expect(within(breadcrumbs).getByText("主机监控")).toBeTruthy();
     // 该页含 recharts 实时图表：首屏需"路由懒加载 + MSW 首请求落库 + 图表 measure"三连，
-    // 并行全量（本机 vite build 也占满 CPU）下偶发逼近默认等待上限。放宽此条等待到 12s，
-    // 用例级超时 20s 留足收尾余量；真回归仍会稳定断言失败，不掩盖信号。
-    expect(await screen.findByText("采样正常，主机指标可用", {}, { timeout: 12_000 })).toBeTruthy();
-  }, 20_000);
+    // 并行全量下会偶发变慢（串行实测仅 1.1–1.4s，原 5s 上限本有约 3.5 倍余量，故 flaky
+    // 成因是并行争抢而非常态过慢）。等待上限取 8s（并行下有 5 倍以上余量）、用例级超时 12s，
+    // 均低于全局 testTimeout 15s；真回归仍会稳定断言失败。
+    expect(await screen.findByText("采样正常，主机指标可用", {}, { timeout: 8_000 })).toBeTruthy();
+  }, 12_000);
 
   it("登录访问 /licenses 经懒加载渲染协议页", async () => {
     renderWithProviders(<AppRoutes />, { route: "/licenses", authenticated: true });

@@ -112,12 +112,10 @@ export function groupAuditEvents(
           latest,
           categories: [...new Set(orderedEvents.map((event) => event.category))],
           results: [...new Set(orderedEvents.map((event) => event.result))],
-          successCount: orderedEvents.filter(
-            (event) => event.result !== AUDIT_RESULT.failure,
-          ).length,
-          failureCount: orderedEvents.filter(
-            (event) => event.result === AUDIT_RESULT.failure,
-          ).length,
+          successCount: orderedEvents.filter((event) => event.result !== AUDIT_RESULT.failure)
+            .length,
+          failureCount: orderedEvents.filter((event) => event.result === AUDIT_RESULT.failure)
+            .length,
           affectedCount: orderedEvents.reduce(
             (total, event) => total + (event.affectedCount ?? 0),
             0,
