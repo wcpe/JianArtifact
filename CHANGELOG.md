@@ -107,7 +107,7 @@
 - **新增依赖漏洞扫描（osv-scanner）**：`pnpm audit` 在本仓库**不可用**——`.npmrc` 固定 `registry=https://registry.npmmirror.com/`，而镜像源没有 audit 端点（实测 `ERR_PNPM_AUDIT_ENDPOINT_NOT_EXISTS`）。改用 `osv-scanner`：它读 lockfile 后查 OSV 数据库，与 npm registry 解耦，因此不受镜像限制，同时覆盖前端 `pnpm-lock.yaml` 与后端 Go 模块。作为**独立 workflow、软失败**（`fail-on-vuln: false`）——漏洞信息走 SARIF 进 Security 面板供人工跟进，不阻断发版；Go 侧的 `govulncheck` 仍保留在质量门内作硬门禁。
 - **新增 CodeQL 语义扫描（Go + TS/JS）**：`govulncheck` 只报已知 CVE、`eslint` 偏风格，CodeQL 补语义级分析（注入 / 路径遍历 / SSRF / 凭据泄露），对本项目手写的安全敏感代码（`internal/upstream` 的 SSRF 校验与重定向凭据剥离）有增量价值。独立 workflow、**软失败**（需构建、耗时长、偶发误报）。
 - **新增 `apps/server/.golangci.yml`**：此前没有配置，linter 集合是工具的**隐式默认值**（会随版本漂移、可复现性差）。现把实际生效的六个（errcheck / gosimple / govet / ineffassign / staticcheck / unused）显式钉死，并增补 `gosec`。**未开启** `bodyclose` / `sqlclosecheck` / `rowserrcheck`——实测这三项在本仓库生产代码命中为 0（HTTP body 关闭已统一封装在 `internal/upstream/session.go` 的 `readResponse`；SQL rows 的关闭与 `rows.Err()` 检查在 `persistence/readonly.go` 已写好），为零收益引入只会增加噪声。`gosec` 的排除项均写明理由（协议强制的 MD5/SHA-1、测试夹具、环境变量名误报等），真实关注点（备份解压大小、`VACUUM INTO` 拼接）以 `//nolint` + 理由注释就地标注。
-- **后端覆盖率产出**：`check.sh` 的 `go test` 加 `-coverprofile`，覆盖率落到 `.tmp/go-coverage.out` 并打印总计。**只产出、不设阈值**——存量覆盖水平未知，一上来设阈值会卡死质量门。前端覆盖率待补（需新增 `@vitest/coverage-v8`）。
+- **后端覆盖率产出**：`check.sh` 的 `go test` 加 `-coverprofile`，覆盖率落到 `.tmp/go-coverage.out` 并打印总计。**只产出、不设阈值**——存量覆盖水平未知，一上来设阈值会卡死质量门。前端同样产出到 `.tmp/web-coverage/`（新增 devDependency `@vitest/coverage-v8@2.1.9`，与 vitest 2.1.9 版本对齐；实测开启后测试耗时由 47.6s 增至 51.9s，约 +9%，可接受）。当前基线：前端语句覆盖 **86.53%**、分支 78.03%、函数 64.62%。
 
 ### 文档
 
