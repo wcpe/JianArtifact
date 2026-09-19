@@ -16,6 +16,9 @@ pnpm typecheck
 pnpm test # 含 devmock ↔ OpenAPI 契约一致性（对齐 AC-06）
 pnpm build # 产出 apps/web/dist 供后端 embed
 
+echo "==> [1.2/3] 慢用例观测（仅告警、不阻断）：放宽过等待上限的负载敏感用例在此留痕"
+node scripts/watch-slow-tests.mjs
+
 echo "==> [1.5/3] 同步前端产物到后端 embed 目录（apps/server/web/dist；//go:embed all:dist 依赖非空目录）"
 rm -rf apps/server/web/dist
 mkdir -p apps/server/web/dist

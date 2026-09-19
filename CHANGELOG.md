@@ -84,6 +84,8 @@
 - **公开路径判定收紧，修掉一处隐性误判**：`isPublicPath` 原先用 `pathname.startsWith(prefix)` 宽松匹配，`/repositoriesXYZ` 这类不成路径也会被判为公开浏览面（落到「跟随浏览器语言」分支）。改为「等于前缀，或前缀后紧跟斜杠」的精确匹配。注意 `PUBLIC_PREFIXES` 原先写成 `/p/`（自带尾斜杠），若直接照搬 `prefix + "/"` 会拼出 `/p//maven-public` 双斜杠、把真实公开 ` /p/:name` 路由判成管理面——故前缀统一改为不带尾斜杠（`/p`）存储、比对时再补回。既有 `/p/maven-public` 用例因此修正而过。
 - **主机监控采样范围档位改走 i18n**：`HostMonitoringLive` 的 5 个档位（近 1 小时/6 小时/24 小时/7 天/30 天）此前是硬编码中文，与同页 `DashboardRangePicker` 走 `labelKey` 的口径不一致；现新增 `hostMonitoring.range1h..range30d` 键、渲染时经 `t()` 取文案，并补一条「切英文后档位显示英文、无中文残留」的回归守卫（该用例原本没有，属于「改了但无守护」的缺口）。
 - **目录页 `formatSize` 加单位上限保护**：字节格式化在 `exp ≥ 6`（体积超过约 1.1 ZiB）时 `"KMGTPE"[exp]` 会索引越界 panic。真实资产体积远不及此，但异常数据会直接panic；现循环条件加上限，更大体积夹到 EiB 档。
+- **审计事件 result 枚举收口为单一真源**：`auditGrouping` 的成功/失败计数此前直接拿中文字面量 `"失败"` 与事件 `result` 做等号比较，而该字面量与 devmock 数据契约（`AuditPreviewEvent.result`）各写一份。这里**刻意不改成读 i18n 键**——`result` 是内部判定用的数据标识而非展示文案，一旦翻译文案改动（如「失败」改「未成功」），判定会静默把所有失败事件计成成功。现抽出 `AUDIT_RESULT` 常量（`observabilityPreview.ts`），类型定义、种子数据与聚合判定三处统一引用它；展示文案仍走独立 i18n 键，两者解耦。
+- **为放宽过等待上限的负载敏感用例补观测（`scripts/watch-slow-tests.mjs`）**：`test/AppRoutes.test.tsx` 的「登录访问 /host-monitoring」用例等待上限已放宽到 12s（用例级 20s），此后它**对性能退化失去敏感度**——首屏从 2s 退化到 11s 测试仍然绿。新增该脚本：单独跑被观测用例、从 vitest JSON 报告取耗时，超预算（默认 10s，可用 `SLOW_TEST_BUDGET_MS` 覆盖）时发 `::warning::` 告警；已接入 `scripts/check.sh`（本地与 CI 共用），**仅告警不阻断**质量门。诚实口径：单次运行只有一个样本，故这是「单次耗时阈值告警」而非严格 P95；跨运行的 P95 需先持久化每次结果（可用 CI artifact 累积）再做，本次未实现。
 
 ### 文档
 
