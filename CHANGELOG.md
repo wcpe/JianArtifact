@@ -101,6 +101,14 @@
 - **为放宽过等待上限的负载敏感用例补观测（`scripts/watch-slow-tests.mjs`）**：`test/AppRoutes.test.tsx` 的「登录访问 /host-monitoring」用例等待上限已放宽到 12s（用例级 20s），此后它**对性能退化失去敏感度**——首屏从 2s 退化到 11s 测试仍然绿。新增该脚本：单独跑被观测用例、从 vitest JSON 报告取耗时，超预算（默认 10s，可用 `SLOW_TEST_BUDGET_MS` 覆盖）时发 `::warning::` 告警；已接入 `scripts/check.sh`（本地与 CI 共用），**仅告警不阻断**质量门。
 - **慢用例观测升级为跨运行真 P95**：仅有单次阈值时，「单次偶发慢」与「持续退化」无法区分（前者是噪音、后者是真问题）。现脚本把每次采样追加写入历史文件（`.tmp/slow-history.json`，每用例保留最近 200 条），并计算该用例的 **P95**：P95 超 `SLOW_TEST_P95_BUDGET_MS`（默认取单次预算）即告警——本次单跑哪怕完全正常，只要历史 P95 顶穿预算就会告警，这才是退化逃逸的兜网。历史跨运行累积由 `.github/workflows/ci.yml` 与 `release.yml` 用 `actions/cache` 在质量门前 restore、后 save 实现（cache key 带 `run_id` 以便每次写入新条目，`restore-keys` 回落读最近一次）。诚实口径：GitHub cache 是**尽力而为**，可能 miss 或被清理；样本不足（n<5）时脚本明确打印「不足以给出可信 P95，跳过该项判据」，不会把「没有历史」粉饰成「性能正常」。
 
+### 工程
+
+- **新增 Dependabot**：每周（周二）为前端 pnpm workspace、后端 Go 模块与 CI 的 `actions/*` 分别开更新 PR，由 `ci.yml` 的质量门验证后人工合并。本仓库契约由 `api/openapi.yaml` 生成（`schema.gen.ts` / `api.gen.go` 均已入库），Dependabot 只改依赖版本、不触碰契约源文件，因此不会触发重新生成。
+- **新增依赖漏洞扫描（osv-scanner）**：`pnpm audit` 在本仓库**不可用**——`.npmrc` 固定 `registry=https://registry.npmmirror.com/`，而镜像源没有 audit 端点（实测 `ERR_PNPM_AUDIT_ENDPOINT_NOT_EXISTS`）。改用 `osv-scanner`：它读 lockfile 后查 OSV 数据库，与 npm registry 解耦，因此不受镜像限制，同时覆盖前端 `pnpm-lock.yaml` 与后端 Go 模块。作为**独立 workflow、软失败**（`fail-on-vuln: false`）——漏洞信息走 SARIF 进 Security 面板供人工跟进，不阻断发版；Go 侧的 `govulncheck` 仍保留在质量门内作硬门禁。
+- **新增 CodeQL 语义扫描（Go + TS/JS）**：`govulncheck` 只报已知 CVE、`eslint` 偏风格，CodeQL 补语义级分析（注入 / 路径遍历 / SSRF / 凭据泄露），对本项目手写的安全敏感代码（`internal/upstream` 的 SSRF 校验与重定向凭据剥离）有增量价值。独立 workflow、**软失败**（需构建、耗时长、偶发误报）。
+- **新增 `apps/server/.golangci.yml`**：此前没有配置，linter 集合是工具的**隐式默认值**（会随版本漂移、可复现性差）。现把实际生效的六个（errcheck / gosimple / govet / ineffassign / staticcheck / unused）显式钉死，并增补 `gosec`。**未开启** `bodyclose` / `sqlclosecheck` / `rowserrcheck`——实测这三项在本仓库生产代码命中为 0（HTTP body 关闭已统一封装在 `internal/upstream/session.go` 的 `readResponse`；SQL rows 的关闭与 `rows.Err()` 检查在 `persistence/readonly.go` 已写好），为零收益引入只会增加噪声。`gosec` 的排除项均写明理由（协议强制的 MD5/SHA-1、测试夹具、环境变量名误报等），真实关注点（备份解压大小、`VACUUM INTO` 拼接）以 `//nolint` + 理由注释就地标注。
+- **后端覆盖率产出**：`check.sh` 的 `go test` 加 `-coverprofile`，覆盖率落到 `.tmp/go-coverage.out` 并打印总计。**只产出、不设阈值**——存量覆盖水平未知，一上来设阈值会卡死质量门。前端覆盖率待补（需新增 `@vitest/coverage-v8`）。
+
 ### 文档
 
 - 0.8.1 开发线文档补齐（无代码行为变更）：
