@@ -87,7 +87,12 @@ describe("浏览器语言解析", () => {
 
 describe("公开路径判定", () => {
   it("浏览面是公开路径", () => {
-    for (const path of ["/repositories", "/repositories/maven-public", "/search", "/p/maven-public"]) {
+    for (const path of [
+      "/repositories",
+      "/repositories/maven-public",
+      "/search",
+      "/p/maven-public",
+    ]) {
       expect(isPublicPath(path)).toBe(true);
     }
   });

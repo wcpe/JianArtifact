@@ -166,7 +166,9 @@ export function DashboardLive() {
           <QuickMenu onNavigate={(path) => navigate(path)} />
           {lastUpdated ? (
             <Text size="xs" c="dimmed" visibleFrom="sm">
-              {t("dashboard.lastUpdated", { time: lastUpdated.toLocaleTimeString(currentLocaleTag()) })}
+              {t("dashboard.lastUpdated", {
+                time: lastUpdated.toLocaleTimeString(currentLocaleTag()),
+              })}
             </Text>
           ) : null}
         </Group>

@@ -74,9 +74,7 @@ const PUBLIC_PREFIXES = ["/repositories", "/search", "/p"];
 export function isPublicPath(pathname: string): boolean {
   if (/^\/repositories\/[^/]+\/acl(\/|$)/.test(pathname)) return false;
   // 精确等于前缀，或前缀后紧跟斜杠——避免 /repositoriesXYZ 这类不存在的路径被误判公开。
-  return PUBLIC_PREFIXES.some(
-    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
-  );
+  return PUBLIC_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
 }
 
 /**

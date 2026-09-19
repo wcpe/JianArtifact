@@ -5,13 +5,14 @@ import type { Resources } from "./zh";
 
 export const en = {
   common: {
-    // The keys below were previously missing (t silently fell back to defaultValue on a miss); added to keep i18n complete.
+    // 以下键此前缺失（t 未命中时静默回退 defaultValue），补录以保持 i18n 完整。
     retryLater: "Failed to load, please try again later",
     appName: "JianArtifact",
     loading: "Loading…",
-    // Fallback copy for the route-level error boundary (e.g. failed chunk load).
+    // 路由级错误边界的兜底文案（如 chunk 加载失败）。
     loadFailedTitle: "Page failed to load",
-    loadFailedHint: "This may be caused by a version update that invalidated cached resources. Reloading should fix it.",
+    loadFailedHint:
+      "This may be caused by a version update that invalidated cached resources. Reloading should fix it.",
     reload: "Reload",
     empty: "No data",
     error: "Failed to load",
@@ -46,7 +47,7 @@ export const en = {
     refreshFailedDescription: "Still showing the last data; you can retry the refresh.",
   },
   nav: {
-    // The keys below were previously missing (t silently fell back to defaultValue on a miss); added to keep i18n complete.
+    // 以下键此前缺失（t 未命中时静默回退 defaultValue），补录以保持 i18n 完整。
     publicRepos: "Public Repositories",
     allRepositories: "All Repositories",
     noPublicRepos: "No public repositories",
@@ -72,7 +73,7 @@ export const en = {
     switchLanguage: "Switch language",
   },
   settings: {
-    // The keys below were previously missing (t silently fell back to defaultValue on a miss); added to keep i18n complete.
+    // 以下键此前缺失（t 未命中时静默回退 defaultValue），补录以保持 i18n 完整。
     effectsImmediateLabel: "Takes effect immediately",
     effectsLocalScopeLabel: "Node-local",
     effectsLockoutLabel: "Lockout risk",
@@ -83,7 +84,8 @@ export const en = {
     anonymousLabel: "Allow anonymous access",
     anonymousHint: "When off, all anonymous requests return 401 (public repositories included).",
     publicUrlLabel: "Public Base URL",
-    publicUrlHint: "External access endpoint (including scheme, e.g. https://repo.example.com); leave empty to infer from the request domain.",
+    publicUrlHint:
+      "External access endpoint (including scheme, e.g. https://repo.example.com); leave empty to infer from the request domain.",
     publicUrlEmpty: "No public base URL configured yet; the request domain is used for inference.",
     upstreamTimeoutLabel: "Upstream timeout (seconds)",
     allowedHostsLabel: "Allowed domains",
@@ -93,20 +95,22 @@ export const en = {
     allowedHostsUnlimited: "Unrestricted",
     securityTitle: "Security",
     originTokenLabel: "Origin Token Verification",
-    originTokenHint: "When on, only requests carrying the correct Token (injected by the CDN on origin fetch) can access the service; direct requests to the origin always return 404.",
+    originTokenHint:
+      "When on, only requests carrying the correct Token (injected by the CDN on origin fetch) can access the service; direct requests to the origin always return 404.",
     tokenEnabled: "Enabled",
     tokenDisabled: "Disabled",
     originTokenHeaderLabel: "Header name",
     originTokenHeaderHint: "Name of the request header injected by the CDN on origin fetch.",
     originTokenValueLabel: "Token value",
-    originTokenValueHint: "Copy it into the CDN's \"Modify Origin Request Header\" rule; regenerating invalidates the old value immediately.",
+    originTokenValueHint:
+      'Copy it into the CDN\'s "Modify Origin Request Header" rule; regenerating invalidates the old value immediately.',
     originTokenGenerate: "Regenerate Token",
     originTokenCopy: "Copy Token",
     save: "Save Settings",
     saved: "Saved",
     unsaved: "You have unsaved changes",
     validationRange: "Value must be between 1 and 3600",
-    // Top summary strip: surfaces the "currently effective values" first, so you can compare against the saved values while editing the form.
+    // 顶部摘要带：优先呈现「当前生效值」，便于编辑表单时与已保存值对照。
     summaryLabel: "Effective configuration",
     summaryAnonymous: "Anonymous access",
     summaryAnonymousOn: "On",
@@ -120,8 +124,10 @@ export const en = {
     summaryTimeoutValue: "{{secs}}s",
     summaryHint: "The values below are saved and in effect; unsaved changes are not counted",
     effectsTitle: "Effect & Rollback",
-    effectsImmediate: "Takes effect on the current node immediately after saving, no service restart needed; refreshing the page does not roll back the configuration.",
-    effectsLocalScope: "The domain allowlist and Origin Token are node-local configuration and are not moved to other nodes by a consistency backup package.",
+    effectsImmediate:
+      "Takes effect on the current node immediately after saving, no service restart needed; refreshing the page does not roll back the configuration.",
+    effectsLocalScope:
+      "The domain allowlist and Origin Token are node-local configuration and are not moved to other nodes by a consistency backup package.",
     effectsLockout:
       "Before changing the allowlist, confirm that the new domain already resolves: requests from outside the list return 404 directly, including your own access.",
   },
@@ -173,15 +179,16 @@ export const en = {
     enterConsole: "Enter Console",
     bootstrapUnavailable: "This instance does not allow initialization right now",
     bootstrapUnavailableHint: "Please wait until the instance is ready before proceeding.",
-    statusUnavailable: "Unable to confirm whether this instance allows initialization; please try again later.",
+    statusUnavailable:
+      "Unable to confirm whether this instance allows initialization; please try again later.",
     bootstrapFailed: "Failed to create the administrator, please check and try again.",
   },
   dashboard: {
     title: "Dashboard",
     loading: "Loading dashboard…",
-    /** Placeholder shown when the range delta is below the change threshold. */
+    /** 区间变动低于阈值时的占位文案。 */
     deltaFlat: "Flat",
-    // —— Business dashboard redesigned in v0.8.0 ——
+    // —— v0.8.0 重新设计的业务仪表盘 ——
     rangeToday: "Today",
     rangeYesterday: "Yesterday",
     range24h: "Last 24 hours",
@@ -208,7 +215,7 @@ export const en = {
     trendRequestsSummary: "How request volume changes over time",
     trendCapacity: "Capacity Growth Trend",
     trendCapacitySummary: "Logical size of current asset records, excluding deduplicated blob size",
-    // —— v0.8.0 dashboard sections and selectors ——
+    // —— v0.8.0 仪表盘分区与选择器 ——
     tabAttention: "Needs Attention",
     tabQuickActions: "Quick Actions",
     tabRecent: "Recent Activity",
@@ -224,7 +231,8 @@ export const en = {
     statusOnline: "Online",
     statusOffline: "Offline",
     attentionOpsAlerts: "{{count}} operational alerts need attention",
-    attentionOpsAlertsHint: "The alerts below need administrator attention; see the related repository or audit logs for details.",
+    attentionOpsAlertsHint:
+      "The alerts below need administrator attention; see the related repository or audit logs for details.",
     attentionEmpty: "Nothing needs attention",
     attentionEmptyHint: "There are currently no unacknowledged risk attention batches.",
     attentionRiskCount: "{{count}} unacknowledged risk events",
@@ -238,7 +246,7 @@ export const en = {
     recentEmptyHint: "No audit events in the selected time range.",
     recentViewAll: "View All",
     metricsCacheRateNone: "—",
-    // —— v0.8.0 repository status panel (replaces the upstream auto-block panel) ——
+    // —— v0.8.0 仓库状态面板（取代上游自动阻止面板） ——
     repoStatusTitle: "Repository Status",
     repoStatusTotal: "{{count}} repositories in total",
     repoStatusViewAll: "View All Repositories",
@@ -249,7 +257,7 @@ export const en = {
     trendRequestsSecondary: "Downloads",
     trendFailuresPrimary: "Failures",
     trendCapacityPrimary: "Logical size",
-    // —— v0.8.2 command deck layout ——
+    // —— v0.8.2 指挥舱布局 ——
     kpiStripLabel: "Key metrics strip",
   },
   trendChart: {
@@ -265,10 +273,11 @@ export const en = {
     focusHint: "Drag horizontally on the chart to focus a sub-period",
     focusChip: "Focused {{from}} – {{to}}",
     focusClear: "Exit focus",
-    keyboardHint: "Arrow keys move the cursor, Shift+Arrow keys select a range, Enter focuses, Esc resets",
+    keyboardHint:
+      "Arrow keys move the cursor, Shift+Arrow keys select a range, Enter focuses, Esc resets",
   },
   hostMonitoring: {
-    // The following keys were missing before (t silently fell back to defaultValue on miss); added back to keep i18n complete.
+    // 以下键此前缺失（t 未命中时静默回退 defaultValue），补录以保持 i18n 完整。
     rangeLabel: "Sample Time Range",
     range1h: "Last 1 hour",
     range6h: "Last 6 hours",
@@ -291,7 +300,8 @@ export const en = {
     refreshFailedTitle: "Refresh Failed",
     refreshFailedDescription: "Still showing the previous data. You can retry the refresh.",
     staleAlertTitle: "Sample Stale",
-    staleAlertDescription: "The sampler has not updated for two consecutive cycles. Check the running state of this instance.",
+    staleAlertDescription:
+      "The sampler has not updated for two consecutive cycles. Check the running state of this instance.",
     noSampleTitle: "No Host Sample Yet",
     noSampleDescription: "This instance has not completed its first minute-level sample yet.",
     cardReadiness: "Service Readiness",
@@ -311,7 +321,7 @@ export const en = {
     seriesNetworkRx: "Received",
     seriesNetworkTx: "Sent",
     seriesProcessRss: "Process RSS",
-    // —— v0.8.2 monitoring dashboard layout ——
+    // —— v0.8.2 监控台布局 ——
     nodeStatus: "Node Status",
     componentStatus: "Component Status",
     componentHost: "Host",
@@ -343,7 +353,8 @@ export const en = {
     webLogin: "Web Login",
     webLoginEnabled: "Web login allowed",
     webLoginDisabled: "Web login disabled",
-    webLoginDisabledHint: "When enabled, this account can only publish through native protocols and cannot sign in to the admin Web/API.",
+    webLoginDisabledHint:
+      "When enabled, this account can only publish through native protocols and cannot sign in to the admin Web/API.",
     create: "New User",
     publishPolicy: "Publish Policy",
     publishRepository: "Hosted Repository",
@@ -359,7 +370,7 @@ export const en = {
     deleteConfirm: "Delete this user? This action cannot be undone.",
     empty: "No users",
     anonymousRowHint: "Built-in anonymous principal for ACL grants; cannot sign in or be managed",
-    // Top overview band (after the in-page title was removed, it carries the original title's visual weight and information density).
+    // 顶部概览带（页内大标题移除后，由它承载原标题的视觉重量与信息密度）。
     summaryLabel: "User Overview",
     summaryTotal: "Total Users",
     summaryAdmin: "Administrators",
@@ -368,14 +379,17 @@ export const en = {
     summaryAnonymousHint: "Total users includes the built-in anonymous principal",
     rolesTitle: "Roles and Permissions",
     rolesAdmin: "Administrator",
-    rolesAdminHint: "Can manage users, repositories and instance settings, and access operational features such as audit and host monitoring.",
+    rolesAdminHint:
+      "Can manage users, repositories and instance settings, and access operational features such as audit and host monitoring.",
     rolesUser: "Standard User",
-    rolesUserHint: "Can sign in to the console; read and write access to individual repositories is governed by ACLs and publish policies.",
+    rolesUserHint:
+      "Can sign in to the console; read and write access to individual repositories is governed by ACLs and publish policies.",
     rolesAnonymous: "Anonymous Principal (anonymous)",
-    rolesAnonymousHint: "A built-in principal that exists only to grant anonymous read access to public repositories; cannot sign in or be managed.",
+    rolesAnonymousHint:
+      "A built-in principal that exists only to grant anonymous read access to public repositories; cannot sign in or be managed.",
   },
   tokens: {
-    // The following keys were missing before (t silently fell back to defaultValue on miss); added back to keep i18n complete.
+    // 以下键此前缺失（t 未命中时静默回退 defaultValue），补录以保持 i18n 完整。
     usageAuthLabel: "How to Authenticate",
     usageOnceLabel: "Plaintext Shown Once",
     usageRevokeLabel: "Revocation Takes Effect Immediately",
@@ -391,7 +405,7 @@ export const en = {
     plaintextHint: "The plaintext is shown only once. Store it safely:",
     deleteConfirm: "Revoke this token? Automation that depends on it will stop working.",
     empty: "No tokens",
-    // Top overview band + usage notes (same wording as the Users page).
+    // 顶部概览带 + 使用说明（与用户页同口径）。
     summaryLabel: "Token Overview",
     summaryTotal: "Total Tokens",
     summaryLatest: "Latest Issued",
@@ -399,13 +413,16 @@ export const en = {
     summaryHint: "Only counts tokens owned by the signed-in user",
     usageTitle: "Usage and Security",
     usageAuth:
-      "Use it on the client as a password with \"username + token\", e.g. put the token in the password field of settings.xml when running mvn deploy.",
-    usageOnce: "The plaintext is shown only once at creation. Once the dialog is closed it cannot be viewed again; if lost, revoke it and issue a new one.",
-    usageRevoke: "The token stops working immediately after revocation, and pipelines that depend on it break as well. Replace the credentials in those pipelines first.",
-    usageScope: "A token inherits the permissions of its owner and cannot bypass repository ACLs or publish policies.",
+      'Use it on the client as a password with "username + token", e.g. put the token in the password field of settings.xml when running mvn deploy.',
+    usageOnce:
+      "The plaintext is shown only once at creation. Once the dialog is closed it cannot be viewed again; if lost, revoke it and issue a new one.",
+    usageRevoke:
+      "The token stops working immediately after revocation, and pipelines that depend on it break as well. Replace the credentials in those pipelines first.",
+    usageScope:
+      "A token inherits the permissions of its owner and cannot bypass repository ACLs or publish policies.",
   },
   repositories: {
-    // The following keys were missing before (t silently fell back to defaultValue on miss); added back to keep i18n complete.
+    // 以下键此前缺失（t 未命中时静默回退 defaultValue），补录以保持 i18n 完整。
     cleanupTitle: "Clean Up Artifacts Without Jar",
     cleanupConfirm:
       "Deletes Maven artifact directories that have no .jar file (only complete artifacts containing a jar are kept). This action cannot be undone.",
@@ -439,7 +456,8 @@ export const en = {
     visibilityPrivate: "Private",
     create: "New Repository",
     descriptionLabel: "Description",
-    descriptionPlaceholder: "Short description of the repository's purpose (optional, shown in the detail page header)",
+    descriptionPlaceholder:
+      "Short description of the repository's purpose (optional, shown in the detail page header)",
     manageAcl: "Access Control",
     browse: "Browse",
     url: "Access URL",
@@ -454,9 +472,10 @@ export const en = {
     remoteUrlPlaceholder: "https://repo.example.com/...",
     remoteUrlRequired: "A proxy repository requires a valid http/https upstream URL",
     membersLabel: "Member Repositories",
-    membersHint: "Reads are aggregated in order; only repositories of the same format can be selected",
+    membersHint:
+      "Reads are aggregated in order; only repositories of the same format can be selected",
     membersRequired: "A group repository requires at least one member repository",
-    // FR-114: connection status badge column
+    // FR-114：连接状态徽章列
     connectionStatus: "Connection Status",
     statusAvailable: "Available",
     statusAutoBlocked: "Auto-blocked",
@@ -506,8 +525,9 @@ export const en = {
     colUpdated: "Updated At",
   },
   acl: {
-    // The following keys were missing before (t silently fell back to defaultValue on miss); added back to keep i18n complete.
-    userListUnavailable: "Unable to load users available for grants. You can still edit existing access control entries.",
+    // 以下键此前缺失（t 未命中时静默回退 defaultValue），补录以保持 i18n 完整。
+    userListUnavailable:
+      "Unable to load users available for grants. You can still edit existing access control entries.",
     title: "Access Control",
     user: "User",
     userPlaceholder: "Search or select a user",
@@ -520,14 +540,15 @@ export const en = {
     empty: "No entries configured yet",
   },
   repoDetail: {
-    // The following keys were missing before (t silently fell back to defaultValue on miss); added back to keep i18n complete.
+    // 以下键此前缺失（t 未命中时静默回退 defaultValue），补录以保持 i18n 完整。
     searchResultCount: "Found {{count}} results",
-    configOnlineHint: "When offline, group reads skip this repository; this state is not propagated by replication",
+    configOnlineHint:
+      "When offline, group reads skip this repository; this state is not propagated by replication",
     configMembers: "Member Repositories",
     configMembersHint: "Select the repositories aggregated into this group",
     title: "Repository Details",
     tabBrowse: "Browse",
-    // Repository overview stats in the middle of the page header (visible on wide screens; narrow screens keep the space for tabs and badges)
+    // 页头中部的仓库概览统计（宽屏显示；窄屏把空间留给页签与徽章）
     statArtifacts: "Artifacts",
     statSize: "Size",
     statCreatedAt: "Created",
@@ -538,17 +559,19 @@ export const en = {
     configVisibilityPublic: "Public",
     configVisibilityPrivate: "Private",
     configDescription: "Description",
-    configDescriptionPlaceholder: "Short description of the repository's purpose, shown in the detail page header",
+    configDescriptionPlaceholder:
+      "Short description of the repository's purpose, shown in the detail page header",
     configSave: "Save Configuration",
     configBasicInfo: "Basic Information",
     configFormat: "Format",
     configType: "Type",
     configName: "Name",
-    // FR-114: connection status display and manual recheck
+    // FR-114：连接状态展示与手动复检
     configConnection: "Upstream Connection Status",
     configRecheck: "Recheck",
     configRechecking: "Checking…",
-    configRecheckHint: "Probe upstream reachability now (only online proxy repositories can be rechecked)",
+    configRecheckHint:
+      "Probe upstream reachability now (only online proxy repositories can be rechecked)",
     configRecheckOk: "Recheck complete",
     configOnlineLabel: "Online",
     configOfflineLabel: "Offline",
@@ -557,7 +580,8 @@ export const en = {
     searchPlaceholder: "Search artifacts; supports expressions such as -exclude ext:jar",
     treeTitle: "File Tree",
     fileDetailTitle: "File Details",
-    selectFileHint: "Click a file on the left to view details; clicking a folder only expands it and shows no details.",
+    selectFileHint:
+      "Click a file on the left to view details; clicking a folder only expands it and shows no details.",
     prefixLabel: "Path Prefix",
     prefixPlaceholder: "e.g. com/example/",
     assetPath: "Path",
@@ -571,12 +595,14 @@ export const en = {
     assetCount: "{{n}} artifacts",
     assetsEmpty: "No artifacts",
     assetsEmptyUploadHint: "Upload above or write via client PUT.",
-    treeTruncated: "Loaded {{n}} of {{total}} entries to build the tree; directories may be incomplete.",
+    treeTruncated:
+      "Loaded {{n}} of {{total}} entries to build the tree; directories may be incomplete.",
     usageTitle: "Usage Notes",
     copyPath: "Copy Path",
     download: "Download",
     htmlView: "View HTML",
-    deleteAssetConfirm: "Delete this artifact? The operation is executed atomically by a unified asset transaction and recorded in the audit log.",
+    deleteAssetConfirm:
+      "Delete this artifact? The operation is executed atomically by a unified asset transaction and recorded in the audit log.",
     batchDelete: "Delete Selected",
     batchDeleteWithCount: "Delete Selected ({{count}})",
     assetSelectionCount: "{{count}} selected",
@@ -585,7 +611,8 @@ export const en = {
     assetDestinationPath: "Destination Directory",
     assetNewPath: "New Path",
     assetOperationOk: "Completed {{count}} asset operations",
-    batchDeleteConfirm: "Delete the {{count}} selected assets? The operation is executed atomically by a unified asset transaction and recorded in the audit log.",
+    batchDeleteConfirm:
+      "Delete the {{count}} selected assets? The operation is executed atomically by a unified asset transaction and recorded in the audit log.",
     batchDeleteOk: "Deleted {{count}} artifacts",
     batchDeletePartial: "Some artifacts failed to delete:",
     batchDeleteEmptySelection: "Select the assets to delete first",
@@ -593,26 +620,31 @@ export const en = {
     coordinatesSelectAria: "Select coordinate format",
     uploadToggle: "Upload Artifact",
     uploadTitle: "Upload File (Raw hosted)",
-    uploadHint: "Specify a path relative to the repository, then choose a local file; it is PUT to the protocol layer.",
+    uploadHint:
+      "Specify a path relative to the repository, then choose a local file; it is PUT to the protocol layer.",
     uploadPath: "Target Path",
-    uploadPathHint: "Leave empty to use the file name; may include directories such as docs/readme.txt",
+    uploadPathHint:
+      "Leave empty to use the file name; may include directories such as docs/readme.txt",
     uploadPick: "Choose File and Upload",
     uploadNeedPath: "Enter a target path or choose a file that has a file name",
     uploadOk: "Upload succeeded",
-    uploadClientOnly: "Publish this repository type with client commands (web upload supports Raw / Maven hosted).",
-    // Short version for narrow screens: the full text wraps to two lines (~48px), the short one fits on one line (~22px).
+    uploadClientOnly:
+      "Publish this repository type with client commands (web upload supports Raw / Maven hosted).",
+    // 窄屏短文案：完整文案会折成两行（约 48px），短文案一行放得下（约 22px）。
     uploadClientOnlyShort: "Client publishing only",
     uploadClientOnlyLink: "View usage notes",
     mavenUploadTitle: "Upload Artifact (Maven hosted)",
     mavenUploadHint:
       "Enter the GAV coordinates and choose files; the server generates pom.xml, checksums (.md5/.sha1) and maven-metadata.xml automatically. Release versions only.",
     mavenUploadNeedFields: "Fill in GroupId / ArtifactId / Version completely",
-    mavenSnapshotNotSupported: "Web upload is limited to release versions; publish SNAPSHOT with mvn deploy",
+    mavenSnapshotNotSupported:
+      "Web upload is limited to release versions; publish SNAPSHOT with mvn deploy",
     publicTitle: "Public Repository",
     publicHint: "Browse artifacts in public repositories without signing in.",
     publicDeniedTitle: "Access Denied",
     publicNotFound: "Repository not found.",
-    publicPrivateHint: "This repository is not publicly visible. Sign in to access it or contact an administrator.",
+    publicPrivateHint:
+      "This repository is not publicly visible. Sign in to access it or contact an administrator.",
   },
   audit: {
     title: "Audit Log",
@@ -702,7 +734,7 @@ export const en = {
     forbidden: "The message center is available to administrators only.",
   },
   authSource: {
-    // Auth methods (contract enum → label)
+    // 认证方式（契约枚举 → 标签）
     jwt: "JWT",
     apiKey: "API Key",
     session: "Session",
@@ -710,7 +742,7 @@ export const en = {
     anonymous: "Anonymous",
   },
   auditAction: {
-    // Audit actions (contract value → label)
+    // 审计动作（契约值 → 标签）
     authLogin: "Admin login",
     authLoginRejected: "Admin login rejected",
     authLogout: "Logout",
@@ -732,7 +764,7 @@ export const en = {
     userDelete: "Delete user",
   },
   auditWorkbench: {
-    // Audit workbench (option A · two-pane investigation workbench): the page title is rendered by the header breadcrumb
+    // 审计工作台（方案 A · 双栏排查工作台）：页标题由页眉面包屑渲染
     forbidden: "The current account is not allowed to view the audit center.",
     kpiTotal: "Audit events",
     kpiTotalHint: "Within the current time range",
@@ -790,10 +822,10 @@ export const en = {
     colTarget: "Target",
     colResult: "Result",
     loadErrorTitle: "Audit data for this node is temporarily unavailable",
-    // "Aggregate range too large" is backend 409 audit_query_too_large, a self-recoverable error: explain the cause and offer an action to narrow the range.
+    // 「聚合范围过大」对应后端 409 audit_query_too_large，属可自恢复错误：说明原因并提供收窄范围的操作。
     tooLargeTitle: "Too many audit events in the current time range",
     tooLargeAction: "Use the last 1 hour",
-    // Narrow screens: advanced filters collapse into a drawer, the toolbar keeps only the keyword row.
+    // 窄屏：高级筛选收进抽屉，工具条只保留关键字行。
     filtersMore: "More filters",
     filtersLess: "Hide filters",
     moreFiltersTitle: "Filters",
@@ -814,14 +846,16 @@ export const en = {
     loadMore: "Load more",
     detailTitle: "Event details (redacted contract fields)",
     detailDrawerTitle: "Event details",
-    // The narrow-screen KPI band shows only the 6 primary metrics by default; these two keys expand/collapse all 12.
+    // 窄屏 KPI 带默认只显示 6 个主指标；这两个键用于展开/收起全部 12 个。
     kpiMore: "More metrics",
     kpiLess: "Hide metrics",
-    detailResultSummary: "Result summary {{summary}} · Error class {{errorClass}} · Affects {{affected}} items",
+    detailResultSummary:
+      "Result summary {{summary}} · Error class {{errorClass}} · Affects {{affected}} items",
     detailLoading: "Loading details…",
     detailInvestigate: "Investigate this target",
     riskOpen: "View batch",
-    investigateNoMatch: "No event matches \"{{query}}\" on the current page (first {{loaded}} records).",
+    investigateNoMatch:
+      'No event matches "{{query}}" on the current page (first {{loaded}} records).',
     drawerTitle: "Risk batch details",
     drawerForbidden: "The current account is not allowed to read this risk batch.",
     drawerLoadError: "Failed to load",
@@ -829,7 +863,8 @@ export const en = {
     drawerMembers: "Full records ({{total}})",
     drawerLoadMore: "Load more batch members",
     confirmTitle: "Confirm handled",
-    confirmPopover: "Confirm that all risk records in this batch are handled? The acknowledging user and time are recorded.",
+    confirmPopover:
+      "Confirm that all risk records in this batch are handled? The acknowledging user and time are recorded.",
     confirmYes: "Confirm",
     confirmNo: "Cancel",
     acknowledgedToast: "Acknowledged {{count}} risk records",
@@ -877,9 +912,11 @@ export const en = {
     stepRun: "Generate",
     stepRunDesc: "Wait for packing to finish",
     modeHotTitle: "Hot Backup (no downtime)",
-    modeHotDesc: "Takes a consistent SQLite snapshot while the service keeps serving reads and writes; suitable for most scenarios.",
+    modeHotDesc:
+      "Takes a consistent SQLite snapshot while the service keeps serving reads and writes; suitable for most scenarios.",
     modeFrozenTitle: "Freeze Window (writes stopped)",
-    modeFrozenDesc: "Stops writes before taking the snapshot, giving stricter semantics; suitable for migrations that require strong consistency.",
+    modeFrozenDesc:
+      "Stops writes before taking the snapshot, giving stricter semantics; suitable for migrations that require strong consistency.",
     labelField: "Note",
     labelPlaceholder: "e.g. before moving to a new data center",
     start: "Start",
@@ -893,10 +930,11 @@ export const en = {
     getLink: "Get Link",
     linkTitle: "Download Link",
     linkTtl: "Validity",
-    linkHint: "The link carries a time-limited signature; paste it on the new machine directly, no sign-in on this machine required.",
+    linkHint:
+      "The link carries a time-limited signature; paste it on the new machine directly, no sign-in on this machine required.",
     linkCopied: "Link copied",
     commandCopied: "Command copied",
-    // Previously only a generic "copied" toast existed and the button label key was missing, which would show the raw key once the action became a button; added here.
+    // 此前只有通用的「已复制」提示，且按钮文案键缺失——按钮化后会直接暴露裸键名；在此补录。
     copyCommand: "Copy Command",
     copyFailed: "Copy failed",
     verify: "Verify",
@@ -907,8 +945,9 @@ export const en = {
     deleteConfirm: "Delete backup package {{id}}? This action cannot be undone.",
     delete: "Delete",
     fileMissing: "Package file is missing",
-    includedNote: "A backup package contains only the SQLite snapshot and artifact content, no keys or node-local configuration.",
-    // —— FR-134: write freeze window ——
+    includedNote:
+      "A backup package contains only the SQLite snapshot and artifact content, no keys or node-local configuration.",
+    // —— FR-134：写入冻结窗口 ——
     freezeCardTitle: "Write Freeze Window",
     freezeStatusWritable: "Writable",
     freezeStatusFrozen: "Frozen",
@@ -928,10 +967,11 @@ export const en = {
     freezeConfirm: "Freeze",
     freezeStarted: "Writes frozen",
     freezeUnfreezeTitle: "Unfreeze Writes",
-    freezeUnfreezeMessage: "After unfreezing, the node resumes business writes; handle any ongoing migration separately.",
+    freezeUnfreezeMessage:
+      "After unfreezing, the node resumes business writes; handle any ongoing migration separately.",
     freezeUnfreezeLabel: "Unfreeze",
     freezeUnfrozen: "Writes unfrozen",
-    // —— FR-137: import a backup package from a URL ——
+    // —— FR-137：从 URL 导入备份包 ——
     importCardTitle: "Import from URL",
     importButton: "Import from URL",
     importModalTitle: "Import Backup Package from URL",
@@ -939,9 +979,11 @@ export const en = {
     importFieldUrlPlaceholder: "https://example.com/backups/bk.tar.gz",
     importFieldUrlRequired: "Enter a valid http/https URL",
     importOverwrite: "Overwrite existing data",
-    importOverwriteHint: "Must be enabled explicitly when the target instance is not empty; built-in anonymous principals do not count as \"not empty\".",
+    importOverwriteHint:
+      'Must be enabled explicitly when the target instance is not empty; built-in anonymous principals do not count as "not empty".',
     importDeep: "Deep verify",
-    importDeepHint: "Compares the content digest of every blob; takes time on the order of the package size.",
+    importDeepHint:
+      "Compares the content digest of every blob; takes time on the order of the package size.",
     importSha256: "Expected SHA-256",
     importSha256Placeholder: "Optional; verify the archive digest after the pull completes",
     importSubmit: "Start Import",
@@ -968,12 +1010,13 @@ export const en = {
       package_oversize: "The package exceeds the single-instance size limit; split it and retry.",
       sha256_mismatch: "The archive SHA-256 does not match the expected value; rejected.",
       manifest_invalid: "The manifest inside the package is invalid or missing required fields.",
-      target_not_empty: "The target instance is not empty; enable \"Overwrite existing data\" before importing.",
+      target_not_empty:
+        'The target instance is not empty; enable "Overwrite existing data" before importing.',
       incompatible: "The backup package is not compatible with the current service version.",
       restore_pending: "Failed to write the pending-restart marker; check the service status.",
       internal: "Internal service error; retry later or check the logs.",
     },
-    // —— FR-137: chunked upload of a backup package (third channel) ——
+    // —— FR-137：备份包分片上传（第三条通道） ——
     uploadCardTitle: "Chunked Upload",
     uploadButton: "Upload Local File",
     uploadChooseFile: "Choose File",
@@ -981,17 +1024,21 @@ export const en = {
     uploadProgress: "Uploading {{percent}}%",
     uploadBytes: "{{done}} / {{total}}",
     uploadResumableTitle: "Unfinished upload found",
-    uploadResumableHint: "The previous upload \"{{fileName}}\" is not finished. Upload the missing chunks to continue?",
+    uploadResumableHint:
+      'The previous upload "{{fileName}}" is not finished. Upload the missing chunks to continue?',
     uploadResume: "Resume Upload",
     uploadDiscard: "Discard Upload",
     uploadCancel: "Cancel Upload",
-    uploadCancelConfirm: "Cancel this upload? Uploaded chunks are kept on the server and the upload can be resumed later.",
+    uploadCancelConfirm:
+      "Cancel this upload? Uploaded chunks are kept on the server and the upload can be resumed later.",
     uploadCancelled: "Upload cancelled",
-    uploadDiscardConfirm: "Discarding the upload aborts the session and cleans up the uploaded chunks; this action cannot be undone.",
+    uploadDiscardConfirm:
+      "Discarding the upload aborts the session and cleans up the uploaded chunks; this action cannot be undone.",
     uploadDiscarded: "Upload discarded",
     uploadComplete: "Upload complete, import submitted",
     uploadCompleteHint: "Takes effect after restarting the service",
-    uploadFileMismatch: "The selected file size does not match the upload session; choose the original file and resume",
+    uploadFileMismatch:
+      "The selected file size does not match the upload session; choose the original file and resume",
     uploadError: "Upload failed: {{message}}",
     uploadMissingChunkTitle: "Missing chunks",
   },

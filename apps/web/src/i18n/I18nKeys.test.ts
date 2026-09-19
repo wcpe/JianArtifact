@@ -44,15 +44,30 @@ describe("i18n 资源完整性（zh / en）", () => {
   it("每个键的插值占位符集合一一对应", () => {
     const mismatched = zhKeys
       .filter((key) => placeholders(zhFlat[key]!).join() !== placeholders(enFlat[key]!).join())
-      .map((key) => `${key}: zh[${placeholders(zhFlat[key]!).join()}] en[${placeholders(enFlat[key]!).join()}]`);
+      .map(
+        (key) =>
+          `${key}: zh[${placeholders(zhFlat[key]!).join()}] en[${placeholders(enFlat[key]!).join()}]`,
+      );
     expect(mismatched).toEqual([]);
   });
 
   it("英文资源不含中文，且两种语言都无空值", () => {
     const cjk = /[\u4e00-\u9fff]/;
-    expect(Object.entries(enFlat).filter(([, value]) => cjk.test(value)).map(([key]) => key)).toEqual([]);
-    expect(Object.entries(zhFlat).filter(([, value]) => value.trim() === "").map(([key]) => key)).toEqual([]);
-    expect(Object.entries(enFlat).filter(([, value]) => value.trim() === "").map(([key]) => key)).toEqual([]);
+    expect(
+      Object.entries(enFlat)
+        .filter(([, value]) => cjk.test(value))
+        .map(([key]) => key),
+    ).toEqual([]);
+    expect(
+      Object.entries(zhFlat)
+        .filter(([, value]) => value.trim() === "")
+        .map(([key]) => key),
+    ).toEqual([]);
+    expect(
+      Object.entries(enFlat)
+        .filter(([, value]) => value.trim() === "")
+        .map(([key]) => key),
+    ).toEqual([]);
   });
 
   it("键集规模符合预期（防止命名空间被整体误删）", () => {

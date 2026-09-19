@@ -171,7 +171,9 @@ export function AuditWorkbenchView() {
     },
     {
       label: t("auditWorkbench.kpiClientIp"),
-      value: summary ? (summary.distinctClientIpCount ?? 0).toLocaleString(currentLocaleTag()) : "—",
+      value: summary
+        ? (summary.distinctClientIpCount ?? 0).toLocaleString(currentLocaleTag())
+        : "—",
       hint: t("auditWorkbench.kpiClientIpHint"),
       tone: "blue",
       icon: <IconNetwork size={18} />,

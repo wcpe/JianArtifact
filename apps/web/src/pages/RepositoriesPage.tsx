@@ -878,7 +878,9 @@ export function RepositoriesPage() {
                                     icon={<IconDatabase size={14} />}
                                     hint={t("repositories.totalSizeTooltip", {
                                       size: formatBytes(repo.totalSize ?? 0),
-                                      bytes: (repo.totalSize ?? 0).toLocaleString(currentLocaleTag()),
+                                      bytes: (repo.totalSize ?? 0).toLocaleString(
+                                        currentLocaleTag(),
+                                      ),
                                     })}
                                     value={formatBytes(repo.totalSize ?? 0)}
                                   />
