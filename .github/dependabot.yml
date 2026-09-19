@@ -1,0 +1,51 @@
+# 依赖更新：每周开 PR，由 ci.yml 的 check.sh 验证后人工合并。
+#
+# 说明：本仓库前端产物内嵌进 Go 二进制，契约由 api/openapi.yaml 生成
+# （packages/devmock/src/schema.gen.ts 与 apps/server/internal/api/api.gen.go 均已入库）。
+# Dependabot 只改依赖版本、不触碰 openapi.yaml，因此不会触发契约重新生成；
+# 若某次升级导致生成类型变化，需人工跑生成命令并一并提交。
+version: 2
+updates:
+  # 前端（pnpm workspace：apps/web、apps/wiki、packages/*）
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      # 与国内工作日节奏错开，避免周一集中处理
+      day: "tuesday"
+    open-pull-requests-limit: 5
+    # vite / vitest / eslint 的主版本升级常带配置迁移，单独小步走
+    versioning-strategy: "increase-if-necessary"
+    labels:
+      - "dependencies"
+      - "frontend"
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+      include: "scope"
+
+  # 后端（单 Go 模块，go.work 只含 apps/server）
+  - package-ecosystem: "gomod"
+    directory: "/apps/server"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "backend"
+    commit-message:
+      prefix: "chore(deps)"
+
+  # CI 依赖本身（actions/*）：版本漂移会直接影响质量门
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "ci"
+    commit-message:
+      prefix: "chore(ci)"

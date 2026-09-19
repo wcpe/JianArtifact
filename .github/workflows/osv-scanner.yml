@@ -1,0 +1,42 @@
+# 依赖漏洞扫描（osv-scanner）：PR 触发 + 每周定时。
+#
+# 为什么不用 `pnpm audit`：本仓库 .npmrc 固定 registry=https://registry.npmmirror.com/，
+# 而 npmmirror 没有 audit 端点（实测报 ERR_PNPM_AUDIT_ENDPOINT_NOT_EXISTS），pnpm audit 直接不可用。
+# osv-scanner 读 lockfile 后查 OSV 数据库，与 npm registry 解耦，因此不受镜像源限制；
+# 它同时覆盖前端 pnpm-lock.yaml 与后端 apps/server/go.mod。
+#
+# 为什么是软失败（fail-on-vuln: false）：结果依赖外部漏洞库可用性，且存量漏洞不应
+# 阻断开发预览版与发版——漏洞信息走 SARIF 进 Security > Code Scanning 面板供人工跟进。
+# 与之互补的是 check.sh 里的 govulncheck（Go 侧，快且无网络随机性，保留为硬门禁）。
+name: 依赖漏洞扫描
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  schedule:
+    # 每周一 12:30 UTC
+    - cron: "30 12 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    name: osv-scanner 全量扫描
+    uses: "google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.6.0"
+    with:
+      # 递归扫描整个仓库：覆盖前端 workspace 与后端 Go 模块。
+      scan-args: |-
+        --recursive
+        ./
+      # 发现漏洞不阻断 CI（软告警），结果仍上传 SARIF 供人工跟进。
+      fail-on-vuln: false
+      upload-sarif: true
+    permissions:
+      contents: read
+      # 上传 SARIF 到 Security 面板所需
+      security-events: write
+      actions: read

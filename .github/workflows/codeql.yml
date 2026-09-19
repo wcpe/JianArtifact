@@ -1,0 +1,67 @@
+# CodeQL 语义级代码扫描（Go + TypeScript/JavaScript）。
+#
+# 与既有检查的分工：govulncheck 只报已知 CVE、eslint 偏风格与浅层规则；
+# CodeQL 做语义级分析（注入、路径遍历、SSRF、凭据泄露），对本项目手写的
+# 安全敏感代码（internal/upstream 的 SSRF 校验与重定向凭据剥离、persistence 的路径校验）
+# 有真实增量价值。
+#
+# 为什么独立 workflow 且软失败：CodeQL 每语言需构建，耗时较长（约 3–8 分钟/语言），
+# 且存在偶发误报；语义扫描不应阻断开发预览版与发版，
+# 结果进 Security > Code Scanning 面板供人工跟进即可。
+#
+# 版本：使用官方长期推荐的 @v3（经核实仓库最新 release 为 bundle 标签，未确认存在 v4）。
+name: CodeQL
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  schedule:
+    # 每周一 13:30 UTC（错开 osv-scanner 的 12:30）
+    - cron: "30 13 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: 分析 ${{ matrix.language }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # 软失败：分析失败不阻断 PR 与发版
+    continue-on-error: true
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ["go", "javascript-typescript"]
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v7
+
+      - name: 安装 Go（go 分析需要）
+        if: matrix.language == 'go'
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: apps/server/go.mod
+          cache-dependency-path: apps/server/go.sum
+
+      - name: 初始化 CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+
+      # Go 侧用 modernc.org/sqlite（纯 Go，无 CGO），autobuild 可正常编译；
+      # 前端为 Vite 应用，CodeQL 对 JS/TS 不需要构建即可分析。
+      - name: 自动构建
+        uses: github/codeql-action/autobuild@v3
+
+      - name: 执行分析
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
