@@ -1,6 +1,7 @@
 // 私网来源勾选项（既存任务）与 i18n 覆盖：
 // - PrivateSourceToggle 勾选后必须调用 PATCH source-config 且成功后提示；
-// - zh / en 两种语言的 migrations.allowPrivateSource* key 必须存在且同构。
+// - zh / en 两种语言的 migrations.allowPrivateSource* key 必须存在。
+// 全量键集一致性由 src/i18n/I18nKeys.test.ts 递归守卫（此处不再重复单命名空间断言）。
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 // 注册 jest-dom matchers（toBeChecked 等），setup.ts 未全局引入。
@@ -93,9 +94,5 @@ describe("i18n 私网勾选文案（zh/en）", () => {
       expect(typeof resource.migrations.allowPrivateSourceHint).toBe("string");
       expect(resource.migrations.allowPrivateSourceHint.length).toBeGreaterThan(0);
     }
-  });
-
-  it("en 与 zh 的 migrations 命名空间键集合一致（避免英文缺键回落中文）", () => {
-    expect(Object.keys(en.migrations).sort()).toEqual(Object.keys(zh.migrations).sort());
   });
 });

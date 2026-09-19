@@ -31,6 +31,7 @@ import { useTranslation } from "react-i18next";
 
 import { getHostMonitoring } from "../../api/endpoints";
 import type { HostMetricGroup, HostMetricPoint, HostMonitoring } from "../../api/types";
+import { currentLocaleTag } from "../../i18n/current";
 import { useAsync, useVisibleRefresh } from "../../hooks/useAsync";
 import { formatBytes, formatCount, formatStamp } from "../../lib/format";
 import { density } from "../../theme/density";
@@ -271,7 +272,7 @@ function NodeStatusRail({ data, sample }: { data: HostMonitoring; sample: HostMe
       <Text size="xs" c="dimmed" mt="auto" pt="sm">
         {t("hostMonitoring.latestSample", {
           time: data.latestSampleAt
-            ? new Date(data.latestSampleAt).toLocaleString("zh-CN")
+            ? new Date(data.latestSampleAt).toLocaleString(currentLocaleTag())
             : unavailable,
         })}
       </Text>
@@ -380,12 +381,12 @@ export function HostMonitoringLive() {
           <Text size="sm" c="dimmed">
             {t("hostMonitoring.latestSample", {
               time: data.latestSampleAt
-                ? new Date(data.latestSampleAt).toLocaleString("zh-CN")
+                ? new Date(data.latestSampleAt).toLocaleString(currentLocaleTag())
                 : unavailable,
             })}
             {lastUpdated
               ? ` · ${t("hostMonitoring.pageUpdated", {
-                  time: lastUpdated.toLocaleTimeString("zh-CN"),
+                  time: lastUpdated.toLocaleTimeString(currentLocaleTag()),
                 })}`
               : ""}
           </Text>

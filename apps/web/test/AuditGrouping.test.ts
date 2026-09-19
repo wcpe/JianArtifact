@@ -1,4 +1,6 @@
 // 审计聚合规则：稳定操作标识和时间桶共同决定关联范围。
+// 分桶按**宿主本地时区**（后端传 UTC，展示跟随浏览器），故期望值一律用本地 getter 拼装，
+// 保证任意时区下 CI 稳定；另附「非 UTC 宿主下不得按 UTC 分桶」的显式回归。
 import { describe, expect, it } from "vitest";
 
 import {
@@ -7,6 +9,21 @@ import {
   prioritizeAuditGroups,
 } from "../src/components/observability/auditGrouping";
 import type { AuditPreviewEvent } from "../src/mocks/observabilityPreview";
+
+const pad = (input: number) => String(input).padStart(2, "0");
+
+/** 用宿主本地时区拼出分桶键（与实现口径一致）。 */
+function localBucketKey(iso: string, granularity: "hour" | "day"): string {
+  const at = new Date(iso);
+  const date = `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`;
+  return granularity === "hour" ? `${date}T${pad(at.getHours())}` : date;
+}
+
+/** 用宿主本地时区拼出分桶标签里的日期部分。 */
+function localDate(iso: string): string {
+  const at = new Date(iso);
+  return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`;
+}
 
 function event(overrides: Partial<AuditPreviewEvent> = {}): AuditPreviewEvent {
   return {
@@ -59,8 +76,8 @@ describe("审计分组", () => {
 
     expect(groups).toHaveLength(2);
     expect(groups.map((group) => [group.groupKey, group.bucketKey, group.eventCount])).toEqual([
-      ["operation:op-1", "2026-08-26T15", 1],
-      ["operation:op-1", "2026-08-26T14", 1],
+      ["operation:op-1", localBucketKey("2026-08-26T15:10:00Z", "hour"), 1],
+      ["operation:op-1", localBucketKey("2026-08-26T14:10:00Z", "hour"), 1],
     ]);
   });
 
@@ -84,15 +101,31 @@ describe("审计分组", () => {
     ];
 
     expect(bucketAuditGroups(groupAuditEvents(events, "24h")).map((bucket) => bucket.key)).toEqual([
-      "2026-08-26T15",
-      "2026-08-26T14",
+      localBucketKey("2026-08-26T15:10:00Z", "hour"),
+      localBucketKey("2026-08-26T14:10:00Z", "hour"),
     ]);
     expect(bucketAuditGroups(groupAuditEvents(events, "7d")).map((bucket) => bucket.key)).toEqual([
-      "2026-08-26",
+      localBucketKey("2026-08-26T14:10:00Z", "day"),
     ]);
     expect(bucketAuditGroups(groupAuditEvents(events, "30d")).map((bucket) => bucket.key)).toEqual([
-      "2026-08-26",
+      localBucketKey("2026-08-26T14:10:00Z", "day"),
     ]);
+  });
+
+  it("分桶键与标签按宿主本地时区计算，不按 UTC（跨日不归错桶）", () => {
+    // UTC 20:00 在东八区已是次日 04:00：按 UTC 分桶会落在 26 日，本地口径必须落在 27 日。
+    const [bucket] = bucketAuditGroups(
+      groupAuditEvents([event({ id: "audit-1", occurredAt: "2026-08-26T20:00:00Z" })], "24h"),
+    );
+
+    expect(bucket.key).toBe(localBucketKey("2026-08-26T20:00:00Z", "hour"));
+    expect(bucket.label).toContain(localDate("2026-08-26T20:00:00Z"));
+
+    const offsetMinutes = -new Date("2026-08-26T20:00:00Z").getTimezoneOffset();
+    if (offsetMinutes !== 0) {
+      // 宿主非 UTC 时，按 UTC 分桶的实现会留下 "2026-08-26T20"，这条断言专门拦它。
+      expect(bucket.key).not.toBe("2026-08-26T20");
+    }
   });
 
   it("聚合批次统计成功、失败和显式影响数，已应用也计入成功", () => {

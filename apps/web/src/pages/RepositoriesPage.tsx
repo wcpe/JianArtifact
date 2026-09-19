@@ -48,6 +48,7 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
 import { PageShell } from "../app/PageShell";
+import { currentLocaleTag } from "../i18n/current";
 import { AsyncBoundary } from "../components/AsyncBoundary";
 import { CopyTextButton } from "../components/CopyTextButton";
 import {
@@ -874,7 +875,7 @@ export function RepositoriesPage() {
                                     icon={<IconDatabase size={14} />}
                                     hint={t("repositories.totalSizeTooltip", {
                                       size: formatBytes(repo.totalSize ?? 0),
-                                      bytes: (repo.totalSize ?? 0).toLocaleString("zh-CN"),
+                                      bytes: (repo.totalSize ?? 0).toLocaleString(currentLocaleTag()),
                                     })}
                                     value={formatBytes(repo.totalSize ?? 0)}
                                   />

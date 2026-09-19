@@ -1,4 +1,6 @@
 // 通用数值格式化（图表坐标轴 / KPI / 悬停读数共用）。
+// 数字与时间格式跟随当前界面语言（见 src/i18n/current.ts），不再硬编码 zh-CN。
+import { currentLocaleTag } from "../i18n/current";
 import { parseUtc } from "./timeFormat";
 
 /**
@@ -23,22 +25,23 @@ export function formatBytes(bytes: number): string {
 
 /** 千分位整数（计数型指标）。 */
 export function formatCount(value: number): string {
-  return value.toLocaleString("zh-CN");
+  return value.toLocaleString(currentLocaleTag());
 }
 
 /**
  * 短时间戳（列表行 / 图表刻度共用）：
- * 当天只显示 HH:mm，跨天显示「M/d HH:mm」，避免一排重复的同款标签。
- * 注意必须同时给 hour 与 minute——只给 hour 时 zh-CN 会输出「16时」而不是「16:00」。
+ * 当天只显示 HH:mm，跨天显示「月/日 HH:mm」，避免一排重复的同款标签。
+ * 注意必须同时给 hour 与 minute——只给 hour 时中文会输出「16时」而不是「16:00」。
  */
 export function formatStamp(iso: string): string {
   // 后端时间可能是 SQLite naive UTC（YYYY-MM-DD HH:MM:SS）或 RFC3339，统一解析。
   const date = parseUtc(iso);
   if (!date) return "—";
+  const locale = currentLocaleTag();
   const sameDay = date.toDateString() === new Date().toDateString();
   return sameDay
-    ? date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })
-    : date.toLocaleString("zh-CN", {
+    ? date.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })
+    : date.toLocaleString(locale, {
         month: "numeric",
         day: "numeric",
         hour: "2-digit",

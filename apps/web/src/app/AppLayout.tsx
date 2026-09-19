@@ -29,6 +29,7 @@ import {
   IconFileReport,
   IconActivity,
   IconLicense,
+  IconLanguage,
   IconLogin,
   IconPackage,
   IconRefresh,
@@ -43,6 +44,8 @@ import { useTranslation } from "react-i18next";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { getStatus, listPublicRepositories } from "../api/endpoints";
+import { nextLanguage, languageLabel } from "../i18n/language";
+import { useLanguage } from "../i18n/useLanguage";
 import { getNetworkActivityCount, subscribeNetworkActivity } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { useLoginModal } from "../auth/LoginModal";
@@ -76,11 +79,6 @@ interface NavSection {
 function isNavActive(pathname: string, itemPath: string): boolean {
   return pathname === itemPath || pathname.startsWith(`${itemPath}/`);
 }
-
-/** 页眉面包屑的末级文案覆盖：导航项标签之外更准确的页面名。 */
-const NAV_BREADCRUMB_OVERRIDES: Record<string, string> = {
-  "/dashboard": "业务仪表盘",
-};
 
 /** 面包屑项：label 必填；to 存在时渲染为可点击链接（末级始终不可点）。 */
 interface Crumb {
@@ -239,6 +237,8 @@ export function AppLayout() {
   const { t } = useTranslation();
   const { user, logout } = useAuth();
   const { openLogin } = useLoginModal();
+  // 语言：用户在页眉显式切换后记住选择，未选择时按路由默认（公开页随浏览器语言）。
+  const { language, setLanguage } = useLanguage();
   const navigate = useNavigate();
   const location = useLocation();
   const isAuthenticated = Boolean(user);
@@ -364,7 +364,8 @@ export function AppLayout() {
           return [
             { label: t(section.titleKey) },
             {
-              label: NAV_BREADCRUMB_OVERRIDES[item.path] ?? t(item.labelKey),
+              // 末级面包屑用更准确的页面名（如「业务仪表盘」），与导航项标签区分
+              label: item.path === "/dashboard" ? t("nav.dashboardPage") : t(item.labelKey),
               to: item.path,
             },
           ];
@@ -536,7 +537,7 @@ export function AppLayout() {
             justify="flex-end"
             style={{ flex: 1, minWidth: 0, flexShrink: 0 }}
           >
-            {/* 窄屏：搜索 / 刷新退化为纯图标（页眉放不下文字，硬塞会被裁成半个字），
+            {/* 窄屏：搜索 / 刷新 / 语言退化为纯图标（页眉放不下文字，硬塞会被裁成半个字），
                 文字经悬停或长按 Tooltip 可达；桌面仍按全站约定「图标 + 文字」。 */}
             {isMobile ? (
               <>
@@ -556,24 +557,42 @@ export function AppLayout() {
                     style={refreshing ? { animation: "ja-spin 0.9s linear infinite" } : undefined}
                   />
                 </HeaderIconAction>
+                <HeaderIconAction
+                  label={t("nav.switchLanguage", { defaultValue: "切换语言" })}
+                  onClick={() => setLanguage(nextLanguage(language))}
+                >
+                  <IconLanguage size={16} />
+                </HeaderIconAction>
               </>
             ) : (
-              /* FR-59/FR-71: 刷新按钮——刷新期间禁用并旋转 */
-              <Button
-                size="compact-sm"
-                variant="subtle"
-                leftSection={
-                  <IconRefresh
-                    size={16}
-                    style={refreshing ? { animation: "ja-spin 0.9s linear infinite" } : undefined}
-                  />
-                }
-                aria-label={t("common.refresh", { defaultValue: "刷新" })}
-                onClick={handleRefresh}
-                disabled={refreshing}
-              >
-                {t("common.refresh", { defaultValue: "刷新" })}
-              </Button>
+              <>
+                {/* FR-59/FR-71: 刷新按钮——刷新期间禁用并旋转 */}
+                <Button
+                  size="compact-sm"
+                  variant="subtle"
+                  leftSection={
+                    <IconRefresh
+                      size={16}
+                      style={refreshing ? { animation: "ja-spin 0.9s linear infinite" } : undefined}
+                    />
+                  }
+                  aria-label={t("common.refresh", { defaultValue: "刷新" })}
+                  onClick={handleRefresh}
+                  disabled={refreshing}
+                >
+                  {t("common.refresh", { defaultValue: "刷新" })}
+                </Button>
+                {/* 语言切换：显示**目标**语言的自称，点一下即切过去 */}
+                <Button
+                  size="compact-sm"
+                  variant="subtle"
+                  leftSection={<IconLanguage size={16} />}
+                  aria-label={t("nav.switchLanguage", { defaultValue: "切换语言" })}
+                  onClick={() => setLanguage(nextLanguage(language))}
+                >
+                  {languageLabel(nextLanguage(language))}
+                </Button>
+              </>
             )}
             {user ? (
               <AccountMenu

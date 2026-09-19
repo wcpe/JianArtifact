@@ -14,6 +14,7 @@ import {
 } from "@jianartifact/devmock/scenario";
 import { AppRoutes } from "../src/app/router";
 import { RepositoryDetailPage } from "../src/pages/RepositoryDetailPage";
+import { formatUtcToLocalDate } from "../src/lib/timeFormat";
 import { renderWithProviders } from "./harness";
 
 function renderDetail(name: string, authenticated: boolean) {
@@ -227,5 +228,38 @@ describe("仓库详情", () => {
     expect(await screen.findByText("备用节点为只读，当前请求已拒绝")).toBeTruthy();
     expect(description.value).toBe("保留的配置说明");
     expect((screen.getAllByLabelText("可见性")[0]! as HTMLInputElement).value).toBe("公开");
+  });
+
+  it("页头概览的创建时间按浏览器本地时区展示，不做 UTC 截断", async () => {
+    // 概览行用 visibleFrom="md" 承载，而 jsdom 的 matchMedia 默认一律不匹配
+    // （test/setup.ts 返回 matches:false）——这里临时按「桌面」渲染，跑完立刻还原。
+    const originalMatchMedia = window.matchMedia;
+    window.matchMedia = ((query: string) =>
+      ({
+        matches: query.includes("min-width"),
+        media: query,
+        onchange: null,
+        addListener: () => {},
+        removeListener: () => {},
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        dispatchEvent: () => false,
+      }) as MediaQueryList) as typeof window.matchMedia;
+
+    try {
+      renderDetail("maven-releases", true);
+      // 种子值来自 packages/devmock 的仓库列表（maven-releases.createdAt）。
+      const seedCreatedAt = "2026-01-01T00:00:00Z";
+      expect(await screen.findByText(formatUtcToLocalDate(seedCreatedAt))).toBeTruthy();
+
+      const utcSlice = seedCreatedAt.slice(0, 10);
+      const offsetMinutes = -new Date(seedCreatedAt).getTimezoneOffset();
+      if (offsetMinutes !== 0 && utcSlice !== formatUtcToLocalDate(seedCreatedAt)) {
+        // 非 UTC 宿主下按 UTC 截断会差一天，这条断言专门拦「绕过统一入口」的写法。
+        expect(screen.queryByText(utcSlice)).toBeNull();
+      }
+    } finally {
+      window.matchMedia = originalMatchMedia;
+    }
   });
 });

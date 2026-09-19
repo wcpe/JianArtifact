@@ -46,6 +46,7 @@ export const zh = {
     sectionOperations: "运维",
     sectionAdministration: "管理",
     dashboard: "仪表盘",
+    dashboardPage: "业务仪表盘",
     users: "用户",
     tokens: "访问令牌",
     repositories: "仓库",
@@ -60,6 +61,7 @@ export const zh = {
     userSuffix: "（{{role}}）",
     accountLabel: "当前登录身份",
     loggingOut: "正在退出…",
+    switchLanguage: "切换语言",
   },
   settings: {
     // 以下键此前缺失（t 未命中时静默回退 defaultValue），补录以保持 i18n 完整。
@@ -1190,4 +1192,16 @@ export const zh = {
   },
 } as const;
 
-export type Resources = typeof zh;
+/**
+ * 资源形状（把 `as const` 的字面量类型放宽为 string），供其它语言包用 `satisfies` 声明。
+ * 直接用 `typeof zh` 会让形状保留中文字面量，英文包必然类型不兼容；
+ * 这里把叶子放宽成 string（嵌套一层的对象也递归放宽），从而在**编译期**强制
+ * 「同命名空间、同键集」——`backups.backupImportError` 是按错误码分组的嵌套对象。
+ */
+export type Resources = {
+  [K in keyof typeof zh]: {
+    [P in keyof (typeof zh)[K]]: (typeof zh)[K][P] extends string
+      ? string
+      : { [Q in keyof (typeof zh)[K][P]]: string };
+  };
+};

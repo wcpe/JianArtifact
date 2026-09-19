@@ -1,6 +1,6 @@
 # 架构设计：JianArtifact
 
-> 本文是当前代码的架构真源（HOW）。它区分已落地实现和发布状态：当前发布版本由根目录 `VERSION` 标记（`0.8.0`）。**实时复制通道已随 FR-138 整体退役**，当前形态是单实例独立部署 + 一致性备份包搬迁；当前开发窗口是 `0.9.0`（M3）。
+> 本文是当前代码的架构真源（HOW）。它区分已落地实现和发布状态：当前发布版本由根目录 `VERSION` 标记（`0.8.0`），当前开发窗口是 `0.8.1`（控制台布局口径收敛、观测页性能、移动端响应式、时区与 i18n 落地）。**实时复制通道已随 FR-138 整体退役**，当前形态是单实例独立部署 + 一致性备份包搬迁。
 
 ## 1. 定位与边界
 
@@ -50,6 +50,20 @@ config 为横切配置层；web 是 go:embed 的前端静态资源。
 `api` 和 `protocol` 不直接访问 SQLite；鉴权和 ACL 在后端完成，前端只负责展示和交互。前端依赖方向为 `packages/ui` → `apps/web` / `apps/wiki`，不得反向依赖应用。
 
 技术栈固定为 Go、Gin、sqlx、纯 Go SQLite、React、TypeScript、Vite、Mantine 和 i18next；API 设计真源为 `api/openapi.yaml`。
+
+### 3.1 前端范式（0.8.1 收敛）
+
+- **页面骨架**：固定视口高度由 `app/PageShell` 唯一提供（`100dvh − 页眉偏移 − 2×padding`），页面不再自造 `vh` / `dvh` / `max-width`；内容区宽度取 `theme/density.contentMaxWidth`。
+- **KPI 口径**：`components/ops/OpsKit` 的 `OpsKpiBand` 是唯一 KPI 组件（含 `variant="strip"` 紧凑横带与 `actions` 插槽），不在页面内自造指标卡。
+- **加载与错误**：`AsyncBoundary` 承担首载骨架与失败重试；`RouteErrorBoundary` 按路由路径重建，避免一次 chunk 加载失败污染后续页面；导航项在 hover / 聚焦时预取目标页 chunk。
+- **刷新**：刷新入口唯一（页眉），页面通过全局刷新事件订阅，不各自放刷新按钮。
+- **时间口径**：后端一律存 UTC（SQLite `datetime('now')` 为 naive `YYYY-MM-DD HH:MM:SS`，Go `time.Time` 为 RFC3339）。前端展示统一走 `lib/timeFormat`（`parseUtc` / `formatUtcToLocal[Date]`）按**浏览器本地时区**渲染；唯一例外是服务端渲染的 HTML 目录索引页（见 §3.2）。
+- **语言与格式**：语言策略收敛在 `i18n/language.ts`（解析优先级：用户显式选择 > 浏览器语言 > 路由默认；公开页跟浏览器语言，管理页与 `/setup` 默认中文），`i18n/useLanguage` 负责同步 i18next 与 `<html lang>`；`i18n/current.ts` 的 `currentLocaleTag()` / `localizedFormatter()` 是 `toLocaleString`、`Intl.*` 与 Mantine 日期组件 locale 的**唯一取值来源**，禁止再写死 `zh-CN`。文案资源 `zh.ts` / `en.ts` 必须同命名空间同键集，由 `en.ts` 的 `satisfies Resources` 与 `I18nKeys.test.ts` 双层守卫。
+- **开发态**：`packages/devmock` 提供全部控制台路由的正常 / 空 / 加载 / 失败状态契约，生产构建不含 Mock；开发态控制台（档位矩阵、观测抖动、拖拽与重置）只在开发态挂载。
+
+### 3.2 HTML 目录索引页的时区例外
+
+`apps/server/internal/protocol/browse.go` 渲染的目录索引页是**零依赖静态页面**（无外链资源、无框架）。但浏览器时区只有前端拿得到，因此该页是唯一一处刻意的例外：时间以 `<time datetime="…Z">` 承载**恒为 UTC** 的机器可读值，页内一段内联原生脚本按 `datetime` 改写展示文案与表头（`data-local` 提供本地时区文案），同时同步目录行的「最近更新」。脚本禁用或失效时页面回退为服务端渲染的 UTC 文本并把表头标回 `(UTC)`，信息不丢失；机器可读值与 API 返回、ETag 校验始终同口径。除这段脚本外不引入任何依赖。
 
 ## 4. 数据真源与主要模型
 

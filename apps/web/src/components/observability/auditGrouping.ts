@@ -3,6 +3,7 @@ import type {
   AuditPreviewEvent,
   PreviewRange,
 } from "../../mocks/observabilityPreview";
+import { parseUtc } from "../../lib/timeFormat";
 
 export interface AuditPreviewGroup {
   groupKey: string;
@@ -29,12 +30,21 @@ function eventGroupKey(event: AuditPreviewEvent) {
   return event.operationId ? `operation:${event.operationId}` : `event:${event.source}:${event.id}`;
 }
 
+/**
+ * 分桶键与标签按**浏览器本地时区**计算。
+ * 后端传的是 UTC，若直接 `toISOString()` 取前 13 位就会按 UTC 天/小时分桶——UTC+8 下
+ * 本地 09:30 的记录会被标成「01:00–01:59」，分桶与标签双错，跨日时还会归错到前一天。
+ */
 function timeBucket(occurredAt: string, range: PreviewRange) {
-  const timestamp = new Date(occurredAt).toISOString();
-  const date = timestamp.slice(0, 10);
+  const at = parseUtc(occurredAt);
+  if (!at) {
+    return { key: occurredAt, label: occurredAt };
+  }
+  const pad = (input: number) => String(input).padStart(2, "0");
+  const date = `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`;
 
   if (range === "24h") {
-    const hour = timestamp.slice(11, 13);
+    const hour = pad(at.getHours());
     return { key: `${date}T${hour}`, label: `${date} ${hour}:00–${hour}:59` };
   }
 

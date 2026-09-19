@@ -7,9 +7,23 @@ import { server } from "@jianartifact/devmock/node";
 import { resetDevMockScenario, resetStore, resetMockBackups } from "@jianartifact/devmock";
 
 import { clearAsyncCache } from "../src/hooks/useAsync";
+import i18n from "../src/i18n";
 import { notifications } from "@mantine/notifications";
 import { cleanup } from "@testing-library/react";
 import { afterAll, afterEach, beforeAll } from "vitest";
+
+// jsdom 的 navigator.language 恒为 en-US，而界面语言策略会让**公开路由**跟随浏览器语言——
+// 不固定的话，公开页在测试里全部落英文。既有用例的中文断言基于「中文环境」，
+// 这里把浏览器语言桩成 zh-CN 作为测试基线；需要验证语言解析的用例自行覆盖 navigator。
+function stubBrowserLanguage(): void {
+  for (const [key, value] of [
+    ["language", "zh-CN"],
+    ["languages", ["zh-CN"]],
+  ] as const) {
+    Object.defineProperty(window.navigator, key, { configurable: true, get: () => value });
+  }
+}
+stubBrowserLanguage();
 
 // 懒加载路由 + 图表重页面在全量并行负载下可能超过 findBy* 默认 1s 等待，
 // 统一放宽到 5s，与用例内显式 timeout: 5_000 的口径一致（真失败仍会稳定超时）。
@@ -131,6 +145,11 @@ afterEach(() => {
   // 备份包 mock 状态是独立内存态，不随 resetStore 复位，需单独清理。
   resetMockBackups();
   localStorage.clear();
+  // 语言是全局单例状态，用例后复位到基线，避免泄漏到下一用例（偏好由 localStorage 承载，
+  // 上面已清空；这里复位 i18next 实例本身）。已经是基线时跳过，省掉一次多余的异步切换。
+  if (i18n.language !== "zh") {
+    void i18n.changeLanguage("zh");
+  }
   window.history.replaceState({}, "", "/");
   // 清空 Mantine 通知，避免上一个用例的通知泄漏到下一用例的 DOM。
   notifications.clean();

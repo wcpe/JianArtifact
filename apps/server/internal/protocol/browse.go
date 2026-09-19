@@ -8,6 +8,11 @@
 // 规模口径：子目录**全量**展示，只有直接文件分页。目录项规模只与「同层目录数」相关，
 // 而对取数做条数截断会让同层的其它子目录整片消失（列表既不完整也不正确），因此分页
 // 只作用于直接文件；单次响应规模与子树规模解耦。
+//
+// 时区口径：服务端只认 UTC（asset 表存的就是 UTC naive 串），而访问者的浏览器时区只有
+// 前端拿得到。因此本页是**唯一**一处刻意的零依赖例外——内联一段十几行的原生脚本，把
+// <time datetime> 的机器可读值改写为访问者本地时区；脚本失效或禁用时页面回退为服务端
+// 渲染的 UTC 文案，信息不丢失。除这段脚本外仍不引入任何依赖、不使用外链资源。
 package protocol
 
 import (
@@ -19,6 +24,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -87,14 +93,14 @@ footer{margin-top:2rem;color:#57606a;font-size:.75rem}
 {{if .Rows}}
 <div class="tablewrap">
 <table>
-<thead><tr><th>名称</th><th>大小</th><th>创建时间 (UTC)</th><th>修改时间 (UTC)</th><th>校验和</th></tr></thead>
+<thead><tr><th>名称</th><th>大小</th><th data-local="创建时间（本地时区）">创建时间 (UTC)</th><th data-local="修改时间（本地时区）">修改时间 (UTC)</th><th>校验和</th></tr></thead>
 <tbody>
 {{range .Rows}}
 <tr class="{{if .IsDir}}dir{{end}}">
 <td class="name"><a href="{{.Href}}">{{.Name}}</a></td>
 <td class="size"{{if .SizeTitle}} title="{{.SizeTitle}}"{{end}}>{{.SizeStr}}</td>
-<td class="time">{{.CreatedStr}}</td>
-<td class="time"{{if .UpdatedTitle}} title="{{.UpdatedTitle}}"{{end}}>{{.UpdatedStr}}</td>
+<td class="time">{{if .CreatedISO}}<time datetime="{{.CreatedISO}}">{{.CreatedStr}}</time>{{else}}{{.CreatedStr}}{{end}}</td>
+<td class="time"{{if .UpdatedTitle}} title="{{.UpdatedTitle}}"{{end}}>{{if .UpdatedISO}}<time datetime="{{.UpdatedISO}}">{{.UpdatedStr}}</time>{{else}}{{.UpdatedStr}}{{end}}</td>
 <td class="sum">{{if .HasChecksum}}<details><summary title="{{.Sha256}}">{{.Sha256Short}}</summary><dl><dt>SHA-256</dt><dd>{{.Sha256}}</dd><dt>SHA-1</dt><dd>{{.Sha1}}</dd><dt>MD5</dt><dd>{{.Md5}}</dd></dl></details>{{else}}-{{end}}</td>
 </tr>
 {{end}}
@@ -121,6 +127,26 @@ footer{margin-top:2rem;color:#57606a;font-size:.75rem}
 <p class="empty">此目录为空。</p>
 {{end}}
 <footer>JianArtifact 制品仓库</footer>
+<script>
+// 时区渐进增强：服务端只认 UTC（asset 表存的就是 UTC naive 串），浏览器时区只有前端拿得到。
+// 因此保留服务端渲染的 UTC 文案作为**无脚本回退**，再由本脚本按 <time datetime> 的机器可读值
+// 改写为访问者本地时区；表头文案同样由 data-local 提供，避免两套文案分叉。脚本内联、无外链、无 eval。
+(function () {
+  var pad = function (n) { return String(n).length < 2 ? "0" + n : String(n); };
+  var nodes = document.querySelectorAll("time[datetime]");
+  for (var i = 0; i < nodes.length; i++) {
+    var at = new Date(nodes[i].getAttribute("datetime"));
+    if (isNaN(at.getTime())) continue;
+    nodes[i].textContent =
+      at.getFullYear() + "-" + pad(at.getMonth() + 1) + "-" + pad(at.getDate()) + " " +
+      pad(at.getHours()) + ":" + pad(at.getMinutes()) + ":" + pad(at.getSeconds());
+  }
+  var heads = document.querySelectorAll("[data-local]");
+  for (var j = 0; j < heads.length; j++) {
+    heads[j].textContent = heads[j].getAttribute("data-local");
+  }
+})();
+</script>
 </body>
 </html>`))
 
@@ -131,7 +157,9 @@ type browseCrumb struct {
 }
 
 // browseRow 是目录列表中的一行：子目录或文件。
-// 时间字段是 asset 表存的 UTC "YYYY-MM-DD HH:MM:SS"，原样展示并在表头标注 UTC。
+// 时间字段是 asset 表存的 UTC "YYYY-MM-DD HH:MM:SS"，原样展示并在表头标注 UTC；
+// ISO 字段是同一时刻的 RFC3339（带 Z），供 <time datetime> 承载机器可读值，
+// 便于前端脚本按浏览器时区改写展示文案而不丢失原始口径。
 // 目录行的「大小」是子树内制品总数、「修改时间」是子树内最近一次更新时间（目录没有
 // 自身的创建/修改时间），故用 title 说明该差异。
 type browseRow struct {
@@ -141,7 +169,9 @@ type browseRow struct {
 	SizeStr      string
 	SizeTitle    string
 	CreatedStr   string
+	CreatedISO   string
 	UpdatedStr   string
+	UpdatedISO   string
 	UpdatedTitle string
 	Sha256       string
 	Sha256Short  string
@@ -341,6 +371,7 @@ func collectBrowseRows(c *gin.Context, dirs []string, dirStats []repository.DirS
 			SizeTitle:    "目录内制品总数（含子目录）",
 			CreatedStr:   "-", // 目录没有自身的创建时间
 			UpdatedStr:   orDash(st.Latest),
+			UpdatedISO:   toISOUTC(st.Latest),
 			UpdatedTitle: "目录内最近一次更新时间",
 		})
 	}
@@ -354,7 +385,9 @@ func collectBrowseRows(c *gin.Context, dirs []string, dirStats []repository.DirS
 			Href:        base + url.PathEscape(name),
 			SizeStr:     formatSize(f.Size),
 			CreatedStr:  orDash(f.CreatedAt),
+			CreatedISO:  toISOUTC(f.CreatedAt),
 			UpdatedStr:  orDash(f.UpdatedAt),
+			UpdatedISO:  toISOUTC(f.UpdatedAt),
 			Sha256:      f.BlobHash, // 内容寻址键，即内容 SHA-256（与下载 ETag 同值）
 			Sha256Short: shortHash(f.BlobHash),
 			Sha1:        orDash(f.Sha1),
@@ -382,6 +415,21 @@ func orDash(s string) string {
 	}
 	return s
 }
+
+// toISOUTC 把 asset 表存的 UTC "YYYY-MM-DD HH:MM:SS" 转成机器可读的 RFC3339（带 Z），
+// 供 <time datetime> 承载。展示文案可按访问者时区改写，这个机器可读值恒为 UTC，
+// 因此下载校验、日志比对与人工核对仍以同一口径为准。
+// 形态不符（含空值与历史脏数据）返回空串，模板据此退化为纯文本而不渲染 <time>。
+func toISOUTC(s string) string {
+	at, err := time.Parse(assetTimeLayout, s)
+	if err != nil {
+		return ""
+	}
+	return at.Format("2006-01-02T15:04:05Z")
+}
+
+// assetTimeLayout 是 asset 表 created_at/updated_at 的存储形态（UTC，无时区后缀）。
+const assetTimeLayout = "2006-01-02 15:04:05"
 
 // lastSegment 返回路径的最后一段（无分隔符时返回原值）。
 func lastSegment(path string) string {

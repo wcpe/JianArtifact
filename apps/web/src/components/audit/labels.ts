@@ -1,6 +1,7 @@
 // 审计工作台（方案 A）共享字典与格式化：类别/结果/严重度/认证来源的
 // i18n 键映射与语义色，供左右栏与抽屉共用，避免魔法字符串散落。
 import type { AuditCategory, AuditResult } from "../../api/types";
+import { localizedFormatter } from "../../i18n/current";
 import { parseUtc } from "../../lib/timeFormat";
 
 /** 类别 → i18n 键（标签统一走 auditWorkbench 命名空间）。 */
@@ -198,22 +199,32 @@ export function parseTime(value: unknown): number {
   return date ? date.getTime() : 0;
 }
 
-const timeFormatter = new Intl.DateTimeFormat("zh-CN", {
-  dateStyle: "medium",
-  timeStyle: "short",
-});
+// 时间格式化器按**当前界面语言**惰性构造并缓存：此前是模块级 `new Intl.DateTimeFormat("zh-CN")`
+// 常量，切语言后不会重建，时间格式会停在旧语言（见 src/i18n/current.ts）。
+function timeFormatterFor(): Intl.DateTimeFormat {
+  return localizedFormatter(
+    (locale) => new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }),
+    "audit.time",
+  ) as Intl.DateTimeFormat;
+}
 
 export function formatTime(value: unknown): string {
   const t = parseTime(value);
-  return t ? timeFormatter.format(new Date(t)) : "—";
+  return t ? timeFormatterFor().format(new Date(t)) : "—";
 }
 
-const clockFormatter = new Intl.DateTimeFormat("zh-CN", {
-  hour: "2-digit",
-  minute: "2-digit",
-  second: "2-digit",
-  hour12: false,
-});
+function clockFormatterFor(): Intl.DateTimeFormat {
+  return localizedFormatter(
+    (locale) =>
+      new Intl.DateTimeFormat(locale, {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+      }),
+    "audit.clock",
+  ) as Intl.DateTimeFormat;
+}
 
 /**
  * 只取时刻（hh:mm:ss）。窄屏审计表的时间列只有 ~78px，带日期会折成三行；
@@ -221,7 +232,7 @@ const clockFormatter = new Intl.DateTimeFormat("zh-CN", {
  */
 export function formatClock(value: unknown): string {
   const t = parseTime(value);
-  return t ? clockFormatter.format(new Date(t)) : "—";
+  return t ? clockFormatterFor().format(new Date(t)) : "—";
 }
 
 const sameDay = (a: Date, b: Date) =>
@@ -229,13 +240,21 @@ const sameDay = (a: Date, b: Date) =>
   a.getMonth() === b.getMonth() &&
   a.getDate() === b.getDate();
 
-const shortTime = new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" });
-const shortDate = new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric" });
-const fullDate = new Intl.DateTimeFormat("zh-CN", {
-  year: "numeric",
-  month: "numeric",
-  day: "numeric",
-});
+const shortTimeFormatter = () =>
+  localizedFormatter(
+    (locale) => new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit" }),
+    "audit.shortTime",
+  ) as Intl.DateTimeFormat;
+const shortDateFormatter = () =>
+  localizedFormatter(
+    (locale) => new Intl.DateTimeFormat(locale, { month: "numeric", day: "numeric" }),
+    "audit.shortDate",
+  ) as Intl.DateTimeFormat;
+const fullDateFormatter = () =>
+  localizedFormatter(
+    (locale) => new Intl.DateTimeFormat(locale, { year: "numeric", month: "numeric", day: "numeric" }),
+    "audit.fullDate",
+  ) as Intl.DateTimeFormat;
 
 /** 紧凑时间：今天只显示时分，今年省略年份，跨年补年份。 */
 export function formatShortTime(value: unknown): string {
@@ -243,7 +262,7 @@ export function formatShortTime(value: unknown): string {
   if (!t) return "—";
   const date = new Date(t);
   const now = new Date();
-  if (sameDay(date, now)) return shortTime.format(date);
-  if (date.getFullYear() === now.getFullYear()) return shortDate.format(date);
-  return fullDate.format(date);
+  if (sameDay(date, now)) return shortTimeFormatter().format(date);
+  if (date.getFullYear() === now.getFullYear()) return shortDateFormatter().format(date);
+  return fullDateFormatter().format(date);
 }

@@ -23,6 +23,7 @@ import { useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { PageShell } from "../app/PageShell";
+import { currentLocaleTag } from "../i18n/current";
 import { RepoBrowser } from "../components/repo/RepoBrowser";
 import { AsyncBoundary } from "../components/AsyncBoundary";
 import {
@@ -48,6 +49,7 @@ import { useAsync } from "../hooks/useAsync";
 import { CONN_COLOR, CONN_LABEL_KEY } from "../lib/connectionStatus";
 import { formatBytes } from "../lib/format";
 import { notifyError, notifySuccess } from "../lib/feedback";
+import { formatUtcToLocalDate } from "../lib/timeFormat";
 import { density } from "../theme/density";
 
 export function RepositoryDetailPage() {
@@ -126,7 +128,7 @@ export function RepositoryDetailPage() {
             >
               <DetailStat
                 label={t("repoDetail.statArtifacts")}
-                value={(repo.artifactCount ?? 0).toLocaleString("zh-CN")}
+                value={(repo.artifactCount ?? 0).toLocaleString(currentLocaleTag())}
               />
               <DetailStat
                 label={t("repoDetail.statSize")}
@@ -136,7 +138,7 @@ export function RepositoryDetailPage() {
                   同一文案在两个位置出现既冗余、也让按文本定位的用例产生歧义。 */}
               <DetailStat
                 label={t("repoDetail.statCreatedAt")}
-                value={(repo.createdAt ?? "").slice(0, 10)}
+                value={formatUtcToLocalDate(repo.createdAt)}
               />
             </Group>
           ) : null}

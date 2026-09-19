@@ -110,7 +110,9 @@ describe("Vite Mock 产物隔离", () => {
     for (const canary of fixedPreviewCanaries) {
       expect(contents.join("\n")).not.toContain(canary);
     }
-  }, 60_000);
+    // 本机实测 vite build 真实耗时 67–75s；全量并行时该 build 子进程还要与主进程争抢
+    // CPU/IO 而更慢，原 60s 预算偏短会误杀（build 未跑完即被超时终止）。给到 2 倍余量。
+  }, 120_000);
 
   it("开发服务器继续从既有路径提供 MSW worker", async () => {
     const server = await startViteDevServer();

@@ -409,9 +409,50 @@ func TestBrowseShowsTimesAndChecksums(t *testing.T) {
 	if !strings.Contains(body, `<td class="time">-</td>`) || !strings.Contains(body, `<td class="sum">-</td>`) {
 		t.Errorf("子目录行的时间/校验和列应为占位符，体：%s", body)
 	}
-	// 仍为零依赖静态 HTML：不含脚本。
-	if strings.Contains(body, "<script") {
-		t.Errorf("目录页不应引入脚本")
+	// 时区口径：时间为 <time datetime=RFC3339Z>（机器可读值恒为 UTC），展示文案由页内脚本
+	// 按访问者时区改写；表头两套文案由 data-local 提供，避免服务端与脚本各写一份。
+	for _, want := range []string{
+		`<time datetime="2026-01-05T08:00:00Z">2026-01-05 08:00:00</time>`,
+		`<time datetime="2026-03-08T09:30:15Z">2026-03-08 09:30:15</time>`,
+		`data-local="创建时间（本地时区）"`,
+		`data-local="修改时间（本地时区）"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("目录页应含 %q（体：%s）", want, body)
+		}
+	}
+	// 时区改写脚本必须内联在页内：无外链脚本、无 eval。
+	if !strings.Contains(body, `querySelectorAll("time[datetime]")`) {
+		t.Errorf("目录页应含按 <time datetime> 改写时区的内联脚本，体：%s", body)
+	}
+	if strings.Contains(body, "<script src") || strings.Contains(body, "eval(") {
+		t.Errorf("时区脚本必须内联且不得使用 eval")
+	}
+}
+
+// TestBrowseFallsBackToPlainTextForInvalidTime 验证脏时间数据不会让页面渲染出
+// 无效的 <time datetime>：形态不符时退化为纯文本展示。
+func TestBrowseFallsBackToPlainTextForInvalidTime(t *testing.T) {
+	e := newProtocolEnv(t)
+	adminToken := e.bootstrapAdmin(t)
+	e.createRawRepo(t, adminToken, "raw-public", "public")
+	// 直接写库构造历史脏数据（非 "YYYY-MM-DD HH:MM:SS" 形态）。
+	e.seedAssetMeta(t, "raw-public", assetMeta{
+		Path: "dirty/odd.bin", Size: 8, BlobHash: strings.Repeat("a", 64),
+		UpdatedAt: "not-a-timestamp",
+	})
+
+	rec := e.browseReq("/repository/raw-public/dirty/")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("状态码 = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "not-a-timestamp") {
+		t.Errorf("脏时间应原样展示，体：%s", body)
+	}
+	if strings.Contains(body, `datetime="not-a-timestamp"`) ||
+		strings.Contains(body, "T00:00:00Z") {
+		t.Errorf("形态不符的时间不得渲染为 <time datetime>，体：%s", body)
 	}
 }
 
@@ -441,9 +482,9 @@ func TestBrowseShowsDirStats(t *testing.T) {
 	for _, want := range []string{
 		// 子目录行：a/ 计 2 件（含 deep/ 下的制品），时间是子树内的最大 updated_at。
 		`title="目录内制品总数（含子目录）">2 项</td>`,
-		`title="目录内最近一次更新时间">2026-05-20 12:00:00</td>`,
+		`title="目录内最近一次更新时间"><time datetime="2026-05-20T12:00:00Z">2026-05-20 12:00:00</time></td>`,
 		`title="目录内制品总数（含子目录）">1 项</td>`,
-		`title="目录内最近一次更新时间">2025-12-31 23:59:59</td>`,
+		`title="目录内最近一次更新时间"><time datetime="2025-12-31T23:59:59Z">2025-12-31 23:59:59</time></td>`,
 		// 文件行仍是文件自身的体积与时间。
 		"2026-06-01 00:00:00",
 		"文件 1 项",

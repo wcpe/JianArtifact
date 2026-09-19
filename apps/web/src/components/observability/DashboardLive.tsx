@@ -53,6 +53,7 @@ import type {
   Repository,
   StatusInfo,
 } from "../../api/types";
+import { currentLocaleTag } from "../../i18n/current";
 import { useAsync, useVisibleRefresh } from "../../hooks/useAsync";
 import { formatBytes, formatCount, formatStamp } from "../../lib/format";
 import { UPSTREAM_BLOCKED_CODE } from "../../lib/connectionStatus";
@@ -165,7 +166,7 @@ export function DashboardLive() {
           <QuickMenu onNavigate={(path) => navigate(path)} />
           {lastUpdated ? (
             <Text size="xs" c="dimmed" visibleFrom="sm">
-              {t("dashboard.lastUpdated", { time: lastUpdated.toLocaleTimeString("zh-CN") })}
+              {t("dashboard.lastUpdated", { time: lastUpdated.toLocaleTimeString(currentLocaleTag()) })}
             </Text>
           ) : null}
         </Group>
@@ -228,7 +229,7 @@ function KpiBand({ data, blockedRepos }: { data: OperationsDashboard; blockedRep
     },
     {
       label: t("dashboard.metricsAssets"),
-      value: kpi.assetCount.toLocaleString("zh-CN"),
+      value: kpi.assetCount.toLocaleString(currentLocaleTag()),
       hint: t("dashboard.metricsAssetsHint"),
       danger: false,
       icon: <IconPackage size={14} color="var(--mantine-color-cyan-6)" />,
@@ -242,21 +243,21 @@ function KpiBand({ data, blockedRepos }: { data: OperationsDashboard; blockedRep
     },
     {
       label: t("dashboard.metricsRequests"),
-      value: kpi.requestCount.toLocaleString("zh-CN"),
+      value: kpi.requestCount.toLocaleString(currentLocaleTag()),
       hint: t("dashboard.metricsRequestsHint"),
       danger: false,
       icon: <IconActivity size={14} color="var(--mantine-color-indigo-6)" />,
     },
     {
       label: t("dashboard.metricsDownloads"),
-      value: kpi.downloadCount.toLocaleString("zh-CN"),
+      value: kpi.downloadCount.toLocaleString(currentLocaleTag()),
       hint: t("dashboard.metricsDownloadsHint"),
       danger: false,
       icon: <IconDownload size={14} color="var(--mantine-color-green-6)" />,
     },
     {
       label: t("dashboard.metricsFailures"),
-      value: kpi.failureCount.toLocaleString("zh-CN"),
+      value: kpi.failureCount.toLocaleString(currentLocaleTag()),
       hint: t("dashboard.metricsFailuresHint"),
       danger: kpi.failureCount > 0,
       icon: <IconAlertTriangle size={14} color="var(--mantine-color-orange-6)" />,

@@ -74,7 +74,7 @@ export function MigrationLifecycle({
         color="yellow"
       >
         <Text size="xs" c="dimmed">
-          {createdAt || "—"}
+          {formatUtcToLocal(createdAt) || "—"}
         </Text>
         <Text size="xs" c="dimmed">
           {t("migrations.lifecyclePlannedHint")}

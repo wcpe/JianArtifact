@@ -30,6 +30,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
+import { currentLocaleTag } from "../i18n/current";
 import { listMigrations } from "../api/endpoints";
 import type { MigrationTask } from "../api/types";
 import { planEstimatedAssets, sourceColor, statusColor } from "../components/migration/status";
@@ -165,34 +166,34 @@ function MigrationsTab() {
         items={[
           {
             label: t("migrations.summaryTotal"),
-            value: state.data ? total.toLocaleString("zh-CN") : "—",
+            value: state.data ? total.toLocaleString(currentLocaleTag()) : "—",
             icon: <IconStack2 size={18} />,
             tone: "blue",
           },
           {
             label: t("migrations.status_running"),
-            value: state.data ? pageSummary.running.toLocaleString("zh-CN") : "—",
+            value: state.data ? pageSummary.running.toLocaleString(currentLocaleTag()) : "—",
             icon: <IconPlayerPlay size={18} />,
             tone: "cyan",
             hint: t("migrations.summaryPageOnly"),
           },
           {
             label: t("migrations.status_planned"),
-            value: state.data ? pageSummary.planned.toLocaleString("zh-CN") : "—",
+            value: state.data ? pageSummary.planned.toLocaleString(currentLocaleTag()) : "—",
             icon: <IconClock size={18} />,
             tone: "yellow",
             hint: t("migrations.summaryPageOnly"),
           },
           {
             label: t("migrations.status_completed"),
-            value: state.data ? pageSummary.completed.toLocaleString("zh-CN") : "—",
+            value: state.data ? pageSummary.completed.toLocaleString(currentLocaleTag()) : "—",
             icon: <IconCircleCheck size={18} />,
             tone: "green",
             hint: t("migrations.summaryPageOnly"),
           },
           {
             label: t("migrations.status_failed"),
-            value: state.data ? pageSummary.failed.toLocaleString("zh-CN") : "—",
+            value: state.data ? pageSummary.failed.toLocaleString(currentLocaleTag()) : "—",
             icon: <IconAlertTriangle size={18} />,
             tone: "red",
             danger: pageSummary.failed > 0,

@@ -6,6 +6,8 @@ import { IconCalendar, IconCheck, IconChevronDown } from "@tabler/icons-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { currentLocaleTag } from "../../i18n/current";
+
 export interface DashboardRange {
   /** 当前选中的快捷预设 key；自定义范围时为 "custom"。 */
   preset: string;
@@ -92,7 +94,7 @@ export function DashboardRangePicker({
 
   const label =
     value.preset === "custom"
-      ? `${new Date(value.from).toLocaleDateString("zh-CN")} ~ ${new Date(value.to).toLocaleDateString("zh-CN")}`
+      ? `${new Date(value.from).toLocaleDateString(currentLocaleTag())} ~ ${new Date(value.to).toLocaleDateString(currentLocaleTag())}`
       : presetLabel(t, value.preset);
 
   const applyPreset = (preset: Preset) => {
@@ -153,7 +155,7 @@ export function DashboardRangePicker({
             type="range"
             value={custom}
             onChange={setCustom}
-            locale="zh-CN"
+            locale={currentLocaleTag()}
             numberOfColumns={2}
             size="xs"
           />

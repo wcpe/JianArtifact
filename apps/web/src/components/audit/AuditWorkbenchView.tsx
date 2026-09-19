@@ -27,6 +27,7 @@ import { useTranslation } from "react-i18next";
 import { ForbiddenState } from "@jianartifact/ui";
 
 import { ApiError } from "../../api/client";
+import { currentLocaleTag } from "../../i18n/current";
 import { PageShell } from "../../app/PageShell";
 import { OpsKpiBand } from "../ops/OpsKit";
 import type { OpsKpiItem } from "../ops/OpsKit";
@@ -103,27 +104,27 @@ export function AuditWorkbenchView() {
   const kpiItems: OpsKpiItem[] = [
     {
       label: t("auditWorkbench.kpiTotal"),
-      value: summary ? summary.totalCount.toLocaleString("zh-CN") : "—",
+      value: summary ? summary.totalCount.toLocaleString(currentLocaleTag()) : "—",
       hint: t("auditWorkbench.kpiTotalHint"),
       tone: "blue",
       icon: <IconFileAnalytics size={18} />,
     },
     {
       label: t("auditWorkbench.kpiSuccess"),
-      value: summary ? summary.successCount.toLocaleString("zh-CN") : "—",
+      value: summary ? summary.successCount.toLocaleString(currentLocaleTag()) : "—",
       tone: "green",
       icon: <IconCircleCheck size={18} />,
     },
     {
       label: t("auditWorkbench.kpiFailure"),
-      value: summary ? summary.failureCount.toLocaleString("zh-CN") : "—",
+      value: summary ? summary.failureCount.toLocaleString(currentLocaleTag()) : "—",
       tone: "red",
       danger: Boolean(summary && summary.failureCount > 0),
       icon: <IconCircleX size={18} />,
     },
     {
       label: t("auditWorkbench.kpiHighRisk"),
-      value: summary ? summary.highRiskCount.toLocaleString("zh-CN") : "—",
+      value: summary ? summary.highRiskCount.toLocaleString(currentLocaleTag()) : "—",
       tone: "orange",
       danger: Boolean(summary && summary.highRiskCount > 0),
       icon: <IconAlertTriangle size={18} />,
@@ -147,7 +148,7 @@ export function AuditWorkbenchView() {
     },
     {
       label: t("auditWorkbench.kpiSlowRequest"),
-      value: summary ? (summary.slowRequestCount ?? 0).toLocaleString("zh-CN") : "—",
+      value: summary ? (summary.slowRequestCount ?? 0).toLocaleString(currentLocaleTag()) : "—",
       hint: t("auditWorkbench.kpiSlowRequestHint"),
       tone: "yellow",
       danger: Boolean(summary && (summary.slowRequestCount ?? 0) > 0),
@@ -155,14 +156,14 @@ export function AuditWorkbenchView() {
     },
     {
       label: t("auditWorkbench.kpiClientError"),
-      value: summary ? (summary.clientErrorCount ?? 0).toLocaleString("zh-CN") : "—",
+      value: summary ? (summary.clientErrorCount ?? 0).toLocaleString(currentLocaleTag()) : "—",
       hint: t("auditWorkbench.kpiClientErrorHint"),
       tone: "orange",
       icon: <IconAlertCircle size={18} />,
     },
     {
       label: t("auditWorkbench.kpiServerError"),
-      value: summary ? (summary.serverErrorCount ?? 0).toLocaleString("zh-CN") : "—",
+      value: summary ? (summary.serverErrorCount ?? 0).toLocaleString(currentLocaleTag()) : "—",
       hint: t("auditWorkbench.kpiServerErrorHint"),
       tone: "red",
       danger: Boolean(summary && (summary.serverErrorCount ?? 0) > 0),
@@ -170,14 +171,14 @@ export function AuditWorkbenchView() {
     },
     {
       label: t("auditWorkbench.kpiClientIp"),
-      value: summary ? (summary.distinctClientIpCount ?? 0).toLocaleString("zh-CN") : "—",
+      value: summary ? (summary.distinctClientIpCount ?? 0).toLocaleString(currentLocaleTag()) : "—",
       hint: t("auditWorkbench.kpiClientIpHint"),
       tone: "blue",
       icon: <IconNetwork size={18} />,
     },
     {
       label: t("auditWorkbench.kpiPendingAttention"),
-      value: model.pendingAttentionCount.toLocaleString("zh-CN"),
+      value: model.pendingAttentionCount.toLocaleString(currentLocaleTag()),
       hint: t("auditWorkbench.kpiPendingHint"),
       tone: "yellow",
       danger: model.pendingAttentionCount > 0,
@@ -185,7 +186,7 @@ export function AuditWorkbenchView() {
     },
     {
       label: t("auditWorkbench.kpiActors"),
-      value: summary ? summary.distinctActorCount.toLocaleString("zh-CN") : "—",
+      value: summary ? summary.distinctActorCount.toLocaleString(currentLocaleTag()) : "—",
       hint: t("auditWorkbench.kpiActorsHint"),
       tone: "gray",
       icon: <IconUsers size={18} />,
