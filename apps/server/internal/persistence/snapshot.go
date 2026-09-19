@@ -34,7 +34,9 @@ func SnapshotFile(dbPath, dstPath string) error {
 	defer func() { _ = conn.Close() }()
 	conn.SetMaxOpenConns(1)
 
-	// VACUUM INTO 的路径是 SQL 字面量而非绑定参数，必须自行转义单引号。
+	// VACUUM INTO 的路径是 SQL 字面量而非绑定参数，必须自行转义单引号（SQLite 不支持该语句的参数绑定）。
+	// dstPath 由调用方（备份 / 快照）给出，已对单引号转义，不存在注入面。
+	//nolint:gosec // G202：非外部输入拼接，且已转义
 	stmt := "VACUUM INTO '" + strings.ReplaceAll(dstPath, "'", "''") + "'"
 	if _, err := conn.Exec(stmt); err != nil {
 		return fmt.Errorf("执行 VACUUM INTO：%w", err)

@@ -1,0 +1,67 @@
+# golangci-lint 配置。
+#
+# 为什么要有这份文件：此前没有配置，linter 集合是 golangci-lint 的**隐式默认值**，
+# 会随工具版本漂移（可复现性差）。这里把当前实际生效的集合显式钉死，再按需增补。
+#
+# 为什么**没有**开启 bodyclose / sqlclosecheck / rowserrcheck：
+# 实测（显式开启后跑一遍）这几项在本仓库生产代码命中为 0——
+# HTTP 响应体的关闭已统一封装在 internal/upstream/session.go 的 readResponse，
+# SQL rows 的关闭与 rows.Err() 检查在 persistence/readonly.go 已用 defer + 显式判断写好。
+# 为零收益引入 linter 只会增加噪声与升级摩擦，故不开启。
+run:
+  timeout: 10m
+
+linters:
+  disable-all: true
+  enable:
+    # —— 此前隐式默认生效的六个（钉死，防止版本间集合漂移）——
+    - errcheck # 未检查的错误返回
+    - gosimple # 可简化的写法
+    - govet # 可疑构造（与 go vet 同源）
+    - ineffassign # 赋值后未使用
+    - staticcheck # 静态检查规则集
+    - unused # 未使用的常量/变量/函数/类型
+    # —— 本次增补 ——
+    - gosec # 安全：本仓库手写了 SSRF 防护与路径校验，对这类代码有真实增量价值
+
+linters-settings:
+  errcheck:
+    exclude-functions:
+      - (*os.File).Close
+      - (io.Closer).Close
+
+issues:
+  # 生成代码（oapi-codegen 产物）不参与 lint
+  exclude-files:
+    - "api.gen.go$"
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  exclude-rules:
+    # 测试文件里的假凭据 / 固定口令是测试夹具，不是真实凭据。
+    - path: '_test\.go$'
+      linters:
+        - gosec
+
+    # Maven / npm 协议**强制**要求 MD5 与 SHA-1 校验和（见 protocol/maven.go 与 npm.go），
+    # blobstore 的内容寻址与 domain 的制品校验同样依赖它们——这不是弱加密误用，
+    # 而是协议契约的一部分，逐处加 nolint 只会淹没真正的安全信号。
+    - path: 'internal/(protocol|blobstore|domain)/'
+      linters:
+        - gosec
+      text: "G401|G501|G505"
+
+    # G115（整数转换溢出）：命中的都是长度 / 内存字节数这类上界明确的转换
+    # （如 uint32(len(x))、Windows 的 uint64→int64 物理内存），非外部可控数值。
+    - linters:
+        - gosec
+      text: "G115"
+
+    # G101 在 config.go 命中的是环境变量**名**（如 "JIAN_JWT_SECRET"）而非密钥值，属误报。
+    - linters:
+        - gosec
+      text: "G101"
+
+    # G306（文件权限）：命中的是发布资产里的 SHA256SUMS，需可被下载方读取，0644 是预期。
+    - linters:
+        - gosec
+      text: "G306"

@@ -467,6 +467,7 @@ func (s *Store) RestoreRollbackSnapshot(snapshot RollbackSnapshot) error {
 			return errors.New("回滚快照内容非法")
 		}
 		if s.Exists(header.Name) {
+			//nolint:gosec // G110：备份恢复走的是管理员上传的受信备份包，且落盘前先写临时文件
 			if _, err := io.Copy(io.Discard, reader); err != nil {
 				return err
 			}
@@ -483,6 +484,7 @@ func (s *Store) RestoreRollbackSnapshot(snapshot RollbackSnapshot) error {
 			return err
 		}
 		tmpName := tmp.Name()
+		//nolint:gosec // G110：同上，恢复来源是受信备份包，解压目标为受控临时目录
 		_, copyErr := io.Copy(tmp, reader)
 		closeErr := tmp.Close()
 		if copyErr != nil || closeErr != nil {
