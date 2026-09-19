@@ -31,15 +31,31 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const webDir = join(repoRoot, "apps", "web");
 const reportDir = join(repoRoot, ".tmp");
 const reportFile = join(reportDir, "slow-watch.json");
-const historyFile =
-  process.env.SLOW_TEST_HISTORY ?? join(reportDir, "slow-history.json");
+const historyFile = process.env.SLOW_TEST_HISTORY ?? join(reportDir, "slow-history.json");
 
 /** 被观测的用例：文件名 + 用例名子串（避开完整中文标题，减少匹配脆弱性）。 */
-const WATCHED = [{ file: "test/AppRoutes.test.tsx", namePart: "/host-monitoring" }];
+const WATCHED = [
+  { file: "test/AppRoutes.test.tsx", namePart: "/host-monitoring" },
+  // 这处的等待上限同样被放宽过（60s → 120s），不能只观测前者。
+  { file: "test/ViteMockIsolation.test.ts", namePart: "生产构建" },
+];
 
-const budgetMs = Number(process.env.SLOW_TEST_BUDGET_MS ?? 10_000);
-const p95BudgetMs = Number(process.env.SLOW_TEST_P95_BUDGET_MS ?? budgetMs);
-const windowSize = Number(process.env.SLOW_TEST_WINDOW ?? 200);
+/** 数值型环境变量：非法值直接失败，避免 NaN 让所有判据静默失效却仍报绿。 */
+function numericEnv(name, fallback) {
+  if (process.env[name] === undefined) return fallback;
+  const parsed = Number(process.env[name]);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    console.error(
+      `::error::慢用例观测：环境变量 ${name}=${process.env[name]} 不是正数，判据无法生效。`,
+    );
+    process.exit(1);
+  }
+  return parsed;
+}
+
+const budgetMs = numericEnv("SLOW_TEST_BUDGET_MS", 10_000);
+const p95BudgetMs = numericEnv("SLOW_TEST_P95_BUDGET_MS", budgetMs);
+const windowSize = Math.floor(numericEnv("SLOW_TEST_WINDOW", 200));
 /** 给出「可信 P95」所需的最小样本数；低于此值只做提示，不作为判据。 */
 const MIN_SAMPLES_FOR_P95 = 5;
 
@@ -70,16 +86,18 @@ const printHistory = process.argv.includes("--print-history");
 
 if (printHistory) {
   const history = loadHistory();
-  const byName = new Map();
+  const byKey = new Map();
   for (const sample of history) {
-    if (!byName.has(sample.fullName)) byName.set(sample.fullName, []);
-    byName.get(sample.fullName).push(sample.duration);
+    if (!byKey.has(sample.key ?? `${sample.file}::${sample.fullName}`)) {
+      byKey.set(sample.key ?? `${sample.file}::${sample.fullName}`, []);
+    }
+    byKey.get(sample.key ?? `${sample.file}::${sample.fullName}`).push(sample.duration);
   }
-  if (byName.size === 0) {
+  if (byKey.size === 0) {
     console.log("慢用例历史：暂无采样。");
   } else {
     console.log(`慢用例历史（${history.length} 条采样，文件 ${historyFile}）：`);
-    for (const [name, durations] of byName) {
+    for (const [name, durations] of byKey) {
       const sorted = [...durations].sort((a, b) => a - b);
       const p95 = percentile(sorted, 95);
       console.log(
@@ -94,6 +112,8 @@ if (printHistory) {
 mkdirSync(reportDir, { recursive: true });
 const history = loadHistory();
 let warnings = 0;
+/** 因样本不足而**未**给出判据的项数：不计入告警，但必须在终局显式报出来。 */
+let skipped = 0;
 
 for (const target of WATCHED) {
   const run = spawnSync(
@@ -180,6 +200,7 @@ for (const target of WATCHED) {
       .map((sample) => sample.duration)
       .sort((a, b) => a - b);
     if (samples.length < MIN_SAMPLES_FOR_P95) {
+      skipped += 1;
       console.log(
         `慢用例观测：${label} 历史样本 n=${samples.length}（< ${MIN_SAMPLES_FOR_P95}），` +
           "不足以给出可信 P95，跳过该项判据（CI cache 未命中时会出现此情况）。",
@@ -204,7 +225,16 @@ for (const target of WATCHED) {
 rmSync(reportFile, { force: true });
 
 if (warnings > 0) {
-  console.log(`慢用例观测结束：${warnings} 条告警（仅告警，未阻断质量门）。`);
+  console.log(
+    `慢用例观测结束：${warnings} 条告警` +
+      (skipped > 0 ? `，另有 ${skipped} 项因样本不足未给判据` : "") +
+      "（仅告警，未阻断质量门）。",
+  );
+} else if (skipped > 0) {
+  // 不能说"全部在预算内"——被跳过的不等于合格的。
+  console.log(
+    `慢用例观测结束：无告警，但有 ${skipped} 项因样本不足**未给出判据**，结论不等于"性能正常"。`,
+  );
 } else {
   console.log("慢用例观测结束：全部在预算内。");
 }
