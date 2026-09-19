@@ -12,6 +12,22 @@ export interface PreviewMetric {
   tone?: "default" | "danger";
 }
 
+/**
+ * 审计事件的 result 枚举值（数据契约的单一真源）。
+ *
+ * 这些值是**内部判定用**的数据标识，不是展示文案——聚合逻辑（成功数/失败数）依赖它们做
+ * 等号比较，因此不能写成 `t("...")` 之类的翻译取值：翻译文案一旦改动，判定会静默失效
+ * （例如把「失败」改成「未成功」会让所有失败事件被计成成功）。
+ * 展示用的中文标签走 i18n 键（见 zh.ts 的 auditResult.*），与这里的键名对应但值独立。
+ */
+export const AUDIT_RESULT = {
+  success: "成功",
+  failure: "失败",
+  applied: "已应用",
+} as const;
+
+export type AuditResult = (typeof AUDIT_RESULT)[keyof typeof AUDIT_RESULT];
+
 export interface AuditPreviewEvent {
   id: string;
   source: "audit" | "replication";
@@ -22,7 +38,7 @@ export interface AuditPreviewEvent {
   authSource: string;
   action: string;
   target: string;
-  result: "成功" | "失败" | "已应用";
+  result: AuditResult;
   operationId?: string;
   risk?: boolean;
   summary?: string;
@@ -163,7 +179,7 @@ export const auditPreviewEvents: AuditPreviewEvent[] = [
     authSource: "协议账户",
     action: "重建 Maven 元数据",
     target: "maven-releases / com.example:demo",
-    result: "成功",
+    result: AUDIT_RESULT.success,
     operationId: "op_01J8X1Q9P7M4Z2A6F5C3D8H0K1",
     summary: "已完成当前仓库的关联元数据更新。",
     affectedCount: 2,
@@ -178,7 +194,7 @@ export const auditPreviewEvents: AuditPreviewEvent[] = [
     authSource: "协议账户",
     action: "删除制品版本",
     target: "maven-releases / com.example:demo:1.4.2",
-    result: "成功",
+    result: AUDIT_RESULT.success,
     operationId: "op_01J8X1Q9P7M4Z2A6F5C3D8H0K1",
     risk: true,
     summary: "已删除当前 Hosted 仓库中的指定版本。",
@@ -194,7 +210,7 @@ export const auditPreviewEvents: AuditPreviewEvent[] = [
     authSource: "协议账户",
     action: "校验发布目标",
     target: "npm-private / internal/preview.tgz",
-    result: "成功",
+    result: AUDIT_RESULT.success,
     operationId: "op_01J8X1R2K6D3M8V4N9P5Q7S0T1",
     summary: "已完成目标路径和仓库状态校验。",
   },
@@ -208,7 +224,7 @@ export const auditPreviewEvents: AuditPreviewEvent[] = [
     authSource: "协议账户",
     action: "拒绝受限路径发布",
     target: "npm-private / internal/preview.tgz",
-    result: "失败",
+    result: AUDIT_RESULT.failure,
     operationId: "op_01J8X1R2K6D3M8V4N9P5Q7S0T1",
     summary: "命中发布账号允许路径前缀限制，未写入制品。",
   },
@@ -222,7 +238,7 @@ export const auditPreviewEvents: AuditPreviewEvent[] = [
     authSource: "网页会话",
     action: "创建 Hosted 仓库",
     target: "raw-releases",
-    result: "成功",
+    result: AUDIT_RESULT.success,
   },
 ];
 

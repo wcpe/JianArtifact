@@ -3,6 +3,7 @@ import type {
   AuditPreviewEvent,
   PreviewRange,
 } from "../../mocks/observabilityPreview";
+import { AUDIT_RESULT } from "../../mocks/observabilityPreview";
 import { parseUtc } from "../../lib/timeFormat";
 
 export interface AuditPreviewGroup {
@@ -111,8 +112,12 @@ export function groupAuditEvents(
           latest,
           categories: [...new Set(orderedEvents.map((event) => event.category))],
           results: [...new Set(orderedEvents.map((event) => event.result))],
-          successCount: orderedEvents.filter((event) => event.result !== "失败").length,
-          failureCount: orderedEvents.filter((event) => event.result === "失败").length,
+          successCount: orderedEvents.filter(
+            (event) => event.result !== AUDIT_RESULT.failure,
+          ).length,
+          failureCount: orderedEvents.filter(
+            (event) => event.result === AUDIT_RESULT.failure,
+          ).length,
           affectedCount: orderedEvents.reduce(
             (total, event) => total + (event.affectedCount ?? 0),
             0,
