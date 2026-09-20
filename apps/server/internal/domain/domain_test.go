@@ -347,7 +347,7 @@ func TestUsageByFormat(t *testing.T) {
 	const base = "https://artifact.example.com"
 
 	// maven hosted：settings.xml、pom 解析、Gradle 解析 + mvn/Gradle 两段发布，共五段。
-	repo, mvnSnips, err := svc.Usage("mvn", base)
+	repo, mvnSnips, err := svc.Usage("mvn", base, "zh")
 	if err != nil {
 		t.Fatalf("Usage maven：%v", err)
 	}
@@ -366,7 +366,7 @@ func TestUsageByFormat(t *testing.T) {
 	}
 
 	// npm proxy：仅配置 + 安装两段（不可写，无 publish）。
-	_, npmSnips, err := svc.Usage("npm-proxy", base)
+	_, npmSnips, err := svc.Usage("npm-proxy", base, "zh")
 	if err != nil {
 		t.Fatalf("Usage npm：%v", err)
 	}
@@ -383,7 +383,7 @@ func TestUsageByFormat(t *testing.T) {
 	}
 
 	// 仓库不存在返回 ErrNotFound。
-	if _, _, err := svc.Usage("ghost", base); !errors.Is(err, domain.ErrNotFound) {
+	if _, _, err := svc.Usage("ghost", base, "zh"); !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("未知仓库应返回 ErrNotFound，得 %v", err)
 	}
 }

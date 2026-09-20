@@ -105,7 +105,10 @@ export function asText(value: unknown): string {
 }
 
 /** 操作者展示文本：显示名（认证来源）。 */
-export function actorText(actor: unknown, t: (key: string) => string): string {
+export function actorText(
+  actor: unknown,
+  t: (key: string, options?: Record<string, unknown>) => string,
+): string {
   if (!actor || typeof actor !== "object") return t("auditWorkbench.actorSystem");
   const a = actor as {
     displayName?: unknown;
@@ -121,7 +124,8 @@ export function actorText(actor: unknown, t: (key: string) => string): string {
         : "";
   const name = rawName || t("auditWorkbench.actorSystem");
   const sourceKey = authSourceLabelKey(a.authSource ?? a.actorAuthSource);
-  return sourceKey ? `${name}（${t(sourceKey)}）` : name;
+  // 括号随语言（中文全角 / 英文半角），故一并交给 i18n 文案，不在此硬编码。
+  return sourceKey ? t("auditWorkbench.actorWithSource", { name, source: t(sourceKey) }) : name;
 }
 
 /** 审计动作 → i18n 键；未知动作回退显示原始契约值。 */

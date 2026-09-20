@@ -168,9 +168,9 @@ func (s *RepositoryService) listGroupAssets(repo *repository.Repository, prefix 
 	return items, total, nil
 }
 
-// Usage 返回仓库及其客户端接入片段（据 format/type 与对外基址组装）。
+// Usage 返回仓库及其客户端接入片段（据 format/type 与对外基址组装，文案按 lang 本地化）。
 // 仓库不存在返回 ErrNotFound。
-func (s *RepositoryService) Usage(name, baseURL string) (*repository.Repository, []UsageSnippet, error) {
+func (s *RepositoryService) Usage(name, baseURL, lang string) (*repository.Repository, []UsageSnippet, error) {
 	repo, err := s.repos.GetByName(name)
 	if err != nil {
 		return nil, nil, mapNotFound(err)
@@ -178,7 +178,7 @@ func (s *RepositoryService) Usage(name, baseURL string) (*repository.Repository,
 	if !s.enabled.Has(repo.Format) {
 		return nil, nil, fmt.Errorf("%w: %s", ErrFormatDisabled, repo.Format)
 	}
-	return repo, buildUsage(repo, baseURL), nil
+	return repo, buildUsage(repo, baseURL, lang), nil
 }
 
 // Create 创建仓库（默认可见性 private）。cfg 为结构化配置：

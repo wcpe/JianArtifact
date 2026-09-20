@@ -881,6 +881,8 @@ export const en = {
     authBasic: "Basic auth",
     authSystem: "System",
     actorSystem: "System",
+    // 操作者 + 认证来源的组合展示（英文用半角括号，与中文文案区分）。
+    actorWithSource: "{{name}} ({{source}})",
   },
   backups: {
     tabExternal: "External Import",

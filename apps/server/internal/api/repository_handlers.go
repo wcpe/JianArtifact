@@ -282,7 +282,7 @@ func (h *Handlers) GetRepositoryUsage(c *gin.Context, name RepoNameParam) {
 	if _, ok := h.requireRepoRead(c, name); !ok {
 		return
 	}
-	repo, snippets, err := h.repos.Usage(name, h.apiBaseURL(c))
+	repo, snippets, err := h.repos.Usage(name, h.apiBaseURL(c), requestLang(c))
 	if err != nil {
 		writeDomainErr(c, err)
 		return

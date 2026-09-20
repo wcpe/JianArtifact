@@ -842,6 +842,9 @@ export const zh = {
     authBasic: "Basic 认证",
     authSystem: "系统",
     actorSystem: "系统",
+    // 操作者 + 认证来源的组合展示。中英标点不同，故连括号一起放进文案：
+    // 英文界面不应出现中文全角括号。
+    actorWithSource: "{{name}}（{{source}}）",
   },
   backups: {
     tabExternal: "外部导入",

@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { AppRoutes } from "../src/app/router";
-import { formatFullTime, formatTime } from "../src/components/audit/labels";
+import { actorText, formatFullTime, formatTime } from "../src/components/audit/labels";
 import { currentLocaleTag } from "../src/i18n/current";
 import { LANGUAGE_STORAGE_KEY } from "../src/i18n/language";
 import i18n from "../src/i18n";
@@ -91,6 +91,23 @@ describe("格式化输出跟随语言", () => {
     // 完全绕过 locale，是本次收敛唯一的漏网路径。
     expect(enFull).not.toBe(zhFull);
     expect(enFull).not.toBe("—");
+  });
+
+  it("审计操作者的括号随语言：英文用半角，不出现中文全角括号", async () => {
+    const actor = { displayName: "admin", authSource: "web" };
+
+    // 断言括号形态而非具体文案：文案可随契约枚举演进，回归点是「英文界面不得出现
+    // 中文全角括号」（此前括号是硬编码在模板里的，与语言无关）。
+    await i18n.changeLanguage("zh");
+    const zh = actorText(actor, i18n.t.bind(i18n));
+    expect(zh).toContain("admin");
+    expect(zh).toMatch(/（.+）/);
+
+    await i18n.changeLanguage("en");
+    const en = actorText(actor, i18n.t.bind(i18n));
+    expect(en).toContain("admin");
+    expect(en).not.toMatch(/[（）]/);
+    expect(en).toMatch(/^admin \(.+\)$/);
   });
 
   it("偏好被记住：重新挂载后仍是用户选择的语言", async () => {
