@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-20T10:34:33.045Z",
+  "generatedAt": "2026-09-20T14:23:53.911Z",
   "go": [
     {
       "name": "github.com/apapsch/go-jsonmerge/v2",
@@ -123,7 +123,7 @@
     },
     {
       "name": "github.com/mattn/go-isatty",
-      "version": "v0.0.20",
+      "version": "v0.0.24",
       "license": "MIT",
       "author": "mattn"
     },
@@ -147,7 +147,7 @@
     },
     {
       "name": "github.com/oapi-codegen/runtime",
-      "version": "v1.6.0",
+      "version": "v1.7.0",
       "license": "Apache-2.0",
       "author": "oapi-codegen"
     },
@@ -201,37 +201,37 @@
     },
     {
       "name": "golang.org/x/crypto",
-      "version": "v0.54.0",
-      "license": "BSD-3-Clause",
-      "author": "x"
-    },
-    {
-      "name": "golang.org/x/net",
       "version": "v0.57.0",
       "license": "BSD-3-Clause",
       "author": "x"
     },
     {
+      "name": "golang.org/x/net",
+      "version": "v0.58.0",
+      "license": "BSD-3-Clause",
+      "author": "x"
+    },
+    {
       "name": "golang.org/x/sync",
-      "version": "v0.22.0",
+      "version": "v0.23.0",
       "license": "BSD-3-Clause",
       "author": "x"
     },
     {
       "name": "golang.org/x/sys",
-      "version": "v0.47.0",
+      "version": "v0.48.0",
       "license": "BSD-3-Clause",
       "author": "x"
     },
     {
       "name": "golang.org/x/term",
-      "version": "v0.45.0",
+      "version": "v0.46.0",
       "license": "BSD-3-Clause",
       "author": "x"
     },
     {
       "name": "golang.org/x/text",
-      "version": "v0.40.0",
+      "version": "v0.42.0",
       "license": "BSD-3-Clause",
       "author": "x"
     },
@@ -243,7 +243,7 @@
     },
     {
       "name": "modernc.org/libc",
-      "version": "v1.74.1",
+      "version": "v1.75.7",
       "license": "BSD-3-Clause",
       "author": "libc"
     },
@@ -255,13 +255,13 @@
     },
     {
       "name": "modernc.org/memory",
-      "version": "v1.11.0",
+      "version": "v1.12.1",
       "license": "BSD-3-Clause",
       "author": "memory"
     },
     {
       "name": "modernc.org/sqlite",
-      "version": "v1.54.0",
+      "version": "v1.59.0",
       "license": "BSD-3-Clause",
       "author": "sqlite"
     }
@@ -359,7 +359,7 @@
     },
     {
       "name": "@floating-ui/react",
-      "version": "0.26.28",
+      "version": "0.27.20",
       "license": "MIT",
       "author": "atomiks"
     },
@@ -437,49 +437,49 @@
     },
     {
       "name": "@mantine/charts",
-      "version": "7.17.8",
+      "version": "8.3.18",
       "license": "MIT",
       "author": "Vitaly Rtishchev"
     },
     {
       "name": "@mantine/core",
-      "version": "7.17.8",
+      "version": "8.3.18",
       "license": "MIT",
       "author": "Vitaly Rtishchev"
     },
     {
       "name": "@mantine/dates",
-      "version": "7.17.8",
+      "version": "8.3.18",
       "license": "MIT",
       "author": "Vitaly Rtishchev"
     },
     {
       "name": "@mantine/form",
-      "version": "7.17.8",
+      "version": "8.3.18",
       "license": "MIT",
       "author": "Vitaly Rtishchev"
     },
     {
       "name": "@mantine/hooks",
-      "version": "7.17.8",
+      "version": "8.3.18",
       "license": "MIT",
       "author": "Vitaly Rtishchev"
     },
     {
       "name": "@mantine/modals",
-      "version": "7.17.8",
+      "version": "8.3.18",
       "license": "MIT",
       "author": "Vitaly Rtishchev"
     },
     {
       "name": "@mantine/notifications",
-      "version": "7.17.8",
+      "version": "8.3.18",
       "license": "MIT",
       "author": "Vitaly Rtishchev"
     },
     {
       "name": "@mantine/store",
-      "version": "7.17.8",
+      "version": "8.3.18",
       "license": "MIT",
       "author": "Vitaly Rtishchev"
     },
@@ -1079,13 +1079,13 @@
     },
     {
       "name": "html-parse-stringify",
-      "version": "3.0.1",
+      "version": "4.0.1",
       "license": "MIT",
       "author": "Henrik Joreteg"
     },
     {
       "name": "i18next",
-      "version": "23.16.8",
+      "version": "26.4.2",
       "license": "MIT",
       "author": "Jan Mühlemann"
     },
@@ -1361,7 +1361,7 @@
     },
     {
       "name": "react-i18next",
-      "version": "15.7.4",
+      "version": "17.0.14",
       "license": "MIT",
       "author": "Jan Mühlemann"
     },
@@ -1642,16 +1642,16 @@
       "author": "theKashey"
     },
     {
+      "name": "use-sync-external-store",
+      "version": "1.7.0",
+      "license": "MIT",
+      "author": "—"
+    },
+    {
       "name": "victory-vendor",
       "version": "36.9.2",
       "license": "MIT AND ISC",
       "author": "Formidable"
-    },
-    {
-      "name": "void-elements",
-      "version": "3.1.0",
-      "license": "MIT",
-      "author": "hemanth.hm"
     },
     {
       "name": "which",
