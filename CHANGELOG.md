@@ -110,7 +110,8 @@
   - **i18next 23 → 26 + react-i18next 15 → 17**（跨 3 个大版本）：类型检查与 i18n 专项测试（键集守卫、三优先级、格式化跟随、偏好记忆）全部通过，无需改代码。
   - **jsdom 25 → 29.1.1**：跨 4 个大版本，测试环境行为无回归。未采用 Dependabot 提的 30（其要求 Node ≥24.15，当前工具链为 24.11）。
 - **`go.work` 的 go 指令对齐 `go.mod`**：此前 go.work 写 `go 1.25.0` 而 go.mod 已是 `1.26.0`（漂移），`go get` 时由工具链自动同步为 `1.26.0`。
-- **已知代价**：Mantine 8 使前端测试耗时上升（本机全量 47–52s → 约 92s，其中 `ViteMockIsolation` 的真实 vite build 占 63s）；功能零回归（4 包 364 测试全过、完整质量门全绿）。
+- **测试并发与构建验证的隔离（消除 Mantine 8 引入的负载敏感抖动）**：Mantine 8 后每个测试 fork 的启动成本显著上升（jsdom + Mantine 8 + 中英各 1093 键的资源），默认按 CPU 数开 31 个 fork 时内存/CPU 峰值过高，会把需要渲染与请求的用例拖过等待上限（表现为「找不到文本」「构建 120s 超时」这类**非确定性失败**，实测同一提交有时全绿、有时 3 个失败）。两项处理：① `maxWorkers: 16` 限制并发（弱机器如 CI 的 4 核自然低于该上限，不受影响；实测 `isolate: false` 会引入测试间状态泄漏，不可用）；② 把 `ViteMockIsolation`（spawn 一次真实 vite build，60–120s）**移出并行单测套件**，改用独立的 `vitest.build.config.ts`（node 环境，比 jsdom 更贴合）由 `check.sh` 在单测之后串行执行——单测主套件因此回到 58–84s 且连跑稳定，构建验证在 CPU 空闲时 33–55s 完成。慢用例观测脚本同步支持 per-target 配置（否则主配置的 exclude 会让它误报「未能通过」）。
+- **已知代价**：Mantine 8 使测试总耗时上升（前端主套件 + 独立构建验证合计约 2 分钟，此前约 50s）；功能零回归（4 包 364 测试全过、完整质量门全绿）。
 
 - **依赖升级：vitest 2→4 全链（含 vite 5→7、plugin-react 5、coverage-v8 4）**：Dependabot security updates 开启后自动为 vitest 的 critical alert 开出跨主版本升级 PR（2.1.9→4.1.11），本地落地验证后合入。vitest 4 硬性要求 vite ≥6，故连带升级：vite 5.4→7.3.6、@vitejs/plugin-react 4→5.1.2、@vitest/coverage-v8 2→4.1.11；devmock/ui 包此前靠提升隐式获得 vite，vitest 4 的 peer 检查后显式声明 vite 7。**配置零改动**（coverage/超时/装置全兼容）；唯一代码适配是 `BrandLogo` 测试断言——vite 7 的 vitest 环境把小资源内联成 data URI（vite 5 返回 `/src/assets/` 原路径），放宽为两种形态皆可，仍拦截 public/ 直接引用。全量回归：4 包 364 测试全过、vite 7 生产构建 19.2s 正常、产物隔离（worker 不入包）仍有效、完整质量门全绿。react-router-dom 6.30.4→6.30.6（另一个 Dependabot PR，补丁级）一并本地落地。
 

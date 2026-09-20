@@ -14,6 +14,9 @@ pnpm format:check
 pnpm lint
 pnpm typecheck
 pnpm test # 含 devmock ↔ OpenAPI 契约一致性（对齐 AC-06）
+# 构建验证单独串行跑：它 spawn 一次真实 vite build（60–120s），与单元测试并行会互相拖慢
+# 且自身易超时；放在单元测试之后、CPU 空闲时执行（实测 20–45s）。
+pnpm --filter @jianartifact/web exec vitest run --config vitest.build.config.ts
 pnpm build # 产出 apps/web/dist 供后端 embed
 
 echo "==> [1.2/3] 慢用例观测（仅告警、不阻断）：放宽过等待上限的负载敏感用例在此留痕"

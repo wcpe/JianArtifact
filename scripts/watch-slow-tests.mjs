@@ -39,7 +39,14 @@ const WATCHED = [
   // 这处的等待上限同样被放宽过（60s → 120s），不能只观测前者。
   // 但它的耗时主体是 spawn 一次真实 vite build（实测 19–69s，本就不是"等待上限"问题），
   // 故单独给预算：用全局 10s 口径会让它每次都误告警，淹没真正的性能信号。
-  { file: "test/ViteMockIsolation.test.ts", namePart: "生产构建", budgetMs: 120_000 },
+  // 该用例已从主套件移出（见 vitest.config.ts 的 exclude），必须用它的专用配置跑，
+  // 否则主配置的 exclude 会让 vitest 报 "No test files found" 而误判为"未能通过"。
+  {
+    file: "test/ViteMockIsolation.test.ts",
+    namePart: "生产构建",
+    budgetMs: 180_000,
+    config: "vitest.build.config.ts",
+  },
 ];
 
 /** 数值型环境变量：非法值直接失败，避免 NaN 让所有判据静默失效却仍报绿。 */
@@ -118,15 +125,19 @@ let warnings = 0;
 let skipped = 0;
 
 for (const target of WATCHED) {
+  const args = [
+    join(webDir, "node_modules", "vitest", "vitest.mjs"),
+    "run",
+    target.file,
+    "--reporter=json",
+    `--outputFile=${reportFile}`,
+  ];
+  if (target.config) {
+    args.push("--config", target.config);
+  }
   const run = spawnSync(
     process.execPath,
-    [
-      join(webDir, "node_modules", "vitest", "vitest.mjs"),
-      "run",
-      target.file,
-      "--reporter=json",
-      `--outputFile=${reportFile}`,
-    ],
+    args,
     { cwd: webDir, encoding: "utf8", stdio: ["ignore", "ignore", "pipe"] },
   );
 
