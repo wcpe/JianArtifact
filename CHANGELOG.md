@@ -105,6 +105,8 @@
 
 ### 工程
 
+- **依赖升级：vitest 2→4 全链（含 vite 5→7、plugin-react 5、coverage-v8 4）**：Dependabot security updates 开启后自动为 vitest 的 critical alert 开出跨主版本升级 PR（2.1.9→4.1.11），本地落地验证后合入。vitest 4 硬性要求 vite ≥6，故连带升级：vite 5.4→7.3.6、@vitejs/plugin-react 4→5.1.2、@vitest/coverage-v8 2→4.1.11；devmock/ui 包此前靠提升隐式获得 vite，vitest 4 的 peer 检查后显式声明 vite 7。**配置零改动**（coverage/超时/装置全兼容）；唯一代码适配是 `BrandLogo` 测试断言——vite 7 的 vitest 环境把小资源内联成 data URI（vite 5 返回 `/src/assets/` 原路径），放宽为两种形态皆可，仍拦截 public/ 直接引用。全量回归：4 包 364 测试全过、vite 7 生产构建 19.2s 正常、产物隔离（worker 不入包）仍有效、完整质量门全绿。react-router-dom 6.30.4→6.30.6（另一个 Dependabot PR，补丁级）一并本地落地。
+
 - **仓库安全设置开启与安全扫描触发器修正**：①Dependabot alerts 与 Dependabot security updates 由 API 开启（此前 alerts 未开，一键查得 30 条存量 alert——集中在 vitest/vite 等开发工具链，登记于 `docs/OPERATIONS.md` §1.3，主版本升级另行安排）；②osv-scanner 与 CodeQL 的 push 触发器补上 `dev` 分支——GitHub 只按默认分支上的 workflow 注册触发器，此前推送 dev 不触发扫描，开发窗口处于盲区；③CodeQL action 升级 v4（官方公告 v3 于 2026-12 弃用）。三 workflow（CI/CodeQL/依赖漏洞扫描）已实测随 dev 推送全绿。
 - **新增 Dependabot**：每周（周二）为前端 pnpm workspace、后端 Go 模块与 CI 的 `actions/*` 分别开更新 PR，由 `ci.yml` 的质量门验证后人工合并。本仓库契约由 `api/openapi.yaml` 生成（`schema.gen.ts` / `api.gen.go` 均已入库），Dependabot 只改依赖版本、不触碰契约源文件，因此不会触发重新生成。
 - **新增依赖漏洞扫描（osv-scanner）**：`pnpm audit` 在本仓库**不可用**——`.npmrc` 固定 `registry=https://registry.npmmirror.com/`，而镜像源没有 audit 端点（实测 `ERR_PNPM_AUDIT_ENDPOINT_NOT_EXISTS`）。改用 `osv-scanner`：它读 lockfile 后查 OSV 数据库，与 npm registry 解耦，因此不受镜像限制，同时覆盖前端 `pnpm-lock.yaml` 与后端 Go 模块。作为**独立 workflow、软失败**（`fail-on-vuln: false`）——漏洞信息走 SARIF 进 Security 面板供人工跟进，不阻断发版；Go 侧的 `govulncheck` 仍保留在质量门内作硬门禁。

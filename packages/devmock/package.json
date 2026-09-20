@@ -32,9 +32,11 @@
     "@jianartifact/eslint-config": "workspace:*",
     "@jianartifact/typescript-config": "workspace:*",
     "@types/node": "^22.8.1",
+    "@vitest/coverage-v8": "4.1.11",
     "eslint": "^9.13.0",
     "openapi-typescript": "^7.4.2",
     "typescript": "^5.6.3",
-    "vitest": "^2.1.4"
+    "vite": "7.3.6",
+    "vitest": "^4.1.11"
   }
 }

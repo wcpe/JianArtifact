@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-19T16:58:54.782Z",
+  "generatedAt": "2026-09-20T10:34:33.045Z",
   "go": [
     {
       "name": "github.com/apapsch/go-jsonmerge/v2",
@@ -509,7 +509,7 @@
     },
     {
       "name": "@remix-run/router",
-      "version": "1.23.3",
+      "version": "1.23.4",
       "license": "MIT",
       "author": "Remix Software"
     },
@@ -1391,13 +1391,13 @@
     },
     {
       "name": "react-router",
-      "version": "6.30.4",
+      "version": "6.30.6",
       "license": "MIT",
       "author": "Remix Software"
     },
     {
       "name": "react-router-dom",
-      "version": "6.30.4",
+      "version": "6.30.6",
       "license": "MIT",
       "author": "Remix Software"
     },
