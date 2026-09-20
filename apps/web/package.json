@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "@jianartifact/ui": "workspace:*",
-    "@mantine/charts": "^7.17.8",
+    "@mantine/charts": "^9.6.1",
     "@mantine/core": "^7.17.0",
     "@mantine/dates": "7.17.8",
     "@mantine/form": "^7.17.0",
