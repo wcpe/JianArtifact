@@ -64,6 +64,16 @@
 
 **注意**：若未来这些地址开始承载敏感服务或暴露面扩大，应优先调整其访问控制，而不是回头清理历史。对仓库运行、发布与审计无影响。
 
+#### 依赖安全告警的跟踪
+
+仓库已开启三道依赖安全通道（2026-09-20）：
+
+1. **Dependabot alerts**（仓库设置级）：报告 manifest 与传递依赖的已知漏洞，入口在 GitHub 仓库的 Security 标签页；
+2. **Dependabot security updates**：对每条 alert 自动开修复 PR，由 `ci.yml` 的质量门验证后人工合并；
+3. **osv-scanner workflow**（`.github/workflows/osv-scanner.yml`）：PR / push dev / 每周定时扫描 lockfile，结果以 SARIF 上报 Code Scanning（软失败，不阻断）。
+
+**当前存量（2026-09-20 登记，待处理）**：Dependabot alerts 共 30 条（critical 5 / high 20 / medium 18 的标注口径，按 alert 计 30），集中在 **vitest / vite / esbuild 等**开发工具链（`scope: development`，不进生产 bundle——产物隔离测试已验证 devmock/MSW 不入包），另有 `brace-expansion` / `fast-uri` / `js-yaml` 标为 runtime。**处置约定**：涉及 vitest 2→3、vite 5→7 等主版本升级，需按依赖升级流程（全量回归验证）另行安排，不在日常小版本更新中顺带处理；实际数字与清单以 Security 标签页实时状态为准，本文不维护快照。
+
 ## 2. 部署路径
 
 ### 2.1 Docker Compose（单实例主路径）

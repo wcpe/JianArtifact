@@ -105,6 +105,7 @@
 
 ### 工程
 
+- **仓库安全设置开启与安全扫描触发器修正**：①Dependabot alerts 与 Dependabot security updates 由 API 开启（此前 alerts 未开，一键查得 30 条存量 alert——集中在 vitest/vite 等开发工具链，登记于 `docs/OPERATIONS.md` §1.3，主版本升级另行安排）；②osv-scanner 与 CodeQL 的 push 触发器补上 `dev` 分支——GitHub 只按默认分支上的 workflow 注册触发器，此前推送 dev 不触发扫描，开发窗口处于盲区；③CodeQL action 升级 v4（官方公告 v3 于 2026-12 弃用）。三 workflow（CI/CodeQL/依赖漏洞扫描）已实测随 dev 推送全绿。
 - **新增 Dependabot**：每周（周二）为前端 pnpm workspace、后端 Go 模块与 CI 的 `actions/*` 分别开更新 PR，由 `ci.yml` 的质量门验证后人工合并。本仓库契约由 `api/openapi.yaml` 生成（`schema.gen.ts` / `api.gen.go` 均已入库），Dependabot 只改依赖版本、不触碰契约源文件，因此不会触发重新生成。
 - **新增依赖漏洞扫描（osv-scanner）**：`pnpm audit` 在本仓库**不可用**——`.npmrc` 固定 `registry=https://registry.npmmirror.com/`，而镜像源没有 audit 端点（实测 `ERR_PNPM_AUDIT_ENDPOINT_NOT_EXISTS`）。改用 `osv-scanner`：它读 lockfile 后查 OSV 数据库，与 npm registry 解耦，因此不受镜像限制，同时覆盖前端 `pnpm-lock.yaml` 与后端 Go 模块。作为**独立 workflow、软失败**（`fail-on-vuln: false`）——漏洞信息走 SARIF 进 Security 面板供人工跟进，不阻断发版；Go 侧的 `govulncheck` 仍保留在质量门内作硬门禁。
 - **新增 CodeQL 语义扫描（Go + TS/JS）**：`govulncheck` 只报已知 CVE、`eslint` 偏风格，CodeQL 补语义级分析（注入 / 路径遍历 / SSRF / 凭据泄露），对本项目手写的安全敏感代码（`internal/upstream` 的 SSRF 校验与重定向凭据剥离）有增量价值。独立 workflow、**软失败**（需构建、耗时长、偶发误报）。
