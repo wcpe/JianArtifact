@@ -99,7 +99,9 @@ describe("仓库管理", () => {
     fireEvent.change(within(dialog).getByLabelText(/名称/), { target: { value: "my-proxy" } });
 
     // 选择类型为 proxy，触发上游地址输入渲染。
-    await user.click(within(dialog).getByLabelText(/类型/));
+    // Mantine 8 的 Select 把 label 同时关联到输入框与选项容器（ARIA combobox 模式），
+    // getByLabelText 会命中多个元素，故按 role=textbox 精确定位输入框。
+    await user.click(within(dialog).getByRole("textbox", { name: /类型/ }));
     await user.click(await screen.findByRole("option", { name: "proxy" }));
     fireEvent.change(within(dialog).getByLabelText(/上游地址/), {
       target: { value: "https://repo.example.com/raw" },
@@ -286,9 +288,11 @@ describe("仓库管理", () => {
     await user.click(screen.getByRole("button", { name: "新建仓库" }));
     const dialog = await screen.findByRole("dialog");
     await waitFor(() =>
-      expect((within(dialog).getByLabelText("格式") as HTMLInputElement).value).toBe("raw"),
+      expect(
+        (within(dialog).getByRole("textbox", { name: "格式" }) as HTMLInputElement).value,
+      ).toBe("raw"),
     );
-    await user.click(within(dialog).getByLabelText("格式"));
+    await user.click(within(dialog).getByRole("textbox", { name: "格式" }));
     expect(await screen.findByRole("option", { name: "raw" })).toBeTruthy();
     expect(screen.queryByRole("option", { name: "maven" })).toBeNull();
     expect(screen.queryByRole("option", { name: "npm" })).toBeNull();

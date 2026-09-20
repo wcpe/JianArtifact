@@ -45,6 +45,12 @@ function calendarRange(kind: "today" | "yesterday"): { from: Date; to: Date } {
   return { from: yesterdayStart, to: dayStart };
 }
 
+/** 本地时区的 YYYY-MM-DD（Mantine 8 的 DateStringValue 形态）。 */
+function toLocalDateString(date: Date): string {
+  const pad = (input: number) => String(input).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
 function presetRange(preset: Preset): { from: string; to: string } {
   if (preset.kind === "calendar") {
     const { from, to } = calendarRange(preset.key === "today" ? "today" : "yesterday");
@@ -87,9 +93,11 @@ export function DashboardRangePicker({
 }) {
   const { t } = useTranslation();
   const [opened, setOpened] = useState(false);
-  const [custom, setCustom] = useState<[Date | null, Date | null]>([
-    value.preset === "custom" ? new Date(value.from) : null,
-    value.preset === "custom" ? new Date(value.to) : null,
+  // Mantine 8 的 dates 组件统一使用日期字符串（DateStringValue），不再接受 Date 对象。
+  // 用**本地**日期串（而非 UTC）以保持与升级前 DatePicker 的显示一致。
+  const [custom, setCustom] = useState<[string | null, string | null]>([
+    value.preset === "custom" ? toLocalDateString(new Date(value.from)) : null,
+    value.preset === "custom" ? toLocalDateString(new Date(value.to)) : null,
   ]);
 
   const label =
@@ -105,12 +113,14 @@ export function DashboardRangePicker({
 
   const applyCustom = () => {
     if (!custom[0] || !custom[1]) return;
+    // YYYY-MM-DD 同格式下字符串字典序即时间序，无需再转 Date 比较。
     const from = custom[0] < custom[1] ? custom[0] : custom[1];
     const to = custom[0] < custom[1] ? custom[1] : custom[0];
     onChange({
       preset: "custom",
-      from: from.toISOString(),
-      to: to.toISOString(),
+      // 与升级前语义一致：取所选日期的本地零点转 ISO。
+      from: new Date(`${from}T00:00:00`).toISOString(),
+      to: new Date(`${to}T00:00:00`).toISOString(),
     });
     setOpened(false);
   };

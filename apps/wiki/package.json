@@ -13,11 +13,11 @@
   },
   "dependencies": {
     "@jianartifact/ui": "workspace:*",
-    "@mantine/core": "^7.17.0",
-    "@mantine/form": "^7.17.0",
-    "@mantine/hooks": "^7.17.0",
-    "@mantine/modals": "^7.17.0",
-    "@mantine/notifications": "^7.17.0",
+    "@mantine/core": "^8.3.18",
+    "@mantine/form": "^8.3.18",
+    "@mantine/hooks": "^8.3.18",
+    "@mantine/modals": "^8.3.18",
+    "@mantine/notifications": "^8.3.18",
     "@tabler/icons-react": "^3.30.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"

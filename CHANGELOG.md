@@ -105,6 +105,13 @@
 
 ### 工程
 
+- **前端依赖大版本升级（Dependabot PR #9#10#11#13 的等价落地）**：
+  - **Mantine 7.17 → 8.3.18 全家桶**（core/hooks/form/dates/modals/notifications/charts，web + wiki + ui 三处必须同版本，否则 Provider 混用会崩）。两处适配：① `DatePicker` 在 8 起改用日期字符串（不再接受 Date 对象），`DashboardRangePicker` 的状态改为本地日期串并保持原有本地零点语义；② Mantine 8 新增 `env` 机制——默认环境下浮层（Popover/Select）依赖真实浏览器的异步定位，在 jsdom 里会停在 `display:none`（表现为"下拉打不开"），`AppProvider` 现仅在测试环境声明 `env="test"`，生产不变。另适配一处罚查询：Mantine 8 的 Select 会把 label 同时关联到输入框与选项容器（标准 ARIA combobox 模式），`getByLabelText` 会命中多个元素，测试改按 `role=textbox` 精确定位。
+  - **i18next 23 → 26 + react-i18next 15 → 17**（跨 3 个大版本）：类型检查与 i18n 专项测试（键集守卫、三优先级、格式化跟随、偏好记忆）全部通过，无需改代码。
+  - **jsdom 25 → 29.1.1**：跨 4 个大版本，测试环境行为无回归。未采用 Dependabot 提的 30（其要求 Node ≥24.15，当前工具链为 24.11）。
+- **`go.work` 的 go 指令对齐 `go.mod`**：此前 go.work 写 `go 1.25.0` 而 go.mod 已是 `1.26.0`（漂移），`go get` 时由工具链自动同步为 `1.26.0`。
+- **已知代价**：Mantine 8 使前端测试耗时上升（本机全量 47–52s → 约 92s，其中 `ViteMockIsolation` 的真实 vite build 占 63s）；功能零回归（4 包 364 测试全过、完整质量门全绿）。
+
 - **依赖升级：vitest 2→4 全链（含 vite 5→7、plugin-react 5、coverage-v8 4）**：Dependabot security updates 开启后自动为 vitest 的 critical alert 开出跨主版本升级 PR（2.1.9→4.1.11），本地落地验证后合入。vitest 4 硬性要求 vite ≥6，故连带升级：vite 5.4→7.3.6、@vitejs/plugin-react 4→5.1.2、@vitest/coverage-v8 2→4.1.11；devmock/ui 包此前靠提升隐式获得 vite，vitest 4 的 peer 检查后显式声明 vite 7。**配置零改动**（coverage/超时/装置全兼容）；唯一代码适配是 `BrandLogo` 测试断言——vite 7 的 vitest 环境把小资源内联成 data URI（vite 5 返回 `/src/assets/` 原路径），放宽为两种形态皆可，仍拦截 public/ 直接引用。全量回归：4 包 364 测试全过、vite 7 生产构建 19.2s 正常、产物隔离（worker 不入包）仍有效、完整质量门全绿。react-router-dom 6.30.4→6.30.6（另一个 Dependabot PR，补丁级）一并本地落地。
 
 - **仓库安全设置开启与安全扫描触发器修正**：①Dependabot alerts 与 Dependabot security updates 由 API 开启（此前 alerts 未开，一键查得 30 条存量 alert——集中在 vitest/vite 等开发工具链，登记于 `docs/OPERATIONS.md` §1.3，主版本升级另行安排）；②osv-scanner 与 CodeQL 的 push 触发器补上 `dev` 分支——GitHub 只按默认分支上的 workflow 注册触发器，此前推送 dev 不触发扫描，开发窗口处于盲区；③CodeQL action 升级 v4（官方公告 v3 于 2026-12 弃用）。三 workflow（CI/CodeQL/依赖漏洞扫描）已实测随 dev 推送全绿。
