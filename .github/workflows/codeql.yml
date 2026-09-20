@@ -9,7 +9,7 @@
 # 且存在偶发误报；语义扫描不应阻断开发预览版与发版，
 # 结果进 Security > Code Scanning 面板供人工跟进即可。
 #
-# 版本：使用官方长期推荐的 @v3（经核实仓库最新 release 为 bundle 标签，未确认存在 v4）。
+# 版本：@v4（官方于 2026-10 公告 v3 将于 2026-12 弃用；本仓库首跑时 CI 注释亦提示升级 v4）。
 name: CodeQL
 
 on:
@@ -54,16 +54,16 @@ jobs:
           cache-dependency-path: apps/server/go.sum
 
       - name: 初始化 CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
 
       # Go 侧用 modernc.org/sqlite（纯 Go，无 CGO），autobuild 可正常编译；
       # 前端为 Vite 应用，CodeQL 对 JS/TS 不需要构建即可分析。
       - name: 自动构建
-        uses: github/codeql-action/autobuild@v3
+        uses: github/codeql-action/autobuild@v4
 
       - name: 执行分析
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@v4
         with:
           category: "/language:${{ matrix.language }}"
