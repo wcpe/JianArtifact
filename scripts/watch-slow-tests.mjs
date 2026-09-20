@@ -135,11 +135,11 @@ for (const target of WATCHED) {
   if (target.config) {
     args.push("--config", target.config);
   }
-  const run = spawnSync(
-    process.execPath,
-    args,
-    { cwd: webDir, encoding: "utf8", stdio: ["ignore", "ignore", "pipe"] },
-  );
+  const run = spawnSync(process.execPath, args, {
+    cwd: webDir,
+    encoding: "utf8",
+    stdio: ["ignore", "ignore", "pipe"],
+  });
 
   if (run.status !== 0) {
     warnings += 1;
