@@ -39,13 +39,14 @@ const WATCHED = [
   // 这处的等待上限同样被放宽过（60s → 120s），不能只观测前者。
   // 但它的耗时主体是 spawn 一次真实 vite build（实测 19–69s，本就不是"等待上限"问题），
   // 故单独给预算：用全局 10s 口径会让它每次都误告警，淹没真正的性能信号。
-  // 该用例已从主套件移出（见 vitest.config.ts 的 exclude），必须用它的专用配置跑，
-  // 否则主配置的 exclude 会让 vitest 报 "No test files found" 而误判为"未能通过"。
+  // 该用例已从主套件移出（见 vitest.config.ts 的 exclude），由 check.sh 用
+  // vitest.build.config.ts 单独串行跑并输出 JSON 报告——这里**直接读那份报告**，
+  // 不再重复执行：既省下一次 30–60s 的真实构建，也避免与构建步抢 CPU 而偶发失败。
   {
     file: "test/ViteMockIsolation.test.ts",
     namePart: "生产构建",
     budgetMs: 180_000,
-    config: "vitest.build.config.ts",
+    reportFile: ".tmp/build-isolation.json",
   },
 ];
 
@@ -125,38 +126,67 @@ let warnings = 0;
 let skipped = 0;
 
 for (const target of WATCHED) {
-  const args = [
-    join(webDir, "node_modules", "vitest", "vitest.mjs"),
-    "run",
-    target.file,
-    "--reporter=json",
-    `--outputFile=${reportFile}`,
-  ];
-  if (target.config) {
-    args.push("--config", target.config);
-  }
-  const run = spawnSync(process.execPath, args, {
-    cwd: webDir,
-    encoding: "utf8",
-    stdio: ["ignore", "ignore", "pipe"],
-  });
-
-  if (run.status !== 0) {
-    warnings += 1;
-    console.warn(
-      `::warning::慢用例观测：${target.file} 未能通过（退出码 ${run.status ?? "未知"}），跳过本次采样。`,
-    );
-    console.warn((run.stderr ?? "").split("\n").slice(-3).join("\n"));
-    continue;
-  }
-
+  // 报告来源二选一：
+  //   ① reportFile —— 复用 check.sh 构建验证步已产出的 JSON 报告（不重复执行）；
+  //   ② 未提供时自己跑一次（适用于独立的 AppRoutes 这类轻量目标）。
   let report;
-  try {
-    report = JSON.parse(readFileSync(reportFile, "utf8"));
-  } catch {
-    warnings += 1;
-    console.warn(`::warning::慢用例观测：无法解析 ${target.file} 的报告，跳过本次采样。`);
-    continue;
+  if (target.reportFile) {
+    const path = join(repoRoot, target.reportFile);
+    if (!existsSync(path)) {
+      warnings += 1;
+      console.warn(
+        `::warning::慢用例观测：未找到 ${target.reportFile}（应由 check.sh 的构建验证步产出；` +
+          "单独运行本脚本时请先执行该步）。",
+      );
+      continue;
+    }
+    try {
+      report = JSON.parse(readFileSync(path, "utf8"));
+    } catch {
+      warnings += 1;
+      console.warn(`::warning::慢用例观测：无法解析 ${target.reportFile}，跳过本次采样。`);
+      continue;
+    }
+  } else {
+    const args = [
+      join(webDir, "node_modules", "vitest", "vitest.mjs"),
+      "run",
+      target.file,
+      "--reporter=json",
+      `--outputFile=${reportFile}`,
+    ];
+    if (target.config) {
+      args.push("--config", target.config);
+    }
+    const run = spawnSync(process.execPath, args, {
+      cwd: webDir,
+      encoding: "utf8",
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+
+    if (run.status !== 0) {
+      warnings += 1;
+      console.warn(
+        `::warning::慢用例观测：${target.file} 未能通过（退出码 ${run.status ?? "未知"}），跳过本次采样。`,
+      );
+      // 失败时把 stdout 末尾也带出来：vitest 的多数启动期错误（找不到文件、配置解析失败）
+      // 走 stdout，只打印 stderr 会得到一片空白、无法定位。
+      const tail = `${run.stderr ?? ""}\n${run.stdout ?? ""}`
+        .split("\n")
+        .filter((line) => line.trim())
+        .slice(-6)
+        .join("\n");
+      if (tail) console.warn(tail);
+      continue;
+    }
+
+    try {
+      report = JSON.parse(readFileSync(reportFile, "utf8"));
+    } catch {
+      warnings += 1;
+      console.warn(`::warning::慢用例观测：无法解析 ${target.file} 的报告，跳过本次采样。`);
+      continue;
+    }
   }
 
   const matched = [];
