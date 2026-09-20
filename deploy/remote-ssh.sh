@@ -1,29 +1,43 @@
 #!/usr/bin/env bash
-# JianArtifact 远程 SSH 部署辅助脚本（systemd 二进制路径）。
+# JianArtifact 远程部署辅助：密钥管理 + 本机构建 + 登录/探活入口。
 #
-# 与 deploy.sh 配合：本脚本专注「本机构建 → scp 上传 → 远端 systemd 切换 → 探活」。
-# 凭据与主机信息不入库：读 deploy/.env 或环境变量。
+# 分工（重要）：
+#   - 本脚本**不自己启动远端服务**。早期版本用「kill + nohup + pid 文件」启动，与现网的
+#     systemd --user 托管冲突（双进程抢端口），且只写 3 个环境变量（丢掉格式配置、把 JWT
+#     换成脚本内置的默认值）。现改为：构建后**委托 deploy/deploy.sh** 执行部署
+#     （releases/<stamp> + 切 current + systemctl --user restart + 探活失败回滚）。
+#   - 运行环境变量的真源是远端的 EnvironmentFile（如 ~/jianartifact/jianartifact.env），
+#     由运维维护；本脚本与 deploy.sh 都不会写入它。
 #
 # 用法：
 #   bash deploy/remote-ssh.sh setup-key     # 生成 deploy/ssh/ 下密钥（不入库）
-#   bash deploy/remote-ssh.sh show-pubkey  # 打印公钥，供粘贴到主机 authorized_keys
-#   bash deploy/remote-ssh.sh deploy       # 构建并远程部署
-#   bash deploy/remote-ssh.sh health       # 远程探活
-#   bash deploy/remote-ssh.sh ssh          # 交互登录
+#   bash deploy/remote-ssh.sh show-pubkey   # 打印公钥，供粘贴到主机 authorized_keys
+#   bash deploy/remote-ssh.sh build         # 仅本机构建 Linux amd64 二进制
+#   bash deploy/remote-ssh.sh deploy        # 构建 + 委托 deploy.sh 远程部署
+#   bash deploy/remote-ssh.sh health        # 远程探活（委托 deploy.sh healthcheck）
+#   bash deploy/remote-ssh.sh ssh           # 交互登录
 #
 # 环境变量（deploy/.env 或 export）：
+#   DEPLOY_ENV            环境名：读 deploy/.env.<环境>（如 DEPLOY_ENV=prod → deploy/.env.prod）
 #   DEPLOY_HOST          必填，user@host 或仅 host（配合 DEPLOY_USER）
 #   DEPLOY_USER          可选，默认 root
 #   DEPLOY_PORT          SSH 端口，默认 22
 #   DEPLOY_SSH_KEY       私钥路径，默认 deploy/ssh/jianartifact_ed25519
-#   RELEASE_DIR          远端发布根，默认 /opt/jianartifact
-#   HEALTH_URL           远端探活（经 SSH 本地 curl），默认 http://127.0.0.1:8080/readyz
-#   JIAN_HTTP_ADDR       远端监听，写入 unit 环境时可选
+#   DEPLOY_DIR           远端发布根（未设则由 deploy.sh 按远端 home 推导）
+#   DEPLOY_SERVICE       systemd 用户服务名，默认 jianartifact
+#   HEALTH_URL           远端探活，默认 http://127.0.0.1:8080/readyz
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-ENV_FILE="${SCRIPT_DIR}/.env"
+# 环境文件选择：DEPLOY_ENV=prod → deploy/.env.prod（现网按环境存放）；未设则 deploy/.env。
+# 环境文件含主机与密钥路径等凭据，已被 .gitignore 忽略（deploy/.env.*）。
+DEPLOY_ENV="${DEPLOY_ENV:-}"
+if [[ -n "${DEPLOY_ENV}" ]]; then
+  ENV_FILE="${SCRIPT_DIR}/.env.${DEPLOY_ENV}"
+else
+  ENV_FILE="${SCRIPT_DIR}/.env"
+fi
 SSH_DIR="${SCRIPT_DIR}/ssh"
 DEFAULT_KEY="${SSH_DIR}/jianartifact_ed25519"
 
@@ -41,14 +55,6 @@ load_env() {
 
 DEPLOY_PORT="${DEPLOY_PORT:-22}"
 DEPLOY_SSH_KEY="${DEPLOY_SSH_KEY:-${DEFAULT_KEY}}"
-# 无 root 时默认装到部署用户 home（可用 RELEASE_DIR 覆盖）
-RELEASE_DIR="${RELEASE_DIR:-}"
-HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:8080/readyz}"
-
-if [[ -z "${RELEASE_DIR}" ]]; then
-  # 延后到 resolve 后填；先占位，cmd_deploy 内再设
-  RELEASE_DIR=""
-fi
 
 resolve_host() {
   local host="${DEPLOY_HOST:-}"
@@ -60,29 +66,12 @@ resolve_host() {
 }
 
 ssh_opts() {
+  local key="${DEPLOY_SSH_KEY/#\~/$HOME}"
   local opts=(-p "${DEPLOY_PORT}" -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes)
-  if [[ -f "${DEPLOY_SSH_KEY}" ]]; then
-    opts+=(-i "${DEPLOY_SSH_KEY}")
+  if [[ -f "${key}" ]]; then
+    opts+=(-i "${key}")
   fi
   printf '%q ' "${opts[@]}"
-}
-
-run_ssh() {
-  local host
-  host="$(resolve_host)"
-  # shellcheck disable=SC2046
-  ssh $(ssh_opts) "${host}" "$@"
-}
-
-run_scp() {
-  local host src dest
-  host="$(resolve_host)"
-  src="$1"
-  dest="$2"
-  # shellcheck disable=SC2046
-  scp -P "${DEPLOY_PORT}" -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes \
-    ${DEPLOY_SSH_KEY:+-i "${DEPLOY_SSH_KEY}"} \
-    "${src}" "${host}:${dest}"
 }
 
 cmd_setup_key() {
@@ -128,73 +117,22 @@ cmd_build() {
       -o bin/jianartifact-linux-amd64 ./cmd/jianartifact
   )
   [[ -f "${out}" ]] || die "构建失败：未找到 ${out}"
-  # 兼容 scp 路径名
-  cp "${out}" "${ROOT_DIR}/apps/server/bin/jianartifact" 2>/dev/null \
-    || cp "${out}" "${ROOT_DIR}/apps/server/bin/jianartifact"
+  # deploy.sh 按 apps/server/bin/jianartifact 上传（与 make build 的产物路径一致）
+  cp "${out}" "${ROOT_DIR}/apps/server/bin/jianartifact"
   log "构建完成：${out}（version=${ver}）"
 }
 
 cmd_deploy() {
   load_env
   cmd_build
-  local stamp release host remote_home
-  host="$(resolve_host)"
-  remote_home="$(run_ssh 'echo $HOME')"
-  if [[ -z "${RELEASE_DIR}" ]]; then
-    RELEASE_DIR="${remote_home}/jianartifact"
-  fi
-  stamp="$(date +%Y%m%d%H%M%S)"
-  release="${RELEASE_DIR}/releases/${stamp}"
-  log "部署到 ${host}:${release}"
-
-  run_ssh "mkdir -p '${release}' '${RELEASE_DIR}/data' '${RELEASE_DIR}/bin' '${RELEASE_DIR}/logs'"
-  run_scp "${ROOT_DIR}/apps/server/bin/jianartifact" "${release}/jianartifact"
-  run_ssh "chmod +x '${release}/jianartifact' && ln -sfn '${release}' '${RELEASE_DIR}/current'"
-
-  local jwt="${JIAN_JWT_SECRET:-change-me-in-production-please-32b}"
-  local addr="${JIAN_HTTP_ADDR:-0.0.0.0:8080}"
-  # 写 env、停旧进程、后台启动
-  # shellcheck disable=SC2086
-  ssh $(ssh_opts) "${host}" bash -s <<REMOTE
-set -euo pipefail
-RD='${RELEASE_DIR}'
-cat > "\${RD}/run.env" <<EOF
-JIAN_HTTP_ADDR=${addr}
-JIAN_DATA_DIR=\${RD}/data
-JIAN_JWT_SECRET=${jwt}
-EOF
-chmod 600 "\${RD}/run.env" || true
-if [[ -f "\${RD}/jianartifact.pid" ]]; then
-  kill "\$(cat "\${RD}/jianartifact.pid")" 2>/dev/null || true
-  sleep 1
-fi
-pkill -f "\${RD}/current/jianartifact" 2>/dev/null || true
-sleep 1
-set -a
-. "\${RD}/run.env"
-set +a
-nohup "\${RD}/current/jianartifact" run >>"\${RD}/logs/server.log" 2>&1 &
-echo \$! > "\${RD}/jianartifact.pid"
-echo "started pid=\$(cat "\${RD}/jianartifact.pid")"
-REMOTE
-
-  log "等待探活 ${HEALTH_URL} …"
-  local ok=0
-  for i in $(seq 1 45); do
-    if run_ssh "curl -fsS -o /dev/null '${HEALTH_URL}'"; then
-      ok=1
-      break
-    fi
-    sleep 2
-  done
-  [[ "${ok}" -eq 1 ]] || die "远程探活失败，请检查 ${RELEASE_DIR}/logs/server.log"
-  log "部署成功。current → ${stamp}  RELEASE_DIR=${RELEASE_DIR}"
+  log "委托 deploy.sh 执行部署（releases/current + systemctl 重启 + 失败回滚）…"
+  # 现网形态固定为 systemd 二进制路径；发布根/服务名由 deploy.sh 从同一份 .env 读取
+  DEPLOY_MODE=systemd bash "${SCRIPT_DIR}/deploy.sh" deploy
 }
 
 cmd_health() {
   load_env
-  run_ssh "curl -fsS '${HEALTH_URL}' && echo"
-  log "探活通过。"
+  DEPLOY_MODE="${DEPLOY_MODE:-systemd}" bash "${SCRIPT_DIR}/deploy.sh" healthcheck
 }
 
 cmd_ssh() {
@@ -221,13 +159,14 @@ main() {
   setup-key    生成 ed25519 密钥到 deploy/ssh/（不入库）
   show-pubkey  打印公钥
   build        仅本机构建二进制
-  deploy       构建 + scp + 远端切换 + 探活
+  deploy       构建 + 委托 deploy.sh 部署（releases/current + systemctl 重启 + 失败回滚）
   health       远端 /readyz 探活
   ssh          使用部署密钥登录
 
-先 setup-key，把公钥放到主机，再在 deploy/.env 写：
-  DEPLOY_HOST=root@x.x.x.x
-  DEPLOY_PORT=22
+前置：
+  1) 先 setup-key，把公钥放到主机 ~/.ssh/authorized_keys
+  2) 在 deploy/.env 写 DEPLOY_HOST / DEPLOY_PORT / DEPLOY_DIR / DEPLOY_SERVICE 等
+  3) 主机上已有 EnvironmentFile（见 deploy.sh 的前置检查提示）
 USAGE
       exit 1
       ;;

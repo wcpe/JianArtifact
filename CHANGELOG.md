@@ -108,6 +108,8 @@
 
 ### 工程
 
+- **部署脚本对齐现网形态**：`remote-ssh.sh` 原本自行 `kill + nohup + pid 文件` 启动服务，与现网的**用户级 systemd 托管**冲突（双进程抢端口），且只写 3 个环境变量（丢掉格式配置、把 JWT 换成脚本内置默认值——会导致所有登录态失效）。现改为：`remote-ssh.sh` 只负责密钥、构建与登录入口，**部署一律委托 `deploy.sh`**（`releases/<stamp>` + 切 `current` + `systemctl --user restart` + 探活失败自动回滚）。同时对齐配置键名：支持 `DEPLOY_DIR`（现网键名，`RELEASE_DIR` 兼容）、`DEPLOY_SERVICE`（不再硬编码服务名）、`DEPLOY_USER`/`DEPLOY_PORT`/`DEPLOY_SSH_KEY`（完整连接参数）、`DEPLOY_MODE=systemd-user`（现网写法），并新增 `DEPLOY_ENV=prod` 选择环境文件（`deploy/.env.prod`）。两处安全加固：部署前**检查远端 EnvironmentFile 是否存在**（缺失只给指引、不代写，避免覆盖密钥与格式配置）；回滚改为记录 `current` 原指向而非「版本列表第二个」，避免并发部署时回滚到错误版本。
+
 - **慢用例观测改为复用构建验证的报告**：`ViteMockIsolation` 此前由观测脚本再跑一次真实 vite build，与 `check.sh` 的构建验证步重复执行（多耗 30–60s），且两次构建抢 CPU 会偶发失败并误报「未能通过」。现构建验证步输出 JSON 报告（`--reporter=json`），观测脚本直接读取，不再重复执行。
 - **`.gitignore` 补齐 `deploy/.env.*`**：此前只有 `.env`、`.env.local`、`.env.*.local` 三条规则，而 `deploy/.env.prod`（含部署目标主机与密钥路径）**不在任何规则内**，随时可能被 `git add .` 误提交（经核实历史中从未提交过）。现按目录整体忽略 `deploy/.env.*`、仅保留模板 `.env.example`。
 
