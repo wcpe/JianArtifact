@@ -16,6 +16,8 @@ on:
   pull_request:
   push:
     branches:
+      # dev 也要扫：本仓库在 dev 开发，等合到 main 才扫会让整个开发窗口处于盲区
+      - dev
       - main
   schedule:
     # 每周一 13:30 UTC（错开 osv-scanner 的 12:30）
