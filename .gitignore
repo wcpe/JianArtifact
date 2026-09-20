@@ -75,6 +75,11 @@ Thumbs.db
 .env
 .env.local
 .env.*.local
+# deploy/ 下的各环境部署配置（含目标主机与密钥路径）：此前只有 .env.*.local 被忽略，
+# .env.prod 这类名字不在规则内，随时可能被 git add . 误提交。这里按目录整体忽略、
+# 仅保留模板 .env.example。
+deploy/.env.*
+!deploy/.env.example
 
 # 远程部署专用 SSH 密钥（deploy/remote-ssh.sh setup-key 生成）
 deploy/ssh/
