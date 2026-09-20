@@ -110,10 +110,10 @@ describe("Vite Mock 产物隔离", () => {
     for (const canary of fixedPreviewCanaries) {
       expect(contents.join("\n")).not.toContain(canary);
     }
-    // 实测（本机空闲、连续 3 次）：vite build 常态 21–23s，故 60s 相对常态仍有约 2.6 倍余量。
-    // 此前把预算抬到 120s 所依据的「56–75s」是高负载下的观测，不代表常态——
-    // 那次放宽的依据不成立，故回到 60s；若仍偶发超时，根因是并行争抢（应查并发度）而非预算不足。
-  }, 60_000);
+    // 实测：vite 5 时代 21–23s，升到 vite 7 后实测 19–69s（波动大，多数落在 46–69s）——
+    // 60s 预算会超时（本用例曾以 60.03s 撞线失败）。取 120s：相对主要观测区间约 1.7–2.5 倍余量，
+    // 同时仍能拦住"构建退化到数分钟"这类真问题。
+  }, 120_000);
 
   it("开发服务器继续从既有路径提供 MSW worker", async () => {
     const server = await startViteDevServer();

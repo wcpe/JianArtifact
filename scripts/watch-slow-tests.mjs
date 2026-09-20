@@ -37,7 +37,9 @@ const historyFile = process.env.SLOW_TEST_HISTORY ?? join(reportDir, "slow-histo
 const WATCHED = [
   { file: "test/AppRoutes.test.tsx", namePart: "/host-monitoring" },
   // 这处的等待上限同样被放宽过（60s → 120s），不能只观测前者。
-  { file: "test/ViteMockIsolation.test.ts", namePart: "生产构建" },
+  // 但它的耗时主体是 spawn 一次真实 vite build（实测 19–69s，本就不是"等待上限"问题），
+  // 故单独给预算：用全局 10s 口径会让它每次都误告警，淹没真正的性能信号。
+  { file: "test/ViteMockIsolation.test.ts", namePart: "生产构建", budgetMs: 120_000 },
 ];
 
 /** 数值型环境变量：非法值直接失败，避免 NaN 让所有判据静默失效却仍报绿。 */
@@ -185,13 +187,14 @@ for (const target of WATCHED) {
     history.push(...trimmed);
     saveHistory(history);
 
-    if (ms >= budgetMs) {
+    const targetBudgetMs = target.budgetMs ?? budgetMs;
+    if (ms >= targetBudgetMs) {
       warnings += 1;
       console.warn(
-        `::warning::慢用例告警（单次）：${label} 本次耗时 ${ms}ms，超过单次预算 ${budgetMs}ms。`,
+        `::warning::慢用例告警（单次）：${label} 本次耗时 ${ms}ms，超过单次预算 ${targetBudgetMs}ms。`,
       );
     } else {
-      console.log(`慢用例观测：${label} 本次 ${ms}ms（单次预算 ${budgetMs}ms）。`);
+      console.log(`慢用例观测：${label} 本次 ${ms}ms（单次预算 ${targetBudgetMs}ms）。`);
     }
 
     // 跨运行 P95：这一层才是退化逃逸的兜网。
@@ -208,15 +211,16 @@ for (const target of WATCHED) {
       continue;
     }
     const p95 = percentile(samples, 95);
-    if (p95 >= p95BudgetMs) {
+    const targetP95BudgetMs = target.budgetMs ?? p95BudgetMs;
+    if (p95 >= targetP95BudgetMs) {
       warnings += 1;
       console.warn(
         `::warning::慢用例告警（P95）：${label} 历史 P95=${Math.round(p95)}ms（n=${samples.length}），` +
-          `超过 P95 预算 ${p95BudgetMs}ms——很可能是持续退化而非单次抖动，请排查图表首屏耗时。`,
+          `超过 P95 预算 ${targetP95BudgetMs}ms——很可能是持续退化而非单次抖动，请排查图表首屏耗时。`,
       );
     } else {
       console.log(
-        `慢用例观测：${label} 历史 P95=${Math.round(p95)}ms（n=${samples.length}，预算 ${p95BudgetMs}ms）。`,
+        `慢用例观测：${label} 历史 P95=${Math.round(p95)}ms（n=${samples.length}，预算 ${targetP95BudgetMs}ms）。`,
       );
     }
   }
