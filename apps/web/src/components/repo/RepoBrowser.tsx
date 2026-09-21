@@ -521,17 +521,23 @@ export function RepoBrowser({
     return () => window.removeEventListener(REFRESH_EVENT, handler);
   }, []);
 
-  // FR-145：搜索结果直达——根层就绪后逐级展开命中路径并选中文件；路径失效静默降级。
-  // 仅作进入时的初始定位提示（不写回 URL），每条 highlightPath 只消费一次。
+  // FR-145：搜索结果直达——启动一次定位，内部等待根层就绪后逐级懒加载展开并选中命中文件；
+  // 路径失效静默降级。注意两点：
+  // 1) 定位链**不能**随 effect 依赖变化被取消——每次展开都会 setTreeNodes，若依赖它做 cleanup，
+  //    链会在第一步展开后被打断且 consumed 标记已写、不再重启（线上真实网络延迟下必现）；
+  // 2) 因此根层就绪改为在链内轮询等待（treeNodesRef 读最新值），effect 只在 highlight 变化时启动。
+  const treeNodesRef = useRef<AssetTreeNode[]>([]);
+  treeNodesRef.current = treeNodes;
   const highlightConsumedRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!highlightPath || treeNodes.length === 0) return;
-    if (highlightConsumedRef.current === highlightPath) return;
+    if (!highlightPath || highlightConsumedRef.current === highlightPath) return;
     highlightConsumedRef.current = highlightPath;
-    let cancelled = false;
-    const locate = async () => {
+    void (async () => {
+      for (let waited = 0; treeNodesRef.current.length === 0 && waited < 100; waited += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
       const parts = highlightPath.split("/").filter(Boolean);
-      let level: AssetTreeNode[] = treeNodes;
+      let level: AssetTreeNode[] = treeNodesRef.current;
       for (let index = 0; index < parts.length - 1; index += 1) {
         const prefix = parts.slice(0, index + 1).join("/");
         const dirNode = level.find((node) => node.path === prefix && node.kind === "dir");
@@ -541,7 +547,7 @@ export function RepoBrowser({
           continue;
         }
         const children = await handleExpandDir(dirNode);
-        if (cancelled || !children) return;
+        if (!children) return; // 展开失败：静默降级
         level = children;
       }
       const fileNode = level.find((node) => node.path === highlightPath && node.kind === "file");
@@ -552,12 +558,8 @@ export function RepoBrowser({
           .querySelector(`[data-path="${CSS.escape(highlightPath)}"]`)
           ?.scrollIntoView({ block: "nearest" });
       });
-    };
-    void locate();
-    return () => {
-      cancelled = true;
-    };
-  }, [highlightPath, treeNodes, handleExpandDir, onSelectFile]);
+    })();
+  }, [highlightPath, handleExpandDir, onSelectFile]);
 
   return (
     <Stack gap={isNarrow ? "sm" : "md"} style={{ height: "100%", overflow: "hidden" }}>
