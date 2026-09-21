@@ -152,7 +152,13 @@ func (h *Handlers) ListAuditObservabilityEvents(c *gin.Context, params ListAudit
 		}
 		offset = int(*params.Offset)
 	}
-	events, total, nextOffset, err := h.auditObservability.ListEventPage(repositoryObservabilityFilter(snapshot, filter), offset, limit)
+	// 默认折叠 replication 同步记录（30 天可达百万级，实测 114 万）：仅显式
+	// includeReplication=true 时纳入统一事件流——默认视图只列审计事件。
+	listFilter := repositoryObservabilityFilter(snapshot, filter)
+	if params.IncludeReplication == nil || !*params.IncludeReplication {
+		listFilter.AuditOnly = true
+	}
+	events, total, nextOffset, err := h.auditObservability.ListEventPage(listFilter, offset, limit)
 	if err != nil {
 		writeDomainErr(c, err)
 		return

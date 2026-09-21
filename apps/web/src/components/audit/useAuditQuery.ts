@@ -109,6 +109,8 @@ export function useAuditQuery() {
   // 自定义时间段（range === "custom" 时生效；后端上限 30 天）。
   const [customFrom, setCustomFrom] = useState<string | undefined>(initial.customFrom);
   const [customTo, setCustomTo] = useState<string | undefined>(initial.customTo);
+  // 是否包含 replication 同步记录（默认折叠：30 天可达百万级）。
+  const [includeReplication, setIncludeReplication] = useState(false);
   const [draft, setDraft] = useState(initial.q);
   const [search, setSearch] = useState(initial.q);
   const [page, setPage] = useState(initial.page);
@@ -190,9 +192,12 @@ export function useAuditQuery() {
         ...query,
         offset: (page - 1) * pageSize,
         limit: pageSize,
+        includeReplication,
       }),
-    [queryKey, page, pageSize],
-    { cacheKey: `audit:wb:events:${queryKey}:${page}:${pageSize}` },
+    [queryKey, page, pageSize, includeReplication],
+    {
+      cacheKey: `audit:wb:events:${queryKey}:${page}:${pageSize}:${includeReplication ? "all" : "audit"}`,
+    },
   );
   // 待确认批次数（页眉同口径：缺省请求 = 未确认批次）。
   const pendingNotifications = useAsync(() => getAuditAttentionNotifications(), [], {
@@ -270,6 +275,8 @@ export function useAuditQuery() {
     range,
     setRange,
     customRange: { from: customFrom, to: customTo },
+    includeReplication,
+    setIncludeReplication,
     setCustomRange: (from: string, to: string) => {
       setCustomFrom(from);
       setCustomTo(to);

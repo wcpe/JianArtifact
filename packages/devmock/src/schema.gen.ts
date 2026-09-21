@@ -2449,6 +2449,8 @@ export interface components {
         AuditActionParam: string;
         /** @description 按操作者邮箱精确筛选（记录时固化的身份快照）。 */
         AuditActorEmailParam: string;
+        /** @description 是否包含 replication 同步记录（默认 false：只列审计事件——同步记录 30 天可达百万级，默认折叠） */
+        AuditIncludeReplicationParam: boolean;
         /** @description 按客户端 IP 前缀筛选。 */
         AuditClientIpParam: string;
         /** @description 按认证方式筛选（如 jwt、api_key、web）。 */
@@ -2659,6 +2661,8 @@ export interface operations {
                 actorEmail?: components["parameters"]["AuditActorEmailParam"];
                 /** @description 按客户端 IP 前缀筛选。 */
                 clientIp?: components["parameters"]["AuditClientIpParam"];
+                /** @description 是否包含 replication 同步记录（默认 false：只列审计事件——同步记录 30 天可达百万级，默认折叠） */
+                includeReplication?: components["parameters"]["AuditIncludeReplicationParam"];
                 /** @description 按认证方式筛选（如 jwt、api_key、web）。 */
                 authSource?: components["parameters"]["AuditAuthSourceParam"];
                 /** @description 显式偏移量（分页器直达指定页，优先于 cursor）。 */

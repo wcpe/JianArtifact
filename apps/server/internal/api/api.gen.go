@@ -2691,6 +2691,9 @@ type AuditEventIdParam = string
 // AuditFromParam defines model for AuditFromParam.
 type AuditFromParam = time.Time
 
+// AuditIncludeReplicationParam defines model for AuditIncludeReplicationParam.
+type AuditIncludeReplicationParam = bool
+
 // AuditLimitParam defines model for AuditLimitParam.
 type AuditLimitParam = int
 
@@ -2938,6 +2941,9 @@ type ListAuditObservabilityEventsParams struct {
 
 	// ClientIp 按客户端 IP 前缀筛选。
 	ClientIp *AuditClientIpParam `form:"clientIp,omitempty" json:"clientIp,omitempty"`
+
+	// IncludeReplication 是否包含 replication 同步记录（默认 false：只列审计事件——同步记录 30 天可达百万级，默认折叠）
+	IncludeReplication *AuditIncludeReplicationParam `form:"includeReplication,omitempty" json:"includeReplication,omitempty"`
 
 	// AuthSource 按认证方式筛选（如 jwt、api_key、web）。
 	AuthSource *AuditAuthSourceParam `form:"authSource,omitempty" json:"authSource,omitempty"`
@@ -4711,6 +4717,14 @@ func (siw *ServerInterfaceWrapper) ListAuditObservabilityEvents(c *gin.Context) 
 	err = runtime.BindQueryParameterWithOptions("form", true, false, "clientIp", c.Request.URL.Query(), &params.ClientIp, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
 	if err != nil {
 		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter clientIp: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "includeReplication" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "includeReplication", c.Request.URL.Query(), &params.IncludeReplication, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter includeReplication: %w", err), http.StatusBadRequest)
 		return
 	}
 

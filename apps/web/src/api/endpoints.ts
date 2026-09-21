@@ -900,7 +900,13 @@ export function getAuditSummary(
 
 /** 按服务端快照分页读取安全审计事件，客户端不得解析 snapshot 或 cursor。 */
 export function listAuditEvents(
-  query: AuditObservabilityQuery & { snapshot?: string; cursor?: string; limit?: number } = {},
+  query: AuditObservabilityQuery & {
+    snapshot?: string;
+    cursor?: string;
+    limit?: number;
+    /** 是否包含 replication 同步记录（默认 false：只列审计事件）。 */
+    includeReplication?: boolean;
+  } = {},
 ): Promise<AuditEventPage> {
   return request<AuditEventPage>(auditObservabilityPath("/observability/audit/events", query));
 }

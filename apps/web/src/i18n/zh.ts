@@ -769,6 +769,7 @@ export const zh = {
     loadedCount: "已加载 {{count}} 条",
     rangeFrom: "起始日期",
     rangeTo: "结束日期",
+    includeReplication: "含同步记录",
     kpiBandLabel: "审计指标",
     kpiSuccessRate: "成功率",
     kpiSuccessRateHint: "成功 / (成功 + 失败)",

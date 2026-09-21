@@ -128,6 +128,7 @@ paths:
         - $ref: "#/components/parameters/AuditActionParam"
         - $ref: "#/components/parameters/AuditActorEmailParam"
         - $ref: "#/components/parameters/AuditClientIpParam"
+        - $ref: "#/components/parameters/AuditIncludeReplicationParam"
         - $ref: "#/components/parameters/AuditAuthSourceParam"
         - $ref: "#/components/parameters/AuditOffsetParam"
         - $ref: "#/components/parameters/AuditSnapshotParam"
@@ -1794,6 +1795,13 @@ components:
         type: string
         minLength: 1
         maxLength: 256
+    AuditIncludeReplicationParam:
+      name: includeReplication
+      in: query
+      required: false
+      description: 是否包含 replication 同步记录（默认 false：只列审计事件——同步记录 30 天可达百万级，默认折叠）
+      schema:
+        type: boolean
     AuditClientIpParam:
       name: clientIp
       in: query

@@ -15,6 +15,7 @@ import {
   SegmentedControl,
   Select,
   Card,
+  Checkbox,
   Table,
   Text,
   TextInput,
@@ -368,6 +369,14 @@ export function RecordsStream({ model, onInvestigate, onOpenAttention }: Records
               style={{ width: 134, padding: "3px 6px", fontSize: 12 }}
             />
           </Group>
+          {/* 默认折叠 replication 同步记录（30 天可达百万级）；勾选后纳入统一事件流。 */}
+          <Checkbox
+            size="xs"
+            checked={model.includeReplication}
+            onChange={(e) => model.setIncludeReplication(e.currentTarget.checked)}
+            label={t("auditWorkbench.includeReplication", { defaultValue: "含同步记录" })}
+            style={{ flexShrink: 0 }}
+          />
           {isNarrow ? null : advancedFilters}
           {/* 记录计数并入筛选工具条（原分区卡 meta 位置）；窄屏换行时独占行尾。 */}
           <Text size="xs" c="dimmed" ml="auto" style={{ flexShrink: 0 }}>

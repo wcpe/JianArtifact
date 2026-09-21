@@ -806,6 +806,7 @@ export const en = {
     loadedCount: "Loaded {{count}}",
     rangeFrom: "Start date",
     rangeTo: "End date",
+    includeReplication: "Include replication",
     kpiBandLabel: "Audit metrics",
     kpiSuccessRate: "Success rate",
     kpiSuccessRateHint: "Success / (success + failure)",
