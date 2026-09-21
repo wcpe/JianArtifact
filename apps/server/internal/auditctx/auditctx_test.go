@@ -1,6 +1,7 @@
 package auditctx
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -45,6 +46,15 @@ func TestSanitizeBody(t *testing.T) {
 	t.Run("非 JSON 原样保留（截断到上限）", func(t *testing.T) {
 		if got := SanitizeBody([]byte("  plain text body  ")); got != "plain text body" {
 			t.Fatalf("非 JSON 应保留原文，got=%q", got)
+		}
+	})
+
+	t.Run("非 UTF-8 请求体标注而非原样回显（GBK 客户端回归）", func(t *testing.T) {
+		// GBK 编码的「你好」= C4 E3 BA C3：JSON 解析必失败；此前回退会把损坏字节
+		// 原样入库，前端按 UTF-8 解码后成 U+FFFD 乱码（看起来像真实数据）。
+		got := SanitizeBody([]byte("{\"reason\":\"\xC4\xE3\xBA\xC3\"}"))
+		if !strings.Contains(got, "不是合法 UTF-8") {
+			t.Fatalf("非 UTF-8 请求体应返回明确标注，got=%q", got)
 		}
 	})
 

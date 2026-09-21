@@ -359,7 +359,11 @@ export function RecordsStream({ model, onInvestigate, onOpenAttention }: Records
         </Drawer>
       ) : null}
 
-      <Box data-testid="audit-records-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+      <Box
+        data-testid="audit-records-scroll"
+        className="ja-hide-scrollbar"
+        style={{ flex: 1, minHeight: 0, overflowY: "auto" }}
+      >
         {model.searchMode ? (
           <Text size="xs" c="dimmed" px="md" pt="xs">
             {t("auditWorkbench.searchModeHint", { query: model.search })}

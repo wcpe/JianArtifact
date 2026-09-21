@@ -87,11 +87,12 @@ describe("页眉打磨（FR-71）", () => {
   });
 
   it("窄屏页眉的搜索与刷新退化为纯图标，文字经提示可达", async () => {
-    // 强制窄屏：测试替身默认所有媒体查询都不命中（等价桌面），这里只让 max-width 查询命中。
+    // 强制窄屏：测试替身默认所有媒体查询都不命中（等价桌面），这里让页眉相关的
+    // max-width 查询（isMobile 48em 与 compactHeader 62em）都命中。
     vi.spyOn(window, "matchMedia").mockImplementation(
       (query: string) =>
         ({
-          matches: /max-width: 48em/.test(query),
+          matches: /max-width: (48|62)em/.test(query),
           media: query,
           onchange: null,
           addListener: () => {},

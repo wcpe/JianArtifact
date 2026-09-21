@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 )
@@ -131,6 +132,12 @@ func SanitizeBody(raw []byte) string {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 {
 		return ""
+	}
+	// 非 UTF-8（如 GBK 客户端）必须在这里拦下：Go 的 json.Unmarshal 对非法 UTF-8 是
+	// 宽容的（把坏字节静默替换为 U+FFFD 而不报错），放行会在前端呈现一片乱码、且
+	// 看起来像真实数据——明确标注而非伪装。
+	if !utf8.Valid(trimmed) {
+		return "（请求体不是合法 UTF-8，预览已省略——请检查客户端请求编码）"
 	}
 	var parsed any
 	if err := json.Unmarshal(trimmed, &parsed); err == nil {

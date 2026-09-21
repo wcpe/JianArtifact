@@ -252,6 +252,11 @@ export function AppLayout() {
   });
   // isMobile：是否处于移动端。
   const isMobile = useMediaQuery("(max-width: 48em)") ?? false;
+  // compactHeader：页眉右侧按钮带（刷新/语言/账户）是否退化为紧凑形态。
+  // 比 isMobile 宽一档（md=62em，992px）：768–992px 区间放不下「图标+文字」三件套，
+  // 会被父级裁剪（语言按钮与账户名各被切一半）——该区间改用图标+Tooltip。
+  // 只作用于页眉，避免连带改变导航与面包屑的移动端行为。
+  const compactHeader = useMediaQuery("(max-width: 62em)") ?? false;
   const toggleNav = () => setNavExpanded((value) => !value);
   const [version, setVersion] = useState<string | null>(null);
   // FR-55: 未登录时拉取公开仓库列表供侧边栏展示
@@ -539,7 +544,7 @@ export function AppLayout() {
           >
             {/* 窄屏：搜索 / 刷新 / 语言退化为纯图标（页眉放不下文字，硬塞会被裁成半个字），
                 文字经悬停或长按 Tooltip 可达；桌面仍按全站约定「图标 + 文字」。 */}
-            {isMobile ? (
+            {compactHeader ? (
               <>
                 <HeaderIconAction
                   label={t("common.search", { defaultValue: "搜索" })}

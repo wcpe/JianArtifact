@@ -7,6 +7,17 @@ html {
   scrollbar-gutter: stable;
 }
 
+/* 固定视口内的滚动容器（审计中心记录区等）：隐藏滚动条、保留滚动能力——
+ * 常驻滚动条会遮住内容（尤其窄屏），而滚轮/触控/键盘滚动不受影响。 */
+.ja-hide-scrollbar {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* 旧 Edge */
+}
+
+.ja-hide-scrollbar::-webkit-scrollbar {
+  display: none; /* WebKit/Chromium */
+}
+
 /* FR-71：页眉刷新按钮旋转指示。 */
 @keyframes ja-spin {
   from {
