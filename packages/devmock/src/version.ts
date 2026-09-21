@@ -4,8 +4,8 @@
 // 用于云构建产物命名（曾产出 `jianartifact-0.8.0-dev-<日期>-<平台>`）与部署脚本注入
 // `main.version`；由 store（`/api/v1/status`）、handlers（契约测试）与备份包元数据共同引用，
 // 避免版本号散落成三份各自过期的字面量。
-/** 当前开发版版本号（v0.8.1 开发线）。 */
-export const MOCK_APP_VERSION = "0.8.1-dev";
+/** 当前开发版版本号。 */
+export const MOCK_APP_VERSION = "0.9.0";
 
 /**
  * 当前数据库 schema 版本与迁移标识。

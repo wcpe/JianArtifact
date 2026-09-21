@@ -1,6 +1,6 @@
 # 架构设计：JianArtifact
 
-> 本文是当前代码的架构真源（HOW）。它区分已落地实现和发布状态：当前发布版本由根目录 `VERSION` 标记（`0.8.0`），当前开发窗口是 `0.8.1`（控制台布局口径收敛、观测页性能、移动端响应式、时区与 i18n 落地）。**实时复制通道已随 FR-138 整体退役**，当前形态是单实例独立部署 + 一致性备份包搬迁。
+> 本文是当前代码的架构真源（HOW）。它区分已落地实现和发布状态：当前发布版本为 `0.9.0`（控制台布局口径收敛、观测页性能、移动端响应式、时区统一、i18n 与目录页信息补全；真源是根目录 `VERSION`）。**实时复制通道已随 FR-138 整体退役**，当前形态是单实例独立部署 + 一致性备份包搬迁。
 
 ## 1. 定位与边界
 
@@ -51,7 +51,7 @@ config 为横切配置层；web 是 go:embed 的前端静态资源。
 
 技术栈固定为 Go、Gin、sqlx、纯 Go SQLite、React、TypeScript、Vite、Mantine 和 i18next；API 设计真源为 `api/openapi.yaml`。
 
-### 3.1 前端范式（0.8.1 收敛）
+### 3.1 前端范式（0.9.0 收敛）
 
 - **页面骨架**：固定视口高度由 `app/PageShell` 唯一提供（`100dvh − 页眉偏移 − 2×padding`），页面不再自造 `vh` / `dvh` / `max-width`；内容区宽度取 `theme/density.contentMaxWidth`。
 - **KPI 口径**：`components/ops/OpsKit` 的 `OpsKpiBand` 是唯一 KPI 组件（含 `variant="strip"` 紧凑横带与 `actions` 插槽），不在页面内自造指标卡。
