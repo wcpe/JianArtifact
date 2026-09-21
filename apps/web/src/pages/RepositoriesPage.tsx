@@ -126,9 +126,13 @@ const CONN_ICON: Record<ConnectionStatusValue, typeof IconCircleCheck> = {
  * 会静默失效、`color="amber"` 也解析不到——这正是此前置顶「没有高亮」的原因）。
  */
 const PINNED_ROW_STYLE = {
+  // Mantine 9 起 light 变体不再带透明度（M9 changelog：统一「去透明」以提升对比度），
+  // 直接铺满整行会明显刺眼——这正是升级后置顶行「太亮」的原因；用 color-mix 兑回
+  // 半透明，恢复升级前的柔和底色观感。hover 加深一档仍由变量覆写（同样兑回透明度）。
   backgroundImage:
-    "linear-gradient(var(--mantine-color-yellow-light), var(--mantine-color-yellow-light))",
-  "--table-highlight-on-hover-color": "var(--mantine-color-yellow-light-hover)",
+    "linear-gradient(color-mix(in srgb, var(--mantine-color-yellow-light) 45%, transparent), color-mix(in srgb, var(--mantine-color-yellow-light) 45%, transparent))",
+  "--table-highlight-on-hover-color":
+    "color-mix(in srgb, var(--mantine-color-yellow-light-hover) 70%, transparent)",
   boxShadow: "inset 3px 0 0 0 var(--mantine-color-yellow-6)",
 } as CSSProperties;
 
