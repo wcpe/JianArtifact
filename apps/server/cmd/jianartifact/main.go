@@ -263,6 +263,9 @@ func newApplicationHandler(cfg *config.Config, svc *appServices, assets fs.FS) h
 		httpserver.WithProtocolMetric(func(c *gin.Context) {
 			cacheResult, _ := c.Get("jianartifact.protocol.cache_result")
 			svc.dashboardSvc.RecordProtocol(domain.ProtocolMetric{CompletedAt: time.Now().UTC(), Method: c.Request.Method, Status: c.Writer.Status(), CacheResult: cacheResultString(cacheResult)})
+			// FR-142：制品下载计量（只认 GET+200 的完整传输；该钩子只服务制品协议请求，
+			// 路径解析与 UA 归类在服务内完成——原始 UA 串不落库）。
+			svc.assetDownloadSvc.RecordDownload(c.Request.Method, c.Writer.Status(), c.Request.URL.Path, c.ClientIP(), c.Request.UserAgent(), time.Now().UTC())
 		}),
 		httpserver.WithProtocolRoutes(func(r gin.IRouter) {
 			protocolMW := authenticator.Protocol().Optional()
@@ -382,6 +385,7 @@ func run() error {
 	}
 	// FR-53/120：分钟聚合与当前主机采样只由运行期定时任务驱动，启动不扫描历史数据。
 	svc.dashboardSvc.Start(ctx, time.Now)
+	svc.assetDownloadSvc.Start(ctx, time.Now)
 	svc.hostMonitoringSvc.Start(ctx, time.Now)
 	startBlobGCTask(ctx, cfg.BlobGCInterval, svc.assetSvc.CleanupUnreferencedBlobs)
 

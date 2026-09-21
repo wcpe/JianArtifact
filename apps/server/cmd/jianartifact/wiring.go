@@ -40,6 +40,7 @@ type appServices struct {
 	operationsMetrics   *repository.OperationsObservabilityRepo // FR-53/120：当前节点业务与主机读模型
 	operationsAlertRepo *repository.OperationsAlertRepo         // v0.8.0：运维告警去重持久化
 	dashboardSvc        *domain.OperationsDashboardService
+	assetDownloadSvc    *domain.AssetDownloadService
 	hostMonitoringSvc   *domain.HostMonitoringService
 	backupSvc           *domain.BackupService    // FR-132：节点备份包生成与登记
 	freeze              *domain.FreezeController // FR-135：全局共享的运行时写入冻结控制器
@@ -157,6 +158,7 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	operationsMetrics := repository.NewOperationsObservabilityRepo(db)
 	operationsAlertRepo := repository.NewOperationsAlertRepo(db)
 	dashboardSvc := domain.NewOperationsDashboardService(operationsMetrics)
+	assetDownloadSvc := domain.NewAssetDownloadService(repository.NewAssetDownloadRepo(db))
 	hostMonitoringSvc := domain.NewHostMonitoringService(operationsMetrics, domain.NewHostCollector(cfg.BlobDir, func() bool { return db.Ping() == nil }))
 
 	offlineIndexRepo := repository.NewOfflineIndexRepo(db)
@@ -214,6 +216,7 @@ func openServices(cfg *config.Config) (*appServices, error) {
 		operationsMetrics:   operationsMetrics,
 		operationsAlertRepo: operationsAlertRepo,
 		dashboardSvc:        dashboardSvc,
+		assetDownloadSvc:    assetDownloadSvc,
 		hostMonitoringSvc:   hostMonitoringSvc,
 		backupSvc:           domain.NewBackupService(db, repository.NewBackupPackageRepo(db), blobs, cfg.DataDir, cfg.DBPath, version, nodeIdentity.NodeID),
 		restoreSvc:          restoreSvc,
