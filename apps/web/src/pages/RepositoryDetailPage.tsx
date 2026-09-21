@@ -28,7 +28,6 @@ import { RepoBrowser } from "../components/repo/RepoBrowser";
 import { AsyncBoundary } from "../components/AsyncBoundary";
 import {
   getAcl,
-  getRepositoryUsage,
   listRepositories,
   listUsers,
   recheckConnection,
