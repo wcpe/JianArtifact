@@ -208,7 +208,10 @@ export function RepoBrowser({
   // FR-57: 仓库内搜索
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<AssetTreeNode[] | null>(null);
-  const [searchCount, setSearchCount] = useState(0);
+  // 分页累积的原始结果（供「加载更多」追加后重建树）与后端命中的总数
+  const [searchLoaded, setSearchLoaded] = useState<AssetSummary[]>([]);
+  const [searchTotal, setSearchTotal] = useState(0);
+  const [searchPage, setSearchPage] = useState(1);
   const [searching, setSearching] = useState(false);
 
   const usageState = useAsync(() => getRepositoryUsage(repoName), [repoName], {
@@ -296,11 +299,15 @@ export function RepoBrowser({
     setSelectionAnchor(null);
     if (!q) {
       setSearchResults(null);
+      setSearchLoaded([]);
+      setSearchTotal(0);
       return;
     }
     setTreeActionError(null);
     setSearching(true);
-    searchAssets({ q, repository: repoName, page_size: 200 })
+    // page_size 取后端上限（100）：此前传 200 会被后端静默丢弃、回落默认 20 条
+    // （表现为「仓库内搜索只能搜到前几个结果」）；超出部分由「加载更多」翻页补齐。
+    searchAssets({ q, repository: repoName, page: 1, page_size: 100 })
       .then((res) => {
         const assets: AssetSummary[] = res.items.map((item) => ({
           path: item.path,
@@ -309,8 +316,36 @@ export function RepoBrowser({
           contentType: "application/octet-stream",
           updatedAt: item.updatedAt,
         }));
-        setSearchCount(assets.length);
+        setSearchLoaded(assets);
+        setSearchTotal(res.total);
+        setSearchPage(1);
         setSearchResults(buildAssetTree(assets));
+      })
+      .catch((error: unknown) => {
+        setTreeActionError(error instanceof Error ? error.message : t("common.error"));
+      })
+      .finally(() => setSearching(false));
+  };
+
+  // 「加载更多」：命中数超过单页上限（100）时逐页追加，直至翻完 searchTotal。
+  const handleLoadMoreSearch = () => {
+    const q = searchQuery.trim();
+    if (!q) return;
+    setTreeActionError(null);
+    setSearching(true);
+    searchAssets({ q, repository: repoName, page: searchPage + 1, page_size: 100 })
+      .then((res) => {
+        const added: AssetSummary[] = res.items.map((item) => ({
+          path: item.path,
+          size: item.size,
+          hash: item.hash,
+          contentType: "application/octet-stream",
+          updatedAt: item.updatedAt,
+        }));
+        const merged = [...searchLoaded, ...added];
+        setSearchLoaded(merged);
+        setSearchPage((page) => page + 1);
+        setSearchResults(buildAssetTree(merged));
       })
       .catch((error: unknown) => {
         setTreeActionError(error instanceof Error ? error.message : t("common.error"));
@@ -321,7 +356,8 @@ export function RepoBrowser({
   const clearSearch = () => {
     setSearchQuery("");
     setSearchResults(null);
-    setSearchCount(0);
+    setSearchLoaded([]);
+    setSearchTotal(0);
     setTreeActionError(null);
     setSelectedPaths(new Set());
     setSelectionAnchor(null);
@@ -651,12 +687,30 @@ export function RepoBrowser({
                 </Group>
               )}
               {searchResults !== null && (
-                <Text size="xs" c="dimmed" mb="xs">
-                  {t("repoDetail.searchResultCount", {
-                    count: searchCount,
-                    defaultValue: `找到 ${searchCount} 条结果`,
-                  })}
-                </Text>
+                <Group justify="space-between" align="center" gap="xs" mb="xs" wrap="nowrap">
+                  <Text size="xs" c="dimmed" truncate>
+                    {searchLoaded.length < searchTotal
+                      ? t("repoDetail.searchPartial", {
+                          shown: searchLoaded.length,
+                          total: searchTotal,
+                          defaultValue: `已显示 ${searchLoaded.length} / 共 ${searchTotal} 条结果`,
+                        })
+                      : t("repoDetail.searchResultCount", {
+                          count: searchLoaded.length,
+                          defaultValue: `找到 ${searchLoaded.length} 条结果`,
+                        })}
+                  </Text>
+                  {searchLoaded.length < searchTotal ? (
+                    <Button
+                      size="compact-xs"
+                      variant="light"
+                      loading={searching}
+                      onClick={handleLoadMoreSearch}
+                    >
+                      {t("repoDetail.searchLoadMore", { defaultValue: "加载更多" })}
+                    </Button>
+                  ) : null}
+                </Group>
               )}
               {treeActionError && (
                 <Alert color="red" py="xs" mb="xs">

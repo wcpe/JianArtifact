@@ -519,17 +519,12 @@ func (h *Handlers) SearchAssets(c *gin.Context) {
 		return
 	}
 	page := 1
-	pageSize := 20
 	if v := c.Query("page"); v != "" {
 		if n, err := parseIntQuery(v); err == nil && n > 0 {
 			page = n
 		}
 	}
-	if v := c.Query("page_size"); v != "" {
-		if n, err := parseIntQuery(v); err == nil && n > 0 && n <= 100 {
-			pageSize = n
-		}
-	}
+	pageSize := parseSearchPageSize(c.Query("page_size"))
 	limit := pageSize
 	offset := (page - 1) * pageSize
 
@@ -611,6 +606,28 @@ func (h *Handlers) SearchAssets(c *gin.Context) {
 }
 
 // parseIntQuery 尝试将字符串解析为 int。
+// 搜索分页参数口径：非法/非正数回落默认；**超上限夹取到上限**。
+// 关键回归（仓库内搜索「只搜到前几个结果」的根因）：此前实现为「n <= 100 才采纳，
+// 否则整个忽略」——请求 200 条会被静默丢弃、回落默认 20 条，调用方与用户都无任何信号。
+const (
+	searchPageSizeDefault = 20
+	searchPageSizeMax     = 100
+)
+
+func parseSearchPageSize(raw string) int {
+	if raw == "" {
+		return searchPageSizeDefault
+	}
+	n, err := parseIntQuery(raw)
+	if err != nil || n <= 0 {
+		return searchPageSizeDefault
+	}
+	if n > searchPageSizeMax {
+		return searchPageSizeMax
+	}
+	return n
+}
+
 func parseIntQuery(s string) (int, error) {
 	var n int
 	_, err := fmt.Sscanf(s, "%d", &n)

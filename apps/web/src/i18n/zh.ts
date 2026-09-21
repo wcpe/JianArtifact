@@ -518,6 +518,8 @@ export const zh = {
   repoDetail: {
     // 以下键此前缺失（t 未命中时静默回退 defaultValue），补录以保持 i18n 完整。
     searchResultCount: "找到 {{count}} 条结果",
+    searchPartial: "已显示 {{shown}} / 共 {{total}} 条结果",
+    searchLoadMore: "加载更多",
     configOnlineHint: "离线后 group 读将跳过该仓库；本状态不随复制传播",
     configMembers: "成员仓库",
     configMembersHint: "选择聚合进本 group 的仓库",

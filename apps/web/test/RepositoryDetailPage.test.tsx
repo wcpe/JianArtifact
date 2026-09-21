@@ -262,4 +262,43 @@ describe("仓库详情", () => {
       window.matchMedia = originalMatchMedia;
     }
   });
+
+  it("仓库内搜索超单页时显示加载进度并支持「加载更多」翻页（搜索截断回归）", async () => {
+    const user = userEvent.setup();
+    // 以小数据复现分页链路：命中 2 条、单页返回 1 条。
+    // 回归点：此前前端传 page_size=200 被后端静默回落 20 条且无翻页入口，
+    // 用户永远只能看到前几条；现应可见「已显示 x / 共 y」并提供「加载更多」。
+    server.use(
+      http.get("*/api/v1/search", ({ request }) => {
+        const page = Number(new URL(request.url).searchParams.get("page") ?? "1");
+        const item = (path: string) => ({
+          repository: "maven-releases",
+          path,
+          size: 128,
+          hash: "0".repeat(64),
+          updatedAt: "2026-01-01T00:00:00Z",
+        });
+        return HttpResponse.json({
+          items: page === 1 ? [item("com/first.jar")] : [item("com/second.jar")],
+          total: 2,
+          facets: {},
+        });
+      }),
+    );
+    renderDetail("maven-releases", true);
+
+    const box = await screen.findByPlaceholderText(/搜索制品/);
+    await user.type(box, "jar");
+    await user.keyboard("{Enter}");
+
+    // 首页：提示已显示 1 / 共 2 条，并提供「加载更多」按钮
+    expect(await screen.findByText("已显示 1 / 共 2 条结果")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "加载更多" }));
+
+    // 翻页后：追加到 2/2、按钮消失、第二页结果进入树
+    expect(await screen.findByText("找到 2 条结果")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "加载更多" })).toBeNull();
+    expect(screen.getByText("second.jar")).toBeTruthy();
+  });
 });

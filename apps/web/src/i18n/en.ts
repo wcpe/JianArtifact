@@ -542,6 +542,8 @@ export const en = {
   repoDetail: {
     // 以下键此前缺失（t 未命中时静默回退 defaultValue），补录以保持 i18n 完整。
     searchResultCount: "Found {{count}} results",
+    searchPartial: "Showing {{shown}} of {{total}} results",
+    searchLoadMore: "Load more",
     configOnlineHint:
       "When offline, group reads skip this repository; this state is not propagated by replication",
     configMembers: "Member Repositories",
