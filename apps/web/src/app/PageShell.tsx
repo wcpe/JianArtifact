@@ -55,7 +55,11 @@ export function PageShell({
       data-testid={testId}
       style={{
         height: PAGE_VIEWPORT_HEIGHT,
-        minHeight,
+        // 下限 480px，但**不得高于可视高度**：矮视口（开着 DevTools / 小窗 / 分屏）下
+        // 可用高度不足 480 时，min-height 会把外壳撑出视口，出现「外壳滚 + 内部区滚」
+        // 的双重滚动；用 CSS min() 取「480 下限」与「可视高度」的较小者——
+        // 视口足够时仍是 480 的原有兜底（长工具行换行不把主体压扁），矮视口则不再溢出。
+        minHeight: `min(${minHeight}px, ${PAGE_VIEWPORT_HEIGHT})`,
         display: "flex",
         flexDirection: "column",
         gap,
