@@ -534,13 +534,15 @@ export function AppLayout() {
               style={{ maxWidth: 320, flex: 1 }}
             />
           </Group>
-          {/* flexShrink: 0：页眉右侧按钮带文字后不该被压缩截断，让面包屑去占剩余空间
-              （面包屑已按窄屏 slice(-2) 收敛）。 */}
+          {/* flex: 0 0 auto：右侧按钮带按内容取宽（flex-basis: auto），既不参与 grow 平分
+              剩余空间，也不被压缩。历史上的 `flex: 1` + flexShrink:0 会因 flex-basis: 0%
+              把宽度锁成容器 1/4，内容（刷新/语言/账户）超出即被硬裁（clip，无省略号）。
+              剩余空间由面包屑与搜索按 1:2 分配（面包屑已按窄屏 slice(-2) 收敛）。 */}
           <Group
             gap="xs"
             wrap="nowrap"
             justify="flex-end"
-            style={{ flex: 1, minWidth: 0, flexShrink: 0 }}
+            style={{ flex: "0 0 auto", minWidth: 0 }}
           >
             {/* 窄屏：搜索 / 刷新 / 语言退化为纯图标（页眉放不下文字，硬塞会被裁成半个字），
                 文字经悬停或长按 Tooltip 可达；桌面仍按全站约定「图标 + 文字」。 */}
