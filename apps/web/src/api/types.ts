@@ -118,3 +118,6 @@ export interface AssetOperationResponse {
   operationId: string;
   affected: number;
 }
+
+// 制品下载计量与分析（FR-142~144）
+export type DownloadClientRanking = Schemas["DownloadClientRanking"];

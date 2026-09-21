@@ -1188,6 +1188,16 @@ export const handlers = [
         cacheHitRate: (78 + jitter(6, 5)) / 84,
       },
       requestTrend: trendBuckets,
+      // FR-143：下载累计趋势（与 requestTrend 同桶口径；预览数据取请求趋势的下载分量做基线，
+      // 保证「下载 ≤ 请求」的直觉关系，且刷新时随快照序号抖动）。
+      downloadTrend: trendBuckets.map((bucket, index) => ({
+        from: bucket.from,
+        to: bucket.to,
+        downloadCount: Math.max(
+          0,
+          Math.round(bucket.downloadCount * (0.6 + jitter(index + 40, 3) / 20)),
+        ),
+      })),
       capacityTrend: capacityTrendBuckets,
       alerts: [
         {
@@ -1230,6 +1240,26 @@ export const handlers = [
           firstObservedAt: blockedAt(132),
           blockedUntil,
         },
+      ],
+    });
+  }),
+
+  http.get("*/api/v1/observability/downloads/by-client", () => {
+    // FR-144：来源聚合（独立来源口径）。预览数据给固定来源集 + 快照抖动，
+    // 便于验证 Top 排名与族分布渲染；真实口径以服务端为准。
+    return HttpResponse.json({
+      topIps: [
+        { ip: "10.0.0.12", count: 46 + jitter(70, 8) },
+        { ip: "10.0.0.31", count: 28 + jitter(71, 6) },
+        { ip: "10.0.0.7", count: 19 + jitter(72, 5) },
+        { ip: "10.0.1.5", count: 9 + jitter(73, 3) },
+      ],
+      families: [
+        { family: "maven", count: 62 + jitter(74, 9) },
+        { family: "gradle", count: 24 + jitter(75, 5) },
+        { family: "curl", count: 11 + jitter(76, 3) },
+        { family: "npm", count: 6 + jitter(77, 2) },
+        { family: "browser", count: 3 + jitter(78, 1) },
       ],
     });
   }),

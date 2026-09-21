@@ -10,6 +10,7 @@ import {
   Grid,
   Group,
   Menu,
+  Box,
   SimpleGrid,
   Skeleton,
   Stack,
@@ -39,6 +40,7 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
 import {
+  getDownloadByClient,
   getOperationsDashboard,
   getStatus,
   listAllRepositories,
@@ -48,6 +50,7 @@ import {
 import type {
   AuditAttention,
   AuditEvent,
+  DownloadClientRanking,
   OperationsAlert,
   OperationsDashboard,
   Repository,
@@ -118,9 +121,16 @@ export function DashboardLive() {
   const repos = useAsync(() => listAllRepositories(), [], {
     cacheKey: "dashboard:repos",
   });
+  // FR-144：来源聚合（独立来源口径）；本页即管理员页，IP 明文不出管理端。
+  const downloadClients = useAsync(
+    () => getDownloadByClient({ from: range.from, to: range.to }),
+    [range.from, range.to],
+    { cacheKey: `dashboard:download-clients:${range.from}:${range.to}` },
+  );
 
   // 任一子请求在途即视为"忙"：慢接口下用它挡住轮询与手动刷新，避免请求在挂起期间累积。
-  const busy = dashboard.refreshing || status.refreshing || recent.refreshing;
+  const busy =
+    dashboard.refreshing || status.refreshing || recent.refreshing || downloadClients.refreshing;
   const busyRef = useRef(busy);
   busyRef.current = busy;
 
@@ -131,7 +141,15 @@ export function DashboardLive() {
     attentions.reload();
     recent.reload();
     repos.reload();
-  }, [dashboard.reload, status.reload, attentions.reload, recent.reload, repos.reload]);
+    downloadClients.reload();
+  }, [
+    dashboard.reload,
+    status.reload,
+    attentions.reload,
+    recent.reload,
+    repos.reload,
+    downloadClients.reload,
+  ]);
   useVisibleRefresh(reloadAll);
 
   useEffect(() => {
@@ -151,6 +169,11 @@ export function DashboardLive() {
     : null;
   const capacityTrend: TrendSeries | null = dashboard.data
     ? points(dashboard.data.capacityTrend, "logicalBytes")
+    : null;
+  // FR-143：下载累计趋势（原始口径，与 KPI 同一采集点）。
+  // 兼容性：线上后端可能尚未升级到含 downloadTrend 的版本，缺失时退化为空序列（不崩）。
+  const downloadTrend: TrendSeries | null = dashboard.data
+    ? points(dashboard.data.downloadTrend ?? [], "downloadCount")
     : null;
 
   const alertList = (dashboard.data?.alerts ?? []) as OperationsAlert[];
@@ -203,6 +226,8 @@ export function DashboardLive() {
           recentLoading={recent.loading}
           repos={repos.data?.items ?? []}
           reposLoading={repos.loading}
+          downloadTrend={downloadTrend}
+          downloadClients={downloadClients.data ?? null}
           onOpenAttention={(attentionId) =>
             navigate(
               attentionId
@@ -346,6 +371,8 @@ function DashboardGrid({
   data,
   requestTrend,
   capacityTrend,
+  downloadTrend,
+  downloadClients,
   otherAlerts,
   attentions,
   attentionsLoading,
@@ -363,6 +390,8 @@ function DashboardGrid({
     failure: TrendSeries;
   } | null;
   capacityTrend: TrendSeries | null;
+  downloadTrend: TrendSeries | null;
+  downloadClients: DownloadClientRanking | null;
   otherAlerts: OperationsAlert[];
   attentions: AuditAttention[];
   attentionsLoading: boolean;
@@ -409,6 +438,71 @@ function DashboardGrid({
                   ) : null
                 }
               />
+            </Card>
+            {/* FR-143/144：下载分析——累计趋势（原始口径）+ 来源聚合（独立来源口径）。 */}
+            <Card withBorder radius="md" padding={density.cardPadding}>
+              <TrendChart
+                title={t("dashboard.trendDownloads")}
+                summary={t("dashboard.trendDownloadsSummary")}
+                primary={downloadTrend ?? []}
+                primaryLabel={t("dashboard.trendDownloadsPrimary")}
+                headerRight={
+                  downloadTrend?.length ? (
+                    <Group gap={6} wrap="nowrap">
+                      <IconDownload size={20} color="var(--mantine-color-grape-6)" />
+                      <Text size="xl" fw={700} lh={1.1}>
+                        {formatCount(downloadTrend[downloadTrend.length - 1]?.value ?? 0)}
+                      </Text>
+                    </Group>
+                  ) : null
+                }
+              />
+              <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm" mt="sm">
+                <Box>
+                  <Text size="xs" fw={600} c="dimmed" mb={4}>
+                    {t("dashboard.downloadTopIps")}
+                  </Text>
+                  {downloadClients?.topIps?.length ? (
+                    <Stack gap={2}>
+                      {downloadClients.topIps.map((item) => (
+                        <Group key={item.ip} justify="space-between" gap="xs" wrap="nowrap">
+                          <Text size="xs" ff="monospace" truncate>
+                            {item.ip}
+                          </Text>
+                          <Text size="xs" c="dimmed">
+                            {formatCount(item.count)}
+                          </Text>
+                        </Group>
+                      ))}
+                    </Stack>
+                  ) : (
+                    <Text size="xs" c="dimmed">
+                      {t("dashboard.downloadNoSamples")}
+                    </Text>
+                  )}
+                </Box>
+                <Box>
+                  <Text size="xs" fw={600} c="dimmed" mb={4}>
+                    {t("dashboard.downloadFamilies")}
+                  </Text>
+                  {downloadClients?.families?.length ? (
+                    <Stack gap={2}>
+                      {downloadClients.families.map((item) => (
+                        <Group key={item.family} justify="space-between" gap="xs" wrap="nowrap">
+                          <Text size="xs">{item.family}</Text>
+                          <Text size="xs" c="dimmed">
+                            {formatCount(item.count)}
+                          </Text>
+                        </Group>
+                      ))}
+                    </Stack>
+                  ) : (
+                    <Text size="xs" c="dimmed">
+                      {t("dashboard.downloadNoSamples")}
+                    </Text>
+                  )}
+                </Box>
+              </SimpleGrid>
             </Card>
             <Card withBorder radius="md" padding={density.cardPadding}>
               <TrendChart

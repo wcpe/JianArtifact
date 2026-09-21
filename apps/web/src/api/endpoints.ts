@@ -39,6 +39,7 @@ import type {
   LoginResponse,
   MigrationConflictPolicy,
   OperationsDashboard,
+  DownloadClientRanking,
   MigrationDiscoverResponse,
   MigrationSourceAuth,
   MigrationPlan,
@@ -82,6 +83,15 @@ export function getOperationsDashboard(
 ): Promise<OperationsDashboard> {
   return request<OperationsDashboard>(
     operationsObservabilityPath("/observability/dashboard", query),
+  );
+}
+
+/** 下载来源聚合（FR-144；仅管理员；独立来源口径，IP 明文与 UA 归类可见）。 */
+export function getDownloadByClient(
+  query: OperationsObservabilityQuery = {},
+): Promise<DownloadClientRanking> {
+  return request<DownloadClientRanking>(
+    operationsObservabilityPath("/observability/downloads/by-client", query),
   );
 }
 

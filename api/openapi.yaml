@@ -2439,7 +2439,18 @@ components:
             $ref: "#/components/schemas/DownloadFamilyCount"
     OperationsDashboard:
       type: object
-      required: [from, to, effectiveBucket, current, kpi, requestTrend, downloadTrend, capacityTrend, alerts]
+      required:
+        [
+          from,
+          to,
+          effectiveBucket,
+          current,
+          kpi,
+          requestTrend,
+          downloadTrend,
+          capacityTrend,
+          alerts,
+        ]
       properties:
         from:
           type: string

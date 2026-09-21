@@ -230,6 +230,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/observability/downloads/by-client": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 制品下载来源聚合（仅管理员）
+         * @description 按来源 IP（Top 10，明文仅管理员）与客户端类型（UA 归类，不暴露原始 UA 串）聚合。
+         *     去重口径固定为「同 IP + 同制品 1 小时窗口只计一次贡献」（独立来源视角）；
+         *     原始累计口径见仪表盘 downloadTrend。
+         */
+        get: operations["getDownloadByClient"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/observability/dashboard": {
         parameters: {
             query?: never;
@@ -1273,6 +1295,28 @@ export interface components {
             /** Format: date-time */
             blockedUntil?: string;
         };
+        DownloadTrendPoint: {
+            /** Format: date-time */
+            from: string;
+            /** Format: date-time */
+            to: string;
+            /** Format: int64 */
+            downloadCount: number;
+        };
+        DownloadIpCount: {
+            ip: string;
+            /** Format: int64 */
+            count: number;
+        };
+        DownloadFamilyCount: {
+            family: string;
+            /** Format: int64 */
+            count: number;
+        };
+        DownloadClientRanking: {
+            topIps: components["schemas"]["DownloadIpCount"][];
+            families: components["schemas"]["DownloadFamilyCount"][];
+        };
         OperationsDashboard: {
             /** Format: date-time */
             from: string;
@@ -1282,6 +1326,7 @@ export interface components {
             current: components["schemas"]["CapacityPoint"];
             kpi: components["schemas"]["OperationsDashboardKpi"];
             requestTrend: components["schemas"]["ProtocolMetricPoint"][];
+            downloadTrend: components["schemas"]["DownloadTrendPoint"][];
             capacityTrend: components["schemas"]["CapacityPoint"][];
             alerts: components["schemas"]["OperationsAlert"][];
         };
@@ -2853,6 +2898,34 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AuditAttentionNotificationList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    getDownloadByClient: {
+        parameters: {
+            query?: {
+                /** @description UTC 时间范围下界（含）。与 to 同时提供或同时省略；省略时为最近 24 小时。 */
+                from?: components["parameters"]["ObservabilityFromParam"];
+                /** @description UTC 时间范围上界（不含），最长 30 天。 */
+                to?: components["parameters"]["ObservabilityToParam"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 下载来源聚合 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DownloadClientRanking"];
                 };
             };
             400: components["responses"]["BadRequest"];

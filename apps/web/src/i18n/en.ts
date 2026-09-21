@@ -215,6 +215,13 @@ export const en = {
     trendRequestsSummary: "How request volume changes over time",
     trendCapacity: "Capacity Growth Trend",
     trendCapacitySummary: "Logical size of current asset records, excluding deduplicated blob size",
+    trendDownloads: "Download Trend",
+    trendDownloadsSummary:
+      "Counts complete downloads (GET 200); Range segments excluded; same collection point as KPIs",
+    trendDownloadsPrimary: "Downloads",
+    downloadTopIps: "Top 10 source IPs · unique-source dedupe",
+    downloadFamilies: "Client families (UA grouped)",
+    downloadNoSamples: "No download samples",
     // —— v0.8.0 仪表盘分区与选择器 ——
     tabAttention: "Needs Attention",
     tabQuickActions: "Quick Actions",

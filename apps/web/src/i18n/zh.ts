@@ -204,6 +204,12 @@ export const zh = {
     trendRequestsSummary: "请求量随时间的变化",
     trendCapacity: "容量增长趋势",
     trendCapacitySummary: "当前 asset 记录的逻辑体积，不混入 blob 去重体积",
+    trendDownloads: "下载趋势",
+    trendDownloadsSummary: "按完整下载（GET 200）计；Range 分段不计，与 KPI 同一采集点",
+    trendDownloadsPrimary: "下载",
+    downloadTopIps: "来源 IP Top 10 · 独立来源口径",
+    downloadFamilies: "客户端分布（UA 归类）",
+    downloadNoSamples: "暂无下载样本",
     // —— v0.8.0 仪表盘分区与选择器 ——
     tabAttention: "需要处理",
     tabQuickActions: "快速操作",
