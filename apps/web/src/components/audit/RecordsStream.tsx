@@ -284,15 +284,6 @@ export function RecordsStream({ model, onInvestigate, onOpenAttention }: Records
   return (
     <OpsSection
       title={t("auditWorkbench.recordsTitle")}
-      actions={
-        <SegmentedControl
-          size="xs"
-          aria-label={t("auditWorkbench.rangeLabel")}
-          data={RANGE_OPTIONS}
-          value={model.range}
-          onChange={(value) => model.setRange(value as AuditRange)}
-        />
-      }
       bodyPadding={0}
       style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
       bodyStyle={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
@@ -339,6 +330,14 @@ export function RecordsStream({ model, onInvestigate, onOpenAttention }: Records
                 : t("auditWorkbench.filtersMore", { defaultValue: "更多筛选" })}
             </Button>
           ) : null}
+          {/* 时间范围切换：自分区卡标题行移入筛选条（与计数一起构成统一的筛选区域）。 */}
+          <SegmentedControl
+            size="xs"
+            aria-label={t("auditWorkbench.rangeLabel")}
+            data={RANGE_OPTIONS}
+            value={model.range}
+            onChange={(value) => model.setRange(value as AuditRange)}
+          />
           {isNarrow ? null : advancedFilters}
           {/* 记录计数并入筛选工具条（原分区卡 meta 位置）；窄屏换行时独占行尾。 */}
           <Text size="xs" c="dimmed" ml="auto" style={{ flexShrink: 0 }}>
@@ -365,7 +364,15 @@ export function RecordsStream({ model, onInvestigate, onOpenAttention }: Records
       <Box
         data-testid="audit-records-scroll"
         className="ja-hide-scrollbar"
-        style={{ flex: 1, minHeight: 0, overflowY: "auto" }}
+        style={{
+          flex: 1,
+          minHeight: 0,
+          overflowY: "auto",
+          // 左右留白且不出现横向滚动（用户诉求）：横向溢出直接隐藏，
+          // 列宽由 Table 的 fixed 布局与 Th 宽度约束。
+          overflowX: "hidden",
+          paddingInline: "var(--mantine-spacing-md)",
+        }}
       >
         {model.searchMode ? (
           <Text size="xs" c="dimmed" px="md" pt="xs">
