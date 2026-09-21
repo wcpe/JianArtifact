@@ -243,7 +243,8 @@ describe("业务仪表盘（真实读模型）", () => {
       { route: "/dashboard", authenticated: true },
     );
 
-    const attentionButtons = await screen.findAllByRole("button", { name: "auth.login_rejected" });
+    // 面板经 actionLabel 渲染译文（修复「裸 action 键」后不再是原始 action 串）。
+    const attentionButtons = await screen.findAllByRole("button", { name: "管理登录被拒绝" });
     await user.click(attentionButtons[0]!);
     expect(screen.getByTestId("location-probe").textContent).toBe(
       "/audit-logs?attentionId=attention-security-login",
@@ -298,7 +299,7 @@ describe("业务仪表盘（真实读模型）", () => {
     const heading = await screen.findByText("需要处理");
     const panel = heading.closest(".mantine-Card-root");
     expect(panel).not.toBeNull();
-    expect(within(panel as HTMLElement).getByRole("button", { name: "asset.delete" })).toBeTruthy();
+    expect(within(panel as HTMLElement).getByRole("button", { name: "删除制品" })).toBeTruthy();
     expect(within(panel as HTMLElement).queryByRole("button", { name: "repo.delete" })).toBeNull();
   });
 });

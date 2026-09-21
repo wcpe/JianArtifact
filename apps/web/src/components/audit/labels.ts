@@ -150,6 +150,24 @@ export const ACTION_LABEL_KEYS: Record<string, string> = {
   "user.create": "auditAction.userCreate",
   "user.update": "auditAction.userUpdate",
   "user.delete": "auditAction.userDelete",
+  // 0.9.0 后新增/补齐的动作（此前未映射会原样显示裸 action 串）。
+  "management.write_rejected": "auditAction.managementWriteRejected",
+  "repo.recheck": "auditAction.repoRecheck",
+  "repo.online": "auditAction.repoOnline",
+  "asset.move": "auditAction.assetMove",
+  "asset.rename": "auditAction.assetRename",
+  "acl.set": "auditAction.aclSet",
+  "audit.attention_acknowledge": "auditAction.attentionAcknowledge",
+  "user.password": "auditAction.userPassword",
+  "token.revoke": "auditAction.tokenRevoke",
+  "settings.update": "auditAction.settingsUpdate",
+  "migration.start": "auditAction.migrationStart",
+  "migration.complete": "auditAction.migrationComplete",
+  "migration.switch": "auditAction.migrationSwitch",
+  "migration.result": "auditAction.migrationResult",
+  "migration.credential_ref": "auditAction.migrationCredentialRef",
+  "repository.create": "auditAction.repoCreate",
+  "repository.delete": "auditAction.repoDelete",
 };
 
 export function actionLabel(action: unknown, t: (key: string) => string): string {

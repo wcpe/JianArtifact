@@ -57,6 +57,7 @@ import type {
   StatusInfo,
 } from "../../api/types";
 import { currentLocaleTag } from "../../i18n/current";
+import { actionLabel } from "../audit/labels";
 import { useAsync, useVisibleRefresh } from "../../hooks/useAsync";
 import { formatBytes, formatCount, formatStamp } from "../../lib/format";
 import { UPSTREAM_BLOCKED_CODE } from "../../lib/connectionStatus";
@@ -655,7 +656,7 @@ function AttentionPanel({
               <UnstyledButton
                 key={attention.attentionId}
                 onClick={() => onOpen(attention.attentionId)}
-                aria-label={attention.action}
+                aria-label={actionLabel(attention.action, t)}
                 style={{
                   display: "block",
                   padding: "8px 10px",
@@ -675,7 +676,7 @@ function AttentionPanel({
                         <IconAlertTriangle size={13} />
                       </ThemeIcon>
                       <Text size="sm" fw={600} truncate style={{ minWidth: 0 }}>
-                        {attention.action}
+                        {actionLabel(attention.action, t)}
                       </Text>
                     </Group>
                     <Badge color={severityColor(attention.severity)} variant="light" size="sm">
@@ -781,7 +782,7 @@ function RecentActivity({
             <UnstyledButton
               key={event.eventId}
               onClick={onOpen}
-              aria-label={event.action}
+              aria-label={actionLabel(event.action, t)}
               style={{
                 display: "block",
                 padding: "8px 10px",
@@ -801,7 +802,7 @@ function RecentActivity({
                       <IconClock size={13} />
                     </ThemeIcon>
                     <Text size="sm" fw={500} truncate style={{ minWidth: 0 }}>
-                      {event.action}
+                      {actionLabel(event.action, t)}
                     </Text>
                   </Group>
                   <Badge color={resultColor(event.result)} variant="light" size="sm">
