@@ -25,6 +25,8 @@ describe("审计工作台（单列表 + 顶部 KPI）", () => {
 
     const recordsScroll = screen.getByTestId("audit-records-scroll");
     expect(recordsScroll.style.overflowY).toBe("auto");
+    // 滚动条隐藏类：常驻滚动条会遮挡内容（用户反馈），该类隐藏滚动条并保留滚动能力。
+    expect(recordsScroll.className).toContain("ja-hide-scrollbar");
     // 右栏已移除：待处理风险改为筛选维度。
     expect(screen.queryByTestId("audit-risk-sidebar")).toBeNull();
   });
