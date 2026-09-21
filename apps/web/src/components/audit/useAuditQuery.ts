@@ -27,7 +27,7 @@ export const AUDIT_PAGE_SIZES = ["20", "50", "100"];
 
 // 1h 档是"聚合范围过大"时的兜底选择：事件量按量级增长，24h 窗口在活跃节点上
 // 也可能触到后端聚合上限（返回 audit_query_too_large），此时一键切到最小窗口仍能看数据。
-export type AuditRange = "1h" | "3d" | "7d" | "30d";
+export type AuditRange = "1h" | "3d" | "7d" | "30d" | "custom";
 /** 风险状态筛选：待处理（未确认）/ 已确认。 */
 export type AuditAttentionFilter = "pending" | "acknowledged";
 
@@ -51,6 +51,8 @@ export interface AuditFilters {
 const RANGE_MS: Record<AuditRange, number> = {
   "1h": 60 * 60_000,
   "3d": 3 * 24 * 60 * 60_000,
+  // custom 走 customFrom/customTo，不参与窗口换算。
+  custom: 0,
   "7d": 7 * 24 * 60 * 60_000,
   "30d": 30 * 24 * 60 * 60_000,
 };
@@ -65,7 +67,12 @@ function readUrlState(params: URLSearchParams) {
   const pageParam = Number(params.get("page"));
   const sizeParam = Number(params.get("pageSize"));
   return {
-    range: RANGES.includes(rangeParam as AuditRange) ? (rangeParam as AuditRange) : "1h",
+    range:
+      RANGES.includes(rangeParam as AuditRange) || rangeParam === "custom"
+        ? (rangeParam as AuditRange)
+        : "1h",
+    customFrom: params.get("from") ?? undefined,
+    customTo: params.get("to") ?? undefined,
     attention: ATTENTIONS.includes(attentionParam as AuditAttentionFilter)
       ? (attentionParam as AuditAttentionFilter)
       : undefined,
@@ -99,16 +106,20 @@ export function useAuditQuery() {
     authSource: initial.authSource,
   });
   const [range, setRange] = useState<AuditRange>(initial.range);
+  // 自定义时间段（range === "custom" 时生效；后端上限 30 天）。
+  const [customFrom, setCustomFrom] = useState<string | undefined>(initial.customFrom);
+  const [customTo, setCustomTo] = useState<string | undefined>(initial.customTo);
   const [draft, setDraft] = useState(initial.q);
   const [search, setSearch] = useState(initial.q);
   const [page, setPage] = useState(initial.page);
   const [pageSize, setPageSize] = useState(initial.pageSize);
 
   const query: AuditObservabilityQuery = useMemo(() => {
-    const to = new Date();
+    const now = new Date();
+    const useCustom = range === "custom" && Boolean(customFrom) && Boolean(customTo);
     return {
-      from: new Date(to.getTime() - RANGE_MS[range]).toISOString(),
-      to: to.toISOString(),
+      from: useCustom ? customFrom! : new Date(now.getTime() - RANGE_MS[range]).toISOString(),
+      to: useCustom ? customTo! : now.toISOString(),
       category: filters.category.length > 0 ? filters.category : undefined,
       result: filters.result.length > 0 ? filters.result : undefined,
       actor: filters.actor,
@@ -146,6 +157,13 @@ export function useAuditQuery() {
     next.delete("clientIp");
     next.delete("authSource");
     if (range !== "1h") next.set("range", range);
+    if (range === "custom") {
+      if (customFrom) next.set("from", customFrom);
+      if (customTo) next.set("to", customTo);
+    } else {
+      next.delete("from");
+      next.delete("to");
+    }
     if (search.trim()) next.set("q", search.trim());
     if (filters.attention) next.set("attention", filters.attention);
     if (page > 1) next.set("page", String(page));
@@ -251,6 +269,12 @@ export function useAuditQuery() {
     setFilters,
     range,
     setRange,
+    customRange: { from: customFrom, to: customTo },
+    setCustomRange: (from: string, to: string) => {
+      setCustomFrom(from);
+      setCustomTo(to);
+      setRange("custom");
+    },
     draft,
     setDraft,
     search,

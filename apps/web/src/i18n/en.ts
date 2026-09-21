@@ -804,6 +804,8 @@ export const en = {
     filterAttentionAcknowledged: "Acknowledged",
     totalCount: "{{total}} total",
     loadedCount: "Loaded {{count}}",
+    rangeFrom: "Start date",
+    rangeTo: "End date",
     kpiBandLabel: "Audit metrics",
     kpiSuccessRate: "Success rate",
     kpiSuccessRateHint: "Success / (success + failure)",

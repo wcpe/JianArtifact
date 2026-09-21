@@ -337,6 +337,37 @@ export function RecordsStream({ model, onInvestigate, onOpenAttention }: Records
             value={model.range}
             onChange={(value) => model.setRange(value as AuditRange)}
           />
+          {/* 自定义时间段：原生日期输入（样式从简），任一变更即切换 custom；后端上限 30 天。 */}
+          <Group gap={4} wrap="nowrap" style={{ flexShrink: 0 }}>
+            <input
+              type="date"
+              aria-label={t("auditWorkbench.rangeFrom", { defaultValue: "起始日期" })}
+              value={model.customRange.from ? model.customRange.from.slice(0, 10) : ""}
+              onChange={(e) => {
+                const value = e.currentTarget.value;
+                if (!value) return;
+                const to = model.customRange.to ?? new Date().toISOString();
+                model.setCustomRange(`${value}T00:00:00.000Z`, to);
+              }}
+              style={{ width: 134, padding: "3px 6px", fontSize: 12 }}
+            />
+            <Text size="xs" c="dimmed">
+              –
+            </Text>
+            <input
+              type="date"
+              aria-label={t("auditWorkbench.rangeTo", { defaultValue: "结束日期" })}
+              value={model.customRange.to ? model.customRange.to.slice(0, 10) : ""}
+              onChange={(e) => {
+                const value = e.currentTarget.value;
+                if (!value) return;
+                const from =
+                  model.customRange.from ?? new Date(Date.now() - 86_400_000).toISOString();
+                model.setCustomRange(from, `${value}T23:59:59.999Z`);
+              }}
+              style={{ width: 134, padding: "3px 6px", fontSize: 12 }}
+            />
+          </Group>
           {isNarrow ? null : advancedFilters}
           {/* 记录计数并入筛选工具条（原分区卡 meta 位置）；窄屏换行时独占行尾。 */}
           <Text size="xs" c="dimmed" ml="auto" style={{ flexShrink: 0 }}>
