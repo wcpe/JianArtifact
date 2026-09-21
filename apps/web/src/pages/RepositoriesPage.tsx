@@ -814,7 +814,7 @@ export function RepositoriesPage() {
                                       ) : null}
                                       <Text size="xs" c="dimmed" truncate>
                                         {repo.type} ·{" "}
-                                        {t("repositories.assetCount", {
+                                        {t("repoDetail.assetCount", {
                                           n: repo.artifactCount ?? 0,
                                         })}{" "}
                                         · {formatBytes(repo.totalSize ?? 0)}
