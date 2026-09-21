@@ -35,7 +35,7 @@ async function openOnlineConfig(user: ReturnType<typeof userEvent.setup>) {
 }
 
 function sourceAuthSelect(): HTMLInputElement {
-  return screen.getByRole("textbox", { name: "认证方式" });
+  return screen.getByRole("combobox", { name: "认证方式" });
 }
 
 function discoverInput(): Record<string, unknown> {

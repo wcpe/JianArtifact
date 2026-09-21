@@ -41,6 +41,28 @@ globalThis.FormData = nodeFormData as typeof FormData;
 globalThis.File = NodeFile as unknown as typeof File;
 globalThis.Blob = NodeBlob as unknown as typeof Blob;
 
+// jsdom（≤30）不实现 document.fonts（FontFaceSet API），而 Mantine 9 的 TextareaAutosize
+// 会在挂载时 document.fonts.addEventListener("loadingdone", ...) 监听字体加载完成以重算
+// 高度——undefined 上调方法直接抛 TypeError，React 19 会卸载整棵树（页面只剩测量节点）。
+// 补一个 FontFaceSet 的空实现垫片：status/load 为恒定值、事件注册为 no-op，语义为
+// "字体恒就绪、永不触发 loadingdone"，与 jsdom 无字体加载的现实一致。
+if (!("fonts" in document)) {
+  const noop = (): void => {};
+  Object.defineProperty(document, "fonts", {
+    configurable: true,
+    value: {
+      addEventListener: noop,
+      removeEventListener: noop,
+      check: (): boolean => true,
+      load: async (): Promise<FontFace[]> => [],
+      ready: Promise.resolve(),
+      status: "loaded",
+      size: 0,
+      [Symbol.iterator]: [][Symbol.iterator],
+    },
+  });
+}
+
 if (!window.matchMedia) {
   window.matchMedia = (query: string): MediaQueryList =>
     ({

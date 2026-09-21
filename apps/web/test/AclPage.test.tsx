@@ -40,7 +40,7 @@ describe("仓库访问控制 Mock", () => {
     renderAcl();
 
     await screen.findByText("developer");
-    const action = screen.getAllByRole("textbox")[0]!;
+    const action = screen.getAllByRole("combobox")[0]!;
     await user.click(action);
     await user.click(await screen.findByRole("option", { name: "写入" }));
     await user.click(screen.getByRole("button", { name: "保存访问控制" }));
@@ -62,7 +62,7 @@ describe("仓库访问控制 Mock", () => {
     renderAcl();
 
     await screen.findByText("developer");
-    const action = screen.getAllByRole("textbox")[0]!;
+    const action = screen.getAllByRole("combobox")[0]!;
     await user.click(action);
     await user.click(await screen.findByRole("option", { name: "写入" }));
     await user.click(screen.getByRole("button", { name: "保存访问控制" }));
@@ -97,7 +97,7 @@ describe("仓库访问控制 Mock", () => {
 
     expect(await screen.findByText("#2")).toBeTruthy();
     expect(screen.queryByText("需要管理员权限")).toBeNull();
-    const action = screen.getAllByRole("textbox")[0]!;
+    const action = screen.getAllByRole("combobox")[0]!;
     await user.click(action);
     await user.click(await screen.findByRole("option", { name: "写入" }));
     await user.click(screen.getByRole("button", { name: "保存访问控制" }));

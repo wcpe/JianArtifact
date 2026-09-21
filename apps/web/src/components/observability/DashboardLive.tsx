@@ -382,7 +382,7 @@ function DashboardGrid({
     <Stack gap={density.gridSpacing}>
       {/* KPI 指标带：全宽置顶，数值内联不挤压 */}
       <KpiBand data={data} blockedRepos={blockedRepos} />
-      <Grid gutter={density.gridSpacing} align="stretch">
+      <Grid gap={density.gridSpacing} align="stretch">
         {/* 左主区：请求趋势主图 → 容量趋势 → 仓库状态 */}
         <Grid.Col span={{ base: 12, lg: 8 }}>
           <Stack gap={density.gridSpacing}>
@@ -470,7 +470,7 @@ function DashboardSkeleton() {
           ))}
         </SimpleGrid>
       </Card>
-      <Grid gutter={density.gridSpacing} align="stretch">
+      <Grid gap={density.gridSpacing} align="stretch">
         <Grid.Col span={{ base: 12, lg: 8 }}>
           <Stack gap={density.gridSpacing}>
             {/* 趋势卡（图 200 + 剖析条）× 2 → 仓库状态面板 */}

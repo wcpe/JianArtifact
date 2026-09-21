@@ -338,7 +338,7 @@ export function HostMonitoringLive() {
           <Skeleton height={28} width={120} radius="sm" />
         </Group>
         <Skeleton height={32} radius="md" />
-        <Grid gutter={density.gridSpacing}>
+        <Grid gap={density.gridSpacing}>
           <Grid.Col span={{ base: 12, lg: 8 }}>
             <Stack gap={density.gridSpacing}>
               <Skeleton height={240} radius="md" />
@@ -455,7 +455,7 @@ export function HostMonitoringLive() {
       ) : null}
 
       {/* 主区：CPU 实时大图 + 内存趋势；右辅栏节点状态 */}
-      <Grid gutter={density.gridSpacing} align="stretch">
+      <Grid gap={density.gridSpacing} align="stretch">
         <Grid.Col span={{ base: 12, lg: 8 }}>
           <Stack gap={density.gridSpacing}>
             <Card withBorder radius="md" padding={density.cardPadding}>

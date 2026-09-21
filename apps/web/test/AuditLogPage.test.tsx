@@ -121,6 +121,9 @@ describe("当前节点审计中心（方案 A · 双栏工作台）", () => {
     // 页眉通知入口已退役（统一收敛到审计日志）。
     expect(screen.queryByRole("button", { name: /风险通知/ })).toBeNull();
     expect(await screen.findByRole("dialog", { name: "风险批次详情" })).toBeTruthy();
+    // 抽屉外壳先挂载、内容随 GET 详情异步到达：先等正文（drawerMeta 行）出现，
+    // 再找「确认已处理」按钮，否则会在数据未就绪时找不到按钮（M9/React19 下时序更敏感）。
+    await screen.findByText(/影响 \d+ 项/, undefined, { timeout: 5_000 });
     await user.click(screen.getByRole("button", { name: "确认已处理" }));
     await screen.findByText("确认该批次全部风险记录已处理？确认后写入确认人与时间。");
     await user.click(screen.getByRole("button", { name: "确认", exact: true }));

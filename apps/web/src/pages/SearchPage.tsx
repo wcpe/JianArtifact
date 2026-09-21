@@ -216,7 +216,7 @@ export function SearchPage() {
             </Button>
           </Group>
 
-          <Collapse in={filtersOpen}>
+          <Collapse expanded={filtersOpen}>
             <Paper withBorder radius="md" p="sm">
               <SimpleGrid cols={{ base: 1, sm: 2, lg: 3 }} spacing="sm">
                 <Select

@@ -493,7 +493,7 @@ export function RepoBrowser({
           >
             {t("repoDetail.uploadToggle", { defaultValue: "上传制品" })}
           </Button>
-          <Collapse in={uploadOpen}>
+          <Collapse expanded={uploadOpen}>
             <Box mt="xs">
               {canUpload && (
                 <Card withBorder padding={density.cardPadding} radius="md">
