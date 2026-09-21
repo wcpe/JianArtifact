@@ -315,4 +315,13 @@ describe("仓库详情", () => {
     expect(await screen.findByText("com")).toBeTruthy();
     expect(screen.queryByText(/none\.jar/)).toBeNull();
   });
+
+  it("匿名浏览公开仓库详情时概览带展示真实统计（回归：此前显示 0 / 0 B）", async () => {
+    // 此前匿名走 getRepositoryUsage（只含 format/type/description，无统计），概览带的
+    // 「制品数 / 体积」恒为 0；现统一走公开列表 API（带 artifactCount/totalSize）。
+    // 种子：npm-proxy artifactCount=5240、totalSize=12884901888（12 GiB）。
+    renderDetail("npm-proxy", false);
+    expect(await screen.findByText("5,240")).toBeTruthy();
+    expect(await screen.findByText(/^12(\.\d+)? GB$/)).toBeTruthy();
+  });
 });

@@ -64,29 +64,17 @@ export function RepositoryDetailPage() {
   // 有登录即可尝试上传（后端校验 write）
   const allowUpload = Boolean(user);
 
-  // 拉取仓库信息：已登录用户走 listRepositories，未登录用户走 getRepositoryUsage（公开 API）
+  // 拉取仓库信息：统一走公开列表 API——匿名可读且响应带 artifactCount/totalSize 统计。
+  // 此前匿名走 getRepositoryUsage（该端点只含 format/type/description），匿名浏览公开
+  // 仓库详情时概览带显示「制品数 0 · 体积 0 B」（用户反馈）；列表项字段足以覆盖所需。
+  // 匿名访问 private 仓库时列表不含该项 → null，由下方「未认证」分支处理。
   const repoState = useAsync(
-    () => {
-      if (user) {
-        return listRepositories({ page_size: 100 }).then(
-          (list) => list.items.find((r) => r.name === name) ?? null,
-        );
-      }
-      // 未登录：用公开端点获取仓库基本信息，构造精简 Repository 对象
-      return getRepositoryUsage(name).then(
-        (usage) =>
-          ({
-            name,
-            format: usage.format ?? "raw",
-            type: usage.type ?? "hosted",
-            visibility: "public" as RepoVisibility,
-            description: usage.description,
-            createdAt: "",
-          }) as Repository,
-      );
-    },
-    [name, user],
-    { cacheKey: `repo:detail:${name}:${user ? "managed" : "public"}` },
+    () =>
+      listRepositories({ page_size: 100 }).then(
+        (list) => list.items.find((r) => r.name === name) ?? null,
+      ),
+    [name],
+    { cacheKey: `repo:detail:${name}` },
   );
   const repo = repoState.data ?? null;
   // 窄屏（< 48em）：页签与徽章必然折成两行，面板上边距也收一档，尽可能把高度留给内容。
