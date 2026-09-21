@@ -1,4 +1,5 @@
 // Vitest 配置：jsdom 环境 + 全局装置（MSW Node server 与 jsdom 垫片）。
+import { availableParallelism } from "node:os";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 
@@ -20,8 +21,11 @@ export default defineConfig({
     // 并发上限：默认按 CPU 数开 fork（本机 32 核 → 31 个），而每个 fork 都要建 jsdom、
     // 加载 Mantine 8 与中英双语资源（各 1093 键）。实测 31 个并发时内存/CPU 峰值过高，
     // 会把需要渲染与请求的用例拖过等待上限，出现"找不到文本/构建超时"这类**负载敏感抖动**；
-    // 限到 16 后全量稳定通过。弱机器（如 CI 的 4 核）自然低于该上限，不受影响。
-    maxWorkers: 16,
+    // 本机限到 16 后全量稳定通过。
+    // 注意 maxWorkers 是**直接设定的并发上限**，vitest 不会按 CPU 数夹取：写死 16 会让 4 核
+    // CI 也开 16 个 fork、互相抢 CPU——实测 CI 上 14 个用例因此撞 15s 超时而全红。故取
+    // min(16, CPU−1)：CI 回到 3 个，本机仍是 16。
+    maxWorkers: Math.min(16, Math.max(1, availableParallelism() - 1)),
     coverage: {
       // 覆盖率只产出、不做阈值门禁：存量覆盖水平未知，一上来设阈值会卡死质量门。
       provider: "v8",
