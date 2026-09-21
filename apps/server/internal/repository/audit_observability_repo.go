@@ -63,6 +63,10 @@ type ObservabilityFilter struct {
 	ClientIP string
 	// AuthSource 按认证方式精确筛选。
 	AuthSource string
+	// AuditOnly 限定只读 audit_log 源：聚合类路径（KPI/趋势/关注批次/通知）置位——
+	// replication 同步记录 30 天可达百万级（线上实测 114 万），既拖垮聚合内存/耗时，
+	// 又淹没「审计事件」的统计语义；它仍完整保留在事件流列表（ListEventPage 不置位）。
+	AuditOnly bool
 	// Attention 按风险批次状态筛选：pending（未确认）/ acknowledged（已确认）；空值不过滤。
 	Attention string
 }
@@ -242,7 +246,10 @@ func observabilityEventsQueryLimited(f ObservabilityFilter, selectClause string,
 			WHERE (source_node = '' OR source_node = ?) AND id <= ? AND ts >= ? AND ts < ?
 			ORDER BY ts DESC LIMIT ?
 		)
-		UNION ALL
+	`
+	args := []any{f.SourceNode, f.AuditMaxID, f.From, f.To, perSourceLimit}
+	if !f.AuditOnly {
+		query += `	UNION ALL
 		SELECT * FROM (
 			SELECT 'replication' AS source, id AS source_event_id, occurred_at, source_actor AS actor, source_user_id AS user_id,
 				source_auth_source AS auth_source, op AS action, entity_type, entity_key, '' AS repository, result,
@@ -253,9 +260,11 @@ func observabilityEventsQueryLimited(f ObservabilityFilter, selectClause string,
 			WHERE id <= ? AND occurred_at >= ? AND occurred_at < ?
 			ORDER BY occurred_at DESC LIMIT ?
 		)
-	)
+	`
+		args = append(args, f.ReplicationMaxID, f.From, f.To, perSourceLimit)
+	}
+	query += `)
 	` + selectClause + ` FROM observability_events`
-	args := []any{f.SourceNode, f.AuditMaxID, f.From, f.To, perSourceLimit, f.ReplicationMaxID, f.From, f.To, perSourceLimit}
 	return query, args, true
 }
 
@@ -267,7 +276,10 @@ func observabilityEventsQuery(f ObservabilityFilter, selectClause string) (strin
 			token_preview, body_preview, actor_email
 		FROM audit_log
 		WHERE (source_node = '' OR source_node = ?) AND id <= ? AND ts >= ? AND ts < ?
-		UNION ALL
+	`
+	args := []any{f.SourceNode, f.AuditMaxID, f.From, f.To}
+	if !f.AuditOnly {
+		query += `	UNION ALL
 		SELECT 'replication' AS source, id AS source_event_id, occurred_at, source_actor AS actor, source_user_id AS user_id,
 			source_auth_source AS auth_source, op AS action, entity_type, entity_key, '' AS repository, result,
 			operation_id AS correlation_id, '' AS detail, error_class,
@@ -275,9 +287,11 @@ func observabilityEventsQuery(f ObservabilityFilter, selectClause string) (strin
 			'' AS user_agent, '' AS request_id, '' AS token_preview, '' AS body_preview, '' AS actor_email
 		FROM replication_apply_event
 		WHERE id <= ? AND occurred_at >= ? AND occurred_at < ?
-	)
+	`
+		args = append(args, f.ReplicationMaxID, f.From, f.To)
+	}
+	query += `)
 	` + selectClause + ` FROM observability_events WHERE 1=1`
-	args := []any{f.SourceNode, f.AuditMaxID, f.From, f.To, f.ReplicationMaxID, f.From, f.To}
 	if f.Actor != "" {
 		query += " AND actor = ?"
 		args = append(args, f.Actor)

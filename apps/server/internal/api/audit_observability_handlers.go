@@ -458,7 +458,11 @@ func (h *Handlers) loadAuditSnapshot(c *gin.Context, filter auditViewFilter, raw
 		return auditReadSnapshot{}, nil, false
 	}
 	// 聚合读取窄投影：这些事件只用于统计与分组，不进前端（见 ListAggregateEventsLimited）。
-	events, tooLarge, err := h.auditObservability.ListAggregateEventsLimited(repositoryObservabilityFilter(snapshot, filter), maxAuditAggregationEvents)
+	// AuditOnly：KPI/趋势/关注批次/通知只统计审计事件——replication 同步记录 30 天可达
+	// 百万级（线上实测 114 万），既拖垮聚合又淹没「审计事件」语义；它保留在事件流列表。
+	aggregateFilter := repositoryObservabilityFilter(snapshot, filter)
+	aggregateFilter.AuditOnly = true
+	events, tooLarge, err := h.auditObservability.ListAggregateEventsLimited(aggregateFilter, maxAuditAggregationEvents)
 	if err != nil {
 		writeDomainErr(c, err)
 		return auditReadSnapshot{}, nil, false
