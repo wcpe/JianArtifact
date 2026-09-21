@@ -22,7 +22,7 @@ describe("页面缓存与软失败（审计日志）", () => {
       route: "/audit-logs",
       authenticated: true,
     });
-    expect(await first.findByText("审计记录")).toBeTruthy();
+    expect(await first.findByTestId("audit-records-scroll")).toBeTruthy();
     first.unmount();
 
     const second = renderWithProviders(<AuditLogPage />, {
@@ -30,7 +30,7 @@ describe("页面缓存与软失败（审计日志）", () => {
       authenticated: true,
     });
     // 同步断言：缓存命中时首帧就渲染数据（此时后台刷新尚未完成）。
-    expect(second.getByText("审计记录")).toBeTruthy();
+    expect(second.getByTestId("audit-records-scroll")).toBeTruthy();
   });
 
   it("后台刷新失败保留旧数据并给警告，不整页报错", async () => {
@@ -38,13 +38,13 @@ describe("页面缓存与软失败（审计日志）", () => {
       route: "/audit-logs",
       authenticated: true,
     });
-    expect(await view.findByText("审计记录")).toBeTruthy();
+    expect(await view.findByTestId("audit-records-scroll")).toBeTruthy();
 
     window.history.replaceState({}, "", "/audit-logs?__mock=error");
     act(() => {
       window.dispatchEvent(new Event(REFRESH_EVENT));
     });
-    expect(view.getByText("审计记录")).toBeTruthy();
+    expect(view.getByTestId("audit-records-scroll")).toBeTruthy();
     expect(await view.findByText(/最近一次刷新失败/)).toBeTruthy();
     expect(view.queryByText(/当前节点审计暂时不可用/)).toBeNull();
   });
@@ -59,6 +59,6 @@ describe("页面缓存与软失败（审计日志）", () => {
 
     window.history.replaceState({}, "", "/audit-logs");
     await userEvent.setup().click(screen.getByRole("button", { name: "重试" }));
-    expect(await view.findByText("审计记录")).toBeTruthy();
+    expect(await view.findByTestId("audit-records-scroll")).toBeTruthy();
   });
 });

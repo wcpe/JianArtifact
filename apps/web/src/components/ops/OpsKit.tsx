@@ -50,7 +50,7 @@ export function OpsSection({
   style,
   bodyStyle,
 }: {
-  title: ReactNode;
+  title?: ReactNode;
   meta?: ReactNode;
   actions?: ReactNode;
   children: ReactNode;
@@ -69,33 +69,35 @@ export function OpsSection({
         ...style,
       }}
     >
-      <Group
-        justify="space-between"
-        align="center"
-        wrap="wrap"
-        gap="xs"
-        px="md"
-        py="sm"
-        style={{ borderBottom: "1px solid var(--mantine-color-default-border)" }}
-      >
-        <Group gap="xs" wrap="nowrap">
-          <Text fw={700} size="sm">
-            {title}
-          </Text>
-          {meta ? (
-            // meta 支持 ReactNode：文本走 dimmed Text，徽章等节点用 Box 承载，
-            // 避免 <div>（Badge）被塞进 <p>（Text 默认标签）触发非法嵌套告警。
-            typeof meta === "string" || typeof meta === "number" ? (
-              <Text size="xs" c="dimmed">
-                {meta}
-              </Text>
-            ) : (
-              <Box>{meta}</Box>
-            )
-          ) : null}
+      {title || meta || actions ? (
+        <Group
+          justify="space-between"
+          align="center"
+          wrap="wrap"
+          gap="xs"
+          px="md"
+          py="sm"
+          style={{ borderBottom: "1px solid var(--mantine-color-default-border)" }}
+        >
+          <Group gap="xs" wrap="nowrap">
+            <Text fw={700} size="sm">
+              {title}
+            </Text>
+            {meta ? (
+              // meta 支持 ReactNode：文本走 dimmed Text，徽章等节点用 Box 承载，
+              // 避免 <div>（Badge）被塞进 <p>（Text 默认标签）触发非法嵌套告警。
+              typeof meta === "string" || typeof meta === "number" ? (
+                <Text size="xs" c="dimmed">
+                  {meta}
+                </Text>
+              ) : (
+                <Box>{meta}</Box>
+              )
+            ) : null}
+          </Group>
+          {actions}
         </Group>
-        {actions}
-      </Group>
+      ) : null}
       <Box p={bodyPadding} style={bodyStyle}>
         {children}
       </Box>

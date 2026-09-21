@@ -27,7 +27,7 @@ export const AUDIT_PAGE_SIZES = ["20", "50", "100"];
 
 // 1h 档是"聚合范围过大"时的兜底选择：事件量按量级增长，24h 窗口在活跃节点上
 // 也可能触到后端聚合上限（返回 audit_query_too_large），此时一键切到最小窗口仍能看数据。
-export type AuditRange = "1h" | "24h" | "7d" | "30d";
+export type AuditRange = "1h" | "3d" | "7d" | "30d";
 /** 风险状态筛选：待处理（未确认）/ 已确认。 */
 export type AuditAttentionFilter = "pending" | "acknowledged";
 
@@ -50,12 +50,12 @@ export interface AuditFilters {
 
 const RANGE_MS: Record<AuditRange, number> = {
   "1h": 60 * 60_000,
-  "24h": 24 * 60 * 60_000,
+  "3d": 3 * 24 * 60 * 60_000,
   "7d": 7 * 24 * 60 * 60_000,
   "30d": 30 * 24 * 60 * 60_000,
 };
 
-const RANGES: AuditRange[] = ["1h", "24h", "7d", "30d"];
+const RANGES: AuditRange[] = ["1h", "3d", "7d", "30d"];
 const ATTENTIONS: AuditAttentionFilter[] = ["pending", "acknowledged"];
 
 /** 从 URL 恢复筛选与分页状态（深链 / 刷新不丢视图）。 */
@@ -65,7 +65,7 @@ function readUrlState(params: URLSearchParams) {
   const pageParam = Number(params.get("page"));
   const sizeParam = Number(params.get("pageSize"));
   return {
-    range: RANGES.includes(rangeParam as AuditRange) ? (rangeParam as AuditRange) : "24h",
+    range: RANGES.includes(rangeParam as AuditRange) ? (rangeParam as AuditRange) : "1h",
     attention: ATTENTIONS.includes(attentionParam as AuditAttentionFilter)
       ? (attentionParam as AuditAttentionFilter)
       : undefined,
@@ -145,7 +145,7 @@ export function useAuditQuery() {
     next.delete("actorEmail");
     next.delete("clientIp");
     next.delete("authSource");
-    if (range !== "24h") next.set("range", range);
+    if (range !== "1h") next.set("range", range);
     if (search.trim()) next.set("q", search.trim());
     if (filters.attention) next.set("attention", filters.attention);
     if (page > 1) next.set("page", String(page));

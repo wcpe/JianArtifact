@@ -52,7 +52,7 @@ describe("当前节点审计中心（方案 A · 双栏工作台）", () => {
     // 顶部 KPI 卡片 + OpsSection 记录表（页面标题由页眉面包屑承担，页面内不重复）。
     expect(await screen.findByText("审计事件")).toBeTruthy();
     expect(screen.getByText("待确认批次")).toBeTruthy();
-    expect(await screen.findByText("审计记录")).toBeTruthy();
+    await screen.findByTestId("audit-records-scroll");
 
     // 记录流的筛选器常驻：风险状态 / 类别 / 结果 / 操作者。
     expect(screen.getByLabelText("风险状态")).toBeTruthy();
@@ -175,7 +175,7 @@ describe("当前节点审计中心（方案 A · 双栏工作台）", () => {
       releaseDevMockPendingRequests();
     });
     // 方案 A 数据层仅在页面可见时低频刷新（不再有 5s 轮询），一次释放后首屏数据即可达。
-    expect(await screen.findByText("审计记录")).toBeTruthy();
+    await screen.findByTestId("audit-records-scroll");
     unmount();
 
     window.history.replaceState({}, "", "/audit-logs?__mock=error");

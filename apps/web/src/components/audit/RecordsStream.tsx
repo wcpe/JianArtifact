@@ -56,7 +56,7 @@ const RESULT_LABEL_KEYS: Record<string, string> = {
 
 const RANGE_OPTIONS = [
   { value: "1h", label: "1h" },
-  { value: "24h", label: "24h" },
+  { value: "3d", label: "3d" },
   { value: "7d", label: "7d" },
   { value: "30d", label: "30d" },
 ];
@@ -283,7 +283,6 @@ export function RecordsStream({ model, onInvestigate, onOpenAttention }: Records
 
   return (
     <OpsSection
-      title={t("auditWorkbench.recordsTitle")}
       bodyPadding={0}
       style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
       bodyStyle={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}

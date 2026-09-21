@@ -42,16 +42,18 @@ describe("审计工作台（单列表 + 顶部 KPI）", () => {
     expect(screen.getAllByText("待确认批次").length).toBeGreaterThan(0);
   });
 
-  it("记录区为 OpsSection 分区卡：标题行含时间范围，无重复页面标题", async () => {
+  it("记录区为 OpsSection 分区卡：时间范围在筛选条内，标题已移除", async () => {
     renderWorkbench();
 
     // 页面标题只出现在页眉面包屑，页面内不重复渲染大标题。
     expect(screen.queryByRole("heading", { name: "审计中心" })).toBeNull();
-    expect(await screen.findByText("审计记录")).toBeTruthy();
-    // 时间范围 SegmentedControl（渲染为 radio）
-    expect(screen.getByRole("radio", { name: "24h" })).toBeTruthy();
+    await screen.findByTestId("audit-records-scroll");
+    // 时间范围 SegmentedControl（渲染为 radio）：档位为 1h/3d/7d/30d，默认 1h。
+    expect((screen.getByRole("radio", { name: "1h" }) as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByRole("radio", { name: "3d" })).toBeTruthy();
     expect(screen.getByRole("radio", { name: "7d" })).toBeTruthy();
     expect(screen.getByRole("radio", { name: "30d" })).toBeTruthy();
+    expect(screen.queryByRole("radio", { name: "24h" })).toBeNull();
   });
 
   it("动作列展示 i18n 中文标签而非契约值", async () => {
@@ -95,7 +97,7 @@ describe("审计工作台（筛选与搜索）", () => {
     const user = userEvent.setup();
     renderWorkbench();
 
-    await screen.findByText("审计记录");
+    await screen.findByTestId("audit-records-scroll");
     expect(screen.getByRole("radio", { name: "待处理" })).toBeTruthy();
     await user.click(screen.getByRole("radio", { name: "已确认" }));
     // 已确认口径下不再出现未确认批次的「待处理」标记行。
