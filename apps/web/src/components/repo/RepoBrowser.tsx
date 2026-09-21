@@ -777,6 +777,7 @@ export function RepoBrowser({
                   onExpandDir={searchResults === null ? handleExpandDir : undefined}
                   maxHeight="none"
                   defaultExpanded={searchResults !== null}
+                  highlightPath={highlightPath}
                   showSize={searchResults !== null}
                   selectable={isAdmin}
                   selectedPaths={selectedPaths}

@@ -35,6 +35,8 @@ interface Props {
   defaultExpanded?: boolean;
   /** 文件行右侧显示大小（搜索结果等需要直观信息的场景）。 */
   showSize?: boolean;
+  /** FR-145：搜索结果直达的命中路径——路径上的目录初始即展开（子层数据由定位链懒加载）。 */
+  highlightPath?: string;
   /** FR-105: 管理员启用文件和目录选择。 */
   selectable?: boolean;
   /** FR-105: 当前选中的文件和目录路径集合。 */
@@ -56,6 +58,7 @@ export function RepoAssetTree({
   maxHeight = 480,
   defaultExpanded = false,
   showSize = false,
+  highlightPath,
   selectable = false,
   selectedPaths,
   onNodeInteraction,
@@ -75,6 +78,7 @@ export function RepoAssetTree({
           onExpandDir={onExpandDir}
           defaultExpanded={defaultExpanded}
           showSize={showSize}
+          highlightPath={highlightPath}
           selectable={selectable}
           selectedPaths={selectedPaths}
           onNodeInteraction={onNodeInteraction}
@@ -106,6 +110,7 @@ function TreeNodeRow({
   onExpandDir,
   defaultExpanded = false,
   showSize = false,
+  highlightPath,
   selectable = false,
   selectedPaths,
   onNodeInteraction,
@@ -120,13 +125,16 @@ function TreeNodeRow({
   onExpandDir?: (node: AssetTreeNode) => void;
   defaultExpanded?: boolean;
   showSize?: boolean;
+  highlightPath?: string;
   selectable?: boolean;
   selectedPaths?: Set<string>;
   onNodeInteraction?: (node: AssetTreeNode, event: ReactMouseEvent<HTMLButtonElement>) => void;
   onContextMenu?: (node: AssetTreeNode, event: ReactMouseEvent<HTMLButtonElement>) => void;
   onToggleSelect?: (node: AssetTreeNode) => void;
 }) {
-  const [open, setOpen] = useState(defaultExpanded);
+  // FR-145：位于定位路径上的目录初始即展开（子层数据由定位链懒加载后填充；用户可手动收起）。
+  const onHighlightPath = highlightPath !== undefined && highlightPath.startsWith(`${node.path}/`);
+  const [open, setOpen] = useState(defaultExpanded || onHighlightPath);
   const { t } = useTranslation();
   // 窄屏放大行高：树节点在手机上要够点（桌面保持紧凑，一屏能看更多节点）。
   const isNarrow = useMediaQuery("(max-width: 48em)") ?? false;
@@ -226,6 +234,7 @@ function TreeNodeRow({
                 onSelectDir={onSelectDir}
                 onExpandDir={onExpandDir}
                 defaultExpanded={defaultExpanded}
+                highlightPath={highlightPath}
                 showSize={showSize}
                 selectable={selectable}
                 selectedPaths={selectedPaths}
