@@ -68,7 +68,9 @@ func TestAuditObservabilityRepoPagesWithinSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("读取第二页：%v", err)
 	}
-	if total != 2 || len(page) != 1 || next != nil || page[0].SourceEventID != 1 {
+	// 新契约：COUNT 只在首屏执行（翻页重复全量计数是 30 天卡死主因之一），
+	// 翻页返回 total=-1（未计数），是否还有更多以「取满一页」判定。
+	if total != -1 || len(page) != 1 || next != nil || page[0].SourceEventID != 1 {
 		t.Fatalf("第二页不稳定：total=%d page=%+v next=%v", total, page, next)
 	}
 	filtered := filter

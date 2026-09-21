@@ -284,7 +284,6 @@ export function RecordsStream({ model, onInvestigate, onOpenAttention }: Records
   return (
     <OpsSection
       title={t("auditWorkbench.recordsTitle")}
-      meta={t("auditWorkbench.totalCount", { total: model.pagination.totalCount })}
       actions={
         <SegmentedControl
           size="xs"
@@ -341,6 +340,10 @@ export function RecordsStream({ model, onInvestigate, onOpenAttention }: Records
             </Button>
           ) : null}
           {isNarrow ? null : advancedFilters}
+          {/* 记录计数并入筛选工具条（原分区卡 meta 位置）；窄屏换行时独占行尾。 */}
+          <Text size="xs" c="dimmed" ml="auto" style={{ flexShrink: 0 }}>
+            {t("auditWorkbench.totalCount", { total: model.pagination.totalCount })}
+          </Text>
         </Group>
       </Box>
 

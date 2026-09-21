@@ -126,7 +126,11 @@ func (r *AuditObservabilityRepo) ListAggregateEventsLimited(f ObservabilityFilte
 }
 
 func (r *AuditObservabilityRepo) listEventsLimited(f ObservabilityFilter, limit int, selectClause string) ([]ObservabilityEvent, bool, error) {
-	query, args := observabilityEventsQuery(f, selectClause)
+	// 同 ListEventPage：无过滤时下推每源 LIMIT（走时间索引取满即停，避免全量物化排序）。
+	query, args, limited := observabilityEventsQueryLimited(f, selectClause, limit+1)
+	if !limited {
+		query, args = observabilityEventsQuery(f, selectClause)
+	}
 	args = append(args, limit+1)
 	var events []ObservabilityEvent
 	if err := r.db.Select(&events, query+` ORDER BY occurred_at DESC, source DESC, source_event_id DESC LIMIT ?`, args...); err != nil {
@@ -143,19 +147,43 @@ func (r *AuditObservabilityRepo) listEventsLimited(f ObservabilityFilter, limit 
 
 // ListEventPage 按快照与筛选条件直接在 SQLite 中分页，避免请求页读取整段历史。
 func (r *AuditObservabilityRepo) ListEventPage(f ObservabilityFilter, offset, limit int) ([]ObservabilityEvent, int, *int, error) {
-	countQuery, countArgs := observabilityEventsQuery(f, "SELECT COUNT(*)")
-	var total int
-	if err := r.db.Get(&total, countQuery, countArgs...); err != nil {
-		return nil, 0, nil, err
+	// COUNT 只在首屏（offset==0）执行：同一 CTE 的全量计数在翻页时重复代价极高——
+	// 30 天范围下正是审计中心「切 30d 卡死」的主因之一。翻页返回 total=-1（未计数）。
+	total := -1
+	if offset == 0 {
+		countQuery, countArgs := observabilityEventsQuery(f, "SELECT COUNT(*)")
+		if err := r.db.Get(&total, countQuery, countArgs...); err != nil {
+			return nil, 0, nil, err
+		}
 	}
-	query, args := observabilityEventsQuery(f, observabilityEventSelect)
-	args = append(args, limit, offset)
+	// 翻页（无精确 total）时多取 1 条用于精确判定「是否还有更多」；首屏无需多取。
+	fetchLimit := limit
+	if total < 0 {
+		fetchLimit = limit + 1
+	}
+	// 无过滤时把每源 LIMIT 下推（走时间索引、取满即停）；有过滤时回退通用查询。
+	query, args, limited := observabilityEventsQueryLimited(f, observabilityEventSelect, offset+fetchLimit)
+	if !limited {
+		query, args = observabilityEventsQuery(f, observabilityEventSelect)
+	}
+	args = append(args, fetchLimit, offset)
 	var events []ObservabilityEvent
 	if err := r.db.Select(&events, query+` ORDER BY occurred_at DESC, source DESC, source_event_id DESC LIMIT ? OFFSET ?`, args...); err != nil {
 		return nil, 0, nil, err
 	}
 	if events == nil {
 		events = []ObservabilityEvent{}
+	}
+	if total < 0 {
+		hasMore := len(events) > limit
+		if hasMore {
+			events = events[:limit]
+		}
+		if !hasMore {
+			return events, total, nil, nil
+		}
+		nextOffset := offset + len(events)
+		return events, total, &nextOffset, nil
 	}
 	nextOffset := offset + len(events)
 	if nextOffset >= total {
@@ -184,6 +212,52 @@ const observabilityAggregateSelect = `SELECT source, source_event_id, occurred_a
 	action, entity_type, entity_key, repository, result, correlation_id, '' AS detail, error_class,
 	http_method, http_path, status_code, duration_ms, client_ip, '' AS user_agent, '' AS request_id,
 	'' AS token_preview, '' AS body_preview, '' AS actor_email`
+
+// hasEventFilters 判断是否存在外层筛选。下推 LIMIT 的优化**仅当无外层过滤**时正确
+// （有过滤时源内前 K 名会被外层滤掉，导致漏数据）——判断保守：任一条件出现即视为有过滤，
+// 回退到通用查询（此时过滤后行数已小，排序代价可控）。
+func hasEventFilters(f ObservabilityFilter) bool {
+	return f.Actor != "" || f.Repository != "" || f.Query != "" || f.Method != "" ||
+		f.Action != "" || f.Email != "" || f.ClientIP != "" || f.AuthSource != "" ||
+		f.Attention == "pending" || f.Attention == "acknowledged" || len(f.Categories) > 0
+}
+
+// observabilityEventsQueryLimited 把「每源按时间倒序取前 perSourceLimit 条」下推到各子查询
+// （走时间索引、取满即停），外层只归并排序 ≤2×perSourceLimit 行。30 天默认视图由此从
+// 「全量物化 + TEMP B-TREE 排序」（实测查询计划）降为毫秒级——审计中心「切 30d 卡死」的根治点。
+//
+// 正确性：全局第 K 名必属于某源的「前 K 名」（K = offset+limit）；仅无过滤时成立（见 hasEventFilters）。
+// 返回 ok=false 时调用方应回退 observabilityEventsQuery。
+func observabilityEventsQueryLimited(f ObservabilityFilter, selectClause string, perSourceLimit int) (string, []any, bool) {
+	if hasEventFilters(f) {
+		return "", nil, false
+	}
+	query := `WITH observability_events AS (
+		SELECT * FROM (
+			SELECT 'audit' AS source, id AS source_event_id, ts AS occurred_at, actor, user_id, auth_source,
+				action, entity_type, entity_key, repo AS repository, result, correlation_id, detail, '' AS error_class,
+				http_method, http_path, status_code, duration_ms, ip AS client_ip, user_agent, request_id,
+				token_preview, body_preview, actor_email
+			FROM audit_log
+			WHERE (source_node = '' OR source_node = ?) AND id <= ? AND ts >= ? AND ts < ?
+			ORDER BY ts DESC LIMIT ?
+		)
+		UNION ALL
+		SELECT * FROM (
+			SELECT 'replication' AS source, id AS source_event_id, occurred_at, source_actor AS actor, source_user_id AS user_id,
+				source_auth_source AS auth_source, op AS action, entity_type, entity_key, '' AS repository, result,
+				operation_id AS correlation_id, '' AS detail, error_class,
+				'' AS http_method, '' AS http_path, 0 AS status_code, 0 AS duration_ms, '' AS client_ip,
+				'' AS user_agent, '' AS request_id, '' AS token_preview, '' AS body_preview, '' AS actor_email
+			FROM replication_apply_event
+			WHERE id <= ? AND occurred_at >= ? AND occurred_at < ?
+			ORDER BY occurred_at DESC LIMIT ?
+		)
+	)
+	` + selectClause + ` FROM observability_events`
+	args := []any{f.SourceNode, f.AuditMaxID, f.From, f.To, perSourceLimit, f.ReplicationMaxID, f.From, f.To, perSourceLimit}
+	return query, args, true
+}
 
 func observabilityEventsQuery(f ObservabilityFilter, selectClause string) (string, []any) {
 	query := `WITH observability_events AS (

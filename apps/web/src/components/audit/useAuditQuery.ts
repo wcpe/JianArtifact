@@ -181,7 +181,14 @@ export function useAuditQuery() {
     cacheKey: "audit:wb:pending-notifications",
   });
 
-  const totalCount = events.data?.totalCount ?? 0;
+  // 首屏返回精确总数；翻页返回 -1（后端不再重复全量计数，属 30 天卡死修复）——
+  // 保留首屏已知值，避免翻页后分页器与「共 N 条」被 -1 覆盖。
+  const [knownTotal, setKnownTotal] = useState<number | null>(null);
+  useEffect(() => {
+    const value = events.data?.totalCount;
+    if (value !== undefined && value >= 0) setKnownTotal(value);
+  }, [events.data]);
+  const totalCount = knownTotal ?? 0;
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
 
   /** offset 直达目标页：无需顺序回放游标。 */
