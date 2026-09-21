@@ -683,7 +683,7 @@ function seed(): State {
 let state: State = seed();
 
 /** 观测数据的快照通道：各端点独立计数，互不干扰。 */
-export type SnapshotChannel = "dashboard" | "host";
+export type SnapshotChannel = "dashboard" | "host" | "download-clients";
 
 /**
  * 快照序号：每次对应端点被请求时递增，驱动一个确定性抖动。
@@ -699,6 +699,7 @@ export type SnapshotChannel = "dashboard" | "host";
 const snapshotTicks: Record<SnapshotChannel, number> = {
   dashboard: 0,
   host: 0,
+  "download-clients": 0,
 };
 
 /** 取某通道的当前快照序号并前移；该通道首次调用恒返回 0（基线快照）。 */

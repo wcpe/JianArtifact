@@ -150,8 +150,10 @@ export function SearchPage() {
   const facets = state.data?.facets ?? [];
   const facetTotal = facets.reduce((sum, f) => sum + f.count, 0);
 
-  const openRepo = (repository: string) => {
-    navigate(`/repositories/${encodeURIComponent(repository)}`);
+  const openRepo = (repository: string, highlightPath?: string) => {
+    // FR-145：携带命中位置进入仓库详情，避免进仓库后再搜一遍。
+    const query = highlightPath ? `?highlight=${encodeURIComponent(highlightPath)}` : "";
+    navigate(`/repositories/${encodeURIComponent(repository)}${query}`);
   };
 
   const items = state.data?.items ?? [];
@@ -385,7 +387,7 @@ export function SearchPage() {
                         <Table.Tr
                           key={`${item.repository}/${item.path}`}
                           style={{ cursor: "pointer" }}
-                          onClick={() => openRepo(item.repository)}
+                          onClick={() => openRepo(item.repository, item.path)}
                         >
                           <Table.Td style={{ whiteSpace: "nowrap" }}>
                             <Group gap={6} wrap="nowrap">

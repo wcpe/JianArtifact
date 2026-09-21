@@ -1247,6 +1247,8 @@ export const handlers = [
   http.get("*/api/v1/observability/downloads/by-client", () => {
     // FR-144：来源聚合（独立来源口径）。预览数据给固定来源集 + 快照抖动，
     // 便于验证 Top 排名与族分布渲染；真实口径以服务端为准。
+    const tick = nextSnapshotTick("download-clients");
+    const jitter = (salt: number, amplitude: number) => snapshotJitter(tick, salt, amplitude);
     return HttpResponse.json({
       topIps: [
         { ip: "10.0.0.12", count: 46 + jitter(70, 8) },

@@ -64,6 +64,8 @@ interface Props {
   /** 公开页已知的 format（来自 usage） */
   forcedFormat?: string;
   forcedType?: string;
+  /** FR-145：搜索结果直达的命中路径（进入时逐级展开并选中；失效静默降级）。 */
+  highlightPath?: string;
 }
 
 /** 将 tree API 响应转为 AssetTreeNode[] （目录 children=undefined 表示未加载）。 */
@@ -151,6 +153,7 @@ export function RepoBrowser({
   publicMode = false,
   forcedFormat,
   forcedType,
+  highlightPath,
 }: Props) {
   const { t } = useTranslation();
   const { user } = useAuth();
@@ -282,13 +285,16 @@ export function RepoBrowser({
     (node: AssetTreeNode) => {
       const prefix = node.path.endsWith("/") ? node.path : node.path + "/";
       setTreeActionError(null);
-      getRepositoryTree(repoName, prefix)
+      // 返回本次加载出的子节点（FR-145 的逐级定位需要按序等待；既有调用忽略返回值，兼容）。
+      return getRepositoryTree(repoName, prefix)
         .then((entry) => {
           const children = treeEntryToNodes(entry.directories, entry.files);
           setTreeNodes((prev) => updateNodeChildren(prev, node.path, children));
+          return children;
         })
         .catch((error: unknown) => {
           setTreeActionError(error instanceof Error ? error.message : t("common.error"));
+          return undefined;
         });
     },
     [repoName, t, updateNodeChildren],
@@ -514,6 +520,44 @@ export function RepoBrowser({
     window.addEventListener(REFRESH_EVENT, handler);
     return () => window.removeEventListener(REFRESH_EVENT, handler);
   }, []);
+
+  // FR-145：搜索结果直达——根层就绪后逐级展开命中路径并选中文件；路径失效静默降级。
+  // 仅作进入时的初始定位提示（不写回 URL），每条 highlightPath 只消费一次。
+  const highlightConsumedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!highlightPath || treeNodes.length === 0) return;
+    if (highlightConsumedRef.current === highlightPath) return;
+    highlightConsumedRef.current = highlightPath;
+    let cancelled = false;
+    const locate = async () => {
+      const parts = highlightPath.split("/").filter(Boolean);
+      let level: AssetTreeNode[] = treeNodes;
+      for (let index = 0; index < parts.length - 1; index += 1) {
+        const prefix = parts.slice(0, index + 1).join("/");
+        const dirNode = level.find((node) => node.path === prefix && node.kind === "dir");
+        if (!dirNode) return; // 路径失效：静默降级
+        if (dirNode.children) {
+          level = dirNode.children;
+          continue;
+        }
+        const children = await handleExpandDir(dirNode);
+        if (cancelled || !children) return;
+        level = children;
+      }
+      const fileNode = level.find((node) => node.path === highlightPath && node.kind === "file");
+      if (!fileNode?.asset) return; // 失效降级
+      onSelectFile(fileNode);
+      requestAnimationFrame(() => {
+        document
+          .querySelector(`[data-path="${CSS.escape(highlightPath)}"]`)
+          ?.scrollIntoView({ block: "nearest" });
+      });
+    };
+    void locate();
+    return () => {
+      cancelled = true;
+    };
+  }, [highlightPath, treeNodes, handleExpandDir, onSelectFile]);
 
   return (
     <Stack gap={isNarrow ? "sm" : "md"} style={{ height: "100%", overflow: "hidden" }}>

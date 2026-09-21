@@ -20,7 +20,7 @@ import { useMediaQuery } from "@mantine/hooks";
 import { EmptyState } from "@jianartifact/ui";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { PageShell } from "../app/PageShell";
 import { currentLocaleTag } from "../i18n/current";
@@ -56,6 +56,9 @@ export function RepositoryDetailPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { name = "" } = useParams();
+  // FR-145：搜索直达的命中路径（仅作进入时的初始定位提示，不随后续交互写回）。
+  const [searchParams] = useSearchParams();
+  const highlightPath = searchParams.get("highlight") ?? undefined;
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
   // 有登录即可尝试上传（后端校验 write）
@@ -192,7 +195,12 @@ export function RepositoryDetailPage() {
           pt={isNarrow ? "xs" : "sm"}
           style={{ flex: 1, minHeight: 0, overflow: "hidden" }}
         >
-          <RepoBrowser repoName={name} allowUpload={allowUpload} publicMode={!user} />
+          <RepoBrowser
+            repoName={name}
+            allowUpload={allowUpload}
+            publicMode={!user}
+            highlightPath={highlightPath}
+          />
         </Tabs.Panel>
 
         {/* 配置 Tab：仅管理员，展示仓库信息 + 可修改 visibility */}

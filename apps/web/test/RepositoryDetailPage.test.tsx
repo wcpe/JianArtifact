@@ -17,12 +17,12 @@ import { RepositoryDetailPage } from "../src/pages/RepositoryDetailPage";
 import { formatUtcToLocalDate } from "../src/lib/timeFormat";
 import { renderWithProviders } from "./harness";
 
-function renderDetail(name: string, authenticated: boolean) {
+function renderDetail(name: string, authenticated: boolean, query = "") {
   return renderWithProviders(
     <Routes>
       <Route path="/repositories/:name" element={<RepositoryDetailPage />} />
     </Routes>,
-    { route: `/repositories/${name}`, authenticated },
+    { route: `/repositories/${name}${query}`, authenticated },
   );
 }
 
@@ -300,5 +300,19 @@ describe("仓库详情", () => {
     expect(await screen.findByText("找到 2 条结果")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "加载更多" })).toBeNull();
     expect(screen.getByText("second.jar")).toBeTruthy();
+  });
+
+  it("带 highlight 进入时逐级展开并选中命中文件（FR-145）", async () => {
+    renderDetail("maven-releases", true, "?highlight=com/example/app/1.0.0/app-1.0.0.jar");
+    // 祖先目录逐级懒加载展开后自动选中：右侧详情出现完整路径与使用说明（等同手动点选）
+    expect(await screen.findByText("com/example/app/1.0.0/app-1.0.0.jar")).toBeTruthy();
+    expect(await screen.findByText("解析依赖（pom.xml）")).toBeTruthy();
+  });
+
+  it("highlight 指向不存在路径时静默降级：仓库正常打开、不报错（FR-145）", async () => {
+    renderDetail("maven-releases", true, "?highlight=missing/none.jar");
+    // 树根层正常渲染、可交互；失效路径不产生错误提示
+    expect(await screen.findByText("com")).toBeTruthy();
+    expect(screen.queryByText(/none\.jar/)).toBeNull();
   });
 });
