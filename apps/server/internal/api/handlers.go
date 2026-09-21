@@ -35,6 +35,7 @@ type Deps struct {
 	AuditObservability      *repository.AuditObservabilityRepo      // FR-118：统一审计读模型
 	OperationsObservability *repository.OperationsObservabilityRepo // FR-53/120：当前节点业务与主机读模型
 	OperationsAlerts        *repository.OperationsAlertRepo         // v0.8.0：运维告警去重持久化
+	AssetDownloads          *repository.AssetDownloadRepo           // FR-142：制品下载计量明细（tree 计数列）
 	AuditAttentionKey       []byte                                  // FR-118：关注标识签名密钥（由启动密钥派生）
 	AuditSourceNode         string                                  // FR-109：本节点审计标识
 	ClusterTokenSet         bool                                    // FR-86：同步令牌是否已配置（不暴露明文）
@@ -65,6 +66,7 @@ type Handlers struct {
 	auditObservability      *repository.AuditObservabilityRepo
 	operationsObservability *repository.OperationsObservabilityRepo
 	operationsAlertStore    *repository.OperationsAlertRepo
+	assetDownloads          *repository.AssetDownloadRepo // FR-142：制品下载计量明细（tree 计数列）
 	auditAttentionKey       []byte
 	auditSourceNode         string // FR-109：本节点审计标识
 	clusterTokenSet         bool
@@ -96,6 +98,7 @@ func NewHandlers(d Deps) *Handlers {
 		auditObservability:      d.AuditObservability,
 		operationsObservability: d.OperationsObservability,
 		operationsAlertStore:    d.OperationsAlerts,
+		assetDownloads:          d.AssetDownloads,
 		auditAttentionKey:       auditAttentionKey(d.AuditAttentionKey, d.AuditSourceNode),
 		auditSourceNode:         d.AuditSourceNode,
 		clusterTokenSet:         d.ClusterTokenSet,

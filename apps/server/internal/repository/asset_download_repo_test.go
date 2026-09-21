@@ -70,3 +70,39 @@ func TestAssetDownloadRepoAccumulatesSumsAndPurges(t *testing.T) {
 		t.Fatalf("清理后应为空：%+v", after)
 	}
 }
+
+// SumPaths：批量路径只返回命中项、跨仓库隔离、空集合为 no-op（不发查询）。
+func TestAssetDownloadRepoSumPaths(t *testing.T) {
+	db, err := persistence.Open(filepath.Join(t.TempDir(), "asset-download-paths.db"))
+	if err != nil {
+		t.Fatalf("打开数据库：%v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := db.Migrate(); err != nil {
+		t.Fatalf("迁移数据库：%v", err)
+	}
+	repo := NewAssetDownloadRepo(db)
+
+	base := time.Date(2026, 9, 21, 11, 0, 0, 0, time.UTC)
+	bucket := formatMetricTime(base)
+	if err := repo.AddMinutes([]AssetDownloadMinute{
+		{BucketStart: bucket, Repo: "r1", AssetPath: "a/x.jar", ClientIP: "1.1.1.1", UAFamily: "maven", DownloadCount: 3},
+		{BucketStart: bucket, Repo: "r1", AssetPath: "a/y.jar", ClientIP: "1.1.1.1", UAFamily: "maven", DownloadCount: 7},
+		{BucketStart: bucket, Repo: "r2", AssetPath: "a/x.jar", ClientIP: "1.1.1.1", UAFamily: "maven", DownloadCount: 9},
+	}); err != nil {
+		t.Fatalf("写入：%v", err)
+	}
+
+	sum, err := repo.SumPaths("r1", []string{"a/x.jar", "a/y.jar", "a/missing.jar"})
+	if err != nil {
+		t.Fatalf("批量聚合：%v", err)
+	}
+	if len(sum) != 2 || sum["a/x.jar"] != 3 || sum["a/y.jar"] != 7 {
+		t.Fatalf("命中项应只有两条且数值正确（r2 不混入、missing 不出现）：%+v", sum)
+	}
+
+	empty, err := repo.SumPaths("r1", nil)
+	if err != nil || len(empty) != 0 {
+		t.Fatalf("空集合应为空 map：%+v, %v", empty, err)
+	}
+}

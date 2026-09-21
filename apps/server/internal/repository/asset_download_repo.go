@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"strings"
 	"time"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
@@ -90,4 +91,37 @@ func (r *AssetDownloadRepo) PurgeBefore(cutoff time.Time) (int64, error) {
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+// SumPaths 返回给定制品路径集合的累计次数（仓库详情树层批量展示用；单次 IN 查询，
+// 命中 (repo, asset_path, bucket_start) 索引）。空集合返回空 map，不发起查询。
+func (r *AssetDownloadRepo) SumPaths(repo string, paths []string) (map[string]int64, error) {
+	out := make(map[string]int64)
+	if len(paths) == 0 {
+		return out, nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(paths)), ",")
+	args := make([]any, 0, len(paths)+1)
+	args = append(args, repo)
+	for _, path := range paths {
+		args = append(args, path)
+	}
+	rows, err := r.db.Query(
+		`SELECT asset_path, SUM(download_count) FROM asset_download_minutes
+		 WHERE repo = ? AND asset_path IN (`+placeholders+`) GROUP BY asset_path`,
+		args...,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var path string
+		var count int64
+		if err := rows.Scan(&path, &count); err != nil {
+			return nil, err
+		}
+		out[path] = count
+	}
+	return out, rows.Err()
 }

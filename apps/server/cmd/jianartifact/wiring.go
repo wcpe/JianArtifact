@@ -39,6 +39,7 @@ type appServices struct {
 	auditObservability  *repository.AuditObservabilityRepo      // FR-118：统一审计读模型
 	operationsMetrics   *repository.OperationsObservabilityRepo // FR-53/120：当前节点业务与主机读模型
 	operationsAlertRepo *repository.OperationsAlertRepo         // v0.8.0：运维告警去重持久化
+	assetDownloadRepo   *repository.AssetDownloadRepo           // FR-142：制品下载计量明细
 	dashboardSvc        *domain.OperationsDashboardService
 	assetDownloadSvc    *domain.AssetDownloadService
 	hostMonitoringSvc   *domain.HostMonitoringService
@@ -158,7 +159,8 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	operationsMetrics := repository.NewOperationsObservabilityRepo(db)
 	operationsAlertRepo := repository.NewOperationsAlertRepo(db)
 	dashboardSvc := domain.NewOperationsDashboardService(operationsMetrics)
-	assetDownloadSvc := domain.NewAssetDownloadService(repository.NewAssetDownloadRepo(db))
+	assetDownloadRepo := repository.NewAssetDownloadRepo(db)
+	assetDownloadSvc := domain.NewAssetDownloadService(assetDownloadRepo)
 	hostMonitoringSvc := domain.NewHostMonitoringService(operationsMetrics, domain.NewHostCollector(cfg.BlobDir, func() bool { return db.Ping() == nil }))
 
 	offlineIndexRepo := repository.NewOfflineIndexRepo(db)
@@ -217,6 +219,7 @@ func openServices(cfg *config.Config) (*appServices, error) {
 		operationsAlertRepo: operationsAlertRepo,
 		dashboardSvc:        dashboardSvc,
 		assetDownloadSvc:    assetDownloadSvc,
+		assetDownloadRepo:   assetDownloadRepo,
 		hostMonitoringSvc:   hostMonitoringSvc,
 		backupSvc:           domain.NewBackupService(db, repository.NewBackupPackageRepo(db), blobs, cfg.DataDir, cfg.DBPath, version, nodeIdentity.NodeID),
 		restoreSvc:          restoreSvc,
@@ -263,6 +266,7 @@ func (s *appServices) handlers(version string, checks []func() error) *api.Handl
 		AuditObservability:      s.auditObservability,
 		OperationsObservability: s.operationsMetrics,
 		OperationsAlerts:        s.operationsAlertRepo,
+		AssetDownloads:          s.assetDownloadRepo,
 		AuditAttentionKey:       s.auditAttentionKey,
 		AuditSourceNode:         s.nodeIdentity.NodeID(),
 		Backups:                 s.backupSvc,

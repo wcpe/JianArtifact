@@ -963,6 +963,8 @@ export interface TreeEntry {
     contentType?: string;
     createdAt?: string;
     updatedAt: string;
+    /** FR-142：累计完整下载次数（原始口径，公开） */
+    downloadCount?: number;
   }[];
 }
 

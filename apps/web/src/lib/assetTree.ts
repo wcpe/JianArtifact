@@ -8,6 +8,8 @@ export type AssetTreeNode = {
   kind: "dir" | "file";
   children?: AssetTreeNode[];
   asset?: AssetSummary;
+  /** FR-142：累计完整下载次数（仅来自树 API 的文件节点持有；搜索拼树不带） */
+  downloadCount?: number;
 };
 
 type MutableNode = {

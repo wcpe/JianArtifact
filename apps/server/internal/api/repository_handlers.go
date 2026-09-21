@@ -481,26 +481,41 @@ func (h *Handlers) ListRepositoryTree(c *gin.Context) {
 		return
 	}
 	type fileItem struct {
-		Path        string `json:"path"`
-		Size        int64  `json:"size"`
-		Hash        string `json:"hash"`
-		Sha1        string `json:"sha1,omitempty"`
-		Md5         string `json:"md5,omitempty"`
-		ContentType string `json:"contentType,omitempty"`
-		CreatedAt   string `json:"createdAt,omitempty"`
-		UpdatedAt   string `json:"updatedAt"`
+		Path          string `json:"path"`
+		Size          int64  `json:"size"`
+		Hash          string `json:"hash"`
+		Sha1          string `json:"sha1,omitempty"`
+		Md5           string `json:"md5,omitempty"`
+		ContentType   string `json:"contentType,omitempty"`
+		CreatedAt     string `json:"createdAt,omitempty"`
+		UpdatedAt     string `json:"updatedAt"`
+		DownloadCount int64  `json:"downloadCount"` // FR-142：累计完整下载次数（原始口径）
+	}
+	// FR-142：本层文件批量取下载计数（单次 IN 查询；空层不发起查询）。
+	var counts map[string]int64
+	if h.assetDownloads != nil {
+		paths := make([]string, 0, len(entry.Files))
+		for _, f := range entry.Files {
+			paths = append(paths, f.Path)
+		}
+		counts, err = h.assetDownloads.SumPaths(name, paths)
+		if err != nil {
+			writeDomainErr(c, err)
+			return
+		}
 	}
 	files := make([]fileItem, 0, len(entry.Files))
 	for _, f := range entry.Files {
 		files = append(files, fileItem{
-			Path:        f.Path,
-			Size:        f.Size,
-			Hash:        f.BlobHash,
-			Sha1:        f.Sha1,
-			Md5:         f.Md5,
-			ContentType: f.ContentType,
-			CreatedAt:   f.CreatedAt,
-			UpdatedAt:   f.UpdatedAt,
+			Path:          f.Path,
+			Size:          f.Size,
+			Hash:          f.BlobHash,
+			Sha1:          f.Sha1,
+			Md5:           f.Md5,
+			ContentType:   f.ContentType,
+			CreatedAt:     f.CreatedAt,
+			UpdatedAt:     f.UpdatedAt,
+			DownloadCount: counts[f.Path],
 		})
 	}
 	dirs := entry.Dirs

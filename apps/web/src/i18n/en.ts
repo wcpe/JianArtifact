@@ -544,6 +544,7 @@ export const en = {
     searchResultCount: "Found {{count}} results",
     searchPartial: "Showing {{shown}} of {{total}} results",
     searchLoadMore: "Load more",
+    downloadCountShort: "{{count}} downloads",
     configOnlineHint:
       "When offline, group reads skip this repository; this state is not propagated by replication",
     configMembers: "Member Repositories",

@@ -78,6 +78,7 @@ function treeEntryToNodes(
     contentType?: string;
     createdAt?: string;
     updatedAt: string;
+    downloadCount?: number;
   }[],
 ): AssetTreeNode[] {
   const nodes: AssetTreeNode[] = [];
@@ -91,6 +92,7 @@ function treeEntryToNodes(
       name,
       path: f.path,
       kind: "file",
+      downloadCount: f.downloadCount,
       asset: {
         path: f.path,
         size: f.size,

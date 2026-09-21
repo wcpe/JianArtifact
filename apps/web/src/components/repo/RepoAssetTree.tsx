@@ -19,6 +19,7 @@ import {
 } from "@tabler/icons-react";
 import { useEffect, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
+import { useTranslation } from "react-i18next";
 import type { AssetTreeNode } from "../../lib/assetTree";
 import { formatBytes } from "../../lib/assetTree";
 
@@ -126,6 +127,7 @@ function TreeNodeRow({
   onToggleSelect?: (node: AssetTreeNode) => void;
 }) {
   const [open, setOpen] = useState(defaultExpanded);
+  const { t } = useTranslation();
   // 窄屏放大行高：树节点在手机上要够点（桌面保持紧凑，一屏能看更多节点）。
   const isNarrow = useMediaQuery("(max-width: 48em)") ?? false;
   const isDir = node.kind === "dir";
@@ -195,9 +197,13 @@ function TreeNodeRow({
           <Text size="sm" lineClamp={1} fw={selected ? 600 : 400} style={{ flex: 1, minWidth: 0 }}>
             {node.name}
           </Text>
-          {showSize && !isDir && node.asset && (
+          {!isDir && node.asset && (
             <Text size="xs" c="dimmed" style={{ flexShrink: 0 }}>
-              {formatBytes(node.asset.size)}
+              {showSize ? formatBytes(node.asset.size) : null}
+              {/* FR-142：下载次数独立于 showSize（浏览模式也展示）；为 0 时不占位。 */}
+              {typeof node.downloadCount === "number" && node.downloadCount > 0
+                ? `${showSize ? " · " : ""}${t("repoDetail.downloadCountShort", { count: node.downloadCount })}`
+                : ""}
             </Text>
           )}
         </Group>
