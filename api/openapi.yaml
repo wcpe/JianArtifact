@@ -314,6 +314,30 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+  /api/v1/observability/downloads/by-client:
+    get:
+      operationId: getDownloadByClient
+      summary: 制品下载来源聚合（仅管理员）
+      description: |
+        按来源 IP（Top 10，明文仅管理员）与客户端类型（UA 归类，不暴露原始 UA 串）聚合。
+        去重口径固定为「同 IP + 同制品 1 小时窗口只计一次贡献」（独立来源视角）；
+        原始累计口径见仪表盘 downloadTrend。
+      parameters:
+        - $ref: "#/components/parameters/ObservabilityFromParam"
+        - $ref: "#/components/parameters/ObservabilityToParam"
+      responses:
+        "200":
+          description: 下载来源聚合
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DownloadClientRanking"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
   /api/v1/observability/dashboard:
     get:
       operationId: getOperationsDashboard
@@ -2370,9 +2394,52 @@ components:
         blockedUntil:
           type: string
           format: date-time
+    DownloadTrendPoint:
+      type: object
+      required: [from, to, downloadCount]
+      properties:
+        from:
+          type: string
+          format: date-time
+        to:
+          type: string
+          format: date-time
+        downloadCount:
+          type: integer
+          format: int64
+    DownloadIpCount:
+      type: object
+      required: [ip, count]
+      properties:
+        ip:
+          type: string
+        count:
+          type: integer
+          format: int64
+    DownloadFamilyCount:
+      type: object
+      required: [family, count]
+      properties:
+        family:
+          type: string
+        count:
+          type: integer
+          format: int64
+    DownloadClientRanking:
+      type: object
+      required: [topIps, families]
+      properties:
+        topIps:
+          type: array
+          items:
+            $ref: "#/components/schemas/DownloadIpCount"
+        families:
+          type: array
+          items:
+            $ref: "#/components/schemas/DownloadFamilyCount"
     OperationsDashboard:
       type: object
-      required: [from, to, effectiveBucket, current, kpi, requestTrend, capacityTrend, alerts]
+      required: [from, to, effectiveBucket, current, kpi, requestTrend, downloadTrend, capacityTrend, alerts]
       properties:
         from:
           type: string
@@ -2390,6 +2457,10 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ProtocolMetricPoint"
+        downloadTrend:
+          type: array
+          items:
+            $ref: "#/components/schemas/DownloadTrendPoint"
         capacityTrend:
           type: array
           items:

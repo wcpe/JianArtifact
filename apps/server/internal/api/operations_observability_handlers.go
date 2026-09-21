@@ -44,13 +44,73 @@ func (h *Handlers) GetOperationsDashboard(c *gin.Context, params GetOperationsDa
 		return
 	}
 	bucket := operationsBucket(from, to)
+	downloadTrend, ok := h.assetDownloadTrend(c, from, to, bucket)
+	if !ok {
+		return
+	}
 	response := OperationsDashboard{
 		From: from, To: to, EffectiveBucket: ObservabilityBucket(bucket),
 		Current:       capacityPoint(current, time.Now().UTC().Truncate(time.Hour), time.Now().UTC()),
 		Kpi:           dashboardKPI(current, minutes),
 		RequestTrend:  aggregateProtocolMinutes(minutes, from, to, bucket),
+		DownloadTrend: downloadTrend,
 		CapacityTrend: aggregateCapacitySnapshots(capacity, from, to, bucket),
 		Alerts:        h.operationsAlerts(),
+	}
+	c.JSON(http.StatusOK, response)
+}
+
+// assetDownloadTrend 查询并转换下载累计趋势（FR-143；原始口径，与 KPI 走同一采集点）。
+// repo 未接线时返回空集——不伪造数据，也不因可选依赖缺失而整体 500。
+func (h *Handlers) assetDownloadTrend(c *gin.Context, from, to time.Time, bucket string) ([]DownloadTrendPoint, bool) {
+	points := make([]DownloadTrendPoint, 0)
+	if h.assetDownloads == nil {
+		return points, true
+	}
+	buckets, err := h.assetDownloads.DownloadTrend(from, to, bucket)
+	if err != nil {
+		writeDomainErr(c, err)
+		return nil, false
+	}
+	for _, item := range buckets {
+		start, parseErr := time.Parse(time.RFC3339, item.Bucket)
+		if parseErr != nil {
+			continue
+		}
+		points = append(points, DownloadTrendPoint{From: start, To: bucketEnd(start, bucket), DownloadCount: item.Count})
+	}
+	return points, true
+}
+
+// GetDownloadByClient 返回下载来源聚合（FR-144；独立来源口径：同 IP + 同制品 1 小时窗口
+// 只计一次贡献）。IP 明文仅管理员可见；客户端类型为 UA 归类结果，不含原始 UA 串。
+func (h *Handlers) GetDownloadByClient(c *gin.Context, params GetDownloadByClientParams) {
+	if _, ok := requireAdmin(c); !ok {
+		return
+	}
+	from, to, ok := operationsRange(c, params.From, params.To)
+	if !ok {
+		return
+	}
+	if h.assetDownloads == nil {
+		authWriteUnavailable(c)
+		return
+	}
+	const topIPs = 10
+	ips, families, err := h.assetDownloads.DownloadClientRanking(from, to, topIPs)
+	if err != nil {
+		writeDomainErr(c, err)
+		return
+	}
+	response := DownloadClientRanking{
+		TopIps:   make([]DownloadIpCount, 0, len(ips)),
+		Families: make([]DownloadFamilyCount, 0, len(families)),
+	}
+	for _, item := range ips {
+		response.TopIps = append(response.TopIps, DownloadIpCount{Ip: item.IP, Count: item.Count})
+	}
+	for _, item := range families {
+		response.Families = append(response.Families, DownloadFamilyCount{Family: item.Family, Count: item.Count})
 	}
 	c.JSON(http.StatusOK, response)
 }

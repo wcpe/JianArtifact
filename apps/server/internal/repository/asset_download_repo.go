@@ -93,6 +93,105 @@ func (r *AssetDownloadRepo) PurgeBefore(cutoff time.Time) (int64, error) {
 	return result.RowsAffected()
 }
 
+// DownloadTrendBucket 是下载累计趋势的一个时间桶（Bucket 为 RFC3339 起点字符串）。
+type DownloadTrendBucket struct {
+	Bucket string
+	Count  int64
+}
+
+// DownloadClientIPCount / DownloadClientFamilyCount 是来源排名的行。
+type DownloadClientIPCount struct {
+	IP    string
+	Count int64
+}
+
+type DownloadClientFamilyCount struct {
+	Family string
+	Count  int64
+}
+
+// DownloadTrend 按粒度（minute/hour/day）聚合下载累计（原始口径，不去重）。明细表是
+// 「组合级」行（分钟 × 仓库 × 制品 × IP × UA），行数远大于全局分钟表——故聚合下推到
+// SQL（strftime 截断 + GROUP BY），不读全量进内存；bucket_start 是 RFC3339 文本，可解析。
+func (r *AssetDownloadRepo) DownloadTrend(from, to time.Time, bucket string) ([]DownloadTrendBucket, error) {
+	format := "%Y-%m-%dT%H:%M:00Z"
+	switch bucket {
+	case "hour":
+		format = "%Y-%m-%dT%H:00:00Z"
+	case "day":
+		format = "%Y-%m-%dT00:00:00Z"
+	}
+	rows, err := r.db.Query(
+		`SELECT strftime(?, bucket_start) AS bucket, SUM(download_count)
+		 FROM asset_download_minutes WHERE bucket_start >= ? AND bucket_start <= ?
+		 GROUP BY bucket ORDER BY bucket`,
+		format, formatMetricTime(from), formatMetricTime(to),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := make([]DownloadTrendBucket, 0)
+	for rows.Next() {
+		var item DownloadTrendBucket
+		if err := rows.Scan(&item.Bucket, &item.Count); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+// DownloadClientRanking 返回「独立来源」口径的 IP Top N 与客户端族分布：同 IP + 同制品
+// 在同一小时窗口内只计一次贡献（对 小时桶 × 仓库 × 制品 × 维度 做 DISTINCT 再计数）。
+// 原始累计口径见 DownloadTrend；此处刻意不返回原始 UA 串（ua_family 为归类结果）。
+func (r *AssetDownloadRepo) DownloadClientRanking(from, to time.Time, topIPs int) ([]DownloadClientIPCount, []DownloadClientFamilyCount, error) {
+	fromStr, toStr := formatMetricTime(from), formatMetricTime(to)
+	ipRows, err := r.db.Query(
+		`SELECT client_ip, COUNT(*) FROM (
+		   SELECT DISTINCT client_ip, repo, asset_path, strftime('%Y-%m-%dT%H', bucket_start) AS hour
+		   FROM asset_download_minutes WHERE bucket_start >= ? AND bucket_start <= ?
+		 ) GROUP BY client_ip ORDER BY COUNT(*) DESC, client_ip LIMIT ?`,
+		fromStr, toStr, topIPs,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() { _ = ipRows.Close() }()
+	ips := make([]DownloadClientIPCount, 0)
+	for ipRows.Next() {
+		var item DownloadClientIPCount
+		if err := ipRows.Scan(&item.IP, &item.Count); err != nil {
+			return nil, nil, err
+		}
+		ips = append(ips, item)
+	}
+	if err := ipRows.Err(); err != nil {
+		return nil, nil, err
+	}
+
+	familyRows, err := r.db.Query(
+		`SELECT ua_family, COUNT(*) FROM (
+		   SELECT DISTINCT ua_family, repo, asset_path, client_ip, strftime('%Y-%m-%dT%H', bucket_start) AS hour
+		   FROM asset_download_minutes WHERE bucket_start >= ? AND bucket_start <= ?
+		 ) GROUP BY ua_family ORDER BY COUNT(*) DESC, ua_family`,
+		fromStr, toStr,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() { _ = familyRows.Close() }()
+	families := make([]DownloadClientFamilyCount, 0)
+	for familyRows.Next() {
+		var item DownloadClientFamilyCount
+		if err := familyRows.Scan(&item.Family, &item.Count); err != nil {
+			return nil, nil, err
+		}
+		families = append(families, item)
+	}
+	return ips, families, familyRows.Err()
+}
+
 // SumPaths 返回给定制品路径集合的累计次数（仓库详情树层批量展示用；单次 IN 查询，
 // 命中 (repo, asset_path, bucket_start) 索引）。空集合返回空 map，不发起查询。
 func (r *AssetDownloadRepo) SumPaths(repo string, paths []string) (map[string]int64, error) {

@@ -2054,6 +2054,31 @@ type CreateUserRequest struct {
 // CreateUserRequestRole defines model for CreateUserRequest.Role.
 type CreateUserRequestRole string
 
+// DownloadClientRanking defines model for DownloadClientRanking.
+type DownloadClientRanking struct {
+	Families []DownloadFamilyCount `json:"families"`
+	TopIps   []DownloadIpCount     `json:"topIps"`
+}
+
+// DownloadFamilyCount defines model for DownloadFamilyCount.
+type DownloadFamilyCount struct {
+	Count  int64  `json:"count"`
+	Family string `json:"family"`
+}
+
+// DownloadIpCount defines model for DownloadIpCount.
+type DownloadIpCount struct {
+	Count int64  `json:"count"`
+	Ip    string `json:"ip"`
+}
+
+// DownloadTrendPoint defines model for DownloadTrendPoint.
+type DownloadTrendPoint struct {
+	DownloadCount int64     `json:"downloadCount"`
+	From          time.Time `json:"from"`
+	To            time.Time `json:"to"`
+}
+
 // EnabledFormats defines model for EnabledFormats.
 type EnabledFormats struct {
 	// Formats 当前进程启动时启用的格式，按字典序返回
@@ -2333,11 +2358,12 @@ type OperationsAlertSeverity string
 
 // OperationsDashboard defines model for OperationsDashboard.
 type OperationsDashboard struct {
-	Alerts          []OperationsAlert   `json:"alerts"`
-	CapacityTrend   []CapacityPoint     `json:"capacityTrend"`
-	Current         CapacityPoint       `json:"current"`
-	EffectiveBucket ObservabilityBucket `json:"effectiveBucket"`
-	From            time.Time           `json:"from"`
+	Alerts          []OperationsAlert    `json:"alerts"`
+	CapacityTrend   []CapacityPoint      `json:"capacityTrend"`
+	Current         CapacityPoint        `json:"current"`
+	DownloadTrend   []DownloadTrendPoint `json:"downloadTrend"`
+	EffectiveBucket ObservabilityBucket  `json:"effectiveBucket"`
+	From            time.Time            `json:"from"`
 
 	// Kpi 服务端按当前范围聚合的权威仪表盘 KPI；客户端不得自行从趋势重新计算。
 	Kpi          OperationsDashboardKpi `json:"kpi"`
@@ -3011,6 +3037,15 @@ type GetOperationsDashboardParams struct {
 	To *ObservabilityToParam `form:"to,omitempty" json:"to,omitempty"`
 }
 
+// GetDownloadByClientParams defines parameters for GetDownloadByClient.
+type GetDownloadByClientParams struct {
+	// From UTC 时间范围下界（含）。与 to 同时提供或同时省略；省略时为最近 24 小时。
+	From *ObservabilityFromParam `form:"from,omitempty" json:"from,omitempty"`
+
+	// To UTC 时间范围上界（不含），最长 30 天。
+	To *ObservabilityToParam `form:"to,omitempty" json:"to,omitempty"`
+}
+
 // GetHostMonitoringParams defines parameters for GetHostMonitoring.
 type GetHostMonitoringParams struct {
 	// From UTC 时间范围下界（含）。与 to 同时提供或同时省略；省略时为最近 24 小时。
@@ -3530,6 +3565,9 @@ type ServerInterface interface {
 	// GetOperationsDashboard 当前节点业务仪表盘（仅管理员）
 	// (GET /api/v1/observability/dashboard)
 	GetOperationsDashboard(c *gin.Context, params GetOperationsDashboardParams)
+	// GetDownloadByClient 制品下载来源聚合（仅管理员）
+	// (GET /api/v1/observability/downloads/by-client)
+	GetDownloadByClient(c *gin.Context, params GetDownloadByClientParams)
 	// GetHostMonitoring 当前主机监控（仅管理员）
 	// (GET /api/v1/observability/host)
 	GetHostMonitoring(c *gin.Context, params GetHostMonitoringParams)
@@ -4968,6 +5006,41 @@ func (siw *ServerInterfaceWrapper) GetOperationsDashboard(c *gin.Context) {
 	siw.Handler.GetOperationsDashboard(c, params)
 }
 
+// GetDownloadByClient operation middleware
+func (siw *ServerInterfaceWrapper) GetDownloadByClient(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetDownloadByClientParams
+
+	// ------------- Optional query parameter "from" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "from", c.Request.URL.Query(), &params.From, runtime.BindQueryParameterOptions{Type: "string", Format: "date-time"})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter from: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "to" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "to", c.Request.URL.Query(), &params.To, runtime.BindQueryParameterOptions{Type: "string", Format: "date-time"})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter to: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetDownloadByClient(c, params)
+}
+
 // GetHostMonitoring operation middleware
 func (siw *ServerInterfaceWrapper) GetHostMonitoring(c *gin.Context) {
 
@@ -5647,6 +5720,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/api/v1/observability/audit/attention/:attentionId", wrapper.GetAuditAttention)
 	router.PUT(options.BaseURL+"/api/v1/observability/audit/attention-acknowledgements", wrapper.AcknowledgeAuditAttention)
 	router.GET(options.BaseURL+"/api/v1/observability/audit/notifications", wrapper.ListAuditAttentionNotifications)
+	router.GET(options.BaseURL+"/api/v1/observability/downloads/by-client", wrapper.GetDownloadByClient)
 	router.GET(options.BaseURL+"/api/v1/observability/dashboard", wrapper.GetOperationsDashboard)
 	router.GET(options.BaseURL+"/api/v1/observability/host", wrapper.GetHostMonitoring)
 	router.POST(options.BaseURL+"/api/v1/auth/bootstrap", wrapper.Bootstrap)

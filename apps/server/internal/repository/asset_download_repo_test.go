@@ -106,3 +106,79 @@ func TestAssetDownloadRepoSumPaths(t *testing.T) {
 		t.Fatalf("空集合应为空 map：%+v, %v", empty, err)
 	}
 }
+
+// DownloadTrend：按粒度分桶聚合（分钟 / 小时），原始累计不去重。
+func TestAssetDownloadRepoDownloadTrend(t *testing.T) {
+	db, err := persistence.Open(filepath.Join(t.TempDir(), "asset-download-trend.db"))
+	if err != nil {
+		t.Fatalf("打开数据库：%v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := db.Migrate(); err != nil {
+		t.Fatalf("迁移数据库：%v", err)
+	}
+	repo := NewAssetDownloadRepo(db)
+
+	base := time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC)
+	if err := repo.AddMinutes([]AssetDownloadMinute{
+		{BucketStart: formatMetricTime(base), Repo: "r1", AssetPath: "a.jar", ClientIP: "1.1.1.1", UAFamily: "maven", DownloadCount: 2},
+		{BucketStart: formatMetricTime(base.Add(time.Minute)), Repo: "r1", AssetPath: "a.jar", ClientIP: "1.1.1.1", UAFamily: "maven", DownloadCount: 3},
+		{BucketStart: formatMetricTime(base.Add(time.Minute)), Repo: "r1", AssetPath: "b.jar", ClientIP: "2.2.2.2", UAFamily: "curl", DownloadCount: 4},
+	}); err != nil {
+		t.Fatalf("写入：%v", err)
+	}
+	window := [2]time.Time{base.Add(-time.Minute), base.Add(time.Hour)}
+
+	minuteTrend, err := repo.DownloadTrend(window[0], window[1], "minute")
+	if err != nil {
+		t.Fatalf("分钟趋势：%v", err)
+	}
+	if len(minuteTrend) != 2 || minuteTrend[0].Count != 2 || minuteTrend[1].Count != 7 {
+		t.Fatalf("分钟桶应为 [2, 7]：%+v", minuteTrend)
+	}
+
+	hourTrend, err := repo.DownloadTrend(window[0], window[1], "hour")
+	if err != nil {
+		t.Fatalf("小时趋势：%v", err)
+	}
+	if len(hourTrend) != 1 || hourTrend[0].Count != 9 {
+		t.Fatalf("小时桶应为 [9]：%+v", hourTrend)
+	}
+}
+
+// DownloadClientRanking：独立来源口径——同一小时同 IP 同制品多分钟只计一次贡献。
+func TestAssetDownloadRepoDownloadClientRanking(t *testing.T) {
+	db, err := persistence.Open(filepath.Join(t.TempDir(), "asset-download-ranking.db"))
+	if err != nil {
+		t.Fatalf("打开数据库：%v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := db.Migrate(); err != nil {
+		t.Fatalf("迁移数据库：%v", err)
+	}
+	repo := NewAssetDownloadRepo(db)
+
+	base := time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC)
+	if err := repo.AddMinutes([]AssetDownloadMinute{
+		// 同一小时内 1.1.1.1 对 a.jar 的两次（不同分钟）→ 去重后算一次贡献。
+		{BucketStart: formatMetricTime(base), Repo: "r1", AssetPath: "a.jar", ClientIP: "1.1.1.1", UAFamily: "maven", DownloadCount: 5},
+		{BucketStart: formatMetricTime(base.Add(time.Minute)), Repo: "r1", AssetPath: "a.jar", ClientIP: "1.1.1.1", UAFamily: "maven", DownloadCount: 9},
+		// 同 IP 同小时另有 b.jar → 第二次贡献。
+		{BucketStart: formatMetricTime(base.Add(2 * time.Minute)), Repo: "r1", AssetPath: "b.jar", ClientIP: "1.1.1.1", UAFamily: "maven", DownloadCount: 1},
+		// 另一小时的 2.2.2.2 → 独立贡献一次。
+		{BucketStart: formatMetricTime(base.Add(time.Hour)), Repo: "r1", AssetPath: "a.jar", ClientIP: "2.2.2.2", UAFamily: "curl", DownloadCount: 1},
+	}); err != nil {
+		t.Fatalf("写入：%v", err)
+	}
+
+	ips, families, err := repo.DownloadClientRanking(base.Add(-time.Minute), base.Add(2*time.Hour), 10)
+	if err != nil {
+		t.Fatalf("来源排名：%v", err)
+	}
+	if len(ips) != 2 || ips[0].IP != "1.1.1.1" || ips[0].Count != 2 || ips[1].IP != "2.2.2.2" || ips[1].Count != 1 {
+		t.Fatalf("IP 排名应去重且按贡献降序：%+v", ips)
+	}
+	if len(families) != 2 || families[0].Family != "maven" || families[0].Count != 2 || families[1].Family != "curl" || families[1].Count != 1 {
+		t.Fatalf("族分布应同口径去重：%+v", families)
+	}
+}
