@@ -271,6 +271,7 @@ export function useAuditQuery() {
       pageSize,
       totalPages,
       totalCount,
+      hasExactTotal: knownTotal !== null,
       goToPage,
       setPageSize: changePageSize,
       loading: false,

@@ -766,6 +766,7 @@ export const zh = {
     filterAttentionPending: "待处理",
     filterAttentionAcknowledged: "已确认",
     totalCount: "共 {{total}} 条",
+    loadedCount: "已加载 {{count}} 条",
     kpiBandLabel: "审计指标",
     kpiSuccessRate: "成功率",
     kpiSuccessRateHint: "成功 / (成功 + 失败)",

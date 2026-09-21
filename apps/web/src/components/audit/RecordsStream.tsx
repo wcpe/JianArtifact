@@ -341,7 +341,9 @@ export function RecordsStream({ model, onInvestigate, onOpenAttention }: Records
           {isNarrow ? null : advancedFilters}
           {/* 记录计数并入筛选工具条（原分区卡 meta 位置）；窄屏换行时独占行尾。 */}
           <Text size="xs" c="dimmed" ml="auto" style={{ flexShrink: 0 }}>
-            {t("auditWorkbench.totalCount", { total: model.pagination.totalCount })}
+            {model.pagination.hasExactTotal
+              ? t("auditWorkbench.totalCount", { total: model.pagination.totalCount })
+              : t("auditWorkbench.loadedCount", { count: model.records.items.length })}
           </Text>
         </Group>
       </Box>

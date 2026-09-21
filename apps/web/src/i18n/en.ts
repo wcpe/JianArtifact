@@ -803,6 +803,7 @@ export const en = {
     filterAttentionPending: "Pending",
     filterAttentionAcknowledged: "Acknowledged",
     totalCount: "{{total}} total",
+    loadedCount: "Loaded {{count}}",
     kpiBandLabel: "Audit metrics",
     kpiSuccessRate: "Success rate",
     kpiSuccessRateHint: "Success / (success + failure)",

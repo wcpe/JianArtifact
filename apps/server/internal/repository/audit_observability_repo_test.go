@@ -61,7 +61,9 @@ func TestAuditObservabilityRepoPagesWithinSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("读取第一页：%v", err)
 	}
-	if total != 2 || len(page) != 1 || next == nil || page[0].SourceEventID != 2 {
+	// 新契约：不再 COUNT（百万级 replication 的全量计数是首屏主要耗时），
+	// 首屏与翻页统一 total=-1；是否还有更多以「多取 1 条」精确判断。
+	if total != -1 || len(page) != 1 || next == nil || page[0].SourceEventID != 2 {
 		t.Fatalf("第一页未受快照边界约束：total=%d page=%+v next=%v", total, page, next)
 	}
 	page, total, next, err = repo.ListEventPage(filter, *next, 1)
@@ -83,7 +85,7 @@ func TestAuditObservabilityRepoPagesWithinSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("读取筛选页：%v", err)
 	}
-	if total != 1 || len(page) != 1 || next != nil || page[0].SourceEventID != 4 {
+	if total != -1 || len(page) != 1 || next != nil || page[0].SourceEventID != 4 {
 		t.Fatalf("数据库分页未同时应用筛选与快照：total=%d page=%+v next=%v", total, page, next)
 	}
 	limited, tooLarge, err := repo.ListEventsLimited(filter, 1)

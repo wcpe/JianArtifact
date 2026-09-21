@@ -151,21 +151,13 @@ func (r *AuditObservabilityRepo) listEventsLimited(f ObservabilityFilter, limit 
 
 // ListEventPage 按快照与筛选条件直接在 SQLite 中分页，避免请求页读取整段历史。
 func (r *AuditObservabilityRepo) ListEventPage(f ObservabilityFilter, offset, limit int) ([]ObservabilityEvent, int, *int, error) {
-	// COUNT 只在首屏（offset==0）执行：同一 CTE 的全量计数在翻页时重复代价极高——
-	// 30 天范围下正是审计中心「切 30d 卡死」的主因之一。翻页返回 total=-1（未计数）。
+	// 不做 COUNT：30 天 replication 达百万级（线上实测 114 万），全量计数（即使走
+	// covering index）是首屏主要耗时。统一返回 total=-1，前端显示「已加载 N 条」，
+	// 以「多取 1 条」精确判断是否还有更多。
 	total := -1
-	if offset == 0 {
-		countQuery, countArgs := observabilityEventsQuery(f, "SELECT COUNT(*)")
-		if err := r.db.Get(&total, countQuery, countArgs...); err != nil {
-			return nil, 0, nil, err
-		}
-	}
-	// 翻页（无精确 total）时多取 1 条用于精确判定「是否还有更多」；首屏无需多取。
-	fetchLimit := limit
-	if total < 0 {
-		fetchLimit = limit + 1
-	}
-	// 无过滤时把每源 LIMIT 下推（走时间索引、取满即停）；有过滤时回退通用查询。
+	fetchLimit := limit + 1
+	// 无过滤/白名单过滤时把每源 LIMIT（含过滤）下推（走时间索引、取满即停）；
+	// 含白名单外条件时回退通用查询。
 	query, args, limited := observabilityEventsQueryLimited(f, observabilityEventSelect, offset+fetchLimit)
 	if !limited {
 		query, args = observabilityEventsQuery(f, observabilityEventSelect)
@@ -178,22 +170,12 @@ func (r *AuditObservabilityRepo) ListEventPage(f ObservabilityFilter, offset, li
 	if events == nil {
 		events = []ObservabilityEvent{}
 	}
-	if total < 0 {
-		hasMore := len(events) > limit
-		if hasMore {
-			events = events[:limit]
-		}
-		if !hasMore {
-			return events, total, nil, nil
-		}
+	if len(events) > limit {
+		events = events[:limit]
 		nextOffset := offset + len(events)
 		return events, total, &nextOffset, nil
 	}
-	nextOffset := offset + len(events)
-	if nextOffset >= total {
-		return events, total, nil, nil
-	}
-	return events, total, &nextOffset, nil
+	return events, total, nil, nil
 }
 
 // observabilityEventSelect 是统一读模型的投影列清单（真实列全部来自 CTE 别名）。
@@ -217,23 +199,41 @@ const observabilityAggregateSelect = `SELECT source, source_event_id, occurred_a
 	http_method, http_path, status_code, duration_ms, client_ip, '' AS user_agent, '' AS request_id,
 	'' AS token_preview, '' AS body_preview, '' AS actor_email`
 
-// hasEventFilters 判断是否存在外层筛选。下推 LIMIT 的优化**仅当无外层过滤**时正确
-// （有过滤时源内前 K 名会被外层滤掉，导致漏数据）——判断保守：任一条件出现即视为有过滤，
-// 回退到通用查询（此时过滤后行数已小，排序代价可控）。
-func hasEventFilters(f ObservabilityFilter) bool {
-	return f.Actor != "" || f.Repository != "" || f.Query != "" || f.Method != "" ||
-		f.Action != "" || f.Email != "" || f.ClientIP != "" || f.AuthSource != "" ||
-		f.Attention == "pending" || f.Attention == "acknowledged" || len(f.Categories) > 0
+// pushdownFilterClause 生成可安全下推到各源的过滤片段（列名按源映射）。
+// 保守白名单：只放行两源都能精确映射的条件（action↔op、actor↔source_actor），覆盖
+// 高频筛选且保证正确性；含其它条件时整体回退通用查询（此时过滤后行数已小、排序可控）。
+func pushdownFilterClause(f ObservabilityFilter, auditSource bool) (string, []any, bool) {
+	if f.Repository != "" || f.Query != "" || f.Method != "" || f.Email != "" || f.ClientIP != "" ||
+		f.AuthSource != "" || f.Attention != "" || len(f.Categories) > 0 || len(f.Results) > 0 {
+		return "", nil, false
+	}
+	actionCol, actorCol := "action", "actor"
+	if !auditSource {
+		actionCol, actorCol = "op", "source_actor"
+	}
+	clause := ""
+	args := []any{}
+	if f.Action != "" {
+		clause += " AND " + actionCol + " = ?"
+		args = append(args, f.Action)
+	}
+	if f.Actor != "" {
+		clause += " AND " + actorCol + " = ?"
+		args = append(args, f.Actor)
+	}
+	return clause, args, true
 }
 
 // observabilityEventsQueryLimited 把「每源按时间倒序取前 perSourceLimit 条」下推到各子查询
 // （走时间索引、取满即停），外层只归并排序 ≤2×perSourceLimit 行。30 天默认视图由此从
 // 「全量物化 + TEMP B-TREE 排序」（实测查询计划）降为毫秒级——审计中心「切 30d 卡死」的根治点。
+// 过滤（白名单内）同样下推进各源（列名按源映射），筛选后翻页不再回退全量物化。
 //
-// 正确性：全局第 K 名必属于某源的「前 K 名」（K = offset+limit）；仅无过滤时成立（见 hasEventFilters）。
-// 返回 ok=false 时调用方应回退 observabilityEventsQuery。
+// 正确性：全局第 K 名必属于某源的「前 K 名」（K = offset+limit）；下推条件必须与
+// 外层语义逐源等价（见 pushdownFilterClause 的白名单）。返回 ok=false 时回退通用查询。
 func observabilityEventsQueryLimited(f ObservabilityFilter, selectClause string, perSourceLimit int) (string, []any, bool) {
-	if hasEventFilters(f) {
+	auditClause, auditArgs, ok := pushdownFilterClause(f, true)
+	if !ok {
 		return "", nil, false
 	}
 	query := `WITH observability_events AS (
@@ -243,12 +243,15 @@ func observabilityEventsQueryLimited(f ObservabilityFilter, selectClause string,
 				http_method, http_path, status_code, duration_ms, ip AS client_ip, user_agent, request_id,
 				token_preview, body_preview, actor_email
 			FROM audit_log
-			WHERE (source_node = '' OR source_node = ?) AND id <= ? AND ts >= ? AND ts < ?
+			WHERE (source_node = '' OR source_node = ?) AND id <= ? AND ts >= ? AND ts < ?` + auditClause + `
 			ORDER BY ts DESC LIMIT ?
 		)
 	`
-	args := []any{f.SourceNode, f.AuditMaxID, f.From, f.To, perSourceLimit}
+	args := []any{f.SourceNode, f.AuditMaxID, f.From, f.To}
+	args = append(args, auditArgs...)
+	args = append(args, perSourceLimit)
 	if !f.AuditOnly {
+		replClause, replArgs, _ := pushdownFilterClause(f, false)
 		query += `	UNION ALL
 		SELECT * FROM (
 			SELECT 'replication' AS source, id AS source_event_id, occurred_at, source_actor AS actor, source_user_id AS user_id,
@@ -257,11 +260,13 @@ func observabilityEventsQueryLimited(f ObservabilityFilter, selectClause string,
 				'' AS http_method, '' AS http_path, 0 AS status_code, 0 AS duration_ms, '' AS client_ip,
 				'' AS user_agent, '' AS request_id, '' AS token_preview, '' AS body_preview, '' AS actor_email
 			FROM replication_apply_event
-			WHERE id <= ? AND occurred_at >= ? AND occurred_at < ?
+			WHERE id <= ? AND occurred_at >= ? AND occurred_at < ?` + replClause + `
 			ORDER BY occurred_at DESC LIMIT ?
 		)
 	`
-		args = append(args, f.ReplicationMaxID, f.From, f.To, perSourceLimit)
+		args = append(args, f.ReplicationMaxID, f.From, f.To)
+		args = append(args, replArgs...)
+		args = append(args, perSourceLimit)
 	}
 	query += `)
 	` + selectClause + ` FROM observability_events`
