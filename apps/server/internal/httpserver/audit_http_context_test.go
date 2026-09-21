@@ -106,8 +106,9 @@ func TestAuditEventsExposeHTTPContextAndFilters(t *testing.T) {
 
 	t.Run("列表返回脱敏 HTTP 上下文与身份快照", func(t *testing.T) {
 		page := get("/api/v1/observability/audit/events?limit=10")
-		if page.TotalCount != 3 || len(page.Items) != 3 {
-			t.Fatalf("期望 3 条事件，实际 total=%d items=%d", page.TotalCount, len(page.Items))
+		// totalCount=-1 表示服务端不再执行精确全量 COUNT（首屏性能契约），命中数由当前页 items 表达。
+		if page.TotalCount != -1 || len(page.Items) != 3 {
+			t.Fatalf("期望 3 条事件且 totalCount=-1（未精确计数），实际 total=%d items=%d", page.TotalCount, len(page.Items))
 		}
 		newest := page.Items[0]
 		if newest.Http == nil {
@@ -142,27 +143,27 @@ func TestAuditEventsExposeHTTPContextAndFilters(t *testing.T) {
 	})
 
 	t.Run("按方法/动作/邮箱/客户端 IP 前缀筛选", func(t *testing.T) {
-		if page := get("/api/v1/observability/audit/events?limit=10&method=POST"); page.TotalCount != 1 {
-			t.Fatalf("method=POST 期望 1 条，实际 %d", page.TotalCount)
+		if page := get("/api/v1/observability/audit/events?limit=10&method=POST"); len(page.Items) != 1 {
+			t.Fatalf("method=POST 期望 1 条，实际 %d", len(page.Items))
 		}
-		if page := get("/api/v1/observability/audit/events?limit=10&action=asset.delete"); page.TotalCount != 1 {
-			t.Fatalf("action=asset.delete 期望 1 条，实际 %d", page.TotalCount)
+		if page := get("/api/v1/observability/audit/events?limit=10&action=asset.delete"); len(page.Items) != 1 {
+			t.Fatalf("action=asset.delete 期望 1 条，实际 %d", len(page.Items))
 		}
-		if page := get("/api/v1/observability/audit/events?limit=10&actorEmail=admin@example.com"); page.TotalCount != 2 {
-			t.Fatalf("actorEmail 期望 2 条，实际 %d", page.TotalCount)
+		if page := get("/api/v1/observability/audit/events?limit=10&actorEmail=admin@example.com"); len(page.Items) != 2 {
+			t.Fatalf("actorEmail 期望 2 条，实际 %d", len(page.Items))
 		}
-		if page := get("/api/v1/observability/audit/events?limit=10&clientIp=10.12."); page.TotalCount != 1 {
-			t.Fatalf("clientIp 前缀期望 1 条，实际 %d", page.TotalCount)
+		if page := get("/api/v1/observability/audit/events?limit=10&clientIp=10.12."); len(page.Items) != 1 {
+			t.Fatalf("clientIp 前缀期望 1 条，实际 %d", len(page.Items))
 		}
-		if page := get("/api/v1/observability/audit/events?limit=10&authSource=system"); page.TotalCount != 1 {
-			t.Fatalf("authSource=system 期望 1 条，实际 %d", page.TotalCount)
+		if page := get("/api/v1/observability/audit/events?limit=10&authSource=system"); len(page.Items) != 1 {
+			t.Fatalf("authSource=system 期望 1 条，实际 %d", len(page.Items))
 		}
 	})
 
 	t.Run("关键字命中请求路径", func(t *testing.T) {
 		page := get("/api/v1/observability/audit/events?limit=10&q=artifacts")
-		if page.TotalCount != 1 {
-			t.Fatalf("q=artifacts 期望 1 条，实际 %d", page.TotalCount)
+		if len(page.Items) != 1 {
+			t.Fatalf("q=artifacts 期望 1 条，实际 %d", len(page.Items))
 		}
 		if page.Items[0].Http == nil || !strings.Contains(page.Items[0].Http.Path, "artifacts") {
 			t.Fatalf("命中事件应含目标路径，实际 %+v", page.Items[0].Http)

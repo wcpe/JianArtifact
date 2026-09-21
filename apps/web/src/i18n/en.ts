@@ -804,8 +804,6 @@ export const en = {
     filterAttentionAcknowledged: "Acknowledged",
     totalCount: "{{total}} total",
     loadedCount: "Loaded {{count}}",
-    rangeFrom: "Start date",
-    rangeTo: "End date",
     includeReplication: "Include replication",
     kpiBandLabel: "Audit metrics",
     kpiSuccessRate: "Success rate",
@@ -883,8 +881,7 @@ export const en = {
     detailLoading: "Loading details…",
     detailInvestigate: "Investigate this target",
     riskOpen: "View batch",
-    investigateNoMatch:
-      'No event matches "{{query}}" on the current page (first {{loaded}} records).',
+    investigateNoMatch: 'No event matches "{{query}}".',
     drawerTitle: "Risk batch details",
     drawerForbidden: "The current account is not allowed to read this risk batch.",
     drawerLoadError: "Failed to load",

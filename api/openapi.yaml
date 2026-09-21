@@ -3031,7 +3031,9 @@ components:
             $ref: "#/components/schemas/AuditEvent"
         totalCount:
           type: integer
-          minimum: 0
+          description: |-
+            命中总数。-1 表示服务端未执行精确 COUNT（取消全量计数以保障首屏性能），
+            此时客户端应展示「已加载 N 条」，不得当作 0 或错误处理。
         nextCursor:
           type: string
           description: 下一页的不透明游标；没有下一页时省略。

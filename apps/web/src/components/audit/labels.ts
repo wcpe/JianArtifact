@@ -189,6 +189,18 @@ export function formatFullTime(value: unknown): string {
   ).format(new Date(t));
 }
 
+/** 审计表格时间列：固定 `YYYY-MM-DD HH:mm:ss`（本地时区）。
+ *  跨语言宽度恒定（约 150px），避免英文 locale 的长文案撑破定宽列。 */
+export function formatTableTime(value: unknown): string {
+  const t = parseTime(value);
+  if (!t) return "—";
+  const d = new Date(t);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const clock = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  return `${date} ${clock}`;
+}
+
 /** 耗时：907 ms / 1.24 s。 */
 export function formatDuration(ms: unknown): string {
   if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) return "—";

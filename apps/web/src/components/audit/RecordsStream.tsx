@@ -20,6 +20,7 @@ import {
   Text,
   TextInput,
 } from "@mantine/core";
+import { DatePickerInput } from "@mantine/dates";
 import { IconChevronDown, IconChevronUp, IconEye, IconSearch } from "@tabler/icons-react";
 
 import { getAuditEvent } from "../../api/endpoints";
@@ -35,6 +36,7 @@ import {
   formatDuration,
   formatClock,
   formatFullTime,
+  formatTableTime,
   requestMethod,
   resultLabelKey,
   ACTION_LABEL_KEYS,
@@ -338,37 +340,26 @@ export function RecordsStream({ model, onInvestigate, onOpenAttention }: Records
             value={model.range}
             onChange={(value) => model.setRange(value as AuditRange)}
           />
-          {/* 自定义时间段：原生日期输入（样式从简），任一变更即切换 custom；后端上限 30 天。 */}
-          <Group gap={4} wrap="nowrap" style={{ flexShrink: 0 }}>
-            <input
-              type="date"
-              aria-label={t("auditWorkbench.rangeFrom", { defaultValue: "起始日期" })}
-              value={model.customRange.from ? model.customRange.from.slice(0, 10) : ""}
-              onChange={(e) => {
-                const value = e.currentTarget.value;
-                if (!value) return;
-                const to = model.customRange.to ?? new Date().toISOString();
-                model.setCustomRange(`${value}T00:00:00.000Z`, to);
-              }}
-              style={{ width: 134, padding: "3px 6px", fontSize: 12 }}
-            />
-            <Text size="xs" c="dimmed">
-              –
-            </Text>
-            <input
-              type="date"
-              aria-label={t("auditWorkbench.rangeTo", { defaultValue: "结束日期" })}
-              value={model.customRange.to ? model.customRange.to.slice(0, 10) : ""}
-              onChange={(e) => {
-                const value = e.currentTarget.value;
-                if (!value) return;
-                const from =
-                  model.customRange.from ?? new Date(Date.now() - 86_400_000).toISOString();
-                model.setCustomRange(from, `${value}T23:59:59.999Z`);
-              }}
-              style={{ width: 134, padding: "3px 6px", fontSize: 12 }}
-            />
-          </Group>
+          {/* 自定义时间段：组件库日期区间选择器（type=range），任一区间选定即切换 custom。 */}
+          <DatePickerInput
+            type="range"
+            size="xs"
+            clearable
+            w={236}
+            aria-label={t("auditWorkbench.rangeCustom", { defaultValue: "自定义时间段" })}
+            placeholder={t("auditWorkbench.rangeCustom", { defaultValue: "自定义时间段" })}
+            value={[
+              model.customRange.from ? new Date(model.customRange.from) : null,
+              model.customRange.to ? new Date(model.customRange.to) : null,
+            ]}
+            onChange={(value) => {
+              const [from, to] = value;
+              if (from && to) {
+                model.setCustomRange(new Date(from).toISOString(), new Date(to).toISOString());
+              }
+            }}
+            style={{ flexShrink: 0 }}
+          />
           {/* 默认折叠 replication 同步记录（30 天可达百万级）；勾选后纳入统一事件流。 */}
           <Checkbox
             size="xs"
@@ -428,17 +419,14 @@ export function RecordsStream({ model, onInvestigate, onOpenAttention }: Records
         ) : records.items.length === 0 ? (
           <Text size="sm" c="dimmed" py="lg" px="md">
             {model.searchMode
-              ? t("auditWorkbench.investigateNoMatch", {
-                  query: model.search,
-                  loaded: model.pagination.totalCount,
-                })
+              ? t("auditWorkbench.investigateNoMatch", { query: model.search })
               : t("auditWorkbench.emptyRecords")}
           </Text>
         ) : (
           <Table layout="fixed" highlightOnHover verticalSpacing={8} horizontalSpacing="md">
             <Table.Thead>
               <Table.Tr>
-                <Table.Th w={isNarrow ? 78 : 150} style={STICKY_HEADER}>
+                <Table.Th w={isNarrow ? 78 : 168} style={STICKY_HEADER}>
                   {t("auditWorkbench.colTime")}
                 </Table.Th>
                 {isNarrow ? null : (
@@ -447,11 +435,11 @@ export function RecordsStream({ model, onInvestigate, onOpenAttention }: Records
                   </Table.Th>
                 )}
                 <Table.Th style={STICKY_HEADER}>{t("auditWorkbench.colAction")}</Table.Th>
-                <Table.Th w={76} style={STICKY_HEADER}>
+                <Table.Th w={60} style={STICKY_HEADER}>
                   {t("auditWorkbench.colStatus")}
                 </Table.Th>
                 {isNarrow ? null : (
-                  <Table.Th w={88} style={STICKY_HEADER}>
+                  <Table.Th w={80} style={STICKY_HEADER}>
                     {t("auditWorkbench.colDuration")}
                   </Table.Th>
                 )}
@@ -460,7 +448,7 @@ export function RecordsStream({ model, onInvestigate, onOpenAttention }: Records
                     {t("auditWorkbench.colClientIp")}
                   </Table.Th>
                 )}
-                <Table.Th w={76} style={STICKY_HEADER}>
+                <Table.Th w={104} style={STICKY_HEADER}>
                   {t("auditWorkbench.colOperation")}
                 </Table.Th>
               </Table.Tr>
@@ -586,7 +574,7 @@ function EventRow({
         <Table.Td c="dimmed" style={{ fontVariantNumeric: "tabular-nums" }}>
           {/* 窄屏只留时刻：日期在分区标题的时间范围内已表达，全量时间戳会把主列挤没。 */}
           <Text size="xs">
-            {isNarrow ? formatClock(event.occurredAt) : formatFullTime(event.occurredAt)}
+            {isNarrow ? formatClock(event.occurredAt) : formatTableTime(event.occurredAt)}
           </Text>
         </Table.Td>
         {isNarrow ? null : (

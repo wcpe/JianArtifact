@@ -56,6 +56,18 @@ describe("审计工作台（单列表 + 顶部 KPI）", () => {
     expect(screen.queryByRole("radio", { name: "24h" })).toBeNull();
   });
 
+  it("筛选条保留含同步记录开关，自定义时间为组件库日期区间选择器", async () => {
+    renderWorkbench();
+
+    await screen.findByTestId("audit-records-scroll");
+    // 该开关曾随「原生日期输入 → 组件库」替换被整段误删，此断言防回归。
+    const toggle = screen.getByRole("checkbox", { name: "含同步记录" }) as HTMLInputElement;
+    expect(toggle.checked).toBe(false);
+    // 自定义时间段必须是组件库（DatePickerInput type=range），不得回退到原生日期输入。
+    expect(document.querySelectorAll('input[type="date"]').length).toBe(0);
+    expect(document.querySelector(".mantine-DatePickerInput-input")).toBeTruthy();
+  });
+
   it("动作列展示 i18n 中文标签而非契约值", async () => {
     renderWorkbench();
 
