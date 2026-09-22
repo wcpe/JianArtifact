@@ -33,7 +33,7 @@
     "@jianartifact/devmock": "workspace:*",
     "@jianartifact/eslint-config": "workspace:*",
     "@jianartifact/typescript-config": "workspace:*",
-    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",
     "@testing-library/user-event": "^14.5.2",
     "@types/react": "^19.3.0",
