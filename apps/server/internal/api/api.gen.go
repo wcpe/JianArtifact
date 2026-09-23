@@ -575,6 +575,24 @@ func (e CreateUserRequestRole) Valid() bool {
 	}
 }
 
+// Defines values for DownloadGroupedTrendResponseGroupBy.
+const (
+	DownloadGroupedTrendResponseGroupByFamily DownloadGroupedTrendResponseGroupBy = "family"
+	DownloadGroupedTrendResponseGroupByIp     DownloadGroupedTrendResponseGroupBy = "ip"
+)
+
+// Valid indicates whether the value is a known member of the DownloadGroupedTrendResponseGroupBy enum.
+func (e DownloadGroupedTrendResponseGroupBy) Valid() bool {
+	switch e {
+	case DownloadGroupedTrendResponseGroupByFamily:
+		return true
+	case DownloadGroupedTrendResponseGroupByIp:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for EnabledFormatsFormats.
 const (
 	EnabledFormatsFormatsCargo  EnabledFormatsFormats = "cargo"
@@ -1169,6 +1187,24 @@ func (e AuditMethodParam) Valid() bool {
 	}
 }
 
+// Defines values for DownloadGroupByParam.
+const (
+	DownloadGroupByParamFamily DownloadGroupByParam = "family"
+	DownloadGroupByParamIp     DownloadGroupByParam = "ip"
+)
+
+// Valid indicates whether the value is a known member of the DownloadGroupByParam enum.
+func (e DownloadGroupByParam) Valid() bool {
+	switch e {
+	case DownloadGroupByParamFamily:
+		return true
+	case DownloadGroupByParamIp:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ListAuditAttentionsParamsAttention.
 const (
 	ListAuditAttentionsParamsAttentionAcknowledged ListAuditAttentionsParamsAttention = "acknowledged"
@@ -1316,6 +1352,24 @@ func (e GetAuditObservabilitySummaryParamsMethod) Valid() bool {
 	case GetAuditObservabilitySummaryParamsMethodPOST:
 		return true
 	case GetAuditObservabilitySummaryParamsMethodPUT:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GetDownloadTrendGroupedParamsGroupBy.
+const (
+	GetDownloadTrendGroupedParamsGroupByFamily GetDownloadTrendGroupedParamsGroupBy = "family"
+	GetDownloadTrendGroupedParamsGroupByIp     GetDownloadTrendGroupedParamsGroupBy = "ip"
+)
+
+// Valid indicates whether the value is a known member of the GetDownloadTrendGroupedParamsGroupBy enum.
+func (e GetDownloadTrendGroupedParamsGroupBy) Valid() bool {
+	switch e {
+	case GetDownloadTrendGroupedParamsGroupByFamily:
+		return true
+	case GetDownloadTrendGroupedParamsGroupByIp:
 		return true
 	default:
 		return false
@@ -1593,7 +1647,9 @@ type AuditCategoryCount struct {
 }
 
 // AuditEvent 当前节点统一审计事件的安全展示字段。客户端 IP 仅在管理员审计视图按策略返回（可关闭）；
-// 不得以本对象返回 User-Agent、请求标识、原始响应体、内部地址、令牌标识或任何凭据。
+// 顶层不得返回 User-Agent、请求标识、原始响应体、内部地址、令牌标识或任何凭据——
+// 它们只允许出现在脱敏后的 http 子对象（AuditHttpContext）内，其中请求头仅保留
+// 白名单常用头且已剔除 Authorization 等敏感头；durationServerMs 只是耗时度量，不承载请求内容。
 type AuditEvent struct {
 	// Action 服务端映射的稳定操作名称。
 	Action string `json:"action"`
@@ -1614,6 +1670,10 @@ type AuditEvent struct {
 
 	// DurationMs 服务端处理耗时（毫秒）。
 	DurationMs *int64 `json:"durationMs,omitempty"`
+
+	// DurationServerMs 单段服务端耗时（毫秒）：进入业务路由处理到审计落笔；
+	// 未进入契约路由（协议端点、静态回退或被全局中间件直接拒绝）为 0，缺省不返回。
+	DurationServerMs *int64 `json:"durationServerMs,omitempty"`
 
 	// EventId 服务端签发的不透明事件标识，客户端不得解析或拼装。
 	EventId string `json:"eventId"`
@@ -1659,7 +1719,9 @@ type AuditEventDetail struct {
 	Details AuditEventSafeDetails `json:"details"`
 
 	// Event 当前节点统一审计事件的安全展示字段。客户端 IP 仅在管理员审计视图按策略返回（可关闭）；
-	// 不得以本对象返回 User-Agent、请求标识、原始响应体、内部地址、令牌标识或任何凭据。
+	// 顶层不得返回 User-Agent、请求标识、原始响应体、内部地址、令牌标识或任何凭据——
+	// 它们只允许出现在脱敏后的 http 子对象（AuditHttpContext）内，其中请求头仅保留
+	// 白名单常用头且已剔除 Authorization 等敏感头；durationServerMs 只是耗时度量，不承载请求内容。
 	Event AuditEvent `json:"event"`
 }
 
@@ -1673,7 +1735,10 @@ type AuditEventPage struct {
 	// Snapshot 与审计概览和同筛选事件页共享的不透明稳定读取边界。
 	Snapshot   string    `json:"snapshot"`
 	SnapshotAt time.Time `json:"snapshotAt"`
-	TotalCount int       `json:"totalCount"`
+
+	// TotalCount 命中总数。-1 表示服务端未执行精确 COUNT（取消全量计数以保障首屏性能），
+	// 此时客户端应展示「已加载 N 条」，不得当作 0 或错误处理。
+	TotalCount int `json:"totalCount"`
 }
 
 // AuditEventSafeDetails 事件详情允许扩展的脱敏字段。不得回显原始 detail、堆栈、原始响应体、内部地址、
@@ -1692,7 +1757,12 @@ type AuditEventSafeDetails struct {
 type AuditHttpContext struct {
 	// BodyPreview 脱敏后的请求体（JSON 文本，敏感字段已掩码）。
 	// 仅管理员审计视图返回，不得包含凭据、令牌或个人信息原文。
-	BodyPreview *string                `json:"bodyPreview,omitempty"`
+	BodyPreview *string `json:"bodyPreview,omitempty"`
+
+	// HttpHeaders 常用白名单请求头的紧凑 JSON 文本（如 {"Accept":"application/json"}）。
+	// 已剔除 Authorization 等敏感头，单个头值截断 256 字符；Referer 仅保留
+	// scheme/host/path，剔除 userinfo、query 与 fragment；未捕获到白名单头（或该列未读取）时缺省。
+	HttpHeaders *string                `json:"httpHeaders,omitempty"`
 	Method      AuditHttpContextMethod `json:"method"`
 	Path        string                 `json:"path"`
 
@@ -2066,6 +2136,45 @@ type DownloadFamilyCount struct {
 	Family string `json:"family"`
 }
 
+// DownloadGroupTotal 单个分组在整段窗口内的累计下载（饼图数据源；按 count 降序返回）。
+type DownloadGroupTotal struct {
+	Count int64 `json:"count"`
+
+	// Group 分组取值：groupBy=ip 时为来源 IP 明文，=family 时为 UA 归类结果。
+	Group string `json:"group"`
+}
+
+// DownloadGroupedTrendPoint 分组下载时序的一点：稀疏「桶 × 组」记录，缺失桶即 0（服务端不按组做笛卡尔补零，
+// 前端对齐桶轴后把缺失桶记 0）。桶区间 [from, to) 左闭右开，from 即绘图 label。
+type DownloadGroupedTrendPoint struct {
+	Count int64 `json:"count"`
+
+	// From 桶起点（左闭），前端绘图 label 取此时间戳。
+	From time.Time `json:"from"`
+
+	// Group 分组取值：groupBy=ip 时为来源 IP 明文，=family 时为 UA 归类结果。
+	Group string `json:"group"`
+
+	// To 桶终点（右开）。
+	To time.Time `json:"to"`
+}
+
+// DownloadGroupedTrendResponse 分组下载趋势响应：points 为稀疏「桶 × 组」时序，totals 为全窗口按组降序总计；
+// from/to/effectiveBucket 是桶轴参数，前端据此对齐缺失桶。
+type DownloadGroupedTrendResponse struct {
+	EffectiveBucket ObservabilityBucket `json:"effectiveBucket"`
+	From            time.Time           `json:"from"`
+
+	// GroupBy 实际生效的分组维度（family 或 ip）。
+	GroupBy DownloadGroupedTrendResponseGroupBy `json:"groupBy"`
+	Points  []DownloadGroupedTrendPoint         `json:"points"`
+	To      time.Time                           `json:"to"`
+	Totals  []DownloadGroupTotal                `json:"totals"`
+}
+
+// DownloadGroupedTrendResponseGroupBy 实际生效的分组维度（family 或 ip）。
+type DownloadGroupedTrendResponseGroupBy string
+
 // DownloadIpCount defines model for DownloadIpCount.
 type DownloadIpCount struct {
 	Count int64  `json:"count"`
@@ -2123,13 +2232,22 @@ type HostMetricGroup struct {
 
 // HostMetricPoint defines model for HostMetricPoint.
 type HostMetricPoint struct {
-	CpuPercent                    *float64        `json:"cpuPercent,omitempty"`
-	DiskAvailableBytes            *int64          `json:"diskAvailableBytes,omitempty"`
-	From                          time.Time       `json:"from"`
-	GoroutineCount                *int64          `json:"goroutineCount,omitempty"`
-	HostState                     HostMetricGroup `json:"hostState"`
-	MemoryAvailableBytes          *int64          `json:"memoryAvailableBytes,omitempty"`
-	MemoryTotalBytes              *int64          `json:"memoryTotalBytes,omitempty"`
+	CpuPercent         *float64 `json:"cpuPercent,omitempty"`
+	DiskAvailableBytes *int64   `json:"diskAvailableBytes,omitempty"`
+
+	// DiskTotalBytes 磁盘总量（字节），数据目录所在卷，与 diskAvailableBytes 同口径。
+	DiskTotalBytes *int64 `json:"diskTotalBytes,omitempty"`
+
+	// DiskUsedBytes 磁盘已用（字节），= total − available。
+	DiskUsedBytes        *int64          `json:"diskUsedBytes,omitempty"`
+	From                 time.Time       `json:"from"`
+	GoroutineCount       *int64          `json:"goroutineCount,omitempty"`
+	HostState            HostMetricGroup `json:"hostState"`
+	MemoryAvailableBytes *int64          `json:"memoryAvailableBytes,omitempty"`
+	MemoryTotalBytes     *int64          `json:"memoryTotalBytes,omitempty"`
+
+	// MemoryUsedBytes 内存已用（字节），= total − available，采样点固定口径。
+	MemoryUsedBytes               *int64          `json:"memoryUsedBytes,omitempty"`
 	NetworkReceiveBytesPerSecond  *float64        `json:"networkReceiveBytesPerSecond,omitempty"`
 	NetworkState                  HostMetricGroup `json:"networkState"`
 	NetworkTransmitBytesPerSecond *float64        `json:"networkTransmitBytesPerSecond,omitempty"`
@@ -2137,8 +2255,11 @@ type HostMetricPoint struct {
 	ProcessCpuPercent             *float64        `json:"processCpuPercent,omitempty"`
 	ProcessRssBytes               *int64          `json:"processRssBytes,omitempty"`
 	ProcessState                  HostMetricGroup `json:"processState"`
-	ReadinessState                HostMetricGroup `json:"readinessState"`
-	To                            time.Time       `json:"to"`
+
+	// ProcessUptimeSeconds 当前进程运行时长（秒，挂钟口径，仅本进程，不做系统进程枚举）。
+	ProcessUptimeSeconds *int64          `json:"processUptimeSeconds,omitempty"`
+	ReadinessState       HostMetricGroup `json:"readinessState"`
+	To                   time.Time       `json:"to"`
 }
 
 // HostMonitoring defines model for HostMonitoring.
@@ -2736,6 +2857,12 @@ type BackupUploadChunkIndexParam = int
 // BackupUploadIdParam defines model for BackupUploadIdParam.
 type BackupUploadIdParam = string
 
+// DownloadGroupByParam defines model for DownloadGroupByParam.
+type DownloadGroupByParam string
+
+// DownloadRepoParam defines model for DownloadRepoParam.
+type DownloadRepoParam = string
+
 // MigrationIdParam defines model for MigrationIdParam.
 type MigrationIdParam = int64
 
@@ -3051,6 +3178,24 @@ type GetDownloadByClientParams struct {
 	// To UTC 时间范围上界（不含），最长 30 天。
 	To *ObservabilityToParam `form:"to,omitempty" json:"to,omitempty"`
 }
+
+// GetDownloadTrendGroupedParams defines parameters for GetDownloadTrendGrouped.
+type GetDownloadTrendGroupedParams struct {
+	// From UTC 时间范围下界（含）。与 to 同时提供或同时省略；省略时为最近 24 小时。
+	From *ObservabilityFromParam `form:"from,omitempty" json:"from,omitempty"`
+
+	// To UTC 时间范围上界（不含），最长 30 天。
+	To *ObservabilityToParam `form:"to,omitempty" json:"to,omitempty"`
+
+	// GroupBy 分组维度：family（缺省，UA 归类）或 ip（来源 IP 明文，仅管理员）；非法值返回 400。
+	GroupBy *GetDownloadTrendGroupedParamsGroupBy `form:"groupBy,omitempty" json:"groupBy,omitempty"`
+
+	// Repo 按仓库名精确过滤；省略为全部仓库。
+	Repo *DownloadRepoParam `form:"repo,omitempty" json:"repo,omitempty"`
+}
+
+// GetDownloadTrendGroupedParamsGroupBy defines parameters for GetDownloadTrendGrouped.
+type GetDownloadTrendGroupedParamsGroupBy string
 
 // GetHostMonitoringParams defines parameters for GetHostMonitoring.
 type GetHostMonitoringParams struct {
@@ -3574,6 +3719,9 @@ type ServerInterface interface {
 	// GetDownloadByClient 制品下载来源聚合（仅管理员）
 	// (GET /api/v1/observability/downloads/by-client)
 	GetDownloadByClient(c *gin.Context, params GetDownloadByClientParams)
+	// GetDownloadTrendGrouped 分组下载趋势与分组总计（仅管理员）
+	// (GET /api/v1/observability/downloads/trend)
+	GetDownloadTrendGrouped(c *gin.Context, params GetDownloadTrendGroupedParams)
 	// GetHostMonitoring 当前主机监控（仅管理员）
 	// (GET /api/v1/observability/host)
 	GetHostMonitoring(c *gin.Context, params GetHostMonitoringParams)
@@ -5055,6 +5203,57 @@ func (siw *ServerInterfaceWrapper) GetDownloadByClient(c *gin.Context) {
 	siw.Handler.GetDownloadByClient(c, params)
 }
 
+// GetDownloadTrendGrouped operation middleware
+func (siw *ServerInterfaceWrapper) GetDownloadTrendGrouped(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetDownloadTrendGroupedParams
+
+	// ------------- Optional query parameter "from" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "from", c.Request.URL.Query(), &params.From, runtime.BindQueryParameterOptions{Type: "string", Format: "date-time"})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter from: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "to" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "to", c.Request.URL.Query(), &params.To, runtime.BindQueryParameterOptions{Type: "string", Format: "date-time"})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter to: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "groupBy" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "groupBy", c.Request.URL.Query(), &params.GroupBy, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter groupBy: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "repo" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "repo", c.Request.URL.Query(), &params.Repo, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter repo: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetDownloadTrendGrouped(c, params)
+}
+
 // GetHostMonitoring operation middleware
 func (siw *ServerInterfaceWrapper) GetHostMonitoring(c *gin.Context) {
 
@@ -5735,6 +5934,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.PUT(options.BaseURL+"/api/v1/observability/audit/attention-acknowledgements", wrapper.AcknowledgeAuditAttention)
 	router.GET(options.BaseURL+"/api/v1/observability/audit/notifications", wrapper.ListAuditAttentionNotifications)
 	router.GET(options.BaseURL+"/api/v1/observability/downloads/by-client", wrapper.GetDownloadByClient)
+	router.GET(options.BaseURL+"/api/v1/observability/downloads/trend", wrapper.GetDownloadTrendGrouped)
 	router.GET(options.BaseURL+"/api/v1/observability/dashboard", wrapper.GetOperationsDashboard)
 	router.GET(options.BaseURL+"/api/v1/observability/host", wrapper.GetHostMonitoring)
 	router.POST(options.BaseURL+"/api/v1/auth/bootstrap", wrapper.Bootstrap)

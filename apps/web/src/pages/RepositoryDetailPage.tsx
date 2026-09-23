@@ -28,6 +28,7 @@ import { RepoBrowser } from "../components/repo/RepoBrowser";
 import { AsyncBoundary } from "../components/AsyncBoundary";
 import {
   getAcl,
+  getRepositoryDownloadTrend,
   listRepositories,
   listUsers,
   recheckConnection,
@@ -46,9 +47,10 @@ import type {
 import { useAuth } from "../auth/AuthContext";
 import { useAsync } from "../hooks/useAsync";
 import { CONN_COLOR, CONN_LABEL_KEY } from "../lib/connectionStatus";
-import { formatBytes } from "../lib/format";
+import { formatBytes, formatCount, formatStamp } from "../lib/format";
 import { notifyError, notifySuccess } from "../lib/feedback";
 import { formatUtcToLocalDate } from "../lib/timeFormat";
+import { TrendChart } from "../components/observability/TrendChart";
 import { density } from "../theme/density";
 
 export function RepositoryDetailPage() {
@@ -76,6 +78,17 @@ export function RepositoryDetailPage() {
     { cacheKey: `repo:detail:${name}` },
   );
   const repo = repoState.data ?? null;
+  // 端点 B（非契约 /download-trend）：全时段累计下载次数 + 近 24h 补零趋势；
+  // 权限与仓库树同级，匿名 private 会 401——失败时页头统计与小图各自降级，不拖垮详情页。
+  const downloadTrendState = useAsync(() => getRepositoryDownloadTrend(name), [name], {
+    cacheKey: `repo:download-trend:${name}`,
+  });
+  const downloadTrend = downloadTrendState.data ?? null;
+  // 趋势点映射为 TrendChart 的 {label, value}：label 与仪表盘同用桶起点本地时间戳。
+  const downloadTrendPoints = (downloadTrend?.trend ?? []).map((point) => ({
+    label: formatStamp(point.from),
+    value: point.downloadCount,
+  }));
   // 窄屏（< 48em）：页签与徽章必然折成两行，面板上边距也收一档，尽可能把高度留给内容。
   const isNarrow = useMediaQuery("(max-width: 48em)") ?? false;
 
@@ -130,6 +143,14 @@ export function RepositoryDetailPage() {
                 label={t("repoDetail.statCreatedAt")}
                 value={formatUtcToLocalDate(repo.createdAt)}
               />
+              {/* 总下载次数：端点 B 的全时段累计（与仓库树 downloadCount 同口径）；
+                  接口未就绪（匿名 401 / 加载中）时不渲染，避免「0」假象。 */}
+              {downloadTrend ? (
+                <DetailStat
+                  label={t("repoDetail.statDownloads")}
+                  value={formatCount(downloadTrend.totalDownloadCount)}
+                />
+              ) : null}
             </Group>
           ) : null}
 
@@ -173,6 +194,24 @@ export function RepositoryDetailPage() {
         {repo?.description ? (
           <Text size="xs" c="dimmed" lineClamp={1} mb="xs">
             {repo.description}
+          </Text>
+        ) : null}
+
+        {/* 下载趋势小图（端点 B，近 24h）：加载中骨架 / 失败降级文案 / 就绪复用 TrendChart。
+            高度固定，避免接口返回时页头与页签跳动。 */}
+        {downloadTrendState.loading && !downloadTrend ? (
+          <Skeleton height={160} radius="md" mb="xs" />
+        ) : downloadTrend ? (
+          <TrendChart
+            title={t("repoDetail.downloadTrendTitle")}
+            summary={t("repoDetail.downloadTrendPrimary")}
+            primary={downloadTrendPoints}
+            primaryLabel={t("repoDetail.downloadTrendPrimary")}
+            compact
+          />
+        ) : downloadTrendState.error ? (
+          <Text size="xs" c="dimmed" mb="xs">
+            {t("repoDetail.downloadTrendUnavailable")}
           </Text>
         ) : null}
 

@@ -35,3 +35,33 @@ func TestOperationsDashboardFlushCountsOnlyCompletedProtocolOutcomes(t *testing.
 		t.Fatalf("统计口径错误：%+v", items)
 	}
 }
+
+// TestHostSampleFromRawDerivesUsedBytesAtSamplePoint 验证已用量在采样点
+// 按 total − available 直接给值（与总量同源），缺任一端时保持空值而不是伪造零。
+func TestHostSampleFromRawDerivesUsedBytesAtSamplePoint(t *testing.T) {
+	memoryTotal, memoryAvailable := int64(100), int64(40)
+	diskTotal, diskAvailable := int64(1000), int64(250)
+	uptime := int64(120)
+	raw := HostRawSample{At: time.Date(2026, 8, 27, 10, 0, 0, 0, time.UTC),
+		MemoryTotalBytes: &memoryTotal, MemoryAvailableBytes: &memoryAvailable,
+		DiskTotalBytes: &diskTotal, DiskAvailableBytes: &diskAvailable,
+		ProcessUptimeSeconds: &uptime}
+	item := hostSampleFromRaw(raw)
+	if item.MemoryUsedBytes == nil || *item.MemoryUsedBytes != 60 {
+		t.Fatalf("内存已用 = %v，期望 60", item.MemoryUsedBytes)
+	}
+	if item.DiskUsedBytes == nil || *item.DiskUsedBytes != 750 {
+		t.Fatalf("磁盘已用 = %v，期望 750", item.DiskUsedBytes)
+	}
+	if item.DiskTotalBytes == nil || *item.DiskTotalBytes != diskTotal {
+		t.Fatalf("磁盘总量未透传：%v", item.DiskTotalBytes)
+	}
+	if item.ProcessUptimeSeconds == nil || *item.ProcessUptimeSeconds != uptime {
+		t.Fatalf("进程运行时长未透传：%v", item.ProcessUptimeSeconds)
+	}
+	// 只有总量、缺可用量时，已用量必须保持空值。
+	partial := hostSampleFromRaw(HostRawSample{At: raw.At, MemoryTotalBytes: &memoryTotal})
+	if partial.MemoryUsedBytes != nil || partial.DiskUsedBytes != nil {
+		t.Fatalf("缺可用量时已用量应为空：%+v", partial)
+	}
+}

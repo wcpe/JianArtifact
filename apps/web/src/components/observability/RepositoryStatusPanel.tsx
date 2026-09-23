@@ -1,6 +1,6 @@
 // 仓库状态面板（v0.8.0）：替代原「上游自动阻止」面板。
 // - 左：DonutChart 展示各连接状态的仓库数量分布（可用/自动阻止/不可用/离线/未连接）；
-// - 右：全部仓库的状态明细（状态点 + 仓库名 + 类型 + 状态徽章），点击跳仓库详情；
+// - 右：全部仓库的状态明细（状态点 + 仓库名 + 制品数/体积 + 类型 + 状态徽章），点击跳仓库详情；
 // - 状态推导：offline 优先 OFFLINE；hosted 在线视为可用；proxy/group 取 connectionStatus（缺省 READY 未连接）。
 import { DonutChart } from "@mantine/charts";
 import {
@@ -24,6 +24,7 @@ import { useNavigate } from "react-router-dom";
 import type { ConnectionStatusValue, Repository } from "../../api/types";
 import { usePinnedRepos } from "../../hooks/usePinnedRepos";
 import { CONN_COLOR, CONN_LABEL_KEY } from "../../lib/connectionStatus";
+import { formatBytes, formatCount } from "../../lib/format";
 import { density } from "../../theme/density";
 
 const STATUS_ORDER: ConnectionStatusValue[] = [
@@ -60,6 +61,17 @@ function StatusDot({ color }: { color: string }) {
       style={{ borderRadius: "50%", flexShrink: 0 }}
     />
   );
+}
+
+/**
+ * 明细行统计文案："制品数 N · 体积 X"。
+ * 字段缺失（undefined）时显示 —，不渲染 0 假象；
+ * 文案复用仓库详情页的 i18n key（跨命名空间引用，i18next 允许）。
+ */
+function repoStatText(repo: Repository, t: (key: string) => string): string {
+  const count = repo.artifactCount != null ? formatCount(repo.artifactCount) : "—";
+  const size = repo.totalSize != null ? formatBytes(repo.totalSize) : "—";
+  return `${t("repoDetail.statArtifacts")} ${count} · ${t("repoDetail.statSize")} ${size}`;
 }
 
 export function RepositoryStatusPanel({
@@ -198,6 +210,10 @@ export function RepositoryStatusPanel({
                         ) : null}
                       </Group>
                       <Group gap={6} wrap="nowrap">
+                        {/* 制品数与体积：窄容器（1024）下限宽截断，避免挤压仓库名与徽章。 */}
+                        <Text size="xs" c="dimmed" truncate style={{ maxWidth: 170 }}>
+                          {repoStatText(repo, t)}
+                        </Text>
                         <Badge size="xs" variant="default">
                           {t(`dashboard.repoType_${repo.type}`)}
                         </Badge>

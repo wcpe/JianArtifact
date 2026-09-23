@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useLocation } from "react-router-dom";
 
 import { DashboardPage } from "../src/pages/DashboardPage";
+import { buildBucketAxis } from "../src/components/observability/DownloadGroupedTrend";
 import { TrendChart } from "../src/components/observability/TrendChart";
 import { renderWithProviders } from "./harness";
 import { server } from "@jianartifact/devmock/node";
@@ -16,6 +17,43 @@ afterEach(() => vi.restoreAllMocks());
 function LocationProbe() {
   const location = useLocation();
   return <span data-testid="location-probe">{`${location.pathname}${location.search}`}</span>;
+}
+
+/**
+ * 分组下载趋势（端点 A /observability/downloads/trend）最小合法响应。
+ * devmock 未注册该端点（schema.gen 只有类型），按既有模式在测试内 server.use 覆盖：
+ * 2 小时窗口 hour 桶 → 2 个桶点；按 groupBy 分别返回族 / IP 两套 totals 与稀疏时序。
+ */
+function mockDownloadTrend(): void {
+  const span = { from: "2026-08-30T00:00:00.000Z", to: "2026-08-30T02:00:00.000Z" };
+  const midBucket = "2026-08-30T01:00:00.000Z";
+  server.use(
+    http.get("*/api/v1/observability/downloads/trend", ({ request }) => {
+      const groupBy = new URL(request.url).searchParams.get("groupBy") === "ip" ? "ip" : "family";
+      const totals =
+        groupBy === "ip"
+          ? [
+              { group: "10.0.2.1", count: 30 },
+              { group: "10.0.3.5", count: 12 },
+            ]
+          : [
+              { group: "Chrome", count: 30 },
+              { group: "curl", count: 12 },
+            ];
+      // 稀疏「桶 × 组」时序：两桶各给一个点，组件负责把缺失桶补 0。
+      const points = totals.flatMap((item) => [
+        { from: span.from, to: midBucket, group: item.group, count: item.count },
+        { from: midBucket, to: span.to, group: item.group, count: Math.floor(item.count / 2) },
+      ]);
+      return HttpResponse.json({
+        ...span,
+        effectiveBucket: "hour",
+        groupBy,
+        points,
+        totals,
+      });
+    }),
+  );
 }
 
 describe("业务仪表盘（真实读模型）", () => {
@@ -186,6 +224,47 @@ describe("业务仪表盘（真实读模型）", () => {
     expect(screen.getAllByText("自动阻止").length).toBeGreaterThanOrEqual(4);
     expect(screen.getAllByText("不可用").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("共 9 个仓库")).toBeTruthy();
+    // 明细行展示制品数与体积（devmock 种子 maven-releases：1284 制品 / 8589934592 字节 → 8.0 GB）。
+    const mavenRow = screen.getByRole("button", { name: "maven-releases" });
+    expect(within(mavenRow).getByText("制品数 1,284 · 体积 8.0 GB")).toBeTruthy();
+  });
+
+  it("仓库明细字段缺失时以 — 占位，不渲染 0 假象", async () => {
+    server.use(
+      http.get("*/api/v1/repositories", () =>
+        HttpResponse.json({
+          total: 2,
+          items: [
+            {
+              id: 101,
+              name: "stats-full",
+              format: "npm",
+              type: "hosted",
+              visibility: "public",
+              createdAt: "2026-01-01T00:00:00Z",
+              artifactCount: 42,
+              totalSize: 1024,
+            },
+            {
+              id: 102,
+              name: "stats-missing",
+              format: "raw",
+              type: "hosted",
+              visibility: "private",
+              createdAt: "2026-01-01T00:00:00Z",
+              // 故意缺 artifactCount / totalSize：面板应显示 — 而非 0
+            },
+          ],
+        }),
+      ),
+    );
+    renderWithProviders(<DashboardPage />, { route: "/dashboard", authenticated: true });
+
+    const list = await screen.findByTestId("repo-status-list");
+    const fullRow = within(list).getByRole("button", { name: "stats-full" });
+    expect(within(fullRow).getByText("制品数 42 · 体积 1.0 KB")).toBeTruthy();
+    const missingRow = within(list).getByRole("button", { name: "stats-missing" });
+    expect(within(missingRow).getByText("制品数 — · 体积 —")).toBeTruthy();
   });
 
   it("仓库状态明细限高滚动，超出可视行数时给出查看全部出口", async () => {
@@ -301,5 +380,157 @@ describe("业务仪表盘（真实读模型）", () => {
     expect(panel).not.toBeNull();
     expect(within(panel as HTMLElement).getByRole("button", { name: "删除制品" })).toBeTruthy();
     expect(within(panel as HTMLElement).queryByRole("button", { name: "repo.delete" })).toBeNull();
+  });
+
+  it("分组下载趋势卡渲染折线图并以 aria-label 暴露标题", async () => {
+    mockDownloadTrend();
+    renderWithProviders(<DashboardPage />, { route: "/dashboard", authenticated: true });
+
+    const card = await screen.findByTestId("download-grouped-trend");
+    // 骨架 / 错误态只有文本标题，role="img" 出现才代表成功态折线图已挂载。
+    expect(await within(card).findByRole("img", { name: "分组下载趋势" })).toBeTruthy();
+    // 底部双饼同样以 role="img" + aria-label 暴露可读标题。
+    expect(within(card).getByRole("img", { name: "IP 占比" })).toBeTruthy();
+    expect(within(card).getByRole("img", { name: "客户端族占比" })).toBeTruthy();
+  });
+
+  it("分组切换按钮的 aria-pressed 随点击在 family / ip 间翻转", async () => {
+    const user = userEvent.setup();
+    mockDownloadTrend();
+    renderWithProviders(<DashboardPage />, { route: "/dashboard", authenticated: true });
+
+    const card = await screen.findByTestId("download-grouped-trend");
+    await within(card).findByRole("img", { name: "分组下载趋势" });
+
+    // 初始态：默认按客户端族分组。
+    expect(
+      within(card).getByRole("button", { name: "客户端族" }).getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(within(card).getByRole("button", { name: "IP" }).getAttribute("aria-pressed")).toBe(
+      "false",
+    );
+
+    await user.click(within(card).getByRole("button", { name: "IP" }));
+    // 两个 groupBy 的数据挂载时已并发取回，切换只翻转本地态即可换图。
+    expect(within(card).getByRole("button", { name: "IP" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+    expect(
+      within(card).getByRole("button", { name: "客户端族" }).getAttribute("aria-pressed"),
+    ).toBe("false");
+    // 图例同步切到 IP 维度的组（确认数据真的换了，而不只是按钮态翻转）。
+    expect(within(card).getByRole("button", { name: "10.0.2.1" })).toBeTruthy();
+  });
+
+  it("点击图例隐藏系列：aria-pressed 由 true 变 false 并加 trend-legend-hidden 类", async () => {
+    const user = userEvent.setup();
+    mockDownloadTrend();
+    renderWithProviders(<DashboardPage />, { route: "/dashboard", authenticated: true });
+
+    const card = await screen.findByTestId("download-grouped-trend");
+    await within(card).findByRole("img", { name: "分组下载趋势" });
+
+    const legend = within(card).getByRole("button", { name: "Chrome" });
+    expect(legend.getAttribute("aria-pressed")).toBe("true");
+    expect(legend.classList.contains("trend-legend-hidden")).toBe(false);
+
+    await user.click(legend);
+
+    const hiddenLegend = within(card).getByRole("button", { name: "Chrome" });
+    expect(hiddenLegend.getAttribute("aria-pressed")).toBe("false");
+    expect(hiddenLegend.classList.contains("trend-legend-hidden")).toBe(true);
+  });
+
+  it("点击占比饼图例跳审计页，携带审计识别的 clientIp / q 参数", async () => {
+    const user = userEvent.setup();
+    mockDownloadTrend();
+    renderWithProviders(
+      <>
+        <DashboardPage />
+        <LocationProbe />
+      </>,
+      { route: "/dashboard", authenticated: true },
+    );
+
+    const card = await screen.findByTestId("download-grouped-trend");
+    await within(card).findByRole("img", { name: "分组下载趋势" });
+    const probe = () => screen.getByTestId("location-probe").textContent ?? "";
+    const params = () => new URLSearchParams(probe().split("?")[1] ?? "");
+
+    // IP 饼图例 → /audit-logs?range=custom&...&clientIp=<组值>（注意是小写 p 的 clientIp）。
+    await user.click(within(card).getByRole("button", { name: "IP 占比 10.0.2.1" }));
+    await waitFor(() => expect(probe()).toContain("/audit-logs?"));
+    expect(params().get("range")).toBe("custom");
+    expect(params().get("clientIp")).toBe("10.0.2.1");
+    expect(params().get("from")).toBeTruthy();
+    expect(params().get("to")).toBeTruthy();
+    expect(params().has("attentionId")).toBe(false);
+
+    // 客户端族饼图例 → 带关键字 q（审计侧模糊匹配），同一用例内再次导航覆盖上一次参数。
+    await user.click(within(card).getByRole("button", { name: "客户端族占比 Chrome" }));
+    await waitFor(() => expect(params().get("q")).toBe("Chrome"));
+    expect(params().get("range")).toBe("custom");
+    expect(params().has("clientIp")).toBe(false);
+    expect(params().has("attentionId")).toBe(false);
+  });
+
+  it("旧下载累计趋势独立图已移除，分组下载趋势卡全页唯一", async () => {
+    mockDownloadTrend();
+    renderWithProviders(<DashboardPage />, { route: "/dashboard", authenticated: true });
+
+    const card = await screen.findByTestId("download-grouped-trend");
+    await within(card).findByRole("img", { name: "分组下载趋势" });
+
+    // 新组件全页唯一（旧独立图已删除，不应出现第二张同类卡）。
+    expect(screen.getAllByTestId("download-grouped-trend")).toHaveLength(1);
+    // 旧独立图的可辨识文案（i18n 残留键 trendDownloads / downloadTopIps / downloadFamilies，
+    // src 已无引用）不再出现：标题为独立文本节点，故用精确匹配避免误中「分组下载趋势」。
+    expect(screen.queryByText("下载趋势", { exact: true })).toBeNull();
+    expect(screen.queryByText("来源 IP Top 10 · 独立来源口径")).toBeNull();
+    expect(screen.queryByText("客户端分布（UA 归类）")).toBeNull();
+    // 旧图的 aria-label 形如「下载趋势：<summary>」；新图以「分组下载趋势」开头，不会误中。
+    expect(screen.queryByRole("img", { name: /^下载趋势：/ })).toBeNull();
+  });
+
+  it("分组小时桶与服务端整点键对齐，to 边界采用右开窗口", () => {
+    const buckets = buildBucketAxis(
+      "2026-09-23T10:37:30Z",
+      "2026-09-23T12:00:00Z",
+      "hour",
+    );
+
+    expect(
+      buckets.map((bucket) => ({
+        key: new Date(bucket.keyMs).toISOString(),
+        from: bucket.from,
+        to: bucket.to,
+      })),
+    ).toEqual([
+      {
+        key: "2026-09-23T10:00:00.000Z",
+        from: "2026-09-23T10:37:30.000Z",
+        to: "2026-09-23T11:00:00.000Z",
+      },
+      {
+        key: "2026-09-23T11:00:00.000Z",
+        from: "2026-09-23T11:00:00.000Z",
+        to: "2026-09-23T12:00:00.000Z",
+      },
+    ]);
+  });
+
+  it("分钟桶跳过早于 from 的源桶且不生成 to 所在分钟", () => {
+    const buckets = buildBucketAxis(
+      "2026-09-23T10:37:30Z",
+      "2026-09-23T10:40:00Z",
+      "minute",
+    );
+
+    expect(buckets.map((bucket) => new Date(bucket.keyMs).toISOString())).toEqual([
+      "2026-09-23T10:38:00.000Z",
+      "2026-09-23T10:39:00.000Z",
+    ]);
+    expect(buckets[0]?.from).toBe("2026-09-23T10:38:00.000Z");
+    expect(buckets.at(-1)?.to).toBe("2026-09-23T10:40:00.000Z");
   });
 });

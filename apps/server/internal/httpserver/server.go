@@ -145,9 +145,10 @@ func (s *Server) Handler(assets fs.FS) http.Handler {
 			}
 		})
 	}
-	// 审计上下文中间件：记录请求耗时并捕获脱敏请求体（仅管理写请求），
-	// 供审计写入方填充 http_method/http_path/status_code/duration_ms/body_preview。
+	// 审计上下文中间件：记录请求耗时、捕获常用白名单请求头与脱敏请求体（仅管理写请求），
+	// 供审计写入方填充 http_method/http_path/status_code/duration_ms/http_headers/body_preview。
 	r.Use(auditctx.TimingMiddleware())
+	r.Use(auditctx.HeadersMiddleware())
 	r.Use(auditctx.BodyPreviewMiddleware(auditctx.IsManagementWrite))
 	if s.managementSecurityAudit != nil {
 		r.Use(managementSecurityAuditMiddleware(s.managementSecurityAudit))
@@ -156,7 +157,12 @@ func (s *Server) Handler(assets fs.FS) http.Handler {
 		r.Use(writeFreezeMiddleware(s.writeFreeze))
 	}
 
-	api.RegisterHandlersWithOptions(r, s, api.GinServerOptions{Middlewares: s.middlewares})
+	// 路由级中间件链：链首插入「进入业务路由处理」计时（duration_server_ms 口径起点），
+	// 必须先于鉴权等业务中间件执行；协议路由与静态回退不经过此链，分段耗时记 0。
+	routeMiddlewares := make([]api.MiddlewareFunc, 0, len(s.middlewares)+1)
+	routeMiddlewares = append(routeMiddlewares, api.MiddlewareFunc(auditctx.ServerTimingMiddleware()))
+	routeMiddlewares = append(routeMiddlewares, s.middlewares...)
+	api.RegisterHandlersWithOptions(r, s, api.GinServerOptions{Middlewares: routeMiddlewares})
 
 	if s.protocolRoutes != nil {
 		s.protocolRoutes(r)

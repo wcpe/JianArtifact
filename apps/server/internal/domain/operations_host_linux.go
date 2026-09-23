@@ -40,8 +40,9 @@ func (c *linuxHostCollector) Collect(at time.Time) HostRawSample {
 	} else {
 		item.HostState, item.HostErrorCode = repository.MetricStateUnavailable, "memory_unavailable"
 	}
-	if free, ok := readLinuxDisk(c.dataDir); ok {
-		item.DiskAvailableBytes = int64Ptr(free)
+	if free, total, ok := readLinuxDisk(c.dataDir); ok {
+		// 数据目录为磁盘采集根，总量与可用量取自同一次 statfs，与 diskAvailableBytes 口径一致。
+		item.DiskAvailableBytes, item.DiskTotalBytes = int64Ptr(free), int64Ptr(total)
 	} else {
 		item.HostState, item.HostErrorCode = repository.MetricStateUnavailable, "disk_unavailable"
 	}
@@ -54,6 +55,11 @@ func (c *linuxHostCollector) Collect(at time.Time) HostRawSample {
 		item.ProcessRSSBytes, item.ProcessCPUTicks, item.GoroutineCount = int64Ptr(rss), ticks, int64Ptr(int64(runtime.NumGoroutine()))
 	} else {
 		item.ProcessState, item.ProcessErrorCode = repository.MetricStateUnavailable, "process_unavailable"
+	}
+	// 进程运行时长（秒）：仅当前进程（/proc/self starttime 起算），不做系统进程枚举；
+	// 读取失败只置空该附加指标，不影响 process 组状态（RSS/CPU 仍可用）。
+	if uptime, ok := readLinuxProcessUptime(at); ok {
+		item.ProcessUptimeSeconds = int64Ptr(uptime)
 	}
 	if files, err := os.ReadDir("/proc/self/fd"); err == nil {
 		item.OpenFileDescriptors = int64Ptr(int64(len(files)))
@@ -94,36 +100,25 @@ func readLinuxCPU() (uint64, uint64, bool) {
 	return values[3] + values[4], total, total > 0
 }
 
+// readLinuxMemory 读取 /proc/meminfo 并交由纯函数 parseMeminfo 解析
+// （抽纯函数后非 Linux 平台也能对解析口径做单元测试）。
 func readLinuxMemory() (int64, int64, bool) {
-	file, err := os.Open("/proc/meminfo")
+	data, err := os.ReadFile("/proc/meminfo")
 	if err != nil {
 		return 0, 0, false
 	}
-	defer func() { _ = file.Close() }()
-	values := map[string]int64{}
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		parts := strings.Fields(scanner.Text())
-		if len(parts) < 2 {
-			continue
-		}
-		value, err := strconv.ParseInt(parts[1], 10, 64)
-		if err != nil {
-			continue
-		}
-		values[strings.TrimSuffix(parts[0], ":")] = value * 1024
-	}
-	total, totalOK := values["MemTotal"]
-	available, availableOK := values["MemAvailable"]
-	return total, available, totalOK && availableOK
+	return parseMeminfo(string(data))
 }
 
-func readLinuxDisk(dataDir string) (int64, bool) {
+// readLinuxDisk 返回数据目录所在文件系统的可用量与总量（字节）。
+// 总量 = Statfs.Blocks × Bsize；可用量为非特权用户可用的 Bavail × Bsize。
+// 两者取自同一次 statfs，与 diskAvailableBytes 保持同一数据目录、同一次调用的口径。
+func readLinuxDisk(dataDir string) (int64, int64, bool) {
 	var stat syscall.Statfs_t
 	if err := syscall.Statfs(dataDir, &stat); err != nil {
-		return 0, false
+		return 0, 0, false
 	}
-	return int64(stat.Bavail) * int64(stat.Bsize), true
+	return int64(stat.Bavail) * int64(stat.Bsize), int64(stat.Blocks) * int64(stat.Bsize), true
 }
 
 func readLinuxNetwork() (uint64, uint64, bool) {
@@ -174,13 +169,33 @@ func readLinuxProcess() (int64, uint64, bool) {
 	if err != nil {
 		return rss, 0, rss > 0
 	}
-	parts := strings.Fields(string(stat))
-	if len(parts) < 15 {
-		return rss, 0, rss > 0
+	// utime/stime 与 starttime 由纯函数 parseProcSelfStat 统一解析（口径见该函数注释）。
+	cpuTicks, _, cpuOK, _ := parseProcSelfStat(string(stat))
+	return rss, cpuTicks, cpuOK
+}
+
+// readLinuxProcessUptime 计算当前进程运行时长（秒）：
+// 启动绝对时刻 = /proc/stat 的 btime（系统启动 Unix 秒）+ /proc/self/stat 的 starttime
+// （距系统启动的时钟滴答数）换算，详见 processUptimeSeconds 的口径与精度说明。
+// 任一步读取或解析失败返回 false，由上层给出空值而不是伪造零。
+func readLinuxProcessUptime(at time.Time) (int64, bool) {
+	statData, err := os.ReadFile(filepath.Clean("/proc/self/stat"))
+	if err != nil {
+		return 0, false
 	}
-	user, userErr := strconv.ParseUint(parts[13], 10, 64)
-	kernel, kernelErr := strconv.ParseUint(parts[14], 10, 64)
-	return rss, user + kernel, userErr == nil && kernelErr == nil
+	_, startTicks, _, startOK := parseProcSelfStat(string(statData))
+	if !startOK {
+		return 0, false
+	}
+	bootData, err := os.ReadFile("/proc/stat")
+	if err != nil {
+		return 0, false
+	}
+	bootUnix, ok := parseProcStatBtime(string(bootData))
+	if !ok {
+		return 0, false
+	}
+	return processUptimeSeconds(at.Unix(), bootUnix, startTicks, clockTicksPerSecond()), true
 }
 
 func int64Ptr(value int64) *int64 { return &value }

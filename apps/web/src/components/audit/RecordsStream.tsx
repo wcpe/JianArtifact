@@ -2,12 +2,13 @@
 // + Mantine Table（完整时间 / 操作者邮箱 / 动作+方法路径 / 状态码 / 耗时 / 客户端 IP / 详情）。
 // 全部筛选走服务端（关键字、动作、操作者邮箱、客户端 IP、请求方法、认证方式、结果、风险状态）。
 import { useMediaQuery } from "@mantine/hooks";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Badge,
   Box,
   Button,
+  Divider,
   Drawer,
   Group,
   MultiSelect,
@@ -25,6 +26,7 @@ import { IconChevronDown, IconChevronUp, IconEye, IconSearch } from "@tabler/ico
 
 import { getAuditEvent } from "../../api/endpoints";
 import type { AuditEvent, AuditEventDetail, AuditCategory, AuditResult } from "../../api/types";
+import { currentLocaleTag } from "../../i18n/current";
 import { OpsDetailGrid, OpsSection } from "../ops/OpsKit";
 import {
   actionLabel,
@@ -58,7 +60,7 @@ const RESULT_LABEL_KEYS: Record<string, string> = {
 };
 
 const RANGE_OPTIONS = [
-  { value: "1h", label: "1h" },
+  { value: "24h", label: "24h" },
   { value: "3d", label: "3d" },
   { value: "7d", label: "7d" },
   { value: "30d", label: "30d" },
@@ -340,14 +342,16 @@ export function RecordsStream({ model, onInvestigate, onOpenAttention }: Records
             value={model.range}
             onChange={(value) => model.setRange(value as AuditRange)}
           />
-          {/* 自定义时间段：组件库日期区间选择器（type=range），任一区间选定即切换 custom。 */}
+          {/* 自定义时间段：组件库日期区间选择器（type=range），任一区间选定即切换 custom。
+              locale 跟随全局语言：日期面板的月份/星期标题随界面语言切换。 */}
           <DatePickerInput
             type="range"
             size="xs"
             clearable
             w={236}
-            aria-label={t("auditWorkbench.rangeCustom", { defaultValue: "自定义时间段" })}
-            placeholder={t("auditWorkbench.rangeCustom", { defaultValue: "自定义时间段" })}
+            locale={currentLocaleTag()}
+            aria-label={t("auditWorkbench.rangeCustom")}
+            placeholder={t("auditWorkbench.rangeCustom")}
             value={[
               model.customRange.from ? new Date(model.customRange.from) : null,
               model.customRange.to ? new Date(model.customRange.to) : null,
@@ -668,6 +672,36 @@ function asTextLabel(event: AuditEvent): string {
   return target?.label ?? target?.repository ?? "—";
 }
 
+/**
+ * 解析白名单请求头的紧凑 JSON 文本（如 {"Accept":"application/json"}）为键值对列表。
+ * 解析失败或不是普通对象时返回 null，由调用方回退展示原始文本——宁可原样显示，
+ * 也不静默丢内容。
+ */
+function parseHeaderEntries(raw: string): Array<[string, string]> | null {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+    return Object.entries(parsed as Record<string, unknown>).map(([name, value]) => [
+      name,
+      typeof value === "string" ? value : String(value),
+    ]);
+  } catch {
+    return null;
+  }
+}
+
+/** 详情分组小标题：分隔线 + 加粗标签，理清「性能 / 上下文 / 请求」三层信息层次。 */
+function DetailGroupLabel({ children }: { children: ReactNode }) {
+  return (
+    <Box mt="sm" mb={6}>
+      <Divider mb={6} />
+      <Text size="xs" fw={600}>
+        {children}
+      </Text>
+    </Box>
+  );
+}
+
 function EventDetail({
   detail,
   event,
@@ -691,6 +725,7 @@ function EventDetail({
         userAgent?: string;
         tokenPreview?: string;
         bodyPreview?: string;
+        httpHeaders?: string;
       }
     | undefined;
   const actor = event.actor as { displayName?: string; authSource?: string } | undefined;
@@ -700,10 +735,23 @@ function EventDetail({
     errorClass?: string;
     affectedCount?: number;
   };
+  // 请求头紧凑 JSON：解析失败为 null，区块内回退原始文本（见请求头卡片的兜底分支）。
+  const headerEntries = http?.httpHeaders ? parseHeaderEntries(http.httpHeaders) : null;
+  // 服务端耗时缺省或为 0（未进入契约路由）时不渲染该项，避免假 0 干扰与总耗时的对照。
+  const serverDurationItems: Array<{ label: string; value: ReactNode }> = event.durationServerMs
+    ? [
+        {
+          label: t("auditWorkbench.detailServerDuration"),
+          value: formatDuration(event.durationServerMs),
+        },
+      ]
+    : [];
+  // 请求组标题：请求头 / 请求体任一存在才渲染，避免空分组。
+  const hasRequestBody = Boolean(http?.httpHeaders || http?.bodyPreview);
 
   return (
     <Box p="sm" m="sm" style={{ background: "var(--mantine-color-gray-0)", borderRadius: 8 }}>
-      {/* 头部：状态码 + 动作 + 方法 + 路径 */}
+      {/* 头部：状态码 + 动作 + 方法 + 路径（详情第一层，保持不变） */}
       <Group gap="xs" wrap="wrap" mb="xs">
         <Badge size="sm" variant="light" color={statusTone(http?.statusCode)}>
           {http?.statusCode ?? "—"} {t(RESULT_LABEL_KEYS[event.result] ?? event.result)}
@@ -719,14 +767,20 @@ function EventDetail({
         </Text>
       </Group>
 
-      {/* 字段网格 */}
+      {/* 性能组：时间与总耗时、服务端耗时并列，便于对照链路开销 */}
+      <DetailGroupLabel>{t("auditWorkbench.detailGroupPerformance")}</DetailGroupLabel>
       <OpsDetailGrid
         items={[
-          {
-            label: t("auditWorkbench.detailTime"),
-            value: formatFullTime(event.occurredAt),
-          },
+          { label: t("auditWorkbench.detailTime"), value: formatFullTime(event.occurredAt) },
           { label: t("auditWorkbench.colDuration"), value: formatDuration(event.durationMs) },
+          ...serverDurationItems,
+        ]}
+      />
+
+      {/* 上下文组：请求标识与操作者身份 */}
+      <DetailGroupLabel>{t("auditWorkbench.detailGroupContext")}</DetailGroupLabel>
+      <OpsDetailGrid
+        items={[
           {
             label: t("auditWorkbench.detailRequestId"),
             value: <span style={{ fontFamily: "monospace" }}>{http?.requestId ?? "—"}</span>,
@@ -762,9 +816,52 @@ function EventDetail({
         )}
       </Box>
 
+      {/* 请求组：请求头与请求体（均等宽展示，两者都缺省时整组不渲染） */}
+      {hasRequestBody ? (
+        <DetailGroupLabel>{t("auditWorkbench.detailGroupRequest")}</DetailGroupLabel>
+      ) : null}
+
+      {/* 请求头（白名单已过滤）：键名等宽原样展示（User-Agent 等不翻译），值 pre-wrap 换行可看全 */}
+      {http?.httpHeaders ? (
+        <Box mb="xs">
+          <Text size="xs" c="dimmed" mb={4}>
+            {t("auditWorkbench.detailHeaders")}
+          </Text>
+          <Card withBorder radius="sm" padding="xs">
+            {headerEntries ? (
+              headerEntries.map(([name, value]) => (
+                <Text
+                  key={name}
+                  size="xs"
+                  style={{
+                    fontFamily: "monospace",
+                    whiteSpace: "pre-wrap",
+                    overflowWrap: "anywhere",
+                  }}
+                >
+                  <span style={{ fontWeight: 600 }}>{name}</span>: {value}
+                </Text>
+              ))
+            ) : (
+              // JSON 解析失败兜底：原样展示原始文本（含中文说明注释），不静默丢内容。
+              <Text
+                size="xs"
+                style={{
+                  fontFamily: "monospace",
+                  whiteSpace: "pre-wrap",
+                  overflowWrap: "anywhere",
+                }}
+              >
+                {http.httpHeaders}
+              </Text>
+            )}
+          </Card>
+        </Box>
+      ) : null}
+
       {/* 请求体（已脱敏） */}
       {http?.bodyPreview ? (
-        <Box mt="xs">
+        <Box mb="xs">
           <Text size="xs" c="dimmed" mb={4}>
             {t("auditWorkbench.detailRequestBody")}
           </Text>

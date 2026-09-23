@@ -248,7 +248,7 @@ export function AuditWorkbenchView() {
                 variant="light"
                 w="fit-content"
                 leftSection={<IconClock size={14} />}
-                onClick={() => model.setRange("1h")}
+                onClick={() => model.setRange("24h")}
               >
                 {t("auditWorkbench.tooLargeAction")}
               </Button>

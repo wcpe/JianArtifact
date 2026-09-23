@@ -5,6 +5,8 @@
 // - 区间剖析条：当前可视序列的均值 /（累计型）总量 / 峰值 / 谷值 / 首尾相对变动；
 // - 拖选聚焦：图面横向拖选即聚焦子时段——数据切片、剖析条跟随、胶囊一键还原（双击同样还原）；
 // - 键盘聚焦：图面可聚焦，方向键移光标、Shift+方向键选区间、Enter 提交、Esc 还原；
+// - 图例开关：图例项是原生 button（aria-pressed 表达显隐），点击隐藏/恢复对应系列，
+//   隐藏系列经 recharts `hide` 不渲染、不进浮动 tooltip，sr-only 悬停读数同样剔除；
 // - 明暗双主题：SVG attribute 不支持 CSS var，按当前配色方案切换两套 hex；
 // - 对外契约保持不变：role="img" + aria-label、trend-hover-summary 常驻占位。
 import {
@@ -74,6 +76,9 @@ const HOVER_THROTTLE_THRESHOLD = 60;
 const PRIMARY_KEY = "__primary__";
 const SECONDARY_KEY = "__secondary__";
 const TERTIARY_KEY = "__tertiary__";
+
+/** 系列槽位：与 dataKey 的 primary/secondary/tertiary 一一对应（图例显隐开关用）。 */
+type SeriesSlot = "primary" | "secondary" | "tertiary";
 
 interface Palette {
   primary: string;
@@ -251,6 +256,16 @@ export function TrendChart({
   const dragRef = useRef<{ anchor: number; end: number } | null>(null);
   /** 悬停读数的 rAF 句柄：把同一帧内的多次 pointermove 合并成一次 setState。 */
   const hoverFrameRef = useRef<number | null>(null);
+  /** 三条系列的图例显隐状态（默认全显示；点击图例切换）。 */
+  const [hiddenSeries, setHiddenSeries] = useState<Record<SeriesSlot, boolean>>({
+    primary: false,
+    secondary: false,
+    tertiary: false,
+  });
+  /** 切换指定系列显隐（图例点击回调；只翻转对应槽位，互不影响）。 */
+  const toggleSeries = useCallback((slot: SeriesSlot) => {
+    setHiddenSeries((prev) => ({ ...prev, [slot]: !prev[slot] }));
+  }, []);
   const gradientId = useId();
   // useId 返回值含 ":"，不宜直接当查询用 id，这里去掉冒号。
   const keyboardHintId = `${gradientId.replace(/:/g, "")}-keyboard`;
@@ -328,13 +343,23 @@ export function TrendChart({
   const tertiaryHovered =
     hasTertiary && hoverIndex !== null ? (view.tertiary?.[hoverIndex] ?? null) : null;
 
-  const extraSummary =
-    (secondaryHovered !== null && secondaryHovered !== undefined && secondaryLabel
-      ? ` · ${secondaryLabel}：${formatTrendValue(secondaryHovered.value, unit)}`
-      : "") +
-    (tertiaryHovered !== null && tertiaryHovered !== undefined && tertiaryLabel
-      ? ` · ${tertiaryLabel}：${formatTrendValue(tertiaryHovered.value, unit)}`
-      : "");
+  // 悬停读数组装：隐藏系列不参与读数（与 recharts 对 hide 系列的浮动 tooltip 过滤口径一致）。
+  const summaryParts: string[] = [];
+  if (hovered && !hiddenSeries.primary) {
+    summaryParts.push(`${primaryLabel}：${formatTrendValue(hovered.value, unit)}`);
+  }
+  if (secondaryHovered && secondaryLabel && !hiddenSeries.secondary) {
+    summaryParts.push(`${secondaryLabel}：${formatTrendValue(secondaryHovered.value, unit)}`);
+  }
+  if (tertiaryHovered && tertiaryLabel && !hiddenSeries.tertiary) {
+    summaryParts.push(`${tertiaryLabel}：${formatTrendValue(tertiaryHovered.value, unit)}`);
+  }
+  // 全系列隐藏时只留时间锚点，读数行仍然常驻（不破坏占位断言）。
+  const hoverSummary = hovered
+    ? summaryParts.length > 0
+      ? `${hovered.label} · ${summaryParts.join(" · ")}`
+      : hovered.label
+    : " ";
 
   const empty = view.primary.length === 0;
   const viewLength = view.primary.length;
@@ -464,9 +489,28 @@ export function TrendChart({
             </Group>
           ) : null}
           {headerRight}
-          <ChartLegend color={palette.primary} label={primaryLabel} />
-          {hasSecondary ? <ChartLegend color={palette.secondary} label={secondaryLabel!} /> : null}
-          {hasTertiary ? <ChartLegend color={palette.tertiary} label={tertiaryLabel!} /> : null}
+          <ChartLegend
+            color={palette.primary}
+            label={primaryLabel}
+            hidden={hiddenSeries.primary}
+            onToggle={() => toggleSeries("primary")}
+          />
+          {hasSecondary ? (
+            <ChartLegend
+              color={palette.secondary}
+              label={secondaryLabel!}
+              hidden={hiddenSeries.secondary}
+              onToggle={() => toggleSeries("secondary")}
+            />
+          ) : null}
+          {hasTertiary ? (
+            <ChartLegend
+              color={palette.tertiary}
+              label={tertiaryLabel!}
+              hidden={hiddenSeries.tertiary}
+              onToggle={() => toggleSeries("tertiary")}
+            />
+          ) : null}
         </Group>
       </Group>
 
@@ -600,6 +644,7 @@ export function TrendChart({
                 type="monotone"
                 dataKey={PRIMARY_KEY}
                 name={primaryLabel}
+                hide={hiddenSeries.primary}
                 stroke={palette.primary}
                 strokeWidth={2}
                 fill={`url(#${gradientId})`}
@@ -612,6 +657,7 @@ export function TrendChart({
                   type="monotone"
                   dataKey={SECONDARY_KEY}
                   name={secondaryLabel}
+                  hide={hiddenSeries.secondary}
                   stroke={palette.secondary}
                   strokeWidth={1.5}
                   dot={false}
@@ -625,6 +671,7 @@ export function TrendChart({
                   type="monotone"
                   dataKey={TERTIARY_KEY}
                   name={tertiaryLabel}
+                  hide={hiddenSeries.tertiary}
                   stroke={palette.tertiary}
                   strokeWidth={1.8}
                   strokeDasharray="4 3"
@@ -680,9 +727,7 @@ export function TrendChart({
               aria-live="polite"
               style={{ minHeight: 18 }}
             >
-              {hovered
-                ? `${hovered.label} · ${primaryLabel}：${formatTrendValue(hovered.value, unit)}${extraSummary}`
-                : " "}
+              {hoverSummary}
             </Text>
           </VisuallyHidden>
         </Box>
@@ -760,13 +805,51 @@ function StatCell({ label, value, hint }: { label: string; value: string; hint?:
   );
 }
 
-function ChartLegend({ color, label }: { color: string; label: string }) {
+/**
+ * 图例项：原生 button 保证键盘可达，`aria-pressed` 表达"该系列当前显示"。
+ * 隐藏态视觉变暗（整体降透明度 + 文字变灰 + 色点随父级变淡 + 删除线），
+ * 不新增 i18n 文案——状态只靠 aria-pressed 与视觉表达。
+ */
+function ChartLegend({
+  color,
+  label,
+  hidden,
+  onToggle,
+}: {
+  color: string;
+  label: string;
+  hidden: boolean;
+  onToggle: () => void;
+}) {
   return (
-    <Group gap={4} wrap="nowrap">
-      <Box w={8} h={8} style={{ background: color, borderRadius: "50%" }} />
-      <Text size="xs" c="dimmed">
+    <Box
+      component="button"
+      type="button"
+      onClick={onToggle}
+      aria-pressed={!hidden}
+      // 视觉类供测试与样式钩住隐藏态（trend-legend-hidden = 系列已隐藏）。
+      className={hidden ? "trend-legend trend-legend-hidden" : "trend-legend"}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4,
+        padding: "2px 6px",
+        border: "none",
+        borderRadius: "var(--mantine-radius-sm)",
+        background: "transparent",
+        cursor: "pointer",
+        // 隐藏态整体变暗，色点/文字随之变淡。
+        opacity: hidden ? 0.45 : 1,
+      }}
+    >
+      <Box w={8} h={8} style={{ background: color, borderRadius: "50%", flexShrink: 0 }} />
+      <Text
+        size="xs"
+        c={hidden ? "dimmed" : undefined}
+        style={{ textDecorationLine: hidden ? "line-through" : undefined }}
+      >
         {label}
       </Text>
-    </Group>
+    </Box>
   );
 }

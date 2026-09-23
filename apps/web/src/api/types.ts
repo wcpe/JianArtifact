@@ -121,3 +121,15 @@ export interface AssetOperationResponse {
 
 // 制品下载计量与分析（FR-142~144）
 export type DownloadClientRanking = Schemas["DownloadClientRanking"];
+/** 下载趋势桶粒度（服务端按窗口跨度自适应）。 */
+export type ObservabilityBucket = Schemas["ObservabilityBucket"];
+/** 分组下载趋势响应：points 为稀疏「桶 × 组」时序，totals 为全窗口按组降序（饼图数据源）。 */
+export type DownloadGroupedTrendResponse = Schemas["DownloadGroupedTrendResponse"];
+/** 分组下载时序单点（稀疏，缺失桶由前端补 0）。 */
+export type DownloadGroupedTrendPoint = Schemas["DownloadGroupedTrendPoint"];
+/** 单组全窗口累计（饼图扇区）。 */
+export type DownloadGroupTotal = Schemas["DownloadGroupTotal"];
+/** 仓库下载趋势响应：trend 已补零连续，totalDownloadCount 为全时段累计。 */
+export type RepositoryDownloadTrendResponse = Schemas["RepositoryDownloadTrendResponse"];
+/** 仓库下载趋势单点（补零后连续桶）。 */
+export type DownloadTrendPoint = Schemas["DownloadTrendPoint"];

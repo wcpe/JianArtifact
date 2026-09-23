@@ -10,7 +10,6 @@ import {
   Grid,
   Group,
   Menu,
-  Box,
   SimpleGrid,
   Skeleton,
   Stack,
@@ -40,7 +39,6 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
 import {
-  getDownloadByClient,
   getOperationsDashboard,
   getStatus,
   listAllRepositories,
@@ -50,7 +48,6 @@ import {
 import type {
   AuditAttention,
   AuditEvent,
-  DownloadClientRanking,
   OperationsAlert,
   OperationsDashboard,
   Repository,
@@ -64,6 +61,7 @@ import { UPSTREAM_BLOCKED_CODE } from "../../lib/connectionStatus";
 import { density } from "../../theme/density";
 import { OpsKpiBand } from "../ops/OpsKit";
 import { TrendChart } from "./TrendChart";
+import { DownloadGroupedTrend } from "./DownloadGroupedTrend";
 import { RepositoryStatusPanel } from "./RepositoryStatusPanel";
 import { DashboardRangePicker, type DashboardRange } from "./DashboardRangePicker";
 
@@ -122,16 +120,12 @@ export function DashboardLive() {
   const repos = useAsync(() => listAllRepositories(), [], {
     cacheKey: "dashboard:repos",
   });
-  // FR-144：来源聚合（独立来源口径）；本页即管理员页，IP 明文不出管理端。
-  const downloadClients = useAsync(
-    () => getDownloadByClient({ from: range.from, to: range.to }),
-    [range.from, range.to],
-    { cacheKey: `dashboard:download-clients:${range.from}:${range.to}` },
-  );
+  // FR-144 旧「来源聚合（by-client）」拉取已移除：IP/UA 族占比改由
+  // DownloadGroupedTrend 内部走端点 A（downloads/trend）的 totals，单源不再并行两套口径。
 
   // 任一子请求在途即视为"忙"：慢接口下用它挡住轮询与手动刷新，避免请求在挂起期间累积。
   const busy =
-    dashboard.refreshing || status.refreshing || recent.refreshing || downloadClients.refreshing;
+    dashboard.refreshing || status.refreshing || recent.refreshing || repos.refreshing;
   const busyRef = useRef(busy);
   busyRef.current = busy;
 
@@ -142,14 +136,12 @@ export function DashboardLive() {
     attentions.reload();
     recent.reload();
     repos.reload();
-    downloadClients.reload();
   }, [
     dashboard.reload,
     status.reload,
     attentions.reload,
     recent.reload,
     repos.reload,
-    downloadClients.reload,
   ]);
   useVisibleRefresh(reloadAll);
 
@@ -171,11 +163,8 @@ export function DashboardLive() {
   const capacityTrend: TrendSeries | null = dashboard.data
     ? points(dashboard.data.capacityTrend, "logicalBytes")
     : null;
-  // FR-143：下载累计趋势（原始口径，与 KPI 同一采集点）。
-  // 兼容性：线上后端可能尚未升级到含 downloadTrend 的版本，缺失时退化为空序列（不崩）。
-  const downloadTrend: TrendSeries | null = dashboard.data
-    ? points(dashboard.data.downloadTrend ?? [], "downloadCount")
-    : null;
+  // FR-143：旧「下载累计趋势」独立图已删除（与请求主图的下载系列重复），
+  // 下载分析统一由 DownloadGroupedTrend（分组时序 + 占比饼）承担。
 
   const alertList = (dashboard.data?.alerts ?? []) as OperationsAlert[];
   const otherAlerts = alertList.filter((alert) => alert.code !== UPSTREAM_BLOCKED_CODE);
@@ -218,6 +207,8 @@ export function DashboardLive() {
       ) : (
         <DashboardGrid
           data={dashboard.data}
+          rangeFrom={range.from}
+          rangeTo={range.to}
           requestTrend={requestTrend}
           capacityTrend={capacityTrend}
           otherAlerts={otherAlerts}
@@ -227,8 +218,6 @@ export function DashboardLive() {
           recentLoading={recent.loading}
           repos={repos.data?.items ?? []}
           reposLoading={repos.loading}
-          downloadTrend={downloadTrend}
-          downloadClients={downloadClients.data ?? null}
           onOpenAttention={(attentionId) =>
             navigate(
               attentionId
@@ -370,10 +359,10 @@ function QuickMenu({ onNavigate }: { onNavigate: (path: string) => void }) {
 
 function DashboardGrid({
   data,
+  rangeFrom,
+  rangeTo,
   requestTrend,
   capacityTrend,
-  downloadTrend,
-  downloadClients,
   otherAlerts,
   attentions,
   attentionsLoading,
@@ -385,14 +374,15 @@ function DashboardGrid({
   onOpenRecent,
 }: {
   data: OperationsDashboard;
+  /** 当前仪表盘窗口起点/终点（ISO）：分组下载趋势按同一窗口取数，随档位联动。 */
+  rangeFrom: string;
+  rangeTo: string;
   requestTrend: {
     request: TrendSeries;
     download: TrendSeries;
     failure: TrendSeries;
   } | null;
   capacityTrend: TrendSeries | null;
-  downloadTrend: TrendSeries | null;
-  downloadClients: DownloadClientRanking | null;
   otherAlerts: OperationsAlert[];
   attentions: AuditAttention[];
   attentionsLoading: boolean;
@@ -440,70 +430,14 @@ function DashboardGrid({
                 }
               />
             </Card>
-            {/* FR-143/144：下载分析——累计趋势（原始口径）+ 来源聚合（独立来源口径）。 */}
+            {/* FR-143/144：下载分析——旧「下载累计趋势」独立图已删除（与请求主图下载系列重复），
+                改由 DownloadGroupedTrend 承担：分组时序多系列 + 请求总量对照 + IP/UA族占比饼。 */}
             <Card withBorder radius="md" padding={density.cardPadding}>
-              <TrendChart
-                title={t("dashboard.trendDownloads")}
-                summary={t("dashboard.trendDownloadsSummary")}
-                primary={downloadTrend ?? []}
-                primaryLabel={t("dashboard.trendDownloadsPrimary")}
-                headerRight={
-                  downloadTrend?.length ? (
-                    <Group gap={6} wrap="nowrap">
-                      <IconDownload size={20} color="var(--mantine-color-grape-6)" />
-                      <Text size="xl" fw={700} lh={1.1}>
-                        {formatCount(downloadTrend[downloadTrend.length - 1]?.value ?? 0)}
-                      </Text>
-                    </Group>
-                  ) : null
-                }
+              <DownloadGroupedTrend
+                from={rangeFrom}
+                to={rangeTo}
+                requestSeries={requestTrend?.request ?? []}
               />
-              <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm" mt="sm">
-                <Box>
-                  <Text size="xs" fw={600} c="dimmed" mb={4}>
-                    {t("dashboard.downloadTopIps")}
-                  </Text>
-                  {downloadClients?.topIps?.length ? (
-                    <Stack gap={2}>
-                      {downloadClients.topIps.map((item) => (
-                        <Group key={item.ip} justify="space-between" gap="xs" wrap="nowrap">
-                          <Text size="xs" ff="monospace" truncate>
-                            {item.ip}
-                          </Text>
-                          <Text size="xs" c="dimmed">
-                            {formatCount(item.count)}
-                          </Text>
-                        </Group>
-                      ))}
-                    </Stack>
-                  ) : (
-                    <Text size="xs" c="dimmed">
-                      {t("dashboard.downloadNoSamples")}
-                    </Text>
-                  )}
-                </Box>
-                <Box>
-                  <Text size="xs" fw={600} c="dimmed" mb={4}>
-                    {t("dashboard.downloadFamilies")}
-                  </Text>
-                  {downloadClients?.families?.length ? (
-                    <Stack gap={2}>
-                      {downloadClients.families.map((item) => (
-                        <Group key={item.family} justify="space-between" gap="xs" wrap="nowrap">
-                          <Text size="xs">{item.family}</Text>
-                          <Text size="xs" c="dimmed">
-                            {formatCount(item.count)}
-                          </Text>
-                        </Group>
-                      ))}
-                    </Stack>
-                  ) : (
-                    <Text size="xs" c="dimmed">
-                      {t("dashboard.downloadNoSamples")}
-                    </Text>
-                  )}
-                </Box>
-              </SimpleGrid>
             </Card>
             <Card withBorder radius="md" padding={density.cardPadding}>
               <TrendChart

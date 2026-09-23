@@ -37,8 +37,9 @@ func (c *windowsHostCollector) Collect(at time.Time) HostRawSample {
 	} else {
 		item.HostState, item.HostErrorCode = repository.MetricStateUnavailable, "memory_unavailable"
 	}
-	if free, ok := windowsDisk(c.dataDir); ok {
-		item.DiskAvailableBytes = int64Ptr(free)
+	if free, total, ok := windowsDisk(c.dataDir); ok {
+		// 数据目录为磁盘采集根，总量与可用量取自同一次 API 调用，与 diskAvailableBytes 口径一致。
+		item.DiskAvailableBytes, item.DiskTotalBytes = int64Ptr(free), int64Ptr(total)
 	} else {
 		item.HostState, item.HostErrorCode = repository.MetricStateUnavailable, "disk_unavailable"
 	}
@@ -47,8 +48,10 @@ func (c *windowsHostCollector) Collect(at time.Time) HostRawSample {
 	} else {
 		item.NetworkState, item.NetworkErrorCode = repository.MetricStateUnavailable, "network_unavailable"
 	}
-	if rss, ticks, ok := windowsProcess(); ok {
+	if rss, ticks, created, ok := windowsProcess(); ok {
 		item.ProcessRSSBytes, item.ProcessCPUTicks, item.GoroutineCount = int64Ptr(rss), ticks, int64Ptr(int64(runtime.NumGoroutine()))
+		// 进程运行时长：仅当前进程（GetProcessTimes 创建时间起算），不做系统进程枚举。
+		item.ProcessUptimeSeconds = int64Ptr(processUptimeFromCreated(at, created))
 	} else {
 		item.ProcessState, item.ProcessErrorCode = repository.MetricStateUnavailable, "process_unavailable"
 	}
@@ -75,16 +78,19 @@ func windowsMemory() (int64, int64, bool) {
 	return int64(status.TotalPhys), int64(status.AvailPhys), true
 }
 
-func windowsDisk(dir string) (int64, bool) {
+// windowsDisk 返回数据目录所在卷的可用量与总量（字节）。
+// 两者取自 GetDiskFreeSpaceEx 同一次调用的出参（第三出参 lpTotalNumberOfBytes 此前传 nil 未取），
+// 与 diskAvailableBytes 保持同一数据目录、同一调用的口径。
+func windowsDisk(dir string) (int64, int64, bool) {
 	path, err := windows.UTF16PtrFromString(dir)
 	if err != nil {
-		return 0, false
+		return 0, 0, false
 	}
-	var available uint64
-	if err := windows.GetDiskFreeSpaceEx(path, &available, nil, nil); err != nil {
-		return 0, false
+	var available, total uint64
+	if err := windows.GetDiskFreeSpaceEx(path, &available, &total, nil); err != nil {
+		return 0, 0, false
 	}
-	return int64(available), true
+	return int64(available), int64(total), true
 }
 
 func windowsNetwork() (uint64, uint64, bool) {
@@ -104,17 +110,19 @@ func windowsNetwork() (uint64, uint64, bool) {
 	return received, transmitted, true
 }
 
-func windowsProcess() (int64, uint64, bool) {
+// windowsProcess 返回当前进程 RSS、累计 CPU 滴答与创建时间（FILETIME 100ns 计数）；
+// 创建时间供运行时长计算使用，仅针对本进程，不做系统进程枚举。
+func windowsProcess() (int64, uint64, uint64, bool) {
 	process := windows.CurrentProcess()
 	var created, exited, kernel, user windows.Filetime
 	if err := windows.GetProcessTimes(process, &created, &exited, &kernel, &user); err != nil {
-		return 0, 0, false
+		return 0, 0, 0, false
 	}
 	info := processMemoryCounters{CB: uint32(unsafe.Sizeof(processMemoryCounters{}))}
 	if err := getProcessMemoryInfo(process, &info); err != nil {
-		return 0, 0, false
+		return 0, 0, 0, false
 	}
-	return int64(info.WorkingSetSize), filetimeTicks(kernel) + filetimeTicks(user), true
+	return int64(info.WorkingSetSize), filetimeTicks(kernel) + filetimeTicks(user), filetimeTicks(created), true
 }
 
 type memoryStatusEx struct {

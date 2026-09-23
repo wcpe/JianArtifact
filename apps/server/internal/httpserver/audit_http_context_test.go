@@ -32,6 +32,8 @@ func seedAuditEvents(t *testing.T, db *persistence.DB) {
 			RequestID: "req-seed-1", SourceNode: "node-a",
 			HTTPMethod: "DELETE", HTTPPath: "/api/v1/artifacts/:id", StatusCode: 500, DurationMs: 1240,
 			TokenPreview: "Bearer eyJhbG****1dnM", BodyPreview: "{\n  \"force\": true\n}",
+			HTTPHeaders:      `{"Accept":"application/json","User-Agent":"seed-agent/1.0"}`,
+			DurationServerMs: 860,
 		},
 		{
 			TS:    now.Add(-20 * time.Second).Format(time.RFC3339Nano),
@@ -72,13 +74,19 @@ func newAuditRouter(t *testing.T) (http.Handler, *persistence.DB) {
 		AuditSourceNode:    "node-a",
 		AuditAttentionKey:  []byte("audit-http-context-test-key"),
 	})
+	// 协议路由不经过契约路由级中间件，主体注入需显式挂载（与生产 main.go 的 authMW 同理）。
+	principal := func(c *gin.Context) {
+		c.Set("auth.principal", &auth.Principal{UserID: 11, Username: "admin-a", Role: "admin", AuthSource: auth.AuthSourceWebJWT})
+		c.Next()
+	}
 	server := httpserver.New("test",
 		httpserver.WithHandlers(handlers),
 		httpserver.WithManagementSecurityAudit(handlers.AuditLog),
-		httpserver.WithMiddleware(func(c *gin.Context) {
-			c.Set("auth.principal", &auth.Principal{UserID: 11, Username: "admin-a", Role: "admin", AuthSource: auth.AuthSourceWebJWT})
-			c.Next()
+		// 非契约协议路由：读路径验证 AuditLogEntry 新增字段的 JSON 序列化。
+		httpserver.WithProtocolRoutes(func(r gin.IRouter) {
+			r.GET("/api/v1/audit-logs", principal, handlers.GetAuditLogs)
 		}),
+		httpserver.WithMiddleware(principal),
 	)
 	return server.Handler(nil), db
 }
@@ -197,6 +205,31 @@ func TestAuditEventsExposeHTTPContextAndFilters(t *testing.T) {
 		}
 	})
 
+	t.Run("审计日志读路径返回常用头与服务端分段耗时", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/audit-logs?limit=10", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET /api/v1/audit-logs 期望 200，实际 %d：%s", rec.Code, rec.Body.String())
+		}
+		var list api.AuditLogListResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+			t.Fatalf("解析审计日志响应：%v", err)
+		}
+		for _, entry := range list.Items {
+			if entry.Action != "asset.delete" {
+				continue
+			}
+			if !strings.Contains(entry.HTTPHeaders, "seed-agent/1.0") || !strings.Contains(entry.HTTPHeaders, "application/json") {
+				t.Fatalf("读路径应返回常用请求头 JSON，实际 %q", entry.HTTPHeaders)
+			}
+			if entry.DurationServerMs != 860 {
+				t.Fatalf("读路径应返回服务端分段耗时 860ms，实际 %d", entry.DurationServerMs)
+			}
+			return
+		}
+		t.Fatalf("审计日志缺少 seed 的 asset.delete 记录：%+v", list.Items)
+	})
+
 	t.Run("概览指标统计耗时/慢请求/错误码/来源 IP", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/observability/audit/summary", nil))
@@ -246,6 +279,12 @@ func newUnauthenticatedAuditRouter(t *testing.T) (http.Handler, *persistence.DB)
 	server := httpserver.New("test",
 		httpserver.WithHandlers(handlers),
 		httpserver.WithManagementSecurityAudit(handlers.AuditLog),
+		// 路由级业务中间件人为延迟：duration_server_ms 起点在路由链首（ServerTiming）
+		// 计入，本延迟必须出现在分段耗时中，用于验证口径而非巧合的 0ms。
+		httpserver.WithMiddleware(func(c *gin.Context) {
+			time.Sleep(7 * time.Millisecond)
+			c.Next()
+		}),
 	)
 	return server.Handler(nil), db
 }
@@ -259,6 +298,13 @@ func TestAuditWriteCapturesRequestContext(t *testing.T) {
 	req.Header.Set("User-Agent", "audit-test-agent/1.0")
 	req.Header.Set("X-Request-ID", "req-http-context-1")
 	req.Header.Set("Authorization", "Bearer eyJhbGciOiJIUzI1NiJ9.payloadpart.signaturepart")
+	// 常用白名单头：应全部进入 http_headers；白名单外的自定义头不得入列。
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept-Language", "zh-CN")
+	req.Header.Set("Origin", "https://artifact.example.com")
+	req.Header.Set("Referer", "https://artifact.example.com/admin")
+	req.Header.Set("X-Forwarded-For", "203.0.113.55")
+	req.Header.Set("X-Custom-Debug", "should-not-appear")
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized && rec.Code != http.StatusForbidden {
@@ -293,5 +339,38 @@ func TestAuditWriteCapturesRequestContext(t *testing.T) {
 	}
 	if !strings.Contains(entry.BodyPreview, "****") || strings.Contains(entry.BodyPreview, "s3cret-value") {
 		t.Fatalf("请求体应脱敏且不含明文凭据，实际 %q", entry.BodyPreview)
+	}
+
+	// 常用白名单头已落库为紧凑 JSON，且逐键命中。
+	var captured map[string]string
+	if err := json.Unmarshal([]byte(entry.HTTPHeaders), &captured); err != nil {
+		t.Fatalf("http_headers 应为合法 JSON：%v（原文 %q）", err, entry.HTTPHeaders)
+	}
+	for name, want := range map[string]string{
+		"User-Agent":      "audit-test-agent/1.0",
+		"X-Request-ID":    "req-http-context-1",
+		"Content-Type":    "application/json",
+		"Accept-Language": "zh-CN",
+		"Origin":          "https://artifact.example.com",
+		"Referer":         "https://artifact.example.com/admin",
+		"X-Forwarded-For": "203.0.113.55",
+	} {
+		if captured[name] != want {
+			t.Fatalf("http_headers 缺少 %s：want %q, got %+v", name, want, captured)
+		}
+	}
+	// Authorization 走 TokenPreview 机制，连同白名单外头与凭据原文绝不入列。
+	for _, banned := range []string{"Authorization", "eyJhbGciOiJIUzI1NiJ9", "X-Custom-Debug", "should-not-appear"} {
+		if strings.Contains(entry.HTTPHeaders, banned) {
+			t.Fatalf("http_headers 不得包含 %q：%s", banned, entry.HTTPHeaders)
+		}
+	}
+	// 单段服务端耗时：路由级 sleep(7ms) 必须被计入（证明起点在路由链首），
+	// 且分段耗时不超过总耗时 durationMs（起点更晚、终点相同）。
+	if entry.DurationServerMs < 7 {
+		t.Fatalf("服务端分段耗时应 ≥7ms（路由级延迟已发生），实际 %d", entry.DurationServerMs)
+	}
+	if entry.DurationMs < entry.DurationServerMs {
+		t.Fatalf("总耗时 %dms 不得小于分段耗时 %dms", entry.DurationMs, entry.DurationServerMs)
 	}
 }

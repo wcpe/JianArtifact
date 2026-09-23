@@ -97,6 +97,52 @@ describe("趋势图", () => {
     expect(screen.queryByText(/已聚焦/)).toBeNull();
   });
 
+  it("点击图例隐藏系列并可再次点击恢复，状态由 aria-pressed 与视觉类表达", () => {
+    renderWithProviders(
+      <TrendChart
+        title="图例开关趋势"
+        summary="图例可切换系列显隐"
+        primary={POINTS}
+        secondary={[
+          { label: "10:00", value: 4 },
+          { label: "10:05", value: 8 },
+          { label: "10:10", value: 12 },
+          { label: "10:15", value: 16 },
+        ]}
+        primaryLabel="请求"
+        secondaryLabel="下载"
+      />,
+    );
+    const chart = screen.getByRole("img", { name: "图例开关趋势：图例可切换系列显隐" });
+    const downloadLegend = screen.getByRole("button", { name: "下载" });
+
+    // 默认显示：aria-pressed=true、无隐藏视觉类
+    expect(downloadLegend.getAttribute("aria-pressed")).toBe("true");
+    expect(downloadLegend.className).not.toContain("trend-legend-hidden");
+
+    // 悬停读数默认包含两个系列
+    fireEvent.mouseMove(chart, { clientX: 100 });
+    expect(screen.getByTestId("trend-hover-summary").textContent).toBe(
+      "10:15 · 请求：40 · 下载：16",
+    );
+
+    // 点击隐藏：aria-pressed 翻转 + 隐藏视觉类出现；读数不再包含隐藏系列
+    fireEvent.click(downloadLegend);
+    expect(downloadLegend.getAttribute("aria-pressed")).toBe("false");
+    expect(downloadLegend.className).toContain("trend-legend-hidden");
+    fireEvent.mouseMove(chart, { clientX: 100 });
+    expect(screen.getByTestId("trend-hover-summary").textContent).toBe("10:15 · 请求：40");
+
+    // 再次点击恢复：状态与读数一并还原
+    fireEvent.click(downloadLegend);
+    expect(downloadLegend.getAttribute("aria-pressed")).toBe("true");
+    expect(downloadLegend.className).not.toContain("trend-legend-hidden");
+    fireEvent.mouseMove(chart, { clientX: 100 });
+    expect(screen.getByTestId("trend-hover-summary").textContent).toBe(
+      "10:15 · 请求：40 · 下载：16",
+    );
+  });
+
   it("聚焦后再次拖选按当前视图换算区间，不被全量长度带偏", () => {
     renderWithProviders(
       <TrendChart title="二级聚焦" summary="聚焦后可再选" primary={POINTS} primaryLabel="请求" />,

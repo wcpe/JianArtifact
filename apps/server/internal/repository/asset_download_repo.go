@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -110,22 +111,46 @@ type DownloadClientFamilyCount struct {
 	Count  int64
 }
 
-// DownloadTrend 按粒度（minute/hour/day）聚合下载累计（原始口径，不去重）。明细表是
-// 「组合级」行（分钟 × 仓库 × 制品 × IP × UA），行数远大于全局分钟表——故聚合下推到
-// SQL（strftime 截断 + GROUP BY），不读全量进内存；bucket_start 是 RFC3339 文本，可解析。
-func (r *AssetDownloadRepo) DownloadTrend(from, to time.Time, bucket string) ([]DownloadTrendBucket, error) {
-	format := "%Y-%m-%dT%H:%M:00Z"
+// metricBucketFormat 返回分桶截断用的 strftime 格式。桶粒度与 api 层 operationsBucket
+// 产出的 minute/hour/day 对齐，截断结果统一落在 UTC 桶起点（minute 为默认——明细表
+// 本身就是分钟预聚合，保底不粗于原始粒度）。
+func metricBucketFormat(bucket string) string {
 	switch bucket {
 	case "hour":
-		format = "%Y-%m-%dT%H:00:00Z"
+		return "%Y-%m-%dT%H:00:00Z"
 	case "day":
-		format = "%Y-%m-%dT00:00:00Z"
+		return "%Y-%m-%dT00:00:00Z"
+	default:
+		return "%Y-%m-%dT%H:%M:00Z"
 	}
+}
+
+// assetDownloadMinuteRangeBounds 将精确时间窗 [from,to) 对齐到下载明细的分钟桶起点。
+// 明细每行已是整分钟聚合，因此只纳入分钟起点落在请求窗内的行；上界按分钟向上取整，
+// 再由 SQL 严格 `<` 排除 to 边界，避免 RFC3339 小数秒的文本比较和额外终点桶。
+func assetDownloadMinuteRangeBounds(from, to time.Time) (time.Time, time.Time) {
+	fromUTC, toUTC := from.UTC(), to.UTC()
+	start := fromUTC.Truncate(time.Minute)
+	if start.Before(fromUTC) {
+		start = start.Add(time.Minute)
+	}
+	end := toUTC.Truncate(time.Minute)
+	if end.Before(toUTC) {
+		end = end.Add(time.Minute)
+	}
+	return start, end
+}
+
+// DownloadTrend 按粒度（minute/hour/day）聚合下载累计（原始口径，不去重）。明细表是
+// 「组合级」行（分钟 × 仓库 × 制品 × IP × UA）——故聚合下推到
+// SQL（strftime 截断 + GROUP BY），不读全量进内存；只纳入分钟桶起点落在 [from,to) 的样本。
+func (r *AssetDownloadRepo) DownloadTrend(from, to time.Time, bucket string) ([]DownloadTrendBucket, error) {
+	rangeFrom, rangeTo := assetDownloadMinuteRangeBounds(from, to)
 	rows, err := r.db.Query(
 		`SELECT strftime(?, bucket_start) AS bucket, SUM(download_count)
-		 FROM asset_download_minutes WHERE bucket_start >= ? AND bucket_start <= ?
+		 FROM asset_download_minutes WHERE bucket_start >= ? AND bucket_start < ?
 		 GROUP BY bucket ORDER BY bucket`,
-		format, formatMetricTime(from), formatMetricTime(to),
+		metricBucketFormat(bucket), formatMetricTime(rangeFrom), formatMetricTime(rangeTo),
 	)
 	if err != nil {
 		return nil, err
@@ -146,11 +171,13 @@ func (r *AssetDownloadRepo) DownloadTrend(from, to time.Time, bucket string) ([]
 // 在同一小时窗口内只计一次贡献（对 小时桶 × 仓库 × 制品 × 维度 做 DISTINCT 再计数）。
 // 原始累计口径见 DownloadTrend；此处刻意不返回原始 UA 串（ua_family 为归类结果）。
 func (r *AssetDownloadRepo) DownloadClientRanking(from, to time.Time, topIPs int) ([]DownloadClientIPCount, []DownloadClientFamilyCount, error) {
-	fromStr, toStr := formatMetricTime(from), formatMetricTime(to)
+	// 排名只纳入分钟桶起点位于 [from,to) 的样本，再按小时去重；to 上界严格不含。
+	rangeFrom, rangeTo := assetDownloadMinuteRangeBounds(from, to)
+	fromStr, toStr := formatMetricTime(rangeFrom), formatMetricTime(rangeTo)
 	ipRows, err := r.db.Query(
 		`SELECT client_ip, COUNT(*) FROM (
 		   SELECT DISTINCT client_ip, repo, asset_path, strftime('%Y-%m-%dT%H', bucket_start) AS hour
-		   FROM asset_download_minutes WHERE bucket_start >= ? AND bucket_start <= ?
+		   FROM asset_download_minutes WHERE bucket_start >= ? AND bucket_start < ?
 		 ) GROUP BY client_ip ORDER BY COUNT(*) DESC, client_ip LIMIT ?`,
 		fromStr, toStr, topIPs,
 	)
@@ -173,7 +200,7 @@ func (r *AssetDownloadRepo) DownloadClientRanking(from, to time.Time, topIPs int
 	familyRows, err := r.db.Query(
 		`SELECT ua_family, COUNT(*) FROM (
 		   SELECT DISTINCT ua_family, repo, asset_path, client_ip, strftime('%Y-%m-%dT%H', bucket_start) AS hour
-		   FROM asset_download_minutes WHERE bucket_start >= ? AND bucket_start <= ?
+		   FROM asset_download_minutes WHERE bucket_start >= ? AND bucket_start < ?
 		 ) GROUP BY ua_family ORDER BY COUNT(*) DESC, ua_family`,
 		fromStr, toStr,
 	)
@@ -223,4 +250,104 @@ func (r *AssetDownloadRepo) SumPaths(repo string, paths []string) (map[string]in
 		out[path] = count
 	}
 	return out, rows.Err()
+}
+
+// DownloadGroupKey 是分组下载时序里的分组维度取值：ip 为来源 IP 明文（仅管理员可见），
+// family 为 UA 归类结果（不含原始 UA 串）。
+type DownloadGroupKey string
+
+const (
+	DownloadGroupKeyIP     DownloadGroupKey = "ip"
+	DownloadGroupKeyFamily DownloadGroupKey = "family"
+)
+
+// DownloadGroupedBucket 是分组下载时序的一行：Bucket 为截断后的桶起点 RFC3339 字符串
+// （即桶标签），Group 为该行的分组取值，Count 为该桶该组内的下载次数合计。
+// 返回行按 (Bucket, Group) 升序；空区间返回空切片。
+type DownloadGroupedBucket struct {
+	Bucket string
+	Group  string
+	Count  int64
+}
+
+// DownloadTrendGrouped 按「截断后的桶 × 分组列」聚合下载时序（原始累计口径，不去重），
+// 供仪表盘分组趋势图与饼图使用。groupBy ∈ {ip, family}，非法值直接报错（调用方在
+// handler 层做参数校验）。repo 为空串表示全局口径；非空时按仓库过滤——过滤形态为
+// `repo = ? AND bucket_start >= ? AND bucket_start < ?`，可走 idx_asset_download_asset 的 repo 前缀。
+// 桶粒度复用 api 层 operationsBucket 的 minute/hour/day；聚合仍下推 SQL，不读全量进内存。
+func (r *AssetDownloadRepo) DownloadTrendGrouped(from, to time.Time, bucket string, groupBy DownloadGroupKey, repo string) ([]DownloadGroupedBucket, error) {
+	var groupColumn string
+	switch groupBy {
+	case DownloadGroupKeyIP:
+		groupColumn = "client_ip"
+	case DownloadGroupKeyFamily:
+		groupColumn = "ua_family"
+	default:
+		return nil, fmt.Errorf("不支持的分组维度：%s", groupBy)
+	}
+	// 分组列名来自白名单 switch（非用户输入拼接），值仍以绑定参数传入。
+	// 查询只纳入分钟桶起点位于 [from,to) 的样本，再按目标粒度分组；首尾目标桶可以是部分桶。
+	rangeFrom, rangeTo := assetDownloadMinuteRangeBounds(from, to)
+	query := `SELECT strftime(?, bucket_start) AS bucket, ` + groupColumn + ` AS grp, SUM(download_count)
+		 FROM asset_download_minutes WHERE bucket_start >= ? AND bucket_start < ?`
+	args := []any{metricBucketFormat(bucket), formatMetricTime(rangeFrom), formatMetricTime(rangeTo)}
+	if repo != "" {
+		query += ` AND repo = ?`
+		args = append(args, repo)
+	}
+	query += ` GROUP BY bucket, grp ORDER BY bucket, grp`
+	rows, err := r.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := make([]DownloadGroupedBucket, 0)
+	for rows.Next() {
+		var item DownloadGroupedBucket
+		if err := rows.Scan(&item.Bucket, &item.Group, &item.Count); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+// DownloadTrendForRepo 返回单仓库的下载累计趋势（仓库详情页下载趋势图）。
+// 过滤形态为 `repo = ? AND bucket_start >= ? AND bucket_start < ?`：纯桶范围 + repo 等值过滤
+// 可走 idx_asset_download_asset (repo, asset_path, bucket_start) 的 repo 前缀缩小扫描集。
+// 查询只纳入分钟桶起点位于 [from,to) 的样本，再按目标粒度聚合；空区间返回空切片。
+func (r *AssetDownloadRepo) DownloadTrendForRepo(repo string, from, to time.Time, bucket string) ([]DownloadTrendBucket, error) {
+	rangeFrom, rangeTo := assetDownloadMinuteRangeBounds(from, to)
+	rows, err := r.db.Query(
+		`SELECT strftime(?, bucket_start) AS bucket, SUM(download_count)
+		 FROM asset_download_minutes WHERE repo = ? AND bucket_start >= ? AND bucket_start < ?
+		 GROUP BY bucket ORDER BY bucket`,
+		metricBucketFormat(bucket), repo, formatMetricTime(rangeFrom), formatMetricTime(rangeTo),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := make([]DownloadTrendBucket, 0)
+	for rows.Next() {
+		var item DownloadTrendBucket
+		if err := rows.Scan(&item.Bucket, &item.Count); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+// SumByRepo 返回单仓库全时段累计下载次数（**原始口径**，与 SumByAsset 同口径求和），
+// 供仓库详情页展示仓库总下载。命中 idx_asset_download_asset 的 repo 前缀；无数据返回 0。
+func (r *AssetDownloadRepo) SumByRepo(repo string) (int64, error) {
+	var total int64
+	if err := r.db.Get(&total,
+		`SELECT COALESCE(SUM(download_count), 0) FROM asset_download_minutes WHERE repo = ?`,
+		repo,
+	); err != nil {
+		return 0, err
+	}
+	return total, nil
 }

@@ -117,13 +117,15 @@ func (h *Handlers) auditLogEntry(c *gin.Context, action, entityType, entityKey, 
 		RequestID:  requestID(c),
 		SourceNode: h.auditSourceNode,
 
-		HTTPMethod:   c.Request.Method,
-		HTTPPath:     httpPath,
-		StatusCode:   status,
-		DurationMs:   auditctx.DurationMs(c),
-		TokenPreview: auditctx.TokenPreview(c.GetHeader("Authorization")),
-		BodyPreview:  auditctx.BodyFrom(c),
-		ActorEmail:   email,
+		HTTPMethod:       c.Request.Method,
+		HTTPPath:         httpPath,
+		StatusCode:       status,
+		DurationMs:       auditctx.DurationMs(c),
+		TokenPreview:     auditctx.TokenPreview(c.GetHeader("Authorization")),
+		BodyPreview:      auditctx.BodyFrom(c),
+		HTTPHeaders:      auditctx.HeadersFrom(c),
+		DurationServerMs: auditctx.ServerDurationMs(c),
+		ActorEmail:       email,
 	}
 }
 

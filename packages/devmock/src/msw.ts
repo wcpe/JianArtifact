@@ -26,6 +26,7 @@ import {
   store,
 } from "./store";
 import { MOCK_APP_VERSION, MOCK_SCHEMA_VERSION } from "./version";
+import type { components } from "./schema.gen";
 import type {
   AclEntry,
   BackupPackage,
@@ -231,6 +232,79 @@ function intParam(url: URL, key: string, fallback: number): number {
   const raw = url.searchParams.get(key);
   const n = raw === null ? NaN : Number.parseInt(raw, 10);
   return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+type DownloadGroupedTrendResponse = components["schemas"]["DownloadGroupedTrendResponse"];
+type RepositoryDownloadTrendResponse = components["schemas"]["RepositoryDownloadTrendResponse"];
+type DownloadTrendPoint = components["schemas"]["DownloadTrendPoint"];
+
+interface DownloadTrendWindow {
+  from: string;
+  to: string;
+  fromMs: number;
+  toMs: number;
+}
+
+/** 解析下载趋势窗口：from/to 成对出现，缺省取最近 24 小时，跨度不超过 30 天。 */
+function downloadTrendWindow(url: URL, now = Date.now()): DownloadTrendWindow | null {
+  const from = url.searchParams.get("from");
+  const to = url.searchParams.get("to");
+  if ((from === null) !== (to === null)) return null;
+  if (from === null || to === null) {
+    const toMs = now;
+    const fromMs = toMs - 24 * 60 * 60_000;
+    return { from: new Date(fromMs).toISOString(), to: new Date(toMs).toISOString(), fromMs, toMs };
+  }
+  const isoDateTime = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+  const fromMs = Date.parse(from);
+  const toMs = Date.parse(to);
+  if (
+    !isoDateTime.test(from) ||
+    !isoDateTime.test(to) ||
+    !Number.isFinite(fromMs) ||
+    !Number.isFinite(toMs) ||
+    fromMs >= toMs ||
+    toMs - fromMs > 30 * 24 * 60 * 60_000
+  ) {
+    return null;
+  }
+  return { from, to, fromMs, toMs };
+}
+
+/** 下载趋势桶粒度与 operationsBucket 保持一致。 */
+function downloadTrendBucket(window: DownloadTrendWindow): "minute" | "hour" | "day" {
+  const span = window.toMs - window.fromMs;
+  if (span <= 24 * 60 * 60_000) return "minute";
+  if (span <= 7 * 24 * 60 * 60_000) return "hour";
+  return "day";
+}
+
+/** 按分钟源桶与 [from,to) 规则生成服务端同起点的连续聚合桶。 */
+function downloadTrendBuckets(window: DownloadTrendWindow, bucket: "minute" | "hour" | "day") {
+  const minuteMs = 60_000;
+  const stepMs = bucket === "minute" ? minuteMs : bucket === "hour" ? 60 * minuteMs : 24 * 60 * minuteMs;
+  const firstSourceMinute = Math.ceil(window.fromMs / minuteMs) * minuteMs;
+  const endSourceMinute = Math.ceil(window.toMs / minuteMs) * minuteMs;
+  if (firstSourceMinute >= endSourceMinute) return [];
+  const firstBucket = Math.floor(firstSourceMinute / stepMs) * stepMs;
+  const lastBucket = Math.floor((endSourceMinute - minuteMs) / stepMs) * stepMs;
+  const buckets: Array<{ from: string; to: string }> = [];
+  for (let cursor = firstBucket; cursor <= lastBucket; cursor += stepMs) {
+    buckets.push({
+      from: new Date(cursor).toISOString(),
+      to: new Date(cursor + stepMs).toISOString(),
+    });
+  }
+  return buckets;
+}
+
+/** 字符串转稳定种子，让不同仓库得到可复现但有区别的演示数据。 */
+function downloadTrendHash(value: string): number {
+  let hash = 2_166_136_261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = Math.imul(hash ^ value.charCodeAt(index), 16_777_619);
+  }
+  return hash >>> 0;
 }
 
 /** 仓库列表排序的最小结构（id/audit 等其余字段不参与排序）。 */
@@ -1266,6 +1340,58 @@ export const handlers = [
     });
   }),
 
+  http.get("*/api/v1/observability/downloads/trend", ({ request }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) return denied;
+    const url = new URL(request.url);
+    const window = downloadTrendWindow(url);
+    if (!window) return err("bad_request", "下载趋势时间范围无效", 400);
+    const rawGroupBy = url.searchParams.get("groupBy") ?? "family";
+    if (rawGroupBy !== "family" && rawGroupBy !== "ip") {
+      return err("bad_request", "groupBy 仅支持 family 或 ip", 400);
+    }
+    const groupBy = rawGroupBy;
+    const repo = url.searchParams.get("repo");
+    const groups =
+      groupBy === "family"
+        ? ["maven", "gradle", "docker", "npm", "pip"]
+        : ["10.0.2.15", "10.0.2.28", "10.0.3.7", "10.0.4.19", "10.0.5.3"];
+    const effectiveBucket = downloadTrendBucket(window);
+    const buckets = downloadTrendBuckets(window, effectiveBucket);
+    const points: DownloadGroupedTrendResponse["points"] = [];
+    if (!isEmptyScenario(request) && (repo === null || store.findRepository(repo))) {
+      const repoSalt = repo === null ? 0 : downloadTrendHash(repo) % 7;
+      const bases = groupBy === "family" ? [4, 3, 3, 2, 1] : [3, 3, 2, 2, 1];
+      for (let bucketIndex = 0; bucketIndex < buckets.length; bucketIndex += 1) {
+        const bucket = buckets[bucketIndex]!;
+        for (let groupIndex = 0; groupIndex < groups.length; groupIndex += 1) {
+          const wave = Math.sin(bucketIndex / 2.4 + groupIndex * 0.85);
+          const count = Math.max(
+            0,
+            Math.round(bases[groupIndex]! + wave * 1.6 + ((bucketIndex * 7 + groupIndex * 3 + repoSalt) % 3) - 1),
+          );
+          if (count > 0) points.push({ ...bucket, group: groups[groupIndex]!, count });
+        }
+      }
+    }
+    // 饼图 totals 必须逐组等于 points 的全窗口求和，并按降序返回，确保饼图与时序总量一致。
+    const totals = [...points.reduce((counts, point) => {
+      counts.set(point.group, (counts.get(point.group) ?? 0) + point.count);
+      return counts;
+    }, new Map<string, number>())]
+      .map(([group, count]) => ({ group, count }))
+      .sort((left, right) => right.count - left.count || left.group.localeCompare(right.group));
+    const response: DownloadGroupedTrendResponse = {
+      from: window.from,
+      to: window.to,
+      effectiveBucket,
+      groupBy,
+      points,
+      totals,
+    };
+    return HttpResponse.json(response);
+  }),
+
   http.get("*/api/v1/observability/host", ({ request }) => {
     const denied = adminUnauthorized(request);
     if (denied) return denied;
@@ -1293,6 +1419,14 @@ export const handlers = [
       // 采样序号取模 48：数据量档位会放大桶数（大档 768），若不取模，
       // 单调递减的内存 / 磁盘序列会穿过 0 变成负数，曲线形状也不对。
       const slot = i % 48;
+      // 容量字段与后端同口径：已用 = 同一采样点 total − available（前端只展示不复算）。
+      // 桶序取模 48 使 available 呈锯齿，已用随 slot 单调上升后再回落，与既有曲线一致。
+      const memoryTotal = 17179869184;
+      const memoryAvailable =
+        6871947673 - slot * 1024 * 1024 * 37 + jitter(100 + slot, 120 * 1024 * 1024);
+      const diskTotal = 1073741824000; // 数据目录所在卷固定 1 TiB
+      const diskAvailable =
+        536870912000 - slot * 1024 * 1024 * 173 + jitter(200 + slot, 400 * 1024 * 1024);
       return {
         from: start.toISOString(),
         to: end.toISOString(),
@@ -1304,11 +1438,12 @@ export const handlers = [
           Math.round(
             Math.max(5, Math.min(95, 42 + wave * 14 + drift * 10 + jitter(10 + slot, 6))) * 10,
           ) / 10,
-        memoryTotalBytes: 17179869184,
-        memoryAvailableBytes:
-          6871947673 - slot * 1024 * 1024 * 37 + jitter(100 + slot, 120 * 1024 * 1024),
-        diskAvailableBytes:
-          536870912000 - slot * 1024 * 1024 * 173 + jitter(200 + slot, 400 * 1024 * 1024),
+        memoryTotalBytes: memoryTotal,
+        memoryAvailableBytes: memoryAvailable,
+        memoryUsedBytes: memoryTotal - memoryAvailable,
+        diskTotalBytes: diskTotal,
+        diskAvailableBytes: diskAvailable,
+        diskUsedBytes: diskTotal - diskAvailable,
         networkReceiveBytesPerSecond: Math.max(
           0,
           Math.round(8192 + wave * 4096 + slot * 96) + jitter(300 + slot, 900),
@@ -1321,6 +1456,8 @@ export const handlers = [
         processCpuPercent:
           Math.round(Math.max(0, 1.2 + wave * 0.5 + drift * 0.8 + jitter(600 + slot, 0.4)) * 100) /
           100,
+        // 进程运行时长（挂钟口径，仅本进程）：随桶时间单调增长，序列起点为 1 小时。
+        processUptimeSeconds: Math.max(60, Math.round(((i + 1) * step) / 1000) + 3600),
         goroutineCount: Math.max(1, 37 + (slot % 4) + jitter(700 + slot, 3)),
       };
     });
@@ -1598,6 +1735,40 @@ export const handlers = [
       return err("conflict", "制品操作与当前仓库状态冲突", 409);
     }
     return HttpResponse.json({ deleted: result.affected, failed: [] });
+  }),
+
+  // 仓库下载趋势沿用仓库树的读取权限，返回全时段累计与所选小时窗口趋势。
+  http.get("*/api/v1/repositories/:name/download-trend", ({ request, params }) => {
+    const name = String(params.name);
+    const denied = repositoryReadUnauthorized(request, name);
+    if (denied) return denied;
+    const window = downloadTrendWindow(new URL(request.url));
+    if (!window) return err("bad_request", "下载趋势时间范围无效", 400);
+    const effectiveBucket = downloadTrendBucket(window);
+    const buckets = downloadTrendBuckets(window, effectiveBucket);
+    const hash = downloadTrendHash(name);
+    // 累计值是全时段口径；仓库名哈希只用于稳定区分预览数据，不与所选 24 小时趋势相加。
+    const totalDownloadCount = isEmptyScenario(request) ? 0 : 120_000 + (hash % 40_000);
+    const trend: DownloadTrendPoint[] = buckets.map((bucket, index) => {
+      const isQuietBucket = (index + (hash % 11)) % 17 === 0;
+      const wave = Math.sin(index / 2.3 + (hash % 9));
+      return {
+        ...bucket,
+        downloadCount: isEmptyScenario(request)
+          ? 0
+          : isQuietBucket
+            ? 0
+            : Math.max(0, Math.round(34 + (hash % 13) + wave * 18 + ((index * 5) % 9) - 4)),
+      };
+    });
+    const response: RepositoryDownloadTrendResponse = {
+      from: window.from,
+      to: window.to,
+      effectiveBucket,
+      totalDownloadCount,
+      trend,
+    };
+    return HttpResponse.json(response);
   }),
 
   // FR-54：目录懒加载。匿名仅在全局开关开启且仓库 public 时可读。

@@ -1,8 +1,9 @@
 // 主机监控（v0.8.2 监控台布局）：
 // - 状态行：单个状态胶囊 + 采样/更新时间 + 范围控件（徽章不再重复三处）；
 // - 健康时采样状态收成一条细状态条，仅 stale 才弹出完整警示 Alert；
-// - 主区（8/12）：CPU 实时大图（当前值前置）→ 内存趋势；右辅栏（4/12）：节点状态（就绪 / goroutine / fd / RSS / 磁盘 / 采样时间）；
-// - 底部：磁盘 / 网络 / 进程 3 图并排，不再出现孤行。
+// - 主区（8/12）：CPU 实时大图 → 内存卡（总量/已用/可用/使用率三值 + 多线趋势，
+//   含进程 RSS，已与原独立进程内存图合并）；右辅栏（4/12）：节点状态（就绪/组件/网络）；
+// - 底部：磁盘（三值 + 多线趋势）/ 网络 / 进程指标表 3 格并排，进程类指标只在表内出现一次。
 import {
   Alert,
   Badge,
@@ -15,6 +16,7 @@ import {
   SimpleGrid,
   Skeleton,
   Stack,
+  Table,
   Text,
   ThemeIcon,
 } from "@mantine/core";
@@ -24,7 +26,6 @@ import {
   IconCpu,
   IconRefresh,
   IconServer,
-  IconStack2,
 } from "@tabler/icons-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -59,16 +60,31 @@ const rangeOptions: Array<{ value: Range; labelKey: string }> = [
 
 // 主机指标可能缺采样，统一用「有值走共享格式化、无值回退占位」的容错包装，
 // 避免各地各写一份 formatBytes / formatCount（进位分支不一致会给出不同字符串）。
-function bytesOr(value: number | null | undefined, fallback = ""): string {
+// 默认占位统一为 "—"：新字段（memoryUsedBytes 等）在历史样本行为 null，判空渲染占位。
+function bytesOr(value: number | null | undefined, fallback = "—"): string {
   return typeof value === "number" ? formatBytes(value) : fallback;
 }
 
-function percentOr(value: number | null | undefined, fallback = ""): string {
+function percentOr(value: number | null | undefined, fallback = "—"): string {
   return typeof value === "number" ? `${value.toFixed(1)}%` : fallback;
 }
 
-function countOr(value: number | null | undefined, fallback = ""): string {
+function countOr(value: number | null | undefined, fallback = "—"): string {
   return typeof value === "number" ? formatCount(value) : fallback;
+}
+
+/**
+ * 进程运行时长格式化：满 1 天显示 `3d 04:12:33`，不足 1 天只显示 `04:12:33`。
+ * 口径为挂钟秒数（processUptimeSeconds，仅本进程，不做系统进程枚举），非法值显示 "—"。
+ */
+function formatUptime(seconds: number | null | undefined): string {
+  if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0) return "—";
+  const total = Math.floor(seconds);
+  const days = Math.floor(total / 86_400);
+  const rest = total % 86_400;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const clock = `${pad(Math.floor(rest / 3_600))}:${pad(Math.floor((rest % 3_600) / 60))}:${pad(rest % 60)}`;
+  return days > 0 ? `${days}d ${clock}` : clock;
 }
 
 type TFunction = (key: string, options?: Record<string, unknown>) => string;
@@ -121,7 +137,120 @@ function meterColor(percent: number): string {
   return "blue";
 }
 
-/** 右辅栏：节点状态汇总（服务就绪 → 组件状态 → 资源仪表 → 运行明细），分区填满右栏与左列等高。 */
+/** 容量三值格（标签 + 数值并排）：数值缺失时由 bytesOr / percentOr 落到 "—"。 */
+function CapacityStat({ label, value }: { label: string; value: string }) {
+  return (
+    <Stack gap={2}>
+      <Text size="xs" c="dimmed">
+        {label}
+      </Text>
+      <Text size="sm" fw={600} style={{ fontVariantNumeric: "tabular-nums" }}>
+        {value}
+      </Text>
+    </Stack>
+  );
+}
+
+/**
+ * 内存已用：优先读后端固定口径 `memoryUsedBytes`（= total − available，采样点同口径）；
+ * 历史样本无该字段时才用 total − available 兜底推算，避免前端口径与后端漂移。
+ * 返回已用字节数与使用率（percent），任一缺失为 null。
+ */
+function resolveMemoryUsed(sample: HostMetricPoint): { used: number | null; percent: number | null } {
+  const total = typeof sample.memoryTotalBytes === "number" ? sample.memoryTotalBytes : null;
+  const available =
+    typeof sample.memoryAvailableBytes === "number" ? sample.memoryAvailableBytes : null;
+  const used =
+    typeof sample.memoryUsedBytes === "number"
+      ? sample.memoryUsedBytes
+      : total !== null && available !== null
+        ? total - available
+        : null;
+  const percent = used !== null && total !== null && total > 0 ? (used / total) * 100 : null;
+  return { used, percent };
+}
+
+/** 磁盘占用率：已用 ÷ 总量（数据目录所在卷）；新字段缺失（老数据历史行）为 null。 */
+function diskUsagePercent(sample: HostMetricPoint): number | null {
+  const total = typeof sample.diskTotalBytes === "number" ? sample.diskTotalBytes : null;
+  const used = typeof sample.diskUsedBytes === "number" ? sample.diskUsedBytes : null;
+  return used !== null && total !== null && total > 0 ? (used / total) * 100 : null;
+}
+
+/**
+ * 进程指标表：把原散落在辅栏与底部趋势图里的进程类指标收敛成一张紧凑表。
+ * 仅统计当前进程（不做系统进程枚举）；运行时长列为新增参数（processUptimeSeconds，挂钟秒）。
+ */
+function ProcessMetricsCard({
+  sample,
+  unavailable,
+}: {
+  sample: HostMetricPoint;
+  unavailable: string;
+}) {
+  const { t } = useTranslation();
+  const rows = [
+    {
+      label: t("hostMonitoring.processCpu"),
+      value: percentOr(sample.processCpuPercent, unavailable),
+      note: t("hostMonitoring.processCpuNote"),
+    },
+    {
+      label: t("hostMonitoring.seriesProcessRss"),
+      value: bytesOr(sample.processRssBytes, unavailable),
+      note: t("hostMonitoring.processRssNote"),
+    },
+    {
+      label: t("hostMonitoring.goroutines"),
+      value: countOr(sample.goroutineCount, unavailable),
+      note: t("hostMonitoring.goroutinesNote"),
+    },
+    {
+      label: t("hostMonitoring.fileDescriptors"),
+      value: countOr(sample.openFileDescriptors, unavailable),
+      note: t("hostMonitoring.fileDescriptorsNote"),
+    },
+    {
+      label: t("hostMonitoring.uptime"),
+      value: formatUptime(sample.processUptimeSeconds),
+      note: t("hostMonitoring.uptimeNote"),
+    },
+  ];
+  return (
+    <Card withBorder radius="md" padding={density.cardPadding}>
+      <Group justify="space-between" mb="xs" wrap="nowrap">
+        <Text fw={600}>{t("hostMonitoring.processMetrics")}</Text>
+        <Text size="xs" c="dimmed">
+          {t("hostMonitoring.processMetricsHint")}
+        </Text>
+      </Group>
+      <Table layout="fixed" highlightOnHover verticalSpacing={6} horizontalSpacing="xs" fz="sm">
+        <Table.Thead>
+          <Table.Tr>
+            <Table.Th w="38%">{t("hostMonitoring.colMetric")}</Table.Th>
+            <Table.Th w="30%">{t("hostMonitoring.colCurrentValue")}</Table.Th>
+            <Table.Th>{t("hostMonitoring.colNote")}</Table.Th>
+          </Table.Tr>
+        </Table.Thead>
+        <Table.Tbody>
+          {rows.map((row) => (
+            <Table.Tr key={row.label}>
+              <Table.Td c="dimmed">{row.label}</Table.Td>
+              <Table.Td style={{ fontVariantNumeric: "tabular-nums" }}>{row.value}</Table.Td>
+              <Table.Td c="dimmed" style={{ fontSize: "var(--mantine-font-size-xs)" }}>
+                {row.note}
+              </Table.Td>
+            </Table.Tr>
+          ))}
+        </Table.Tbody>
+      </Table>
+    </Card>
+  );
+}
+
+/** 右辅栏：节点状态汇总（服务就绪 → 组件状态 → 主机资源 → 网络明细），分区填满右栏与左列等高。
+ *  进程类指标（进程 CPU / RSS / goroutine / fd / 运行时长）与容量三值不再散落这里，
+ *  统一收敛到下方「进程指标」表与内存 / 磁盘卡，避免同一指标多处重复展示。 */
 function NodeStatusRail({ data, sample }: { data: HostMonitoring; sample: HostMetricPoint }) {
   const { t } = useTranslation();
   const unavailable = t("hostMonitoring.unavailable");
@@ -131,36 +260,11 @@ function NodeStatusRail({ data, sample }: { data: HostMonitoring; sample: HostMe
     { label: t("hostMonitoring.componentNetwork"), group: sample.networkState },
     { label: t("hostMonitoring.componentProcess"), group: sample.processState },
   ];
-  const memoryTotal = typeof sample.memoryTotalBytes === "number" ? sample.memoryTotalBytes : null;
-  const memoryAvailable =
-    typeof sample.memoryAvailableBytes === "number" ? sample.memoryAvailableBytes : null;
-  const memoryUsedPercent =
-    memoryTotal !== null && memoryAvailable !== null && memoryTotal > 0
-      ? ((memoryTotal - memoryAvailable) / memoryTotal) * 100
-      : null;
   const meters = [
     {
       label: t("hostMonitoring.seriesCpu"),
       percent: typeof sample.cpuPercent === "number" ? sample.cpuPercent : null,
       value: percentOr(sample.cpuPercent, unavailable),
-      detail: undefined as string | undefined,
-    },
-    {
-      label: t("hostMonitoring.memoryUsage"),
-      percent: memoryUsedPercent,
-      value: percentOr(memoryUsedPercent, unavailable),
-      detail:
-        memoryTotal !== null && memoryAvailable !== null
-          ? t("hostMonitoring.memoryUsageDetail", {
-              available: bytesOr(memoryAvailable),
-              total: bytesOr(memoryTotal),
-            })
-          : undefined,
-    },
-    {
-      label: t("hostMonitoring.processCpu"),
-      percent: typeof sample.processCpuPercent === "number" ? sample.processCpuPercent : null,
-      value: percentOr(sample.processCpuPercent, unavailable),
       detail: undefined as string | undefined,
     },
   ];
@@ -172,22 +276,6 @@ function NodeStatusRail({ data, sample }: { data: HostMonitoring; sample: HostMe
     {
       label: t("hostMonitoring.seriesNetworkTx"),
       value: `${bytesOr(sample.networkTransmitBytesPerSecond, unavailable)}${t("hostMonitoring.perSecond")}`,
-    },
-    {
-      label: t("hostMonitoring.seriesProcessRss"),
-      value: bytesOr(sample.processRssBytes, unavailable),
-    },
-    {
-      label: t("hostMonitoring.goroutines"),
-      value: countOr(sample.goroutineCount, unavailable),
-    },
-    {
-      label: t("hostMonitoring.fileDescriptors"),
-      value: countOr(sample.openFileDescriptors, unavailable),
-    },
-    {
-      label: t("hostMonitoring.dataDirAvailable"),
-      value: bytesOr(sample.diskAvailableBytes, unavailable),
     },
   ];
   return (
@@ -247,11 +335,6 @@ function NodeStatusRail({ data, sample }: { data: HostMonitoring; sample: HostMe
                 size={6}
                 radius="xl"
               />
-            ) : null}
-            {meter.detail ? (
-              <Text size="xs" c="dimmed">
-                {meter.detail}
-              </Text>
             ) : null}
           </Stack>
         ))}
@@ -479,20 +562,40 @@ export function HostMonitoringLive() {
               />
             </Card>
             <Card withBorder radius="md" padding={density.cardPadding}>
+              {/* 内存卡：总量 / 已用 / 可用 / 使用率三值并排；已用优先后端 memoryUsedBytes，
+                  null（历史样本）时按 total − available 兜底（见 resolveMemoryUsed 注释）。 */}
+              <SimpleGrid cols={{ base: 2, sm: 4 }} spacing="xs" mb="xs">
+                <CapacityStat
+                  label={t("hostMonitoring.memoryTotal")}
+                  value={bytesOr(sample.memoryTotalBytes, unavailable)}
+                />
+                <CapacityStat
+                  label={t("hostMonitoring.memoryUsed")}
+                  // null 降级为 "—"：历史样本无 memoryUsedBytes 且 total/available 也缺时占位
+                  value={bytesOr(resolveMemoryUsed(sample).used)}
+                />
+                <CapacityStat
+                  label={t("hostMonitoring.seriesMemory")}
+                  value={bytesOr(sample.memoryAvailableBytes, unavailable)}
+                />
+                <CapacityStat
+                  label={t("hostMonitoring.memoryUsage")}
+                  value={percentOr(resolveMemoryUsed(sample).percent)}
+                />
+              </SimpleGrid>
               <TrendChart
                 title={t("hostMonitoring.trendMemory")}
                 summary={t("hostMonitoring.trendMemorySummary")}
-                primary={points(data.samples, "memoryAvailableBytes")}
-                primaryLabel={t("hostMonitoring.seriesMemory")}
+                // 三线合并：已用（primary，面积）+ 可用（secondary）+ 进程 RSS（tertiary）。
+                // RSS（约几十 MB）与内存容量（GB 级）量纲差千倍，走独立右轴不会被压平——
+                // 这也是 TrendChart 第三系列的设计用途；原独立「进程内存趋势」图已并入此图。
+                primary={points(data.samples, "memoryUsedBytes")}
+                secondary={points(data.samples, "memoryAvailableBytes")}
+                tertiary={points(data.samples, "processRssBytes")}
+                primaryLabel={t("hostMonitoring.seriesMemoryUsed")}
+                secondaryLabel={t("hostMonitoring.seriesMemory")}
+                tertiaryLabel={t("hostMonitoring.seriesProcessRss")}
                 unit="bytes"
-                headerRight={
-                  <Group gap="xs" wrap="nowrap">
-                    <IconStack2 size={20} color="var(--mantine-color-teal-6)" />
-                    <Text size="xl" fw={700} lh={1.1}>
-                      {bytesOr(sample.memoryAvailableBytes, unavailable)}
-                    </Text>
-                  </Group>
-                }
               />
             </Card>
           </Stack>
@@ -502,14 +605,41 @@ export function HostMonitoringLive() {
         </Grid.Col>
       </Grid>
 
-      {/* 底部：磁盘 / 网络 / 进程 3 图并排 */}
+      {/* 底部：磁盘 / 网络 / 进程指标表 3 格并排 */}
       <SimpleGrid cols={{ base: 1, sm: 2, lg: 3 }} spacing={density.gridSpacing}>
         <Card withBorder radius="md" padding={density.cardPadding}>
+          {/* 磁盘卡：总量 / 已用 / 可用 / 占用率。diskTotalBytes / diskUsedBytes 是新字段，
+              老数据历史行为 null——降级为 "—"，只保留可用值（不伪造 0 或推算值）。 */}
+          <SimpleGrid cols={2} spacing="xs" mb="xs">
+            <CapacityStat
+              label={t("hostMonitoring.diskTotal")}
+              // 新字段 null（老数据历史行）降级为 "—"，只保留可用值，不伪造 0
+              value={bytesOr(sample.diskTotalBytes)}
+            />
+            <CapacityStat
+              label={t("hostMonitoring.diskUsed")}
+              value={bytesOr(sample.diskUsedBytes)}
+            />
+            <CapacityStat
+              label={t("hostMonitoring.seriesDisk")}
+              value={bytesOr(sample.diskAvailableBytes, unavailable)}
+            />
+            <CapacityStat
+              label={t("hostMonitoring.diskUsage")}
+              value={percentOr(diskUsagePercent(sample))}
+            />
+          </SimpleGrid>
           <TrendChart
             title={t("hostMonitoring.trendDisk")}
             summary={t("hostMonitoring.trendDiskSummary")}
+            // 已用叠为次系列、总量走右轴作参照线：占用趋势一眼可读；
+            // 历史行新字段缺失时该线自然为空（points 跳过 null），不阻塞可用线。
             primary={points(data.samples, "diskAvailableBytes")}
+            secondary={points(data.samples, "diskUsedBytes")}
+            tertiary={points(data.samples, "diskTotalBytes")}
             primaryLabel={t("hostMonitoring.seriesDisk")}
+            secondaryLabel={t("hostMonitoring.seriesDiskUsed")}
+            tertiaryLabel={t("hostMonitoring.seriesDiskTotal")}
             unit="bytes"
             compact
           />
@@ -526,16 +656,7 @@ export function HostMonitoringLive() {
             compact
           />
         </Card>
-        <Card withBorder radius="md" padding={density.cardPadding}>
-          <TrendChart
-            title={t("hostMonitoring.trendProcess")}
-            summary={t("hostMonitoring.trendProcessSummary")}
-            primary={points(data.samples, "processRssBytes")}
-            primaryLabel={t("hostMonitoring.seriesProcessRss")}
-            unit="bytes"
-            compact
-          />
-        </Card>
+        <ProcessMetricsCard sample={sample} unavailable={unavailable} />
       </SimpleGrid>
     </Stack>
   );

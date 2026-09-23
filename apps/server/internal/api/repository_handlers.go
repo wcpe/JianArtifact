@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -523,6 +524,72 @@ func (h *Handlers) ListRepositoryTree(c *gin.Context) {
 		dirs = []string{}
 	}
 	c.JSON(http.StatusOK, gin.H{"directories": dirs, "files": files})
+}
+
+// RepositoryDownloadTrendResponse 是仓库详情页「下载趋势 + 仓库总下载」的响应。
+// Trend 为补零后的连续桶序列（前端折线直接可画）；TotalDownloadCount 是仓库全时段
+// 累计下载（**原始口径**，与树节点 downloadCount 列同口径，不受 from/to 约束）。
+type RepositoryDownloadTrendResponse struct {
+	From               time.Time            `json:"from"`
+	To                 time.Time            `json:"to"`
+	EffectiveBucket    ObservabilityBucket  `json:"effectiveBucket"`
+	TotalDownloadCount int64                `json:"totalDownloadCount"`
+	Trend              []DownloadTrendPoint `json:"trend"`
+}
+
+// GetRepositoryDownloadTrend 返回仓库详情页的下载趋势与仓库总下载（原始累计口径）。
+// 非契约端点，经 WithProtocolRoutes 注册，与 ListRepositoryTree 同级同风格——tree 不在契约内，
+// 故本端点路径同样不入契约；响应结构已收口至 openapi.yaml components/schemas 的
+// RepositoryDownloadTrendResponse（供文档与前端类型，路径仅此处手写注册）。
+// 权限：与树一致走 requireRepoRead —— 仓库详情页匿名也可见制品树与 downloadCount（FR-142），
+// 本端点只暴露仓库级聚合时序，不含来源 IP / UA 明文，故不高于树的读权限；
+// 私有仓匿名仍 401、非授权主体 403（由 requireRepoRead 统一判定）。
+func (h *Handlers) GetRepositoryDownloadTrend(c *gin.Context) {
+	name := c.Param("name")
+	if _, ok := h.requireRepoRead(c, name); !ok {
+		return
+	}
+	// requireRepoRead 的管理员快捷分支不校验仓库存在性（tree 端点由 ListDirectory 兜底
+	// 404）；本端点只查下载计量表，故显式补一次存在性查询，避免对不存在的仓库
+	// 返回「全零趋势 200」的错觉。非管理员分支已由 requireRepoRead 查过，此处幂等。
+	if _, err := h.repos.CanAccess(name, 0, "read"); err != nil {
+		writeDomainErr(c, err)
+		return
+	}
+	from, to, ok := observabilityRangeQuery(c)
+	if !ok {
+		return
+	}
+	if h.assetDownloads == nil {
+		// 下载计量仓储未接线时返回 409，不伪造 0 计数的空趋势。
+		authWriteUnavailable(c)
+		return
+	}
+	bucket := operationsBucket(from, to)
+	rows, err := h.assetDownloads.DownloadTrendForRepo(name, from, to, bucket)
+	if err != nil {
+		writeDomainErr(c, err)
+		return
+	}
+	total, err := h.assetDownloads.SumByRepo(name)
+	if err != nil {
+		writeDomainErr(c, err)
+		return
+	}
+	values := make(map[time.Time]int64, len(rows))
+	for _, row := range rows {
+		start, parseErr := time.Parse(time.RFC3339, row.Bucket)
+		if parseErr != nil {
+			continue
+		}
+		values[truncateOperationsBucket(start, bucket)] = row.Count
+	}
+	response := RepositoryDownloadTrendResponse{
+		From: from, To: to, EffectiveBucket: ObservabilityBucket(bucket),
+		TotalDownloadCount: total,
+		Trend:              zeroFilledDownloadTrendPoints(values, from, to, bucket),
+	}
+	c.JSON(http.StatusOK, response)
 }
 
 // SearchAssets 全局跨仓库制品搜索。

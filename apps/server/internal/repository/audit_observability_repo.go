@@ -38,6 +38,10 @@ type ObservabilityEvent struct {
 	TokenPreview string `db:"token_preview"`
 	BodyPreview  string `db:"body_preview"`
 	ActorEmail   string `db:"actor_email"`
+	// HTTPHeaders 是常用白名单请求头的紧凑 JSON（复制来源恒空串；窄投影恒空串——不参与聚合）。
+	HTTPHeaders string `db:"http_headers"`
+	// DurationServerMs 是单段服务端耗时（毫秒；复制来源恒 0，口径见 auditctx.ServerTimingMiddleware）。
+	DurationServerMs int64 `db:"duration_server_ms"`
 }
 
 // ObservabilityFilter 表示当前节点不可变审计事件查询边界。
@@ -182,7 +186,7 @@ func (r *AuditObservabilityRepo) ListEventPage(f ObservabilityFilter, offset, li
 const observabilityEventSelect = `SELECT source, source_event_id, occurred_at, actor, user_id, auth_source,
 	action, entity_type, entity_key, repository, result, correlation_id, detail, error_class,
 	http_method, http_path, status_code, duration_ms, client_ip, user_agent, request_id,
-	token_preview, body_preview, actor_email`
+	token_preview, body_preview, actor_email, http_headers, duration_server_ms`
 
 // observabilityAggregateSelect 是**聚合读**用的窄投影：只取统计与分组真正读到的列。
 //
@@ -194,10 +198,13 @@ const observabilityEventSelect = `SELECT source, source_event_id, occurred_at, a
 //
 // 注意：**关注批次详情**会把事件原样序列化给前端看证据（含 detail/body_preview/user_agent），
 // 那条路径必须继续用全量投影 observabilityEventSelect。
+//
+// 新增两列的取舍：duration_server_ms 是标量（与 duration_ms 同类），保留真实值供耗时统计；
+// http_headers 是可至数 KB 的文本（与 detail/body_preview 同类），聚合不读它，置空串。
 const observabilityAggregateSelect = `SELECT source, source_event_id, occurred_at, actor, user_id, auth_source,
 	action, entity_type, entity_key, repository, result, correlation_id, '' AS detail, error_class,
 	http_method, http_path, status_code, duration_ms, client_ip, '' AS user_agent, '' AS request_id,
-	'' AS token_preview, '' AS body_preview, '' AS actor_email`
+	'' AS token_preview, '' AS body_preview, '' AS actor_email, '' AS http_headers, duration_server_ms`
 
 // pushdownFilterClause 生成可安全下推到各源的过滤片段（列名按源映射）。
 // 保守白名单：只放行两源都能精确映射的条件（action↔op、actor↔source_actor），覆盖
@@ -241,7 +248,7 @@ func observabilityEventsQueryLimited(f ObservabilityFilter, selectClause string,
 			SELECT 'audit' AS source, id AS source_event_id, ts AS occurred_at, actor, user_id, auth_source,
 				action, entity_type, entity_key, repo AS repository, result, correlation_id, detail, '' AS error_class,
 				http_method, http_path, status_code, duration_ms, ip AS client_ip, user_agent, request_id,
-				token_preview, body_preview, actor_email
+				token_preview, body_preview, actor_email, http_headers, duration_server_ms
 			FROM audit_log
 			WHERE (source_node = '' OR source_node = ?) AND id <= ? AND ts >= ? AND ts < ?` + auditClause + `
 			ORDER BY ts DESC LIMIT ?
@@ -258,7 +265,8 @@ func observabilityEventsQueryLimited(f ObservabilityFilter, selectClause string,
 				source_auth_source AS auth_source, op AS action, entity_type, entity_key, '' AS repository, result,
 				operation_id AS correlation_id, '' AS detail, error_class,
 				'' AS http_method, '' AS http_path, 0 AS status_code, 0 AS duration_ms, '' AS client_ip,
-				'' AS user_agent, '' AS request_id, '' AS token_preview, '' AS body_preview, '' AS actor_email
+				'' AS user_agent, '' AS request_id, '' AS token_preview, '' AS body_preview, '' AS actor_email,
+				'' AS http_headers, 0 AS duration_server_ms
 			FROM replication_apply_event
 			WHERE id <= ? AND occurred_at >= ? AND occurred_at < ?` + replClause + `
 			ORDER BY occurred_at DESC LIMIT ?
@@ -278,7 +286,7 @@ func observabilityEventsQuery(f ObservabilityFilter, selectClause string) (strin
 		SELECT 'audit' AS source, id AS source_event_id, ts AS occurred_at, actor, user_id, auth_source,
 			action, entity_type, entity_key, repo AS repository, result, correlation_id, detail, '' AS error_class,
 			http_method, http_path, status_code, duration_ms, ip AS client_ip, user_agent, request_id,
-			token_preview, body_preview, actor_email
+			token_preview, body_preview, actor_email, http_headers, duration_server_ms
 		FROM audit_log
 		WHERE (source_node = '' OR source_node = ?) AND id <= ? AND ts >= ? AND ts < ?
 	`
@@ -289,7 +297,8 @@ func observabilityEventsQuery(f ObservabilityFilter, selectClause string) (strin
 			source_auth_source AS auth_source, op AS action, entity_type, entity_key, '' AS repository, result,
 			operation_id AS correlation_id, '' AS detail, error_class,
 			'' AS http_method, '' AS http_path, 0 AS status_code, 0 AS duration_ms, '' AS client_ip,
-			'' AS user_agent, '' AS request_id, '' AS token_preview, '' AS body_preview, '' AS actor_email
+			'' AS user_agent, '' AS request_id, '' AS token_preview, '' AS body_preview, '' AS actor_email,
+			'' AS http_headers, 0 AS duration_server_ms
 		FROM replication_apply_event
 		WHERE id <= ? AND occurred_at >= ? AND occurred_at < ?
 	`
@@ -395,14 +404,15 @@ func (r *AuditObservabilityRepo) EventByID(source string, id int64, sourceNode s
 		err = r.db.Get(&event, `SELECT 'audit' AS source, id AS source_event_id, ts AS occurred_at, actor, user_id, auth_source,
 			action, entity_type, entity_key, repo AS repository, result, correlation_id, detail, '' AS error_class,
 			http_method, http_path, status_code, duration_ms, ip AS client_ip, user_agent, request_id,
-			token_preview, body_preview, actor_email
+			token_preview, body_preview, actor_email, http_headers, duration_server_ms
 			FROM audit_log WHERE id = ? AND (source_node = '' OR source_node = ?)`, id, sourceNode)
 	case "replication":
 		err = r.db.Get(&event, `SELECT 'replication' AS source, id AS source_event_id, occurred_at, source_actor AS actor,
 			source_user_id AS user_id, source_auth_source AS auth_source, op AS action, entity_type, entity_key,
 			'' AS repository, result, operation_id AS correlation_id, '' AS detail, error_class,
 			'' AS http_method, '' AS http_path, 0 AS status_code, 0 AS duration_ms, '' AS client_ip,
-			'' AS user_agent, '' AS request_id, '' AS token_preview, '' AS body_preview, '' AS actor_email
+			'' AS user_agent, '' AS request_id, '' AS token_preview, '' AS body_preview, '' AS actor_email,
+			'' AS http_headers, 0 AS duration_server_ms
 			FROM replication_apply_event WHERE id = ?`, id)
 	default:
 		return nil, ErrNotFound

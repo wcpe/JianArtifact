@@ -141,6 +141,7 @@ type HostRawSample struct {
 	MemoryTotalBytes     *int64
 	MemoryAvailableBytes *int64
 	DiskAvailableBytes   *int64
+	DiskTotalBytes       *int64
 	NetworkState         repository.MetricState
 	NetworkErrorCode     string
 	NetworkReceiveBytes  uint64
@@ -149,6 +150,7 @@ type HostRawSample struct {
 	ProcessErrorCode     string
 	ProcessRSSBytes      *int64
 	ProcessCPUTicks      uint64
+	ProcessUptimeSeconds *int64
 	GoroutineCount       *int64
 	OpenFileDescriptors  *int64
 	ReadinessState       repository.MetricState
@@ -222,12 +224,24 @@ func (s *HostMonitoringService) Start(ctx context.Context, now func() time.Time)
 }
 
 func hostSampleFromRaw(raw HostRawSample) repository.HostMetricSample {
-	return repository.HostMetricSample{BucketStart: raw.At.UTC().Truncate(time.Minute).Format(time.RFC3339Nano), HostState: raw.HostState,
+	item := repository.HostMetricSample{BucketStart: raw.At.UTC().Truncate(time.Minute).Format(time.RFC3339Nano), HostState: raw.HostState,
 		HostErrorCode: raw.HostErrorCode, MemoryTotalBytes: raw.MemoryTotalBytes, MemoryAvailableBytes: raw.MemoryAvailableBytes,
-		DiskAvailableBytes: raw.DiskAvailableBytes, NetworkState: raw.NetworkState, NetworkErrorCode: raw.NetworkErrorCode,
+		DiskAvailableBytes: raw.DiskAvailableBytes, DiskTotalBytes: raw.DiskTotalBytes, NetworkState: raw.NetworkState, NetworkErrorCode: raw.NetworkErrorCode,
 		ProcessState: raw.ProcessState, ProcessErrorCode: raw.ProcessErrorCode, ProcessRSSBytes: raw.ProcessRSSBytes,
-		GoroutineCount: raw.GoroutineCount, OpenFileDescriptors: raw.OpenFileDescriptors, ReadinessState: raw.ReadinessState,
+		ProcessUptimeSeconds: raw.ProcessUptimeSeconds,
+		GoroutineCount:       raw.GoroutineCount, OpenFileDescriptors: raw.OpenFileDescriptors, ReadinessState: raw.ReadinessState,
 		ReadinessErrorCode: raw.ReadinessErrorCode}
+	// 内存/磁盘已用量在采样点直接按 total − available 给值：与总量同一采样同源，
+	// 避免前端另算一套口径；任一端缺失则保持空值，由监控组状态解释而不是伪造零。
+	if raw.MemoryTotalBytes != nil && raw.MemoryAvailableBytes != nil {
+		used := *raw.MemoryTotalBytes - *raw.MemoryAvailableBytes
+		item.MemoryUsedBytes = &used
+	}
+	if raw.DiskTotalBytes != nil && raw.DiskAvailableBytes != nil {
+		used := *raw.DiskTotalBytes - *raw.DiskAvailableBytes
+		item.DiskUsedBytes = &used
+	}
+	return item
 }
 
 func cpuPercent(idle, total, previousIdle, previousTotal uint64) *float64 {

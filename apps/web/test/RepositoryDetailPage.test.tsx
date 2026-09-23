@@ -14,6 +14,7 @@ import {
 } from "@jianartifact/devmock/scenario";
 import { AppRoutes } from "../src/app/router";
 import { RepositoryDetailPage } from "../src/pages/RepositoryDetailPage";
+import { formatCount } from "../src/lib/format";
 import { formatUtcToLocalDate } from "../src/lib/timeFormat";
 import { renderWithProviders } from "./harness";
 
@@ -323,5 +324,43 @@ describe("仓库详情", () => {
     renderDetail("npm-proxy", false);
     expect(await screen.findByText("5,240")).toBeTruthy();
     expect(await screen.findByText(/^12(\.\d+)? GB$/)).toBeTruthy();
+  });
+
+  it("概览带展示总下载次数并挂载近 24 小时下载趋势图", async () => {
+    // 端点 B（非契约 /repositories/:name/download-trend）未在 devmock 注册，
+    // 按既有模式在测试内 server.use 覆盖最小合法响应（全时段累计 + 补零趋势点）。
+    server.use(
+      http.get("*/api/v1/repositories/:name/download-trend", () =>
+        HttpResponse.json({
+          from: "2026-09-01T00:00:00.000Z",
+          to: "2026-09-02T00:00:00.000Z",
+          effectiveBucket: "hour",
+          totalDownloadCount: 12345,
+          trend: [
+            {
+              from: "2026-09-01T00:00:00.000Z",
+              to: "2026-09-01T01:00:00.000Z",
+              downloadCount: 3,
+            },
+            {
+              from: "2026-09-01T01:00:00.000Z",
+              to: "2026-09-01T02:00:00.000Z",
+              downloadCount: 5,
+            },
+          ],
+        }),
+      ),
+    );
+    renderDetail("maven-releases", true);
+
+    // 统计区：label「总下载次数」与 formatCount(totalDownloadCount) 的数值同组出现。
+    const statLabel = await screen.findByText("总下载次数");
+    const statGroup = statLabel.parentElement;
+    expect(statGroup).not.toBeNull();
+    expect(within(statGroup as HTMLElement).getByText(formatCount(12345))).toBeTruthy();
+
+    // 趋势图已挂载：TrendChart 标题出现，且 role="img" 的 aria-label 为「标题：摘要」。
+    expect(await screen.findByText("下载趋势（近 24 小时）")).toBeTruthy();
+    expect(await screen.findByRole("img", { name: "下载趋势（近 24 小时）：下载" })).toBeTruthy();
   });
 });

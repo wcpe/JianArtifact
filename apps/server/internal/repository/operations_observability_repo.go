@@ -38,13 +38,18 @@ const (
 
 // HostMetricSample 是当前进程所在主机的一条分钟样本；空数值必须由状态解释，不能表示为伪造的零。
 type HostMetricSample struct {
-	BucketStart                   string      `db:"bucket_start"`
-	HostState                     MetricState `db:"host_state"`
-	HostErrorCode                 string      `db:"host_error_code"`
-	CPUPercent                    *float64    `db:"cpu_percent"`
-	MemoryTotalBytes              *int64      `db:"memory_total_bytes"`
-	MemoryAvailableBytes          *int64      `db:"memory_available_bytes"`
-	DiskAvailableBytes            *int64      `db:"disk_available_bytes"`
+	BucketStart          string      `db:"bucket_start"`
+	HostState            MetricState `db:"host_state"`
+	HostErrorCode        string      `db:"host_error_code"`
+	CPUPercent           *float64    `db:"cpu_percent"`
+	MemoryTotalBytes     *int64      `db:"memory_total_bytes"`
+	MemoryAvailableBytes *int64      `db:"memory_available_bytes"`
+	// MemoryUsedBytes 口径固定为同一采样点的 memory_total_bytes − memory_available_bytes，前端只展示不复算。
+	MemoryUsedBytes    *int64 `db:"memory_used_bytes"`
+	DiskAvailableBytes *int64 `db:"disk_available_bytes"`
+	DiskTotalBytes     *int64 `db:"disk_total_bytes"`
+	// DiskUsedBytes 口径固定为同一采样点的 disk_total_bytes − disk_available_bytes，与内存已用算法对称。
+	DiskUsedBytes                 *int64      `db:"disk_used_bytes"`
 	NetworkState                  MetricState `db:"network_state"`
 	NetworkErrorCode              string      `db:"network_error_code"`
 	NetworkReceiveBytesPerSecond  *float64    `db:"network_receive_bytes_per_sec"`
@@ -53,10 +58,12 @@ type HostMetricSample struct {
 	ProcessErrorCode              string      `db:"process_error_code"`
 	ProcessRSSBytes               *int64      `db:"process_rss_bytes"`
 	ProcessCPUPercent             *float64    `db:"process_cpu_percent"`
-	GoroutineCount                *int64      `db:"goroutine_count"`
-	OpenFileDescriptors           *int64      `db:"open_file_descriptors"`
-	ReadinessState                MetricState `db:"readiness_state"`
-	ReadinessErrorCode            string      `db:"readiness_error_code"`
+	// ProcessUptimeSeconds 是当前进程运行时长（挂钟口径，仅本进程，不做系统进程枚举）。
+	ProcessUptimeSeconds *int64      `db:"process_uptime_seconds"`
+	GoroutineCount       *int64      `db:"goroutine_count"`
+	OpenFileDescriptors  *int64      `db:"open_file_descriptors"`
+	ReadinessState       MetricState `db:"readiness_state"`
+	ReadinessErrorCode   string      `db:"readiness_error_code"`
 }
 
 // OperationsObservabilityRepo 保存当前节点的可视化聚合；它从不参与复制。
@@ -90,24 +97,29 @@ func (r *OperationsObservabilityRepo) PutCapacitySnapshot(value CapacitySnapshot
 
 func (r *OperationsObservabilityRepo) PutHostSample(value HostMetricSample) error {
 	_, err := r.db.Exec(`INSERT INTO host_metric_minute
-		(bucket_start, host_state, host_error_code, cpu_percent, memory_total_bytes, memory_available_bytes, disk_available_bytes,
+		(bucket_start, host_state, host_error_code, cpu_percent, memory_total_bytes, memory_available_bytes, memory_used_bytes,
+		disk_available_bytes, disk_total_bytes, disk_used_bytes,
 		network_state, network_error_code, network_receive_bytes_per_sec, network_transmit_bytes_per_sec,
-		process_state, process_error_code, process_rss_bytes, process_cpu_percent, goroutine_count, open_file_descriptors,
+		process_state, process_error_code, process_rss_bytes, process_cpu_percent, process_uptime_seconds, goroutine_count, open_file_descriptors,
 		readiness_state, readiness_error_code)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(bucket_start) DO UPDATE SET
 		host_state=excluded.host_state, host_error_code=excluded.host_error_code, cpu_percent=excluded.cpu_percent,
 		memory_total_bytes=excluded.memory_total_bytes, memory_available_bytes=excluded.memory_available_bytes,
-		disk_available_bytes=excluded.disk_available_bytes, network_state=excluded.network_state,
+		memory_used_bytes=excluded.memory_used_bytes, disk_available_bytes=excluded.disk_available_bytes,
+		disk_total_bytes=excluded.disk_total_bytes, disk_used_bytes=excluded.disk_used_bytes,
+		network_state=excluded.network_state,
 		network_error_code=excluded.network_error_code, network_receive_bytes_per_sec=excluded.network_receive_bytes_per_sec,
 		network_transmit_bytes_per_sec=excluded.network_transmit_bytes_per_sec, process_state=excluded.process_state,
 		process_error_code=excluded.process_error_code, process_rss_bytes=excluded.process_rss_bytes,
-		process_cpu_percent=excluded.process_cpu_percent, goroutine_count=excluded.goroutine_count,
+		process_cpu_percent=excluded.process_cpu_percent, process_uptime_seconds=excluded.process_uptime_seconds,
+		goroutine_count=excluded.goroutine_count,
 		open_file_descriptors=excluded.open_file_descriptors, readiness_state=excluded.readiness_state,
 		readiness_error_code=excluded.readiness_error_code`,
-		value.BucketStart, value.HostState, value.HostErrorCode, value.CPUPercent, value.MemoryTotalBytes, value.MemoryAvailableBytes, value.DiskAvailableBytes,
+		value.BucketStart, value.HostState, value.HostErrorCode, value.CPUPercent, value.MemoryTotalBytes, value.MemoryAvailableBytes, value.MemoryUsedBytes,
+		value.DiskAvailableBytes, value.DiskTotalBytes, value.DiskUsedBytes,
 		value.NetworkState, value.NetworkErrorCode, value.NetworkReceiveBytesPerSecond, value.NetworkTransmitBytesPerSecond,
-		value.ProcessState, value.ProcessErrorCode, value.ProcessRSSBytes, value.ProcessCPUPercent, value.GoroutineCount, value.OpenFileDescriptors,
+		value.ProcessState, value.ProcessErrorCode, value.ProcessRSSBytes, value.ProcessCPUPercent, value.ProcessUptimeSeconds, value.GoroutineCount, value.OpenFileDescriptors,
 		value.ReadinessState, value.ReadinessErrorCode)
 	return err
 }
@@ -128,18 +140,20 @@ func (r *OperationsObservabilityRepo) CapacitySnapshots(from, to time.Time) ([]C
 
 func (r *OperationsObservabilityRepo) HostSamples(from, to time.Time) ([]HostMetricSample, error) {
 	items := []HostMetricSample{}
-	err := r.db.Select(&items, `SELECT bucket_start, host_state, host_error_code, cpu_percent, memory_total_bytes, memory_available_bytes, disk_available_bytes,
+	err := r.db.Select(&items, `SELECT bucket_start, host_state, host_error_code, cpu_percent, memory_total_bytes, memory_available_bytes, memory_used_bytes,
+		disk_available_bytes, disk_total_bytes, disk_used_bytes,
 		network_state, network_error_code, network_receive_bytes_per_sec, network_transmit_bytes_per_sec,
-		process_state, process_error_code, process_rss_bytes, process_cpu_percent, goroutine_count, open_file_descriptors,
+		process_state, process_error_code, process_rss_bytes, process_cpu_percent, process_uptime_seconds, goroutine_count, open_file_descriptors,
 		readiness_state, readiness_error_code FROM host_metric_minute WHERE bucket_start >= ? AND bucket_start < ? ORDER BY bucket_start`, formatMetricTime(from), formatMetricTime(to))
 	return items, err
 }
 
 func (r *OperationsObservabilityRepo) LatestHostSample() (*HostMetricSample, error) {
 	var item HostMetricSample
-	err := r.db.Get(&item, `SELECT bucket_start, host_state, host_error_code, cpu_percent, memory_total_bytes, memory_available_bytes, disk_available_bytes,
+	err := r.db.Get(&item, `SELECT bucket_start, host_state, host_error_code, cpu_percent, memory_total_bytes, memory_available_bytes, memory_used_bytes,
+		disk_available_bytes, disk_total_bytes, disk_used_bytes,
 		network_state, network_error_code, network_receive_bytes_per_sec, network_transmit_bytes_per_sec,
-		process_state, process_error_code, process_rss_bytes, process_cpu_percent, goroutine_count, open_file_descriptors,
+		process_state, process_error_code, process_rss_bytes, process_cpu_percent, process_uptime_seconds, goroutine_count, open_file_descriptors,
 		readiness_state, readiness_error_code FROM host_metric_minute ORDER BY bucket_start DESC LIMIT 1`)
 	if err != nil {
 		return nil, mapMetricNotFound(err)

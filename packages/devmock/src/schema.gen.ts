@@ -252,6 +252,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/observability/downloads/trend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 分组下载趋势与分组总计（仅管理员）
+         * @description 按桶输出分组下载时序 `points`（稀疏「桶 × 组」，缺失桶即 0，前端对齐桶轴补零）
+         *     与全窗口分组总计 `totals`（按计数降序，饼图数据源）。
+         *     groupBy=family 按 UA 归类分组（默认，不暴露原始 UA 串）；groupBy=ip 返回来源 IP 明文，
+         *     与 by-client 同一隐私边界（IP 明文仅管理员可见，端点整体仅管理员）。
+         *     采集口径与仪表盘 downloadTrend 同源（原始累计）；from/to 成对提供或全省略（缺省最近 24 小时），跨度最长 30 天。
+         */
+        get: operations["getDownloadTrendGrouped"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/observability/dashboard": {
         parameters: {
             query?: never;
@@ -1317,6 +1341,71 @@ export interface components {
             topIps: components["schemas"]["DownloadIpCount"][];
             families: components["schemas"]["DownloadFamilyCount"][];
         };
+        /**
+         * @description 分组下载时序的一点：稀疏「桶 × 组」记录，缺失桶即 0（服务端不按组做笛卡尔补零，
+         *     前端对齐桶轴后把缺失桶记 0）。桶区间 [from, to) 左闭右开，from 即绘图 label。
+         */
+        DownloadGroupedTrendPoint: {
+            /**
+             * Format: date-time
+             * @description 桶起点（左闭），前端绘图 label 取此时间戳。
+             */
+            from: string;
+            /**
+             * Format: date-time
+             * @description 桶终点（右开）。
+             */
+            to: string;
+            /** @description 分组取值：groupBy=ip 时为来源 IP 明文，=family 时为 UA 归类结果。 */
+            group: string;
+            /** Format: int64 */
+            count: number;
+        };
+        /** @description 单个分组在整段窗口内的累计下载（饼图数据源；按 count 降序返回）。 */
+        DownloadGroupTotal: {
+            /** @description 分组取值：groupBy=ip 时为来源 IP 明文，=family 时为 UA 归类结果。 */
+            group: string;
+            /** Format: int64 */
+            count: number;
+        };
+        /**
+         * @description 分组下载趋势响应：points 为稀疏「桶 × 组」时序，totals 为全窗口按组降序总计；
+         *     from/to/effectiveBucket 是桶轴参数，前端据此对齐缺失桶。
+         */
+        DownloadGroupedTrendResponse: {
+            /** Format: date-time */
+            from: string;
+            /** Format: date-time */
+            to: string;
+            effectiveBucket: components["schemas"]["ObservabilityBucket"];
+            /**
+             * @description 实际生效的分组维度（family 或 ip）。
+             * @enum {string}
+             */
+            groupBy: "family" | "ip";
+            points: components["schemas"]["DownloadGroupedTrendPoint"][];
+            totals: components["schemas"]["DownloadGroupTotal"][];
+        };
+        /**
+         * @description 仓库详情页「下载趋势 + 全时段累计下载」响应：trend 为补零后的连续桶序列（折线直接可画）；
+         *     totalDownloadCount 与树节点 downloadCount 同口径（原始累计），不受 from/to 约束。
+         *     该端点与仓库树同级同权限（匿名 public 200 / 匿名 private 401 / 无授权 403 / 不存在 404），
+         *     不含来源 IP / UA 明文。
+         */
+        RepositoryDownloadTrendResponse: {
+            /** Format: date-time */
+            from: string;
+            /** Format: date-time */
+            to: string;
+            effectiveBucket: components["schemas"]["ObservabilityBucket"];
+            /**
+             * Format: int64
+             * @description 仓库全时段累计下载次数（原始口径，与树 downloadCount 同口径）。
+             */
+            totalDownloadCount: number;
+            /** @description 补零后的连续桶序列；桶区间 [from, to) 左闭右开，from 即桶标签。 */
+            trend: components["schemas"]["DownloadTrendPoint"][];
+        };
         OperationsDashboard: {
             /** Format: date-time */
             from: string;
@@ -1371,8 +1460,23 @@ export interface components {
             memoryTotalBytes?: number | null;
             /** Format: int64 */
             memoryAvailableBytes?: number | null;
+            /**
+             * Format: int64
+             * @description 内存已用（字节），= total − available，采样点固定口径。
+             */
+            memoryUsedBytes?: number | null;
+            /**
+             * Format: int64
+             * @description 磁盘总量（字节），数据目录所在卷，与 diskAvailableBytes 同口径。
+             */
+            diskTotalBytes?: number | null;
             /** Format: int64 */
             diskAvailableBytes?: number | null;
+            /**
+             * Format: int64
+             * @description 磁盘已用（字节），= total − available。
+             */
+            diskUsedBytes?: number | null;
             /** Format: double */
             networkReceiveBytesPerSecond?: number | null;
             /** Format: double */
@@ -1381,6 +1485,11 @@ export interface components {
             processRssBytes?: number | null;
             /** Format: double */
             processCpuPercent?: number | null;
+            /**
+             * Format: int64
+             * @description 当前进程运行时长（秒，挂钟口径，仅本进程，不做系统进程枚举）。
+             */
+            processUptimeSeconds?: number | null;
             /** Format: int64 */
             goroutineCount?: number | null;
             /** Format: int64 */
@@ -1482,7 +1591,9 @@ export interface components {
         };
         /**
          * @description 当前节点统一审计事件的安全展示字段。客户端 IP 仅在管理员审计视图按策略返回（可关闭）；
-         *     不得以本对象返回 User-Agent、请求标识、原始响应体、内部地址、令牌标识或任何凭据。
+         *     顶层不得返回 User-Agent、请求标识、原始响应体、内部地址、令牌标识或任何凭据——
+         *     它们只允许出现在脱敏后的 http 子对象（AuditHttpContext）内，其中请求头仅保留
+         *     白名单常用头且已剔除 Authorization 等敏感头；durationServerMs 只是耗时度量，不承载请求内容。
          */
         AuditEvent: {
             /** @description 服务端签发的不透明事件标识，客户端不得解析或拼装。 */
@@ -1507,6 +1618,12 @@ export interface components {
              * @description 服务端处理耗时（毫秒）。
              */
             durationMs?: number;
+            /**
+             * Format: int64
+             * @description 单段服务端耗时（毫秒）：进入业务路由处理到审计落笔；
+             *     未进入契约路由（协议端点、静态回退或被全局中间件直接拒绝）为 0，缺省不返回。
+             */
+            durationServerMs?: number;
             /**
              * @description 发起请求的客户端 IP。仅管理员审计视图按策略返回（可配置关闭），
              *     不得用于凭据用途，也不得在复制/导出通道外传播。
@@ -1535,6 +1652,12 @@ export interface components {
              *     仅管理员审计视图返回，不得包含凭据、令牌或个人信息原文。
              */
             bodyPreview?: string;
+            /**
+             * @description 常用白名单请求头的紧凑 JSON 文本（如 {"Accept":"application/json"}）。
+             *     已剔除 Authorization 等敏感头，单个头值截断 256 字符；Referer 仅保留
+             *     scheme/host/path，剔除 userinfo、query 与 fragment；未捕获到白名单头（或该列未读取）时缺省。
+             */
+            httpHeaders?: string;
         };
         /**
          * @description 事件详情允许扩展的脱敏字段。不得回显原始 detail、堆栈、原始响应体、内部地址、
@@ -1600,6 +1723,10 @@ export interface components {
         };
         AuditEventPage: {
             items: components["schemas"]["AuditEvent"][];
+            /**
+             * @description 命中总数。-1 表示服务端未执行精确 COUNT（取消全量计数以保障首屏性能），
+             *     此时客户端应展示「已加载 N 条」，不得当作 0 或错误处理。
+             */
             totalCount: number;
             /** @description 下一页的不透明游标；没有下一页时省略。 */
             nextCursor?: string;
@@ -2478,6 +2605,10 @@ export interface components {
         ObservabilityFromParam: string;
         /** @description UTC 时间范围上界（不含），最长 30 天。 */
         ObservabilityToParam: string;
+        /** @description 分组维度：family（缺省，UA 归类）或 ip（来源 IP 明文，仅管理员）；非法值返回 400。 */
+        DownloadGroupByParam: "family" | "ip";
+        /** @description 按仓库名精确过滤；省略为全部仓库。 */
+        DownloadRepoParam: string;
         /** @description 备份包标识（形如 bk-20260910-162701-a1b2c3）。 */
         BackupIdParam: string;
         /** @description 导入记录标识。 */
@@ -2935,6 +3066,39 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+        };
+    };
+    getDownloadTrendGrouped: {
+        parameters: {
+            query?: {
+                /** @description UTC 时间范围下界（含）。与 to 同时提供或同时省略；省略时为最近 24 小时。 */
+                from?: components["parameters"]["ObservabilityFromParam"];
+                /** @description UTC 时间范围上界（不含），最长 30 天。 */
+                to?: components["parameters"]["ObservabilityToParam"];
+                /** @description 分组维度：family（缺省，UA 归类）或 ip（来源 IP 明文，仅管理员）；非法值返回 400。 */
+                groupBy?: components["parameters"]["DownloadGroupByParam"];
+                /** @description 按仓库名精确过滤；省略为全部仓库。 */
+                repo?: components["parameters"]["DownloadRepoParam"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 分组下载趋势（桶轴参数与稀疏点同响应返回） */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DownloadGroupedTrendResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
         };
     };
     getOperationsDashboard: {

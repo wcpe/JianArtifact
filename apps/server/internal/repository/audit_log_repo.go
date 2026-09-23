@@ -35,6 +35,11 @@ type AuditLogEntry struct {
 	DurationMs   int64  `db:"duration_ms" json:"durationMs"`
 	TokenPreview string `db:"token_preview" json:"tokenPreview,omitempty"`
 	BodyPreview  string `db:"body_preview" json:"bodyPreview,omitempty"`
+	// HTTPHeaders 是常用白名单请求头的紧凑 JSON 文本（已过滤敏感头、单值截断；空串表示未捕获）。
+	HTTPHeaders string `db:"http_headers" json:"httpHeaders,omitempty"`
+	// DurationServerMs 是单段服务端耗时（进入业务路由处理到审计落笔，毫秒；
+	// 口径见 auditctx.ServerTimingMiddleware；未进入契约路由时为 0）。
+	DurationServerMs int64 `db:"duration_server_ms" json:"durationServerMs"`
 	// ActorEmail 是记录时固化的操作者邮箱快照（账号未绑定邮箱时为空）。
 	ActorEmail string `db:"actor_email" json:"actorEmail"`
 }
@@ -79,11 +84,13 @@ func insertAudit(exec auditExecutor, e AuditLogEntry) error {
 	_, err := exec.Exec(
 		`INSERT INTO audit_log (ts, actor, action, entity_type, entity_key, repo, detail, result, ip,
 		 user_id, auth_source, token_id, token_name, user_agent, request_id, source_node, correlation_id,
-		 http_method, http_path, status_code, duration_ms, token_preview, body_preview, actor_email)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 http_method, http_path, status_code, duration_ms, token_preview, body_preview, actor_email,
+		 http_headers, duration_server_ms)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		e.TS, e.Actor, e.Action, e.EntityType, e.EntityKey, e.Repo, e.Detail, e.Result, e.IP,
 		e.UserID, e.AuthSource, e.TokenID, e.TokenName, e.UserAgent, e.RequestID, e.SourceNode, e.CorrelationID,
 		e.HTTPMethod, e.HTTPPath, e.StatusCode, e.DurationMs, e.TokenPreview, e.BodyPreview, e.ActorEmail,
+		e.HTTPHeaders, e.DurationServerMs,
 	)
 	return err
 }
@@ -141,7 +148,8 @@ func (r *AuditLogRepo) List(f AuditFilter) ([]AuditLogEntry, error) {
 	}
 	query := `SELECT id, ts, actor, action, entity_type, entity_key, repo, detail, result, ip,
 		 user_id, auth_source, token_id, token_name, user_agent, request_id, source_node, correlation_id,
-		 http_method, http_path, status_code, duration_ms, token_preview, body_preview, actor_email
+		 http_method, http_path, status_code, duration_ms, token_preview, body_preview, actor_email,
+		 http_headers, duration_server_ms
 	          FROM audit_log WHERE 1=1` + where + ` ORDER BY ts DESC, id DESC LIMIT ? OFFSET ?`
 	args = append(args, limit, f.Offset)
 	var entries []AuditLogEntry

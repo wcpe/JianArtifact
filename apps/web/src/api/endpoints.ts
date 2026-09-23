@@ -40,6 +40,8 @@ import type {
   MigrationConflictPolicy,
   OperationsDashboard,
   DownloadClientRanking,
+  DownloadGroupedTrendResponse,
+  RepositoryDownloadTrendResponse,
   MigrationDiscoverResponse,
   MigrationSourceAuth,
   MigrationPlan,
@@ -83,6 +85,50 @@ export function getOperationsDashboard(
 ): Promise<OperationsDashboard> {
   return request<OperationsDashboard>(
     operationsObservabilityPath("/observability/dashboard", query),
+  );
+}
+
+/** 分组下载趋势的查询参数（契约端点 A）。 */
+export interface DownloadTrendQuery extends OperationsObservabilityQuery {
+  /** 分组维度：family（UA 归类，默认）或 ip（来源 IP 明文，仅管理员）。 */
+  groupBy?: "family" | "ip";
+  /** 按仓库名精确过滤；省略为全部仓库。 */
+  repo?: string;
+}
+
+/**
+ * 分组下载趋势与分组总计（契约端点，仅管理员）。
+ * points 为稀疏「桶 × 组」时序（缺失桶由前端对齐桶轴补 0），
+ * totals 为全窗口按组降序（饼图数据源）。
+ */
+export function getDownloadTrend(query: DownloadTrendQuery = {}): Promise<DownloadGroupedTrendResponse> {
+  const params = new URLSearchParams();
+  if (query.from) params.set("from", query.from);
+  if (query.to) params.set("to", query.to);
+  if (query.groupBy) params.set("groupBy", query.groupBy);
+  if (query.repo) params.set("repo", query.repo);
+  const suffix = params.toString();
+  return request<DownloadGroupedTrendResponse>(
+    suffix ? `/observability/downloads/trend?${suffix}` : "/observability/downloads/trend",
+  );
+}
+
+/**
+ * 仓库下载趋势 + 全时段累计下载（非契约端点：openapi paths 中无此路径，
+ * 仅 components.schemas.RepositoryDownloadTrendResponse 有类型，故前端自行拼 URL
+ * ——参照 getRepositoryTree 对 /tree 的非契约封装写法）。
+ * 权限与仓库树同级（匿名 public 200 / 匿名 private 401 / 无授权 403）；
+ * trend 为服务端补零后的连续桶序列，缺省窗口最近 24 小时。
+ */
+export function getRepositoryDownloadTrend(
+  repoName: string,
+  query: OperationsObservabilityQuery = {},
+): Promise<RepositoryDownloadTrendResponse> {
+  return request<RepositoryDownloadTrendResponse>(
+    operationsObservabilityPath(
+      `/repositories/${encodeURIComponent(repoName)}/download-trend`,
+      query,
+    ),
   );
 }
 

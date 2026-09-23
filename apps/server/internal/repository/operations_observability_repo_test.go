@@ -35,7 +35,20 @@ func TestOperationsObservabilityRepoAggregatesAndRetainsCurrentNodeMetrics(t *te
 	if len(items) != 1 || items[0].RequestCount != 7 || items[0].DownloadCount != 5 || items[0].FailureCount != 1 || items[0].CacheHitCount != 3 || items[0].CacheMissCount != 1 {
 		t.Fatalf("分钟聚合错误：%+v", items)
 	}
-	if err := repo.PutHostSample(HostMetricSample{BucketStart: formatMetricTime(base), HostState: MetricStateOK, NetworkState: MetricStateUnavailable, NetworkErrorCode: "network_unavailable", ProcessState: MetricStateOK, ReadinessState: MetricStateOK}); err != nil {
+	memoryTotal := int64(16 << 30)
+	memoryAvailable := int64(6 << 30)
+	memoryUsed := memoryTotal - memoryAvailable
+	diskTotal := int64(500 << 30)
+	diskAvailable := int64(200 << 30)
+	diskUsed := diskTotal - diskAvailable
+	uptime := int64(3600)
+	if err := repo.PutHostSample(HostMetricSample{
+		BucketStart: formatMetricTime(base), HostState: MetricStateOK, NetworkState: MetricStateUnavailable,
+		NetworkErrorCode: "network_unavailable", ProcessState: MetricStateOK, ReadinessState: MetricStateOK,
+		MemoryTotalBytes: &memoryTotal, MemoryAvailableBytes: &memoryAvailable, MemoryUsedBytes: &memoryUsed,
+		DiskTotalBytes: &diskTotal, DiskAvailableBytes: &diskAvailable, DiskUsedBytes: &diskUsed,
+		ProcessUptimeSeconds: &uptime,
+	}); err != nil {
 		t.Fatalf("写入主机样本：%v", err)
 	}
 	latest, err := repo.LatestHostSample()
@@ -44,6 +57,29 @@ func TestOperationsObservabilityRepoAggregatesAndRetainsCurrentNodeMetrics(t *te
 	}
 	if latest.NetworkState != MetricStateUnavailable || latest.NetworkErrorCode != "network_unavailable" {
 		t.Fatalf("主机状态未持久化：%+v", latest)
+	}
+	// 新容量与运行时长字段必须整列落库并原样读回（迁移 0039 的四列）。
+	if latest.MemoryUsedBytes == nil || *latest.MemoryUsedBytes != memoryUsed {
+		t.Fatalf("内存已用未持久化：%+v", latest.MemoryUsedBytes)
+	}
+	if latest.DiskTotalBytes == nil || *latest.DiskTotalBytes != diskTotal {
+		t.Fatalf("磁盘总量未持久化：%+v", latest.DiskTotalBytes)
+	}
+	if latest.DiskUsedBytes == nil || *latest.DiskUsedBytes != diskUsed {
+		t.Fatalf("磁盘已用未持久化：%+v", latest.DiskUsedBytes)
+	}
+	if latest.ProcessUptimeSeconds == nil || *latest.ProcessUptimeSeconds != uptime {
+		t.Fatalf("进程运行时长未持久化：%+v", latest.ProcessUptimeSeconds)
+	}
+	rangeItems, err := repo.HostSamples(base.Add(-time.Minute), base.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("范围读取主机样本：%v", err)
+	}
+	if len(rangeItems) != 1 || rangeItems[0].MemoryUsedBytes == nil || *rangeItems[0].MemoryUsedBytes != memoryUsed ||
+		rangeItems[0].DiskTotalBytes == nil || *rangeItems[0].DiskTotalBytes != diskTotal ||
+		rangeItems[0].DiskUsedBytes == nil || *rangeItems[0].DiskUsedBytes != diskUsed ||
+		rangeItems[0].ProcessUptimeSeconds == nil || *rangeItems[0].ProcessUptimeSeconds != uptime {
+		t.Fatalf("范围查询未返回新字段：%+v", rangeItems)
 	}
 	if err := repo.DeleteBefore(base.Add(time.Second)); err != nil {
 		t.Fatalf("清理过期数据：%v", err)

@@ -57,6 +57,9 @@ type auditReadSnapshot struct {
 	ClientIP   string `json:"ci,omitempty"`
 	AuthSource string `json:"as,omitempty"`
 	Attention  string `json:"at,omitempty"`
+	// 快照签名决定：audit_log 的 http_headers（常用请求头）与 duration_server_ms（单段
+	// 服务端耗时）只做展示字段，不作为筛选维度——因此不进本指纹，matchesFilter 与
+	// auditViewFilter 均不感知它们（筛选语义零变化，旧快照不失效）。
 }
 
 type auditAttentionPayload struct {
@@ -593,6 +596,8 @@ func newAuditReadSnapshot(auditMax, replicationMax int64, sourceNode string, fil
 	}
 }
 
+// matchesFilter 校验快照指纹与当前筛选一致。快照签名决定：http_headers 与
+// duration_server_ms 不参与筛选（见 auditReadSnapshot 内注释），故此处不比较它们。
 func (s auditReadSnapshot) matchesFilter(filter auditViewFilter) bool {
 	return s.From == filter.from.Format(time.RFC3339Nano) &&
 		s.To == filter.to.Format(time.RFC3339Nano) &&
@@ -978,6 +983,10 @@ func toAPIAuditHTTP(event repository.ObservabilityEvent) *AuditHttpContext {
 		body := event.BodyPreview
 		context.BodyPreview = &body
 	}
+	if event.HTTPHeaders != "" {
+		headers := event.HTTPHeaders
+		context.HttpHeaders = &headers
+	}
 	return context
 }
 
@@ -995,6 +1004,11 @@ func (h *Handlers) toAPIAuditEvent(snapshot auditReadSnapshot, event repository.
 	if event.DurationMs > 0 {
 		duration := event.DurationMs
 		apiEvent.DurationMs = &duration
+	}
+	// 单段服务端耗时：0 表示未进入契约路由（协议端点/静态回退/全局中间件拒绝），缺省不返回。
+	if event.DurationServerMs > 0 {
+		serverDuration := event.DurationServerMs
+		apiEvent.DurationServerMs = &serverDuration
 	}
 	if event.ClientIP != "" {
 		clientIP := event.ClientIP

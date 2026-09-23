@@ -115,6 +115,143 @@ func (h *Handlers) GetDownloadByClient(c *gin.Context, params GetDownloadByClien
 	c.JSON(http.StatusOK, response)
 }
 
+// GetDownloadTrendGrouped 返回按 IP / UA 族分组的下载时序与分组总计，
+// 供仪表盘「分组趋势图 + 饼图」使用（原始累计口径，与仪表盘 downloadTrend 同采集点）。
+// 契约端点（operationId: getDownloadTrendGrouped），响应结构见 openapi.yaml 的
+// DownloadGroupedTrendResponse / DownloadGroupedTrendPoint / DownloadGroupTotal（由 task gen 生成）：
+// Points 是稀疏「桶 × 组」时序——分组基数不受限（IP 维度可达成百上千），服务端不做
+// 组 × 桶笛卡尔补零，前端对齐 from/to/effectiveBucket 桶轴后把缺失桶记 0 即可连续绘图；
+// Totals 为全窗口按组降序总计（饼图数据源）。
+// 权限：仅管理员 —— groupBy=ip 时返回来源 IP 明文，与 GetDownloadByClient 同一隐私边界；
+// 仪表盘本体也仅管理员可见，故端点不按 groupBy 分级，统一 requireAdmin。
+func (h *Handlers) GetDownloadTrendGrouped(c *gin.Context, params GetDownloadTrendGroupedParams) {
+	if _, ok := requireAdmin(c); !ok {
+		return
+	}
+	// from/to 成对校验、缺省最近 24 小时与 30 天跨度上限由 operationsRange 统一裁决。
+	from, to, ok := operationsRange(c, params.From, params.To)
+	if !ok {
+		return
+	}
+	if h.assetDownloads == nil {
+		// 下载计量仓储未接线时返回 409，不伪造空趋势（与 GetDownloadByClient 同策略）。
+		authWriteUnavailable(c)
+		return
+	}
+	groupBy := repository.DownloadGroupKeyFamily
+	switch value := groupedTrendGroupBy(params.GroupBy); value {
+	case string(repository.DownloadGroupKeyFamily):
+		// 缺省按 UA 族分组：低基数、不含 IP 明文，是饼图的常规口径。
+	case string(repository.DownloadGroupKeyIP):
+		groupBy = repository.DownloadGroupKeyIP
+	default:
+		auth.WriteError(c, http.StatusBadRequest, "bad_request", "groupBy 仅支持 ip 或 family")
+		return
+	}
+	repo := ""
+	if params.Repo != nil {
+		repo = string(*params.Repo)
+	}
+	bucket := operationsBucket(from, to)
+	rows, err := h.assetDownloads.DownloadTrendGrouped(from, to, bucket, groupBy, repo)
+	if err != nil {
+		writeDomainErr(c, err)
+		return
+	}
+	response := DownloadGroupedTrendResponse{
+		From: from, To: to, EffectiveBucket: ObservabilityBucket(bucket),
+		GroupBy: DownloadGroupedTrendResponseGroupBy(groupBy),
+		Points:  make([]DownloadGroupedTrendPoint, 0, len(rows)),
+	}
+	totals := make(map[string]int64)
+	for _, row := range rows {
+		start, parseErr := time.Parse(time.RFC3339, row.Bucket)
+		if parseErr != nil {
+			continue
+		}
+		response.Points = append(response.Points, DownloadGroupedTrendPoint{
+			From: start, To: bucketEnd(start, bucket), Group: row.Group, Count: row.Count,
+		})
+		totals[row.Group] += row.Count
+	}
+	response.Totals = sortedDownloadGroupTotals(totals)
+	c.JSON(http.StatusOK, response)
+}
+
+// groupedTrendGroupBy 取出分组维度字面量；契约缺省（参数省略）为 family（UA 归类）。
+func groupedTrendGroupBy(value *GetDownloadTrendGroupedParamsGroupBy) string {
+	if value == nil {
+		return string(repository.DownloadGroupKeyFamily)
+	}
+	return string(*value)
+}
+
+// sortedDownloadGroupTotals 把分组总计整理为饼图序列：Count 降序、同数按 Group 升序稳定。
+func sortedDownloadGroupTotals(totals map[string]int64) []DownloadGroupTotal {
+	result := make([]DownloadGroupTotal, 0, len(totals))
+	for group, count := range totals {
+		result = append(result, DownloadGroupTotal{Group: group, Count: count})
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Count != result[j].Count {
+			return result[i].Count > result[j].Count
+		}
+		return result[i].Group < result[j].Group
+	})
+	return result
+}
+
+// observabilityRangeQuery 解析非契约观测端点的可选 from/to 查询参数（RFC3339）；
+// 成对缺省时复用 operationsRange 的最近 24 小时默认与 30 天上限校验。
+func observabilityRangeQuery(c *gin.Context) (time.Time, time.Time, bool) {
+	rawFrom, rawTo := c.Query("from"), c.Query("to")
+	if rawFrom == "" && rawTo == "" {
+		return operationsRange(c, nil, nil)
+	}
+	if rawFrom == "" || rawTo == "" {
+		auth.WriteError(c, http.StatusBadRequest, "bad_request", "from 与 to 必须同时提供")
+		return time.Time{}, time.Time{}, false
+	}
+	from, err := time.Parse(time.RFC3339, rawFrom)
+	if err != nil {
+		auth.WriteError(c, http.StatusBadRequest, "bad_request", "from 必须为 RFC3339 时间")
+		return time.Time{}, time.Time{}, false
+	}
+	to, err := time.Parse(time.RFC3339, rawTo)
+	if err != nil {
+		auth.WriteError(c, http.StatusBadRequest, "bad_request", "to 必须为 RFC3339 时间")
+		return time.Time{}, time.Time{}, false
+	}
+	return operationsRange(c, &from, &to)
+}
+
+// zeroFilledDownloadTrendPoints 把稀疏桶补齐为连续序列（单序列趋势用），请求范围遵循 [from,to)。
+// 下载明细源精度为分钟：先取窗口内分钟桶起点，再按目标粒度映射到 minute/hour/day 桶；
+// 因此 hour/day 首尾桶可能是部分窗口数据，to 边界对应的源分钟桶不纳入。缺失桶计 0，
+// 点的 From 即目标桶起点（label 取桶起点时间戳）。
+func zeroFilledDownloadTrendPoints(values map[time.Time]int64, from, to time.Time, bucket string) []DownloadTrendPoint {
+	points := make([]DownloadTrendPoint, 0, len(values))
+	fromUTC, toUTC := from.UTC(), to.UTC()
+	firstMinute := truncateOperationsBucket(fromUTC, "minute")
+	if firstMinute.Before(fromUTC) {
+		firstMinute = bucketEnd(firstMinute, "minute")
+	}
+	minuteEndExclusive := truncateOperationsBucket(toUTC, "minute")
+	if minuteEndExclusive.Before(toUTC) {
+		minuteEndExclusive = bucketEnd(minuteEndExclusive, "minute")
+	}
+	if !firstMinute.Before(minuteEndExclusive) {
+		return points
+	}
+	start := truncateOperationsBucket(firstMinute, bucket)
+	lastMinute := minuteEndExclusive.Add(-time.Minute)
+	last := truncateOperationsBucket(lastMinute, bucket)
+	for ; !start.After(last); start = bucketEnd(start, bucket) {
+		points = append(points, DownloadTrendPoint{From: start, To: bucketEnd(start, bucket), DownloadCount: values[start]})
+	}
+	return points
+}
+
 // dashboardKPI 统一计算范围内业务计数，避免每个客户端独立重算造成统计口径漂移。
 func dashboardKPI(current repository.CapacitySnapshot, minutes []repository.ProtocolMinute) OperationsDashboardKpi {
 	kpi := OperationsDashboardKpi{
@@ -309,13 +446,17 @@ func capacityPoint(item repository.CapacitySnapshot, from, to time.Time) Capacit
 	return CapacityPoint{From: from, To: to, RepositoryCount: item.RepositoryCount, AssetCount: item.AssetCount, LogicalBytes: item.LogicalBytes}
 }
 
+// hostPoint 把主机样本映射为响应点：容量三件套（内存已用、磁盘总量/已用）与进程运行时长
+// 均为 nullable 可选字段，采样点缺列时保持 nil（契约不入 required）。
 func hostPoint(item repository.HostMetricSample, from, to time.Time) HostMetricPoint {
 	return HostMetricPoint{From: from, To: to, HostState: metricGroup(item.HostState, item.HostErrorCode), CpuPercent: item.CPUPercent,
-		MemoryTotalBytes: item.MemoryTotalBytes, MemoryAvailableBytes: item.MemoryAvailableBytes, DiskAvailableBytes: item.DiskAvailableBytes,
+		MemoryTotalBytes: item.MemoryTotalBytes, MemoryAvailableBytes: item.MemoryAvailableBytes, MemoryUsedBytes: item.MemoryUsedBytes,
+		DiskTotalBytes: item.DiskTotalBytes, DiskAvailableBytes: item.DiskAvailableBytes, DiskUsedBytes: item.DiskUsedBytes,
 		NetworkState: metricGroup(item.NetworkState, item.NetworkErrorCode), NetworkReceiveBytesPerSecond: item.NetworkReceiveBytesPerSecond,
 		NetworkTransmitBytesPerSecond: item.NetworkTransmitBytesPerSecond, ProcessState: metricGroup(item.ProcessState, item.ProcessErrorCode),
-		ProcessRssBytes: item.ProcessRSSBytes, ProcessCpuPercent: item.ProcessCPUPercent, GoroutineCount: item.GoroutineCount,
-		OpenFileDescriptors: item.OpenFileDescriptors, ReadinessState: metricGroup(item.ReadinessState, item.ReadinessErrorCode)}
+		ProcessRssBytes: item.ProcessRSSBytes, ProcessCpuPercent: item.ProcessCPUPercent, ProcessUptimeSeconds: item.ProcessUptimeSeconds,
+		GoroutineCount: item.GoroutineCount, OpenFileDescriptors: item.OpenFileDescriptors,
+		ReadinessState: metricGroup(item.ReadinessState, item.ReadinessErrorCode)}
 }
 
 func metricGroup(state repository.MetricState, code string) HostMetricGroup {

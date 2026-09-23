@@ -304,6 +304,11 @@ func newApplicationHandler(cfg *config.Config, svc *appServices, assets fs.FS) h
 			}
 			// FR-54: 目录懒加载 tree API
 			r.GET("/api/v1/repositories/:name/tree", authMW, apiHandlers.ListRepositoryTree)
+			// FR-142: 仓库详情下载趋势与总下载（权限同 tree；非契约端点，结构收口在
+			// openapi.yaml 的 RepositoryDownloadTrendResponse，路径按 tree 先例不入契约）
+			r.GET("/api/v1/repositories/:name/download-trend", authMW, apiHandlers.GetRepositoryDownloadTrend)
+			// FR-142: 分组下载趋势 /api/v1/observability/downloads/trend 已收口进契约，
+			// 由 RegisterHandlersWithOptions 注册（勿在此重复注册，避免 gin 路由冲突）。
 			// 公开接口（无需认证）
 			r.GET("/api/v1/public/repositories", apiHandlers.ListPublicRepositories)
 			// FR-30: 全局搜索
