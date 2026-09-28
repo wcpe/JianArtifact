@@ -144,7 +144,15 @@ describe("用户管理", () => {
                   visibility: "private",
                 },
               ]
-            : [{ id: 999, name: "page2-hosted", format: "raw", type: "hosted", visibility: "private" }];
+            : [
+                {
+                  id: 999,
+                  name: "page2-hosted",
+                  format: "raw",
+                  type: "hosted",
+                  visibility: "private",
+                },
+              ];
         // total 超过单页上限（100）：只取第一页会漏掉后面的 hosted 仓库。
         return HttpResponse.json({ items, total: 101 });
       }),
