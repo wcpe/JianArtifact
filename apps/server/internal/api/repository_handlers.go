@@ -45,6 +45,32 @@ func (h *Handlers) resolveRepoNameSet(name string) ([]string, error) {
 	return set, nil
 }
 
+const repositoryListFetchSize = 100
+
+// listAllRepositories 分批读取全部仓库，供需要先做可见性过滤的列表端点使用。
+// 每批固定 100 条，避免把分页上限误当成全量上限；各批次沿用同一排序参数，保证拼接顺序稳定。
+func (h *Handlers) listAllRepositories(sortBy, order string) ([]repository.Repository, map[int64]domain.RepoStats, error) {
+	all := make([]repository.Repository, 0, repositoryListFetchSize)
+	stats := make(map[int64]domain.RepoStats)
+	for offset := 0; ; offset += repositoryListFetchSize {
+		rows, batchStats, _, err := h.repos.ListWithStats(repositoryListFetchSize, offset, sortBy, order)
+		if err != nil {
+			return nil, nil, err
+		}
+		if len(rows) == 0 {
+			break
+		}
+		all = append(all, rows...)
+		for id, value := range batchStats {
+			stats[id] = value
+		}
+		if len(rows) < repositoryListFetchSize {
+			break
+		}
+	}
+	return all, stats, nil
+}
+
 // ListRepositories 仓库列表（分页）。管理员可见全部；普通用户仅见可读（public 或经 ACL 授权）者。
 // 可选鉴权（FR-66）：匿名请求受全局开关约束（关则 401），开则返回匿名可读集合。
 // 响应中每个仓库附带 artifactCount/totalSize 统计（GROUP BY 一次查出，避免 N+1）。
@@ -54,7 +80,7 @@ func (h *Handlers) ListRepositories(c *gin.Context, params ListRepositoriesParam
 		return
 	}
 	limit, offset := pageOffset(params.Page, params.PageSize)
-	// 排序参数（可选）
+	// 排序参数（可选）。
 	sortBy := ""
 	order := ""
 	if s := c.Query("sort"); s != "" {
@@ -63,24 +89,45 @@ func (h *Handlers) ListRepositories(c *gin.Context, params ListRepositoriesParam
 	if o := c.Query("order"); o != "" {
 		order = o
 	}
-	rows, statsMap, total, err := h.repos.ListWithStats(limit, offset, sortBy, order)
-	if err != nil {
-		writeDomainErr(c, err)
-		return
-	}
 	isAdmin := authed && p.IsAdmin()
 	var subjectID int64
 	if authed {
 		subjectID = p.UserID
 	}
-	items := make([]Repository, 0, len(rows))
-	for i := range rows {
-		if !isAdmin {
-			allowed, err := h.repos.CanAccess(rows[i].Name, subjectID, "read")
-			if err != nil || !allowed {
-				continue
+
+	var rows []repository.Repository
+	var statsMap map[int64]domain.RepoStats
+	var total int
+	var err error
+	if isAdmin {
+		rows, statsMap, total, err = h.repos.ListWithStats(limit, offset, sortBy, order)
+	} else {
+		var allRows []repository.Repository
+		allRows, statsMap, err = h.listAllRepositories(sortBy, order)
+		if err == nil {
+			visible := make([]repository.Repository, 0, len(allRows))
+			for i := range allRows {
+				allowed, accessErr := h.repos.CanAccess(allRows[i].Name, subjectID, "read")
+				if accessErr == nil && allowed {
+					visible = append(visible, allRows[i])
+				}
+			}
+			total = len(visible)
+			if offset < len(visible) {
+				end := offset + limit
+				if end > len(visible) {
+					end = len(visible)
+				}
+				rows = visible[offset:end]
 			}
 		}
+	}
+	if err != nil {
+		writeDomainErr(c, err)
+		return
+	}
+	items := make([]Repository, 0, len(rows))
+	for i := range rows {
 		stats := statsMap[rows[i].ID]
 		item := toAPIRepository(&rows[i], &stats)
 		// 连接状态为管理面信息（FR-114），仅管理员可见。
@@ -88,9 +135,6 @@ func (h *Handlers) ListRepositories(c *gin.Context, params ListRepositoriesParam
 			item.ConnectionStatus = h.connectionStatus(&rows[i])
 		}
 		items = append(items, item)
-	}
-	if !isAdmin {
-		total = len(items)
 	}
 	c.JSON(http.StatusOK, RepositoryList{Items: items, Total: total})
 }
@@ -500,16 +544,15 @@ func (h *Handlers) ListPublicRepositories(c *gin.Context) {
 	if !h.anonymousAllowed(c) {
 		return
 	}
-	limit, offset := pageOffset(nil, nil)
-	rows, statsMap, _, err := h.repos.ListWithStats(limit, offset)
+	rows, statsMap, err := h.listAllRepositories("", "")
 	if err != nil {
 		writeDomainErr(c, err)
 		return
 	}
 	items := make([]Repository, 0, len(rows))
 	for i := range rows {
-		allowed, err := h.repos.CanAccess(rows[i].Name, 0, "read")
-		if err != nil || !allowed {
+		allowed, accessErr := h.repos.CanAccess(rows[i].Name, 0, "read")
+		if accessErr != nil || !allowed {
 			continue
 		}
 		stats := statsMap[rows[i].ID]

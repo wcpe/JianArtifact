@@ -91,7 +91,7 @@ func (r *RepoRepo) ListSorted(limit, offset int, sortBy, order string) ([]Reposi
 		dir = "DESC"
 	}
 	var repos []Repository
-	q := fmt.Sprintf(`SELECT id, name, format, type, visibility, description, config, online, created_at FROM repository ORDER BY %s %s LIMIT ? OFFSET ?`, col, dir)
+	q := fmt.Sprintf(`SELECT id, name, format, type, visibility, description, config, online, created_at FROM repository ORDER BY %s %s, id %s LIMIT ? OFFSET ?`, col, dir, dir)
 	err := r.db.Select(&repos, q, limit, offset)
 	return repos, err
 }

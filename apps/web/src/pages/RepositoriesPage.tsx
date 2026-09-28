@@ -312,7 +312,7 @@ export function RepositoriesPage() {
   };
   // 一次拉全量（`listAllRepositories` 内部按契约单页上限拼接），客户端做「置顶 → 筛选 → 分页」。
   //
-  // 为什么不用服务端分页：置顶是**本地偏好**（localStorage）、名称筛选是客户端条件，
+  // 为什么不用服务端分页：置顶是**服务端偏好**但排序在前端做（要跨页生效）、名称筛选是客户端条件，
   // 服务端都无从参与。继续用服务端分页会让置顶只在当前页内生效、筛选漏掉其它页的匹配项。
   const state = useAsync(
     () => listAllRepositories({ sort: sortBy, order: sortOrder }),

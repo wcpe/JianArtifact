@@ -35,12 +35,12 @@ import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { PageShell } from "../app/PageShell";
 import { currentLocaleTag } from "../i18n/current";
-import { RepoBrowser } from "../components/repo/RepoBrowser";
+import { RepoBrowser, type RepoDownloadTrendView } from "../components/repo/RepoBrowser";
 import { AsyncBoundary } from "../components/AsyncBoundary";
 import {
   getAcl,
   getRepositoryDownloadTrend,
-  listRepositories,
+  listAllRepositories,
   listUsers,
   recheckConnection,
   renameRepository,
@@ -84,7 +84,7 @@ export function RepositoryDetailPage() {
   // 匿名访问 private 仓库时列表不含该项 → null，由下方「未认证」分支处理。
   const repoState = useAsync(
     () =>
-      listRepositories({ page_size: 100 }).then(
+      listAllRepositories().then(
         (list) => list.items.find((r) => r.name === name || r.aliases?.includes(name)) ?? null,
       ),
     [name],
@@ -327,7 +327,7 @@ function ConfigTab({
   const [renaming, setRenaming] = useState(false);
   const [renameError, setRenameError] = useState<string | null>(null);
   // group 成员候选：当前列表中同格式、非本仓的仓库名。
-  const reposState = useAsync(() => listRepositories({ page_size: 100 }), [], {
+  const reposState = useAsync(() => listAllRepositories(), [], {
     cacheKey: "repositories:options",
   });
   const memberOptions = (reposState.data?.items ?? [])

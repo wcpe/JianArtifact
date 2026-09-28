@@ -38,11 +38,11 @@ import {
   applyAssetOperation,
   getRepositoryTree,
   getRepositoryUsage,
-  listRepositories,
+  listAllRepositories,
   searchAssets,
   uploadRawAsset,
 } from "../../api/endpoints";
-import type { AssetSummary, Repository, UsageInfo } from "../../api/types";
+import type { AssetSummary, Repository, UsageInfo, UsageSnippet } from "../../api/types";
 import { useAsync, REFRESH_EVENT } from "../../hooks/useAsync";
 import type { AssetTreeNode } from "../../lib/assetTree";
 import { buildAssetTree } from "../../lib/assetTree";
@@ -226,7 +226,7 @@ export function RepoBrowser({
     () =>
       publicMode
         ? Promise.resolve(null as Repository | null)
-        : listRepositories({ page_size: 100 }).then(
+        : listAllRepositories().then(
             (list) =>
               list.items.find((r) => r.name === repoName || r.aliases?.includes(repoName)) ?? null,
           ),
