@@ -10,7 +10,7 @@
 
 - **仓库别名与重命名（FR-146）**：仓库可配置多个别名，别名与主名**共享命名空间、全局唯一**，可等价访问（协议路由与管理端 API 全域经 `GetByName` 单点按名解析到主名仓库）；`POST /api/v1/repositories/{name}/rename` 重命名后**旧名自动转为别名**，旧链接与既有客户端坐标仍可解析。新增迁移 `0041_repository_alias.sql`（`repository_alias` 表，随仓库级联删除）；契约新增 `Repository.aliases`、`CreateRepositoryRequest`/`UpdateRepositoryRequest` 的 `aliases` 与 rename 端点；配置页签可编辑别名与重命名，创建表单可填别名。下载统计按「主名 ∪ 别名」聚合，`audit_log` / `asset_download_minutes` 保留旧名不回填。语义取舍见 [`docs/adr/0028`](docs/adr/0028-repository-alias-and-rename.md)
 - **主机监控网络总量与网卡维度（FR-147）**：网络指标在既有速率之外新增「总发送 / 总接收」（**自网卡启动以来的累计字节**）与**逐网卡维度**。平台层由「聚合全网卡」改为逐网卡采集（Linux 读 `/proc/net/dev`、Windows 用 `GetIfTable2Ex`，均跳过回环），解析 / 过滤 / 求和下沉为无平台标签纯函数以便跨平台单测；服务层按**同名网卡**与上一份样本配对算逐网卡速率——网卡新增或计数回退时速率留空、不伪造 0。新增迁移 `0042_host_network_interface.sql`：`host_metric_minute` 增可空列 `network_receive_bytes_total` / `network_transmit_bytes_total`（该时刻全部非回环网卡的聚合累计，历史行 NULL 不回填），新表 `host_network_interface_minute`（逐网卡每分钟一行，主键 `(bucket_start, interface)` + `(interface, bucket_start)` 索引）。契约 `HostMetricPoint` 增 `networkReceiveBytesTotal` / `networkTransmitBytesTotal`，新增 schema `HostNetworkInterface`，主机监控响应增 `networkInterfaces`，`/api/v1/observability/host` 增可选 `interface` 参数（省略 = 全网卡聚合）。前端网络卡显示「总发送 / 总接收」+ 网卡选择器（首项「全部网卡」，选定后速率图与总量都按该网卡）
-- **仓库使用说明扩充更多工具与构建系统**：在既有分组内补充常见客户端片段——Maven 增 sbt（`~/.sbt/repositories`）、Gradle 凭据（`~/.gradle/gradle.properties`）与一行式 `mvn dependency:get` / `mvn deploy -DaltDeploymentRepository`；npm 增 `.npmrc`（含 `//<host><path>:_authToken` 认证行）、pnpm 与 Yarn（1.x / 2+）等价配置、scoped 包 `publishConfig` 发布；raw 增带 `Authorization: Bearer` 的 curl 下载 / 上传与 wget 下载。分组枚举不变、只是同组内扩展（Maven hosted 5→9、npm hosted 3→7、raw hosted 2→5），只读（proxy）仓库仍不出现发布组，标题 / 描述继续按 `Accept-Language` 中英成对
+- **仓库使用说明扩充更多工具与构建系统**：在既有分组内补充常见客户端片段——Maven 增 sbt（`~/.sbt/repositories`）、Gradle 凭据（`~/.gradle/gradle.properties`）与一行式 `mvn dependency:get` / `mvn deploy -DaltDeploymentRepository`；npm 增 `.npmrc`（含 `//<host><path>:_authToken` 认证行）、pnpm 与 Yarn（1.x / 2+）等价配置、scoped 包 `publishConfig` 发布；raw 增带 `Authorization: Bearer` 的 curl 下载 / 上传与 wget 下载。分组枚举不变、只是同组内扩展（Maven hosted 5→14、npm hosted 3→8、raw hosted 2→5），只读（proxy）仓库仍不出现发布组，标题 / 描述继续按 `Accept-Language` 中英成对
 - **审计工作台「上传聚合」视图**：在既有事件流之外新增按上传 / 发布事件聚合的树视图 `仓库 → groupId → artifactId → 版本 → 文件`（复用既有 GAV 坐标解析），节点显示该节点上传次数与时间范围，展开到叶子可见文件并可跳转到对应审计事件；非 Maven 路径（如 npm 的 `@scope/pkg/-/pkg-1.0.0.tgz`、raw 任意路径）与解析不出 GAV 的事件**降级归入「其他」**（按目录路径聚合，不丢事件）；只聚合当前查询结果集内的事件，空态给出明确文案。纯前端聚合，不新增接口
 - **置顶仓库改数据库存储（FR-148）**：置顶此前是纯前端 `localStorage` 偏好（键 `jianartifact.pinnedRepos`），换设备 / 清缓存即丢失。现新增迁移 `0043_pinned_repository.sql`：`pinned_repository` 表（`user_id` NULL = **全局置顶**、非 NULL = 用户私有置顶，主键 `(user_id, repository_id)`，随 `user` / `repository` 级联删除）与 partial unique index `idx_pinned_repo_global`（`repository_id WHERE user_id IS NULL`，兜住 SQLite 主键唯一性不覆盖 NULL 的缺口）。契约新增 `GET/PUT /api/v1/me/pinned-repositories`（用户级，匿名 `GET` 回退全局、匿名 `PUT` 401）与 `GET/PUT /api/v1/settings/pinned-repositories`（仅管理员），写入为覆盖式（按 repositoryId 整体替换）；`/api/v1/public/repositories` 响应增 `pinnedNames`（全局置顶），使**公开页也按置顶排序并显示图钉**。前端 `usePinnedRepos` 改为读服务端数据 + 乐观更新失败回滚，`localStorage` 仅作只读降级；既有浏览器内置顶无法读进服务端，需重新置顶（不做自动导入）
 - **发布策略支持多仓库批量保存**：发布策略原为 `publish_policy` 单仓库一条（主键 `(user_id, repository_id)`），前端表单只能选一个仓库。现契约新增批量端点 `PUT /api/v1/users/{id}/publish-policies`（body `{repositories[], ...}`），把同一份策略一次应用到多个 Hosted 仓库；服务层 `SaveMany` 先对全部仓库统一预校验（须存在且为 hosted，任一不合法即整体拒绝），再逐个落库，响应按仓库返回 `results[]`（部分失败可见）；单仓库端点保留。前端发布策略弹窗改多选仓库（Mantine `MultiSelect`）、展示逐仓库结果，并补一句策略用途说明（它约束发布账号的路径前缀与配额）
@@ -57,7 +57,7 @@
 
 - **页面权限与仓库浏览布局口径收敛**：路由层统一区分公开浏览、登录后页面与管理员页面；仓库列表、仓库详情、ACL、搜索、设置、迁移与备份统一使用单一 `PageShell`，仓库列表按「置顶 → 筛选 → 分组/排序 → 分页」处理，窄屏收起低价值列，详情文件树与文件详情上下堆叠，宽屏保留分割条
 - **Maven 请求级仓库快照与快速 404 语义明确化**：协议请求按主名/别名解析一次并在请求内复用仓库快照；SNAPSHOT 先按时间戳元数据解析、失败后按字面路径回退；未知仓库、禁用格式和明确不存在的制品快速 404，确认不存在时写入默认 60 秒负缓存，上游故障或不可判定状态不缓存，成功写入/回源成功/删除后失效
-- **主机监控内存/磁盘趋势纵轴贴合数据**：内存趋势纵轴改为**系统内存总量**、只画「已用」（已用之上的空白即表示空闲，不再单画可用量折线）；磁盘趋势与仪表盘「容量增长趋势」的 Y 轴改为贴合数据的放大域以放大波动。图表能力上 `TrendChart` 新增 `yDomain` 入参（不传时保持原「从 0 起」行为，零回归）
+- **主机监控内存/磁盘趋势纵轴贴合数据**：内存趋势纵轴改为**系统内存总量**、只画「已用」（已用之上的空白即表示空闲，不再单画可用量折线）；磁盘趋势与仪表盘「容量增长趋势」的 Y 轴统一为 `[0, 总量]`（磁盘图与内存图同构，容量增长图见下）。图表能力上 `TrendChart` 新增 `yDomain` 入参（不传时保持原「从 0 起」行为，零回归）
 - **仓库详情下载趋势归位**：从页面顶层整行移入右侧详情面板顶部，不再占用页头与浏览面板之间的空间
 - **审计时间范围档位改为 24h / 3d / 7d / 30d（默认 24h）**，并支持**自定义日期区间**（URL 深链 `range=custom&from=&to=`）；日期选择器文案与日历 locale 随界面中英文切换；「共 N 条」与时间切换器并入筛选条，记录区标题移除、左右留白且不再横向滚动
 - **自定义日期区间改用 Mantine `DatePickerInput type="range"`**：替换原生 `<input type="date">`，与组件库保持一致
@@ -66,8 +66,8 @@
 - **仓库详情补充下载数据**：展示累计下载次数与近 24 小时下载趋势；下载趋势按仓库过滤，复用分钟级下载计量数据
 - **DevMock 补齐下载趋势端点**：新增分组下载趋势与仓库下载趋势模拟响应；桶粒度与服务端一致，按分钟源桶遵循 `[from,to)` 并对齐 minute/hour/day 起点，分组总数与时序点保持一致
 - **趋势图移除「区间剖析」统计条**：删除图下方那条均值 / 峰值 / 谷值 / 区间变动的统计（及随之无用的中英 i18n 键 `trendChart.analysis*`）；**横向拖选聚焦放大仍保留**（拖选与还原、键盘可达性、悬停读数均不受影响）
-- **仓库详情「下载趋势」默认折叠**：改为默认一行摘要「下载趋势 · 总下载次数」，点击展开图表；折叠后不再占高度，展开态仍是原 `TrendChart`，三态（加载 / 失败 / 正常）不变。总次数取自页面已有的下载趋势响应，**不新增请求**
-- **仓库详情「使用说明」按用途分组折叠**：契约 `UsageSnippet` 新增必填 `group`（enum `auth` / `resolve` / `publish` / `other`，**结构化分组标记、不参与本地化**，与随 `Accept-Language` 变化的 `title` / `description` 不同）；前端按「认证 / 解析依赖 / 发布制品 / 其他」分组渲染 `Accordion`、默认全部折叠（空组不渲染），每段代码块右上角复用 `CopyTextButton`
+- **仓库详情「下载趋势」常驻详情面板**：趋势图常驻右侧详情面板顶部（不折叠、不占页头高度），加载中骨架 / 失败降级文案 / 就绪复用 `TrendChart` 三态不变；总次数取自页面已有的下载趋势响应，**不新增请求**
+- **仓库详情「使用说明」按用途分组 + 工具切换**：契约 `UsageSnippet` 新增必填 `group`（enum `auth` / `resolve` / `publish` / `other`，**结构化分组标记、不参与本地化**，与随 `Accept-Language` 变化的 `title` / `description` 不同）与 `tool`（构建工具标识）；前端按「认证 / 解析依赖 / 发布制品 / 其他」分组、组间以 `Divider` 分隔，**全部展开不折叠**；工具多于一种时顶部给一个全局工具 `Select`，切换后各组只显示该工具的片段（空组整组隐藏），每段代码块右上角复用 `CopyTextButton`
 - **仪表盘「容量增长趋势」改为增量曲线**：此前以绝对逻辑体积作纵轴，容量基数在 GB 量级而 `formatBytes` 只到 GB 一位小数，坐标轴刻度与悬停读数被取整到同一个 GB 读数，期间的真实增长被基数掩盖，视觉上就像「卡住」。现把序列映射为相对**区间起点**的增量（首点恒为 0），纵轴在增量非负时自 0 起（只有在区间内出现负增量时才贴合数据两端，避免截断），卡片右上大数字改为当前增量而非总量；总量仍在 KPI 指标带的 `logicalBytes` 中可见。标题 / 摘要 / 主标签同步改为「容量增长（相对区间起点）」语义（`dashboard.trendCapacity*` 中英同步），空数据与单点数据安全（单点增量为 0，不除零、不产生空轴）
 
 ## 0.9.0（2026-09-21）
@@ -78,8 +78,6 @@
 - **36 处硬编码 `zh-CN` 收敛到统一 locale 入口（FR-139）**：新增 `src/i18n/current.ts` 的 `currentLocaleTag()` / `localizedFormatter()` 作为 `toLocaleString`、`Intl.*` 与 Mantine 日期组件 locale 的**唯一取值来源**。其中 5 处是 `components/audit/labels.ts` 的**模块级** `Intl.DateTimeFormat` 常量——模块级常量在切语言后不会重建，改语言时时间格式会停在旧语言，是本次最隐蔽的一处；现按「语言|选项」惰性构造并缓存。另 10 处无 locale 参数的 `toLocaleString()` 同样收敛，避免跟随浏览器 locale 而与界面语言分叉。
 - DevMock 控制台悬浮球（仅开发态）：数据量（少量 / 中量 / 大量 = ×1 / ×4 / ×16）× 网速（快 / 中 / 慢 = 0 / 400 / 1500 ms）3×3 矩阵，切换即清页面缓存并触发全站重拉。延迟挂在全局前置守卫上，因此对全部端点生效；数据量会把仓库**物化**成更多真实仓库（`<名称>-v<轮次>`，列表与详情看到同一份数据），并放大主机采样点（48→768）与仪表盘趋势桶（12→192）。
 - **DevMock 观测数据每次刷新都会变化**：仪表盘的 KPI 与趋势曲线、主机监控的 CPU / 内存 / 网络 / RSS / goroutine 采样，都由「快照序号」驱动一个确定性抖动，因此点页眉刷新能立刻看到数据变动（此前数值恒定，无法判断刷新是否生效）。序号 0 为**确定性基线**——契约测试与前端断言都基于它，`resetStore` 会把所有通道归零；各端点**独立计数**，避免同一页面内先发的其他请求吃掉基线序号。
-
-- **可见仓库超过一页时列表只加载第一页**：非管理员与匿名请求的仓库列表把 `total` 写成「当前页可见条数」，而前端正是按 `total` 判断是否继续翻页，于是公开 / 授权可见仓库超过单页上限（100 条）时永远只拉第一页；`/api/v1/public/repositories` 也固定在默认 20 条。现改为先按可见性过滤再分页、`total` 统计全部可见仓库，公开列表一次读全，且都不泄漏私有仓库
 
 ### 变更
 
@@ -239,8 +237,6 @@
 - Linux arm64 静态构建资产（FR-33）与 Windows 发布检查入口（scripts/check.ps1）。
 - 管理员可直接填写外部 Nexus URL 创建在线迁移（FR-116），支持匿名、Basic（含 User Token）和 Bearer 认证；任务凭据使用 AES-256-GCM 加密保存以支持断点续传。
 - 凭据引用审计补齐（FR-109）：迁移 discover/远程仓库索引读取实际使用凭据引用时写入 `migration.credential_ref` 审计（仅逻辑名称与认证类型）；`migration.start` 审计附带任务凭据引用；proxy 仓库创建/更新审计附带 `credentialRef` 配置与清除记录。全程不记录明文、摘要或环境变量全名。
-
-- **可见仓库超过一页时列表只加载第一页**：非管理员与匿名请求的仓库列表把 `total` 写成「当前页可见条数」，而前端正是按 `total` 判断是否继续翻页，于是公开 / 授权可见仓库超过单页上限（100 条）时永远只拉第一页；`/api/v1/public/repositories` 也固定在默认 20 条。现改为先按可见性过滤再分页、`total` 统计全部可见仓库，公开列表一次读全，且都不泄漏私有仓库
 
 ### 变更
 
@@ -408,8 +404,6 @@
 - 全局搜索增强（FR-30 增强）：高级搜索表达式（多词 AND、`-` 负筛选、双引号短语、`repo:`/`format:`/`ext:` 限定及对应排除形式，解析后下推 SQL）；结果按仓库聚合 facets（点击即过滤）；结果表格表头排序（名称/仓库/路径/大小/更新时间，存储层排序 + 分页总数）。
 - 浏览页与仓库列表交互打磨：浏览页搜索结果树形化展示（FR-57 增强，命中路径按目录聚合）+ 上传表单折叠收纳；仓库列表匿名视图标题文案独立、仓库名称点击直达详情、复制按钮 Tooltip 去重（消除嵌套提示重叠）。
 
-- **可见仓库超过一页时列表只加载第一页**：非管理员与匿名请求的仓库列表把 `total` 写成「当前页可见条数」，而前端正是按 `total` 判断是否继续翻页，于是公开 / 授权可见仓库超过单页上限（100 条）时永远只拉第一页；`/api/v1/public/repositories` 也固定在默认 20 条。现改为先按可见性过滤再分页、`total` 统计全部可见仓库，公开列表一次读全，且都不泄漏私有仓库
-
 ### 变更
 
 - 公开页 `/p/:name` 与整页登录 `/login` 移除：公开浏览合并入主布局（匿名直接进入 `/repositories` 与仓库浏览页）。
@@ -472,8 +466,6 @@
   - FR-25c：后端 HTML 目录索引页（`/repository/{repo}/{dir}/` 尾斜杠渲染目录列表，public 匿名可读）
   - FR-25d：仓库列表新增「制品数」「总大小」列（后端 GROUP BY 聚合，避免 N+1）
   - FR-25e：仓库详情页 Tab 布局（浏览/配置/ACL，管理员可见配置与 ACL）
-
-- **可见仓库超过一页时列表只加载第一页**：非管理员与匿名请求的仓库列表把 `total` 写成「当前页可见条数」，而前端正是按 `total` 判断是否继续翻页，于是公开 / 授权可见仓库超过单页上限（100 条）时永远只拉第一页；`/api/v1/public/repositories` 也固定在默认 20 条。现改为先按可见性过滤再分页、`total` 统计全部可见仓库，公开列表一次读全，且都不泄漏私有仓库
 
 ### 变更
 
@@ -549,8 +541,6 @@
   - 配色对齐旧项目：`packages/ui` 主题主色改为 Mantine 原生蓝、品牌蓝 `#228be6` 仅用于 logo、`AppProvider` 色彩模式改为 `auto`（跟随系统深浅色）。
   - 新增依赖 `@tabler/icons-react`（外壳图标）。
 
-- **可见仓库超过一页时列表只加载第一页**：非管理员与匿名请求的仓库列表把 `total` 写成「当前页可见条数」，而前端正是按 `total` 判断是否继续翻页，于是公开 / 授权可见仓库超过单页上限（100 条）时永远只拉第一页；`/api/v1/public/repositories` 也固定在默认 20 条。现改为先按可见性过滤再分页、`total` 统计全部可见仓库，公开列表一次读全，且都不泄漏私有仓库
-
 ### 变更
 
 - `apps/wiki`（组件 / 业务模式验收站）随 0.2.0 引入 Mantine 7 组件后重新纳入 pnpm 工作区。
@@ -569,8 +559,6 @@
   - 前端可构建工作区：React + Vite + TS strict 的 `apps/web`；`packages/ui` 设计令牌；`packages/devmock` 以 openapi-typescript 生成类型 + ajv 运行时校验实现 devmock↔OpenAPI 契约一致性（mock 漂移即测试失败）。
   - 统一质量门 `scripts/check.sh`：前端 format/lint/typecheck/test/build + 后端 gofmt/vet/golangci-lint/`go test -race`/govulncheck/build + 契约一致性。
   - 部署骨架：多阶段 `Dockerfile`（基础镜像经 `ARG` 参数化，默认 distroless nonroot）可离线构建；容器 `/readyz` 探活通过。
-
-- **可见仓库超过一页时列表只加载第一页**：非管理员与匿名请求的仓库列表把 `total` 写成「当前页可见条数」，而前端正是按 `total` 判断是否继续翻页，于是公开 / 授权可见仓库超过单页上限（100 条）时永远只拉第一页；`/api/v1/public/repositories` 也固定在默认 20 条。现改为先按可见性过滤再分页、`total` 统计全部可见仓库，公开列表一次读全，且都不泄漏私有仓库
 
 ### 变更
 
