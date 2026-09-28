@@ -175,6 +175,34 @@ func TestPutPublishPoliciesBatchAppliesToAllRepositories(t *testing.T) {
 	}
 }
 
+// 批量端点：补丁自身字段非法（前缀含 ..、配额为负）时整体 400，与单仓库端点口径一致；
+// 不能退化成 200 + 逐仓库失败——那会让调用方以为请求被接受，且契约只声明了仓库级整体拒绝。
+func TestPutPublishPoliciesBatchRejectsInvalidPatchFields(t *testing.T) {
+	h := newPublishPolicyTestHandlers(t)
+
+	for _, body := range []string{
+		`{"repositories":["raw-a","raw-b"],"allowedPrefixes":["a/../b"]}`,
+		`{"repositories":["raw-a","raw-b"],"allowedPrefixes":["releases"],"maxAssetsHour":-1}`,
+	} {
+		rec := servePublishPolicy(h, adminPrincipal(), http.MethodPut, "/api/v1/users/1/publish-policies", body)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("非法补丁字段应 400，得 %d：%s", rec.Code, rec.Body.String())
+		}
+	}
+
+	// 整体拒绝：合法仓库也不得落库非法值。
+	for _, name := range []string{"raw-a", "raw-b"} {
+		got := servePublishPolicy(h, adminPrincipal(), http.MethodGet,
+			"/api/v1/users/1/publish-policies/"+name, "")
+		if got.Code != http.StatusOK {
+			t.Fatalf("回读 %s 应 200，得 %d：%s", name, got.Code, got.Body.String())
+		}
+		if strings.Contains(got.Body.String(), "a/../b") || strings.Contains(got.Body.String(), `"maxAssetsHour":-1`) {
+			t.Fatalf("%s 不应落库非法值：%s", name, got.Body.String())
+		}
+	}
+}
+
 // 批量端点：仓库名重复时去重，避免同一仓库写两次、结果列表出现重复行。
 func TestPutPublishPoliciesBatchDeduplicatesRepositories(t *testing.T) {
 	h := newPublishPolicyTestHandlers(t)

@@ -53,16 +53,13 @@ func (s *PublishPolicyService) Save(p repository.PublishPolicy, repoName string)
 	if err != nil {
 		return nil, mapNotFound(err)
 	}
-	if repo.Type != "hosted" || p.UserID <= 0 || p.MaxAssetsHour < 0 || p.MaxBytesDay < 0 || p.MaxFileBytes < 0 {
+	if repo.Type != "hosted" || p.UserID <= 0 {
 		return nil, ErrValidation
 	}
 	p.RepositoryID = repo.ID
-	for i, prefix := range p.PathPrefixes {
-		prefix = strings.Trim(prefix, "/")
-		if prefix == "" || strings.Contains(prefix, "..") {
-			return nil, ErrValidation
-		}
-		p.PathPrefixes[i] = prefix
+	p.PathPrefixes, err = validatePolicyFields(p.PathPrefixes, p.MaxAssetsHour, p.MaxBytesDay, p.MaxFileBytes)
+	if err != nil {
+		return nil, err
 	}
 	if err := s.policies.Upsert(p); err != nil {
 		return nil, err
@@ -121,6 +118,43 @@ func (p PublishPolicyPatch) Apply(current repository.PublishPolicy, userID int64
 	return out
 }
 
+// validatePolicyFields 校验策略字段本身：配额非负、前缀归一（去两端斜杠）后非空且不含 ..。
+// 返回归一后的前缀供写入路径复用，避免「校验一份、写入再算一份」的规则漂移。
+func validatePolicyFields(prefixes []string, maxAssetsHour, maxBytesDay, maxFileBytes int64) ([]string, error) {
+	if maxAssetsHour < 0 || maxBytesDay < 0 || maxFileBytes < 0 {
+		return nil, ErrValidation
+	}
+	cleaned := make([]string, 0, len(prefixes))
+	for _, prefix := range prefixes {
+		prefix = strings.Trim(prefix, "/")
+		if prefix == "" || strings.Contains(prefix, "..") {
+			return nil, ErrValidation
+		}
+		cleaned = append(cleaned, prefix)
+	}
+	return cleaned, nil
+}
+
+// validate 校验补丁自身携带的字段（nil 表示保留目标仓库现值，不参与校验）。
+func (p PublishPolicyPatch) validate() error {
+	var prefixes []string
+	if p.PathPrefixes != nil {
+		prefixes = *p.PathPrefixes
+	}
+	var maxAssetsHour, maxBytesDay, maxFileBytes int64
+	if p.MaxAssetsHour != nil {
+		maxAssetsHour = *p.MaxAssetsHour
+	}
+	if p.MaxBytesDay != nil {
+		maxBytesDay = *p.MaxBytesDay
+	}
+	if p.MaxFileBytes != nil {
+		maxFileBytes = *p.MaxFileBytes
+	}
+	_, err := validatePolicyFields(prefixes, maxAssetsHour, maxBytesDay, maxFileBytes)
+	return err
+}
+
 // PublishPolicySaveResult 是单仓库的批量保存结果；Error 非空表示该仓库失败。
 type PublishPolicySaveResult struct {
 	Repository string
@@ -144,6 +178,11 @@ func (s *PublishPolicyService) SaveMany(userID int64, patch PublishPolicyPatch, 
 	names := normalizeRepoNames(repoNames)
 	if len(names) == 0 {
 		return nil, fmt.Errorf("%w：至少指定一个仓库", ErrValidation)
+	}
+	// 补丁自身的字段校验提前到批量级：同一份补丁应用于全部仓库，字段非法时逐仓失败会被报成
+	// 200 + 全仓失败，与单仓库端点的 400 口径不一致（契约也只声明了仓库级整体拒绝）。
+	if err := patch.validate(); err != nil {
+		return nil, fmt.Errorf("%w: 策略字段不合法", ErrValidation)
 	}
 	// 统一预校验：任一仓库不存在或不是 hosted 都整体拒绝，且错误必须点名该仓库。
 	repoIDs := make([]int64, len(names))
