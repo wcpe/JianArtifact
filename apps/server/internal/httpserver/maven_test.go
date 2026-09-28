@@ -336,3 +336,48 @@ func TestMavenGroupMetadataMerge(t *testing.T) {
 		t.Errorf("group 缺失 metadata 状态码 = %d，期望 404", rec.Code)
 	}
 }
+
+// 成员 metadata 超过读取上限时跳过该成员：不把超大 body 整份读进内存（架构红线：大文件
+// 不得整体入内存），且不影响其余成员正常合并。
+func TestMavenGroupMetadataSkipsOversizedMember(t *testing.T) {
+	e := newProtocolEnv(t)
+	adminToken := e.bootstrapAdmin(t)
+	e.createMavenRepo(t, adminToken, "big-a", "hosted", "", nil)
+	e.createMavenRepo(t, adminToken, "big-b", "hosted", "", nil)
+	e.createMavenRepo(t, adminToken, "big-all", "group", "", []string{"big-a", "big-b"})
+
+	metaPath := "com/example/big/maven-metadata.xml"
+	normal := `<?xml version="1.0" encoding="UTF-8"?>
+<metadata>
+  <groupId>com.example</groupId>
+  <artifactId>big</artifactId>
+  <versioning><versions><version>1.0.0</version></versions></versioning>
+</metadata>`
+	// 超过 8 MiB 的合法 XML（用注释占位）：其版本 9.9.9 不得进入合并结果。
+	oversized := `<?xml version="1.0" encoding="UTF-8"?>
+<metadata>
+  <groupId>com.example</groupId>
+  <artifactId>big</artifactId>
+  <versioning><versions><version>9.9.9</version></versions></versioning>
+  <!-- ` + strings.Repeat("A", 9<<20) + ` -->
+</metadata>`
+
+	if rec := e.rawReq(http.MethodPut, "/repository/big-b/"+metaPath, "Bearer "+adminToken, "application/xml", []byte(normal)); rec.Code != http.StatusCreated {
+		t.Fatalf("部署正常成员 metadata 状态码 = %d", rec.Code)
+	}
+	if rec := e.rawReq(http.MethodPut, "/repository/big-a/"+metaPath, "Bearer "+adminToken, "application/xml", []byte(oversized)); rec.Code != http.StatusCreated {
+		t.Fatalf("部署超大成员 metadata 状态码 = %d", rec.Code)
+	}
+
+	rec := e.rawReq(http.MethodGet, "/repository/big-all/"+metaPath, "Bearer "+adminToken, "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("group metadata 状态码 = %d（体：%s）", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "<version>1.0.0</version>") {
+		t.Errorf("正常成员应参与合并：%s", body)
+	}
+	if strings.Contains(body, "9.9.9") {
+		t.Errorf("超限成员应被跳过，其版本不得进入合并结果：%s", body)
+	}
+}

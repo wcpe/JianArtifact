@@ -282,6 +282,11 @@ func (h *MavenHandler) serveComputedChecksum(c *gin.Context, repo *repository.Re
 // proxy 成员在此时间内未能从上游取回 metadata 则跳过，防止不可达成员阻塞整条链路。
 const metadataMemberTimeout = 5 * time.Second
 
+// mavenMetadataMaxBytes 单个成员 maven-metadata.xml 的读取上限（8 MiB）：正常只有几 KB，
+// 给足余量的同时避免上游返回超大 body 时把整份内容读进内存（架构红线：大文件不得整体入内存）。
+// 超限的成员按「不可用」处理直接跳过，不影响其余成员合并。
+const mavenMetadataMaxBytes = 8 << 20
+
 // serveGroupMetadata 合并 group 各成员的 maven-metadata.xml：并行请求所有成员（限时
 // metadataMemberTimeout），再严格按 Members 配置顺序合并 versions、重算
 // latest/release/lastUpdated 后返回；全成员皆无该文件返回 404。
@@ -319,9 +324,10 @@ func (h *MavenHandler) serveGroupMetadata(c *gin.Context, repo *repository.Repos
 			if err != nil {
 				return
 			}
-			data, rerr := io.ReadAll(rc)
+			// 多读 1 字节用于判定超限：超限即跳过该成员，而不是截断（截断会得到非法 XML）。
+			data, rerr := io.ReadAll(io.LimitReader(rc, mavenMetadataMaxBytes+1))
 			_ = rc.Close()
-			if rerr != nil {
+			if rerr != nil || len(data) > mavenMetadataMaxBytes {
 				return
 			}
 			results[idx] = data
