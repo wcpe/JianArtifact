@@ -19,9 +19,12 @@
 ## 3. 合并策略：一律 Squash merge
 
 - 所有 PR 使用 **Squash merge**：分支上的提交被压缩为**一条**落在主线上的提交（「一 PR 一提交」）。
-- squash 后的提交信息取 **PR 标题**（Conventional Commits + 简体中文描述）与正文要点；禁止任何 AI 签名、AI 尾注或作者署名（`git-commit.md` §1.1）。
+- squash 提交的**标题必须带 PR 编号**，形如 `feat(web): 页面骨架收敛 (#123)`：让主线提交能直接跳回对应 PR 的讨论与评审记录。
+- squash 提交的**正文必须由合并者自行总结**，写清「为什么改 / 改动要点 / 验证证据」；**禁止直接使用 PR 标题、PR 描述、PR 评论或分支提交正文**。PR 里的过程讨论、逐条回复与历史细节属于 PR，不属于主线历史。
+- 标题的 type/scope 与正文语言仍按 `git-commit.md` §1：Conventional Commits + 简体中文描述，禁止任何 AI 签名、AI 尾注或作者署名。
 - **禁止 Merge commit（`--no-ff`）**，**禁止 Rebase merge**：不让主线出现网状历史或分支回放产生的重复提交。
 - 主线历史因此是线性序列；`git log --first-parent` 与常规 log 等价。
+- 仓库设置层面同样只保留 squash（关闭 merge commit 与 rebase merge），避免绕过规则合并。
 
 ## 4. 发布
 
@@ -38,6 +41,7 @@
 | 隐私与敏感内容 | 见 §6，命中即阻断                                                                            |
 | 文档同步       | 满足 `doc-sync.md`：契约、CHANGELOG、PRD、ROADMAP 与代码一致                                 |
 | 提交整理       | 分支上的提交已按 `git-commit.md` §4.1 整理（无 `WIP`/`fixup!`/`squash!`/拼写修补）           |
+| 合并提交信息   | squash 标题带 PR 编号（`(#123)`）；正文为合并者自写的总结，未照搬 PR 标题 / 描述 / 评论      |
 
 ## 6. 禁止提交的内容（强制）
 
