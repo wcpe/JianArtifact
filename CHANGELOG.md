@@ -8,6 +8,14 @@
 
 ### 新增
 
+### 修复
+
+### 变更
+
+## 0.10.0（2026-09-28）
+
+### 新增
+
 - **仓库别名与重命名（FR-146）**：仓库可配置多个别名，别名与主名**共享命名空间、全局唯一**，可等价访问（协议路由与管理端 API 全域经 `GetByName` 单点按名解析到主名仓库）；`POST /api/v1/repositories/{name}/rename` 重命名后**旧名自动转为别名**，旧链接与既有客户端坐标仍可解析。新增迁移 `0041_repository_alias.sql`（`repository_alias` 表，随仓库级联删除）；契约新增 `Repository.aliases`、`CreateRepositoryRequest`/`UpdateRepositoryRequest` 的 `aliases` 与 rename 端点；配置页签可编辑别名与重命名，创建表单可填别名。下载统计按「主名 ∪ 别名」聚合，`audit_log` / `asset_download_minutes` 保留旧名不回填。语义取舍见 [`docs/adr/0028`](docs/adr/0028-repository-alias-and-rename.md)
 - **主机监控网络总量与网卡维度（FR-147）**：网络指标在既有速率之外新增「总发送 / 总接收」（**自网卡启动以来的累计字节**）与**逐网卡维度**。平台层由「聚合全网卡」改为逐网卡采集（Linux 读 `/proc/net/dev`、Windows 用 `GetIfTable2Ex`，均跳过回环），解析 / 过滤 / 求和下沉为无平台标签纯函数以便跨平台单测；服务层按**同名网卡**与上一份样本配对算逐网卡速率——网卡新增或计数回退时速率留空、不伪造 0。新增迁移 `0042_host_network_interface.sql`：`host_metric_minute` 增可空列 `network_receive_bytes_total` / `network_transmit_bytes_total`（该时刻全部非回环网卡的聚合累计，历史行 NULL 不回填），新表 `host_network_interface_minute`（逐网卡每分钟一行，主键 `(bucket_start, interface)` + `(interface, bucket_start)` 索引）。契约 `HostMetricPoint` 增 `networkReceiveBytesTotal` / `networkTransmitBytesTotal`，新增 schema `HostNetworkInterface`，主机监控响应增 `networkInterfaces`，`/api/v1/observability/host` 增可选 `interface` 参数（省略 = 全网卡聚合）。前端网络卡显示「总发送 / 总接收」+ 网卡选择器（首项「全部网卡」，选定后速率图与总量都按该网卡）
 - **仓库使用说明扩充更多工具与构建系统**：在既有分组内补充常见客户端片段——Maven 增 sbt（`~/.sbt/repositories`）、Gradle 凭据（`~/.gradle/gradle.properties`）与一行式 `mvn dependency:get` / `mvn deploy -DaltDeploymentRepository`；npm 增 `.npmrc`（含 `//<host><path>:_authToken` 认证行）、pnpm 与 Yarn（1.x / 2+）等价配置、scoped 包 `publishConfig` 发布；raw 增带 `Authorization: Bearer` 的 curl 下载 / 上传与 wget 下载。分组枚举不变、只是同组内扩展（Maven hosted 5→14、npm hosted 3→8、raw hosted 2→5），只读（proxy）仓库仍不出现发布组，标题 / 描述继续按 `Accept-Language` 中英成对
