@@ -260,7 +260,7 @@ export function RepositoriesPage() {
   // 仓库创建、配置、清理与删除均为全局管理员操作，前端仅按会话快照展示。
   const canManage = user?.role === "admin";
   // 置顶：服务端持久化（用户级；匿名回退全局置顶），置顶仓库排到列表最前（分页语义内）。
-  const { isPinned, toggle: togglePin, sortPinnedFirst } = usePinnedRepos();
+  const { isPinned, toggle: togglePin, sortPinnedFirst, refreshError } = usePinnedRepos();
   const [page, setPage] = useState(1);
   // 窄屏（< 48em）：8 列表格在手机上会把每列压到换行甚至截断（类型徽章只剩「P..」）。
   // 此时只保留「名称 + 操作」，被裁掉的类型/制品数/大小改由名称下方副文本承载。
@@ -451,6 +451,11 @@ export function RepositoriesPage() {
    * 切换置顶：写服务端（覆盖式），失败回滚并给出可区分的提示。
    * 匿名置顶由服务端 401 拒绝（匿名没有归属主体），此处翻译为「需登录」。
    */
+  // 置顶写入已生效、但后台重拉失败时给出提示：否则界面会停留在写入前的旧置顶集合上且无信号。
+  useEffect(() => {
+    if (refreshError) notifyError(refreshError);
+  }, [refreshError]);
+
   const handleTogglePin = (repoName: string) => {
     togglePin(repoName).catch((err: unknown) => {
       if (err instanceof ApiError && err.status === 401) {

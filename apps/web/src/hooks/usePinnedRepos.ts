@@ -11,15 +11,16 @@
 // 写入（`toggle`）：契约按 **repositoryId** 持久化（重命名后置顶不丢），而调用点传的是
 // 仓库名（保持既有签名）。名字 → ID 由置顶响应自带的 ids/names 对应关系 + 一次仓库列表
 // 解析得到；写入为**覆盖式**（整体替换），采用乐观更新 + 失败回滚。
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
+import { ApiError } from "../api/client";
 import {
   getMyPinnedRepositories,
   listAllRepositories,
   listPublicRepositories,
   putMyPinnedRepositories,
 } from "../api/endpoints";
-import { useAsync } from "./useAsync";
+import { invalidateAsyncCache, useAsync } from "./useAsync";
 
 export const PINNED_REPOS_KEY = "jianartifact.pinnedRepos";
 
@@ -79,6 +80,8 @@ export interface UsePinnedReposResult {
   toggle: (name: string) => Promise<void>;
   /** 置顶的仓库排到最前（保持原相对顺序；ES2019+ Array.sort 稳定）。 */
   sortPinnedFirst: <T extends { name: string }>(items: T[]) => T[];
+  /** 写入已生效但后台重拉失败（权威数据未刷新），供调用方提示；无失败为 null。 */
+  refreshError: ApiError | null;
 }
 
 /**
@@ -94,6 +97,8 @@ export function usePinnedRepos(): UsePinnedReposResult {
   });
   // 乐观层：非 null 时表示本地已先行变更、等待服务端确认。
   const [optimistic, setOptimistic] = useState<string[] | null>(null);
+  // 写入后重拉：记住重拉前的快照对象，data 引用变化即视为新快照落地（见下方 effect）。
+  const snapshotBeforeReloadRef = useRef<PinnedSnapshot | null>(null);
   // 名字 → ID 映射：先取置顶响应自带的对应关系，缺口再经仓库列表补全。
   const idsRef = useRef<Record<string, number>>({});
 
@@ -140,8 +145,11 @@ export function usePinnedRepos(): UsePinnedReposResult {
       try {
         await putMyPinnedRepositories(await resolveIDs(next));
         // 服务端已接受：丢弃乐观层并重拉权威数据（保证与其它标签页 / 设备一致）。
-        setOptimistic(null);
-        reloadPinned();
+      // 写入已生效：先失效缓存再重拉，否则重拉会先回放 60s 内的旧快照；
+      // 乐观层保留到新快照落地再丢弃，重拉期间界面不得闪回写入前的旧值。
+      invalidateAsyncCache("pinned-repositories");
+      snapshotBeforeReloadRef.current = serverSnapshot;
+      reloadPinned();
       } catch (err) {
         setOptimistic(null);
         throw err;
@@ -150,6 +158,19 @@ export function usePinnedRepos(): UsePinnedReposResult {
     [optimistic, serverSnapshot, resolveIDs, reloadPinned],
   );
 
+  // 重拉的新快照落地（data 引用变化）或重拉失败时丢弃乐观层：此前界面一直显示乐观值，
+  // 避免缓存回放 / 旧快照把刚保存的置顶顶回去；失败时由 refreshError 提示，不会无声停留。
+  useEffect(() => {
+    if (optimistic === null) return;
+    const landed =
+      snapshotBeforeReloadRef.current !== null &&
+      state.data !== snapshotBeforeReloadRef.current;
+    if (landed || state.refreshError) {
+      snapshotBeforeReloadRef.current = null;
+      setOptimistic(null);
+    }
+  }, [optimistic, state.data, state.refreshError]);
+
   // 返回签名与旧实现一致（调用点无需改动）：pinned / isPinned / toggle / sortPinnedFirst。
-  return { pinned, isPinned, toggle, sortPinnedFirst };
+  return { pinned, isPinned, toggle, sortPinnedFirst, refreshError: state.refreshError };
 }
