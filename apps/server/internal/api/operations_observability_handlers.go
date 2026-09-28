@@ -305,11 +305,15 @@ func (h *Handlers) GetHostMonitoring(c *gin.Context, params GetHostMonitoringPar
 	bucket := operationsBucket(from, to)
 	selected := hostInterfaceQuery(params)
 	response := HostMonitoring{EffectiveBucket: ObservabilityBucket(bucket), Samples: aggregateHostSamples(items, from, to, bucket)}
-	// 网卡列表与各网卡累计总量：取窗口内每个网卡各自最新一行，供选择器与总量展示；
-	// 无网卡数据时留空（响应省略该字段，向后兼容）。
-	if interfaces, interfaceErr := h.operationsObservability.LatestHostNetworkInterfaces(from, to); interfaceErr == nil {
-		response.NetworkInterfaces = hostNetworkInterfaceList(interfaces)
+	// 网卡列表与各网卡累计总量：取窗口内每个网卡各自最新一行，供选择器与总量展示。
+	// 无网卡数据时查询本身不报错、返回空集合（响应留空，向后兼容）；查询失败与其他分支同口径
+	// 返回错误，不静默吞掉——否则 DB 故障时前端只看到「没有网卡可选」而无任何错误信号。
+	interfaces, interfaceErr := h.operationsObservability.LatestHostNetworkInterfaces(from, to)
+	if interfaceErr != nil {
+		writeDomainErr(c, interfaceErr)
+		return
 	}
+	response.NetworkInterfaces = hostNetworkInterfaceList(interfaces)
 	if selected != "" {
 		// 选定网卡：速率图与总量都换成该网卡的逐分钟样本，避免与全网卡聚合值混读。
 		interfaces, sampleErr := h.operationsObservability.HostNetworkInterfaceSamples(from, to, selected)
