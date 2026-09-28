@@ -219,6 +219,26 @@ func TestPinnedWriteUnknownRepositoryIs404(t *testing.T) {
 	}
 }
 
+// 写入的 repositoryIds 数量上限：超大数组在入口即 400，不得进入逐 ID 查询 + 单事务逐 ID插入
+// （任一登录用户都能把一次请求放大成数万次查询并长时间持写锁）。
+func TestPinnedWriteRejectsOversizedRepositoryIds(t *testing.T) {
+	env := newPinnedTestEnv(t)
+
+	ids := make([]int, 0, maxPinnedRepositoryIds+1)
+	for i := 0; i < maxPinnedRepositoryIds+1; i++ {
+		ids = append(ids, i+1)
+	}
+	body := fmt.Sprintf(`{"repositoryIds":[%s]}`, strings.Trim(strings.Join(strings.Fields(fmt.Sprint(ids)), ","), "[]"))
+
+	rec := servePinned(env, userPrincipal(), http.MethodPut, "/api/v1/me/pinned-repositories", body)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("超大 repositoryIds 应 400，得 %d：%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "too_many_repositories") {
+		t.Fatalf("应带 too_many_repositories 错误码，得 %s", rec.Body.String())
+	}
+}
+
 // 公开列表携带全局置顶名：只含匿名可读者，私有仓库的全局置顶不外泄。
 func TestListPublicRepositoriesIncludesGlobalPinnedNames(t *testing.T) {
 	env := newPinnedTestEnv(t)

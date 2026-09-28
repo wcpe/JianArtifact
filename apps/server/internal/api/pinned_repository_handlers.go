@@ -23,6 +23,11 @@ import (
 // 写入同样先校验可读（不可读视同不存在，返回 404），且**校验先于覆盖式写入**，
 // 避免「请求含非法 ID」时先把用户既有置顶清空。
 
+// maxPinnedRepositoryIds 限定单次覆盖式写入的仓库 ID 数量：任一登录用户（含管理员）传入
+// 超大数组时，仓储层会在**单个写事务内**逐 ID 查询存在性再逐 ID 插入，把一次请求放大成
+// 数万次查询并长时间持有 SQLite 写锁，故在入口按数量上限拒绝（400）。
+const maxPinnedRepositoryIds = 200
+
 // GetMyPinnedRepositories 读取当前用户的置顶仓库：登录用户读自己的，匿名回退全局置顶。
 func (h *Handlers) GetMyPinnedRepositories(c *gin.Context) {
 	p, authed := auth.PrincipalFrom(c)
@@ -51,6 +56,10 @@ func (h *Handlers) PutMyPinnedRepositories(c *gin.Context) {
 	}
 	if h.pinned == nil {
 		pinnedUnavailable(c)
+		return
+	}
+	if len(req.RepositoryIds) > maxPinnedRepositoryIds {
+		auth.WriteError(c, http.StatusBadRequest, "too_many_repositories", "置顶仓库数量超过上限")
 		return
 	}
 	if err := h.requirePinnable(req.RepositoryIds, p.UserID, p.IsAdmin()); err != nil {
@@ -97,6 +106,10 @@ func (h *Handlers) PutGlobalPinnedRepositories(c *gin.Context) {
 	}
 	if h.pinned == nil {
 		pinnedUnavailable(c)
+		return
+	}
+	if len(req.RepositoryIds) > maxPinnedRepositoryIds {
+		auth.WriteError(c, http.StatusBadRequest, "too_many_repositories", "置顶仓库数量超过上限")
 		return
 	}
 	if err := h.requirePinnable(req.RepositoryIds, p.UserID, true); err != nil {
