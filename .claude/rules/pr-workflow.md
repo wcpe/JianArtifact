@@ -31,13 +31,13 @@
 
 ## 5. PR 门禁（合入前必须全部通过）
 
-| 门 | 判据 |
-| --- | --- |
-| 质量门 | `scripts/check.ps1`（Windows）/ `scripts/check.sh`（Linux）全绿，见 `testing-and-quality.md` |
-| CI | PR 触发的 `ci.yml` 全绿：质量门 + CodeQL + 依赖漏洞扫描 |
-| 隐私与敏感内容 | 见 §6，命中即阻断 |
-| 文档同步 | 满足 `doc-sync.md`：契约、CHANGELOG、PRD、ROADMAP 与代码一致 |
-| 提交整理 | 分支上的提交已按 `git-commit.md` §4.1 整理（无 `WIP`/`fixup!`/`squash!`/拼写修补） |
+| 门             | 判据                                                                                         |
+| -------------- | -------------------------------------------------------------------------------------------- |
+| 质量门         | `scripts/check.ps1`（Windows）/ `scripts/check.sh`（Linux）全绿，见 `testing-and-quality.md` |
+| CI             | PR 触发的 `ci.yml` 全绿：质量门 + CodeQL + 依赖漏洞扫描                                      |
+| 隐私与敏感内容 | 见 §6，命中即阻断                                                                            |
+| 文档同步       | 满足 `doc-sync.md`：契约、CHANGELOG、PRD、ROADMAP 与代码一致                                 |
+| 提交整理       | 分支上的提交已按 `git-commit.md` §4.1 整理（无 `WIP`/`fixup!`/`squash!`/拼写修补）           |
 
 ## 6. 禁止提交的内容（强制）
 
