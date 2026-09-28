@@ -1,5 +1,5 @@
 // 审计工作台（单列表 + 顶部 KPI）：滚动限制、KPI 卡片、动作翻译、筛选与批次抽屉的回归覆盖。
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpResponse, http } from "msw";
 import { describe, expect, it } from "vitest";
@@ -279,5 +279,249 @@ describe("审计工作台（详情：服务端耗时与请求头）", () => {
     expect(await screen.findByText("请求 ID")).toBeTruthy();
     expect(screen.queryByText("服务端耗时")).toBeNull();
     expect(screen.queryByText("请求头（已过滤）")).toBeNull();
+  });
+});
+
+describe("审计工作台（制品路径优先于路由模板）", () => {
+  it("制品事件副文本展示 repo/path，而不是协议路由模板", async () => {
+    // 协议 PUT 上传的 http.path 只是路由模板，看不出具体传了哪个文件；
+    // 真正的制品路径在 target.label（=repo/path），列表与详情都应以它为主。
+    overrideEventList([
+      customEvent({
+        eventId: "audit-artifact-put",
+        category: "asset_change",
+        action: "asset.put",
+        target: { kind: "artifact", label: "raw-hosted/release/a.jar", repository: "raw-hosted" },
+        http: { method: "PUT", path: "/repository/:repo/*artifactPath", statusCode: 201 },
+      }),
+    ]);
+    const user = userEvent.setup();
+    renderWorkbench();
+
+    const rows = await screen.findAllByRole("button", { name: /审计事件：/ });
+    expect(rows).toHaveLength(1);
+    // 副文本展示制品路径（repo/path）。
+    expect(screen.getByText("raw-hosted/release/a.jar")).toBeTruthy();
+    // 路由模板不再抢占副文本。
+    expect(screen.queryByText(/repository\/:repo/)).toBeNull();
+
+    // 展开详情：头部路径与列表同一口径，仍为制品路径（行内 + 详情各一处）。
+    await user.click(rows[0]!);
+    expect(await screen.findAllByText("raw-hosted/release/a.jar")).toHaveLength(2);
+    expect(screen.queryByText(/repository\/:repo/)).toBeNull();
+  });
+
+  it("非制品事件仍展示「方法 + 路由」副文本，展示语义不变", async () => {
+    overrideEventList([
+      customEvent({
+        eventId: "audit-setting-update",
+        target: { kind: "setting", label: "系统设置" },
+        http: { method: "PATCH", path: "/api/v1/settings", statusCode: 200 },
+      }),
+    ]);
+    renderWorkbench();
+
+    const rows = await screen.findAllByRole("button", { name: /审计事件：/ });
+    expect(rows).toHaveLength(1);
+    expect(screen.getByText("PATCH /api/v1/settings")).toBeTruthy();
+  });
+});
+
+describe("审计工作台（操作聚合视图）", () => {
+  /** 上传/发布事件夹具：两条同一 Maven 坐标（不同版本）+ 一条 raw 上传。 */
+  function uploadFixtures(): AuditEvent[] {
+    return [
+      customEvent({
+        eventId: "audit-put-1",
+        category: "asset_change",
+        action: "asset.put",
+        target: {
+          kind: "artifact",
+          label: "maven-releases/com/example/demo/1.0.0/demo-1.0.0.jar",
+          repository: "maven-releases",
+        },
+        http: { method: "PUT", path: "/repository/:repo/*artifactPath", statusCode: 201 },
+      }),
+      customEvent({
+        eventId: "audit-put-2",
+        occurredAt: "2026-08-30T11:00:00.000Z",
+        category: "asset_change",
+        action: "asset.put",
+        target: {
+          kind: "artifact",
+          label: "maven-releases/com/example/demo/1.1.0/demo-1.1.0.jar",
+          repository: "maven-releases",
+        },
+        http: { method: "PUT", path: "/repository/:repo/*artifactPath", statusCode: 201 },
+      }),
+      customEvent({
+        eventId: "audit-put-3",
+        category: "asset_change",
+        action: "asset.put",
+        target: {
+          kind: "artifact",
+          label: "raw-hosted/release/report.pdf",
+          repository: "raw-hosted",
+        },
+        http: { method: "PUT", path: "/repository/:repo/*artifactPath", statusCode: 201 },
+      }),
+    ];
+  }
+
+  it("默认事件流：可切换到操作聚合树，再切回事件流仍正常", async () => {
+    overrideEventList(uploadFixtures());
+    const user = userEvent.setup();
+    renderWorkbench();
+
+    // 默认事件流：渲染记录表行，聚合视图不存在。
+    expect((await screen.findAllByRole("button", { name: /审计事件：/ })).length).toBe(3);
+    expect(screen.queryByTestId("audit-op-aggregation")).toBeNull();
+
+    // 切到操作聚合：按操作类型分区，上传分区内为 GAV 树（仓库 → groupId → artifactId → 版本 → 文件）。
+    await user.click(screen.getByRole("radio", { name: "操作聚合" }));
+    expect(await screen.findByTestId("audit-op-aggregation")).toBeTruthy();
+    const uploadSection = screen.getByTestId("audit-op-section-upload");
+    expect(within(uploadSection).getByText("maven-releases")).toBeTruthy();
+    expect(within(uploadSection).getByText("com.example")).toBeTruthy();
+    expect(within(uploadSection).getByText("demo")).toBeTruthy();
+    expect(within(uploadSection).getByText("1.1.0")).toBeTruthy();
+    expect(within(uploadSection).getByText("1.0.0")).toBeTruthy();
+    expect(within(uploadSection).getByText("demo-1.1.0.jar")).toBeTruthy();
+    // 非 Maven 路径归入仓库下的目录层级，事件不被丢弃。
+    expect(within(uploadSection).getByText("raw-hosted")).toBeTruthy();
+    expect(within(uploadSection).getByText("report.pdf")).toBeTruthy();
+    // 聚合视图下记录表行不再渲染。
+    expect(screen.queryByRole("button", { name: /审计事件：/ })).toBeNull();
+
+    // 切回事件流：记录表恢复。
+    await user.click(screen.getByRole("radio", { name: "事件流" }));
+    expect((await screen.findAllByRole("button", { name: /审计事件：/ })).length).toBe(3);
+    expect(screen.queryByTestId("audit-op-aggregation")).toBeNull();
+  });
+
+  it("非制品操作归入「其他」分区，而不是被当作空结果集", async () => {
+    overrideEventList([
+      customEvent({
+        eventId: "audit-setting-only",
+        target: { kind: "setting", label: "系统设置" },
+        http: { method: "PATCH", path: "/api/v1/settings", statusCode: 200 },
+      }),
+    ]);
+    const user = userEvent.setup();
+    renderWorkbench();
+
+    await screen.findAllByRole("button", { name: /审计事件：/ });
+    await user.click(screen.getByRole("radio", { name: "操作聚合" }));
+
+    const other = await screen.findByTestId("audit-op-section-other");
+    expect(within(other).getByText("更新设置")).toBeTruthy();
+    expect(screen.queryByTestId("audit-op-empty")).toBeNull();
+  });
+
+  it("点击文件叶子跳回事件流并按制品路径调查", async () => {
+    overrideEventList([
+      customEvent({
+        eventId: "audit-put-raw",
+        category: "asset_change",
+        action: "asset.put",
+        target: {
+          kind: "artifact",
+          label: "raw-hosted/release/report.pdf",
+          repository: "raw-hosted",
+        },
+        http: { method: "PUT", path: "/repository/:repo/*artifactPath", statusCode: 201 },
+      }),
+    ]);
+    const user = userEvent.setup();
+    renderWorkbench();
+
+    await user.click(await screen.findByRole("radio", { name: "操作聚合" }));
+    await user.click(await screen.findByRole("button", { name: "report.pdf" }));
+
+    // 回到事件流，且关键字预填为该制品路径（repo/path）。
+    const box = (await screen.findByPlaceholderText(
+      "路径 / 动作 / 操作者邮箱",
+    )) as HTMLInputElement;
+    expect(box.value).toBe("raw-hosted/release/report.pdf");
+    expect(screen.queryByTestId("audit-op-aggregation")).toBeNull();
+  });
+});
+
+describe("审计工作台（事件流按操作折叠）", () => {
+  /** 同一次 `mvn deploy` 为同一版本写下的多文件事件：同一操作者、同一时间窗、同一坐标。 */
+  function deploymentEvents(): AuditEvent[] {
+    const base = "maven-releases/com/example/demo/1.0.0";
+    const files = ["demo-1.0.0.jar", "demo-1.0.0.pom", "demo-1.0.0.jar.sha1", "demo-1.0.0.jar.md5"];
+    return files.map((name, index) =>
+      customEvent({
+        eventId: `audit-deploy-${index + 1}`,
+        // 时间按数组序递减：首项（jar）是最后写入的一条，即折叠行的主导事件。
+        occurredAt: `2026-08-30T10:00:0${files.length - 1 - index}.000Z`,
+        category: "asset_change",
+        action: "asset.put",
+        target: { kind: "artifact", label: `${base}/${name}`, repository: "maven-releases" },
+        http: { method: "PUT", path: "/repository/:repo/*artifactPath", statusCode: 201 },
+      }),
+    );
+  }
+
+  it("同一版本的多个文件事件折叠成一行，展开可见各文件并可进入单条详情", async () => {
+    const user = userEvent.setup();
+    // 4 个多文件事件（同一次 deploy）+ 1 个管理类单事件。
+    overrideEventList([...deploymentEvents(), customEvent({ eventId: "audit-setting-1" })]);
+    renderWorkbench();
+
+    // 折叠：4 个文件事件只占一行，管理事件仍是独立的事件行。
+    const folded = await screen.findByRole("button", { name: /操作：上传制品/ });
+    expect(folded.textContent).toContain("+3 个文件");
+    expect(screen.getAllByRole("button", { name: /审计事件：/ })).toHaveLength(1);
+    // 折叠态不渲染成员文件。
+    expect(screen.queryByText("demo-1.0.0.pom")).toBeNull();
+    // 副文本仍是制品路径（repo/path），路由模板不抢占。
+    expect(screen.getByText("maven-releases/com/example/demo/1.0.0/demo-1.0.0.jar")).toBeTruthy();
+    expect(screen.queryByText(/repository\/:repo/)).toBeNull();
+    // 分页口径：行数（2）≠ 事件数（5），汇总行并列两者。
+    expect(screen.getByTestId("audit-operation-summary").textContent).toContain(
+      "2 次操作 / 5 个事件",
+    );
+
+    // 展开：列出成员文件（文件名 + 目录）。
+    await user.click(folded);
+    expect(await screen.findByText("demo-1.0.0.pom")).toBeTruthy();
+    expect(screen.getByText("demo-1.0.0.jar.sha1")).toBeTruthy();
+    expect(screen.getByText("demo-1.0.0.jar.md5")).toBeTruthy();
+    expect(screen.getAllByText("com/example/demo/1.0.0")).toHaveLength(4);
+
+    // 成员子行进的是「该事件的既有详情」，与单事件行同一套展开。
+    const members = screen.getAllByRole("button", { name: /审计事件：上传制品/ });
+    expect(members).toHaveLength(4);
+    await user.click(members[1]!);
+    expect(await screen.findByText("请求 ID")).toBeTruthy();
+  });
+
+  it("单事件操作仍是独立一行，点击展开的仍是事件详情", async () => {
+    const user = userEvent.setup();
+    overrideEventList([
+      customEvent({
+        eventId: "audit-repo-create",
+        action: "repo.create",
+        target: { kind: "repository", label: "新建仓库 raw-x" },
+        http: { method: "POST", path: "/api/v1/repositories", statusCode: 201 },
+      }),
+    ]);
+    renderWorkbench();
+
+    // 管理类单事件：与折叠前完全一致的一条事件行，既无折叠徽章也无操作行。
+    const rows = await screen.findAllByRole("button", { name: /审计事件：/ });
+    expect(rows).toHaveLength(1);
+    expect(screen.queryByText(/\+\d+ 个文件/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /操作：/ })).toBeNull();
+    expect(screen.getByTestId("audit-operation-summary").textContent).toContain(
+      "1 次操作 / 1 个事件",
+    );
+
+    // 行点击 = 既有详情展开（不是文件清单）。
+    await user.click(rows[0]!);
+    expect(await screen.findByText("请求 ID")).toBeTruthy();
   });
 });

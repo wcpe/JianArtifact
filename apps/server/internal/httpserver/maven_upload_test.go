@@ -12,10 +12,12 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/api"
+	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
 // mavenUploadResp 是上传成功的响应体。
@@ -316,5 +318,60 @@ func TestMavenWebUploadRollsBackWholeBatchOnMetadataFailure(t *testing.T) {
 	}
 	if len(assets) != 0 {
 		t.Fatalf("批次失败不得留下任何 Maven 资产：%+v", assets)
+	}
+}
+
+// TestMavenWebUploadWritesPerFileAudit 确保网页表单上传（批量 PublishAssets 路径）
+// 也逐文件写 asset.put 审计：字段口径与协议 raw 上传一致（EntityType=asset、
+// EntityKey=repo/path、Detail=size=N），审计里能看出「传了什么」。
+func TestMavenWebUploadWritesPerFileAudit(t *testing.T) {
+	e := newProtocolEnv(t)
+	adminToken := e.bootstrapAdmin(t)
+	e.createMavenRepo(t, adminToken, "mvn-audit", "hosted", "", nil)
+
+	jar := []byte("maven-web-upload-audit-bytes")
+	rec := e.mavenUpload(t, adminToken, "mvn-audit", map[string]string{
+		"groupId": "com.example", "artifactId": "audited", "version": "1.0.0",
+	}, "audited.jar", jar)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("上传状态码 = %d，期望 201（体：%s）", rec.Code, rec.Body.String())
+	}
+	var resp mavenUploadResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("解析响应：%v", err)
+	}
+
+	entries, err := e.auditLogs.List(repository.AuditFilter{Action: "asset.put", Repo: "mvn-audit", Limit: 200})
+	if err != nil {
+		t.Fatalf("读取审计：%v", err)
+	}
+	// 网页上传是一次批量提交，审计须逐文件留痕：条数应与实际落库文件数一致。
+	if len(entries) != len(resp.Files) {
+		t.Fatalf("审计条数 = %d，期望每文件一行 = %d：%+v", len(entries), len(resp.Files), entries)
+	}
+	byKey := make(map[string]repository.AuditLogEntry, len(entries))
+	for _, entry := range entries {
+		if entry.EntityType != "asset" || entry.Result != "ok" {
+			t.Errorf("审计字段口径不符：%+v", entry)
+		}
+		byKey[entry.EntityKey] = entry
+	}
+	// 主文件必须能追踪到具体制品路径，且 Detail 记为 size=N。
+	mainKey := "mvn-audit/com/example/audited/1.0.0/audited-1.0.0.jar"
+	main, ok := byKey[mainKey]
+	if !ok {
+		t.Fatalf("审计缺少主文件条目 %s：%+v", mainKey, entries)
+	}
+	if want := "size=" + strconv.Itoa(len(jar)); main.Detail != want {
+		t.Errorf("主文件审计 Detail = %q，期望 %q", main.Detail, want)
+	}
+	// 生成的 POM 与 artifact 级 metadata 同样逐文件留痕。
+	for _, key := range []string{
+		"mvn-audit/com/example/audited/1.0.0/audited-1.0.0.pom",
+		"mvn-audit/com/example/audited/maven-metadata.xml",
+	} {
+		if _, ok := byKey[key]; !ok {
+			t.Errorf("审计缺少生成文件条目 %s：%+v", key, entries)
+		}
 	}
 }

@@ -77,6 +77,7 @@ func buildMinimalPom(groupID, artifactID, version, packaging string) string {
 // UploadForm 处理管理端 Maven 表单上传。校验顺序：字段 400 → SNAPSHOT 400 →
 // 鉴权 write（401/403/404）→ 仓库须 maven hosted（409）。主文件、校验和、POM 和
 // 元数据统一暂存，最后作为一个资产操作公开，失败时不暴露半套 Maven 版本。
+// 提交成功后按文件逐个写 asset.put 审计（与 raw 上传同一口径），使网页上传同样可追踪。
 func (h *MavenHandler) UploadForm(c *gin.Context) {
 	repoName := c.Param("name")
 	groupID := strings.TrimSpace(c.PostForm("groupId"))
@@ -221,10 +222,17 @@ func (h *MavenHandler) UploadForm(c *gin.Context) {
 		return
 	}
 	if _, err := h.assets.PublishAssets(repoName, planned); err != nil {
+		h.auditRejected(c, "asset.put", repoName, mainPath, publishRejectionDetail(err))
 		writeAssetErr(c, err)
 		return
 	}
 	committed = true
+	// 逐个文件写审计：Maven 表单上传是一批文件（主文件 / 校验和 / POM / metadata），
+	// 与 raw 上传保持同一口径（action=asset.put、EntityKey=repo/path、Detail=size=N），
+	// 每个实际落库的文件一行，审计里才能看出「传了什么」。
+	for _, asset := range planned {
+		h.auditPublish(c, "asset.put", repoName, asset.Path, asset.Size)
+	}
 
 	c.JSON(http.StatusCreated, gin.H{
 		"repository": repoName,

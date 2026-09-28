@@ -177,6 +177,30 @@ export function actionLabel(action: unknown, t: (key: string) => string): string
   return key ? t(key) : value;
 }
 
+/**
+ * 上传 / 发布类动作白名单（审计「上传聚合」视图据此筛选事件）。
+ *
+ * 集中定义避免散落：协议侧「向仓库写入制品」使用不同 action——raw 上传与 Maven
+ * 网页表单上传走 `asset.put`，各生态原生发布走 `{format}.publish`，OCI 推送走
+ * `oci.blob.put` / `oci.manifest.put`；`asset.upload` 为历史等价别名。下载、删除、
+ * 管理变更等动作不属于「上传」，不参与聚合。
+ */
+export const UPLOAD_ACTION_KEYS: Record<string, true> = {
+  "asset.put": true,
+  "asset.upload": true,
+  "npm.publish": true,
+  "pypi.publish": true,
+  "nuget.publish": true,
+  "cargo.publish": true,
+  "oci.manifest.put": true,
+  "oci.blob.put": true,
+};
+
+/** 是否为上传 / 发布类动作（用于审计聚合视图）。 */
+export function isUploadAction(action: unknown): boolean {
+  return typeof action === "string" && UPLOAD_ACTION_KEYS[action] === true;
+}
+
 /** 完整时间（审计列表主时间列）：随当前语言格式化，不再手写拼接。 */
 export function formatFullTime(value: unknown): string {
   const t = parseTime(value);

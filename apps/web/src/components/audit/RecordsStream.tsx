@@ -2,7 +2,7 @@
 // + Mantine Table（完整时间 / 操作者邮箱 / 动作+方法路径 / 状态码 / 耗时 / 客户端 IP / 详情）。
 // 全部筛选走服务端（关键字、动作、操作者邮箱、客户端 IP、请求方法、认证方式、结果、风险状态）。
 import { useMediaQuery } from "@mantine/hooks";
-import { useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Badge,
@@ -22,7 +22,13 @@ import {
   TextInput,
 } from "@mantine/core";
 import { DatePickerInput } from "@mantine/dates";
-import { IconChevronDown, IconChevronUp, IconEye, IconSearch } from "@tabler/icons-react";
+import {
+  IconChevronDown,
+  IconChevronUp,
+  IconCornerDownRight,
+  IconEye,
+  IconSearch,
+} from "@tabler/icons-react";
 
 import { getAuditEvent } from "../../api/endpoints";
 import type { AuditEvent, AuditEventDetail, AuditCategory, AuditResult } from "../../api/types";
@@ -50,6 +56,15 @@ import {
   type AuditWorkbenchModel,
   type AuditRange,
 } from "./useAuditQuery";
+import { OperationAggregation } from "./OperationAggregation";
+import { buildOperations, operationFileCount, type AuditOperation } from "./operations";
+import { parseUploadCoordinates, uploadArtifactTarget } from "./uploadTree";
+
+/** 记录区分区内的视图：事件流（列表）/ 操作聚合（按操作类型分区）。 */
+type RecordsView = "events" | "operations";
+
+/** 事件表列数：桌面 7 列，窄屏裁到 4 列（操作者 / 耗时 / 客户端 IP 并入副文本）。 */
+const RECORD_COLUMNS = { wide: 7, narrow: 4 } as const;
 
 const RESULT_LABEL_KEYS: Record<string, string> = {
   failure: "auditResult.failure",
@@ -105,6 +120,19 @@ export function RecordsStream({ model, onInvestigate, onOpenAttention }: Records
   // 窄屏：高级筛选收起，默认只留关键字那行。
   const isNarrow = useMediaQuery("(max-width: 48em)") ?? false;
   const [moreOpen, setMoreOpen] = useState(false);
+  // 视图切换：事件流（默认，保持既有行为）/ 操作聚合（按操作类型聚合成树）。
+  const [view, setView] = useState<RecordsView>("events");
+  // 事件流按「操作」折叠：同一时间窗内同一坐标的多文件写入（jar / pom / xml / sha1 …）合成一行。
+  // 归并语义完全交给 operations.buildOperations（纯函数，另有单测锁行为），本组件只管渲染：
+  // 单事件操作仍走原有 EventRow（逐字不变，保证非制品事件的既有断言零回归），多事件走 OperationRow。
+  const operations = useMemo(() => buildOperations(records.items), [records.items]);
+  // 折叠行的展开态：值是 op.key。刻意与单事件的详情展开态 expandedEvent 分开放，
+  // 两者语义不同（一个展开文件清单、一个展开某条事件的详情），混用会互相顶掉。
+  const [expandedOperation, setExpandedOperation] = useState<string | null>(null);
+
+  const toggleOperation = (key: string) => {
+    setExpandedOperation((current) => (current === key ? null : key));
+  };
 
   const expandEvent = async (eventId: string) => {
     if (expandedEvent === eventId) {
@@ -318,6 +346,19 @@ export function RecordsStream({ model, onInvestigate, onOpenAttention }: Records
           <Button size="xs" style={{ flexShrink: 0 }} onClick={() => model.setSearch(model.draft)}>
             {t("auditWorkbench.searchAction")}
           </Button>
+          {/* 视图切换：事件流（列表）/ 操作聚合（按操作类型分区）。同一结果集、同一筛选口径，
+              只切换呈现方式；默认事件流，保持既有行为。 */}
+          <SegmentedControl
+            size="xs"
+            style={{ flexShrink: 0 }}
+            aria-label={t("auditWorkbench.operationsViewLabel")}
+            value={view}
+            onChange={(value) => setView(value as RecordsView)}
+            data={[
+              { value: "events", label: t("auditWorkbench.eventView") },
+              { value: "operations", label: t("auditWorkbench.operationsView") },
+            ]}
+          />
           {/* 窄屏：高级筛选默认收起。8 个筛选控件全展开会把 390×844 的整个视口占满，
               记录表被挤到折叠线下（实测表格完全不可见）；桌面端保持常显。 */}
           {isNarrow ? (
@@ -416,7 +457,18 @@ export function RecordsStream({ model, onInvestigate, onOpenAttention }: Records
           </Text>
         ) : null}
 
-        {records.loading && records.items.length === 0 ? (
+        {view === "operations" ? (
+          // 操作聚合：仅聚合当前结果集，不额外发请求；点击文件叶子回到事件流并按其
+          // 制品路径（repo/path）作为关键字调查该事件。
+          <OperationAggregation
+            events={records.items}
+            loading={records.loading}
+            onJumpToEvent={(keyword) => {
+              setView("events");
+              onInvestigate(keyword);
+            }}
+          />
+        ) : records.loading && records.items.length === 0 ? (
           <Text size="sm" c="dimmed" py="lg" px="md">
             {t("auditWorkbench.loading")}
           </Text>
@@ -427,50 +479,81 @@ export function RecordsStream({ model, onInvestigate, onOpenAttention }: Records
               : t("auditWorkbench.emptyRecords")}
           </Text>
         ) : (
-          <Table layout="fixed" highlightOnHover verticalSpacing={8} horizontalSpacing="md">
-            <Table.Thead>
-              <Table.Tr>
-                <Table.Th w={isNarrow ? 78 : 168} style={STICKY_HEADER}>
-                  {t("auditWorkbench.colTime")}
-                </Table.Th>
-                {isNarrow ? null : (
-                  <Table.Th w={190} style={STICKY_HEADER}>
-                    {t("auditWorkbench.colActor")}
+          <>
+            {/* 口径说明：服务端仍按「事件」分页，顶部计数与分页器都是事件数。折叠后行数≠事件数，
+                这里显式给出「N 次操作 / M 个事件」，避免用户把分页数当成操作数。 */}
+            <Text size="xs" c="dimmed" px="md" pt="xs" data-testid="audit-operation-summary">
+              {t("auditWorkbench.operationSummary", {
+                ops: operations.length,
+                events: records.items.length,
+              })}
+            </Text>
+            <Table layout="fixed" highlightOnHover verticalSpacing={8} horizontalSpacing="md">
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th w={isNarrow ? 78 : 168} style={STICKY_HEADER}>
+                    {t("auditWorkbench.colTime")}
                   </Table.Th>
-                )}
-                <Table.Th style={STICKY_HEADER}>{t("auditWorkbench.colAction")}</Table.Th>
-                <Table.Th w={60} style={STICKY_HEADER}>
-                  {t("auditWorkbench.colStatus")}
-                </Table.Th>
-                {isNarrow ? null : (
-                  <Table.Th w={80} style={STICKY_HEADER}>
-                    {t("auditWorkbench.colDuration")}
+                  {isNarrow ? null : (
+                    <Table.Th w={190} style={STICKY_HEADER}>
+                      {t("auditWorkbench.colActor")}
+                    </Table.Th>
+                  )}
+                  <Table.Th style={STICKY_HEADER}>{t("auditWorkbench.colAction")}</Table.Th>
+                  <Table.Th w={60} style={STICKY_HEADER}>
+                    {t("auditWorkbench.colStatus")}
                   </Table.Th>
-                )}
-                {isNarrow ? null : (
-                  <Table.Th w={132} style={STICKY_HEADER}>
-                    {t("auditWorkbench.colClientIp")}
+                  {isNarrow ? null : (
+                    <Table.Th w={80} style={STICKY_HEADER}>
+                      {t("auditWorkbench.colDuration")}
+                    </Table.Th>
+                  )}
+                  {isNarrow ? null : (
+                    <Table.Th w={132} style={STICKY_HEADER}>
+                      {t("auditWorkbench.colClientIp")}
+                    </Table.Th>
+                  )}
+                  <Table.Th w={104} style={STICKY_HEADER}>
+                    {t("auditWorkbench.colOperation")}
                   </Table.Th>
-                )}
-                <Table.Th w={104} style={STICKY_HEADER}>
-                  {t("auditWorkbench.colOperation")}
-                </Table.Th>
-              </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
-              {records.items.map((event) => (
-                <EventRow
-                  key={event.eventId}
-                  event={event}
-                  expanded={expandedEvent === event.eventId}
-                  detail={eventDetails[event.eventId]}
-                  onToggle={() => void expandEvent(event.eventId)}
-                  onInvestigate={onInvestigate}
-                  onOpenAttention={onOpenAttention}
-                />
-              ))}
-            </Table.Tbody>
-          </Table>
+                </Table.Tr>
+              </Table.Thead>
+              <Table.Tbody>
+                {operations.map((operation) => {
+                  // 单事件操作：走与改动前完全相同的 EventRow（同一组件、同样的列与无障碍名、
+                  // 同一套详情展开），「事件逐条平铺」的既有行为与断言因此逐字保持不变。
+                  if (operation.events.length === 1) {
+                    const event = operation.events[0]!;
+                    return (
+                      <EventRow
+                        key={operation.key}
+                        event={event}
+                        expanded={expandedEvent === event.eventId}
+                        detail={eventDetails[event.eventId]}
+                        onToggle={() => void expandEvent(event.eventId)}
+                        onInvestigate={onInvestigate}
+                        onOpenAttention={onOpenAttention}
+                      />
+                    );
+                  }
+                  // 多事件操作：折叠成一行，点击展开成员文件。
+                  return (
+                    <OperationRow
+                      key={operation.key}
+                      operation={operation}
+                      expanded={expandedOperation === operation.key}
+                      onToggle={() => toggleOperation(operation.key)}
+                      expandedEvent={expandedEvent}
+                      eventDetails={eventDetails}
+                      onToggleEvent={(eventId) => void expandEvent(eventId)}
+                      onInvestigate={onInvestigate}
+                      onOpenAttention={onOpenAttention}
+                    />
+                  );
+                })}
+              </Table.Tbody>
+            </Table>
+          </>
         )}
       </Box>
 
@@ -555,6 +638,10 @@ function EventRow({
   const isHigh = event.severity === "high" || event.severity === "critical";
   const http = event.http as { method?: string; path?: string; statusCode?: number } | undefined;
   const targetText = asTextLabel(event);
+  // 制品事件优先展示制品路径（repo/path）；其余事件沿用「方法 + 路由模板」的既有副文本。
+  const rowTarget =
+    artifactLabel(event) ??
+    (http?.path ? `${requestMethod(http.method)} ${http.path}` : targetText);
   const email = actorEmail(event.actor);
   const actorName = actorText(event.actor, t);
 
@@ -602,13 +689,8 @@ function EventRow({
               </Badge>
             ) : null}
           </Group>
-          <Text
-            size="xs"
-            c="dimmed"
-            truncate
-            title={http?.path ? `${requestMethod(http.method)} ${http.path}` : targetText}
-          >
-            {http?.path ? `${requestMethod(http.method)} ${http.path}` : targetText}
+          <Text size="xs" c="dimmed" truncate title={rowTarget}>
+            {rowTarget}
           </Text>
           {isNarrow ? (
             <Text size="xs" c="dimmed" truncate title={`${email} · ${actorName}`}>
@@ -664,11 +746,275 @@ function EventRow({
   );
 }
 
-/** 目标文本：优先路由模板，其次目标 label。 */
+/**
+ * 多文件操作行：把同一时间窗内同一坐标的多个文件事件折叠成一行（用户诉求 #3）。
+ *
+ * 交互划分（刻意与单事件行的详情展开错开，避免两套展开语义打架）：
+ * - 行点击（含末列按钮）= 展开 / 收起**成员文件清单**，状态是 `expandedOperation`（值 op.key）；
+ * - 成员子行点击 = 进入该事件的**既有详情**，状态仍是 `expandedEvent`，与单事件行共用一套
+ *   （窄屏同样落到既有详情抽屉）；
+ * - 折叠行本身不提供「操作级详情」：详情永远属于某一条事件，聚合体没有对应的契约实体，
+ *   再造一个「操作详情」面板只会把同一份信息讲两遍。
+ *
+ * 列口径与 EventRow 完全一致（时间 / 操作者 / 动作 / 状态 / 耗时 / 客户端 IP / 操作），
+ * 主导信息一律取该操作的最新事件（buildOperations 已把事件按时间倒序）。
+ */
+function OperationRow({
+  operation,
+  expanded,
+  onToggle,
+  expandedEvent,
+  eventDetails,
+  onToggleEvent,
+  onInvestigate,
+  onOpenAttention,
+}: {
+  operation: AuditOperation;
+  expanded: boolean;
+  onToggle: () => void;
+  expandedEvent: string | null;
+  eventDetails: Record<string, AuditEventDetail | "loading">;
+  onToggleEvent: (eventId: string) => void;
+  onInvestigate: (keyword: string) => void;
+  onOpenAttention: (attentionId: string) => void;
+}) {
+  const { t } = useTranslation();
+  const isNarrow = useMediaQuery("(max-width: 48em)") ?? false;
+  // 主导事件：该操作里最新的一条（行上展示的时间 / 状态 / 耗时 / IP 都取它）。
+  const head = operation.events[0]!;
+  const isHigh = head.severity === "high" || head.severity === "critical";
+  const http = head.http as { method?: string; path?: string; statusCode?: number } | undefined;
+  const email = actorEmail(head.actor);
+  const actorName = actorText(head.actor, t);
+  // 副文本口径与单事件行相同：制品事件优先 repo/path，其余回退「方法 + 路由模板」。
+  const rowTarget =
+    artifactLabel(head) ??
+    (http?.path ? `${requestMethod(http.method)} ${http.path}` : asTextLabel(head));
+  const fileCount = operationFileCount(operation);
+  // 徽章只报「另有几个文件」：行上已经展示了最新那个文件，+N 是折叠掉的其余 N 个。
+  const collapsedCount = Math.max(fileCount - 1, 0);
+
+  return (
+    <>
+      <Table.Tr
+        onClick={onToggle}
+        onKeyDown={(keyEvent) => {
+          if (keyEvent.key === "Enter" || keyEvent.key === " ") {
+            keyEvent.preventDefault();
+            onToggle();
+          }
+        }}
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
+        aria-label={t("auditWorkbench.operationRowLabel", {
+          action: actionLabel(operation.action, t),
+          count: fileCount,
+        })}
+        title={isHigh ? t("auditWorkbench.severityHigh") : undefined}
+        style={{ cursor: "pointer" }}
+      >
+        <Table.Td c="dimmed" style={{ fontVariantNumeric: "tabular-nums" }}>
+          <Text size="xs">
+            {isNarrow ? formatClock(head.occurredAt) : formatTableTime(head.occurredAt)}
+          </Text>
+        </Table.Td>
+        {isNarrow ? null : (
+          <Table.Td>
+            <Text size="xs" truncate title={email}>
+              {email}
+            </Text>
+            <Text size="xs" c="dimmed" truncate>
+              {actorName}
+            </Text>
+          </Table.Td>
+        )}
+        <Table.Td>
+          <Group gap={6} wrap="nowrap">
+            <Text size="sm" truncate style={{ minWidth: 0 }}>
+              {actionLabel(operation.action, t)}
+            </Text>
+            <Badge size="xs" variant="light" style={{ flexShrink: 0 }}>
+              {t("auditWorkbench.operationFoldBadge", { count: collapsedCount })}
+            </Badge>
+            {isHigh ? (
+              <Badge size="xs" variant="light" color="red" style={{ flexShrink: 0 }}>
+                {t("auditWorkbench.severityHigh")}
+              </Badge>
+            ) : null}
+          </Group>
+          <Text size="xs" c="dimmed" truncate title={rowTarget}>
+            {rowTarget}
+          </Text>
+          {isNarrow ? (
+            <Text size="xs" c="dimmed" truncate title={`${email} · ${actorName}`}>
+              {email} · {formatDuration(head.durationMs)} · {head.clientIp ?? "—"}
+            </Text>
+          ) : null}
+        </Table.Td>
+        <Table.Td>
+          <Badge size="sm" variant="light" color={statusTone(http?.statusCode)}>
+            {http?.statusCode ?? t("auditWorkbench.statusUnknown")}
+          </Badge>
+        </Table.Td>
+        {isNarrow ? null : (
+          <Table.Td c="dimmed" style={{ fontVariantNumeric: "tabular-nums" }}>
+            <Text size="xs">{formatDuration(head.durationMs)}</Text>
+          </Table.Td>
+        )}
+        {isNarrow ? null : (
+          <Table.Td c="dimmed">
+            <Text size="xs" style={{ fontVariantNumeric: "tabular-nums" }}>
+              {head.clientIp ?? "—"}
+            </Text>
+          </Table.Td>
+        )}
+        <Table.Td>
+          <Button
+            size={isNarrow ? "xs" : "compact-xs"}
+            variant="subtle"
+            leftSection={expanded ? <IconChevronUp size={14} /> : <IconChevronDown size={14} />}
+            onClick={(clickEvent) => {
+              clickEvent.stopPropagation();
+              onToggle();
+            }}
+          >
+            {t("auditWorkbench.operationToggleFiles")}
+          </Button>
+        </Table.Td>
+      </Table.Tr>
+      {expanded
+        ? operation.events.map((member) => (
+            <OperationMemberRow
+              key={member.eventId}
+              event={member}
+              expanded={expandedEvent === member.eventId}
+              detail={eventDetails[member.eventId]}
+              onToggle={() => onToggleEvent(member.eventId)}
+              onInvestigate={onInvestigate}
+              onOpenAttention={onOpenAttention}
+            />
+          ))
+        : null}
+    </>
+  );
+}
+
+/**
+ * 折叠行展开后的成员文件子行：一行一文件，展示 时间 + 文件名 + 目录。
+ *
+ * 用跨满整行的单个单元格（而非对齐主表 7 列）：子行没有状态 / 耗时 / IP 这些列，
+ * 硬对齐只会留下一排空列；点击子行进入该事件的既有详情（桌面内联、窄屏抽屉）。
+ */
+function OperationMemberRow({
+  event,
+  expanded,
+  detail,
+  onToggle,
+  onInvestigate,
+  onOpenAttention,
+}: {
+  event: AuditEvent;
+  expanded: boolean;
+  detail: AuditEventDetail | "loading" | undefined;
+  onToggle: () => void;
+  onInvestigate: (keyword: string) => void;
+  onOpenAttention: (attentionId: string) => void;
+}) {
+  const { t } = useTranslation();
+  const isNarrow = useMediaQuery("(max-width: 48em)") ?? false;
+  // 文件名与目录复用上传树的同一个反解函数：折叠行与聚合视图里的路径口径必须一致。
+  const target = uploadArtifactTarget(event);
+  const coords = target ? parseUploadCoordinates(target.path) : null;
+  const filename = coords?.filename ?? asTextLabel(event);
+  const directory = coords?.directory ?? "";
+
+  return (
+    <>
+      <Table.Tr
+        onClick={onToggle}
+        onKeyDown={(keyEvent) => {
+          if (keyEvent.key === "Enter" || keyEvent.key === " ") {
+            keyEvent.preventDefault();
+            onToggle();
+          }
+        }}
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
+        aria-label={t("auditWorkbench.rowLabel", { action: actionLabel(event.action, t) })}
+        style={{ cursor: "pointer" }}
+      >
+        <Table.Td colSpan={isNarrow ? RECORD_COLUMNS.narrow : RECORD_COLUMNS.wide} py={4}>
+          <Group gap="xs" wrap="nowrap" pl="lg">
+            <IconCornerDownRight size={14} style={{ flexShrink: 0, opacity: 0.5 }} />
+            <Text
+              size="xs"
+              c="dimmed"
+              style={{ fontVariantNumeric: "tabular-nums", flexShrink: 0 }}
+            >
+              {isNarrow ? formatClock(event.occurredAt) : formatTableTime(event.occurredAt)}
+            </Text>
+            <Text size="xs" truncate style={{ fontFamily: "monospace", minWidth: 0 }}>
+              {filename}
+            </Text>
+            {directory ? (
+              <Text size="xs" c="dimmed" truncate title={directory} style={{ minWidth: 0 }}>
+                {directory}
+              </Text>
+            ) : null}
+          </Group>
+        </Table.Td>
+      </Table.Tr>
+      {/* 桌面内联详情 / 窄屏走 RecordsStream 主体的详情抽屉，与单事件行同一套机制。 */}
+      {expanded && !isNarrow ? (
+        <Table.Tr>
+          <Table.Td colSpan={RECORD_COLUMNS.wide} p={0}>
+            <EventDetail
+              detail={detail}
+              event={event}
+              onInvestigate={onInvestigate}
+              onOpenAttention={onOpenAttention}
+            />
+          </Table.Td>
+        </Table.Tr>
+      ) : null}
+    </>
+  );
+}
+
+/** 事件目标的安全读取（kind 用于区分制品与非制品，label 为脱敏后的展示文本）。 */
+function eventTarget(
+  event: AuditEvent,
+): { kind?: string; label?: string; repository?: string } | undefined {
+  return event.target as { kind?: string; label?: string; repository?: string } | undefined;
+}
+
+/**
+ * 制品路径：制品事件（kind=artifact）的 target.label 是 `repo/path`（后端 EntityKey），
+ * 比 http.path 更能说明「传/动了哪个文件」。非制品事件返回 null，交给原有回退，
+ * 避免改变仓库/用户/令牌/设置等管理端事件的展示语义。
+ *
+ * 背景：协议路由的 http.path 存的是路由模板（如 `/repository/:repo/*artifactPath`），
+ * 不含具体文件，直接渲染等于把真正的制品路径遮住。
+ */
+function artifactLabel(event: AuditEvent): string | null {
+  const target = eventTarget(event);
+  if (target?.kind !== "artifact") return null;
+  const label = target.label ?? target.repository;
+  return label && label.length > 0 ? label : null;
+}
+
+/**
+ * 目标文本（兜底）：制品事件优先展示制品路径；其余维持既有语义——
+ * 先路由模板，再目标 label/repository。
+ */
 function asTextLabel(event: AuditEvent): string {
+  const artifact = artifactLabel(event);
+  if (artifact) return artifact;
   const http = event.http as { path?: string } | undefined;
   if (http?.path) return http.path;
-  const target = event.target as { label?: string; repository?: string } | undefined;
+  const target = eventTarget(event);
   return target?.label ?? target?.repository ?? "—";
 }
 
@@ -730,6 +1076,8 @@ function EventDetail({
     | undefined;
   const actor = event.actor as { displayName?: string; authSource?: string } | undefined;
   const email = actorEmail(event.actor);
+  // 详情头部路径与列表同一口径：制品事件展示制品路径（repo/path），其余回退路由模板。
+  const artifactPath = artifactLabel(event);
   const details = (detailData?.details ?? {}) as {
     resultSummary?: string;
     errorClass?: string;
@@ -751,7 +1099,7 @@ function EventDetail({
 
   return (
     <Box p="sm" m="sm" style={{ background: "var(--mantine-color-gray-0)", borderRadius: 8 }}>
-      {/* 头部：状态码 + 动作 + 方法 + 路径（详情第一层，保持不变） */}
+      {/* 头部：状态码 + 动作 + 方法 + 路径（制品事件展示制品路径，其余为路由模板） */}
       <Group gap="xs" wrap="wrap" mb="xs">
         <Badge size="sm" variant="light" color={statusTone(http?.statusCode)}>
           {http?.statusCode ?? "—"} {t(RESULT_LABEL_KEYS[event.result] ?? event.result)}
@@ -763,7 +1111,7 @@ function EventDetail({
           {requestMethod(http?.method)}
         </Badge>
         <Text size="xs" style={{ fontFamily: "monospace", overflowWrap: "anywhere" }}>
-          {http?.path ?? "—"}
+          {artifactPath ?? http?.path ?? "—"}
         </Text>
       </Group>
 

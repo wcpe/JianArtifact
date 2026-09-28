@@ -922,6 +922,14 @@ export const en = {
     pageSizeLabel: "Rows per page",
     pageUnit: "page",
     rowLabel: "Audit event: {{action}}",
+    // 事件流按「操作」折叠（同一时间窗同一坐标的多文件写入合成一行）：
+    // 折叠徽章只报「另有 N 个文件」，行上已展示最新那个文件。
+    operationFoldBadge: "+{{count}} files",
+    // 折叠行的无障碍名：说清这是「一次操作」而非单条事件。
+    operationRowLabel: "Operation: {{action}} ({{count}} files)",
+    operationToggleFiles: "Files",
+    // 口径说明：折叠后行数 ≠ 事件数，服务端分页仍按事件计数，故显式并列两者。
+    operationSummary: "{{ops}} operations / {{events}} events on this page (paging counts events)",
     rangeLabel: "Time range",
     rangeCustom: "Custom range",
     loading: "Loading audit data for this node…",
@@ -990,6 +998,25 @@ export const en = {
     authBasic: "Basic auth",
     authSystem: "System",
     actorSystem: "System",
+    // 操作聚合视图：把当前结果集内的事件聚合成「一次完整操作」（上传 / 删除 / 移动 / 其他），
+    // 先按操作类型分区，再按仓库 → groupId → artifactId → 版本（或目录）→ 文件展开。
+    operationsView: "Operations",
+    eventView: "Event Stream",
+    operationsViewLabel: "View",
+    opFilterLabel: "Operation type filter",
+    opFilterAll: "All",
+    opKindUpload: "Uploads",
+    opKindDelete: "Deletes",
+    opKindMove: "Moves",
+    opKindOther: "Other",
+    opSummary: "{{ops}} operations · {{files}} files",
+    opSectionTitle: "{{ops}} operations / {{files}} files",
+    opFileCount: "{{count}} files",
+    opMoreFiles: "Show the other {{count}} files",
+    opEmpty: "No aggregatable operations in the current result set",
+    opJump: "View events",
+    opExpand: "Expand",
+    opCollapse: "Collapse",
     // 操作者 + 认证来源的组合展示（英文用半角括号，与中文文案区分）。
     actorWithSource: "{{name}} ({{source}})",
   },

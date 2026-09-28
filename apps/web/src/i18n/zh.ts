@@ -898,6 +898,14 @@ export const zh = {
     pageSizeLabel: "每页条数",
     pageUnit: "页",
     rowLabel: "审计事件：{{action}}",
+    // 事件流按「操作」折叠（同一时间窗同一坐标的多文件写入合成一行）：
+    // 折叠徽章只报「另有 N 个文件」，行上已展示最新那个文件。
+    operationFoldBadge: "+{{count}} 个文件",
+    // 折叠行的无障碍名：说清这是「一次操作」而非单条事件。
+    operationRowLabel: "操作：{{action}}（{{count}} 个文件）",
+    operationToggleFiles: "文件",
+    // 口径说明：折叠后行数 ≠ 事件数，服务端分页仍按事件计数，故显式并列两者。
+    operationSummary: "本页 {{ops}} 次操作 / {{events}} 个事件（分页按事件计数）",
     rangeLabel: "时间范围",
     rangeCustom: "自定义时间段",
     loading: "正在加载当前节点审计…",
@@ -964,6 +972,25 @@ export const zh = {
     authBasic: "Basic 认证",
     authSystem: "系统",
     actorSystem: "系统",
+    // 操作聚合视图：把当前结果集内的事件聚合成「一次完整操作」（上传 / 删除 / 移动 / 其他），
+    // 先按操作类型分区，再按 仓库 → groupId → artifactId → 版本（或目录）→ 文件 展开。
+    operationsView: "操作聚合",
+    eventView: "事件流",
+    operationsViewLabel: "视图",
+    opFilterLabel: "操作类型筛选",
+    opFilterAll: "全部",
+    opKindUpload: "上传",
+    opKindDelete: "删除",
+    opKindMove: "移动",
+    opKindOther: "其他",
+    opSummary: "{{ops}} 次操作 · {{files}} 个文件",
+    opSectionTitle: "{{ops}} 次操作 / {{files}} 个文件",
+    opFileCount: "{{count}} 个文件",
+    opMoreFiles: "展开其余 {{count}} 个文件",
+    opEmpty: "当前结果集内没有可聚合的操作",
+    opJump: "查看事件",
+    opExpand: "展开",
+    opCollapse: "收起",
     // 操作者 + 认证来源的组合展示。中英标点不同，故连括号一起放进文案：
     // 英文界面不应出现中文全角括号。
     actorWithSource: "{{name}}（{{source}}）",
