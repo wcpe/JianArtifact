@@ -2,7 +2,9 @@ package domain_test
 
 import (
 	"errors"
+	"fmt"
 	"slices"
+	"sync"
 	"testing"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
@@ -91,6 +93,46 @@ func TestRepositoryCreateAliasDedup(t *testing.T) {
 	}
 	if !slices.Equal(created.Aliases, []string{"x", "y"}) {
 		t.Fatalf("别名应去重并去空白，得 %v", created.Aliases)
+	}
+}
+
+// TestRepositoryCreateAliasRaceLeavesNoOrphan 并发创建共用同一别名的仓库：
+// 撞名失败的一方不得留下「调用方以为没创建、实际已存在」的仓库行（别名与主名跨表唯一性
+// 无 DB 兜底，只有服务层先查后写，并发窗口内会真的插进重复别名）。
+func TestRepositoryCreateAliasRaceLeavesNoOrphan(t *testing.T) {
+	svc := newAliasService(t)
+	const rounds = 6
+	const workers = 24
+	for r := 0; r < rounds; r++ {
+		prefix := fmt.Sprintf("race-%d", r)
+		alias := fmt.Sprintf("shared-%d", r)
+		var wg sync.WaitGroup
+		errs := make([]error, workers)
+		for i := 0; i < workers; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				_, errs[i] = svc.Create(fmt.Sprintf("%s-%d", prefix, i), "raw", "hosted", "private", "", repository.RepositoryConfig{}, alias)
+			}(i)
+		}
+		wg.Wait()
+
+		wins := 0
+		for i, err := range errs {
+			if err == nil {
+				wins++
+				continue
+			}
+			if !errors.Is(err, domain.ErrConflict) {
+				t.Fatalf("第 %d 个并发请求应 ErrConflict，得 %v", i, err)
+			}
+			if _, gerr := svc.Get(fmt.Sprintf("%s-%d", prefix, i)); gerr == nil {
+				t.Fatalf("并发撞名的失败请求留下了仓库行 %s-%d", prefix, i)
+			}
+		}
+		if wins != 1 {
+			t.Fatalf("每轮应恰好 1 个成功，得 %d", wins)
+		}
 	}
 }
 

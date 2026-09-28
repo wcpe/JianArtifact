@@ -291,18 +291,15 @@ func (s *RepositoryService) Create(name, format, typ, visibility, description st
 		}
 		return nil, err
 	}
-	if description != "" {
-		if err := s.repos.UpdateDescription(name, description); err != nil {
-			return nil, err
+	// 仓库行已建但后续步骤失败时补偿删除：别名与主名的跨表唯一性没有 DB 兜底，只有服务层
+	// 「先查后写」，并发窗口内会真的插进重复别名。若留下仓库行，调用方收到 ErrConflict 却有一个
+	// 按主名可访问的仓库，重试只会得到「名称已被占用」。
+	if err := s.finishCreate(name, description, repoID, cleanedAliases); err != nil {
+		_ = s.repos.Delete(name)
+		if isUniqueViolation(err) {
+			return nil, ErrConflict
 		}
-	}
-	if len(cleanedAliases) > 0 {
-		if err := s.repos.SetAliases(repoID, cleanedAliases); err != nil {
-			if isUniqueViolation(err) {
-				return nil, ErrConflict
-			}
-			return nil, err
-		}
+		return nil, err
 	}
 	repo, err := s.repos.GetByName(name)
 	if err != nil {
@@ -316,6 +313,21 @@ func (s *RepositoryService) Create(name, format, typ, visibility, description st
 		Visibility: repo.Visibility, Description: repo.Description, Config: repo.Config,
 	})
 	return repo, nil
+}
+
+// finishCreate 完成创建仓库后的收尾步骤（描述、别名）。任一步失败即返回错误，由调用方补偿删除。
+func (s *RepositoryService) finishCreate(name, description string, repoID int64, aliases []string) error {
+	if description != "" {
+		if err := s.repos.UpdateDescription(name, description); err != nil {
+			return err
+		}
+	}
+	if len(aliases) > 0 {
+		if err := s.repos.SetAliases(repoID, aliases); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Update 更新仓库可见性、描述、结构化配置与/或别名。visibility 为空表示不改；
