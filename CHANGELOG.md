@@ -10,6 +10,7 @@
 
 ### 修复
 
+- **发布策略多选只列前 100 个仓库**：用户页的发布策略弹窗用 `listRepositories({ page_size: 100 })` 只取第一页，仓库总数超过单页上限时第 2 页起的 hosted 仓库选不到；现改用 `listAllRepositories()` 按 `total` 翻完全部页（与本批其他页面同口径）
 - **group 合并读取成员 metadata 无大小上限**：成员 `maven-metadata.xml` 用 `io.ReadAll` 整份读入内存，上游返回超大 body 时可把服务拖垮（与「大文件整体入内存」的架构红线相抵触）；现按 8 MiB 上限读取，超限成员视为不可用直接跳过（不截断，避免得到非法 XML），其余成员照常合并
 
 ### 变更
