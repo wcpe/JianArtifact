@@ -17,6 +17,7 @@
 
 ### 修复
 
+- **devmock 发布策略保存必然失败**：devmock 的 PUT 单仓库与批量发布策略端点把已废弃的 `immutableRelease` 当必填字段校验，而契约与真实后端都按「只读兼容字段」处理（不要求出现、出现即 400 `immutable_release_moved`），前端按契约发来的请求被误判为缺字段；现改为与真实后端同口径，并补一条直打 mock handler 的用例锁住该行为
 - **上传制品在审计中不可追踪**：前端审计列表对制品事件优先显示 `repo/path` 副文本，此前该副文本被协议路由模板（`/repository/:repo/*artifactPath`）遮盖，看不到「传了什么」；同时后端补齐 Maven 网页表单上传的逐文件 `asset.put` 审计（该路径此前不触发审计回调），与协议 PUT 上传同口径（`EntityKey=repo/path`、`Detail=size=N`）
 - **主机监控「节点状态」右栏被强行拉伸等高**：主 Grid `align="stretch"` 把右栏拉到与左列等高，中间留出大片空白；改为按内容取高（`align="start"`、移除 `h="100%"` 与末行 `mt="auto"`、压缩 Divider 间距），消除空占
 - **主机监控缺失的 i18n 键**：`hostMonitoring.processCpu` 与 `hostMonitoring.metricDetails`（节点状态栏 Divider 标签）此前为裸键，补齐中英译文；顺带清理未被引用的孤儿键 `metricNetworkRx` / `metricNetworkTx`

@@ -98,7 +98,8 @@ interface State {
   acls: Record<string, AclEntry[]>;
   assets: Record<string, AssetSummary[]>;
   migrations: MigrationTask[];
-  publishPolicies: Record<string, Omit<PublishPolicy, "userId" | "username" | "repository">>;
+  // immutableRelease 已废弃：只读兼容字段，写入记录不再保存（读取时恒为 false）。
+  publishPolicies: Record<string, Omit<PublishPolicy, "userId" | "username" | "repository" | "immutableRelease">>;
   seq: { user: number; token: number; repo: number; migration: number; operation: number };
   /** FR-66：实例级匿名访问开关（默认开）。 */
   anonymousAccessEnabled: boolean;
@@ -1011,14 +1012,16 @@ export const store = {
       maxAssetsHour: saved?.maxAssetsHour ?? 0,
       maxBytesDay: saved?.maxBytesDay ?? 0,
       maxFileBytes: saved?.maxFileBytes ?? 0,
-      immutableRelease: saved?.immutableRelease ?? false,
+      // 只读兼容字段：契约保留该键，但不再可写，恒为 false。
+      immutableRelease: false,
     };
   },
 
   setPublishPolicy(
     userId: number,
     repository: string,
-    patch: Omit<PublishPolicy, "userId" | "username" | "repository">,
+    // immutableRelease 已废弃：只读兼容字段，写入路径不再接受（与真实后端一致）。
+    patch: Omit<PublishPolicy, "userId" | "username" | "repository" | "immutableRelease">,
   ): PublishPolicy | null {
     const user = state.users.find((item) => item.id === userId);
     if (
@@ -1034,7 +1037,6 @@ export const store = {
       maxAssetsHour: patch.maxAssetsHour,
       maxBytesDay: patch.maxBytesDay,
       maxFileBytes: patch.maxFileBytes,
-      immutableRelease: patch.immutableRelease,
     };
     return this.getPublishPolicy(userId, repository);
   },
@@ -1046,7 +1048,7 @@ export const store = {
   setPublishPolicies(
     userId: number,
     repositories: string[],
-    patch: Omit<PublishPolicy, "userId" | "username" | "repository">,
+    patch: Omit<PublishPolicy, "userId" | "username" | "repository" | "immutableRelease">,
   ): {
     results: { repository: string; ok: boolean; error?: string }[];
     missing?: string;

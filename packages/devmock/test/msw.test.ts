@@ -296,6 +296,41 @@ describe("devmock MSW 端点行为", () => {
     await expect(afterGlobal.json()).resolves.toMatchObject({ pinnedNames: ["npm-proxy"] });
   });
 
+  it("批量发布策略：不要求已废弃的 immutableRelease，出现该字段即 400", async () => {
+    // 前端契约不含 immutableRelease（已废弃，写入会被拒绝）；devmock 不得要求它存在。
+    const payload = {
+      webLoginDisabled: false,
+      allowedPrefixes: ["/team"],
+      maxAssetsHour: 10,
+      maxBytesDay: 1024,
+      maxFileBytes: 64,
+      repositories: ["maven-releases", "raw-hosted"],
+    };
+    const ok = await fetch("http://localhost/api/v1/users/1/publish-policies", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...auth },
+      body: JSON.stringify(payload),
+    });
+    expect(ok.status).toBe(200);
+    await expect(ok.json()).resolves.toMatchObject({
+      results: [
+        { repository: "maven-releases", ok: true },
+        { repository: "raw-hosted", ok: true },
+      ],
+    });
+
+    // 出现已废弃字段：与真实后端一致 400（immutable_release_moved）。
+    const legacy = await fetch("http://localhost/api/v1/users/1/publish-policies", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...auth },
+      body: JSON.stringify({ ...payload, immutableRelease: true }),
+    });
+    expect(legacy.status).toBe(400);
+    await expect(legacy.json()).resolves.toMatchObject({
+      error: expect.objectContaining({ code: "immutable_release_moved" }),
+    });
+  });
+
   it("迁移仅管理员可操作，发现后保持 planned 并由显式 start 推进", async () => {
     const userList = await fetch("http://localhost/api/v1/migrations", { headers: userAuth });
     expect(userList.status).toBe(403);

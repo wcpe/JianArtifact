@@ -938,13 +938,17 @@ export const handlers = [
     const denied = adminUnauthorized(request);
     if (denied) return denied;
     const body = (await request.json().catch(() => ({}))) as Partial<PublishPolicy>;
+    // immutableRelease 已废弃：契约与真实后端都按「只读兼容字段」处理——不要求出现，
+    // 出现即拒绝（与真实后端 PUT 端点口径一致），否则前端按契约发来的请求会被误判为缺字段。
+    if (body.immutableRelease !== undefined) {
+      return err("immutable_release_moved", "不可变 Release 请在仓库配置中更新", 400);
+    }
     if (
       typeof body.webLoginDisabled !== "boolean" ||
       !Array.isArray(body.allowedPrefixes) ||
       typeof body.maxAssetsHour !== "number" ||
       typeof body.maxBytesDay !== "number" ||
-      typeof body.maxFileBytes !== "number" ||
-      typeof body.immutableRelease !== "boolean"
+      typeof body.maxFileBytes !== "number"
     ) {
       return err("bad_request", "发布策略字段不完整", 400);
     }
@@ -956,7 +960,6 @@ export const handlers = [
       maxAssetsHour: body.maxAssetsHour,
       maxBytesDay: body.maxBytesDay,
       maxFileBytes: body.maxFileBytes,
-      immutableRelease: body.immutableRelease,
     });
     return policy ? HttpResponse.json(policy) : err("not_found", "用户或 Hosted 仓库不存在", 404);
   }),
@@ -972,13 +975,17 @@ export const handlers = [
     if (!Array.isArray(body.repositories) || body.repositories.length === 0) {
       return err("bad_request", "至少选择一个仓库", 400);
     }
+    // immutableRelease 已废弃：契约与真实后端都按「只读兼容字段」处理——不要求出现，
+    // 出现即拒绝（与真实后端 PUT 端点口径一致），否则前端按契约发来的请求会被误判为缺字段。
+    if (body.immutableRelease !== undefined) {
+      return err("immutable_release_moved", "不可变 Release 请在仓库配置中更新", 400);
+    }
     if (
       typeof body.webLoginDisabled !== "boolean" ||
       !Array.isArray(body.allowedPrefixes) ||
       typeof body.maxAssetsHour !== "number" ||
       typeof body.maxBytesDay !== "number" ||
-      typeof body.maxFileBytes !== "number" ||
-      typeof body.immutableRelease !== "boolean"
+      typeof body.maxFileBytes !== "number"
     ) {
       return err("bad_request", "发布策略字段不完整", 400);
     }
@@ -996,7 +1003,6 @@ export const handlers = [
       maxAssetsHour: body.maxAssetsHour,
       maxBytesDay: body.maxBytesDay,
       maxFileBytes: body.maxFileBytes,
-      immutableRelease: body.immutableRelease,
     });
     if (!results) {
       return err("not_found", "用户不存在", 404);
