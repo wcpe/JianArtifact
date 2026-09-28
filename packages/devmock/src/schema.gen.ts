@@ -548,6 +548,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/repositories/{name}/rename": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 重命名仓库（仅管理员）
+         * @description 仅管理员可操作。新名称需非空且未被任何仓库主名或别名占用（别名与主名共享命名空间、全局唯一）。
+         *     重命名后旧名自动登记为别名，旧链接与既有客户端仍可解析到该仓库；历史审计/下载计量保留旧名不回填。
+         */
+        post: operations["renameRepository"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/repositories/{name}/recheck-connection": {
         parameters: {
             query?: never;
@@ -1969,6 +1990,8 @@ export interface components {
             immutableRelease?: boolean;
             /** @description group 仓库的成员仓库名（有序，仅 type=group） */
             members?: string[];
+            /** @description 仓库别名列表（可多个；别名与主名共享命名空间、全局唯一，重命名后旧名自动转别名） */
+            aliases?: string[];
             createdAt: string;
             /** @description 仓库内制品数量（只读统计字段） */
             artifactCount?: number;
@@ -2003,6 +2026,8 @@ export interface components {
             immutableRelease?: boolean;
             /** @description group 仓库的成员仓库名（有序，type=group 时必填） */
             members?: string[];
+            /** @description 仓库别名（可选；与主名共享命名空间、全局唯一，不得等于主名或与他仓主名/别名冲突） */
+            aliases?: string[];
         };
         UpdateRepositoryRequest: {
             /** @enum {string} */
@@ -2017,6 +2042,12 @@ export interface components {
             immutableRelease?: boolean;
             /** @description 更新 group 成员仓库名（仅 type=group） */
             members?: string[];
+            /** @description 覆盖式更新仓库别名集合（传空数组表示清空；与主名共享命名空间、全局唯一） */
+            aliases?: string[];
+        };
+        RenameRepositoryRequest: {
+            /** @description 仓库新名称（非空；不得与任何主名/别名冲突。重命名后旧名自动转为别名，仍可解析到该仓库） */
+            newName: string;
         };
         SetRepositoryOnlineRequest: {
             /** @description 是否在线（true=在线，false=离线；必填） */
@@ -3685,6 +3716,37 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+        };
+    };
+    renameRepository: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: components["parameters"]["RepoNameParam"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RenameRepositoryRequest"];
+            };
+        };
+        responses: {
+            /** @description 已重命名，返回更新后的仓库 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Repository"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
     recheckRepositoryConnection: {

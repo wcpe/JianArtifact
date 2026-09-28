@@ -526,7 +526,15 @@ export const en = {
     filterNoMatch: "No matching repositories",
     pin: "Pin",
     unpin: "Unpin",
+    // 置顶现存储在服务端（按用户区分；匿名回退全局置顶）。
+    pinFailed: "Failed to save the pin, please try again later",
+    pinNeedsLogin: "Sign in to pin repositories",
     statusNone: "—",
+    // 仓库别名（创建表单可选）：与主名共享命名空间、全局唯一。
+    aliasesLabel: "Aliases",
+    aliasesPlaceholder: "Type an alias and press Enter (multiple allowed, optional)",
+    aliasesHint:
+      "Aliases share the namespace with the primary name and must be globally unique; they resolve to the same repository",
   },
   search: {
     title: "Artifact Search",
@@ -693,6 +701,26 @@ export const en = {
     publicNotFound: "Repository not found.",
     publicPrivateHint:
       "This repository is not publicly visible. Sign in to access it or contact an administrator.",
+    // 仓库别名编辑（配置页签）
+    configAliases: "Aliases",
+    configAliasesHint:
+      "Aliases share the namespace with the primary name and must be globally unique; they resolve to this repository",
+    configAliasesEmpty: "No aliases",
+    configAliasAdd: "Add alias",
+    configAliasRemove: "Remove",
+    configAliasSelf: "An alias cannot equal the repository name",
+    configAliasTaken: "That alias is already taken",
+    configAliasInvalid: "Alias cannot be empty",
+    // 仓库重命名（配置页签）：旧名会变为别名，旧链接继续可用。
+    configRename: "Rename",
+    configRenameTitle: "Rename repository",
+    configRenameNewName: "New name",
+    configRenameHint: "After renaming, the old name becomes an alias; existing links keep working",
+    configRenameConfirm: "Confirm rename",
+    configRenameEmpty: "New name cannot be empty",
+    configRenameSame: "New name must differ from the current name",
+    configRenameTaken: "That name is already taken",
+    configRenameOk: "Renamed",
   },
   audit: {
     title: "Audit Log",

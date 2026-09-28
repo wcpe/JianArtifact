@@ -13,6 +13,7 @@ import {
   Select,
   Stack,
   Table,
+  TagsInput,
   Text,
   Textarea,
   TextInput,
@@ -355,6 +356,8 @@ export function RepositoriesPage() {
       description: "",
       remoteUrl: "",
       members: [] as string[],
+      // 别名（可选）：与主名共享命名空间、全局唯一，可用别名等价访问该仓库。
+      aliases: [] as string[],
     },
     validate: {
       name: (v) => (v.trim() ? null : t("repositories.name")),
@@ -395,6 +398,13 @@ export function RepositoriesPage() {
       ...(values.description.trim() ? { description: values.description.trim() } : {}),
       ...(values.type === "proxy" ? { remoteUrl: values.remoteUrl.trim() } : {}),
       ...(values.type === "group" ? { members: values.members } : {}),
+      // 别名去空去重后提交（后台仍会做全局唯一性校验兜底）。
+      ...(() => {
+        const aliases = Array.from(
+          new Set(values.aliases.map((a) => a.trim()).filter((a) => a && a !== values.name)),
+        );
+        return aliases.length > 0 ? { aliases } : {};
+      })(),
     };
     createRepository(payload)
       .then(() => {
@@ -980,6 +990,15 @@ export function RepositoriesPage() {
             minRows={2}
             maxRows={4}
             {...form.getInputProps("description")}
+          />
+          {/* 别名（可选）：与主名共享命名空间、全局唯一，可用别名等价访问该仓库 */}
+          <TagsInput
+            mt="sm"
+            label={t("repositories.aliasesLabel")}
+            description={t("repositories.aliasesHint")}
+            placeholder={t("repositories.aliasesPlaceholder")}
+            clearable
+            {...form.getInputProps("aliases")}
           />
           <Group justify="flex-end" mt="md">
             <Button variant="default" onClick={createModal.close}>

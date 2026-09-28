@@ -124,6 +124,7 @@ export function mockRepository(): Repository {
     type: "hosted",
     visibility: "private",
     createdAt: MOCK_TIME,
+    aliases: ["maven-legacy"],
   };
 }
 

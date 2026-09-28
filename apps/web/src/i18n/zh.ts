@@ -502,7 +502,14 @@ export const zh = {
     filterNoMatch: "没有匹配的仓库",
     pin: "置顶",
     unpin: "取消置顶",
+    // 置顶已改为服务端存储（用户级；匿名回退全局置顶），写入失败时的提示。
+    pinFailed: "置顶保存失败，请稍后重试",
+    pinNeedsLogin: "置顶需要登录后再试",
     statusNone: "—",
+    // 仓库别名（创建表单可选）：与主名共享命名空间、全局唯一。
+    aliasesLabel: "别名",
+    aliasesPlaceholder: "输入别名后回车添加（可多个，可选）",
+    aliasesHint: "别名与主名共享命名空间、全局唯一，可用别名等价访问该仓库",
   },
   search: {
     title: "制品搜索",
@@ -656,6 +663,25 @@ export const zh = {
     publicDeniedTitle: "无法访问",
     publicNotFound: "仓库不存在。",
     publicPrivateHint: "该仓库不是公开可见，请登录后访问或联系管理员。",
+    // 仓库别名编辑（配置页签）
+    configAliases: "别名",
+    configAliasesHint: "别名与仓库主名共享命名空间、全局唯一；用别名可等价访问本仓库",
+    configAliasesEmpty: "暂无别名",
+    configAliasAdd: "添加别名",
+    configAliasRemove: "移除",
+    configAliasSelf: "别名不能与仓库主名相同",
+    configAliasTaken: "该别名已被占用",
+    configAliasInvalid: "别名不能为空",
+    // 仓库重命名（配置页签）：成功后旧名自动转为别名，旧链接仍可访问
+    configRename: "重命名",
+    configRenameTitle: "重命名仓库",
+    configRenameNewName: "新名称",
+    configRenameHint: "重命名后旧名将自动转为别名，旧链接仍可访问",
+    configRenameConfirm: "确认重命名",
+    configRenameEmpty: "新名称不能为空",
+    configRenameSame: "新名称不能与当前名称相同",
+    configRenameTaken: "该名称已被占用",
+    configRenameOk: "已重命名",
   },
   audit: {
     title: "审计日志",

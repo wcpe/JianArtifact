@@ -23,6 +23,7 @@
 
 - 用户与令牌：用户列表/创建/更新/禁用/改密，API Token 创建和吊销。
 - 仓库与 ACL：仓库 CRUD、成员授权、仓库格式/可见性/上游配置和使用统计。
+- 仓库别名与重命名：`Repository.aliases` 与 `CreateRepositoryRequest` / `UpdateRepositoryRequest` 的 `aliases` 表达别名集合（别名与主名**共享命名空间、全局唯一**，不得等于主名或与他仓主名/别名冲突）；`POST /api/v1/repositories/{name}/rename`（仅管理员，`{newName}`）重命名后**旧名自动转别名**，旧链接仍可解析。字段、请求体与错误码以 [`../api/openapi.yaml`](../api/openapi.yaml) 为准。
 - 制品：仓库文件树、详情、搜索、下载、统一资产操作和格式相关管理操作。
 - 迁移：Nexus 来源发现、计划、显式启动/取消、进度、报告和恢复。
 - 备份与搬迁：节点备份包的生成、列表、详情、删除、完整性校验与下载导出。

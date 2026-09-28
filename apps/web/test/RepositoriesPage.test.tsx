@@ -297,4 +297,131 @@ describe("仓库管理", () => {
     expect(screen.queryByRole("option", { name: "maven" })).toBeNull();
     expect(screen.queryByRole("option", { name: "npm" })).toBeNull();
   });
+
+  it("新建仓库时可填可选别名并随请求提交（阶段 D-2）", async () => {
+    let createBody: { name?: string; aliases?: string[] } | null = null;
+    server.use(
+      http.post("*/api/v1/repositories", async ({ request }) => {
+        createBody = (await request.json()) as { name?: string; aliases?: string[] };
+        return HttpResponse.json(
+          {
+            id: 99,
+            name: createBody.name,
+            format: "maven",
+            type: "hosted",
+            visibility: "private",
+            createdAt: "2026-01-01T00:00:00Z",
+            aliases: createBody.aliases ?? [],
+          },
+          { status: 201 },
+        );
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(<RepositoriesPage />, { route: "/repositories", authenticated: true });
+    await screen.findByText("raw-hosted");
+
+    await user.click(screen.getByRole("button", { name: "新建仓库" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText(/名称/), { target: { value: "alias-repo" } });
+
+    // 别名（可选）：输入后回车添加。
+    const aliasInput = within(dialog).getByPlaceholderText("输入别名后回车添加（可多个，可选）");
+    await user.type(aliasInput, "legacy-alias{Enter}");
+
+    await user.click(within(dialog).getByRole("button", { name: "新建" }));
+    await waitFor(() => expect(createBody?.aliases).toEqual(["legacy-alias"]));
+  });
+});
+
+// 手机（窄屏 < 48em）：一屏能看几个仓库直接决定"查依赖"的效率。
+// 这里锁住两件事：① 行内不再铺开四个文字按钮（行高降下来）；② 管理操作仍可达（溢出菜单）。
+describe("窄屏仓库列表（手机）", () => {
+  /** 强制窄屏：让 max-width 查询命中。jsdom 默认一律不命中（等价桌面），既有用例不受影响。 */
+  function stubNarrowViewport(): void {
+    vi.spyOn(window, "matchMedia").mockImplementation(
+      (query: string) =>
+        ({
+          matches: /max-width: 48em/.test(query),
+          media: query,
+          onchange: null,
+          addListener: () => {},
+          removeListener: () => {},
+          addEventListener: () => {},
+          removeEventListener: () => {},
+          dispatchEvent: () => false,
+        }) as MediaQueryList,
+    );
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("主标识整块是进入仓库的链接，桌面那排文字操作按钮不再渲染", async () => {
+    stubNarrowViewport();
+    renderWithProviders(<RepositoriesPage />, { route: "/repositories", authenticated: true });
+
+    const name = await screen.findByText("maven-releases");
+    // 整块可点：名称是 <a> 内的文本，href 指向仓库详情（保留中键/复制链接能力）。
+    expect(name.closest("a")?.getAttribute("href")).toBe("/repositories/maven-releases");
+    // 密度守卫：窄屏不渲染桌面那套「图标 + 文字」操作按钮。
+    expect(screen.queryByRole("button", { name: "浏览" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "清理" })).toBeNull();
+  });
+
+  it("管理操作收进溢出菜单，删除仍走二次确认", async () => {
+    stubNarrowViewport();
+    const user = userEvent.setup();
+    renderWithProviders(<RepositoriesPage />, { route: "/repositories", authenticated: true });
+    const row = (await screen.findByText("raw-hosted")).closest("tr")!;
+
+    await user.click(within(row).getByLabelText("更多操作"));
+    await user.click(await screen.findByRole("menuitem", { name: "删除" }));
+    await user.click(
+      within(await screen.findByRole("dialog")).getByRole("button", { name: "删除" }),
+    );
+
+    expect(await screen.findByText("删除成功")).toBeTruthy();
+    await waitFor(() => expect(screen.queryByText("raw-hosted")).toBeNull());
+  });
+
+  it("maven hosted 仓库的清理入口在菜单内可用", async () => {
+    stubNarrowViewport();
+    const user = userEvent.setup();
+    renderWithProviders(<RepositoriesPage />, { route: "/repositories", authenticated: true });
+    const row = (await screen.findByText("maven-releases")).closest("tr")!;
+
+    await user.click(within(row).getByLabelText("更多操作"));
+    await user.click(await screen.findByRole("menuitem", { name: "清理" }));
+    await user.click(
+      within(await screen.findByRole("dialog")).getByRole("button", { name: "执行清理" }),
+    );
+
+    expect(await screen.findByText("已清理 0 个空制品目录")).toBeTruthy();
+  });
+
+  it("置顶仍是一键图标操作，置顶后行排到最前", async () => {
+    stubNarrowViewport();
+    const user = userEvent.setup();
+    renderWithProviders(<RepositoriesPage />, { route: "/repositories", authenticated: true });
+    await screen.findByText("maven-releases");
+
+    const firstRow = () => screen.getAllByRole("row")[1];
+    await user.click(within(screen.getByText("npm-proxy").closest("tr")!).getByLabelText("置顶"));
+
+    await waitFor(() => expect(within(firstRow()).getByText("npm-proxy")).toBeTruthy());
+    expect(within(firstRow()).getByLabelText("取消置顶")).toBeTruthy();
+  });
+
+  it("新建仓库在窄屏收成图标按钮，仍可打开创建弹窗", async () => {
+    stubNarrowViewport();
+    const user = userEvent.setup();
+    renderWithProviders(<RepositoriesPage />, { route: "/repositories", authenticated: true });
+    await screen.findByText("raw-hosted");
+
+    // 通栏按钮换成与筛选同行的图标按钮：可访问名仍为「新建仓库」。
+    await user.click(screen.getByRole("button", { name: "新建仓库" }));
+    expect(await screen.findByRole("dialog")).toBeTruthy();
+  });
 });

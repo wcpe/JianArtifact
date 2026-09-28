@@ -833,6 +833,38 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+  /api/v1/repositories/{name}/rename:
+    post:
+      operationId: renameRepository
+      summary: 重命名仓库（仅管理员）
+      description: |
+        仅管理员可操作。新名称需非空且未被任何仓库主名或别名占用（别名与主名共享命名空间、全局唯一）。
+        重命名后旧名自动登记为别名，旧链接与既有客户端仍可解析到该仓库；历史审计/下载计量保留旧名不回填。
+      parameters:
+        - $ref: "#/components/parameters/RepoNameParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RenameRepositoryRequest"
+      responses:
+        "200":
+          description: 已重命名，返回更新后的仓库
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Repository"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
   /api/v1/repositories/{name}/recheck-connection:
     post:
       operationId: recheckRepositoryConnection
@@ -3706,6 +3738,11 @@ components:
           items:
             type: string
           description: group 仓库的成员仓库名（有序，仅 type=group）
+        aliases:
+          type: array
+          items:
+            type: string
+          description: 仓库别名列表（可多个；别名与主名共享命名空间、全局唯一，重命名后旧名自动转别名）
         createdAt:
           type: string
         artifactCount:
@@ -3760,6 +3797,11 @@ components:
           items:
             type: string
           description: group 仓库的成员仓库名（有序，type=group 时必填）
+        aliases:
+          type: array
+          items:
+            type: string
+          description: 仓库别名（可选；与主名共享命名空间、全局唯一，不得等于主名或与他仓主名/别名冲突）
     UpdateRepositoryRequest:
       type: object
       properties:
@@ -3784,6 +3826,19 @@ components:
           items:
             type: string
           description: 更新 group 成员仓库名（仅 type=group）
+        aliases:
+          type: array
+          items:
+            type: string
+          description: 覆盖式更新仓库别名集合（传空数组表示清空；与主名共享命名空间、全局唯一）
+    RenameRepositoryRequest:
+      type: object
+      required: [newName]
+      properties:
+        newName:
+          type: string
+          minLength: 1
+          description: 仓库新名称（非空；不得与任何主名/别名冲突。重命名后旧名自动转为别名，仍可解析到该仓库）
     SetRepositoryOnlineRequest:
       type: object
       properties:

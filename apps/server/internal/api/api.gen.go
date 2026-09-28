@@ -2080,6 +2080,9 @@ type CreateMigrationRequest struct {
 
 // CreateRepositoryRequest defines model for CreateRepositoryRequest.
 type CreateRepositoryRequest struct {
+	// Aliases 仓库别名（可选；与主名共享命名空间、全局唯一，不得等于主名或与他仓主名/别名冲突）
+	Aliases *[]string `json:"aliases,omitempty"`
+
 	// CredentialRef proxy 上游凭据的受限逻辑名称；运行时仅从 JIAN_UPSTREAM_CREDENTIAL_<名称> 读取（仅 type=proxy，非密钥明文）
 	CredentialRef *string `json:"credentialRef,omitempty"`
 
@@ -2598,8 +2601,17 @@ type RemoteNexusSourceConfig struct {
 	union json.RawMessage
 }
 
+// RenameRepositoryRequest defines model for RenameRepositoryRequest.
+type RenameRepositoryRequest struct {
+	// NewName 仓库新名称（非空；不得与任何主名/别名冲突。重命名后旧名自动转为别名，仍可解析到该仓库）
+	NewName string `json:"newName"`
+}
+
 // Repository defines model for Repository.
 type Repository struct {
+	// Aliases 仓库别名列表（可多个；别名与主名共享命名空间、全局唯一，重命名后旧名自动转别名）
+	Aliases *[]string `json:"aliases,omitempty"`
+
 	// ArtifactCount 仓库内制品数量（只读统计字段）
 	ArtifactCount    *int              `json:"artifactCount,omitempty"`
 	ConnectionStatus *ConnectionStatus `json:"connectionStatus,omitempty"`
@@ -2694,6 +2706,9 @@ type TokenList struct {
 
 // UpdateRepositoryRequest defines model for UpdateRepositoryRequest.
 type UpdateRepositoryRequest struct {
+	// Aliases 覆盖式更新仓库别名集合（传空数组表示清空；与主名共享命名空间、全局唯一）
+	Aliases *[]string `json:"aliases,omitempty"`
+
 	// CredentialRef 更新 proxy 上游凭据的受限逻辑名称；运行时仅从 JIAN_UPSTREAM_CREDENTIAL_<名称> 读取（仅 type=proxy，非密钥明文）
 	CredentialRef *string `json:"credentialRef,omitempty"`
 
@@ -3289,6 +3304,9 @@ type ApplyRepositoryAssetOperationJSONRequestBody = AssetOperationRequest
 // SetRepositoryOnlineJSONRequestBody defines body for SetRepositoryOnline for application/json ContentType.
 type SetRepositoryOnlineJSONRequestBody = SetRepositoryOnlineRequest
 
+// RenameRepositoryJSONRequestBody defines body for RenameRepository for application/json ContentType.
+type RenameRepositoryJSONRequestBody = RenameRepositoryRequest
+
 // CreateTokenJSONRequestBody defines body for CreateToken for application/json ContentType.
 type CreateTokenJSONRequestBody = CreateTokenRequest
 
@@ -3760,6 +3778,9 @@ type ServerInterface interface {
 	// RecheckRepositoryConnection 手动重测仓库上游连接（仅管理员）
 	// (POST /api/v1/repositories/{name}/recheck-connection)
 	RecheckRepositoryConnection(c *gin.Context, name RepoNameParam)
+	// RenameRepository 重命名仓库（仅管理员）
+	// (POST /api/v1/repositories/{name}/rename)
+	RenameRepository(c *gin.Context, name RepoNameParam)
 	// GetRepositoryUsage 仓库客户端使用片段（据 format/type 返回接入命令）
 	// (GET /api/v1/repositories/{name}/usage)
 	GetRepositoryUsage(c *gin.Context, name RepoNameParam)
@@ -5589,6 +5610,31 @@ func (siw *ServerInterfaceWrapper) RecheckRepositoryConnection(c *gin.Context) {
 	siw.Handler.RecheckRepositoryConnection(c, name)
 }
 
+// RenameRepository operation middleware
+func (siw *ServerInterfaceWrapper) RenameRepository(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "name" -------------
+	var name RepoNameParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "name", c.Param("name"), &name, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter name: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.RenameRepository(c, name)
+}
+
 // GetRepositoryUsage operation middleware
 func (siw *ServerInterfaceWrapper) GetRepositoryUsage(c *gin.Context) {
 
@@ -5957,6 +6003,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/api/v1/repositories/:name/acl", wrapper.GetRepositoryAcl)
 	router.PUT(options.BaseURL+"/api/v1/repositories/:name/acl", wrapper.SetRepositoryAcl)
 	router.PUT(options.BaseURL+"/api/v1/repositories/:name/online", wrapper.SetRepositoryOnline)
+	router.POST(options.BaseURL+"/api/v1/repositories/:name/rename", wrapper.RenameRepository)
 	router.POST(options.BaseURL+"/api/v1/repositories/:name/recheck-connection", wrapper.RecheckRepositoryConnection)
 	router.GET(options.BaseURL+"/api/v1/repositories/:name/assets", wrapper.ListRepositoryAssets)
 	router.POST(options.BaseURL+"/api/v1/repositories/:name/assets/batch-delete", wrapper.BatchDeleteRepositoryAssets)

@@ -111,6 +111,16 @@ func (s *RepositoryService) ListWithStats(limit, offset int, sortBy ...string) (
 	for id, rs := range rawStats {
 		stats[id] = RepoStats{Count: rs.Count, TotalSize: rs.TotalSize}
 	}
+	// 别名一次 IN 查询批量填充，避免逐仓 N+1。
+	aliasMap, err := s.repos.ListAliasesByRepos(ids)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	for i := range items {
+		if aliases := aliasMap[items[i].ID]; len(aliases) > 0 {
+			items[i].Aliases = aliases
+		}
+	}
 	return items, stats, total, nil
 }
 
@@ -123,10 +133,68 @@ func (s *RepositoryService) Stats(repoID int64) (RepoStats, error) {
 	return RepoStats{Count: count, TotalSize: totalSize}, nil
 }
 
-// Get 按名取仓库。
+// Get 按名取仓库（名字可为别名，返回的是主名仓库并带出别名列表）。
 func (s *RepositoryService) Get(name string) (*repository.Repository, error) {
 	r, err := s.repos.GetByName(name)
-	return r, mapNotFound(err)
+	if err != nil {
+		return nil, mapNotFound(err)
+	}
+	if err := s.fillAliases(r); err != nil {
+		return nil, err
+	}
+	return r, nil
+}
+
+// fillAliases 读取仓库别名并挂到模型上（供 API 响应展示）。
+func (s *RepositoryService) fillAliases(repo *repository.Repository) error {
+	aliases, err := s.repos.ListAliases(repo.ID)
+	if err != nil {
+		return err
+	}
+	repo.Aliases = aliases
+	return nil
+}
+
+// validateAliases 清洗并校验别名集合：去两端空白、去重、拒绝空别名与「等于自身主名」，
+// 并拒绝与任何仓库主名或其他仓库别名冲突（别名与主名共享同一命名空间、全局唯一）。
+// own 为当前仓库已有的别名集合（创建时为空），用于覆盖式更新时放行「自身既有别名」。
+// 违规返回 ErrValidation；名称被占用返回 ErrConflict。返回去重后的别名（保持首次出现顺序）。
+func (s *RepositoryService) validateAliases(ownName string, aliases []string, own map[string]bool) ([]string, error) {
+	cleaned := make([]string, 0, len(aliases))
+	seen := make(map[string]bool, len(aliases))
+	for _, raw := range aliases {
+		alias := strings.TrimSpace(raw)
+		if alias == "" {
+			return nil, fmt.Errorf("%w: 别名不能为空", ErrValidation)
+		}
+		if alias == ownName {
+			return nil, fmt.Errorf("%w: 别名不能与仓库主名相同", ErrValidation)
+		}
+		if seen[alias] {
+			continue
+		}
+		seen[alias] = true
+		if !own[alias] {
+			taken, err := s.repos.NameTaken(alias)
+			if err != nil {
+				return nil, err
+			}
+			if taken {
+				return nil, fmt.Errorf("%w: 名称 %q 已被占用", ErrConflict, alias)
+			}
+		}
+		cleaned = append(cleaned, alias)
+	}
+	return cleaned, nil
+}
+
+// aliasSet 把别名切片转为集合，供校验时放行「自身既有别名」。
+func aliasSet(aliases []string) map[string]bool {
+	out := make(map[string]bool, len(aliases))
+	for _, a := range aliases {
+		out[a] = true
+	}
+	return out
 }
 
 // ListAssets 返回仓库内制品的分页列表与总数；prefix 非空时按路径前缀过滤。
@@ -185,8 +253,9 @@ func (s *RepositoryService) Usage(name, baseURL, lang string) (*repository.Repos
 // proxy 必填合法 remoteUrl，可选 credentialRef（环境变量引用名）；
 // group 必填 members（均存在且同 format、禁止自引用）。
 // description 为仓库描述（可为空）。
-// 校验不过返回 ErrValidation；仓库名重复返回 ErrConflict。
-func (s *RepositoryService) Create(name, format, typ, visibility, description string, cfg repository.RepositoryConfig) (*repository.Repository, error) {
+// aliases 为可选的仓库别名（与主名共享命名空间、全局唯一）。
+// 校验不过返回 ErrValidation；仓库名或别名被占用返回 ErrConflict。
+func (s *RepositoryService) Create(name, format, typ, visibility, description string, cfg repository.RepositoryConfig, aliases ...string) (*repository.Repository, error) {
 	if err := requireBusinessWrite(s.writeGate); err != nil {
 		return nil, err
 	}
@@ -210,7 +279,13 @@ func (s *RepositoryService) Create(name, format, typ, visibility, description st
 	if err != nil {
 		return nil, err
 	}
-	if _, err := s.repos.Create(name, format, typ, visibility, configJSON); err != nil {
+	// 别名在插入前校验，避免仓库已建而别名非法造成半成品。
+	cleanedAliases, err := s.validateAliases(name, aliases, nil)
+	if err != nil {
+		return nil, err
+	}
+	repoID, err := s.repos.Create(name, format, typ, visibility, configJSON)
+	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, ErrConflict
 		}
@@ -221,8 +296,19 @@ func (s *RepositoryService) Create(name, format, typ, visibility, description st
 			return nil, err
 		}
 	}
+	if len(cleanedAliases) > 0 {
+		if err := s.repos.SetAliases(repoID, cleanedAliases); err != nil {
+			if isUniqueViolation(err) {
+				return nil, ErrConflict
+			}
+			return nil, err
+		}
+	}
 	repo, err := s.repos.GetByName(name)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.fillAliases(repo); err != nil {
 		return nil, err
 	}
 	s.recordChange(EntityRepository, RepoKey(name), OpPut, RepoChangeData{
@@ -232,10 +318,11 @@ func (s *RepositoryService) Create(name, format, typ, visibility, description st
 	return repo, nil
 }
 
-// Update 更新仓库可见性、描述与/或结构化配置。visibility 为空表示不改；
+// Update 更新仓库可见性、描述、结构化配置与/或别名。visibility 为空表示不改；
 // description 为 nil 表示不改（指向空串表示清空）；cfg 非 nil 时
-// 按仓库当前 format/type 重新校验并覆盖写 config。仓库不存在返回 ErrNotFound。
-func (s *RepositoryService) Update(name, visibility string, description *string, cfg *repository.RepositoryConfig) (*repository.Repository, error) {
+// 按仓库当前 format/type 重新校验并覆盖写 config；aliases 非 nil 时覆盖式替换别名集合。
+// 仓库不存在返回 ErrNotFound；别名非法返回 ErrValidation、被占用返回 ErrConflict。
+func (s *RepositoryService) Update(name, visibility string, description *string, cfg *repository.RepositoryConfig, aliases *[]string) (*repository.Repository, error) {
 	if err := requireBusinessWrite(s.writeGate); err != nil {
 		return nil, err
 	}
@@ -244,36 +331,105 @@ func (s *RepositoryService) Update(name, visibility string, description *string,
 		return nil, mapNotFound(err)
 	}
 	if cfg != nil {
-		if err := s.validateConfig(name, repo.Format, repo.Type, *cfg); err != nil {
+		if err := s.validateConfig(repo.Name, repo.Format, repo.Type, *cfg); err != nil {
 			return nil, err
 		}
 		configJSON, err := repository.EncodeRepositoryConfig(*cfg)
 		if err != nil {
 			return nil, err
 		}
-		if err := s.repos.UpdateConfig(name, configJSON); err != nil {
+		if err := s.repos.UpdateConfig(repo.Name, configJSON); err != nil {
 			return nil, mapNotFound(err)
 		}
 	}
 	if description != nil {
-		if err := s.repos.UpdateDescription(name, *description); err != nil {
+		if err := s.repos.UpdateDescription(repo.Name, *description); err != nil {
 			return nil, mapNotFound(err)
 		}
 	}
 	if visibility != "" {
-		if err := s.repos.UpdateVisibility(name, visibility); err != nil {
+		if err := s.repos.UpdateVisibility(repo.Name, visibility); err != nil {
 			return nil, mapNotFound(err)
 		}
 	}
-	updated, err := s.repos.GetByName(name)
+	if aliases != nil {
+		own, err := s.repos.ListAliases(repo.ID)
+		if err != nil {
+			return nil, err
+		}
+		cleaned, err := s.validateAliases(repo.Name, *aliases, aliasSet(own))
+		if err != nil {
+			return nil, err
+		}
+		if err := s.repos.SetAliases(repo.ID, cleaned); err != nil {
+			if isUniqueViolation(err) {
+				return nil, ErrConflict
+			}
+			return nil, mapNotFound(err)
+		}
+	}
+	updated, err := s.repos.GetByName(repo.Name)
 	if err != nil {
 		return nil, mapNotFound(err)
 	}
-	s.recordChange(EntityRepository, RepoKey(name), OpPut, RepoChangeData{
-		Name: name, Format: updated.Format, Type: updated.Type,
+	if err := s.fillAliases(updated); err != nil {
+		return nil, err
+	}
+	s.recordChange(EntityRepository, RepoKey(repo.Name), OpPut, RepoChangeData{
+		Name: repo.Name, Format: updated.Format, Type: updated.Type,
 		Visibility: updated.Visibility, Description: updated.Description, Config: updated.Config,
 	})
 	return updated, nil
+}
+
+// Rename 重命名仓库（name -> newName）。newName 非空且未被任何主名/别名占用，
+// 否则返回 ErrValidation / ErrConflict。重命名后自动把旧名登记为别名，
+// 使旧名仍能经 GetByName 解析到同一仓库（别名与主名共享命名空间）。
+//
+// 变更记录说明：仓储层 Rename 在同一事务内更新主名并把旧名写入别名表，故旧名与主名
+// 都指向同一仓库，无需为旧名单独发墓碑。复制通道以主名编址（RepoKey(name)），
+// 重命名会使自然键从 repo:<旧名> 变为 repo:<新名>：此处按**新名**记录一次 put 变更
+// （新键=新名）；旧名作为别名继续可解析，历史审计/计量保留旧名不回填（见 D-2a）。
+func (s *RepositoryService) Rename(name, newName string) (*repository.Repository, error) {
+	if err := requireBusinessWrite(s.writeGate); err != nil {
+		return nil, err
+	}
+	newName = strings.TrimSpace(newName)
+	if newName == "" {
+		return nil, fmt.Errorf("%w: 新名称不能为空", ErrValidation)
+	}
+	repo, err := s.repos.GetByName(name)
+	if err != nil {
+		return nil, mapNotFound(err)
+	}
+	if newName == repo.Name {
+		return nil, fmt.Errorf("%w: 新名称与原名称相同", ErrValidation)
+	}
+	taken, err := s.repos.NameTaken(newName)
+	if err != nil {
+		return nil, err
+	}
+	if taken {
+		return nil, fmt.Errorf("%w: 名称 %q 已被占用", ErrConflict, newName)
+	}
+	if err := s.repos.Rename(repo.Name, newName); err != nil {
+		if isUniqueViolation(err) {
+			return nil, ErrConflict
+		}
+		return nil, mapNotFound(err)
+	}
+	renamed, err := s.repos.GetByName(newName)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.fillAliases(renamed); err != nil {
+		return nil, err
+	}
+	s.recordChange(EntityRepository, RepoKey(renamed.Name), OpPut, RepoChangeData{
+		Name: renamed.Name, Format: renamed.Format, Type: renamed.Type,
+		Visibility: renamed.Visibility, Description: renamed.Description, Config: renamed.Config,
+	})
+	return renamed, nil
 }
 
 // SetOnline 设置仓库 online/offline 状态（FR-113）。
@@ -283,7 +439,12 @@ func (s *RepositoryService) SetOnline(name string, online bool) error {
 	if err := requireBusinessWrite(s.writeGate); err != nil {
 		return err
 	}
-	if err := s.repos.SetOnline(name, online); err != nil {
+	// 名字可为别名：解析到主名仓库后按主名落库（别名与主名等价，D-2b）。
+	repo, err := s.repos.GetByName(name)
+	if err != nil {
+		return mapNotFound(err)
+	}
+	if err := s.repos.SetOnline(repo.Name, online); err != nil {
 		return mapNotFound(err)
 	}
 	return nil
@@ -506,15 +667,15 @@ func (s *RepositoryService) Delete(name string) error {
 			if err := repository.PutRepositoryDeleteJournal(tx, operationID, snapshot); err != nil {
 				return err
 			}
-			return s.repos.DeleteTx(tx, name)
+			return s.repos.DeleteTx(tx, repo.Name)
 		})
 		if err != nil {
 			return err
 		}
-	} else if err := s.repos.Delete(name); err != nil {
+	} else if err := s.repos.Delete(repo.Name); err != nil {
 		return mapNotFound(err)
 	}
-	s.recordChange(EntityRepository, RepoKey(name), OpDelete, TombstoneData{Deleted: true})
+	s.recordChange(EntityRepository, RepoKey(repo.Name), OpDelete, TombstoneData{Deleted: true})
 	return nil
 }
 

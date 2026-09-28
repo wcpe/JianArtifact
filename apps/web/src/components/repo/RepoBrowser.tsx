@@ -227,7 +227,8 @@ export function RepoBrowser({
       publicMode
         ? Promise.resolve(null as Repository | null)
         : listRepositories({ page_size: 100 }).then(
-            (list) => list.items.find((r) => r.name === repoName) ?? null,
+            (list) =>
+              list.items.find((r) => r.name === repoName || r.aliases?.includes(repoName)) ?? null,
           ),
     [repoName, publicMode],
     // 公开态不发请求，**不能**与管理态共用缓存键：useAsync 的同键在途去重会把

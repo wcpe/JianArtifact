@@ -325,6 +325,10 @@ func toAPIRepository(r *repository.Repository, stats *domain.RepoStats) Reposito
 		desc := r.Description
 		out.Description = &desc
 	}
+	if len(r.Aliases) > 0 {
+		aliases := r.Aliases
+		out.Aliases = &aliases
+	}
 	if cfg, err := r.DecodeConfig(); err == nil {
 		immutable := cfg.ImmutableRelease
 		out.ImmutableRelease = &immutable

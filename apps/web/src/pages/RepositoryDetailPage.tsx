@@ -4,6 +4,7 @@ import {
   Button,
   Card,
   Group,
+  Modal,
   MultiSelect,
   Select,
   Skeleton,
@@ -11,11 +12,21 @@ import {
   Switch,
   Table,
   Tabs,
+  TagsInput,
   Text,
   Textarea,
+  TextInput,
   Title,
 } from "@mantine/core";
-import { IconDeviceFloppy, IconPlus, IconRefresh, IconTrash, IconX } from "@tabler/icons-react";
+import {
+  IconDeviceFloppy,
+  IconPencil,
+  IconPlus,
+  IconRefresh,
+  IconTag,
+  IconTrash,
+  IconX,
+} from "@tabler/icons-react";
 import { useMediaQuery } from "@mantine/hooks";
 import { EmptyState } from "@jianartifact/ui";
 import { useEffect, useMemo, useState } from "react";
@@ -32,6 +43,7 @@ import {
   listRepositories,
   listUsers,
   recheckConnection,
+  renameRepository,
   setAcl,
   setRepositoryOnline,
   updateRepository,
@@ -44,6 +56,7 @@ import type {
   Repository,
   User,
 } from "../api/types";
+import { ApiError } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { useAsync } from "../hooks/useAsync";
 import { CONN_COLOR, CONN_LABEL_KEY } from "../lib/connectionStatus";
@@ -72,7 +85,7 @@ export function RepositoryDetailPage() {
   const repoState = useAsync(
     () =>
       listRepositories({ page_size: 100 }).then(
-        (list) => list.items.find((r) => r.name === name) ?? null,
+        (list) => list.items.find((r) => r.name === name || r.aliases?.includes(name)) ?? null,
       ),
     [name],
     { cacheKey: `repo:detail:${name}` },
@@ -269,6 +282,22 @@ function DetailStat({ label, value, color }: { label: string; value: string; col
   );
 }
 
+/**
+ * 别名前端校验：返回错误提示的 i18n 键（无错误返回 null）。
+ * 规则：非空、不得等于仓库主名、不得重复；后端仍会做全局唯一性兜底。
+ */
+function aliasValidationKey(list: string[], repoName: string): string | null {
+  const seen = new Set<string>();
+  for (const raw of list) {
+    const alias = raw.trim();
+    if (!alias) return "repoDetail.configAliasInvalid";
+    if (alias === repoName) return "repoDetail.configAliasSelf";
+    if (seen.has(alias)) return "repoDetail.configAliasTaken";
+    seen.add(alias);
+  }
+  return null;
+}
+
 /** 配置 Tab：展示仓库基本信息，可修改 visibility 与描述并保存。 */
 function ConfigTab({
   repoName,
@@ -280,15 +309,23 @@ function ConfigTab({
   onUpdated: () => void;
 }) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const [visibility, setVisibility] = useState<RepoVisibility>("private");
   const [description, setDescription] = useState("");
   const [members, setMembers] = useState<string[]>([]);
+  // 仓库别名：与主名共享命名空间、全局唯一；随「保存配置」一并覆盖式提交。
+  const [aliases, setAliases] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [online, setOnline] = useState(true);
   const [togglingOnline, setTogglingOnline] = useState(false);
   const [rechecking, setRechecking] = useState(false);
   // FR-114：连接状态（本地 state 承载重测后的即时更新，避免等待整页刷新）
   const [connStatus, setConnStatus] = useState<ConnectionStatusValue | null>(null);
+  // 重命名弹窗：仅管理员；成功后旧名自动转为别名，需导航到新名详情。
+  const [renameOpened, setRenameOpened] = useState(false);
+  const [renameValue, setRenameValue] = useState("");
+  const [renaming, setRenaming] = useState(false);
+  const [renameError, setRenameError] = useState<string | null>(null);
   // group 成员候选：当前列表中同格式、非本仓的仓库名。
   const reposState = useAsync(() => listRepositories({ page_size: 100 }), [], {
     cacheKey: "repositories:options",
@@ -297,16 +334,20 @@ function ConfigTab({
     .filter((r) => r.format === repo?.format && r.name !== repo?.name)
     .map((r) => r.name);
 
-  // 仓库信息就绪后同步初始 visibility/描述/members/online/连接状态
+  // 仓库信息就绪后同步初始 visibility/描述/members/aliases/online/连接状态
   useEffect(() => {
     if (repo) {
       setVisibility(repo.visibility);
       setDescription(repo.description ?? "");
       setMembers(repo.members ?? []);
+      setAliases(repo.aliases ?? []);
       setOnline(repo.online ?? true);
       setConnStatus(repo.connectionStatus?.status ?? null);
     }
   }, [repo]);
+
+  // 别名前端校验：返回错误提示的 i18n 键（无错误返回 null）。后端仍会兜底校验。
+  const aliasErrorKey = aliasValidationKey(aliases, repo?.name ?? repoName);
 
   // FR-113：online/offline 开关（仅管理员；本地运维状态，不参与复制）。
   const handleToggleOnline = (next: boolean) => {
@@ -337,11 +378,23 @@ function ConfigTab({
   };
 
   const handleSave = () => {
+    // 别名非法时不提交（与后端兜底一致，但先给出可读提示）。
+    if (aliasErrorKey) {
+      notifyError(t(aliasErrorKey));
+      return;
+    }
     setSaving(true);
-    const patch: { visibility: RepoVisibility; description: string; members?: string[] } = {
+    const normalizedAliases = aliases.map((a) => a.trim()).filter(Boolean);
+    const patch: {
+      visibility: RepoVisibility;
+      description: string;
+      members?: string[];
+      aliases: string[];
+    } = {
       visibility,
       description,
       ...(repo?.type === "group" ? { members } : {}),
+      aliases: normalizedAliases,
     };
     updateRepository(repoName, patch)
       .then(() => {
@@ -352,6 +405,44 @@ function ConfigTab({
       .finally(() => setSaving(false));
   };
 
+  const openRename = () => {
+    setRenameValue(repo?.name ?? repoName);
+    setRenameError(null);
+    setRenameOpened(true);
+  };
+
+  // 重命名提交：非空、不得与当前名相同；成功后旧名转为别名，导航到新名详情
+  // （路由参数 name 已失效，不导航会 404 / 停留在旧地址）。
+  const handleRename = () => {
+    const newName = renameValue.trim();
+    if (!newName) {
+      setRenameError(t("repoDetail.configRenameEmpty"));
+      return;
+    }
+    if (newName === (repo?.name ?? repoName)) {
+      setRenameError(t("repoDetail.configRenameSame"));
+      return;
+    }
+    setRenaming(true);
+    setRenameError(null);
+    renameRepository(repoName, newName)
+      .then(() => {
+        setRenameOpened(false);
+        notifySuccess(t("repoDetail.configRenameOk"));
+        onUpdated();
+        navigate(`/repositories/${encodeURIComponent(newName)}`);
+      })
+      .catch((err: unknown) => {
+        // 409：名称或别名被占用（与后端 conflict 语义一致）。
+        if (err instanceof ApiError && (err.status === 409 || err.code === "conflict")) {
+          setRenameError(t("repoDetail.configRenameTaken"));
+          return;
+        }
+        notifyError(err);
+      })
+      .finally(() => setRenaming(false));
+  };
+
   if (!repo) {
     return <Text c="dimmed">{t("common.loading")}</Text>;
   }
@@ -359,7 +450,18 @@ function ConfigTab({
   return (
     <Card withBorder padding={density.cardPadding} radius="md" maw={520}>
       <Stack gap="md">
-        <Title order={5}>{t("repoDetail.configTitle")}</Title>
+        {/* 标题行右侧放「重命名」入口：它与配置区其它修改同级，属于管理操作。 */}
+        <Group justify="space-between" align="center">
+          <Title order={5}>{t("repoDetail.configTitle")}</Title>
+          <Button
+            size="compact-xs"
+            variant="light"
+            leftSection={<IconPencil size={14} />}
+            onClick={openRename}
+          >
+            {t("repoDetail.configRename")}
+          </Button>
+        </Group>
 
         {/* 基本信息（只读展示） */}
         <Stack gap="xs">
@@ -438,6 +540,25 @@ function ConfigTab({
           onChange={(e) => setDescription(e.currentTarget.value)}
         />
 
+        {/* 仓库别名：与主名共享命名空间、全局唯一；可增删多个，随保存一并提交 */}
+        <Stack gap={4}>
+          <TagsInput
+            label={t("repoDetail.configAliases")}
+            description={t("repoDetail.configAliasesHint")}
+            placeholder={t("repoDetail.configAliasAdd")}
+            leftSection={<IconTag size={14} />}
+            value={aliases}
+            onChange={setAliases}
+            error={aliasErrorKey ? t(aliasErrorKey) : undefined}
+            clearable
+          />
+          {aliases.length === 0 ? (
+            <Text size="xs" c="dimmed">
+              {t("repoDetail.configAliasesEmpty")}
+            </Text>
+          ) : null}
+        </Stack>
+
         {/* group 仓库：成员仓库（members）编辑 */}
         {repo.type === "group" && (
           <MultiSelect
@@ -462,6 +583,37 @@ function ConfigTab({
           </Button>
         </Group>
       </Stack>
+
+      {/* 重命名弹窗：成功后旧名自动转为别名，旧链接仍可访问。 */}
+      <Modal
+        opened={renameOpened}
+        onClose={() => setRenameOpened(false)}
+        title={t("repoDetail.configRenameTitle")}
+      >
+        <Stack gap="sm">
+          <TextInput
+            label={t("repoDetail.configRenameNewName")}
+            description={t("repoDetail.configRenameHint")}
+            value={renameValue}
+            error={renameError}
+            onChange={(e) => {
+              setRenameValue(e.currentTarget.value);
+              if (renameError) setRenameError(null);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") handleRename();
+            }}
+          />
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => setRenameOpened(false)}>
+              {t("common.cancel")}
+            </Button>
+            <Button loading={renaming} onClick={handleRename}>
+              {t("repoDetail.configRenameConfirm")}
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
     </Card>
   );
 }

@@ -196,6 +196,9 @@ JianArtifact 是一个**自托管、单二进制交付的多格式制品仓库**
 | FR-143 | **仪表盘「下载分析」· 累计趋势**：下载量累计曲线，跟随仪表盘既有时间范围筛选联动；数据与 FR-142 同源 | P2 | 计划 |
 | FR-144 | **仪表盘「下载分析」· IP / 客户端聚合**：按来源 IP（Top 10，明文仅管理员，与审计既有口径一致）与客户端类型（UA 归类：浏览器 / CI（maven·gradle·npm）/ curl / 其他，不展示原始 UA 串）聚合展示 | P2 | 计划 |
 | FR-145 | **搜索结果直达仓库命中位置**：全局搜索点击结果进入仓库详情时，经 `?highlight=<path>` 定位命中制品（展开目录路径 + 高亮/滚动到目标）；刷新与分享链接仍定位，路径失效时优雅降级（仅打开仓库不报错）；设计见 `specs/search-highlight.md` | P2 | 计划 |
+| FR-146 | **仓库别名与重命名**：仓库可配置多个别名，别名与主名**共享命名空间、全局唯一**，可等价访问（协议路由与管理端 API 全域经单点按名解析到主名仓库）；`POST /api/v1/repositories/{name}/rename` 重命名后**旧名自动转为别名**，旧链接与既有客户端坐标仍可解析；下载统计按「主名 ∪ 别名」聚合，`audit_log` / `asset_download_minutes` 保留旧名不回填。设计取舍见 [`adr/0028`](adr/0028-repository-alias-and-rename.md) | P2 | 开发完成，待用户验收 |
+| FR-147 | **主机监控网络总量与网卡维度**：网络指标在既有速率之外新增「总发送 / 总接收」（自网卡启动以来的累计字节）与**逐网卡维度**。平台层由「聚合全网卡」改为逐网卡采集（Linux `/proc/net/dev`、Windows `GetIfTable2Ex`，均跳过回环），解析 / 过滤 / 求和下沉为无平台标签纯函数；服务层按**同名网卡**与上一份样本配对算逐网卡速率（网卡新增或计数回退时留空、不伪造 0）。`host_metric_minute` 增聚合累计列（迁移 `0042`），新增逐网卡分钟表 `host_network_interface_minute`（主键 `(bucket_start, interface)`）；契约 `HostMetricPoint` 增 `networkReceiveBytesTotal` / `networkTransmitBytesTotal`、新增 `HostNetworkInterface`，响应增 `networkInterfaces`，`/api/v1/observability/host` 增可选 `interface` 参数（省略 = 全网卡聚合）；前端网络卡显示「总发送 / 总接收」+ 网卡选择器（首项「全部网卡」，选定后速率图与总量都按该网卡） | P2 | 开发完成，待用户验收 |
+| FR-148 | **置顶仓库服务端持久化与公开页置顶**：置顶从纯前端 `localStorage`（换设备 / 清缓存即丢）改为服务端存储，迁移 `0043` 新增 `pinned_repository` 表（`user_id IS NULL` = 全局置顶，partial unique index 兜底；按 repositoryId 关联使仓库重命名不影响置顶）；新增 `GET/PUT /api/v1/me/pinned-repositories`（用户级置顶，匿名 `GET` 回退全局、匿名 `PUT` 401）与 `GET/PUT /api/v1/settings/pinned-repositories`（仅管理员维护全局置顶）；`/api/v1/public/repositories` 响应增 `pinnedNames`（全局置顶），使**公开页也按置顶排序并显示图钉**。前端 `usePinnedRepos` 改读服务端 + 乐观更新失败回滚，`localStorage` 仅作只读降级；既有浏览器内置顶无法自动导入，需重新置顶 | P2 | 开发完成，待用户验收 |
 
 ### 4.5 M3 · 企业认证、存储与运维（P2，版本号待规划）
 

@@ -35,6 +35,45 @@ function renderBrowser(authenticated: boolean, user?: User) {
 }
 
 describe("FR-105 右键资产操作", () => {
+  it("仓库信息查询会跨页拼接而不是只读取固定一页", async () => {
+    const requests: URL[] = [];
+    server.use(
+      http.get("*/api/v1/repositories", ({ request }) => {
+        const url = new URL(request.url);
+        requests.push(url);
+        const page = Number(url.searchParams.get("page") ?? "1");
+        return HttpResponse.json({
+          items: [
+            {
+              id: page,
+              name: page === 2 ? "maven-releases" : `repo-${page}`,
+              format: "maven",
+              type: "hosted",
+              visibility: "public",
+              createdAt: "2026-01-02T00:00:00Z",
+            },
+          ],
+          total: 101,
+        });
+      }),
+    );
+
+    renderBrowser(true);
+    await screen.findByText("com");
+    await waitFor(() => expect(requests.length).toBe(2));
+    expect(requests.map((url) => url.searchParams.get("page_size"))).toEqual(["100", "100"]);
+    expect(requests.map((url) => url.searchParams.get("page"))).toEqual(["1", "2"]);
+  });
+
+  it("管理态通过仓库别名进入浏览器时仍保留上传能力", async () => {
+    renderWithProviders(<RepoBrowser repoName="maven-legacy" allowUpload />, {
+      route: "/repositories/maven-legacy",
+      authenticated: true,
+    });
+
+    expect(await screen.findByRole("button", { name: "上传制品" })).toBeTruthy();
+  });
+
   it("管理员多选后不显示删除所选工具栏，右键删除调用统一 API 并清空选择", async () => {
     const user = userEvent.setup();
     let body: { action: string; targets: { type: string; path: string }[] } | null = null;

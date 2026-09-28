@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -14,6 +15,35 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
+
+// resolveRepoNameSet 把请求里的仓库名解析为「主名 ∪ 全部别名」的去重有序集合，供下载
+// 计量按仓库维度聚合（FR-142）。下载明细按请求路径里的名字落库，别名功能下同一仓库可经
+// 多个名字访问（重命名后旧名仍在用、或直接用别名下载），故按主名过滤会少算记在别名下的
+// 部分；查询侧统一按此集合聚合，即可合并同一逻辑仓库的全部下载。
+//
+// 名字经 RepositoryService.Get（内部 GetByName 支持别名解析）取到主名仓库并带出别名列表；
+// 仓库不存在时返回其错误（调用方沿用既有 404 语义）。仓库服务未接线（测试/降级）时退化为
+// 单名集合，保证不回退既有行为。返回集合已去重、按字典序排序稳定，避免同一次查询重复计数。
+func (h *Handlers) resolveRepoNameSet(name string) ([]string, error) {
+	if h.repos == nil {
+		return []string{name}, nil
+	}
+	repo, err := h.repos.Get(name)
+	if err != nil {
+		return nil, err
+	}
+	set := make([]string, 0, len(repo.Aliases)+1)
+	seen := make(map[string]bool, len(repo.Aliases)+1)
+	for _, candidate := range append([]string{repo.Name}, repo.Aliases...) {
+		if candidate == "" || seen[candidate] {
+			continue
+		}
+		seen[candidate] = true
+		set = append(set, candidate)
+	}
+	sort.Strings(set)
+	return set, nil
+}
 
 // ListRepositories 仓库列表（分页）。管理员可见全部；普通用户仅见可读（public 或经 ACL 授权）者。
 // 可选鉴权（FR-66）：匿名请求受全局开关约束（关则 401），开则返回匿名可读集合。
@@ -99,7 +129,11 @@ func (h *Handlers) CreateRepository(c *gin.Context) {
 	if req.ImmutableRelease != nil {
 		cfg.ImmutableRelease = *req.ImmutableRelease
 	}
-	repo, err := h.repos.Create(req.Name, string(req.Format), string(req.Type), visibility, description, cfg)
+	var aliases []string
+	if req.Aliases != nil {
+		aliases = *req.Aliases
+	}
+	repo, err := h.repos.Create(req.Name, string(req.Format), string(req.Type), visibility, description, cfg, aliases...)
 	if err != nil {
 		writeDomainErr(c, err)
 		return
@@ -108,6 +142,9 @@ func (h *Handlers) CreateRepository(c *gin.Context) {
 	detail := "format=" + string(req.Format) + " type=" + string(req.Type)
 	if cfg.CredentialRef != "" {
 		detail += " credentialRef=" + cfg.CredentialRef
+	}
+	if len(repo.Aliases) > 0 {
+		detail += " aliases=" + strings.Join(repo.Aliases, ",")
 	}
 	h.AuditLog(c, "repo.create", "repository", req.Name, req.Name, detail, "ok")
 	c.JSON(http.StatusCreated, h.toRepo(repo, nil))
@@ -122,7 +159,7 @@ func (h *Handlers) UpdateRepository(c *gin.Context, name RepoNameParam) {
 	if !bindJSON(c, &req) {
 		return
 	}
-	if req.Visibility == nil && req.Description == nil && req.RemoteUrl == nil && req.CredentialRef == nil && req.ImmutableRelease == nil && req.Members == nil {
+	if req.Visibility == nil && req.Description == nil && req.RemoteUrl == nil && req.CredentialRef == nil && req.ImmutableRelease == nil && req.Members == nil && req.Aliases == nil {
 		auth.WriteError(c, http.StatusBadRequest, "bad_request", "缺少可更新字段")
 		return
 	}
@@ -156,13 +193,13 @@ func (h *Handlers) UpdateRepository(c *gin.Context, name RepoNameParam) {
 			cfg.ImmutableRelease = *req.ImmutableRelease
 		}
 	}
-	repo, err := h.repos.Update(name, visibility, req.Description, cfg)
+	repo, err := h.repos.Update(name, visibility, req.Description, cfg, req.Aliases)
 	if err != nil {
 		writeDomainErr(c, err)
 		return
 	}
 	// FR-109：审计附带逻辑凭据引用变更（配置或清除），只记名称不记明文。
-	detailParts := make([]string, 0, 2)
+	detailParts := make([]string, 0, 3)
 	if req.ImmutableRelease != nil {
 		detailParts = append(detailParts, "immutableRelease="+strconv.FormatBool(*req.ImmutableRelease))
 	}
@@ -173,8 +210,35 @@ func (h *Handlers) UpdateRepository(c *gin.Context, name RepoNameParam) {
 			detailParts = append(detailParts, "credentialRef=(cleared)")
 		}
 	}
+	if req.Aliases != nil {
+		detailParts = append(detailParts, "aliases="+strings.Join(*req.Aliases, ","))
+	}
 	detail := strings.Join(detailParts, " ")
 	h.AuditLog(c, "repo.update", "repository", name, name, detail, "ok")
+	c.JSON(http.StatusOK, h.toRepo(repo, nil))
+}
+
+// RenameRepository 重命名仓库，仅管理员。
+// 新名称需非空且未被任何仓库主名或别名占用；重命名后旧名自动转为别名，
+// 旧链接与既有客户端仍可经 GetByName 解析到该仓库。
+func (h *Handlers) RenameRepository(c *gin.Context, name RepoNameParam) {
+	if _, ok := requireAdmin(c); !ok {
+		return
+	}
+	var req RenameRepositoryRequest
+	if !bindJSON(c, &req) {
+		return
+	}
+	if strings.TrimSpace(req.NewName) == "" {
+		auth.WriteError(c, http.StatusBadRequest, "bad_request", "新名称不能为空")
+		return
+	}
+	repo, err := h.repos.Rename(name, req.NewName)
+	if err != nil {
+		writeDomainErr(c, err)
+		return
+	}
+	h.AuditLog(c, "repo.rename", "repository", repo.Name, repo.Name, "oldName="+name+" newName="+repo.Name, "ok")
 	c.JSON(http.StatusOK, h.toRepo(repo, nil))
 }
 

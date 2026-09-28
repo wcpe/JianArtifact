@@ -4,7 +4,7 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { describe, expect, it } from "vitest";
-import { Route, Routes } from "react-router-dom";
+import { Route, Routes, useParams } from "react-router-dom";
 
 import { store } from "@jianartifact/devmock";
 import { server } from "@jianartifact/devmock/node";
@@ -27,6 +27,31 @@ function renderDetail(name: string, authenticated: boolean, query = "") {
   );
 }
 
+/** 在详情页旁挂一个路由参数探针：重命名成功后用于断言已导航到新名。 */
+function DetailWithRouteName() {
+  const { name } = useParams();
+  return (
+    <>
+      <div data-testid="route-name">{name}</div>
+      <RepositoryDetailPage />
+    </>
+  );
+}
+
+/** 非管理员会话快照（role=user）：配置页签与重命名入口都应对其隐藏。 */
+const MEMBER_USER = {
+  id: 2,
+  username: "developer",
+  role: "user" as const,
+  status: "active" as const,
+  createdAt: "2026-01-02T00:00:00Z",
+};
+
+/**
+ * 把 window.matchMedia 临时桩成窄屏：`max-width: 48em` 查询命中（RepoBrowser 的 isNarrow）。
+ * 测试替身默认所有媒体查询都不命中（等价桌面），故既有桌面用例不受影响；
+ * 返回的 spy 必须在用例结束前还原（try/finally），否则会泄漏到同文件后续用例。
+ */
 function renderDetailScenario(scenario: "empty" | "loading" | "error" | "standby_read_only") {
   const route = `/repositories/maven-releases?__mock=${scenario}`;
   window.history.replaceState({}, "", route);
@@ -326,41 +351,143 @@ describe("仓库详情", () => {
     expect(await screen.findByText(/^12(\.\d+)? GB$/)).toBeTruthy();
   });
 
-  it("概览带展示总下载次数并挂载近 24 小时下载趋势图", async () => {
-    // 端点 B（非契约 /repositories/:name/download-trend）未在 devmock 注册，
-    // 按既有模式在测试内 server.use 覆盖最小合法响应（全时段累计 + 补零趋势点）。
+  it("通过仓库别名进入详情时仍展示页头属性并保留管理能力", async () => {
+    store.updateRepository("maven-releases", { aliases: ["maven-legacy"] });
+    const user = userEvent.setup();
+    renderDetail("maven-legacy", true);
+
+    // 别名只用于定位仓库，接口请求仍沿用 URL 中的名称；页头属性不能因定位失败而缺失。
+    expect(await screen.findByText("maven")).toBeTruthy();
+    expect(await screen.findByText("hosted")).toBeTruthy();
+
+    await user.click(await screen.findByRole("tab", { name: "配置" }));
+    expect(await screen.findByRole("button", { name: "重命名" })).toBeTruthy();
+  });
+
+  it("配置页签展示别名并支持增删，保存时随 updateRepository 一并提交（阶段 D-2）", async () => {
+    // 种子仓库主名 maven-releases，预置别名 maven-legacy 以验证「展示 + 移除」。
+    store.updateRepository("maven-releases", { aliases: ["maven-legacy"] });
+    let patchBody: { aliases?: string[] } | null = null;
     server.use(
-      http.get("*/api/v1/repositories/:name/download-trend", () =>
-        HttpResponse.json({
-          from: "2026-09-01T00:00:00.000Z",
-          to: "2026-09-02T00:00:00.000Z",
-          effectiveBucket: "hour",
-          totalDownloadCount: 12345,
-          trend: [
-            {
-              from: "2026-09-01T00:00:00.000Z",
-              to: "2026-09-01T01:00:00.000Z",
-              downloadCount: 3,
-            },
-            {
-              from: "2026-09-01T01:00:00.000Z",
-              to: "2026-09-01T02:00:00.000Z",
-              downloadCount: 5,
-            },
-          ],
-        }),
-      ),
+      http.patch("*/api/v1/repositories/:name", async ({ request }) => {
+        patchBody = (await request.json()) as { aliases?: string[] };
+        return HttpResponse.json({
+          id: 1,
+          name: "maven-releases",
+          format: "maven",
+          type: "hosted",
+          visibility: "private",
+          createdAt: "2026-01-01T00:00:00Z",
+          aliases: patchBody.aliases ?? [],
+        });
+      }),
     );
+    const user = userEvent.setup();
     renderDetail("maven-releases", true);
 
-    // 统计区：label「总下载次数」与 formatCount(totalDownloadCount) 的数值同组出现。
-    const statLabel = await screen.findByText("总下载次数");
-    const statGroup = statLabel.parentElement;
-    expect(statGroup).not.toBeNull();
-    expect(within(statGroup as HTMLElement).getByText(formatCount(12345))).toBeTruthy();
+    await user.click(await screen.findByRole("tab", { name: "配置" }));
 
-    // 趋势图已挂载：TrendChart 标题出现，且 role="img" 的 aria-label 为「标题：摘要」。
-    expect(await screen.findByText("下载趋势（近 24 小时）")).toBeTruthy();
-    expect(await screen.findByRole("img", { name: "下载趋势（近 24 小时）：下载" })).toBeTruthy();
+    // 已有别名以标签形式展示。
+    const legacyLabel = await screen.findByText("maven-legacy");
+    expect(legacyLabel).toBeTruthy();
+
+    // 新增一个别名（输入后回车）。
+    const aliasInput = screen.getByPlaceholderText("添加别名");
+    await user.type(aliasInput, "maven-old{Enter}");
+    expect(await screen.findByText("maven-old")).toBeTruthy();
+
+    // 移除原别名：点掉标签上的删除按钮。
+    const pillRoot = legacyLabel.parentElement as HTMLElement;
+    await user.click(pillRoot.querySelector("button") as HTMLButtonElement);
+    await waitFor(() => expect(screen.queryByText("maven-legacy")).toBeNull());
+
+    await user.click(screen.getByRole("button", { name: "保存配置" }));
+    expect(await screen.findByText("保存成功")).toBeTruthy();
+    await waitFor(() => expect(patchBody?.aliases).toEqual(["maven-old"]));
   });
+
+  it("别名等于仓库主名时前端拦截并给出可读提示（阶段 D-2）", async () => {
+    const user = userEvent.setup();
+    renderDetail("maven-releases", true);
+    await user.click(await screen.findByRole("tab", { name: "配置" }));
+
+    const aliasInput = await screen.findByPlaceholderText("添加别名");
+    await user.type(aliasInput, "maven-releases{Enter}");
+
+    // 内联错误提示出现（不与主名相同）。
+    expect((await screen.findAllByText("别名不能与仓库主名相同")).length).toBeGreaterThan(0);
+  });
+
+  it("重命名成功后提示并导航到新名仓库详情（阶段 D-2）", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <Routes>
+        <Route path="/repositories/:name" element={<DetailWithRouteName />} />
+      </Routes>,
+      { route: "/repositories/maven-releases", authenticated: true },
+    );
+
+    await user.click(await screen.findByRole("tab", { name: "配置" }));
+    await user.click(await screen.findByRole("button", { name: "重命名" }));
+
+    const dialog = await screen.findByRole("dialog");
+    const input = within(dialog).getByLabelText("新名称") as HTMLInputElement;
+    await user.clear(input);
+    await user.type(input, "maven-renamed");
+    await user.click(within(dialog).getByRole("button", { name: "确认重命名" }));
+
+    // 成功提示 + 路由参数已切到新名（旧名失效，不导航会 404）。
+    expect(await screen.findByText("已重命名")).toBeTruthy();
+    await waitFor(() => expect(screen.getByTestId("route-name").textContent).toBe("maven-renamed"));
+  });
+
+  it("重命名冲突（409）展示名称被占用且不跳转（阶段 D-2）", async () => {
+    server.use(
+      http.post("*/api/v1/repositories/:name/rename", () =>
+        HttpResponse.json(
+          { error: { code: "conflict", message: "名称已被占用" } },
+          { status: 409 },
+        ),
+      ),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(
+      <Routes>
+        <Route path="/repositories/:name" element={<DetailWithRouteName />} />
+      </Routes>,
+      { route: "/repositories/maven-releases", authenticated: true },
+    );
+
+    await user.click(await screen.findByRole("tab", { name: "配置" }));
+    await user.click(await screen.findByRole("button", { name: "重命名" }));
+
+    const dialog = await screen.findByRole("dialog");
+    const input = within(dialog).getByLabelText("新名称") as HTMLInputElement;
+    await user.clear(input);
+    await user.type(input, "npm-proxy");
+    await user.click(within(dialog).getByRole("button", { name: "确认重命名" }));
+
+    expect(await screen.findByText("该名称已被占用")).toBeTruthy();
+    // 未成功 → 仍停留在原仓库。
+    expect(screen.getByTestId("route-name").textContent).toBe("maven-releases");
+  });
+
+  it("非管理员看不到配置页签与重命名入口（阶段 D-2）", async () => {
+    renderWithProviders(
+      <Routes>
+        <Route path="/repositories/:name" element={<RepositoryDetailPage />} />
+      </Routes>,
+      {
+        route: "/repositories/maven-releases",
+        authenticated: true,
+        user: MEMBER_USER,
+        token: "mock.jwt.token:user",
+      },
+    );
+
+    await screen.findByText("com");
+    expect(screen.queryByRole("tab", { name: "配置" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "重命名" })).toBeNull();
+  });
+
 });

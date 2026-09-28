@@ -269,6 +269,8 @@ export function createRepository(input: {
   description?: string;
   remoteUrl?: string;
   members?: string[];
+  /** 仓库别名（可选；与主名共享命名空间、全局唯一，不得等于主名或与他仓主名/别名冲突）。 */
+  aliases?: string[];
 }): Promise<Repository> {
   return request<Repository>("/repositories", { method: "POST", body: input });
 }
@@ -280,9 +282,23 @@ export function updateRepository(
     description?: string;
     remoteUrl?: string;
     members?: string[];
+    /** 覆盖式更新别名集合（空数组表示清空；与主名共享命名空间、全局唯一）。 */
+    aliases?: string[];
   },
 ): Promise<Repository> {
   return request<Repository>(`/repositories/${name}`, { method: "PATCH", body: patch });
+}
+
+/**
+ * 重命名仓库（仅管理员）。
+ * 成功后旧名自动转为别名——旧链接 / 旧坐标仍可解析到该仓库；返回更新后的仓库。
+ * 新名与任何主名或别名冲突时后端返回 409（ApiError.code = "conflict"）。
+ */
+export function renameRepository(name: string, newName: string): Promise<Repository> {
+  return request<Repository>(`/repositories/${encodeURIComponent(name)}/rename`, {
+    method: "POST",
+    body: { newName },
+  });
 }
 
 export function deleteRepository(name: string): Promise<void> {

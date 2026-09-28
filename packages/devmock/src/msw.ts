@@ -681,6 +681,7 @@ interface CreateRepoBody {
   description?: string;
   remoteUrl?: string;
   members?: string[];
+  aliases?: string[];
 }
 
 interface AssetOperationBody {
@@ -1535,6 +1536,7 @@ export const handlers = [
       description: body.description,
       remoteUrl: body.remoteUrl,
       members: body.members,
+      aliases: body.aliases,
     });
     if (!repo) {
       return err("conflict", "仓库名已存在", 409);
@@ -1561,9 +1563,30 @@ export const handlers = [
       description?: string;
       remoteUrl?: string;
       members?: string[];
+      aliases?: string[];
     };
     const repo = store.updateRepository(String(params.name), body);
     return repo ? HttpResponse.json(repo) : err("not_found", "仓库不存在", 404);
+  }),
+
+  // 仓库重命名（仅管理员）：旧名自动转为别名，仍可通过旧名解析到该仓库。
+  http.post("*/api/v1/repositories/:name/rename", async ({ request, params }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const body = (await request.json().catch(() => ({}))) as { newName?: string };
+    if (!body.newName || !body.newName.trim()) {
+      return err("bad_request", "新名称不能为空", 400);
+    }
+    const result = store.renameRepository(String(params.name), body.newName.trim());
+    if (result === null) {
+      return err("not_found", "仓库不存在", 404);
+    }
+    if (result === "conflict") {
+      return err("conflict", "名称已被占用", 409);
+    }
+    return HttpResponse.json(result);
   }),
 
   http.delete("*/api/v1/repositories/:name", ({ request, params }) => {

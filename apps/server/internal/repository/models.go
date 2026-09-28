@@ -41,6 +41,8 @@ type Repository struct {
 	Config      string `db:"config"`      // 结构化配置 JSON（上游 URL、成员列表等）
 	Online      bool   `db:"online"`      // 是否在线（默认 true；管理员可手动置 offline，FR-113）
 	CreatedAt   string `db:"created_at"`
+	// Aliases 是仓库的别名列表（非列字段，由服务层按需填充；别名与主名共享命名空间）。
+	Aliases []string `db:"-"`
 }
 
 // RepositoryConfig 是 repository.config 列的结构化视图：

@@ -6,6 +6,10 @@
 
 ## 未发布
 
+### 新增
+
+- **仓库别名与重命名（FR-146）**：仓库可配置多个别名，别名与主名**共享命名空间、全局唯一**，可等价访问（协议路由与管理端 API 全域经 `GetByName` 单点按名解析到主名仓库）；`POST /api/v1/repositories/{name}/rename` 重命名后**旧名自动转为别名**，旧链接与既有客户端坐标仍可解析。新增迁移 `0041_repository_alias.sql`（`repository_alias` 表，随仓库级联删除）；契约新增 `Repository.aliases`、`CreateRepositoryRequest`/`UpdateRepositoryRequest` 的 `aliases` 与 rename 端点；配置页签可编辑别名与重命名，创建表单可填别名。下载统计按「主名 ∪ 别名」聚合，`audit_log` / `asset_download_minutes` 保留旧名不回填。语义取舍见 [`docs/adr/0028`](docs/adr/0028-repository-alias-and-rename.md)
+
 ### 修复
 
 - **审计中心切 30 天卡死**：统一事件流 CTE 在 `UNION ALL` 后全量物化 + 临时 B 树排序（时间索引只帮范围过滤、不帮合并排序），叠加事件页每次翻页的全量 `COUNT`、聚合探针同样物化、前端并发多请求，服务被拖死。修复：① 无过滤/白名单过滤（action↔op、actor↔source_actor）时把「每源按时间倒序取前 offset+limit 条」下推子查询（走索引取满即停），外层只归并 ≤2K 行——25 万行实测 **95ms → 0.2ms**；② 取消 `COUNT`（首屏亦不计，统一 `total=-1`），前端显示「已加载 N 条」并以多取 1 条精确判断有无更多

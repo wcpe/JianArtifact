@@ -1177,7 +1177,9 @@ export const store = {
   },
 
   findRepository(name: string): Repository | undefined {
-    const repo = state.repositories.find((r) => r.name === name);
+    const repo =
+      state.repositories.find((r) => r.name === name) ??
+      state.repositories.find((r) => (r.aliases ?? []).includes(name));
     return repo ? decorate(repo) : undefined;
   },
 
@@ -1187,6 +1189,7 @@ export const store = {
       description?: string;
       remoteUrl?: string;
       members?: string[];
+      aliases?: string[];
     },
   ): Repository | null {
     if (state.repositories.some((r) => r.name === input.name)) {
@@ -1210,6 +1213,9 @@ export const store = {
     if (input.members && input.members.length > 0) {
       repo.members = input.members;
     }
+    if (input.aliases && input.aliases.length > 0) {
+      repo.aliases = input.aliases;
+    }
     state.repositories.push(repo);
     return decorate(repo);
   },
@@ -1221,6 +1227,7 @@ export const store = {
       description?: string;
       remoteUrl?: string;
       members?: string[];
+      aliases?: string[];
     },
   ): Repository | null {
     const repo = state.repositories.find((r) => r.name === name);
@@ -1239,6 +1246,31 @@ export const store = {
     }
     if (patch.members !== undefined) {
       repo.members = patch.members;
+    }
+    // 别名覆盖式更新：空数组表示清空（与后端 Update 语义一致）。
+    if (patch.aliases !== undefined) {
+      repo.aliases = patch.aliases;
+    }
+    return decorate(repo);
+  },
+
+  /** 重命名仓库：成功后旧名自动登记为别名（与后端语义一致）。
+   *  返回 null 表示仓库不存在；返回 "conflict" 表示新名与既有主名/别名冲突。 */
+  renameRepository(name: string, newName: string): Repository | null | "conflict" {
+    const repo = state.repositories.find((r) => r.name === name);
+    if (!repo) {
+      return null;
+    }
+    if (newName !== name) {
+      for (const other of state.repositories) {
+        if (other.name === newName || (other.aliases ?? []).includes(newName)) {
+          return "conflict";
+        }
+      }
+    }
+    if (newName !== name) {
+      repo.aliases = [...new Set([...(repo.aliases ?? []), name])];
+      repo.name = newName;
     }
     return decorate(repo);
   },
