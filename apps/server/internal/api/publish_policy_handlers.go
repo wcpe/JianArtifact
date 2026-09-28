@@ -203,9 +203,15 @@ func (h *Handlers) PutPublishPolicies(c *gin.Context, _ UserIdParam) {
 		}
 		out.Results = append(out.Results, item)
 	}
+	// 逐仓库结果可能部分失败：全部成功才记 ok，否则记 partial（分类时归入失败），
+	// 避免按 result=ok 过滤的审计视图把「部分失败」计为成功。
+	auditResult := "ok"
+	if succeeded < len(results) {
+		auditResult = "partial"
+	}
 	h.AuditLog(c, "publish_policy.update", "publish_policy", strconv.FormatInt(userID, 10),
 		strings.Join(req.Repositories, ","),
-		fmt.Sprintf("repositories=%d succeeded=%d", len(results), succeeded), "ok")
+		fmt.Sprintf("repositories=%d succeeded=%d", len(results), succeeded), auditResult)
 	c.JSON(http.StatusOK, out)
 }
 

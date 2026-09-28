@@ -1190,7 +1190,8 @@ func classifyAuditResult(event repository.ObservabilityEvent) AuditResult {
 	switch event.Result {
 	case "ok", "applied", "success":
 		return AuditResultSuccess
-	case "failed", "error", "rejected":
+	case "failed", "error", "rejected", "partial":
+		// partial：批量操作部分成功（如逐仓库结果有失败项）按失败归类，便于按「失败」筛出。
 		return AuditResultFailure
 	case "pending":
 		return AuditResultPending

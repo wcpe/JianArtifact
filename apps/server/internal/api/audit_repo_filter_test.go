@@ -97,6 +97,17 @@ func TestAuditEventsRepositoryFilterExpandsAliases(t *testing.T) {
 	}
 }
 
+// 批量操作部分成功时审计记 result=partial，按「失败」归类 —— 否则按 result=ok/失败 过滤的
+// 审计视图会把「部分失败」计成成功（publish_policy 批量端点的逐仓库结果可部分失败）。
+func TestClassifyAuditResultTreatsPartialAsFailure(t *testing.T) {
+	if got := classifyAuditResult(repository.ObservabilityEvent{Result: "partial"}); got != AuditResultFailure {
+		t.Fatalf("partial 应归入失败，得 %s", got)
+	}
+	if got := classifyAuditResult(repository.ObservabilityEvent{Result: "ok"}); got != AuditResultSuccess {
+		t.Fatalf("ok 应归入成功，得 %s", got)
+	}
+}
+
 // serveAuditEventsList 以管理员身份调用 GET /observability/audit/events。
 func serveAuditEventsList(handler *Handlers, params ListAuditObservabilityEventsParams) *httptest.ResponseRecorder {
 	router := gin.New()
