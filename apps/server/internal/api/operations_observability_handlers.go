@@ -445,7 +445,10 @@ func operationsRange(c *gin.Context, fromValue *ObservabilityFromParam, toValue 
 
 func operationsBucket(from, to time.Time) string {
 	duration := to.Sub(from)
-	if duration <= 24*time.Hour {
+	// 与前端 fallbackBucket 同口径：≤6h 用分钟桶、≤7d 用小时桶、其余用天桶。
+	// 此前 ≤24h 都返回分钟桶，默认 24h 视图会返回约 1440 个点（约 1MB、数秒），
+	// 而前端按 >6h 建小时桶轴，两边粒度不一致。
+	if duration <= 6*time.Hour {
 		return "minute"
 	}
 	if duration <= 7*24*time.Hour {

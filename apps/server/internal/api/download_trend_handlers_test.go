@@ -68,6 +68,7 @@ func serveDownloadTrend(h *Handlers, principal *auth.Principal, path string) *ht
 		},
 	}
 	router.GET("/api/v1/observability/downloads/trend", siw.GetDownloadTrendGrouped)
+	router.GET("/api/v1/observability/host", siw.GetHostMonitoring)
 	router.GET("/api/v1/repositories/:name/download-trend", func(c *gin.Context) { h.GetRepositoryDownloadTrend(c) })
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
@@ -393,5 +394,27 @@ func TestGetDownloadTrendGroupedUnknownRepositoryIs404(t *testing.T) {
 		"/api/v1/observability/downloads/trend?from=2026-09-21T09:59:00Z&to=2026-09-21T10:30:00Z&repo=ghost")
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("未知名过滤应 404，得 %d：%s", rec.Code, rec.Body.String())
+	}
+}
+
+// 桶粒度与前端 fallbackBucket 同口径：≤6h 用分钟桶、≤7d 用小时桶、其余用天桶。
+// 此前 ≤24h 都返回分钟桶，默认 24h 视图会返回约 1440 个点（约 1MB、数秒），
+// 而前端按 >6h 建小时桶轴，两边粒度不一致。
+func TestOperationsBucketMatchesFrontendFallback(t *testing.T) {
+	base := time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC)
+	cases := []struct {
+		span time.Duration
+		want string
+	}{
+		{30 * time.Minute, "minute"},
+		{6 * time.Hour, "minute"},
+		{24 * time.Hour, "hour"},
+		{7 * 24 * time.Hour, "hour"},
+		{30 * 24 * time.Hour, "day"},
+	}
+	for _, tc := range cases {
+		if got := operationsBucket(base, base.Add(tc.span)); got != tc.want {
+			t.Errorf("跨度 %v：期望 %s，得 %s", tc.span, tc.want, got)
+		}
 	}
 }
