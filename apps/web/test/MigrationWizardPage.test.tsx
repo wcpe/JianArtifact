@@ -133,6 +133,20 @@ describe("在线 Nexus 迁移向导", () => {
     expect(screen.getByRole("button", { name: "发现并落库" })).toBeTruthy();
   });
 
+  it("计划预览的底部操作栏保持主操作与辅助操作可见", async () => {
+    const user = userEvent.setup();
+
+    const address = await openOnlineConfig(user);
+    await user.type(address, "https://bak.maven.example.com");
+    await user.click(screen.getByRole("button", { name: "发现并落库" }));
+
+    const startButton = await screen.findByRole("button", { name: /开始迁移/ });
+    const actionBar = startButton.closest('[data-layout="wizard-action-bar"]');
+    expect(actionBar).not.toBeNull();
+    expect(actionBar?.getAttribute("data-layout")).toBe("wizard-action-bar");
+    expect(screen.getByRole("button", { name: "稍后启动（仅保存计划）" })).toBeTruthy();
+  });
+
   it("Basic 认证发送用户名和密码，但不写入向导草稿", async () => {
     const user = userEvent.setup();
     const password = "user-token-password";

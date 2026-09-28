@@ -31,6 +31,7 @@ import { AsyncBoundary } from "../components/AsyncBoundary";
 import { OpsHelpButton, OpsKpiBand, OpsSection, StatusPill } from "../components/ops/OpsKit";
 import { useAsync } from "../hooks/useAsync";
 import { notifyError, notifySuccess } from "../lib/feedback";
+import { PageShell } from "../app/PageShell";
 
 const MIN_SECS = 1;
 const MAX_SECS = 3600;
@@ -143,7 +144,7 @@ function ServiceSettingsForm({
 
   return (
     // 不再自造 maw：宽度口径统一由 AppLayout 内容容器（density.contentMaxWidth）承担。
-    <Stack gap="md">
+    <Stack gap="md" style={{ flex: 1, minHeight: 0, overflowY: "auto", paddingRight: 4 }}>
       {/* 顶部概览带：把「当前生效值」前置，改表单时能一眼对照已保存的口径。
           数据口径来自 normalizeForm(initial)（已保存/生效值），不随未保存的改动跳动。 */}
       <OpsKpiBand
@@ -383,10 +384,10 @@ export function SettingsPage() {
   const settingsState = useAsync(getSettings, [], { cacheKey: "settings:service" });
 
   return (
-    <>
+    <PageShell testId="settings-page">
       <AsyncBoundary state={settingsState}>
         {(settings) => <ServiceSettingsForm initial={settings} onSaved={settingsState.reload} />}
       </AsyncBoundary>
-    </>
+    </PageShell>
   );
 }

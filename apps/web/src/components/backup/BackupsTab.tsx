@@ -10,7 +10,6 @@ import { useTranslation } from "react-i18next";
 import { createBackupLink, deleteBackup, listBackups, verifyBackup } from "../../api/endpoints";
 import type { BackupPackage } from "../../api/types";
 import { AsyncBoundary } from "../AsyncBoundary";
-import { PageShell } from "../../app/PageShell";
 import { OpsSection } from "../ops/OpsKit";
 import { confirmDanger, notifyError, notifySuccess } from "../../lib/feedback";
 import { formatCount } from "../../lib/format";
@@ -86,7 +85,11 @@ export function BackupsTab() {
   };
 
   return (
-    <PageShell testId="backups-tab" gap={12}>
+    <Stack
+      gap={12}
+      data-testid="backups-tab"
+      style={{ height: "100%", minHeight: 0, overflow: "hidden" }}
+    >
       <WriteFreezeCard />
 
       <OpsSection
@@ -178,6 +181,6 @@ export function BackupsTab() {
           </Group>
         </Stack>
       </Modal>
-    </PageShell>
+    </Stack>
   );
 }

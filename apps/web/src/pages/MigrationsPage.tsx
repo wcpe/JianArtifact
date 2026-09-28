@@ -40,6 +40,7 @@ import { AsyncBoundary } from "../components/AsyncBoundary";
 import { useAsync } from "../hooks/useAsync";
 import { formatUtcToLocal } from "../lib/timeFormat";
 import { density } from "../theme/density";
+import { PageShell } from "../app/PageShell";
 
 const PAGE_SIZE_OPTIONS = ["10", "20", "50"] as const;
 
@@ -70,18 +71,25 @@ export function MigrationsPage() {
   };
 
   return (
-    <Tabs value={tab} onChange={changeTab} keepMounted={false}>
-      <Tabs.List>
-        <Tabs.Tab value="external">{t("backups.tabExternal")}</Tabs.Tab>
-        <Tabs.Tab value="backups">{t("backups.tabBackup")}</Tabs.Tab>
-      </Tabs.List>
-      <Tabs.Panel value="external" pt="md">
-        <MigrationsTab />
-      </Tabs.Panel>
-      <Tabs.Panel value="backups" pt="md">
-        <BackupsTab />
-      </Tabs.Panel>
-    </Tabs>
+    <PageShell testId="migrations-page" gap={12}>
+      <Tabs
+        value={tab}
+        onChange={changeTab}
+        keepMounted={false}
+        style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
+      >
+        <Tabs.List style={{ flexShrink: 0 }}>
+          <Tabs.Tab value="external">{t("backups.tabExternal")}</Tabs.Tab>
+          <Tabs.Tab value="backups">{t("backups.tabBackup")}</Tabs.Tab>
+        </Tabs.List>
+        <Tabs.Panel value="external" pt="md" style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+          <MigrationsTab />
+        </Tabs.Panel>
+        <Tabs.Panel value="backups" pt="md" style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
+          <BackupsTab />
+        </Tabs.Panel>
+      </Tabs>
+    </PageShell>
   );
 }
 

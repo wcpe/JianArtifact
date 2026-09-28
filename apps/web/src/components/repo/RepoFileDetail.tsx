@@ -1,5 +1,6 @@
 // 文件详情：元数据 + 多校验和 + 下载/HTML View + 依赖坐标 + usage 片段可复制。点文件夹时不渲染。
 import { useState } from "react";
+import { useMediaQuery } from "@mantine/hooks";
 import { Button, Card, Code, Group, Select, Stack, Text, Title } from "@mantine/core";
 import { IconDownload, IconExternalLink } from "@tabler/icons-react";
 import { useTranslation } from "react-i18next";
@@ -58,15 +59,15 @@ export function RepoFileDetail({ repoName, format, asset, usage, showDownload = 
         <Text size="xs" c="dimmed" fw={600}>
           {t("repoDetail.assetHash")}
         </Text>
-        <Group gap="xs" wrap="nowrap">
-          <Code style={{ flex: 1, wordBreak: "break-all" }}>{asset.hash}</Code>
+        <Group gap="xs" wrap="wrap">
+          <Code style={{ flex: 1, minWidth: 0, wordBreak: "break-all" }}>{asset.hash}</Code>
           <CopyTextButton value={asset.hash} />
         </Group>
         {asset.sha1 && <ChecksumRow label={t("repoDetail.assetSha1")} value={asset.sha1} />}
         {asset.md5 && <ChecksumRow label={t("repoDetail.assetMd5")} value={asset.md5} />}
       </Stack>
 
-      <Group gap="xs">
+      <Group gap="xs" wrap="wrap">
         <CopyTextButton value={asset.path} label={t("repoDetail.copyPath")} />
         {showDownload && (
           <Button
@@ -160,12 +161,13 @@ function CoordinatesCard({
   coordinates: { label: string; language: string; content: string }[];
 }) {
   const { t } = useTranslation();
+  const isNarrow = useMediaQuery("(max-width: 48em)") ?? false;
   const first = coordinates[0]!;
   const [active, setActive] = useState(first.label);
   const current = coordinates.find((c) => c.label === active) ?? first;
   return (
     <Card withBorder padding="sm" radius="md">
-      <Group justify="space-between" align="flex-start" mb={6} wrap="nowrap">
+      <Group justify="space-between" align="flex-start" mb={6} wrap="wrap">
         <Title order={6}>{t("repoDetail.coordinates")}</Title>
         <Select
           data={coordinates.map((c) => c.label)}
@@ -173,7 +175,8 @@ function CoordinatesCard({
           onChange={(v) => setActive(v ?? first.label)}
           allowDeselect={false}
           size="xs"
-          w={200}
+          w={isNarrow ? "100%" : 200}
+          style={{ minWidth: 0 }}
           aria-label={t("repoDetail.coordinatesSelectAria")}
         />
       </Group>

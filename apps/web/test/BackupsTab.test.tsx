@@ -3,11 +3,11 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
-import { BackupsTab } from "../src/components/backup/BackupsTab";
+import { MigrationsPage } from "../src/pages/MigrationsPage";
 import { renderWithProviders } from "./harness";
 
 function renderTab() {
-  return renderWithProviders(<BackupsTab />, {
+  return renderWithProviders(<MigrationsPage />, {
     route: "/migrations?tab=backups",
     authenticated: true,
   });
@@ -17,9 +17,9 @@ describe("备份与搬迁", () => {
   it("锁定视口高度：外层不滚动，列表在剩余高度内滚动", async () => {
     renderTab();
 
-    const tab = await screen.findByTestId("backups-tab");
-    expect(tab.style.height).toContain("calc(100dvh");
-    expect(tab.style.overflow).toBe("hidden");
+    const page = await screen.findByTestId("migrations-page");
+    expect(page.style.height).toContain("calc(100dvh");
+    expect(page.style.overflow).toBe("hidden");
   });
 
   it("备份列表用 Table 渲染，状态走 StatusPill", async () => {

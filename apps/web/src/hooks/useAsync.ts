@@ -9,6 +9,16 @@
 // - 数据在场时的后台刷新保持 refreshing=true，UI 能给出局部加载反馈，请求挂起不再“无感卡死”；
 // - invalidateAsyncCache(prefix) 供变更操作按前缀失效缓存，避免回放过期内容；
 // - 请求超时由 api/client 统一兜底（AbortController），不再无限等待。
+//
+// keepPreviousData（可选，默认 false = 保持既有行为）：
+// - 默认口径下，cacheKey 变化且新键无缓存命中时会清空数据并回到首载态（setData(null)
+//   + setLoading(true)）——这对筛选/分页换数据是必要的（避免旧口径的数据冒充新口径）。
+// - 但像“点表头排序 / 翻页”这类**同一视图换数据**的场景，清空数据会让整块结果区被首载
+//   骨架屏替换、表格卸载重建，视觉上等同于“整页重刷、布局跳动”。开启 keepPreviousData
+//   后，只要当前已有数据在场（hasDataRef.current === true），跨键切换就不清空旧数据，改为
+//   仅置后台刷新态（refreshing=true），旧内容留在原位、布局不跳，待新数据到达再就地替换。
+// - 首载（尚无数据在场）不受该选项影响，仍按原逻辑显示加载态；失败时旧数据仍在场则走
+//   refreshError（非阻断警告）分支，与缓存回放分支口径一致。
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError } from "../api/client";
@@ -35,6 +45,12 @@ export interface UseAsyncOptions {
   cacheKey?: string;
   /** 缓存有效期（毫秒）；默认 60s。过期条目视为未命中并淘汰。 */
   staleMs?: number;
+  /**
+   * 跨键切换且新键无缓存时，若已有数据在场则**保留旧数据、仅后台刷新**（默认 false）。
+   * 用于“同一视图换数据”（换排序 / 翻页）：避免整块内容被首载骨架替换造成布局跳动。
+   * 首载（尚无数据）不受影响，仍显示加载态。
+   */
+  keepPreviousData?: boolean;
 }
 
 interface AsyncCacheEntry {
@@ -168,6 +184,7 @@ export function useAsync<T>(
 ): AsyncState<T> {
   const cacheKey = options.cacheKey;
   const staleMs = options.staleMs ?? DEFAULT_STALE_MS;
+  const keepPreviousData = options.keepPreviousData ?? false;
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(
     () => cacheKey === undefined || readAsyncCache(cacheKey, staleMs) === null,
@@ -204,12 +221,22 @@ export function useAsync<T>(
       setLoading(false);
       setRefreshing(true);
     } else if (dataKeyRef.current !== cacheKey) {
-      dataKeyRef.current = cacheKey;
-      hasDataRef.current = false;
-      setData(null);
-      setError(null);
-      setRefreshError(null);
-      setLoading(true);
+      if (keepPreviousData && hasDataRef.current) {
+        // 跨键但保留旧数据：不清空内容，只置后台刷新态，旧内容留在原位、布局不跳；
+        // 待新数据到达后在 .then 就地替换。dataKeyRef 前移到新键，使失败时 catch 走
+        // refreshError（旧数据仍在场）分支而非整页报错，与缓存回放分支口径一致。
+        dataKeyRef.current = cacheKey;
+        setRefreshing(true);
+        setError(null);
+        setRefreshError(null);
+      } else {
+        dataKeyRef.current = cacheKey;
+        hasDataRef.current = false;
+        setData(null);
+        setError(null);
+        setRefreshError(null);
+        setLoading(true);
+      }
     }
     fetchOnce(cacheKey, fetcher)
       .then((result) => {
@@ -247,7 +274,7 @@ export function useAsync<T>(
     return () => {
       active = false;
     };
-  }, [nonce, cacheKey, ...deps]);
+  }, [nonce, cacheKey, keepPreviousData, ...deps]);
 
   return {
     data,

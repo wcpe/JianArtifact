@@ -53,7 +53,9 @@ config 为横切配置层；web 是 go:embed 的前端静态资源。
 
 ### 3.1 前端范式（0.9.0 收敛）
 
-- **页面骨架**：固定视口高度由 `app/PageShell` 唯一提供（`100dvh − 页眉偏移 − 2×padding`），页面不再自造 `vh` / `dvh` / `max-width`；内容区宽度取 `theme/density.contentMaxWidth`。
+- **页面骨架**：固定视口高度由 `app/PageShell` 唯一提供（`100dvh − 页眉偏移 − 2×padding`），页面不再自造 `vh` / `dvh` / `max-width`；内容区宽度取 `theme/density.contentMaxWidth`。仓库列表、仓库详情、ACL、搜索、设置、迁移与备份页均在该外壳内，页内只负责组织内容区滚动。
+- **页面权限**：路由层统一区分公开浏览、登录后可访问与管理员专属页面；`/repositories`、仓库详情、搜索和 `/p/:name` 允许公开读取，设置、迁移/备份、ACL 等管理面由 `RequireAuth` / `RequireAdmin` 守卫兜底，页面组件不重复实现路由权限。
+- **仓库列表与响应式规则**：仓库列表先按服务端返回的完整集合执行置顶前置、名称筛选、排序/分组与分页；分组只作用于当前页，避免改变置顶和分页语义。窄屏隐藏低价值列，把类型、可见性、制品数与体积并入主标识副文本；仓库详情的文件树与文件详情由左右分栏改为上下堆叠，树按内容自适应并在选中文件后收起，宽屏保留可拖拽分割条。
 - **KPI 口径**：`components/ops/OpsKit` 的 `OpsKpiBand` 是唯一 KPI 组件（含 `variant="strip"` 紧凑横带与 `actions` 插槽），不在页面内自造指标卡。
 - **加载与错误**：`AsyncBoundary` 承担首载骨架与失败重试；`RouteErrorBoundary` 按路由路径重建，避免一次 chunk 加载失败污染后续页面；导航项在 hover / 聚焦时预取目标页 chunk。
 - **刷新**：刷新入口唯一（页眉），页面通过全局刷新事件订阅，不各自放刷新按钮。

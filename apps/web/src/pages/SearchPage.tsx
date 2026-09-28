@@ -20,6 +20,7 @@ import {
   Text,
   TextInput,
 } from "@mantine/core";
+import { useLocalStorage, useMediaQuery } from "@mantine/hooks";
 import {
   IconChevronDown,
   IconChevronUp,
@@ -56,6 +57,39 @@ const FORMAT_OPTIONS = ["maven", "raw", "npm"];
 /** 可排序列（服务端下推排序，键值与后端白名单一致）。 */
 type SortKey = "name" | "repo" | "path" | "size" | "updated";
 
+type SortOrder = "asc" | "desc";
+
+interface SortPreference {
+  by: SortKey;
+  order: SortOrder;
+}
+
+/** 排序偏好持久化键：沿用全站 `jianartifact.*` 前缀（见 i18n/language.ts、usePinnedRepos.ts）。 */
+export const SEARCH_SORT_KEY = "jianartifact.search.sort";
+
+/** 默认排序：修改时间倒序（新的在前）。 */
+const DEFAULT_SORT: SortPreference = { by: "updated", order: "desc" };
+
+const SORT_KEYS: readonly SortKey[] = ["name", "repo", "path", "size", "updated"];
+
+function isSortKey(value: unknown): value is SortKey {
+  return typeof value === "string" && (SORT_KEYS as readonly string[]).includes(value);
+}
+
+/**
+ * 校验持久化排序值：localStorage 可能残留脏值 / 旧版本值（结构不符或键越界），
+ * 一律回退到默认排序，避免非法 sort/order 打到后端。
+ */
+function sanitizeSort(value: unknown): SortPreference {
+  if (value !== null && typeof value === "object") {
+    const candidate = value as { by?: unknown; order?: unknown };
+    if (isSortKey(candidate.by) && (candidate.order === "asc" || candidate.order === "desc")) {
+      return { by: candidate.by, order: candidate.order };
+    }
+  }
+  return DEFAULT_SORT;
+}
+
 // 语法帮助条目：[表达式示例, 文案 key, 兜底文案]
 const SYNTAX_ROWS: [string, string, string][] = [
   ["spring core", "search.helpTerms", "同时包含多个关键词"],
@@ -80,17 +114,23 @@ export function SearchPage() {
   const [page, setPage] = useState(1);
   const [input, setInput] = useState(q);
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [sortBy, setSortBy] = useState<SortKey>("path");
-  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
+  const isNarrow = useMediaQuery("(max-width: 48em)") ?? false;
+  // 排序偏好跨会话记忆：默认「新的在前」（updated 倒序），脏值回退默认。
+  const [sortPref, setSortPref] = useLocalStorage<SortPreference>({
+    key: SEARCH_SORT_KEY,
+    defaultValue: DEFAULT_SORT,
+    getInitialValueInEffect: false,
+  });
+  const { by: sortBy, order: sortOrder } = sanitizeSort(sortPref);
 
   // 点击表头切换排序：同列翻转方向，换列重置为升序；排序变化回到第一页
   const toggleSort = (key: SortKey) => {
-    if (sortBy === key) {
-      setSortOrder((o) => (o === "asc" ? "desc" : "asc"));
-    } else {
-      setSortBy(key);
-      setSortOrder("asc");
-    }
+    setSortPref((current) => {
+      const prev = sanitizeSort(current);
+      return prev.by === key
+        ? { by: key, order: prev.order === "asc" ? "desc" : "asc" }
+        : { by: key, order: "asc" };
+    });
     setPage(1);
   };
   const sortIcon = (key: SortKey) =>
@@ -114,7 +154,8 @@ export function SearchPage() {
         ? searchAssets({ q, sort: sortBy, order: sortOrder, page, page_size: PAGE_SIZE })
         : Promise.resolve({ items: [], total: 0, facets: [] }),
     [q, page, sortBy, sortOrder],
-    { cacheKey: `search:${q}:${page}:${sortBy}:${sortOrder}` },
+    // keepPreviousData：换排序 / 翻页时保留旧结果、仅后台刷新，避免整块内容被骨架替换。
+    { cacheKey: `search:${q}:${page}:${sortBy}:${sortOrder}`, keepPreviousData: true },
   );
 
   const totalPages = Math.ceil((state.data?.total ?? 0) / PAGE_SIZE);
@@ -162,7 +203,7 @@ export function SearchPage() {
     // 列表页统一范式：整页固定在视口内，结果区在容器内滚动（纵向）+ 表头吸顶；
     // 表格横向溢出由同一容器承担，不再嵌套 ScrollArea（嵌套会让 sticky 表头失效）。
     <PageShell>
-      <Box style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+      <Box style={{ flex: 1, minHeight: 0, overflow: "auto", overflowX: "auto" }}>
         <Stack gap="md">
           {/* wrap：窄屏把按钮换到第二行，否则输入框会被挤到只剩几十像素宽没法输入。
               输入框给 minWidth 200 保底，放不下时让按钮先换行而不是压缩输入框。 */}
@@ -173,7 +214,7 @@ export function SearchPage() {
               value={input}
               onChange={(e) => setInput(e.currentTarget.value)}
               onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
-              style={{ flex: 1, minWidth: 200, maxWidth: 560 }}
+              style={{ flex: 1, minWidth: isNarrow ? 160 : 200, maxWidth: 560 }}
             />
             {/* 语法帮助从输入框右侧的裸图标移出为「图标 + 文字」按钮：右槽里塞不下文字，
                 而裸图标（问号）看不出点开是语法说明还是别的帮助。 */}
@@ -359,24 +400,28 @@ export function SearchPage() {
                           {sortIcon("path")}
                         </Group>
                       </Table.Th>
-                      <Table.Th
-                        style={{ cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }}
-                        onClick={() => toggleSort("size")}
-                      >
-                        <Group gap={4} wrap="nowrap" justify="flex-end">
-                          {t("search.colSize", { defaultValue: "大小" })}
-                          {sortIcon("size")}
-                        </Group>
-                      </Table.Th>
-                      <Table.Th
-                        style={{ cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }}
-                        onClick={() => toggleSort("updated")}
-                      >
-                        <Group gap={4} wrap="nowrap">
-                          {t("search.colUpdated", { defaultValue: "修改时间" })}
-                          {sortIcon("updated")}
-                        </Group>
-                      </Table.Th>
+                      {!isNarrow && (
+                        <Table.Th
+                          style={{ cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }}
+                          onClick={() => toggleSort("size")}
+                        >
+                          <Group gap={4} wrap="nowrap" justify="flex-end">
+                            {t("search.colSize", { defaultValue: "大小" })}
+                            {sortIcon("size")}
+                          </Group>
+                        </Table.Th>
+                      )}
+                      {!isNarrow && (
+                        <Table.Th
+                          style={{ cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }}
+                          onClick={() => toggleSort("updated")}
+                        >
+                          <Group gap={4} wrap="nowrap">
+                            {t("search.colUpdated", { defaultValue: "修改时间" })}
+                            {sortIcon("updated")}
+                          </Group>
+                        </Table.Th>
+                      )}
                       <Table.Th w={36} />
                     </Table.Tr>
                   </Table.Thead>
@@ -389,14 +434,18 @@ export function SearchPage() {
                           style={{ cursor: "pointer" }}
                           onClick={() => openRepo(item.repository, item.path)}
                         >
-                          <Table.Td style={{ whiteSpace: "nowrap" }}>
+                          <Table.Td style={{ maxWidth: isNarrow ? 180 : undefined }}>
                             <Group gap={6} wrap="nowrap">
                               <IconFile
                                 size={14}
                                 color="var(--mantine-color-gray-6)"
                                 style={{ flexShrink: 0 }}
                               />
-                              <Text size="xs" fw={500}>
+                              <Text
+                                size="xs"
+                                fw={500}
+                                style={{ overflowWrap: isNarrow ? "anywhere" : undefined }}
+                              >
                                 {name}
                               </Text>
                             </Group>
@@ -406,19 +455,31 @@ export function SearchPage() {
                               {item.repository}
                             </Badge>
                           </Table.Td>
-                          <Table.Td style={{ maxWidth: 420, overflow: "hidden" }} title={item.path}>
-                            <Text size="xs" c="dimmed" truncate="start">
+                          <Table.Td
+                            style={{ maxWidth: isNarrow ? 220 : 420, overflow: "hidden" }}
+                            title={item.path}
+                          >
+                            <Text
+                              size="xs"
+                              c="dimmed"
+                              truncate={isNarrow ? false : "start"}
+                              style={isNarrow ? { overflowWrap: "anywhere" } : undefined}
+                            >
                               {dir || "/"}
                             </Text>
                           </Table.Td>
-                          <Table.Td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
-                            {formatBytes(item.size)}
-                          </Table.Td>
-                          <Table.Td style={{ whiteSpace: "nowrap" }}>
-                            <Text size="xs" c="dimmed">
-                              {formatUtcToLocal(item.updatedAt)}
-                            </Text>
-                          </Table.Td>
+                          {!isNarrow && (
+                            <Table.Td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                              {formatBytes(item.size)}
+                            </Table.Td>
+                          )}
+                          {!isNarrow && (
+                            <Table.Td style={{ whiteSpace: "nowrap" }}>
+                              <Text size="xs" c="dimmed">
+                                {formatUtcToLocal(item.updatedAt)}
+                              </Text>
+                            </Table.Td>
+                          )}
                           <Table.Td onClick={(e) => e.stopPropagation()}>
                             <Button
                               component="a"

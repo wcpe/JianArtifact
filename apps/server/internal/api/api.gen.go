@@ -1100,6 +1100,30 @@ func (e UpdateUserRequestStatus) Valid() bool {
 	}
 }
 
+// Defines values for UsageSnippetGroup.
+const (
+	Auth    UsageSnippetGroup = "auth"
+	Other   UsageSnippetGroup = "other"
+	Publish UsageSnippetGroup = "publish"
+	Resolve UsageSnippetGroup = "resolve"
+)
+
+// Valid indicates whether the value is a known member of the UsageSnippetGroup enum.
+func (e UsageSnippetGroup) Valid() bool {
+	switch e {
+	case Auth:
+		return true
+	case Other:
+		return true
+	case Publish:
+		return true
+	case Resolve:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for UserRole.
 const (
 	UserRoleAdmin UserRole = "admin"
@@ -2848,8 +2872,17 @@ type UsageInfo struct {
 type UsageSnippet struct {
 	Code        string  `json:"code"`
 	Description *string `json:"description,omitempty"`
-	Title       string  `json:"title"`
+
+	// Group 按用途分组，供界面折叠分区：认证 / 解析依赖 / 发布制品 / 其他
+	Group UsageSnippetGroup `json:"group"`
+	Title string            `json:"title"`
+
+	// Tool 使用方式 / 构建工具标识，用于界面在分组内做工具切换；与 group 一样是结构化标记，不参与本地化。 当前取值：maven | gradle | gradle-kts | sbt | ivy | ant | npm | pnpm | yarn | bun | curl | wget
+	Tool string `json:"tool"`
 }
+
+// UsageSnippetGroup 按用途分组，供界面折叠分区：认证 / 解析依赖 / 发布制品 / 其他
+type UsageSnippetGroup string
 
 // User defines model for User.
 type User struct {

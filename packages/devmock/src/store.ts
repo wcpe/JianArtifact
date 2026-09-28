@@ -2038,7 +2038,9 @@ function migrationSourceAuthType(input: unknown): MigrationSourceAuthType | unde
   return type === "anonymous" || type === "basic" || type === "bearer" ? type : undefined;
 }
 
-/** buildUsage 依仓库 format/type 与对外基址组装接入片段（与后端 domain 层一致）。 */
+/** buildUsage 依仓库 format/type 与对外基址组装接入片段（与后端 domain 层一致）。
+ *  片段顺序、分组（group）与工具（tool）必须与 `apps/server/internal/domain/usage.go` 对齐——
+ *  使用说明按分组折叠、在组内用下拉切换工具，mock 与后端不一致会让契约测试与界面断言都失真。 */
 function buildUsage(repo: Repository, base: string): UsageSnippet[] {
   const writable = repo.type === "hosted";
   const repoURL = `${base}/repository/${repo.name}`;
@@ -2048,11 +2050,73 @@ function buildUsage(repo: Repository, base: string): UsageSnippet[] {
         title: "认证（~/.m2/settings.xml）",
         description: "在 <servers> 中配置凭据。",
         code: `<server>\n  <id>${repo.name}</id>\n  <username><user></username>\n  <password><token></password>\n</server>`,
+        group: "auth",
+        tool: "maven",
+      },
+      // gradle.properties 与 DSL 无关：Groovy / Kotlin 两种 DSL 各给一份相同凭据片段，
+      // 让任一 Gradle 变体的视图自包含（与后端 usage.go 一致）。
+      {
+        title: "认证（~/.gradle/gradle.properties）",
+        description: "为 Gradle 配置同一组凭据，避免把口令写进构建脚本。",
+        code: `repoUser=<user>\nrepoPassword=<token>`,
+        group: "auth",
+        tool: "gradle",
+      },
+      {
+        title: "认证（~/.gradle/gradle.properties）",
+        description: "为 Gradle 配置同一组凭据，避免把口令写进构建脚本。",
+        code: `repoUser=<user>\nrepoPassword=<token>`,
+        group: "auth",
+        tool: "gradle-kts",
       },
       {
         title: "解析依赖（pom.xml）",
         description: "在 <repositories> 中声明该仓库。",
         code: `<repository>\n  <id>${repo.name}</id>\n  <url>${repoURL}</url>\n</repository>`,
+        group: "resolve",
+        tool: "maven",
+      },
+      {
+        title: "解析依赖（Gradle）",
+        description: "在 build.gradle 的 repositories 块中添加仓库（Groovy DSL）。",
+        code: `// build.gradle\nrepositories {\n    maven {\n        url = uri("${repoURL}")\n        credentials {\n            username = "<user>"\n            password = "<token>"\n        }\n    }\n}`,
+        group: "resolve",
+        tool: "gradle",
+      },
+      {
+        title: "解析依赖（Gradle Kotlin DSL）",
+        description: "在 build.gradle.kts 的 repositories 块中添加仓库（Kotlin DSL）。",
+        code: `// build.gradle.kts\nrepositories {\n    maven {\n        url = uri("${repoURL}")\n        credentials {\n            username = "<user>"\n            password = "<token>"\n        }\n    }\n}`,
+        group: "resolve",
+        tool: "gradle-kts",
+      },
+      {
+        title: "解析依赖（sbt）",
+        description: "在 ~/.sbt/repositories 中声明该仓库。",
+        code: `[repositories]\n  ${repo.name}: ${repoURL}`,
+        group: "resolve",
+        tool: "sbt",
+      },
+      {
+        title: "解析依赖（一行式 mvn 参数）",
+        description: "不改 pom.xml，仅本次命令指定仓库。",
+        code: `mvn dependency:get -Dartifact=<group>:<artifact>:<version> -DremoteRepositories=${repo.name}::default::${repoURL}`,
+        group: "resolve",
+        tool: "maven",
+      },
+      {
+        title: "解析依赖（Ivy）",
+        description: "在 ivy.xml 的 resolvers 中声明该仓库。",
+        code: `<!-- ivy.xml -->\n<resolvers>\n  <ibiblio name="${repo.name}" m2compatible="true" root="${repoURL}/"/>\n</resolvers>`,
+        group: "resolve",
+        tool: "ivy",
+      },
+      {
+        title: "解析依赖（Ant）",
+        description: "Ant 无依赖解析模型，需用 get 任务手动按 URL 取件。",
+        code: `<!-- build.xml -->\n<get src="${repoURL}/path/to/artifact" dest="lib/artifact.jar"/>`,
+        group: "resolve",
+        tool: "ant",
       },
     ];
     if (writable) {
@@ -2060,6 +2124,29 @@ function buildUsage(repo: Repository, base: string): UsageSnippet[] {
         title: "发布制品（pom.xml + mvn deploy）",
         description: "在 <distributionManagement> 声明部署目标（仅 hosted 可写）。",
         code: `<distributionManagement>\n  <repository>\n    <id>${repo.name}</id>\n    <url>${repoURL}</url>\n  </repository>\n</distributionManagement>`,
+        group: "publish",
+        tool: "maven",
+      });
+      snippets.push({
+        title: "发布制品（Gradle）",
+        description: "在 build.gradle 的 publishing 块中配置部署仓库（Groovy DSL）。",
+        code: `// build.gradle\npublishing {\n    repositories {\n        maven {\n            url = uri("${repoURL}")\n            credentials {\n                username = "<user>"\n                password = "<token>"\n            }\n        }\n    }\n}`,
+        group: "publish",
+        tool: "gradle",
+      });
+      snippets.push({
+        title: "发布制品（Gradle Kotlin DSL）",
+        description: "在 build.gradle.kts 的 publishing 块中配置部署仓库（Kotlin DSL）。",
+        code: `// build.gradle.kts\npublishing {\n    repositories {\n        maven {\n            url = uri("${repoURL}")\n            credentials {\n                username = "<user>"\n                password = "<token>"\n            }\n        }\n    }\n}`,
+        group: "publish",
+        tool: "gradle-kts",
+      });
+      snippets.push({
+        title: "发布制品（一行式 mvn deploy）",
+        description: "无需改动 pom.xml 即可部署。",
+        code: `mvn deploy -DaltDeploymentRepository=${repo.name}::default::${repoURL}`,
+        group: "publish",
+        tool: "maven",
       });
     }
     return snippets;
@@ -2071,11 +2158,43 @@ function buildUsage(repo: Repository, base: string): UsageSnippet[] {
         title: "配置 registry",
         description: "将该仓库设为 npm registry。",
         code: `npm config set registry ${registryURL}`,
+        group: "auth",
+        tool: "npm",
       },
       {
-        title: "安装依赖",
+        title: "认证（.npmrc）",
+        description: "在 .npmrc 中配置访问令牌。",
+        code: `registry=${registryURL}\n//<host>/:_authToken=<token>`,
+        group: "auth",
+        tool: "npm",
+      },
+      {
+        title: "安装依赖（npm）",
         description: "从该 registry 安装包。",
         code: `npm install <package> --registry ${registryURL}`,
+        group: "resolve",
+        tool: "npm",
+      },
+      {
+        title: "安装依赖（pnpm）",
+        description: "pnpm 通过 .npmrc 读取该 registry。",
+        code: `pnpm config set registry ${registryURL}\npnpm add <package>`,
+        group: "resolve",
+        tool: "pnpm",
+      },
+      {
+        title: "安装依赖（Yarn）",
+        description: "Yarn 1.x 用 config set；2+ 写入 .yarnrc.yml。",
+        code: `yarn config set registry ${registryURL}`,
+        group: "resolve",
+        tool: "yarn",
+      },
+      {
+        title: "安装依赖（bun）",
+        description: "bun 读取 .npmrc / bunfig.toml，registry 沿用既有配置。",
+        code: `bun add <package>`,
+        group: "resolve",
+        tool: "bun",
       },
     ];
     if (writable) {
@@ -2083,6 +2202,15 @@ function buildUsage(repo: Repository, base: string): UsageSnippet[] {
         title: "发布包（npm publish）",
         description: "发布到该仓库（仅 hosted 可写）。",
         code: `npm publish --registry ${registryURL}`,
+        group: "publish",
+        tool: "npm",
+      });
+      snippets.push({
+        title: "发布作用域包（publishConfig）",
+        description: "在 package.json 固定发布目标（仅 hosted 可写）。",
+        code: `"publishConfig": {\n  "registry": "${registryURL}"\n}`,
+        group: "publish",
+        tool: "npm",
       });
     }
     return snippets;
@@ -2092,6 +2220,22 @@ function buildUsage(repo: Repository, base: string): UsageSnippet[] {
       title: "下载制品（curl）",
       description: "以 API Token 作口令（公开仓库可匿名读）。",
       code: `curl -u <user>:<token> -O ${repoURL}/path/to/artifact`,
+      group: "resolve",
+      tool: "curl",
+    },
+    {
+      title: "下载制品（curl + Bearer Token）",
+      description: "以 Bearer Token 直接读取（公开仓库可匿名读）。",
+      code: `curl -H "Authorization: Bearer <token>" -O ${repoURL}/path/to/artifact`,
+      group: "resolve",
+      tool: "curl",
+    },
+    {
+      title: "下载制品（wget）",
+      description: "wget 等价写法。",
+      code: `wget --user=<user> --password=<token> ${repoURL}/path/to/artifact`,
+      group: "resolve",
+      tool: "wget",
     },
   ];
   if (writable) {
@@ -2099,6 +2243,15 @@ function buildUsage(repo: Repository, base: string): UsageSnippet[] {
       title: "上传制品（curl）",
       description: "PUT 上传到指定路径（仅 hosted 可写）。",
       code: `curl -u <user>:<token> --upload-file ./artifact ${repoURL}/path/to/artifact`,
+      group: "publish",
+      tool: "curl",
+    });
+    snippets.push({
+      title: "上传制品（curl + Bearer Token）",
+      description: "以 Bearer Token 上传（仅 hosted 可写）。",
+      code: `curl -X PUT -H "Authorization: Bearer <token>" --upload-file ./artifact ${repoURL}/path/to/artifact`,
+      group: "publish",
+      tool: "curl",
     });
   }
   return snippets;

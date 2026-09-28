@@ -483,6 +483,8 @@ export const zh = {
     descriptionPlaceholder: "仓库用途简述（可选，将展示在详情页页头）",
     manageAcl: "访问控制",
     browse: "浏览",
+    // 窄屏行内操作收敛后的溢出菜单入口（图标按钮，文字经 aria-label 可达）。
+    moreActions: "更多操作",
     url: "访问 URL",
     members: "成员 / 上游",
     artifactCount: "制品数",

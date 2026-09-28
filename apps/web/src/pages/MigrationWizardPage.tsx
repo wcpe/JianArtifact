@@ -38,7 +38,7 @@ import {
   IconRefresh,
   IconSearch,
 } from "@tabler/icons-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate } from "react-router-dom";
 
@@ -146,6 +146,22 @@ const SOURCE_OPTIONS: {
   { value: "offline_dir", icon: IconFolder, hintKey: "sourcePickOfflineDir" },
   { value: "offline_bundle", icon: IconPackage, hintKey: "sourcePickOfflineBundle" },
 ];
+
+function WizardSection({ children }: { children: ReactNode }) {
+  return (
+    <Stack mt="md" gap="md">
+      {children}
+    </Stack>
+  );
+}
+
+function WizardActionBar({ children }: { children: ReactNode }) {
+  return (
+    <Group gap="xs" grow wrap="wrap" align="stretch" data-layout="wizard-action-bar">
+      {children}
+    </Group>
+  );
+}
 
 export function MigrationWizardPage() {
   const { t } = useTranslation();
@@ -778,7 +794,7 @@ export function MigrationWizardPage() {
             label={t("migrations.stepSource")}
             description={t("migrations.stepSourceDesc")}
           >
-            <Stack mt="md" gap="md">
+            <WizardSection>
               <Text size="sm" c="dimmed">
                 {t("migrations.sourcePickTitle")}
               </Text>
@@ -826,7 +842,7 @@ export function MigrationWizardPage() {
                   );
                 })}
               </SimpleGrid>
-              <Group>
+              <WizardActionBar>
                 <Button
                   disabled={busy}
                   onClick={() => setActive(1)}
@@ -834,15 +850,15 @@ export function MigrationWizardPage() {
                 >
                   {t("common.confirm")}
                 </Button>
-              </Group>
-            </Stack>
+              </WizardActionBar>
+            </WizardSection>
           </Stepper.Step>
 
           <Stepper.Step
             label={t("migrations.stepConfig")}
             description={t("migrations.stepConfigDesc")}
           >
-            <Stack mt="md" gap="md">
+            <WizardSection>
               {form.values.sourceType === "online_rest" ? (
                 <>
                   <TextInput
@@ -1001,7 +1017,7 @@ export function MigrationWizardPage() {
                         <Alert color="red">{offlineIdx.errorMessage}</Alert>
                       )}
                       {/* 按钮互斥：idle/failed 仅「建立」；ready 仅「更新+清空重建」；scanning 仅「取消」 */}
-                      <Group gap="xs" align="flex-start">
+                      <Group gap="xs" align="flex-start" wrap="wrap">
                         {offlineIdxScanning ? (
                           <Button
                             size="xs"
@@ -1085,7 +1101,7 @@ export function MigrationWizardPage() {
                             })}
                           </Badge>
                         </Group>
-                        <Group gap="xs">
+                        <Group gap="xs" wrap="wrap">
                           <Button
                             size="compact-xs"
                             variant="light"
@@ -1189,7 +1205,7 @@ export function MigrationWizardPage() {
                             disabled={busy || remoteBusy}
                             {...form.getInputProps("credentialRef")}
                           />
-                          <Group>
+                          <Group gap="xs" wrap="wrap">
                             <Button
                               leftSection={<IconCloudDownload size={16} />}
                               loading={remoteBusy}
@@ -1356,7 +1372,7 @@ export function MigrationWizardPage() {
                 </Card>
               )}
 
-              <Group>
+              <WizardActionBar>
                 <Button variant="default" disabled={busy} onClick={() => setActive(0)}>
                   {t("setup.back")}
                 </Button>
@@ -1365,6 +1381,7 @@ export function MigrationWizardPage() {
                   loading={busy}
                   disabled={(Boolean(firstPlanned) && !discoverResult) || offlineNeedPickRepos}
                   onClick={() => runDiscover()}
+                  w={{ base: "100%", sm: "auto" }}
                 >
                   {offlineIndexReady && includeSelectedCount === 0 && indexRepoNames.length > 0
                     ? t("migrations.offlineDiscoverAllFromIndex")
@@ -1372,13 +1389,13 @@ export function MigrationWizardPage() {
                       ? `${t("migrations.runDiscover")}（${includeSelectedCount}）`
                       : t("migrations.runDiscover")}
                 </Button>
-              </Group>
+              </WizardActionBar>
               {firstPlanned && !discoverResult && (
                 <Text size="sm" c="orange">
                   {t("migrations.mustHandlePlannedFirst")}
                 </Text>
               )}
-            </Stack>
+            </WizardSection>
           </Stepper.Step>
 
           <Stepper.Step
@@ -1386,7 +1403,7 @@ export function MigrationWizardPage() {
             description={t("migrations.stepPreviewDesc")}
           >
             {discoverResult ? (
-              <Stack mt="md" gap="md">
+              <WizardSection>
                 <Alert color="blue" title={t("migrations.plannedHint")}>
                   {t("migrations.previewSummary", { id: discoverResult.taskId })}
                 </Alert>
@@ -1422,7 +1439,7 @@ export function MigrationWizardPage() {
                 )}
 
                 <Card withBorder padding={density.cardPadding} radius="md">
-                  <Group justify="space-between" mb="sm">
+                  <Group justify="space-between" mb="sm" wrap="wrap" gap="xs">
                     <Title order={5}>{t("migrations.selectRepos")}</Title>
                     <Group gap="xs">
                       <Button size="compact-xs" variant="light" onClick={selectAll} disabled={busy}>
@@ -1450,7 +1467,7 @@ export function MigrationWizardPage() {
                 <Text size="sm" c="dimmed">
                   {t("migrations.explicitStartHint")}
                 </Text>
-                <Group>
+                <WizardActionBar>
                   <Button variant="default" disabled={busy} onClick={() => setActive(1)}>
                     {t("setup.back")}
                   </Button>
@@ -1460,6 +1477,7 @@ export function MigrationWizardPage() {
                     loading={busy}
                     disabled={selectedRepos.length === 0}
                     onClick={runStart}
+                    w={{ base: "100%", sm: "auto" }}
                   >
                     {t("migrations.start")}（{selectedRepos.length}）
                   </Button>
@@ -1471,8 +1489,8 @@ export function MigrationWizardPage() {
                   >
                     {t("migrations.savePlanned")}
                   </Button>
-                </Group>
-              </Stack>
+                </WizardActionBar>
+              </WizardSection>
             ) : (
               <Text c="dimmed" mt="md">
                 {t("migrations.needDiscover")}

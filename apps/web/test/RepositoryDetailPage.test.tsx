@@ -3,8 +3,8 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
-import { describe, expect, it } from "vitest";
-import { Route, Routes, useParams } from "react-router-dom";
+import { describe, expect, it, vi } from "vitest";
+import { Route, Routes, useLocation, useParams } from "react-router-dom";
 
 import { store } from "@jianartifact/devmock";
 import { server } from "@jianartifact/devmock/node";
@@ -38,6 +38,11 @@ function DetailWithRouteName() {
   );
 }
 
+function DetailLocationProbe() {
+  const location = useLocation();
+  return <div data-testid="detail-location">{location.search}</div>;
+}
+
 /** 非管理员会话快照（role=user）：配置页签与重命名入口都应对其隐藏。 */
 const MEMBER_USER = {
   id: 2,
@@ -52,6 +57,22 @@ const MEMBER_USER = {
  * 测试替身默认所有媒体查询都不命中（等价桌面），故既有桌面用例不受影响；
  * 返回的 spy 必须在用例结束前还原（try/finally），否则会泄漏到同文件后续用例。
  */
+function mockNarrowViewport() {
+  return vi.spyOn(window, "matchMedia").mockImplementation(
+    (query: string) =>
+      ({
+        matches: query.includes("max-width: 48em"),
+        media: query,
+        onchange: null,
+        addListener: () => {},
+        removeListener: () => {},
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        dispatchEvent: () => false,
+      }) as MediaQueryList,
+  );
+}
+
 function renderDetailScenario(scenario: "empty" | "loading" | "error" | "standby_read_only") {
   const route = `/repositories/maven-releases?__mock=${scenario}`;
   window.history.replaceState({}, "", route);
@@ -77,6 +98,40 @@ describe("仓库详情", () => {
     expect(await screen.findByText("com/example/app/1.0.0/app-1.0.0.jar")).toBeTruthy();
     expect(await screen.findByText("解析依赖（pom.xml）")).toBeTruthy();
     expect((await screen.findAllByRole("button", { name: "复制" })).length).toBeGreaterThan(0);
+  });
+
+  it("受控页签写入 tab 查询参数并保留 highlight 等其他参数", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <Routes>
+        <Route
+          path="/repositories/:name"
+          element={
+            <>
+              <DetailLocationProbe />
+              <RepositoryDetailPage />
+            </>
+          }
+        />
+      </Routes>,
+      {
+        route: "/repositories/maven-releases?highlight=com/example&from=search",
+        authenticated: true,
+      },
+    );
+
+    expect((await screen.findByRole("tab", { name: "浏览" })).getAttribute("aria-selected")).toBe(
+      "true",
+    );
+    await user.click(await screen.findByRole("tab", { name: "配置" }));
+    expect(screen.getByTestId("detail-location").textContent).toBe(
+      "?highlight=com%2Fexample&from=search&tab=config",
+    );
+
+    await user.click(await screen.findByRole("tab", { name: "ACL" }));
+    expect(screen.getByTestId("detail-location").textContent).toBe(
+      "?highlight=com%2Fexample&from=search&tab=acl",
+    );
   });
 
   it("empty 场景展示空制品树", async () => {
@@ -364,6 +419,114 @@ describe("仓库详情", () => {
     expect(await screen.findByRole("button", { name: "重命名" })).toBeTruthy();
   });
 
+  it("总下载次数留在页头概览，下载趋势移入右侧详情卡片顶部（阶段 D-1）", async () => {
+    // 端点 B（非契约 /repositories/:name/download-trend）未在 devmock 注册，
+    // 按既有模式在测试内 server.use 覆盖最小合法响应（全时段累计 + 补零趋势点）。
+    server.use(
+      http.get("*/api/v1/repositories/:name/download-trend", () =>
+        HttpResponse.json({
+          from: "2026-09-01T00:00:00.000Z",
+          to: "2026-09-02T00:00:00.000Z",
+          effectiveBucket: "hour",
+          totalDownloadCount: 12345,
+          trend: [
+            {
+              from: "2026-09-01T00:00:00.000Z",
+              to: "2026-09-01T01:00:00.000Z",
+              downloadCount: 3,
+            },
+            {
+              from: "2026-09-01T01:00:00.000Z",
+              to: "2026-09-01T02:00:00.000Z",
+              downloadCount: 5,
+            },
+          ],
+        }),
+      ),
+    );
+    renderDetail("maven-releases", true);
+
+    // 页头统计：label「总下载次数」与 formatCount(totalDownloadCount) 的数值同组出现（保留不动）。
+    const statLabel = await screen.findByText("总下载次数");
+    const statGroup = statLabel.parentElement;
+    expect(statGroup).not.toBeNull();
+    expect(within(statGroup as HTMLElement).getByText(formatCount(12345))).toBeTruthy();
+
+    // 趋势区落在右侧详情卡片内部（与文件树同级的两栏右栏），而不是页头与页签之间的页面级整行。
+    const detailPanel = await screen.findByTestId("repo-detail-panel");
+    const trend = await screen.findByTestId("repo-detail-trend");
+    expect(detailPanel.contains(trend)).toBe(true);
+    // 整行区块已移除：下载趋势只存在于浏览 Tab 面板内（页面顶层的 Tabs 直系子节点里不再有它）。
+    expect(trend.closest('[role="tabpanel"]')).not.toBeNull();
+    expect(screen.getAllByTestId("repo-detail-trend")).toHaveLength(1);
+
+    // 默认展开：不再有折叠控件，无需任何点击即直接渲染图表，且图表就在右栏卡片内。
+    expect(screen.queryByTestId("repo-detail-trend-toggle")).toBeNull();
+    const chart = await screen.findByRole("img", { name: "下载趋势（近 24 小时）：下载" });
+    expect(trend.contains(chart)).toBe(true);
+
+    // 趋势与下方内容同处一个滚动区（不再钉在固定列首）：往下滚时它会向上滚出视野，
+    // 因此必须位于 ScrollArea 的 viewport 内，而不是它的兄弟节点。
+    expect(trend.closest(".mantine-ScrollArea-viewport")).not.toBeNull();
+  });
+
+  it("下载趋势默认直接渲染图表（不再折叠）且仍在右栏卡片内", async () => {
+    server.use(
+      http.get("*/api/v1/repositories/:name/download-trend", () =>
+        HttpResponse.json({
+          from: "2026-09-01T00:00:00.000Z",
+          to: "2026-09-02T00:00:00.000Z",
+          effectiveBucket: "hour",
+          totalDownloadCount: 8888,
+          trend: [
+            {
+              from: "2026-09-01T00:00:00.000Z",
+              to: "2026-09-01T01:00:00.000Z",
+              downloadCount: 2,
+            },
+          ],
+        }),
+      ),
+    );
+    renderDetail("maven-releases", true);
+
+    // 无折叠控件：默认即渲染图表（不经任何点击），且仍落在右栏详情卡片内（没有跑到页面顶层）。
+    expect(await screen.findByTestId("repo-detail-trend")).toBeTruthy();
+    expect(screen.queryByTestId("repo-detail-trend-toggle")).toBeNull();
+    const img = await screen.findByRole("img", { name: "下载趋势（近 24 小时）：下载" });
+    expect(screen.getByTestId("repo-detail-panel").contains(img)).toBe(true);
+    expect(screen.getByTestId("repo-detail-trend").closest('[role="tabpanel"]')).not.toBeNull();
+  });
+
+  it("下载趋势属于仓库级信息：未选中文件时也常驻右栏顶部（阶段 D-1）", async () => {
+    // 未选中文件时右栏渲染的是 UsagePanel；下载趋势不随选中态出现/消失。
+    server.use(
+      http.get("*/api/v1/repositories/:name/download-trend", () =>
+        HttpResponse.json({
+          from: "2026-09-01T00:00:00.000Z",
+          to: "2026-09-02T00:00:00.000Z",
+          effectiveBucket: "hour",
+          totalDownloadCount: 7,
+          trend: [
+            {
+              from: "2026-09-01T00:00:00.000Z",
+              to: "2026-09-01T01:00:00.000Z",
+              downloadCount: 7,
+            },
+          ],
+        }),
+      ),
+    );
+    renderDetail("maven-releases", true);
+
+    // 未选中任何文件：右栏是使用说明，趋势图依旧在右栏卡片内。
+    expect(await screen.findByText("使用说明")).toBeTruthy();
+    const detailPanel = await screen.findByTestId("repo-detail-panel");
+    const trend = await screen.findByTestId("repo-detail-trend");
+    expect(detailPanel.contains(trend)).toBe(true);
+    expect(await screen.findByText("下载趋势（近 24 小时）")).toBeTruthy();
+  });
+
   it("配置页签展示别名并支持增删，保存时随 updateRepository 一并提交（阶段 D-2）", async () => {
     // 种子仓库主名 maven-releases，预置别名 maven-legacy 以验证「展示 + 移除」。
     store.updateRepository("maven-releases", { aliases: ["maven-legacy"] });
@@ -472,6 +635,107 @@ describe("仓库详情", () => {
     expect(screen.getByTestId("route-name").textContent).toBe("maven-releases");
   });
 
+  it("使用说明三组全展开、顶部只有一个工具切换器（阶段 3.2）", async () => {
+    renderDetail("maven-releases", true);
+
+    // 未选中文件 → 右栏是使用说明；标题保留在面板顶部。
+    expect(await screen.findByText("使用说明")).toBeTruthy();
+
+    // 三个分组按固定顺序一次看全（认证 → 解析依赖 → 发布制品）；other 为空集 → 不出现。
+    // 不再折叠：它们本就是配置一个仓库时要一起做的事。
+    const groupIds = (await screen.findAllByTestId(/^repo-usage-group-/)).map((node) =>
+      node.getAttribute("data-testid"),
+    );
+    expect(groupIds).toEqual([
+      "repo-usage-group-auth",
+      "repo-usage-group-resolve",
+      "repo-usage-group-publish",
+    ]);
+    expect(await screen.findByText(/<server>/)).toBeTruthy();
+    expect(screen.getByText("发布制品（pom.xml + mvn deploy）")).toBeTruthy();
+
+    // 工具切换器只有一个（不再每组一个），默认选中第一个工具 Maven；选项只显示工具名。
+    const selects = screen.getAllByTestId("repo-usage-tool-select");
+    expect(selects.length).toBe(1);
+    expect((selects[0] as HTMLInputElement).value).toBe("Maven");
+  });
+
+  it("顶部切换工具：三组同时按该工具筛选，无片段的组整组隐藏（阶段 3.2）", async () => {
+    const user = userEvent.setup();
+    renderDetail("maven-releases", true);
+
+    // 选项是跨分组的工具并集，只显示工具名（不带片段数）。
+    await user.click(await screen.findByTestId("repo-usage-tool-select"));
+    const optionNames = (await screen.findAllByRole("option")).map((node) => node.textContent);
+    expect(optionNames).toEqual([
+      "Maven",
+      "Gradle（Groovy）",
+      "Gradle（Kotlin DSL）",
+      "sbt",
+      "Ivy",
+      "Ant",
+    ]);
+
+    // 切到 Gradle（Groovy DSL）：一次切换，三组同时换成 Gradle 写法。
+    await user.click(await screen.findByRole("option", { name: "Gradle（Groovy）" }));
+    expect(await screen.findByText("认证（~/.gradle/gradle.properties）")).toBeTruthy();
+    expect(screen.getByText("解析依赖（Gradle）")).toBeTruthy();
+    expect(screen.getByText("发布制品（Gradle）")).toBeTruthy();
+    expect(screen.queryByText(/<server>/)).toBeNull();
+
+    // 切到 sbt：只有「解析依赖」有该工具，另两组整组隐藏（而不是留空标题）。
+    await user.click(screen.getByTestId("repo-usage-tool-select"));
+    await user.click(await screen.findByRole("option", { name: "sbt" }));
+    expect(await screen.findByText("解析依赖（sbt）")).toBeTruthy();
+    expect(screen.queryByTestId("repo-usage-group-auth")).toBeNull();
+    expect(screen.queryByTestId("repo-usage-group-publish")).toBeNull();
+
+    // 代码块右上角的复制按钮仍在；点击走复制链路且不抛错。
+    const copies = screen.getAllByRole("button", { name: "复制" });
+    expect(copies.length).toBeGreaterThan(0);
+    await user.click(copies[0]!);
+  });
+
+  it("raw 仓库：切到 wget 后只剩「解析依赖」（发布制品只有 curl）（阶段 3.2）", async () => {
+    const user = userEvent.setup();
+    renderDetail("raw-hosted", true);
+
+    // 默认 curl：解析与发布两组都在。
+    expect(await screen.findByTestId("repo-usage-group-resolve")).toBeTruthy();
+    expect(screen.getByTestId("repo-usage-group-publish")).toBeTruthy();
+
+    await user.click(await screen.findByTestId("repo-usage-tool-select"));
+    await user.click(await screen.findByRole("option", { name: "wget" }));
+
+    expect(await screen.findByText("下载制品（wget）")).toBeTruthy();
+    expect(screen.queryByTestId("repo-usage-group-publish")).toBeNull();
+  });
+
+  it("使用说明防御：非法 group 归入「其他」、缺失 tool 仍显示片段（阶段 3.2）", async () => {
+    server.use(
+      http.get("*/api/v1/repositories/:name/usage", () =>
+        HttpResponse.json({
+          format: "raw",
+          type: "hosted",
+          snippets: [
+            { title: "无分组片段", code: "echo no-group" },
+            { title: "非法分组片段", code: "echo bad-group", group: "legacy" },
+          ],
+        }),
+      ),
+    );
+    renderDetail("maven-releases", true);
+
+    expect(await screen.findByText("使用说明")).toBeTruthy();
+    // auth / resolve / publish 均为空 → 只剩「其他」一组，且已展开（无需点击）。
+    expect(await screen.findByTestId("repo-usage-group-other")).toBeTruthy();
+
+    // 两段都缺失合法 tool → 同属「未知工具」一档；只有一种工具 → 不渲染切换器，片段仍全部显示。
+    expect(await screen.findByText("无分组片段")).toBeTruthy();
+    expect(screen.getByText("非法分组片段")).toBeTruthy();
+    expect(screen.queryByTestId("repo-usage-tool-select")).toBeNull();
+  });
+
   it("非管理员看不到配置页签与重命名入口（阶段 D-2）", async () => {
     renderWithProviders(
       <Routes>
@@ -490,4 +754,82 @@ describe("仓库详情", () => {
     expect(screen.queryByRole("button", { name: "重命名" })).toBeNull();
   });
 
+  describe("窄屏浏览（FR-74 后续：树占满高度、详情改底部抽屉）", () => {
+    it("窄屏点选文件后弹出抽屉，抽屉内可见制品路径与下载入口，桌面详情卡不再渲染", async () => {
+      const user = userEvent.setup();
+      const spy = mockNarrowViewport();
+      try {
+        renderDetail("maven-releases", true);
+        await user.click(await screen.findByText("com"));
+        await user.click(await screen.findByText("example"));
+        await user.click(await screen.findByText("app"));
+        await user.click(await screen.findByText("1.0.0"));
+        await user.click(await screen.findByText("app-1.0.0.jar"));
+
+        const drawer = await screen.findByRole("dialog");
+        expect(within(drawer).getByText("com/example/app/1.0.0/app-1.0.0.jar")).toBeTruthy();
+        expect(within(drawer).getByRole("link", { name: "下载" })).toBeTruthy();
+        // 窄屏不再渲染桌面详情卡：详情空间全部让给抽屉，卡片不占布局高度。
+        expect(screen.queryByTestId("repo-detail-panel")).toBeNull();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("窄屏关闭抽屉后回到文件树：抽屉消失、树保持展开状态", async () => {
+      const user = userEvent.setup();
+      const spy = mockNarrowViewport();
+      try {
+        renderDetail("maven-releases", true);
+        await user.click(await screen.findByText("com"));
+        await user.click(await screen.findByText("example"));
+        await user.click(await screen.findByText("app"));
+        await user.click(await screen.findByText("1.0.0"));
+        await user.click(await screen.findByText("app-1.0.0.jar"));
+
+        const drawer = await screen.findByRole("dialog");
+        await user.click(within(drawer).getByRole("button", { name: "关闭" }));
+
+        await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+        // 树仍在且保持原有展开状态（祖先目录与命中文件不需要重新展开）。
+        expect(screen.getByRole("tree")).toBeTruthy();
+        expect(screen.getByText("app-1.0.0.jar")).toBeTruthy();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("窄屏文件树占满可用高度：树卡不再有 45vh 上限", async () => {
+      const spy = mockNarrowViewport();
+      try {
+        renderDetail("maven-releases", true);
+        const tree = await screen.findByRole("tree");
+        // 树卡即文件树最近的 Card 根节点（ScrollArea 不是 Card）。
+        const treeCard = tree.closest(".mantine-Card-root") as HTMLElement | null;
+        expect(treeCard).not.toBeNull();
+        expect((treeCard as HTMLElement).style.maxHeight).toBe("");
+        // 改为参与拉伸（flex: 1 → 1 1 0%），不再按内容自适应。
+        expect((treeCard as HTMLElement).style.flex).toBe("1 1 0%");
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("窄屏未选中文件时「使用说明」入口可见，点击在同一抽屉内渲染使用说明", async () => {
+      const user = userEvent.setup();
+      const spy = mockNarrowViewport();
+      try {
+        renderDetail("maven-releases", true);
+        const entry = await screen.findByTestId("repo-usage-entry");
+        expect(entry.textContent).toBe("使用说明");
+
+        await user.click(entry);
+        const drawer = await screen.findByRole("dialog");
+        expect(within(drawer).getByTestId("repo-usage-panel")).toBeTruthy();
+        expect(within(drawer).getByText("解析依赖（pom.xml）")).toBeTruthy();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  });
 });

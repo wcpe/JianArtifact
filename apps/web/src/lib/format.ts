@@ -5,7 +5,7 @@ import { parseUtc } from "./timeFormat";
 
 /**
  * 人类可读文件大小（B/KB/MB/GB/TB，一位小数）。
- * 负值（如区间变动为下降）先取绝对值再格式化，最后补回负号。
+ * 负值先取绝对值再格式化，最后补回负号（兼容差值为负的调用方）。
  */
 export function formatBytes(bytes: number): string {
   const sign = bytes < 0 ? "-" : "";

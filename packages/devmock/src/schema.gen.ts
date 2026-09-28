@@ -2311,6 +2311,13 @@ export interface components {
             title: string;
             description?: string;
             code: string;
+            /**
+             * @description 按用途分组，供界面折叠分区：认证 / 解析依赖 / 发布制品 / 其他
+             * @enum {string}
+             */
+            group: "auth" | "resolve" | "publish" | "other";
+            /** @description 使用方式 / 构建工具标识，用于界面在分组内做工具切换；与 group 一样是结构化标记，不参与本地化。 当前取值：maven | gradle | gradle-kts | sbt | ivy | ant | npm | pnpm | yarn | bun | curl | wget */
+            tool: string;
         };
         UsageInfo: {
             format: string;

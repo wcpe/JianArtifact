@@ -24,6 +24,7 @@
 - 用户与令牌：用户列表/创建/更新/禁用/改密，API Token 创建和吊销。
 - 仓库与 ACL：仓库 CRUD、成员授权、仓库格式/可见性/上游配置和使用统计。
 - 公开仓库列表：`GET /api/v1/public/repositories`（无需认证）在 `items` / `total` 之外附带 `pinnedNames`——**全局置顶**仓库的当前主名（有序），公开页据此置顶前置并显示图钉。
+- 仓库使用说明：`GET /api/v1/repositories/{name}/usage` 返回 `UsageInfo.snippets`，每个 `UsageSnippet` 含 `group`（`auth` / `resolve` / `publish` / `other`）——它是**结构化分组标记，不参与本地化**（与随 `Accept-Language` 变化的 `title` / `description` 不同），供界面按「认证 / 解析依赖 / 发布制品 / 其他」折叠分区。
 - 仓库别名与重命名：`Repository.aliases` 与 `CreateRepositoryRequest` / `UpdateRepositoryRequest` 的 `aliases` 表达别名集合（别名与主名**共享命名空间、全局唯一**，不得等于主名或与他仓主名/别名冲突）；`POST /api/v1/repositories/{name}/rename`（仅管理员，`{newName}`）重命名后**旧名自动转别名**，旧链接仍可解析。字段、请求体与错误码以 [`../api/openapi.yaml`](../api/openapi.yaml) 为准。
 - 置顶仓库：`GET/PUT /api/v1/me/pinned-repositories` 读写**当前用户**的置顶（登录用户；匿名 `GET` 回退**全局置顶**，匿名 `PUT` 返回 401）；`GET/PUT /api/v1/settings/pinned-repositories` 读写**全局置顶**（仅管理员）。读写为**覆盖式**（按 repositoryId 整体替换，空数组即取消全部置顶），非法仓库 ID 返回 404 且不改动既有置顶；按 ID 持久化使仓库重命名不影响置顶。
 - 制品：仓库文件树、详情、搜索、下载、统一资产操作和格式相关管理操作。

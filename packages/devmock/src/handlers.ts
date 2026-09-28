@@ -280,6 +280,8 @@ export function mockUsageInfo(): UsageInfo {
         title: "解析依赖（pom.xml）",
         description: "在 <repositories> 中声明该仓库。",
         code: "<repository>...</repository>",
+        group: "resolve",
+        tool: "maven",
       },
     ],
   };

@@ -63,7 +63,6 @@ import { CONN_COLOR, CONN_LABEL_KEY } from "../lib/connectionStatus";
 import { formatBytes, formatCount, formatStamp } from "../lib/format";
 import { notifyError, notifySuccess } from "../lib/feedback";
 import { formatUtcToLocalDate } from "../lib/timeFormat";
-import { TrendChart } from "../components/observability/TrendChart";
 import { density } from "../theme/density";
 
 export function RepositoryDetailPage() {
@@ -71,10 +70,23 @@ export function RepositoryDetailPage() {
   const navigate = useNavigate();
   const { name = "" } = useParams();
   // FR-145：搜索直达的命中路径（仅作进入时的初始定位提示，不随后续交互写回）。
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const highlightPath = searchParams.get("highlight") ?? undefined;
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
+  const requestedTab = searchParams.get("tab");
+  const tab =
+    requestedTab === "config" || requestedTab === "acl" || requestedTab === "browse"
+      ? isAdmin || requestedTab === "browse"
+        ? requestedTab
+        : "browse"
+      : "browse";
+  const changeTab = (value: string | null) => {
+    if (!value) return;
+    const next = new URLSearchParams(searchParams);
+    next.set("tab", value);
+    setSearchParams(next, { replace: true });
+  };
   // 有登录即可尝试上传（后端校验 write）
   const allowUpload = Boolean(user);
 
@@ -102,13 +114,24 @@ export function RepositoryDetailPage() {
     label: formatStamp(point.from),
     value: point.downloadCount,
   }));
+  // 下传给 RepoBrowser 的趋势视图（渲染在右侧详情卡片顶部）：
+  // 下载趋势是仓库级信息，与「当前选中文件」无关，故由页面取数后统一交给浏览区展示，
+  // 避免 RepoBrowser 重复请求同一端点。三态与原先顶层整行渲染时完全一致。
+  const downloadTrendView: RepoDownloadTrendView = {
+    points: downloadTrend ? downloadTrendPoints : null,
+    loading: downloadTrendState.loading && !downloadTrend,
+    error: Boolean(downloadTrendState.error) && !downloadTrend,
+    // 折叠态摘要用：页面已取的全时段累计下载数，接口未就绪/失败为 null（不新增请求）。
+    total: downloadTrend?.totalDownloadCount ?? null,
+  };
   // 窄屏（< 48em）：页签与徽章必然折成两行，面板上边距也收一档，尽可能把高度留给内容。
   const isNarrow = useMediaQuery("(max-width: 48em)") ?? false;
 
   return (
     <PageShell testId="repo-detail-shell">
       <Tabs
-        defaultValue="browse"
+        value={tab}
+        onChange={changeTab}
         styles={{ tab: { paddingTop: 6, paddingBottom: 6 } }}
         style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
       >
@@ -210,23 +233,8 @@ export function RepositoryDetailPage() {
           </Text>
         ) : null}
 
-        {/* 下载趋势小图（端点 B，近 24h）：加载中骨架 / 失败降级文案 / 就绪复用 TrendChart。
-            高度固定，避免接口返回时页头与页签跳动。 */}
-        {downloadTrendState.loading && !downloadTrend ? (
-          <Skeleton height={160} radius="md" mb="xs" />
-        ) : downloadTrend ? (
-          <TrendChart
-            title={t("repoDetail.downloadTrendTitle")}
-            summary={t("repoDetail.downloadTrendPrimary")}
-            primary={downloadTrendPoints}
-            primaryLabel={t("repoDetail.downloadTrendPrimary")}
-            compact
-          />
-        ) : downloadTrendState.error ? (
-          <Text size="xs" c="dimmed" mb="xs">
-            {t("repoDetail.downloadTrendUnavailable")}
-          </Text>
-        ) : null}
+        {/* 下载趋势不再占用页面顶部整行：改由 RepoBrowser 渲染在右侧详情卡片顶部
+            （见 RepoBrowser 的 downloadTrend 区域），此处只负责取数并下传。 */}
 
         {/* 浏览 Tab：嵌入现有 RepoBrowser（填满剩余高度，内部面板各自滚动） */}
         <Tabs.Panel
@@ -239,6 +247,7 @@ export function RepositoryDetailPage() {
             allowUpload={allowUpload}
             publicMode={!user}
             highlightPath={highlightPath}
+            downloadTrend={downloadTrendView}
           />
         </Tabs.Panel>
 

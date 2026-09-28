@@ -4277,7 +4277,7 @@ components:
           description: 实际变更的资产数量
     UsageSnippet:
       type: object
-      required: [title, code]
+      required: [title, code, group, tool]
       properties:
         title:
           type: string
@@ -4285,6 +4285,15 @@ components:
           type: string
         code:
           type: string
+        group:
+          type: string
+          enum: [auth, resolve, publish, other]
+          description: 按用途分组，供界面折叠分区：认证 / 解析依赖 / 发布制品 / 其他
+        tool:
+          type: string
+          description: >-
+            使用方式 / 构建工具标识，用于界面在分组内做工具切换；与 group 一样是结构化标记，不参与本地化。
+            当前取值：maven | gradle | gradle-kts | sbt | ivy | ant | npm | pnpm | yarn | bun | curl | wget
     UsageInfo:
       type: object
       required: [format, type, snippets]

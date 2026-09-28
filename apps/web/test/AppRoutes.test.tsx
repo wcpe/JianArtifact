@@ -10,6 +10,13 @@ describe("路由懒加载（FR-70）", () => {
     ["审计中心", "/audit-logs"],
     ["业务仪表盘", "/dashboard"],
     ["主机监控", "/host-monitoring"],
+    ["用户管理", "/users"],
+    ["设置", "/settings"],
+    ["开源协议", "/licenses"],
+    ["迁移列表", "/migrations"],
+    ["新建迁移", "/migrations/new"],
+    ["迁移详情", "/migrations/1"],
+    ["仓库访问控制", "/repositories/maven-releases/acl"],
   ])("普通用户直链%s保持管理权限 403", async (_name, route) => {
     renderWithProviders(<AppRoutes />, {
       route,
@@ -30,6 +37,16 @@ describe("路由懒加载（FR-70）", () => {
     expect(publicRepositoryRedirectPath("raw-hosted", "?__mock=empty")).toBe(
       "/repositories/raw-hosted?__mock=empty",
     );
+  });
+
+  it("旧 ACL 深链重定向到详情页 ACL 页签", async () => {
+    renderWithProviders(<AppRoutes />, {
+      route: "/repositories/maven-releases/acl?highlight=com/example",
+      authenticated: true,
+    });
+
+    const aclTab = await screen.findByRole("tab", { name: "ACL" });
+    expect(aclTab.getAttribute("aria-selected")).toBe("true");
   });
 
   it("迁移详情 empty 场景经完整路由仍停留在详情页", async () => {

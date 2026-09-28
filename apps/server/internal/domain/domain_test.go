@@ -346,13 +346,15 @@ func TestUsageByFormat(t *testing.T) {
 
 	const base = "https://artifact.example.com"
 
-	// maven hosted：settings.xml、pom 解析、Gradle 解析 + mvn/Gradle 两段发布，共五段。
+	// maven hosted：认证 3（settings.xml / gradle / gradle-kts 的 gradle.properties）、
+	// 解析 7（pom / Gradle Groovy / Gradle Kotlin DSL / sbt / 一行式 mvn / Ivy / Ant）、
+	// 发布 4（pom / Gradle Groovy / Gradle Kotlin DSL / 一行式 mvn deploy），共十四段。
 	repo, mvnSnips, err := svc.Usage("mvn", base, "zh")
 	if err != nil {
 		t.Fatalf("Usage maven：%v", err)
 	}
-	if repo.Format != "maven" || len(mvnSnips) != 5 {
-		t.Fatalf("maven hosted 应 5 段，得 format=%s len=%d", repo.Format, len(mvnSnips))
+	if repo.Format != "maven" || len(mvnSnips) != 14 {
+		t.Fatalf("maven hosted 应 14 段，得 format=%s len=%d", repo.Format, len(mvnSnips))
 	}
 	joined := ""
 	for _, s := range mvnSnips {
@@ -365,19 +367,20 @@ func TestUsageByFormat(t *testing.T) {
 		t.Error("maven hosted 应含发布片段")
 	}
 
-	// npm proxy：仅配置 + 安装两段（不可写，无 publish）。
+	// npm proxy：认证 2（全局 registry / .npmrc）+ 解析 4（npm / pnpm / Yarn / bun），共六段；不可写，无 publish。
 	_, npmSnips, err := svc.Usage("npm-proxy", base, "zh")
 	if err != nil {
 		t.Fatalf("Usage npm：%v", err)
 	}
-	if len(npmSnips) != 2 {
-		t.Fatalf("npm proxy 应 2 段（无 publish），得 %d", len(npmSnips))
+	if len(npmSnips) != 6 {
+		t.Fatalf("npm proxy 应 6 段（无 publish），得 %d", len(npmSnips))
 	}
 	for _, s := range npmSnips {
 		if strings.Contains(s.Code, "npm publish") {
 			t.Error("proxy 仓库不应含 publish 片段")
 		}
-		if !strings.Contains(s.Code, base+"/npm/npm-proxy/") {
+		// bun 读取既有 .npmrc / bunfig.toml 的 registry 配置，命令里不带地址，故豁免。
+		if s.Tool != domain.UsageToolBun && !strings.Contains(s.Code, base+"/npm/npm-proxy/") {
 			t.Errorf("npm 片段应含 registry 地址，得 %q", s.Code)
 		}
 	}

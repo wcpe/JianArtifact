@@ -8,12 +8,16 @@ import {
   Button,
   Card,
   Collapse,
+  Divider,
+  Drawer,
   FileButton,
   Group,
   Loader,
   LoadingOverlay,
   Modal,
   ScrollArea,
+  Select,
+  Skeleton,
   Stack,
   Text,
   TextInput,
@@ -51,9 +55,29 @@ import { confirmDanger, notifyError, notifySuccess } from "../../lib/feedback";
 import { useAuth } from "../../auth/AuthContext";
 import { density } from "../../theme/density";
 import { AsyncBoundary } from "../AsyncBoundary";
+import { CopyTextButton } from "../CopyTextButton";
 import { MavenUploadCard } from "./MavenUploadCard";
 import { RepoAssetTree } from "./RepoAssetTree";
 import { RepoFileDetail } from "./RepoFileDetail";
+import { TrendChart } from "../observability/TrendChart";
+
+/**
+ * 仓库级下载趋势视图（阶段 D-1）：由 RepositoryDetailPage 取数后下传，
+ * 避免 RepoBrowser 自己再发一次同口径请求。三态互斥，供右栏顶部固定区渲染。
+ */
+export interface RepoDownloadTrendView {
+  /** 近 24h 趋势点（label=桶起点本地时间，value=下载次数）；尚无数据时为 null。 */
+  points: { label: string; value: number }[] | null;
+  /** 首载进行中且无数据可展示 → 渲染骨架。 */
+  loading: boolean;
+  /** 取数失败且无数据可展示 → 渲染降级文案。 */
+  error: boolean;
+  /**
+   * 全时段累计下载次数（接口未就绪/失败时为 null）。图表区已改为默认直接展示、
+   * 不再有折叠摘要行，故本字段当前未被本组件消费；保留以兼容调用方传参。
+   */
+  total: number | null;
+}
 
 interface Props {
   repoName: string;
@@ -66,6 +90,11 @@ interface Props {
   forcedType?: string;
   /** FR-145：搜索结果直达的命中路径（进入时逐级展开并选中；失效静默降级）。 */
   highlightPath?: string;
+  /**
+   * 仓库级下载趋势：常驻渲染在右侧详情卡片顶部，与「当前选中文件」无关。
+   * 由详情页取数后下传（不传则不渲染该区域，既有直接使用 RepoBrowser 的场景不受影响）。
+   */
+  downloadTrend?: RepoDownloadTrendView;
 }
 
 /** 将 tree API 响应转为 AssetTreeNode[] （目录 children=undefined 表示未加载）。 */
@@ -154,6 +183,7 @@ export function RepoBrowser({
   forcedFormat,
   forcedType,
   highlightPath,
+  downloadTrend,
 }: Props) {
   const { t } = useTranslation();
   const { user } = useAuth();
@@ -172,6 +202,8 @@ export function RepoBrowser({
   const [reloadNonce, setReloadNonce] = useState(0);
   // 上传区默认收起，点击按钮展开（避免常驻占位挤压文件树）。
   const [uploadOpen, setUploadOpen] = useState(false);
+  // 窄屏底部抽屉：选中文件时自动打开；未选中文件时由树卡下方的「使用说明」入口打开。
+  const [usageDrawerOpen, setUsageDrawerOpen] = useState(false);
 
   // FR-99: 左树宽度可拖拽调整（分割条），偏好本地持久化；min 280 / max 720。
   const [treeWidth, setTreeWidth] = useLocalStorage<number>({
@@ -374,6 +406,9 @@ export function RepoBrowser({
 
   const onSelectFile = (node: AssetTreeNode) => {
     if (node.asset) {
+      // 窄屏：选中制品即弹出底部抽屉（抽屉内容按 selected 判定），
+      // 先收起「使用说明」抽屉态，避免关闭后又回到使用说明。
+      setUsageDrawerOpen(false);
       setSelected(node.asset);
     }
   };
@@ -562,6 +597,59 @@ export function RepoBrowser({
     })();
   }, [highlightPath, handleExpandDir, onSelectFile]);
 
+  // 窄屏底部抽屉：选中制品或点开「使用说明」时打开；关闭即清空选中（树保持原有展开与滚动状态）。
+  const narrowDrawerOpen = isNarrow && (selected !== null || usageDrawerOpen);
+  const closeNarrowDrawer = () => {
+    setSelected(null);
+    setUsageDrawerOpen(false);
+  };
+
+  /**
+   * 右侧详情内容：下载趋势 + 选中制品的完整详情（未选中时是使用说明）。
+   * 桌面固定右栏卡片与窄屏底部抽屉**复用同一份内容**，避免两处实现各自漂移；
+   * 滚动容器一并内置，两处外壳只需给出受约束的高度（卡片 / 抽屉内容区）即可。
+   */
+  const detailPanelContent = (
+    <ScrollArea style={{ flex: 1, minHeight: 0 }} type="auto" offsetScrollbars>
+      {/* 下载趋势：与下方详情 / 使用说明**同处一个滚动区**，作为滚动内容的开头。
+          不放固定列首——钉在顶部会与下方内容争夺高度、被压得显小；放进滚动流后
+          图表按自身高度完整渲染，往下滚时它自然向上滚出视野，不再占位。
+          minHeight:0：flex 项默认 min-height:auto 会被内容顶高，导致 ScrollArea 撑破卡片而非内滚。 */}
+      {/* 窄屏：选中制品时不再把仓库级趋势图排在前面——手机上打开详情的第一眼应该是
+          路径/校验和/下载，而不是先滚过一张图；趋势图保留在「使用说明」那一次展开里。 */}
+      {downloadTrend && (!isNarrow || selected === null) ? (
+        <Box data-testid="repo-detail-trend" mb="sm">
+          {downloadTrend.loading ? (
+            <Skeleton height={160} radius="md" />
+          ) : downloadTrend.points ? (
+            <TrendChart
+              title={t("repoDetail.downloadTrendTitle")}
+              summary={t("repoDetail.downloadTrendPrimary")}
+              primary={downloadTrend.points}
+              primaryLabel={t("repoDetail.downloadTrendPrimary")}
+              compact
+            />
+          ) : downloadTrend.error ? (
+            <Text size="xs" c="dimmed">
+              {t("repoDetail.downloadTrendUnavailable")}
+            </Text>
+          ) : null}
+        </Box>
+      ) : null}
+      {selected ? (
+        <RepoFileDetail
+          repoName={repoName}
+          format={format}
+          asset={selected}
+          usage={usageState.data}
+          showDownload
+        />
+      ) : (
+        <UsagePanel usageState={usageState} />
+      )}
+    </ScrollArea>
+  );
+
   return (
     <Stack gap={isNarrow ? "sm" : "md"} style={{ height: "100%", overflow: "hidden" }}>
       {/* FR-81：format/type/visibility 徽章由详情页页头统一渲染，此处不再重复一层。 */}
@@ -676,21 +764,20 @@ export function RepoBrowser({
           }}
         >
           {/* 左侧：文件树 + 搜索。
-              窄屏按内容高度自适应（最多 45vh，超出时树内滚动），不再与详情平分高度——
-              2 行的树平分后会白占半屏空白，而"选中后收起"又要多点一次「换文件」，得不偿失。 */}
+              窄屏详情改由底部抽屉承载（见下方 Drawer），树卡因此独占整屏剩余高度、由内层 ScrollArea 滚动——
+              此前树卡被限死在 45vh，选中制品后详情只剩残余高度，手机上一句话都读不全。 */}
           <Card
             withBorder
             padding={density.cardPadding}
             radius="md"
             style={{
-              // 窄屏：全宽 + 按内容自适应（不参与拉伸，最多 45vh）；宽屏：可拖拽的固定宽侧栏。
+              // 窄屏：全宽 + 占满可用高度（内层 ScrollArea 负责滚动）；宽屏：可拖拽的固定宽侧栏。
               width: isNarrow ? "100%" : treeWidth,
               minWidth: isNarrow ? 0 : 280,
               maxWidth: isNarrow ? "100%" : 720,
-              flex: isNarrow ? "0 0 auto" : undefined,
-              maxHeight: isNarrow ? "45vh" : undefined,
+              flex: isNarrow ? 1 : undefined,
               overflow: isNarrow ? "hidden" : undefined,
-              flexShrink: 0,
+              flexShrink: isNarrow ? 1 : 0,
               minHeight: 0,
               display: "flex",
               flexDirection: "column",
@@ -766,8 +853,8 @@ export function RepoBrowser({
                   {treeActionError}
                 </Alert>
               )}
-              {/* 窄屏树卡是"按内容自适应"高度：超出 maxHeight（45vh）时要靠内层滚动，
-                所以这里必须 minHeight: 0，否则 ScrollArea 会撑破卡片。 */}
+              {/* 树卡高度受约束（宽屏由树宽/窄屏由 flex: 1 决定），超出部分必须靠内层滚动，
+                所以这里必须 minHeight: 0，否则 ScrollArea 会被内容顶高、撑破卡片而不是内滚。 */}
               <ScrollArea style={{ flex: 1, minHeight: 0 }} type="auto" offsetScrollbars>
                 <RepoAssetTree
                   key={searchResults === null ? "browse" : `search:${searchQuery}`}
@@ -807,33 +894,39 @@ export function RepoBrowser({
             />
           )}
 
-          {/* 右侧：文件详情 / 使用说明 */}
-          <Card
-            withBorder
-            padding={density.cardPadding}
-            radius="md"
-            style={{
-              flex: 1,
-              minHeight: 0,
-              display: "flex",
-              flexDirection: "column",
-              overflow: "hidden",
-            }}
-          >
-            <ScrollArea style={{ flex: 1 }} type="auto" offsetScrollbars>
-              {selected ? (
-                <RepoFileDetail
-                  repoName={repoName}
-                  format={format}
-                  asset={selected}
-                  usage={usageState.data}
-                  showDownload
-                />
-              ) : (
-                <UsagePanel usageState={usageState} />
-              )}
-            </ScrollArea>
-          </Card>
+          {/* 窄屏：未选中文件时给一行紧凑入口，保证「使用说明」不随详情卡退场而不可达。 */}
+          {isNarrow && !selected && (
+            <Button
+              size="xs"
+              variant="light"
+              data-testid="repo-usage-entry"
+              style={{ alignSelf: "flex-start" }}
+              onClick={() => setUsageDrawerOpen(true)}
+            >
+              {t("repoDetail.usageTitle")}
+            </Button>
+          )}
+
+          {/* 右侧：文件详情 / 使用说明。
+              窄屏不渲染（也不占布局空间）：详情与使用说明改由下方底部抽屉承载，
+              两者共用 detailPanelContent 这一份内容，避免两处实现漂移。 */}
+          {isNarrow ? null : (
+            <Card
+              withBorder
+              padding={density.cardPadding}
+              radius="md"
+              data-testid="repo-detail-panel"
+              style={{
+                flex: 1,
+                minHeight: 0,
+                display: "flex",
+                flexDirection: "column",
+                overflow: "hidden",
+              }}
+            >
+              {detailPanelContent}
+            </Card>
+          )}
         </Box>
       )}
 
@@ -922,46 +1015,211 @@ export function RepoBrowser({
           </Group>
         </Stack>
       </Modal>
+
+      {/* 窄屏：制品详情 / 使用说明改由底部抽屉承载（约 85dvh，内容区自身滚动、关闭按钮常驻）。
+          选中文件即自动弹出，关闭则清空选中并回到文件树（树的展开与滚动状态不变）。 */}
+      <Drawer
+        opened={narrowDrawerOpen}
+        onClose={closeNarrowDrawer}
+        position="bottom"
+        size="85dvh"
+        closeButtonProps={{ "aria-label": t("common.close") }}
+        styles={{
+          // 抽屉内容区固定为 85dvh 高、内部纵向弹性布局，滚动交给共用的 ScrollArea，
+          // 头部（含关闭按钮）保持固定；不这样做则滚动条会落到含头部的整块内容上。
+          content: {
+            display: "flex",
+            flexDirection: "column",
+            overflow: "hidden",
+          },
+          body: {
+            flex: 1,
+            minHeight: 0,
+            display: "flex",
+            flexDirection: "column",
+            overflow: "hidden",
+          },
+        }}
+      >
+        {detailPanelContent}
+      </Drawer>
     </Stack>
   );
 }
 
-/** 使用说明面板：右侧无选中文件时展示。 */
+/**
+ * 使用说明分组顺序（固定）：认证 → 解析依赖 → 发布制品 → 其他。
+ * 顺序即契约 `UsageSnippet.group` 的展示序；空组不渲染。
+ */
+const USAGE_GROUPS = ["auth", "resolve", "publish", "other"] as const;
+type UsageGroup = (typeof USAGE_GROUPS)[number];
+
+/**
+ * 分组标签的 i18n 键（与 USAGE_GROUPS 一一对应）。
+ */
+const USAGE_GROUP_LABEL_KEYS: Record<UsageGroup, string> = {
+  auth: "repoDetail.usageGroupAuth",
+  resolve: "repoDetail.usageGroupResolve",
+  publish: "repoDetail.usageGroupPublish",
+  other: "repoDetail.usageGroupOther",
+};
+
+/**
+ * 工具标识 → 显示名 i18n 键。工具标识是契约里的**结构化标记**（不参与本地化），
+ * 界面按键取本地化显示名；未收录的标识直接原样显示（防御异常数据）。
+ */
+const USAGE_TOOL_LABEL_KEYS: Record<string, string> = {
+  maven: "repoDetail.usageToolMaven",
+  gradle: "repoDetail.usageToolGradle",
+  "gradle-kts": "repoDetail.usageToolGradleKts",
+  sbt: "repoDetail.usageToolSbt",
+  ivy: "repoDetail.usageToolIvy",
+  ant: "repoDetail.usageToolAnt",
+  npm: "repoDetail.usageToolNpm",
+  pnpm: "repoDetail.usageToolPnpm",
+  yarn: "repoDetail.usageToolYarn",
+  bun: "repoDetail.usageToolBun",
+  curl: "repoDetail.usageToolCurl",
+  wget: "repoDetail.usageToolWget",
+};
+
+/**
+ * 归类单个片段：缺失 `group` 或值不在预期集合内（老 mock / 异常数据）一律归入 `other`，
+ * 只折叠不错放——直接丢弃会让用户看不到既有片段。
+ */
+function usageGroupOf(snippet: UsageSnippet): UsageGroup {
+  const group = (snippet as { group?: string }).group;
+  return USAGE_GROUPS.includes(group as UsageGroup) ? (group as UsageGroup) : "other";
+}
+
+/**
+ * 读取片段的工具标识；缺失或非字符串（老 mock / 异常数据）回落为空串，
+ * 只做分组内切换、绝不丢弃片段——异常数据仍会显示在「未知工具」这一档下。
+ */
+function usageToolOf(snippet: UsageSnippet): string {
+  const tool = (snippet as { tool?: string }).tool;
+  return typeof tool === "string" ? tool : "";
+}
+
+/**
+ * 使用说明面板：右侧无选中文件时展示。
+ *
+ * 顶部**一个工具切换器**统一筛选（Maven / Gradle / Gradle Kotlin DSL / sbt / Ivy / Ant /
+ * npm / pnpm / Yarn / bun / curl / wget 等）：几种工具通常是针对同一个仓库并行使用的（不同项目
+ * 各自选型），不该让用户在每个分组里各选一次；切换一次，下方各分组的内容同时跟着变。
+ *
+ * 「认证 / 解析依赖 / 发布制品」三组**全部展开**一次看全——它们本就是配置一个仓库时要一起做的事，
+ * 折叠反而多一次点击。当前工具在某组没有片段时该组隐藏（避免只剩空标题），故切换工具后分组数会变，
+ * 这是预期行为（例如选 sbt 时只剩「解析依赖」一组）。
+ * 每段一张小卡片，代码块右上角提供复制。
+ */
 function UsagePanel({ usageState }: { usageState: ReturnType<typeof useAsync<UsageInfo>> }) {
   const { t } = useTranslation();
+  // 全局选中的工具；数据变化导致选择失效时回落第一个可用工具，避免受控空值导致内容空白。
+  const [activeTool, setActiveTool] = useState("");
+  // 工具显示名：已知工具走 i18n，未知工具直接显示原始标识（不丢弃片段）。
+  const toolLabel = (tool: string) => {
+    const key = USAGE_TOOL_LABEL_KEYS[tool];
+    return key ? t(key, { defaultValue: tool }) : tool;
+  };
   return (
     <AsyncBoundary state={usageState}>
-      {(usage: UsageInfo) => (
-        <Stack gap="sm">
-          <Title order={5}>{t("repoDetail.usageTitle")}</Title>
-          {usage.snippets.map((snippet, index) => (
-            <Card key={index} withBorder padding="sm" radius="md">
-              <Text fw={600} size="sm" mb={4}>
-                {snippet.title}
+      {(usage: UsageInfo) => {
+        const grouped = USAGE_GROUPS.map((group) => ({
+          group,
+          snippets: usage.snippets.filter((snippet) => usageGroupOf(snippet) === group),
+        })).filter((entry) => entry.snippets.length > 0);
+        // 全部工具（跨分组的并集，按首次出现顺序去重）——即切换器的选项；选项只显示工具名。
+        const tools: string[] = [];
+        for (const snippet of usage.snippets) {
+          const tool = usageToolOf(snippet);
+          if (!tools.includes(tool)) {
+            tools.push(tool);
+          }
+        }
+        const active = tools.includes(activeTool) ? activeTool : (tools[0] ?? "");
+        // 按当前工具过滤各分组；空组整组隐藏（切换工具后分组数会变，属预期）。
+        const sections = grouped
+          .map((entry) => ({
+            group: entry.group,
+            snippets: entry.snippets.filter((snippet) => usageToolOf(snippet) === active),
+          }))
+          .filter((entry) => entry.snippets.length > 0);
+        return (
+          <Stack gap="sm" data-testid="repo-usage-panel">
+            <Title order={5}>{t("repoDetail.usageTitle")}</Title>
+            {grouped.length === 0 ? (
+              <Text size="xs" c="dimmed">
+                {t("repoDetail.usageEmpty", { defaultValue: "该仓库暂无使用说明" })}
               </Text>
-              {snippet.description && (
-                <Text size="xs" c="dimmed" mb={6}>
-                  {snippet.description}
-                </Text>
-              )}
-              <Text
-                component="pre"
-                size="xs"
-                ff="monospace"
-                style={{
-                  whiteSpace: "pre-wrap",
-                  margin: 0,
-                  background: "var(--mantine-color-default-hover)",
-                  padding: 8,
-                  borderRadius: 4,
-                }}
-              >
-                {snippet.code}
-              </Text>
-            </Card>
-          ))}
-        </Stack>
-      )}
+            ) : (
+              <>
+                {tools.length > 1 && (
+                  <Select
+                    size="xs"
+                    data-testid="repo-usage-tool-select"
+                    aria-label={t("repoDetail.usageToolSelectLabel", {
+                      defaultValue: "选择使用方式",
+                    })}
+                    data={tools.map((tool) => ({
+                      value: tool,
+                      label: toolLabel(tool),
+                    }))}
+                    value={active}
+                    onChange={(value) => {
+                      if (value !== null) {
+                        setActiveTool(value);
+                      }
+                    }}
+                    allowDeselect={false}
+                    comboboxProps={{ withinPortal: true }}
+                  />
+                )}
+                {sections.map((entry) => (
+                  <Stack key={entry.group} gap="xs" data-testid={`repo-usage-group-${entry.group}`}>
+                    <Divider label={t(USAGE_GROUP_LABEL_KEYS[entry.group])} labelPosition="left" />
+                    {entry.snippets.map((snippet, index) => (
+                      <Card key={index} withBorder padding="sm" radius="md">
+                        <Group
+                          justify="space-between"
+                          align="flex-start"
+                          gap="xs"
+                          mb={4}
+                          wrap="nowrap"
+                        >
+                          <Text fw={600} size="sm">
+                            {snippet.title}
+                          </Text>
+                          <CopyTextButton value={snippet.code} />
+                        </Group>
+                        {snippet.description && (
+                          <Text size="xs" c="dimmed" mb={6}>
+                            {snippet.description}
+                          </Text>
+                        )}
+                        <Text
+                          component="pre"
+                          size="xs"
+                          ff="monospace"
+                          style={{
+                            whiteSpace: "pre-wrap",
+                            margin: 0,
+                            background: "var(--mantine-color-default-hover)",
+                            padding: 8,
+                            borderRadius: 4,
+                          }}
+                        >
+                          {snippet.code}
+                        </Text>
+                      </Card>
+                    ))}
+                  </Stack>
+                ))}
+              </>
+            )}
+          </Stack>
+        );
+      }}
     </AsyncBoundary>
   );
 }

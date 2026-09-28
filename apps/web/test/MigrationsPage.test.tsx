@@ -17,6 +17,8 @@ describe("迁移列表开发态场景", () => {
     });
 
     expect(await screen.findByText("#5")).toBeTruthy();
+    expect(screen.getAllByTestId("migrations-page")).toHaveLength(1);
+    expect(screen.queryByTestId("backups-tab")).toBeNull();
   });
 
   it("empty 场景仍展示空态", async () => {

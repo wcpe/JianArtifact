@@ -1059,13 +1059,22 @@ describe("devmock MSW 端点行为", () => {
     const body = (await res.json()) as {
       format: string;
       type: string;
-      snippets: { code: string }[];
+      snippets: { code: string; group: string }[];
     };
     expect(body.format).toBe("npm");
     expect(body.snippets.length).toBeGreaterThan(0);
     expect(body.snippets.some((s) => s.code.includes("npm config set registry"))).toBe(true);
     // proxy 不可写：不应含 publish 片段。
     expect(body.snippets.some((s) => s.code.includes("npm publish"))).toBe(false);
+    // 每个片段都带契约允许的 group，且 registry 配置归入 auth、安装归入 resolve。
+    const allowedGroups = ["auth", "resolve", "publish", "other"];
+    for (const snippet of body.snippets) {
+      expect(allowedGroups).toContain(snippet.group);
+    }
+    expect(body.snippets.find((s) => s.code.includes("npm config set registry"))?.group).toBe(
+      "auth",
+    );
+    expect(body.snippets.find((s) => s.code.includes("npm install"))?.group).toBe("resolve");
   });
 
   it("仓库列表为 proxy 返回连接状态、hosted 不返回（FR-114）", async () => {

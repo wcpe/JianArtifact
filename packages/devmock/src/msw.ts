@@ -301,7 +301,8 @@ function downloadTrendBucket(window: DownloadTrendWindow): "minute" | "hour" | "
 /** 按分钟源桶与 [from,to) 规则生成服务端同起点的连续聚合桶。 */
 function downloadTrendBuckets(window: DownloadTrendWindow, bucket: "minute" | "hour" | "day") {
   const minuteMs = 60_000;
-  const stepMs = bucket === "minute" ? minuteMs : bucket === "hour" ? 60 * minuteMs : 24 * 60 * minuteMs;
+  const stepMs =
+    bucket === "minute" ? minuteMs : bucket === "hour" ? 60 * minuteMs : 24 * 60 * minuteMs;
   const firstSourceMinute = Math.ceil(window.fromMs / minuteMs) * minuteMs;
   const endSourceMinute = Math.ceil(window.toMs / minuteMs) * minuteMs;
   if (firstSourceMinute >= endSourceMinute) return [];
@@ -1496,17 +1497,24 @@ export const handlers = [
           const wave = Math.sin(bucketIndex / 2.4 + groupIndex * 0.85);
           const count = Math.max(
             0,
-            Math.round(bases[groupIndex]! + wave * 1.6 + ((bucketIndex * 7 + groupIndex * 3 + repoSalt) % 3) - 1),
+            Math.round(
+              bases[groupIndex]! +
+                wave * 1.6 +
+                ((bucketIndex * 7 + groupIndex * 3 + repoSalt) % 3) -
+                1,
+            ),
           );
           if (count > 0) points.push({ ...bucket, group: groups[groupIndex]!, count });
         }
       }
     }
     // 饼图 totals 必须逐组等于 points 的全窗口求和，并按降序返回，确保饼图与时序总量一致。
-    const totals = [...points.reduce((counts, point) => {
-      counts.set(point.group, (counts.get(point.group) ?? 0) + point.count);
-      return counts;
-    }, new Map<string, number>())]
+    const totals = [
+      ...points.reduce((counts, point) => {
+        counts.set(point.group, (counts.get(point.group) ?? 0) + point.count);
+        return counts;
+      }, new Map<string, number>()),
+    ]
       .map(([group, count]) => ({ group, count }))
       .sort((left, right) => right.count - left.count || left.group.localeCompare(right.group));
     const response: DownloadGroupedTrendResponse = {

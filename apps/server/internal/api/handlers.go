@@ -438,7 +438,7 @@ func toAPIAsset(a *repository.Asset) AssetSummary {
 
 // toAPIUsageSnippet 把领域使用片段转为契约 UsageSnippet。
 func toAPIUsageSnippet(s domain.UsageSnippet) UsageSnippet {
-	out := UsageSnippet{Title: s.Title, Code: s.Code}
+	out := UsageSnippet{Title: s.Title, Code: s.Code, Group: UsageSnippetGroup(s.Group), Tool: s.Tool}
 	if s.Description != "" {
 		d := s.Description
 		out.Description = &d

@@ -2,11 +2,13 @@
 // FR-68：固定布局（页头/筛选/分页固定，表格区内滚 + sticky 表头）；匿名视图隐藏管理操作。
 // 每页条数随表格滚动区高度自适应（下限 10，见 rowsPerPage），高屏不再留大片空白。
 import {
+  ActionIcon,
   Badge,
   Box,
   Button,
   Center,
   Group,
+  Menu,
   Modal,
   MultiSelect,
   Pagination,
@@ -31,6 +33,7 @@ import {
   IconCircleX,
   IconCloudOff,
   IconDatabase,
+  IconDotsVertical,
   IconEraser,
   IconEye,
   IconFile,
@@ -43,10 +46,10 @@ import {
   IconTrash,
 } from "@tabler/icons-react";
 import { EmptyState } from "@jianartifact/ui";
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import { PageShell } from "../app/PageShell";
 import { currentLocaleTag } from "../i18n/current";
@@ -512,7 +515,8 @@ export function RepositoriesPage() {
       <PageShell>
         {/* FR-56: 排序与分组控件 + 名称筛选；右侧为新建仓库入口（与筛选同一行，避免多余空白带） */}
         <Group gap="sm" mb="md" wrap="wrap" justify="space-between">
-          <Group gap="sm" wrap="wrap">
+          {/* 窄屏 align=flex-end：同行控件自带 label，底部对齐才能让「新建」图标按钮与输入框齐平。 */}
+          <Group gap="sm" wrap="wrap" align={isNarrow ? "flex-end" : "center"}>
             <Select
               size="xs"
               label={t("repositories.sortBy", { defaultValue: "排序" })}
@@ -598,14 +602,24 @@ export function RepositoriesPage() {
               w={isNarrow ? undefined : 190}
               style={isNarrow ? { flex: "1 1 0", minWidth: 0 } : undefined}
             />
+            {/* 窄屏：新建仓库收成图标按钮与筛选同行。「整行通栏按钮」在手机上要独占约 36px
+                高度，而那一行高度直接等于少看一个仓库；图标按钮带 aria-label/Tooltip，
+                可达性不变。 */}
+            {isNarrow && canManage ? (
+              <Tooltip label={t("repositories.create")}>
+                <ActionIcon
+                  size="md"
+                  variant="filled"
+                  aria-label={t("repositories.create")}
+                  onClick={createModal.open}
+                >
+                  <IconPlus size={16} />
+                </ActionIcon>
+              </Tooltip>
+            ) : null}
           </Group>
-          {canManage ? (
-            <Button
-              leftSection={<IconPlus size={16} />}
-              // 窄屏主操作占整行：挤在筛选行尾部会把它自己换到下一行且只有半个宽度。
-              w={isNarrow ? "100%" : undefined}
-              onClick={createModal.open}
-            >
+          {!isNarrow && canManage ? (
+            <Button leftSection={<IconPlus size={16} />} onClick={createModal.open}>
               {t("repositories.create")}
             </Button>
           ) : null}
@@ -653,7 +667,9 @@ export function RepositoriesPage() {
                       // 默认 horizontalSpacing=md 每列左右各 16px、8 列共 256px 纯内边距，
                       // 收到 sm 腾出 64px 给内容列——比缩短日期/砍列更无损。
                       horizontalSpacing={isNarrow ? "xs" : "sm"}
-                      verticalSpacing={isNarrow ? "md" : "xs"}
+                      // 行距统一 xs：手机上一行的高度直接决定一屏能看几个仓库（窄屏曾用 md，
+                      // 行高被行内边距再撑大一圈，一屏只剩四五个）。
+                      verticalSpacing="xs"
                     >
                       <Table.Thead>
                         <Table.Tr>
@@ -722,7 +738,7 @@ export function RepositoriesPage() {
                         </Table.Tr>
                       </Table.Thead>
                       <Table.Tbody>
-                        {visibleItems.map((repo) => {
+                        {groupedVisibleItems.map(({ repo, groupKey, showGroupHeader }) => {
                           const protoUrl = protocolBaseFor(repo);
                           const pinned = isPinned(repo.name);
                           const visibilityLabel =
@@ -730,12 +746,12 @@ export function RepositoriesPage() {
                               ? t("repositories.visibilityPublic")
                               : t("repositories.visibilityPrivate");
                           // 行内操作统一「图标 + 文字」：纯图标看不出是什么操作（浏览/置顶/清理/删除）。
-                          // 抽成变量是因为窄屏要把它从「操作」列挪到主标识下方：那里有整行宽度，
-                          // 三四个按钮能一行放下，不会像窄列那样竖着排成四行把行撑高。
-                          // 窄屏行内操作放大一号：compact-xs 只有 22px，放在手机上太小。
-                          const actionSize = isNarrow ? "xs" : "compact-xs";
+                          // 这份「图标 + 文字」按钮组只用于桌面表格的操作列；窄屏已改为
+                          // 「点主标识进入 + 图标操作 + 溢出菜单」（见下方 narrowActions），
+                          // 目的是把一屏可见仓库数翻倍（四个文字按钮换行会把行撑到 140px 上下）。
+                          const actionSize = "compact-xs";
                           const rowActions = (
-                            <Group gap={isNarrow ? 8 : 4} wrap="wrap">
+                            <Group gap={4} wrap="wrap">
                               <Button
                                 size={actionSize}
                                 variant="light"
@@ -802,160 +818,273 @@ export function RepositoriesPage() {
                               )}
                             </Group>
                           );
-                          return (
-                            <Table.Tr
-                              key={repo.id}
-                              // 置顶行整行高亮（淡琥珀底 + 左侧色条）。
-                              style={pinned ? PINNED_ROW_STYLE : undefined}
-                            >
-                              <Table.Td>
-                                <Stack gap={isNarrow ? 12 : 2}>
-                                  <Group
-                                    gap={8}
-                                    wrap="nowrap"
-                                    justify={isNarrow ? "space-between" : undefined}
-                                  >
-                                    <Group gap={8} wrap="nowrap" style={{ minWidth: 0 }}>
-                                      <FormatIcon format={repo.format} />
-                                      {pinned ? (
-                                        <IconPinned
-                                          size={14}
-                                          color="var(--mantine-color-yellow-6)"
-                                          aria-hidden
-                                        />
-                                      ) : null}
-                                      <Text
-                                        fw={600}
-                                        size="sm"
-                                        c="blue"
-                                        truncate
-                                        style={{ cursor: "pointer" }}
-                                        onClick={() => navigate(`/repositories/${repo.name}`)}
-                                      >
-                                        {repo.name}
-                                      </Text>
-                                    </Group>
-                                    {/* 复制用「图标 + 文字」而不是裸图标：单独一个复制图标看不出
-                                        复制的是协议地址；外层 Tooltip 仍展示完整 URL。 */}
-                                    <Tooltip label={protoUrl} position="top" withArrow>
-                                      <span>
-                                        <CopyTextButton value={protoUrl} size="compact-xs" />
-                                      </span>
-                                    </Tooltip>
-                                  </Group>
-                                  {/* 窄屏被裁掉的列信息集中到这里（含可见性徽章，保持可点切换），
-                                      并把行内操作一并挪下来：全宽排布，避免窄列竖排把行撑高。 */}
-                                  {isNarrow ? (
-                                    <Group gap={6} wrap="wrap">
-                                      {user ? (
-                                        <Badge
-                                          size="xs"
-                                          color={repo.visibility === "public" ? "blue" : "gray"}
-                                          variant="light"
-                                          style={canManage ? { cursor: "pointer" } : undefined}
-                                          onClick={
-                                            canManage
-                                              ? () => handleToggleVisibility(repo)
-                                              : undefined
-                                          }
-                                        >
-                                          {visibilityLabel}
-                                        </Badge>
-                                      ) : null}
-                                      <Text size="xs" c="dimmed" truncate>
-                                        {repo.type} ·{" "}
-                                        {t("repoDetail.assetCount", {
-                                          n: repo.artifactCount ?? 0,
-                                        })}{" "}
-                                        · {formatBytes(repo.totalSize ?? 0)}
-                                      </Text>
-                                    </Group>
-                                  ) : null}
-                                  {isNarrow ? rowActions : null}
-                                </Stack>
-                              </Table.Td>
-                              {isNarrow ? null : (
-                                <Table.Td>
-                                  <Badge
-                                    variant="light"
-                                    color={TYPE_COLOR[repo.type] ?? "gray"}
-                                    size="sm"
-                                    style={BADGE_NO_SHRINK}
-                                  >
-                                    {repo.type}
-                                  </Badge>
-                                </Table.Td>
-                              )}
-                              {user && !isNarrow ? (
-                                <Table.Td>
-                                  <Badge
-                                    color={repo.visibility === "public" ? "blue" : "gray"}
-                                    variant="light"
-                                    size="sm"
-                                    style={
-                                      canManage
-                                        ? { ...BADGE_NO_SHRINK, cursor: "pointer" }
-                                        : BADGE_NO_SHRINK
-                                    }
-                                    onClick={
-                                      canManage ? () => handleToggleVisibility(repo) : undefined
-                                    }
-                                  >
-                                    {visibilityLabel}
-                                  </Badge>
-                                </Table.Td>
+                          // 窄屏主标识：整块是进入仓库的链接（用 Link 而非 onClick，
+                          // 保留真实 href、键盘可达，且 <a> 内允许放图标与文本组成的块）。
+                          const nameBlock = (
+                            <Group gap={8} wrap="nowrap" style={{ minWidth: 0 }}>
+                              <FormatIcon format={repo.format} />
+                              {pinned ? (
+                                <IconPinned
+                                  size={14}
+                                  color="var(--mantine-color-yellow-6)"
+                                  aria-hidden
+                                />
                               ) : null}
-                              {user && !isNarrow ? (
-                                <Table.Td>
-                                  {/* FR-114：连接状态（仅 proxy/group 有 connectionStatus） */}
-                                  <ConnectionStatusCell status={repo.connectionStatus?.status} />
-                                </Table.Td>
-                              ) : null}
-                              {isNarrow ? null : (
-                                <Table.Td>
-                                  <MetricCell
-                                    icon={<IconPackage size={14} />}
-                                    hint={t("repositories.artifactCountTooltip", {
-                                      count: repo.artifactCount ?? 0,
-                                    })}
-                                    value={repo.artifactCount ?? 0}
-                                  />
-                                </Table.Td>
-                              )}
-                              {isNarrow ? null : (
-                                <Table.Td>
-                                  <MetricCell
-                                    icon={<IconDatabase size={14} />}
-                                    hint={t("repositories.totalSizeTooltip", {
-                                      size: formatBytes(repo.totalSize ?? 0),
-                                      bytes: (repo.totalSize ?? 0).toLocaleString(
-                                        currentLocaleTag(),
-                                      ),
-                                    })}
-                                    value={formatBytes(repo.totalSize ?? 0)}
-                                  />
-                                </Table.Td>
-                              )}
-                              {isNarrow ? null : (
-                                <Table.Td>
-                                  {/* 完整日期 + 悬浮精确到秒；`nowrap` 防止列宽不足时折成「2026-01-」+「05」。 */}
-                                  <Tooltip
-                                    label={repo.createdAt ? formatUtcToLocal(repo.createdAt) : "-"}
-                                    position="top"
-                                    withArrow
+                              <Text
+                                fw={600}
+                                size="sm"
+                                c="blue"
+                                truncate
+                                style={isNarrow ? undefined : { cursor: "pointer" }}
+                                onClick={
+                                  isNarrow
+                                    ? undefined
+                                    : () => navigate(`/repositories/${repo.name}`)
+                                }
+                              >
+                                {repo.name}
+                              </Text>
+                            </Group>
+                          );
+                          // 窄屏行内操作：高频的复制协议地址与置顶保留为图标按钮，低频/危险的管理操作
+                          // （清理、删除）收进溢出菜单。少一排文字按钮，一屏就能多看好几个仓库，
+                          // 且菜单项本身是完整文字，不损失可读性。
+                          const narrowActions = (
+                            <Group gap={4} wrap="nowrap">
+                              <Tooltip label={protoUrl} position="top" withArrow>
+                                <span>
+                                  <CopyTextButton value={protoUrl} size="compact-xs" />
+                                </span>
+                              </Tooltip>
+                              {user ? (
+                                <Tooltip
+                                  label={pinned ? t("repositories.unpin") : t("repositories.pin")}
+                                >
+                                  <ActionIcon
+                                    size="md"
+                                    variant="subtle"
+                                    color={pinned ? "yellow" : "gray"}
+                                    aria-label={
+                                      pinned ? t("repositories.unpin") : t("repositories.pin")
+                                    }
+                                    onClick={() => handleTogglePin(repo.name)}
                                   >
-                                    <Text
-                                      size="xs"
-                                      c="dimmed"
-                                      style={{ whiteSpace: "nowrap", cursor: "default" }}
+                                    {pinned ? (
+                                      <IconPinned size={16} />
+                                    ) : (
+                                      <IconPinnedOff size={16} />
+                                    )}
+                                  </ActionIcon>
+                                </Tooltip>
+                              ) : null}
+                              {canManage ? (
+                                <Menu position="bottom-end" withinPortal shadow="md">
+                                  <Menu.Target>
+                                    <ActionIcon
+                                      size="md"
+                                      variant="subtle"
+                                      color="gray"
+                                      aria-label={t("repositories.moreActions")}
                                     >
-                                      {repo.createdAt ? formatUtcToLocalDate(repo.createdAt) : "-"}
+                                      <IconDotsVertical size={16} />
+                                    </ActionIcon>
+                                  </Menu.Target>
+                                  <Menu.Dropdown>
+                                    {repo.format === "maven" && repo.type === "hosted" ? (
+                                      <Menu.Item
+                                        color="orange"
+                                        leftSection={<IconEraser size={14} />}
+                                        onClick={() => handleCleanup(repo)}
+                                      >
+                                        {t("repositories.cleanupAction", { defaultValue: "清理" })}
+                                      </Menu.Item>
+                                    ) : null}
+                                    <Menu.Item
+                                      color="red"
+                                      leftSection={<IconTrash size={14} />}
+                                      onClick={() => handleDelete(repo)}
+                                    >
+                                      {t("common.delete")}
+                                    </Menu.Item>
+                                  </Menu.Dropdown>
+                                </Menu>
+                              ) : null}
+                            </Group>
+                          );
+                          return (
+                            <Fragment key={repo.id}>
+                              {showGroupHeader ? (
+                                <Table.Tr
+                                  data-testid={`repo-group-${activeGroupBy}-${groupKey}`}
+                                  style={{ background: "var(--mantine-color-default-hover)" }}
+                                >
+                                  <Table.Td colSpan={tableColumnCount}>
+                                    <Text size="xs" fw={700} c="dimmed">
+                                      {activeGroupBy === "format"
+                                        ? t("repositories.format")
+                                        : t("repositories.type")}{" "}
+                                      : {groupKey}
                                     </Text>
-                                  </Tooltip>
+                                  </Table.Td>
+                                </Table.Tr>
+                              ) : null}
+                              <Table.Tr
+                                key={repo.id}
+                                // 置顶行整行高亮（淡琥珀底 + 左侧色条）。
+                                style={pinned ? PINNED_ROW_STYLE : undefined}
+                              >
+                                <Table.Td>
+                                  <Stack gap={isNarrow ? 6 : 2}>
+                                    <Group
+                                      gap={8}
+                                      wrap="nowrap"
+                                      justify={isNarrow ? "space-between" : undefined}
+                                    >
+                                      {/* 窄屏整块主标识可点（手机点得准），桌面仍只有仓库名可点。 */}
+                                      {isNarrow ? (
+                                        <UnstyledButton
+                                          component={Link}
+                                          to={`/repositories/${repo.name}`}
+                                          style={{ flex: 1, minWidth: 0 }}
+                                        >
+                                          {nameBlock}
+                                        </UnstyledButton>
+                                      ) : (
+                                        nameBlock
+                                      )}
+                                      {/* 复制用「图标 + 文字」而不是裸图标：单独一个复制图标看不出
+                                        复制的是协议地址；外层 Tooltip 仍展示完整 URL。
+                                        窄屏这一处换成图标操作组（复制 + 置顶 + 溢出菜单）。 */}
+                                      {isNarrow ? (
+                                        narrowActions
+                                      ) : (
+                                        <Tooltip label={protoUrl} position="top" withArrow>
+                                          <span>
+                                            <CopyTextButton value={protoUrl} size="compact-xs" />
+                                          </span>
+                                        </Tooltip>
+                                      )}
+                                    </Group>
+                                    {/* 窄屏被裁掉的列信息集中到这里，压成单行不换行：
+                                      可见性徽章保持可点切换，其余用省略号收尾。 */}
+                                    {isNarrow ? (
+                                      <Group gap={6} wrap="nowrap">
+                                        {user ? (
+                                          <Badge
+                                            size="xs"
+                                            color={repo.visibility === "public" ? "blue" : "gray"}
+                                            variant="light"
+                                            style={{
+                                              flexShrink: 0,
+                                              ...(canManage ? { cursor: "pointer" } : {}),
+                                            }}
+                                            onClick={
+                                              canManage
+                                                ? () => handleToggleVisibility(repo)
+                                                : undefined
+                                            }
+                                          >
+                                            {visibilityLabel}
+                                          </Badge>
+                                        ) : null}
+                                        <Text size="xs" c="dimmed" truncate>
+                                          {repo.type} ·{" "}
+                                          {t("repoDetail.assetCount", {
+                                            n: repo.artifactCount ?? 0,
+                                          })}{" "}
+                                          · {formatBytes(repo.totalSize ?? 0)}
+                                        </Text>
+                                      </Group>
+                                    ) : null}
+                                  </Stack>
                                 </Table.Td>
-                              )}
-                              {isNarrow ? null : <Table.Td>{rowActions}</Table.Td>}
-                            </Table.Tr>
+                                {isNarrow ? null : (
+                                  <Table.Td>
+                                    <Badge
+                                      variant="light"
+                                      color={TYPE_COLOR[repo.type] ?? "gray"}
+                                      size="sm"
+                                      style={BADGE_NO_SHRINK}
+                                    >
+                                      {repo.type}
+                                    </Badge>
+                                  </Table.Td>
+                                )}
+                                {user && !isNarrow ? (
+                                  <Table.Td>
+                                    <Badge
+                                      color={repo.visibility === "public" ? "blue" : "gray"}
+                                      variant="light"
+                                      size="sm"
+                                      style={
+                                        canManage
+                                          ? { ...BADGE_NO_SHRINK, cursor: "pointer" }
+                                          : BADGE_NO_SHRINK
+                                      }
+                                      onClick={
+                                        canManage ? () => handleToggleVisibility(repo) : undefined
+                                      }
+                                    >
+                                      {visibilityLabel}
+                                    </Badge>
+                                  </Table.Td>
+                                ) : null}
+                                {user && !isNarrow ? (
+                                  <Table.Td>
+                                    {/* FR-114：连接状态（仅 proxy/group 有 connectionStatus） */}
+                                    <ConnectionStatusCell status={repo.connectionStatus?.status} />
+                                  </Table.Td>
+                                ) : null}
+                                {isNarrow ? null : (
+                                  <Table.Td>
+                                    <MetricCell
+                                      icon={<IconPackage size={14} />}
+                                      hint={t("repositories.artifactCountTooltip", {
+                                        count: repo.artifactCount ?? 0,
+                                      })}
+                                      value={repo.artifactCount ?? 0}
+                                    />
+                                  </Table.Td>
+                                )}
+                                {isNarrow ? null : (
+                                  <Table.Td>
+                                    <MetricCell
+                                      icon={<IconDatabase size={14} />}
+                                      hint={t("repositories.totalSizeTooltip", {
+                                        size: formatBytes(repo.totalSize ?? 0),
+                                        bytes: (repo.totalSize ?? 0).toLocaleString(
+                                          currentLocaleTag(),
+                                        ),
+                                      })}
+                                      value={formatBytes(repo.totalSize ?? 0)}
+                                    />
+                                  </Table.Td>
+                                )}
+                                {isNarrow ? null : (
+                                  <Table.Td>
+                                    {/* 完整日期 + 悬浮精确到秒；`nowrap` 防止列宽不足时折成「2026-01-」+「05」。 */}
+                                    <Tooltip
+                                      label={
+                                        repo.createdAt ? formatUtcToLocal(repo.createdAt) : "-"
+                                      }
+                                      position="top"
+                                      withArrow
+                                    >
+                                      <Text
+                                        size="xs"
+                                        c="dimmed"
+                                        style={{ whiteSpace: "nowrap", cursor: "default" }}
+                                      >
+                                        {repo.createdAt
+                                          ? formatUtcToLocalDate(repo.createdAt)
+                                          : "-"}
+                                      </Text>
+                                    </Tooltip>
+                                  </Table.Td>
+                                )}
+                                {isNarrow ? null : <Table.Td>{rowActions}</Table.Td>}
+                              </Table.Tr>
+                            </Fragment>
                           );
                         })}
                       </Table.Tbody>

@@ -103,21 +103,25 @@ export function AppRoutes() {
           <Route path="/repositories/:name" element={<RepositoryDetailPage />} />
           <Route path="/search" element={<SearchPage />} />
           {/* 受保护路由 */}
-          {/* FR-72：开源协议页收敛为登录可见（导航入口仅 admin；清单数据由 admin 端点返回） */}
+          {/* FR-72：开源协议页仅管理员可见，路由权限与侧栏入口保持一致。 */}
           <Route
             path="/licenses"
             element={
               <RequireAuth>
-                <LicensesPage />
+                <RequireAdmin>
+                  <LicensesPage />
+                </RequireAdmin>
               </RequireAuth>
             }
           />
-          {/* FR-90：设置页（入口仅管理员可见；RequireAuth 兜底） */}
+          {/* FR-90：设置页仅管理员可见，路由权限与侧栏入口保持一致。 */}
           <Route
             path="/settings"
             element={
               <RequireAuth>
-                <SettingsPage />
+                <RequireAdmin>
+                  <SettingsPage />
+                </RequireAdmin>
               </RequireAuth>
             }
           />
@@ -156,7 +160,9 @@ export function AppRoutes() {
             path="/users"
             element={
               <RequireAuth>
-                <UsersPage />
+                <RequireAdmin>
+                  <UsersPage />
+                </RequireAdmin>
               </RequireAuth>
             }
           />
@@ -172,7 +178,9 @@ export function AppRoutes() {
             path="/repositories/:name/acl"
             element={
               <RequireAuth>
-                <AclPage />
+                <RequireAdmin>
+                  <AclPage />
+                </RequireAdmin>
               </RequireAuth>
             }
           />
@@ -180,7 +188,9 @@ export function AppRoutes() {
             path="/migrations"
             element={
               <RequireAuth>
-                <MigrationsPage />
+                <RequireAdmin>
+                  <MigrationsPage />
+                </RequireAdmin>
               </RequireAuth>
             }
           />
@@ -188,7 +198,9 @@ export function AppRoutes() {
             path="/migrations/new"
             element={
               <RequireAuth>
-                <MigrationWizardPage />
+                <RequireAdmin>
+                  <MigrationWizardPage />
+                </RequireAdmin>
               </RequireAuth>
             }
           />
@@ -196,7 +208,9 @@ export function AppRoutes() {
             path="/migrations/:id"
             element={
               <RequireAuth>
-                <MigrationDetailPage />
+                <RequireAdmin>
+                  <MigrationDetailPage />
+                </RequireAdmin>
               </RequireAuth>
             }
           />
