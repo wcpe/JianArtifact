@@ -38,6 +38,8 @@ func RegisterCargoRoutes(r gin.IRouter, h *CargoHandler, mw ...gin.HandlerFunc) 
 func (h *CargoHandler) Get(c *gin.Context) {
 	repoName := c.Param("repo")
 	rest := strings.TrimPrefix(c.Param("rest"), "/")
+	withCacheOutcome(c)
+	defer h.markCacheResult(c, repoName)
 	if !h.authorize(c, repoName, "read") {
 		return
 	}

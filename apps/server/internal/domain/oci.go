@@ -260,6 +260,8 @@ func (s *OCIService) ResolveManifest(ctx context.Context, repoName, image, refer
 	}
 	switch repo.Type {
 	case "group":
+		// group 的缓存来源不可靠：冻结为未知，避免成员级 hit/miss 外泄。
+		sealCacheOutcome(ctx)
 		cfg, cfgErr := repo.DecodeConfig()
 		if cfgErr != nil {
 			return nil, nil, cfgErr
@@ -310,6 +312,8 @@ func (s *OCIService) ResolveBlob(ctx context.Context, repoName, image, digest st
 		return nil, nil, err
 	}
 	if repo.Type == "group" {
+		// group 的缓存来源不可靠：冻结为未知，避免成员级 hit/miss 外泄。
+		sealCacheOutcome(ctx)
 		cfg, cfgErr := repo.DecodeConfig()
 		if cfgErr != nil {
 			return nil, nil, cfgErr

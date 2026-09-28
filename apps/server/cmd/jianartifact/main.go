@@ -261,7 +261,7 @@ func newApplicationHandler(cfg *config.Config, svc *appServices, assets fs.FS) h
 		httpserver.WithOriginTokenGuard(originTokenGuard),
 		httpserver.WithMiddleware(api.MiddlewareFunc(authenticator.Optional())),
 		httpserver.WithProtocolMetric(func(c *gin.Context) {
-			cacheResult, _ := c.Get("jianartifact.protocol.cache_result")
+			cacheResult, _ := c.Get(protocol.CacheResultContextKey)
 			svc.dashboardSvc.RecordProtocol(domain.ProtocolMetric{CompletedAt: time.Now().UTC(), Method: c.Request.Method, Status: c.Writer.Status(), CacheResult: cacheResultString(cacheResult)})
 			// FR-142：制品下载计量（只认 GET+200 的完整传输；该钩子只服务制品协议请求，
 			// 路径解析与 UA 归类在服务内完成——原始 UA 串不落库）。

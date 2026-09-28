@@ -547,6 +547,8 @@ func (s *FormatMetadataService) ResolvePyPIWithAudit(ctx context.Context, repoNa
 		if item.Filename == filename {
 			sourceRepo := repoName
 			if item.SourceMember != "" {
+				// 经 group 命中该成员：整体缓存来源不可靠，冻结为未知。
+				sealCacheOutcome(ctx)
 				sourceRepo = item.SourceMember
 			}
 			if item.SourceKind == "proxy" {
@@ -570,10 +572,13 @@ func (s *FormatMetadataService) cachePyPIProxyFile(ctx context.Context, repoName
 	}
 	if _, rc, err := s.assets.Get(repoName, item.AssetPath); err == nil {
 		_ = rc.Close()
+		recordCacheOutcome(ctx, CacheOutcomeHit)
 		return nil
 	} else if !errors.Is(err, ErrNotFound) {
 		return err
 	}
+	// 本地未命中即计 miss：PyPI 代理包需回源下载并落库。
+	recordCacheOutcome(ctx, CacheOutcomeMiss)
 	_, cacheErr, _ := s.pypiSF.Do("package\x00"+repoName+"\x00"+item.NameNormalized+"\x00"+item.Filename, func() (any, error) {
 		if _, rc, err := s.assets.Get(repoName, item.AssetPath); err == nil {
 			_ = rc.Close()
@@ -789,6 +794,8 @@ func (s *FormatMetadataService) ResolveNuGet(ctx context.Context, repoName, id, 
 		}
 		sourceRepo := repoName
 		if item.SourceMember != "" {
+			// 经 group 命中该成员：整体缓存来源不可靠，冻结为未知。
+			sealCacheOutcome(ctx)
 			sourceRepo = item.SourceMember
 		}
 		if item.SourceKind == "proxy" {
@@ -811,10 +818,13 @@ func (s *FormatMetadataService) cacheNuGetProxyPackage(ctx context.Context, repo
 	}
 	if _, rc, err := s.assets.Get(repoName, item.AssetPath); err == nil {
 		_ = rc.Close()
+		recordCacheOutcome(ctx, CacheOutcomeHit)
 		return nil
 	} else if !errors.Is(err, ErrNotFound) {
 		return err
 	}
+	// 本地未命中即计 miss：NuGet 代理包需回源下载并落库。
+	recordCacheOutcome(ctx, CacheOutcomeMiss)
 	_, cacheErr, _ := s.nugetSF.Do("package\x00"+repoName+"\x00"+item.IDNormalized+"\x00"+item.Filename, func() (any, error) {
 		if _, rc, err := s.assets.Get(repoName, item.AssetPath); err == nil {
 			_ = rc.Close()

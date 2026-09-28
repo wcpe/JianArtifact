@@ -7,6 +7,7 @@
 package protocol
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
+	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
 // RawHandler 处理 Raw 格式仓库的发布 / 拉取 / 删除。
@@ -103,10 +105,55 @@ type assetSummary struct {
 	ContentType string `json:"contentType"`
 }
 
+// CacheResultContextKey 是请求上下文里缓存来源标记的键，由 main 的协议指标中间件读取。
+const CacheResultContextKey = "jianartifact.protocol.cache_result"
+
+type repositorySnapshotContextKey struct{}
+
+func withRepositorySnapshot(c *gin.Context, repo *repository.Repository) {
+	c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), repositorySnapshotContextKey{}, repo))
+}
+
+func repositorySnapshot(c *gin.Context, repoName string) (*repository.Repository, error) {
+	if repo, ok := c.Request.Context().Value(repositorySnapshotContextKey{}).(*repository.Repository); ok {
+		if repo.Name == repoName {
+			return repo, nil
+		}
+		for _, alias := range repo.Aliases {
+			if alias == repoName {
+				return repo, nil
+			}
+		}
+	}
+	return nil, nil
+}
+
+// withCacheOutcome 在当前请求上下文挂载缓存来源记录器，使后续 domain 解析调用能产出 hit/miss。
+// 所有制品读取 handler 都应在解析前调用；hosted/group 不会写入，保持缺省（未知）。
+func withCacheOutcome(c *gin.Context) {
+	c.Request = c.Request.WithContext(domain.WithCacheOutcome(c.Request.Context()))
+}
+
+// markCacheResult 读取本次请求的缓存来源，仅当请求命中代理仓库且来源可判定（hit/miss）时写入上下文键。
+// hosted/group 一律保持缺省：group 的首个命中成员无法在此层可靠判定，宁可未知也不猜。
+func (h *RawHandler) markCacheResult(c *gin.Context, repoName string) {
+	outcome := domain.CacheOutcomeFromContext(c.Request.Context())
+	if outcome == domain.CacheOutcomeUnknown {
+		return
+	}
+	repo, err := repositorySnapshot(c, repoName)
+	if err != nil || repo == nil || repo.Type != "proxy" {
+		return
+	}
+	c.Set(CacheResultContextKey, string(outcome))
+}
+
 // Get 处理 GET/HEAD：鉴权 read → 流式回写内容，设置 Content-Type/Length/ETag。
 // HEAD 不写 body。
 func (h *RawHandler) Get(c *gin.Context) {
 	repo := c.Param("repo")
+	withCacheOutcome(c)
+	defer h.markCacheResult(c, repo)
 	if !h.authorize(c, repo, "read") {
 		return
 	}
@@ -114,18 +161,19 @@ func (h *RawHandler) Get(c *gin.Context) {
 		return
 	}
 	artPath := cleanArtifactPath(c.Param("artifactPath"))
-	cacheCandidate, cacheHit := h.cacheCandidate(repo, artPath)
-	asset, rc, err := h.assets.Resolve(c.Request.Context(), repo, artPath)
+	repoSnapshot, err := repositorySnapshot(c, repo)
+	if err != nil || repoSnapshot == nil {
+		if err != nil {
+			writeAssetErr(c, err)
+		} else {
+			auth.WriteError(c, http.StatusNotFound, "not_found", "仓库不存在")
+		}
+		return
+	}
+	asset, rc, err := h.assets.ResolveWithRepo(c.Request.Context(), repoSnapshot, artPath)
 	if err != nil {
 		writeAssetErr(c, err)
 		return
-	}
-	if cacheCandidate {
-		if cacheHit {
-			c.Set("jianartifact.protocol.cache_result", "hit")
-		} else {
-			c.Set("jianartifact.protocol.cache_result", "miss")
-		}
 	}
 	defer func() { _ = rc.Close() }()
 
@@ -138,20 +186,6 @@ func (h *RawHandler) Get(c *gin.Context) {
 	}
 	c.Status(http.StatusOK)
 	_, _ = io.Copy(c.Writer, rc)
-}
-
-// cacheCandidate 只对单个 proxy 仓库标记可缓存读取；group 的首个命中成员不可在此层可靠判定，保持未知。
-func (h *RawHandler) cacheCandidate(repoName, artifactPath string) (bool, bool) {
-	repo, err := h.repoSvc.Get(repoName)
-	if err != nil || repo.Type != "proxy" {
-		return false, false
-	}
-	_, reader, err := h.assets.Get(repoName, artifactPath)
-	if err != nil {
-		return true, false
-	}
-	_ = reader.Close()
-	return true, true
 }
 
 // Put 处理 PUT：鉴权 write → 流式入库；成功返回 201 与制品摘要。
@@ -365,6 +399,24 @@ func writeRawDeleteErrorResponse(c *gin.Context, status int, code, message, oper
 // authorize 判定主体对仓库是否可执行动作。全局管理员放行；否则按 ACL（含 public read）判定。
 // 无主体且无权限 → 401；有主体无权限 → 403；仓库不存在 → 404。返回 false 时已写出响应。
 func (h *RawHandler) authorize(c *gin.Context, repo, action string) bool {
+	repoSnapshot, lookupErr := repositorySnapshot(c, repo)
+	if lookupErr != nil {
+		writeAssetErr(c, lookupErr)
+		return false
+	}
+	if repoSnapshot == nil {
+		var err error
+		repoSnapshot, err = h.repoSvc.Get(repo)
+		if err != nil {
+			if errors.Is(err, domain.ErrNotFound) {
+				auth.WriteError(c, http.StatusNotFound, "not_found", "仓库不存在")
+			} else {
+				writeAssetErr(c, err)
+			}
+			return false
+		}
+		withRepositorySnapshot(c, repoSnapshot)
+	}
 	principal, hasPrincipal := auth.PrincipalFrom(c)
 	if hasPrincipal && principal.IsAdmin() {
 		return true
@@ -373,7 +425,7 @@ func (h *RawHandler) authorize(c *gin.Context, repo, action string) bool {
 	if hasPrincipal {
 		subjectID = principal.UserID
 	}
-	ok, err := h.repoSvc.CanAccess(repo, subjectID, action)
+	ok, err := h.repoSvc.CanAccessResolved(repoSnapshot, subjectID, action)
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
 			auth.WriteError(c, http.StatusNotFound, "not_found", "仓库不存在")

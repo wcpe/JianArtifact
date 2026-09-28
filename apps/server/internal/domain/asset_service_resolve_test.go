@@ -256,6 +256,34 @@ func TestResolveGroupOrderedHit(t *testing.T) {
 	}
 }
 
+func TestResolveGroupDuplicateMemberReusesSnapshotOrder(t *testing.T) {
+	var hits int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.Header().Set("Content-Type", "application/octet-stream")
+		_, _ = w.Write([]byte("group-member"))
+	}))
+	defer server.Close()
+
+	svc, repos := newAssetService(t)
+	if _, err := repos.Create("snapshot-proxy", "raw", "proxy", "private", proxyConfigJSON(t, server.URL)); err != nil {
+		t.Fatalf("建 proxy 成员：%v", err)
+	}
+	if _, err := repos.Create("snapshot-group", "raw", "group", "private", groupConfigJSON(t, "snapshot-proxy", "snapshot-proxy")); err != nil {
+		t.Fatalf("建重复成员 group：%v", err)
+	}
+	_, rc, err := svc.Resolve(context.Background(), "snapshot-group", "a.bin")
+	if err != nil {
+		t.Fatalf("group 解析：%v", err)
+	}
+	if got := string(readClose(t, rc)); got != "group-member" {
+		t.Fatalf("group 内容不符：%q", got)
+	}
+	if got := atomic.LoadInt32(&hits); got != 1 {
+		t.Fatalf("重复成员应复用单次回源，实际 %d 次", got)
+	}
+}
+
 func TestResolveProxySingleFlight(t *testing.T) {
 	var hits int32
 	payload := []byte("single-flight payload")

@@ -36,6 +36,8 @@ func RegisterNuGetRoutes(r gin.IRouter, h *NuGetHandler, mw ...gin.HandlerFunc) 
 
 func (h *NuGetHandler) Get(c *gin.Context) {
 	repo := c.Param("repo")
+	withCacheOutcome(c)
+	defer h.markCacheResult(c, repo)
 	if !h.authorize(c, repo, "read") {
 		return
 	}

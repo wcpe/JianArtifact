@@ -61,12 +61,18 @@ func NewDispatcher(repoSvc *domain.RepositoryService, raw *RawHandler, maven *Ma
 // SetNpm 注入 npm 仓库处理器（npm 格式启用时由装配层调用）。
 func (d *Dispatcher) SetNpm(npm *NpmHandler) { d.npm = npm }
 
-// route 依据仓库 format 选择处理器；仓库不存在则回退 raw（其 authorize 会产出 404）。
-func (d *Dispatcher) route(repoName string) artifactHandler {
+// route 依据仓库 format 选择处理器，并把已解析仓库快照挂到请求上下文。
+// 未知仓库直接返回 404；数据库异常返回 500，不能误判为不存在。
+func (d *Dispatcher) route(c *gin.Context) artifactHandler {
+	repoName := c.Param("repo")
 	repo, err := d.repoSvc.Get(repoName)
 	if err != nil {
-		return d.raw
+		if errors.Is(err, domain.ErrNotFound) {
+			return dispatchErrorHandler{status: http.StatusNotFound, code: "not_found", message: "仓库不存在"}
+		}
+		return dispatchErrorHandler{status: http.StatusInternalServerError, code: "internal", message: "内部错误"}
 	}
+	withRepositorySnapshot(c, repo)
 	if !d.enabled.Has(repo.Format) {
 		return disabledArtifactHandler{}
 	}
@@ -90,15 +96,70 @@ func (disabledArtifactHandler) Get(c *gin.Context)    { c.Status(http.StatusNotF
 func (disabledArtifactHandler) Put(c *gin.Context)    { c.Status(http.StatusNotFound) }
 func (disabledArtifactHandler) Delete(c *gin.Context) { c.Status(http.StatusNotFound) }
 
+type dispatchErrorHandler struct {
+	status  int
+	code    string
+	message string
+}
+
+func (h dispatchErrorHandler) Get(c *gin.Context) {
+	auth.WriteError(c, h.status, h.code, h.message)
+}
+func (h dispatchErrorHandler) Put(c *gin.Context) {
+	auth.WriteError(c, h.status, h.code, h.message)
+}
+func (h dispatchErrorHandler) Delete(c *gin.Context) {
+	auth.WriteError(c, h.status, h.code, h.message)
+}
+
 // Get/Put/Delete 按仓库 format 委派到对应处理器。
-func (d *Dispatcher) Get(c *gin.Context)    { d.route(c.Param("repo")).Get(c) }
-func (d *Dispatcher) Put(c *gin.Context)    { d.route(c.Param("repo")).Put(c) }
-func (d *Dispatcher) Delete(c *gin.Context) { d.route(c.Param("repo")).Delete(c) }
+func (d *Dispatcher) Get(c *gin.Context)    { d.route(c).Get(c) }
+func (d *Dispatcher) Put(c *gin.Context)    { d.route(c).Put(c) }
+func (d *Dispatcher) Delete(c *gin.Context) { d.route(c).Delete(c) }
 
 // MavenHandler 处理 Maven 格式仓库。发布/删除与鉴权复用内嵌 RawHandler；
 // GET 覆盖以支持校验和缺失现算与 group 的 maven-metadata.xml 合并。
 type MavenHandler struct {
 	*RawHandler
+}
+
+type mavenResolveMemoContextKey struct{}
+
+type mavenResolveMemo struct {
+	mu       sync.Mutex
+	notFound map[string]struct{}
+}
+
+func withMavenResolveMemo(c *gin.Context) {
+	c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), mavenResolveMemoContextKey{}, &mavenResolveMemo{notFound: make(map[string]struct{})}))
+}
+
+func mavenMemoKey(repo *repository.Repository, path string) string {
+	return strconv.FormatInt(repo.ID, 10) + "\x00" + path
+}
+
+func (h *MavenHandler) resolveMaven(ctx context.Context, repo *repository.Repository, path string) (*repository.Asset, io.ReadCloser, error) {
+	if repo == nil {
+		return nil, nil, domain.ErrNotFound
+	}
+	if memo, ok := ctx.Value(mavenResolveMemoContextKey{}).(*mavenResolveMemo); ok {
+		key := mavenMemoKey(repo, path)
+		memo.mu.Lock()
+		_, failed := memo.notFound[key]
+		memo.mu.Unlock()
+		if failed {
+			return nil, nil, domain.ErrNotFound
+		}
+		resolveCtx := domain.WithResolveFailure(ctx)
+		asset, rc, err := h.assets.ResolveWithRepo(resolveCtx, repo, path)
+		if errors.Is(err, domain.ErrNotFound) && domain.ResolveFailureFromContext(resolveCtx) == domain.ResolveFailureConfirmed {
+			memo.mu.Lock()
+			memo.notFound[key] = struct{}{}
+			memo.mu.Unlock()
+		}
+		return asset, rc, err
+	}
+	return h.assets.ResolveWithRepo(ctx, repo, path)
 }
 
 // NewMavenHandler 构造 MavenHandler，复用既有 RawHandler 的发布/删除/鉴权能力。
@@ -111,6 +172,9 @@ func NewMavenHandler(raw *RawHandler) *MavenHandler {
 // 校验和文件缺失则据底层制品现算返回。
 func (h *MavenHandler) Get(c *gin.Context) {
 	repoName := c.Param("repo")
+	withCacheOutcome(c)
+	withMavenResolveMemo(c)
+	defer h.markCacheResult(c, repoName)
 	if !h.authorize(c, repoName, "read") {
 		return
 	}
@@ -119,9 +183,13 @@ func (h *MavenHandler) Get(c *gin.Context) {
 	}
 	artPath := cleanArtifactPath(c.Param("artifactPath"))
 
-	repo, err := h.repoSvc.Get(repoName)
+	repo, err := repositorySnapshot(c, repoName)
 	if err != nil {
 		writeAssetErr(c, err)
+		return
+	}
+	if repo == nil {
+		auth.WriteError(c, http.StatusNotFound, "not_found", "仓库不存在")
 		return
 	}
 	// 仅对 artifact 级别的 maven-metadata.xml（列版本号）做 group 合并；
@@ -130,7 +198,7 @@ func (h *MavenHandler) Get(c *gin.Context) {
 		h.serveGroupMetadata(c, repo, artPath)
 		return
 	}
-	if repo.Type == "group" && h.markerPomHasPomPackaging(c, repoName, artPath) {
+	if repo.Type == "group" && h.markerPomHasPomPackaging(c, repo, artPath) {
 		auth.WriteError(c, http.StatusNotFound, "not_found", "资源不存在")
 		return
 	}
@@ -138,8 +206,8 @@ func (h *MavenHandler) Get(c *gin.Context) {
 	// SNAPSHOT 制品优化：文件名含 -SNAPSHOT 时先尝试时间戳解析，
 	// 避免 group 广播字面 -SNAPSHOT 路径给所有 proxy 成员（不存在且超时慢）。
 	if h.isSnapshotArtifact(artPath) {
-		if resolved, ok := h.resolveSnapshotPath(c, repoName, artPath); ok {
-			asset, rc, err := h.assets.Resolve(c.Request.Context(), repoName, resolved)
+		if resolved, ok := h.resolveSnapshotPath(c, repo, artPath); ok {
+			asset, rc, err := h.resolveMaven(c.Request.Context(), repo, resolved)
 			if err == nil {
 				defer func() { _ = rc.Close() }()
 				writeArtifact(c, asset.ContentType, asset.Size, asset.BlobHash, rc)
@@ -147,13 +215,13 @@ func (h *MavenHandler) Get(c *gin.Context) {
 			}
 		}
 		// SNAPSHOT 解析失败，尝试校验和现算
-		if ext, ok := checksumExt(artPath); ok && h.serveComputedChecksum(c, repoName, artPath, ext) {
+		if ext, ok := checksumExt(artPath); ok && h.serveComputedChecksum(c, repo, artPath, ext) {
 			return
 		}
 		// SNAPSHOT 时间戳解析与校验和现算均失败时，回退按字面路径解析：
 		// 客户端可能直接发布了 artifact-version-SNAPSHOT.ext 字面文件（Gradle 快照发布），
 		// 其 maven-metadata.xml 未必带顶层 <snapshot> timestamp/buildNumber，直接 Resolve 命中即返回。
-		if asset, rc, err := h.assets.Resolve(c.Request.Context(), repoName, artPath); err == nil {
+		if asset, rc, err := h.resolveMaven(c.Request.Context(), repo, artPath); err == nil {
 			defer func() { _ = rc.Close() }()
 			writeArtifact(c, asset.ContentType, asset.Size, asset.BlobHash, rc)
 			return
@@ -162,10 +230,10 @@ func (h *MavenHandler) Get(c *gin.Context) {
 		return
 	}
 
-	asset, rc, err := h.assets.Resolve(c.Request.Context(), repoName, artPath)
+	asset, rc, err := h.resolveMaven(c.Request.Context(), repo, artPath)
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
-			if ext, ok := checksumExt(artPath); ok && h.serveComputedChecksum(c, repoName, artPath, ext) {
+			if ext, ok := checksumExt(artPath); ok && h.serveComputedChecksum(c, repo, artPath, ext) {
 				return
 			}
 		}
@@ -177,9 +245,9 @@ func (h *MavenHandler) Get(c *gin.Context) {
 }
 
 // serveComputedChecksum 据底层制品字节现算校验和并以纯文本返回；底层制品不存在返回 false。
-func (h *MavenHandler) serveComputedChecksum(c *gin.Context, repoName, artPath, ext string) bool {
+func (h *MavenHandler) serveComputedChecksum(c *gin.Context, repo *repository.Repository, artPath, ext string) bool {
 	base := strings.TrimSuffix(artPath, ext)
-	_, rc, err := h.assets.Resolve(c.Request.Context(), repoName, base)
+	_, rc, err := h.resolveMaven(c.Request.Context(), repo, base)
 	if err != nil {
 		return false
 	}
@@ -226,16 +294,28 @@ func (h *MavenHandler) serveGroupMetadata(c *gin.Context, repo *repository.Repos
 		return
 	}
 
-	// 并行请求所有成员的 metadata，每个 goroutine 只写自己下标位（无竞争）
-	results := make([][]byte, len(cfg.Members))
+	// 成员仓库只解析一次，后续并发解析直接复用快照。
+	members := make([]*repository.Repository, len(cfg.Members))
+	for i, memberName := range cfg.Members {
+		member, getErr := h.repoSvc.Get(memberName)
+		if getErr != nil && !errors.Is(getErr, domain.ErrNotFound) {
+			writeAssetErr(c, getErr)
+			return
+		}
+		members[i] = member
+	}
+	results := make([][]byte, len(members))
 	var wg sync.WaitGroup
-	for i, member := range cfg.Members {
+	for i, member := range members {
+		if member == nil {
+			continue
+		}
 		wg.Add(1)
-		go func(idx int, m string) {
+		go func(idx int, memberRepo *repository.Repository) {
 			defer wg.Done()
 			ctx, cancel := context.WithTimeout(c.Request.Context(), metadataMemberTimeout)
 			defer cancel()
-			_, rc, err := h.assets.Resolve(ctx, m, artPath)
+			_, rc, err := h.resolveMaven(ctx, memberRepo, artPath)
 			if err != nil {
 				return
 			}
@@ -313,7 +393,7 @@ func (h *MavenHandler) isSnapshotArtifact(artPath string) bool {
 // resolveSnapshotPath 检测路径是否为 SNAPSHOT 制品请求，若是则读取 maven-metadata.xml
 // 解析 <snapshot> 的 timestamp+buildNumber，将文件名中 -SNAPSHOT 替换为 -timestamp-buildNumber。
 // 例: .../6.2.4-wcpe-SNAPSHOT/foo-6.2.4-wcpe-SNAPSHOT.jar → .../6.2.4-wcpe-SNAPSHOT/foo-6.2.4-wcpe-20260317.215705-3.jar
-func (h *MavenHandler) resolveSnapshotPath(c *gin.Context, repoName, artPath string) (string, bool) {
+func (h *MavenHandler) resolveSnapshotPath(c *gin.Context, repo *repository.Repository, artPath string) (string, bool) {
 	// 仅处理文件名中包含 -SNAPSHOT 的路径（不含 maven-metadata.xml 本身）
 	slash := strings.LastIndex(artPath, "/")
 	var dir, filename string
@@ -340,7 +420,7 @@ func (h *MavenHandler) resolveSnapshotPath(c *gin.Context, repoName, artPath str
 
 	// 读取同目录下 maven-metadata.xml
 	metaPath := dir + "/maven-metadata.xml"
-	_, rc, err := h.assets.Resolve(c.Request.Context(), repoName, metaPath)
+	_, rc, err := h.resolveMaven(c.Request.Context(), repo, metaPath)
 	if err != nil {
 		return "", false
 	}
@@ -382,12 +462,12 @@ type snapshotMetadata struct {
 
 // markerPomHasPomPackaging 判断 group 中的 Gradle plugin marker JAR 同坐标 POM 是否声明 packaging=pom。
 // POM 不存在、解析失败或 packaging 非 pom 均返回 false，保留原有 JAR 解析行为。
-func (h *MavenHandler) markerPomHasPomPackaging(c *gin.Context, repoName, artPath string) bool {
+func (h *MavenHandler) markerPomHasPomPackaging(c *gin.Context, repo *repository.Repository, artPath string) bool {
 	pomPath, ok := gradlePluginMarkerPomPath(artPath)
 	if !ok {
 		return false
 	}
-	_, rc, err := h.assets.Resolve(c.Request.Context(), repoName, pomPath)
+	_, rc, err := h.resolveMaven(c.Request.Context(), repo, pomPath)
 	if err != nil {
 		return false
 	}

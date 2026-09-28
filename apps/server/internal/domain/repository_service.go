@@ -802,6 +802,14 @@ func (s *RepositoryService) CanAccess(name string, subjectID int64, action strin
 	if err != nil {
 		return false, err
 	}
+	return s.CanAccessResolved(r, subjectID, action)
+}
+
+// CanAccessResolved 使用已解析仓库快照完成授权，避免协议分派后再次按名称查库。
+func (s *RepositoryService) CanAccessResolved(r *repository.Repository, subjectID int64, action string) (bool, error) {
+	if r == nil {
+		return false, ErrNotFound
+	}
 	if subjectID == 0 {
 		return s.canAccessAnonymous(r, action)
 	}

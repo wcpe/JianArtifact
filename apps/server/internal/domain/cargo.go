@@ -238,6 +238,8 @@ func (s *CargoService) Download(ctx context.Context, repoName, crateName, versio
 	}
 	switch repo.Type {
 	case "group":
+		// group 的缓存来源不可靠：冻结为未知，避免成员级 hit/miss 外泄。
+		sealCacheOutcome(ctx)
 		cfg, cfgErr := repo.DecodeConfig()
 		if cfgErr != nil {
 			return nil, nil, cfgErr
@@ -371,10 +373,13 @@ func (s *CargoService) proxyIndex(ctx context.Context, repo *repository.Reposito
 func (s *CargoService) proxyDownload(ctx context.Context, repo *repository.Repository, crateName, version string) (*repository.Asset, io.ReadCloser, error) {
 	assetPath := cargoAssetPath(crateName, version)
 	if asset, rc, err := s.assets.localGet(repo, assetPath); err == nil {
+		recordCacheOutcome(ctx, CacheOutcomeHit)
 		return asset, rc, nil
 	} else if !errors.Is(err, ErrNotFound) {
 		return nil, nil, err
 	}
+	// 本地未命中即计 miss：crate 需回源下载并缓存。
+	recordCacheOutcome(ctx, CacheOutcomeMiss)
 	if err := s.assets.requireBusinessWrite(); err != nil || s.assets.upstream == nil || !repo.Online {
 		return nil, nil, ErrNotFound
 	}

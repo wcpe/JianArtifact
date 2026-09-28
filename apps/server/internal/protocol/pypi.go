@@ -135,6 +135,8 @@ func wantsPypiJSON(c *gin.Context) bool {
 
 func (h *PypiHandler) Package(c *gin.Context) {
 	repo := c.Param("repo")
+	withCacheOutcome(c)
+	defer h.markCacheResult(c, repo)
 	if !h.authorize(c, repo, "read") {
 		return
 	}

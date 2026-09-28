@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/api"
+	"github.com/wcpe/jianartifact/apps/server/internal/formats"
 )
 
 // createMavenRepo 以管理员身份创建指定 type 的 maven 仓库；remoteURL/members 按需传入。
@@ -58,6 +59,9 @@ func TestMavenHostedDeployAndGet(t *testing.T) {
 	if rec.Code != http.StatusOK || !bytes.Equal(rec.Body.Bytes(), jar) {
 		t.Fatalf("拉取 jar 状态码 = %d，内容一致 = %v", rec.Code, bytes.Equal(rec.Body.Bytes(), jar))
 	}
+	if rec := e.rawReq(http.MethodHead, jarPath, "Bearer "+adminToken, "", nil); rec.Code != http.StatusOK || rec.Body.Len() != 0 {
+		t.Fatalf("HEAD jar 状态码 = %d，响应体长度 = %d", rec.Code, rec.Body.Len())
+	}
 
 	// 校验和文件未部署 → 据 jar 现算 .sha1 返回。
 	sum := sha1.Sum(jar)
@@ -73,6 +77,39 @@ func TestMavenHostedDeployAndGet(t *testing.T) {
 	// 不存在的制品 → 404。
 	if rec := e.rawReq(http.MethodGet, "/repository/mvn-releases/com/example/app/9.9.9/app-9.9.9.jar", "Bearer "+adminToken, "", nil); rec.Code != http.StatusNotFound {
 		t.Errorf("缺失制品状态码 = %d，期望 404", rec.Code)
+	}
+}
+
+func TestMavenDisabledFormatFast404(t *testing.T) {
+	e := newProtocolEnvWithFormats(t, formats.New("raw"))
+	adminToken := e.bootstrapAdmin(t)
+	// 直接写入仓库元数据，绕过启用格式校验以构造“已存在但格式禁用”的场景。
+	if _, err := e.repoRepo.Create("mvn-disabled", "maven", "hosted", "public", "{}"); err != nil {
+		t.Fatalf("创建禁用格式仓库：%v", err)
+	}
+	path := "/repository/mvn-disabled/com/example/app/1.0.0/app-1.0.0.jar"
+	if rec := e.rawReq(http.MethodGet, path, "Bearer "+adminToken, "", nil); rec.Code != http.StatusNotFound {
+		t.Fatalf("禁用 Maven 格式状态码 = %d，期望 404", rec.Code)
+	}
+	if rec := e.rawReq(http.MethodHead, path, "Bearer "+adminToken, "", nil); rec.Code != http.StatusNotFound {
+		t.Fatalf("禁用 Maven 格式 HEAD 状态码 = %d，期望 404", rec.Code)
+	}
+}
+
+func TestMavenUnknownRepositoryFast404AndHead(t *testing.T) {
+	e := newProtocolEnv(t)
+	adminToken := e.bootstrapAdmin(t)
+	path := "/repository/mvn-missing/com/example/app/1.0.0/app-1.0.0.jar"
+	start := time.Now()
+	rec := e.rawReq(http.MethodGet, path, "Bearer "+adminToken, "", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("未知仓库状态码 = %d，期望 404", rec.Code)
+	}
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Fatalf("未知仓库未快速返回 404，耗时 %s", elapsed)
+	}
+	if rec := e.rawReq(http.MethodHead, path, "Bearer "+adminToken, "", nil); rec.Code != http.StatusNotFound {
+		t.Fatalf("未知仓库 HEAD 状态码 = %d，期望 404", rec.Code)
 	}
 }
 
@@ -101,6 +138,34 @@ func TestMavenProxyFetchesUpstream(t *testing.T) {
 	// 上游无该路径 → 404。
 	if rec := e.rawReq(http.MethodGet, "/repository/mvn-central/com/example/app/1.0.0/missing.pom", "Bearer "+adminToken, "", nil); rec.Code != http.StatusNotFound {
 		t.Errorf("上游缺失状态码 = %d，期望 404", rec.Code)
+	}
+}
+
+func TestMavenSnapshotMissingShortCircuitsRepeatedMetadataProbe(t *testing.T) {
+	var metadataHits atomic.Int32
+	var literalHits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/maven-metadata.xml") {
+			metadataHits.Add(1)
+		} else {
+			literalHits.Add(1)
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	e := newProtocolEnv(t)
+	adminToken := e.bootstrapAdmin(t)
+	e.createMavenRepo(t, adminToken, "mvn-snapshot-missing", "proxy", srv.URL, nil)
+	path := "/repository/mvn-snapshot-missing/com/example/app/1.0-SNAPSHOT/app-1.0-SNAPSHOT.jar"
+	if rec := e.rawReq(http.MethodGet, path, "Bearer "+adminToken, "", nil); rec.Code != http.StatusNotFound {
+		t.Fatalf("缺失 SNAPSHOT 状态码 = %d，期望 404", rec.Code)
+	}
+	if got := metadataHits.Load(); got != 1 {
+		t.Fatalf("SNAPSHOT metadata 探测次数 = %d，期望 1", got)
+	}
+	if got := literalHits.Load(); got != 1 {
+		t.Fatalf("SNAPSHOT 字面路径探测次数 = %d，期望 1", got)
 	}
 }
 

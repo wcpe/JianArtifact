@@ -26,6 +26,8 @@ func RegisterGoProxyRoutes(r gin.IRouter, h *GoProxyHandler, mw ...gin.HandlerFu
 
 func (h *GoProxyHandler) Get(c *gin.Context) {
 	repoName := c.Param("repo")
+	withCacheOutcome(c)
+	defer h.markCacheResult(c, repoName)
 	if !h.authorize(c, repoName, "read") {
 		return
 	}

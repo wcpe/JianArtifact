@@ -48,12 +48,21 @@ func newProtocolEnv(t *testing.T) *protocolEnv {
 	return newProtocolEnvOpts(t, "")
 }
 
+// newProtocolEnvWithFormats 构造指定协议格式能力集合的测试环境。
+func newProtocolEnvWithFormats(t *testing.T, enabled formats.Set) *protocolEnv {
+	return newProtocolEnvConfigured(t, "", enabled)
+}
+
 // newProtocolEnvWithPublicURL 构造带对外基础 URL（FR-87）的协议测试环境。
 func newProtocolEnvWithPublicURL(t *testing.T, publicURL string) *protocolEnv {
 	return newProtocolEnvOpts(t, publicURL)
 }
 
 func newProtocolEnvOpts(t *testing.T, publicURL string) *protocolEnv {
+	return newProtocolEnvConfigured(t, publicURL, formats.New(formats.Known...))
+}
+
+func newProtocolEnvConfigured(t *testing.T, publicURL string, enabled formats.Set) *protocolEnv {
 	t.Helper()
 	db, err := persistence.Open(filepath.Join(t.TempDir(), "proto.db"))
 	if err != nil {
@@ -82,7 +91,7 @@ func newProtocolEnvOpts(t *testing.T, publicURL string) *protocolEnv {
 	tokenSvc := domain.NewTokenService(tokenRepo, userRepo)
 
 	repoSvc := domain.NewRepositoryService(repoRepo, aclRepo, assetRepo, domain.NewSettingService(settings), userRepo)
-	repoSvc.SetEnabledFormats(formats.New(formats.Known...))
+	repoSvc.SetEnabledFormats(enabled)
 	repoSvc.SetChangeRecorder(domain.NoopChangeRecorder{})
 	assetSvc := domain.NewAssetService(repoRepo, assetRepo, blobs, upstream.NewTestClient(5*time.Second))
 	assetSvc.SetChangeRecorder(domain.NoopChangeRecorder{})
@@ -92,7 +101,7 @@ func newProtocolEnvOpts(t *testing.T, publicURL string) *protocolEnv {
 	rawHandler := protocol.NewRawHandler(assetSvc, repoSvc)
 	rawHandler.SetPublishPolicy(publishPolicySvc)
 	mavenHandler := protocol.NewMavenHandler(rawHandler)
-	dispatcher := protocol.NewDispatcher(repoSvc, rawHandler, mavenHandler)
+	dispatcher := protocol.NewDispatcher(repoSvc, rawHandler, mavenHandler, enabled)
 	npmHandler := protocol.NewNpmHandler(rawHandler, authStore, tokenSvc, publicURL)
 	dispatcher.SetNpm(npmHandler)
 	formatMetadataSvc := domain.NewFormatMetadataService(assetSvc, repoRepo, formatMetadataRepo, upstream.NewTestClient(5*time.Second))

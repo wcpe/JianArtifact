@@ -73,6 +73,8 @@ func RegisterNpmRoutes(r gin.IRouter, h *NpmHandler, mw ...gin.HandlerFunc) {
 // Get 处理 GET/HEAD：`-/` 开头走 registry 级端点；rest 含 `/-/` 视为 tarball，否则视为 packument。
 func (h *NpmHandler) Get(c *gin.Context) {
 	repoName := c.Param("repo")
+	withCacheOutcome(c)
+	defer h.markCacheResult(c, repoName)
 	rest := strings.TrimPrefix(c.Param("rest"), "/")
 	if strings.HasPrefix(rest, "-/") {
 		h.registryGet(c, repoName, rest)

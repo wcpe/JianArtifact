@@ -73,7 +73,10 @@ func (h *OCIHandler) Probe(c *gin.Context) {
 
 // Get 处理 manifest、blob 和 tag 列表读取。
 func (h *OCIHandler) Get(c *gin.Context) {
-	repo, image, kind, value, ok := parseOCIPath(c.Param("repo"), c.Param("rest"))
+	repoName := c.Param("repo")
+	withCacheOutcome(c)
+	defer h.markCacheResult(c, repoName)
+	repo, image, kind, value, ok := parseOCIPath(repoName, c.Param("rest"))
 	if !ok {
 		writeOCIError(c, http.StatusNotFound, "NAME_UNKNOWN", "OCI 路径不存在")
 		return

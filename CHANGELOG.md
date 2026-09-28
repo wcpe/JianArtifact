@@ -40,6 +40,7 @@
 - **审计详情缺少请求上下文**：记录脱敏后的常用请求头与服务端处理耗时，并按请求、性能、上下文分组展示；Referer 仅保留 scheme/host/path，剔除 userinfo、query 与 fragment
 - **下载趋势多算右边界桶、分组轴与服务端桶起点错位**：统一按 `[from,to)` 过滤分钟源桶，前端轴按有效桶粒度对齐；`to` 落桶边界时不再额外生成终点桶
 - **主机监控磁盘趋势「已用≈总量」错误读数**：磁盘图此前把「已用 / 可用」画在左轴（贴合数据的放大域）、「总量」画在量纲不同的右轴，结果已用贴近左轴顶、总量贴近右轴顶，视觉上「已用≈总量」，与 74% 的实际占比矛盾。现改为**单一左轴**：`primary=diskUsedBytes`（面积）+ `yDomain=[0, diskTotalBytes]`，已用面积之上到轴顶的空白即**可用**（与内存图同构）；`diskTotalBytes` 缺失（历史样本）时回退 `["auto","auto"]`。卡内「总量 / 已用 / 可用 / 占用率」数字保留，可用量仍以精确值可见
+- **缓存命中率只对 raw 生效、其余格式恒为空**：`jianartifact.protocol.cache_result` 此前仅在 raw 协议的 Get 中设置（且只服务 raw 格式的 proxy 仓库），maven / npm / nuget / go / pypi / cargo / oci 的读路径都不写该键，于是业务仪表盘的缓存命中率长期显示 `—`（判定链路其余部分完好，只是没有数据来源）。现新增领域枚举 `CacheOutcome`（`hit` / `miss` / 未知）并在各 proxy 解析路径「先查本地、未命中再回源」的分叉处记录（`AssetService.proxyGet` / `ResolveOCIProxy`、`CargoService.proxyDownload`、`FormatMetadataService` 的 PyPI / NuGet 缓存路径）；协议层新增统一 `markCacheResult` 助手替换 raw 里原来的裸 `c.Set`，并删除旧的 raw-only `cacheCandidate` 判定，避免两套口径。hosted/group 一律保持未知——group 的首个命中成员无法在解析层可靠判定，宁可未知也不猜
 - **发布策略保存此前从未成功**：旧前端保存时会发送 `immutableRelease` 字段，而后端对发布策略请求里的该字段一律返回 400 `immutable_release_moved`（不可变 Release 已改为仓库级配置）→ 保存请求必然失败（与线上 `publish_policy` 表 0 行吻合）。现前端改为只读展示、不再发送该字段，发布策略保存恢复正常
 - **主机监控切换时间档位 / 网卡时整块被骨架替换**：`HostMonitoringLive` 的 `useAsync` 未传 `keepPreviousData`，跨键（时间档位或网卡变化）时会先 `setData(null) + setLoading(true)`，导致整块图表被骨架替换、布局重排。现补 `keepPreviousData: true`（与搜索页同款语义）：切换时保留旧数据、仅置后台刷新态，新数据到达就地替换，首载仍显示加载态
 
@@ -47,6 +48,7 @@
 
 ### 变更
 
+- **Maven 请求级仓库快照与快速 404 语义明确化**：协议请求按主名/别名解析一次并在请求内复用仓库快照；SNAPSHOT 先按时间戳元数据解析、失败后按字面路径回退；未知仓库、禁用格式和明确不存在的制品快速 404，确认不存在时写入默认 60 秒负缓存，上游故障或不可判定状态不缓存，成功写入/回源成功/删除后失效
 - **主机监控内存/磁盘趋势纵轴贴合数据**：内存趋势纵轴改为**系统内存总量**、只画「已用」（已用之上的空白即表示空闲，不再单画可用量折线）；磁盘趋势与仪表盘「容量增长趋势」的 Y 轴改为贴合数据的放大域以放大波动。图表能力上 `TrendChart` 新增 `yDomain` 入参（不传时保持原「从 0 起」行为，零回归）
 - **审计时间范围档位改为 24h / 3d / 7d / 30d（默认 24h）**，并支持**自定义日期区间**（URL 深链 `range=custom&from=&to=`）；日期选择器文案与日历 locale 随界面中英文切换；「共 N 条」与时间切换器并入筛选条，记录区标题移除、左右留白且不再横向滚动
 - **自定义日期区间改用 Mantine `DatePickerInput type="range"`**：替换原生 `<input type="date">`，与组件库保持一致

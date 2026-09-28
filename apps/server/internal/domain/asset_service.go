@@ -25,6 +25,120 @@ import (
 // maxResolveDepth 限制 group 成员递归解析深度，防止成员相互引用形成环导致的无限递归。
 const maxResolveDepth = 16
 
+// CacheOutcome 表示一次 proxy 读取的缓存来源；空串表示无法判定或非 proxy。
+type CacheOutcome string
+
+const (
+	// CacheOutcomeUnknown 表示无法可靠判定（hosted/group，或解析未命中判定点），不参与命中率统计。
+	CacheOutcomeUnknown CacheOutcome = ""
+	// CacheOutcomeHit 表示直接命中本地已缓存副本，未访问上游。
+	CacheOutcomeHit CacheOutcome = "hit"
+	// CacheOutcomeMiss 表示本地未命中、需要回源拉取。
+	CacheOutcomeMiss CacheOutcome = "miss"
+)
+
+// cacheOutcomeContextKey 是缓存来源记录器的 context 键（未导出，避免跨包误用）。
+type cacheOutcomeContextKey struct{}
+
+// cacheOutcomeRecorder 收集单次请求内 proxy 解析产生的缓存来源；并发回源时可能被多个 goroutine 写入，故加锁。
+// sealed 用于冻结 group 等不可靠场景：一旦冻结，成员级的 hit/miss 不再写入，整体保持未知。
+type cacheOutcomeRecorder struct {
+	mu      sync.Mutex
+	outcome CacheOutcome
+	sealed  bool
+}
+
+func (r *cacheOutcomeRecorder) record(outcome CacheOutcome) {
+	r.mu.Lock()
+	if !r.sealed {
+		r.outcome = outcome
+	}
+	r.mu.Unlock()
+}
+
+func (r *cacheOutcomeRecorder) seal() {
+	r.mu.Lock()
+	r.sealed = true
+	r.outcome = CacheOutcomeUnknown
+	r.mu.Unlock()
+}
+
+// WithCacheOutcome 在 ctx 上挂载缓存来源记录器，协议层借此读回本次 proxy 读取的 hit/miss。
+// 未挂载时 recordCacheOutcome 为无操作，因此后台任务与内部调用无需关心。
+func WithCacheOutcome(ctx context.Context) context.Context {
+	return context.WithValue(ctx, cacheOutcomeContextKey{}, &cacheOutcomeRecorder{})
+}
+
+// CacheOutcomeFromContext 读回 WithCacheOutcome 挂载的缓存来源；未挂载或未判定返回 CacheOutcomeUnknown。
+func CacheOutcomeFromContext(ctx context.Context) CacheOutcome {
+	if r, ok := ctx.Value(cacheOutcomeContextKey{}).(*cacheOutcomeRecorder); ok {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		return r.outcome
+	}
+	return CacheOutcomeUnknown
+}
+
+// ResolveFailureStatus 表示一次解析失败是否可以确认资源不存在。
+type ResolveFailureStatus string
+
+const (
+	// ResolveFailureUnknown 表示没有可用的失败判定。
+	ResolveFailureUnknown ResolveFailureStatus = ""
+	// ResolveFailureConfirmed 表示已确认上游或本地资源不存在。
+	ResolveFailureConfirmed ResolveFailureStatus = "confirmed"
+	// ResolveFailureUncertain 表示失败可能由离线、阻止窗口或上游故障导致。
+	ResolveFailureUncertain ResolveFailureStatus = "uncertain"
+)
+
+type resolveFailureContextKey struct{}
+
+type resolveFailureRecorder struct {
+	mu     sync.Mutex
+	status ResolveFailureStatus
+}
+
+// WithResolveFailure 为一次解析挂载失败判定记录器，协议层可据此避免重复探测不确定路径。
+func WithResolveFailure(ctx context.Context) context.Context {
+	return context.WithValue(ctx, resolveFailureContextKey{}, &resolveFailureRecorder{})
+}
+
+// ResolveFailureFromContext 读取当前解析失败判定；未记录时返回未知。
+func ResolveFailureFromContext(ctx context.Context) ResolveFailureStatus {
+	if r, ok := ctx.Value(resolveFailureContextKey{}).(*resolveFailureRecorder); ok {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		return r.status
+	}
+	return ResolveFailureUnknown
+}
+
+func recordResolveFailure(ctx context.Context, status ResolveFailureStatus) {
+	if r, ok := ctx.Value(resolveFailureContextKey{}).(*resolveFailureRecorder); ok {
+		r.mu.Lock()
+		if r.status != ResolveFailureUncertain {
+			r.status = status
+		}
+		r.mu.Unlock()
+	}
+}
+
+// recordCacheOutcome 把一次 proxy 解析的缓存来源写入 ctx 上的记录器；无记录器时静默忽略。
+// 判定点就在各 proxy 读路径「先查本地、未命中再回源」的分叉处，因此只对 proxy 仓库产生非空值。
+func recordCacheOutcome(ctx context.Context, outcome CacheOutcome) {
+	if r, ok := ctx.Value(cacheOutcomeContextKey{}).(*cacheOutcomeRecorder); ok {
+		r.record(outcome)
+	}
+}
+
+// sealCacheOutcome 冻结本次请求的缓存来源为未知：group 聚合读的首个命中成员无法在解析层可靠判定，
+// 因此 group 及其成员回源产生的成员级 hit/miss 不得暴露为整体结果（宁可未知也不猜）。
+func sealCacheOutcome(ctx context.Context) {
+	if r, ok := ctx.Value(cacheOutcomeContextKey{}).(*cacheOutcomeRecorder); ok {
+		r.seal()
+	}
+}
+
 // AssetService 编排制品的发布与拉取：元数据落 asset 表，内容落内容寻址 blob。
 //
 // 分层（见 internal/doc.go）：domain -> repository, blobstore, upstream。协议层
@@ -716,6 +830,17 @@ func (s *AssetService) Resolve(ctx context.Context, repoName, path string) (*rep
 	return s.resolvePath(ctx, repoName, path)
 }
 
+// ResolveWithRepo 使用调用方已解析的仓库快照执行制品解析，避免协议层重复查库。
+func (s *AssetService) ResolveWithRepo(ctx context.Context, repo *repository.Repository, path string) (*repository.Asset, io.ReadCloser, error) {
+	if path == "" || strings.HasSuffix(path, "/") {
+		return nil, nil, ErrNotFound
+	}
+	if repo == nil {
+		return nil, nil, ErrNotFound
+	}
+	return s.resolve(ctx, repo, path, 0)
+}
+
 // ResolveIndex 解析并缓存 proxy 的目录索引。
 // 普通制品路径仍由 Resolve 拒绝尾斜杠，避免把 Raw 目录页误当制品；
 // PyPI Simple 等格式索引明确需要该语义，因此单独开放入口。
@@ -739,9 +864,11 @@ func (s *AssetService) resolvePath(ctx context.Context, repoName, path string) (
 // 不再回源/探测（覆盖 Resolve/groupGet/proxyGet 各层入口，见 FR-111）。
 func (s *AssetService) resolve(ctx context.Context, repo *repository.Repository, path string, depth int) (*repository.Asset, io.ReadCloser, error) {
 	if depth > maxResolveDepth {
+		recordResolveFailure(ctx, ResolveFailureConfirmed)
 		return nil, nil, ErrNotFound
 	}
 	if s.negCache.hit(repo.ID, path) {
+		recordResolveFailure(ctx, ResolveFailureConfirmed)
 		return nil, nil, ErrNotFound
 	}
 	switch repo.Type {
@@ -750,7 +877,11 @@ func (s *AssetService) resolve(ctx context.Context, repo *repository.Repository,
 	case "group":
 		return s.groupGet(ctx, repo, path, depth)
 	default: // hosted 及未知类型均按本地读处理
-		return s.localGet(repo, path)
+		asset, rc, err := s.localGet(repo, path)
+		if errors.Is(err, ErrNotFound) {
+			recordResolveFailure(ctx, ResolveFailureConfirmed)
+		}
+		return asset, rc, err
 	}
 }
 
@@ -784,15 +915,20 @@ func (s *AssetService) localGet(repo *repository.Repository, path string) (*repo
 // 上游处于 auto-block 阻止窗口时零连接快速失败（不发起上游连接，见 proxyHealth）。
 func (s *AssetService) proxyGet(ctx context.Context, repo *repository.Repository, path string) (*repository.Asset, io.ReadCloser, error) {
 	if asset, rc, err := s.localGet(repo, path); err == nil {
+		recordCacheOutcome(ctx, CacheOutcomeHit)
 		return asset, rc, nil
 	} else if !errors.Is(err, ErrNotFound) {
 		return nil, nil, err
 	}
+	// 本地未命中即计 miss：本次请求无法由已缓存副本直接满足，需走回源（含回源失败）。
+	recordCacheOutcome(ctx, CacheOutcomeMiss)
 	// 备用节点只服务已同步到本地的缓存；未命中不得回源并写入本地。
 	if s.requireBusinessWrite() != nil {
+		recordResolveFailure(ctx, ResolveFailureUncertain)
 		return nil, nil, ErrNotFound
 	}
 	if s.upstream == nil {
+		recordResolveFailure(ctx, ResolveFailureUncertain)
 		return nil, nil, ErrNotFound
 	}
 	cfg, err := repo.DecodeConfig()
@@ -800,14 +936,17 @@ func (s *AssetService) proxyGet(ctx context.Context, repo *repository.Repository
 		return nil, nil, err
 	}
 	if cfg.RemoteURL == "" {
+		recordResolveFailure(ctx, ResolveFailureUncertain)
 		return nil, nil, ErrNotFound
 	}
 	// 仓库手动 offline（FR-113）：不回源，快速 404（本地已确认未命中）。
 	if !repo.Online {
+		recordResolveFailure(ctx, ResolveFailureUncertain)
 		return nil, nil, ErrNotFound
 	}
 	// 阻止窗口内直接快速失败，不发起上游连接（group 读不拖慢的关键）。
 	if s.health.shouldBlock(repo.ID) {
+		recordResolveFailure(ctx, ResolveFailureUncertain)
 		return nil, nil, ErrUpstream
 	}
 
@@ -871,11 +1010,14 @@ func (s *AssetService) fetchProxyAsset(ctx context.Context, repo *repository.Rep
 		switch {
 		case errors.Is(err, upstream.ErrNotFound):
 			s.negCache.add(repo.ID, path)
+			recordResolveFailure(ctx, ResolveFailureConfirmed)
 		case errors.Is(err, upstream.ErrGone):
 			// 410 表示当前资源永久下架，不代表上游仓库不可达；
-			// 不能因此触发仓库级 auto-block，否则 Go proxy 等客户端
-			// 的后续请求会被错误改写成 502，无法按标准链路回退。
+			// 不能因此触发仓库级 auto-block，否则 Go proxy 等客户端的
+			// 后续请求会被错误改写成 502，无法按标准链路回退。
+			recordResolveFailure(ctx, ResolveFailureUncertain)
 		default:
+			recordResolveFailure(ctx, ResolveFailureUncertain)
 			s.health.recordFailure(repo.ID, cfg.RemoteURL, cfg.CredentialRef)
 		}
 		return nil, mapUpstreamErr(err)
@@ -918,10 +1060,13 @@ func (s *AssetService) ResolveOCIProxy(ctx context.Context, repoName, path, pull
 		return s.Resolve(ctx, repoName, path)
 	}
 	if asset, rc, err := s.ociLocalGet(repo, path, expectedDigest); err == nil {
+		recordCacheOutcome(ctx, CacheOutcomeHit)
 		return asset, rc, nil
 	} else if !errors.Is(err, ErrNotFound) {
 		return nil, nil, err
 	}
+	// 本地未命中即计 miss：本次请求无法由已缓存副本直接满足，需按 Bearer 质询回源。
+	recordCacheOutcome(ctx, CacheOutcomeMiss)
 	if s.requireBusinessWrite() != nil || s.upstream == nil || !repo.Online || s.health.shouldBlock(repo.ID) {
 		return nil, nil, ErrNotFound
 	}
@@ -1043,81 +1188,80 @@ const groupMemberTimeout = 3 * time.Second
 // 或回源失败（上游 5xx/超时）。任一成员不可判定（可能只是暂时不可用），则不写负缓存，
 // 避免把上游故障误缓存成永久不存在（上游恢复后同路径立即重试成功）。
 func (s *AssetService) groupGet(ctx context.Context, repo *repository.Repository, path string, depth int) (*repository.Asset, io.ReadCloser, error) {
+	// group 的缓存来源不可靠：首个命中成员可能来自任一成员，冻结为未知，避免成员级 hit/miss 外泄。
+	sealCacheOutcome(ctx)
 	cfg, err := repo.DecodeConfig()
 	if err != nil {
 		return nil, nil, err
 	}
 	if depth > maxResolveDepth {
+		recordResolveFailure(ctx, ResolveFailureConfirmed)
 		return nil, nil, ErrNotFound
 	}
 
-	// uncertain 标记本次 404 是否「不可判定」：任何成员被跳过或回源失败即置位。
+	// 成员快照只解析一次，并始终按配置原始顺序保存，供两个阶段共同复用。
+	members := make([]*repository.Repository, len(cfg.Members))
 	var uncertain atomic.Bool
-
-	// 阶段一：串行快查本地缓存（不触发网络），命中即返回，保持成员顺序语义。
-	// 跳过 offline 成员（FR-113：手动置离线的仓库不参与聚合读）；离线成员未参与判定，
-	// 其 404 结果不可信，置不可判定（FR-111 M-1）。
-	for _, name := range cfg.Members {
-		member, err := s.repos.GetByName(name)
-		if err != nil {
-			// 成员解析失败（悬空引用）：存在无法判定的成员，整体 404 不可信，置不可判定。
+	for i, name := range cfg.Members {
+		member, getErr := s.repos.GetByName(name)
+		if getErr != nil {
 			uncertain.Store(true)
+			continue
+		}
+		members[i] = member
+	}
+
+	// 阶段一：串行快查全部成员的本地缓存，保持成员优先级。
+	for _, member := range members {
+		if member == nil {
 			continue
 		}
 		if !member.Online {
 			uncertain.Store(true)
 			continue
 		}
-		if asset, rc, err := s.localGet(member, path); err == nil {
+		if asset, rc, localErr := s.localGet(member, path); localErr == nil {
 			return asset, rc, nil
 		}
 	}
-	// 备用节点组仓库只可读成员的本地缓存，禁止第二阶段并行回源与负缓存写入。
 	if s.requireBusinessWrite() != nil {
+		recordResolveFailure(ctx, ResolveFailureUncertain)
 		return nil, nil, ErrNotFound
 	}
 
-	// 阶段二：本地全未命中 → 并行回源未被阻止的 proxy 成员。
-	// 收集需要回源的成员（proxy 且未处于阻止窗口；hosted 已在阶段一确认未命中）。
 	type job struct {
 		idx    int
-		repoID int64
 		member *repository.Repository
 	}
-	jobs := make([]job, 0, len(cfg.Members))
-	for _, name := range cfg.Members {
-		member, err := s.repos.GetByName(name)
-		if err != nil {
-			// 成员解析失败（悬空引用）：存在无法判定的成员，置不可判定（FR-111 M-1）。
-			uncertain.Store(true)
+	jobs := make([]job, 0, len(members))
+	for i, member := range members {
+		if member == nil {
 			continue
 		}
 		if !member.Online {
-			// 离线成员跳过：未参与本次判定，404 不可信，置不可判定（FR-111 M-1）。
 			uncertain.Store(true)
 			continue
 		}
 		if member.Type != "proxy" {
-			continue // hosted 等已在阶段一确认未命中，不算跳过
+			continue
 		}
 		if s.health.shouldBlock(member.ID) {
-			// auto-block 阻止窗口内跳过：未参与判定，置不可判定（FR-111 M-1）。
 			uncertain.Store(true)
 			continue
 		}
-		jobs = append(jobs, job{idx: len(jobs), repoID: member.ID, member: member})
+		jobs = append(jobs, job{idx: i, member: member})
 	}
 	if len(jobs) == 0 {
-		// 无可回源成员：全部 hosted 成员已在阶段一确认未命中（确认不存在，可写负缓存）；
-		// 但若有成员被 offline/阻止跳过（uncertain），404 不可信，不写（FR-111 M-1）。
-		if !uncertain.Load() {
+		if uncertain.Load() {
+			recordResolveFailure(ctx, ResolveFailureUncertain)
+		} else {
 			s.negCache.add(repo.ID, path)
+			recordResolveFailure(ctx, ResolveFailureConfirmed)
 		}
 		return nil, nil, ErrNotFound
 	}
 
-	// 并行回源：首个成功即返回并取消其余；全部失败/超时快速 404。
-	results := make([]bool, len(jobs))
+	results := make([]bool, len(members))
 	groupCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var wg sync.WaitGroup
@@ -1127,37 +1271,35 @@ func (s *AssetService) groupGet(ctx context.Context, repo *repository.Repository
 			defer wg.Done()
 			memberCtx, mCancel := context.WithTimeout(groupCtx, groupMemberTimeout)
 			defer mCancel()
-			asset, rc, err := s.resolve(memberCtx, j.member, path, depth+1)
-			if err != nil {
-				// 明确 404（含成员自身负缓存命中）是「确认不存在」；其余错误（回源失败/
-				// 超时）说明该成员上游暂时不可用，本次 404 不可判定（FR-111 M-1）。
-				if !errors.Is(err, ErrNotFound) {
+			memberCtx = WithResolveFailure(memberCtx)
+			asset, rc, resolveErr := s.resolve(memberCtx, j.member, path, depth+1)
+			if resolveErr != nil {
+				if !errors.Is(resolveErr, ErrNotFound) || ResolveFailureFromContext(memberCtx) != ResolveFailureConfirmed {
 					uncertain.Store(true)
 				}
 				return
 			}
-			// 成功：proxyGet 已把制品落本地缓存，此处关闭读流即可；
-			// 记录成功成员供后续按 members 顺序 localGet 返回。
 			_ = rc.Close()
 			_ = asset
 			results[j.idx] = true
-			cancel() // 首个成功：取消其它等待者
+			cancel()
 		}(j)
 	}
 	wg.Wait()
 
-	// 有成员成功：按 members 顺序返回第一个成功成员的本地缓存制品。
 	for i, ok := range results {
 		if ok {
-			asset, rc, err := s.localGet(jobs[i].member, path)
-			if err == nil {
+			asset, rc, localErr := s.localGet(members[i], path)
+			if localErr == nil {
 				return asset, rc, nil
 			}
 		}
 	}
-	// 全未命中：确认不存在（无成员被跳过/失败）才写 group 层负缓存（FR-111 M-1）。
-	if !uncertain.Load() {
+	if uncertain.Load() {
+		recordResolveFailure(ctx, ResolveFailureUncertain)
+	} else {
 		s.negCache.add(repo.ID, path)
+		recordResolveFailure(ctx, ResolveFailureConfirmed)
 	}
 	return nil, nil, ErrNotFound
 }
