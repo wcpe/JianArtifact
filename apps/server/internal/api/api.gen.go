@@ -3332,7 +3332,7 @@ type GetDownloadTrendGroupedParams struct {
 	// GroupBy 分组维度：family（缺省，UA 归类）或 ip（来源 IP 明文，仅管理员）；非法值返回 400。
 	GroupBy *GetDownloadTrendGroupedParamsGroupBy `form:"groupBy,omitempty" json:"groupBy,omitempty"`
 
-	// Repo 按仓库名精确过滤；省略为全部仓库。
+	// Repo 按仓库名（主名或别名）精确过滤；省略为全部仓库。仓库名不存在时返回 404。
 	Repo *DownloadRepoParam `form:"repo,omitempty" json:"repo,omitempty"`
 }
 

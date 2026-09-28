@@ -383,3 +383,15 @@ func TestDownloadTrendMergesAliases(t *testing.T) {
 		t.Fatalf("按别名过滤的分组趋势应合并主名与别名：%+v", grouped.Points)
 	}
 }
+
+// 分组趋势按未知名过滤：404（契约已声明），不是 200 + 空序列——否则前端无法区分
+// 「仓库不存在」与「这段时间没有下载」。
+func TestGetDownloadTrendGroupedUnknownRepositoryIs404(t *testing.T) {
+	handlers, _ := newDownloadTrendTestHandlers(t)
+
+	rec := serveDownloadTrend(handlers, adminPrincipal(),
+		"/api/v1/observability/downloads/trend?from=2026-09-21T09:59:00Z&to=2026-09-21T10:30:00Z&repo=ghost")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("未知名过滤应 404，得 %d：%s", rec.Code, rec.Body.String())
+	}
+}

@@ -369,6 +369,9 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "409":
           $ref: "#/components/responses/Conflict"
+        "404":
+          description: 过滤用的仓库名不存在（含已删除 / 未跟随重命名的旧名）
+          $ref: "#/components/responses/NotFound"
   /api/v1/observability/dashboard:
     get:
       operationId: getOperationsDashboard
@@ -2138,7 +2141,7 @@ components:
       name: repo
       in: query
       required: false
-      description: 按仓库名精确过滤；省略为全部仓库。
+      description: 按仓库名（主名或别名）精确过滤；省略为全部仓库。仓库名不存在时返回 404。
       schema:
         type: string
         minLength: 1

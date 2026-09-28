@@ -2818,7 +2818,7 @@ export interface components {
         HostInterfaceParam: string;
         /** @description 分组维度：family（缺省，UA 归类）或 ip（来源 IP 明文，仅管理员）；非法值返回 400。 */
         DownloadGroupByParam: "family" | "ip";
-        /** @description 按仓库名精确过滤；省略为全部仓库。 */
+        /** @description 按仓库名（主名或别名）精确过滤；省略为全部仓库。仓库名不存在时返回 404。 */
         DownloadRepoParam: string;
         /** @description 备份包标识（形如 bk-20260910-162701-a1b2c3）。 */
         BackupIdParam: string;
@@ -3288,7 +3288,7 @@ export interface operations {
                 to?: components["parameters"]["ObservabilityToParam"];
                 /** @description 分组维度：family（缺省，UA 归类）或 ip（来源 IP 明文，仅管理员）；非法值返回 400。 */
                 groupBy?: components["parameters"]["DownloadGroupByParam"];
-                /** @description 按仓库名精确过滤；省略为全部仓库。 */
+                /** @description 按仓库名（主名或别名）精确过滤；省略为全部仓库。仓库名不存在时返回 404。 */
                 repo?: components["parameters"]["DownloadRepoParam"];
             };
             header?: never;
@@ -3309,6 +3309,8 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            /** @description 过滤用的仓库名不存在（含已删除 / 未跟随重命名的旧名） */
+            404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
         };
     };
