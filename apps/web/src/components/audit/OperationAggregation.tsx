@@ -141,11 +141,13 @@ function coordinateChain(
 }
 
 /** 把某一分区的操作组装成展示树（仓库 / 坐标分段为分支，操作与文件为叶子）。 */
-function buildKindTree(operations: readonly AuditOperation[]): DisplayNode[] {
+function buildKindTree(operations: readonly AuditOperation[], kind: OperationKind): DisplayNode[] {
   const root = new Map<string, MutableNode>();
 
   for (const operation of operations) {
-    const opKey = `op:${operation.key}`;
+    // 键带分区前缀：折叠集合是跨分区共享的，同名仓库 / 坐标在不同分区会产生相同键，
+    // 不带前缀会让「上传」分区的折叠状态串到「删除」分区。
+    const opKey = `op:${kind}:${operation.key}`;
     const opNode: MutableNode = {
       key: opKey,
       role: "operation",
@@ -168,7 +170,8 @@ function buildKindTree(operations: readonly AuditOperation[]): DisplayNode[] {
     }
 
     let map = root;
-    let prefix = "";
+    // 路径键同样以分区开头，与操作键保持同一命名空间。
+    let prefix: string = kind;
     const path: MutableNode[] = [];
     for (const step of chain) {
       const key = `${prefix}/${step.key}`;
@@ -271,7 +274,7 @@ export function OperationAggregation({
           kind,
           ops: ops.length,
           files: ops.reduce((total, operation) => total + operationFileCount(operation), 0),
-          nodes: buildKindTree(ops),
+          nodes: buildKindTree(ops, kind),
         };
       })
       .filter((section) => section.ops > 0);

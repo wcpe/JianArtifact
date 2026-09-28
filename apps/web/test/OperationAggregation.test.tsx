@@ -108,6 +108,31 @@ describe("OperationAggregation", () => {
     expect(within(other).getByText("更新设置")).toBeTruthy();
   });
 
+  it("折叠键按分区隔离：折叠上传分区的节点不影响删除分区的同名节点", async () => {
+    renderAggregation([
+      artifactEvent({ eventId: "u1", path: "g/a/1.0/a-1.0.jar", action: "asset.put" }),
+      artifactEvent({ eventId: "d1", path: "g/a/1.0/a-1.0.jar", action: "asset.delete" }),
+    ]);
+
+    const upload = screen.getByTestId("audit-op-section-upload");
+    const del = screen.getByTestId("audit-op-section-delete");
+    // 两个分区都有 g / a / 1.0 这条路径（同名中间节点）。
+    expect(within(upload).getByText("1.0")).toBeTruthy();
+    expect(within(del).getByText("1.0")).toBeTruthy();
+
+    // 收起上传分区的 1.0 节点：从标签向上找到含切换按钮的行（标签本身在 Badge 里）。
+    let row: HTMLElement | null = within(upload).getByText("1.0");
+    while (row && !row.querySelector("button")) row = row.parentElement;
+    if (!row) throw new Error("未找到 1.0 节点的切换按钮");
+    const user = userEvent.setup();
+    await user.click(within(row).getByRole("button", { name: "收起" }));
+
+    // 上传分区该节点已收起：文件叶不再可见。
+    expect(within(upload).queryByRole("button", { name: "a-1.0.jar" })).toBeNull();
+    // 删除分区的同名节点不受影响：文件叶仍可见。
+    expect(within(del).getByRole("button", { name: "a-1.0.jar" })).toBeTruthy();
+  });
+
   it("类型筛选只保留对应类型的分区，并同步汇总", async () => {
     const user = userEvent.setup();
     renderAggregation([
