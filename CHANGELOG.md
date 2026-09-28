@@ -20,6 +20,8 @@
 
 ### 变更
 
+- **删除前端死代码 `buildUploadTree`**：它是「审计聚合」之外的第二套建树实现，生产代码零引用（只被自身 286 行单测保护），已随 `UploadTreeNode` / `MutableNode` / `upsert` / `finalize` / `compareNodes` 一并删除；模块收窄为「坐标反解 / 目标解析 / 搜索关键字」三个被复用的导出，`artifactSearchText` 的用例移到独立 describe 保留
+
 ## 0.10.0（2026-09-28）
 
 ### 新增
