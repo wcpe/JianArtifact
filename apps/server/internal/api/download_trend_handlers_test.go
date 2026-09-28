@@ -312,3 +312,74 @@ func TestDownloadTrendRangeQueryValidation(t *testing.T) {
 		}
 	}
 }
+
+// TestDownloadTrendMergesAliases 仓库别名并集（端到端）：同一逻辑仓库的下载分别记在主名与
+// 旧名（重命名后已成别名）两个名字下时，按主名或别名入口查询仓库下载趋势都应合并为同一
+// 总数与同一趋势（不按名字拆分成两份），仪表盘分组趋势按别名过滤同样合并。
+func TestDownloadTrendMergesAliases(t *testing.T) {
+	gin.SetMode(gin.ReleaseMode)
+	db := openAPITestDB(t)
+	downloads := repository.NewAssetDownloadRepo(db)
+	repoSvc := domain.NewRepositoryService(
+		repository.NewRepoRepo(db),
+		repository.NewAclRepo(db),
+		repository.NewAssetRepo(db),
+		domain.NewSettingService(repository.NewSettingRepo(db)),
+		repository.NewUserRepo(db),
+	)
+	// 主名 merge-main、别名 merge-legacy（等价「重命名后旧名转别名」的落库状态）。
+	if _, err := repoSvc.Create("merge-main", "raw", "hosted", "public", "", repository.RepositoryConfig{}, "merge-legacy"); err != nil {
+		t.Fatalf("创建仓库：%v", err)
+	}
+	// 主名 4 次 + 别名 6 次（同分钟 a.jar）、别名 1 次（次分钟 b.jar）。
+	if err := downloads.AddMinutes([]repository.AssetDownloadMinute{
+		{BucketStart: repository.FormatMetricTime(downloadTrendBase), Repo: "merge-main", AssetPath: "a.jar", ClientIP: "1.1.1.1", UAFamily: "maven", DownloadCount: 4},
+		{BucketStart: repository.FormatMetricTime(downloadTrendBase), Repo: "merge-legacy", AssetPath: "a.jar", ClientIP: "1.1.1.1", UAFamily: "maven", DownloadCount: 6},
+		{BucketStart: repository.FormatMetricTime(downloadTrendBase.Add(time.Minute)), Repo: "merge-legacy", AssetPath: "b.jar", ClientIP: "2.2.2.2", UAFamily: "curl", DownloadCount: 1},
+	}); err != nil {
+		t.Fatalf("写入下载样本：%v", err)
+	}
+	handlers := NewHandlers(Deps{Repos: repoSvc, AssetDownloads: downloads})
+	admin := adminPrincipal()
+	const window = "?from=2026-09-21T09:59:00Z&to=2026-09-21T10:02:00Z"
+
+	// 主名与别名入口都应得到合并后的总数 11 与趋势 [0, 10, 1]（10:00=4+6、10:01=1）。
+	for _, name := range []string{"merge-main", "merge-legacy"} {
+		rec := serveDownloadTrend(handlers, admin, "/api/v1/repositories/"+name+"/download-trend"+window)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("按 %q 读仓库趋势应 200，得 %d：%s", name, rec.Code, rec.Body.String())
+		}
+		var resp RepositoryDownloadTrendResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("解析仓库趋势（%s）：%v", name, err)
+		}
+		if resp.TotalDownloadCount != 11 {
+			t.Fatalf("按 %q 总下载应合并为 11（4+6+1），得 %d", name, resp.TotalDownloadCount)
+		}
+		wantCounts := []int64{0, 10, 1}
+		if len(resp.Trend) != len(wantCounts) {
+			t.Fatalf("按 %q 应 %d 个桶，得 %d：%+v", name, len(wantCounts), len(resp.Trend), resp.Trend)
+		}
+		for i, want := range wantCounts {
+			if resp.Trend[i].DownloadCount != want {
+				t.Fatalf("按 %q 第 %d 桶应 %d，得 %d：%+v", name, i, want, resp.Trend[i].DownloadCount, resp.Trend)
+			}
+		}
+	}
+
+	// 仪表盘分组趋势按别名过滤：10:00 maven=10（主名 4 + 别名 6）、10:01 curl=1。
+	rec := serveDownloadTrend(handlers, admin,
+		"/api/v1/observability/downloads/trend?from=2026-09-21T09:59:00Z&to=2026-09-21T10:30:00Z&repo=merge-legacy")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("按别名过滤分组趋势应 200，得 %d：%s", rec.Code, rec.Body.String())
+	}
+	var grouped DownloadGroupedTrendResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &grouped); err != nil {
+		t.Fatalf("解析分组趋势：%v", err)
+	}
+	if len(grouped.Points) != 2 ||
+		grouped.Points[0].Group != "maven" || grouped.Points[0].Count != 10 ||
+		grouped.Points[1].Group != "curl" || grouped.Points[1].Count != 1 {
+		t.Fatalf("按别名过滤的分组趋势应合并主名与别名：%+v", grouped.Points)
+	}
+}

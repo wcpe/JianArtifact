@@ -46,8 +46,10 @@ func (c *linuxHostCollector) Collect(at time.Time) HostRawSample {
 	} else {
 		item.HostState, item.HostErrorCode = repository.MetricStateUnavailable, "disk_unavailable"
 	}
-	if in, out, ok := readLinuxNetwork(); ok {
-		item.NetworkReceiveBytes, item.NetworkTransmitBytes = in, out
+	if interfaces, ok := readLinuxNetwork(); ok {
+		// 逐网卡累计计数保留，聚合值由调用方求和，使网络卡既能选网卡也可看全网卡总量。
+		item.NetworkInterfaces = interfaces
+		item.NetworkReceiveBytes, item.NetworkTransmitBytes = sumNetworkInterfaces(interfaces)
 	} else {
 		item.NetworkState, item.NetworkErrorCode = repository.MetricStateUnavailable, "network_unavailable"
 	}
@@ -121,33 +123,14 @@ func readLinuxDisk(dataDir string) (int64, int64, bool) {
 	return int64(stat.Bavail) * int64(stat.Bsize), int64(stat.Blocks) * int64(stat.Bsize), true
 }
 
-func readLinuxNetwork() (uint64, uint64, bool) {
-	file, err := os.Open("/proc/net/dev")
+// readLinuxNetwork 读取 /proc/net/dev 并交由纯函数 parseProcNetDev 解析为逐网卡累计计数
+// （抽纯函数后非 Linux 平台也能对解析口径做单元测试，见 operations_host_common.go）。
+func readLinuxNetwork() ([]HostNetworkInterface, bool) {
+	data, err := os.ReadFile("/proc/net/dev")
 	if err != nil {
-		return 0, 0, false
+		return nil, false
 	}
-	defer func() { _ = file.Close() }()
-	var received, transmitted uint64
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := scanner.Text()
-		parts := strings.SplitN(line, ":", 2)
-		if len(parts) != 2 || strings.TrimSpace(parts[0]) == "lo" {
-			continue
-		}
-		fields := strings.Fields(parts[1])
-		if len(fields) < 9 {
-			continue
-		}
-		in, inErr := strconv.ParseUint(fields[0], 10, 64)
-		out, outErr := strconv.ParseUint(fields[8], 10, 64)
-		if inErr != nil || outErr != nil {
-			continue
-		}
-		received += in
-		transmitted += out
-	}
-	return received, transmitted, true
+	return parseProcNetDev(string(data)), true
 }
 
 func readLinuxProcess() (int64, uint64, bool) {

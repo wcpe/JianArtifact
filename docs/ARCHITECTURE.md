@@ -80,6 +80,7 @@ config 为横切配置层；web 是 go:embed 的前端静态资源。
 - **原子操作与 operation outbox（退役时保留复用）**：`asset_mutation` 与 `replication_operation_outbox` 仍是原子制品操作的唯一真源——业务写入在同一事务内追加完整 operation envelope，供引用计数、可恢复隔离回收与审计使用。FR-138 退役复制时逐项确认了共享代码归属，该机制依 ADR-0014 / ADR-0019 / ADR-0024 继续保留。
 - **复制期表的历史保留**：`repl_change`、`replication_relay_record`、`replication_relay_frontier`、`replication_operation_receipt`、`repl_sync_log`、`replication_apply_log`、`replication_pull_credential`、`replication_sync_event` 等表默认**保留不 DROP**（迁移 0010–0033 原样保留），当前代码不再写入其中的接收 / 中继 / 凭据 / 同步历史语义；`asset_mutation.origin='received'` 等入站身份字段仅为历史数据兼容而保留。
 - **当前观测**：`audit_log`、运维告警与风险确认表只表达当前实例自身事实（审计中心、主机监控、业务仪表盘），不参与任何跨实例传播。
+- **主机监控数据模型**：`host_metric_minute`（每分钟一行，主键 `bucket_start`）保存 CPU / 内存 / 磁盘 / 网络 / 进程 / 就绪样本；迁移 0042 追加可空列 `network_receive_bytes_total` / `network_transmit_bytes_total`（该时刻**全部非回环网卡的聚合累计字节**，自网卡启动以来；历史行保持 NULL、不回填）。逐网卡明细另存 `host_network_interface_minute`（主键 `(bucket_start, interface)`，含该网卡累计总量与**按该网卡**算得的速率，速率列可空），并按 `(interface, bucket_start)` 建索引。
 
 ## 5. 已落地的通用机制
 

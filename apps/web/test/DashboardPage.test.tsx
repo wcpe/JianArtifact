@@ -3,7 +3,7 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpResponse, http } from "msw";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useLocation } from "react-router-dom";
 
 import { DashboardPage } from "../src/pages/DashboardPage";
@@ -12,7 +12,76 @@ import { TrendChart } from "../src/components/observability/TrendChart";
 import { renderWithProviders } from "./harness";
 import { server } from "@jianartifact/devmock/node";
 
+// 拦截仪表盘的 TrendChart：既**断言传给图表的 props**（容量增量口径、纵轴域），
+// 又仍调用真实组件渲染（保留本文件既有悬停/拖选等交互用例）。
+// mock 工厂会被 hoist 到 import 之前，故调用记录用 vi.hoisted 提前声明；不用 vi.fn，
+// 以免 afterEach 的 restoreAllMocks 清掉包装实现。每个用例前清空记录。
+const trendChartSpy = vi.hoisted(() => ({ calls: [] as Array<Record<string, unknown>> }));
+vi.mock("../src/components/observability/TrendChart", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../src/components/observability/TrendChart")>();
+  return {
+    ...actual,
+    TrendChart: (props: Parameters<typeof actual.TrendChart>[0]) => {
+      trendChartSpy.calls.push(props as unknown as Record<string, unknown>);
+      return actual.TrendChart(props);
+    },
+  };
+});
+
+beforeEach(() => {
+  trendChartSpy.calls.length = 0;
+});
+
 afterEach(() => vi.restoreAllMocks());
+
+/** dashboard 响应最小骨架 + 指定 capacityTrend，用于容量增量口径断言。 */
+function mockDashboardCapacity(capacityTrend: Array<Record<string, unknown>>): void {
+  server.use(
+    http.get("*/api/v1/observability/dashboard", () =>
+      HttpResponse.json({
+        from: "2026-08-30T00:00:00.000Z",
+        to: "2026-08-31T00:00:00.000Z",
+        effectiveBucket: "minute",
+        current: {
+          from: "2026-08-31T00:00:00.000Z",
+          to: "2026-08-31T01:00:00.000Z",
+          repositoryCount: 1,
+          assetCount: 2,
+          logicalBytes: 3,
+        },
+        kpi: {
+          repositoryCount: 1,
+          assetCount: 2,
+          logicalBytes: 8_600_000_000,
+          requestCount: 4,
+          downloadCount: 5,
+          failureCount: 0,
+          cacheHitRate: null,
+        },
+        requestTrend: [],
+        capacityTrend,
+        alerts: [],
+      }),
+    ),
+  );
+}
+
+/** 容量趋势桶点（capacityTrend 元素的最小合法形态，logicalBytes 为逻辑字节数）。 */
+function capacityPoint(from: string, logicalBytes: number): Record<string, unknown> {
+  return {
+    from,
+    to: from,
+    repositoryCount: 1,
+    assetCount: 1,
+    logicalBytes,
+  };
+}
+
+/** 从拦截记录里取容量图（唯一以 unit="bytes" 渲染的 TrendChart）的 props。 */
+function capacityChartProps(): Record<string, unknown> | undefined {
+  return trendChartSpy.calls.find((call) => call.unit === "bytes");
+}
 
 function LocationProbe() {
   const location = useLocation();
@@ -98,13 +167,89 @@ describe("业务仪表盘（真实读模型）", () => {
     );
     renderWithProviders(<DashboardPage />, { route: "/dashboard", authenticated: true });
 
-    // KPI 值限定在核心指标带内断言（趋势卡的区间剖析条可能统计出相同数字，属预期）
+    // KPI 取服务端值（10/11/12），不从趋势数据重新汇总。
+    // 趋势卡右上「最新值大数字」也取趋势末点（999），与 KPI 是两套口径，故 KPI 断言限定在核心指标带内。
+    // 区间剖析条移除后，999 在页面上只应剩这一处——此前统计条会再算出均值/峰值/总量等重复的 999。
     const kpiBand = await screen.findByLabelText("核心指标带");
     expect(within(kpiBand).getByText("10")).toBeTruthy();
     expect(within(kpiBand).getByText("11")).toBeTruthy();
     expect(within(kpiBand).getByText("12")).toBeTruthy();
     expect(within(kpiBand).getByText("25.0%")).toBeTruthy();
     expect(within(kpiBand).queryByText("999")).toBeNull();
+    expect(screen.getAllByText("999")).toHaveLength(1);
+  });
+
+  it("容量趋势绘制相对区间起点的增量：首点为 0、末点为区间增长量", async () => {
+    const base = 8_610_000_000;
+    mockDashboardCapacity([
+      capacityPoint("2026-08-30T00:00:00.000Z", base),
+      capacityPoint("2026-08-30T06:00:00.000Z", base + 20 * 1024 * 1024),
+      capacityPoint("2026-08-30T12:00:00.000Z", base + 33 * 1024 * 1024),
+    ]);
+    renderWithProviders(<DashboardPage />, { route: "/dashboard", authenticated: true });
+
+    // 标题/摘要改为「增长」语义，role=img 的 aria-label 由二者拼成。
+    await screen.findByRole("img", {
+      name: "容量增长（相对区间起点）：以区间起点为 0，展示期间增长量",
+    });
+
+    const capacity = capacityChartProps();
+    const primary = capacity?.primary as Array<{ value: number }>;
+    // 增量口径：首点恒为 0，末点＝区间增长量（与 8.6 GB 基数无关）。
+    expect(primary.map((point) => point.value)).toEqual([0, 20 * 1024 * 1024, 33 * 1024 * 1024]);
+    expect(capacity?.primaryLabel).toBe("增长量");
+    // 增量非负 → 纵轴自 0 起，增长才有可比性。
+    expect(capacity?.yDomain).toEqual([0, "auto"]);
+    // 右上读数＝当前增量（末点），带符号细粒度而非 "8.0 GB" 总量。
+    expect(await screen.findByText("+33.0 MB")).toBeTruthy();
+  });
+
+  it("区间内出现负增量时纵轴退化为 auto，读数带负号", async () => {
+    const base = 8_610_000_000;
+    mockDashboardCapacity([
+      capacityPoint("2026-08-30T00:00:00.000Z", base),
+      capacityPoint("2026-08-30T12:00:00.000Z", base - 16 * 1024 * 1024),
+    ]);
+    renderWithProviders(<DashboardPage />, { route: "/dashboard", authenticated: true });
+
+    await screen.findByRole("img", {
+      name: "容量增长（相对区间起点）：以区间起点为 0，展示期间增长量",
+    });
+
+    const capacity = capacityChartProps();
+    // 容量下降：固定下界 0 会截断负值，故退化为 auto/auto 贴合数据两端。
+    expect(capacity?.yDomain).toEqual(["auto", "auto"]);
+    expect(await screen.findByText("-16.0 MB")).toBeTruthy();
+  });
+
+  it("容量趋势为空数组时不崩溃且不渲染读数", async () => {
+    mockDashboardCapacity([]);
+    renderWithProviders(<DashboardPage />, { route: "/dashboard", authenticated: true });
+
+    // 空序列走 TrendChart 的空态分支（不渲染 role=img），页面显示"暂无样本数据"
+    // （请求趋势同为空序列，故这里可能有多个空态占位）。
+    expect((await screen.findAllByText("暂无样本数据")).length).toBeGreaterThanOrEqual(1);
+
+    const capacity = capacityChartProps();
+    expect(capacity?.primary).toEqual([]);
+    expect(capacity?.yDomain).toEqual([0, "auto"]);
+    // 无数据 → headerRight 为 null，不出现任何增量读数。
+    expect(capacity?.headerRight).toBeNull();
+  });
+
+  it("容量趋势单点时增量为 0：首点即基准，显示 +0 B", async () => {
+    mockDashboardCapacity([capacityPoint("2026-08-30T00:00:00.000Z", 8_610_000_000)]);
+    renderWithProviders(<DashboardPage />, { route: "/dashboard", authenticated: true });
+
+    await screen.findByRole("img", {
+      name: "容量增长（相对区间起点）：以区间起点为 0，展示期间增长量",
+    });
+
+    const capacity = capacityChartProps();
+    const primary = capacity?.primary as Array<{ value: number }>;
+    expect(primary.map((point) => point.value)).toEqual([0]);
+    // 单点：增量为 0，显示 "+0 B" 而非空白。
+    expect(await screen.findByText("+0 B")).toBeTruthy();
   });
 
   it("悬停趋势图同时展示时间与两个系列的数值", () => {
@@ -132,7 +277,7 @@ describe("业务仪表盘（真实读模型）", () => {
     expect(screen.getByText("10:05 · 请求：20 · 下载：8")).toBeTruthy();
   });
 
-  it("拖选聚焦子时段：胶囊出现、剖析条跟随、双击还原", () => {
+  it("拖选聚焦子时段：胶囊出现、双击还原（已移除的剖析条不再渲染）", () => {
     renderWithProviders(
       <TrendChart
         title="拖选聚焦趋势"
@@ -164,9 +309,10 @@ describe("业务仪表盘（真实读模型）", () => {
     fireEvent.mouseUp(chart, { clientX: 60 });
 
     expect(screen.getByText("已聚焦 10:00 – 10:05")).toBeTruthy();
-    // 剖析条切换为聚焦段统计（10:00–10:05 两点：均值 15 / 峰值 20 / 谷值 10）
-    expect(screen.getByText("15")).toBeTruthy();
-    expect(screen.getByText("20")).toBeTruthy();
+    // 区间剖析条已移除：聚焦段的统计口径（原先均值 15 / 峰值 20）与标题都不再渲染
+    expect(screen.queryByText("区间剖析")).toBeNull();
+    expect(screen.queryByText("均值")).toBeNull();
+    expect(screen.queryByText("15")).toBeNull();
 
     fireEvent.doubleClick(chart);
     expect(screen.queryByText(/已聚焦/)).toBeNull();
@@ -199,7 +345,7 @@ describe("业务仪表盘（真实读模型）", () => {
     await screen.findByText("请求与下载趋势", undefined, { timeout: 5000 });
     // 页面定位（概览 / 业务仪表盘）由全局页眉面包屑（AppLayout）表达，页内不再渲染标题。
     // devmock 种子：9 仓库 / 28416 制品 / 128 请求 / 92 下载 / 1 失败 / 命中率 78/(78+6)
-    // KPI 值限定在核心指标带内断言（趋势卡区间剖析条可能统计出相同数字，属预期）
+    // KPI 值限定在核心指标带内断言；趋势卡区间剖析条已移除，页面不再出现其标题文案。
     const kpiBand = screen.getByLabelText("核心指标带");
     expect(within(kpiBand).getByText("仓库数")).toBeTruthy();
     expect(within(kpiBand).getByText("9")).toBeTruthy();
@@ -208,6 +354,8 @@ describe("业务仪表盘（真实读模型）", () => {
     expect(within(kpiBand).getByText("92")).toBeTruthy();
     expect(within(kpiBand).getByText("1")).toBeTruthy();
     expect(within(kpiBand).getByText("92.9%")).toBeTruthy();
+    // 区间剖析条已整体移除（不再有「区间剖析」标题，故其数字也无从出现）
+    expect(screen.queryByText("区间剖析")).toBeNull();
     // 不混入主机指标
     expect(screen.queryByText(/CPU|内存|主机磁盘/)).toBeNull();
   });
@@ -493,11 +641,7 @@ describe("业务仪表盘（真实读模型）", () => {
   });
 
   it("分组小时桶与服务端整点键对齐，to 边界采用右开窗口", () => {
-    const buckets = buildBucketAxis(
-      "2026-09-23T10:37:30Z",
-      "2026-09-23T12:00:00Z",
-      "hour",
-    );
+    const buckets = buildBucketAxis("2026-09-23T10:37:30Z", "2026-09-23T12:00:00Z", "hour");
 
     expect(
       buckets.map((bucket) => ({
@@ -520,11 +664,7 @@ describe("业务仪表盘（真实读模型）", () => {
   });
 
   it("分钟桶跳过早于 from 的源桶且不生成 to 所在分钟", () => {
-    const buckets = buildBucketAxis(
-      "2026-09-23T10:37:30Z",
-      "2026-09-23T10:40:00Z",
-      "minute",
-    );
+    const buckets = buildBucketAxis("2026-09-23T10:37:30Z", "2026-09-23T10:40:00Z", "minute");
 
     expect(buckets.map((bucket) => new Date(bucket.keyMs).toISOString())).toEqual([
       "2026-09-23T10:38:00.000Z",

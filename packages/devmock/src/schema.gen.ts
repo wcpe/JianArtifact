@@ -1576,6 +1576,16 @@ export interface components {
             networkReceiveBytesPerSecond?: number | null;
             /** Format: double */
             networkTransmitBytesPerSecond?: number | null;
+            /**
+             * Format: int64
+             * @description 网络累计接收字节数，自网卡启动以来；按所选网卡或全部非回环网卡聚合。采集失败时为 null。
+             */
+            networkReceiveBytesTotal?: number | null;
+            /**
+             * Format: int64
+             * @description 网络累计发送字节数，自网卡启动以来；按所选网卡或全部非回环网卡聚合。采集失败时为 null。
+             */
+            networkTransmitBytesTotal?: number | null;
             /** Format: int64 */
             processRssBytes?: number | null;
             /** Format: double */
@@ -1590,6 +1600,19 @@ export interface components {
             /** Format: int64 */
             openFileDescriptors?: number | null;
         };
+        HostNetworkInterface: {
+            name: string;
+            /**
+             * Format: int64
+             * @description 该网卡自启动以来的累计接收字节数。
+             */
+            receiveBytesTotal?: number | null;
+            /**
+             * Format: int64
+             * @description 该网卡自启动以来的累计发送字节数。
+             */
+            transmitBytesTotal?: number | null;
+        };
         HostMonitoring: {
             /** @enum {string} */
             hostState: "healthy" | "stale" | "unknown";
@@ -1598,6 +1621,8 @@ export interface components {
             effectiveBucket: components["schemas"]["ObservabilityBucket"];
             latest?: components["schemas"]["HostMetricPoint"];
             samples: components["schemas"]["HostMetricPoint"][];
+            /** @description 可用网卡列表及各网卡累计总量，用于网卡选择器与「总发送 / 总接收」展示；无数据时省略。 */
+            networkInterfaces?: components["schemas"]["HostNetworkInterface"][];
         };
         HealthStatus: {
             /** @enum {string} */
@@ -2735,6 +2760,8 @@ export interface components {
         ObservabilityFromParam: string;
         /** @description UTC 时间范围上界（不含），最长 30 天。 */
         ObservabilityToParam: string;
+        /** @description 网卡名（来自响应 networkInterfaces.name）。省略时按全部非回环网卡聚合；指定时速率图与累计总量都按该网卡。 */
+        HostInterfaceParam: string;
         /** @description 分组维度：family（缺省，UA 归类）或 ip（来源 IP 明文，仅管理员）；非法值返回 400。 */
         DownloadGroupByParam: "family" | "ip";
         /** @description 按仓库名精确过滤；省略为全部仓库。 */
@@ -3266,6 +3293,8 @@ export interface operations {
                 from?: components["parameters"]["ObservabilityFromParam"];
                 /** @description UTC 时间范围上界（不含），最长 30 天。 */
                 to?: components["parameters"]["ObservabilityToParam"];
+                /** @description 网卡名（来自响应 networkInterfaces.name）。省略时按全部非回环网卡聚合；指定时速率图与累计总量都按该网卡。 */
+                interface?: components["parameters"]["HostInterfaceParam"];
             };
             header?: never;
             path?: never;

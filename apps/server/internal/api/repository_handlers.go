@@ -607,13 +607,19 @@ func (h *Handlers) ListRepositoryTree(c *gin.Context) {
 		DownloadCount int64  `json:"downloadCount"` // FR-142：累计完整下载次数（原始口径）
 	}
 	// FR-142：本层文件批量取下载计数（单次 IN 查询；空层不发起查询）。
+	// 仓库名解析为「主名 ∪ 别名」集合，使经别名访问的下载记数并入主名。
 	var counts map[string]int64
 	if h.assetDownloads != nil {
+		names, err := h.resolveRepoNameSet(name)
+		if err != nil {
+			writeDomainErr(c, err)
+			return
+		}
 		paths := make([]string, 0, len(entry.Files))
 		for _, f := range entry.Files {
 			paths = append(paths, f.Path)
 		}
-		counts, err = h.assetDownloads.SumPaths(name, paths)
+		counts, err = h.assetDownloads.SumPaths(names, paths)
 		if err != nil {
 			writeDomainErr(c, err)
 			return
@@ -679,13 +685,20 @@ func (h *Handlers) GetRepositoryDownloadTrend(c *gin.Context) {
 		authWriteUnavailable(c)
 		return
 	}
-	bucket := operationsBucket(from, to)
-	rows, err := h.assetDownloads.DownloadTrendForRepo(name, from, to, bucket)
+	// 仓库名（可能是别名）解析为「主名 ∪ 别名」集合：重命名后按主名检索也要并入记在
+	// 旧名（现为别名）下的下载，避免同一逻辑仓库的下载数在趋势与总计里被拆分。
+	names, err := h.resolveRepoNameSet(name)
 	if err != nil {
 		writeDomainErr(c, err)
 		return
 	}
-	total, err := h.assetDownloads.SumByRepo(name)
+	bucket := operationsBucket(from, to)
+	rows, err := h.assetDownloads.DownloadTrendForRepo(names, from, to, bucket)
+	if err != nil {
+		writeDomainErr(c, err)
+		return
+	}
+	total, err := h.assetDownloads.SumByRepo(names)
 	if err != nil {
 		writeDomainErr(c, err)
 		return

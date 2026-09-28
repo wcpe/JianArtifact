@@ -54,16 +54,34 @@ type HostMetricSample struct {
 	NetworkErrorCode              string      `db:"network_error_code"`
 	NetworkReceiveBytesPerSecond  *float64    `db:"network_receive_bytes_per_sec"`
 	NetworkTransmitBytesPerSecond *float64    `db:"network_transmit_bytes_per_sec"`
-	ProcessState                  MetricState `db:"process_state"`
-	ProcessErrorCode              string      `db:"process_error_code"`
-	ProcessRSSBytes               *int64      `db:"process_rss_bytes"`
-	ProcessCPUPercent             *float64    `db:"process_cpu_percent"`
+	// NetworkReceiveBytesTotal / NetworkTransmitBytesTotal 是自网卡启动以来的累计字节数
+	// （全部非回环网卡的聚合）；采集失败时为 NULL，不伪造零。
+	NetworkReceiveBytesTotal  *int64      `db:"network_receive_bytes_total"`
+	NetworkTransmitBytesTotal *int64      `db:"network_transmit_bytes_total"`
+	ProcessState              MetricState `db:"process_state"`
+	ProcessErrorCode          string      `db:"process_error_code"`
+	ProcessRSSBytes           *int64      `db:"process_rss_bytes"`
+	ProcessCPUPercent         *float64    `db:"process_cpu_percent"`
 	// ProcessUptimeSeconds 是当前进程运行时长（挂钟口径，仅本进程，不做系统进程枚举）。
 	ProcessUptimeSeconds *int64      `db:"process_uptime_seconds"`
 	GoroutineCount       *int64      `db:"goroutine_count"`
 	OpenFileDescriptors  *int64      `db:"open_file_descriptors"`
 	ReadinessState       MetricState `db:"readiness_state"`
 	ReadinessErrorCode   string      `db:"readiness_error_code"`
+}
+
+// HostNetworkInterfaceSample 是单个网卡的一个分钟样本：累计总量为自网卡启动以来的字节数，
+// 速率为与**同名网卡**上一份样本差分的结果；网卡刚出现（无上一份）或计数回退时速率列为 NULL，
+// 不伪造零。选定网卡后速率图与总量都取该网卡的行，避免与全网卡聚合值混读。
+type HostNetworkInterfaceSample struct {
+	BucketStart            string      `db:"bucket_start"`
+	Interface              string      `db:"interface"`
+	State                  MetricState `db:"state"`
+	ErrorCode              string      `db:"error_code"`
+	ReceiveBytesTotal      *int64      `db:"receive_bytes_total"`
+	TransmitBytesTotal     *int64      `db:"transmit_bytes_total"`
+	ReceiveBytesPerSecond  *float64    `db:"receive_bytes_per_sec"`
+	TransmitBytesPerSecond *float64    `db:"transmit_bytes_per_sec"`
 }
 
 // OperationsObservabilityRepo 保存当前节点的可视化聚合；它从不参与复制。
@@ -100,9 +118,10 @@ func (r *OperationsObservabilityRepo) PutHostSample(value HostMetricSample) erro
 		(bucket_start, host_state, host_error_code, cpu_percent, memory_total_bytes, memory_available_bytes, memory_used_bytes,
 		disk_available_bytes, disk_total_bytes, disk_used_bytes,
 		network_state, network_error_code, network_receive_bytes_per_sec, network_transmit_bytes_per_sec,
+		network_receive_bytes_total, network_transmit_bytes_total,
 		process_state, process_error_code, process_rss_bytes, process_cpu_percent, process_uptime_seconds, goroutine_count, open_file_descriptors,
 		readiness_state, readiness_error_code)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(bucket_start) DO UPDATE SET
 		host_state=excluded.host_state, host_error_code=excluded.host_error_code, cpu_percent=excluded.cpu_percent,
 		memory_total_bytes=excluded.memory_total_bytes, memory_available_bytes=excluded.memory_available_bytes,
@@ -110,7 +129,9 @@ func (r *OperationsObservabilityRepo) PutHostSample(value HostMetricSample) erro
 		disk_total_bytes=excluded.disk_total_bytes, disk_used_bytes=excluded.disk_used_bytes,
 		network_state=excluded.network_state,
 		network_error_code=excluded.network_error_code, network_receive_bytes_per_sec=excluded.network_receive_bytes_per_sec,
-		network_transmit_bytes_per_sec=excluded.network_transmit_bytes_per_sec, process_state=excluded.process_state,
+		network_transmit_bytes_per_sec=excluded.network_transmit_bytes_per_sec,
+		network_receive_bytes_total=excluded.network_receive_bytes_total, network_transmit_bytes_total=excluded.network_transmit_bytes_total,
+		process_state=excluded.process_state,
 		process_error_code=excluded.process_error_code, process_rss_bytes=excluded.process_rss_bytes,
 		process_cpu_percent=excluded.process_cpu_percent, process_uptime_seconds=excluded.process_uptime_seconds,
 		goroutine_count=excluded.goroutine_count,
@@ -119,9 +140,69 @@ func (r *OperationsObservabilityRepo) PutHostSample(value HostMetricSample) erro
 		value.BucketStart, value.HostState, value.HostErrorCode, value.CPUPercent, value.MemoryTotalBytes, value.MemoryAvailableBytes, value.MemoryUsedBytes,
 		value.DiskAvailableBytes, value.DiskTotalBytes, value.DiskUsedBytes,
 		value.NetworkState, value.NetworkErrorCode, value.NetworkReceiveBytesPerSecond, value.NetworkTransmitBytesPerSecond,
+		value.NetworkReceiveBytesTotal, value.NetworkTransmitBytesTotal,
 		value.ProcessState, value.ProcessErrorCode, value.ProcessRSSBytes, value.ProcessCPUPercent, value.ProcessUptimeSeconds, value.GoroutineCount, value.OpenFileDescriptors,
 		value.ReadinessState, value.ReadinessErrorCode)
 	return err
+}
+
+// PutHostNetworkInterfaces 逐网卡写入同一分钟的样本（主键 bucket_start + interface）。
+// 空切片直接返回，避免发起无意义的事务/语句。
+func (r *OperationsObservabilityRepo) PutHostNetworkInterfaces(values []HostNetworkInterfaceSample) error {
+	for _, value := range values {
+		if _, err := r.db.Exec(`INSERT INTO host_network_interface_minute
+			(bucket_start, interface, state, error_code, receive_bytes_total, transmit_bytes_total,
+			receive_bytes_per_sec, transmit_bytes_per_sec)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(bucket_start, interface) DO UPDATE SET
+			state=excluded.state, error_code=excluded.error_code,
+			receive_bytes_total=excluded.receive_bytes_total, transmit_bytes_total=excluded.transmit_bytes_total,
+			receive_bytes_per_sec=excluded.receive_bytes_per_sec, transmit_bytes_per_sec=excluded.transmit_bytes_per_sec`,
+			value.BucketStart, value.Interface, value.State, value.ErrorCode,
+			value.ReceiveBytesTotal, value.TransmitBytesTotal, value.ReceiveBytesPerSecond, value.TransmitBytesPerSecond); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// LatestHostNetworkInterfaces 返回窗口 [from,to) 内**每个网卡各自最新**的一行，
+// 供网卡选择器与「各网卡累计总量」展示（每网卡一行，按网卡名升序）。
+func (r *OperationsObservabilityRepo) LatestHostNetworkInterfaces(from, to time.Time) ([]HostNetworkInterfaceSample, error) {
+	items := []HostNetworkInterfaceSample{}
+	fromValue, toValue := formatMetricTime(from), formatMetricTime(to)
+	err := r.db.Select(&items, `SELECT bucket_start, interface, state, error_code, receive_bytes_total, transmit_bytes_total,
+		receive_bytes_per_sec, transmit_bytes_per_sec FROM host_network_interface_minute AS current
+		WHERE current.bucket_start >= ? AND current.bucket_start < ?
+		AND current.bucket_start = (
+			SELECT MAX(bucket_start) FROM host_network_interface_minute AS latest
+			WHERE latest.interface = current.interface AND latest.bucket_start >= ? AND latest.bucket_start < ?)
+		ORDER BY current.interface`, fromValue, toValue, fromValue, toValue)
+	return items, err
+}
+
+// HostNetworkInterfaceSamples 返回窗口 [from,to) 内指定网卡的逐分钟样本（按时间升序），
+// 供 handler 在选定网卡时用该网卡的速率与总量覆盖聚合口径。
+func (r *OperationsObservabilityRepo) HostNetworkInterfaceSamples(from, to time.Time, iface string) ([]HostNetworkInterfaceSample, error) {
+	items := []HostNetworkInterfaceSample{}
+	err := r.db.Select(&items, `SELECT bucket_start, interface, state, error_code, receive_bytes_total, transmit_bytes_total,
+		receive_bytes_per_sec, transmit_bytes_per_sec FROM host_network_interface_minute
+		WHERE bucket_start >= ? AND bucket_start < ? AND interface = ? ORDER BY bucket_start`,
+		formatMetricTime(from), formatMetricTime(to), iface)
+	return items, err
+}
+
+// LatestHostNetworkInterface 返回指定网卡的最新一行（不限窗口，与 LatestHostSample 同一最新语义）；
+// 没有该网卡的样本时返回 ErrNotFound。
+func (r *OperationsObservabilityRepo) LatestHostNetworkInterface(iface string) (*HostNetworkInterfaceSample, error) {
+	var item HostNetworkInterfaceSample
+	err := r.db.Get(&item, `SELECT bucket_start, interface, state, error_code, receive_bytes_total, transmit_bytes_total,
+		receive_bytes_per_sec, transmit_bytes_per_sec FROM host_network_interface_minute
+		WHERE interface = ? ORDER BY bucket_start DESC LIMIT 1`, iface)
+	if err != nil {
+		return nil, mapMetricNotFound(err)
+	}
+	return &item, nil
 }
 
 func (r *OperationsObservabilityRepo) ProtocolMinutes(from, to time.Time) ([]ProtocolMinute, error) {
@@ -143,6 +224,7 @@ func (r *OperationsObservabilityRepo) HostSamples(from, to time.Time) ([]HostMet
 	err := r.db.Select(&items, `SELECT bucket_start, host_state, host_error_code, cpu_percent, memory_total_bytes, memory_available_bytes, memory_used_bytes,
 		disk_available_bytes, disk_total_bytes, disk_used_bytes,
 		network_state, network_error_code, network_receive_bytes_per_sec, network_transmit_bytes_per_sec,
+		network_receive_bytes_total, network_transmit_bytes_total,
 		process_state, process_error_code, process_rss_bytes, process_cpu_percent, process_uptime_seconds, goroutine_count, open_file_descriptors,
 		readiness_state, readiness_error_code FROM host_metric_minute WHERE bucket_start >= ? AND bucket_start < ? ORDER BY bucket_start`, formatMetricTime(from), formatMetricTime(to))
 	return items, err
@@ -153,6 +235,7 @@ func (r *OperationsObservabilityRepo) LatestHostSample() (*HostMetricSample, err
 	err := r.db.Get(&item, `SELECT bucket_start, host_state, host_error_code, cpu_percent, memory_total_bytes, memory_available_bytes, memory_used_bytes,
 		disk_available_bytes, disk_total_bytes, disk_used_bytes,
 		network_state, network_error_code, network_receive_bytes_per_sec, network_transmit_bytes_per_sec,
+		network_receive_bytes_total, network_transmit_bytes_total,
 		process_state, process_error_code, process_rss_bytes, process_cpu_percent, process_uptime_seconds, goroutine_count, open_file_descriptors,
 		readiness_state, readiness_error_code FROM host_metric_minute ORDER BY bucket_start DESC LIMIT 1`)
 	if err != nil {
@@ -171,7 +254,7 @@ func (r *OperationsObservabilityRepo) CurrentCapacity() (CapacitySnapshot, error
 
 func (r *OperationsObservabilityRepo) DeleteBefore(cutoff time.Time) error {
 	value := formatMetricTime(cutoff)
-	for _, table := range []string{"protocol_metric_minute", "capacity_snapshot_hour", "host_metric_minute"} {
+	for _, table := range []string{"protocol_metric_minute", "capacity_snapshot_hour", "host_metric_minute", "host_network_interface_minute"} {
 		if _, err := r.db.Exec("DELETE FROM "+table+" WHERE bucket_start < ?", value); err != nil {
 			return err
 		}

@@ -29,6 +29,63 @@ describe("业务与当前主机观测 Mock", () => {
     }
   });
 
+  it("主机网络 mock 提供总发送/总接收与网卡列表，并支持按网卡过滤", async () => {
+    const response = await fetch("http://localhost/api/v1/observability/host", { headers: admin });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      latest: { networkReceiveBytesTotal: number; networkTransmitBytesTotal: number };
+      samples: {
+        networkReceiveBytesPerSecond: number;
+        networkTransmitBytesPerSecond: number;
+        networkReceiveBytesTotal: number;
+        networkTransmitBytesTotal: number;
+      }[];
+      networkInterfaces: { name: string; receiveBytesTotal: number; transmitBytesTotal: number }[];
+    };
+    // 网卡列表至少含两个非回环网卡，供选择器使用。
+    expect(body.networkInterfaces.length).toBeGreaterThanOrEqual(2);
+    expect(body.networkInterfaces.map((item) => item.name)).toContain("eth0");
+    // 总量 = 自网卡启动以来的累计计数，随采样单调不减；速率仍可有抖动。
+    for (let index = 1; index < body.samples.length; index += 1) {
+      expect(body.samples[index]!.networkReceiveBytesTotal).toBeGreaterThanOrEqual(
+        body.samples[index - 1]!.networkReceiveBytesTotal,
+      );
+      expect(body.samples[index]!.networkTransmitBytesTotal).toBeGreaterThanOrEqual(
+        body.samples[index - 1]!.networkTransmitBytesTotal,
+      );
+    }
+    // 全部网卡聚合 = 各网卡累计总量之和（与后端 host_metric_minute 聚合口径一致）。
+    const latestSample = body.samples.at(-1)!;
+    expect(latestSample.networkReceiveBytesTotal).toBe(
+      body.networkInterfaces.reduce((sum, item) => sum + item.receiveBytesTotal, 0),
+    );
+    expect(body.latest.networkTransmitBytesTotal).toBe(
+      body.networkInterfaces.reduce((sum, item) => sum + item.transmitBytesTotal, 0),
+    );
+
+    // 指定网卡：速率与总量都按该网卡，且严格小于聚合值（另一个网卡仍有贡献）。
+    const selected = await fetch("http://localhost/api/v1/observability/host?interface=eth0", {
+      headers: admin,
+    });
+    const selectedBody = (await selected.json()) as typeof body;
+    expect(selectedBody.networkInterfaces).toHaveLength(body.networkInterfaces.length);
+    const eth0 = body.networkInterfaces.find((item) => item.name === "eth0")!;
+    const selectedLatest = selectedBody.samples.at(-1)!;
+    expect(selectedLatest.networkReceiveBytesTotal).toBe(eth0.receiveBytesTotal);
+    expect(selectedLatest.networkReceiveBytesTotal).toBeLessThan(
+      latestSample.networkReceiveBytesTotal,
+    );
+    expect(selectedBody.latest.networkReceiveBytesTotal).toBe(eth0.receiveBytesTotal);
+
+    // 未知网卡：不伪造 0，速率与总量整组置 null。
+    const unknown = await fetch("http://localhost/api/v1/observability/host?interface=ghost0", {
+      headers: admin,
+    });
+    const unknownBody = (await unknown.json()) as typeof body;
+    expect(unknownBody.samples.at(-1)!.networkReceiveBytesTotal).toBeNull();
+    expect(unknownBody.samples.at(-1)!.networkReceiveBytesPerSecond).toBeNull();
+  });
+
   it("分组下载趋势注册成功，时间桶、分组总计与权限口径一致", async () => {
     const denied = await fetch("http://localhost/api/v1/observability/downloads/trend");
     expect(denied.status).toBe(401);
@@ -108,9 +165,12 @@ describe("业务与当前主机观测 Mock", () => {
     expect(body.trend).toHaveLength((endSourceMinute - firstSourceMinute) / 60_000);
     expect(Date.parse(body.trend[0]?.from ?? "")).toBe(firstSourceMinute);
     expect(Date.parse(body.trend.at(-1)?.to ?? "")).toBe(endSourceMinute);
-    expect(body.trend.every((point, index, points) =>
-      point.downloadCount >= 0 && (index === 0 || points[index - 1]?.to === point.from),
-    )).toBe(true);
+    expect(
+      body.trend.every(
+        (point, index, points) =>
+          point.downloadCount >= 0 && (index === 0 || points[index - 1]?.to === point.from),
+      ),
+    ).toBe(true);
     expect(body.trend.some((point) => point.downloadCount === 0)).toBe(true);
 
     const from = "2026-09-22T10:00:00.000Z";

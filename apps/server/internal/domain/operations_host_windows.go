@@ -43,8 +43,10 @@ func (c *windowsHostCollector) Collect(at time.Time) HostRawSample {
 	} else {
 		item.HostState, item.HostErrorCode = repository.MetricStateUnavailable, "disk_unavailable"
 	}
-	if in, out, ok := windowsNetwork(); ok {
-		item.NetworkReceiveBytes, item.NetworkTransmitBytes = in, out
+	if interfaces, ok := windowsNetwork(); ok {
+		// 逐网卡累计计数保留，聚合值由调用方求和，使网络卡既能选网卡也可看全网卡总量。
+		item.NetworkInterfaces = interfaces
+		item.NetworkReceiveBytes, item.NetworkTransmitBytes = sumNetworkInterfaces(interfaces)
 	} else {
 		item.NetworkState, item.NetworkErrorCode = repository.MetricStateUnavailable, "network_unavailable"
 	}
@@ -93,21 +95,26 @@ func windowsDisk(dir string) (int64, int64, bool) {
 	return int64(available), int64(total), true
 }
 
-func windowsNetwork() (uint64, uint64, bool) {
+// windowsNetwork 返回逐网卡累计计数（跳过回环 IF_TYPE_SOFTWARE_LOOPBACK）。
+// Name 取网卡友好名（Alias，如「以太网」）；过滤与组装下沉到纯函数 selectNetworkInterfaces，
+// 本函数只保留无法跨平台验证的 GetIfTable2Ex 调用与结构体映射。
+func windowsNetwork() ([]HostNetworkInterface, bool) {
 	var table *windows.MibIfTable2
 	if err := windows.GetIfTable2Ex(windows.MibIfTableNormal, &table); err != nil || table == nil {
-		return 0, 0, false
+		return nil, false
 	}
 	defer windows.FreeMibTable(unsafe.Pointer(table))
 	rows := unsafe.Slice(&table.Table[0], int(table.NumEntries))
-	var received, transmitted uint64
+	raw := make([]netRawInterface, 0, len(rows))
 	for _, row := range rows {
-		if row.Type != windows.IF_TYPE_SOFTWARE_LOOPBACK {
-			received += row.InOctets
-			transmitted += row.OutOctets
-		}
+		raw = append(raw, netRawInterface{
+			Name:          windows.UTF16ToString(row.Alias[:]),
+			Loopback:      row.Type == windows.IF_TYPE_SOFTWARE_LOOPBACK,
+			ReceiveBytes:  row.InOctets,
+			TransmitBytes: row.OutOctets,
+		})
 	}
-	return received, transmitted, true
+	return selectNetworkInterfaces(raw), true
 }
 
 // windowsProcess 返回当前进程 RSS、累计 CPU 滴答与创建时间（FILETIME 100ns 计数）；

@@ -59,6 +59,32 @@ func (r *AssetDownloadRepo) AddMinutes(items []AssetDownloadMinute) error {
 	return tx.Commit()
 }
 
+// sqlPlaceholders 返回 n 个逗号分隔的绑定占位符（`?,?,...`）。n 必须 > 0——调用方在
+// 集合为空时应提前返回，不发起查询。
+func sqlPlaceholders(n int) string {
+	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
+}
+
+// repoNameFilter 构造「仓库名集合」的过滤片段与绑定参数（形如 repo IN (?, ?, ...)）。
+//
+// 集合来自「主名 ∪ 全部别名」：下载明细按请求路径里的名字落库，而别名功能（0041）下
+// 同一仓库可经多个名字访问——重命名后旧名仍在用、或直接用别名下载——这些下载会记在
+// 别名下。只有把集合内所有名字一起聚合，才能还原单仓库的真实下载数；仅按主名过滤会
+// 少算记在别名下的部分。
+//
+// 调用方保证集合已去重、排序稳定且至少含主名（见 api 层 resolveRepoNameSet）；集合为空
+// 时返回 ok=false，表示不加仓库过滤（全局口径），调用方据此跳过该 AND 子句。
+func repoNameFilter(repos []string) (filter string, args []any, ok bool) {
+	if len(repos) == 0 {
+		return "", nil, false
+	}
+	args = make([]any, 0, len(repos))
+	for _, name := range repos {
+		args = append(args, name)
+	}
+	return "repo IN (" + sqlPlaceholders(len(repos)) + ")", args, true
+}
+
 // SumByAsset 返回该仓库每个制品的累计下载次数（**原始口径**，不做去重——去重是查询视角，
 // 见 spec §3.3；原始数据不丢）。
 func (r *AssetDownloadRepo) SumByAsset(repo string) (map[string]int64, error) {
@@ -220,21 +246,25 @@ func (r *AssetDownloadRepo) DownloadClientRanking(from, to time.Time, topIPs int
 }
 
 // SumPaths 返回给定制品路径集合的累计次数（仓库详情树层批量展示用；单次 IN 查询，
-// 命中 (repo, asset_path, bucket_start) 索引）。空集合返回空 map，不发起查询。
-func (r *AssetDownloadRepo) SumPaths(repo string, paths []string) (map[string]int64, error) {
+// 命中 (repo, asset_path, bucket_start) 索引）。空路径集合返回空 map，不发起查询。
+//
+// repos 为「主名 ∪ 别名」的仓库名集合（见 repoNameFilter）：经别名访问产生的下载记在
+// 别名下，按集合聚合才能与主名合并；集合为空视为无匹配，返回空 map。
+func (r *AssetDownloadRepo) SumPaths(repos []string, paths []string) (map[string]int64, error) {
 	out := make(map[string]int64)
 	if len(paths) == 0 {
 		return out, nil
 	}
-	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(paths)), ",")
-	args := make([]any, 0, len(paths)+1)
-	args = append(args, repo)
+	repoFilter, args, ok := repoNameFilter(repos)
+	if !ok {
+		return out, nil
+	}
 	for _, path := range paths {
 		args = append(args, path)
 	}
 	rows, err := r.db.Query(
 		`SELECT asset_path, SUM(download_count) FROM asset_download_minutes
-		 WHERE repo = ? AND asset_path IN (`+placeholders+`) GROUP BY asset_path`,
+		 WHERE `+repoFilter+` AND asset_path IN (`+sqlPlaceholders(len(paths))+`) GROUP BY asset_path`,
 		args...,
 	)
 	if err != nil {
@@ -272,10 +302,12 @@ type DownloadGroupedBucket struct {
 
 // DownloadTrendGrouped 按「截断后的桶 × 分组列」聚合下载时序（原始累计口径，不去重），
 // 供仪表盘分组趋势图与饼图使用。groupBy ∈ {ip, family}，非法值直接报错（调用方在
-// handler 层做参数校验）。repo 为空串表示全局口径；非空时按仓库过滤——过滤形态为
-// `repo = ? AND bucket_start >= ? AND bucket_start < ?`，可走 idx_asset_download_asset 的 repo 前缀。
-// 桶粒度复用 api 层 operationsBucket 的 minute/hour/day；聚合仍下推 SQL，不读全量进内存。
-func (r *AssetDownloadRepo) DownloadTrendGrouped(from, to time.Time, bucket string, groupBy DownloadGroupKey, repo string) ([]DownloadGroupedBucket, error) {
+// handler 层做参数校验）。repos 为空集合表示全局口径；非空时按仓库名集合过滤——过滤形态
+// 为 `repo IN (?, ?, ...) AND bucket_start >= ? AND bucket_start < ?`，可走
+// idx_asset_download_asset 的 repo 前缀。repos 应传「主名 ∪ 别名」（见 repoNameFilter），
+// 使经别名访问的下载与主名合并；桶粒度复用 api 层 operationsBucket 的 minute/hour/day；
+// 聚合仍下推 SQL，不读全量进内存。
+func (r *AssetDownloadRepo) DownloadTrendGrouped(from, to time.Time, bucket string, groupBy DownloadGroupKey, repos []string) ([]DownloadGroupedBucket, error) {
 	var groupColumn string
 	switch groupBy {
 	case DownloadGroupKeyIP:
@@ -291,9 +323,9 @@ func (r *AssetDownloadRepo) DownloadTrendGrouped(from, to time.Time, bucket stri
 	query := `SELECT strftime(?, bucket_start) AS bucket, ` + groupColumn + ` AS grp, SUM(download_count)
 		 FROM asset_download_minutes WHERE bucket_start >= ? AND bucket_start < ?`
 	args := []any{metricBucketFormat(bucket), formatMetricTime(rangeFrom), formatMetricTime(rangeTo)}
-	if repo != "" {
-		query += ` AND repo = ?`
-		args = append(args, repo)
+	if repoFilter, repoArgs, ok := repoNameFilter(repos); ok {
+		query += ` AND ` + repoFilter
+		args = append(args, repoArgs...)
 	}
 	query += ` GROUP BY bucket, grp ORDER BY bucket, grp`
 	rows, err := r.db.Query(query, args...)
@@ -313,16 +345,26 @@ func (r *AssetDownloadRepo) DownloadTrendGrouped(from, to time.Time, bucket stri
 }
 
 // DownloadTrendForRepo 返回单仓库的下载累计趋势（仓库详情页下载趋势图）。
-// 过滤形态为 `repo = ? AND bucket_start >= ? AND bucket_start < ?`：纯桶范围 + repo 等值过滤
-// 可走 idx_asset_download_asset (repo, asset_path, bucket_start) 的 repo 前缀缩小扫描集。
+// repos 为「主名 ∪ 别名」的仓库名集合（见 repoNameFilter）：过滤形态为
+// `repo IN (?, ...) AND bucket_start >= ? AND bucket_start < ?`——纯桶范围 + repo 集合过滤
+// 可走 idx_asset_download_asset (repo, asset_path, bucket_start) 的 repo 前缀缩小扫描集，
+// 并把记在别名下的下载与主名合并。集合为空视为无匹配，返回空切片。
 // 查询只纳入分钟桶起点位于 [from,to) 的样本，再按目标粒度聚合；空区间返回空切片。
-func (r *AssetDownloadRepo) DownloadTrendForRepo(repo string, from, to time.Time, bucket string) ([]DownloadTrendBucket, error) {
+func (r *AssetDownloadRepo) DownloadTrendForRepo(repos []string, from, to time.Time, bucket string) ([]DownloadTrendBucket, error) {
+	repoFilter, repoArgs, ok := repoNameFilter(repos)
+	if !ok {
+		return []DownloadTrendBucket{}, nil
+	}
 	rangeFrom, rangeTo := assetDownloadMinuteRangeBounds(from, to)
+	args := make([]any, 0, len(repoArgs)+3)
+	args = append(args, metricBucketFormat(bucket))
+	args = append(args, repoArgs...)
+	args = append(args, formatMetricTime(rangeFrom), formatMetricTime(rangeTo))
 	rows, err := r.db.Query(
 		`SELECT strftime(?, bucket_start) AS bucket, SUM(download_count)
-		 FROM asset_download_minutes WHERE repo = ? AND bucket_start >= ? AND bucket_start < ?
+		 FROM asset_download_minutes WHERE `+repoFilter+` AND bucket_start >= ? AND bucket_start < ?
 		 GROUP BY bucket ORDER BY bucket`,
-		metricBucketFormat(bucket), repo, formatMetricTime(rangeFrom), formatMetricTime(rangeTo),
+		args...,
 	)
 	if err != nil {
 		return nil, err
@@ -340,12 +382,18 @@ func (r *AssetDownloadRepo) DownloadTrendForRepo(repo string, from, to time.Time
 }
 
 // SumByRepo 返回单仓库全时段累计下载次数（**原始口径**，与 SumByAsset 同口径求和），
-// 供仓库详情页展示仓库总下载。命中 idx_asset_download_asset 的 repo 前缀；无数据返回 0。
-func (r *AssetDownloadRepo) SumByRepo(repo string) (int64, error) {
+// 供仓库详情页展示仓库总下载。repos 为「主名 ∪ 别名」的仓库名集合（见 repoNameFilter）：
+// 按集合求和可把记在别名下的下载并入主名，命中 idx_asset_download_asset 的 repo 前缀；
+// 集合为空视为无匹配，返回 0。无数据返回 0。
+func (r *AssetDownloadRepo) SumByRepo(repos []string) (int64, error) {
+	repoFilter, args, ok := repoNameFilter(repos)
+	if !ok {
+		return 0, nil
+	}
 	var total int64
 	if err := r.db.Get(&total,
-		`SELECT COALESCE(SUM(download_count), 0) FROM asset_download_minutes WHERE repo = ?`,
-		repo,
+		`SELECT COALESCE(SUM(download_count), 0) FROM asset_download_minutes WHERE `+repoFilter,
+		args...,
 	); err != nil {
 		return 0, err
 	}

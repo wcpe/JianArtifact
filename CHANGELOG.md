@@ -9,10 +9,13 @@
 ### 新增
 
 - **仓库别名与重命名（FR-146）**：仓库可配置多个别名，别名与主名**共享命名空间、全局唯一**，可等价访问（协议路由与管理端 API 全域经 `GetByName` 单点按名解析到主名仓库）；`POST /api/v1/repositories/{name}/rename` 重命名后**旧名自动转为别名**，旧链接与既有客户端坐标仍可解析。新增迁移 `0041_repository_alias.sql`（`repository_alias` 表，随仓库级联删除）；契约新增 `Repository.aliases`、`CreateRepositoryRequest`/`UpdateRepositoryRequest` 的 `aliases` 与 rename 端点；配置页签可编辑别名与重命名，创建表单可填别名。下载统计按「主名 ∪ 别名」聚合，`audit_log` / `asset_download_minutes` 保留旧名不回填。语义取舍见 [`docs/adr/0028`](docs/adr/0028-repository-alias-and-rename.md)
+- **主机监控网络总量与网卡维度（FR-147）**：网络指标在既有速率之外新增「总发送 / 总接收」（**自网卡启动以来的累计字节**）与**逐网卡维度**。平台层由「聚合全网卡」改为逐网卡采集（Linux 读 `/proc/net/dev`、Windows 用 `GetIfTable2Ex`，均跳过回环），解析 / 过滤 / 求和下沉为无平台标签纯函数以便跨平台单测；服务层按**同名网卡**与上一份样本配对算逐网卡速率——网卡新增或计数回退时速率留空、不伪造 0。新增迁移 `0042_host_network_interface.sql`：`host_metric_minute` 增可空列 `network_receive_bytes_total` / `network_transmit_bytes_total`（该时刻全部非回环网卡的聚合累计，历史行 NULL 不回填），新表 `host_network_interface_minute`（逐网卡每分钟一行，主键 `(bucket_start, interface)` + `(interface, bucket_start)` 索引）。契约 `HostMetricPoint` 增 `networkReceiveBytesTotal` / `networkTransmitBytesTotal`，新增 schema `HostNetworkInterface`，主机监控响应增 `networkInterfaces`，`/api/v1/observability/host` 增可选 `interface` 参数（省略 = 全网卡聚合）。前端网络卡显示「总发送 / 总接收」+ 网卡选择器（首项「全部网卡」，选定后速率图与总量都按该网卡）
 - **置顶仓库改数据库存储（FR-148）**：置顶此前是纯前端 `localStorage` 偏好（键 `jianartifact.pinnedRepos`），换设备 / 清缓存即丢失。现新增迁移 `0043_pinned_repository.sql`：`pinned_repository` 表（`user_id` NULL = **全局置顶**、非 NULL = 用户私有置顶，主键 `(user_id, repository_id)`，随 `user` / `repository` 级联删除）与 partial unique index `idx_pinned_repo_global`（`repository_id WHERE user_id IS NULL`，兜住 SQLite 主键唯一性不覆盖 NULL 的缺口）。契约新增 `GET/PUT /api/v1/me/pinned-repositories`（用户级，匿名 `GET` 回退全局、匿名 `PUT` 401）与 `GET/PUT /api/v1/settings/pinned-repositories`（仅管理员），写入为覆盖式（按 repositoryId 整体替换）；`/api/v1/public/repositories` 响应增 `pinnedNames`（全局置顶），使**公开页也按置顶排序并显示图钉**。前端 `usePinnedRepos` 改为读服务端数据 + 乐观更新失败回滚，`localStorage` 仅作只读降级；既有浏览器内置顶无法读进服务端，需重新置顶（不做自动导入）
 
 ### 修复
 
+- **主机监控「节点状态」右栏被强行拉伸等高**：主 Grid `align="stretch"` 把右栏拉到与左列等高，中间留出大片空白；改为按内容取高（`align="start"`、移除 `h="100%"` 与末行 `mt="auto"`、压缩 Divider 间距），消除空占
+- **主机监控缺失的 i18n 键**：`hostMonitoring.processCpu` 与 `hostMonitoring.metricDetails`（节点状态栏 Divider 标签）此前为裸键，补齐中英译文；顺带清理未被引用的孤儿键 `metricNetworkRx` / `metricNetworkTx`
 - **审计中心切 30 天卡死**：统一事件流 CTE 在 `UNION ALL` 后全量物化 + 临时 B 树排序（时间索引只帮范围过滤、不帮合并排序），叠加事件页每次翻页的全量 `COUNT`、聚合探针同样物化、前端并发多请求，服务被拖死。修复：① 无过滤/白名单过滤（action↔op、actor↔source_actor）时把「每源按时间倒序取前 offset+limit 条」下推子查询（走索引取满即停），外层只归并 ≤2K 行——25 万行实测 **95ms → 0.2ms**；② 取消 `COUNT`（首屏亦不计，统一 `total=-1`），前端显示「已加载 N 条」并以多取 1 条精确判断有无更多
 - **KPI/趋势/关注批次只统计审计事件**：30 天内 replication 同步记录达 114 万条（审计事件仅 1.1 万），既拖垮聚合又淹没「审计事件」语义；聚合路径改 `AuditOnly`，同步记录保留在事件流列表
 - **replication 同步记录默认折叠**：events 端点增 `includeReplication`（默认 false）；前端筛选条增「含同步记录」开关（按需展开）
@@ -33,17 +36,22 @@
 - **主机监控资源口径不完整**：补充内存与磁盘总量、已用量、可用量；合并当前进程内存趋势与进程指标，并显示进程运行时长
 - **审计详情缺少请求上下文**：记录脱敏后的常用请求头与服务端处理耗时，并按请求、性能、上下文分组展示；Referer 仅保留 scheme/host/path，剔除 userinfo、query 与 fragment
 - **下载趋势多算右边界桶、分组轴与服务端桶起点错位**：统一按 `[from,to)` 过滤分钟源桶，前端轴按有效桶粒度对齐；`to` 落桶边界时不再额外生成终点桶
+- **主机监控磁盘趋势「已用≈总量」错误读数**：磁盘图此前把「已用 / 可用」画在左轴（贴合数据的放大域）、「总量」画在量纲不同的右轴，结果已用贴近左轴顶、总量贴近右轴顶，视觉上「已用≈总量」，与 74% 的实际占比矛盾。现改为**单一左轴**：`primary=diskUsedBytes`（面积）+ `yDomain=[0, diskTotalBytes]`，已用面积之上到轴顶的空白即**可用**（与内存图同构）；`diskTotalBytes` 缺失（历史样本）时回退 `["auto","auto"]`。卡内「总量 / 已用 / 可用 / 占用率」数字保留，可用量仍以精确值可见
+- **主机监控切换时间档位 / 网卡时整块被骨架替换**：`HostMonitoringLive` 的 `useAsync` 未传 `keepPreviousData`，跨键（时间档位或网卡变化）时会先 `setData(null) + setLoading(true)`，导致整块图表被骨架替换、布局重排。现补 `keepPreviousData: true`（与搜索页同款语义）：切换时保留旧数据、仅置后台刷新态，新数据到达就地替换，首载仍显示加载态
 
 - **可见仓库超过一页时列表只加载第一页**：非管理员与匿名请求的仓库列表把 `total` 写成「当前页可见条数」，而前端正是按 `total` 判断是否继续翻页，于是公开 / 授权可见仓库超过单页上限（100 条）时永远只拉第一页；`/api/v1/public/repositories` 也固定在默认 20 条。现改为先按可见性过滤再分页、`total` 统计全部可见仓库，公开列表一次读全，且都不泄漏私有仓库
 
 ### 变更
 
+- **主机监控内存/磁盘趋势纵轴贴合数据**：内存趋势纵轴改为**系统内存总量**、只画「已用」（已用之上的空白即表示空闲，不再单画可用量折线）；磁盘趋势与仪表盘「容量增长趋势」的 Y 轴改为贴合数据的放大域以放大波动。图表能力上 `TrendChart` 新增 `yDomain` 入参（不传时保持原「从 0 起」行为，零回归）
 - **审计时间范围档位改为 24h / 3d / 7d / 30d（默认 24h）**，并支持**自定义日期区间**（URL 深链 `range=custom&from=&to=`）；日期选择器文案与日历 locale 随界面中英文切换；「共 N 条」与时间切换器并入筛选条，记录区标题移除、左右留白且不再横向滚动
 - **自定义日期区间改用 Mantine `DatePickerInput type="range"`**：替换原生 `<input type="date">`，与组件库保持一致
 - **审计事件 `totalCount` 契约显式文档化**：openapi 明确 `-1` 表示服务端未执行精确 COUNT（去掉 `minimum: 0`），客户端据此展示「已加载 N 条」
 - **仪表盘趋势图增强**：请求、下载与失败系列图例可点击隐藏/恢复；新增按客户端族/IP 分组的下载趋势、请求总量对照和下载占比饼图，图表项可跳转到带时间/IP/客户端筛选的审计页；移除重复的独立下载趋势图
 - **仓库详情补充下载数据**：展示累计下载次数与近 24 小时下载趋势；下载趋势按仓库过滤，复用分钟级下载计量数据
 - **DevMock 补齐下载趋势端点**：新增分组下载趋势与仓库下载趋势模拟响应；桶粒度与服务端一致，按分钟源桶遵循 `[from,to)` 并对齐 minute/hour/day 起点，分组总数与时序点保持一致
+- **趋势图移除「区间剖析」统计条**：删除图下方那条均值 / 峰值 / 谷值 / 区间变动的统计（及随之无用的中英 i18n 键 `trendChart.analysis*`）；**横向拖选聚焦放大仍保留**（拖选与还原、键盘可达性、悬停读数均不受影响）
+- **仪表盘「容量增长趋势」改为增量曲线**：此前以绝对逻辑体积作纵轴，容量基数在 GB 量级而 `formatBytes` 只到 GB 一位小数，坐标轴刻度与悬停读数被取整到同一个 GB 读数，期间的真实增长被基数掩盖，视觉上就像「卡住」。现把序列映射为相对**区间起点**的增量（首点恒为 0），纵轴在增量非负时自 0 起（只有在区间内出现负增量时才贴合数据两端，避免截断），卡片右上大数字改为当前增量而非总量；总量仍在 KPI 指标带的 `logicalBytes` 中可见。标题 / 摘要 / 主标签同步改为「容量增长（相对区间起点）」语义（`dashboard.trendCapacity*` 中英同步），空数据与单点数据安全（单点增量为 0，不除零、不产生空轴）
 
 ## 0.9.0（2026-09-21）
 

@@ -53,6 +53,25 @@ const MOCK_ADMIN_ID = 1;
 const MOCK_USER_ID = 2;
 const MOCK_SECOND_ADMIN_ID = 3;
 
+// 主机监控的模拟网卡：两个非回环网卡，与后端 host_network_interface_minute 口径一致
+// （总量 = 自网卡启动以来的累计字节数，随采样单调不减）。
+const MOCK_HOST_INTERFACES = [
+  {
+    name: "eth0",
+    receiveBase: 4_200_000_000,
+    transmitBase: 1_600_000_000,
+    receiveRate: 8192,
+    transmitRate: 4096,
+  },
+  {
+    name: "wlan0",
+    receiveBase: 900_000_000,
+    transmitBase: 320_000_000,
+    receiveRate: 2048,
+    transmitRate: 1024,
+  },
+] as const;
+
 const auditCategories = new Set<AuditCategory>([
   "management_change",
   "asset_change",
@@ -1465,66 +1484,125 @@ export const handlers = [
       ? Math.min(parsedFrom, windowTo - 3_600_000)
       : windowTo - 86_400_000;
     const span = Math.max(windowTo - windowFrom, 3_600_000);
+    // 选定网卡（interface 参数）：省略时速率与总量按全部非回环网卡聚合；指定时只按该网卡。
+    const requestedInterface = url.searchParams.get("interface");
     const SAMPLES = 48 * mockVolumeFactor();
     const step = span / SAMPLES;
-    const samples = Array.from({ length: SAMPLES }, (_, i) => {
-      const end = new Date(windowFrom + step * (i + 1));
-      const start = new Date(end.getTime() - step);
-      const wave = Math.sin(i / 3.2);
-      const drift = Math.sin(i / 11);
-      // 采样序号取模 48：数据量档位会放大桶数（大档 768），若不取模，
-      // 单调递减的内存 / 磁盘序列会穿过 0 变成负数，曲线形状也不对。
-      const slot = i % 48;
-      // 容量字段与后端同口径：已用 = 同一采样点 total − available（前端只展示不复算）。
-      // 桶序取模 48 使 available 呈锯齿，已用随 slot 单调上升后再回落，与既有曲线一致。
-      const memoryTotal = 17179869184;
-      const memoryAvailable =
-        6871947673 - slot * 1024 * 1024 * 37 + jitter(100 + slot, 120 * 1024 * 1024);
-      const diskTotal = 1073741824000; // 数据目录所在卷固定 1 TiB
-      const diskAvailable =
-        536870912000 - slot * 1024 * 1024 * 173 + jitter(200 + slot, 400 * 1024 * 1024);
-      return {
-        from: start.toISOString(),
-        to: end.toISOString(),
-        hostState: { state: "ok" },
-        networkState: { state: "ok" },
-        processState: { state: "ok" },
-        readinessState: { state: "ok" },
-        cpuPercent:
-          Math.round(
-            Math.max(5, Math.min(95, 42 + wave * 14 + drift * 10 + jitter(10 + slot, 6))) * 10,
-          ) / 10,
-        memoryTotalBytes: memoryTotal,
-        memoryAvailableBytes: memoryAvailable,
-        memoryUsedBytes: memoryTotal - memoryAvailable,
-        diskTotalBytes: diskTotal,
-        diskAvailableBytes: diskAvailable,
-        diskUsedBytes: diskTotal - diskAvailable,
-        networkReceiveBytesPerSecond: Math.max(
-          0,
-          Math.round(8192 + wave * 4096 + slot * 96) + jitter(300 + slot, 900),
-        ),
-        networkTransmitBytesPerSecond: Math.max(
-          0,
-          Math.round(4096 + wave * 2048 + slot * 48) + jitter(400 + slot, 500),
-        ),
-        processRssBytes: 67108864 + slot * 1024 * 512 + jitter(500 + slot, 3 * 1024 * 1024),
-        processCpuPercent:
-          Math.round(Math.max(0, 1.2 + wave * 0.5 + drift * 0.8 + jitter(600 + slot, 0.4)) * 100) /
-          100,
-        // 进程运行时长（挂钟口径，仅本进程）：随桶时间单调增长，序列起点为 1 小时。
-        processUptimeSeconds: Math.max(60, Math.round(((i + 1) * step) / 1000) + 3600),
-        goroutineCount: Math.max(1, 37 + (slot % 4) + jitter(700 + slot, 3)),
-      };
-    });
+    const samples: components["schemas"]["HostMetricPoint"][] = Array.from(
+      { length: SAMPLES },
+      (_, i) => {
+        const end = new Date(windowFrom + step * (i + 1));
+        const start = new Date(end.getTime() - step);
+        const wave = Math.sin(i / 3.2);
+        const drift = Math.sin(i / 11);
+        // 采样序号取模 48：数据量档位会放大桶数（大档 768），若不取模，
+        // 单调递减的内存 / 磁盘序列会穿过 0 变成负数，曲线形状也不对。
+        const slot = i % 48;
+        // 容量字段与后端同口径：已用 = 同一采样点 total − available（前端只展示不复算）。
+        // 桶序取模 48 使 available 呈锯齿，已用随 slot 单调上升后再回落，与既有曲线一致。
+        const memoryTotal = 17179869184;
+        const memoryAvailable =
+          6871947673 - slot * 1024 * 1024 * 37 + jitter(100 + slot, 120 * 1024 * 1024);
+        const diskTotal = 1073741824000; // 数据目录所在卷固定 1 TiB
+        const diskAvailable =
+          536870912000 - slot * 1024 * 1024 * 173 + jitter(200 + slot, 400 * 1024 * 1024);
+        // 逐网卡累计总量 = 基数 + 常量速率 × 累计时长，不加抖动：保证总量随采样单调不减，
+        // 与后端「自网卡启动以来的累计计数」一致。速率仍带抖动，让曲线有可见变化。
+        const elapsedSeconds = (step * (i + 1)) / 1000;
+        const interfaces = MOCK_HOST_INTERFACES.map((iface, interfaceIndex) => {
+          const shape = 1 + 0.4 * Math.sin(i / 3.2 + interfaceIndex);
+          return {
+            name: iface.name,
+            receiveBytesTotal: iface.receiveBase + Math.round(iface.receiveRate * elapsedSeconds),
+            transmitBytesTotal:
+              iface.transmitBase + Math.round(iface.transmitRate * elapsedSeconds),
+            receiveBytesPerSecond: Math.max(
+              0,
+              Math.round(iface.receiveRate * shape) + jitter(300 + interfaceIndex * 20 + slot, 900),
+            ),
+            transmitBytesPerSecond: Math.max(
+              0,
+              Math.round(iface.transmitRate * shape) +
+                jitter(400 + interfaceIndex * 20 + slot, 500),
+            ),
+          };
+        });
+        // 全部网卡聚合 = 各网卡求和（与后端 host_metric_minute 的聚合口径一致）。
+        const aggregate = interfaces.reduce(
+          (total, item) => ({
+            receiveBytesPerSecond: total.receiveBytesPerSecond + item.receiveBytesPerSecond,
+            transmitBytesPerSecond: total.transmitBytesPerSecond + item.transmitBytesPerSecond,
+            receiveBytesTotal: total.receiveBytesTotal + item.receiveBytesTotal,
+            transmitBytesTotal: total.transmitBytesTotal + item.transmitBytesTotal,
+          }),
+          {
+            receiveBytesPerSecond: 0,
+            transmitBytesPerSecond: 0,
+            receiveBytesTotal: 0,
+            transmitBytesTotal: 0,
+          },
+        );
+        const selected = requestedInterface
+          ? interfaces.find((item) => item.name === requestedInterface)
+          : undefined;
+        // 指定网卡时速率与总量都按该网卡；未知网卡不留假 0，整组置 null。
+        const network = requestedInterface
+          ? {
+              receiveBytesPerSecond: selected?.receiveBytesPerSecond ?? null,
+              transmitBytesPerSecond: selected?.transmitBytesPerSecond ?? null,
+              receiveBytesTotal: selected?.receiveBytesTotal ?? null,
+              transmitBytesTotal: selected?.transmitBytesTotal ?? null,
+            }
+          : aggregate;
+        return {
+          from: start.toISOString(),
+          to: end.toISOString(),
+          hostState: { state: "ok" },
+          networkState: { state: "ok" },
+          processState: { state: "ok" },
+          readinessState: { state: "ok" },
+          cpuPercent:
+            Math.round(
+              Math.max(5, Math.min(95, 42 + wave * 14 + drift * 10 + jitter(10 + slot, 6))) * 10,
+            ) / 10,
+          memoryTotalBytes: memoryTotal,
+          memoryAvailableBytes: memoryAvailable,
+          memoryUsedBytes: memoryTotal - memoryAvailable,
+          diskTotalBytes: diskTotal,
+          diskAvailableBytes: diskAvailable,
+          diskUsedBytes: diskTotal - diskAvailable,
+          networkReceiveBytesPerSecond: network.receiveBytesPerSecond,
+          networkTransmitBytesPerSecond: network.transmitBytesPerSecond,
+          networkReceiveBytesTotal: network.receiveBytesTotal,
+          networkTransmitBytesTotal: network.transmitBytesTotal,
+          processRssBytes: 67108864 + slot * 1024 * 512 + jitter(500 + slot, 3 * 1024 * 1024),
+          processCpuPercent:
+            Math.round(
+              Math.max(0, 1.2 + wave * 0.5 + drift * 0.8 + jitter(600 + slot, 0.4)) * 100,
+            ) / 100,
+          // 进程运行时长（挂钟口径，仅本进程）：随桶时间单调增长，序列起点为 1 小时。
+          processUptimeSeconds: Math.max(60, Math.round(((i + 1) * step) / 1000) + 3600),
+          goroutineCount: Math.max(1, 37 + (slot % 4) + jitter(700 + slot, 3)),
+        };
+      },
+    );
     const latest = samples[SAMPLES - 1];
-    return HttpResponse.json({
+    // 可用网卡列表与各网卡累计总量取窗口末端：选择器需要**全部**网卡，故不受 interface 过滤影响。
+    const lastElapsedSeconds = (step * SAMPLES) / 1000;
+    const response: components["schemas"]["HostMonitoring"] = {
       hostState: "healthy",
       latestSampleAt: minute,
       effectiveBucket: "minute",
       latest,
       samples,
-    });
+      networkInterfaces: MOCK_HOST_INTERFACES.map((iface) => ({
+        name: iface.name,
+        receiveBytesTotal: iface.receiveBase + Math.round(iface.receiveRate * lastElapsedSeconds),
+        transmitBytesTotal:
+          iface.transmitBase + Math.round(iface.transmitRate * lastElapsedSeconds),
+      })),
+    };
+    return HttpResponse.json(response);
   }),
 
   // FR-38：管理审计日志（非 OpenAPI 端点，仅管理员可读）。

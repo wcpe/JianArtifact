@@ -148,12 +148,21 @@ func (h *Handlers) GetDownloadTrendGrouped(c *gin.Context, params GetDownloadTre
 		auth.WriteError(c, http.StatusBadRequest, "bad_request", "groupBy 仅支持 ip 或 family")
 		return
 	}
-	repo := ""
+	// repo 过滤（可选）：把仓库名（可能是别名）解析为「主名 ∪ 别名」集合，使经别名访问的
+	// 下载并入主名，避免按仓库查看时同一仓库的下载被拆分。缺省为空集合=全局口径。
+	var repos []string
 	if params.Repo != nil {
-		repo = string(*params.Repo)
+		if name := string(*params.Repo); name != "" {
+			names, err := h.resolveRepoNameSet(name)
+			if err != nil {
+				writeDomainErr(c, err)
+				return
+			}
+			repos = names
+		}
 	}
 	bucket := operationsBucket(from, to)
-	rows, err := h.assetDownloads.DownloadTrendGrouped(from, to, bucket, groupBy, repo)
+	rows, err := h.assetDownloads.DownloadTrendGrouped(from, to, bucket, groupBy, repos)
 	if err != nil {
 		writeDomainErr(c, err)
 		return
@@ -275,6 +284,7 @@ func dashboardKPI(current repository.CapacitySnapshot, minutes []repository.Prot
 }
 
 // GetHostMonitoring 返回当前节点主机持久样本；首次采样前与过期样本明确区分。
+// 可选 interface 查询参数：省略时速率与总量按全部非回环网卡聚合；指定时改为该网卡的逐分钟样本。
 func (h *Handlers) GetHostMonitoring(c *gin.Context, params GetHostMonitoringParams) {
 	if _, ok := requireAdmin(c); !ok {
 		return
@@ -293,7 +303,22 @@ func (h *Handlers) GetHostMonitoring(c *gin.Context, params GetHostMonitoringPar
 		return
 	}
 	bucket := operationsBucket(from, to)
+	selected := hostInterfaceQuery(params)
 	response := HostMonitoring{EffectiveBucket: ObservabilityBucket(bucket), Samples: aggregateHostSamples(items, from, to, bucket)}
+	// 网卡列表与各网卡累计总量：取窗口内每个网卡各自最新一行，供选择器与总量展示；
+	// 无网卡数据时留空（响应省略该字段，向后兼容）。
+	if interfaces, interfaceErr := h.operationsObservability.LatestHostNetworkInterfaces(from, to); interfaceErr == nil {
+		response.NetworkInterfaces = hostNetworkInterfaceList(interfaces)
+	}
+	if selected != "" {
+		// 选定网卡：速率图与总量都换成该网卡的逐分钟样本，避免与全网卡聚合值混读。
+		interfaces, sampleErr := h.operationsObservability.HostNetworkInterfaceSamples(from, to, selected)
+		if sampleErr != nil {
+			writeDomainErr(c, sampleErr)
+			return
+		}
+		overrideHostNetworkFields(response.Samples, interfaceNetworkByBucket(interfaces, bucket))
+	}
 	latest, err := h.operationsObservability.LatestHostSample()
 	if errors.Is(err, repository.ErrNotFound) {
 		response.HostState = HostMonitoringHostState("unknown")
@@ -311,6 +336,14 @@ func (h *Handlers) GetHostMonitoring(c *gin.Context, params GetHostMonitoringPar
 	}
 	response.LatestSampleAt = &latestAt
 	latestPoint := hostPoint(*latest, latestAt, latestAt.Add(time.Minute))
+	if selected != "" {
+		latestInterface, ifaceErr := h.operationsObservability.LatestHostNetworkInterface(selected)
+		if ifaceErr != nil && !errors.Is(ifaceErr, repository.ErrNotFound) {
+			writeDomainErr(c, ifaceErr)
+			return
+		}
+		overrideHostPointNetwork(&latestPoint, latestInterface)
+	}
 	response.Latest = &latestPoint
 	if time.Since(latestAt) > 2*time.Minute {
 		response.HostState = HostMonitoringHostState("stale")
@@ -318,6 +351,79 @@ func (h *Handlers) GetHostMonitoring(c *gin.Context, params GetHostMonitoringPar
 		response.HostState = HostMonitoringHostState("healthy")
 	}
 	c.JSON(http.StatusOK, response)
+}
+
+// hostInterfaceQuery 取出网卡过滤参数（契约 name=interface）；省略或空串表示全部非回环网卡聚合。
+func hostInterfaceQuery(params GetHostMonitoringParams) string {
+	if params.Interface == nil {
+		return ""
+	}
+	return string(*params.Interface)
+}
+
+// hostNetworkInterfaceList 把「每网卡最新一行」映射为契约网卡条目；无数据返回 nil（响应省略字段）。
+func hostNetworkInterfaceList(items []repository.HostNetworkInterfaceSample) *[]HostNetworkInterface {
+	if len(items) == 0 {
+		return nil
+	}
+	result := make([]HostNetworkInterface, 0, len(items))
+	for _, item := range items {
+		result = append(result, HostNetworkInterface{Name: item.Interface, ReceiveBytesTotal: item.ReceiveBytesTotal, TransmitBytesTotal: item.TransmitBytesTotal})
+	}
+	return &result
+}
+
+// networkFields 是某分钟在网络维度上的取值（接收/发送速率与累计总量）。
+type networkFields struct {
+	receiveBytesPerSecond  *float64
+	transmitBytesPerSecond *float64
+	receiveBytesTotal      *int64
+	transmitBytesTotal     *int64
+}
+
+// interfaceNetworkByBucket 把选定网卡的逐分钟样本按聚合桶起点整理；
+// 同一桶内时间更晚的样本覆盖更早的，与 aggregateHostSamples 的取值口径一致。
+func interfaceNetworkByBucket(items []repository.HostNetworkInterfaceSample, bucket string) map[time.Time]networkFields {
+	result := map[time.Time]networkFields{}
+	for _, item := range items {
+		at, err := time.Parse(time.RFC3339Nano, item.BucketStart)
+		if err != nil {
+			continue
+		}
+		result[truncateOperationsBucket(at, bucket)] = networkFields{
+			receiveBytesPerSecond: item.ReceiveBytesPerSecond, transmitBytesPerSecond: item.TransmitBytesPerSecond,
+			receiveBytesTotal: item.ReceiveBytesTotal, transmitBytesTotal: item.TransmitBytesTotal,
+		}
+	}
+	return result
+}
+
+// overrideHostNetworkFields 用选定网卡的取值覆盖趋势点的网络字段。
+// 该桶没有该网卡样本时清空为 null（不沿用聚合值，避免两种口径混读，也不伪造 0）。
+func overrideHostNetworkFields(points []HostMetricPoint, fields map[time.Time]networkFields) {
+	for index := range points {
+		value := fields[points[index].From]
+		points[index].NetworkReceiveBytesPerSecond = value.receiveBytesPerSecond
+		points[index].NetworkTransmitBytesPerSecond = value.transmitBytesPerSecond
+		points[index].NetworkReceiveBytesTotal = value.receiveBytesTotal
+		points[index].NetworkTransmitBytesTotal = value.transmitBytesTotal
+	}
+}
+
+// overrideHostPointNetwork 用选定网卡最新一行的取值覆盖单点的网络字段；
+// 该网卡无样本（latest 为 nil）时清空为 null，不沿用聚合值、也不伪造 0。
+func overrideHostPointNetwork(point *HostMetricPoint, latest *repository.HostNetworkInterfaceSample) {
+	point.NetworkReceiveBytesPerSecond = nil
+	point.NetworkTransmitBytesPerSecond = nil
+	point.NetworkReceiveBytesTotal = nil
+	point.NetworkTransmitBytesTotal = nil
+	if latest == nil {
+		return
+	}
+	point.NetworkReceiveBytesPerSecond = latest.ReceiveBytesPerSecond
+	point.NetworkTransmitBytesPerSecond = latest.TransmitBytesPerSecond
+	point.NetworkReceiveBytesTotal = latest.ReceiveBytesTotal
+	point.NetworkTransmitBytesTotal = latest.TransmitBytesTotal
 }
 
 func operationsRange(c *gin.Context, fromValue *ObservabilityFromParam, toValue *ObservabilityToParam) (time.Time, time.Time, bool) {
@@ -446,14 +552,16 @@ func capacityPoint(item repository.CapacitySnapshot, from, to time.Time) Capacit
 	return CapacityPoint{From: from, To: to, RepositoryCount: item.RepositoryCount, AssetCount: item.AssetCount, LogicalBytes: item.LogicalBytes}
 }
 
-// hostPoint 把主机样本映射为响应点：容量三件套（内存已用、磁盘总量/已用）与进程运行时长
-// 均为 nullable 可选字段，采样点缺列时保持 nil（契约不入 required）。
+// hostPoint 把主机样本映射为响应点：容量三件套（内存已用、磁盘总量/已用）、进程运行时长
+// 与网络累计总量均为 nullable 可选字段，采样点缺列时保持 nil（契约不入 required）。
 func hostPoint(item repository.HostMetricSample, from, to time.Time) HostMetricPoint {
 	return HostMetricPoint{From: from, To: to, HostState: metricGroup(item.HostState, item.HostErrorCode), CpuPercent: item.CPUPercent,
 		MemoryTotalBytes: item.MemoryTotalBytes, MemoryAvailableBytes: item.MemoryAvailableBytes, MemoryUsedBytes: item.MemoryUsedBytes,
 		DiskTotalBytes: item.DiskTotalBytes, DiskAvailableBytes: item.DiskAvailableBytes, DiskUsedBytes: item.DiskUsedBytes,
 		NetworkState: metricGroup(item.NetworkState, item.NetworkErrorCode), NetworkReceiveBytesPerSecond: item.NetworkReceiveBytesPerSecond,
-		NetworkTransmitBytesPerSecond: item.NetworkTransmitBytesPerSecond, ProcessState: metricGroup(item.ProcessState, item.ProcessErrorCode),
+		NetworkTransmitBytesPerSecond: item.NetworkTransmitBytesPerSecond,
+		NetworkReceiveBytesTotal:      item.NetworkReceiveBytesTotal, NetworkTransmitBytesTotal: item.NetworkTransmitBytesTotal,
+		ProcessState:    metricGroup(item.ProcessState, item.ProcessErrorCode),
 		ProcessRssBytes: item.ProcessRSSBytes, ProcessCpuPercent: item.ProcessCPUPercent, ProcessUptimeSeconds: item.ProcessUptimeSeconds,
 		GoroutineCount: item.GoroutineCount, OpenFileDescriptors: item.OpenFileDescriptors,
 		ReadinessState: metricGroup(item.ReadinessState, item.ReadinessErrorCode)}

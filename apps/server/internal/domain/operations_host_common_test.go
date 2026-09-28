@@ -5,6 +5,67 @@ import (
 	"time"
 )
 
+// TestParseProcNetDevReturnsPerInterfaceSkippingLoopback 验证 /proc/net/dev 解析口径：
+// 返回**逐网卡**累计计数，跳过表头行与回环 lo；接收/发送字节取自冒号后第 1、第 9 个字段。
+func TestParseProcNetDevReturnsPerInterfaceSkippingLoopback(t *testing.T) {
+	const content = "Inter-|   Receive                                                |  Transmit\n" +
+		" face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed\n" +
+		"    lo:  123456     1000    0    0    0     0          0         0   123456     1000    0    0    0     0       0          0\n" +
+		"  eth0: 9876543    54321    7    0    0     0          0         0  4567890    43210    3    0    0     0       0          0\n" +
+		" wlan0:  111111     2222    0    0    0     0          0         0    33333     2222    0    0    0     0       0          0\n"
+	interfaces := parseProcNetDev(content)
+	if len(interfaces) != 2 {
+		t.Fatalf("网卡数 = %d，期望 2（跳过 lo 与表头）：%+v", len(interfaces), interfaces)
+	}
+	if interfaces[0].Name != "eth0" || interfaces[0].ReceiveBytes != 9876543 || interfaces[0].TransmitBytes != 4567890 {
+		t.Fatalf("eth0 解析错误：%+v", interfaces[0])
+	}
+	if interfaces[1].Name != "wlan0" || interfaces[1].ReceiveBytes != 111111 || interfaces[1].TransmitBytes != 33333 {
+		t.Fatalf("wlan0 解析错误：%+v", interfaces[1])
+	}
+}
+
+// TestParseProcNetDevSkipsMalformedLines 畸形行（字段不足或计数非法）必须整行跳过，
+// 不得污染其他网卡的计数，也不得把解析失败伪装成 0。
+func TestParseProcNetDevSkipsMalformedLines(t *testing.T) {
+	const content = "  eth0: 1 2 3\n" +
+		"  eth1: notanumber 1 1 1 1 1 1 1 2 2 2 2\n" +
+		"  eth2: 5 0 0 0 0 0 0 0 7 0 0 0 0 0 0\n"
+	interfaces := parseProcNetDev(content)
+	if len(interfaces) != 1 || interfaces[0].Name != "eth2" || interfaces[0].ReceiveBytes != 5 || interfaces[0].TransmitBytes != 7 {
+		t.Fatalf("非法行应被跳过：%+v", interfaces)
+	}
+}
+
+// TestSumNetworkInterfacesAggregates 验证逐网卡累计计数求和为「全部网卡」聚合值，空列表为 0。
+func TestSumNetworkInterfacesAggregates(t *testing.T) {
+	received, transmitted := sumNetworkInterfaces([]HostNetworkInterface{
+		{Name: "eth0", ReceiveBytes: 100, TransmitBytes: 10},
+		{Name: "wlan0", ReceiveBytes: 200, TransmitBytes: 20},
+	})
+	if received != 300 || transmitted != 30 {
+		t.Fatalf("聚合 = (%d, %d)，期望 (300, 30)", received, transmitted)
+	}
+	if received, transmitted := sumNetworkInterfaces(nil); received != 0 || transmitted != 0 {
+		t.Fatalf("空网卡列表应聚合为 0：(%d, %d)", received, transmitted)
+	}
+}
+
+// TestSelectNetworkInterfacesSkipsLoopbackRows 验证 Windows/通用路径的回环过滤与透传，
+// 使平台侧只剩无法跨平台验证的系统调用。
+func TestSelectNetworkInterfacesSkipsLoopbackRows(t *testing.T) {
+	interfaces := selectNetworkInterfaces([]netRawInterface{
+		{Name: "Loopback", Loopback: true, ReceiveBytes: 999, TransmitBytes: 999},
+		{Name: "以太网", ReceiveBytes: 10, TransmitBytes: 20},
+	})
+	if len(interfaces) != 1 || interfaces[0].Name != "以太网" || interfaces[0].ReceiveBytes != 10 || interfaces[0].TransmitBytes != 20 {
+		t.Fatalf("应跳过回环网卡：%+v", interfaces)
+	}
+	if empty := selectNetworkInterfaces(nil); len(empty) != 0 {
+		t.Fatalf("空输入应返回空列表：%+v", empty)
+	}
+}
+
 // TestParseMeminfoExtractsTotalAndAvailable 验证 meminfo 解析口径：
 // 只认 MemTotal/MemAvailable 且 kB 统一换算为字节。
 func TestParseMeminfoExtractsTotalAndAvailable(t *testing.T) {

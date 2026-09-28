@@ -186,8 +186,6 @@ export const en = {
   dashboard: {
     title: "Dashboard",
     loading: "Loading dashboard…",
-    /** 区间变动低于阈值时的占位文案。 */
-    deltaFlat: "Flat",
     // —— v0.8.0 重新设计的业务仪表盘 ——
     rangeToday: "Today",
     rangeYesterday: "Yesterday",
@@ -213,8 +211,8 @@ export const en = {
     metricsBlockedReposHint: "Proxy repositories auto-blocked due to unreachable upstream",
     trendRequests: "Request and Download Trend",
     trendRequestsSummary: "How request volume changes over time",
-    trendCapacity: "Capacity Growth Trend",
-    trendCapacitySummary: "Logical size of current asset records, excluding deduplicated blob size",
+    trendCapacity: "Capacity Growth (relative to range start)",
+    trendCapacitySummary: "Shows growth during the range, with the range start as 0",
     trendDownloads: "Download Trend",
     trendDownloadsSummary:
       "Counts complete downloads (GET 200); Range segments excluded; same collection point as KPIs",
@@ -222,7 +220,7 @@ export const en = {
     downloadTopIps: "Top 10 source IPs · unique-source dedupe",
     downloadFamilies: "Client families (UA grouped)",
     downloadNoSamples: "No download samples",
-    // —— Grouped download trend (endpoint A: downloads/trend) ——
+    // —— 分组下载趋势（端点 A：downloads/trend） ——
     downloadGroupedTitle: "Grouped Download Trend",
     downloadGroupByFamily: "Client family",
     downloadGroupByIp: "IP",
@@ -274,21 +272,12 @@ export const en = {
     trendRequestsPrimary: "Requests",
     trendRequestsSecondary: "Downloads",
     trendFailuresPrimary: "Failures",
-    trendCapacityPrimary: "Logical size",
+    trendCapacityPrimary: "Growth",
     // —— v0.8.2 指挥舱布局 ——
     kpiStripLabel: "Key metrics strip",
   },
   trendChart: {
     noData: "No sample data",
-    analysisTitle: "Range Analysis",
-    analysisMean: "Mean",
-    analysisTotal: "Total",
-    analysisPeak: "Peak",
-    analysisTrough: "Trough",
-    analysisChange: "Range change",
-    analysisDeltaAbs: "Absolute",
-    analysisFocused: "Statistics focused on a period; double-click the chart to reset",
-    focusHint: "Drag horizontally on the chart to focus a sub-period",
     focusChip: "Focused {{from}} – {{to}}",
     focusClear: "Exit focus",
     keyboardHint:
@@ -326,9 +315,11 @@ export const en = {
     trendCpu: "CPU Usage Trend",
     trendCpuSummary: "CPU usage over time",
     trendMemory: "Memory Trend",
-    trendMemorySummary: "Memory total, used, available, and current process RSS over time",
+    trendMemorySummary:
+      "System memory total and used over time; the blank above the used area is free memory, and process RSS shares the memory scale so it sits near the chart bottom",
     trendDisk: "Disk Trend",
-    trendDiskSummary: "Total, used, and available space of this instance's data directory volume",
+    trendDiskSummary:
+      "Used space of this instance's data directory volume over time; the blank above the used area is the available space",
     trendNetwork: "Network Traffic Trend",
     trendNetworkSummary: "Receive and transmit rates over time",
     seriesCpu: "CPU Usage",
@@ -344,12 +335,13 @@ export const en = {
     componentNetwork: "Network",
     componentProcess: "Process",
     resourceUsage: "Resource Usage",
+    metricDetails: "Metric Details",
     memoryUsage: "Memory Usage",
     goroutines: "Goroutines",
     fileDescriptors: "File Descriptors",
     liveBadge: "Live",
     sampleOkShort: "Sampling OK, host metrics available",
-    // —— Capacity triple (total / used / available) and process metrics table ——
+    // —— 容量三元组（总量 / 已用 / 可用）与进程指标表 ——
     memoryTotal: "Memory Total",
     memoryUsed: "Memory Used",
     seriesMemoryUsed: "Used Memory",
@@ -357,26 +349,31 @@ export const en = {
     diskTotal: "Disk Total",
     diskUsed: "Disk Used",
     seriesDiskUsed: "Used Disk",
-    seriesDiskTotal: "Disk Total",
     diskUsage: "Disk Usage",
-    // Process metrics table: previously scattered process rows merged into one table.
+    // 进程指标表：此前分散的进程行已合并为一张表。
     processMetrics: "Process Metrics",
     processMetricsHint: "Current process metrics only, not a system-wide process enumeration",
     colMetric: "Metric",
     colCurrentValue: "Current Value",
     colNote: "Note",
     uptime: "Uptime",
+    uptimeDaySuffix: "d",
     uptimeNote: "Wall-clock time of this process only",
     goroutinesNote: "Total running goroutines",
     fileDescriptorsNote: "Open file descriptors (Linux)",
+    processCpu: "Process CPU",
     processCpuNote: "CPU usage of the current process",
     processRssNote: "Resident memory, see the memory chart for the trend",
     memoryUsageNote: "Used ÷ total (fixed per-sample basis)",
     diskUsageNote: "Used ÷ total (data directory volume)",
     networkRxNote: "Receive rate on non-loopback interfaces",
     networkTxNote: "Transmit rate on non-loopback interfaces",
-    metricNetworkRx: "Network Received",
-    metricNetworkTx: "Network Sent",
+    // —— 网络累计总量与网卡选择器 ——
+    networkTotalTransmit: "Total Sent",
+    networkTotalReceive: "Total Received",
+    networkInterface: "Interface",
+    networkInterfaceAll: "All Interfaces",
+    networkInterfaceTotalHint: "Cumulative since the interface came up",
   },
   users: {
     title: "User Management",

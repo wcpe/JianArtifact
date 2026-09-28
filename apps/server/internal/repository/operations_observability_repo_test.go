@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -90,6 +91,139 @@ func TestOperationsObservabilityRepoAggregatesAndRetainsCurrentNodeMetrics(t *te
 	}
 	if len(items) != 0 {
 		t.Fatalf("过期协议计数未清理：%+v", items)
+	}
+}
+
+// TestOperationsObservabilityHostNetworkInterfaces 覆盖迁移 0042：
+// host_metric_minute 的聚合累计总量整列往返，逐网卡新表的 upsert / 按网卡过滤 / 各网卡最新一行。
+func TestOperationsObservabilityHostNetworkInterfaces(t *testing.T) {
+	db, err := persistence.Open(filepath.Join(t.TempDir(), "operations-host-network.db"))
+	if err != nil {
+		t.Fatalf("打开数据库：%v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := db.Migrate(); err != nil {
+		t.Fatalf("迁移数据库：%v", err)
+	}
+	repo := NewOperationsObservabilityRepo(db)
+	first := time.Date(2026, 8, 27, 10, 0, 0, 0, time.UTC)
+	second := first.Add(time.Minute)
+
+	// 聚合累计总量（host_metric_minute 新增两列）必须整列落库并原样读回。
+	receiveTotal, transmitTotal := int64(9_000_000), int64(4_500_000)
+	if err := repo.PutHostSample(HostMetricSample{
+		BucketStart: formatMetricTime(first), HostState: MetricStateOK, NetworkState: MetricStateOK,
+		ProcessState: MetricStateOK, ReadinessState: MetricStateOK,
+		NetworkReceiveBytesTotal: &receiveTotal, NetworkTransmitBytesTotal: &transmitTotal,
+	}); err != nil {
+		t.Fatalf("写入主机样本：%v", err)
+	}
+	latest, err := repo.LatestHostSample()
+	if err != nil {
+		t.Fatalf("读取主机样本：%v", err)
+	}
+	if latest.NetworkReceiveBytesTotal == nil || *latest.NetworkReceiveBytesTotal != receiveTotal ||
+		latest.NetworkTransmitBytesTotal == nil || *latest.NetworkTransmitBytesTotal != transmitTotal {
+		t.Fatalf("聚合累计总量未持久化：%+v", latest)
+	}
+	// 历史行（未写总量）必须保持 NULL，而不是被读成 0。
+	if err := repo.PutHostSample(HostMetricSample{
+		BucketStart: formatMetricTime(second), HostState: MetricStateOK, NetworkState: MetricStateUnavailable,
+		NetworkErrorCode: "network_unavailable", ProcessState: MetricStateOK, ReadinessState: MetricStateOK,
+	}); err != nil {
+		t.Fatalf("写入无网络主机样本：%v", err)
+	}
+	samples, err := repo.HostSamples(first.Add(-time.Minute), second.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("范围读取主机样本：%v", err)
+	}
+	if len(samples) != 2 || samples[1].NetworkReceiveBytesTotal != nil || samples[1].NetworkTransmitBytesTotal != nil {
+		t.Fatalf("采集失败样本的总量必须为 NULL：%+v", samples)
+	}
+
+	// 逐网卡：同一分钟两网卡 + 下一分钟更新 eth0，验证 upsert、过滤与各网卡最新行。
+	ethReceive, ethTransmit := int64(600), int64(900)
+	ethRate := 8.0
+	wlanReceive, wlanTransmit := int64(100), int64(200)
+	if err := repo.PutHostNetworkInterfaces([]HostNetworkInterfaceSample{
+		{BucketStart: formatMetricTime(first), Interface: "eth0", State: MetricStateOK,
+			ReceiveBytesTotal: &ethReceive, TransmitBytesTotal: &ethTransmit, ReceiveBytesPerSecond: &ethRate},
+		{BucketStart: formatMetricTime(first), Interface: "wlan0", State: MetricStateOK,
+			ReceiveBytesTotal: &wlanReceive, TransmitBytesTotal: &wlanTransmit},
+	}); err != nil {
+		t.Fatalf("写入逐网卡样本：%v", err)
+	}
+	ethReceive2 := int64(1000)
+	if err := repo.PutHostNetworkInterfaces([]HostNetworkInterfaceSample{
+		{BucketStart: formatMetricTime(second), Interface: "eth0", State: MetricStateOK, ReceiveBytesTotal: &ethReceive2},
+	}); err != nil {
+		t.Fatalf("写入第二分钟逐网卡样本：%v", err)
+	}
+	// 重复写入同一 (bucket_start, interface) 必须覆盖而不是新增一行。
+	ethReceive2Updated := int64(1500)
+	if err := repo.PutHostNetworkInterfaces([]HostNetworkInterfaceSample{
+		{BucketStart: formatMetricTime(second), Interface: "eth0", State: MetricStateOK, ReceiveBytesTotal: &ethReceive2Updated},
+	}); err != nil {
+		t.Fatalf("覆盖逐网卡样本：%v", err)
+	}
+
+	ethRows, err := repo.HostNetworkInterfaceSamples(first.Add(-time.Minute), second.Add(time.Minute), "eth0")
+	if err != nil {
+		t.Fatalf("按网卡读取样本：%v", err)
+	}
+	if len(ethRows) != 2 {
+		t.Fatalf("eth0 行数 = %d，期望 2（ON CONFLICT 覆盖而非新增）：%+v", len(ethRows), ethRows)
+	}
+	if ethRows[0].ReceiveBytesTotal == nil || *ethRows[0].ReceiveBytesTotal != ethReceive ||
+		ethRows[0].ReceiveBytesPerSecond == nil || *ethRows[0].ReceiveBytesPerSecond != ethRate {
+		t.Fatalf("eth0 首行错误：%+v", ethRows[0])
+	}
+	if ethRows[1].ReceiveBytesTotal == nil || *ethRows[1].ReceiveBytesTotal != ethReceive2Updated {
+		t.Fatalf("eth0 第二次写入未覆盖：%+v", ethRows[1])
+	}
+	if ethRows[1].TransmitBytesTotal != nil || ethRows[1].ReceiveBytesPerSecond != nil {
+		t.Fatalf("未提供的可选列必须保持 NULL：%+v", ethRows[1])
+	}
+
+	latestInterfaces, err := repo.LatestHostNetworkInterfaces(first.Add(-time.Minute), second.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("读取各网卡最新行：%v", err)
+	}
+	if len(latestInterfaces) != 2 {
+		t.Fatalf("网卡数 = %d，期望 2：%+v", len(latestInterfaces), latestInterfaces)
+	}
+	byName := map[string]HostNetworkInterfaceSample{}
+	for _, item := range latestInterfaces {
+		byName[item.Interface] = item
+	}
+	if item, ok := byName["eth0"]; !ok || item.BucketStart != formatMetricTime(second) || item.ReceiveBytesTotal == nil || *item.ReceiveBytesTotal != ethReceive2Updated {
+		t.Fatalf("eth0 最新行错误：%+v", byName["eth0"])
+	}
+	if item, ok := byName["wlan0"]; !ok || item.BucketStart != formatMetricTime(first) || item.ReceiveBytesTotal == nil || *item.ReceiveBytesTotal != wlanReceive {
+		t.Fatalf("wlan0 最新行错误：%+v", byName["wlan0"])
+	}
+
+	latestEth, err := repo.LatestHostNetworkInterface("eth0")
+	if err != nil {
+		t.Fatalf("读取指定网卡最新行：%v", err)
+	}
+	if latestEth.BucketStart != formatMetricTime(second) || latestEth.ReceiveBytesTotal == nil || *latestEth.ReceiveBytesTotal != ethReceive2Updated {
+		t.Fatalf("指定网卡最新行错误：%+v", latestEth)
+	}
+	if _, err := repo.LatestHostNetworkInterface("nope"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("不存在的网卡应返回 ErrNotFound，得 %v", err)
+	}
+
+	// 留存清理必须同时覆盖新表。
+	if err := repo.DeleteBefore(second.Add(time.Second)); err != nil {
+		t.Fatalf("清理过期数据：%v", err)
+	}
+	remaining, err := repo.HostNetworkInterfaceSamples(first.Add(-time.Minute), second.Add(time.Minute), "eth0")
+	if err != nil {
+		t.Fatalf("清理后读取：%v", err)
+	}
+	if len(remaining) != 0 {
+		t.Fatalf("过期逐网卡行未清理：%+v", remaining)
 	}
 }
 

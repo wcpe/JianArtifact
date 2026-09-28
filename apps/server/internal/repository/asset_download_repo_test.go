@@ -2,6 +2,7 @@ package repository
 
 import (
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -93,7 +94,7 @@ func TestAssetDownloadRepoSumPaths(t *testing.T) {
 		t.Fatalf("写入：%v", err)
 	}
 
-	sum, err := repo.SumPaths("r1", []string{"a/x.jar", "a/y.jar", "a/missing.jar"})
+	sum, err := repo.SumPaths([]string{"r1"}, []string{"a/x.jar", "a/y.jar", "a/missing.jar"})
 	if err != nil {
 		t.Fatalf("批量聚合：%v", err)
 	}
@@ -101,7 +102,7 @@ func TestAssetDownloadRepoSumPaths(t *testing.T) {
 		t.Fatalf("命中项应只有两条且数值正确（r2 不混入、missing 不出现）：%+v", sum)
 	}
 
-	empty, err := repo.SumPaths("r1", nil)
+	empty, err := repo.SumPaths([]string{"r1"}, nil)
 	if err != nil || len(empty) != 0 {
 		t.Fatalf("空集合应为空 map：%+v, %v", empty, err)
 	}
@@ -183,7 +184,7 @@ func TestAssetDownloadRepoDownloadTrendGrouped(t *testing.T) {
 	from, to := base.Add(-time.Minute), base.Add(2*time.Hour)
 
 	// 按 IP 分组（全局、分钟桶）：(bucket, group) 升序。
-	ipRows, err := repo.DownloadTrendGrouped(from, to, "minute", DownloadGroupKeyIP, "")
+	ipRows, err := repo.DownloadTrendGrouped(from, to, "minute", DownloadGroupKeyIP, nil)
 	if err != nil {
 		t.Fatalf("按 IP 分组：%v", err)
 	}
@@ -202,7 +203,7 @@ func TestAssetDownloadRepoDownloadTrendGrouped(t *testing.T) {
 	}
 
 	// 按 UA 族分组 + repo 过滤（r2 不得混入）。
-	familyRows, err := repo.DownloadTrendGrouped(from, to, "minute", DownloadGroupKeyFamily, "r1")
+	familyRows, err := repo.DownloadTrendGrouped(from, to, "minute", DownloadGroupKeyFamily, []string{"r1"})
 	if err != nil {
 		t.Fatalf("按族分组：%v", err)
 	}
@@ -220,7 +221,7 @@ func TestAssetDownloadRepoDownloadTrendGrouped(t *testing.T) {
 	}
 
 	// 小时桶对齐：10:00 与 10:01 合并进 10:00 桶；11:00 独立成桶。
-	hourRows, err := repo.DownloadTrendGrouped(from, to, "hour", DownloadGroupKeyIP, "")
+	hourRows, err := repo.DownloadTrendGrouped(from, to, "hour", DownloadGroupKeyIP, nil)
 	if err != nil {
 		t.Fatalf("小时桶分组：%v", err)
 	}
@@ -234,7 +235,7 @@ func TestAssetDownloadRepoDownloadTrendGrouped(t *testing.T) {
 	}
 
 	// 空区间返回空切片（非 nil），不报错。
-	empty, err := repo.DownloadTrendGrouped(base.Add(3*time.Hour), base.Add(4*time.Hour), "minute", DownloadGroupKeyIP, "")
+	empty, err := repo.DownloadTrendGrouped(base.Add(3*time.Hour), base.Add(4*time.Hour), "minute", DownloadGroupKeyIP, nil)
 	if err != nil {
 		t.Fatalf("空区间不应报错：%v", err)
 	}
@@ -243,13 +244,13 @@ func TestAssetDownloadRepoDownloadTrendGrouped(t *testing.T) {
 	}
 
 	// 不存在的仓库过滤 → 空。
-	otherRepo, err := repo.DownloadTrendGrouped(from, to, "minute", DownloadGroupKeyIP, "missing")
+	otherRepo, err := repo.DownloadTrendGrouped(from, to, "minute", DownloadGroupKeyIP, []string{"missing"})
 	if err != nil || len(otherRepo) != 0 {
 		t.Fatalf("未知仓库应返回空：%+v, %v", otherRepo, err)
 	}
 
 	// 非法分组维度直接报错（白名单外的列名不得下推 SQL）。
-	if _, err := repo.DownloadTrendGrouped(from, to, "minute", DownloadGroupKey("asset_path"), ""); err == nil {
+	if _, err := repo.DownloadTrendGrouped(from, to, "minute", DownloadGroupKey("asset_path"), nil); err == nil {
 		t.Fatal("非法 groupBy 应报错")
 	}
 }
@@ -262,7 +263,7 @@ func TestAssetDownloadRepoDownloadTrendForRepoAndSumByRepo(t *testing.T) {
 	from, to := base.Add(-time.Minute), base.Add(2*time.Hour)
 
 	// r1 分钟趋势：10:00=7、10:01=4、11:00=6。
-	minuteTrend, err := repo.DownloadTrendForRepo("r1", from, to, "minute")
+	minuteTrend, err := repo.DownloadTrendForRepo([]string{"r1"}, from, to, "minute")
 	if err != nil {
 		t.Fatalf("r1 分钟趋势：%v", err)
 	}
@@ -281,7 +282,7 @@ func TestAssetDownloadRepoDownloadTrendForRepoAndSumByRepo(t *testing.T) {
 	}
 
 	// 小时桶对齐：10:00 与 10:01 合并为 10:00 桶（7+4=11），11:00 独立。
-	hourTrend, err := repo.DownloadTrendForRepo("r1", from, to, "hour")
+	hourTrend, err := repo.DownloadTrendForRepo([]string{"r1"}, from, to, "hour")
 	if err != nil {
 		t.Fatalf("r1 小时趋势：%v", err)
 	}
@@ -290,7 +291,7 @@ func TestAssetDownloadRepoDownloadTrendForRepoAndSumByRepo(t *testing.T) {
 	}
 
 	// r2 隔离：只有自己的 9。
-	r2Trend, err := repo.DownloadTrendForRepo("r2", from, to, "minute")
+	r2Trend, err := repo.DownloadTrendForRepo([]string{"r2"}, from, to, "minute")
 	if err != nil {
 		t.Fatalf("r2 趋势：%v", err)
 	}
@@ -299,19 +300,19 @@ func TestAssetDownloadRepoDownloadTrendForRepoAndSumByRepo(t *testing.T) {
 	}
 
 	// 空区间返回空切片。
-	emptyTrend, err := repo.DownloadTrendForRepo("r1", base.Add(3*time.Hour), base.Add(4*time.Hour), "minute")
+	emptyTrend, err := repo.DownloadTrendForRepo([]string{"r1"}, base.Add(3*time.Hour), base.Add(4*time.Hour), "minute")
 	if err != nil || emptyTrend == nil || len(emptyTrend) != 0 {
 		t.Fatalf("空区间应返回空切片：%+v, %v", emptyTrend, err)
 	}
 
 	// 总下载：r1 = 7+4+6 = 17，r2 = 9，未知仓库 = 0。
-	if total, err := repo.SumByRepo("r1"); err != nil || total != 17 {
+	if total, err := repo.SumByRepo([]string{"r1"}); err != nil || total != 17 {
 		t.Fatalf("r1 总下载应 17，得 %d（%v）", total, err)
 	}
-	if total, err := repo.SumByRepo("r2"); err != nil || total != 9 {
+	if total, err := repo.SumByRepo([]string{"r2"}); err != nil || total != 9 {
 		t.Fatalf("r2 总下载应 9，得 %d（%v）", total, err)
 	}
-	if total, err := repo.SumByRepo("missing"); err != nil || total != 0 {
+	if total, err := repo.SumByRepo([]string{"missing"}); err != nil || total != 0 {
 		t.Fatalf("未知仓库总下载应 0，得 %d（%v）", total, err)
 	}
 }
@@ -323,7 +324,7 @@ func TestAssetDownloadRepoDownloadRangesExcludeUpperBoundary(t *testing.T) {
 	seedGroupedDownloads(t, repo, base)
 	to := base.Add(time.Hour)
 
-	grouped, err := repo.DownloadTrendGrouped(base, to, "hour", DownloadGroupKeyIP, "")
+	grouped, err := repo.DownloadTrendGrouped(base, to, "hour", DownloadGroupKeyIP, nil)
 	if err != nil {
 		t.Fatalf("分组趋势：%v", err)
 	}
@@ -331,7 +332,7 @@ func TestAssetDownloadRepoDownloadRangesExcludeUpperBoundary(t *testing.T) {
 		t.Fatalf("to 边界的 11:00 桶不得进入分组趋势：%+v", grouped)
 	}
 
-	repoTrend, err := repo.DownloadTrendForRepo("r1", base, to, "hour")
+	repoTrend, err := repo.DownloadTrendForRepo([]string{"r1"}, base, to, "hour")
 	if err != nil || len(repoTrend) != 1 || repoTrend[0].Bucket != base.Format(time.RFC3339) || repoTrend[0].Count != 11 {
 		t.Fatalf("仓库趋势仅应含 [10:00,11:00) 的 11 次下载，得 %+v（%v）", repoTrend, err)
 	}
@@ -386,5 +387,121 @@ func TestAssetDownloadRepoDownloadClientRanking(t *testing.T) {
 	}
 	if len(families) != 2 || families[0].Family != "maven" || families[0].Count != 2 || families[1].Family != "curl" || families[1].Count != 1 {
 		t.Fatalf("族分布应同口径去重：%+v", families)
+	}
+}
+
+// resolveAliasNameSetForTest 复刻 api 层 resolveRepoNameSet 的语义（主名 ∪ 别名、去重、字典序），
+// 供仓储层用例把「按名查询」折算为「按名集合查询」——仓储层只接受集合，解析在调用方。
+func resolveAliasNameSetForTest(t *testing.T, repos *RepoRepo, name string) []string {
+	t.Helper()
+	repo, err := repos.GetByName(name)
+	if err != nil {
+		t.Fatalf("按 %q 取仓库：%v", name, err)
+	}
+	aliases, err := repos.ListAliases(repo.ID)
+	if err != nil {
+		t.Fatalf("取仓库 %d 别名：%v", repo.ID, err)
+	}
+	set := append([]string{repo.Name}, aliases...)
+	slices.Sort(set)
+	return slices.Compact(set)
+}
+
+// TestAssetDownloadRepoNamesMergeAcrossAliases 别名并集：同一逻辑仓库的下载可能记在主名与
+// 别名（重命名后的旧名）两个名字下；只有按「主名 ∪ 别名」集合聚合才能合并为同一总数，
+// 且无论入口是主名还是别名结果一致（覆盖 SumByRepo、DownloadTrendForRepo 与 SumPaths）。
+// 仅按主名过滤（旧行为）会漏掉记在别名下的部分，本用例锁死合并后的正确数。
+func TestAssetDownloadRepoNamesMergeAcrossAliases(t *testing.T) {
+	db, err := persistence.Open(filepath.Join(t.TempDir(), "asset-download-alias.db"))
+	if err != nil {
+		t.Fatalf("打开数据库：%v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := db.Migrate(); err != nil {
+		t.Fatalf("迁移数据库：%v", err)
+	}
+	repos := NewRepoRepo(db)
+	downloads := NewAssetDownloadRepo(db)
+
+	repoID, err := repos.Create("maven-main", "maven", "hosted", "private", "")
+	if err != nil {
+		t.Fatalf("建仓库：%v", err)
+	}
+	if err := repos.SetAliases(repoID, []string{"maven-legacy"}); err != nil {
+		t.Fatalf("写别名：%v", err)
+	}
+
+	base := time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC)
+	// 主名 4 次、别名 6（同桶 a.jar）+ 1（次桶 b.jar）；另一仓库 100 不得混入。
+	if err := downloads.AddMinutes([]AssetDownloadMinute{
+		{BucketStart: formatMetricTime(base), Repo: "maven-main", AssetPath: "a.jar", ClientIP: "1.1.1.1", UAFamily: "maven", DownloadCount: 4},
+		{BucketStart: formatMetricTime(base), Repo: "maven-legacy", AssetPath: "a.jar", ClientIP: "1.1.1.1", UAFamily: "maven", DownloadCount: 6},
+		{BucketStart: formatMetricTime(base.Add(time.Minute)), Repo: "maven-legacy", AssetPath: "b.jar", ClientIP: "2.2.2.2", UAFamily: "curl", DownloadCount: 1},
+		{BucketStart: formatMetricTime(base), Repo: "other", AssetPath: "a.jar", ClientIP: "3.3.3.3", UAFamily: "maven", DownloadCount: 100},
+	}); err != nil {
+		t.Fatalf("写入下载样本：%v", err)
+	}
+
+	byMain := resolveAliasNameSetForTest(t, repos, "maven-main")
+	byAlias := resolveAliasNameSetForTest(t, repos, "maven-legacy")
+	if !slices.Equal(byMain, []string{"maven-legacy", "maven-main"}) {
+		t.Fatalf("主名入口的集合应为主名 ∪ 别名，得 %v", byMain)
+	}
+	if !slices.Equal(byMain, byAlias) {
+		t.Fatalf("主名与别名入口应解析出同一集合，得 %v vs %v", byMain, byAlias)
+	}
+
+	// 主名与别名入口得到同一合并结果：总下载 = 4 + 6 + 1 = 11。
+	for _, tc := range []struct {
+		label string
+		set   []string
+	}{{"主名入口", byMain}, {"别名入口", byAlias}} {
+		total, err := downloads.SumByRepo(tc.set)
+		if err != nil {
+			t.Fatalf("%s SumByRepo：%v", tc.label, err)
+		}
+		if total != 11 {
+			t.Fatalf("%s 总下载应合并为 11（4+6+1），得 %d", tc.label, total)
+		}
+
+		trend, err := downloads.DownloadTrendForRepo(tc.set, base.Add(-time.Minute), base.Add(time.Hour), "minute")
+		if err != nil {
+			t.Fatalf("%s DownloadTrendForRepo：%v", tc.label, err)
+		}
+		want := []DownloadTrendBucket{
+			{Bucket: base.Format(time.RFC3339), Count: 10},
+			{Bucket: base.Add(time.Minute).Format(time.RFC3339), Count: 1},
+		}
+		if len(trend) != len(want) {
+			t.Fatalf("%s 趋势应 %d 桶，得 %d：%+v", tc.label, len(want), len(trend), trend)
+		}
+		for i := range want {
+			if trend[i] != want[i] {
+				t.Fatalf("%s 第 %d 桶应 %+v，得 %+v", tc.label, i, want[i], trend[i])
+			}
+		}
+	}
+
+	// 仅按主名（不并别名）会少算：单名过滤只得 4，验证合并确有必要。
+	single, err := downloads.SumByRepo([]string{"maven-main"})
+	if err != nil {
+		t.Fatalf("按主名单名 SumByRepo：%v", err)
+	}
+	if single != 4 {
+		t.Fatalf("按主名单名应只看到 4，得 %d", single)
+	}
+
+	// SumPaths 同样跨别名合并（a.jar 4+6=10、b.jar 1）。
+	sums, err := downloads.SumPaths(byAlias, []string{"a.jar", "b.jar", "missing.jar"})
+	if err != nil {
+		t.Fatalf("SumPaths：%v", err)
+	}
+	if len(sums) != 2 || sums["a.jar"] != 10 || sums["b.jar"] != 1 {
+		t.Fatalf("SumPaths 应跨别名合并：%+v", sums)
+	}
+
+	// 空集合视为无匹配（不误聚合为全局）。
+	if total, err := downloads.SumByRepo(nil); err != nil || total != 0 {
+		t.Fatalf("空名集合应返回 0，得 %d（%v）", total, err)
 	}
 }

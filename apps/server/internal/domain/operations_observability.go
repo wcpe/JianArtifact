@@ -131,6 +131,14 @@ func (s *OperationsDashboardService) Start(ctx context.Context, now func() time.
 	}()
 }
 
+// HostNetworkInterface 是单个网卡的累计计数（自网卡启动以来的字节数）。
+// 它不含速率：速率由服务层按同名网卡的相邻样本差分得出。
+type HostNetworkInterface struct {
+	Name          string
+	ReceiveBytes  uint64
+	TransmitBytes uint64
+}
+
 // HostRawSample 是平台适配器返回的原始计数与当前值；速率由服务按相邻样本计算。
 type HostRawSample struct {
 	At                   time.Time
@@ -144,6 +152,10 @@ type HostRawSample struct {
 	DiskTotalBytes       *int64
 	NetworkState         repository.MetricState
 	NetworkErrorCode     string
+	// NetworkInterfaces 是本次采样读到的逐网卡累计计数（跳过回环）。
+	NetworkInterfaces []HostNetworkInterface
+	// NetworkReceiveBytes / NetworkTransmitBytes 是 NetworkInterfaces 的求和，
+	// 语义保持不变（全网卡聚合累计），向后兼容既有聚合速率逻辑。
 	NetworkReceiveBytes  uint64
 	NetworkTransmitBytes uint64
 	ProcessState         repository.MetricState
@@ -180,8 +192,9 @@ func (s *HostMonitoringService) Sample(now time.Time) (repository.HostMetricSamp
 	item := hostSampleFromRaw(raw)
 	s.mu.Lock()
 	previous := s.previous
+	var elapsed float64
 	if previous != nil {
-		elapsed := raw.At.Sub(previous.At).Seconds()
+		elapsed = raw.At.Sub(previous.At).Seconds()
 		if elapsed > 0 {
 			item.CPUPercent = cpuPercent(raw.CPUIdleTicks, raw.CPUTotalTicks, previous.CPUIdleTicks, previous.CPUTotalTicks)
 			if raw.NetworkState == repository.MetricStateOK && previous.NetworkState == repository.MetricStateOK {
@@ -193,9 +206,14 @@ func (s *HostMonitoringService) Sample(now time.Time) (repository.HostMetricSamp
 			}
 		}
 	}
+	interfaces := hostInterfaceSamplesFromRaw(item.BucketStart, raw, previous, elapsed)
 	s.previous = &raw
 	s.mu.Unlock()
 	if err := s.repo.PutHostSample(item); err != nil {
+		return repository.HostMetricSample{}, err
+	}
+	// 逐网卡行与聚合样本同一分钟写入；失败沿用同一错误语义（调用方按分钟任务忽略并重试）。
+	if err := s.repo.PutHostNetworkInterfaces(interfaces); err != nil {
 		return repository.HostMetricSample{}, err
 	}
 	return item, nil
@@ -241,7 +259,42 @@ func hostSampleFromRaw(raw HostRawSample) repository.HostMetricSample {
 		used := *raw.DiskTotalBytes - *raw.DiskAvailableBytes
 		item.DiskUsedBytes = &used
 	}
+	// 网络累计总量只在采集成功时落库（自网卡启动以来的聚合字节数）；采集失败保持 NULL，不伪造零。
+	if raw.NetworkState == repository.MetricStateOK {
+		receiveTotal, transmitTotal := int64(raw.NetworkReceiveBytes), int64(raw.NetworkTransmitBytes)
+		item.NetworkReceiveBytesTotal = &receiveTotal
+		item.NetworkTransmitBytesTotal = &transmitTotal
+	}
 	return item
+}
+
+// hostInterfaceSamplesFromRaw 把本次采样的逐网卡累计计数与上一份样本按**同名网卡**配对，
+// 组装为逐网卡分钟行：累计总量原样落库，速率由同名网卡的相邻样本差分得出。
+// 网卡新增（没有上一份同名样本）或时间未前进时速率留空，不伪造零；上一份里已消失的网卡不写行。
+func hostInterfaceSamplesFromRaw(bucket string, raw HostRawSample, previous *HostRawSample, elapsed float64) []repository.HostNetworkInterfaceSample {
+	if raw.NetworkState != repository.MetricStateOK {
+		return nil
+	}
+	previousByName := make(map[string]HostNetworkInterface, 0)
+	if previous != nil && previous.NetworkState == repository.MetricStateOK {
+		for _, item := range previous.NetworkInterfaces {
+			previousByName[item.Name] = item
+		}
+	}
+	samples := make([]repository.HostNetworkInterfaceSample, 0, len(raw.NetworkInterfaces))
+	for _, current := range raw.NetworkInterfaces {
+		receiveTotal, transmitTotal := int64(current.ReceiveBytes), int64(current.TransmitBytes)
+		sample := repository.HostNetworkInterfaceSample{
+			BucketStart: bucket, Interface: current.Name, State: raw.NetworkState, ErrorCode: raw.NetworkErrorCode,
+			ReceiveBytesTotal: &receiveTotal, TransmitBytesTotal: &transmitTotal,
+		}
+		if prev, ok := previousByName[current.Name]; ok && elapsed > 0 {
+			sample.ReceiveBytesPerSecond = bytesPerSecond(current.ReceiveBytes, prev.ReceiveBytes, elapsed)
+			sample.TransmitBytesPerSecond = bytesPerSecond(current.TransmitBytes, prev.TransmitBytes, elapsed)
+		}
+		samples = append(samples, sample)
+	}
+	return samples
 }
 
 func cpuPercent(idle, total, previousIdle, previousTotal uint64) *float64 {

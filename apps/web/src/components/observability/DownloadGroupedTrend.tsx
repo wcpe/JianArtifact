@@ -82,7 +82,11 @@ interface Bucket {
  * 服务端 minute 桶只纳入 bucket_start 落在 [from,to) 的行；hour/day 桶先按该粒度聚合，
  * 因此首桶可能早于 from。桶轴按相同规则对齐，避免精确时间戳与整点/分钟标签错位。
  */
-export function buildBucketAxis(fromIso: string, toIso: string, bucket: ObservabilityBucket): Bucket[] {
+export function buildBucketAxis(
+  fromIso: string,
+  toIso: string,
+  bucket: ObservabilityBucket,
+): Bucket[] {
   const step = bucketStepMs(bucket);
   const minuteMs = 60_000;
   const requestedStart = Date.parse(fromIso);
@@ -99,7 +103,11 @@ export function buildBucketAxis(fromIso: string, toIso: string, bucket: Observab
   const lastBucket = Math.floor(lastSourceMinute / step) * step;
 
   const buckets: Bucket[] = [];
-  for (let cursor = firstBucket; cursor <= lastBucket && buckets.length < MAX_BUCKETS; cursor += step) {
+  for (
+    let cursor = firstBucket;
+    cursor <= lastBucket && buckets.length < MAX_BUCKETS;
+    cursor += step
+  ) {
     const rangeFrom = Math.max(cursor, requestedStart);
     const rangeTo = Math.min(cursor + step, end);
     buckets.push({

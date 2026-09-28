@@ -398,6 +398,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ObservabilityFromParam"
         - $ref: "#/components/parameters/ObservabilityToParam"
+        - $ref: "#/components/parameters/HostInterfaceParam"
       responses:
         "200":
           description: 当前主机概览和趋势
@@ -2077,6 +2078,15 @@ components:
       schema:
         type: string
         format: date-time
+    HostInterfaceParam:
+      name: interface
+      in: query
+      required: false
+      description: 网卡名（来自响应 networkInterfaces.name）。省略时按全部非回环网卡聚合；指定时速率图与累计总量都按该网卡。
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 255
     DownloadGroupByParam:
       name: groupBy
       in: query
@@ -2881,6 +2891,17 @@ components:
           type: number
           format: double
           nullable: true
+        # 自网卡启动以来的累计字节数；按所选网卡（interface 参数）或全部非回环网卡聚合。
+        networkReceiveBytesTotal:
+          type: integer
+          format: int64
+          nullable: true
+          description: 网络累计接收字节数，自网卡启动以来；按所选网卡或全部非回环网卡聚合。采集失败时为 null。
+        networkTransmitBytesTotal:
+          type: integer
+          format: int64
+          nullable: true
+          description: 网络累计发送字节数，自网卡启动以来；按所选网卡或全部非回环网卡聚合。采集失败时为 null。
         processRssBytes:
           type: integer
           format: int64
@@ -2903,6 +2924,25 @@ components:
           type: integer
           format: int64
           nullable: true
+    HostNetworkInterface:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        # 自网卡启动以来的累计字节数，与该网卡自身的 counter 同源；未知时为 null。
+        receiveBytesTotal:
+          type: integer
+          format: int64
+          nullable: true
+          description: 该网卡自启动以来的累计接收字节数。
+        transmitBytesTotal:
+          type: integer
+          format: int64
+          nullable: true
+          description: 该网卡自启动以来的累计发送字节数。
     HostMonitoring:
       type: object
       required: [hostState, effectiveBucket, samples]
@@ -2921,6 +2961,12 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/HostMetricPoint"
+        # 可用网卡列表与各网卡累计总量（供网卡选择器与总量展示）；无网卡数据时省略。
+        networkInterfaces:
+          type: array
+          description: 可用网卡列表及各网卡累计总量，用于网卡选择器与「总发送 / 总接收」展示；无数据时省略。
+          items:
+            $ref: "#/components/schemas/HostNetworkInterface"
     HealthStatus:
       type: object
       required: [status, version]

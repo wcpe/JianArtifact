@@ -74,6 +74,26 @@ function points<T extends { from: string }>(items: T[], field: keyof T): TrendSe
   }));
 }
 
+/**
+ * 把绝对值序列映射为「相对区间起点」的增量序列（首点恒为 0）。
+ * 用途见下方 capacityGrowth：容量绝对基数大（GB 级）而单档位增幅小，
+ * 直接画绝对值的刻度会被 formatBytes 的 GB 一位小数抹平，看上去像一条卡住的直线。
+ * 空序列返回空数组；单点序列首点即基准，增量恒为 0（不会除零、不会产生空轴）。
+ */
+function relativeGrowth(series: TrendSeries): TrendSeries {
+  const base = series[0]?.value ?? 0;
+  return series.map((point) => ({ label: point.label, value: point.value - base }));
+}
+
+/**
+ * 带符号增量读数：正数补 "+"，负数由 formatBytes 自带 "-"，0 显式渲染为 "+0 B"
+ * （而不是留空——空字符串会被误读成"没数据"）。
+ */
+function formatSignedBytes(bytes: number): string {
+  if (bytes < 0) return formatBytes(bytes);
+  return `+${formatBytes(bytes)}`;
+}
+
 function severityColor(severity: string): string {
   if (severity === "critical") return "red";
   if (severity === "high") return "orange";
@@ -124,8 +144,7 @@ export function DashboardLive() {
   // DownloadGroupedTrend 内部走端点 A（downloads/trend）的 totals，单源不再并行两套口径。
 
   // 任一子请求在途即视为"忙"：慢接口下用它挡住轮询与手动刷新，避免请求在挂起期间累积。
-  const busy =
-    dashboard.refreshing || status.refreshing || recent.refreshing || repos.refreshing;
+  const busy = dashboard.refreshing || status.refreshing || recent.refreshing || repos.refreshing;
   const busyRef = useRef(busy);
   busyRef.current = busy;
 
@@ -136,13 +155,7 @@ export function DashboardLive() {
     attentions.reload();
     recent.reload();
     repos.reload();
-  }, [
-    dashboard.reload,
-    status.reload,
-    attentions.reload,
-    recent.reload,
-    repos.reload,
-  ]);
+  }, [dashboard.reload, status.reload, attentions.reload, recent.reload, repos.reload]);
   useVisibleRefresh(reloadAll);
 
   useEffect(() => {
@@ -160,8 +173,13 @@ export function DashboardLive() {
         failure: points(dashboard.data.requestTrend, "failureCount"),
       }
     : null;
-  const capacityTrend: TrendSeries | null = dashboard.data
-    ? points(dashboard.data.capacityTrend, "logicalBytes")
+  // 容量增长：把绝对逻辑体积映射为「相对区间起点」的增量（首点恒为 0）。
+  // 线上容量已达 8.6 GB、单档位只增长几十 MB（+0.4%），若照原值绘制，坐标轴刻度与
+  // 悬停读数会被 formatBytes 的 GB 一位小数抹成同一个 "8.0 GB"，看起来像一条卡住的直线；
+  // 增量口径让曲线与读数直接表达「这段时间增长了多少字节」。总量仍由 KPI 指标带的
+  // logicalBytes 承担，不在此重复。
+  const capacityGrowth: TrendSeries | null = dashboard.data
+    ? relativeGrowth(points(dashboard.data.capacityTrend, "logicalBytes"))
     : null;
   // FR-143：旧「下载累计趋势」独立图已删除（与请求主图的下载系列重复），
   // 下载分析统一由 DownloadGroupedTrend（分组时序 + 占比饼）承担。
@@ -210,7 +228,7 @@ export function DashboardLive() {
           rangeFrom={range.from}
           rangeTo={range.to}
           requestTrend={requestTrend}
-          capacityTrend={capacityTrend}
+          capacityGrowth={capacityGrowth}
           otherAlerts={otherAlerts}
           attentions={attentions.data?.items ?? []}
           attentionsLoading={attentions.loading}
@@ -362,7 +380,7 @@ function DashboardGrid({
   rangeFrom,
   rangeTo,
   requestTrend,
-  capacityTrend,
+  capacityGrowth,
   otherAlerts,
   attentions,
   attentionsLoading,
@@ -382,7 +400,8 @@ function DashboardGrid({
     download: TrendSeries;
     failure: TrendSeries;
   } | null;
-  capacityTrend: TrendSeries | null;
+  /** 容量增长增量序列（相对区间起点，首点为 0）；供容量卡片绘制。 */
+  capacityGrowth: TrendSeries | null;
   otherAlerts: OperationsAlert[];
   attentions: AuditAttention[];
   attentionsLoading: boolean;
@@ -398,6 +417,18 @@ function DashboardGrid({
   const blockedRepos = repos.filter(
     (repo) => repo.connectionStatus?.status === "AUTO_BLOCKED",
   ).length;
+  // 容量增长卡片的纵轴自适应：增量非负时自 0 起——「从 0 起」才有"增长了多少"的可比性，
+  // 否则 auto 会把几十 MB 的落差拉满整个轴高，看起来又像剧烈波动。一旦区间内出现负增量
+  // （清理/压缩导致的容量下降），固定下界 0 会把负值裁到看不见，故退化为 auto/auto，
+  // 让轴两端都贴合数据，避免截断。
+  const capacityHasNegativeGrowth = (capacityGrowth ?? []).some((point) => point.value < 0);
+  const capacityDomain: [number | string, number | string] = capacityHasNegativeGrowth
+    ? ["auto", "auto"]
+    : [0, "auto"];
+  // 卡片右上大数字＝当前增量（末点值）；无数据时为 null，不渲染读数。
+  const latestGrowth = capacityGrowth?.length
+    ? (capacityGrowth[capacityGrowth.length - 1]?.value ?? 0)
+    : null;
   return (
     <Stack gap={density.gridSpacing}>
       {/* KPI 指标带：全宽置顶，数值内联不挤压 */}
@@ -443,18 +474,20 @@ function DashboardGrid({
               <TrendChart
                 title={t("dashboard.trendCapacity")}
                 summary={t("dashboard.trendCapacitySummary")}
-                primary={capacityTrend ?? []}
+                primary={capacityGrowth ?? []}
                 primaryLabel={t("dashboard.trendCapacityPrimary")}
                 unit="bytes"
+                // 增量纵轴口径见 capacityDomain：非负自 0 起，含负增量才贴合数据两端。
+                yDomain={capacityDomain}
                 headerRight={
-                  capacityTrend?.length ? (
+                  latestGrowth === null ? null : (
                     <Group gap={6} wrap="nowrap">
                       <IconDatabase size={20} color="var(--mantine-color-teal-6)" />
                       <Text size="xl" fw={700} lh={1.1}>
-                        {formatBytes(capacityTrend[capacityTrend.length - 1]?.value ?? 0)}
+                        {formatSignedBytes(latestGrowth)}
                       </Text>
                     </Group>
-                  ) : null
+                  )
                 }
               />
             </Card>

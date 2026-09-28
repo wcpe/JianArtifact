@@ -2250,14 +2250,20 @@ type HostMetricPoint struct {
 	MemoryTotalBytes     *int64          `json:"memoryTotalBytes,omitempty"`
 
 	// MemoryUsedBytes 内存已用（字节），= total − available，采样点固定口径。
-	MemoryUsedBytes               *int64          `json:"memoryUsedBytes,omitempty"`
-	NetworkReceiveBytesPerSecond  *float64        `json:"networkReceiveBytesPerSecond,omitempty"`
+	MemoryUsedBytes              *int64   `json:"memoryUsedBytes,omitempty"`
+	NetworkReceiveBytesPerSecond *float64 `json:"networkReceiveBytesPerSecond,omitempty"`
+
+	// NetworkReceiveBytesTotal 网络累计接收字节数，自网卡启动以来；按所选网卡或全部非回环网卡聚合。采集失败时为 null。
+	NetworkReceiveBytesTotal      *int64          `json:"networkReceiveBytesTotal,omitempty"`
 	NetworkState                  HostMetricGroup `json:"networkState"`
 	NetworkTransmitBytesPerSecond *float64        `json:"networkTransmitBytesPerSecond,omitempty"`
-	OpenFileDescriptors           *int64          `json:"openFileDescriptors,omitempty"`
-	ProcessCpuPercent             *float64        `json:"processCpuPercent,omitempty"`
-	ProcessRssBytes               *int64          `json:"processRssBytes,omitempty"`
-	ProcessState                  HostMetricGroup `json:"processState"`
+
+	// NetworkTransmitBytesTotal 网络累计发送字节数，自网卡启动以来；按所选网卡或全部非回环网卡聚合。采集失败时为 null。
+	NetworkTransmitBytesTotal *int64          `json:"networkTransmitBytesTotal,omitempty"`
+	OpenFileDescriptors       *int64          `json:"openFileDescriptors,omitempty"`
+	ProcessCpuPercent         *float64        `json:"processCpuPercent,omitempty"`
+	ProcessRssBytes           *int64          `json:"processRssBytes,omitempty"`
+	ProcessState              HostMetricGroup `json:"processState"`
 
 	// ProcessUptimeSeconds 当前进程运行时长（秒，挂钟口径，仅本进程，不做系统进程枚举）。
 	ProcessUptimeSeconds *int64          `json:"processUptimeSeconds,omitempty"`
@@ -2271,11 +2277,25 @@ type HostMonitoring struct {
 	HostState       HostMonitoringHostState `json:"hostState"`
 	Latest          *HostMetricPoint        `json:"latest,omitempty"`
 	LatestSampleAt  *time.Time              `json:"latestSampleAt,omitempty"`
-	Samples         []HostMetricPoint       `json:"samples"`
+
+	// NetworkInterfaces 可用网卡列表及各网卡累计总量，用于网卡选择器与「总发送 / 总接收」展示；无数据时省略。
+	NetworkInterfaces *[]HostNetworkInterface `json:"networkInterfaces,omitempty"`
+	Samples           []HostMetricPoint       `json:"samples"`
 }
 
 // HostMonitoringHostState defines model for HostMonitoring.HostState.
 type HostMonitoringHostState string
+
+// HostNetworkInterface defines model for HostNetworkInterface.
+type HostNetworkInterface struct {
+	Name string `json:"name"`
+
+	// ReceiveBytesTotal 该网卡自启动以来的累计接收字节数。
+	ReceiveBytesTotal *int64 `json:"receiveBytesTotal,omitempty"`
+
+	// TransmitBytesTotal 该网卡自启动以来的累计发送字节数。
+	TransmitBytesTotal *int64 `json:"transmitBytesTotal,omitempty"`
+}
 
 // LoginRequest defines model for LoginRequest.
 type LoginRequest struct {
@@ -2904,6 +2924,9 @@ type DownloadGroupByParam string
 // DownloadRepoParam defines model for DownloadRepoParam.
 type DownloadRepoParam = string
 
+// HostInterfaceParam defines model for HostInterfaceParam.
+type HostInterfaceParam = string
+
 // MigrationIdParam defines model for MigrationIdParam.
 type MigrationIdParam = int64
 
@@ -3245,6 +3268,9 @@ type GetHostMonitoringParams struct {
 
 	// To UTC 时间范围上界（不含），最长 30 天。
 	To *ObservabilityToParam `form:"to,omitempty" json:"to,omitempty"`
+
+	// Interface 网卡名（来自响应 networkInterfaces.name）。省略时按全部非回环网卡聚合；指定时速率图与累计总量都按该网卡。
+	Interface *HostInterfaceParam `form:"interface,omitempty" json:"interface,omitempty"`
 }
 
 // ListRepositoriesParams defines parameters for ListRepositories.
@@ -5370,6 +5396,14 @@ func (siw *ServerInterfaceWrapper) GetHostMonitoring(c *gin.Context) {
 	err = runtime.BindQueryParameterWithOptions("form", true, false, "to", c.Request.URL.Query(), &params.To, runtime.BindQueryParameterOptions{Type: "string", Format: "date-time"})
 	if err != nil {
 		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter to: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "interface" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "interface", c.Request.URL.Query(), &params.Interface, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter interface: %w", err), http.StatusBadRequest)
 		return
 	}
 

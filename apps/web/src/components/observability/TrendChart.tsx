@@ -1,13 +1,13 @@
-// 趋势图：直接基于 recharts 的渐变面积折线图 + 时段剖析（方案 B 拖选聚焦）。
+// 趋势图：直接基于 recharts 的渐变面积折线图 + 拖选聚焦（方案 B）。
 // - 主系列渐变面积 + 折线，次系列对比折线；第三系列（如失败）走独立右轴，避免被主量纲压平；
 // - 浮动 tooltip：鼠标悬停显示时间与各系列数值卡片（视觉主通道）；
 // - 悬停读数行（trend-hover-summary）保留为读屏专用（sr-only），供 aria-live 与测试定位；
-// - 区间剖析条：当前可视序列的均值 /（累计型）总量 / 峰值 / 谷值 / 首尾相对变动；
-// - 拖选聚焦：图面横向拖选即聚焦子时段——数据切片、剖析条跟随、胶囊一键还原（双击同样还原）；
+// - 拖选聚焦：图面横向拖选即聚焦子时段——数据切片、胶囊一键还原（双击同样还原）；
 // - 键盘聚焦：图面可聚焦，方向键移光标、Shift+方向键选区间、Enter 提交、Esc 还原；
 // - 图例开关：图例项是原生 button（aria-pressed 表达显隐），点击隐藏/恢复对应系列，
 //   隐藏系列经 recharts `hide` 不渲染、不进浮动 tooltip，sr-only 悬停读数同样剔除；
 // - 明暗双主题：SVG attribute 不支持 CSS var，按当前配色方案切换两套 hex；
+// - 右轴百分比（可选）：yDomain 为 [0, max] 时可在右轴按「值 ÷ 上界」读占比（xx%）；
 // - 对外契约保持不变：role="img" + aria-label、trend-hover-summary 常驻占位。
 import {
   Area,
@@ -19,17 +19,10 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import {
-  Box,
-  Group,
-  SimpleGrid,
-  Stack,
-  Text,
-  VisuallyHidden,
-  useComputedColorScheme,
-} from "@mantine/core";
+import { Box, Group, Stack, Text, VisuallyHidden, useComputedColorScheme } from "@mantine/core";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type {
+  ComponentProps,
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
   ReactNode,
@@ -42,6 +35,12 @@ import type { PreviewTrendPoint } from "../../mocks/observabilityPreview";
 
 /** 数值单位：count 千分位整数；bytes 按 B/KB/MB/GB/TB；percent 百分比（一位小数）。 */
 type TrendUnit = "count" | "bytes" | "percent";
+
+/**
+ * 左 Y 轴可视域：直接取 recharts `YAxis` 的 `domain` 入参类型（数字 / "auto" / 函数 / 函数对等），
+ * 从组件 props 反推而不复制其内部类型，recharts 版本升降级都不会失配。
+ */
+type YAxisDomain = ComponentProps<typeof YAxis>["domain"];
 
 interface TrendChartProps {
   title: string;
@@ -57,10 +56,29 @@ interface TrendChartProps {
   /** 标题行右侧附加内容（如图表当前值大数字），渲染在图例之前。 */
   headerRight?: ReactNode;
   /**
-   * 窄卡片模式（如 1/3 宽并排的三联图）：剖析条固定收成 2 列。
-   * 剖析条的列数按视口断点排会失配窄容器——视口够宽但卡片本身只有 250px 时数值会被截断。
+   * 窄卡片模式（如 1/3 宽并排的三联图）。该 prop 原先只用于把「区间剖析条」的列数固定收成 2 列；
+   * 剖析条已移除，故它不再影响渲染，但保留在契约里以免破坏既有调用方
+   * （如 HostMonitoringLive 的三联图仍传入 compact）。
    */
   compact?: boolean;
+  /**
+   * 左 Y 轴自定义可视域（原样透传给 recharts，不求值、不做转换）：
+   * - 固定上界：`[0, total]`（如内存图以系统总内存为顶，空闲即轴顶余量）；
+   * - 放大波动：`["auto", "auto"]`，或带内边距的函数对 `[(min) => min * 0.98, (max) => max * 1.02]`。
+   * 不传时保持 recharts 默认（数值轴自 0 起），渲染结果与未支持该能力前完全一致。
+   */
+  yDomain?: YAxisDomain;
+  /**
+   * 右侧百分比轴：把**主系列**按「`值 ÷ yDomain 上界 × 100`」换算成占比，在右轴以 `xx%` 读数。
+   * 用于「已用 ÷ 总量」这类字节图的占比读法（内存图 / 磁盘图）。
+   *
+   * 前提：仅当 `yDomain` 是具体数字上界的 `[0, max]` 时才有意义（此时主系列 ÷ 上界即占比）。
+   * `yDomain` 为 `"auto"` / 函数 / 未传时**忽略该 prop**（不猜上界，宁可不给百分比轴）。
+   *
+   * 与 `tertiary` 的关系：右轴位置同一处，若两者都传则以 `tertiary` 的既有行为优先
+   * （第三系列走右轴），此时忽略本 prop——避免两条右轴相互挤压。
+   */
+  rightPercentAxis?: boolean;
 }
 
 const CHART_HEIGHT = 200;
@@ -76,6 +94,12 @@ const HOVER_THROTTLE_THRESHOLD = 60;
 const PRIMARY_KEY = "__primary__";
 const SECONDARY_KEY = "__secondary__";
 const TERTIARY_KEY = "__tertiary__";
+/**
+ * 百分比轴的辅助系列字段名。它不是真实指标，只是让 recharts 认为右轴「有系列」从而渲染刻度：
+ * recharts 对没有任何图形项绑定的轴不会渲染（实测见 TrendChart.test.tsx），故必须挂一条
+ * 不可见序列。该序列全程透明、不进图例、不进 hover 读数与浮动 tooltip。
+ */
+const PERCENT_KEY = "__percent__";
 
 /** 系列槽位：与 dataKey 的 primary/secondary/tertiary 一一对应（图例显隐开关用）。 */
 type SeriesSlot = "primary" | "secondary" | "tertiary";
@@ -120,67 +144,6 @@ function formatTrendValue(value: number, unit: TrendUnit): string {
   return formatCount(value);
 }
 
-/** 区间剖析统计：基于当前可视（全量或聚焦切片）主序列计算。 */
-interface TrendStats {
-  mean: string;
-  /** 样本值之和；仅累计型（count）有意义，bytes / percent 为 null 不展示。 */
-  total: string | null;
-  peak: PreviewTrendPoint;
-  trough: PreviewTrendPoint;
-  /** 首尾相对变动（如 "+12.3% ▲"）；首值不可用或为 0 时为 "—"。 */
-  delta: string;
-  /** 首尾绝对差（title 提示用）。 */
-  deltaAbs: string;
-}
-
-function computeStats(
-  points: PreviewTrendPoint[],
-  unit: TrendUnit,
-  flatLabel: string,
-): TrendStats | null {
-  const finite = points.filter(
-    (point) => typeof point.value === "number" && Number.isFinite(point.value),
-  );
-  const [firstPoint] = finite;
-  if (!firstPoint) return null;
-  const sum = finite.reduce((acc, point) => acc + point.value, 0);
-  const meanValue = sum / finite.length;
-  // 均值保留一位小数（bytes 交给 formatBytes 自行取舍）。
-  const mean = formatTrendValue(
-    unit === "bytes" ? meanValue : Math.round(meanValue * 10) / 10,
-    unit,
-  );
-  let peak = firstPoint;
-  let trough = firstPoint;
-  for (const point of finite) {
-    if (point.value > peak.value) peak = point;
-    if (point.value < trough.value) trough = point;
-  }
-  const first = firstPoint.value;
-  const lastPoint = finite[finite.length - 1];
-  const last = lastPoint ? lastPoint.value : first;
-  let delta = "—";
-  let deltaAbs = "—";
-  if (first !== 0) {
-    const pct = ((last - first) / Math.abs(first)) * 100;
-    if (Math.abs(pct) < 0.05) {
-      delta = flatLabel;
-    } else {
-      delta = `${pct > 0 ? "+" : ""}${pct.toFixed(1)}% ${pct > 0 ? "▲" : "▼"}`;
-    }
-    const abs = last - first;
-    deltaAbs = `${abs > 0 ? "+" : ""}${formatTrendValue(abs, unit)}`;
-  }
-  return {
-    mean,
-    total: unit === "count" ? formatTrendValue(sum, unit) : null,
-    peak,
-    trough,
-    delta,
-    deltaAbs,
-  };
-}
-
 /** 浮动 tooltip 卡片：时间 + 各系列（色点 / 名称 / 数值）。 */
 function TrendTooltipContent({
   active,
@@ -189,13 +152,23 @@ function TrendTooltipContent({
   unit,
 }: {
   active?: boolean;
-  payload?: Array<{ name?: string; value?: number | string; color?: string; stroke?: string }>;
+  payload?: Array<{
+    name?: string;
+    value?: number | string;
+    color?: string;
+    stroke?: string;
+    dataKey?: string;
+  }>;
   label?: string | number;
   unit: TrendUnit;
 }) {
   if (!active || !payload || payload.length === 0) return null;
   const items = payload.filter(
-    (entry) => typeof entry.value === "number" && Number.isFinite(entry.value),
+    (entry) =>
+      typeof entry.value === "number" &&
+      Number.isFinite(entry.value) &&
+      // 百分比辅助序列（透明、仅用于撑起右轴）不参与浮动 tooltip 读数。
+      entry.dataKey !== PERCENT_KEY,
   );
   if (items.length === 0) return null;
   return (
@@ -241,7 +214,8 @@ export function TrendChart({
   tertiaryLabel,
   unit = "count",
   headerRight,
-  compact = false,
+  yDomain,
+  rightPercentAxis = false,
 }: TrendChartProps) {
   const { t } = useTranslation();
   const palette = useComputedColorScheme("light") === "dark" ? DARK_PALETTE : LIGHT_PALETTE;
@@ -280,6 +254,20 @@ export function TrendChart({
 
   const hasSecondary = Boolean(secondary && secondaryLabel);
   const hasTertiary = Boolean(tertiary && tertiaryLabel);
+
+  // 百分比轴的上界（= yDomain 的具体数字上界）。仅当 yDomain 恰为 `[0, max]` 时取到，
+  // 其余（"auto" / 函数 / 未传 / 下界非 0）一律为 null → 不渲染百分比轴。
+  const percentMax = useMemo(() => {
+    if (!rightPercentAxis) return null;
+    if (!Array.isArray(yDomain) || yDomain.length !== 2) return null;
+    const [lower, upper] = yDomain;
+    if (typeof lower !== "number" || lower !== 0) return null;
+    if (typeof upper !== "number" || !Number.isFinite(upper) || upper <= 0) return null;
+    return upper;
+  }, [rightPercentAxis, yDomain]);
+
+  // 与 tertiary 共用右轴位置：两者都有效时以 tertiary 既有行为优先（见 props 注释）。
+  const showPercentAxis = percentMax !== null && !hasTertiary;
 
   // 渲染护栏：三条序列先按**同一组索引**降采样，再做聚焦切片。
   // 顺序不可颠倒——聚焦区间与拖选索引都以"当前序列"为基准，先降采样才能保持索引自洽。
@@ -320,12 +308,8 @@ export function TrendChart({
     };
   }, [focus, series, viewOffset]);
 
-  const stats = useMemo(
-    () => computeStats(view.primary, unit, t("dashboard.deltaFlat")),
-    [view.primary, unit, t],
-  );
-
   // 合并主/次/第三系列为 recharts 的行数据（按索引对齐，标签以主系列为准）。
+  // 百分比辅助序列由主系列值 ÷ 上界换算：它只为让右轴刻度得以渲染，不影响任何真实系列。
   const data = useMemo(
     () =>
       view.primary.map((point, index) => ({
@@ -333,8 +317,9 @@ export function TrendChart({
         [PRIMARY_KEY]: point.value,
         [SECONDARY_KEY]: view.secondary?.[index]?.value ?? null,
         [TERTIARY_KEY]: view.tertiary?.[index]?.value ?? null,
+        [PERCENT_KEY]: percentMax !== null ? (point.value / percentMax) * 100 : null,
       })),
-    [view],
+    [view, percentMax],
   );
 
   const hovered = hoverIndex !== null ? (view.primary[hoverIndex] ?? null) : null;
@@ -598,7 +583,12 @@ export function TrendChart({
           <ResponsiveContainer width="100%" height={CHART_HEIGHT} debounce={120}>
             <AreaChart
               data={data}
-              margin={{ top: 10, right: hasTertiary ? 12 : 8, bottom: 0, left: 0 }}
+              margin={{
+                top: 10,
+                right: hasTertiary || showPercentAxis ? 12 : 8,
+                bottom: 0,
+                left: 0,
+              }}
             >
               <defs>
                 <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
@@ -615,23 +605,43 @@ export function TrendChart({
                 minTickGap={28}
                 tick={{ fontSize: 11, fill: palette.tick }}
               />
+              {/* 左轴域：仅当调用方显式传入 yDomain 时才下发 domain 属性，
+                  未传时属性不出现在元素上，recharts 走自身默认（数值轴 [0, 'auto']），
+                  保证本能力对既有图表是零行为改动。 */}
               <YAxis
                 width={unit === "bytes" ? 78 : unit === "percent" ? 64 : 56}
                 tickLine={false}
                 axisLine={false}
                 tick={{ fontSize: 11, fill: palette.tick }}
                 tickFormatter={(value: number) => formatTrendValue(Number(value), unit)}
+                {...(yDomain === undefined ? {} : { domain: yDomain })}
               />
               {hasTertiary ? (
                 <YAxis
                   yAxisId="right"
                   orientation="right"
-                  width={44}
+                  // 与左轴同口径的宽度：bytes 轴要放下 "100.0 GB" 这类刻度，44 会截断。
+                  width={unit === "bytes" ? 78 : unit === "percent" ? 64 : 56}
                   tickLine={false}
                   axisLine={false}
                   allowDecimals={false}
+                  // 右轴刻度同样走 formatTrendValue：否则会直接显示原始字节数（如 107374182400）。
+                  tickFormatter={(value: number) => formatTrendValue(Number(value), unit)}
                   // 第三系列全为 0 时兜底上界，避免右轴塌缩成 0..0 把主图压平。
                   domain={[0, (dataMax: number) => (dataMax > 0 ? Math.ceil(dataMax) : 1)]}
+                  tick={{ fontSize: 11, fill: palette.tick }}
+                />
+              ) : showPercentAxis ? (
+                // 百分比右轴：domain 固定 [0,100]，刻度输出 "xx%"；宽度够放下 "100%"。
+                <YAxis
+                  yAxisId="rightPercent"
+                  orientation="right"
+                  width={46}
+                  tickLine={false}
+                  axisLine={false}
+                  allowDecimals={false}
+                  domain={[0, 100]}
+                  tickFormatter={(value: number) => `${Math.round(Number(value))}%`}
                   tick={{ fontSize: 11, fill: palette.tick }}
                 />
               ) : null}
@@ -677,6 +687,22 @@ export function TrendChart({
                   strokeDasharray="4 3"
                   dot={false}
                   activeDot={{ r: 3, strokeWidth: 2, stroke: palette.dotRing }}
+                  isAnimationActive={false}
+                />
+              ) : null}
+              {showPercentAxis ? (
+                // 百分比辅助序列：recharts 只对「有图形项绑定」的轴渲染刻度，故必须挂一条；
+                // 它全程透明、无点、不进图例，也不参与读数——纯粹为撑起右侧百分比轴。
+                // 注意不能用 `hide`：实测 hide 的图形项会被排除出轴绑定，右轴又会消失。
+                <Line
+                  yAxisId="rightPercent"
+                  type="monotone"
+                  dataKey={PERCENT_KEY}
+                  legendType="none"
+                  stroke="transparent"
+                  fill="transparent"
+                  dot={false}
+                  activeDot={false}
                   isAnimationActive={false}
                 />
               ) : null}
@@ -732,75 +758,6 @@ export function TrendChart({
           </VisuallyHidden>
         </Box>
       )}
-
-      {/* 区间剖析条：跟随聚焦切片；拖选提示仅在未聚焦时显示。 */}
-      {stats ? (
-        <Stack gap={6}>
-          <Group gap="sm" wrap="wrap">
-            <Text size="xs" fw={600} c="dimmed">
-              {t("trendChart.analysisTitle", { defaultValue: "区间剖析" })}
-            </Text>
-            <Text size="xs" c="dimmed">
-              {focus
-                ? t("trendChart.analysisFocused", { defaultValue: "统计聚焦时段，双击图面还原" })
-                : t("trendChart.focusHint", { defaultValue: "在图面横向拖选可聚焦子时段" })}
-            </Text>
-          </Group>
-          <SimpleGrid cols={compact ? 2 : { base: 2, sm: 3, md: stats.total ? 5 : 4 }} spacing="xs">
-            <StatCell
-              label={t("trendChart.analysisMean", { defaultValue: "均值" })}
-              value={stats.mean}
-            />
-            {stats.total ? (
-              <StatCell
-                label={t("trendChart.analysisTotal", { defaultValue: "总量" })}
-                value={stats.total}
-              />
-            ) : null}
-            <StatCell
-              label={t("trendChart.analysisPeak", { defaultValue: "峰值" })}
-              value={formatTrendValue(stats.peak.value, unit)}
-              hint={`@ ${stats.peak.label}`}
-            />
-            <StatCell
-              label={t("trendChart.analysisTrough", { defaultValue: "谷值" })}
-              value={formatTrendValue(stats.trough.value, unit)}
-              hint={`@ ${stats.trough.label}`}
-            />
-            <StatCell
-              label={t("trendChart.analysisChange", { defaultValue: "区间变动" })}
-              value={stats.delta}
-              hint={`${t("trendChart.analysisDeltaAbs", { defaultValue: "绝对" })} ${stats.deltaAbs}`}
-            />
-          </SimpleGrid>
-        </Stack>
-      ) : null}
-    </Stack>
-  );
-}
-
-function StatCell({ label, value, hint }: { label: string; value: string; hint?: string }) {
-  return (
-    <Stack
-      gap={2}
-      px="sm"
-      py={6}
-      style={{
-        borderRadius: "var(--mantine-radius-md)",
-        background: "var(--mantine-color-gray-0)",
-      }}
-    >
-      <Text size="xs" c="dimmed">
-        {label}
-      </Text>
-      <Text size="sm" fw={600} truncate>
-        {value}
-      </Text>
-      {hint ? (
-        <Text size="xs" c="dimmed" truncate>
-          {hint}
-        </Text>
-      ) : null}
     </Stack>
   );
 }

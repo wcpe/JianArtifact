@@ -27,6 +27,67 @@ func parseMeminfo(content string) (total int64, available int64, ok bool) {
 	return total, available, totalOK && availableOK
 }
 
+// parseProcNetDev 解析 /proc/net/dev 文本，返回**逐网卡**累计计数（自网卡启动以来）。
+// 每行形如「  eth0: 12345 100 0 0 0 0 0 0 67890 200 ...」：冒号前为网卡名，
+// 冒号后第 1 个字段为接收字节、第 9 个字段为发送字节（与既有聚合口径一致）。
+// 跳过回环 lo 与表头行；抽为无平台标签的纯函数，便于在任意平台对解析口径做单元测试。
+func parseProcNetDev(content string) []HostNetworkInterface {
+	interfaces := []HostNetworkInterface{}
+	for _, line := range strings.Split(content, "\n") {
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		name := strings.TrimSpace(parts[0])
+		if name == "" || name == "lo" {
+			continue
+		}
+		fields := strings.Fields(parts[1])
+		if len(fields) < 9 {
+			continue
+		}
+		in, inErr := strconv.ParseUint(fields[0], 10, 64)
+		out, outErr := strconv.ParseUint(fields[8], 10, 64)
+		if inErr != nil || outErr != nil {
+			continue
+		}
+		interfaces = append(interfaces, HostNetworkInterface{Name: name, ReceiveBytes: in, TransmitBytes: out})
+	}
+	return interfaces
+}
+
+// netRawInterface 是平台无关的网卡原始行：Windows GetIfTable2Ex 与 Linux /proc/net/dev
+// 各自映射到该形状后，交由纯函数 selectNetworkInterfaces 统一过滤与组装。
+type netRawInterface struct {
+	Name          string
+	Loopback      bool
+	ReceiveBytes  uint64
+	TransmitBytes uint64
+}
+
+// selectNetworkInterfaces 从平台原始行挑出非回环网卡，返回逐网卡累计计数。
+// 过滤（跳过回环）与组装逻辑刻意下沉到此纯函数，使 Windows 侧仅剩无法跨平台验证的系统调用。
+func selectNetworkInterfaces(rows []netRawInterface) []HostNetworkInterface {
+	interfaces := make([]HostNetworkInterface, 0, len(rows))
+	for _, row := range rows {
+		if row.Loopback {
+			continue
+		}
+		interfaces = append(interfaces, HostNetworkInterface{Name: row.Name, ReceiveBytes: row.ReceiveBytes, TransmitBytes: row.TransmitBytes})
+	}
+	return interfaces
+}
+
+// sumNetworkInterfaces 把逐网卡累计计数求和，得到「全部非回环网卡」的聚合值。
+func sumNetworkInterfaces(interfaces []HostNetworkInterface) (uint64, uint64) {
+	var received, transmitted uint64
+	for _, item := range interfaces {
+		received += item.ReceiveBytes
+		transmitted += item.TransmitBytes
+	}
+	return received, transmitted
+}
+
 // parseProcStatBtime 解析 /proc/stat 文本中的 btime 行，返回系统启动的 Unix 秒。
 func parseProcStatBtime(content string) (int64, bool) {
 	for _, line := range strings.Split(content, "\n") {

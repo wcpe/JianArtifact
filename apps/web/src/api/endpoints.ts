@@ -103,7 +103,9 @@ export interface DownloadTrendQuery extends OperationsObservabilityQuery {
  * points 为稀疏「桶 × 组」时序（缺失桶由前端对齐桶轴补 0），
  * totals 为全窗口按组降序（饼图数据源）。
  */
-export function getDownloadTrend(query: DownloadTrendQuery = {}): Promise<DownloadGroupedTrendResponse> {
+export function getDownloadTrend(
+  query: DownloadTrendQuery = {},
+): Promise<DownloadGroupedTrendResponse> {
   const params = new URLSearchParams();
   if (query.from) params.set("from", query.from);
   if (query.to) params.set("to", query.to);
@@ -116,9 +118,8 @@ export function getDownloadTrend(query: DownloadTrendQuery = {}): Promise<Downlo
 }
 
 /**
- * 仓库下载趋势 + 全时段累计下载（非契约端点：openapi paths 中无此路径，
- * 仅 components.schemas.RepositoryDownloadTrendResponse 有类型，故前端自行拼 URL
- * ——参照 getRepositoryTree 对 /tree 的非契约封装写法）。
+ * 仓库下载趋势 + 全时段累计下载（当前端点已在服务端使用，但尚未纳入 OpenAPI 路径定义，
+ * 因此前端继续自行拼 URL；类型来自 components.schemas.RepositoryDownloadTrendResponse）。
  * 权限与仓库树同级（匿名 public 200 / 匿名 private 401 / 无授权 403）；
  * trend 为服务端补零后的连续桶序列，缺省窗口最近 24 小时。
  */
@@ -143,11 +144,24 @@ export function getDownloadByClient(
   );
 }
 
-/** 读取当前实例所在主机的持久化分钟样本。 */
-export function getHostMonitoring(
-  query: OperationsObservabilityQuery = {},
-): Promise<HostMonitoring> {
-  return request<HostMonitoring>(operationsObservabilityPath("/observability/host", query));
+/**
+ * 主机监控查询：可选 interfaceName 指定单个网卡。
+ * `interface` 是 JS 保留字，故类型里命名为 interfaceName，拼查询串时再映射回契约的 `interface`；
+ * 省略（或空串）表示按全部非回环网卡聚合。
+ */
+export interface HostMonitoringQuery extends OperationsObservabilityQuery {
+  /** 网卡名（来自响应 networkInterfaces.name）；省略时按全部非回环网卡聚合。 */
+  interfaceName?: string;
+}
+
+/** 读取当前实例所在主机的持久化分钟样本；可指定单个网卡（速率图与累计总量都按该网卡）。 */
+export function getHostMonitoring(query: HostMonitoringQuery = {}): Promise<HostMonitoring> {
+  const params = new URLSearchParams();
+  if (query.from) params.set("from", query.from);
+  if (query.to) params.set("to", query.to);
+  if (query.interfaceName) params.set("interface", query.interfaceName);
+  const suffix = params.toString();
+  return request<HostMonitoring>(`/observability/host${suffix ? `?${suffix}` : ""}`);
 }
 
 export interface Pagination {
