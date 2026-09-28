@@ -99,7 +99,10 @@ interface State {
   assets: Record<string, AssetSummary[]>;
   migrations: MigrationTask[];
   // immutableRelease 已废弃：只读兼容字段，写入记录不再保存（读取时恒为 false）。
-  publishPolicies: Record<string, Omit<PublishPolicy, "userId" | "username" | "repository" | "immutableRelease">>;
+  publishPolicies: Record<
+    string,
+    Omit<PublishPolicy, "userId" | "username" | "repository" | "immutableRelease">
+  >;
   seq: { user: number; token: number; repo: number; migration: number; operation: number };
   /** FR-66：实例级匿名访问开关（默认开）。 */
   anonymousAccessEnabled: boolean;

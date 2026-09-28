@@ -127,8 +127,16 @@ describe("buildOperations 归并", () => {
   it("跨 15 分钟边界的同一次操作仍并成一个（窗口按锚点而非翻转桶）", () => {
     // 两个事件只隔 1 秒，但恰好落在 15 分钟桶的两侧。
     const events = [
-      artifactEvent({ eventId: "e1", path: "g/a/1.0/a-1.0.jar", occurredAt: "2026-09-24T10:14:59.000Z" }),
-      artifactEvent({ eventId: "e2", path: "g/a/1.0/a-1.0.pom", occurredAt: "2026-09-24T10:15:00.000Z" }),
+      artifactEvent({
+        eventId: "e1",
+        path: "g/a/1.0/a-1.0.jar",
+        occurredAt: "2026-09-24T10:14:59.000Z",
+      }),
+      artifactEvent({
+        eventId: "e2",
+        path: "g/a/1.0/a-1.0.pom",
+        occurredAt: "2026-09-24T10:15:00.000Z",
+      }),
     ];
     const ops = buildOperations(events);
     expect(ops).toHaveLength(1);

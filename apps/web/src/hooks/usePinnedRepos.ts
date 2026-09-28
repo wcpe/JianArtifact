@@ -145,11 +145,11 @@ export function usePinnedRepos(): UsePinnedReposResult {
       try {
         await putMyPinnedRepositories(await resolveIDs(next));
         // 服务端已接受：丢弃乐观层并重拉权威数据（保证与其它标签页 / 设备一致）。
-      // 写入已生效：先失效缓存再重拉，否则重拉会先回放 60s 内的旧快照；
-      // 乐观层保留到新快照落地再丢弃，重拉期间界面不得闪回写入前的旧值。
-      invalidateAsyncCache("pinned-repositories");
-      snapshotBeforeReloadRef.current = serverSnapshot;
-      reloadPinned();
+        // 写入已生效：先失效缓存再重拉，否则重拉会先回放 60s 内的旧快照；
+        // 乐观层保留到新快照落地再丢弃，重拉期间界面不得闪回写入前的旧值。
+        invalidateAsyncCache("pinned-repositories");
+        snapshotBeforeReloadRef.current = serverSnapshot;
+        reloadPinned();
       } catch (err) {
         setOptimistic(null);
         throw err;
@@ -163,8 +163,7 @@ export function usePinnedRepos(): UsePinnedReposResult {
   useEffect(() => {
     if (optimistic === null) return;
     const landed =
-      snapshotBeforeReloadRef.current !== null &&
-      state.data !== snapshotBeforeReloadRef.current;
+      snapshotBeforeReloadRef.current !== null && state.data !== snapshotBeforeReloadRef.current;
     if (landed || state.refreshError) {
       snapshotBeforeReloadRef.current = null;
       setOptimistic(null);
