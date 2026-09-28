@@ -59,13 +59,13 @@ type AuditFilter struct {
 	Action     string // 操作类型（精确，如 asset.put）
 	// Repos 关联仓库：按「主名 ∪ 别名」全集过滤（ADR-0028 要求按仓库维度的检索处理全集，
 	// 否则重命名后按新主名检索会漏掉记在旧名下的历史事件）；空表示不按仓库过滤。
-	Repos []string
-	Result     string // 结果（精确，如 ok/error）
-	IP         string // 来源 IP（精确）
-	From       string // 起始时间（RFC3339Nano，含）
-	To         string // 结束时间（RFC3339Nano，含）
-	Limit      int    // 分页上限（≤0 默认 50，上限 200）
-	Offset     int    // 分页偏移
+	Repos  []string
+	Result string // 结果（精确，如 ok/error）
+	IP     string // 来源 IP（精确）
+	From   string // 起始时间（RFC3339Nano，含）
+	To     string // 结束时间（RFC3339Nano，含）
+	Limit  int    // 分页上限（≤0 默认 50，上限 200）
+	Offset int    // 分页偏移
 }
 
 // Insert 记录一条审计日志；记录失败不阻断业务写（审计尽力而为，见 FR-38）。

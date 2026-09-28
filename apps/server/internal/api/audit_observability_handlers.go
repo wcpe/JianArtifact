@@ -79,12 +79,12 @@ type auditViewFilter struct {
 	// SQL 过滤；快照指纹仍按原始名比较，响应结构不变。
 	repositories []string
 	query        string
-	method     string
-	action     string
-	email      string
-	clientIP   string
-	authSource string
-	attention  string
+	method       string
+	action       string
+	email        string
+	clientIP     string
+	authSource   string
+	attention    string
 }
 
 type auditAttentionGroup struct {
