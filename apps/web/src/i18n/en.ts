@@ -403,6 +403,19 @@ export const en = {
     maxFileBytes: "Max Bytes per File",
     immutableRelease: "Protect Release from Overwrite",
     immutableReleaseHint: "When enabled, existing Release versions cannot be overwritten.",
+    // 发布策略多仓库（FR-109 扩展）。
+    policyPurpose:
+      "A publish policy constrains the path prefixes and quotas this account may publish under in these repositories, and controls immutable releases.",
+    policyMultipleHint: "Saving applies this policy to all selected repositories.",
+    policyInconsistent:
+      "The selected repositories have different policies; saving will overwrite all of them.",
+    policyRepoRequired: "Select at least one repository",
+    policyResults: "Results",
+    policyResultOK: "Succeeded",
+    policyResultFailed: "Failed",
+    policyPartialFailure: "{{count}} repositories failed to save",
+    policyImmutableReadOnly:
+      "Immutable release is determined by the repository configuration and is read-only here.",
     changePassword: "Reset Password",
     deleteConfirm: "Delete this user? This action cannot be undone.",
     empty: "No users",

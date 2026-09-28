@@ -2564,6 +2564,51 @@ type PublicRepositoryList struct {
 	Total       int      `json:"total"`
 }
 
+// PublishPoliciesBatchRequest 把同一份发布策略批量应用到多个 Hosted 仓库；策略字段与单仓库端点一致。
+// 仓库列表至少一个，任一仓库不存在或不是 hosted 都会导致整体拒绝。
+type PublishPoliciesBatchRequest struct {
+	// AllowedPrefixes 可选的发布路径前缀；空数组表示不限制前缀
+	AllowedPrefixes *[]string `json:"allowedPrefixes,omitempty"`
+
+	// ImmutableRelease 已废弃，只读兼容字段；写入会被拒绝，请改用仓库 immutableRelease 配置
+	ImmutableRelease *bool `json:"immutableRelease,omitempty"`
+
+	// MaxAssetsHour 每小时新增制品数上限；零表示不限制
+	MaxAssetsHour *int64 `json:"maxAssetsHour,omitempty"`
+
+	// MaxBytesDay 每日上传总字节上限；零表示不限制
+	MaxBytesDay *int64 `json:"maxBytesDay,omitempty"`
+
+	// MaxFileBytes 单文件字节上限；零表示不限制
+	MaxFileBytes *int64 `json:"maxFileBytes,omitempty"`
+
+	// PathPrefixes allowedPrefixes 的兼容别名
+	PathPrefixes *[]string `json:"pathPrefixes,omitempty"`
+
+	// Repositories 目标 Hosted 仓库名列表；重复名会被去重，顺序保留首次出现的位置
+	Repositories []string `json:"repositories"`
+
+	// WebLoginDisabled 是否禁止该账号登录 Web 与管理 API
+	WebLoginDisabled *bool `json:"webLoginDisabled,omitempty"`
+}
+
+// PublishPoliciesBatchResponse 逐仓库保存结果；顺序与请求中的仓库列表一致
+type PublishPoliciesBatchResponse struct {
+	Results []PublishPolicyBatchResult `json:"results"`
+}
+
+// PublishPolicyBatchResult defines model for PublishPolicyBatchResult.
+type PublishPolicyBatchResult struct {
+	// Error 失败原因；仅在 ok 为 false 时出现
+	Error *string `json:"error,omitempty"`
+
+	// Ok 该仓库是否保存成功
+	Ok bool `json:"ok"`
+
+	// Repository 本条结果对应的仓库名
+	Repository string `json:"repository"`
+}
+
 // PublishPolicyRequest defines model for PublishPolicyRequest.
 type PublishPolicyRequest struct {
 	// AllowedPrefixes 可选的发布路径前缀；空数组表示不限制前缀
@@ -3377,6 +3422,9 @@ type UpdateUserJSONRequestBody = UpdateUserRequest
 // ChangePasswordJSONRequestBody defines body for ChangePassword for application/json ContentType.
 type ChangePasswordJSONRequestBody = PasswordChangeRequest
 
+// PutPublishPoliciesJSONRequestBody defines body for PutPublishPolicies for application/json ContentType.
+type PutPublishPoliciesJSONRequestBody = PublishPoliciesBatchRequest
+
 // PutPublishPolicyJSONRequestBody defines body for PutPublishPolicy for application/json ContentType.
 type PutPublishPolicyJSONRequestBody = PublishPolicyRequest
 
@@ -3884,6 +3932,9 @@ type ServerInterface interface {
 	// ChangePassword 修改 / 重置用户口令
 	// (POST /api/v1/users/{id}/password)
 	ChangePassword(c *gin.Context, id UserIdParam)
+	// PutPublishPolicies 批量更新用户在多个 Hosted 仓库的发布策略
+	// (PUT /api/v1/users/{id}/publish-policies)
+	PutPublishPolicies(c *gin.Context, id UserIdParam)
 	// GetPublishPolicy 获取用户在 Hosted 仓库的发布策略
 	// (GET /api/v1/users/{id}/publish-policies/{repo})
 	GetPublishPolicy(c *gin.Context, id UserIdParam, repo string)
@@ -5993,6 +6044,31 @@ func (siw *ServerInterfaceWrapper) ChangePassword(c *gin.Context) {
 	siw.Handler.ChangePassword(c, id)
 }
 
+// PutPublishPolicies operation middleware
+func (siw *ServerInterfaceWrapper) PutPublishPolicies(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id UserIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.PutPublishPolicies(c, id)
+}
+
 // GetPublishPolicy operation middleware
 func (siw *ServerInterfaceWrapper) GetPublishPolicy(c *gin.Context) {
 
@@ -6137,6 +6213,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.DELETE(options.BaseURL+"/api/v1/users/:id", wrapper.DeleteUser)
 	router.PATCH(options.BaseURL+"/api/v1/users/:id", wrapper.UpdateUser)
 	router.POST(options.BaseURL+"/api/v1/users/:id/password", wrapper.ChangePassword)
+	router.PUT(options.BaseURL+"/api/v1/users/:id/publish-policies", wrapper.PutPublishPolicies)
 	router.GET(options.BaseURL+"/api/v1/users/:id/publish-policies/:repo", wrapper.GetPublishPolicy)
 	router.PUT(options.BaseURL+"/api/v1/users/:id/publish-policies/:repo", wrapper.PutPublishPolicy)
 	router.GET(options.BaseURL+"/api/v1/tokens", wrapper.ListTokens)

@@ -31,12 +31,24 @@ func (r *PublishPolicyRepo) Get(userID, repoID int64) (*PublishPolicy, error) {
 	if err := json.Unmarshal([]byte(row.Prefixes), &row.PathPrefixes); err != nil {
 		return nil, err
 	}
+	// 历史行可能存着 'null'（早期用 json.Marshal(nil 切片) 写入的产物），解出来即 nil；
+	// 而契约把 allowedPrefixes 定为 required 数组，nil 会序列化成 null 并在前端 .join 处抛错。
+	// 统一归一为空切片，让「无前缀」始终以 [] 表达。
+	if row.PathPrefixes == nil {
+		row.PathPrefixes = []string{}
+	}
 	return &row.PublishPolicy, nil
 }
 
 // Upsert 保存发布策略；路径前缀与额度在领域层校验。
 func (r *PublishPolicyRepo) Upsert(p PublishPolicy) error {
-	prefixes, err := json.Marshal(p.PathPrefixes)
+	// 归一后再编码：nil 切片会被 json.Marshal 写成 'null'，读回时又是 nil，
+	// 于是「无前缀」在契约的 required 数组字段上变成 null 并引发前端崩溃。
+	stored := p.PathPrefixes
+	if stored == nil {
+		stored = []string{}
+	}
+	prefixes, err := json.Marshal(stored)
 	if err != nil {
 		return err
 	}

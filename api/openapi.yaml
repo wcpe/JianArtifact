@@ -575,6 +575,44 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+  /api/v1/users/{id}/publish-policies:
+    put:
+      operationId: putPublishPolicies
+      summary: 批量更新用户在多个 Hosted 仓库的发布策略
+      description: |
+        发布策略是发布账号在**单个仓库**上的仓库级限制（FR-109）：它约束该账号在该仓库
+        可发布的路径前缀、每小时新增制品数、每日上传字节数与单文件字节数，并配合仓库的
+        immutableRelease 配置拒绝覆盖已发布的 Release 版本。
+        本端点把同一份策略一次性**批量应用到多个仓库**，等价于对每个仓库分别调用
+        PUT /api/v1/users/{id}/publish-policies/{repo}。
+        为避免「部分仓库成功、部分仓库失败」的静默不一致：保存前先对所有仓库做统一预校验
+        （仓库必须存在且为 hosted），任一仓库不合法即**整体拒绝**，错误信息会点名问题仓库。
+        响应按仓库逐条返回结果，便于调用方在个别仓库落库失败时精确定位，而不会被静默吞掉。
+      parameters:
+        - $ref: "#/components/parameters/UserIdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PublishPoliciesBatchRequest"
+      responses:
+        "200":
+          description: 逐仓库保存结果
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublishPoliciesBatchResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
   /api/v1/users/{id}/publish-policies/{repo}:
     get:
       operationId: getPublishPolicy
@@ -3761,6 +3799,44 @@ components:
         immutableRelease:
           type: boolean
           description: 已废弃，只读兼容字段；写入会被拒绝，请改用仓库 immutableRelease 配置
+    PublishPoliciesBatchRequest:
+      type: object
+      description: |
+        把同一份发布策略批量应用到多个 Hosted 仓库；策略字段与单仓库端点一致。
+        仓库列表至少一个，任一仓库不存在或不是 hosted 都会导致整体拒绝。
+      allOf:
+        - $ref: "#/components/schemas/PublishPolicyRequest"
+        - type: object
+          required: [repositories]
+          properties:
+            repositories:
+              type: array
+              minItems: 1
+              items:
+                type: string
+              description: 目标 Hosted 仓库名列表；重复名会被去重，顺序保留首次出现的位置
+    PublishPolicyBatchResult:
+      type: object
+      required: [repository, ok]
+      properties:
+        repository:
+          type: string
+          description: 本条结果对应的仓库名
+        ok:
+          type: boolean
+          description: 该仓库是否保存成功
+        error:
+          type: string
+          description: 失败原因；仅在 ok 为 false 时出现
+    PublishPoliciesBatchResponse:
+      type: object
+      description: 逐仓库保存结果；顺序与请求中的仓库列表一致
+      required: [results]
+      properties:
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/PublishPolicyBatchResult"
     PublishPolicyResponse:
       type: object
       required:

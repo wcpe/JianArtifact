@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
@@ -67,6 +68,134 @@ func (s *PublishPolicyService) Save(p repository.PublishPolicy, repoName string)
 		return nil, err
 	}
 	return s.Get(p.UserID, repoName)
+}
+
+// PublishPolicyBatchError 表示批量保存的**预校验**失败，Repository 指出问题仓库。
+// 它包装用于状态码映射的哨兵错误（ErrNotFound / ErrValidation），而 Error() 文案会点名
+// 仓库——批量保存「整体拒绝」时必须让调用方知道是哪一个仓库不合法。
+type PublishPolicyBatchError struct {
+	Repository string
+	Reason     string
+	Err        error
+}
+
+// Error 返回面向调用方的说明，始终包含仓库名。
+func (e *PublishPolicyBatchError) Error() string {
+	return fmt.Sprintf("仓库 %s：%s", e.Repository, e.Reason)
+}
+
+// Unwrap 暴露哨兵错误，供调用方用 errors.Is 映射 HTTP 状态码。
+func (e *PublishPolicyBatchError) Unwrap() error { return e.Err }
+
+// PublishPolicyPatch 是对既有发布策略的局部覆盖；nil 字段表示**保留目标仓库的现有值**。
+// 批量保存对每个仓库分别与现有策略合并，因此「省略字段」不会被误当成「清空」——
+// 清空允许前缀等于放开全部路径，静默放宽发布范围是危险的。
+type PublishPolicyPatch struct {
+	// PathPrefixes 非 nil（含空切片）时覆盖路径前缀；nil 保留现有值。
+	PathPrefixes  *[]string
+	MaxAssetsHour *int64
+	MaxBytesDay   *int64
+	MaxFileBytes  *int64
+}
+
+// Apply 把补丁合并到现有策略上，返回可交给 Save 的策略。空前缀归一为非 nil 空切片，
+// 保证契约的 required 数组字段不会序列化成 null（与仓储层的归一策略一致）。
+func (p PublishPolicyPatch) Apply(current repository.PublishPolicy, userID int64) repository.PublishPolicy {
+	out := current
+	out.UserID = userID
+	if out.PathPrefixes == nil {
+		out.PathPrefixes = []string{}
+	}
+	if p.PathPrefixes != nil {
+		out.PathPrefixes = *p.PathPrefixes
+	}
+	if p.MaxAssetsHour != nil {
+		out.MaxAssetsHour = *p.MaxAssetsHour
+	}
+	if p.MaxBytesDay != nil {
+		out.MaxBytesDay = *p.MaxBytesDay
+	}
+	if p.MaxFileBytes != nil {
+		out.MaxFileBytes = *p.MaxFileBytes
+	}
+	return out
+}
+
+// PublishPolicySaveResult 是单仓库的批量保存结果；Error 非空表示该仓库失败。
+type PublishPolicySaveResult struct {
+	Repository string
+	OK         bool
+	Error      string
+}
+
+// SaveMany 把同一份策略补丁批量应用到多个 Hosted 仓库。
+//
+// 原子性做法与取舍：**先对全部仓库做统一预校验**（存在且为 hosted），任一不合法即整体拒绝
+// 并点明问题仓库，从而排除「前几个成功、后面报错」的半成品；预校验通过后再逐仓库与现有
+// 策略合并落库（复用 Save 的校验规则，不复制一份），并按仓库逐条报告结果。
+// 没有引入跨仓库事务：预校验已消除全部确定性失败，此后残留的只可能是单仓库的存储层错误
+// （锁/磁盘），把它作为该仓库的失败结果上报比整体回滚更可诊断；而给 PublishPolicyRepo
+// 增加 UpsertTx 需要复制一份 upsert SQL（或改造 Upsert 接收可复用 querier），
+// 为这类罕见失败引入规则漂移的成本并不划算。
+func (s *PublishPolicyService) SaveMany(userID int64, patch PublishPolicyPatch, repoNames []string) ([]PublishPolicySaveResult, error) {
+	if err := requireBusinessWrite(s.writeGate); err != nil {
+		return nil, err
+	}
+	names := normalizeRepoNames(repoNames)
+	if len(names) == 0 {
+		return nil, fmt.Errorf("%w：至少指定一个仓库", ErrValidation)
+	}
+	// 统一预校验：任一仓库不存在或不是 hosted 都整体拒绝，且错误必须点名该仓库。
+	repoIDs := make([]int64, len(names))
+	for i, name := range names {
+		repo, err := s.repos.GetByName(name)
+		if err != nil {
+			return nil, &PublishPolicyBatchError{Repository: name, Reason: "仓库不存在", Err: mapNotFound(err)}
+		}
+		if repo.Type != "hosted" {
+			return nil, &PublishPolicyBatchError{
+				Repository: name,
+				Reason:     "不是 Hosted 仓库，无法配置发布策略",
+				Err:        ErrValidation,
+			}
+		}
+		repoIDs[i] = repo.ID
+	}
+	results := make([]PublishPolicySaveResult, 0, len(names))
+	for i, name := range names {
+		current := repository.PublishPolicy{UserID: userID, RepositoryID: repoIDs[i], PathPrefixes: []string{}}
+		if existing, err := s.policies.Get(userID, repoIDs[i]); err == nil {
+			current = *existing
+		} else if !errors.Is(err, repository.ErrNotFound) {
+			results = append(results, PublishPolicySaveResult{Repository: name, Error: err.Error()})
+			continue
+		}
+		if _, err := s.Save(patch.Apply(current, userID), name); err != nil {
+			results = append(results, PublishPolicySaveResult{Repository: name, Error: err.Error()})
+			continue
+		}
+		results = append(results, PublishPolicySaveResult{Repository: name, OK: true})
+	}
+	return results, nil
+}
+
+// normalizeRepoNames 去掉空白与重复仓库名，保留首次出现的顺序；去重是为了避免同一仓库被
+// 重复写入（结果列表也会出现重复行）。
+func normalizeRepoNames(repoNames []string) []string {
+	out := make([]string, 0, len(repoNames))
+	seen := make(map[string]struct{}, len(repoNames))
+	for _, name := range repoNames {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+	return out
 }
 
 // Begin 校验一次协议发布并创建持久化额度预留。管理员不受用户策略限制，

@@ -11,6 +11,135 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
+// 批量保存：预校验的原子性——任一仓库非法则整体拒绝，合法仓库也不得落库。
+func TestPublishPolicySaveManyPreValidationIsAtomic(t *testing.T) {
+	db := newTestDB(t)
+	users := repository.NewUserRepo(db)
+	uid, err := users.Create("batch-publisher", "hash", "user")
+	if err != nil {
+		t.Fatalf("创建发布用户：%v", err)
+	}
+	repos := repository.NewRepoRepo(db)
+	hostedID, err := repos.Create("batch-hosted", "raw", "hosted", "private", "{}")
+	if err != nil {
+		t.Fatalf("创建 hosted 仓库：%v", err)
+	}
+	if _, err := repos.Create("batch-proxy", "maven", "proxy", "public", `{"remoteUrl":"https://repo.example.com"}`); err != nil {
+		t.Fatalf("创建 proxy 仓库：%v", err)
+	}
+	policies := repository.NewPublishPolicyRepo(db)
+	svc := domain.NewPublishPolicyService(policies, repos, repository.NewAssetRepo(db))
+	prefixes := []string{"releases"}
+
+	// 一个合法 + 一个非 hosted：整体拒绝并点名问题仓库。
+	results, err := svc.SaveMany(uid, domain.PublishPolicyPatch{PathPrefixes: &prefixes},
+		[]string{"batch-hosted", "batch-proxy"})
+	if results != nil {
+		t.Fatalf("整体拒绝时不得返回结果：%+v", results)
+	}
+	var batchErr *domain.PublishPolicyBatchError
+	if !errors.As(err, &batchErr) {
+		t.Fatalf("应返回批量预校验错误，得 %v", err)
+	}
+	if batchErr.Repository != "batch-proxy" || !errors.Is(batchErr.Err, domain.ErrValidation) {
+		t.Fatalf("错误应点名 batch-proxy 且映射为校验失败：%+v", batchErr)
+	}
+
+	// 不存在的仓库同样整体拒绝，并映射为 404 语义。
+	_, err = svc.SaveMany(uid, domain.PublishPolicyPatch{PathPrefixes: &prefixes},
+		[]string{"batch-hosted", "ghost-repo"})
+	if !errors.As(err, &batchErr) || batchErr.Repository != "ghost-repo" {
+		t.Fatalf("应点名不存在的仓库，得 %v", err)
+	}
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("不存在的仓库应映射为 ErrNotFound，得 %v", err)
+	}
+
+	// 关键断言：整体拒绝后，合法仓库也不得有任何落库。
+	if _, err := policies.Get(uid, hostedID); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("整体拒绝后不得写入任何仓库，实际 err=%v", err)
+	}
+
+	// 空列表与「全空白名字」都视为校验失败。
+	empty := []string{}
+	for _, names := range [][]string{nil, empty, {"  "}} {
+		if _, err := svc.SaveMany(uid, domain.PublishPolicyPatch{}, names); !errors.Is(err, domain.ErrValidation) {
+			t.Fatalf("空仓库列表应返回 ErrValidation，得 %v", err)
+		}
+	}
+}
+
+// 批量保存：同一份补丁应用到多个仓库，未提供的字段保留各仓库现有值，重复名去重。
+func TestPublishPolicySaveManyAppliesPatchAndKeepsUnsetFields(t *testing.T) {
+	db := newTestDB(t)
+	users := repository.NewUserRepo(db)
+	uid, err := users.Create("batch-merge-publisher", "hash", "user")
+	if err != nil {
+		t.Fatalf("创建发布用户：%v", err)
+	}
+	repos := repository.NewRepoRepo(db)
+	existingID, err := repos.Create("batch-merge-a", "raw", "hosted", "private", "{}")
+	if err != nil {
+		t.Fatalf("创建 hosted 仓库 A：%v", err)
+	}
+	if _, err := repos.Create("batch-merge-b", "raw", "hosted", "private", "{}"); err != nil {
+		t.Fatalf("创建 hosted 仓库 B：%v", err)
+	}
+	policies := repository.NewPublishPolicyRepo(db)
+	svc := domain.NewPublishPolicyService(policies, repos, repository.NewAssetRepo(db))
+
+	// A 仓库已有策略：日额度 9、前缀 snapshots。
+	if err := policies.Upsert(repository.PublishPolicy{
+		UserID: uid, RepositoryID: existingID, PathPrefixes: []string{"snapshots"}, MaxBytesDay: 9,
+	}); err != nil {
+		t.Fatalf("预置既有策略：%v", err)
+	}
+
+	prefixes := []string{"releases", "/snapshots/"}
+	assetsHour := int64(3)
+	results, err := svc.SaveMany(uid, domain.PublishPolicyPatch{
+		PathPrefixes:  &prefixes,
+		MaxAssetsHour: &assetsHour,
+	}, []string{"batch-merge-a", "batch-merge-b", "batch-merge-a"})
+	if err != nil {
+		t.Fatalf("批量保存：%v", err)
+	}
+	// 重复仓库名去重，顺序保留首次出现。
+	if len(results) != 2 || results[0].Repository != "batch-merge-a" || results[1].Repository != "batch-merge-b" {
+		t.Fatalf("结果应去重且保持顺序：%+v", results)
+	}
+	for _, result := range results {
+		if !result.OK || result.Error != "" {
+			t.Fatalf("全部仓库应成功：%+v", result)
+		}
+	}
+
+	// A：前缀被覆盖并归一化（去掉首尾斜杠），未提供的 MaxBytesDay 保留 9。
+	a, err := policies.Get(uid, existingID)
+	if err != nil {
+		t.Fatalf("回读 A：%v", err)
+	}
+	if len(a.PathPrefixes) != 2 || a.PathPrefixes[0] != "releases" || a.PathPrefixes[1] != "snapshots" {
+		t.Fatalf("A 的前缀应被覆盖并归一化，实际 %v", a.PathPrefixes)
+	}
+	if a.MaxBytesDay != 9 || a.MaxAssetsHour != 3 {
+		t.Fatalf("A 应保留未提供的日额度、写入已提供的小时额度，实际 %+v", a)
+	}
+
+	// B：新建策略，未提供的数值字段为 0。
+	bRepo, err := repos.GetByName("batch-merge-b")
+	if err != nil {
+		t.Fatalf("查 B 仓库：%v", err)
+	}
+	b, err := policies.Get(uid, bRepo.ID)
+	if err != nil {
+		t.Fatalf("回读 B：%v", err)
+	}
+	if b.MaxBytesDay != 0 || b.MaxAssetsHour != 3 || len(b.PathPrefixes) != 2 {
+		t.Fatalf("B 应新建为同一份策略且未提供字段为 0：%+v", b)
+	}
+}
+
 func TestPublishPolicyStreamingReservationEnforcesPathAndQuota(t *testing.T) {
 	db := newTestDB(t)
 	users := repository.NewUserRepo(db)

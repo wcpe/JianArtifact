@@ -192,6 +192,27 @@ export function mockBatchDeleteAssets(): BatchDeleteAssetsResponse {
   };
 }
 
+/** PUT /api/v1/users/{id}/publish-policies 的契约请求体（批量应用到两个 Hosted 仓库）。 */
+export function mockPublishPoliciesBatchRequest(): PublishPoliciesBatchRequest {
+  return {
+    repositories: ["maven-releases", "raw-hosted"],
+    webLoginDisabled: false,
+    allowedPrefixes: ["releases"],
+    maxAssetsHour: 0,
+    maxBytesDay: 0,
+    maxFileBytes: 0,
+  };
+}
+
+/** PUT /api/v1/users/{id}/publish-policies 的契约响应：逐仓库结果，含一条失败样例。 */
+export function mockPublishPoliciesBatchResponse(): PublishPoliciesBatchResponse {
+  const results: PublishPolicyBatchResult[] = [
+    { repository: "maven-releases", ok: true },
+    { repository: "raw-hosted", ok: false, error: "内部错误" },
+  ];
+  return { results };
+}
+
 /** GET /api/v1/audit-logs 的稳定样本（该端点尚未纳入 OpenAPI）。 */
 export function mockAuditLogList(): MockAuditLogList {
   const items: MockAuditLogEntry[] = [

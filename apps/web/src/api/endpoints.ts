@@ -25,6 +25,7 @@ import type {
   AuditResult,
   AssetList,
   BatchDeleteAssetsResponse,
+  PublishPoliciesBatchResponse,
   BackupLink,
   BackupPackage,
   BackupPackageList,
@@ -247,16 +248,48 @@ export function getPublishPolicy(userId: number, repository: string): Promise<Pu
   );
 }
 
-/** FR-109：全量保存发布账号策略；空前缀数组表示允许全部路径。 */
+/**
+ * FR-109：全量保存发布账号策略；空前缀数组表示允许全部路径。
+ *
+ * 注意 payload 不含 immutableRelease：该字段是仓库级配置（只读展示），单仓库与批量端点
+ * 都对写入返回 400 immutable_release_moved。
+ */
 export function updatePublishPolicy(
   userId: number,
   repository: string,
-  policy: Omit<PublishPolicy, "userId" | "username" | "repository">,
+  policy: PublishPolicyBatchPayload,
 ): Promise<PublishPolicy> {
   return request<PublishPolicy>(
     `/users/${userId}/publish-policies/${encodeURIComponent(repository)}`,
     { method: "PUT", body: policy },
   );
+}
+
+/**
+ * FR-109：可写入的发布策略字段（单仓库与批量共用）。
+ * 不含 immutableRelease——它由仓库配置决定，端点对它的写入一律拒绝。
+ */
+export type PublishPolicyBatchPayload = Omit<
+  PublishPolicy,
+  "userId" | "username" | "repository" | "immutableRelease"
+>;
+
+/**
+ * FR-109：把同一份发布策略批量应用到多个 Hosted 仓库。
+ *
+ * 服务端先对各仓库做统一预校验，任一仓库不存在或非 hosted 会整体拒绝（HTTP 4xx），
+ * 因此抛错即表示「没有任何仓库被写入」；返回结果里的逐仓库条目的 ok=false 表示个别仓库
+ * 落库失败，调用方应逐条展示原因而不是当成整体成功。
+ */
+export function updatePublishPolicies(
+  userId: number,
+  repositories: string[],
+  policy: PublishPolicyBatchPayload,
+): Promise<PublishPoliciesBatchResponse> {
+  return request<PublishPoliciesBatchResponse>(`/users/${userId}/publish-policies`, {
+    method: "PUT",
+    body: { repositories, ...policy },
+  });
 }
 
 export function listTokens(): Promise<TokenList> {

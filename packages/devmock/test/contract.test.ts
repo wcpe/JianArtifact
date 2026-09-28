@@ -110,6 +110,21 @@ describe("devmock ↔ OpenAPI 契约一致性", () => {
     });
   });
 
+  it("批量发布策略请求与逐仓库结果满足契约", () => {
+    expectValid("PublishPoliciesBatchRequest", mockPublishPoliciesBatchRequest());
+    expectValid("PublishPoliciesBatchResponse", mockPublishPoliciesBatchResponse());
+
+    // 漂移可检出：缺 repositories（required）的请求、缺 results（required）的响应都必须被拒绝。
+    const validateRequest = ajv.compile(schemaFor("PublishPoliciesBatchRequest"));
+    expect(validateRequest({ allowedPrefixes: [] })).toBe(false);
+    expect(validateRequest({ repositories: [] })).toBe(false);
+
+    const validateResponse = ajv.compile(schemaFor("PublishPoliciesBatchResponse"));
+    expect(validateResponse({})).toBe(false);
+    // 逐仓库结果必须携带 repository 与 ok。
+    expect(validateResponse({ results: [{ repository: "a" }] })).toBe(false);
+  });
+
   it("统一制品操作的全部失败响应都要求 operationId 并声明 500", () => {
     const operationError = schemaFor("AssetOperationError");
     expect(operationError.required).toContain("operationId");

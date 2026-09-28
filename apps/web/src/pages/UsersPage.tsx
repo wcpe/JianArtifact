@@ -1,10 +1,12 @@
 // 用户管理：列表 + 新建 / 改角色状态 / 重置口令 / 删除。
 import {
+  Alert,
   Badge,
   Box,
   Button,
   Group,
   Modal,
+  MultiSelect,
   PasswordInput,
   Select,
   NumberInput,
@@ -42,16 +44,30 @@ import {
   getPublishPolicy,
   listRepositories,
   listUsers,
-  updatePublishPolicy,
+  updatePublishPolicies,
   updateUser,
   type PublishPolicy,
 } from "../api/endpoints";
-import type { Repository, User, UserRole, UserStatus } from "../api/types";
+import type {
+  PublishPolicyBatchResult,
+  Repository,
+  User,
+  UserRole,
+  UserStatus,
+} from "../api/types";
 import { useAsync } from "../hooks/useAsync";
 import { confirmDanger, notifyError, notifySuccess } from "../lib/feedback";
 
 /** FR-66 内置匿名主体用户名（与后端 domain.AnonymousUsername 一致）。 */
 const ANONYMOUS_USERNAME = "anonymous";
+
+/** 把文本域的「每行一个」路径前缀解析成数组（去空白与空行）。 */
+function parsePrefixes(value: string): string[] {
+  return value
+    .split(/\r?\n/)
+    .map((prefix) => prefix.trim())
+    .filter(Boolean);
+}
 
 export function UsersPage() {
   const { t } = useTranslation();
@@ -76,11 +92,16 @@ export function UsersPage() {
   const [policyUser, setPolicyUser] = useState<User | null>(null);
   const [policyOpened, setPolicyOpened] = useState(false);
   const [policyRepos, setPolicyRepos] = useState<Repository[]>([]);
-  const [policyRepo, setPolicyRepo] = useState("");
+  // 发布策略支持多仓库（FR-109）：选择集是仓库名列表，保存时整体下发到批量端点。
+  const [policyRepoNames, setPolicyRepoNames] = useState<string[]>([]);
   const [policy, setPolicy] = useState<PublishPolicy | null>(null);
   const [policyPrefixes, setPolicyPrefixes] = useState("");
+  // 所选仓库的现有策略不一致时给出提示（保存会统一覆盖）。
+  const [policyInconsistent, setPolicyInconsistent] = useState(false);
   const [policyLoading, setPolicyLoading] = useState(false);
   const [policySaving, setPolicySaving] = useState(false);
+  // 最近一次批量保存的逐仓库结果；null 表示尚未保存过。
+  const [policyResults, setPolicyResults] = useState<PublishPolicyBatchResult[] | null>(null);
   // 窄屏（< 48em）：6 列在手机上会把角色下拉与操作图标一起挤到换行，
   // 此时只留「用户名 / 角色 / 操作」，被裁的 id 与启用状态改由用户名下方副文本承载。
   const isNarrow = useMediaQuery("(max-width: 48em)") ?? false;
@@ -143,16 +164,33 @@ export function UsersPage() {
       .catch(notifyError);
   };
 
-  const loadPolicy = (userID: number, repository: string) => {
-    if (!repository) {
-      setPolicy(null);
+  // 发布策略的「实际约束」字段：不可变 Release 属于仓库配置（只读展示），不参与比较，
+  // 否则不同仓库的仓库级配置差异会被误报成「策略不一致」。
+  const samePolicy = (a: PublishPolicy, b: PublishPolicy) =>
+    (a.allowedPrefixes ?? []).join("\n") === (b.allowedPrefixes ?? []).join("\n") &&
+    a.maxAssetsHour === b.maxAssetsHour &&
+    a.maxBytesDay === b.maxBytesDay &&
+    a.maxFileBytes === b.maxFileBytes;
+
+  // 多仓口径：以**首个所选仓库**的策略作为编辑基线（保持与原来「先选先编辑」一致），
+  // 其余所选仓库与之不一致时置提示位——保存会把这份基线统一覆盖到全部所选仓库。
+  const loadPolicies = (userID: number, repoNames: string[]) => {
+    if (repoNames.length === 0) {
+      // 清空选择时保留最后一次基线，避免表单整体消失导致无法回到「再选一个仓库」；
+      // 只有提示与保存按钮的可用性随之变化。
+      setPolicyInconsistent(false);
       return;
     }
     setPolicyLoading(true);
-    getPublishPolicy(userID, repository)
-      .then((value) => {
-        setPolicy(value);
-        setPolicyPrefixes(value.allowedPrefixes.join("\n"));
+    setPolicyResults(null);
+    Promise.all(repoNames.map((name) => getPublishPolicy(userID, name)))
+      .then((policies) => {
+        const baseline = policies[0]!;
+        setPolicy(baseline);
+        // 契约把 allowedPrefixes 定为 required 数组，但服务端历史上可能返回 null
+        // （nil 切片被序列化成 null），此处兜底成空数组，避免 .join 抛 TypeError。
+        setPolicyPrefixes((baseline.allowedPrefixes ?? []).join("\n"));
+        setPolicyInconsistent(policies.some((item) => !samePolicy(item, baseline)));
       })
       .catch(notifyError)
       .finally(() => setPolicyLoading(false));
@@ -162,16 +200,19 @@ export function UsersPage() {
     setPolicyUser(user);
     setPolicyOpened(true);
     setPolicy(null);
-    setPolicyRepo("");
+    setPolicyRepoNames([]);
+    setPolicyResults(null);
+    setPolicyInconsistent(false);
     setPolicyLoading(true);
     listRepositories({ page_size: 100 })
       .then((list) => {
         const hosted = list.items.filter((repo) => repo.type === "hosted");
         setPolicyRepos(hosted);
+        // 默认只选第一个仓库：与改动前的单仓库行为等价（保存等价于原单仓库保存）。
         const first = hosted[0]?.name ?? "";
-        setPolicyRepo(first);
+        setPolicyRepoNames(first ? [first] : []);
         if (first) {
-          loadPolicy(user.id, first);
+          loadPolicies(user.id, [first]);
         }
       })
       .catch(notifyError)
@@ -179,23 +220,30 @@ export function UsersPage() {
   };
 
   const savePolicy = () => {
-    if (!policyUser || !policy || !policyRepo) return;
+    if (!policyUser || !policy) return;
+    if (policyRepoNames.length === 0) {
+      notifyError(t("users.policyRepoRequired"));
+      return;
+    }
     setPolicySaving(true);
-    updatePublishPolicy(policyUser.id, policyRepo, {
+    updatePublishPolicies(policyUser.id, policyRepoNames, {
       webLoginDisabled: policy.webLoginDisabled,
-      allowedPrefixes: policyPrefixes
-        .split(/\r?\n/)
-        .map((prefix) => prefix.trim())
-        .filter(Boolean),
+      allowedPrefixes: parsePrefixes(policyPrefixes),
       maxAssetsHour: policy.maxAssetsHour,
       maxBytesDay: policy.maxBytesDay,
       maxFileBytes: policy.maxFileBytes,
-      immutableRelease: policy.immutableRelease,
     })
       .then((value) => {
-        setPolicy(value);
-        setPolicyPrefixes(value.allowedPrefixes.join("\n"));
-        notifySuccess(t("common.saved"));
+        setPolicyResults(value.results);
+        // 保存成功后所选仓库已统一为同一份策略，不一致提示随之消失。
+        setPolicyInconsistent(false);
+        const failed = value.results.filter((item) => !item.ok);
+        if (failed.length === 0) {
+          notifySuccess(t("common.saved"));
+        } else {
+          // 逐仓库结果会列在弹窗内；这里再给一条汇总提示，避免失败被静默。
+          notifyError(t("users.policyPartialFailure", { count: failed.length }));
+        }
         state.reload();
       })
       .catch(notifyError)
@@ -506,17 +554,30 @@ export function UsersPage() {
           <EmptyState message={t("users.noHostedRepositories")} />
         ) : (
           <Stack gap="sm">
-            <Select
+            {/* 策略用途说明：用户问过「发布策略干什么用」——先讲清约束什么，再给表单。 */}
+            <Text size="xs" c="dimmed">
+              {t("users.policyPurpose")}
+            </Text>
+            <MultiSelect
               label={t("users.publishRepository")}
+              size="xs"
               data={policyRepos.map((repo) => ({ value: repo.name, label: repo.name }))}
-              value={policyRepo}
-              allowDeselect={false}
-              onChange={(value) => {
-                const next = value ?? "";
-                setPolicyRepo(next);
-                loadPolicy(policyUser.id, next);
+              value={policyRepoNames}
+              searchable
+              clearable
+              onChange={(values) => {
+                setPolicyRepoNames(values);
+                loadPolicies(policyUser.id, values);
               }}
             />
+            <Text size="xs" c="dimmed">
+              {t("users.policyMultipleHint")}
+            </Text>
+            {policyInconsistent ? (
+              <Alert color="yellow" variant="light" p="xs">
+                <Text size="xs">{t("users.policyInconsistent")}</Text>
+              </Alert>
+            ) : null}
             {policyLoading ? (
               <Text size="sm">{t("common.loading")}</Text>
             ) : policy ? (
@@ -558,23 +619,55 @@ export function UsersPage() {
                     onChange={(value) => setPolicy({ ...policy, maxFileBytes: Number(value) || 0 })}
                   />
                 </Group>
+                {/* 不可变 Release 属于仓库配置（后端写入即拒绝），这里只读展示其当前值，
+                    不能做成可切换——否则用户以为改了、实际每次保存都会被拒。 */}
                 <Switch
                   label={t("users.immutableRelease")}
-                  description={t("users.immutableReleaseHint")}
+                  description={t("users.policyImmutableReadOnly")}
                   checked={policy.immutableRelease}
-                  onChange={(event) =>
-                    setPolicy({ ...policy, immutableRelease: event.currentTarget.checked })
-                  }
+                  disabled
                 />
+                {policyRepoNames.length === 0 ? (
+                  <Text size="xs" c="red">
+                    {t("users.policyRepoRequired")}
+                  </Text>
+                ) : null}
                 <Group justify="flex-end">
                   <Button variant="default" onClick={() => setPolicyOpened(false)}>
                     {t("common.cancel")}
                   </Button>
-                  <Button onClick={savePolicy} loading={policySaving}>
+                  <Button
+                    onClick={savePolicy}
+                    loading={policySaving}
+                    disabled={policyRepoNames.length === 0}
+                  >
                     {t("common.save")}
                   </Button>
                 </Group>
               </>
+            ) : null}
+            {/* 逐仓库结果：部分失败必须可见，而不是只报一句「保存失败」。 */}
+            {policyResults ? (
+              <Stack gap={4}>
+                <Text size="xs" fw={600}>
+                  {t("users.policyResults")}
+                </Text>
+                {policyResults.map((item) => (
+                  <Group key={item.repository} gap={6} wrap="nowrap">
+                    <Badge size="xs" variant="light" color={item.ok ? "green" : "red"}>
+                      {item.ok ? t("users.policyResultOK") : t("users.policyResultFailed")}
+                    </Badge>
+                    <Text size="xs" ff="monospace" truncate>
+                      {item.repository}
+                    </Text>
+                    {item.error ? (
+                      <Text size="xs" c="red">
+                        {item.error}
+                      </Text>
+                    ) : null}
+                  </Group>
+                ))}
+              </Stack>
             ) : null}
           </Stack>
         )}

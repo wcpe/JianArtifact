@@ -420,6 +420,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/users/{id}/publish-policies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * 批量更新用户在多个 Hosted 仓库的发布策略
+         * @description 发布策略是发布账号在**单个仓库**上的仓库级限制（FR-109）：它约束该账号在该仓库
+         *     可发布的路径前缀、每小时新增制品数、每日上传字节数与单文件字节数，并配合仓库的
+         *     immutableRelease 配置拒绝覆盖已发布的 Release 版本。
+         *     本端点把同一份策略一次性**批量应用到多个仓库**，等价于对每个仓库分别调用
+         *     PUT /api/v1/users/{id}/publish-policies/{repo}。
+         *     为避免「部分仓库成功、部分仓库失败」的静默不一致：保存前先对所有仓库做统一预校验
+         *     （仓库必须存在且为 hosted），任一仓库不合法即**整体拒绝**，错误信息会点名问题仓库。
+         *     响应按仓库逐条返回结果，便于调用方在个别仓库落库失败时精确定位，而不会被静默吞掉。
+         */
+        put: operations["putPublishPolicies"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/users/{id}/publish-policies/{repo}": {
         parameters: {
             query?: never;
@@ -2026,6 +2053,26 @@ export interface components {
             /** @description 已废弃，只读兼容字段；写入会被拒绝，请改用仓库 immutableRelease 配置 */
             immutableRelease?: boolean;
         };
+        /**
+         * @description 把同一份发布策略批量应用到多个 Hosted 仓库；策略字段与单仓库端点一致。
+         *     仓库列表至少一个，任一仓库不存在或不是 hosted 都会导致整体拒绝。
+         */
+        PublishPoliciesBatchRequest: components["schemas"]["PublishPolicyRequest"] & {
+            /** @description 目标 Hosted 仓库名列表；重复名会被去重，顺序保留首次出现的位置 */
+            repositories: string[];
+        };
+        PublishPolicyBatchResult: {
+            /** @description 本条结果对应的仓库名 */
+            repository: string;
+            /** @description 该仓库是否保存成功 */
+            ok: boolean;
+            /** @description 失败原因；仅在 ok 为 false 时出现 */
+            error?: string;
+        };
+        /** @description 逐仓库保存结果；顺序与请求中的仓库列表一致 */
+        PublishPoliciesBatchResponse: {
+            results: components["schemas"]["PublishPolicyBatchResult"][];
+        };
         PublishPolicyResponse: {
             /** Format: int64 */
             userId: number;
@@ -3527,6 +3574,37 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+        };
+    };
+    putPublishPolicies: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["UserIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PublishPoliciesBatchRequest"];
+            };
+        };
+        responses: {
+            /** @description 逐仓库保存结果 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublishPoliciesBatchResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
     getPublishPolicy: {

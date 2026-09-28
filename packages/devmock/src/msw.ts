@@ -960,6 +960,59 @@ export const handlers = [
     return policy ? HttpResponse.json(policy) : err("not_found", "用户或 Hosted 仓库不存在", 404);
   }),
 
+  // FR-109：批量应用发布策略。与真实后端同源：先对全部仓库做统一预校验，任一仓库不存在或
+  // 不是 hosted 即整体拒绝（4xx，消息点名仓库）；否则逐仓库落库并返回逐仓库结果。
+  http.put("*/api/v1/users/:id/publish-policies", async ({ request, params }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) return denied;
+    const body = (await request.json().catch(() => ({}))) as Partial<PublishPolicy> & {
+      repositories?: unknown;
+    };
+    if (!Array.isArray(body.repositories) || body.repositories.length === 0) {
+      return err("bad_request", "至少选择一个仓库", 400);
+    }
+    if (
+      typeof body.webLoginDisabled !== "boolean" ||
+      !Array.isArray(body.allowedPrefixes) ||
+      typeof body.maxAssetsHour !== "number" ||
+      typeof body.maxBytesDay !== "number" ||
+      typeof body.maxFileBytes !== "number" ||
+      typeof body.immutableRelease !== "boolean"
+    ) {
+      return err("bad_request", "发布策略字段不完整", 400);
+    }
+    const repositories = body.repositories.filter(
+      (value): value is string => typeof value === "string",
+    );
+    if (repositories.length === 0) {
+      return err("bad_request", "至少选择一个仓库", 400);
+    }
+    const results = store.setPublishPolicies(Number(params.id), repositories, {
+      webLoginDisabled: body.webLoginDisabled,
+      allowedPrefixes: body.allowedPrefixes.filter(
+        (value): value is string => typeof value === "string",
+      ),
+      maxAssetsHour: body.maxAssetsHour,
+      maxBytesDay: body.maxBytesDay,
+      maxFileBytes: body.maxFileBytes,
+      immutableRelease: body.immutableRelease,
+    });
+    if (!results) {
+      return err("not_found", "用户不存在", 404);
+    }
+    if (results.missing) {
+      return err("not_found", `仓库 ${results.missing}：仓库不存在`, 404);
+    }
+    if (results.notHosted) {
+      return err(
+        "validation_error",
+        `仓库 ${results.notHosted}：不是 Hosted 仓库，无法配置发布策略`,
+        400,
+      );
+    }
+    return HttpResponse.json({ results: results.results });
+  }),
+
   // —— API Token ——
   http.get("*/api/v1/tokens", ({ request }) => {
     const denied = unauthorized(request);

@@ -27,6 +27,7 @@
 - 仓库别名与重命名：`Repository.aliases` 与 `CreateRepositoryRequest` / `UpdateRepositoryRequest` 的 `aliases` 表达别名集合（别名与主名**共享命名空间、全局唯一**，不得等于主名或与他仓主名/别名冲突）；`POST /api/v1/repositories/{name}/rename`（仅管理员，`{newName}`）重命名后**旧名自动转别名**，旧链接仍可解析。字段、请求体与错误码以 [`../api/openapi.yaml`](../api/openapi.yaml) 为准。
 - 置顶仓库：`GET/PUT /api/v1/me/pinned-repositories` 读写**当前用户**的置顶（登录用户；匿名 `GET` 回退**全局置顶**，匿名 `PUT` 返回 401）；`GET/PUT /api/v1/settings/pinned-repositories` 读写**全局置顶**（仅管理员）。读写为**覆盖式**（按 repositoryId 整体替换，空数组即取消全部置顶），非法仓库 ID 返回 404 且不改动既有置顶；按 ID 持久化使仓库重命名不影响置顶。
 - 制品：仓库文件树、详情、搜索、下载、统一资产操作和格式相关管理操作。
+- 发布策略：`GET/PUT /api/v1/users/{id}/publish-policies/{repo}` 读写发布账号在**单个** Hosted 仓库的仓库级策略（路径前缀、每小时制品数、每日/单文件字节上限）；`PUT /api/v1/users/{id}/publish-policies`（body `{repositories[], ...}`）把同一份策略**批量应用到多个** Hosted 仓库，保存前对全部仓库统一预校验（仓库须存在且为 hosted，任一不合法即整体拒绝），响应按仓库逐条返回 `results[]`（`{repository, ok, error?}`）使部分失败可见。`immutableRelease` 已废弃、只读兼容，写入返回 400 `immutable_release_moved`（改由仓库 `immutableRelease` 配置维护）。
 - 迁移：Nexus 来源发现、计划、显式启动/取消、进度、报告和恢复。
 - 备份与搬迁：节点备份包的生成、列表、详情、删除、完整性校验与下载导出。
 
