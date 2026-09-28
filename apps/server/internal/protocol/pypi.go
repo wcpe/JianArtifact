@@ -73,7 +73,11 @@ func (h *PypiHandler) Simple(c *gin.Context) {
 		c.Redirect(http.StatusMovedPermanently, location)
 		return
 	}
-	files, err := h.metadata.PyPIFiles(repo, normalized)
+	// 项目索引可能来自本地缓存或回源：与 packages 路径同口径记录本次读取的缓存来源，
+	// 否则 PyPI 仓的缓存命中率在仪表盘上系统性偏低（pip 每次依赖解析都打 simple）。
+	withCacheOutcome(c)
+	defer h.markCacheResult(c, repo)
+	files, err := h.metadata.PyPIFiles(c.Request.Context(), repo, normalized)
 	if err != nil {
 		writeAssetErr(c, err)
 		return
