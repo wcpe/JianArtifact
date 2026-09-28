@@ -124,6 +124,17 @@ describe("buildOperations 归并", () => {
     expect(buildOperations(events)).toHaveLength(2);
   });
 
+  it("跨 15 分钟边界的同一次操作仍并成一个（窗口按锚点而非翻转桶）", () => {
+    // 两个事件只隔 1 秒，但恰好落在 15 分钟桶的两侧。
+    const events = [
+      artifactEvent({ eventId: "e1", path: "g/a/1.0/a-1.0.jar", occurredAt: "2026-09-24T10:14:59.000Z" }),
+      artifactEvent({ eventId: "e2", path: "g/a/1.0/a-1.0.pom", occurredAt: "2026-09-24T10:15:00.000Z" }),
+    ];
+    const ops = buildOperations(events);
+    expect(ops).toHaveLength(1);
+    expect(ops[0]!.events).toHaveLength(2);
+  });
+
   it("超出时间窗的同坐标事件不并账", () => {
     const first = new Date("2026-09-24T10:00:00.000Z").getTime();
     const later = new Date(first + OPERATION_WINDOW_MS).toISOString();

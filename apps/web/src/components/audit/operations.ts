@@ -12,7 +12,8 @@
 // 3. 其余单事件（仓库/用户/设置等管理动作）→ 各自成一个操作，不强行编造关联。
 //
 // 时间窗的作用：一次 deploy 的各文件几乎同时写入，但可能跨分钟边界；窗口只用于容忍这种
-// 边界抖动，不用于「把一段时间内的巧合写入并成一个操作」。
+// 边界抖动，不用于「把一段时间内的巧合写入并成一个操作」。窗口按**锚点**判定（与本段首个
+// 事件的时间差 < 窗口），不是按绝对时间桶——否则跨 15 分钟边界的同一次操作会被拆成两个。
 //
 // 关键约束：**永不丢弃事件**。归并只改变分组，不改变集合；坐标反解不出的（npm / raw / 未知格式）
 // 一律降级到「其他」分枝，按目录聚合。
@@ -104,8 +105,9 @@ function derivedKey(event: AuditEvent, kind: OperationKind): string | null {
       ? `${coords.groupId}:${coords.artifactId}:${coords.version}`
       : `dir:${coords.directory}`;
   const actor = actorEmail(event.actor);
-  const bucket = Math.floor(parseTime(event.occurredAt) / OPERATION_WINDOW_MS);
-  return `${kind}|${action}|${target.repo}|${scope}|${actor}|${bucket}`;
+  // 键内不含时间桶：同一次操作的各文件可能跨分钟边界，按绝对桶会把它们拆成两个操作。
+  // 时间窗在归并阶段按锚点判定（见 buildOperations）。
+  return `${kind}|${action}|${target.repo}|${scope}|${actor}`;
 }
 
 /**
@@ -141,41 +143,66 @@ export function buildOperations(events: readonly AuditEvent[]): AuditOperation[]
   const operations: AuditOperation[] = [];
   for (const key of order) {
     const group = byKey.get(key)!;
-    // 每个操作内部按时间倒序（最新在前）。
-    const sorted = [...group].sort((a, b) => parseTime(b.occurredAt) - parseTime(a.occurredAt));
-    const head = sorted[0]!;
-    const target = uploadArtifactTarget(head);
-    const coords = target ? parseUploadCoordinates(target.path) : null;
-    let latestAt = 0;
-    let earliestAt = 0;
-    for (const event of sorted) {
+    // 同键事件先按时间正序，再按锚点切段：与本段首个事件的时间差 < 窗口才并入本段。
+    // 用锚点而不是绝对时间桶，保证跨分钟边界的同一次操作不被拆成两个。
+    const ascending = [...group].sort((a, b) => parseTime(a.occurredAt) - parseTime(b.occurredAt));
+    const segments: AuditEvent[][] = [];
+    let anchor = 0;
+    for (const event of ascending) {
       const at = parseTime(event.occurredAt);
-      if (at > latestAt) latestAt = at;
-      if (earliestAt === 0 || (at > 0 && at < earliestAt)) earliestAt = at;
+      if (segments.length === 0) {
+        segments.push([event]);
+        anchor = at;
+      } else if (at > 0 && anchor > 0 && at - anchor < OPERATION_WINDOW_MS) {
+        segments[segments.length - 1]!.push(event);
+      } else {
+        segments.push([event]);
+        anchor = at;
+      }
     }
-    operations.push({
-      key,
-      kind: operationKindOf(head.action),
-      action: typeof head.action === "string" ? head.action : "",
-      repo: target?.repo ?? null,
-      coordinates: coords
-        ? {
-            groupId: coords.groupId,
-            artifactId: coords.artifactId,
-            version: coords.version,
-            directory: coords.directory,
-          }
-        : null,
-      events: sorted,
-      latestAt,
-      earliestAt,
-      result: resultOf(head),
-      actor: actorEmail(head.actor),
+    segments.forEach((segment, index) => {
+      // 每个操作内部按时间倒序（最新在前）。
+      const sorted = [...segment].sort((a, b) => parseTime(b.occurredAt) - parseTime(a.occurredAt));
+      // 同键多段时给后缀，保证 React key 唯一且稳定。
+      operations.push(toOperation(index === 0 ? key : `${key}#${index}`, sorted));
     });
   }
 
   operations.sort((a, b) => b.latestAt - a.latestAt);
   return operations;
+}
+
+/** 把一个已归并的事件段转成操作模型（事件按时间倒序）。 */
+function toOperation(key: string, sorted: AuditEvent[]): AuditOperation {
+  const head = sorted[0]!;
+  const target = uploadArtifactTarget(head);
+  const coords = target ? parseUploadCoordinates(target.path) : null;
+  let latestAt = 0;
+  let earliestAt = 0;
+  for (const event of sorted) {
+    const at = parseTime(event.occurredAt);
+    if (at > latestAt) latestAt = at;
+    if (earliestAt === 0 || (at > 0 && at < earliestAt)) earliestAt = at;
+  }
+  return {
+    key,
+    kind: operationKindOf(head.action),
+    action: typeof head.action === "string" ? head.action : "",
+    repo: target?.repo ?? null,
+    coordinates: coords
+      ? {
+          groupId: coords.groupId,
+          artifactId: coords.artifactId,
+          version: coords.version,
+          directory: coords.directory,
+        }
+      : null,
+    events: sorted,
+    latestAt,
+    earliestAt,
+    result: resultOf(head),
+    actor: actorEmail(head.actor),
+  };
 }
 
 /** 操作内的文件数（= 事件数）；供「N 次操作 / M 个文件」这类汇总复用。 */
