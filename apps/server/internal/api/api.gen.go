@@ -2513,6 +2513,16 @@ type PasswordChangeRequest struct {
 	Password string `json:"password"`
 }
 
+// PinnedRepositoriesResponse 置顶仓库响应：repositoryIds 为仓库 ID（持久化关联，重命名不受影响），names 为读取时
+// 实时解析的当前主名，两者一一对应、顺序一致（顺序即置顶顺序）。
+type PinnedRepositoriesResponse struct {
+	// Names 置顶仓库的当前主名（按置顶顺序；已删除仓库不出现在此列表）。
+	Names []string `json:"names"`
+
+	// RepositoryIds 置顶仓库的 ID（按置顶顺序）。
+	RepositoryIds []int64 `json:"repositoryIds"`
+}
+
 // ProtocolMetricPoint defines model for ProtocolMetricPoint.
 type ProtocolMetricPoint struct {
 	CacheHitCount  int64     `json:"cacheHitCount"`
@@ -2522,6 +2532,16 @@ type ProtocolMetricPoint struct {
 	From           time.Time `json:"from"`
 	RequestCount   int64     `json:"requestCount"`
 	To             time.Time `json:"to"`
+}
+
+// PublicRepositoryList 公开仓库列表：items/total 与 RepositoryList 同构，额外携带 pinnedNames —— 全局置顶
+// 仓库的当前主名（顺序即置顶顺序），供公开页（匿名浏览）排序与展示图钉。
+type PublicRepositoryList struct {
+	Items []Repository `json:"items"`
+
+	// PinnedNames 全局置顶仓库的当前主名（有序；公开页据此置顶前置并显示图钉）。
+	PinnedNames []string `json:"pinnedNames"`
+	Total       int      `json:"total"`
 }
 
 // PublishPolicyRequest defines model for PublishPolicyRequest.
@@ -2566,6 +2586,12 @@ type PublishPolicyResponse struct {
 // PutAclRequest defines model for PutAclRequest.
 type PutAclRequest struct {
 	Items []AclEntry `json:"items"`
+}
+
+// PutPinnedRepositoriesRequest 覆盖式写入置顶集合：整体替换当前作用域的置顶，空数组即取消全部置顶。
+type PutPinnedRepositoriesRequest struct {
+	// RepositoryIds 置顶仓库的完整 ID 集合（按期望顺序；服务端去重后按序写入）。
+	RepositoryIds []int64 `json:"repositoryIds"`
 }
 
 // RemoteNexusRepository defines model for RemoteNexusRepository.
@@ -3266,6 +3292,9 @@ type CreateBackupLinkJSONRequestBody = CreateBackupLinkRequest
 // FreezeWritesJSONRequestBody defines body for FreezeWrites for application/json ContentType.
 type FreezeWritesJSONRequestBody = FreezeWritesRequest
 
+// PutMyPinnedRepositoriesJSONRequestBody defines body for PutMyPinnedRepositories for application/json ContentType.
+type PutMyPinnedRepositoriesJSONRequestBody = PutPinnedRepositoriesRequest
+
 // CreateMigrationJSONRequestBody defines body for CreateMigration for application/json ContentType.
 type CreateMigrationJSONRequestBody = CreateMigrationRequest
 
@@ -3306,6 +3335,9 @@ type SetRepositoryOnlineJSONRequestBody = SetRepositoryOnlineRequest
 
 // RenameRepositoryJSONRequestBody defines body for RenameRepository for application/json ContentType.
 type RenameRepositoryJSONRequestBody = RenameRepositoryRequest
+
+// PutGlobalPinnedRepositoriesJSONRequestBody defines body for PutGlobalPinnedRepositories for application/json ContentType.
+type PutGlobalPinnedRepositoriesJSONRequestBody = PutPinnedRepositoriesRequest
 
 // CreateTokenJSONRequestBody defines body for CreateToken for application/json ContentType.
 type CreateTokenJSONRequestBody = CreateTokenRequest
@@ -3677,6 +3709,12 @@ type ServerInterface interface {
 	// FreezeWrites 冻结节点写入（仅管理员）
 	// (POST /api/v1/maintenance/freeze)
 	FreezeWrites(c *gin.Context)
+	// GetMyPinnedRepositories 当前用户的置顶仓库（登录用户读自己的；匿名回退全局置顶）
+	// (GET /api/v1/me/pinned-repositories)
+	GetMyPinnedRepositories(c *gin.Context)
+	// PutMyPinnedRepositories 覆盖式写入当前用户的置顶仓库（仅登录用户）
+	// (PUT /api/v1/me/pinned-repositories)
+	PutMyPinnedRepositories(c *gin.Context)
 	// ListMigrations 迁移任务列表（分页）
 	// (GET /api/v1/migrations)
 	ListMigrations(c *gin.Context, params ListMigrationsParams)
@@ -3743,6 +3781,9 @@ type ServerInterface interface {
 	// GetHostMonitoring 当前主机监控（仅管理员）
 	// (GET /api/v1/observability/host)
 	GetHostMonitoring(c *gin.Context, params GetHostMonitoringParams)
+	// ListPublicRepositories 公开仓库列表（无需认证，含全局置顶名）
+	// (GET /api/v1/public/repositories)
+	ListPublicRepositories(c *gin.Context)
 	// ListRepositories 仓库列表（分页，按可见性 / ACL 过滤）
 	// (GET /api/v1/repositories)
 	ListRepositories(c *gin.Context, params ListRepositoriesParams)
@@ -3784,6 +3825,12 @@ type ServerInterface interface {
 	// GetRepositoryUsage 仓库客户端使用片段（据 format/type 返回接入命令）
 	// (GET /api/v1/repositories/{name}/usage)
 	GetRepositoryUsage(c *gin.Context, name RepoNameParam)
+	// GetGlobalPinnedRepositories 全局置顶仓库（仅管理员）
+	// (GET /api/v1/settings/pinned-repositories)
+	GetGlobalPinnedRepositories(c *gin.Context)
+	// PutGlobalPinnedRepositories 覆盖式写入全局置顶仓库（仅管理员）
+	// (PUT /api/v1/settings/pinned-repositories)
+	PutGlobalPinnedRepositories(c *gin.Context)
 	// GetStatus 运行时状态（版本、就绪、迁移版本、初始化标志、用户数与自举许可）
 	// (GET /api/v1/status)
 	GetStatus(c *gin.Context)
@@ -4321,6 +4368,32 @@ func (siw *ServerInterfaceWrapper) FreezeWrites(c *gin.Context) {
 	}
 
 	siw.Handler.FreezeWrites(c)
+}
+
+// GetMyPinnedRepositories operation middleware
+func (siw *ServerInterfaceWrapper) GetMyPinnedRepositories(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetMyPinnedRepositories(c)
+}
+
+// PutMyPinnedRepositories operation middleware
+func (siw *ServerInterfaceWrapper) PutMyPinnedRepositories(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.PutMyPinnedRepositories(c)
 }
 
 // ListMigrations operation middleware
@@ -5310,6 +5383,19 @@ func (siw *ServerInterfaceWrapper) GetHostMonitoring(c *gin.Context) {
 	siw.Handler.GetHostMonitoring(c, params)
 }
 
+// ListPublicRepositories operation middleware
+func (siw *ServerInterfaceWrapper) ListPublicRepositories(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ListPublicRepositories(c)
+}
+
 // ListRepositories operation middleware
 func (siw *ServerInterfaceWrapper) ListRepositories(c *gin.Context) {
 
@@ -5658,6 +5744,32 @@ func (siw *ServerInterfaceWrapper) GetRepositoryUsage(c *gin.Context) {
 	}
 
 	siw.Handler.GetRepositoryUsage(c, name)
+}
+
+// GetGlobalPinnedRepositories operation middleware
+func (siw *ServerInterfaceWrapper) GetGlobalPinnedRepositories(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetGlobalPinnedRepositories(c)
+}
+
+// PutGlobalPinnedRepositories operation middleware
+func (siw *ServerInterfaceWrapper) PutGlobalPinnedRepositories(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.PutGlobalPinnedRepositories(c)
 }
 
 // GetStatus operation middleware
@@ -6009,6 +6121,11 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.POST(options.BaseURL+"/api/v1/repositories/:name/assets/batch-delete", wrapper.BatchDeleteRepositoryAssets)
 	router.POST(options.BaseURL+"/api/v1/repositories/:name/assets/operations", wrapper.ApplyRepositoryAssetOperation)
 	router.GET(options.BaseURL+"/api/v1/repositories/:name/usage", wrapper.GetRepositoryUsage)
+	router.GET(options.BaseURL+"/api/v1/me/pinned-repositories", wrapper.GetMyPinnedRepositories)
+	router.PUT(options.BaseURL+"/api/v1/me/pinned-repositories", wrapper.PutMyPinnedRepositories)
+	router.GET(options.BaseURL+"/api/v1/settings/pinned-repositories", wrapper.GetGlobalPinnedRepositories)
+	router.PUT(options.BaseURL+"/api/v1/settings/pinned-repositories", wrapper.PutGlobalPinnedRepositories)
+	router.GET(options.BaseURL+"/api/v1/public/repositories", wrapper.ListPublicRepositories)
 	router.POST(options.BaseURL+"/api/v1/migrations/discover", wrapper.DiscoverMigrations)
 	router.POST(options.BaseURL+"/api/v1/migrations/remote-repositories", wrapper.ListRemoteNexusRepositories)
 	router.GET(options.BaseURL+"/api/v1/migrations", wrapper.ListMigrations)

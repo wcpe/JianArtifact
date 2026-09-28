@@ -1014,15 +1014,70 @@ export const handlers = [
   }),
 
   // 公开仓库列表（侧边栏公开导航；开关关时与真实端点一致返回 401）。
+  // 响应携带 pinnedNames（全局置顶且匿名可读的仓库名），使公开页也能展示置顶。
   http.get("*/api/v1/public/repositories", ({ request }) => {
     if (!store.anonymousAccess()) {
       return err("unauthorized", "匿名访问已关闭", 401);
     }
     if (isEmptyScenario(request)) {
-      return HttpResponse.json({ items: [], total: 0 });
+      return HttpResponse.json({ items: [], total: 0, pinnedNames: [] });
     }
     // 档位克隆同样是真实仓库，公开导航与登录态列表口径一致。
-    return HttpResponse.json(store.listAnonymousRepositories(1, 100));
+    return HttpResponse.json({
+      ...store.listAnonymousRepositories(1, 100),
+      pinnedNames: store.globalPinnedNames(),
+    });
+  }),
+
+  // —— 置顶仓库（用户级 + 全局兜底，迁移 0043）——
+
+  // 当前用户的置顶：登录用户读自己的；匿名回退全局置顶（与后端一致）。
+  http.get("*/api/v1/me/pinned-repositories", ({ request }) => {
+    const userId = mockUserId(request);
+    return HttpResponse.json(store.pinnedResponse(userId ?? null));
+  }),
+
+  // 覆盖式写入当前用户的置顶，仅登录用户（匿名 401——匿名没有归属主体）。
+  http.put("*/api/v1/me/pinned-repositories", async ({ request }) => {
+    const denied = unauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const userId = mockUserId(request);
+    if (userId === undefined) {
+      return err("unauthorized", "未认证", 401);
+    }
+    const body = (await request.json().catch(() => ({}))) as { repositoryIds?: number[] };
+    if (!Array.isArray(body.repositoryIds)) {
+      return err("bad_request", "repositoryIds 必填", 400);
+    }
+    const saved = store.setPinned(userId, body.repositoryIds);
+    if (saved === null) {
+      return err("not_found", "资源不存在", 404);
+    }
+    return HttpResponse.json(store.pinnedResponse(userId));
+  }),
+
+  // 全局置顶：读（admin）、覆盖写（admin）。
+  http.get(
+    "*/api/v1/settings/pinned-repositories",
+    ({ request }) => adminUnauthorized(request) ?? HttpResponse.json(store.pinnedResponse(null)),
+  ),
+
+  http.put("*/api/v1/settings/pinned-repositories", async ({ request }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const body = (await request.json().catch(() => ({}))) as { repositoryIds?: number[] };
+    if (!Array.isArray(body.repositoryIds)) {
+      return err("bad_request", "repositoryIds 必填", 400);
+    }
+    const saved = store.setPinned(null, body.repositoryIds);
+    if (saved === null) {
+      return err("not_found", "资源不存在", 404);
+    }
+    return HttpResponse.json(store.pinnedResponse(null));
   }),
 
   // —— 匿名访问全局开关（FR-66，admin）——

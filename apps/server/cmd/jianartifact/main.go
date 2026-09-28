@@ -309,8 +309,8 @@ func newApplicationHandler(cfg *config.Config, svc *appServices, assets fs.FS) h
 			r.GET("/api/v1/repositories/:name/download-trend", authMW, apiHandlers.GetRepositoryDownloadTrend)
 			// FR-142: 分组下载趋势 /api/v1/observability/downloads/trend 已收口进契约，
 			// 由 RegisterHandlersWithOptions 注册（勿在此重复注册，避免 gin 路由冲突）。
-			// 公开接口（无需认证）
-			r.GET("/api/v1/public/repositories", apiHandlers.ListPublicRepositories)
+			// 公开接口 /api/v1/public/repositories 同样已收口进契约（响应含全局置顶名），
+			// 由 RegisterHandlersWithOptions 注册，不再经此处手写注册。
 			// FR-30: 全局搜索
 			r.GET("/api/v1/search", authMW, apiHandlers.SearchAssets)
 			// FR-66: 匿名访问全局开关（admin，主体由 Optional 注入，handler 内校验）

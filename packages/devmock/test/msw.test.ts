@@ -221,6 +221,81 @@ describe("devmock MSW 端点行为", () => {
     expect(createdTask).not.toHaveProperty("sourceAuth");
   });
 
+  it("置顶端点：用户级覆盖式写入、匿名回退全局、公开列表携带全局置顶名", async () => {
+    // 公开列表带出全局置顶名（种子 global=[5,2]，均为 public）。
+    const publicList = await fetch("http://localhost/api/v1/public/repositories");
+    const publicBody = (await publicList.json()) as { pinnedNames: string[] };
+    expect(publicBody.pinnedNames).toEqual(["maven-central", "npm-proxy"]);
+
+    // 匿名读「我的置顶」既回退全局，而非 401。
+    const anonMine = await fetch("http://localhost/api/v1/me/pinned-repositories");
+    expect(anonMine.status).toBe(200);
+    await expect(anonMine.json()).resolves.toMatchObject({
+      repositoryIds: [5, 2],
+      names: ["maven-central", "npm-proxy"],
+    });
+
+    // 普通用户读自己的置顶（种子 user:2 无置顶，为空集合）。
+    const userMine = await fetch("http://localhost/api/v1/me/pinned-repositories", {
+      headers: userAuth,
+    });
+    await expect(userMine.json()).resolves.toEqual({ repositoryIds: [], names: [] });
+
+    // 覆盖式写入：第二次只写 3，先前的 1 不再保留。
+    const first = await fetch("http://localhost/api/v1/me/pinned-repositories", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...userAuth },
+      body: JSON.stringify({ repositoryIds: [1, 3] }),
+    });
+    expect(first.status).toBe(200);
+    await expect(first.json()).resolves.toMatchObject({ repositoryIds: [1, 3] });
+    const second = await fetch("http://localhost/api/v1/me/pinned-repositories", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...userAuth },
+      body: JSON.stringify({ repositoryIds: [3] }),
+    });
+    await expect(second.json()).resolves.toMatchObject({
+      repositoryIds: [3],
+      names: ["raw-hosted"],
+    });
+
+    // 非法仓库 ID：404 且不改动既有置顶。
+    const bad = await fetch("http://localhost/api/v1/me/pinned-repositories", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...userAuth },
+      body: JSON.stringify({ repositoryIds: [1, 999999] }),
+    });
+    expect(bad.status).toBe(404);
+    const afterBad = await fetch("http://localhost/api/v1/me/pinned-repositories", {
+      headers: userAuth,
+    });
+    await expect(afterBad.json()).resolves.toMatchObject({ repositoryIds: [3] });
+
+    // 匿名写自己的置顶：401。
+    const anonWrite = await fetch("http://localhost/api/v1/me/pinned-repositories", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ repositoryIds: [1] }),
+    });
+    expect(anonWrite.status).toBe(401);
+
+    // 全局置顶：普通用户 403、管理员可写；私有仓库设为全局置顶后不进入公开 pinnedNames。
+    const userGlobal = await fetch("http://localhost/api/v1/settings/pinned-repositories", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...userAuth },
+      body: JSON.stringify({ repositoryIds: [1] }),
+    });
+    expect(userGlobal.status).toBe(403);
+    const adminGlobal = await fetch("http://localhost/api/v1/settings/pinned-repositories", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...auth },
+      body: JSON.stringify({ repositoryIds: [1, 2] }),
+    });
+    expect(adminGlobal.status).toBe(200);
+    const afterGlobal = await fetch("http://localhost/api/v1/public/repositories");
+    await expect(afterGlobal.json()).resolves.toMatchObject({ pinnedNames: ["npm-proxy"] });
+  });
+
   it("迁移仅管理员可操作，发现后保持 planned 并由显式 start 推进", async () => {
     const userList = await fetch("http://localhost/api/v1/migrations", { headers: userAuth });
     expect(userList.status).toBe(403);
@@ -664,7 +739,11 @@ describe("devmock MSW 端点行为", () => {
     const publicRepositories = await fetch("http://localhost/api/v1/public/repositories", {
       headers: emptyHeaders,
     });
-    await expect(publicRepositories.json()).resolves.toEqual({ items: [], total: 0 });
+    await expect(publicRepositories.json()).resolves.toEqual({
+      items: [],
+      total: 0,
+      pinnedNames: [],
+    });
 
     const auditLogs = await fetch("http://localhost/api/v1/audit-logs", {
       headers: { ...emptyHeaders, [DEV_MOCK_ROUTE_HEADER]: "/audit-logs" },

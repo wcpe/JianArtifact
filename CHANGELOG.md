@@ -9,6 +9,7 @@
 ### 新增
 
 - **仓库别名与重命名（FR-146）**：仓库可配置多个别名，别名与主名**共享命名空间、全局唯一**，可等价访问（协议路由与管理端 API 全域经 `GetByName` 单点按名解析到主名仓库）；`POST /api/v1/repositories/{name}/rename` 重命名后**旧名自动转为别名**，旧链接与既有客户端坐标仍可解析。新增迁移 `0041_repository_alias.sql`（`repository_alias` 表，随仓库级联删除）；契约新增 `Repository.aliases`、`CreateRepositoryRequest`/`UpdateRepositoryRequest` 的 `aliases` 与 rename 端点；配置页签可编辑别名与重命名，创建表单可填别名。下载统计按「主名 ∪ 别名」聚合，`audit_log` / `asset_download_minutes` 保留旧名不回填。语义取舍见 [`docs/adr/0028`](docs/adr/0028-repository-alias-and-rename.md)
+- **置顶仓库改数据库存储（FR-148）**：置顶此前是纯前端 `localStorage` 偏好（键 `jianartifact.pinnedRepos`），换设备 / 清缓存即丢失。现新增迁移 `0043_pinned_repository.sql`：`pinned_repository` 表（`user_id` NULL = **全局置顶**、非 NULL = 用户私有置顶，主键 `(user_id, repository_id)`，随 `user` / `repository` 级联删除）与 partial unique index `idx_pinned_repo_global`（`repository_id WHERE user_id IS NULL`，兜住 SQLite 主键唯一性不覆盖 NULL 的缺口）。契约新增 `GET/PUT /api/v1/me/pinned-repositories`（用户级，匿名 `GET` 回退全局、匿名 `PUT` 401）与 `GET/PUT /api/v1/settings/pinned-repositories`（仅管理员），写入为覆盖式（按 repositoryId 整体替换）；`/api/v1/public/repositories` 响应增 `pinnedNames`（全局置顶），使**公开页也按置顶排序并显示图钉**。前端 `usePinnedRepos` 改为读服务端数据 + 乐观更新失败回滚，`localStorage` 仅作只读降级；既有浏览器内置顶无法读进服务端，需重新置顶（不做自动导入）
 
 ### 修复
 

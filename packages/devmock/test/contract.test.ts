@@ -11,6 +11,11 @@ import {
   mockConnectionStatus,
   mockHealthz,
   mockLoginResponse,
+  mockPinnedRepositories,
+  mockPublicRepositoryList,
+  mockPublishPoliciesBatchRequest,
+  mockPublishPoliciesBatchResponse,
+  mockPutPinnedRepositories,
   mockReadyz,
   mockRepository,
   mockRepositoryList,
@@ -67,6 +72,18 @@ describe("devmock ↔ OpenAPI 契约一致性", () => {
     expectValid("Repository", mockRepository());
     expectValid("RepositoryList", mockRepositoryList());
     expectValid("AclList", mockAclList());
+  });
+
+  it("置顶仓库与公开列表响应满足契约", () => {
+    expectValid("PinnedRepositoriesResponse", mockPinnedRepositories());
+    expectValid("PutPinnedRepositoriesRequest", mockPutPinnedRepositories());
+    expectValid("PublicRepositoryList", mockPublicRepositoryList());
+
+    // 漂移可检出：置顶响应缺 names、公开列表缺 pinnedNames 都必须被拒绝。
+    const validatePinned = ajv.compile(schemaFor("PinnedRepositoriesResponse"));
+    expect(validatePinned({ repositoryIds: [1] })).toBe(false);
+    const validatePublic = ajv.compile(schemaFor("PublicRepositoryList"));
+    expect(validatePublic({ items: [], total: 0 })).toBe(false);
   });
 
   it("连接状态响应满足契约并接受真实枚举", () => {

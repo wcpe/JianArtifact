@@ -16,12 +16,18 @@ export type TokenList = Schemas["TokenList"];
 export type TokenCreated = Schemas["TokenCreated"];
 export type Repository = Schemas["Repository"];
 export type RepositoryList = Schemas["RepositoryList"];
+export type PinnedRepositoriesResponse = Schemas["PinnedRepositoriesResponse"];
+export type PutPinnedRepositoriesRequest = Schemas["PutPinnedRepositoriesRequest"];
+export type PublicRepositoryList = Schemas["PublicRepositoryList"];
 export type ConnectionStatus = Schemas["ConnectionStatus"];
 export type AclList = Schemas["AclList"];
 export type AssetList = Schemas["AssetList"];
 export type BatchDeleteAssetsRequest = Schemas["BatchDeleteAssetsRequest"];
 export type BatchDeleteAssetFailure = Schemas["BatchDeleteAssetFailure"];
 export type BatchDeleteAssetsResponse = Schemas["BatchDeleteAssetsResponse"];
+export type PublishPoliciesBatchRequest = Schemas["PublishPoliciesBatchRequest"];
+export type PublishPolicyBatchResult = Schemas["PublishPolicyBatchResult"];
+export type PublishPoliciesBatchResponse = Schemas["PublishPoliciesBatchResponse"];
 export type UsageInfo = Schemas["UsageInfo"];
 
 /** GET /api/v1/audit-logs 的非 OpenAPI 管理面响应。 */
@@ -131,6 +137,21 @@ export function mockRepository(): Repository {
 /** GET /api/v1/repositories 的契约响应。 */
 export function mockRepositoryList(): RepositoryList {
   return { items: [mockRepository()], total: 1 };
+}
+
+/** GET /api/v1/me/pinned-repositories 与 /settings/pinned-repositories 的契约响应。 */
+export function mockPinnedRepositories(): PinnedRepositoriesResponse {
+  return { repositoryIds: [1, 2], names: ["maven-releases", "npm-proxy"] };
+}
+
+/** PUT /api/v1/{me,settings}/pinned-repositories 的契约请求体。 */
+export function mockPutPinnedRepositories(): PutPinnedRepositoriesRequest {
+  return { repositoryIds: [1, 2] };
+}
+
+/** GET /api/v1/public/repositories 的契约响应（携带全局置顶名）。 */
+export function mockPublicRepositoryList(): PublicRepositoryList {
+  return { items: [mockRepository()], total: 1, pinnedNames: ["npm-proxy"] };
 }
 
 /** FR-114：仓库连接状态的契约响应（AUTO_BLOCKED 示例，含阻止窗口）。 */

@@ -67,6 +67,7 @@ import type {
   Repository,
   RepoVisibility,
 } from "../api/types";
+import { ApiError } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { usePinnedRepos } from "../hooks/usePinnedRepos";
 import { useAsync } from "../hooks/useAsync";
@@ -255,7 +256,7 @@ export function RepositoriesPage() {
   const { user } = useAuth();
   // 仓库创建、配置、清理与删除均为全局管理员操作，前端仅按会话快照展示。
   const canManage = user?.role === "admin";
-  // 置顶：本地偏好（localStorage），置顶仓库排到列表最前（分页语义内）。
+  // 置顶：服务端持久化（用户级；匿名回退全局置顶），置顶仓库排到列表最前（分页语义内）。
   const { isPinned, toggle: togglePin, sortPinnedFirst } = usePinnedRepos();
   const [page, setPage] = useState(1);
   // 窄屏（< 48em）：8 列表格在手机上会把每列压到换行甚至截断（类型徽章只剩「P..」）。
@@ -341,6 +342,22 @@ export function RepositoriesPage() {
     : pinnedFirst;
   const totalPages = Math.ceil(filteredItems.length / rowsPerPage);
   const visibleItems = filteredItems.slice((page - 1) * rowsPerPage, page * rowsPerPage);
+  // 分组只作用于当前页的可见行，保持置顶、排序、筛选和分页的既有语义不变。
+  const activeGroupBy = groupBy === "format" || groupBy === "type" ? groupBy : null;
+  const groupedVisibleItems = activeGroupBy
+    ? Array.from(
+        visibleItems.reduce((groups, repo) => {
+          const key = repo[activeGroupBy];
+          const current = groups.get(key) ?? [];
+          current.push(repo);
+          groups.set(key, current);
+          return groups;
+        }, new Map<string, Repository[]>()),
+      ).flatMap(([groupKey, repos]) =>
+        repos.map((repo, index) => ({ repo, groupKey, showGroupHeader: index === 0 })),
+      )
+    : visibleItems.map((repo) => ({ repo, groupKey: null, showGroupHeader: false }));
+  const tableColumnCount = isNarrow ? 1 : 6 + (user ? 2 : 0);
 
   // 页码越界回退：筛选或数据量变化后当前页可能已不存在。
   if (page > 1 && page > totalPages) {
@@ -425,6 +442,25 @@ export function RepositoriesPage() {
         state.reload();
       })
       .catch(notifyError);
+  };
+
+  /**
+   * 切换置顶：写服务端（覆盖式），失败回滚并给出可区分的提示。
+   * 匿名置顶由服务端 401 拒绝（匿名没有归属主体），此处翻译为「需登录」。
+   */
+  const handleTogglePin = (repoName: string) => {
+    togglePin(repoName).catch((err: unknown) => {
+      if (err instanceof ApiError && err.status === 401) {
+        notifyError(new Error(t("repositories.pinNeedsLogin")));
+        return;
+      }
+      // 后端返回了可读消息时优先展示（如「资源不存在」），否则用本地化兜底文案。
+      if (err instanceof ApiError && err.message) {
+        notifyError(err);
+        return;
+      }
+      notifyError(new Error(t("repositories.pinFailed")));
+    });
   };
 
   const handleDelete = (repo: Repository) => {
@@ -723,7 +759,7 @@ export function RepositoriesPage() {
                                         <IconPinnedOff size={14} />
                                       )
                                     }
-                                    onClick={() => togglePin(repo.name)}
+                                    onClick={() => handleTogglePin(repo.name)}
                                     aria-label={
                                       pinned ? t("repositories.unpin") : t("repositories.pin")
                                     }

@@ -53,6 +53,8 @@ import type {
   RemoteNexusRepositoryRequest,
   Repository,
   RepositoryList,
+  PinnedRepositoriesResponse,
+  PublicRepositoryList,
   RepoFormat,
   RepoType,
   RepoVisibility,
@@ -746,9 +748,47 @@ export function cleanupEmptyArtifacts(repoName: string): Promise<{ deleted: numb
   return request<{ deleted: number }>(`/repositories/${repoName}/cleanup`, { method: "POST" });
 }
 
-/** 公开仓库列表（无需认证，仅返回 visibility=public 的仓库）。 */
-export function listPublicRepositories(): Promise<RepositoryList> {
-  return request<RepositoryList>("/public/repositories");
+/**
+ * 公开仓库列表（无需认证，仅返回 visibility=public 的仓库）。
+ * 响应携带 `pinnedNames`（全局置顶且匿名可读的仓库名），使公开页也能展示置顶。
+ */
+export function listPublicRepositories(): Promise<PublicRepositoryList> {
+  return request<PublicRepositoryList>("/public/repositories");
+}
+
+// —— 置顶仓库（用户级 + 全局兜底，见迁移 0043）——
+
+/**
+ * 当前用户的置顶仓库：登录用户读自己的（服务端持久化，跨设备一致）；
+ * 匿名请求回退全局置顶，使未登录浏览也有稳定的置顶顺序。
+ */
+export function getMyPinnedRepositories(): Promise<PinnedRepositoriesResponse> {
+  return request<PinnedRepositoriesResponse>("/me/pinned-repositories");
+}
+
+/** 覆盖式写入当前用户的置顶集合（仅登录用户；空数组即取消全部置顶）。 */
+export function putMyPinnedRepositories(
+  repositoryIds: number[],
+): Promise<PinnedRepositoriesResponse> {
+  return request<PinnedRepositoriesResponse>("/me/pinned-repositories", {
+    method: "PUT",
+    body: { repositoryIds },
+  });
+}
+
+/** 读取全局置顶仓库（仅管理员）。 */
+export function getGlobalPinnedRepositories(): Promise<PinnedRepositoriesResponse> {
+  return request<PinnedRepositoriesResponse>("/settings/pinned-repositories");
+}
+
+/** 覆盖式写入全局置顶仓库（仅管理员）。 */
+export function putGlobalPinnedRepositories(
+  repositoryIds: number[],
+): Promise<PinnedRepositoriesResponse> {
+  return request<PinnedRepositoriesResponse>("/settings/pinned-repositories", {
+    method: "PUT",
+    body: { repositoryIds },
+  });
 }
 
 // —— FR-66: 匿名访问全局开关（admin）——

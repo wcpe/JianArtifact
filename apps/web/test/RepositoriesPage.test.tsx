@@ -211,29 +211,85 @@ describe("仓库管理", () => {
 
   it("置顶仓库排到列表首位，可取消置顶", async () => {
     const user = userEvent.setup();
-    // 清理本地置顶偏好，保证种子顺序可预期。
-    localStorage.removeItem("jianartifact.pinnedRepos");
     renderWithProviders(<RepositoriesPage />, { route: "/repositories", authenticated: true });
     await screen.findByText("maven-releases");
 
-    // 种子顺序首位是 maven-releases；置顶 npm-proxy 后应排到第一行。
-    const npmRow = screen.getByText("npm-proxy").closest("tr")!;
-    await user.click(within(npmRow).getByLabelText("置顶"));
+    // 置顶 npm-proxy 后应排到第一行（每帧重新查询行，避免 DOM 复排序后拿到陈旧节点）。
+    const firstRow = () => screen.getAllByRole("row")[1];
+    await user.click(within(screen.getByText("npm-proxy").closest("tr")!).getByLabelText("置顶"));
 
+    await waitFor(() => expect(within(firstRow()).getByText("npm-proxy")).toBeTruthy());
+    expect(within(firstRow()).getByLabelText("取消置顶")).toBeTruthy();
+
+    // 取消置顶后恢复默认排序（name asc → docker-hub 首位）。
+    await user.click(within(firstRow()).getByLabelText("取消置顶"));
+    await waitFor(() => expect(within(firstRow()).getByText("docker-hub")).toBeTruthy());
+    expect(screen.queryByLabelText("取消置顶")).toBeNull();
+  });
+
+  it("置顶写入失败时回滚本地状态并提示", async () => {
+    const user = userEvent.setup();
+    // 覆盖 PUT 置顶端点：返回 500，验证乐观更新回滚。
+    server.use(
+      http.put("*/api/v1/me/pinned-repositories", () =>
+        HttpResponse.json(
+          { error: { code: "internal_error", message: "内部错误" } },
+          { status: 500 },
+        ),
+      ),
+    );
+    renderWithProviders(<RepositoriesPage />, { route: "/repositories", authenticated: true });
+    await screen.findByText("maven-releases");
+
+    const firstRow = () => screen.getAllByRole("row")[1];
+    // 写入前首行是 docker-hub（name asc，无置顶）。
+    expect(within(firstRow()).getByText("docker-hub")).toBeTruthy();
+
+    await user.click(within(screen.getByText("npm-proxy").closest("tr")!).getByLabelText("置顶"));
+
+    // 失败后回滚：首行仍是 docker-hub，图钉未落下（无「取消置顶」按钮）。
+    await waitFor(() => expect(within(firstRow()).getByText("docker-hub")).toBeTruthy());
+    expect(screen.queryByLabelText("取消置顶")).toBeNull();
+  });
+
+  it("匿名浏览公开页时全局置顶生效（排序 + 图钉）", async () => {
+    renderWithProviders(<RepositoriesPage />, { route: "/repositories", authenticated: false });
+    await screen.findByText("npm-proxy");
+
+    // 种子全局置顶为 [maven-central, npm-proxy]，两者都是 public：匿名视图里占据前两行。
+    const topRowNames = () =>
+      screen
+        .getAllByRole("row")
+        .slice(1, 3)
+        .map((row) => row.textContent ?? "");
+    await waitFor(() => {
+      const names = topRowNames();
+      expect(names.some((name) => name.includes("maven-central"))).toBe(true);
+      expect(names.some((name) => name.includes("npm-proxy"))).toBe(true);
+    });
+    // 匿名视图没有置顶按钮（写置顶需登录），此时图钉图标数即置顶行数。
+    expect(document.querySelectorAll("svg.tabler-icon-pinned").length).toBe(2);
+  });
+
+  it("切换分组后按格式插入分组行且不改变仓库行顺序", async () => {
+    const user = userEvent.setup();
+    localStorage.removeItem("jianartifact.repoView");
+    renderWithProviders(<RepositoriesPage />, { route: "/repositories", authenticated: true });
+    await screen.findByText("npm-proxy");
+
+    await user.click(screen.getByRole("combobox", { name: "分组" }));
+    await user.click(await screen.findByRole("option", { name: "按格式" }));
+
+    expect(screen.getByTestId("repo-group-format-maven")).toBeTruthy();
+    expect(screen.getByTestId("repo-group-format-npm")).toBeTruthy();
+    expect(screen.getByTestId("repo-group-format-raw")).toBeTruthy();
     const rows = screen.getAllByRole("row");
-    expect(within(rows[1]).getByText("npm-proxy")).toBeTruthy();
-    expect(within(rows[1]).getByLabelText("取消置顶")).toBeTruthy();
-    // 本地偏好已持久化（按浏览器记忆）。
-    expect(JSON.parse(localStorage.getItem("jianartifact.pinnedRepos") ?? "[]")).toContain(
-      "npm-proxy",
+    expect(rows.findIndex((row) => row.textContent?.includes("格式 : maven"))).toBeLessThan(
+      rows.findIndex((row) => row.textContent?.includes("maven-releases")),
     );
-
-    // 取消置顶后恢复服务端排序（name asc → docker-hub 首位）。
-    await user.click(within(rows[1]).getByLabelText("取消置顶"));
-    await waitFor(() =>
-      expect(within(screen.getAllByRole("row")[1]).queryByText("npm-proxy")).toBeNull(),
+    expect(JSON.parse(localStorage.getItem("jianartifact.repoView") ?? "{}").groupBy).toBe(
+      "format",
     );
-    expect(localStorage.getItem("jianartifact.pinnedRepos")).toBe("[]");
   });
 
   it("表头点击排序可切换升降序并持久化", async () => {

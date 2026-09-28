@@ -40,6 +40,7 @@ type appServices struct {
 	operationsMetrics   *repository.OperationsObservabilityRepo // FR-53/120：当前节点业务与主机读模型
 	operationsAlertRepo *repository.OperationsAlertRepo         // v0.8.0：运维告警去重持久化
 	assetDownloadRepo   *repository.AssetDownloadRepo           // FR-142：制品下载计量明细
+	pinnedRepo          *repository.PinnedRepoRepo              // 置顶仓库（用户级 + 全局兜底）
 	dashboardSvc        *domain.OperationsDashboardService
 	assetDownloadSvc    *domain.AssetDownloadService
 	hostMonitoringSvc   *domain.HostMonitoringService
@@ -160,6 +161,7 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	operationsAlertRepo := repository.NewOperationsAlertRepo(db)
 	dashboardSvc := domain.NewOperationsDashboardService(operationsMetrics)
 	assetDownloadRepo := repository.NewAssetDownloadRepo(db)
+	pinnedRepo := repository.NewPinnedRepoRepo(db)
 	assetDownloadSvc := domain.NewAssetDownloadService(assetDownloadRepo)
 	hostMonitoringSvc := domain.NewHostMonitoringService(operationsMetrics, domain.NewHostCollector(cfg.BlobDir, func() bool { return db.Ping() == nil }))
 
@@ -220,6 +222,7 @@ func openServices(cfg *config.Config) (*appServices, error) {
 		dashboardSvc:        dashboardSvc,
 		assetDownloadSvc:    assetDownloadSvc,
 		assetDownloadRepo:   assetDownloadRepo,
+		pinnedRepo:          pinnedRepo,
 		hostMonitoringSvc:   hostMonitoringSvc,
 		backupSvc:           domain.NewBackupService(db, repository.NewBackupPackageRepo(db), blobs, cfg.DataDir, cfg.DBPath, version, nodeIdentity.NodeID),
 		restoreSvc:          restoreSvc,
@@ -267,6 +270,7 @@ func (s *appServices) handlers(version string, checks []func() error) *api.Handl
 		OperationsObservability: s.operationsMetrics,
 		OperationsAlerts:        s.operationsAlertRepo,
 		AssetDownloads:          s.assetDownloadRepo,
+		Pinned:                  s.pinnedRepo,
 		AuditAttentionKey:       s.auditAttentionKey,
 		AuditSourceNode:         s.nodeIdentity.NodeID(),
 		Backups:                 s.backupSvc,

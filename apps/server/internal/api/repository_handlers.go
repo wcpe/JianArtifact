@@ -539,7 +539,9 @@ func (h *Handlers) CleanupEmptyMavenArtifacts(c *gin.Context) {
 
 // ListPublicRepositories 匿名可读仓库列表（无需认证）：public ∪ anonymous 主体
 // 被授 read 的仓库（FR-66）。全局开关关闭时 401。
-// 非契约端点，经 WithProtocolRoutes 注册。
+// 响应附带 pinnedNames（全局置顶且匿名可读的仓库名），使**公开页也能展示置顶**。
+// 路径已在契约内（api/openapi.yaml /api/v1/public/repositories），由生成的
+// ServerInterfaceWrapper 注册，此处实现接口方法。
 func (h *Handlers) ListPublicRepositories(c *gin.Context) {
 	if !h.anonymousAllowed(c) {
 		return
@@ -558,7 +560,12 @@ func (h *Handlers) ListPublicRepositories(c *gin.Context) {
 		stats := statsMap[rows[i].ID]
 		items = append(items, toAPIRepository(&rows[i], &stats))
 	}
-	c.JSON(http.StatusOK, RepositoryList{Items: items, Total: len(items)})
+	pinnedNames, err := h.globalPinnedNames()
+	if err != nil {
+		writeDomainErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, PublicRepositoryList{Items: items, Total: len(items), PinnedNames: pinnedNames})
 }
 
 // anonymousAllowed 校验匿名访问全局开关；关闭则写 401 并返回 false（FR-66）。

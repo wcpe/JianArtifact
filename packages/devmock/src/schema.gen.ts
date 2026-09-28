@@ -666,6 +666,80 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/me/pinned-repositories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 当前用户的置顶仓库（登录用户读自己的；匿名回退全局置顶）
+         * @description 返回当前主体的置顶仓库集合：已登录用户读其**个人置顶**（服务端持久化，跨设备一致）；
+         *     匿名请求回退**全局置顶**（由管理员维护），使未登录 / 公开浏览也有稳定的置顶顺序。
+         *     names 为读取时实时解析的当前主名，与 repositoryIds 一一对应、顺序一致。
+         */
+        get: operations["getMyPinnedRepositories"];
+        /**
+         * 覆盖式写入当前用户的置顶仓库（仅登录用户）
+         * @description 整体替换当前用户的置顶集合（先删后插，空数组即取消全部置顶）；请求中的非法仓库 ID
+         *     返回 404 且不改动既有置顶。匿名调用返回 401——匿名写入没有归属主体、会污染他人视图，
+         *     故必须登录；未登录用户由全局置顶兜底。
+         */
+        put: operations["putMyPinnedRepositories"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/settings/pinned-repositories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 全局置顶仓库（仅管理员）
+         * @description 读取全局置顶集合：用于未登录用户与无个人置顶用户的兜底，并决定公开页的置顶展示。
+         */
+        get: operations["getGlobalPinnedRepositories"];
+        /**
+         * 覆盖式写入全局置顶仓库（仅管理员）
+         * @description 整体替换全局置顶集合（先删后插，空数组即清空）；请求中的非法仓库 ID 返回 404
+         *     且不改动既有置顶。全局置顶对所有用户可见，故限管理员维护。
+         */
+        put: operations["putGlobalPinnedRepositories"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/repositories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 公开仓库列表（无需认证，含全局置顶名）
+         * @description 匿名可读仓库列表（public ∪ 匿名主体被授 read 的仓库）。响应附带 **pinnedNames**（全局置顶
+         *     仓库的当前主名），使公开页也能按置顶排序并展示图钉。全局匿名访问开关关闭时返回 401。
+         */
+        get: operations["listPublicRepositories"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/migrations/discover": {
         parameters: {
             query?: never;
@@ -2004,6 +2078,31 @@ export interface components {
         RepositoryList: {
             items: components["schemas"]["Repository"][];
             total: number;
+        };
+        /**
+         * @description 公开仓库列表：items/total 与 RepositoryList 同构，额外携带 pinnedNames —— 全局置顶
+         *     仓库的当前主名（顺序即置顶顺序），供公开页（匿名浏览）排序与展示图钉。
+         */
+        PublicRepositoryList: {
+            items: components["schemas"]["Repository"][];
+            total: number;
+            /** @description 全局置顶仓库的当前主名（有序；公开页据此置顶前置并显示图钉）。 */
+            pinnedNames: string[];
+        };
+        /**
+         * @description 置顶仓库响应：repositoryIds 为仓库 ID（持久化关联，重命名不受影响），names 为读取时
+         *     实时解析的当前主名，两者一一对应、顺序一致（顺序即置顶顺序）。
+         */
+        PinnedRepositoriesResponse: {
+            /** @description 置顶仓库的 ID（按置顶顺序）。 */
+            repositoryIds: number[];
+            /** @description 置顶仓库的当前主名（按置顶顺序；已删除仓库不出现在此列表）。 */
+            names: string[];
+        };
+        /** @description 覆盖式写入置顶集合：整体替换当前作用域的置顶，空数组即取消全部置顶。 */
+        PutPinnedRepositoriesRequest: {
+            /** @description 置顶仓库的完整 ID 集合（按期望顺序；服务端去重后按序写入）。 */
+            repositoryIds: number[];
         };
         CreateRepositoryRequest: {
             name: string;
@@ -3892,6 +3991,124 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+        };
+    };
+    getMyPinnedRepositories: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 置顶仓库集合 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PinnedRepositoriesResponse"];
+                };
+            };
+        };
+    };
+    putMyPinnedRepositories: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutPinnedRepositoriesRequest"];
+            };
+        };
+        responses: {
+            /** @description 写入后的置顶集合 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PinnedRepositoriesResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    getGlobalPinnedRepositories: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 全局置顶集合 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PinnedRepositoriesResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    putGlobalPinnedRepositories: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutPinnedRepositoriesRequest"];
+            };
+        };
+        responses: {
+            /** @description 写入后的全局置顶集合 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PinnedRepositoriesResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listPublicRepositories: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 公开仓库列表 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicRepositoryList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
         };
     };
     discoverMigrations: {

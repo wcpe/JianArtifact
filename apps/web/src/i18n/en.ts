@@ -603,7 +603,7 @@ export const en = {
     statArtifacts: "Artifacts",
     statSize: "Size",
     statCreatedAt: "Created",
-    // Repository download stats (endpoint B: non-contract /download-trend)
+    // 仓库下载统计（端点 B：非契约 /download-trend）
     statDownloads: "Total downloads",
     downloadTrendTitle: "Download Trend (last 24h)",
     downloadTrendPrimary: "Downloads",

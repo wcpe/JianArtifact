@@ -38,6 +38,8 @@ export type BackupImportList = Schemas["BackupImportList"];
 export type BackupImportStatus = Schemas["BackupImportStatus"];
 export type BackupImportOrigin = Schemas["BackupImportOrigin"];
 export type CreateBackupImportRequest = Schemas["CreateBackupImportRequest"];
+export type PinnedRepositoriesResponse = Schemas["PinnedRepositoriesResponse"];
+export type PublicRepositoryList = Schemas["PublicRepositoryList"];
 
 export interface PublishPolicy {
   userId: number;
@@ -103,6 +105,11 @@ interface State {
   /** 管理端服务设置；集群拓扑仍由部署配置决定。 */
   serviceSettings: Omit<ServiceSettings, "anonymousAccess">;
   /** FR-86：复制同步调度启停（默认开）。 */
+  /**
+   * 置顶仓库（迁移 0043 语义）：key 为 `global`（匿名/全局兜底）或 `user:<id>`；
+   * value 为仓库 ID 数组（顺序即置顶顺序）。覆盖式写入，与后端一致。
+   */
+  pinned: Record<string, number[]>;
 }
 
 function seed(): State {
@@ -668,6 +675,9 @@ function seed(): State {
     publishPolicies: {},
     seq: { user: 5, token: 4, repo: 9, migration: 0, operation: 0 },
     anonymousAccessEnabled: true,
+    // 种子置顶：全局置顶 maven-central 与 npm-proxy（均为 public，公开页据此展示置顶）。
+    // key 口径：`global` 为全局/匿名兜底，`user:<id>` 为某登录用户的私有置顶（默认无）。
+    pinned: { global: [5, 2] },
     serviceSettings: {
       publicUrl: "https://repo.example.com",
       upstreamTimeout: 30,
@@ -1029,6 +1039,34 @@ export const store = {
     return this.getPublishPolicy(userId, repository);
   },
 
+  /**
+   * 批量应用同一份发布策略。与真实后端同源：先对全部仓库做统一预校验，
+   * 任一仓库不存在（missing）或不是 hosted（notHosted）即整体拒绝，不写任何仓库。
+   */
+  setPublishPolicies(
+    userId: number,
+    repositories: string[],
+    patch: Omit<PublishPolicy, "userId" | "username" | "repository">,
+  ): {
+    results: { repository: string; ok: boolean; error?: string }[];
+    missing?: string;
+    notHosted?: string;
+  } | null {
+    const user = state.users.find((item) => item.id === userId);
+    if (!user) return null;
+    const names = [...new Set(repositories.map((name) => name.trim()).filter(Boolean))];
+    for (const name of names) {
+      const repo = state.repositories.find((item) => item.name === name);
+      if (!repo) return { results: [], missing: name };
+      if (repo.type !== "hosted") return { results: [], notHosted: name };
+    }
+    const results = names.map((name) => {
+      this.setPublishPolicy(userId, name, patch);
+      return { repository: name, ok: true };
+    });
+    return { results };
+  },
+
   createUser(username: string, role: User["role"]): User | null {
     if (state.users.some((u) => u.username === username)) {
       return null;
@@ -1152,6 +1190,53 @@ export const store = {
   /** FR-66：匿名访问全局开关。 */
   anonymousAccess(): boolean {
     return state.anonymousAccessEnabled;
+  },
+
+  // —— 置顶仓库（迁移 0043 语义：用户级 + 全局兜底）——
+
+  /** 置顶作用域键：null 表示全局。 */
+  pinnedKey(userId: number | null): string {
+    return userId === null ? "global" : `user:${userId}`;
+  },
+
+  /** 读取某作用域的置顶仓库 ID（按置顶顺序，过滤已被删除的仓库）。 */
+  pinnedIds(userId: number | null): number[] {
+    const ids = state.pinned[this.pinnedKey(userId)] ?? [];
+    return ids.filter((id) => state.repositories.some((r) => r.id === id));
+  },
+
+  /** 覆盖式写入某作用域的置顶：去重保序；任一 ID 不存在时返回 null（不改动既有置顶）。 */
+  setPinned(userId: number | null, ids: number[]): number[] | null {
+    const ordered: number[] = [];
+    for (const id of ids) {
+      if (!ordered.includes(id)) ordered.push(id);
+    }
+    if (ordered.some((id) => !state.repositories.some((r) => r.id === id))) {
+      return null;
+    }
+    state.pinned[this.pinnedKey(userId)] = ordered;
+    return [...ordered];
+  },
+
+  /** 置顶响应的通用组装：ID 顺序保留，名字按当前主名实时解析（已删仓库跳过）。 */
+  pinnedResponse(userId: number | null): PinnedRepositoriesResponse {
+    const repositoryIds: number[] = [];
+    const names: string[] = [];
+    for (const id of this.pinnedIds(userId)) {
+      const repo = state.repositories.find((r) => r.id === id);
+      if (!repo) continue;
+      repositoryIds.push(id);
+      names.push(repo.name);
+    }
+    return { repositoryIds, names };
+  },
+
+  /** 全局置顶中**匿名可读**（public）的仓库名，供公开列表携带。 */
+  globalPinnedNames(): string[] {
+    return this.pinnedIds(null)
+      .map((id) => state.repositories.find((r) => r.id === id))
+      .filter((repo): repo is Repository => repo !== undefined && repo.visibility === "public")
+      .map((repo) => repo.name);
   },
 
   setAnonymousAccess(enabled: boolean): boolean {
