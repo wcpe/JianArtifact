@@ -2171,10 +2171,14 @@ export interface components {
             /** @description 置顶仓库的当前主名（按置顶顺序；已删除仓库不出现在此列表）。 */
             names: string[];
         };
-        /** @description 覆盖式写入置顶集合：整体替换当前作用域的置顶，空数组即取消全部置顶。 */
+        /**
+         * @description 覆盖式写入置顶集合：整体替换当前作用域的置顶，空数组即取消全部置顶。
+         *     `repositoryIds` 必须**显式提供**（缺省即 400）：空数组表示「取消全部置顶」，
+         *     与「字段漏传」语义不同——后者若按空数组处理会静默清空既有置顶。
+         */
         PutPinnedRepositoriesRequest: {
-            /** @description 置顶仓库的完整 ID 集合（按期望顺序；服务端去重后按序写入）。 */
-            repositoryIds: number[];
+            /** @description 置顶仓库的完整 ID 集合（按期望顺序；服务端去重后按序写入）；必须显式提供。 */
+            repositoryIds?: number[];
         };
         CreateRepositoryRequest: {
             name: string;

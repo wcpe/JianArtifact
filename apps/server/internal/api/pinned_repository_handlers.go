@@ -28,6 +28,17 @@ import (
 // 数万次查询并长时间持有 SQLite 写锁，故在入口按数量上限拒绝（400）。
 const maxPinnedRepositoryIds = 200
 
+// pinnedRequestIDs 取出覆盖式写入的仓库 ID 集合。字段必须**显式提供**：空数组表示「取消全部
+// 置顶」，与「字段漏传」语义不同——漏传若按空数组处理会静默清空既有置顶，故直接 400。
+func pinnedRequestIDs(c *gin.Context, req PutPinnedRepositoriesRequest) ([]int64, bool) {
+	if req.RepositoryIds == nil {
+		auth.WriteError(c, http.StatusBadRequest, "bad_request",
+			"repositoryIds 必须显式提供；空数组表示取消全部置顶")
+		return nil, false
+	}
+	return *req.RepositoryIds, true
+}
+
 // GetMyPinnedRepositories 读取当前用户的置顶仓库：登录用户读自己的，匿名回退全局置顶。
 func (h *Handlers) GetMyPinnedRepositories(c *gin.Context) {
 	p, authed := auth.PrincipalFrom(c)
@@ -58,15 +69,19 @@ func (h *Handlers) PutMyPinnedRepositories(c *gin.Context) {
 		pinnedUnavailable(c)
 		return
 	}
-	if len(req.RepositoryIds) > maxPinnedRepositoryIds {
+	ids, ok := pinnedRequestIDs(c, req)
+	if !ok {
+		return
+	}
+	if len(ids) > maxPinnedRepositoryIds {
 		auth.WriteError(c, http.StatusBadRequest, "too_many_repositories", "置顶仓库数量超过上限")
 		return
 	}
-	if err := h.requirePinnable(req.RepositoryIds, p.UserID, p.IsAdmin()); err != nil {
+	if err := h.requirePinnable(ids, p.UserID, p.IsAdmin()); err != nil {
 		writePinnedErr(c, err)
 		return
 	}
-	if err := h.pinned.Set(&p.UserID, req.RepositoryIds); err != nil {
+	if err := h.pinned.Set(&p.UserID, ids); err != nil {
 		writePinnedErr(c, err)
 		return
 	}
@@ -108,15 +123,19 @@ func (h *Handlers) PutGlobalPinnedRepositories(c *gin.Context) {
 		pinnedUnavailable(c)
 		return
 	}
-	if len(req.RepositoryIds) > maxPinnedRepositoryIds {
+	ids, ok := pinnedRequestIDs(c, req)
+	if !ok {
+		return
+	}
+	if len(ids) > maxPinnedRepositoryIds {
 		auth.WriteError(c, http.StatusBadRequest, "too_many_repositories", "置顶仓库数量超过上限")
 		return
 	}
-	if err := h.requirePinnable(req.RepositoryIds, p.UserID, true); err != nil {
+	if err := h.requirePinnable(ids, p.UserID, true); err != nil {
 		writePinnedErr(c, err)
 		return
 	}
-	if err := h.pinned.Set(nil, req.RepositoryIds); err != nil {
+	if err := h.pinned.Set(nil, ids); err != nil {
 		writePinnedErr(c, err)
 		return
 	}

@@ -239,6 +239,28 @@ func TestPinnedWriteRejectsOversizedRepositoryIds(t *testing.T) {
 	}
 }
 
+// 请求体缺 repositoryIds：400 且不改动既有置顶 —— 省略字段与空数组语义不同（空数组＝取消
+// 全部置顶），漏传若按空数组处理会静默清空。
+func TestPinnedWriteMissingRepositoryIdsIs400(t *testing.T) {
+	env := newPinnedTestEnv(t)
+	a := env.seed(t, "pin-a", "public")
+	if rec := servePinned(env, userPrincipal(), http.MethodPut, "/api/v1/me/pinned-repositories", fmt.Sprintf(`{"repositoryIds":[%d]}`, a)); rec.Code != http.StatusOK {
+		t.Fatalf("预置置顶应 200，得 %d：%s", rec.Code, rec.Body.String())
+	}
+
+	for _, body := range []string{`{}`, `{"repositoryIds":null}`} {
+		rec := servePinned(env, userPrincipal(), http.MethodPut, "/api/v1/me/pinned-repositories", body)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("缺 repositoryIds（%s）应 400，得 %d：%s", body, rec.Code, rec.Body.String())
+		}
+	}
+	// 失败写入不产生副作用：既有置顶仍在。
+	rec := servePinned(env, userPrincipal(), http.MethodGet, "/api/v1/me/pinned-repositories", "")
+	if got := decodePinned(t, rec); len(got.RepositoryIds) != 1 || got.RepositoryIds[0] != a {
+		t.Fatalf("失败写入不应改动既有置顶，得 %+v", got)
+	}
+}
+
 // 公开列表携带全局置顶名：只含匿名可读者，私有仓库的全局置顶不外泄。
 func TestListPublicRepositoriesIncludesGlobalPinnedNames(t *testing.T) {
 	env := newPinnedTestEnv(t)
