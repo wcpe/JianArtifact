@@ -661,7 +661,7 @@ func TestRawBasicWriteCarriesRequestID(t *testing.T) {
 				}
 			}
 
-			entries, err := e.auditLogs.List(repository.AuditFilter{Action: "asset.put", Repo: "raw-request-id", Limit: 10})
+			entries, err := e.auditLogs.List(repository.AuditFilter{Action: "asset.put", Repos: []string{"raw-request-id"}, Limit: 10})
 			if err != nil {
 				t.Fatalf("查询 Raw 审计：%v", err)
 			}
@@ -790,7 +790,7 @@ func TestRawDeleteRequiresGlobalAdmin(t *testing.T) {
 		t.Errorf("删除最后引用后 blob 应立即离开活动存储，哈希 %s 仍存在", asset.BlobHash)
 	}
 
-	entries, err := e.auditLogs.List(repository.AuditFilter{Action: "asset.delete", Repo: "raw-delete"})
+	entries, err := e.auditLogs.List(repository.AuditFilter{Action: "asset.delete", Repos: []string{"raw-delete"}})
 	if err != nil {
 		t.Fatalf("读取删除审计：%v", err)
 	}

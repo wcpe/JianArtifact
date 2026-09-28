@@ -341,7 +341,7 @@ func TestMavenWebUploadWritesPerFileAudit(t *testing.T) {
 		t.Fatalf("解析响应：%v", err)
 	}
 
-	entries, err := e.auditLogs.List(repository.AuditFilter{Action: "asset.put", Repo: "mvn-audit", Limit: 200})
+	entries, err := e.auditLogs.List(repository.AuditFilter{Action: "asset.put", Repos: []string{"mvn-audit"}, Limit: 200})
 	if err != nil {
 		t.Fatalf("读取审计：%v", err)
 	}
