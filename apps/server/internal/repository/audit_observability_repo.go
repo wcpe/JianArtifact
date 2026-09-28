@@ -54,7 +54,8 @@ type ObservabilityFilter struct {
 	Categories       []string
 	Results          []string
 	Actor            string
-	Repository       string
+	// Repositories 关联仓库：按「主名 ∪ 别名」全集过滤（ADR-0028）；空表示不按仓库过滤。
+	Repositories []string
 	// Query 是关键字检索：匹配动作、摘要/详情、目标、操作者与邮箱、请求路径与客户端 IP。
 	Query string
 	// Method 按 HTTP 请求方法精确筛选（大写）。
@@ -210,7 +211,7 @@ const observabilityAggregateSelect = `SELECT source, source_event_id, occurred_a
 // 保守白名单：只放行两源都能精确映射的条件（action↔op、actor↔source_actor），覆盖
 // 高频筛选且保证正确性；含其它条件时整体回退通用查询（此时过滤后行数已小、排序可控）。
 func pushdownFilterClause(f ObservabilityFilter, auditSource bool) (string, []any, bool) {
-	if f.Repository != "" || f.Query != "" || f.Method != "" || f.Email != "" || f.ClientIP != "" ||
+	if len(f.Repositories) > 0 || f.Query != "" || f.Method != "" || f.Email != "" || f.ClientIP != "" ||
 		f.AuthSource != "" || f.Attention != "" || len(f.Categories) > 0 || len(f.Results) > 0 {
 		return "", nil, false
 	}
@@ -310,9 +311,15 @@ func observabilityEventsQuery(f ObservabilityFilter, selectClause string) (strin
 		query += " AND actor = ?"
 		args = append(args, f.Actor)
 	}
-	if f.Repository != "" {
-		query += " AND repository = ?"
-		args = append(args, f.Repository)
+	if len(f.Repositories) > 0 {
+		clause, repoArgs, inErr := sqlx.In(" AND repository IN (?)", f.Repositories)
+		if inErr != nil {
+			// 理论不会发生（字符串切片是 sqlx.In 支持的绑定类型）；兜底退回单名等值，
+			// 不静默放大结果集。
+			clause, repoArgs = " AND repository = ?", []any{f.Repositories[0]}
+		}
+		query += clause
+		args = append(args, repoArgs...)
 	}
 	if f.Query != "" {
 		needle := "%" + strings.ToLower(strings.TrimSpace(f.Query)) + "%"

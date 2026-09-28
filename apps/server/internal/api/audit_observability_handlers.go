@@ -75,7 +75,10 @@ type auditViewFilter struct {
 	results    map[AuditResult]bool
 	actor      string
 	repository string
-	query      string
+	// repositories 是 repository 按「主名 ∪ 别名」展开后的集合（ADR-0028）：仅用于下发到
+	// SQL 过滤；快照指纹仍按原始名比较，响应结构不变。
+	repositories []string
+	query        string
 	method     string
 	action     string
 	email      string
@@ -115,6 +118,7 @@ func (h *Handlers) GetAuditObservabilitySummary(c *gin.Context, params GetAuditO
 	if !ok {
 		return
 	}
+	h.expandAuditRepoFilterSet(&filter)
 	snapshot, events, ok := h.loadAuditSnapshot(c, filter, "")
 	if !ok {
 		return
@@ -134,6 +138,7 @@ func (h *Handlers) ListAuditObservabilityEvents(c *gin.Context, params ListAudit
 	if !ok {
 		return
 	}
+	h.expandAuditRepoFilterSet(&filter)
 	snapshotValue := ""
 	if params.Snapshot != nil {
 		snapshotValue = *params.Snapshot
@@ -192,6 +197,7 @@ func (h *Handlers) ListAuditAttentions(c *gin.Context, params ListAuditAttention
 	if !ok {
 		return
 	}
+	h.expandAuditRepoFilterSet(&filter)
 	snapshotValue := ""
 	if params.Snapshot != nil {
 		snapshotValue = *params.Snapshot
@@ -632,6 +638,17 @@ func sortedAuditResults(values map[AuditResult]bool) []AuditResult {
 	return items
 }
 
+// expandAuditRepoFilterSet 把仓库筛选名展开为「主名 ∪ 别名」全集（ADR-0028：按仓库维度的
+// 检索必须处理全集，否则重命名后按当前主名筛会漏掉记在旧名下的历史事件）。
+// 名称不存在（或解析失败）时保持空集合，由下游退回原始名——与既有行为一致，不改判 404。
+func (h *Handlers) expandAuditRepoFilterSet(filter *auditViewFilter) {
+	if filter.repository == "" {
+		return
+	}
+	if names, err := h.resolveRepoNameSet(filter.repository); err == nil {
+		filter.repositories = names
+	}
+}
 func repositoryObservabilityFilter(snapshot auditReadSnapshot, filter auditViewFilter) repository.ObservabilityFilter {
 	categories := make([]string, 0, len(filter.categories))
 	for category := range filter.categories {
@@ -643,6 +660,11 @@ func repositoryObservabilityFilter(snapshot auditReadSnapshot, filter auditViewF
 	}
 	sort.Strings(categories)
 	sort.Strings(results)
+	// 仓库筛选下发「主名 ∪ 别名」全集；未解析出集合时退回原始名（行为不变）。
+	repositories := filter.repositories
+	if len(repositories) == 0 && filter.repository != "" {
+		repositories = []string{filter.repository}
+	}
 	return repository.ObservabilityFilter{
 		From:             snapshot.From,
 		To:               snapshot.To,
@@ -652,7 +674,7 @@ func repositoryObservabilityFilter(snapshot auditReadSnapshot, filter auditViewF
 		Categories:       categories,
 		Results:          results,
 		Actor:            filter.actor,
-		Repository:       filter.repository,
+		Repositories:     repositories,
 		Query:            filter.query,
 		Method:           filter.method,
 		Action:           filter.action,

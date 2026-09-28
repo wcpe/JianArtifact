@@ -57,7 +57,9 @@ type AuditFilter struct {
 	AuthSource string // 认证来源（精确）
 	TokenID    string // Token ID（精确）
 	Action     string // 操作类型（精确，如 asset.put）
-	Repo       string // 关联仓库（精确）
+	// Repos 关联仓库：按「主名 ∪ 别名」全集过滤（ADR-0028 要求按仓库维度的检索处理全集，
+	// 否则重命名后按新主名检索会漏掉记在旧名下的历史事件）；空表示不按仓库过滤。
+	Repos []string
 	Result     string // 结果（精确，如 ok/error）
 	IP         string // 来源 IP（精确）
 	From       string // 起始时间（RFC3339Nano，含）
@@ -126,9 +128,13 @@ func (r *AuditLogRepo) List(f AuditFilter) ([]AuditLogEntry, error) {
 		where += " AND action = ?"
 		args = append(args, f.Action)
 	}
-	if f.Repo != "" {
-		where += " AND repo = ?"
-		args = append(args, f.Repo)
+	if len(f.Repos) > 0 {
+		clause, repoArgs, inErr := sqlx.In(" AND repo IN (?)", f.Repos)
+		if inErr != nil {
+			return nil, inErr
+		}
+		where += clause
+		args = append(args, repoArgs...)
 	}
 	if f.Result != "" {
 		where += " AND result = ?"
@@ -186,9 +192,13 @@ func (r *AuditLogRepo) Count(f AuditFilter) (int, error) {
 		where += " AND action = ?"
 		args = append(args, f.Action)
 	}
-	if f.Repo != "" {
-		where += " AND repo = ?"
-		args = append(args, f.Repo)
+	if len(f.Repos) > 0 {
+		clause, repoArgs, inErr := sqlx.In(" AND repo IN (?)", f.Repos)
+		if inErr != nil {
+			return 0, inErr
+		}
+		where += clause
+		args = append(args, repoArgs...)
 	}
 	if f.Result != "" {
 		where += " AND result = ?"

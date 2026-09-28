@@ -36,13 +36,25 @@ func (h *Handlers) GetAuditLogs(c *gin.Context) {
 	if offset < 0 {
 		offset = 0
 	}
+	// repo 过滤：把仓库名（可能是别名）展开为「主名 ∪ 别名」全集，避免重命名后按当前主名
+	// 检索漏掉记在旧名下的历史事件（ADR-0028 要求按仓库维度的检索处理全集）。
+	var repos []string
+	if name := c.Query("repo"); name != "" {
+		names, nameErr := h.resolveRepoNameSet(name)
+		if nameErr != nil {
+			// 名称不存在：退回字面量，与既有行为一致（筛不到记录），不改判为 404。
+			repos = []string{name}
+		} else {
+			repos = names
+		}
+	}
 	f := repository.AuditFilter{
 		Actor:      c.Query("actor"),
 		UserID:     c.Query("userId"),
 		AuthSource: c.Query("authSource"),
 		TokenID:    c.Query("tokenId"),
 		Action:     c.Query("action"),
-		Repo:       c.Query("repo"),
+		Repos:      repos,
 		Result:     c.Query("result"),
 		IP:         c.Query("ip"),
 		From:       c.Query("from"),
