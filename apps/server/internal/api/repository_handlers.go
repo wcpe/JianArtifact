@@ -107,7 +107,9 @@ func (h *Handlers) ListRepositories(c *gin.Context, params ListRepositoriesParam
 		if err == nil {
 			visible := make([]repository.Repository, 0, len(allRows))
 			for i := range allRows {
-				allowed, accessErr := h.repos.CanAccess(allRows[i].Name, subjectID, "read")
+				// 行已在手上，用按对象鉴权：CanAccess 会再按名查一次库，N 个仓库就是 N 次
+				// 额外查询（公开列表端点无需认证，是可控的放大路径）。
+				allowed, accessErr := h.repos.CanAccessResolved(&allRows[i], subjectID, "read")
 				if accessErr == nil && allowed {
 					visible = append(visible, allRows[i])
 				}
@@ -553,7 +555,8 @@ func (h *Handlers) ListPublicRepositories(c *gin.Context) {
 	}
 	items := make([]Repository, 0, len(rows))
 	for i := range rows {
-		allowed, accessErr := h.repos.CanAccess(rows[i].Name, 0, "read")
+		// 同上：行已在手上，按对象鉴权省掉逐行按名查库。
+		allowed, accessErr := h.repos.CanAccessResolved(&rows[i], 0, "read")
 		if accessErr != nil || !allowed {
 			continue
 		}

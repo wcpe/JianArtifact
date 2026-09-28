@@ -96,6 +96,47 @@ func TestRepositoryCreateAliasDedup(t *testing.T) {
 	}
 }
 
+// TestRepositoryCanAccessResolvedMatchesCanAccess 按对象鉴权与按名鉴权判定一致：
+// 列表可见性过滤逐行调用，必须用按对象版本（省掉逐行按名查库），两者判定不能分叉。
+func TestRepositoryCanAccessResolvedMatchesCanAccess(t *testing.T) {
+	svc := newAliasService(t)
+	for _, spec := range []struct{ name, visibility string }{
+		{"pub", "public"},
+		{"priv", "private"},
+	} {
+		if _, err := svc.Create(spec.name, "raw", "hosted", spec.visibility, "", repository.RepositoryConfig{}); err != nil {
+			t.Fatalf("建仓库 %s：%v", spec.name, err)
+		}
+	}
+	pub, err := svc.Get("pub")
+	if err != nil {
+		t.Fatalf("取 pub：%v", err)
+	}
+	priv, err := svc.Get("priv")
+	if err != nil {
+		t.Fatalf("取 priv：%v", err)
+	}
+	for _, tc := range []struct {
+		label      string
+		repo       *repository.Repository
+		subjectID  int64
+		wantAccess bool
+	}{
+		{"public 仓库对匿名可读", pub, 0, true},
+		{"private 仓库对匿名不可读", priv, 0, false},
+		{"private 仓库对无授权用户不可读", priv, 999, false},
+	} {
+		byName, errName := svc.CanAccess(tc.repo.Name, tc.subjectID, "read")
+		byObj, errObj := svc.CanAccessResolved(tc.repo, tc.subjectID, "read")
+		if (errName == nil) != (errObj == nil) || byName != byObj {
+			t.Errorf("%s：按名(%v, %v) 与按对象(%v, %v) 判定分叉", tc.label, byName, errName, byObj, errObj)
+		}
+		if byObj != tc.wantAccess {
+			t.Errorf("%s：期望 %v，得 %v", tc.label, tc.wantAccess, byObj)
+		}
+	}
+}
+
 // TestRepositoryCreateAliasRaceLeavesNoOrphan 并发创建共用同一别名的仓库：
 // 撞名失败的一方不得留下「调用方以为没创建、实际已存在」的仓库行（别名与主名跨表唯一性
 // 无 DB 兜底，只有服务层先查后写，并发窗口内会真的插进重复别名）。
