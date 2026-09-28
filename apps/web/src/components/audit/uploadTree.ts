@@ -1,15 +1,12 @@
-// 上传审计聚合（纯前端纯函数）：把扁平的「上传 / 发布」审计事件聚合成
-// 「仓库 → groupId → artifactId → 版本 → 文件」的树，便于一眼看出「谁往哪个仓库
-// 传了哪些坐标、多少个版本」。
+// 上传审计的路径解析工具（纯前端纯函数）：从制品路径反解坐标、取事件的目标信息与搜索关键字。
+// 展示树由调用方（审计工作台的上传聚合视图）自行组装，本模块不再自带建树逻辑。
 //
 // 关键约束：
-// - 事件来自审计工作台当前查询结果集（不额外发请求），action 归类见 labels.isUploadAction；
 // - 制品路径取自 target.label（后端 EntityKey = `repo/path`），仓库名取自 target.repository；
 // - Maven 路径复用 coordinates.parseMavenGav 反解 GAV；非 Maven（npm / raw / 其他格式）
-//   一律优雅降级到「其他」分支，按目录路径聚合，**绝不丢弃事件**。
+//   一律优雅降级（坐标留空，调用方按目录路径聚合），**绝不丢弃事件**。
 
 import type { AuditEvent, RepoFormat } from "../../api/types";
-import { isUploadAction, parseTime } from "./labels";
 import { parseMavenGav } from "../../lib/coordinates";
 
 /** 从制品路径尽力反解出的坐标；反解不出 GAV 时仅 filename / directory 有值。 */
@@ -31,26 +28,6 @@ export interface UploadArtifactTarget {
   repo: string;
   path: string;
   label: string;
-}
-
-/** 树节点类型：仓库 / Maven 分组 / 制品 / 版本 / 其他 / 目录 / 文件。 */
-export type UploadNodeKind =
-  "repository" | "group" | "artifact" | "version" | "others" | "directory" | "file";
-
-/** 聚合树节点（已按展示顺序排序）。 */
-export interface UploadTreeNode {
-  /** 层级路径构成的稳定键，供展开态与 React key 使用。 */
-  key: string;
-  kind: UploadNodeKind;
-  label: string;
-  /** 子树内事件数。 */
-  count: number;
-  /** 子树内最新 / 最早事件时间（毫秒时间戳；无样本为 0）。 */
-  latestAt: number;
-  earliestAt: number;
-  children: UploadTreeNode[];
-  /** 文件叶子对应的事件（仅 kind=file）。 */
-  event?: AuditEvent;
 }
 
 /** 版本段至少含一个数字才认为像版本——避免把 npm 的 `-` 分隔段等误判为版本。 */
@@ -139,118 +116,4 @@ export function uploadArtifactTarget(event: AuditEvent): UploadArtifactTarget | 
 export function artifactSearchText(event: AuditEvent): string {
   const target = event.target as { label?: string; repository?: string } | undefined;
   return target?.label ?? target?.repository ?? "";
-}
-
-interface MutableNode {
-  key: string;
-  kind: UploadNodeKind;
-  label: string;
-  count: number;
-  latestAt: number;
-  earliestAt: number;
-  children: Map<string, MutableNode>;
-  event?: AuditEvent;
-}
-
-function upsert(
-  map: Map<string, MutableNode>,
-  key: string,
-  kind: UploadNodeKind,
-  label: string,
-): MutableNode {
-  const existing = map.get(key);
-  if (existing) return existing;
-  const created: MutableNode = {
-    key,
-    kind,
-    label,
-    count: 0,
-    latestAt: 0,
-    earliestAt: 0,
-    children: new Map(),
-  };
-  map.set(key, created);
-  return created;
-}
-
-/**
- * 把上传 / 发布事件聚合成树。
- *
- * 层级：仓库 → （Maven：groupId → artifactId → 版本）或（其他：目录）→ 文件。
- * 每层节点累计子树内的事件数与时间范围；非上传事件与非制品事件直接跳过。
- */
-export function buildUploadTree(
-  events: readonly AuditEvent[],
-  options: { othersLabel: string },
-): UploadTreeNode[] {
-  const root = new Map<string, MutableNode>();
-
-  for (const event of events) {
-    if (!isUploadAction(event.action)) continue;
-    const target = uploadArtifactTarget(event);
-    if (!target) continue;
-    const at = parseTime(event.occurredAt);
-    const coords = parseUploadCoordinates(target.path);
-
-    // 组装该事件在仓库节点下的层级链（不含仓库本身）。
-    const chain: Array<{ kind: UploadNodeKind; label: string }> = [];
-    if (coords.groupId && coords.artifactId && coords.version) {
-      chain.push({ kind: "group", label: coords.groupId });
-      chain.push({ kind: "artifact", label: coords.artifactId });
-      chain.push({ kind: "version", label: coords.version });
-    } else {
-      chain.push({ kind: "others", label: options.othersLabel });
-      if (coords.directory) chain.push({ kind: "directory", label: coords.directory });
-    }
-    chain.push({ kind: "file", label: coords.filename });
-
-    // 沿链插入并累计计数 / 时间（仓库节点也计入）。
-    const nodes: MutableNode[] = [];
-    const repoKey = `repo:${target.repo}`;
-    const repoNode = upsert(root, repoKey, "repository", target.repo);
-    nodes.push(repoNode);
-    let parentMap = repoNode.children;
-    let prefix = repoKey;
-    for (const step of chain) {
-      const key = `${prefix}/${step.kind}:${step.label}`;
-      const node = upsert(parentMap, key, step.kind, step.label);
-      nodes.push(node);
-      parentMap = node.children;
-      prefix = key;
-    }
-    for (const node of nodes) {
-      node.count += 1;
-      if (at > node.latestAt) node.latestAt = at;
-      if (node.earliestAt === 0 || at < node.earliestAt) node.earliestAt = at;
-    }
-    nodes[nodes.length - 1]!.event = event;
-  }
-
-  return finalize(root);
-}
-
-function finalize(map: Map<string, MutableNode>): UploadTreeNode[] {
-  const nodes: UploadTreeNode[] = [...map.values()].map((node) => ({
-    key: node.key,
-    kind: node.kind,
-    label: node.label,
-    count: node.count,
-    latestAt: node.latestAt,
-    earliestAt: node.earliestAt,
-    children: finalize(node.children),
-    event: node.event,
-  }));
-  nodes.sort(compareNodes);
-  return nodes;
-}
-
-function compareNodes(a: UploadTreeNode, b: UploadTreeNode): number {
-  // 「其他」分支恒排最后，让可反解 GAV 的制品排前面。
-  if (a.kind === "others" && b.kind !== "others") return 1;
-  if (b.kind === "others" && a.kind !== "others") return -1;
-  // 版本按最新上传时间倒序（最近发布的排前），比字符串排序更符合直觉。
-  if (a.kind === "version" && b.kind === "version" && a.latestAt !== b.latestAt) {
-    return b.latestAt - a.latestAt;
-  }
-  return a.label < b.label ? -1 : a.label > b.label ? 1 : 0;
 }
