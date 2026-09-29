@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-27T09:16:45.502Z",
+  "generatedAt": "2026-09-29T17:45:07.595Z",
   "go": [
     {
       "name": "github.com/apapsch/go-jsonmerge/v2",
@@ -207,7 +207,7 @@
     },
     {
       "name": "golang.org/x/net",
-      "version": "v0.58.0",
+      "version": "v0.59.0",
       "license": "BSD-3-Clause",
       "author": "x"
     },
