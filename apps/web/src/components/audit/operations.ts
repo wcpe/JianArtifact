@@ -23,7 +23,8 @@ import { actorEmail, isUploadAction, parseTime } from "./labels";
 import { parseUploadCoordinates, uploadArtifactTarget } from "./uploadTree";
 
 /** 操作类型：决定聚合界面的分区与事件流的图标/色彩。 */
-export type OperationKind = "upload" | "delete" | "move" | "token" | "setting" | "repo" | "user" | "other";
+export type OperationKind =
+  "upload" | "delete" | "move" | "token" | "setting" | "repo" | "user" | "other";
 
 /** 同一次多文件写入的时间窗（毫秒）：只容忍跨分钟边界，不做大范围猜测。 */
 export const OPERATION_WINDOW_MS = 15 * 60 * 1000;
