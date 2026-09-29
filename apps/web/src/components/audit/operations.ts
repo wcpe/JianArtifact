@@ -23,7 +23,8 @@ import { actorEmail, isUploadAction, parseTime } from "./labels";
 import { parseUploadCoordinates, uploadArtifactTarget } from "./uploadTree";
 
 /** 操作类型：决定聚合界面的分区与事件流的图标/色彩。 */
-export type OperationKind = "upload" | "delete" | "move" | "other";
+export type OperationKind =
+  "upload" | "delete" | "move" | "token" | "setting" | "repo" | "user" | "other";
 
 /** 同一次多文件写入的时间窗（毫秒）：只容忍跨分钟边界，不做大范围猜测。 */
 export const OPERATION_WINDOW_MS = 15 * 60 * 1000;
@@ -58,13 +59,21 @@ export interface AuditOperation {
   actor: string;
 }
 
-/** 动作 → 操作类型。上传白名单复用 labels（与后端 action 命名一致）。 */
+/** 动作 → 操作类型。上传白名单复用 labels（与后端 action 命名一致）。
+ *
+ * 归一化：动作名大小写与首尾空白先统一（实测库中存在 `SETTING.SET` 这类大写写法），
+ * 否则精确匹配会全部落进兜底「其他」——那正是「一屏只有其他」的成因。
+ * 非制品类管理动作（令牌/设置/仓库/用户）各自成类，兜底「其他」只留真正无法分类的杂项。 */
 export function operationKindOf(action: unknown): OperationKind {
-  const value = typeof action === "string" ? action.trim() : "";
+  const value = typeof action === "string" ? action.trim().toLowerCase() : "";
   if (!value) return "other";
   if (isUploadAction(value)) return "upload";
   if (value === "asset.delete") return "delete";
   if (value === "asset.move" || value === "asset.rename") return "move";
+  if (value.startsWith("token.")) return "token";
+  if (value.startsWith("setting.")) return "setting";
+  if (value.startsWith("repo.")) return "repo";
+  if (value.startsWith("user.")) return "user";
   return "other";
 }
 

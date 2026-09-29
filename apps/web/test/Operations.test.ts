@@ -38,14 +38,20 @@ function artifactEvent(overrides: {
 }
 
 describe("operationKindOf", () => {
-  it("按 action 归类上传 / 删除 / 移动 / 其他", () => {
+  it("按 action 归类上传 / 删除 / 移动 / 管理类细分 / 其他", () => {
     expect(operationKindOf("asset.put")).toBe("upload");
     expect(operationKindOf("npm.publish")).toBe("upload");
     expect(operationKindOf("oci.blob.put")).toBe("upload");
     expect(operationKindOf("asset.delete")).toBe("delete");
     expect(operationKindOf("asset.move")).toBe("move");
     expect(operationKindOf("asset.rename")).toBe("move");
-    expect(operationKindOf("repo.create")).toBe("other");
+    // 管理类动作各自成类，不再落进兜底「其他」（口径见 operations.kind.test.ts）。
+    expect(operationKindOf("repo.create")).toBe("repo");
+    expect(operationKindOf("token.create")).toBe("token");
+    expect(operationKindOf("setting.update")).toBe("setting");
+    expect(operationKindOf("user.update")).toBe("user");
+    // 真正无法分类的杂项与空值仍归「其他」。
+    expect(operationKindOf("migration.start")).toBe("other");
     expect(operationKindOf("")).toBe("other");
   });
 });
@@ -175,7 +181,8 @@ describe("buildOperations 归并", () => {
     ];
     const ops = buildOperations(events);
     expect(ops).toHaveLength(2);
-    expect(ops.every((o) => o.kind === "other")).toBe(true);
+    // 各自成类（仓库 / 用户），但同样不参与坐标聚合。
+    expect(ops.every((o) => o.kind === "repo" || o.kind === "user")).toBe(true);
   });
 
   it("空集合返回空数组", () => {

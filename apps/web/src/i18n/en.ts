@@ -1029,7 +1029,13 @@ export const en = {
     opKindUpload: "Uploads",
     opKindDelete: "Deletes",
     opKindMove: "Moves",
+    opKindToken: "Tokens",
+    opKindSetting: "Settings",
+    opKindRepo: "Repositories",
+    opKindUser: "Users",
     opKindOther: "Other",
+    opScopeHint:
+      "Current page only: aggregates the events on this page; paging or filtering changes the scope",
     opSummary: "{{ops}} operations · {{files}} files",
     opSectionTitle: "{{ops}} operations / {{files}} files",
     opFileCount: "{{count}} files",
