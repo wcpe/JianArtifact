@@ -213,7 +213,12 @@ export function useAuditQuery() {
     if (value !== undefined && value >= 0) setKnownTotal(value);
   }, [events.data]);
   const totalCount = knownTotal ?? 0;
-  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+  // 服务端对「未执行精确 COUNT」统一返回 totalCount=-1（openapi 明示 -1 即未精确计数），
+  // 因此不能用总数推页数——那会恒得 1 页、goToPage 拒绝一切翻页（分页失效）。
+  // 已知总数时用精确页数；未知时以服务端 nextCursor 判定「还能前进一页」。
+  const hasMore = Boolean(events.data?.nextCursor);
+  const totalPages =
+    knownTotal !== null ? Math.max(1, Math.ceil(knownTotal / pageSize)) : page + (hasMore ? 1 : 0);
 
   /** offset 直达目标页：无需顺序回放游标。 */
   const goToPage = useCallback(

@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -178,8 +179,15 @@ func (h *RawHandler) Get(c *gin.Context) {
 	defer func() { _ = rc.Close() }()
 
 	c.Header("Content-Type", asset.ContentType)
-	c.Header("Content-Length", strconv.FormatInt(asset.Size, 10))
 	c.Header("ETag", `"`+asset.BlobHash+`"`)
+	// 本地 blob 是 *os.File（可寻址）：交给 http.ServeContent 协商 Range / If-Range /
+	// If-None-Match，使 curl -C -、构建工具重试等断点续传拿到 206 与 Content-Range；
+	// 不可寻址的内容流（如 proxy 回源）退化为一次性全量回写，与改动前行为一致。
+	if rs, ok := rc.(io.ReadSeeker); ok {
+		http.ServeContent(c.Writer, c.Request, "", time.Time{}, rs)
+		return
+	}
+	c.Header("Content-Length", strconv.FormatInt(asset.Size, 10))
 	if c.Request.Method == http.MethodHead {
 		c.Status(http.StatusOK)
 		return
