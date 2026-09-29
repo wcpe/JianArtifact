@@ -16,12 +16,19 @@ updates:
     open-pull-requests-limit: 5
     # vite / vitest / eslint 的主版本升级常带配置迁移，单独小步走
     versioning-strategy: "increase-if-necessary"
+    # typescript 的大版本升级被 lint 工具链挡住：packages/eslint-config 依赖的
+    # typescript-eslint 声明 peer 范围 "typescript": ">=4.8.4 <6.1.0"，升到 TS 7 后
+    # devmock 的 lint 直接崩溃（Cannot read properties of undefined (reading 'Cjs')），
+    # 非本仓库代码可修，故抑制大版本 PR，避免持续消耗 CI。上游支持 TS 7 后删去本项。
+    ignore:
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
     labels:
       - "dependencies"
       - "frontend"
     commit-message:
-      prefix: "chore(deps)"
-      prefix-development: "chore(deps-dev)"
+      prefix: "chore"
+      prefix-development: "chore"
       include: "scope"
 
   # 后端（单 Go 模块，go.work 只含 apps/server）
