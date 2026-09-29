@@ -65,11 +65,15 @@ describe("页眉打磨（FR-71）", () => {
 
   it("点击刷新按钮进入刷新态，请求归零后恢复可用", async () => {
     renderWithProviders(<AppRoutes />, { route: "/repositories" });
-    // 等首屏数据就绪，避免初始请求干扰计数
-    expect(await screen.findByText("npm-proxy")).toBeTruthy();
-    const refreshButton = (await screen.findByRole("button", {
-      name: "刷新",
-    })) as HTMLButtonElement;
+    // 等首屏数据就绪，避免初始请求干扰计数（并发跑全量时首包明显变慢，给足等待窗）
+    expect(await screen.findByText("npm-proxy", {}, { timeout: 10_000 })).toBeTruthy();
+    const refreshButton = (await screen.findByRole(
+      "button",
+      {
+        name: "刷新",
+      },
+      { timeout: 10_000 },
+    )) as HTMLButtonElement;
     expect(refreshButton.disabled).toBe(false);
 
     // 点击派发全局刷新事件并进入刷新态；并发负载下"立即断言 disabled"存在竞速，
@@ -82,8 +86,8 @@ describe("页眉打磨（FR-71）", () => {
       ),
     ).toBe(true);
     dispatchSpy.mockRestore();
-    // 触发的重新拉取归零后（含最短旋转时长）恢复可用
-    await waitFor(() => expect(refreshButton.disabled).toBe(false), { timeout: 3000 });
+    // 触发的重新拉取归零后（含最短旋转时长）恢复可用；并发跑全量时给足等待窗
+    await waitFor(() => expect(refreshButton.disabled).toBe(false), { timeout: 10_000 });
   });
 
   it("窄屏页眉的搜索与刷新退化为纯图标，文字经提示可达", async () => {

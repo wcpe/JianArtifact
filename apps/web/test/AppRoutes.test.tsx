@@ -45,7 +45,8 @@ describe("路由懒加载（FR-70）", () => {
       authenticated: true,
     });
 
-    const aclTab = await screen.findByRole("tab", { name: "ACL" });
+    // 懒加载路由 + 重定向链，给足等待窗（并发跑全量时首包 chunk 明显变慢）。
+    const aclTab = await screen.findByRole("tab", { name: "ACL" }, { timeout: 10_000 });
     expect(aclTab.getAttribute("aria-selected")).toBe("true");
   });
 
