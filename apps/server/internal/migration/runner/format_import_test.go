@@ -33,7 +33,7 @@ func TestRunnerImportsPyPIWithSimpleMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitStatus(t, mig, result.Task.ID, repository.MigrationStatusCompleted)
-	files, err := metadata.PyPIFiles("pypi-source", "demo")
+	files, err := metadata.PyPIFiles(context.Background(), "pypi-source", "demo")
 	if err != nil || len(files) != 1 || files[0].Filename != "demo-1.0.0-py3-none-any.whl" {
 		t.Fatalf("迁移后 PyPI simple 元数据不可读：files=%+v err=%v", files, err)
 	}

@@ -192,7 +192,7 @@ func TestNpmUnpublish(t *testing.T) {
 	if len(operation.Items) != 2 || operation.Actor.Username != "admin" || operation.Actor.UserID == nil || operation.Actor.AuthSource == "" {
 		t.Fatalf("v2 operation 必须同时携带 packument/tarball 与主体快照：%+v", operation)
 	}
-	entries, err := e.auditLogs.List(repository.AuditFilter{Action: "npm.unpublish", Repo: "npm-up", Limit: 20})
+	entries, err := e.auditLogs.List(repository.AuditFilter{Action: "npm.unpublish", Repos: []string{"npm-up"}, Limit: 20})
 	if err != nil {
 		t.Fatalf("读取 npm 删除审计：%v", err)
 	}

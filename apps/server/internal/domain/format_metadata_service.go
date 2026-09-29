@@ -205,7 +205,7 @@ func (s *FormatMetadataService) formatMetadataPutOperationEnvelope(repoName, ope
 	return repository.OperationEnvelope{Kind: "operation", OperationID: operationID, SourceNode: nodeID, Version: version, ItemCount: len(items), ManifestSHA256: manifest, Actor: actor, Items: items}, nil
 }
 
-func (s *FormatMetadataService) pypiFiles(repoName, project string) ([]repository.FormatMetadata, error) {
+func (s *FormatMetadataService) pypiFiles(ctx context.Context, repoName, project string) ([]repository.FormatMetadata, error) {
 	r, err := s.repo(repoName, "pypi", false)
 	if err != nil {
 		return nil, err
@@ -217,6 +217,8 @@ func (s *FormatMetadataService) pypiFiles(repoName, project string) ([]repositor
 			return nil, listErr
 		}
 		if r.Type == "proxy" && len(items) == 0 {
+			// 本地索引为空 → 回源拉取：本次读取判为 miss（与其它格式同口径）。
+			recordCacheOutcome(ctx, CacheOutcomeMiss)
 			loaded, loadErr, _ := s.pypiSF.Do("index\x00"+r.Name+"\x00"+project, func() (any, error) {
 				cached, cachedErr := s.metadata.List(r.ID, "pypi", project)
 				if cachedErr != nil || len(cached) > 0 {
@@ -229,12 +231,18 @@ func (s *FormatMetadataService) pypiFiles(repoName, project string) ([]repositor
 			}
 			return loaded.([]repository.FormatMetadata), nil
 		}
+		if r.Type == "proxy" {
+			// 本地索引命中：本次读取判为 hit。hosted / group 不写入，保持缺省（未知）。
+			recordCacheOutcome(ctx, CacheOutcomeHit)
+		}
 		return items, nil
 	}
 	cfg, err := r.DecodeConfig()
 	if err != nil {
 		return nil, err
 	}
+	// group：成员级 hit/miss 不能代表本次整体读取，冻结缓存来源为未知（与其它格式同口径）。
+	sealCacheOutcome(ctx)
 	seen := make(map[string]bool)
 	var out []repository.FormatMetadata
 	for _, member := range cfg.Members {
@@ -242,7 +250,7 @@ func (s *FormatMetadataService) pypiFiles(repoName, project string) ([]repositor
 		if e != nil {
 			continue
 		}
-		items, e := s.pypiFiles(member, project)
+		items, e := s.pypiFiles(ctx, member, project)
 		if e != nil {
 			return nil, e
 		}
@@ -521,8 +529,8 @@ func versionFromFilename(filename string) string {
 	return "0"
 }
 
-func (s *FormatMetadataService) PyPIFiles(repoName, project string) ([]PypiFile, error) {
-	items, err := s.pypiFiles(repoName, project)
+func (s *FormatMetadataService) PyPIFiles(ctx context.Context, repoName, project string) ([]PypiFile, error) {
+	items, err := s.pypiFiles(ctx, repoName, project)
 	if err != nil {
 		return nil, err
 	}
@@ -539,7 +547,7 @@ func (s *FormatMetadataService) ResolvePyPI(ctx context.Context, repoName, proje
 
 // ResolvePyPIWithAudit 解析 PyPI 包；代理缓存落盘时一并写入来源审计。
 func (s *FormatMetadataService) ResolvePyPIWithAudit(ctx context.Context, repoName, project, filename string, audit AssetOperationAudit) (*repository.Asset, io.ReadCloser, error) {
-	items, err := s.pypiFiles(repoName, project)
+	items, err := s.pypiFiles(ctx, repoName, project)
 	if err != nil {
 		return nil, nil, err
 	}

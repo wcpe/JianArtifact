@@ -80,7 +80,7 @@ func TestAuditObservabilityRepoPagesWithinSnapshot(t *testing.T) {
 	filtered.Categories = []string{"security_event"}
 	filtered.Results = []string{"failure"}
 	filtered.Actor = "other-admin"
-	filtered.Repository = "other-release"
+	filtered.Repositories = []string{"other-release"}
 	page, total, next, err = repo.ListEventPage(filtered, 0, 1)
 	if err != nil {
 		t.Fatalf("读取筛选页：%v", err)

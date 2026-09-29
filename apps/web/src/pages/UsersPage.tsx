@@ -42,7 +42,7 @@ import {
   createUser,
   deleteUser,
   getPublishPolicy,
-  listRepositories,
+  listAllRepositories,
   listUsers,
   updatePublishPolicies,
   updateUser,
@@ -204,7 +204,7 @@ export function UsersPage() {
     setPolicyResults(null);
     setPolicyInconsistent(false);
     setPolicyLoading(true);
-    listRepositories({ page_size: 100 })
+    listAllRepositories()
       .then((list) => {
         const hosted = list.items.filter((repo) => repo.type === "hosted");
         setPolicyRepos(hosted);

@@ -127,6 +127,45 @@ describe("用户管理", () => {
     await waitFor(() => expect(within(dialog).getAllByText("成功").length).toBe(2));
   });
 
+  it("发布策略弹窗跨页取全量仓库（total 超单页上限时继续翻页）", async () => {
+    const pages: number[] = [];
+    server.use(
+      http.get("*/api/v1/repositories", ({ request }) => {
+        const page = Number(new URL(request.url).searchParams.get("page") ?? "1");
+        pages.push(page);
+        const items =
+          page === 1
+            ? [
+                {
+                  id: 1,
+                  name: "maven-releases",
+                  format: "maven",
+                  type: "hosted",
+                  visibility: "private",
+                },
+              ]
+            : [
+                {
+                  id: 999,
+                  name: "page2-hosted",
+                  format: "raw",
+                  type: "hosted",
+                  visibility: "private",
+                },
+              ];
+        // total 超过单页上限（100）：只取第一页会漏掉后面的 hosted 仓库。
+        return HttpResponse.json({ items, total: 101 });
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(<UsersPage />, { route: "/users", authenticated: true });
+    const dialog = await openPolicyDialog(user);
+
+    await waitFor(() => expect(pages).toContain(2));
+    await user.click(within(dialog).getByRole("combobox", { name: "Hosted 仓库" }));
+    expect(await screen.findByRole("option", { name: /page2-hosted/ })).toBeTruthy();
+  });
+
   it("逐仓库结果里列出失败仓库与原因", async () => {
     server.use(
       http.put("*/api/v1/users/:id/publish-policies", () =>

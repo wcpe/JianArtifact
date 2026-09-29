@@ -159,7 +159,7 @@ func TestPyPIProxyMetadataFailureDoesNotLeaveCachedPackage(t *testing.T) {
 	if _, err := db.Exec(`CREATE TRIGGER reject_pypi_metadata BEFORE INSERT ON format_metadata WHEN NEW.filename='demo-2.0.0.whl' BEGIN SELECT RAISE(ABORT, '注入 PyPI 元数据失败'); END`); err != nil {
 		t.Fatalf("创建失败注入：%v", err)
 	}
-	if _, err := service.PyPIFiles("pypi-proxy", "demo"); err == nil {
+	if _, err := service.PyPIFiles(context.Background(), "pypi-proxy", "demo"); err == nil {
 		t.Fatal("PyPI proxy 元数据失败必须返回错误")
 	}
 	for filename, hash := range hashes {
