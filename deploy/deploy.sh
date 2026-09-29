@@ -15,7 +15,9 @@
 #
 # 关键环境变量（可在 deploy/.env 或调用环境提供）：
 #   DEPLOY_ENV        环境名：读 deploy/.env.<环境>（如 DEPLOY_ENV=prod → deploy/.env.prod）
-#   DEPLOY_MODE       compose | systemd | systemd-user（后两者等价：用户级 systemd 二进制路径；默认 compose）
+#   DEPLOY_MODE       compose | systemd | systemd-user（后两者为 systemd 二进制路径：
+#                     systemd=系统级单元 /etc/systemd/system，systemd-user=用户级 rootless
+#                     单元 ~/.config/systemd/user；默认 compose）
 #   DEPLOY_HOST       目标主机（user@host 或仅 host）；留空则本机部署
 #   DEPLOY_USER       SSH 用户（DEPLOY_HOST 未含 user@ 时使用，默认 root）
 #   DEPLOY_PORT       SSH 端口（默认 22）
@@ -56,8 +58,8 @@ load_env() {
 DEPLOY_MODE="${DEPLOY_MODE:-compose}"
 DEPLOY_SERVICE="${DEPLOY_SERVICE:-jianartifact}"
 DEPLOY_PORT="${DEPLOY_PORT:-22}"
-# 发布根：DEPLOY_DIR（现网配置键名）优先，RELEASE_DIR 为旧名兼容；都未设时按远端 home 推导
-RELEASE_DIR="${RELEASE_DIR:-${DEPLOY_DIR:-}}"
+# 发布根：RELEASE_DIR/DEPLOY_DIR 由环境文件或调用环境提供，**在 ensure_release_dir 里解析**
+# （不能在此处用 ${DEPLOY_DIR:-} 预展开——那时 load_env 还没跑，会拿到空串）
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:8080/readyz}"
 KEEP_RELEASES="${KEEP_RELEASES:-5}"
 
@@ -94,9 +96,17 @@ run_remote() {
   fi
 }
 
-# 发布根未配置时按远端 home 推导（现网形态：部署用户 home 下的 jianartifact）
+# 发布根解析**必须晚于 load_env**：环境文件里的 DEPLOY_DIR 在 source 之后才可见，
+# 若在 load_env 之前用 ${DEPLOY_DIR:-} 展开，会得到空串并静默回落到 home 推导
+# （正式站的 home 推导恰好等于真实路径，所以只在 t1 这类自定义发布根上暴露）。
 ensure_release_dir() {
-  [[ -n "${RELEASE_DIR}" ]] && return 0
+  if [[ -z "${RELEASE_DIR:-}" ]]; then
+    RELEASE_DIR="${DEPLOY_DIR:-}"
+  fi
+  if [[ -n "${RELEASE_DIR:-}" ]]; then
+    log "发布根 ${RELEASE_DIR}（来自 RELEASE_DIR/DEPLOY_DIR）"
+    return 0
+  fi
   local home_dir
   if [[ -n "${DEPLOY_HOST:-}" ]]; then
     home_dir="$(run_remote 'echo $HOME')"
@@ -133,10 +143,27 @@ deploy_compose() {
   log "Compose 部署完成。"
 }
 
-# 切换 current 并重启用户服务：部署与回滚共用的唯一动作。
+# systemd 作用域：systemd=系统级单元（/etc/systemd/system，通常以 root 连接），
+# systemd-user=用户级 rootless 单元（~/.config/systemd/user，需 lingering）。
+# 两者重启命令不同，用错会报 "Unit not found" 或 "Failed to connect to bus"。
+SYSTEMD_SCOPE="user"
+systemctl_restart() {
+  local svc="$1"
+  if [[ "${SYSTEMD_SCOPE}" == "system" ]]; then
+    run_remote "systemctl restart '${svc}'" || die "重启失败：${svc} 不在系统级作用域。
+若该单元其实位于 ~/.config/systemd/user（用户级），请把环境文件里的 DEPLOY_MODE 改为 systemd-user。"
+  else
+    run_remote "systemctl --user restart '${svc}'" || die "重启失败：${svc} 不在用户级作用域。
+若该单元其实位于 /etc/systemd/system（系统级），请把环境文件里的 DEPLOY_MODE 改为 systemd，
+并以有权重启该单元的用户连接。"
+  fi
+}
+
+# 切换 current 并重启服务：部署与回滚共用的唯一动作。
 switch_and_restart() {
   local target="$1"
-  run_remote "ln -sfn '${target}' '${RELEASE_DIR}/current' && systemctl --user restart '${DEPLOY_SERVICE}'"
+  run_remote "ln -sfn '${target}' '${RELEASE_DIR}/current'"
+  systemctl_restart "${DEPLOY_SERVICE}"
 }
 
 # 部署前置检查：远端必须已有 EnvironmentFile，否则重启后会因缺关键变量而起不来。
@@ -160,7 +187,9 @@ preflight_env_file() {
 
 deploy_systemd() {
   ensure_release_dir
-  log "以 rootless systemd 二进制模式部署，发布目录 ${RELEASE_DIR}，服务 ${DEPLOY_SERVICE}。"
+  local scope_desc="用户级（rootless）"
+  [[ "${SYSTEMD_SCOPE}" == "system" ]] && scope_desc="系统级"
+  log "以 systemd 二进制模式部署（${scope_desc}作用域），发布目录 ${RELEASE_DIR}，服务 ${DEPLOY_SERVICE}。"
   local stamp release
   stamp="$(date +%Y%m%d%H%M%S)"
   release="${RELEASE_DIR}/releases/${stamp}"
@@ -218,14 +247,17 @@ main() {
     deploy)
       case "${DEPLOY_MODE}" in
         compose) deploy_compose ;;
-        # systemd-user 是现网配置（deploy/.env.prod）里的写法，指用户级 systemd，与 systemd 等价
-        systemd | systemd-user) deploy_systemd ;;
-        *) die "未知 DEPLOY_MODE：${DEPLOY_MODE}（应为 compose 或 systemd / systemd-user）。" ;;
+        # systemd=系统级单元（deploy/.env.test：t1 测试实例），systemd-user=用户级 rootless 单元
+        # （deploy/.env.prod：正式站）。作用域由环境文件里的 DEPLOY_MODE 决定。
+        systemd) SYSTEMD_SCOPE="system"; deploy_systemd ;;
+        systemd-user) SYSTEMD_SCOPE="user"; deploy_systemd ;;
+        *) die "未知 DEPLOY_MODE：${DEPLOY_MODE}（应为 compose、systemd 或 systemd-user）。" ;;
       esac
       ;;
     rollback)
       case "${DEPLOY_MODE}" in
-        systemd | systemd-user) rollback_systemd ;;
+        systemd) SYSTEMD_SCOPE="system"; rollback_systemd ;;
+        systemd-user) SYSTEMD_SCOPE="user"; rollback_systemd ;;
         compose) die "Compose 模式请用镜像标签回滚（重设 image 后重新 deploy）。" ;;
         *) die "未知 DEPLOY_MODE：${DEPLOY_MODE}。" ;;
       esac

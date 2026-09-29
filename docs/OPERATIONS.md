@@ -92,7 +92,7 @@ Compose 使用命名卷保存 `/data`。首次启动后通过 `POST /api/v1/auth
 **部署形态**（三者缺一不可，改动任一处都要同步另外两处）：
 
 1. **二进制走版本目录**：每次部署解包到 `${DEPLOY_DIR}/releases/<时间戳>/`，再把 `current` 符号链接原子切过去；回滚只需切回上一版本目录。
-2. **进程由用户级 systemd 托管**：unit 的 `ExecStart=%h/jianartifact/current/jianartifact run`（**指向 `current`，不是固定路径**——否则切了 `current` 服务仍跑旧二进制）。`systemctl --user restart <服务>` 完成重启。
+2. **进程由 systemd 托管**：unit 的 `ExecStart=%h/jianartifact/current/jianartifact run`（**指向 `current`，不是固定路径**——否则切了 `current` 服务仍跑旧二进制）。**作用域由环境文件里的 `DEPLOY_MODE` 决定**，部署脚本据此选重启命令：`systemd`=系统级单元（`/etc/systemd/system`，`systemctl restart`）、`systemd-user`=用户级 rootless 单元（`~/.config/systemd/user`，`systemctl --user restart`，需 lingering）。选错作用域会报 `Unit not found` 或 `Failed to connect to bus`，脚本会在重启处直接失败并提示该改哪个值，不会静默切版本。发布根取自环境文件的 `DEPLOY_DIR`（自定义路径必须显式给出，不要依赖 home 推导）。
 3. **环境变量的真源是 `EnvironmentFile`**：`${DEPLOY_DIR}/jianartifact.env`（600 权限，含 `JIAN_DATA_DIR` / `JIAN_HTTP_ADDR` / `JIAN_PUBLIC_URL` / `JIAN_ENABLED_FORMATS` / `JIAN_JWT_SECRET` 等）。**部署脚本不会写入或覆盖它**——写入会丢掉格式配置、并把 JWT 换成脚本内置值（导致所有登录态失效）。unit 里不再写 `Environment=`，密钥也不出现在 unit 文件中。
 
 **脚本分工**：
@@ -109,6 +109,8 @@ DEPLOY_ENV=prod bash deploy/remote-ssh.sh deploy
 DEPLOY_ENV=prod bash deploy/remote-ssh.sh health
 DEPLOY_ENV=prod bash deploy/deploy.sh rollback
 ```
+
+系统级与用户级实例走同一条路径，差别只在环境文件里的 `DEPLOY_MODE`（系统级写 `systemd`、用户级写 `systemd-user`）与 `DEPLOY_DIR` / `DEPLOY_SERVICE` / `HEALTH_URL` 的取值；两站的部署命令完全相同。
 
 `remote-ssh.sh` 只做密钥、构建与登录入口，部署一律委托 `deploy.sh`——历史版本曾自行 `kill + nohup + pid` 启动，与 systemd 托管冲突（双进程抢端口）且只写 3 个环境变量，已移除。
 
