@@ -1,6 +1,6 @@
 # 接口契约：JianArtifact
 
-> 本文只提供接口分组和行为概览。管理 REST 的唯一契约是 [`../api/openapi.yaml`](../api/openapi.yaml)；生成 Go 接口、前端 client 和 devmock 时必须以该文件为输入。当前发布版本为 `0.8.0`；实时复制通道已随 FR-138 整体退役，`/api/v1/cluster/*` 与 `/api/v1/replication-apply-logs` 等端点已从契约与代码中移除。
+> 本文只提供接口分组和行为概览。管理 REST 的唯一契约是 [`../api/openapi.yaml`](../api/openapi.yaml)；生成 Go 接口、前端 client 和 devmock 时必须以该文件为输入。当前发布版本为 `0.10.1`（当前开发窗口为 `0.11.0`，进行中）；实时复制通道已随 FR-138 整体退役，`/api/v1/cluster/*` 与 `/api/v1/replication-apply-logs` 等端点已从契约与代码中移除。
 
 ## 1. 通用约定
 
