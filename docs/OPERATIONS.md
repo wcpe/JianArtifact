@@ -227,9 +227,32 @@ jianartifact-backup-<packageId>.tar.gz
 2. 备份 SQLite 与 blob。
 3. 停止单实例或使用部署脚本原子切换版本。
 4. 启动并等待 schema 迁移完成。
-5. 检查 `/readyz`、管理员登录、关键仓库读取和制品抽样。
+5. 检查 `/readyz`、管理员登录、关键仓库读取和制品抽样；可跑 `scripts/acceptance-spotcheck.py` 做一轮契约回归抽查（免认证断言对正式站也适用）。
 
 SQLite + blob 是一个数据边界，默认不做滚动多副本升级。
+
+**部署前的一致性快照**（部署失败要能立刻退回升级前的库）：
+
+```bash
+sqlite3 "${JIAN_DATA_DIR}/jianartifact.db" ".backup '${JIAN_DATA_DIR%/data}/pre-deploy-backup/jianartifact-$(date +%Y%m%d%H%M%S).db'"
+# 目标机无 sqlite3 时用 Python 标准库的在线备份 API（等价于 .backup，不阻塞写入）
+python3 - "$JIAN_DATA_DIR/jianartifact.db" "$dst" <<'PY'
+import sqlite3, sys
+s = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)
+d = sqlite3.connect(sys.argv[2])
+with d:
+    s.backup(d)
+PY
+sqlite3 "$dst" "PRAGMA quick_check;"   # 确认快照可读
+```
+
+**部署什么**：优先用该版本 tag 对应的 Release 附件，而不是本地重建，并用随附的 `SHA256SUMS` 校验；目标机出网良好时让它自行下载再校验，比经过运维机隧道搬运大文件更稳：
+
+```bash
+curl -fsSL -o /tmp/jianartifact "<Release 附件 URL>" && sha256sum /tmp/jianartifact
+```
+
+**确认跑的是哪个版本**：看启动日志行 `JianArtifact <版本> 正在监听`，或对运行产物 `sha256sum` 与附件比对。`/healthz` 的 `version` 字段当前不由构建注入，恒为空，不能用来判版本。
 
 ### 5.2 备份
 
@@ -282,7 +305,7 @@ jianartifact backup verify <包标识> --deep     # 可选的深度校验
 
 ### 7.1 质量门与发布
 
-本地质量入口是 Windows 原生 `make check` / `scripts/check.ps1`；应覆盖前端格式、类型、lint、测试、构建、Go vet/lint/race/vuln、契约和静态构建。当前发布版本为 `0.8.0`；下一个版本在版本提交、tag、远程 CI 和 Release 完成前都不得标正式交付。
+本地质量入口是 Windows 原生 `make check` / `scripts/check.ps1`；应覆盖前端格式、类型、lint、测试、构建、Go vet/lint/race/vuln、契约和静态构建。已发布版本以 `CHANGELOG.md` 与远程 tag 为准（本文写作时最新为 `0.10.1`）；下一个版本在版本提交、tag、远程 CI 和 Release 完成前都不得标正式交付。
 
 开发预览和正式发布使用不同版本标识；发布资产必须有对应校验和。交叉编译成功不能代替原生运行或真实服务验收。
 
