@@ -51,14 +51,27 @@ interface OperationAggregationProps {
 /** 类型筛选值：`all` 或某一操作类型。 */
 type KindFilter = "all" | OperationKind;
 
-/** 分区展示顺序：固定为 上传 → 删除 → 移动 → 其他。 */
-const KIND_ORDER: readonly OperationKind[] = ["upload", "delete", "move", "other"];
+/** 分区展示顺序：固定为 上传 → 删除 → 移动 → 令牌 → 设置 → 仓库 → 用户 → 其他。 */
+const KIND_ORDER: readonly OperationKind[] = [
+  "upload",
+  "delete",
+  "move",
+  "token",
+  "setting",
+  "repo",
+  "user",
+  "other",
+];
 
 /** 操作类型 → i18n 显示名键。 */
 const KIND_LABEL_KEYS: Record<OperationKind, string> = {
   upload: "auditWorkbench.opKindUpload",
   delete: "auditWorkbench.opKindDelete",
   move: "auditWorkbench.opKindMove",
+  token: "auditWorkbench.opKindToken",
+  setting: "auditWorkbench.opKindSetting",
+  repo: "auditWorkbench.opKindRepo",
+  user: "auditWorkbench.opKindUser",
   other: "auditWorkbench.opKindOther",
 };
 
@@ -315,6 +328,10 @@ export function OperationAggregation({
           {t("auditWorkbench.opSummary", { ops: totalOps, files: totalFiles })}
         </Text>
       </Group>
+      {/* 口径说明：聚合只覆盖当前页结果集（分页器只管事件流），显式写出避免被当成全量。 */}
+      <Text size="xs" c="dimmed" data-testid="audit-op-scope-hint">
+        {t("auditWorkbench.opScopeHint")}
+      </Text>
 
       {sections.length === 0 ? (
         <Text size="sm" c="dimmed" py="lg" px="md">
