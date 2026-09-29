@@ -252,7 +252,9 @@ sqlite3 "$dst" "PRAGMA quick_check;"   # 确认快照可读
 curl -fsSL -o /tmp/jianartifact "<Release 附件 URL>" && sha256sum /tmp/jianartifact
 ```
 
-**确认跑的是哪个版本**：看启动日志行 `JianArtifact <版本> 正在监听`，或对运行产物 `sha256sum` 与附件比对。`/healthz` 的 `version` 字段当前不由构建注入，恒为空，不能用来判版本。
+**确认跑的是哪个版本**：看启动日志行 `JianArtifact <版本> 正在监听`，对运行产物 `sha256sum` 与附件比对，或带管理员凭据请求 `GET /api/v1/status` 读 `version` 字段。
+
+注意 `version` **按认证状态脱敏**：匿名请求一律返回空串（`/healthz`、`/readyz`、`/api/v1/status` 同此规则），这是防指纹的预期行为，**不是「版本没注入」**——用匿名请求判版本，会把正常实例误读成没有版本。
 
 ### 5.2 备份
 

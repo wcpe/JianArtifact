@@ -58,6 +58,12 @@ def anonymous_checks() -> None:
     code, _, _ = call("GET", "/readyz")
     check("就绪探活", code == 200, f"HTTP {code}")
 
+    # 版本号按认证状态脱敏：匿名必须拿到空串（防指纹）。空串是预期行为，
+    # 不是「版本没注入」——别把这里的空串读成故障。
+    code, payload, _ = call("GET", "/healthz")
+    version = json.loads(payload).get("version", None) if code == 200 else None
+    check("匿名探针不泄露版本号", code == 200 and version == "", f"HTTP {code} version={version!r}")
+
     # 公开仓库列表：关闭全局匿名访问时为 401，属正常配置，不算失败
     code, _, _ = call("GET", "/api/v1/public/repositories")
     check("公开仓库端点", code in (200, 401), f"HTTP {code}")
@@ -71,6 +77,12 @@ def authenticated_checks() -> None:
         return
     token = json.loads(payload)["token"]
     check("管理员登录", True, "拿到 token")
+
+    # 版本号按认证状态脱敏：已认证必须拿到真实版本（注入失效时会退化成空串，
+    # 而空串在部署核验时会被误读成「没版本」，故在此锁定）
+    code, payload, _ = call("GET", "/api/v1/status", token=token)
+    version = json.loads(payload).get("version", "") if code == 200 else ""
+    check("认证请求可见版本号", code == 200 and version != "", f"HTTP {code} version={version!r}")
 
     # 用户列表分页：page_size 必须生效且返回 total
     code, payload, _ = call("GET", "/api/v1/users?page=1&page_size=1", token=token)
