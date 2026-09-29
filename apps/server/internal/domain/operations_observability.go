@@ -209,11 +209,10 @@ func (s *HostMonitoringService) Sample(now time.Time) (repository.HostMetricSamp
 	interfaces := hostInterfaceSamplesFromRaw(item.BucketStart, raw, previous, elapsed)
 	s.previous = &raw
 	s.mu.Unlock()
-	if err := s.repo.PutHostSample(item); err != nil {
-		return repository.HostMetricSample{}, err
-	}
-	// 逐网卡行与聚合样本同一分钟写入；失败沿用同一错误语义（调用方按分钟任务忽略并重试）。
-	if err := s.repo.PutHostNetworkInterfaces(interfaces); err != nil {
+	// 逐网卡行与聚合样本必须在同一事务内写入：两次独立写入之间若进程退出，
+	// 会留下「总账有、明细无」的缺口，只能等下一次采样自愈。失败沿用同一错误语义
+	// （调用方按分钟任务忽略并重试）。
+	if err := s.repo.PutHostSampleWithInterfaces(item, interfaces); err != nil {
 		return repository.HostMetricSample{}, err
 	}
 	return item, nil

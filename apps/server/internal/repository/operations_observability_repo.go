@@ -113,8 +113,13 @@ func (r *OperationsObservabilityRepo) PutCapacitySnapshot(value CapacitySnapshot
 	return err
 }
 
-func (r *OperationsObservabilityRepo) PutHostSample(value HostMetricSample) error {
-	_, err := r.db.Exec(`INSERT INTO host_metric_minute
+// hostSampleExecer 抽象「连接或事务」，让同一段 SQL 既能直连执行、也能在事务内执行。
+type hostSampleExecer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+func putHostSample(exec hostSampleExecer, value HostMetricSample) error {
+	_, err := exec.Exec(`INSERT INTO host_metric_minute
 		(bucket_start, host_state, host_error_code, cpu_percent, memory_total_bytes, memory_available_bytes, memory_used_bytes,
 		disk_available_bytes, disk_total_bytes, disk_used_bytes,
 		network_state, network_error_code, network_receive_bytes_per_sec, network_transmit_bytes_per_sec,
@@ -146,11 +151,11 @@ func (r *OperationsObservabilityRepo) PutHostSample(value HostMetricSample) erro
 	return err
 }
 
-// PutHostNetworkInterfaces 逐网卡写入同一分钟的样本（主键 bucket_start + interface）。
+// putHostNetworkInterfaces 逐网卡写入同一分钟的样本（主键 bucket_start + interface）。
 // 空切片直接返回，避免发起无意义的事务/语句。
-func (r *OperationsObservabilityRepo) PutHostNetworkInterfaces(values []HostNetworkInterfaceSample) error {
+func putHostNetworkInterfaces(exec hostSampleExecer, values []HostNetworkInterfaceSample) error {
 	for _, value := range values {
-		if _, err := r.db.Exec(`INSERT INTO host_network_interface_minute
+		if _, err := exec.Exec(`INSERT INTO host_network_interface_minute
 			(bucket_start, interface, state, error_code, receive_bytes_total, transmit_bytes_total,
 			receive_bytes_per_sec, transmit_bytes_per_sec)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -164,6 +169,33 @@ func (r *OperationsObservabilityRepo) PutHostNetworkInterfaces(values []HostNetw
 		}
 	}
 	return nil
+}
+
+func (r *OperationsObservabilityRepo) PutHostSample(value HostMetricSample) error {
+	return putHostSample(r.db, value)
+}
+
+func (r *OperationsObservabilityRepo) PutHostNetworkInterfaces(values []HostNetworkInterfaceSample) error {
+	return putHostNetworkInterfaces(r.db, values)
+}
+
+// PutHostSampleWithInterfaces 在同一事务里写总体样本与逐网卡明细：两张表要么一起生效、
+// 要么都不生效。此前采集侧是两次独立调用，进程若在两次写之间退出（崩溃 / 断电 / 磁盘报错），
+// 就会留下「总账有、明细无」的缺口，只能靠下一次采样自愈。
+// 采集侧应走这个入口；单表方法保留给只需要其一的场景。
+func (r *OperationsObservabilityRepo) PutHostSampleWithInterfaces(value HostMetricSample, interfaces []HostNetworkInterfaceSample) error {
+	tx, err := r.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := putHostSample(tx, value); err != nil {
+		return err
+	}
+	if err := putHostNetworkInterfaces(tx, interfaces); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // LatestHostNetworkInterfaces 返回窗口 [from,to) 内**每个网卡各自最新**的一行，

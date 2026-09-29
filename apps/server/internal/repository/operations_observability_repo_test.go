@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -269,4 +270,87 @@ func TestOperationsObservabilityCurrentCapacityCountsDistinctRepositories(t *tes
 	if snap.AssetCount != 3 {
 		t.Fatalf("资产数=%d，期望 3", snap.AssetCount)
 	}
+}
+
+// failSecondExec 把真实事务包装一层，在第二次 Exec 时注入失败：
+// 用于模拟「总体样本已写、网卡明细写入失败」这一崩溃/报错点。
+type failSecondExec struct {
+	tx    *sql.Tx
+	calls int
+}
+
+func (f *failSecondExec) Exec(query string, args ...any) (sql.Result, error) {
+	f.calls++
+	if f.calls == 2 {
+		return nil, errors.New("注入失败：第二次写入")
+	}
+	return f.tx.Exec(query, args...)
+}
+
+// TestOperationsObservabilityRepoWritesHostSampleAndInterfacesInOneTransaction 锁定两表同事务：
+// 合并入口必须同时写入两张表；中途失败回滚后，两张表都不留痕（不再出现「总账有、明细无」）。
+func TestOperationsObservabilityRepoWritesHostSampleAndInterfacesInOneTransaction(t *testing.T) {
+	db, err := persistence.Open(filepath.Join(t.TempDir(), "host-sample-transaction.db"))
+	if err != nil {
+		t.Fatalf("打开数据库：%v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := db.Migrate(); err != nil {
+		t.Fatalf("迁移数据库：%v", err)
+	}
+	repo := NewOperationsObservabilityRepo(db)
+	base := time.Date(2026, 8, 27, 10, 0, 0, 0, time.UTC)
+	sample := HostMetricSample{BucketStart: formatMetricTime(base), HostState: "ok", NetworkState: "ok"}
+	interfaces := []HostNetworkInterfaceSample{
+		{BucketStart: formatMetricTime(base), Interface: "eth0", State: "ok"},
+		{BucketStart: formatMetricTime(base), Interface: "lo", State: "ok"},
+	}
+
+	// 正向：合并入口一次写入总体样本与两条网卡明细。
+	if err := repo.PutHostSampleWithInterfaces(sample, interfaces); err != nil {
+		t.Fatalf("合并写入：%v", err)
+	}
+	if got := countRows(t, db, "host_metric_minute"); got != 1 {
+		t.Fatalf("总体样本行数：期望 1，得 %d", got)
+	}
+	if got := countRows(t, db, "host_network_interface_minute"); got != 2 {
+		t.Fatalf("网卡明细行数：期望 2，得 %d", got)
+	}
+
+	// 反向：先清空，再用注入失败的事务走同一段写入，回滚后两张表都必须为空。
+	if _, err := db.Exec("DELETE FROM host_metric_minute"); err != nil {
+		t.Fatalf("清空总体样本：%v", err)
+	}
+	if _, err := db.Exec("DELETE FROM host_network_interface_minute"); err != nil {
+		t.Fatalf("清空网卡明细：%v", err)
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("开启事务：%v", err)
+	}
+	exec := &failSecondExec{tx: tx}
+	if err := putHostSample(exec, sample); err != nil {
+		t.Fatalf("第一段写入本应成功：%v", err)
+	}
+	if err := putHostNetworkInterfaces(exec, interfaces); err == nil {
+		t.Fatalf("第二段写入本应失败（注入点）")
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("回滚：%v", err)
+	}
+	if got := countRows(t, db, "host_metric_minute"); got != 0 {
+		t.Fatalf("回滚后总体样本应无痕，实得 %d 行", got)
+	}
+	if got := countRows(t, db, "host_network_interface_minute"); got != 0 {
+		t.Fatalf("回滚后网卡明细应无痕，实得 %d 行", got)
+	}
+}
+
+func countRows(t *testing.T, db *persistence.DB, table string) int {
+	t.Helper()
+	var count int
+	if err := db.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count); err != nil {
+		t.Fatalf("统计 %s：%v", table, err)
+	}
+	return count
 }
