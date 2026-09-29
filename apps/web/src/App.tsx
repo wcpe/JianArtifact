@@ -22,14 +22,14 @@ export function App() {
         <AuthProvider>
           <LoginModalProvider>
             <BrowserRouter
-              future={{
-                // 明确关闭 startTransition：开启后路由更新走 transition，
-                // React 会**保留旧页面内容**直到新页面 chunk 就绪，期间没有任何反馈——
-                // 慢网速下用户看到的就是"点了导航切不过去"。关闭后 Suspense 立即回退到
-                // 页面骨架，配合 React.lazy 预取（app/preloadRoute）把骨架窗口压到最短。
-                v7_startTransition: false,
-                v7_relativeSplatPath: true,
-              }}
+              // v7 起 `future` 开关已并入正式行为：`v7_startTransition` 移除、
+              // `v7_relativeSplatPath` 成为默认，等价配置改为 `useTransitions`。
+              // 仍明确关闭 transition（原 `v7_startTransition: false` 的同一决策）：
+              // 开启后路由更新走 transition，React 会**保留旧页面内容**直到新页面 chunk
+              // 就绪，期间没有任何反馈——慢网速下用户看到的就是"点了导航切不过去"。
+              // 关闭后 Suspense 立即回退到页面骨架，配合 React.lazy 预取（app/preloadRoute）
+              // 把骨架窗口压到最短。
+              useTransitions={false}
             >
               <AppRoutes />
             </BrowserRouter>
