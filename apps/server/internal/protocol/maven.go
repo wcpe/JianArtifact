@@ -364,11 +364,17 @@ func (h *MavenHandler) serveGroupMetadata(c *gin.Context, repo *repository.Repos
 	c.Data(http.StatusOK, "application/xml", out)
 }
 
-// writeArtifact 流式回写制品：设置 Content-Type/Length 与 ETag(=blob sha256)，HEAD 不写 body。
+// writeArtifact 流式回写制品：设置 Content-Type 与 ETag(=blob sha256)，HEAD 不写 body。
+// 内容可寻址时交给 http.ServeContent 协商 Range / If-Range / If-None-Match（断点续传），
+// 不可寻址（上游流）时退化为一次性全量回写。
 func writeArtifact(c *gin.Context, contentType string, size int64, blobHash string, rc io.Reader) {
 	c.Header("Content-Type", contentType)
-	c.Header("Content-Length", strconv.FormatInt(size, 10))
 	c.Header("ETag", `"`+blobHash+`"`)
+	if rs, ok := rc.(io.ReadSeeker); ok {
+		http.ServeContent(c.Writer, c.Request, "", time.Time{}, rs)
+		return
+	}
+	c.Header("Content-Length", strconv.FormatInt(size, 10))
 	if c.Request.Method == http.MethodHead {
 		c.Status(http.StatusOK)
 		return
