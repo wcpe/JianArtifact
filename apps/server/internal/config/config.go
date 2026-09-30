@@ -40,6 +40,14 @@ const (
 	EnvOIDCRedirectURL        = "JIAN_OIDC_REDIRECT_URL"    // OIDC 回调地址（FR-34），须与 IdP 侧注册一致
 	EnvOIDCUsernameClaim      = "JIAN_OIDC_USERNAME_CLAIM"  // 用户名 claim（FR-34）；缺省 preferred_username
 	EnvOIDCAllowedDomains     = "JIAN_OIDC_ALLOWED_DOMAINS" // 允许自动建号的邮箱域名（FR-34），逗号分隔；空 = 不限制
+	EnvLDAPURL                = "JIAN_LDAP_URL"             // LDAP 目录地址（FR-35，ldap:// 或 ldaps://）；空 = 不启用
+	EnvLDAPBindDN             = "JIAN_LDAP_BIND_DN"         // 检索用服务账号 DN（FR-35）；空 = 改用 DN 模板直接绑定
+	EnvLDAPBindPassword       = "JIAN_LDAP_BIND_PASSWORD"   // 服务账号口令（FR-35）；只从环境变量读取，不入库不打印
+	EnvLDAPBaseDN             = "JIAN_LDAP_BASE_DN"         // 用户检索基准 DN（FR-35）
+	EnvLDAPUserFilter         = "JIAN_LDAP_USER_FILTER"     // 用户检索过滤器（FR-35），必须含 {username} 占位
+	EnvLDAPEmailAttr          = "JIAN_LDAP_EMAIL_ATTR"      // 邮箱属性名（FR-35）；缺省 mail
+	EnvLDAPStartTLS           = "JIAN_LDAP_STARTTLS"        // 对 ldap:// 是否使用 StartTLS（FR-35）；缺省关闭
+	EnvLDAPCAFile             = "JIAN_LDAP_CA_FILE"         // 自定义 CA（PEM）路径（FR-35）；不提供跳过证书校验的开关
 
 	defaultDataDir         = "./data"
 	defaultHTTPAddr        = ":8080"
@@ -48,6 +56,9 @@ const (
 	defaultBlobGCInterval  = 24 * time.Hour  // 孤立 blob 默认每日清理一次
 	// defaultOIDCUsernameClaim 是 OIDC 用户名的缺省 claim；各 IdP 常见取值见 OPERATIONS。
 	defaultOIDCUsernameClaim = "preferred_username"
+	// defaultLDAPUserFilter 与 defaultLDAPEmailAttr 是 LDAP 检索的缺省口径（OpenLDAP 风格 uid）。
+	defaultLDAPUserFilter = "(uid={username})"
+	defaultLDAPEmailAttr  = "mail"
 
 	dbFileName                       = "jianartifact.db"
 	blobDirName                      = "blobs"
@@ -74,7 +85,24 @@ type Config struct {
 	TLSCert                string        // TLS PEM 证书文件路径（FR-131）
 	TLSKey                 string        // TLS PEM 私钥文件路径（FR-131）
 	OIDC                   OIDCConfig    // FR-34：OIDC 身份源接入配置（Issuer 空 = 不启用）
+	LDAP                   LDAPConfig    // FR-35：LDAP 身份源接入配置（URL 空 = 不启用）
 }
+
+// LDAPConfig 是 LDAP 目录接入配置（FR-35，见 ADR-0029）；
+// 服务账号口令只从环境变量解析，不落库、不打印、不进审计。
+type LDAPConfig struct {
+	URL          string // 目录地址（ldap:// 或 ldaps://）
+	BindDN       string // 检索用服务账号 DN；空 = 改用 DN 模板直接绑定
+	BindPassword string // 服务账号口令（仅环境变量）
+	BaseDN       string // 用户检索基准 DN
+	UserFilter   string // 用户检索过滤器，含 {username} 占位
+	EmailAttr    string // 邮箱属性名
+	StartTLS     bool   // 对 ldap:// 使用 StartTLS
+	CAFile       string // 自定义 CA（PEM）路径；留空用系统根证书
+}
+
+// Enabled 报告是否启用 LDAP 登录（配置了 URL 即启用）。
+func (c LDAPConfig) Enabled() bool { return c.URL != "" }
 
 // OIDCConfig 是 OIDC 身份源接入配置（FR-34，见 ADR-0029）；
 // 凭据只从环境变量解析，不落库、不打印、不进审计。
@@ -123,6 +151,10 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	ldap, err := ldapConfig()
+	if err != nil {
+		return nil, err
+	}
 
 	return &Config{
 		DataDir:                absData,
@@ -141,6 +173,7 @@ func Load() (*Config, error) {
 		TLSCert:                os.Getenv(EnvTLSCert),
 		TLSKey:                 os.Getenv(EnvTLSKey),
 		OIDC:                   oidc,
+		LDAP:                   ldap,
 	}, nil
 }
 
@@ -302,4 +335,46 @@ func requireHTTPURL(env, value string) error {
 		return fmt.Errorf("解析 %s：须为 http(s) 绝对 URL", env)
 	}
 	return nil
+}
+
+// ldapConfig 解析 LDAP 接入配置（FR-35）。未配置 URL 时整组不启用；
+// 半配置、过滤器缺占位、StartTLS 与 ldaps 冲突、CA 文件不可读都在启动期直接报错，
+// 避免"以为启用了实际没有"（对齐 OIDC 与 FR-131 的防静默降级口径）。
+func ldapConfig() (LDAPConfig, error) {
+	startTLS := os.Getenv(EnvLDAPStartTLS)
+	cfg := LDAPConfig{
+		URL:          strings.TrimSpace(os.Getenv(EnvLDAPURL)),
+		BindDN:       strings.TrimSpace(os.Getenv(EnvLDAPBindDN)),
+		BindPassword: os.Getenv(EnvLDAPBindPassword),
+		BaseDN:       strings.TrimSpace(os.Getenv(EnvLDAPBaseDN)),
+		UserFilter:   envOr(EnvLDAPUserFilter, defaultLDAPUserFilter),
+		EmailAttr:    envOr(EnvLDAPEmailAttr, defaultLDAPEmailAttr),
+		StartTLS:     startTLS == "1" || strings.EqualFold(startTLS, "true"),
+		CAFile:       strings.TrimSpace(os.Getenv(EnvLDAPCAFile)),
+	}
+	if cfg.URL == "" {
+		return LDAPConfig{}, nil
+	}
+	u, err := url.Parse(cfg.URL)
+	if err != nil || (u.Scheme != "ldap" && u.Scheme != "ldaps") || u.Host == "" {
+		return LDAPConfig{}, fmt.Errorf("解析 %s：须为 ldap:// 或 ldaps:// 地址", EnvLDAPURL)
+	}
+	if cfg.BaseDN == "" {
+		return LDAPConfig{}, fmt.Errorf("启用 %s 时必须同时配置：%s", EnvLDAPURL, EnvLDAPBaseDN)
+	}
+	if !strings.Contains(cfg.UserFilter, "{username}") {
+		return LDAPConfig{}, fmt.Errorf("解析 %s：过滤器必须包含 {username} 占位", EnvLDAPUserFilter)
+	}
+	if cfg.BindDN != "" && cfg.BindPassword == "" {
+		return LDAPConfig{}, fmt.Errorf("配置了 %s 时必须同时配置：%s", EnvLDAPBindDN, EnvLDAPBindPassword)
+	}
+	if cfg.StartTLS && u.Scheme == "ldaps" {
+		return LDAPConfig{}, fmt.Errorf("%s 与 ldaps:// 冲突：ldaps 已全程加密", EnvLDAPStartTLS)
+	}
+	if cfg.CAFile != "" {
+		if _, err := os.Stat(cfg.CAFile); err != nil {
+			return LDAPConfig{}, fmt.Errorf("读取 %s 指向的 CA 文件：%w", EnvLDAPCAFile, err)
+		}
+	}
+	return cfg, nil
 }

@@ -21,7 +21,7 @@ const oidcFlowCookiePath = "/api/v1/auth/oidc"
 type OIDCLogin interface {
 	NewFlow() auth.OIDCFlow
 	AuthCodeURL(ctx context.Context, flow auth.OIDCFlow) (string, error)
-	Exchange(ctx context.Context, code string, flow auth.OIDCFlow) (auth.OIDCClaims, error)
+	Exchange(ctx context.Context, code string, flow auth.OIDCFlow) (auth.ExternalUser, error)
 }
 
 // OIDCDeps 汇集 OIDC 登录端点所需依赖（FR-34）；为 nil 表示未启用 OIDC 登录。

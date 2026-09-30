@@ -58,10 +58,11 @@ type appServices struct {
 	upstreamClient      *upstream.Client // FR-89：回源客户端（web 改回源超时时 SetTimeout）
 	store               auth.Store
 	jwt                 *auth.JWTManager
-	metricsReg          *metrics.Registry    // FR-39：进程内指标登记（协议请求计数）
-	metricsExp          *metrics.Exposition  // FR-39：/metrics 文本暴露渲染器
-	scheduler           *scheduler.Scheduler // FR-44：维护类周期作业调度器
-	oidcDeps            *api.OIDCDeps        // FR-34：OIDC 登录端点依赖（nil = 未启用）
+	metricsReg          *metrics.Registry     // FR-39：进程内指标登记（协议请求计数）
+	metricsExp          *metrics.Exposition   // FR-39：/metrics 文本暴露渲染器
+	scheduler           *scheduler.Scheduler  // FR-44：维护类周期作业调度器
+	oidcDeps            *api.OIDCDeps         // FR-34：OIDC 登录端点依赖（nil = 未启用）
+	ldapAuth            api.LDAPAuthenticator // FR-35：LDAP 目录侧校验（nil = 未启用）
 }
 
 // openServices 打开数据库、执行迁移并装配领域服务。调用方负责在返回的 db 上 Close。
@@ -225,6 +226,16 @@ func openServices(cfg *config.Config) (*appServices, error) {
 		}
 	}
 
+	// FR-35：LDAP 目录侧校验；未配置 URL 时保持 nil，登录不回退目录。
+	var ldapAuth api.LDAPAuthenticator
+	if cfg.LDAP.Enabled() {
+		ldapVerifier, err := auth.NewLDAPVerifier(cfg.LDAP)
+		if err != nil {
+			return nil, fmt.Errorf("初始化 LDAP 校验器：%w", err)
+		}
+		ldapAuth = ldapVerifier.Authenticate
+	}
+
 	return &appServices{
 		db:                  db,
 		users:               userRepo,
@@ -264,6 +275,7 @@ func openServices(cfg *config.Config) (*appServices, error) {
 		metricsExp:          metricsExp,
 		scheduler:           schedulerSvc,
 		oidcDeps:            oidcDeps,
+		ldapAuth:            ldapAuth,
 	}, nil
 }
 
@@ -307,6 +319,7 @@ func (s *appServices) handlers(version string, checks []func() error) *api.Handl
 		BackupUploads:           s.backupUploads,
 		Metrics:                 s.metricsExp,
 		OIDC:                    s.oidcDeps,
+		LDAPAuth:                s.ldapAuth,
 		BackupLinkKey:           append([]byte(nil), s.auditAttentionKey...),
 		ClusterTokenSet:         s.syncTokenSet,
 		PublicURL:               s.publicURL,
