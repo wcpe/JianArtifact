@@ -34,7 +34,13 @@ function Providers({ children, route }: { children: ReactNode; route: string }) 
               initialEntries={[route]}
               // 与 App.tsx 保持一致：关闭 startTransition，让懒加载切换立即回退到骨架
               // （开启时 React 会保留旧页面内容，测试里也会掩盖"切换无反馈"这类问题）。
-              future={{ v7_startTransition: false, v7_relativeSplatPath: true }}
+              //
+              // react-router v7 起 `future` 开关已并入正式行为：`v7_startTransition` 移除、
+              // `v7_relativeSplatPath` 成为默认，等价配置为 `useTransitions`。此处必须同步
+              // 迁移——否则该 prop 被 v7 静默忽略，夹具会退回 startTransition 默认开启，
+              // 与 App.tsx 脱节，并让依赖懒加载的用例在负载下超时（`test/` 不在 tsc 范围内，
+              // 这类失效不会被类型检查拦住）。
+              useTransitions={false}
             >
               {children}
             </MemoryRouter>
