@@ -172,6 +172,14 @@ func NewAssetService(repos *repository.RepoRepo, assets *repository.AssetRepo, b
 // SetMutationCoordinator 注入与其它写路径共享的节点级协调器。
 func (s *AssetService) SetMutationCoordinator(c *AssetMutationCoordinator) { s.mutator = c }
 
+// SetStorageQuotaCheck 注入仓库级存储配额的提交点权威复检（FR-41 §4.1）。
+// nil 表示不做存储配额判定（兼容既有装配与只读部署）。
+func (s *AssetService) SetStorageQuotaCheck(check StorageQuotaGuard) {
+	if s.mutator != nil {
+		s.mutator.SetStorageQuotaCheck(check)
+	}
+}
+
 // MutationCoordinator 返回当前节点共享的资产生命周期协调器，供同一装配图中的写服务复用。
 func (s *AssetService) MutationCoordinator() *AssetMutationCoordinator { return s.mutator }
 
@@ -275,18 +283,22 @@ func (s *AssetService) Put(repoName, path string, r io.Reader, contentType strin
 		return nil, ErrConflict
 	}
 	// 复制退役后所有节点都是普通节点：发布一律走原子 operation 信封路径。
-	return s.putWithPrimaryOperation(repoName, repo, path, r, contentType)
+	return s.putWithPrimaryOperation(repoName, repo, path, r, contentType, false)
 }
 
 // putWithPrimaryOperation 将主节点的单制品发布写入不可拆分的 v2 operation，
 // 避免 standby 仅拉取 v2 时遗漏仍停留在旧变更流中的协议发布。
-func (s *AssetService) putWithPrimaryOperation(repoName string, repo *repository.Repository, path string, r io.Reader, contentType string) (*repository.Asset, error) {
+// quotaExempt 为 true 时该资产在提交点豁免仓库存储配额（仅迁移导入 / 备份恢复）。
+func (s *AssetService) putWithPrimaryOperation(repoName string, repo *repository.Repository, path string, r io.Reader, contentType string, quotaExempt bool) (*repository.Asset, error) {
 	asset, err := s.StageBlob(r, contentType)
 	if err != nil {
 		return nil, err
 	}
 	asset.RepositoryID = repo.ID
 	asset.Path = path
+	if quotaExempt {
+		markQuotaExempt(asset)
+	}
 	if _, err := s.PublishAssets(repoName, []*repository.Asset{asset}); err != nil {
 		return nil, s.cleanupFailedWrite(asset.BlobHash, err)
 	}
@@ -302,15 +314,34 @@ func (s *AssetService) putWithPrimaryOperation(repoName string, repo *repository
 // 用于在线迁移保留源 Nexus 资产的时间戳。sourceModified 为零值时回退到 Put（使用本地当前时间），
 // 离线路径或缺失时间戳时语义等同 Put。时间按 UTC "YYYY-MM-DD HH:MM:SS" 写入，
 // 与 asset 表 datetime('now') 默认值格式一致。
+//
+// 本方法只服务迁移导入（管理员批量操作），因此**显式豁免仓库存储配额**（FR-41 §4.1）：
+// 迁移导入属可预估的批量管理员操作，配额不阻断它，但提交点会记日志。
 func (s *AssetService) PutWithTimestamps(repoName, path string, r io.Reader, contentType string, sourceModified time.Time) (*repository.Asset, error) {
 	if sourceModified.IsZero() {
-		return s.Put(repoName, path, r, contentType)
+		return s.putWithPrimaryOperationExemptQuota(repoName, path, r, contentType)
 	}
-	return s.PutWithCommitHook(repoName, path, r, contentType, func(asset *repository.Asset) repository.MutationCompletionHook {
+	return s.putWithCommitHook(repoName, path, r, contentType, func(asset *repository.Asset) repository.MutationCompletionHook {
 		// 源端时间写入资产行：created_at 与 updated_at 均与源一致（用户要求迁移后两时间都对齐源）。
 		applySourceTimestamp(asset, sourceModified)
 		return func(tx *sqlx.Tx) error { return nil }
-	})
+	}, true)
+}
+
+// putWithPrimaryOperationExemptQuota 与 Put 相同，但显式豁免仓库存储配额。
+// 仅供迁移导入 / 备份恢复等管理员批量操作使用；协议发布路径必须走 Put。
+func (s *AssetService) putWithPrimaryOperationExemptQuota(repoName, path string, r io.Reader, contentType string) (*repository.Asset, error) {
+	if err := s.requireBusinessWrite(); err != nil {
+		return nil, err
+	}
+	repo, err := s.repos.GetByName(repoName)
+	if err != nil {
+		return nil, mapNotFound(err)
+	}
+	if repo.Type != "hosted" {
+		return nil, ErrConflict
+	}
+	return s.putWithPrimaryOperation(repoName, repo, path, r, contentType, true)
 }
 
 // applySourceTimestamp 将资产行 created_at/updated_at 固定为源端时间的 UTC
@@ -329,6 +360,12 @@ func applySourceTimestamp(asset *repository.Asset, sourceModified time.Time) {
 // PutWithCommitHook 将内容写入 blob 后，与调用方的同库元数据一起完成资产事务。
 // 附加事务失败时，资产视图与新写入的无引用 blob 都不会对外保留。
 func (s *AssetService) PutWithCommitHook(repoName, path string, r io.Reader, contentType string, hook func(*repository.Asset) repository.MutationCompletionHook) (*repository.Asset, error) {
+	return s.putWithCommitHook(repoName, path, r, contentType, hook, false)
+}
+
+// putWithCommitHook 是 PutWithCommitHook 的共享实现；quotaExempt 为 true 时该资产在
+// 提交点豁免仓库存储配额（仅迁移导入 / 备份恢复等管理员批量操作）。
+func (s *AssetService) putWithCommitHook(repoName, path string, r io.Reader, contentType string, hook func(*repository.Asset) repository.MutationCompletionHook, quotaExempt bool) (*repository.Asset, error) {
 	if err := s.requireBusinessWrite(); err != nil {
 		return nil, err
 	}
@@ -347,6 +384,9 @@ func (s *AssetService) PutWithCommitHook(repoName, path string, r io.Reader, con
 		contentType = "application/octet-stream"
 	}
 	asset := &repository.Asset{RepositoryID: repo.ID, Path: path, BlobHash: hash, Size: size, ContentType: contentType, Sha1: sha1sum, Md5: md5sum}
+	if quotaExempt {
+		markQuotaExempt(asset)
+	}
 	if err := s.mutator.PutWithCommitHook(asset, hook(asset)); err != nil {
 		return nil, s.cleanupFailedWrite(hash, err)
 	}
@@ -1333,7 +1373,8 @@ func (s *AssetService) ListPathsByPrefix(repoName, prefix string) ([]string, err
 	return paths, nil
 }
 
-// Delete 删除制品元数据（blob 内容不即时清理）。
+// Delete 删除制品元数据：引用归零的 blob 在本次调用返回前完成物理回收（ADR-0024），
+// 仍被其它资产引用的 blob 留在活动目录（由 blob-gc 兜底清理孤立件）。
 // 仓库或路径不存在均返回 ErrNotFound。
 func (s *AssetService) Delete(repoName, path string) error {
 	if err := s.requireBusinessWrite(); err != nil {

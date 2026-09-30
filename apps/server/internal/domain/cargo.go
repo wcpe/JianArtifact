@@ -87,13 +87,14 @@ func (s *CargoService) Publish(ctx context.Context, repoName string, r io.Reader
 
 // PublishWithGuard 在解析出规范 crate 路径及实际字节数后、写入任何资产前执行发布策略。
 func (s *CargoService) PublishWithGuard(ctx context.Context, repoName string, r io.Reader, guard CargoPublishGuard) (*CargoPublishResult, error) {
-	return s.publishCargo(ctx, repoName, r, guard, time.Time{})
+	return s.publishCargo(ctx, repoName, r, guard, time.Time{}, false)
 }
 
 // publishCargo 是 Publish 的共享实现；sourceModified 非零时将 crate 资产行
 // created_at/updated_at 固定为源端时间（在线迁移保留源时间戳）。
 // 索引资产是既有索引与新版本行合并后的衍生内容，保持本地时间语义。
-func (s *CargoService) publishCargo(ctx context.Context, repoName string, r io.Reader, guard CargoPublishGuard, sourceModified time.Time) (*CargoPublishResult, error) {
+// quotaExempt 为 true 时本次写入在提交点豁免仓库存储配额（仅迁移导入）。
+func (s *CargoService) publishCargo(ctx context.Context, repoName string, r io.Reader, guard CargoPublishGuard, sourceModified time.Time, quotaExempt bool) (*CargoPublishResult, error) {
 	repo, err := s.repos.Get(repoName)
 	if err != nil {
 		return nil, err
@@ -169,6 +170,11 @@ func (s *CargoService) publishCargo(ctx context.Context, repoName string, r io.R
 	}
 	crateAsset.Path = cratePath
 	indexAsset.Path = indexPath
+	if quotaExempt {
+		// 迁移导入属管理员批量操作：显式豁免仓库存储配额（FR-41 §4.1）。
+		markQuotaExempt(crateAsset)
+		markQuotaExempt(indexAsset)
+	}
 	if _, err := s.assets.PublishAssets(repoName, []*repository.Asset{crateAsset, indexAsset}); err != nil {
 		return nil, s.assets.cleanupFailedWrite(indexAsset.BlobHash, s.assets.cleanupFailedWrite(crateAsset.BlobHash, err))
 	}

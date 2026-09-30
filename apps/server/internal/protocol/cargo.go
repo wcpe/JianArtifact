@@ -84,6 +84,7 @@ func (h *CargoHandler) Put(c *gin.Context) {
 		})
 		if err != nil {
 			h.auditRejected(c, "cargo.publish", repoName, cargoAuditPath(rest), publishRejectionDetail(err))
+			h.recordQuotaRejection(err)
 			writeCargoError(c, cargoStatus(err), cargoCode(err), "发布失败")
 			return
 		}

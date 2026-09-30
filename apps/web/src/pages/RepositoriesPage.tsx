@@ -7,6 +7,7 @@ import {
   Box,
   Button,
   Center,
+  Divider,
   Group,
   Menu,
   Modal,
@@ -77,6 +78,19 @@ import { useAsync } from "../hooks/useAsync";
 import { CONN_COLOR, CONN_LABEL_KEY } from "../lib/connectionStatus";
 import { confirmDanger, notifyError, notifySuccess } from "../lib/feedback";
 import { formatBytes } from "../lib/assetTree";
+import {
+  QUOTA_STATE_COLOR,
+  QUOTA_STATE_LABEL_KEY,
+  QUOTA_UNITS,
+  hasQuotaLimit,
+  parseNonNegativeInt,
+  parseQuotaBytes,
+  quotaState,
+  repoQuotaState,
+  type QuotaState,
+  type QuotaUnit,
+} from "../lib/quota";
+import { formatCount } from "../lib/format";
 import { formatUtcToLocal, formatUtcToLocalDate } from "../lib/timeFormat";
 
 const PAGE_SIZE = 10;
@@ -177,14 +191,33 @@ function protocolBaseFor(repo: Pick<Repository, "format" | "name">): string {
  * `whiteSpace: nowrap` 保证「1.2 MB」「日期」这类不折行——列宽不足时宁可整表横向滚动，
  * 也不要折成「2026-01-」+「05」这种半截日期（用户实测反馈：看起来像只显示了年月）。
  */
-function MetricCell({ icon, hint, value }: { icon: ReactNode; hint: string; value: ReactNode }) {
+function MetricCell({
+  icon,
+  hint,
+  value,
+  state,
+}: {
+  icon: ReactNode;
+  hint: string;
+  value: ReactNode;
+  /**
+   * FR-41：该维度的配额状态。接近上限着橙、已超限着红（正常与不限保持默认前景色）；
+   * 状态同时落到 `data-quota-state`，供用例断言"哪个维度被判定成了什么状态"，
+   * 不必依赖颜色（颜色断言在 jsdom 下既脆弱又读不出语义）。
+   */
+  state?: QuotaState;
+}) {
+  const color =
+    state && state !== "ok" && state !== "unlimited" ? QUOTA_STATE_COLOR[state] : undefined;
   return (
     <Tooltip label={hint} position="top" withArrow>
       <Group gap={4} wrap="nowrap" justify="flex-end" style={{ whiteSpace: "nowrap" }}>
         <Box c="dimmed" style={{ display: "flex" }} aria-hidden>
           {icon}
         </Box>
-        <Text size="sm">{value}</Text>
+        <Text size="sm" c={color} data-quota-state={state}>
+          {value}
+        </Text>
       </Group>
     </Tooltip>
   );
@@ -378,6 +411,12 @@ export function RepositoriesPage() {
       members: [] as string[],
       // 别名（可选）：与主名共享命名空间、全局唯一，可用别名等价访问该仓库。
       aliases: [] as string[],
+      // FR-41：创建时即可设存储治理三项（可选项；0 / 留空 = 不限 / 关闭）。
+      // 字节按所选单位填写，保存时换算成字节——与详情页配置区共用同一套换算与校验。
+      quotaBytesText: "0",
+      quotaBytesUnit: "GB" as QuotaUnit,
+      quotaAssetsText: "0",
+      cacheRetentionText: "0",
     },
     validate: {
       name: (v) => (v.trim() ? null : t("repositories.name")),
@@ -407,7 +446,31 @@ export function RepositoriesPage() {
     .filter((r) => r.format === form.values.format && r.name !== form.values.name)
     .map((r) => r.name);
 
+  // FR-41：新建弹窗的治理字段（null = 非法输入，需内联提示并阻止提交）。
+  // 配额两项只在 hosted 类型下渲染与校验（group 不承载写入，proxy 的缓存写入在读取回源路径上、
+  // 没有准入预检与流式早拒，后端对这两类仓库提交非 0 配额直接 400）；
+  // 保留天数只在 proxy 类型下渲染与校验，避免「换成其他类型后隐藏字段里残留的非法值卡住提交」。
+  const createQuotaEditable = form.values.type === "hosted";
+  const createQuotaBytesValue = parseQuotaBytes(
+    form.values.quotaBytesText,
+    form.values.quotaBytesUnit,
+  );
+  const createQuotaAssetsValue = parseNonNegativeInt(form.values.quotaAssetsText);
+  const createCacheRetentionValue = parseNonNegativeInt(form.values.cacheRetentionText);
+  const createQuotaBytesInvalid = createQuotaEditable && createQuotaBytesValue === null;
+  const createQuotaAssetsInvalid = createQuotaEditable && createQuotaAssetsValue === null;
+  const createCacheRetentionInvalid =
+    form.values.type === "proxy" && createCacheRetentionValue === null;
+
   const handleCreate = form.onSubmit((values) => {
+    if (createQuotaBytesInvalid || createQuotaAssetsInvalid) {
+      notifyError(t("repoDetail.configQuotaInvalid"));
+      return;
+    }
+    if (createCacheRetentionInvalid) {
+      notifyError(t("repoDetail.configCacheRetentionInvalid"));
+      return;
+    }
     setCreating(true);
     const payload = {
       name: values.name,
@@ -418,6 +481,12 @@ export function RepositoriesPage() {
       ...(values.description.trim() ? { description: values.description.trim() } : {}),
       ...(values.type === "proxy" ? { remoteUrl: values.remoteUrl.trim() } : {}),
       ...(values.type === "group" ? { members: values.members } : {}),
+      // FR-41：配额只有 hosted 可设（0 = 不限），保留天数只有 proxy 可设（0 = 关闭）；
+      // 其他类型不提交这两个字段，避免发出必然被后端 400 的值。
+      ...(values.type === "hosted"
+        ? { quotaBytes: createQuotaBytesValue ?? 0, quotaAssets: createQuotaAssetsValue ?? 0 }
+        : {}),
+      ...(values.type === "proxy" ? { cacheRetentionDays: createCacheRetentionValue ?? 0 } : {}),
       // 别名去空去重后提交（后台仍会做全局唯一性校验兜底）。
       ...(() => {
         const aliases = Array.from(
@@ -750,6 +819,17 @@ export function RepositoriesPage() {
                             repo.visibility === "public"
                               ? t("repositories.visibilityPublic")
                               : t("repositories.visibilityPrivate");
+                          // FR-41：把「当前用量 / 上限」放在同一格（此前只显示用量，管理员要自己去
+                          // 配置页才知道有没有上限）。状态色沿用 quota.ts 的统一口径：
+                          // ≥90% 橙（接近上限）、≥100% 红（已超限，服务端开始 429 拒绝写入）。
+                          const quotaStateOfRepo = repoQuotaState(repo);
+                          const quotaStatusText = t(QUOTA_STATE_LABEL_KEY[quotaStateOfRepo]);
+                          const assetsQuotaState = quotaState(repo.artifactCount, repo.quotaAssets);
+                          const bytesQuotaState = quotaState(repo.totalSize, repo.quotaBytes);
+                          const artifactLimit = hasQuotaLimit(repo.quotaAssets)
+                            ? repo.quotaAssets
+                            : null;
+                          const sizeLimit = hasQuotaLimit(repo.quotaBytes) ? repo.quotaBytes : null;
                           // 行内操作统一「图标 + 文字」：纯图标看不出是什么操作（浏览/置顶/清理/删除）。
                           // 这份「图标 + 文字」按钮组只用于桌面表格的操作列；窄屏已改为
                           // 「点主标识进入 + 图标操作 + 溢出菜单」（见下方 narrowActions），
@@ -998,6 +1078,12 @@ export function RepositoriesPage() {
                                             n: repo.artifactCount ?? 0,
                                           })}{" "}
                                           · {formatBytes(repo.totalSize ?? 0)}
+                                          {/* FR-41：窄屏没有用量列，超限/接近上限时补一句状态，
+                                              否则手机上看不出这个仓库已经写不进去了。 */}
+                                          {quotaStateOfRepo === "over" ||
+                                          quotaStateOfRepo === "near"
+                                            ? ` · ${quotaStatusText}`
+                                            : ""}
                                         </Text>
                                       </Group>
                                     ) : null}
@@ -1044,10 +1130,28 @@ export function RepositoriesPage() {
                                   <Table.Td>
                                     <MetricCell
                                       icon={<IconPackage size={14} />}
-                                      hint={t("repositories.artifactCountTooltip", {
-                                        count: repo.artifactCount ?? 0,
-                                      })}
-                                      value={repo.artifactCount ?? 0}
+                                      hint={
+                                        artifactLimit
+                                          ? t("repositories.quotaTooltip", {
+                                              base: t("repositories.artifactCountTooltip", {
+                                                count: repo.artifactCount ?? 0,
+                                              }),
+                                              limit: formatCount(artifactLimit),
+                                              status: quotaStatusText,
+                                            })
+                                          : t("repositories.artifactCountTooltip", {
+                                              count: repo.artifactCount ?? 0,
+                                            })
+                                      }
+                                      state={assetsQuotaState}
+                                      value={
+                                        artifactLimit
+                                          ? t("repositories.quotaUsage", {
+                                              used: formatCount(repo.artifactCount ?? 0),
+                                              limit: formatCount(artifactLimit),
+                                            })
+                                          : (repo.artifactCount ?? 0)
+                                      }
                                     />
                                   </Table.Td>
                                 )}
@@ -1055,13 +1159,34 @@ export function RepositoriesPage() {
                                   <Table.Td>
                                     <MetricCell
                                       icon={<IconDatabase size={14} />}
-                                      hint={t("repositories.totalSizeTooltip", {
-                                        size: formatBytes(repo.totalSize ?? 0),
-                                        bytes: (repo.totalSize ?? 0).toLocaleString(
-                                          currentLocaleTag(),
-                                        ),
-                                      })}
-                                      value={formatBytes(repo.totalSize ?? 0)}
+                                      hint={
+                                        sizeLimit
+                                          ? t("repositories.quotaTooltip", {
+                                              base: t("repositories.totalSizeTooltip", {
+                                                size: formatBytes(repo.totalSize ?? 0),
+                                                bytes: (repo.totalSize ?? 0).toLocaleString(
+                                                  currentLocaleTag(),
+                                                ),
+                                              }),
+                                              limit: formatBytes(sizeLimit),
+                                              status: quotaStatusText,
+                                            })
+                                          : t("repositories.totalSizeTooltip", {
+                                              size: formatBytes(repo.totalSize ?? 0),
+                                              bytes: (repo.totalSize ?? 0).toLocaleString(
+                                                currentLocaleTag(),
+                                              ),
+                                            })
+                                      }
+                                      state={bytesQuotaState}
+                                      value={
+                                        sizeLimit
+                                          ? t("repositories.quotaUsage", {
+                                              used: formatBytes(repo.totalSize ?? 0),
+                                              limit: formatBytes(sizeLimit),
+                                            })
+                                          : formatBytes(repo.totalSize ?? 0)
+                                      }
                                     />
                                   </Table.Td>
                                 )}
@@ -1170,6 +1295,91 @@ export function RepositoriesPage() {
             clearable
             {...form.getInputProps("aliases")}
           />
+
+          {/* FR-41：存储治理（可选，创建后仍可在详情页配置页签修改）。
+              配额两项只对 hosted 出现；标签与提示复用 repoDetail.configQuota* 键，保证两处措辞同源。 */}
+          <Divider mt="md" mb="sm" />
+          {createQuotaEditable ? (
+            <>
+              <Text size="sm" fw={600}>
+                {t("repoDetail.configQuotaTitle")}
+              </Text>
+              <Text size="xs" c="dimmed">
+                {t("repoDetail.configQuotaHint")}
+              </Text>
+              <Group align="flex-end" gap="xs" wrap="nowrap" mt="sm">
+                <TextInput
+                  style={{ flex: 1 }}
+                  label={t("repoDetail.configQuotaBytes")}
+                  value={form.values.quotaBytesText}
+                  error={createQuotaBytesInvalid ? t("repoDetail.configQuotaInvalid") : undefined}
+                  onChange={(e) => form.setFieldValue("quotaBytesText", e.currentTarget.value)}
+                />
+                <Select
+                  label={t("repoDetail.configQuotaUnit")}
+                  data={QUOTA_UNITS.map((unit) => ({ value: unit, label: unit }))}
+                  value={form.values.quotaBytesUnit}
+                  onChange={(value) =>
+                    value && form.setFieldValue("quotaBytesUnit", value as QuotaUnit)
+                  }
+                  allowDeselect={false}
+                  w={92}
+                />
+              </Group>
+              {createQuotaBytesValue === null ? null : (
+                <Text size="xs" c="dimmed">
+                  {createQuotaBytesValue > 0
+                    ? t("repoDetail.configQuotaBytesConverted", {
+                        size: formatBytes(createQuotaBytesValue),
+                        bytes: formatCount(createQuotaBytesValue),
+                      })
+                    : t("repoDetail.configQuotaUnlimitedInput")}
+                </Text>
+              )}
+              <TextInput
+                mt="sm"
+                label={t("repoDetail.configQuotaAssets")}
+                value={form.values.quotaAssetsText}
+                error={createQuotaAssetsInvalid ? t("repoDetail.configQuotaInvalid") : undefined}
+                onChange={(e) => form.setFieldValue("quotaAssetsText", e.currentTarget.value)}
+              />
+              {createQuotaAssetsValue === null ? null : (
+                <Text size="xs" c="dimmed">
+                  {createQuotaAssetsValue > 0
+                    ? t("repoDetail.configQuotaAssetsConverted", {
+                        count: formatCount(createQuotaAssetsValue),
+                      })
+                    : t("repoDetail.configQuotaUnlimitedInput")}
+                </Text>
+              )}
+            </>
+          ) : null}
+          {/* 代理缓存保留：仅 proxy 有意义（其他类型后端会拒绝非 0 值），故按类型出现/隐藏。 */}
+          {form.values.type === "proxy" ? (
+            <>
+              <TextInput
+                mt="sm"
+                label={t("repoDetail.configCacheRetention")}
+                description={t("repoDetail.configCacheRetentionHint")}
+                value={form.values.cacheRetentionText}
+                error={
+                  createCacheRetentionInvalid
+                    ? t("repoDetail.configCacheRetentionInvalid")
+                    : undefined
+                }
+                onChange={(e) => form.setFieldValue("cacheRetentionText", e.currentTarget.value)}
+              />
+              {createCacheRetentionValue === null ? null : (
+                <Text size="xs" c="dimmed">
+                  {createCacheRetentionValue > 0
+                    ? t("repoDetail.configCacheRetentionValue", {
+                        days: formatCount(createCacheRetentionValue),
+                      })
+                    : t("repoDetail.configCacheRetentionOff")}
+                </Text>
+              )}
+            </>
+          ) : null}
           <Group justify="flex-end" mt="md">
             <Button variant="default" onClick={createModal.close}>
               {t("common.cancel")}

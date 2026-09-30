@@ -325,3 +325,167 @@ func TestSchedulerCountersSettleOnCompletion(t *testing.T) {
 		t.Fatalf("每轮都失败的作业在停止后计数应一致：Runs=%d Failures=%d", st.Runs, st.Failures)
 	}
 }
+
+// TestSchedulerRunRejectsUnknownJob 锁定按名触发的 404 语义：未注册（含间隔 <= 0 被禁用）
+// 的名称必须返回可判别的 ErrJobNotFound，而不是静默成功。
+func TestSchedulerRunRejectsUnknownJob(t *testing.T) {
+	s := New()
+	s.Register("disabled", 0, func(context.Context) error { return nil }) // 间隔 0 = 禁用，不注册
+
+	err := s.Run("ghost")
+	if !errors.Is(err, ErrJobNotFound) {
+		t.Fatalf("未知作业名应返回 ErrJobNotFound，得 %v", err)
+	}
+	if err := s.Run("disabled"); !errors.Is(err, ErrJobNotFound) {
+		t.Fatalf("被禁用的作业应等价于未注册，得 %v", err)
+	}
+}
+
+// TestSchedulerRunExecutesOnceAndBackfillsStatus 锁定触发语义：受理后异步执行一次，
+// 结果照既有机制回填 Status（runs 递增、lastError 记录失败），且不阻塞调用方。
+func TestSchedulerRunExecutesOnceAndBackfillsStatus(t *testing.T) {
+	done := make(chan struct{})
+	s := New()
+	s.Register("manual", time.Hour, func(context.Context) error {
+		close(done)
+		return errors.New("手动触发失败")
+	})
+
+	// Start 之前即可触发（尚无运行 ctx 时以 Background 执行）。
+	if err := s.Run("manual"); err != nil {
+		t.Fatalf("首次触发应被受理，得 %v", err)
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("受理后作业未执行")
+	}
+	waitFor(t, "失败在结束后回填", func() bool { return statusByName(t, s, "manual").Failures == 1 })
+
+	st := statusByName(t, s, "manual")
+	if st.Runs != 1 || st.Running {
+		t.Fatalf("触发一轮应 runs=1 且已结束：Runs=%d Running=%v", st.Runs, st.Running)
+	}
+	if st.LastStart.IsZero() || st.LastFinish.Before(st.LastStart) {
+		t.Fatalf("应记录起止时间：start=%v finish=%v", st.LastStart, st.LastFinish)
+	}
+	if !strings.Contains(st.LastError, "手动触发失败") {
+		t.Fatalf("状态应记录本次失败，实际 %q", st.LastError)
+	}
+	if st.Failures != 1 {
+		t.Fatalf("失败次数应为 1，实际 %d", st.Failures)
+	}
+}
+
+// TestSchedulerRunRejectsWhileRunning 锁定"不自我重叠"：作业执行中再次触发必须被拒，
+// 绝不能并发跑第二次（这是调度器既有语义，手动触发不得绕过）。
+func TestSchedulerRunRejectsWhileRunning(t *testing.T) {
+	release := make(chan struct{})
+	var calls int32
+	s := New()
+	s.Register("busy", time.Hour, func(context.Context) error {
+		atomic.AddInt32(&calls, 1)
+		<-release
+		return nil
+	})
+
+	if err := s.Run("busy"); err != nil {
+		t.Fatalf("首次触发应被受理，得 %v", err)
+	}
+	// 以"作业函数已进入"为等待条件：claim 先置运行位、再启动 goroutine，只看 Running 会在函数体执行前返回。
+	waitFor(t, "作业函数开始执行", func() bool { return atomic.LoadInt32(&calls) == 1 })
+
+	if err := s.Run("busy"); !errors.Is(err, ErrJobRunning) {
+		t.Fatalf("运行中触发应返回 ErrJobRunning，得 %v", err)
+	}
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("运行中触发不得并发跑第二次，实际执行 %d 次", got)
+	}
+
+	close(release)
+	waitFor(t, "执行结束后可再次触发", func() bool { return !statusByName(t, s, "busy").Running })
+	if err := s.Run("busy"); err != nil {
+		t.Fatalf("上一轮结束后应可再次触发，得 %v", err)
+	}
+	// release 已关闭，第二次触发的函数体直接返回。
+	waitFor(t, "第二次触发开始执行", func() bool { return atomic.LoadInt32(&calls) == 2 })
+}
+
+// TestSchedulerRunConcurrentTriggersOnlyOneAccepted 锁定并发双击只跑一次：
+// 多个并发的按名触发里恰好一个被受理，其余全部按"正在运行"拒绝，作业函数只执行一次。
+func TestSchedulerRunConcurrentTriggersOnlyOneAccepted(t *testing.T) {
+	release := make(chan struct{})
+	var calls int32
+	s := New()
+	s.Register("once", time.Hour, func(context.Context) error {
+		atomic.AddInt32(&calls, 1)
+		<-release
+		return nil
+	})
+
+	const n = 8
+	results := make([]error, n)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			<-start
+			results[idx] = s.Run("once")
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	accepted := 0
+	for _, err := range results {
+		switch {
+		case err == nil:
+			accepted++
+		case errors.Is(err, ErrJobRunning):
+		default:
+			t.Fatalf("并发触发只应出现受理或运行中两种结果，得 %v", err)
+		}
+	}
+	if accepted != 1 {
+		t.Fatalf("并发触发应只受理一次，实际受理 %d 次", accepted)
+	}
+	waitFor(t, "作业函数开始执行", func() bool { return atomic.LoadInt32(&calls) == 1 })
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("作业函数只应执行一次，实际 %d 次", got)
+	}
+
+	close(release)
+	waitFor(t, "执行结束", func() bool { return !statusByName(t, s, "once").Running })
+	if st := statusByName(t, s, "once"); st.Runs != 1 {
+		t.Fatalf("受理一轮应只计一次执行，实际 Runs=%d", st.Runs)
+	}
+}
+
+// TestSchedulerRunSharesRunningFlagWithLoop 锁定手动触发与周期触发共用同一"运行中"状态位：
+// 周期那一轮正在跑时手动触发同样被拒，两条路径之间也不会并发重入。
+func TestSchedulerRunSharesRunningFlagWithLoop(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	s := New()
+	s.Register("shared", 20*time.Millisecond, func(context.Context) error {
+		once.Do(func() { close(started) })
+		<-release
+		return nil
+	})
+	s.Start(ctx)
+	select {
+	case <-started:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("周期作业未触发")
+	}
+
+	if err := s.Run("shared"); !errors.Is(err, ErrJobRunning) {
+		t.Fatalf("周期作业运行中手动触发应被拒（ErrJobRunning），得 %v", err)
+	}
+	close(release)
+}

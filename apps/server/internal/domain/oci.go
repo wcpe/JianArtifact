@@ -54,12 +54,13 @@ type OCIPublishResult struct {
 
 // PutBlob 校验 sha256 后写入 hosted OCI blob。digest 只接受 sha256。
 func (s *OCIService) PutBlob(repoName, digest string, r io.Reader) (*repository.Asset, error) {
-	return s.putBlob(repoName, digest, r, time.Time{})
+	return s.putBlob(repoName, digest, r, time.Time{}, false)
 }
 
 // putBlob 是 PutBlob 的共享实现；sourceModified 非零时将暂存资产行标注源端时间，
 // 该时间随 pending 引用在 manifest 批次发布时落入 asset 行（迁移保留源时间戳）。
-func (s *OCIService) putBlob(repoName, digest string, r io.Reader, sourceModified time.Time) (*repository.Asset, error) {
+// quotaExempt 为 true 时该资产在提交点豁免仓库存储配额（仅迁移导入）。
+func (s *OCIService) putBlob(repoName, digest string, r io.Reader, sourceModified time.Time, quotaExempt bool) (*repository.Asset, error) {
 	hexDigest, ok := validOCIDigest(digest)
 	if !ok {
 		return nil, ErrValidation
@@ -80,19 +81,24 @@ func (s *OCIService) putBlob(repoName, digest string, r io.Reader, sourceModifie
 		return nil, fmt.Errorf("%w: blob digest 不匹配", ErrValidation)
 	}
 	applySourceTimestamp(asset, sourceModified)
+	if quotaExempt {
+		// 迁移导入属管理员批量操作：显式豁免仓库存储配额（FR-41 §4.1）。
+		markQuotaExempt(asset)
+	}
 	s.storePending(repo.ID, hexDigest, asset)
 	return asset, nil
 }
 
 // PutManifest 校验 manifest 正文、digest 与依赖 blob，并写入不可变 digest 及 tag 引用。
 func (s *OCIService) PutManifest(repoName, image, reference string, body []byte, contentType string) (*OCIPublishResult, error) {
-	return s.putManifest(repoName, image, reference, body, contentType, time.Time{})
+	return s.putManifest(repoName, image, reference, body, contentType, time.Time{}, false)
 }
 
 // putManifest 是 PutManifest 的共享实现；sourceModified 非零时将 manifest 与
 // tag 资产行 created_at/updated_at 固定为源端时间（迁移保留源时间戳）。
 // pending blob 各自携带其 PutBlob 时的源端时间，不在此覆盖。
-func (s *OCIService) putManifest(repoName, image, reference string, body []byte, contentType string, sourceModified time.Time) (*OCIPublishResult, error) {
+// quotaExempt 为 true 时 manifest/tag 在提交点豁免仓库存储配额（仅迁移导入）。
+func (s *OCIService) putManifest(repoName, image, reference string, body []byte, contentType string, sourceModified time.Time, quotaExempt bool) (*OCIPublishResult, error) {
 	if !validOCIImage(image) || len(body) == 0 || len(body) > maxOCIManifestBytes {
 		return nil, ErrValidation
 	}
@@ -172,6 +178,10 @@ func (s *OCIService) putManifest(repoName, image, reference string, body []byte,
 	}
 	manifest.Path = manifestPath
 	applySourceTimestamp(manifest, sourceModified)
+	if quotaExempt {
+		// 迁移导入属管理员批量操作：显式豁免仓库存储配额（FR-41 §4.1）。
+		markQuotaExempt(manifest)
+	}
 	pending = append(pending, manifest)
 	if tagPath != "" {
 		tag, tagErr := s.assets.StageOCIBlob(strings.NewReader(digest), "text/plain")
@@ -182,6 +192,9 @@ func (s *OCIService) putManifest(repoName, image, reference string, body []byte,
 		tag.Path = tagPath
 		// tag 文件内容是 manifest digest 的引用，随 manifest 同一源端时间。
 		applySourceTimestamp(tag, sourceModified)
+		if quotaExempt {
+			markQuotaExempt(tag)
+		}
 		pending = append(pending, tag)
 	}
 	if _, err := s.assets.PublishOCIAssets(repoName, pending); err != nil {

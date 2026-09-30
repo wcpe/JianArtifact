@@ -553,6 +553,20 @@ export const en = {
     aliasesPlaceholder: "Type an alias and press Enter (multiple allowed, optional)",
     aliasesHint:
       "Aliases share the namespace with the primary name and must be globally unique; they resolve to the same repository",
+    // FR-41：列表里把「当前用量 / 上限」放在同一格（与详情页配置区同一口径）。
+    quotaUsage: "{{used}} / {{limit}}",
+    quotaTooltip: "{{base}} · Limit {{limit}} ({{status}})",
+  },
+  // FR-41 存储治理：配额状态与用量口径（仓库列表、仓库详情共用）。
+  // 状态阈值固定为「已用 ≥ 上限的 90% 即接近上限」，见 src/lib/quota.ts 的 QUOTA_NEAR_RATIO。
+  quota: {
+    unlimited: "Unlimited",
+    limitLabel: "Limit",
+    stateOk: "Within limit",
+    stateNear: "Nearing limit",
+    stateOver: "Over limit",
+    nearHint: "Usage is approaching the limit (≥ {{percent}}%); consider expanding or cleaning up.",
+    overHint: "Limit reached: further writes are rejected (HTTP 429).",
   },
   search: {
     title: "Artifact Search",
@@ -758,6 +772,33 @@ export const en = {
     configRenameSame: "New name must differ from the current name",
     configRenameTaken: "That name is already taken",
     configRenameOk: "Renamed",
+    // FR-41 存储配额（配置页签）：0 / 留空 = 不限；超限后服务端拒绝写入（HTTP 429）
+    configQuotaTitle: "Storage Quota",
+    configQuotaHint:
+      "Set a limit to 0 or leave it empty for unlimited; once a limit is exceeded, writes to this repository are rejected (HTTP 429).",
+    configQuotaHostedOnly:
+      "Storage quotas apply to hosted repositories only: groups do not accept writes, and proxy cache writes happen on the read-through path, so no limit input is offered here.",
+    configQuotaUsageBytes: "Storage usage: {{used}} / {{limit}}",
+    configQuotaUsageAssets: "Artifact usage: {{used}} / {{limit}}",
+    configQuotaOverNotice:
+      "Limit exceeded: further writes are rejected (HTTP 429, quota_exceeded).",
+    configQuotaNearNotice:
+      "Usage is at {{percent}}% or more of the limit; consider expanding the quota or cleaning up.",
+    configQuotaBytes: "Storage limit",
+    configQuotaUnit: "Size unit",
+    configQuotaBytesConverted: "= {{size}} ({{bytes}} bytes)",
+    configQuotaAssets: "Artifact limit",
+    configQuotaAssetsConverted: "= {{count}} artifacts",
+    configQuotaUnlimitedInput: "Currently unlimited (limit is 0)",
+    configQuotaInvalid: "Enter a number greater than or equal to 0 (0 or empty means unlimited)",
+    // FR-41 代理缓存保留（配置页签，仅 proxy 仓库）：按最后一次写入时间淘汰超期缓存
+    configCacheRetention: "Proxy cache retention (days)",
+    configCacheRetentionHint:
+      "Expired proxy cache entries are cleaned up based on their last write time: entries that stay read-only long enough are removed and fetched from the upstream again on the next request. Set 0 or leave empty to disable automatic cleanup.",
+    configCacheRetentionValue: "= keep for {{days}} days",
+    configCacheRetentionOff: "Disabled (0 days = no automatic cleanup)",
+    configCacheRetentionInvalid:
+      "Enter a whole number of days greater than or equal to 0 (0 or empty disables it)",
   },
   audit: {
     title: "Audit Log",
@@ -890,6 +931,9 @@ export const en = {
     migrationSwitch: "Switch migration source",
     migrationResult: "Migration result",
     migrationCredentialRef: "Migration credential reference",
+    // FR-41：存储治理新增动作
+    maintenanceJobRun: "Run maintenance job manually",
+    repoCleanup: "Clean up empty repository directories",
   },
   auditWorkbench: {
     // 审计工作台（方案 A · 双栏排查工作台）：页标题由页眉面包屑渲染

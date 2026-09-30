@@ -370,6 +370,7 @@ func (h *NpmHandler) publish(c *gin.Context, repoName, pkg string) {
 				release(false)
 			}
 			h.auditRejected(c, "npm.publish", repoName, assetPath, publishRejectionDetail(perr))
+			h.recordQuotaRejection(perr)
 			writePublishErr(c, perr)
 			return
 		}
@@ -379,6 +380,7 @@ func (h *NpmHandler) publish(c *gin.Context, repoName, pkg string) {
 		settle, perr := h.beginPublish(c, repoName, pkg, int64(len(out)))
 		if perr != nil {
 			h.auditRejected(c, "npm.publish", repoName, pkg, publishRejectionDetail(perr))
+			h.recordQuotaRejection(perr)
 			writePublishErr(c, perr)
 			return
 		}

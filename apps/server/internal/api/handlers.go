@@ -18,6 +18,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
 	"github.com/wcpe/jianartifact/apps/server/internal/metrics"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
+	"github.com/wcpe/jianartifact/apps/server/internal/scheduler"
 )
 
 // Deps 汇集 Handlers 的依赖。健康 / 就绪端点仅用 Version 与 Checks，
@@ -54,6 +55,17 @@ type Deps struct {
 	Metrics                 *metrics.Exposition                     // FR-39：Prometheus 指标导出（/metrics；nil 时该端点返回 503）
 	OIDC                    *OIDCDeps                               // FR-34：OIDC 登录端点依赖（nil = 未启用，端点返回 404）
 	LDAPAuth                LDAPAuthenticator                       // FR-35：LDAP 目录侧校验（nil = 未启用，登录不回退目录）
+	MaintenanceJobs         MaintenanceJobController                // FR-41：维护作业清单与手动触发（nil 时端点返回 503）
+}
+
+// MaintenanceJobController 是接口层对维护作业调度器的最小依赖：只读状态 + 按名触发一次。
+// 刻意不依赖 *scheduler.Scheduler 具体类型，测试可注入桩（与 LDAPAuthenticator 同一抽象风格）。
+type MaintenanceJobController interface {
+	// Status 返回全部已注册作业的状态快照（只读、可并发调用）。
+	Status() []scheduler.JobStatus
+	// Run 按名触发一次执行并立即返回；名称未注册返回 scheduler.ErrJobNotFound，
+	// 作业正在运行返回 scheduler.ErrJobRunning。
+	Run(name string) error
 }
 
 // LDAPAuthenticator 是 LDAP 目录侧校验能力（由 auth.LDAPVerifier 适配；测试可替换）。
@@ -92,6 +104,7 @@ type Handlers struct {
 	metrics                 *metrics.Exposition          // FR-39：Prometheus 指标导出
 	oidc                    *OIDCDeps                    // FR-34：OIDC 登录端点依赖（nil = 未启用）
 	ldapAuth                LDAPAuthenticator            // FR-35：LDAP 目录侧校验（nil = 未启用）
+	maintenanceJobs         MaintenanceJobController     // FR-41：维护作业清单与手动触发
 }
 
 // NewHandlers 构造 Handlers。
@@ -128,6 +141,7 @@ func NewHandlers(d Deps) *Handlers {
 		metrics:                 d.Metrics,
 		oidc:                    d.OIDC,
 		ldapAuth:                d.LDAPAuth,
+		maintenanceJobs:         d.MaintenanceJobs,
 	}
 }
 
@@ -373,6 +387,20 @@ func toAPIRepository(r *repository.Repository, stats *domain.RepoStats) Reposito
 		if len(cfg.Members) > 0 {
 			members := cfg.Members
 			out.Members = &members
+		}
+		// FR-41：治理字段（0 / 缺省 = 不限 / 关闭代理缓存保留）只在设了非 0 值时回显，
+		// 与前端 hasQuotaLimit 的「缺省即不限」判定以及 devmock 样例的省略写法保持一致。
+		if cfg.QuotaBytes > 0 {
+			quotaBytes := cfg.QuotaBytes
+			out.QuotaBytes = &quotaBytes
+		}
+		if cfg.QuotaAssets > 0 {
+			quotaAssets := cfg.QuotaAssets
+			out.QuotaAssets = &quotaAssets
+		}
+		if cfg.CacheRetentionDays > 0 {
+			days := cfg.CacheRetentionDays
+			out.CacheRetentionDays = &days
 		}
 	}
 	if stats != nil {

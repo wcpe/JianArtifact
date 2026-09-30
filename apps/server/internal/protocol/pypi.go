@@ -176,6 +176,7 @@ func (h *PypiHandler) LegacyUpload(c *gin.Context) {
 	settle, limit, err := h.beginUnresolvedPublish(c, repo)
 	if err != nil {
 		h.auditRejected(c, "pypi.publish", repo, "", publishRejectionDetail(err))
+		h.recordQuotaRejection(err)
 		writePublishErr(c, err)
 		return
 	}
@@ -190,6 +191,7 @@ func (h *PypiHandler) LegacyUpload(c *gin.Context) {
 	if err != nil {
 		if errors.Is(err, domain.ErrQuotaExceeded) {
 			h.auditRejected(c, "pypi.publish", repo, "", "quota_exceeded")
+			h.recordQuotaRejection(err)
 			writePublishErr(c, err)
 			return
 		}

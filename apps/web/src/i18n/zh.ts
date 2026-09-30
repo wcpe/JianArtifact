@@ -523,6 +523,20 @@ export const zh = {
     aliasesLabel: "别名",
     aliasesPlaceholder: "输入别名后回车添加（可多个，可选）",
     aliasesHint: "别名与主名共享命名空间、全局唯一，可用别名等价访问该仓库",
+    // FR-41：列表里把「当前用量 / 上限」放在同一格（与详情页配置区同一口径）。
+    quotaUsage: "{{used}} / {{limit}}",
+    quotaTooltip: "{{base}} · 上限 {{limit}}（{{status}}）",
+  },
+  // FR-41 存储治理：配额状态与用量口径（仓库列表、仓库详情共用）。
+  // 状态阈值固定为「已用 ≥ 上限的 90% 即接近上限」，见 src/lib/quota.ts 的 QUOTA_NEAR_RATIO。
+  quota: {
+    unlimited: "不限",
+    limitLabel: "上限",
+    stateOk: "正常",
+    stateNear: "接近上限",
+    stateOver: "已超限",
+    nearHint: "已用接近上限（≥ {{percent}}%），建议尽快扩容或清理。",
+    overHint: "已达上限：继续写入会被拒绝（HTTP 429）。",
   },
   search: {
     title: "制品搜索",
@@ -714,6 +728,29 @@ export const zh = {
     configRenameSame: "新名称不能与当前名称相同",
     configRenameTaken: "该名称已被占用",
     configRenameOk: "已重命名",
+    // FR-41 存储配额（配置页签）：0 / 留空 = 不限；超限后服务端拒绝写入（HTTP 429）
+    configQuotaTitle: "存储配额",
+    configQuotaHint: "上限填 0 或留空表示不限；超出上限后该仓库的写入会被拒绝（HTTP 429）。",
+    configQuotaHostedOnly:
+      "存储配额只对 hosted 仓库生效：group 不承载写入，proxy 的缓存写入发生在读取回源路径上，因此这里不提供上限输入。",
+    configQuotaUsageBytes: "存储用量：{{used}} / {{limit}}",
+    configQuotaUsageAssets: "制品用量：{{used}} / {{limit}}",
+    configQuotaOverNotice: "已超出上限：继续写入会被拒绝（HTTP 429，quota_exceeded）。",
+    configQuotaNearNotice: "已用 ≥ 上限的 {{percent}}%，接近上限，请及时扩容或清理。",
+    configQuotaBytes: "存储上限",
+    configQuotaUnit: "容量单位",
+    configQuotaBytesConverted: "= {{size}}（{{bytes}} 字节）",
+    configQuotaAssets: "制品数上限",
+    configQuotaAssetsConverted: "= {{count}} 个制品",
+    configQuotaUnlimitedInput: "当前不限（上限为 0）",
+    configQuotaInvalid: "请填写不小于 0 的数字（0 或留空表示不限）",
+    // FR-41 代理缓存保留（配置页签，仅 proxy 仓库）：按最后一次写入时间淘汰超期缓存
+    configCacheRetention: "代理缓存保留天数",
+    configCacheRetentionHint:
+      "到期按最后一次写入时间清理本仓库的代理缓存：长期只读的缓存条目会被清理，下次访问时从上游重新拉取。0 或留空表示关闭，不自动清理。",
+    configCacheRetentionValue: "= 保留 {{days}} 天",
+    configCacheRetentionOff: "已关闭（0 天 = 不自动清理）",
+    configCacheRetentionInvalid: "请填写不小于 0 的整数天（0 或留空表示关闭）",
   },
   audit: {
     title: "审计日志",
@@ -846,6 +883,9 @@ export const zh = {
     migrationSwitch: "切换迁移源",
     migrationResult: "迁移结果",
     migrationCredentialRef: "迁移凭据引用",
+    // FR-41：存储治理新增动作
+    maintenanceJobRun: "手动触发维护作业",
+    repoCleanup: "清理仓库空目录",
   },
   auditWorkbench: {
     // 审计工作台（方案 A · 双栏调查工作台）：页面标题由页眉面包屑承担

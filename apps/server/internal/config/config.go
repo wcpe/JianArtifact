@@ -49,11 +49,21 @@ const (
 	EnvLDAPStartTLS           = "JIAN_LDAP_STARTTLS"        // 对 ldap:// 是否使用 StartTLS（FR-35）；缺省关闭
 	EnvLDAPCAFile             = "JIAN_LDAP_CA_FILE"         // 自定义 CA（PEM）路径（FR-35）；不提供跳过证书校验的开关
 
+	// FR-41 存储治理清理作业的开关（单独成组：名字更长，并入上一组会只为对齐而重排全部既有行）。
+	EnvStorageCleanupInterval   = "JIAN_STORAGE_CLEANUP_INTERVAL"        // 存储治理清理作业间隔，单位秒；0 禁用
+	EnvStorageMetadataRetention = "JIAN_STORAGE_METADATA_RETENTION_DAYS" // 终态操作与隔离元数据保留天数；0 禁用
+	EnvStorageTempMaxAge        = "JIAN_STORAGE_TEMP_MAX_AGE_HOURS"      // 过期上传临时文件阈值，单位小时；0 禁用
+
 	defaultDataDir         = "./data"
 	defaultHTTPAddr        = ":8080"
 	defaultUpstreamTimeout = 30 * time.Second
 	defaultSyncInterval    = 5 * time.Second // 复制轮询间隔默认 5s（近实时）
 	defaultBlobGCInterval  = 24 * time.Hour  // 孤立 blob 默认每日清理一次
+	// FR-41 存储治理清理的默认阈值：每日一轮、终态元数据保留 7 天、临时文件 24 小时。
+	// 隔离区空目录的宽限期不设开关（见 domain/storage_cleanup.go 的常量与理由）。
+	defaultStorageCleanupInterval   = 24 * time.Hour
+	defaultStorageMetadataRetention = 7 * 24 * time.Hour
+	defaultStorageTempMaxAge        = 24 * time.Hour
 	// defaultOIDCUsernameClaim 是 OIDC 用户名的缺省 claim；各 IdP 常见取值见 OPERATIONS。
 	defaultOIDCUsernameClaim = "preferred_username"
 	// defaultLDAPUserFilter 与 defaultLDAPEmailAttr 是 LDAP 检索的缺省口径（OpenLDAP 风格 uid）。
@@ -81,11 +91,16 @@ type Config struct {
 	PublicURL              string        // 对外基础 URL（FR-87，如 https://repo.example.com）；空则回退请求 Host 推断
 	EnabledFormats         formats.Set   // 启动时启用的协议格式（FR-32）
 	BlobGCInterval         time.Duration // primary 孤立 blob 定时清理间隔；0 禁用
-	TLSAddr                string        // 服务内置 TLS 监听地址（FR-131）；空 = 不启用
-	TLSCert                string        // TLS PEM 证书文件路径（FR-131）
-	TLSKey                 string        // TLS PEM 私钥文件路径（FR-131）
-	OIDC                   OIDCConfig    // FR-34：OIDC 身份源接入配置（Issuer 空 = 不启用）
-	LDAP                   LDAPConfig    // FR-35：LDAP 身份源接入配置（URL 空 = 不启用）
+	StorageCleanupInterval time.Duration // FR-41 存储治理清理作业间隔；0 禁用
+	// StorageMetadataRetention 是终态资产操作与隔离元数据的保留期（FR-41）；0 禁用裁剪。
+	StorageMetadataRetention time.Duration
+	// StorageTempMaxAge 是过期上传临时文件（<BlobDir>/tmp/oci-upload）的最长滞留时长（FR-41）；0 禁用。
+	StorageTempMaxAge time.Duration
+	TLSAddr           string     // 服务内置 TLS 监听地址（FR-131）；空 = 不启用
+	TLSCert           string     // TLS PEM 证书文件路径（FR-131）
+	TLSKey            string     // TLS PEM 私钥文件路径（FR-131）
+	OIDC              OIDCConfig // FR-34：OIDC 身份源接入配置（Issuer 空 = 不启用）
+	LDAP              LDAPConfig // FR-35：LDAP 身份源接入配置（URL 空 = 不启用）
 }
 
 // LDAPConfig 是 LDAP 目录接入配置（FR-35，见 ADR-0029）；
@@ -157,23 +172,26 @@ func Load() (*Config, error) {
 	}
 
 	return &Config{
-		DataDir:                absData,
-		HTTPAddr:               envOr(EnvHTTPAddr, defaultHTTPAddr),
-		DBPath:                 filepath.Join(absData, dbFileName),
-		BlobDir:                blobDir,
-		JWTSecret:              secret,
-		MigrationCredentialKey: migrationCredentialKey,
-		UpstreamTimeout:        upstreamTimeout(),
-		SyncPeerURL:            os.Getenv(EnvSyncPeerURL),
-		SyncInterval:           syncInterval(),
-		PublicURL:              os.Getenv(EnvPublicURL),
-		EnabledFormats:         enabledFormats,
-		BlobGCInterval:         blobGCInterval(),
-		TLSAddr:                envOr(EnvTLSAddr, ""),
-		TLSCert:                os.Getenv(EnvTLSCert),
-		TLSKey:                 os.Getenv(EnvTLSKey),
-		OIDC:                   oidc,
-		LDAP:                   ldap,
+		DataDir:                  absData,
+		HTTPAddr:                 envOr(EnvHTTPAddr, defaultHTTPAddr),
+		DBPath:                   filepath.Join(absData, dbFileName),
+		BlobDir:                  blobDir,
+		JWTSecret:                secret,
+		MigrationCredentialKey:   migrationCredentialKey,
+		UpstreamTimeout:          upstreamTimeout(),
+		SyncPeerURL:              os.Getenv(EnvSyncPeerURL),
+		SyncInterval:             syncInterval(),
+		PublicURL:                os.Getenv(EnvPublicURL),
+		EnabledFormats:           enabledFormats,
+		BlobGCInterval:           blobGCInterval(),
+		StorageCleanupInterval:   storageCleanupInterval(),
+		StorageMetadataRetention: storageMetadataRetention(),
+		StorageTempMaxAge:        storageTempMaxAge(),
+		TLSAddr:                  envOr(EnvTLSAddr, ""),
+		TLSCert:                  os.Getenv(EnvTLSCert),
+		TLSKey:                   os.Getenv(EnvTLSKey),
+		OIDC:                     oidc,
+		LDAP:                     ldap,
 	}, nil
 }
 
@@ -245,6 +263,37 @@ func blobGCInterval() time.Duration {
 		return defaultBlobGCInterval
 	}
 	return time.Duration(secs) * time.Second
+}
+
+// storageCleanupInterval 解析 JIAN_STORAGE_CLEANUP_INTERVAL（秒）；
+// 缺省或非法值取每日一次，显式 0 禁用（与 blobGCInterval 同构）。
+func storageCleanupInterval() time.Duration {
+	return envDurationOr(EnvStorageCleanupInterval, defaultStorageCleanupInterval, time.Second)
+}
+
+// storageMetadataRetention 解析 JIAN_STORAGE_METADATA_RETENTION_DAYS（天）；
+// 缺省或非法值取 7 天，显式 0 禁用元数据裁剪。
+func storageMetadataRetention() time.Duration {
+	return envDurationOr(EnvStorageMetadataRetention, defaultStorageMetadataRetention, 24*time.Hour)
+}
+
+// storageTempMaxAge 解析 JIAN_STORAGE_TEMP_MAX_AGE_HOURS（小时）；
+// 缺省或非法值取 24 小时，显式 0 禁用过期上传临时文件清理。
+func storageTempMaxAge() time.Duration {
+	return envDurationOr(EnvStorageTempMaxAge, defaultStorageTempMaxAge, time.Hour)
+}
+
+// envDurationOr 按给定单位解析环境变量为时长：缺省、非法与负数取 fallback，显式 0 原样返回（禁用语义）。
+func envDurationOr(key string, fallback, unit time.Duration) time.Duration {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		return fallback
+	}
+	return time.Duration(n) * unit
 }
 
 // loadOrCreateSecret 解析 JWT 签名密钥：环境变量 > 本地持久化文件 > 新生成并落盘。

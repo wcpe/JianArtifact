@@ -40,6 +40,8 @@ export type BackupImportOrigin = Schemas["BackupImportOrigin"];
 export type CreateBackupImportRequest = Schemas["CreateBackupImportRequest"];
 export type PinnedRepositoriesResponse = Schemas["PinnedRepositoriesResponse"];
 export type PublicRepositoryList = Schemas["PublicRepositoryList"];
+/** FR-41：周期作业状态快照（运维作业面）。 */
+export type MaintenanceJob = Schemas["MaintenanceJob"];
 
 export interface PublishPolicy {
   userId: number;
@@ -71,6 +73,8 @@ export interface ServiceSettings {
 export const MOCK_TOKEN = "mock.jwt.token";
 /** 第二个管理员会话，仅供审计确认并发 Mock 验收使用。 */
 export const MOCK_SECOND_ADMIN_TOKEN = "mock.jwt.token:admin-2";
+/** FR-41：手动触发作业的模拟执行时延（毫秒），让前端能看到 running 中间态。 */
+const MOCK_JOB_RUN_MS = 1200;
 
 interface StoredToken extends Token {
   /** 明文令牌仅签发时返回一次，此处留存以模拟“再次列表不含明文”。 */
@@ -114,6 +118,11 @@ interface State {
    * value 为仓库 ID 数组（顺序即置顶顺序）。覆盖式写入，与后端一致。
    */
   pinned: Record<string, number[]>;
+  /**
+   * FR-41：调度器已注册的周期作业状态（内存态，仅运维作业面读写）。
+   * 与真实后端一致：清单由"注册"决定，计数自进程启动累计（这里即 resetStore 后归零）。
+   */
+  maintenanceJobs: MaintenanceJob[];
 }
 
 function seed(): State {
@@ -206,6 +215,9 @@ function seed(): State {
         createdAt: "2026-01-01T00:00:00Z",
         artifactCount: 1284,
         totalSize: 8589934592,
+        // FR-41：配额样例——字节与制品数都设上限，用量留有约 20% 余量（管理端显示「正常」）。
+        quotaBytes: 10737418240,
+        quotaAssets: 2000,
       },
       {
         id: 2,
@@ -218,6 +230,8 @@ function seed(): State {
         createdAt: "2026-01-02T00:00:00Z",
         artifactCount: 5240,
         totalSize: 12884901888,
+        // FR-41：已超限样例（5240 > 5000），用于核对管理端的超限提示与拒绝写入文案。
+        quotaAssets: 5000,
       },
       {
         id: 3,
@@ -229,6 +243,9 @@ function seed(): State {
         createdAt: "2026-01-03T00:00:00Z",
         artifactCount: 82,
         totalSize: 1503238144,
+        // FR-41：只设字节配额、不设制品数配额（缺省 = 不限），且用量已达 93%
+        // （1.4 GiB / 1.5 GiB）→ 用于核对「接近上限」的橙色预警样式（阈值 90%）。
+        quotaBytes: 1610612736,
       },
       // v0.8.0：补充仓库状态面板样例——与 dashboard 告警对应的被阻止 proxy + 状态多样性。
       // 种子总数控制在 9（PAGE_SIZE=10 内），保证新建仓库后仍出现在列表第 1 页。
@@ -255,6 +272,8 @@ function seed(): State {
         createdAt: "2026-01-04T00:00:00Z",
         artifactCount: 12480,
         totalSize: 38654706022,
+        // FR-41：代理缓存保留 30 天（0/缺省 = 关闭代理缓存保留），供管理端演示保留天数表单项。
+        cacheRetentionDays: 30,
       },
       {
         id: 6,
@@ -691,6 +710,31 @@ function seed(): State {
       originTokenHeader: "",
       originTokenValue: "",
     },
+    // FR-41：与后端已注册的作业一一对应（blob-gc / storage-cleanup，默认间隔均为每日一次）。
+    // 覆盖两种展示分支：blob-gc 执行过且最近一次失败（lastError 有值），
+    // storage-cleanup 从未执行过（三个可空字段为 null）。
+    maintenanceJobs: [
+      {
+        name: "blob-gc",
+        intervalSeconds: 86400,
+        running: false,
+        runs: 3,
+        failures: 1,
+        lastStartedAt: "2026-01-05T02:00:00Z",
+        lastFinishedAt: "2026-01-05T02:00:03Z",
+        lastError: "扫描活动目录失败：磁盘不可读",
+      },
+      {
+        name: "storage-cleanup",
+        intervalSeconds: 86400,
+        running: false,
+        runs: 0,
+        failures: 0,
+        lastStartedAt: null,
+        lastFinishedAt: null,
+        lastError: null,
+      },
+    ],
   };
 }
 
@@ -1268,6 +1312,47 @@ export const store = {
     return this.settings();
   },
 
+  // —— FR-41：存储治理运维作业面（admin）——
+
+  /** 周期作业清单（返回副本，避免调用方直接改内部态）。 */
+  maintenanceJobs(): MaintenanceJob[] {
+    return state.maintenanceJobs.map((job) => ({ ...job }));
+  },
+
+  /**
+   * 手动触发一次作业。
+   * 返回 "not_found" 表示名称未注册；返回 "running" 表示作业正在执行（与后端 409 口径一致）；
+   * 其余情况立即置位 running / runs / lastStartedAt，并在 MOCK_JOB_RUN_MS 后模拟执行完成。
+   */
+  runMaintenanceJob(name: string): MaintenanceJob | "not_found" | "running" {
+    const job = state.maintenanceJobs.find((item) => item.name === name);
+    if (!job) {
+      return "not_found";
+    }
+    if (job.running) {
+      return "running";
+    }
+    job.running = true;
+    job.runs += 1;
+    job.lastStartedAt = nowIso();
+    // 模拟执行完成：只在同一份 store 快照上回填，避免用例重置后新旧状态互相污染。
+    const snapshot = state;
+    setTimeout(() => {
+      if (state !== snapshot) {
+        return;
+      }
+      const current = state.maintenanceJobs.find((item) => item.name === name);
+      if (!current) {
+        return;
+      }
+      // 本轮模拟为成功：running 归位并清空 lastError（与后端"最近一次成功则 lastError 为空"一致）。
+      current.running = false;
+      current.lastFinishedAt = nowIso();
+      current.lastError = undefined;
+    }, MOCK_JOB_RUN_MS);
+    return { ...job };
+  },
+
   findRepository(name: string): Repository | undefined {
     const repo =
       state.repositories.find((r) => r.name === name) ??
@@ -1282,6 +1367,9 @@ export const store = {
       remoteUrl?: string;
       members?: string[];
       aliases?: string[];
+      quotaBytes?: number;
+      quotaAssets?: number;
+      cacheRetentionDays?: number;
     },
   ): Repository | null {
     if (state.repositories.some((r) => r.name === input.name)) {
@@ -1308,6 +1396,17 @@ export const store = {
     if (input.aliases && input.aliases.length > 0) {
       repo.aliases = input.aliases;
     }
+    // FR-41：存储配额（0/缺省 = 不限）。不限时不写键，与后端"零值即不限"的回显一致。
+    if (input.quotaBytes !== undefined && input.quotaBytes > 0) {
+      repo.quotaBytes = input.quotaBytes;
+    }
+    if (input.quotaAssets !== undefined && input.quotaAssets > 0) {
+      repo.quotaAssets = input.quotaAssets;
+    }
+    // FR-41：代理缓存保留天数（0/缺省 = 关闭），语义同配额——不限/关闭时不写键。
+    if (input.cacheRetentionDays !== undefined && input.cacheRetentionDays > 0) {
+      repo.cacheRetentionDays = input.cacheRetentionDays;
+    }
     state.repositories.push(repo);
     return decorate(repo);
   },
@@ -1320,6 +1419,9 @@ export const store = {
       remoteUrl?: string;
       members?: string[];
       aliases?: string[];
+      quotaBytes?: number;
+      quotaAssets?: number;
+      cacheRetentionDays?: number;
     },
   ): Repository | null {
     const repo = state.repositories.find((r) => r.name === name);
@@ -1342,6 +1444,29 @@ export const store = {
     // 别名覆盖式更新：空数组表示清空（与后端 Update 语义一致）。
     if (patch.aliases !== undefined) {
       repo.aliases = patch.aliases;
+    }
+    // FR-41：配额是局部补丁语义——缺省表示不修改，传 0 表示改为不限（清掉键）。
+    if (patch.quotaBytes !== undefined) {
+      if (patch.quotaBytes > 0) {
+        repo.quotaBytes = patch.quotaBytes;
+      } else {
+        delete repo.quotaBytes;
+      }
+    }
+    if (patch.quotaAssets !== undefined) {
+      if (patch.quotaAssets > 0) {
+        repo.quotaAssets = patch.quotaAssets;
+      } else {
+        delete repo.quotaAssets;
+      }
+    }
+    // FR-41：代理缓存保留天数同样按局部补丁处理——缺省不修改，传 0 表示关闭（清掉键）。
+    if (patch.cacheRetentionDays !== undefined) {
+      if (patch.cacheRetentionDays > 0) {
+        repo.cacheRetentionDays = patch.cacheRetentionDays;
+      } else {
+        delete repo.cacheRetentionDays;
+      }
     }
     return decorate(repo);
   },

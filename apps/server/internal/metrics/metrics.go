@@ -32,10 +32,20 @@ const (
 	cacheMiss         = "miss"
 	metricPrefix      = "jianartifact_"
 	protocolMetric    = metricPrefix + "protocol_requests_total"
+	rejectionMetric   = metricPrefix + "publish_rejections_total"
 	runtimeGoroutines = metricPrefix + "runtime_goroutines"
 	runtimeHeapBytes  = metricPrefix + "runtime_heap_bytes"
 	runtimeGCTotal    = metricPrefix + "runtime_gc_total"
 )
+
+// 发布拒绝原因（FR-41）是**闭集枚举**：v1 只有 quota 一个取值。
+// 该集合与 docs/specs/0.11.0-prometheus-metrics.md 的 reason 标签取值一一对应：
+// **新增取值必须先改规格并同步测试与 OPERATIONS.md**，不允许实现期就地塞入自由字符串
+// （自由字符串会把无界值带进指标标签，违反该规格的标签基数受控约定）。
+var knownRejectionReasons = []string{rejectionQuota}
+
+// rejectionQuota 是配额（发布额度或仓库存储配额）拒绝。
+const rejectionQuota = "quota"
 
 // protocolKey 是制品协议请求计数的标签组合（值均已归一化）。
 type protocolKey struct {
@@ -46,13 +56,14 @@ type protocolKey struct {
 
 // Registry 累计进程内计数器；并发安全。
 type Registry struct {
-	mu       sync.Mutex
-	protocol map[protocolKey]uint64
+	mu         sync.Mutex
+	protocol   map[protocolKey]uint64
+	rejections map[string]uint64
 }
 
 // New 创建空指标登记表。
 func New() *Registry {
-	return &Registry{protocol: make(map[protocolKey]uint64)}
+	return &Registry{protocol: make(map[protocolKey]uint64), rejections: make(map[string]uint64)}
 }
 
 // ProtocolRequest 记录一次已完成的制品协议请求；标签值在内部归一化。
@@ -65,6 +76,39 @@ func (r *Registry) ProtocolRequest(method string, status int, cacheResult string
 	r.mu.Lock()
 	r.protocol[key]++
 	r.mu.Unlock()
+}
+
+// PublishRejection 记录一次发布拒绝（FR-41 §4.5），按原因分区。
+// reason 必须是闭集枚举取值（v1 只有 quota）；闭集外的取值**直接忽略**，
+// 以保证标签基数受控、暴露面与规格完全一致。
+func (r *Registry) PublishRejection(reason string) {
+	if !isKnownRejectionReason(reason) {
+		return
+	}
+	r.mu.Lock()
+	r.rejections[reason]++
+	r.mu.Unlock()
+}
+
+// isKnownRejectionReason 判定原因是否属于闭集枚举。
+func isKnownRejectionReason(reason string) bool {
+	for _, known := range knownRejectionReasons {
+		if reason == known {
+			return true
+		}
+	}
+	return false
+}
+
+// rejectionSnapshot 复制一份发布拒绝计数快照，避免渲染期间持锁。
+func (r *Registry) rejectionSnapshot() map[string]uint64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make(map[string]uint64, len(r.rejections))
+	for k, v := range r.rejections {
+		out[k] = v
+	}
+	return out
 }
 
 // protocolSnapshot 复制一份计数快照，避免渲染期间持锁。
@@ -150,6 +194,7 @@ type family struct {
 func (e *Exposition) render() string {
 	families := []family{
 		e.protocolFamily(),
+		e.rejectionFamily(),
 		e.schedulerFamily("runs_total", "counter", "定时任务作业累计执行次数", func(st JobStatus) *sample {
 			return &sample{labels: jobLabels(st.Name), value: strconv.FormatInt(st.Runs, 10)}
 		}),
@@ -217,6 +262,24 @@ func (e *Exposition) protocolFamily() family {
 				{name: "status", value: key.status},
 			},
 			value: strconv.FormatUint(count, 10),
+		})
+	}
+	return f
+}
+
+// rejectionFamily 汇总发布拒绝计数（FR-41）；进程存在即视为可用，
+// 首抓无样本时仍输出 HELP / TYPE，样本行只反映真实数据。
+func (e *Exposition) rejectionFamily() family {
+	f := family{
+		name:      rejectionMetric,
+		help:      "发布被拒绝的累计次数（按拒绝原因分区；原因取值是闭集枚举）",
+		kind:      "counter",
+		available: true,
+	}
+	for reason, count := range e.registry.rejectionSnapshot() {
+		f.samples = append(f.samples, sample{
+			labels: []labelPair{{name: "reason", value: reason}},
+			value:  strconv.FormatUint(count, 10),
 		})
 	}
 	return f

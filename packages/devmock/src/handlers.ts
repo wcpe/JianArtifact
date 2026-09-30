@@ -29,6 +29,10 @@ export type PublishPoliciesBatchRequest = Schemas["PublishPoliciesBatchRequest"]
 export type PublishPolicyBatchResult = Schemas["PublishPolicyBatchResult"];
 export type PublishPoliciesBatchResponse = Schemas["PublishPoliciesBatchResponse"];
 export type UsageInfo = Schemas["UsageInfo"];
+/** FR-41：存储治理运维作业面。 */
+export type MaintenanceJob = Schemas["MaintenanceJob"];
+export type MaintenanceJobList = Schemas["MaintenanceJobList"];
+export type MaintenanceJobRunResult = Schemas["MaintenanceJobRunResult"];
 
 /** GET /api/v1/audit-logs 的非 OpenAPI 管理面响应。 */
 export interface MockAuditLogEntry {
@@ -149,7 +153,45 @@ export function mockRepository(): Repository {
     visibility: "private",
     createdAt: MOCK_TIME,
     aliases: ["maven-legacy"],
+    // FR-41：仓库存储配额（0/缺省 = 不限）；契约校验覆盖这两个新字段。
+    quotaBytes: 10737418240,
+    quotaAssets: 2000,
   };
+}
+
+/** FR-41：GET /api/v1/maintenance/jobs 的契约响应。 */
+export function mockMaintenanceJobList(): MaintenanceJobList {
+  return {
+    jobs: [
+      // 执行过且最近一次失败：lastError 有值。
+      {
+        name: "blob-gc",
+        intervalSeconds: 86400,
+        running: false,
+        runs: 3,
+        failures: 1,
+        lastStartedAt: "2026-01-05T02:00:00Z",
+        lastFinishedAt: "2026-01-05T02:00:03Z",
+        lastError: "扫描活动目录失败：磁盘不可读",
+      },
+      // 从未执行过：三个可空字段为 null（与后端"未执行过则为空"的语义对齐）。
+      {
+        name: "storage-cleanup",
+        intervalSeconds: 86400,
+        running: false,
+        runs: 0,
+        failures: 0,
+        lastStartedAt: null,
+        lastFinishedAt: null,
+        lastError: null,
+      },
+    ],
+  };
+}
+
+/** FR-41：POST /api/v1/maintenance/jobs/{name}/run 的契约响应（202 已受理）。 */
+export function mockMaintenanceJobRunResult(name = "blob-gc"): MaintenanceJobRunResult {
+  return { name, started: true };
 }
 
 /** GET /api/v1/repositories 的契约响应。 */

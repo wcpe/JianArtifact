@@ -5,11 +5,20 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"runtime/debug"
 	"sync"
 	"time"
+)
+
+// 按名触发（Run）的可判别错误：上层据此映射 404 / 409，无需解析错误文本。
+var (
+	// ErrJobNotFound 表示该名称没有已注册的作业（未注册、间隔 <= 0 被禁用或名称拼写错误）。
+	ErrJobNotFound = errors.New("作业未注册")
+	// ErrJobRunning 表示该作业正在运行，本次触发被拒（不排队、不并发重入）。
+	ErrJobRunning = errors.New("作业正在运行")
 )
 
 // JobStatus 是单个作业的运行状态快照，供诊断与指标导出（FR-39）。
@@ -61,6 +70,10 @@ type job struct {
 //   - 同一作业不自我重叠：上一次结束后再等一个间隔。
 type Scheduler struct {
 	jobs []*job
+
+	// mu 保护 ctx：Start 在启动时写入，Run 在请求期读取，两者可能来自不同 goroutine。
+	mu  sync.RWMutex
+	ctx context.Context
 }
 
 // New 创建空调度器；作业须在 Start 之前注册。
@@ -77,10 +90,57 @@ func (s *Scheduler) Register(name string, interval time.Duration, run func(ctx c
 }
 
 // Start 为每个已注册作业启动独立循环，随 ctx 取消优雅停止。
+// 手动触发（Run）沿用同一个 ctx，因此关闭流程对两者一致。
 func (s *Scheduler) Start(ctx context.Context) {
+	s.mu.Lock()
+	s.ctx = ctx
+	s.mu.Unlock()
 	for _, j := range s.jobs {
 		go j.loop(ctx)
 	}
+}
+
+// Run 按名触发一次作业执行：取得独占权后异步启动并立即返回，不等待作业跑完——
+// 执行结果照既有机制回填 Status（runs / failures / lastError / lastFinish）。
+//
+// 返回的可判别错误：
+//   - ErrJobNotFound：该名称没有已注册的作业；
+//   - ErrJobRunning：该作业正在运行（含周期触发的那一轮），本次触发被拒。
+//
+// 本方法**不改变**既有调度语义：同一作业不自我重叠，被拒的触发不排队、后续不补跑。
+// Run 可在 Start 之前调用（尚无运行 ctx 时以 context.Background() 执行）。
+func (s *Scheduler) Run(name string) error {
+	j := s.job(name)
+	if j == nil {
+		return fmt.Errorf("%w：%s", ErrJobNotFound, name)
+	}
+	if !j.claim() {
+		return fmt.Errorf("%w：%s", ErrJobRunning, name)
+	}
+	go j.runClaimed(s.runContext())
+	return nil
+}
+
+// job 按名查找已注册作业；不存在返回 nil。
+func (s *Scheduler) job(name string) *job {
+	for _, j := range s.jobs {
+		if j.name == name {
+			return j
+		}
+	}
+	return nil
+}
+
+// runContext 返回作业执行所用的上下文：优先用 Start 传入的 ctx（随其取消优雅停止），
+// 尚未 Start 时退回 context.Background()。
+func (s *Scheduler) runContext() context.Context {
+	s.mu.RLock()
+	ctx := s.ctx
+	s.mu.RUnlock()
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
 }
 
 // Status 返回全部作业的状态快照（副本，可并发调用）。
@@ -120,11 +180,32 @@ func (j *job) loop(ctx context.Context) {
 	}
 }
 
-// runOnce 执行一次作业并记录状态；失败与 panic 都隔离在本作业内。
+// runOnce 由周期循环调用：先取得独占权，再同步执行一轮。
+// 周期循环本身是串行的，取不到独占权只可能是手动触发那一轮正在运行——
+// 此时保持"不自我重叠"：跳过本轮，不排队、不补跑（下一轮照常重新起算间隔）。
 func (j *job) runOnce(ctx context.Context) {
+	if !j.claim() {
+		return
+	}
+	j.runClaimed(ctx)
+}
+
+// claim 尝试独占本轮执行：已在运行时返回 false。
+// 周期触发与手动触发共用这一个状态位，因此两条路径之间也不会并发重入。
+func (j *job) claim() bool {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.running {
+		return false
+	}
+	j.running = true
+	return true
+}
+
+// runClaimed 执行一轮已取得独占权的作业并记录状态；失败与 panic 都隔离在本作业内。
+func (j *job) runClaimed(ctx context.Context) {
 	j.mu.Lock()
 	j.runs++
-	j.running = true
 	j.lastStart = time.Now()
 	j.mu.Unlock()
 

@@ -1,11 +1,17 @@
 {
-  "generatedAt": "2026-09-30T02:34:10.607Z",
+  "generatedAt": "2026-09-30T22:28:36.790Z",
   "go": [
     {
       "name": "github.com/apapsch/go-jsonmerge/v2",
       "version": "v2.0.0",
       "license": "MIT",
       "author": "apapsch"
+    },
+    {
+      "name": "github.com/Azure/go-ntlmssp",
+      "version": "v0.1.1",
+      "license": "MIT",
+      "author": "Azure"
     },
     {
       "name": "github.com/bytedance/gopkg",
@@ -32,6 +38,12 @@
       "author": "cloudwego"
     },
     {
+      "name": "github.com/coreos/go-oidc/v3",
+      "version": "v3.21.0",
+      "license": "Apache-2.0",
+      "author": "coreos"
+    },
+    {
       "name": "github.com/dustin/go-humanize",
       "version": "v1.0.1",
       "license": "MIT",
@@ -54,6 +66,24 @@
       "version": "v1.12.0",
       "license": "MIT",
       "author": "gin-gonic"
+    },
+    {
+      "name": "github.com/go-asn1-ber/asn1-ber",
+      "version": "v1.5.8",
+      "license": "MIT",
+      "author": "go-asn1-ber"
+    },
+    {
+      "name": "github.com/go-jose/go-jose/v4",
+      "version": "v4.1.4",
+      "license": "Apache-2.0",
+      "author": "go-jose"
+    },
+    {
+      "name": "github.com/go-ldap/ldap/v3",
+      "version": "v3.4.14",
+      "license": "MIT",
+      "author": "go-ldap"
     },
     {
       "name": "github.com/go-playground/locales",
@@ -122,6 +152,12 @@
       "author": "leodido"
     },
     {
+      "name": "github.com/lor00x/goldap",
+      "version": "v0.0.0-20180618054307-a546dffdd1a3",
+      "license": "LGPL",
+      "author": "lor00x"
+    },
+    {
       "name": "github.com/mattn/go-isatty",
       "version": "v0.0.24",
       "license": "MIT",
@@ -188,6 +224,12 @@
       "author": "ugorji"
     },
     {
+      "name": "github.com/vjeantet/ldapserver",
+      "version": "v1.0.1",
+      "license": "LGPL",
+      "author": "vjeantet"
+    },
+    {
       "name": "go.mongodb.org/mongo-driver/v2",
       "version": "v2.5.0",
       "license": "Apache-2.0",
@@ -208,6 +250,12 @@
     {
       "name": "golang.org/x/net",
       "version": "v0.59.0",
+      "license": "BSD-3-Clause",
+      "author": "x"
+    },
+    {
+      "name": "golang.org/x/oauth2",
+      "version": "v0.37.0",
       "license": "BSD-3-Clause",
       "author": "x"
     },

@@ -187,6 +187,7 @@ func (h *NuGetHandler) Push(c *gin.Context) {
 	settle, limit, err := h.beginUnresolvedPublish(c, repo)
 	if err != nil {
 		h.auditRejected(c, "nuget.publish", repo, "", publishRejectionDetail(err))
+		h.recordQuotaRejection(err)
 		writePublishErr(c, err)
 		return
 	}
@@ -196,6 +197,7 @@ func (h *NuGetHandler) Push(c *gin.Context) {
 	if err != nil {
 		if errors.Is(err, domain.ErrQuotaExceeded) {
 			h.auditRejected(c, "nuget.publish", repo, "", "quota_exceeded")
+			h.recordQuotaRejection(err)
 			writePublishErr(c, err)
 			return
 		}

@@ -168,6 +168,9 @@ export const ACTION_LABEL_KEYS: Record<string, string> = {
   "migration.credential_ref": "auditAction.migrationCredentialRef",
   "repository.create": "auditAction.repoCreate",
   "repository.delete": "auditAction.repoDelete",
+  // FR-41 存储治理：手动触发维护作业与仓库空目录清理（后端新增写入的两个动作）。
+  "maintenance.job_run": "auditAction.maintenanceJobRun",
+  "repo.cleanup": "auditAction.repoCleanup",
 };
 
 export function actionLabel(action: unknown, t: (key: string) => string): string {

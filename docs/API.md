@@ -33,6 +33,8 @@
 - 迁移：Nexus 来源发现、计划、显式启动/取消、进度、报告和恢复。
 - 备份与搬迁：节点备份包的生成、列表、详情、删除、完整性校验与下载导出。
 
+- 仓库存储治理字段（FR-41）：`Repository.quotaBytes` / `quotaAssets` 是仓库级存储配额上限（计量口径为**逻辑字节** `SUM(asset.size)` 与**制品计数** `COUNT(*)`，0 / 缺省 = 不限），`Repository.cacheRetentionDays` 是代理缓存资产的保留天数（**仅 `type=proxy` 可设**，0 / 缺省 = 关闭）。超出配额后该仓库的写入返回 **429 `quota_exceeded`**，消息含当前占用与上限、不含文件系统路径；配额只对 `hosted` 仓库强制，且计量口径**与去重后的物理占用不等价**。创建与更新请求的对应字段为指针语义（缺省 = 不修改；显式 0 = 改为不限 / 关闭代理缓存保留），负数为 400；**非 `hosted` 仓库（`group` 与 `proxy`）携带非 0 配额一律 400**——`group` 不承载写入，`proxy` 的缓存写入发生在读取回源路径上、没有准入预检与流式早拒，配额强制尚未覆盖该路径（管理端因此只在 `hosted` 仓库渲染这两个输入）。字段真源见 [`../api/openapi.yaml`](../api/openapi.yaml)。
+
 ### 设置与审计
 
 - `GET/PUT /api/v1/settings`：实例基础设置（匿名访问开关、对外基础 URL、上游超时、域名白名单、回源 Token 与遗留的同步间隔项）；全部为节点本地配置，不参与任何跨实例传播。
@@ -61,6 +63,15 @@
 - `DELETE /api/v1/maintenance/freeze`：解冻，幂等（未冻结也返 200 与当前状态）。
 
 冻结期间节点拒绝本地业务与管理写入（503 + `write_frozen`），但放行：读方法、`POST /api/v1/auth/login`、维护命名空间 `/api/v1/maintenance/`、以及备份导入/上传路径（`/api/v1/backups/import{s}`、`/api/v1/backups/uploads`）——它们只写 `restore-staging/` 与 `restore.pending`、重启才生效，不破坏冻结语义。
+
+### 维护作业（FR-41）
+
+周期作业的只读清单与手动触发。**仅管理员**；**本批只交付 API，没有配套管理页面**。
+
+- `GET /api/v1/maintenance/jobs`：返回本进程**已注册**的周期作业清单与状态快照（`MaintenanceJobList`：名称、间隔秒数、是否运行中、累计执行 / 失败次数、最近开始 / 结束时间、最近错误；未执行过时时间与错误字段为 `null`，空清单为 `[]`）。只读，不触发任何作业。**间隔 ≤ 0 的作业不注册、不出现**，"某作业不在清单里"等价于"该作业在本实例被禁用"；计数自进程启动累计、重启归零。
+- `POST /api/v1/maintenance/jobs/{name}/run`：手动触发指定作业一次。返回 **202** 与 `MaintenanceJobRunResult{name, started:true}`——**只表示已受理**，不等待执行完成，是否跑完 / 失败回查清单接口的 `running` / `failures` / `lastError`。作业正在运行（含周期触发的那一轮）返回 **409 `job_running`**，不排队、不并发重入；作业名未注册或已禁用返回 **404 `not_found`**；触发成功写审计 `maintenance.job_run`，失败的响应不回显内部细节。调度器未接线时返回 503 `unavailable`（兼容分支，生产装配恒为已接线）。
+
+两个接口均要求管理员（未登录 401 / 非管理员 403）；`/api/v1/maintenance/` 在写入冻结窗口的放行清单内。清理作业自身的行为（隔离区空目录、终态元数据裁剪、过期上传临时文件、代理缓存保留）与本批的配额语义见 [`specs/0.11.0-storage-governance.md`](specs/0.11.0-storage-governance.md)。
 
 ### 备份包导入（FR-137，三通道）
 

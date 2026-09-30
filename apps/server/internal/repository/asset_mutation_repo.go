@@ -185,6 +185,18 @@ func (r *AssetMutationRepo) CompleteWithOutboxAndHook(id string, items []AssetMu
 	return r.complete(id, items, outbox, &envelope, hook)
 }
 
+// CompleteWithHooks 在同一事务中应用资产视图并按顺序执行多个附加状态变更
+// （如仓库存储配额复检 + 调用方附加元数据）。任一钩子报错即整批回滚。
+func (r *AssetMutationRepo) CompleteWithHooks(id string, items []AssetMutationItem, hooks ...MutationCompletionHook) error {
+	return r.complete(id, items, nil, nil, hooks...)
+}
+
+// CompleteWithOutboxAndHooks 在同一个短事务中应用资产视图、完成 intent、写入
+// operation outbox 并按顺序执行多个附加状态变更。
+func (r *AssetMutationRepo) CompleteWithOutboxAndHooks(id string, items []AssetMutationItem, outbox *ReplicationOperationRepo, envelope OperationEnvelope, hooks ...MutationCompletionHook) error {
+	return r.complete(id, items, outbox, &envelope, hooks...)
+}
+
 // RollbackCompleted 恢复已提交但物理回收未完成的资产视图，并将 intent 标为 rolled_back。
 // 仅协调器在持有节点写门时调用，避免外部读路径观察回滚中间态。
 func (r *AssetMutationRepo) RollbackCompleted(id string, items []AssetMutationItem, reason string) error {

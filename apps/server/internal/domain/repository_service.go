@@ -462,21 +462,36 @@ func (s *RepositoryService) SetOnline(name string, online bool) error {
 	return nil
 }
 
-// validateConfig 按仓库类型校验结构化配置：
+// validateConfig 校验仓库配置，按仓库类型校验结构化配置：
 //   - hosted：remoteUrl、credentialRef 与 members 均须为空；
 //   - proxy：remoteUrl 必填且为合法 http/https 绝对地址，members 与 immutableRelease 须为空或 false，credentialRef 可选且必须是环境变量引用名；
 //   - group：members 必填（≥1），每个成员须存在、与本仓 format 一致且非自引用，remoteUrl、credentialRef 与 immutableRelease 须为空或 false。
 //
+// FR-41：cacheRetentionDays（代理缓存保留）只对 proxy 有意义，hosted/group 必须为 0，
+// proxy 上 0 = 关闭（默认）且不接受负数；存储配额 quotaBytes/quotaAssets 为仓库级上限，
+// 0/缺省 = 不限、负数非法，**只有 hosted 接受非 0 配额**：group 不承载写入，
+// proxy 的缓存在读取回源路径上落盘而该路径没有预检与早拒，两者都在这里拒绝非 0 值。
+//
 // 违规返回 ErrValidation。
 func (s *RepositoryService) validateConfig(name, format, typ string, cfg repository.RepositoryConfig) error {
+	if cfg.QuotaBytes < 0 || cfg.QuotaAssets < 0 {
+		return fmt.Errorf("%w: 存储配额不能为负数", ErrValidation)
+	}
 	switch typ {
 	case "hosted":
-		if cfg.RemoteURL != "" || cfg.CredentialRef != "" || len(cfg.Members) > 0 {
+		if cfg.RemoteURL != "" || cfg.CredentialRef != "" || len(cfg.Members) > 0 || cfg.CacheRetentionDays != 0 {
 			return ErrValidation
 		}
 	case "proxy":
-		if len(cfg.Members) > 0 || cfg.RemoteURL == "" || cfg.ImmutableRelease {
+		if len(cfg.Members) > 0 || cfg.RemoteURL == "" || cfg.ImmutableRelease || cfg.CacheRetentionDays < 0 {
 			return ErrValidation
+		}
+		if cfg.QuotaBytes != 0 || cfg.QuotaAssets != 0 {
+			// 代理缓存的写入发生在「读取回源」路径上：该路径既没有准入预检、也没有流式早拒，
+			// 只能在整份上游内容落盘后的提交点才被判越限，配额强制实际只对 hosted 完整生效。
+			// 故与 group 一样先拒绝非 0 配额，避免"设了但永不生效"；
+			// 待后续增量把代理回源写入纳入配额强制后再放开。
+			return fmt.Errorf("%w: proxy 仓库暂不支持存储配额", ErrValidation)
 		}
 		u, err := url.Parse(cfg.RemoteURL)
 		if err != nil || !u.IsAbs() || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
@@ -486,8 +501,12 @@ func (s *RepositoryService) validateConfig(name, format, typ string, cfg reposit
 			return ErrValidation
 		}
 	case "group":
-		if cfg.RemoteURL != "" || cfg.CredentialRef != "" || cfg.ImmutableRelease || len(cfg.Members) == 0 {
+		if cfg.RemoteURL != "" || cfg.CredentialRef != "" || cfg.ImmutableRelease || len(cfg.Members) == 0 || cfg.CacheRetentionDays != 0 {
 			return ErrValidation
+		}
+		if cfg.QuotaBytes != 0 || cfg.QuotaAssets != 0 {
+			// group 只是成员的读取聚合视图，不承载写入：不接受非 0 配额（避免"设了但永不生效"）。
+			return fmt.Errorf("%w: group 仓库不支持存储配额", ErrValidation)
 		}
 		for _, m := range cfg.Members {
 			if m == "" || m == name {

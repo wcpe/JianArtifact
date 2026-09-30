@@ -186,3 +186,59 @@ func TestRegistryIsConcurrencySafe(t *testing.T) {
 		t.Fatalf("并发累加计数不正确：\n%s", render(t, exp))
 	}
 }
+
+// TestPublishRejectionsRenderClosedSet 发布拒绝指标（FR-41）：reason 是闭集枚举，
+// 闭集外的取值不产生样本；固定指标族即使暂无样本也输出 HELP / TYPE。
+func TestPublishRejectionsRenderClosedSet(t *testing.T) {
+	reg, exp := newTestExposition(nil)
+
+	// 首抓（尚无样本）仍输出 HELP / TYPE，样本行只反映真实数据。
+	out := render(t, exp)
+	for _, want := range []string{
+		"# HELP jianartifact_publish_rejections_total",
+		"# TYPE jianartifact_publish_rejections_total counter",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("输出缺少 %q：\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "jianartifact_publish_rejections_total{") {
+		t.Fatalf("尚未发生拒绝时不应输出样本：\n%s", out)
+	}
+
+	reg.PublishRejection("quota")
+	reg.PublishRejection("quota")
+	// 闭集外的取值必须被忽略：标签基数受控，暴露面与规格完全一致。
+	reg.PublishRejection("bogus")
+	reg.PublishRejection("")
+	out = render(t, exp)
+	if !strings.Contains(out, `jianartifact_publish_rejections_total{reason="quota"} 2`) {
+		t.Fatalf("缺少 reason=quota 的计数：\n%s", out)
+	}
+	for _, unwanted := range []string{"bogus", `reason=""`, `reason="other"`} {
+		if strings.Contains(out, unwanted) {
+			t.Fatalf("闭集外取值不得进入样本（%q）：\n%s", unwanted, out)
+		}
+	}
+	if strings.Count(out, "jianartifact_publish_rejections_total{") != 1 {
+		t.Fatalf("v1 只允许一个 reason 取值：\n%s", out)
+	}
+}
+
+// TestPublishRejectionConcurrentWithRender 拒绝计数与渲染并发无数据竞争（-race 下验证）。
+func TestPublishRejectionConcurrentWithRender(t *testing.T) {
+	reg, exp := newTestExposition(nil)
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			reg.PublishRejection("quota")
+			_ = render(t, exp)
+		}()
+	}
+	wg.Wait()
+	if !strings.Contains(render(t, exp), `jianartifact_publish_rejections_total{reason="quota"} 8`) {
+		t.Fatalf("并发累加计数不正确：\n%s", render(t, exp))
+	}
+}

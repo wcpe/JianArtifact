@@ -11,6 +11,8 @@ import {
   mockConnectionStatus,
   mockHealthz,
   mockLoginResponse,
+  mockMaintenanceJobList,
+  mockMaintenanceJobRunResult,
   mockPinnedRepositories,
   mockPublicRepositoryList,
   mockPublishPoliciesBatchRequest,
@@ -248,6 +250,62 @@ describe("devmock ↔ OpenAPI 契约一致性", () => {
         updatedAt: "2026-08-24T00:00:00Z",
       }),
     ).toBe(false);
+  });
+
+  it("存储治理运维作业面与仓库配额字段满足契约，漂移可被检出", () => {
+    expectValid("MaintenanceJobList", mockMaintenanceJobList());
+    expectValid("MaintenanceJobRunResult", mockMaintenanceJobRunResult());
+
+    // 漂移可检出：作业项缺 required（name 等）的清单必须被拒绝。
+    const validateJob = ajv.compile(schemaFor("MaintenanceJob"));
+    expect(validateJob({ intervalSeconds: 86400, running: false, runs: 0, failures: 0 })).toBe(
+      false,
+    );
+    const validateJobList = ajv.compile(schemaFor("MaintenanceJobList"));
+    expect(validateJobList({})).toBe(false);
+
+    // 仓库配额：缺省即"不限"，因此省略 quotaBytes/quotaAssets 仍然合法；负数被 minimum 拒绝。
+    const validateRepository = ajv.compile(schemaFor("Repository"));
+    const withoutQuota: Record<string, unknown> = { ...mockRepository() };
+    delete withoutQuota.quotaBytes;
+    delete withoutQuota.quotaAssets;
+    expect(validateRepository(withoutQuota)).toBe(true);
+    expect(validateRepository({ ...mockRepository(), quotaBytes: -1 })).toBe(false);
+
+    // 代理缓存保留天数：与配额同口径——缺省即"关闭"，仅 proxy 有语义；负数被 minimum 拒绝。
+    // mockRepository() 是 hosted 仓库，按域层规则本就不该带该字段，故用 proxy 形状的对象校验。
+    const validateRequest = ajv.compile(schemaFor("CreateRepositoryRequest"));
+    expect(validateRequest({ name: "npm-proxy", format: "npm", type: "proxy" })).toBe(true);
+    expect(
+      validateRequest({
+        name: "npm-proxy",
+        format: "npm",
+        type: "proxy",
+        cacheRetentionDays: 30,
+      }),
+    ).toBe(true);
+    expect(
+      validateRequest({
+        name: "npm-proxy",
+        format: "npm",
+        type: "proxy",
+        cacheRetentionDays: -1,
+      }),
+    ).toBe(false);
+
+    const validateUpdateRequest = ajv.compile(schemaFor("UpdateRepositoryRequest"));
+    expect(validateUpdateRequest({ cacheRetentionDays: 0 })).toBe(true);
+    expect(validateUpdateRequest({ cacheRetentionDays: -1 })).toBe(false);
+
+    const validateProxyRepository = ajv.compile(schemaFor("Repository"));
+    const proxyRepo = {
+      ...mockRepository(),
+      type: "proxy",
+      remoteUrl: "https://repo1.maven.org/maven2",
+      cacheRetentionDays: 30,
+    };
+    expect(validateProxyRepository(proxyRepo)).toBe(true);
+    expect(validateProxyRepository({ ...proxyRepo, cacheRetentionDays: -1 })).toBe(false);
   });
 
   it("契约漂移可被检出：缺 required 字段或非法枚举的响应校验失败", () => {

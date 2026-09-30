@@ -104,6 +104,10 @@ type RepoStats struct {
 	TotalSize    int64 `db:"total_size"`
 }
 
+// repoStatsQuery 是单仓库占用的唯一聚合 SQL（制品数 COUNT(*) 与逻辑字节 SUM(size)）：
+// 仓库存储配额（FR-41）的预检与提交点复检共用它，避免两处口径漂移。
+const repoStatsQuery = `SELECT ? AS repository_id, COUNT(*) AS count, COALESCE(SUM(size), 0) AS total_size FROM asset WHERE repository_id = ?`
+
 // ListMissingChecksums 返回 sha1 或 md5 为空的资产（历史数据回填用）。
 func (r *AssetRepo) ListMissingChecksums(limit int) ([]Asset, error) {
 	if limit <= 0 {
@@ -185,10 +189,16 @@ func (r *AssetRepo) CountByRepos(repoIDs []int64, prefix string) (int, error) {
 // CountAndSizeByRepo 返回单个仓库的制品数量与总字节数。
 func (r *AssetRepo) CountAndSizeByRepo(repoID int64) (count int64, totalSize int64, err error) {
 	var s RepoStats
-	err = r.db.Get(&s,
-		`SELECT ? AS repository_id, COUNT(*) AS count, COALESCE(SUM(size), 0) AS total_size FROM asset WHERE repository_id = ?`,
-		repoID, repoID,
-	)
+	err = r.db.Get(&s, repoStatsQuery, repoID, repoID)
+	return s.Count, s.TotalSize, err
+}
+
+// CountAndSizeByRepoTx 在调用方事务中返回单个仓库的制品数量与总字节数。
+// 供仓库存储配额的提交点权威复检（FR-41）读取与本次写入同一事务视图下的占用，
+// 复用与 CountAndSizeByRepo 完全相同的聚合 SQL（不另写等价查询）。
+func (r *AssetRepo) CountAndSizeByRepoTx(tx *sqlx.Tx, repoID int64) (count int64, totalSize int64, err error) {
+	var s RepoStats
+	err = tx.Get(&s, repoStatsQuery, repoID, repoID)
 	return s.Count, s.TotalSize, err
 }
 

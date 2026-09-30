@@ -8,21 +8,24 @@
 
 配置通过环境变量、部署 Secret 或 systemd 环境文件注入；真实环境文件不入库。
 
-| 变量                             | 作用                                 | 默认/约束                                                          |
-| -------------------------------- | ------------------------------------ | ------------------------------------------------------------------ |
-| `JIAN_HTTP_ADDR`                 | HTTP 监听地址                        | `:8080`                                                            |
-| `JIAN_DATA_DIR`                  | SQLite 与 blob 数据根目录            | `./data`；生产必须使用持久化绝对路径                               |
-| `JIAN_JWT_SECRET`                | JWT(HS256) 签名密钥                  | 生产必填、强随机、不得打印                                         |
-| `JIAN_MIGRATION_CREDENTIAL_KEY`  | 在线迁移凭据 AES-256-GCM 密钥        | Base64 编码 32 字节；生产应显式固定                                |
-| `JIAN_UPSTREAM_TIMEOUT`          | proxy 回源整体超时（秒）             | `30`                                                               |
-| `JIAN_ENABLED_FORMATS`           | 启用的协议格式                       | 缺省 `raw,maven,npm`；显式空值关闭全部                             |
-| `JIAN_PUBLIC_URL`                | 对外基础 URL                         | 节点本地配置；影响下载链接与 usage 片段                            |
-| `JIAN_SYNC_INTERVAL`             | 设置页「同步间隔」的初始默认值（秒） | `5`；仅在 setting 键不存在时写入，当前无调度器消费（复制退役遗留） |
-| `JIAN_BLOB_GC_INTERVAL`          | 清理遗留 / 孤儿 blob 的间隔（秒）    | `86400`；`0` 禁用                                                  |
-| `JIAN_TLS_ADDR`                  | 内置 HTTPS 监听地址                  | 为空表示不启用                                                     |
-| `JIAN_TLS_CERT` / `JIAN_TLS_KEY` | TLS 证书和私钥路径                   | 配置 `JIAN_TLS_ADDR` 时必填                                        |
+| 变量                                   | 作用                                    | 默认/约束                                                          |
+| -------------------------------------- | --------------------------------------- | ------------------------------------------------------------------ |
+| `JIAN_HTTP_ADDR`                       | HTTP 监听地址                           | `:8080`                                                            |
+| `JIAN_DATA_DIR`                        | SQLite 与 blob 数据根目录               | `./data`；生产必须使用持久化绝对路径                               |
+| `JIAN_JWT_SECRET`                      | JWT(HS256) 签名密钥                     | 生产必填、强随机、不得打印                                         |
+| `JIAN_MIGRATION_CREDENTIAL_KEY`        | 在线迁移凭据 AES-256-GCM 密钥           | Base64 编码 32 字节；生产应显式固定                                |
+| `JIAN_UPSTREAM_TIMEOUT`                | proxy 回源整体超时（秒）                | `30`                                                               |
+| `JIAN_ENABLED_FORMATS`                 | 启用的协议格式                          | 缺省 `raw,maven,npm`；显式空值关闭全部                             |
+| `JIAN_PUBLIC_URL`                      | 对外基础 URL                            | 节点本地配置；影响下载链接与 usage 片段                            |
+| `JIAN_SYNC_INTERVAL`                   | 设置页「同步间隔」的初始默认值（秒）    | `5`；仅在 setting 键不存在时写入，当前无调度器消费（复制退役遗留） |
+| `JIAN_BLOB_GC_INTERVAL`                | 清理遗留 / 孤儿 blob 的间隔（秒）       | `86400`；`0` 禁用                                                  |
+| `JIAN_STORAGE_CLEANUP_INTERVAL`        | 存储治理清理作业的间隔（秒）            | `86400`；`0` 禁用（作业不注册）；非法 / 负数回落默认               |
+| `JIAN_STORAGE_METADATA_RETENTION_DAYS` | 终态操作与隔离元数据的保留天数          | `7`；`0` 禁用元数据裁剪；非法 / 负数回落默认                       |
+| `JIAN_STORAGE_TEMP_MAX_AGE_HOURS`      | 过期 OCI 上传临时文件的最长滞留（小时） | `24`；`0` 禁用该项清理；非法 / 负数回落默认                        |
+| `JIAN_TLS_ADDR`                        | 内置 HTTPS 监听地址                     | 为空表示不启用                                                     |
+| `JIAN_TLS_CERT` / `JIAN_TLS_KEY`       | TLS 证书和私钥路径                      | 配置 `JIAN_TLS_ADDR` 时必填                                        |
 
-派生路径固定为 `${JIAN_DATA_DIR}/jianartifact.db` 和 `${JIAN_DATA_DIR}/blobs`。启动会创建数据目录并执行 schema 迁移；不会在启动时扫描活动 blob；遗留 / 孤儿 blob 的定时清理由本实例按 `JIAN_BLOB_GC_INTERVAL` 独立运行。
+派生路径固定为 `${JIAN_DATA_DIR}/jianartifact.db` 和 `${JIAN_DATA_DIR}/blobs`。启动会创建数据目录并执行 schema 迁移；不会在启动时扫描活动 blob；遗留 / 孤儿 blob 的定时清理由本实例按 `JIAN_BLOB_GC_INTERVAL` 独立运行；存储治理清理（隔离区空目录、终态操作与隔离元数据裁剪、过期 OCI 上传临时文件、代理缓存保留）由 `storage-cleanup` 作业按 `JIAN_STORAGE_CLEANUP_INTERVAL` 独立运行，两者按目录命名空间各管一块、互不重叠。以上作业**都只在第一个间隔到期后执行**（启动不清理、不扫描历史）。
 
 **已废弃的环境变量**：`JIAN_REPLICATION_ROLE`、`JIAN_REPLICATION_PRIMARY_URL`、`JIAN_REPLICATION_RELAY_ENABLED` 自复制通道退役（FR-138）起不再被解析；旧环境文件里残留这些键不影响启动（未知键被忽略），可直接删除。
 
@@ -82,7 +85,8 @@
 curl -fsS http://127.0.0.1:8080/metrics | head
 ```
 
-- **指标口径**：`jianartifact_protocol_requests_total{method,status,cache_result}`（制品协议请求完成计数，缓存结果取 `hit` / `miss` / `unknown`）、`jianartifact_scheduler_job_*{job}`（定时任务作业的执行 / 失败次数、是否运行中、最近执行时间与最近是否失败）、`jianartifact_runtime_*`（协程数、堆占用、累计 GC 次数）。
+- **指标口径**：`jianartifact_protocol_requests_total{method,status,cache_result}`（制品协议请求完成计数，缓存结果取 `hit` / `miss` / `unknown`）、`jianartifact_publish_rejections_total{reason}`（发布被拒绝的累计次数，见下）、`jianartifact_scheduler_job_*{job}`（定时任务作业的执行 / 失败次数、是否运行中、最近执行时间与最近是否失败）、`jianartifact_runtime_*`（协程数、堆占用、累计 GC 次数）。
+- **发布拒绝原因（闭集枚举）**：`jianartifact_publish_rejections_total{reason}` 的 `reason` 是**闭集枚举**，v1 只有 `quota` 一个取值——它同时覆盖「发布额度拒绝」与「仓库存储配额拒绝」这两类共用 429 `quota_exceeded` 口径的拒绝。**闭集之外的取值会被直接忽略**（标签基数受控）；**新增取值必须先改规格**（[`specs/0.11.0-storage-governance.md`](specs/0.11.0-storage-governance.md) §3.5）并同步测试与本文，不允许就地塞入自由字符串。该指标族即使尚无拒绝样本也输出 `# HELP` / `# TYPE`，样本行只在真的发生过拒绝后出现。
 - **抓取开销**：全部取自进程内数据，**不查询数据库、不访问网络**；标签基数受控——未知方法与异常状态码归 `other`，路径 / 仓库名 / 用户等无界值不做标签。
 - **匿名口径**：与 `/healthz`、`/readyz` 一致免认证，但**不含版本等指纹信息**；需要限制访问范围时在网络层收口（安全组 / 反向代理）。
 - **抓取配置示例**：
@@ -138,6 +142,42 @@ scrape_configs:
 - **登录顺序**：本地口令优先；本地未通过且启用 LDAP 时才回退目录。两侧都失败时对外表现一致（不泄露账号存在于哪一侧）；离职在目录侧停用后**无法再次登录**（已签发会话在其过期前仍有效，与本地账号语义一致）。
 - **永不锁死**：目录不可达只影响 LDAP 来源用户的登录，本地管理员与本地账号照常登录。
 - **排障**：服务端日志记录目录侧失败原因（连接失败 / 检索无命中或命中多个 / 绑定被拒），前端只看到笼统失败，不泄露账号是否存在。
+
+### 1.7 维护作业 API 与存储配额治理（FR-41）
+
+**本批只交付 API，没有配套管理页面**——作业清单、手动触发与配额调整都通过 HTTP 调用（配额的编辑入口在仓库详情页的配置页签，见下）。
+
+**看作业清单**（仅管理员）：
+
+```bash
+curl -fsS -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/api/v1/maintenance/jobs
+```
+
+返回本进程**已注册**的周期作业（现状为 `blob-gc` 与 `storage-cleanup`）及状态：名称、间隔秒数、是否运行中、累计执行 / 失败次数、最近开始 / 结束时间、最近错误。要点：
+
+- 清单由注册决定——**间隔 ≤ 0 被禁用的作业不注册，也不出现在清单里**，所以"某个作业没出现"等价于"该作业在本实例被禁用"（例如 `JIAN_STORAGE_CLEANUP_INTERVAL=0`）；
+- 计数自进程启动累计、重启归零；未执行过的作业，时间与错误字段为 `null`。
+
+**手动触发一次**（仅管理员）：
+
+```bash
+curl -fsS -X POST -H "Authorization: Bearer $TOKEN" \
+  http://127.0.0.1:8080/api/v1/maintenance/jobs/storage-cleanup/run
+```
+
+- **202 只表示已受理**，不等待作业执行完成；是否跑完、是否失败，回查清单接口的 `running` / `failures` / `lastError`。
+- **409 `job_running`**：作业正在运行（含周期触发的那一轮，也含本接口上一次触发尚未结束的那一轮）——不排队、不并发重入、后续不补跑。
+- **404 `not_found`**：作业名未注册或已被禁用（如把间隔设成 0 后重启）。
+- **403**（非管理员）/ **401**（未登录）；调度器未接线时 503 `unavailable`（兼容分支，生产装配恒为已接线）。
+- 触发成功写审计动作 `maintenance.job_run`。维护命名空间在写入冻结窗口的放行清单内，冻结期间仍可查清单与手动触发。
+- 手动触发**不会**让作业变得"更快"：调度语义不变，触发只是额外跑一轮。
+
+**仓库存储配额与代理缓存保留**：
+
+- 仓库级配额 `quotaBytes`（字节，计量口径为**逻辑字节** `SUM(asset.size)`）与 `quotaAssets`（制品数）在 **`hosted` 仓库**的详情页「配置」页签可编辑（留空 / 0 = 不限），也可直接 `PATCH /api/v1/repositories/{name}`；越限后该仓库的写入被拒绝（**429 `quota_exceeded`**，消息含当前占用与上限）。**配额只对 `hosted` 仓库生效**（非 `hosted` 仓库不提供该输入，PATCH 非 0 配额会 400），且计量口径与去重后的物理磁盘占用不等价。
+- 迁移导入与备份恢复**豁免**配额（属管理员批量操作），豁免只记日志、不进审计。
+- 代理缓存保留 `cacheRetentionDays`（**仅 `proxy` 仓库**、**默认关闭**）：开启后由 `storage-cleanup` 作业淘汰该仓库内"最后一次写入早于「当前时间 − 保留天数」"的缓存资产，删除走既有资产删除通道；每轮删除有数量上限（当前 200 个），达到上限的部分留到下一轮。**系统发起的删除只记日志、不写审计**。
+- 排障：对"配额被打满"设告警可用 `jianartifact_publish_rejections_total{reason="quota"}`（见 §1.4）；清理作业的动作与计数看作业日志（形如"存储治理清理完成：终态操作 N 行 / …"）与 `jianartifact_scheduler_job_*{job="storage-cleanup"}`。
 
 ## 2. 部署路径
 

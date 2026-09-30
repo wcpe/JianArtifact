@@ -1,0 +1,42 @@
+-- 0045：存储治理清理查询的索引（asset_mutation / asset）
+-- 引入版本：0.11.0（开发中）
+-- 影响：asset_mutation 新增 (status, updated_at) 索引；asset 新增 (repository_id, updated_at, path) 索引
+-- 数据处理：无历史回填——纯建索引，扫描既有行建立结构；预计耗时：随两张表行数增长（大库首次升级可能到秒级，升级期间会短暂占用写锁）
+-- 回滚：不支持 down migration；需要恢复升级前备份
+-- 相关：FR-41 存储治理（docs/PRD.md）、storage-cleanup 周期作业（docs/specs/0.11.0-job-scheduler.md）
+--
+-- 背景：FR-41 的 storage-cleanup 作业每轮都要跑两条跨库范围的查询（见
+-- internal/repository/storage_cleanup_repo.go），而这两条在本次迁移前都没有可用索引：
+-- asset_mutation 只有主键（TEXT id），asset 只有 (repository_id) 与 (repository_id, path)。
+-- 库一大就退化成每轮全表扫：作业耗时随库增长且不可预期，还会在扫描期间吃满 IO。
+--
+-- 索引口径（列顺序按真实 WHERE / ORDER BY 子句定，不是猜的）：
+--   - idx_asset_mutation_status_updated (status, updated_at)
+--     对应 storage_cleanup_repo.go:39-45 的候选集判定：`status IN ('completed','rolled_back')
+--     AND updated_at < ?`。status 在前：两个终态值是等值族，同一终态的行走在同一条索引序上；
+--     updated_at 在后的范围裁剪因此只扫「待裁区间」，不必把 prepared / staged / committing /
+--     rolling_back 的在途操作读进来——清理作业「绝不碰在途」的安全约束在查询计划层就兑现了。
+--     该子句被三条语句复用（删 blob_quarantine 终态、删 asset_mutation_item、删 asset_mutation），
+--     索引只需建一次即对三者生效。
+--   - idx_asset_repo_updated (repository_id, updated_at, path)
+--     对应 storage_cleanup_repo.go:97-98 的淘汰查询：`WHERE repository_id=? AND updated_at < ?
+--     ORDER BY updated_at, path LIMIT ?`。repository_id 等值 → updated_at 范围，末尾再带 path，
+--     使 ORDER BY updated_at, path 完全由索引顺序满足。三种计划的实测对照（EXPLAIN QUERY PLAN）：
+--       · 不建索引：(repository_id) 上 SEARCH + USE TEMP B-TREE FOR ORDER BY
+--         ——即把该仓库全部资产读出来再整体排序，LIMIT 完全失效；
+--       · 只建 (repository_id, updated_at)：SEARCH 命中范围，但 USE TEMP B-TREE FOR LAST TERM OF
+--         ORDER BY——updated_at 并列（同秒写入）的行仍要按 path 再排一次，并列组越大越贵；
+--       · 建 (repository_id, updated_at, path)：SEARCH ... (repository_id=? AND updated_at<?)，
+--         无任何临时排序，按序取够 LIMIT 条即可停。
+--     末尾的 path 会让索引变大些，换来的是「按序取前 n 条即可停」，对清理作业的每轮上限语义更划算。
+--   - 不重建既有索引：(repository_id) 由 0002 建、(repository_id, path) 由 0006 建，都与本次新索引
+--     不同（updated_at 插在中间，二者互不等价），保留原样不动。新索引以 repository_id 为最左列，
+--     会让 0002 的 (repository_id) 在功能上变成冗余前缀；但删索引会改变其它既有查询的计划（本批只做加法、
+--     不引入计划回归），如需清理请另开一条迁移并在压测后再动。
+--
+-- 幂等性说明：迁移器把每个文件放在单个事务里执行（见 persistence/migrate.go），
+-- 索引创建与 schema_migrations 记录同事务提交，不存在「索引已建但版本未记」的半成品状态，
+-- 因此这里按 0043 / 0044 的既有写法用裸 CREATE INDEX，不加 IF NOT EXISTS。
+CREATE INDEX idx_asset_mutation_status_updated ON asset_mutation (status, updated_at);
+
+CREATE INDEX idx_asset_repo_updated ON asset (repository_id, updated_at, path);
