@@ -475,6 +475,50 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+  /api/v1/auth/oidc/start:
+    get:
+      operationId: startOidcLogin
+      summary: 起跳 OIDC 授权码流程（未启用 OIDC 时 404）
+      security: []
+      responses:
+        "302":
+          description: 重定向到身份提供方授权端点
+          headers:
+            Location:
+              schema:
+                type: string
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/v1/auth/oidc/callback:
+    get:
+      operationId: completeOidcLogin
+      summary: 完成 OIDC 授权码流程并重定向回前端（成功携令牌片段，失败携错误码片段）
+      security: []
+      parameters:
+        - name: code
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: state
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: error
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "302":
+          description: 重定向回前端登录页
+          headers:
+            Location:
+              schema:
+                type: string
+        "404":
+          $ref: "#/components/responses/NotFound"
   /api/v1/auth/logout:
     post:
       operationId: logout

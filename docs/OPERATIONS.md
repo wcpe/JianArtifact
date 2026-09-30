@@ -101,6 +101,24 @@ scrape_configs:
       - targets: ["jianartifact.example.com:8080"]
 ```
 
+### 1.5 外部身份源（OIDC，FR-34）
+
+配置下列变量即启用 OIDC 登录（**未配置 issuer 时整组不启用**，相关端点返回 404；见 [ADR-0029](adr/0029-external-identity-providers.md)）：
+
+| 变量                        | 说明                                | 取值                                                                                   |
+| --------------------------- | ----------------------------------- | -------------------------------------------------------------------------------------- |
+| `JIAN_OIDC_ISSUER`          | 身份提供方 issuer（discovery 基址） | 必填，如 `https://idp.example.com`                                                     |
+| `JIAN_OIDC_CLIENT_ID`       | 客户端 ID                           | 必填                                                                                   |
+| `JIAN_OIDC_CLIENT_SECRET`   | 客户端密钥                          | 必填；**只从环境变量读取**，不入库、不打印、不进日志                                   |
+| `JIAN_OIDC_REDIRECT_URL`    | 回调地址                            | 必填，须与 IdP 侧注册完全一致，如 `https://repo.example.com/api/v1/auth/oidc/callback` |
+| `JIAN_OIDC_USERNAME_CLAIM`  | 用户名 claim                        | 缺省 `preferred_username`（以 IdP 实际下发的 claim 为准）                              |
+| `JIAN_OIDC_ALLOWED_DOMAINS` | 允许自动建号的邮箱域名              | 逗号分隔；空 = 不限制；配了就只放行命中域名                                            |
+
+- **半配置直接拒绝启动**：配了 issuer 但缺客户端 ID / 密钥 / 回调地址会启动报错，不会"以为启用了实际没有"。
+- **永不锁死**：IdP 不可达只影响 OIDC 来源用户的登录，本地管理员与本地账号照常登录（离线恢复用 `jianartifact admin reset`）。
+- **绑定与建号**：首次登录按 `sub` 绑定既有账号 → 按用户名绑定本地普通账号 → 建号（角色固定 `user`，可见性仍完全由 ACL 决定）；管理员账号与内置主体**不会被自动绑定**。
+- **排障**：登录失败时服务端日志记录具体原因（流程过期 / state 不符 / 验签失败 / 白名单拒绝），前端只看到笼统错误码，不泄露账号是否存在。
+
 ## 2. 部署路径
 
 ### 2.1 Docker Compose（单实例主路径）

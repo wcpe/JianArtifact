@@ -3067,6 +3067,13 @@ type NotFound = Error
 // Unauthorized defines model for Unauthorized.
 type Unauthorized = Error
 
+// CompleteOidcLoginParams defines parameters for CompleteOidcLogin.
+type CompleteOidcLoginParams struct {
+	Code  *string `form:"code,omitempty" json:"code,omitempty"`
+	State *string `form:"state,omitempty" json:"state,omitempty"`
+	Error *string `form:"error,omitempty" json:"error,omitempty"`
+}
+
 // ListBackupsParams defines parameters for ListBackups.
 type ListBackupsParams struct {
 	Page     *PageParam     `form:"page,omitempty" json:"page,omitempty"`
@@ -3761,6 +3768,12 @@ type ServerInterface interface {
 	// Logout 注销当前会话（当前 JWT 记入吊销名单直至过期）
 	// (POST /api/v1/auth/logout)
 	Logout(c *gin.Context)
+	// CompleteOidcLogin 完成 OIDC 授权码流程并重定向回前端（成功携令牌片段，失败携错误码片段）
+	// (GET /api/v1/auth/oidc/callback)
+	CompleteOidcLogin(c *gin.Context, params CompleteOidcLoginParams)
+	// StartOidcLogin 起跳 OIDC 授权码流程（未启用 OIDC 时 404）
+	// (GET /api/v1/auth/oidc/start)
+	StartOidcLogin(c *gin.Context)
 	// ListBackups 备份包列表（分页，仅管理员）
 	// (GET /api/v1/backups)
 	ListBackups(c *gin.Context, params ListBackupsParams)
@@ -4033,6 +4046,62 @@ func (siw *ServerInterfaceWrapper) Logout(c *gin.Context) {
 	}
 
 	siw.Handler.Logout(c)
+}
+
+// CompleteOidcLogin operation middleware
+func (siw *ServerInterfaceWrapper) CompleteOidcLogin(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CompleteOidcLoginParams
+
+	// ------------- Optional query parameter "code" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "code", c.Request.URL.Query(), &params.Code, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter code: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "state" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "state", c.Request.URL.Query(), &params.State, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter state: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "error" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "error", c.Request.URL.Query(), &params.Error, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter error: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.CompleteOidcLogin(c, params)
+}
+
+// StartOidcLogin operation middleware
+func (siw *ServerInterfaceWrapper) StartOidcLogin(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.StartOidcLogin(c)
 }
 
 // ListBackups operation middleware
@@ -6259,6 +6328,8 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/api/v1/observability/host", wrapper.GetHostMonitoring)
 	router.POST(options.BaseURL+"/api/v1/auth/bootstrap", wrapper.Bootstrap)
 	router.POST(options.BaseURL+"/api/v1/auth/login", wrapper.Login)
+	router.GET(options.BaseURL+"/api/v1/auth/oidc/start", wrapper.StartOidcLogin)
+	router.GET(options.BaseURL+"/api/v1/auth/oidc/callback", wrapper.CompleteOidcLogin)
 	router.POST(options.BaseURL+"/api/v1/auth/logout", wrapper.Logout)
 	router.GET(options.BaseURL+"/api/v1/users", wrapper.ListUsers)
 	router.POST(options.BaseURL+"/api/v1/users", wrapper.CreateUser)

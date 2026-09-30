@@ -51,6 +51,7 @@ type Deps struct {
 	BackupImports           *domain.BackupImportService             // FR-137：导入记录与 URL 拉取
 	BackupUploads           *domain.BackupUploadService             // FR-137：分片上传（Web 第三通道）
 	Metrics                 *metrics.Exposition                     // FR-39：Prometheus 指标导出（/metrics；nil 时该端点返回 503）
+	OIDC                    *OIDCDeps                               // FR-34：OIDC 登录端点依赖（nil = 未启用，端点返回 404）
 }
 
 // Handlers 实现 ServerInterface 的全部端点。
@@ -84,6 +85,7 @@ type Handlers struct {
 	backupImports           *domain.BackupImportService  // FR-137：导入记录与 URL 拉取
 	backupUploads           *domain.BackupUploadService  // FR-137：分片上传（Web 第三通道）
 	metrics                 *metrics.Exposition          // FR-39：Prometheus 指标导出
+	oidc                    *OIDCDeps                    // FR-34：OIDC 登录端点依赖（nil = 未启用）
 }
 
 // NewHandlers 构造 Handlers。
@@ -118,6 +120,7 @@ func NewHandlers(d Deps) *Handlers {
 		backupImports:           d.BackupImports,
 		backupUploads:           d.BackupUploads,
 		metrics:                 d.Metrics,
+		oidc:                    d.OIDC,
 	}
 }
 

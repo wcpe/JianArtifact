@@ -45,7 +45,7 @@ func (r *UserRepo) Create(username, passwordHash, role string) (int64, error) {
 // GetByID 按 ID 取用户；不存在返回 ErrNotFound。
 func (r *UserRepo) GetByID(id int64) (*User, error) {
 	var u User
-	err := r.db.Get(&u, `SELECT id, username, password_hash, role, status, web_login_disabled, created_at, email FROM user WHERE id = ?`, id)
+	err := r.db.Get(&u, `SELECT id, username, password_hash, role, status, web_login_disabled, created_at, email, auth_source, external_subject FROM user WHERE id = ?`, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -58,7 +58,7 @@ func (r *UserRepo) GetByID(id int64) (*User, error) {
 // GetByUsername 按用户名取用户；不存在返回 ErrNotFound。
 func (r *UserRepo) GetByUsername(username string) (*User, error) {
 	var u User
-	err := r.db.Get(&u, `SELECT id, username, password_hash, role, status, web_login_disabled, created_at, email FROM user WHERE username = ?`, username)
+	err := r.db.Get(&u, `SELECT id, username, password_hash, role, status, web_login_disabled, created_at, email, auth_source, external_subject FROM user WHERE username = ?`, username)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -68,10 +68,47 @@ func (r *UserRepo) GetByUsername(username string) (*User, error) {
 	return &u, nil
 }
 
+// GetByExternalSubject 按外部身份标识取用户（OIDC sub / LDAP DN）；未绑定（空串）恒返回 ErrNotFound。
+func (r *UserRepo) GetByExternalSubject(subject string) (*User, error) {
+	if subject == "" {
+		return nil, ErrNotFound
+	}
+	var u User
+	err := r.db.Get(&u, `SELECT id, username, password_hash, role, status, web_login_disabled, created_at, email, auth_source, external_subject FROM user WHERE external_subject = ?`, subject)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
+// BindExternalSubject 把既有用户绑定到外部身份（同时记录来源），后续登录按该标识命中。
+func (r *UserRepo) BindExternalSubject(id int64, authSource, subject string) error {
+	res, err := r.db.Exec(
+		`UPDATE user SET auth_source = ?, external_subject = ?, updated_at = datetime('now') WHERE id = ?`,
+		authSource, subject, id,
+	)
+	return affected(res, err)
+}
+
+// CreateExternal 创建外部身份来源用户：不设本地口令（password_hash 为空串，登录只走身份源校验）。
+func (r *UserRepo) CreateExternal(username, authSource, subject, email, role string) (int64, error) {
+	res, err := r.db.Exec(
+		`INSERT INTO user (username, password_hash, role, email, auth_source, external_subject) VALUES (?, '', ?, ?, ?, ?)`,
+		username, role, email, authSource, subject,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
 // List 返回分页用户（按 id 升序）。
 func (r *UserRepo) List(limit, offset int) ([]User, error) {
 	var us []User
-	err := r.db.Select(&us, `SELECT id, username, password_hash, role, status, web_login_disabled, created_at, email FROM user ORDER BY id LIMIT ? OFFSET ?`, limit, offset)
+	err := r.db.Select(&us, `SELECT id, username, password_hash, role, status, web_login_disabled, created_at, email, auth_source, external_subject FROM user ORDER BY id LIMIT ? OFFSET ?`, limit, offset)
 	return us, err
 }
 
