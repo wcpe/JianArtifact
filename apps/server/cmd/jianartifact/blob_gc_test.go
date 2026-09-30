@@ -4,16 +4,20 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/wcpe/jianartifact/apps/server/internal/scheduler"
 )
 
-func TestStartBlobGCTaskDoesNotScanAtStartupAndRunsOnInterval(t *testing.T) {
+func TestBlobGCJobDoesNotScanAtStartupAndRunsOnInterval(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	calls := make(chan struct{}, 2)
-	startBlobGCTask(ctx, 80*time.Millisecond, func() (int, error) {
+	sched := scheduler.New()
+	registerBlobGCJob(sched, 80*time.Millisecond, func() (int, error) {
 		calls <- struct{}{}
 		return 1, nil
 	})
+	sched.Start(ctx)
 
 	select {
 	case <-calls:
@@ -23,7 +27,7 @@ func TestStartBlobGCTaskDoesNotScanAtStartupAndRunsOnInterval(t *testing.T) {
 	select {
 	case <-calls:
 	case <-time.After(500 * time.Millisecond):
-		t.Fatal("primary blob 定时清理未按间隔触发")
+		t.Fatal("blob 定时清理未按间隔触发")
 	}
 
 	cancel()

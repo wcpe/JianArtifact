@@ -31,6 +31,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/formats"
 	"github.com/wcpe/jianartifact/apps/server/internal/httpserver"
 	"github.com/wcpe/jianartifact/apps/server/internal/protocol"
+	"github.com/wcpe/jianartifact/apps/server/internal/scheduler"
 	"github.com/wcpe/jianartifact/apps/server/web"
 )
 
@@ -392,7 +393,10 @@ func run() error {
 	svc.dashboardSvc.Start(ctx, time.Now)
 	svc.assetDownloadSvc.Start(ctx, time.Now)
 	svc.hostMonitoringSvc.Start(ctx, time.Now)
-	startBlobGCTask(ctx, cfg.BlobGCInterval, svc.assetSvc.CleanupUnreferencedBlobs)
+	// FR-44：维护类周期作业统一经调度器驱动（间隔 0 禁用；启动不立即执行）。
+	sched := scheduler.New()
+	registerBlobGCJob(sched, cfg.BlobGCInterval, svc.assetSvc.CleanupUnreferencedBlobs)
+	sched.Start(ctx)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -432,33 +436,24 @@ func run() error {
 	}
 }
 
-// startBlobGCTask 仅在 primary 节点按固定间隔清理未引用 blob；启动阶段不立即扫描。
-func startBlobGCTask(ctx context.Context, interval time.Duration, cleanup func() (int, error)) {
-	// 复制退役后不再有 standby（此前 standby 不 GC 以免误删对端仍引用的 blob）；
-	// 单节点视角下未引用 blob 即可回收。
+// registerBlobGCJob 把孤立 blob 定时清理注册为调度器作业：按固定间隔执行、启动不立即扫描；
+// 间隔 <= 0 或清理函数为空时不注册（禁用语义，对齐 JIAN_BLOB_GC_INTERVAL=0）。
+// 复制退役后不再有 standby（此前 standby 不 GC 以免误删对端仍引用的 blob）；
+// 单节点视角下未引用 blob 即可回收。
+func registerBlobGCJob(sched *scheduler.Scheduler, interval time.Duration, cleanup func() (int, error)) {
 	if interval <= 0 || cleanup == nil {
 		return
 	}
-	go func() {
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if ctx.Err() != nil {
-					return
-				}
-				removed, err := cleanup()
-				if err != nil {
-					log.Printf("blob 定时清理失败：%v", err)
-				} else if removed > 0 {
-					log.Printf("blob 定时清理完成：回收 %d 个未引用 blob", removed)
-				}
-			}
+	sched.Register("blob-gc", interval, func(context.Context) error {
+		removed, err := cleanup()
+		if err != nil {
+			return err
 		}
-	}()
+		if removed > 0 {
+			log.Printf("blob 定时清理完成：回收 %d 个未引用 blob", removed)
+		}
+		return nil
+	})
 }
 
 // buildTLSServer 构造服务内置 TLS 的 http.Server(FR-131)。
