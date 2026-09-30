@@ -3730,7 +3730,8 @@ components:
           maxLength: 2048
     StatusInfo:
       type: object
-      required: [version, ready, initialized, migrationVersion, userCount, bootstrapAllowed, oidcEnabled]
+      required:
+        [version, ready, initialized, migrationVersion, userCount, bootstrapAllowed, oidcEnabled]
       properties:
         version:
           type: string
