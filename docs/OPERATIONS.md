@@ -74,6 +74,33 @@
 
 **当前存量（2026-09-20 登记，待处理）**：Dependabot alerts 共 30 条（critical 5 / high 20 / medium 18 的标注口径，按 alert 计 30），集中在 **vitest / vite / esbuild 等**开发工具链（`scope: development`，不进生产 bundle——产物隔离测试已验证 devmock/MSW 不入包），另有 `brace-expansion` / `fast-uri` / `js-yaml` 标为 runtime。**处置约定**：涉及 vitest 2→3、vite 5→7 等主版本升级，需按依赖升级流程（全量回归验证）另行安排，不在日常小版本更新中顺带处理；实际数字与清单以 Security 标签页实时状态为准，本文不维护快照。
 
+### 1.4 指标导出（Prometheus，FR-39）
+
+`GET /metrics` 以 Prometheus 文本暴露格式输出进程内指标，供标准抓取与告警：
+
+```bash
+curl -fsS http://127.0.0.1:8080/metrics | head
+```
+
+- **指标口径**：`jianartifact_protocol_requests_total{method,status,cache_result}`（制品协议请求完成计数，缓存结果取 `hit` / `miss` / `unknown`）、`jianartifact_scheduler_job_*{job}`（定时任务作业的执行 / 失败次数、是否运行中、最近执行时间与最近是否失败）、`jianartifact_runtime_*`（协程数、堆占用、累计 GC 次数）。
+- **抓取开销**：全部取自进程内数据，**不查询数据库、不访问网络**；标签基数受控——未知方法与异常状态码归 `other`，路径 / 仓库名 / 用户等无界值不做标签。
+- **匿名口径**：与 `/healthz`、`/readyz` 一致免认证，但**不含版本等指纹信息**；需要限制访问范围时在网络层收口（安全组 / 反向代理）。
+- **抓取配置示例**：
+
+```yaml
+# Prometheus 抓取配置片段：一次性接入本实例指标
+scrape_configs:
+  # 抓取任务名，可自定义
+  - job_name: jianartifact
+    # 指标端点路径（固定）
+    metrics_path: /metrics
+    # 抓取间隔与超时按需调整；指标为进程内聚合，抓取很轻
+    scrape_interval: 30s
+    # 抓取目标：换成实际域名与端口（示例为文档保留域名）
+    static_configs:
+      - targets: ["jianartifact.example.com:8080"]
+```
+
 ## 2. 部署路径
 
 ### 2.1 Docker Compose（单实例主路径）
