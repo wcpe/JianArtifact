@@ -138,15 +138,16 @@ func TestSchedulerIsolatesFailingJob(t *testing.T) {
 	})
 	s.Start(ctx)
 
-	waitFor(t, "失败作业累计至少 2 次执行", func() bool {
-		return statusByName(t, s, "bad").Runs >= 2
+	// 以"失败已完成两次"为等待条件：Runs 在开始时计数，不能用来判断执行已结束。
+	waitFor(t, "失败作业累计至少 2 次失败", func() bool {
+		return statusByName(t, s, "bad").Failures >= 2
 	})
 	if atomic.LoadInt32(&healthy) == 0 {
 		t.Fatal("单个作业持续失败导致其他作业停摆")
 	}
 	st := statusByName(t, s, "bad")
-	if st.Failures != st.Runs {
-		t.Fatalf("持续失败的作业失败次数应等于执行次数：Runs=%d Failures=%d", st.Runs, st.Failures)
+	if st.Runs < st.Failures {
+		t.Fatalf("失败次数不应超过执行次数：Runs=%d Failures=%d", st.Runs, st.Failures)
 	}
 	if !strings.Contains(st.LastError, "上游不可达") {
 		t.Fatalf("状态应记录最近一次错误，实际 %q", st.LastError)
@@ -166,13 +167,12 @@ func TestSchedulerIsolatesPanicAndKeepsRunning(t *testing.T) {
 	})
 	s.Start(ctx)
 
-	waitFor(t, "panic 作业继续按周期执行", func() bool {
-		return statusByName(t, s, "boom").Runs >= 2
+	// 以"panic 已完成两次"为等待条件：既证明 panic 被隔离（进程存活），
+	// 也证明作业继续按周期执行（失败计数持续增长）。
+	waitFor(t, "panic 作业累计至少 2 次失败", func() bool {
+		return statusByName(t, s, "boom").Failures >= 2
 	})
 	st := statusByName(t, s, "boom")
-	if st.Failures != st.Runs {
-		t.Fatalf("panic 应计入失败：Runs=%d Failures=%d", st.Runs, st.Failures)
-	}
 	if !strings.Contains(st.LastError, "panic") {
 		t.Fatalf("状态应标明 panic，实际 %q", st.LastError)
 	}
@@ -288,4 +288,40 @@ func TestSchedulerStatusIsConcurrencySafe(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// TestSchedulerCountersSettleOnCompletion 锁定计数语义：Runs 在每次执行开始时计入、
+// Failures 在结束时回填，因此执行中两者可能瞬时不等；判断作业是否跑完必须看 Running。
+func TestSchedulerCountersSettleOnCompletion(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	hold := make(chan struct{})
+	s := New()
+	s.Register("hold", 20*time.Millisecond, func(context.Context) error {
+		<-hold
+		return errors.New("失败")
+	})
+	s.Start(ctx)
+
+	waitFor(t, "作业进入运行中", func() bool {
+		return statusByName(t, s, "hold").Running
+	})
+	mid := statusByName(t, s, "hold")
+	if mid.Runs != 1 || mid.Failures != 0 {
+		t.Fatalf("执行中应先计执行次数、后计失败次数：Runs=%d Failures=%d", mid.Runs, mid.Failures)
+	}
+
+	close(hold)
+	waitFor(t, "失败在结束后回填", func() bool {
+		return statusByName(t, s, "hold").Failures >= 1
+	})
+	// 停止调度并等最后一个在途运行结束，此后计数不再变化，才可断言两者一致。
+	cancel()
+	waitFor(t, "在途运行结束", func() bool {
+		return !statusByName(t, s, "hold").Running
+	})
+	st := statusByName(t, s, "hold")
+	if st.Runs != st.Failures {
+		t.Fatalf("每轮都失败的作业在停止后计数应一致：Runs=%d Failures=%d", st.Runs, st.Failures)
+	}
 }
