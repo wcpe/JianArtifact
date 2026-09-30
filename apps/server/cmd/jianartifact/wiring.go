@@ -61,6 +61,7 @@ type appServices struct {
 	metricsReg          *metrics.Registry    // FR-39：进程内指标登记（协议请求计数）
 	metricsExp          *metrics.Exposition  // FR-39：/metrics 文本暴露渲染器
 	scheduler           *scheduler.Scheduler // FR-44：维护类周期作业调度器
+	oidcDeps            *api.OIDCDeps        // FR-34：OIDC 登录端点依赖（nil = 未启用）
 }
 
 // openServices 打开数据库、执行迁移并装配领域服务。调用方负责在返回的 db 上 Close。
@@ -213,6 +214,17 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	metricsReg := metrics.New()
 	metricsExp := metrics.NewExposition(metricsReg, schedulerJobStatuses(schedulerSvc))
 
+	// FR-34：OIDC 登录端点依赖；未配置 issuer 时保持 nil，端点返回 404（存在即启用）。
+	var oidcDeps *api.OIDCDeps
+	if cfg.OIDC.Enabled() {
+		oidcDeps = &api.OIDCDeps{
+			Verifier:       auth.NewOIDCVerifier(cfg.OIDC),
+			FlowSigner:     auth.NewOIDCFlowSigner(cfg.JWTSecret),
+			AllowedDomains: cfg.OIDC.AllowedDomains,
+			RedirectAfter:  "/login",
+		}
+	}
+
 	return &appServices{
 		db:                  db,
 		users:               userRepo,
@@ -251,6 +263,7 @@ func openServices(cfg *config.Config) (*appServices, error) {
 		metricsReg:          metricsReg,
 		metricsExp:          metricsExp,
 		scheduler:           schedulerSvc,
+		oidcDeps:            oidcDeps,
 	}, nil
 }
 
@@ -293,6 +306,7 @@ func (s *appServices) handlers(version string, checks []func() error) *api.Handl
 		BackupImports:           s.backupImports,
 		BackupUploads:           s.backupUploads,
 		Metrics:                 s.metricsExp,
+		OIDC:                    s.oidcDeps,
 		BackupLinkKey:           append([]byte(nil), s.auditAttentionKey...),
 		ClusterTokenSet:         s.syncTokenSet,
 		PublicURL:               s.publicURL,
