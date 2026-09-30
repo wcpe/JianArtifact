@@ -68,7 +68,7 @@ func oidcDepsForTest(fake *fakeOIDC, domains []string) *OIDCDeps {
 		Verifier:       fake,
 		FlowSigner:     auth.NewOIDCFlowSigner([]byte(oidcTestSecret)),
 		AllowedDomains: domains,
-		RedirectAfter:  "/login",
+		RedirectAfter:  "/repositories",
 	}
 }
 
@@ -135,8 +135,8 @@ func TestOIDCLoginFlowIssuesSessionThroughFragment(t *testing.T) {
 
 	cookie := startFlowViaEndpoint(t, h)
 	location := callbackViaEndpoint(t, h, cookie, "auth-code-1", "state-1")
-	if !strings.HasPrefix(location, "/login#token=") {
-		t.Fatalf("成功回调应以片段携令牌：%q", location)
+	if !strings.HasPrefix(location, "/repositories#token=") {
+		t.Fatalf("成功回调应以片段携令牌回业务页（借道 /login 会被客户端跳转丢掉片段）：%q", location)
 	}
 	if fake.lastCode != "auth-code-1" {
 		t.Fatalf("应把授权码交给协议侧：%q", fake.lastCode)
