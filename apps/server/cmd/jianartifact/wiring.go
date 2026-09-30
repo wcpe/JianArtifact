@@ -222,7 +222,9 @@ func openServices(cfg *config.Config) (*appServices, error) {
 			Verifier:       auth.NewOIDCVerifier(cfg.OIDC),
 			FlowSigner:     auth.NewOIDCFlowSigner(cfg.JWTSecret),
 			AllowedDomains: cfg.OIDC.AllowedDomains,
-			RedirectAfter:  "/login",
+			// 回跳直达业务页：/login 在前端会经一次客户端跳转，而客户端跳转会丢掉
+			// 承载令牌的 URL 片段（实机验收发现），故不能借道 /login。
+			RedirectAfter: "/repositories",
 		}
 	}
 
