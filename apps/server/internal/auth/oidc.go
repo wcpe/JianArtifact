@@ -88,8 +88,8 @@ func (s *OIDCFlowSigner) Decode(value string, now time.Time) (OIDCFlow, error) {
 	return flow, nil
 }
 
-// OIDCClaims 是登录所需的最小声明集合（不含任何令牌原文）。
-type OIDCClaims struct {
+// ExternalUser 是外部身份源（OIDC / LDAP）校验通过后的最小身份信息：不含任何凭据原文。
+type ExternalUser struct {
 	Subject  string
 	Username string
 	Email    string
@@ -157,49 +157,49 @@ func (v *OIDCVerifier) AuthCodeURL(ctx context.Context, flow OIDCFlow) (string, 
 
 // Exchange 用授权码换取并校验身份：验证 ID Token 签名与声明，校验 nonce，
 // 返回最小声明集合；任何一步失败都返回错误（调用方不得据此放行登录）。
-func (v *OIDCVerifier) Exchange(ctx context.Context, code string, flow OIDCFlow) (OIDCClaims, error) {
+func (v *OIDCVerifier) Exchange(ctx context.Context, code string, flow OIDCFlow) (ExternalUser, error) {
 	oauthCfg, verifier, err := v.endpoints(ctx)
 	if err != nil {
-		return OIDCClaims{}, err
+		return ExternalUser{}, err
 	}
 	token, err := oauthCfg.Exchange(ctx, code, oauth2.VerifierOption(flow.CodeVerifier))
 	if err != nil {
-		return OIDCClaims{}, fmt.Errorf("兑换授权码：%w", err)
+		return ExternalUser{}, fmt.Errorf("兑换授权码：%w", err)
 	}
 	rawIDToken, ok := token.Extra("id_token").(string)
 	if !ok || rawIDToken == "" {
-		return OIDCClaims{}, errors.New("令牌响应缺少 id_token")
+		return ExternalUser{}, errors.New("令牌响应缺少 id_token")
 	}
 	idToken, err := verifier.Verify(ctx, rawIDToken)
 	if err != nil {
-		return OIDCClaims{}, fmt.Errorf("校验 ID Token：%w", err)
+		return ExternalUser{}, fmt.Errorf("校验 ID Token：%w", err)
 	}
 	if idToken.Nonce != flow.Nonce {
-		return OIDCClaims{}, errors.New("ID Token 的 nonce 与流程状态不符")
+		return ExternalUser{}, errors.New("ID Token 的 nonce 与流程状态不符")
 	}
 	return v.claimsFrom(idToken)
 }
 
 // claimsFrom 从已验签的 ID Token 中提取登录所需声明。
-func (v *OIDCVerifier) claimsFrom(idToken *oidc.IDToken) (OIDCClaims, error) {
+func (v *OIDCVerifier) claimsFrom(idToken *oidc.IDToken) (ExternalUser, error) {
 	var raw map[string]any
 	if err := idToken.Claims(&raw); err != nil {
-		return OIDCClaims{}, fmt.Errorf("解析 ID Token 声明：%w", err)
+		return ExternalUser{}, fmt.Errorf("解析 ID Token 声明：%w", err)
 	}
-	claims := OIDCClaims{
+	claims := ExternalUser{
 		Subject:  idToken.Subject,
 		Username: stringClaim(raw, v.cfg.UsernameClaim),
 		Email:    stringClaim(raw, "email"),
 	}
 	if claims.Subject == "" {
-		return OIDCClaims{}, errors.New("ID Token 缺少 sub")
+		return ExternalUser{}, errors.New("ID Token 缺少 sub")
 	}
 	if claims.Username == "" {
-		return OIDCClaims{}, fmt.Errorf("ID Token 缺少用户名字段（%s）", v.cfg.UsernameClaim)
+		return ExternalUser{}, fmt.Errorf("ID Token 缺少用户名字段（%s）", v.cfg.UsernameClaim)
 	}
 	// 邮箱仅作审计与白名单输入：IdP 明确标记未验证时一律拒绝，避免用他人邮箱冒充。
 	if verified, ok := raw["email_verified"].(bool); ok && !verified && claims.Email != "" {
-		return OIDCClaims{}, errors.New("ID Token 的邮箱未通过验证")
+		return ExternalUser{}, errors.New("ID Token 的邮箱未通过验证")
 	}
 	return claims, nil
 }

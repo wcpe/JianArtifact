@@ -15,7 +15,7 @@
 ### 认证与状态
 
 - `POST /api/v1/auth/bootstrap`：空库创建首个管理员（仅未初始化时开放）。
-- `POST /api/v1/auth/login`、`POST /api/v1/auth/logout`：登录和会话退出。
+- `POST /api/v1/auth/login`、`POST /api/v1/auth/logout`：登录和会话退出。登录为**本地口令优先、启用 LDAP 时回退目录**（两侧皆失败对外表现一致）。
 - `GET /api/v1/auth/oidc/start`、`GET /api/v1/auth/oidc/callback`：OIDC 授权码登录（未配置 `JIAN_OIDC_ISSUER` 时返回 404）；成功后以 URL 片段携会话令牌回前端登录页。
 - `GET /api/v1/status`：版本、就绪、迁移版本、用户数和非敏感初始化状态。
 - `GET /healthz`、`GET /readyz`：存活与就绪探测。

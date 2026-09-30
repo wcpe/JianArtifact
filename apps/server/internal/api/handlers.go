@@ -5,6 +5,7 @@
 package api
 
 import (
+	"context"
 	"crypto/sha256"
 	"errors"
 	"net/http"
@@ -52,7 +53,11 @@ type Deps struct {
 	BackupUploads           *domain.BackupUploadService             // FR-137：分片上传（Web 第三通道）
 	Metrics                 *metrics.Exposition                     // FR-39：Prometheus 指标导出（/metrics；nil 时该端点返回 503）
 	OIDC                    *OIDCDeps                               // FR-34：OIDC 登录端点依赖（nil = 未启用，端点返回 404）
+	LDAPAuth                LDAPAuthenticator                       // FR-35：LDAP 目录侧校验（nil = 未启用，登录不回退目录）
 }
+
+// LDAPAuthenticator 是 LDAP 目录侧校验能力（由 auth.LDAPVerifier 适配；测试可替换）。
+type LDAPAuthenticator func(ctx context.Context, username, password string) (auth.ExternalUser, error)
 
 // Handlers 实现 ServerInterface 的全部端点。
 type Handlers struct {
@@ -86,6 +91,7 @@ type Handlers struct {
 	backupUploads           *domain.BackupUploadService  // FR-137：分片上传（Web 第三通道）
 	metrics                 *metrics.Exposition          // FR-39：Prometheus 指标导出
 	oidc                    *OIDCDeps                    // FR-34：OIDC 登录端点依赖（nil = 未启用）
+	ldapAuth                LDAPAuthenticator            // FR-35：LDAP 目录侧校验（nil = 未启用）
 }
 
 // NewHandlers 构造 Handlers。
@@ -121,6 +127,7 @@ func NewHandlers(d Deps) *Handlers {
 		backupUploads:           d.BackupUploads,
 		metrics:                 d.Metrics,
 		oidc:                    d.OIDC,
+		ldapAuth:                d.LDAPAuth,
 	}
 }
 

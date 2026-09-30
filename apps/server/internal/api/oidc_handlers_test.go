@@ -22,7 +22,7 @@ const oidcTestSecret = "api-oidc-test-secret-32-bytes!!"
 
 // fakeOIDC 实现 OIDCLogin，在不接触真实 IdP 的前提下驱动端点分支。
 type fakeOIDC struct {
-	claims      auth.OIDCClaims
+	claims      auth.ExternalUser
 	exchangeErr error
 	authURL     string
 	lastCode    string
@@ -36,10 +36,10 @@ func (f *fakeOIDC) AuthCodeURL(context.Context, auth.OIDCFlow) (string, error) {
 	return f.authURL, nil
 }
 
-func (f *fakeOIDC) Exchange(_ context.Context, code string, _ auth.OIDCFlow) (auth.OIDCClaims, error) {
+func (f *fakeOIDC) Exchange(_ context.Context, code string, _ auth.OIDCFlow) (auth.ExternalUser, error) {
 	f.lastCode = code
 	if f.exchangeErr != nil {
-		return auth.OIDCClaims{}, f.exchangeErr
+		return auth.ExternalUser{}, f.exchangeErr
 	}
 	return f.claims, nil
 }
@@ -129,7 +129,7 @@ func TestOIDCLoginFlowIssuesSessionThroughFragment(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	fake := &fakeOIDC{
 		authURL: "https://idp.example.com/authorize?client_id=x",
-		claims:  auth.OIDCClaims{Subject: "sub-alice", Username: "alice", Email: "alice@example.com"},
+		claims:  auth.ExternalUser{Subject: "sub-alice", Username: "alice", Email: "alice@example.com"},
 	}
 	h := newOIDCHandlers(t, oidcDepsForTest(fake, nil))
 
@@ -146,7 +146,7 @@ func TestOIDCLoginFlowIssuesSessionThroughFragment(t *testing.T) {
 // TestOIDCCallbackRejectsStateMismatchAndTamperedFlow state 不符与流程 Cookie 被篡改都必须拒绝。
 func TestOIDCCallbackRejectsStateMismatchAndTamperedFlow(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	fake := &fakeOIDC{claims: auth.OIDCClaims{Subject: "s", Username: "u", Email: "u@example.com"}}
+	fake := &fakeOIDC{claims: auth.ExternalUser{Subject: "s", Username: "u", Email: "u@example.com"}}
 	h := newOIDCHandlers(t, oidcDepsForTest(fake, nil))
 	cookie := startFlowViaEndpoint(t, h)
 
@@ -164,7 +164,7 @@ func TestOIDCCallbackRejectsStateMismatchAndTamperedFlow(t *testing.T) {
 // TestOIDCCallbackRejectsDomainOutsideAllowlist 配置白名单时，名单外邮箱不得建号或登录。
 func TestOIDCCallbackRejectsDomainOutsideAllowlist(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	fake := &fakeOIDC{claims: auth.OIDCClaims{Subject: "s", Username: "bob", Email: "bob@other.example"}}
+	fake := &fakeOIDC{claims: auth.ExternalUser{Subject: "s", Username: "bob", Email: "bob@other.example"}}
 	h := newOIDCHandlers(t, oidcDepsForTest(fake, []string{"example.com"}))
 	cookie := startFlowViaEndpoint(t, h)
 
