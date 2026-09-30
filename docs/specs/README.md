@@ -16,11 +16,11 @@
 
 `0.11.0` 是 M3 窗口（`VERSION=0.11.0`，进行中）。
 
-| FR       | 规格                                                                             | 主题                    | 状态                 |
-| -------- | -------------------------------------------------------------------------------- | ----------------------- | -------------------- |
-| FR-44    | [`0.11.0-job-scheduler.md`](0.11.0-job-scheduler.md)                             | 定时任务调度器          | 开发完成，待用户验收 |
-| FR-39    | [`0.11.0-prometheus-metrics.md`](0.11.0-prometheus-metrics.md)                   | Prometheus 指标导出     | 开发完成，待用户验收 |
-| FR-34/35 | [`0.11.0-external-identity-providers.md`](0.11.0-external-identity-providers.md) | 外部身份源（OIDC/LDAP） | 开发中               |
+| FR       | 规格                                                                             | 主题                    | 状态                             |
+| -------- | -------------------------------------------------------------------------------- | ----------------------- | -------------------------------- |
+| FR-44    | [`0.11.0-job-scheduler.md`](0.11.0-job-scheduler.md)                             | 定时任务调度器          | 开发完成，待用户验收             |
+| FR-39    | [`0.11.0-prometheus-metrics.md`](0.11.0-prometheus-metrics.md)                   | Prometheus 指标导出     | 开发完成，待用户验收             |
+| FR-34/35 | [`0.11.0-external-identity-providers.md`](0.11.0-external-identity-providers.md) | 外部身份源（OIDC/LDAP） | OIDC 段完成待验收；LDAP 段待开发 |
 
 ## 3. 0.9.0 规格（已发布）
 
