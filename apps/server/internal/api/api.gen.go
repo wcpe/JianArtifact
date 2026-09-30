@@ -2794,9 +2794,12 @@ type StatusInfo struct {
 	BootstrapAllowed bool   `json:"bootstrapAllowed"`
 	Initialized      bool   `json:"initialized"`
 	MigrationVersion string `json:"migrationVersion"`
-	Ready            bool   `json:"ready"`
-	UserCount        int    `json:"userCount"`
-	Version          string `json:"version"`
+
+	// OidcEnabled 是否启用 OIDC 登录（前端据此决定是否展示登录入口）
+	OidcEnabled bool   `json:"oidcEnabled"`
+	Ready       bool   `json:"ready"`
+	UserCount   int    `json:"userCount"`
+	Version     string `json:"version"`
 }
 
 // Token defines model for Token.
@@ -3768,6 +3771,9 @@ type ServerInterface interface {
 	// Logout 注销当前会话（当前 JWT 记入吊销名单直至过期）
 	// (POST /api/v1/auth/logout)
 	Logout(c *gin.Context)
+	// GetCurrentUser 当前会话对应的用户（OIDC 回调后前端据此取身份快照）
+	// (GET /api/v1/auth/me)
+	GetCurrentUser(c *gin.Context)
 	// CompleteOidcLogin 完成 OIDC 授权码流程并重定向回前端（成功携令牌片段，失败携错误码片段）
 	// (GET /api/v1/auth/oidc/callback)
 	CompleteOidcLogin(c *gin.Context, params CompleteOidcLoginParams)
@@ -4046,6 +4052,19 @@ func (siw *ServerInterfaceWrapper) Logout(c *gin.Context) {
 	}
 
 	siw.Handler.Logout(c)
+}
+
+// GetCurrentUser operation middleware
+func (siw *ServerInterfaceWrapper) GetCurrentUser(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetCurrentUser(c)
 }
 
 // CompleteOidcLogin operation middleware
@@ -6328,6 +6347,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/api/v1/observability/host", wrapper.GetHostMonitoring)
 	router.POST(options.BaseURL+"/api/v1/auth/bootstrap", wrapper.Bootstrap)
 	router.POST(options.BaseURL+"/api/v1/auth/login", wrapper.Login)
+	router.GET(options.BaseURL+"/api/v1/auth/me", wrapper.GetCurrentUser)
 	router.GET(options.BaseURL+"/api/v1/auth/oidc/start", wrapper.StartOidcLogin)
 	router.GET(options.BaseURL+"/api/v1/auth/oidc/callback", wrapper.CompleteOidcLogin)
 	router.POST(options.BaseURL+"/api/v1/auth/logout", wrapper.Logout)

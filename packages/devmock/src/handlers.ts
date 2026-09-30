@@ -102,6 +102,8 @@ export function mockStatus(version = MOCK_APP_VERSION): StatusInfo {
     migrationVersion: "0001_init",
     userCount: 1,
     bootstrapAllowed: false,
+    // FR-34：开发环境不接真实 IdP，登录入口保持隐藏。
+    oidcEnabled: false,
   };
 }
 

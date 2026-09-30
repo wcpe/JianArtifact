@@ -143,6 +143,11 @@ export const zh = {
     login: "登录",
     bootstrap: "创建并登录",
     passwordRule: "口令至少 8 位",
+    oidcLogin: "使用 OIDC 登录",
+    oidcErrorExpired: "登录流程已过期或校验失败，请重试。",
+    oidcErrorNotAllowed: "该账号不在允许登录的范围内。",
+    oidcErrorUnavailable: "身份提供方暂时不可用，请稍后重试或用本地账号登录。",
+    oidcErrorFailed: "OIDC 登录失败，请重试或用本地账号登录。",
   },
   setup: {
     title: "初始化实例",

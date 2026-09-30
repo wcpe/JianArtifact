@@ -2,12 +2,21 @@
 // 登录成功后关闭并停留当前页；取消时执行调用方传入的 onCancel（如受保护页回落仓库列表）。
 import { Alert, Button, Group, Modal, PasswordInput, Stack, Text, TextInput } from "@mantine/core";
 import { useForm } from "@mantine/form";
-import { IconAlertCircle, IconLogin } from "@tabler/icons-react";
-import { createContext, useCallback, useContext, useMemo, useState } from "react";
+import { IconAlertCircle, IconKey, IconLogin } from "@tabler/icons-react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 import { ApiError } from "../api/client";
+import * as api from "../api/endpoints";
 import { useAuth } from "./AuthContext";
 
 export interface OpenLoginOptions {
@@ -23,12 +32,36 @@ const LoginModalContext = createContext<LoginModalContextValue | null>(null);
 
 export function LoginModalProvider({ children }: { children: ReactNode }) {
   const { t } = useTranslation();
-  const { login } = useAuth();
+  const { login, oidcError, clearOidcError } = useAuth();
   const [opened, setOpened] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [oidcEnabled, setOidcEnabled] = useState(false);
   // onCancel 用函数状态持有（setState 传入函数会被当 updater，需再包一层）。
   const [onCancel, setOnCancel] = useState<(() => void) | null>(null);
+
+  // FR-34：仅在打开登录框时查询一次 OIDC 是否启用（未配置时后端端点为 404）；
+  // 用 ref 做一次性守卫——若用 state 标记，effect 会因依赖变化重跑并把在途结果丢弃。
+  const oidcFetchedRef = useRef(false);
+  useEffect(() => {
+    if (!opened || oidcFetchedRef.current) {
+      return;
+    }
+    oidcFetchedRef.current = true;
+    api
+      .getStatus()
+      .then((status) => setOidcEnabled(status.oidcEnabled))
+      .catch(() => setOidcEnabled(false));
+  }, [opened]);
+
+  // FR-34：OIDC 回调失败时自动弹出登录框并展示对应提示。
+  useEffect(() => {
+    if (oidcError) {
+      setError(t(oidcError));
+      setOpened(true);
+      clearOidcError();
+    }
+  }, [oidcError, clearOidcError, t]);
 
   const form = useForm({
     initialValues: { username: "", password: "" },
@@ -109,6 +142,18 @@ export function LoginModalProvider({ children }: { children: ReactNode }) {
               </Group>
             </Stack>
           </form>
+          {oidcEnabled ? (
+            // 该入口是顶层跳转（浏览器离开本页），不能用 fetch，故用链接按钮。
+            <Button
+              component="a"
+              href="/api/v1/auth/oidc/start"
+              variant="light"
+              fullWidth
+              leftSection={<IconKey size={16} />}
+            >
+              {t("auth.oidcLogin")}
+            </Button>
+          ) : null}
         </Stack>
       </Modal>
     </LoginModalContext.Provider>

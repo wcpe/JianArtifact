@@ -175,6 +175,11 @@ export function getStatus(): Promise<StatusInfo> {
   return request<StatusInfo>("/status");
 }
 
+/** FR-34：取当前会话对应的用户（OIDC 回调只带回令牌，身份快照需另行取回）。 */
+export function currentUser(): Promise<User> {
+  return request<User>("/auth/me");
+}
+
 /** FR-32：读取本进程启动时启用的格式（仅管理员）。 */
 export function getEnabledFormats(): Promise<EnabledFormats> {
   return request<EnabledFormats>("/formats/enabled");

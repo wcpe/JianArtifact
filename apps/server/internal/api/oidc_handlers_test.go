@@ -60,7 +60,7 @@ func newOIDCHandlers(t *testing.T, deps *OIDCDeps) *Handlers {
 		repository.NewRevokedRepo(db),
 		auth.NewJWTManager([]byte(oidcTestSecret)),
 	)
-	return NewHandlers(Deps{Auth: svc, OIDC: deps})
+	return NewHandlers(Deps{Auth: svc, Users: domain.NewUserService(repository.NewUserRepo(db)), OIDC: deps})
 }
 
 func oidcDepsForTest(fake *fakeOIDC, domains []string) *OIDCDeps {
@@ -170,5 +170,51 @@ func TestOIDCCallbackRejectsDomainOutsideAllowlist(t *testing.T) {
 
 	if location := callbackViaEndpoint(t, h, cookie, "c", "state-1"); !strings.Contains(location, "#error=not_allowed") {
 		t.Fatalf("白名单外域名应回 not_allowed：%q", location)
+	}
+}
+
+// TestGetStatusReportsOIDCEnabled 状态端点如实报告 OIDC 是否启用（前端据此决定是否展示入口）。
+func TestGetStatusReportsOIDCEnabled(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	disabled := NewHandlers(Deps{})
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
+	disabled.GetStatus(c)
+	if !strings.Contains(rec.Body.String(), `"oidcEnabled":false`) {
+		t.Fatalf("未启用时应报告 false：%s", rec.Body.String())
+	}
+
+	enabled := newOIDCHandlers(t, oidcDepsForTest(&fakeOIDC{}, nil))
+	rec2 := httptest.NewRecorder()
+	c2, _ := gin.CreateTestContext(rec2)
+	c2.Request = httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
+	enabled.GetStatus(c2)
+	if !strings.Contains(rec2.Body.String(), `"oidcEnabled":true`) {
+		t.Fatalf("启用时应报告 true：%s", rec2.Body.String())
+	}
+}
+
+// TestGetCurrentUserReturnsSessionOwner 会话可经 /auth/me 取回身份快照（OIDC 回调链路依赖它）。
+func TestGetCurrentUserReturnsSessionOwner(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := newOIDCHandlers(t, nil)
+
+	u, err := h.users.Create("alice", "secret123", "user")
+	if err != nil {
+		t.Fatalf("预建用户：%v", err)
+	}
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+	c.Set("auth.principal", &auth.Principal{UserID: u.ID, Username: "alice", Role: "user"})
+	h.GetCurrentUser(c)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("已认证应返回 200，实际 %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `"username":"alice"`) {
+		t.Fatalf("应返回会话归属用户：%s", rec.Body.String())
 	}
 }

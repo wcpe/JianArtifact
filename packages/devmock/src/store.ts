@@ -960,6 +960,8 @@ export const store = {
       migrationVersion: state.migrationVersion,
       userCount: state.users.length,
       bootstrapAllowed: !state.initialized && state.users.length === 0,
+      // FR-34：开发环境不接真实 IdP，登录入口保持隐藏（真实 OIDC 流程需顶层跳转，MSW 拦不到）。
+      oidcEnabled: false,
     };
   },
 

@@ -46,12 +46,34 @@ export interface AuthContextValue {
   login: (username: string, password: string) => Promise<void>;
   bootstrap: (username: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
+  /** FR-34：OIDC 回调失败时带回的 i18n 键；登录框消费后清空。 */
+  oidcError: string | null;
+  clearOidcError: () => void;
+}
+
+/** oidcErrorKey 把服务端片段错误码映射为 i18n 键（未知码归入通用失败）。 */
+function oidcErrorKey(code: string): string {
+  switch (code) {
+    case "flow_expired":
+    case "state_mismatch":
+    case "missing_code":
+      return "auth.oidcErrorExpired";
+    case "not_allowed":
+    case "login_rejected":
+      return "auth.oidcErrorNotAllowed";
+    case "provider_unavailable":
+    case "provider_error":
+      return "auth.oidcErrorUnavailable";
+    default:
+      return "auth.oidcErrorFailed";
+  }
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(() => readStoredUser());
+  const [oidcError, setOidcError] = useState<string | null>(null);
   // 页面数据缓存按会话身份隔离：登录/登出/切换账号即清空，避免回放他人数据。
   const identityRef = useRef<string | null>(null);
   useEffect(() => {
@@ -106,9 +128,48 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener(AUTH_EXPIRED_EVENT, handleExpired);
   }, []);
 
+  // FR-34：OIDC 回调以 URL 片段送回会话或错误码——先消费片段并清除（避免残留在地址栏与
+  // 浏览器历史），再据结果建立会话或把错误交给登录框展示。
+  useEffect(() => {
+    const fragment = window.location.hash.startsWith("#") ? window.location.hash.slice(1) : "";
+    const params = new URLSearchParams(fragment);
+    const token = params.get("token");
+    const error = params.get("error");
+    if (!token && !error) {
+      return;
+    }
+    window.history.replaceState({}, "", window.location.pathname + window.location.search);
+    if (!token) {
+      setOidcError(oidcErrorKey(error ?? ""));
+      return;
+    }
+    setToken(token);
+    // 片段只携带令牌：身份快照需另行取回（后端 /auth/me），取不到则视为登录失败。
+    api
+      .currentUser()
+      .then((snapshot) => {
+        writeStoredUser(snapshot);
+        setUser(snapshot);
+      })
+      .catch(() => {
+        setToken(null);
+        setOidcError(oidcErrorKey("verify_failed"));
+      });
+  }, []);
+
+  const clearOidcError = useCallback(() => setOidcError(null), []);
+
   const value = useMemo<AuthContextValue>(
-    () => ({ user, isAuthenticated: user !== null, login, bootstrap, logout }),
-    [user, login, bootstrap, logout],
+    () => ({
+      user,
+      isAuthenticated: user !== null,
+      login,
+      bootstrap,
+      logout,
+      oidcError,
+      clearOidcError,
+    }),
+    [user, login, bootstrap, logout, oidcError, clearOidcError],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

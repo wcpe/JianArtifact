@@ -3,7 +3,7 @@
 // 保证 web 开发态脱离后端可跑、vitest 集成测试与真实 fetch 链路同源。
 import { http, HttpResponse } from "msw";
 
-import { mockAuditLogList, mockMetrics } from "./handlers";
+import { mockAuditLogList, mockMetrics, mockUser } from "./handlers";
 import {
   observabilityStore,
   type AuditCategory,
@@ -765,6 +765,8 @@ export const handlers = [
   // —— 健康 / 状态（公开）——
   http.get("*/healthz", () => HttpResponse.json({ status: "ok", version: store.status().version })),
   http.get("*/readyz", () => HttpResponse.json({ status: "ok", version: store.status().version })),
+  // FR-34：`/auth/me` 供 OIDC 回调后的前端取身份快照（开发环境返回 mock 用户）。
+  http.get("*/api/v1/auth/me", () => HttpResponse.json(mockUser())),
   // FR-34：OIDC 登录（开发环境不接真实 IdP：起跳指向示例地址，回调直接回带 mock 会话令牌）。
   http.get("*/api/v1/auth/oidc/start", () =>
     HttpResponse.redirect("https://idp.example.com/authorize?client_id=devmock&state=devmock"),

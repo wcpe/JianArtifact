@@ -26,6 +26,21 @@ func (h *Handlers) Bootstrap(c *gin.Context) {
 	c.JSON(http.StatusCreated, LoginResponse{Token: token, User: toAPIUser(user)})
 }
 
+// GetCurrentUser 返回当前会话对应的用户：OIDC 回调后前端据此取身份快照，
+// 避免把用户信息塞进 URL 片段（FR-34）。
+func (h *Handlers) GetCurrentUser(c *gin.Context) {
+	p, ok := requirePrincipal(c)
+	if !ok {
+		return
+	}
+	u, err := h.users.Get(p.UserID)
+	if err != nil {
+		writeDomainErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, toAPIUser(u))
+}
+
 // Login 用户名 + 口令换取会话 JWT。
 func (h *Handlers) Login(c *gin.Context) {
 	var req LoginRequest
