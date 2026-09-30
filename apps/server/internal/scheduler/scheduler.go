@@ -18,9 +18,10 @@ type JobStatus struct {
 	Name string
 	// Interval 是触发间隔。
 	Interval time.Duration
-	// Runs 是已执行次数（含失败）。
+	// Runs 是已执行次数（含失败），在每次执行开始时计入。
 	Runs int64
-	// Failures 是失败次数（含 panic）。
+	// Failures 是失败次数（含 panic），在每次执行结束时回填；
+	// 执行中 Runs 与 Failures 可能瞬时不等，判断作业是否跑完请用 Running。
 	Failures int64
 	// Running 表示当前是否正在执行。
 	Running bool
