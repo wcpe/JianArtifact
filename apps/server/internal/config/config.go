@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -24,21 +25,29 @@ const (
 	EnvHTTPAddr               = "JIAN_HTTP_ADDR"
 	EnvJWTSecret              = "JIAN_JWT_SECRET"
 	EnvMigrationCredentialKey = "JIAN_MIGRATION_CREDENTIAL_KEY"
-	EnvUpstreamTimeout        = "JIAN_UPSTREAM_TIMEOUT" // proxy 回源整体超时，单位秒
-	EnvSyncPeerURL            = "JIAN_SYNC_PEER_URL"    // 遗留复制对端基址；主备角色模式下不参与调度
-	EnvSyncInterval           = "JIAN_SYNC_INTERVAL"    // 同步轮询间隔（FR-85），单位秒
-	EnvPublicURL              = "JIAN_PUBLIC_URL"       // 对外基础 URL（FR-87）；CDN 域名，隐藏源站 IP
-	EnvEnabledFormats         = "JIAN_ENABLED_FORMATS"  // 启用的协议格式，逗号分隔（FR-32）
-	EnvBlobGCInterval         = "JIAN_BLOB_GC_INTERVAL" // 孤立 blob 定时清理间隔，单位秒；0 禁用
-	EnvTLSAddr                = "JIAN_TLS_ADDR"         // 服务内置 TLS 监听地址（FR-131）；空 = 不启用
-	EnvTLSCert                = "JIAN_TLS_CERT"         // TLS PEM 证书文件路径（FR-131）
-	EnvTLSKey                 = "JIAN_TLS_KEY"          // TLS PEM 私钥文件路径（FR-131）
+	EnvUpstreamTimeout        = "JIAN_UPSTREAM_TIMEOUT"     // proxy 回源整体超时，单位秒
+	EnvSyncPeerURL            = "JIAN_SYNC_PEER_URL"        // 遗留复制对端基址；主备角色模式下不参与调度
+	EnvSyncInterval           = "JIAN_SYNC_INTERVAL"        // 同步轮询间隔（FR-85），单位秒
+	EnvPublicURL              = "JIAN_PUBLIC_URL"           // 对外基础 URL（FR-87）；CDN 域名，隐藏源站 IP
+	EnvEnabledFormats         = "JIAN_ENABLED_FORMATS"      // 启用的协议格式，逗号分隔（FR-32）
+	EnvBlobGCInterval         = "JIAN_BLOB_GC_INTERVAL"     // 孤立 blob 定时清理间隔，单位秒；0 禁用
+	EnvTLSAddr                = "JIAN_TLS_ADDR"             // 服务内置 TLS 监听地址（FR-131）；空 = 不启用
+	EnvTLSCert                = "JIAN_TLS_CERT"             // TLS PEM 证书文件路径（FR-131）
+	EnvTLSKey                 = "JIAN_TLS_KEY"              // TLS PEM 私钥文件路径（FR-131）
+	EnvOIDCIssuer             = "JIAN_OIDC_ISSUER"          // OIDC 身份提供方 issuer（FR-34）；空 = 不启用 OIDC 登录
+	EnvOIDCClientID           = "JIAN_OIDC_CLIENT_ID"       // OIDC 客户端 ID（FR-34）
+	EnvOIDCClientSecret       = "JIAN_OIDC_CLIENT_SECRET"   // OIDC 客户端密钥（FR-34）；只从环境变量读取，不入库不打印
+	EnvOIDCRedirectURL        = "JIAN_OIDC_REDIRECT_URL"    // OIDC 回调地址（FR-34），须与 IdP 侧注册一致
+	EnvOIDCUsernameClaim      = "JIAN_OIDC_USERNAME_CLAIM"  // 用户名 claim（FR-34）；缺省 preferred_username
+	EnvOIDCAllowedDomains     = "JIAN_OIDC_ALLOWED_DOMAINS" // 允许自动建号的邮箱域名（FR-34），逗号分隔；空 = 不限制
 
 	defaultDataDir         = "./data"
 	defaultHTTPAddr        = ":8080"
 	defaultUpstreamTimeout = 30 * time.Second
 	defaultSyncInterval    = 5 * time.Second // 复制轮询间隔默认 5s（近实时）
 	defaultBlobGCInterval  = 24 * time.Hour  // 孤立 blob 默认每日清理一次
+	// defaultOIDCUsernameClaim 是 OIDC 用户名的缺省 claim；各 IdP 常见取值见 OPERATIONS。
+	defaultOIDCUsernameClaim = "preferred_username"
 
 	dbFileName                       = "jianartifact.db"
 	blobDirName                      = "blobs"
@@ -64,7 +73,22 @@ type Config struct {
 	TLSAddr                string        // 服务内置 TLS 监听地址（FR-131）；空 = 不启用
 	TLSCert                string        // TLS PEM 证书文件路径（FR-131）
 	TLSKey                 string        // TLS PEM 私钥文件路径（FR-131）
+	OIDC                   OIDCConfig    // FR-34：OIDC 身份源接入配置（Issuer 空 = 不启用）
 }
+
+// OIDCConfig 是 OIDC 身份源接入配置（FR-34，见 ADR-0029）；
+// 凭据只从环境变量解析，不落库、不打印、不进审计。
+type OIDCConfig struct {
+	Issuer         string   // 身份提供方 issuer（discovery 基址）
+	ClientID       string   // 客户端 ID
+	ClientSecret   string   // 客户端密钥（仅环境变量）
+	RedirectURL    string   // 回调地址（须与 IdP 注册一致）
+	UsernameClaim  string   // 用户名 claim
+	AllowedDomains []string // 允许自动建号的邮箱域名；空 = 不限制
+}
+
+// Enabled 报告是否启用 OIDC 登录（配置了 issuer 即启用）。
+func (c OIDCConfig) Enabled() bool { return c.Issuer != "" }
 
 // Load 从环境变量解析配置并确保 data / blob 目录存在。
 // JWT 密钥优先取 JIAN_JWT_SECRET；缺省时从 data 目录的 jwt.secret 读取，
@@ -95,6 +119,11 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
+	oidc, err := oidcConfig()
+	if err != nil {
+		return nil, err
+	}
+
 	return &Config{
 		DataDir:                absData,
 		HTTPAddr:               envOr(EnvHTTPAddr, defaultHTTPAddr),
@@ -111,6 +140,7 @@ func Load() (*Config, error) {
 		TLSAddr:                envOr(EnvTLSAddr, ""),
 		TLSCert:                os.Getenv(EnvTLSCert),
 		TLSKey:                 os.Getenv(EnvTLSKey),
+		OIDC:                   oidc,
 	}, nil
 }
 
@@ -222,4 +252,54 @@ func upstreamTimeout() time.Duration {
 		return defaultUpstreamTimeout
 	}
 	return time.Duration(secs) * time.Second
+}
+
+// oidcConfig 解析 OIDC 接入配置（FR-34）。未配置 issuer 时整组不启用；
+// 半配置（缺客户端 ID / 密钥 / 回调地址）或非法 URL 直接报错，
+// 避免"以为启用了实际没有"的静默半启用（对齐 FR-131 的防静默降级口径）。
+func oidcConfig() (OIDCConfig, error) {
+	cfg := OIDCConfig{
+		Issuer:        strings.TrimSpace(os.Getenv(EnvOIDCIssuer)),
+		ClientID:      strings.TrimSpace(os.Getenv(EnvOIDCClientID)),
+		ClientSecret:  os.Getenv(EnvOIDCClientSecret),
+		RedirectURL:   strings.TrimSpace(os.Getenv(EnvOIDCRedirectURL)),
+		UsernameClaim: envOr(EnvOIDCUsernameClaim, defaultOIDCUsernameClaim),
+	}
+	if cfg.Issuer == "" {
+		return OIDCConfig{}, nil
+	}
+	var missing []string
+	if cfg.ClientID == "" {
+		missing = append(missing, EnvOIDCClientID)
+	}
+	if cfg.ClientSecret == "" {
+		missing = append(missing, EnvOIDCClientSecret)
+	}
+	if cfg.RedirectURL == "" {
+		missing = append(missing, EnvOIDCRedirectURL)
+	}
+	if len(missing) > 0 {
+		return OIDCConfig{}, fmt.Errorf("启用 %s 时必须同时配置：%s", EnvOIDCIssuer, strings.Join(missing, "、"))
+	}
+	if err := requireHTTPURL(EnvOIDCIssuer, cfg.Issuer); err != nil {
+		return OIDCConfig{}, err
+	}
+	if err := requireHTTPURL(EnvOIDCRedirectURL, cfg.RedirectURL); err != nil {
+		return OIDCConfig{}, err
+	}
+	for _, part := range strings.Split(os.Getenv(EnvOIDCAllowedDomains), ",") {
+		if domain := strings.ToLower(strings.TrimSpace(part)); domain != "" {
+			cfg.AllowedDomains = append(cfg.AllowedDomains, domain)
+		}
+	}
+	return cfg, nil
+}
+
+// requireHTTPURL 校验配置值为 http(s) 绝对 URL；配置错误在启动期早失败。
+func requireHTTPURL(env, value string) error {
+	u, err := url.Parse(value)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return fmt.Errorf("解析 %s：须为 http(s) 绝对 URL", env)
+	}
+	return nil
 }

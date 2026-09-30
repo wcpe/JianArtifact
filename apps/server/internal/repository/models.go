@@ -20,6 +20,10 @@ type User struct {
 	CreatedAt        string `db:"created_at"`
 	// Email 是账号绑定邮箱（可空），用于审计检索与操作者身份快照。
 	Email string `db:"email"`
+	// AuthSource 标记身份来源：local（本地口令）/ oidc / ldap（见 ADR-0029）。
+	AuthSource string `db:"auth_source"`
+	// ExternalSubject 是身份源内稳定标识（OIDC sub / LDAP DN）；空串表示未绑定外部身份。
+	ExternalSubject string `db:"external_subject"`
 }
 
 // Token 是 api_token 表的行模型（不含摘要，列表场景使用）。
