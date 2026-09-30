@@ -367,6 +367,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 当前会话对应的用户（OIDC 回调后前端据此取身份快照） */
+        get: operations["getCurrentUser"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/oidc/start": {
         parameters: {
             query?: never;
@@ -2029,6 +2046,8 @@ export interface components {
             userCount: number;
             /** @description 当前实例是否允许首个管理员自举；备用节点即使空库也始终为 false */
             bootstrapAllowed: boolean;
+            /** @description 是否启用 OIDC 登录（前端据此决定是否展示登录入口） */
+            oidcEnabled: boolean;
         };
         EnabledFormats: {
             /** @description 当前进程启动时启用的格式，按字典序返回 */
@@ -3504,6 +3523,27 @@ export interface operations {
                 };
             };
             400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    getCurrentUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 当前用户 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["User"];
+                };
+            };
             401: components["responses"]["Unauthorized"];
         };
     };

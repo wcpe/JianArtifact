@@ -187,6 +187,8 @@ func (h *Handlers) GetStatus(c *gin.Context) {
 		UserCount:   count,
 		// 复制退役：不再有 standby，自举只取决于是否已有用户。
 		BootstrapAllowed: count == 0,
+		// FR-34：前端据 oidcEnabled 决定是否展示 OIDC 登录入口。
+		OidcEnabled: h.oidc != nil,
 	}
 	if _, ok := auth.PrincipalFrom(c); ok {
 		info.Version = h.version
