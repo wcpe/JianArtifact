@@ -3,7 +3,7 @@
 // 保证 web 开发态脱离后端可跑、vitest 集成测试与真实 fetch 链路同源。
 import { http, HttpResponse } from "msw";
 
-import { mockAuditLogList } from "./handlers";
+import { mockAuditLogList, mockMetrics } from "./handlers";
 import {
   observabilityStore,
   type AuditCategory,
@@ -765,6 +765,14 @@ export const handlers = [
   // —— 健康 / 状态（公开）——
   http.get("*/healthz", () => HttpResponse.json({ status: "ok", version: store.status().version })),
   http.get("*/readyz", () => HttpResponse.json({ status: "ok", version: store.status().version })),
+  // FR-39：运维指标端点（文本暴露格式，与后端 /metrics 同口径）。
+  http.get(
+    "*/metrics",
+    () =>
+      new HttpResponse(mockMetrics(), {
+        headers: { "Content-Type": "text/plain; version=0.0.4; charset=utf-8" },
+      }),
+  ),
   http.get("*/api/v1/status", ({ request }) =>
     HttpResponse.json(
       isSetupEmptyScenario(request)

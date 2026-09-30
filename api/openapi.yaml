@@ -43,6 +43,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /metrics:
+    get:
+      operationId: getMetrics
+      summary: Prometheus 指标（文本暴露格式，匿名可见且不含版本等指纹信息）
+      security: []
+      responses:
+        "200":
+          description: 指标快照
+          content:
+            text/plain:
+              schema:
+                type: string
   /api/v1/status:
     get:
       operationId: getStatus

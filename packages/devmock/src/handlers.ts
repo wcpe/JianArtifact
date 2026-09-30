@@ -67,6 +67,22 @@ export function mockReadyz(version = MOCK_APP_VERSION): HealthStatus {
   return { status: "ok", version };
 }
 
+/** GET /metrics 的 Prometheus 文本暴露格式样本（与后端指标口径一致的最小集合）。 */
+export function mockMetrics(): string {
+  return [
+    "# HELP jianartifact_protocol_requests_total 制品协议请求完成计数（按方法、状态码与缓存结果分区）",
+    "# TYPE jianartifact_protocol_requests_total counter",
+    'jianartifact_protocol_requests_total{cache_result="hit",method="GET",status="200"} 12',
+    "# HELP jianartifact_scheduler_job_runs_total 定时任务作业累计执行次数",
+    "# TYPE jianartifact_scheduler_job_runs_total counter",
+    'jianartifact_scheduler_job_runs_total{job="blob-gc"} 3',
+    "# HELP jianartifact_runtime_goroutines 当前 goroutine 数量",
+    "# TYPE jianartifact_runtime_goroutines gauge",
+    "jianartifact_runtime_goroutines 24",
+    "",
+  ].join("\n");
+}
+
 /** GET /readyz 未就绪（503）及其余错误的契约信封 `{error:{code,message}}`。 */
 export function mockUnavailable(): ApiError {
   return { error: { code: "dependency_unavailable", message: "依赖未就绪" } };
