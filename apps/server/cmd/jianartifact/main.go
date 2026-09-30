@@ -264,6 +264,8 @@ func newApplicationHandler(cfg *config.Config, svc *appServices, assets fs.FS) h
 		httpserver.WithProtocolMetric(func(c *gin.Context) {
 			cacheResult, _ := c.Get(protocol.CacheResultContextKey)
 			svc.dashboardSvc.RecordProtocol(domain.ProtocolMetric{CompletedAt: time.Now().UTC(), Method: c.Request.Method, Status: c.Writer.Status(), CacheResult: cacheResultString(cacheResult)})
+			// FR-39：Prometheus 指标——复用同一钩子累加协议请求计数（进程内，不写库）。
+			svc.metricsReg.ProtocolRequest(c.Request.Method, c.Writer.Status(), cacheResultString(cacheResult))
 			// FR-142：制品下载计量（只认 GET+200 的完整传输；该钩子只服务制品协议请求，
 			// 路径解析与 UA 归类在服务内完成——原始 UA 串不落库）。
 			svc.assetDownloadSvc.RecordDownload(c.Request.Method, c.Writer.Status(), c.Request.URL.Path, c.ClientIP(), c.Request.UserAgent(), time.Now().UTC())
@@ -393,10 +395,8 @@ func run() error {
 	svc.dashboardSvc.Start(ctx, time.Now)
 	svc.assetDownloadSvc.Start(ctx, time.Now)
 	svc.hostMonitoringSvc.Start(ctx, time.Now)
-	// FR-44：维护类周期作业统一经调度器驱动（间隔 0 禁用；启动不立即执行）。
-	sched := scheduler.New()
-	registerBlobGCJob(sched, cfg.BlobGCInterval, svc.assetSvc.CleanupUnreferencedBlobs)
-	sched.Start(ctx)
+	// FR-44：维护类周期作业的统一调度器（作业已在 wiring 装配期注册完毕）。
+	svc.scheduler.Start(ctx)
 
 	errCh := make(chan error, 1)
 	go func() {

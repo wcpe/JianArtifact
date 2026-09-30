@@ -15,6 +15,7 @@ import (
 
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
+	"github.com/wcpe/jianartifact/apps/server/internal/metrics"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
@@ -49,6 +50,7 @@ type Deps struct {
 	Freeze                  *domain.FreezeController                // FR-135：运行时写入冻结窗口
 	BackupImports           *domain.BackupImportService             // FR-137：导入记录与 URL 拉取
 	BackupUploads           *domain.BackupUploadService             // FR-137：分片上传（Web 第三通道）
+	Metrics                 *metrics.Exposition                     // FR-39：Prometheus 指标导出（/metrics；nil 时该端点返回 503）
 }
 
 // Handlers 实现 ServerInterface 的全部端点。
@@ -81,6 +83,7 @@ type Handlers struct {
 	freeze                  *domain.FreezeController     // FR-135：运行时写入冻结
 	backupImports           *domain.BackupImportService  // FR-137：导入记录与 URL 拉取
 	backupUploads           *domain.BackupUploadService  // FR-137：分片上传（Web 第三通道）
+	metrics                 *metrics.Exposition          // FR-39：Prometheus 指标导出
 }
 
 // NewHandlers 构造 Handlers。
@@ -114,6 +117,7 @@ func NewHandlers(d Deps) *Handlers {
 		freeze:                  d.Freeze,
 		backupImports:           d.BackupImports,
 		backupUploads:           d.BackupUploads,
+		metrics:                 d.Metrics,
 	}
 }
 
@@ -136,6 +140,19 @@ func (h *Handlers) versionFor(c *gin.Context) string {
 		return h.version
 	}
 	return ""
+}
+
+// GetMetrics 指标导出（FR-39）：Prometheus 文本暴露格式；匿名可见且不输出
+// 版本等指纹信息（与 /healthz、/readyz、/api/v1/status 的脱敏口径一致）。
+func (h *Handlers) GetMetrics(c *gin.Context) {
+	if h.metrics == nil {
+		// 未接线时明确不可用；AbortWithStatus 立即落地状态码，避免空 200。
+		c.AbortWithStatus(http.StatusServiceUnavailable)
+		return
+	}
+	c.Header("Content-Type", metrics.ContentType)
+	c.Status(http.StatusOK)
+	h.metrics.WritePrometheus(c.Writer)
 }
 
 // GetHealthz 存活探针：进程存活即 200；版本号仅对已认证请求返回。

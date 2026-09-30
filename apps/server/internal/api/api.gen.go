@@ -3979,6 +3979,9 @@ type ServerInterface interface {
 	// GetHealthz 存活探针
 	// (GET /healthz)
 	GetHealthz(c *gin.Context)
+	// GetMetrics Prometheus 指标（文本暴露格式，匿名可见且不含版本等指纹信息）
+	// (GET /metrics)
+	GetMetrics(c *gin.Context)
 	// GetReadyz 就绪探针（SQLite + blob 目录自检通过后才返回 200）
 	// (GET /readyz)
 	GetReadyz(c *gin.Context)
@@ -6185,6 +6188,19 @@ func (siw *ServerInterfaceWrapper) GetHealthz(c *gin.Context) {
 	siw.Handler.GetHealthz(c)
 }
 
+// GetMetrics operation middleware
+func (siw *ServerInterfaceWrapper) GetMetrics(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetMetrics(c)
+}
+
 // GetReadyz operation middleware
 func (siw *ServerInterfaceWrapper) GetReadyz(c *gin.Context) {
 
@@ -6227,6 +6243,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 
 	router.GET(options.BaseURL+"/healthz", wrapper.GetHealthz)
 	router.GET(options.BaseURL+"/readyz", wrapper.GetReadyz)
+	router.GET(options.BaseURL+"/metrics", wrapper.GetMetrics)
 	router.GET(options.BaseURL+"/api/v1/status", wrapper.GetStatus)
 	router.GET(options.BaseURL+"/api/v1/formats/enabled", wrapper.GetEnabledFormats)
 	router.GET(options.BaseURL+"/api/v1/observability/audit/summary", wrapper.GetAuditObservabilitySummary)

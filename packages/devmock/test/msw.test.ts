@@ -26,6 +26,16 @@ afterEach(() => {
 afterAll(() => server.close());
 
 describe("devmock MSW 端点行为", () => {
+  it("指标端点按 Prometheus 文本暴露格式返回", async () => {
+    const res = await fetch("http://localhost/metrics");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/plain");
+    const body = await res.text();
+    expect(body).toContain("# TYPE jianartifact_protocol_requests_total counter");
+    expect(body).toContain("# TYPE jianartifact_runtime_goroutines gauge");
+    expect(body).toContain('jianartifact_scheduler_job_runs_total{job="blob-gc"}');
+  });
+
   it("正常场景透传给既有 handler，路由范围的错误场景只影响对应请求", async () => {
     setDevMockScenario("/users", "error");
 

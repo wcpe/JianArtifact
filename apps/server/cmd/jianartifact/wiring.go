@@ -12,11 +12,13 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/blobstore"
 	"github.com/wcpe/jianartifact/apps/server/internal/config"
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
+	"github.com/wcpe/jianartifact/apps/server/internal/metrics"
 	"github.com/wcpe/jianartifact/apps/server/internal/migration/credential"
 	"github.com/wcpe/jianartifact/apps/server/internal/migration/offindex"
 	"github.com/wcpe/jianartifact/apps/server/internal/migration/runner"
 	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
+	"github.com/wcpe/jianartifact/apps/server/internal/scheduler"
 	"github.com/wcpe/jianartifact/apps/server/internal/upstream"
 )
 
@@ -56,6 +58,9 @@ type appServices struct {
 	upstreamClient      *upstream.Client // FR-89：回源客户端（web 改回源超时时 SetTimeout）
 	store               auth.Store
 	jwt                 *auth.JWTManager
+	metricsReg          *metrics.Registry    // FR-39：进程内指标登记（协议请求计数）
+	metricsExp          *metrics.Exposition  // FR-39：/metrics 文本暴露渲染器
+	scheduler           *scheduler.Scheduler // FR-44：维护类周期作业调度器
 }
 
 // openServices 打开数据库、执行迁移并装配领域服务。调用方负责在返回的 db 上 Close。
@@ -201,6 +206,13 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	// FR-137：分片上传服务依赖导入服务（组装完成后走本地导入状态机）。
 	backupImportsSvc := domain.NewBackupImportService(repository.NewBackupImportRepo(db), restoreSvc, cfg.DataDir, upstreamClient)
 
+	// FR-44：维护类周期作业统一经调度器驱动（间隔 0 禁用；启动不立即执行）。
+	schedulerSvc := scheduler.New()
+	registerBlobGCJob(schedulerSvc, cfg.BlobGCInterval, assetSvc.CleanupUnreferencedBlobs)
+	// FR-39：指标登记与 /metrics 渲染器；协议请求计数由 HTTP 层钩子（run）累加。
+	metricsReg := metrics.New()
+	metricsExp := metrics.NewExposition(metricsReg, schedulerJobStatuses(schedulerSvc))
+
 	return &appServices{
 		db:                  db,
 		users:               userRepo,
@@ -236,6 +248,9 @@ func openServices(cfg *config.Config) (*appServices, error) {
 		upstreamClient:      upstreamClient,
 		store:               domain.NewAuthStore(userRepo, tokenRepo, revokedRepo),
 		jwt:                 jwtMgr,
+		metricsReg:          metricsReg,
+		metricsExp:          metricsExp,
+		scheduler:           schedulerSvc,
 	}, nil
 }
 
@@ -277,6 +292,7 @@ func (s *appServices) handlers(version string, checks []func() error) *api.Handl
 		Freeze:                  s.freeze,
 		BackupImports:           s.backupImports,
 		BackupUploads:           s.backupUploads,
+		Metrics:                 s.metricsExp,
 		BackupLinkKey:           append([]byte(nil), s.auditAttentionKey...),
 		ClusterTokenSet:         s.syncTokenSet,
 		PublicURL:               s.publicURL,
@@ -288,4 +304,24 @@ func (s *appServices) handlers(version string, checks []func() error) *api.Handl
 			}
 		},
 	})
+}
+
+// schedulerJobStatuses 把调度器作业状态适配为指标渲染快照（FR-39）；
+// 由渲染器在每次抓取时调用，不缓存。
+func schedulerJobStatuses(s *scheduler.Scheduler) func() []metrics.JobStatus {
+	return func() []metrics.JobStatus {
+		statuses := s.Status()
+		out := make([]metrics.JobStatus, 0, len(statuses))
+		for _, st := range statuses {
+			out = append(out, metrics.JobStatus{
+				Name:     st.Name,
+				Runs:     st.Runs,
+				Failures: st.Failures,
+				Running:  st.Running,
+				LastRun:  st.LastFinish,
+				Failed:   st.LastError != "",
+			})
+		}
+		return out
+	}
 }
