@@ -153,6 +153,12 @@ export const en = {
     login: "Sign In",
     bootstrap: "Create and Sign In",
     passwordRule: "Password must be at least 8 characters",
+    oidcLogin: "Sign in with OIDC",
+    oidcErrorExpired: "The sign-in flow expired or failed validation. Please try again.",
+    oidcErrorNotAllowed: "This account is not allowed to sign in.",
+    oidcErrorUnavailable:
+      "The identity provider is unavailable. Try again later or use a local account.",
+    oidcErrorFailed: "OIDC sign-in failed. Try again or use a local account.",
   },
   setup: {
     title: "Initialize Instance",
