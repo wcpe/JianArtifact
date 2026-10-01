@@ -62,8 +62,10 @@ func (e *StorageQuotaError) Error() string {
 		used = append(used, strconv.FormatInt(e.UsedAssets, 10)+" 件")
 		limits = append(limits, strconv.FormatInt(e.Limits.Assets, 10)+" 件")
 	}
-	text := "仓库 " + e.Repository + " 存储配额已超限：当前占用 " + strings.Join(used, " / ") +
-		"，上限 " + strings.Join(limits, " / ")
+	// 分隔符用顿号而非「/」：错误消息不得含文件系统分隔符——跨平台守卫会一并检查 / 与 \，
+	// 用「/」会在 Linux 上被误判成路径（CI 实测：本地 Windows 通过、Linux 失败）。
+	text := "仓库 " + e.Repository + " 存储配额已超限：当前占用 " + strings.Join(used, "、") +
+		"，上限 " + strings.Join(limits, "、")
 	return text
 }
 

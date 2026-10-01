@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -168,7 +169,7 @@ func TestRepoQuotaAdmissionKnownLengthRejectsBeforeReadingBody(t *testing.T) {
 	if !strings.Contains(message, "当前占用") || !strings.Contains(message, "上限") {
 		t.Fatalf("错误消息必须含「当前占用 / 上限」，得 %q", message)
 	}
-	if strings.Contains(message, string(filepath.Separator)) {
+	if looksLikeFilesystemPath(message) {
 		t.Fatalf("错误消息不得回显文件系统路径，得 %q", message)
 	}
 	if a.spy.count() != 1 || a.spy.reasons[0] != domain.RejectionReasonQuota {
@@ -408,7 +409,7 @@ func TestRepoQuotaExemptsMigrationImport(t *testing.T) {
 	if !strings.Contains(logged, "仓库存储配额豁免") {
 		t.Fatalf("豁免必须记日志，得 %q", logged)
 	}
-	if strings.Contains(logged, string(filepath.Separator)) {
+	if looksLikeFilesystemPath(stripLogTimestamp(logged)) {
 		t.Fatalf("豁免日志不得回显文件系统路径，得 %q", logged)
 	}
 
@@ -528,4 +529,18 @@ func TestValidateConfigStorageQuotaRules(t *testing.T) {
 	if cfg.QuotaBytes != 2048 || cfg.QuotaAssets != 16 {
 		t.Fatalf("配额应持久化并回显，得 %+v", cfg)
 	}
+}
+
+// looksLikeFilesystemPath 判断文本是否像文件系统路径：**跨平台**同时检查 `/` 与 `\`。
+// 只查 filepath.Separator 会在 Windows 上漏掉 `/`，造成「本地通过、Linux CI 才暴露」。
+func looksLikeFilesystemPath(text string) bool {
+	return strings.ContainsAny(text, `/\`)
+}
+
+// logTimestampPrefix 匹配 Go log 默认时间前缀（每行行首的 YYYY/MM/DD HH:MM:SS 与一个空格）。
+// 该前缀自带 `/`，查路径前必须先逐行剥离，否则会把它当成路径。
+var logTimestampPrefix = regexp.MustCompile(`(?m)^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} `)
+
+func stripLogTimestamp(text string) string {
+	return logTimestampPrefix.ReplaceAllString(text, "")
 }
