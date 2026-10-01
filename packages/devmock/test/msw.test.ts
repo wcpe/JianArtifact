@@ -1618,4 +1618,55 @@ describe("devmock MSW 端点行为", () => {
       }).then((result) => result.json()),
     ).resolves.toEqual(expect.objectContaining({ total: baseline + maxAssets + 1 }));
   });
+
+  it("存储治理作业面：非管理员 403、清单可读、未知作业 404、运行中 409", async () => {
+    expect(
+      (await fetch("http://localhost/api/v1/maintenance/jobs", { headers: userAuth })).status,
+    ).toBe(403);
+    expect((await fetch("http://localhost/api/v1/maintenance/jobs")).status).toBe(401);
+
+    const list = await fetch("http://localhost/api/v1/maintenance/jobs", { headers: auth });
+    expect(list.status).toBe(200);
+    await expect(list.json()).resolves.toMatchObject({
+      jobs: [
+        { name: "blob-gc", running: false, runs: 3, failures: 1 },
+        // 未执行过：可空字段为 null，而不是被省略。
+        { name: "storage-cleanup", running: false, runs: 0, lastStartedAt: null, lastError: null },
+      ],
+    });
+
+    // 未知作业名 → 404。
+    const unknown = await fetch("http://localhost/api/v1/maintenance/jobs/no-such-job/run", {
+      method: "POST",
+      headers: auth,
+    });
+    expect(unknown.status).toBe(404);
+    await expect(unknown.json()).resolves.toMatchObject({
+      error: expect.objectContaining({ code: "not_found" }),
+    });
+
+    // 首次触发 202 并置位 running；紧接着再触发一次 → 409（不排队、不并发重入）。
+    const first = await fetch("http://localhost/api/v1/maintenance/jobs/storage-cleanup/run", {
+      method: "POST",
+      headers: auth,
+    });
+    expect(first.status).toBe(202);
+    await expect(first.json()).resolves.toEqual({ name: "storage-cleanup", started: true });
+
+    const second = await fetch("http://localhost/api/v1/maintenance/jobs/storage-cleanup/run", {
+      method: "POST",
+      headers: auth,
+    });
+    expect(second.status).toBe(409);
+    await expect(second.json()).resolves.toMatchObject({
+      error: expect.objectContaining({ code: "job_running" }),
+    });
+
+    // 触发已计入 runs 且 running 为真（lastStartedAt 已回填）。
+    const after = await fetch("http://localhost/api/v1/maintenance/jobs", { headers: auth }).then(
+      (result) => result.json() as Promise<{ jobs: { name: string; running: boolean }[] }>,
+    );
+    const job = after.jobs.find((item) => item.name === "storage-cleanup");
+    expect(job).toMatchObject({ running: true, runs: 1 });
+  });
 });

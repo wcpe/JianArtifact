@@ -98,15 +98,17 @@ func (s *FormatMetadataService) PublishPyPI(repoName, project, version, filename
 // PublishPyPIWithSourceTime 与 PublishPyPI 相同，但将资产行 created_at/updated_at
 // 固定为源端时间（在线迁移保留源时间戳）。sourceModified 为零值时回退 PublishPyPI 语义。
 func (s *FormatMetadataService) PublishPyPIWithSourceTime(repoName, project, version, filename, requiresPython, yanked string, body io.Reader, sourceModified time.Time) (*PypiFile, error) {
-	return s.publishPyPI(repoName, project, version, filename, requiresPython, yanked, body, AssetOperationAudit{}, sourceModified)
+	// 迁移导入属管理员批量操作：显式豁免仓库存储配额（FR-41 §4.1）。
+	return s.publishPyPI(repoName, project, version, filename, requiresPython, yanked, body, AssetOperationAudit{}, sourceModified, true)
 }
 
 // PublishPyPIWithAudit 将 PyPI 文件、Simple 元数据、源端审计和 v2 operation 置于同一提交边界。
 func (s *FormatMetadataService) PublishPyPIWithAudit(repoName, project, version, filename, requiresPython, yanked string, body io.Reader, audit AssetOperationAudit) (*PypiFile, error) {
-	return s.publishPyPI(repoName, project, version, filename, requiresPython, yanked, body, audit, time.Time{})
+	return s.publishPyPI(repoName, project, version, filename, requiresPython, yanked, body, audit, time.Time{}, false)
 }
 
-func (s *FormatMetadataService) publishPyPI(repoName, project, version, filename, requiresPython, yanked string, body io.Reader, audit AssetOperationAudit, sourceModified time.Time) (*PypiFile, error) {
+// quotaExempt 为 true 时本次写入在提交点豁免仓库存储配额（仅迁移导入）。
+func (s *FormatMetadataService) publishPyPI(repoName, project, version, filename, requiresPython, yanked string, body io.Reader, audit AssetOperationAudit, sourceModified time.Time, quotaExempt bool) (*PypiFile, error) {
 	if err := s.requireBusinessWrite(); err != nil {
 		return nil, err
 	}
@@ -130,6 +132,9 @@ func (s *FormatMetadataService) publishPyPI(repoName, project, version, filename
 	asset.Path = "pypi/packages/" + project + "/" + filename
 	// 在信封与发布批次构造前标注源端时间，资产行与复制信封携带同一时间。
 	applySourceTimestamp(asset, sourceModified)
+	if quotaExempt {
+		markQuotaExempt(asset)
+	}
 	meta := repository.FormatMetadata{
 		RepositoryID: r.ID, Format: "pypi", NameNormalized: project, NameDisplay: project,
 		Version: version, VersionNormalized: version, Filename: filename, AssetPath: asset.Path,
@@ -692,16 +697,18 @@ func NormalizeNuGetVersion(version string) string { return strings.ToLower(strin
 
 // PublishNuGet 写入一个已验证的 NuGet 元数据。包内容校验由协议层完成，服务负责资产与索引登记。
 func (s *FormatMetadataService) PublishNuGet(repoName, id, version, filename, metadataJSON string, body io.Reader) (*NuGetPackage, error) {
-	return s.publishNuGet(repoName, id, version, filename, metadataJSON, body, time.Time{})
+	return s.publishNuGet(repoName, id, version, filename, metadataJSON, body, time.Time{}, false)
 }
 
 // PublishNuGetWithSourceTime 与 PublishNuGet 相同，但将资产行 created_at/updated_at
 // 固定为源端时间（在线迁移保留源时间戳）。sourceModified 为零值时回退 PublishNuGet 语义。
 func (s *FormatMetadataService) PublishNuGetWithSourceTime(repoName, id, version, filename, metadataJSON string, body io.Reader, sourceModified time.Time) (*NuGetPackage, error) {
-	return s.publishNuGet(repoName, id, version, filename, metadataJSON, body, sourceModified)
+	// 迁移导入属管理员批量操作：显式豁免仓库存储配额（FR-41 §4.1）。
+	return s.publishNuGet(repoName, id, version, filename, metadataJSON, body, sourceModified, true)
 }
 
-func (s *FormatMetadataService) publishNuGet(repoName, id, version, filename, metadataJSON string, body io.Reader, sourceModified time.Time) (*NuGetPackage, error) {
+// quotaExempt 为 true 时本次写入在提交点豁免仓库存储配额（仅迁移导入）。
+func (s *FormatMetadataService) publishNuGet(repoName, id, version, filename, metadataJSON string, body io.Reader, sourceModified time.Time, quotaExempt bool) (*NuGetPackage, error) {
 	if err := s.requireBusinessWrite(); err != nil {
 		return nil, err
 	}
@@ -729,6 +736,9 @@ func (s *FormatMetadataService) publishNuGet(repoName, id, version, filename, me
 	asset.Path = "nuget/" + idNorm + "/" + versionNorm + "/" + filename
 	// 在信封与发布批次构造前标注源端时间，资产行与复制信封携带同一时间。
 	applySourceTimestamp(asset, sourceModified)
+	if quotaExempt {
+		markQuotaExempt(asset)
+	}
 	meta := repository.FormatMetadata{RepositoryID: r.ID, Format: "nuget", NameNormalized: idNorm, NameDisplay: id, Version: version, VersionNormalized: versionNorm, Filename: filename, AssetPath: asset.Path, Sha256: asset.BlobHash, Size: asset.Size, MetadataJSON: metadataJSON, SourceKind: "hosted"}
 	// format_metadata 行时间同样对齐源端时间（保持 RFC3339Nano 表内约定）。
 	applyFormatMetadataSourceTimestamp(&meta, sourceModified)

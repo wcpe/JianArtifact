@@ -27,6 +27,7 @@ type RawHandler struct {
 	assets         *domain.AssetService
 	repoSvc        *domain.RepositoryService
 	publish        *domain.PublishPolicyService
+	quota          QuotaGuard         // FR-41：仓库级存储配额判定（nil 不判定）
 	audit          AuditFunc          // FR-38：审计记录回调（main 注入；nil 不记录）
 	operationAudit OperationAuditFunc // 原子制品操作的同事务审计构造器
 }
@@ -55,6 +56,16 @@ func (r *quotaReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// QuotaGuard 是仓库级存储配额判定（FR-41 §4.1）。协议层只需要两个能力：
+// 准入判定（已知长度直接给结论，长度未知返回流式读取上限）与流式早拒上报。
+// 由装配层注入 *domain.RepoQuotaService；接口在此声明是为了让协议单测可注入桩。
+type QuotaGuard interface {
+	// Admission 判定一次发布的准入并返回流式读取上限（0 表示不限）。
+	Admission(repoName, path string, size int64) (int64, error)
+	// RecordStreamRejection 上报一次由限额感知读取器在流中触发的早拒。
+	RecordStreamRejection()
+}
+
 // AuditFunc 是审计记录回调（FR-38）：写操作成功后记录一条审计日志。
 // 由 main 组装时注入（闭包绑定 api.Handlers.AuditLog），避免 protocol 依赖 api 包。
 type AuditFunc func(c *gin.Context, action, entityType, entityKey, repo, detail, result string)
@@ -71,6 +82,48 @@ func (h *RawHandler) SetOperationAudit(f OperationAuditFunc) { h.operationAudit 
 // SetPublishPolicy 注入发布账号策略校验；为空时保持旧行为，供兼容测试和只读部署使用。
 func (h *RawHandler) SetPublishPolicy(s *domain.PublishPolicyService) { h.publish = s }
 
+// SetQuotaGuard 注入仓库级存储配额判定（FR-41）；nil 表示不做判定，供兼容测试与只读部署使用。
+func (h *RawHandler) SetQuotaGuard(g QuotaGuard) { h.quota = g }
+
+// admissionFor 统一做仓库存储配额的准入判定（FR-41 §4.1 判定时序第 1/2 级）。
+// 所有原生协议（raw/maven/npm/cargo/oci/pypi/nuget）的发布入口都经此一处调用，
+// 避免逐协议各写一遍判定而漏掉某条绕过通道；越限错误经既有 ErrQuotaExceeded
+// 映射落到 429 quota_exceeded，与发布额度的 429 口径一致。
+func (h *RawHandler) admissionFor(repo, path string, size int64) (int64, error) {
+	if h.quota == nil {
+		return 0, nil
+	}
+	return h.quota.Admission(repo, path, size)
+}
+
+// minLimit 合并两个「字节上限」：0 表示不限；两者都非零取较小值。
+func minLimit(a, b int64) int64 {
+	if a == 0 {
+		return b
+	}
+	if b == 0 {
+		return a
+	}
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// recordQuotaRejection 在协议层观察到配额拒绝时上报一次（FR-41 §4.5 指标）。
+// 预检与提交点的拒绝以 *domain.StorageQuotaError 形式返回、已由配额服务累加；
+// 只在限额感知读取器于流中中断时（裸 ErrQuotaExceeded）才需要协议层补报，避免重复计数。
+func (h *RawHandler) recordQuotaRejection(err error) {
+	if h.quota == nil || !errors.Is(err, domain.ErrQuotaExceeded) {
+		return
+	}
+	var counted *domain.StorageQuotaError
+	if errors.As(err, &counted) {
+		return
+	}
+	h.quota.RecordStreamRejection()
+}
+
 func (h *RawHandler) nativeOperationAudit(c *gin.Context, action, repo string) domain.AssetOperationAudit {
 	if h.operationAudit == nil {
 		return domain.AssetOperationAudit{}
@@ -79,6 +132,10 @@ func (h *RawHandler) nativeOperationAudit(c *gin.Context, action, repo string) d
 }
 
 func (h *RawHandler) beginPublish(c *gin.Context, repo, path string, size int64) (func(bool), error) {
+	// FR-41：仓库存储配额预检先于发布额度预留——越限时既不读请求体也不占额度。
+	if _, err := h.admissionFor(repo, path, size); err != nil {
+		return nil, err
+	}
 	if h.publish == nil {
 		return func(bool) {}, nil
 	}
@@ -212,6 +269,7 @@ func (h *RawHandler) Put(c *gin.Context) {
 	settle, limit, err := h.beginRawPublish(c, repo, artPath)
 	if err != nil {
 		h.auditRejected(c, "asset.put", repo, artPath, publishRejectionDetail(err))
+		h.recordQuotaRejection(err)
 		writePublishErr(c, err)
 		return
 	}
@@ -224,6 +282,7 @@ func (h *RawHandler) Put(c *gin.Context) {
 	if err != nil {
 		h.auditRejected(c, "asset.put", repo, artPath, publishRejectionDetail(err))
 		if errors.Is(err, domain.ErrQuotaExceeded) {
+			h.recordQuotaRejection(err)
 			writePublishErr(c, err)
 			return
 		}
@@ -276,13 +335,20 @@ func publishRejectionDetail(err error) string {
 	}
 }
 
+// beginRawPublish 为「路径已知」的发布做预检：已知 Content-Length 时在读取请求体之前
+// 判定（越限直接返回，不读流）；长度未知时返回流式上限，由调用方包成限额感知读取器早拒。
 func (h *RawHandler) beginRawPublish(c *gin.Context, repo, path string) (func(bool, int64), int64, error) {
-	if h.publish == nil {
-		return func(bool, int64) {}, 0, nil
-	}
 	if c.Request.ContentLength >= 0 {
 		settle, err := h.beginPublish(c, repo, path, c.Request.ContentLength)
 		return func(ok bool, _ int64) { settle(ok) }, 0, err
+	}
+	// FR-41：长度未知——路径已知，配额给出抵扣覆盖写旧大小后的流式早拒上限。
+	quotaLimit, err := h.admissionFor(repo, path, -1)
+	if err != nil {
+		return nil, 0, err
+	}
+	if h.publish == nil {
+		return func(bool, int64) {}, quotaLimit, nil
 	}
 	userID := int64(0)
 	if p, ok := auth.PrincipalFrom(c); ok {
@@ -292,12 +358,19 @@ func (h *RawHandler) beginRawPublish(c *gin.Context, repo, path string) (func(bo
 	if err != nil {
 		return nil, 0, err
 	}
-	return func(ok bool, size int64) { _ = h.publish.SettleSize(id, ok, size) }, limit, nil
+	return func(ok bool, size int64) { _ = h.publish.SettleSize(id, ok, size) }, minLimit(limit, quotaLimit), nil
 }
 
+// beginUnresolvedPublish 为「路径尚未解析」的发布做预检（multipart / 上传会话建立时）。
+// FR-41：路径未知时无法计算覆盖写抵扣，只能给出不会误拒合法写入的安全上限（整仓配额），
+// 精确判定由路径解析后的 validateUnresolvedPublish 与提交点复检负责。
 func (h *RawHandler) beginUnresolvedPublish(c *gin.Context, repo string) (func(bool, int64), int64, error) {
+	quotaLimit, err := h.admissionFor(repo, "", -1)
+	if err != nil {
+		return nil, 0, err
+	}
 	if h.publish == nil {
-		return func(bool, int64) {}, 0, nil
+		return func(bool, int64) {}, quotaLimit, nil
 	}
 	userID := int64(0)
 	if p, ok := auth.PrincipalFrom(c); ok {
@@ -307,10 +380,16 @@ func (h *RawHandler) beginUnresolvedPublish(c *gin.Context, repo string) (func(b
 	if err != nil {
 		return nil, 0, err
 	}
-	return func(ok bool, size int64) { _ = h.publish.SettleSize(id, ok, size) }, limit, nil
+	return func(ok bool, size int64) { _ = h.publish.SettleSize(id, ok, size) }, minLimit(limit, quotaLimit), nil
 }
 
+// validateUnresolvedPublish 在制品路径解析出来后补做准入判定与发布额度路径校验。
+// FR-41：此时路径已知，可做精确判定（件数上限 + 字节上限 + 覆盖写抵扣），
+// 判定发生在任何内容进入 blob 存储之前，越限即 429。
 func (h *RawHandler) validateUnresolvedPublish(c *gin.Context, repo, path string) error {
+	if _, err := h.admissionFor(repo, path, -1); err != nil {
+		return err
+	}
 	if h.publish == nil {
 		return nil
 	}
@@ -328,7 +407,7 @@ func writePublishErr(c *gin.Context, err error) {
 	case errors.Is(err, domain.ErrImmutableRelease):
 		auth.WriteError(c, http.StatusConflict, "immutable_release", "不可变 Release 不允许覆盖")
 	case errors.Is(err, domain.ErrQuotaExceeded):
-		auth.WriteError(c, http.StatusTooManyRequests, "quota_exceeded", "发布额度已用尽")
+		auth.WriteError(c, http.StatusTooManyRequests, "quota_exceeded", quotaRejectionMessage(err))
 	case errors.Is(err, domain.ErrConflict):
 		auth.WriteError(c, http.StatusConflict, "conflict", "该仓库不支持此操作")
 	case errors.Is(err, domain.ErrLogicalDeleteRequired):
@@ -463,6 +542,16 @@ func writeUnauthorized(c *gin.Context) {
 	}
 	c.Header("WWW-Authenticate", `Basic realm="JianArtifact"`)
 	auth.WriteError(c, http.StatusUnauthorized, "unauthenticated", "未认证或凭据无效")
+}
+
+// quotaRejectionMessage 给出配额超限的可读提示。仓库存储配额（FR-41）的
+// 「当前占用 / 上限」文本由领域层构造，只含仓库名与数字，**不含文件系统路径**（docs/API.md:10）。
+func quotaRejectionMessage(err error) string {
+	var quotaErr *domain.StorageQuotaError
+	if errors.As(err, &quotaErr) {
+		return quotaErr.Error()
+	}
+	return "发布额度已用尽"
 }
 
 // writeAssetErr 把领域错误映射为协议层 HTTP 状态：不存在 404、非 raw-hosted / 写只读仓库 409、

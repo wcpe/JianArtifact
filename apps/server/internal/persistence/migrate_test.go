@@ -2,6 +2,7 @@ package persistence
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -175,5 +176,90 @@ func TestForeignKeysEnforced(t *testing.T) {
 	_, err := db.Exec(`INSERT INTO api_token (user_id, name, token_digest) VALUES (999, 'x', 'd')`)
 	if err == nil {
 		t.Fatal("期望外键约束拒绝插入，却成功了")
+	}
+}
+
+// TestMigration0045BuildsCleanupIndexes 校验 0045 的三项要求：
+// 索引真的建出来、真的被 FR-41 清理查询命中、重复迁移后依然存在。
+//
+// 索引存在但不被 planner 使用等于没建，因此这里不止查 sqlite_master，还用
+// EXPLAIN QUERY PLAN 断言计划里出现索引名而不是 SCAN。查询文本镜像自
+// internal/repository/storage_cleanup_repo.go：38-45（终态候选集）与 96-98（按 updated_at
+// 淘汰缓存资产）——persistence 被 repository 依赖，无法反向 import 那两个常量，
+// 此处只能保持同形状；改清理 SQL 的 WHERE / ORDER BY 时必须同步这里。
+func TestMigration0045BuildsCleanupIndexes(t *testing.T) {
+	db := openTestDB(t)
+	if err := db.Migrate(); err != nil {
+		t.Fatalf("Migrate：%v", err)
+	}
+	assertCleanupIndexes(t, db)
+
+	// 幂等：重复迁移不得重复建索引或报错。
+	if err := db.Migrate(); err != nil {
+		t.Fatalf("重复 Migrate：%v", err)
+	}
+	assertCleanupIndexes(t, db)
+}
+
+// assertCleanupIndexes 断言两个索引存在且被清理查询的查询计划命中。
+func assertCleanupIndexes(t *testing.T, db *DB) {
+	t.Helper()
+	cases := []struct {
+		name  string
+		index string
+		query string
+		args  []any
+	}{
+		{
+			// 镜像 storage_cleanup_repo.go:39-45：status 只认终态 + updated_at 早于 cutoff。
+			name:  "裁剪终态操作候选集",
+			index: "idx_asset_mutation_status_updated",
+			query: `SELECT id FROM asset_mutation
+				WHERE status IN ('completed','rolled_back')
+				  AND updated_at < ?
+				  AND NOT EXISTS (
+				    SELECT 1 FROM blob_quarantine q
+				    WHERE q.operation_id = asset_mutation.id AND q.status NOT IN ('deleted','restored')
+				  )`,
+			args: []any{"2026-01-01 00:00:00"},
+		},
+		{
+			// 镜像 storage_cleanup_repo.go:97-98：仓库内按 updated_at 选最旧的超期资产。
+			name:  "淘汰超期缓存资产",
+			index: "idx_asset_repo_updated",
+			query: `SELECT id, repository_id, path, blob_hash, size, content_type, sha1, md5, created_at, updated_at
+				FROM asset WHERE repository_id=? AND updated_at < ? ORDER BY updated_at, path LIMIT ?`,
+			args: []any{int64(1), "2026-01-01 00:00:00", 100},
+		},
+	}
+	for _, tc := range cases {
+		var exists int
+		if err := db.Get(&exists, `SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?`, tc.index); err != nil {
+			t.Fatalf("查索引 %s：%v", tc.index, err)
+		}
+		if exists != 1 {
+			t.Fatalf("%s：索引 %s 未随迁移建出", tc.name, tc.index)
+		}
+
+		// EXPLAIN QUERY PLAN 固定四列，sqlx 要求字段与列一一对应。
+		var rows []struct {
+			ID     int    `db:"id"`
+			Parent int    `db:"parent"`
+			NotUsd int    `db:"notused"`
+			Detail string `db:"detail"`
+		}
+		if err := db.Select(&rows, "EXPLAIN QUERY PLAN "+tc.query, tc.args...); err != nil {
+			t.Fatalf("%s：EXPLAIN：%v", tc.name, err)
+		}
+		plan := ""
+		for _, row := range rows {
+			plan += row.Detail + " | "
+		}
+		if !strings.Contains(plan, "USING INDEX "+tc.index) && !strings.Contains(plan, "USING COVERING INDEX "+tc.index) {
+			t.Errorf("%s：查询计划未命中索引 %s，计划 = %s", tc.name, tc.index, plan)
+		}
+		if strings.Contains(plan, "SCAN asset_mutation") || strings.Contains(plan, "SCAN asset ") {
+			t.Errorf("%s：查询计划退回全表扫，计划 = %s", tc.name, plan)
+		}
 	}
 }

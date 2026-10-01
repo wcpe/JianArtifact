@@ -428,6 +428,12 @@ func (h *NpmHandler) savePackument(c *gin.Context, repoName, pkg string, doc map
 		auth.WriteError(c, http.StatusInternalServerError, "internal", "内部错误")
 		return false
 	}
+	// FR-41：packument 覆盖写同样受仓库存储配额约束（path/长度已知，写 blob 之前判定）。
+	if _, quotaErr := h.admissionFor(repoName, pkg, int64(len(out))); quotaErr != nil {
+		h.auditRejected(c, "npm.packument.put", repoName, pkg, publishRejectionDetail(quotaErr))
+		writePublishErr(c, quotaErr)
+		return false
+	}
 	if _, err := h.assets.Put(repoName, pkg, bytes.NewReader(out), "application/json"); err != nil {
 		writeAssetErr(c, err)
 		return false

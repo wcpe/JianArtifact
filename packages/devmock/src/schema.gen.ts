@@ -1154,6 +1154,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/maintenance/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 周期作业清单与运行状态（仅管理员）
+         * @description 返回本进程内调度器**已注册**的全部周期作业及其累计状态快照。
+         *     作业清单由调度器注册决定（间隔 <= 0 的作业不注册、也不出现在这里），因此
+         *     「某个作业没有出现」等价于「该作业在本实例被禁用」。
+         *     计数（runs / failures）自进程启动累计，重启归零；
+         *     只读接口：不触发任何作业、不修改任何状态。
+         */
+        get: operations["listMaintenanceJobs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/maintenance/jobs/{name}/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 手动触发一次周期作业（仅管理员）
+         * @description 立即触发指定作业一次；返回 202 只表示**已受理**，不等待作业执行完成——
+         *     触发后是否跑完、是否失败，请查 GET /api/v1/maintenance/jobs 的 running / failures / lastError。
+         *     本接口**不改变**既有调度语义：作业正在运行（含本接口触发的那一轮）时返回 409 `job_running`，
+         *     不排队、不并发重入；名称未注册返回 404 `not_found`。
+         *     触发动作写入审计。
+         */
+        post: operations["runMaintenanceJob"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/backups/import": {
         parameters: {
             query?: never;
@@ -2208,12 +2256,33 @@ export interface components {
             members?: string[];
             /** @description 仓库别名列表（可多个；别名与主名共享命名空间、全局唯一，重命名后旧名自动转别名） */
             aliases?: string[];
+            /**
+             * Format: int64
+             * @description 仓库存储配额上限（字节）；0 或缺省表示不限。
+             *     计量口径是**逻辑字节** `SUM(asset.size)`（按制品记录大小累加，不是去重后的物理占用
+             *     ——去重 blob 无法按仓库归属）；超出后该仓库的写入被拒绝（HTTP 429，`quota_exceeded`）。
+             */
+            quotaBytes?: number;
+            /**
+             * Format: int64
+             * @description 仓库制品数配额上限；0 或缺省表示不限。
+             *     计量口径是**制品计数** `COUNT(*)`（与 artifactCount 同一口径）；
+             *     超出后该仓库的写入被拒绝（HTTP 429，`quota_exceeded`）。
+             */
+            quotaAssets?: number;
+            /**
+             * @description 仓库代理缓存资产的保留天数；0 或缺省表示关闭（默认）。
+             *     仅 proxy 仓库可设置（hosted/group 恒为 0 或缺省）：开启后 storage-cleanup 作业会淘汰
+             *     该仓库内 `updated_at` 早于「当前时间 − 保留天数」的缓存资产，删除走既有资产变更通道；
+             *     保留天数按 24 小时整数天计。
+             */
+            cacheRetentionDays?: number;
             createdAt: string;
-            /** @description 仓库内制品数量（只读统计字段） */
+            /** @description 仓库内制品数量（只读统计字段；即 quotaAssets 的计量口径 COUNT(*)） */
             artifactCount?: number;
             /**
              * Format: int64
-             * @description 仓库内制品总字节数（只读统计字段）
+             * @description 仓库内制品总字节数（只读统计字段；即 quotaBytes 的计量口径 SUM(asset.size)）
              */
             totalSize?: number;
         };
@@ -2273,6 +2342,23 @@ export interface components {
             members?: string[];
             /** @description 仓库别名（可选；与主名共享命名空间、全局唯一，不得等于主名或与他仓主名/别名冲突） */
             aliases?: string[];
+            /**
+             * Format: int64
+             * @description 仓库存储配额上限（字节）；0 或缺省表示不限。
+             *     计量口径是**逻辑字节** `SUM(asset.size)`（不是去重后的物理占用）；超出后写入被拒绝（HTTP 429，`quota_exceeded`）。
+             */
+            quotaBytes?: number;
+            /**
+             * Format: int64
+             * @description 仓库制品数配额上限；0 或缺省表示不限。
+             *     计量口径是**制品计数** `COUNT(*)`；超出后写入被拒绝（HTTP 429，`quota_exceeded`）。
+             */
+            quotaAssets?: number;
+            /**
+             * @description 代理缓存资产的保留天数（仅 type=proxy 可设置；0 或缺省表示关闭）。
+             *     开启后 storage-cleanup 作业按此值淘汰该仓库的超期缓存资产；其他类型传非 0 值会被拒绝。
+             */
+            cacheRetentionDays?: number;
         };
         UpdateRepositoryRequest: {
             /** @enum {string} */
@@ -2289,6 +2375,20 @@ export interface components {
             members?: string[];
             /** @description 覆盖式更新仓库别名集合（传空数组表示清空；与主名共享命名空间、全局唯一） */
             aliases?: string[];
+            /**
+             * Format: int64
+             * @description 更新仓库存储配额上限（字节）：传 0 表示改为不限；缺省表示不修改。
+             *     计量口径是**逻辑字节** `SUM(asset.size)`；超出后写入被拒绝（HTTP 429，`quota_exceeded`）。
+             */
+            quotaBytes?: number;
+            /**
+             * Format: int64
+             * @description 更新仓库制品数配额上限：传 0 表示改为不限；缺省表示不修改。
+             *     计量口径是**制品计数** `COUNT(*)`；超出后写入被拒绝（HTTP 429，`quota_exceeded`）。
+             */
+            quotaAssets?: number;
+            /** @description 更新代理缓存保留天数：传 0 表示关闭；缺省表示不修改。仅 type=proxy 可设置。 */
+            cacheRetentionDays?: number;
         };
         RenameRepositoryRequest: {
             /** @description 仓库新名称（非空；不得与任何主名/别名冲突。重命名后旧名自动转为别名，仍可解析到该仓库） */
@@ -2651,6 +2751,52 @@ export interface components {
             ttlSeconds?: number;
             reason?: string;
         };
+        /**
+         * @description 单个周期作业的状态快照。计数自进程启动累计（重启归零）；
+         *     未执行过时 lastStartedAt / lastFinishedAt / lastError 缺省（等价于 null）。
+         */
+        MaintenanceJob: {
+            /** @description 作业名（调度器注册名，注册后不可变） */
+            name: string;
+            /**
+             * Format: int64
+             * @description 触发间隔秒数；启动不立即执行，首次执行在第一个间隔到期后
+             */
+            intervalSeconds: number;
+            /** @description 当前是否正在执行（判断作业是否跑完请用本字段，而不是 runs 与 failures 是否相等） */
+            running: boolean;
+            /**
+             * Format: int64
+             * @description 累计执行次数（含失败；在每次执行开始时计入）
+             */
+            runs: number;
+            /**
+             * Format: int64
+             * @description 累计失败次数（含 panic；在每次执行结束时回填，执行中可能与 runs 瞬时不等）
+             */
+            failures: number;
+            /**
+             * Format: date-time
+             * @description 最近一次开始时间；未执行过为 null
+             */
+            lastStartedAt?: string | null;
+            /**
+             * Format: date-time
+             * @description 最近一次结束时间；未执行完成过为 null
+             */
+            lastFinishedAt?: string | null;
+            /** @description 最近一次失败描述；最近一次执行成功或未执行为 null */
+            lastError?: string | null;
+        };
+        /** @description 已注册的周期作业清单；按注册顺序返回。 */
+        MaintenanceJobList: {
+            jobs: components["schemas"]["MaintenanceJob"][];
+        };
+        /** @description 手动触发结果；started 恒为 true——202 表示已受理，不代表作业已执行完成。 */
+        MaintenanceJobRunResult: {
+            name: string;
+            started: boolean;
+        };
         /** @enum {string} */
         BackupImportOrigin: "url" | "upload" | "cli";
         /** @enum {string} */
@@ -2766,6 +2912,24 @@ export interface components {
         };
         /** @description 冲突 */
         Conflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /**
+         * @description 写入被配额拒绝（HTTP 429），错误体沿用统一信封 `{error:{code,message}}`。
+         *     配额类拒绝的错误码固定为 `quota_exceeded`，共两种触发来源，口径一致：
+         *     - 用户发布额度超限（`PublishPolicyRequest` 的每小时制品数 / 每日字节 / 单文件字节）；
+         *     - 仓库存储配额超限（`CreateRepositoryRequest` / `UpdateRepositoryRequest` 的
+         *       `quotaBytes` / `quotaAssets`，计量口径为逻辑字节 `SUM(asset.size)` 与制品计数）。
+         *     被拒绝的写入不产生部分变更。触发这些拒绝的上传入口是**协议端点**
+         *     （raw / maven / npm / oci / pypi / nuget / cargo 原生客户端路径），
+         *     按本契约开头的约定不在此契约内描述；此处登记错误码以统一口径。
+         */
+        TooManyRequests: {
             headers: {
                 [name: string]: unknown;
             };
@@ -2902,6 +3066,8 @@ export interface components {
         BackupUploadIdParam: string;
         /** @description 分片序号，从 0 开始。 */
         BackupUploadChunkIndexParam: number;
+        /** @description 调度器注册的作业名（如 blob-gc / storage-cleanup）；未注册的名称一律 404。 */
+        MaintenanceJobNameParam: string;
     };
     requestBodies: never;
     headers: never;
@@ -4974,6 +5140,55 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+        };
+    };
+    listMaintenanceJobs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 作业清单（按注册顺序） */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaintenanceJobList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    runMaintenanceJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 调度器注册的作业名（如 blob-gc / storage-cleanup）；未注册的名称一律 404。 */
+                name: components["parameters"]["MaintenanceJobNameParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 已受理本次触发 */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaintenanceJobRunResult"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
     importBackupFromURL: {

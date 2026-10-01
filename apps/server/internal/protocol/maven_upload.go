@@ -164,13 +164,20 @@ func (h *MavenHandler) UploadForm(c *gin.Context) {
 	}
 
 	// 1) 主文件 + 校验和。
+	// FR-41：网页上传在 multipart 解析后长度已确定，故在任何内容进入 blob 存储之前
+	// 先做仓库存储配额预检（这是本入口的预检点；本入口不存在未定长度的流式读取）。
+	mainPath := versionDir + "/" + artifactID + "-" + version + "." + packaging
+	if _, quotaErr := h.admissionFor(repoName, mainPath, fileHeader.Size); quotaErr != nil {
+		h.auditRejected(c, "asset.put", repoName, mainPath, publishRejectionDetail(quotaErr))
+		writePublishErr(c, quotaErr)
+		return
+	}
 	f, err := fileHeader.Open()
 	if err != nil {
 		auth.WriteError(c, http.StatusBadRequest, "invalid_file", "读取上传文件失败")
 		return
 	}
 	defer func() { _ = f.Close() }()
-	mainPath := versionDir + "/" + artifactID + "-" + version + "." + packaging
 	if err := stageWithChecksums(mainPath, mainContentType(packaging), f); err != nil {
 		writeAssetErr(c, err)
 		return

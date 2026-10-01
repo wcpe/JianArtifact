@@ -2107,6 +2107,10 @@ type CreateRepositoryRequest struct {
 	// Aliases 仓库别名（可选；与主名共享命名空间、全局唯一，不得等于主名或与他仓主名/别名冲突）
 	Aliases *[]string `json:"aliases,omitempty"`
 
+	// CacheRetentionDays 代理缓存资产的保留天数（仅 type=proxy 可设置；0 或缺省表示关闭）。
+	// 开启后 storage-cleanup 作业按此值淘汰该仓库的超期缓存资产；其他类型传非 0 值会被拒绝。
+	CacheRetentionDays *int `json:"cacheRetentionDays,omitempty"`
+
 	// CredentialRef proxy 上游凭据的受限逻辑名称；运行时仅从 JIAN_UPSTREAM_CREDENTIAL_<名称> 读取（仅 type=proxy，非密钥明文）
 	CredentialRef *string `json:"credentialRef,omitempty"`
 
@@ -2120,6 +2124,14 @@ type CreateRepositoryRequest struct {
 	// Members group 仓库的成员仓库名（有序，type=group 时必填）
 	Members *[]string `json:"members,omitempty"`
 	Name    string    `json:"name"`
+
+	// QuotaAssets 仓库制品数配额上限；0 或缺省表示不限。
+	// 计量口径是**制品计数** `COUNT(*)`；超出后写入被拒绝（HTTP 429，`quota_exceeded`）。
+	QuotaAssets *int64 `json:"quotaAssets,omitempty"`
+
+	// QuotaBytes 仓库存储配额上限（字节）；0 或缺省表示不限。
+	// 计量口径是**逻辑字节** `SUM(asset.size)`（不是去重后的物理占用）；超出后写入被拒绝（HTTP 429，`quota_exceeded`）。
+	QuotaBytes *int64 `json:"quotaBytes,omitempty"`
 
 	// RemoteUrl proxy 仓库的上游地址（type=proxy 时必填）
 	RemoteUrl  *string                            `json:"remoteUrl,omitempty"`
@@ -2331,6 +2343,45 @@ type LoginRequest struct {
 type LoginResponse struct {
 	Token string `json:"token"`
 	User  User   `json:"user"`
+}
+
+// MaintenanceJob 单个周期作业的状态快照。计数自进程启动累计（重启归零）；
+// 未执行过时 lastStartedAt / lastFinishedAt / lastError 缺省（等价于 null）。
+type MaintenanceJob struct {
+	// Failures 累计失败次数（含 panic；在每次执行结束时回填，执行中可能与 runs 瞬时不等）
+	Failures int64 `json:"failures"`
+
+	// IntervalSeconds 触发间隔秒数；启动不立即执行，首次执行在第一个间隔到期后
+	IntervalSeconds int64 `json:"intervalSeconds"`
+
+	// LastError 最近一次失败描述；最近一次执行成功或未执行为 null
+	LastError *string `json:"lastError,omitempty"`
+
+	// LastFinishedAt 最近一次结束时间；未执行完成过为 null
+	LastFinishedAt *time.Time `json:"lastFinishedAt,omitempty"`
+
+	// LastStartedAt 最近一次开始时间；未执行过为 null
+	LastStartedAt *time.Time `json:"lastStartedAt,omitempty"`
+
+	// Name 作业名（调度器注册名，注册后不可变）
+	Name string `json:"name"`
+
+	// Running 当前是否正在执行（判断作业是否跑完请用本字段，而不是 runs 与 failures 是否相等）
+	Running bool `json:"running"`
+
+	// Runs 累计执行次数（含失败；在每次执行开始时计入）
+	Runs int64 `json:"runs"`
+}
+
+// MaintenanceJobList 已注册的周期作业清单；按注册顺序返回。
+type MaintenanceJobList struct {
+	Jobs []MaintenanceJob `json:"jobs"`
+}
+
+// MaintenanceJobRunResult 手动触发结果；started 恒为 true——202 表示已受理，不代表作业已执行完成。
+type MaintenanceJobRunResult struct {
+	Name    string `json:"name"`
+	Started bool   `json:"started"`
 }
 
 // MetricGroupState defines model for MetricGroupState.
@@ -2729,10 +2780,16 @@ type Repository struct {
 	// Aliases 仓库别名列表（可多个；别名与主名共享命名空间、全局唯一，重命名后旧名自动转别名）
 	Aliases *[]string `json:"aliases,omitempty"`
 
-	// ArtifactCount 仓库内制品数量（只读统计字段）
-	ArtifactCount    *int              `json:"artifactCount,omitempty"`
-	ConnectionStatus *ConnectionStatus `json:"connectionStatus,omitempty"`
-	CreatedAt        string            `json:"createdAt"`
+	// ArtifactCount 仓库内制品数量（只读统计字段；即 quotaAssets 的计量口径 COUNT(*)）
+	ArtifactCount *int `json:"artifactCount,omitempty"`
+
+	// CacheRetentionDays 仓库代理缓存资产的保留天数；0 或缺省表示关闭（默认）。
+	// 仅 proxy 仓库可设置（hosted/group 恒为 0 或缺省）：开启后 storage-cleanup 作业会淘汰
+	// 该仓库内 `updated_at` 早于「当前时间 − 保留天数」的缓存资产，删除走既有资产变更通道；
+	// 保留天数按 24 小时整数天计。
+	CacheRetentionDays *int              `json:"cacheRetentionDays,omitempty"`
+	ConnectionStatus   *ConnectionStatus `json:"connectionStatus,omitempty"`
+	CreatedAt          string            `json:"createdAt"`
 
 	// CredentialRef proxy 上游凭据的受限逻辑名称；运行时仅从 JIAN_UPSTREAM_CREDENTIAL_<名称> 读取（仅 type=proxy，非密钥明文）
 	CredentialRef *string `json:"credentialRef,omitempty"`
@@ -2752,10 +2809,20 @@ type Repository struct {
 	// Online 仓库是否在线（管理员可手动置离线；offline 不参与复制）
 	Online *bool `json:"online,omitempty"`
 
+	// QuotaAssets 仓库制品数配额上限；0 或缺省表示不限。
+	// 计量口径是**制品计数** `COUNT(*)`（与 artifactCount 同一口径）；
+	// 超出后该仓库的写入被拒绝（HTTP 429，`quota_exceeded`）。
+	QuotaAssets *int64 `json:"quotaAssets,omitempty"`
+
+	// QuotaBytes 仓库存储配额上限（字节）；0 或缺省表示不限。
+	// 计量口径是**逻辑字节** `SUM(asset.size)`（按制品记录大小累加，不是去重后的物理占用
+	// ——去重 blob 无法按仓库归属）；超出后该仓库的写入被拒绝（HTTP 429，`quota_exceeded`）。
+	QuotaBytes *int64 `json:"quotaBytes,omitempty"`
+
 	// RemoteUrl proxy 仓库的上游地址（仅 type=proxy）
 	RemoteUrl *string `json:"remoteUrl,omitempty"`
 
-	// TotalSize 仓库内制品总字节数（只读统计字段）
+	// TotalSize 仓库内制品总字节数（只读统计字段；即 quotaBytes 的计量口径 SUM(asset.size)）
 	TotalSize  *int64               `json:"totalSize,omitempty"`
 	Type       RepositoryType       `json:"type"`
 	Visibility RepositoryVisibility `json:"visibility"`
@@ -2829,6 +2896,9 @@ type UpdateRepositoryRequest struct {
 	// Aliases 覆盖式更新仓库别名集合（传空数组表示清空；与主名共享命名空间、全局唯一）
 	Aliases *[]string `json:"aliases,omitempty"`
 
+	// CacheRetentionDays 更新代理缓存保留天数：传 0 表示关闭；缺省表示不修改。仅 type=proxy 可设置。
+	CacheRetentionDays *int `json:"cacheRetentionDays,omitempty"`
+
 	// CredentialRef 更新 proxy 上游凭据的受限逻辑名称；运行时仅从 JIAN_UPSTREAM_CREDENTIAL_<名称> 读取（仅 type=proxy，非密钥明文）
 	CredentialRef *string `json:"credentialRef,omitempty"`
 
@@ -2840,6 +2910,14 @@ type UpdateRepositoryRequest struct {
 
 	// Members 更新 group 成员仓库名（仅 type=group）
 	Members *[]string `json:"members,omitempty"`
+
+	// QuotaAssets 更新仓库制品数配额上限：传 0 表示改为不限；缺省表示不修改。
+	// 计量口径是**制品计数** `COUNT(*)`；超出后写入被拒绝（HTTP 429，`quota_exceeded`）。
+	QuotaAssets *int64 `json:"quotaAssets,omitempty"`
+
+	// QuotaBytes 更新仓库存储配额上限（字节）：传 0 表示改为不限；缺省表示不修改。
+	// 计量口径是**逻辑字节** `SUM(asset.size)`；超出后写入被拒绝（HTTP 429，`quota_exceeded`）。
+	QuotaBytes *int64 `json:"quotaBytes,omitempty"`
 
 	// RemoteUrl 更新 proxy 上游地址（仅 type=proxy）
 	RemoteUrl  *string                            `json:"remoteUrl,omitempty"`
@@ -3009,6 +3087,9 @@ type DownloadRepoParam = string
 
 // HostInterfaceParam defines model for HostInterfaceParam.
 type HostInterfaceParam = string
+
+// MaintenanceJobNameParam defines model for MaintenanceJobNameParam.
+type MaintenanceJobNameParam = string
 
 // MigrationIdParam defines model for MigrationIdParam.
 type MigrationIdParam = int64
@@ -3837,6 +3918,12 @@ type ServerInterface interface {
 	// FreezeWrites 冻结节点写入（仅管理员）
 	// (POST /api/v1/maintenance/freeze)
 	FreezeWrites(c *gin.Context)
+	// ListMaintenanceJobs 周期作业清单与运行状态（仅管理员）
+	// (GET /api/v1/maintenance/jobs)
+	ListMaintenanceJobs(c *gin.Context)
+	// RunMaintenanceJob 手动触发一次周期作业（仅管理员）
+	// (POST /api/v1/maintenance/jobs/{name}/run)
+	RunMaintenanceJob(c *gin.Context, name MaintenanceJobNameParam)
 	// GetMyPinnedRepositories 当前用户的置顶仓库（登录用户读自己的；匿名回退全局置顶）
 	// (GET /api/v1/me/pinned-repositories)
 	GetMyPinnedRepositories(c *gin.Context)
@@ -4571,6 +4658,44 @@ func (siw *ServerInterfaceWrapper) FreezeWrites(c *gin.Context) {
 	}
 
 	siw.Handler.FreezeWrites(c)
+}
+
+// ListMaintenanceJobs operation middleware
+func (siw *ServerInterfaceWrapper) ListMaintenanceJobs(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ListMaintenanceJobs(c)
+}
+
+// RunMaintenanceJob operation middleware
+func (siw *ServerInterfaceWrapper) RunMaintenanceJob(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "name" -------------
+	var name MaintenanceJobNameParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "name", c.Param("name"), &name, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter name: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.RunMaintenanceJob(c, name)
 }
 
 // GetMyPinnedRepositories operation middleware
@@ -6401,6 +6526,8 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.DELETE(options.BaseURL+"/api/v1/maintenance/freeze", wrapper.UnfreezeWrites)
 	router.GET(options.BaseURL+"/api/v1/maintenance/freeze", wrapper.GetWriteFreezeState)
 	router.POST(options.BaseURL+"/api/v1/maintenance/freeze", wrapper.FreezeWrites)
+	router.GET(options.BaseURL+"/api/v1/maintenance/jobs", wrapper.ListMaintenanceJobs)
+	router.POST(options.BaseURL+"/api/v1/maintenance/jobs/:name/run", wrapper.RunMaintenanceJob)
 	router.POST(options.BaseURL+"/api/v1/backups/import", wrapper.ImportBackupFromURL)
 	router.GET(options.BaseURL+"/api/v1/backups/imports", wrapper.ListBackupImports)
 	router.GET(options.BaseURL+"/api/v1/backups/imports/:id", wrapper.GetBackupImport)

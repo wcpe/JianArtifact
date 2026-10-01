@@ -203,6 +203,7 @@ func newApplicationHandler(cfg *config.Config, svc *appServices, assets fs.FS) h
 	if cfg.EnabledFormats.Any() {
 		rawHandler = protocol.NewRawHandler(svc.assetSvc, svc.repoSvc)
 		rawHandler.SetPublishPolicy(svc.publishPolicySvc)
+		rawHandler.SetQuotaGuard(svc.quotaSvc) // FR-41：仓库存储配额（预检早拒 + 提交点权威复检）
 		rawHandler.SetAudit(apiHandlers.AuditLog)
 		rawHandler.SetOperationAudit(apiHandlers.ProtocolAssetOperationAudit)
 	}

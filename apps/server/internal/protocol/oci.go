@@ -114,6 +114,7 @@ func (h *OCIHandler) Post(c *gin.Context) {
 	settle, limit, err := h.beginUnresolvedPublish(c, repo)
 	if err != nil {
 		h.auditRejected(c, "oci.blob.put", repo, ociAuditPath(c.Param("rest")), publishRejectionDetail(err))
+		h.recordQuotaRejection(err)
 		writeOCIError(c, ociStatus(err), ociCode(err), "blob 发布被拒绝")
 		return
 	}
@@ -276,6 +277,7 @@ func (h *OCIHandler) putManifest(c *gin.Context, repo, image, reference string) 
 	settle, err := h.beginPublish(c, repo, ociManifestPolicyPath(image, reference), int64(len(body)))
 	if err != nil {
 		h.auditRejected(c, "oci.manifest.put", repo, ociManifestPolicyPath(image, reference), publishRejectionDetail(err))
+		h.recordQuotaRejection(err)
 		writeOCIError(c, ociStatus(err), ociCode(err), "manifest 发布被拒绝")
 		return
 	}
@@ -337,6 +339,7 @@ func (h *OCIHandler) completeUpload(c *gin.Context, repo, image, id string) {
 	if _, err := h.copyUploadChunk(session, file, c.Request.Body); err != nil {
 		if errors.Is(err, domain.ErrQuotaExceeded) {
 			h.auditRejected(c, "oci.blob.put", repo, ociAuditPath(c.Param("rest")), "quota_exceeded")
+			h.recordQuotaRejection(err)
 			cleanup = h.closeUploadLocked(id, session, false)
 			writeOCIError(c, ociStatus(err), ociCode(err), "blob 发布被拒绝")
 			return
@@ -377,6 +380,7 @@ func (h *OCIHandler) completeDirectUpload(c *gin.Context, repo, image, digest st
 	settle, limit, err := h.beginRawPublish(c, repo, path)
 	if err != nil {
 		h.auditRejected(c, "oci.blob.put", repo, path, publishRejectionDetail(err))
+		h.recordQuotaRejection(err)
 		writeOCIError(c, ociStatus(err), ociCode(err), "blob 发布被拒绝")
 		return
 	}
@@ -388,6 +392,7 @@ func (h *OCIHandler) completeDirectUpload(c *gin.Context, repo, image, digest st
 	asset, err := h.oci.PutBlob(repo, digest, body)
 	if err != nil {
 		h.auditRejected(c, "oci.blob.put", repo, path, publishRejectionDetail(err))
+		h.recordQuotaRejection(err)
 		writeOCIError(c, ociStatus(err), ociCode(err), "blob 发布失败")
 		return
 	}

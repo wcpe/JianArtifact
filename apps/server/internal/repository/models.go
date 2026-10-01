@@ -57,6 +57,16 @@ type RepositoryConfig struct {
 	CredentialRef    string   `json:"credentialRef,omitempty"`
 	Members          []string `json:"members,omitempty"`
 	ImmutableRelease bool     `json:"immutableRelease,omitempty"`
+	// CacheRetentionDays 是 proxy 仓库代理缓存资产的保留天数（FR-41）：
+	// 0/缺省 = 关闭（默认），仅允许 proxy 类型取非 0；负数非法。
+	// 由 storage-cleanup 作业按此值淘汰超期缓存，删除走既有资产变更通道。
+	CacheRetentionDays int `json:"cacheRetentionDays,omitempty"`
+	// QuotaBytes 是仓库的存储配额上限（FR-41），口径为逻辑字节 SUM(asset.size)：
+	// 0/缺省 = 不限，负数非法；group 类型不承载写入，必须为 0。
+	QuotaBytes int64 `json:"quotaBytes,omitempty"`
+	// QuotaAssets 是仓库的制品数配额上限（FR-41），口径为 COUNT(*)：
+	// 0/缺省 = 不限，负数非法；group 类型不承载写入，必须为 0。
+	QuotaAssets int64 `json:"quotaAssets,omitempty"`
 }
 
 // PublishPolicy 是用户×hosted 仓库的发布附加限制。
@@ -110,4 +120,8 @@ type Asset struct {
 	Md5          string `db:"md5"`
 	CreatedAt    string `db:"created_at"`
 	UpdatedAt    string `db:"updated_at"`
+	// QuotaExempt 是仓库存储配额豁免标记（FR-41）：**非持久化字段**，仅供迁移导入与
+	// 备份恢复等管理员批量操作在提交点声明「本次写入不受仓库配额约束」。零值表示
+	// 正常受配额约束；协议发布路径不得置位（配额守卫在提交点读取它）。
+	QuotaExempt bool `db:"-" json:"-"`
 }

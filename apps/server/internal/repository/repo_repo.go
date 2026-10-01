@@ -69,6 +69,20 @@ func (r *RepoRepo) GetByID(id int64) (*Repository, error) {
 	return &repo, nil
 }
 
+// GetByIDTx 在调用方事务中按 ID 取仓库，供提交点判定（FR-41 存储配额）读取
+// 与本次写入同一事务视图下的仓库配置。不存在返回 ErrNotFound。
+func (r *RepoRepo) GetByIDTx(tx *sqlx.Tx, id int64) (*Repository, error) {
+	var repo Repository
+	err := tx.Get(&repo, `SELECT id, name, format, type, visibility, description, config, online, created_at FROM repository WHERE id = ?`, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &repo, nil
+}
+
 // List 返回分页仓库（按 id 升序）。
 func (r *RepoRepo) List(limit, offset int) ([]Repository, error) {
 	var repos []Repository

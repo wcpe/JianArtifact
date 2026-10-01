@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jmoiron/sqlx"
+
 	"github.com/wcpe/jianartifact/apps/server/internal/blobstore"
 	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
@@ -23,8 +25,10 @@ type AssetMutationCoordinator struct {
 	finalize           func(blobstore.QuarantineEntry) error
 	finalizeSnapshot   func(blobstore.RollbackSnapshot) error
 	removeUnreferenced func(string) error
-	retainBlob         func(string) bool
-	gate               sync.RWMutex
+	// quotaCheck 是提交点权威的仓库存储配额复检（FR-41）：与资产写入同一事务执行，
+	// 越限返回错误即整批回滚。nil 表示不做存储配额判定。
+	quotaCheck StorageQuotaGuard
+	gate       sync.RWMutex
 }
 
 var operationIDFallback atomic.Uint64
@@ -44,10 +48,11 @@ func NewAssetMutationCoordinatorDeferred(db *persistence.DB, blobs *blobstore.St
 	return &AssetMutationCoordinator{mutations: repository.NewAssetMutationRepo(db), blobs: blobs, finalize: blobs.Finalize, finalizeSnapshot: blobs.FinalizeRollbackSnapshot, removeUnreferenced: blobs.Remove}
 }
 
-// SetBlobRetentionChecker 注入 relay 日志保留检查。
-// relay 节点必须保留已转发 record 引用的 blob，防止慢子节点在上游先删除元数据后无法回补内容。
-func (c *AssetMutationCoordinator) SetBlobRetentionChecker(check func(string) bool) {
-	c.retainBlob = check
+// SetStorageQuotaCheck 注入仓库级存储配额的提交点复检（FR-41 §4.1）。
+// 复检与资产写入处于同一事务：判定失败即整批回滚，已提交状态永不越界。
+// nil 表示不做存储配额判定（兼容既有装配与只读部署）。
+func (c *AssetMutationCoordinator) SetStorageQuotaCheck(check StorageQuotaGuard) {
+	c.quotaCheck = check
 }
 
 // Read 在读门内执行元数据与 blob 打开，确保不会观察 staged/committing 中间状态。
@@ -173,17 +178,21 @@ func (c *AssetMutationCoordinator) applyLockedWithEnvelopeAndHook(items []reposi
 			return id, c.rollbackBeforeCompletion(id, entries, snapshot, err)
 		}
 	}
+	// 完成事务的钩子顺序：先做仓库存储配额权威复检（FR-41），再执行调用方的附加
+	// 元数据 / 审计钩子。越限时复检返回错误使整个事务回滚，附加状态一律不落库。
+	hooks := make([]repository.MutationCompletionHook, 0, 2)
+	if c.quotaCheck != nil {
+		hooks = append(hooks, func(tx *sqlx.Tx) error { return c.quotaCheck(tx, items) })
+	}
+	if hook != nil {
+		hooks = append(hooks, hook)
+	}
 	var completeErr error
-	if envelope == nil && hook != nil {
-		completeErr = c.mutations.CompleteWithHook(id, items, hook)
-	} else if envelope == nil {
-		completeErr = c.mutations.Complete(id, items)
-	} else if hook != nil {
-		outbox := repository.NewReplicationOperationRepo(c.mutations.DB())
-		completeErr = c.mutations.CompleteWithOutboxAndHook(id, items, outbox, *envelope, hook)
+	if envelope == nil {
+		completeErr = c.mutations.CompleteWithHooks(id, items, hooks...)
 	} else {
 		outbox := repository.NewReplicationOperationRepo(c.mutations.DB())
-		completeErr = c.mutations.CompleteWithOutbox(id, items, outbox, *envelope)
+		completeErr = c.mutations.CompleteWithOutboxAndHooks(id, items, outbox, *envelope, hooks...)
 	}
 	if completeErr != nil {
 		return id, c.rollbackBeforeCompletion(id, entries, snapshot, completeErr)
@@ -324,9 +333,6 @@ func (c *AssetMutationCoordinator) stageUnreferenced(id string, items []reposito
 	}
 	var entries []blobstore.QuarantineEntry
 	for hash, removeCount := range removed {
-		if c.retainBlob != nil && c.retainBlob(hash) {
-			continue
-		}
 		count, err := c.mutations.CountBlobReferences(hash)
 		if err != nil {
 			return entries, err

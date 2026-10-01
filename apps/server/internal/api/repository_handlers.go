@@ -175,6 +175,17 @@ func (h *Handlers) CreateRepository(c *gin.Context) {
 	if req.ImmutableRelease != nil {
 		cfg.ImmutableRelease = *req.ImmutableRelease
 	}
+	// FR-41：存储治理字段（配额 + 代理缓存保留天数）与其它配置同列落库，创建时整体写入。
+	// 指针缺省即 config 里的 0，与契约的「0 / 缺省 = 不限 / 关闭代理缓存保留」同义。
+	if req.QuotaBytes != nil {
+		cfg.QuotaBytes = *req.QuotaBytes
+	}
+	if req.QuotaAssets != nil {
+		cfg.QuotaAssets = *req.QuotaAssets
+	}
+	if req.CacheRetentionDays != nil {
+		cfg.CacheRetentionDays = *req.CacheRetentionDays
+	}
 	var aliases []string
 	if req.Aliases != nil {
 		aliases = *req.Aliases
@@ -192,8 +203,37 @@ func (h *Handlers) CreateRepository(c *gin.Context) {
 	if len(repo.Aliases) > 0 {
 		detail += " aliases=" + strings.Join(repo.Aliases, ",")
 	}
+	// FR-41：只在真的设了上限 / 保留天数时记账——0 是「不限 / 关闭」的缺省态，写进审计只是噪声。
+	if cfg.QuotaBytes > 0 {
+		detail += " quotaBytes=" + strconv.FormatInt(cfg.QuotaBytes, 10)
+	}
+	if cfg.QuotaAssets > 0 {
+		detail += " quotaAssets=" + strconv.FormatInt(cfg.QuotaAssets, 10)
+	}
+	if cfg.CacheRetentionDays > 0 {
+		detail += " cacheRetentionDays=" + strconv.Itoa(cfg.CacheRetentionDays)
+	}
 	h.AuditLog(c, "repo.create", "repository", req.Name, req.Name, detail, "ok")
 	c.JSON(http.StatusCreated, h.toRepo(repo, nil))
+}
+
+// repositoryUpdateRequestEmpty 判断更新请求体是否一个可更新字段都没带。
+// 全空请求体是调用方错误（而不是「无事发生」），必须 400 而非静默成功；
+// 每新增一个可更新字段都要在此登记，否则「只传新字段」的请求会被误判为空。
+func repositoryUpdateRequestEmpty(req UpdateRepositoryRequest) bool {
+	return req.Visibility == nil && req.Description == nil && req.RemoteUrl == nil &&
+		req.CredentialRef == nil && req.ImmutableRelease == nil && req.Members == nil &&
+		req.Aliases == nil && req.QuotaBytes == nil && req.QuotaAssets == nil &&
+		req.CacheRetentionDays == nil
+}
+
+// repositoryConfigUpdateTouched 判断请求是否触及 config 列承载的字段。
+// config 是整体覆盖写（逐字段覆盖后整列替换），因此必须先把现有配置读回来再改；
+// 一个 config 字段都没带时保持 nil，避免无谓的读改写把并发窗口放大。
+func repositoryConfigUpdateTouched(req UpdateRepositoryRequest) bool {
+	return req.RemoteUrl != nil || req.CredentialRef != nil || req.ImmutableRelease != nil ||
+		req.Members != nil || req.QuotaBytes != nil || req.QuotaAssets != nil ||
+		req.CacheRetentionDays != nil
 }
 
 // UpdateRepository 更新仓库可见性/描述/配置，仅管理员。
@@ -205,7 +245,7 @@ func (h *Handlers) UpdateRepository(c *gin.Context, name RepoNameParam) {
 	if !bindJSON(c, &req) {
 		return
 	}
-	if req.Visibility == nil && req.Description == nil && req.RemoteUrl == nil && req.CredentialRef == nil && req.ImmutableRelease == nil && req.Members == nil && req.Aliases == nil {
+	if repositoryUpdateRequestEmpty(req) {
 		auth.WriteError(c, http.StatusBadRequest, "bad_request", "缺少可更新字段")
 		return
 	}
@@ -214,7 +254,7 @@ func (h *Handlers) UpdateRepository(c *gin.Context, name RepoNameParam) {
 		visibility = string(*req.Visibility)
 	}
 	var cfg *repository.RepositoryConfig
-	if req.RemoteUrl != nil || req.CredentialRef != nil || req.ImmutableRelease != nil || req.Members != nil {
+	if repositoryConfigUpdateTouched(req) {
 		existing, err := h.repos.Get(name)
 		if err != nil {
 			writeDomainErr(c, err)
@@ -238,6 +278,17 @@ func (h *Handlers) UpdateRepository(c *gin.Context, name RepoNameParam) {
 		if req.ImmutableRelease != nil {
 			cfg.ImmutableRelease = *req.ImmutableRelease
 		}
+		// FR-41：治理字段按指针语义逐字段覆盖——nil 表示不修改，显式 0 表示改为不限 / 关闭代理缓存保留。
+		// 负值与非 proxy 上的非 0 cacheRetentionDays 交由域层 validateConfig 拒绝（400）。
+		if req.QuotaBytes != nil {
+			cfg.QuotaBytes = *req.QuotaBytes
+		}
+		if req.QuotaAssets != nil {
+			cfg.QuotaAssets = *req.QuotaAssets
+		}
+		if req.CacheRetentionDays != nil {
+			cfg.CacheRetentionDays = *req.CacheRetentionDays
+		}
 	}
 	repo, err := h.repos.Update(name, visibility, req.Description, cfg, req.Aliases)
 	if err != nil {
@@ -245,7 +296,7 @@ func (h *Handlers) UpdateRepository(c *gin.Context, name RepoNameParam) {
 		return
 	}
 	// FR-109：审计附带逻辑凭据引用变更（配置或清除），只记名称不记明文。
-	detailParts := make([]string, 0, 3)
+	detailParts := make([]string, 0, 6)
 	if req.ImmutableRelease != nil {
 		detailParts = append(detailParts, "immutableRelease="+strconv.FormatBool(*req.ImmutableRelease))
 	}
@@ -258,6 +309,16 @@ func (h *Handlers) UpdateRepository(c *gin.Context, name RepoNameParam) {
 	}
 	if req.Aliases != nil {
 		detailParts = append(detailParts, "aliases="+strings.Join(*req.Aliases, ","))
+	}
+	// FR-41：治理字段只在请求显式带上时记账（显式 0 也要记：那是「改为不限 / 关闭」这一次变更）。
+	if req.QuotaBytes != nil {
+		detailParts = append(detailParts, "quotaBytes="+strconv.FormatInt(*req.QuotaBytes, 10))
+	}
+	if req.QuotaAssets != nil {
+		detailParts = append(detailParts, "quotaAssets="+strconv.FormatInt(*req.QuotaAssets, 10))
+	}
+	if req.CacheRetentionDays != nil {
+		detailParts = append(detailParts, "cacheRetentionDays="+strconv.Itoa(*req.CacheRetentionDays))
 	}
 	detail := strings.Join(detailParts, " ")
 	h.AuditLog(c, "repo.update", "repository", name, name, detail, "ok")
@@ -526,6 +587,9 @@ func (h *Handlers) apiBaseURL(c *gin.Context) string {
 
 // CleanupEmptyMavenArtifacts 清理 Maven 仓库中无 jar 的 GAV 目录。
 // 非契约端点，经 WithProtocolRoutes 注册。
+//
+// FR-41：这是唯一的「批量物理删除」运维入口，必须留痕（成功与失败都记 repo.cleanup）；
+// 响应体形状保持不变（{"deleted": n}），审计只发生在服务端。
 func (h *Handlers) CleanupEmptyMavenArtifacts(c *gin.Context) {
 	name := c.Param("name")
 	if _, ok := h.requireRepoAdmin(c, name); !ok {
@@ -533,10 +597,34 @@ func (h *Handlers) CleanupEmptyMavenArtifacts(c *gin.Context) {
 	}
 	deleted, err := h.repos.CleanupEmptyMavenArtifacts(name)
 	if err != nil {
+		// 先写响应再记审计：审计条目里的 statusCode 取的是已写出的状态码，
+		// 这样失败留痕能和调用方真正看到的 4xx/409 对上。
 		writeDomainErr(c, err)
+		h.AuditLog(c, "repo.cleanup", "repository", name, name, "deleted=0 reason="+cleanupFailureReason(err), "failed")
 		return
 	}
+	h.AuditLog(c, "repo.cleanup", "repository", name, name, "deleted="+strconv.Itoa(deleted), "ok")
 	c.JSON(http.StatusOK, gin.H{"deleted": deleted})
+}
+
+// cleanupFailureReason 把清理失败归一为稳定的短原因，供审计 detail 使用。
+// 刻意不复用错误原文：底层错误可能带数据库位置或文件系统路径，而审计条目是要长期保留、
+// 并对管理员可见的，不该落盘这类环境信息。取值对应 writeDomainErr 的错误码分类。
+func cleanupFailureReason(err error) string {
+	switch {
+	case errors.Is(err, domain.ErrNotFound):
+		return "not_found"
+	case errors.Is(err, domain.ErrValidation):
+		return "format_unsupported"
+	case errors.Is(err, domain.ErrFormatDisabled):
+		return "format_disabled"
+	case errors.Is(err, domain.ErrOperationLimit):
+		return "operation_limit"
+	case errors.Is(err, domain.ErrConflict):
+		return "conflict"
+	default:
+		return "internal_error"
+	}
 }
 
 // ListPublicRepositories 匿名可读仓库列表（无需认证）：public ∪ anonymous 主体

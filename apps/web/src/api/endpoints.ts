@@ -325,6 +325,12 @@ export function createRepository(input: {
   members?: string[];
   /** 仓库别名（可选；与主名共享命名空间、全局唯一，不得等于主名或与他仓主名/别名冲突）。 */
   aliases?: string[];
+  /** FR-41：仓库存储配额上限（字节）；0 / 缺省表示不限。 */
+  quotaBytes?: number;
+  /** FR-41：仓库制品数配额上限；0 / 缺省表示不限。 */
+  quotaAssets?: number;
+  /** FR-41：代理缓存保留天数（仅 type=proxy 可设）；0 / 缺省表示关闭。 */
+  cacheRetentionDays?: number;
 }): Promise<Repository> {
   return request<Repository>("/repositories", { method: "POST", body: input });
 }
@@ -338,6 +344,12 @@ export function updateRepository(
     members?: string[];
     /** 覆盖式更新别名集合（空数组表示清空；与主名共享命名空间、全局唯一）。 */
     aliases?: string[];
+    /** FR-41：存储配额上限（字节）；传 0 表示改为不限，缺省表示不修改。 */
+    quotaBytes?: number;
+    /** FR-41：制品数配额上限；传 0 表示改为不限，缺省表示不修改。 */
+    quotaAssets?: number;
+    /** FR-41：代理缓存保留天数（仅 type=proxy 可设）；传 0 表示关闭，缺省表示不修改。 */
+    cacheRetentionDays?: number;
   },
 ): Promise<Repository> {
   return request<Repository>(`/repositories/${name}`, { method: "PATCH", body: patch });

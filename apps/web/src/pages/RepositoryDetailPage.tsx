@@ -3,6 +3,7 @@ import {
   Badge,
   Button,
   Card,
+  Divider,
   Group,
   Modal,
   MultiSelect,
@@ -17,6 +18,7 @@ import {
   Textarea,
   TextInput,
   Title,
+  Tooltip,
 } from "@mantine/core";
 import {
   IconDeviceFloppy,
@@ -61,6 +63,20 @@ import { useAuth } from "../auth/AuthContext";
 import { useAsync } from "../hooks/useAsync";
 import { CONN_COLOR, CONN_LABEL_KEY } from "../lib/connectionStatus";
 import { formatBytes, formatCount, formatStamp } from "../lib/format";
+import {
+  QUOTA_NEAR_RATIO,
+  QUOTA_STATE_COLOR,
+  QUOTA_STATE_LABEL_KEY,
+  QUOTA_UNITS,
+  hasQuotaLimit,
+  parseNonNegativeInt,
+  parseQuotaBytes,
+  quotaState,
+  repoQuotaState,
+  splitQuotaBytes,
+  type QuotaState,
+  type QuotaUnit,
+} from "../lib/quota";
 import { notifyError, notifySuccess } from "../lib/feedback";
 import { formatUtcToLocalDate } from "../lib/timeFormat";
 import { density } from "../theme/density";
@@ -209,6 +225,8 @@ export function RepositoryDetailPage() {
                     ? t("repositories.visibilityPublic")
                     : t("repositories.visibilityPrivate")}
                 </Badge>
+                {/* FR-41：配额状态（接近上限 / 已超限）对所有登录用户可见，只读。 */}
+                <QuotaStatusBadge repo={repo} />
               </>
             ) : (
               // 慢接口下也保持页头有形，避免左侧长时间是空的。
@@ -292,6 +310,47 @@ function DetailStat({ label, value, color }: { label: string; value: string; col
 }
 
 /**
+ * FR-41：用量行的文字颜色——只在需要预警的两个状态着色（接近上限橙、已超限红）；
+ * 正常与不限保持默认前景色（灰色会被误读成「禁用/失效」）。
+ */
+function quotaLineColor(state: QuotaState): string | undefined {
+  return state === "near" || state === "over" ? QUOTA_STATE_COLOR[state] : undefined;
+}
+
+/**
+ * FR-41：页头的仓库配额状态徽章（管理员与非管理员都能看到，只读）。
+ *
+ * 只在「接近上限 / 已超限」时渲染：正常与不限状态下没有信息量，不该给每个仓库都挂一个绿徽章。
+ * 超限的含义是服务端开始拒绝写入（HTTP 429 / quota_exceeded），故用红色并给出明确提示。
+ */
+function QuotaStatusBadge({ repo }: { repo: Repository }) {
+  const { t } = useTranslation();
+  const state = repoQuotaState(repo);
+  if (state !== "near" && state !== "over") return null;
+  const label = t(QUOTA_STATE_LABEL_KEY[state]);
+  return (
+    <Tooltip
+      label={
+        state === "over"
+          ? t("quota.overHint")
+          : t("quota.nearHint", { percent: Math.round(QUOTA_NEAR_RATIO * 100) })
+      }
+      position="top"
+      withArrow
+    >
+      <Badge
+        size="xs"
+        variant="light"
+        color={QUOTA_STATE_COLOR[state]}
+        data-testid="repo-quota-badge"
+      >
+        {label}
+      </Badge>
+    </Tooltip>
+  );
+}
+
+/**
  * 别名前端校验：返回错误提示的 i18n 键（无错误返回 null）。
  * 规则：非空、不得等于仓库主名、不得重复；后端仍会做全局唯一性兜底。
  */
@@ -324,6 +383,13 @@ function ConfigTab({
   const [members, setMembers] = useState<string[]>([]);
   // 仓库别名：与主名共享命名空间、全局唯一；随「保存配置」一并覆盖式提交。
   const [aliases, setAliases] = useState<string[]>([]);
+  // FR-41 存储配额：字节按所选单位（MB/GB/字节）填写，保存时换算成字节；0 或留空 = 不限。
+  // 存成字符串是为了区分「空输入」（= 不限）与「非法输入」（负数/非数字，需拦截）。
+  const [quotaBytesText, setQuotaBytesText] = useState("0");
+  const [quotaBytesUnit, setQuotaBytesUnit] = useState<QuotaUnit>("GB");
+  const [quotaAssetsText, setQuotaAssetsText] = useState("0");
+  // FR-41 代理缓存保留天数（仅 proxy 仓库可设）；0 或留空 = 关闭（不自动清理）。
+  const [cacheRetentionText, setCacheRetentionText] = useState("0");
   const [saving, setSaving] = useState(false);
   const [online, setOnline] = useState(true);
   const [togglingOnline, setTogglingOnline] = useState(false);
@@ -350,6 +416,15 @@ function ConfigTab({
       setDescription(repo.description ?? "");
       setMembers(repo.members ?? []);
       setAliases(repo.aliases ?? []);
+      // FR-41：配额回显成「数值 + 单位」（能整除 GB 就用 GB），避免管理员对着字节数心算。
+      const quotaBytesInput = splitQuotaBytes(repo.quotaBytes);
+      setQuotaBytesText(quotaBytesInput.value);
+      setQuotaBytesUnit(quotaBytesInput.unit);
+      setQuotaAssetsText(String(hasQuotaLimit(repo.quotaAssets) ? repo.quotaAssets : 0));
+      // FR-41：保留天数 0 / 缺省 = 关闭（对非 proxy 仓库后端恒为 0，这里一并按关闭渲染）。
+      setCacheRetentionText(
+        String(hasQuotaLimit(repo.cacheRetentionDays) ? repo.cacheRetentionDays : 0),
+      );
       setOnline(repo.online ?? true);
       setConnStatus(repo.connectionStatus?.status ?? null);
     }
@@ -357,6 +432,23 @@ function ConfigTab({
 
   // 别名前端校验：返回错误提示的 i18n 键（无错误返回 null）。后端仍会兜底校验。
   const aliasErrorKey = aliasValidationKey(aliases, repo?.name ?? repoName);
+
+  // 配额输入校验：null 表示非法（非数字 / 负数）。空串按 0（不限 / 关闭）处理。
+  const quotaBytesValue = parseQuotaBytes(quotaBytesText, quotaBytesUnit);
+  const quotaAssetsValue = parseNonNegativeInt(quotaAssetsText);
+  const cacheRetentionValue = parseNonNegativeInt(cacheRetentionText);
+  // FR-41：存储配额只有承载写入的 hosted 仓库可设——group 不承载写入，proxy 的缓存在读取回源
+  // 路径上落盘、没有准入预检与流式早拒，后端对这两类仓库提交非 0 配额直接 400。
+  // 因此配额两项按类型出现/隐藏，校验与提交也只对 hosted 生效（与「保留天数仅 proxy」同一范式）。
+  const quotaEditable = repo?.type === "hosted";
+  const quotaInvalid =
+    (quotaEditable && (quotaBytesValue === null || quotaAssetsValue === null)) ||
+    cacheRetentionValue === null;
+  // 当前用量（来自仓库响应的只读统计字段）与上限的状态：正常 / 接近上限 / 已超限。
+  const bytesState = quotaState(repo?.totalSize, repo?.quotaBytes);
+  const assetsState = quotaState(repo?.artifactCount, repo?.quotaAssets);
+  const repoQuota = repoQuotaState(repo ?? {});
+  const quotaUnlimitedText = t("quota.unlimited");
 
   // FR-113：online/offline 开关（仅管理员；本地运维状态，不参与复制）。
   const handleToggleOnline = (next: boolean) => {
@@ -392,6 +484,11 @@ function ConfigTab({
       notifyError(t(aliasErrorKey));
       return;
     }
+    // FR-41：配额非法（负数 / 非数字）时不提交，避免把 NaN 或负值发给服务端。
+    if (quotaInvalid) {
+      notifyError(t("repoDetail.configQuotaInvalid"));
+      return;
+    }
     setSaving(true);
     const normalizedAliases = aliases.map((a) => a.trim()).filter(Boolean);
     const patch: {
@@ -399,11 +496,22 @@ function ConfigTab({
       description: string;
       members?: string[];
       aliases: string[];
+      quotaBytes?: number;
+      quotaAssets?: number;
+      cacheRetentionDays?: number;
     } = {
       visibility,
       description,
       ...(repo?.type === "group" ? { members } : {}),
       aliases: normalizedAliases,
+      // 配额只有 hosted 可设：其他类型提交非 0 值会被后端 400，而非 hosted 也从不渲染这两个输入，
+      // 故整字段按类型条件提交（0 = 不限必须显式提交，否则「缺省 = 不修改」会让清空上限静默失效）。
+      ...(quotaEditable
+        ? { quotaBytes: quotaBytesValue ?? 0, quotaAssets: quotaAssetsValue ?? 0 }
+        : {}),
+      // 保留天数只对 proxy 有意义：其他类型提交非 0 值会被后端拒绝（400），
+      // 而非 proxy 也从不渲染该输入，故整字段按类型条件提交。
+      ...(repo?.type === "proxy" ? { cacheRetentionDays: cacheRetentionValue ?? 0 } : {}),
     };
     updateRepository(repoName, patch)
       .then(() => {
@@ -581,6 +689,137 @@ function ConfigTab({
             onChange={setMembers}
           />
         )}
+
+        {/* FR-41 存储配额：用量展示（只读统计）+ 上限编辑（0 = 不限）。
+            用量口径与服务端拒绝点一致：逻辑字节 SUM(asset.size) 与制品计数 COUNT(*)。 */}
+        <Divider />
+        <Stack gap="xs" data-testid="repo-quota-section">
+          <Group justify="space-between" align="center" wrap="wrap">
+            <Text size="sm" fw={600}>
+              {t("repoDetail.configQuotaTitle")}
+            </Text>
+            <Badge
+              variant="light"
+              size="sm"
+              color={QUOTA_STATE_COLOR[repoQuota]}
+              data-testid="repo-quota-state"
+            >
+              {t(QUOTA_STATE_LABEL_KEY[repoQuota])}
+            </Badge>
+          </Group>
+          {/* 说明文案按类型切换：hosted 讲「0 = 不限」，非 hosted 讲清为什么没有输入框。 */}
+          <Text size="xs" c="dimmed">
+            {quotaEditable
+              ? t("repoDetail.configQuotaHint")
+              : t("repoDetail.configQuotaHostedOnly")}
+          </Text>
+
+          {/* 当前用量 / 上限：每行各自的颜色独立（可能一个维度接近上限、另一个正常）；
+              正常与不限都不着色，避免把「不限」渲染成看起来像禁用的灰字。 */}
+          <Text size="sm" c={quotaLineColor(bytesState)}>
+            {t("repoDetail.configQuotaUsageBytes", {
+              used: formatBytes(repo.totalSize ?? 0),
+              limit: hasQuotaLimit(repo.quotaBytes)
+                ? formatBytes(repo.quotaBytes)
+                : quotaUnlimitedText,
+            })}
+          </Text>
+          <Text size="sm" c={quotaLineColor(assetsState)}>
+            {t("repoDetail.configQuotaUsageAssets", {
+              used: formatCount(repo.artifactCount ?? 0),
+              limit: hasQuotaLimit(repo.quotaAssets)
+                ? formatCount(repo.quotaAssets)
+                : quotaUnlimitedText,
+            })}
+          </Text>
+          {repoQuota === "over" ? (
+            <Text size="xs" c="red" data-testid="repo-quota-over-notice">
+              {t("repoDetail.configQuotaOverNotice")}
+            </Text>
+          ) : repoQuota === "near" ? (
+            <Text size="xs" c="orange" data-testid="repo-quota-near-notice">
+              {t("repoDetail.configQuotaNearNotice", {
+                percent: Math.round(QUOTA_NEAR_RATIO * 100),
+              })}
+            </Text>
+          ) : null}
+
+          {/* 上限编辑（仅 hosted）：字节按 MB/GB 填写（不必心算字节），保存时换算成字节。 */}
+          {quotaEditable ? (
+            <>
+              <Group align="flex-end" gap="xs" wrap="nowrap">
+                <TextInput
+                  style={{ flex: 1 }}
+                  label={t("repoDetail.configQuotaBytes")}
+                  value={quotaBytesText}
+                  error={quotaBytesValue === null ? t("repoDetail.configQuotaInvalid") : undefined}
+                  onChange={(e) => setQuotaBytesText(e.currentTarget.value)}
+                />
+                <Select
+                  label={t("repoDetail.configQuotaUnit")}
+                  data={QUOTA_UNITS.map((unit) => ({ value: unit, label: unit }))}
+                  value={quotaBytesUnit}
+                  onChange={(value) => value && setQuotaBytesUnit(value as QuotaUnit)}
+                  allowDeselect={false}
+                  w={92}
+                />
+              </Group>
+              {quotaBytesValue === null ? null : (
+                <Text size="xs" c="dimmed">
+                  {quotaBytesValue > 0
+                    ? t("repoDetail.configQuotaBytesConverted", {
+                        size: formatBytes(quotaBytesValue),
+                        bytes: formatCount(quotaBytesValue),
+                      })
+                    : t("repoDetail.configQuotaUnlimitedInput")}
+                </Text>
+              )}
+
+              <TextInput
+                label={t("repoDetail.configQuotaAssets")}
+                value={quotaAssetsText}
+                error={quotaAssetsValue === null ? t("repoDetail.configQuotaInvalid") : undefined}
+                onChange={(e) => setQuotaAssetsText(e.currentTarget.value)}
+              />
+              {quotaAssetsValue === null ? null : (
+                <Text size="xs" c="dimmed">
+                  {quotaAssetsValue > 0
+                    ? t("repoDetail.configQuotaAssetsConverted", {
+                        count: formatCount(quotaAssetsValue),
+                      })
+                    : t("repoDetail.configQuotaUnlimitedInput")}
+                </Text>
+              )}
+            </>
+          ) : null}
+
+          {/* FR-41 代理缓存保留：只对 proxy 有意义（hosted/group 无「可重拉的缓存」语义，
+              后端对这些类型提交非 0 值会直接拒绝），因此整块按类型出现/隐藏。 */}
+          {repo.type === "proxy" ? (
+            <>
+              <TextInput
+                label={t("repoDetail.configCacheRetention")}
+                description={t("repoDetail.configCacheRetentionHint")}
+                value={cacheRetentionText}
+                error={
+                  cacheRetentionValue === null
+                    ? t("repoDetail.configCacheRetentionInvalid")
+                    : undefined
+                }
+                onChange={(e) => setCacheRetentionText(e.currentTarget.value)}
+              />
+              {cacheRetentionValue === null ? null : (
+                <Text size="xs" c="dimmed">
+                  {cacheRetentionValue > 0
+                    ? t("repoDetail.configCacheRetentionValue", {
+                        days: formatCount(cacheRetentionValue),
+                      })
+                    : t("repoDetail.configCacheRetentionOff")}
+                </Text>
+              )}
+            </>
+          ) : null}
+        </Stack>
 
         <Group justify="flex-end">
           <Button

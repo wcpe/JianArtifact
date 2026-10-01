@@ -58,11 +58,12 @@ type appServices struct {
 	upstreamClient      *upstream.Client // FR-89：回源客户端（web 改回源超时时 SetTimeout）
 	store               auth.Store
 	jwt                 *auth.JWTManager
-	metricsReg          *metrics.Registry     // FR-39：进程内指标登记（协议请求计数）
-	metricsExp          *metrics.Exposition   // FR-39：/metrics 文本暴露渲染器
-	scheduler           *scheduler.Scheduler  // FR-44：维护类周期作业调度器
-	oidcDeps            *api.OIDCDeps         // FR-34：OIDC 登录端点依赖（nil = 未启用）
-	ldapAuth            api.LDAPAuthenticator // FR-35：LDAP 目录侧校验（nil = 未启用）
+	metricsReg          *metrics.Registry        // FR-39：进程内指标登记（协议请求计数）
+	metricsExp          *metrics.Exposition      // FR-39：/metrics 文本暴露渲染器
+	scheduler           *scheduler.Scheduler     // FR-44：维护类周期作业调度器
+	quotaSvc            *domain.RepoQuotaService // FR-41：仓库存储配额（预检早拒 + 提交点权威复检）
+	oidcDeps            *api.OIDCDeps            // FR-34：OIDC 登录端点依赖（nil = 未启用）
+	ldapAuth            api.LDAPAuthenticator    // FR-35：LDAP 目录侧校验（nil = 未启用）
 }
 
 // openServices 打开数据库、执行迁移并装配领域服务。调用方负责在返回的 db 上 Close。
@@ -211,9 +212,27 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	// FR-44：维护类周期作业统一经调度器驱动（间隔 0 禁用；启动不立即执行）。
 	schedulerSvc := scheduler.New()
 	registerBlobGCJob(schedulerSvc, cfg.BlobGCInterval, assetSvc.CleanupUnreferencedBlobs)
+	// FR-41：存储治理清理（隔离区空目录 / 过期 OCI 上传临时文件 / 终态元数据裁剪 / 代理缓存保留）。
+	// 只做「不触碰任何在途文件」的四类清理；pending_gc 滞留件回收留待后续增量
+	// （前置能力缺口：操作引擎没有「在写门下判定是否在途」的入口）。
+	storageCleanupSvc := domain.NewStorageCleanupService(
+		repository.NewStorageCleanupRepo(db),
+		assetSvc,
+		blobs,
+		domain.StorageCleanupOptions{
+			MetadataRetention: cfg.StorageMetadataRetention, // JIAN_STORAGE_METADATA_RETENTION_DAYS（天），0 禁用
+			TempMaxAge:        cfg.StorageTempMaxAge,        // JIAN_STORAGE_TEMP_MAX_AGE_HOURS（小时），0 禁用
+		},
+	)
+	registerStorageCleanupJob(schedulerSvc, cfg.StorageCleanupInterval, storageCleanupSvc.Run)
 	// FR-39：指标登记与 /metrics 渲染器；协议请求计数由 HTTP 层钩子（run）累加。
 	metricsReg := metrics.New()
 	metricsExp := metrics.NewExposition(metricsReg, schedulerJobStatuses(schedulerSvc))
+	// FR-41：仓库级存储配额判定。预检（已知长度/流式）走 Admission，提交点权威复检走 CheckCommit；
+	// 拒绝原因以闭集枚举累加进 jianartifact_publish_rejections_total{reason="quota"}。
+	quotaSvc := domain.NewRepoQuotaService(repoRepo, assetRepo)
+	quotaSvc.SetRejectionRecorder(metricsReg)
+	assetSvc.SetStorageQuotaCheck(quotaSvc.CheckCommit)
 
 	// FR-34：OIDC 登录端点依赖；未配置 issuer 时保持 nil，端点返回 404（存在即启用）。
 	var oidcDeps *api.OIDCDeps
@@ -249,6 +268,7 @@ func openServices(cfg *config.Config) (*appServices, error) {
 		ociSvc:              ociSvc,
 		formatMetadataSvc:   formatMetadataSvc,
 		publishPolicySvc:    publishPolicySvc,
+		quotaSvc:            quotaSvc,
 		assetSvc:            assetSvc,
 		migrationSvc:        migrationSvc,
 		settingSvc:          settingSvc,
@@ -327,6 +347,7 @@ func (s *appServices) handlers(version string, checks []func() error) *api.Handl
 		PublicURL:               s.publicURL,
 		EnabledFormats:          s.repoSvc.EnabledFormats(),
 		PublishPolicies:         s.publishPolicySvc,
+		MaintenanceJobs:         s.scheduler, // FR-41：维护作业清单与手动触发
 		OnUpstreamTimeoutChange: func(d time.Duration) {
 			if s.upstreamClient != nil {
 				s.upstreamClient.SetTimeout(d)

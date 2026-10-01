@@ -702,6 +702,11 @@ interface CreateRepoBody {
   remoteUrl?: string;
   members?: string[];
   aliases?: string[];
+  /** FR-41：存储配额（0/缺省 = 不限）。 */
+  quotaBytes?: number;
+  quotaAssets?: number;
+  /** FR-41：代理缓存保留天数（0/缺省 = 关闭；仅 proxy 有语义）。 */
+  cacheRetentionDays?: number;
 }
 
 interface AssetOperationBody {
@@ -1754,6 +1759,9 @@ export const handlers = [
       remoteUrl: body.remoteUrl,
       members: body.members,
       aliases: body.aliases,
+      quotaBytes: body.quotaBytes,
+      quotaAssets: body.quotaAssets,
+      cacheRetentionDays: body.cacheRetentionDays,
     });
     if (!repo) {
       return err("conflict", "仓库名已存在", 409);
@@ -1781,6 +1789,11 @@ export const handlers = [
       remoteUrl?: string;
       members?: string[];
       aliases?: string[];
+      /** FR-41：存储配额局部补丁（缺省 = 不修改，0 = 改为不限）。 */
+      quotaBytes?: number;
+      quotaAssets?: number;
+      /** FR-41：代理缓存保留天数局部补丁（缺省 = 不修改，0 = 关闭）。 */
+      cacheRetentionDays?: number;
     };
     const repo = store.updateRepository(String(params.name), body);
     return repo ? HttpResponse.json(repo) : err("not_found", "仓库不存在", 404);
@@ -2310,6 +2323,32 @@ export const handlers = [
       return err("conflict", "仅 completed 可 finalize", 409);
     }
     return HttpResponse.json(result);
+  }),
+
+  // —— FR-41：存储治理运维作业面（admin）——
+  // 作业清单由 store 的"注册表"决定；手动触发复用后端语义：未知作业名 404、正在运行 409。
+  http.get("*/api/v1/maintenance/jobs", ({ request }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    return HttpResponse.json({ jobs: store.maintenanceJobs() });
+  }),
+
+  http.post("*/api/v1/maintenance/jobs/:name/run", ({ request, params }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const result = store.runMaintenanceJob(String(params.name));
+    if (result === "not_found") {
+      return err("not_found", "作业不存在", 404);
+    }
+    if (result === "running") {
+      return err("job_running", "作业正在运行", 409);
+    }
+    // 202 只表示已受理；是否跑完请看清单里的 running。
+    return HttpResponse.json({ name: result.name, started: true }, { status: 202 });
   }),
 
   // —— 节点备份与搬迁（FR-132）——
