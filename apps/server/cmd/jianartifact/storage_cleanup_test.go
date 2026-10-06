@@ -128,6 +128,13 @@ func TestStorageCleanupJobIsFailureIsolatedAndKeepsRunning(t *testing.T) {
 			t.Fatalf("第 %d 次执行未在间隔内触发（失败不得终止作业）", i+1)
 		}
 	}
+	// 第 2 次信号发出时，作业函数可能尚未返回、调度器记录 runs 与清 running 的收尾也未完成，
+	// 直接断言等于在断言竞态。这里先等它真正回到空闲——**判据一点不放宽**：若作业真的自我
+	// 重叠（持续 running），下面的等待会超时，随后的断言仍会失败。
+	deadline := time.Now().Add(2 * time.Second)
+	for sched.Status()[0].Running && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
 	status := sched.Status()
 	if len(status) != 1 {
 		t.Fatalf("作业数=%d，期望 1", len(status))
