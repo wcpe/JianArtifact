@@ -16,8 +16,10 @@ export default defineConfig({
     exclude: ["**/node_modules/**", "**/dist/**", "test/ViteMockIsolation.test.ts"],
     // 并行全量跑时，含图表（recharts）的套件在低配/负载下可能逼近默认 5s 阈值；
     // 放宽到 15s 避免偶发超时误报（单个用例仍会稳定失败，不掩盖回归）。
-    testTimeout: 15_000,
-    hookTimeout: 15_000,
+    // 后续实测：在「长跑 + 后台常驻负载（IDE / 安全软件 / 本工具自身）」的机器上，15s 仍会被
+    // 单例擦线（同一用例单独复跑 6.7s 通过，全量并发时撞 15s 超时），故再放宽到 30s。
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
     // 并发上限：默认按 CPU 数开 fork（本机 32 核 → 31 个），而每个 fork 都要建 jsdom、
     // 加载 Mantine 8 与中英双语资源（各 1093 键）。实测 31 个并发时内存/CPU 峰值过高，
     // 会把需要渲染与请求的用例拖过等待上限，出现"找不到文本/构建超时"这类**负载敏感抖动**；
