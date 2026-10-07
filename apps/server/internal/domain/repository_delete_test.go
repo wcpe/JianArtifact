@@ -14,6 +14,7 @@ import (
 
 // TestDeleteRepositoryCascadesAssets 删除仓库后 asset 行须级联清除，便于真机复测腾出元数据。
 func TestDeleteRepositoryCascadesAssets(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	repoRepo := repository.NewRepoRepo(db)
 	assetRepo := repository.NewAssetRepo(db)
@@ -61,6 +62,7 @@ func TestDeleteRepositoryCascadesAssets(t *testing.T) {
 }
 
 func TestDeleteRepositoryRejectsNonHostedAndOverLimitWithoutSideEffects(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	repoRepo := repository.NewRepoRepo(db)
 	assetRepo := repository.NewAssetRepo(db)
@@ -105,6 +107,7 @@ func TestDeleteRepositoryRejectsNonHostedAndOverLimitWithoutSideEffects(t *testi
 }
 
 func TestDeleteRepositoryRowFailureRestoresRepositoryAclMetadataAssetAndBlob(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	repoRepo := repository.NewRepoRepo(db)
 	assetRepo := repository.NewAssetRepo(db)

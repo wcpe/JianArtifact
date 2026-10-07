@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"os"
-	"path/filepath"
 	"regexp"
 	"testing"
 
@@ -14,6 +13,7 @@ import (
 )
 
 func TestNewOperationIDUsesUUIDv7(t *testing.T) {
+	t.Parallel()
 	pattern := regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 	first := newOperationID()
 	if !pattern.MatchString(first) {
@@ -24,20 +24,14 @@ func TestNewOperationIDUsesUUIDv7(t *testing.T) {
 	}
 }
 
+// mutationTestDB 打开一个「刚迁移完的空库」夹具库（见 testdb_template_test.go）。
 func mutationTestDB(t *testing.T) *persistence.DB {
 	t.Helper()
-	db, err := persistence.Open(filepath.Join(t.TempDir(), "mutation.db"))
-	if err != nil {
-		t.Fatalf("打开数据库：%v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(); err != nil {
-		t.Fatalf("迁移：%v", err)
-	}
-	return db
+	return migratedTestDB(t, "mutation.db")
 }
 
 func TestAssetMutationSharedReferenceAndZeroReference(t *testing.T) {
+	t.Parallel()
 	db := mutationTestDB(t)
 	repos := repository.NewRepoRepo(db)
 	assets := repository.NewAssetRepo(db)
@@ -74,6 +68,7 @@ func TestAssetMutationSharedReferenceAndZeroReference(t *testing.T) {
 }
 
 func TestAssetMutationBatchReclaimsLastSharedBlob(t *testing.T) {
+	t.Parallel()
 	db := mutationTestDB(t)
 	repos := repository.NewRepoRepo(db)
 	assets := repository.NewAssetRepo(db)
@@ -107,6 +102,7 @@ func TestAssetMutationBatchReclaimsLastSharedBlob(t *testing.T) {
 }
 
 func TestAssetMutationStageFailureLeavesMetadata(t *testing.T) {
+	t.Parallel()
 	db := mutationTestDB(t)
 	repos := repository.NewRepoRepo(db)
 	assets := repository.NewAssetRepo(db)
@@ -133,6 +129,7 @@ func TestAssetMutationStageFailureLeavesMetadata(t *testing.T) {
 // TestAssetMutationFinalizeFailureRollsBackMetadataAndBlob 确保最终物理回收失败时，
 // 删除不会留下“元数据已删但字节仍在隔离区”的半完成状态。
 func TestAssetMutationFinalizeFailureRollsBackMetadataAndBlob(t *testing.T) {
+	t.Parallel()
 	db := mutationTestDB(t)
 	repos := repository.NewRepoRepo(db)
 	assets := repository.NewAssetRepo(db)
@@ -168,6 +165,7 @@ func TestAssetMutationFinalizeFailureRollsBackMetadataAndBlob(t *testing.T) {
 // TestAssetMutationFinalizeFailureRestoresWholeBatch 确保批内已有 blob 被物理删除后，
 // 后续回收失败仍能把整批字节和元数据一起恢复。
 func TestAssetMutationFinalizeFailureRestoresWholeBatch(t *testing.T) {
+	t.Parallel()
 	db := mutationTestDB(t)
 	repos := repository.NewRepoRepo(db)
 	assets := repository.NewAssetRepo(db)
@@ -214,6 +212,7 @@ func TestAssetMutationFinalizeFailureRestoresWholeBatch(t *testing.T) {
 }
 
 func TestAssetMutationFinalSnapshotFailureKeepsCommittedStateForCleanupRetry(t *testing.T) {
+	t.Parallel()
 	db := mutationTestDB(t)
 	repos := repository.NewRepoRepo(db)
 	assets := repository.NewAssetRepo(db)
@@ -253,6 +252,7 @@ func TestAssetMutationFinalSnapshotFailureKeepsCommittedStateForCleanupRetry(t *
 }
 
 func TestAssetMutationRecoverStagedBlob(t *testing.T) {
+	t.Parallel()
 	db := mutationTestDB(t)
 	blobs := blobstore.NewStore(t.TempDir())
 	c, err := NewAssetMutationCoordinator(db, blobs)
@@ -288,6 +288,7 @@ func TestAssetMutationRecoverStagedBlob(t *testing.T) {
 // TestAssetServiceConstructionDefersMutationRecovery 确保角色尚未完成装配时，
 // AssetService 不会擅自恢复或回收本地遗留 intent。
 func TestAssetServiceConstructionDefersMutationRecovery(t *testing.T) {
+	t.Parallel()
 	for _, status := range []string{"staged", "pending_gc"} {
 		t.Run(status, func(t *testing.T) {
 			db := mutationTestDB(t)
@@ -361,6 +362,7 @@ func TestAssetServiceConstructionDefersMutationRecovery(t *testing.T) {
 // TestAssetServiceExplicitMutationRecovery 确保主节点和禁用复制节点可在装配完成后
 // 显式恢复遗留 intent，保留原有启动恢复语义。
 func TestAssetServiceExplicitMutationRecovery(t *testing.T) {
+	t.Parallel()
 	db := mutationTestDB(t)
 	repos := repository.NewRepoRepo(db)
 	assets := repository.NewAssetRepo(db)

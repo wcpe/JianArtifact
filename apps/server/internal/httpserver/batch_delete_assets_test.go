@@ -34,14 +34,7 @@ type batchDeleteEnv struct {
 // newBatchDeleteEnv 建库并装配路由；principal 中间件按 role 注入管理员或普通用户。
 func newBatchDeleteEnv(t *testing.T, role string) *batchDeleteEnv {
 	t.Helper()
-	db, err := persistence.Open(filepath.Join(t.TempDir(), "batch-delete.db"))
-	if err != nil {
-		t.Fatalf("打开数据库：%v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(); err != nil {
-		t.Fatalf("迁移：%v", err)
-	}
+	db := openMigratedDB(t, filepath.Join(t.TempDir(), "batch-delete.db"))
 	repoRepo := repository.NewRepoRepo(db)
 	assetRepo := repository.NewAssetRepo(db)
 	aclRepo := repository.NewAclRepo(db)
@@ -143,6 +136,7 @@ func (e *batchDeleteEnv) assertAssetsRemain(t *testing.T, paths ...string) {
 }
 
 func TestAssetOperationAPIDeletesDirectoryAtomically(t *testing.T) {
+	t.Parallel()
 	e := newBatchDeleteEnv(t, "admin")
 	e.seedBatchAssets(t)
 	rec, out := e.postOperation(api.AssetOperationRequest{
@@ -165,6 +159,7 @@ func TestAssetOperationAPIDeletesDirectoryAtomically(t *testing.T) {
 // TestAssetOperationAPIAuditFailureRollsBackOperation 确保源端审计 SQL 失败时，
 // 资产视图与 operation outbox 都随同一事务回滚。
 func TestAssetOperationAPIAuditFailureRollsBackOperation(t *testing.T) {
+	t.Parallel()
 	e := newBatchDeleteEnv(t, "admin")
 	e.seedBatchAssets(t)
 	// 以 seed 完成后的水位为基线：FR-138 后 Put 自身也写 v2 outbox，基线已含若干记录。
@@ -197,6 +192,7 @@ func TestAssetOperationAPIAuditFailureRollsBackOperation(t *testing.T) {
 // TestAssetOperationAPIFailureResponsesLeaveAssetsUntouched 覆盖统一操作 API 的 HTTP
 // 失败契约：鉴权、校验、冲突、未找到及 blob 隔离失败都不得留下部分元数据变更。
 func TestAssetOperationAPIFailureResponsesLeaveAssetsUntouched(t *testing.T) {
+	t.Parallel()
 	request := func(action api.AssetOperationRequestAction, targets []api.AssetOperationTarget) api.AssetOperationRequest {
 		return api.AssetOperationRequest{
 			Action:         action,
@@ -282,6 +278,7 @@ func TestAssetOperationAPIFailureResponsesLeaveAssetsUntouched(t *testing.T) {
 }
 
 func TestAssetOperationAPIMavenRejectsFileAndDeepTargets(t *testing.T) {
+	t.Parallel()
 	e := newBatchDeleteEnv(t, "admin")
 	repoID, err := e.repoRepo.Create("maven-logical-api", "maven", "hosted", "private", "")
 	if err != nil {
@@ -357,6 +354,7 @@ func (e *batchDeleteEnv) postBatchDeleteBody(body any) (*httptest.ResponseRecord
 
 // TestBatchDeleteAssetsAdminDeletes 管理员批量删除成功：元数据删 + 审计 + 单条 v2 operation outbox。
 func TestBatchDeleteAssetsAdminDeletes(t *testing.T) {
+	t.Parallel()
 	e := newBatchDeleteEnv(t, "admin")
 	e.seedBatchAssets(t)
 
@@ -442,6 +440,7 @@ func TestBatchDeleteAssetsAdminDeletes(t *testing.T) {
 
 // TestBatchDeleteAssetsPartialFailure 任一路径不存在时整批失败且不产生部分删除。
 func TestBatchDeleteAssetsPartialFailure(t *testing.T) {
+	t.Parallel()
 	e := newBatchDeleteEnv(t, "admin")
 	e.seedBatchAssets(t)
 
@@ -470,6 +469,7 @@ func TestBatchDeleteAssetsPartialFailure(t *testing.T) {
 
 // TestBatchDeleteAssetsValidation 空 paths / 空路径条目 / 超上限应 400。
 func TestBatchDeleteAssetsValidation(t *testing.T) {
+	t.Parallel()
 	e := newBatchDeleteEnv(t, "admin")
 	e.seedBatchAssets(t)
 
@@ -500,6 +500,7 @@ func TestBatchDeleteAssetsValidation(t *testing.T) {
 
 // TestBatchDeleteAssetsForbidden 非管理员请求批量删除应 403。
 func TestBatchDeleteAssetsForbidden(t *testing.T) {
+	t.Parallel()
 	e := newBatchDeleteEnv(t, "user")
 	e.seedBatchAssets(t)
 
@@ -512,6 +513,7 @@ func TestBatchDeleteAssetsForbidden(t *testing.T) {
 
 // TestBatchDeleteAssetsUnauthenticated 未认证（无主体）应 401。
 func TestBatchDeleteAssetsUnauthenticated(t *testing.T) {
+	t.Parallel()
 	e := newBatchDeleteEnv(t, "none")
 	e.seedBatchAssets(t)
 
@@ -524,6 +526,7 @@ func TestBatchDeleteAssetsUnauthenticated(t *testing.T) {
 
 // TestBatchDeleteAssetsRepoNotFound 仓库不存在应 404（与契约及 devmock 行为一致）。
 func TestBatchDeleteAssetsRepoNotFound(t *testing.T) {
+	t.Parallel()
 	e := newBatchDeleteEnv(t, "admin")
 
 	body, _ := json.Marshal(map[string]any{"paths": []string{"a/1.txt"}})

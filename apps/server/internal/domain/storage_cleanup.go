@@ -96,12 +96,36 @@ type StorageCleanupService struct {
 	blobs    *blobstore.Store
 	opts     StorageCleanupOptions
 	now      func() time.Time
+	// cacheDeletesPerRun 覆盖单轮代理缓存删除上限；<= 0 时回落到 maxProxyCacheDeletesPerRun。
+	cacheDeletesPerRun int
 }
 
 // NewStorageCleanupService 构造存储治理清理服务。assetSvc 提供既有资产删除通道
 // （引用归零→同步物理回收），blobs 提供隔离区与上传暂存目录的维护原语。
 func NewStorageCleanupService(meta *repository.StorageCleanupRepo, assetSvc *AssetService, blobs *blobstore.Store, opts StorageCleanupOptions) *StorageCleanupService {
-	return &StorageCleanupService{meta: meta, assetSvc: assetSvc, blobs: blobs, opts: opts, now: time.Now}
+	return &StorageCleanupService{
+		meta: meta, assetSvc: assetSvc, blobs: blobs, opts: opts, now: time.Now,
+		cacheDeletesPerRun: maxProxyCacheDeletesPerRun,
+	}
+}
+
+// SetProxyCacheDeletesPerRun 调整单轮代理缓存删除上限（默认 maxProxyCacheDeletesPerRun=200；
+// 测试与调优用，<= 0 忽略）。把上限压小后，验证「每轮删除量有上限、剩余留待下一轮」
+// 只需造「上限 + 少量」个资产，而不必造满默认上限的规模。
+func (s *StorageCleanupService) SetProxyCacheDeletesPerRun(n int) {
+	if s == nil || n <= 0 {
+		return
+	}
+	s.cacheDeletesPerRun = n
+}
+
+// proxyCacheDeleteLimit 返回本轮生效的删除上限；零值/未设置时回落到默认常量，
+// 使直接构造的零值服务保持与今天完全一致的行为。
+func (s *StorageCleanupService) proxyCacheDeleteLimit() int {
+	if s == nil || s.cacheDeletesPerRun <= 0 {
+		return maxProxyCacheDeletesPerRun
+	}
+	return s.cacheDeletesPerRun
 }
 
 // Run 执行一轮清理并返回计数。单个子步骤失败不会跳过其余子步骤，
@@ -168,7 +192,7 @@ func (s *StorageCleanupService) purgeExpiredProxyCache(now time.Time) (int, erro
 	if err != nil {
 		return 0, fmt.Errorf("列举代理仓库：%w", err)
 	}
-	remaining := maxProxyCacheDeletesPerRun
+	remaining := s.proxyCacheDeleteLimit()
 	deleted := 0
 	var errs []error
 	for _, repo := range repos {
@@ -210,7 +234,7 @@ func (s *StorageCleanupService) purgeExpiredProxyCache(now time.Time) (int, erro
 		}
 	}
 	if remaining <= 0 {
-		log.Printf("代理缓存保留：本轮达到 %d 个删除上限，剩余超期缓存留待下一轮", maxProxyCacheDeletesPerRun)
+		log.Printf("代理缓存保留：本轮达到 %d 个删除上限，剩余超期缓存留待下一轮", s.proxyCacheDeleteLimit())
 	}
 	return deleted, errors.Join(errs...)
 }

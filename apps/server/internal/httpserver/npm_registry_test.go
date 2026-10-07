@@ -31,6 +31,7 @@ func (e *protocolEnv) npmJSON(t *testing.T, method, path, authHeader string, bod
 }
 
 func TestNpmRegistryPingWhoamiLogin(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	e.createNpmRepo(t, adminToken, "npm-reg", "hosted", "", nil)
@@ -76,6 +77,7 @@ func TestNpmRegistryPingWhoamiLogin(t *testing.T) {
 }
 
 func TestNpmDistTags(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	auth := "Bearer " + adminToken
@@ -131,6 +133,7 @@ func TestNpmDistTags(t *testing.T) {
 }
 
 func TestNpmUnpublish(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	auth := "Bearer " + adminToken
@@ -226,6 +229,7 @@ func TestNpmUnpublish(t *testing.T) {
 }
 
 func TestNpmUnpublishAuditFailureLeavesPackumentAndTarballUntouched(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	authHeader := "Bearer " + adminToken
@@ -270,6 +274,7 @@ func TestNpmUnpublishAuditFailureLeavesPackumentAndTarballUntouched(t *testing.T
 }
 
 func TestNpmDeprecate(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	auth := "Bearer " + adminToken
@@ -301,6 +306,7 @@ func TestNpmDeprecate(t *testing.T) {
 }
 
 func TestNpmSearch(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	auth := "Bearer " + adminToken
@@ -340,6 +346,7 @@ func TestNpmSearch(t *testing.T) {
 }
 
 func TestNpmAudit(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	auth := "Bearer " + adminToken
@@ -356,6 +363,7 @@ func TestNpmAudit(t *testing.T) {
 }
 
 func TestNpmAbbreviatedPackument(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	e.createNpmRepo(t, adminToken, "npm-ab", "hosted", "", nil)

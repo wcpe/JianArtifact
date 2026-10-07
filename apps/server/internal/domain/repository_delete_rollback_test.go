@@ -11,6 +11,7 @@ import (
 )
 
 func TestDeleteRepositoryFinalSnapshotCleanupFailureKeepsCommittedCascadeDelete(t *testing.T) {
+	t.Parallel()
 	db := mutationTestDB(t)
 	repos := repository.NewRepoRepo(db)
 	assets := repository.NewAssetRepo(db)

@@ -7,22 +7,15 @@ import (
 
 	"github.com/wcpe/jianartifact/apps/server/internal/blobstore"
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
-	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
 // TestAssetServicePutUsesV2OperationOnPrimary 断言 Raw 发布写入**单个原子 v2 operation**，
 // 且不再产生可拆分的 v1 asset change（复制退役后变更日志停止写入）。
 func TestAssetServicePutUsesV2OperationOnPrimary(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
-	db, err := persistence.Open(filepath.Join(dir, "test.db"))
-	if err != nil {
-		t.Fatalf("打开数据库：%v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(); err != nil {
-		t.Fatalf("迁移：%v", err)
-	}
+	db := openMigratedTestDB(t, dir, "test.db")
 	assets := repository.NewAssetRepo(db)
 	repos := repository.NewRepoRepo(db)
 	if _, err := repos.Create("raw", "raw", "hosted", "public", ""); err != nil {

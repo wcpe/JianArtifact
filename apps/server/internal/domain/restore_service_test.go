@@ -30,14 +30,8 @@ func newRestoreTargetFixture(t *testing.T) *restoreTarget {
 	t.Helper()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "jianartifact.db")
-	db, err := persistence.Open(dbPath)
-	if err != nil {
-		t.Fatalf("Open：%v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(); err != nil {
-		t.Fatalf("Migrate：%v", err)
-	}
+	// 夹具拿到的是一份「刚 Open + Migrate 完的空库」的独立副本（见 testdb_template_test.go）。
+	db := openMigratedTestDB(t, dir, "jianartifact.db")
 	// 注意：迁移 0007_anonymous_setting.sql 会无条件植入内置 anonymous 主体，
 	// TargetNonEmpty 已显式排除它，故"全新实例"经 Open+Migrate 后即被判为空目标，
 	// 不应再清空任何表——否则就掩盖了"anonymous 不算非空"这一回归点。
@@ -82,6 +76,7 @@ func craftRestorePackage(t *testing.T, dir, dbPath string, store *blobstore.Stor
 // TestRestoreImportRoundTrip 覆盖全新空目标的导入往返：
 // 生成包 → 暂存 → 标记/暂存 db 落盘 → 应用替换 → db 被替换、pre-restore 保留、标记与暂存清理。
 func TestRestoreImportRoundTrip(t *testing.T) {
+	t.Parallel()
 	src := newBackupFixture(t)
 	src.seedAssets(t, "alpha", "beta", "gamma")
 	rec, err := src.svc.Generate(context.Background(), CreateBackupOptions{Mode: archive.ModeHot})
@@ -186,6 +181,7 @@ func readDirNames(t *testing.T, dir string) []string {
 
 // TestRestoreImportTargetNotEmpty 目标非空且未 Overwrite → ErrRestoreTargetNotEmpty，不留文件。
 func TestRestoreImportTargetNotEmpty(t *testing.T) {
+	t.Parallel()
 	target := newRestoreTargetFixture(t)
 	if _, err := target.db.Exec(`INSERT INTO repository (name, format, type) VALUES ('raw-repo','raw','hosted')`); err != nil {
 		t.Fatalf("插入仓库：%v", err)
@@ -214,6 +210,7 @@ func TestRestoreImportTargetNotEmpty(t *testing.T) {
 // 不做任何插入（仅迁移植入的内置 anonymous 主体），直接 Stage(Overwrite=false) 必须成功——
 // 验证 TargetNonEmpty 已正确排除 anonymous，否则此用例会被误判为非空而失败。
 func TestRestoreImportEmptyDBSucceeds(t *testing.T) {
+	t.Parallel()
 	src := newBackupFixture(t)
 	src.seedAssets(t, "alpha", "beta")
 	rec, err := src.svc.Generate(context.Background(), CreateBackupOptions{Mode: archive.ModeHot})
@@ -239,6 +236,7 @@ func TestRestoreImportEmptyDBSucceeds(t *testing.T) {
 // TestRestoreImportTargetNotEmptyWithUser 反向回归：插入一条非 anonymous 的 user 后，
 // Stage 不带 Overwrite 必须返回 ErrRestoreTargetNotEmpty（anonymous 不算非空，但真实用户算）。
 func TestRestoreImportTargetNotEmptyWithUser(t *testing.T) {
+	t.Parallel()
 	target := newRestoreTargetFixture(t)
 	if _, err := target.db.Exec(`INSERT INTO user (username, password_hash) VALUES ('real-admin','ph')`); err != nil {
 		t.Fatalf("插入用户：%v", err)
@@ -266,6 +264,7 @@ func TestRestoreImportTargetNotEmptyWithUser(t *testing.T) {
 
 // TestRestoreImportOverwriteKeepsPreRestore 覆盖导入成功，且 pre-restore 备份保留。
 func TestRestoreImportOverwriteKeepsPreRestore(t *testing.T) {
+	t.Parallel()
 	target := newRestoreTargetFixture(t)
 	if _, err := target.db.Exec(`INSERT INTO repository (name, format, type) VALUES ('raw-repo','raw','hosted')`); err != nil {
 		t.Fatalf("插入仓库：%v", err)
@@ -304,6 +303,7 @@ func TestRestoreImportOverwriteKeepsPreRestore(t *testing.T) {
 
 // TestRestoreImportIncompatible 包 DBSchemaVersion 高于本地 → ErrRestoreIncompatible，不留文件。
 func TestRestoreImportIncompatible(t *testing.T) {
+	t.Parallel()
 	src := newBackupFixture(t)
 	src.seedAssets(t, "x")
 	if _, err := src.svc.Generate(context.Background(), CreateBackupOptions{Mode: archive.ModeHot}); err != nil {
@@ -329,6 +329,7 @@ func TestRestoreImportIncompatible(t *testing.T) {
 
 // TestRestoreImportCorrupted 归档内容损坏（翻转中段字节）→ 校验失败，不留文件、不留标记。
 func TestRestoreImportCorrupted(t *testing.T) {
+	t.Parallel()
 	src := newBackupFixture(t)
 	src.seedAssets(t, "alpha", "beta")
 	rec, err := src.svc.Generate(context.Background(), CreateBackupOptions{Mode: archive.ModeHot})
@@ -363,6 +364,7 @@ func TestRestoreImportCorrupted(t *testing.T) {
 
 // TestRestoreImportIncrementalUnsupported 增量包（BasePackageID 非空）→ ErrRestoreIncrementalUnsupported。
 func TestRestoreImportIncrementalUnsupported(t *testing.T) {
+	t.Parallel()
 	src := newBackupFixture(t)
 	src.seedAssets(t, "x")
 	if _, err := src.svc.Generate(context.Background(), CreateBackupOptions{Mode: archive.ModeHot}); err != nil {
@@ -388,6 +390,7 @@ func TestRestoreImportIncrementalUnsupported(t *testing.T) {
 
 // TestRestoreImportPendingExists 已存在标记时再 Stage → ErrRestorePending。
 func TestRestoreImportPendingExists(t *testing.T) {
+	t.Parallel()
 	src := newBackupFixture(t)
 	src.seedAssets(t, "x")
 	rec, err := src.svc.Generate(context.Background(), CreateBackupOptions{Mode: archive.ModeHot})
@@ -408,6 +411,7 @@ func TestRestoreImportPendingExists(t *testing.T) {
 
 // TestRestoreImportBlobSkipped 已存在的 blob 走跳过路径，且文件 mtime 不变。
 func TestRestoreImportBlobSkipped(t *testing.T) {
+	t.Parallel()
 	src := newBackupFixture(t)
 	src.seedAssets(t, "shared")
 	rec, err := src.svc.Generate(context.Background(), CreateBackupOptions{Mode: archive.ModeHot})
@@ -458,6 +462,7 @@ func TestRestoreImportBlobSkipped(t *testing.T) {
 
 // TestRestoreReconcileStaleStaging 只留暂存目录、无标记 → 清理掉。
 func TestRestoreReconcileStaleStaging(t *testing.T) {
+	t.Parallel()
 	target := newRestoreTargetFixture(t)
 	if err := os.MkdirAll(target.svc.StagingDir(), 0o750); err != nil {
 		t.Fatalf("mkdir：%v", err)
@@ -472,6 +477,7 @@ func TestRestoreReconcileStaleStaging(t *testing.T) {
 
 // TestRestoreReconcileKeepsWhenPending 有标记时 ReconcileStaleStaging 不动暂存与标记。
 func TestRestoreReconcileKeepsWhenPending(t *testing.T) {
+	t.Parallel()
 	target := newRestoreTargetFixture(t)
 	src := newBackupFixture(t)
 	src.seedAssets(t, "x")
@@ -496,6 +502,7 @@ func TestRestoreReconcileKeepsWhenPending(t *testing.T) {
 
 // TestApplyPendingRestoreNoMarker 无标记时返回 applied=false 且不出错。
 func TestApplyPendingRestoreNoMarker(t *testing.T) {
+	t.Parallel()
 	target := newRestoreTargetFixture(t)
 	_ = target.db.Close()
 	applied, _, err := ApplyPendingRestore(target.dir, target.dbPath, filepath.Join(target.dir, "blobs"))
@@ -548,6 +555,7 @@ func writeManifestOnlyPackage(t *testing.T, path string, m archive.Manifest) {
 // 迁移 0007 会无条件植入 anonymous，若按 user 表原始行数判定，任何全新实例都会被判为
 // 非空，迫使主用例（把包导入到一台新机器）也要 --overwrite —— 护栏退化成噪音。
 func TestRestoreTargetNonEmptyExcludesAnonymous(t *testing.T) {
+	t.Parallel()
 	target := newRestoreTargetFixture(t)
 
 	nonEmpty, err := target.svc.TargetNonEmpty()
@@ -576,6 +584,7 @@ func TestRestoreTargetNonEmptyExcludesAnonymous(t *testing.T) {
 // TestRestoreRejectsOversizePackage 覆盖规模护栏：归档是不可信输入（可能来自 URL 拉取
 // 或分片上传），tar.gz 可声明远超自身大小的内容，必须在任何磁盘写入前拦下。
 func TestRestoreRejectsOversizePackage(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		mutate func(m *archive.Manifest)
@@ -595,6 +604,8 @@ func TestRestoreRejectsOversizePackage(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			// 每个子用例各自 newRestoreTargetFixture（独立临时目录 + 独立 SQLite），无共享状态，可并行。
+			t.Parallel()
 			target := newRestoreTargetFixture(t)
 			pkg := filepath.Join(target.dir, "oversize.tar.gz")
 			m := archive.Manifest{
@@ -633,6 +644,7 @@ func TestRestoreRejectsOversizePackage(t *testing.T) {
 // 这是 BackupImportService.StartURLImport 在全新节点能正常登记 queued 的前提
 // （否则被误判为内部错误 → 导入恒返 500）。修复见 restore_service.go readPendingFile。
 func TestMarkedPendingReturnsNilOnFreshTarget(t *testing.T) {
+	t.Parallel()
 	target := newRestoreTargetFixture(t)
 	pending, err := target.svc.MarkedPending()
 	if err != nil {
@@ -646,6 +658,7 @@ func TestMarkedPendingReturnsNilOnFreshTarget(t *testing.T) {
 // TestRestoreConcurrentStageRejected 覆盖导入串行化：暂存目录与待生效标记是单例资源，
 // 两个并发导入（例如 HTTP 导入与 CLI 同时发起）会互相踩踏。
 func TestRestoreConcurrentStageRejected(t *testing.T) {
+	t.Parallel()
 	target := newRestoreTargetFixture(t)
 
 	// 先占住导入权，模拟已有导入正在进行。
@@ -665,6 +678,7 @@ func TestRestoreConcurrentStageRejected(t *testing.T) {
 // TestRestoreDeltaImport 覆盖差包导入主路径：先导入基线包再导入差包 → 成功，且最终库的
 // blob 集合与源一致（用 persistence.AssetBlobs 比对）。
 func TestRestoreDeltaImport(t *testing.T) {
+	t.Parallel()
 	src := newBackupFixture(t)
 	src.seedAssets(t, "alpha", "beta", "gamma") // 基线 blob
 	rec0, err := src.svc.Generate(context.Background(), CreateBackupOptions{Mode: archive.ModeHot})
@@ -740,6 +754,7 @@ func TestRestoreDeltaImport(t *testing.T) {
 // TestRestoreDeltaImportRejectsMissingBase 覆盖差包导入负路径：目标缺少基线包应有的 blob →
 // ErrRestoreBaseMissing，且绝不落暂存目录与标记。
 func TestRestoreDeltaImportRejectsMissingBase(t *testing.T) {
+	t.Parallel()
 	src := newBackupFixture(t)
 	src.seedAssets(t, "alpha", "beta", "gamma")
 	rec0, err := src.svc.Generate(context.Background(), CreateBackupOptions{Mode: archive.ModeHot})

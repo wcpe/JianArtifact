@@ -53,14 +53,7 @@ type quotaAssembly struct {
 func newQuotaAssembly(t *testing.T) *quotaAssembly {
 	t.Helper()
 	dataDir := t.TempDir()
-	db, err := persistence.Open(filepath.Join(dataDir, "jianartifact.db"))
-	if err != nil {
-		t.Fatalf("打开数据库：%v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(); err != nil {
-		t.Fatalf("迁移数据库：%v", err)
-	}
+	db := openMigratedTestDB(t, dataDir, "jianartifact.db")
 	blobRoot := filepath.Join(dataDir, "blobs")
 	if err := os.MkdirAll(blobRoot, 0o750); err != nil {
 		t.Fatalf("创建 blob 根目录：%v", err)
@@ -150,6 +143,7 @@ func countBlobFilesOfSize(t *testing.T, root string, size int64) int {
 // TestRepoQuotaAdmissionKnownLengthRejectsBeforeReadingBody 已知长度的预检：
 // 越限时返回可按 ErrQuotaExceeded 识别的错误（协议层据此 429），且不写入任何内容。
 func TestRepoQuotaAdmissionKnownLengthRejectsBeforeReadingBody(t *testing.T) {
+	t.Parallel()
 	a := newQuotaAssembly(t)
 	repo := a.createHostedRepo(t, "raw-quota", "raw", domain.RepoQuotaLimits{Bytes: 100, Assets: 4})
 	a.seedAsset(t, "raw-quota", "big.bin", bytes.Repeat([]byte("x"), 60))
@@ -189,6 +183,7 @@ func TestRepoQuotaAdmissionKnownLengthRejectsBeforeReadingBody(t *testing.T) {
 
 // TestRepoQuotaAdmissionOverwriteUsesNetIncrement 覆盖写按净增量判定（新大小 − 被覆盖的旧大小）。
 func TestRepoQuotaAdmissionOverwriteUsesNetIncrement(t *testing.T) {
+	t.Parallel()
 	a := newQuotaAssembly(t)
 	repo := a.createHostedRepo(t, "raw-overwrite", "raw", domain.RepoQuotaLimits{Bytes: 100})
 	a.seedAsset(t, "raw-overwrite", "app.jar", bytes.Repeat([]byte("a"), 60))
@@ -210,6 +205,7 @@ func TestRepoQuotaAdmissionOverwriteUsesNetIncrement(t *testing.T) {
 
 // TestRepoQuotaAdmissionAssetCountLimit 制品数上限：只有新增路径才增件，覆盖写不改变件数。
 func TestRepoQuotaAdmissionAssetCountLimit(t *testing.T) {
+	t.Parallel()
 	a := newQuotaAssembly(t)
 	repo := a.createHostedRepo(t, "raw-assets", "raw", domain.RepoQuotaLimits{Assets: 2})
 	a.seedAsset(t, "raw-assets", "one.txt", []byte("1"))
@@ -233,6 +229,7 @@ func TestRepoQuotaAdmissionAssetCountLimit(t *testing.T) {
 // TestRepoQuotaAdmissionStreamingLimit 长度未知时的流式早拒上限：
 // 路径已知按「剩余额度 + 覆盖写抵扣」给出上限；已无余量直接拒绝；路径未解析给安全上限。
 func TestRepoQuotaAdmissionStreamingLimit(t *testing.T) {
+	t.Parallel()
 	a := newQuotaAssembly(t)
 	repo := a.createHostedRepo(t, "raw-stream", "raw", domain.RepoQuotaLimits{Bytes: 100})
 	a.seedAsset(t, "raw-stream", "app.jar", bytes.Repeat([]byte("a"), 60))
@@ -274,6 +271,7 @@ func TestRepoQuotaAdmissionStreamingLimit(t *testing.T) {
 // TestRepoQuotaCommitPointRejectsCommitBeyondQuota 提交点权威复检：
 // 即使预检被绕过（这里直接调用域写入），越限写入也必须整批回滚、不留孤立件。
 func TestRepoQuotaCommitPointRejectsCommitBeyondQuota(t *testing.T) {
+	t.Parallel()
 	a := newQuotaAssembly(t)
 	repo := a.createHostedRepo(t, "raw-commit", "raw", domain.RepoQuotaLimits{Bytes: 100, Assets: 3})
 
@@ -301,6 +299,7 @@ func TestRepoQuotaCommitPointRejectsCommitBeyondQuota(t *testing.T) {
 // TestRepoQuotaCommitPointOverwriteNetIncrementKeepsExistingContent 覆盖写的提交点复检：
 // 净增量在限内放行；越限回滚且**既有内容未被破坏**。
 func TestRepoQuotaCommitPointOverwriteNetIncrementKeepsExistingContent(t *testing.T) {
+	t.Parallel()
 	a := newQuotaAssembly(t)
 	repo := a.createHostedRepo(t, "raw-commit-overwrite", "raw", domain.RepoQuotaLimits{Bytes: 100})
 	a.seedAsset(t, "raw-commit-overwrite", "app.jar", bytes.Repeat([]byte("a"), 60))
@@ -339,6 +338,7 @@ func TestRepoQuotaCommitPointOverwriteNetIncrementKeepsExistingContent(t *testin
 // TestRepoQuotaConcurrentUploadsOnlyOneCommits 并发语义（无预留案）：
 // 预检可能同时通过，但提交点由单写者串行化，最多一个在途上传被拒，已提交状态永不越界。
 func TestRepoQuotaConcurrentUploadsOnlyOneCommits(t *testing.T) {
+	t.Parallel()
 	a := newQuotaAssembly(t)
 	repo := a.createHostedRepo(t, "raw-concurrent", "raw", domain.RepoQuotaLimits{Bytes: 100})
 
@@ -424,6 +424,7 @@ func TestRepoQuotaExemptsMigrationImport(t *testing.T) {
 
 // TestRepoQuotaIgnoresUnlimitedAndMissingRepositories 缺省不限与不存在/非 hosted 仓库不判定。
 func TestRepoQuotaIgnoresUnlimitedAndMissingRepositories(t *testing.T) {
+	t.Parallel()
 	a := newQuotaAssembly(t)
 	a.createHostedRepo(t, "raw-unlimited", "raw", domain.RepoQuotaLimits{})
 	id, err := a.repos.Create("grp", "raw", "group", "public", `{"members":["raw-unlimited"]}`)
@@ -464,6 +465,7 @@ func newQuotaRepositoryService(t *testing.T) *domain.RepositoryService {
 
 // TestValidateConfigStorageQuotaRules 配额配置校验：缺省不限；负数非法；非 hosted（group/proxy）不允许非 0。
 func TestValidateConfigStorageQuotaRules(t *testing.T) {
+	t.Parallel()
 	svc := newQuotaRepositoryService(t)
 
 	// 缺省（0）表示不限：三种类型都接受。

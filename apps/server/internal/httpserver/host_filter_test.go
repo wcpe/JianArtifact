@@ -8,6 +8,7 @@ import (
 )
 
 func TestHostFilterMiddleware(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	allowed := []string{"maven.example.com", "repo.example.com"}
 	router := gin.New()
@@ -56,6 +57,7 @@ func TestHostFilterMiddleware(t *testing.T) {
 }
 
 func TestHostFilterRejectsSpoofedLoopbackHostFromExternalPeer(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.Use(hostFilterMiddleware(func() []string { return []string{"maven.example.com"} }))
@@ -73,6 +75,7 @@ func TestHostFilterRejectsSpoofedLoopbackHostFromExternalPeer(t *testing.T) {
 }
 
 func TestRemoteAddrLoopbackClassification(t *testing.T) {
+	t.Parallel()
 	tests := map[string]bool{
 		"127.0.0.1:1234":              true,
 		"[::1]:1234":                  true,

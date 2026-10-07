@@ -41,6 +41,7 @@ func newAssetService(t *testing.T) (*domain.AssetService, *repository.RepoRepo) 
 }
 
 func TestAssetServicePutGetRoundtrip(t *testing.T) {
+	t.Parallel()
 	svc, repos := newAssetService(t)
 	if _, err := repos.Create("raw-hosted", "raw", "hosted", "private", ""); err != nil {
 		t.Fatalf("建仓库：%v", err)
@@ -73,6 +74,7 @@ func TestAssetServicePutGetRoundtrip(t *testing.T) {
 }
 
 func TestAssetServicePutRejectsNonHosted(t *testing.T) {
+	t.Parallel()
 	svc, repos := newAssetService(t)
 	// proxy 类型（非 hosted）应被拒绝。
 	if _, err := repos.Create("raw-proxy", "raw", "proxy", "private", ""); err != nil {
@@ -92,6 +94,7 @@ func TestAssetServicePutRejectsNonHosted(t *testing.T) {
 }
 
 func TestAssetServicePutRepoNotFound(t *testing.T) {
+	t.Parallel()
 	svc, _ := newAssetService(t)
 	if _, err := svc.Put("ghost", "a.txt", bytes.NewReader([]byte("x")), ""); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("仓库不存在应返回 ErrNotFound，实际：%v", err)
@@ -99,6 +102,7 @@ func TestAssetServicePutRepoNotFound(t *testing.T) {
 }
 
 func TestAssetServiceProxyCacheRecordsReplicationChange(t *testing.T) {
+	t.Parallel()
 	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/example.com/demo/@v/v1.0.0.mod" {
 			http.NotFound(w, r)
@@ -134,6 +138,7 @@ func TestAssetServiceProxyCacheRecordsReplicationChange(t *testing.T) {
 }
 
 func TestAssetServiceGetNotFound(t *testing.T) {
+	t.Parallel()
 	svc, repos := newAssetService(t)
 	if _, err := repos.Create("raw-hosted", "raw", "hosted", "private", ""); err != nil {
 		t.Fatalf("建仓库：%v", err)
@@ -144,6 +149,7 @@ func TestAssetServiceGetNotFound(t *testing.T) {
 }
 
 func TestAssetServicePutOverwrite(t *testing.T) {
+	t.Parallel()
 	svc, repos := newAssetService(t)
 	if _, err := repos.Create("raw-hosted", "raw", "hosted", "private", ""); err != nil {
 		t.Fatalf("建仓库：%v", err)
@@ -166,6 +172,7 @@ func TestAssetServicePutOverwrite(t *testing.T) {
 }
 
 func TestAssetServiceBackfillTimes(t *testing.T) {
+	t.Parallel()
 	svc, repos := newAssetService(t)
 	if _, err := repos.Create("raw-hosted", "raw", "hosted", "private", ""); err != nil {
 		t.Fatalf("建仓库：%v", err)

@@ -18,7 +18,6 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
 	"github.com/wcpe/jianartifact/apps/server/internal/httpserver"
 	"github.com/wcpe/jianartifact/apps/server/internal/migration/credential"
-	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 	"github.com/wcpe/jianartifact/apps/server/internal/upstream"
 )
@@ -35,14 +34,7 @@ type testEnv struct {
 func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "it.db")
-	db, err := persistence.Open(dbPath)
-	if err != nil {
-		t.Fatalf("打开数据库：%v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(); err != nil {
-		t.Fatalf("迁移：%v", err)
-	}
+	db := openMigratedDB(t, dbPath)
 
 	userRepo := repository.NewUserRepo(db)
 	tokenRepo := repository.NewTokenRepo(db)
@@ -119,6 +111,7 @@ func (e *testEnv) do(t *testing.T, method, path, token string, body any, out any
 
 // TestAuthFlowEndToEnd 端到端覆盖：自举 → 登录 → 建用户 → 签发 Token → 建仓库 → ACL → 授权判定。
 func TestAuthFlowEndToEnd(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 
 	// 空库自举创建首个管理员。
@@ -228,6 +221,7 @@ func TestAuthFlowEndToEnd(t *testing.T) {
 }
 
 func TestRemoteNexusRepositoriesUsesOpenAPIRoute(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	request := map[string]string{"sourceRef": "NEXUS_TEST"}
 	if code := e.do(t, http.MethodPost, "/api/v1/migrations/remote-repositories", "", request, nil); code != http.StatusUnauthorized {
@@ -353,6 +347,7 @@ func TestProxyCredentialRefAPIContract(t *testing.T) {
 }
 
 func TestLegacyProxyURLUserinfoNeverAppearsInRepositoryAPI(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	var boot api.LoginResponse
 	if code := e.do(t, http.MethodPost, "/api/v1/auth/bootstrap", "",
@@ -395,6 +390,7 @@ func stringPointer(value string) *string { return &value }
 // 管理员建 public maven 仓库后，usage 按 format 返回接入片段、assets 空列表；
 // 无 read 权限的私有仓库对非授权用户返回 403。
 func TestBrowseAndUsageEndpoints(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 
 	var boot api.LoginResponse
@@ -496,6 +492,7 @@ func TestBrowseAndUsageEndpoints(t *testing.T) {
 // TestStatusReportsInitialized 自举后 /api/v1/status 反映已初始化与用户数；
 // 版本与迁移版本对匿名脱敏、对已认证请求返回。
 func TestStatusReportsInitialized(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 
 	var before api.StatusInfo
@@ -556,6 +553,7 @@ func TestStatusReportsInitialized(t *testing.T) {
 
 // TestMigrationFoundationAPI 覆盖迁移地基：admin 创建 planned、start、非法态 409、401/403、未知凭据 400。
 func TestMigrationFoundationAPI(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 
 	var boot api.LoginResponse
@@ -642,6 +640,7 @@ func TestMigrationFoundationAPI(t *testing.T) {
 }
 
 func TestMigrationStartAuditsInitiatorWithoutSourceSecrets(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	var boot api.LoginResponse
 	if code := e.do(t, http.MethodPost, "/api/v1/auth/bootstrap", "", api.BootstrapRequest{Username: "migration-admin", Password: "admin-pass-123"}, &boot); code != http.StatusCreated {
@@ -669,6 +668,7 @@ func TestMigrationStartAuditsInitiatorWithoutSourceSecrets(t *testing.T) {
 }
 
 func TestMigrationAPIDirectURLPersistsEncryptedBasicAuth(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	var boot api.LoginResponse
 	if code := e.do(t, http.MethodPost, "/api/v1/auth/bootstrap", "", api.BootstrapRequest{Username: "migration-admin", Password: "admin-pass-123"}, &boot); code != http.StatusCreated {
@@ -707,6 +707,7 @@ func TestMigrationAPIDirectURLPersistsEncryptedBasicAuth(t *testing.T) {
 }
 
 func TestMigrationAPIPersistsRequestPrincipalForCreateAndDiscover(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	var boot api.LoginResponse
 	if code := e.do(t, http.MethodPost, "/api/v1/auth/bootstrap", "", api.BootstrapRequest{Username: "migration-admin", Password: "admin-pass-123"}, &boot); code != http.StatusCreated {
@@ -780,6 +781,7 @@ func itoa64(id int64) string {
 
 // TestMigrationDiscoverAPI 覆盖 discover 落库 planned、坏路径不落库、非 admin 403。
 func TestMigrationDiscoverAPI(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 
 	var boot api.LoginResponse

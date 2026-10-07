@@ -112,6 +112,8 @@ func assertNoPyPIProjection(t *testing.T, e *protocolEnv, repo, project string) 
 	}
 }
 
+// 本用例**必须串行**：断言读的是进程级 runtime.MemStats.TotalAlloc 增量（流式上传的
+// 分配上限），而 TotalAlloc 是全进程计数器，并行用例的分配会被计入差值，断言随即失真。
 func TestPypiLegacyUploadStreamsLargeDistribution(t *testing.T) {
 	e := newProtocolEnv(t)
 	admin := e.bootstrapAdmin(t)
@@ -144,6 +146,7 @@ func TestPypiLegacyUploadStreamsLargeDistribution(t *testing.T) {
 }
 
 func TestPypiLegacyUploadRejectsOversizedFieldWithoutProjection(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	admin := e.bootstrapAdmin(t)
 	createFormatRepo(t, e, admin, "pypi-field-limit", "pypi", "hosted")
@@ -157,6 +160,7 @@ func TestPypiLegacyUploadRejectsOversizedFieldWithoutProjection(t *testing.T) {
 }
 
 func TestPypiLegacyUploadRejectsSecondFileWithoutProjection(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	admin := e.bootstrapAdmin(t)
 	createFormatRepo(t, e, admin, "pypi-single-file", "pypi", "hosted")
@@ -173,6 +177,7 @@ func TestPypiLegacyUploadRejectsSecondFileWithoutProjection(t *testing.T) {
 }
 
 func TestPyPIPublishPolicyAuditRecordsSuccessAndRejection(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	admin := e.bootstrapAdmin(t)
 	createFormatRepo(t, e, admin, "pypi-policy-audit", "pypi", "hosted")
@@ -211,6 +216,7 @@ func TestPyPIPublishPolicyAuditRecordsSuccessAndRejection(t *testing.T) {
 }
 
 func TestPypiHostedPEP503PEP691AndMultipart(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	admin := e.bootstrapAdmin(t)
 	createFormatRepo(t, e, admin, "pypi-hosted", "pypi", "hosted")
@@ -266,6 +272,7 @@ func TestPypiHostedPEP503PEP691AndMultipart(t *testing.T) {
 }
 
 func TestPypiGroupMergesMembersAndRejectsUpload(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	admin := e.bootstrapAdmin(t)
 	createFormatRepo(t, e, admin, "pypi-a", "pypi", "hosted")
@@ -284,6 +291,7 @@ func TestPypiGroupMergesMembersAndRejectsUpload(t *testing.T) {
 }
 
 func TestPypiInvalidMultipartIsRejected(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	admin := e.bootstrapAdmin(t)
 	createFormatRepo(t, e, admin, "pypi-invalid", "pypi", "hosted")
@@ -297,6 +305,7 @@ func TestPypiInvalidMultipartIsRejected(t *testing.T) {
 }
 
 func TestPypiProxyCachesSimpleIndexAndPackage(t *testing.T) {
+	t.Parallel()
 	var indexHits, packageHits int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -337,6 +346,7 @@ func TestPypiProxyCachesSimpleIndexAndPackage(t *testing.T) {
 }
 
 func TestPypiProxyDefersPackageFetchAndCoalescesConcurrentRequests(t *testing.T) {
+	t.Parallel()
 	payload := []byte("proxy-pypi-package")
 	var indexHits, packageHits int32
 	indexEntered := make(chan struct{}, 2)
@@ -514,6 +524,7 @@ func TestPypiProxyProjectsVerifiedPEP691AndPEP503CandidatesWithoutSourceLeak(t *
 }
 
 func TestPypiProxyRejectsHashMismatchWithoutPersistentProjection(t *testing.T) {
+	t.Parallel()
 	payload := []byte("tampered-pypi-package")
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

@@ -17,6 +17,7 @@ import (
 
 // npmViaRepositoryPrefix 用例矩阵：未 scope / scoped（URL 编码 %2f）。
 func TestNpmPublishViaRepositoryPrefix(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	admin := e.bootstrapAdmin(t)
 	e.createNpmRepo(t, admin, "npm-hosted", "hosted", "", nil)
@@ -75,6 +76,7 @@ func TestNpmPublishViaRepositoryPrefix(t *testing.T) {
 // TestNpmPublishViaRepositoryPrefixMergesVersions 确保经 /repository/ 前缀连续发布
 // 多版本时 packument 合并既有版本（不丢历史）。
 func TestNpmPublishViaRepositoryPrefixMergesVersions(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	admin := e.bootstrapAdmin(t)
 	e.createNpmRepo(t, admin, "npm-hosted", "hosted", "", nil)
@@ -103,6 +105,7 @@ func TestNpmPublishViaRepositoryPrefixMergesVersions(t *testing.T) {
 // （@acc/probe-1.0.0.tgz）而 dist.tarball 的 basename 是裸名（probe-1.0.0.tgz）。
 // 存储名必须与 packument 声明对齐，否则重写后的 dist.tarball 404。
 func TestNpmScopedPublishAlignsTarballNameWithPackument(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	admin := e.bootstrapAdmin(t)
 	e.createNpmRepo(t, admin, "npm-hosted", "hosted", "", nil)

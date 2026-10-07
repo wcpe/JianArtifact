@@ -9,6 +9,7 @@ import (
 
 // TestParseSearchQuery 覆盖高级搜索表达式的各类 token 解析。
 func TestParseSearchQuery(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		q    string
@@ -81,6 +82,7 @@ func TestParseSearchQuery(t *testing.T) {
 
 // TestParsedSearchHasRepoMeta 验证 hasRepoMeta 判定。
 func TestParsedSearchHasRepoMeta(t *testing.T) {
+	t.Parallel()
 	if parseSearchQuery("spring -sources ext:jar").hasRepoMeta() {
 		t.Error("纯路径条件不应需要仓库元数据")
 	}

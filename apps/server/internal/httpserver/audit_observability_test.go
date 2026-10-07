@@ -15,19 +15,12 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/api"
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 	"github.com/wcpe/jianartifact/apps/server/internal/httpserver"
-	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
 func TestAuditObservabilitySnapshotAndAtomicAcknowledgement(t *testing.T) {
-	db, err := persistence.Open(filepath.Join(t.TempDir(), "audit-observability.db"))
-	if err != nil {
-		t.Fatalf("打开数据库：%v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(); err != nil {
-		t.Fatalf("迁移数据库：%v", err)
-	}
+	t.Parallel()
+	db := openMigratedDB(t, filepath.Join(t.TempDir(), "audit-observability.db"))
 	audits := repository.NewAuditLogRepo(db)
 	now := time.Now().UTC()
 	batchTime := now.Truncate(time.Minute).Add(-40 * time.Second)
@@ -114,14 +107,8 @@ func TestAuditObservabilitySnapshotAndAtomicAcknowledgement(t *testing.T) {
 
 // FR-117：消息中心依赖 notifications 端点的筛选、分页与排序扩展；缺省请求保持页眉口径。
 func TestAuditNotificationCenterPaginationAndStatusFilter(t *testing.T) {
-	db, err := persistence.Open(filepath.Join(t.TempDir(), "notification-center.db"))
-	if err != nil {
-		t.Fatalf("打开数据库：%v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(); err != nil {
-		t.Fatalf("迁移数据库：%v", err)
-	}
+	t.Parallel()
+	db := openMigratedDB(t, filepath.Join(t.TempDir(), "notification-center.db"))
 	audits := repository.NewAuditLogRepo(db)
 	now := time.Now().UTC().Truncate(time.Minute)
 	// 五个风险批次：一个稍旧的失败批次（将被确认）+ 四个未确认批次（失败/高风险混合）。
@@ -240,14 +227,8 @@ func TestAuditNotificationCenterPaginationAndStatusFilter(t *testing.T) {
 }
 
 func TestAuditSnapshotRejectsFilterMismatch(t *testing.T) {
-	db, err := persistence.Open(filepath.Join(t.TempDir(), "audit-filter-snapshot.db"))
-	if err != nil {
-		t.Fatalf("打开数据库：%v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(); err != nil {
-		t.Fatalf("迁移数据库：%v", err)
-	}
+	t.Parallel()
+	db := openMigratedDB(t, filepath.Join(t.TempDir(), "audit-filter-snapshot.db"))
 	now := time.Now().UTC().Truncate(time.Second)
 	if err := repository.NewAuditLogRepo(db).Insert(repository.AuditLogEntry{
 		TS: now.Format(time.RFC3339Nano), Actor: "admin-a", Action: "user.update", EntityType: "user",
@@ -294,14 +275,8 @@ func TestAuditSnapshotRejectsFilterMismatch(t *testing.T) {
 }
 
 func TestAuditAttentionKeepsSnapshotFilters(t *testing.T) {
-	db, err := persistence.Open(filepath.Join(t.TempDir(), "audit-attention-filter.db"))
-	if err != nil {
-		t.Fatalf("打开数据库：%v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(); err != nil {
-		t.Fatalf("迁移数据库：%v", err)
-	}
+	t.Parallel()
+	db := openMigratedDB(t, filepath.Join(t.TempDir(), "audit-attention-filter.db"))
 	now := time.Now().UTC().Truncate(time.Minute)
 	audits := repository.NewAuditLogRepo(db)
 	for _, entry := range []repository.AuditLogEntry{
@@ -362,14 +337,8 @@ func TestAuditAttentionKeepsSnapshotFilters(t *testing.T) {
 }
 
 func TestAuditAttentionQueueUsesSnapshotAndPaginatesGroups(t *testing.T) {
-	db, err := persistence.Open(filepath.Join(t.TempDir(), "audit-attention-queue.db"))
-	if err != nil {
-		t.Fatalf("打开数据库：%v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(); err != nil {
-		t.Fatalf("迁移数据库：%v", err)
-	}
+	t.Parallel()
+	db := openMigratedDB(t, filepath.Join(t.TempDir(), "audit-attention-queue.db"))
 
 	now := time.Now().UTC().Truncate(time.Minute)
 	audits := repository.NewAuditLogRepo(db)
@@ -431,6 +400,7 @@ func TestAuditAttentionQueueUsesSnapshotAndPaginatesGroups(t *testing.T) {
 }
 
 func TestAuditAttentionQueueRequiresAdmin(t *testing.T) {
+	t.Parallel()
 	handlers := api.NewHandlers(api.Deps{})
 	server := httpserver.New("test", httpserver.WithHandlers(handlers), httpserver.WithMiddleware(func(c *gin.Context) {
 		c.Set("auth.principal", &auth.Principal{UserID: 12, Username: "member", Role: "user", AuthSource: auth.AuthSourceWebJWT})

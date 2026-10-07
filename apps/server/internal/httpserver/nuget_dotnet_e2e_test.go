@@ -11,6 +11,7 @@ import (
 )
 
 func TestNuGetDotnetPushRestoreAndBuildAcrossHostedProxyAndGroup(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("dotnet"); err != nil {
 		t.Skip("本机未安装 dotnet，跳过 NuGet 原生客户端验收")
 	}

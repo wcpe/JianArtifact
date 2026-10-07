@@ -8,6 +8,7 @@ import (
 )
 
 func TestParsePyPIIndexAcceptsPEP691RelativeCandidate(t *testing.T) {
+	t.Parallel()
 	payload := []byte("relative-pypi-package")
 	digest := sha256.Sum256(payload)
 	base, err := url.Parse("https://upstream.example/simple/proxy-pkg/")

@@ -22,6 +22,7 @@ import (
 )
 
 func TestMigrationServiceCreatePlannedAndStart(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	repo := repository.NewMigrationTaskRepo(db)
 	svc := domain.NewMigrationService(repo, nil)
@@ -54,6 +55,7 @@ func TestMigrationServiceCreatePlannedAndStart(t *testing.T) {
 }
 
 func TestMigrationServicePersistsInitiatorForCreateAndDiscover(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	svc := domain.NewMigrationService(repository.NewMigrationTaskRepo(db), nil)
 	initiator := domain.MigrationInitiator{Username: "migration-admin", UserID: 42, AuthSource: "web_jwt"}
@@ -91,6 +93,7 @@ func assertMigrationInitiator(t *testing.T, task *repository.MigrationTask, want
 }
 
 func TestMigrationServiceUpdateSourceConfigNonTerminal(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	repo := repository.NewMigrationTaskRepo(db)
 	svc := domain.NewMigrationService(repo, nil)
@@ -192,6 +195,7 @@ func TestMigrationServiceCredentialRef(t *testing.T) {
 }
 
 func TestMigrationServicePersistsDirectSourceAuthEncrypted(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	svc := domain.NewMigrationService(repository.NewMigrationTaskRepo(db), nil)
 	sealer, err := credential.NewSealer([]byte("01234567890123456789012345678901"))
@@ -228,6 +232,7 @@ func TestMigrationServicePersistsDirectSourceAuthEncrypted(t *testing.T) {
 }
 
 func TestMigrationServiceDiscoverPersistsDirectBearerAuthOnlyAfterSuccess(t *testing.T) {
+	t.Parallel()
 	const token = "discover-bearer-token"
 	var requests atomic.Int32
 	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -305,6 +310,7 @@ func TestMigrationServiceListRemoteRepositoriesUsesSourceRef(t *testing.T) {
 }
 
 func TestMigrationServiceListRemoteRepositoriesUsesDirectBearerAuth(t *testing.T) {
+	t.Parallel()
 	const token = "jwt:contains-colon"
 	var requests atomic.Int32
 	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -330,6 +336,7 @@ func TestMigrationServiceListRemoteRepositoriesUsesDirectBearerAuth(t *testing.T
 }
 
 func TestMigrationServiceListRemoteRepositoriesRejectsRawURLWithoutRequest(t *testing.T) {
+	t.Parallel()
 	factoryCalls := 0
 	svc := domain.NewMigrationService(nil, nil, func(string) (discover.Source, error) {
 		factoryCalls++
@@ -405,6 +412,7 @@ func newOnlineMigrationService(t *testing.T) *domain.MigrationService {
 }
 
 func TestMigrationServicePersistsOnlyAllowedSourceConfig(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	svc := domain.NewMigrationService(repository.NewMigrationTaskRepo(db), nil)
 
@@ -481,6 +489,7 @@ func assertPlanRepositories(t *testing.T, raw string, want []string) {
 }
 
 func TestMigrationServiceCancelAndResume(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	svc := domain.NewMigrationService(repository.NewMigrationTaskRepo(db), nil)
 	task, err := svc.Create(domain.MigrationCreateInput{
@@ -507,6 +516,7 @@ func TestMigrationServiceCancelAndResume(t *testing.T) {
 }
 
 func TestMigrationServiceIllegalTransitions(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	repo := repository.NewMigrationTaskRepo(db)
 	svc := domain.NewMigrationService(repo, nil)
@@ -531,6 +541,7 @@ func TestMigrationServiceIllegalTransitions(t *testing.T) {
 }
 
 func TestMigrationServiceFailInterrupted(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	repo := repository.NewMigrationTaskRepo(db)
 	svc := domain.NewMigrationService(repo, nil)
@@ -552,6 +563,7 @@ func TestMigrationServiceFailInterrupted(t *testing.T) {
 }
 
 func TestMigrationServiceInvalidSource(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	svc := domain.NewMigrationService(repository.NewMigrationTaskRepo(db), nil)
 	_, err := svc.Create(domain.MigrationCreateInput{

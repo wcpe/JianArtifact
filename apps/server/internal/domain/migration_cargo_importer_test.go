@@ -14,6 +14,7 @@ import (
 )
 
 func TestCargoMigrationCratePathAcceptsNexusDownloadRoute(t *testing.T) {
+	t.Parallel()
 	for _, source := range []string{
 		"api/v1/crates/fr31-cargo-source/0.1.0/download",
 		"crates/fr31-cargo-source/0.1.0/download",
@@ -26,6 +27,7 @@ func TestCargoMigrationCratePathAcceptsNexusDownloadRoute(t *testing.T) {
 }
 
 func TestCargoMigrationIndexMergesSourceMetadata(t *testing.T) {
+	t.Parallel()
 	service, assets, _, mutator, repoID := newLifecycleAssetService(t)
 	db := mutator.mutations.DB()
 	if _, err := db.Exec(`UPDATE repository SET format='cargo' WHERE id=?`, repoID); err != nil {

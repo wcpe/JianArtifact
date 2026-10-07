@@ -2,7 +2,6 @@ package domain_test
 
 import (
 	"errors"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -13,20 +12,14 @@ import (
 )
 
 // newTestDB 打开临时 SQLite 并执行迁移，返回连接与各 Repo。
+// newTestDB 打开一个「刚迁移完的空库」夹具库（见 testdb_template_test.go）。
 func newTestDB(t *testing.T) *persistence.DB {
 	t.Helper()
-	db, err := persistence.Open(filepath.Join(t.TempDir(), "domain.db"))
-	if err != nil {
-		t.Fatalf("打开数据库：%v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(); err != nil {
-		t.Fatalf("迁移：%v", err)
-	}
-	return db
+	return migratedTestDB(t, "domain.db")
 }
 
 func TestCreateRejectsKnownDisabledFormat(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	svc := domain.NewRepositoryService(repository.NewRepoRepo(db), repository.NewAclRepo(db), repository.NewAssetRepo(db), domain.NewSettingService(repository.NewSettingRepo(db)), repository.NewUserRepo(db))
 	svc.SetEnabledFormats(formats.New("raw"))
@@ -41,6 +34,7 @@ func TestCreateRejectsKnownDisabledFormat(t *testing.T) {
 // TestCanAccessImplicationMatrix 校验 ACL 蕴含矩阵：
 // admin 蕴含 read/write；write 蕴含 read；read 仅 read。
 func TestCanAccessImplicationMatrix(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	repoRepo := repository.NewRepoRepo(db)
 	aclRepo := repository.NewAclRepo(db)
@@ -87,6 +81,7 @@ func TestCanAccessImplicationMatrix(t *testing.T) {
 
 // TestCanAccessPublicRead public 仓库对无 ACL 主体的 read 放行，write/admin 仍拒绝。
 func TestCanAccessPublicRead(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	svc := domain.NewRepositoryService(repository.NewRepoRepo(db), repository.NewAclRepo(db), repository.NewAssetRepo(db), domain.NewSettingService(repository.NewSettingRepo(db)), repository.NewUserRepo(db))
 	if _, err := svc.Create("public-repo", "raw", "hosted", "public", "", repository.RepositoryConfig{}); err != nil {
@@ -103,6 +98,7 @@ func TestCanAccessPublicRead(t *testing.T) {
 
 // TestCanAccessNotFound 未知仓库返回 ErrNotFound。
 func TestCanAccessNotFound(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	svc := domain.NewRepositoryService(repository.NewRepoRepo(db), repository.NewAclRepo(db), repository.NewAssetRepo(db), domain.NewSettingService(repository.NewSettingRepo(db)), repository.NewUserRepo(db))
 	if _, err := svc.CanAccess("ghost", 1, "read"); err != domain.ErrNotFound {
@@ -113,6 +109,7 @@ func TestCanAccessNotFound(t *testing.T) {
 // TestCreateConfigValidation 校验 proxy/group 仓库配置的校验规则（FR-13）：
 // proxy 必填合法 remoteUrl；group 必填成员且均存在、同 format、禁止自引用。
 func TestCreateConfigValidation(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	svc := domain.NewRepositoryService(repository.NewRepoRepo(db), repository.NewAclRepo(db), repository.NewAssetRepo(db), domain.NewSettingService(repository.NewSettingRepo(db)), repository.NewUserRepo(db))
 
@@ -159,6 +156,7 @@ func TestCreateConfigValidation(t *testing.T) {
 }
 
 func TestGoModOnlyAllowsProxyForCreateAndMigration(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	svc := domain.NewRepositoryService(repository.NewRepoRepo(db), repository.NewAclRepo(db), repository.NewAssetRepo(db), domain.NewSettingService(repository.NewSettingRepo(db)), repository.NewUserRepo(db))
 	svc.SetEnabledFormats(formats.New(formats.Known...))
@@ -278,6 +276,7 @@ func TestProxyCredentialRefValidationAndPersistence(t *testing.T) {
 
 // TestListAssetsPaginationAndPrefix 校验制品浏览（FR-16）：前缀过滤、分页与总数。
 func TestListAssetsPaginationAndPrefix(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	repoRepo := repository.NewRepoRepo(db)
 	assetRepo := repository.NewAssetRepo(db)
@@ -334,6 +333,7 @@ func TestListAssetsPaginationAndPrefix(t *testing.T) {
 // TestUsageByFormat 校验使用片段（FR-16）：按 format 返回正确接入片段，
 // hosted 含发布 / 上传片段，proxy 仅含下载 / 解析片段。
 func TestUsageByFormat(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	svc := domain.NewRepositoryService(repository.NewRepoRepo(db), repository.NewAclRepo(db), repository.NewAssetRepo(db), domain.NewSettingService(repository.NewSettingRepo(db)), repository.NewUserRepo(db))
 
@@ -393,6 +393,7 @@ func TestUsageByFormat(t *testing.T) {
 
 // TestPasswordNotStoredInPlaintext 建用户后 DB 中的口令哈希不得为明文（NFR-06）。
 func TestPasswordNotStoredInPlaintext(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	userRepo := repository.NewUserRepo(db)
 	svc := domain.NewUserService(userRepo)
@@ -417,6 +418,7 @@ func TestPasswordNotStoredInPlaintext(t *testing.T) {
 
 // TestTokenDigestNotPlaintext 签发 API Token 后 DB 中不得出现明文（AC-05）。
 func TestTokenDigestNotPlaintext(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	userRepo := repository.NewUserRepo(db)
 	tokenRepo := repository.NewTokenRepo(db)

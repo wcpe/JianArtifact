@@ -12,6 +12,7 @@ import (
 )
 
 func TestZzDiagImportProgress(t *testing.T) {
+	t.Parallel()
 	src := newBackupEnv(t)
 	srcTok := src.adminToken(t)
 	src.seedAsset(t, "diag-payload")

@@ -39,6 +39,7 @@ func cargoFrame(name, version string, crate []byte) []byte {
 }
 
 func TestCargoHostedProtocolLifecycle(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	admin := e.bootstrapAdmin(t)
 	createFormatRepo(t, e, admin, "cargo-hosted", "cargo", "hosted")
@@ -88,6 +89,7 @@ func TestCargoHostedProtocolLifecycle(t *testing.T) {
 }
 
 func TestCargoConfigUsesConfiguredPublicURL(t *testing.T) {
+	t.Parallel()
 	const publicURL = "https://standby.example.test"
 	e := newProtocolEnvWithPublicURL(t, publicURL)
 	admin := e.bootstrapAdmin(t)
@@ -119,6 +121,7 @@ func TestCargoConfigUsesConfiguredPublicURL(t *testing.T) {
 }
 
 func TestCargoHostedPublishAcceptsRegistryToken(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	registryToken := e.bootstrapAdmin(t)
 	createFormatRepo(t, e, registryToken, "cargo-registry-token", "cargo", "hosted")
@@ -136,6 +139,7 @@ func TestCargoHostedPublishAcceptsRegistryToken(t *testing.T) {
 }
 
 func TestCargoPublishPolicyRejectionsAuditActor(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	admin := e.bootstrapAdmin(t)
 	visibility := api.CreateRepositoryRequestVisibility("private")
@@ -186,6 +190,7 @@ func TestCargoPublishPolicyRejectionsAuditActor(t *testing.T) {
 }
 
 func TestCargoRegistryTokenIsRejectedByRawRoute(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	registryToken := e.bootstrapAdmin(t)
 	e.createRawRepo(t, registryToken, "raw-no-cargo-token", "public")
@@ -203,6 +208,7 @@ func TestCargoRegistryTokenIsRejectedByRawRoute(t *testing.T) {
 }
 
 func TestCargoGroupMergesMembersAndRejectsPublish(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	admin := e.bootstrapAdmin(t)
 	createFormatRepo(t, e, admin, "cargo-a", "cargo", "hosted")
@@ -221,6 +227,7 @@ func TestCargoGroupMergesMembersAndRejectsPublish(t *testing.T) {
 }
 
 func TestCargoProxyCachesIndexAndCrate(t *testing.T) {
+	t.Parallel()
 	var indexHits, crateHits int32
 	crate := []byte("proxy-crate-bytes")
 	checksum := sha256.Sum256(crate)
@@ -266,6 +273,7 @@ func TestCargoProxyCachesIndexAndCrate(t *testing.T) {
 }
 
 func TestCargoProxyRejectsChecksumMismatchBeforeCaching(t *testing.T) {
+	t.Parallel()
 	var downloadHits int32
 	var upstream *httptest.Server
 	upstream = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -308,6 +316,7 @@ func TestCargoProxyRejectsChecksumMismatchBeforeCaching(t *testing.T) {
 }
 
 func TestCargoProxyRejectsUnsafeDownloadTemplate(t *testing.T) {
+	t.Parallel()
 	crate := []byte("safe-template-crate")
 	checksum := sha256.Sum256(crate)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -337,6 +346,7 @@ func TestCargoProxyRejectsUnsafeDownloadTemplate(t *testing.T) {
 }
 
 func TestCargoRejectsInvalidIndexPathAndNonCargoRepository(t *testing.T) {
+	t.Parallel()
 	var upstreamHits int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&upstreamHits, 1)

@@ -2,26 +2,17 @@ package domain_test
 
 import (
 	"errors"
-	"path/filepath"
 	"testing"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
-	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
 // newExternalAuthSvc 装配外部身份登录所需的 AuthService 与用户仓库（真实 SQLite + 迁移 0044）。
 func newExternalAuthSvc(t *testing.T) (*domain.AuthService, *repository.UserRepo) {
 	t.Helper()
-	db, err := persistence.Open(filepath.Join(t.TempDir(), "auth-external.db"))
-	if err != nil {
-		t.Fatalf("打开数据库：%v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(); err != nil {
-		t.Fatalf("迁移数据库：%v", err)
-	}
+	db := migratedTestDB(t, "auth-external.db")
 	users := repository.NewUserRepo(db)
 	jwtMgr := auth.NewJWTManager([]byte("external-identity-test-secret-32b"))
 	return domain.NewAuthService(users, repository.NewRevokedRepo(db), jwtMgr), users
@@ -33,6 +24,7 @@ func oidcIdentity(username, subject string) domain.ExternalIdentity {
 
 // TestLoginExternalCreatesAccountOnFirstLogin 首次外部登录即建号：角色固定 user、不设本地口令。
 func TestLoginExternalCreatesAccountOnFirstLogin(t *testing.T) {
+	t.Parallel()
 	svc, users := newExternalAuthSvc(t)
 
 	token, user, err := svc.LoginExternal(oidcIdentity("alice", "sub-alice"))
@@ -56,6 +48,7 @@ func TestLoginExternalCreatesAccountOnFirstLogin(t *testing.T) {
 
 // TestLoginExternalBindsExistingLocalUser 已存在的本地普通账号按用户名绑定，保留原 ID。
 func TestLoginExternalBindsExistingLocalUser(t *testing.T) {
+	t.Parallel()
 	svc, users := newExternalAuthSvc(t)
 	id, err := users.Create("bob", "$argon2id$local-hash", "user")
 	if err != nil {
@@ -76,6 +69,7 @@ func TestLoginExternalBindsExistingLocalUser(t *testing.T) {
 
 // TestLoginExternalNeverBindsAdmin 管理员账号绝不参与自动绑定，避免用户名撞名即接管管理员。
 func TestLoginExternalNeverBindsAdmin(t *testing.T) {
+	t.Parallel()
 	svc, users := newExternalAuthSvc(t)
 	id, err := users.Create("root", "$argon2id$admin-hash", "admin")
 	if err != nil {
@@ -97,6 +91,7 @@ func TestLoginExternalNeverBindsAdmin(t *testing.T) {
 
 // TestLoginExternalRejectsBuiltinAndInvalidIdentities 内置主体、空字段与来源不符一律拒绝。
 func TestLoginExternalRejectsBuiltinAndInvalidIdentities(t *testing.T) {
+	t.Parallel()
 	svc, users := newExternalAuthSvc(t)
 
 	if _, _, err := svc.LoginExternal(oidcIdentity(domain.AnonymousUsername, "sub-anon")); !errors.Is(err, domain.ErrExternalIdentityInvalid) {
@@ -122,6 +117,7 @@ func TestLoginExternalRejectsBuiltinAndInvalidIdentities(t *testing.T) {
 
 // TestLoginExternalRejectsRebindingAndDisabled 已绑定其它标识的账号不被劫持；停用与禁网页登录一律拒绝。
 func TestLoginExternalRejectsRebindingAndDisabled(t *testing.T) {
+	t.Parallel()
 	svc, users := newExternalAuthSvc(t)
 
 	id, err := users.Create("dave", "$argon2id$local", "user")

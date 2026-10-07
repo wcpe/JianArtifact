@@ -61,6 +61,7 @@ func readClose(t *testing.T, rc io.ReadCloser) []byte {
 }
 
 func TestResolveProxyCacheMissThenHit(t *testing.T) {
+	t.Parallel()
 	var hits int32
 	payload := []byte("upstream artifact bytes")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -133,6 +134,7 @@ func TestResolveProxyUsesCredentialRefWithoutLeakage(t *testing.T) {
 }
 
 func TestResolveProxyRejectsUnknownCredentialRefWithoutLeakage(t *testing.T) {
+	t.Parallel()
 	const missingRef = "MISSING_PRIVATE_ARTIFACTS"
 	const secret = "must-not-appear-in-error"
 	var hits int32
@@ -161,6 +163,7 @@ func TestResolveProxyRejectsUnknownCredentialRefWithoutLeakage(t *testing.T) {
 // 目录形路径（空串或以 / 结尾）不是制品：proxy 不得回源，否则上游返回的 HTML
 // 目录索引页会被当成制品缓存（path 以 / 结尾、text/html），前端文件树出现空白名假文件。
 func TestResolveRejectsDirectoryLikePath(t *testing.T) {
+	t.Parallel()
 	var hits int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&hits, 1)
@@ -184,6 +187,7 @@ func TestResolveRejectsDirectoryLikePath(t *testing.T) {
 }
 
 func TestResolveProxyUpstreamNotFound(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 	}))
@@ -199,6 +203,7 @@ func TestResolveProxyUpstreamNotFound(t *testing.T) {
 }
 
 func TestResolveProxyUpstreamError(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "boom", http.StatusInternalServerError)
 	}))
@@ -214,6 +219,7 @@ func TestResolveProxyUpstreamError(t *testing.T) {
 }
 
 func TestResolveGroupOrderedHit(t *testing.T) {
+	t.Parallel()
 	svc, repos := newAssetService(t)
 	for _, name := range []string{"raw-a", "raw-b"} {
 		if _, err := repos.Create(name, "raw", "hosted", "private", ""); err != nil {
@@ -257,6 +263,7 @@ func TestResolveGroupOrderedHit(t *testing.T) {
 }
 
 func TestResolveGroupDuplicateMemberReusesSnapshotOrder(t *testing.T) {
+	t.Parallel()
 	var hits int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&hits, 1)
@@ -285,6 +292,7 @@ func TestResolveGroupDuplicateMemberReusesSnapshotOrder(t *testing.T) {
 }
 
 func TestResolveProxySingleFlight(t *testing.T) {
+	t.Parallel()
 	var hits int32
 	payload := []byte("single-flight payload")
 	release := make(chan struct{})
@@ -346,6 +354,7 @@ func errorsIsUpstream(err error) bool {
 // TestResolveGroupFast404WithHangingMember 验证 group 并行回源：一个 proxy 成员上游挂起
 // （不响应直到超时），另一个快速 404；整体应在秒级返回 404，而非串行等 2 个超时。
 func TestResolveGroupFast404WithHangingMember(t *testing.T) {
+	t.Parallel()
 	hangSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done()
 	}))
@@ -380,6 +389,7 @@ func TestResolveGroupFast404WithHangingMember(t *testing.T) {
 // TestResolveGroupFuseSkipsUnreachableMember 验证熔断：proxy 上游 5xx 失败后进入短窗熔断，
 // 后续 group 请求直接跳过该成员（不再请求上游），快速 404。
 func TestResolveGroupFuseSkipsUnreachableMember(t *testing.T) {
+	t.Parallel()
 	var hits int32
 	boomSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&hits, 1)
@@ -418,6 +428,7 @@ func TestResolveGroupFuseSkipsUnreachableMember(t *testing.T) {
 
 // TestResolveGroupParallelHitFromLaterMember 验证并行回源：后一个 proxy 成员能命中并返回内容。
 func TestResolveGroupParallelHitFromLaterMember(t *testing.T) {
+	t.Parallel()
 	payload := []byte("hit-from-fast")
 	fastSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/java-archive")
@@ -473,6 +484,7 @@ func waitForStatus(t *testing.T, svc *domain.AssetService, repoID int64, want do
 // TestResolveProxyAutoBlockZeroConnection 验证 auto-block：上游 5xx 失败后进入 AUTO_BLOCKED，
 // 阻止窗口内 group 请求对该成员零连接、快速 404。
 func TestResolveProxyAutoBlockZeroConnection(t *testing.T) {
+	t.Parallel()
 	var hits int32
 	boomSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		atomic.AddInt32(&hits, 1)
@@ -528,6 +540,7 @@ func TestResolveProxyAutoBlockZeroConnection(t *testing.T) {
 // TestResolveProxyAutoBlockRecovers 验证后台探测恢复：上游恢复后，后台 HEAD 探测成功，
 // 状态自动回到 AVAILABLE，后续请求正常回源。
 func TestResolveProxyAutoBlockRecovers(t *testing.T) {
+	t.Parallel()
 	var fail atomic.Bool
 	fail.Store(true)
 	payload := []byte("recovered artifact bytes")
@@ -573,6 +586,7 @@ func TestResolveProxyAutoBlockRecovers(t *testing.T) {
 // TestResolveProxyAutoBlockBackoffIncrements 验证退避递增：持续失败时阻止窗口按
 // 起始档翻倍递增（默认 40s→80s→160s…），此处用缩短的起始档验证倍数关系。
 func TestResolveProxyAutoBlockBackoffIncrements(t *testing.T) {
+	t.Parallel()
 	boomSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "boom", http.StatusInternalServerError)
 	}))
@@ -619,6 +633,7 @@ func TestResolveProxyAutoBlockBackoffIncrements(t *testing.T) {
 // TestResolveProxyAutoBlockConcurrent 验证并发安全：多 goroutine 同时 group 读，
 // 状态机并发更新无数据竞争（-race 验证），并发失败收敛为进入 AUTO_BLOCKED。
 func TestResolveProxyAutoBlockConcurrent(t *testing.T) {
+	t.Parallel()
 	var hits int32
 	boomSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		atomic.AddInt32(&hits, 1)
@@ -672,6 +687,7 @@ func TestResolveProxyAutoBlockConcurrent(t *testing.T) {
 // TestNegativeCacheProxyNotFoundCached 验证 proxy 明确 404 写负缓存：
 // 首次回源得到 404 后，TTL 内同路径再次请求直接 404，不再回源。
 func TestNegativeCacheProxyNotFoundCached(t *testing.T) {
+	t.Parallel()
 	var hits int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		atomic.AddInt32(&hits, 1)
@@ -706,6 +722,7 @@ func TestNegativeCacheProxyNotFoundCached(t *testing.T) {
 // TestNegativeCacheProxyErrorNotCached 验证上游故障（5xx）不写负缓存：
 // 上游恢复后同路径立即重试成功；若误缓存，恢复后仍会返回缓存的 404。
 func TestNegativeCacheProxyErrorNotCached(t *testing.T) {
+	t.Parallel()
 	var fail atomic.Bool
 	var hits int32
 	fail.Store(true)
@@ -754,6 +771,7 @@ func TestNegativeCacheProxyErrorNotCached(t *testing.T) {
 // TestNegativeCacheGroupConfirmedNotFoundCached 验证 group 全成员确认不存在时写负缓存：
 // TTL 内再次请求 group 直接 404，不再探测成员（即使成员后来有了该制品）。
 func TestNegativeCacheGroupConfirmedNotFoundCached(t *testing.T) {
+	t.Parallel()
 	var hits int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		atomic.AddInt32(&hits, 1)
@@ -796,6 +814,7 @@ func TestNegativeCacheGroupConfirmedNotFoundCached(t *testing.T) {
 // TestNegativeCacheGroupSkippedMemberNotCached 验证 M-1 不可判定 404 不写负缓存：
 // group 有 offline 成员被跳过时，404 不写负缓存；成员恢复并上传后同路径立即重试成功。
 func TestNegativeCacheGroupSkippedMemberNotCached(t *testing.T) {
+	t.Parallel()
 	var hits int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		atomic.AddInt32(&hits, 1)
@@ -842,6 +861,7 @@ func TestNegativeCacheGroupSkippedMemberNotCached(t *testing.T) {
 // TestNegativeCacheGroupAutoBlockSkippedNotCached 验证 M-1 的另一路径：
 // proxy 成员被 auto-block 阻止跳过时，group 404 不写负缓存（上游恢复后立即重试成功）。
 func TestNegativeCacheGroupAutoBlockSkippedNotCached(t *testing.T) {
+	t.Parallel()
 	var boomHits int32
 	var fail atomic.Bool
 	fail.Store(true)

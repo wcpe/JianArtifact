@@ -21,6 +21,7 @@ func decodeHealth(t *testing.T, body []byte) api.HealthStatus {
 }
 
 func TestGetHealthz(t *testing.T) {
+	t.Parallel()
 	h := New("test-version").Handler(nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
@@ -41,6 +42,7 @@ func TestGetHealthz(t *testing.T) {
 }
 
 func TestGetReadyz(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		opts     []Option
@@ -74,6 +76,7 @@ func TestGetReadyz(t *testing.T) {
 }
 
 func TestStaticAndSPAFallback(t *testing.T) {
+	t.Parallel()
 	assets := fstest.MapFS{
 		"index.html":    &fstest.MapFile{Data: []byte("<!doctype html><title>jian</title>")},
 		"assets/app.js": &fstest.MapFile{Data: []byte("console.log(1)")},
@@ -110,6 +113,7 @@ func TestStaticAndSPAFallback(t *testing.T) {
 }
 
 func TestReservedProtocolPrefixDoesNotFallbackToSPA(t *testing.T) {
+	t.Parallel()
 	assets := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("index")}}
 	h := New("v", WithProtocolPrefixes("/repository", "/npm")).Handler(assets)
 	for _, path := range []string{"/repository/raw/a.txt", "/npm/demo", "/npm"} {
@@ -127,6 +131,7 @@ func TestReservedProtocolPrefixDoesNotFallbackToSPA(t *testing.T) {
 
 // 契约路由优先于静态回退：即便挂了前端资源，/healthz 仍走契约处理器。
 func TestContractRouteTakesPrecedenceOverStatic(t *testing.T) {
+	t.Parallel()
 	assets := fstest.MapFS{
 		"index.html": &fstest.MapFile{Data: []byte("<html></html>")},
 	}

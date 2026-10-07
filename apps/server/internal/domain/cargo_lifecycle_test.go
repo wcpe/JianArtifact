@@ -33,6 +33,7 @@ func cargoPublishFrame(t *testing.T, name, version string, crate []byte) []byte 
 }
 
 func TestCargoPublishIndexFailureDoesNotExposeCrate(t *testing.T) {
+	t.Parallel()
 	service, assets, blobs, mutator, repoID := newLifecycleAssetService(t)
 	if _, err := mutator.mutations.DB().Exec(`UPDATE repository SET format='cargo' WHERE id=?`, repoID); err != nil {
 		t.Fatalf("设置 Cargo 仓库：%v", err)

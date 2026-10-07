@@ -24,6 +24,7 @@ func bootstrapAndLogin(t *testing.T, e *testEnv) string {
 //     offline 优先覆盖为 OFFLINE，hosted 不返回；
 //   - 普通用户列表不返回 connectionStatus（管理面信息）。
 func TestRepositoryConnectionStatusFilled(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminToken := bootstrapAndLogin(t, e)
 
@@ -99,6 +100,7 @@ func TestRepositoryConnectionStatusFilled(t *testing.T) {
 // TestRepositoryOfflineStatusOverrides 离线优先覆盖（MD-2）：置 offline 后无论内存态
 // 为何，响应 connectionStatus 一律 OFFLINE。
 func TestRepositoryOfflineStatusOverrides(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminToken := bootstrapAndLogin(t, e)
 
@@ -136,6 +138,7 @@ func TestRepositoryOfflineStatusOverrides(t *testing.T) {
 // TestRecheckConnectionEndpoint 手动重测端点（FR-114）：
 // 仅管理员；仅 online 的 proxy 可重测；重测触发上游探测并返回最新状态。
 func TestRecheckConnectionEndpoint(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminToken := bootstrapAndLogin(t, e)
 
@@ -227,6 +230,7 @@ func TestRecheckConnectionEndpoint(t *testing.T) {
 
 // TestRecheckConnectionOfflineRejected offline 仓库不可重测（FR-114：仅 online 可重测）。
 func TestRecheckConnectionOfflineRejected(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 	adminToken := bootstrapAndLogin(t, e)
 

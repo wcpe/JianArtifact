@@ -13,6 +13,7 @@ import (
 
 // 批量保存：预校验的原子性——任一仓库非法则整体拒绝，合法仓库也不得落库。
 func TestPublishPolicySaveManyPreValidationIsAtomic(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	users := repository.NewUserRepo(db)
 	uid, err := users.Create("batch-publisher", "hash", "user")
@@ -71,6 +72,7 @@ func TestPublishPolicySaveManyPreValidationIsAtomic(t *testing.T) {
 
 // 批量保存：同一份补丁应用到多个仓库，未提供的字段保留各仓库现有值，重复名去重。
 func TestPublishPolicySaveManyAppliesPatchAndKeepsUnsetFields(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	users := repository.NewUserRepo(db)
 	uid, err := users.Create("batch-merge-publisher", "hash", "user")
@@ -141,6 +143,7 @@ func TestPublishPolicySaveManyAppliesPatchAndKeepsUnsetFields(t *testing.T) {
 }
 
 func TestPublishPolicyStreamingReservationEnforcesPathAndQuota(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	users := repository.NewUserRepo(db)
 	uid, err := users.Create("publisher", "hash", "user")
@@ -174,6 +177,7 @@ func TestPublishPolicyStreamingReservationEnforcesPathAndQuota(t *testing.T) {
 }
 
 func TestPublishPolicyUnresolvedStreamingReservesBeforePathParsing(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	users := repository.NewUserRepo(db)
 	uid, err := users.Create("unresolved-publisher", "hash", "user")
@@ -204,6 +208,7 @@ func TestPublishPolicyUnresolvedStreamingReservesBeforePathParsing(t *testing.T)
 }
 
 func TestPublishPolicyMultiplePrefixesAndNoPolicyAllowsAllPaths(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	users := repository.NewUserRepo(db)
 	uid, err := users.Create("prefix-publisher", "hash", "user")
@@ -233,6 +238,7 @@ func TestPublishPolicyMultiplePrefixesAndNoPolicyAllowsAllPaths(t *testing.T) {
 }
 
 func TestPublishPolicyImmutableReleaseAlsoRejectsAdministratorOverwrite(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	repos := repository.NewRepoRepo(db)
 	repoID, err := repos.Create("raw-immutable-admin", "raw", "hosted", "private", `{"immutableRelease":true}`)
@@ -250,6 +256,7 @@ func TestPublishPolicyImmutableReleaseAlsoRejectsAdministratorOverwrite(t *testi
 }
 
 func TestPublishPolicyEnforcesAllQuotaLimits(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	users := repository.NewUserRepo(db)
 	uid, err := users.Create("quota-publisher", "hash", "user")
@@ -287,6 +294,7 @@ func TestPublishPolicyEnforcesAllQuotaLimits(t *testing.T) {
 }
 
 func TestPublishPolicyConcurrentReservationsDoNotExceedQuota(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	users := repository.NewUserRepo(db)
 	uid, err := users.Create("concurrent-publisher", "hash", "user")
@@ -335,6 +343,7 @@ func TestPublishPolicyConcurrentReservationsDoNotExceedQuota(t *testing.T) {
 }
 
 func TestPublishPolicyFailedStreamingUploadReleasesReservation(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	users := repository.NewUserRepo(db)
 	uid, err := users.Create("failed-stream-publisher", "hash", "user")
@@ -362,6 +371,7 @@ func TestPublishPolicyFailedStreamingUploadReleasesReservation(t *testing.T) {
 }
 
 func TestPublishPolicyStreamingReservationCountsPendingBytes(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	users := repository.NewUserRepo(db)
 	uid, err := users.Create("streaming-quota-publisher", "hash", "user")
@@ -385,15 +395,10 @@ func TestPublishPolicyStreamingReservationCountsPendingBytes(t *testing.T) {
 }
 
 func TestPublishPolicyFailureAndRestartRecoveryReleaseReservationsImmediately(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "publish-policy-restart.db")
-	db, err := persistence.Open(path)
-	if err != nil {
-		t.Fatalf("打开数据库：%v", err)
-	}
-	if err := db.Migrate(); err != nil {
-		_ = db.Close()
-		t.Fatalf("迁移数据库：%v", err)
-	}
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "publish-policy-restart.db")
+	db := openMigratedTestDB(t, dir, "publish-policy-restart.db")
 	users := repository.NewUserRepo(db)
 	uid, err := users.Create("restart-publisher", "hash", "user")
 	if err != nil {

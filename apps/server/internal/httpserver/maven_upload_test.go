@@ -71,6 +71,7 @@ func (e *protocolEnv) getBody(t *testing.T, token, repo, path string) string {
 }
 
 func TestMavenWebUploadCreatesFullSet(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	e.createMavenRepo(t, adminToken, "mvn-web", "hosted", "", nil)
@@ -137,6 +138,7 @@ func TestMavenWebUploadCreatesFullSet(t *testing.T) {
 }
 
 func TestMavenWebUploadSecondVersionUpdatesMetadata(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	e.createMavenRepo(t, adminToken, "mvn-multi", "hosted", "", nil)
@@ -170,6 +172,7 @@ func TestMavenWebUploadSecondVersionUpdatesMetadata(t *testing.T) {
 }
 
 func TestMavenWebUploadRejectsImmutableReleaseOverwrite(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	e.createMavenRepo(t, adminToken, "mvn-immutable", "hosted", "", nil)
@@ -189,6 +192,7 @@ func TestMavenWebUploadRejectsImmutableReleaseOverwrite(t *testing.T) {
 }
 
 func TestMavenWebUploadRejections(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	e.createMavenRepo(t, adminToken, "mvn-host", "hosted", "", nil)
@@ -265,6 +269,7 @@ func TestMavenWebUploadRejections(t *testing.T) {
 }
 
 func TestMavenWebUploadPomPackaging(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	e.createMavenRepo(t, adminToken, "mvn-pom", "hosted", "", nil)
@@ -293,6 +298,7 @@ func TestMavenWebUploadPomPackaging(t *testing.T) {
 // TestMavenWebUploadRollsBackWholeBatchOnMetadataFailure 确保网页上传的主文件、
 // 校验和、POM 与 Maven 元数据必须作为同一批次可见。
 func TestMavenWebUploadRollsBackWholeBatchOnMetadataFailure(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	e.createMavenRepo(t, adminToken, "mvn-atomic", "hosted", "", nil)
@@ -325,6 +331,7 @@ func TestMavenWebUploadRollsBackWholeBatchOnMetadataFailure(t *testing.T) {
 // 也逐文件写 asset.put 审计：字段口径与协议 raw 上传一致（EntityType=asset、
 // EntityKey=repo/path、Detail=size=N），审计里能看出「传了什么」。
 func TestMavenWebUploadWritesPerFileAudit(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	e.createMavenRepo(t, adminToken, "mvn-audit", "hosted", "", nil)

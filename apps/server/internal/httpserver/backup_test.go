@@ -43,14 +43,7 @@ func newBackupEnv(t *testing.T) *backupEnv {
 	t.Helper()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "jianartifact.db")
-	db, err := persistence.Open(dbPath)
-	if err != nil {
-		t.Fatalf("打开数据库：%v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(); err != nil {
-		t.Fatalf("迁移：%v", err)
-	}
+	db := openMigratedDB(t, dbPath)
 
 	blobs := blobstore.NewStore(filepath.Join(dir, "blobs"))
 	backupSvc := domain.NewBackupService(db, repository.NewBackupPackageRepo(db), blobs, dir, dbPath, "test", func() string { return "np-test" })
@@ -187,6 +180,7 @@ func deref(t *testing.T, s *string) string {
 // TestBackupEndToEndCreateLinkDownload 覆盖搬迁主链路：
 // 生成 → 列表 → 签名链接 → 无会话下载 → 校验 → 删除。
 func TestBackupEndToEndCreateLinkDownload(t *testing.T) {
+	t.Parallel()
 	env := newBackupEnv(t)
 	env.seedAsset(t, "payload-content")
 	token := env.adminToken(t)
@@ -290,6 +284,7 @@ func TestBackupEndToEndCreateLinkDownload(t *testing.T) {
 // TestBackupVerifyReportsCorruptionAs422 覆盖契约形状：包存在但内容校验未通过时，
 // 返回 422 + BackupVerification（业务结论），而不是泛化成 500。
 func TestBackupVerifyReportsCorruptionAs422(t *testing.T) {
+	t.Parallel()
 	env := newBackupEnv(t)
 	env.seedAsset(t, "payload-to-corrupt")
 	token := env.adminToken(t)
@@ -330,6 +325,7 @@ func TestBackupVerifyReportsCorruptionAs422(t *testing.T) {
 
 // TestBackupVerifyUnknownPackageIs404 验证"包不存在"仍走通用错误映射（不是 422）。
 func TestBackupVerifyUnknownPackageIs404(t *testing.T) {
+	t.Parallel()
 	env := newBackupEnv(t)
 	token := env.adminToken(t)
 	code, _ := env.request(t, http.MethodPost, "/api/v1/backups/bk-nope/verify", token, nil)
@@ -339,6 +335,7 @@ func TestBackupVerifyUnknownPackageIs404(t *testing.T) {
 }
 
 func TestBackupCreateRejectsUnknownMode(t *testing.T) {
+	t.Parallel()
 	env := newBackupEnv(t)
 	token := env.adminToken(t)
 	code, body := env.request(t, http.MethodPost, "/api/v1/backups", token, map[string]any{"mode": "nope"})
@@ -348,6 +345,7 @@ func TestBackupCreateRejectsUnknownMode(t *testing.T) {
 }
 
 func TestBackupLinkRequiresAdmin(t *testing.T) {
+	t.Parallel()
 	env := newBackupEnv(t)
 	if code, _ := env.request(t, http.MethodPost, "/api/v1/backups/bk-x/link", "", nil); code != http.StatusUnauthorized {
 		t.Fatalf("未认证生成链接应 401，实际 %d", code)

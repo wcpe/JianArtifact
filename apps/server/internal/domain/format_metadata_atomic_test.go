@@ -23,6 +23,7 @@ import (
 )
 
 func TestPyPIProxySizeReaderRejectsContentBeyondLimit(t *testing.T) {
+	t.Parallel()
 	reader := &pypiProxySizeReader{reader: bytes.NewReader([]byte("abc")), remaining: 2}
 	if _, err := io.ReadAll(reader); !errors.Is(err, errPyPIProxyPackageTooLarge) {
 		t.Fatalf("超过限制的 PyPI proxy 内容必须拒绝：%v", err)
@@ -30,6 +31,7 @@ func TestPyPIProxySizeReaderRejectsContentBeyondLimit(t *testing.T) {
 }
 
 func TestPyPIPublishAuditFailureDoesNotLeaveProjection(t *testing.T) {
+	t.Parallel()
 	db := mutationTestDB(t)
 	repos := repository.NewRepoRepo(db)
 	assets := repository.NewAssetRepo(db)
@@ -59,6 +61,7 @@ func TestPyPIPublishAuditFailureDoesNotLeaveProjection(t *testing.T) {
 }
 
 func TestFormatPublishMetadataFailureDoesNotLeaveAsset(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, format, filename, path string
 		publish                      func(*FormatMetadataService) error
@@ -114,6 +117,7 @@ func TestFormatPublishMetadataFailureDoesNotLeaveAsset(t *testing.T) {
 }
 
 func TestPyPIProxyMetadataFailureDoesNotLeaveCachedPackage(t *testing.T) {
+	t.Parallel()
 	db := mutationTestDB(t)
 	repos := repository.NewRepoRepo(db)
 	assets := repository.NewAssetRepo(db)
@@ -173,6 +177,7 @@ func TestPyPIProxyMetadataFailureDoesNotLeaveCachedPackage(t *testing.T) {
 }
 
 func TestNuGetProxyMetadataFailureDoesNotLeavePartialMetadata(t *testing.T) {
+	t.Parallel()
 	db := mutationTestDB(t)
 	repos := repository.NewRepoRepo(db)
 	assets := repository.NewAssetRepo(db)
@@ -208,6 +213,7 @@ func TestNuGetProxyMetadataFailureDoesNotLeavePartialMetadata(t *testing.T) {
 }
 
 func TestNuGetProxyDiscoversV3ResourcesAndCachesLocalMetadata(t *testing.T) {
+	t.Parallel()
 	var serviceIndexHits, flatIndexHits, registrationHits, packageHits int
 	proxyPackage := nugetProxyTestPackage(t, "Demo.Package", "1.0.0")
 	var upstreamServer *httptest.Server
@@ -283,6 +289,7 @@ func nugetProxyTestPackage(t *testing.T, id, version string) []byte {
 }
 
 func TestNuGetProxySourceRejectsCredentialAndUnsafeURLForms(t *testing.T) {
+	t.Parallel()
 	for _, source := range []string{
 		`{"source":{"packageUrl":"https://user:secret@example.invalid/package.nupkg"}}`,
 		`{"source":{"packageUrl":"https://example.invalid/package.nupkg?token=secret"}}`,

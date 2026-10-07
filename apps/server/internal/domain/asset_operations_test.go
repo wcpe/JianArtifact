@@ -15,6 +15,7 @@ import (
 )
 
 func TestAssetOperationPublishesV2OutboxWithoutItemChanges(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	repos := repository.NewRepoRepo(db)
 	assets := repository.NewAssetRepo(db)
@@ -75,6 +76,7 @@ func TestAssetOperationPublishesV2OutboxWithoutItemChanges(t *testing.T) {
 // TestAssetOperationAuditFailureRollsBackViewAndOutbox 确保源端审计不能在
 // operation/outbox 之后单独失败，任一审计写入失败都必须使整批回滚。
 func TestAssetOperationAuditFailureRollsBackViewAndOutbox(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	repos := repository.NewRepoRepo(db)
 	assets := repository.NewAssetRepo(db)
@@ -117,6 +119,7 @@ func TestAssetOperationAuditFailureRollsBackViewAndOutbox(t *testing.T) {
 }
 
 func TestAssetOperationRawDeleteMoveAndAtomicFailure(t *testing.T) {
+	t.Parallel()
 	svc, repos := newAssetService(t)
 	if _, err := repos.Create("raw-ops", "raw", "hosted", "private", ""); err != nil {
 		t.Fatalf("建仓库：%v", err)
@@ -212,6 +215,7 @@ func TestAssetOperationRawDeleteMoveAndAtomicFailure(t *testing.T) {
 // TestAssetOperationRejectsOverlappingDirectoryMove 确保重叠目录不能导致同一
 // 制品在同一批次被重复迁移，失败时不暴露任何部分结果。
 func TestAssetOperationRejectsOverlappingDirectoryMove(t *testing.T) {
+	t.Parallel()
 	svc, repos := newAssetService(t)
 	if _, err := repos.Create("overlap-move", "raw", "hosted", "private", ""); err != nil {
 		t.Fatalf("建仓库：%v", err)
@@ -244,6 +248,7 @@ func TestAssetOperationRejectsOverlappingDirectoryMove(t *testing.T) {
 }
 
 func TestAssetOperationRejectsMoveIntoOwnSubtreeWithoutMutation(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	repos := repository.NewRepoRepo(db)
 	assets := repository.NewAssetRepo(db)
@@ -292,6 +297,7 @@ func TestAssetOperationRejectsMoveIntoOwnSubtreeWithoutMutation(t *testing.T) {
 }
 
 func TestAssetOperationMavenVersionRebuildsMetadata(t *testing.T) {
+	t.Parallel()
 	svc, repos := newAssetService(t)
 	if _, err := repos.Create("maven-ops", "maven", "hosted", "private", ""); err != nil {
 		t.Fatalf("建仓库：%v", err)
@@ -328,6 +334,7 @@ func TestAssetOperationMavenVersionRebuildsMetadata(t *testing.T) {
 }
 
 func TestAssetOperationMavenRejectsNonLogicalTargetsAndDeletesCompleteArtifact(t *testing.T) {
+	t.Parallel()
 	svc, repos := newAssetService(t)
 	if _, err := repos.Create("maven-logical", "maven", "hosted", "private", ""); err != nil {
 		t.Fatalf("建仓库：%v", err)
@@ -396,6 +403,7 @@ func TestAssetOperationMavenRejectsNonLogicalTargetsAndDeletesCompleteArtifact(t
 }
 
 func TestAssetOperationNpmVersionUpdatesPackument(t *testing.T) {
+	t.Parallel()
 	svc, repos := newAssetService(t)
 	if _, err := repos.Create("npm-ops", "npm", "hosted", "private", ""); err != nil {
 		t.Fatalf("建仓库：%v", err)

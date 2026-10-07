@@ -59,6 +59,7 @@ func nugetPackage(t *testing.T, id, version string, extra func(*zip.Writer) erro
 }
 
 func TestNuGetPublishPolicyAuditRecordsSuccessAndRejection(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	admin := e.bootstrapAdmin(t)
 	createFormatRepo(t, e, admin, "nuget-policy-audit", "nuget", "hosted")
@@ -90,6 +91,7 @@ func TestNuGetPublishPolicyAuditRecordsSuccessAndRejection(t *testing.T) {
 }
 
 func TestNuGetHostedV3PushAndRestore(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	admin := e.bootstrapAdmin(t)
 	createFormatRepo(t, e, admin, "nuget-hosted", "nuget", "hosted")
@@ -149,6 +151,7 @@ func TestNuGetHostedV3PushAndRestore(t *testing.T) {
 }
 
 func TestNuGetRegistrationProjectsNuSpecDependencies(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	admin := e.bootstrapAdmin(t)
 	createFormatRepo(t, e, admin, "nuget-registration", "nuget", "hosted")
@@ -194,6 +197,7 @@ func TestNuGetRegistrationProjectsNuSpecDependencies(t *testing.T) {
 }
 
 func TestNuGetSearchReturnsEmptyResultForUnknownPackage(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	admin := e.bootstrapAdmin(t)
 	createFormatRepo(t, e, admin, "nuget-empty-search", "nuget", "hosted")
@@ -208,6 +212,7 @@ func TestNuGetSearchReturnsEmptyResultForUnknownPackage(t *testing.T) {
 }
 
 func TestNuGetMultipartPush(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	admin := e.bootstrapAdmin(t)
 	createFormatRepo(t, e, admin, "nuget-multipart", "nuget", "hosted")
@@ -237,6 +242,7 @@ func TestNuGetMultipartPush(t *testing.T) {
 }
 
 func TestNuGetPushStreamsLargePackageWithoutWholeBodyRead(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	admin := e.bootstrapAdmin(t)
 	createFormatRepo(t, e, admin, "nuget-stream", "nuget", "hosted")
@@ -270,6 +276,7 @@ func TestNuGetPushStreamsLargePackageWithoutWholeBodyRead(t *testing.T) {
 }
 
 func TestNuGetRejectsMalformedAndMaliciousPackages(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	admin := e.bootstrapAdmin(t)
 	createFormatRepo(t, e, admin, "nuget-invalid", "nuget", "hosted")
@@ -299,6 +306,7 @@ func TestNuGetRejectsMalformedAndMaliciousPackages(t *testing.T) {
 }
 
 func TestNuGetGroupMergesMembersAndRejectsPush(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	admin := e.bootstrapAdmin(t)
 	createFormatRepo(t, e, admin, "nuget-a", "nuget", "hosted")
@@ -318,6 +326,7 @@ func TestNuGetGroupMergesMembersAndRejectsPush(t *testing.T) {
 }
 
 func TestNuGetProxyCachesFlatIndexAndPackage(t *testing.T) {
+	t.Parallel()
 	var indexHits, packageHits int32
 	packageBody := []byte("proxy-nuget-package")
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

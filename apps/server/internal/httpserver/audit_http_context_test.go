@@ -60,14 +60,7 @@ func seedAuditEvents(t *testing.T, db *persistence.DB) {
 
 func newAuditRouter(t *testing.T) (http.Handler, *persistence.DB) {
 	t.Helper()
-	db, err := persistence.Open(filepath.Join(t.TempDir(), "audit-http-context.db"))
-	if err != nil {
-		t.Fatalf("打开数据库：%v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(); err != nil {
-		t.Fatalf("迁移数据库：%v", err)
-	}
+	db := openMigratedDB(t, filepath.Join(t.TempDir(), "audit-http-context.db"))
 	handlers := api.NewHandlers(api.Deps{
 		AuditLogs:          repository.NewAuditLogRepo(db),
 		AuditObservability: repository.NewAuditObservabilityRepo(db),
@@ -92,6 +85,7 @@ func newAuditRouter(t *testing.T) (http.Handler, *persistence.DB) {
 }
 
 func TestAuditEventsExposeHTTPContextAndFilters(t *testing.T) {
+	t.Parallel()
 	router, db := newAuditRouter(t)
 	seedAuditEvents(t, db)
 
@@ -262,14 +256,7 @@ func TestAuditEventsExposeHTTPContextAndFilters(t *testing.T) {
 // 管理写请求会被认证层拒绝并记录审计，用于验证请求上下文的采集链路。
 func newUnauthenticatedAuditRouter(t *testing.T) (http.Handler, *persistence.DB) {
 	t.Helper()
-	db, err := persistence.Open(filepath.Join(t.TempDir(), "audit-write-context.db"))
-	if err != nil {
-		t.Fatalf("打开数据库：%v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(); err != nil {
-		t.Fatalf("迁移数据库：%v", err)
-	}
+	db := openMigratedDB(t, filepath.Join(t.TempDir(), "audit-write-context.db"))
 	handlers := api.NewHandlers(api.Deps{
 		AuditLogs:          repository.NewAuditLogRepo(db),
 		AuditObservability: repository.NewAuditObservabilityRepo(db),
@@ -290,6 +277,7 @@ func newUnauthenticatedAuditRouter(t *testing.T) (http.Handler, *persistence.DB)
 }
 
 func TestAuditWriteCapturesRequestContext(t *testing.T) {
+	t.Parallel()
 	router, db := newUnauthenticatedAuditRouter(t)
 
 	// 未认证的管理写请求会被拒绝并记录审计：验证中间件确实抓到了方法与请求体。

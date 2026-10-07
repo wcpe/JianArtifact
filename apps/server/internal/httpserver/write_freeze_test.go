@@ -121,6 +121,7 @@ func assertNotWriteFrozen(t *testing.T, recorder *httptest.ResponseRecorder, wha
 // TestWriteFreezeRejectsWritesExceptAllowed 验证关键回归：冻结中维护端点与导入/上传放行，
 // 其余写被 503 + write_frozen 拦下（防"冻上就解不开"）。
 func TestWriteFreezeRejectsWritesExceptAllowed(t *testing.T) {
+	t.Parallel()
 	env := newWriteFreezeTestServer(true)
 
 	// 写被拦：503 + write_frozen，且处理器不应被调用。
@@ -172,6 +173,7 @@ func TestWriteFreezeRejectsWritesExceptAllowed(t *testing.T) {
 }
 
 func TestWriteFreezeDisabledKeepsWrites(t *testing.T) {
+	t.Parallel()
 	env := newWriteFreezeTestServer(false)
 
 	if recorder := env.request(http.MethodPost, "/api/v1/users"); recorder.Code != http.StatusCreated {
@@ -189,6 +191,7 @@ func TestWriteFreezeDisabledKeepsWrites(t *testing.T) {
 }
 
 func TestWriteFreezeUnfreezeRestoresWrites(t *testing.T) {
+	t.Parallel()
 	env := newWriteFreezeTestServer(true)
 	if recorder := env.request(http.MethodPost, "/api/v1/users"); recorder.Code != http.StatusServiceUnavailable {
 		t.Fatalf("冻结中管理写应 503，得 %d", recorder.Code)

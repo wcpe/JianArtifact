@@ -8,6 +8,7 @@ import (
 // TestParseProcNetDevReturnsPerInterfaceSkippingLoopback 验证 /proc/net/dev 解析口径：
 // 返回**逐网卡**累计计数，跳过表头行与回环 lo；接收/发送字节取自冒号后第 1、第 9 个字段。
 func TestParseProcNetDevReturnsPerInterfaceSkippingLoopback(t *testing.T) {
+	t.Parallel()
 	const content = "Inter-|   Receive                                                |  Transmit\n" +
 		" face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed\n" +
 		"    lo:  123456     1000    0    0    0     0          0         0   123456     1000    0    0    0     0       0          0\n" +
@@ -28,6 +29,7 @@ func TestParseProcNetDevReturnsPerInterfaceSkippingLoopback(t *testing.T) {
 // TestParseProcNetDevSkipsMalformedLines 畸形行（字段不足或计数非法）必须整行跳过，
 // 不得污染其他网卡的计数，也不得把解析失败伪装成 0。
 func TestParseProcNetDevSkipsMalformedLines(t *testing.T) {
+	t.Parallel()
 	const content = "  eth0: 1 2 3\n" +
 		"  eth1: notanumber 1 1 1 1 1 1 1 2 2 2 2\n" +
 		"  eth2: 5 0 0 0 0 0 0 0 7 0 0 0 0 0 0\n"
@@ -39,6 +41,7 @@ func TestParseProcNetDevSkipsMalformedLines(t *testing.T) {
 
 // TestSumNetworkInterfacesAggregates 验证逐网卡累计计数求和为「全部网卡」聚合值，空列表为 0。
 func TestSumNetworkInterfacesAggregates(t *testing.T) {
+	t.Parallel()
 	received, transmitted := sumNetworkInterfaces([]HostNetworkInterface{
 		{Name: "eth0", ReceiveBytes: 100, TransmitBytes: 10},
 		{Name: "wlan0", ReceiveBytes: 200, TransmitBytes: 20},
@@ -54,6 +57,7 @@ func TestSumNetworkInterfacesAggregates(t *testing.T) {
 // TestSelectNetworkInterfacesSkipsLoopbackRows 验证 Windows/通用路径的回环过滤与透传，
 // 使平台侧只剩无法跨平台验证的系统调用。
 func TestSelectNetworkInterfacesSkipsLoopbackRows(t *testing.T) {
+	t.Parallel()
 	interfaces := selectNetworkInterfaces([]netRawInterface{
 		{Name: "Loopback", Loopback: true, ReceiveBytes: 999, TransmitBytes: 999},
 		{Name: "以太网", ReceiveBytes: 10, TransmitBytes: 20},
@@ -69,6 +73,7 @@ func TestSelectNetworkInterfacesSkipsLoopbackRows(t *testing.T) {
 // TestParseMeminfoExtractsTotalAndAvailable 验证 meminfo 解析口径：
 // 只认 MemTotal/MemAvailable 且 kB 统一换算为字节。
 func TestParseMeminfoExtractsTotalAndAvailable(t *testing.T) {
+	t.Parallel()
 	const content = "MemTotal:       16384000 kB\nMemFree:         1024000 kB\nMemAvailable:    6144000 kB\n"
 	total, available, ok := parseMeminfo(content)
 	if !ok {
@@ -85,6 +90,7 @@ func TestParseMeminfoExtractsTotalAndAvailable(t *testing.T) {
 // TestParseMeminfoFailsWithoutAvailable 缺少 MemAvailable 时必须整体判失败，
 // 由上层给出空值而不是只返回一半数据。
 func TestParseMeminfoFailsWithoutAvailable(t *testing.T) {
+	t.Parallel()
 	if _, _, ok := parseMeminfo("MemTotal: 16384000 kB\n"); ok {
 		t.Fatal("缺少 MemAvailable 时应解析失败")
 	}
@@ -92,6 +98,7 @@ func TestParseMeminfoFailsWithoutAvailable(t *testing.T) {
 
 // TestParseProcStatBtimeExtractsBootSeconds 验证 /proc/stat 的 btime 行解析。
 func TestParseProcStatBtimeExtractsBootSeconds(t *testing.T) {
+	t.Parallel()
 	const content = "cpu  100 0 100 9900 0 0 0 0 0 0\ncpu0 100 0 100 9900 0 0 0 0 0 0\nbtime 1699990000\n"
 	boot, ok := parseProcStatBtime(content)
 	if !ok || boot != 1699990000 {
@@ -105,6 +112,7 @@ func TestParseProcStatBtimeExtractsBootSeconds(t *testing.T) {
 // TestParseProcSelfStatExtractsCpuAndStartTicks 验证字段 14/15（utime/stime）
 // 与字段 22（starttime）的位置口径。
 func TestParseProcSelfStatExtractsCpuAndStartTicks(t *testing.T) {
+	t.Parallel()
 	const content = "1234 (gotest) S 0 1 1 0 -1 4194560 100 0 0 0 500 200 0 0 20 0 8 0 98765 10000000 0"
 	cpuTicks, startTicks, cpuOK, startOK := parseProcSelfStat(content)
 	if !cpuOK || cpuTicks != 700 {
@@ -118,6 +126,7 @@ func TestParseProcSelfStatExtractsCpuAndStartTicks(t *testing.T) {
 // TestParseProcSelfStatFailsClosed 缺 starttime 时 startOK 必须为 false，
 // 上层据此给空值而不是把 0 当作启动滴答参与计算（CPU 滴答不受影响仍可解析）。
 func TestParseProcSelfStatFailsClosed(t *testing.T) {
+	t.Parallel()
 	const content = "1234 (gotest) S 0 1 1 0 -1 4194560 100 0 0 0 500 200"
 	cpuTicks, _, cpuOK, startOK := parseProcSelfStat(content)
 	if !cpuOK || cpuTicks != 700 {
@@ -131,6 +140,7 @@ func TestParseProcSelfStatFailsClosed(t *testing.T) {
 // TestProcessUptimeSecondsComputesWallClockDuration 验证运行时长口径：
 // 当前时刻 −（btime + starttime/每秒滴答），负值与非法滴答率安全处理。
 func TestProcessUptimeSecondsComputesWallClockDuration(t *testing.T) {
+	t.Parallel()
 	// 启动时刻 = 1699990000 + 500/100 = 1699990005，运行时长 = 1700000000 − 1699990005 = 9995。
 	if got := processUptimeSeconds(1700000000, 1699990000, 500, 100); got != 9995 {
 		t.Fatalf("运行时长 = %d，期望 9995", got)
@@ -146,6 +156,7 @@ func TestProcessUptimeSecondsComputesWallClockDuration(t *testing.T) {
 // TestFiletimeUnixSecondsConvertsWindowsEpoch 验证 FILETIME（1601 纪元 100ns）
 // 到 Unix 秒的换算，含纪元前非法值的兜底。
 func TestFiletimeUnixSecondsConvertsWindowsEpoch(t *testing.T) {
+	t.Parallel()
 	if got := filetimeUnixSeconds(windowsEpochToUnix100ns); got != 0 {
 		t.Fatalf("纪元差本身应换算为 0，得 %d", got)
 	}
@@ -160,6 +171,7 @@ func TestFiletimeUnixSecondsConvertsWindowsEpoch(t *testing.T) {
 // TestProcessUptimeFromCreatedUsesWallClockNow 验证 Windows 侧运行时长 =
 // 采集时刻 − 创建时刻，并对时钟回拨的负值钳制为 0。
 func TestProcessUptimeFromCreatedUsesWallClockNow(t *testing.T) {
+	t.Parallel()
 	now := time.Unix(1700000100, 0)
 	created := uint64(windowsEpochToUnix100ns) + 1700000000*10000000
 	if got := processUptimeFromCreated(now, created); got != 100 {

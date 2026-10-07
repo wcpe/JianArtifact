@@ -27,6 +27,7 @@ import (
 )
 
 func TestNpmRealClientInstallViaRepositoryPrefixPublish(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("npm"); err != nil {
 		t.Skip("本机未安装 npm，跳过 npm 原生客户端验收")
 	}

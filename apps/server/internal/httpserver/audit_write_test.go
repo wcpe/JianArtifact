@@ -16,7 +16,6 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 	"github.com/wcpe/jianartifact/apps/server/internal/blobstore"
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
-	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 	"github.com/wcpe/jianartifact/apps/server/internal/upstream"
 )
@@ -24,14 +23,7 @@ import (
 // auditTestRouter 装配仓库与集群配置端点 + 审计存储，返回数据句柄。
 func auditTestRouter(t *testing.T) (http.Handler, *repository.AuditLogRepo, *repository.RepoRepo, *repository.SettingRepo) {
 	t.Helper()
-	db, err := persistence.Open(filepath.Join(t.TempDir(), "audit-write.db"))
-	if err != nil {
-		t.Fatalf("打开数据库：%v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(); err != nil {
-		t.Fatalf("迁移：%v", err)
-	}
+	db := openMigratedDB(t, filepath.Join(t.TempDir(), "audit-write.db"))
 	repoRepo := repository.NewRepoRepo(db)
 	assetRepo := repository.NewAssetRepo(db)
 	settings := repository.NewSettingRepo(db)
@@ -62,6 +54,7 @@ func auditTestRouter(t *testing.T) (http.Handler, *repository.AuditLogRepo, *rep
 
 // TestAuditRepoUpdate 仓库更新成功后应写入 repo.update 审计。
 func TestAuditRepoUpdate(t *testing.T) {
+	t.Parallel()
 	r, auditLogs, repoRepo, _ := auditTestRouter(t)
 	if _, err := repoRepo.Create("raw-audit", "raw", "hosted", "public", "{}"); err != nil {
 		t.Fatalf("创建仓库：%v", err)
@@ -92,6 +85,7 @@ func TestAuditRepoUpdate(t *testing.T) {
 }
 
 func TestManagementAuditSourceNodePersistsAndIsAvailableThroughAPI(t *testing.T) {
+	t.Parallel()
 	r, _, repoRepo, _ := auditTestRouter(t)
 	if _, err := repoRepo.Create("raw-source-node", "raw", "hosted", "public", "{}"); err != nil {
 		t.Fatalf("创建仓库：%v", err)
@@ -126,6 +120,7 @@ func TestManagementAuditSourceNodePersistsAndIsAvailableThroughAPI(t *testing.T)
 }
 
 func TestAuditRecheckDoesNotRecordLegacyURLUserinfo(t *testing.T) {
+	t.Parallel()
 	r, auditLogs, repoRepo, _ := auditTestRouter(t)
 	const secret = "private-password"
 	if _, err := repoRepo.Create("legacy-userinfo", "raw", "proxy", "private", `{"remoteUrl":"https://release-user:private-password@repo.example.com/raw"}`); err != nil {

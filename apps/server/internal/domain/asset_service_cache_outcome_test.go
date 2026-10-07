@@ -13,6 +13,7 @@ import (
 // TestProxyResolveCacheOutcome 校验 proxy 读路径的缓存来源判定：
 // 首次本地未命中→miss，二次命中已缓存副本→hit。
 func TestProxyResolveCacheOutcome(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("upstream artifact bytes"))
 	}))
@@ -46,6 +47,7 @@ func TestProxyResolveCacheOutcome(t *testing.T) {
 
 // TestHostedResolveCacheOutcomeUnknown 校验 hosted 读路径不产出缓存来源（保持未知）。
 func TestHostedResolveCacheOutcomeUnknown(t *testing.T) {
+	t.Parallel()
 	svc, repos := newAssetService(t)
 	if _, err := repos.Create("raw-hosted", "raw", "hosted", "private", ""); err != nil {
 		t.Fatalf("建 hosted 仓库：%v", err)
@@ -67,6 +69,7 @@ func TestHostedResolveCacheOutcomeUnknown(t *testing.T) {
 
 // TestGroupResolveCacheOutcomeUnknown 校验 group 聚合读不因成员命中而产出 hit/miss（保持未知）。
 func TestGroupResolveCacheOutcomeUnknown(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("member artifact"))
 	}))

@@ -17,6 +17,7 @@ import (
 )
 
 func TestMigrationServiceDiscoverOfflineBundlePersist(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	svc := domain.NewMigrationService(repository.NewMigrationTaskRepo(db), nil)
 

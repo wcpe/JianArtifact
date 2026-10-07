@@ -9,6 +9,7 @@ import (
 )
 
 func TestManagementWriteRejectionsArePersistedAsSecurityAudit(t *testing.T) {
+	t.Parallel()
 	env := newTestEnv(t)
 	var bootstrap api.LoginResponse
 	if code := env.do(t, http.MethodPost, "/api/v1/auth/bootstrap", "", api.BootstrapRequest{Username: "admin", Password: "admin-pass-123"}, &bootstrap); code != http.StatusCreated {

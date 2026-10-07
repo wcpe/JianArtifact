@@ -8,6 +8,7 @@ import (
 )
 
 func TestOriginTokenGuardRoundTrip(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	svc := domain.NewSettingService(repository.NewSettingRepo(db))
 
