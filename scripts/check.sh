@@ -41,7 +41,10 @@ echo "==> [2/3] 后端质量门（格式 / 静态 / 漏洞 / 测试 / 构建）"
   # 覆盖率只产出、不做阈值门禁：存量代码覆盖水平未知，一上来设阈值会卡死质量门。
   # 数据落在 .tmp/ 供本地查看与后续接入（CI 里可上传或做趋势比较）。
   mkdir -p ../../.tmp
-  CGO_ENABLED=1 go test -race -count=1 -coverprofile=../../.tmp/go-coverage.out ./...
+  # -parallel 4：与 CI（4 核 runner）口径一致；同时避免在核多的开发机上并行度过高——
+  # -race 的 ThreadSanitizer 会为并发 goroutine 预留大量影子内存，实测 32 核默认并行 32 时
+  # 在 Windows 上直接分配失败（ThreadSanitizer failed to allocate …，error code 1455）。
+  CGO_ENABLED=1 go test -race -count=1 -parallel 4 -coverprofile=../../.tmp/go-coverage.out ./...
   go tool cover -func=../../.tmp/go-coverage.out | tail -1
   govulncheck ./...
   CGO_ENABLED=0 go build -trimpath -o bin/jianartifact ./cmd/jianartifact

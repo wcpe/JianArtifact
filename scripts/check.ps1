@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param()
 
 $ErrorActionPreference = "Stop"
@@ -70,7 +70,10 @@ try {
   $oldCgo = $env:CGO_ENABLED
   try {
     $env:CGO_ENABLED = "1"
-    Invoke-Checked "Go race 测试" { go test -race -count=1 ./... }
+    # -parallel 4：与 CI（4 核 runner）口径一致；同时避免在核多的开发机上并行度过高——
+    # -race 的 ThreadSanitizer 会为并发 goroutine 预留大量影子内存，实测 32 核默认并行 32 时
+    # 在 Windows 上直接分配失败（ThreadSanitizer failed to allocate …，error code 1455）。
+    Invoke-Checked "Go race 测试" { go test -race -count=1 -parallel 4 ./... }
 
     $toolchainLine = Get-Content -LiteralPath (Join-Path $serverRoot "go.mod") |
       Where-Object { $_ -match '^toolchain\s+(\S+)' } |
