@@ -32,6 +32,7 @@ func (e *backupEnv) putChunk(t *testing.T, uploadID string, index int, token str
 
 // TestBackupUploadAllUnauthorized 覆盖五个端点的鉴权：未带令牌均 401。
 func TestBackupUploadAllUnauthorized(t *testing.T) {
+	t.Parallel()
 	env := newBackupEnv(t)
 	cases := []struct {
 		method string
@@ -52,6 +53,7 @@ func TestBackupUploadAllUnauthorized(t *testing.T) {
 
 // TestBackupUploadInitReturnsSession 覆盖发起会话：201 + chunkSize>0 + uploadedChunks 为空。
 func TestBackupUploadInitReturnsSession(t *testing.T) {
+	t.Parallel()
 	env := newBackupEnv(t)
 	token := env.adminToken(t)
 	code, body := env.request(t, http.MethodPost, "/api/v1/backups/uploads", token,
@@ -82,6 +84,7 @@ func TestBackupUploadInitReturnsSession(t *testing.T) {
 
 // TestBackupUploadTwoChunksAndResume 覆盖逐片上传 + GET 反映进度 + 续传语义（以磁盘为准）。
 func TestBackupUploadTwoChunksAndResume(t *testing.T) {
+	t.Parallel()
 	env := newBackupEnv(t)
 	token := env.adminToken(t)
 
@@ -163,6 +166,7 @@ func TestBackupUploadTwoChunksAndResume(t *testing.T) {
 // 生成一份真实备份包 → 按分片上传其字节 → 拼装 → 触发本地导入 → 记录走到 pending_restart。
 // 目标已自举管理员（非空），故 complete 须传 overwrite=true。
 func TestBackupUploadCompleteStagesPendingRestart(t *testing.T) {
+	t.Parallel()
 	env := newBackupEnv(t)
 	token := env.adminToken(t)
 	env.seedAsset(t, "payload-for-upload-complete")
@@ -255,6 +259,7 @@ func TestBackupUploadCompleteStagesPendingRestart(t *testing.T) {
 
 // TestBackupUploadAbortThenGone 覆盖取消：204；之后 GET 反映状态已中止（记录留作审计）。
 func TestBackupUploadAbortThenGone(t *testing.T) {
+	t.Parallel()
 	env := newBackupEnv(t)
 	token := env.adminToken(t)
 	code, body := env.request(t, http.MethodPost, "/api/v1/backups/uploads", token,
@@ -289,6 +294,7 @@ func TestBackupUploadAbortThenGone(t *testing.T) {
 
 // TestBackupUploadChunkIndexOutOfRangeReturns400 覆盖片号越界：合法整数但超出 [0,expected) → 400。
 func TestBackupUploadChunkIndexOutOfRangeReturns400(t *testing.T) {
+	t.Parallel()
 	env := newBackupEnv(t)
 	token := env.adminToken(t)
 	code, body := env.request(t, http.MethodPost, "/api/v1/backups/uploads", token,
@@ -309,6 +315,7 @@ func TestBackupUploadChunkIndexOutOfRangeReturns400(t *testing.T) {
 // TestBackupUploadCompleteMissingChunkReturns400 覆盖缺失片直接 complete：按 ErrValidation 映射 → 400
 // （缺失片属「客户端上传不完整」的输入校验错，与片号越界/超额同族，故统一 400 而非 409）。
 func TestBackupUploadCompleteMissingChunkReturns400(t *testing.T) {
+	t.Parallel()
 	env := newBackupEnv(t)
 	token := env.adminToken(t)
 	code, body := env.request(t, http.MethodPost, "/api/v1/backups/uploads", token,

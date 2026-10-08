@@ -10,6 +10,7 @@ import (
 )
 
 func TestCleanupEmptyMavenArtifactsIsAtomicOnPhysicalFailure(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	repoRepo := repository.NewRepoRepo(db)
 	assetRepo := repository.NewAssetRepo(db)

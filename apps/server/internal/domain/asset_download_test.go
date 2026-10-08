@@ -1,25 +1,17 @@
 package domain
 
 import (
-	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
 // 覆盖 FR-142 采集口径：只计 GET+200 的完整传输（206/POST/非制品路径不计）、
 // UA 归类、分钟桶内存合并后批量落库，以及 flush 失败时的保留重试语义。
 func TestAssetDownloadServiceRecordsOnlyCompleteTransfers(t *testing.T) {
-	db, err := persistence.Open(filepath.Join(t.TempDir(), "asset-download-svc.db"))
-	if err != nil {
-		t.Fatalf("打开数据库：%v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(); err != nil {
-		t.Fatalf("迁移数据库：%v", err)
-	}
+	t.Parallel()
+	db := migratedTestDB(t, "asset-download-svc.db")
 	repo := repository.NewAssetDownloadRepo(db)
 	svc := NewAssetDownloadService(repo)
 
@@ -77,6 +69,7 @@ func TestAssetDownloadServiceRecordsOnlyCompleteTransfers(t *testing.T) {
 
 // URL 解码与边界：编码路径解出可读 path；前缀/段数不符返回 false。
 func TestParseRepositoryAssetPath(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		in   string
@@ -102,6 +95,7 @@ func TestParseRepositoryAssetPath(t *testing.T) {
 
 // UA 归类表（spec 附录）逐族断言。
 func TestClassifyUAFamily(t *testing.T) {
+	t.Parallel()
 	cases := map[string]string{
 		"Apache-Maven/3.9.6 (Java 17)":    "maven",
 		"Gradle/8.5 (Linux; amd64)":       "gradle",

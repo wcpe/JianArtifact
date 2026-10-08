@@ -24,6 +24,7 @@ func (e *protocolEnv) getWithHeaders(t *testing.T, path string, headers map[stri
 // 客户端（curl -C -、构建工具重试）依赖 206 与 Content-Range 才能续传；
 // 此前实现直接 io.Copy 回写，Range 被静默忽略并回 200 全量，续传退化为重下。
 func TestRawDownloadSupportsRange(t *testing.T) {
+	t.Parallel()
 	env := newProtocolEnv(t)
 	token := env.bootstrapAdmin(t)
 	env.createRawRepo(t, token, "raw-range", "public")
@@ -78,6 +79,7 @@ func TestRawDownloadSupportsRange(t *testing.T) {
 // TestRangeResponseIsNotCountedAsFullDownload 守住计次语义：206 分片不计入下载
 // （见 domain/asset_download.go 对 Range 的说明），仅完整传输计次。
 func TestRangeResponseIsNotCountedAsFullDownload(t *testing.T) {
+	t.Parallel()
 	env := newProtocolEnv(t)
 	token := env.bootstrapAdmin(t)
 	env.createRawRepo(t, token, "raw-range-count", "public")

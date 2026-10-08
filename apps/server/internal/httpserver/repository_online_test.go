@@ -10,6 +10,7 @@ import (
 // TestRepositoryOnlineEndpoint 仓库 online/offline 端点（FR-113）：
 // 仅管理员可操作；置离线后持久化读回；仓库不存在 404。
 func TestRepositoryOnlineEndpoint(t *testing.T) {
+	t.Parallel()
 	e := newTestEnv(t)
 
 	// 自举管理员。

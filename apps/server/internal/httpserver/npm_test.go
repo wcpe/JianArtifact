@@ -35,6 +35,7 @@ func (e *protocolEnv) createNpmRepo(t *testing.T, adminToken, name, typ, remoteU
 }
 
 func TestNpmPublishPolicyAuditRecordsSuccessAndRejection(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	admin := e.bootstrapAdmin(t)
 	e.createNpmRepo(t, admin, "npm-policy-audit", "hosted", "", nil)
@@ -107,6 +108,7 @@ func npmTarballURL(t *testing.T, body []byte, version string) string {
 }
 
 func TestNpmPublishAndInstall(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	e.createNpmRepo(t, adminToken, "npm-hosted", "hosted", "", nil)
@@ -150,6 +152,7 @@ func TestNpmPublishAndInstall(t *testing.T) {
 // TestNpmPublishRollsBackTarballsWhenPackumentCommitFails 确保 tarball 与
 // packument 同一事务公开，不能在 packument 写入失败时留下孤立 tarball。
 func TestNpmPublishRollsBackTarballsWhenPackumentCommitFails(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	e.createNpmRepo(t, adminToken, "npm-atomic", "hosted", "", nil)
@@ -176,6 +179,7 @@ func TestNpmPublishRollsBackTarballsWhenPackumentCommitFails(t *testing.T) {
 }
 
 func TestNpmScopedPackage(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	e.createNpmRepo(t, adminToken, "npm-scoped", "hosted", "", nil)
@@ -201,6 +205,7 @@ func TestNpmScopedPackage(t *testing.T) {
 }
 
 func TestNpmProxyRewritesTarball(t *testing.T) {
+	t.Parallel()
 	tarball := []byte("upstream registry tgz")
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -238,6 +243,7 @@ func TestNpmProxyRewritesTarball(t *testing.T) {
 }
 
 func TestNpmGroupMergesPackument(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	e.createNpmRepo(t, adminToken, "npm-a", "hosted", "", nil)
@@ -282,6 +288,7 @@ func TestNpmGroupMergesPackument(t *testing.T) {
 // TestNpmPublicURLOverridesHost 配置对外基础 URL（FR-87）后，packument 的 tarball URL 用 public URL，
 // 而非请求 Host（隐藏源站 IP，适配 CDN 回源）。
 func TestNpmPublicURLOverridesHost(t *testing.T) {
+	t.Parallel()
 	const publicURL = "https://repo.example.com"
 	e := newProtocolEnvWithPublicURL(t, publicURL)
 	adminToken := e.bootstrapAdmin(t)

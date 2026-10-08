@@ -33,6 +33,7 @@ func createGoProxyRepoWithVisibility(t *testing.T, e *protocolEnv, token, name, 
 }
 
 func TestGoProxyFetchesAllEndpointsCachesAndMaps404(t *testing.T) {
+	t.Parallel()
 	var hits int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&hits, 1)
@@ -83,6 +84,7 @@ func TestGoProxyFetchesAllEndpointsCachesAndMaps404(t *testing.T) {
 }
 
 func TestGoProxyRealGoModuleDownloadAndBuild(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("本机未安装 go，跳过 Go 原生客户端验收")
 	}
@@ -138,6 +140,7 @@ func TestGoProxyRealGoModuleDownloadAndBuild(t *testing.T) {
 }
 
 func TestGoProxyRealGoClientFallsBackAfter410(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("本机未安装 go，跳过 Go 原生客户端验收")
 	}
@@ -244,6 +247,7 @@ func goProxyModuleZip(t *testing.T, entries ...any) []byte {
 }
 
 func TestGoProxyPreservesUpstreamGone(t *testing.T) {
+	t.Parallel()
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "模块已下架", http.StatusGone)
 	}))
@@ -260,6 +264,7 @@ func TestGoProxyPreservesUpstreamGone(t *testing.T) {
 }
 
 func TestGoProxyConcurrentMissSingleFlightAndAuth(t *testing.T) {
+	t.Parallel()
 	var hits int32
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -310,6 +315,7 @@ func TestGoProxyConcurrentMissSingleFlightAndAuth(t *testing.T) {
 }
 
 func TestGoProxyRejectsNonGoRepositoryAndInvalidPath(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	e.createRawRepo(t, adminToken, "not-go", "public")
@@ -323,6 +329,7 @@ func TestGoProxyRejectsNonGoRepositoryAndInvalidPath(t *testing.T) {
 }
 
 func TestGoProxyRejectsDoubleSlashBeforeNormalization(t *testing.T) {
+	t.Parallel()
 	var upstreamCalls int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		atomic.AddInt32(&upstreamCalls, 1)

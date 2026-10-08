@@ -11,6 +11,7 @@ import (
 )
 
 func TestMigrationServicePassesOfflineRepositoryConfigIntoPlan(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "repositories", "docker-proxy", "content"), 0o755); err != nil {
 		t.Fatal(err)

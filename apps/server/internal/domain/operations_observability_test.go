@@ -1,23 +1,15 @@
 package domain
 
 import (
-	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
 func TestOperationsDashboardFlushCountsOnlyCompletedProtocolOutcomes(t *testing.T) {
-	db, err := persistence.Open(filepath.Join(t.TempDir(), "dashboard-metrics.db"))
-	if err != nil {
-		t.Fatalf("打开数据库：%v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(); err != nil {
-		t.Fatalf("迁移数据库：%v", err)
-	}
+	t.Parallel()
+	db := migratedTestDB(t, "dashboard-metrics.db")
 	repo := repository.NewOperationsObservabilityRepo(db)
 	service := NewOperationsDashboardService(repo)
 	now := time.Date(2026, 8, 27, 10, 0, 20, 0, time.UTC)
@@ -39,6 +31,7 @@ func TestOperationsDashboardFlushCountsOnlyCompletedProtocolOutcomes(t *testing.
 // TestHostSampleFromRawDerivesUsedBytesAtSamplePoint 验证已用量在采样点
 // 按 total − available 直接给值（与总量同源），缺任一端时保持空值而不是伪造零。
 func TestHostSampleFromRawDerivesUsedBytesAtSamplePoint(t *testing.T) {
+	t.Parallel()
 	memoryTotal, memoryAvailable := int64(100), int64(40)
 	diskTotal, diskAvailable := int64(1000), int64(250)
 	uptime := int64(120)
@@ -69,6 +62,7 @@ func TestHostSampleFromRawDerivesUsedBytesAtSamplePoint(t *testing.T) {
 // TestHostSampleFromRawWritesAggregateNetworkTotals 验证网络聚合累计总量只在采集成功时落库；
 // 网络不可用（采集失败）时保持空值，不伪造 0。
 func TestHostSampleFromRawWritesAggregateNetworkTotals(t *testing.T) {
+	t.Parallel()
 	at := time.Date(2026, 8, 27, 10, 0, 0, 0, time.UTC)
 	raw := HostRawSample{At: at, NetworkState: repository.MetricStateOK, NetworkReceiveBytes: 1234, NetworkTransmitBytes: 5678}
 	item := hostSampleFromRaw(raw)
@@ -88,6 +82,7 @@ func TestHostSampleFromRawWritesAggregateNetworkTotals(t *testing.T) {
 // 累计总量原样落库；速率按**同名网卡**与上一份样本差分；网卡新增（无上一份）速率留空、
 // 消失的网卡不写行；网络不可用时不写任何逐网卡行。
 func TestHostInterfaceSamplesFromRawPairsByInterfaceName(t *testing.T) {
+	t.Parallel()
 	const bucket = "2026-08-27T10:00:00Z"
 	previous := &HostRawSample{NetworkState: repository.MetricStateOK, NetworkInterfaces: []HostNetworkInterface{
 		{Name: "eth0", ReceiveBytes: 1000, TransmitBytes: 500},

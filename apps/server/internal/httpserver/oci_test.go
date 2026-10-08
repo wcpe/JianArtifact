@@ -74,6 +74,7 @@ func putOCIManifest(t *testing.T, e *protocolEnv, token, repo, image, reference 
 }
 
 func TestOCIHostedUploadHeadMissingLayerAndImmutableTag(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	createOCIHostedRepo(t, e, adminToken, "oci-hosted")
@@ -135,6 +136,7 @@ func TestOCIHostedUploadHeadMissingLayerAndImmutableTag(t *testing.T) {
 }
 
 func TestOCIManifestCommitAtomicallyPublishesStagedBlobs(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	createOCIHostedRepo(t, e, adminToken, "oci-atomic")
@@ -182,6 +184,7 @@ func TestOCIManifestCommitAtomicallyPublishesStagedBlobs(t *testing.T) {
 }
 
 func TestOCIManifestCommitRollsBackWhenTagWriteFails(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	createOCIHostedRepo(t, e, adminToken, "oci-rollback")
@@ -228,6 +231,7 @@ func TestOCIManifestCommitRollsBackWhenTagWriteFails(t *testing.T) {
 }
 
 func TestOCIHostedRejectsDigestMismatchWithoutLeavingBlob(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	createOCIHostedRepo(t, e, adminToken, "oci-digest")
@@ -250,6 +254,7 @@ func TestOCIHostedRejectsDigestMismatchWithoutLeavingBlob(t *testing.T) {
 }
 
 func TestOCIPublishPolicyRejectionsAuditActor(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	admin := e.bootstrapAdmin(t)
 	createOCIHostedRepo(t, e, admin, "oci-policy")
@@ -295,6 +300,7 @@ func TestOCIPublishPolicyRejectionsAuditActor(t *testing.T) {
 // TestOCIDockerBasicLoginChallengeAndPush 覆盖 Docker 原生握手：未认证探测必须发起
 // Basic 质询，Docker login 携带账号口令后，后续 push 的首个 blob 上传请求必须可写。
 func TestOCIDockerBasicLoginChallengeAndPush(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	createOCIHostedRepo(t, e, adminToken, "oci-docker-login")
@@ -359,6 +365,7 @@ func TestOCIDockerBasicLoginChallengeAndPush(t *testing.T) {
 }
 
 func TestOCIProxyAndGroupReadCache(t *testing.T) {
+	t.Parallel()
 	var hits int32
 	manifest := []byte(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json"}`)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -398,6 +405,7 @@ func TestOCIProxyAndGroupReadCache(t *testing.T) {
 }
 
 func TestOCIGroupPriorityFallbackAndTagDeduplication(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	admin := e.bootstrapAdmin(t)
 	for _, name := range []string{"oci-group-first", "oci-group-second"} {

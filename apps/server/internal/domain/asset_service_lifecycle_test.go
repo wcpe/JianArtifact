@@ -35,6 +35,7 @@ func newLifecycleAssetService(t *testing.T) (*AssetService, *repository.AssetRep
 }
 
 func TestAssetServiceConcurrentPutSamePathKeepsOneReferencedBlob(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name     string
 		payloads [][]byte
@@ -97,6 +98,7 @@ func TestAssetServiceConcurrentPutSamePathKeepsOneReferencedBlob(t *testing.T) {
 }
 
 func TestAssetServicePublishKeepsBlobWhenGCInterleaves(t *testing.T) {
+	t.Parallel()
 	service, assets, blobs, _, repoID := newLifecycleAssetService(t)
 	payload := []byte("publish-gc-race")
 	hash := stringHash(sha256.Sum256(payload))
@@ -124,6 +126,7 @@ func TestAssetServicePublishKeepsBlobWhenGCInterleaves(t *testing.T) {
 }
 
 func TestAssetServiceWriteFailureDoesNotLeaveUnreferencedBlob(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name    string
 		prepare func(*testing.T, *AssetService, *repository.AssetRepo, int64)
@@ -165,6 +168,7 @@ func TestAssetServiceWriteFailureDoesNotLeaveUnreferencedBlob(t *testing.T) {
 }
 
 func TestAssetServiceFailedCleanupReportsErrorAndCanRetry(t *testing.T) {
+	t.Parallel()
 	service, _, blobs, mutator, _ := newLifecycleAssetService(t)
 	cleanupErr := errors.New("注入物理清理失败")
 	mutator.removeUnreferenced = func(string) error { return cleanupErr }
@@ -189,6 +193,7 @@ func TestAssetServiceFailedCleanupReportsErrorAndCanRetry(t *testing.T) {
 }
 
 func TestAssetServiceCommitHookFailureDoesNotLeaveUnreferencedBlob(t *testing.T) {
+	t.Parallel()
 	service, _, blobs, _, _ := newLifecycleAssetService(t)
 	payload := []byte("commit-hook-failure")
 	hookErr := errors.New("注入提交回调失败")

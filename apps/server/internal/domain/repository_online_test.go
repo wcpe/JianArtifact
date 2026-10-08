@@ -10,6 +10,7 @@ import (
 // TestRepositorySetOnlineNoReplChange SetOnline 是节点本地运维状态：
 // 直接落库且不写复制变更日志（M-2 硬约束），对照业务写路径仍记录变更。
 func TestRepositorySetOnlineNoReplChange(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	repoRepo := repository.NewRepoRepo(db)
 	assetRepo := repository.NewAssetRepo(db)

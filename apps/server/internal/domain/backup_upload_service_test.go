@@ -21,14 +21,7 @@ func newUploadFixture(t *testing.T) (*BackupUploadService, *BackupImportService,
 	t.Helper()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "data.db")
-	db, err := persistence.Open(dbPath)
-	if err != nil {
-		t.Fatalf("Open：%v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(); err != nil {
-		t.Fatalf("Migrate：%v", err)
-	}
+	db := openMigratedTestDB(t, dir, "data.db")
 	blobsDir := filepath.Join(dir, "blobs")
 	_ = blobstore.NewStore(blobsDir) // 确保目录存在（恢复侧会按需写入）
 	restore := NewRestoreService(db, dir, dbPath, blobsDir)
@@ -73,6 +66,7 @@ func waitImport(t *testing.T, repo *repository.BackupImportRepo, id string) repo
 
 // TestBackupUploadRoundTrip 覆盖 init → 逐片 PutChunk → Get 反映已传分片 → Complete 组装成包并触发本地导入。
 func TestBackupUploadRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	uploadSvc, _, importRepo, _, _ := newUploadFixture(t)
 
@@ -164,6 +158,7 @@ func TestBackupUploadRoundTrip(t *testing.T) {
 // 网络抖动后重发同一序号分片是覆盖语义（契约写明「重复片幂等覆盖」），
 // 不应被"累计分片 + 本次 超过声明总字节"误拒。
 func TestBackupUploadRetransmitSameChunkIsIdempotent(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	uploadSvc, _, _, _, _ := newUploadFixture(t)
 
@@ -208,6 +203,7 @@ func TestBackupUploadRetransmitSameChunkIsIdempotent(t *testing.T) {
 
 // TestBackupUploadValidation 覆盖片号越界 / 单片超额 / 累计超额 → ErrValidation 且不留半成品分片。
 func TestBackupUploadValidation(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	uploadSvc, _, _, _, _ := newUploadFixture(t)
 	// totalBytes=10，chunkSize 服务端固定 8MiB → 期望 ceil(10/8MiB)=1 片。
@@ -242,6 +238,7 @@ func TestBackupUploadValidation(t *testing.T) {
 
 // TestBackupUploadCompleteMissingChunk 缺片时 Complete 应返回带缺失序号的明确错误。
 func TestBackupUploadCompleteMissingChunk(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	uploadSvc, _, _, _, _ := newUploadFixture(t)
 	data := []byte("0123456789ABCDEF") // 16 字节，按 8MiB 切片 => 1 片
@@ -265,6 +262,7 @@ func TestBackupUploadCompleteMissingChunk(t *testing.T) {
 
 // TestBackupUploadCompleteSHA256Mismatch clientSHA256 不符应明确错误且删除半成品。
 func TestBackupUploadCompleteSHA256Mismatch(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	uploadSvc, _, _, _, _ := newUploadFixture(t)
 	data := []byte("hello-jian-artifact-backup-package-content-here")
@@ -295,6 +293,7 @@ func TestBackupUploadCompleteSHA256Mismatch(t *testing.T) {
 
 // TestBackupUploadAbort 清磁盘；TestBackupUploadReconcileExpired 清过期；过期会话 PutChunk 被拒。
 func TestBackupUploadAbortAndExpiry(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	uploadSvc, _, _, db, _ := newUploadFixture(t)
 	data := []byte("some-bytes-for-abort-test-1234567890")

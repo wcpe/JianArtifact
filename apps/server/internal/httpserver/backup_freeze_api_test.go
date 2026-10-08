@@ -11,6 +11,7 @@ import (
 
 // TestFreezeEndpointsRequireAdmin 覆盖三条冻结端点的鉴权：未带令牌一律 401。
 func TestFreezeEndpointsRequireAdmin(t *testing.T) {
+	t.Parallel()
 	env := newBackupEnv(t)
 	cases := []struct {
 		method, path string
@@ -29,6 +30,7 @@ func TestFreezeEndpointsRequireAdmin(t *testing.T) {
 // TestFreezeWithTTL 覆盖「带 ttlSeconds 冻结」：200、frozen=true、
 // until ≈ now+ttl、frozenAt 非空。
 func TestFreezeWithTTL(t *testing.T) {
+	t.Parallel()
 	env := newBackupEnv(t)
 	token := env.adminToken(t)
 
@@ -59,6 +61,7 @@ func TestFreezeWithTTL(t *testing.T) {
 
 // TestFreezeUntilBounds 覆盖接口层窗口策略：until 超界（>now+24h 或已过去）一律 400。
 func TestFreezeUntilBounds(t *testing.T) {
+	t.Parallel()
 	env := newBackupEnv(t)
 	token := env.adminToken(t)
 
@@ -79,6 +82,7 @@ func TestFreezeUntilBounds(t *testing.T) {
 // TestFreezeTTLClamp 覆盖 ttlSeconds 的钳制边界：低于下限被钳到 60s，超过上限被钳到 86400s，
 // 且不报 400。
 func TestFreezeTTLClamp(t *testing.T) {
+	t.Parallel()
 	env := newBackupEnv(t)
 	token := env.adminToken(t)
 
@@ -120,6 +124,7 @@ func TestFreezeTTLClamp(t *testing.T) {
 // TestFreezeGetReflectsState 覆盖 GET 反映当前状态，且**未冻结**时响应 JSON
 // 不应出现 until / frozenAt / reason 键（直接解析成 map[string]any 断言键缺失）。
 func TestFreezeGetReflectsState(t *testing.T) {
+	t.Parallel()
 	env := newBackupEnv(t)
 	token := env.adminToken(t)
 
@@ -166,6 +171,7 @@ func TestFreezeGetReflectsState(t *testing.T) {
 
 // TestFreezeUnfreezeIdempotent 覆盖解冻端点：一次 200；再解一次仍 200 且 frozen=false。
 func TestFreezeUnfreezeIdempotent(t *testing.T) {
+	t.Parallel()
 	env := newBackupEnv(t)
 	token := env.adminToken(t)
 
@@ -200,6 +206,7 @@ func TestFreezeUnfreezeIdempotent(t *testing.T) {
 // TestFreezeBlocksBusinessWrites 覆盖关键回归：冻结生效后业务写被 503 + write_frozen 拦下，
 // 而读请求不受影响（非 503）。
 func TestFreezeBlocksBusinessWrites(t *testing.T) {
+	t.Parallel()
 	env := newBackupEnv(t)
 	token := env.adminToken(t)
 

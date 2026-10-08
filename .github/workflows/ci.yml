@@ -1,17 +1,12 @@
-# 质量门：PR 与任意分支推送均跑通；与本地 scripts/check.sh 对齐。
+# 质量门只在 PR 上运行；主线发布由 release.yml 统一跑质量门并发布预览。
 name: CI
 
 on:
   pull_request:
-  push:
-    # main 由 release.yml 统一跑质量门 + 发预览，避免重复
-    branches-ignore:
-      - main
-    tags-ignore:
-      - "**"
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # 同一 PR 的新提交取消旧运行，避免过期提交继续占用质量门。
+  group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 permissions:
@@ -42,10 +37,19 @@ jobs:
           go-version-file: apps/server/go.mod
           cache-dependency-path: apps/server/go.sum
 
+      # 质量工具缓存：key 里钉死版本，因此只有当工具版本变化时才会失效重装。
+      # 原先 govulncheck 用 @latest，每次运行的版本都可能变、而且必然重编译（实测这一步 54 秒），
+      # 现在版本固定 + 二进制缓存命中即可跳过编译。
+      - name: 缓存 Go 质量工具
+        uses: actions/cache@v6
+        with:
+          path: ~/go/bin
+          key: go-tools-${{ runner.os }}-golangci-lint-v1.64.8-govulncheck-v1.8.0
+
       - name: 安装 Go 质量工具
         run: |
-          go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8
-          go install golang.org/x/vuln/cmd/govulncheck@latest
+          command -v golangci-lint >/dev/null || go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8
+          command -v govulncheck >/dev/null || go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
 
       # 慢用例观测的历史采样（scripts/watch-slow-tests.mjs 用它算跨运行 P95）。
       # actions/cache 的 key 不可变：restore 用稳定前缀 + restore-keys 回落读最近一次；

@@ -8,6 +8,7 @@ import (
 )
 
 func TestFreezeInitialNotFrozen(t *testing.T) {
+	t.Parallel()
 	c := NewFreezeController(nil)
 	if c.State().Frozen {
 		t.Fatal("初始应未冻结")
@@ -18,6 +19,7 @@ func TestFreezeInitialNotFrozen(t *testing.T) {
 }
 
 func TestFreezeBlocksWrite(t *testing.T) {
+	t.Parallel()
 	c := NewFreezeController(nil)
 	c.Freeze(time.Time{}, "relocation")
 	if err := c.RequireBusinessWrite(); !errors.Is(err, ErrWriteFrozen) {
@@ -29,6 +31,7 @@ func TestFreezeBlocksWrite(t *testing.T) {
 }
 
 func TestUnfreezeRestoresWrite(t *testing.T) {
+	t.Parallel()
 	c := NewFreezeController(nil)
 	c.Freeze(time.Time{}, "relocation")
 	c.Unfreeze()
@@ -41,6 +44,7 @@ func TestUnfreezeRestoresWrite(t *testing.T) {
 }
 
 func TestFreezeAutoExpiresPast(t *testing.T) {
+	t.Parallel()
 	c := NewFreezeController(nil)
 	c.Freeze(time.Now().Add(-time.Second), "relocation")
 	if c.State().Frozen {
@@ -52,6 +56,7 @@ func TestFreezeAutoExpiresPast(t *testing.T) {
 }
 
 func TestFreezeAutoExpiresNear(t *testing.T) {
+	t.Parallel()
 	c := NewFreezeController(nil)
 	c.Freeze(time.Now().Add(time.Millisecond), "relocation")
 	time.Sleep(5 * time.Millisecond)
@@ -64,6 +69,7 @@ func TestFreezeAutoExpiresNear(t *testing.T) {
 }
 
 func TestFreezeConcurrency(t *testing.T) {
+	t.Parallel()
 	c := NewFreezeController(nil)
 	var wg sync.WaitGroup
 	for i := 0; i < 100; i++ {

@@ -10,6 +10,7 @@ import (
 )
 
 func TestLicensesEndpointAdminOnly(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 

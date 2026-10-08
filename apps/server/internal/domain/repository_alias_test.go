@@ -26,6 +26,7 @@ func newAliasService(t *testing.T) *domain.RepositoryService {
 
 // TestRepositoryCreateWithAliases 创建时携带别名：按别名可解析到主名仓库，且别名随列表带出。
 func TestRepositoryCreateWithAliases(t *testing.T) {
+	t.Parallel()
 	svc := newAliasService(t)
 	created, err := svc.Create("maven-main", "maven", "hosted", "private", "", repository.RepositoryConfig{}, "maven-legacy", "maven-old")
 	if err != nil {
@@ -57,6 +58,7 @@ func TestRepositoryCreateWithAliases(t *testing.T) {
 
 // TestRepositoryCreateAliasValidation 创建时别名校验：空、等于自身主名、撞主名/别名。
 func TestRepositoryCreateAliasValidation(t *testing.T) {
+	t.Parallel()
 	svc := newAliasService(t)
 	if _, err := svc.Create("a", "raw", "hosted", "private", "", repository.RepositoryConfig{}); err != nil {
 		t.Fatalf("建仓库 a：%v", err)
@@ -86,6 +88,7 @@ func TestRepositoryCreateAliasValidation(t *testing.T) {
 
 // TestRepositoryCreateAliasDedup 重复别名去重后仅保留一份。
 func TestRepositoryCreateAliasDedup(t *testing.T) {
+	t.Parallel()
 	svc := newAliasService(t)
 	created, err := svc.Create("dedup", "raw", "hosted", "private", "", repository.RepositoryConfig{}, "x", "x", " y ")
 	if err != nil {
@@ -99,6 +102,7 @@ func TestRepositoryCreateAliasDedup(t *testing.T) {
 // TestRepositoryCanAccessResolvedMatchesCanAccess 按对象鉴权与按名鉴权判定一致：
 // 列表可见性过滤逐行调用，必须用按对象版本（省掉逐行按名查库），两者判定不能分叉。
 func TestRepositoryCanAccessResolvedMatchesCanAccess(t *testing.T) {
+	t.Parallel()
 	svc := newAliasService(t)
 	for _, spec := range []struct{ name, visibility string }{
 		{"pub", "public"},
@@ -141,6 +145,7 @@ func TestRepositoryCanAccessResolvedMatchesCanAccess(t *testing.T) {
 // 撞名失败的一方不得留下「调用方以为没创建、实际已存在」的仓库行（别名与主名跨表唯一性
 // 无 DB 兜底，只有服务层先查后写，并发窗口内会真的插进重复别名）。
 func TestRepositoryCreateAliasRaceLeavesNoOrphan(t *testing.T) {
+	t.Parallel()
 	svc := newAliasService(t)
 	const rounds = 6
 	const workers = 24
@@ -179,6 +184,7 @@ func TestRepositoryCreateAliasRaceLeavesNoOrphan(t *testing.T) {
 
 // TestRepositoryUpdateAliases Update 覆盖式更新别名：保留自身既有别名、可清空、拒绝冲突。
 func TestRepositoryUpdateAliases(t *testing.T) {
+	t.Parallel()
 	svc := newAliasService(t)
 	if _, err := svc.Create("main", "raw", "hosted", "private", "", repository.RepositoryConfig{}); err != nil {
 		t.Fatalf("建仓库 main：%v", err)
@@ -229,6 +235,7 @@ func TestRepositoryUpdateAliases(t *testing.T) {
 
 // TestRepositoryRename 重命名成功：新名为主名、旧名转别名仍可解析。
 func TestRepositoryRename(t *testing.T) {
+	t.Parallel()
 	svc := newAliasService(t)
 	if _, err := svc.Create("raw-old", "raw", "hosted", "private", "", repository.RepositoryConfig{}); err != nil {
 		t.Fatalf("建仓库：%v", err)
@@ -266,6 +273,7 @@ func TestRepositoryRename(t *testing.T) {
 
 // TestRepositoryRenameValidation 重命名非法输入：空、同名、撞名、不存在。
 func TestRepositoryRenameValidation(t *testing.T) {
+	t.Parallel()
 	svc := newAliasService(t)
 	if _, err := svc.Create("a", "raw", "hosted", "private", "", repository.RepositoryConfig{}); err != nil {
 		t.Fatalf("建仓库 a：%v", err)

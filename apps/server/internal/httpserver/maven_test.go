@@ -38,6 +38,7 @@ func (e *protocolEnv) createMavenRepo(t *testing.T, adminToken, name, typ, remot
 }
 
 func TestMavenHostedDeployAndGet(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	e.createMavenRepo(t, adminToken, "mvn-releases", "hosted", "", nil)
@@ -81,6 +82,7 @@ func TestMavenHostedDeployAndGet(t *testing.T) {
 }
 
 func TestMavenDisabledFormatFast404(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnvWithFormats(t, formats.New("raw"))
 	adminToken := e.bootstrapAdmin(t)
 	// 直接写入仓库元数据，绕过启用格式校验以构造“已存在但格式禁用”的场景。
@@ -97,6 +99,7 @@ func TestMavenDisabledFormatFast404(t *testing.T) {
 }
 
 func TestMavenUnknownRepositoryFast404AndHead(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	path := "/repository/mvn-missing/com/example/app/1.0.0/app-1.0.0.jar"
@@ -114,6 +117,7 @@ func TestMavenUnknownRepositoryFast404AndHead(t *testing.T) {
 }
 
 func TestMavenProxyFetchesUpstream(t *testing.T) {
+	t.Parallel()
 	upstreamJar := []byte("upstream maven jar")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasSuffix(r.URL.Path, "/app-1.0.0.jar") {
@@ -142,6 +146,7 @@ func TestMavenProxyFetchesUpstream(t *testing.T) {
 }
 
 func TestMavenSnapshotMissingShortCircuitsRepeatedMetadataProbe(t *testing.T) {
+	t.Parallel()
 	var metadataHits atomic.Int32
 	var literalHits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -170,6 +175,7 @@ func TestMavenSnapshotMissingShortCircuitsRepeatedMetadataProbe(t *testing.T) {
 }
 
 func TestMavenGroupGradlePluginMarkerPomPackaging404BeforeJar(t *testing.T) {
+	t.Parallel()
 	const (
 		markerPom = "/com/example/demo.gradle.plugin/1.0.0/demo.gradle.plugin-1.0.0.pom"
 		markerJar = "/com/example/demo.gradle.plugin/1.0.0/demo.gradle.plugin-1.0.0.jar"
@@ -226,6 +232,7 @@ func TestMavenGroupGradlePluginMarkerPomPackaging404BeforeJar(t *testing.T) {
 }
 
 func TestMavenGroupGradlePluginMarkerJarPackagingAndNonMarkerJar(t *testing.T) {
+	t.Parallel()
 	const (
 		markerPom = "/com/example/demo.gradle.plugin/1.0.0/demo.gradle.plugin-1.0.0.pom"
 		markerJar = "/com/example/demo.gradle.plugin/1.0.0/demo.gradle.plugin-1.0.0.jar"
@@ -271,6 +278,7 @@ func TestMavenGroupGradlePluginMarkerJarPackagingAndNonMarkerJar(t *testing.T) {
 }
 
 func TestMavenGroupMetadataMerge(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	e.createMavenRepo(t, adminToken, "mvn-a", "hosted", "", nil)
@@ -340,6 +348,7 @@ func TestMavenGroupMetadataMerge(t *testing.T) {
 // 成员 metadata 超过读取上限时跳过该成员：不把超大 body 整份读进内存（架构红线：大文件
 // 不得整体入内存），且不影响其余成员正常合并。
 func TestMavenGroupMetadataSkipsOversizedMember(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	e.createMavenRepo(t, adminToken, "big-a", "hosted", "", nil)

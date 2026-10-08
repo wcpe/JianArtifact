@@ -10,6 +10,7 @@ import (
 // asset 行 created_at/updated_at 与源端时间一致，且格式为 asset 表 datetime('now') 的
 // UTC "YYYY-MM-DD HH:MM:SS"（非 RFC3339）。
 func TestAssetServicePutWithTimestamps(t *testing.T) {
+	t.Parallel()
 	svc, repos := newAssetService(t)
 	if _, err := repos.Create("maven-hosted", "maven", "hosted", "private", ""); err != nil {
 		t.Fatalf("建仓库：%v", err)

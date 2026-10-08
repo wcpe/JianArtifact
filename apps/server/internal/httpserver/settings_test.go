@@ -15,21 +15,14 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
 	"github.com/wcpe/jianartifact/apps/server/internal/httpserver"
-	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
 // TestSettingsEndpoints 设置端点（FR-89）：鉴权、默认生效值、部分写入回读、非法拒绝、
 // 回源超时回调触发。
 func TestSettingsEndpoints(t *testing.T) {
-	db, err := persistence.Open(filepath.Join(t.TempDir(), "settings-handler.db"))
-	if err != nil {
-		t.Fatalf("打开数据库：%v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(); err != nil {
-		t.Fatalf("迁移：%v", err)
-	}
+	t.Parallel()
+	db := openMigratedDB(t, filepath.Join(t.TempDir(), "settings-handler.db"))
 	settingSvc := domain.NewSettingService(repository.NewSettingRepo(db))
 	var timeoutUpdated *time.Duration
 	handlers := api.NewHandlers(api.Deps{
@@ -170,14 +163,8 @@ func TestSettingsEndpoints(t *testing.T) {
 // 未开启 Token 时空头名/空值必须放行（设置页全字段提交的历史 bug），
 // 开启时必须齐备且合法；白名单支持多域名写入回读。
 func TestSettingsOriginTokenAndAllowedHosts(t *testing.T) {
-	db, err := persistence.Open(filepath.Join(t.TempDir(), "settings-token.db"))
-	if err != nil {
-		t.Fatalf("打开数据库：%v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(); err != nil {
-		t.Fatalf("迁移：%v", err)
-	}
+	t.Parallel()
+	db := openMigratedDB(t, filepath.Join(t.TempDir(), "settings-token.db"))
 	settingSvc := domain.NewSettingService(repository.NewSettingRepo(db))
 	handlers := api.NewHandlers(api.Deps{Settings: settingSvc})
 
@@ -281,14 +268,8 @@ func TestSettingsOriginTokenAndAllowedHosts(t *testing.T) {
 
 // TestSettingsPublicURLDynamicEffect 写 publicUrl 后 usage 立即用新值（FR-89 对外 URL 动态生效）。
 func TestSettingsPublicURLDynamicEffect(t *testing.T) {
-	db, err := persistence.Open(filepath.Join(t.TempDir(), "settings-usage.db"))
-	if err != nil {
-		t.Fatalf("打开数据库：%v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(); err != nil {
-		t.Fatalf("迁移：%v", err)
-	}
+	t.Parallel()
+	db := openMigratedDB(t, filepath.Join(t.TempDir(), "settings-usage.db"))
 	userRepo := repository.NewUserRepo(db)
 	tokenRepo := repository.NewTokenRepo(db)
 	revokedRepo := repository.NewRevokedRepo(db)

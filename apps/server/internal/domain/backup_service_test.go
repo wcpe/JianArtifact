@@ -30,14 +30,7 @@ func newBackupFixture(t *testing.T) *backupFixture {
 	t.Helper()
 	dataDir := t.TempDir()
 	dbPath := filepath.Join(dataDir, "jianartifact.db")
-	db, err := persistence.Open(dbPath)
-	if err != nil {
-		t.Fatalf("Open：%v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(); err != nil {
-		t.Fatalf("Migrate：%v", err)
-	}
+	db := openMigratedTestDB(t, dataDir, "jianartifact.db")
 
 	store := blobstore.NewStore(filepath.Join(dataDir, "blobs"))
 	repo := repository.NewBackupPackageRepo(db)
@@ -75,6 +68,7 @@ func (f *backupFixture) seedAssets(t *testing.T, contents ...string) []string {
 }
 
 func TestBackupGenerateHotProducesVerifiablePackage(t *testing.T) {
+	t.Parallel()
 	f := newBackupFixture(t)
 	f.seedAssets(t, "alpha", "beta", "gamma")
 
@@ -119,6 +113,7 @@ func TestBackupGenerateHotProducesVerifiablePackage(t *testing.T) {
 // TestBackupSkipsUnreferencedBlobs 验证 blob 集合以 asset 表为准：
 // 目录里未被引用的 blob 不应进入包，否则包体会被历史残留撑大。
 func TestBackupSkipsUnreferencedBlobs(t *testing.T) {
+	t.Parallel()
 	f := newBackupFixture(t)
 	f.seedAssets(t, "referenced")
 	// 再写入一个不挂到任何资产上的 blob。
@@ -142,6 +137,7 @@ func TestBackupSkipsUnreferencedBlobs(t *testing.T) {
 // TestBackupGenerateRejectsConcurrent 覆盖生成串行化：并发第二次生成应被拒绝，
 // 避免两条快照/打包互相挤压磁盘与内存。
 func TestBackupGenerateRejectsConcurrent(t *testing.T) {
+	t.Parallel()
 	f := newBackupFixture(t)
 	f.seedAssets(t, "one")
 
@@ -174,6 +170,7 @@ func TestBackupGenerateRejectsConcurrent(t *testing.T) {
 // TestBackupGenerateFailureCleansUp 覆盖失败路径：引用一个磁盘上不存在的 blob 时，
 // 生成必须失败、登记置为 failed，且不留下可被误用的半成品包。
 func TestBackupGenerateFailureCleansUp(t *testing.T) {
+	t.Parallel()
 	f := newBackupFixture(t)
 	res, err := f.db.Exec(`INSERT INTO repository (name, format, type) VALUES ('raw-repo','raw','hosted')`)
 	if err != nil {
@@ -222,6 +219,7 @@ func TestBackupGenerateFailureCleansUp(t *testing.T) {
 }
 
 func TestBackupGenerateRejectsUnknownMode(t *testing.T) {
+	t.Parallel()
 	f := newBackupFixture(t)
 	if _, err := f.svc.Generate(context.Background(), CreateBackupOptions{Mode: "weird"}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("未知模式应返回 ErrValidation，实际 %v", err)
@@ -229,6 +227,7 @@ func TestBackupGenerateRejectsUnknownMode(t *testing.T) {
 }
 
 func TestBackupOpenReaderRejectsIncomplete(t *testing.T) {
+	t.Parallel()
 	f := newBackupFixture(t)
 	if err := f.repo.Create(repository.BackupPackage{
 		PackageID: "bk-pending",
@@ -243,6 +242,7 @@ func TestBackupOpenReaderRejectsIncomplete(t *testing.T) {
 }
 
 func TestBackupOpenReaderReportsMissingFile(t *testing.T) {
+	t.Parallel()
 	f := newBackupFixture(t)
 	if err := f.repo.Create(repository.BackupPackage{
 		PackageID: "bk-ghost",
@@ -257,6 +257,7 @@ func TestBackupOpenReaderReportsMissingFile(t *testing.T) {
 }
 
 func TestBackupGetUnknown(t *testing.T) {
+	t.Parallel()
 	f := newBackupFixture(t)
 	if _, err := f.svc.Get("nope"); !errors.Is(err, ErrBackupNotFound) {
 		t.Fatalf("不存在的包应返回 ErrBackupNotFound，实际 %v", err)
@@ -264,6 +265,7 @@ func TestBackupGetUnknown(t *testing.T) {
 }
 
 func TestBackupDeleteLifecycle(t *testing.T) {
+	t.Parallel()
 	f := newBackupFixture(t)
 	f.seedAssets(t, "payload")
 	rec, err := f.svc.Generate(context.Background(), CreateBackupOptions{Mode: archive.ModeHot})
@@ -287,6 +289,7 @@ func TestBackupDeleteLifecycle(t *testing.T) {
 // TestBackupDeleteRefusesBaseWithDerived 验证被增量包引用的基线不可删除，
 // 否则派生包在目标端永远无法还原。
 func TestBackupDeleteRefusesBaseWithDerived(t *testing.T) {
+	t.Parallel()
 	f := newBackupFixture(t)
 	if err := f.repo.Create(repository.BackupPackage{
 		PackageID: "bk-base", Mode: repository.BackupModeHot, Status: repository.BackupStatusDone,
@@ -309,6 +312,7 @@ func TestBackupDeleteRefusesBaseWithDerived(t *testing.T) {
 }
 
 func TestBackupReconcileStartupMarksInterrupted(t *testing.T) {
+	t.Parallel()
 	f := newBackupFixture(t)
 	for id, status := range map[string]string{
 		"bk-q": repository.BackupStatusQueued,
@@ -342,6 +346,7 @@ func TestBackupReconcileStartupMarksInterrupted(t *testing.T) {
 // 它的内嵌快照取自生成过程中，登记行仍是生成中；但归档在本节点完整可用。
 // 启动收口必须判为 done，否则目标节点无法基于它继续生成增量差包（会报基线状态 failed）。
 func TestBackupReconcileStartupKeepsRestoredPackageDone(t *testing.T) {
+	t.Parallel()
 	f := newBackupFixture(t)
 	f.seedAssets(t, "alpha", "beta")
 
@@ -386,6 +391,7 @@ func TestBackupReconcileStartupKeepsRestoredPackageDone(t *testing.T) {
 }
 
 func TestBackupListReflectsGeneratedPackages(t *testing.T) {
+	t.Parallel()
 	f := newBackupFixture(t)
 	f.seedAssets(t, "x")
 	for i := 0; i < 2; i++ {
@@ -409,6 +415,7 @@ func TestBackupListReflectsGeneratedPackages(t *testing.T) {
 // TestBackupDeltaGenerate 覆盖增量差包生成：包体只含新增 blob、manifest 带 BasePackageID 与
 // Expected、Expected == 完整集合（并集）摘要、侧车 == 完整集合；基线侧车 == 基线完整集合。
 func TestBackupDeltaGenerate(t *testing.T) {
+	t.Parallel()
 	f := newBackupFixture(t)
 	baseHashes := f.seedAssets(t, "alpha", "beta", "gamma")
 
@@ -501,6 +508,7 @@ func TestBackupDeltaGenerate(t *testing.T) {
 
 // TestBackupDeltaGenerateChained 覆盖"差包的差包"（链式）：在差包之上再派生差包。
 func TestBackupDeltaGenerateChained(t *testing.T) {
+	t.Parallel()
 	f := newBackupFixture(t)
 	f.seedAssets(t, "alpha", "beta", "gamma") // 基线 3 个 blob
 	if _, err := f.svc.Generate(context.Background(), CreateBackupOptions{Mode: archive.ModeHot}); err != nil {
@@ -554,6 +562,7 @@ func TestBackupDeltaGenerateChained(t *testing.T) {
 
 // TestBackupDeltaRejectsMissingBase 覆盖负路径：基线不存在 → ErrBackupBaseUnavailable，且不留下半成品包。
 func TestBackupDeltaRejectsMissingBase(t *testing.T) {
+	t.Parallel()
 	f := newBackupFixture(t)
 	f.seedAssets(t, "x")
 	_, err := f.svc.Generate(context.Background(), CreateBackupOptions{Mode: archive.ModeHot, BasePackageID: "bk-does-not-exist"})
@@ -569,6 +578,7 @@ func TestBackupDeltaRejectsMissingBase(t *testing.T) {
 
 // TestBackupDeltaRejectsBaseNotDone 覆盖负路径：基线未完成（非 done）→ ErrBackupBaseUnavailable。
 func TestBackupDeltaRejectsBaseNotDone(t *testing.T) {
+	t.Parallel()
 	f := newBackupFixture(t)
 	// 登记一个未完成（packing）的基线包。
 	if err := f.repo.Create(repository.BackupPackage{
@@ -586,6 +596,7 @@ func TestBackupDeltaRejectsBaseNotDone(t *testing.T) {
 // TestBackupDeltaRejectsBaseSidecarMissing 覆盖负路径：基线已完成但其侧车索引缺失 →
 // ErrBackupBaseUnavailable，不得静默退化成扫描整包。
 func TestBackupDeltaRejectsBaseSidecarMissing(t *testing.T) {
+	t.Parallel()
 	f := newBackupFixture(t)
 	f.seedAssets(t, "alpha", "beta")
 	rec0, err := f.svc.Generate(context.Background(), CreateBackupOptions{Mode: archive.ModeHot})

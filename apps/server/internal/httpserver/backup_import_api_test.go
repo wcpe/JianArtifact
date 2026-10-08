@@ -17,6 +17,7 @@ import (
 
 // TestBackupImportUnauthorized 覆盖 URL 导入端点的鉴权：未带令牌 401。
 func TestBackupImportUnauthorized(t *testing.T) {
+	t.Parallel()
 	env := newBackupEnv(t)
 	if code, _ := env.request(t, http.MethodPost, "/api/v1/backups/import", "",
 		map[string]any{"sourceUrl": "http://127.0.0.1:1/x.tar.gz"}); code != http.StatusUnauthorized {
@@ -30,6 +31,7 @@ func TestBackupImportUnauthorized(t *testing.T) {
 
 // TestBackupImportMissingSourceURL 覆盖契约校验：缺 sourceUrl → 400。
 func TestBackupImportMissingSourceURL(t *testing.T) {
+	t.Parallel()
 	env := newBackupEnv(t)
 	token := env.adminToken(t)
 	if code, body := env.request(t, http.MethodPost, "/api/v1/backups/import", token,
@@ -41,6 +43,7 @@ func TestBackupImportMissingSourceURL(t *testing.T) {
 // TestBackupImportListAndDetail 覆盖导入记录的列表/详情读取：
 // 直接经仓储造两条记录 → 列表返回 {items,total} 且最近优先 → 详情命中 → 未知 id 404。
 func TestBackupImportListAndDetail(t *testing.T) {
+	t.Parallel()
 	env := newBackupEnv(t)
 	token := env.adminToken(t)
 
@@ -115,6 +118,7 @@ func TestBackupImportListAndDetail(t *testing.T) {
 // 这是此前被 restore_service.go 的 MarkedPending 缺文件未归一化 (nil,nil) 阻塞的回归点
 // （彼时全新节点恒返 500）。该 bug 已修，故此处为正向断言。
 func TestBackupImportCreatesQueuedRecord(t *testing.T) {
+	t.Parallel()
 	env := newBackupEnv(t)
 	token := env.adminToken(t)
 	// 指向一个不可达的回环地址即可：受理（202）发生在后台拉取之前，与拉取成败无关。
@@ -138,6 +142,7 @@ func TestBackupImportCreatesQueuedRecord(t *testing.T) {
 // TestBackupImportFetchFailed 覆盖 URL 拉取失败路径：指向不可达地址 → 记录置 failed +
 // error_code=fetch_failed（后台 goroutine 失败，HTTP 受理仍为 202）。
 func TestBackupImportFetchFailed(t *testing.T) {
+	t.Parallel()
 	env := newBackupEnv(t)
 	token := env.adminToken(t)
 	id := startImport(t, env, token, "http://127.0.0.1:1/dead.tar.gz", false)
@@ -154,6 +159,7 @@ func TestBackupImportFetchFailed(t *testing.T) {
 // 在 RestoreService 的同一 dataDir 写入 restore.pending，再触发导入。
 // MarkedPending 检查在受理路径同步执行，故返回 409 + error_code=restore_pending。
 func TestBackupImportRestorePendingReturns409(t *testing.T) {
+	t.Parallel()
 	env := newBackupEnv(t)
 	token := env.adminToken(t)
 
@@ -197,6 +203,7 @@ func TestBackupImportRestorePendingReturns409(t *testing.T) {
 // （writeBackupImportErr 中 409 + target_not_empty 的映射对 URL 通道不可同步触达，
 // 这是当前实现下唯一可观测的行为；已就此点与 team-lead 对齐）。
 func TestBackupImportTargetNotEmptyFailsImport(t *testing.T) {
+	t.Parallel()
 	src := newBackupEnv(t)
 	srcTok := src.adminToken(t)
 	url, _ := serveRealBackupPackage(t, src, srcTok, "payload-for-nonempty")
@@ -223,6 +230,7 @@ func TestBackupImportTargetNotEmptyFailsImport(t *testing.T) {
 // httptest 服务拉取导入到全新目标 → 记录走到 pending_restart、restore_pending_at 非空、
 // blob_count > 0、package_id 与源包一致。需上游 NewTestClient 放行回环方可跑通。
 func TestBackupImportSuccessStagesPendingRestart(t *testing.T) {
+	t.Parallel()
 	src := newBackupEnv(t)
 	srcTok := src.adminToken(t)
 	url, pkgID := serveRealBackupPackage(t, src, srcTok, "payload-to-import")

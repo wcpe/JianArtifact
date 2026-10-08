@@ -20,6 +20,7 @@ func (r *recordingRecorder) Record(entityType, entityKey, op string, data any) e
 
 // TestSettingsDynamicConfig 基础配置动态化（FR-89）：缺省回退、写后读一致、非法值归零。
 func TestSettingsDynamicConfig(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	settings := repository.NewSettingRepo(db)
 	svc := domain.NewSettingService(settings)
@@ -80,6 +81,7 @@ func TestSettingsDynamicConfig(t *testing.T) {
 
 // TestSettingsSetManyRollback 验证多设置写入任一失败时整体回滚，不留下部分值。
 func TestSettingsSetManyRollback(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	settings := repository.NewSettingRepo(db)
 	if _, err := db.Exec(`CREATE TRIGGER reject_setting BEFORE INSERT ON setting
@@ -100,6 +102,7 @@ func TestSettingsSetManyRollback(t *testing.T) {
 
 // TestSettingsWriteRecordsChange 设置写入记录复制变更日志（FR-83 链路）。
 func TestSettingsWriteRecordsChange(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	settings := repository.NewSettingRepo(db)
 	svc := domain.NewSettingService(settings)
@@ -120,6 +123,7 @@ func TestSettingsWriteRecordsChange(t *testing.T) {
 // TestSettingsClusterKeyNotReplicated 集群配置键（repl:*）绝不记录复制变更日志，
 // 避免同步间隔等节点本地配置被复制到对端造成混乱（用户约束）。
 func TestSettingsClusterKeyNotReplicated(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	settings := repository.NewSettingRepo(db)
 	svc := domain.NewSettingService(settings)

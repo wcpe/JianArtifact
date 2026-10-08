@@ -7,6 +7,7 @@ import (
 )
 
 func TestBackupLinkSignerRoundTrip(t *testing.T) {
+	t.Parallel()
 	signer := NewBackupLinkSigner([]byte("test-secret-for-backup-link"))
 	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
 	exp := now.Add(30 * time.Minute)
@@ -22,6 +23,7 @@ func TestBackupLinkSignerRoundTrip(t *testing.T) {
 
 // TestBackupLinkSignerRejectsTampering 覆盖令牌被挪用到别的包或延期使用。
 func TestBackupLinkSignerRejectsTampering(t *testing.T) {
+	t.Parallel()
 	signer := NewBackupLinkSigner([]byte("test-secret-for-backup-link"))
 	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
 	exp := now.Add(30 * time.Minute)
@@ -53,6 +55,7 @@ func TestBackupLinkSignerRejectsTampering(t *testing.T) {
 // TestBackupLinkSignerKeyIsDerived 验证签名密钥是从启动密钥派生的，
 // 而不是直接复用原值：换一个启动密钥必须导致旧令牌失效。
 func TestBackupLinkSignerKeyIsDerived(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
 	exp := now.Add(time.Hour)
 	token := NewBackupLinkSigner([]byte("secret-one")).Sign("bk-aaa", exp)
@@ -63,6 +66,7 @@ func TestBackupLinkSignerKeyIsDerived(t *testing.T) {
 
 // TestBackupLinkSignerBoundaryAtExpiry 验证到期瞬间即失效（用 now.Before(exp) 判定）。
 func TestBackupLinkSignerBoundaryAtExpiry(t *testing.T) {
+	t.Parallel()
 	signer := NewBackupLinkSigner([]byte("k"))
 	exp := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
 	token := signer.Sign("bk-aaa", exp)

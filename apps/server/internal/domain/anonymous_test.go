@@ -22,6 +22,7 @@ func newAnonTestSvc(t *testing.T) (*domain.RepositoryService, *domain.SettingSer
 // TestAnonymousAclRead anonymous 主体经 ACL 授 read 后，匿名（subjectID=0）可读 private 仓库；
 // 未授权的 private 仓库仍拒绝；public 仓库始终可读（FR-66）。
 func TestAnonymousAclRead(t *testing.T) {
+	t.Parallel()
 	svc, _, userRepo, aclRepo := newAnonTestSvc(t)
 
 	granted, err := svc.Create("anon-granted", "raw", "hosted", "private", "", repository.RepositoryConfig{})
@@ -67,6 +68,7 @@ func TestAnonymousAclRead(t *testing.T) {
 // TestAnonymousGlobalSwitch 全局开关关闭后一切匿名访问拒绝（public 也不例外）、
 // 已认证主体不受影响；重新开启后恢复（FR-66）。
 func TestAnonymousGlobalSwitch(t *testing.T) {
+	t.Parallel()
 	svc, settings, userRepo, aclRepo := newAnonTestSvc(t)
 
 	repo, err := svc.Create("switch-pub", "raw", "hosted", "public", "", repository.RepositoryConfig{})
@@ -114,6 +116,7 @@ func TestAnonymousGlobalSwitch(t *testing.T) {
 // TestAnonymousUserProtection 内置 anonymous 用户禁登录、禁删除 / 改密 / 改角色（FR-66），
 // 且不影响自举判断（Bootstrap 不把 anonymous 计为已初始化）。
 func TestAnonymousUserProtection(t *testing.T) {
+	t.Parallel()
 	db := newTestDB(t)
 	userRepo := repository.NewUserRepo(db)
 	userSvc := domain.NewUserService(userRepo)

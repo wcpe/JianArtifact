@@ -12,6 +12,7 @@ import (
 // hosted/group 携带非 0 值、proxy 携带负值都必须被拒（对外映射为 400），
 // proxy 的 0（关闭）与非 0（开启）都必须放行。
 func TestRepositoryCreateCacheRetentionValidation(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name               string
 		format             string
@@ -30,6 +31,8 @@ func TestRepositoryCreateCacheRetentionValidation(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			// 每个子用例自带独立的临时 SQLite 与仓库命名空间，彼此无共享状态，可并行。
+			t.Parallel()
 			db := newTestDB(t)
 			repoRepo := repository.NewRepoRepo(db)
 			repoSvc := domain.NewRepositoryService(repoRepo, repository.NewAclRepo(db), repository.NewAssetRepo(db),

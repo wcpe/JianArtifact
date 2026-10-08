@@ -28,6 +28,7 @@ func (e *protocolEnv) browseReq(path string) *httptest.ResponseRecorder {
 }
 
 func TestBrowseRendersDirectoryListing(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	e.createRawRepo(t, adminToken, "raw-public", "public")
@@ -84,6 +85,7 @@ func TestBrowseRendersDirectoryListing(t *testing.T) {
 }
 
 func TestBrowsePrivateRepoRequiresAuth(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	e.createRawRepo(t, adminToken, "raw-private", "private")
@@ -110,6 +112,7 @@ func TestBrowsePrivateRepoRequiresAuth(t *testing.T) {
 }
 
 func TestBrowseNotTriggeredForNonHtmlClient(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	e.createRawRepo(t, adminToken, "raw-public", "public")
@@ -126,6 +129,7 @@ func TestBrowseNotTriggeredForNonHtmlClient(t *testing.T) {
 }
 
 func TestBrowseHeadDoesNotRender(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	e.createRawRepo(t, adminToken, "raw-public", "public")
@@ -143,6 +147,7 @@ func TestBrowseHeadDoesNotRender(t *testing.T) {
 }
 
 func TestBrowseEscapesHTMLInNames(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	e.createRawRepo(t, adminToken, "raw-public", "public")
@@ -178,6 +183,7 @@ func (e *protocolEnv) seedAssetRows(t *testing.T, repoName string, paths ...stri
 // 同层的其它顶层目录必须照样列出。旧实现按「前缀下的前 1000 条制品」推导直接子项，
 // 路径全局升序会让 a/ 的制品吃满配额，z/ 整片消失——列表既不完整也不正确。
 func TestBrowseListsAllDirsWhenOneSubtreeIsHuge(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	e.createRawRepo(t, adminToken, "raw-public", "public")
@@ -217,6 +223,7 @@ func TestBrowseListsAllDirsWhenOneSubtreeIsHuge(t *testing.T) {
 // TestBrowsePaginatesFilesAndKeepsDirs 验证直接文件分页：分页只作用于文件，
 // 每页都带全部子目录，计数与页码基于精确总数。
 func TestBrowsePaginatesFilesAndKeepsDirs(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	e.createRawRepo(t, adminToken, "raw-public", "public")
@@ -310,6 +317,7 @@ func TestBrowsePaginatesFilesAndKeepsDirs(t *testing.T) {
 
 // TestBrowsePagingLinksPreserveOtherQuery 验证翻页链接保留既有查询参数。
 func TestBrowsePagingLinksPreserveOtherQuery(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	e.createRawRepo(t, adminToken, "raw-public", "public")
@@ -359,6 +367,7 @@ func (e *protocolEnv) seedAssetMeta(t *testing.T, repoName string, items ...asse
 // TestBrowseShowsTimesAndChecksums 验证目录页展示创建/修改时间与校验和：
 // 时间按存储值原样展示并在表头标注 UTC；校验和折叠展示，短摘要可见、完整值可展开复制。
 func TestBrowseShowsTimesAndChecksums(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	e.createRawRepo(t, adminToken, "raw-public", "public")
@@ -433,6 +442,7 @@ func TestBrowseShowsTimesAndChecksums(t *testing.T) {
 // TestBrowseFallsBackToPlainTextForInvalidTime 验证脏时间数据不会让页面渲染出
 // 无效的 <time datetime>：形态不符时退化为纯文本展示。
 func TestBrowseFallsBackToPlainTextForInvalidTime(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	e.createRawRepo(t, adminToken, "raw-public", "public")
@@ -459,6 +469,7 @@ func TestBrowseFallsBackToPlainTextForInvalidTime(t *testing.T) {
 // TestBrowseShowsDirStats 验证目录行给出子树规模与最近更新时间：计数含更深层级、
 // 时间为子树内最大值，并用 title 标注用途以免与文件行的「大小 / 修改时间」混淆。
 func TestBrowseShowsDirStats(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	e.createRawRepo(t, adminToken, "raw-public", "public")

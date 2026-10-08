@@ -176,6 +176,7 @@ func mustRunCleanup(t *testing.T, fixture *storageCleanupFixture) StorageCleanup
 // TestStorageCleanupPrunesOnlyTerminalMetadataPastRetention 元数据裁剪只认终态行且必须早于保留期；
 // 在途行、未过期行以及「仍挂着非终态隔离记录的终态父行」都必须原样保留。
 func TestStorageCleanupPrunesOnlyTerminalMetadataPastRetention(t *testing.T) {
+	t.Parallel()
 	fixture := newStorageCleanupFixture(t, StorageCleanupOptions{MetadataRetention: 7 * 24 * time.Hour})
 	d := 24 * time.Hour
 	fixture.seedMutation(t, "op-old-completed", "completed", "deleted", fixture.now.Add(-8*d))
@@ -221,6 +222,7 @@ func TestStorageCleanupPrunesOnlyTerminalMetadataPastRetention(t *testing.T) {
 
 // TestStorageCleanupRetentionZeroDisablesPruning 显式 0 必须完全禁用元数据裁剪。
 func TestStorageCleanupRetentionZeroDisablesPruning(t *testing.T) {
+	t.Parallel()
 	fixture := newStorageCleanupFixture(t, StorageCleanupOptions{MetadataRetention: 0, TempMaxAge: 0})
 	fixture.seedMutation(t, "op-ancient-completed", "completed", "deleted", fixture.now.Add(-365*24*time.Hour))
 
@@ -237,6 +239,7 @@ func TestStorageCleanupRetentionZeroDisablesPruning(t *testing.T) {
 // 已被提交但物理回收未完成的滞留件（pending_gc + 隔离文件仍在），即便远超宽限期与保留期，
 // 也不得被删除、推进或裁剪——在途判定接口不存在，任何回收动作都会破坏回滚原子性。
 func TestStorageCleanupLeavesPendingQuarantineUntouched(t *testing.T) {
+	t.Parallel()
 	fixture := newStorageCleanupFixture(t, StorageCleanupOptions{
 		MetadataRetention: time.Nanosecond,
 		TempMaxAge:        time.Nanosecond,
@@ -264,6 +267,7 @@ func TestStorageCleanupLeavesPendingQuarantineUntouched(t *testing.T) {
 
 // TestStorageCleanupRemovesOnlyAgedEmptyQuarantineDirs 空目录清理必须同时满足「目录为空」与「已过宽限期」。
 func TestStorageCleanupRemovesOnlyAgedEmptyQuarantineDirs(t *testing.T) {
+	t.Parallel()
 	fixture := newStorageCleanupFixture(t, StorageCleanupOptions{MetadataRetention: 0, TempMaxAge: 0})
 	aged := fixture.makeQuarantineDir(t, "op-aged-empty", nil, fixture.now.Add(-2*time.Hour))
 	fresh := fixture.makeQuarantineDir(t, "op-fresh-empty", nil, fixture.now.Add(-1*time.Minute))
@@ -292,6 +296,7 @@ func TestStorageCleanupRemovesOnlyAgedEmptyQuarantineDirs(t *testing.T) {
 
 // TestStorageCleanupRemovesOnlyExpiredOCIUploadTemps 过期临时文件清理只碰 tmp/oci-upload 下的过期文件。
 func TestStorageCleanupRemovesOnlyExpiredOCIUploadTemps(t *testing.T) {
+	t.Parallel()
 	fixture := newStorageCleanupFixture(t, StorageCleanupOptions{MetadataRetention: 0, TempMaxAge: 24 * time.Hour})
 	uploadDir := filepath.Join(fixture.blobRoot, "tmp", "oci-upload")
 	if err := os.MkdirAll(uploadDir, 0o750); err != nil {
@@ -343,6 +348,7 @@ func TestStorageCleanupRemovesOnlyExpiredOCIUploadTemps(t *testing.T) {
 // TestStorageCleanupKeepsProxyCacheWhenRetentionDisabled 默认关闭：未配置 cacheRetentionDays 的
 // proxy 仓库（以及任何 hosted 仓库）必须完全不受影响。
 func TestStorageCleanupKeepsProxyCacheWhenRetentionDisabled(t *testing.T) {
+	t.Parallel()
 	fixture := newStorageCleanupFixture(t, StorageCleanupOptions{MetadataRetention: 0, TempMaxAge: 0})
 	proxyID := fixture.createRepository(t, "raw-proxy-default-off", "proxy", 0)
 	proxyStaleHash := fixture.seedAsset(t, proxyID, "cached-old.bin", "cached-old", fixture.now.Add(-365*24*time.Hour))
@@ -373,6 +379,7 @@ func TestStorageCleanupKeepsProxyCacheWhenRetentionDisabled(t *testing.T) {
 // TestStorageCleanupPurgesOnlyExpiredProxyCacheWhenEnabled 开启后只删超期代理缓存，
 // 且删除走既有资产变更通道（引用归零 → 同步物理回收）。
 func TestStorageCleanupPurgesOnlyExpiredProxyCacheWhenEnabled(t *testing.T) {
+	t.Parallel()
 	fixture := newStorageCleanupFixture(t, StorageCleanupOptions{MetadataRetention: 0, TempMaxAge: 0})
 	const retentionDays = 7
 	proxyID := fixture.createRepository(t, "raw-proxy-retain", "proxy", retentionDays)
@@ -411,25 +418,32 @@ func TestStorageCleanupPurgesOnlyExpiredProxyCacheWhenEnabled(t *testing.T) {
 }
 
 // TestStorageCleanupCapsProxyCacheDeletesPerRun 每轮删除量必须有上限，剩余部分留到后续轮次。
+//
+// 上限语义与断言不依赖上限的具体取值，因此这里用测试钩子把上限压到个位数：
+// 夹具只需造「上限 + 2」个资产即可覆盖「首轮打满上限、次轮清空余量」这两个场景，
+// 而不必为验证一个上限先造 200+ 个真实 blob。
 func TestStorageCleanupCapsProxyCacheDeletesPerRun(t *testing.T) {
+	t.Parallel()
+	const capPerRun = 3
 	fixture := newStorageCleanupFixture(t, StorageCleanupOptions{MetadataRetention: 0, TempMaxAge: 0})
+	fixture.clean.SetProxyCacheDeletesPerRun(capPerRun)
 	proxyID := fixture.createRepository(t, "raw-proxy-cap", "proxy", 1)
-	total := maxProxyCacheDeletesPerRun + 5
+	total := capPerRun + 2
 	for i := 0; i < total; i++ {
 		fixture.seedAsset(t, proxyID, fmt.Sprintf("cache-%04d.bin", i), fmt.Sprintf("payload-%d", i), fixture.now.Add(-30*24*time.Hour))
 	}
 
 	first := mustRunCleanup(t, fixture)
-	if first.CacheAssets != maxProxyCacheDeletesPerRun {
-		t.Fatalf("首轮删除数=%d，应被限制为 %d", first.CacheAssets, maxProxyCacheDeletesPerRun)
+	if first.CacheAssets != capPerRun {
+		t.Fatalf("首轮删除数=%d，应被限制为 %d", first.CacheAssets, capPerRun)
 	}
-	if remaining := fixture.assetCount(t, proxyID); remaining != total-maxProxyCacheDeletesPerRun {
-		t.Fatalf("首轮后剩余资产=%d，期望 %d", remaining, total-maxProxyCacheDeletesPerRun)
+	if remaining := fixture.assetCount(t, proxyID); remaining != total-capPerRun {
+		t.Fatalf("首轮后剩余资产=%d，期望 %d", remaining, total-capPerRun)
 	}
 
 	second := mustRunCleanup(t, fixture)
-	if second.CacheAssets != 5 {
-		t.Fatalf("次轮删除数=%d，期望 5", second.CacheAssets)
+	if second.CacheAssets != 2 {
+		t.Fatalf("次轮删除数=%d，期望 2", second.CacheAssets)
 	}
 	if remaining := fixture.assetCount(t, proxyID); remaining != 0 {
 		t.Fatalf("次轮后应清空超期代理缓存，剩余 %d 个", remaining)

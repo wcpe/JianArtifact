@@ -64,14 +64,7 @@ func newProtocolEnvOpts(t *testing.T, publicURL string) *protocolEnv {
 
 func newProtocolEnvConfigured(t *testing.T, publicURL string, enabled formats.Set) *protocolEnv {
 	t.Helper()
-	db, err := persistence.Open(filepath.Join(t.TempDir(), "proto.db"))
-	if err != nil {
-		t.Fatalf("打开数据库：%v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Migrate(); err != nil {
-		t.Fatalf("迁移：%v", err)
-	}
+	db := openMigratedDB(t, filepath.Join(t.TempDir(), "proto.db"))
 
 	userRepo := repository.NewUserRepo(db)
 	tokenRepo := repository.NewTokenRepo(db)
@@ -247,6 +240,7 @@ func assertProtocolAudit(t *testing.T, e *protocolEnv, actor string, userID int6
 // TestProtocolCredentialsRequireTLSOutsideLoopback 确保携凭据的公网 HTTP
 // 在协议 handler 前被拒绝，不产生资产、额度或成功审计；HTTPS 保持可发布。
 func TestProtocolCredentialsRequireTLSOutsideLoopback(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	e.createRawRepo(t, adminToken, "raw-tls-policy", "private")
@@ -295,6 +289,7 @@ func TestProtocolCredentialsRequireTLSOutsideLoopback(t *testing.T) {
 // TestMavenPublishPolicyAndIdentityAudit 确保 Maven 协议复用发布路径限制，且发布
 // 成功和拒绝均保留账号、认证来源和节点身份。
 func TestMavenPublishPolicyAndIdentityAudit(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	visibility := api.CreateRepositoryRequestVisibilityPrivate
@@ -343,6 +338,7 @@ func (r *interruptedProtocolBody) Read(p []byte) (int, error) {
 // TestProtocolDisconnectReleasesPublishReservation 确保上传正文断连后释放流式
 // reservation，下一次发布可立即占用同一件数额度。
 func TestProtocolDisconnectReleasesPublishReservation(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	e.createRawRepo(t, adminToken, "raw-disconnect-quota", "private")
@@ -382,6 +378,7 @@ func TestProtocolDisconnectReleasesPublishReservation(t *testing.T) {
 }
 
 func TestRawPublishRejectionsRecordAuditableActor(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	e.createRawRepo(t, adminToken, "raw-policy-audit", "private")
@@ -455,6 +452,7 @@ func TestRawPublishRejectionsRecordAuditableActor(t *testing.T) {
 }
 
 func TestImmutableReleaseUsesRepositoryConfiguration(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	e.createRawRepo(t, adminToken, "raw-immutable-config", "private")
@@ -488,6 +486,7 @@ func TestImmutableReleaseUsesRepositoryConfiguration(t *testing.T) {
 }
 
 func TestPublishPolicyPartialUpdateRetainsAllowedPrefixes(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	e.createRawRepo(t, adminToken, "raw-policy-partial", "private")
@@ -550,6 +549,7 @@ func (e *protocolEnv) createRawRepo(t *testing.T, adminToken, name, visibility s
 }
 
 func TestRawHostedRoundtripBearerAndBasic(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	e.createRawRepo(t, adminToken, "raw-hosted", "private")
@@ -618,6 +618,7 @@ func TestRawHostedRoundtripBearerAndBasic(t *testing.T) {
 // TestRawBasicWriteCarriesRequestID 确保原生 Basic 发布也经全局请求标识中间件，
 // 审计记录与响应头使用同一标识，便于按单次发布请求追踪。
 func TestRawBasicWriteCarriesRequestID(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	e.createRawRepo(t, adminToken, "raw-request-id", "private")
@@ -679,6 +680,7 @@ func TestRawBasicWriteCarriesRequestID(t *testing.T) {
 }
 
 func TestRawHostedAccessControl(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	e.createRawRepo(t, adminToken, "raw-hosted", "private")
@@ -726,6 +728,7 @@ func TestRawHostedAccessControl(t *testing.T) {
 
 // TestRawDeleteRequiresGlobalAdmin 验证仓库 write ACL 不可替代制品删除的全局管理员权限。
 func TestRawDeleteRequiresGlobalAdmin(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	e.createRawRepo(t, adminToken, "raw-delete", "private")
@@ -830,6 +833,7 @@ func TestRawDeleteRequiresGlobalAdmin(t *testing.T) {
 
 // TestRawDeleteFailureResponsesIncludeOperationID 覆盖 Raw DELETE 进入领域后的冲突与内部失败响应。
 func TestRawDeleteFailureResponsesIncludeOperationID(t *testing.T) {
+	t.Parallel()
 	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer upstreamServer.Close()
 
@@ -865,6 +869,7 @@ func TestRawDeleteFailureResponsesIncludeOperationID(t *testing.T) {
 }
 
 func TestRawDeleteAuditFailureLeavesAssetAndOutboxUntouched(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	e.createRawRepo(t, adminToken, "raw-audit-failure", "private")
@@ -903,6 +908,7 @@ func TestRawDeleteAuditFailureLeavesAssetAndOutboxUntouched(t *testing.T) {
 // 默认非抢占式认证，收不到 Basic 质询就不会带凭据重试，私有仓库将无法拉取。
 // API 端点（/api/*）不得携带该头，否则浏览器会弹出原生 Basic 登录框。
 func TestProtocolUnauthorizedChallengesBasic(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	e.createRawRepo(t, adminToken, "raw-hosted", "private")
@@ -936,6 +942,7 @@ func TestProtocolUnauthorizedChallengesBasic(t *testing.T) {
 }
 
 func TestMavenHostedDispatchedNotRejected(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 
@@ -957,6 +964,7 @@ func TestMavenHostedDispatchedNotRejected(t *testing.T) {
 // TestMavenHostedSnapshotLiteralFallback 验证 SNAPSHOT 字面文件在无 maven-metadata.xml
 // （无顶层 <snapshot> timestamp/buildNumber）时仍可被 GET：时间戳解析失败后回退字面路径。
 func TestMavenHostedSnapshotLiteralFallback(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 
@@ -1015,6 +1023,7 @@ func (e *protocolEnv) createRawGroupRepo(t *testing.T, adminToken, name string, 
 }
 
 func TestRawProxyGetFetchesUpstream(t *testing.T) {
+	t.Parallel()
 	var hits int32
 	upstreamBody := []byte("bytes from upstream registry")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1061,6 +1070,7 @@ func TestRawProxyGetFetchesUpstream(t *testing.T) {
 }
 
 func TestRawGroupAggregatesReads(t *testing.T) {
+	t.Parallel()
 	upstreamBody := []byte("upstream-only artifact")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/remote.txt" {
@@ -1102,6 +1112,7 @@ func TestRawGroupAggregatesReads(t *testing.T) {
 }
 
 func TestRawWriteRejectedOnProxyAndGroup(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("x"))
 	}))
@@ -1125,6 +1136,7 @@ func TestRawWriteRejectedOnProxyAndGroup(t *testing.T) {
 
 // TestDoubleSlashPathCompat 客户端拼接 baseUrl + "/" + path 产生双斜杠（如 /repository/raw//dir/a.txt）时应正常解析。
 func TestDoubleSlashPathCompat(t *testing.T) {
+	t.Parallel()
 	e := newProtocolEnv(t)
 	adminToken := e.bootstrapAdmin(t)
 	e.createRawRepo(t, adminToken, "raw-hosted", "private")

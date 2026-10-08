@@ -13,6 +13,7 @@ import (
 // TestRecheckConnectionFailureToAutoBlocked 手动重测（FR-114）：上游不可达时
 // 立即 HEAD 探测失败 → 进入 AUTO_BLOCKED 并携带阻止窗口；不等待自动窗口。
 func TestRecheckConnectionFailureToAutoBlocked(t *testing.T) {
+	t.Parallel()
 	var fail atomic.Bool
 	fail.Store(true)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -62,6 +63,7 @@ func TestRecheckConnectionFailureToAutoBlocked(t *testing.T) {
 // TestRecheckConnectionUnavailableRepo 手动重测对不可达上游：同步探测失败进入
 // AUTO_BLOCKED（验证探测路径不依赖自动窗口，能立即给出结论）。
 func TestRecheckConnectionUnavailableRepo(t *testing.T) {
+	t.Parallel()
 	svc, repos := newAssetService(t)
 	repoID, err := repos.Create("fresh-proxy", "raw", "proxy", "private", proxyConfigJSON(t, "http://127.0.0.1:1"))
 	if err != nil {
@@ -102,6 +104,7 @@ func TestRecheckConnectionUsesCredentialRef(t *testing.T) {
 
 // 旧库可能遗留在校验收紧前写入的配置；重测必须仍由安全出站客户端拦截。
 func TestRecheckConnectionRejectsLegacyUserinfoURL(t *testing.T) {
+	t.Parallel()
 	svc, repos := newAssetService(t)
 	repoID, err := repos.Create("legacy-userinfo-proxy", "raw", "proxy", "private", `{"remoteUrl":"https://release-user:private-password@repo.example.com/raw"}`)
 	if err != nil {

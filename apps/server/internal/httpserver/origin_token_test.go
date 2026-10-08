@@ -8,6 +8,7 @@ import (
 )
 
 func TestOriginTokenMiddleware(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	guard := func() (bool, string, string) { return true, "X-Jian-Origin-Token", "secret-token-value-123456" }
 	router := gin.New()
@@ -58,6 +59,7 @@ func TestOriginTokenMiddleware(t *testing.T) {
 }
 
 func TestOriginTokenMiddlewareDisabled(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.Use(originTokenMiddleware(func() (bool, string, string) { return false, "", "" }))
@@ -74,6 +76,7 @@ func TestOriginTokenMiddlewareDisabled(t *testing.T) {
 }
 
 func TestOriginTokenRejectsSpoofedLoopbackHostFromExternalPeer(t *testing.T) {
+	t.Parallel()
 	gin.SetMode(gin.TestMode)
 	guard := func() (bool, string, string) { return true, "X-Jian-Origin-Token", "secret-token-value-123456" }
 	router := gin.New()

@@ -11,6 +11,7 @@ import (
 
 // 使用片段的标题 / 描述随请求语言本地化，命令片段本身与语言无关。
 func TestBuildUsageLocalizesTextsNotCommands(t *testing.T) {
+	t.Parallel()
 	repo := &repository.Repository{Name: "demo", Format: "raw", Type: "hosted"}
 
 	zh := buildUsage(repo, "https://example.test", "zh")
@@ -38,6 +39,7 @@ func TestBuildUsageLocalizesTextsNotCommands(t *testing.T) {
 
 // 未收录的语言与空语言一律回退中文（与前端策略一致：只有明确 en 才落英文）。
 func TestBuildUsageFallsBackToChinese(t *testing.T) {
+	t.Parallel()
 	repo := &repository.Repository{Name: "demo", Format: "raw", Type: "hosted"}
 	zh := buildUsage(repo, "https://example.test", "zh")[0]
 
@@ -50,6 +52,7 @@ func TestBuildUsageFallsBackToChinese(t *testing.T) {
 
 // maven / npm 两类也走同一套语言选择，避免只覆盖 raw 的假绿。
 func TestBuildUsageLocalizesAllFormats(t *testing.T) {
+	t.Parallel()
 	for _, format := range []string{"maven", "npm", "raw"} {
 		repo := &repository.Repository{Name: "demo", Format: format, Type: "hosted"}
 		zh := buildUsage(repo, "https://example.test", "zh")
@@ -67,6 +70,7 @@ func TestBuildUsageLocalizesAllFormats(t *testing.T) {
 // 顺序由组装函数决定，故按索引断言；hosted 才有发布片段，proxy/group 只有解析片段。
 // 同组内保持「先基础后进阶」的顺序。
 func TestBuildUsageAssignsGroups(t *testing.T) {
+	t.Parallel()
 	valid := map[string]bool{
 		UsageGroupAuth:    true,
 		UsageGroupResolve: true,
@@ -122,6 +126,7 @@ func TestBuildUsageAssignsGroups(t *testing.T) {
 
 // group 是结构化标记、不参与本地化：同一仓库在不同语言下分组必须完全一致。
 func TestBuildUsageGroupIndependentOfLanguage(t *testing.T) {
+	t.Parallel()
 	for _, format := range []string{"maven", "npm", "raw"} {
 		repo := &repository.Repository{Name: "demo", Format: format, Type: "hosted"}
 		zh := buildUsage(repo, "https://example.test", "zh")
@@ -139,6 +144,7 @@ func TestBuildUsageGroupIndependentOfLanguage(t *testing.T) {
 
 // 只读仓库（proxy/group）不得出现任何发布类片段——否则会误导用户去上传。
 func TestBuildUsageReadOnlyHasNoPublishSnippets(t *testing.T) {
+	t.Parallel()
 	for _, format := range []string{"maven", "npm", "raw"} {
 		for _, repoType := range []string{"proxy", "group"} {
 			repo := &repository.Repository{Name: "demo", Format: format, Type: repoType}
@@ -163,6 +169,7 @@ func TestBuildUsageReadOnlyHasNoPublishSnippets(t *testing.T) {
 // 每个片段都要有可展示的标题 / 描述与可复制文本，且 group / tool 落在预期集合内；
 // 空字段会让界面出现空白卡片或无法做工具切换，故对所有格式 × 类型 × 语言逐一校验。
 func TestBuildUsageSnippetsAreComplete(t *testing.T) {
+	t.Parallel()
 	valid := map[string]bool{
 		UsageGroupAuth:    true,
 		UsageGroupResolve: true,
@@ -214,6 +221,7 @@ func TestBuildUsageSnippetsAreComplete(t *testing.T) {
 // （maven / gradle / gradle-kts / sbt / ivy / ant / npm / pnpm / yarn / bun / curl / wget）。
 // 顺序由组装函数决定，故按索引断言；hosted 才有发布片段，proxy/group 只有解析片段。
 func TestBuildUsageAssignsTools(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		format   string
 		writable bool
@@ -266,6 +274,7 @@ func TestBuildUsageAssignsTools(t *testing.T) {
 
 // tool 是结构化标记、不参与本地化：同一仓库在不同语言下工具归类必须完全一致。
 func TestBuildUsageToolIndependentOfLanguage(t *testing.T) {
+	t.Parallel()
 	for _, format := range []string{"maven", "npm", "raw"} {
 		repo := &repository.Repository{Name: "demo", Format: format, Type: "hosted"}
 		zh := buildUsage(repo, "https://example.test", "zh")
@@ -284,6 +293,7 @@ func TestBuildUsageToolIndependentOfLanguage(t *testing.T) {
 // usageTexts 的每个字段都必须在每种语言下都有值：漏翻译会让界面出现空标题 / 空描述。
 // 用反射遍历全部字段，新增文案字段时自动纳入校验，无需手工补断言。
 func TestUsageTextsCompleteForEveryLanguage(t *testing.T) {
+	t.Parallel()
 	textType := reflect.TypeOf(usageTexts{})
 	for _, lang := range []string{"zh", "en"} {
 		texts, ok := usageTextsByLang[lang]
@@ -302,6 +312,7 @@ func TestUsageTextsCompleteForEveryLanguage(t *testing.T) {
 // 用户明确要求「使用说明要有多种工具」：按标题抽查各格式覆盖到的工具，
 // 避免后续重构把这些片段悄悄删掉（只动标题会被发现，但删整段不会）。
 func TestBuildUsageCoversMultipleTools(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		format  string
 		keyword string // 应出现在某段标题里的工具 / 文件标志
@@ -342,6 +353,7 @@ func TestBuildUsageCoversMultipleTools(t *testing.T) {
 // 两种 Gradle 变体（gradle / gradle-kts）都必须带 gradle.properties 认证片段，且内容一致——
 // gradle.properties 与 DSL 无关，在两个工具下各给一份是为了让任一 Gradle 变体的视图自包含。
 func TestBuildUsageGradleVariantsShareAuthSnippet(t *testing.T) {
+	t.Parallel()
 	repo := &repository.Repository{Name: "demo", Format: "maven", Type: "hosted"}
 	snippets := buildUsage(repo, "https://example.test", "zh")
 	var gradleAuth, ktsAuth *UsageSnippet
