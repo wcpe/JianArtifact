@@ -1,20 +1,11 @@
-# 质量门：PR 与任意分支推送均跑通；与本地 scripts/check.sh 对齐。
+# 质量门只在 PR 上运行；主线发布由 release.yml 统一跑质量门并发布预览。
 name: CI
 
 on:
   pull_request:
-  push:
-    # main 由 release.yml 统一跑质量门 + 发预览，避免重复
-    branches-ignore:
-      - main
-    tags-ignore:
-      - "**"
 
 concurrency:
-  # 键必须用**分支名**而不是 github.ref：同一个 PR 会同时触发 push 与 pull_request 两个事件，
-  # 而两者的 ref 不同（refs/heads/<分支> 与 refs/pull/<n>/merge），用 ref 会落进两个并发组、
-  # cancel-in-progress 拦不住，导致同一个分支把质量门白跑两遍（实测各约 17 分钟）。
-  # head_ref 仅在 pull_request 事件有值，push 事件回落到 ref_name（即分支名），两者归为同一组。
+  # 同一 PR 的新提交取消旧运行，避免过期提交继续占用质量门。
   group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
