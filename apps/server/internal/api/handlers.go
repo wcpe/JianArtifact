@@ -274,6 +274,34 @@ func requireAdmin(c *gin.Context) (*auth.Principal, bool) {
 	return p, true
 }
 
+// errInternalSubject 表示「无法组装鉴权主体」（查用户所属组失败）。
+//
+// 统一用这一个哨兵，是因为组装失败在 HTTP 层只有一个合理的处理：500 且不带
+// 内部细节（组名、SQL 文本都不该出现在响应里）。各守卫处直接引用它，
+// 不必各自拼一段同样的错误。
+var errInternalSubject = errors.New("无法组装鉴权主体")
+
+// subjectOf 把请求中的 principal 转成鉴权主体（含其所属用户组，FR-36）。
+//
+// 单独抽出来是为了让「按组织造鉴权主体」这一件事只有一个写法：api 层的每个仓库
+// 守卫都要这么做，而漏做一处的后果是——该端点静默退化成不含组授权的老行为，
+// 即使用户所属用户组已被授权也会被拒绝，且这种拒绝在测试里很难被发现。
+// p 为 nil（匿名）时得到无用户、无组的匿名主体；repos 未接线时不做数据库访问。
+func (h *Handlers) subjectOf(p *auth.Principal) (repository.Subject, error) {
+	var userID int64
+	if p != nil {
+		userID = p.UserID
+	}
+	if h.repos == nil {
+		return repository.UserSubject(userID), nil
+	}
+	subject, err := h.repos.SubjectFor(userID)
+	if err != nil {
+		return repository.Subject{}, errInternalSubject
+	}
+	return subject, nil
+}
+
 // writeDomainErr 把领域错误映射为契约约定的 HTTP 状态与错误码。
 func writeDomainErr(c *gin.Context, err error) {
 	writeDomainErrWithOperationID(c, err, "")

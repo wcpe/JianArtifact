@@ -15,6 +15,7 @@ const (
 	EntityUser       = "user"
 	EntityToken      = "token"
 	EntitySetting    = "setting"
+	EntityUserGroup  = "user_group"
 
 	OpPut    = "put"
 	OpDelete = "delete"
@@ -24,12 +25,13 @@ const (
 const (
 	EntityFormatMetadata = "format_metadata"
 
-	keyPrefixAsset   = "asset:"
-	keyPrefixRepo    = "repo:"
-	keyPrefixAcl     = "acl:"
-	keyPrefixUser    = "user:"
-	keyPrefixToken   = "token:"
-	keyPrefixSetting = "setting:"
+	keyPrefixAsset     = "asset:"
+	keyPrefixRepo      = "repo:"
+	keyPrefixAcl       = "acl:"
+	keyPrefixUser      = "user:"
+	keyPrefixToken     = "token:"
+	keyPrefixSetting   = "setting:"
+	keyPrefixUserGroup = "user_group:"
 
 	keyPrefixFormatMetadata = "format_metadata:"
 )
@@ -139,6 +141,18 @@ type SettingChangeData struct {
 	Value string `json:"value"`
 }
 
+// UserGroupChangeData 是用户组 put 变更的 data（FR-36）。
+//
+// Members 是成员用户名快照（整体快照而非增量）：组与成员是多对多，逐条增量会
+// 让对账方无法判断「漏掉一条」与「没变」；整体快照由收口方直接覆盖，语义明确。
+// 成员名不含任何凭据（口令哈希不参与变更日志）。
+type UserGroupChangeData struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Members     []string `json:"members,omitempty"`
+	CreatedAt   string   `json:"createdAt,omitempty"`
+}
+
 // 自然键构造器（跨节点一致）。
 func AssetKey(repoName, path string) string { return keyPrefixAsset + repoName + "/" + path }
 
@@ -147,6 +161,9 @@ func RepoKey(name string) string { return keyPrefixRepo + name }
 func AclKey(repoName string) string { return keyPrefixAcl + repoName }
 
 func UserKey(username string) string { return keyPrefixUser + username }
+
+// UserGroupKey 构造用户组自然键（FR-36）：组名全局唯一，可跨节点一致寻址。
+func UserGroupKey(name string) string { return keyPrefixUserGroup + name }
 
 func TokenKey(digest string) string { return keyPrefixToken + digest }
 

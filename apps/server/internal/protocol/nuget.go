@@ -14,6 +14,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
 	"github.com/wcpe/jianartifact/apps/server/internal/nugetpackage"
+	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
 // NuGetHandler 提供 NuGet V3 service index、flat container、registration 与 hosted push。
@@ -173,7 +174,7 @@ func (h *NuGetHandler) search(c *gin.Context, repo string) {
 
 func (h *NuGetHandler) Push(c *gin.Context) {
 	repo := c.Param("repo")
-	if !h.authorize(c, repo, "write") {
+	if !h.authorize(c, repo, repository.ActionPublish) {
 		h.auditRejected(c, "nuget.publish", repo, "", "authorization_denied")
 		return
 	}

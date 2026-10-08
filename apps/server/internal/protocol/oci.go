@@ -17,6 +17,7 @@ import (
 
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
+	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
 const maxOCIRequestManifestBytes = 32 << 20
@@ -103,7 +104,7 @@ func (h *OCIHandler) Post(c *gin.Context) {
 		writeOCIError(c, http.StatusNotFound, "BLOB_UPLOAD_UNKNOWN", "上传会话不存在")
 		return
 	}
-	if !h.authorize(c, repo, "write") {
+	if !h.authorize(c, repo, repository.ActionPublish) {
 		h.auditRejected(c, "oci.blob.put", repo, ociAuditPath(c.Param("rest")), "authorization_denied")
 		return
 	}
@@ -147,7 +148,7 @@ func (h *OCIHandler) Patch(c *gin.Context) {
 		writeOCIError(c, http.StatusNotFound, "BLOB_UPLOAD_UNKNOWN", "上传会话不存在")
 		return
 	}
-	if !h.authorize(c, repo, "write") {
+	if !h.authorize(c, repo, repository.ActionPublish) {
 		h.auditRejected(c, "oci.blob.put", repo, ociAuditPath(c.Param("rest")), "authorization_denied")
 		return
 	}
@@ -210,7 +211,7 @@ func (h *OCIHandler) Put(c *gin.Context) {
 		writeOCIError(c, http.StatusNotFound, "NAME_UNKNOWN", "OCI 路径不存在")
 		return
 	}
-	if !h.authorize(c, repo, "write") {
+	if !h.authorize(c, repo, repository.ActionPublish) {
 		h.auditRejected(c, ociAction(kind), repo, ociAuditPath(c.Param("rest")), "authorization_denied")
 		return
 	}

@@ -1204,6 +1204,12 @@ func isHighRisk(event repository.ObservabilityEvent) bool {
 	case "repository.delete", "repo.delete", "asset.delete", "user.delete", "token.revoke", "acl.set", "settings.update", "setting.set", "migration.switch", "migration.complete":
 		return true
 	}
+	// FR-36：删组与改组成员是**授权面**的变更——一次改组成员等于一次性改变N 个
+	// 用户对若干仓库的有效权限，影响面比单次 ACL 变更更大，故与 acl.set 同级高危。
+	switch event.Action {
+	case AuditActionGroupDelete, AuditActionGroupMemberAdd, AuditActionGroupMemberRmv:
+		return true
+	}
 	return false
 }
 func isRiskEvent(event repository.ObservabilityEvent) bool {
@@ -1256,6 +1262,11 @@ func toAPIAuditTarget(event repository.ObservabilityEvent) AuditTarget {
 	case "asset":
 		target.Kind = AuditTargetArtifact
 	case "user":
+		target.Kind = AuditTargetUser
+	// FR-36：用户组归到 user 目标类——契约的 AuditTargetKind 没有独立的 group 成员，
+	// 而组是账号维度的授权载体，与「账号」同族；落到 other 会让组操作在看板上
+	// 与真正的杂项混在一起。
+	case EntityTypeUserGroup:
 		target.Kind = AuditTargetUser
 	case "token":
 		target.Kind = AuditTargetToken

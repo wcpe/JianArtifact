@@ -42,11 +42,14 @@ func pinnedRequestIDs(c *gin.Context, req PutPinnedRepositoriesRequest) ([]int64
 // GetMyPinnedRepositories 读取当前用户的置顶仓库：登录用户读自己的，匿名回退全局置顶。
 func (h *Handlers) GetMyPinnedRepositories(c *gin.Context) {
 	p, authed := auth.PrincipalFrom(c)
-	subjectID, isAdmin := int64(0), false
-	if authed {
-		subjectID, isAdmin = p.UserID, p.IsAdmin()
+	isAdmin := authed && p.IsAdmin()
+	// 匿名回退全局置顶：此处主体为匿名时 p 为 nil，组装出的也是匿名主体。
+	subject, err := h.subjectOf(p)
+	if err != nil {
+		writePinnedErr(c, err)
+		return
 	}
-	resp, err := h.pinnedResponse(pinnedScope(c), subjectID, isAdmin)
+	resp, err := h.pinnedResponse(pinnedScope(c), subject, isAdmin)
 	if err != nil {
 		writePinnedErr(c, err)
 		return
@@ -77,7 +80,12 @@ func (h *Handlers) PutMyPinnedRepositories(c *gin.Context) {
 		auth.WriteError(c, http.StatusBadRequest, "too_many_repositories", "置顶仓库数量超过上限")
 		return
 	}
-	if err := h.requirePinnable(ids, p.UserID, p.IsAdmin()); err != nil {
+	subject, err := h.subjectOf(p)
+	if err != nil {
+		writePinnedErr(c, err)
+		return
+	}
+	if err := h.requirePinnable(ids, subject, p.IsAdmin()); err != nil {
 		writePinnedErr(c, err)
 		return
 	}
@@ -85,7 +93,7 @@ func (h *Handlers) PutMyPinnedRepositories(c *gin.Context) {
 		writePinnedErr(c, err)
 		return
 	}
-	resp, err := h.pinnedResponse(&p.UserID, p.UserID, p.IsAdmin())
+	resp, err := h.pinnedResponse(&p.UserID, subject, p.IsAdmin())
 	if err != nil {
 		writePinnedErr(c, err)
 		return
@@ -100,7 +108,7 @@ func (h *Handlers) GetGlobalPinnedRepositories(c *gin.Context) {
 		return
 	}
 	// 管理员视图不按可读性过滤：需要能看到并管理「私有仓库」的全局置顶。
-	resp, err := h.pinnedResponse(nil, p.UserID, true)
+	resp, err := h.pinnedResponse(nil, repository.UserSubject(p.UserID), true)
 	if err != nil {
 		writePinnedErr(c, err)
 		return
@@ -131,7 +139,12 @@ func (h *Handlers) PutGlobalPinnedRepositories(c *gin.Context) {
 		auth.WriteError(c, http.StatusBadRequest, "too_many_repositories", "置顶仓库数量超过上限")
 		return
 	}
-	if err := h.requirePinnable(ids, p.UserID, true); err != nil {
+	subject, err := h.subjectOf(p)
+	if err != nil {
+		writePinnedErr(c, err)
+		return
+	}
+	if err := h.requirePinnable(ids, subject, true); err != nil {
 		writePinnedErr(c, err)
 		return
 	}
@@ -139,7 +152,7 @@ func (h *Handlers) PutGlobalPinnedRepositories(c *gin.Context) {
 		writePinnedErr(c, err)
 		return
 	}
-	resp, err := h.pinnedResponse(nil, p.UserID, true)
+	resp, err := h.pinnedResponse(nil, subject, true)
 	if err != nil {
 		writePinnedErr(c, err)
 		return
@@ -161,7 +174,7 @@ func pinnedScope(c *gin.Context) *int64 {
 // pinnedResponse 组装某作用域的置顶响应：ID 保留持久化顺序，名字按 ID 实时解析
 // （仓库重命名后自动跟随），两者一一对应。仅回显调用方可读（isAdmin 不受限）的仓库。
 // 置顶仓储未接线（测试/降级）时返回空集合。
-func (h *Handlers) pinnedResponse(scope *int64, subjectID int64, isAdmin bool) (PinnedRepositoriesResponse, error) {
+func (h *Handlers) pinnedResponse(scope *int64, subject repository.Subject, isAdmin bool) (PinnedRepositoriesResponse, error) {
 	out := PinnedRepositoriesResponse{RepositoryIds: []int64{}, Names: []string{}}
 	if h.pinned == nil {
 		return out, nil
@@ -180,7 +193,7 @@ func (h *Handlers) pinnedResponse(scope *int64, subjectID int64, isAdmin bool) (
 			// 仓库已删除（外键级联下不应出现）：跳过而不是返回空名。
 			continue
 		}
-		if !isAdmin && !h.readable(name, subjectID) {
+		if !isAdmin && !h.readable(name, subject) {
 			continue
 		}
 		out.RepositoryIds = append(out.RepositoryIds, id)
@@ -191,7 +204,7 @@ func (h *Handlers) pinnedResponse(scope *int64, subjectID int64, isAdmin bool) (
 
 // requirePinnable 校验待写入的置顶 ID 是否可被该主体置顶：未知仓库或不可读者一律返回
 // repository.ErrNotFound（视同不存在，不泄漏私有仓库的存在性）。
-func (h *Handlers) requirePinnable(ids []int64, subjectID int64, isAdmin bool) error {
+func (h *Handlers) requirePinnable(ids []int64, subject repository.Subject, isAdmin bool) error {
 	if len(ids) == 0 || h.pinned == nil {
 		return nil
 	}
@@ -207,7 +220,7 @@ func (h *Handlers) requirePinnable(ids []int64, subjectID int64, isAdmin bool) e
 		if isAdmin {
 			continue
 		}
-		if !h.readable(name, subjectID) {
+		if !h.readable(name, subject) {
 			return repository.ErrNotFound
 		}
 	}
@@ -215,11 +228,13 @@ func (h *Handlers) requirePinnable(ids []int64, subjectID int64, isAdmin bool) e
 }
 
 // readable 判定主体对仓库是否有读权限（repos 未接线时放行，保持测试/降级装配的旧语义）。
-func (h *Handlers) readable(name string, subjectID int64) bool {
+// 判定含主体所属用户组的授权（FR-36）：组被授 read 即视为该组成员可读。
+// 组装主体失败视为不可读——查不到组就放行会让拒绝侧开口子。
+func (h *Handlers) readable(name string, subject repository.Subject) bool {
 	if h.repos == nil {
 		return true
 	}
-	allowed, err := h.repos.CanAccess(name, subjectID, "read")
+	allowed, err := h.repos.CanAccess(name, subject, repository.ActionRead)
 	return err == nil && allowed
 }
 
@@ -247,7 +262,7 @@ func (h *Handlers) globalPinnedNames() ([]string, error) {
 			continue
 		}
 		// 匿名可读：全局开关关闭或仓库非 public 时都读不到（与公开列表同一判定）。
-		if !h.readable(name, 0) {
+		if !h.readable(name, repository.AnonymousSubject()) {
 			continue
 		}
 		names = append(names, name)
