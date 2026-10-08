@@ -230,6 +230,9 @@ func TestUserGroupMemberCascade(t *testing.T) {
 
 	// 删用户：另一组的成员关系也随之消失。
 	gid2, err := groups.Create("another-group", "")
+	if err != nil {
+		t.Fatalf("创建另一组：%v", err)
+	}
 	if err := groups.AddMember(gid2, uid); err != nil {
 		t.Fatalf("加入成员：%v", err)
 	}
