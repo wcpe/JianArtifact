@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-30T22:28:36.790Z",
+  "generatedAt": "2026-10-06T14:02:34.414Z",
   "go": [
     {
       "name": "github.com/apapsch/go-jsonmerge/v2",
@@ -291,7 +291,7 @@
     },
     {
       "name": "modernc.org/libc",
-      "version": "v1.75.7",
+      "version": "v1.77.1",
       "license": "BSD-3-Clause",
       "author": "libc"
     },
@@ -309,7 +309,7 @@
     },
     {
       "name": "modernc.org/sqlite",
-      "version": "v1.59.0",
+      "version": "v1.60.1",
       "license": "BSD-3-Clause",
       "author": "sqlite"
     }
@@ -320,60 +320,6 @@
       "version": "7.29.7",
       "license": "MIT",
       "author": "The Babel Team"
-    },
-    {
-      "name": "@eslint-community/eslint-utils",
-      "version": "4.9.1",
-      "license": "MIT",
-      "author": "Toru Nagashima"
-    },
-    {
-      "name": "@eslint-community/regexpp",
-      "version": "4.12.2",
-      "license": "MIT",
-      "author": "Toru Nagashima"
-    },
-    {
-      "name": "@eslint/config-array",
-      "version": "0.21.2",
-      "license": "Apache-2.0",
-      "author": "Nicholas C. Zakas"
-    },
-    {
-      "name": "@eslint/config-helpers",
-      "version": "0.4.2",
-      "license": "Apache-2.0",
-      "author": "—"
-    },
-    {
-      "name": "@eslint/core",
-      "version": "0.17.0",
-      "license": "Apache-2.0",
-      "author": "Nicholas C. Zakas"
-    },
-    {
-      "name": "@eslint/eslintrc",
-      "version": "3.3.6",
-      "license": "MIT",
-      "author": "Nicholas C. Zakas"
-    },
-    {
-      "name": "@eslint/js",
-      "version": "9.39.5",
-      "license": "MIT",
-      "author": "—"
-    },
-    {
-      "name": "@eslint/object-schema",
-      "version": "2.1.7",
-      "license": "Apache-2.0",
-      "author": "Nicholas C. Zakas"
-    },
-    {
-      "name": "@eslint/plugin-kit",
-      "version": "0.4.1",
-      "license": "Apache-2.0",
-      "author": "Nicholas C. Zakas"
     },
     {
       "name": "@floating-ui/core",
@@ -404,36 +350,6 @@
       "version": "0.2.12",
       "license": "MIT",
       "author": "atomiks"
-    },
-    {
-      "name": "@humanfs/core",
-      "version": "0.19.2",
-      "license": "Apache-2.0",
-      "author": "Nicholas C. Zakas"
-    },
-    {
-      "name": "@humanfs/node",
-      "version": "0.16.8",
-      "license": "Apache-2.0",
-      "author": "Nicholas C. Zakas"
-    },
-    {
-      "name": "@humanfs/types",
-      "version": "0.15.0",
-      "license": "Apache-2.0",
-      "author": "Nicholas C. Zakas"
-    },
-    {
-      "name": "@humanwhocodes/module-importer",
-      "version": "1.0.1",
-      "license": "Apache-2.0",
-      "author": "Nicholas C. Zaks"
-    },
-    {
-      "name": "@humanwhocodes/retry",
-      "version": "0.4.3",
-      "license": "Apache-2.0",
-      "author": "Nicholas C. Zaks"
     },
     {
       "name": "@inquirer/ansi",
@@ -622,18 +538,6 @@
       "author": "—"
     },
     {
-      "name": "@types/estree",
-      "version": "1.0.9",
-      "license": "MIT",
-      "author": "—"
-    },
-    {
-      "name": "@types/json-schema",
-      "version": "7.0.15",
-      "license": "MIT",
-      "author": "—"
-    },
-    {
       "name": "@types/node",
       "version": "22.20.1",
       "license": "MIT",
@@ -664,80 +568,8 @@
       "author": "—"
     },
     {
-      "name": "@typescript-eslint/eslint-plugin",
-      "version": "8.64.0",
-      "license": "MIT",
-      "author": "—"
-    },
-    {
-      "name": "@typescript-eslint/parser",
-      "version": "8.64.0",
-      "license": "MIT",
-      "author": "—"
-    },
-    {
-      "name": "@typescript-eslint/project-service",
-      "version": "8.64.0",
-      "license": "MIT",
-      "author": "—"
-    },
-    {
-      "name": "@typescript-eslint/scope-manager",
-      "version": "8.64.0",
-      "license": "MIT",
-      "author": "—"
-    },
-    {
-      "name": "@typescript-eslint/tsconfig-utils",
-      "version": "8.64.0",
-      "license": "MIT",
-      "author": "—"
-    },
-    {
-      "name": "@typescript-eslint/type-utils",
-      "version": "8.64.0",
-      "license": "MIT",
-      "author": "—"
-    },
-    {
-      "name": "@typescript-eslint/types",
-      "version": "8.64.0",
-      "license": "MIT",
-      "author": "—"
-    },
-    {
-      "name": "@typescript-eslint/typescript-estree",
-      "version": "8.64.0",
-      "license": "MIT",
-      "author": "—"
-    },
-    {
-      "name": "@typescript-eslint/utils",
-      "version": "8.64.0",
-      "license": "MIT",
-      "author": "—"
-    },
-    {
-      "name": "@typescript-eslint/visitor-keys",
-      "version": "8.64.0",
-      "license": "MIT",
-      "author": "—"
-    },
-    {
-      "name": "acorn",
-      "version": "8.17.0",
-      "license": "MIT",
-      "author": "—"
-    },
-    {
-      "name": "acorn-jsx",
-      "version": "5.3.2",
-      "license": "MIT",
-      "author": "—"
-    },
-    {
       "name": "ajv",
-      "version": "6.15.0, 8.20.0",
+      "version": "8.20.0",
       "license": "MIT",
       "author": "Evgeny Poberezkin"
     },
@@ -752,36 +584,6 @@
       "version": "4.3.0",
       "license": "MIT",
       "author": "Sindre Sorhus"
-    },
-    {
-      "name": "argparse",
-      "version": "2.0.1",
-      "license": "Python-2.0",
-      "author": "—"
-    },
-    {
-      "name": "balanced-match",
-      "version": "1.0.2, 4.0.4",
-      "license": "MIT",
-      "author": "—"
-    },
-    {
-      "name": "brace-expansion",
-      "version": "1.1.16, 5.0.7",
-      "license": "MIT",
-      "author": "—"
-    },
-    {
-      "name": "callsites",
-      "version": "3.1.0",
-      "license": "MIT",
-      "author": "Sindre Sorhus"
-    },
-    {
-      "name": "chalk",
-      "version": "4.1.2",
-      "license": "MIT",
-      "author": "—"
     },
     {
       "name": "cli-width",
@@ -814,22 +616,10 @@
       "author": "DY"
     },
     {
-      "name": "concat-map",
-      "version": "0.0.1",
-      "license": "MIT",
-      "author": "James Halliday"
-    },
-    {
       "name": "cookie",
       "version": "1.1.1",
       "license": "MIT",
       "author": "Roman Shtylman"
-    },
-    {
-      "name": "cross-spawn",
-      "version": "7.0.6",
-      "license": "MIT",
-      "author": "André Cruz"
     },
     {
       "name": "csstype",
@@ -910,22 +700,10 @@
       "author": "iamkun"
     },
     {
-      "name": "debug",
-      "version": "4.4.3",
-      "license": "MIT",
-      "author": "Josh Junon"
-    },
-    {
       "name": "decimal.js-light",
       "version": "2.5.1",
       "license": "MIT",
       "author": "Michael Mclaughlin"
-    },
-    {
-      "name": "deep-is",
-      "version": "0.1.4",
-      "license": "MIT",
-      "author": "Thorsten Lorenz"
     },
     {
       "name": "detect-node-es",
@@ -958,60 +736,6 @@
       "author": "Luke Edwards"
     },
     {
-      "name": "escape-string-regexp",
-      "version": "4.0.0",
-      "license": "MIT",
-      "author": "Sindre Sorhus"
-    },
-    {
-      "name": "eslint",
-      "version": "9.39.5",
-      "license": "MIT",
-      "author": "Nicholas C. Zakas"
-    },
-    {
-      "name": "eslint-scope",
-      "version": "8.4.0",
-      "license": "BSD-2-Clause",
-      "author": "—"
-    },
-    {
-      "name": "eslint-visitor-keys",
-      "version": "3.4.3, 4.2.1, 5.0.1",
-      "license": "Apache-2.0",
-      "author": "Toru Nagashima"
-    },
-    {
-      "name": "espree",
-      "version": "10.4.0",
-      "license": "BSD-2-Clause",
-      "author": "Nicholas C. Zakas"
-    },
-    {
-      "name": "esquery",
-      "version": "1.7.0",
-      "license": "BSD-3-Clause",
-      "author": "Joel Feenstra"
-    },
-    {
-      "name": "esrecurse",
-      "version": "4.3.0",
-      "license": "BSD-2-Clause",
-      "author": "—"
-    },
-    {
-      "name": "estraverse",
-      "version": "5.3.0",
-      "license": "BSD-2-Clause",
-      "author": "—"
-    },
-    {
-      "name": "esutils",
-      "version": "2.0.3",
-      "license": "BSD-2-Clause",
-      "author": "—"
-    },
-    {
       "name": "eventemitter3",
       "version": "5.0.4",
       "license": "MIT",
@@ -1022,18 +746,6 @@
       "version": "3.1.3",
       "license": "MIT",
       "author": "Evgeny Poberezkin"
-    },
-    {
-      "name": "fast-json-stable-stringify",
-      "version": "2.1.0",
-      "license": "MIT",
-      "author": "James Halliday"
-    },
-    {
-      "name": "fast-levenshtein",
-      "version": "2.0.6",
-      "license": "MIT",
-      "author": "Ramesh Nair"
     },
     {
       "name": "fast-string-truncated-width",
@@ -1049,7 +761,7 @@
     },
     {
       "name": "fast-uri",
-      "version": "3.1.4",
+      "version": "3.1.8",
       "license": "BSD-3-Clause",
       "author": "Vincent Le Goff"
     },
@@ -1058,36 +770,6 @@
       "version": "0.2.2",
       "license": "MIT",
       "author": "James Garbutt"
-    },
-    {
-      "name": "fdir",
-      "version": "6.5.0",
-      "license": "MIT",
-      "author": "thecodrr"
-    },
-    {
-      "name": "file-entry-cache",
-      "version": "8.0.0",
-      "license": "MIT",
-      "author": "Jared Wray"
-    },
-    {
-      "name": "find-up",
-      "version": "5.0.0",
-      "license": "MIT",
-      "author": "Sindre Sorhus"
-    },
-    {
-      "name": "flat-cache",
-      "version": "4.0.1",
-      "license": "MIT",
-      "author": "Jared Wray"
-    },
-    {
-      "name": "flatted",
-      "version": "3.4.2",
-      "license": "ISC",
-      "author": "Andrea Giammarchi"
     },
     {
       "name": "get-caller-file",
@@ -1102,28 +784,10 @@
       "author": "Anton Korzunov"
     },
     {
-      "name": "glob-parent",
-      "version": "6.0.2",
-      "license": "ISC",
-      "author": "Gulp Team"
-    },
-    {
-      "name": "globals",
-      "version": "14.0.0",
-      "license": "MIT",
-      "author": "Sindre Sorhus"
-    },
-    {
       "name": "graphql",
       "version": "16.14.2",
       "license": "MIT",
       "author": "—"
-    },
-    {
-      "name": "has-flag",
-      "version": "4.0.0",
-      "license": "MIT",
-      "author": "Sindre Sorhus"
     },
     {
       "name": "headers-polyfill",
@@ -1144,28 +808,10 @@
       "author": "Jan Mühlemann"
     },
     {
-      "name": "ignore",
-      "version": "5.3.2, 7.0.6",
-      "license": "MIT",
-      "author": "kael"
-    },
-    {
       "name": "immer",
       "version": "11.1.18",
       "license": "MIT",
       "author": "Michel Weststrate"
-    },
-    {
-      "name": "import-fresh",
-      "version": "3.3.1",
-      "license": "MIT",
-      "author": "Sindre Sorhus"
-    },
-    {
-      "name": "imurmurhash",
-      "version": "0.1.4",
-      "license": "MIT",
-      "author": "Jens Taylor"
     },
     {
       "name": "internmap",
@@ -1174,22 +820,10 @@
       "author": "Mike Bostock"
     },
     {
-      "name": "is-extglob",
-      "version": "2.1.1",
-      "license": "MIT",
-      "author": "Jon Schlinkert"
-    },
-    {
       "name": "is-fullwidth-code-point",
       "version": "3.0.0",
       "license": "MIT",
       "author": "Sindre Sorhus"
-    },
-    {
-      "name": "is-glob",
-      "version": "4.0.3",
-      "license": "MIT",
-      "author": "Jon Schlinkert"
     },
     {
       "name": "is-node-process",
@@ -1198,46 +832,16 @@
       "author": "—"
     },
     {
-      "name": "isexe",
-      "version": "2.0.0",
-      "license": "ISC",
-      "author": "Isaac Z. Schlueter"
-    },
-    {
       "name": "js-tokens",
       "version": "4.0.0",
       "license": "MIT",
       "author": "Simon Lydell"
     },
     {
-      "name": "js-yaml",
-      "version": "4.3.0",
-      "license": "MIT",
-      "author": "Vladimir Zapparov"
-    },
-    {
-      "name": "json-buffer",
-      "version": "3.0.1",
-      "license": "MIT",
-      "author": "Dominic Tarr"
-    },
-    {
       "name": "json-schema-traverse",
-      "version": "0.4.1, 1.0.0",
+      "version": "1.0.0",
       "license": "MIT",
       "author": "Evgeny Poberezkin"
-    },
-    {
-      "name": "json-stable-stringify-without-jsonify",
-      "version": "1.0.1",
-      "license": "MIT",
-      "author": "James Halliday"
-    },
-    {
-      "name": "keyv",
-      "version": "4.5.4",
-      "license": "MIT",
-      "author": "Jared Wray"
     },
     {
       "name": "klona",
@@ -1246,46 +850,10 @@
       "author": "Luke Edwards"
     },
     {
-      "name": "levn",
-      "version": "0.4.1",
-      "license": "MIT",
-      "author": "George Zahariev"
-    },
-    {
-      "name": "locate-path",
-      "version": "6.0.0",
-      "license": "MIT",
-      "author": "Sindre Sorhus"
-    },
-    {
-      "name": "lodash.merge",
-      "version": "4.6.2",
-      "license": "MIT",
-      "author": "John-David Dalton"
-    },
-    {
       "name": "loose-envify",
       "version": "1.4.0",
       "license": "MIT",
       "author": "Andres Suarez"
-    },
-    {
-      "name": "minimatch",
-      "version": "3.1.5",
-      "license": "ISC",
-      "author": "Isaac Z. Schlueter"
-    },
-    {
-      "name": "minimatch",
-      "version": "10.2.5",
-      "license": "BlueOak-1.0.0",
-      "author": "Isaac Z. Schlueter"
-    },
-    {
-      "name": "ms",
-      "version": "2.1.3",
-      "license": "MIT",
-      "author": "—"
     },
     {
       "name": "msw",
@@ -1300,58 +868,16 @@
       "author": "GitHub Inc."
     },
     {
-      "name": "natural-compare",
-      "version": "1.4.0",
-      "license": "MIT",
-      "author": "Lauri Rooden"
-    },
-    {
       "name": "object-assign",
       "version": "4.1.1",
       "license": "MIT",
       "author": "Sindre Sorhus"
     },
     {
-      "name": "optionator",
-      "version": "0.9.4",
-      "license": "MIT",
-      "author": "George Zahariev"
-    },
-    {
       "name": "outvariant",
       "version": "1.4.3",
       "license": "MIT",
       "author": "Artem Zakharchenko"
-    },
-    {
-      "name": "p-limit",
-      "version": "3.1.0",
-      "license": "MIT",
-      "author": "Sindre Sorhus"
-    },
-    {
-      "name": "p-locate",
-      "version": "5.0.0",
-      "license": "MIT",
-      "author": "Sindre Sorhus"
-    },
-    {
-      "name": "parent-module",
-      "version": "1.0.1",
-      "license": "MIT",
-      "author": "Sindre Sorhus"
-    },
-    {
-      "name": "path-exists",
-      "version": "4.0.0",
-      "license": "MIT",
-      "author": "Sindre Sorhus"
-    },
-    {
-      "name": "path-key",
-      "version": "3.1.1",
-      "license": "MIT",
-      "author": "Sindre Sorhus"
     },
     {
       "name": "path-to-regexp",
@@ -1366,28 +892,10 @@
       "author": "Alexey Raspopov"
     },
     {
-      "name": "picomatch",
-      "version": "4.0.5",
-      "license": "MIT",
-      "author": "Jon Schlinkert"
-    },
-    {
-      "name": "prelude-ls",
-      "version": "1.2.1",
-      "license": "MIT",
-      "author": "George Zahariev"
-    },
-    {
       "name": "prop-types",
       "version": "15.8.1",
       "license": "MIT",
       "author": "—"
-    },
-    {
-      "name": "punycode",
-      "version": "2.3.1",
-      "license": "MIT",
-      "author": "Mathias Bynens"
     },
     {
       "name": "react",
@@ -1403,7 +911,7 @@
     },
     {
       "name": "react-i18next",
-      "version": "17.0.14",
+      "version": "17.0.15",
       "license": "MIT",
       "author": "Jan Mühlemann"
     },
@@ -1498,12 +1006,6 @@
       "author": "—"
     },
     {
-      "name": "resolve-from",
-      "version": "4.0.0",
-      "license": "MIT",
-      "author": "Sindre Sorhus"
-    },
-    {
       "name": "rettime",
       "version": "0.11.12",
       "license": "MIT",
@@ -1516,28 +1018,10 @@
       "author": "—"
     },
     {
-      "name": "semver",
-      "version": "7.8.5",
-      "license": "ISC",
-      "author": "GitHub Inc."
-    },
-    {
       "name": "set-cookie-parser",
       "version": "2.7.2, 3.1.2",
       "license": "MIT",
       "author": "Nathan Friedly"
-    },
-    {
-      "name": "shebang-command",
-      "version": "2.0.0",
-      "license": "MIT",
-      "author": "Kevin Mårtensson"
-    },
-    {
-      "name": "shebang-regex",
-      "version": "3.0.0",
-      "license": "MIT",
-      "author": "Sindre Sorhus"
     },
     {
       "name": "signal-exit",
@@ -1570,18 +1054,6 @@
       "author": "Sindre Sorhus"
     },
     {
-      "name": "strip-json-comments",
-      "version": "3.1.1",
-      "license": "MIT",
-      "author": "Sindre Sorhus"
-    },
-    {
-      "name": "supports-color",
-      "version": "7.2.0, 10.2.2",
-      "license": "MIT",
-      "author": "Sindre Sorhus"
-    },
-    {
       "name": "tabbable",
       "version": "6.5.0",
       "license": "MIT",
@@ -1598,12 +1070,6 @@
       "version": "1.3.3",
       "license": "MIT",
       "author": "Alex Reardon"
-    },
-    {
-      "name": "tinyglobby",
-      "version": "0.2.17",
-      "license": "MIT",
-      "author": "Superchupu"
     },
     {
       "name": "tldts",
@@ -1624,22 +1090,10 @@
       "author": "Jeremy Stashewsky"
     },
     {
-      "name": "ts-api-utils",
-      "version": "2.5.0",
-      "license": "MIT",
-      "author": "JoshuaKGoldberg"
-    },
-    {
       "name": "tslib",
       "version": "2.8.1",
       "license": "0BSD",
       "author": "Microsoft Corp."
-    },
-    {
-      "name": "type-check",
-      "version": "0.4.0",
-      "license": "MIT",
-      "author": "George Zahariev"
     },
     {
       "name": "type-fest",
@@ -1654,12 +1108,6 @@
       "author": "Microsoft Corp."
     },
     {
-      "name": "typescript-eslint",
-      "version": "8.64.0",
-      "license": "MIT",
-      "author": "—"
-    },
-    {
       "name": "undici-types",
       "version": "6.21.0",
       "license": "MIT",
@@ -1670,12 +1118,6 @@
       "version": "3.0.2",
       "license": "MIT",
       "author": "Artem Zakharchenko"
-    },
-    {
-      "name": "uri-js",
-      "version": "4.4.1",
-      "license": "BSD-2-Clause",
-      "author": "Gary Court"
     },
     {
       "name": "use-callback-ref",
@@ -1700,18 +1142,6 @@
       "version": "37.3.6",
       "license": "MIT AND ISC",
       "author": "Formidable"
-    },
-    {
-      "name": "which",
-      "version": "2.0.2",
-      "license": "ISC",
-      "author": "Isaac Z. Schlueter"
-    },
-    {
-      "name": "word-wrap",
-      "version": "1.2.5",
-      "license": "MIT",
-      "author": "Jon Schlinkert"
     },
     {
       "name": "wrap-ansi",
@@ -1742,12 +1172,6 @@
       "version": "21.1.1",
       "license": "ISC",
       "author": "Ben Coe"
-    },
-    {
-      "name": "yocto-queue",
-      "version": "0.1.0",
-      "license": "MIT",
-      "author": "Sindre Sorhus"
     }
   ]
 }

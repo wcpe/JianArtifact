@@ -44,7 +44,7 @@ function copyViaExecCommand(text: string): boolean {
   try {
     ok = document.execCommand("copy");
   } catch {
-    ok = false;
+    // 复制失败即视为未成功：ok 保持初始的 false，无需重复赋值。
   }
   document.body.removeChild(ta);
   return ok;

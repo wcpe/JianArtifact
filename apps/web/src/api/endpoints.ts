@@ -414,7 +414,9 @@ export async function listAllRepositoryAssets(
   const pageSize = 100;
   const all: AssetList["items"] = [];
   let page = 1;
-  let total = 0;
+  // total 由循环内每次响应赋值，且 break 之前必定已赋值；初值永远不会被读到，
+  // 故不写初始化（写 0 会被 no-useless-assignment 判为无用赋值）。
+  let total: number;
   for (;;) {
     const res = await listRepositoryAssets(name, {
       page,
