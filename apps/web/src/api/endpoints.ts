@@ -64,6 +64,13 @@ import type {
   TokenList,
   UsageInfo,
   User,
+  UserGroup,
+  UserGroupList,
+  UserGroupMember,
+  UserGroupMemberList,
+  CreateUserGroupRequest,
+  UpdateUserGroupRequest,
+  AddUserGroupMemberRequest,
   UserList,
   UserRole,
   UserStatus,
@@ -231,6 +238,59 @@ export function deleteUser(id: number): Promise<void> {
 
 export function changePassword(id: number, password: string): Promise<void> {
   return request<void>(`/users/${id}/password`, { method: "POST", body: { password } });
+}
+
+// —— 用户组（FR-36）——
+// 八个端点均仅管理员可用；组是 ACL 的主体之一，成员关系由组 × 用户承载。
+
+/** 用户组列表（分页窗口 + total 总数）。 */
+export function listUserGroups(params: Pagination = {}): Promise<UserGroupList> {
+  return request<UserGroupList>("/user-groups", {
+    query: { page: params.page, page_size: params.page_size },
+  });
+}
+
+/** 新建用户组；组名全局唯一。 */
+export function createUserGroup(input: CreateUserGroupRequest): Promise<UserGroup> {
+  return request<UserGroup>("/user-groups", { method: "POST", body: input });
+}
+
+/** 单个用户组详情。 */
+export function getUserGroup(id: number): Promise<UserGroup> {
+  return request<UserGroup>(`/user-groups/${id}`);
+}
+
+/**
+ * 更新用户组；空串表示「不改该字段」。
+ *
+ * 注意 description 允许改成空串（清掉说明）在语义上与「不改」冲突：契约把空串定义为不改，
+ * 故这里不提供清空说明的能力——如需清空应在契约层区分 null 与空串，前端不擅自发明语义。
+ */
+export function updateUserGroup(id: number, patch: UpdateUserGroupRequest): Promise<UserGroup> {
+  return request<UserGroup>(`/user-groups/${id}`, { method: "PATCH", body: patch });
+}
+
+/** 删除用户组；组内成员关系与该组在 ACL 中的授权由服务端一并处理。 */
+export function deleteUserGroup(id: number): Promise<void> {
+  return request<void>(`/user-groups/${id}`, { method: "DELETE" });
+}
+
+/** 组成员列表。 */
+export function listUserGroupMembers(id: number): Promise<UserGroupMemberList> {
+  return request<UserGroupMemberList>(`/user-groups/${id}/members`);
+}
+
+/** 把用户加入该组。 */
+export function addUserGroupMember(
+  id: number,
+  input: AddUserGroupMemberRequest,
+): Promise<UserGroupMember> {
+  return request<UserGroupMember>(`/user-groups/${id}/members`, { method: "POST", body: input });
+}
+
+/** 把用户移出该组。 */
+export function removeUserGroupMember(id: number, userId: number): Promise<void> {
+  return request<void>(`/user-groups/${id}/members/${userId}`, { method: "DELETE" });
 }
 
 /** FR-109：管理员读取指定用户在 hosted 仓库的发布策略。 */

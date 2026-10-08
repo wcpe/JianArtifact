@@ -37,6 +37,7 @@ import {
   IconSettings,
   IconTransfer,
   IconUsers,
+  IconUsersGroup,
 } from "@tabler/icons-react";
 import { useEffect, useState, Suspense } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
@@ -48,6 +49,7 @@ import { nextLanguage, languageLabel } from "../i18n/language";
 import { useLanguage } from "../i18n/useLanguage";
 import { getNetworkActivityCount, subscribeNetworkActivity } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
+import { useIsAdmin } from "../auth/useIsAdmin";
 import { useLoginModal } from "../auth/LoginModal";
 import { BrandLogo } from "../components/BrandLogo";
 import { AccountMenu } from "../components/account/AccountMenu";
@@ -120,6 +122,13 @@ const NAV_SECTIONS: NavSection[] = [
     titleKey: "nav.sectionAdministration",
     items: [
       { labelKey: "nav.users", path: "/users", icon: <IconUsers size={18} />, adminOnly: true },
+      // FR-36：用户组是授权主体之一，仅管理员可管理。
+      {
+        labelKey: "nav.userGroups",
+        path: "/user-groups",
+        icon: <IconUsersGroup size={18} />,
+        adminOnly: true,
+      },
       { labelKey: "nav.tokens", path: "/tokens", icon: <IconKey size={18} /> },
       {
         labelKey: "nav.migrations",
@@ -264,7 +273,8 @@ export function AppLayout() {
   // FR-59: 搜索栏状态
   const [searchQuery, setSearchQuery] = useState("");
 
-  const isAdmin = user?.role === "admin";
+  // 管理员判定走集中工具（FR-36）：角色口径只有一处，侧栏不再自己解释 role 字段。
+  const isAdmin = useIsAdmin();
   const expanded = isMobile ? true : navExpanded;
 
   // 挂载与登录态变化时查实例状态：版本号仅登录后由后端返回（匿名脱敏）；

@@ -10,6 +10,7 @@ import { ForbiddenState } from "@jianartifact/ui";
 import { AppLayout } from "./AppLayout";
 import { RouteFallback } from "../components/RouteFallback";
 import { useAuth } from "../auth/AuthContext";
+import { useIsAdmin } from "../auth/useIsAdmin";
 import { useLoginModal } from "../auth/LoginModal";
 import type { ReactNode } from "react";
 
@@ -52,6 +53,9 @@ const TokensPage = lazy(() =>
   import("../pages/TokensPage").then((m) => ({ default: m.TokensPage })),
 );
 const UsersPage = lazy(() => import("../pages/UsersPage").then((m) => ({ default: m.UsersPage })));
+const UserGroupsPage = lazy(() =>
+  import("../pages/UserGroupsPage").then((m) => ({ default: m.UserGroupsPage })),
+);
 
 /** 鉴权守卫（FR-67）：未登录弹登录模态框（不整页跳转），取消则回落仓库列表。 */
 function RequireAuth({ children }: { children: ReactNode }) {
@@ -73,9 +77,10 @@ function RequireAuth({ children }: { children: ReactNode }) {
 
 /** 管理观测页面即使被普通用户直链访问，也必须保持管理权限边界。 */
 function RequireAdmin({ children }: { children: ReactNode }) {
-  const { user } = useAuth();
+  // 走集中权限工具：角色口径只有一处，不在守卫里另写一遍。
+  const isAdmin = useIsAdmin();
 
-  if (user?.role !== "admin") {
+  if (!isAdmin) {
     return <ForbiddenState />;
   }
   return <>{children}</>;
@@ -162,6 +167,16 @@ export function AppRoutes() {
               <RequireAuth>
                 <RequireAdmin>
                   <UsersPage />
+                </RequireAdmin>
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/user-groups"
+            element={
+              <RequireAuth>
+                <RequireAdmin>
+                  <UserGroupsPage />
                 </RequireAdmin>
               </RequireAuth>
             }

@@ -11,6 +11,8 @@ describe("路由懒加载（FR-70）", () => {
     ["业务仪表盘", "/dashboard"],
     ["主机监控", "/host-monitoring"],
     ["用户管理", "/users"],
+    // FR-36：用户组同样仅管理员可直达。
+    ["用户组管理", "/user-groups"],
     ["设置", "/settings"],
     ["开源协议", "/licenses"],
     ["迁移列表", "/migrations"],

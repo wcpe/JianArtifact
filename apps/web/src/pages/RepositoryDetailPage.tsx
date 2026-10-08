@@ -43,6 +43,7 @@ import {
   getAcl,
   getRepositoryDownloadTrend,
   listAllRepositories,
+  listUserGroups,
   listUsers,
   recheckConnection,
   renameRepository,
@@ -54,15 +55,28 @@ import type {
   ConnectionStatusValue,
   AclAction,
   AclEntry,
+  AclSubjectType,
   RepoVisibility,
   Repository,
   User,
+  UserGroup,
 } from "../api/types";
 import { ApiError } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
+import { useIsAdmin } from "../auth/useIsAdmin";
 import { useAsync } from "../hooks/useAsync";
+import {
+  ACL_ACTIONS,
+  ACL_ACTION_HINT_KEYS,
+  ACL_ACTION_LABEL_KEYS,
+  aclSubjectKey,
+  aclSubjectLabel,
+  aclSubjectType,
+  buildAclEntry,
+} from "../lib/acl";
 import { CONN_COLOR, CONN_LABEL_KEY } from "../lib/connectionStatus";
 import { formatBytes, formatCount, formatStamp } from "../lib/format";
+import { OpsHelpButton } from "../components/ops/OpsKit";
 import {
   QUOTA_NEAR_RATIO,
   QUOTA_STATE_COLOR,
@@ -89,7 +103,8 @@ export function RepositoryDetailPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const highlightPath = searchParams.get("highlight") ?? undefined;
   const { user } = useAuth();
-  const isAdmin = user?.role === "admin";
+  // 管理员判定走集中工具（FR-36）：角色口径只有一处，页面不再自己解释 role 字段。
+  const isAdmin = useIsAdmin();
   const requestedTab = searchParams.get("tab");
   const tab =
     requestedTab === "config" || requestedTab === "acl" || requestedTab === "browse"
@@ -868,146 +883,230 @@ function ConfigTab({
 
 /**
  * ACL 管理面板：从 AclPage 提取的核心逻辑，接收 repoName prop。
- * 拉取 ACL 条目与用户列表，支持增删改后整表 PUT 保存。
+ *
+ * FR-36：主体从「只有用户」扩展到「用户 / 用户组」，动作从三档细化为六档。
+ *
+ * 覆盖写语义：PUT /repositories/{name}/acl 是**整份替换**，因此任何改动都必须基于
+ * `entries`（当前完整列表）构造请求体——只提交新增/修改的那一条会把其余条目全部抹掉。
+ * 这里所有写操作都走 `setEntries`（就地改这一份列表），保存时整体下发，正是为此。
  */
 function AclPanel({ repoName }: { repoName: string }) {
   const { t } = useTranslation();
 
-  // 并行拉取 ACL 条目与用户列表（page_size: 100 足够覆盖常见规模）
+  // 并行拉取 ACL 条目、用户列表与用户组列表：
+  // - 用户列表用于「用户」主体的下拉与 id→用户名映射；
+  // - 用户组列表用于「用户组」主体的下拉与 id→组名映射（组主体条目没有 subjectId，
+  //   没有这份映射就只能显示成裸 ID）。
   const state = useAsync(
     () =>
-      Promise.all([getAcl(repoName), listUsers({ page_size: 100 })]).then(([acl, users]) => ({
-        acl,
-        users,
-      })),
+      Promise.all([
+        getAcl(repoName),
+        listUsers({ page_size: 100 }),
+        listUserGroups({ page_size: 100 }),
+      ]).then(([acl, users, groups]) => ({ acl, users, groups })),
     [repoName],
     { cacheKey: `repo:acl-editor:${repoName}` },
   );
 
   const [entries, setEntries] = useState<AclEntry[]>([]);
   const [users, setUsers] = useState<User[]>([]);
+  const [groups, setGroups] = useState<UserGroup[]>([]);
   const [saving, setSaving] = useState(false);
 
-  // 新增条目输入：用户 Select + 权限 Select，点击添加才落入 entries
+  // 新增条目输入：主体类型 + 主体 Select + 权限 Select，点击添加才落入 entries
+  const [newSubjectType, setNewSubjectType] = useState<AclSubjectType>("user");
   const [newSubjectId, setNewSubjectId] = useState<string | null>(null);
   const [newAction, setNewAction] = useState<AclAction>("read");
+  // 同一主体重复添加时给出提示（不静默丢弃、也不静默覆盖已有条目的权限）。
+  const [duplicateHint, setDuplicateHint] = useState(false);
 
   useEffect(() => {
     if (state.data) {
       setEntries(state.data.acl.items);
       setUsers(state.data.users.items);
+      setGroups(state.data.groups.items);
     }
   }, [state.data]);
 
-  // id -> username 映射；列表中用用户名展示，映射缺失时回退到 id
-  const nameById = useMemo(() => {
+  // id → 展示名的两份映射；列表中按主体类型取对应那份
+  const userNames = useMemo(() => {
     const m = new Map<number, string>();
     for (const u of users) m.set(u.id, u.username);
     return m;
   }, [users]);
+  const groupNames = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const g of groups) m.set(g.id, g.name);
+    return m;
+  }, [groups]);
 
-  // 用户下拉选项：值用字符串 id（Mantine Select 统一字符串），提交时转回 number
-  const userOptions = useMemo(
-    () => users.map((u) => ({ value: String(u.id), label: u.username })),
-    [users],
+  /** 新增下拉的候选主体：按选中类型取用户或用户组；值用字符串 id，提交时转回 number。 */
+  const subjectOptions = useMemo(
+    () =>
+      newSubjectType === "group"
+        ? groups.map((g) => ({ value: String(g.id), label: g.name }))
+        : users.map((u) => ({ value: String(u.id), label: u.username })),
+    [groups, users, newSubjectType],
   );
 
-  // 已添加条目中已被占用的用户 id，新增时从下拉里排除，避免重复授权
-  const usedIds = useMemo(() => new Set(entries.map((e) => e.subjectId)), [entries]);
-  const availableUserOptions = useMemo(
-    () => userOptions.filter((o) => !usedIds.has(Number(o.value))),
-    [userOptions, usedIds],
+  // 已占用主体：新增时从下拉里排除，避免同主体重复授权（后端会按唯一约束拒绝保存）
+  const usedKeys = useMemo(() => new Set(entries.map(aclSubjectKey)), [entries]);
+  const availableSubjectOptions = useMemo(
+    () => subjectOptions.filter((o) => !usedKeys.has(`${newSubjectType}:${Number(o.value)}`)),
+    [subjectOptions, usedKeys, newSubjectType],
   );
 
-  const actionOptions = [
-    { value: "read", label: t("acl.actionRead") },
-    { value: "write", label: t("acl.actionWrite") },
-    { value: "admin", label: t("acl.actionAdmin") },
+  const actionOptions = ACL_ACTIONS.map((action) => ({
+    value: action,
+    label: t(ACL_ACTION_LABEL_KEYS[action]),
+  }));
+  const subjectTypeOptions = [
+    { value: "user", label: t("acl.subjectUser") },
+    { value: "group", label: t("acl.subjectGroup") },
   ];
 
-  const updateEntry = (index: number, patch: Partial<AclEntry>) => {
-    setEntries((prev) => prev.map((e, i) => (i === index ? { ...e, ...patch } : e)));
+  /** 按稳定标识更新条目：类型切换会重写两个 ID 列，保证两列互斥。 */
+  const updateEntry = (key: string, patch: Partial<AclEntry>) => {
+    setEntries((prev) => prev.map((e) => (aclSubjectKey(e) === key ? { ...e, ...patch } : e)));
   };
 
-  const removeEntry = (index: number) => {
-    setEntries((prev) => prev.filter((_, i) => i !== index));
+  const removeEntry = (key: string) => {
+    setEntries((prev) => prev.filter((e) => aclSubjectKey(e) !== key));
   };
 
   const addEntry = () => {
     if (!newSubjectId) return;
-    setEntries((prev) => [...prev, { subjectId: Number(newSubjectId), action: newAction }]);
+    const entry = buildAclEntry(newSubjectType, Number(newSubjectId), newAction);
+    if (usedKeys.has(aclSubjectKey(entry))) {
+      setDuplicateHint(true);
+      return;
+    }
+    setDuplicateHint(false);
+    // 追加而不是替换：保存是覆盖写，请求体必须始终是完整列表。
+    setEntries((prev) => [...prev, entry]);
     setNewSubjectId(null);
     setNewAction("read");
   };
 
   const handleSave = () => {
     setSaving(true);
+    // 整份下发：后端按 PutAclRequest 替换该仓库的全部条目。
     setAcl(repoName, entries)
       .then(() => notifySuccess(t("common.saved")))
       .catch(notifyError)
       .finally(() => setSaving(false));
   };
 
+  const subjectLabel = (entry: AclEntry) =>
+    aclSubjectLabel(
+      entry,
+      { userNames, groupNames },
+      {
+        user: (id) => t("acl.userIdFallback", { id }),
+        group: (id) => t("acl.groupIdFallback", { id }),
+      },
+    );
+
   return (
     <Stack gap="md">
       <AsyncBoundary state={state}>
         {() => (
           <>
+            {/* 覆盖写提示：整份替换这点不说明，用户会以为「添加」只提交了一条。 */}
+            <Text size="xs" c="dimmed">
+              {t("acl.overlayHint")}
+            </Text>
             {entries.length === 0 ? (
               <EmptyState message={t("acl.empty")} />
             ) : (
               <Table>
                 <Table.Thead>
                   <Table.Tr>
-                    <Table.Th>{t("acl.user")}</Table.Th>
+                    <Table.Th>{t("acl.subject")}</Table.Th>
                     <Table.Th>{t("acl.action")}</Table.Th>
                     <Table.Th>{t("common.actions")}</Table.Th>
                   </Table.Tr>
                 </Table.Thead>
                 <Table.Tbody>
-                  {entries.map((entry, index) => (
-                    <Table.Tr key={entry.subjectId}>
-                      <Table.Td>
-                        {/* 展示用户名；若用户列表中查不到（如已删除）则回退显示 id */}
-                        {/* FR-36：subjectId 在契约里已变为可选（组主体条目不带用户 ID），
-                            此处仍按用户主体渲染，缺省回退 0（列表里查不到即显示 #0）。 */}
-                        {nameById.get(entry.subjectId ?? 0) ?? `#${entry.subjectId ?? 0}`}
-                      </Table.Td>
-                      <Table.Td>
-                        <Select
-                          w={140}
-                          data={actionOptions}
-                          allowDeselect={false}
-                          value={entry.action}
-                          onChange={(v) => v && updateEntry(index, { action: v as AclAction })}
-                        />
-                      </Table.Td>
-                      <Table.Td>
-                        <Button
-                          size="compact-xs"
-                          variant="subtle"
-                          color="red"
-                          leftSection={<IconTrash size={14} />}
-                          aria-label={t("common.delete")}
-                          onClick={() => removeEntry(index)}
-                        >
-                          {t("common.delete")}
-                        </Button>
-                      </Table.Td>
-                    </Table.Tr>
-                  ))}
+                  {entries.map((entry) => {
+                    // 稳定标识而不是数组下标：删除/重排后 React 不会复用错行。
+                    const key = aclSubjectKey(entry);
+                    return (
+                      <Table.Tr key={key}>
+                        {/* 主体只读：改主体等于换一条授权，删掉重加更明确，
+                            也避免「改了 ID 但列表里同主体已有另一条」的重复授权。 */}
+                        <Table.Td>
+                          <Group gap="xs" wrap="nowrap">
+                            <Badge
+                              size="sm"
+                              variant="light"
+                              color={aclSubjectType(entry) === "group" ? "violet" : "blue"}
+                            >
+                              {aclSubjectType(entry) === "group"
+                                ? t("acl.subjectGroup")
+                                : t("acl.subjectUser")}
+                            </Badge>
+                            <Text size="sm" truncate>
+                              {subjectLabel(entry)}
+                            </Text>
+                          </Group>
+                        </Table.Td>
+                        <Table.Td>
+                          <Select
+                            w={140}
+                            data={actionOptions}
+                            allowDeselect={false}
+                            value={entry.action}
+                            onChange={(v) => v && updateEntry(key, { action: v as AclAction })}
+                          />
+                        </Table.Td>
+                        <Table.Td>
+                          <Button
+                            size="compact-xs"
+                            variant="subtle"
+                            color="red"
+                            leftSection={<IconTrash size={14} />}
+                            aria-label={t("common.delete")}
+                            onClick={() => removeEntry(key)}
+                          >
+                            {t("common.delete")}
+                          </Button>
+                        </Table.Td>
+                      </Table.Tr>
+                    );
+                  })}
                 </Table.Tbody>
               </Table>
             )}
 
-            {/* 新增条目行：选用户 + 选权限 + 添加按钮 */}
+            {/* 新增条目行：选主体类型 + 选主体 + 选权限 + 添加按钮 */}
             <Group align="flex-end" gap="sm">
               <Select
-                label={t("acl.user")}
-                placeholder={t("acl.userPlaceholder")}
-                data={availableUserOptions}
+                label={t("acl.subjectType")}
+                data={subjectTypeOptions}
+                allowDeselect={false}
+                value={newSubjectType}
+                onChange={(v) => {
+                  // 换类型即换候选集：原主体 ID 对新类型无意义，必须清空。
+                  setNewSubjectType((v as AclSubjectType) ?? "user");
+                  setNewSubjectId(null);
+                  setDuplicateHint(false);
+                }}
+                w={120}
+              />
+              <Select
+                label={t("acl.subject")}
+                placeholder={
+                  newSubjectType === "group"
+                    ? t("acl.subjectGroupPlaceholder")
+                    : t("acl.userPlaceholder")
+                }
+                data={availableSubjectOptions}
                 value={newSubjectId}
-                onChange={setNewSubjectId}
+                onChange={(value) => {
+                  setNewSubjectId(value);
+                  setDuplicateHint(false);
+                }}
                 searchable
                 w={240}
                 nothingFoundMessage={t("common.empty")}
@@ -1028,7 +1127,19 @@ function AclPanel({ repoName }: { repoName: string }) {
               >
                 {t("acl.addEntry")}
               </Button>
+              <OpsHelpButton
+                title={t("acl.actionHintTitle")}
+                items={ACL_ACTIONS.map((action) => ({
+                  label: t(ACL_ACTION_LABEL_KEYS[action]),
+                  value: t(ACL_ACTION_HINT_KEYS[action]),
+                }))}
+              />
             </Group>
+            {duplicateHint ? (
+              <Text size="xs" c="red">
+                {t("acl.duplicateSubject")}
+              </Text>
+            ) : null}
 
             <Group justify="flex-end">
               <Button

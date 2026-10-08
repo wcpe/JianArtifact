@@ -19,6 +19,14 @@ export type ConnectionStatus = Schemas["ConnectionStatus"];
 export type ConnectionStatusValue = ConnectionStatus["status"];
 export type AclEntry = Schemas["AclEntry"];
 export type AclList = Schemas["AclList"];
+// 用户组（FR-36）：授权主体之一，类型直接取自契约，避免手抄偏差。
+export type UserGroup = Schemas["UserGroup"];
+export type UserGroupList = Schemas["UserGroupList"];
+export type UserGroupMember = Schemas["UserGroupMember"];
+export type UserGroupMemberList = Schemas["UserGroupMemberList"];
+export type CreateUserGroupRequest = Schemas["CreateUserGroupRequest"];
+export type UpdateUserGroupRequest = Schemas["UpdateUserGroupRequest"];
+export type AddUserGroupMemberRequest = Schemas["AddUserGroupMemberRequest"];
 export type LoginResponse = Schemas["LoginResponse"];
 export type AssetSummary = Schemas["AssetSummary"];
 export type AssetList = Schemas["AssetList"];
@@ -100,6 +108,8 @@ export type RepoFormat = Repository["format"];
 export type RepoType = Repository["type"];
 export type RepoVisibility = Repository["visibility"];
 export type AclAction = AclEntry["action"];
+/** FR-36：ACL 主体类型；缺省按 user 解释（沿用三档时代的请求体）。 */
+export type AclSubjectType = NonNullable<AclEntry["subjectType"]>;
 
 /** FR-105：统一资产操作 API 的请求目标。 */
 export type AssetOperationTargetType =

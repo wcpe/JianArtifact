@@ -11,6 +11,7 @@ const ROUTE_PRELOADERS: Record<string, () => Promise<unknown>> = {
   "/audit-logs": () => import("../pages/AuditLogPage"),
   "/host-monitoring": () => import("../pages/HostMonitoringPage"),
   "/users": () => import("../pages/UsersPage"),
+  "/user-groups": () => import("../pages/UserGroupsPage"),
   "/tokens": () => import("../pages/TokensPage"),
   "/migrations": () => import("../pages/MigrationsPage"),
   "/settings": () => import("../pages/SettingsPage"),
