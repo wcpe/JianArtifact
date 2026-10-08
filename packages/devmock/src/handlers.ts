@@ -11,6 +11,14 @@ export type StatusInfo = Schemas["StatusInfo"];
 export type LoginResponse = Schemas["LoginResponse"];
 export type User = Schemas["User"];
 export type UserList = Schemas["UserList"];
+/** FR-36：用户组（授权主体之一）与成员相关契约类型。 */
+export type UserGroup = Schemas["UserGroup"];
+export type UserGroupList = Schemas["UserGroupList"];
+export type UserGroupMember = Schemas["UserGroupMember"];
+export type UserGroupMemberList = Schemas["UserGroupMemberList"];
+export type CreateUserGroupRequest = Schemas["CreateUserGroupRequest"];
+export type UpdateUserGroupRequest = Schemas["UpdateUserGroupRequest"];
+export type AddUserGroupMemberRequest = Schemas["AddUserGroupMemberRequest"];
 export type Token = Schemas["Token"];
 export type TokenList = Schemas["TokenList"];
 export type TokenCreated = Schemas["TokenCreated"];
@@ -131,6 +139,46 @@ export function mockLoginResponse(): LoginResponse {
 /** GET /api/v1/users 的契约响应。 */
 export function mockUserList(): UserList {
   return { items: [mockUser()], total: 1 };
+}
+
+/** 单个用户组的契约响应（FR-36）：授权主体之一。 */
+export function mockUserGroup(): UserGroup {
+  return {
+    id: 1,
+    name: "release-team",
+    description: "负责发布窗口的团队",
+    createdAt: MOCK_TIME,
+  };
+}
+
+/** GET /api/v1/user-groups 的契约响应。 */
+export function mockUserGroupList(): UserGroupList {
+  return { items: [mockUserGroup()], total: 1 };
+}
+
+/** GET /api/v1/user-groups/{id}/members 的单个成员条目。 */
+export function mockUserGroupMember(): UserGroupMember {
+  return { userId: 2, username: "publisher", createdAt: MOCK_TIME };
+}
+
+/** GET /api/v1/user-groups/{id}/members 的契约响应。 */
+export function mockUserGroupMemberList(): UserGroupMemberList {
+  return { items: [mockUserGroupMember()] };
+}
+
+/** POST /api/v1/user-groups 的契约请求体。 */
+export function mockCreateUserGroupRequest(): CreateUserGroupRequest {
+  return { name: "release-team", description: "负责发布窗口的团队" };
+}
+
+/** PATCH /api/v1/user-groups/{id} 的契约请求体（空串表示不改该字段）。 */
+export function mockUpdateUserGroupRequest(): UpdateUserGroupRequest {
+  return { name: "release-team", description: "负责发布窗口的团队（含灰度）" };
+}
+
+/** POST /api/v1/user-groups/{id}/members 的契约请求体。 */
+export function mockAddUserGroupMemberRequest(): AddUserGroupMemberRequest {
+  return { userId: 2 };
 }
 
 /** GET /api/v1/tokens 的契约响应。 */

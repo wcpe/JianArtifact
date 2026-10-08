@@ -34,6 +34,7 @@ type appServices struct {
 	ociSvc              *domain.OCIService
 	formatMetadataSvc   *domain.FormatMetadataService
 	publishPolicySvc    *domain.PublishPolicyService
+	userGroupSvc        *domain.UserGroupService // FR-36：用户组（授权主体之一）的 CRUD 与成员维护
 	assetSvc            *domain.AssetService
 	migrationSvc        *domain.MigrationService
 	settingSvc          *domain.SettingService
@@ -274,6 +275,7 @@ func openServices(cfg *config.Config) (*appServices, error) {
 		ociSvc:              ociSvc,
 		formatMetadataSvc:   formatMetadataSvc,
 		publishPolicySvc:    publishPolicySvc,
+		userGroupSvc:        userGroupSvc,
 		quotaSvc:            quotaSvc,
 		assetSvc:            assetSvc,
 		migrationSvc:        migrationSvc,
@@ -353,7 +355,8 @@ func (s *appServices) handlers(version string, checks []func() error) *api.Handl
 		PublicURL:               s.publicURL,
 		EnabledFormats:          s.repoSvc.EnabledFormats(),
 		PublishPolicies:         s.publishPolicySvc,
-		MaintenanceJobs:         s.scheduler, // FR-41：维护作业清单与手动触发
+		UserGroups:              s.userGroupSvc, // FR-36：用户组管理端点（仅管理员）
+		MaintenanceJobs:         s.scheduler,    // FR-41：维护作业清单与手动触发
 		OnUpstreamTimeoutChange: func(d time.Duration) {
 			if s.upstreamClient != nil {
 				s.upstreamClient.SetTimeout(d)

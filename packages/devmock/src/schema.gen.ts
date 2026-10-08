@@ -568,6 +568,100 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/user-groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 用户组列表（分页，仅管理员）
+         * @description 仅管理员可见。用户组是授权主体之一（FR-36）：把组作为主体写进仓库 ACL，
+         *     等价于给组内每个成员各写一条授权，且成员变动不需要重改 ACL。
+         */
+        get: operations["listUserGroups"];
+        put?: never;
+        /**
+         * 创建用户组（仅管理员）
+         * @description 仅管理员可操作。组名必填且全局唯一，重名返回 409。
+         */
+        post: operations["createUserGroup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/user-groups/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 读取单个用户组（仅管理员） */
+        get: operations["getUserGroup"];
+        put?: never;
+        post?: never;
+        /**
+         * 删除用户组（仅管理员）
+         * @description 仅管理员可操作。删除会连带清理该组的成员关系，以及**以该组为主体的全部
+         *     ACL 条目**——否则会留下指向已消失组的悬空授权，在日后的判定里既不可见
+         *     也无法回收。清理失败即整体失败，宁可删不掉组也不留悬空授权。
+         */
+        delete: operations["deleteUserGroup"];
+        options?: never;
+        head?: never;
+        /**
+         * 更新用户组（名称 / 描述，仅管理员）
+         * @description 仅管理员可操作。空串表示不改该字段；组改名不影响既有授权（ACL 引用的是组 ID）。
+         */
+        patch: operations["updateUserGroup"];
+        trace?: never;
+    };
+    "/api/v1/user-groups/{id}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 列出用户组成员（仅管理员） */
+        get: operations["listUserGroupMembers"];
+        put?: never;
+        /**
+         * 把用户加入用户组（仅管理员）
+         * @description 仅管理员可操作。用户必须已存在（否则 404）；重复加入是幂等的（不报错）。
+         */
+        post: operations["addUserGroupMember"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/user-groups/{id}/members/{userId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * 把用户移出用户组（仅管理员）
+         * @description 仅管理员可操作。移出后该用户立即失去**经由该组**获得的授权，
+         *     其自身被单独授予的授权不受影响。
+         */
+        delete: operations["removeUserGroupMember"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/repositories": {
         parameters: {
             query?: never;
@@ -2146,6 +2240,52 @@ export interface components {
             /** @description 是否禁止该账号登录 Web 与管理 API；不影响原生协议账号密码发布 */
             webLoginDisabled?: boolean;
         };
+        /**
+         * @description 用户组（FR-36）：授权主体之一。组本身只承载「名字 + 描述」，
+         *     授权关系由仓库 ACL 指向组 ID，成员关系由组 × 用户的关联表承载。
+         */
+        UserGroup: {
+            /** Format: int64 */
+            id: number;
+            /** @description 组名（全局唯一） */
+            name: string;
+            /** @description 组说明（可为空串） */
+            description: string;
+            createdAt: string;
+        };
+        UserGroupList: {
+            items: components["schemas"]["UserGroup"][];
+            /** @description 全部组数（不受分页窗口限制） */
+            total: number;
+        };
+        UserGroupMember: {
+            /** Format: int64 */
+            userId: number;
+            username: string;
+            /** @description 加入该组的时间 */
+            createdAt: string;
+        };
+        UserGroupMemberList: {
+            items: components["schemas"]["UserGroupMember"][];
+        };
+        CreateUserGroupRequest: {
+            /** @description 组名（全局唯一，不可为空白） */
+            name: string;
+            description?: string;
+        };
+        UpdateUserGroupRequest: {
+            /** @description 新组名（空串表示不改；全局唯一） */
+            name?: string;
+            /** @description 新说明（空串表示不改） */
+            description?: string;
+        };
+        AddUserGroupMemberRequest: {
+            /**
+             * Format: int64
+             * @description 待加入该组的用户 ID（必须已存在）
+             */
+            userId: number;
+        };
         PublishPolicyRequest: {
             /** @description 是否禁止该账号登录 Web 与管理 API */
             webLoginDisabled?: boolean;
@@ -2412,11 +2552,43 @@ export interface components {
             /** @description 状态说明（供展示） */
             description?: string;
         };
+        /**
+         * @description 一条仓库授权（主体 × 动作）。主体分两类（FR-36）：
+         *     - `subjectType=user`（默认）：`subjectId` 必填，填用户 ID；
+         *     - `subjectType=group`：`subjectGroupId` 必填，填用户组 ID。
+         *     两个 ID 字段互斥：服务端按 `subjectType` 只读取对应那一列，
+         *     另一列即使有值也会被忽略（表内 CHECK 强制恰有其一）。
+         */
         AclEntry: {
-            /** Format: int64 */
-            subjectId: number;
-            /** @enum {string} */
-            action: "read" | "write" | "admin";
+            /**
+             * Format: int64
+             * @description 用户主体 ID（`subjectType=user` 时必填；group 主体不填）
+             */
+            subjectId?: number;
+            /**
+             * @description 授权主体类型：user=单个用户，group=用户组（组内成员全部生效）。
+             *     缺省（不传）按 user 解释——既有三档时代的请求体只有 subjectId，
+             *     沿用该缺省即可无改动继续工作。
+             * @enum {string}
+             */
+            subjectType?: "user" | "group";
+            /**
+             * Format: int64
+             * @description 用户组主体 ID（`subjectType=group` 时必填；user 主体为 null）
+             */
+            subjectGroupId?: number | null;
+            /**
+             * @description 授权动作（FR-36 六档，由粗到细）：
+             *     - read 读取 / 下载；
+             *     - write 写入，蕴含 read 与 publish；
+             *     - publish 仅发布（协议上传），不蕴含写其它路径；
+             *     - delete 删除制品；
+             *     - acl_manage 管理该仓库的 ACL；
+             *     - admin 该仓库的全权管理，蕴含其余五档。
+             *     未登记的动作一律按「只由自身满足」判定，不会被宽泛授权放行。
+             * @enum {string}
+             */
+            action: "read" | "write" | "publish" | "delete" | "acl_manage" | "admin";
         };
         AclList: {
             items: components["schemas"]["AclEntry"][];
@@ -2996,6 +3168,10 @@ export interface components {
         PageParam: number;
         PageSizeParam: number;
         UserIdParam: number;
+        /** @description 用户组 ID */
+        UserGroupIdParam: number;
+        /** @description 待加入 / 移出该组的用户 ID */
+        UserGroupMemberUserIdParam: number;
         TokenIdParam: number;
         RepoNameParam: string;
         MigrationIdParam: number;
@@ -4065,6 +4241,224 @@ export interface operations {
                 content?: never;
             };
             401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listUserGroups: {
+        parameters: {
+            query?: {
+                page?: components["parameters"]["PageParam"];
+                page_size?: components["parameters"]["PageSizeParam"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 用户组列表 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserGroupList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    createUserGroup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateUserGroupRequest"];
+            };
+        };
+        responses: {
+            /** @description 已创建 */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserGroup"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    getUserGroup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 用户组 ID */
+                id: components["parameters"]["UserGroupIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 用户组 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserGroup"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    deleteUserGroup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 用户组 ID */
+                id: components["parameters"]["UserGroupIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 已删除 */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    updateUserGroup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 用户组 ID */
+                id: components["parameters"]["UserGroupIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateUserGroupRequest"];
+            };
+        };
+        responses: {
+            /** @description 已更新 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserGroup"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    listUserGroupMembers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 用户组 ID */
+                id: components["parameters"]["UserGroupIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 成员列表 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserGroupMemberList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    addUserGroupMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 用户组 ID */
+                id: components["parameters"]["UserGroupIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AddUserGroupMemberRequest"];
+            };
+        };
+        responses: {
+            /** @description 已加入 */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserGroupMember"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    removeUserGroupMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 用户组 ID */
+                id: components["parameters"]["UserGroupIdParam"];
+                /** @description 待加入 / 移出该组的用户 ID */
+                userId: components["parameters"]["UserGroupMemberUserIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 已移出 */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
         };
     };

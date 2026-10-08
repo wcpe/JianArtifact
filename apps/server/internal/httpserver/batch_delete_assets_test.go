@@ -140,7 +140,7 @@ func TestAssetOperationAPIDeletesDirectoryAtomically(t *testing.T) {
 	e := newBatchDeleteEnv(t, "admin")
 	e.seedBatchAssets(t)
 	rec, out := e.postOperation(api.AssetOperationRequest{
-		Action:         api.Delete,
+		Action:         api.AssetOperationRequestActionDelete,
 		OverrideReason: "清理测试制品",
 		Targets:        []api.AssetOperationTarget{{Type: api.RawPath, Path: "a"}},
 	})
@@ -177,7 +177,7 @@ func TestAssetOperationAPIAuditFailureRollsBackOperation(t *testing.T) {
 		t.Fatalf("创建审计失败触发器：%v", err)
 	}
 	rec, _ := e.postOperation(api.AssetOperationRequest{
-		Action: api.Delete, OverrideReason: "验证审计原子性",
+		Action: api.AssetOperationRequestActionDelete, OverrideReason: "验证审计原子性",
 		Targets: []api.AssetOperationTarget{{Type: api.RawPath, Path: "a"}},
 	})
 	assertAssetOperationFailure(t, rec, http.StatusInternalServerError, "internal_error")
@@ -204,7 +204,7 @@ func TestAssetOperationAPIFailureResponsesLeaveAssetsUntouched(t *testing.T) {
 	t.Run("未认证返回 401 且不变更", func(t *testing.T) {
 		e := newBatchDeleteEnv(t, "none")
 		e.seedBatchAssets(t)
-		rec, _ := e.postOperation(request(api.Delete, []api.AssetOperationTarget{{Type: api.RawPath, Path: "a/1.txt"}}))
+		rec, _ := e.postOperation(request(api.AssetOperationRequestActionDelete, []api.AssetOperationTarget{{Type: api.RawPath, Path: "a/1.txt"}}))
 		assertAssetOperationFailure(t, rec, http.StatusUnauthorized, "unauthenticated")
 		assertFailureOperationID(t, rec)
 		e.assertAssetsRemain(t, "a/1.txt")
@@ -213,7 +213,7 @@ func TestAssetOperationAPIFailureResponsesLeaveAssetsUntouched(t *testing.T) {
 	t.Run("非管理员返回 403 且不变更", func(t *testing.T) {
 		e := newBatchDeleteEnv(t, "user")
 		e.seedBatchAssets(t)
-		rec, _ := e.postOperation(request(api.Delete, []api.AssetOperationTarget{{Type: api.RawPath, Path: "a/1.txt"}}))
+		rec, _ := e.postOperation(request(api.AssetOperationRequestActionDelete, []api.AssetOperationTarget{{Type: api.RawPath, Path: "a/1.txt"}}))
 		assertAssetOperationFailure(t, rec, http.StatusForbidden, "forbidden")
 		assertFailureOperationID(t, rec)
 		e.assertAssetsRemain(t, "a/1.txt")
@@ -222,7 +222,7 @@ func TestAssetOperationAPIFailureResponsesLeaveAssetsUntouched(t *testing.T) {
 	t.Run("不存在仓库返回 404", func(t *testing.T) {
 		e := newBatchDeleteEnv(t, "admin")
 		e.seedBatchAssets(t)
-		rec, _ := e.postOperationAt("missing", request(api.Delete, []api.AssetOperationTarget{{Type: api.RawPath, Path: "a/1.txt"}}))
+		rec, _ := e.postOperationAt("missing", request(api.AssetOperationRequestActionDelete, []api.AssetOperationTarget{{Type: api.RawPath, Path: "a/1.txt"}}))
 		assertAssetOperationFailure(t, rec, http.StatusNotFound, "not_found")
 		assertFailureOperationID(t, rec)
 		e.assertAssetsRemain(t, "a/1.txt")
@@ -231,7 +231,7 @@ func TestAssetOperationAPIFailureResponsesLeaveAssetsUntouched(t *testing.T) {
 	t.Run("非法路径返回 400 且不变更", func(t *testing.T) {
 		e := newBatchDeleteEnv(t, "admin")
 		e.seedBatchAssets(t)
-		rec, _ := e.postOperation(request(api.Delete, []api.AssetOperationTarget{{Type: api.RawPath, Path: ""}}))
+		rec, _ := e.postOperation(request(api.AssetOperationRequestActionDelete, []api.AssetOperationTarget{{Type: api.RawPath, Path: ""}}))
 		assertAssetOperationFailure(t, rec, http.StatusBadRequest, "validation_error")
 		assertFailureOperationID(t, rec)
 		e.assertAssetsRemain(t, "a/1.txt")
@@ -251,7 +251,7 @@ func TestAssetOperationAPIFailureResponsesLeaveAssetsUntouched(t *testing.T) {
 		e.seedBatchAssets(t)
 		destination := "a"
 		rec, _ := e.postOperation(api.AssetOperationRequest{
-			Action:          api.Move,
+			Action:          api.AssetOperationRequestActionMove,
 			DestinationPath: &destination,
 			OverrideReason:  "验收失败原子性",
 			Targets:         []api.AssetOperationTarget{{Type: api.RawPath, Path: "a/1.txt"}},
@@ -267,7 +267,7 @@ func TestAssetOperationAPIFailureResponsesLeaveAssetsUntouched(t *testing.T) {
 		if err := e.blobs.Remove(e.firstHash); err != nil {
 			t.Fatalf("模拟 blob 缺失：%v", err)
 		}
-		rec, _ := e.postOperation(request(api.Delete, []api.AssetOperationTarget{
+		rec, _ := e.postOperation(request(api.AssetOperationRequestActionDelete, []api.AssetOperationTarget{
 			{Type: api.RawPath, Path: "a"},
 			{Type: api.RawPath, Path: "b"},
 		}))
@@ -301,7 +301,7 @@ func TestAssetOperationAPIMavenRejectsFileAndDeepTargets(t *testing.T) {
 		{Type: api.MavenVersion, Path: "com/example/demo/1.0/nested"},
 	} {
 		rec, _ := e.postOperationAt("maven-logical-api", api.AssetOperationRequest{
-			Action: api.Delete, OverrideReason: "验证 Maven 逻辑删除边界", Targets: []api.AssetOperationTarget{target},
+			Action: api.AssetOperationRequestActionDelete, OverrideReason: "验证 Maven 逻辑删除边界", Targets: []api.AssetOperationTarget{target},
 		})
 		assertAssetOperationFailure(t, rec, http.StatusConflict, "logical_delete_required")
 		assertFailureOperationID(t, rec)

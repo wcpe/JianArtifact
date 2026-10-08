@@ -6,9 +6,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   mockAclList,
+  mockAddUserGroupMemberRequest,
   mockAssetList,
   mockBatchDeleteAssets,
   mockConnectionStatus,
+  mockCreateUserGroupRequest,
   mockHealthz,
   mockLoginResponse,
   mockMaintenanceJobList,
@@ -25,8 +27,13 @@ import {
   mockTokenCreated,
   mockTokenList,
   mockUnavailable,
+  mockUpdateUserGroupRequest,
   mockUsageInfo,
   mockUser,
+  mockUserGroup,
+  mockUserGroupList,
+  mockUserGroupMember,
+  mockUserGroupMemberList,
   mockUserList,
 } from "../src/handlers";
 import { observabilityStore, resetObservabilityStore } from "../src/observability";
@@ -63,6 +70,49 @@ describe("devmock ↔ OpenAPI 契约一致性", () => {
     expectValid("LoginResponse", mockLoginResponse());
     expectValid("User", mockUser());
     expectValid("UserList", mockUserList());
+  });
+
+  it("用户组与成员响应满足契约，主体类型漂移可被检出", () => {
+    expectValid("UserGroup", mockUserGroup());
+    expectValid("UserGroupList", mockUserGroupList());
+    expectValid("UserGroupMember", mockUserGroupMember());
+    expectValid("UserGroupMemberList", mockUserGroupMemberList());
+    expectValid("CreateUserGroupRequest", mockCreateUserGroupRequest());
+    expectValid("UpdateUserGroupRequest", mockUpdateUserGroupRequest());
+    expectValid("AddUserGroupMemberRequest", mockAddUserGroupMemberRequest());
+
+    // 漂移可检出：组缺 required 的 name / createdAt 必须被拒绝；成员缺 userId 同理。
+    const validateGroup = ajv.compile(schemaFor("UserGroup"));
+    expect(validateGroup({ id: 1, description: "缺组名" })).toBe(false);
+    const validateMember = ajv.compile(schemaFor("UserGroupMember"));
+    expect(validateMember({ username: "publisher", createdAt: "2026-01-01T00:00:00Z" })).toBe(
+      false,
+    );
+    // 建组请求必须带 name（required）。
+    const validateCreate = ajv.compile(schemaFor("CreateUserGroupRequest"));
+    expect(validateCreate({ description: "只有说明" })).toBe(false);
+    // 加入成员必须带 userId（required）。
+    const validateAdd = ajv.compile(schemaFor("AddUserGroupMemberRequest"));
+    expect(validateAdd({})).toBe(false);
+  });
+
+  it("ACL 条目接受六档动作与用户组主体，非法取值可被检出", () => {
+    // 用户主体：缺省 subjectType 即 user，subjectId 有值。
+    expectValid("AclEntry", { subjectId: 1, action: "read" });
+    // 组主体：subjectType=group + subjectGroupId。
+    expectValid("AclEntry", { subjectType: "group", subjectGroupId: 7, action: "publish" });
+    // 六档动作全部合法（FR-36 由三档扩为六档）。
+    for (const action of ["read", "write", "publish", "delete", "acl_manage", "admin"]) {
+      expectValid("AclEntry", { subjectId: 1, action });
+    }
+
+    const validate = ajv.compile(schemaFor("AclEntry"));
+    // 漂移可检出：越界的动作枚举（既有的三档之外不得静默放行任意串）。
+    expect(validate({ subjectId: 1, action: "superuser" })).toBe(false);
+    // 缺 action（required）应被拒绝——主体字段已不再是 required。
+    expect(validate({ subjectId: 1 })).toBe(false);
+    // 主体类型只接受 user / group。
+    expect(validate({ subjectType: "team", subjectGroupId: 7, action: "read" })).toBe(false);
   });
 
   it("令牌类响应满足契约", () => {

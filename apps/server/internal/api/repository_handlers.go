@@ -502,7 +502,24 @@ func (h *Handlers) SetRepositoryAcl(c *gin.Context, name RepoNameParam) {
 	}
 	entries := make([]repository.Acl, 0, len(req.Items))
 	for _, e := range req.Items {
-		entries = append(entries, repository.Acl{SubjectID: e.SubjectId, Action: string(e.Action)})
+		// 主体类型缺省为 user（契约 default），显式 group 才按组主体解释；
+		// 两个 ID 按 subjectType 二选一，另一列留零（写库时显式置 NULL）。
+		entry := repository.Acl{SubjectType: repository.SubjectTypeUser, Action: string(e.Action)}
+		if e.SubjectType != nil && string(*e.SubjectType) == repository.SubjectTypeGroup {
+			entry.SubjectType = repository.SubjectTypeGroup
+			if e.SubjectGroupId == nil {
+				auth.WriteError(c, http.StatusBadRequest, "bad_request", "组主体条目必须提供 subjectGroupId")
+				return
+			}
+			entry.SubjectGroupID = *e.SubjectGroupId
+		} else {
+			if e.SubjectId == nil {
+				auth.WriteError(c, http.StatusBadRequest, "bad_request", "用户主体条目必须提供 subjectId")
+				return
+			}
+			entry.SubjectID = *e.SubjectId
+		}
+		entries = append(entries, entry)
 	}
 	rows, err := h.repos.SetAcl(name, entries)
 	if err != nil {

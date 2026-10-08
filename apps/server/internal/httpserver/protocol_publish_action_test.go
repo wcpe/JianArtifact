@@ -53,8 +53,8 @@ func TestPublishActionConsistentAcrossProtocols(t *testing.T) {
 	// 两个仓库都按同样的授权铺设，才能做「同一授权 × 不同协议」的对照。
 	for _, repo := range []string{"xproto-raw", "xproto-npm"} {
 		grantAcls(t, e, adminToken, repo,
-			api.AclEntry{SubjectId: writer.Id, Action: api.AclEntryActionWrite},
-			api.AclEntry{SubjectId: reader.Id, Action: api.AclEntryActionRead},
+			api.AclEntry{SubjectId: &writer.Id, Action: api.AclEntryActionWrite},
+			api.AclEntry{SubjectId: &reader.Id, Action: api.AclEntryActionRead},
 		)
 	}
 

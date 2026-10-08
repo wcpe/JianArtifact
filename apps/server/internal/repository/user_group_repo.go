@@ -87,6 +87,17 @@ func (r *UserGroupRepo) RemoveMember(groupID, userID int64) error {
 	return affected(res, err)
 }
 
+// MemberRow 是「组成员」的展示行：用户 ID / 用户名 + 加入该组的时间。
+//
+// 单独定义一个行模型而不是复用 User，是因为「加入时间」属于关联表而非用户表，
+// 而管理面的成员列表正要展示它；把两个来源的列拼成一条记录，比让调用方先查成员
+// 再逐个回查用户更省一次往返，也避免调用方自己拼 SQL。
+type MemberRow struct {
+	UserID    int64  `db:"user_id"`
+	Username  string `db:"username"`
+	CreatedAt string `db:"created_at"`
+}
+
 // ListMembers 列出组的全部成员用户（按用户名升序）。
 func (r *UserGroupRepo) ListMembers(groupID int64) ([]User, error) {
 	var us []User
@@ -96,6 +107,29 @@ func (r *UserGroupRepo) ListMembers(groupID int64) ([]User, error) {
 		FROM user_group_member m JOIN user u ON u.id = m.user_id
 		WHERE m.group_id = ? ORDER BY u.username`, groupID)
 	return us, err
+}
+
+// ListMemberRows 列出组成员（按用户名升序），带加入时间。
+// 供管理面成员列表使用：与 ListMembers 同源同序，只是多取关联表的 created_at。
+func (r *UserGroupRepo) ListMemberRows(groupID int64) ([]MemberRow, error) {
+	var rows []MemberRow
+	err := r.db.Select(&rows,
+		`SELECT m.user_id, u.username, m.created_at
+		FROM user_group_member m JOIN user u ON u.id = m.user_id
+		WHERE m.group_id = ? ORDER BY u.username`, groupID)
+	return rows, err
+}
+
+// MemberJoinedAt 取某用户加入某组的时间；不存在返回 ErrNotFound。
+// 供「加入成员」端点回填 createdAt（无需为一条记录拉全量列表）。
+func (r *UserGroupRepo) MemberJoinedAt(groupID, userID int64) (string, error) {
+	var at string
+	err := r.db.Get(&at,
+		`SELECT created_at FROM user_group_member WHERE group_id = ? AND user_id = ?`, groupID, userID)
+	if err != nil {
+		return "", mapNoRows(err)
+	}
+	return at, nil
 }
 
 // ListGroupsOfUser 列出某用户所属的全部组 ID（升序）。

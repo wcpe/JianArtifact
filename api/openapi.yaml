@@ -788,6 +788,183 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+  /api/v1/user-groups:
+    get:
+      operationId: listUserGroups
+      summary: 用户组列表（分页，仅管理员）
+      description: |
+        仅管理员可见。用户组是授权主体之一（FR-36）：把组作为主体写进仓库 ACL，
+        等价于给组内每个成员各写一条授权，且成员变动不需要重改 ACL。
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/PageSizeParam"
+      responses:
+        "200":
+          description: 用户组列表
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserGroupList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      operationId: createUserGroup
+      summary: 创建用户组（仅管理员）
+      description: 仅管理员可操作。组名必填且全局唯一，重名返回 409。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUserGroupRequest"
+      responses:
+        "201":
+          description: 已创建
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserGroup"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/user-groups/{id}:
+    get:
+      operationId: getUserGroup
+      summary: 读取单个用户组（仅管理员）
+      parameters:
+        - $ref: "#/components/parameters/UserGroupIdParam"
+      responses:
+        "200":
+          description: 用户组
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserGroup"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      operationId: updateUserGroup
+      summary: 更新用户组（名称 / 描述，仅管理员）
+      description: 仅管理员可操作。空串表示不改该字段；组改名不影响既有授权（ACL 引用的是组 ID）。
+      parameters:
+        - $ref: "#/components/parameters/UserGroupIdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateUserGroupRequest"
+      responses:
+        "200":
+          description: 已更新
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserGroup"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+    delete:
+      operationId: deleteUserGroup
+      summary: 删除用户组（仅管理员）
+      description: |
+        仅管理员可操作。删除会连带清理该组的成员关系，以及**以该组为主体的全部
+        ACL 条目**——否则会留下指向已消失组的悬空授权，在日后的判定里既不可见
+        也无法回收。清理失败即整体失败，宁可删不掉组也不留悬空授权。
+      parameters:
+        - $ref: "#/components/parameters/UserGroupIdParam"
+      responses:
+        "204":
+          description: 已删除
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/v1/user-groups/{id}/members:
+    get:
+      operationId: listUserGroupMembers
+      summary: 列出用户组成员（仅管理员）
+      parameters:
+        - $ref: "#/components/parameters/UserGroupIdParam"
+      responses:
+        "200":
+          description: 成员列表
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserGroupMemberList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      operationId: addUserGroupMember
+      summary: 把用户加入用户组（仅管理员）
+      description: 仅管理员可操作。用户必须已存在（否则 404）；重复加入是幂等的（不报错）。
+      parameters:
+        - $ref: "#/components/parameters/UserGroupIdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddUserGroupMemberRequest"
+      responses:
+        "201":
+          description: 已加入
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserGroupMember"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/v1/user-groups/{id}/members/{userId}:
+    delete:
+      operationId: removeUserGroupMember
+      summary: 把用户移出用户组（仅管理员）
+      description: |
+        仅管理员可操作。移出后该用户立即失去**经由该组**获得的授权，
+        其自身被单独授予的授权不受影响。
+      parameters:
+        - $ref: "#/components/parameters/UserGroupIdParam"
+        - $ref: "#/components/parameters/UserGroupMemberUserIdParam"
+      responses:
+        "204":
+          description: 已移出
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
   /api/v1/repositories:
     get:
       operationId: listRepositories
@@ -1985,6 +2162,22 @@ components:
       name: id
       in: path
       required: true
+      schema:
+        type: integer
+        format: int64
+    UserGroupIdParam:
+      name: id
+      in: path
+      required: true
+      description: 用户组 ID
+      schema:
+        type: integer
+        format: int64
+    UserGroupMemberUserIdParam:
+      name: userId
+      in: path
+      required: true
+      description: 待加入 / 移出该组的用户 ID
       schema:
         type: integer
         format: int64
@@ -3912,6 +4105,82 @@ components:
         webLoginDisabled:
           type: boolean
           description: 是否禁止该账号登录 Web 与管理 API；不影响原生协议账号密码发布
+    UserGroup:
+      type: object
+      description: |
+        用户组（FR-36）：授权主体之一。组本身只承载「名字 + 描述」，
+        授权关系由仓库 ACL 指向组 ID，成员关系由组 × 用户的关联表承载。
+      required: [id, name, description, createdAt]
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+          description: 组名（全局唯一）
+        description:
+          type: string
+          description: 组说明（可为空串）
+        createdAt:
+          type: string
+    UserGroupList:
+      type: object
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/UserGroup"
+        total:
+          type: integer
+          description: 全部组数（不受分页窗口限制）
+    UserGroupMember:
+      type: object
+      required: [userId, username, createdAt]
+      properties:
+        userId:
+          type: integer
+          format: int64
+        username:
+          type: string
+        createdAt:
+          type: string
+          description: 加入该组的时间
+    UserGroupMemberList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/UserGroupMember"
+    CreateUserGroupRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          description: 组名（全局唯一，不可为空白）
+        description:
+          type: string
+    UpdateUserGroupRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          description: 新组名（空串表示不改；全局唯一）
+        description:
+          type: string
+          description: 新说明（空串表示不改）
+    AddUserGroupMemberRequest:
+      type: object
+      required: [userId]
+      properties:
+        userId:
+          type: integer
+          format: int64
+          description: 待加入该组的用户 ID（必须已存在）
     PublishPolicyRequest:
       type: object
       properties:
@@ -4349,14 +4618,42 @@ components:
           description: 状态说明（供展示）
     AclEntry:
       type: object
-      required: [subjectId, action]
+      description: |
+        一条仓库授权（主体 × 动作）。主体分两类（FR-36）：
+        - `subjectType=user`（默认）：`subjectId` 必填，填用户 ID；
+        - `subjectType=group`：`subjectGroupId` 必填，填用户组 ID。
+        两个 ID 字段互斥：服务端按 `subjectType` 只读取对应那一列，
+        另一列即使有值也会被忽略（表内 CHECK 强制恰有其一）。
+      required: [action]
       properties:
         subjectId:
           type: integer
           format: int64
+          description: 用户主体 ID（`subjectType=user` 时必填；group 主体不填）
+        subjectType:
+          type: string
+          enum: [user, group]
+          description: |
+            授权主体类型：user=单个用户，group=用户组（组内成员全部生效）。
+            缺省（不传）按 user 解释——既有三档时代的请求体只有 subjectId，
+            沿用该缺省即可无改动继续工作。
+        subjectGroupId:
+          type: integer
+          format: int64
+          nullable: true
+          description: 用户组主体 ID（`subjectType=group` 时必填；user 主体为 null）
         action:
           type: string
-          enum: [read, write, admin]
+          enum: [read, write, publish, delete, acl_manage, admin]
+          description: |
+            授权动作（FR-36 六档，由粗到细）：
+            - read 读取 / 下载；
+            - write 写入，蕴含 read 与 publish；
+            - publish 仅发布（协议上传），不蕴含写其它路径；
+            - delete 删除制品；
+            - acl_manage 管理该仓库的 ACL；
+            - admin 该仓库的全权管理，蕴含其余五档。
+            未登记的动作一律按「只由自身满足」判定，不会被宽泛授权放行。
     AclList:
       type: object
       required: [items]

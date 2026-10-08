@@ -46,6 +46,7 @@ type Deps struct {
 	PublicURL               string                                  // FR-87：对外基础 URL（CDN 域名，隐藏源站 IP）
 	EnabledFormats          []string                                // FR-32：启动时启用的格式清单
 	PublishPolicies         *domain.PublishPolicyService            // FR-109：发布账号策略管理
+	UserGroups              *domain.UserGroupService                // FR-36：用户组管理的授权载体
 	OnUpstreamTimeoutChange func(time.Duration)                     // FR-89：回源超时设置变更回调（wiring 注入 upstream.Client.SetTimeout；nil 不触发）
 	Backups                 *domain.BackupService                   // FR-132：节点备份包生成与登记
 	BackupLinkKey           []byte                                  // FR-132：备份下载令牌签名密钥（由启动密钥派生）
@@ -95,6 +96,7 @@ type Handlers struct {
 	publicURL               string                       // FR-87：对外基础 URL（CDN 域名）
 	enabledFormats          []string                     // FR-32：启动时启用的格式清单
 	publishPolicies         *domain.PublishPolicyService // FR-109：发布账号策略管理
+	userGroups              *domain.UserGroupService     // FR-36：用户组（授权主体之一）的 CRUD 与成员维护
 	onUpstreamTimeoutChange func(time.Duration)          // FR-89：回源超时设置变更回调
 	backups                 *domain.BackupService        // FR-132：节点备份包
 	backupLinks             *domain.BackupLinkSigner     // FR-132：下载令牌签名
@@ -132,6 +134,7 @@ func NewHandlers(d Deps) *Handlers {
 		publicURL:               d.PublicURL,
 		enabledFormats:          append([]string(nil), d.EnabledFormats...),
 		publishPolicies:         d.PublishPolicies,
+		userGroups:              d.UserGroups,
 		onUpstreamTimeoutChange: d.OnUpstreamTimeoutChange,
 		backups:                 d.Backups,
 		backupLinks:             domain.NewBackupLinkSigner(d.BackupLinkKey),
@@ -532,9 +535,26 @@ func toAPIUsageSnippet(s domain.UsageSnippet) UsageSnippet {
 }
 
 // toAPIAcl 把行模型转为契约 AclEntry。
+//
+// 主体类型由行的 subject_type 决定：组主体只回 subjectGroupId（subjectId 为 null），
+// 用户主体只回 subjectId。两列互斥由表内 CHECK 保证，这里只负责如实回显——
+// 若不加区分地把两列都填进去，前端会同时看到两个 ID 而无法判断当前条目到底授给了谁。
 func toAPIAcl(a repository.Acl) AclEntry {
-	return AclEntry{SubjectId: a.SubjectID, Action: AclEntryAction(a.Action)}
+	out := AclEntry{Action: AclEntryAction(a.Action)}
+	if a.SubjectType == repository.SubjectTypeGroup {
+		groupID := a.SubjectGroupID
+		out.SubjectType = ptr(AclEntrySubjectType(repository.SubjectTypeGroup))
+		out.SubjectGroupId = &groupID
+		return out
+	}
+	userID := a.SubjectID
+	out.SubjectType = ptr(AclEntrySubjectType(repository.SubjectTypeUser))
+	out.SubjectId = &userID
+	return out
 }
+
+// ptr 取值的指针（生成模型里可选字段用指针表达，此处仅为字面量取址）。
+func ptr[T any](v T) *T { return &v }
 
 // stringValue 解引用可能为 nil 的字符串指针，返回空字符串或取值。
 // 由已退役的复制应用日志处理器原定义，现保留为包级工具函数供审计/连接状态处理复用。

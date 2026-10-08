@@ -897,7 +897,22 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-const accessRank = { read: 0, write: 1, admin: 2 } as const;
+// FR-36：动作由三档扩为六档，而 devmock 的仓库守卫仍只判三档（细化动作的
+// 门控目前只在后端 domain 层），因此 `accessRank` 按**六档全量**给出排名：
+// 未在本表里显式登记的档位（publish / delete / acl_manage）各自独立，
+// 取比 read 更低的 rank 0 会让它们互相放行，故给它们单独一档——只有完全相同的
+// 动作、或更高位的管理档（write / admin）才能满足。
+//
+// `satisfies` 在这里是**契约漂移的编译期护栏**：契约一旦新增动作而本表漏登记，
+// 这行会因键缺失编译失败，而不是在运行期把未知动作静默当成"无权"。
+const accessRank = {
+  publish: 0,
+  delete: 0,
+  acl_manage: 0,
+  read: 1,
+  write: 2,
+  admin: 3,
+} as const satisfies Record<AclEntry["action"], number>;
 
 function canAccessRepository(
   name: string,
@@ -911,7 +926,15 @@ function canAccessRepository(
   }
   if (subjectId === 0) return false;
   const granted = (state.acls[name] ?? []).find((item) => item.subjectId === subjectId);
-  return granted ? accessRank[granted.action] >= accessRank[action] : false;
+  // 三档之间存在"高档蕴含低档"（write ≥ read、admin ≥ 全部），
+  // 而细化档（publish / delete / acl_manage）彼此独立：授予其一不得顺带拿到另一档，
+  // 这与后端 satisfyingGrants 的口径一致——故只有 rank 严格更高、或动作完全相同才放行。
+  if (!granted) return false;
+  const grantedRank = accessRank[granted.action];
+  const wantedRank = accessRank[action];
+  if (granted.action === action) return true;
+  // admin（最高档）蕴含全部；其余档位只有"严格更高且不在独立档集合内"才蕴含。
+  return granted.action === "admin" || (wantedRank > 0 && grantedRank > wantedRank);
 }
 
 /**

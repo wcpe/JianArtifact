@@ -174,6 +174,21 @@ func (s *UserGroupService) ListMembers(groupID int64) ([]repository.User, error)
 	return s.groups.ListMembers(groupID)
 }
 
+// ListMemberRows 列出组成员（按用户名升序），带加入时间；供管理面成员列表展示。
+// 组不存在时返回 ErrNotFound（与 Get 同口径，避免把「组不存在」误报成空列表）。
+func (s *UserGroupService) ListMemberRows(groupID int64) ([]repository.MemberRow, error) {
+	if err := s.requireGroup(groupID); err != nil {
+		return nil, err
+	}
+	return s.groups.ListMemberRows(groupID)
+}
+
+// MemberJoinedAt 取某用户加入某组的时间；不存在返回 ErrNotFound。
+// 供「加入成员」端点回填 createdAt，避免为一条记录拉全量成员列表。
+func (s *UserGroupService) MemberJoinedAt(groupID, userID int64) (string, error) {
+	return s.groups.MemberJoinedAt(groupID, userID)
+}
+
 // ListGroupsOfUser 列出某用户所属的全部组 ID（升序）；供鉴权展开主体。
 func (s *UserGroupService) ListGroupsOfUser(userID int64) ([]int64, error) {
 	return s.groups.ListGroupsOfUser(userID)

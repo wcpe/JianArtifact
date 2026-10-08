@@ -969,7 +969,9 @@ function AclPanel({ repoName }: { repoName: string }) {
                     <Table.Tr key={entry.subjectId}>
                       <Table.Td>
                         {/* 展示用户名；若用户列表中查不到（如已删除）则回退显示 id */}
-                        {nameById.get(entry.subjectId) ?? `#${entry.subjectId}`}
+                        {/* FR-36：subjectId 在契约里已变为可选（组主体条目不带用户 ID），
+                            此处仍按用户主体渲染，缺省回退 0（列表里查不到即显示 #0）。 */}
+                        {nameById.get(entry.subjectId ?? 0) ?? `#${entry.subjectId ?? 0}`}
                       </Table.Td>
                       <Table.Td>
                         <Select

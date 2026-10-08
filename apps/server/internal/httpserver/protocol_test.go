@@ -253,7 +253,7 @@ func TestProtocolCredentialsRequireTLSOutsideLoopback(t *testing.T) {
 		t.Fatalf("创建发布账号状态码=%d", code)
 	}
 	if code := e.jsonReq(t, http.MethodPut, "/api/v1/repositories/raw-tls-policy/acl", adminToken,
-		api.PutAclRequest{Items: []api.AclEntry{{SubjectId: user.Id, Action: api.AclEntryActionWrite}}}, nil); code != http.StatusOK {
+		api.PutAclRequest{Items: []api.AclEntry{{SubjectId: &user.Id, Action: api.AclEntryActionWrite}}}, nil); code != http.StatusOK {
 		t.Fatalf("授予发布 ACL 状态码=%d", code)
 	}
 	policyPath := "/api/v1/users/" + strconv.FormatInt(user.Id, 10) + "/publish-policies/raw-tls-policy"
@@ -306,7 +306,7 @@ func TestMavenPublishPolicyAndIdentityAudit(t *testing.T) {
 		t.Fatalf("创建发布账号状态码=%d", code)
 	}
 	if code := e.jsonReq(t, http.MethodPut, "/api/v1/repositories/maven-policy-audit/acl", adminToken,
-		api.PutAclRequest{Items: []api.AclEntry{{SubjectId: user.Id, Action: api.AclEntryActionWrite}}}, nil); code != http.StatusOK {
+		api.PutAclRequest{Items: []api.AclEntry{{SubjectId: &user.Id, Action: api.AclEntryActionWrite}}}, nil); code != http.StatusOK {
 		t.Fatalf("授予 Maven 发布 ACL 状态码=%d", code)
 	}
 	policyPath := "/api/v1/users/" + strconv.FormatInt(user.Id, 10) + "/publish-policies/maven-policy-audit"
@@ -350,7 +350,7 @@ func TestProtocolDisconnectReleasesPublishReservation(t *testing.T) {
 		t.Fatalf("创建发布账号状态码=%d", code)
 	}
 	if code := e.jsonReq(t, http.MethodPut, "/api/v1/repositories/raw-disconnect-quota/acl", adminToken,
-		api.PutAclRequest{Items: []api.AclEntry{{SubjectId: user.Id, Action: api.AclEntryActionWrite}}}, nil); code != http.StatusOK {
+		api.PutAclRequest{Items: []api.AclEntry{{SubjectId: &user.Id, Action: api.AclEntryActionWrite}}}, nil); code != http.StatusOK {
 		t.Fatalf("授予发布 ACL 状态码=%d", code)
 	}
 	policyPath := "/api/v1/users/" + strconv.FormatInt(user.Id, 10) + "/publish-policies/raw-disconnect-quota"
@@ -392,7 +392,7 @@ func TestRawPublishRejectionsRecordAuditableActor(t *testing.T) {
 		t.Fatalf("创建发布账号状态码 = %d，期望 201", code)
 	}
 	if code := e.jsonReq(t, http.MethodPut, "/api/v1/repositories/raw-policy-audit/acl", adminToken,
-		api.PutAclRequest{Items: []api.AclEntry{{SubjectId: user.Id, Action: api.AclEntryActionWrite}}}, nil); code != http.StatusOK {
+		api.PutAclRequest{Items: []api.AclEntry{{SubjectId: &user.Id, Action: api.AclEntryActionWrite}}}, nil); code != http.StatusOK {
 		t.Fatalf("授予 write ACL 状态码 = %d，期望 200", code)
 	}
 	policy := map[string]any{
@@ -752,7 +752,7 @@ func TestRawDeleteRequiresGlobalAdmin(t *testing.T) {
 		t.Fatalf("创建 write 用户协议 Token 状态码 = %d，期望 201", code)
 	}
 	if code := e.jsonReq(t, http.MethodPut, "/api/v1/repositories/raw-delete/acl", adminToken,
-		api.PutAclRequest{Items: []api.AclEntry{{SubjectId: writer.Id, Action: api.AclEntryActionWrite}}}, nil); code != http.StatusOK {
+		api.PutAclRequest{Items: []api.AclEntry{{SubjectId: &writer.Id, Action: api.AclEntryActionWrite}}}, nil); code != http.StatusOK {
 		t.Fatalf("授予 write ACL 状态码 = %d，期望 200", code)
 	}
 
