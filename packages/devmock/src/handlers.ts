@@ -271,6 +271,15 @@ export function mockConnectionStatus(): ConnectionStatus {
   };
 }
 
+/** FR-43：半开态连接状态的契约响应（阻止窗口已到、正在试探上游，业务流量仍等效封锁）。 */
+export function mockHalfOpenConnectionStatus(): ConnectionStatus {
+  return {
+    status: "HALF_OPEN",
+    blockedUntil: "2026-01-05T00:00:00Z",
+    description: "上游不可用，正在试探上游",
+  };
+}
+
 /** 仓库 ACL 的契约响应。 */
 export function mockAclList(): AclList {
   return { items: [{ subjectId: 1, action: "read" }] };

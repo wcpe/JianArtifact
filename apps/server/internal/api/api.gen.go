@@ -468,6 +468,7 @@ func (e BackupUploadStatus) Valid() bool {
 const (
 	AUTOBLOCKED ConnectionStatusStatus = "AUTO_BLOCKED"
 	AVAILABLE   ConnectionStatusStatus = "AVAILABLE"
+	HALFOPEN    ConnectionStatusStatus = "HALF_OPEN"
 	OFFLINE     ConnectionStatusStatus = "OFFLINE"
 	READY       ConnectionStatusStatus = "READY"
 	UNAVAILABLE ConnectionStatusStatus = "UNAVAILABLE"
@@ -479,6 +480,8 @@ func (e ConnectionStatusStatus) Valid() bool {
 	case AUTOBLOCKED:
 		return true
 	case AVAILABLE:
+		return true
+	case HALFOPEN:
 		return true
 	case OFFLINE:
 		return true
@@ -2101,17 +2104,23 @@ type CompleteBackupUploadRequest struct {
 
 // ConnectionStatus defines model for ConnectionStatus.
 type ConnectionStatus struct {
-	// BlockedUntil 自动阻止窗口截止时间（非阻止状态为 null）
+	// BlockedUntil 自动阻止窗口截止时间（仅 AUTO_BLOCKED 与 HALF_OPEN 这两个阻止态有值，其余状态为 null）
 	BlockedUntil *time.Time `json:"blockedUntil,omitempty"`
 
 	// Description 状态说明（供展示）
 	Description *string `json:"description,omitempty"`
 
-	// Status 上游连接状态（READY=尚未探测，AVAILABLE=可用，AUTO_BLOCKED=自动阻止，UNAVAILABLE=不可用，OFFLINE=手动离线）
+	// Status 上游连接状态（READY=尚未探测，AVAILABLE=可用，AUTO_BLOCKED=自动阻止，HALF_OPEN=阻止窗口已到期、正在试探上游，UNAVAILABLE=不可用，OFFLINE=手动离线）。
+	// HALF_OPEN 表示自动阻止窗口已到期、后台正在试探上游：业务流量仍**等效封锁**（每轮半开只放行一个探测请求，其余请求快速失败），
+	// 试探成功即回到 AVAILABLE 并重置退避，失败则回到 AUTO_BLOCKED 并推进一档窗口。
+	// 展示上不要把它当作「已恢复」——它与 AUTO_BLOCKED 一样属于阻止态。
 	Status ConnectionStatusStatus `json:"status"`
 }
 
-// ConnectionStatusStatus 上游连接状态（READY=尚未探测，AVAILABLE=可用，AUTO_BLOCKED=自动阻止，UNAVAILABLE=不可用，OFFLINE=手动离线）
+// ConnectionStatusStatus 上游连接状态（READY=尚未探测，AVAILABLE=可用，AUTO_BLOCKED=自动阻止，HALF_OPEN=阻止窗口已到期、正在试探上游，UNAVAILABLE=不可用，OFFLINE=手动离线）。
+// HALF_OPEN 表示自动阻止窗口已到期、后台正在试探上游：业务流量仍**等效封锁**（每轮半开只放行一个探测请求，其余请求快速失败），
+// 试探成功即回到 AVAILABLE 并重置退避，失败则回到 AUTO_BLOCKED 并推进一档窗口。
+// 展示上不要把它当作「已恢复」——它与 AUTO_BLOCKED 一样属于阻止态。
 type ConnectionStatusStatus string
 
 // CreateBackupImportRequest defines model for CreateBackupImportRequest.

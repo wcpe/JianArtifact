@@ -11,6 +11,7 @@ import {
   mockBatchDeleteAssets,
   mockConnectionStatus,
   mockCreateUserGroupRequest,
+  mockHalfOpenConnectionStatus,
   mockHealthz,
   mockLoginResponse,
   mockMaintenanceJobList,
@@ -140,6 +141,7 @@ describe("devmock ↔ OpenAPI 契约一致性", () => {
 
   it("连接状态响应满足契约并接受真实枚举", () => {
     expectValid("ConnectionStatus", mockConnectionStatus());
+    expectValid("ConnectionStatus", mockHalfOpenConnectionStatus());
     expectValid("ConnectionStatus", { status: "AVAILABLE", description: "上游可用" });
     expectValid("ConnectionStatus", { status: "OFFLINE", description: "已手动离线" });
     const validate = ajv.compile(schemaFor("ConnectionStatus"));
@@ -147,6 +149,34 @@ describe("devmock ↔ OpenAPI 契约一致性", () => {
     expect(validate({ status: "UNKNOWN_STATE" })).toBe(false);
     // 缺 required 的 status 应被契约拒绝。
     expect(validate({ description: "缺少状态" })).toBe(false);
+  });
+
+  it("契约枚举含 HALF_OPEN（FR-43），缺它或漂移都能被检出", () => {
+    // 正向：阻止态的六个取值全部合法，HALF_OPEN 不被当作未知状态拒绝。
+    for (const status of [
+      "READY",
+      "AVAILABLE",
+      "UNAVAILABLE",
+      "AUTO_BLOCKED",
+      "HALF_OPEN",
+      "OFFLINE",
+    ]) {
+      expectValid("ConnectionStatus", { status });
+    }
+
+    // 反向：契约里的 HALF_OPEN 若被删回旧枚举，上面的正向断言与这里都会失败——
+    // 直接读枚举确认两侧产物同源，避免「mock 恰好没用到该取值」掩盖漂移。
+    const schema = schemaFor("ConnectionStatus") as {
+      properties?: { status?: { enum?: string[] } };
+    };
+    expect(schema.properties?.status?.enum).toContain("HALF_OPEN");
+
+    // 枚举区分大小写与写法：半开的近似写法不得被静默放行
+    // （`half_open` 是内部 domain 常量的风格，`HalfOpen` 是 Go 类型风格，都不是契约取值）。
+    const validate = ajv.compile(schemaFor("ConnectionStatus"));
+    for (const near of ["half_open", "HalfOpen", "HALFOPEN", "半开"]) {
+      expect(validate({ status: near })).toBe(false);
+    }
   });
 
   it("制品浏览 / 使用片段响应满足契约", () => {

@@ -633,7 +633,9 @@ func (h *Handlers) currentOperationsAlerts(now time.Time) []OperationsAlert {
 					continue
 				}
 				health := h.assets.Status(repo.ID)
-				if health.Status != domain.StatusAutoBlocked {
+				// FR-43：HALF_OPEN（窗口已到、正在试探）对业务流量同样处于阻止效果，
+				// 告警不应在半开期被判定为「已恢复」而闪断，故与 AUTO_BLOCKED 同等对待。
+				if health.Status != domain.StatusAutoBlocked && health.Status != domain.StatusHalfOpen {
 					continue
 				}
 				alert := OperationsAlert{Code: "upstream_auto_blocked", Severity: OperationsAlertSeverity("warning"), Source: "repository:" + repo.Name, ObservedAt: now}
