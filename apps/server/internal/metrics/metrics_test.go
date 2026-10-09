@@ -242,3 +242,103 @@ func TestPublishRejectionConcurrentWithRender(t *testing.T) {
 		t.Fatalf("并发累加计数不正确：\n%s", render(t, exp))
 	}
 }
+
+// TestUpstreamBlockEventsRenderClosedSet 上游断路器阻止事件（FR-43）：reason 是闭集枚举，
+// 闭集外的取值不产生样本；该族即使暂无样本也输出 HELP / TYPE。
+func TestUpstreamBlockEventsRenderClosedSet(t *testing.T) {
+	reg, exp := newTestExposition(nil)
+
+	// 首抓（尚无样本）仍输出 HELP / TYPE，样本行只反映真实数据。
+	out := render(t, exp)
+	for _, want := range []string{
+		"# HELP jianartifact_upstream_block_events_total",
+		"# TYPE jianartifact_upstream_block_events_total counter",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("输出缺少 %q：\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "jianartifact_upstream_block_events_total{") {
+		t.Fatalf("尚未发生阻止事件时不应输出样本：\n%s", out)
+	}
+
+	reg.UpstreamBlockEvent("probe_failed")
+	reg.UpstreamBlockEvent("probe_failed")
+	reg.UpstreamBlockEvent("upstream_error")
+	// 闭集外的取值必须被忽略：标签基数受控，不得把仓库名等无界值带进标签。
+	reg.UpstreamBlockEvent("bogus")
+	reg.UpstreamBlockEvent("")
+	reg.UpstreamBlockEvent("some-repo-name")
+	out = render(t, exp)
+	for _, want := range []string{
+		`jianartifact_upstream_block_events_total{reason="probe_failed"} 2`,
+		`jianartifact_upstream_block_events_total{reason="upstream_error"} 1`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("输出缺少 %q：\n%s", want, out)
+		}
+	}
+	for _, unwanted := range []string{"bogus", `reason=""`, "some-repo-name", `reason="other"`} {
+		if strings.Contains(out, unwanted) {
+			t.Fatalf("闭集外取值不得进入样本（%q）：\n%s", unwanted, out)
+		}
+	}
+	if n := strings.Count(out, "jianartifact_upstream_block_events_total{"); n != 2 {
+		t.Fatalf("闭集只允许 2 个 reason 取值，实际 %d 行：\n%s", n, out)
+	}
+}
+
+// TestUpstreamBlockedRepositoriesGaugeRequiresWiring 未注入取数回调时该族整族不输出：
+// 无值可报，不虚构 0（与 scheduler 目标族同构）。
+func TestUpstreamBlockedRepositoriesGaugeRequiresWiring(t *testing.T) {
+	_, exp := newTestExposition(nil)
+	if out := render(t, exp); strings.Contains(out, "jianartifact_upstream_blocked_repositories") {
+		t.Fatalf("未注入取数回调时不应输出该族：\n%s", out)
+	}
+}
+
+// TestUpstreamBlockedRepositoriesGaugeReflectsCallback 注入后每次抓取实时取数（不缓存），
+// 无标签且值为当前阻止态仓库数。
+func TestUpstreamBlockedRepositoriesGaugeReflectsCallback(t *testing.T) {
+	_, exp := newTestExposition(nil)
+	blocked := 2
+	exp.SetBlockedRepositories(func() int { return blocked })
+	out := render(t, exp)
+	for _, want := range []string{
+		"# HELP jianartifact_upstream_blocked_repositories",
+		"# TYPE jianartifact_upstream_blocked_repositories gauge",
+		"jianartifact_upstream_blocked_repositories 2",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("输出缺少 %q：\n%s", want, out)
+		}
+	}
+	// 无标签：仓库名/路径不得作为标签。
+	if strings.Contains(out, "jianartifact_upstream_blocked_repositories{") {
+		t.Fatalf("该仪表不得携带标签：\n%s", out)
+	}
+	// 每次抓取实时取数：状态变化后下一次抓取立即反映。
+	blocked = 0
+	if out = render(t, exp); !strings.Contains(out, "jianartifact_upstream_blocked_repositories 0") {
+		t.Fatalf("抓取应实时取数（期望 0）：\n%s", out)
+	}
+}
+
+// TestUpstreamBlockMetricsConcurrentWithRender 阻止事件计数与渲染并发无数据竞争（-race 下验证）。
+func TestUpstreamBlockMetricsConcurrentWithRender(t *testing.T) {
+	reg, exp := newTestExposition(nil)
+	exp.SetBlockedRepositories(func() int { return 3 })
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			reg.UpstreamBlockEvent("probe_failed")
+			_ = render(t, exp)
+		}()
+	}
+	wg.Wait()
+	if !strings.Contains(render(t, exp), `jianartifact_upstream_block_events_total{reason="probe_failed"} 8`) {
+		t.Fatalf("并发累加计数不正确：\n%s", render(t, exp))
+	}
+}

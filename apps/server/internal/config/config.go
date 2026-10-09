@@ -54,6 +54,9 @@ const (
 	EnvStorageMetadataRetention = "JIAN_STORAGE_METADATA_RETENTION_DAYS" // 终态操作与隔离元数据保留天数；0 禁用
 	EnvStorageTempMaxAge        = "JIAN_STORAGE_TEMP_MAX_AGE_HOURS"      // 过期上传临时文件阈值，单位小时；0 禁用
 
+	// FR-43 上游断路器补强：auto-block 退避起始时长，单位秒。
+	EnvAutoBlockBaseSeconds = "JIAN_AUTO_BLOCK_BASE_SECONDS" // proxy 上游首次失败的阻止窗口时长；非正数回落默认
+
 	defaultDataDir         = "./data"
 	defaultHTTPAddr        = ":8080"
 	defaultUpstreamTimeout = 30 * time.Second
@@ -64,6 +67,10 @@ const (
 	defaultStorageCleanupInterval   = 24 * time.Hour
 	defaultStorageMetadataRetention = 7 * 24 * time.Hour
 	defaultStorageTempMaxAge        = 24 * time.Hour
+	// defaultAutoBlockBase 是 auto-block 退避起始时长（FR-43）。
+	// 与 domain 侧兜底常量 autoBlockInitial（proxy_health.go）保持同值：
+	// 装配层始终注入本值，domain 常量只在未装配/测试构造时兜底。
+	defaultAutoBlockBase = 40 * time.Second
 	// defaultOIDCUsernameClaim 是 OIDC 用户名的缺省 claim；各 IdP 常见取值见 OPERATIONS。
 	defaultOIDCUsernameClaim = "preferred_username"
 	// defaultLDAPUserFilter 与 defaultLDAPEmailAttr 是 LDAP 检索的缺省口径（OpenLDAP 风格 uid）。
@@ -86,6 +93,9 @@ type Config struct {
 	JWTSecret              []byte        // JWT HS256 签名密钥（不入库、不打印）
 	MigrationCredentialKey []byte        // 在线迁移凭据 AES-256-GCM 专用密钥（不入库、不打印）
 	UpstreamTimeout        time.Duration // proxy 回源整体超时
+	// AutoBlockBaseSeconds 是 proxy 上游 auto-block 退避起始时长（FR-43）：
+	// 首次失败的阻止窗口，之后每档翻倍。非正数（含非法值）已在解析期回落默认值。
+	AutoBlockBaseSeconds   time.Duration
 	SyncPeerURL            string        // 遗留复制对端基址；仅为兼容旧配置保留，不驱动主备调度
 	SyncInterval           time.Duration // 复制轮询间隔（FR-85）
 	PublicURL              string        // 对外基础 URL（FR-87，如 https://repo.example.com）；空则回退请求 Host 推断
@@ -179,6 +189,7 @@ func Load() (*Config, error) {
 		JWTSecret:                secret,
 		MigrationCredentialKey:   migrationCredentialKey,
 		UpstreamTimeout:          upstreamTimeout(),
+		AutoBlockBaseSeconds:     autoBlockBase(),
 		SyncPeerURL:              os.Getenv(EnvSyncPeerURL),
 		SyncInterval:             syncInterval(),
 		PublicURL:                os.Getenv(EnvPublicURL),
@@ -283,6 +294,14 @@ func storageTempMaxAge() time.Duration {
 	return envDurationOr(EnvStorageTempMaxAge, defaultStorageTempMaxAge, time.Hour)
 }
 
+// autoBlockBase 解析 JIAN_AUTO_BLOCK_BASE_SECONDS（秒，FR-43）：proxy 上游首次失败的
+// 阻止窗口时长，之后每档翻倍。缺省、非数字、负数与显式 0 都回落默认 40s——
+// 退避起始为 0 等于「失败不阻止」，不是有意义的配置，故本项**无禁用语义**
+// （口径同 upstreamTimeout，而非 storageCleanupInterval 的 0 禁用）。
+func autoBlockBase() time.Duration {
+	return envPositiveDurationOr(EnvAutoBlockBaseSeconds, defaultAutoBlockBase, time.Second)
+}
+
 // envDurationOr 按给定单位解析环境变量为时长：缺省、非法与负数取 fallback，显式 0 原样返回（禁用语义）。
 func envDurationOr(key string, fallback, unit time.Duration) time.Duration {
 	v := strings.TrimSpace(os.Getenv(key))
@@ -291,6 +310,21 @@ func envDurationOr(key string, fallback, unit time.Duration) time.Duration {
 	}
 	n, err := strconv.Atoi(v)
 	if err != nil || n < 0 {
+		return fallback
+	}
+	return time.Duration(n) * unit
+}
+
+// envPositiveDurationOr 按给定单位解析环境变量为时长：缺省、非法、负数与显式 0 都取 fallback。
+// 与 envDurationOr 的区别是**没有禁用语义**——用于「取 0 无意义」的时长配置
+// （如 auto-block 退避起始：0 窗口等于不阻止），对齐 upstreamTimeout 的正数口径。
+func envPositiveDurationOr(key string, fallback, unit time.Duration) time.Duration {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
 		return fallback
 	}
 	return time.Duration(n) * unit

@@ -100,6 +100,9 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	// FR-36：授权判定据此展开主体的组归属；不注入则退化成「仅按用户自身 ACL」。
 	repoSvc.SetUserGroupRepo(userGroupRepo)
 	assetSvc := domain.NewAssetService(repoRepo, assetRepo, blobs, upstreamClient)
+	// FR-43：auto-block 退避起始时长来自 JIAN_AUTO_BLOCK_BASE_SECONDS（缺省/非法回落 40s）；
+	// 未注入时 domain 侧以 autoBlockInitial 常量兜底（两者必须同值）。
+	assetSvc.SetAutoBlockBase(cfg.AutoBlockBaseSeconds)
 	repoSvc.SetMutationCoordinator(assetSvc.MutationCoordinator())
 	// FR-135：全局共享的冻结控制器。复制退役后不再有角色派生的静态只读栅栏，
 	// 底座传 nil；冻结窗口（搬迁切换用）由该实例统一承载。
@@ -235,6 +238,11 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	// FR-39：指标登记与 /metrics 渲染器；协议请求计数由 HTTP 层钩子（run）累加。
 	metricsReg := metrics.New()
 	metricsExp := metrics.NewExposition(metricsReg, schedulerJobStatuses(schedulerSvc))
+	// FR-43：上游断路器指标。阻止事件计数按闭集 reason 分区（probe_failed / upstream_error，
+	// 由 domain 定义、装配层注入）；阻止态仓库数在每次抓取时实时取数（只读内存态，
+	// 不查库、不访问网络，符合 /metrics 的抓取路径约定）。
+	assetSvc.SetUpstreamBlockRecorder(metricsReg)
+	metricsExp.SetBlockedRepositories(assetSvc.BlockedUpstreamCount)
 	// FR-41：仓库级存储配额判定。预检（已知长度/流式）走 Admission，提交点权威复检走 CheckCommit；
 	// 拒绝原因以闭集枚举累加进 jianartifact_publish_rejections_total{reason="quota"}。
 	quotaSvc := domain.NewRepoQuotaService(repoRepo, assetRepo)
