@@ -8,6 +8,16 @@
 
 > 本段登记**尚未开窗**的变更：`VERSION` 仍为 `0.11.0`，版本号待下一个开发窗口开启时统一确定，故此处不写具体版本。
 
+### 新增
+
+- **用户组与更细粒度权限动作（FR-36）**：① **用户组**作为新的授权主体：新增 `user_group`（组名全局唯一、可选说明）与 `user_group_member`（复合主键 `(group_id, user_id)`，两侧外键均 `ON DELETE CASCADE`），一个用户可属多个组；组本身不产生权限，真正生效的是把组写进仓库 ACL，等价于给组内每个成员各写一条授权，且成员变动不必重改 ACL。② **动作集由三档扩为六档** `read` / `write` / `publish` / `delete` / `acl_manage` / `admin`，蕴含关系定义为「判定动作 → 能使之通过的已授权动作集合」：`read` ← `read`/`write`/`admin`、`publish` ← `publish`/`write`/`admin`、`write` ← `write`/`admin`、`delete` ← `delete`/`admin`、`acl_manage` ← `acl_manage`/`admin`、`admin` ← `admin`；**`write` 蕴含 `read` 与 `publish`，但不蕴含 `delete`**（`delete` 需单独授予，与「发 / 删分离」的取舍一致，见规格 §6），`publish` / `delete` / `acl_manage` 只蕴含自身、彼此互不满足且**都不蕴含 `read`**（只发发布权的人不应因此读全仓，管 ACL 不等于能读内容）。**未登记的动作一律按「只由自身满足」判定**，不会被宽泛授权放行。③ **判定主体**改为 `repository.Subject{UserID, GroupIDs}`：一次判定同时看「用户自身 ACL」与「所属任一组的 ACL」并取并集，组归属由 `RepositoryService.SubjectFor` 单点展开（避免某端点漏展开即成提权漏洞）；成员关系变化**即时生效**（无缓存、无快照）；**匿名主体不属于任何组**，沿用既有匿名与 public read 语义；全局管理员（role=admin）行为不变。④ **协议层统一**：各格式（Raw/Maven/npm/NuGet/OCI/Cargo/PyPI）的上传统一判定 `publish`，删除判定 `delete`；cargo yank 作为**索引状态变更**仍走 `write`（它既不上传新制品也不移除制品本体）。向后兼容由 `write ⊇ publish` 保证——存量 `write` 授权照旧可发布。删除权则由「仅全局管理员」放开为可授予的仓库级 `delete` 动作（见下方「变更」段）。⑤ **八个组管理端点**（均仅管理员，见 `docs/API.md`）：`GET/POST /api/v1/user-groups`、`GET/PATCH/DELETE /api/v1/user-groups/{id}`、`GET/POST /api/v1/user-groups/{id}/members`、`DELETE /api/v1/user-groups/{id}/members/{userId}`；建组重名 409，成员重复加入幂等，删组连带清理成员关系与该组的全部 ACL 条目（不留指向已消失组的悬空授权）。⑥ **审计**：新增动作 `group.create` / `group.update` / `group.delete` / `group.member.add` / `group.member.remove`，`entityType` 为 `user_group`。⑦ **范围外（本期不做）**：目录组 → 角色 / ACL 映射（LDAP / OIDC / SCIM）、组嵌套、路径级授权、以及**管理面的细粒度授权**——管理端点仍沿用既有 `IsAdmin()` 粗粒度守卫，`acl_manage` 未接到管理端点。规格见 [`docs/specs/0.12.0-user-groups-and-fine-grained-actions.md`](docs/specs/0.12.0-user-groups-and-fine-grained-actions.md)
+
+### 变更
+
+- **仓库删除权从「仅全局管理员」放开为可授予的仓库级动作**：此前协议层删除（Raw `DELETE`、批量制品删除）由 `IsAdmin()` 硬守卫，普通账号要能删某仓就必须被加为全局管理员（等于把实例级权限当仓库级权限发）。现在删除统一判定 `delete` 动作，可由管理员以**用户或组主体**按仓库授予；全局管理员分支原样保留。**`write` 不蕴含 `delete`**——因为此前 `write` 事实上从未蕴含删除（旧 `HasPermission` 只认三档、其余动作一律映射到 `admin`），故本次不会让任何既有账号失去删除能力；`delete` 的净变化是**放开**而非收紧。需要仓库级删除能力的账号请显式补授 `delete`（或继续依赖全局管理员），不要以为升级会自动获得。
+
+- **`acl` 表重建与数据语义变化（升级注意事项）**：迁移 `0046_user_groups.sql` 按仓库既有范式（建新表 → 复制 → 删旧 → 改名 → 重建索引）重建 `acl`，新增 `subject_type`（`user`/`group`，恰有其一）与 `subject_group_id`，`action` 的 CHECK 放宽到六值；唯一性由原 `UNIQUE(repository_id, subject_id, action)` 改为**两条 partial unique index**（`idx_acl_user_grant` / `idx_acl_group_grant`），因为 SQLite 唯一索引把 NULL 视作互不相同、引入可空列后原约束会失效。既有行全部按**用户主体**原样复制（`subject_type='user'`），`(repository_id, subject_id, action)` 三元组与 `id` 逐条不变，故既有三档授权升级后行为一致。**这是一次性全表复制，不提供 down migration**：升级前请备份数据库，降级（回退版本）时旧版本代码不认识新列，必须从备份恢复，不能只回滚代码。详见 `docs/OPERATIONS.md` §5.1
+
 ### 修复
 
 - **升级 Go 工具链与 x/net 以清除标准库安全漏洞**：Go `1.26.6` 与 `golang.org/x/net` `v0.59.0` 被 2026-10-09 新披露的 12 个漏洞覆盖（含 `net/http`、`net/textproto`、`crypto/tls`、`html/template` 及 x/net 自身），`govulncheck` 因此由绿转红、质量门随之失败，与业务改动无关。`toolchain` 升至 `go1.26.9`、`x/net` 升至 `v0.60.0` 后 `govulncheck` 恢复「No vulnerabilities found」（仍余 1 条模块级漏洞，代码未调用、不阻断）。`release.yml` 的 Go 版本同步更新；**CI 的 Go 质量工具缓存 key 补上 Go 版本**——该缓存此前只钉工具版本，升级工具链后会命中旧工具链编译的 `govulncheck` 二进制，导致它继续按旧版本报告标准库漏洞（实测踩到），故必须把 Go 版本纳入 key。

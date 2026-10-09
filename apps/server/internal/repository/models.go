@@ -103,9 +103,89 @@ func EncodeRepositoryConfig(c RepositoryConfig) (string, error) {
 }
 
 // Acl 是 acl 表中一条授权（主体 × 动作）。
+//
+// 主体分两类（FR-36，迁移 0046）：用户主体用 SubjectID 标记、SubjectGroupID 恒为 0；
+// 用户组主体用 SubjectGroupID 标记、SubjectID 恒为 0。两列互斥由表内 CHECK 强制，
+// 因此写入前必须把「不用的那一列」显式写 NULL。
 type Acl struct {
-	SubjectID int64  `db:"subject_id"`
-	Action    string `db:"action"`
+	SubjectID      int64  `db:"subject_id"`
+	SubjectType    string `db:"subject_type"`
+	SubjectGroupID int64  `db:"subject_group_id"`
+	Action         string `db:"action"`
+}
+
+// acl 主体类型取值（对应 acl.subject_type 的 CHECK）。
+const (
+	SubjectTypeUser  = "user"
+	SubjectTypeGroup = "group"
+)
+
+// acl 动作取值（FR-36 六档，对应 acl.action 的 CHECK）。
+// 三档 read / write / admin 是既有语义，publish / delete / acl_manage 为本次细化新增。
+const (
+	ActionRead      = "read"
+	ActionWrite     = "write"
+	ActionPublish   = "publish"
+	ActionDelete    = "delete"
+	ActionAclManage = "acl_manage"
+	ActionAdmin     = "admin"
+)
+
+// Subject 是授权判定的主体：用户自身（UserID）及其所属用户组 ID 集合（GroupIDs）。
+//
+// 之所以要成「集合」而非单个 ID：一次判定必须同时看「用户自己的 ACL」与
+// 「该用户所属任一组的 ACL」，把组 ID 集合一次性下推给 SQL，可以让这次判定
+// 仍是**一条** COUNT 查询（否则每个组一次往返，鉴权热路径会退化成 N+1）。
+//
+// UserID == 0 表示匿名（或尚未映射到具体用户的主体）；匿名不属于任何组，
+// 故 GroupIDs 被忽略。
+type Subject struct {
+	UserID   int64
+	GroupIDs []int64
+}
+
+// UserSubject 构造「仅用户自身」的主体（无组归属）。
+func UserSubject(userID int64) Subject { return Subject{UserID: userID} }
+
+// AnonymousSubject 返回匿名主体：无用户 ID、无组归属，不在任何 ACL 条目上命中。
+func AnonymousSubject() Subject { return Subject{} }
+
+// IsAnonymous 判断是否为匿名主体（无用户 ID）。
+func (s Subject) IsAnonymous() bool { return s.UserID == 0 }
+
+// groupIDs 返回规范化后的组 ID 列表：去掉非正数与重复项，保持稳定顺序。
+// 空列表表示主体不属任何组，调用方据此省略 SQL 中的组分支，避免构造出非法的 IN ()。
+func (s Subject) groupIDs() []int64 {
+	if len(s.GroupIDs) == 0 {
+		return nil
+	}
+	out := make([]int64, 0, len(s.GroupIDs))
+	seen := make(map[int64]bool, len(s.GroupIDs))
+	for _, id := range s.GroupIDs {
+		if id <= 0 || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
+}
+
+// UserGroup 是 user_group 表的行模型（FR-36）：授权主体之一是「用户组」。
+// 组名全局唯一；ACL 里引用的是 id，故组改名不影响既有授权。
+type UserGroup struct {
+	ID          int64  `db:"id"`
+	Name        string `db:"name"`
+	Description string `db:"description"`
+	CreatedAt   string `db:"created_at"`
+}
+
+// UserGroupMember 是 user_group_member 表的行模型：组 × 用户的多对多关联。
+// 两侧外键均 ON DELETE CASCADE——删组清成员、删用户清归属。
+type UserGroupMember struct {
+	GroupID   int64  `db:"group_id"`
+	UserID    int64  `db:"user_id"`
+	CreatedAt string `db:"created_at"`
 }
 
 // Asset 是 asset 表的行模型：仓库内某路径的制品，指向内容寻址 blob。

@@ -23,8 +23,8 @@ func TestMigrateCreatesSchema(t *testing.T) {
 	if err := db.Migrate(); err != nil {
 		t.Fatalf("Migrate：%v", err)
 	}
-	// 关键表应存在且可查询。
-	tables := []string{"user", "api_token", "revoked_token", "repository", "acl", "asset", "migration_task", "setting", "repl_change", "repl_entity_version", "replication_apply_log", "replication_operation_outbox", "replication_relay_record", "replication_relay_blob", "replication_relay_frontier", "replication_operation_receipt", "backup_package", "backup_import", "backup_upload", "backup_upload_chunk"}
+	// 关键表应存在且可查询。user_group / user_group_member 为 FR-36 引入（迁移 0046）。
+	tables := []string{"user", "api_token", "revoked_token", "repository", "acl", "asset", "user_group", "user_group_member", "migration_task", "setting", "repl_change", "repl_entity_version", "replication_apply_log", "replication_operation_outbox", "replication_relay_record", "replication_relay_blob", "replication_relay_frontier", "replication_operation_receipt", "backup_package", "backup_import", "backup_upload", "backup_upload_chunk"}
 	for _, tbl := range tables {
 		var count int
 		if err := db.Get(&count, "SELECT COUNT(*) FROM "+tbl); err != nil {

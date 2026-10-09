@@ -46,7 +46,7 @@ func TestNpmPublishPolicyAuditRecordsSuccessAndRejection(t *testing.T) {
 		t.Fatalf("创建发布账号状态码=%d", code)
 	}
 	if code := e.jsonReq(t, http.MethodPut, "/api/v1/repositories/npm-policy-audit/acl", admin,
-		api.PutAclRequest{Items: []api.AclEntry{{SubjectId: user.Id, Action: api.AclEntryActionWrite}}}, nil); code != http.StatusOK {
+		api.PutAclRequest{Items: []api.AclEntry{{SubjectId: &user.Id, Action: api.AclEntryActionWrite}}}, nil); code != http.StatusOK {
 		t.Fatalf("授予 write ACL 状态码=%d", code)
 	}
 	if code := e.jsonReq(t, http.MethodPut, "/api/v1/users/"+strconv.FormatInt(user.Id, 10)+"/publish-policies/npm-policy-audit", admin,

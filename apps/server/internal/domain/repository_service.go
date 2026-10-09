@@ -27,6 +27,7 @@ type RepositoryService struct {
 	metadata  *repository.FormatMetadataRepo
 	settings  *SettingService
 	users     *repository.UserRepo
+	groups    *repository.UserGroupRepo // FR-36：展开主体的组归属（nil 退化为「仅用户自身」）
 	mutator   *AssetMutationCoordinator
 	recorder  ChangeRecorder
 	writeGate BusinessWriteGate
@@ -50,6 +51,10 @@ func (s *RepositoryService) SetChangeRecorder(r ChangeRecorder) { s.recorder = r
 
 // SetBusinessWriteGate 注入备用节点本地业务写栅栏；nil 保持兼容行为。
 func (s *RepositoryService) SetBusinessWriteGate(gate BusinessWriteGate) { s.writeGate = gate }
+
+// SetUserGroupRepo 注入用户组仓储（FR-36）：授权判定时据此展开主体的组归属。
+// 未注入（nil）时 CanAccess 只看用户自身 ACL，等价于接入用户组之前的行为。
+func (s *RepositoryService) SetUserGroupRepo(groups *repository.UserGroupRepo) { s.groups = groups }
 
 // SetMutationCoordinator 注入节点级资产生命周期协调器，供仓库删除和 Maven 清理复用。
 func (s *RepositoryService) SetMutationCoordinator(c *AssetMutationCoordinator) { s.mutator = c }
@@ -719,7 +724,28 @@ func (s *RepositoryService) GetAcl(name string) ([]repository.Acl, error) {
 	return s.acls.ListByRepo(r.ID)
 }
 
+// aclActions 是 ACL 可登记的全部动作（FR-36 六档），与 acl.action 的 CHECK 一致。
+// 之所以要在领域层再校一遍而不是只依赖 SQLite CHECK：CHECK 违规表现为驱动层的
+// 裸 SQL 错误，且是在**整仓 ACL 已被 DELETE 之后**才在 INSERT 上炸出来，
+// 事务回滚后用户看到的是「内部错误」而不是「动作非法」。
+var aclActions = []string{
+	repository.ActionRead, repository.ActionWrite, repository.ActionPublish,
+	repository.ActionDelete, repository.ActionAclManage, repository.ActionAdmin,
+}
+
+// validateActions 校验待写入的动作是否全部合法（FR-36 六档）；非法返回 ErrValidation。
+func validateActions(entries []repository.Acl) error {
+	for _, e := range entries {
+		if !slices.Contains(aclActions, e.Action) {
+			return fmt.Errorf("%w：未知 ACL 动作 %q", ErrValidation, e.Action)
+		}
+	}
+	return nil
+}
+
 // SetAcl 覆盖写入仓库 ACL；仓库不存在返回 ErrNotFound。
+// 用户主体条目 SubjectID 有值，用户组主体条目 SubjectGroupID 有值，二者由
+// 表内 CHECK 强制互斥（FR-36）；非法动作返回 ErrValidation。
 func (s *RepositoryService) SetAcl(name string, entries []repository.Acl) ([]repository.Acl, error) {
 	if err := requireBusinessWrite(s.writeGate); err != nil {
 		return nil, err
@@ -727,6 +753,9 @@ func (s *RepositoryService) SetAcl(name string, entries []repository.Acl) ([]rep
 	r, err := s.repos.GetByName(name)
 	if err != nil {
 		return nil, mapNotFound(err)
+	}
+	if err := validateActions(entries); err != nil {
+		return nil, err
 	}
 	if err := s.acls.Replace(r.ID, entries); err != nil {
 		return nil, err
@@ -821,11 +850,14 @@ func (s *RepositoryService) CleanupEmptyMavenArtifacts(name string) (int, error)
 	return len(toDelete), nil
 }
 
-// CanAccess 判定主体对仓库是否可执行动作（read/write/admin）。
-// subjectID==0 表示匿名：受全局开关约束，开启时 public read 放行，
-// 否则按内置 anonymous 主体的 ACL 判定（FR-66）。
-// 已认证主体：public 仓库对 read 放行；其余按 ACL 判定。仓库不存在返回 ErrNotFound。
-func (s *RepositoryService) CanAccess(name string, subjectID int64, action string) (bool, error) {
+// CanAccess 判定主体对仓库是否可执行动作。
+//
+// subject 是**已展开组归属**的主体（见 SubjectFor）。UserID==0 即匿名（可用
+// repository.AnonymousSubject() 构造）：受全局开关约束，开启时 public read 放行，
+// 否则按内置 anonymous 主体的 ACL 判定（FR-66）。匿名不属于任何组，组集合恒为空。
+// 已认证主体：public 仓库对 read 放行；其余按 ACL 判定，命中「用户自身」或
+// 「其所属任一用户组」的 ACL 之一即放行（FR-36）。仓库不存在返回 ErrNotFound。
+func (s *RepositoryService) CanAccess(name string, subject repository.Subject, action string) (bool, error) {
 	r, err := s.repos.GetByName(name)
 	if errors.Is(err, repository.ErrNotFound) {
 		return false, ErrNotFound
@@ -833,25 +865,47 @@ func (s *RepositoryService) CanAccess(name string, subjectID int64, action strin
 	if err != nil {
 		return false, err
 	}
-	return s.CanAccessResolved(r, subjectID, action)
+	return s.CanAccessResolved(r, subject, action)
 }
 
 // CanAccessResolved 使用已解析仓库快照完成授权，避免协议分派后再次按名称查库。
-func (s *RepositoryService) CanAccessResolved(r *repository.Repository, subjectID int64, action string) (bool, error) {
+func (s *RepositoryService) CanAccessResolved(r *repository.Repository, subject repository.Subject, action string) (bool, error) {
 	if r == nil {
 		return false, ErrNotFound
 	}
-	if subjectID == 0 {
+	if subject.IsAnonymous() {
 		return s.canAccessAnonymous(r, action)
 	}
-	if action == "read" && r.Visibility == "public" {
+	if action == repository.ActionRead && r.Visibility == "public" {
 		return true, nil
 	}
-	return s.acls.HasPermission(r.ID, subjectID, action)
+	return s.acls.HasPermission(r.ID, subject, action)
+}
+
+// SubjectFor 把「用户 ID」组装为鉴权主体：补上该用户所属的用户组 ID 集合（FR-36）。
+//
+// 这是全系统构造组感知主体的**唯一入口**：授权判定需要组集合，但各调用点（管理面守卫、
+// 协议层 authorize、仓库列表/搜索过滤）拿到的都只是用户 ID，若让它们各自去查组，
+// 既重复又容易漏掉某个端点——漏掉的那个端点正好是提权漏洞。故由本方法集中展开，
+// 再由调用点把结果透传给 CanAccess / CanAccessResolved。
+//
+// 用户 ID 为 0（匿名）或组仓储未接线时直接返回无组归属的主体：前者本就不属任何组，
+// 后者退化为「仅按用户自身 ACL 判定」，即 FR-36 之前既有的行为。
+// 组查询失败返回 error：查不到组就放行会让组授权的拒绝侧开口子，宁可让请求失败。
+func (s *RepositoryService) SubjectFor(userID int64) (repository.Subject, error) {
+	if userID == 0 || s.groups == nil {
+		return repository.UserSubject(userID), nil
+	}
+	groupIDs, err := s.groups.ListGroupsOfUser(userID)
+	if err != nil {
+		return repository.Subject{}, err
+	}
+	return repository.Subject{UserID: userID, GroupIDs: groupIDs}, nil
 }
 
 // canAccessAnonymous 判定匿名请求对仓库的访问：全局开关关闭一律拒绝；
 // 开启时 public read 放行，其余按 anonymous 主体的 ACL 判定。
+// 匿名不属任何组，故主体恒为「仅 anonymous 用户自身」。
 func (s *RepositoryService) canAccessAnonymous(r *repository.Repository, action string) (bool, error) {
 	enabled, err := s.settings.AnonymousAccessEnabled()
 	if err != nil {
@@ -860,14 +914,14 @@ func (s *RepositoryService) canAccessAnonymous(r *repository.Repository, action 
 	if !enabled {
 		return false, nil
 	}
-	if action == "read" && r.Visibility == "public" {
+	if action == repository.ActionRead && r.Visibility == "public" {
 		return true, nil
 	}
 	anonID, err := s.anonymousSubjectID()
 	if err != nil || anonID == 0 {
 		return false, err
 	}
-	return s.acls.HasPermission(r.ID, anonID, action)
+	return s.acls.HasPermission(r.ID, repository.UserSubject(anonID), action)
 }
 
 // anonymousSubjectID 解析内置 anonymous 用户 ID；用户缺失返回 0（视为无授权）。
@@ -962,6 +1016,7 @@ type SearchOutput struct {
 // repoScope 非空时限定单仓库（浏览页内搜索，条件下推保证 total 精确）。
 // subjectID==0 表示匿名：受全局开关约束，可搜范围 = public ∪ anonymous 主体
 // 被授 read 的仓库（FR-66）；isAdmin 则搜全部。
+// 已认证主体的可搜范围含「其所属用户组被授 read」的仓库（FR-36）。
 // sort/order 控制结果排序，取值见 AssetRepo.SearchByFilter。
 func (s *RepositoryService) SearchAssets(keyword, repoScope string, subjectID int64, isAdmin bool, sort, order string, limit, offset int) (*SearchOutput, error) {
 	empty := &SearchOutput{Items: []SearchResult{}, Facets: []SearchFacetResult{}}
@@ -993,18 +1048,23 @@ func (s *RepositoryService) SearchAssets(keyword, repoScope string, subjectID in
 		for _, r := range pubRepos {
 			repoIDs = append(repoIDs, r.ID)
 		}
-		// 已登录主体或匿名映射到的 anonymous 主体：加上 ACL 授权的私有仓库
+		// 已登录主体或匿名映射到的 anonymous 主体：加上 ACL 授权的私有仓库。
+		// 主体按用户 ID 展开组归属，使「组被授 read」的仓库也进入可搜范围（FR-36）。
 		if aclSubject > 0 {
 			allRepos, _ := s.repos.List(1000, 0)
 			pubSet := make(map[int64]bool)
 			for _, r := range pubRepos {
 				pubSet[r.ID] = true
 			}
+			subject, err := s.SubjectFor(aclSubject)
+			if err != nil {
+				return nil, err
+			}
 			for _, r := range allRepos {
 				if pubSet[r.ID] {
 					continue
 				}
-				if ok, _ := s.acls.HasPermission(r.ID, aclSubject, "read"); ok {
+				if ok, _ := s.acls.HasPermission(r.ID, subject, repository.ActionRead); ok {
 					repoIDs = append(repoIDs, r.ID)
 				}
 			}

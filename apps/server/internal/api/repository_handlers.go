@@ -90,15 +90,21 @@ func (h *Handlers) ListRepositories(c *gin.Context, params ListRepositoriesParam
 		order = o
 	}
 	isAdmin := authed && p.IsAdmin()
-	var subjectID int64
-	if authed {
-		subjectID = p.UserID
-	}
 
 	var rows []repository.Repository
 	var statsMap map[int64]domain.RepoStats
 	var total int
 	var err error
+	// 主体按用户 ID 展开组归属（FR-36）：组被授 read 的仓库也要列入可见集。
+	// 展开失败按未知错误处理（writeDomainErr 默认 500），不泄露内部细节。
+	var subject repository.Subject
+	if !isAdmin && authed {
+		var err error
+		if subject, err = h.subjectOf(p); err != nil {
+			writeDomainErr(c, err)
+			return
+		}
+	}
 	if isAdmin {
 		rows, statsMap, total, err = h.repos.ListWithStats(limit, offset, sortBy, order)
 	} else {
@@ -109,7 +115,7 @@ func (h *Handlers) ListRepositories(c *gin.Context, params ListRepositoriesParam
 			for i := range allRows {
 				// 行已在手上，用按对象鉴权：CanAccess 会再按名查一次库，N 个仓库就是 N 次
 				// 额外查询（公开列表端点无需认证，是可控的放大路径）。
-				allowed, accessErr := h.repos.CanAccessResolved(&allRows[i], subjectID, "read")
+				allowed, accessErr := h.repos.CanAccessResolved(&allRows[i], subject, repository.ActionRead)
 				if accessErr == nil && allowed {
 					visible = append(visible, allRows[i])
 				}
@@ -496,7 +502,24 @@ func (h *Handlers) SetRepositoryAcl(c *gin.Context, name RepoNameParam) {
 	}
 	entries := make([]repository.Acl, 0, len(req.Items))
 	for _, e := range req.Items {
-		entries = append(entries, repository.Acl{SubjectID: e.SubjectId, Action: string(e.Action)})
+		// 主体类型缺省为 user（契约 default），显式 group 才按组主体解释；
+		// 两个 ID 按 subjectType 二选一，另一列留零（写库时显式置 NULL）。
+		entry := repository.Acl{SubjectType: repository.SubjectTypeUser, Action: string(e.Action)}
+		if e.SubjectType != nil && string(*e.SubjectType) == repository.SubjectTypeGroup {
+			entry.SubjectType = repository.SubjectTypeGroup
+			if e.SubjectGroupId == nil {
+				auth.WriteError(c, http.StatusBadRequest, "bad_request", "组主体条目必须提供 subjectGroupId")
+				return
+			}
+			entry.SubjectGroupID = *e.SubjectGroupId
+		} else {
+			if e.SubjectId == nil {
+				auth.WriteError(c, http.StatusBadRequest, "bad_request", "用户主体条目必须提供 subjectId")
+				return
+			}
+			entry.SubjectID = *e.SubjectId
+		}
+		entries = append(entries, entry)
 	}
 	rows, err := h.repos.SetAcl(name, entries)
 	if err != nil {
@@ -508,6 +531,7 @@ func (h *Handlers) SetRepositoryAcl(c *gin.Context, name RepoNameParam) {
 }
 
 // requireRepoAdmin 要求主体对仓库有管理权：全局管理员或该仓库 admin ACL。
+// 判定含主体所属用户组的授权（FR-36）：组被授 admin 等同于该组成员被授 admin。
 func (h *Handlers) requireRepoAdmin(c *gin.Context, name RepoNameParam) (*auth.Principal, bool) {
 	p, ok := requirePrincipal(c)
 	if !ok {
@@ -516,7 +540,12 @@ func (h *Handlers) requireRepoAdmin(c *gin.Context, name RepoNameParam) (*auth.P
 	if p.IsAdmin() {
 		return p, true
 	}
-	allowed, err := h.repos.CanAccess(name, p.UserID, "admin")
+	subject, err := h.subjectOf(p)
+	if err != nil {
+		writeDomainErr(c, err)
+		return nil, false
+	}
+	allowed, err := h.repos.CanAccess(name, subject, repository.ActionAdmin)
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
 			auth.WriteError(c, http.StatusNotFound, "not_found", "资源不存在")
@@ -534,16 +563,19 @@ func (h *Handlers) requireRepoAdmin(c *gin.Context, name RepoNameParam) (*auth.P
 
 // requireRepoRead 要求主体对仓库有读权限：全局管理员、public 仓库（含匿名）或该仓库 read/write/admin ACL。
 // 采用可选鉴权：public 仓库允许匿名读；私有仓库匿名 401、已认证但越权 403，与协议层放行策略一致。
+// 已认证主体的判定含其所属用户组的授权（FR-36）。
 func (h *Handlers) requireRepoRead(c *gin.Context, name RepoNameParam) (*auth.Principal, bool) {
 	p, authed := auth.PrincipalFrom(c)
 	if authed && p.IsAdmin() {
 		return p, true
 	}
-	var subjectID int64
-	if authed {
-		subjectID = p.UserID
+	// 未认证即匿名：匿名不属于任何组，故主体恒为「无用户、无组」。
+	subject, err := h.subjectOf(p)
+	if err != nil {
+		writeDomainErr(c, err)
+		return nil, false
 	}
-	allowed, err := h.repos.CanAccess(name, subjectID, "read")
+	allowed, err := h.repos.CanAccess(name, subject, repository.ActionRead)
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
 			auth.WriteError(c, http.StatusNotFound, "not_found", "资源不存在")
@@ -644,7 +676,8 @@ func (h *Handlers) ListPublicRepositories(c *gin.Context) {
 	items := make([]Repository, 0, len(rows))
 	for i := range rows {
 		// 同上：行已在手上，按对象鉴权省掉逐行按名查库。
-		allowed, accessErr := h.repos.CanAccessResolved(&rows[i], 0, "read")
+		// 端点本身无需认证，故主体恒为匿名（不属于任何组）。
+		allowed, accessErr := h.repos.CanAccessResolved(&rows[i], repository.AnonymousSubject(), repository.ActionRead)
 		if accessErr != nil || !allowed {
 			continue
 		}
@@ -763,7 +796,8 @@ func (h *Handlers) GetRepositoryDownloadTrend(c *gin.Context) {
 	// requireRepoRead 的管理员快捷分支不校验仓库存在性（tree 端点由 ListDirectory 兜底
 	// 404）；本端点只查下载计量表，故显式补一次存在性查询，避免对不存在的仓库
 	// 返回「全零趋势 200」的错觉。非管理员分支已由 requireRepoRead 查过，此处幂等。
-	if _, err := h.repos.CanAccess(name, 0, "read"); err != nil {
+	// 用匿名主体探测：不因调用者身份而异，只回答「这个仓库是否存在」。
+	if _, err := h.repos.CanAccess(name, repository.AnonymousSubject(), repository.ActionRead); err != nil {
 		writeDomainErr(c, err)
 		return
 	}
@@ -855,8 +889,13 @@ func (h *Handlers) SearchAssets(c *gin.Context) {
 	// 仓库范围过滤（下推到服务层，保证 total 精确）
 	repoFilter := c.Query("repository")
 	if repoFilter != "" {
-		// 单仓库内搜索：先检查读权限
-		allowed, err := h.repos.CanAccess(repoFilter, subjectID, "read")
+		// 单仓库内搜索：先检查读权限（含主体所属用户组的授权，FR-36）
+		subject, err := h.subjectOf(p)
+		if err != nil {
+			writeDomainErr(c, err)
+			return
+		}
+		allowed, err := h.repos.CanAccess(repoFilter, subject, repository.ActionRead)
 		if err != nil {
 			writeDomainErr(c, err)
 			return

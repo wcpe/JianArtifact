@@ -253,7 +253,11 @@ func (h *RawHandler) Get(c *gin.Context) {
 	_, _ = io.Copy(c.Writer, rc)
 }
 
-// Put 处理 PUT：鉴权 write → 流式入库；成功返回 201 与制品摘要。
+// Put 处理 PUT：鉴权 publish → 流式入库；成功返回 201 与制品摘要。
+//
+// 动作从 write 收窄为 publish（FR-36）：「能写某个路径」与「能发布新版本」在细化后的
+// 动作集里是两件事。向后兼容由 Publish 的蕴含关系保证——write 蕴含 publish，
+// 故存量 write 授权照旧可以发布，而新授予的 publish 不再顺带拿到 write/read。
 func (h *RawHandler) Put(c *gin.Context) {
 	repo := c.Param("repo")
 	artPath := cleanArtifactPath(c.Param("artifactPath"))
@@ -262,7 +266,7 @@ func (h *RawHandler) Put(c *gin.Context) {
 		auth.WriteError(c, http.StatusBadRequest, "invalid_path", "制品路径不能为空")
 		return
 	}
-	if !h.authorize(c, repo, "write") {
+	if !h.authorize(c, repo, repository.ActionPublish) {
 		h.auditRejected(c, "asset.put", repo, artPath, "authorization_denied")
 		return
 	}
@@ -421,12 +425,16 @@ func writePublishErr(c *gin.Context, err error) {
 	}
 }
 
-// Delete 处理 DELETE：仅全局管理员可删除制品元数据（blob 内容保留）。
+// Delete 处理 DELETE：管理员，或对该仓库持有 delete 授权的主体（blob 内容保留）。
+//
+// 删除权从「仅全局管理员」放开到 ACL 的 delete 动作（FR-36）：仓库级删除授权此前
+// 只能靠给账号加全局管理员，等于把实例级权限当仓库级权限发。delete 只蕴含自身，
+// 故授予 delete 不会顺带拿到 read/write/publish；全局管理员分支原样保留。
 func (h *RawHandler) Delete(c *gin.Context) {
 	repo := c.Param("repo")
 	artPath := cleanArtifactPath(c.Param("artifactPath"))
 	operationID := domain.NewOperationID()
-	if !h.requireAdmin(c, operationID) {
+	if !h.requireDelete(c, repo, operationID) {
 		h.auditRejected(c, "asset.delete", repo, artPath, "authorization_denied")
 		return
 	}
@@ -446,16 +454,35 @@ func (h *RawHandler) Delete(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-// requireAdmin 要求全局管理员权限，并为 Raw 删除失败保留操作追踪标识。
-func (h *RawHandler) requireAdmin(c *gin.Context, operationID string) bool {
+// requireDelete 要求删除制品的授权：全局管理员，或对该仓库持有 delete 动作者。
+// 未认证 401、已认证越权 403；为 Raw 删除失败保留操作追踪标识。
+func (h *RawHandler) requireDelete(c *gin.Context, repo string, operationID string) bool {
 	principal, ok := auth.PrincipalFrom(c)
 	if !ok {
 		c.Header("WWW-Authenticate", `Basic realm="JianArtifact"`)
 		writeRawDeleteErrorResponse(c, http.StatusUnauthorized, "unauthenticated", "未认证或凭据无效", operationID)
 		return false
 	}
-	if !principal.IsAdmin() {
-		writeRawDeleteErrorResponse(c, http.StatusForbidden, "forbidden", "仅管理员可删除制品", operationID)
+	if principal.IsAdmin() {
+		return true
+	}
+	// 主体（含组归属）展开一次，再按 delete 动作判定。
+	subject, err := h.repoSvc.SubjectFor(principal.UserID)
+	if err != nil {
+		writeRawDeleteErrorResponse(c, http.StatusInternalServerError, "internal", "内部错误", operationID)
+		return false
+	}
+	allowed, err := h.repoSvc.CanAccess(repo, subject, repository.ActionDelete)
+	if err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			writeRawDeleteErrorResponse(c, http.StatusNotFound, "not_found", "仓库不存在", operationID)
+			return false
+		}
+		writeRawDeleteErrorResponse(c, http.StatusInternalServerError, "internal", "内部错误", operationID)
+		return false
+	}
+	if !allowed {
+		writeRawDeleteErrorResponse(c, http.StatusForbidden, "forbidden", "无权删除该仓库制品", operationID)
 		return false
 	}
 	return true
@@ -483,6 +510,17 @@ func writeRawDeleteErrorResponse(c *gin.Context, status int, code, message, oper
 	})
 }
 
+// principalUserID 取出当前请求的用户 ID；未认证返回 0（匿名）。
+//
+// 单独抽出来是因为协议层各处都要「有主体才取 ID、否则当匿名」这个同样的三行，
+// 而这正是最容易漏判的一处——漏一次就把未认证请求当成 ID 为 0 的有效主体传下去。
+func principalUserID(c *gin.Context) int64 {
+	if p, ok := auth.PrincipalFrom(c); ok {
+		return p.UserID
+	}
+	return 0
+}
+
 // authorize 判定主体对仓库是否可执行动作。全局管理员放行；否则按 ACL（含 public read）判定。
 // 无主体且无权限 → 401；有主体无权限 → 403；仓库不存在 → 404。返回 false 时已写出响应。
 func (h *RawHandler) authorize(c *gin.Context, repo, action string) bool {
@@ -508,11 +546,14 @@ func (h *RawHandler) authorize(c *gin.Context, repo, action string) bool {
 	if hasPrincipal && principal.IsAdmin() {
 		return true
 	}
-	var subjectID int64
-	if hasPrincipal {
-		subjectID = principal.UserID
+	// 主体（含其所属用户组）在本层展开一次：HasPermission 需要组 ID 集合，
+	// 而协议层的十来个 authorize 调用点都只持有用户 ID。
+	subject, err := h.repoSvc.SubjectFor(principalUserID(c))
+	if err != nil {
+		auth.WriteError(c, http.StatusInternalServerError, "internal", "内部错误")
+		return false
 	}
-	ok, err := h.repoSvc.CanAccessResolved(repoSnapshot, subjectID, action)
+	ok, err := h.repoSvc.CanAccessResolved(repoSnapshot, subject, action)
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
 			auth.WriteError(c, http.StatusNotFound, "not_found", "仓库不存在")

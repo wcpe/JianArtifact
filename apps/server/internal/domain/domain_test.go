@@ -66,8 +66,8 @@ func TestCanAccessImplicationMatrix(t *testing.T) {
 			if _, err := svc.SetAcl(name, []repository.Acl{{SubjectID: uid, Action: c.granted}}); err != nil {
 				t.Fatalf("写 ACL：%v", err)
 			}
-			for action, want := range map[string]bool{"read": c.read, "write": c.write, "admin": c.admin} {
-				got, err := svc.CanAccess(name, uid, action)
+			for action, want := range map[string]bool{repository.ActionRead: c.read, repository.ActionWrite: c.write, repository.ActionAdmin: c.admin} {
+				got, err := svc.CanAccess(name, repository.UserSubject(uid), action)
 				if err != nil {
 					t.Fatalf("CanAccess(%s)：%v", action, err)
 				}
@@ -88,11 +88,17 @@ func TestCanAccessPublicRead(t *testing.T) {
 		t.Fatalf("建仓库：%v", err)
 	}
 	const strangerID = int64(999)
-	if ok, err := svc.CanAccess("public-repo", strangerID, "read"); err != nil || !ok {
+	if ok, err := svc.CanAccess("public-repo", repository.UserSubject(strangerID), repository.ActionRead); err != nil || !ok {
 		t.Errorf("public 仓库 read 应放行，得 ok=%t err=%v", ok, err)
 	}
-	if ok, _ := svc.CanAccess("public-repo", strangerID, "write"); ok {
+	if ok, _ := svc.CanAccess("public-repo", repository.UserSubject(strangerID), repository.ActionWrite); ok {
 		t.Error("public 仓库 write 不应无 ACL 放行")
+	}
+	// FR-36：public 仓库也不得让无 ACL 主体获得 delete / acl_manage。
+	for _, action := range []string{repository.ActionDelete, repository.ActionAclManage} {
+		if ok, _ := svc.CanAccess("public-repo", repository.UserSubject(strangerID), action); ok {
+			t.Errorf("public 仓库 %s 不应无 ACL 放行", action)
+		}
 	}
 }
 
@@ -101,7 +107,7 @@ func TestCanAccessNotFound(t *testing.T) {
 	t.Parallel()
 	db := newTestDB(t)
 	svc := domain.NewRepositoryService(repository.NewRepoRepo(db), repository.NewAclRepo(db), repository.NewAssetRepo(db), domain.NewSettingService(repository.NewSettingRepo(db)), repository.NewUserRepo(db))
-	if _, err := svc.CanAccess("ghost", 1, "read"); err != domain.ErrNotFound {
+	if _, err := svc.CanAccess("ghost", repository.UserSubject(1), repository.ActionRead); err != domain.ErrNotFound {
 		t.Errorf("未知仓库应返回 ErrNotFound，得 %v", err)
 	}
 }

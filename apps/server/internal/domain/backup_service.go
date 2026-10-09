@@ -34,7 +34,9 @@ var (
 )
 
 // backupCountTables 是包内计数的表白名单，顺序固定以产出稳定结果。
-var backupCountTables = []string{"user", "api_token", "repository", "acl", "asset", "format_metadata"}
+// user_group / user_group_member 是 FR-36 的授权元数据（迁移 0046）：它们与 acl 一样决定
+// 「谁能访问什么」，备份包漏掉它们会让恢复后的节点丢失组授权，故一并计入。
+var backupCountTables = []string{"user", "api_token", "repository", "acl", "asset", "format_metadata", "user_group", "user_group_member"}
 
 // CreateBackupOptions 控制一次备份生成。
 type CreateBackupOptions struct {

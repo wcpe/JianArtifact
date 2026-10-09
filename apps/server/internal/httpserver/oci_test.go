@@ -265,7 +265,7 @@ func TestOCIPublishPolicyRejectionsAuditActor(t *testing.T) {
 		t.Fatalf("创建 OCI 发布用户状态码=%d", code)
 	}
 	if code := e.jsonReq(t, http.MethodPut, "/api/v1/repositories/oci-policy/acl", admin,
-		api.PutAclRequest{Items: []api.AclEntry{{SubjectId: user.Id, Action: "write"}}}, nil); code != http.StatusOK {
+		api.PutAclRequest{Items: []api.AclEntry{{SubjectId: &user.Id, Action: "write"}}}, nil); code != http.StatusOK {
 		t.Fatalf("设置 OCI 写 ACL 状态码=%d", code)
 	}
 	policy := map[string]any{"allowedPrefixes": []string{"oci/blobs"}, "maxAssetsHour": 1}

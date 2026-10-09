@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
+	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
 // CargoHandler 适配 Cargo sparse registry 的 config、索引、下载和发布端点。
@@ -74,7 +75,7 @@ func (h *CargoHandler) Get(c *gin.Context) {
 func (h *CargoHandler) Put(c *gin.Context) {
 	repoName := c.Param("repo")
 	rest := strings.TrimPrefix(c.Param("rest"), "/")
-	if !h.authorize(c, repoName, "write") {
+	if !h.authorize(c, repoName, repository.ActionPublish) {
 		h.auditRejected(c, cargoAction(rest), repoName, cargoAuditPath(rest), "authorization_denied")
 		return
 	}
@@ -109,7 +110,10 @@ func (h *CargoHandler) Put(c *gin.Context) {
 func (h *CargoHandler) Delete(c *gin.Context) {
 	repoName := c.Param("repo")
 	rest := strings.TrimPrefix(c.Param("rest"), "/")
-	if !h.authorize(c, repoName, "write") {
+	// yank 走 write 而非 publish/delete：它不上传新制品，只是把索引里某个版本标记为
+	// yanked（撤销可见性），属索引状态变更。publish 语义上只覆盖「发布新制品」，
+	// 而 delete 意味着移除制品本体——yank 两者都不是，故沿用 write。
+	if !h.authorize(c, repoName, repository.ActionWrite) {
 		h.auditRejected(c, "cargo.yank", repoName, cargoAuditPath(rest), "authorization_denied")
 		return
 	}

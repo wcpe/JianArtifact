@@ -693,6 +693,18 @@ interface UpdateUserBody {
   status?: User["status"];
   webLoginDisabled?: boolean;
 }
+/** FR-36：新建 / 更新 / 加成员的请求体（与契约 schema 同形）。 */
+interface CreateUserGroupBody {
+  name?: string;
+  description?: string;
+}
+interface UpdateUserGroupBody {
+  name?: string;
+  description?: string;
+}
+interface AddUserGroupMemberBody {
+  userId?: number;
+}
 interface CreateRepoBody {
   name?: string;
   format?: Repository["format"];
@@ -1040,6 +1052,100 @@ export const handlers = [
       );
     }
     return HttpResponse.json({ results: results.results });
+  }),
+
+  // —— 用户组（FR-36）：八个端点均仅管理员可用 ——
+  http.get("*/api/v1/user-groups", ({ request }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const url = new URL(request.url);
+    return HttpResponse.json(
+      store.listUserGroups(intParam(url, "page", 1), intParam(url, "page_size", 20)),
+    );
+  }),
+
+  http.post("*/api/v1/user-groups", async ({ request }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const body = (await request.json().catch(() => ({}))) as CreateUserGroupBody;
+    if (!body.name || !body.name.trim()) {
+      return err("bad_request", "组名必填", 400);
+    }
+    const group = store.createUserGroup(body.name.trim(), body.description ?? "");
+    return group ? HttpResponse.json(group, { status: 201 }) : err("conflict", "组名已存在", 409);
+  }),
+
+  http.get("*/api/v1/user-groups/:id", ({ request, params }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const group = store.findUserGroup(Number(params.id));
+    return group ? HttpResponse.json(group) : err("not_found", "用户组不存在", 404);
+  }),
+
+  http.patch("*/api/v1/user-groups/:id", async ({ request, params }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const body = (await request.json().catch(() => ({}))) as UpdateUserGroupBody;
+    // 空串表示「不改该字段」；改名为已存在的组名由 store 返回 null（转 409）。
+    const group = store.updateUserGroup(Number(params.id), {
+      name: body.name ?? "",
+      description: body.description ?? "",
+    });
+    return group ? HttpResponse.json(group) : err("conflict", "组名已存在或用户组不存在", 409);
+  }),
+
+  http.delete("*/api/v1/user-groups/:id", ({ request, params }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    return store.deleteUserGroup(Number(params.id))
+      ? new HttpResponse(null, { status: 204 })
+      : err("not_found", "用户组不存在", 404);
+  }),
+
+  http.get("*/api/v1/user-groups/:id/members", ({ request, params }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    if (!store.findUserGroup(Number(params.id))) {
+      return err("not_found", "用户组不存在", 404);
+    }
+    return HttpResponse.json(store.listUserGroupMembers(Number(params.id)));
+  }),
+
+  http.post("*/api/v1/user-groups/:id/members", async ({ request, params }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const body = (await request.json().catch(() => ({}))) as AddUserGroupMemberBody;
+    if (typeof body.userId !== "number") {
+      return err("bad_request", "用户 ID 必填", 400);
+    }
+    const member = store.addUserGroupMember(Number(params.id), body.userId);
+    return member
+      ? HttpResponse.json(member, { status: 201 })
+      : err("conflict", "用户不存在或已在该组内", 409);
+  }),
+
+  http.delete("*/api/v1/user-groups/:id/members/:userId", ({ request, params }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    return store.removeUserGroupMember(Number(params.id), Number(params.userId))
+      ? new HttpResponse(null, { status: 204 })
+      : err("not_found", "成员不存在", 404);
   }),
 
   // —— API Token ——

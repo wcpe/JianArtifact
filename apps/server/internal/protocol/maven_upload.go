@@ -102,7 +102,7 @@ func (h *MavenHandler) UploadForm(c *gin.Context) {
 		return
 	}
 
-	if !h.authorize(c, repoName, "write") {
+	if !h.authorize(c, repoName, repository.ActionPublish) {
 		return
 	}
 	repo, err := h.repoSvc.Get(repoName)

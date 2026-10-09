@@ -154,7 +154,7 @@ func TestCargoPublishPolicyRejectionsAuditActor(t *testing.T) {
 		t.Fatalf("创建发布用户状态码=%d", code)
 	}
 	if code := e.jsonReq(t, http.MethodPut, "/api/v1/repositories/cargo-policy/acl", admin,
-		api.PutAclRequest{Items: []api.AclEntry{{SubjectId: user.Id, Action: "write"}}}, nil); code != http.StatusOK {
+		api.PutAclRequest{Items: []api.AclEntry{{SubjectId: &user.Id, Action: "write"}}}, nil); code != http.StatusOK {
 		t.Fatalf("设置 Cargo 写 ACL 状态码=%d", code)
 	}
 	policy := map[string]any{"allowedPrefixes": []string{"cargo/crates/cargo-policy"}, "maxAssetsHour": 1}

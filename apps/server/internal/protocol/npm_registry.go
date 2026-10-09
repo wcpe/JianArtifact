@@ -24,6 +24,7 @@ import (
 
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
+	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
 // npmInstallMediaType 是 abbreviated packument 的媒体类型（install 加速）。
@@ -182,7 +183,7 @@ func (h *NpmHandler) distTagsGet(c *gin.Context, repoName, pkg string) {
 // distTagPut 新增/更新标签（`npm dist-tag add`）：body 为版本号 JSON 字符串，
 // 版本必须已存在于 versions。
 func (h *NpmHandler) distTagPut(c *gin.Context, repoName, pkg, tag string) {
-	if !h.authorize(c, repoName, "write") {
+	if !h.authorize(c, repoName, repository.ActionPublish) {
 		return
 	}
 	if !h.requireHosted(c, repoName) {
@@ -215,7 +216,7 @@ func (h *NpmHandler) distTagPut(c *gin.Context, repoName, pkg, tag string) {
 
 // distTagDelete 删除标签（`npm dist-tag rm`）；latest 拒删。
 func (h *NpmHandler) distTagDelete(c *gin.Context, repoName, pkg, tag string) {
-	if !h.authorize(c, repoName, "write") {
+	if !h.authorize(c, repoName, repository.ActionPublish) {
 		return
 	}
 	if !h.requireHosted(c, repoName) {

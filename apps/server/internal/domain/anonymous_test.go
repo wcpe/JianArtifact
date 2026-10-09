@@ -55,12 +55,12 @@ func TestAnonymousAclRead(t *testing.T) {
 		{"anon-public", "read", true},
 	}
 	for _, c := range cases {
-		got, err := svc.CanAccess(c.repo, 0, c.action)
+		got, err := svc.CanAccess(c.repo, repository.AnonymousSubject(), c.action)
 		if err != nil {
-			t.Fatalf("CanAccess(%s, 0, %s)：%v", c.repo, c.action, err)
+			t.Fatalf("CanAccess(%s, 匿名, %s)：%v", c.repo, c.action, err)
 		}
 		if got != c.want {
-			t.Errorf("CanAccess(%s, 0, %s) = %v，期望 %v", c.repo, c.action, got, c.want)
+			t.Errorf("CanAccess(%s, 匿名, %s) = %v，期望 %v", c.repo, c.action, got, c.want)
 		}
 	}
 }
@@ -76,7 +76,7 @@ func TestAnonymousGlobalSwitch(t *testing.T) {
 		t.Fatalf("建仓库：%v", err)
 	}
 	// 开关默认开启：public 匿名可读。
-	if ok, _ := svc.CanAccess("switch-pub", 0, "read"); !ok {
+	if ok, _ := svc.CanAccess("switch-pub", repository.AnonymousSubject(), repository.ActionRead); !ok {
 		t.Fatal("默认开关开启时 public 应匿名可读")
 	}
 
@@ -86,7 +86,7 @@ func TestAnonymousGlobalSwitch(t *testing.T) {
 	if enabled, _ := settings.AnonymousAccessEnabled(); enabled {
 		t.Fatal("开关应已关闭")
 	}
-	if ok, _ := svc.CanAccess("switch-pub", 0, "read"); ok {
+	if ok, _ := svc.CanAccess("switch-pub", repository.AnonymousSubject(), repository.ActionRead); ok {
 		t.Error("开关关闭后 public 匿名读应拒绝")
 	}
 	// 已认证主体不受开关影响：ACL 授权用户仍可读。
@@ -97,7 +97,7 @@ func TestAnonymousGlobalSwitch(t *testing.T) {
 	if err := aclRepo.Replace(repo.ID, []repository.Acl{{SubjectID: uid, Action: "read"}}); err != nil {
 		t.Fatalf("写 ACL：%v", err)
 	}
-	if ok, _ := svc.CanAccess("switch-pub", uid, "read"); !ok {
+	if ok, _ := svc.CanAccess("switch-pub", repository.UserSubject(uid), repository.ActionRead); !ok {
 		t.Error("开关关闭不应影响已认证主体")
 	}
 	// 匿名搜索兜底：开关关闭返回空集。
@@ -108,7 +108,7 @@ func TestAnonymousGlobalSwitch(t *testing.T) {
 	if err := settings.SetAnonymousAccessEnabled(true); err != nil {
 		t.Fatalf("重新开启开关：%v", err)
 	}
-	if ok, _ := svc.CanAccess("switch-pub", 0, "read"); !ok {
+	if ok, _ := svc.CanAccess("switch-pub", repository.AnonymousSubject(), repository.ActionRead); !ok {
 		t.Error("开关重新开启后 public 应恢复匿名可读")
 	}
 }

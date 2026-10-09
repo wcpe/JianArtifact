@@ -57,6 +57,7 @@ export const en = {
     dashboard: "Dashboard",
     dashboardPage: "Business Dashboard",
     users: "Users",
+    userGroups: "User Groups",
     tokens: "Access Tokens",
     repositories: "Repositories",
     migrations: "Migration & Backup",
@@ -444,6 +445,52 @@ export const en = {
     rolesAnonymousHint:
       "A built-in principal that exists only to grant anonymous read access to public repositories; cannot sign in or be managed.",
   },
+  // 用户组（FR-36）：授权主体之一，组内成员共享指向该组的 ACL 授权。
+  userGroups: {
+    title: "User Groups",
+    description:
+      "Group several users into one grant subject; repository access control can grant permissions to a group directly",
+    name: "Group Name",
+    namePlaceholder: "e.g. release-team",
+    descriptionField: "Description",
+    descriptionPlaceholder: "What this group is for; may be left empty",
+    memberCount: "Members",
+    createdAt: "Created At",
+    create: "New User Group",
+    edit: "Edit User Group",
+    empty: "No user groups",
+    // 空串表示「不改该字段」：编辑弹窗用它提示，避免用户以为是在清空。
+    editKeepHint: "Leave empty to keep the current value",
+    deleteConfirm:
+      "Delete this user group? The grants this group holds in repository access control will stop applying.",
+    // 成员管理
+    members: "Members",
+    membersOf: "Members of {{name}}",
+    memberUsername: "Username",
+    memberJoinedAt: "Joined At",
+    addMember: "Add Member",
+    memberPlaceholder: "Search or select a user",
+    memberEmpty: "This group has no members",
+    memberNoCandidate: "No users available to add",
+    removeMemberConfirm: "Remove this user from the group?",
+    removeMember: "Remove",
+    // 顶部概览带
+    summaryLabel: "User Group Overview",
+    summaryTotal: "Groups",
+    summaryMembers: "Memberships",
+    summaryEmptyGroups: "Empty Groups",
+    summaryEmptyGroupsHint: "A group without members grants nothing to anyone",
+    helpTitle: "How User Groups Work",
+    helpGroup: "A Group Is a Grant Subject",
+    helpGroupHint:
+      "Repository access control can grant a permission to a user or to a user group; members of the group inherit that permission automatically.",
+    helpMember: "Membership",
+    helpMemberHint:
+      "A user can belong to several groups; the most permissive matching grant wins and is never revoked by a stricter entry.",
+    helpDelete: "What Deleting a Group Does",
+    helpDeleteHint:
+      "Deleting a group removes the grants it holds on every repository. It only affects grants; user accounts are not deleted.",
+  },
   tokens: {
     // 以下键此前缺失（t 未命中时静默回退 defaultValue），补录以保持 i18n 完整。
     usageAuthLabel: "How to Authenticate",
@@ -618,6 +665,32 @@ export const en = {
     addEntry: "Add Entry",
     save: "Save Access Control",
     empty: "No entries configured yet",
+    // FR-36：主体从「只有用户」扩展到「用户 / 用户组」，动作从三档细化为六档。
+    subject: "Grant Subject",
+    subjectType: "Subject Type",
+    subjectUser: "User",
+    subjectGroup: "User Group",
+    subjectGroupPlaceholder: "Search or select a user group",
+    groupIdFallback: "User Group #{{id}}",
+    userIdFallback: "User #{{id}}",
+    overlayHint:
+      "Saving replaces the whole list: this submission overwrites every entry of this repository.",
+    duplicateSubject:
+      "This subject already has an entry; edit its permission directly in the list below.",
+    actionPublish: "Publish",
+    actionDelete: "Delete",
+    actionAclManage: "Manage Access",
+    // 六档动作的口径说明（放进工具栏「说明」气泡，不常驻占版）。
+    actionHintTitle: "How the Six Permissions Differ",
+    actionHintRead: "Read and download artifacts; cannot upload or change configuration.",
+    actionHintWrite:
+      "Write to the granted paths, which implies read and publish; may overwrite a same-named Release depending on repository configuration.",
+    actionHintPublish:
+      "Publish through native protocols only; does not imply write access to other paths.",
+    actionHintDelete: "Delete artifact versions in this repository.",
+    actionHintAclManage:
+      "Manage this repository's access control entries (no other repository management).",
+    actionHintAdmin: "Full management of this repository, implying the other five permissions.",
   },
   repoDetail: {
     // 以下键此前缺失（t 未命中时静默回退 defaultValue），补录以保持 i18n 完整。

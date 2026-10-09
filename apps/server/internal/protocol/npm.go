@@ -99,7 +99,7 @@ func (h *NpmHandler) Put(c *gin.Context) {
 		h.registryPut(c, repoName, rest)
 		return
 	}
-	if !h.authorize(c, repoName, "write") {
+	if !h.authorize(c, repoName, repository.ActionPublish) {
 		h.auditRejected(c, "npm.publish", repoName, rest, "authorization_denied")
 		return
 	}
@@ -143,7 +143,7 @@ func (h *NpmHandler) Delete(c *gin.Context) {
 		auth.WriteError(c, http.StatusNotFound, "not_found", "资源不存在")
 		return
 	}
-	if !h.authorize(c, repoName, "write") {
+	if !h.authorize(c, repoName, repository.ActionPublish) {
 		return
 	}
 	if !h.requireHosted(c, repoName) {

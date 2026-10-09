@@ -123,15 +123,15 @@ func TestRepositoryCanAccessResolvedMatchesCanAccess(t *testing.T) {
 	for _, tc := range []struct {
 		label      string
 		repo       *repository.Repository
-		subjectID  int64
+		subject    repository.Subject
 		wantAccess bool
 	}{
-		{"public 仓库对匿名可读", pub, 0, true},
-		{"private 仓库对匿名不可读", priv, 0, false},
-		{"private 仓库对无授权用户不可读", priv, 999, false},
+		{"public 仓库对匿名可读", pub, repository.AnonymousSubject(), true},
+		{"private 仓库对匿名不可读", priv, repository.AnonymousSubject(), false},
+		{"private 仓库对无授权用户不可读", priv, repository.UserSubject(999), false},
 	} {
-		byName, errName := svc.CanAccess(tc.repo.Name, tc.subjectID, "read")
-		byObj, errObj := svc.CanAccessResolved(tc.repo, tc.subjectID, "read")
+		byName, errName := svc.CanAccess(tc.repo.Name, tc.subject, repository.ActionRead)
+		byObj, errObj := svc.CanAccessResolved(tc.repo, tc.subject, repository.ActionRead)
 		if (errName == nil) != (errObj == nil) || byName != byObj {
 			t.Errorf("%s：按名(%v, %v) 与按对象(%v, %v) 判定分叉", tc.label, byName, errName, byObj, errObj)
 		}

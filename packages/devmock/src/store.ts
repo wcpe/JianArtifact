@@ -14,6 +14,9 @@ export type TokenCreated = Schemas["TokenCreated"];
 export type Repository = Schemas["Repository"];
 export type ConnectionStatus = Schemas["ConnectionStatus"];
 export type AclEntry = Schemas["AclEntry"];
+// FR-36：用户组（授权主体）与组成员关系。
+export type UserGroup = Schemas["UserGroup"];
+export type UserGroupMember = Schemas["UserGroupMember"];
 export type StatusInfo = Schemas["StatusInfo"];
 export type AssetSummary = Schemas["AssetSummary"];
 export type AssetList = Schemas["AssetList"];
@@ -100,6 +103,9 @@ interface State {
   /** FR-114：proxy 仓库上游连接状态（内存态，按仓库名；hosted/group 不维护）。 */
   connStatus: Record<string, ConnectionStatus>;
   acls: Record<string, AclEntry[]>;
+  // FR-36：用户组与「组 × 用户」成员关系。members 的 key 是组 ID。
+  userGroups: UserGroup[];
+  userGroupMembers: Record<number, UserGroupMember[]>;
   assets: Record<string, AssetSummary[]>;
   migrations: MigrationTask[];
   // immutableRelease 已废弃：只读兼容字段，写入记录不再保存（读取时恒为 false）。
@@ -107,7 +113,15 @@ interface State {
     string,
     Omit<PublishPolicy, "userId" | "username" | "repository" | "immutableRelease">
   >;
-  seq: { user: number; token: number; repo: number; migration: number; operation: number };
+  seq: {
+    user: number;
+    token: number;
+    repo: number;
+    migration: number;
+    operation: number;
+    /** FR-36：用户组自增 ID。 */
+    userGroup: number;
+  };
   /** FR-66：实例级匿名访问开关（默认开）。 */
   anonymousAccessEnabled: boolean;
   /** 管理端服务设置；集群拓扑仍由部署配置决定。 */
@@ -329,6 +343,19 @@ function seed(): State {
     volumeClones: [],
     volumeFactor: 1,
     acls: { "maven-releases": [{ subjectId: 2, action: "read" }] },
+    // FR-36：种子留一个组，便于演示「组主体」的 ACL 与成员管理。
+    userGroups: [
+      {
+        id: 1,
+        name: "release-team",
+        description: "负责发布窗口的团队",
+        createdAt: "2026-01-01T00:00:00Z",
+      },
+    ],
+    userGroupMembers: {
+      // 成员必须是 store 里真实存在的用户（id 2 = developer）：加成员端点会校验这一点。
+      1: [{ userId: 2, username: "developer", createdAt: "2026-01-01T00:00:00Z" }],
+    },
     connStatus: {
       // FR-114：各 proxy 上游连接状态内存态——2 可用 / 4 自动阻止 / 1 不可用，供列表徽章与状态面板演示。
       "npm-proxy": { status: "AVAILABLE", description: "上游可用" },
@@ -696,7 +723,7 @@ function seed(): State {
     },
     migrations: [],
     publishPolicies: {},
-    seq: { user: 5, token: 4, repo: 9, migration: 0, operation: 0 },
+    seq: { user: 5, token: 4, repo: 9, migration: 0, operation: 0, userGroup: 1 },
     anonymousAccessEnabled: true,
     // 种子置顶：全局置顶 maven-central 与 npm-proxy（均为 public，公开页据此展示置顶）。
     // key 口径：`global` 为全局/匿名兜底，`user:<id>` 为某登录用户的私有置顶（默认无）。
@@ -795,7 +822,7 @@ export function emptyStore(): void {
   state.tokens = [];
   state.initialized = false;
   state.migrations = [];
-  state.seq = { user: 0, token: 0, repo: 3, migration: 0, operation: 0 };
+  state.seq = { user: 0, token: 0, repo: 3, migration: 0, operation: 0, userGroup: 0 };
   reconcileVolumeRepositories(mockVolumeFactor());
 }
 
@@ -897,7 +924,22 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-const accessRank = { read: 0, write: 1, admin: 2 } as const;
+// FR-36：动作由三档扩为六档，而 devmock 的仓库守卫仍只判三档（细化动作的
+// 门控目前只在后端 domain 层），因此 `accessRank` 按**六档全量**给出排名：
+// 未在本表里显式登记的档位（publish / delete / acl_manage）各自独立，
+// 取比 read 更低的 rank 0 会让它们互相放行，故给它们单独一档——只有完全相同的
+// 动作、或更高位的管理档（write / admin）才能满足。
+//
+// `satisfies` 在这里是**契约漂移的编译期护栏**：契约一旦新增动作而本表漏登记，
+// 这行会因键缺失编译失败，而不是在运行期把未知动作静默当成"无权"。
+const accessRank = {
+  publish: 0,
+  delete: 0,
+  acl_manage: 0,
+  read: 1,
+  write: 2,
+  admin: 3,
+} as const satisfies Record<AclEntry["action"], number>;
 
 function canAccessRepository(
   name: string,
@@ -911,7 +953,15 @@ function canAccessRepository(
   }
   if (subjectId === 0) return false;
   const granted = (state.acls[name] ?? []).find((item) => item.subjectId === subjectId);
-  return granted ? accessRank[granted.action] >= accessRank[action] : false;
+  // 三档之间存在"高档蕴含低档"（write ≥ read、admin ≥ 全部），
+  // 而细化档（publish / delete / acl_manage）彼此独立：授予其一不得顺带拿到另一档，
+  // 这与后端 satisfyingGrants 的口径一致——故只有 rank 严格更高、或动作完全相同才放行。
+  if (!granted) return false;
+  const grantedRank = accessRank[granted.action];
+  const wantedRank = accessRank[action];
+  if (granted.action === action) return true;
+  // admin（最高档）蕴含全部；其余档位只有"严格更高且不在独立档集合内"才蕴含。
+  return granted.action === "admin" || (wantedRank > 0 && grantedRank > wantedRank);
 }
 
 /**
@@ -1158,6 +1208,85 @@ export const store = {
     const before = state.users.length;
     state.users = state.users.filter((u) => u.id !== id);
     return state.users.length < before;
+  },
+
+  // —— 用户组（FR-36）——
+
+  listUserGroups(page: number, pageSize: number): { items: UserGroup[]; total: number } {
+    return { items: pageSlice(state.userGroups, page, pageSize), total: state.userGroups.length };
+  },
+
+  findUserGroup(id: number): UserGroup | undefined {
+    return state.userGroups.find((g) => g.id === id);
+  },
+
+  /** 新建组；组名冲突返回 null（调用方转 409）。 */
+  createUserGroup(name: string, description: string): UserGroup | null {
+    if (state.userGroups.some((g) => g.name === name)) {
+      return null;
+    }
+    const group: UserGroup = {
+      id: ++state.seq.userGroup,
+      name,
+      description,
+      createdAt: nowIso(),
+    };
+    state.userGroups.push(group);
+    state.userGroupMembers[group.id] = [];
+    return group;
+  },
+
+  /** 空串表示不改该字段（与契约 UpdateUserGroupRequest 同义）。 */
+  updateUserGroup(id: number, patch: { name?: string; description?: string }): UserGroup | null {
+    const group = state.userGroups.find((g) => g.id === id);
+    if (!group) return null;
+    if (patch.name) {
+      group.name = patch.name;
+    }
+    if (patch.description) {
+      group.description = patch.description;
+    }
+    return group;
+  },
+
+  /** 删组：同时撤掉该组在全部仓库上的 ACL 授权（组都没了，授权必须失效）。 */
+  deleteUserGroup(id: number): boolean {
+    const before = state.userGroups.length;
+    state.userGroups = state.userGroups.filter((g) => g.id !== id);
+    if (state.userGroups.length === before) {
+      return false;
+    }
+    delete state.userGroupMembers[id];
+    for (const [repo, entries] of Object.entries(state.acls)) {
+      const kept = entries.filter((entry) => entry.subjectGroupId !== id);
+      state.acls[repo] = kept;
+    }
+    return true;
+  },
+
+  listUserGroupMembers(id: number): { items: UserGroupMember[] } {
+    return { items: state.userGroupMembers[id] ?? [] };
+  },
+
+  /** 加入成员；用户不存在或已在组内返回 null。 */
+  addUserGroupMember(id: number, userId: number): UserGroupMember | null {
+    const members = state.userGroupMembers[id];
+    if (!members) return null;
+    const user = state.users.find((u) => u.id === userId);
+    if (!user || members.some((m) => m.userId === userId)) {
+      return null;
+    }
+    const member: UserGroupMember = { userId, username: user.username, createdAt: nowIso() };
+    members.push(member);
+    return member;
+  },
+
+  removeUserGroupMember(id: number, userId: number): boolean {
+    const members = state.userGroupMembers[id];
+    if (!members) return false;
+    const before = members.length;
+    state.userGroupMembers[id] = members.filter((m) => m.userId !== userId);
+    return members.length < before;
   },
 
   listTokens(ownerId: number): { items: Token[] } {

@@ -18,6 +18,22 @@ type AuditLogListResponse struct {
 	Total int                        `json:"total"`
 }
 
+// 用户组相关审计动作与实体类型（FR-36）。
+//
+// 本阶段只把常量与映射备好（组管理的 HTTP handler 在阶段三落地），
+// 让审计读模型在组端点上线前就认得这些动作，避免上线后组操作在审计里
+// 全部落进 other / 非高危——那样「谁改了授权组」就查不出来了。
+const (
+	// EntityTypeUserGroup 是用户组的审计实体类型，与 domain.EntityUserGroup 同值。
+	EntityTypeUserGroup = "user_group"
+
+	AuditActionGroupCreate    = "group.create"
+	AuditActionGroupUpdate    = "group.update"
+	AuditActionGroupDelete    = "group.delete"
+	AuditActionGroupMemberAdd = "group.member.add"
+	AuditActionGroupMemberRmv = "group.member.remove"
+)
+
 // GetAuditLogs 返回审计日志（分页 + 筛选），仅管理员（FR-38）。
 // 非契约端点，经 WithProtocolRoutes 注册。
 func (h *Handlers) GetAuditLogs(c *gin.Context) {

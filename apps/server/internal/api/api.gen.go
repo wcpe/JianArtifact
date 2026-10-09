@@ -16,15 +16,24 @@ import (
 
 // Defines values for AclEntryAction.
 const (
-	AclEntryActionAdmin AclEntryAction = "admin"
-	AclEntryActionRead  AclEntryAction = "read"
-	AclEntryActionWrite AclEntryAction = "write"
+	AclEntryActionAclManage AclEntryAction = "acl_manage"
+	AclEntryActionAdmin     AclEntryAction = "admin"
+	AclEntryActionDelete    AclEntryAction = "delete"
+	AclEntryActionPublish   AclEntryAction = "publish"
+	AclEntryActionRead      AclEntryAction = "read"
+	AclEntryActionWrite     AclEntryAction = "write"
 )
 
 // Valid indicates whether the value is a known member of the AclEntryAction enum.
 func (e AclEntryAction) Valid() bool {
 	switch e {
+	case AclEntryActionAclManage:
+		return true
 	case AclEntryActionAdmin:
+		return true
+	case AclEntryActionDelete:
+		return true
+	case AclEntryActionPublish:
 		return true
 	case AclEntryActionRead:
 		return true
@@ -35,21 +44,39 @@ func (e AclEntryAction) Valid() bool {
 	}
 }
 
+// Defines values for AclEntrySubjectType.
+const (
+	AclEntrySubjectTypeGroup AclEntrySubjectType = "group"
+	AclEntrySubjectTypeUser  AclEntrySubjectType = "user"
+)
+
+// Valid indicates whether the value is a known member of the AclEntrySubjectType enum.
+func (e AclEntrySubjectType) Valid() bool {
+	switch e {
+	case AclEntrySubjectTypeGroup:
+		return true
+	case AclEntrySubjectTypeUser:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AssetOperationRequestAction.
 const (
-	Delete AssetOperationRequestAction = "delete"
-	Move   AssetOperationRequestAction = "move"
-	Rename AssetOperationRequestAction = "rename"
+	AssetOperationRequestActionDelete AssetOperationRequestAction = "delete"
+	AssetOperationRequestActionMove   AssetOperationRequestAction = "move"
+	AssetOperationRequestActionRename AssetOperationRequestAction = "rename"
 )
 
 // Valid indicates whether the value is a known member of the AssetOperationRequestAction enum.
 func (e AssetOperationRequestAction) Valid() bool {
 	switch e {
-	case Delete:
+	case AssetOperationRequestActionDelete:
 		return true
-	case Move:
+	case AssetOperationRequestActionMove:
 		return true
-	case Rename:
+	case AssetOperationRequestActionRename:
 		return true
 	default:
 		return false
@@ -1102,22 +1129,22 @@ func (e UpdateUserRequestStatus) Valid() bool {
 
 // Defines values for UsageSnippetGroup.
 const (
-	Auth    UsageSnippetGroup = "auth"
-	Other   UsageSnippetGroup = "other"
-	Publish UsageSnippetGroup = "publish"
-	Resolve UsageSnippetGroup = "resolve"
+	UsageSnippetGroupAuth    UsageSnippetGroup = "auth"
+	UsageSnippetGroupOther   UsageSnippetGroup = "other"
+	UsageSnippetGroupPublish UsageSnippetGroup = "publish"
+	UsageSnippetGroupResolve UsageSnippetGroup = "resolve"
 )
 
 // Valid indicates whether the value is a known member of the UsageSnippetGroup enum.
 func (e UsageSnippetGroup) Valid() bool {
 	switch e {
-	case Auth:
+	case UsageSnippetGroupAuth:
 		return true
-	case Other:
+	case UsageSnippetGroupOther:
 		return true
-	case Publish:
+	case UsageSnippetGroupPublish:
 		return true
-	case Resolve:
+	case UsageSnippetGroupResolve:
 		return true
 	default:
 		return false
@@ -1419,18 +1446,58 @@ type AcknowledgeAuditAttentionResponse struct {
 	UnacknowledgedRiskEventCount int `json:"unacknowledgedRiskEventCount"`
 }
 
-// AclEntry defines model for AclEntry.
+// AclEntry 一条仓库授权（主体 × 动作）。主体分两类（FR-36）：
+// - `subjectType=user`（默认）：`subjectId` 必填，填用户 ID；
+// - `subjectType=group`：`subjectGroupId` 必填，填用户组 ID。
+// 两个 ID 字段互斥：服务端按 `subjectType` 只读取对应那一列，
+// 另一列即使有值也会被忽略（表内 CHECK 强制恰有其一）。
 type AclEntry struct {
-	Action    AclEntryAction `json:"action"`
-	SubjectId int64          `json:"subjectId"`
+	// Action 授权动作（FR-36 六档，由粗到细）：
+	// - read 读取 / 下载；
+	// - write 写入，蕴含 read 与 publish；
+	// - publish 仅发布（协议上传），不蕴含写其它路径；
+	// - delete 删除制品；
+	// - acl_manage 管理该仓库的 ACL；
+	// - admin 该仓库的全权管理，蕴含其余五档。
+	// 未登记的动作一律按「只由自身满足」判定，不会被宽泛授权放行。
+	Action AclEntryAction `json:"action"`
+
+	// SubjectGroupId 用户组主体 ID（`subjectType=group` 时必填；user 主体为 null）
+	SubjectGroupId *int64 `json:"subjectGroupId,omitempty"`
+
+	// SubjectId 用户主体 ID（`subjectType=user` 时必填；group 主体不填）
+	SubjectId *int64 `json:"subjectId,omitempty"`
+
+	// SubjectType 授权主体类型：user=单个用户，group=用户组（组内成员全部生效）。
+	// 缺省（不传）按 user 解释——既有三档时代的请求体只有 subjectId，
+	// 沿用该缺省即可无改动继续工作。
+	SubjectType *AclEntrySubjectType `json:"subjectType,omitempty"`
 }
 
-// AclEntryAction defines model for AclEntry.Action.
+// AclEntryAction 授权动作（FR-36 六档，由粗到细）：
+// - read 读取 / 下载；
+// - write 写入，蕴含 read 与 publish；
+// - publish 仅发布（协议上传），不蕴含写其它路径；
+// - delete 删除制品；
+// - acl_manage 管理该仓库的 ACL；
+// - admin 该仓库的全权管理，蕴含其余五档。
+// 未登记的动作一律按「只由自身满足」判定，不会被宽泛授权放行。
 type AclEntryAction string
+
+// AclEntrySubjectType 授权主体类型：user=单个用户，group=用户组（组内成员全部生效）。
+// 缺省（不传）按 user 解释——既有三档时代的请求体只有 subjectId，
+// 沿用该缺省即可无改动继续工作。
+type AclEntrySubjectType string
 
 // AclList defines model for AclList.
 type AclList struct {
 	Items []AclEntry `json:"items"`
+}
+
+// AddUserGroupMemberRequest defines model for AddUserGroupMemberRequest.
+type AddUserGroupMemberRequest struct {
+	// UserId 待加入该组的用户 ID（必须已存在）
+	UserId int64 `json:"userId"`
 }
 
 // AssetList defines model for AssetList.
@@ -2150,6 +2217,14 @@ type CreateRepositoryRequestVisibility string
 
 // CreateTokenRequest defines model for CreateTokenRequest.
 type CreateTokenRequest struct {
+	Name string `json:"name"`
+}
+
+// CreateUserGroupRequest defines model for CreateUserGroupRequest.
+type CreateUserGroupRequest struct {
+	Description *string `json:"description,omitempty"`
+
+	// Name 组名（全局唯一，不可为空白）
 	Name string `json:"name"`
 }
 
@@ -2927,6 +3002,15 @@ type UpdateRepositoryRequest struct {
 // UpdateRepositoryRequestVisibility defines model for UpdateRepositoryRequest.Visibility.
 type UpdateRepositoryRequestVisibility string
 
+// UpdateUserGroupRequest defines model for UpdateUserGroupRequest.
+type UpdateUserGroupRequest struct {
+	// Description 新说明（空串表示不改）
+	Description *string `json:"description,omitempty"`
+
+	// Name 新组名（空串表示不改；全局唯一）
+	Name *string `json:"name,omitempty"`
+}
+
 // UpdateUserRequest defines model for UpdateUserRequest.
 type UpdateUserRequest struct {
 	Role   *UpdateUserRequestRole   `json:"role,omitempty"`
@@ -2984,6 +3068,40 @@ type UserRole string
 
 // UserStatus defines model for User.Status.
 type UserStatus string
+
+// UserGroup 用户组（FR-36）：授权主体之一。组本身只承载「名字 + 描述」，
+// 授权关系由仓库 ACL 指向组 ID，成员关系由组 × 用户的关联表承载。
+type UserGroup struct {
+	CreatedAt string `json:"createdAt"`
+
+	// Description 组说明（可为空串）
+	Description string `json:"description"`
+	Id          int64  `json:"id"`
+
+	// Name 组名（全局唯一）
+	Name string `json:"name"`
+}
+
+// UserGroupList defines model for UserGroupList.
+type UserGroupList struct {
+	Items []UserGroup `json:"items"`
+
+	// Total 全部组数（不受分页窗口限制）
+	Total int `json:"total"`
+}
+
+// UserGroupMember defines model for UserGroupMember.
+type UserGroupMember struct {
+	// CreatedAt 加入该组的时间
+	CreatedAt string `json:"createdAt"`
+	UserId    int64  `json:"userId"`
+	Username  string `json:"username"`
+}
+
+// UserGroupMemberList defines model for UserGroupMemberList.
+type UserGroupMemberList struct {
+	Items []UserGroupMember `json:"items"`
+}
 
 // UserList defines model for UserList.
 type UserList struct {
@@ -3114,6 +3232,12 @@ type RepoNameParam = string
 
 // TokenIdParam defines model for TokenIdParam.
 type TokenIdParam = int64
+
+// UserGroupIdParam defines model for UserGroupIdParam.
+type UserGroupIdParam = int64
+
+// UserGroupMemberUserIdParam defines model for UserGroupMemberUserIdParam.
+type UserGroupMemberUserIdParam = int64
 
 // UserIdParam defines model for UserIdParam.
 type UserIdParam = int64
@@ -3459,6 +3583,12 @@ type ListRepositoryAssetsParams struct {
 	Prefix *PrefixParam `form:"prefix,omitempty" json:"prefix,omitempty"`
 }
 
+// ListUserGroupsParams defines parameters for ListUserGroups.
+type ListUserGroupsParams struct {
+	Page     *PageParam     `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *PageSizeParam `form:"page_size,omitempty" json:"page_size,omitempty"`
+}
+
 // ListUsersParams defines parameters for ListUsers.
 type ListUsersParams struct {
 	Page     *PageParam     `form:"page,omitempty" json:"page,omitempty"`
@@ -3538,6 +3668,15 @@ type PutGlobalPinnedRepositoriesJSONRequestBody = PutPinnedRepositoriesRequest
 
 // CreateTokenJSONRequestBody defines body for CreateToken for application/json ContentType.
 type CreateTokenJSONRequestBody = CreateTokenRequest
+
+// CreateUserGroupJSONRequestBody defines body for CreateUserGroup for application/json ContentType.
+type CreateUserGroupJSONRequestBody = CreateUserGroupRequest
+
+// UpdateUserGroupJSONRequestBody defines body for UpdateUserGroup for application/json ContentType.
+type UpdateUserGroupJSONRequestBody = UpdateUserGroupRequest
+
+// AddUserGroupMemberJSONRequestBody defines body for AddUserGroupMember for application/json ContentType.
+type AddUserGroupMemberJSONRequestBody = AddUserGroupMemberRequest
 
 // CreateUserJSONRequestBody defines body for CreateUser for application/json ContentType.
 type CreateUserJSONRequestBody = CreateUserRequest
@@ -4058,6 +4197,30 @@ type ServerInterface interface {
 	// DeleteToken 吊销 API Token
 	// (DELETE /api/v1/tokens/{id})
 	DeleteToken(c *gin.Context, id TokenIdParam)
+	// ListUserGroups 用户组列表（分页，仅管理员）
+	// (GET /api/v1/user-groups)
+	ListUserGroups(c *gin.Context, params ListUserGroupsParams)
+	// CreateUserGroup 创建用户组（仅管理员）
+	// (POST /api/v1/user-groups)
+	CreateUserGroup(c *gin.Context)
+	// DeleteUserGroup 删除用户组（仅管理员）
+	// (DELETE /api/v1/user-groups/{id})
+	DeleteUserGroup(c *gin.Context, id UserGroupIdParam)
+	// GetUserGroup 读取单个用户组（仅管理员）
+	// (GET /api/v1/user-groups/{id})
+	GetUserGroup(c *gin.Context, id UserGroupIdParam)
+	// UpdateUserGroup 更新用户组（名称 / 描述，仅管理员）
+	// (PATCH /api/v1/user-groups/{id})
+	UpdateUserGroup(c *gin.Context, id UserGroupIdParam)
+	// ListUserGroupMembers 列出用户组成员（仅管理员）
+	// (GET /api/v1/user-groups/{id}/members)
+	ListUserGroupMembers(c *gin.Context, id UserGroupIdParam)
+	// AddUserGroupMember 把用户加入用户组（仅管理员）
+	// (POST /api/v1/user-groups/{id}/members)
+	AddUserGroupMember(c *gin.Context, id UserGroupIdParam)
+	// RemoveUserGroupMember 把用户移出用户组（仅管理员）
+	// (DELETE /api/v1/user-groups/{id}/members/{userId})
+	RemoveUserGroupMember(c *gin.Context, id UserGroupIdParam, userId UserGroupMemberUserIdParam)
 	// ListUsers 用户列表（分页）
 	// (GET /api/v1/users)
 	ListUsers(c *gin.Context, params ListUsersParams)
@@ -6172,6 +6335,213 @@ func (siw *ServerInterfaceWrapper) DeleteToken(c *gin.Context) {
 	siw.Handler.DeleteToken(c, id)
 }
 
+// ListUserGroups operation middleware
+func (siw *ServerInterfaceWrapper) ListUserGroups(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListUserGroupsParams
+
+	// ------------- Optional query parameter "page" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page", c.Request.URL.Query(), &params.Page, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter page: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "page_size" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page_size", c.Request.URL.Query(), &params.PageSize, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter page_size: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ListUserGroups(c, params)
+}
+
+// CreateUserGroup operation middleware
+func (siw *ServerInterfaceWrapper) CreateUserGroup(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.CreateUserGroup(c)
+}
+
+// DeleteUserGroup operation middleware
+func (siw *ServerInterfaceWrapper) DeleteUserGroup(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id UserGroupIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.DeleteUserGroup(c, id)
+}
+
+// GetUserGroup operation middleware
+func (siw *ServerInterfaceWrapper) GetUserGroup(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id UserGroupIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetUserGroup(c, id)
+}
+
+// UpdateUserGroup operation middleware
+func (siw *ServerInterfaceWrapper) UpdateUserGroup(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id UserGroupIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.UpdateUserGroup(c, id)
+}
+
+// ListUserGroupMembers operation middleware
+func (siw *ServerInterfaceWrapper) ListUserGroupMembers(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id UserGroupIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ListUserGroupMembers(c, id)
+}
+
+// AddUserGroupMember operation middleware
+func (siw *ServerInterfaceWrapper) AddUserGroupMember(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id UserGroupIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.AddUserGroupMember(c, id)
+}
+
+// RemoveUserGroupMember operation middleware
+func (siw *ServerInterfaceWrapper) RemoveUserGroupMember(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id UserGroupIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Path parameter "userId" -------------
+	var userId UserGroupMemberUserIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "userId", c.Param("userId"), &userId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter userId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.RemoveUserGroupMember(c, id, userId)
+}
+
 // ListUsers operation middleware
 func (siw *ServerInterfaceWrapper) ListUsers(c *gin.Context) {
 
@@ -6487,6 +6857,14 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/api/v1/tokens", wrapper.ListTokens)
 	router.POST(options.BaseURL+"/api/v1/tokens", wrapper.CreateToken)
 	router.DELETE(options.BaseURL+"/api/v1/tokens/:id", wrapper.DeleteToken)
+	router.GET(options.BaseURL+"/api/v1/user-groups", wrapper.ListUserGroups)
+	router.POST(options.BaseURL+"/api/v1/user-groups", wrapper.CreateUserGroup)
+	router.DELETE(options.BaseURL+"/api/v1/user-groups/:id", wrapper.DeleteUserGroup)
+	router.GET(options.BaseURL+"/api/v1/user-groups/:id", wrapper.GetUserGroup)
+	router.PATCH(options.BaseURL+"/api/v1/user-groups/:id", wrapper.UpdateUserGroup)
+	router.GET(options.BaseURL+"/api/v1/user-groups/:id/members", wrapper.ListUserGroupMembers)
+	router.POST(options.BaseURL+"/api/v1/user-groups/:id/members", wrapper.AddUserGroupMember)
+	router.DELETE(options.BaseURL+"/api/v1/user-groups/:id/members/:userId", wrapper.RemoveUserGroupMember)
 	router.GET(options.BaseURL+"/api/v1/repositories", wrapper.ListRepositories)
 	router.POST(options.BaseURL+"/api/v1/repositories", wrapper.CreateRepository)
 	router.DELETE(options.BaseURL+"/api/v1/repositories/:name", wrapper.DeleteRepository)

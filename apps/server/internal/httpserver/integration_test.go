@@ -198,7 +198,7 @@ func TestAuthFlowEndToEnd(t *testing.T) {
 
 	// 管理员授予 alice read。
 	if code := e.do(t, http.MethodPut, "/api/v1/repositories/maven-releases/acl", adminToken,
-		api.PutAclRequest{Items: []api.AclEntry{{SubjectId: alice.Id, Action: api.AclEntryActionRead}}}, nil); code != http.StatusOK {
+		api.PutAclRequest{Items: []api.AclEntry{{SubjectId: &alice.Id, Action: api.AclEntryActionRead}}}, nil); code != http.StatusOK {
 		t.Fatalf("写 ACL 状态码 = %d，期望 200", code)
 	}
 

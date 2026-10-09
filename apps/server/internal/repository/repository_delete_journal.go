@@ -69,9 +69,25 @@ func restoreRepositoryDeleteJournal(tx *sqlx.Tx, operationID string) error {
 		snapshot.Repository.Online, snapshot.Repository.CreatedAt); err != nil {
 		return err
 	}
+	// 恢复 ACL 时必须带上主体类型与组 ID：组主体行的 subject_id 为 NULL、
+	// 授权信息全在 subject_group_id 上，只写三列会让组授权在回滚后静默丢失
+	// （用户主体只靠 subject_type 的列默认值兜底、看不出问题，故极易漏）。
 	for _, entry := range snapshot.ACL {
-		if _, err := tx.Exec(`INSERT OR IGNORE INTO acl (repository_id, subject_id, action) VALUES (?, ?, ?)`,
-			snapshot.Repository.ID, entry.SubjectID, entry.Action); err != nil {
+		if entry.SubjectType == SubjectTypeGroup {
+			if _, err := tx.Exec(
+				`INSERT OR IGNORE INTO acl (repository_id, subject_id, subject_type, subject_group_id, action)
+				VALUES (?, NULL, ?, ?, ?)`,
+				snapshot.Repository.ID, SubjectTypeGroup, entry.SubjectGroupID, entry.Action,
+			); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, err := tx.Exec(
+			`INSERT OR IGNORE INTO acl (repository_id, subject_id, subject_type, subject_group_id, action)
+			VALUES (?, ?, ?, NULL, ?)`,
+			snapshot.Repository.ID, entry.SubjectID, SubjectTypeUser, entry.Action,
+		); err != nil {
 			return err
 		}
 	}

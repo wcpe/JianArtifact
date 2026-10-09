@@ -23,7 +23,7 @@
 ### 用户、令牌、仓库和制品
 
 - 用户与令牌：用户列表/创建/更新/禁用/改密，API Token 创建和吊销。
-- 仓库与 ACL：仓库 CRUD、成员授权、仓库格式/可见性/上游配置和使用统计。
+- 仓库与 ACL：仓库 CRUD、成员授权、仓库格式/可见性/上游配置和使用统计。授权主体分 `user` / `group` 两态（`AclEntry.subjectType`，缺省 `user` 以兼容既有请求体），`subjectId` 与 `subjectGroupId` 按 `subjectType` 二选一必填、另一列被忽略；动作 `action` 为六档 `read` / `write` / `publish` / `delete` / `acl_manage` / `admin`。蕴含关系（判定动作 → 能使之通过的已授权动作集合）：`read` ← `read`/`write`/`admin`；`publish` ← `publish`/`write`/`admin`；`write` ← `write`/`admin`；`delete` ← `delete`/`admin`；`acl_manage` ← `acl_manage`/`admin`；`admin` ← `admin`。即 **`write` 蕴含 `read` 与 `publish` 但不蕴含 `delete`**（`delete` 需单独授予），`publish` / `delete` / `acl_manage` 各自只蕴含自身且彼此互不满足、均**不蕴含** `read`。判定取「用户自身条目」∪「其所属各组条目」的并集，组内成员变动即时生效。字段与枚举以 [`../api/openapi.yaml`](../api/openapi.yaml) 为准，语义取舍见 [`specs/0.12.0-user-groups-and-fine-grained-actions.md`](specs/0.12.0-user-groups-and-fine-grained-actions.md)。
 - 公开仓库列表：`GET /api/v1/public/repositories`（无需认证）在 `items` / `total` 之外附带 `pinnedNames`——**全局置顶**仓库的当前主名（有序），公开页据此置顶前置并显示图钉。
 - 仓库使用说明：`GET /api/v1/repositories/{name}/usage` 返回 `UsageInfo.snippets`，每个 `UsageSnippet` 含 `group`（`auth` / `resolve` / `publish` / `other`）——它是**结构化分组标记，不参与本地化**（与随 `Accept-Language` 变化的 `title` / `description` 不同），供界面按「认证 / 解析依赖 / 发布制品 / 其他」折叠分区。
 - 仓库别名与重命名：`Repository.aliases` 与 `CreateRepositoryRequest` / `UpdateRepositoryRequest` 的 `aliases` 表达别名集合（别名与主名**共享命名空间、全局唯一**，不得等于主名或与他仓主名/别名冲突）；`POST /api/v1/repositories/{name}/rename`（仅管理员，`{newName}`）重命名后**旧名自动转别名**，旧链接仍可解析。字段、请求体与错误码以 [`../api/openapi.yaml`](../api/openapi.yaml) 为准。
@@ -34,6 +34,23 @@
 - 备份与搬迁：节点备份包的生成、列表、详情、删除、完整性校验与下载导出。
 
 - 仓库存储治理字段（FR-41）：`Repository.quotaBytes` / `quotaAssets` 是仓库级存储配额上限（计量口径为**逻辑字节** `SUM(asset.size)` 与**制品计数** `COUNT(*)`，0 / 缺省 = 不限），`Repository.cacheRetentionDays` 是代理缓存资产的保留天数（**仅 `type=proxy` 可设**，0 / 缺省 = 关闭）。超出配额后该仓库的写入返回 **429 `quota_exceeded`**，消息含当前占用与上限、不含文件系统路径；配额只对 `hosted` 仓库强制，且计量口径**与去重后的物理占用不等价**。创建与更新请求的对应字段为指针语义（缺省 = 不修改；显式 0 = 改为不限 / 关闭代理缓存保留），负数为 400；**非 `hosted` 仓库（`group` 与 `proxy`）携带非 0 配额一律 400**——`group` 不承载写入，`proxy` 的缓存写入发生在读取回源路径上、没有准入预检与流式早拒，配额强制尚未覆盖该路径（管理端因此只在 `hosted` 仓库渲染这两个输入）。字段真源见 [`../api/openapi.yaml`](../api/openapi.yaml)。
+
+### 用户组与授权主体（FR-36）
+
+用户组把「给 N 个用户逐条写 ACL」收敛成一条：组本身不产生权限，真正生效的是把组作为主体写进仓库 ACL（见「用户、令牌、仓库和制品」的仓库 ACL 条目）。**八个端点全部仅管理员可用**——管理面不做仓库级细粒度授权，`acl_manage` 未接到管理端点，沿用既有 `IsAdmin` 守卫；字段真源见 [`../api/openapi.yaml`](../api/openapi.yaml)。
+
+- `GET /api/v1/user-groups?page=&page_size=`：用户组分页列表（`UserGroupList{items, total}`；`total` 是**全部组数、不受分页窗口限制**）。组规模按「管理面一次列全」设计，分页窗口在服务端切片。
+- `POST /api/v1/user-groups`：`CreateUserGroupRequest{name（必填，不可为空白）, description?}` 创建组，**201** 返回 `UserGroup`。组名全局唯一，重名 **409**；组名为空 **400**。
+- `GET /api/v1/user-groups/{id}`：读取单个组 `UserGroup{id, name, description, createdAt}`；不存在 **404**。
+- `PATCH /api/v1/user-groups/{id}`：`UpdateUserGroupRequest{name?, description?}` 改组名 / 说明，**200** 返回更新后的 `UserGroup`。两字段均为**指针语义**——缺省（不传）表示不改；**显式空串也表示不改**（服务端按 `COALESCE(NULLIF(?, ''), 列)` 处理），故该端点**无法把组说明清空成空串**，只能改成非空文本。改名撞既有组名 **409**；**改名不影响既有授权**（ACL 引用的是组 ID）。
+- `DELETE /api/v1/user-groups/{id}`：删组，**204**。连带清理该组的成员关系与**以该组为主体的全部 ACL 条目**——否则会留下指向已消失组的悬空授权，它在 ACL 列表里既显示不出组名、也无法回收；清理失败即整体失败。审计的 `entityKey` 落在**组名**上。
+- `GET /api/v1/user-groups/{id}/members`：列出成员 `UserGroupMemberList{items: UserGroupMember[]{userId, username, createdAt}}`。**组不存在返回 404**（否则调用方无法区分「组不存在」与「组存在但没成员」）；成员列表不分页。
+- `POST /api/v1/user-groups/{id}/members`：`AddUserGroupMemberRequest{userId（必填）}` 把用户加入组，**201** 返回 `UserGroupMember`。用户不存在 **404**（组不存在亦 404）；**重复加入幂等**（不报错，可安全重试）。
+- `DELETE /api/v1/user-groups/{id}/members/{userId}`：把用户移出组，**204**；该成员关系不存在返回 **404**。移出后该用户**立即失去经由该组获得的授权**（判定无缓存、无快照），其自身被单独授予的授权不受影响。
+
+错误码：全部端点未登录 **401**、非管理员 **403**；`GET`/`PATCH`/`DELETE /{id}` 与成员两个端点在目标不存在时 **404**；`POST /{id}` 与 `PATCH /{id}` 在组名非法 / 重名时分别为 **400** / **409**。
+
+**组操作的审计动作**（`entityType=user_group`）：`group.create` / `group.update` / `group.delete` / `group.member.add` / `group.member.remove`。前三者 `entityKey` 为组名、detail 带 `id=<组 ID>`（`repo` 为空）；成员增删 `entityKey` 为组 ID，detail 带 `userId=<用户 ID>`（`member.add` 另带 username）。
 
 ### 设置与审计
 

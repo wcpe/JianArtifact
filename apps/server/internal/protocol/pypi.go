@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
+	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
 // PypiHandler 提供 PyPI PEP 503/691 Simple 与 Twine legacy 上传端点。
@@ -165,7 +166,7 @@ func validPypiFilename(name string) bool {
 // LegacyUpload 解析 Twine 的 multipart 上传；文件正文先流式暂存，拒绝超大表单。
 func (h *PypiHandler) LegacyUpload(c *gin.Context) {
 	repo := c.Param("repo")
-	if !h.authorize(c, repo, "write") {
+	if !h.authorize(c, repo, repository.ActionPublish) {
 		h.auditRejected(c, "pypi.publish", repo, "", "authorization_denied")
 		return
 	}
