@@ -30,6 +30,9 @@ import { density } from "../../theme/density";
 const STATUS_ORDER: ConnectionStatusValue[] = [
   "AVAILABLE",
   "AUTO_BLOCKED",
+  // FR-43：半开也必须在这里出现——环形图的数据源是这个数组（按它过滤计数），
+  // 漏掉即「状态分布」静默吞掉半开仓库，图上总数对不上仓库总数。
+  "HALF_OPEN",
   "UNAVAILABLE",
   "OFFLINE",
   "READY",

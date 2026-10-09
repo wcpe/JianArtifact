@@ -57,7 +57,7 @@ import { currentLocaleTag } from "../../i18n/current";
 import { actionLabel } from "../audit/labels";
 import { useAsync, useVisibleRefresh } from "../../hooks/useAsync";
 import { formatBytes, formatCount, formatStamp } from "../../lib/format";
-import { UPSTREAM_BLOCKED_CODE } from "../../lib/connectionStatus";
+import { isBlockedStatus, UPSTREAM_BLOCKED_CODE } from "../../lib/connectionStatus";
 import { density } from "../../theme/density";
 import { OpsKpiBand } from "../ops/OpsKit";
 import { TrendChart } from "./TrendChart";
@@ -413,10 +413,13 @@ function DashboardGrid({
   onOpenRecent: () => void;
 }) {
   const { t } = useTranslation();
-  // KPI 指标带第 8 格：上游被自动阻止的 proxy 仓库数（与仓库状态面板同源）。
-  const blockedRepos = repos.filter(
-    (repo) => repo.connectionStatus?.status === "AUTO_BLOCKED",
-  ).length;
+  // KPI 指标带第 8 格：上游被阻止的 proxy 仓库数（与仓库状态面板、后端 blockedCount 同口径）。
+  // FR-43：半开也计入——它业务上仍处于封锁效果，只数 AUTO_BLOCKED 会让「正在试探」的仓库
+  // 在封锁窗口到期瞬间从读数为 0，误报成已恢复。
+  const blockedRepos = repos.filter((repo) => {
+    const status = repo.connectionStatus?.status;
+    return status != null && isBlockedStatus(status);
+  }).length;
   // 容量增长卡片的纵轴自适应：增量非负时自 0 起——「从 0 起」才有"增长了多少"的可比性，
   // 否则 auto 会把几十 MB 的落差拉满整个轴高，看起来又像剧烈波动。一旦区间内出现负增量
   // （清理/压缩导致的容量下降），固定下界 0 会把负值裁到看不见，故退化为 auto/auto，

@@ -43,6 +43,7 @@ import {
   IconPinnedOff,
   IconPlug,
   IconPlus,
+  IconRadar,
   IconSearch,
   IconTrash,
 } from "@tabler/icons-react";
@@ -125,6 +126,9 @@ const TYPE_COLOR: Record<string, string> = {
 const CONN_ICON: Record<ConnectionStatusValue, typeof IconCircleCheck> = {
   AVAILABLE: IconCircleCheck,
   AUTO_BLOCKED: IconBan,
+  // FR-43：半开是过渡态（正在试探上游），用「雷达/探测」形状与禁行标志区分——
+  // 二者同属阻止态，靠形状差别才能一眼看出仍在试探、尚未恢复。
+  HALF_OPEN: IconRadar,
   UNAVAILABLE: IconCircleX,
   OFFLINE: IconCloudOff,
   READY: IconPlug,
