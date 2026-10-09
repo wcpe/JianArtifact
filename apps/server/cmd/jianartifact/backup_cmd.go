@@ -12,6 +12,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/archive"
 	"github.com/wcpe/jianartifact/apps/server/internal/config"
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
+	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 	"golang.org/x/term"
 )
 
@@ -24,7 +25,7 @@ const (
 // backupCmd 执行备份包离线运维子命令。
 func backupCmd(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("用法：jianartifact backup <create|list|verify|link|delete|import>")
+		return fmt.Errorf("用法：jianartifact backup <create|list|verify|drill|link|delete|import>")
 	}
 	cfg, err := config.Load()
 	if err != nil {
@@ -43,6 +44,8 @@ func backupCmd(args []string) error {
 		return backupList(svc, args[1:])
 	case "verify":
 		return backupVerify(svc, args[1:])
+	case "drill":
+		return backupDrill(svc, args[1:])
 	case "link":
 		return backupLink(svc, cfg, args[1:])
 	case "delete":
@@ -50,7 +53,7 @@ func backupCmd(args []string) error {
 	case "import":
 		return backupImport(svc, cfg, args[1:])
 	default:
-		return fmt.Errorf("未知 backup 子命令：%s（支持 create / list / verify / link / delete / import）", args[0])
+		return fmt.Errorf("未知 backup 子命令：%s（支持 create / list / verify / drill / link / delete / import）", args[0])
 	}
 }
 
@@ -158,6 +161,61 @@ func backupVerify(svc *appServices, args []string) error {
 	fmt.Printf("  制品 %d 件，blob %d 个（%d 字节）\n",
 		manifest.Counts.Assets, manifest.Blobs.Count, manifest.Blobs.TotalBytes)
 	return nil
+}
+
+// backupDrill 对已登记的备份包执行一次恢复演练：在隔离临时目录里真解包、真校验，
+// 产出结构化报告并落库（FR-40）。CLI 走同步等待，包大时会跑一会儿。
+//
+// 与 backup verify 的区别：verify 只校验归档自身（可对任意文件路径），
+// drill 额外真解包、对解出的 SQLite 跑 quick_check、写报告落库——
+// 它回答的是"这份包真的能恢复吗"，而不是"这个归档字节完整吗"。
+// 演练是**只读路径**：绝不写 restore.pending / restore-staging/（那是真导入的副作用）。
+func backupDrill(svc *appServices, args []string) error {
+	packageID := positionalArg(args)
+	if packageID == "" {
+		return fmt.Errorf("用法：jianartifact backup drill <包标识> [--level shallow|deep]")
+	}
+	level := optionalOption(args, "--level")
+	if level == "" {
+		level = repository.VerificationLevelShallow
+	}
+	if level != repository.VerificationLevelShallow && level != repository.VerificationLevelDeep {
+		return fmt.Errorf("--level 只能是 shallow 或 deep，实际 %q", level)
+	}
+
+	started := time.Now()
+	result, err := svc.backupDrillSvc.Drill(context.Background(), packageID, domain.DrillBackupOptions{Level: level})
+	if err != nil {
+		return fmt.Errorf("恢复演练：%w", err)
+	}
+
+	fmt.Printf("恢复演练完成：%s\n", result.PackageID)
+	fmt.Printf("  级别：%s\n", result.Level)
+	fmt.Printf("  结论：%s\n", drillVerdict(result.OK))
+	fmt.Printf("  耗时：%s\n", time.Since(started).Round(time.Millisecond))
+	fmt.Printf("  报告：编号 %d（已落库，可查历史）\n", result.Verification.ID)
+	for _, check := range result.Checks {
+		mark := "通过"
+		if !check.OK {
+			mark = "失败"
+		}
+		fmt.Printf("  - [%s] %s：%s\n", mark, check.Name, check.Detail)
+	}
+	if !result.OK {
+		fmt.Fprintf(os.Stderr, "演练未通过：%s\n", result.ErrorSummary)
+		fmt.Fprintln(os.Stderr, "提示：报告已如实记录失败原因，未做任何修饰；包体未被修改。")
+		// 非零退出，便于脚本与 CI 判定。
+		return fmt.Errorf("演练结论为失败：%s", result.ErrorSummary)
+	}
+	return nil
+}
+
+// drillVerdict 把布尔结论翻成中文，避免输出裸 true/false。
+func drillVerdict(ok bool) string {
+	if ok {
+		return "通过（该包可恢复）"
+	}
+	return "未通过（该包存在不可恢复的问题）"
 }
 
 // backupLink 签发带时效的下载链接，供新机器直接拉取。

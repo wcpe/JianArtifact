@@ -22,11 +22,16 @@
 | `JIAN_STORAGE_CLEANUP_INTERVAL`        | 存储治理清理作业的间隔（秒）             | `86400`；`0` 禁用（作业不注册）；非法 / 负数回落默认               |
 | `JIAN_STORAGE_METADATA_RETENTION_DAYS` | 终态操作与隔离元数据的保留天数           | `7`；`0` 禁用元数据裁剪；非法 / 负数回落默认                       |
 | `JIAN_STORAGE_TEMP_MAX_AGE_HOURS`      | 过期 OCI 上传临时文件的最长滞留（小时）  | `24`；`0` 禁用该项清理；非法 / 负数回落默认                        |
+| `JIAN_BACKUP_AUTO_INTERVAL`            | 自动备份作业的间隔（秒）                 | `0`（**默认关闭**）；`0` 不注册作业；非法 / 负数回落默认           |
+| `JIAN_BACKUP_KEEP_LAST`                | 保留最近 N 份自动备份（份）              | `7`；`0` = 不按份数限制；非法 / 负数回落默认                       |
+| `JIAN_BACKUP_RETENTION_DAYS`           | 自动备份的保留天数（天）                 | `30`；`0` = 不限天数；非法 / 负数回落默认                          |
 | `JIAN_TLS_ADDR`                        | 内置 HTTPS 监听地址                      | 为空表示不启用                                                     |
 | `JIAN_TLS_CERT` / `JIAN_TLS_KEY`       | TLS 证书和私钥路径                       | 配置 `JIAN_TLS_ADDR` 时必填                                        |
 | `JIAN_AUTO_BLOCK_BASE_SECONDS`         | proxy 上游 auto-block 退避起始时长（秒） | `40`；之后每档翻倍；`0` / 负数 / 非法回落默认（无禁用语义）        |
 
 派生路径固定为 `${JIAN_DATA_DIR}/jianartifact.db` 和 `${JIAN_DATA_DIR}/blobs`。启动会创建数据目录并执行 schema 迁移；不会在启动时扫描活动 blob；遗留 / 孤儿 blob 的定时清理由本实例按 `JIAN_BLOB_GC_INTERVAL` 独立运行；存储治理清理（隔离区空目录、终态操作与隔离元数据裁剪、过期 OCI 上传临时文件、代理缓存保留）由 `storage-cleanup` 作业按 `JIAN_STORAGE_CLEANUP_INTERVAL` 独立运行，两者按目录命名空间各管一块、互不重叠。以上作业**都只在第一个间隔到期后执行**（启动不清理、不扫描历史）。
+
+**周期化自动备份**（FR-40）默认**关闭**：必须显式配置 `JIAN_BACKUP_AUTO_INTERVAL` 才会注册 `backup-auto` 作业。开启后按间隔生成**完整热备份包**（不生成差包——无人值守下基线选择不可控且易形成长链），并在每轮收尾应用保留策略（见 §5.2「备份目录保留」）。**调度间隔在启动时固定，改 `JIAN_BACKUP_AUTO_INTERVAL` 需要重启进程才生效**，不支持运行时热改。
 
 **已废弃的环境变量**：`JIAN_REPLICATION_ROLE`、`JIAN_REPLICATION_PRIMARY_URL`、`JIAN_REPLICATION_RELAY_ENABLED` 自复制通道退役（FR-138）起不再被解析；旧环境文件里残留这些键不影响启动（未知键被忽略），可直接删除。
 
@@ -155,7 +160,7 @@ scrape_configs:
 curl -fsS -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/api/v1/maintenance/jobs
 ```
 
-返回本进程**已注册**的周期作业（现状为 `blob-gc` 与 `storage-cleanup`）及状态：名称、间隔秒数、是否运行中、累计执行 / 失败次数、最近开始 / 结束时间、最近错误。要点：
+返回本进程**已注册**的周期作业（现状为 `blob-gc`、`storage-cleanup` 与 `backup-auto`）及状态：名称、间隔秒数、是否运行中、累计执行 / 失败次数、最近开始 / 结束时间、最近错误。要点：
 
 - 清单由注册决定——**间隔 ≤ 0 被禁用的作业不注册，也不出现在清单里**，所以"某个作业没出现"等价于"该作业在本实例被禁用"（例如 `JIAN_STORAGE_CLEANUP_INTERVAL=0`）；
 - 计数自进程启动累计、重启归零；未执行过的作业，时间与错误字段为 `null`。
@@ -324,6 +329,7 @@ jianartifact-backup-<packageId>.tar.gz
 - `jianartifact backup create --base <packageId> [--mode hot|frozen] [--label <备注>]`：以某基线包生成**增量差包**，只携带新增 blob + 新 db，把搬迁停机窗口从"传整个包"缩到"只传新增 blob + 新 db"（分钟级）。基线必须存在、状态 `done`、且其**侧车索引** `${JIAN_DATA_DIR}/backups/<packageId>.index` 存在，否则明确报错。
 - `jianartifact backup list [--json]`：列出本机备份包（状态、大小、创建时间、失败摘要）。
 - `jianartifact backup verify <包标识|归档路径> [--deep]`：校验完整性。不带 `--deep` 只比对 db 与 `blobs.index` 摘要；带 `--deep` 逐 blob 比对内容摘要（耗时与包体积同阶）。目标既可以是已登记的包标识，也可以是外部传入的归档文件路径。
+- `jianartifact backup drill <包标识> [--level shallow|deep]`：**恢复演练**（FR-40）。在隔离临时目录内真解包并校验（归档完整性 → 解包 → 解出的 SQLite `quick_check` + 关键表可查询 → 解出的 blob 数与 manifest 一致），产出结构化报告并落库；未通过时非零退出且报告仍落库。**只读路径：不写 `restore.pending` / `restore-staging/`，不改动本实例、无需重启**。与 `backup verify` 的区别：verify 只校验归档字节（可对任意文件路径），drill 回答的是"这份包真的能恢复吗"。详见 §5.2「恢复演练」。
 - `jianartifact backup link <包标识> [--ttl 30m] [--base https://对外地址]`：签发带时效的下载链接，供新机器直接拉取。`--base` 缺省时回退 `JIAN_PUBLIC_URL`；两者都为空则报错（不签相对链接）。有效期钳制在 1 分钟 ~ 24 小时。
 - `jianartifact backup delete <包标识>`：删除包体与登记；被增量包引用的基线会被拒绝。
 - `jianartifact backup import <归档路径> [--overwrite] [--deep] [--yes]`：校验备份包并暂存，**需重启服务后生效**。`--overwrite`：目标实例非空时必需（内置 `anonymous` 主体不计入"非空"）；`--deep`：逐 blob 比对内容摘要（耗时与包体积同阶）；`--yes`：交互式终端下跳过"确认覆盖"的二次确认（无 TTY 时 `--overwrite` 即视为已确认）。失败不会留下待生效标记。重启后启动日志会打印已应用的恢复，并保留 `pre-restore-<ts>/` 作为回滚退路。
@@ -379,11 +385,38 @@ curl -fsSL -o /tmp/jianartifact "<Release 附件 URL>" && sha256sum /tmp/jianart
 ```bash
 jianartifact backup create --mode hot --label "每周例行"
 jianartifact backup verify <包标识> --deep     # 可选的深度校验
+jianartifact backup drill <包标识> --level deep # 恢复演练：确认这份包真的能恢复
 ```
 
 包落在 `${JIAN_DATA_DIR}/backups/`，也可从管理台「迁移与搬迁 → 备份与搬迁」生成与下载。热备份不停服，适合例行备份；要求严格一致性时改用冻结窗口。
 
+也可以让服务按周期自动备份（FR-40）：设 `JIAN_BACKUP_AUTO_INTERVAL`（秒）即启用 `backup-auto` 作业，并配 `JIAN_BACKUP_KEEP_LAST` / `JIAN_BACKUP_RETENTION_DAYS` 约束占用（见 §1.1 与下文「备份目录保留」）。**自动备份默认关闭**，间隔改动需重启生效。
+
 **包内不含密钥**，因此除包之外仍必须另行受保护地保存：生产显式配置的 `JIAN_JWT_SECRET`、`JIAN_MIGRATION_CREDENTIAL_KEY` 与服务环境文件（`deploy/.env`、systemd 环境文件）。这些密钥不随包迁移，新实例必须自行注入。
+
+**备份目录保留**（FR-40）：`${JIAN_DATA_DIR}/backups/` 的自动淘汰只作用于**自动备份**（`origin=auto`，即 `backup-auto` 作业生成的包），两条上限**同时生效、取更严格者**：
+
+| 配置                                 | 默认 | `0` 的含义        | 说明                                     |
+| ------------------------------------ | ---- | ----------------- | ---------------------------------------- |
+| `JIAN_BACKUP_KEEP_LAST`              | `7`  | 不按份数限制      | 保留最近 N 份自动备份                    |
+| `JIAN_BACKUP_RETENTION_DAYS`         | `30` | 不限天数          | 保留最近 N 天的自动备份                  |
+
+两条都配 `0` 等于不做任何淘汰（只生成、不清理，需自行盯磁盘）。语义要点：
+
+- **手动备份永不被自动删除**：`jianartifact backup create`、管理台与 API 生成的包都是 `origin=manual`，是人工决策产物，保留策略不触碰它们（不做手动包的自动保留策略）。清单里"淘汰 0 份"因此是正常结果。
+- **被增量差包引用为基线的包跳过不删**，并在作业日志中计入"跳过数"。日志形如 `自动备份完成：包 bk-…；保留策略：候选 3 份 / 淘汰 1 份 / 因被差包引用跳过 1 份 / 失败 0 份`——**跳过数非 0 不是故障**，它表示有差包依赖该基线。
+- 淘汰是 `backup-auto` 作业的**收尾步骤**，随作业一起跑；首个自动备份生成后立即应用一次，不需要等下一轮。
+- 保留策略**只统计状态为 `done` 的自动包**：生成中 / 失败的包不占份数（否则会挤掉一份真正可用的备份），也不被本策略删除。
+- 手工清理仍可用 `jianartifact backup delete <包标识>`；被差包引用的基线会被拒绝（`该备份包仍被增量包引用，不能删除`），与保留策略同一约束。
+
+**恢复演练**（FR-40）：对任意已完成的包在**隔离临时目录**内真解包、真校验，产出结构化报告并落库：
+
+```bash
+jianartifact backup drill <包标识>                # 浅校验（默认）
+jianartifact backup drill <包标识> --level deep   # 深校验：逐 blob 比对内容摘要
+```
+
+演练依次检查四项：归档完整性、解包、解出的 SQLite（`PRAGMA quick_check` + 关键表可查询）、解出的 blob 数与 manifest 一致。耗时与包体积同阶（深校验要逐 blob 读一遍），大包请留足时间。**演练是只读路径**：它**不会**产生 `restore.pending` 或 `restore-staging/`，与 §5.3 的真导入有本质区别——演练不改动本实例，不需要重启。演练未通过时命令以非零退出码结束，报告仍会落库（失败报告正是演练最该留下的东西）；报告随包级联删除。临时目录位于 `${JIAN_DATA_DIR}/backup-drill/`，无论成败都会被清理。
 
 若不用备份包而手工兜底，需一致备份：
 

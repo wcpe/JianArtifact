@@ -110,6 +110,10 @@ func usage(w io.Writer) {
   backup list        列出本机备份包 [--json]
   backup verify <包标识|归档路径>
                      校验备份包完整性 [--deep]（deep 逐 blob 比对内容摘要）
+  backup drill <包标识>
+                     恢复演练：隔离目录内真解包 + SQLite 一致性校验，
+                     产出报告并落库 [--level shallow|deep]（默认 shallow）
+                     只读路径，不产生 restore.pending；未通过时以非零退出
   backup link <包标识>
                      签发带时效的下载链接，供新机器直接拉取
                      [--ttl 30m] [--base https://对外地址]
@@ -135,6 +139,12 @@ func usage(w io.Writer) {
                      proxy 回源整体超时（秒，默认 30）
   JIAN_BLOB_GC_INTERVAL
                      遗留 blob 清理间隔（秒，默认 86400；0 禁用）
+  JIAN_BACKUP_AUTO_INTERVAL
+                     自动备份作业间隔（秒，默认 0 即关闭；需显式开启）
+  JIAN_BACKUP_KEEP_LAST
+                     保留最近 N 份自动备份（默认 7；0 = 不按份数限制）
+  JIAN_BACKUP_RETENTION_DAYS
+                     自动备份保留天数（默认 30；0 = 不限天数）
   JIAN_MIGRATION_CREDENTIAL_KEY
                      在线迁移凭据 AES-256-GCM 密钥（Base64 32 字节）
   JIAN_TLS_ADDR      HTTPS 监听地址（为空则不启用 HTTPS）
