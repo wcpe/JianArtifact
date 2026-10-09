@@ -4,6 +4,14 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## 未发布
+
+> 本段登记**尚未开窗**的变更：`VERSION` 仍为 `0.11.0`，版本号待下一个开发窗口开启时统一确定，故此处不写具体版本。
+
+### 修复
+
+- **升级 Go 工具链与 x/net 以清除标准库安全漏洞**：Go `1.26.6` 与 `golang.org/x/net` `v0.59.0` 被 2026-10-09 新披露的 12 个漏洞覆盖（含 `net/http`、`net/textproto`、`crypto/tls`、`html/template` 及 x/net 自身），`govulncheck` 因此由绿转红、质量门随之失败，与业务改动无关。`toolchain` 升至 `go1.26.9`、`x/net` 升至 `v0.60.0` 后 `govulncheck` 恢复「No vulnerabilities found」（仍余 1 条模块级漏洞，代码未调用、不阻断）。`release.yml` 的 Go 版本同步更新；**CI 的 Go 质量工具缓存 key 补上 Go 版本**——该缓存此前只钉工具版本，升级工具链后会命中旧工具链编译的 `govulncheck` 二进制，导致它继续按旧版本报告标准库漏洞（实测踩到），故必须把 Go 版本纳入 key。
+
 ## 0.11.0（2026-10-02）
 
 ### 新增
