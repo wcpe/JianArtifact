@@ -2,7 +2,7 @@ module github.com/wcpe/jianartifact/apps/server
 
 go 1.26.0
 
-toolchain go1.26.6
+toolchain go1.26.9
 
 require (
 	github.com/coreos/go-oidc/v3 v3.21.0
@@ -13,7 +13,7 @@ require (
 	github.com/oapi-codegen/runtime v1.7.0
 	github.com/vjeantet/ldapserver v1.0.1
 	golang.org/x/crypto v0.57.0
-	golang.org/x/net v0.59.0
+	golang.org/x/net v0.60.0
 	golang.org/x/oauth2 v0.37.0
 	golang.org/x/sync v0.23.0
 	golang.org/x/sys v0.48.0
