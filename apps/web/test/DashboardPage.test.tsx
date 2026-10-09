@@ -364,12 +364,15 @@ describe("业务仪表盘（真实读模型）", () => {
     renderWithProviders(<DashboardPage />, { route: "/dashboard", authenticated: true });
 
     expect(await screen.findByText("仓库状态")).toBeTruthy();
-    // devmock 种子：9 个仓库（KPI 与列表一致）；4 可用 / 4 自动阻止 / 1 不可用
+    // devmock 种子：9 个仓库（KPI 与列表一致）；4 可用 / 3 自动阻止 / 1 半开 / 1 不可用
     expect(screen.getByText("npm-proxy")).toBeTruthy();
     expect(screen.getByText("maven-central")).toBeTruthy();
     expect(screen.getByText("docker-hub")).toBeTruthy();
     expect(screen.getByText("pypi-mirror")).toBeTruthy();
-    expect(screen.getAllByText("自动阻止").length).toBeGreaterThanOrEqual(4);
+    expect(screen.getAllByText("自动阻止").length).toBeGreaterThanOrEqual(3);
+    // FR-43：半开（窗口已到、正在试探上游）与自动阻止同属阻止态，但必须显示为不同状态，
+    // 否则「正在试探」会被误读成「窗口内封锁」。
+    expect(screen.getAllByText("试探中").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("不可用").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("共 9 个仓库")).toBeTruthy();
     // 明细行展示制品数与体积（devmock 种子 maven-releases：1284 制品 / 8589934592 字节 → 8.0 GB）。

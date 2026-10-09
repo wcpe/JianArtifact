@@ -214,8 +214,9 @@ export const en = {
     metricsFailuresHint: "Final server-side 5xx",
     metricsCacheRate: "Cache hit rate",
     metricsCacheRateHint: "Cacheable proxy/group reads only",
-    metricsBlockedRepos: "Auto-blocked",
-    metricsBlockedReposHint: "Proxy repositories auto-blocked due to unreachable upstream",
+    metricsBlockedRepos: "Upstream blocked",
+    metricsBlockedReposHint:
+      "Proxy repositories blocked by unreachable upstream (including half-open probes)",
     trendRequests: "Request and Download Trend",
     trendRequestsSummary: "How request volume changes over time",
     trendCapacity: "Capacity Growth (relative to range start)",
@@ -584,6 +585,8 @@ export const en = {
     connectionStatus: "Connection Status",
     statusAvailable: "Available",
     statusAutoBlocked: "Auto-blocked",
+    // FR-43：半开（阻止窗口已到、正在试探上游，业务流量仍等效封锁）
+    statusHalfOpen: "Probing",
     statusUnavailable: "Unavailable",
     statusOffline: "Offline",
     statusReady: "Not connected",

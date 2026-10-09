@@ -468,7 +468,7 @@ func (h *Handlers) connectionStatus(r *repository.Repository) *ConnectionStatus 
 // toAPIConnectionStatus 按 MD-2 状态合并规则生成契约 ConnectionStatus：
 //   - hosted 不展示连接状态（返回 nil）；
 //   - online=false（离线）优先覆盖其它状态：无论内存态为何一律 OFFLINE；
-//   - 仅 online=true 显示内存态连接状态（READY/AVAILABLE/AUTO_BLOCKED/UNAVAILABLE）；
+//   - 仅 online=true 显示内存态连接状态（READY/AVAILABLE/AUTO_BLOCKED/HALF_OPEN/UNAVAILABLE）；
 //   - group 无独立上游，online 时显示 READY（未连接）。
 func toAPIConnectionStatus(r *repository.Repository, h domain.RemoteHealth) *ConnectionStatus {
 	if r.Type == "hosted" {
@@ -480,6 +480,17 @@ func toAPIConnectionStatus(r *repository.Repository, h domain.RemoteHealth) *Con
 	switch h.Status {
 	case domain.StatusAutoBlocked:
 		out := &ConnectionStatus{Status: ConnectionStatusStatus(domain.StatusAutoBlocked), Description: optionalString("上游不可用，自动阻止中")}
+		if !h.BlockedUntil.IsZero() {
+			until := h.BlockedUntil
+			out.BlockedUntil = &until
+		}
+		return out
+	case domain.StatusHalfOpen:
+		// FR-43：半开期（阻止窗口已到、正在试探上游）对业务流量同样等效封锁——
+		// 每轮半开只放行一个探测请求，其余快速失败——因此对外必须呈现为阻止态。
+		// 契约已新增 HALF_OPEN 枚举，故与 AUTO_BLOCKED 分开映射：展示侧据此
+		// 区分「窗口内封锁」与「正在试探」，而不再把半开期误报成自动阻止。
+		out := &ConnectionStatus{Status: ConnectionStatusStatus(domain.StatusHalfOpen), Description: optionalString("上游不可用，正在试探上游")}
 		if !h.BlockedUntil.IsZero() {
 			until := h.BlockedUntil
 			out.BlockedUntil = &until

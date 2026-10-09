@@ -33,6 +33,7 @@
 - 迁移：Nexus 来源发现、计划、显式启动/取消、进度、报告和恢复。
 - 备份与搬迁：节点备份包的生成、列表、详情、删除、完整性校验与下载导出。
 
+- 仓库上游连接状态（FR-114 起，FR-43 扩展）：`Repository.connectionStatus` 是 `ConnectionStatus{status, blockedUntil?, description?}`，**仅 `proxy` / `group` 返回**（`hosted` 无上游概念、字段缺省，向后兼容）。`status` 取值 `READY`（尚未探测）/ `AVAILABLE`（可用）/ `AUTO_BLOCKED`（自动阻止窗口内）/ `HALF_OPEN`（阻止窗口已到期、正在试探上游）/ `UNAVAILABLE`（不可用）/ `OFFLINE`（手动离线）。**`AUTO_BLOCKED` 与 `HALF_OPEN` 同属阻止态**：`HALF_OPEN` 表示后台已发起一轮探测，但业务流量仍**等效封锁**——每轮半开只放行一个探测请求，其余请求快速失败，故展示上不得把它当作「已恢复」；探测成功即回 `AVAILABLE` 并重置退避，失败则回 `AUTO_BLOCKED` 并推进一档窗口（退避为**每档翻倍**，起始 40s 可由 `JIAN_AUTO_BLOCK_BASE_SECONDS` 配置）。`blockedUntil` 只在 `AUTO_BLOCKED` 与 `HALF_OPEN` 两态有值。`online=false` 的仓库一律返回 `OFFLINE`（覆盖内存态）；`POST /api/v1/repositories/{name}/recheck-connection`（仅管理员、仅 online proxy）同步发起一次 HEAD 探测并返回最新状态，不等窗口。字段与枚举真源见 [`../api/openapi.yaml`](../api/openapi.yaml)，语义与闸门设计见 [`specs/0.12.0-upstream-circuit-breaker.md`](specs/0.12.0-upstream-circuit-breaker.md)。
 - 仓库存储治理字段（FR-41）：`Repository.quotaBytes` / `quotaAssets` 是仓库级存储配额上限（计量口径为**逻辑字节** `SUM(asset.size)` 与**制品计数** `COUNT(*)`，0 / 缺省 = 不限），`Repository.cacheRetentionDays` 是代理缓存资产的保留天数（**仅 `type=proxy` 可设**，0 / 缺省 = 关闭）。超出配额后该仓库的写入返回 **429 `quota_exceeded`**，消息含当前占用与上限、不含文件系统路径；配额只对 `hosted` 仓库强制，且计量口径**与去重后的物理占用不等价**。创建与更新请求的对应字段为指针语义（缺省 = 不修改；显式 0 = 改为不限 / 关闭代理缓存保留），负数为 400；**非 `hosted` 仓库（`group` 与 `proxy`）携带非 0 配额一律 400**——`group` 不承载写入，`proxy` 的缓存写入发生在读取回源路径上、没有准入预检与流式早拒，配额强制尚未覆盖该路径（管理端因此只在 `hosted` 仓库渲染这两个输入）。字段真源见 [`../api/openapi.yaml`](../api/openapi.yaml)。
 
 ### 用户组与授权主体（FR-36）

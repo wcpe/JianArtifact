@@ -1136,6 +1136,22 @@ describe("devmock MSW 端点行为", () => {
     expect(hosted?.connectionStatus).toBeUndefined();
   });
 
+  it("半开仓库在列表里返回 HALF_OPEN（FR-43），与 AUTO_BLOCKED 可区分", async () => {
+    // 种子 maven-papermc 处于半开、maven-central 处于自动阻止：两者同属阻止态，
+    // 但对外取值必须不同，否则管理界面无从区分「窗口内封锁」与「正在试探上游」。
+    const res = await fetch("http://localhost/api/v1/repositories?page_size=100", {
+      headers: auth,
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      items: { name: string; connectionStatus?: { status: string; blockedUntil?: string } }[];
+    };
+    const halfOpen = body.items.find((r) => r.name === "maven-papermc");
+    expect(halfOpen?.connectionStatus?.status).toBe("HALF_OPEN");
+    const blocked = body.items.find((r) => r.name === "maven-central");
+    expect(blocked?.connectionStatus?.status).toBe("AUTO_BLOCKED");
+  });
+
   it("offline 仓库连接状态优先覆盖为 OFFLINE（MD-2）", async () => {
     const put = await fetch("http://localhost/api/v1/repositories/npm-proxy/online", {
       method: "PUT",

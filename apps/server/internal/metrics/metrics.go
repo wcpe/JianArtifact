@@ -33,6 +33,8 @@ const (
 	metricPrefix      = "jianartifact_"
 	protocolMetric    = metricPrefix + "protocol_requests_total"
 	rejectionMetric   = metricPrefix + "publish_rejections_total"
+	blockEventsMetric = metricPrefix + "upstream_block_events_total"
+	blockedRepoMetric = metricPrefix + "upstream_blocked_repositories"
 	runtimeGoroutines = metricPrefix + "runtime_goroutines"
 	runtimeHeapBytes  = metricPrefix + "runtime_heap_bytes"
 	runtimeGCTotal    = metricPrefix + "runtime_gc_total"
@@ -47,6 +49,22 @@ var knownRejectionReasons = []string{rejectionQuota}
 // rejectionQuota 是配额（发布额度或仓库存储配额）拒绝。
 const rejectionQuota = "quota"
 
+// 上游断路器阻止事件原因（FR-43 §2.2）同样是**闭集枚举**：
+//   - probeFailed：后台/手动探测失败，阻止窗口延长一档；
+//   - upstreamError：回源失败触发首次（或再次）自动阻止。
+//
+// 该集合与 docs/specs/0.12.0-upstream-circuit-breaker.md §3.3 一一对应。
+// **新增取值必须先改规格并同步测试与 OPERATIONS.md**；闭集外的取值直接忽略，
+// 以此保证标签基数受控（仓库名/路径一律不得作为标签，见 ARCHITECTURE.md 指标约定）。
+var knownBlockReasons = []string{blockReasonProbeFailed, blockReasonUpstreamError}
+
+const (
+	// blockReasonProbeFailed 表示探测失败导致阻止窗口延长。
+	blockReasonProbeFailed = "probe_failed"
+	// blockReasonUpstreamError 表示回源失败触发自动阻止。
+	blockReasonUpstreamError = "upstream_error"
+)
+
 // protocolKey 是制品协议请求计数的标签组合（值均已归一化）。
 type protocolKey struct {
 	method      string
@@ -59,11 +77,17 @@ type Registry struct {
 	mu         sync.Mutex
 	protocol   map[protocolKey]uint64
 	rejections map[string]uint64
+	// blockEvents 是上游断路器阻止事件计数（FR-43），按闭集原因分区。
+	blockEvents map[string]uint64
 }
 
 // New 创建空指标登记表。
 func New() *Registry {
-	return &Registry{protocol: make(map[protocolKey]uint64), rejections: make(map[string]uint64)}
+	return &Registry{
+		protocol:    make(map[protocolKey]uint64),
+		rejections:  make(map[string]uint64),
+		blockEvents: make(map[string]uint64),
+	}
 }
 
 // ProtocolRequest 记录一次已完成的制品协议请求；标签值在内部归一化。
@@ -100,12 +124,45 @@ func isKnownRejectionReason(reason string) bool {
 	return false
 }
 
+// UpstreamBlockEvent 记录一次上游断路器阻止事件（FR-43 §2.2），按原因分区。
+// reason 必须是闭集枚举取值（probe_failed / upstream_error）；闭集外的取值**直接忽略**，
+// 与 PublishRejection 同构，以保证标签基数受控、暴露面与规格完全一致。
+func (r *Registry) UpstreamBlockEvent(reason string) {
+	if !isKnownBlockReason(reason) {
+		return
+	}
+	r.mu.Lock()
+	r.blockEvents[reason]++
+	r.mu.Unlock()
+}
+
+// isKnownBlockReason 判定原因是否属于上游阻止事件的闭集枚举。
+func isKnownBlockReason(reason string) bool {
+	for _, known := range knownBlockReasons {
+		if reason == known {
+			return true
+		}
+	}
+	return false
+}
+
 // rejectionSnapshot 复制一份发布拒绝计数快照，避免渲染期间持锁。
 func (r *Registry) rejectionSnapshot() map[string]uint64 {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	out := make(map[string]uint64, len(r.rejections))
 	for k, v := range r.rejections {
+		out[k] = v
+	}
+	return out
+}
+
+// blockEventSnapshot 复制一份上游阻止事件计数快照，避免渲染期间持锁。
+func (r *Registry) blockEventSnapshot() map[string]uint64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make(map[string]uint64, len(r.blockEvents))
+	for k, v := range r.blockEvents {
 		out[k] = v
 	}
 	return out
@@ -157,12 +214,20 @@ type Exposition struct {
 	registry *Registry
 	jobs     func() []JobStatus  // 定时任务作业快照；nil 表示不输出作业指标
 	runtime  func() RuntimeStats // 运行时快照；测试可替换
+	// blockedRepositories 是当前处于阻止态（AUTO_BLOCKED / HALF_OPEN）的仓库数（FR-43）；
+	// nil 表示未接入状态机，该族整族不输出（无值可报，不虚构 0）。
+	blockedRepositories func() int
 }
 
-// NewExposition 构造渲染器；jobs 可为 nil。
+// NewExposition 构造渲染器；jobs 与 blockedRepositories 均可为 nil。
 func NewExposition(registry *Registry, jobs func() []JobStatus) *Exposition {
 	return &Exposition{registry: registry, jobs: jobs, runtime: readRuntimeStats}
 }
+
+// SetBlockedRepositories 注入「当前阻止态仓库数」取数回调（FR-43）。
+// 由装配层在状态机就绪后调用；未调用（nil）时该指标族整族不输出。
+// 回调在每次抓取时调用，不缓存——抓取路径必须只读内存、不查库、不访问网络。
+func (e *Exposition) SetBlockedRepositories(f func() int) { e.blockedRepositories = f }
 
 // WritePrometheus 按文本暴露格式写出当前指标快照。
 func (e *Exposition) WritePrometheus(w io.Writer) {
@@ -195,6 +260,8 @@ func (e *Exposition) render() string {
 	families := []family{
 		e.protocolFamily(),
 		e.rejectionFamily(),
+		e.blockEventFamily(),
+		e.blockedRepositoriesFamily(),
 		e.schedulerFamily("runs_total", "counter", "定时任务作业累计执行次数", func(st JobStatus) *sample {
 			return &sample{labels: jobLabels(st.Name), value: strconv.FormatInt(st.Runs, 10)}
 		}),
@@ -282,6 +349,41 @@ func (e *Exposition) rejectionFamily() family {
 			value:  strconv.FormatUint(count, 10),
 		})
 	}
+	return f
+}
+
+// blockEventFamily 汇总上游断路器阻止事件计数（FR-43）；进程存在即视为可用，
+// 首抓无样本时仍输出 HELP / TYPE，样本行只反映真实数据。
+func (e *Exposition) blockEventFamily() family {
+	f := family{
+		name:      blockEventsMetric,
+		help:      "上游断路器阻止事件累计次数（按原因分区；原因取值是闭集枚举）",
+		kind:      "counter",
+		available: true,
+	}
+	for reason, count := range e.registry.blockEventSnapshot() {
+		f.samples = append(f.samples, sample{
+			labels: []labelPair{{name: "reason", value: reason}},
+			value:  strconv.FormatUint(count, 10),
+		})
+	}
+	return f
+}
+
+// blockedRepositoriesFamily 报告当前处于阻止态（AUTO_BLOCKED / HALF_OPEN）的仓库数（FR-43）。
+// 无标签：仓库名/路径不得作为标签（ARCHITECTURE.md 标签基数约定）。
+// 未接入状态机（回调为 nil）时该族不可用，整族不输出——无值可报，不虚构 0。
+func (e *Exposition) blockedRepositoriesFamily() family {
+	f := family{
+		name:      blockedRepoMetric,
+		help:      "当前处于阻止态（自动阻止或半开试探）的上游仓库数",
+		kind:      "gauge",
+		available: e.blockedRepositories != nil,
+	}
+	if e.blockedRepositories == nil {
+		return f
+	}
+	f.samples = []sample{{value: strconv.Itoa(e.blockedRepositories())}}
 	return f
 }
 

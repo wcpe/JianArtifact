@@ -227,8 +227,18 @@ func (s *AssetService) requireBusinessWrite() error {
 	return requireBusinessWrite(s.writeGate)
 }
 
-// SetAutoBlockBase 调整 auto-block 退避起始时长（默认 40s；测试与调优用，<=0 忽略）。
+// SetAutoBlockBase 调整 auto-block 退避起始时长（默认 40s；装配层注入配置、测试与调优用，<=0 忽略）。
 func (s *AssetService) SetAutoBlockBase(d time.Duration) { s.health.setBase(d) }
+
+// SetUpstreamBlockRecorder 注入上游断路器阻止事件记录器（FR-43 §2.2）；nil 表示不记录。
+func (s *AssetService) SetUpstreamBlockRecorder(r UpstreamBlockRecorder) {
+	s.health.setBlockRecorder(r)
+}
+
+// BlockedUpstreamCount 返回当前处于阻止态（AUTO_BLOCKED / HALF_OPEN）的上游仓库数（FR-43 §2.2）。
+// 供装配层把它接进 /metrics 的 jianartifact_upstream_blocked_repositories 仪表；
+// 只读内存态，不查库、不访问网络。
+func (s *AssetService) BlockedUpstreamCount() int { return s.health.blockedCount() }
 
 // SetNegativeCacheTTL 调整 404 负缓存 TTL（默认 60s；测试与调优用，<=0 忽略）。
 func (s *AssetService) SetNegativeCacheTTL(d time.Duration) { s.negCache.setTTL(d) }
@@ -1042,7 +1052,10 @@ func (s *AssetService) fetchProxyAsset(ctx context.Context, repo *repository.Rep
 	if cfg.RemoteURL == "" {
 		return nil, ErrNotFound
 	}
-	if s.health.shouldBlock(repo.ID) {
+	// FR-43：半开闸门。shouldBlock 只做外层非占用式过滤；这里才是真正发起上游连接前的
+	// **占用式**判定——判定与占位在同一把锁内完成，保证每轮半开只放行一个试探请求，
+	// 其余请求在试探结果返回前等效封锁（快速失败）。
+	if !s.health.beginUpstream(repo.ID) {
 		return nil, ErrUpstream
 	}
 	body, header, err := s.upstream.FetchWithCredential(ctx, cfg.RemoteURL, path, cfg.CredentialRef)
@@ -1051,14 +1064,17 @@ func (s *AssetService) fetchProxyAsset(ctx context.Context, repo *repository.Rep
 		case errors.Is(err, upstream.ErrNotFound):
 			s.negCache.add(repo.ID, path)
 			recordResolveFailure(ctx, ResolveFailureConfirmed)
+			// 上游可达但资源缺失：不据此改状态，但必须释放试探名额，否则后续请求被无限封锁。
+			s.health.releaseProbe(repo.ID)
 		case errors.Is(err, upstream.ErrGone):
 			// 410 表示当前资源永久下架，不代表上游仓库不可达；
 			// 不能因此触发仓库级 auto-block，否则 Go proxy 等客户端的
 			// 后续请求会被错误改写成 502，无法按标准链路回退。
 			recordResolveFailure(ctx, ResolveFailureUncertain)
+			s.health.releaseProbe(repo.ID)
 		default:
 			recordResolveFailure(ctx, ResolveFailureUncertain)
-			s.health.recordFailure(repo.ID, cfg.RemoteURL, cfg.CredentialRef)
+			s.health.recordFailure(repo.ID, cfg.RemoteURL, cfg.CredentialRef, UpstreamBlockReasonUpstreamError)
 		}
 		return nil, mapUpstreamErr(err)
 	}
@@ -1124,15 +1140,25 @@ func (s *AssetService) ResolveOCIProxy(ctx context.Context, repoName, path, pull
 		if s.requireBusinessWrite() != nil {
 			return nil, ErrNotFound
 		}
+		// FR-43：半开闸门（占用式）。上面兜底过滤只保证「不落在阻止窗口内」，
+		// 这里在真正发起上游连接前抢占名额，保证每轮半开只放行一个试探请求。
+		// 与普通 proxy 路径的区别是收敛点在 singleflight 内：不同 path 是不同 key，
+		// 因此闸门必须装在这里而非外层。
+		if !s.health.beginUpstream(repo.ID) {
+			return nil, ErrUpstream
+		}
 		session, sessionErr := s.upstream.NewSession(cfg.RemoteURL, cfg.CredentialRef)
 		if sessionErr != nil {
-			s.health.recordFailure(repo.ID, cfg.RemoteURL, cfg.CredentialRef)
+			s.health.recordFailure(repo.ID, cfg.RemoteURL, cfg.CredentialRef, UpstreamBlockReasonUpstreamError)
 			return nil, mapUpstreamErr(sessionErr)
 		}
 		body, header, fetchErr := session.ReadOCIPath(ctx, path, pullScope)
 		if fetchErr != nil {
 			if !errors.Is(fetchErr, upstream.ErrNotFound) {
-				s.health.recordFailure(repo.ID, cfg.RemoteURL, cfg.CredentialRef)
+				s.health.recordFailure(repo.ID, cfg.RemoteURL, cfg.CredentialRef, UpstreamBlockReasonUpstreamError)
+			} else {
+				// 上游可达但资源缺失：不改状态，但必须释放试探名额。
+				s.health.releaseProbe(repo.ID)
 			}
 			return nil, mapUpstreamErr(fetchErr)
 		}

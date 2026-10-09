@@ -357,12 +357,15 @@ function seed(): State {
       1: [{ userId: 2, username: "developer", createdAt: "2026-01-01T00:00:00Z" }],
     },
     connStatus: {
-      // FR-114：各 proxy 上游连接状态内存态——2 可用 / 4 自动阻止 / 1 不可用，供列表徽章与状态面板演示。
+      // FR-114：各 proxy 上游连接状态内存态——2 可用 / 3 自动阻止 / 1 半开 / 1 不可用，
+      // 供列表徽章与状态面板演示。
+      // FR-43：半开（HALF_OPEN）与自动阻止同属阻止态但需可区分，故种子里专门留一个被阻止仓库
+      // 处于半开，让状态面板/环形图/徽章的半开分支有真数据可渲染（否则新枚举在 mock 里从不出现）。
       "npm-proxy": { status: "AVAILABLE", description: "上游可用" },
       "gomod-proxy": { status: "AVAILABLE", description: "上游可用" },
       "maven-papermc": {
-        status: "AUTO_BLOCKED",
-        description: "上游连续不可达，已进入自动阻止窗口",
+        status: "HALF_OPEN",
+        description: "阻止窗口已到，正在试探上游",
       },
       "maven-central": {
         status: "AUTO_BLOCKED",

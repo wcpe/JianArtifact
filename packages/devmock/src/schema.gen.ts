@@ -2540,13 +2540,16 @@ export interface components {
         };
         ConnectionStatus: {
             /**
-             * @description 上游连接状态（READY=尚未探测，AVAILABLE=可用，AUTO_BLOCKED=自动阻止，UNAVAILABLE=不可用，OFFLINE=手动离线）
+             * @description 上游连接状态（READY=尚未探测，AVAILABLE=可用，AUTO_BLOCKED=自动阻止，HALF_OPEN=阻止窗口已到期、正在试探上游，UNAVAILABLE=不可用，OFFLINE=手动离线）。
+             *     HALF_OPEN 表示自动阻止窗口已到期、后台正在试探上游：业务流量仍**等效封锁**（每轮半开只放行一个探测请求，其余请求快速失败），
+             *     试探成功即回到 AVAILABLE 并重置退避，失败则回到 AUTO_BLOCKED 并推进一档窗口。
+             *     展示上不要把它当作「已恢复」——它与 AUTO_BLOCKED 一样属于阻止态。
              * @enum {string}
              */
-            status: "READY" | "AVAILABLE" | "UNAVAILABLE" | "AUTO_BLOCKED" | "OFFLINE";
+            status: "READY" | "AVAILABLE" | "UNAVAILABLE" | "AUTO_BLOCKED" | "HALF_OPEN" | "OFFLINE";
             /**
              * Format: date-time
-             * @description 自动阻止窗口截止时间（非阻止状态为 null）
+             * @description 自动阻止窗口截止时间（仅 AUTO_BLOCKED 与 HALF_OPEN 这两个阻止态有值，其余状态为 null）
              */
             blockedUntil?: string | null;
             /** @description 状态说明（供展示） */

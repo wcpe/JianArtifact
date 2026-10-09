@@ -209,6 +209,15 @@ describe("仓库管理", () => {
     expect(screen.getAllByText("—").length).toBeGreaterThan(0);
   });
 
+  it("半开状态（FR-43）在列表里独立成态，不被并入自动阻止", async () => {
+    renderWithProviders(<RepositoriesPage />, { route: "/repositories", authenticated: true });
+    // devmock 种子：maven-papermc 处于 HALF_OPEN（窗口已到、正在试探上游），
+    // maven-central 等处于 AUTO_BLOCKED。两者同属阻止态但文案必须可区分。
+    expect(await screen.findByText("maven-papermc")).toBeTruthy();
+    expect(screen.getAllByLabelText("连接状态：试探中").length).toBeGreaterThan(0);
+    expect(screen.getAllByLabelText("连接状态：自动阻止").length).toBeGreaterThan(0);
+  });
+
   it("置顶仓库排到列表首位，可取消置顶", async () => {
     const user = userEvent.setup();
     renderWithProviders(<RepositoriesPage />, { route: "/repositories", authenticated: true });
