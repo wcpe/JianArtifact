@@ -238,7 +238,7 @@ export const auditPreviewEvents: AuditPreviewEvent[] = [
     occurredAt: "2026-08-26T09:24:00Z",
     category: "管理变更",
     timestamp: "今天 09:24",
-    actor: "wxys233",
+    actor: "admin",
     authSource: "网页会话",
     action: "创建 Hosted 仓库",
     target: "raw-releases",
