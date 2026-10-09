@@ -49,6 +49,9 @@ type CreateBackupOptions struct {
 	// BasePackageID 非空时生成增量差包：只携带相对该基线包的新增 blob。
 	// 要求基线包存在、状态 done 且其侧车索引可用（否则 ErrBackupBaseUnavailable）。
 	BasePackageID string
+	// Origin 是生成来源（FR-40）：空值等价于 repository.BackupOriginManual，
+	// 自动备份作业传 repository.BackupOriginAuto。该标记决定保留策略是否可淘汰本包。
+	Origin string
 }
 
 // BackupService 负责节点备份包的生成、登记、校验与下载。
@@ -329,6 +332,7 @@ func (s *BackupService) prepare(opts CreateBackupOptions, status string) (reposi
 		CountsJSON:      "{}",
 		DBSchemaVersion: s.dbSchemaVersion(),
 		CreatedAt:       s.now().Format(time.RFC3339Nano),
+		Origin:          normalizeBackupOrigin(opts.Origin),
 	}
 	if err := os.MkdirAll(s.Dir(), 0o750); err != nil {
 		s.endGenerate()
@@ -543,6 +547,18 @@ func parseCounts(countsJSON string) archive.Counts {
 		return archive.Counts{}
 	}
 	return c
+}
+
+// normalizeBackupOrigin 把选项里的来源收敛到列 CHECK 允许的两个取值：
+// 空值（以及任何未知值）一律落到 manual。
+//
+// 为什么未知值不报错而是回落：来源只影响「能否被保留策略自动淘汰」，落成 manual 的后果
+// 是"这份包被保守地多留一份"，而报错会让一次正常的备份生成整体失败。宁可多留，不可失败。
+func normalizeBackupOrigin(origin string) string {
+	if origin == repository.BackupOriginAuto {
+		return repository.BackupOriginAuto
+	}
+	return repository.BackupOriginManual
 }
 
 func errText(err error) string {

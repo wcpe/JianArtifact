@@ -23,8 +23,9 @@ func TestMigrateCreatesSchema(t *testing.T) {
 	if err := db.Migrate(); err != nil {
 		t.Fatalf("Migrate：%v", err)
 	}
-	// 关键表应存在且可查询。user_group / user_group_member 为 FR-36 引入（迁移 0046）。
-	tables := []string{"user", "api_token", "revoked_token", "repository", "acl", "asset", "user_group", "user_group_member", "migration_task", "setting", "repl_change", "repl_entity_version", "replication_apply_log", "replication_operation_outbox", "replication_relay_record", "replication_relay_blob", "replication_relay_frontier", "replication_operation_receipt", "backup_package", "backup_import", "backup_upload", "backup_upload_chunk"}
+	// 关键表应存在且可查询。user_group / user_group_member 为 FR-36 引入（迁移 0046）；
+	// backup_verification 为 FR-40 恢复演练报告引入（迁移 0047）。
+	tables := []string{"user", "api_token", "revoked_token", "repository", "acl", "asset", "user_group", "user_group_member", "migration_task", "setting", "repl_change", "repl_entity_version", "replication_apply_log", "replication_operation_outbox", "replication_relay_record", "replication_relay_blob", "replication_relay_frontier", "replication_operation_receipt", "backup_package", "backup_verification", "backup_import", "backup_upload", "backup_upload_chunk"}
 	for _, tbl := range tables {
 		var count int
 		if err := db.Get(&count, "SELECT COUNT(*) FROM "+tbl); err != nil {
@@ -261,5 +262,59 @@ func assertCleanupIndexes(t *testing.T, db *DB) {
 		if strings.Contains(plan, "SCAN asset_mutation") || strings.Contains(plan, "SCAN asset ") {
 			t.Errorf("%s：查询计划退回全表扫，计划 = %s", tc.name, plan)
 		}
+	}
+}
+
+// TestMigration0047AddsBackupOriginAndVerification 校验 0047 的三项要求：
+// origin 列真的带上了 CHECK（ADD COLUMN 不会静默丢约束）、既有行取到默认值 manual、
+// 演练报告随包级联删除（这是「包没了报告无意义」的实现方式，不能只写在注释里）。
+func TestMigration0047AddsBackupOriginAndVerification(t *testing.T) {
+	db := openTestDB(t)
+	if err := db.Migrate(); err != nil {
+		t.Fatalf("Migrate：%v", err)
+	}
+
+	// ① 列存在，且表 DDL 里确实带着 CHECK——SQLite 的 ADD COLUMN 允许带 CHECK，
+	// 但若哪天被改写或驱动行为变化，约束消失是无声的，这里显式断言。
+	var ddl string
+	if err := db.Get(&ddl, `SELECT COALESCE(sql,'') FROM sqlite_master WHERE type='table' AND name='backup_package'`); err != nil {
+		t.Fatalf("读取 backup_package DDL：%v", err)
+	}
+	if !strings.Contains(ddl, "origin") || !strings.Contains(ddl, "'manual'") || !strings.Contains(ddl, "'auto'") {
+		t.Fatalf("backup_package 的 origin 列未带来源枚举约束，DDL = %s", ddl)
+	}
+
+	// ② 默认值与非法值：省略 origin 的既有写入路径必须落到 manual，非法来源被拒。
+	if _, err := db.Exec(`INSERT INTO backup_package (package_id, mode, status, created_at)
+		VALUES ('bk-default','hot','done','2026-01-01T00:00:00Z')`); err != nil {
+		t.Fatalf("插入不带 origin 的包：%v", err)
+	}
+	var origin string
+	if err := db.Get(&origin, `SELECT origin FROM backup_package WHERE package_id='bk-default'`); err != nil {
+		t.Fatalf("读取 origin：%v", err)
+	}
+	if origin != "manual" {
+		t.Fatalf("既有写入路径的 origin 默认值 = %q，期望 manual", origin)
+	}
+	if _, err := db.Exec(`INSERT INTO backup_package (package_id, mode, status, created_at, origin)
+		VALUES ('bk-bogus','hot','done','2026-01-01T00:00:00Z','bogus')`); err == nil {
+		t.Fatal("非法 origin 应被 CHECK 拒绝")
+	}
+
+	// ③ 演练报告：先写一条，再删包，报告应随之消失（ON DELETE CASCADE）。
+	if _, err := db.Exec(`INSERT INTO backup_verification
+		(package_id, level, ok, started_at, finished_at, duration_ms)
+		VALUES ('bk-default','shallow',1,'2026-01-01T00:00:00Z','2026-01-01T00:00:01Z',1000)`); err != nil {
+		t.Fatalf("插入演练报告：%v", err)
+	}
+	if _, err := db.Exec(`DELETE FROM backup_package WHERE package_id='bk-default'`); err != nil {
+		t.Fatalf("删除备份包：%v", err)
+	}
+	var reports int
+	if err := db.Get(&reports, `SELECT COUNT(*) FROM backup_verification WHERE package_id='bk-default'`); err != nil {
+		t.Fatalf("统计演练报告：%v", err)
+	}
+	if reports != 0 {
+		t.Fatalf("删除包后演练报告应随级联清除，剩余 %d 条", reports)
 	}
 }

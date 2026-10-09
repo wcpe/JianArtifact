@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -47,8 +48,9 @@ type appServices struct {
 	dashboardSvc        *domain.OperationsDashboardService
 	assetDownloadSvc    *domain.AssetDownloadService
 	hostMonitoringSvc   *domain.HostMonitoringService
-	backupSvc           *domain.BackupService    // FR-132：节点备份包生成与登记
-	freeze              *domain.FreezeController // FR-135：全局共享的运行时写入冻结控制器
+	backupSvc           *domain.BackupService      // FR-132：节点备份包生成与登记
+	backupDrillSvc      *domain.BackupDrillService // FR-40：恢复演练与校验报告
+	freeze              *domain.FreezeController   // FR-135：全局共享的运行时写入冻结控制器
 	restoreSvc          *domain.RestoreService
 	backupImports       *domain.BackupImportService // FR-137：导入记录与 URL 拉取
 	backupUploads       *domain.BackupUploadService // FR-137：分片上传（Web 第三通道）
@@ -219,6 +221,12 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	// FR-137：分片上传服务依赖导入服务（组装完成后走本地导入状态机）。
 	backupImportsSvc := domain.NewBackupImportService(repository.NewBackupImportRepo(db), restoreSvc, cfg.DataDir, upstreamClient)
 
+	// FR-132 / FR-40：备份服务是生成、保留策略与演练三者共用的同一实例——
+	// 保留策略的候选集查询与删除都经它走同一条已装配的连接与生成槽位，
+	// 避免"策略看到的包"与"生成写下的包"来自两个视图。
+	backupRepo := repository.NewBackupPackageRepo(db)
+	backupSvc := domain.NewBackupService(db, backupRepo, blobs, cfg.DataDir, cfg.DBPath, version, nodeIdentity.NodeID)
+
 	// FR-44：维护类周期作业统一经调度器驱动（间隔 0 禁用；启动不立即执行）。
 	schedulerSvc := scheduler.New()
 	registerBlobGCJob(schedulerSvc, cfg.BlobGCInterval, assetSvc.CleanupUnreferencedBlobs)
@@ -235,6 +243,17 @@ func openServices(cfg *config.Config) (*appServices, error) {
 		},
 	)
 	registerStorageCleanupJob(schedulerSvc, cfg.StorageCleanupInterval, storageCleanupSvc.Run)
+	// FR-40：周期化自动备份 + 保留策略。默认间隔 0 = 关闭（作业不注册），
+	// 需显式配置 JIAN_BACKUP_AUTO_INTERVAL 才启用。
+	backupRetentionSvc := domain.NewBackupRetentionService(backupSvc, backupRepo, domain.BackupRetentionOptions{
+		KeepLast:      cfg.BackupKeepLast,      // JIAN_BACKUP_KEEP_LAST（份），0 = 不按份数限制
+		RetentionDays: cfg.BackupRetentionDays, // JIAN_BACKUP_RETENTION_DAYS（天），0 = 不限天数
+	})
+	registerAutoBackupJob(schedulerSvc, cfg.BackupAutoInterval, func(ctx context.Context) (autoBackupRun, error) {
+		return runAutoBackup(ctx, backupSvc, backupRetentionSvc)
+	})
+	// FR-40：恢复演练服务（CLI 与 API 共用同一实现；API 端点在后续阶段接入）。
+	backupDrillSvc := domain.NewBackupDrillService(backupSvc, repository.NewBackupVerificationRepo(db), cfg.DataDir)
 	// FR-39：指标登记与 /metrics 渲染器；协议请求计数由 HTTP 层钩子（run）累加。
 	metricsReg := metrics.New()
 	metricsExp := metrics.NewExposition(metricsReg, schedulerJobStatuses(schedulerSvc))
@@ -297,7 +316,8 @@ func openServices(cfg *config.Config) (*appServices, error) {
 		assetDownloadRepo:   assetDownloadRepo,
 		pinnedRepo:          pinnedRepo,
 		hostMonitoringSvc:   hostMonitoringSvc,
-		backupSvc:           domain.NewBackupService(db, repository.NewBackupPackageRepo(db), blobs, cfg.DataDir, cfg.DBPath, version, nodeIdentity.NodeID),
+		backupSvc:           backupSvc,
+		backupDrillSvc:      backupDrillSvc,
 		restoreSvc:          restoreSvc,
 		backupImports:       backupImportsSvc,
 		backupUploads:       domain.NewBackupUploadService(repository.NewBackupUploadRepo(db), backupImportsSvc, cfg.DataDir),

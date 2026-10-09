@@ -54,6 +54,11 @@ const (
 	EnvStorageMetadataRetention = "JIAN_STORAGE_METADATA_RETENTION_DAYS" // 终态操作与隔离元数据保留天数；0 禁用
 	EnvStorageTempMaxAge        = "JIAN_STORAGE_TEMP_MAX_AGE_HOURS"      // 过期上传临时文件阈值，单位小时；0 禁用
 
+	// FR-40 周期化自动备份与保留策略（单独成组，理由同上）。
+	EnvBackupAutoInterval  = "JIAN_BACKUP_AUTO_INTERVAL"  // 自动备份作业间隔，单位秒；0 禁用
+	EnvBackupKeepLast      = "JIAN_BACKUP_KEEP_LAST"      // 保留最近 N 份自动备份；0 = 不按份数限制
+	EnvBackupRetentionDays = "JIAN_BACKUP_RETENTION_DAYS" // 自动备份保留天数；0 = 不限天数
+
 	// FR-43 上游断路器补强：auto-block 退避起始时长，单位秒。
 	EnvAutoBlockBaseSeconds = "JIAN_AUTO_BLOCK_BASE_SECONDS" // proxy 上游首次失败的阻止窗口时长；非正数回落默认
 
@@ -67,6 +72,12 @@ const (
 	defaultStorageCleanupInterval   = 24 * time.Hour
 	defaultStorageMetadataRetention = 7 * 24 * time.Hour
 	defaultStorageTempMaxAge        = 24 * time.Hour
+	// FR-40 自动备份与保留策略的默认值。
+	// 间隔默认 0 = **关闭**：自动备份是显式开启的能力，不在升级后悄悄开始占磁盘。
+	// 保留份数与天数取规格 §2.2 的口径（7 份 / 30 天），两者同时生效、取更严格者。
+	defaultBackupAutoInterval  = 0
+	defaultBackupKeepLast      = 7
+	defaultBackupRetentionDays = 30
 	// defaultAutoBlockBase 是 auto-block 退避起始时长（FR-43）。
 	// 与 domain 侧兜底常量 autoBlockInitial（proxy_health.go）保持同值：
 	// 装配层始终注入本值，domain 常量只在未装配/测试构造时兜底。
@@ -106,11 +117,18 @@ type Config struct {
 	StorageMetadataRetention time.Duration
 	// StorageTempMaxAge 是过期上传临时文件（<BlobDir>/tmp/oci-upload）的最长滞留时长（FR-41）；0 禁用。
 	StorageTempMaxAge time.Duration
-	TLSAddr           string     // 服务内置 TLS 监听地址（FR-131）；空 = 不启用
-	TLSCert           string     // TLS PEM 证书文件路径（FR-131）
-	TLSKey            string     // TLS PEM 私钥文件路径（FR-131）
-	OIDC              OIDCConfig // FR-34：OIDC 身份源接入配置（Issuer 空 = 不启用）
-	LDAP              LDAPConfig // FR-35：LDAP 身份源接入配置（URL 空 = 不启用）
+	// BackupAutoInterval 是周期化自动备份作业的间隔（FR-40）；0 禁用（作业不注册）。
+	// 调度间隔在启动时固定、不支持运行时热改——改它需要重启进程（见 docs/OPERATIONS.md）。
+	BackupAutoInterval time.Duration
+	// BackupKeepLast 是自动备份按份数保留的上限（FR-40）；0 = 不按份数限制。
+	BackupKeepLast int
+	// BackupRetentionDays 是自动备份按时间的保留上限（FR-40）；0 = 不限天数。
+	BackupRetentionDays int
+	TLSAddr             string     // 服务内置 TLS 监听地址（FR-131）；空 = 不启用
+	TLSCert             string     // TLS PEM 证书文件路径（FR-131）
+	TLSKey              string     // TLS PEM 私钥文件路径（FR-131）
+	OIDC                OIDCConfig // FR-34：OIDC 身份源接入配置（Issuer 空 = 不启用）
+	LDAP                LDAPConfig // FR-35：LDAP 身份源接入配置（URL 空 = 不启用）
 }
 
 // LDAPConfig 是 LDAP 目录接入配置（FR-35，见 ADR-0029）；
@@ -198,6 +216,9 @@ func Load() (*Config, error) {
 		StorageCleanupInterval:   storageCleanupInterval(),
 		StorageMetadataRetention: storageMetadataRetention(),
 		StorageTempMaxAge:        storageTempMaxAge(),
+		BackupAutoInterval:       backupAutoInterval(),
+		BackupKeepLast:           backupKeepLast(),
+		BackupRetentionDays:      backupRetentionDays(),
 		TLSAddr:                  envOr(EnvTLSAddr, ""),
 		TLSCert:                  os.Getenv(EnvTLSCert),
 		TLSKey:                   os.Getenv(EnvTLSKey),
@@ -292,6 +313,43 @@ func storageMetadataRetention() time.Duration {
 // 缺省或非法值取 24 小时，显式 0 禁用过期上传临时文件清理。
 func storageTempMaxAge() time.Duration {
 	return envDurationOr(EnvStorageTempMaxAge, defaultStorageTempMaxAge, time.Hour)
+}
+
+// backupAutoInterval 解析 JIAN_BACKUP_AUTO_INTERVAL（秒，FR-40）：周期化自动备份作业的间隔。
+// 缺省、非法与负数取默认值 0（= **关闭**），显式 0 同样是关闭——本项默认关闭，
+// 因为自动备份会在无人确认的情况下持续占用磁盘，必须是运维显式开启的能力。
+// 与 storageCleanupInterval 的「默认开、0 关」不同，但「0 = 不注册作业」的机制完全一致。
+func backupAutoInterval() time.Duration {
+	return envDurationOr(EnvBackupAutoInterval, defaultBackupAutoInterval, time.Second)
+}
+
+// backupKeepLast 解析 JIAN_BACKUP_KEEP_LAST（份，FR-40）：保留最近 N 份**自动**备份。
+// 缺省或非法值取 7；显式 0 = **不按份数限制**（只受天数约束），而不是「一份都不留」——
+// 把 0 解释成"全删"会让一个笔误直接清空备份目录，而"不限制"永远只导致多留。
+// 负数与非法值回落默认 7（不采用"负数为不限制"的隐式写法，避免与 0 的语义重叠）。
+func backupKeepLast() int {
+	return envNonNegativeIntOr(EnvBackupKeepLast, defaultBackupKeepLast)
+}
+
+// backupRetentionDays 解析 JIAN_BACKUP_RETENTION_DAYS（天，FR-40）：自动备份的保留天数。
+// 缺省或非法值取 30；显式 0 = 不限天数（只受份数约束）。0 语义与 backupKeepLast 同构。
+func backupRetentionDays() int {
+	return envNonNegativeIntOr(EnvBackupRetentionDays, defaultBackupRetentionDays)
+}
+
+// envNonNegativeIntOr 解析环境变量为整数：缺省、非法与负数取 fallback，显式 0 原样返回。
+// 0 的具体含义由调用方定义并注释（保留策略里是"不限制"），本函数只负责区分
+// 「显式 0」与「未配置 / 配错」这两种在解析层就该分开的情况。
+func envNonNegativeIntOr(key string, fallback int) int {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		return fallback
+	}
+	return n
 }
 
 // autoBlockBase 解析 JIAN_AUTO_BLOCK_BASE_SECONDS（秒，FR-43）：proxy 上游首次失败的
