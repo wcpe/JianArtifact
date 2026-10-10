@@ -219,7 +219,11 @@ func (s *BackupDrillService) runChecks(ctx context.Context, rec *repository.Back
 	} else {
 		check.OK = true
 		extracted = true
-		check.Detail = fmt.Sprintf("已解包到隔离目录：%s", staging)
+		// 只报告"解包成功"这一结论，不回显隔离目录的绝对路径：报告会长期留在列表里
+		// 供人查阅（以及随包导出），绝对路径既非结论也不稳定，还会把节点的目录布局
+		// 带进这份可传播的产物。需要定位临时目录时，临时目录本就是每次演练独立创建、
+		// 结束即清理，路径对事后排障没有增量价值。
+		check.Detail = "已解包到隔离临时目录（演练结束后已清理）"
 	}
 	check.DurationMS = time.Since(started).Milliseconds()
 	checks = append(checks, check)

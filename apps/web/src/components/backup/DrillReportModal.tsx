@@ -16,15 +16,19 @@ import {
   Modal,
   ScrollArea,
   Stack,
-  Table,
   Text,
+  ThemeIcon,
 } from "@mantine/core";
-import { IconPlayerPlay, IconRefresh, IconRun } from "@tabler/icons-react";
+import { IconCheck, IconPlayerPlay, IconRefresh, IconRun, IconX } from "@tabler/icons-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { drillBackup, listBackupVerifications } from "../../api/endpoints";
-import type { BackupVerificationLevel, BackupVerificationReport } from "../../api/types";
+import type {
+  BackupVerificationLevel,
+  BackupVerificationReport,
+  BackupDrillCheck,
+} from "../../api/types";
 import { notifyError, notifySuccess } from "../../lib/feedback";
 import { formatCount, formatStamp } from "../../lib/format";
 import { AsyncBoundary } from "../AsyncBoundary";
@@ -191,7 +195,7 @@ function DrillReportCard({ report }: { report: BackupVerificationReport }) {
   const { t } = useTranslation();
   return (
     <Card withBorder radius="md" padding="sm">
-      <Group gap="xs" wrap="wrap" mb={6}>
+      <Group gap="xs" wrap="wrap" mb={report.checks.length > 0 ? "xs" : 0}>
         <StatusPill
           tone={drillVerdictTone(report.ok)}
           text={report.ok ? t("backups.drillPassed") : t("backups.drillFailed")}
@@ -205,45 +209,59 @@ function DrillReportCard({ report }: { report: BackupVerificationReport }) {
       </Group>
 
       {report.errorSummary ? (
-        <Text size="xs" c="red" mb={6}>
+        <Text size="xs" c="red" mb={report.checks.length > 0 ? "xs" : 0}>
           {report.errorSummary}
         </Text>
       ) : null}
 
-      <Table fz="xs" verticalSpacing={2} horizontalSpacing="xs">
-        <Table.Thead>
-          <Table.Tr>
-            <Table.Th w={90}>{t("backups.drillColCheck")}</Table.Th>
-            <Table.Th w={64}>{t("backups.drillColResult")}</Table.Th>
-            <Table.Th>{t("backups.drillColDetail")}</Table.Th>
-            <Table.Th w={70}>{t("backups.drillColDuration")}</Table.Th>
-          </Table.Tr>
-        </Table.Thead>
-        <Table.Tbody>
-          {report.checks.map((check) => (
-            <Table.Tr key={check.name}>
-              <Table.Td>
-                <Text size="xs">{t(`backups.drillCheck_${check.name}`, check.name)}</Text>
-              </Table.Td>
-              <Table.Td>
-                <Text size="xs" c={check.ok ? "green" : "red"} fw={500}>
-                  {check.ok ? t("backups.drillCheckOk") : t("backups.drillCheckFail")}
-                </Text>
-              </Table.Td>
-              <Table.Td>
-                <Text size="xs" c="dimmed">
-                  {check.detail}
-                </Text>
-              </Table.Td>
-              <Table.Td>
-                <Text size="xs" c="dimmed">
-                  {check.durationMs ? `${check.durationMs} ms` : "—"}
-                </Text>
-              </Table.Td>
-            </Table.Tr>
-          ))}
-        </Table.Tbody>
-      </Table>
+      <Stack gap={0}>
+        {report.checks.map((check, index) => (
+          <CheckRow key={check.name} check={check} first={index === 0} />
+        ))}
+      </Stack>
     </Card>
   );
 }
+
+/**
+ * 单条检查结论：一行"状态 + 检查项 + 耗时"，说明作为次行缩进展示。
+ *
+ * 不用表格：四条检查项的宽度差异极大（"解包"两字 vs "SQLite 一致性"），表格会把
+ * 列宽固定成最宽项的需求，挤窄说明列后长说明折成多行、行高在 21–38px 之间跳动。
+ * 明细清单让每项自己占一段，说明再长也只是自己换行，不影响邻项。
+ */
+function CheckRow({ check, first }: { check: BackupDrillCheck; first: boolean }) {
+  const { t } = useTranslation();
+  const icon = check.ok ? (
+    <ThemeIcon size={16} radius="xl" variant="light" color="green">
+      <IconCheck size={11} />
+    </ThemeIcon>
+  ) : (
+    <ThemeIcon size={16} radius="xl" variant="light" color="red">
+      <IconX size={11} />
+    </ThemeIcon>
+  );
+  return (
+    <Box pt={first ? 0 : "xs"} mt={first ? 0 : "xs"} style={first ? undefined : rowDividerStyle}>
+      <Group gap="xs" wrap="nowrap" justify="space-between">
+        <Group gap={6} wrap="nowrap">
+          {icon}
+          <Text size="xs" fw={500}>
+            {t(`backups.drillCheck_${check.name}`, check.name)}
+          </Text>
+        </Group>
+        <Text size="xs" c="dimmed">
+          {check.durationMs ? `${check.durationMs} ms` : "—"}
+        </Text>
+      </Group>
+      <Text size="xs" c="dimmed" pl={22} mt={2}>
+        {check.detail}
+      </Text>
+    </Box>
+  );
+}
+
+/** 检查项之间的分隔线：用主题变量，不自绘颜色。 */
+const rowDividerStyle = {
+  borderTop: "1px solid var(--mantine-color-default-border)",
+} as const;
