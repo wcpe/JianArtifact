@@ -13,6 +13,22 @@ function renderTab() {
   });
 }
 
+/**
+ * 从某行的「⋯」溢出菜单里点某个动作。
+ *
+ * 行内只留常用动作（获取链接、校验），低频动作在菜单里——这既是为了压低行高，
+ * 也让测试必须走真实路径：菜单项必须能打开、可点击，否则这条用例就该红。
+ */
+async function clickRowMenuAction(
+  user: ReturnType<typeof userEvent.setup>,
+  row: HTMLElement,
+  action: string,
+) {
+  await user.click(within(row).getByRole("button", { name: "更多操作" }));
+  const menuItem = await screen.findByRole("menuitem", { name: action });
+  await user.click(menuItem);
+}
+
 describe("备份与搬迁", () => {
   it("锁定视口高度：外层不滚动，列表在剩余高度内滚动", async () => {
     renderTab();
@@ -95,7 +111,7 @@ describe("备份与搬迁", () => {
     const wayHeader = await screen.findByText("方式");
     const table = wayHeader.closest("table") as HTMLElement;
     const row = within(table).getByText("bk-20260910-090000-a1b2c3").closest("tr") as HTMLElement;
-    await user.click(within(row).getByRole("button", { name: "演练" }));
+    await clickRowMenuAction(user, row, "演练");
 
     const dialog = await screen.findByRole("dialog");
     // 弹窗说明必须讲清"只读路径"这一关键边界。
@@ -123,7 +139,7 @@ describe("备份与搬迁", () => {
     const wayHeader = await screen.findByText("方式");
     const table = wayHeader.closest("table") as HTMLElement;
     const row = within(table).getByText("bk-20260910-030000-d4e5f6").closest("tr") as HTMLElement;
-    await user.click(within(row).getByRole("button", { name: "演练" }));
+    await clickRowMenuAction(user, row, "演练");
 
     const dialog = await screen.findByRole("dialog");
     // 先等到预置报告渲染完，再计数，避免把异步首载当作"新报告"。

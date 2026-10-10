@@ -1230,6 +1230,7 @@ export const en = {
     copyFailed: "Copy failed",
     verify: "Verify",
     verifyDeep: "Deep Verify",
+    moreActions: "More actions",
     verifyOk: "Verification passed",
     verifyFailed: "Verification failed",
     deleteTitle: "Delete Backup Package",

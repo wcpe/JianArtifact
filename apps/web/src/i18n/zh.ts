@@ -1166,6 +1166,7 @@ export const zh = {
     copyFailed: "复制失败",
     verify: "校验",
     verifyDeep: "深度校验",
+    moreActions: "更多操作",
     verifyOk: "校验通过",
     verifyFailed: "校验未通过",
     deleteTitle: "删除备份包",
