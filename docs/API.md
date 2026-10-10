@@ -60,15 +60,17 @@
 - `GET /api/v1/observability/host?from=&to=&interface=`：当前节点主机监控（CPU / 内存 / 磁盘 / 网络 / 进程）。`interface` 为可选网卡名（取自响应 `networkInterfaces[].name`），省略时按全部非回环网卡聚合，指定时速率图与累计总量都按该网卡；趋势点 `HostMetricPoint` 另暴露 `networkReceiveBytesTotal` / `networkTransmitBytesTotal`（自网卡启动以来的累计字节，可空），响应含 `networkInterfaces: HostNetworkInterface[]`（各网卡名与该网卡累计总量，无数据时省略）。字段以 [`../api/openapi.yaml`](../api/openapi.yaml) 为准。
 - `GET /api/v1/licenses`：管理员读取内嵌依赖协议清单。
 
-### 节点备份与搬迁（FR-132 起）
+### 节点备份与搬迁（FR-132 起；FR-40 增来源与演练）
 
 备份包是搬迁的传输单位：生成包 → 传包 → 导入包 → 校验，不涉及节点角色、水位或拓扑。包内只含 SQLite 一致性快照与内容寻址 blob，**不含任何密钥或节点本地配置**。
 
-- `GET /api/v1/backups?page=&page_size=`：管理员分页读取备份包登记，按最近优先。
+- `GET /api/v1/backups?page=&page_size=`：管理员分页读取备份包登记，按最近优先。每条含 `origin`（`manual` = 人工触发，`auto` = `backup-auto` 周期作业生成；迁移 `0047` 之前的存量行按列默认值补为 `manual`）。
 - `POST /api/v1/backups`：`{mode: "hot" | "frozen", label?}` 登记并启动生成。生成耗时与包体积同阶，接口立即返回 `queued` 记录，由调用方轮询详情看进度；已有生成任务在跑时返回 `409 backup_in_progress`。
-- `GET /api/v1/backups/{id}`：单个备份包详情（状态 `queued`/`snapshotting`/`packing`/`done`/`failed`、大小、内嵌规模、失败摘要）。
+- `GET /api/v1/backups/{id}`：单个备份包详情（状态 `queued`/`snapshotting`/`packing`/`done`/`failed`、大小、内嵌规模、失败摘要、`origin`）。
 - `DELETE /api/v1/backups/{id}`：删除包体与登记；被增量差包引用的基线返回 `409 backup_has_derived`。
-- `POST /api/v1/backups/{id}/verify?deep=`：完整性校验。浅校验比对 manifest、db 摘要与 `blobs.index` 摘要与规模；`deep=true` 逐 blob 比对内容摘要（耗时与包体积同阶）。
+- `POST /api/v1/backups/{id}/verify?deep=`：完整性校验。浅校验比对 manifest、db 摘要与 `blobs.index` 摘要与规模；`deep=true` 逐 blob 比对内容摘要（耗时与包体积同阶）。结论一次性返回、不落库。
+- `POST /api/v1/backups/{id}/drill`：`{level?: "shallow" | "deep"}` 发起**恢复演练**（省略请求体即浅校验）。在**隔离临时目录**内真解包、真校验：归档完整性 → 解包 → 解出的 SQLite 跑 `PRAGMA quick_check` 并确认关键表可查询 → blob 规模比对。深校验耗时与包体积同阶，故返回 **202 + `BackupDrillAccepted{packageId, level, acceptedAt}`**（受理，不代表已完成），由调用方轮询报告列表。**演练未通过不算接口失败**：失败同样落库为一份 `ok: false` 的报告（含失败原因）；仅包不存在（`404`）、包尚未生成完成（`409 backup_not_done`）、级别非法或请求体坏（`400`）走错误响应。**演练是只读路径**：绝不写 `restore-staging/` 与 `restore.pending`，不会在下次重启触发真正的数据替换。发起动作写审计 `backup.drill`（`entityType=backup_package`）。
+- `GET /api/v1/backups/{id}/verifications?page=&page_size=`：分页读取该包的历史演练报告（最近优先），返回 `BackupVerificationList{items: BackupVerificationReport[], total}`。报告含 `id` / `level` / `ok` / 起止时间 / `durationMs` / `checks: BackupDrillCheck[]`（逐项 `{name, ok, detail, durationMs}`，`name` 为 `integrity`/`extract`/`sqlite`/`blobs`）/ 失败摘要 `errorSummary`。**检查项失败后仍继续后续项**（能跑的都跑，便于一次看清"哪里坏了"），故一份报告里可能多项为 false。报告随包级联删除。包不存在返回 `404`（不返回空列表）。
 - `POST /api/v1/backups/{id}/link`：`{ttlSeconds?}` 签发带时效的下载链接，返回 `{url, expiresAt}`。
 - `GET /api/v1/backups/{id}/download?exp=&token=`：流式返回 `application/gzip`。**该端点是唯一不要求会话的备份接口**：`token` 是由启动密钥派生的 HMAC（绑定 packageId 与 exp），使普通链接与新机器可直接拉取；不带令牌时按管理员会话鉴权。支持 Range 断点续传。
 
