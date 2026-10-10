@@ -2,6 +2,7 @@ package domain
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -303,6 +304,58 @@ func TestBackupRetentionIgnoresIncompletePackages(t *testing.T) {
 	}
 	if _, err := f.svc.Get("bk-failed"); err != nil {
 		t.Fatalf("失败包不属本策略范围，不得被删：%v", err)
+	}
+}
+
+// TestBackupRetentionLeavesNoOrphanSidecar 覆盖淘汰的磁盘收尾：
+// 淘汰一份真实包后，它的侧车索引必须随之消失，目录里不得留下孤儿 .index。
+//
+// 这是"保留策略兜住磁盘占用"的一部分：只删包体不删侧车，索引会随周期数只增不减。
+// 本用例走真实生成路径（seedAssets + Generate），因为侧车只有生成成功才会写出。
+func TestBackupRetentionLeavesNoOrphanSidecar(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 5, 20, 12, 0, 0, 0, time.UTC)
+	f := newBackupFixture(t)
+	f.seedAssets(t, "payload")
+
+	// 生成两份真实自动包（各带包体与侧车），把创建时间回填成可判定的先后顺序。
+	var ids []string
+	for i := 0; i < 2; i++ {
+		rec, err := f.svc.Generate(t.Context(), CreateBackupOptions{Mode: archive.ModeHot, Origin: repository.BackupOriginAuto})
+		if err != nil {
+			t.Fatalf("Generate：%v", err)
+		}
+		ids = append(ids, rec.PackageID)
+	}
+	svc := NewBackupRetentionService(f.svc, f.repo, BackupRetentionOptions{KeepLast: 1})
+	svc.now = func() time.Time { return now.UTC() }
+	// 直接回填 created_at：真实生成路径写的是"现在"，两次生成间隔太短，
+	// 无法稳定区分先后；这里只需登记行的时间可判定，包体与侧车已是真实产物。
+	for i, id := range ids {
+		if _, err := f.db.Exec(`UPDATE backup_package SET created_at=? WHERE package_id=?`,
+			now.Add(-time.Duration(2-i)*time.Hour).Format(time.RFC3339Nano), id); err != nil {
+			t.Fatalf("回填创建时间 %s：%v", id, err)
+		}
+	}
+
+	res, err := svc.Run()
+	if err != nil {
+		t.Fatalf("Run：%v", err)
+	}
+	if res.Deleted != 1 {
+		t.Fatalf("淘汰数 = %d，期望 1（%+v）", res.Deleted, res)
+	}
+	if _, err := os.Stat(f.svc.SidecarPath(ids[0])); !os.IsNotExist(err) {
+		t.Fatalf("被淘汰的包不得留下侧车索引，实际 err=%v", err)
+	}
+	if _, err := os.Stat(f.svc.PackagePath(ids[0])); !os.IsNotExist(err) {
+		t.Fatalf("被淘汰的包体应消失，实际 err=%v", err)
+	}
+	// 保留的那份包体与侧车都必须完好，否则"淘汰"就变成了破坏可用备份。
+	for _, p := range []string{f.svc.PackagePath(ids[1]), f.svc.SidecarPath(ids[1])} {
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("保留的包文件应完好（%s）：%v", filepath.Base(p), err)
+		}
 	}
 }
 

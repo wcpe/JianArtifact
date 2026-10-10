@@ -187,9 +187,14 @@ func (s *BackupService) Verify(packageID string, deep bool) (archive.Manifest, e
 	return m, nil
 }
 
-// Delete 删除备份包文件与登记。
+// Delete 删除备份包文件、侧车索引与登记。
 //
 // 仍被增量差包引用的基线不允许删除：否则派生包在目标端永远无法还原。
+//
+// **侧车索引必须与包体同生共死**：它只服务于"为后续差包求差"，包一旦不存在，
+// 侧车就成了无人引用的孤儿文件。保留策略是周期性淘汰（FR-40），漏删侧车会让
+// `${JIAN_DATA_DIR}/backups/` 里的索引只增不减——包体被淘汰而索引永久残留，
+// 与"保留策略兜住磁盘占用"的设计目的直接冲突。
 func (s *BackupService) Delete(packageID string) error {
 	if _, err := s.Get(packageID); err != nil {
 		return err
@@ -203,6 +208,11 @@ func (s *BackupService) Delete(packageID string) error {
 	}
 	if err := os.Remove(s.PackagePath(packageID)); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("删除备份包文件：%w", err)
+	}
+	// 侧车缺失不算错：早期版本删除时未清理侧车，现存实例可能本就没有它；
+	// 这里的目的是"删干净"，不是"断言它一定存在"。
+	if err := os.Remove(s.SidecarPath(packageID)); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("删除备份包侧车索引：%w", err)
 	}
 	return s.repo.Delete(packageID)
 }
