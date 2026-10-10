@@ -10,6 +10,7 @@ import {
   Badge,
   Box,
   Button,
+  Card,
   Group,
   Loader,
   Modal,
@@ -189,13 +190,7 @@ export function DrillReportModal({ packageId, onClose }: DrillReportModalProps) 
 function DrillReportCard({ report }: { report: BackupVerificationReport }) {
   const { t } = useTranslation();
   return (
-    <Box
-      p="sm"
-      style={{
-        border: "1px solid var(--mantine-color-default-border)",
-        borderRadius: "var(--mantine-radius-md)",
-      }}
-    >
+    <Card withBorder radius="md" padding="sm">
       <Group gap="xs" wrap="wrap" mb={6}>
         <StatusPill
           tone={drillVerdictTone(report.ok)}
@@ -249,6 +244,6 @@ function DrillReportCard({ report }: { report: BackupVerificationReport }) {
           ))}
         </Table.Tbody>
       </Table>
-    </Box>
+    </Card>
   );
 }

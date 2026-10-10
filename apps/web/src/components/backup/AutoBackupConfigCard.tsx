@@ -15,7 +15,7 @@
 //
 // 一旦后端把配置纳入契约（例如经 settings 通道），把本卡换成受控表单即可，
 // 文案里的环境变量名届时仍可作为"等价的运维途径"保留。
-import { Code, Group, SimpleGrid, Stack, Text, ThemeIcon } from "@mantine/core";
+import { Card, Code, Group, SimpleGrid, Stack, Text, ThemeIcon } from "@mantine/core";
 import { IconAlertTriangle, IconClock, IconDatabase, IconReload } from "@tabler/icons-react";
 import { useTranslation } from "react-i18next";
 
@@ -104,32 +104,27 @@ function ConfigItem({
   const { t } = useTranslation();
   const entry = AUTO_BACKUP_ENV_VARS.find((item) => item.env === env);
   return (
-    <Stack
-      gap={4}
-      p="sm"
-      style={{
-        border: "1px solid var(--mantine-color-default-border)",
-        borderRadius: "var(--mantine-radius-md)",
-      }}
-    >
-      <Group gap={6} wrap="nowrap">
-        <ThemeIcon size="sm" variant="light" color="gray">
-          {icon}
-        </ThemeIcon>
-        <Text size="sm" fw={500}>
-          {label}
-        </Text>
-      </Group>
-      <Code fz="xs">{env}</Code>
-      <Text size="xs" c="dimmed">
-        {desc}
-      </Text>
-      {entry ? (
+    <Card withBorder radius="md" padding="sm">
+      <Stack gap={4}>
+        <Group gap={6} wrap="nowrap">
+          <ThemeIcon size="sm" variant="light" color="gray">
+            {icon}
+          </ThemeIcon>
+          <Text size="sm" fw={500}>
+            {label}
+          </Text>
+        </Group>
+        <Code fz="xs">{env}</Code>
         <Text size="xs" c="dimmed">
-          {t("backups.autoCfgDefaultLabel")}
-          {t(entry.defaultKey)}
+          {desc}
         </Text>
-      ) : null}
-    </Stack>
+        {entry ? (
+          <Text size="xs" c="dimmed">
+            {t("backups.autoCfgDefaultLabel")}
+            {t(entry.defaultKey)}
+          </Text>
+        ) : null}
+      </Stack>
+    </Card>
   );
 }
