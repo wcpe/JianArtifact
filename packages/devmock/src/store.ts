@@ -33,6 +33,14 @@ export type RemoteNexusSourceConfig = Schemas["RemoteNexusSourceConfig"];
 export type BackupPackage = Schemas["BackupPackage"];
 export type BackupPackageList = Schemas["BackupPackageList"];
 export type BackupLink = Schemas["BackupLink"];
+// FR-40：来源列（manual / auto）与恢复演练报告
+export type BackupPackageOrigin = Schemas["BackupPackageOrigin"];
+export type BackupDrillAccepted = Schemas["BackupDrillAccepted"];
+export type BackupDrillCheck = Schemas["BackupDrillCheck"];
+export type BackupVerificationLevel = Schemas["BackupVerificationLevel"];
+export type BackupVerificationList = Schemas["BackupVerificationList"];
+export type BackupVerificationReport = Schemas["BackupVerificationReport"];
+export type DrillBackupRequest = Schemas["DrillBackupRequest"];
 // FR-134 / FR-137：写入冻结窗口与从 URL 导入备份包
 export type WriteFreezeState = Schemas["WriteFreezeState"];
 export type FreezeWritesRequest = Schemas["FreezeWritesRequest"];

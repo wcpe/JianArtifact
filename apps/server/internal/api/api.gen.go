@@ -440,6 +440,24 @@ func (e BackupPackageStatus) Valid() bool {
 	}
 }
 
+// Defines values for BackupPackageOrigin.
+const (
+	Auto   BackupPackageOrigin = "auto"
+	Manual BackupPackageOrigin = "manual"
+)
+
+// Valid indicates whether the value is a known member of the BackupPackageOrigin enum.
+func (e BackupPackageOrigin) Valid() bool {
+	switch e {
+	case Auto:
+		return true
+	case Manual:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for BackupUploadStatus.
 const (
 	BackupUploadStatusAborted     BackupUploadStatus = "aborted"
@@ -458,6 +476,24 @@ func (e BackupUploadStatus) Valid() bool {
 	case BackupUploadStatusInitialized:
 		return true
 	case BackupUploadStatusReceiving:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BackupVerificationLevel.
+const (
+	Deep    BackupVerificationLevel = "deep"
+	Shallow BackupVerificationLevel = "shallow"
+)
+
+// Valid indicates whether the value is a known member of the BackupVerificationLevel enum.
+func (e BackupVerificationLevel) Valid() bool {
+	switch e {
+	case Deep:
+		return true
+	case Shallow:
 		return true
 	default:
 		return false
@@ -1950,6 +1986,31 @@ type BackupCounts struct {
 	Users          *int `json:"users,omitempty"`
 }
 
+// BackupDrillAccepted 演练**受理**结果（202）。演练在后台推进，本响应不代表演练已完成——它与报告不同：
+// 报告要等演练跑完才落库，请轮询 GET /api/v1/backups/{id}/verifications 查看新报告。
+type BackupDrillAccepted struct {
+	// AcceptedAt 受理时刻；轮询时以它为准判断哪条报告属于本次演练（报告 finishedAt 不早于它）。
+	AcceptedAt string `json:"acceptedAt"`
+
+	// Level 演练强度：shallow 只校验结构摘要与解包可用性；deep 额外逐 blob 比对内容摘要
+	// （全量读取，耗时与包体积同阶）。
+	Level     BackupVerificationLevel `json:"level"`
+	PackageId string                  `json:"packageId"`
+}
+
+// BackupDrillCheck 演练报告中的单项结论。检查项**失败后仍继续后续项**，故一份报告里可能多项为 false。
+type BackupDrillCheck struct {
+	// Detail 人读结论：通过时说明规模，失败时说明原因。
+	Detail string `json:"detail"`
+
+	// DurationMs 该项耗时（毫秒）；缺省表示未单独计时。
+	DurationMs *int64 `json:"durationMs,omitempty"`
+
+	// Name 检查项标识（稳定，供前端按名渲染）：integrity / extract / sqlite / blobs。
+	Name string `json:"name"`
+	Ok   bool   `json:"ok"`
+}
+
 // BackupImport 一次导入的记录。pending_restart 表示校验与暂存已完成、restore.pending 已写入，
 // 需重启服务才会替换数据库并转为 done。
 type BackupImport struct {
@@ -2002,17 +2063,21 @@ type BackupPackage struct {
 	BasePackageId *string `json:"basePackageId,omitempty"`
 
 	// Counts 包内各实体记录数，供导入端核对规模。
-	Counts          *BackupCounts       `json:"counts,omitempty"`
-	CreatedAt       string              `json:"createdAt"`
-	DbSchemaVersion *int                `json:"dbSchemaVersion,omitempty"`
-	ErrorSummary    *string             `json:"errorSummary,omitempty"`
-	FinishedAt      *string             `json:"finishedAt,omitempty"`
-	Label           *string             `json:"label,omitempty"`
-	Mode            BackupPackageMode   `json:"mode"`
-	NodeId          *string             `json:"nodeId,omitempty"`
-	PackageId       string              `json:"packageId"`
-	SizeBytes       int64               `json:"sizeBytes"`
-	Status          BackupPackageStatus `json:"status"`
+	Counts          *BackupCounts     `json:"counts,omitempty"`
+	CreatedAt       string            `json:"createdAt"`
+	DbSchemaVersion *int              `json:"dbSchemaVersion,omitempty"`
+	ErrorSummary    *string           `json:"errorSummary,omitempty"`
+	FinishedAt      *string           `json:"finishedAt,omitempty"`
+	Label           *string           `json:"label,omitempty"`
+	Mode            BackupPackageMode `json:"mode"`
+	NodeId          *string           `json:"nodeId,omitempty"`
+
+	// Origin 备份包来源：manual = 人工触发（含 CLI 与 Web），auto = `backup-auto` 周期作业生成。
+	// 这是**加性字段**：迁移 0047 之前的存量行按列默认值补为 manual，语义正确。
+	Origin    BackupPackageOrigin `json:"origin"`
+	PackageId string              `json:"packageId"`
+	SizeBytes int64               `json:"sizeBytes"`
+	Status    BackupPackageStatus `json:"status"`
 }
 
 // BackupPackageMode defines model for BackupPackage.Mode.
@@ -2026,6 +2091,10 @@ type BackupPackageList struct {
 	Items []BackupPackage `json:"items"`
 	Total int             `json:"total"`
 }
+
+// BackupPackageOrigin 备份包来源：manual = 人工触发（含 CLI 与 Web），auto = `backup-auto` 周期作业生成。
+// 这是**加性字段**：迁移 0047 之前的存量行按列默认值补为 manual，语义正确。
+type BackupPackageOrigin string
 
 // BackupUploadSession 一次分片上传会话的视图。uploadedChunks 由磁盘上真实存在的分片推导（以磁盘为准，可续传）。
 type BackupUploadSession struct {
@@ -2049,6 +2118,45 @@ type BackupVerification struct {
 	Error     *string `json:"error,omitempty"`
 	Ok        bool    `json:"ok"`
 	PackageId *string `json:"packageId,omitempty"`
+}
+
+// BackupVerificationLevel 演练强度：shallow 只校验结构摘要与解包可用性；deep 额外逐 blob 比对内容摘要
+// （全量读取，耗时与包体积同阶）。
+type BackupVerificationLevel string
+
+// BackupVerificationList defines model for BackupVerificationList.
+type BackupVerificationList struct {
+	Items []BackupVerificationReport `json:"items"`
+
+	// Total 该包的历史报告总数（用于分页展示）。
+	Total int `json:"total"`
+}
+
+// BackupVerificationReport 一次恢复演练的**已落库报告**（区别于 /verify 的即时校验结论）。演练在隔离临时目录里
+// 真解包、真校验，报告无论成败都会落库——失败的报告正是演练最该留下的东西。
+// 报告随包级联删除（包没了，针对它的报告没有意义）。
+type BackupVerificationReport struct {
+	// Checks 逐项结论；历史数据缺该项时缺省为空数组。
+	Checks []BackupDrillCheck `json:"checks"`
+
+	// DurationMs 演练总耗时（毫秒）。
+	DurationMs int64 `json:"durationMs"`
+
+	// ErrorSummary 失败原因摘要（取首个致命错误，即根因）；成功时缺省。
+	ErrorSummary *string `json:"errorSummary,omitempty"`
+	FinishedAt   string  `json:"finishedAt"`
+
+	// Id 报告编号（包内递增，可用于定位单条报告）。
+	Id int64 `json:"id"`
+
+	// Level 演练强度：shallow 只校验结构摘要与解包可用性；deep 额外逐 blob 比对内容摘要
+	// （全量读取，耗时与包体积同阶）。
+	Level BackupVerificationLevel `json:"level"`
+
+	// Ok 总判定：全部检查项通过才为 true。与 checks 的分项结论一起看，不要只看本字段。
+	Ok        bool   `json:"ok"`
+	PackageId string `json:"packageId"`
+	StartedAt string `json:"startedAt"`
 }
 
 // BatchDeleteAssetFailure defines model for BatchDeleteAssetFailure.
@@ -2309,6 +2417,13 @@ type DownloadTrendPoint struct {
 	DownloadCount int64     `json:"downloadCount"`
 	From          time.Time `json:"from"`
 	To            time.Time `json:"to"`
+}
+
+// DrillBackupRequest 发起一次恢复演练。请求体可整体省略，省略时按 shallow 执行。
+type DrillBackupRequest struct {
+	// Level 演练强度：shallow 只校验结构摘要与解包可用性；deep 额外逐 blob 比对内容摘要
+	// （全量读取，耗时与包体积同阶）。
+	Level *BackupVerificationLevel `json:"level,omitempty"`
 }
 
 // EnabledFormats defines model for EnabledFormats.
@@ -3312,6 +3427,12 @@ type DownloadBackupParams struct {
 	Exp *string `form:"exp,omitempty" json:"exp,omitempty"`
 }
 
+// ListBackupVerificationsParams defines parameters for ListBackupVerifications.
+type ListBackupVerificationsParams struct {
+	Page     *PageParam     `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *PageSizeParam `form:"page_size,omitempty" json:"page_size,omitempty"`
+}
+
 // VerifyBackupParams defines parameters for VerifyBackup.
 type VerifyBackupParams struct {
 	// Deep 为 true 时逐 blob 比对内容摘要（全量读取，耗时与包等大）。
@@ -3621,6 +3742,9 @@ type CreateBackupUploadJSONRequestBody = CreateBackupUploadRequest
 
 // CompleteBackupUploadJSONRequestBody defines body for CompleteBackupUpload for application/json ContentType.
 type CompleteBackupUploadJSONRequestBody = CompleteBackupUploadRequest
+
+// DrillBackupJSONRequestBody defines body for DrillBackup for application/json ContentType.
+type DrillBackupJSONRequestBody = DrillBackupRequest
 
 // CreateBackupLinkJSONRequestBody defines body for CreateBackupLink for application/json ContentType.
 type CreateBackupLinkJSONRequestBody = CreateBackupLinkRequest
@@ -4048,9 +4172,15 @@ type ServerInterface interface {
 	// DownloadBackup 下载备份包归档
 	// (GET /api/v1/backups/{id}/download)
 	DownloadBackup(c *gin.Context, id BackupIdParam, params DownloadBackupParams)
+	// DrillBackup 发起恢复演练（仅管理员）
+	// (POST /api/v1/backups/{id}/drill)
+	DrillBackup(c *gin.Context, id BackupIdParam)
 	// CreateBackupLink 生成带时效的下载链接（仅管理员）
 	// (POST /api/v1/backups/{id}/link)
 	CreateBackupLink(c *gin.Context, id BackupIdParam)
+	// ListBackupVerifications 恢复演练报告列表（仅管理员）
+	// (GET /api/v1/backups/{id}/verifications)
+	ListBackupVerifications(c *gin.Context, id BackupIdParam, params ListBackupVerificationsParams)
 	// VerifyBackup 校验备份包完整性（仅管理员）
 	// (POST /api/v1/backups/{id}/verify)
 	VerifyBackup(c *gin.Context, id BackupIdParam, params VerifyBackupParams)
@@ -4719,6 +4849,31 @@ func (siw *ServerInterfaceWrapper) DownloadBackup(c *gin.Context) {
 	siw.Handler.DownloadBackup(c, id, params)
 }
 
+// DrillBackup operation middleware
+func (siw *ServerInterfaceWrapper) DrillBackup(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id BackupIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.DrillBackup(c, id)
+}
+
 // CreateBackupLink operation middleware
 func (siw *ServerInterfaceWrapper) CreateBackupLink(c *gin.Context) {
 
@@ -4742,6 +4897,50 @@ func (siw *ServerInterfaceWrapper) CreateBackupLink(c *gin.Context) {
 	}
 
 	siw.Handler.CreateBackupLink(c, id)
+}
+
+// ListBackupVerifications operation middleware
+func (siw *ServerInterfaceWrapper) ListBackupVerifications(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id BackupIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListBackupVerificationsParams
+
+	// ------------- Optional query parameter "page" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page", c.Request.URL.Query(), &params.Page, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter page: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "page_size" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page_size", c.Request.URL.Query(), &params.PageSize, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter page_size: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ListBackupVerifications(c, id, params)
 }
 
 // VerifyBackup operation middleware
@@ -6910,6 +7109,8 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/api/v1/backups/:id/download", wrapper.DownloadBackup)
 	router.POST(options.BaseURL+"/api/v1/backups/:id/link", wrapper.CreateBackupLink)
 	router.POST(options.BaseURL+"/api/v1/backups/:id/verify", wrapper.VerifyBackup)
+	router.POST(options.BaseURL+"/api/v1/backups/:id/drill", wrapper.DrillBackup)
+	router.GET(options.BaseURL+"/api/v1/backups/:id/verifications", wrapper.ListBackupVerifications)
 	router.DELETE(options.BaseURL+"/api/v1/maintenance/freeze", wrapper.UnfreezeWrites)
 	router.GET(options.BaseURL+"/api/v1/maintenance/freeze", wrapper.GetWriteFreezeState)
 	router.POST(options.BaseURL+"/api/v1/maintenance/freeze", wrapper.FreezeWrites)

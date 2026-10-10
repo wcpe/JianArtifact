@@ -29,8 +29,13 @@ import { MOCK_APP_VERSION, MOCK_SCHEMA_VERSION } from "./version";
 import type { components } from "./schema.gen";
 import type {
   AclEntry,
+  BackupDrillAccepted,
+  BackupDrillCheck,
   BackupPackage,
   BackupImport,
+  BackupVerificationLevel,
+  BackupVerificationReport,
+  DrillBackupRequest,
   WriteFreezeState,
   MigrationPlan,
   MigrationReport,
@@ -42,7 +47,6 @@ import type {
   Repository,
   User,
 } from "./store";
-
 function err(code: string, message: string, status: number) {
   return HttpResponse.json({ error: { code, message } }, { status });
 }
@@ -366,11 +370,16 @@ const notificationStatuses = ["unacknowledged", "acknowledged", "all"] as const;
 
 // —— FR-132 备份包内存态（仅 devmock）——
 // 生成过程用定时器推进状态，便于在浏览器里看到 queued → snapshotting → packing → done。
+//
+// FR-40：预置两条真实来源分布（手动 + 自动），让来源列在 devmock 下就能看到两种取值。
 function seedBackups(): BackupPackage[] {
+  const now = Date.now();
+  const iso = (msAgo: number) => new Date(now - msAgo).toISOString();
   return [
     {
       packageId: "bk-20260910-090000-a1b2c3",
       mode: "hot",
+      origin: "manual",
       status: "done",
       label: "例行备份",
       sizeBytes: 73400320,
@@ -385,8 +394,29 @@ function seedBackups(): BackupPackage[] {
       nodeId: "np-demo",
       appVersion: MOCK_APP_VERSION,
       dbSchemaVersion: MOCK_SCHEMA_VERSION,
-      createdAt: new Date(Date.now() - 6 * 3600 * 1000).toISOString(),
-      finishedAt: new Date(Date.now() - 6 * 3600 * 1000 + 42000).toISOString(),
+      createdAt: iso(6 * 3600 * 1000),
+      finishedAt: iso(6 * 3600 * 1000 - 42000),
+    },
+    {
+      packageId: "bk-20260910-030000-d4e5f6",
+      mode: "hot",
+      origin: "auto",
+      status: "done",
+      label: "周期自动备份",
+      sizeBytes: 71303168,
+      counts: {
+        users: 5,
+        tokens: 8,
+        repositories: 20,
+        acls: 12,
+        assets: 74478,
+        formatMetadata: 74,
+      },
+      nodeId: "np-demo",
+      appVersion: MOCK_APP_VERSION,
+      dbSchemaVersion: MOCK_SCHEMA_VERSION,
+      createdAt: iso(12 * 3600 * 1000),
+      finishedAt: iso(12 * 3600 * 1000 - 38000),
     },
   ];
 }
@@ -394,6 +424,118 @@ function seedBackups(): BackupPackage[] {
 const mockBackups: BackupPackage[] = seedBackups();
 
 let mockBackupSeq = 1;
+
+// —— FR-40：恢复演练报告内存态（仅 devmock）——
+// 按包标识分桶存放报告，最近优先（与后端 ListByPackage 的排序口径一致）。
+// 预置一条**失败**报告：失败报告是演练最该留下的产物，界面必须能如实渲染它，
+// 所以 devmock 默认就该带上一条，而不是只给"一切正常"的样例。
+const mockDrillReports = new Map<string, BackupVerificationReport[]>();
+
+let mockDrillSeq = 1;
+
+function drillReportId(): number {
+  mockDrillSeq += 1;
+  return mockDrillSeq;
+}
+
+/** 按包标识取报告列表（最近优先）；首次访问时注入一条预置失败报告。 */
+function drillReportsFor(packageId: string): BackupVerificationReport[] {
+  const existing = mockDrillReports.get(packageId);
+  if (existing) {
+    return existing;
+  }
+  const seeded: BackupVerificationReport[] = [
+    {
+      id: drillReportId(),
+      packageId,
+      level: "deep",
+      ok: false,
+      startedAt: new Date(Date.now() - 3 * 3600 * 1000).toISOString(),
+      finishedAt: new Date(Date.now() - 3 * 3600 * 1000 + 5230).toISOString(),
+      durationMs: 5230,
+      checks: [
+        {
+          name: "integrity",
+          ok: true,
+          detail: "归档完整：制品 74481 件，blob 74481 个（73400320 字节），级别 deep",
+          durationMs: 4100,
+        },
+        {
+          name: "extract",
+          ok: true,
+          detail: "已解包到隔离目录：/var/lib/jianartifact/backup-drill/…",
+          durationMs: 980,
+        },
+        {
+          name: "sqlite",
+          ok: true,
+          detail: "quick_check 通过，关键表（5 张）可查询",
+          durationMs: 120,
+        },
+        {
+          name: "blobs",
+          ok: false,
+          detail: "解出的 blob 数不符：manifest 74481 实际 74478",
+          durationMs: 30,
+        },
+      ],
+      errorSummary: "解出的 blob 数不符：manifest 74481 实际 74478",
+    },
+  ];
+  mockDrillReports.set(packageId, seeded);
+  return seeded;
+}
+
+/** 生成一次"演练结果"报告：浅校验全通过，深校验按序号交替通过 / 失败，覆盖两种渲染分支。 */
+function buildDrillReport(
+  packageId: string,
+  level: BackupVerificationLevel,
+): BackupVerificationReport {
+  const deep = level === "deep";
+  const assets = findMockBackup(packageId)?.counts?.assets ?? 0;
+  const startedAt = new Date().toISOString();
+  const durationMs = deep ? 4200 : 180;
+  const flaky = deep && drillReportId() % 2 === 0;
+  const checks: BackupDrillCheck[] = [
+    {
+      name: "integrity",
+      ok: true,
+      detail: `归档完整：制品 ${assets} 件，blob ${assets} 个（73400320 字节），级别 ${level}`,
+      durationMs: deep ? 3600 : 90,
+    },
+    {
+      name: "extract",
+      ok: true,
+      detail: "已解包到隔离目录：/var/lib/jianartifact/backup-drill/…",
+      durationMs: deep ? 500 : 60,
+    },
+    { name: "sqlite", ok: true, detail: "quick_check 通过，关键表（5 张）可查询", durationMs: 40 },
+    {
+      name: "blobs",
+      ok: !flaky,
+      detail: flaky
+        ? `解出的 blob 数不符：manifest ${assets} 实际 ${Math.max(0, assets - 3)}`
+        : `解出的 blob 数与 manifest 一致：${assets} 个`,
+      durationMs: 20,
+    },
+  ];
+  return {
+    id: drillReportId(),
+    packageId,
+    level,
+    ok: checks.every((check) => check.ok),
+    startedAt,
+    finishedAt: new Date(Date.parse(startedAt) + durationMs).toISOString(),
+    durationMs,
+    checks,
+    ...(checks.every((check) => check.ok)
+      ? {}
+      : { errorSummary: checks.find((check) => !check.ok)?.detail ?? "" }),
+  };
+}
+
+/** 演练是否"正在跑"：受理后短暂保留，便于界面看到轮询中的加载态。 */
+const pendingDrills = new Set<string>();
 
 // —— FR-134：写入冻结窗口内存态（仅 devmock）——
 // 进程内一个状态对象；未冻结时仅含 frozen:false，避免输出 until/frozenAt。
@@ -544,6 +686,8 @@ function createMockBackup(mode: BackupPackage["mode"], label: string): BackupPac
   return {
     packageId: `bk-${stamp}-dev${String(mockBackupSeq).padStart(3, "0")}`,
     mode,
+    // Web 端发起的生成一律是人工来源；自动来源只由 backup-auto 作业产生。
+    origin: "manual",
     status: "queued",
     label,
     sizeBytes: 0,
@@ -2792,6 +2936,68 @@ export const handlers = [
         Math.floor(Date.now() / 1000) + 1800
       }&token=mock-signature`,
       expiresAt: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+    });
+  }),
+
+  // —— FR-40：恢复演练（202 + 轮询）——
+  // 路由注册顺序与 :id 通配无关（drill / verifications 都在 :id 段之后，不会互相吞），
+  // 但仍集中放在备份端点组内，与后端 api.gen.go 的注册顺序对应。
+  http.post("*/api/v1/backups/:id/drill", async ({ request, params }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const packageId = String(params.id);
+    const found = findMockBackup(packageId);
+    if (!found) {
+      return err("not_found", "备份包不存在", 404);
+    }
+    if (found.status !== "done") {
+      return err("backup_not_done", "备份包尚未生成完成，无法演练", 409);
+    }
+    const body = (await request.json().catch(() => ({}))) as DrillBackupRequest;
+    const level = body.level ?? "shallow";
+    if (level !== "shallow" && level !== "deep") {
+      return err("bad_request", `演练级别只能是 shallow 或 deep，实际 "${level}"`, 400);
+    }
+
+    // 后端是"受理后异步跑、报告稍后落库"；这里用定时器复现同一时序，
+    // 让前端的轮询逻辑在 devmock 下也被真正走一遍（否则轮询分支从不被执行）。
+    // 延迟沿用全局网络档位，使"慢速"档下这条异步时序也一并变慢，便于观察加载态。
+    pendingDrills.add(packageId);
+    const report = buildDrillReport(packageId, level);
+    report.startedAt = new Date().toISOString();
+    setTimeout(() => {
+      report.finishedAt = new Date().toISOString();
+      drillReportsFor(packageId).unshift(report);
+      pendingDrills.delete(packageId);
+    }, mockNetworkDelayMs());
+
+    const accepted: BackupDrillAccepted = {
+      packageId,
+      level,
+      acceptedAt: report.startedAt,
+    };
+    return HttpResponse.json(accepted, { status: 202 });
+  }),
+
+  http.get("*/api/v1/backups/:id/verifications", ({ request, params }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const packageId = String(params.id);
+    if (!findMockBackup(packageId)) {
+      return err("not_found", "备份包不存在", 404);
+    }
+    const url = new URL(request.url);
+    const page = intParam(url, "page", 1);
+    const pageSize = intParam(url, "page_size", 20);
+    const all = drillReportsFor(packageId);
+    const start = (page - 1) * pageSize;
+    return HttpResponse.json({
+      items: all.slice(start, start + pageSize),
+      total: all.length,
     });
   }),
 

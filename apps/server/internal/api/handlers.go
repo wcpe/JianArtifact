@@ -50,6 +50,7 @@ type Deps struct {
 	OnUpstreamTimeoutChange func(time.Duration)                     // FR-89：回源超时设置变更回调（wiring 注入 upstream.Client.SetTimeout；nil 不触发）
 	Backups                 *domain.BackupService                   // FR-132：节点备份包生成与登记
 	BackupLinkKey           []byte                                  // FR-132：备份下载令牌签名密钥（由启动密钥派生）
+	BackupDrill             *domain.BackupDrillService              // FR-40：恢复演练与可查报告
 	Freeze                  *domain.FreezeController                // FR-135：运行时写入冻结窗口
 	BackupImports           *domain.BackupImportService             // FR-137：导入记录与 URL 拉取
 	BackupUploads           *domain.BackupUploadService             // FR-137：分片上传（Web 第三通道）
@@ -100,6 +101,7 @@ type Handlers struct {
 	onUpstreamTimeoutChange func(time.Duration)          // FR-89：回源超时设置变更回调
 	backups                 *domain.BackupService        // FR-132：节点备份包
 	backupLinks             *domain.BackupLinkSigner     // FR-132：下载令牌签名
+	backupDrill             *domain.BackupDrillService   // FR-40：恢复演练与校验报告
 	freeze                  *domain.FreezeController     // FR-135：运行时写入冻结
 	backupImports           *domain.BackupImportService  // FR-137：导入记录与 URL 拉取
 	backupUploads           *domain.BackupUploadService  // FR-137：分片上传（Web 第三通道）
@@ -138,6 +140,7 @@ func NewHandlers(d Deps) *Handlers {
 		onUpstreamTimeoutChange: d.OnUpstreamTimeoutChange,
 		backups:                 d.Backups,
 		backupLinks:             domain.NewBackupLinkSigner(d.BackupLinkKey),
+		backupDrill:             d.BackupDrill, // FR-40：恢复演练
 		freeze:                  d.Freeze,
 		backupImports:           d.BackupImports,
 		backupUploads:           d.BackupUploads,

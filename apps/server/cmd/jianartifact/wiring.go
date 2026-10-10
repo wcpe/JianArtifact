@@ -372,6 +372,7 @@ func (s *appServices) handlers(version string, checks []func() error) *api.Handl
 		AuditAttentionKey:       s.auditAttentionKey,
 		AuditSourceNode:         s.nodeIdentity.NodeID(),
 		Backups:                 s.backupSvc,
+		BackupDrill:             s.backupDrillSvc, // FR-40：恢复演练端点（202 受理 + 报告查询）
 		Freeze:                  s.freeze,
 		BackupImports:           s.backupImports,
 		BackupUploads:           s.backupUploads,

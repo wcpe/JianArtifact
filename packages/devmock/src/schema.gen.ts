@@ -1217,6 +1217,61 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/backups/{id}/drill": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 发起恢复演练（仅管理员）
+         * @description 对指定备份包发起一次**恢复演练**（FR-40）。演练在**隔离临时目录**内真解包、真校验：
+         *     归档完整性 → 解包 → 解出的 SQLite 跑 `PRAGMA quick_check` 并确认关键表可查询 → blob 规模比对，
+         *     逐项结论与耗时落库为可查报告（见 `GET /api/v1/backups/{id}/verifications`）。
+         *
+         *     与 `POST /api/v1/backups/{id}/verify` 的区别：verify 只校验归档自身且结论一次性返回；
+         *     drill 额外真解包、真查 SQLite，回答的是「这份包**真的能恢复吗**」，并留下历史报告。
+         *
+         *     **演练是只读路径**：绝不调用恢复暂存，不写 `restore-staging/`、不写 `restore.pending`，
+         *     因此不会在下次重启触发真正的数据替换——这是与真导入/恢复的关键区别。
+         *
+         *     深校验要逐 blob 读取，耗时与包体积同阶，故本端点采用 **202 + 轮询**：
+         *     受理后立即返回，调用方轮询报告列表观察新报告出现。**演练未通过不算接口失败**——
+         *     失败同样会落库为一份 `ok: false` 的报告（含失败原因），这是演练最该留下的产物。
+         *     仅「包不存在 / 尚未生成完成 / 级别非法」这类连演练都无法开始的情况返回错误。
+         */
+        post: operations["drillBackup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/backups/{id}/verifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 恢复演练报告列表（仅管理员）
+         * @description 分页返回指定备份包的历史演练报告，**最近优先**。这是演练的查询面：
+         *     `POST /api/v1/backups/{id}/drill` 受理后，从这里轮询新报告。
+         *     包不存在返回 404（对不存在包的演练历史没有意义，不返回空列表）。
+         */
+        get: operations["listBackupVerifications"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/maintenance/freeze": {
         parameters: {
             query?: never;
@@ -2862,11 +2917,18 @@ export interface components {
             assets?: number;
             formatMetadata?: number;
         };
+        /**
+         * @description 备份包来源：manual = 人工触发（含 CLI 与 Web），auto = `backup-auto` 周期作业生成。
+         *     这是**加性字段**：迁移 0047 之前的存量行按列默认值补为 manual，语义正确。
+         * @enum {string}
+         */
+        BackupPackageOrigin: "manual" | "auto";
         /** @description 节点备份包登记（包体为 tar.gz，不含密钥与节点本地配置）。 */
         BackupPackage: {
             packageId: string;
             /** @enum {string} */
             mode: "hot" | "frozen";
+            origin: components["schemas"]["BackupPackageOrigin"];
             /** @description 非空表示这是基于该基线包生成的增量差包。 */
             basePackageId?: string;
             /** @enum {string} */
@@ -2906,6 +2968,71 @@ export interface components {
             blobs?: number;
             assets?: number;
             error?: string;
+        };
+        /**
+         * @description 演练强度：shallow 只校验结构摘要与解包可用性；deep 额外逐 blob 比对内容摘要
+         *     （全量读取，耗时与包体积同阶）。
+         * @enum {string}
+         */
+        BackupVerificationLevel: "shallow" | "deep";
+        /** @description 演练报告中的单项结论。检查项**失败后仍继续后续项**，故一份报告里可能多项为 false。 */
+        BackupDrillCheck: {
+            /** @description 检查项标识（稳定，供前端按名渲染）：integrity / extract / sqlite / blobs。 */
+            name: string;
+            ok: boolean;
+            /** @description 人读结论：通过时说明规模，失败时说明原因。 */
+            detail: string;
+            /**
+             * Format: int64
+             * @description 该项耗时（毫秒）；缺省表示未单独计时。
+             */
+            durationMs?: number;
+        };
+        /**
+         * @description 一次恢复演练的**已落库报告**（区别于 /verify 的即时校验结论）。演练在隔离临时目录里
+         *     真解包、真校验，报告无论成败都会落库——失败的报告正是演练最该留下的东西。
+         *     报告随包级联删除（包没了，针对它的报告没有意义）。
+         */
+        BackupVerificationReport: {
+            /**
+             * Format: int64
+             * @description 报告编号（包内递增，可用于定位单条报告）。
+             */
+            id: number;
+            packageId: string;
+            level: components["schemas"]["BackupVerificationLevel"];
+            /** @description 总判定：全部检查项通过才为 true。与 checks 的分项结论一起看，不要只看本字段。 */
+            ok: boolean;
+            startedAt: string;
+            finishedAt: string;
+            /**
+             * Format: int64
+             * @description 演练总耗时（毫秒）。
+             */
+            durationMs: number;
+            /** @description 逐项结论；历史数据缺该项时缺省为空数组。 */
+            checks: components["schemas"]["BackupDrillCheck"][];
+            /** @description 失败原因摘要（取首个致命错误，即根因）；成功时缺省。 */
+            errorSummary?: string;
+        };
+        BackupVerificationList: {
+            items: components["schemas"]["BackupVerificationReport"][];
+            /** @description 该包的历史报告总数（用于分页展示）。 */
+            total: number;
+        };
+        /** @description 发起一次恢复演练。请求体可整体省略，省略时按 shallow 执行。 */
+        DrillBackupRequest: {
+            level?: components["schemas"]["BackupVerificationLevel"];
+        };
+        /**
+         * @description 演练**受理**结果（202）。演练在后台推进，本响应不代表演练已完成——它与报告不同：
+         *     报告要等演练跑完才落库，请轮询 GET /api/v1/backups/{id}/verifications 查看新报告。
+         */
+        BackupDrillAccepted: {
+            packageId: string;
+            level: components["schemas"]["BackupVerificationLevel"];
+            /** @description 受理时刻；轮询时以它为准判断哪条报告属于本次演练（报告 finishedAt 不早于它）。 */
+            acceptedAt: string;
         };
         /** @description 节点写入冻结状态。未冻结时 until/frozenAt 缺省（表示当前无生效窗口）。 */
         WriteFreezeState: {
@@ -5466,6 +5593,67 @@ export interface operations {
                     "application/json": components["schemas"]["BackupVerification"];
                 };
             };
+        };
+    };
+    drillBackup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 备份包标识（形如 bk-20260910-162701-a1b2c3）。 */
+                id: components["parameters"]["BackupIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["DrillBackupRequest"];
+            };
+        };
+        responses: {
+            /** @description 已受理本次演练（不代表已完成，请轮询报告列表） */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupDrillAccepted"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    listBackupVerifications: {
+        parameters: {
+            query?: {
+                page?: components["parameters"]["PageParam"];
+                page_size?: components["parameters"]["PageSizeParam"];
+            };
+            header?: never;
+            path: {
+                /** @description 备份包标识（形如 bk-20260910-162701-a1b2c3）。 */
+                id: components["parameters"]["BackupIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 演练报告列表（最近优先） */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupVerificationList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
     getWriteFreezeState: {
