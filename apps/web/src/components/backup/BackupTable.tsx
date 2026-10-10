@@ -7,6 +7,7 @@ import {
   IconDownload,
   IconLink,
   IconReload,
+  IconStethoscope,
   IconTrash,
 } from "@tabler/icons-react";
 import { useTranslation } from "react-i18next";
@@ -16,7 +17,7 @@ import { copyToClipboard } from "../../lib/clipboard";
 import { formatBytes, formatStamp } from "../../lib/format";
 import { notifyError, notifySuccess } from "../../lib/feedback";
 import { StatusPill } from "../ops/OpsKit";
-import { backupInProgress, backupModeTone, backupStatusTone } from "./status";
+import { backupInProgress, backupModeTone, backupOriginTone, backupStatusTone } from "./status";
 
 export interface BackupTableProps {
   items: BackupPackage[];
@@ -24,6 +25,8 @@ export interface BackupTableProps {
   verifyingId?: string | null;
   onGetLink: (id: string) => void;
   onVerify: (id: string, deep: boolean) => void;
+  /** 打开演练报告弹窗（含发起演练入口）。 */
+  onDrill: (id: string) => void;
   onDelete: (item: BackupPackage) => void;
 }
 
@@ -32,6 +35,7 @@ export function BackupTable({
   verifyingId,
   onGetLink,
   onVerify,
+  onDrill,
   onDelete,
 }: BackupTableProps) {
   const { t } = useTranslation();
@@ -49,13 +53,14 @@ export function BackupTable({
       >
         <Table.Thead>
           <Table.Tr>
-            <Table.Th w="26%">{t("backups.colPackage")}</Table.Th>
+            <Table.Th w="22%">{t("backups.colPackage")}</Table.Th>
+            <Table.Th w={96}>{t("backups.colOrigin")}</Table.Th>
             <Table.Th w={110}>{t("backups.colMode")}</Table.Th>
             <Table.Th w={130}>{t("backups.colStatus")}</Table.Th>
             <Table.Th w={100}>{t("backups.colSize")}</Table.Th>
-            <Table.Th w="18%">{t("backups.colCounts")}</Table.Th>
+            <Table.Th w="16%">{t("backups.colCounts")}</Table.Th>
             <Table.Th w={170}>{t("backups.colCreated")}</Table.Th>
-            <Table.Th w={180}>{t("backups.colActions")}</Table.Th>
+            <Table.Th w={220}>{t("backups.colActions")}</Table.Th>
           </Table.Tr>
         </Table.Thead>
         <Table.Tbody>
@@ -73,6 +78,11 @@ export function BackupTable({
                       {item.label}
                     </Text>
                   ) : null}
+                </Table.Td>
+                <Table.Td>
+                  <Badge color={backupOriginTone(item.origin)} variant="light" tt="none">
+                    {t(`backups.origin_${item.origin}`, item.origin)}
+                  </Badge>
                 </Table.Td>
                 <Table.Td>
                   <Badge color={backupModeTone(item.mode)} variant="light" tt="none">
@@ -160,6 +170,17 @@ export function BackupTable({
                       onClick={() => onVerify(item.packageId, true)}
                     >
                       {t("backups.verifyDeep")}
+                    </Button>
+                    <Button
+                      size="compact-xs"
+                      variant="subtle"
+                      color="cyan"
+                      leftSection={<IconStethoscope size={14} />}
+                      aria-label={t("backups.drillOpen")}
+                      disabled={!done}
+                      onClick={() => onDrill(item.packageId)}
+                    >
+                      {t("backups.drillOpen")}
                     </Button>
                     <Button
                       size="compact-xs"

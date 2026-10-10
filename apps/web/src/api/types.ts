@@ -45,9 +45,17 @@ export type BackupPackage = Schemas["BackupPackage"];
 export type BackupPackageList = Schemas["BackupPackageList"];
 export type BackupPackageMode = Schemas["BackupPackage"]["mode"];
 export type BackupPackageStatus = Schemas["BackupPackage"]["status"];
+export type BackupPackageOrigin = Schemas["BackupPackage"]["origin"];
 export type BackupCounts = Schemas["BackupCounts"];
 export type BackupLink = Schemas["BackupLink"];
 export type BackupVerification = Schemas["BackupVerification"];
+// 恢复演练与可查报告（FR-40）：与 /verify 的即时校验结论不同，这里读的是落库的历史报告。
+export type BackupVerificationReport = Schemas["BackupVerificationReport"];
+export type BackupVerificationList = Schemas["BackupVerificationList"];
+export type BackupVerificationLevel = Schemas["BackupVerificationReport"]["level"];
+export type BackupDrillCheck = Schemas["BackupDrillCheck"];
+export type DrillBackupRequest = Schemas["DrillBackupRequest"];
+export type BackupDrillAccepted = Schemas["BackupDrillAccepted"];
 // 写入冻结窗口（FR-134）与从 URL 导入备份包（FR-137）
 export type WriteFreezeState = Schemas["WriteFreezeState"];
 export type FreezeWritesRequest = Schemas["FreezeWritesRequest"];

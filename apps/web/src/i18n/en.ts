@@ -1238,6 +1238,58 @@ export const en = {
     fileMissing: "Package file is missing",
     includedNote:
       "A backup package contains only the SQLite snapshot and artifact content, no keys or node-local configuration.",
+    // —— FR-40：来源列（手动 / 自动）——
+    colOrigin: "Origin",
+    origin_manual: "Manual",
+    origin_auto: "Automatic",
+    // —— FR-40：恢复演练与可查报告 ——
+    drillOpen: "Drill",
+    drillTitle: "Restore Drill",
+    drillHint:
+      'The drill really unpacks and verifies the package in an isolated temporary directory, answering "can this package actually be restored?" and leaving an auditable report. It is a read-only path: it writes no pending-restart marker and never replaces local data. Deep verification reads every blob, so it takes time on the order of the package size.',
+    drillLevelShallow: "Shallow",
+    drillLevelDeep: "Deep",
+    drillLevel_shallow: "Shallow",
+    drillLevel_deep: "Deep",
+    drillStart: "Start Drill",
+    drillStarted: "Drill accepted; the report will appear automatically once ready",
+    drillRunning: "Drill in progress…",
+    drillHistory: "History",
+    drillNoReports: "This package has no drill report yet. Start a drill to create the first one.",
+    drillPassed: "Passed",
+    drillFailed: "Failed",
+    drillColCheck: "Check",
+    drillColResult: "Result",
+    drillColDetail: "Detail",
+    drillColDuration: "Time",
+    drillCheckOk: "Passed",
+    drillCheckFail: "Failed",
+    drillCheck_integrity: "Archive integrity",
+    drillCheck_extract: "Extract",
+    drillCheck_sqlite: "SQLite consistency",
+    drillCheck_blobs: "Blob scale",
+    // —— FR-40：自动备份与保留策略（只读展示；配置走环境变量，间隔改动需重启）——
+    autoCfgTitle: "Automatic Backup & Retention",
+    autoCfgRestartNote: "Interval changes need a restart",
+    autoCfgHint:
+      "These three are configured through environment variables, read once at startup and fixed thereafter; no runtime editing endpoint exists. This card shows how to configure them and deliberately offers no in-place editing.",
+    autoCfgInterval: "Automatic backup interval",
+    autoCfgIntervalDesc:
+      "Seconds; 0 = disabled (default). When enabled, a full hot backup package is produced each interval, never a differential one.",
+    autoCfgKeepLast: "Keep last",
+    autoCfgKeepLastDesc:
+      "Keep the most recent N automatic backups; 0 = no count limit. Only automatic backups are pruned, manual ones are never deleted.",
+    autoCfgRetentionDays: "Retention days",
+    autoCfgRetentionDaysDesc:
+      "Keep automatic backups from the last N days; 0 = no day limit. The stricter of the two limits wins.",
+    autoCfgDefaultLabel: "Default: ",
+    autoCfgDefaultDisabled: "0 (disabled)",
+    autoCfgDefault7: "7",
+    autoCfgDefault30: "30",
+    autoCfgHowTo:
+      "How to change: set the environment variables in the service runtime and restart the process. The interval is registered as a scheduled job at startup, so changing it while running has no effect; the retention count and days are likewise read at startup. For container deployments inject them via compose / orchestration config.",
+    autoCfgJobsHint:
+      "Whether the job is registered can be checked on the Maintenance Jobs page: seeing backup-auto means automatic backup is enabled; if it is absent, the interval is currently 0 (disabled).",
     // —— FR-134：写入冻结窗口 ——
     freezeCardTitle: "Write Freeze Window",
     freezeStatusWritable: "Writable",

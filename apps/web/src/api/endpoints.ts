@@ -31,6 +31,10 @@ import type {
   BackupPackageList,
   BackupPackageMode,
   BackupVerification,
+  // FR-40：恢复演练的受理结果、级别与落库报告。
+  BackupDrillAccepted,
+  BackupVerificationLevel,
+  BackupVerificationList,
   BackupImport,
   BackupImportList,
   BackupUploadSession,
@@ -769,6 +773,38 @@ export function verifyBackup(packageId: string, deep = false): Promise<BackupVer
     // 深度校验可能持续数分钟，需放宽请求超时。
     timeoutMs: deep ? 30 * 60 * 1000 : undefined,
   });
+}
+
+// —— 恢复演练与可查报告（FR-40）——
+// 与 verifyBackup 的分工：verify 只校验归档自身、结论一次性返回；
+// drill 额外真解包 + 真查 SQLite，回答"这份包真的能恢复吗"，并留下可查历史报告。
+
+/**
+ * 发起一次恢复演练，返回 202 受理结果（**不代表已完成**）。
+ *
+ * 深校验要逐 blob 读取，耗时与包体积同阶，故服务端受理后异步执行；
+ * 调用方随后轮询 listBackupVerifications 直到新报告出现。
+ * 演练未通过不算请求失败——失败同样会落库为一份 ok=false 的报告。
+ */
+export function drillBackup(
+  packageId: string,
+  level: BackupVerificationLevel = "shallow",
+): Promise<BackupDrillAccepted> {
+  return request<BackupDrillAccepted>(`/backups/${encodeURIComponent(packageId)}/drill`, {
+    method: "POST",
+    body: { level },
+  });
+}
+
+/** 某包的恢复演练报告列表（分页，最近优先）。演练发起后从这里轮询结果。 */
+export function listBackupVerifications(
+  packageId: string,
+  params: Pagination = {},
+): Promise<BackupVerificationList> {
+  return request<BackupVerificationList>(
+    `/backups/${encodeURIComponent(packageId)}/verifications`,
+    { query: { page: params.page, page_size: params.page_size } },
+  );
 }
 
 // —— 写入冻结窗口（FR-134）——

@@ -32,6 +32,7 @@ describe("备份与搬迁", () => {
     const headers = within(table).getAllByRole("columnheader");
     expect(headers.map((h) => h.textContent)).toEqual([
       "包标识",
+      "来源",
       "方式",
       "状态",
       "大小",
@@ -41,10 +42,109 @@ describe("备份与搬迁", () => {
     ]);
 
     // 预置的已完成包。
-    expect(within(table).getByText("bk-20260910-090000-a1b2c3")).toBeTruthy();
-    expect(within(table).getByText("已完成")).toBeTruthy();
-    expect(within(table).getByText("热备份")).toBeTruthy();
+    const manualRow = within(table)
+      .getByText("bk-20260910-090000-a1b2c3")
+      .closest("tr") as HTMLElement;
+    expect(within(manualRow).getByText("已完成")).toBeTruthy();
+    expect(within(manualRow).getByText("热备份")).toBeTruthy();
   });
+
+  // —— FR-40：来源列（手动 / 自动）——
+  it("来源列区分手动与自动备份", async () => {
+    renderTab();
+
+    const wayHeader = await screen.findByText("方式");
+    const table = wayHeader.closest("table") as HTMLElement;
+
+    // 种子同时含手动包与自动包，两种徽章文案都要出现——
+    // 只断言其中一个会让"两种来源都渲染成同一文案"的漂移蒙混过关。
+    expect(within(table).getByText("手动")).toBeTruthy();
+    expect(within(table).getByText("自动")).toBeTruthy();
+
+    // 自动包的备注（周期自动备份）与来源徽章在同一行。
+    const autoRow = within(table)
+      .getByText("bk-20260910-030000-d4e5f6")
+      .closest("tr") as HTMLElement;
+    expect(within(autoRow).getByText("自动")).toBeTruthy();
+    const manualRow = within(table)
+      .getByText("bk-20260910-090000-a1b2c3")
+      .closest("tr") as HTMLElement;
+    expect(within(manualRow).getByText("手动")).toBeTruthy();
+  });
+
+  // —— FR-40：自动备份配置卡（只读 + 重启说明）——
+  it("自动备份配置卡只读展示三项环境变量，并标注「间隔改动需重启生效」", async () => {
+    renderTab();
+
+    // 如实标注不可热改——这是规格 §3.5 的硬要求，不能假装保存即生效。
+    expect(await screen.findByText("间隔改动需重启生效")).toBeTruthy();
+    expect(screen.getByText("JIAN_BACKUP_AUTO_INTERVAL")).toBeTruthy();
+    expect(screen.getByText("JIAN_BACKUP_KEEP_LAST")).toBeTruthy();
+    expect(screen.getByText("JIAN_BACKUP_RETENTION_DAYS")).toBeTruthy();
+    // 修改途径必须写明（环境变量 + 重启）。
+    expect(screen.getByText(/在服务运行环境中设置上述环境变量后重启进程/)).toBeTruthy();
+    // 不做就地编辑：卡内不得出现保存类按钮。
+    expect(screen.queryByRole("button", { name: "保存" })).toBeNull();
+  });
+
+  // —— FR-40：恢复演练入口与报告 ——
+  it("演练入口打开报告弹窗，历史报告列出逐项结论（失败项如实展示）", async () => {
+    const user = userEvent.setup();
+    renderTab();
+
+    const wayHeader = await screen.findByText("方式");
+    const table = wayHeader.closest("table") as HTMLElement;
+    const row = within(table).getByText("bk-20260910-090000-a1b2c3").closest("tr") as HTMLElement;
+    await user.click(within(row).getByRole("button", { name: "演练" }));
+
+    const dialog = await screen.findByRole("dialog");
+    // 弹窗说明必须讲清"只读路径"这一关键边界。
+    expect(within(dialog).getByText(/不会写入待重启标记/)).toBeTruthy();
+
+    // 预置的失败报告被如实渲染：总判定「未通过」+ 失败检查项与原因都在。
+    await waitFor(
+      () => {
+        expect(within(dialog).getByText("未通过")).toBeTruthy();
+      },
+      { timeout: 10_000 },
+    );
+    // 失败原因同时出现在总摘要与检查项说明两处，用 getAllByText 断言"至少出现"。
+    expect(within(dialog).getAllByText(/manifest 74481 实际 74478/).length).toBeGreaterThan(0);
+    // 四项检查项名称都在（结构化报告，不是一句 ok 字符串）。
+    for (const name of ["归档完整性", "解包", "SQLite 一致性", "blob 规模"]) {
+      expect(within(dialog).getByText(name)).toBeTruthy();
+    }
+  }, 20_000);
+
+  it("发起演练后轮询到新报告（202 受理 → 报告出现）", async () => {
+    const user = userEvent.setup();
+    renderTab();
+
+    const wayHeader = await screen.findByText("方式");
+    const table = wayHeader.closest("table") as HTMLElement;
+    const row = within(table).getByText("bk-20260910-030000-d4e5f6").closest("tr") as HTMLElement;
+    await user.click(within(row).getByRole("button", { name: "演练" }));
+
+    const dialog = await screen.findByRole("dialog");
+    // 先等到预置报告渲染完，再计数，避免把异步首载当作"新报告"。
+    await waitFor(
+      () => {
+        expect(within(dialog).getAllByText(/通过|未通过/).length).toBeGreaterThan(0);
+      },
+      { timeout: 10_000 },
+    );
+    const before = within(dialog).getAllByText(/^(通过|未通过)$/).length;
+
+    await user.click(within(dialog).getByRole("button", { name: "发起演练" }));
+
+    // 受理提示可见，随后轮询把新报告拉进来（报告条数增加）。
+    await waitFor(
+      () => {
+        expect(within(dialog).getAllByText(/^(通过|未通过)$/).length).toBeGreaterThan(before);
+      },
+      { timeout: 15_000 },
+    );
+  }, 25_000);
 
   it("页面内不重复渲染大标题", async () => {
     renderTab();

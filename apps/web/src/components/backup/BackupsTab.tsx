@@ -1,4 +1,4 @@
-// 备份与搬迁 Tab：备份包列表 + 生成 + 取链接 + 校验 + 删除。
+// 备份与搬迁 Tab：备份包列表 + 生成 + 取链接 + 校验 + 恢复演练 + 删除。
 // 布局遵循项目约定：外层锁定视口高度，只有列表区滚动，页面不满页下滚；
 // 页内不重复渲染大标题（标题由页眉面包屑承担）。
 import { Box, Button, Code, CopyButton, Group, Modal, Stack, Text } from "@mantine/core";
@@ -14,8 +14,10 @@ import { OpsSection } from "../ops/OpsKit";
 import { confirmDanger, notifyError, notifySuccess } from "../../lib/feedback";
 import { formatCount } from "../../lib/format";
 import { useAsync } from "../../hooks/useAsync";
+import { AutoBackupConfigCard } from "./AutoBackupConfigCard";
 import { BackupCreateModal } from "./BackupCreateModal";
 import { BackupTable } from "./BackupTable";
+import { DrillReportModal } from "./DrillReportModal";
 import { ImportFromUrlCard } from "./ImportFromUrlCard";
 import { WriteFreezeCard } from "./WriteFreezeCard";
 import { BackupUploadCard } from "./BackupUploadCard";
@@ -28,6 +30,8 @@ export function BackupsTab() {
   const [createOpened, setCreateOpened] = useState(false);
   const [verifyingId, setVerifyingId] = useState<string | null>(null);
   const [linkValue, setLinkValue] = useState<string | null>(null);
+  /** 演练报告弹窗当前作用的包；null 表示关闭。 */
+  const [drillPackageId, setDrillPackageId] = useState<string | null>(null);
 
   const state = useAsync(() => listBackups({ page: 1, page_size: 100 }), [], {
     cacheKey: "backups:list",
@@ -128,12 +132,15 @@ export function BackupsTab() {
                 verifyingId={verifyingId}
                 onGetLink={(id) => void onGetLink(id)}
                 onVerify={(id, deep) => void onVerify(id, deep)}
+                onDrill={setDrillPackageId}
                 onDelete={onDelete}
               />
             )
           }
         </AsyncBoundary>
       </OpsSection>
+
+      <AutoBackupConfigCard />
 
       <ImportFromUrlCard />
 
@@ -144,6 +151,8 @@ export function BackupsTab() {
         onClose={() => setCreateOpened(false)}
         onCreated={reload}
       />
+
+      <DrillReportModal packageId={drillPackageId} onClose={() => setDrillPackageId(null)} />
 
       <Modal
         opened={linkValue !== null}
