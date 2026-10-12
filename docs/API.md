@@ -55,7 +55,9 @@
 
 ### 设置与审计
 
-- `GET/PUT /api/v1/settings`：实例基础设置（匿名访问开关、对外基础 URL、上游超时、域名白名单、回源 Token 与遗留的同步间隔项）；全部为节点本地配置，不参与任何跨实例传播。
+- `GET/PUT /api/v1/settings`：实例基础设置（匿名访问开关、对外基础 URL、上游超时、域名白名单、回源 Token、遗留的同步间隔项，以及**自动备份与保留策略**三项）；全部为节点本地配置，不参与任何跨实例传播。
+  - FR-40 追加的三个字段：`backupAutoInterval`（秒，`0` = 关闭）、`backupKeepLast`（份，`0` = 不按份数限制）、`backupRetentionDays`（天，`0` = 不限天数）。**三项的 `0` 都是合法取值**，不是"未设置"，因此既可读也会照写；写后由 `backup-auto` 作业在下一轮读取生效（**无需重启**）。
+  - 校验：三项均拒绝负数；上限分别为 30 天 / 1000 份 / 3650 天，超限返回 400（防手滑录入无意义的大值，而不是静默接受）。
 - `/api/v1/observability/audit/*`：当前节点审计概览、记录、风险批次、通知和确认；只读或按确认接口定义的最小写入。
 - `GET /api/v1/observability/host?from=&to=&interface=`：当前节点主机监控（CPU / 内存 / 磁盘 / 网络 / 进程）。`interface` 为可选网卡名（取自响应 `networkInterfaces[].name`），省略时按全部非回环网卡聚合，指定时速率图与累计总量都按该网卡；趋势点 `HostMetricPoint` 另暴露 `networkReceiveBytesTotal` / `networkTransmitBytesTotal`（自网卡启动以来的累计字节，可空），响应含 `networkInterfaces: HostNetworkInterface[]`（各网卡名与该网卡累计总量，无数据时省略）。字段以 [`../api/openapi.yaml`](../api/openapi.yaml) 为准。
 - `GET /api/v1/licenses`：管理员读取内嵌依赖协议清单。

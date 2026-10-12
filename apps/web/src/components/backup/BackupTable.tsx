@@ -58,14 +58,19 @@ export function BackupTable({
       >
         <Table.Thead>
           <Table.Tr>
-            <Table.Th w="26%">{t("backups.colPackage")}</Table.Th>
+            {/*
+              列宽预算：操作列收成一个「⋯」按钮后只需约 55px，省下的空间还给
+              「包标识」——它此前被挤到 168px 而内容需要 232px，尾部随机段被截断。
+              其余固定列按各自内容的自然宽度取值（含单元格水平内边距 sm=24px）。
+            */}
+            <Table.Th w="30%">{t("backups.colPackage")}</Table.Th>
             <Table.Th w={72}>{t("backups.colOrigin")}</Table.Th>
             <Table.Th w={80}>{t("backups.colMode")}</Table.Th>
             <Table.Th w={124}>{t("backups.colStatus")}</Table.Th>
             <Table.Th w={76}>{t("backups.colSize")}</Table.Th>
-            <Table.Th w={116}>{t("backups.colCounts")}</Table.Th>
-            <Table.Th w={100}>{t("backups.colCreated")}</Table.Th>
-            <Table.Th w={144}>{t("backups.colActions")}</Table.Th>
+            <Table.Th w={104}>{t("backups.colCounts")}</Table.Th>
+            <Table.Th w={92}>{t("backups.colCreated")}</Table.Th>
+            <Table.Th w={56}>{t("backups.colActions")}</Table.Th>
           </Table.Tr>
         </Table.Thead>
         <Table.Tbody>
@@ -127,80 +132,85 @@ export function BackupTable({
                   </Text>
                 </Table.Td>
                 <Table.Td>
-                  <Group gap={4} wrap="nowrap">
-                    <Button
-                      size="compact-xs"
-                      variant="subtle"
-                      leftSection={<IconDownload size={14} />}
-                      aria-label={t("backups.getLink")}
-                      disabled={!done}
-                      onClick={() => onGetLink(item.packageId)}
-                    >
-                      {t("backups.getLink")}
-                    </Button>
-                    <Button
-                      size="compact-xs"
-                      variant="subtle"
-                      leftSection={<IconCircleCheck size={14} />}
-                      aria-label={t("backups.verify")}
-                      disabled={!done}
-                      loading={verifyingId === item.packageId}
-                      onClick={() => onVerify(item.packageId, false)}
-                    >
-                      {t("backups.verify")}
-                    </Button>
-                    <Menu shadow="md" position="bottom-end" withinPortal>
-                      <Menu.Target>
-                        <Button
-                          size="compact-xs"
-                          variant="subtle"
-                          aria-label={t("backups.moreActions")}
-                          px={6}
-                        >
-                          <IconDotsVertical size={16} />
-                        </Button>
-                      </Menu.Target>
-                      <Menu.Dropdown>
-                        <Menu.Item
-                          leftSection={<IconLink size={14} />}
-                          disabled={!done}
-                          onClick={() =>
-                            void copyToClipboard(`jianartifact backup link ${item.packageId}`).then(
-                              (ok) =>
-                                ok
-                                  ? notifySuccess(t("backups.commandCopied"))
-                                  : notifyError(t("backups.copyFailed")),
-                            )
-                          }
-                        >
-                          {t("backups.copyCommand")}
-                        </Menu.Item>
-                        <Menu.Item
-                          leftSection={<IconReload size={14} />}
-                          disabled={!done}
-                          onClick={() => onVerify(item.packageId, true)}
-                        >
-                          {t("backups.verifyDeep")}
-                        </Menu.Item>
-                        <Menu.Item
-                          leftSection={<IconStethoscope size={14} />}
-                          disabled={!done}
-                          onClick={() => onDrill(item.packageId)}
-                        >
-                          {t("backups.drillOpen")}
-                        </Menu.Item>
-                        <Menu.Divider />
-                        <Menu.Item
-                          color="red"
-                          leftSection={<IconTrash size={14} />}
-                          disabled={running}
-                          onClick={() => onDelete(item)}
-                        >
-                          {t("backups.delete")}
-                        </Menu.Item>
-                      </Menu.Dropdown>
-                    </Menu>
-                  </Group>
+                  {/*
+                    全部动作收进「⋯」菜单，行内只留这一个按钮。
+
+                    为什么不再保留行内主按钮：实测「获取链接 + 校验 + ⋯」带文字需要约
+                    207px，而 1280px 屏幕下表格可用宽 984px、其余七列已占满，挤不出这个
+                    空间。此前把按钮写窄会触发 flex 压缩，Mantine 的 Button-label
+                    （overflow:hidden）就把文字静默压成一条缝（「校验」实测可见宽 3px），
+                    表现为"按钮被裁切"；不压缩则整表横向滚动。收进菜单后操作列只需容纳
+                    一个按钮，裁切与横滚两个问题同时消失，菜单项也保得住完整文字。
+                  */}
+                  <Menu shadow="md" position="bottom-end" withinPortal>
+                    <Menu.Target>
+                      <Button
+                        size="compact-xs"
+                        variant="subtle"
+                        aria-label={t("backups.moreActions")}
+                        title={t("backups.moreActions")}
+                        // 校验进行中在「⋯」上显示 loading：动作已收进菜单，但"这一行正在
+                        // 校验"的状态必须仍然可见，否则用户点完校验看不到任何进行中反馈。
+                        loading={verifyingId === item.packageId}
+                      >
+                        <IconDotsVertical size={16} />
+                      </Button>
+                    </Menu.Target>
+                    <Menu.Dropdown>
+                      <Menu.Item
+                        leftSection={<IconDownload size={14} />}
+                        disabled={!done}
+                        onClick={() => onGetLink(item.packageId)}
+                      >
+                        {t("backups.getLink")}
+                      </Menu.Item>
+                      <Menu.Item
+                        leftSection={<IconLink size={14} />}
+                        disabled={!done}
+                        onClick={() =>
+                          void copyToClipboard(`jianartifact backup link ${item.packageId}`).then(
+                            (ok) =>
+                              ok
+                                ? notifySuccess(t("backups.commandCopied"))
+                                : notifyError(t("backups.copyFailed")),
+                          )
+                        }
+                      >
+                        {t("backups.copyCommand")}
+                      </Menu.Item>
+                      <Menu.Divider />
+                      <Menu.Item
+                        leftSection={<IconCircleCheck size={14} />}
+                        disabled={!done}
+                        onClick={() => onVerify(item.packageId, false)}
+                      >
+                        {t("backups.verify")}
+                      </Menu.Item>
+                      <Menu.Item
+                        leftSection={<IconReload size={14} />}
+                        disabled={!done}
+                        onClick={() => onVerify(item.packageId, true)}
+                      >
+                        {t("backups.verifyDeep")}
+                      </Menu.Item>
+                      <Menu.Item
+                        leftSection={<IconStethoscope size={14} />}
+                        disabled={!done}
+                        onClick={() => onDrill(item.packageId)}
+                      >
+                        {t("backups.drillOpen")}
+                      </Menu.Item>
+                      <Menu.Divider />
+                      <Menu.Item
+                        color="red"
+                        leftSection={<IconTrash size={14} />}
+                        disabled={running}
+                        onClick={() => onDelete(item)}
+                      >
+                        {t("backups.delete")}
+                      </Menu.Item>
+                    </Menu.Dropdown>
+                  </Menu>
                 </Table.Td>
               </Table.Tr>
             );

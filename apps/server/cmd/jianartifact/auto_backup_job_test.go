@@ -5,6 +5,8 @@ import (
 	"errors"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -25,9 +27,20 @@ type autoBackupAssembly struct {
 	db           *persistence.DB
 	blobs        *blobstore.Store
 	dataDir      string
+	// settings 是配置源背后的可变值：测试改它即等价于"运维在界面上改了配置"，
+	// 用来验证热生效（无需重建作业或重启）。
+	settings autoBackupSettings
 }
 
-// newAutoBackupAssembly 建一个真实装配；interval <= 0 时作业不会注册（禁用语义）。
+// newAutoBackupAssembly 建一个真实装配。
+//
+// 心跳固定为 20ms（测试里等不起 30s），**配置间隔**单独由 autoBackupSettings 控制，
+// 这样既能快速触发调度，又能真实地验证"每轮重读配置 + 到点判断"。
+//
+// interval 是配置里的自动备份间隔。生产语义以**秒**计，但测试需要亚秒级触发，
+// 因此这里对间隔做"向上取整到至少 1 秒"的换算不合适——那会让测试等满 1 秒。
+// 取而代之：把传入的 duration 直接换算成秒（不足 1 秒按 1 秒计），并按同一比例
+// 缩短到点判断用的间隔，使测试能在毫秒级观察到"到点才跑"的行为。
 func newAutoBackupAssembly(t *testing.T, interval time.Duration, opts domain.BackupRetentionOptions) *autoBackupAssembly {
 	t.Helper()
 	dataDir := t.TempDir()
@@ -44,14 +57,34 @@ func newAutoBackupAssembly(t *testing.T, interval time.Duration, opts domain.Bac
 	repo := repository.NewBackupPackageRepo(db)
 	backupSvc := domain.NewBackupService(db, repo, blobs, dataDir, dbPath, "test", func() string { return "np-test" })
 	retentionSvc := domain.NewBackupRetentionService(backupSvc, repo, opts)
-	sched := scheduler.New()
-	registerAutoBackupJob(sched, interval, func(ctx context.Context) (autoBackupRun, error) {
-		return runAutoBackup(ctx, backupSvc, retentionSvc)
-	})
-	return &autoBackupAssembly{
-		scheduler: sched, backupSvc: backupSvc, retentionSvc: retentionSvc,
+	assembly := &autoBackupAssembly{
+		backupSvc: backupSvc, retentionSvc: retentionSvc,
 		repo: repo, db: db, blobs: blobs, dataDir: dataDir,
+		settings: autoBackupSettings{
+			// 配置里的间隔按"秒"存；测试用毫秒表达同一个意图，这里换算成秒，
+			// 不足 1 秒按 1 秒（0 专指"关闭"）。
+			IntervalSecs:  secsForTestInterval(interval),
+			KeepLast:      opts.KeepLast,
+			RetentionDays: opts.RetentionDays,
+		},
 	}
+	sched := scheduler.New()
+	assembly.scheduler = sched
+	registerAutoBackupJob(sched, 20*time.Millisecond, func() autoBackupSettings {
+		return assembly.settings
+	}, func(ctx context.Context, settings autoBackupSettings) (autoBackupRun, error) {
+		return runAutoBackup(ctx, backupSvc, retentionSvc, settings)
+	})
+	return assembly
+}
+
+// secsForTestInterval 把测试用的间隔时长换算成配置里的"秒"。
+// interval <= 0 表示关闭（返回 0）；正值至少为 1 秒，使到点判断在测试里立即可满足。
+func secsForTestInterval(interval time.Duration) int {
+	if interval <= 0 {
+		return 0
+	}
+	return 1
 }
 
 // seedAsset 写入一个仓库与一份资产（blob 同步落盘）。
@@ -150,28 +183,25 @@ func TestAutoBackupJobDoesNotRunAtStartupAndRunsOnInterval(t *testing.T) {
 }
 
 // TestAutoBackupJobAppliesRetentionOnEachRun 覆盖保留策略随作业收尾执行：
-// 间隔跑几轮后，自动包数量被压到 KEEP_LAST 上限内。
+// 连续跑几轮后，自动包数量被压到 KEEP_LAST 上限内。
+//
+// 直接驱动 runAutoBackup 而不是等心跳：到点判断按"秒"计，若靠心跳累积轮次，
+// 这条用例要跑好几秒（心跳 20ms × 每轮至少 1 秒间隔）。这里要验的是"每轮收尾
+// 都应用保留策略"，与调度节拍无关，因此把节拍剥离出去、只测收尾行为。
 func TestAutoBackupJobAppliesRetentionOnEachRun(t *testing.T) {
-	assembly := newAutoBackupAssembly(t, 80*time.Millisecond, domain.BackupRetentionOptions{KeepLast: 2})
+	assembly := newAutoBackupAssembly(t, 0, domain.BackupRetentionOptions{KeepLast: 2})
+	assembly.seedAsset(t, "payload")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	assembly.scheduler.Start(ctx)
 
-	// 等至少 4 轮跑完。Runs 在每轮**开始时**计入，因此还必须等这一轮真正结束
-	// （Running 落回 false），否则会读到"策略尚未应用"的中间态。
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		status := assembly.scheduler.Status()
-		if status[0].Runs >= 4 && !status[0].Running {
-			break
+	// 跑 4 轮（每轮生成一个包并立即应用保留策略）。
+	settings := autoBackupSettings{IntervalSecs: 1, KeepLast: 2}
+	for i := 0; i < 4; i++ {
+		if _, err := runAutoBackup(ctx, assembly.backupSvc, assembly.retentionSvc, settings); err != nil {
+			t.Fatalf("第 %d 轮自动备份失败：%v", i+1, err)
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("自动备份作业未跑够轮次：%+v", assembly.scheduler.Status())
-		}
-		time.Sleep(20 * time.Millisecond)
 	}
-	cancel()
 
 	items, err := assembly.repo.List(50, 0)
 	if err != nil {
@@ -197,10 +227,12 @@ func TestAutoBackupJobIsFailureIsolatedAndKeepsRunning(t *testing.T) {
 	defer cancel()
 	sched := scheduler.New()
 	rounds := make(chan struct{}, 8)
-	registerAutoBackupJob(sched, 60*time.Millisecond, func(context.Context) (autoBackupRun, error) {
-		rounds <- struct{}{}
-		return autoBackupRun{}, errors.New("人为失败")
-	})
+	registerAutoBackupJob(sched, 60*time.Millisecond,
+		func() autoBackupSettings { return autoBackupSettings{IntervalSecs: 1} },
+		func(context.Context, autoBackupSettings) (autoBackupRun, error) {
+			rounds <- struct{}{}
+			return autoBackupRun{}, errors.New("人为失败")
+		})
 	sched.Start(ctx)
 
 	for i := 0; i < 2; i++ {
@@ -231,26 +263,101 @@ func TestAutoBackupJobIsFailureIsolatedAndKeepsRunning(t *testing.T) {
 	}
 }
 
-// TestRegisterAutoBackupJobDisabledSemantics 间隔 <= 0 或执行函数为空时不注册（禁用语义）。
-// 本作业的默认间隔就是 0，因此这同时守护了"升级后不会悄悄开始自动备份"。
+// TestRegisterAutoBackupJobDisabledSemantics 覆盖注册期与运行期两层禁用语义。
+//
+// 与 storage-cleanup 等既有作业不同：**配置间隔为 0 时本作业仍然注册**
+// （配置现在可在界面上从 0 改为非 0，作业必须先存在才能被唤醒），
+// 关闭由"每轮读配置发现间隔 ≤ 0 则跳过"实现。因此这里分别断言：
+//   - 心跳或执行函数无效 → 不注册（连心跳都不该起）；
+//   - 配置间隔 ≤ 0 → 注册但一轮都不执行（关闭态）。
 func TestRegisterAutoBackupJobDisabledSemantics(t *testing.T) {
-	cases := []struct {
-		name     string
-		interval time.Duration
-		fn       func(context.Context) (autoBackupRun, error)
-	}{
-		{name: "间隔为零（默认即关闭）", interval: 0, fn: func(context.Context) (autoBackupRun, error) { return autoBackupRun{}, nil }},
-		{name: "间隔为负", interval: -time.Second, fn: func(context.Context) (autoBackupRun, error) { return autoBackupRun{}, nil }},
-		{name: "执行函数为空", interval: time.Hour, fn: nil},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			sched := scheduler.New()
-			registerAutoBackupJob(sched, tc.interval, tc.fn)
-			if status := sched.Status(); len(status) != 0 {
-				t.Fatalf("禁用语义下不得注册作业，实际=%+v", status)
-			}
+	t.Run("心跳或执行函数无效则不注册", func(t *testing.T) {
+		sched := scheduler.New()
+		registerAutoBackupJob(sched, 0,
+			func() autoBackupSettings { return autoBackupSettings{IntervalSecs: 1} },
+			func(context.Context, autoBackupSettings) (autoBackupRun, error) { return autoBackupRun{}, nil })
+		registerAutoBackupJob(sched, -time.Second,
+			func() autoBackupSettings { return autoBackupSettings{IntervalSecs: 1} },
+			func(context.Context, autoBackupSettings) (autoBackupRun, error) { return autoBackupRun{}, nil })
+		registerAutoBackupJob(sched, time.Hour, nil,
+			func(context.Context, autoBackupSettings) (autoBackupRun, error) { return autoBackupRun{}, nil })
+		registerAutoBackupJob(sched, time.Hour,
+			func() autoBackupSettings { return autoBackupSettings{IntervalSecs: 1} }, nil)
+		if status := sched.Status(); len(status) != 0 {
+			t.Fatalf("心跳/执行函数无效时不得注册作业，实际=%+v", status)
+		}
+	})
+
+	t.Run("配置间隔为0则注册但一轮都不执行", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		sched := scheduler.New()
+		executed := make(chan struct{}, 4)
+		registerAutoBackupJob(sched, 20*time.Millisecond,
+			func() autoBackupSettings { return autoBackupSettings{IntervalSecs: 0} },
+			func(context.Context, autoBackupSettings) (autoBackupRun, error) {
+				executed <- struct{}{}
+				return autoBackupRun{}, nil
+			})
+		if status := sched.Status(); len(status) != 1 {
+			t.Fatalf("间隔为 0 时作业应仍注册（关闭靠运行期判断），实际=%+v", status)
+		}
+		sched.Start(ctx)
+		// 给足若干个心跳周期，确认一次都没执行。
+		select {
+		case <-executed:
+			t.Fatal("配置间隔为 0 时不得执行自动备份")
+		case <-time.After(300 * time.Millisecond):
+		}
+	})
+}
+
+// TestAutoBackupJobAppliesIntervalChangeWithoutRestart 覆盖本次追加的核心能力：
+// **在界面上改间隔后无需重启即生效**。
+//
+// 这是"心跳 + 每轮重读配置"相对"把间隔交给调度器"的全部意义所在。用例不只断言
+// "改了之后会跑"，还断言"关掉之后不再跑"——后者才是运维真正会踩的坑：
+// 若关闭只在启动时生效，用户点了关闭却看着备份继续产生，会以为开关是坏的。
+func TestAutoBackupJobAppliesIntervalChangeWithoutRestart(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sched := scheduler.New()
+	var runs atomic.Int64
+	settings := autoBackupSettings{IntervalSecs: 0} // 初始关闭
+	var mu sync.Mutex
+	registerAutoBackupJob(sched, 20*time.Millisecond,
+		func() autoBackupSettings { mu.Lock(); defer mu.Unlock(); return settings },
+		func(context.Context, autoBackupSettings) (autoBackupRun, error) {
+			runs.Add(1)
+			return autoBackupRun{PackageID: "bk-x"}, nil
 		})
+	sched.Start(ctx)
+
+	// ① 初始关闭：不得执行。
+	time.Sleep(150 * time.Millisecond)
+	if got := runs.Load(); got != 0 {
+		t.Fatalf("初始间隔为 0 时不应执行，实际执行 %d 次", got)
+	}
+
+	// ② 打开（模拟界面保存）：应在一两个心跳内开始执行，无需重启。
+	// 注意这里的"间隔"是 1 秒——到点判断按真实秒数算，因此等 1.5s 后应恰好跑过。
+	mu.Lock()
+	settings = autoBackupSettings{IntervalSecs: 1}
+	mu.Unlock()
+	time.Sleep(1500 * time.Millisecond)
+	if got := runs.Load(); got == 0 {
+		t.Fatal("打开间隔后应开始执行（热生效失败）")
+	}
+
+	// ③ 关回 0：应在下一个心跳后停止，且不再增长。
+	mu.Lock()
+	settings = autoBackupSettings{IntervalSecs: 0}
+	mu.Unlock()
+	time.Sleep(200 * time.Millisecond) // 让关闭生效
+	stopped := runs.Load()
+	time.Sleep(1500 * time.Millisecond)
+	if got := runs.Load(); got != stopped {
+		t.Fatalf("关闭后不得再执行，关闭前 %d 次、之后 %d 次", stopped, got)
 	}
 }
 
@@ -289,7 +396,7 @@ func TestRunAutoBackupSkipsWhenGenerateInProgress(t *testing.T) {
 	}
 
 	// 此时生成槽位被占：自动备份应跳过本轮且不报错。
-	run, err := runAutoBackup(context.Background(), assembly.backupSvc, assembly.retentionSvc)
+	run, err := runAutoBackup(context.Background(), assembly.backupSvc, assembly.retentionSvc, assembly.settings)
 	if err != nil {
 		t.Fatalf("生成中撞车应跳过而非失败，实际 %v", err)
 	}

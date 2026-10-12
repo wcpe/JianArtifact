@@ -1207,23 +1207,21 @@ export const zh = {
     drillCheck_blobs: "blob 规模",
     // —— FR-40：自动备份与保留策略（只读展示；配置走环境变量，间隔改动需重启）——
     autoCfgTitle: "自动备份与保留策略",
-    autoCfgRestartNote: "间隔改动需重启生效",
+    autoCfgLiveNote: "保存即生效，无需重启",
     autoCfgHint:
-      "以下三项由环境变量配置，服务启动时读取并固定，当前没有可运行时修改的接口。本卡只如实展示配置途径，不做就地编辑。",
+      "在此修改后立即生效（自动备份作业每轮重读配置，最迟一个心跳周期内应用），无需重启进程。三项的 0 都是有意义的取值：间隔 0 = 关闭自动备份，份数 0 = 不限份数，天数 0 = 不限天数。",
+    autoCfgSave: "保存",
+    autoCfgSaved: "自动备份配置已保存，下一轮作业即按新配置执行",
     autoCfgInterval: "自动备份间隔",
     autoCfgIntervalDesc: "秒；0 = 关闭（默认）。开启后按间隔生成完整热备份包，不生成差包。",
     autoCfgKeepLast: "保留份数",
     autoCfgKeepLastDesc: "保留最近 N 份自动备份；0 = 不按份数限制。仅淘汰自动备份，手动包不删。",
     autoCfgRetentionDays: "保留天数",
     autoCfgRetentionDaysDesc: "保留最近 N 天的自动备份；0 = 不限天数。与份数上限取更严格者。",
-    autoCfgDefaultLabel: "默认：",
-    autoCfgDefaultDisabled: "0（关闭）",
-    autoCfgDefault7: "7",
-    autoCfgDefault30: "30",
-    autoCfgHowTo:
-      "修改方式：在服务运行环境中设置上述环境变量后重启进程。间隔在启动时注册为调度作业，运行中修改不会生效；保留份数与天数同样在启动时读取。部署为容器时请经 compose / 编排配置注入。",
+    autoCfgEnvNote:
+      "等价的环境变量途径（JIAN_BACKUP_AUTO_INTERVAL / JIAN_BACKUP_KEEP_LAST / JIAN_BACKUP_RETENTION_DAYS）仍可作为首次部署的初值：仅在数据库尚无这组配置时写入一次，此后一律以本卡的设置为准，改环境变量不再覆盖界面配置。",
     autoCfgJobsHint:
-      "作业是否已注册可在「维护作业」页查看：出现 backup-auto 表示自动备份已启用，未出现即表示当前间隔为 0（关闭）。",
+      "「维护作业」页始终能看到 backup-auto（作业常驻以便配置改动即时生效）；间隔为 0 时它每轮空转跳过，不生成备份。",
     // —— FR-134：写入冻结窗口 ——
     freezeCardTitle: "写入冻结窗口",
     freezeStatusWritable: "可写",

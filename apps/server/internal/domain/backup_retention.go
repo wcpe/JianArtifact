@@ -3,12 +3,14 @@ package domain
 import (
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// BackupRetentionOptions 是一轮保留策略的阈值，取值来自环境变量（FR-40）。
+// BackupRetentionOptions 是一轮保留策略的阈值（FR-40；初始值来自环境变量，
+// 之后可经界面修改并在下一轮生效）。
 //
 // 两个阈值**同时生效、取更严格者**：任一条判定为「超限」就淘汰，而不是要求两条都超。
 // KEEP_LAST 是「最多留几份」、RETENTION_DAYS 是「最多留几天」，两条都是上限，
@@ -78,8 +80,11 @@ func (r BackupRetentionResult) Summary() string {
 type BackupRetentionService struct {
 	backupSvc *BackupService
 	repo      *repository.BackupPackageRepo
-	opts      BackupRetentionOptions
-	now       func() time.Time
+	// mu 保护 opts：作业每轮用最新配置覆盖阈值（FR-40 追加：配置改为运行时可改），
+	// 而 Run 可能正被手动触发或上一轮心跳调用，两者必须串行读，避免读到写一半的值。
+	mu   sync.RWMutex
+	opts BackupRetentionOptions
+	now  func() time.Time
 }
 
 // NewBackupRetentionService 装配保留策略服务。
@@ -92,11 +97,36 @@ func NewBackupRetentionService(backupSvc *BackupService, repo *repository.Backup
 	}
 }
 
+// SetOptions 用最新配置覆盖阈值（FR-40 追加：三项配置改为运行时可改）。
+//
+// 每次 Run 之前由作业调用，使"界面上改完配置"在下一轮即生效，无需重启。
+// 只覆盖阈值，不动 now（测试注入的时间基准必须保持稳定）。
+func (s *BackupRetentionService) SetOptions(opts BackupRetentionOptions) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.opts = opts
+	s.mu.Unlock()
+}
+
+// options 读取当前阈值快照。
+func (s *BackupRetentionService) options() BackupRetentionOptions {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.opts
+}
+
 // Run 应用一次保留策略。单个包删除失败不中断整轮（继续处理剩余候选），
 // 但失败会如实计入结果并随返回错误上报——不粉饰。
 func (s *BackupRetentionService) Run() (BackupRetentionResult, error) {
 	var result BackupRetentionResult
-	if s == nil || s.repo == nil || s.backupSvc == nil || !s.opts.Enabled() {
+	if s == nil || s.repo == nil || s.backupSvc == nil {
+		return result, nil
+	}
+	// 阈值取本轮快照，避免读到被 SetOptions 改了一半的值。
+	opts := s.options()
+	if !opts.Enabled() {
 		return result, nil
 	}
 
@@ -110,16 +140,16 @@ func (s *BackupRetentionService) Run() (BackupRetentionResult, error) {
 	}
 
 	cutoff := time.Time{}
-	if s.opts.RetentionDays > 0 {
-		cutoff = s.now().AddDate(0, 0, -s.opts.RetentionDays)
+	if opts.RetentionDays > 0 {
+		cutoff = s.now().AddDate(0, 0, -opts.RetentionDays)
 	}
 
 	var errs []error
 	for i, pkg := range candidates {
 		// 候选已按 created_at DESC 排序（见 ListRetentionCandidates），
 		// 因此下标 i 就是"从最近一份起的第 i+1 份"。
-		byCount := s.opts.KeepLast > 0 && i >= s.opts.KeepLast
-		byAge := s.opts.RetentionDays > 0 && parseBackupTime(pkg.CreatedAt).Before(cutoff)
+		byCount := opts.KeepLast > 0 && i >= opts.KeepLast
+		byAge := opts.RetentionDays > 0 && parseBackupTime(pkg.CreatedAt).Before(cutoff)
 		// 两条上限取更严格者：任一条超限即淘汰。
 		if !byCount && !byAge {
 			continue

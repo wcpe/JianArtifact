@@ -1272,9 +1272,11 @@ export const en = {
     drillCheck_blobs: "Blob scale",
     // —— FR-40：自动备份与保留策略（只读展示；配置走环境变量，间隔改动需重启）——
     autoCfgTitle: "Automatic Backup & Retention",
-    autoCfgRestartNote: "Interval changes need a restart",
+    autoCfgLiveNote: "Saved changes take effect immediately",
     autoCfgHint:
-      "These three are configured through environment variables, read once at startup and fixed thereafter; no runtime editing endpoint exists. This card shows how to configure them and deliberately offers no in-place editing.",
+      "Changes made here apply immediately (the automatic backup job re-reads this configuration every cycle, at most one heartbeat later) with no process restart. A value of 0 is meaningful for all three: interval 0 = automatic backup off, count 0 = no count limit, days 0 = no day limit.",
+    autoCfgSave: "Save",
+    autoCfgSaved: "Automatic backup configuration saved; the next job cycle uses it",
     autoCfgInterval: "Automatic backup interval",
     autoCfgIntervalDesc:
       "Seconds; 0 = disabled (default). When enabled, a full hot backup package is produced each interval, never a differential one.",
@@ -1284,14 +1286,10 @@ export const en = {
     autoCfgRetentionDays: "Retention days",
     autoCfgRetentionDaysDesc:
       "Keep automatic backups from the last N days; 0 = no day limit. The stricter of the two limits wins.",
-    autoCfgDefaultLabel: "Default: ",
-    autoCfgDefaultDisabled: "0 (disabled)",
-    autoCfgDefault7: "7",
-    autoCfgDefault30: "30",
-    autoCfgHowTo:
-      "How to change: set the environment variables in the service runtime and restart the process. The interval is registered as a scheduled job at startup, so changing it while running has no effect; the retention count and days are likewise read at startup. For container deployments inject them via compose / orchestration config.",
+    autoCfgEnvNote:
+      "The equivalent environment variables (JIAN_BACKUP_AUTO_INTERVAL / JIAN_BACKUP_KEEP_LAST / JIAN_BACKUP_RETENTION_DAYS) still serve as initial values for first deployment: they are written only once, when the database has no such configuration yet. Afterwards this card's settings always win, and changing the environment variables no longer overrides them.",
     autoCfgJobsHint:
-      "Whether the job is registered can be checked on the Maintenance Jobs page: seeing backup-auto means automatic backup is enabled; if it is absent, the interval is currently 0 (disabled).",
+      "The Maintenance Jobs page always lists backup-auto (the job stays registered so configuration changes take effect immediately); when the interval is 0 it idles and skips every cycle without producing a backup.",
     // —— FR-134：写入冻结窗口 ——
     freezeCardTitle: "Write Freeze Window",
     freezeStatusWritable: "Writable",

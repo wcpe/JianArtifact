@@ -51,6 +51,12 @@ function normalizeForm(initial: SettingsConfig): SettingsConfig {
     originTokenEnabled: initial.originTokenEnabled ?? false,
     originTokenHeader: initial.originTokenHeader ?? "",
     originTokenValue: initial.originTokenValue ?? "",
+    // 三项备份配置由「迁移与备份」页的专用卡片编辑；本页只是携带它们透传，
+    // 以免整对象提交时把这三项丢成 undefined（后端按"传哪个改哪个"处理，
+    // 丢掉即等于本页会静默复位别人的设置）。
+    backupAutoInterval: initial.backupAutoInterval ?? 0,
+    backupKeepLast: initial.backupKeepLast ?? 7,
+    backupRetentionDays: initial.backupRetentionDays ?? 30,
   };
 }
 

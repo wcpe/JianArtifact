@@ -987,6 +987,12 @@ export interface SettingsConfig {
   originTokenHeader: string;
   /** 回源 Token 值（粘贴到 CDN 回源请求头规则）。 */
   originTokenValue: string;
+  /** 自动备份间隔（秒），0 = 关闭（FR-40；运行时可改，保存后作业下一轮生效）。 */
+  backupAutoInterval: number;
+  /** 保留最近 N 份自动备份，0 = 不按份数限制。 */
+  backupKeepLast: number;
+  /** 保留最近 N 天的自动备份，0 = 不限天数。 */
+  backupRetentionDays: number;
 }
 
 /**
@@ -1004,6 +1010,11 @@ function normalizeSettings(raw: SettingsConfig): SettingsConfig {
     originTokenEnabled: raw.originTokenEnabled ?? false,
     originTokenHeader: raw.originTokenHeader ?? "",
     originTokenValue: raw.originTokenValue ?? "",
+    // 三项备份配置同样做兜底：0 是有意义的取值（关闭 / 不限制），
+    // 因此只能用 ?? 判 undefined，不能写成 `|| 7` 之类会把 0 变成默认值的写法。
+    backupAutoInterval: raw.backupAutoInterval ?? 0,
+    backupKeepLast: raw.backupKeepLast ?? 7,
+    backupRetentionDays: raw.backupRetentionDays ?? 30,
   };
 }
 

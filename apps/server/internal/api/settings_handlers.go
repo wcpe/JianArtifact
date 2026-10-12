@@ -34,7 +34,20 @@ type SettingsResponse struct {
 	OriginTokenEnabled bool     `json:"originTokenEnabled"`
 	OriginTokenHeader  string   `json:"originTokenHeader"`
 	OriginTokenValue   string   `json:"originTokenValue"`
+	// FR-40 追加：自动备份与保留策略（运行时可改，保存后由作业下一轮读取生效）。
+	BackupAutoInterval  int `json:"backupAutoInterval"`
+	BackupKeepLast      int `json:"backupKeepLast"`
+	BackupRetentionDays int `json:"backupRetentionDays"`
 }
+
+// 自动备份配置的取值上限。不是"业务规则"，而是防手滑：把间隔输成 99999999
+// 秒（三年）或份数输成 10 万份，都不会报错但会让配置静默失去意义。
+// 有了上限，超范围输入会在保存时被明确拒绝，而不是留下一个看似生效的坏配置。
+const (
+	maxBackupAutoIntervalSecs = 30 * 24 * 3600 // 30 天
+	maxBackupKeepLast         = 1000           // 1000 份
+	maxBackupRetentionDays    = 3650           // 10 年
+)
 
 // SettingsRequest 是设置端点的请求体：可选字段，传哪个改哪个（对齐 cluster 端点风格）。
 type SettingsRequest struct {
@@ -46,6 +59,10 @@ type SettingsRequest struct {
 	OriginTokenEnabled *bool     `json:"originTokenEnabled,omitempty"`
 	OriginTokenHeader  *string   `json:"originTokenHeader,omitempty"`
 	OriginTokenValue   *string   `json:"originTokenValue,omitempty"`
+	// FR-40 追加：自动备份三项（0 分别表示关闭 / 不限制，是合法取值）。
+	BackupAutoInterval  *int `json:"backupAutoInterval,omitempty"`
+	BackupKeepLast      *int `json:"backupKeepLast,omitempty"`
+	BackupRetentionDays *int `json:"backupRetentionDays,omitempty"`
 }
 
 // settingsSnapshot 读取基础配置的当前生效值（未配置的间隔 / 超时回退默认值）。
@@ -80,7 +97,50 @@ func (h *Handlers) settingsSnapshot() SettingsResponse {
 		OriginTokenEnabled: tokenEnabled,
 		OriginTokenHeader:  tokenHeader,
 		OriginTokenValue:   tokenValue,
+		// 三项备份配置：0 是有意义的取值（关闭 / 不限制），照实返回不做回退，
+		// 否则界面无法区分"关闭"与"未配置"，也就无法把开关拨回关闭。
+		BackupAutoInterval:  h.settingServiceOrZero().BackupAutoIntervalSecs(),
+		BackupKeepLast:      h.settingServiceOrZero().BackupKeepLast(),
+		BackupRetentionDays: h.settingServiceOrZero().BackupRetentionDays(),
 	}
+}
+
+// settingServiceOrZero 在设置服务缺失时返回零值服务，使快照读取无需层层判空。
+func (h *Handlers) settingServiceOrZero() *domain.SettingService {
+	if h.settings == nil {
+		return &domain.SettingService{}
+	}
+	return h.settings
+}
+
+// validateBackupSettings 校验自动备份三项配置的取值。
+//
+// 三项均**允许 0**（关闭 / 不限制），这不是"未配置"：0 是界面把开关拨回关闭的方式，
+// 必须能存下来。负数与超上限一律拒绝——它们不会报错但会让配置静默失去意义
+// （如间隔填成负数等于永久关闭，天数填成 10 万等于永不淘汰）。
+func validateBackupSettings(req SettingsRequest) error {
+	checks := []struct {
+		name string
+		val  *int
+		max  int
+		unit string
+	}{
+		{"自动备份间隔", req.BackupAutoInterval, maxBackupAutoIntervalSecs, "秒"},
+		{"保留份数", req.BackupKeepLast, maxBackupKeepLast, "份"},
+		{"保留天数", req.BackupRetentionDays, maxBackupRetentionDays, "天"},
+	}
+	for _, c := range checks {
+		if c.val == nil {
+			continue
+		}
+		if *c.val < 0 {
+			return fmt.Errorf("%s不能为负数（0 表示关闭 / 不限制）", c.name)
+		}
+		if *c.val > c.max {
+			return fmt.Errorf("%s过大（上限 %d %s）", c.name, c.max, c.unit)
+		}
+	}
+	return nil
 }
 
 // GetSettings 返回基础配置四项（FR-89），仅管理员。非契约端点，经 WithProtocolRoutes 注册。
@@ -119,15 +179,22 @@ func (h *Handlers) PutSettings(c *gin.Context) {
 		auth.WriteError(c, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
+	if err := validateBackupSettings(req); err != nil {
+		auth.WriteError(c, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
 	if err := h.settings.UpdateSettings(domain.SettingsUpdate{
-		AnonymousAccess:    req.AnonymousAccess,
-		PublicURL:          req.PublicURL,
-		UpstreamTimeout:    req.UpstreamTimeout,
-		SyncInterval:       req.SyncInterval,
-		AllowedHosts:       req.AllowedHosts,
-		OriginTokenEnabled: req.OriginTokenEnabled,
-		OriginTokenHeader:  req.OriginTokenHeader,
-		OriginTokenValue:   req.OriginTokenValue,
+		AnonymousAccess:     req.AnonymousAccess,
+		PublicURL:           req.PublicURL,
+		UpstreamTimeout:     req.UpstreamTimeout,
+		SyncInterval:        req.SyncInterval,
+		AllowedHosts:        req.AllowedHosts,
+		OriginTokenEnabled:  req.OriginTokenEnabled,
+		OriginTokenHeader:   req.OriginTokenHeader,
+		OriginTokenValue:    req.OriginTokenValue,
+		BackupAutoInterval:  req.BackupAutoInterval,
+		BackupKeepLast:      req.BackupKeepLast,
+		BackupRetentionDays: req.BackupRetentionDays,
 	}); err != nil {
 		writeDomainErr(c, err)
 		return

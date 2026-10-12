@@ -16,8 +16,9 @@ function renderTab() {
 /**
  * 从某行的「⋯」溢出菜单里点某个动作。
  *
- * 行内只留常用动作（获取链接、校验），低频动作在菜单里——这既是为了压低行高，
- * 也让测试必须走真实路径：菜单项必须能打开、可点击，否则这条用例就该红。
+ * 行内只留一个「⋯」按钮，全部动作都在菜单里——这样操作列只需容纳一个按钮，
+ * 不会出现按钮被压成残片或整表横向滚动（此前带文字的多个行内按钮实测需要约
+ * 207px，而表格可用宽只有 984px）。测试走真实路径：菜单必须能打开、项必须可点。
  */
 async function clickRowMenuAction(
   user: ReturnType<typeof userEvent.setup>,
@@ -63,6 +64,12 @@ describe("备份与搬迁", () => {
       .closest("tr") as HTMLElement;
     expect(within(manualRow).getByText("已完成")).toBeTruthy();
     expect(within(manualRow).getByText("热备份")).toBeTruthy();
+
+    // 操作列只有一个「⋯」按钮：带文字的行内动作按钮会需要约 207px 而表格挤不出，
+    // 结果是按钮被 flex 压成残片（可读性丧失）或整表横向滚动。守护"只有一个按钮"。
+    const rowButtons = within(manualRow).getAllByRole("button");
+    expect(rowButtons.length).toBe(1);
+    expect(rowButtons[0].getAttribute("aria-label")).toBe("更多操作");
   });
 
   // —— FR-40：来源列（手动 / 自动）——
@@ -88,19 +95,47 @@ describe("备份与搬迁", () => {
     expect(within(manualRow).getByText("手动")).toBeTruthy();
   });
 
-  // —— FR-40：自动备份配置卡（只读 + 重启说明）——
-  it("自动备份配置卡只读展示三项环境变量，并标注「间隔改动需重启生效」", async () => {
+  // —— FR-40：自动备份配置卡（可编辑 + 保存即生效）——
+  it("自动备份配置卡可编辑三项配置，保存后提交到 settings 通道", async () => {
+    const user = userEvent.setup();
     renderTab();
 
-    // 如实标注不可热改——这是规格 §3.5 的硬要求，不能假装保存即生效。
-    expect(await screen.findByText("间隔改动需重启生效")).toBeTruthy();
-    expect(screen.getByText("JIAN_BACKUP_AUTO_INTERVAL")).toBeTruthy();
-    expect(screen.getByText("JIAN_BACKUP_KEEP_LAST")).toBeTruthy();
-    expect(screen.getByText("JIAN_BACKUP_RETENTION_DAYS")).toBeTruthy();
-    // 修改途径必须写明（环境变量 + 重启）。
-    expect(screen.getByText(/在服务运行环境中设置上述环境变量后重启进程/)).toBeTruthy();
-    // 不做就地编辑：卡内不得出现保存类按钮。
-    expect(screen.queryByRole("button", { name: "保存" })).toBeNull();
+    // 卡上必须如实说明"保存即生效"，不再有"需重启"的旧文案。
+    expect(await screen.findByText("保存即生效，无需重启")).toBeTruthy();
+    expect(screen.queryByText("间隔改动需重启生效")).toBeNull();
+
+    // 三项输入都在，且初值来自 settings（mock 里为 0 / 7 / 30）。
+    const interval = await screen.findByTestId("auto-interval");
+    const keepLast = screen.getByTestId("keep-last");
+    const retentionDays = screen.getByTestId("retention-days");
+    expect((interval as HTMLInputElement).value).toBe("0");
+    expect((keepLast as HTMLInputElement).value).toBe("7");
+    expect((retentionDays as HTMLInputElement).value).toBe("30");
+
+    // 未改动时保存按钮禁用：避免用户误以为"点了没反应"。
+    const saveBtn = screen.getByRole("button", { name: "保存" });
+    expect(saveBtn.hasAttribute("disabled")).toBe(true);
+
+    // 改间隔 → 保存按钮变可用 → 点击保存 → 成功提示出现。
+    await user.clear(interval);
+    await user.type(interval, "60");
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "保存" }).hasAttribute("disabled")).toBe(false);
+    });
+    await user.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(
+      () => {
+        expect(screen.getByText(/自动备份配置已保存/)).toBeTruthy();
+      },
+      { timeout: 10_000 },
+    );
+  }, 20_000);
+
+  it("自动备份配置卡的 0 值不被误当成空值", async () => {
+    renderTab();
+    // 间隔 0 是有意义的取值（关闭）；若归一化写成 `|| 默认值`，这里会显示成默认值而不是 0。
+    const interval = await screen.findByTestId("auto-interval");
+    expect((interval as HTMLInputElement).value).toBe("0");
   });
 
   // —— FR-40：恢复演练入口与报告 ——

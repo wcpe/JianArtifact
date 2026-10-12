@@ -1,35 +1,91 @@
-// 自动备份与保留策略配置卡（FR-40）——**只读展示 + 修改途径说明**。
+// 自动备份与保留策略配置卡（FR-40）——**可编辑表单，保存后运行时生效**。
 //
-// 为什么不给可编辑表单：本批后端没有暴露这四项配置的读写端点。
-// 已核实的读取途径与结论：
-//   - `GET /api/v1/settings`（SettingsResponse）只有匿名开关 / 对外 URL / 回源超时 /
-//     同步间隔 / 域名白名单 / 回源 Token，**不含** backup 三项；
-//   - `GET /api/v1/maintenance/jobs` 只暴露已注册作业的 intervalSeconds——间隔为 0
-//     时作业根本不注册、清单里就没有这一项，因此它既读不到保留份数 / 天数，
-//     也无法可靠表达"自动备份当前是关闭的"；
-//   - 这三项来自环境变量，只在启动时读一次（config.go）。
+// 历史：本卡最初是只读的"配置途径说明"卡，因为当时后端未暴露这三项的读写端点，
+// 规格 §3.5 因此写明"间隔改动需重启生效"。后来用户提出"需要允许后台配置"，
+// 后端把三项纳入既有 settings 通道（`GET/PUT /api/v1/settings`），作业也改为
+// "固定心跳 + 每轮重读配置"，于是本卡改为受控表单，**保存即生效、无需重启**。
 //
-// 于是本卡按规格 §3.5 的取舍呈现：如实说明"在哪配、怎么生效"，而不是造一个
-// 前端假表单或假装支持热改。**间隔改动需重启生效**这一条必须写在界面上——
-// 让人以为保存即生效，比不提供表单更糟。
+// 三个取值语义（0 都是有意义的取值，不是"未设置"）：
+//   - 间隔 0 = 关闭自动备份（作业仍在跑心跳，但每轮跳过）；
+//   - 份数 0 = 不按份数限制；
+//   - 天数 0 = 不限天数。
+// 表单因此**不能**用 `||` 兜底，否则 0 会被悄悄替换成默认值。
 //
-// 一旦后端把配置纳入契约（例如经 settings 通道），把本卡换成受控表单即可，
-// 文案里的环境变量名届时仍可作为"等价的运维途径"保留。
-import { Card, Code, Group, SimpleGrid, Stack, Text, ThemeIcon } from "@mantine/core";
-import { IconAlertTriangle, IconClock, IconDatabase, IconReload } from "@tabler/icons-react";
+// 环境变量的角色已变为**首次播种的初值**：仅在 setting 表尚无该组配置时写入，
+// 之后以界面配置为准。卡片底部保留这一说明，避免运维以为改 env 仍然生效。
+import { Alert, Button, Card, Group, NumberInput, Stack, Text, ThemeIcon } from "@mantine/core";
+import { IconAlertTriangle, IconCheck, IconClock, IconDatabase } from "@tabler/icons-react";
+import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { getSettings, putSettings } from "../../api/endpoints";
+import { notifyError, notifySuccess } from "../../lib/feedback";
+import { AsyncBoundary } from "../AsyncBoundary";
 import { OpsSection } from "../ops/OpsKit";
+import { useAsync } from "../../hooks/useAsync";
 
-/** 展示用条目：环境变量名 + 默认值。默认值取自 config.go 的常量（默认关闭 / 7 份 / 30 天）。 */
-const AUTO_BACKUP_ENV_VARS = [
-  { env: "JIAN_BACKUP_AUTO_INTERVAL", defaultKey: "backups.autoCfgDefaultDisabled" },
-  { env: "JIAN_BACKUP_KEEP_LAST", defaultKey: "backups.autoCfgDefault7" },
-  { env: "JIAN_BACKUP_RETENTION_DAYS", defaultKey: "backups.autoCfgDefault30" },
-] as const;
+/** 表单里三项的取值上限，与后端 settings_handlers.go 的校验保持一致。 */
+const LIMITS = {
+  autoInterval: 30 * 24 * 3600, // 30 天
+  keepLast: 1000,
+  retentionDays: 3650, // 10 年
+} as const;
+
+/** 表单草稿：三项均为字符串以便区分"空输入"与 0（NumberInput 允许清空）。 */
+interface ConfigDraft {
+  autoInterval: number | string;
+  keepLast: number | string;
+  retentionDays: number | string;
+}
 
 export function AutoBackupConfigCard() {
   const { t } = useTranslation();
+  const state = useAsync(() => getSettings(), [], { cacheKey: "backup:auto-config" });
+  const [draft, setDraft] = useState<ConfigDraft | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  // 读到配置后用服务端值初始化草稿；reload 后也要重新对齐，避免显示陈旧值。
+  useEffect(() => {
+    if (!state.data) return;
+    setDraft({
+      autoInterval: state.data.backupAutoInterval,
+      keepLast: state.data.backupKeepLast,
+      retentionDays: state.data.backupRetentionDays,
+    });
+  }, [state.data]);
+
+  const reload = state.reload;
+  const onSave = useCallback(async () => {
+    if (!draft) return;
+    // 空输入按 0 提交（等于关闭 / 不限制），而不是拒绝保存：
+    // 用户清空输入框的意图就是"不要这个限制"，报错反而妨碍操作。
+    const toInt = (v: number | string): number => {
+      if (v === "" || v === undefined || v === null) return 0;
+      const n = typeof v === "number" ? v : Number(v);
+      return Number.isFinite(n) ? Math.trunc(n) : 0;
+    };
+    setSaving(true);
+    try {
+      await putSettings({
+        backupAutoInterval: toInt(draft.autoInterval),
+        backupKeepLast: toInt(draft.keepLast),
+        backupRetentionDays: toInt(draft.retentionDays),
+      });
+      notifySuccess(t("backups.autoCfgSaved"));
+      reload();
+    } catch (err) {
+      notifyError(err);
+    } finally {
+      setSaving(false);
+    }
+  }, [draft, reload, t]);
+
+  const dirty =
+    !!draft &&
+    !!state.data &&
+    (Number(draft.autoInterval || 0) !== state.data.backupAutoInterval ||
+      Number(draft.keepLast || 0) !== state.data.backupKeepLast ||
+      Number(draft.retentionDays || 0) !== state.data.backupRetentionDays);
 
   return (
     <OpsSection
@@ -37,74 +93,109 @@ export function AutoBackupConfigCard() {
       style={{ flexShrink: 0 }}
       actions={
         <Group gap={6} wrap="nowrap">
-          <ThemeIcon size="sm" variant="light" color="orange">
-            <IconAlertTriangle size={12} />
+          <ThemeIcon size="sm" variant="light" color="teal">
+            <IconCheck size={12} />
           </ThemeIcon>
-          <Text size="xs" c="orange">
-            {t("backups.autoCfgRestartNote")}
+          <Text size="xs" c="teal">
+            {t("backups.autoCfgLiveNote")}
           </Text>
         </Group>
       }
     >
-      <Stack gap="sm">
-        <Text size="xs" c="dimmed">
-          {t("backups.autoCfgHint")}
-        </Text>
+      <AsyncBoundary state={state}>
+        {() =>
+          draft ? (
+            <Stack gap="sm">
+              <Text size="xs" c="dimmed">
+                {t("backups.autoCfgHint")}
+              </Text>
 
-        <SimpleGrid cols={{ base: 1, sm: 3 }} spacing="sm">
-          <ConfigItem
-            icon={<IconClock size={14} />}
-            env="JIAN_BACKUP_AUTO_INTERVAL"
-            label={t("backups.autoCfgInterval")}
-            desc={t("backups.autoCfgIntervalDesc")}
-          />
-          <ConfigItem
-            icon={<IconDatabase size={14} />}
-            env="JIAN_BACKUP_KEEP_LAST"
-            label={t("backups.autoCfgKeepLast")}
-            desc={t("backups.autoCfgKeepLastDesc")}
-          />
-          <ConfigItem
-            icon={<IconDatabase size={14} />}
-            env="JIAN_BACKUP_RETENTION_DAYS"
-            label={t("backups.autoCfgRetentionDays")}
-            desc={t("backups.autoCfgRetentionDaysDesc")}
-          />
-        </SimpleGrid>
+              <Group gap="sm" align="flex-start" wrap="wrap">
+                <ConfigField
+                  icon={<IconClock size={14} />}
+                  label={t("backups.autoCfgInterval")}
+                  desc={t("backups.autoCfgIntervalDesc")}
+                  value={draft.autoInterval}
+                  onChange={(v) => setDraft({ ...draft, autoInterval: v })}
+                  max={LIMITS.autoInterval}
+                  testId="auto-interval"
+                />
+                <ConfigField
+                  icon={<IconDatabase size={14} />}
+                  label={t("backups.autoCfgKeepLast")}
+                  desc={t("backups.autoCfgKeepLastDesc")}
+                  value={draft.keepLast}
+                  onChange={(v) => setDraft({ ...draft, keepLast: v })}
+                  max={LIMITS.keepLast}
+                  testId="keep-last"
+                />
+                <ConfigField
+                  icon={<IconDatabase size={14} />}
+                  label={t("backups.autoCfgRetentionDays")}
+                  desc={t("backups.autoCfgRetentionDaysDesc")}
+                  value={draft.retentionDays}
+                  onChange={(v) => setDraft({ ...draft, retentionDays: v })}
+                  max={LIMITS.retentionDays}
+                  testId="retention-days"
+                />
+              </Group>
 
-        <Group gap={6} wrap="nowrap" align="flex-start">
-          <ThemeIcon size="sm" variant="light" color="gray">
-            <IconReload size={12} />
-          </ThemeIcon>
-          <Text size="xs" c="dimmed">
-            {t("backups.autoCfgHowTo")}
-          </Text>
-        </Group>
+              <Group gap="xs" justify="space-between" wrap="wrap">
+                <Text size="xs" c="dimmed">
+                  {t("backups.autoCfgJobsHint")}
+                </Text>
+                <Button
+                  size="xs"
+                  loading={saving}
+                  disabled={!dirty}
+                  leftSection={<IconCheck size={14} />}
+                  onClick={() => void onSave()}
+                >
+                  {t("backups.autoCfgSave")}
+                </Button>
+              </Group>
 
-        <Text size="xs" c="dimmed">
-          {t("backups.autoCfgJobsHint")}
-        </Text>
-      </Stack>
+              <Alert
+                color="gray"
+                variant="light"
+                icon={
+                  <ThemeIcon size="sm" variant="light" color="gray">
+                    <IconAlertTriangle size={12} />
+                  </ThemeIcon>
+                }
+              >
+                <Text size="xs" c="dimmed">
+                  {t("backups.autoCfgEnvNote")}
+                </Text>
+              </Alert>
+            </Stack>
+          ) : null
+        }
+      </AsyncBoundary>
     </OpsSection>
   );
 }
 
-/** 单项配置：标签 + 环境变量名 + 语义说明。值本身不可在此读取，故展示变量名而非当前值。 */
-function ConfigItem({
+/** 单项配置输入：图标 + 标签 + 说明 + 数值输入。 */
+function ConfigField({
   icon,
-  env,
   label,
   desc,
+  value,
+  onChange,
+  max,
+  testId,
 }: {
   icon: React.ReactNode;
-  env: string;
   label: string;
   desc: string;
+  value: number | string;
+  onChange: (v: number | string) => void;
+  max: number;
+  testId: string;
 }) {
-  const { t } = useTranslation();
-  const entry = AUTO_BACKUP_ENV_VARS.find((item) => item.env === env);
   return (
-    <Card withBorder radius="md" padding="sm">
+    <Card withBorder radius="md" padding="sm" style={{ flex: "1 1 220px", minWidth: 200 }}>
       <Stack gap={4}>
         <Group gap={6} wrap="nowrap">
           <ThemeIcon size="sm" variant="light" color="gray">
@@ -114,16 +205,20 @@ function ConfigItem({
             {label}
           </Text>
         </Group>
-        <Code fz="xs">{env}</Code>
+        <NumberInput
+          size="xs"
+          min={0}
+          max={max}
+          allowDecimal={false}
+          allowNegative={false}
+          value={value}
+          onChange={onChange}
+          data-testid={testId}
+          clampBehavior="strict"
+        />
         <Text size="xs" c="dimmed">
           {desc}
         </Text>
-        {entry ? (
-          <Text size="xs" c="dimmed">
-            {t("backups.autoCfgDefaultLabel")}
-            {t(entry.defaultKey)}
-          </Text>
-        ) : null}
       </Stack>
     </Card>
   );

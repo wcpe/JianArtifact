@@ -175,6 +175,12 @@ func openServices(cfg *config.Config) (*appServices, error) {
 			upstreamClient.SetTimeout(time.Duration(secs) * time.Second)
 		}
 	}
+	// FR-40 追加：自动备份三项配置的初始值来自环境变量，此后以 setting 表为准
+	// （运行时可经界面修改并热生效）。只播种整组都缺失的情况，理由见函数注释。
+	if err := seedBackupSettings(settingSvc, settingRepo, cfg); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("初始化自动备份设置：%w", err)
+	}
 	auditLogRepo := repository.NewAuditLogRepo(db)
 	auditObservabilityRepo := repository.NewAuditObservabilityRepo(db)
 	operationsMetrics := repository.NewOperationsObservabilityRepo(db)
@@ -243,14 +249,22 @@ func openServices(cfg *config.Config) (*appServices, error) {
 		},
 	)
 	registerStorageCleanupJob(schedulerSvc, cfg.StorageCleanupInterval, storageCleanupSvc.Run)
-	// FR-40：周期化自动备份 + 保留策略。默认间隔 0 = 关闭（作业不注册），
-	// 需显式配置 JIAN_BACKUP_AUTO_INTERVAL 才启用。
+	// FR-40：周期化自动备份 + 保留策略。间隔的当前值取自 setting 表
+	// （初值由环境变量 JIAN_BACKUP_AUTO_INTERVAL 播种），因此界面上改完下一轮即生效；
+	// 间隔为 0 表示关闭（作业仍在心跳，但每轮跳过）。
 	backupRetentionSvc := domain.NewBackupRetentionService(backupSvc, backupRepo, domain.BackupRetentionOptions{
-		KeepLast:      cfg.BackupKeepLast,      // JIAN_BACKUP_KEEP_LAST（份），0 = 不按份数限制
-		RetentionDays: cfg.BackupRetentionDays, // JIAN_BACKUP_RETENTION_DAYS（天），0 = 不限天数
+		KeepLast:      settingSvc.BackupKeepLast(),      // 初值来自 JIAN_BACKUP_KEEP_LAST（份），0 = 不按份数限制
+		RetentionDays: settingSvc.BackupRetentionDays(), // 初值来自 JIAN_BACKUP_RETENTION_DAYS（天），0 = 不限天数
 	})
-	registerAutoBackupJob(schedulerSvc, cfg.BackupAutoInterval, func(ctx context.Context) (autoBackupRun, error) {
-		return runAutoBackup(ctx, backupSvc, backupRetentionSvc)
+	registerAutoBackupJob(schedulerSvc, autoBackupHeartbeat, func() autoBackupSettings {
+		// 每轮现读：这三个值就是"界面上改完即生效"的全部来源。
+		return autoBackupSettings{
+			IntervalSecs:  settingSvc.BackupAutoIntervalSecs(),
+			KeepLast:      settingSvc.BackupKeepLast(),
+			RetentionDays: settingSvc.BackupRetentionDays(),
+		}
+	}, func(ctx context.Context, settings autoBackupSettings) (autoBackupRun, error) {
+		return runAutoBackup(ctx, backupSvc, backupRetentionSvc, settings)
 	})
 	// FR-40：恢复演练服务（CLI 与 API 共用同一实现；API 端点在后续阶段接入）。
 	backupDrillSvc := domain.NewBackupDrillService(backupSvc, repository.NewBackupVerificationRepo(db), cfg.DataDir)
@@ -348,6 +362,33 @@ func seedSettingDefault(settings *repository.SettingRepo, key, value string) err
 		return err
 	}
 	return settings.Set(key, value)
+}
+
+// seedBackupSettings 把环境变量里的自动备份三项配置作为**初值**播种进 setting 表。
+//
+// 与 seedSettingDefault 的两点不同：
+//
+//   - **0 是有意义的值**（关闭 / 不限制），因此不能用"非空才写"的判据——三项一律写入；
+//   - **整组一起判断**：只要表里已存在任意一项，就认为本节点已由界面管过这组配置，
+//     三项都不再播种。否则会出现"运维在界面把间隔改成 60、重启后却被环境变量里的
+//     30 覆盖回去"这种最令人困惑的行为（因为份数/天数键也在，逐键播种就会各自为政）。
+//
+// 环境变量在播种后即完成使命：此后以 setting 表为准，界面改动不再受 env 干扰。
+func seedBackupSettings(settingSvc *domain.SettingService, settings *repository.SettingRepo, cfg *config.Config) error {
+	if settingSvc.HasBackupSettings() {
+		return nil
+	}
+	values := []repository.SettingValue{
+		{Key: domain.SettingKeyBackupAutoInterval, Value: strconv.Itoa(int(cfg.BackupAutoInterval.Seconds()))},
+		{Key: domain.SettingKeyBackupKeepLast, Value: strconv.Itoa(cfg.BackupKeepLast)},
+		{Key: domain.SettingKeyBackupRetentionDays, Value: strconv.Itoa(cfg.BackupRetentionDays)},
+	}
+	for _, value := range values {
+		if err := settings.Set(value.Key, value.Value); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // handlers 用给定版本与就绪检查构造 api.Handlers。
