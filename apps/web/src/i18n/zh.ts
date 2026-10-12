@@ -1182,7 +1182,14 @@ export const zh = {
     drillOpen: "演练",
     drillTitle: "恢复演练",
     drillHint:
-      "演练在隔离临时目录里真解包、真校验，回答「这份包真的能恢复吗」，并留下可查报告。它是只读路径：不会写入待重启标记，也不会替换本机数据。深校验逐 blob 读取，耗时与包体积同阶。",
+      "演练在隔离临时目录里真解包、真校验，回答「这份包真的能恢复吗」，并留下可查报告。它是只读路径：不会写入待重启标记，也不会替换本机数据。",
+    drillShallowTitle: "浅校验（只看结构，快）",
+    drillShallowDesc:
+      "校验归档能否打开、结构与件数是否与清单一致、快照是否可读。不逐字节核对 blob 内容，因此对「内容被静默篡改但文件结构完好」的包会判为通过。",
+    drillDeepTitle: "深校验（逐字节核对内容，慢）",
+    drillDeepDesc:
+      "在浅校验之上，额外把每个 blob 的内容重新算一遍摘要并与包内清单比对，能发现内容被篡改或位腐坏。耗时与包体积同阶，包越大越慢。",
+    drillRecommended: "建议",
     drillLevelShallow: "浅校验",
     drillLevelDeep: "深校验",
     drillLevel_shallow: "浅校验",

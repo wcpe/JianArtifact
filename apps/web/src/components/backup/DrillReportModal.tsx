@@ -14,12 +14,13 @@ import {
   Group,
   Loader,
   Modal,
+  Radio,
   ScrollArea,
   Stack,
   Text,
   ThemeIcon,
 } from "@mantine/core";
-import { IconCheck, IconPlayerPlay, IconRefresh, IconRun, IconX } from "@tabler/icons-react";
+import { IconCheck, IconPlayerPlay, IconRefresh, IconX } from "@tabler/icons-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -111,26 +112,47 @@ export function DrillReportModal({ packageId, onClose }: DrillReportModalProps) 
           {t("backups.drillHint")}
         </Text>
 
+        {/* 两级校验的差异必须写清楚：正常包跑两级结果一模一样（内容没问题时，
+            "没验内容"和"验过内容"的结论当然相同），只有 blob 被静默篡改、
+            而 tar/gzip 结构仍完好时，浅校验才会漏判。不写明白，用户只会
+            看到两次相同的报告，以为深校验是多余的。 */}
+        <Radio.Group value={level} onChange={(value) => setLevel(value as BackupVerificationLevel)}>
+          <Stack gap="xs">
+            <Radio.Card value="shallow" radius="md" p="sm" withBorder>
+              <Group wrap="nowrap" align="flex-start">
+                <Radio.Indicator mt={2} />
+                <Stack gap={2}>
+                  <Text size="sm" fw={500}>
+                    {t("backups.drillShallowTitle")}
+                  </Text>
+                  <Text size="xs" c="dimmed">
+                    {t("backups.drillShallowDesc")}
+                  </Text>
+                </Stack>
+              </Group>
+            </Radio.Card>
+            <Radio.Card value="deep" radius="md" p="sm" withBorder>
+              <Group wrap="nowrap" align="flex-start">
+                <Radio.Indicator mt={2} />
+                <Stack gap={2}>
+                  <Group gap={6} wrap="nowrap">
+                    <Text size="sm" fw={500}>
+                      {t("backups.drillDeepTitle")}
+                    </Text>
+                    <Badge color={drillLevelTone("deep")} variant="light" tt="none" size="sm">
+                      {t("backups.drillRecommended")}
+                    </Badge>
+                  </Group>
+                  <Text size="xs" c="dimmed">
+                    {t("backups.drillDeepDesc")}
+                  </Text>
+                </Stack>
+              </Group>
+            </Radio.Card>
+          </Stack>
+        </Radio.Group>
+
         <Group gap="xs" wrap="wrap">
-          <Button.Group>
-            <Button
-              size="xs"
-              variant={level === "shallow" ? "filled" : "default"}
-              leftSection={<IconRun size={14} />}
-              onClick={() => setLevel("shallow")}
-            >
-              {t("backups.drillLevelShallow")}
-            </Button>
-            <Button
-              size="xs"
-              variant={level === "deep" ? "filled" : "default"}
-              color={drillLevelTone("deep")}
-              leftSection={<IconRun size={14} />}
-              onClick={() => setLevel("deep")}
-            >
-              {t("backups.drillLevelDeep")}
-            </Button>
-          </Button.Group>
           <Button
             size="xs"
             leftSection={<IconPlayerPlay size={14} />}

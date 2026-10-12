@@ -117,6 +117,21 @@ describe("备份与搬迁", () => {
     // 弹窗说明必须讲清"只读路径"这一关键边界。
     expect(within(dialog).getByText(/不会写入待重启标记/)).toBeTruthy();
 
+    // 两级校验的差异必须写在界面上：正常包跑两级结果完全一样（内容没问题时，
+    // "没验内容"与"验过内容"的结论当然相同），用户只看报告看不出区别，
+    // 若不解释就会以为深校验是多余的。这里守护住"差异说明存在"这件事。
+    expect(within(dialog).getByText(/浅校验（只看结构/)).toBeTruthy();
+    expect(within(dialog).getByText(/深校验（逐字节核对内容/)).toBeTruthy();
+    // 浅校验必须显式声明它漏判的场景，否则等于把"看结构"说成"能验内容"。
+    expect(within(dialog).getByText(/内容被静默篡改但文件结构完好/)).toBeTruthy();
+    // 深校验标注"建议"，把更严格的一档明确推荐给用户。
+    expect(within(dialog).getByText("建议")).toBeTruthy();
+    // 默认仍是浅校验（快）：这是既有行为，不因加提示而改变默认档位。
+    // 用完整标题精确匹配：说明文本里也含"浅校验"三字，宽松匹配会命中多个 radio。
+    // 本仓库未引入 jest-dom 的 toBeChecked，故直接断言 Mantine 的选中属性。
+    const shallowCard = within(dialog).getByRole("radio", { name: /^浅校验（只看结构，快）/ });
+    expect(shallowCard.getAttribute("aria-checked")).toBe("true");
+
     // 预置的失败报告被如实渲染：总判定「未通过」+ 失败检查项与原因都在。
     await waitFor(
       () => {

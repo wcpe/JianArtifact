@@ -1247,7 +1247,14 @@ export const en = {
     drillOpen: "Drill",
     drillTitle: "Restore Drill",
     drillHint:
-      'The drill really unpacks and verifies the package in an isolated temporary directory, answering "can this package actually be restored?" and leaving an auditable report. It is a read-only path: it writes no pending-restart marker and never replaces local data. Deep verification reads every blob, so it takes time on the order of the package size.',
+      'The drill really unpacks and verifies the package in an isolated temporary directory, answering "can this package actually be restored?" and leaving an auditable report. It is a read-only path: it writes no pending-restart marker and never replaces local data.',
+    drillShallowTitle: "Shallow (structure only, fast)",
+    drillShallowDesc:
+      "Checks that the archive opens, its structure and entry counts match the manifest, and the snapshot is readable. It does not re-hash blob contents, so a package whose contents were silently altered but whose file structure is intact will pass.",
+    drillDeepTitle: "Deep (re-hashes every byte, slow)",
+    drillDeepDesc:
+      "On top of shallow, recomputes each blob's content digest and compares it with the index inside the package, catching silent tampering or bit rot. Takes time on the order of the package size.",
+    drillRecommended: "Recommended",
     drillLevelShallow: "Shallow",
     drillLevelDeep: "Deep",
     drillLevel_shallow: "Shallow",
