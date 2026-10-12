@@ -95,14 +95,38 @@ describe("备份与搬迁", () => {
     expect(within(manualRow).getByText("手动")).toBeTruthy();
   });
 
-  // —— FR-40：自动备份配置卡（可编辑 + 保存即生效）——
-  it("自动备份配置卡可编辑三项配置，保存后提交到 settings 通道", async () => {
+  // —— FR-40：自动备份配置卡（默认折叠 + 展开后可编辑 + 保存即生效）——
+  it("自动备份配置卡默认折叠，只显示当前值摘要，不占用列表高度", async () => {
+    renderTab();
+
+    // 折叠态：卡上必须写明"保存即生效"，不再有"需重启"的旧文案。
+    expect(await screen.findByText("保存即生效，无需重启")).toBeTruthy();
+    expect(screen.queryByText("间隔改动需重启生效")).toBeNull();
+
+    // 默认收起：三个输入框都不可见（Mantine Collapse 收起时不渲染内容）。
+    // 这是高度回归的直接守卫——本卡展开时有 365px，会把备份列表挤到 80px。
+    expect(screen.queryByTestId("auto-interval")).toBeNull();
+    expect(screen.queryByTestId("keep-last")).toBeNull();
+    expect(screen.queryByTestId("retention-days")).toBeNull();
+
+    // 折叠态必须给出当前值摘要，否则用户无法一眼看出自动备份是否在跑。
+    // mock 的间隔为 0 → 必须明说"已关闭"，而不是显示"每 0 秒备份一次"。
+    expect(screen.getByText(/自动备份已关闭/)).toBeTruthy();
+    expect(screen.getByText(/保留最近 7 份/)).toBeTruthy();
+    expect(screen.getByText(/30 天内/)).toBeTruthy();
+
+    // 展开开关存在且语义正确。
+    const toggle = screen.getByRole("button", { name: "配置" });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("展开后可编辑三项配置，保存后提交到 settings 通道", async () => {
     const user = userEvent.setup();
     renderTab();
 
-    // 卡上必须如实说明"保存即生效"，不再有"需重启"的旧文案。
-    expect(await screen.findByText("保存即生效，无需重启")).toBeTruthy();
-    expect(screen.queryByText("间隔改动需重启生效")).toBeNull();
+    // 先展开（默认折叠）。
+    const toggle = await screen.findByRole("button", { name: "配置" });
+    await user.click(toggle);
 
     // 三项输入都在，且初值来自 settings（mock 里为 0 / 7 / 30）。
     const interval = await screen.findByTestId("auto-interval");
@@ -133,9 +157,9 @@ describe("备份与搬迁", () => {
 
   it("自动备份配置卡的 0 值不被误当成空值", async () => {
     renderTab();
-    // 间隔 0 是有意义的取值（关闭）；若归一化写成 `|| 默认值`，这里会显示成默认值而不是 0。
-    const interval = await screen.findByTestId("auto-interval");
-    expect((interval as HTMLInputElement).value).toBe("0");
+    // 间隔 0 是有意义的取值（关闭）；若归一化写成 `|| 默认值`，折叠摘要会显示成
+    // "每 7 秒备份一次"之类的默认值，而不是"已关闭"。直接断言摘要语义而非数字。
+    expect(await screen.findByText(/自动备份已关闭/)).toBeTruthy();
   });
 
   // —— FR-40：恢复演练入口与报告 ——

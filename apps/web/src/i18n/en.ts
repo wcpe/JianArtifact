@@ -1270,9 +1270,18 @@ export const en = {
     drillCheck_extract: "Extract",
     drillCheck_sqlite: "SQLite consistency",
     drillCheck_blobs: "Blob scale",
-    // —— FR-40：自动备份与保留策略（只读展示；配置走环境变量，间隔改动需重启）——
+    // —— FR-40：自动备份与保留策略（配置卡默认折叠，展开后可改，保存即生效）——
     autoCfgTitle: "Automatic Backup & Retention",
     autoCfgLiveNote: "Saved changes take effect immediately",
+    autoCfgEdit: "Configure",
+    autoCfgCollapse: "Collapse",
+    autoCfgSummaryLoading: "Loading configuration…",
+    autoCfgSummaryOff: "Automatic backup is off",
+    autoCfgSummaryInterval: "Backup every {{n}}s",
+    autoCfgSummaryKeep: "Keep last {{n}}",
+    autoCfgSummaryKeepUnlimited: "No count limit",
+    autoCfgSummaryDays: "Within {{n}} days",
+    autoCfgSummaryDaysUnlimited: "No day limit",
     autoCfgHint:
       "Changes made here apply immediately (the automatic backup job re-reads this configuration every cycle, at most one heartbeat later) with no process restart. A value of 0 is meaningful for all three: interval 0 = automatic backup off, count 0 = no count limit, days 0 = no day limit.",
     autoCfgSave: "Save",

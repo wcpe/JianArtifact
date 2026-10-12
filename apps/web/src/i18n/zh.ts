@@ -1205,9 +1205,18 @@ export const zh = {
     drillCheck_extract: "解包",
     drillCheck_sqlite: "SQLite 一致性",
     drillCheck_blobs: "blob 规模",
-    // —— FR-40：自动备份与保留策略（只读展示；配置走环境变量，间隔改动需重启）——
+    // —— FR-40：自动备份与保留策略（配置卡默认折叠，展开后可改，保存即生效）——
     autoCfgTitle: "自动备份与保留策略",
     autoCfgLiveNote: "保存即生效，无需重启",
+    autoCfgEdit: "配置",
+    autoCfgCollapse: "收起",
+    autoCfgSummaryLoading: "读取配置中…",
+    autoCfgSummaryOff: "自动备份已关闭",
+    autoCfgSummaryInterval: "每 {{n}} 秒备份一次",
+    autoCfgSummaryKeep: "保留最近 {{n}} 份",
+    autoCfgSummaryKeepUnlimited: "不限份数",
+    autoCfgSummaryDays: "{{n}} 天内",
+    autoCfgSummaryDaysUnlimited: "不限天数",
     autoCfgHint:
       "在此修改后立即生效（自动备份作业每轮重读配置，最迟一个心跳周期内应用），无需重启进程。三项的 0 都是有意义的取值：间隔 0 = 关闭自动备份，份数 0 = 不限份数，天数 0 = 不限天数。",
     autoCfgSave: "保存",
