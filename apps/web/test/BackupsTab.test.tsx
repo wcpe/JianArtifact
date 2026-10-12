@@ -153,6 +153,12 @@ describe("备份与搬迁", () => {
       },
       { timeout: 10_000 },
     );
+
+    // 保存后回读：新值必须真的落到设置里。此前 devmock 的 PUT /settings 不透传这三项，
+    // 保存只会弹成功提示、值却原样退回，用例因此必须断言"回读到的就是新值"。
+    await waitFor(() => {
+      expect((screen.getByTestId("auto-interval") as HTMLInputElement).value).toBe("60");
+    });
   }, 20_000);
 
   it("自动备份配置卡的 0 值不被误当成空值", async () => {

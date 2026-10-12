@@ -78,6 +78,12 @@ export interface ServiceSettings {
   originTokenEnabled: boolean;
   originTokenHeader: string;
   originTokenValue: string;
+  /** 自动备份间隔（秒），0 = 关闭（FR-40）；三者的 0 都是有意义的取值。 */
+  backupAutoInterval: number;
+  /** 保留最近 N 份自动备份，0 = 不限制份数。 */
+  backupKeepLast: number;
+  /** 保留最近 N 天的自动备份，0 = 不限天数。 */
+  backupRetentionDays: number;
 }
 
 /** 开发/测试态签发的固定会话令牌明文；鉴权守卫据此放行。 */
@@ -747,6 +753,11 @@ function seed(): State {
       originTokenEnabled: false,
       originTokenHeader: "",
       originTokenValue: "",
+      // FR-40：间隔刻意给 0（关闭）——这是最容易被"空值兜底"写法吞掉的值，
+      // 让 mock 默认就落在该分支上，摘要必须显示"已关闭"而不是默认档位。
+      backupAutoInterval: 0,
+      backupKeepLast: 7,
+      backupRetentionDays: 30,
     },
     // FR-41：与后端已注册的作业一一对应（blob-gc / storage-cleanup，默认间隔均为每日一次）。
     // 覆盖两种展示分支：blob-gc 执行过且最近一次失败（lastError 有值），
@@ -1449,6 +1460,9 @@ export const store = {
     state.serviceSettings.originTokenEnabled = patch.originTokenEnabled;
     state.serviceSettings.originTokenHeader = patch.originTokenHeader;
     state.serviceSettings.originTokenValue = patch.originTokenValue;
+    state.serviceSettings.backupAutoInterval = patch.backupAutoInterval;
+    state.serviceSettings.backupKeepLast = patch.backupKeepLast;
+    state.serviceSettings.backupRetentionDays = patch.backupRetentionDays;
     return this.settings();
   },
 

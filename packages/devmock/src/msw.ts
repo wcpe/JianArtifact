@@ -1476,6 +1476,9 @@ export const handlers = [
       originTokenEnabled?: boolean;
       originTokenHeader?: string;
       originTokenValue?: string;
+      backupAutoInterval?: number;
+      backupKeepLast?: number;
+      backupRetentionDays?: number;
     };
     const current = store.settings();
     return HttpResponse.json(
@@ -1502,6 +1505,18 @@ export const handlers = [
           typeof body.originTokenValue === "string"
             ? body.originTokenValue
             : current.originTokenValue,
+        // FR-40：三项都按 `typeof === "number"` 判断而非真值判断——0 是合法取值
+        // （关闭 / 不限制），用 `body.x || current.x` 会把 0 悄悄吞回存量值。
+        backupAutoInterval:
+          typeof body.backupAutoInterval === "number"
+            ? body.backupAutoInterval
+            : current.backupAutoInterval,
+        backupKeepLast:
+          typeof body.backupKeepLast === "number" ? body.backupKeepLast : current.backupKeepLast,
+        backupRetentionDays:
+          typeof body.backupRetentionDays === "number"
+            ? body.backupRetentionDays
+            : current.backupRetentionDays,
       }),
     );
   }),

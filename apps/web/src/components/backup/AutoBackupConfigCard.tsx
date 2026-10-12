@@ -137,7 +137,14 @@ export function AutoBackupConfigCard() {
   return (
     <OpsSection
       title={t("backups.autoCfgTitle")}
+      // 摘要放在标题行（OpsSection 的 meta 就是为"标题旁的次要信息"设计的既有范式），
+      // 而不是留在卡内：折叠态若仍渲染 body，光是它的上下内边距就要 32px，而这一页
+      // 每一像素都在跟备份列表抢高度（实测留在卡内时折叠态 103px、列表只剩 167px，
+      // 摘要挪进标题行后折叠态降到约 51px）。
+      meta={expanded ? undefined : (summary ?? t("backups.autoCfgSummaryLoading"))}
       style={{ flexShrink: 0 }}
+      // 折叠态下 body 是空的（Collapse 收起不渲染内容），此时内边距纯属浪费，置 0。
+      bodyPadding={expanded ? "md" : 0}
       actions={
         <Group gap={6} wrap="nowrap">
           <ThemeIcon size="sm" variant="light" color="teal">
@@ -146,16 +153,7 @@ export function AutoBackupConfigCard() {
           <Text size="xs" c="teal" visibleFrom="sm">
             {t("backups.autoCfgLiveNote")}
           </Text>
-        </Group>
-      }
-    >
-      <Stack gap="xs">
-        {/* 折叠态的常驻行：当前值摘要 + 展开开关。摘要在加载中/失败时留占位而非空白，
-            否则用户会以为"没有配置"而不是"还没读到"。 */}
-        <Group gap="xs" justify="space-between" wrap="nowrap">
-          <Text size="xs" c="dimmed" truncate>
-            {summary ?? t("backups.autoCfgSummaryLoading")}
-          </Text>
+          {/* 展开开关放 actions 而非卡内：折叠态卡内不渲染任何内容，否则又要占一行。 */}
           <Button
             size="compact-xs"
             variant={expanded ? "light" : "default"}
@@ -166,82 +164,82 @@ export function AutoBackupConfigCard() {
             {expanded ? t("backups.autoCfgCollapse") : t("backups.autoCfgEdit")}
           </Button>
         </Group>
+      }
+    >
+      <Collapse expanded={expanded}>
+        <Box pt="xs">
+          <AsyncBoundary state={state}>
+            {() =>
+              draft ? (
+                <Stack gap="sm">
+                  <Text size="xs" c="dimmed">
+                    {t("backups.autoCfgHint")}
+                  </Text>
 
-        <Collapse expanded={expanded}>
-          <Box pt="xs">
-            <AsyncBoundary state={state}>
-              {() =>
-                draft ? (
-                  <Stack gap="sm">
+                  <Group gap="sm" align="flex-start" wrap="wrap">
+                    <ConfigField
+                      icon={<IconClock size={14} />}
+                      label={t("backups.autoCfgInterval")}
+                      desc={t("backups.autoCfgIntervalDesc")}
+                      value={draft.autoInterval}
+                      onChange={(v) => setDraft({ ...draft, autoInterval: v })}
+                      max={LIMITS.autoInterval}
+                      testId="auto-interval"
+                    />
+                    <ConfigField
+                      icon={<IconDatabase size={14} />}
+                      label={t("backups.autoCfgKeepLast")}
+                      desc={t("backups.autoCfgKeepLastDesc")}
+                      value={draft.keepLast}
+                      onChange={(v) => setDraft({ ...draft, keepLast: v })}
+                      max={LIMITS.keepLast}
+                      testId="keep-last"
+                    />
+                    <ConfigField
+                      icon={<IconDatabase size={14} />}
+                      label={t("backups.autoCfgRetentionDays")}
+                      desc={t("backups.autoCfgRetentionDaysDesc")}
+                      value={draft.retentionDays}
+                      onChange={(v) => setDraft({ ...draft, retentionDays: v })}
+                      max={LIMITS.retentionDays}
+                      testId="retention-days"
+                    />
+                  </Group>
+
+                  <Group gap="xs" justify="space-between" wrap="wrap">
                     <Text size="xs" c="dimmed">
-                      {t("backups.autoCfgHint")}
+                      {t("backups.autoCfgJobsHint")}
                     </Text>
-
-                    <Group gap="sm" align="flex-start" wrap="wrap">
-                      <ConfigField
-                        icon={<IconClock size={14} />}
-                        label={t("backups.autoCfgInterval")}
-                        desc={t("backups.autoCfgIntervalDesc")}
-                        value={draft.autoInterval}
-                        onChange={(v) => setDraft({ ...draft, autoInterval: v })}
-                        max={LIMITS.autoInterval}
-                        testId="auto-interval"
-                      />
-                      <ConfigField
-                        icon={<IconDatabase size={14} />}
-                        label={t("backups.autoCfgKeepLast")}
-                        desc={t("backups.autoCfgKeepLastDesc")}
-                        value={draft.keepLast}
-                        onChange={(v) => setDraft({ ...draft, keepLast: v })}
-                        max={LIMITS.keepLast}
-                        testId="keep-last"
-                      />
-                      <ConfigField
-                        icon={<IconDatabase size={14} />}
-                        label={t("backups.autoCfgRetentionDays")}
-                        desc={t("backups.autoCfgRetentionDaysDesc")}
-                        value={draft.retentionDays}
-                        onChange={(v) => setDraft({ ...draft, retentionDays: v })}
-                        max={LIMITS.retentionDays}
-                        testId="retention-days"
-                      />
-                    </Group>
-
-                    <Group gap="xs" justify="space-between" wrap="wrap">
-                      <Text size="xs" c="dimmed">
-                        {t("backups.autoCfgJobsHint")}
-                      </Text>
-                      <Button
-                        size="xs"
-                        loading={saving}
-                        disabled={!dirty}
-                        leftSection={<IconCheck size={14} />}
-                        onClick={() => void onSave()}
-                      >
-                        {t("backups.autoCfgSave")}
-                      </Button>
-                    </Group>
-
-                    <Alert
-                      color="gray"
-                      variant="light"
-                      icon={
-                        <ThemeIcon size="sm" variant="light" color="gray">
-                          <IconAlertTriangle size={12} />
-                        </ThemeIcon>
-                      }
+                    <Button
+                      size="xs"
+                      loading={saving}
+                      disabled={!dirty}
+                      leftSection={<IconCheck size={14} />}
+                      onClick={() => void onSave()}
                     >
-                      <Text size="xs" c="dimmed">
-                        {t("backups.autoCfgEnvNote")}
-                      </Text>
-                    </Alert>
-                  </Stack>
-                ) : null
-              }
-            </AsyncBoundary>
-          </Box>
-        </Collapse>
-      </Stack>
+                      {t("backups.autoCfgSave")}
+                    </Button>
+                  </Group>
+
+                  <Alert
+                    color="gray"
+                    variant="light"
+                    icon={
+                      <ThemeIcon size="sm" variant="light" color="gray">
+                        <IconAlertTriangle size={12} />
+                      </ThemeIcon>
+                    }
+                  >
+                    <Text size="xs" c="dimmed">
+                      {t("backups.autoCfgEnvNote")}
+                    </Text>
+                  </Alert>
+                </Stack>
+              ) : null
+            }
+          </AsyncBoundary>
+        </Box>
+      </Collapse>
     </OpsSection>
   );
 }
