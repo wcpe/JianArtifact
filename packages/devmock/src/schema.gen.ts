@@ -3020,7 +3020,11 @@ export interface components {
             /** @description 该包的历史报告总数（用于分页展示）。 */
             total: number;
         };
-        /** @description 发起一次恢复演练。请求体可整体省略，省略时按 shallow 执行。 */
+        /**
+         * @description 发起一次恢复演练。请求体可整体省略，省略时按 **deep（深校验）** 执行：
+         *     浅校验只验归档结构，对「内容被静默篡改但 tar/gzip 结构完好」的包会判为通过，
+         *     因此默认取更严格的一档。需要快速预检时可显式传 `shallow`。
+         */
         DrillBackupRequest: {
             level?: components["schemas"]["BackupVerificationLevel"];
         };
