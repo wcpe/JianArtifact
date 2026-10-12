@@ -121,6 +121,36 @@ func TestBackupDrillDeepSucceeds(t *testing.T) {
 	}
 }
 
+// TestBackupDrillDefaultsToDeep 守护默认档位：不传 Level 时必须走深校验。
+//
+// 这条断言的不是"某个字段等于某个值"，而是**漏判风险**：浅校验只验归档结构，
+// 对「内容被静默篡改但 tar/gzip 结构完好」的包会判为通过。演练的目的是回答
+// "这份包真的能恢复吗"，默认落到浅校验就等于默认允许漏判，因此默认必须是 deep。
+// 没有这条用例时，改回 shallow 不会有任何测试转红。
+func TestBackupDrillDefaultsToDeep(t *testing.T) {
+	t.Parallel()
+	f, drillSvc := newDrillFixture(t)
+	f.seedAssets(t, "payload")
+
+	rec, err := f.svc.Generate(t.Context(), CreateBackupOptions{Mode: archive.ModeHot})
+	if err != nil {
+		t.Fatalf("Generate：%v", err)
+	}
+
+	// 不传 Level（空值），走默认分支。
+	result, err := drillSvc.Drill(t.Context(), rec.PackageID, DrillBackupOptions{})
+	if err != nil {
+		t.Fatalf("Drill：%v", err)
+	}
+	if result.Level != repository.VerificationLevelDeep {
+		t.Fatalf("默认级别 = %q，期望 deep（浅校验会漏判被静默篡改的内容）", result.Level)
+	}
+	// 落库报告也应记 deep，否则历史里看不出这一份到底验没验内容。
+	if result.Verification.Level != repository.VerificationLevelDeep {
+		t.Fatalf("落库级别 = %q，期望 deep", result.Verification.Level)
+	}
+}
+
 // TestBackupDrillSucceedsOnPackageWithoutBlobs 覆盖"空实例的包"（零 blob）。
 //
 // 这是实机冒烟发现的缺陷回归：Reader.Extract 只为真实存在的 blob 条目建目录，

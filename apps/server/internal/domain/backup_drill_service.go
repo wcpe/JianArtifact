@@ -113,7 +113,10 @@ func (s *BackupDrillService) StagingRoot() string {
 func (s *BackupDrillService) Drill(ctx context.Context, packageID string, opts DrillBackupOptions) (DrillResult, error) {
 	level := opts.Level
 	if level == "" {
-		level = repository.VerificationLevelShallow
+		// 默认深校验：浅校验只验结构，对「内容被静默篡改但 tar/gzip 结构完好」的包
+		// 会判为通过。演练的回答是"这份包真的能恢复吗"，漏判一次就等于白演练，
+		// 因此默认取更严格的一档。代价（耗时与包体积同阶）对低频演练可以接受。
+		level = repository.VerificationLevelDeep
 	}
 	if level != repository.VerificationLevelShallow && level != repository.VerificationLevelDeep {
 		return DrillResult{}, fmt.Errorf("%w：%q（支持 shallow / deep）", ErrDrillLevelUnknown, opts.Level)

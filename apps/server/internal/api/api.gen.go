@@ -2419,7 +2419,9 @@ type DownloadTrendPoint struct {
 	To            time.Time `json:"to"`
 }
 
-// DrillBackupRequest 发起一次恢复演练。请求体可整体省略，省略时按 shallow 执行。
+// DrillBackupRequest 发起一次恢复演练。请求体可整体省略，省略时按 **deep（深校验）** 执行：
+// 浅校验只验归档结构，对「内容被静默篡改但 tar/gzip 结构完好」的包会判为通过，
+// 因此默认取更严格的一档。需要快速预检时可显式传 `shallow`。
 type DrillBackupRequest struct {
 	// Level 演练强度：shallow 只校验结构摘要与解包可用性；deep 额外逐 blob 比对内容摘要
 	// （全量读取，耗时与包体积同阶）。

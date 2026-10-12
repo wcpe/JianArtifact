@@ -126,11 +126,12 @@ describe("备份与搬迁", () => {
     expect(within(dialog).getByText(/内容被静默篡改但文件结构完好/)).toBeTruthy();
     // 深校验标注"建议"，把更严格的一档明确推荐给用户。
     expect(within(dialog).getByText("建议")).toBeTruthy();
-    // 默认仍是浅校验（快）：这是既有行为，不因加提示而改变默认档位。
-    // 用完整标题精确匹配：说明文本里也含"浅校验"三字，宽松匹配会命中多个 radio。
+    // 默认档位是深校验：浅校验对「内容被静默篡改但结构完好」的包会漏判，
+    // 而演练的目的就是回答"这份包真的能恢复吗"，因此默认取更严格的一档。
+    // 用完整标题精确匹配：说明文本里也含"深校验"三字，宽松匹配会命中多个 radio。
     // 本仓库未引入 jest-dom 的 toBeChecked，故直接断言 Mantine 的选中属性。
-    const shallowCard = within(dialog).getByRole("radio", { name: /^浅校验（只看结构，快）/ });
-    expect(shallowCard.getAttribute("aria-checked")).toBe("true");
+    const deepCard = within(dialog).getByRole("radio", { name: /^深校验（逐字节核对内容，慢）/ });
+    expect(deepCard.getAttribute("aria-checked")).toBe("true");
 
     // 预置的失败报告被如实渲染：总判定「未通过」+ 失败检查项与原因都在。
     await waitFor(

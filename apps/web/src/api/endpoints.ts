@@ -788,7 +788,7 @@ export function verifyBackup(packageId: string, deep = false): Promise<BackupVer
  */
 export function drillBackup(
   packageId: string,
-  level: BackupVerificationLevel = "shallow",
+  level: BackupVerificationLevel = "deep",
 ): Promise<BackupDrillAccepted> {
   return request<BackupDrillAccepted>(`/backups/${encodeURIComponent(packageId)}/drill`, {
     method: "POST",

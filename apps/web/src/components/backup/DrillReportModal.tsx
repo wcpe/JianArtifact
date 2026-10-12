@@ -48,7 +48,10 @@ export interface DrillReportModalProps {
 
 export function DrillReportModal({ packageId, onClose }: DrillReportModalProps) {
   const { t } = useTranslation();
-  const [level, setLevel] = useState<BackupVerificationLevel>("shallow");
+  // 默认深校验：浅校验对「内容被静默篡改但结构完好」的包会判为通过（见下方选项说明），
+  // 而演练的目的恰恰是回答"这份包真的能恢复吗"——漏判一次就等于白演练。
+  // 代价是耗时与包体积同阶，但演练本就是低频动作，取严格是更安全的默认。
+  const [level, setLevel] = useState<BackupVerificationLevel>("deep");
   const [starting, setStarting] = useState(false);
   /** 本次演练的受理时刻：用来判断"哪条报告才算这次的结果"。 */
   const [acceptedAt, setAcceptedAt] = useState<string | null>(null);

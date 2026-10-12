@@ -173,11 +173,12 @@ func backupVerify(svc *appServices, args []string) error {
 func backupDrill(svc *appServices, args []string) error {
 	packageID := positionalArg(args)
 	if packageID == "" {
-		return fmt.Errorf("用法：jianartifact backup drill <包标识> [--level shallow|deep]")
+		return fmt.Errorf("用法：jianartifact backup drill <包标识> [--level shallow|deep]（默认 deep）")
 	}
 	level := optionalOption(args, "--level")
 	if level == "" {
-		level = repository.VerificationLevelShallow
+		// 与服务端 / API 默认一致：默认深校验。浅校验对"内容被篡改但结构完好"的包会漏判。
+		level = repository.VerificationLevelDeep
 	}
 	if level != repository.VerificationLevelShallow && level != repository.VerificationLevelDeep {
 		return fmt.Errorf("--level 只能是 shallow 或 deep，实际 %q", level)

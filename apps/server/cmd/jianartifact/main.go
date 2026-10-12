@@ -112,7 +112,7 @@ func usage(w io.Writer) {
                      校验备份包完整性 [--deep]（deep 逐 blob 比对内容摘要）
   backup drill <包标识>
                      恢复演练：隔离目录内真解包 + SQLite 一致性校验，
-                     产出报告并落库 [--level shallow|deep]（默认 shallow）
+                     产出报告并落库 [--level shallow|deep]（默认 deep）
                      只读路径，不产生 restore.pending；未通过时以非零退出
   backup link <包标识>
                      签发带时效的下载链接，供新机器直接拉取
