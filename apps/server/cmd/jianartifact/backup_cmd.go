@@ -319,7 +319,63 @@ func backupImport(svc *appServices, cfg *config.Config, args []string) error {
 	fmt.Fprintln(os.Stderr, "提示：需重启服务后生效（下次启动自动完成数据库原子替换，并保留 pre-restore 回滚备份）。")
 	fmt.Fprintf(os.Stderr, "回滚备份将落于 %s/pre-restore-<UTC时间戳>/%s\n",
 		cfg.DataDir, filepath.Base(cfg.DBPath))
+	warnIfMarkerOwnerDiffers(res.PendingPath)
 	return nil
+}
+
+// warnIfMarkerOwnerDiffers 在导入成功后校验待生效标记的属主，必要时给出明确提示。
+//
+// 为什么要在这里查（实测事故）：用 sudo 跑 CLI 导入时，标记与暂存目录的属主成了 root，
+// 而服务以普通用户运行、读不了它。旧实现会因此**起不来**（启动失败 → systemd 重启 →
+// 仍读不了 → 再失败，现场只看到全站 502），重启计数在测试站上冲到过 86。
+// 服务侧现已改为"读不了就跳过并告警、不阻止启动"，但**更该做的是在问题产生的当场就点出来**：
+// 此时人还在终端前，改属主只是顺手一条命令；等到下次重启才发现，代价是整站停机。
+//
+// 判据是"标记属主 vs **数据目录属主**"，不是"标记属主 vs 当前进程"。
+// 后者在 sudo 下会失效：此时 euid=0 与文件 uid=0 相等，被误判为"同属主"而静默放过——
+// 这正是第一版实现漏报的原因（实测踩到）。数据目录的属主才是**服务身份**的可靠代理：
+// 服务要能读写自己的数据目录，两者属主必然一致；而 sudo 建出的标记属主是 root。
+func warnIfMarkerOwnerDiffers(markerPath string) {
+	if msg := markerOwnerMismatchHint(markerPath); msg != "" {
+		fmt.Fprint(os.Stderr, msg)
+	}
+}
+
+// markerOwnerMismatchHint 返回"标记属主与服务身份不一致"的告警文案；一致或无法判定时返回空串。
+//
+// 抽成独立纯函数是为了**可被直接测试**两个分支：走真实文件需要构造"属主不同"的状态，
+// 而那需要 root 或第二个用户，在开发机（Windows + 管理员）上根本造不出来——
+// 一个只能在特定环境跑的守卫等于没有守卫。第一版实现正是因为没有这条测试，
+// 把一个在 sudo 下永远不触发的判据（euid 比文件 uid）当成了正确实现，实测漏报。
+func markerOwnerMismatchHint(markerPath string) string {
+	info, err := os.Stat(markerPath)
+	if err != nil {
+		return ""
+	}
+	markerUID, ok := fileOwnerUID(info)
+	if !ok {
+		return "" // 平台不支持（Windows）或取不到：不猜、不打扰
+	}
+	// 数据目录（标记所在目录）的属主 = 服务运行身份。
+	dirInfo, err := os.Stat(filepath.Dir(markerPath))
+	if err != nil {
+		return ""
+	}
+	dirUID, ok := fileOwnerUID(dirInfo)
+	if !ok {
+		return ""
+	}
+	if markerUID == dirUID {
+		return "" // 与数据目录同属主：服务读得到，正常
+	}
+	return fmt.Sprintf(
+		"\n⚠ 待生效标记的属主与数据目录不同，服务可能读不了它：\n"+
+			"    %s：文件 uid=%d，数据目录 uid=%d\n"+
+			"    若服务以数据目录的属主身份运行（常见），下次启动将无法应用这份恢复。\n"+
+			"    这通常是因为用 sudo 跑了 CLI；请在重启前把属主改回数据目录的属主：\n"+
+			"        sudo chown -R --reference=%s %s %s\n",
+		markerPath, markerUID, dirUID,
+		filepath.Dir(markerPath), filepath.Dir(markerPath), markerPath)
 }
 
 // isInteractiveTerminal 报告标准输入是否为交互式终端（TTY）。

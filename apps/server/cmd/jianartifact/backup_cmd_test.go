@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -212,4 +213,31 @@ func extractPackageID(t *testing.T, out string) string {
 	}
 	t.Fatalf("未能从输出中解析包标识：%s", out)
 	return ""
+}
+
+// TestMarkerOwnerMismatchHint 覆盖"标记属主 vs 数据目录属主"的判定。
+//
+// 这条守卫来自一次**实测漏报**：第一版判据比的是"标记属主 vs 当前进程 euid"，
+// 而在 sudo 下 euid=0 与 root 属主的文件相等，于是被当成"同属主"静默放过，
+// 恰恰漏掉了它唯一要覆盖的场景（用 sudo 跑 CLI）。现在比的是数据目录属主——
+// 那才是**服务身份**的可靠代理（服务必须能读写自己的数据目录）。
+//
+// 在开发机上造不出"两个不同属主"的文件（需要 root 或第二个用户），
+// 故这里直接测判定函数：同属主必须静默、不存在的路径必须静默、Windows 上不判定也不误报。
+func TestMarkerOwnerMismatchHint(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "restore.pending")
+	if err := os.WriteFile(marker, []byte("{}"), 0o600); err != nil {
+		t.Fatalf("写入标记：%v", err)
+	}
+
+	// 同属主（同一进程创建的目录与文件）→ 静默，不打扰用户。
+	if got := markerOwnerMismatchHint(marker); got != "" {
+		t.Fatalf("同属主不应提示，实际：%s", got)
+	}
+	// 路径不存在 → 静默（导入之外的场景不该因此报错）。
+	if got := markerOwnerMismatchHint(filepath.Join(dir, "nonexistent")); got != "" {
+		t.Fatalf("不存在的路径不应提示，实际：%s", got)
+	}
 }

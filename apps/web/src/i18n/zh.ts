@@ -1116,14 +1116,61 @@ export const zh = {
     tabExternal: "外部导入",
     tabBackup: "备份与搬迁",
     refresh: "刷新",
+    // —— 任务台信息架构（备份页重做）——
+    // 页面按「先问你现在要做什么」组织：动作 → 关键事实 → 统一事件表。
+    startTitle: "立即备份",
+    startHint: "冻结写入后打一份完整的快照包，可下载到新机器恢复。",
+    startHintFrozen: "写入已冻结，现在打出的包在时间点上是一致的。",
+    // 动作区从「两张常驻卡」收成标题行右侧的一排按钮后，原来的卡内说明文字
+    // 改挂在「说明」气泡上（OpsHelpButton 的既有定位：不占常驻高度，需要时才展开）。
+    // 只新增气泡标题，说明正文复用原有键——另写一套会让旧键变零引用、等于删掉说明。
+    actionBarHelpTitle: "备份与搬迁怎么用",
+    // 待重启生效（FR-40 追加六）：导入成功后只写 restore.pending，真正的替换在下次启动完成；
+    // 在那之前任何导入都会被 409 拒绝。这个状态必须能解释清楚，否则用户只看到"一直被拒"。
+    pendingRestartBadge: "有一份恢复待重启生效",
+    pendingRestartTitle: "需要重启服务完成替换",
+    pendingRestartBody:
+      "已有一份备份包完成校验并暂存，**需重启服务后才会替换本机数据**。在那之前，再发起导入或上传都会被拒绝（避免叠加第二次恢复）。",
+    pendingRestartPackage: "待生效的包",
+    pendingRestartStagedAt: "暂存时间",
+    pendingRestartCommandLabel: "重启命令",
+    pendingRestartAfterRestart:
+      "重启后启动日志会打印已应用的恢复，并保留 pre-restore-<时间戳>/ 作为回滚退路。",
+    moveTitle: "搬迁到新机器",
+    moveHint: "把已有备份包传到目标实例，或从 URL 拉取——三条通道都会替换本机数据，需重启生效。",
+    factLastSuccess: "最近成功备份",
+    factNextAuto: "下次自动备份",
+    factLastVerify: "最近校验",
+    factUsage: "占用",
+    factAutoPolicy: "保留策略",
+    factVerifyPassed: "通过",
+    factVerifyFailed: "未通过",
+    factVerifyNone: "尚未校验",
+    factAutoOff: "已关闭",
+    factNextPending: "等待首次执行",
+    // 「已过点、等心跳来跑」与「确实还没有自动包」是两件不同的事，不能共用一句话：
+    // 前者实例上已有自动包，说成"等待首次执行"是假话（实测踩到）。
+    factNextDue: "即将执行",
+    factUsageValue: "{{size}} · {{count}} 个包",
+    factNoData: "—",
+    // —— FR-40 追加四：备份包与导入记录聚合进同一张表 ——
+    // 页面只剩三段：动作 → 关键事实 → 统一事件表；「导入与传输」弹窗与待处理条一并删除。
+    eventsSection: "备份与导入事件",
+    eventsEmpty: "暂无备份与导入记录",
+    eventsEmptyHint: "生成一个备份包，或从 URL 导入 / 上传一个包，事件会按时间出现在这里。",
+    eventType_package: "本机包",
+    eventType_import: "导入记录",
+    colIdentity: "标识",
+    colError: "错误",
+    importInlineCollapse: "收起",
+    importInlineBusyHint: "上传进行中，无法收起",
+    autoCfgSettingsButton: "自动备份设置",
+    drillPackageMissing:
+      "该备份包可能已被保留策略删除（自动备份包超出份数 / 天数上限后会被淘汰）。刷新列表即可看到最新状态。",
     create: "生成备份包",
-    empty: "暂无备份包",
-    emptyHint: "生成一个备份包，即可把它搬到新机器上恢复。",
-    colPackage: "包标识",
     colMode: "方式",
     colStatus: "状态",
     colSize: "大小",
-    colCounts: "包含",
     colCreated: "创建时间",
     colActions: "操作",
     mode_hot: "热备份",
@@ -1166,9 +1213,100 @@ export const zh = {
     copyFailed: "复制失败",
     verify: "校验",
     verifyDeep: "深度校验",
+    // 三个动作的分工必须能就地读到：菜单项只有几个字，用户看不出"快的只验结构、
+    // 慢的逐字节核对、演练还多一步真解包"。这些 title 是悬停即知的唯一入口。
+    verifyHint: "只读归档本身，回答「这个文件完整吗」。快，不碰本机数据。",
+    verifyDeepHint:
+      "在浅校验之上逐 blob 比对内容摘要，回答「内容有没有被篡改或位腐坏」。慢，耗时与包体积同阶。",
+    drillOpenHint:
+      "在隔离临时目录里真解包、真恢复一次，回答「这份包真的能恢复吗」。只读，不动本机数据。",
+    restoreHint:
+      "用这份包替换本机数据（含校验与暂存）。需重启服务后才生效，期间可回滚到 pre-restore 备份。",
+    restoreFromPackage: "用这个包恢复",
+    // 陈旧行：列表里那一行指向的包已不存在（自动备份每 30 秒生成并淘汰，而这些都是终态变化，列表不会自己刷新）。
+    // 裸报"备份包不存在"会让用户以为功能坏了；这里说清是"页面数据旧了"并已刷新。
+    staleRow:
+      "该备份包已不存在（可能已被保留策略淘汰），列表已刷新。请从最新列表里重试「{{action}}」。",
+    actionGetLink: "获取链接",
+    actionVerify: "校验",
+    actionDelete: "删除",
+    // 陈旧行处置的第四个动作：从列表行直接恢复。弹窗开着时包也可能已被淘汰（实测如此）。
+    actionRestore: "用这个包恢复",
+    restoreConfirmTitle: "用这份包恢复本机数据",
+    restoreConfirmBody:
+      "将以「{{id}}」替换本机现有数据（用户、仓库、制品、设置等）。执行前会先校验包并暂存，**需重启服务后才真正替换**；届时会保留一份 pre-restore 备份作为回滚退路。",
+    restoreOverwriteLabel: "目标实例非空时允许覆盖",
+    restoreOverwriteHint:
+      "本机已有数据时必需。不勾选而本机非空会被拒绝——这是防止误覆盖的保护，不是缺陷。",
+    restoreStart: "开始恢复",
+    restoreAccepted: "已受理，正在校验与暂存；完成后需重启服务生效",
+    // —— 恢复进度弹窗（追加七）——
+    // 受理后原先只弹一个 toast 就没了下文，用户不知道跑到哪、失败没有。
+    // 四条恢复通道（URL / 上传 / 本机包 / CLI）共用这一个弹窗，差别只在 origin。
+    restoreProgressTitle: "恢复进度",
+    // 阶段说明。逐阶段写清"正在做什么"，而不是只说"处理中"——
+    // 恢复是不可逆动作，用户需要据此判断现在能不能走开。
+    restoreStage_queued: "已排队，等待开始。",
+    restoreStage_fetching: "正在从来源拉取备份包。",
+    restoreStage_staging: "正在校验包并把数据暂存到待生效位置（此步最慢）。",
+    restoreStage_pending_restart: "校验与暂存已完成，等待重启服务生效。",
+    restoreStage_done: "已生效：本机数据已被这份包替换。",
+    restoreStage_failed: "恢复未完成，详见下方原因。",
+    restoreProgressBytes: "已拉取 {{fetched}} / {{total}}（{{percent}}%）",
+    // 无字节数可算的阶段（暂存 / 深校验）刻意不给百分比——编一个数字比不显示更误导。
+    restoreProgressIndeterminate: "处理中，共 {{blobs}} 个对象；此阶段耗时与包体积同阶。",
+    restoreReadyTitle: "可以重启了",
+    restoreReadyBody: "重启后本机数据会被替换。重启期间服务会短暂中断，页面需要手动刷新。",
+    // 恢复生效会把整个数据库替换成包里的快照，这条导入记录随之消失——
+    // 所以"读不到记录"在这里通常意味着**恢复已经成功**，界面不能报成读取失败。
+    restoreAppliedTitle: "恢复已生效",
+    restoreAppliedBody:
+      "本机数据已被这份包替换，导入记录随之消失（它写在被替换掉的那份数据库里）。列表已刷新。",
+    restoreAppliedClose: "知道了",
+    restoreFreezeAdvice:
+      "建议先冻结写入：重启会让进行中的写入无处落地，冻结可避免搬迁期间新产生的数据丢失。",
+    restoreFrozenNote: "已冻结写入，重启后记得解冻（否则实例保持只读）。",
+    // —— 一键重启（追加七）——
+    restartButton: "立即重启服务",
+    restartConfirmTitle: "立即重启服务",
+    restartConfirmBody:
+      "服务将在此提示后约 2 秒开始重启（进程自替换，无需额外权限），连接会中断数秒。确认现在重启？",
+    restartConfirm: "确认重启",
+    restartAccepted: "已受理重启，服务即将中断，请稍候刷新页面。",
+    restartWaiting: "等待服务回来…",
+    restartWaitingHint: "重启期间页面与服务器断开属正常现象，恢复后会自动刷新数据。",
+    restartUnsupportedTitle: "无法自动重启",
+    restartUnsupportedBody: "当前部署形态不支持自动重启（{{reason}}），请手动执行：",
+    restartUnsupportedManual: "请手动执行以下命令：",
+    restartDone: "服务已回来，页面数据已刷新。",
+    restartTimeout: "等待服务恢复超时，请手动刷新页面确认。",
     moreActions: "更多操作",
     verifyOk: "校验通过",
     verifyFailed: "校验未通过",
+    // —— 校验弹窗（追加七）——
+    // 原先「校验」只是 await 一下再弹 toast：用户看不到在查什么、查到哪、结论在哪。
+    // 注意后端 verify 是**同步**接口（一次返回结论），没有中间进度可拉——
+    // 所以这里如实列出"将要执行的检查项"并在结束时就地给出结论，不画假百分比。
+    verifyModalTitle: "校验备份包",
+    verifyModalTitleDeep: "深度校验备份包",
+    verifyRunning: "正在校验，请稍候…",
+    verifyRunningDeep: "正在逐字节核对内容，耗时与包体积同阶，请耐心等待…",
+    verifyTarget: "目标包",
+    // 固定检查序列（与后端 archive.Reader.Verify 的真实步骤一一对应，不得凭空增删）。
+    verifyChecksTitle: "将执行以下检查",
+    verifyCheckManifest: "清单一致性：manifest.json 与包头记录的包标识一致",
+    verifyCheckDb: "数据库快照：db 的体积与 SHA256 摘要均与清单相符",
+    verifyCheckIndex: "对象索引：blobs.index 摘要相符，条目数与总字节与清单一致",
+    verifyCheckComplete: "归档完整性：manifest / db / blobs.index 三者齐备，无缺件多余件",
+    verifyCheckBlobsDeep: "逐对象内容摘要：把每个 blob 重新算一遍摘要与清单比对",
+    // 浅校验的诚实说明：通过 ≠ 能恢复。不写这句，"校验通过"会被读成"这份包没问题"。
+    verifyShallowNotContent:
+      "注意：浅校验不核对对象内容。它通过只说明包的结构与索引完整，不能证明内容未被篡改——需要后者请用深度校验。",
+    verifyResultOk: "校验通过",
+    verifyResultFailed: "校验未通过",
+    verifyResultSummary: "共 {{blobs}} 个对象、{{assets}} 份制品",
+    verifyElapsed: "耗时 {{seconds}} 秒",
+    verifyClose: "关闭",
     deleteTitle: "删除备份包",
     deleteConfirm: "删除备份包 {{id}}？该操作不可恢复。",
     delete: "删除",
@@ -1197,6 +1335,11 @@ export const zh = {
     drillStart: "发起演练",
     drillStarted: "已受理演练请求，报告生成后自动出现",
     drillRunning: "演练进行中…",
+    // 轮询超时：报告永远不会到时必须如实说明，不能无限转圈（实测收到过"一直卡在演练进行中"）。
+    drillTimedOut: "未在预期时间内收到报告，可点「刷新」查看；若包已被保留策略淘汰，该行会消失。",
+    // 演练途中包被保留策略淘汰：必须点明"这次演练被中断了"，否则用户以为是自己点错。
+    drillInterrupted:
+      "本次演练已被中断：包在演练完成前被保留策略淘汰（自动备份包超出份数 / 天数上限后会被清理）。",
     drillHistory: "历史报告",
     drillNoReports: "该包还没有演练报告。发起一次演练即可留下第一份。",
     drillPassed: "通过",
@@ -1208,9 +1351,6 @@ export const zh = {
     // —— FR-40：自动备份与保留策略（配置卡默认折叠，展开后可改，保存即生效）——
     autoCfgTitle: "自动备份与保留策略",
     autoCfgLiveNote: "保存即生效，无需重启",
-    autoCfgEdit: "配置",
-    autoCfgCollapse: "收起",
-    autoCfgSummaryLoading: "读取配置中…",
     autoCfgSummaryOff: "自动备份已关闭",
     autoCfgSummaryInterval: "每 {{n}} 秒备份一次",
     autoCfgSummaryKeep: "保留最近 {{n}} 份",
@@ -1232,7 +1372,6 @@ export const zh = {
     autoCfgJobsHint:
       "「维护作业」页始终能看到 backup-auto（作业常驻以便配置改动即时生效）；间隔为 0 时它每轮空转跳过，不生成备份。",
     // —— FR-134：写入冻结窗口 ——
-    freezeCardTitle: "写入冻结窗口",
     freezeStatusWritable: "可写",
     freezeStatusFrozen: "已冻结",
     freezeUntilLabel: "自动解冻时间",
@@ -1255,9 +1394,9 @@ export const zh = {
     freezeUnfreezeLabel: "解冻",
     freezeUnfrozen: "已解冻写入",
     // —— FR-137：从 URL 导入备份包 ——
-    importCardTitle: "从 URL 导入",
-    importButton: "从 URL 导入",
-    importModalTitle: "从 URL 导入备份包",
+    // 措辞含"恢复"：这三条通道的实际作用就是恢复（会替换本机数据），而"导入/上传"在
+    // 用户心里只是"把东西弄进来"。实测反馈"只能备份无法恢复"正是被这个措辞误导的。
+    importButton: "从 URL 恢复",
     importFieldUrl: "备份包地址",
     importFieldUrlPlaceholder: "https://example.com/backups/bk.tar.gz",
     importFieldUrlRequired: "请填写合法的 http/https 地址",
@@ -1268,14 +1407,7 @@ export const zh = {
     importSha256: "预期 SHA-256",
     importSha256Placeholder: "可选，拉取完成后核对归档摘要",
     importSubmit: "开始导入",
-    importStarted: "已受理导入请求，进度见下方列表",
-    importColId: "记录标识",
-    importColSource: "来源",
-    importColStatus: "状态",
-    importColProgress: "进度",
-    importColPackage: "包标识",
-    importColCreated: "创建时间",
-    importColError: "错误",
+    importStarted: "已受理导入请求，进度见下方事件表",
     import_status_queued: "排队中",
     import_status_fetching: "拉取中",
     import_status_staging: "暂存中",
@@ -1285,6 +1417,8 @@ export const zh = {
     import_origin_url: "URL",
     import_origin_upload: "上传",
     import_origin_cli: "CLI",
+    // 本机包恢复（POST /backups/{id}/restore）：与另外三条"包从外部来"的通道区分开。
+    import_origin_local: "本机包",
     importPendingRestartHint: "需重启服务后生效",
     backupImportError: {
       fetch_failed: "拉取备份包失败：无法从来源地址下载。",
@@ -1297,10 +1431,9 @@ export const zh = {
       internal: "服务内部错误，请稍后重试或查看日志。",
     },
     // —— FR-137：分片上传备份包（第三通道）——
-    uploadCardTitle: "分片上传",
-    uploadButton: "上传本机文件",
+    uploadButton: "上传包恢复",
     uploadChooseFile: "选择文件",
-    uploadStarted: "已开始上传，进度见下方",
+    uploadIdleHint: "选择要上传的备份包（.tar.gz），上传完成后自动提交导入。",
     uploadProgress: "上传中 {{percent}}%",
     uploadBytes: "{{done}} / {{total}}",
     uploadResumableTitle: "发现未完成的上传",

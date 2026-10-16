@@ -1,8 +1,11 @@
-// 分片上传卡（FR-137 第三通道）：浏览器内传 GB 级备份包。
+// 分片上传面板（FR-137 第三通道）：浏览器内传 GB 级备份包。
 // 流程：选文件 → init（取服务端 chunkSize）→ 按 File.slice(chunkSize) 逐片 PUT → 进度条 → complete 触发导入。
 // 支持取消（abort，二次确认）与续传（uploadId 持久化到 localStorage；重开页面时 GET 拉回 uploadedChunks，只补缺失片）。
-// 与从 URL 导入卡平级：本卡只负责上传进度，complete 后派发全局刷新让导入记录列表呈现 pending_restart。
-import { Alert, Box, Button, Group, Progress, Stack, Text } from "@mantine/core";
+//
+// 本组件是 body-only：展开容器由 ImportInline 承担，它只负责上传本身。
+// 覆盖 / 深校验两个开关也由它自己持有——它们是在 complete 这一刻提交的，摆在上传按钮旁边
+// 才不会被误以为属于别的通道。
+import { Alert, Box, Button, Checkbox, Group, Progress, Stack, Text } from "@mantine/core";
 import { IconArrowRight, IconPlayerStop, IconUpload } from "@tabler/icons-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -18,8 +21,7 @@ import type { BackupUploadSession } from "../../api/types";
 import { ApiError } from "../../api/client";
 import { confirmDanger, notifyError, notifySuccess } from "../../lib/feedback";
 import { formatBytes } from "../../lib/format";
-import { REFRESH_EVENT } from "../../hooks/useAsync";
-import { OpsSection } from "../ops/OpsKit";
+import { dispatchRefresh } from "../../hooks/useAsync";
 
 // 续传持久化的资源语义键：只存会话元数据（uploadId/文件名/体积/chunkSize），不存文件内容（整包太大）。
 const UPLOAD_STORAGE_KEY = "jianartifact.backupUpload";
@@ -56,7 +58,8 @@ function clearPersisted(): void {
   }
 }
 
-type Phase = "idle" | "active" | "resuming" | "finished";
+/** 上传阶段：idle 空闲 / active 新会话上传中 / resuming 续传中 / finished 已完成待关闭回执。 */
+export type UploadPhase = "idle" | "active" | "resuming" | "finished";
 
 /** 已落盘分片对应的字节数（末片可能不满 chunkSize）。 */
 function uploadedBytes(uploadedChunks: number[], chunkSize: number, totalBytes: number): number {
@@ -69,19 +72,40 @@ function uploadedBytes(uploadedChunks: number[], chunkSize: number, totalBytes: 
   return bytes;
 }
 
-export function BackupUploadCard() {
+export function BackupUploadPanel({
+  onBusyChange,
+  onResumableChange,
+}: {
+  /** 上传进行中（active / resuming）：调用方需据此禁止关闭弹窗。 */
+  onBusyChange?: (busy: boolean) => void;
+  /** 存在未完成会话待续传：调用方需据此保证续传入口可见。 */
+  onResumableChange?: (resumable: boolean) => void;
+}) {
   const { t } = useTranslation();
-  const [phase, setPhase] = useState<Phase>("idle");
+  // 覆盖 / 深校验由本组件自持：它们在 complete 那一刻提交，是上传自身的选项。
+  // （不做成受控：上一版把它提到弹窗层再回传，多一层状态同步只为让两个开关"看起来在上传之外"，
+  //  而用户真正需要的是它们紧挨着上传按钮。）
+  const [overwrite, setOverwrite] = useState(false);
+  const [deep, setDeep] = useState(false);
+  const [phase, setPhase] = useState<UploadPhase>("idle");
   const [session, setSession] = useState<BackupUploadSession | null>(null);
   const [uploadedChunks, setUploadedChunks] = useState<number[]>([]);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   // 重开页面时发现的未完成会话（含已落盘分片），用于续传提示。
   const [resumable, setResumable] = useState<PersistedUpload | null>(null);
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  // 隐藏 input 由本组件自持：选文件按钮（空闲时）与续传按钮都在组件内，
+  // 不再需要外部透过 ref 触发——面板已整体进入 Modal，没有"外层按钮"这回事了。
+  const pickRef = useRef<HTMLInputElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   // 取消后 in-flight 的分片请求会因 signal 中止而 reject，标记后忽略该错误（取消已统一处理）。
   const cancelledRef = useRef(false);
+  // 选项经 ref 持有最新值：completeUpload 是 useCallback，若把选项放进依赖会让上传中途
+  // 改变闭包引用；而用户恰恰可能在上传进行中才勾上「覆盖已有数据」。
+  const overwriteRef = useRef(overwrite);
+  overwriteRef.current = overwrite;
+  const deepRef = useRef(deep);
+  deepRef.current = deep;
 
   // 重开页面：若本地留存了未完成会话，拉回会话状态与已落盘分片，只补缺失片。
   useEffect(() => {
@@ -114,13 +138,20 @@ export function BackupUploadCard() {
   const completeUpload = useCallback(
     async (uploadId: string) => {
       try {
-        await completeBackupUpload(uploadId);
+        // 选项必须在 complete 时提交：契约的 CompleteBackupUploadRequest 才带 overwrite / deep，
+        // init 阶段不接受它们。omit 掉 false 值，与 URL 导入通道的写法一致。
+        const accepted = await completeBackupUpload(uploadId, {
+          overwrite: overwriteRef.current || undefined,
+          deep: deepRef.current || undefined,
+        });
         clearPersisted();
         setResumable(null);
         setPhase("finished");
         notifySuccess(t("backups.uploadComplete"));
-        // 导入记录由平级的从 URL 导入卡渲染，派发全局刷新让其立即轮询到 pending_restart。
-        window.dispatchEvent(new CustomEvent(REFRESH_EVENT));
+        // 派发全局刷新：导入记录表与备份列表都在监听该事件，
+        // 让新记录（pending_restart）与随之生成的包立即呈现，无需用户手动刷新。
+        // 带上 importId：页面据此打开恢复进度弹窗，把"已受理"之后的暂存过程也显示出来。
+        dispatchRefresh(accepted.importId);
       } catch (err) {
         handleError(err);
       }
@@ -265,123 +296,146 @@ export function BackupUploadCard() {
       : 0;
   const uploading = phase === "active" || phase === "resuming";
 
+  // 上报回调用 ref 持有最新引用：区块传进来的是内联箭头函数，每次渲染都是新引用，
+  // 若把它放进 effect 依赖，就会「上报 → 父 setState → 父重渲染 → 新回调 → effect 重跑」无限循环。
+  const onBusyChangeRef = useRef(onBusyChange);
+  onBusyChangeRef.current = onBusyChange;
+  const onResumableChangeRef = useRef(onResumableChange);
+  onResumableChangeRef.current = onResumableChange;
+
+  // 上传进行中：弹窗不能被关掉，否则进度条会被藏住。
+  useEffect(() => {
+    onBusyChangeRef.current?.(uploading);
+  }, [uploading]);
+
+  // 存在未完成会话：入口按钮要给出提示，否则续传提示与「继续上传 / 放弃」都无从发现。
+  const resumableFlag = !!resumable;
+  useEffect(() => {
+    onResumableChangeRef.current?.(resumableFlag);
+  }, [resumableFlag]);
+
   return (
-    <OpsSection
-      title={t("backups.uploadCardTitle")}
-      style={{
-        flex: 1,
-        minHeight: 0,
-        display: "flex",
-        flexDirection: "column",
-        overflow: "hidden",
-      }}
-      bodyStyle={{ flex: 1, minHeight: 0, overflow: "auto" }}
-      bodyPadding={0}
-      actions={
-        <Button
-          size="xs"
-          leftSection={<IconUpload size={14} />}
-          onClick={() => fileInputRef.current?.click()}
-          disabled={uploading || phase === "finished"}
+    // 弹窗（Modal.Body）已自带内边距，这里不再叠加，避免双重留白。
+    <Box>
+      <input
+        ref={pickRef}
+        type="file"
+        data-testid="backup-upload-input"
+        style={{ display: "none" }}
+        onChange={onInputChange}
+      />
+
+      {/* 重开页面发现未完成会话：提示续传（只补缺失片）或放弃。 */}
+      {resumable && phase === "idle" ? (
+        <Alert
+          color="blue"
+          title={t("backups.uploadResumableTitle")}
+          mb="sm"
+          data-testid="upload-resume-callout"
         >
-          {t("backups.uploadButton")}
-        </Button>
-      }
-    >
-      <Box p="md">
-        <input
-          ref={fileInputRef}
-          type="file"
-          data-testid="backup-upload-input"
-          style={{ display: "none" }}
-          onChange={onInputChange}
-        />
-
-        {/* 重开页面发现未完成会话：提示续传（只补缺失片）或放弃。 */}
-        {resumable && phase === "idle" ? (
-          <Alert
-            color="blue"
-            title={t("backups.uploadResumableTitle")}
-            mb="sm"
-            data-testid="upload-resume-callout"
-          >
-            <Stack gap="xs">
-              <Text size="sm">
-                {t("backups.uploadResumableHint", { fileName: resumable.fileName })}
-              </Text>
-              <Group gap="xs">
-                <Button
-                  size="xs"
-                  onClick={() => fileInputRef.current?.click()}
-                  leftSection={<IconArrowRight size={14} />}
-                >
-                  {t("backups.uploadResume")}
-                </Button>
-                <Button
-                  size="xs"
-                  variant="default"
-                  color="red"
-                  onClick={onDiscard}
-                  leftSection={<IconPlayerStop size={14} />}
-                >
-                  {t("backups.uploadDiscard")}
-                </Button>
-              </Group>
-            </Stack>
-          </Alert>
-        ) : null}
-
-        {uploading ? (
           <Stack gap="xs">
-            <Group justify="space-between">
-              <Text size="sm" fw={500} data-testid="upload-percent">
-                {t("backups.uploadProgress", { percent })}
-              </Text>
-              <Text size="xs" c="dimmed">
-                {t("backups.uploadBytes", {
-                  done: formatBytes(done),
-                  total: formatBytes(session?.totalBytes ?? 0),
-                })}
-              </Text>
-            </Group>
-            <Progress value={percent} size="md" data-testid="upload-progress" />
-            <Group justify="flex-end">
-              <Button size="xs" variant="default" color="red" onClick={onCancel}>
-                {t("backups.uploadCancel")}
+            <Text size="sm">
+              {t("backups.uploadResumableHint", { fileName: resumable.fileName })}
+            </Text>
+            <Group gap="xs">
+              <Button
+                size="xs"
+                onClick={() => pickRef.current?.click()}
+                leftSection={<IconArrowRight size={14} />}
+              >
+                {t("backups.uploadResume")}
+              </Button>
+              <Button
+                size="xs"
+                variant="default"
+                color="red"
+                onClick={onDiscard}
+                leftSection={<IconPlayerStop size={14} />}
+              >
+                {t("backups.uploadDiscard")}
               </Button>
             </Group>
           </Stack>
-        ) : null}
+        </Alert>
+      ) : null}
 
-        {phase === "finished" && session ? (
-          <Alert color="green" title={t("backups.uploadComplete")} data-testid="upload-finished">
-            <Group justify="space-between">
-              <Text size="sm" c="orange">
-                {t("backups.uploadCompleteHint")}
-              </Text>
-              <Button size="xs" variant="default" onClick={onFinishClose}>
-                {t("common.close")}
-              </Button>
-            </Group>
-          </Alert>
-        ) : null}
+      {uploading ? (
+        <Stack gap="xs">
+          <Group justify="space-between">
+            <Text size="sm" fw={500} data-testid="upload-percent">
+              {t("backups.uploadProgress", { percent })}
+            </Text>
+            <Text size="xs" c="dimmed">
+              {t("backups.uploadBytes", {
+                done: formatBytes(done),
+                total: formatBytes(session?.totalBytes ?? 0),
+              })}
+            </Text>
+          </Group>
+          <Progress value={percent} size="md" data-testid="upload-progress" />
+          <Group justify="flex-end">
+            <Button size="xs" variant="default" color="red" onClick={onCancel}>
+              {t("backups.uploadCancel")}
+            </Button>
+          </Group>
+        </Stack>
+      ) : null}
 
-        {errorMsg ? (
-          <Alert
-            color="red"
-            title={t("backups.uploadMissingChunkTitle")}
-            data-testid="upload-error"
-          >
-            <Text size="sm">{errorMsg}</Text>
-          </Alert>
-        ) : null}
+      {phase === "finished" && session ? (
+        <Alert color="green" title={t("backups.uploadComplete")} data-testid="upload-finished">
+          <Group justify="space-between">
+            <Text size="sm" c="orange">
+              {t("backups.uploadCompleteHint")}
+            </Text>
+            <Button size="xs" variant="default" onClick={onFinishClose}>
+              {t("common.close")}
+            </Button>
+          </Group>
+        </Alert>
+      ) : null}
 
-        {phase === "idle" && !resumable && !errorMsg ? (
+      {errorMsg ? (
+        <Alert color="red" title={t("backups.uploadMissingChunkTitle")} data-testid="upload-error">
+          <Text size="sm">{errorMsg}</Text>
+        </Alert>
+      ) : null}
+
+      {/* idle（尚未选文件）时给引导文案**加一个选文件按钮**：面板在弹窗里，
+          没有外层按钮可以代它触发文件选择，必须自足。文案本身也不能写成"已开始上传"
+          ——那与状态正好相反，会让还没动手的用户以为上传已经在跑了。 */}
+      {phase === "idle" && !resumable && !errorMsg ? (
+        <Stack gap="sm">
           <Text size="sm" c="dimmed">
-            {t("backups.uploadStarted")}
+            {t("backups.uploadIdleHint")}
           </Text>
-        ) : null}
-      </Box>
-    </OpsSection>
+          {/* 覆盖 / 深校验就在选文件上方：它们决定 complete 时提交什么选项。
+              尤其「覆盖已有数据」——目标实例非空时不开它，导入会在**异步暂存阶段**失败
+              （HTTP 已返回 202），用户只会看到"上传成功、随后记录变失败"，无从知道差在哪。 */}
+          <Checkbox
+            label={t("backups.importOverwrite")}
+            description={t("backups.importOverwriteHint")}
+            checked={overwrite}
+            onChange={(e) => setOverwrite(e.currentTarget.checked)}
+            data-testid="upload-overwrite"
+          />
+          <Checkbox
+            label={t("backups.importDeep")}
+            description={t("backups.importDeepHint")}
+            checked={deep}
+            onChange={(e) => setDeep(e.currentTarget.checked)}
+            data-testid="upload-deep"
+          />
+          <Group>
+            <Button
+              size="xs"
+              leftSection={<IconUpload size={14} />}
+              onClick={() => pickRef.current?.click()}
+            >
+              {t("backups.uploadChooseFile")}
+            </Button>
+          </Group>
+        </Stack>
+      ) : null}
+    </Box>
   );
 }

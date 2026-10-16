@@ -64,6 +64,8 @@ type appServices struct {
 	metricsReg          *metrics.Registry        // FR-39：进程内指标登记（协议请求计数）
 	metricsExp          *metrics.Exposition      // FR-39：/metrics 文本暴露渲染器
 	scheduler           *scheduler.Scheduler     // FR-44：维护类周期作业调度器
+	restartSvc          *domain.RestartService   // FR-40 追加七：一键重启（能力预检 + 延迟触发）
+	restartCh           chan struct{}            // FR-40 追加七：重启请求信号，由 main 的 select 接收
 	quotaSvc            *domain.RepoQuotaService // FR-41：仓库存储配额（预检早拒 + 提交点权威复检）
 	oidcDeps            *api.OIDCDeps            // FR-34：OIDC 登录端点依赖（nil = 未启用）
 	ldapAuth            api.LDAPAuthenticator    // FR-35：LDAP 目录侧校验（nil = 未启用）
@@ -235,6 +237,30 @@ func openServices(cfg *config.Config) (*appServices, error) {
 
 	// FR-44：维护类周期作业统一经调度器驱动（间隔 0 禁用；启动不立即执行）。
 	schedulerSvc := scheduler.New()
+	// FR-40 追加七：一键重启。单元名与作用域只来自启动配置（环境变量），
+	// 请求体不参与命令构造——这是防命令注入的第一道边界（见 domain/restart_service.go）。
+	//
+	// 执行路径是**进程自替换**（syscall.Exec 换新映像），不执行任何外部命令：
+	// 本进程本就有权执行自己的二进制（systemd 的 ExecStart 就是它），因此不引入任何新权限，
+	// NoNewPrivileges / polkit / sudoers 这些提权路径上的门全都绕开。
+	// 域层只负责"延迟多久触发"，动作（优雅关停 + Exec）由 main 的 select 完成——
+	// 关停哪些监听器是本进程的编排知识，见 RestartTrigger 的说明。
+	restartSvc := domain.NewRestartService(cfg.RestartUnit, cfg.RestartScope)
+	// restartCh 把域层的"该重启了"送到 main 的 select。
+	//
+	// 缓冲 1：域层只发一次（RestartAfter 是单次排定），缓冲 1 保证那次发送永不阻塞，
+	// 不给即将关停的进程留一个卡在发送上的 goroutine；重复触发直接丢弃
+	// （同一件事不必排队两次，重复只会重复关停与 Exec）。
+	//
+	// CLI 子命令（backup / admin / status）也走本函数，它们的 restartCh 无人接收——
+	// 这是无害的：那些子命令不提供 HTTP 端点，没有调用方能看到 supported 判据。
+	restartCh := make(chan struct{}, 1)
+	restartSvc.SetTrigger(func() {
+		select {
+		case restartCh <- struct{}{}:
+		default:
+		}
+	})
 	registerBlobGCJob(schedulerSvc, cfg.BlobGCInterval, assetSvc.CleanupUnreferencedBlobs)
 	// FR-41：存储治理清理（隔离区空目录 / 过期 OCI 上传临时文件 / 终态元数据裁剪 / 代理缓存保留）。
 	// 只做「不触碰任何在途文件」的四类清理；pending_gc 滞留件回收留待后续增量
@@ -346,6 +372,8 @@ func openServices(cfg *config.Config) (*appServices, error) {
 		metricsReg:          metricsReg,
 		metricsExp:          metricsExp,
 		scheduler:           schedulerSvc,
+		restartSvc:          restartSvc,
+		restartCh:           restartCh,
 		oidcDeps:            oidcDeps,
 		ldapAuth:            ldapAuth,
 	}, nil
@@ -427,6 +455,7 @@ func (s *appServices) handlers(version string, checks []func() error) *api.Handl
 		PublishPolicies:         s.publishPolicySvc,
 		UserGroups:              s.userGroupSvc, // FR-36：用户组管理端点（仅管理员）
 		MaintenanceJobs:         s.scheduler,    // FR-41：维护作业清单与手动触发
+		Restart:                 s.restartSvc,   // FR-40 追加七：一键重启（先回响应，再重启）
 		OnUpstreamTimeoutChange: func(d time.Duration) {
 			if s.upstreamClient != nil {
 				s.upstreamClient.SetTimeout(d)

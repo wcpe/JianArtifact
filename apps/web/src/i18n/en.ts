@@ -1177,14 +1177,64 @@ export const en = {
     tabExternal: "External Import",
     tabBackup: "Backup & Migration",
     refresh: "Refresh",
+    // —— 任务台信息架构（备份页重做）——
+    // 页面按「先问你现在要做什么」组织：动作 → 关键事实 → 统一事件表。
+    startTitle: "Back up now",
+    startHint: "Freeze writes, then take a full snapshot package you can restore on a new machine.",
+    startHintFrozen: "Writes are frozen, so a package taken now is consistent in time.",
+    // The action area collapsed from two persistent cards into a button row in the section
+    // header; the cards' explanatory text moved into the「help」popover (where OpsHelpButton
+    // already lives: no permanent height, expandable on demand).
+    // Only the popover title is new — the body reuses the original keys, so writing a fresh
+    // set would leave the old ones unreferenced, i.e. silently delete the explanations.
+    actionBarHelpTitle: "Using backup & migration",
+    // Pending restart (FR-40 follow-up 6): a successful import only writes restore.pending;
+    // the actual replacement happens on the next start. Until then every import is refused
+    // with 409, so the UI has to explain why rather than just saying "rejected".
+    pendingRestartBadge: "A restore is waiting for a restart",
+    pendingRestartTitle: "Restart the service to finish the replacement",
+    pendingRestartBody:
+      "A backup package has been verified and staged. **It replaces this instance's data only after the service restarts.** Until then, any further import or upload is refused (to avoid stacking a second restore).",
+    pendingRestartPackage: "Package waiting",
+    pendingRestartStagedAt: "Staged at",
+    pendingRestartCommandLabel: "Restart command",
+    pendingRestartAfterRestart:
+      "After the restart, the startup log prints the applied restore and keeps pre-restore-<timestamp>/ as a rollback path.",
+    moveTitle: "Move to a new machine",
+    moveHint:
+      "Send an existing package to the target instance, or pull one from a URL — all three channels replace this instance's data and need a restart.",
+    factLastSuccess: "Last successful backup",
+    factNextAuto: "Next automatic backup",
+    factLastVerify: "Last verification",
+    factUsage: "Storage used",
+    factAutoPolicy: "Retention policy",
+    factVerifyPassed: "Passed",
+    factVerifyFailed: "Failed",
+    factVerifyNone: "Not verified yet",
+    factAutoOff: "Off",
+    factNextPending: "Awaiting first run",
+    factNextDue: "Due shortly",
+    factUsageValue: "{{size}} · {{count}} package(s)",
+    factNoData: "—",
+    // —— FR-40 追加四：备份包与导入记录聚合进同一张表 ——
+    // 页面只剩三段：动作 → 关键事实 → 统一事件表；「导入与传输」弹窗与待处理条一并删除。
+    eventsSection: "Backup and import events",
+    eventsEmpty: "No backup or import events yet",
+    eventsEmptyHint:
+      "Create a backup package, or import one from a URL or by upload; events appear here in time order.",
+    eventType_package: "Local package",
+    eventType_import: "Import record",
+    colIdentity: "Identity",
+    colError: "Error",
+    importInlineCollapse: "Collapse",
+    importInlineBusyHint: "Upload in progress; cannot collapse",
+    autoCfgSettingsButton: "Automatic backup settings",
+    drillPackageMissing:
+      "This package may have been pruned by the retention policy (automatic backups are removed once they exceed the count or day limit). Refresh the list to see the current state.",
     create: "Create Backup Package",
-    empty: "No backup packages yet",
-    emptyHint: "Create a backup package so you can move it to a new machine and restore there.",
-    colPackage: "Package ID",
     colMode: "Mode",
     colStatus: "Status",
     colSize: "Size",
-    colCounts: "Contents",
     colCreated: "Created",
     colActions: "Actions",
     mode_hot: "Hot backup",
@@ -1230,9 +1280,121 @@ export const en = {
     copyFailed: "Copy failed",
     verify: "Verify",
     verifyDeep: "Deep Verify",
+    // The three actions' division of labour has to be readable in place: the menu labels alone
+    // don't tell the user that the fast one only checks structure, the slow one compares every
+    // byte, and the drill additionally unpacks for real. These titles are the only hover entry.
+    verifyHint:
+      "Reads the archive itself, answering “is this file intact?”. Fast, never touches local data.",
+    verifyDeepHint:
+      "On top of Verify, compares each blob's content digest — answering “was anything silently tampered with or bit-rotted?”. Slow, on the order of the package size.",
+    drillOpenHint:
+      "Really unpacks and restores once in an isolated temp dir, answering “can this package actually be restored?”. Read-only, never touches local data.",
+    restoreHint:
+      "Replaces this instance's data with this package (verify + stage included). Takes effect only after a service restart; a pre-restore backup remains as a rollback path.",
+    restoreFromPackage: "Restore from this package",
+    // Stale row: the package this row points at no longer exists (automatic backup creates and
+    // evicts packages every 30s, and all of those are terminal changes, so the list does not
+    // refresh itself). A bare "package not found" makes the user think the feature broke.
+    staleRow:
+      "That package no longer exists (it may have been evicted by the retention policy). The list has been refreshed — retry “{{action}}” from the latest rows.",
+    actionGetLink: "Get link",
+    actionVerify: "Verify",
+    actionDelete: "Delete",
+    // The fourth stale-row action: restoring straight from a list row. The package can be
+    // evicted while the dialog is open (observed in practice).
+    actionRestore: "Restore from this package",
+    restoreConfirmTitle: "Restore this instance from the package",
+    restoreConfirmBody:
+      "This replaces the current data (users, repositories, artifacts, settings…) with “{{id}}”. The package is verified and staged first, and the **actual replacement happens only after a service restart**; a pre-restore backup is kept as a rollback path.",
+    restoreOverwriteLabel: "Allow overwriting a non-empty target",
+    restoreOverwriteHint:
+      "Required when this instance already holds data. Without it, a non-empty target is refused — that guard prevents accidental overwrites and is not a defect.",
+    restoreStart: "Start restore",
+    restoreAccepted: "Accepted; verifying and staging — a service restart is required to apply",
+    // —— Restore progress modal (iteration 7) ——
+    // A single toast used to be the whole feedback after acceptance, so users could not tell
+    // whether it was still running or had failed. All four restore channels share this modal;
+    // only `origin` differs.
+    restoreProgressTitle: "Restore progress",
+    // Per-stage wording states what is actually happening, not just "working" — restore is
+    // irreversible, and users need to judge whether they can walk away.
+    restoreStage_queued: "Queued, waiting to start.",
+    restoreStage_fetching: "Fetching the backup package from its source.",
+    restoreStage_staging:
+      "Verifying the package and staging data to the pending location (slowest step).",
+    restoreStage_pending_restart:
+      "Verification and staging finished; waiting for a service restart to apply.",
+    restoreStage_done: "Applied: this node's data has been replaced by this package.",
+    restoreStage_failed: "Restore did not finish — see the reason below.",
+    restoreProgressBytes: "Fetched {{fetched}} / {{total}} ({{percent}}%)",
+    // Stages without byte counts (staging / deep verify) deliberately show no percentage:
+    // a fabricated number misleads more than showing none.
+    restoreProgressIndeterminate:
+      "Working — {{blobs}} objects in total; this step scales with package size.",
+    restoreReadyTitle: "Ready to restart",
+    restoreReadyBody:
+      "After restarting, this node's data will be replaced. The service is briefly unavailable during the restart; refresh the page afterwards.",
+    // Applying a restore replaces the whole database with the snapshot inside the package,
+    // so this import record disappears with it — "record not found" here usually means the
+    // restore SUCCEEDED, and the UI must not report it as a read failure.
+    restoreAppliedTitle: "Restore applied",
+    restoreAppliedBody:
+      "This node's data has been replaced by this package, and the import record went with it (it lived in the database that was replaced). The list has been refreshed.",
+    restoreAppliedClose: "Got it",
+    restoreFreezeAdvice:
+      "Consider freezing writes first: in-flight writes have nowhere to land during a restart, and freezing prevents data written mid-migration from being lost.",
+    restoreFrozenNote:
+      "Writes are frozen — remember to unfreeze after the restart (otherwise this node stays read-only).",
+    // —— One-click restart (iteration 7) ——
+    restartButton: "Restart service now",
+    restartConfirmTitle: "Restart service now",
+    restartConfirmBody:
+      "The service starts restarting about 2 seconds after this prompt (the process replaces its own image; no extra privileges needed), and the connection drops for a few seconds. Restart now?",
+    restartConfirm: "Confirm restart",
+    restartAccepted:
+      "Restart accepted; the service is about to go down — refresh the page shortly.",
+    restartWaiting: "Waiting for the service…",
+    restartWaitingHint:
+      "Losing the connection during a restart is normal; data refreshes automatically once it is back.",
+    restartUnsupportedTitle: "Cannot restart automatically",
+    restartUnsupportedBody:
+      "This deployment cannot be restarted automatically ({{reason}}). Run this manually:",
+    restartUnsupportedManual: "Run the following command manually:",
+    restartDone: "The service is back and the page data has been refreshed.",
+    restartTimeout: "Timed out waiting for the service to come back; refresh the page to confirm.",
     moreActions: "More actions",
     verifyOk: "Verification passed",
     verifyFailed: "Verification failed",
+    // —— Verify modal (iteration 7) ——
+    // Verification used to be an await plus a toast, so users could not see what was checked
+    // or where the conclusion was. The backend verify call is synchronous (one final answer,
+    // no intermediate progress), so this lists the checks that WILL run and reports the
+    // conclusion in place — never a fabricated percentage.
+    verifyModalTitle: "Verify backup package",
+    verifyModalTitleDeep: "Deep-verify backup package",
+    verifyRunning: "Verifying, please wait…",
+    verifyRunningDeep:
+      "Comparing every object byte by byte; this scales with package size, please be patient…",
+    verifyTarget: "Target package",
+    // Fixed check sequence, matching the real steps of archive.Reader.Verify one-to-one.
+    verifyChecksTitle: "The following checks will run",
+    verifyCheckManifest:
+      "Manifest consistency: manifest.json agrees with the package ID recorded in the header",
+    verifyCheckDb: "Database snapshot: the db's size and SHA256 digest match the manifest",
+    verifyCheckIndex:
+      "Object index: blobs.index digest matches, and its entry count and total bytes agree with the manifest",
+    verifyCheckComplete:
+      "Archive completeness: manifest / db / blobs.index are all present, with nothing missing or extra",
+    verifyCheckBlobsDeep:
+      "Per-object content digests: every blob is re-hashed and compared against the manifest",
+    // Honest wording for shallow verification: passing does NOT mean restorable.
+    verifyShallowNotContent:
+      "Note: shallow verification does not check object contents. Passing means the package's structure and index are intact — it does not prove the contents are unmodified. Use deep verification for that.",
+    verifyResultOk: "Verification passed",
+    verifyResultFailed: "Verification failed",
+    verifyResultSummary: "{{blobs}} objects, {{assets}} artifacts in total",
+    verifyElapsed: "Took {{seconds}}s",
+    verifyClose: "Close",
     deleteTitle: "Delete Backup Package",
     deleteConfirm: "Delete backup package {{id}}? This action cannot be undone.",
     delete: "Delete",
@@ -1262,6 +1424,14 @@ export const en = {
     drillStart: "Start Drill",
     drillStarted: "Drill accepted; the report will appear automatically once ready",
     drillRunning: "Drill in progress…",
+    // Polling timeout: when the report will never arrive we must say so instead of spinning
+    // forever (the "stuck on drill in progress" report came from exactly this).
+    drillTimedOut:
+      "No report arrived within the expected time. Click Refresh to check; if the package was evicted by the retention policy, its row will be gone.",
+    // Package evicted mid-drill: state that the drill was interrupted, otherwise the user
+    // assumes they clicked something wrong.
+    drillInterrupted:
+      "This drill was interrupted: the package was evicted by the retention policy before the drill finished (automatic packages are cleaned up once they exceed the count / age limits).",
     drillHistory: "History",
     drillNoReports: "This package has no drill report yet. Start a drill to create the first one.",
     drillPassed: "Passed",
@@ -1273,9 +1443,6 @@ export const en = {
     // —— FR-40：自动备份与保留策略（配置卡默认折叠，展开后可改，保存即生效）——
     autoCfgTitle: "Automatic Backup & Retention",
     autoCfgLiveNote: "Saved changes take effect immediately",
-    autoCfgEdit: "Configure",
-    autoCfgCollapse: "Collapse",
-    autoCfgSummaryLoading: "Loading configuration…",
     autoCfgSummaryOff: "Automatic backup is off",
     autoCfgSummaryInterval: "Backup every {{n}}s",
     autoCfgSummaryKeep: "Keep last {{n}}",
@@ -1300,7 +1467,6 @@ export const en = {
     autoCfgJobsHint:
       "The Maintenance Jobs page always lists backup-auto (the job stays registered so configuration changes take effect immediately); when the interval is 0 it idles and skips every cycle without producing a backup.",
     // —— FR-134：写入冻结窗口 ——
-    freezeCardTitle: "Write Freeze Window",
     freezeStatusWritable: "Writable",
     freezeStatusFrozen: "Frozen",
     freezeUntilLabel: "Auto-unfreeze time",
@@ -1324,9 +1490,10 @@ export const en = {
     freezeUnfreezeLabel: "Unfreeze",
     freezeUnfrozen: "Writes unfrozen",
     // —— FR-137：从 URL 导入备份包 ——
-    importCardTitle: "Import from URL",
-    importButton: "Import from URL",
-    importModalTitle: "Import Backup Package from URL",
+    // The wording includes "restore": these three channels really do restore (they replace
+    // this instance's data), while "import / upload" reads to users as merely "bring something in".
+    // The reported "can only back up, never restore" came from exactly this wording.
+    importButton: "Restore from URL",
     importFieldUrl: "Backup package URL",
     importFieldUrlPlaceholder: "https://example.com/backups/bk.tar.gz",
     importFieldUrlRequired: "Enter a valid http/https URL",
@@ -1339,14 +1506,7 @@ export const en = {
     importSha256: "Expected SHA-256",
     importSha256Placeholder: "Optional; verify the archive digest after the pull completes",
     importSubmit: "Start Import",
-    importStarted: "Import request accepted; see the list below for progress",
-    importColId: "Record ID",
-    importColSource: "Source",
-    importColStatus: "Status",
-    importColProgress: "Progress",
-    importColPackage: "Package ID",
-    importColCreated: "Created",
-    importColError: "Error",
+    importStarted: "Import request accepted; see the event table below for progress",
     import_status_queued: "Queued",
     import_status_fetching: "Fetching",
     import_status_staging: "Staging",
@@ -1356,6 +1516,9 @@ export const en = {
     import_origin_url: "URL",
     import_origin_upload: "Upload",
     import_origin_cli: "CLI",
+    // Local package restore (POST /backups/{id}/restore): distinct from the three
+    // channels that fetch a package from outside.
+    import_origin_local: "Local package",
     importPendingRestartHint: "Takes effect after restarting the service",
     backupImportError: {
       fetch_failed: "Failed to fetch the backup package: could not download from the source URL.",
@@ -1369,10 +1532,10 @@ export const en = {
       internal: "Internal service error; retry later or check the logs.",
     },
     // —— FR-137：备份包分片上传（第三条通道） ——
-    uploadCardTitle: "Chunked Upload",
-    uploadButton: "Upload Local File",
+    uploadButton: "Restore from file",
     uploadChooseFile: "Choose File",
-    uploadStarted: "Upload started; see below for progress",
+    uploadIdleHint:
+      "Choose a backup package (.tar.gz); it is submitted for import once the upload finishes.",
     uploadProgress: "Uploading {{percent}}%",
     uploadBytes: "{{done}} / {{total}}",
     uploadResumableTitle: "Unfinished upload found",

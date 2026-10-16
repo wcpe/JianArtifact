@@ -62,6 +62,11 @@ const (
 	// FR-43 上游断路器补强：auto-block 退避起始时长，单位秒。
 	EnvAutoBlockBaseSeconds = "JIAN_AUTO_BLOCK_BASE_SECONDS" // proxy 上游首次失败的阻止窗口时长；非正数回落默认
 
+	// FR-40 追加七：一键重启的能力配置（单独成组，理由同上）。
+	// 单元名只从环境变量读取，**绝不**接受请求体输入——见 domain/restart_service.go 的注入防护说明。
+	EnvRestartUnit  = "JIAN_RESTART_UNIT"  // 重启目标单元名；缺省 jianartifact
+	EnvRestartScope = "JIAN_RESTART_SCOPE" // 作用域 system / systemd-user / docker；非法值回落 system
+
 	defaultDataDir         = "./data"
 	defaultHTTPAddr        = ":8080"
 	defaultUpstreamTimeout = 30 * time.Second
@@ -87,6 +92,10 @@ const (
 	// defaultLDAPUserFilter 与 defaultLDAPEmailAttr 是 LDAP 检索的缺省口径（OpenLDAP 风格 uid）。
 	defaultLDAPUserFilter = "(uid={username})"
 	defaultLDAPEmailAttr  = "mail"
+	// FR-40 追加七：一键重启的默认单元名与默认作用域。
+	// 单元名默认 jianartifact（与部署脚本里的 systemd 单元同名），作用域默认 system（systemctl）。
+	defaultRestartUnit  = "jianartifact"
+	defaultRestartScope = "system"
 
 	dbFileName                       = "jianartifact.db"
 	blobDirName                      = "blobs"
@@ -129,6 +138,12 @@ type Config struct {
 	TLSKey              string     // TLS PEM 私钥文件路径（FR-131）
 	OIDC                OIDCConfig // FR-34：OIDC 身份源接入配置（Issuer 空 = 不启用）
 	LDAP                LDAPConfig // FR-35：LDAP 身份源接入配置（URL 空 = 不启用）
+	// RestartUnit 是一键重启的目标单元名（FR-40 追加七）；仅来自环境变量，
+	// 绝不从请求体读取——这是防命令注入的第一道边界（见 domain/restart_service.go）。
+	RestartUnit string
+	// RestartScope 是一键重启的作用域（FR-40 追加七）：system / systemd-user / docker；
+	// 非法值已在解析期回落 system，装配层可放心使用。
+	RestartScope string
 }
 
 // LDAPConfig 是 LDAP 目录接入配置（FR-35，见 ADR-0029）；
@@ -164,12 +179,43 @@ func (c OIDCConfig) Enabled() bool { return c.Issuer != "" }
 // Load 从环境变量解析配置并确保 data / blob 目录存在。
 // JWT 密钥优先取 JIAN_JWT_SECRET；缺省时从 data 目录的 jwt.secret 读取，
 // 仍无则生成随机密钥并持久化（0600），同时向 stderr 告警一次。
+//
+// 数据目录的解析交给 ResolveDataDir（见 datadir.go）：显式设置优先，未设置时尝试
+// 自动发现正在运行的实例，最后才回落默认值——并且**每次都会说明依据**。
 func Load() (*Config, error) {
-	dataDir := envOr(EnvDataDir, defaultDataDir)
-	absData, err := filepath.Abs(dataDir)
+	resolved, err := ResolveDataDir(os.Getenv(EnvDataDir))
 	if err != nil {
-		return nil, fmt.Errorf("解析 data 目录：%w", err)
+		return nil, err
 	}
+	// 歧义（发现多个候选）时不能猜：猜错就是操作到另一个库，代价远高于让用户显式指定一次。
+	if len(resolved.Ambiguous) > 0 {
+		return nil, fmt.Errorf(
+			"未设置 %s，且发现多个不同的数据目录，无法确定该用哪一个：\n    %s\n"+
+				"    请显式设置 %s 指定要操作的实例",
+			EnvDataDir, strings.Join(resolved.Ambiguous, "\n    "), EnvDataDir)
+	}
+	if resolved.Warning != "" {
+		// 走 stderr：不能污染 --json 的 stdout（命令的输出要能被管道消费）。
+		fmt.Fprintln(os.Stderr, resolved.Warning)
+	}
+	// 自动发现到实例时，**整份采纳**该实例的 env 文件（只补当前进程未设置的键）。
+	//
+	// 只取目录是不够的：那样该实例的其余配置仍缺失，CLI 会以为 JWT 密钥"未设置"，
+	// 于是在服务的数据目录里现场生成一份，并对 `backup list` 这种只读命令打印误导性警告。
+	// 采纳后 CLI 的行为与服务一致，且不产生任何多余写入。显式设置的环境变量优先级更高——
+	// 它们是调用方刻意的覆盖意图。
+	if resolved.EnvFileContent != "" {
+		applyEnvFileDefaults(resolved.EnvFileContent)
+	}
+	// 采纳之后重新解析目录，因为 env 文件本身可能就带 JIAN_DATA_DIR（此时它同样生效）。
+	if v := os.Getenv(EnvDataDir); strings.TrimSpace(v) != "" {
+		abs, err := absDataDir(v)
+		if err != nil {
+			return nil, err
+		}
+		resolved.Dir = abs
+	}
+	absData := resolved.Dir
 	blobDir := filepath.Join(absData, blobDirName)
 	for _, dir := range []string{absData, blobDir, filepath.Join(blobDir, "tmp")} {
 		if err := os.MkdirAll(dir, 0o750); err != nil {
@@ -224,6 +270,8 @@ func Load() (*Config, error) {
 		TLSKey:                   os.Getenv(EnvTLSKey),
 		OIDC:                     oidc,
 		LDAP:                     ldap,
+		RestartUnit:              envOr(EnvRestartUnit, defaultRestartUnit),
+		RestartScope:             restartScope(),
 	}, nil
 }
 
@@ -413,6 +461,25 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// restartScope 解析 JIAN_RESTART_SCOPE（FR-40 追加七）。
+//
+// 非法值**回落默认而不是报错**：作用域是"怎么重启"的实现细节，写错了应当退化成
+// 最保守的 system 再交给同步预检（Probe）判定可用性——由预检返回 supported:false +
+// reason，运维在界面上看到的是"这台机器没法自动重启，请手动执行 xxx"，
+// 比服务因一个拼错的枚举值拒绝启动要好得多。
+//
+// 三个取值与 domain.RestartScope*（restart_service.go）**必须同值**：这里是字面量而非
+// 引用，因为 config 是横切层、不得反向依赖业务层（见 internal/doc.go 的分层约定）。
+// 与 defaultAutoBlockBase 镜像 domain 常量的处理同一口径。
+func restartScope() string {
+	switch v := strings.TrimSpace(os.Getenv(EnvRestartScope)); v {
+	case "system", "systemd-user", "docker":
+		return v
+	default:
+		return defaultRestartScope
+	}
 }
 
 // upstreamTimeout 解析 JIAN_UPSTREAM_TIMEOUT（秒）；缺省或非法（<=0）时取默认值。

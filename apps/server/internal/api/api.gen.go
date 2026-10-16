@@ -347,6 +347,7 @@ func (e AuditTargetKind) Valid() bool {
 // Defines values for BackupImportOrigin.
 const (
 	Cli    BackupImportOrigin = "cli"
+	Local  BackupImportOrigin = "local"
 	Upload BackupImportOrigin = "upload"
 	Url    BackupImportOrigin = "url"
 )
@@ -355,6 +356,8 @@ const (
 func (e BackupImportOrigin) Valid() bool {
 	switch e {
 	case Cli:
+		return true
+	case Local:
 		return true
 	case Upload:
 		return true
@@ -731,6 +734,27 @@ func (e HostMonitoringHostState) Valid() bool {
 	case Stale:
 		return true
 	case Unknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MaintenanceRestartResultScope.
+const (
+	MaintenanceRestartResultScopeDocker      MaintenanceRestartResultScope = "docker"
+	MaintenanceRestartResultScopeSystem      MaintenanceRestartResultScope = "system"
+	MaintenanceRestartResultScopeSystemdUser MaintenanceRestartResultScope = "systemd-user"
+)
+
+// Valid indicates whether the value is a known member of the MaintenanceRestartResultScope enum.
+func (e MaintenanceRestartResultScope) Valid() bool {
+	switch e {
+	case MaintenanceRestartResultScopeDocker:
+		return true
+	case MaintenanceRestartResultScopeSystem:
+		return true
+	case MaintenanceRestartResultScopeSystemdUser:
 		return true
 	default:
 		return false
@@ -2014,17 +2038,21 @@ type BackupDrillCheck struct {
 // BackupImport 一次导入的记录。pending_restart 表示校验与暂存已完成、restore.pending 已写入，
 // 需重启服务才会替换数据库并转为 done。
 type BackupImport struct {
-	BlobCount    *int               `json:"blobCount,omitempty"`
-	CreatedAt    string             `json:"createdAt"`
-	Deep         bool               `json:"deep"`
-	Error        *string            `json:"error,omitempty"`
-	ErrorCode    *string            `json:"errorCode,omitempty"`
-	FetchedBytes *int64             `json:"fetchedBytes,omitempty"`
-	FinishedAt   *string            `json:"finishedAt,omitempty"`
-	ImportId     string             `json:"importId"`
-	Operator     string             `json:"operator"`
-	Origin       BackupImportOrigin `json:"origin"`
-	Overwrite    bool               `json:"overwrite"`
+	BlobCount    *int    `json:"blobCount,omitempty"`
+	CreatedAt    string  `json:"createdAt"`
+	Deep         bool    `json:"deep"`
+	Error        *string `json:"error,omitempty"`
+	ErrorCode    *string `json:"errorCode,omitempty"`
+	FetchedBytes *int64  `json:"fetchedBytes,omitempty"`
+	FinishedAt   *string `json:"finishedAt,omitempty"`
+	ImportId     string  `json:"importId"`
+	Operator     string  `json:"operator"`
+
+	// Origin 恢复的来源通道。`local` 表示"用本机已登记的备份包恢复"（
+	// `POST /backups/{id}/restore`），与另外三条"包从外部来"的通道（`url` / `upload` / `cli`）
+	// 在事件表里区分开——它们最终走同一条编排，但用户来这一页要办的往往是不同的事。
+	Origin    BackupImportOrigin `json:"origin"`
+	Overwrite bool               `json:"overwrite"`
 
 	// PackageId 包内 manifest 的 packageId（校验通过后才有值）。
 	PackageId        *string `json:"packageId,omitempty"`
@@ -2043,7 +2071,9 @@ type BackupImportList struct {
 	Total int            `json:"total"`
 }
 
-// BackupImportOrigin defines model for BackupImportOrigin.
+// BackupImportOrigin 恢复的来源通道。`local` 表示"用本机已登记的备份包恢复"（
+// `POST /backups/{id}/restore`），与另外三条"包从外部来"的通道（`url` / `upload` / `cli`）
+// 在事件表里区分开——它们最终走同一条编排，但用户来这一页要办的往往是不同的事。
 type BackupImportOrigin string
 
 // BackupImportStatus defines model for BackupImportStatus.
@@ -2095,6 +2125,22 @@ type BackupPackageList struct {
 // BackupPackageOrigin 备份包来源：manual = 人工触发（含 CLI 与 Web），auto = `backup-auto` 周期作业生成。
 // 这是**加性字段**：迁移 0047 之前的存量行按列默认值补为 manual，语义正确。
 type BackupPackageOrigin string
+
+// BackupRestoreStatus 是否存在待重启生效的备份恢复。`pending=false` 时其余字段一律省略——
+// 它们只在确有暂存时才可读，返回零值会让前端渲染出 `0001-01-01` 这类假时间。
+type BackupRestoreStatus struct {
+	// Origin 该次暂存的来源通道（`url` / `upload` / `cli`）。
+	Origin *string `json:"origin,omitempty"`
+
+	// PackageId 待生效的包标识（源机器上的标识）。
+	PackageId *string `json:"packageId,omitempty"`
+
+	// Pending 是否已暂存一份恢复、等待重启替换数据库。
+	Pending bool `json:"pending"`
+
+	// StagedAt 暂存完成时刻。
+	StagedAt *time.Time `json:"stagedAt,omitempty"`
+}
 
 // BackupUploadSession 一次分片上传会话的视图。uploadedChunks 由磁盘上真实存在的分片推导（以磁盘为准，可续传）。
 type BackupUploadSession struct {
@@ -2585,6 +2631,43 @@ type MaintenanceJobRunResult struct {
 	Started bool   `json:"started"`
 }
 
+// MaintenanceRestartResult 一键重启的受理结果。
+//
+// 自动重启的执行路径是**进程自替换**（`syscall.Exec` 换新映像），不执行任何外部命令、
+// 不引入任何新权限，因此在任何部署形态下都可用。
+//
+// `supported: false` 是**正常的业务结果**，用 HTTP 200 返回（不是 4xx/5xx）：
+// 它表示本节点无法自动重启（本平台不支持自替换 / `argv[0]` 不可解析为可执行文件 /
+// 重启触发点未接线 / 单元名或作用域配置非法 / docker 作用域），
+// 此时 `command` 给出可复制到终端手工执行的重启命令，`reason` 说明原因。
+// 服务不会在判据不满足时假装成功，也不会用错误码把降级信息埋掉。
+//
+// 两个端点（`GET` 只读探测 / `POST` 受理）回显的
+// `supported` / `command` / `scope` 逐字一致：它们取同一次 `Probe` 的结论。
+type MaintenanceRestartResult struct {
+	// Command **手工重启的等效命令**（本接口受理时进程走自替换，不执行该命令）；始终返回、可直接复制。
+	// 它随部署形态而变：`systemd-user` → `systemctl --user restart <unit>`；
+	// `system` 非 root → `sudo -n systemctl restart <unit>`；root → `systemctl restart <unit>`；
+	// `docker` → `docker restart <unit>`。配置非法时给出一句说明性注释（不回显配置原文）。
+	Command string `json:"command"`
+
+	// DelayMs 受理后延迟多少毫秒执行重启
+	DelayMs *int64 `json:"delayMs,omitempty"`
+
+	// Reason 无法自动重启的原因（supported=false 时）：本平台不支持自替换 /
+	// `argv[0]` 不可解析为可执行文件 / 触发点未接线 / 配置非法 / docker 作用域。
+	Reason *string `json:"reason,omitempty"`
+
+	// Scope 实际使用的作用域：system / systemd-user / docker
+	Scope *MaintenanceRestartResultScope `json:"scope,omitempty"`
+
+	// Supported 是否已受理自动重启；false 时请用 command 手动执行
+	Supported bool `json:"supported"`
+}
+
+// MaintenanceRestartResultScope 实际使用的作用域：system / systemd-user / docker
+type MaintenanceRestartResultScope string
+
 // MetricGroupState defines model for MetricGroupState.
 type MetricGroupState string
 
@@ -3042,6 +3125,15 @@ type RepositoryVisibility string
 type RepositoryList struct {
 	Items []Repository `json:"items"`
 	Total int          `json:"total"`
+}
+
+// RestoreFromLocalPackageRequest 用本机已有的备份包发起恢复。请求体可整体省略（等同全部取默认）。
+type RestoreFromLocalPackageRequest struct {
+	// Deep 暂存前逐 blob 比对内容摘要（耗时与包体积同阶）。
+	Deep *bool `json:"deep,omitempty"`
+
+	// Overwrite 目标实例非空时需显式置真。内置 anonymous 主体不计入「非空」。
+	Overwrite *bool `json:"overwrite,omitempty"`
 }
 
 // SetRepositoryOnlineRequest defines model for SetRepositoryOnlineRequest.
@@ -3751,6 +3843,9 @@ type DrillBackupJSONRequestBody = DrillBackupRequest
 // CreateBackupLinkJSONRequestBody defines body for CreateBackupLink for application/json ContentType.
 type CreateBackupLinkJSONRequestBody = CreateBackupLinkRequest
 
+// RestoreFromLocalPackageJSONRequestBody defines body for RestoreFromLocalPackage for application/json ContentType.
+type RestoreFromLocalPackageJSONRequestBody = RestoreFromLocalPackageRequest
+
 // FreezeWritesJSONRequestBody defines body for FreezeWrites for application/json ContentType.
 type FreezeWritesJSONRequestBody = FreezeWritesRequest
 
@@ -4150,6 +4245,9 @@ type ServerInterface interface {
 	// GetBackupImport 导入记录详情（仅管理员）
 	// (GET /api/v1/backups/imports/{id})
 	GetBackupImport(c *gin.Context, id BackupImportIdParam)
+	// GetBackupRestoreStatus 查询是否存在待重启生效的备份恢复（仅管理员）
+	// (GET /api/v1/backups/restore-status)
+	GetBackupRestoreStatus(c *gin.Context)
 	// CreateBackupUpload 发起分片上传会话（仅管理员）
 	// (POST /api/v1/backups/uploads)
 	CreateBackupUpload(c *gin.Context)
@@ -4180,6 +4278,9 @@ type ServerInterface interface {
 	// CreateBackupLink 生成带时效的下载链接（仅管理员）
 	// (POST /api/v1/backups/{id}/link)
 	CreateBackupLink(c *gin.Context, id BackupIdParam)
+	// RestoreFromLocalPackage 用本机已有的备份包恢复本机数据（仅管理员）
+	// (POST /api/v1/backups/{id}/restore)
+	RestoreFromLocalPackage(c *gin.Context, id BackupIdParam)
 	// ListBackupVerifications 恢复演练报告列表（仅管理员）
 	// (GET /api/v1/backups/{id}/verifications)
 	ListBackupVerifications(c *gin.Context, id BackupIdParam, params ListBackupVerificationsParams)
@@ -4204,6 +4305,12 @@ type ServerInterface interface {
 	// RunMaintenanceJob 手动触发一次周期作业（仅管理员）
 	// (POST /api/v1/maintenance/jobs/{name}/run)
 	RunMaintenanceJob(c *gin.Context, name MaintenanceJobNameParam)
+	// GetRestartCapability 探测重启能力（只读，仅管理员）
+	// (GET /api/v1/maintenance/restart)
+	GetRestartCapability(c *gin.Context)
+	// RestartService 重启服务进程（仅管理员）
+	// (POST /api/v1/maintenance/restart)
+	RestartService(c *gin.Context)
 	// GetMyPinnedRepositories 当前用户的置顶仓库（登录用户读自己的；匿名回退全局置顶）
 	// (GET /api/v1/me/pinned-repositories)
 	GetMyPinnedRepositories(c *gin.Context)
@@ -4635,6 +4742,19 @@ func (siw *ServerInterfaceWrapper) GetBackupImport(c *gin.Context) {
 	siw.Handler.GetBackupImport(c, id)
 }
 
+// GetBackupRestoreStatus operation middleware
+func (siw *ServerInterfaceWrapper) GetBackupRestoreStatus(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetBackupRestoreStatus(c)
+}
+
 // CreateBackupUpload operation middleware
 func (siw *ServerInterfaceWrapper) CreateBackupUpload(c *gin.Context) {
 
@@ -4901,6 +5021,31 @@ func (siw *ServerInterfaceWrapper) CreateBackupLink(c *gin.Context) {
 	siw.Handler.CreateBackupLink(c, id)
 }
 
+// RestoreFromLocalPackage operation middleware
+func (siw *ServerInterfaceWrapper) RestoreFromLocalPackage(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id BackupIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.RestoreFromLocalPackage(c, id)
+}
+
 // ListBackupVerifications operation middleware
 func (siw *ServerInterfaceWrapper) ListBackupVerifications(c *gin.Context) {
 
@@ -5069,6 +5214,32 @@ func (siw *ServerInterfaceWrapper) RunMaintenanceJob(c *gin.Context) {
 	}
 
 	siw.Handler.RunMaintenanceJob(c, name)
+}
+
+// GetRestartCapability operation middleware
+func (siw *ServerInterfaceWrapper) GetRestartCapability(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetRestartCapability(c)
+}
+
+// RestartService operation middleware
+func (siw *ServerInterfaceWrapper) RestartService(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.RestartService(c)
 }
 
 // GetMyPinnedRepositories operation middleware
@@ -7111,6 +7282,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/api/v1/backups/:id/download", wrapper.DownloadBackup)
 	router.POST(options.BaseURL+"/api/v1/backups/:id/link", wrapper.CreateBackupLink)
 	router.POST(options.BaseURL+"/api/v1/backups/:id/verify", wrapper.VerifyBackup)
+	router.POST(options.BaseURL+"/api/v1/backups/:id/restore", wrapper.RestoreFromLocalPackage)
 	router.POST(options.BaseURL+"/api/v1/backups/:id/drill", wrapper.DrillBackup)
 	router.GET(options.BaseURL+"/api/v1/backups/:id/verifications", wrapper.ListBackupVerifications)
 	router.DELETE(options.BaseURL+"/api/v1/maintenance/freeze", wrapper.UnfreezeWrites)
@@ -7118,6 +7290,9 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.POST(options.BaseURL+"/api/v1/maintenance/freeze", wrapper.FreezeWrites)
 	router.GET(options.BaseURL+"/api/v1/maintenance/jobs", wrapper.ListMaintenanceJobs)
 	router.POST(options.BaseURL+"/api/v1/maintenance/jobs/:name/run", wrapper.RunMaintenanceJob)
+	router.GET(options.BaseURL+"/api/v1/maintenance/restart", wrapper.GetRestartCapability)
+	router.POST(options.BaseURL+"/api/v1/maintenance/restart", wrapper.RestartService)
+	router.GET(options.BaseURL+"/api/v1/backups/restore-status", wrapper.GetBackupRestoreStatus)
 	router.POST(options.BaseURL+"/api/v1/backups/import", wrapper.ImportBackupFromURL)
 	router.GET(options.BaseURL+"/api/v1/backups/imports", wrapper.ListBackupImports)
 	router.GET(options.BaseURL+"/api/v1/backups/imports/:id", wrapper.GetBackupImport)

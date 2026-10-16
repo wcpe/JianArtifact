@@ -49,6 +49,8 @@ export type BackupPackageOrigin = Schemas["BackupPackage"]["origin"];
 export type BackupCounts = Schemas["BackupCounts"];
 export type BackupLink = Schemas["BackupLink"];
 export type BackupVerification = Schemas["BackupVerification"];
+// 待重启生效的恢复状态：让界面能解释"为什么现在导入不了"（见 endpoints.getBackupRestoreStatus）。
+export type BackupRestoreStatus = Schemas["BackupRestoreStatus"];
 // 恢复演练与可查报告（FR-40）：与 /verify 的即时校验结论不同，这里读的是落库的历史报告。
 export type BackupVerificationReport = Schemas["BackupVerificationReport"];
 export type BackupVerificationList = Schemas["BackupVerificationList"];
@@ -59,6 +61,9 @@ export type BackupDrillAccepted = Schemas["BackupDrillAccepted"];
 // 写入冻结窗口（FR-134）与从 URL 导入备份包（FR-137）
 export type WriteFreezeState = Schemas["WriteFreezeState"];
 export type FreezeWritesRequest = Schemas["FreezeWritesRequest"];
+// 一键重启（FR-40 追加七）：supported=false 是正常业务结果（HTTP 200），
+// 此时 command 给出可复制手动执行的手工等效命令——不是错误分支。
+export type MaintenanceRestartResult = Schemas["MaintenanceRestartResult"];
 export type BackupImport = Schemas["BackupImport"];
 export type BackupImportList = Schemas["BackupImportList"];
 export type BackupImportStatus = Schemas["BackupImportStatus"];

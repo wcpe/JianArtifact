@@ -600,6 +600,12 @@ function seedImports(): BackupImport[] {
 let mockImports: BackupImport[] = seedImports();
 let mockImportSeq = 1;
 
+// FR-40 追加六：待重启生效的恢复。
+// 只有导入/上传到达 pending_restart 时才置位——这正是后端的真实语义：暂存成功后写
+// restore.pending，此后任何导入都会被 409 restore_pending 拒绝，直到重启完成替换。
+// null 表示无待生效恢复（绝大多数时候）。
+let mockPendingRestore: { packageId: string; origin: string; stagedAt: string } | null = null;
+
 // —— FR-137：分片上传备份包内存态（仅 devmock）——
 // 服务端决定的分片大小固定 8 MiB；uploadedChunks 以实际收到的分片为准（可续传）。
 const UPLOAD_CHUNK_SIZE = 8 * 1024 * 1024;
@@ -654,6 +660,13 @@ function advanceMockImport(importId: string): void {
           r.finishedAt = new Date().toISOString();
           r.restorePendingAt = new Date().toISOString();
           r.updatedAt = new Date().toISOString();
+          // 同步置位"有待生效恢复"：界面据此把两个导入按钮转橙并解释"为什么现在导入不了"，
+          // 与后端写 restore.pending 的效果一一对应。
+          mockPendingRestore = {
+            packageId: r.packageId,
+            origin: r.origin,
+            stagedAt: r.restorePendingAt,
+          };
         }
       }, 500);
     }
@@ -668,6 +681,8 @@ export function resetMockBackups(): void {
   mockFreeze = { frozen: false };
   mockImports = seedImports();
   mockImportSeq = 1;
+  // 待生效恢复也是备份域状态：不复位会让"某用例导入过"泄漏成"下个用例一进来就待重启"。
+  mockPendingRestore = null;
   // 分片上传会话同属备份域，一并复位，避免用例间状态泄漏。
   // 注意 mockUploadIdCounter 不复位：id 需跨会话保持唯一。
   mockUploads = {};
@@ -2662,6 +2677,110 @@ export const handlers = [
     return HttpResponse.json(mockFreeze);
   }),
 
+  // —— 一键重启（FR-40 追加七，admin）——
+  // mock 环境没有可重启的进程，故如实返回**降级**结果（supported:false + 可复制命令）：
+  // 这正是真实世界里"容器部署 / 无 systemctl"时的形态，也是界面必须能处理的那条分支。
+  // 若这里假装 supported:true，前端探活会一直等一个永不重启的 mock，把降级路径漏测掉。
+  // 只读探测：与 POST 同结构，但**绝不排定重启**（预览环境没有可重启的进程）。
+  // 界面用它显示"本机可用命令"，故这里也如实给降级结果。
+  http.get("*/api/v1/maintenance/restart", ({ request }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    return HttpResponse.json({
+      supported: false,
+      command: "sudo systemctl restart jianartifact",
+      reason: "预览环境不提供自动重启",
+      scope: "system",
+    });
+  }),
+
+  http.post("*/api/v1/maintenance/restart", ({ request }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    return HttpResponse.json({
+      supported: false,
+      command: "sudo systemctl restart jianartifact",
+      reason: "预览环境不提供自动重启",
+      scope: "system",
+    });
+  }),
+
+  // —— 待重启生效的恢复状态（FR-40 追加六，admin）——
+  // 与下面 /backups/import 等一样必须早于 `*/api/v1/backups/:id`，否则会被 :id 通配吞掉。
+  // 默认 pending=false（绝大多数时候如此），由导入/上传的终态推进来翻转，
+  // 这样开发环境也能复现"导入成功后按钮转橙、再导入被拒"的完整链路。
+  http.get("*/api/v1/backups/restore-status", ({ request }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    if (!mockPendingRestore) {
+      // 未暂存时只回 pending，其余字段一律省略（契约要求：不返回零值占位，
+      // 否则前端会把 0001-01-01 当成真实时间渲染出来）。
+      return HttpResponse.json({ pending: false });
+    }
+    return HttpResponse.json({
+      pending: true,
+      packageId: mockPendingRestore.packageId,
+      origin: mockPendingRestore.origin,
+      stagedAt: mockPendingRestore.stagedAt,
+    });
+  }),
+
+  // —— 用本机已有的备份包恢复（FR-40 追加六，admin）——
+  // 补的是"页面上明明有包，却没有任何按钮能用它恢复"这个缺口（实测反馈"只能备份无法恢复"）。
+  // 语义与其它三条恢复通道一致：受理 → 暂存 → 写 restore.pending → 需重启生效，
+  // 故这里也置位 mockPendingRestore，让"待重启"提示与 409 防护在开发环境同样可见。
+  // 必须早于 `*/api/v1/backups/:id`，否则会被 :id 通配吞掉。
+  http.post("*/api/v1/backups/:id/restore", async ({ request, params }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    if (mockPendingRestore) {
+      return err("restore_pending", "已存在待生效的备份恢复，请先重启服务完成替换", 409);
+    }
+    const id = String(params.id);
+    const pkg = mockBackups.find((b) => b.packageId === id);
+    if (!pkg) {
+      return err("not_found", "备份包不存在", 404);
+    }
+    // 只有 done 的包能作为恢复源——与后端一致（生成中/失败的包内容不可靠）。
+    if (pkg.status !== "done") {
+      return err("backup_not_done", "备份包未生成完成或已失败，不能作为恢复源", 409);
+    }
+    const body = (await request.json().catch(() => ({}))) as {
+      overwrite?: boolean;
+      deep?: boolean;
+    };
+    const importId = `imp-${new Date()
+      .toISOString()
+      .replace(/[-:T.]/g, "")
+      .slice(0, 14)}-${String(++mockImportSeq).padStart(3, "0")}`;
+    const record: BackupImport = {
+      importId,
+      origin: "local",
+      status: "queued",
+      operator: store.findUser(mockUserId(request) ?? 0)?.username ?? "admin",
+      overwrite: body.overwrite === true,
+      deep: body.deep === true,
+      totalBytes: 73_400_320,
+      fetchedBytes: 0,
+      blobCount: 0,
+      // 本机包恢复：源就是本机这个包本身，故 packageId 直接是它，无需从别处带回。
+      packageId: id,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    mockImports.unshift(record);
+    advanceMockImport(importId);
+    return HttpResponse.json(record, { status: 202 });
+  }),
+
   // —— 从 URL 导入备份包（FR-137，admin）——
   // 注意路由注册顺序：必须早于 `*/api/v1/backups/:id`，否则 /backups/imports
   // 会被 :id 通配吞掉（与 gin 上实测一致的静默吞路由问题）。
@@ -2669,6 +2788,11 @@ export const handlers = [
     const denied = adminUnauthorized(request);
     if (denied) {
       return denied;
+    }
+    // 已有待生效恢复时拒绝叠加第二次——与后端一致（409 restore_pending）。
+    // 不复现这条，前端就测不出"待重启期间导入被拒"的分支。
+    if (mockPendingRestore) {
+      return err("restore_pending", "已存在待生效的备份恢复，请先重启服务完成替换", 409);
     }
     const body = (await request.json().catch(() => ({}))) as {
       sourceUrl?: string;

@@ -33,6 +33,10 @@ import (
 // entityType 取 backup_package、entityKey 取包标识，与备份列表的主键口径一致。
 const auditActionBackupDrill = "backup.drill"
 
+// auditActionBackupRestore 是用本机包发起恢复的审计动作名（FR-40 追加六）。
+// 与 backup.drill 一样 entityType 取 backup_package、entityKey 取包标识。
+const auditActionBackupRestore = "backup.restore"
+
 // DrillBackup 发起一次恢复演练（仅管理员）。
 //
 // 三段式：先同步完成"能不能开始"的判定（包存在且已完成、级别合法），再交给后台执行，

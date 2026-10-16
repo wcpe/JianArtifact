@@ -419,17 +419,32 @@ func run() error {
 	// FR-131：服务内置 TLS 双监听（与 HTTP 共用同一 handler），供 CDN 回源 HTTPS。
 	// 显式配置了 TLS 地址但证书缺失 / 格式错误 → 启动失败并明确报错，
 	// 防止"以为加密了实际没有"的静默降级；未配置 TLS 地址时保持纯 HTTP。
+	//
+	// tlsServer 在 select 之前声明（而不是原来的 if 块内短声明）：一键重启分支也要关停它，
+	// 块内短声明的变量在 select 处已不可见。
+	var tlsServer *http.Server
 	if cfg.TLSAddr != "" {
-		tlsServer, err := buildTLSServer(cfg, newApplicationHandler(cfg, svc, assets))
+		built, err := buildTLSServer(cfg, newApplicationHandler(cfg, svc, assets))
 		if err != nil {
 			return fmt.Errorf("配置了 %s 但 TLS 启动失败：%w", config.EnvTLSAddr, err)
 		}
+		tlsServer = built
 		go func() {
 			fmt.Printf("JianArtifact %s TLS 正在监听 %s\n", version, cfg.TLSAddr)
 			if err := tlsServer.ListenAndServeTLS(cfg.TLSCert, cfg.TLSKey); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				errCh <- err
 			}
 		}()
+	}
+
+	// FR-40 追加七：一键重启的"该重启了"信号（触发点已在装配期接到领域服务上）。
+	// 它由 HTTP 端点受理后延迟发出，因此这条分支就是"重启"本身：
+	// 先优雅关停（与 SIGTERM 同一条路），再自替换映像。
+	restartCh := svc.restartCh
+	if restartCh == nil {
+		// CLI 子命令不会走到这里（它们不启动 HTTP 服务）；真到了也只说明装配漏了，
+		// 用一条永不触发的通道兜底，避免 select 里出现 nil 通道分支。
+		restartCh = make(chan struct{})
 	}
 
 	select {
@@ -444,6 +459,45 @@ func run() error {
 		}
 		fmt.Println("已关停。")
 		return nil
+	case <-restartCh:
+		// 一键重启：**先优雅关停，再自替换**。
+		//
+		// 顺序必须是这个（反过来是错的，两个具体后果）：
+		//  1. 新映像要在关停之后才绑定同一端口。若先 Exec，旧监听器还没关，
+		//     新映像就只能绑到一个已被占用的端口上；虽然 Go 的 fd 默认带 O_CLOEXEC、
+		//     内核会在 exec 时关掉旧 fd（实测可重绑），但那是"靠内核兜底"，
+		//     一旦哪天某个监听器的 fd 被清掉 CLOEXEC 或被继承，就变成新映像起不来；
+		//  2. 正在服务的在途请求与数据库连接需要有收尾的机会。Exec 一到，旧映像的内存状态
+		//     连同 goroutine 一起消失，没有任何机会把请求写完、把事务提交完。
+		//     所以这里走与 SIGTERM 完全相同的 15s 上限的 Shutdown。
+		//
+		// 关停失败**如实报错并返回**，绝不静默 Exec：在途请求或 SQLite 连接残留着
+		// 就换映像，等于把"没关干净"这件事藏起来——新映像启动时看到的是一份半关停的现场，
+		// 而日志里一个字都不会提。
+		fmt.Println("收到一键重启请求，正在优雅关停并自替换……")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+			return fmt.Errorf("一键重启：优雅关停 HTTP 失败，已放弃自替换：%w", err)
+		}
+		if tlsServer != nil {
+			if err := tlsServer.Shutdown(shutdownCtx); err != nil {
+				return fmt.Errorf("一键重启：优雅关停 TLS 失败，已放弃自替换：%w", err)
+			}
+		}
+		fmt.Println("已关停，正在自替换进程映像……")
+
+		// 自替换：不执行任何外部命令，只是把本进程的映像换成 argv[0] 指向的那份
+		// （**必须是 os.Args[0]，不能用 os.Executable()**——理由见 domain/restart_exec.go，
+		// 用错会让"部署切换后重启"等于没有切换）。本调用成功后不会返回：
+		// 新映像从 run() 的第一行重新开始，于是 ApplyPendingRestore（见本函数开头的调用）
+		// 会被再执行一次——这才是"一键重启"真正的意义：备份恢复的落地就靠这一次启动。
+		if err := domain.ReplaceSelf(); err != nil {
+			return fmt.Errorf("一键重启：自替换失败（argv[0]=%q）：%w", os.Args[0], err)
+		}
+		// 理论上到不了这里（Exec 成功即换映像）。留一句防御性返回，避免将来有人把
+		// ReplaceSelf 改成"可返回成功"的实现后，本函数静默地走完却没重启。
+		return errors.New("一键重启：自替换未生效，进程仍在运行")
 	}
 }
 

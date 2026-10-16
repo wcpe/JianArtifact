@@ -95,13 +95,36 @@
 
 两个接口均要求管理员（未登录 401 / 非管理员 403）；`/api/v1/maintenance/` 在写入冻结窗口的放行清单内。清理作业自身的行为（隔离区空目录、终态元数据裁剪、过期上传临时文件、代理缓存保留）与本批的配额语义见 [`specs/0.11.0-storage-governance.md`](specs/0.11.0-storage-governance.md)。
 
+### 一键重启服务（FR-40 追加七）
+
+让本节点重新起服（备份恢复后生效、或按运维要求重载进程）。**仅管理员**。
+
+**执行路径是进程自替换（`syscall.Exec`），不执行任何外部命令。** `jianartifact` 本就有权执行自己的二进制（systemd 的 `ExecStart` 就是它），自替换只是"同一进程换新映像"，**不引入任何新权限**——因此不需要 sudo / polkit / sudoers，也不受 `NoNewPrivileges=true` 影响，在用户级单元 / 系统级单元 / 容器等任何部署形态下都可用。两个必须知道的语义差异（运维视角）：**① systemd 视角上单元从未停止**——PID 不变、`ActiveEnterTimestamp` 与 `NRestart` 都不动，`systemctl status` 看不出重启过；**② 存在一个短暂的中断窗口**（先优雅关停再接替映像）。详见 [`OPERATIONS.md`](OPERATIONS.md) §1.7。
+
+- `GET /api/v1/maintenance/restart`：**只读探测**本机的重启能力，返回与 `POST` 相同的 `MaintenanceRestartResult{supported, command, reason?, scope?}`，但**不含 `delayMs`**（没有受理就没有延迟可言）。
+  - **绝不排定任何重启**：它只调 `Probe()`，不调 `RestartAfter`。**必须存在这个只读端点**，因为 `command` 是**手工重启的等效命令**、随部署形态与运行身份而变（rootless 用户级 / 系统级 root / 系统级非 root / 容器），只有后端知道本机该敲哪一条；界面若硬编码一条，在仓库自带的 rootless 用户级单元下就会给出**照做必失败**的 `sudo systemctl restart <unit>`（自带形态该用 `systemctl --user`，且它本就不需要 sudo）——同一台机器上于是同时出现两条命令，其中一条是陷阱。
+  - **不能用 `POST` 代替它做探测**：`POST` 在 `supported:true` 时会当场排定重启（见 `RestartAfter`），"打开弹窗即调用它取 command"等于**打开弹窗就重启服务**。因此本端点存在的意义正是把"读能力"与"触发重启"在接口层彻底分开：读操作无论被轮询多少次都不会让进程重启。
+  - 探测口径与 `POST` 完全一致（同一次 `Probe`、同一套 `RestartPlan` → `MaintenanceRestartResult` 映射），因此两个端点回显的 `supported` / `command` / `scope` **逐字一致**。
+  - **不写审计**：只读探测不改变任何状态，与 `GET /api/v1/maintenance/jobs` 一致（读操作不落审计）；否则界面每次打开弹窗都会在审计库里留一条记录，把真正的重启受理淹没。
+  - 未装配重启能力时返回 503 `unavailable`；未登录 401、非管理员 403。
+- `POST /api/v1/maintenance/restart`：返回 `MaintenanceRestartResult{supported, command, reason?, scope?, delayMs?}`。
+  - **顺序契约：先回响应，再重启。** 返回 **202** 时重启**尚未开始**，只是**已受理**，真正开始（优雅关停 → 自替换）在 `delayMs` 毫秒后（约 1.8 秒），留出响应送达与前端展示的余量。调用方看到 202 后应立刻停止轮询本节点——连接随后断开是**预期行为**，不是失败。若"先重启再回响应"，202 根本发不出去，调用方只会看到连接被重置，既分不清"重启成功"还是"网络抖动"，也拿不到 `command` / `supported` 这些降级信息。
+  - **能力预检与降级：`supported: false` 是正常业务结果，用 HTTP 200 返回，不是错误。** 受理前会**同步**预检四条判据——① 本平台是否支持自替换（`syscall.Exec` 仅 Unix）；② `os.Args[0]`（即自替换要加载的路径）能否解析为可执行文件；③ 重启触发点是否已接线；④ 单元名与作用域是否合法。判据不满足时返回 **200** + `supported:false` + `reason` + `command`（可复制到终端手动执行的**手工等效命令**），供前端渲染降级 UI。预检不通过**不**返回 4xx/5xx，也**绝不**假装成功。预检必须在响应之前：后台失败对调用方不可观测（进程随即换映像、响应早已发出），无法区分"重启成功"与"根本没重启成"。
+  - **`command` 不是本进程将要执行的命令**（本进程走自替换，压根不执行命令），它是"若你想手工重启，敲这条"。**任何情况下都返回**（含受理成功时），便于审计与人工复现。`scope` 回显配置的作用域（`system` / `systemd-user` / `docker`）。
+  - **各作用域的 `command` 形态**：`systemd-user` → `systemctl --user restart <unit>`（**与仓库自带的 rootless 用户级单元配套，推荐**）；`system` 非 root → `sudo -n systemctl restart <unit>`；`system` 且进程是 root → `systemctl restart <unit>`；`docker` → `docker restart <unit>`（**不支持自动重启**，`supported:false`；实例由 compose / k8s 编排时，实际生效的命令应换成 `docker compose restart` / `kubectl rollout restart`，见 [`OPERATIONS.md`](OPERATIONS.md) §1.7）。
+  - **配置**（环境变量，见 [`OPERATIONS.md`](OPERATIONS.md) §1）：`JIAN_RESTART_UNIT`（默认 `jianartifact`）指定单元名，`JIAN_RESTART_SCOPE`（默认 `system`，非法值回落默认）决定 `command` 的形态。两者都只影响**手工命令的展示**，不影响自替换本身（自替换加载的是本进程自己的 `os.Args[0]`，与单元名无关）。
+  - **安全**：单元名**只**来自环境变量，**绝不**从请求体读取——那是一条直通命令注入的路径。此外单元名须匹配 `[A-Za-z0-9._@-]`，含 `;` / `$()` / 空格 / 换行等元字符时一律降级为 `supported:false`，且 `command` 只给说明性注释、**不回显配置原文**（`command` 会被运维复制到终端粘贴执行，回显等于把一处配置错误变成可粘贴的注入载荷）。
+  - 审计动作 `maintenance.service_restart`（`entityType=maintenance`）：受理记 `ok`、降级记 `failed`，均带命令或原因。重启能力未装配时返回 503 `unavailable`（兼容分支，生产装配恒为已接线）。
+
 ### 备份包导入（FR-137，三通道）
 
 导入三通道均已交付：CLI 直传、Web URL 拉取、Web 分片上传；导入记录异步跨重启可查。仅管理员。
 
+- `POST /api/v1/backups/{id}/restore`：`{overwrite?, deep?}` **用本机已有的备份包恢复本机数据**，立即返回 `202` 与 `BackupImport`（`origin=local`）。存在的意义是补上「页面上明明列着可用的包，却没有任何按钮能用它恢复」这个缺口——另外三条通道（URL / 上传 / CLI）都要求包从外部来，用户因此会得出「只能备份、不能恢复」的结论。语义与它们**完全一致**（复用同一条编排：校验 → 合并 blob → 暂存 db → 写 `restore.pending`，**需重启生效**），前置校验也相同：包必须 `done`（否则 409 `backup_not_done`）、目标非空需 `overwrite`、已有待生效恢复时 409 `restore_pending`；包不存在 404。
 - `POST /api/v1/backups/import`：`{sourceUrl（必填，http/https）, overwrite?, deep?, expectedSha256?}` 由服务端拉取并异步导入，立即返回 `202` 与 `BackupImport`（状态 `queued`）。**SSRF 防护**：拒绝回环/私网/链路本地/云元数据地址，每次拨号重新解析（防 DNS 重绑定），重定向重新校验。
 - `GET /api/v1/backups/imports?page=&page_size=`：导入记录分页列表（按 `createdAt` 倒序，最近优先），返回 `BackupImportList{items, total}`。
 - `GET /api/v1/backups/imports/{id}`：单条导入记录详情（状态机、进度、错误码）。状态机 `queued → fetching → staging → pending_restart → done`，失败转 `failed`；`pending_restart` 表示包已校验、blob 已按内容寻址合并、db 已暂存、`restore.pending` 已写入，**需重启服务才替换数据库**。
+- `GET /api/v1/backups/restore-status`：查询是否存在待重启生效的恢复，返回 `BackupRestoreStatus{pending, packageId?, origin?, stagedAt?}`。`pending=true` 时后续导入/上传一律 `409 restore_pending`（不允许叠加第二次恢复），界面据此解释"为什么现在导入不了"——该状态此前只体现在导入记录行的 `pending_restart` 徽章上，徽章滚出视野后原因就不可见了。未暂存时只返回 `pending: false`，其余字段**省略**（不返回零值占位，避免前端把 `0001-01-01` 当真实时间渲染）。
 
 ### 分片上传（FR-137 第三通道）
 

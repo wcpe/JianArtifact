@@ -49,6 +49,7 @@ export function OpsSection({
   tone,
   style,
   bodyStyle,
+  testId,
 }: {
   title?: ReactNode;
   meta?: ReactNode;
@@ -58,12 +59,15 @@ export function OpsSection({
   tone?: OpsTone;
   style?: CSSProperties;
   bodyStyle?: CSSProperties;
+  /** 供测试定位该分区卡（卡片本身没有语义角色，靠标题文案定位会随文案漂移）。 */
+  testId?: string;
 }) {
   return (
     <Card
       withBorder
       radius="md"
       padding={0}
+      data-testid={testId}
       style={{
         ...(tone === "orange" ? { borderColor: "var(--mantine-color-orange-3)" } : {}),
         ...style,

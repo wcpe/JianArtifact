@@ -26,6 +26,26 @@ import { ApiError } from "../api/client";
 /** 全局刷新事件名：页眉刷新按钮派发，所有 useAsync 实例（及自管数据的组件）重新拉取。 */
 export const REFRESH_EVENT = "jianartifact:refresh";
 
+/**
+ * 派发全局刷新事件，可选携带"刚受理的导入记录"标识。
+ *
+ * 为什么把 importId 搭在同一个事件上，而不是另加一个回调或第二个事件：
+ * 导入通道（URL / 上传）此前明确拒绝过 `onImported` 回调，理由写在
+ * UrlImportPanel 文件头——同一件事有两个刷新通道，容易出现一个刷了另一个没刷的错位。
+ * 这里沿用那个判断：**通道仍只有一个**，只是把"顺手要打开的进度弹窗"当作载荷捎带过去。
+ * 监听方按需取 `detail.importId`（不关心它的监听者完全无感，向后兼容）。
+ */
+export function dispatchRefresh(importId?: string): void {
+  window.dispatchEvent(new CustomEvent(REFRESH_EVENT, { detail: { importId } }));
+}
+
+/** 从全局刷新事件里取导入标识；非导入场景（页眉刷新等）返回 null。 */
+export function importIdFromRefreshEvent(event: Event): string | null {
+  const detail = (event as CustomEvent<{ importId?: unknown }>).detail;
+  const id = detail?.importId;
+  return typeof id === "string" && id.length > 0 ? id : null;
+}
+
 export interface AsyncState<T> {
   data: T | null;
   /** 首载进行中（尚无数据可展示）。 */

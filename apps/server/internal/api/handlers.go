@@ -58,6 +58,24 @@ type Deps struct {
 	OIDC                    *OIDCDeps                               // FR-34：OIDC 登录端点依赖（nil = 未启用，端点返回 404）
 	LDAPAuth                LDAPAuthenticator                       // FR-35：LDAP 目录侧校验（nil = 未启用，登录不回退目录）
 	MaintenanceJobs         MaintenanceJobController                // FR-41：维护作业清单与手动触发（nil 时端点返回 503）
+	Restart                 RestartController                       // FR-40 追加七：一键重启（nil 时端点返回 503）
+}
+
+// RestartController 是接口层对一键重启能力的最小依赖：同步预检、延迟触发重启动作。
+// 与 MaintenanceJobController 同一抽象风格——刻意不依赖 *domain.RestartService 具体类型，
+// 使接口层可以脱离真实的自替换执行验证鉴权、状态码与"响应先于动作"的顺序。
+type RestartController interface {
+	// Command 返回**手工重启**的等效命令串（不预检，任何情况下都非空）。
+	// 它不是本进程将要执行的命令——自动重启走进程自替换，不执行任何外部命令。
+	Command() string
+	// Scope 返回配置的作用域（system / systemd-user / docker），供契约回显。
+	Scope() string
+	// Probe 同步预检能否自替换（平台支持 / argv[0] 可执行 / 触发点已接线）；
+	// 判据不满足是正常业务结果，不返回 error。
+	Probe() domain.RestartPlan
+	// RestartAfter 在 delay 之后后台触发重启动作并立即返回（不阻塞调用方）。
+	// 传回 Probe 的结论而不是让它重新判一次：响应里说的与后台做的不再同源就会脱节（见 domain.RestartPlan）。
+	RestartAfter(plan domain.RestartPlan, delay time.Duration)
 }
 
 // MaintenanceJobController 是接口层对维护作业调度器的最小依赖：只读状态 + 按名触发一次。
@@ -109,6 +127,7 @@ type Handlers struct {
 	oidc                    *OIDCDeps                    // FR-34：OIDC 登录端点依赖（nil = 未启用）
 	ldapAuth                LDAPAuthenticator            // FR-35：LDAP 目录侧校验（nil = 未启用）
 	maintenanceJobs         MaintenanceJobController     // FR-41：维护作业清单与手动触发
+	restart                 RestartController            // FR-40 追加七：一键重启（nil = 未装配）
 }
 
 // NewHandlers 构造 Handlers。
@@ -148,6 +167,7 @@ func NewHandlers(d Deps) *Handlers {
 		oidc:                    d.OIDC,
 		ldapAuth:                d.LDAPAuth,
 		maintenanceJobs:         d.MaintenanceJobs,
+		restart:                 d.Restart,
 	}
 }
 

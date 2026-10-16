@@ -1217,6 +1217,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/backups/{id}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 用本机已有的备份包恢复本机数据（仅管理员）
+         * @description 直接以**本机已登记的备份包**为源发起一次恢复，省去"先下载再上传"的往返。
+         *
+         *     为什么需要它：另外三条恢复通道（`POST /backups/import`、`POST /backups/uploads`、
+         *     CLI `backup import`）都要求包来自**外部**（远端 URL / 本机文件 / 本地路径），
+         *     于是页面上明明列着可用的包，却没有任何按钮能用它恢复——用户会直接得出
+         *     "只能备份、不能恢复"的结论。本端点补上这个缺口。
+         *
+         *     语义与其它通道**完全一致**（刻意复用同一条编排，避免出现"第二条恢复路径行为不同"）：
+         *     校验 → 合并 blob → 暂存 db → 写 `restore.pending`，**需重启服务后才替换数据库**。
+         *     因此返回 **202 + 导入记录**（与 URL 导入同形），进度经 `GET /backups/imports/{id}` 查看。
+         *     `origin` 记为 `local`，便于在事件表里区分"从本机包恢复"与其它来源。
+         *
+         *     前置校验（复用既有规则）：包必须存在且状态为 `done`；目标实例非空时需显式
+         *     `overwrite: true`；已存在待生效恢复（`restore.pending`）时返回 409 `restore_pending`
+         *     （不允许叠加第二次恢复）。
+         */
+        post: operations["restoreFromLocalPackage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/backups/{id}/drill": {
         parameters: {
             query?: never;
@@ -1345,6 +1379,109 @@ export interface paths {
          *     触发动作写入审计。
          */
         post: operations["runMaintenanceJob"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/maintenance/restart": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 探测重启能力（只读，仅管理员）
+         * @description **只读探测：绝不排定任何重启。** 返回与 `POST` 相同的 `MaintenanceRestartResult`
+         *     结构（`supported` / `command` / `reason` / `scope`），但**不含 `delayMs`**——
+         *     没有受理就没有延迟可言（该字段本就只在受理成功时给出）。
+         *
+         *     为什么必须有这个只读端点：`command` 是**手工重启的等效命令**，随部署形态而变
+         *     （root / 非 root / systemd-user / docker），只有后端知道本机该敲哪一条。界面若自行
+         *     硬编码一条（例如 `sudo systemctl restart <unit>`），在自带单元这种部署形态下会因为
+         *     `NoNewPrivileges=true` 阻止 sudo 提权而**照做必失败**——同一台机器上于是同时出现
+         *     两条命令，其中一条是陷阱。命令的真源只能是后端。
+         *
+         *     为什么不能让调用方用 `POST` 代替：`POST` 在 `supported: true` 时**会当场排定重启**，
+         *     于是"打开界面即重启"。本端点因此是唯一允许用来渲染"待重启"说明与可复制命令的入口，
+         *     且**不写审计**（只读，与作业清单查询一致）。
+         *
+         *     探测口径与 `POST` 完全一致（同一次 `Probe`），因此两个端点给出的
+         *     `supported` / `command` / `scope` 逐字一致。
+         *
+         *     **自动重启的判据与 `command` 无关**：真正执行的是**进程自替换**
+         *     （`syscall.Exec` 换新映像，不执行任何外部命令、不引入任何新权限），
+         *     判据只有"本平台支持自替换 / `argv[0]` 可解析为可执行文件 / 触发点已接线"三条。
+         *     `command` 只用于手工重启与降级出路。
+         */
+        get: operations["getRestartCapability"];
+        put?: never;
+        /**
+         * 重启服务进程（仅管理员）
+         * @description 让本节点重新起服（用于备份恢复后生效、或按运维要求重载进程）。
+         *
+         *     **执行路径是进程自替换（`syscall.Exec`），不执行任何外部命令。**
+         *     `jianartifact` 本就有权执行自己的二进制（systemd 的 `ExecStart` 就是它），
+         *     自替换只是"同一进程换新映像"，**不引入任何新权限**——因此不需要 sudo / polkit /
+         *     sudoers，也不受 `NoNewPrivileges=true` 影响，在用户级单元 / 系统级单元 / 容器等
+         *     任何部署形态下都可用。代价与差异见 [`docs/OPERATIONS.md`](docs/OPERATIONS.md)：
+         *     systemd 视角上单元从未停止（`ActiveEnterTimestamp` / `NRestart` 不变），
+         *     且存在一个"先优雅关停、再替换映像"的短暂中断窗口。
+         *
+         *     **顺序契约：先回响应，再重启。** 返回 202 时重启**尚未开始**，只是**已受理**；
+         *     真正开始（优雅关停 → 自替换）在 `delayMs` 毫秒之后（约 1.5~2 秒），
+         *     留出响应送达与前端展示的余量。因此调用方看到 202 后应立刻停止轮询本节点——
+         *     连接随后断开是**预期行为**，不是失败。
+         *
+         *     **能力探测与降级：`supported: false` 是正常业务结果，用 HTTP 200 返回，不是错误。**
+         *     服务在受理前会同步预检（本平台是否支持自替换 / `argv[0]` 是否可解析为可执行文件 /
+         *     触发点是否已接线 / 单元名与作用域是否合法），判据不满足时**不会**返回 4xx/5xx，
+         *     而是返回 200 与 `supported: false` + `reason`（原因）+
+         *     `command`（可复制到终端手动执行的手工等效命令）。
+         *     这样前端能渲染降级 UI 并让运维照抄命令，而不是只看到一个没有出路的失败。
+         *     本接口**绝不假装成功**：只要没有真正受理自动重启，就一定如实回 `supported: false`。
+         *
+         *     `command` 在任何情况下都返回（含成功时），便于审计与人工复现。
+         *     注意它**不是本进程将要执行的命令**（本进程走自替换），而是"若你想手工重启，跑这条"，
+         *     因此它随部署形态而变（`systemd-user` → `systemctl --user restart <unit>`；
+         *     `system` 非 root → `sudo -n systemctl restart <unit>`；root → `systemctl restart <unit>`；
+         *     `docker` → `docker restart <unit>`）。
+         *
+         *     只想**查询**本机能不能自动重启、以及手工命令长什么样时，请用同路径的 `GET`
+         *     （`getRestartCapability`）：本接口会真的排定重启，不能拿来探测。
+         */
+        post: operations["restartService"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/backups/restore-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 查询是否存在待重启生效的备份恢复（仅管理员）
+         * @description 回答「本节点是否有一份已暂存、等待重启才生效的恢复」。
+         *
+         *     为什么需要这个端点：导入/上传成功后只写 `restore.pending` 与 `restore-staging/`，
+         *     真正的数据库替换在**下次启动**完成。在那之前，任何后续导入都会以 409
+         *     `restore_pending` 被拒。此前这个状态只体现在导入记录行的 `pending_restart` 徽章上——
+         *     一旦该行被更近的事件挤出视野，用户就再也看不出「为什么导入一直失败」。
+         *
+         *     `pending` 为真时 `packageId` / `origin` / `stagedAt` 给出待生效那一份的来源，
+         *     供界面如实说明是哪一次搬迁在等重启；未暂存时三者省略（不返回零值占位，
+         *     以免前端把 `0001-01-01` 当成真实时间渲染）。
+         */
+        get: operations["getBackupRestoreStatus"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2970,6 +3107,23 @@ export interface components {
             error?: string;
         };
         /**
+         * @description 是否存在待重启生效的备份恢复。`pending=false` 时其余字段一律省略——
+         *     它们只在确有暂存时才可读，返回零值会让前端渲染出 `0001-01-01` 这类假时间。
+         */
+        BackupRestoreStatus: {
+            /** @description 是否已暂存一份恢复、等待重启替换数据库。 */
+            pending: boolean;
+            /** @description 待生效的包标识（源机器上的标识）。 */
+            packageId?: string;
+            /** @description 该次暂存的来源通道（`url` / `upload` / `cli`）。 */
+            origin?: string;
+            /**
+             * Format: date-time
+             * @description 暂存完成时刻。
+             */
+            stagedAt?: string;
+        };
+        /**
          * @description 演练强度：shallow 只校验结构摘要与解包可用性；deep 额外逐 blob 比对内容摘要
          *     （全量读取，耗时与包体积同阶）。
          * @enum {string}
@@ -3019,6 +3173,13 @@ export interface components {
             items: components["schemas"]["BackupVerificationReport"][];
             /** @description 该包的历史报告总数（用于分页展示）。 */
             total: number;
+        };
+        /** @description 用本机已有的备份包发起恢复。请求体可整体省略（等同全部取默认）。 */
+        RestoreFromLocalPackageRequest: {
+            /** @description 目标实例非空时需显式置真。内置 anonymous 主体不计入「非空」。 */
+            overwrite?: boolean;
+            /** @description 暂存前逐 blob 比对内容摘要（耗时与包体积同阶）。 */
+            deep?: boolean;
         };
         /**
          * @description 发起一次恢复演练。请求体可整体省略，省略时按 **deep（深校验）** 执行：
@@ -3103,8 +3264,54 @@ export interface components {
             name: string;
             started: boolean;
         };
-        /** @enum {string} */
-        BackupImportOrigin: "url" | "upload" | "cli";
+        /**
+         * @description 一键重启的受理结果。
+         *
+         *     自动重启的执行路径是**进程自替换**（`syscall.Exec` 换新映像），不执行任何外部命令、
+         *     不引入任何新权限，因此在任何部署形态下都可用。
+         *
+         *     `supported: false` 是**正常的业务结果**，用 HTTP 200 返回（不是 4xx/5xx）：
+         *     它表示本节点无法自动重启（本平台不支持自替换 / `argv[0]` 不可解析为可执行文件 /
+         *     重启触发点未接线 / 单元名或作用域配置非法 / docker 作用域），
+         *     此时 `command` 给出可复制到终端手工执行的重启命令，`reason` 说明原因。
+         *     服务不会在判据不满足时假装成功，也不会用错误码把降级信息埋掉。
+         *
+         *     两个端点（`GET` 只读探测 / `POST` 受理）回显的
+         *     `supported` / `command` / `scope` 逐字一致：它们取同一次 `Probe` 的结论。
+         */
+        MaintenanceRestartResult: {
+            /** @description 是否已受理自动重启；false 时请用 command 手动执行 */
+            supported: boolean;
+            /**
+             * @description **手工重启的等效命令**（本接口受理时进程走自替换，不执行该命令）；始终返回、可直接复制。
+             *     它随部署形态而变：`systemd-user` → `systemctl --user restart <unit>`；
+             *     `system` 非 root → `sudo -n systemctl restart <unit>`；root → `systemctl restart <unit>`；
+             *     `docker` → `docker restart <unit>`。配置非法时给出一句说明性注释（不回显配置原文）。
+             */
+            command: string;
+            /**
+             * @description 无法自动重启的原因（supported=false 时）：本平台不支持自替换 /
+             *     `argv[0]` 不可解析为可执行文件 / 触发点未接线 / 配置非法 / docker 作用域。
+             */
+            reason?: string;
+            /**
+             * @description 实际使用的作用域：system / systemd-user / docker
+             * @enum {string}
+             */
+            scope?: "system" | "systemd-user" | "docker";
+            /**
+             * Format: int64
+             * @description 受理后延迟多少毫秒执行重启
+             */
+            delayMs?: number;
+        };
+        /**
+         * @description 恢复的来源通道。`local` 表示"用本机已登记的备份包恢复"（
+         *     `POST /backups/{id}/restore`），与另外三条"包从外部来"的通道（`url` / `upload` / `cli`）
+         *     在事件表里区分开——它们最终走同一条编排，但用户来这一页要办的往往是不同的事。
+         * @enum {string}
+         */
+        BackupImportOrigin: "url" | "upload" | "cli" | "local";
         /** @enum {string} */
         BackupUploadStatus: "initialized" | "receiving" | "completed" | "aborted";
         /** @description 一次分片上传会话的视图。uploadedChunks 由磁盘上真实存在的分片推导（以磁盘为准，可续传）。 */
@@ -5599,6 +5806,38 @@ export interface operations {
             };
         };
     };
+    restoreFromLocalPackage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 备份包标识（形如 bk-20260910-162701-a1b2c3）。 */
+                id: components["parameters"]["BackupIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["RestoreFromLocalPackageRequest"];
+            };
+        };
+        responses: {
+            /** @description 已受理并开始暂存 */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupImport"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
     drillBackup: {
         parameters: {
             query?: never;
@@ -5778,6 +6017,87 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+        };
+    };
+    getRestartCapability: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /**
+             * @description 探测结果。`supported: false` 是**正常业务结果**（不是错误）：此时 `reason` 说明原因，
+             *     `command` 给出**本机等效**的手工重启命令供运维复制执行。
+             */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaintenanceRestartResult"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    restartService: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /**
+             * @description 未受理自动重启（降级）。**这是正常业务结果，不是错误**：`supported: false` +
+             *     `reason` + `command` 供前端渲染降级 UI、运维照抄命令手动执行。
+             */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaintenanceRestartResult"];
+                };
+            };
+            /** @description 已受理自动重启（响应先于重启命令；约 delayMs 后进程重启，连接会断开） */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaintenanceRestartResult"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    getBackupRestoreStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 待生效恢复状态 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupRestoreStatus"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
         };
     };
     importBackupFromURL: {

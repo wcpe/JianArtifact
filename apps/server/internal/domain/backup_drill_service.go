@@ -20,6 +20,11 @@ var (
 	ErrDrillPackageNotDone = errors.New("备份包尚未生成完成，无法演练")
 	// ErrDrillLevelUnknown 表示请求的演练级别不是 shallow / deep。
 	ErrDrillLevelUnknown = errors.New("未知的演练级别")
+	// ErrRestorePackageNotDone 表示目标包尚未生成完成（非 done），不能作为恢复源。
+	//
+	// 与 ErrDrillPackageNotDone 分开是必要的：同一判据（包必须 done）在两处的**出路不同**，
+	// 把"无法演练"原样抛给恢复请求会让用户以为点错了功能。
+	ErrRestorePackageNotDone = errors.New("备份包未生成完成或已失败，不能作为恢复源")
 )
 
 // drillStagingDirName 是演练临时目录名（落在 data 目录下、每次演练独立子目录）。

@@ -141,6 +141,18 @@ func (s *BackupImportService) Get(importID string) (*repository.BackupImport, er
 	return rec, err
 }
 
+// PendingRestore 返回当前是否存在待重启生效的恢复；不存在时返回 (nil, nil)。
+//
+// 供界面回答「为什么我现在导入不了」：一旦暂存成功，后续导入一律以 409 restore_pending
+// 被拒，直到重启完成替换。此前这个状态只体现在导入记录行的 pending_restart 徽章上，
+// 徽章被更近的事件挤出视野后，用户就再也看不出原因。
+//
+// 标记读不了（属主/权限不对）按"无待生效恢复"对待并交回错误——调用方据此如实说明，
+// 但不应因此让整个端点失败：这只是一个提示性查询。
+func (s *BackupImportService) PendingRestore() (*PendingRestore, error) {
+	return s.restore.MarkedPending()
+}
+
 // LocalImportOptions 描述一次本地导入（CLI 直传 / 分片上传组装后的归档）。
 // SourcePath 是已落地的归档路径；Origin 标注入口（"upload" | "cli"）。
 type LocalImportOptions struct {

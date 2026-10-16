@@ -250,6 +250,12 @@ func TestBackupDrillWritesAudit(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("drill 状态码 = %d，期望 202", rec.Code)
 	}
+	// 审计在 202 之前就已写入，所以本用例断言审计其实不需要等后台演练。但**必须**先等它收尾：
+	// 后台演练持有 fixture 的 t.TempDir()，不等它结束就返回，t.TempDir() 的清理会与
+	// 演练自身的 RemoveAll 赛跑，偶发报 "TempDir RemoveAll cleanup: directory is not empty"
+	// （实测在 CI 全量并发下真实出现过）。这里复用既有助手，与同文件的其它用例口径一致。
+	waitForDrillSettled(t, f.h, f.drill, pkgID)
+
 	entries, err := f.audits.List(repository.AuditFilter{Action: auditActionBackupDrill, Limit: 10})
 	if err != nil {
 		t.Fatalf("读审计：%v", err)

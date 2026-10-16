@@ -31,6 +31,8 @@ import type {
   BackupPackageList,
   BackupPackageMode,
   BackupVerification,
+  // FR-40 追加六：待重启生效的恢复状态（解释"为什么现在导入不了"）。
+  BackupRestoreStatus,
   // FR-40：恢复演练的受理结果、级别与落库报告。
   BackupDrillAccepted,
   BackupVerificationLevel,
@@ -78,6 +80,7 @@ import type {
   UserList,
   UserRole,
   UserStatus,
+  MaintenanceRestartResult,
 } from "./types";
 
 export interface OperationsObservabilityQuery {
@@ -829,6 +832,36 @@ export function unfreezeWrites(): Promise<WriteFreezeState> {
   return request<WriteFreezeState>("/maintenance/freeze", { method: "DELETE" });
 }
 
+/**
+ * 一键重启服务（FR-40 追加七）。
+ *
+ * 响应**先于**重启发出（服务端延迟约 2 秒才开始重启），所以这里能正常拿到 202；
+ * 之后连接会断，调用方需自行探活。
+ *
+ * 服务端的执行路径是**进程自替换**（`syscall.Exec` 换新映像），不执行任何外部命令、
+ * 不需要任何额外权限；`command` 是**手工重启的等效命令**（给用户复制执行），不是本进程会跑的命令。
+ *
+ * `supported:false` 不是异常：它表示本节点无法自动重启（平台不支持自替换 / argv[0] 不可执行 /
+ * 容器编排形态 / 配置非法），HTTP 仍是 200，`command` 给出可复制手动执行的等效命令。
+ */
+export function restartService(): Promise<MaintenanceRestartResult> {
+  return request<MaintenanceRestartResult>("/maintenance/restart", { method: "POST" });
+}
+
+/**
+ * 只读探测重启能力（**绝不触发重启**）。
+ *
+ * 为什么不能用 `restartService` 代替：那个 POST 在 `supported:true` 时会**当场排定重启**
+ * （服务端 `RestartAfter`），拿它探测等于"打开页面就重启"。本端点只跑同步预检并回包，
+ * 因此可安全用于挂载即取——界面据此显示**本机真正可用**的那条命令。
+ *
+ * 这条**手工重启**命令随部署形态与运行身份而变（systemd-user / 系统级 root / 系统级非 root /
+ * docker），只有后端知道本机该敲哪条；界面硬编码一条会在部分部署上给出照做必失败的指引。
+ */
+export function getRestartCapability(): Promise<MaintenanceRestartResult> {
+  return request<MaintenanceRestartResult>("/maintenance/restart", { method: "GET" });
+}
+
 // —— 从 URL 导入备份包（FR-137）——
 // 仅接受 http/https，由服务端拉取；校验/暂存完成后需重启服务替换。
 
@@ -852,6 +885,34 @@ export function listBackupImports(params: Pagination = {}): Promise<BackupImport
 /** 导入记录详情；id 为 importId。 */
 export function getBackupImport(id: string): Promise<BackupImport> {
   return request<BackupImport>(`/backups/imports/${encodeURIComponent(id)}`);
+}
+
+/**
+ * 是否存在待重启生效的备份恢复。
+ *
+ * 导入/上传成功后只写 restore.pending，真正的数据库替换在下次启动完成；在那之前
+ * 任何后续导入都会被 409 restore_pending 拒绝。这个查询让界面能解释"为什么导入不了"——
+ * 此前该状态只体现在导入记录行的徽章上，徽章被更近的事件挤出视野后就再也看不出原因。
+ */
+export function getBackupRestoreStatus(): Promise<BackupRestoreStatus> {
+  return request<BackupRestoreStatus>("/backups/restore-status");
+}
+
+/**
+ * 用本机已有的备份包恢复本机数据。
+ *
+ * 补的是"页面上明明列着可用的包，却没有任何按钮能用它恢复"这个缺口——另外三条通道
+ * （URL 拉取 / 上传 / CLI）都要求包从外部来，用户因此会得出"只能备份、不能恢复"的结论。
+ * 语义与它们完全一致：202 受理 → 轮询导入记录 → `pending_restart` 表示需重启服务生效。
+ */
+export function restoreFromLocalPackage(
+  packageId: string,
+  opts: { overwrite?: boolean; deep?: boolean } = {},
+): Promise<BackupImport> {
+  return request<BackupImport>(`/backups/${encodeURIComponent(packageId)}/restore`, {
+    method: "POST",
+    body: { overwrite: opts.overwrite, deep: opts.deep },
+  });
 }
 
 // —— 分片上传备份包（FR-137 第三通道）——
