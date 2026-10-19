@@ -8,12 +8,20 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"strings"
 
 	"time"
+
+	"github.com/wcpe/jianartifact/apps/server/internal/archive"
+	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
 )
 
 // preRestoreDirPrefix 是覆盖前的自动备份目录前缀；pre-restore-<UTC时间戳>/ 作为回滚退路。
 const preRestoreDirPrefix = "pre-restore-"
+
+// preRestoreLabel 是"恢复后补回登记"的备注文案。
+// 写成常量而不是内联字面量：它会落库并被用户看到，需要一处可改。
+const preRestoreLabel = "恢复后补回"
 
 // RestoreOutcome 是启动期应用一次待生效恢复的结果，供启动日志打印。
 type RestoreOutcome struct {
@@ -22,6 +30,9 @@ type RestoreOutcome struct {
 	BlobMerged    int
 	BlobSkipped   int
 	PreRestoreDir string // 覆盖前自动备份目录；无既有 db 时为空
+	// ReRegistered 是恢复后从磁盘包体补回的备份登记数。
+	// 非零说明"这份旧快照里没有这些包的登记，但包体还在磁盘上"——不补回来它们就看不见了。
+	ReRegistered int
 	// SkippedReason 非空表示"有待生效标记但本次未应用"，值是给运维看的完整原因与处置建议。
 	// 出现它时 applied 为 false，且**不阻止启动**（见 ApplyPendingRestore 的说明）。
 	SkippedReason string
@@ -33,8 +44,12 @@ func (o RestoreOutcome) Summary() string {
 	if backup == "" {
 		backup = "（无既有数据库，未生成回滚备份）"
 	}
-	return fmt.Sprintf("包 %s：制品 %d 件，blob 合并 %d / 跳过 %d，回滚备份 %s",
+	s := fmt.Sprintf("包 %s：制品 %d 件，blob 合并 %d / 跳过 %d，回滚备份 %s",
 		o.PackageID, o.AssetCount, o.BlobMerged, o.BlobSkipped, backup)
+	if o.ReRegistered > 0 {
+		s += fmt.Sprintf("，补回备份登记 %d 个", o.ReRegistered)
+	}
+	return s
 }
 
 // ApplyPendingRestore 在 persistence.Open 之前调用：若存在待生效标记，则先备份当前数据库，
@@ -110,7 +125,19 @@ func ApplyPendingRestore(dataDir, dbPath, blobDir string) (applied bool, outcome
 	_ = os.Remove(dbPath + "-wal")
 	_ = os.Remove(dbPath + "-shm")
 
-	// 4. 删除标记与暂存目录。
+	// 4. 把"被覆盖掉的那些备份登记"补回来。
+	//
+	// 这一步是本函数最容易被忽略、却最致命的地方：backup_package 表就存在被替换的
+	// 那个数据库里，而备份包体（<id>.tar.gz）在数据目录下、**不在**快照内。恢复一份
+	// 旧快照会让登记表退回旧内容，于是恢复之后"磁盘上明明有包、列表里却看不见"——
+	// 用户看到的就是"备份包全丢了"。而 restore 恰恰是最需要备份兜底的时刻。
+	//
+	// 修复口径：以**磁盘为准**重建登记。凡包体还在、但新库里没有登记的，一律补登记
+	// （状态 done、来源沿用包内 manifest）。这样恢复不会再把备份列表抹掉；
+	// 反过来，包体已不存在的旧登记不补（它们本来就没法用）。
+	restored := restoreBackupRegistrations(dbPath, dataDir)
+
+	// 5. 删除标记与暂存目录。
 	if err := os.Remove(pendingPath(dataDir)); err != nil {
 		return false, RestoreOutcome{}, fmt.Errorf("移除待生效标记：%w", err)
 	}
@@ -122,6 +149,7 @@ func ApplyPendingRestore(dataDir, dbPath, blobDir string) (applied bool, outcome
 		BlobMerged:    pending.BlobMerged,
 		BlobSkipped:   pending.BlobSkipped,
 		PreRestoreDir: preRestoreDir,
+		ReRegistered:  restored,
 	}, nil
 }
 
@@ -173,6 +201,107 @@ func unreadableMarkerHint(dataDir string, err error) string {
 			"        sudo chown -R <服务用户>:<服务组> %s %s\n"+
 			"        sudo systemctl restart jianartifact",
 		path, detail, err, current, path, stagingDir(dataDir))
+}
+
+// restoreBackupRegistrations 在数据库被恢复后，把"包体还在磁盘上、但新库里没有登记"
+// 的备份包重新登记回去，返回补回的条数。
+//
+// # 为什么需要
+//
+// backup_package 登记表与被恢复的数据库是同一个文件，而备份包体在数据目录下、
+// 不在快照里。恢复一份旧快照会让登记表退回旧内容，于是"磁盘上有包、列表里没有"。
+// 用户看到的就是"恢复一次，备份包全没了"——偏偏 restore 正是最需要备份兜底的时刻。
+//
+// # 口径：以磁盘为准
+//
+// 只补"包体存在且能通过 manifest 校验"的包。旧快照里登记过、但包体已不在的那些不补
+// （它们本来也没法用）。已在登记里的跳过，因此本函数幂等。
+//
+// # 为什么不用 BackupService
+//
+// 本函数在 persistence.Open **之前**执行（替换数据库时不能有活动连接）。
+// 因此这里自建一条临时连接，用完即关；不复用服务层的仓储，避免在启动早期引入
+// 完整的服务装配。
+//
+// 任何一步失败都只返回 0 而不是让启动失败：恢复本身已经成功，补登记是尽力而为的
+// 补救动作，不该反过来把服务打死。
+func restoreBackupRegistrations(dbPath, dataDir string) int {
+	dir := filepath.Join(dataDir, "backups")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0
+	}
+	// 先收集磁盘上可用的包标识。
+	type diskPackage struct {
+		id string
+	}
+	var onDisk []diskPackage
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasSuffix(name, ".tar.gz") || strings.HasSuffix(name, ".snapshot") {
+			continue
+		}
+		id := strings.TrimSuffix(name, ".tar.gz")
+		if id == "" {
+			continue
+		}
+		onDisk = append(onDisk, diskPackage{id: id})
+	}
+	if len(onDisk) == 0 {
+		return 0
+	}
+
+	db, err := persistence.Open(dbPath)
+	if err != nil {
+		return 0
+	}
+	defer func() { _ = db.Close() }()
+
+	// 既有登记集合。
+	registered := make(map[string]struct{}, len(onDisk))
+	rows, err := db.Query(`SELECT package_id FROM backup_package`)
+	if err != nil {
+		return 0
+	}
+	for rows.Next() {
+		var id string
+		if scanErr := rows.Scan(&id); scanErr == nil {
+			registered[id] = struct{}{}
+		}
+	}
+	_ = rows.Close()
+
+	restored := 0
+	for _, p := range onDisk {
+		if _, ok := registered[p.id]; ok {
+			continue
+		}
+		// 直接读归档 manifest：这是包的权威身份，也是"能否使用"的最低门槛。
+		// 不用 BackupService：它需要完整仓储装配，而本函数跑在服务装配之前。
+		_, m, openErr := archive.Open(filepath.Join(dir, p.id+".tar.gz"))
+		if openErr != nil {
+			continue
+		}
+		if validateErr := m.Validate(); validateErr != nil {
+			continue
+		}
+		size := packageSize(filepath.Join(dir, p.id+".tar.gz"))
+		finished := m.CreatedAt.UTC().Format(time.RFC3339Nano)
+		if _, execErr := db.Exec(`INSERT OR IGNORE INTO backup_package
+			(package_id, mode, base_package_id, status, label, size_bytes, counts_json,
+			 node_id, app_version, db_schema_version, created_at, finished_at, error_summary, origin)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			m.PackageID, string(m.Mode), m.BasePackageID, "done", preRestoreLabel, size, "{}",
+			m.NodeID, m.AppVersion, m.DBSchemaVersion, finished, finished, "",
+			"manual"); execErr == nil {
+			restored++
+			registered[m.PackageID] = struct{}{}
+		}
+	}
+	return restored
 }
 
 // copyRegularFile 把 src 完整复制为 dst（不保留原 mtime，仅内容一致）。
