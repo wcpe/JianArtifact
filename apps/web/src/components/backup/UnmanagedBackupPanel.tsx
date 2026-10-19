@@ -224,6 +224,14 @@ export function UnmanagedBackupPanel({ onDone }: { onDone?: () => void }) {
                             {t("backups.adoptRenamed")}
                           </Text>
                         ) : null}
+                        {/* 重复副本：同一份包的另一个文件。不能导入，但**内容有效**，
+                            所以孤儿回收也不会删它——必须显式告诉用户，否则它又会
+                            变成"两条列表都看不见、白占磁盘"的隐身文件。 */}
+                        {it.duplicate ? (
+                          <Text size="xs" c="dimmed">
+                            {t("backups.adoptDuplicate")}
+                          </Text>
+                        ) : null}
                       </Box>
                     </Table.Td>
                     <Table.Td>

@@ -42,6 +42,7 @@ func (h *Handlers) ListUnmanagedBackups(c *gin.Context) {
 			Valid:      it.Valid,
 			Reason:     optionalString(it.Reason),
 			Renamed:    it.Renamed,
+			Duplicate:  it.Duplicate,
 		})
 	}
 	c.JSON(http.StatusOK, UnmanagedBackupList{Items: out, Total: len(out)})

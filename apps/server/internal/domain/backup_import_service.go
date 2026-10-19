@@ -249,6 +249,33 @@ func (s *BackupImportService) process(ctx context.Context, importID string, opts
 	_ = os.Remove(dest)
 }
 
+// restoreFailureLogName 是恢复失败的**文件级**留痕（落在数据目录下）。
+//
+// 为什么不能只写数据库：backup_import 表在数据库里，而恢复会替换整个数据库。
+// 于是一次失败的恢复，其失败记录可能被**它自己的恢复动作**覆盖掉——实测丢失过一次，
+// 导致完全无法定位。文件在数据目录下、不在快照内，因此不会被覆盖。
+const restoreFailureLogName = "restore-failures.log"
+
+// appendRestoreFailureRecord 把一次恢复失败追加到文件日志。
+//
+// 内容刻意包含 operator / origin / package / errorCode / 原始错误，足以在数据库记录
+// 丢失后仍能还原"谁、在什么时候、对哪个包、因为什么失败了"。
+// 任何失败都静默忽略：留痕是尽力而为的附带动作，不该反过来影响主流程。
+func appendRestoreFailureRecord(dataDir, importID, origin, operator, packageID, code, detail string) {
+	if dataDir == "" {
+		return
+	}
+	line := fmt.Sprintf("%s\timport=%s\torigin=%s\toperator=%s\tpackage=%s\tcode=%s\tdetail=%s\n",
+		time.Now().UTC().Format(time.RFC3339), importID, origin, operator, packageID, code, detail)
+	f, err := os.OpenFile(filepath.Join(dataDir, restoreFailureLogName),
+		os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return
+	}
+	defer func() { _ = f.Close() }()
+	_, _ = f.WriteString(line)
+}
+
 // stageAndFinish 是 URL 拉取与本地导入共享的收尾逻辑：置 staging → 调 RestoreService.Stage
 // （同步阻塞：校验→合并 blob→暂存 db→写 restore.pending）→ 成功置 pending_restart；任何失败
 // 经 failStage 把领域错误映射为明确的 error_code 并写 failed 记录。
@@ -266,6 +293,9 @@ func (s *BackupImportService) stageAndFinish(ctx context.Context, importID, sour
 	})
 	if stageErr != nil {
 		failStage(s.repo, importID, stageErr)
+		// 同时写到文件：数据库记录可能被后续的恢复动作覆盖掉（见 restoreFailureLogName）。
+		appendRestoreFailureRecord(s.dataDir, importID, origin, operator,
+			stagePackageHint(sourcePath), stageErrorCode(stageErr), stageErr.Error())
 		return
 	}
 
@@ -400,29 +430,49 @@ func failImport(repo *repository.BackupImportRepo, importID, code, summary strin
 //   - 未知错误 → 保留 internal，但**把原始错误文本写进 error 字段**，
 //     让用户与运维至少能看到真实原因，而不是一句套话。
 func failStage(repo *repository.BackupImportRepo, importID string, stageErr error) {
-	code := errCodeInternal
+	_ = repo.Finish(importID, repository.ImportStatusFailed, stageErrorCode(stageErr),
+		stageErr.Error(), "", 0, nil)
+}
+
+// stageErrorCode 把 Stage 的领域错误映射为 error_code。
+//
+// 抽成独立函数是为了让"写数据库"与"写文件留痕"共用同一份映射——
+// 两处各写一遍迟早不一致，而它们描述的是同一件事。
+func stageErrorCode(stageErr error) string {
 	switch {
 	case errors.Is(stageErr, ErrRestoreTargetNotEmpty):
-		code = errCodeTargetNotEmpty
+		return errCodeTargetNotEmpty
 	case errors.Is(stageErr, ErrRestoreIncompatible):
-		code = errCodeIncompatible
+		return errCodeIncompatible
 	case errors.Is(stageErr, ErrRestorePending):
-		code = errCodeRestorePending
+		return errCodeRestorePending
 	case errors.Is(stageErr, ErrRestoreIncrementalUnsupported):
-		code = errCodeManifestInvalid
+		return errCodeManifestInvalid
 	case errors.Is(stageErr, ErrRestoreTooLarge):
-		code = errCodePackageOversize
+		return errCodePackageOversize
 	case errors.Is(stageErr, ErrRestoreBaseMissing):
 		// 差包的基线不在本机：这是运维可处置的状态（先导入基线包），不是内部故障。
-		code = errCodeBaseMissing
+		return errCodeBaseMissing
 	case errors.Is(stageErr, ErrRestoreInProgress):
 		// 并发导入是正常的可重试状态，不该伪装成内部错误。
-		code = errCodeImportInProgress
+		return errCodeImportInProgress
 	case errors.Is(stageErr, ErrRestorePackageNotDone):
 		// 包尚未生成完成 / 已失败，不能作为恢复源。
-		code = errCodePackageNotReady
+		return errCodePackageNotReady
 	}
-	_ = repo.Finish(importID, repository.ImportStatusFailed, code, stageErr.Error(), "", 0, nil)
+	return errCodeInternal
+}
+
+// stagePackageHint 从源路径里取出便于人读的包标识（失败留痕用）。
+//
+// 源路径可能是 backup-uploads/<id>/package.tar.gz 或 backups/<id>.tar.gz，
+// 两者都取最后一段并剥掉后缀；剥不出有意义的名字时退回完整路径。
+func stagePackageHint(sourcePath string) string {
+	base := filepath.Base(sourcePath)
+	if base == "package.tar.gz" {
+		return filepath.Base(filepath.Dir(sourcePath))
+	}
+	return strings.TrimSuffix(base, ".tar.gz")
 }
 
 func newBackupImportID(now time.Time) string {

@@ -1475,6 +1475,7 @@ export const zh = {
     adoptSubmit: "导入所选",
     adoptInvalid: "无法导入",
     adoptRenamed: "文件名与包标识不一致，导入时会重命名",
+    adoptDuplicate: "与已登记的包内容相同（多余副本），可安全删除该文件",
     adoptHasSidecar: "索引已存在",
     adoptNoSidecar: "索引缺失（导入时会重建）",
     adoptSize: "大小",

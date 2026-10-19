@@ -33,6 +33,9 @@ type RestoreOutcome struct {
 	// ReRegistered 是恢复后从磁盘包体补回的备份登记数。
 	// 非零说明"这份旧快照里没有这些包的登记，但包体还在磁盘上"——不补回来它们就看不见了。
 	ReRegistered int
+	// ImportsRestored 是从回滚备份里搬回的导入记录数。
+	// 非零说明"恢复之前有过导入事件，而新快照里没有它们"——不搬回来就查不到历史了。
+	ImportsRestored int
 	// SkippedReason 非空表示"有待生效标记但本次未应用"，值是给运维看的完整原因与处置建议。
 	// 出现它时 applied 为 false，且**不阻止启动**（见 ApplyPendingRestore 的说明）。
 	SkippedReason string
@@ -48,6 +51,9 @@ func (o RestoreOutcome) Summary() string {
 		o.PackageID, o.AssetCount, o.BlobMerged, o.BlobSkipped, backup)
 	if o.ReRegistered > 0 {
 		s += fmt.Sprintf("，补回备份登记 %d 个", o.ReRegistered)
+	}
+	if o.ImportsRestored > 0 {
+		s += fmt.Sprintf("，搬回导入记录 %d 条", o.ImportsRestored)
 	}
 	return s
 }
@@ -137,6 +143,16 @@ func ApplyPendingRestore(dataDir, dbPath, blobDir string) (applied bool, outcome
 	// 反过来，包体已不存在的旧登记不补（它们本来就没法用）。
 	restored := restoreBackupRegistrations(dbPath, dataDir)
 
+	// 4b. 把导入记录从回滚备份里搬回来。
+	//
+	// backup_import 同样是"库内的表"，恢复后会退回旧快照的内容。后果是：
+	// 恢复**之后**用户再也看不到"这次恢复是怎么失败的"——失败记录被它自己的恢复
+	// 覆盖掉了。实测就是这样丢掉过一次失败原因，导致无法定位。
+	//
+	// 与备份登记不同，导入记录是**纯历史**，磁盘上没有对应物可依据，因此只能从
+	// pre-restore 那份完整快照里搬运：它正是"被覆盖前的数据库"。
+	importsRestored := restoreImportHistory(dbPath, preRestoreDir)
+
 	// 5. 删除标记与暂存目录。
 	if err := os.Remove(pendingPath(dataDir)); err != nil {
 		return false, RestoreOutcome{}, fmt.Errorf("移除待生效标记：%w", err)
@@ -144,12 +160,13 @@ func ApplyPendingRestore(dataDir, dbPath, blobDir string) (applied bool, outcome
 	_ = os.RemoveAll(stagingDir(dataDir))
 
 	return true, RestoreOutcome{
-		PackageID:     pending.PackageID,
-		AssetCount:    pending.Counts.Assets,
-		BlobMerged:    pending.BlobMerged,
-		BlobSkipped:   pending.BlobSkipped,
-		PreRestoreDir: preRestoreDir,
-		ReRegistered:  restored,
+		PackageID:       pending.PackageID,
+		AssetCount:      pending.Counts.Assets,
+		BlobMerged:      pending.BlobMerged,
+		BlobSkipped:     pending.BlobSkipped,
+		PreRestoreDir:   preRestoreDir,
+		ReRegistered:    restored,
+		ImportsRestored: importsRestored,
 	}, nil
 }
 
@@ -299,6 +316,113 @@ func restoreBackupRegistrations(dbPath, dataDir string) int {
 			"manual"); execErr == nil {
 			restored++
 			registered[m.PackageID] = struct{}{}
+		}
+	}
+	return restored
+}
+
+// restoreImportHistory 把 pre-restore 快照里的导入记录搬回当前库，返回搬回的条数。
+//
+// # 为什么需要
+//
+// backup_import 是被恢复的那个数据库里的一张表，因此恢复会把它一并回滚。
+// 于是"这次恢复失败了"的记录会被**它自己的恢复动作**覆盖掉——记录消失、
+// 界面查不到、日志里也没有，现场完全无法定位。这真实发生过一次。
+//
+// # 数据来源
+//
+// 导入记录是纯历史，磁盘上没有对应物，所以只能从 pre-restore 快照里读——
+// 那是"被覆盖前的数据库"的完整副本。若本次没有生成 pre-restore（全新实例首次恢复），
+// 就没有可搬的历史，直接返回 0。
+//
+// # 覆盖策略
+//
+// 用 INSERT OR REPLACE：新旧两库可能有同 id 的记录（例如同一批历史），
+// 以**旧库为准**——旧库是"恢复前真实发生的最后一次状态"，比新快照里的更接近事实。
+// 任何一步失败都只返回 0，不让启动失败：恢复本身已经成功，搬历史是尽力而为。
+func restoreImportHistory(dbPath, preRestoreDir string) int {
+	if preRestoreDir == "" {
+		return 0
+	}
+	oldDBPath := filepath.Join(preRestoreDir, filepath.Base(dbPath))
+	if _, err := os.Stat(oldDBPath); err != nil {
+		return 0
+	}
+
+	oldDB, err := persistence.Open(oldDBPath)
+	if err != nil {
+		return 0
+	}
+	defer func() { _ = oldDB.Close() }()
+
+	// 先确认旧库确实有这张表（老版本可能没有），避免对不存在的表查询报错。
+	var tableCount int
+	if err := oldDB.Get(&tableCount,
+		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='backup_import'`); err != nil {
+		return 0
+	}
+	if tableCount == 0 {
+		return 0
+	}
+
+	rows, err := oldDB.Query(`SELECT import_id, origin, status, source_url, operator,
+		overwrite, deep, total_bytes, fetched_bytes, blob_count, package_id,
+		error_code, error_summary, created_at, updated_at, finished_at, restore_pending_at
+		FROM backup_import`)
+	if err != nil {
+		return 0
+	}
+	type importRow struct {
+		ImportID         string
+		Origin           string
+		Status           string
+		SourceURL        string
+		Operator         string
+		Overwrite        bool
+		Deep             bool
+		TotalBytes       int64
+		FetchedBytes     int64
+		BlobCount        int
+		PackageID        string
+		ErrorCode        string
+		ErrorSummary     string
+		CreatedAt        string
+		UpdatedAt        string
+		FinishedAt       *string
+		RestorePendingAt *string
+	}
+	var collected []importRow
+	for rows.Next() {
+		var r importRow
+		if scanErr := rows.Scan(&r.ImportID, &r.Origin, &r.Status, &r.SourceURL, &r.Operator,
+			&r.Overwrite, &r.Deep, &r.TotalBytes, &r.FetchedBytes, &r.BlobCount, &r.PackageID,
+			&r.ErrorCode, &r.ErrorSummary, &r.CreatedAt, &r.UpdatedAt, &r.FinishedAt,
+			&r.RestorePendingAt); scanErr == nil {
+			collected = append(collected, r)
+		}
+	}
+	_ = rows.Close()
+	if len(collected) == 0 {
+		return 0
+	}
+
+	newDB, err := persistence.Open(dbPath)
+	if err != nil {
+		return 0
+	}
+	defer func() { _ = newDB.Close() }()
+
+	restored := 0
+	for _, r := range collected {
+		if _, execErr := newDB.Exec(`INSERT OR REPLACE INTO backup_import
+			(import_id, origin, status, source_url, operator, overwrite, deep,
+			 total_bytes, fetched_bytes, blob_count, package_id, error_code, error_summary,
+			 created_at, updated_at, finished_at, restore_pending_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			r.ImportID, r.Origin, r.Status, r.SourceURL, r.Operator, r.Overwrite, r.Deep,
+			r.TotalBytes, r.FetchedBytes, r.BlobCount, r.PackageID, r.ErrorCode, r.ErrorSummary,
+			r.CreatedAt, r.UpdatedAt, r.FinishedAt, r.RestorePendingAt); execErr == nil {
+			restored++
 		}
 	}
 	return restored

@@ -3,6 +3,9 @@ package domain
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
@@ -105,5 +108,71 @@ func TestFailStageUnknownErrorKeepsReason(t *testing.T) {
 	}
 	if want := "permission denied"; !contains(got.ErrorSummary, want) {
 		t.Fatalf("原始原因应保留在 error 里（含 %q），实得 %q", want, got.ErrorSummary)
+	}
+}
+
+// TestStageErrorCodeCoversAllDomainErrors 直接断言映射函数本身（与"写库"共用同一份），
+// 防止将来有人只在 failStage 里加分支、却漏了这个共用函数。
+func TestStageErrorCodeCoversAllDomainErrors(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		err  error
+		want string
+	}{
+		{fmt.Errorf("%w", ErrRestoreTargetNotEmpty), "target_not_empty"},
+		{fmt.Errorf("%w", ErrRestoreIncompatible), "incompatible"},
+		{fmt.Errorf("%w", ErrRestorePending), "restore_pending"},
+		{fmt.Errorf("%w", ErrRestoreIncrementalUnsupported), "manifest_invalid"},
+		{fmt.Errorf("%w", ErrRestoreTooLarge), "package_oversize"},
+		{fmt.Errorf("%w", ErrRestoreBaseMissing), "base_missing"},
+		{ErrRestoreInProgress, "import_in_progress"},
+		{fmt.Errorf("%w", ErrRestorePackageNotDone), "package_not_ready"},
+		{fmt.Errorf("某个未知故障"), "internal"},
+	}
+	for _, tc := range cases {
+		if got := stageErrorCode(tc.err); got != tc.want {
+			t.Fatalf("%v 应映射为 %q，实得 %q", tc.err, tc.want, got)
+		}
+	}
+}
+
+// TestAppendRestoreFailureRecordWritesFile 覆盖文件留痕：
+// 数据库记录会被恢复覆盖，文件不会——所以它必须真的写出来，且内容足以定位。
+func TestAppendRestoreFailureRecordWritesFile(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	appendRestoreFailureRecord(dir, "imp-1", "local", "tester", "bk-abc", "base_missing", "缺少基线包")
+
+	path := filepath.Join(dir, restoreFailureLogName)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("失败留痕文件未生成：%v", err)
+	}
+	text := string(raw)
+	for _, want := range []string{"imp-1", "local", "tester", "bk-abc", "base_missing", "缺少基线包"} {
+		if !contains(text, want) {
+			t.Fatalf("留痕缺少 %q，实际内容：%s", want, text)
+		}
+	}
+
+	// 追加语义：第二次失败不应覆盖第一条。
+	appendRestoreFailureRecord(dir, "imp-2", "url", "admin", "bk-def", "incompatible", "版本过高")
+	raw2, _ := os.ReadFile(path)
+	if strings.Count(string(raw2), "\n") < 2 {
+		t.Fatalf("应追加而不是覆盖，实际：%s", string(raw2))
+	}
+}
+
+// TestStagePackageHint 覆盖失败留痕里的包标识提取。
+func TestStagePackageHint(t *testing.T) {
+	t.Parallel()
+	cases := map[string]string{
+		"/data/backups/bk-123.tar.gz":                "bk-123",
+		"/data/backup-uploads/up-456/package.tar.gz": "up-456",
+	}
+	for path, want := range cases {
+		if got := stagePackageHint(path); got != want {
+			t.Fatalf("%s 应提取为 %q，实得 %q", path, want, got)
+		}
 	}
 }

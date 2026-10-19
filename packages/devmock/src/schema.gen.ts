@@ -3452,6 +3452,12 @@ export interface components {
             reason?: string;
             /** @description 文件名与包内标识是否不一致（导入时以包内为准并重命名包体）。 */
             renamed: boolean;
+            /**
+             * @description 是否为"同一份包的多余副本"——磁盘上该文件的 manifest 标识已登记在列表中。
+             *     这类条目的 `valid` 为 false：不能重复导入，但内容有效、不会被孤儿回收删除。
+             *     用户需自行决定保留哪个副本（删除多余的那个）。
+             */
+            duplicate: boolean;
         };
         UnmanagedBackupList: {
             items: components["schemas"]["UnmanagedBackup"][];

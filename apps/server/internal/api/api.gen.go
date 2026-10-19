@@ -3220,6 +3220,11 @@ type TokenList struct {
 
 // UnmanagedBackup defines model for UnmanagedBackup.
 type UnmanagedBackup struct {
+	// Duplicate 是否为"同一份包的多余副本"——磁盘上该文件的 manifest 标识已登记在列表中。
+	// 这类条目的 `valid` 为 false：不能重复导入，但内容有效、不会被孤儿回收删除。
+	// 用户需自行决定保留哪个副本（删除多余的那个）。
+	Duplicate bool `json:"duplicate"`
+
 	// FileId 由文件名推导的标识（磁盘上的 `<fileId>.tar.gz`）。
 	FileId string `json:"fileId"`
 

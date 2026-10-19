@@ -1582,6 +1582,8 @@ export const en = {
     adoptSubmit: "Import selected",
     adoptInvalid: "Cannot be imported",
     adoptRenamed: "File name differs from the package id; it will be renamed on import",
+    adoptDuplicate:
+      "Same content as an already registered package (duplicate copy); this file can be deleted safely",
     adoptHasSidecar: "Index present",
     adoptNoSidecar: "Index missing (will be rebuilt on import)",
     adoptSize: "Size",

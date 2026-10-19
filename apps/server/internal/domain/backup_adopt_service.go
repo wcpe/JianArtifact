@@ -71,6 +71,11 @@ type UnmanagedBackup struct {
 	Reason string `json:"reason,omitempty"`
 	// Renamed 表示文件名与 manifest.packageId 不一致（导入将以 manifest 为准）。
 	Renamed bool `json:"renamed"`
+	// Duplicate 表示磁盘上是"同一份包的多余副本"——它的 manifest id 已登记在列表里。
+	//
+	// 这类文件既不能导入（会撞已有登记），也不该被 GC 当成垃圾删掉（它的内容有效，
+	// 只是重复）。单独标出来，让用户自己决定删哪个副本，而不是任其消失。
+	Duplicate bool `json:"duplicate"`
 }
 
 // AdoptedBackup 是单个包的导入结果。
@@ -177,8 +182,18 @@ func (s *BackupAdoptService) Scan() ([]UnmanagedBackup, error) {
 		item.Valid = true
 		item.PackageID = m.PackageID
 		item.Renamed = m.PackageID != fileID
-		// 文件名与 manifest 不同但 manifest 的 id 已登记：这不是新包，跳过。
+		// 文件名与 manifest 不同，且 manifest 的 id 已登记：这是**同一个包的重复副本**。
+		//
+		// 早先这里直接 continue，把文件从结果里抹掉——后果是它既不在列表里、也不在
+		// 未管理列表里，于是既不能用也不能删，永远占着磁盘（实测测试站上就卡了一个 1MB 的）。
+		// 现在改为**列出来但标记为重复**：Valid=false + 明确原因，用户可以据此决定
+		// 保留（改名/删除旧副本）还是清理。宁可让用户看到一个可解释的条目，
+		// 也不要让它无声无息地消失在两条列表的缝里。
 		if _, already := registered[m.PackageID]; already {
+			item.Valid = false
+			item.Duplicate = true
+			item.Reason = fmt.Sprintf("与已登记的包 %s 内容相同（同一份包的多余副本），不能重复导入", m.PackageID)
+			out = append(out, item)
 			continue
 		}
 		out = append(out, item)
