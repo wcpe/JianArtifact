@@ -1528,8 +1528,15 @@ export const en = {
       target_not_empty:
         'The target instance is not empty; enable "Overwrite existing data" before importing.',
       incompatible: "The backup package is not compatible with the current service version.",
-      restore_pending: "Failed to write the pending-restart marker; check the service status.",
-      internal: "Internal service error; retry later or check the logs.",
+      restore_pending:
+        "A pending restore already exists; restart the service to finish the replacement.",
+      // FR-40 addition 10: these used to fall through to `internal`.
+      base_missing:
+        "Base package missing: this is an incremental package; import its base package first.",
+      import_in_progress: "Another import is already running; wait for it to finish and retry.",
+      package_not_ready:
+        "This backup package is not finished or has failed; it cannot be used as a restore source.",
+      internal: "Restore failed: internal error. See the reason below or check server logs.",
     },
     // —— FR-137 / FR-40 追加八：备份包分片上传（第三条通道） ——
     // 措辞从 "Restore from file" 改为 "Upload backup package"：上传只把包收进备份列表，

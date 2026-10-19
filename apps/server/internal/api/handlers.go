@@ -372,8 +372,25 @@ func writeDomainErrWithOperationID(c *gin.Context, err error, operationID string
 		write(http.StatusBadGateway, "upstream_error", "上游不可达或返回错误")
 	case errors.Is(err, domain.ErrUpstreamTimeout):
 		write(http.StatusGatewayTimeout, "upstream_timeout", "上游超时")
+	case errors.Is(err, domain.ErrRestoreInProgress):
+		// 并发恢复是**可重试**的正常状态，不是内部故障：等前一个跑完或稍后再点即可。
+		write(http.StatusConflict, "import_in_progress", err.Error())
+	case errors.Is(err, domain.ErrRestoreBaseMissing):
+		// 差包缺基线：运维可处置（先导入基线包），不该伪装成内部错误。
+		write(http.StatusConflict, "base_missing", err.Error())
+	case errors.Is(err, domain.ErrRestorePackageNotDone):
+		write(http.StatusConflict, "package_not_ready", err.Error())
 	default:
-		write(http.StatusInternalServerError, "internal_error", "内部错误")
+		// 兜底：**带上原始错误文本**。
+		//
+		// 早先这里只返回「内部错误」，把真实原因（归档损坏、manifest 非法、
+		// 磁盘权限、暂存目录写失败…）全部吞掉，用户看到的就是一句套话，
+		// 日志里也可能没有对应记录——"查不出原因"正是这么来的。
+		//
+		// 对外的文本仍以"内部错误"开头（不承诺细节稳定），但把 err 附在后面，
+		// 让用户与运维至少能看见发生了什么。本接口只对管理员开放，
+		// 且错误文本来自我们自己的领域逻辑，不含凭据。
+		write(http.StatusInternalServerError, "internal_error", "内部错误："+err.Error())
 	}
 }
 

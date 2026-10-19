@@ -20,16 +20,23 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/upstream"
 )
 
-// 导入（URL 拉取）上报的 error_code 取值，与契约的错误语义对齐。
+// 导入上报的 error_code 取值，与契约的错误语义对齐。
+//
+// 每个错误码都对应一种**用户可理解、且多数可自行处置**的状态。
+// 只有真正的未知故障才用 internal——把可解释的失败塞进 internal 会让用户
+// 只看到"服务内部错误"而无从下手（这正是 FR-40 追加十修掉的问题）。
 const (
-	errCodeFetchFailed     = "fetch_failed"     // 拉取失败（连接 / 传输 / 上游非 200）
-	errCodePackageOversize = "package_oversize" // 包超过 50 GiB 上限
-	errCodeSHA256Mismatch  = "sha256_mismatch"  // 归档整体摘要与期望不符
-	errCodeManifestInvalid = "manifest_invalid" // 包非法（增量差包不支持等）
-	errCodeTargetNotEmpty  = "target_not_empty" // 目标非空且未 overwrite
-	errCodeIncompatible    = "incompatible"     // 包所需 db 版本高于本程序
-	errCodeRestorePending  = "restore_pending"  // 已存在待生效恢复
-	errCodeInternal        = "internal"
+	errCodeFetchFailed      = "fetch_failed"       // 拉取失败（连接 / 传输 / 上游非 200）
+	errCodePackageOversize  = "package_oversize"   // 包超过 50 GiB 上限
+	errCodeSHA256Mismatch   = "sha256_mismatch"    // 归档整体摘要与期望不符
+	errCodeManifestInvalid  = "manifest_invalid"   // 包非法（增量差包不支持等）
+	errCodeTargetNotEmpty   = "target_not_empty"   // 目标非空且未 overwrite
+	errCodeIncompatible     = "incompatible"       // 包所需 db 版本高于本程序
+	errCodeRestorePending   = "restore_pending"    // 已存在待生效恢复
+	errCodeBaseMissing      = "base_missing"       // 差包缺少基线（先导入基线包）
+	errCodeImportInProgress = "import_in_progress" // 已有导入正在进行（可重试）
+	errCodePackageNotReady  = "package_not_ready"  // 包未生成完成或已失败
+	errCodeInternal         = "internal"           // 真正的未知故障
 )
 
 // maxBackupImportBytes 限制单包下载落盘的上限（防磁盘打满）。备份包本质是用户/运维
@@ -379,6 +386,19 @@ func failImport(repo *repository.BackupImportRepo, importID, code, summary strin
 }
 
 // failStage 把恢复暂存的领域错误映射为明确的 error_code 并写失败记录。
+// failStage 把 Stage 的领域错误映射为明确的 error_code 并写 failed 记录。
+//
+// # 为什么必须覆盖全部领域错误
+//
+// 早先这里只认 5 种错误，其余一律归为 internal。后果是用户只看到
+// 「服务内部错误，请稍后重试或查看日志」——而真实原因（基线包缺失、已有导入在跑、
+// 归档损坏、manifest 非法…）完全被丢弃，日志里也没有对应记录。
+// 那正是"恢复一直失败却查不出原因"的来源。
+//
+// 现在的口径是：
+//   - 已知的领域错误 → 各自的明确错误码；
+//   - 未知错误 → 保留 internal，但**把原始错误文本写进 error 字段**，
+//     让用户与运维至少能看到真实原因，而不是一句套话。
 func failStage(repo *repository.BackupImportRepo, importID string, stageErr error) {
 	code := errCodeInternal
 	switch {
@@ -392,6 +412,15 @@ func failStage(repo *repository.BackupImportRepo, importID string, stageErr erro
 		code = errCodeManifestInvalid
 	case errors.Is(stageErr, ErrRestoreTooLarge):
 		code = errCodePackageOversize
+	case errors.Is(stageErr, ErrRestoreBaseMissing):
+		// 差包的基线不在本机：这是运维可处置的状态（先导入基线包），不是内部故障。
+		code = errCodeBaseMissing
+	case errors.Is(stageErr, ErrRestoreInProgress):
+		// 并发导入是正常的可重试状态，不该伪装成内部错误。
+		code = errCodeImportInProgress
+	case errors.Is(stageErr, ErrRestorePackageNotDone):
+		// 包尚未生成完成 / 已失败，不能作为恢复源。
+		code = errCodePackageNotReady
 	}
 	_ = repo.Finish(importID, repository.ImportStatusFailed, code, stageErr.Error(), "", 0, nil)
 }
