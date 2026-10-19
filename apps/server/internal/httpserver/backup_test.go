@@ -61,7 +61,10 @@ func newBackupEnv(t *testing.T) *backupEnv {
 	importSvc := domain.NewBackupImportService(
 		repository.NewBackupImportRepo(db), restoreSvc, dir, upstream.NewTestClient(0),
 	)
-	uploadSvc := domain.NewBackupUploadService(repository.NewBackupUploadRepo(db), importSvc, dir)
+	// FR-40 追加八：上传只入库不恢复，因此上传服务依赖 adopt 服务而非导入服务。
+	backupRepo := repository.NewBackupPackageRepo(db)
+	adoptSvc := domain.NewBackupAdoptService(backupSvc, backupRepo)
+	uploadSvc := domain.NewBackupUploadService(repository.NewBackupUploadRepo(db), adoptSvc, dir)
 
 	handlers := api.NewHandlers(api.Deps{
 		Version:       "test",
@@ -74,6 +77,7 @@ func newBackupEnv(t *testing.T) *backupEnv {
 		Freeze:        freeze,
 		BackupImports: importSvc,
 		BackupUploads: uploadSvc,
+		BackupAdopt:   adoptSvc,
 	})
 	srv := httpserver.New("test",
 		httpserver.WithReadinessCheck(db.Ping),

@@ -425,6 +425,50 @@ const mockBackups: BackupPackage[] = seedBackups();
 
 let mockBackupSeq = 1;
 
+// —— FR-40 追加八：服务器上未被管理的备份包（仅 devmock）——
+// 模拟 backups/ 目录里"有包体、无登记行"的残留：两个可导入的合法包，一个无法识别的伪包。
+// 导入其中一个后，它会被并入 mockBackups，从而不再出现在 unmanaged 列表里
+// （与后端 Scan 的差集口径一致）。
+const mockUnmanagedBackups: Array<{
+  fileId: string;
+  packageId: string;
+  sizeBytes: number;
+  modifiedAt: string;
+  hasSidecar: boolean;
+  valid: boolean;
+  reason?: string;
+  renamed: boolean;
+}> = [
+  {
+    fileId: "bk-20261013-082334-f7ed3f",
+    packageId: "bk-20261013-082334-f7ed3f",
+    sizeBytes: 210639,
+    modifiedAt: new Date(Date.now() - 5 * 24 * 3600 * 1000).toISOString(),
+    hasSidecar: true,
+    valid: true,
+    renamed: false,
+  },
+  {
+    fileId: "bk-20261014-213902-573c66",
+    packageId: "bk-20261014-213902-573c66",
+    sizeBytes: 542724,
+    modifiedAt: new Date(Date.now() - 4 * 24 * 3600 * 1000).toISOString(),
+    hasSidecar: false,
+    valid: true,
+    renamed: false,
+  },
+  {
+    fileId: "bk-20261015-000000-broken",
+    packageId: "",
+    sizeBytes: 4096,
+    modifiedAt: new Date(Date.now() - 3 * 24 * 3600 * 1000).toISOString(),
+    hasSidecar: false,
+    valid: false,
+    reason: "归档无法打开或不是本产品的节点备份包",
+    renamed: false,
+  },
+];
+
 // —— FR-40：恢复演练报告内存态（仅 devmock）——
 // 按包标识分桶存放报告，最近优先（与后端 ListByPackage 的排序口径一致）。
 // 预置一条**失败**报告：失败报告是演练最该留下的产物，界面必须能如实渲染它，
@@ -686,6 +730,8 @@ export function resetMockBackups(): void {
   // 分片上传会话同属备份域，一并复位，避免用例间状态泄漏。
   // 注意 mockUploadIdCounter 不复位：id 需跨会话保持唯一。
   mockUploads = {};
+  // 未管理包列表本身是只读夹具（导入后果是并入 mockBackups，不从这里删除），
+  // 但 mockBackups 已被上面的 seedBackups 复位，所以这里不必额外处理。
 }
 
 function findMockBackup(packageId: string): BackupPackage | undefined {
@@ -2731,6 +2777,94 @@ export const handlers = [
     });
   }),
 
+  // —— 未管理备份包（FR-40 追加八，admin）——
+  // 这些包在磁盘上有包体但登记表无记录。mock 里用一组固定候选模拟"历史残留"。
+  // 必须早于 `*/api/v1/backups/:id`，否则 unmanaged 会被 :id 通配吞掉。
+  http.get("*/api/v1/backups/unmanaged", ({ request }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const items = mockUnmanagedBackups.filter(
+      (it) => !mockBackups.some((b) => b.packageId === it.fileId),
+    );
+    return HttpResponse.json({ items, total: items.length });
+  }),
+
+  http.post("*/api/v1/backups/adopt", async ({ request }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const body = (await request.json().catch(() => ({}))) as { fileIds?: string[] };
+    const ids = body.fileIds ?? [];
+    const items: Array<{
+      fileId: string;
+      packageId: string;
+      adopted: boolean;
+      skipped: boolean;
+      reason?: string;
+    }> = [];
+    let adopted = 0;
+    let skipped = 0;
+    let failed = 0;
+    for (const fileId of ids) {
+      const cand = mockUnmanagedBackups.find((it) => it.fileId === fileId);
+      if (!cand) {
+        items.push({ fileId, packageId: "", adopted: false, skipped: false, reason: "包不存在" });
+        failed += 1;
+        continue;
+      }
+      if (!cand.valid) {
+        items.push({
+          fileId,
+          packageId: "",
+          adopted: false,
+          skipped: true,
+          reason: "归档无法打开或不是本产品的节点备份包",
+        });
+        skipped += 1;
+        continue;
+      }
+      if (mockBackups.some((b) => b.packageId === cand.fileId)) {
+        items.push({
+          fileId,
+          packageId: cand.fileId,
+          adopted: false,
+          skipped: true,
+          reason: "该包已在管理列表中",
+        });
+        skipped += 1;
+        continue;
+      }
+      // 导入 = 补建登记行，包随之出现在列表里。
+      mockBackups.unshift({
+        packageId: cand.fileId,
+        mode: "hot",
+        origin: "manual",
+        status: "done",
+        label: "导入的未管理包",
+        sizeBytes: cand.sizeBytes,
+        counts: {
+          users: 1,
+          tokens: 0,
+          repositories: 1,
+          acls: 0,
+          assets: 1,
+          formatMetadata: 0,
+        },
+        nodeId: "np-demo",
+        appVersion: MOCK_APP_VERSION,
+        dbSchemaVersion: MOCK_SCHEMA_VERSION,
+        createdAt: cand.modifiedAt,
+        finishedAt: cand.modifiedAt,
+      });
+      items.push({ fileId, packageId: cand.fileId, adopted: true, skipped: false });
+      adopted += 1;
+    }
+    return HttpResponse.json({ items, adopted, skipped, failed });
+  }),
+
   // —— 用本机已有的备份包恢复（FR-40 追加六，admin）——
   // 补的是"页面上明明有包，却没有任何按钮能用它恢复"这个缺口（实测反馈"只能备份无法恢复"）。
   // 语义与其它三条恢复通道一致：受理 → 暂存 → 写 restore.pending → 需重启生效，
@@ -2964,28 +3098,54 @@ export const handlers = [
     };
     session.status = "completed";
     const operator = store.findUser(mockUserId(request) ?? 0)?.username ?? "admin";
+    // FR-40 追加八：complete 不再产生导入记录，只把包收进备份列表。
+    // 因此这里直接返回一条 done 回执，并把包并入备份包列表（下方 push），
+    // 不再走 advanceMockImport 的 queued→…→pending_restart 状态机。
     const importId = `imp-${new Date()
       .toISOString()
       .replace(/[-:T.]/g, "")
       .slice(0, 14)}-${String(++mockImportSeq).padStart(3, "0")}`;
+    const packageId = `bk-${new Date()
+      .toISOString()
+      .replace(/[-:T.]/g, "")
+      .slice(0, 14)}-${String(mockImportSeq).padStart(6, "0")}`;
     const record: BackupImport = {
       importId,
       origin: "upload",
-      status: "queued",
+      status: "done",
       operator,
       overwrite: body.overwrite ?? false,
       deep: body.deep ?? false,
       totalBytes: session.totalBytes,
       fetchedBytes: session.totalBytes,
       blobCount: 0,
-      packageId: "",
+      packageId,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
-    mockImports.unshift(record);
-    // 复用从 URL 导入的推进状态机：queued → fetching → staging → pending_restart。
-    advanceMockImport(importId);
-    return HttpResponse.json(record, { status: 202 });
+    // 包进备份列表：这才是界面接下来要看到的东西。
+    mockBackups.unshift({
+      packageId,
+      mode: "hot",
+      origin: "manual",
+      status: "done",
+      label: "上传的备份包",
+      sizeBytes: session.totalBytes,
+      counts: {
+        users: 1,
+        tokens: 0,
+        repositories: 1,
+        acls: 0,
+        assets: 1,
+        formatMetadata: 0,
+      },
+      nodeId: "np-demo",
+      appVersion: MOCK_APP_VERSION,
+      dbSchemaVersion: MOCK_SCHEMA_VERSION,
+      createdAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString(),
+    });
+    return HttpResponse.json(record, { status: 200 });
   }),
 
   http.post("*/api/v1/backups/uploads/:id/abort", ({ request, params }) => {

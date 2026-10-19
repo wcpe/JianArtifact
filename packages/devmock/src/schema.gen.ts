@@ -1544,6 +1544,62 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/backups/unmanaged": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 列出服务器上未被管理的备份包（仅管理员）
+         * @description 扫描 `${JIAN_DATA_DIR}/backups/` 下"磁盘有包体、登记表无记录"的包（例如历史残留、
+         *     手工拷入）。这些包在常规列表里不可见，因此既不能用也不能删。
+         *
+         *     结果按文件名升序。`valid=false` 的条目表示归档无法打开或不是本产品的节点备份包，
+         *     这类包无法导入。`renamed=true` 表示文件名与包内声明的标识不一致，导入时以包内为准
+         *     （会把包体重命名为包内标识）。
+         *
+         *     未管理不等于该删：需要的用 `adoptBackups` 导入；无人认领的由 `backup-orphan-cleanup`
+         *     作业按宽限期回收，两者基于同一份差集。
+         */
+        get: operations["listUnmanagedBackups"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/backups/adopt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 导入未管理的备份包到管理列表（仅管理员）
+         * @description 对选中的未管理包逐个校验包内 manifest 并补建登记行，使其出现在备份列表中，
+         *     之后可正常校验、演练与恢复。
+         *
+         *     支持单选与多选。单个包失败不中断整批，逐项返回结果：
+         *     - `adopted=true` 表示已建立登记；
+         *     - `skipped=true` 表示未执行（已登记、非法包等），`reason` 说明原因；
+         *     - 二者皆 false 表示执行失败，`reason` 给出错误。
+         *
+         *     导入的包以 `origin=manual` 登记，因此不会被保留策略自动淘汰。
+         */
+        post: operations["adoptBackups"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/backups/uploads": {
         parameters: {
             query?: never;
@@ -3370,6 +3426,54 @@ export interface components {
             updatedAt: string;
             finishedAt?: string;
             restorePendingAt?: string;
+        };
+        UnmanagedBackup: {
+            /** @description 由文件名推导的标识（磁盘上的 `<fileId>.tar.gz`）。 */
+            fileId: string;
+            /** @description 归档内 manifest 声明的标识；`valid=false` 时为空串。 */
+            packageId: string;
+            /**
+             * Format: int64
+             * @description 包体文件的字节数。
+             */
+            sizeBytes: number;
+            /** @description 包体文件的最后修改时间（RFC3339，UTC）。 */
+            modifiedAt: string;
+            /** @description 同目录下是否存在 `<fileId>.index` 侧车索引。 */
+            hasSidecar: boolean;
+            /** @description 归档能否打开且 manifest 通过校验。 */
+            valid: boolean;
+            /** @description `valid=false` 时的原因。 */
+            reason?: string;
+            /** @description 文件名与包内标识是否不一致（导入时以包内为准并重命名包体）。 */
+            renamed: boolean;
+        };
+        UnmanagedBackupList: {
+            items: components["schemas"]["UnmanagedBackup"][];
+            total: number;
+        };
+        AdoptBackupsRequest: {
+            /** @description 要导入的包标识（来自 listUnmanagedBackups 的 fileId）。 */
+            fileIds: string[];
+        };
+        AdoptedBackup: {
+            /** @description 请求里给出的包标识（回显）。 */
+            fileId: string;
+            /** @description 最终登记的包标识。 */
+            packageId: string;
+            /** @description 是否成功建立登记。 */
+            adopted: boolean;
+            /** @description 是否跳过未执行（已登记、非法包等）。 */
+            skipped: boolean;
+            /** @description 跳过或失败的原因。 */
+            reason?: string;
+        };
+        AdoptBackupsResult: {
+            /** @description 逐项结果，顺序与请求的 fileIds 一致。 */
+            items: components["schemas"]["AdoptedBackup"][];
+            adopted: number;
+            skipped: number;
+            failed: number;
         };
         BackupImportList: {
             items: components["schemas"]["BackupImport"][];
@@ -6177,6 +6281,55 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+        };
+    };
+    listUnmanagedBackups: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 未管理备份包列表 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnmanagedBackupList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    adoptBackups: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdoptBackupsRequest"];
+            };
+        };
+        responses: {
+            /** @description 导入结果（逐项） */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdoptBackupsResult"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
         };
     };
     createBackupUpload: {

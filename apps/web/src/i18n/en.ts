@@ -1531,11 +1531,13 @@ export const en = {
       restore_pending: "Failed to write the pending-restart marker; check the service status.",
       internal: "Internal service error; retry later or check the logs.",
     },
-    // —— FR-137：备份包分片上传（第三条通道） ——
-    uploadButton: "Restore from file",
+    // —— FR-137 / FR-40 追加八：备份包分片上传（第三条通道） ——
+    // 措辞从 "Restore from file" 改为 "Upload backup package"：上传只把包收进备份列表，
+    // 不再直接替换本机数据（恢复是入库之后的独立动作）。
+    uploadButton: "Upload backup package",
     uploadChooseFile: "Choose File",
     uploadIdleHint:
-      "Choose a backup package (.tar.gz); it is submitted for import once the upload finishes.",
+      "Choose a backup package (.tar.gz). It is added to the backup list once the upload finishes; restoring is a separate step you can verify first.",
     uploadProgress: "Uploading {{percent}}%",
     uploadBytes: "{{done}} / {{total}}",
     uploadResumableTitle: "Unfinished upload found",
@@ -1550,12 +1552,36 @@ export const en = {
     uploadDiscardConfirm:
       "Discarding the upload aborts the session and cleans up the uploaded chunks; this action cannot be undone.",
     uploadDiscarded: "Upload discarded",
-    uploadComplete: "Upload complete, import submitted",
-    uploadCompleteHint: "Takes effect after restarting the service",
+    uploadComplete: "Upload complete, added to the backup list",
+    uploadCompleteHint:
+      "Verify it or restore from it in the backup list; restoring replaces local data and needs a restart",
     uploadFileMismatch:
       "The selected file size does not match the upload session; choose the original file and resume",
     uploadError: "Upload failed: {{message}}",
     uploadMissingChunkTitle: "Missing chunks",
+
+    // —— FR-40 追加八：服务器上未被管理的备份包 ——
+    // 这些包在磁盘上有包体但登记表里没有记录（历史残留或手工拷入），
+    // 常规列表看不见它们，于是既不能用也不能删。这里补上"列出 + 导入"。
+    adoptButton: "Import unmanaged packages",
+    adoptTitle: "Unmanaged backup packages on the server",
+    adoptHint:
+      "These files exist under the backup directory but have no list entry, so they cannot be used or deleted from the normal view. Importing one checks it and adds it to the backup list.",
+    adoptEmpty: "No unmanaged packages found.",
+    adoptLoading: "Scanning server backup directory…",
+    adoptSelectAll: "Select all",
+    adoptClearAll: "Clear",
+    adoptSelected: "{{count}} selected",
+    adoptSubmit: "Import selected",
+    adoptInvalid: "Cannot be imported",
+    adoptRenamed: "File name differs from the package id; it will be renamed on import",
+    adoptHasSidecar: "Index present",
+    adoptNoSidecar: "Index missing (will be rebuilt on import)",
+    adoptSize: "Size",
+    adoptModified: "Modified",
+    adoptResultTitle: "Import finished",
+    adoptResultSummary: "Imported {{adopted}}, skipped {{skipped}}, failed {{failed}}",
+    adoptRescan: "Rescan",
   },
   migrations: {
     title: "Nexus Migration",

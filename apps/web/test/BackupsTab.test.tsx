@@ -417,16 +417,16 @@ describe("备份与搬迁", () => {
     expect(actionButton("从 URL 恢复").getAttribute("data-variant")).toBe("filled");
   });
 
-  it("内联导入区：点「上传本机文件」切到上传通道，URL 通道转为隐藏", async () => {
+  it("内联导入区：点「上传备份包」切到上传通道，URL 通道转为隐藏", async () => {
     const user = userEvent.setup();
     renderTab();
 
-    await user.click(await actionButtonAsync("上传包恢复"));
+    await user.click(await actionButtonAsync("上传备份包"));
 
     expect(screen.getByTestId("import-inline").style.display).not.toBe("none");
     expect(screen.getByTestId("import-channel-upload").style.display).not.toBe("none");
     expect(screen.getByTestId("import-channel-url").style.display).toBe("none");
-    expect(actionButton("上传包恢复").getAttribute("data-variant")).toBe("light");
+    expect(actionButton("上传备份包").getAttribute("data-variant")).toBe("light");
 
     // 切到 URL 再切回来：切换只改可见性，两个通道的节点都不被卸载（已填内容不丢）。
     await user.click(actionButton("从 URL 恢复"));
@@ -503,13 +503,23 @@ describe("备份与搬迁", () => {
   }, 20_000);
 
   // —— 任务台信息架构：第一段「动作」——
-  it("动作条给出五个操作按钮，两条主路径的说明迁到「说明」气泡里", async () => {
+  it("动作条给出六个操作按钮，两条主路径的说明迁到「说明」气泡里", async () => {
     const user = userEvent.setup();
     renderTab();
 
     const actions = await screen.findByTestId("backup-actions");
-    // 两张卡收成一行按钮后，五个操作都还在（少一个都是功能入口丢失）。
-    for (const name of ["生成备份包", "冻结写入", "从 URL 恢复", "上传包恢复", "自动备份设置"]) {
+    // 两张卡收成一行按钮后，六个操作都还在（少一个都是功能入口丢失）。
+    // 「上传包恢复」在 FR-40 追加八改名为「上传备份包」：上传不再直接恢复，
+    // 只把包收进列表；恢复是入库之后的独立动作。
+    // 「导入未管理的包」是新增入口，对应服务器 backups/ 下有包体但无登记的包。
+    for (const name of [
+      "生成备份包",
+      "冻结写入",
+      "从 URL 恢复",
+      "上传备份包",
+      "导入未管理的包",
+      "自动备份设置",
+    ]) {
       expect(within(actions).getByRole("button", { name })).toBeTruthy();
     }
 
@@ -537,10 +547,14 @@ describe("备份与搬迁", () => {
   });
 
   // —— 待重启生效（FR-40 追加六）：让"为什么导入不了"可见 ——
-  it("有待生效恢复时两个导入按钮转橙并可点开说明，重启命令可直接复制", async () => {
+  it("有待生效恢复时导入按钮转橙并可点开说明，重启命令可直接复制", async () => {
     // 这条守卫的根因：导入成功后只写 restore.pending，后续导入一律 409 拒绝；
     // 而该状态此前只体现在导入记录行的 pending_restart 徽章上——徽章被更近的事件
     // 挤出视野后，用户只看到"导入一直被拒"却看不出原因。
+    //
+    // FR-40 追加八后范围收窄：只有「从 URL 恢复」会写 restore.pending，
+    // 因此只有它需要挡住并解释；「上传备份包」与「导入未管理的包」只入库、
+    // 不写 pending，待重启时仍可正常使用（见下方断言）。
     const user = userEvent.setup();
     vi.spyOn(endpoints, "getBackupRestoreStatus").mockResolvedValue({
       pending: true,
@@ -553,10 +567,13 @@ describe("备份与搬迁", () => {
     const actions = await screen.findByTestId("backup-actions");
     const urlBtn = within(actions).getByTestId("action-import-url");
     const upBtn = within(actions).getByTestId("action-import-upload");
+    const adoptBtn = within(actions).getByTestId("action-import-adopt");
 
-    // 两个按钮都必须带说明（title/aria），否则用户只看到"变橙了"却不知为何。
+    // URL 导入按钮必须带说明（title/aria），否则用户只看到"变橙了"却不知为何。
     expect(urlBtn.getAttribute("title")).toContain("待重启");
-    expect(upBtn.getAttribute("title")).toContain("待重启");
+    // 上传与导入未管理包不写 pending，因此不该被待重启状态标记或挡住。
+    expect(upBtn.getAttribute("title")).toBeNull();
+    expect(adoptBtn.getAttribute("title")).toBeNull();
 
     // 点击不是展开表单（展开了提交也必被拒），而是解释原因。
     await user.click(urlBtn);

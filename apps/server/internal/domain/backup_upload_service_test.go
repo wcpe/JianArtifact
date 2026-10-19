@@ -15,21 +15,47 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// newUploadFixture 装配一个完整的上传 + 导入 + 恢复链路夹具（各自独立数据目录）。
-// 返回上传服务、导入服务、导入 Repo、底层 DB、数据根目录。
-func newUploadFixture(t *testing.T) (*BackupUploadService, *BackupImportService, *repository.BackupImportRepo, *persistence.DB, string) {
+// uploadFixture 聚合上传链路测试所需的全部依赖。
+// 用具名字段而不是多返回值：新增依赖（如本轮加入的备份登记与恢复服务）时，
+// 不必再改动六个调用点的位置参数序列。
+type uploadFixture struct {
+	uploads  *BackupUploadService
+	imports  *BackupImportService
+	impRepo  *repository.BackupImportRepo
+	db       *persistence.DB
+	dir      string
+	restore  *RestoreService
+	backupRp *repository.BackupPackageRepo
+}
+
+// newUploadFixture 装配一个完整的上传链路夹具（各自独立数据目录）。
+//
+// FR-40 追加八改变了上传的终点：组装完成后不再发起恢复，而是把包收进备份列表，
+// 因此夹具需要一套真实的 BackupService + 登记仓库供 adopt 服务使用。
+func newUploadFixture(t *testing.T) *uploadFixture {
 	t.Helper()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "data.db")
 	db := openMigratedTestDB(t, dir, "data.db")
 	blobsDir := filepath.Join(dir, "blobs")
-	_ = blobstore.NewStore(blobsDir) // 确保目录存在（恢复侧会按需写入）
+	blobsStore := blobstore.NewStore(blobsDir)
 	restore := NewRestoreService(db, dir, dbPath, blobsDir)
 	importRepo := repository.NewBackupImportRepo(db)
 	importSvc := NewBackupImportService(importRepo, restore, dir, nil) // 本地导入不经过出站 client
+	backupRepo := repository.NewBackupPackageRepo(db)
+	backupSvc := NewBackupService(db, backupRepo, blobsStore, dir, dbPath, "0.11.0", func() string { return "np-test" })
+	adoptSvc := NewBackupAdoptService(backupSvc, backupRepo)
 	uploadRepo := repository.NewBackupUploadRepo(db)
-	uploadSvc := NewBackupUploadService(uploadRepo, importSvc, dir)
-	return uploadSvc, importSvc, importRepo, db, dir
+	uploadSvc := NewBackupUploadService(uploadRepo, adoptSvc, dir)
+	return &uploadFixture{
+		uploads:  uploadSvc,
+		imports:  importSvc,
+		impRepo:  importRepo,
+		db:       db,
+		dir:      dir,
+		restore:  restore,
+		backupRp: backupRepo,
+	}
 }
 
 // chunkData 把完整字节切成 <= chunkSize 的若干片。
@@ -47,28 +73,13 @@ func chunkData(t *testing.T, data []byte, chunkSize int) [][]byte {
 }
 
 // waitImport 轮询导入记录直到终态；失败则 t.Fatal。
-func waitImport(t *testing.T, repo *repository.BackupImportRepo, id string) repository.BackupImport {
-	t.Helper()
-	deadline := time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) {
-		rec, err := repo.Get(id)
-		if err == nil && rec.Status == repository.ImportStatusPendingRestart {
-			return *rec
-		}
-		if err == nil && rec.Status == repository.ImportStatusFailed {
-			t.Fatalf("导入失败：%+v", rec)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("导入未在超时内完成（id=%s）", id)
-	return repository.BackupImport{}
-}
-
-// TestBackupUploadRoundTrip 覆盖 init → 逐片 PutChunk → Get 反映已传分片 → Complete 组装成包并触发本地导入。
+// TestBackupUploadRoundTrip 覆盖 init → 逐片 PutChunk → Get 反映已传分片 →
+// Complete 组装成包并**收进备份列表**（FR-40 追加八起不再触发恢复）。
 func TestBackupUploadRoundTrip(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	uploadSvc, _, importRepo, _, _ := newUploadFixture(t)
+	f := newUploadFixture(t)
+	uploadSvc := f.uploads
 
 	// 造一个真实备份包作为上传源。
 	src := newBackupFixture(t)
@@ -133,24 +144,48 @@ func TestBackupUploadRoundTrip(t *testing.T) {
 		t.Fatalf("补 PutChunk(%d)：%v", delIdx, err)
 	}
 
-	// Complete：组装归档 + 触发本地导入。
+	// Complete：组装归档 → 收进备份列表（不再触发恢复）。
 	imp, err := uploadSvc.Complete(ctx, uploadID, "", false, false)
 	if err != nil {
 		t.Fatalf("Complete：%v", err)
 	}
-	_ = waitImport(t, importRepo, imp.ImportID)
+	if imp.Status != repository.ImportStatusDone {
+		t.Fatalf("回执状态应为 done（已入库），实际 %s", imp.Status)
+	}
+	if imp.PackageID == "" {
+		t.Fatalf("回执应带回入库的包标识")
+	}
 
-	// 组装包应与源包字节一致，且能被 archive.Open 打开。
-	assembled := uploadSvc.packagePath(uploadID)
-	got, err := os.ReadFile(assembled)
+	// 核心断言：包已出现在备份列表里，且状态为 done。
+	stored, err := f.backupRp.Get(imp.PackageID)
 	if err != nil {
-		t.Fatalf("读取组装包：%v", err)
+		t.Fatalf("上传后应能在备份列表里读到该包：%v", err)
+	}
+	if stored.Status != repository.BackupStatusDone {
+		t.Fatalf("入库状态应为 done，实际 %s", stored.Status)
+	}
+	if stored.Origin != repository.BackupOriginManual {
+		t.Fatalf("上传入库的来源应为 manual，实际 %s", stored.Origin)
+	}
+
+	// 核心断言：不再写 restore.pending —— 这是本轮语义修正的全部意义。
+	if pending, perr := f.restore.MarkedPending(); perr != nil {
+		t.Fatalf("检查待生效恢复：%v", perr)
+	} else if pending != nil {
+		t.Fatalf("上传备份包不应产生待重启恢复，实际 %+v", pending)
+	}
+
+	// 归档应已搬运到 backups/ 下（不再留在上传会话目录里）。
+	backupPath := filepath.Join(f.dir, "backups", imp.PackageID+".tar.gz")
+	got, err := os.ReadFile(backupPath)
+	if err != nil {
+		t.Fatalf("读取入库包：%v", err)
 	}
 	if !bytes.Equal(got, data) {
-		t.Fatalf("组装包与源包字节不一致（%d vs %d）", len(got), len(data))
+		t.Fatalf("入库包与源包字节不一致（%d vs %d）", len(got), len(data))
 	}
-	if _, _, err := archive.Open(assembled); err != nil {
-		t.Fatalf("archive.Open 组装包失败：%v", err)
+	if _, _, err := archive.Open(backupPath); err != nil {
+		t.Fatalf("archive.Open 入库包失败：%v", err)
 	}
 }
 
@@ -160,7 +195,8 @@ func TestBackupUploadRoundTrip(t *testing.T) {
 func TestBackupUploadRetransmitSameChunkIsIdempotent(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	uploadSvc, _, _, _, _ := newUploadFixture(t)
+	f := newUploadFixture(t)
+	uploadSvc := f.uploads
 
 	src := newBackupFixture(t)
 	src.seedAssets(t, "alpha", "beta", "gamma")
@@ -205,7 +241,8 @@ func TestBackupUploadRetransmitSameChunkIsIdempotent(t *testing.T) {
 func TestBackupUploadValidation(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	uploadSvc, _, _, _, _ := newUploadFixture(t)
+	f := newUploadFixture(t)
+	uploadSvc := f.uploads
 	// totalBytes=10，chunkSize 服务端固定 8MiB → 期望 ceil(10/8MiB)=1 片。
 	initRes, err := uploadSvc.Init(ctx, InitUploadOptions{FileName: "p", TotalBytes: 10, Operator: "t"})
 	if err != nil {
@@ -240,7 +277,8 @@ func TestBackupUploadValidation(t *testing.T) {
 func TestBackupUploadCompleteMissingChunk(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	uploadSvc, _, _, _, _ := newUploadFixture(t)
+	f := newUploadFixture(t)
+	uploadSvc := f.uploads
 	data := []byte("0123456789ABCDEF") // 16 字节，按 8MiB 切片 => 1 片
 	initRes, err := uploadSvc.Init(ctx, InitUploadOptions{FileName: "p", TotalBytes: int64(len(data)), Operator: "t"})
 	if err != nil {
@@ -264,7 +302,8 @@ func TestBackupUploadCompleteMissingChunk(t *testing.T) {
 func TestBackupUploadCompleteSHA256Mismatch(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	uploadSvc, _, _, _, _ := newUploadFixture(t)
+	f := newUploadFixture(t)
+	uploadSvc := f.uploads
 	data := []byte("hello-jian-artifact-backup-package-content-here")
 	initRes, err := uploadSvc.Init(ctx, InitUploadOptions{FileName: "p", TotalBytes: int64(len(data)), Operator: "t"})
 	if err != nil {
@@ -295,7 +334,9 @@ func TestBackupUploadCompleteSHA256Mismatch(t *testing.T) {
 func TestBackupUploadAbortAndExpiry(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	uploadSvc, _, _, db, _ := newUploadFixture(t)
+	f := newUploadFixture(t)
+	uploadSvc := f.uploads
+	db := f.db
 	data := []byte("some-bytes-for-abort-test-1234567890")
 	initRes, err := uploadSvc.Init(ctx, InitUploadOptions{FileName: "p", TotalBytes: int64(len(data)), Operator: "t"})
 	if err != nil {

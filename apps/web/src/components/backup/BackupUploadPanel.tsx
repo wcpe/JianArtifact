@@ -5,7 +5,7 @@
 // 本组件是 body-only：展开容器由 ImportInline 承担，它只负责上传本身。
 // 覆盖 / 深校验两个开关也由它自己持有——它们是在 complete 这一刻提交的，摆在上传按钮旁边
 // 才不会被误以为属于别的通道。
-import { Alert, Box, Button, Checkbox, Group, Progress, Stack, Text } from "@mantine/core";
+import { Alert, Box, Button, Group, Progress, Stack, Text } from "@mantine/core";
 import { IconArrowRight, IconPlayerStop, IconUpload } from "@tabler/icons-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -82,11 +82,9 @@ export function BackupUploadPanel({
   onResumableChange?: (resumable: boolean) => void;
 }) {
   const { t } = useTranslation();
-  // 覆盖 / 深校验由本组件自持：它们在 complete 那一刻提交，是上传自身的选项。
-  // （不做成受控：上一版把它提到弹窗层再回传，多一层状态同步只为让两个开关"看起来在上传之外"，
-  //  而用户真正需要的是它们紧挨着上传按钮。）
-  const [overwrite, setOverwrite] = useState(false);
-  const [deep, setDeep] = useState(false);
+  // 覆盖 / 深校验两个开关已随上传语义修正一起移除（FR-40 追加八）：
+  // 上传只把包收进备份列表，不写 restore.pending，因此没有"目标非空"判定点；
+  // 这两个选项属于恢复动作，由列表里的「用这个包恢复」提供。
   const [phase, setPhase] = useState<UploadPhase>("idle");
   const [session, setSession] = useState<BackupUploadSession | null>(null);
   const [uploadedChunks, setUploadedChunks] = useState<number[]>([]);
@@ -100,12 +98,6 @@ export function BackupUploadPanel({
   const abortRef = useRef<AbortController | null>(null);
   // 取消后 in-flight 的分片请求会因 signal 中止而 reject，标记后忽略该错误（取消已统一处理）。
   const cancelledRef = useRef(false);
-  // 选项经 ref 持有最新值：completeUpload 是 useCallback，若把选项放进依赖会让上传中途
-  // 改变闭包引用；而用户恰恰可能在上传进行中才勾上「覆盖已有数据」。
-  const overwriteRef = useRef(overwrite);
-  overwriteRef.current = overwrite;
-  const deepRef = useRef(deep);
-  deepRef.current = deep;
 
   // 重开页面：若本地留存了未完成会话，拉回会话状态与已落盘分片，只补缺失片。
   useEffect(() => {
@@ -138,20 +130,17 @@ export function BackupUploadPanel({
   const completeUpload = useCallback(
     async (uploadId: string) => {
       try {
-        // 选项必须在 complete 时提交：契约的 CompleteBackupUploadRequest 才带 overwrite / deep，
-        // init 阶段不接受它们。omit 掉 false 值，与 URL 导入通道的写法一致。
-        const accepted = await completeBackupUpload(uploadId, {
-          overwrite: overwriteRef.current || undefined,
-          deep: deepRef.current || undefined,
-        });
+        // FR-40 追加八：上传只把包收进备份列表，不再发起恢复，因此这里不提交
+        // overwrite / deep —— 那两个选项属于"恢复"，而恢复现在是入库之后的独立动作。
+        const accepted = await completeBackupUpload(uploadId, {});
         clearPersisted();
         setResumable(null);
         setPhase("finished");
         notifySuccess(t("backups.uploadComplete"));
-        // 派发全局刷新：导入记录表与备份列表都在监听该事件，
-        // 让新记录（pending_restart）与随之生成的包立即呈现，无需用户手动刷新。
-        // 带上 importId：页面据此打开恢复进度弹窗，把"已受理"之后的暂存过程也显示出来。
-        dispatchRefresh(accepted.importId);
+        // 派发全局刷新：备份列表监听该事件，让新入库的包立即呈现。
+        // 不再传 importId：没有导入记录，也没有"恢复进度"可看。
+        dispatchRefresh();
+        void accepted;
       } catch (err) {
         handleError(err);
       }
@@ -408,23 +397,9 @@ export function BackupUploadPanel({
           <Text size="sm" c="dimmed">
             {t("backups.uploadIdleHint")}
           </Text>
-          {/* 覆盖 / 深校验就在选文件上方：它们决定 complete 时提交什么选项。
-              尤其「覆盖已有数据」——目标实例非空时不开它，导入会在**异步暂存阶段**失败
-              （HTTP 已返回 202），用户只会看到"上传成功、随后记录变失败"，无从知道差在哪。 */}
-          <Checkbox
-            label={t("backups.importOverwrite")}
-            description={t("backups.importOverwriteHint")}
-            checked={overwrite}
-            onChange={(e) => setOverwrite(e.currentTarget.checked)}
-            data-testid="upload-overwrite"
-          />
-          <Checkbox
-            label={t("backups.importDeep")}
-            description={t("backups.importDeepHint")}
-            checked={deep}
-            onChange={(e) => setDeep(e.currentTarget.checked)}
-            data-testid="upload-deep"
-          />
+          {/* 这里不再有「覆盖已有数据 / 深度校验」两个开关：它们属于"恢复"的语义，
+              而上传现在只把包收进备份列表，不触碰现有数据。用户要恢复时再在
+              列表里对该包发起恢复，那时才会有覆盖与深校验的选择。 */}
           <Group>
             <Button
               size="xs"

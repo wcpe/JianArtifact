@@ -59,21 +59,23 @@ type UploadView struct {
 	UploadedChunks []int
 }
 
-// BackupUploadService 编排「Web 分片上传 → 组装归档 → 本地导入」的流程：
-// initialized → receiving → completed（取消置 aborted）。组装完成后交给
-// BackupImportService.StartLocalImport 走导入状态机（queued → staging → pending_restart）。
+// BackupUploadService 编排「Web 分片上传 → 组装归档 → 收进备份列表」的流程：
+// initialized → receiving → completed（取消置 aborted）。
+//
+// FR-40 追加八改变了交接对象：组装完成后不再直接发起恢复（StartLocalImport），
+// 而是交给 BackupAdoptService 落进 backups/ 并登记，之后由用户显式发起恢复。
 type BackupUploadService struct {
 	repo    *repository.BackupUploadRepo
-	imports *BackupImportService
+	adopt   *BackupAdoptService
 	dataDir string
 	now     func() time.Time
 }
 
-// NewBackupUploadService 装配分片上传服务。imports 用于组装完成后发起本地导入。
-func NewBackupUploadService(repo *repository.BackupUploadRepo, imports *BackupImportService, dataDir string) *BackupUploadService {
+// NewBackupUploadService 装配分片上传服务。adopt 用于组装完成后把包收进备份列表。
+func NewBackupUploadService(repo *repository.BackupUploadRepo, adopt *BackupAdoptService, dataDir string) *BackupUploadService {
 	return &BackupUploadService{
 		repo:    repo,
-		imports: imports,
+		adopt:   adopt,
 		dataDir: dataDir,
 		now:     func() time.Time { return time.Now().UTC() },
 	}
@@ -294,21 +296,31 @@ func (s *BackupUploadService) Complete(ctx context.Context, uploadID, clientSHA2
 		return repository.BackupImport{}, fmt.Errorf("%w：包摘要与客户端 sha256 不符（期望 %s 实际 %s）", ErrValidation, strings.ToLower(clientSHA256), sum)
 	}
 
-	// 交接给本地导入（跳过 fetching，直接 staging）。
-	imp, err := s.imports.StartLocalImport(ctx, LocalImportOptions{
-		SourcePath: s.packagePath(uploadID),
-		Origin:     repository.ImportOriginUpload,
-		Operator:   rec.Operator,
-		Overwrite:  overwrite,
-		Deep:       deep,
-	})
+	// 收进备份列表（FR-40 追加八）：只登记，不恢复。
+	//
+	// 此前这里直接调 StartLocalImport → Stage → 写 restore.pending，于是"上传一个包"
+	// 等于"提交一次覆盖本机数据的恢复"，用户没有校验的机会。现在改为：把归档搬进
+	// backups/ 并建立登记行，包出现在列表里、状态为已完成；要恢复必须再显式发起，
+	// 且走与其它通道完全相同的恢复入口（含 Deep 校验选项）。
+	_ = overwrite
+	_ = deep
+	pkg, err := s.adopt.AdoptUploaded(s.packagePath(uploadID))
 	if err != nil {
 		return repository.BackupImport{}, err
 	}
 	if err := s.repo.UpdateStatus(uploadID, repository.UploadStatusCompleted); err != nil {
 		return repository.BackupImport{}, err
 	}
-	return imp, nil
+	// 返回一条"已完成"的导入记录回执，让既有前端与契约保持可用：
+	// 语义从"已受理恢复"变为"已存入备份列表"，状态的取值仍是终态 done。
+	return repository.BackupImport{
+		ImportID:  uploadID,
+		Origin:    repository.ImportOriginUpload,
+		Status:    repository.ImportStatusDone,
+		Operator:  rec.Operator,
+		PackageID: pkg.PackageID,
+		BlobCount: pkg.Blobs,
+	}, nil
 }
 
 // Abort 取消会话：置 aborted 并删除会话磁盘目录（归档与分片一并清除）。

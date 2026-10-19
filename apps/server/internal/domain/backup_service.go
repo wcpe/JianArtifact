@@ -286,6 +286,36 @@ func (s *BackupService) readPackageManifest(packageID string) (archive.Manifest,
 	return m, true
 }
 
+// readPackageFile 读取磁盘上某**文件标识**对应的归档 manifest 并做完整校验。
+//
+// 与 readPackageManifest 的区别：后者按已登记的 packageID 定位，只做轻量身份判定；
+// 本方法服务于「未管理包」（尚无登记，只有文件名），因此必须走 archive.Manifest.Validate，
+// 把缺字段、版本不符、模式未知的包挡在登记之外——否则一条坏登记会让校验/演练/恢复
+// 在更晚的环节才失败，且错误信息远离根因。
+func (s *BackupService) readPackageFile(fileID string) (archive.Manifest, bool) {
+	path := filepath.Join(s.Dir(), fileID+".tar.gz")
+	if _, err := os.Stat(path); err != nil {
+		return archive.Manifest{}, false
+	}
+	_, m, err := archive.Open(path)
+	if err != nil {
+		return archive.Manifest{}, false
+	}
+	if err := m.Validate(); err != nil {
+		return archive.Manifest{}, false
+	}
+	return m, true
+}
+
+// readPackageBlobIndex 从归档内 blobs.index 读回完整 blob 集合，用于补写侧车。
+func (s *BackupService) readPackageBlobIndex(packageID string) (archive.BlobIndex, error) {
+	r, _, err := s.OpenReader(packageID)
+	if err != nil {
+		return nil, err
+	}
+	return r.BlobIndex()
+}
+
 // Create 登记并启动后台生成，立即返回 queued 记录。
 //
 // 生成耗时与包体积同阶（大仓库为分钟级），不能占用 HTTP 请求线程；调用方轮询列表

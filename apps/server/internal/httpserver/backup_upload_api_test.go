@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/api"
 )
@@ -162,10 +161,13 @@ func TestBackupUploadTwoChunksAndResume(t *testing.T) {
 	}
 }
 
-// TestBackupUploadCompleteStagesPendingRestart 覆盖成功链路：
-// 生成一份真实备份包 → 按分片上传其字节 → 拼装 → 触发本地导入 → 记录走到 pending_restart。
-// 目标已自举管理员（非空），故 complete 须传 overwrite=true。
-func TestBackupUploadCompleteStagesPendingRestart(t *testing.T) {
+// TestBackupUploadCompleteAddsToBackupList 覆盖成功链路（FR-40 追加八后的语义）：
+// 生成一份真实备份包 → 按分片上传其字节 → 拼装 → **收进备份列表**。
+//
+// 关键断言：complete 返回 200 与 status=done，且**不产生** restore.pending。
+// 此前这里会走 StartLocalImport 并停在 pending_restart——那就意味着"上传一个包"
+// 等于"提交一次覆盖本机数据的恢复"，用户没有校验的机会。
+func TestBackupUploadCompleteAddsToBackupList(t *testing.T) {
 	t.Parallel()
 	env := newBackupEnv(t)
 	token := env.adminToken(t)
@@ -184,6 +186,15 @@ func TestBackupUploadCompleteStagesPendingRestart(t *testing.T) {
 	raw, err := os.ReadFile(env.svc.PackagePath(pkg.PackageId))
 	if err != nil {
 		t.Fatalf("读取源包：%v", err)
+	}
+	// 上传的包要与本机已有的那份**不同**：同名包会被明确拒绝（见下面的拒绝用例），
+	// 因此这里把源包从列表里摘掉，模拟"从另一台机器拿来的包"。
+	if err := env.svc.Delete(pkg.PackageId); err != nil {
+		t.Fatalf("移除本机源包登记：%v", err)
+	}
+	// 删除登记会一并删掉包体，故先把字节读出来。
+	if err := os.WriteFile(env.svc.PackagePath(pkg.PackageId), raw, 0o600); err != nil {
+		t.Fatalf("回写源包字节：%v", err)
 	}
 	sum := sha256.Sum256(raw)
 	totalBytes := int64(len(raw))
@@ -219,42 +230,65 @@ func TestBackupUploadCompleteStagesPendingRestart(t *testing.T) {
 		}
 	}
 
-	// complete（带 overwrite，因目标非空）。
+	// complete：只入库，不恢复。
 	code, body = env.request(t, http.MethodPost, "/api/v1/backups/uploads/"+uploadID+"/complete", token,
-		map[string]any{"overwrite": true, "sha256": hex.EncodeToString(sum[:])})
-	if code != http.StatusAccepted {
-		t.Fatalf("complete 应 202，实际 %d body=%s", code, body)
+		map[string]any{"sha256": hex.EncodeToString(sum[:])})
+	if code != http.StatusOK {
+		t.Fatalf("complete 应 200（已入库），实际 %d body=%s", code, body)
 	}
 	var imp api.BackupImport
 	if err := json.Unmarshal(body, &imp); err != nil {
-		t.Fatalf("解析导入响应：%v", err)
+		t.Fatalf("解析回执：%v", err)
 	}
-	if imp.ImportId == "" {
-		t.Fatal("complete 响应缺少 importId")
+	if imp.Status != "done" {
+		t.Fatalf("回执状态应为 done（已入库），实得 %q", imp.Status)
 	}
-	if imp.Status == "failed" {
-		t.Fatalf("导入已失败：errorCode=%v", deref(t, imp.ErrorCode))
+	if imp.PackageId == nil || *imp.PackageId == "" {
+		t.Fatal("回执应带回入库的包标识")
+	}
+	pkgID := *imp.PackageId
+
+	// 核心断言一：包真的进了备份列表，且状态 done、来源 manual。
+	code, body = env.request(t, http.MethodGet, "/api/v1/backups/"+pkgID, token, nil)
+	if code != http.StatusOK {
+		t.Fatalf("入库后应能查到该包：status=%d body=%s", code, body)
+	}
+	var stored api.BackupPackage
+	if err := json.Unmarshal(body, &stored); err != nil {
+		t.Fatalf("解析包详情：%v", err)
+	}
+	if string(stored.Status) != "done" {
+		t.Fatalf("入库包状态应为 done，实得 %v", stored.Status)
+	}
+	if string(stored.Origin) != "manual" {
+		t.Fatalf("入库包来源应为 manual，实得 %v", stored.Origin)
 	}
 
-	// 轮询导入记录直到 pending_restart（目标非空 + overwrite 应走到该终态）。
-	deadline := time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) {
-		code, body = env.request(t, http.MethodGet, "/api/v1/backups/imports/"+imp.ImportId, token, nil)
-		if code != http.StatusOK {
-			t.Fatalf("查询导入：status=%d body=%s", code, body)
-		}
-		if err := json.Unmarshal(body, &imp); err != nil {
-			t.Fatalf("解析导入：%v", err)
-		}
-		switch imp.Status {
-		case "pending_restart":
-			return
-		case "failed":
-			t.Fatalf("导入失败：errorCode=%v error=%v", deref(t, imp.ErrorCode), deref(t, imp.Error))
-		}
-		time.Sleep(25 * time.Millisecond)
+	// 核心断言二：不产生待重启恢复——这是本轮语义修正的全部意义。
+	code, body = env.request(t, http.MethodGet, "/api/v1/backups/restore-status", token, nil)
+	if code != http.StatusOK {
+		t.Fatalf("查询待重启状态：status=%d body=%s", code, body)
 	}
-	t.Fatalf("导入未在超时内到 pending_restart，终态 status=%q", imp.Status)
+	var st api.BackupRestoreStatus
+	if err := json.Unmarshal(body, &st); err != nil {
+		t.Fatalf("解析待重启状态：%v", err)
+	}
+	if st.Pending {
+		t.Fatalf("上传备份包不应产生待重启恢复，实得 pending=true packageId=%v", st.PackageId)
+	}
+
+	// 核心断言三：不再产生导入记录。
+	code, body = env.request(t, http.MethodGet, "/api/v1/backups/imports", token, nil)
+	if code != http.StatusOK {
+		t.Fatalf("查询导入记录：status=%d body=%s", code, body)
+	}
+	var imports api.BackupImportList
+	if err := json.Unmarshal(body, &imports); err != nil {
+		t.Fatalf("解析导入记录：%v", err)
+	}
+	if imports.Total != 0 {
+		t.Fatalf("上传不应产生导入记录，实得 %d 条", imports.Total)
+	}
 }
 
 // TestBackupUploadAbortThenGone 覆盖取消：204；之后 GET 反映状态已中止（记录留作审计）。

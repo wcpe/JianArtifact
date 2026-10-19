@@ -1430,10 +1430,13 @@ export const zh = {
       restore_pending: "写入待重启标记失败，请检查服务状态。",
       internal: "服务内部错误，请稍后重试或查看日志。",
     },
-    // —— FR-137：分片上传备份包（第三通道）——
-    uploadButton: "上传包恢复",
+    // —— FR-137 / FR-40 追加八：分片上传备份包（第三通道）——
+    // 措辞从「上传包恢复」改为「上传备份包」：上传只把包收进备份列表，
+    // 不再直接替换本机数据（恢复是入库之后的独立动作，可以先校验）。
+    uploadButton: "上传备份包",
     uploadChooseFile: "选择文件",
-    uploadIdleHint: "选择要上传的备份包（.tar.gz），上传完成后自动提交导入。",
+    uploadIdleHint:
+      "选择要上传的备份包（.tar.gz）。上传完成后它会被加入备份列表；恢复是之后的独立动作，可以先校验再恢复。",
     uploadProgress: "上传中 {{percent}}%",
     uploadBytes: "{{done}} / {{total}}",
     uploadResumableTitle: "发现未完成的上传",
@@ -1445,11 +1448,34 @@ export const zh = {
     uploadCancelled: "已取消上传",
     uploadDiscardConfirm: "放弃该上传会中止会话并清理已上传的分片，此操作不可恢复。",
     uploadDiscarded: "已放弃上传",
-    uploadComplete: "上传完成，已提交导入",
-    uploadCompleteHint: "需重启服务后生效",
+    uploadComplete: "上传完成，已加入备份列表",
+    uploadCompleteHint: "可在备份列表中校验或恢复；恢复会替换本机数据并需重启生效",
     uploadFileMismatch: "所选文件大小与上传会话不符，请选择原始文件后再续传",
     uploadError: "上传失败：{{message}}",
     uploadMissingChunkTitle: "分片缺失",
+
+    // —— FR-40 追加八：服务器上未被管理的备份包 ——
+    // 这些包在磁盘上有包体但登记表里没有记录（历史残留或手工拷入），
+    // 常规列表看不见它们，于是既不能用也不能删。这里补上「列出 + 导入」。
+    adoptButton: "导入未管理的包",
+    adoptTitle: "服务器上未被管理的备份包",
+    adoptHint:
+      "这些文件存在于备份目录中，但列表里没有记录，因此在常规视图中既不能使用也不能删除。导入会先校验，然后把它加入备份列表。",
+    adoptEmpty: "没有发现未被管理的包。",
+    adoptLoading: "正在扫描服务器备份目录…",
+    adoptSelectAll: "全选",
+    adoptClearAll: "清空",
+    adoptSelected: "已选 {{count}} 个",
+    adoptSubmit: "导入所选",
+    adoptInvalid: "无法导入",
+    adoptRenamed: "文件名与包标识不一致，导入时会重命名",
+    adoptHasSidecar: "索引已存在",
+    adoptNoSidecar: "索引缺失（导入时会重建）",
+    adoptSize: "大小",
+    adoptModified: "修改时间",
+    adoptResultTitle: "导入完成",
+    adoptResultSummary: "成功 {{adopted}} 个 / 跳过 {{skipped}} 个 / 失败 {{failed}} 个",
+    adoptRescan: "重新扫描",
   },
   migrations: {
     // 以下键此前缺失（t 未命中时静默回退 defaultValue），补录以保持 i18n 完整。

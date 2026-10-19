@@ -38,6 +38,9 @@ import type {
   BackupVerificationLevel,
   BackupVerificationList,
   BackupImport,
+  // FR-40 追加八：服务器上"磁盘有包体、登记无记录"的备份包。
+  UnmanagedBackupList,
+  AdoptBackupsResult,
   BackupImportList,
   BackupUploadSession,
   WriteFreezeState,
@@ -946,10 +949,16 @@ export function getBackupUpload(uploadId: string): Promise<BackupUploadSession> 
   return request<BackupUploadSession>(`/backups/uploads/${encodeURIComponent(uploadId)}`);
 }
 
-/** 拼装并触发本地导入；返回受理记录（202），导入进度随后由导入记录列表轮询可见，需重启服务生效。 */
+/**
+ * 拼装归档并存入备份列表；返回一条已完成回执（200）。
+ *
+ * FR-40 追加八起语义已改变：上传**不再**直接发起恢复，只把包收进列表。
+ * 恢复是之后的独立动作（走 restoreFromLocalPackage），因此不再需要 overwrite；
+ * deep 同样不再在此时生效——校验发生在用户显式发起恢复或深度校验时。
+ */
 export function completeBackupUpload(
   uploadId: string,
-  input?: { sha256?: string; overwrite?: boolean; deep?: boolean },
+  input?: { sha256?: string },
 ): Promise<BackupImport> {
   return request<BackupImport>(`/backups/uploads/${encodeURIComponent(uploadId)}/complete`, {
     method: "POST",
@@ -961,6 +970,28 @@ export function completeBackupUpload(
 export function abortBackupUpload(uploadId: string): Promise<void> {
   return request<void>(`/backups/uploads/${encodeURIComponent(uploadId)}/abort`, {
     method: "POST",
+  });
+}
+
+// —— 未管理备份包（FR-40 追加八）——
+// 服务器 backups/ 下"磁盘有包体、登记表无记录"的包（历史残留、手工拷入）。
+// 它们在常规列表里不可见，既不能用也不能删；这里补上"列出 + 导入"。
+
+/** 列出服务器上未被管理的备份包（按文件名升序）。 */
+export function listUnmanagedBackups(): Promise<UnmanagedBackupList> {
+  return request<UnmanagedBackupList>("/backups/unmanaged");
+}
+
+/**
+ * 把选中的未管理包导入管理列表（支持单选与多选）。
+ *
+ * 返回 200 与逐项结果：`adopted` 成功、`skipped` 未执行（已登记/非法包）、
+ * 二者皆 false 为失败。单个包失败不影响其余。
+ */
+export function adoptBackups(fileIds: string[]): Promise<AdoptBackupsResult> {
+  return request<AdoptBackupsResult>("/backups/adopt", {
+    method: "POST",
+    body: { fileIds },
   });
 }
 

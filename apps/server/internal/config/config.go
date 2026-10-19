@@ -59,6 +59,10 @@ const (
 	EnvBackupKeepLast      = "JIAN_BACKUP_KEEP_LAST"      // 保留最近 N 份自动备份；0 = 不按份数限制
 	EnvBackupRetentionDays = "JIAN_BACKUP_RETENTION_DAYS" // 自动备份保留天数；0 = 不限天数
 
+	// FR-40 追加八 备份孤儿回收（单独成组，理由同上）。
+	EnvBackupOrphanCleanupInterval = "JIAN_BACKUP_ORPHAN_CLEANUP_INTERVAL" // 孤儿备份包回收间隔，单位秒；0 禁用
+	EnvBackupOrphanGraceHours      = "JIAN_BACKUP_ORPHAN_GRACE_HOURS"      // 回收宽限期，单位小时；0 取默认 1
+
 	// FR-43 上游断路器补强：auto-block 退避起始时长，单位秒。
 	EnvAutoBlockBaseSeconds = "JIAN_AUTO_BLOCK_BASE_SECONDS" // proxy 上游首次失败的阻止窗口时长；非正数回落默认
 
@@ -83,6 +87,12 @@ const (
 	defaultBackupAutoInterval  = 0
 	defaultBackupKeepLast      = 7
 	defaultBackupRetentionDays = 30
+	// FR-40 追加八 孤儿备份包回收的默认值：每日一轮、宽限期 1 小时。
+	// 间隔默认 24h 而非 0（与自动备份相反）：孤儿文件只会占盘不会自行消失，
+	// 回收是纯粹的兜底动作，开启它不存在"悄悄占磁盘"的风险。
+	// 宽限期保证"拷入 → 界面导入"的操作窗口（见 domain/backup_orphan_cleanup.go）。
+	defaultBackupOrphanCleanupInterval = 24 * time.Hour
+	defaultBackupOrphanGrace           = time.Hour
 	// defaultAutoBlockBase 是 auto-block 退避起始时长（FR-43）。
 	// 与 domain 侧兜底常量 autoBlockInitial（proxy_health.go）保持同值：
 	// 装配层始终注入本值，domain 常量只在未装配/测试构造时兜底。
@@ -133,11 +143,16 @@ type Config struct {
 	BackupKeepLast int
 	// BackupRetentionDays 是自动备份按时间的保留上限（FR-40）；0 = 不限天数。
 	BackupRetentionDays int
-	TLSAddr             string     // 服务内置 TLS 监听地址（FR-131）；空 = 不启用
-	TLSCert             string     // TLS PEM 证书文件路径（FR-131）
-	TLSKey              string     // TLS PEM 私钥文件路径（FR-131）
-	OIDC                OIDCConfig // FR-34：OIDC 身份源接入配置（Issuer 空 = 不启用）
-	LDAP                LDAPConfig // FR-35：LDAP 身份源接入配置（URL 空 = 不启用）
+	// BackupOrphanCleanupInterval 是孤儿备份包回收作业的间隔（FR-40 追加八）；0 禁用。
+	BackupOrphanCleanupInterval time.Duration
+	// BackupOrphanGrace 是孤儿回收的宽限期：mtime 晚于此窗口的文件一律保留，
+	// 给"拷入 → 界面导入"留出操作窗口（FR-40 追加八）。
+	BackupOrphanGrace time.Duration
+	TLSAddr           string     // 服务内置 TLS 监听地址（FR-131）；空 = 不启用
+	TLSCert           string     // TLS PEM 证书文件路径（FR-131）
+	TLSKey            string     // TLS PEM 私钥文件路径（FR-131）
+	OIDC              OIDCConfig // FR-34：OIDC 身份源接入配置（Issuer 空 = 不启用）
+	LDAP              LDAPConfig // FR-35：LDAP 身份源接入配置（URL 空 = 不启用）
 	// RestartUnit 是一键重启的目标单元名（FR-40 追加七）；仅来自环境变量，
 	// 绝不从请求体读取——这是防命令注入的第一道边界（见 domain/restart_service.go）。
 	RestartUnit string
@@ -246,32 +261,34 @@ func Load() (*Config, error) {
 	}
 
 	return &Config{
-		DataDir:                  absData,
-		HTTPAddr:                 envOr(EnvHTTPAddr, defaultHTTPAddr),
-		DBPath:                   filepath.Join(absData, dbFileName),
-		BlobDir:                  blobDir,
-		JWTSecret:                secret,
-		MigrationCredentialKey:   migrationCredentialKey,
-		UpstreamTimeout:          upstreamTimeout(),
-		AutoBlockBaseSeconds:     autoBlockBase(),
-		SyncPeerURL:              os.Getenv(EnvSyncPeerURL),
-		SyncInterval:             syncInterval(),
-		PublicURL:                os.Getenv(EnvPublicURL),
-		EnabledFormats:           enabledFormats,
-		BlobGCInterval:           blobGCInterval(),
-		StorageCleanupInterval:   storageCleanupInterval(),
-		StorageMetadataRetention: storageMetadataRetention(),
-		StorageTempMaxAge:        storageTempMaxAge(),
-		BackupAutoInterval:       backupAutoInterval(),
-		BackupKeepLast:           backupKeepLast(),
-		BackupRetentionDays:      backupRetentionDays(),
-		TLSAddr:                  envOr(EnvTLSAddr, ""),
-		TLSCert:                  os.Getenv(EnvTLSCert),
-		TLSKey:                   os.Getenv(EnvTLSKey),
-		OIDC:                     oidc,
-		LDAP:                     ldap,
-		RestartUnit:              envOr(EnvRestartUnit, defaultRestartUnit),
-		RestartScope:             restartScope(),
+		DataDir:                     absData,
+		HTTPAddr:                    envOr(EnvHTTPAddr, defaultHTTPAddr),
+		DBPath:                      filepath.Join(absData, dbFileName),
+		BlobDir:                     blobDir,
+		JWTSecret:                   secret,
+		MigrationCredentialKey:      migrationCredentialKey,
+		UpstreamTimeout:             upstreamTimeout(),
+		AutoBlockBaseSeconds:        autoBlockBase(),
+		SyncPeerURL:                 os.Getenv(EnvSyncPeerURL),
+		SyncInterval:                syncInterval(),
+		PublicURL:                   os.Getenv(EnvPublicURL),
+		EnabledFormats:              enabledFormats,
+		BlobGCInterval:              blobGCInterval(),
+		StorageCleanupInterval:      storageCleanupInterval(),
+		StorageMetadataRetention:    storageMetadataRetention(),
+		StorageTempMaxAge:           storageTempMaxAge(),
+		BackupAutoInterval:          backupAutoInterval(),
+		BackupKeepLast:              backupKeepLast(),
+		BackupRetentionDays:         backupRetentionDays(),
+		BackupOrphanCleanupInterval: backupOrphanCleanupInterval(),
+		BackupOrphanGrace:           backupOrphanGrace(),
+		TLSAddr:                     envOr(EnvTLSAddr, ""),
+		TLSCert:                     os.Getenv(EnvTLSCert),
+		TLSKey:                      os.Getenv(EnvTLSKey),
+		OIDC:                        oidc,
+		LDAP:                        ldap,
+		RestartUnit:                 envOr(EnvRestartUnit, defaultRestartUnit),
+		RestartScope:                restartScope(),
 	}, nil
 }
 
@@ -383,6 +400,30 @@ func backupKeepLast() int {
 // 缺省或非法值取 30；显式 0 = 不限天数（只受份数约束）。0 语义与 backupKeepLast 同构。
 func backupRetentionDays() int {
 	return envNonNegativeIntOr(EnvBackupRetentionDays, defaultBackupRetentionDays)
+}
+
+// backupOrphanCleanupInterval 解析 JIAN_BACKUP_ORPHAN_CLEANUP_INTERVAL（秒，FR-40 追加八）：
+// 孤儿备份包回收作业的间隔。缺省或非法值取 24 小时，显式 0 禁用（不注册作业）。
+//
+// 默认开：孤儿文件只占磁盘、不会自行消失，回收是纯兜底动作，不存在"意外删数据"的
+// 默认风险——真正的护栏是宽限期与身份校验（见 domain/backup_orphan_cleanup.go）。
+func backupOrphanCleanupInterval() time.Duration {
+	return envDurationOr(EnvBackupOrphanCleanupInterval, defaultBackupOrphanCleanupInterval, time.Second)
+}
+
+// backupOrphanGrace 解析 JIAN_BACKUP_ORPHAN_GRACE_HOURS（小时，FR-40 追加八）：
+// 孤儿回收的宽限期。缺省或非法值取 1 小时；显式 0 同样回落 1 小时——
+// **不允许零宽限**：那会让"刚拷进来、还没来得及在界面导入"的包在下一轮就被删掉。
+func backupOrphanGrace() time.Duration {
+	v := os.Getenv(EnvBackupOrphanGraceHours)
+	if v == "" {
+		return defaultBackupOrphanGrace
+	}
+	hours, err := strconv.Atoi(v)
+	if err != nil || hours <= 0 {
+		return defaultBackupOrphanGrace
+	}
+	return time.Duration(hours) * time.Hour
 }
 
 // envNonNegativeIntOr 解析环境变量为整数：缺省、非法与负数取 fallback，显式 0 原样返回。

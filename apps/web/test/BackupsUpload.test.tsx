@@ -54,7 +54,7 @@ async function actionButtonAsync(name: string | RegExp): Promise<HTMLElement> {
  */
 async function openUploadTab() {
   const user = userEvent.setup();
-  await user.click(await actionButtonAsync("上传包恢复"));
+  await user.click(await actionButtonAsync("上传备份包"));
   expect(screen.queryByRole("dialog")).toBeNull();
   const channel = screen.getByTestId("import-channel-upload");
   expect(channel.style.display).not.toBe("none");
@@ -87,7 +87,7 @@ function slowChunks() {
 }
 
 describe("分片上传备份包", () => {
-  it("选文件→init→逐片上传→进度出现→complete 后导入记录出现且为 pending_restart", async () => {
+  it("选文件→init→逐片上传→进度出现→complete 后包进入备份列表（不再产生待重启导入）", async () => {
     slowChunks();
     renderTab();
     const { user, input } = await openUploadTab();
@@ -105,56 +105,42 @@ describe("分片上传备份包", () => {
       { timeout: 8000 },
     );
 
-    // 本面板给出「已提交导入 / 需重启」回执。
+    // 本面板给出「已加入备份列表」回执（FR-40 追加八起不再有"需重启"）。
     await waitFor(
       () => {
-        expect(screen.getByText("上传完成，已提交导入")).toBeTruthy();
+        expect(screen.getByText("上传完成，已加入备份列表")).toBeTruthy();
       },
       { timeout: 15_000 },
     );
 
-    // complete 触发导入：新导入记录（origin=upload）经 queued→…→pending_restart 推进。
-    // 记录已并入统一事件表（不再需要"切到记录标签"），新行按事件时间直接出现在表里——
-    // 上传后仍停留在展开的上传表单上，两者同屏，正是本次重构的收益。
-    //
-    // 必须限定在事件表内查找：complete 之后**恢复进度弹窗会自动打开**，弹窗状态行也渲染
-    // 同一个 importId；不限定作用域会同时命中表格单元格与弹窗，断言因"找到多个元素"失败。
-    const table = await screen.findByTestId("backup-event-table");
-    const newId = await within(table).findByText(/^imp-\d{14}-\d{3}$/, {}, { timeout: 15_000 });
-    const row = newId.closest("tr") as HTMLElement;
-    expect(row.dataset.rowKind).toBe("import");
-    await waitFor(
-      () => {
-        expect(within(row).getByText("待重启")).toBeTruthy();
-      },
-      { timeout: 15_000 },
-    );
+    // 关键语义反转：上传**不再**产生导入记录，也不再打开恢复进度弹窗。
+    // 它只把包收进备份列表，恢复是之后的独立动作。
+    expect(screen.queryByTestId("backup-event-table")).toBeTruthy(); // 事件表仍在页面上
+    const table = screen.getByTestId("backup-event-table");
+    expect(within(table).queryByText(/^imp-\d{14}-\d{3}$/)).toBeNull();
   }, 30_000);
 
-  it("途中勾选「覆盖已有数据」后，complete 时把它透传给后端", async () => {
-    // 这一条是本轮要修的核心缺陷：契约的 CompleteBackupUploadRequest 本就支持 overwrite，
-    // 但界面从未暴露它，于是"往非空实例导"必然在**异步暂存阶段**失败
-    // （HTTP 早返回 202，用户只看到"上传成功、随后记录变失败"，无从知道差在哪）。
-    // 因此必须验证：勾上开关后，complete 请求体的 overwrite 真的为 true。
+  it("上传只把包存入备份列表：complete 不提交 overwrite/deep，界面也不再出现这两个开关", async () => {
+    // FR-40 追加八改变了上传语义：此前 complete 会走 StartLocalImport → 写 restore.pending，
+    // 于是"上传一个包"等于"提交一次覆盖本机数据的恢复"，用户没有校验的机会。
+    // 现在上传只入库，因此：
+    //   ① 界面不再出现「覆盖已有数据 / 深度校验」两个开关（它们属于恢复动作）；
+    //   ② complete 请求体不携带这两个字段。
     const completeSpy = vi.spyOn(endpoints, "completeBackupUpload");
     renderTab();
     const { user, input } = await openUploadTab();
 
-    // 默认不勾（false 不该被静默写成 true：覆盖会动目标实例的既有数据）。
-    const overwriteBox = await screen.findByTestId("upload-overwrite");
-    expect((overwriteBox as HTMLInputElement).checked).toBe(false);
+    expect(screen.queryByTestId("upload-overwrite")).toBeNull();
+    expect(screen.queryByTestId("upload-deep")).toBeNull();
 
-    await user.click(overwriteBox);
-    expect((overwriteBox as HTMLInputElement).checked).toBe(true);
-
-    // 选文件走完流程（单片 1 MiB，无需放慢）。
     await user.upload(input, makeFile(1 * 1024 * 1024));
 
     await waitFor(
       () => {
         expect(completeSpy).toHaveBeenCalled();
         const opts = completeSpy.mock.calls[0]?.[1];
-        expect(opts?.overwrite).toBe(true);
+        expect(opts?.overwrite).toBeUndefined();
+        expect(opts?.deep).toBeUndefined();
       },
       { timeout: 15_000 },
     );
@@ -268,7 +254,7 @@ describe("分片上传备份包", () => {
     // 完成后本面板给出回执。
     await waitFor(
       () => {
-        expect(screen.getByText("上传完成，已提交导入")).toBeTruthy();
+        expect(screen.getByText("上传完成，已加入备份列表")).toBeTruthy();
       },
       { timeout: 15_000 },
     );
@@ -308,7 +294,7 @@ describe("分片上传备份包", () => {
     await user.click(collapse);
     expect(screen.getByTestId("import-inline").style.display).toBe("none");
 
-    await user.click(await actionButtonAsync("上传包恢复"));
+    await user.click(await actionButtonAsync("上传备份包"));
     expect(screen.getByTestId("import-channel-upload").style.display).not.toBe("none");
     expect(await screen.findByText("发现未完成的上传", {}, { timeout: 5000 })).toBeTruthy();
   }, 25_000);

@@ -54,6 +54,7 @@ type appServices struct {
 	restoreSvc          *domain.RestoreService
 	backupImports       *domain.BackupImportService // FR-137：导入记录与 URL 拉取
 	backupUploads       *domain.BackupUploadService // FR-137：分片上传（Web 第三通道）
+	backupAdopt         *domain.BackupAdoptService  // FR-40 追加八：未管理备份包的扫描与导入
 	auditAttentionKey   []byte                      // FR-118：由启动密钥派生的关注标识签名输入
 	nodeIdentity        *domain.NodeIdentity
 	syncTokenSet        bool             // 历史集群状态兼容字段；主备不再以环境令牌配置
@@ -294,6 +295,14 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	})
 	// FR-40：恢复演练服务（CLI 与 API 共用同一实现；API 端点在后续阶段接入）。
 	backupDrillSvc := domain.NewBackupDrillService(backupSvc, repository.NewBackupVerificationRepo(db), cfg.DataDir)
+	// FR-40 追加八：未管理备份包（磁盘有包体、登记无记录）的扫描与导入。
+	// 与孤儿回收共用同一份差集口径，因此两者都由 adopt 服务给出候选。
+	backupAdoptSvc := domain.NewBackupAdoptService(backupSvc, backupRepo)
+	// FR-40 追加八：孤儿备份包回收。宽限期保证"拷入 → 界面导入"的窗口，
+	// 身份校验保证不误删用户放错的其他归档（见 domain/backup_orphan_cleanup.go）。
+	backupOrphanSvc := domain.NewBackupOrphanCleanupService(backupSvc, backupAdoptSvc,
+		domain.BackupOrphanCleanupOptions{Grace: cfg.BackupOrphanGrace})
+	registerBackupOrphanCleanupJob(schedulerSvc, cfg.BackupOrphanCleanupInterval, backupOrphanSvc.Run)
 	// FR-39：指标登记与 /metrics 渲染器；协议请求计数由 HTTP 层钩子（run）累加。
 	metricsReg := metrics.New()
 	metricsExp := metrics.NewExposition(metricsReg, schedulerJobStatuses(schedulerSvc))
@@ -360,7 +369,8 @@ func openServices(cfg *config.Config) (*appServices, error) {
 		backupDrillSvc:      backupDrillSvc,
 		restoreSvc:          restoreSvc,
 		backupImports:       backupImportsSvc,
-		backupUploads:       domain.NewBackupUploadService(repository.NewBackupUploadRepo(db), backupImportsSvc, cfg.DataDir),
+		backupUploads:       domain.NewBackupUploadService(repository.NewBackupUploadRepo(db), backupAdoptSvc, cfg.DataDir),
+		backupAdopt:         backupAdoptSvc,
 		freeze:              freeze,
 		auditAttentionKey:   append([]byte(nil), cfg.JWTSecret...),
 		nodeIdentity:        nodeIdentity,
@@ -445,6 +455,7 @@ func (s *appServices) handlers(version string, checks []func() error) *api.Handl
 		Freeze:                  s.freeze,
 		BackupImports:           s.backupImports,
 		BackupUploads:           s.backupUploads,
+		BackupAdopt:             s.backupAdopt, // FR-40 追加八：未管理备份包的扫描与导入
 		Metrics:                 s.metricsExp,
 		OIDC:                    s.oidcDeps,
 		LDAPAuth:                s.ldapAuth,

@@ -14,15 +14,21 @@
 // 因此 busy 状态经 onBusyChange 上报给页面，由页面把两个通道按钮一起置灰——只在本组件内
 // 挡住收起按钮是不够的，动作条仍能把面板收掉（该漏洞已由用例守住，见 BackupsUpload）。
 import { ActionIcon, Group, Paper, Text, ThemeIcon } from "@mantine/core";
-import { IconChevronUp, IconUpload, IconWorldDownload } from "@tabler/icons-react";
+import {
+  IconChevronUp,
+  IconDatabaseImport,
+  IconUpload,
+  IconWorldDownload,
+} from "@tabler/icons-react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { BackupUploadPanel } from "./BackupUploadPanel";
+import { UnmanagedBackupPanel } from "./UnmanagedBackupPanel";
 import { UrlImportPanel } from "./UrlImportPanel";
 
 /** 两个导入通道；null 表示整块收起。 */
-export type ImportChannel = "url" | "upload";
+export type ImportChannel = "url" | "upload" | "adopt";
 
 export function ImportInline({
   channel,
@@ -63,10 +69,10 @@ export function ImportInline({
       <Group justify="space-between" align="center" wrap="nowrap" mb="sm">
         <Group gap="xs" wrap="nowrap">
           <ThemeIcon size={22} radius="sm" variant="light" color="blue">
-            {channel === "upload" ? <IconUpload size={14} /> : <IconWorldDownload size={14} />}
+            {channel ? channelIcon(channel) : null}
           </ThemeIcon>
           <Text fw={700} size="sm">
-            {channel === "upload" ? t("backups.uploadButton") : t("backups.importButton")}
+            {channel ? channelTitle(channel, t) : null}
           </Text>
         </Group>
         <ActionIcon
@@ -103,6 +109,37 @@ export function ImportInline({
         */}
         <BackupUploadPanel onBusyChange={setBusy} />
       </div>
+      <div
+        style={channel === "adopt" ? undefined : { display: "none" }}
+        data-testid="import-channel-adopt"
+      >
+        {/* 未管理包导入：成功后面板自己派发 REFRESH_EVENT，与其它通道一致。 */}
+        <UnmanagedBackupPanel onDone={() => onChannelChange(null)} />
+      </div>
     </Paper>
   );
+}
+
+/** 通道图标：三个通道各用一眼可辨的图形。 */
+function channelIcon(channel: ImportChannel) {
+  switch (channel) {
+    case "upload":
+      return <IconUpload size={14} />;
+    case "adopt":
+      return <IconDatabaseImport size={14} />;
+    default:
+      return <IconWorldDownload size={14} />;
+  }
+}
+
+/** 通道标题：与动作条上的按钮文案保持同一 key，避免两处措辞漂移。 */
+function channelTitle(channel: ImportChannel, t: (key: string) => string) {
+  switch (channel) {
+    case "upload":
+      return t("backups.uploadButton");
+    case "adopt":
+      return t("backups.adoptButton");
+    default:
+      return t("backups.importButton");
+  }
 }

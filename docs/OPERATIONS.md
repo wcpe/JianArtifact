@@ -25,13 +25,33 @@
 | `JIAN_BACKUP_AUTO_INTERVAL`            | 自动备份间隔（秒）——**仅作首次部署初值**  | `0`（**默认关闭**）；`0` = 关闭；非法 / 负数回落默认               |
 | `JIAN_BACKUP_KEEP_LAST`                | 保留最近 N 份自动备份（份）——**仅作初值** | `7`；`0` = 不按份数限制；非法 / 负数回落默认                       |
 | `JIAN_BACKUP_RETENTION_DAYS`           | 自动备份的保留天数（天）——**仅作初值**    | `30`；`0` = 不限天数；非法 / 负数回落默认                          |
+| `JIAN_BACKUP_ORPHAN_CLEANUP_INTERVAL`  | 孤儿备份包回收作业的间隔（秒）            | `86400`；`0` 禁用（作业不注册）；非法 / 负数回落默认               |
+| `JIAN_BACKUP_ORPHAN_GRACE_HOURS`       | 孤儿回收的宽限期（小时）                  | `1`；`0` / 负数 / 非法回落 1（**不允许零宽限**，见下）             |
 | `JIAN_TLS_ADDR`                        | 内置 HTTPS 监听地址                       | 为空表示不启用                                                     |
 | `JIAN_TLS_CERT` / `JIAN_TLS_KEY`       | TLS 证书和私钥路径                        | 配置 `JIAN_TLS_ADDR` 时必填                                        |
 | `JIAN_AUTO_BLOCK_BASE_SECONDS`         | proxy 上游 auto-block 退避起始时长（秒）  | `40`；之后每档翻倍；`0` / 负数 / 非法回落默认（无禁用语义）        |
 | `JIAN_RESTART_UNIT`                    | 一键重启的目标 systemd 单元名             | `jianartifact`；须匹配 `[A-Za-z0-9._@-]`，否则该能力降级为不可用   |
 | `JIAN_RESTART_SCOPE`                   | 一键重启的作用域                          | `system`；可选 `systemd-user`（**推荐**）/ `docker`；非法回落默认  |
 
-派生路径固定为 `${JIAN_DATA_DIR}/jianartifact.db` 和 `${JIAN_DATA_DIR}/blobs`。启动会创建数据目录并执行 schema 迁移；不会在启动时扫描活动 blob；遗留 / 孤儿 blob 的定时清理由本实例按 `JIAN_BLOB_GC_INTERVAL` 独立运行；存储治理清理（隔离区空目录、终态操作与隔离元数据裁剪、过期 OCI 上传临时文件、代理缓存保留）由 `storage-cleanup` 作业按 `JIAN_STORAGE_CLEANUP_INTERVAL` 独立运行，两者按目录命名空间各管一块、互不重叠。以上作业**都只在第一个间隔到期后执行**（启动不清理、不扫描历史）。
+派生路径固定为 `${JIAN_DATA_DIR}/jianartifact.db` 和 `${JIAN_DATA_DIR}/blobs`。启动会创建数据目录并执行 schema 迁移；不会在启动时扫描活动 blob；遗留 / 孤儿 blob 的定时清理由本实例按 `JIAN_BLOB_GC_INTERVAL` 独立运行；存储治理清理（隔离区空目录、终态操作与隔离元数据裁剪、过期 OCI 上传临时文件、代理缓存保留）由 `storage-cleanup` 作业按 `JIAN_STORAGE_CLEANUP_INTERVAL` 独立运行；备份孤儿回收（`${JIAN_DATA_DIR}/backups/` 下"有包体、无登记"的残留）由 `backup-orphan-cleanup` 作业按 `JIAN_BACKUP_ORPHAN_CLEANUP_INTERVAL` 独立运行。三者按目录命名空间各管一块、互不重叠。以上作业**都只在第一个间隔到期后执行**（启动不清理、不扫描历史）。
+
+### 备份目录与"未被管理的包"（FR-40 追加八）
+
+`${JIAN_DATA_DIR}/backups/` 里的包体与数据库登记是两套独立的持久化：包体是文件，登记在 SQLite。`BackupService.Delete` 的顺序是**先删文件、再删登记**，因此正常删除与保留策略都不会留下残留；但两者之间没有事务，进程被杀、外部工具直接改库、历史版本缺陷或手工搬运都可能让它们失步，产生"磁盘有包体、登记无记录"的包。
+
+这类包在常规列表里**不可见**（列表读登记表），于是磁盘被占着却既不能用也不能删。为此提供两个配套能力：
+
+- **导入（界面「导入未管理的包」）**：扫描出候选，支持单选与多选，逐个校验包内 manifest 后补建登记行。导入的包以 `origin=manual` 登记，因此**不会被保留策略自动淘汰**——是否保留由人决定。文件名与包内标识不一致时会按包内标识重命名包体。
+- **回收（`backup-orphan-cleanup` 作业）**：把无人认领的残留按两道路径删掉。
+
+两者的候选来自**同一份差集**（磁盘有、登记无），因此不会互相打架。回收作业有两道护栏：
+
+1. **宽限期**：只回收 mtime 早于 `now - JIAN_BACKUP_ORPHAN_GRACE_HOURS` 的文件。刚拷进来、还没来得及在界面导入的包一律保留。宽限期**不允许配成 0**（`0`/负数/非法都回落 1 小时）——零宽限会让"拷入 → 导入"这个操作窗口消失。
+2. **身份校验**：只回收能通过 `archive.Manifest.Validate` 的本产品备份包。无法识别的归档（用户放错的其他 tar.gz、损坏包）一律不动，计入结果的 `Invalid` 而非删除。
+
+命名空间护栏：只碰 `<id>.tar.gz` 与 `<id>.index`；`<id>.tar.gz.snap` 是生成中的一致性快照临时文件，由生成流程的 defer 自清理，回收作业不碰。单轮删除上限 500 个，首次在积压严重的实例上不会一次打爆磁盘 IO。
+
+> **典型处置流程**：发现未管理包 → 先在界面确认哪些要 → 导入要保留的 → 其余的等宽限期过后由作业回收（或手动触发 `POST /api/v1/maintenance/jobs/backup-orphan-cleanup/run`）。
 
 ### 数据目录解析（CLI 与服务的对齐）
 

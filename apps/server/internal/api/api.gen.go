@@ -1563,6 +1563,40 @@ type AddUserGroupMemberRequest struct {
 	UserId int64 `json:"userId"`
 }
 
+// AdoptBackupsRequest defines model for AdoptBackupsRequest.
+type AdoptBackupsRequest struct {
+	// FileIds 要导入的包标识（来自 listUnmanagedBackups 的 fileId）。
+	FileIds []string `json:"fileIds"`
+}
+
+// AdoptBackupsResult defines model for AdoptBackupsResult.
+type AdoptBackupsResult struct {
+	Adopted int `json:"adopted"`
+	Failed  int `json:"failed"`
+
+	// Items 逐项结果，顺序与请求的 fileIds 一致。
+	Items   []AdoptedBackup `json:"items"`
+	Skipped int             `json:"skipped"`
+}
+
+// AdoptedBackup defines model for AdoptedBackup.
+type AdoptedBackup struct {
+	// Adopted 是否成功建立登记。
+	Adopted bool `json:"adopted"`
+
+	// FileId 请求里给出的包标识（回显）。
+	FileId string `json:"fileId"`
+
+	// PackageId 最终登记的包标识。
+	PackageId string `json:"packageId"`
+
+	// Reason 跳过或失败的原因。
+	Reason *string `json:"reason,omitempty"`
+
+	// Skipped 是否跳过未执行（已登记、非法包等）。
+	Skipped bool `json:"skipped"`
+}
+
 // AssetList defines model for AssetList.
 type AssetList struct {
 	Items []AssetSummary `json:"items"`
@@ -3184,6 +3218,39 @@ type TokenList struct {
 	Items []Token `json:"items"`
 }
 
+// UnmanagedBackup defines model for UnmanagedBackup.
+type UnmanagedBackup struct {
+	// FileId 由文件名推导的标识（磁盘上的 `<fileId>.tar.gz`）。
+	FileId string `json:"fileId"`
+
+	// HasSidecar 同目录下是否存在 `<fileId>.index` 侧车索引。
+	HasSidecar bool `json:"hasSidecar"`
+
+	// ModifiedAt 包体文件的最后修改时间（RFC3339，UTC）。
+	ModifiedAt string `json:"modifiedAt"`
+
+	// PackageId 归档内 manifest 声明的标识；`valid=false` 时为空串。
+	PackageId string `json:"packageId"`
+
+	// Reason `valid=false` 时的原因。
+	Reason *string `json:"reason,omitempty"`
+
+	// Renamed 文件名与包内标识是否不一致（导入时以包内为准并重命名包体）。
+	Renamed bool `json:"renamed"`
+
+	// SizeBytes 包体文件的字节数。
+	SizeBytes int64 `json:"sizeBytes"`
+
+	// Valid 归档能否打开且 manifest 通过校验。
+	Valid bool `json:"valid"`
+}
+
+// UnmanagedBackupList defines model for UnmanagedBackupList.
+type UnmanagedBackupList struct {
+	Items []UnmanagedBackup `json:"items"`
+	Total int               `json:"total"`
+}
+
 // UpdateRepositoryRequest defines model for UpdateRepositoryRequest.
 type UpdateRepositoryRequest struct {
 	// Aliases 覆盖式更新仓库别名集合（传空数组表示清空；与主名共享命名空间、全局唯一）
@@ -3828,6 +3895,9 @@ type LoginJSONRequestBody = LoginRequest
 // CreateBackupJSONRequestBody defines body for CreateBackup for application/json ContentType.
 type CreateBackupJSONRequestBody = CreateBackupRequest
 
+// AdoptBackupsJSONRequestBody defines body for AdoptBackups for application/json ContentType.
+type AdoptBackupsJSONRequestBody = AdoptBackupsRequest
+
 // ImportBackupFromURLJSONRequestBody defines body for ImportBackupFromURL for application/json ContentType.
 type ImportBackupFromURLJSONRequestBody = CreateBackupImportRequest
 
@@ -4236,6 +4306,9 @@ type ServerInterface interface {
 	// CreateBackup 生成备份包（仅管理员）
 	// (POST /api/v1/backups)
 	CreateBackup(c *gin.Context)
+	// AdoptBackups 导入未管理的备份包到管理列表（仅管理员）
+	// (POST /api/v1/backups/adopt)
+	AdoptBackups(c *gin.Context)
 	// ImportBackupFromURL 从 URL 拉取并导入备份包（仅管理员）
 	// (POST /api/v1/backups/import)
 	ImportBackupFromURL(c *gin.Context)
@@ -4248,6 +4321,9 @@ type ServerInterface interface {
 	// GetBackupRestoreStatus 查询是否存在待重启生效的备份恢复（仅管理员）
 	// (GET /api/v1/backups/restore-status)
 	GetBackupRestoreStatus(c *gin.Context)
+	// ListUnmanagedBackups 列出服务器上未被管理的备份包（仅管理员）
+	// (GET /api/v1/backups/unmanaged)
+	ListUnmanagedBackups(c *gin.Context)
 	// CreateBackupUpload 发起分片上传会话（仅管理员）
 	// (POST /api/v1/backups/uploads)
 	CreateBackupUpload(c *gin.Context)
@@ -4260,7 +4336,7 @@ type ServerInterface interface {
 	// UploadBackupChunk 上传单个分片（仅管理员）
 	// (PUT /api/v1/backups/uploads/{id}/chunks/{index})
 	UploadBackupChunk(c *gin.Context, id BackupUploadIdParam, index BackupUploadChunkIndexParam)
-	// CompleteBackupUpload 拼装并触发本地导入（仅管理员）
+	// CompleteBackupUpload 拼装归档并存入备份列表（仅管理员）
 	// (POST /api/v1/backups/uploads/{id}/complete)
 	CompleteBackupUpload(c *gin.Context, id BackupUploadIdParam)
 	// DeleteBackup 删除备份包（仅管理员）
@@ -4669,6 +4745,19 @@ func (siw *ServerInterfaceWrapper) CreateBackup(c *gin.Context) {
 	siw.Handler.CreateBackup(c)
 }
 
+// AdoptBackups operation middleware
+func (siw *ServerInterfaceWrapper) AdoptBackups(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.AdoptBackups(c)
+}
+
 // ImportBackupFromURL operation middleware
 func (siw *ServerInterfaceWrapper) ImportBackupFromURL(c *gin.Context) {
 
@@ -4753,6 +4842,19 @@ func (siw *ServerInterfaceWrapper) GetBackupRestoreStatus(c *gin.Context) {
 	}
 
 	siw.Handler.GetBackupRestoreStatus(c)
+}
+
+// ListUnmanagedBackups operation middleware
+func (siw *ServerInterfaceWrapper) ListUnmanagedBackups(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ListUnmanagedBackups(c)
 }
 
 // CreateBackupUpload operation middleware
@@ -7296,6 +7398,8 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.POST(options.BaseURL+"/api/v1/backups/import", wrapper.ImportBackupFromURL)
 	router.GET(options.BaseURL+"/api/v1/backups/imports", wrapper.ListBackupImports)
 	router.GET(options.BaseURL+"/api/v1/backups/imports/:id", wrapper.GetBackupImport)
+	router.GET(options.BaseURL+"/api/v1/backups/unmanaged", wrapper.ListUnmanagedBackups)
+	router.POST(options.BaseURL+"/api/v1/backups/adopt", wrapper.AdoptBackups)
 	router.POST(options.BaseURL+"/api/v1/backups/uploads", wrapper.CreateBackupUpload)
 	router.PUT(options.BaseURL+"/api/v1/backups/uploads/:id/chunks/:index", wrapper.UploadBackupChunk)
 	router.GET(options.BaseURL+"/api/v1/backups/uploads/:id", wrapper.GetBackupUpload)

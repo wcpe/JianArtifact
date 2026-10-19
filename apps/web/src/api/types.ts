@@ -74,6 +74,13 @@ export type BackupUploadSession = Schemas["BackupUploadSession"];
 export type BackupUploadStatus = Schemas["BackupUploadStatus"];
 export type CreateBackupUploadRequest = Schemas["CreateBackupUploadRequest"];
 export type CompleteBackupUploadRequest = Schemas["CompleteBackupUploadRequest"];
+// 未管理备份包（FR-40 追加八）：服务器 backups/ 下有包体但登记表无记录的包。
+// valid=false 的条目无法导入；renamed=true 表示文件名与包内标识不一致（导入以包内为准）。
+export type UnmanagedBackup = Schemas["UnmanagedBackup"];
+export type UnmanagedBackupList = Schemas["UnmanagedBackupList"];
+export type AdoptBackupsRequest = Schemas["AdoptBackupsRequest"];
+export type AdoptedBackup = Schemas["AdoptedBackup"];
+export type AdoptBackupsResult = Schemas["AdoptBackupsResult"];
 export type MigrationPlan = Schemas["MigrationPlan"];
 export type MigrationReport = Schemas["MigrationReport"];
 export type MigrationDiscoverResponse = Schemas["MigrationDiscoverResponse"];
