@@ -668,6 +668,7 @@ describe("备份与搬迁", () => {
     expect(saveBtn.hasAttribute("disabled")).toBe(true);
 
     // 改间隔 → 保存按钮变可用 → 点击保存 → 成功提示出现。
+    // FR-40 追加九起间隔是「数值 + 单位」两个控件，这里只改数值（单位保持秒）。
     await user.clear(interval);
     await user.type(interval, "60");
     await waitFor(() => {
@@ -685,12 +686,57 @@ describe("备份与搬迁", () => {
 
     // 保存后回读：新值必须真的落到设置里。此前 devmock 的 PUT /settings 不透传这三项，
     // 保存只会弹成功提示、值却原样退回，用例因此必须断言"回读到的就是新值"。
+    //
+    // 注意回读的不是 "60"：FR-40 追加九起后端会把秒拆成"最适合显示的单位"，
+    // 60 秒回显为「1 分钟」。这正是本功能的意图——用户不必看到 86400 才知道那是一天。
     await waitFor(() => {
-      expect((within(dialog).getByTestId("auto-interval") as HTMLInputElement).value).toBe("60");
+      const restored = within(dialog).getByTestId("auto-interval") as HTMLInputElement;
+      expect(restored.value).toBe("1");
+      const unit = within(dialog).getByTestId("auto-interval-unit") as HTMLInputElement;
+      // Mantine 的 Select 把选中项的 label 写进 input.value（显示用），故断言中文标签。
+      expect(unit.value).toBe("分钟");
     });
 
     // 「保存即生效，无需重启」必须可见（卡改弹窗后该提示不能丢）。
     expect(within(dialog).getByText("保存即生效，无需重启")).toBeTruthy();
+  }, 20_000);
+
+  it("自动备份间隔支持多种时间单位：切换单位后按新单位换算并提交表达式", async () => {
+    // FR-40 追加九之前的痛点：间隔只能填秒，"每天一次"要心算 86400。
+    // 现在拆成「数值 + 单位」，本用例守住三件事：
+    //   ① 单位控件存在且可切换；
+    //   ② 换算提示随单位变化（让"1 天 = 86400 秒"当场可见）；
+    //   ③ 提交给后端的是表达式（"1d"），不是心算后的秒数。
+    const user = userEvent.setup();
+    const putSpy = vi.spyOn(endpoints, "putSettings");
+    renderTab();
+
+    await user.click(await screen.findByRole("button", { name: "自动备份设置" }));
+    const dialog = await screen.findByRole("dialog");
+
+    const interval = await within(dialog).findByTestId("auto-interval");
+    const unit = within(dialog).getByTestId("auto-interval-unit");
+
+    // 填 1，切到「天」。
+    await user.clear(interval);
+    await user.type(interval, "1");
+    await user.click(unit);
+    await user.click(await screen.findByRole("option", { name: "天" }));
+
+    // 换算提示应立刻显示 86400 秒——这是用户核对"我填的到底是多少"的唯一途径。
+    await waitFor(() => {
+      expect(within(dialog).getByTestId("auto-interval-hint").textContent).toContain("86400");
+    });
+
+    await user.click(within(dialog).getByRole("button", { name: "保存" }));
+    await waitFor(() => {
+      expect(putSpy).toHaveBeenCalled();
+      const payload = putSpy.mock.calls.at(-1)?.[0];
+      // 提交表达式而非秒数：换算的权威实现只在后端，前端不重复算一遍。
+      expect(payload?.backupAutoIntervalExpr).toBe("1d");
+      // 不应再提交秒字段（两者语义重叠，同时给会让人分不清哪个生效）。
+      expect(payload?.backupAutoInterval).toBeUndefined();
+    });
   }, 20_000);
 
   it("自动备份配置的 0 值不被误当成空值", async () => {

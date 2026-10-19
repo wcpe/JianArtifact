@@ -1582,6 +1582,18 @@ export const en = {
     adoptResultTitle: "Import finished",
     adoptResultSummary: "Imported {{adopted}}, skipped {{skipped}}, failed {{failed}}",
     adoptRescan: "Rescan",
+
+    // —— FR-40 addition 9: backup interval supports multiple time units ——
+    autoCfgIntervalUnit: "Unit",
+    autoCfgIntervalEquals: "Equals {{n}} seconds",
+    autoCfgIntervalOff: "0 disables automatic backup",
+    unitSeconds: "Seconds",
+    unitMinutes: "Minutes",
+    unitHours: "Hours",
+    unitDays: "Days",
+    unitWeeks: "Weeks",
+    unitMonths: "Months",
+    unitYears: "Years",
   },
   migrations: {
     title: "Nexus Migration",

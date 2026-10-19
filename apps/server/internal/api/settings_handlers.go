@@ -38,6 +38,11 @@ type SettingsResponse struct {
 	BackupAutoInterval  int `json:"backupAutoInterval"`
 	BackupKeepLast      int `json:"backupKeepLast"`
 	BackupRetentionDays int `json:"backupRetentionDays"`
+	// FR-40 追加九：间隔的人类表达与拆解结果，供界面直接回填"数值 + 单位"控件，
+	// 避免前端重复实现一遍拆分规则（两处实现迟早不一致）。
+	BackupAutoIntervalExpr  string `json:"backupAutoIntervalExpr"`
+	BackupAutoIntervalValue int64  `json:"backupAutoIntervalValue"`
+	BackupAutoIntervalUnit  string `json:"backupAutoIntervalUnit"`
 }
 
 // 自动备份配置的取值上限。不是"业务规则"，而是防手滑：把间隔输成 99999999
@@ -63,6 +68,12 @@ type SettingsRequest struct {
 	BackupAutoInterval  *int `json:"backupAutoInterval,omitempty"`
 	BackupKeepLast      *int `json:"backupKeepLast,omitempty"`
 	BackupRetentionDays *int `json:"backupRetentionDays,omitempty"`
+	// FR-40 追加九：间隔的人类表达（如 "30"、"5m"、"2h"、"1d"、"1mo"、"1y"）。
+	//
+	// 与 BackupAutoInterval（秒）二选一，本字段优先：它就是为了让用户不必心算
+	// "每天一次等于多少秒"。两者都给时以本字段为准并在响应里回显换算结果，
+	// 避免"我填了 1d 但存进去的是 86400"这种不透明的落差。
+	BackupAutoIntervalExpr *string `json:"backupAutoIntervalExpr,omitempty"`
 }
 
 // settingsSnapshot 读取基础配置的当前生效值（未配置的间隔 / 超时回退默认值）。
@@ -88,6 +99,8 @@ func (h *Handlers) settingsSnapshot() SettingsResponse {
 		allowedHosts = h.settings.AllowedHostsList()
 		tokenEnabled, tokenHeader, tokenValue = h.settings.OriginTokenGuard()
 	}
+	// 间隔拆成"数值 + 单位"：界面据此回填两个控件，不需要自己猜该显示成天还是秒。
+	intervalValue, intervalUnit := domain.DurationToParts(int64(h.settingServiceOrZero().BackupAutoIntervalSecs()))
 	return SettingsResponse{
 		AnonymousAccess:    anonymous,
 		PublicURL:          publicURL,
@@ -99,9 +112,12 @@ func (h *Handlers) settingsSnapshot() SettingsResponse {
 		OriginTokenValue:   tokenValue,
 		// 三项备份配置：0 是有意义的取值（关闭 / 不限制），照实返回不做回退，
 		// 否则界面无法区分"关闭"与"未配置"，也就无法把开关拨回关闭。
-		BackupAutoInterval:  h.settingServiceOrZero().BackupAutoIntervalSecs(),
-		BackupKeepLast:      h.settingServiceOrZero().BackupKeepLast(),
-		BackupRetentionDays: h.settingServiceOrZero().BackupRetentionDays(),
+		BackupAutoInterval:      h.settingServiceOrZero().BackupAutoIntervalSecs(),
+		BackupKeepLast:          h.settingServiceOrZero().BackupKeepLast(),
+		BackupRetentionDays:     h.settingServiceOrZero().BackupRetentionDays(),
+		BackupAutoIntervalExpr:  domain.FormatDurationHuman(int64(h.settingServiceOrZero().BackupAutoIntervalSecs())),
+		BackupAutoIntervalValue: intervalValue,
+		BackupAutoIntervalUnit:  string(intervalUnit),
 	}
 }
 
@@ -118,14 +134,29 @@ func (h *Handlers) settingServiceOrZero() *domain.SettingService {
 // 三项均**允许 0**（关闭 / 不限制），这不是"未配置"：0 是界面把开关拨回关闭的方式，
 // 必须能存下来。负数与超上限一律拒绝——它们不会报错但会让配置静默失去意义
 // （如间隔填成负数等于永久关闭，天数填成 10 万等于永不淘汰）。
+//
+// 间隔若以表达式（backupAutoIntervalExpr）提交，则只校验表达式本身、跳过秒字段的
+// 上限校验——两者语义重叠，对同一个值报两次错只会让用户困惑。
 func validateBackupSettings(req SettingsRequest) error {
+	if req.BackupAutoIntervalExpr != nil {
+		if _, err := domain.ParseDurationExpression(*req.BackupAutoIntervalExpr, maxBackupAutoIntervalSecs); err != nil {
+			return fmt.Errorf("自动备份间隔：%w", err)
+		}
+	} else if req.BackupAutoInterval != nil {
+		if *req.BackupAutoInterval < 0 {
+			return fmt.Errorf("自动备份间隔不能为负数（0 表示关闭）")
+		}
+		if *req.BackupAutoInterval > maxBackupAutoIntervalSecs {
+			return fmt.Errorf("自动备份间隔过大（上限 %s）",
+				domain.FormatDurationHuman(int64(maxBackupAutoIntervalSecs)))
+		}
+	}
 	checks := []struct {
 		name string
 		val  *int
 		max  int
 		unit string
 	}{
-		{"自动备份间隔", req.BackupAutoInterval, maxBackupAutoIntervalSecs, "秒"},
 		{"保留份数", req.BackupKeepLast, maxBackupKeepLast, "份"},
 		{"保留天数", req.BackupRetentionDays, maxBackupRetentionDays, "天"},
 	}
@@ -141,6 +172,21 @@ func validateBackupSettings(req SettingsRequest) error {
 		}
 	}
 	return nil
+}
+
+// resolveBackupAutoInterval 决定本次请求最终要写入的秒数（nil = 本次不改这一项）。
+//
+// 优先级：表达式 > 秒字段。表达式是给人用的入口，秒字段只为兼容既有调用方保留。
+func resolveBackupAutoInterval(req SettingsRequest) (*int, error) {
+	if req.BackupAutoIntervalExpr != nil {
+		secs, err := domain.ParseDurationExpression(*req.BackupAutoIntervalExpr, maxBackupAutoIntervalSecs)
+		if err != nil {
+			return nil, err
+		}
+		v := int(secs)
+		return &v, nil
+	}
+	return req.BackupAutoInterval, nil
 }
 
 // GetSettings 返回基础配置四项（FR-89），仅管理员。非契约端点，经 WithProtocolRoutes 注册。
@@ -183,6 +229,12 @@ func (h *Handlers) PutSettings(c *gin.Context) {
 		auth.WriteError(c, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
+	// 表达式优先：把 "5m"/"1d"/"1mo" 换算成秒后写入，存储口径不变。
+	intervalSecs, err := resolveBackupAutoInterval(req)
+	if err != nil {
+		auth.WriteError(c, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
 	if err := h.settings.UpdateSettings(domain.SettingsUpdate{
 		AnonymousAccess:     req.AnonymousAccess,
 		PublicURL:           req.PublicURL,
@@ -192,7 +244,7 @@ func (h *Handlers) PutSettings(c *gin.Context) {
 		OriginTokenEnabled:  req.OriginTokenEnabled,
 		OriginTokenHeader:   req.OriginTokenHeader,
 		OriginTokenValue:    req.OriginTokenValue,
-		BackupAutoInterval:  req.BackupAutoInterval,
+		BackupAutoInterval:  intervalSecs,
 		BackupKeepLast:      req.BackupKeepLast,
 		BackupRetentionDays: req.BackupRetentionDays,
 	}); err != nil {

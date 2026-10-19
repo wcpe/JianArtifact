@@ -26,6 +26,7 @@ import {
   Group,
   Modal,
   NumberInput,
+  Select,
   Stack,
   Text,
   ThemeIcon,
@@ -46,9 +47,55 @@ const LIMITS = {
   retentionDays: 3650, // 10 年
 } as const;
 
+/**
+ * 间隔的单位选项（FR-40 追加九）。
+ *
+ * 与后端 domain/duration_unit.go 的 unitSeconds 必须一致——这是全项目唯一
+ * 一处"前端也知道单位换算"的地方，因为输入控件需要即时换算才能显示"等于多少秒"。
+ * 权威换算仍在后端：保存时提交 `backupAutoIntervalExpr`（如 "5m"），由后端解析。
+ *
+ * 单位标识与后端 DurationUnit 的字符串值完全对齐，不再做一层映射，避免两套名字漂移。
+ */
+const INTERVAL_UNITS = [
+  { value: "seconds", seconds: 1, labelKey: "backups.unitSeconds" },
+  { value: "minutes", seconds: 60, labelKey: "backups.unitMinutes" },
+  { value: "hours", seconds: 3600, labelKey: "backups.unitHours" },
+  { value: "days", seconds: 86400, labelKey: "backups.unitDays" },
+  { value: "weeks", seconds: 7 * 86400, labelKey: "backups.unitWeeks" },
+  { value: "months", seconds: 30 * 86400, labelKey: "backups.unitMonths" },
+  { value: "years", seconds: 365 * 86400, labelKey: "backups.unitYears" },
+] as const;
+
+/** 单位短后缀：提交给后端的表达式用它（"5m"、"2h"、"1mo"）。 */
+const UNIT_SUFFIX: Record<string, string> = {
+  seconds: "s",
+  minutes: "m",
+  hours: "h",
+  days: "d",
+  weeks: "w",
+  months: "mo",
+  years: "y",
+};
+
+/**
+ * 把"数值 + 单位"换算成秒，仅用于**判断表单是否有改动**与显示换算提示。
+ *
+ * 不用于提交——提交的是表达式字符串，换算的权威实现只在后端。
+ * 这里之所以还要一份，是因为 dirty 判定必须能与服务端返回值比较。
+ */
+function composeIntervalSeconds(value: number | string, unit: string): number {
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  const u = INTERVAL_UNITS.find((it) => it.value === unit);
+  return Math.trunc(n) * (u ? u.seconds : 1);
+}
+
 /** 表单草稿：三项均为字符串以便区分"空输入"与 0（NumberInput 允许清空）。 */
 interface ConfigDraft {
-  autoInterval: number | string;
+  /** 间隔的数值部分（与 unit 合起来才是完整语义）。 */
+  intervalValue: number | string;
+  /** 间隔的单位标识（与后端 DurationUnit 对齐：seconds/minutes/…/years）。 */
+  intervalUnit: string;
   keepLast: number | string;
   retentionDays: number | string;
 }
@@ -69,8 +116,11 @@ export function AutoBackupConfigModal({
   // 读到配置后用服务端值初始化草稿；reload 后也要重新对齐，避免显示陈旧值。
   useEffect(() => {
     if (!state.data) return;
+    // 用后端回显的 value/unit 回填：拆分规则只在后端实现一处，
+    // 前端若自己再算一遍，迟早与后端不一致（例如"7 天"与"1 周"之争）。
     setDraft({
-      autoInterval: state.data.backupAutoInterval,
+      intervalValue: state.data.backupAutoIntervalValue ?? 0,
+      intervalUnit: state.data.backupAutoIntervalUnit ?? "seconds",
       keepLast: state.data.backupKeepLast,
       retentionDays: state.data.backupRetentionDays,
     });
@@ -88,8 +138,12 @@ export function AutoBackupConfigModal({
     };
     setSaving(true);
     try {
+      // 提交表达式（如 "5m"）而非秒数：换算由后端做，前端不必重复实现，
+      // 也让"我填了 1d，存进去的是 86400"这件事有据可查。
+      const value = toInt(draft.intervalValue);
+      const suffix = UNIT_SUFFIX[draft.intervalUnit] ?? "s";
       await putSettings({
-        backupAutoInterval: toInt(draft.autoInterval),
+        backupAutoIntervalExpr: `${value}${suffix}`,
         backupKeepLast: toInt(draft.keepLast),
         backupRetentionDays: toInt(draft.retentionDays),
       });
@@ -105,7 +159,8 @@ export function AutoBackupConfigModal({
   const dirty =
     !!draft &&
     !!state.data &&
-    (Number(draft.autoInterval || 0) !== state.data.backupAutoInterval ||
+    (composeIntervalSeconds(draft.intervalValue, draft.intervalUnit) !==
+      state.data.backupAutoInterval ||
       Number(draft.keepLast || 0) !== state.data.backupKeepLast ||
       Number(draft.retentionDays || 0) !== state.data.backupRetentionDays);
 
@@ -120,15 +175,52 @@ export function AutoBackupConfigModal({
               </Text>
 
               <Group gap="sm" align="flex-start" wrap="wrap">
-                <ConfigField
-                  icon={<IconClock size={14} />}
-                  label={t("backups.autoCfgInterval")}
-                  desc={t("backups.autoCfgIntervalDesc")}
-                  value={draft.autoInterval}
-                  onChange={(v) => setDraft({ ...draft, autoInterval: v })}
-                  max={LIMITS.autoInterval}
-                  testId="auto-interval"
-                />
+                {/* 间隔 = 数值 + 单位（FR-40 追加九）。
+                    之前只能填秒：想设"每天一次"要心算 86400，"每月一次"要算 2592000，
+                    既容易算错也无法一眼核对。拆成两个控件后，用户填的就是他心里的那个量。 */}
+                <Stack gap={4} style={{ flex: "1 1 260px", minWidth: 240 }}>
+                  <Group gap={6} align="center" wrap="nowrap">
+                    <ThemeIcon size={20} variant="light" color="blue">
+                      <IconClock size={12} />
+                    </ThemeIcon>
+                    <Text size="sm" fw={600}>
+                      {t("backups.autoCfgInterval")}
+                    </Text>
+                  </Group>
+                  <Group gap={6} align="center" wrap="nowrap">
+                    <NumberInput
+                      value={draft.intervalValue}
+                      onChange={(v) => setDraft({ ...draft, intervalValue: v })}
+                      min={0}
+                      allowDecimal={false}
+                      allowNegative={false}
+                      style={{ flex: "1 1 auto" }}
+                      data-testid="auto-interval"
+                      aria-label={t("backups.autoCfgInterval")}
+                    />
+                    <Select
+                      value={draft.intervalUnit}
+                      onChange={(v) => v && setDraft({ ...draft, intervalUnit: v })}
+                      data={INTERVAL_UNITS.map((u) => ({ value: u.value, label: t(u.labelKey) }))}
+                      style={{ flex: "0 0 96px" }}
+                      allowDeselect={false}
+                      data-testid="auto-interval-unit"
+                      aria-label={t("backups.autoCfgIntervalUnit")}
+                    />
+                  </Group>
+                  <Text size="xs" c="dimmed">
+                    {t("backups.autoCfgIntervalDesc")}
+                  </Text>
+                  {/* 换算提示：让"1 天"与"86400 秒"的关系当场可见，
+                      也提示 0 的含义（关闭自动备份），避免用户以为填 0 是"立刻备份"。 */}
+                  <Text size="xs" c="dimmed" data-testid="auto-interval-hint">
+                    {composeIntervalSeconds(draft.intervalValue, draft.intervalUnit) > 0
+                      ? t("backups.autoCfgIntervalEquals", {
+                          n: composeIntervalSeconds(draft.intervalValue, draft.intervalUnit),
+                        })
+                      : t("backups.autoCfgIntervalOff")}
+                  </Text>
+                </Stack>
                 <ConfigField
                   icon={<IconDatabase size={14} />}
                   label={t("backups.autoCfgKeepLast")}

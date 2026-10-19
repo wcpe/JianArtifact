@@ -970,6 +970,92 @@ function isValidAssetOperationBody(body: AssetOperationBody): body is ValidAsset
   );
 }
 
+/** devmock 版时间单位换算表：与后端 domain/duration_unit.go 的 unitSeconds 对齐。 */
+const MOCK_UNIT_SECONDS: Record<string, number> = {
+  seconds: 1,
+  minutes: 60,
+  hours: 3600,
+  days: 86400,
+  weeks: 7 * 86400,
+  months: 30 * 86400,
+  years: 365 * 86400,
+};
+
+/**
+ * 解析间隔表达式（"5m"/"2h"/"1d"/"1mo"/"1y"，裸数字按秒）。
+ * 无法解析时返回 null，由调用方回落到秒字段。
+ */
+function parseMockDurationExpression(raw: string): number | null {
+  const s = raw.trim().toLowerCase();
+  if (!s) return null;
+  const m = /^(\d+)\s*([a-z]*)$/.exec(s);
+  if (!m) return null;
+  const value = Number(m[1]);
+  if (!Number.isFinite(value) || value < 0) return null;
+  if (value === 0) return 0;
+  const suffix = m[2];
+  if (!suffix) return value;
+  const unitMap: Record<string, string> = {
+    s: "seconds",
+    sec: "seconds",
+    secs: "seconds",
+    second: "seconds",
+    seconds: "seconds",
+    m: "minutes",
+    min: "minutes",
+    mins: "minutes",
+    minute: "minutes",
+    minutes: "minutes",
+    h: "hours",
+    hr: "hours",
+    hour: "hours",
+    hours: "hours",
+    d: "days",
+    day: "days",
+    days: "days",
+    w: "weeks",
+    week: "weeks",
+    weeks: "weeks",
+    mo: "months",
+    month: "months",
+    months: "months",
+    y: "years",
+    year: "years",
+    years: "years",
+  };
+  const unit = unitMap[suffix];
+  if (!unit) return null;
+  return value * (MOCK_UNIT_SECONDS[unit] ?? 1);
+}
+
+/** 秒 → 最适合显示的「数值 + 单位」（天优先于周，与后端一致）。 */
+function mockDurationToParts(seconds: number): { value: number; unit: string } {
+  if (!Number.isFinite(seconds) || seconds <= 0) return { value: 0, unit: "seconds" };
+  for (const unit of ["years", "months", "days", "weeks", "hours", "minutes"]) {
+    const unitSecs = MOCK_UNIT_SECONDS[unit] ?? 1;
+    if (seconds % unitSecs === 0 && seconds / unitSecs >= 1) {
+      return { value: seconds / unitSecs, unit };
+    }
+  }
+  return { value: seconds, unit: "seconds" };
+}
+
+/** 秒 → 中文可读表达（与后端 FormatDurationHuman 对齐）。 */
+function mockFormatDurationHuman(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "关闭";
+  const { value, unit } = mockDurationToParts(seconds);
+  const names: Record<string, string> = {
+    years: "年",
+    months: "个月",
+    weeks: "周",
+    days: "天",
+    hours: "小时",
+    minutes: "分钟",
+    seconds: "秒",
+  };
+  return `${value} ${names[unit]}`;
+}
+
 export const handlers = [
   // 开发态通用场景必须先于业务 handler 处理；undefined 时继续走既有路由。
   // 同一个前置守卫顺带承担"网速"模拟：按控制台档位在放行前等待一段延迟，
@@ -1517,11 +1603,18 @@ export const handlers = [
     if (denied) {
       return denied;
     }
-    return HttpResponse.json(
-      isEmptyScenario(request)
-        ? { ...store.settings(), anonymousAccess: false, publicUrl: "" }
-        : store.settings(),
-    );
+    const base = isEmptyScenario(request)
+      ? { ...store.settings(), anonymousAccess: false, publicUrl: "" }
+      : store.settings();
+    // FR-40 追加九：后端会回显「数值 + 单位」与人类表达，界面据此回填两个控件。
+    // devmock 必须同口径返回，否则前端拿不到 value/unit，只能退回"按秒显示"。
+    const parts = mockDurationToParts(base.backupAutoInterval);
+    return HttpResponse.json({
+      ...base,
+      backupAutoIntervalExpr: mockFormatDurationHuman(base.backupAutoInterval),
+      backupAutoIntervalValue: parts.value,
+      backupAutoIntervalUnit: parts.unit,
+    });
   }),
 
   http.put("*/api/v1/settings", async ({ request }) => {
@@ -1540,8 +1633,20 @@ export const handlers = [
       backupAutoInterval?: number;
       backupKeepLast?: number;
       backupRetentionDays?: number;
+      // FR-40 追加九：间隔的人类表达（"5m"/"2h"/"1d"…），优先级高于秒字段。
+      backupAutoIntervalExpr?: string;
     };
     const current = store.settings();
+    // 表达式优先：与后端 resolveBackupAutoInterval 的口径一致。
+    const nextInterval = (() => {
+      if (typeof body.backupAutoIntervalExpr === "string") {
+        const parsed = parseMockDurationExpression(body.backupAutoIntervalExpr);
+        if (parsed !== null) return parsed;
+      }
+      return typeof body.backupAutoInterval === "number"
+        ? body.backupAutoInterval
+        : current.backupAutoInterval;
+    })();
     return HttpResponse.json(
       store.updateSettings({
         anonymousAccess:
@@ -1568,10 +1673,7 @@ export const handlers = [
             : current.originTokenValue,
         // FR-40：三项都按 `typeof === "number"` 判断而非真值判断——0 是合法取值
         // （关闭 / 不限制），用 `body.x || current.x` 会把 0 悄悄吞回存量值。
-        backupAutoInterval:
-          typeof body.backupAutoInterval === "number"
-            ? body.backupAutoInterval
-            : current.backupAutoInterval,
+        backupAutoInterval: nextInterval,
         backupKeepLast:
           typeof body.backupKeepLast === "number" ? body.backupKeepLast : current.backupKeepLast,
         backupRetentionDays:

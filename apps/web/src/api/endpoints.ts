@@ -1085,6 +1085,15 @@ export interface SettingsConfig {
   backupKeepLast: number;
   /** 保留最近 N 天的自动备份，0 = 不限天数。 */
   backupRetentionDays: number;
+  /**
+   * 间隔的人类表达（FR-40 追加九），如「1 天」「5 分钟」。
+   * 由后端格式化，界面直接展示，避免前端重复实现一套渲染规则。
+   */
+  backupAutoIntervalExpr: string;
+  /** 间隔拆解后的数值部分，供"数值 + 单位"控件回填。 */
+  backupAutoIntervalValue: number;
+  /** 间隔拆解后的单位标识（seconds/minutes/hours/days/weeks/months/years）。 */
+  backupAutoIntervalUnit: string;
 }
 
 /**
@@ -1107,6 +1116,10 @@ function normalizeSettings(raw: SettingsConfig): SettingsConfig {
     backupAutoInterval: raw.backupAutoInterval ?? 0,
     backupKeepLast: raw.backupKeepLast ?? 7,
     backupRetentionDays: raw.backupRetentionDays ?? 30,
+    // 旧后端可能不返回这三个派生字段：按秒回落，界面仍可用（只是不体现单位换算）。
+    backupAutoIntervalExpr: raw.backupAutoIntervalExpr ?? "",
+    backupAutoIntervalValue: raw.backupAutoIntervalValue ?? raw.backupAutoInterval ?? 0,
+    backupAutoIntervalUnit: raw.backupAutoIntervalUnit ?? "seconds",
   };
 }
 

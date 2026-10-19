@@ -1476,6 +1476,18 @@ export const zh = {
     adoptResultTitle: "导入完成",
     adoptResultSummary: "成功 {{adopted}} 个 / 跳过 {{skipped}} 个 / 失败 {{failed}} 个",
     adoptRescan: "重新扫描",
+
+    // —— FR-40 追加九：自动备份间隔支持多种时间单位 ——
+    autoCfgIntervalUnit: "时间单位",
+    autoCfgIntervalEquals: "等于 {{n}} 秒",
+    autoCfgIntervalOff: "0 表示关闭自动备份",
+    unitSeconds: "秒",
+    unitMinutes: "分钟",
+    unitHours: "小时",
+    unitDays: "天",
+    unitWeeks: "周",
+    unitMonths: "个月",
+    unitYears: "年",
   },
   migrations: {
     // 以下键此前缺失（t 未命中时静默回退 defaultValue），补录以保持 i18n 完整。

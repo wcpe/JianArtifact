@@ -1669,9 +1669,14 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * 拼装并触发本地导入（仅管理员）
-         * @description 校验分片齐全后按序拼成归档并核对摘要，再交给本地导入状态机（queued → staging → pending_restart）。
-         *     需重启服务才生效。目标非空需 overwrite=true。
+         * 拼装归档并存入备份列表（仅管理员）
+         * @description 校验分片齐全后按序拼成归档、核对摘要，再**收进备份列表**（搬运到备份目录 + 建立登记行）。
+         *
+         *     自 FR-40 追加八起不再直接发起恢复：上传只入库，恢复是之后的独立动作，
+         *     用户可以先校验再决定是否恢复。因此本端点不写 restore.pending、不产生导入记录，
+         *     同步返回 `status=done` 的回执，不再需要轮询。
+         *
+         *     包标识取自归档内 manifest；若列表中已存在同名包则明确拒绝（400），不会静默覆盖。
          */
         post: operations["completeBackupUpload"];
         delete?: never;
@@ -6434,8 +6439,8 @@ export interface operations {
             };
         };
         responses: {
-            /** @description 已受理并开始导入 */
-            202: {
+            /** @description 已存入备份列表（status=done） */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
