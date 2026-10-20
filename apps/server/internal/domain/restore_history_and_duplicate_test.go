@@ -1,10 +1,12 @@
 package domain
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
@@ -187,5 +189,105 @@ func TestOrphanCleanupKeepsDuplicates(t *testing.T) {
 	}
 	if _, statErr := os.Stat(dst); statErr != nil {
 		t.Fatalf("重复副本必须保留：%v", statErr)
+	}
+}
+
+// TestOrphanCleanupReclaimsPreRestoreBackups 是「回滚备份只增不减」的回归守卫。
+//
+// # 曾经的 bug
+//
+// 每次恢复都会在数据目录下留一份 pre-restore-<时间戳>/ 作为回滚退路，但**从不清理**。
+// 实测测试站积了 61 个目录、96MB；按 20GB 数据算，每恢复一次就多 20GB，
+// 两次就能写满 40GB 的盘——而这恰恰发生在"用户已因磁盘紧张来恢复"的时刻。
+//
+// # 本用例守住
+//
+// 只保留最近 keepRecentPreRestore 个，更早的被回收；且不多删（保留那几个必须还在）。
+func TestOrphanCleanupReclaimsPreRestoreBackups(t *testing.T) {
+	t.Parallel()
+	f := newBackupFixture(t)
+	base := f.generateRealPackage(t, "占位")
+
+	// 造 6 个 pre-restore 目录，mtime 依次递增（越晚越新）。
+	dataDir := filepath.Dir(f.svc.Dir())
+	names := make([]string, 0, 6)
+	for i := 0; i < 6; i++ {
+		name := fmt.Sprintf("pre-restore-2026010%d-000000", i+1)
+		dir := filepath.Join(dataDir, name)
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			t.Fatalf("建目录 %s：%v", dir, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "jianartifact.db"), []byte("snapshot"), 0o600); err != nil {
+			t.Fatalf("写快照 %s：%v", dir, err)
+		}
+		// 用 Chtimes 明确设定 mtime，避免同秒内创建导致排序不确定。
+		ts := time.Now().Add(time.Duration(i) * time.Hour)
+		if err := os.Chtimes(dir, ts, ts); err != nil {
+			t.Fatalf("设置 mtime %s：%v", dir, err)
+		}
+		names = append(names, name)
+	}
+	_ = base
+
+	adopt := NewBackupAdoptService(f.svc, f.repo)
+	svc := NewBackupOrphanCleanupService(f.svc, adopt, BackupOrphanCleanupOptions{Grace: time.Hour})
+	res, err := svc.Run()
+	if err != nil {
+		t.Fatalf("Run：%v", err)
+	}
+
+	if res.PreRestoreKept != keepRecentPreRestore {
+		t.Fatalf("应保留 %d 个，实得 %d", keepRecentPreRestore, res.PreRestoreKept)
+	}
+	if res.PreRestoreDeleted != 6-keepRecentPreRestore {
+		t.Fatalf("应回收 %d 个，实得 %d", 6-keepRecentPreRestore, res.PreRestoreDeleted)
+	}
+
+	// 最近 3 个（下标 3,4,5）必须还在；更早的必须已删。
+	for i, name := range names {
+		_, statErr := os.Stat(filepath.Join(dataDir, name))
+		if i >= 6-keepRecentPreRestore {
+			if statErr != nil {
+				t.Fatalf("最近的 %s 必须保留：%v", name, statErr)
+			}
+			continue
+		}
+		if !os.IsNotExist(statErr) {
+			t.Fatalf("较早的 %s 应已回收", name)
+		}
+	}
+
+	// 摘要里要体现这件事，否则运维不知道磁盘为何变小。
+	if !strings.Contains(res.Summary(), "pre-restore") {
+		t.Fatalf("摘要应体现 pre-restore 回收：%s", res.Summary())
+	}
+}
+
+// TestOrphanCleanupKeepsAllWhenFewPreRestore 覆盖"不足 N 个时不删"：
+// 不能把仅有的几个回滚退路也删掉。
+func TestOrphanCleanupKeepsAllWhenFewPreRestore(t *testing.T) {
+	t.Parallel()
+	f := newBackupFixture(t)
+	f.generateRealPackage(t, "占位")
+
+	dataDir := filepath.Dir(f.svc.Dir())
+	for i := 0; i < 2; i++ {
+		dir := filepath.Join(dataDir, fmt.Sprintf("pre-restore-2026020%d-000000", i+1))
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			t.Fatalf("建目录：%v", err)
+		}
+	}
+
+	adopt := NewBackupAdoptService(f.svc, f.repo)
+	svc := NewBackupOrphanCleanupService(f.svc, adopt, BackupOrphanCleanupOptions{Grace: time.Hour})
+	res, err := svc.Run()
+	if err != nil {
+		t.Fatalf("Run：%v", err)
+	}
+	if res.PreRestoreDeleted != 0 {
+		t.Fatalf("不足 %d 个时不应删除，实得删除 %d", keepRecentPreRestore, res.PreRestoreDeleted)
+	}
+	if res.PreRestoreKept != 2 {
+		t.Fatalf("应保留 2 个，实得 %d", res.PreRestoreKept)
 	}
 }

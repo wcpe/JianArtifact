@@ -10,6 +10,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/api"
 	"github.com/wcpe/jianartifact/apps/server/internal/archive"
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
+	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
 // TestRestoreFromLocalPackageRequiresAdmin 未认证一律 401。
@@ -115,4 +116,33 @@ func TestRestoreFromLocalPackageAcceptsLocalOrigin(t *testing.T) {
 	if stored.Origin != "local" {
 		t.Fatalf("落库的 origin 应为 local，实际 %q（若这里失败，多半是 CHECK 约束没跟着放宽）", stored.Origin)
 	}
+
+	// 等后台 Stage 收尾后再返回。
+	//
+	// StartLocalImport 是**异步**的（go func 里跑 runLocalImport），而 t.TempDir() 的
+	// cleanup 在测试函数返回时立刻执行。不等的话，后台仍在往数据目录写，
+	// TempDir 的 RemoveAll 会失败并报 "The directory is not empty" ——
+	// 一个与被测行为无关、却在高频重跑时稳定出现的假失败。
+	waitImportSettled(t, env.backupImports, rec.ImportId)
+}
+
+// waitImportSettled 轮询导入记录直到它离开进行中状态（pending_restart / failed / done）。
+//
+// 抽成独立函数是因为同一个竞态在多个用例里都会出现：凡是"提交后立即返回"的端点，
+// 测试在断言完受理结果后都必须等后台落定，否则 TempDir 清理会与后台写入竞争。
+func waitImportSettled(t *testing.T, repo *domain.BackupImportService, importID string) {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		rec, err := repo.Get(importID)
+		if err != nil {
+			t.Fatalf("读导入记录：%v", err)
+		}
+		switch rec.Status {
+		case repository.ImportStatusPendingRestart, repository.ImportStatusFailed, repository.ImportStatusDone:
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("导入 %s 未在超时内落定（后台仍在写数据目录会与 TempDir 清理竞争）", importID)
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -79,17 +80,26 @@ type BackupOrphanCleanupResult struct {
 	Failed int
 	// Capped 表示本轮因达到单轮上限而提前结束。
 	Capped bool
+	// PreRestoreDeleted 是回收的 pre-restore 回滚备份目录数（FR-40 追加十三）。
+	PreRestoreDeleted int
+	// PreRestoreKept 是保留的 pre-restore 目录数。
+	PreRestoreKept int
 }
 
 // Empty 报告本轮是否什么都没做（用于抑制无意义的日志输出）。
 func (r BackupOrphanCleanupResult) Empty() bool {
-	return r.Orphans == 0 && r.Deleted == 0 && r.Skipped == 0 && r.Invalid == 0 && r.Failed == 0
+	return r.Orphans == 0 && r.Deleted == 0 && r.Skipped == 0 && r.Invalid == 0 &&
+		r.Failed == 0 && r.PreRestoreDeleted == 0
 }
 
 // Summary 输出一轮回收的中文计数摘要（作业日志用）。
 func (r BackupOrphanCleanupResult) Summary() string {
 	s := fmt.Sprintf("扫描 %d 个包体 / 孤儿 %d 个 / 回收 %d 个 / 宽限期保留 %d 个 / 无法识别 %d 个 / 失败 %d 个",
 		r.Scanned, r.Orphans, r.Deleted, r.Skipped, r.Invalid, r.Failed)
+	if r.PreRestoreDeleted > 0 || r.PreRestoreKept > 0 {
+		s += fmt.Sprintf(" / pre-restore 备份回收 %d 个（保留最近 %d 个）",
+			r.PreRestoreDeleted, r.PreRestoreKept)
+	}
 	if r.Capped {
 		s += "（已达单轮上限，剩余留待下一轮）"
 	}
@@ -124,6 +134,14 @@ func (s *BackupOrphanCleanupService) Run() (BackupOrphanCleanupResult, error) {
 	if err != nil {
 		return result, fmt.Errorf("扫描未管理备份包：%w", err)
 	}
+
+	// pre-restore 回滚备份的回收**先做**，且不受下面任何提前返回影响。
+	//
+	// 早先它被放在"孤儿回收"之后，于是 `len(candidates)==0` 的提前返回会把它整个跳过——
+	// 而"没有孤儿包"恰恰是多数实例的常态，等于这个清理几乎永远不生效。
+	// 两件事彼此独立（一个管 backups/ 里的包体，一个管数据目录下的回滚快照），
+	// 不该因为前者没事可做就连带跳过后者。
+	result.PreRestoreDeleted, result.PreRestoreKept = s.cleanupPreRestoreBackups()
 
 	// Scanned 取磁盘上的包体总数，用于日志里体现"绝大多数是正常包"。
 	entries, err := os.ReadDir(s.backups.Dir())
@@ -181,6 +199,55 @@ func (s *BackupOrphanCleanupService) Run() (BackupOrphanCleanupResult, error) {
 		return result, fmt.Errorf("%s", strings.Join(errs, "；"))
 	}
 	return result, nil
+}
+
+// keepRecentPreRestore 是保留的 pre-restore 目录个数。
+//
+// 取 3 而不是 1：一次误恢复可能连着回滚两三次，只留 1 个会让第二次回滚无从下手；
+// 3 个足够覆盖"发现不对 → 回滚 → 再试一次"的常见路径，同时把占用钉在
+// 3 × 数据量（20GB 数据即 60GB……仍然很大，因此还受下面的容量护栏约束）。
+const keepRecentPreRestore = 3
+
+// cleanupPreRestoreBackups 删除除最近 keepRecentPreRestore 个之外的 pre-restore 目录。
+//
+// 返回删除数与保留数。任何失败都不影响主流程（孤儿回收本身的结果仍照常上报）。
+func (s *BackupOrphanCleanupService) cleanupPreRestoreBackups() (deleted, kept int) {
+	if s == nil || s.backups == nil {
+		return 0, 0
+	}
+	// 数据目录是 backups/ 的父目录。
+	dataDir := filepath.Dir(s.backups.Dir())
+	entries, err := os.ReadDir(dataDir)
+	if err != nil {
+		return 0, 0
+	}
+	type dirInfo struct {
+		path    string
+		modTime time.Time
+	}
+	var dirs []dirInfo
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), preRestoreDirPrefix) {
+			continue
+		}
+		info, statErr := e.Info()
+		if statErr != nil {
+			continue
+		}
+		dirs = append(dirs, dirInfo{path: filepath.Join(dataDir, e.Name()), modTime: info.ModTime()})
+	}
+	if len(dirs) <= keepRecentPreRestore {
+		return 0, len(dirs)
+	}
+	// 最近优先排序，前 N 个保留。
+	sort.Slice(dirs, func(i, j int) bool { return dirs[i].modTime.After(dirs[j].modTime) })
+	for _, d := range dirs[keepRecentPreRestore:] {
+		if rmErr := os.RemoveAll(d.path); rmErr != nil {
+			continue
+		}
+		deleted++
+	}
+	return deleted, keepRecentPreRestore
 }
 
 // removeOrphan 删除孤儿包的包体与侧车。
