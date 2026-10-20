@@ -1782,6 +1782,69 @@ paths:
           $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/AssetOperationInternalError"
+  /api/v1/backups/{id}/diff:
+    get:
+      operationId: getBackupDiff
+      summary: 对比包内容与当前系统（仅管理员）
+      description: |
+        恢复前回答"会改什么"：包里有、本机没有的会被**新增**；本机有、包里没有的会**消失**；
+        两边都有但内容不同的会**被替换**；完全一致的不变。
+
+        **只对比元数据**（仓库的 name/format/type/visibility、制品的仓库名+路径+blob 哈希+大小、
+        账号的 username/role/status），不比对文件内容——逐字节验证 20GB 需要读两份完整数据，
+        且已有「深度校验」承担该职责。响应里的 `metadataOnly` 恒为 true。
+
+        性能约束：
+        - `scope=summary`（默认）只做聚合查询，返回四类**计数**，不搬明细；
+        - `scope` 为某实体时返回该分类的**分页明细**，单页上限 200 条；
+        - 包内快照解出后缓存在临时目录（TTL 10 分钟、同时最多 2 份），
+          因此翻页不会重复触发分钟级解包。
+      parameters:
+        - $ref: "#/components/parameters/BackupIdParam"
+        - name: scope
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [summary, repositories, assets, users]
+          description: 默认 summary（只返回计数）。
+        - name: kind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [onlyInPackage, onlyLocal, changed, same]
+          description: scope 非 summary 时必填，指定要看哪一类明细。
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+          description: 明细页码，从 1 开始。
+        - name: pageSize
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+          description: 单页条数，默认 50，上限 200。
+      responses:
+        "200":
+          description: 对比结果（摘要或明细，取决于 scope）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupDiff"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
   /api/v1/backups/{id}/download:
     get:
       operationId: downloadBackup
@@ -6037,6 +6100,72 @@ components:
           description: 非空表示这是增量差包。
         createdAt:
           type: string
+    DiffCounts:
+      type: object
+      required: [onlyInPackage, onlyLocal, changed, same]
+      additionalProperties: false
+      properties:
+        onlyInPackage:
+          type: integer
+          description: 包里有、本机没有 —— 恢复后会新增。
+        onlyLocal:
+          type: integer
+          description: 本机有、包里没有 —— 恢复后会消失。
+        changed:
+          type: integer
+          description: 两边都有但内容不同 —— 恢复后会被替换。
+        same:
+          type: integer
+          description: 完全一致 —— 恢复后不变。
+    BackupDiffDetailItem:
+      type: object
+      required: [key, detail]
+      additionalProperties: false
+      properties:
+        key:
+          type: string
+          description: 稳定标识（仓库名 / 制品路径 / 用户名）。
+        detail:
+          type: string
+          description: 供人判断的补充说明（大小变化、哈希前缀等）。
+    BackupDiffDetailPage:
+      type: object
+      required: [items, total, truncated]
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/BackupDiffDetailItem"
+        total:
+          type: integer
+          description: 该分类的真实总数（不受分页影响）。
+        truncated:
+          type: boolean
+          description: 是否因分页而未返回全部。
+    BackupDiff:
+      type: object
+      required: [packageId, metadataOnly]
+      additionalProperties: false
+      description: |
+        `scope=summary` 时只填 repositories/assets/users 三个计数；
+        其他 scope 时填 `detail`。
+      properties:
+        packageId:
+          type: string
+        metadataOnly:
+          type: boolean
+          description: 恒为 true —— 本次只比元数据（路径/大小/哈希），不比对文件内容。
+        repositories:
+          $ref: "#/components/schemas/DiffCounts"
+        assets:
+          $ref: "#/components/schemas/DiffCounts"
+        users:
+          $ref: "#/components/schemas/DiffCounts"
+        detail:
+          allOf:
+            - $ref: "#/components/schemas/BackupDiffDetailPage"
+          description: 仅 scope 非 summary 时返回。
     UnmanagedBackup:
       type: object
       required: [fileId, packageId, sizeBytes, modifiedAt, hasSidecar, valid, renamed, duplicate]

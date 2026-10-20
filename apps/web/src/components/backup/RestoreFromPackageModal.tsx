@@ -10,12 +10,13 @@
 //
 // 非空目标需显式勾选覆盖：与其它三条通道共用同一道护栏（target_not_empty），
 // 勾选框**前置**在提交按钮旁，而不是等失败了再让用户猜哪里不对。
-import { Alert, Button, Checkbox, Code, Group, Modal, Stack, Text } from "@mantine/core";
+import { Alert, Button, Checkbox, Code, Group, Modal, Stack, Text, Accordion } from "@mantine/core";
 import { IconAlertTriangle, IconRestore, IconSnowflake } from "@tabler/icons-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { restoreFromLocalPackage } from "../../api/endpoints";
+import { BackupDiffView } from "./BackupDiffView";
 import type { BackupPackage } from "../../api/types";
 import { notifyError, notifySuccess } from "../../lib/feedback";
 
@@ -124,6 +125,26 @@ export function RestoreFromPackageModal({
             </Stack>
           </Alert>
         )}
+
+        {/* 包内容与差异（FR-40 追加十四）。
+            **放在这里**而不是藏进另一个菜单项：用户点「用这个包恢复」的这一刻，
+            才是最需要知道"包里有什么、和我现在的有什么不同"的时候。
+            用 Accordion 收起来，是因为摘要行情愿常看，明细只在想看时展开——
+            恢复确认弹窗本身要短，不能把用户淹在表格里。 */}
+        {pkg ? (
+          <Accordion variant="separated" radius="sm" chevronPosition="left">
+            <Accordion.Item value="diff">
+              <Accordion.Control>
+                <Text size="sm" fw={600}>
+                  {t("backups.restoreDiffTitle")}
+                </Text>
+              </Accordion.Control>
+              <Accordion.Panel>
+                <BackupDiffView packageId={pkg.packageId} />
+              </Accordion.Panel>
+            </Accordion.Item>
+          </Accordion>
+        ) : null}
 
         {pkg ? (
           <Text size="xs" c="dimmed">

@@ -181,3 +181,88 @@ func toAPIBackupPreview(pv domain.BackupPreview) BackupPreview {
 	}
 	return out
 }
+
+// GetBackupDiff 对比包内容与当前系统（仅管理员，FR-40 追加十四）。
+//
+// 两种模式共用一个端点，用 scope 区分：
+//   - summary（默认）：只返回四类计数（聚合查询，代价小）；
+//   - 某实体：返回该分类的分页明细（单页上限 200）。
+//
+// 这样界面可以先拿到"有多少差异"，用户点开某一类才拉明细——
+// 几十万制品时，一次拉全量既慢又占内存。
+func (h *Handlers) GetBackupDiff(c *gin.Context, id BackupIdParam, params GetBackupDiffParams) {
+	if _, ok := requireAdmin(c); !ok {
+		return
+	}
+	if h.backups == nil {
+		auth.WriteError(c, http.StatusServiceUnavailable, "unavailable", "备份服务未启用")
+		return
+	}
+
+	scope := "summary"
+	if params.Scope != nil {
+		scope = string(*params.Scope)
+	}
+	if scope == "summary" || scope == "" {
+		sum, err := h.backups.DiffSummary(string(id))
+		if err != nil {
+			writeBackupErr(c, err)
+			return
+		}
+		repos := toAPIDiffCounts(sum.Repositories)
+		assets := toAPIDiffCounts(sum.Assets)
+		users := toAPIDiffCounts(sum.Users)
+		c.JSON(http.StatusOK, BackupDiff{
+			PackageId:    sum.PackageID,
+			MetadataOnly: sum.MetadataOnly,
+			Repositories: &repos,
+			Assets:       &assets,
+			Users:        &users,
+		})
+		return
+	}
+
+	// 明细模式：kind 必填。
+	if params.Kind == nil {
+		auth.WriteError(c, http.StatusBadRequest, "bad_request", "查看明细时必须指定 kind")
+		return
+	}
+	page := 1
+	if params.Page != nil {
+		page = *params.Page
+	}
+	pageSize := 0
+	if params.PageSize != nil {
+		pageSize = *params.PageSize
+	}
+	detail, err := h.backups.DiffDetail(string(id),
+		domain.DiffEntity(scope), domain.DiffKind(string(*params.Kind)), page, pageSize)
+	if err != nil {
+		writeBackupErr(c, err)
+		return
+	}
+	items := make([]BackupDiffDetailItem, 0, len(detail.Items))
+	for _, it := range detail.Items {
+		items = append(items, BackupDiffDetailItem{Key: it.Key, Detail: it.Detail})
+	}
+	detailPage := BackupDiffDetailPage{
+		Items:     items,
+		Total:     detail.Total,
+		Truncated: detail.Truncated,
+	}
+	c.JSON(http.StatusOK, BackupDiff{
+		PackageId:    string(id),
+		MetadataOnly: true,
+		Detail:       &detailPage,
+	})
+}
+
+// toAPIDiffCounts 把领域层计数映射为契约类型。
+func toAPIDiffCounts(c domain.DiffCounts) DiffCounts {
+	return DiffCounts{
+		OnlyInPackage: c.OnlyInPackage,
+		OnlyLocal:     c.OnlyLocal,
+		Changed:       c.Changed,
+		Same:          c.Same,
+	}
+}

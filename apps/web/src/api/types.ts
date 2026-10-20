@@ -172,3 +172,9 @@ export type DownloadGroupTotal = Schemas["DownloadGroupTotal"];
 export type RepositoryDownloadTrendResponse = Schemas["RepositoryDownloadTrendResponse"];
 /** 仓库下载趋势单点（补零后连续桶）。 */
 export type DownloadTrendPoint = Schemas["DownloadTrendPoint"];
+// 包内容与当前系统的差异对比（FR-40 追加十四）。
+// metadataOnly 恒为 true：只比元数据（路径/大小/哈希），不比对文件内容。
+export type DiffCounts = Schemas["DiffCounts"];
+export type BackupDiff = Schemas["BackupDiff"];
+export type BackupDiffDetailItem = Schemas["BackupDiffDetailItem"];
+export type BackupDiffDetailPage = Schemas["BackupDiffDetailPage"];

@@ -2916,6 +2916,58 @@ export const handlers = [
     });
   }),
 
+  // —— 包内容与本机差异（FR-40 追加十四，admin）——
+  // 必须早于 `*/api/v1/backups/:id`，否则被 :id 通配吞掉。
+  http.get("*/api/v1/backups/:id/diff", ({ request, params }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const id = String(params.id);
+    const pkg = mockBackups.find((b) => b.packageId === id);
+    if (!pkg) {
+      return err("not_found", "备份包不存在", 404);
+    }
+    const url = new URL(request.url);
+    const scope = url.searchParams.get("scope") ?? "summary";
+    const kind = url.searchParams.get("kind") ?? "";
+    const page = Number(url.searchParams.get("page") ?? "1");
+    const pageSize = Math.min(Number(url.searchParams.get("pageSize") ?? "50"), 200);
+
+    const summary = {
+      packageId: id,
+      metadataOnly: true,
+      repositories: { onlyInPackage: 1, onlyLocal: 0, changed: 0, same: 1 },
+      assets: { onlyInPackage: 3, onlyLocal: 2, changed: 1, same: 10 },
+      users: { onlyInPackage: 0, onlyLocal: 1, changed: 0, same: 2 },
+    };
+    if (scope === "summary") {
+      return HttpResponse.json(summary);
+    }
+    // 明细：生成确定的假数据，便于测试断言分页。
+    const buckets: Record<
+      string,
+      { onlyInPackage: number; onlyLocal: number; changed: number; same: number }
+    > = {
+      repositories: summary.repositories,
+      assets: summary.assets,
+      users: summary.users,
+    };
+    const total = buckets[scope]?.[kind as "onlyInPackage"] ?? 0;
+    const items = [];
+    for (let i = (page - 1) * pageSize; i < Math.min(page * pageSize, total); i++) {
+      items.push({
+        key: `${scope}-${kind}-${i + 1}`,
+        detail: kind === "changed" ? "本机 100 → 包内 200" : "1024 字节",
+      });
+    }
+    return HttpResponse.json({
+      packageId: id,
+      metadataOnly: true,
+      detail: { items, total, truncated: page * pageSize < total },
+    });
+  }),
+
   // —— 未管理备份包（FR-40 追加八，admin）——
   // 这些包在磁盘上有包体但登记表无记录。mock 里用一组固定候选模拟"历史残留"。
   // 必须早于 `*/api/v1/backups/:id`，否则 unmanaged 会被 :id 通配吞掉。

@@ -1616,6 +1616,37 @@ export const en = {
     previewColName: "Name",
     previewColFormat: "Format",
     previewColType: "Type",
+    // —— FR-40 addition 14: package vs current system diff ——
+    restoreDiffTitle: "What is inside · diff with this instance",
+    diffTitle: "What will change after restoring",
+    diffSubtitle:
+      "Compares package metadata with this instance: what will be added, removed, or replaced.",
+    diffMetadataOnly:
+      "Compares metadata only (path / size / hash), not file contents. Use deep verify to check byte-level equality.",
+    diffLoading: "Computing diff (aggregate queries only, no content extraction)…",
+    diffFailed: "Failed to compute diff: {{message}}",
+    diffEntityAssets: "Assets",
+    diffEntityRepos: "Repositories",
+    diffEntityUsers: "Accounts",
+    diffKindOnlyInPackage: "In package, not here (will be added)",
+    diffKindOnlyInPackageHint: "These exist only in the package and will appear after restoring.",
+    diffKindOnlyLocal: "Here, not in package (will disappear)",
+    diffKindOnlyLocalHint:
+      "These exist only on this instance and will be overwritten — check nothing you need is here.",
+    diffKindChanged: "In both but different (will be replaced)",
+    diffKindChangedHint:
+      "Same path but different hash or size; the local version will be replaced by the package one.",
+    diffKindSame: "Identical (unchanged)",
+    diffKindSameHint: "Metadata matches exactly; restoring will not change these.",
+    diffDetailLoading: "Loading details…",
+    diffDetailEmpty: "No details.",
+    diffDetailPage: "Page {{page}} of {{pages}}, {{total}} items",
+    diffPrev: "Previous",
+    diffNext: "Next",
+    // —— verification tiers (merged entry) ——
+    verifyDeepen: "Also run deep verify",
+    verifyDeepenHint:
+      "Compares contents byte by byte; takes time proportional to package size (minutes for large packages).",
 
     adoptHasSidecar: "Index present",
     adoptNoSidecar: "Index missing (will be rebuilt on import)",

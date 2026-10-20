@@ -24,7 +24,6 @@ import {
   IconDotsVertical,
   IconDownload,
   IconLink,
-  IconReload,
   IconStethoscope,
   IconTrash,
 } from "@tabler/icons-react";
@@ -324,21 +323,18 @@ export function BackupEventTable({
                         {/* 三项都带 title：菜单项文字只有几个字，用户看不出"校验 / 深度校验 /
                             演练"的分工与代价（快的只验结构、慢的逐字节核对、演练还多一步真解包）。
                             悬停即知用途，不必点开试错。 */}
+                        {/* 校验与深度校验合并为一个入口（FR-40 追加十四）。
+                            早先是两个并列菜单项，用户看不出差别、也不知道该点哪个；
+                            现在统一进弹窗，档位在弹窗内选——浅校验先跑（快），
+                            深校验作为"再深一层"的显式动作，代价写在按钮边上。 */}
                         <Menu.Item
                           leftSection={<IconCircleCheck size={14} />}
                           disabled={!done}
                           title={t("backups.verifyHint")}
                           onClick={() => onVerify(item.packageId, false)}
+                          data-testid={`verify-${item.packageId}`}
                         >
                           {t("backups.verify")}
-                        </Menu.Item>
-                        <Menu.Item
-                          leftSection={<IconReload size={14} />}
-                          disabled={!done}
-                          title={t("backups.verifyDeepHint")}
-                          onClick={() => onVerify(item.packageId, true)}
-                        >
-                          {t("backups.verifyDeep")}
                         </Menu.Item>
                         <Menu.Item
                           leftSection={<IconStethoscope size={14} />}

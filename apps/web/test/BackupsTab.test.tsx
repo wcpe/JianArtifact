@@ -1121,7 +1121,7 @@ describe("备份与搬迁", () => {
   }, 40_000);
 
   // —— FR-40 追加六：本机已有包的恢复入口（实测反馈"只能备份无法恢复"）——
-  it("事件表提供「用这个包恢复」入口，且菜单里三个检查动作都带用途说明", async () => {
+  it("事件表提供「用这个包恢复」入口，且菜单里的检查动作都带用途说明", async () => {
     // 这条守卫的根因：另外三条恢复通道（URL / 上传 / CLI）都要求包来自**外部**，
     // 于是页面上明明列着可用的包，却没有任何按钮能用它恢复——用户会直接得出
     // "只能备份、不能恢复"的结论。缺的是**入口**，不是机制。
@@ -1133,11 +1133,12 @@ describe("备份与搬迁", () => {
 
     expect(await screen.findByRole("menuitem", { name: "用这个包恢复" })).toBeTruthy();
 
-    // 三个检查类动作必须各自带 title（"校验/深度校验/演练"只有几个字，
-    // 用户看不出分工与代价，实测反馈"为什么不写提示"）。
+    // 检查类动作必须带 title（"校验/演练"只有几个字，用户看不出分工与代价）。
+    //
+    // FR-40 追加十四起「深度校验」不再是独立菜单项：它与「校验」合并进同一个弹窗，
+    // 浅校验通过后由弹窗内的「再执行深度校验」提供。因此这里只剩两项。
     for (const [name, want] of [
       ["校验", /只读归档本身/],
-      ["深度校验", /逐 blob 比对内容摘要/],
       ["演练", /真解包、真恢复一次/],
     ] as const) {
       const item = screen.getByRole("menuitem", { name });
@@ -1179,6 +1180,39 @@ describe("备份与搬迁", () => {
     expect(within(assets).getByText(/pkg\/item-a/)).toBeTruthy();
   }, 20_000);
 
+  it("校验与深度校验合并为单一入口：菜单里只有「校验」，深校验在弹窗内升级", async () => {
+    // FR-40 追加十四：早先菜单里「校验」「深度校验」两个并列项，用户看不出差别、
+    // 也不知道该点哪个。现在入口收敛为一个，档位在弹窗内选。
+    const user = userEvent.setup();
+    renderTab();
+
+    const table = await screen.findByTestId("backup-event-table");
+    await waitFor(() => expect(within(table).getAllByRole("button").length).toBeGreaterThan(0));
+    const more = within(table).getAllByRole("button", { name: "更多操作" })[0];
+    await user.click(more);
+
+    expect(await screen.findByRole("menuitem", { name: "校验" })).toBeTruthy();
+    // 关键：不再有独立的「深度校验」菜单项。
+    expect(screen.queryByRole("menuitem", { name: "深度校验" })).toBeNull();
+  }, 20_000);
+
+  it("浅校验通过后弹窗内提供「再执行深度校验」，并标注代价", async () => {
+    const user = userEvent.setup();
+    renderTab();
+
+    const table = await screen.findByTestId("backup-event-table");
+    await waitFor(() => expect(within(table).getAllByRole("button").length).toBeGreaterThan(0));
+    await user.click(within(table).getAllByRole("button", { name: "更多操作" })[0]);
+    await user.click(await screen.findByRole("menuitem", { name: "校验" }));
+
+    const dialog = await screen.findByRole("dialog");
+    // 浅校验结论出现后，才给"再深一层"的入口。
+    const deepen = await within(dialog).findByTestId("verify-deepen", {}, { timeout: 15_000 });
+    expect(deepen).toBeTruthy();
+    // 代价必须写在旁边，避免点下去才发现很慢。
+    expect(within(dialog).getByText(/耗时与包体积同阶/)).toBeTruthy();
+  }, 30_000);
+
   it("点「用这个包恢复」弹出确认弹窗，并明确告知会替换本机数据且需重启", async () => {
     const user = userEvent.setup();
     renderTab();
@@ -1195,6 +1229,39 @@ describe("备份与搬迁", () => {
     expect(within(dialog).getByTestId("restore-overwrite")).toBeTruthy();
     expect(within(dialog).getByTestId("restore-start")).toBeTruthy();
   }, 20_000);
+
+  it("恢复确认弹窗内可直接看到与本机的差异，并可展开明细", async () => {
+    // FR-40 追加十四：恢复是整份覆盖，用户在这一刻最需要知道"会改什么"。
+    // 差异视图直接嵌在恢复弹窗里，不必再去别处找。
+    const user = userEvent.setup();
+    renderTab();
+
+    const table = await screen.findByTestId("backup-event-table");
+    await waitFor(() => expect(within(table).getAllByRole("button").length).toBeGreaterThan(0));
+    await user.click(within(table).getAllByRole("button", { name: "更多操作" })[0]);
+    await user.click(await screen.findByRole("menuitem", { name: "用这个包恢复" }));
+
+    const dialog = await screen.findByRole("dialog");
+    // 展开"包里有什么 · 与本机差异"。
+    await user.click(within(dialog).getByText("包里有什么 · 与本机差异"));
+
+    const diff = await within(dialog).findByTestId("diff-view", {}, { timeout: 15_000 });
+    expect(diff).toBeTruthy();
+    // 诚实性声明必须在。
+    expect(within(diff).getByText(/只对比元数据/)).toBeTruthy();
+
+    // 四类计数里，"本机有、包里没有"（恢复后消失）是最需要警惕的一类，必须可见。
+    // 用 getAllByText：制品与账号两个实体下都会出现同名标签，这是正确的（各自独立计数）。
+    await waitFor(() => {
+      expect(within(diff).getAllByText(/本机有、包里没有/).length).toBeGreaterThan(0);
+    });
+
+    // 点开该类 → 明细表出现。
+    await user.click(within(diff).getByTestId("diff-toggle-assets-onlyLocal"));
+    await waitFor(() => {
+      expect(within(diff).getByText(/assets-onlyLocal-1/)).toBeTruthy();
+    });
+  }, 30_000);
 
   it("确认恢复后提交 overwrite 并刷新列表；不勾选时以 false 提交", async () => {
     const user = userEvent.setup();

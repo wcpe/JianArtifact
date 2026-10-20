@@ -39,6 +39,7 @@ import type {
   BackupVerificationList,
   BackupImport,
   BackupPreview,
+  BackupDiff,
   // FR-40 追加八：服务器上"磁盘有包体、登记无记录"的备份包。
   UnmanagedBackupList,
   AdoptBackupsResult,
@@ -984,6 +985,34 @@ export function abortBackupUpload(uploadId: string): Promise<void> {
  */
 export function previewBackup(packageId: string): Promise<BackupPreview> {
   return request<BackupPreview>(`/backups/${encodeURIComponent(packageId)}/preview`);
+}
+
+/**
+ * 对比包内容与当前系统（FR-40 追加十四）。
+ *
+ * 不含 scope/kind 时返回四类计数（summary 模式，服务端只跑聚合查询）；
+ * 指定 scope+kind 时返回该分类的分页明细。
+ *
+ * 注意：只对比**元数据**（仓库/路径/大小/哈希），不比对文件内容——
+ * 逐字节验证 20GB 不现实，那是「深度校验」的职责。
+ * 服务端会把包内快照缓存在临时目录，因此翻页不会重复触发解包。
+ */
+export function getBackupDiff(
+  packageId: string,
+  opts: {
+    scope?: "summary" | "repositories" | "assets" | "users";
+    kind?: string;
+    page?: number;
+    pageSize?: number;
+  } = {},
+): Promise<BackupDiff> {
+  const q = new URLSearchParams();
+  if (opts.scope) q.set("scope", opts.scope);
+  if (opts.kind) q.set("kind", opts.kind);
+  if (opts.page) q.set("page", String(opts.page));
+  if (opts.pageSize) q.set("pageSize", String(opts.pageSize));
+  const qs = q.toString();
+  return request<BackupDiff>(`/backups/${encodeURIComponent(packageId)}/diff${qs ? `?${qs}` : ""}`);
 }
 
 // —— 未管理备份包（FR-40 追加八）——

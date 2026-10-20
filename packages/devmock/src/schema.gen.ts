@@ -1189,6 +1189,37 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/backups/{id}/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 对比包内容与当前系统（仅管理员）
+         * @description 恢复前回答"会改什么"：包里有、本机没有的会被**新增**；本机有、包里没有的会**消失**；
+         *     两边都有但内容不同的会**被替换**；完全一致的不变。
+         *
+         *     **只对比元数据**（仓库的 name/format/type/visibility、制品的仓库名+路径+blob 哈希+大小、
+         *     账号的 username/role/status），不比对文件内容——逐字节验证 20GB 需要读两份完整数据，
+         *     且已有「深度校验」承担该职责。响应里的 `metadataOnly` 恒为 true。
+         *
+         *     性能约束：
+         *     - `scope=summary`（默认）只做聚合查询，返回四类**计数**，不搬明细；
+         *     - `scope` 为某实体时返回该分类的**分页明细**，单页上限 200 条；
+         *     - 包内快照解出后缓存在临时目录（TTL 10 分钟、同时最多 2 份），
+         *       因此翻页不会重复触发分钟级解包。
+         */
+        get: operations["getBackupDiff"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/backups/{id}/download": {
         parameters: {
             query?: never;
@@ -3491,6 +3522,43 @@ export interface components {
             /** @description 非空表示这是增量差包。 */
             basePackageId?: string;
             createdAt?: string;
+        };
+        DiffCounts: {
+            /** @description 包里有、本机没有 —— 恢复后会新增。 */
+            onlyInPackage: number;
+            /** @description 本机有、包里没有 —— 恢复后会消失。 */
+            onlyLocal: number;
+            /** @description 两边都有但内容不同 —— 恢复后会被替换。 */
+            changed: number;
+            /** @description 完全一致 —— 恢复后不变。 */
+            same: number;
+        };
+        BackupDiffDetailItem: {
+            /** @description 稳定标识（仓库名 / 制品路径 / 用户名）。 */
+            key: string;
+            /** @description 供人判断的补充说明（大小变化、哈希前缀等）。 */
+            detail: string;
+        };
+        BackupDiffDetailPage: {
+            items: components["schemas"]["BackupDiffDetailItem"][];
+            /** @description 该分类的真实总数（不受分页影响）。 */
+            total: number;
+            /** @description 是否因分页而未返回全部。 */
+            truncated: boolean;
+        };
+        /**
+         * @description `scope=summary` 时只填 repositories/assets/users 三个计数；
+         *     其他 scope 时填 `detail`。
+         */
+        BackupDiff: {
+            packageId: string;
+            /** @description 恒为 true —— 本次只比元数据（路径/大小/哈希），不比对文件内容。 */
+            metadataOnly: boolean;
+            repositories?: components["schemas"]["DiffCounts"];
+            assets?: components["schemas"]["DiffCounts"];
+            users?: components["schemas"]["DiffCounts"];
+            /** @description 仅 scope 非 summary 时返回。 */
+            detail?: components["schemas"]["BackupDiffDetailPage"];
         };
         UnmanagedBackup: {
             /** @description 由文件名推导的标识（磁盘上的 `<fileId>.tar.gz`）。 */
@@ -5909,6 +5977,42 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             500: components["responses"]["AssetOperationInternalError"];
+        };
+    };
+    getBackupDiff: {
+        parameters: {
+            query?: {
+                /** @description 默认 summary（只返回计数）。 */
+                scope?: "summary" | "repositories" | "assets" | "users";
+                /** @description scope 非 summary 时必填，指定要看哪一类明细。 */
+                kind?: "onlyInPackage" | "onlyLocal" | "changed" | "same";
+                /** @description 明细页码，从 1 开始。 */
+                page?: number;
+                /** @description 单页条数，默认 50，上限 200。 */
+                pageSize?: number;
+            };
+            header?: never;
+            path: {
+                /** @description 备份包标识（形如 bk-20260910-162701-a1b2c3）。 */
+                id: components["parameters"]["BackupIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 对比结果（摘要或明细，取决于 scope） */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupDiff"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
     downloadBackup: {

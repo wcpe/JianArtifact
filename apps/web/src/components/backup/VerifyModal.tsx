@@ -24,7 +24,7 @@ import {
   Text,
   ThemeIcon,
 } from "@mantine/core";
-import { IconCheck, IconInfoCircle, IconX } from "@tabler/icons-react";
+import { IconCheck, IconInfoCircle, IconReload, IconX } from "@tabler/icons-react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -68,7 +68,13 @@ export function VerifyModal({
   // 目标变化即重置结论：否则上一个包的结论会短暂显示在新包名下，
   // 那是最糟的一类错——**张冠李戴的结论**比没有结论更容易被当真。
   const pkgId = request?.packageId ?? null;
-  const deep = request?.deep ?? false;
+  // 档位可在弹窗内升级（FR-40 追加十四）：入口只有一个「校验」，
+  // 浅校验先跑，用户看到结论后若还想逐字节核对，再点「深度校验」。
+  // 用 state 而不是直接用 request.deep，正是为了支持这种就地升级。
+  const [deep, setDeep] = useState(request?.deep ?? false);
+  useEffect(() => {
+    setDeep(request?.deep ?? false);
+  }, [request?.packageId, request?.deep]);
   useEffect(() => {
     setOutcome(null);
   }, [pkgId, deep]);
@@ -204,12 +210,35 @@ export function VerifyModal({
           </Alert>
         ) : null}
 
-        <Group justify="flex-end">
-          {/* 深校验可能要几分钟，允许提前关掉弹窗（请求仍在飞、结论会由后端落库）；
-              这里只是把"等不了"的出口给出来，不假装能取消服务端动作。 */}
-          <Button variant="default" onClick={onClose}>
-            {t("common.close")}
-          </Button>
+        <Group justify="space-between" align="center" wrap="wrap">
+          {/* 浅校验通过后才给「深度校验」入口：它耗时与包体积同阶（20GB 是分钟级），
+              不该在用户还没看到浅结论时就摆在最显眼处诱导点击。
+              代价直接写在按钮文字边上，避免"点下去才发现很慢"。 */}
+          {!deep && outcome?.ok ? (
+            <Stack gap={2}>
+              <Button
+                size="xs"
+                variant="light"
+                leftSection={<IconReload size={14} />}
+                onClick={() => setDeep(true)}
+                data-testid="verify-deepen"
+              >
+                {t("backups.verifyDeepen")}
+              </Button>
+              <Text size="xs" c="dimmed">
+                {t("backups.verifyDeepenHint")}
+              </Text>
+            </Stack>
+          ) : (
+            <Box />
+          )}
+          <Group gap="xs">
+            {/* 深校验可能要几分钟，允许提前关掉弹窗（请求仍在飞、结论会由后端落库）；
+                这里只是把"等不了"的出口给出来，不假装能取消服务端动作。 */}
+            <Button variant="default" onClick={onClose}>
+              {t("common.close")}
+            </Button>
+          </Group>
         </Group>
       </Stack>
     </Modal>

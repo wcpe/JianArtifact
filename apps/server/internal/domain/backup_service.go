@@ -70,6 +70,12 @@ type BackupService struct {
 
 	mu         sync.Mutex
 	generating bool
+	// diffMu 串行化"挂载包内快照 → 查询 → 卸载"这一段。
+	//
+	// ATTACH 是**连接级**状态：连接池上限为 1，但同一连接上仍可能被并发 goroutine
+	// 交错使用（sqlx 会复用），一旦两个请求交错 ATTACH/DETACH，
+	// 后一个 DETACH 会把前一个正在用的库卸掉。用锁把整段包住最直白也最安全。
+	diffMu sync.Mutex
 }
 
 // NewBackupService 装配备份服务。nodeID 允许为 nil（单节点场景）。

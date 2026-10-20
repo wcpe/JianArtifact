@@ -1319,6 +1319,54 @@ func (e DownloadGroupByParam) Valid() bool {
 	}
 }
 
+// Defines values for GetBackupDiffParamsScope.
+const (
+	GetBackupDiffParamsScopeAssets       GetBackupDiffParamsScope = "assets"
+	GetBackupDiffParamsScopeRepositories GetBackupDiffParamsScope = "repositories"
+	GetBackupDiffParamsScopeSummary      GetBackupDiffParamsScope = "summary"
+	GetBackupDiffParamsScopeUsers        GetBackupDiffParamsScope = "users"
+)
+
+// Valid indicates whether the value is a known member of the GetBackupDiffParamsScope enum.
+func (e GetBackupDiffParamsScope) Valid() bool {
+	switch e {
+	case GetBackupDiffParamsScopeAssets:
+		return true
+	case GetBackupDiffParamsScopeRepositories:
+		return true
+	case GetBackupDiffParamsScopeSummary:
+		return true
+	case GetBackupDiffParamsScopeUsers:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GetBackupDiffParamsKind.
+const (
+	Changed       GetBackupDiffParamsKind = "changed"
+	OnlyInPackage GetBackupDiffParamsKind = "onlyInPackage"
+	OnlyLocal     GetBackupDiffParamsKind = "onlyLocal"
+	Same          GetBackupDiffParamsKind = "same"
+)
+
+// Valid indicates whether the value is a known member of the GetBackupDiffParamsKind enum.
+func (e GetBackupDiffParamsKind) Valid() bool {
+	switch e {
+	case Changed:
+		return true
+	case OnlyInPackage:
+		return true
+	case OnlyLocal:
+		return true
+	case Same:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ListAuditAttentionsParamsAttention.
 const (
 	ListAuditAttentionsParamsAttentionAcknowledged ListAuditAttentionsParamsAttention = "acknowledged"
@@ -2044,6 +2092,41 @@ type BackupCounts struct {
 	Users          *int `json:"users,omitempty"`
 }
 
+// BackupDiff `scope=summary` 时只填 repositories/assets/users 三个计数；
+// 其他 scope 时填 `detail`。
+type BackupDiff struct {
+	Assets *DiffCounts `json:"assets,omitempty"`
+
+	// Detail 仅 scope 非 summary 时返回。
+	Detail *BackupDiffDetailPage `json:"detail,omitempty"`
+
+	// MetadataOnly 恒为 true —— 本次只比元数据（路径/大小/哈希），不比对文件内容。
+	MetadataOnly bool        `json:"metadataOnly"`
+	PackageId    string      `json:"packageId"`
+	Repositories *DiffCounts `json:"repositories,omitempty"`
+	Users        *DiffCounts `json:"users,omitempty"`
+}
+
+// BackupDiffDetailItem defines model for BackupDiffDetailItem.
+type BackupDiffDetailItem struct {
+	// Detail 供人判断的补充说明（大小变化、哈希前缀等）。
+	Detail string `json:"detail"`
+
+	// Key 稳定标识（仓库名 / 制品路径 / 用户名）。
+	Key string `json:"key"`
+}
+
+// BackupDiffDetailPage defines model for BackupDiffDetailPage.
+type BackupDiffDetailPage struct {
+	Items []BackupDiffDetailItem `json:"items"`
+
+	// Total 该分类的真实总数（不受分页影响）。
+	Total int `json:"total"`
+
+	// Truncated 是否因分页而未返回全部。
+	Truncated bool `json:"truncated"`
+}
+
 // BackupDrillAccepted 演练**受理**结果（202）。演练在后台推进，本响应不代表演练已完成——它与报告不同：
 // 报告要等演练跑完才落库，请轮询 GET /api/v1/backups/{id}/verifications 查看新报告。
 type BackupDrillAccepted struct {
@@ -2473,6 +2556,21 @@ type CreateUserRequest struct {
 
 // CreateUserRequestRole defines model for CreateUserRequest.Role.
 type CreateUserRequestRole string
+
+// DiffCounts defines model for DiffCounts.
+type DiffCounts struct {
+	// Changed 两边都有但内容不同 —— 恢复后会被替换。
+	Changed int `json:"changed"`
+
+	// OnlyInPackage 包里有、本机没有 —— 恢复后会新增。
+	OnlyInPackage int `json:"onlyInPackage"`
+
+	// OnlyLocal 本机有、包里没有 —— 恢复后会消失。
+	OnlyLocal int `json:"onlyLocal"`
+
+	// Same 完全一致 —— 恢复后不变。
+	Same int `json:"same"`
+}
 
 // DownloadClientRanking defines model for DownloadClientRanking.
 type DownloadClientRanking struct {
@@ -3623,6 +3721,27 @@ type ListBackupImportsParams struct {
 	PageSize *PageSizeParam `form:"page_size,omitempty" json:"page_size,omitempty"`
 }
 
+// GetBackupDiffParams defines parameters for GetBackupDiff.
+type GetBackupDiffParams struct {
+	// Scope 默认 summary（只返回计数）。
+	Scope *GetBackupDiffParamsScope `form:"scope,omitempty" json:"scope,omitempty"`
+
+	// Kind scope 非 summary 时必填，指定要看哪一类明细。
+	Kind *GetBackupDiffParamsKind `form:"kind,omitempty" json:"kind,omitempty"`
+
+	// Page 明细页码，从 1 开始。
+	Page *int `form:"page,omitempty" json:"page,omitempty"`
+
+	// PageSize 单页条数，默认 50，上限 200。
+	PageSize *int `form:"pageSize,omitempty" json:"pageSize,omitempty"`
+}
+
+// GetBackupDiffParamsScope defines parameters for GetBackupDiff.
+type GetBackupDiffParamsScope string
+
+// GetBackupDiffParamsKind defines parameters for GetBackupDiff.
+type GetBackupDiffParamsKind string
+
 // DownloadBackupParams defines parameters for DownloadBackup.
 type DownloadBackupParams struct {
 	// Token 签名令牌（由 /link 下发）。
@@ -4389,6 +4508,9 @@ type ServerInterface interface {
 	// GetBackup 备份包详情（仅管理员）
 	// (GET /api/v1/backups/{id})
 	GetBackup(c *gin.Context, id BackupIdParam)
+	// GetBackupDiff 对比包内容与当前系统（仅管理员）
+	// (GET /api/v1/backups/{id}/diff)
+	GetBackupDiff(c *gin.Context, id BackupIdParam, params GetBackupDiffParams)
 	// DownloadBackup 下载备份包归档
 	// (GET /api/v1/backups/{id}/download)
 	DownloadBackup(c *gin.Context, id BackupIdParam, params DownloadBackupParams)
@@ -5074,6 +5196,66 @@ func (siw *ServerInterfaceWrapper) GetBackup(c *gin.Context) {
 	}
 
 	siw.Handler.GetBackup(c, id)
+}
+
+// GetBackupDiff operation middleware
+func (siw *ServerInterfaceWrapper) GetBackupDiff(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id BackupIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetBackupDiffParams
+
+	// ------------- Optional query parameter "scope" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "scope", c.Request.URL.Query(), &params.Scope, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter scope: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "kind" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "kind", c.Request.URL.Query(), &params.Kind, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter kind: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "page" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page", c.Request.URL.Query(), &params.Page, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter page: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "pageSize" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "pageSize", c.Request.URL.Query(), &params.PageSize, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter pageSize: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetBackupDiff(c, id, params)
 }
 
 // DownloadBackup operation middleware
@@ -7454,6 +7636,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.DELETE(options.BaseURL+"/api/v1/backups/:id", wrapper.DeleteBackup)
 	router.GET(options.BaseURL+"/api/v1/backups/:id", wrapper.GetBackup)
 	router.GET(options.BaseURL+"/api/v1/backups/:id/preview", wrapper.PreviewBackup)
+	router.GET(options.BaseURL+"/api/v1/backups/:id/diff", wrapper.GetBackupDiff)
 	router.GET(options.BaseURL+"/api/v1/backups/:id/download", wrapper.DownloadBackup)
 	router.POST(options.BaseURL+"/api/v1/backups/:id/link", wrapper.CreateBackupLink)
 	router.POST(options.BaseURL+"/api/v1/backups/:id/verify", wrapper.VerifyBackup)
