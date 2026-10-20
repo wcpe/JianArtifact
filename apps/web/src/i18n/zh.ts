@@ -1360,6 +1360,15 @@ export const zh = {
     autoCfgHint:
       "在此修改后立即生效（自动备份作业每轮重读配置，最迟一个心跳周期内应用），无需重启进程。三项的 0 都是有意义的取值：间隔 0 = 关闭自动备份，份数 0 = 不限份数，天数 0 = 不限天数。",
     autoCfgSave: "保存",
+    // —— FR-40 追加十二：容量估算 ——
+    // 备份是**全量**包：每份约等于整个数据目录。因此「份数 × 单份大小」就是
+    // 最坏情况的磁盘占用，必须让用户在开启前看到这个数。
+    autoCfgCapacityTitle: "预计磁盘占用",
+    autoCfgCapacityEstimate: "约 {{size}}（{{n}} 份 × 每份 {{each}}）",
+    autoCfgCapacityUnknown: "暂无已完成的备份包，无法估算。生成一份后即可看到实际占用。",
+    autoCfgCapacityHint:
+      "自动备份是全量包，每份大小≈整个数据目录。请确保「份数 × 单份大小」不超过可用磁盘，否则写满会导致服务异常。",
+
     autoCfgSaved: "自动备份配置已保存，下一轮作业即按新配置执行",
     autoCfgInterval: "自动备份间隔",
     autoCfgIntervalDesc: "秒；0 = 关闭（默认）。开启后按间隔生成完整热备份包，不生成差包。",

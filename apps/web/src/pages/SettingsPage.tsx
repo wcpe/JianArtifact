@@ -62,6 +62,7 @@ function normalizeForm(initial: SettingsConfig): SettingsConfig {
     backupAutoIntervalExpr: initial.backupAutoIntervalExpr ?? "",
     backupAutoIntervalValue: initial.backupAutoIntervalValue ?? initial.backupAutoInterval ?? 0,
     backupAutoIntervalUnit: initial.backupAutoIntervalUnit ?? "seconds",
+    backupLatestPackageBytes: initial.backupLatestPackageBytes ?? 0,
   };
 }
 

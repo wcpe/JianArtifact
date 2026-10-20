@@ -1614,6 +1614,9 @@ export const handlers = [
       backupAutoIntervalExpr: mockFormatDurationHuman(base.backupAutoInterval),
       backupAutoIntervalValue: parts.value,
       backupAutoIntervalUnit: parts.unit,
+      // FR-40 追加十二：最近一次成功备份包的大小，供界面估算容量占用。
+      backupLatestPackageBytes:
+        mockBackups.find((b) => b.status === "done" && (b.sizeBytes ?? 0) > 0)?.sizeBytes ?? 0,
     });
   }),
 

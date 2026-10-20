@@ -1452,6 +1452,14 @@ export const en = {
     autoCfgHint:
       "Changes made here apply immediately (the automatic backup job re-reads this configuration every cycle, at most one heartbeat later) with no process restart. A value of 0 is meaningful for all three: interval 0 = automatic backup off, count 0 = no count limit, days 0 = no day limit.",
     autoCfgSave: "Save",
+    // —— FR-40 addition 12: capacity estimate ——
+    autoCfgCapacityTitle: "Estimated disk usage",
+    autoCfgCapacityEstimate: "About {{size}} ({{n}} × {{each}} each)",
+    autoCfgCapacityUnknown:
+      "No completed backup yet, so usage cannot be estimated. It will show once one is created.",
+    autoCfgCapacityHint:
+      "Automatic backups are full packages: each is roughly the size of the whole data directory. Make sure count × size stays below free disk space; filling the disk will break the service.",
+
     autoCfgSaved: "Automatic backup configuration saved; the next job cycle uses it",
     autoCfgInterval: "Automatic backup interval",
     autoCfgIntervalDesc:

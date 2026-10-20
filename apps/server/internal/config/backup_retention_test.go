@@ -5,24 +5,24 @@ import (
 	"time"
 )
 
-// TestBackupAutoIntervalDefaultsToEnabled 覆盖 FR-40 追加十一 的默认值变更。
+// TestBackupAutoIntervalDefaultsToDisabled 覆盖自动备份间隔的默认值与回落规则。
 //
-// 默认值从 0（关闭）改为 1 天（开启）：实测反馈是多数实例期望"系统自己会备份"，
-// 而默认关闭意味着**用户想起要配置之前实例没有任何备份**，出事时无可恢复。
-// 保留策略（7 份 / 30 天）把占用钉住了上限，因此默认开的风险可控。
-//
-// 关闭能力**没有改变**：显式 0 仍是关闭，且非法值回落到默认（现在是开启）——
-// 这一条要特别守住：如果非法输入也变成"关闭"，一个笔误就会静默停掉备份。
-func TestBackupAutoIntervalDefaultsToEnabled(t *testing.T) {
+// 默认关闭是**有意**的：备份是全量包（每份 ≈ 数据目录大小），默认开启会在用户
+// 毫无预期时持续消耗磁盘。实测存在"20GB 数据 / 40GB 磁盘"这类配置——默认开几天
+// 就能把盘写满，而盘满会连带把服务写挂。反面（默认关闭、出事时没备份）可以由运维
+// 事后补配置修复；盘被写满则是运行故障。两害相权，默认关闭。
+func TestBackupAutoIntervalDefaultsToDisabled(t *testing.T) {
 	cases := []struct {
 		name  string
 		value string
 		want  time.Duration
 	}{
-		{name: "缺省为开启", value: "", want: 24 * time.Hour},
-		{name: "显式零仍是关闭", value: "0", want: 0},
-		{name: "非数字回落默认（开启）", value: "每天", want: 24 * time.Hour},
-		{name: "负数回落默认（开启）", value: "-3600", want: 24 * time.Hour},
+		{name: "缺省为关闭", value: "", want: 0},
+		{name: "显式零关闭", value: "0", want: 0},
+		// 非法值回落到默认（关闭）。这与"保留份数非法回落 7"的口径一致：
+		// 回落目标是本项的默认值，而不是某个看起来更安全的值。
+		{name: "非数字回落默认（关闭）", value: "每天", want: 0},
+		{name: "负数回落默认（关闭）", value: "-3600", want: 0},
 		{name: "自定义间隔", value: "86400", want: 24 * time.Hour},
 		{name: "自定义更短间隔", value: "1800", want: 30 * time.Minute},
 	}

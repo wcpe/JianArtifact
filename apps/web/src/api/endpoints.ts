@@ -1107,6 +1107,14 @@ export interface SettingsConfig {
   backupAutoIntervalValue: number;
   /** 间隔拆解后的单位标识（seconds/minutes/hours/days/weeks/months/years）。 */
   backupAutoIntervalUnit: string;
+  /**
+   * 最近一次成功备份包的大小（字节，FR-40 追加十二）。
+   *
+   * 备份是**全量**包，每份约等于数据目录大小，因此「份数 × 本值」就是最坏情况的
+   * 磁盘占用。界面据此提示容量风险——没有它，用户无法判断"保留 7 份"会不会写满盘。
+   * 0 表示暂无已完成备份，界面不显示估算。
+   */
+  backupLatestPackageBytes: number;
 }
 
 /**
@@ -1133,6 +1141,7 @@ function normalizeSettings(raw: SettingsConfig): SettingsConfig {
     backupAutoIntervalExpr: raw.backupAutoIntervalExpr ?? "",
     backupAutoIntervalValue: raw.backupAutoIntervalValue ?? raw.backupAutoInterval ?? 0,
     backupAutoIntervalUnit: raw.backupAutoIntervalUnit ?? "seconds",
+    backupLatestPackageBytes: raw.backupLatestPackageBytes ?? 0,
   };
 }
 

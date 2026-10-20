@@ -31,12 +31,19 @@ import {
   Text,
   ThemeIcon,
 } from "@mantine/core";
-import { IconAlertTriangle, IconCheck, IconClock, IconDatabase } from "@tabler/icons-react";
+import {
+  IconAlertTriangle,
+  IconChartPie,
+  IconCheck,
+  IconClock,
+  IconDatabase,
+} from "@tabler/icons-react";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { putSettings, type SettingsConfig } from "../../api/endpoints";
 import type { AsyncState } from "../../hooks/useAsync";
+import { formatBytes } from "../../lib/format";
 import { notifyError, notifySuccess } from "../../lib/feedback";
 import { AsyncBoundary } from "../AsyncBoundary";
 
@@ -156,6 +163,12 @@ export function AutoBackupConfigModal({
     }
   }, [draft, reload, t]);
 
+  // 容量估算：最近一份包的大小 × 保留份数。0 或缺失时不显示（无从估算）。
+  const latestPkgBytes = state.data?.backupLatestPackageBytes ?? 0;
+  const keepLastNum = Number(draft?.keepLast || 0);
+  const estimatedBytes =
+    latestPkgBytes > 0 && keepLastNum > 0 ? latestPkgBytes * keepLastNum : null;
+
   const dirty =
     !!draft &&
     !!state.data &&
@@ -230,6 +243,36 @@ export function AutoBackupConfigModal({
                   max={LIMITS.keepLast}
                   testId="keep-last"
                 />
+                {/* 容量估算（FR-40 追加十二）：备份是**全量**包，每份约等于数据目录大小，
+                    因此「份数 × 单份大小」就是最坏情况的磁盘占用。
+                    没有这个提示，用户无法判断"保留 7 份"会不会把自己的盘写满——
+                    实测存在 20GB 数据 / 40GB 磁盘的配置，7 份需要 140GB，远超可用空间。 */}
+                <Stack gap={4} style={{ flex: "1 1 260px", minWidth: 240 }}>
+                  <Group gap={6} align="center" wrap="nowrap">
+                    <ThemeIcon size={20} variant="light" color="grape">
+                      <IconChartPie size={12} />
+                    </ThemeIcon>
+                    <Text size="sm" fw={600}>
+                      {t("backups.autoCfgCapacityTitle")}
+                    </Text>
+                  </Group>
+                  {estimatedBytes !== null ? (
+                    <Text size="xs" data-testid="auto-capacity">
+                      {t("backups.autoCfgCapacityEstimate", {
+                        size: formatBytes(estimatedBytes),
+                        each: formatBytes(latestPkgBytes),
+                        n: keepLastNum,
+                      })}
+                    </Text>
+                  ) : (
+                    <Text size="xs" c="dimmed">
+                      {t("backups.autoCfgCapacityUnknown")}
+                    </Text>
+                  )}
+                  <Text size="xs" c="dimmed">
+                    {t("backups.autoCfgCapacityHint")}
+                  </Text>
+                </Stack>
                 <ConfigField
                   icon={<IconDatabase size={14} />}
                   label={t("backups.autoCfgRetentionDays")}

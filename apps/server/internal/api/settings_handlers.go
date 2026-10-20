@@ -14,6 +14,7 @@ import (
 
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
+	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
 // 设置端点的边界（FR-89）：秒级配置允许范围与缺省展示值。
@@ -43,6 +44,12 @@ type SettingsResponse struct {
 	BackupAutoIntervalExpr  string `json:"backupAutoIntervalExpr"`
 	BackupAutoIntervalValue int64  `json:"backupAutoIntervalValue"`
 	BackupAutoIntervalUnit  string `json:"backupAutoIntervalUnit"`
+	// FR-40 追加十二：最近一次备份包的实际大小，供界面估算容量占用。
+	//
+	// 备份是**全量**包，每份约等于数据目录大小，因此"份数 × 单份大小"就是最坏情况
+	// 下的磁盘占用。没有这个值，用户无法判断"保留 7 份"会不会把自己的盘写满——
+	// 实测存在 20GB 数据 / 40GB 磁盘的配置，7 份需要 140GB，远超可用空间。
+	BackupLatestPackageBytes int64 `json:"backupLatestPackageBytes"`
 }
 
 // 自动备份配置的取值上限。不是"业务规则"，而是防手滑：把间隔输成 99999999
@@ -112,12 +119,13 @@ func (h *Handlers) settingsSnapshot() SettingsResponse {
 		OriginTokenValue:   tokenValue,
 		// 三项备份配置：0 是有意义的取值（关闭 / 不限制），照实返回不做回退，
 		// 否则界面无法区分"关闭"与"未配置"，也就无法把开关拨回关闭。
-		BackupAutoInterval:      h.settingServiceOrZero().BackupAutoIntervalSecs(),
-		BackupKeepLast:          h.settingServiceOrZero().BackupKeepLast(),
-		BackupRetentionDays:     h.settingServiceOrZero().BackupRetentionDays(),
-		BackupAutoIntervalExpr:  domain.FormatDurationHuman(int64(h.settingServiceOrZero().BackupAutoIntervalSecs())),
-		BackupAutoIntervalValue: intervalValue,
-		BackupAutoIntervalUnit:  string(intervalUnit),
+		BackupAutoInterval:       h.settingServiceOrZero().BackupAutoIntervalSecs(),
+		BackupKeepLast:           h.settingServiceOrZero().BackupKeepLast(),
+		BackupRetentionDays:      h.settingServiceOrZero().BackupRetentionDays(),
+		BackupAutoIntervalExpr:   domain.FormatDurationHuman(int64(h.settingServiceOrZero().BackupAutoIntervalSecs())),
+		BackupAutoIntervalValue:  intervalValue,
+		BackupAutoIntervalUnit:   string(intervalUnit),
+		BackupLatestPackageBytes: h.latestBackupPackageBytes(),
 	}
 }
 
@@ -428,4 +436,27 @@ func validatePublicURL(v string) error {
 		return errors.New("对外 URL 须为 http/https 绝对地址或留空")
 	}
 	return nil
+}
+
+// latestBackupPackageBytes 返回最近一次**成功**备份包的实际大小（字节）。
+//
+// 用途是让界面估算"保留 N 份大约占多少磁盘"。取"最近一次"而不是平均值：
+// 数据量通常是增长的，用旧的平均值会低估当前占用；而最近一份最接近现状。
+//
+// 任何读不到的情况都返回 0（界面据此不显示估算），不让它影响设置读取本身。
+func (h *Handlers) latestBackupPackageBytes() int64 {
+	if h.backups == nil {
+		return 0
+	}
+	items, err := h.backups.List(20, 0)
+	if err != nil {
+		return 0
+	}
+	for _, it := range items {
+		// 只认已完成的包：生成中的包体积不完整，会严重低估。
+		if it.Status == repository.BackupStatusDone && it.SizeBytes > 0 {
+			return it.SizeBytes
+		}
+	}
+	return 0
 }
