@@ -1162,6 +1162,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/backups/{id}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 查看备份包内容概要（仅管理员）
+         * @description 恢复前先看清包里到底有什么：仓库、账号、制品样例与规模。
+         *
+         *     此前的列表只给出抽象计数（"多少制品、多少仓库"），而恢复是不可撤销的操作，
+         *     用户需要知道具体内容才能判断这个包是不是自己要的那个。
+         *
+         *     本端点**只读**：把包内的数据库快照解到临时目录、以只读方式打开查询，
+         *     查完立即删除；不改动包体、不写入备份目录、不产生任何标记。
+         *     账号概要**不含**口令哈希等敏感字段。
+         */
+        get: operations["previewBackup"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/backups/{id}/download": {
         parameters: {
             query?: never;
@@ -3431,6 +3458,39 @@ export interface components {
             updatedAt: string;
             finishedAt?: string;
             restorePendingAt?: string;
+        };
+        BackupPreview: {
+            manifest: components["schemas"]["BackupPreviewManifest"];
+            /** @description 包内仓库（按名字排序）。 */
+            repositories: {
+                name: string;
+                format: string;
+                type: string;
+            }[];
+            /** @description 包内账号（按用户名排序）。**不含**口令哈希等敏感字段。 */
+            users: {
+                username: string;
+                role: string;
+                status: string;
+            }[];
+            /** @description 若干条制品路径样例（最多 50 条）。 */
+            sampleAssets: string[];
+            /** @description 制品总数（样例有上限，总数以本字段为准）。 */
+            totalAssets: number;
+            /**
+             * Format: int64
+             * @description 包内 blob 的总字节数。
+             */
+            blobBytes: number;
+        };
+        BackupPreviewManifest: {
+            packageId: string;
+            mode: string;
+            appVersion: string;
+            dbSchemaVersion: number;
+            /** @description 非空表示这是增量差包。 */
+            basePackageId?: string;
+            createdAt?: string;
         };
         UnmanagedBackup: {
             /** @description 由文件名推导的标识（磁盘上的 `<fileId>.tar.gz`）。 */
@@ -5821,6 +5881,34 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+        };
+    };
+    previewBackup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 备份包标识（形如 bk-20260910-162701-a1b2c3）。 */
+                id: components["parameters"]["BackupIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 包内容概要 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupPreview"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["AssetOperationInternalError"];
         };
     };
     downloadBackup: {

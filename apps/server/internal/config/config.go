@@ -82,9 +82,15 @@ const (
 	defaultStorageMetadataRetention = 7 * 24 * time.Hour
 	defaultStorageTempMaxAge        = 24 * time.Hour
 	// FR-40 自动备份与保留策略的默认值。
-	// 间隔默认 0 = **关闭**：自动备份是显式开启的能力，不在升级后悄悄开始占磁盘。
-	// 保留份数与天数取规格 §2.2 的口径（7 份 / 30 天），两者同时生效、取更严格者。
-	defaultBackupAutoInterval  = 0
+	//
+	// 间隔默认 **1 天（开启）**。早先默认 0（关闭），理由是"不在升级后悄悄占磁盘"；
+	// 但实测反馈是：绝大多数实例开箱即用时期望"系统自己会备份"，而默认关闭意味着
+	// **在用户想起要配置之前，实例没有任何备份**——真出事时无可恢复，代价远高于
+	// 每天多占一份包的空间。保留策略（7 份 / 30 天）本身就把占用钉住了上限。
+	//
+	// 仍可显式关闭：把间隔设为 0（界面或 JIAN_BACKUP_AUTO_INTERVAL=0）。
+	// 关闭语义、以及"0 不是未配置"这一点都没有改变。
+	defaultBackupAutoInterval  = 24 * time.Hour
 	defaultBackupKeepLast      = 7
 	defaultBackupRetentionDays = 30
 	// FR-40 追加八 孤儿备份包回收的默认值：每日一轮、宽限期 1 小时。

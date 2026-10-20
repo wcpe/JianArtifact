@@ -81,6 +81,10 @@ export type UnmanagedBackupList = Schemas["UnmanagedBackupList"];
 export type AdoptBackupsRequest = Schemas["AdoptBackupsRequest"];
 export type AdoptedBackup = Schemas["AdoptedBackup"];
 export type AdoptBackupsResult = Schemas["AdoptBackupsResult"];
+// 包内容预览（FR-40 追加十一）：恢复前先看清包里有什么（仓库/账号/制品样例）。
+// 账号概要**不含**口令哈希等敏感字段。
+export type BackupPreview = Schemas["BackupPreview"];
+export type BackupPreviewManifest = Schemas["BackupPreviewManifest"];
 export type MigrationPlan = Schemas["MigrationPlan"];
 export type MigrationReport = Schemas["MigrationReport"];
 export type MigrationDiscoverResponse = Schemas["MigrationDiscoverResponse"];

@@ -2160,6 +2160,45 @@ type BackupPackageList struct {
 // 这是**加性字段**：迁移 0047 之前的存量行按列默认值补为 manual，语义正确。
 type BackupPackageOrigin string
 
+// BackupPreview defines model for BackupPreview.
+type BackupPreview struct {
+	// BlobBytes 包内 blob 的总字节数。
+	BlobBytes int64                 `json:"blobBytes"`
+	Manifest  BackupPreviewManifest `json:"manifest"`
+
+	// Repositories 包内仓库（按名字排序）。
+	Repositories []struct {
+		Format string `json:"format"`
+		Name   string `json:"name"`
+		Type   string `json:"type"`
+	} `json:"repositories"`
+
+	// SampleAssets 若干条制品路径样例（最多 50 条）。
+	SampleAssets []string `json:"sampleAssets"`
+
+	// TotalAssets 制品总数（样例有上限，总数以本字段为准）。
+	TotalAssets int `json:"totalAssets"`
+
+	// Users 包内账号（按用户名排序）。**不含**口令哈希等敏感字段。
+	Users []struct {
+		Role     string `json:"role"`
+		Status   string `json:"status"`
+		Username string `json:"username"`
+	} `json:"users"`
+}
+
+// BackupPreviewManifest defines model for BackupPreviewManifest.
+type BackupPreviewManifest struct {
+	AppVersion string `json:"appVersion"`
+
+	// BasePackageId 非空表示这是增量差包。
+	BasePackageId   *string `json:"basePackageId,omitempty"`
+	CreatedAt       *string `json:"createdAt,omitempty"`
+	DbSchemaVersion int     `json:"dbSchemaVersion"`
+	Mode            string  `json:"mode"`
+	PackageId       string  `json:"packageId"`
+}
+
 // BackupRestoreStatus 是否存在待重启生效的备份恢复。`pending=false` 时其余字段一律省略——
 // 它们只在确有暂存时才可读，返回零值会让前端渲染出 `0001-01-01` 这类假时间。
 type BackupRestoreStatus struct {
@@ -4359,6 +4398,9 @@ type ServerInterface interface {
 	// CreateBackupLink 生成带时效的下载链接（仅管理员）
 	// (POST /api/v1/backups/{id}/link)
 	CreateBackupLink(c *gin.Context, id BackupIdParam)
+	// PreviewBackup 查看备份包内容概要（仅管理员）
+	// (GET /api/v1/backups/{id}/preview)
+	PreviewBackup(c *gin.Context, id BackupIdParam)
 	// RestoreFromLocalPackage 用本机已有的备份包恢复本机数据（仅管理员）
 	// (POST /api/v1/backups/{id}/restore)
 	RestoreFromLocalPackage(c *gin.Context, id BackupIdParam)
@@ -5126,6 +5168,31 @@ func (siw *ServerInterfaceWrapper) CreateBackupLink(c *gin.Context) {
 	}
 
 	siw.Handler.CreateBackupLink(c, id)
+}
+
+// PreviewBackup operation middleware
+func (siw *ServerInterfaceWrapper) PreviewBackup(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id BackupIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.PreviewBackup(c, id)
 }
 
 // RestoreFromLocalPackage operation middleware
@@ -7386,6 +7453,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.POST(options.BaseURL+"/api/v1/backups", wrapper.CreateBackup)
 	router.DELETE(options.BaseURL+"/api/v1/backups/:id", wrapper.DeleteBackup)
 	router.GET(options.BaseURL+"/api/v1/backups/:id", wrapper.GetBackup)
+	router.GET(options.BaseURL+"/api/v1/backups/:id/preview", wrapper.PreviewBackup)
 	router.GET(options.BaseURL+"/api/v1/backups/:id/download", wrapper.DownloadBackup)
 	router.POST(options.BaseURL+"/api/v1/backups/:id/link", wrapper.CreateBackupLink)
 	router.POST(options.BaseURL+"/api/v1/backups/:id/verify", wrapper.VerifyBackup)

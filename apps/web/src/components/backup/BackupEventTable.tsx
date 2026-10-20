@@ -19,6 +19,7 @@ import { Badge, Box, Button, Group, Loader, Menu, Progress, Table, Text } from "
 import { useMediaQuery } from "@mantine/hooks";
 import {
   IconCircleCheck,
+  IconEye,
   IconRestore,
   IconDotsVertical,
   IconDownload,
@@ -92,6 +93,8 @@ export interface BackupEventTableProps {
   verifyingId?: string | null;
   onGetLink: (id: string) => void;
   onVerify: (id: string, deep: boolean) => void;
+  /** 「查看包内容」入口（打开预览弹窗，FR-40 追加十一）。 */
+  onPreview: (packageId: string) => void;
   /** 「用这个包恢复」入口（打开确认弹窗）。 */
   onRestore: (item: BackupPackage) => void;
   /** 打开演练报告弹窗（含发起演练入口）。 */
@@ -132,6 +135,7 @@ export function BackupEventTable({
   verifyingId,
   onGetLink,
   onVerify,
+  onPreview,
   onRestore,
   onDrill,
   onDelete,
@@ -305,6 +309,18 @@ export function BackupEventTable({
                           {t("backups.copyCommand")}
                         </Menu.Item>
                         <Menu.Divider />
+                        {/* 查看内容排在最前：它是"要不要用这个包恢复"的第一手依据。
+                            此前只能看到抽象计数（多少制品），用户无从判断里面是什么，
+                            恢复因此变成一次赌博——而恢复是不可撤销的。 */}
+                        <Menu.Item
+                          leftSection={<IconEye size={14} />}
+                          disabled={!done}
+                          title={t("backups.previewHint")}
+                          onClick={() => onPreview(item.packageId)}
+                          data-testid={`preview-${item.packageId}`}
+                        >
+                          {t("backups.previewOpen")}
+                        </Menu.Item>
                         {/* 三项都带 title：菜单项文字只有几个字，用户看不出"校验 / 深度校验 /
                             演练"的分工与代价（快的只验结构、慢的逐字节核对、演练还多一步真解包）。
                             悬停即知用途，不必点开试错。 */}

@@ -1584,6 +1584,31 @@ export const en = {
     adoptRenamed: "File name differs from the package id; it will be renamed on import",
     adoptDuplicate:
       "Same content as an already registered package (duplicate copy); this file can be deleted safely",
+
+    // —— FR-40 addition 11: backup package content preview ——
+    previewOpen: "View contents",
+    previewTitle: "Backup package contents",
+    previewTarget: "Package",
+    previewLoading: "Reading package contents…",
+    previewFailed: "Failed to read package contents: {{message}}",
+    previewHint:
+      "Restoring replaces all local data with this package and cannot be undone. Confirm that its repositories, accounts and assets are the ones you need before restoring.",
+    previewAssets: "Assets",
+    previewRepos: "Repositories",
+    previewUsers: "Accounts",
+    previewSchema: "Schema version",
+    previewRepoList: "Repositories",
+    previewUserList: "Accounts",
+    previewUserNoSecret: "Only username, role and status are shown; no passwords or keys.",
+    previewSampleAssets: "Sample asset paths",
+    previewEmptyRepos: "This package contains no repositories.",
+    previewEmptyUsers: "This package contains no accounts.",
+    previewEmptyAssets: "This package contains no assets.",
+    previewMoreAssets: "{{n}} more assets not shown (at most 50 samples).",
+    previewColName: "Name",
+    previewColFormat: "Format",
+    previewColType: "Type",
+
     adoptHasSidecar: "Index present",
     adoptNoSidecar: "Index missing (will be rebuilt on import)",
     adoptSize: "Size",

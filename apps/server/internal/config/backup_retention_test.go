@@ -5,18 +5,26 @@ import (
 	"time"
 )
 
-func TestBackupAutoIntervalDefaultsToDisabled(t *testing.T) {
+// TestBackupAutoIntervalDefaultsToEnabled 覆盖 FR-40 追加十一 的默认值变更。
+//
+// 默认值从 0（关闭）改为 1 天（开启）：实测反馈是多数实例期望"系统自己会备份"，
+// 而默认关闭意味着**用户想起要配置之前实例没有任何备份**，出事时无可恢复。
+// 保留策略（7 份 / 30 天）把占用钉住了上限，因此默认开的风险可控。
+//
+// 关闭能力**没有改变**：显式 0 仍是关闭，且非法值回落到默认（现在是开启）——
+// 这一条要特别守住：如果非法输入也变成"关闭"，一个笔误就会静默停掉备份。
+func TestBackupAutoIntervalDefaultsToEnabled(t *testing.T) {
 	cases := []struct {
 		name  string
 		value string
 		want  time.Duration
 	}{
-		// 与 storage-cleanup 的「默认开、0 关」不同：自动备份默认关闭，必须显式开启。
-		{name: "缺省为关闭", value: "", want: 0},
-		{name: "零关闭", value: "0", want: 0},
-		{name: "非数字取默认关闭", value: "每天", want: 0},
-		{name: "负数取默认关闭", value: "-3600", want: 0},
+		{name: "缺省为开启", value: "", want: 24 * time.Hour},
+		{name: "显式零仍是关闭", value: "0", want: 0},
+		{name: "非数字回落默认（开启）", value: "每天", want: 24 * time.Hour},
+		{name: "负数回落默认（开启）", value: "-3600", want: 24 * time.Hour},
 		{name: "自定义间隔", value: "86400", want: 24 * time.Hour},
+		{name: "自定义更短间隔", value: "1800", want: 30 * time.Minute},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

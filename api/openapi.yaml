@@ -1750,6 +1750,38 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
+  /api/v1/backups/{id}/preview:
+    get:
+      operationId: previewBackup
+      summary: 查看备份包内容概要（仅管理员）
+      description: |
+        恢复前先看清包里到底有什么：仓库、账号、制品样例与规模。
+
+        此前的列表只给出抽象计数（"多少制品、多少仓库"），而恢复是不可撤销的操作，
+        用户需要知道具体内容才能判断这个包是不是自己要的那个。
+
+        本端点**只读**：把包内的数据库快照解到临时目录、以只读方式打开查询，
+        查完立即删除；不改动包体、不写入备份目录、不产生任何标记。
+        账号概要**不含**口令哈希等敏感字段。
+      parameters:
+        - $ref: "#/components/parameters/BackupIdParam"
+      responses:
+        "200":
+          description: 包内容概要
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupPreview"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/AssetOperationInternalError"
   /api/v1/backups/{id}/download:
     get:
       operationId: downloadBackup
@@ -5939,6 +5971,71 @@ components:
         finishedAt:
           type: string
         restorePendingAt:
+          type: string
+    BackupPreview:
+      type: object
+      required: [manifest, repositories, users, sampleAssets, totalAssets, blobBytes]
+      additionalProperties: false
+      properties:
+        manifest:
+          $ref: "#/components/schemas/BackupPreviewManifest"
+        repositories:
+          type: array
+          description: 包内仓库（按名字排序）。
+          items:
+            type: object
+            required: [name, format, type]
+            additionalProperties: false
+            properties:
+              name:
+                type: string
+              format:
+                type: string
+              type:
+                type: string
+        users:
+          type: array
+          description: 包内账号（按用户名排序）。**不含**口令哈希等敏感字段。
+          items:
+            type: object
+            required: [username, role, status]
+            additionalProperties: false
+            properties:
+              username:
+                type: string
+              role:
+                type: string
+              status:
+                type: string
+        sampleAssets:
+          type: array
+          description: 若干条制品路径样例（最多 50 条）。
+          items:
+            type: string
+        totalAssets:
+          type: integer
+          description: 制品总数（样例有上限，总数以本字段为准）。
+        blobBytes:
+          type: integer
+          format: int64
+          description: 包内 blob 的总字节数。
+    BackupPreviewManifest:
+      type: object
+      required: [packageId, mode, appVersion, dbSchemaVersion]
+      additionalProperties: false
+      properties:
+        packageId:
+          type: string
+        mode:
+          type: string
+        appVersion:
+          type: string
+        dbSchemaVersion:
+          type: integer
+        basePackageId:
+          type: string
+          description: 非空表示这是增量差包。
+        createdAt:
           type: string
     UnmanagedBackup:
       type: object

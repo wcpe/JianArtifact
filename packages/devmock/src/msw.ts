@@ -2879,6 +2879,40 @@ export const handlers = [
     });
   }),
 
+  // —— 备份包内容预览（FR-40 追加十一，admin）——
+  // 返回包内仓库/账号/制品样例。必须早于 `*/api/v1/backups/:id`，否则被 :id 通配吞掉。
+  http.get("*/api/v1/backups/:id/preview", ({ request, params }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const id = String(params.id);
+    const pkg = mockBackups.find((b) => b.packageId === id);
+    if (!pkg) {
+      return err("not_found", "备份包不存在", 404);
+    }
+    return HttpResponse.json({
+      manifest: {
+        packageId: pkg.packageId,
+        mode: pkg.mode,
+        appVersion: pkg.appVersion,
+        dbSchemaVersion: pkg.dbSchemaVersion,
+        createdAt: pkg.createdAt,
+      },
+      repositories: [
+        { name: "raw-releases", format: "raw", type: "hosted" },
+        { name: "maven-central", format: "maven", type: "proxy" },
+      ],
+      users: [
+        { username: "admin", role: "admin", status: "active" },
+        { username: "developer", role: "user", status: "active" },
+      ],
+      sampleAssets: ["pkg/item-a/1.0.0/a.jar", "pkg/item-b/2.0.0/b.pom"],
+      totalAssets: pkg.counts?.assets ?? 0,
+      blobBytes: pkg.sizeBytes,
+    });
+  }),
+
   // —— 未管理备份包（FR-40 追加八，admin）——
   // 这些包在磁盘上有包体但登记表无记录。mock 里用一组固定候选模拟"历史残留"。
   // 必须早于 `*/api/v1/backups/:id`，否则 unmanaged 会被 :id 通配吞掉。

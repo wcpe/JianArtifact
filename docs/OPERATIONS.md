@@ -8,30 +8,30 @@
 
 配置通过环境变量、部署 Secret 或 systemd 环境文件注入；真实环境文件不入库。
 
-| 变量                                   | 作用                                      | 默认/约束                                                                                      |
-| -------------------------------------- | ----------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `JIAN_HTTP_ADDR`                       | HTTP 监听地址                             | `:8080`                                                                                        |
-| `JIAN_DATA_DIR`                        | SQLite 与 blob 数据根目录                 | `./data`；生产必须使用持久化绝对路径（见下方"数据目录解析"）                                   |
-| `JIAN_JWT_SECRET`                      | JWT(HS256) 签名密钥                       | 生产必填、强随机、不得打印                                                                     |
-| `JIAN_MIGRATION_CREDENTIAL_KEY`        | 在线迁移凭据 AES-256-GCM 密钥             | Base64 编码 32 字节；生产应显式固定                                                            |
-| `JIAN_UPSTREAM_TIMEOUT`                | proxy 回源整体超时（秒）                  | `30`                                                                                           |
-| `JIAN_ENABLED_FORMATS`                 | 启用的协议格式                            | 缺省 `raw,maven,npm`；显式空值关闭全部                                                         |
-| `JIAN_PUBLIC_URL`                      | 对外基础 URL                              | 节点本地配置；影响下载链接与 usage 片段                                                        |
-| `JIAN_SYNC_INTERVAL`                   | 设置页「同步间隔」的初始默认值（秒）      | `5`；仅在 setting 键不存在时写入，当前无调度器消费（复制退役遗留）                             |
-| `JIAN_BLOB_GC_INTERVAL`                | 清理遗留 / 孤儿 blob 的间隔（秒）         | `86400`；`0` 禁用                                                                              |
-| `JIAN_STORAGE_CLEANUP_INTERVAL`        | 存储治理清理作业的间隔（秒）              | `86400`；`0` 禁用（作业不注册）；非法 / 负数回落默认                                           |
-| `JIAN_STORAGE_METADATA_RETENTION_DAYS` | 终态操作与隔离元数据的保留天数            | `7`；`0` 禁用元数据裁剪；非法 / 负数回落默认                                                   |
-| `JIAN_STORAGE_TEMP_MAX_AGE_HOURS`      | 过期 OCI 上传临时文件的最长滞留（小时）   | `24`；`0` 禁用该项清理；非法 / 负数回落默认                                                    |
-| `JIAN_BACKUP_AUTO_INTERVAL`            | 自动备份间隔（秒）——**仅作首次部署初值**  | `0`（**默认关闭**）；`0` = 关闭；非法 / 负数回落默认。界面可填 `30s`/`5m`/`2h`/`1d`/`1mo`/`1y` |
-| `JIAN_BACKUP_KEEP_LAST`                | 保留最近 N 份自动备份（份）——**仅作初值** | `7`；`0` = 不按份数限制；非法 / 负数回落默认                                                   |
-| `JIAN_BACKUP_RETENTION_DAYS`           | 自动备份的保留天数（天）——**仅作初值**    | `30`；`0` = 不限天数；非法 / 负数回落默认                                                      |
-| `JIAN_BACKUP_ORPHAN_CLEANUP_INTERVAL`  | 孤儿备份包回收作业的间隔（秒）            | `86400`；`0` 禁用（作业不注册）；非法 / 负数回落默认                                           |
-| `JIAN_BACKUP_ORPHAN_GRACE_HOURS`       | 孤儿回收的宽限期（小时）                  | `1`；`0` / 负数 / 非法回落 1（**不允许零宽限**，见下）                                         |
-| `JIAN_TLS_ADDR`                        | 内置 HTTPS 监听地址                       | 为空表示不启用                                                                                 |
-| `JIAN_TLS_CERT` / `JIAN_TLS_KEY`       | TLS 证书和私钥路径                        | 配置 `JIAN_TLS_ADDR` 时必填                                                                    |
-| `JIAN_AUTO_BLOCK_BASE_SECONDS`         | proxy 上游 auto-block 退避起始时长（秒）  | `40`；之后每档翻倍；`0` / 负数 / 非法回落默认（无禁用语义）                                    |
-| `JIAN_RESTART_UNIT`                    | 一键重启的目标 systemd 单元名             | `jianartifact`；须匹配 `[A-Za-z0-9._@-]`，否则该能力降级为不可用                               |
-| `JIAN_RESTART_SCOPE`                   | 一键重启的作用域                          | `system`；可选 `systemd-user`（**推荐**）/ `docker`；非法回落默认                              |
+| 变量                                   | 作用                                      | 默认/约束                                                                                              |
+| -------------------------------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `JIAN_HTTP_ADDR`                       | HTTP 监听地址                             | `:8080`                                                                                                |
+| `JIAN_DATA_DIR`                        | SQLite 与 blob 数据根目录                 | `./data`；生产必须使用持久化绝对路径（见下方"数据目录解析"）                                           |
+| `JIAN_JWT_SECRET`                      | JWT(HS256) 签名密钥                       | 生产必填、强随机、不得打印                                                                             |
+| `JIAN_MIGRATION_CREDENTIAL_KEY`        | 在线迁移凭据 AES-256-GCM 密钥             | Base64 编码 32 字节；生产应显式固定                                                                    |
+| `JIAN_UPSTREAM_TIMEOUT`                | proxy 回源整体超时（秒）                  | `30`                                                                                                   |
+| `JIAN_ENABLED_FORMATS`                 | 启用的协议格式                            | 缺省 `raw,maven,npm`；显式空值关闭全部                                                                 |
+| `JIAN_PUBLIC_URL`                      | 对外基础 URL                              | 节点本地配置；影响下载链接与 usage 片段                                                                |
+| `JIAN_SYNC_INTERVAL`                   | 设置页「同步间隔」的初始默认值（秒）      | `5`；仅在 setting 键不存在时写入，当前无调度器消费（复制退役遗留）                                     |
+| `JIAN_BLOB_GC_INTERVAL`                | 清理遗留 / 孤儿 blob 的间隔（秒）         | `86400`；`0` 禁用                                                                                      |
+| `JIAN_STORAGE_CLEANUP_INTERVAL`        | 存储治理清理作业的间隔（秒）              | `86400`；`0` 禁用（作业不注册）；非法 / 负数回落默认                                                   |
+| `JIAN_STORAGE_METADATA_RETENTION_DAYS` | 终态操作与隔离元数据的保留天数            | `7`；`0` 禁用元数据裁剪；非法 / 负数回落默认                                                           |
+| `JIAN_STORAGE_TEMP_MAX_AGE_HOURS`      | 过期 OCI 上传临时文件的最长滞留（小时）   | `24`；`0` 禁用该项清理；非法 / 负数回落默认                                                            |
+| `JIAN_BACKUP_AUTO_INTERVAL`            | 自动备份间隔（秒）——**仅作首次部署初值**  | `86400`（**默认每天一次**）；`0` = 关闭；非法 / 负数回落默认。界面可填 `30s`/`5m`/`2h`/`1d`/`1mo`/`1y` |
+| `JIAN_BACKUP_KEEP_LAST`                | 保留最近 N 份自动备份（份）——**仅作初值** | `7`；`0` = 不按份数限制；非法 / 负数回落默认                                                           |
+| `JIAN_BACKUP_RETENTION_DAYS`           | 自动备份的保留天数（天）——**仅作初值**    | `30`；`0` = 不限天数；非法 / 负数回落默认                                                              |
+| `JIAN_BACKUP_ORPHAN_CLEANUP_INTERVAL`  | 孤儿备份包回收作业的间隔（秒）            | `86400`；`0` 禁用（作业不注册）；非法 / 负数回落默认                                                   |
+| `JIAN_BACKUP_ORPHAN_GRACE_HOURS`       | 孤儿回收的宽限期（小时）                  | `1`；`0` / 负数 / 非法回落 1（**不允许零宽限**，见下）                                                 |
+| `JIAN_TLS_ADDR`                        | 内置 HTTPS 监听地址                       | 为空表示不启用                                                                                         |
+| `JIAN_TLS_CERT` / `JIAN_TLS_KEY`       | TLS 证书和私钥路径                        | 配置 `JIAN_TLS_ADDR` 时必填                                                                            |
+| `JIAN_AUTO_BLOCK_BASE_SECONDS`         | proxy 上游 auto-block 退避起始时长（秒）  | `40`；之后每档翻倍；`0` / 负数 / 非法回落默认（无禁用语义）                                            |
+| `JIAN_RESTART_UNIT`                    | 一键重启的目标 systemd 单元名             | `jianartifact`；须匹配 `[A-Za-z0-9._@-]`，否则该能力降级为不可用                                       |
+| `JIAN_RESTART_SCOPE`                   | 一键重启的作用域                          | `system`；可选 `systemd-user`（**推荐**）/ `docker`；非法回落默认                                      |
 
 派生路径固定为 `${JIAN_DATA_DIR}/jianartifact.db` 和 `${JIAN_DATA_DIR}/blobs`。启动会创建数据目录并执行 schema 迁移；不会在启动时扫描活动 blob；遗留 / 孤儿 blob 的定时清理由本实例按 `JIAN_BLOB_GC_INTERVAL` 独立运行；存储治理清理（隔离区空目录、终态操作与隔离元数据裁剪、过期 OCI 上传临时文件、代理缓存保留）由 `storage-cleanup` 作业按 `JIAN_STORAGE_CLEANUP_INTERVAL` 独立运行；备份孤儿回收（`${JIAN_DATA_DIR}/backups/` 下"有包体、无登记"的残留）由 `backup-orphan-cleanup` 作业按 `JIAN_BACKUP_ORPHAN_CLEANUP_INTERVAL` 独立运行。三者按目录命名空间各管一块、互不重叠。以上作业**都只在第一个间隔到期后执行**（启动不清理、不扫描历史）。
 
@@ -54,6 +54,28 @@
 
 - **可自行处置的失败**会给出各自的错误码与做法：`target_not_empty`（勾选覆盖）、`base_missing`（先导入基线包）、`import_in_progress`（等前一个跑完）、`package_not_ready`（包未生成完成或已失败）、`restore_pending`（先重启）、`incompatible`（升级程序）、`package_oversize`（拆包）。
 - **真正的未知故障**才标 `internal`，并且**把原始错误文本一并返回**（`内部错误：<原始错误>`）与写入导入记录的 `error` 字段。该接口仅对管理员开放，错误文本来自本程序的领域逻辑，不含凭据。
+
+### 恢复前先看包内容（FR-40 追加十一）
+
+恢复会用备份包**整份覆盖**本机数据且不可撤销。此前界面只给出抽象计数（"多少制品、多少仓库"），无从判断包里到底是什么，恢复等于一次赌博。
+
+现在列表的「⋯」菜单里第一项是「查看包内容」，展示：
+
+- **仓库清单**（名称 / 格式 / 类型）——判断"是不是我要的那个包"最直接的依据；
+- **账号清单**（用户名 / 角色 / 状态）——**不含**口令哈希或任何密钥；
+- **制品路径样例**（最多 50 条）与制品总数；
+- 数据库 schema 版本（低于当前程序即可直接恢复）。
+
+该端点是**纯只读**的：把包内数据库快照解到临时目录、以 `mode=ro` 打开查询，查完立即删除；不改动包体、不写入备份目录、不产生任何标记。因此"看内容"不会影响包本身的可用性。
+
+### 自动备份的默认值（FR-40 追加十一）
+
+默认间隔从 `0`（关闭）改为 **1 天（开启）**。理由是实测反馈：多数实例期望"系统自己会备份"，而默认关闭意味着**在用户想起要配置之前，实例没有任何备份**——真出事时无可恢复。保留策略（7 份 / 30 天）已把占用钉住上限，因此默认开启的风险可控。
+
+两点必须注意：
+
+- **已有实例不受影响**：`setting` 表里已写入的值不会被环境默认值覆盖。升级后仍保持原配置，想开启请显式设置。
+- **关闭能力没变**：显式设 `0` 仍是关闭。且**非法值回落到默认（开启）而不是关闭**——这一条是刻意的：如果笔误也能静默停掉备份，那才是最危险的行为。
 
 ### 恢复不会抹掉备份列表（FR-40 追加九）
 
@@ -522,7 +544,7 @@ jianartifact backup drill <包标识> --level deep # 恢复演练：确认这份
 
 包落在 `${JIAN_DATA_DIR}/backups/`，也可从管理台「迁移与搬迁 → 备份与搬迁」生成与下载。热备份不停服，适合例行备份；要求严格一致性时改用冻结窗口。
 
-也可以让服务按周期自动备份（FR-40）：在管理端「迁移与备份 → 备份与搬迁 → 自动备份与保留策略」卡上设置间隔即可（**默认关闭**），并用保留份数 / 天数约束占用（见 §1.1 与下文「备份目录保留」）。三项均**保存即生效、无需重启**；首次部署也可经 `JIAN_BACKUP_AUTO_INTERVAL` / `JIAN_BACKUP_KEEP_LAST` / `JIAN_BACKUP_RETENTION_DAYS` 提供初值。
+也可以让服务按周期自动备份（FR-40）：在管理端「迁移与备份 → 备份与搬迁 → 自动备份与保留策略」卡上设置间隔即可（**默认每天一次**，显式设为 `0` 可关闭），并用保留份数 / 天数约束占用（见 §1.1 与下文「备份目录保留」）。三项均**保存即生效、无需重启**；首次部署也可经 `JIAN_BACKUP_AUTO_INTERVAL` / `JIAN_BACKUP_KEEP_LAST` / `JIAN_BACKUP_RETENTION_DAYS` 提供初值。
 
 **包内不含密钥**，因此除包之外仍必须另行受保护地保存：生产显式配置的 `JIAN_JWT_SECRET`、`JIAN_MIGRATION_CREDENTIAL_KEY` 与服务环境文件（`deploy/.env`、systemd 环境文件）。这些密钥不随包迁移，新实例必须自行注入。
 

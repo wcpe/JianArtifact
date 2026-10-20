@@ -53,6 +53,7 @@ import { DrillReportModal } from "./DrillReportModal";
 import { FactsStrip } from "./FactsStrip";
 import { ImportInline, type ImportChannel } from "./ImportInline";
 import { RestartControl } from "./RestartControl";
+import { BackupPreviewModal } from "./BackupPreviewModal";
 import { RestoreFromPackageModal } from "./RestoreFromPackageModal";
 import { RestoreProgressModal } from "./RestoreProgressModal";
 import { VerifyModal, type VerifyRequest } from "./VerifyModal";
@@ -98,6 +99,8 @@ export function BackupsTab() {
   const [drillPackageId, setDrillPackageId] = useState<string | null>(null);
   /** 待恢复的包（「用这个包恢复」的确认弹窗）；null 表示关闭。 */
   const [restorePkg, setRestorePkg] = useState<BackupPackage | null>(null);
+  // 预览的包标识（FR-40 追加十一）：null = 弹窗关闭。
+  const [previewPkg, setPreviewPkg] = useState<string | null>(null);
   /** 内联导入区当前展开的通道；null 表示收起。 */
   const [channel, setChannel] = useState<ImportChannel | null>(null);
   /**
@@ -454,6 +457,7 @@ export function BackupsTab() {
                 onGetLink={(id) => void onGetLink(id)}
                 onVerify={(id, deep) => void onVerify(id, deep)}
                 onDrill={setDrillPackageId}
+                onPreview={setPreviewPkg}
                 onRestore={setRestorePkg}
                 onDelete={onDelete}
               />
@@ -481,6 +485,10 @@ export function BackupsTab() {
         onClose={() => setFreezeOpened(false)}
         state={freezeState}
       />
+
+      {/* 包内容预览（FR-40 追加十一）：恢复前先看清包里有什么。
+          放在恢复弹窗之前，与菜单里的顺序一致（先看内容，再决定是否恢复）。 */}
+      <BackupPreviewModal packageId={previewPkg} onClose={() => setPreviewPkg(null)} />
 
       {/* 用本机包恢复：受理后把 importId 交给进度弹窗，并刷新列表
           （事件表里会出现一条 origin=local 的导入记录）。 */}

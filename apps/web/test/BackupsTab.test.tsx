@@ -1145,6 +1145,40 @@ describe("备份与搬迁", () => {
     }
   }, 20_000);
 
+  it("菜单里「查看包内容」打开预览：展示仓库、账号与制品样例", async () => {
+    // FR-40 追加十一：恢复不可撤销，用户需要先看清包里到底有什么。
+    // 此前只能看到抽象计数（多少制品），无从判断内容，恢复等于赌博。
+    const user = userEvent.setup();
+    renderTab();
+
+    const table = await screen.findByTestId("backup-event-table");
+    await waitFor(() => expect(within(table).getAllByRole("button").length).toBeGreaterThan(0));
+
+    // 打开第一行的 ⋯ 菜单。
+    const more = within(table).getAllByRole("button", { name: "更多操作" })[0];
+    await user.click(more);
+    const viewItem = await screen.findByRole("menuitem", { name: "查看包内容" });
+    await user.click(viewItem);
+
+    const dialog = await screen.findByRole("dialog");
+    // 仓库清单：这是"是不是我要的那个包"最直接的判据。
+    const repos = await within(dialog).findByTestId("preview-repos");
+    expect(within(repos).getByText("raw-releases")).toBeTruthy();
+
+    // 账号清单：只显示用户名/角色/状态。
+    const users = within(dialog).getByTestId("preview-users");
+    // 用 getAllByText：页面上还有其它 admin 字样（登录态、账号名等），
+    // 这里只关心预览表里确实列出了这个账号。
+    expect(within(users).getAllByText("admin").length).toBeGreaterThan(0);
+    expect(within(users).getByText("developer")).toBeTruthy();
+    // 必须明确声明不含敏感信息，否则用户会怀疑是否泄露了口令。
+    expect(within(dialog).getByText(/不含任何口令或密钥/)).toBeTruthy();
+
+    // 制品样例。
+    const assets = within(dialog).getByTestId("preview-assets");
+    expect(within(assets).getByText(/pkg\/item-a/)).toBeTruthy();
+  }, 20_000);
+
   it("点「用这个包恢复」弹出确认弹窗，并明确告知会替换本机数据且需重启", async () => {
     const user = userEvent.setup();
     renderTab();

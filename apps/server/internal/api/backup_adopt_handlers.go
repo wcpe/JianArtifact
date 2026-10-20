@@ -6,12 +6,16 @@ package api
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
 )
+
+// 本文件同时承载「未管理包导入」与「包内容预览」两组端点：前者解决"文件在但看不见"，
+// 后者解决"看得见但看不清里面有什么"，都是恢复前决策所必需的信息。
 
 // ListUnmanagedBackups 列出未管理的备份包（仅管理员）。
 //
@@ -94,3 +98,86 @@ func (h *Handlers) AdoptBackups(c *gin.Context) {
 
 // 编译期断言：确保 domain 的服务类型在此文件被引用（防止未来重构时静默丢字段）。
 var _ = (*domain.BackupAdoptService)(nil)
+
+// PreviewBackup 查看备份包内容概要（仅管理员，FR-40 追加十一）。
+//
+// 为什么需要：恢复是不可撤销的操作，而此前列表只给出抽象计数（"多少制品、多少仓库"），
+// 用户无法判断这个包是不是自己要的那个。本端点让"看清里面有什么"成为可能。
+//
+// 只读承诺由 domain.BackupService.Preview 保证：解到临时目录、以 mode=ro 查询、
+// 查完即删；不改包体、不写备份目录。因此这里不需要额外的写冻结保护。
+func (h *Handlers) PreviewBackup(c *gin.Context, id BackupIdParam) {
+	if _, ok := requireAdmin(c); !ok {
+		return
+	}
+	if h.backups == nil {
+		auth.WriteError(c, http.StatusServiceUnavailable, "unavailable", "备份服务未启用")
+		return
+	}
+	pv, err := h.backups.Preview(string(id))
+	if err != nil {
+		writeBackupErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, toAPIBackupPreview(pv))
+}
+
+// toAPIBackupPreview 把领域层的预览结果映射为契约类型。
+func toAPIBackupPreview(pv domain.BackupPreview) BackupPreview {
+	repos := make([]struct {
+		Format string `json:"format"`
+		Name   string `json:"name"`
+		Type   string `json:"type"`
+	}, 0, len(pv.Repositories))
+	for _, r := range pv.Repositories {
+		repos = append(repos, struct {
+			Format string `json:"format"`
+			Name   string `json:"name"`
+			Type   string `json:"type"`
+		}{Format: r.Format, Name: r.Name, Type: r.Type})
+	}
+	users := make([]struct {
+		Role     string `json:"role"`
+		Status   string `json:"status"`
+		Username string `json:"username"`
+	}, 0, len(pv.Users))
+	for _, u := range pv.Users {
+		users = append(users, struct {
+			Role     string `json:"role"`
+			Status   string `json:"status"`
+			Username string `json:"username"`
+		}{Role: u.Role, Status: u.Status, Username: u.Username})
+	}
+	samples := make([]string, 0, len(pv.SampleAssets))
+	samples = append(samples, pv.SampleAssets...)
+
+	out := BackupPreview{
+		Repositories: repos,
+		Users:        users,
+		SampleAssets: samples,
+		TotalAssets:  pv.TotalAssets,
+		BlobBytes:    pv.BlobBytes,
+		Manifest: struct {
+			AppVersion      string  `json:"appVersion"`
+			BasePackageId   *string `json:"basePackageId,omitempty"`
+			CreatedAt       *string `json:"createdAt,omitempty"`
+			DbSchemaVersion int     `json:"dbSchemaVersion"`
+			Mode            string  `json:"mode"`
+			PackageId       string  `json:"packageId"`
+		}{
+			AppVersion:      pv.Manifest.AppVersion,
+			DbSchemaVersion: pv.Manifest.DBSchemaVersion,
+			Mode:            string(pv.Manifest.Mode),
+			PackageId:       pv.Manifest.PackageID,
+		},
+	}
+	if pv.Manifest.BasePackageID != "" {
+		base := pv.Manifest.BasePackageID
+		out.Manifest.BasePackageId = &base
+	}
+	if !pv.Manifest.CreatedAt.IsZero() {
+		created := pv.Manifest.CreatedAt.UTC().Format(time.RFC3339)
+		out.Manifest.CreatedAt = &created
+	}
+	return out
+}

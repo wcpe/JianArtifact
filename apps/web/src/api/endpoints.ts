@@ -38,6 +38,7 @@ import type {
   BackupVerificationLevel,
   BackupVerificationList,
   BackupImport,
+  BackupPreview,
   // FR-40 追加八：服务器上"磁盘有包体、登记无记录"的备份包。
   UnmanagedBackupList,
   AdoptBackupsResult,
@@ -971,6 +972,18 @@ export function abortBackupUpload(uploadId: string): Promise<void> {
   return request<void>(`/backups/uploads/${encodeURIComponent(uploadId)}/abort`, {
     method: "POST",
   });
+}
+
+/**
+ * 查看备份包内容概要（FR-40 追加十一）。
+ *
+ * 恢复不可撤销，而此前只能看到"多少制品"这类抽象计数；本接口让用户先看清
+ * 包里到底有哪些仓库、账号与制品路径，再决定要不要用它覆盖本机数据。
+ *
+ * 纯只读：服务端把包内快照解到临时目录、以只读方式查询后立即删除。
+ */
+export function previewBackup(packageId: string): Promise<BackupPreview> {
+  return request<BackupPreview>(`/backups/${encodeURIComponent(packageId)}/preview`);
 }
 
 // —— 未管理备份包（FR-40 追加八）——
