@@ -32,6 +32,50 @@ func newHalfOpenRepo(h *proxyHealth, repoID int64) {
 	forceWindowExpired(h, repoID, StatusHalfOpen, time.Now().Add(-time.Second))
 }
 
+// deterministicBase 是「需要手工改写状态」的用例统一采用的退避基数。
+//
+// 为什么不用毫秒级基数：recordFailure 会顺带启动后台探测线程，该线程等到 blockedUntil 后
+// 自行探测，失败即调用 advanceBlock 把 blockedUntil 重新推回未来。而这类用例随后用
+// forceWindowExpired 手工把窗口改成「已过期」，若后台线程的 advanceBlock 恰好落在其后，
+// beginUpstream 就会判为「仍在窗口内」而拒绝放行，断言随机器负载概率性失败——基数为 1ms
+// 时几乎必然撞上。取足够长的基数后，线程在用例执行期间始终睡在「等待窗口到期」，不会自行
+// 推进退避或改写窗口，用例因此可确定性复现同一结论。
+const deterministicBase = time.Hour
+
+// stopProbe 把仓库的后台探测线程登记为用例结束时关停。
+//
+// recordSuccess 会关闭 stopCh 使线程退出；不做这一步虽然不影响用例结论（各用例的
+// proxyHealth 实例互不复用），但会留下一个睡到窗口到期的 goroutine，故仍在结束时收口。
+func stopProbe(t *testing.T, h *proxyHealth, repoIDs ...int64) {
+	t.Helper()
+	t.Cleanup(func() {
+		for _, id := range repoIDs {
+			h.recordSuccess(id)
+		}
+	})
+}
+
+// seedStateSuppressingProbe 预置仓库状态，并让它看起来「后台探测线程已在运行」。
+//
+// recordFailure 以 stopCh == nil 判断是否需要启动后台探测线程，因此预先放入一个非 nil 的
+// stopCh，就能让它只推进状态与退避、不启动线程。这类用例随后要手工把窗口改成「已过期」再
+// 断言闸门放行，若线程存在，它一旦被调度就会看到过期窗口而直接抢占探测名额、调用
+// advanceBlock 把 blockedUntil 推回未来，使 beginUpstream 的断言随调度时机概率性失败——
+// 拉长退避基数并不能避免：线程首次被调度的时刻可能晚于用例改写窗口的时刻。
+// 本函数让线程根本不存在，用例因此可确定性复现同一结论。
+func seedStateSuppressingProbe(h *proxyHealth, repoID int64) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	st := h.repos[repoID]
+	if st == nil {
+		st = &remoteState{}
+		h.repos[repoID] = st
+	}
+	if st.stopCh == nil {
+		st.stopCh = make(chan struct{})
+	}
+}
+
 // TestBeginUpstreamAllowsExactlyOneConcurrentProbe 并发闸门（核心修复）：
 // 多 goroutine 同时冲闸门，**恰好一个**被放行，其余在探测结论返回前等效封锁。
 // 判定与置位在同一把锁内完成，故不可能出现两个请求同时放行（-race 下验证）。
@@ -115,9 +159,11 @@ func TestConcurrentProbeGateMatchesShouldBlock(t *testing.T) {
 // 且名额被释放、下一轮半开可重新抢占。
 func TestHalfOpenFailureAdvancesBackoffOnce(t *testing.T) {
 	const repoID int64 = 5
-	base := 30 * time.Millisecond
+	base := deterministicBase
 	h := newProxyHealth(func(context.Context, string, string) error { return errors.New("boom") })
 	h.setBase(base)
+	stopProbe(t, h, repoID)
+	seedStateSuppressingProbe(h, repoID)
 
 	// 首次失败：进入 AUTO_BLOCKED 起始档。
 	h.recordFailure(repoID, "http://upstream", "", UpstreamBlockReasonUpstreamError)
@@ -152,9 +198,11 @@ func TestHalfOpenFailureAdvancesBackoffOnce(t *testing.T) {
 // 后续再次失败从起始档重新计时。
 func TestHalfOpenSuccessResetsBackoff(t *testing.T) {
 	const repoID int64 = 9
-	base := 30 * time.Millisecond
+	base := deterministicBase
 	h := newProxyHealth(func(context.Context, string, string) error { return errors.New("boom") })
 	h.setBase(base)
+	stopProbe(t, h, repoID)
+	seedStateSuppressingProbe(h, repoID)
 
 	h.recordFailure(repoID, "http://upstream", "", UpstreamBlockReasonUpstreamError)
 	forceWindowExpired(h, repoID, StatusAutoBlocked, time.Now().Add(-time.Second))
@@ -178,6 +226,8 @@ func TestHalfOpenSuccessResetsBackoff(t *testing.T) {
 	}
 
 	// 再次失败应从起始档重新开始（而非接着 2×base）。
+	// recordSuccess 已清空 stopCh，此处需再抑制一次，避免末尾这一档又拉起后台线程。
+	seedStateSuppressingProbe(h, repoID)
 	h.recordFailure(repoID, "http://upstream", "", UpstreamBlockReasonUpstreamError)
 	if again := h.status(repoID).BlockedFor; again != base {
 		t.Fatalf("复位后应从起始档重新计时（%s），实际 %s", base, again)
@@ -225,6 +275,7 @@ func TestReleaseProbeFreesHalfOpenSlot(t *testing.T) {
 func TestBlockedCountCountsBlockedAndHalfOpen(t *testing.T) {
 	h := newProxyHealth(func(context.Context, string, string) error { return nil })
 	h.setBase(time.Hour) // 窗口长，停在 AUTO_BLOCKED
+	stopProbe(t, h, 1, 2)
 	if got := h.blockedCount(); got != 0 {
 		t.Fatalf("空状态应为 0，实际 %d", got)
 	}
@@ -250,8 +301,10 @@ func TestRecordFailureEmitsBlockEvent(t *testing.T) {
 	const repoID int64 = 19
 	spy := &recorderSpy{}
 	h := newProxyHealth(func(context.Context, string, string) error { return errors.New("boom") })
-	h.setBase(time.Millisecond)
+	h.setBase(deterministicBase)
 	h.setBlockRecorder(spy)
+	stopProbe(t, h, repoID)
+	seedStateSuppressingProbe(h, repoID)
 
 	h.recordFailure(repoID, "http://upstream", "", UpstreamBlockReasonUpstreamError)
 	if got := spy.reasons(); len(got) != 1 || got[0] != string(UpstreamBlockReasonUpstreamError) {
@@ -269,6 +322,8 @@ func TestRecordFailureEmitsBlockEvent(t *testing.T) {
 
 	// 未接线记录器：不 panic、不记录。
 	bare := newProxyHealth(func(context.Context, string, string) error { return errors.New("boom") })
+	stopProbe(t, bare, repoID)
+	seedStateSuppressingProbe(bare, repoID)
 	bare.recordFailure(repoID, "http://upstream", "", UpstreamBlockReasonUpstreamError)
 }
 
