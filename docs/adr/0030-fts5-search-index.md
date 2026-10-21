@@ -19,13 +19,14 @@ FR-149 的性能目标是百万级 `asset` 下常见关键词与版本号搜索 
 1. **新增 FTS5 虚拟表对 `asset.path` 建全文索引，分词器用 `tokenize='trigram'`。**
 2. **FTS 表是派生索引，`asset` 仍是唯一真源**：采用 external content 形态（`content='asset'`、`content_rowid='id'`），FTS 表以 `asset.id` 为 `rowid`，不复制路径文本。
 3. **索引由应用层在与 `asset` 写入同一事务内显式维护**，不使用触发器；未索引的行不进候选集。
-4. **升级后后台异步回填**：按 `rowid` 水位分批推进、中断后可续跑，不阻塞进程启动；回填完成前搜索继续走既有 `LIKE` 路径，完成后切到索引。
+4. **升级后后台异步回填**：按 `rowid` 水位分批推进、中断后可续跑，不阻塞进程启动；回填完成前搜索继续走既有 `LIKE` 路径，完成后改为「FTS 候选集收敛 + `LIKE` 后置复核」——**不是**完全改用 `MATCH` 定案，理由见「理由」第二条。
 5. **索引可丢弃重建**：前向迁移只建 FTS 表与回填状态，不回填数据；一致性异常时按水位续灌或全量 `rebuild`。
 6. **FTS5 是 SQLite 内建能力**，随 `modernc.org/sqlite` 编入同一二进制，不引入外部服务、进程或新的运行依赖。
 
 ## 理由
 
-- **trigram 是唯一同时满足"走索引"与"任意子串"的分词器**。实测 5 万行合成数据：`WHERE path LIKE '%1.17.12%'` 在 trigram 表上约 1ms，在 unicode61 表上约 29ms，后者是逐行扫描、耗时随行数线性增长。若改用 `MATCH` 配合 unicode61，`1.17.12` 会按分隔符被切成 `1` / `17` / `12`，命中 `1.17.120`、`1.17.1212` 等无关路径；若再用 `LIKE` 复核则退回扫描，等于放弃索引。
+- **trigram 是唯一同时满足"走索引"与"任意子串"的分词器**。实测 5 万行合成数据：`WHERE path LIKE '%1.17.12%'` 在 trigram 表上约 1ms，在 unicode61 表上约 29ms，后者是逐行扫描、耗时随行数线性增长。若改用 `MATCH` 配合 unicode61，`1.17.12` 会按分隔符被切成 `1` / `17` / `12`，命中 `1.17.120`、`1.17.1212` 等无关路径；此时若再用 `LIKE` 复核，因为候选集本身就是全表量级，等于退回逐行扫描、白付索引成本。
+- **但生产查询仍然保留 `LIKE` 作为后置复核，这不与上一条矛盾**：trigram 折叠**整个 Unicode**，而 `LIKE` 只折叠 ASCII，因此 trigram 的命中集是 `LIKE` 的**超集**（实测 `Ärger-1.0.jar` 与 `ärger-2.0.jar` 在 `q=ärger` 下 FTS 命中 2 条、`LIKE` 只命中 1 条）。所以 FTS 只用来**收敛候选集**，最终由 `LIKE` 在小集合上定案——此时 `LIKE` 面对的是已收窄的行集而非全表，代价可忽略，而语义与改造前逐字等价。换言之：上一条否掉的是「unicode61 的噪声候选 + 全表 `LIKE`」，本处采用「trigram 的精确候选 + 小集 `LIKE`」，两者前提不同。
 - **external content 让索引滞后只可能漏、不可能伪造内容**：查询以 `rowid` 回 `JOIN asset` 取真实 `path`，被删除的 `asset` 行会让对应索引行在 join 中自然消失，无需额外的孤儿清理；同时省去把百万条路径再存一份。**但仅限"只读 rowid"的查询形态**：一旦对 `asset_path_fts` 的列值直接过滤（例如 `SELECT ... WHERE path LIKE ...`），孤儿行会让 SQLite 报 `267 fts5: missing row N from content table`。因此生产查询固定为 `id IN (SELECT rowid FROM asset_path_fts WHERE asset_path_fts MATCH ?)`，一律回表取真值。
 - **显式同步而非触发器**：`asset` 的写入点有限且集中在仓储层（`AssetRepo.UpsertWithTime`、`DeleteByPath`，以及 `asset_mutation_repo.go` 的 apply 与回滚），全部可穷举，并且已经在事务边界内。而 external content 表上的 `UPDATE` 语句不会重建索引（实测改 `path` 后新文本查不到），正确维护必须"先移除旧条目、再插入新条目"——把这套易错操作封在一个可测试的入口，比固化进只增不改的迁移里的触发器更可控。仓库删除会经 `repository` 的 `ON DELETE CASCADE`（0002 L15）级联清掉该仓库全部 `asset`，此时按仓库一次性清理也比逐行触发更直接。
 - **移除条目必须"先确保它在索引里"**（实测踩坑，决定了实现形态）：当内容行存在、但索引里没有该 `rowid` 时（迁移刚完成、历史行尚未回填，这是常态），FTS5 移除条目会报 `267 database disk image is malformed`——专用命令 `'delete'` 与 `DELETE FROM` 都会踩，且报错会污染同一连接上该表的后续操作。因此移除前先对同一 `(rowid, path)` 插一次（对已入索引的行幂等无害），再执行删除，使"删除从未入索引的历史行"不会失败。
