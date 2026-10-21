@@ -9,7 +9,7 @@ import (
 // CheckFTS5Support 探测当前 SQLite 构建是否具备搜索索引所需的两项能力：
 // fts5 模块本身，以及 trigram 分词器（`tokenize='trigram'`）。
 //
-// 为什么要探测：asset_path_fts 是 FTS5 虚拟表（迁移 0047），而 fts5 与 trigram 都是**构建期**
+// 为什么要探测：asset_path_fts 是 FTS5 虚拟表（迁移 0049），而 fts5 与 trigram 都是**构建期**
 // 编入 SQLite 的能力。modernc.org/sqlite v1.60.1 实测两者可用，但换成 CGO 构建、换驱动或换
 // 版本时能力可能不同。若不探测，缺能力的部署会在升级时挂在一句泛化的 `SQL logic error` 上，
 // 排查成本极高；探测后给出可读的中文根因，直接指向「换构建 / 换驱动」。

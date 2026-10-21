@@ -592,7 +592,7 @@ func (r *AssetRepo) SearchPerRepoByFilter(ctx context.Context, f SearchFilter, r
 }
 
 // SearchIndexReady 报告 asset_path_fts 的回填是否已完成
-// （search_index_state.completed_at 非空，见迁移 0047 与规格 §3.1）。
+// （search_index_state.completed_at 非空，见迁移 0049 与规格 §3.1）。
 //
 // 由领域层在**每次搜索入口**调用一次，不做进程内缓存：全量重建会把 completed_at 打回 NULL，
 // 而缓存里的 true 会让重建期间的搜索继续走已被清空的索引——结果是静默漏结果。这条查询是单行

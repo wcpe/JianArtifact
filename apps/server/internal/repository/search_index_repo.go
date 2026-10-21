@@ -94,7 +94,7 @@ func searchIndexDelete(ext sqlx.Ext, rowid int64, path string) error {
 //     **重建**索引，是「灌满」而不是「清空」（实测：索引清空后 rebuild 会把内容表全部行重新写入，
 //     顺带丢弃孤儿条目）。它确实能一步得到一致索引，但代价是在**单个事务**里重扫全表：SQLite
 //     只有一个写者（WAL 的「多读 + 单写」），百万级 asset 上会长时间占住写锁、把全部在线写入
-//     堵在忙等待里，正是迁移 0047 与规格 §3.2 明确拒绝的形态。因此重建走「delete-all 清空
+//     堵在忙等待里，正是迁移 0049 与规格 §3.2 明确拒绝的形态。因此重建走「delete-all 清空
 //     （瞬时）+ 水位归零 + 分批回填」，靠回填的分批让出保证在线可用。
 func searchIndexClearAll(ext sqlx.Ext) error {
 	_, err := ext.Exec(`INSERT INTO asset_path_fts(asset_path_fts) VALUES('delete-all')`)

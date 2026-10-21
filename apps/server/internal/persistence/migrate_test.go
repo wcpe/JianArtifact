@@ -326,11 +326,11 @@ func TestMigration0047AddsBackupOriginAndVerification(t *testing.T) {
 const capacityAggregateSQL = `SELECT COUNT(*) AS asset_count, COALESCE(SUM(size),0) AS logical_bytes FROM asset`
 
 // repoStatsSQL 是仓库存储配额（FR-41）的单仓库聚合，镜像自
-// internal/repository/asset_repo.go 的 repoStatsQuery。它不属于 0048 的服务对象，
+// internal/repository/asset_repo.go 的 repoStatsQuery。它不属于 0050 的服务对象，
 // 但必须确认新索引没有把它的计划带偏。
 const repoStatsSQL = `SELECT ? AS repository_id, COUNT(*) AS count, COALESCE(SUM(size), 0) AS total_size FROM asset WHERE repository_id = ?`
 
-// TestMigration0048BuildsAssetSizeCoveringIndex 校验 0048 的三项要求：
+// TestMigration0050BuildsAssetSizeCoveringIndex 校验 0050 的三项要求：
 //  1. 建出**复合**覆盖索引 (repository_id, size)——两条聚合都在整表/整仓读 size；
 //  2. 配额查询（每次上传走两遍的热路径）命中该索引且**覆盖**（不回表）；
 //  3. 冗余的 idx_asset_repository 已被删除（其前缀被复合索引覆盖）。
@@ -346,7 +346,7 @@ const repoStatsSQL = `SELECT ? AS repository_id, COUNT(*) AS count, COALESCE(SUM
 //
 // 空表也要断言：迁移刚建库时 asset 为 0 行，若计划在空表上退回 "SCAN asset"，
 // 说明该优化在「刚升级、还没数据」的窗口里不生效。
-func TestMigration0048BuildsAssetSizeCoveringIndex(t *testing.T) {
+func TestMigration0050BuildsAssetSizeCoveringIndex(t *testing.T) {
 	db := openTestDB(t)
 	if err := db.Migrate(); err != nil {
 		t.Fatalf("Migrate：%v", err)
@@ -367,7 +367,7 @@ func TestMigration0048BuildsAssetSizeCoveringIndex(t *testing.T) {
 		t.Fatalf("检查 idx_asset_repository 是否残留：%v", err)
 	}
 	if legacy != 0 {
-		t.Errorf("idx_asset_repository 应已被 0048 删除（其前缀被 idx_asset_repo_size 覆盖），实际仍存在")
+		t.Errorf("idx_asset_repository 应已被 0050 删除（其前缀被 idx_asset_repo_size 覆盖），实际仍存在")
 	}
 
 	// 空表 + 有数据两种状态都必须命中：空表用迁移刚完成的状态，有数据用插入后的状态。
@@ -406,7 +406,7 @@ func TestMigration0048BuildsAssetSizeCoveringIndex(t *testing.T) {
 	}
 
 	// 配额查询（热路径）：必须是覆盖索引扫描。这里**钉死索引名与 COVERING**，
-	// 因为 0048 的主要收益就在这条语句（实测 91.95ms → 1.10ms）；若它退化为回表，
+	// 因为 0050 的主要收益就在这条语句（实测 91.95ms → 1.10ms）；若它退化为回表，
 	// 说明复合索引的列顺序或内容被改坏了，必须报错而不是放过。
 	repoPlan := strings.Join(explainPlanLines(t, db, repoStatsSQL, int64(1), int64(1)), " | ")
 	if !strings.Contains(repoPlan, "USING COVERING INDEX idx_asset_repo_size") {

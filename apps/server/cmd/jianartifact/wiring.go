@@ -85,7 +85,7 @@ func openServices(cfg *config.Config) (*appServices, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("应用数据库迁移：%w", err)
 	}
-	// FR-149：fts5 与 trigram 是 SQLite 的构建期能力，缺能力时搜索索引（asset_path_fts，迁移 0047）
+	// FR-149：fts5 与 trigram 是 SQLite 的构建期能力，缺能力时搜索索引（asset_path_fts，迁移 0049）
 	// 根本无法工作。这里在迁移成功后立刻自检，把「构建不支持」这种环境问题变成一句可读的中文
 	// 启动错误，而不是等到第一次写资产才在事务里冒出一句泛化的 SQL logic error。
 	if err := persistence.CheckFTS5Support(); err != nil {

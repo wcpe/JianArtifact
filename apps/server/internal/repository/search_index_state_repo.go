@@ -4,7 +4,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
 )
 
-// 本文件提供 asset_path_fts 的**回填状态**读写（search_index_state 单行表，见迁移 0047）
+// 本文件提供 asset_path_fts 的**回填状态**读写（search_index_state 单行表，见迁移 0049）
 // 与后台分批回填所需的批次原语。索引行本身的维护原语在 search_index_repo.go，
 // 两者一起构成 FR-149「后台异步回填 + 可重建」的持久层。
 //

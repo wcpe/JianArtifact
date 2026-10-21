@@ -1,4 +1,4 @@
--- 0047：资产路径的 FTS5 全文索引表与索引回填状态表
+-- 0049：资产路径的 FTS5 全文索引表与索引回填状态表
 -- 引入版本：未开窗（0.11.0 之后的下一窗口）
 -- 影响：新增虚拟表 asset_path_fts（FTS5 external content，索引 asset.path）与单行状态表 search_index_state
 -- 数据处理：**不在迁移内回填**——只建结构并写入一行初始状态（last_id=0、total_rows=0、completed_at 为 NULL）；

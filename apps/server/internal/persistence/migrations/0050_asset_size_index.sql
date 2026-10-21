@@ -1,4 +1,4 @@
--- 0048：asset 的仓库维度覆盖索引（repository_id, size），并移除被它取代的冗余单列索引
+-- 0050：asset 的仓库维度覆盖索引（repository_id, size），并移除被它取代的冗余单列索引
 -- 引入版本：未开窗（0.11.0 之后的下一窗口）
 -- 影响：asset 新增复合索引 idx_asset_repo_size；删除冗余的 idx_asset_repository（其前缀已被覆盖）
 -- 数据处理：无历史回填——纯建/删索引，扫描既有 asset 行建立结构；预计耗时随 asset 行数增长，升级期间会短暂占用写锁
