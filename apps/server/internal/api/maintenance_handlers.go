@@ -79,7 +79,7 @@ func (h *Handlers) RunMaintenanceJob(c *gin.Context, name MaintenanceJobNamePara
 	c.JSON(http.StatusAccepted, MaintenanceJobRunResult{Name: name, Started: true})
 }
 
-// RestartService 一键重启本节点（仅管理员，）。
+// RestartService 一键重启本节点（仅管理员）。
 //
 // 执行路径是**进程自替换**：本进程本就有权执行自己的二进制（systemd 的 ExecStart 就是它），
 // syscall.Exec 只是"同一进程换新映像"，**不引入任何新权限**——因此不需要 sudo / polkit /
@@ -132,7 +132,7 @@ func (h *Handlers) RestartService(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
-// GetRestartCapability 只读探测本节点的重启能力（仅管理员，）。
+// GetRestartCapability 只读探测本节点的重启能力（仅管理员）。
 //
 // 存在的理由（本端点最重要的一条约束）：`command` 是**手工等效命令**，随部署形态而变
 // （root / 非 root 的 systemd-user / docker），只有后端知道本机该敲哪一条。界面此前硬编码

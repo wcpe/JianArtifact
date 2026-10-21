@@ -1595,7 +1595,7 @@ export const handlers = [
     return HttpResponse.json(store.pinnedResponse(null));
   }),
 
-  // —— 匿名访问全局开关（，admin）——
+  // —— 匿名访问全局开关（admin）——
   http.get(
     "*/api/v1/settings/anonymous-access",
     ({ request }) =>
@@ -2800,7 +2800,7 @@ export const handlers = [
   }),
 
   // —— 节点备份与搬迁——
-  // —— 写入冻结窗口（，admin）——
+  // —— 写入冻结窗口（admin）——
   // 冻结期间节点拒绝本地业务与管理写入，但放行读 / 登录 / 备份导入路径。
   http.get(
     "*/api/v1/maintenance/freeze",
@@ -2845,7 +2845,7 @@ export const handlers = [
     return HttpResponse.json(mockFreeze);
   }),
 
-  // —— 一键重启（，admin）——
+  // —— 一键重启（admin）——
   // mock 环境没有可重启的进程，故如实返回**降级**结果（supported:false + 可复制命令）：
   // 这正是真实世界里"容器部署 / 无 systemctl"时的形态，也是界面必须能处理的那条分支。
   // 若这里假装 supported:true，前端探活会一直等一个永不重启的 mock，把降级路径漏测掉。
@@ -2877,7 +2877,7 @@ export const handlers = [
     });
   }),
 
-  // —— 待重启生效的恢复状态（，admin）——
+  // —— 待重启生效的恢复状态（admin）——
   // 与下面 /backups/import 等一样必须早于 `*/api/v1/backups/:id`，否则会被 :id 通配吞掉。
   // 默认 pending=false（绝大多数时候如此），由导入/上传的终态推进来翻转，
   // 这样开发环境也能复现"导入成功后按钮转橙、再导入被拒"的完整链路。
@@ -2899,7 +2899,7 @@ export const handlers = [
     });
   }),
 
-  // —— 备份包内容预览（，admin）——
+  // —— 备份包内容预览（admin）——
   // 返回包内仓库/账号/制品样例。必须早于 `*/api/v1/backups/:id`，否则被 :id 通配吞掉。
   http.get("*/api/v1/backups/:id/preview", ({ request, params }) => {
     const denied = adminUnauthorized(request);
@@ -2933,7 +2933,7 @@ export const handlers = [
     });
   }),
 
-  // —— 包内容与本机差异（，admin）——
+  // —— 包内容与本机差异（admin）——
   // 必须早于 `*/api/v1/backups/:id`，否则被 :id 通配吞掉。
   http.get("*/api/v1/backups/:id/diff", ({ request, params }) => {
     const denied = adminUnauthorized(request);
@@ -2985,7 +2985,7 @@ export const handlers = [
     });
   }),
 
-  // —— 未管理备份包（，admin）——
+  // —— 未管理备份包（admin）——
   // 这些包在磁盘上有包体但登记表无记录。mock 里用一组固定候选模拟"历史残留"。
   // 必须早于 `*/api/v1/backups/:id`，否则 unmanaged 会被 :id 通配吞掉。
   http.get("*/api/v1/backups/unmanaged", ({ request }) => {
@@ -3073,7 +3073,7 @@ export const handlers = [
     return HttpResponse.json({ items, adopted, skipped, failed });
   }),
 
-  // —— 用本机已有的备份包恢复（，admin）——
+  // —— 用本机已有的备份包恢复（admin）——
   // 补的是"页面上明明有包，却没有任何按钮能用它恢复"这个缺口（实测反馈"只能备份无法恢复"）。
   // 语义与其它三条恢复通道一致：受理 → 暂存 → 写 restore.pending → 需重启生效，
   // 故这里也置位 mockPendingRestore，让"待重启"提示与 409 防护在开发环境同样可见。
@@ -3123,7 +3123,7 @@ export const handlers = [
     return HttpResponse.json(record, { status: 202 });
   }),
 
-  // —— 从 URL 导入备份包（，admin）——
+  // —— 从 URL 导入备份包（admin）——
   // 注意路由注册顺序：必须早于 `*/api/v1/backups/:id`，否则 /backups/imports
   // 会被 :id 通配吞掉（与 gin 上实测一致的静默吞路由问题）。
   http.post("*/api/v1/backups/import", async ({ request }) => {

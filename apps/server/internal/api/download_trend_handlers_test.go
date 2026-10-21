@@ -18,7 +18,7 @@ import (
 var downloadTrendBase = time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC)
 
 // newDownloadTrendTestHandlers 组装趋势端点测试环境：仓库服务（含 public/private 各一）
-// 与下载计量仓储。匿名访问全局开关走默认开启（键缺失视为开启，）。
+// 与下载计量仓储。匿名访问全局开关走默认开启（键缺失视为开启）。
 func newDownloadTrendTestHandlers(t *testing.T) (*Handlers, *repository.AssetDownloadRepo) {
 	t.Helper()
 	gin.SetMode(gin.ReleaseMode)

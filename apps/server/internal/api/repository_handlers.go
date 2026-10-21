@@ -913,7 +913,7 @@ func (h *Handlers) SearchAssets(c *gin.Context) {
 	// 仓库范围过滤（下推到服务层，保证 total 精确）
 	repoFilter := c.Query("repository")
 	if repoFilter != "" {
-		// 单仓库内搜索：先检查读权限（含主体所属用户组的授权，）
+		// 单仓库内搜索：先检查读权限（含主体所属用户组的授权）
 		subject, err := h.subjectOf(p)
 		if err != nil {
 			writeDomainErr(c, err)

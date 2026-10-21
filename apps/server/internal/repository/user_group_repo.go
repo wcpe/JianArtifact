@@ -7,7 +7,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
 )
 
-// UserGroupRepo 读写 user_group 与 user_group_member 两张表（，迁移 0046）。
+// UserGroupRepo 读写 user_group 与 user_group_member 两张表（迁移 0046）。
 //
 // 组是授权主体之一：组本身只承载「名字 + 描述」，授权关系由 acl 表指向组 ID，
 // 成员关系由 user_group_member 表承载。因此删组需要连带清理 acl 条目（由

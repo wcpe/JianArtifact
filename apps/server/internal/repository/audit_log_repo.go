@@ -44,7 +44,7 @@ type AuditLogEntry struct {
 	ActorEmail string `db:"actor_email" json:"actorEmail"`
 }
 
-// AuditLogRepo 读写 audit_log 表（审计日志，）。
+// AuditLogRepo 读写 audit_log 表（审计日志）。
 type AuditLogRepo struct{ db *persistence.DB }
 
 // NewAuditLogRepo 构造 AuditLogRepo。

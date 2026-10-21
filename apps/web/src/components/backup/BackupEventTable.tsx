@@ -92,7 +92,7 @@ export interface BackupEventTableProps {
   verifyingId?: string | null;
   onGetLink: (id: string) => void;
   onVerify: (id: string, deep: boolean) => void;
-  /** 「查看包内容」入口（打开预览弹窗，）。 */
+  /** 「查看包内容」入口（打开预览弹窗）。 */
   onPreview: (packageId: string) => void;
   /** 「用这个包恢复」入口（打开确认弹窗）。 */
   onRestore: (item: BackupPackage) => void;

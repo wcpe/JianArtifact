@@ -40,7 +40,7 @@ const (
 	EnvOIDCRedirectURL        = "JIAN_OIDC_REDIRECT_URL"    // OIDC 回调地址，须与 IdP 侧注册一致
 	EnvOIDCUsernameClaim      = "JIAN_OIDC_USERNAME_CLAIM"  // 用户名 claim；缺省 preferred_username
 	EnvOIDCAllowedDomains     = "JIAN_OIDC_ALLOWED_DOMAINS" // 允许自动建号的邮箱域名，逗号分隔；空 = 不限制
-	EnvLDAPURL                = "JIAN_LDAP_URL"             // LDAP 目录地址（，ldap:// 或 ldaps://）；空 = 不启用
+	EnvLDAPURL                = "JIAN_LDAP_URL"             // LDAP 目录地址（ldap:// 或 ldaps://）；空 = 不启用
 	EnvLDAPBindDN             = "JIAN_LDAP_BIND_DN"         // 检索用服务账号 DN；空 = 改用 DN 模板直接绑定
 	EnvLDAPBindPassword       = "JIAN_LDAP_BIND_PASSWORD"   // 服务账号口令；只从环境变量读取，不入库不打印
 	EnvLDAPBaseDN             = "JIAN_LDAP_BASE_DN"         // 用户检索基准 DN
@@ -163,7 +163,7 @@ type Config struct {
 	AutoBlockBaseSeconds   time.Duration
 	SyncPeerURL            string        // 遗留复制对端基址；仅为兼容旧配置保留，不驱动主备调度
 	SyncInterval           time.Duration // 复制轮询间隔
-	PublicURL              string        // 对外基础 URL（，如 https://repo.example.com）；空则回退请求 Host 推断
+	PublicURL              string        // 对外基础 URL（如 https://repo.example.com）；空则回退请求 Host 推断
 	EnabledFormats         formats.Set   // 启动时启用的协议格式
 	BlobGCInterval         time.Duration // primary 孤立 blob 定时清理间隔；0 禁用
 	StorageCleanupInterval time.Duration //  存储治理清理作业间隔；0 禁用
@@ -205,7 +205,7 @@ type Config struct {
 	LDAP           LDAPConfig // LDAP 身份源接入配置（URL 空 = 不启用）
 }
 
-// LDAPConfig 是 LDAP 目录接入配置（，见 ADR-0029）；
+// LDAPConfig 是 LDAP 目录接入配置（见 ADR-0029）；
 // 服务账号口令只从环境变量解析，不落库、不打印、不进审计。
 type LDAPConfig struct {
 	URL          string // 目录地址（ldap:// 或 ldaps://）
@@ -221,7 +221,7 @@ type LDAPConfig struct {
 // Enabled 报告是否启用 LDAP 登录（配置了 URL 即启用）。
 func (c LDAPConfig) Enabled() bool { return c.URL != "" }
 
-// OIDCConfig 是 OIDC 身份源接入配置（，见 ADR-0029）；
+// OIDCConfig 是 OIDC 身份源接入配置（见 ADR-0029）；
 // 凭据只从环境变量解析，不落库、不打印、不进审计。
 type OIDCConfig struct {
 	Issuer         string   // 身份提供方 issuer（discovery 基址）
@@ -427,7 +427,7 @@ func storageTempMaxAge() time.Duration {
 	return envDurationOr(EnvStorageTempMaxAge, defaultStorageTempMaxAge, time.Hour)
 }
 
-// backupAutoInterval 解析 JIAN_BACKUP_AUTO_INTERVAL（秒，）：周期化自动备份作业的间隔。
+// backupAutoInterval 解析 JIAN_BACKUP_AUTO_INTERVAL（秒）：周期化自动备份作业的间隔。
 // 缺省、非法与负数取默认值 0（= **关闭**），显式 0 同样是关闭——本项默认关闭，
 // 因为自动备份会在无人确认的情况下持续占用磁盘，必须是运维显式开启的能力。
 // 与 storageCleanupInterval 的「默认开、0 关」不同，但「0 = 不注册作业」的机制完全一致。
@@ -435,7 +435,7 @@ func backupAutoInterval() time.Duration {
 	return envDurationOr(EnvBackupAutoInterval, defaultBackupAutoInterval, time.Second)
 }
 
-// backupKeepLast 解析 JIAN_BACKUP_KEEP_LAST（份，）：保留最近 N 份**自动**备份。
+// backupKeepLast 解析 JIAN_BACKUP_KEEP_LAST（份）：保留最近 N 份**自动**备份。
 // 缺省或非法值取 7；显式 0 = **不按份数限制**（只受天数约束），而不是「一份都不留」——
 // 把 0 解释成"全删"会让一个笔误直接清空备份目录，而"不限制"永远只导致多留。
 // 负数与非法值回落默认 7（不采用"负数为不限制"的隐式写法，避免与 0 的语义重叠）。
@@ -443,13 +443,13 @@ func backupKeepLast() int {
 	return envNonNegativeIntOr(EnvBackupKeepLast, defaultBackupKeepLast)
 }
 
-// backupRetentionDays 解析 JIAN_BACKUP_RETENTION_DAYS（天，）：自动备份的保留天数。
+// backupRetentionDays 解析 JIAN_BACKUP_RETENTION_DAYS（天）：自动备份的保留天数。
 // 缺省或非法值取 30；显式 0 = 不限天数（只受份数约束）。0 语义与 backupKeepLast 同构。
 func backupRetentionDays() int {
 	return envNonNegativeIntOr(EnvBackupRetentionDays, defaultBackupRetentionDays)
 }
 
-// backupOrphanCleanupInterval 解析 JIAN_BACKUP_ORPHAN_CLEANUP_INTERVAL（秒，）：
+// backupOrphanCleanupInterval 解析 JIAN_BACKUP_ORPHAN_CLEANUP_INTERVAL（秒）：
 // 孤儿备份包回收作业的间隔。缺省或非法值取 24 小时，显式 0 禁用（不注册作业）。
 //
 // 默认开：孤儿文件只占磁盘、不会自行消失，回收是纯兜底动作，不存在"意外删数据"的
@@ -458,7 +458,7 @@ func backupOrphanCleanupInterval() time.Duration {
 	return envDurationOr(EnvBackupOrphanCleanupInterval, defaultBackupOrphanCleanupInterval, time.Second)
 }
 
-// backupOrphanGrace 解析 JIAN_BACKUP_ORPHAN_GRACE_HOURS（小时，）：
+// backupOrphanGrace 解析 JIAN_BACKUP_ORPHAN_GRACE_HOURS（小时）：
 // 孤儿回收的宽限期。缺省或非法值取 1 小时；显式 0 同样回落 1 小时——
 // **不允许零宽限**：那会让"刚拷进来、还没来得及在界面导入"的包在下一轮就被删掉。
 func backupOrphanGrace() time.Duration {
@@ -488,7 +488,7 @@ func envNonNegativeIntOr(key string, fallback int) int {
 	return n
 }
 
-// autoBlockBase 解析 JIAN_AUTO_BLOCK_BASE_SECONDS（秒，）：proxy 上游首次失败的
+// autoBlockBase 解析 JIAN_AUTO_BLOCK_BASE_SECONDS（秒）：proxy 上游首次失败的
 // 阻止窗口时长，之后每档翻倍。缺省、非数字、负数与显式 0 都回落默认 40s——
 // 退避起始为 0 等于「失败不阻止」，不是有意义的配置，故本项**无禁用语义**
 // （口径同 upstreamTimeout，而非 storageCleanupInterval 的 0 禁用）。
@@ -496,7 +496,7 @@ func autoBlockBase() time.Duration {
 	return envPositiveDurationOr(EnvAutoBlockBaseSeconds, defaultAutoBlockBase, time.Second)
 }
 
-// searchTimeout 解析 JIAN_SEARCH_TIMEOUT_SECONDS（秒，）：搜索链路
+// searchTimeout 解析 JIAN_SEARCH_TIMEOUT_SECONDS（秒）：搜索链路
 // （网页搜索 / npm 搜索 / 后续 suggest）的**总预算**，三条语句共享同一个 deadline。
 // 缺省、非数字、负数与显式 0 都回落默认 10s——本项**无禁用语义**：搜索是无界查询，
 // 关掉超时等于开放一个可以长时间占住数据库连接（主库池见 db.go 的 OpenWithMaxConns）

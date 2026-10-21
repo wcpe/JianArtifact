@@ -81,7 +81,7 @@ func (s *SettingService) SetAnonymousAccessEnabled(enabled bool) error {
 	return s.UpdateSettings(SettingsUpdate{AnonymousAccess: &enabled})
 }
 
-// PublicURL 返回对外基础 URL（，读 setting）；未配置返回空串（回退请求 Host 推断）。
+// PublicURL 返回对外基础 URL（读 setting）；未配置返回空串（回退请求 Host 推断）。
 func (s *SettingService) PublicURL() string {
 	v, err := s.settings.Get(SettingKeyPublicURL)
 	if err != nil {
@@ -95,8 +95,8 @@ func (s *SettingService) SetPublicURL(v string) error {
 	return s.UpdateSettings(SettingsUpdate{PublicURL: &v})
 }
 
-// SyncIntervalSecs 返回同步轮询间隔（秒，）；未配置或非法返回 0（调度器回退构造值）。
-// SettingKeyReplSyncInterval 是设置页「同步间隔」的存储键（，用户可见配置；
+// SyncIntervalSecs 返回同步轮询间隔（秒）；未配置或非法返回 0（调度器回退构造值）。
+// SettingKeyReplSyncInterval 是设置页「同步间隔」的存储键（用户可见配置；
 // 名字里的 repl: 是历史遗留，复制退役后由该键继续承载此配置项）。
 const SettingKeyReplSyncInterval = "repl:sync_interval"
 
@@ -112,7 +112,7 @@ func (s *SettingService) SetSyncInterval(secs int) error {
 	return s.UpdateSettings(SettingsUpdate{SyncInterval: &secs})
 }
 
-// UpstreamTimeoutSecs 返回回源整体超时（秒，）；未配置或非法返回 0。
+// UpstreamTimeoutSecs 返回回源整体超时（秒）；未配置或非法返回 0。
 func (s *SettingService) UpstreamTimeoutSecs() int {
 	return s.secsSetting(SettingKeyUpstreamTimeout)
 }

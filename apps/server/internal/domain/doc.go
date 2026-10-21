@@ -26,7 +26,7 @@ var (
 	ErrUpstreamTimeout = errors.New("上游回源超时")
 	// ErrUpstreamGone proxy 回源明确返回 410，由需保留该语义的协议映射。
 	ErrUpstreamGone = errors.New("上游资源已下架")
-	// ErrSearchTimeout 搜索链路超出总预算（映射 504 + search_timeout，）。
+	// ErrSearchTimeout 搜索链路超出总预算（映射 504 + search_timeout）。
 	// 与 ErrUpstreamTimeout 刻意分开：一个是「本地查询超出预算、该缩检索范围或查索引」，
 	// 另一个是「上游不畅」，复用同一个错误码会让用户与运维分不清该修哪一头。
 	ErrSearchTimeout = errors.New("搜索查询超时")

@@ -324,7 +324,7 @@ func requireAdmin(c *gin.Context) (*auth.Principal, bool) {
 // 不必各自拼一段同样的错误。
 var errInternalSubject = errors.New("无法组装鉴权主体")
 
-// subjectOf 把请求中的 principal 转成鉴权主体（含其所属用户组，）。
+// subjectOf 把请求中的 principal 转成鉴权主体（含其所属用户组）。
 //
 // 单独抽出来是为了让「按组织造鉴权主体」这一件事只有一个写法：api 层的每个仓库
 // 守卫都要这么做，而漏做一处的后果是——该端点静默退化成不含组授权的老行为，

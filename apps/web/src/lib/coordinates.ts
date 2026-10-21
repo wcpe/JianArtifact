@@ -1,4 +1,4 @@
-// 多格式依赖坐标生成（，纯前端纯函数）：
+// 多格式依赖坐标生成（纯前端纯函数）：
 //
 // 把 Maven 制品路径反解为 GAV，再用模板产出多种构建工具的依赖坐标片段
 // （Apache Maven / Gradle Groovy / Gradle Kotlin DSL / Scala SBT / Apache Ivy /

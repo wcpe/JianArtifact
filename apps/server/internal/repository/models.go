@@ -43,7 +43,7 @@ type Repository struct {
 	Visibility  string `db:"visibility"`
 	Description string `db:"description"` // 仓库描述（管理后台可配置，详情页展示）
 	Config      string `db:"config"`      // 结构化配置 JSON（上游 URL、成员列表等）
-	Online      bool   `db:"online"`      // 是否在线（默认 true；管理员可手动置 offline，）
+	Online      bool   `db:"online"`      // 是否在线（默认 true；管理员可手动置 offline）
 	CreatedAt   string `db:"created_at"`
 	// Aliases 是仓库的别名列表（非列字段，由服务层按需填充；别名与主名共享命名空间）。
 	Aliases []string `db:"-"`
@@ -104,7 +104,7 @@ func EncodeRepositoryConfig(c RepositoryConfig) (string, error) {
 
 // Acl 是 acl 表中一条授权（主体 × 动作）。
 //
-// 主体分两类（，迁移 0046）：用户主体用 SubjectID 标记、SubjectGroupID 恒为 0；
+// 主体分两类（迁移 0046）：用户主体用 SubjectID 标记、SubjectGroupID 恒为 0；
 // 用户组主体用 SubjectGroupID 标记、SubjectID 恒为 0。两列互斥由表内 CHECK 强制，
 // 因此写入前必须把「不用的那一列」显式写 NULL。
 type Acl struct {

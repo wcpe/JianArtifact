@@ -81,7 +81,7 @@ func WithAllowedHosts(provider func() []string) Option {
 	return func(s *Server) { s.allowedHosts = provider }
 }
 
-// WithOriginTokenGuard 注入回源 Token 校验配置读取器（，运行时读取最新值）。
+// WithOriginTokenGuard 注入回源 Token 校验配置读取器（运行时读取最新值）。
 // 非 nil 时启用校验中间件：开启状态下非回环请求必须携带匹配的 Token 头，否则 404。
 func WithOriginTokenGuard(guard originTokenGuard) Option {
 	return func(s *Server) { s.originToken = guard }

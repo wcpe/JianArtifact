@@ -158,7 +158,7 @@ export interface AssetOperationResponse {
   affected: number;
 }
 
-// 制品下载计量与分析（~144）
+// 制品下载计量与分析（含后续扩展）
 export type DownloadClientRanking = Schemas["DownloadClientRanking"];
 /** 下载趋势桶粒度（服务端按窗口跨度自适应）。 */
 export type ObservabilityBucket = Schemas["ObservabilityBucket"];

@@ -47,7 +47,7 @@ type BackupPackage struct {
 	CreatedAt       string  `db:"created_at" json:"createdAt"`
 	FinishedAt      *string `db:"finished_at" json:"finishedAt,omitempty"`
 	ErrorSummary    string  `db:"error_summary" json:"errorSummary"`
-	// Origin 是生成来源（manual / auto，）。迁移 0047 之前的行由列默认值补为 manual。
+	// Origin 是生成来源（manual / auto）。迁移 0047 之前的行由列默认值补为 manual。
 	Origin string `db:"origin" json:"origin"`
 }
 

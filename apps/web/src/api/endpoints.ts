@@ -1115,7 +1115,7 @@ export interface SettingsConfig {
   syncInterval: number;
   /** 允许访问的域名白名单（空数组 = 不限制；仅白名单内的 Host 可访问，节点本地）。 */
   allowedHosts: string[];
-  /** 回源 Token 校验开关（，节点本地）。 */
+  /** 回源 Token 校验开关（节点本地）。 */
   originTokenEnabled: boolean;
   /** 回源 Token 请求头名（CDN 回源时注入）。 */
   originTokenHeader: string;
@@ -1137,7 +1137,7 @@ export interface SettingsConfig {
   /** 间隔拆解后的单位标识（seconds/minutes/hours/days/weeks/months/years）。 */
   backupAutoIntervalUnit: string;
   /**
-   * 最近一次成功备份包的大小（字节，）。
+   * 最近一次成功备份包的大小（字节）。
    *
    * 备份是**全量**包，每份约等于数据目录大小，因此「份数 × 本值」就是最坏情况的
    * 磁盘占用。界面据此提示容量风险——没有它，用户无法判断"保留 7 份"会不会写满盘。
@@ -1231,7 +1231,7 @@ export interface AuditLogList {
   total: number;
 }
 
-/** 审计日志查询参数（，全可选）。 */
+/** 审计日志查询参数（全可选）。 */
 export interface AuditLogQuery {
   actor?: string;
   userId?: string;
@@ -1247,7 +1247,7 @@ export interface AuditLogQuery {
   offset?: number;
 }
 
-/** 审计日志（，分页 + 筛选，仅管理员）。 */
+/** 审计日志（分页 + 筛选，仅管理员）。 */
 export function getAuditLogs(q: AuditLogQuery = {}): Promise<AuditLogList> {
   const params = new URLSearchParams();
   if (q.actor) params.set("actor", q.actor);

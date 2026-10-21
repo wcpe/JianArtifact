@@ -27,7 +27,7 @@ const ALL_STATUSES: ConnectionStatusValue[] = [
   "OFFLINE",
 ];
 
-describe("连接状态映射（ / ）", () => {
+describe("连接状态映射", () => {
   it("每个契约枚举都有颜色与标签键（含新增的 HALF_OPEN）", () => {
     for (const status of ALL_STATUSES) {
       expect(CONN_COLOR[status], `${status} 缺颜色映射`).toBeTruthy();

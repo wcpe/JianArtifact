@@ -44,12 +44,12 @@ type NpmHandler struct {
 	publicURLFn func() string // 动态对外 URL（web 可运行时修改），优先于 publicURL
 }
 
-// NewNpmHandler 构造 NpmHandler。publicURL 为对外基础 URL（，可空）。
+// NewNpmHandler 构造 NpmHandler。publicURL 为对外基础 URL（可空）。
 func NewNpmHandler(raw *RawHandler, store auth.Store, tokens *domain.TokenService, publicURL string) *NpmHandler {
 	return &NpmHandler{RawHandler: raw, store: store, tokens: tokens, publicURL: publicURL}
 }
 
-// SetPublicURLFn 注入动态对外 URL 读取回调（，wiring 传入；nil 表示不启用）。
+// SetPublicURLFn 注入动态对外 URL 读取回调（wiring 传入；nil 表示不启用）。
 func (h *NpmHandler) SetPublicURLFn(fn func() string) { h.publicURLFn = fn }
 
 // RegisterNpmRoutes 在 r 上挂载 npm registry 端点（前缀 /npm，不与 /api/v1、/repository 冲突）：

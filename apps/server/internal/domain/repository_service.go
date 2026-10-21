@@ -46,7 +46,7 @@ type RepositoryService struct {
 }
 
 // NewRepositoryService 构造 RepositoryService。settings 与 users 供匿名判定
-// （全局开关 + anonymous 主体 ACL，）使用。
+// （全局开关 + anonymous 主体 ACL）使用。
 func NewRepositoryService(repos *repository.RepoRepo, acls *repository.AclRepo, assets *repository.AssetRepo, settings *SettingService, users *repository.UserRepo) *RepositoryService {
 	return &RepositoryService{repos: repos, acls: acls, assets: assets, settings: settings, users: users, enabled: formats.Default(),
 		searchTimeout: searchTimeoutDefault}
@@ -1364,7 +1364,7 @@ func (s *RepositoryService) SearchAssets(ctx context.Context, keyword, repoScope
 	return out, nil
 }
 
-// SearchAggregate 在文件级搜索结果之外追加包级聚合（~ §3.7）。
+// SearchAggregate 在文件级搜索结果之外追加包级聚合（见 §3.7）。
 //
 // groupBy 取 SearchGroupByFile（缺省）或 SearchGroupByPackage。file 模式直接委托给
 // SearchAssets——**行为、签名与查询条数完全不变**，npm registrySearch 因此不受本 FR 影响
