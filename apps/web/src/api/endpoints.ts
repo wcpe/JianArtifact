@@ -1424,21 +1424,98 @@ export function getRepositoryTree(name: string, prefix?: string): Promise<TreeEn
 
 // ---- FR-30: Search API ----
 
+/**
+ * 命中精度分层（FR-150 §3.4）：后端比较「查询里的版本串 T」与「结果里的版本段 V」得出。
+ * `none` 表示没有版本信号（既不精确也不近似），UI 不显示精度徽标。
+ */
+export type SearchPrecision = "exact" | "prerelease" | "substring" | "none";
+
+/** 包节点的协议归类：`file` 是「无坐标」伪包（按仓库归组，没有版本层）。 */
+export type SearchPackageKind = "maven" | "npm" | "file";
+
+/** 聚合结果里的单个文件行（`packages[].versions[].files[]` / 伪包的 `files[]`）。 */
+export interface SearchPackageFile {
+  name: string;
+  path: string;
+  repository: string;
+  size: number;
+  /** FR-150 新增：详情面板展示的 SHA-1（可能为空串）。 */
+  sha1: string;
+  updatedAt: string;
+  /** 附录 A 的封闭集合：jar / war / tgz / sources / javadoc / tests / pom / packument / metadata / other / checksum。 */
+  fileKind: string;
+}
+
+/** 包节点下的版本组。 */
+export interface SearchPackageVersion {
+  version: string;
+  precision: SearchPrecision;
+  fileCount: number;
+  /** 组内文件体积合计。 */
+  size: number;
+  latestUpdatedAt: string;
+  files: SearchPackageFile[];
+}
+
+/** 包级聚合节点（`group_by=package` 才有）。 */
+export interface SearchPackage {
+  /** 展示坐标；无坐标伪包为仓库名。 */
+  coordinate: string;
+  kind: SearchPackageKind;
+  repositories: string[];
+  versionCount: number;
+  fileCount: number;
+  bestPrecision: SearchPrecision;
+  latestUpdatedAt: string;
+  topVersion: string;
+  versions: SearchPackageVersion[];
+  /**
+   * 仅 `kind=file` 的「无坐标」伪包携带该键：这类条目跳过版本层，文件直接挂在包下。
+   * 有坐标的包（maven / npm）后端不输出此键（`omitempty`）。
+   */
+  files?: SearchPackageFile[];
+}
+
 export interface SearchResult {
-  items: { repository: string; path: string; size: number; hash: string; updatedAt: string }[];
+  items: {
+    repository: string;
+    path: string;
+    size: number;
+    hash: string;
+    /** FR-150 新增的纯追加键：详情面板展示的 SHA-1。 */
+    sha1?: string;
+    updatedAt: string;
+  }[];
   total: number;
   /** 按仓库聚合的命中数（钻取导航用，按命中数降序）。 */
   facets?: { repository: string; count: number }[];
+  /** 包节点数（含「无坐标」伪包）；`aggregation.truncated` 时为下界。仅 `group_by=package` 有。 */
+  packageTotal?: number;
+  /** 包级聚合结果，仅 `group_by=package` 有。 */
+  packages?: SearchPackage[];
+  /** 聚合扫描口径，仅 `group_by=package` 有。 */
+  aggregation?: { scanned: number; truncated: boolean };
+  /** 后端回报的实际生效排序（relevance 回落 / 缺省时用来"不猜"）。 */
+  appliedOrder?: string;
 }
+
+/** 搜索结果的分组维度：缺省 `file`（文件级扁平列表），`package` 走包级聚合。 */
+export type SearchGroupBy = "file" | "package";
+
+/** 搜索结果排序方向；`relevance` 仅在 `group_by=package` 下生效（其余情况后端静默回落）。 */
+export type SearchOrder = "asc" | "desc" | "relevance";
 
 /** 全局跨仓库制品搜索。 */
 export function searchAssets(params: {
   q: string;
   repository?: string;
   sort?: string;
-  order?: "asc" | "desc";
+  order?: SearchOrder;
+  group_by?: SearchGroupBy;
   page?: number;
   page_size?: number;
+  /** FR-152：外部中止信号（取消 / 换口径时中止上一次），透传给客户端由 fetch 真实中断。 */
+  signal?: AbortSignal;
 }): Promise<SearchResult> {
   return request<SearchResult>("/search", {
     query: {
@@ -1446,9 +1523,47 @@ export function searchAssets(params: {
       repository: params.repository,
       sort: params.sort,
       order: params.order,
+      group_by: params.group_by,
       page: params.page,
       page_size: params.page_size,
     },
+    signal: params.signal,
+  });
+}
+
+// ---- FR-153: 搜索建议（搜索框下拉候选） ----
+
+/**
+ * 候选类型决定确认语义（规格 §3.9）：
+ * - `package` → 写入输入框并**直接发起搜索**；
+ * - `repository` → 写成 `repo:` 限定、**不立即搜索**（用户可继续追加关键词）。
+ */
+export type SearchSuggestionType = "package" | "repository";
+
+export interface SearchSuggestion {
+  type: SearchSuggestionType;
+  /** 候选值：仓库名，或可直接作为搜索词命中该包的包名。 */
+  value: string;
+}
+
+export interface SearchSuggestResult {
+  items: SearchSuggestion[];
+}
+
+/**
+ * 取搜索框下拉候选（非契约端点 `/api/v1/search/suggest`）。
+ *
+ * 空 `q`（trim 后）后端返回空 `items` 而不是 400；`limit` 由后端夹取到 [1, 20]。
+ * `signal` 供调用方在每次新请求前中止上一次，避免旧响应覆盖新候选（规格 §3.9）。
+ */
+export function suggestSearch(params: {
+  q: string;
+  limit?: number;
+  signal?: AbortSignal;
+}): Promise<SearchSuggestResult> {
+  return request<SearchSuggestResult>("/search/suggest", {
+    query: { q: params.q, limit: params.limit },
+    signal: params.signal,
   });
 }
 

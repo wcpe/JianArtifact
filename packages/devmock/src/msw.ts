@@ -1129,16 +1129,33 @@ export const handlers = [
       }
     }
     const order = url.searchParams.get("order") === "desc" ? "desc" : "asc";
-    return HttpResponse.json(
-      store.searchAssets(
-        url.searchParams.get("q") ?? "",
-        url.searchParams.get("sort") ?? "path",
-        order,
-        intParam(url, "page", 1),
-        intParam(url, "page_size", 50),
-        readableRepositories,
-      ),
+    const base = store.searchAssets(
+      url.searchParams.get("q") ?? "",
+      url.searchParams.get("sort") ?? "path",
+      order,
+      intParam(url, "page", 1),
+      intParam(url, "page_size", 50),
+      readableRepositories,
     );
+    // FR-150：`group_by=package&order=relevance` 才追加聚合字段，其余情形响应形状与
+    // 改造前逐字段一致（file 模式只多出 items[].sha1 这类纯追加键时也保持一致）。
+    const groupByPackage = url.searchParams.get("group_by") === "package";
+    const relevanceRequested = url.searchParams.get("order") === "relevance";
+    if (!groupByPackage) {
+      return HttpResponse.json(base);
+    }
+    const { packages, scanned } = store.searchPackages(
+      url.searchParams.get("q") ?? "",
+      readableRepositories,
+    );
+    return HttpResponse.json({
+      ...base,
+      packageTotal: packages.length,
+      packages,
+      aggregation: { scanned, truncated: false },
+      // relevance 在 package 模式下恒为生效排序（mock 也按同一比较器排好了包序）。
+      appliedOrder: relevanceRequested ? "relevance" : order,
+    });
   }),
 
   // —— 认证（公开）——

@@ -1,6 +1,7 @@
 package domain_test
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -392,7 +393,7 @@ func TestSearchAssetsIncludesGroupGrantedRepos(t *testing.T) {
 	}
 
 	// 传入用户 ID：服务层自行展开组归属，命中组授权的仓库。
-	out, err := svc.SearchAssets("anything", "", uid, false, "path", "asc", 10, 0)
+	out, err := svc.SearchAssets(context.Background(), "anything", "", uid, false, "path", "asc", 10, 0)
 	if err != nil {
 		t.Fatalf("搜索：%v", err)
 	}

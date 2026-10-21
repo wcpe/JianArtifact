@@ -19,6 +19,20 @@
 //   仅置后台刷新态（refreshing=true），旧内容留在原位、布局不跳，待新数据到达再就地替换。
 // - 首载（尚无数据在场）不受该选项影响，仍按原逻辑显示加载态；失败时旧数据仍在场则走
 //   refreshError（非阻断警告）分支，与缓存回放分支口径一致。
+//
+// abortable（可选，默认 false = 保持既有行为，FR-152）：
+// - 原实现只靠 `active` 闭包标志**丢弃**过期响应，网络请求照旧跑完——用户取消不了，
+//   换口径时后端也白算一遍。开启后每次 effect 运行都新建 AbortController 并把 signal
+//   透传给 fetcher，cleanup（卸载 / 口径切换）与显式 cancel() 都会真的 abort 请求。
+// - 为什么扩展现有钩子而不是让搜索页自管请求：搜索页需要的不是「一次请求」，而是缓存回放、
+//   在途状态、keepPreviousData、刷新失败非阻断、`reload` 重试这一整套既有语义；自管等于把
+//   这些逻辑复制一份，两套口径必然漂移。这里新增的是**可选**开关，未开启的 26 处调用点
+//   行为零变化，故为侵入最小的方案。
+// - 取消语义：abort 不算失败，静默回到空闲态（cancelled=true、error/refreshError 清空、
+//   loading/refreshing 归零，已展示的旧数据保留）。
+// - abortable 模式下**不参与同键在途去重**：去重共享的是同一个 Promise，无法只中止其中一个
+//   订阅者；且 React StrictMode 的「挂载→清理→再挂载」会把第一个控制器的请求 abort 掉，
+//   若第二次挂载复用到这个已被 abort 的 Promise，数据将永远拉不回来。
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError } from "../api/client";
@@ -57,7 +71,11 @@ export interface AsyncState<T> {
   forbidden: boolean;
   /** 后台刷新失败（旧数据仍在展示）；仅在提供 cacheKey 且存在旧数据时非空。 */
   refreshError: ApiError | null;
+  /** 用户主动取消（非错误）：请求已被 abort，界面应静默回到空闲态而不是报错。 */
+  cancelled: boolean;
   reload: () => void;
+  /** 中止在途请求并静默回到空闲态；未开启 abortable 时为空操作。 */
+  cancel: () => void;
 }
 
 export interface UseAsyncOptions {
@@ -71,6 +89,11 @@ export interface UseAsyncOptions {
    * 首载（尚无数据）不受影响，仍显示加载态。
    */
   keepPreviousData?: boolean;
+  /**
+   * 可中止模式（默认 false）：把 AbortSignal 透传给 fetcher，并在下次发起 / 卸载 / cancel()
+   * 时真的中止上一次请求。见文件头 abortable 段。
+   */
+  abortable?: boolean;
 }
 
 interface AsyncCacheEntry {
@@ -196,15 +219,16 @@ export function useVisibleRefresh(
   }, [intervalMs]);
 }
 
-/** 组件挂载即执行 fetcher；deps 变化重新拉取；返回状态与手动 reload。 */
+/** 组件挂载即执行 fetcher；deps 变化重新拉取；返回状态与手动 reload / cancel。 */
 export function useAsync<T>(
-  fetcher: () => Promise<T>,
+  fetcher: (signal: AbortSignal | undefined) => Promise<T>,
   deps: unknown[] = [],
   options: UseAsyncOptions = {},
 ): AsyncState<T> {
   const cacheKey = options.cacheKey;
   const staleMs = options.staleMs ?? DEFAULT_STALE_MS;
   const keepPreviousData = options.keepPreviousData ?? false;
+  const abortable = options.abortable ?? false;
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(
     () => cacheKey === undefined || readAsyncCache(cacheKey, staleMs) === null,
@@ -212,14 +236,23 @@ export function useAsync<T>(
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
   const [refreshError, setRefreshError] = useState<ApiError | null>(null);
+  const [cancelled, setCancelled] = useState(false);
   const [nonce, setNonce] = useState(0);
   // 当前 data 归属的缓存键与是否在场：跨键（如筛选变化）且无缓存时清空旧数据回到加载态；
   // ref 而非 state，供异步回调判定“旧数据是否在场”而不受闭包过期值影响。
   const dataKeyRef = useRef<string | undefined>(undefined);
   const hasDataRef = useRef(false);
+  // 在途请求的控制器：cancel() 通过它中止当前请求（仅 abortable 模式会赋值）。
+  const controllerRef = useRef<AbortController | null>(null);
 
   const reload = useCallback(() => {
     setNonce((n) => n + 1);
+  }, []);
+
+  // 取消：只负责中止在途请求，状态收尾交给该请求自己的 catch（同一处判定，不会两处打架）。
+  // 没有在途请求时是空操作——避免误 abort 一个已落定的控制器。
+  const cancel = useCallback(() => {
+    controllerRef.current?.abort();
   }, []);
 
   // FR-71：响应页眉刷新按钮的全局刷新事件。
@@ -231,6 +264,11 @@ export function useAsync<T>(
 
   useEffect(() => {
     let active = true;
+    // abortable：本次运行专属的控制器；cleanup 与 cancel() 都通过它中止请求。
+    const controller = abortable ? new AbortController() : null;
+    controllerRef.current = controller;
+    // 新一次取数开始即退出「已取消」态，UI 回到正常的加载/刷新反馈。
+    setCancelled(false);
     const cached = cacheKey !== undefined ? readAsyncCache<T>(cacheKey, staleMs) : null;
     if (cached !== null) {
       // 缓存回放：立即展示旧数据，同时保持刷新反馈（refreshing=true），
@@ -258,7 +296,11 @@ export function useAsync<T>(
         setLoading(true);
       }
     }
-    fetchOnce(cacheKey, fetcher)
+    // abortable 走独立请求（不参与同键去重，理由见文件头）；其余调用点保持原有单飞去重。
+    const pending = abortable
+      ? fetcher(controller?.signal)
+      : fetchOnce(cacheKey, () => fetcher(undefined));
+    pending
       .then((result) => {
         if (!active) return;
         // null 占位（如“快照就绪后再拉事件”的等待分支）不算数据在场，也不写缓存。
@@ -275,6 +317,19 @@ export function useAsync<T>(
       })
       .catch((err: unknown) => {
         if (!active) return;
+        if (controller?.signal.aborted) {
+          // 用户取消 / 口径切换引起的 abort 不是失败：静默回到空闲态，不落错误提示。
+          // 已展示的旧数据原样保留（取消后台刷新不该把上一次的结果也抹掉）。
+          setCancelled(true);
+          setError(null);
+          setRefreshError(null);
+          setLoading(false);
+          setRefreshing(false);
+          // 数据归属键回退到“未知”：否则取消后立即重查同一口径会被判为同键，
+          // 不进入上面的状态切换分支，界面上就没有任何加载反馈。
+          dataKeyRef.current = undefined;
+          return;
+        }
         const apiError = err instanceof ApiError ? err : new ApiError("unknown", String(err), 0);
         if (hasDataRef.current && dataKeyRef.current === cacheKey) {
           // 旧数据在场：保留展示，仅标记刷新失败。
@@ -293,8 +348,11 @@ export function useAsync<T>(
       });
     return () => {
       active = false;
+      // 卸载 / 口径切换时真正中止上一次请求；之后到达的响应靠 active 标志再兜一层。
+      controller?.abort();
+      controllerRef.current = null;
     };
-  }, [nonce, cacheKey, keepPreviousData, ...deps]);
+  }, [nonce, cacheKey, keepPreviousData, abortable, ...deps]);
 
   return {
     data,
@@ -303,6 +361,8 @@ export function useAsync<T>(
     error,
     forbidden: error?.status === 403,
     refreshError,
+    cancelled,
     reload,
+    cancel,
   };
 }

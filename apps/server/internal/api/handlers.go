@@ -60,6 +60,7 @@ type Deps struct {
 	LDAPAuth                LDAPAuthenticator                       // FR-35：LDAP 目录侧校验（nil = 未启用，登录不回退目录）
 	MaintenanceJobs         MaintenanceJobController                // FR-41：维护作业清单与手动触发（nil 时端点返回 503）
 	Restart                 RestartController                       // FR-40 追加七：一键重启（nil 时端点返回 503）
+	SearchIndex             SearchIndexController                   // FR-149：搜索索引回填状态与全量重建（nil 时端点返回 503）
 }
 
 // RestartController 是接口层对一键重启能力的最小依赖：同步预检、延迟触发重启动作。
@@ -87,6 +88,16 @@ type MaintenanceJobController interface {
 	// Run 按名触发一次执行并立即返回；名称未注册返回 scheduler.ErrJobNotFound，
 	// 作业正在运行返回 scheduler.ErrJobRunning。
 	Run(name string) error
+}
+
+// SearchIndexController 是接口层对索引回填服务的最小依赖：只读状态快照 + 受理一次重建。
+// 与 MaintenanceJobController 同一抽象风格：测试可注入桩，从而确定性地覆盖
+// 「运行中重复触发 409」这类并发语义，不必依赖真实回填的时序。
+type SearchIndexController interface {
+	// Status 返回回填状态快照（只读、可并发调用）。
+	Status() (domain.SearchIndexStatus, error)
+	// Rebuild 受理一次全量重建并立即返回；已有任务在跑时返回 domain.ErrSearchIndexRunning。
+	Rebuild() error
 }
 
 // LDAPAuthenticator 是 LDAP 目录侧校验能力（由 auth.LDAPVerifier 适配；测试可替换）。
@@ -130,6 +141,7 @@ type Handlers struct {
 	ldapAuth                LDAPAuthenticator            // FR-35：LDAP 目录侧校验（nil = 未启用）
 	maintenanceJobs         MaintenanceJobController     // FR-41：维护作业清单与手动触发
 	restart                 RestartController            // FR-40 追加七：一键重启（nil = 未装配）
+	searchIndex             SearchIndexController        // FR-149：搜索索引回填状态与全量重建
 }
 
 // NewHandlers 构造 Handlers。
@@ -171,6 +183,7 @@ func NewHandlers(d Deps) *Handlers {
 		ldapAuth:                d.LDAPAuth,
 		maintenanceJobs:         d.MaintenanceJobs,
 		restart:                 d.Restart,
+		searchIndex:             d.SearchIndex,
 	}
 }
 
@@ -380,6 +393,10 @@ func writeDomainErrWithOperationID(c *gin.Context, err error, operationID string
 		write(http.StatusConflict, "base_missing", err.Error())
 	case errors.Is(err, domain.ErrRestorePackageNotDone):
 		write(http.StatusConflict, "package_not_ready", err.Error())
+	case errors.Is(err, domain.ErrSearchTimeout):
+		// 本地查询超出预算（FR-149 §3.4）：不复用 upstream_timeout——那个表示「上游不畅」，
+		// 复用会让用户与运维分不清该查上游还是该缩小检索范围 / 查索引。
+		write(http.StatusGatewayTimeout, "search_timeout", "搜索超时，请缩小检索范围后重试")
 	default:
 		// 兜底：**带上原始错误文本**。
 		//

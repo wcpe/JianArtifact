@@ -117,6 +117,70 @@ func (r *RepoRepo) ListPublic() ([]Repository, error) {
 	return repos, err
 }
 
+// ListByNames 批量按名字解析仓库，返回以**请求名**为键的映射（别名也作为键）。
+//
+// 语义与逐个 GetByName 一致：先按主名匹配，未命中的再按别名解析到所属仓库（别名唯一，
+// 至多一行）；解析不到的名字不出现在结果里（调用方按缺席处理）。
+//
+// 查询次数固定为 2 条（主名 IN + 别名 IN），与名字个数无关：供 npm group 搜索这类
+// 「按成员聚合」的路径一次完成成员解析，避免逐个成员往返（每个成员原本要两条查询：
+// 主名 + 别名回填）。
+func (r *RepoRepo) ListByNames(names []string) (map[string]*Repository, error) {
+	out := make(map[string]*Repository, len(names))
+	cleaned := make([]string, 0, len(names))
+	seen := make(map[string]bool, len(names))
+	for _, name := range names {
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		cleaned = append(cleaned, name)
+	}
+	if len(cleaned) == 0 {
+		return out, nil
+	}
+	query, args, err := sqlx.In(
+		`SELECT id, name, format, type, visibility, description, config, online, created_at
+			FROM repository WHERE name IN (?)`, cleaned)
+	if err != nil {
+		return nil, err
+	}
+	var byPrimary []Repository
+	if err := r.db.Select(&byPrimary, r.db.Rebind(query), args...); err != nil {
+		return nil, err
+	}
+	// 主名与别名共享命名空间、全局唯一，因此同名不会既命中主名又命中别名；
+	// 但为了与 GetByName 的「主名优先」口径一致，这里仍然是先落主名、别名只填空缺。
+	for i := range byPrimary {
+		repo := byPrimary[i]
+		if seen[repo.Name] {
+			out[repo.Name] = &repo
+		}
+	}
+	aliasQuery, aliasArgs, err := sqlx.In(
+		`SELECT a.alias AS alias, r.id, r.name, r.format, r.type, r.visibility, r.description, r.config,
+			r.online, r.created_at
+			FROM repository_alias a JOIN repository r ON r.id = a.repository_id WHERE a.alias IN (?)`, cleaned)
+	if err != nil {
+		return nil, err
+	}
+	var byAlias []struct {
+		Alias string `db:"alias"`
+		Repository
+	}
+	if err := r.db.Select(&byAlias, r.db.Rebind(aliasQuery), aliasArgs...); err != nil {
+		return nil, err
+	}
+	for i := range byAlias {
+		if _, ok := out[byAlias[i].Alias]; ok {
+			continue
+		}
+		repo := byAlias[i].Repository
+		out[byAlias[i].Alias] = &repo
+	}
+	return out, nil
+}
+
 // Count 返回仓库总数。
 func (r *RepoRepo) Count() (int, error) {
 	var n int

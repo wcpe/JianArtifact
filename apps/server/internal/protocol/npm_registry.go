@@ -14,7 +14,9 @@ package protocol
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -296,6 +298,15 @@ func (h *NpmHandler) unpublishPackage(c *gin.Context, repoName, pkg string) {
 
 // registrySearch 处理 `npm search`（GET /-/v1/search?text=&size=&from=）：
 // 在本仓（group 则各成员）packument 中按路径子串检索，组装 npm 标准响应。
+//
+// 成员聚合由**一条语句**完成（FR-149 §3.6 的放大修复）：原实现对每个成员循环调用完整的
+// SearchAssets——成员越多越慢（每个成员各跑 COUNT + 分页 SELECT + facet 聚合，还要再算一遍
+// 可搜范围与仓库名映射），且每次都把 `from+size` 行拉回内存再去重。现在把成员仓库 ID 集合
+// 交给 SearchPerRepoByFilter，由 SQL 按成员分别取前 `from+size` 条（窗口函数），Go 侧只做
+// 去重与 packument 解析。
+//
+// 语义与响应结构保持不变：仍按成员顺序遍历、仍按 asset.path 去重、仍跳过非 packument、
+// `total` 仍是「去重且可解析的条目数」。
 func (h *NpmHandler) registrySearch(c *gin.Context, repoName string) {
 	if !h.authorize(c, repoName, "read") {
 		return
@@ -322,24 +333,59 @@ func (h *NpmHandler) registrySearch(c *gin.Context, repoName string) {
 		}
 		members = cfg.Members
 	}
+	// 成员名解析为仓库（含别名）：一次批量解析，避免逐个成员往返。
+	// 成员不存在就跳过（既有实现同样只是「这个成员搜不到东西」，静默跳过不改口径）。
+	type npmSearchMember struct {
+		name string // 主名：用于读取 packument
+		id   int64
+	}
+	byName, err := h.repoSvc.ReposByNames(members)
+	if err != nil {
+		writeAssetErr(c, err)
+		return
+	}
+	resolved := make([]npmSearchMember, 0, len(members))
+	seenMember := make(map[int64]bool, len(members))
+	memberIDs := make([]int64, 0, len(members))
+	for _, name := range members {
+		m, ok := byName[name]
+		if !ok || seenMember[m.ID] {
+			continue
+		}
+		seenMember[m.ID] = true
+		memberIDs = append(memberIDs, m.ID)
+		resolved = append(resolved, npmSearchMember{name: m.Name, id: m.ID})
+	}
 	// 排除 tarball 路径（含 /-/），仅命中 packument（路径即包名）。
-	keyword := text + ` -"/-/"`
+	keyword := text + ` -"/-"`
+	assets, serr := h.repoSvc.SearchAssetsPerRepo(c.Request.Context(), keyword, memberIDs, from+size)
+	if serr != nil {
+		// 既有容错口径：搜索失败不让整个请求失败（响应结构不变，返回已得结果）。
+		// 超时单独记一条中文 warn，避免「静默少结果」完全无痕（FR-149 §3.4）。
+		if errors.Is(serr, domain.ErrSearchTimeout) {
+			log.Printf("npm 搜索超时：仓库 %s 的成员检索超过搜索超时上限 %s，按既有容错口径降级为空结果：%v",
+				repoName, h.repoSvc.SearchTimeout(), serr)
+		} else {
+			log.Printf("npm 搜索失败：仓库 %s 的成员检索出错，按既有容错口径降级为空结果：%v", repoName, serr)
+		}
+		assets = nil
+	}
+	// 还原「逐成员搜索」的先后：先按 repository_id 分组，再按成员顺序遍历。
+	// 组内已是 path 升序（SQL 的 ORDER BY），因此结果顺序与成员循环时一致。
+	byRepo := make(map[int64][]repository.Asset, len(resolved))
+	for _, a := range assets {
+		byRepo[a.RepositoryID] = append(byRepo[a.RepositoryID], a)
+	}
 	objects := make([]any, 0, size)
 	seen := map[string]bool{}
 	total := 0
-	for _, member := range members {
-		// 仓库级 read 已由 authorize 判定，isAdmin=true 跳过二次 ACL；
-		// repoScope 限定单仓库保证不越权。
-		out, serr := h.repoSvc.SearchAssets(keyword, member, 0, true, "path", "asc", from+size, 0)
-		if serr != nil {
-			continue
-		}
-		for _, item := range out.Items {
-			if seen[item.Asset.Path] {
+	for _, m := range resolved {
+		for _, item := range byRepo[m.id] {
+			if seen[item.Path] {
 				continue
 			}
-			seen[item.Asset.Path] = true
-			obj := h.searchObject(member, item.Asset.Path)
+			seen[item.Path] = true
+			obj := h.searchObject(m.name, item.Path)
 			if obj == nil {
 				continue
 			}

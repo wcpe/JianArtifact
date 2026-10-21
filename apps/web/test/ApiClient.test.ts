@@ -215,4 +215,59 @@ describe("API 客户端错误响应", () => {
       expect((error as ApiError).operationId).toBe("op-failed-asset-operation");
     }
   });
+
+  // FR-152：取消必须是「真实中止网络请求」，而不是只在前端丢弃响应。
+  it("外部 AbortSignal 中止时真的中断在途请求，并归一化为 aborted", async () => {
+    let handlerAborted = false;
+    let notifyStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      notifyStarted = resolve;
+    });
+    server.use(
+      http.get("*/api/v1/settings", async ({ request }) => {
+        notifyStarted();
+        await new Promise<void>((resolve) => {
+          request.signal.addEventListener("abort", () => {
+            handlerAborted = true;
+            resolve();
+          });
+        });
+        return HttpResponse.json({});
+      }),
+    );
+
+    const controller = new AbortController();
+    const pending = request("/settings", { signal: controller.signal });
+    await started;
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({
+      name: "ApiError",
+      code: "aborted",
+      status: 0,
+    });
+    expect(handlerAborted).toBe(true);
+  });
+
+  it("超时兜底同样中断请求，并归一化为 timeout（供页面区分超时文案）", async () => {
+    let handlerAborted = false;
+    server.use(
+      http.get("*/api/v1/settings", async ({ request }) => {
+        await new Promise<void>((resolve) => {
+          request.signal.addEventListener("abort", () => {
+            handlerAborted = true;
+            resolve();
+          });
+        });
+        return HttpResponse.json({});
+      }),
+    );
+
+    await expect(request("/settings", { timeoutMs: 20 })).rejects.toMatchObject({
+      name: "ApiError",
+      code: "timeout",
+      status: 0,
+    });
+    expect(handlerAborted).toBe(true);
+  });
 });

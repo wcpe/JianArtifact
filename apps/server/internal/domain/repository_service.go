@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -8,6 +9,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/wcpe/jianartifact/apps/server/internal/formats"
@@ -18,6 +20,12 @@ import (
 // AnonymousUsername 是内置匿名主体的用户名（FR-66）：迁移脚本创建，
 // 不可登录、不可删除 / 改密 / 停用；ACL 中作为普通主体承接匿名授权。
 const AnonymousUsername = "anonymous"
+
+// searchTimeoutDefault 是搜索链路总预算的兜底默认值（FR-149 §3.4）。
+// 生产装配经 SetSearchTimeout 注入 JIAN_SEARCH_TIMEOUT_SECONDS 的解析结果，
+// 本常量只在未注入时兜底（测试构造与未接线的旧路径），必须与 config 的
+// defaultSearchTimeout 保持同值——改一处必须同步改另一处。
+const searchTimeoutDefault = 10 * time.Second
 
 // RepositoryService 处理仓库管理、ACL 与授权判定。
 type RepositoryService struct {
@@ -32,13 +40,30 @@ type RepositoryService struct {
 	recorder  ChangeRecorder
 	writeGate BusinessWriteGate
 	enabled   formats.Set
+	// searchTimeout 是搜索链路（网页搜索 / npm 搜索 / 后续 suggest）的总预算上限。
+	// 每个搜索入口用它派生一次 deadline，三条语句共享同一个 deadline（FR-149 §3.4）。
+	searchTimeout time.Duration
 }
 
 // NewRepositoryService 构造 RepositoryService。settings 与 users 供匿名判定
 // （全局开关 + anonymous 主体 ACL，FR-66）使用。
 func NewRepositoryService(repos *repository.RepoRepo, acls *repository.AclRepo, assets *repository.AssetRepo, settings *SettingService, users *repository.UserRepo) *RepositoryService {
-	return &RepositoryService{repos: repos, acls: acls, assets: assets, settings: settings, users: users, enabled: formats.Default()}
+	return &RepositoryService{repos: repos, acls: acls, assets: assets, settings: settings, users: users, enabled: formats.Default(),
+		searchTimeout: searchTimeoutDefault}
 }
+
+// SetSearchTimeout 注入搜索链路的总预算上限（FR-149 §3.4）。
+// 非正数不覆盖默认值：搜索是无界查询，关掉超时等于开放一个可以无限占用唯一数据库连接的
+// 入口，因此本项**没有禁用语义**（口径同 autoBlockBase，而非 storageCleanupInterval 的 0 禁用）。
+func (s *RepositoryService) SetSearchTimeout(d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	s.searchTimeout = d
+}
+
+// SearchTimeout 返回当前生效的搜索总预算，供协议层/运维排查读取。
+func (s *RepositoryService) SearchTimeout() time.Duration { return s.searchTimeout }
 
 // SetEnabledFormats 注入启动期格式能力集合。集合仅在装配阶段设置，运行中不切换。
 func (s *RepositoryService) SetEnabledFormats(enabled formats.Set) { s.enabled = enabled }
@@ -148,6 +173,14 @@ func (s *RepositoryService) Get(name string) (*repository.Repository, error) {
 		return nil, err
 	}
 	return r, nil
+}
+
+// ReposByNames 批量按名字解析仓库（含别名），返回以请求名为键的映射。
+//
+// 供「按成员聚合」的协议路径（npm group 搜索）一次完成成员解析：逐个 Get 会为每个成员发出
+// 两条查询（主名 + 别名回填），成员一多就与搜索本身的开销相乘；这里固定两条。
+func (s *RepositoryService) ReposByNames(names []string) (map[string]*repository.Repository, error) {
+	return s.repos.ListByNames(names)
 }
 
 // fillAliases 读取仓库别名并挂到模型上（供 API 响应展示）。
@@ -882,6 +915,84 @@ func (s *RepositoryService) CanAccessResolved(r *repository.Repository, subject 
 	return s.acls.HasPermission(r.ID, subject, action)
 }
 
+// ReadableRepoIDs 一次性求出 repos 中主体**可读**（ActionRead）的仓库 ID 集合。
+//
+// 这是 CanAccessResolved(..., ActionRead) 的批量版本，用于「先取一批仓库行、再逐行过滤可见性」
+// 的列表端点：逐行调用会按仓库各发一条 COUNT 查询，N 个仓库就是 N 条，而列表端点（尤其是
+// 无需认证的公开列表）是外部可反复触发的放大路径。本方法的语句数恒为常数，与仓库数无关。
+//
+// 语义与逐条调用 CanAccessResolved 严格等价，判定顺序也照抄它：
+//   - 匿名主体：先看匿名访问全局开关，关闭即**全部**拒绝（公开仓库也不例外，与
+//     canAccessAnonymous 的判定顺序一致），开启再把主体映射到内置 anonymous 用户；
+//   - 公开仓库（visibility=public）对 read 直接放行，不查 acl；
+//   - 其余仓库按 ACL 判定，口径为「用户自身 ∪ 用户所属任一用户组」，动作蕴含关系由
+//     satisfyingGrants 展开。
+//
+// ACL 判定复用仓储层批量方法 RepoIDsWithPermission（用户分支、组分支各一条 SQL），
+// 因此不存在第二套权限口径——若在这里另写一条 SQL，就会在「只授 write 能否读」这类
+// 蕴含关系上与逐仓库路径悄悄分叉，那是权限语义分叉，后果比性能问题严重得多。
+//
+// 返回的 map 只包含可读仓库，未出现的 ID 一律视为不可读；repos 为空时不发任何查询。
+// 管理员不受本方法约束（管理面由调用方分支处理），此处不判断管理员身份。
+//
+// 与 readableRepoIDs 的分工（刻意不合并）：后者服务于搜索 / suggest，需要的是「有序的
+// 可搜范围」——公开仓库在前、被授 read 的私有仓库在后，顺序会进入后续 SQL 与结果展示，
+// 且它以 ListPublic 为公开集来源（自己的 allRepos 可能被取数上限截断）、以 subjectID 入参
+// 内部再展开组归属。本方法只回答「手上这批行里哪些可读」，故直接吃调用方已展开的主体与
+// 行快照，不额外查仓库表、不重复展开组。两者的 ACL 判定仍收敛在同一处。
+func (s *RepositoryService) ReadableRepoIDs(repos []repository.Repository, subject repository.Subject) (map[int64]bool, error) {
+	readable := make(map[int64]bool, len(repos))
+	if len(repos) == 0 {
+		return readable, nil
+	}
+	// 匿名主体先过全局开关，且必须在「公开仓库放行」之前：开关关闭时匿名连公开仓库
+	// 都不可读，判定顺序反了就会变成一个「关掉开关仍能列出公开仓库」的越权口子。
+	aclSubject := subject
+	aclDisabled := false
+	if subject.IsAnonymous() {
+		enabled, err := s.settings.AnonymousAccessEnabled()
+		if err != nil {
+			return nil, err
+		}
+		if !enabled {
+			return readable, nil
+		}
+		anonID, err := s.anonymousSubjectID()
+		if err != nil {
+			return nil, err
+		}
+		if anonID == 0 {
+			// 内置 anonymous 用户缺失：ACL 分支无从判定，退化为「仅公开仓库可读」，
+			// 与 canAccessAnonymous 在该情形下的结论一致。
+			aclDisabled = true
+		} else {
+			aclSubject = repository.UserSubject(anonID)
+		}
+	}
+	// 公开仓库对 read 放行；私有仓库收集起来留待一次批量 ACL 判定。
+	privateIDs := make([]int64, 0, len(repos))
+	for i := range repos {
+		if repos[i].Visibility == "public" {
+			readable[repos[i].ID] = true
+			continue
+		}
+		privateIDs = append(privateIDs, repos[i].ID)
+	}
+	if aclDisabled || len(privateIDs) == 0 {
+		return readable, nil
+	}
+	granted, err := s.acls.RepoIDsWithPermission(privateIDs, aclSubject, repository.ActionRead)
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range privateIDs {
+		if granted[id] {
+			readable[id] = true
+		}
+	}
+	return readable, nil
+}
+
 // SubjectFor 把「用户 ID」组装为鉴权主体：补上该用户所属的用户组 ID 集合（FR-36）。
 //
 // 这是全系统构造组感知主体的**唯一入口**：授权判定需要组集合，但各调用点（管理面守卫、
@@ -1003,147 +1114,241 @@ type SearchFacetResult struct {
 	Count    int
 }
 
+// 搜索结果的分组维度（FR-150 §3.7）：`group_by=file` 为既有文件级视图（缺省），
+// `group_by=package` 在文件级视图之外额外给出包级聚合。缺省值必须保持 file——仓库内搜索
+// 依赖 `path asc` 的文件级结果建树，包级视图只在结果页显式请求。
+const (
+	SearchGroupByFile    = "file"
+	SearchGroupByPackage = "package"
+)
+
 // SearchOutput 全局搜索的完整返回：分页条目 + 精确总数 + 仓库聚合。
 type SearchOutput struct {
 	Items  []SearchResult
 	Total  int
 	Facets []SearchFacetResult
+
+	// 以下字段只在 `group_by=package` 时填充（FR-150 §3.7）。file 模式下保持零值，
+	// 因此既有响应形状（items / total / facets）逐字段不变。
+	Packages     []SearchPackage
+	PackageTotal int
+	Aggregation  SearchAggregation
 }
 
-// SearchAssets 跨仓库搜索制品路径，按可读权限过滤。
-// keyword 支持高级表达式（见 search_query.go）：-词 负筛选、repo:/-repo: 仓库
-// 限定、format:/-format: 格式筛选、ext:/-ext: 扩展名筛选、"引号短语"。
-// repoScope 非空时限定单仓库（浏览页内搜索，条件下推保证 total 精确）。
-// subjectID==0 表示匿名：受全局开关约束，可搜范围 = public ∪ anonymous 主体
-// 被授 read 的仓库（FR-66）；isAdmin 则搜全部。
-// 已认证主体的可搜范围含「其所属用户组被授 read」的仓库（FR-36）。
-// sort/order 控制结果排序，取值见 AssetRepo.SearchByFilter。
-func (s *RepositoryService) SearchAssets(keyword, repoScope string, subjectID int64, isAdmin bool, sort, order string, limit, offset int) (*SearchOutput, error) {
-	empty := &SearchOutput{Items: []SearchResult{}, Facets: []SearchFacetResult{}}
-	parsed := parseSearchQuery(keyword)
+// SearchAggregation 描述一次包级聚合的扫描情况（响应 aggregation）。
+type SearchAggregation struct {
+	Scanned   int  // 实际扫描的候选行数（受 maxAggregateRows 预算约束）
+	Truncated bool // 是否因预算不足被截断（此时各计数为下界，total 仍是精确值）
+}
+
+// searchScope 是一次搜索解析出的「可搜范围」：表达式、主查询仓库集合、facet 统计范围
+// 与仓库全量表。SearchAssets 与 SearchAggregate 共用它，避免 ACL 与表达式收窄逻辑出现
+// 两份实现（两份必然漂移，而漂移的后果是越权或漏搜）。
+type searchScope struct {
+	parsed   parsedSearch
+	repoIDs  []int64                 // 主查询范围；nil 表示不限（管理员搜全部）
+	facetIDs []int64                 // facet 统计范围（忽略 repo: 正向限定，供钻取切换）
+	allRepos []repository.Repository // 仓库全量表，供名称/格式映射复用
+	hasQuery bool                    // 是否需要对 asset 表发起主查询
+}
+
+// readableRepoIDs 计算一次请求的**可读仓库集合**（规格 §3.5 / §3.7 衔接点 2）。
+//
+// 返回：
+//   - repoIDs —— 可读仓库 ID；**nil 表示不限**（管理员搜全部）。顺序为「public 在前、
+//     被授 read 的私有仓库在后（按 allRepos 顺序）」，与引入本函数之前逐仓库判定时一致。
+//   - readable —— false 表示本次请求必然为空集（匿名被关闭，或非管理员没有任何可读仓库）。
+//     调用方应返回空结果而不是报错：suggest 若对此返回 403，就把「这里存在一个你看不到的
+//     仓库」当信号泄漏出去了（规格 §3.8）。
+//   - err —— 真实故障（设置读取 / 主体展开 / ACL 查询失败），原样上抛。
+//
+// **本函数是「允许仓库集合」判定的唯一实现**：搜索主链路（resolveSearchScope）与 suggest
+// 都调用它，不新增第三套权限逻辑。ACL 判定本身复用仓储层的批量方法 RepoIDsWithPermission
+// （固定两条 SQL，与逐仓库 HasPermission 结果一致）。
+//
+// allRepos/allErr 由调用方传入：仓库全量列举是同一请求内多处共用的产物（表达式收窄、仓库名
+// 映射、suggest 的 format 映射），此处不再重复查询。allErr 非空时**静默跳过私有仓库补充**
+// ——这是改造成批量判定前的既有容错口径（公开仓库仍可搜），本函数保持它不变。
+func (s *RepositoryService) readableRepoIDs(subjectID int64, isAdmin bool, allRepos []repository.Repository, allErr error) ([]int64, bool, error) {
+	if isAdmin {
+		// 管理员搜全部：nil 表示不限。
+		return nil, true, nil
+	}
 	// 匿名请求：开关关闭直接返回空集（handler 另拦 401，此处兜底）。
 	aclSubject := subjectID
-	if subjectID == 0 && !isAdmin {
+	if subjectID == 0 {
 		enabled, err := s.settings.AnonymousAccessEnabled()
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		if !enabled {
-			return empty, nil
+			return nil, false, nil
 		}
 		if aclSubject, err = s.anonymousSubjectID(); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
-	// 收集可读仓库 ID
-	var repoIDs []int64
-	if isAdmin {
-		// 管理员搜全部，传空 repoIDs
-		repoIDs = nil
-	} else {
-		pubRepos, err := s.repos.ListPublic()
-		if err != nil {
-			return nil, err
-		}
+	pubRepos, err := s.repos.ListPublic()
+	if err != nil {
+		return nil, false, err
+	}
+	repoIDs := make([]int64, 0, len(pubRepos))
+	for _, r := range pubRepos {
+		repoIDs = append(repoIDs, r.ID)
+	}
+	// 已登录主体或匿名映射到的 anonymous 主体：加上 ACL 授权的私有仓库。
+	// 主体按用户 ID 展开组归属，使「组被授 read」的仓库也进入可搜范围（FR-36）。
+	// 判定是**一次批量查询**（用户分支 + 组分支各一条 SQL），不随仓库数增长。
+	if aclSubject > 0 && allErr == nil {
+		pubSet := make(map[int64]bool, len(pubRepos))
 		for _, r := range pubRepos {
+			pubSet[r.ID] = true
+		}
+		privateIDs := make([]int64, 0, len(allRepos))
+		for _, r := range allRepos {
+			if pubSet[r.ID] {
+				continue
+			}
+			privateIDs = append(privateIDs, r.ID)
+		}
+		subject, err := s.SubjectFor(aclSubject)
+		if err != nil {
+			return nil, false, err
+		}
+		granted, err := s.acls.RepoIDsWithPermission(privateIDs, subject, repository.ActionRead)
+		if err != nil {
+			return nil, false, err
+		}
+		// 按 allRepos 的顺序追加，保持「公开在前、私有在后」的既有可搜范围顺序。
+		for _, r := range allRepos {
+			if pubSet[r.ID] || !granted[r.ID] {
+				continue
+			}
 			repoIDs = append(repoIDs, r.ID)
 		}
-		// 已登录主体或匿名映射到的 anonymous 主体：加上 ACL 授权的私有仓库。
-		// 主体按用户 ID 展开组归属，使「组被授 read」的仓库也进入可搜范围（FR-36）。
-		if aclSubject > 0 {
-			allRepos, _ := s.repos.List(1000, 0)
-			pubSet := make(map[int64]bool)
-			for _, r := range pubRepos {
-				pubSet[r.ID] = true
-			}
-			subject, err := s.SubjectFor(aclSubject)
-			if err != nil {
-				return nil, err
-			}
-			for _, r := range allRepos {
-				if pubSet[r.ID] {
-					continue
-				}
-				if ok, _ := s.acls.HasPermission(r.ID, subject, repository.ActionRead); ok {
-					repoIDs = append(repoIDs, r.ID)
-				}
-			}
-		}
-		if len(repoIDs) == 0 {
-			return empty, nil
-		}
+	}
+	if len(repoIDs) == 0 {
+		return nil, false, nil
+	}
+	return repoIDs, true, nil
+}
+
+// resolveSearchScope 解析表达式并计算可搜范围。
+// 返回 ok=false 表示本次搜索必然为空集（匿名被关闭 / 没有任何可读仓库），调用方直接返回空。
+func (s *RepositoryService) resolveSearchScope(keyword, repoScope string, subjectID int64, isAdmin bool) (*searchScope, bool, error) {
+	parsed := parseSearchQuery(keyword)
+	// 索引是否可用：每次搜索判定一次（重建会把 completed_at 打回 NULL，因此不缓存），
+	// 结果下推给仓储层决定走 FTS 候选集还是原 LIKE 路径。
+	indexReady, err := s.assets.SearchIndexReady()
+	if err != nil {
+		return nil, false, err
+	}
+	parsed.filter.UseFullTextIndex = indexReady
+	// allRepos 是本请求对仓库表的**唯一**一次全量列举：ACL 候选、表达式收窄与仓库名映射都
+	// 复用它，避免同一请求内向仓库表发多次「取全量」，也避免名字映射按结果条目逐个回查。
+	allRepos, allErr := s.repos.List(1000, 0)
+	// 可读仓库集合：匿名开关、public ∪ 被授 read 的私有仓库、批量 ACL 判定都收敛在
+	// readableRepoIDs 里，搜索与 suggest 共用同一份实现（规格 §3.7 衔接点 2）。
+	repoIDs, readable, err := s.readableRepoIDs(subjectID, isAdmin, allRepos, allErr)
+	if err != nil {
+		return nil, false, err
+	}
+	if !readable {
+		return nil, false, nil
 	}
 	// repo:/format: 表达式或单仓库限定：按仓库元数据收窄搜索范围。
 	// facetIDs 是聚合统计用的范围：忽略 repo: 正向限定（保留 -repo:/format: 等），
 	// 让用户点选某仓库钻取后，聚合条上仍能看到其他仓库的命中数以便切换。
 	facetIDs := repoIDs
 	if repoScope != "" || parsed.hasRepoMeta() {
-		allRepos, err := s.repos.List(1000, 0)
-		if err != nil {
-			return nil, err
+		if allErr != nil {
+			return nil, false, allErr
 		}
-		allowed := make(map[int64]bool, len(repoIDs))
-		for _, id := range repoIDs {
-			allowed[id] = true
-		}
-		narrow := func(withPositiveRepos bool) []int64 {
-			var out []int64
-			for _, r := range allRepos {
-				if !isAdmin && !allowed[r.ID] {
-					continue
-				}
-				if repoScope != "" && r.Name != repoScope {
-					continue
-				}
-				if withPositiveRepos && len(parsed.repos) > 0 && !slices.Contains(parsed.repos, r.Name) {
-					continue
-				}
-				if slices.Contains(parsed.notRepos, r.Name) {
-					continue
-				}
-				if len(parsed.formats) > 0 && !slices.Contains(parsed.formats, r.Format) {
-					continue
-				}
-				if slices.Contains(parsed.notFormats, r.Format) {
-					continue
-				}
-				out = append(out, r.ID)
+		// allowed 为 nil 表示不限（管理员搜全部），与既有 isAdmin 分支等价。
+		var allowed map[int64]bool
+		if !isAdmin {
+			allowed = make(map[int64]bool, len(repoIDs))
+			for _, id := range repoIDs {
+				allowed[id] = true
 			}
-			return out
 		}
-		repoIDs = narrow(true)
-		facetIDs = narrow(false)
+		repoIDs = filterReposByExpr(allRepos, allowed, repoScope, parsed, true)
+		facetIDs = filterReposByExpr(allRepos, allowed, repoScope, parsed, false)
 		if len(facetIDs) == 0 {
-			return empty, nil
+			return nil, false, nil
 		}
 	}
+	hasQuery := len(repoIDs) > 0 || (isAdmin && repoScope == "" && !parsed.hasRepoMeta())
+	return &searchScope{
+		parsed:   parsed,
+		repoIDs:  repoIDs,
+		facetIDs: facetIDs,
+		allRepos: allRepos,
+		hasQuery: hasQuery,
+	}, true, nil
+}
+
+// SearchAssets 跨仓库搜索制品路径，按可读权限过滤。
+// keyword 支持高级表达式（见 search_query.go）：-词 负筛选、repo:/-repo: 仓库
+// 限定、format:/-format: 格式筛选、ext:/-ext: 扩展名筛选、version:/-version: 版本段
+// 严格匹配、"引号短语"。
+// repoScope 非空时限定单仓库（浏览页内搜索，条件下推保证 total 精确）。
+// subjectID==0 表示匿名：受全局开关约束，可搜范围 = public ∪ anonymous 主体
+// 被授 read 的仓库（FR-66）；isAdmin 则搜全部。
+// 已认证主体的可搜范围含「其所属用户组被授 read」的仓库（FR-36）。
+// sort/order 控制结果排序，取值见 AssetRepo.SearchByFilter。
+//
+// ctx 是搜索链路的**唯一**超时来源（FR-149 §3.4）：本方法在入口按 searchTimeout 派生一次
+// deadline 并向下传给三条语句，命中超时统一归一为 ErrSearchTimeout。三个调用方
+// （/api/v1/search、npm registrySearch、后续 suggest）因此共享同一套语义——放在 handler 层
+// 会让每个调用方各写一遍，放在仓储层则拿不到「一次搜索的总预算」。
+//
+// 本方法**只做文件级搜索**：包级聚合（FR-150）在新增的 SearchAggregate 里，两者的签名与
+// 响应形状互不影响，因此 npm registrySearch 直接调用本方法时行为一字不变（规格 §3.8）。
+func (s *RepositoryService) SearchAssets(ctx context.Context, keyword, repoScope string, subjectID int64, isAdmin bool, sort, order string, limit, offset int) (*SearchOutput, error) {
+	ctx, cancel := s.searchContext(ctx)
+	defer cancel()
+
+	empty := &SearchOutput{Items: []SearchResult{}, Facets: []SearchFacetResult{}}
+	scope, ok, err := s.resolveSearchScope(keyword, repoScope, subjectID, isAdmin)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return empty, nil
+	}
+	parsed, repoIDs, facetIDs, allRepos := scope.parsed, scope.repoIDs, scope.facetIDs, scope.allRepos
 	var (
 		assets []repository.Asset
 		total  int
 	)
-	if len(repoIDs) > 0 || (isAdmin && repoScope == "" && !parsed.hasRepoMeta()) {
-		var err error
-		assets, total, err = s.assets.SearchByFilter(parsed.filter, repoIDs, sort, order, limit, offset)
+	if scope.hasQuery {
+		assets, total, err = s.assets.SearchByFilter(ctx, parsed.filter, repoIDs, sort, order, limit, offset)
 		if err != nil {
-			return nil, err
+			return nil, normalizeSearchErr(ctx, err)
 		}
 	}
 	// 同一路径条件的按仓库聚合（钻取导航用）
-	rawFacets, err := s.assets.SearchFacetsByFilter(parsed.filter, facetIDs)
+	rawFacets, err := s.assets.SearchFacetsByFilter(ctx, parsed.filter, facetIDs)
 	if err != nil {
-		return nil, err
+		return nil, normalizeSearchErr(ctx, err)
 	}
-	// 构建 repoID -> name 映射（结果条目与 facets 共用）
-	idNameMap := make(map[int64]string)
+	// 构建 repoID -> name 映射（结果条目与 facets 共用）：复用上面的全量仓库列表一次遍历，
+	// 未命中才回落单条查询（防御「两次查询之间仓库被删」的窗口；返回值口径不变，查不到为空串）。
+	idNameMap := make(map[int64]string, len(allRepos))
+	for _, r := range allRepos {
+		idNameMap[r.ID] = r.Name
+	}
 	repoName := func(id int64) string {
-		name, ok := idNameMap[id]
-		if !ok {
-			if r, _ := s.repos.GetByID(id); r != nil {
-				name = r.Name
-			}
-			idNameMap[id] = name
+		if name, ok := idNameMap[id]; ok {
+			return name
 		}
-		return name
+		if r, _ := s.repos.GetByID(id); r != nil {
+			idNameMap[id] = r.Name
+			return r.Name
+		}
+		idNameMap[id] = ""
+		return ""
 	}
 	out := &SearchOutput{
 		Items:  make([]SearchResult, 0, len(assets)),
@@ -1157,6 +1362,207 @@ func (s *RepositoryService) SearchAssets(keyword, repoScope string, subjectID in
 		out.Facets = append(out.Facets, SearchFacetResult{RepoName: repoName(f.RepositoryID), Count: f.Count})
 	}
 	return out, nil
+}
+
+// SearchAggregate 在文件级搜索结果之外追加包级聚合（FR-150 §3.3 ~ §3.7）。
+//
+// groupBy 取 SearchGroupByFile（缺省）或 SearchGroupByPackage。file 模式直接委托给
+// SearchAssets——**行为、签名与查询条数完全不变**，npm registrySearch 因此不受本 FR 影响
+// （规格 §3.8 理由 1）。
+//
+// package 模式在 SearchAssets 的全部既有产物（items / total / facets，语义与分页都不变）
+// 之外多扫一次候选行（SearchAllByFilter，预算 maxAggregateRows），在 Go 侧聚合成
+// packages / packageTotal / aggregation。`total` 仍来自 COUNT(*)，不因聚合改写。
+func (s *RepositoryService) SearchAggregate(ctx context.Context, keyword, repoScope string, subjectID int64, isAdmin bool, sort, order, groupBy string, limit, offset int) (*SearchOutput, error) {
+	if groupBy != SearchGroupByPackage {
+		return s.SearchAssets(ctx, keyword, repoScope, subjectID, isAdmin, sort, order, limit, offset)
+	}
+	ctx, cancel := s.searchContext(ctx)
+	defer cancel()
+
+	empty := &SearchOutput{Items: []SearchResult{}, Facets: []SearchFacetResult{}, Packages: []SearchPackage{}}
+	scope, ok, err := s.resolveSearchScope(keyword, repoScope, subjectID, isAdmin)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return empty, nil
+	}
+	parsed, repoIDs, facetIDs, allRepos := scope.parsed, scope.repoIDs, scope.facetIDs, scope.allRepos
+	var (
+		assets []repository.Asset
+		total  int
+	)
+	if scope.hasQuery {
+		assets, total, err = s.assets.SearchByFilter(ctx, parsed.filter, repoIDs, sort, order, limit, offset)
+		if err != nil {
+			return nil, normalizeSearchErr(ctx, err)
+		}
+	}
+	rawFacets, err := s.assets.SearchFacetsByFilter(ctx, parsed.filter, facetIDs)
+	if err != nil {
+		return nil, normalizeSearchErr(ctx, err)
+	}
+	// 聚合扫描：与分页/计数共用同一段 WHERE，因此聚合看到的就是「命中的全部文件」。
+	var (
+		rows      []repository.Asset
+		truncated bool
+	)
+	if scope.hasQuery {
+		rows, truncated, err = s.assets.SearchAllByFilter(ctx, parsed.filter, repoIDs, maxAggregateRows)
+		if err != nil {
+			return nil, normalizeSearchErr(ctx, err)
+		}
+	}
+
+	// 仓库元数据映射：复用同一次全量列举，未命中的才回查单条（防御「两次查询之间仓库被删」）。
+	byID := make(map[int64]repository.Repository, len(allRepos))
+	for _, r := range allRepos {
+		byID[r.ID] = r
+	}
+	repoOf := func(id int64) repository.Repository {
+		if r, ok := byID[id]; ok {
+			return r
+		}
+		r, _ := s.repos.GetByID(id)
+		if r == nil {
+			// 仓库已不存在：名称为空、格式为空 → ParseCoordinates 一律降级为无坐标条目，
+			// 条目本身仍在结果里（不因仓库消失而丢行）。
+			byID[id] = repository.Repository{ID: id}
+			return byID[id]
+		}
+		byID[id] = *r
+		return *r
+	}
+
+	sources := make([]PackageSource, 0, len(rows))
+	for i := range rows {
+		repo := repoOf(rows[i].RepositoryID)
+		sources = append(sources, PackageSource{RepoName: repo.Name, Format: repo.Format, Asset: rows[i]})
+	}
+	// 精度判定只看**普通关键词**（IncludeTerms）：version:/ext:/repo: 等限定词不是相关度信号。
+	packages := BuildPackageGroups(sources, parsed.filter.IncludeTerms)
+	SortSearchPackages(packages)
+
+	out := &SearchOutput{
+		Items:        make([]SearchResult, 0, len(assets)),
+		Total:        total,
+		Facets:       make([]SearchFacetResult, 0, len(rawFacets)),
+		Packages:     packages,
+		PackageTotal: len(packages),
+		Aggregation:  SearchAggregation{Scanned: len(rows), Truncated: truncated},
+	}
+	repoName := func(id int64) string { return repoOf(id).Name }
+	for i := range assets {
+		out.Items = append(out.Items, SearchResult{RepoName: repoName(assets[i].RepositoryID), Asset: assets[i]})
+	}
+	for _, f := range rawFacets {
+		out.Facets = append(out.Facets, SearchFacetResult{RepoName: repoName(f.RepositoryID), Count: f.Count})
+	}
+	return out, nil
+}
+
+// SearchAssetsPerRepo 在给定仓库集合内**按仓库分别**取前 perRepoLimit 条命中（各自 path 升序）。
+//
+// 供 npm registry 搜索使用：它原本对 group 的每个成员各调用一次完整 SearchAssets——成员越多
+// 越慢（每个成员都会跑 COUNT + 分页 SELECT + facet 聚合，还要再算一遍可搜范围与仓库名映射），
+// 且每次都把 `from+size` 行拉回内存再去重。这里用**一条语句**完成「每个成员各取前 N 条」，
+// 成本与成员数解耦，返回的行集与「逐成员各搜一次」逐条一致，去重与 total 口径仍由调用方在
+// Go 侧按成员顺序完成（语义不变）。
+//
+// 不做 ACL 判定：调用方已完成仓库级授权，并用显式 repoIDs 限定范围。
+func (s *RepositoryService) SearchAssetsPerRepo(ctx context.Context, keyword string, repoIDs []int64, perRepoLimit int) ([]repository.Asset, error) {
+	if len(repoIDs) == 0 || perRepoLimit <= 0 {
+		return nil, nil
+	}
+	ctx, cancel := s.searchContext(ctx)
+	defer cancel()
+
+	parsed := parseSearchQuery(keyword)
+	indexReady, err := s.assets.SearchIndexReady()
+	if err != nil {
+		return nil, err
+	}
+	parsed.filter.UseFullTextIndex = indexReady
+	// repo:/format: 仍按仓库元数据收窄（与逐仓库搜索时的收窄口径共用同一个函数）。
+	if parsed.hasRepoMeta() {
+		allRepos, err := s.repos.List(1000, 0)
+		if err != nil {
+			return nil, err
+		}
+		allowed := make(map[int64]bool, len(repoIDs))
+		for _, id := range repoIDs {
+			allowed[id] = true
+		}
+		repoIDs = filterReposByExpr(allRepos, allowed, "", parsed, true)
+	}
+	assets, err := s.assets.SearchPerRepoByFilter(ctx, parsed.filter, repoIDs, perRepoLimit)
+	if err != nil {
+		return nil, normalizeSearchErr(ctx, err)
+	}
+	return assets, nil
+}
+
+// searchContext 为一次搜索派生带总预算的 ctx。
+//
+// 上限是「一次搜索」的预算，而不是「一条语句」的预算：COUNT、分页 SELECT 与 facet 聚合共享
+// 同一个 deadline，这才是用户感知到的响应时间。ctx 为空（未接线的旧调用）时退化为
+// context.Background()，仍受同一个上限保护。
+func (s *RepositoryService) searchContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithTimeout(ctx, s.searchTimeout)
+}
+
+// normalizeSearchErr 把搜索链路的中止原因归一为 ErrSearchTimeout。
+//
+// 驱动在 ctx 超时/取消时返回的错误文案不统一（context deadline exceeded、context canceled
+// 或被包装过的版本），领域侧统一成一个可 errors.Is 判定的哨兵，供 API 映射 504 + search_timeout、
+// 供 npm 侧记 warn 日志。非超时错误原样返回，不掩饰真实故障。
+func normalizeSearchErr(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return fmt.Errorf("%w（%v）", ErrSearchTimeout, err)
+	}
+	// 驱动可能返回与 ctx 无关的文案：以 ctx 自身状态兜底判定，避免超时被当成 500。
+	if ctx.Err() != nil {
+		return fmt.Errorf("%w（%v）", ErrSearchTimeout, err)
+	}
+	return err
+}
+
+// filterReposByExpr 按 repo:/format: 表达式与单仓库限定收窄仓库集合。
+//
+// allowed 为 nil 表示不限（管理员搜全部）；withPositiveRepos 为 false 时忽略 repo: 正向限定，
+// 供 facet 统计保留「其它仓库的命中数」以便钻取切换。本函数是收窄口径的**唯一**实现，
+// 搜索主链路与 npm 的按成员搜索都复用它，避免两处判定漂移。
+func filterReposByExpr(all []repository.Repository, allowed map[int64]bool, repoScope string, p parsedSearch, withPositiveRepos bool) []int64 {
+	var out []int64
+	for _, r := range all {
+		if allowed != nil && !allowed[r.ID] {
+			continue
+		}
+		if repoScope != "" && r.Name != repoScope {
+			continue
+		}
+		if withPositiveRepos && len(p.repos) > 0 && !slices.Contains(p.repos, r.Name) {
+			continue
+		}
+		if slices.Contains(p.notRepos, r.Name) {
+			continue
+		}
+		if len(p.formats) > 0 && !slices.Contains(p.formats, r.Format) {
+			continue
+		}
+		if slices.Contains(p.notFormats, r.Format) {
+			continue
+		}
+		out = append(out, r.ID)
+	}
+	return out
 }
 
 // collectMemberIDs 收集 group 仓库的所有成员 ID（一层展开）。

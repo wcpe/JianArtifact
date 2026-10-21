@@ -4,6 +4,7 @@
 import type { components } from "./schema.gen";
 import { mockVolumeFactor, subscribeMockConsole } from "./console";
 import { resetObservabilityStore } from "./observability";
+import { buildSearchPackages, type MockSearchPackage } from "./searchPackage";
 import { MOCK_APP_VERSION, MOCK_MIGRATION_VERSION } from "./version";
 
 type Schemas = components["schemas"];
@@ -1050,6 +1051,68 @@ function searchTokens(query: string): string[] {
   return query.match(/(?:[^\s"]+|"[^"]*")+/g) ?? [];
 }
 
+/** 命中行：仓库 format 一并带上——包级聚合的坐标解析要按仓库格式门控（规格 §3.2）。 */
+type SearchMatch = AssetSummary & { repository: string; format: string };
+
+/**
+ * 解析搜索表达式并返回命中集合 / 仓库分面 / 普通关键词。
+ *
+ * 抽出来的原因：文件级列表（`searchAssets`）与包级聚合（`searchPackages`）必须共享
+ * **同一套**筛选口径，否则 mock 里会出现"树里的文件与列表条数对不上"这种假 bug。
+ */
+function collectSearchMatches(query: string, allowedRepositories?: readonly string[]): {
+  matches: SearchMatch[];
+  facets: Map<string, number>;
+  terms: string[];
+} {
+  const tokens = searchTokens(query);
+  const repos = new Set<string>();
+  const excludedRepos = new Set<string>();
+  const formats = new Set<string>();
+  const extensions = new Set<string>();
+  const excludedExtensions = new Set<string>();
+  const terms: string[] = [];
+  const excludedTerms: string[] = [];
+  for (const rawToken of tokens) {
+    const token = rawToken.replace(/^"|"$/g, "");
+    if (token.startsWith("repo:")) repos.add(token.slice("repo:".length));
+    else if (token.startsWith("-repo:")) excludedRepos.add(token.slice("-repo:".length));
+    else if (token.startsWith("format:")) formats.add(token.slice("format:".length));
+    else if (token.startsWith("ext:")) extensions.add(token.slice("ext:".length));
+    else if (token.startsWith("-ext:")) excludedExtensions.add(token.slice("-ext:".length));
+    else if (token.startsWith("-")) excludedTerms.push(token.slice(1).toLowerCase());
+    else terms.push(token.toLowerCase());
+  }
+  const allowed = allowedRepositories ? new Set(allowedRepositories) : null;
+  const all: SearchMatch[] = state.repositories
+    .filter((repo) => !allowed || allowed.has(repo.name))
+    .flatMap((repo) =>
+      (state.assets[repo.name] ?? []).map((asset) => ({
+        repository: repo.name,
+        format: repo.format,
+        ...asset,
+      })),
+    );
+  const matches = all.filter((asset) => {
+    const path = asset.path.toLowerCase();
+    const extension = asset.path.split(".").at(-1) ?? "";
+    return (
+      (repos.size === 0 || repos.has(asset.repository)) &&
+      !excludedRepos.has(asset.repository) &&
+      (formats.size === 0 || formats.has(asset.format)) &&
+      (extensions.size === 0 || extensions.has(extension)) &&
+      !excludedExtensions.has(extension) &&
+      terms.every((term) => path.includes(term)) &&
+      excludedTerms.every((term) => !path.includes(term))
+    );
+  });
+  const facets = new Map<string, number>();
+  for (const asset of matches) {
+    facets.set(asset.repository, (facets.get(asset.repository) ?? 0) + 1);
+  }
+  return { matches, facets, terms };
+}
+
 /** FR-114：MD-2 状态合并——offline 优先覆盖为 OFFLINE；hosted 不返回；online 的 proxy 返回内存态。 */
 function statusFor(repo: Repository): ConnectionStatus | undefined {
   if (repo.type === "hosted") {
@@ -1927,51 +1990,7 @@ export const store = {
     total: number;
     facets: { repository: string; count: number }[];
   } {
-    const tokens = searchTokens(query);
-    const repos = new Set<string>();
-    const excludedRepos = new Set<string>();
-    const formats = new Set<string>();
-    const extensions = new Set<string>();
-    const excludedExtensions = new Set<string>();
-    const terms: string[] = [];
-    const excludedTerms: string[] = [];
-    for (const rawToken of tokens) {
-      const token = rawToken.replace(/^"|"$/g, "");
-      if (token.startsWith("repo:")) repos.add(token.slice("repo:".length));
-      else if (token.startsWith("-repo:")) excludedRepos.add(token.slice("-repo:".length));
-      else if (token.startsWith("format:")) formats.add(token.slice("format:".length));
-      else if (token.startsWith("ext:")) extensions.add(token.slice("ext:".length));
-      else if (token.startsWith("-ext:")) excludedExtensions.add(token.slice("-ext:".length));
-      else if (token.startsWith("-")) excludedTerms.push(token.slice(1).toLowerCase());
-      else terms.push(token.toLowerCase());
-    }
-    const allowed = allowedRepositories ? new Set(allowedRepositories) : null;
-    const all = state.repositories
-      .filter((repo) => !allowed || allowed.has(repo.name))
-      .flatMap((repo) =>
-        (state.assets[repo.name] ?? []).map((asset) => ({
-          repository: repo.name,
-          format: repo.format,
-          ...asset,
-        })),
-      );
-    const matches = all.filter((asset) => {
-      const path = asset.path.toLowerCase();
-      const extension = asset.path.split(".").at(-1) ?? "";
-      return (
-        (repos.size === 0 || repos.has(asset.repository)) &&
-        !excludedRepos.has(asset.repository) &&
-        (formats.size === 0 || formats.has(asset.format)) &&
-        (extensions.size === 0 || extensions.has(extension)) &&
-        !excludedExtensions.has(extension) &&
-        terms.every((term) => path.includes(term)) &&
-        excludedTerms.every((term) => !path.includes(term))
-      );
-    });
-    const facets = new Map<string, number>();
-    for (const asset of matches) {
-      facets.set(asset.repository, (facets.get(asset.repository) ?? 0) + 1);
-    }
+    const { matches, facets } = collectSearchMatches(query, allowedRepositories);
     const direction = order === "desc" ? -1 : 1;
     matches.sort((left, right) => {
       const leftValue =
@@ -2016,6 +2035,20 @@ export const store = {
             right.count - left.count || left.repository.localeCompare(right.repository),
         ),
     };
+  },
+
+  /**
+   * 开发态包级聚合（FR-150 的 `group_by=package`）：与 `searchAssets` 共享命中集合，
+   * 按规格 §3.2–§3.5 聚成包 / 版本 / 文件三级结构。
+   *
+   * `scanned` 是参与聚合的行数；mock 不模拟 5000 行预算，故 `truncated` 恒为 false。
+   */
+  searchPackages(
+    query: string,
+    allowedRepositories?: readonly string[],
+  ): { packages: MockSearchPackage[]; scanned: number } {
+    const { matches, terms } = collectSearchMatches(query, allowedRepositories);
+    return { packages: buildSearchPackages(matches, terms), scanned: matches.length };
   },
 
   /** FR-73：Maven 网页上传——登记主文件/pom/metadata 及各自校验和的 asset 摘要。

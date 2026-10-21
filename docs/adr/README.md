@@ -39,6 +39,7 @@
 | [0026](0026-primary-standby-pull-credentials.md)                  | 级联树逐跳拉取凭据的密封存储与轮换                                          | 已被 0027 取代；随 FR-138 退役            |
 | [0027](0027-package-based-node-backup-and-relocation.md)          | 以一致性备份包取代实时复制通道作为节点搬迁手段                              | 已接受；取代 0023、0026 的搬迁定位        |
 | [0028](0028-repository-alias-and-rename.md)                       | 仓库别名与重命名的语义：共享命名空间、旧名转别名、历史不回填                | 已接受                                    |
+| [0030](0030-fts5-search-index.md)                                 | 全局搜索以 FTS5 trigram 虚拟表作派生索引，应用层同步、后台回填、可重建      | 已接受                                    |
 
 > 模板：状态 / 背景 / 决策 / 理由 / 后果 / 备选方案。
 

@@ -111,22 +111,27 @@ func (h *Handlers) ListRepositories(c *gin.Context, params ListRepositoriesParam
 		var allRows []repository.Repository
 		allRows, statsMap, err = h.listAllRepositories(sortBy, order)
 		if err == nil {
-			visible := make([]repository.Repository, 0, len(allRows))
-			for i := range allRows {
-				// 行已在手上，用按对象鉴权：CanAccess 会再按名查一次库，N 个仓库就是 N 次
-				// 额外查询（公开列表端点无需认证，是可控的放大路径）。
-				allowed, accessErr := h.repos.CanAccessResolved(&allRows[i], subject, repository.ActionRead)
-				if accessErr == nil && allowed {
-					visible = append(visible, allRows[i])
+			// 可见性判定走一次批量 ACL：行已在手上，逐仓调 CanAccessResolved 会按仓库
+			// 各发一条 COUNT 查询（N 个仓库 = N 条，公开列表端点无需认证，是可放大的路径）。
+			// ReadableRepoIDs 与之语义等价（公开仓库放行 + 用户自身 ∪ 所属组的授权并集，
+			// 匿名主体另受全局开关约束），但语句数与仓库数无关。
+			var readable map[int64]bool
+			readable, err = h.repos.ReadableRepoIDs(allRows, subject)
+			if err == nil {
+				visible := make([]repository.Repository, 0, len(allRows))
+				for i := range allRows {
+					if readable[allRows[i].ID] {
+						visible = append(visible, allRows[i])
+					}
 				}
-			}
-			total = len(visible)
-			if offset < len(visible) {
-				end := offset + limit
-				if end > len(visible) {
-					end = len(visible)
+				total = len(visible)
+				if offset < len(visible) {
+					end := offset + limit
+					if end > len(visible) {
+						end = len(visible)
+					}
+					rows = visible[offset:end]
 				}
-				rows = visible[offset:end]
 			}
 		}
 	}
@@ -673,12 +678,17 @@ func (h *Handlers) ListPublicRepositories(c *gin.Context) {
 		writeDomainErr(c, err)
 		return
 	}
+	// 一次批量判定匿名主体的可读集合，取代原先逐仓 CanAccessResolved（N 个仓库 N 次查询）。
+	// 匿名主体恒不属于任何组；判定顺序（匿名开关 → 公开放行 → ACL）由 ReadableRepoIDs
+	// 内部单点保证，与 canAccessAnonymous 等价。
+	readable, err := h.repos.ReadableRepoIDs(rows, repository.AnonymousSubject())
+	if err != nil {
+		writeDomainErr(c, err)
+		return
+	}
 	items := make([]Repository, 0, len(rows))
 	for i := range rows {
-		// 同上：行已在手上，按对象鉴权省掉逐行按名查库。
-		// 端点本身无需认证，故主体恒为匿名（不属于任何组）。
-		allowed, accessErr := h.repos.CanAccessResolved(&rows[i], repository.AnonymousSubject(), repository.ActionRead)
-		if accessErr != nil || !allowed {
+		if !readable[rows[i].ID] {
 			continue
 		}
 		stats := statsMap[rows[i].ID]
@@ -869,8 +879,22 @@ func (h *Handlers) SearchAssets(c *gin.Context) {
 	default:
 		sort = ""
 	}
+	// 分组维度（FR-150 §3.7）：缺省 file——仓库内搜索依赖 path asc 的文件级结果建树，
+	// 因此**默认值不能变**。package 只在结果页显式请求时启用。
+	groupBy := c.Query("group_by")
+	if groupBy != domain.SearchGroupByPackage {
+		groupBy = domain.SearchGroupByFile
+	}
 	order := c.Query("order")
-	if order != "desc" {
+	relevanceRequested := order == "relevance"
+	switch {
+	case relevanceRequested && groupBy == domain.SearchGroupByPackage:
+		// relevance 的排序在领域层聚合阶段完成（§3.5），不下推 SQL；文件级 items 仍按
+		// path asc 分页——relevance 需要全量候选集，而分页是无状态的，两者只能解耦。
+		sort, order = "", "asc"
+	case order == "desc":
+		order = "desc"
+	default:
 		order = "asc"
 	}
 
@@ -910,7 +934,9 @@ func (h *Handlers) SearchAssets(c *gin.Context) {
 		}
 	}
 
-	out, err := h.repos.SearchAssets(q, repoFilter, subjectID, isAdmin, sort, order, limit, offset)
+	// 超时预算由领域层统一施加（FR-149 §3.4）：这里只把请求上下文（含客户端断开即取消）
+	// 传下去，不再额外套一层 deadline，避免双层 deadline 让报错语义混乱。
+	out, err := h.repos.SearchAggregate(c.Request.Context(), q, repoFilter, subjectID, isAdmin, sort, order, groupBy, limit, offset)
 	if err != nil {
 		writeDomainErr(c, err)
 		return
@@ -921,7 +947,9 @@ func (h *Handlers) SearchAssets(c *gin.Context) {
 		Path       string `json:"path"`
 		Size       int64  `json:"size"`
 		Hash       string `json:"hash"`
-		UpdatedAt  string `json:"updatedAt"`
+		// Sha1 是纯追加键（FR-150 §3.7）：结果详情面板要用它做校验和展示，老客户端忽略即可。
+		Sha1      string `json:"sha1"`
+		UpdatedAt string `json:"updatedAt"`
 	}
 	type searchFacet struct {
 		Repository string `json:"repository"`
@@ -934,6 +962,7 @@ func (h *Handlers) SearchAssets(c *gin.Context) {
 			Path:       r.Asset.Path,
 			Size:       r.Asset.Size,
 			Hash:       r.Asset.BlobHash,
+			Sha1:       r.Asset.Sha1,
 			UpdatedAt:  r.Asset.UpdatedAt,
 		})
 	}
@@ -941,7 +970,112 @@ func (h *Handlers) SearchAssets(c *gin.Context) {
 	for _, f := range out.Facets {
 		facets = append(facets, searchFacet{Repository: f.RepoName, Count: f.Count})
 	}
-	c.JSON(http.StatusOK, gin.H{"items": items, "total": out.Total, "facets": facets})
+	response := gin.H{"items": items, "total": out.Total, "facets": facets}
+	// package 模式才追加聚合字段：`group_by=file`（缺省）下响应形状与改造前逐字段一致，
+	// 只多出 items[].sha1 这个纯追加键。
+	if groupBy == domain.SearchGroupByPackage {
+		response["packageTotal"] = out.PackageTotal
+		response["packages"] = toAPISearchPackages(out.Packages)
+		response["aggregation"] = gin.H{
+			"scanned":   out.Aggregation.Scanned,
+			"truncated": out.Aggregation.Truncated,
+		}
+		// packages 恒按相关度比较器排序（§3.5）：其它 sort 键只在前端重排，不下推包序。
+		response["appliedOrder"] = "relevance"
+	} else if relevanceRequested {
+		// relevance 在 file 模式下静默回落 path asc（§3.5），回告实际生效的排序值，
+		// 免得前端"以为在按相关度排"。
+		response["appliedOrder"] = order
+	}
+	c.JSON(http.StatusOK, response)
+}
+
+// toAPISearchPackages 把领域层的聚合结果转成响应结构（FR-150 §3.7）。
+// files 一律输出为数组（无文件时是 []，不是 null），前端不必区分两种空值形态。
+func toAPISearchPackages(pkgs []domain.SearchPackage) []searchPackage {
+	out := make([]searchPackage, 0, len(pkgs))
+	for _, p := range pkgs {
+		versions := make([]searchPackageVersion, 0, len(p.Versions))
+		for _, v := range p.Versions {
+			versions = append(versions, searchPackageVersion{
+				Version:         v.Version,
+				Precision:       v.Precision,
+				FileCount:       v.FileCount,
+				Size:            v.Size,
+				LatestUpdatedAt: v.LatestUpdatedAt,
+				Files:           toAPISearchPackageFiles(v.Files),
+			})
+		}
+		out = append(out, searchPackage{
+			Coordinate:      p.Coordinate,
+			Kind:            p.Kind,
+			Repositories:    append([]string{}, p.Repositories...),
+			VersionCount:    p.VersionCount,
+			FileCount:       p.FileCount,
+			BestPrecision:   p.BestPrecision,
+			LatestUpdatedAt: p.LatestUpdatedAt,
+			TopVersion:      p.TopVersion,
+			Versions:        versions,
+			Files:           toAPISearchPackageFiles(p.Files),
+		})
+	}
+	return out
+}
+
+// toAPISearchPackageFiles 转换文件级明细。
+func toAPISearchPackageFiles(files []domain.PackageFile) []searchPackageFile {
+	out := make([]searchPackageFile, 0, len(files))
+	for _, f := range files {
+		out = append(out, searchPackageFile{
+			Name:       f.Name,
+			Path:       f.Path,
+			Repository: f.Repository,
+			Size:       f.Size,
+			Sha1:       f.Sha1,
+			UpdatedAt:  f.UpdatedAt,
+			FileKind:   f.FileKind,
+		})
+	}
+	return out
+}
+
+// searchPackage 是响应 packages[] 的单个包节点（FR-150 §3.7）。
+//
+// files 只在 kind=file 的「无坐标」伪包上出现：规格 §3.2 要求这类条目跳过版本层、
+// 文件直接挂在包下，因此需要包级 files 承载它们。有坐标的包（maven / npm）没有这个键——
+// 它们的文件都在 versions[].files 里，多输出一个空数组只会偏离规格的 JSON 形状。
+type searchPackage struct {
+	Coordinate      string                 `json:"coordinate"`
+	Kind            string                 `json:"kind"`
+	Repositories    []string               `json:"repositories"`
+	VersionCount    int                    `json:"versionCount"`
+	FileCount       int                    `json:"fileCount"`
+	BestPrecision   string                 `json:"bestPrecision"`
+	LatestUpdatedAt string                 `json:"latestUpdatedAt"`
+	TopVersion      string                 `json:"topVersion"`
+	Versions        []searchPackageVersion `json:"versions"`
+	Files           []searchPackageFile    `json:"files,omitempty"`
+}
+
+// searchPackageVersion 是响应 packages[].versions[] 的单个版本组。
+type searchPackageVersion struct {
+	Version         string              `json:"version"`
+	Precision       string              `json:"precision"`
+	FileCount       int                 `json:"fileCount"`
+	Size            int64               `json:"size"`
+	LatestUpdatedAt string              `json:"latestUpdatedAt"`
+	Files           []searchPackageFile `json:"files"`
+}
+
+// searchPackageFile 是响应 packages[].versions[].files[] 的单个文件行。
+type searchPackageFile struct {
+	Name       string `json:"name"`
+	Path       string `json:"path"`
+	Repository string `json:"repository"`
+	Size       int64  `json:"size"`
+	Sha1       string `json:"sha1"`
+	UpdatedAt  string `json:"updatedAt"`
+	FileKind   string `json:"fileKind"`
 }
 
 // parseIntQuery 尝试将字符串解析为 int。

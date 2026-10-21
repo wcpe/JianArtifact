@@ -33,6 +33,15 @@ FR-36 与 FR-43 均已开发完成并待验收，FR-40 已开发完成、待用�
 | FR-40 | [`0.12.0-auto-backup-and-drill.md`](0.12.0-auto-backup-and-drill.md)                               | 周期化自动备份与恢复演练 | 开发完成，待用户验收 |
 | FR-43 | [`0.12.0-upstream-circuit-breaker.md`](0.12.0-upstream-circuit-breaker.md)                         | 上游断路器补强           | 开发完成，待用户验收 |
 
+## 2.2 计划规格（搜索体验与性能，FR-149 ~ FR-153）
+
+搜索体验与性能改造（PRD §4.4.2）尚未开工，版本归属待开窗时确定，故单列于此。FR-149 / FR-150 / FR-153 需 spec（FR-149、FR-150 已起草，FR-153 与 FR-149 同档）；FR-151 / FR-152 免 spec，规格仅作开发工作稿。
+
+| FR             | 规格                                                                   | 主题                         | 状态 |
+| -------------- | ---------------------------------------------------------------------- | ---------------------------- | ---- |
+| FR-149 / FR-153 | [`search-index-and-performance.md`](search-index-and-performance.md)   | 搜索索引与查询性能 / 搜索建议 | 草拟 |
+| FR-150 / FR-151 | [`search-package-aggregation.md`](search-package-aggregation.md)       | 包级聚合与分层排序 / 主从双栏 | 草拟 |
+
 ## 3. 0.9.0 规格（已发布）
 
 `0.9.0` 是控制台体验收敛线（`VERSION=0.9.0`，已发布）。该窗口只对「需要 spec 的净新能力」立规格；增强既有 FR 的收敛项直接登记在 `docs/PRD.md` §4.4.1。

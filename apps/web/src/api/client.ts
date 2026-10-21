@@ -139,6 +139,21 @@ function isJsonResponse(response: Response) {
   return contentType.includes("application/json") || contentType.includes("+json");
 }
 
+/**
+ * 判定 fetch 抛出的「已被中止」错误。
+ *
+ * 浏览器抛 `DOMException(name=AbortError)`，而 Node/undici（测试与部分运行环境）抛的是
+ * 普通 `Error` 且 `name` 同为 `AbortError`。只判 `instanceof DOMException` 会漏掉后者，
+ * 中止被误归为 `network`——超时也就拿不到 `timeout` 语义，页面无法给出「超时」提示。
+ */
+function isAbortError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { name?: unknown }).name === "AbortError"
+  );
+}
+
 async function parseSuccessJson<T>(response: Response): Promise<T> {
   try {
     return (await response.json()) as T;
@@ -215,9 +230,12 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
         method,
         headers,
         body: payload,
+        // FR-152：把内部控制器交给 fetch，abort 才会真正中断网络请求；
+        // 只 abort 而不传 signal 时，超时/取消都只是「前端不再等待」，请求仍在后端跑。
+        signal: controller.signal,
       });
     } catch (e) {
-      if (signal?.aborted || (e instanceof DOMException && e.name === "AbortError")) {
+      if (signal?.aborted || isAbortError(e)) {
         throw new ApiError(
           timedOut ? "timeout" : "aborted",
           timedOut ? "请求超时" : "请求已取消或超时",
@@ -292,9 +310,15 @@ export async function requestBinary<T>(
   try {
     let response: Response;
     try {
-      response = await fetch(requestUrl, { method, headers, body });
+      response = await fetch(requestUrl, {
+        method,
+        headers,
+        body,
+        // 与 request() 一致：不把 signal 交给 fetch 的话，超时/取消不会真正中断传输。
+        signal: controller.signal,
+      });
     } catch (e) {
-      if (signal?.aborted || (e instanceof DOMException && e.name === "AbortError")) {
+      if (signal?.aborted || isAbortError(e)) {
         throw new ApiError(
           timedOut ? "timeout" : "aborted",
           timedOut ? "请求超时" : "请求已取消或超时",
