@@ -10,7 +10,7 @@ cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 echo "==> [0/3] 规范门禁：需求编号不得进入代码（见 .claude/rules/comments.md §5）"
 # 放在最前：只读文件、耗时极短，让违规在跑完几分钟测试之前就暴露。
-./scripts/check-fr-numbers.sh
+bash scripts/check-fr-numbers.sh
 
 echo "==> [1/3] 前端质量门（格式 / 静态 / 类型 / 测试 / 构建）"
 pnpm install --frozen-lockfile
