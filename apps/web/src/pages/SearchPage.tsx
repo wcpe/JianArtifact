@@ -736,7 +736,10 @@ export function SearchPage() {
             取消按钮挂在进度条上，点击即 abort 在途请求并静默回到空闲态。 */}
         {q ? (
           <Box style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 8 }}>
-            {searching && <SearchProgress onCancel={state.cancel} />}
+            {/* key={q}：换关键词时强制重挂，让进度与「已用时长」从零开始。
+                没有它的话，新搜索在旧搜索仍在飞行时发起，searching 从 true 到 true
+                不变化、组件不卸载，用户会看到「100% + 已用 8 秒」而这次搜索才刚开始。 */}
+            {searching && <SearchProgress key={q} onCancel={state.cancel} />}
             {resultArea}
           </Box>
         ) : (

@@ -47,7 +47,7 @@ func Open(dbPath string) (*DB, error) {
 //   - 写事务由 SQLite 自身串行化：同一时刻只有一个连接能拿到 RESERVED 锁，其余写者在
 //     锁外等待。串行化保证来自数据库引擎（文件锁 + WAL），**不依赖连接数**——
 //     此前把池限制为 1 条，只是把并发请求排到池外，并未提供任何额外保证。
-//   - 写者与写者 / 写者与读者之间的短暂锁竞争由 DSN 里的 busy_timeout(5000) 处理：
+//   - 写者与写者 / 写者与读者之间的锁竞争由 DSN 里的 busy_timeout(30000) 处理：
 //     拿不到锁时驱动会重试而非立即报错。
 //   - 事务一律以 BEGIN IMMEDIATE 开启（DSN 的 _txlock=immediate）：deferred 事务在
 //     「先读后写」的锁升级点被 SQLite 直接判 SQLITE_BUSY（不进入 busy handler，因为
@@ -91,7 +91,14 @@ func OpenWithMaxConns(dbPath string, maxConns int) (*DB, error) {
 // busy handler（继续等会与对方的读锁互相死锁），busy_timeout 因此形同虚设。
 func buildDSN(dbPath string) string {
 	q := url.Values{}
-	q.Add("_pragma", "busy_timeout(5000)")
+	// busy_timeout(30000)：等待写锁的上限，而不是查询超时。
+	//
+	// 连接数放宽到 8 之后，写者从「在连接池里无限排队」变成「在 SQLite 层等写锁」，
+	// 因此这个值直接决定并发写者能忍多久。5 秒对短事务够用，但仓库删除、批量资产操作、
+	// 备份导入都在**单个事务里**处理最多数百条资产（每条含 3~4 条 DML + 索引维护），
+	// 慢盘上可能超过 5 秒——超时后写者拿到的是 SQLITE_BUSY，对用户表现为 500。
+	// 30 秒覆盖这些已知的长事务形态；真正的查询预算由上层 context 控制，不靠这里。
+	q.Add("_pragma", "busy_timeout(30000)")
 	q.Add("_pragma", "journal_mode(WAL)")
 	q.Add("_pragma", "foreign_keys(ON)")
 	q.Add("_pragma", "synchronous(NORMAL)")

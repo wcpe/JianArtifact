@@ -399,7 +399,7 @@ func TestBuildDSNUsesImmediateTxLock(t *testing.T) {
 	if !strings.Contains(dsn, "_txlock=immediate") {
 		t.Fatalf("主库 DSN 必须带 _txlock=immediate（否则并发写会撞 database is locked），实际：%s", dsn)
 	}
-	for _, want := range []string{"busy_timeout%285000%29", "journal_mode%28WAL%29", "foreign_keys%28ON%29", "synchronous%28NORMAL%29"} {
+	for _, want := range []string{"busy_timeout%2830000%29", "journal_mode%28WAL%29", "foreign_keys%28ON%29", "synchronous%28NORMAL%29"} {
 		if !strings.Contains(dsn, want) {
 			t.Fatalf("DSN 缺少既有 pragma %s，实际：%s", want, dsn)
 		}

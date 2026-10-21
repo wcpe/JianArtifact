@@ -4,8 +4,10 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
+	"log"
 	"sort"
 	"strings"
+	"time"
 )
 
 //go:embed migrations/*.sql
@@ -42,9 +44,16 @@ func (db *DB) Migrate() error {
 		if applied[version] {
 			continue
 		}
+		// 每个待应用的迁移打开始/结束两行。大库上的建索引（如 asset 全表扫描）
+		// 可能持续数分钟，期间进程不监听端口；没有这两行日志，运维只能看到
+		// 「容器一直没起来」，无法判断是卡在哪个迁移。
+		log.Printf("数据库迁移开始：%s", name)
+		start := time.Now()
 		if err := db.applyMigration(name, version); err != nil {
+			log.Printf("数据库迁移失败：%s（耗时 %v）：%v", name, time.Since(start).Round(time.Millisecond), err)
 			return err
 		}
+		log.Printf("数据库迁移完成：%s（耗时 %v）", name, time.Since(start).Round(time.Millisecond))
 	}
 	return nil
 }

@@ -104,7 +104,10 @@ export function SearchSuggestInput({
     setActiveIndex(-1);
     const timer = window.setTimeout(() => {
       // 每次发起前中止上一次：旧请求的响应不再有任何价值。
-      pending?.abort();
+      // 必须读 ref 的**当前值**而不是 effect 运行时捕获的快照——连续键入时
+      // 定时器可能晚于 Effect 执行 250ms，届时 ref 已被后续 Effect 更新，
+      // 用旧快照会 abort 一个早已结束的 controller，而在途的新请求跑完全程。
+      controllerRef.current?.abort();
       const controller = new AbortController();
       controllerRef.current = controller;
       void suggestSearch({ q, limit: SUGGEST_LIMIT, signal: controller.signal })

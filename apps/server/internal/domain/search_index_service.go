@@ -106,6 +106,8 @@ type SearchIndexStore interface {
 	WriteBatch(rows []repository.SearchIndexRow, lastID int64) error
 	// MarkCompleted 把回填标记为完成。
 	MarkCompleted() error
+	// DemoteOnMissing 在检出漏索引时把完成标记降级为未完成，使查询退回全表检索。
+	DemoteOnMissing() error
 	// Reset 清空索引并重置水位（completed_at 归 NULL）。
 	Reset() error
 	// CountIndexed 数出水位以内的 asset 行数。
@@ -223,7 +225,13 @@ func (s *SearchIndexService) logDrift(stage string) {
 	}
 	hint := "孤儿索引行只占用索引空间、不影响结果，可择机重建（POST /api/v1/search/index/rebuild）"
 	if drift.HasMissing() {
-		hint = "存在漏索引的资产行（这些制品搜不到），需重建索引修复（POST /api/v1/search/index/rebuild）"
+		hint = "存在漏索引的资产行（这些制品搜不到），已自动降级为全表检索以保证结果完整，需重建索引恢复加速（POST /api/v1/search/index/rebuild）"
+		// 降级而不只是报告：查询路径只看 completed_at，若不联动，端点会报 ready=false
+		// 而搜索仍在用索引、继续静默少返回行。清掉 completed_at 后搜索立即退回 LIKE
+		// （慢但完整），重建完成时 MarkCompleted 会自动恢复。
+		if err := s.store.DemoteOnMissing(); err != nil {
+			log.Printf("%s：漏索引降级失败（搜索仍在用不完整索引）：%v", stage, err)
+		}
 	}
 	log.Printf("%s：索引漂移——索引 %d 行、资产 %d 行、漏索引 %d 行、孤儿索引行 %d 行；%s",
 		stage, drift.IndexRows, drift.AssetRows, drift.MissingRows, drift.OrphanRows, hint)

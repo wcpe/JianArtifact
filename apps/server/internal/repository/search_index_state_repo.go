@@ -131,6 +131,23 @@ func (r *SearchIndexStateRepo) MarkCompleted() error {
 	return err
 }
 
+// DemoteOnMissing 在检出「漏索引」时把 completed_at 降级为 NULL，让查询路径退回 LIKE。
+//
+// 为什么需要它：查询路径的就绪判定是 SearchIndexReady（只看 completed_at），而漂移检测
+// 在状态端点与启动自检里。若不联动，会出现「端点报 ready=false、搜索却仍走 FTS 并静默
+// 少返回行」——运维看到 ready=false 会以为已在降级（慢但全），实际还在漏结果。
+//
+// 只降级、不重建：重建是管理员动作（可能要跑很久），自动触发会把一次偶发漂移放大成
+// 长时间的慢搜索。降级后搜索立即恢复正确（慢），重建完成后 MarkCompleted 自动恢复。
+//
+// 只清 completed_at 而**不动 last_id**：水位保留，重建时可以接着灌，不必从头开始。
+func (r *SearchIndexStateRepo) DemoteOnMissing() error {
+	_, err := r.db.Exec(
+		`UPDATE search_index_state SET completed_at = NULL, updated_at = datetime('now')
+		 WHERE id = 1 AND completed_at IS NOT NULL`)
+	return err
+}
+
 // Reset 清空全文索引并把回填水位归零（completed_at 也回到 NULL），供全量重建使用。
 //
 // 一个事务内完成「清空索引 + 重置水位」：两者若分开提交，中间窗口会让并发读者看到

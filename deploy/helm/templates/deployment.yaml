@@ -39,6 +39,17 @@ spec:
                 name: {{ include "jianartifact.fullname" . }}-config
             - secretRef:
                 name: {{ include "jianartifact.fullname" . }}-secret
+          # startupProbe 必须存在：schema 迁移在监听器起来之前执行，
+          # 而大库上的建索引（如 asset 全表扫描）可能远超 liveness 的容忍窗口。
+          # 没有它时，迁移期间 /healthz 不可达 → kubelet 判定失败并 SIGKILL →
+          # 事务回滚 → 重启后从头再建 → 崩溃循环，升级永远完不成。
+          # 这里给 10 分钟（30s × 20），超时说明迁移真的异常。
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 30
+            failureThreshold: 20
           livenessProbe:
             httpGet:
               path: /healthz
