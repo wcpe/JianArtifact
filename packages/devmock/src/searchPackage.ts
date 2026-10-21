@@ -223,8 +223,7 @@ function compareVersionVectorDesc(a: string, b: string): number {
 }
 
 function compareFilesKindThenPath(a: MockSearchPackageFile, b: MockSearchPackageFile): number {
-  const diff =
-    (FILE_KIND_PRIORITY[a.fileKind] ?? 8) - (FILE_KIND_PRIORITY[b.fileKind] ?? 8);
+  const diff = (FILE_KIND_PRIORITY[a.fileKind] ?? 8) - (FILE_KIND_PRIORITY[b.fileKind] ?? 8);
   return diff !== 0 ? diff : a.path.localeCompare(b.path);
 }
 
@@ -316,7 +315,8 @@ export function buildSearchPackages(
     pkg.files?.sort(compareFilesKindThenPath);
     pkg.versionCount = pkg.versions.length;
     pkg.bestPrecision = pkg.versions.reduce<MockPrecision>(
-      (best, version) => (PRECISION_RANK[version.precision] < PRECISION_RANK[best] ? version.precision : best),
+      (best, version) =>
+        PRECISION_RANK[version.precision] < PRECISION_RANK[best] ? version.precision : best,
       "none",
     );
     pkg.topVersion = pkg.versions[0]?.version ?? "";

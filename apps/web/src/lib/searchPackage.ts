@@ -406,12 +406,8 @@ export function sortPackages(
     })
     .sort(
       (a, b) =>
-        compareFilesSafe(
-          representativeOfPackage(a),
-          representativeOfPackage(b),
-          key,
-          direction,
-        ) || comparePath(a.coordinate, b.coordinate),
+        compareFilesSafe(representativeOfPackage(a), representativeOfPackage(b), key, direction) ||
+        comparePath(a.coordinate, b.coordinate),
     );
 }
 

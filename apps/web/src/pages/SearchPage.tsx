@@ -97,14 +97,7 @@ export const SEARCH_SORT_KEY = "jianartifact.search.sort";
 /** 默认排序：相关度（服务端聚合序）。 */
 const DEFAULT_SORT: SortPreference = { by: "relevance", order: "relevance" };
 
-const SORT_KEYS: readonly SortKey[] = [
-  "relevance",
-  "name",
-  "repo",
-  "path",
-  "size",
-  "updated",
-];
+const SORT_KEYS: readonly SortKey[] = ["relevance", "name", "repo", "path", "size", "updated"];
 
 function isSortKey(value: unknown): value is SortKey {
   return typeof value === "string" && (SORT_KEYS as readonly string[]).includes(value);
@@ -598,9 +591,7 @@ export function SearchPage() {
           <Button
             variant={filtersOpen ? "filled" : "light"}
             leftSection={<IconFilter size={14} />}
-            rightSection={
-              filtersOpen ? <IconChevronUp size={14} /> : <IconChevronDown size={14} />
-            }
+            rightSection={filtersOpen ? <IconChevronUp size={14} /> : <IconChevronDown size={14} />}
             onClick={() => setFiltersOpen((o) => !o)}
           >
             {t("search.filters")}
@@ -671,12 +662,7 @@ export function SearchPage() {
         {/* 仓库聚合钻取条：全部 + 各仓库命中数（点击限定 / 还原） */}
         {q && facets.length > 0 && (
           <Group gap={8}>
-            <Chip
-              checked={!activeRepo}
-              onChange={() => drillRepo(null)}
-              size="xs"
-              variant="light"
-            >
+            <Chip checked={!activeRepo} onChange={() => drillRepo(null)} size="xs" variant="light">
               {t("search.facetAll")} {facetTotal.toLocaleString(currentLocaleTag())}
             </Chip>
             {facets.map((f) => (

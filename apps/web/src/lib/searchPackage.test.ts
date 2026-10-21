@@ -198,7 +198,14 @@ describe("sortPackages 非 relevance 的前端重排", () => {
           fileCount: 1,
           size: 300,
           latestUpdatedAt: "2026-10-20 00:00:00",
-          files: [file({ name: "charlie.jar", path: "c/charlie.jar", size: 300, updatedAt: "2026-10-20 00:00:00" })],
+          files: [
+            file({
+              name: "charlie.jar",
+              path: "c/charlie.jar",
+              size: 300,
+              updatedAt: "2026-10-20 00:00:00",
+            }),
+          ],
         },
       ],
     }),
@@ -211,7 +218,14 @@ describe("sortPackages 非 relevance 的前端重排", () => {
           fileCount: 1,
           size: 100,
           latestUpdatedAt: "2026-10-18 00:00:00",
-          files: [file({ name: "alpha.jar", path: "a/alpha.jar", size: 100, updatedAt: "2026-10-18 00:00:00" })],
+          files: [
+            file({
+              name: "alpha.jar",
+              path: "a/alpha.jar",
+              size: 100,
+              updatedAt: "2026-10-18 00:00:00",
+            }),
+          ],
         },
       ],
     }),
@@ -224,7 +238,14 @@ describe("sortPackages 非 relevance 的前端重排", () => {
           fileCount: 1,
           size: 200,
           latestUpdatedAt: "2026-10-19 00:00:00",
-          files: [file({ name: "bravo.jar", path: "b/bravo.jar", size: 200, updatedAt: "2026-10-19 00:00:00" })],
+          files: [
+            file({
+              name: "bravo.jar",
+              path: "b/bravo.jar",
+              size: 200,
+              updatedAt: "2026-10-19 00:00:00",
+            }),
+          ],
         },
       ],
     }),
@@ -394,7 +415,10 @@ describe("resolveSelection / firstFileOfPackage 选中项解析", () => {
           fileCount: 2,
           size: 200,
           latestUpdatedAt: "2026-10-18 09:12:33",
-          files: [file({ name: "a.jar", path: "a.jar" }), file({ name: "b.pom", path: "b.pom", fileKind: "pom" })],
+          files: [
+            file({ name: "a.jar", path: "a.jar" }),
+            file({ name: "b.pom", path: "b.pom", fileKind: "pom" }),
+          ],
         },
       ],
     });

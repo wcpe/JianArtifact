@@ -3,7 +3,17 @@
 // 与左栏树的分工：树负责"在哪个版本里"，详情负责"这个文件是什么、怎么取走"。
 // 同版本文件列表可就地切换选中项（不返回列表、不重发请求）；窄屏下由父级传入
 // `onBack` 渲染顶部返回行，双栏下不传即不渲染。
-import { Badge, Button, Code, Group, Paper, Stack, Text, Title, UnstyledButton } from "@mantine/core";
+import {
+  Badge,
+  Button,
+  Code,
+  Group,
+  Paper,
+  Stack,
+  Text,
+  Title,
+  UnstyledButton,
+} from "@mantine/core";
 import { IconArrowLeft, IconDownload, IconExternalLink } from "@tabler/icons-react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";

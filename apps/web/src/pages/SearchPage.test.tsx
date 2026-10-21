@@ -50,12 +50,7 @@ const PACKAGES: SearchPackage[] = [
         size: 2048,
         latestUpdatedAt: "2026-10-18 09:12:33",
         files: [
-          file(
-            "foo-1.17.12.jar",
-            "com/example/foo/1.17.12/foo-1.17.12.jar",
-            "jar",
-            1523712,
-          ),
+          file("foo-1.17.12.jar", "com/example/foo/1.17.12/foo-1.17.12.jar", "jar", 1523712),
           file("foo-1.17.12.pom", "com/example/foo/1.17.12/foo-1.17.12.pom", "pom"),
           file("foo-1.17.12.jar.sha1", "com/example/foo/1.17.12/foo-1.17.12.jar.sha1", "checksum"),
         ],
@@ -66,9 +61,7 @@ const PACKAGES: SearchPackage[] = [
         fileCount: 1,
         size: 512,
         latestUpdatedAt: "2026-10-17 08:00:00",
-        files: [
-          file("foo-1.17.120.jar", "com/example/foo/1.17.120/foo-1.17.120.jar", "jar", 512),
-        ],
+        files: [file("foo-1.17.120.jar", "com/example/foo/1.17.120/foo-1.17.120.jar", "jar", 512)],
       },
     ],
   },
@@ -146,7 +139,8 @@ function rowByAttribute(testId: string, attribute: string, value: string): HTMLE
 
 const packageRow = (coordinate: string) =>
   rowByAttribute("search-package-row", "data-coordinate", coordinate);
-const versionRow = (version: string) => rowByAttribute("search-version-row", "data-version", version);
+const versionRow = (version: string) =>
+  rowByAttribute("search-version-row", "data-version", version);
 const fileRow = (path: string) => rowByAttribute("search-file-row", "data-path", path);
 const queryFileRow = (path: string) =>
   screen
@@ -208,7 +202,9 @@ describe("SearchPage 主从双栏", () => {
     await userEvent.click(versionRow("1.17.120"));
 
     await waitFor(() => {
-      expect(within(detailPanel()).getByRole("heading", { name: "foo-1.17.120.jar" })).toBeInTheDocument();
+      expect(
+        within(detailPanel()).getByRole("heading", { name: "foo-1.17.120.jar" }),
+      ).toBeInTheDocument();
     });
     // 切版本是纯前端行为：不重发请求、不折叠其它包。
     expect(calls).toHaveLength(1);

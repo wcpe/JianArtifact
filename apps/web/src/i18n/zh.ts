@@ -657,7 +657,8 @@ export const zh = {
     cancel: "取消搜索",
     cancelledHint: "搜索已取消，可重新发起",
     timeoutTitle: "搜索超时",
-    timeoutDescription: "检索耗时超出限制，请求已被中止。请缩小检索范围（限定 repo: 或 ext:、减少关键词）后重试。",
+    timeoutDescription:
+      "检索耗时超出限制，请求已被中止。请缩小检索范围（限定 repo: 或 ext:、减少关键词）后重试。",
     // 搜索建议下拉
     suggestLabel: "搜索建议",
     suggestTypePackage: "包名",

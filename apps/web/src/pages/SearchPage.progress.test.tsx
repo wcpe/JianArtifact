@@ -238,9 +238,7 @@ describe("SearchPage 搜索进度与取消", () => {
     // 新请求先落定 → 列表切到新结果。
     await waitFor(() => expect(pendingNew).toHaveLength(1));
     pendingNew[0]!();
-    await waitFor(() =>
-      expect(within(tree()).getByText("com.example:new")).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(within(tree()).getByText("com.example:new")).toBeInTheDocument());
 
     // 旧请求在切换那一刻已被中止；即便响应迟到也不得覆盖新结果。
     expect(oldSignal.aborted).toBe(true);

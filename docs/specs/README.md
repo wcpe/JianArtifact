@@ -37,10 +37,10 @@ FR-36 与 FR-43 均已开发完成并待验收，FR-40 已开发完成、待用�
 
 搜索体验与性能改造（PRD §4.4.2）尚未开工，版本归属待开窗时确定，故单列于此。FR-149 / FR-150 / FR-153 需 spec（FR-149、FR-150 已起草，FR-153 与 FR-149 同档）；FR-151 / FR-152 免 spec，规格仅作开发工作稿。
 
-| FR             | 规格                                                                   | 主题                         | 状态 |
-| -------------- | ---------------------------------------------------------------------- | ---------------------------- | ---- |
-| FR-149 / FR-153 | [`search-index-and-performance.md`](search-index-and-performance.md)   | 搜索索引与查询性能 / 搜索建议 | 草拟 |
-| FR-150 / FR-151 | [`search-package-aggregation.md`](search-package-aggregation.md)       | 包级聚合与分层排序 / 主从双栏 | 草拟 |
+| FR              | 规格                                                                 | 主题                          | 状态 |
+| --------------- | -------------------------------------------------------------------- | ----------------------------- | ---- |
+| FR-149 / FR-153 | [`search-index-and-performance.md`](search-index-and-performance.md) | 搜索索引与查询性能 / 搜索建议 | 草拟 |
+| FR-150 / FR-151 | [`search-package-aggregation.md`](search-package-aggregation.md)     | 包级聚合与分层排序 / 主从双栏 | 草拟 |
 
 ## 3. 0.9.0 规格（已发布）
 

@@ -1060,7 +1060,10 @@ type SearchMatch = AssetSummary & { repository: string; format: string };
  * 抽出来的原因：文件级列表（`searchAssets`）与包级聚合（`searchPackages`）必须共享
  * **同一套**筛选口径，否则 mock 里会出现"树里的文件与列表条数对不上"这种假 bug。
  */
-function collectSearchMatches(query: string, allowedRepositories?: readonly string[]): {
+function collectSearchMatches(
+  query: string,
+  allowedRepositories?: readonly string[],
+): {
   matches: SearchMatch[];
   facets: Map<string, number>;
   terms: string[];

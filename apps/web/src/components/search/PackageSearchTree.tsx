@@ -230,11 +230,7 @@ function VersionRow({
               style={{ display: "block", width: "100%", padding: `3px 8px 3px ${8 + 14}px` }}
             >
               <Group gap={6} wrap="nowrap">
-                {showChecksums ? (
-                  <IconChevronDown size={12} />
-                ) : (
-                  <IconChevronRight size={12} />
-                )}
+                {showChecksums ? <IconChevronDown size={12} /> : <IconChevronRight size={12} />}
                 <Text size="xs" c="dimmed">
                   {t("search.checksums", { count: checksums.length })}
                 </Text>

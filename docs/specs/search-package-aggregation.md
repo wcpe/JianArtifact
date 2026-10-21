@@ -7,12 +7,14 @@
 **现状**：全局搜索（FR-30）是一条**文件级**链路。后端 `SearchByFilter`（[asset_repo.go](apps/server/internal/repository/asset_repo.go#L307)）按 `path LIKE '%词%'` 返回扁平的 `asset` 行，`SearchFacetsByFilter`（[asset_repo.go](apps/server/internal/repository/asset_repo.go#L330)）只按 `repository_id` 聚合；服务层 `SearchAssets`（[repository_service.go](apps/server/internal/domain/repository_service.go#L1021)）只补仓库名映射，不做任何坐标或版本维度的归并。前端结果页（[SearchPage.tsx](apps/web/src/pages/SearchPage.tsx#L366)）把结果铺成一张扁平 Table，默认按 `updated desc` 排序（[SearchPage.tsx](apps/web/src/pages/SearchPage.tsx#L71)）。
 
 **问题**：用户搜一个版本号 `1.17.12`，命中集里混进两类噪声——
+
 - 语义相邻但不同的版本：`1.17.12-rc1`、`1.17.12-SNAPSHOT`、`1.17.12.1`；
 - **纯子串巧合**：`1.17.120` 同样包含 `1.17.12`。
 
 `asset` 表没有 version 列（[0002_asset.sql](apps/server/internal/persistence/migrations/0002_asset.sql#L13-L23)），包坐标与版本**只存在于 path 文本**里，因此排序只能按 updated/size/path，无法表达"哪个才是用户真正要的那个版本"。结果是精确版本会被同页的 `1.17.120`、`-sources.jar`、`.sha1` 一起淹没，用户需要肉眼二次过滤。同时，同一个包的 8 个文件（jar/pom/sources/javadoc/校验和）在平铺视图里各占一行，一页 50 条（[SearchPage.tsx](apps/web/src/pages/SearchPage.tsx#L54)）经常只够放下六七个包。
 
 **目标**：
+
 1. **FR-150** 让结果按包坐标聚合、按命中精度分层排序，把"用户要的那个版本"顶到最前；新增 `version:` 严格语法与 `order=relevance` 默认排序。
 2. **FR-151** 把结果页改成**主从双栏 + 包级折叠树**：左栏"包 → 版本 → 文件类型"，右栏选中项详情，让"同包多版本"在一屏内可比、可展开。
 
@@ -54,19 +56,19 @@
 
 ### 3.1 改动面总览
 
-| 层 | 文件 | 改动 |
-| --- | --- | --- |
-| 表达式解析 | `apps/server/internal/domain/search_query.go` | `parsedSearch` 新增 `versions` / `notVersions`（[search_query.go](apps/server/internal/domain/search_query.go#L21)、[parseSearchQuery](apps/server/internal/domain/search_query.go#L59)） |
-| 条件构造 | `apps/server/internal/repository/asset_repo.go` | `SearchFilter` 新增 `IncludeVersions` / `ExcludeVersions`（[L236](apps/server/internal/repository/asset_repo.go#L236)），`buildSearchWhere` 拼段边界条件（[L244](apps/server/internal/repository/asset_repo.go#L244)） |
-| 候选集 | `apps/server/internal/repository/asset_repo.go` | 新增 `SearchAllByFilter`（无分页、带上限，复用 `buildSearchWhere`） |
-| 聚合 | **新增** `apps/server/internal/domain/search_package.go` | 纯函数：坐标解析 `ParseCoordinates`、精度判定 `MatchPrecision`、分组 `BuildPackageGroups`、相关度比较器 |
-| 服务 | `apps/server/internal/domain/repository_service.go` | 新增 `SearchAggregate`（[SearchOutput](apps/server/internal/domain/repository_service.go#L1007) 扩展 `Packages`） |
-| HTTP | `apps/server/internal/api/repository_handlers.go` | `SearchAssets` 解析 `group_by` / `order=relevance`，输出 `packages`（[L849](apps/server/internal/api/repository_handlers.go#L849)） |
-| 前端数据 | `apps/web/src/api/endpoints.ts` | `SearchResult` 类型扩展（[L1224](apps/web/src/api/endpoints.ts#L1224)） |
-| 前端解析 | `apps/web/src/lib/searchQuery.ts` | `SearchExpression` 新增 `versions` / `notVersions`，保持面板双向同步不丢 token |
-| 前端视图 | **新增** `apps/web/src/components/search/PackageSearchTree.tsx`、`SearchDetailPanel.tsx`、`apps/web/src/lib/searchPackage.ts` | 树、详情、树构建与高亮切分 |
-| 前端页 | `apps/web/src/pages/SearchPage.tsx` | 替换结果区，默认排序改 relevance |
-| i18n | `apps/web/src/i18n/zh.ts` / `en.ts` | `search.*` 新键（受 [I18nKeys.test.ts](apps/web/src/i18n/I18nKeys.test.ts) 守卫） |
+| 层         | 文件                                                                                                                          | 改动                                                                                                                                                                                                                   |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 表达式解析 | `apps/server/internal/domain/search_query.go`                                                                                 | `parsedSearch` 新增 `versions` / `notVersions`（[search_query.go](apps/server/internal/domain/search_query.go#L21)、[parseSearchQuery](apps/server/internal/domain/search_query.go#L59)）                              |
+| 条件构造   | `apps/server/internal/repository/asset_repo.go`                                                                               | `SearchFilter` 新增 `IncludeVersions` / `ExcludeVersions`（[L236](apps/server/internal/repository/asset_repo.go#L236)），`buildSearchWhere` 拼段边界条件（[L244](apps/server/internal/repository/asset_repo.go#L244)） |
+| 候选集     | `apps/server/internal/repository/asset_repo.go`                                                                               | 新增 `SearchAllByFilter`（无分页、带上限，复用 `buildSearchWhere`）                                                                                                                                                    |
+| 聚合       | **新增** `apps/server/internal/domain/search_package.go`                                                                      | 纯函数：坐标解析 `ParseCoordinates`、精度判定 `MatchPrecision`、分组 `BuildPackageGroups`、相关度比较器                                                                                                                |
+| 服务       | `apps/server/internal/domain/repository_service.go`                                                                           | 新增 `SearchAggregate`（[SearchOutput](apps/server/internal/domain/repository_service.go#L1007) 扩展 `Packages`）                                                                                                      |
+| HTTP       | `apps/server/internal/api/repository_handlers.go`                                                                             | `SearchAssets` 解析 `group_by` / `order=relevance`，输出 `packages`（[L849](apps/server/internal/api/repository_handlers.go#L849)）                                                                                    |
+| 前端数据   | `apps/web/src/api/endpoints.ts`                                                                                               | `SearchResult` 类型扩展（[L1224](apps/web/src/api/endpoints.ts#L1224)）                                                                                                                                                |
+| 前端解析   | `apps/web/src/lib/searchQuery.ts`                                                                                             | `SearchExpression` 新增 `versions` / `notVersions`，保持面板双向同步不丢 token                                                                                                                                         |
+| 前端视图   | **新增** `apps/web/src/components/search/PackageSearchTree.tsx`、`SearchDetailPanel.tsx`、`apps/web/src/lib/searchPackage.ts` | 树、详情、树构建与高亮切分                                                                                                                                                                                             |
+| 前端页     | `apps/web/src/pages/SearchPage.tsx`                                                                                           | 替换结果区，默认排序改 relevance                                                                                                                                                                                       |
+| i18n       | `apps/web/src/i18n/zh.ts` / `en.ts`                                                                                           | `search.*` 新键（受 [I18nKeys.test.ts](apps/web/src/i18n/I18nKeys.test.ts) 守卫）                                                                                                                                      |
 
 **无 migration**：坐标与版本是 path 的派生量，聚合在 Go 侧内存完成，不新增列/表/索引。FR-149 落地后若引入规范化列，`BuildPackageGroups` 的输入可平滑替换（§6）。
 
@@ -74,11 +76,11 @@
 
 **门控原则**：只有能确定布局的格式才解析。仓库的 `format` 由 `repository.Format`（[models.go](apps/server/internal/repository/models.go#L41)）提供，服务层在构建 `repoID → {name, format}` 映射时一并取到（复用既有 `s.repos.GetByID` 缓存，[repository_service.go](apps/server/internal/domain/repository_service.go#L1141)）。
 
-| 仓库 format | 解析 | 结果 |
-| --- | --- | --- |
-| `maven` | 启用 Maven 规则 | 有坐标或降级 |
-| `npm` | 启用 npm 规则 | 有坐标或降级 |
-| 其它（`raw` 等） | **不解析** | 一律降级为「无坐标」文件级条目 |
+| 仓库 format      | 解析            | 结果                           |
+| ---------------- | --------------- | ------------------------------ |
+| `maven`          | 启用 Maven 规则 | 有坐标或降级                   |
+| `npm`            | 启用 npm 规则   | 有坐标或降级                   |
+| 其它（`raw` 等） | **不解析**      | 一律降级为「无坐标」文件级条目 |
 
 #### Maven：`group/artifact/version/file`
 
@@ -108,12 +110,12 @@
 
 ### 3.3 聚合口径
 
-| 概念 | 定义 |
-| --- | --- |
-| **包** | 身份键 = `coordinate`（**不含仓库**）。同一坐标出现在多个仓库时合并为一个包节点，`repositories` 记录涉及仓库；文件行保留各自 `repository` 以消歧（理由见 §6 待定） |
-| **版本** | 包内身份键 = 解析出的 `version` 字符串（ASCII 大小写不敏感归并，展示取首次出现的原文）；空版本 = 「未版本化」组 |
-| **文件** | 一个 `asset` 行。`(repository, path)` 唯一，因此同一文件不会重复计入 |
-| **文件类型（fileKind）** | 由文件名后缀 + Maven classifier 归类，封闭集合，见附录 A |
+| 概念                     | 定义                                                                                                                                                               |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **包**                   | 身份键 = `coordinate`（**不含仓库**）。同一坐标出现在多个仓库时合并为一个包节点，`repositories` 记录涉及仓库；文件行保留各自 `repository` 以消歧（理由见 §6 待定） |
+| **版本**                 | 包内身份键 = 解析出的 `version` 字符串（ASCII 大小写不敏感归并，展示取首次出现的原文）；空版本 = 「未版本化」组                                                    |
+| **文件**                 | 一个 `asset` 行。`(repository, path)` 唯一，因此同一文件不会重复计入                                                                                               |
+| **文件类型（fileKind）** | 由文件名后缀 + Maven classifier 归类，封闭集合，见附录 A                                                                                                           |
 
 **计数**：`package.versionCount` = 版本组数（不含空版本组）；`package.fileCount` = 组内文件总数（含校验和文件）；`version.fileCount` = 该版本文件数。所有计数含被 UI 默认折叠的校验和文件——计数口径与「展开了能看到几个文件」一致。
 
@@ -125,12 +127,12 @@
 
 对每个关键词 `T` 与 `V`，按下表自上而下取**首个**命中项；多个关键词时取**编号最小**者（最有利精度）：
 
-| 编号 | 标记 | 判定条件 | 例（`T = 1.17.12`） |
-| --- | --- | --- | --- |
-| 0 | `exact`（精确） | `V` 与 `T` 完全相等 | `V = 1.17.12` |
-| 1 | `prerelease`（预发布） | `V` 以 `T` 起首，且余下部分 `R = V[len(T):]` 以 `-` 或 `+` 起首 | `1.17.12-rc1`、`1.17.12-SNAPSHOT`、`1.17.12-alpha.3`、`1.17.12+build.7`、`1.17.12-20240101.123456-3` |
-| 2 | `substring`（子串） | `V` 含 `T`，但不满足 0 / 1 | `1.17.120`（`R = 0`）、`1.17.12.1`（`R = .1`）、`11.17.12` |
-| 3 | `none`（无信号） | `V` 不含 `T`，或文件无坐标 | 搜 `foo` 时的全部命中；裸路径条目 |
+| 编号 | 标记                   | 判定条件                                                        | 例（`T = 1.17.12`）                                                                                  |
+| ---- | ---------------------- | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| 0    | `exact`（精确）        | `V` 与 `T` 完全相等                                             | `V = 1.17.12`                                                                                        |
+| 1    | `prerelease`（预发布） | `V` 以 `T` 起首，且余下部分 `R = V[len(T):]` 以 `-` 或 `+` 起首 | `1.17.12-rc1`、`1.17.12-SNAPSHOT`、`1.17.12-alpha.3`、`1.17.12+build.7`、`1.17.12-20240101.123456-3` |
+| 2    | `substring`（子串）    | `V` 含 `T`，但不满足 0 / 1                                      | `1.17.120`（`R = 0`）、`1.17.12.1`（`R = .1`）、`11.17.12`                                           |
+| 3    | `none`（无信号）       | `V` 不含 `T`，或文件无坐标                                      | 搜 `foo` 时的全部命中；裸路径条目                                                                    |
 
 **为什么是结构判定而不是后缀白名单**：`-` / `+` 起首已经覆盖 Maven 与 semver 的全部预发布形态——`-rc1`、`-SNAPSHOT`、`-alpha`、`-beta`、`-M2`、`-milestone`、`-preview`、`-ea`、`-dev`、时间戳快照 `-20240101.123456-3`、以及 `+build` 构建元数据。封闭名单必然漏项（如新兴的 `-canary.N`），且每加一个都要改代码。结构判定的语义是"命中串是版本前缀，后面还有额外的标记段"，这正是"同一版本线的预发布/非正式发布"的定义。
 
@@ -166,11 +168,11 @@
 
 **形式**：
 
-| 写法 | 语义 |
-| --- | --- |
-| `version:1.17.12` | 版本严格等于 `1.17.12`（ASCII 大小写不敏感，`EqualFold`）；多个 `version:` 为 **OR** |
-| `-version:1.17.12` | 排除该版本；多个为 AND（都不等于） |
-| `version:`（空值） | 静默丢弃，与 `repo:` / `ext:` 处理一致 |
+| 写法               | 语义                                                                                 |
+| ------------------ | ------------------------------------------------------------------------------------ |
+| `version:1.17.12`  | 版本严格等于 `1.17.12`（ASCII 大小写不敏感，`EqualFold`）；多个 `version:` 为 **OR** |
+| `-version:1.17.12` | 排除该版本；多个为 AND（都不等于）                                                   |
+| `version:`（空值） | 静默丢弃，与 `repo:` / `ext:` 处理一致                                               |
 
 **与 `search_query.go` 的关系**：新增的两个字段与 `ext:` **同级**，走同一套 `tokenizeSearch` + `HasPrefix(lower, "version:")` 分支，进 `parsedSearch`（[L21](apps/server/internal/domain/search_query.go#L21)）与 `SearchFilter`。关键点：`version:` 的值**绝不能**作为子串词落进 `IncludeTerms`——否则 `1.17.12` 会被拿去子串匹配包名与文件名，失去"严格"语义。
 
@@ -198,19 +200,19 @@ version:v  →  ( path LIKE '%/'||v||'/%' ESCAPE '\'
 
 ```jsonc
 {
-  "items": [ /* 既有文件级数组，字段不变；file 模式下的唯一数据源 */ ],
-  "total": 128,             // 匹配文件总数（全量，与分页无关）—— 未变
-  "facets": [ /* 未变 */ ],
+  "items": [/* 既有文件级数组，字段不变；file 模式下的唯一数据源 */],
+  "total": 128, // 匹配文件总数（全量，与分页无关）—— 未变
+  "facets": [/* 未变 */],
 
-  "packageTotal": 24,       // 不同包节点数（含「无坐标」伪包）；truncated 时为下界
+  "packageTotal": 24, // 不同包节点数（含「无坐标」伪包）；truncated 时为下界
   "packages": [
     {
-      "coordinate": "com.example:foo",   // 展示坐标；无坐标条目为仓库名
-      "kind": "maven",                   // maven | npm | file
+      "coordinate": "com.example:foo", // 展示坐标；无坐标条目为仓库名
+      "kind": "maven", // maven | npm | file
       "repositories": ["maven-releases"],
       "versionCount": 3,
       "fileCount": 12,
-      "bestPrecision": "exact",          // exact | prerelease | substring | none
+      "bestPrecision": "exact", // exact | prerelease | substring | none
       "latestUpdatedAt": "2026-10-18 09:12:33",
       "topVersion": "1.17.12",
       "versions": [
@@ -218,7 +220,7 @@ version:v  →  ( path LIKE '%/'||v||'/%' ESCAPE '\'
           "version": "1.17.12",
           "precision": "exact",
           "fileCount": 4,
-          "size": 1834244,               // 组内文件体积合计
+          "size": 1834244, // 组内文件体积合计
           "latestUpdatedAt": "2026-10-18 09:12:33",
           "files": [
             {
@@ -228,14 +230,14 @@ version:v  →  ( path LIKE '%/'||v||'/%' ESCAPE '\'
               "size": 1523712,
               "sha1": "3f2a…",
               "updatedAt": "2026-10-18 09:12:33",
-              "fileKind": "jar"
-            }
-          ]
-        }
-      ]
-    }
+              "fileKind": "jar",
+            },
+          ],
+        },
+      ],
+    },
   ],
-  "aggregation": { "scanned": 128, "truncated": false }
+  "aggregation": { "scanned": 128, "truncated": false },
 }
 ```
 
@@ -249,16 +251,17 @@ version:v  →  ( path LIKE '%/'||v||'/%' ESCAPE '\'
 
 ### 3.8 兼容性
 
-| 关注点 | 结论 | 依据 |
-| --- | --- | --- |
-| `page` / `page_size` | 语义不变：仍然对**文件级** `items` 分页；`page_size` 默认 20 / 上限 100 不变（[L952](apps/server/internal/api/repository_handlers.go#L952)） | `group_by=package` 只增 `packages`/`packageTotal`，不改 `items` 与 `total` |
-| `sort` 白名单 | 不变（`name`/`repo`/`path`/`size`/`updated`） | `relevance` 走 `order`，不塞进 `sort` |
-| `order` 缺省 | **仍是 `asc`**（`path asc`） | 关键：仓库内搜索 `RepoBrowser` 不传 `sort`/`order`，依赖 `path asc` 才能稳定建树（[RepoBrowser.tsx](apps/web/src/components/repo/RepoBrowser.tsx#L351)）。若把后端缺省改成 relevance，树会按包序抖动 |
-| 搜索结果页默认排序 | 变成 relevance | 仅前端 `DEFAULT_SORT`（[SearchPage.tsx](apps/web/src/pages/SearchPage.tsx#L71)）改，且显式传 `group_by=package&order=relevance` |
-| 排序偏好持久化 | `SEARCH_SORT_KEY`（[L68](apps/web/src/pages/SearchPage.tsx#L68)）里的旧值（如 `{by:"updated",order:"desc"}`）继续合法；只在缺键/脏值时用新默认 | `sanitizeSort` 扩展：`order:"relevance"` 仅在与 `by:"relevance"` 搭配时接受 |
-| npm `GET /-/v1/search` | **零变化** | 见下 |
+| 关注点                 | 结论                                                                                                                                           | 依据                                                                                                                                                                                                 |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `page` / `page_size`   | 语义不变：仍然对**文件级** `items` 分页；`page_size` 默认 20 / 上限 100 不变（[L952](apps/server/internal/api/repository_handlers.go#L952)）   | `group_by=package` 只增 `packages`/`packageTotal`，不改 `items` 与 `total`                                                                                                                           |
+| `sort` 白名单          | 不变（`name`/`repo`/`path`/`size`/`updated`）                                                                                                  | `relevance` 走 `order`，不塞进 `sort`                                                                                                                                                                |
+| `order` 缺省           | **仍是 `asc`**（`path asc`）                                                                                                                   | 关键：仓库内搜索 `RepoBrowser` 不传 `sort`/`order`，依赖 `path asc` 才能稳定建树（[RepoBrowser.tsx](apps/web/src/components/repo/RepoBrowser.tsx#L351)）。若把后端缺省改成 relevance，树会按包序抖动 |
+| 搜索结果页默认排序     | 变成 relevance                                                                                                                                 | 仅前端 `DEFAULT_SORT`（[SearchPage.tsx](apps/web/src/pages/SearchPage.tsx#L71)）改，且显式传 `group_by=package&order=relevance`                                                                      |
+| 排序偏好持久化         | `SEARCH_SORT_KEY`（[L68](apps/web/src/pages/SearchPage.tsx#L68)）里的旧值（如 `{by:"updated",order:"desc"}`）继续合法；只在缺键/脏值时用新默认 | `sanitizeSort` 扩展：`order:"relevance"` 仅在与 `by:"relevance"` 搭配时接受                                                                                                                          |
+| npm `GET /-/v1/search` | **零变化**                                                                                                                                     | 见下                                                                                                                                                                                                 |
 
 **npm 端点不受影响的论证**（三条独立理由，任一成立即够）：
+
 1. **路径不同**：`registrySearch`（[npm_registry.go](apps/server/internal/protocol/npm_registry.go#L299)）直接调用领域层 `SearchAssets`，**不经过** HTTP handler `SearchAssets`。聚合与 `order=relevance` 的解析都在新增的 `SearchAggregate` 与 handler 侧，领域层 `SearchAssets` 的签名与行为**一行不改**——npm 调用点因此不需要任何改动。
 2. **参数显式**：npm 调用点硬编码 `SearchAssets(keyword, member, 0, true, "path", "asc", from+size, 0)`——`sort=path`、`order=asc`，永远不进 relevance 分支。
 3. **响应自建**：`objects` 由 `searchObject` 从 packument 提炼，`total`/`time` 自算；即便领域层内部新增了聚合字段，npm 响应体只挑它读的 `out.Items`，多出来的字段不会外泄。
@@ -304,12 +307,12 @@ version:v  →  ( path LIKE '%/'||v||'/%' ESCAPE '\'
 
 **左栏元素**：
 
-| 元素 | 内容 | 交互 |
-| --- | --- | --- |
-| 包行 | 包名（`coordinate`）、协议徽标（`maven` / `npm` / `raw`，`Badge variant="light" size="xs"`）、`N 个版本 · M 文件` | 点击展开/折叠；展开后再点包名选中该包的首个版本 |
-| 版本行 | 版本号、精度徽标（`精确`/`预发布`/`子串`，无信号不显示徽标）、`N 文件`、文件类型 chip 组（按附录 A 优先级取前 4 个，其余折叠为 `+N`） | 点击选中该版本（右栏切到该版本的首个文件），**不折叠其它节点、不回退列表、不重发请求** |
-| 文件行 | 只在版本展开时出现，`fileKind` + 文件名 | 点击选中该文件 |
-| 校验和文件 | 该版本内 `fileKind=checksum` 的文件默认折入一行 `校验和 (3)`，点击展开 | 与既有「隐藏校验和」心智一致（`CHECKSUM_EXTS`，[searchQuery.ts](apps/web/src/lib/searchQuery.ts#L104)） |
+| 元素       | 内容                                                                                                                                  | 交互                                                                                                    |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| 包行       | 包名（`coordinate`）、协议徽标（`maven` / `npm` / `raw`，`Badge variant="light" size="xs"`）、`N 个版本 · M 文件`                     | 点击展开/折叠；展开后再点包名选中该包的首个版本                                                         |
+| 版本行     | 版本号、精度徽标（`精确`/`预发布`/`子串`，无信号不显示徽标）、`N 文件`、文件类型 chip 组（按附录 A 优先级取前 4 个，其余折叠为 `+N`） | 点击选中该版本（右栏切到该版本的首个文件），**不折叠其它节点、不回退列表、不重发请求**                  |
+| 文件行     | 只在版本展开时出现，`fileKind` + 文件名                                                                                               | 点击选中该文件                                                                                          |
+| 校验和文件 | 该版本内 `fileKind=checksum` 的文件默认折入一行 `校验和 (3)`，点击展开                                                                | 与既有「隐藏校验和」心智一致（`CHECKSUM_EXTS`，[searchQuery.ts](apps/web/src/lib/searchQuery.ts#L104)） |
 
 **右栏详情**：文件名（标题）、包坐标:版本、精度徽标、仓库（`Badge`）、完整路径（等宽字体、可复制）、大小（`formatBytes`）、修改时间（`formatUtcToLocal`）、SHA1（截断显示 + 复制按钮）、`下载`（`assetDownloadUrl`，新窗口）、`打开仓库`（沿用 FR-145 的 `?highlight=<path>` 直达，[SearchPage.tsx](apps/web/src/pages/SearchPage.tsx#L194)）、`同版本文件` 列表（当前版本全部文件，每行含大小与下载）。同版本文件列表里当前选中的那行高亮（背景 `var(--mantine-color-blue-0)`）。
 
@@ -347,12 +350,12 @@ version:v  →  ( path LIKE '%/'||v||'/%' ESCAPE '\'
 
 ### 3.11 四态
 
-| 状态 | 触发 | 呈现 |
-| --- | --- | --- |
+| 状态   | 触发                      | 呈现                                                                                                                                                                            |
+| ------ | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 加载中 | 首次查询、`data === null` | `ContentSkeleton`（[AsyncBoundary.tsx](apps/web/src/components/AsyncBoundary.tsx#L33)，双栏各自骨架：左栏 6 行、右栏 3 块）。换排序/翻页沿用 `keepPreviousData`，**不**回到骨架 |
-| 空结果 | `total === 0` | 居中 `Text c="dimmed"`：`未找到匹配的制品` + 副行提示（可尝试的语法示例），并保留搜索框与筛选条可继续操作 |
-| 无权限 | `state.forbidden` | `ForbiddenState`（`@jianartifact/ui`），仅结果区替换，搜索框保留 |
-| 失败 | `state.error` | `ErrorState` + `重试`（`state.reload`），错误消息用 `state.error.message` |
+| 空结果 | `total === 0`             | 居中 `Text c="dimmed"`：`未找到匹配的制品` + 副行提示（可尝试的语法示例），并保留搜索框与筛选条可继续操作                                                                       |
+| 无权限 | `state.forbidden`         | `ForbiddenState`（`@jianartifact/ui`），仅结果区替换，搜索框保留                                                                                                                |
+| 失败   | `state.error`             | `ErrorState` + `重试`（`state.reload`），错误消息用 `state.error.message`                                                                                                       |
 
 四态都只替换"结果区"，从不整体卸载搜索框与 facet 条——否则用户无法在失败后换个词重试。
 
@@ -425,19 +428,19 @@ version:v  →  ( path LIKE '%/'||v||'/%' ESCAPE '\'
 
 判定顺序自上而下，首个命中即停（扩展名比较大小写不敏感）。
 
-| `fileKind` | 判定 | `fileKindPriority` |
-| --- | --- | --- |
-| `jar` | 扩展名 `jar`，且文件名不含 `-sources` / `-javadoc` / `-tests` | 0 |
-| `war` / `ear` / `aar` | 同名扩展名 | 1 |
-| `tgz` | 扩展名 `tgz`（npm tarball） | 1 |
-| `sources` | 扩展名 `jar` 且文件名含 `-sources` | 2 |
-| `javadoc` | 扩展名 `jar` 且文件名含 `-javadoc` | 3 |
-| `tests` | 扩展名 `jar` 且文件名含 `-tests` | 4 |
-| `pom` | 扩展名 `pom` | 5 |
-| `packument` | 扩展名 `json` 且路径为 npm 包根 | 5 |
-| `metadata` | 文件名为 `maven-metadata.xml`，或扩展名 `module` | 6 |
-| `other` | 以上都不匹配 | 7 |
-| `checksum` | 扩展名 ∈ `sha1` / `md5` / `sha256` / `sha512` / `asc` | 9 |
+| `fileKind`            | 判定                                                          | `fileKindPriority` |
+| --------------------- | ------------------------------------------------------------- | ------------------ |
+| `jar`                 | 扩展名 `jar`，且文件名不含 `-sources` / `-javadoc` / `-tests` | 0                  |
+| `war` / `ear` / `aar` | 同名扩展名                                                    | 1                  |
+| `tgz`                 | 扩展名 `tgz`（npm tarball）                                   | 1                  |
+| `sources`             | 扩展名 `jar` 且文件名含 `-sources`                            | 2                  |
+| `javadoc`             | 扩展名 `jar` 且文件名含 `-javadoc`                            | 3                  |
+| `tests`               | 扩展名 `jar` 且文件名含 `-tests`                              | 4                  |
+| `pom`                 | 扩展名 `pom`                                                  | 5                  |
+| `packument`           | 扩展名 `json` 且路径为 npm 包根                               | 5                  |
+| `metadata`            | 文件名为 `maven-metadata.xml`，或扩展名 `module`              | 6                  |
+| `other`               | 以上都不匹配                                                  | 7                  |
+| `checksum`            | 扩展名 ∈ `sha1` / `md5` / `sha256` / `sha512` / `asc`         | 9                  |
 
 `checksum` 与既有 `CHECKSUM_EXTS`（[searchQuery.ts](apps/web/src/lib/searchQuery.ts#L104)）保持同一集合，避免"一键隐藏校验和"与"树内校验和折叠"两套口径打架。
 
@@ -445,17 +448,17 @@ version:v  →  ( path LIKE '%/'||v||'/%' ESCAPE '\'
 
 `T = 1.17.12`，判定见 §3.4。
 
-| 版本段 `V` | 精度 | 说明 |
-| --- | --- | --- |
-| `1.17.12` | `exact` | 完全相等 |
-| `1.17.12.1` | `substring` | `R = .1`，不是预发布标记 |
-| `1.17.12-rc1` | `prerelease` | `R = -rc1` |
-| `1.17.12-SNAPSHOT` | `prerelease` | `R = -SNAPSHOT` |
-| `1.17.12-alpha.3` | `prerelease` | `R = -alpha.3` |
+| 版本段 `V`                  | 精度         | 说明                              |
+| --------------------------- | ------------ | --------------------------------- |
+| `1.17.12`                   | `exact`      | 完全相等                          |
+| `1.17.12.1`                 | `substring`  | `R = .1`，不是预发布标记          |
+| `1.17.12-rc1`               | `prerelease` | `R = -rc1`                        |
+| `1.17.12-SNAPSHOT`          | `prerelease` | `R = -SNAPSHOT`                   |
+| `1.17.12-alpha.3`           | `prerelease` | `R = -alpha.3`                    |
 | `1.17.12-20240101.123456-3` | `prerelease` | Maven 时间戳快照，`R` 以 `-` 起首 |
-| `1.17.12+build.7` | `prerelease` | 构建元数据，`R = +build.7` |
-| `1.17.120` | `substring` | `R = 0`（关键回归用例） |
-| `11.17.12` | `substring` | 命中在尾部 |
-| `1.17.1200` | `substring` | 同上 |
-| `1.18.0` | `none` | 不含 `T` |
-| （无坐标裸路径） | `none` | 降级条目 |
+| `1.17.12+build.7`           | `prerelease` | 构建元数据，`R = +build.7`        |
+| `1.17.120`                  | `substring`  | `R = 0`（关键回归用例）           |
+| `11.17.12`                  | `substring`  | 命中在尾部                        |
+| `1.17.1200`                 | `substring`  | 同上                              |
+| `1.18.0`                    | `none`       | 不含 `T`                          |
+| （无坐标裸路径）            | `none`       | 降级条目                          |

@@ -8,16 +8,16 @@
 
 **问题**：全局搜索（FR-30）在百万级 `asset` 规模下响应缓慢，且没有上界。根因是一条**可解释的放大链**，每一环单独都不致命，叠加起来才是「慢到不可用」：
 
-| # | 根因                              | 代码位置                                                                                                                                                                                                                         | 为什么慢                                                                                                                                                                                             |
-| - | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1 | 前导通配无法命中任何索引          | `buildSearchWhere` 为每个包含词生成 `path LIKE ?` 且参数为 `"%"+escapeLike(t)+"%"`（[asset_repo.go](apps/server/internal/repository/asset_repo.go#L244-L278)）                                                                    | 前导 `%` 使 B-Tree 无从定位，只能整表逐行做字符串匹配；`asset.path` 上的 `UNIQUE(repository_id, path)`（[0002_asset.sql](apps/server/internal/persistence/migrations/0002_asset.sql#L13-L23)）对它完全无效 |
-| 2 | 一次搜索要跑**三条**全扫 SQL     | `COUNT(*)` + 分页 `SELECT`（[asset_repo.go](apps/server/internal/repository/asset_repo.go#L307-L320)）+ facet 的 `GROUP BY`（[asset_repo.go](apps/server/internal/repository/asset_repo.go#L330-L339)）                            | 三条语句共用同一个不可索引的 `WHERE`，即单次请求把全表扫三遍；库越大线性恶化                                                                                                                          |
-| 3 | 排序无法走索引                    | `searchOrderBy` 的 `name` 键用 `replace(path, rtrim(path,…), '')` 表达式、`repo` 键用 `(SELECT name FROM repository WHERE id = asset.repository_id)` 相关子查询（[asset_repo.go](apps/server/internal/repository/asset_repo.go#L282-L303)） | 排序键是计算列，只能建临时 B-Tree 对**全集**排序，`LIMIT` 无法提前收敛；`repo` 键还会为每行跑一次子查询                                                                                                |
-| 4 | ACL 判定逐仓库 N+1                | 非管理员路径先 `ListPublic()`、再 `List(1000,0)` 取全量仓库，然后逐仓库 `HasPermission`（[repository_service.go](apps/server/internal/domain/repository_service.go#L1044-L1071)）                                                  | `HasPermission` 内部最多两条 SQL（用户分支 + 组分支，[acl_repo.go](apps/server/internal/repository/acl_repo.go#L111-L125)），N 个私有仓库即最多 `2N` 条查询，且与搜索本身的开销相乘                 |
-| 5 | 第二次全量仓库列举                | 带 `repoScope` / `repo:` / `format:` 时再 `List(1000,0)` 一次，并在 Go 内存里 `narrow`（[repository_service.go](apps/server/internal/domain/repository_service.go#L1081-L1113)）                                                  | 同一请求内向仓库表发起两次「取全量」，随仓库数增长                                                                                                                                                    |
-| 6 | 仓库名映射再 N+1                  | `repoName()` 闭包按 `RepositoryID` 逐个 `GetByID`（[repository_service.go](apps/server/internal/domain/repository_service.go#L1138-L1147)）                                                                                       | 结果条目与 facet 里出现的每个不同仓库各一条查询                                                                                                                                                       |
-| 7 | 全链路无超时保护                  | `SearchByFilter` / `SearchFacetsByFilter` 用 `db.Get` / `db.Select`（非 Context 版本），域层 `SearchAssets` 不接受 `ctx`（[repository_service.go](apps/server/internal/domain/repository_service.go#L1021)）                     | 病态查询（宽泛词、深翻页）可无限期占用连接与 SQLite 读事务；客户端断开也不会中止，没有上界                                                                                                            |
-| 8 | 协议搜索把上述成本乘以成员数      | npm `registrySearch` 对 group 的每个成员循环调用完整 `SearchAssets`，`limit = from+size`（[npm_registry.go](apps/server/internal/protocol/npm_registry.go#L330-L333)）                                                              | 每个成员各跑三条全扫；`npm search` 因此比网页搜索更慢                                                                                                                                                 |
+| #   | 根因                         | 代码位置                                                                                                                                                                                                                                    | 为什么慢                                                                                                                                                                                                   |
+| --- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | 前导通配无法命中任何索引     | `buildSearchWhere` 为每个包含词生成 `path LIKE ?` 且参数为 `"%"+escapeLike(t)+"%"`（[asset_repo.go](apps/server/internal/repository/asset_repo.go#L244-L278)）                                                                              | 前导 `%` 使 B-Tree 无从定位，只能整表逐行做字符串匹配；`asset.path` 上的 `UNIQUE(repository_id, path)`（[0002_asset.sql](apps/server/internal/persistence/migrations/0002_asset.sql#L13-L23)）对它完全无效 |
+| 2   | 一次搜索要跑**三条**全扫 SQL | `COUNT(*)` + 分页 `SELECT`（[asset_repo.go](apps/server/internal/repository/asset_repo.go#L307-L320)）+ facet 的 `GROUP BY`（[asset_repo.go](apps/server/internal/repository/asset_repo.go#L330-L339)）                                     | 三条语句共用同一个不可索引的 `WHERE`，即单次请求把全表扫三遍；库越大线性恶化                                                                                                                               |
+| 3   | 排序无法走索引               | `searchOrderBy` 的 `name` 键用 `replace(path, rtrim(path,…), '')` 表达式、`repo` 键用 `(SELECT name FROM repository WHERE id = asset.repository_id)` 相关子查询（[asset_repo.go](apps/server/internal/repository/asset_repo.go#L282-L303)） | 排序键是计算列，只能建临时 B-Tree 对**全集**排序，`LIMIT` 无法提前收敛；`repo` 键还会为每行跑一次子查询                                                                                                    |
+| 4   | ACL 判定逐仓库 N+1           | 非管理员路径先 `ListPublic()`、再 `List(1000,0)` 取全量仓库，然后逐仓库 `HasPermission`（[repository_service.go](apps/server/internal/domain/repository_service.go#L1044-L1071)）                                                           | `HasPermission` 内部最多两条 SQL（用户分支 + 组分支，[acl_repo.go](apps/server/internal/repository/acl_repo.go#L111-L125)），N 个私有仓库即最多 `2N` 条查询，且与搜索本身的开销相乘                        |
+| 5   | 第二次全量仓库列举           | 带 `repoScope` / `repo:` / `format:` 时再 `List(1000,0)` 一次，并在 Go 内存里 `narrow`（[repository_service.go](apps/server/internal/domain/repository_service.go#L1081-L1113)）                                                            | 同一请求内向仓库表发起两次「取全量」，随仓库数增长                                                                                                                                                         |
+| 6   | 仓库名映射再 N+1             | `repoName()` 闭包按 `RepositoryID` 逐个 `GetByID`（[repository_service.go](apps/server/internal/domain/repository_service.go#L1138-L1147)）                                                                                                 | 结果条目与 facet 里出现的每个不同仓库各一条查询                                                                                                                                                            |
+| 7   | 全链路无超时保护             | `SearchByFilter` / `SearchFacetsByFilter` 用 `db.Get` / `db.Select`（非 Context 版本），域层 `SearchAssets` 不接受 `ctx`（[repository_service.go](apps/server/internal/domain/repository_service.go#L1021)）                                | 病态查询（宽泛词、深翻页）可无限期占用连接与 SQLite 读事务；客户端断开也不会中止，没有上界                                                                                                                 |
+| 8   | 协议搜索把上述成本乘以成员数 | npm `registrySearch` 对 group 的每个成员循环调用完整 `SearchAssets`，`limit = from+size`（[npm_registry.go](apps/server/internal/protocol/npm_registry.go#L330-L333)）                                                                      | 每个成员各跑三条全扫；`npm search` 因此比网页搜索更慢                                                                                                                                                      |
 
 **目标（对用户）**：
 
@@ -49,17 +49,17 @@
 
 ### 2.3 不做（范围外，附理由）
 
-| 不做的事                                                     | 理由                                                                                                                         |
-| ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| 不做的事                                                        | 理由                                                                                                                                           |
+| --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | 相关性排序 / `order=relevance` / `version:` 严格匹配 / 包级聚合 | 属 FR-150（[search-package-aggregation.md](search-package-aggregation.md)）；本批改索引不改排序契约，默认排序仍为 `path asc`，避免中途换默认值 |
-| 搜索结果页主从双栏与折叠树                                   | 属 FR-151                                                                                                                    |
-| 搜索进度指示与请求取消（结果区）                             | 属 FR-152。suggest 自身的乱序保护是本 FR 的一部分，两者不重叠                                                                  |
-| 输入即搜（结果区随键入刷新）                                 | PRD 明示不做。suggest 只弹候选，**不触发搜索**；提交仍由回车/按钮显式发起                                                       |
-| 跨节点搜索聚合                                               | PRD 明示不做                                                                                                                 |
-| `asset` 表结构变更（版本列、包坐标列）                       | 属 FR-150 的数据模型议题；本批只新增虚拟表与状态表，`asset` 一列不改                                                            |
-| 拼音 / 同义词 / 拼写纠错 / 搜索历史                          | 无 PRD 条目，且都需要新的词表或语料，YAGNI                                                                                    |
-| 把成员循环合并成单条 SQL（npm）                              | 会改变去重口径与 `total` 语义，本批只做加速不做语义变更                                                                        |
-| suggest 的服务端缓存 / 速率限制                              | 与「组内成员变动即时生效」的既有授权承诺冲突；限流属网关层议题，本批不做                                                       |
+| 搜索结果页主从双栏与折叠树                                      | 属 FR-151                                                                                                                                      |
+| 搜索进度指示与请求取消（结果区）                                | 属 FR-152。suggest 自身的乱序保护是本 FR 的一部分，两者不重叠                                                                                  |
+| 输入即搜（结果区随键入刷新）                                    | PRD 明示不做。suggest 只弹候选，**不触发搜索**；提交仍由回车/按钮显式发起                                                                      |
+| 跨节点搜索聚合                                                  | PRD 明示不做                                                                                                                                   |
+| `asset` 表结构变更（版本列、包坐标列）                          | 属 FR-150 的数据模型议题；本批只新增虚拟表与状态表，`asset` 一列不改                                                                           |
+| 拼音 / 同义词 / 拼写纠错 / 搜索历史                             | 无 PRD 条目，且都需要新的词表或语料，YAGNI                                                                                                     |
+| 把成员循环合并成单条 SQL（npm）                                 | 会改变去重口径与 `total` 语义，本批只做加速不做语义变更                                                                                        |
+| suggest 的服务端缓存 / 速率限制                                 | 与「组内成员变动即时生效」的既有授权承诺冲突；限流属网关层议题，本批不做                                                                       |
 
 ## 3. 设计（怎么做）
 
@@ -71,11 +71,11 @@
 
 因此写入点被穷举为三处，全部必须在**既有事务边界内**成对维护索引：
 
-| 写入点                                                                                                     | 形态                                         |
-| ---------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
-| `UpsertWithTime`（[asset_repo.go](apps/server/internal/repository/asset_repo.go#L32-L47)，`INSERT … ON CONFLICT DO UPDATE`） | 新增或覆盖写（同一 `repository_id + path`）  |
-| `DeleteByPath`（[asset_repo.go](apps/server/internal/repository/asset_repo.go#L67-L70)）                        | 单条删除                                     |
-| `asset_mutation_repo.go` 的 apply / 回滚（[asset_mutation_repo.go](apps/server/internal/repository/asset_mutation_repo.go#L274-L330)） | 统一资产操作的批量提交与回滚                  |
+| 写入点                                                                                                                                 | 形态                                        |
+| -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
+| `UpsertWithTime`（[asset_repo.go](apps/server/internal/repository/asset_repo.go#L32-L47)，`INSERT … ON CONFLICT DO UPDATE`）           | 新增或覆盖写（同一 `repository_id + path`） |
+| `DeleteByPath`（[asset_repo.go](apps/server/internal/repository/asset_repo.go#L67-L70)）                                               | 单条删除                                    |
+| `asset_mutation_repo.go` 的 apply / 回滚（[asset_mutation_repo.go](apps/server/internal/repository/asset_mutation_repo.go#L274-L330)） | 统一资产操作的批量提交与回滚                |
 
 外加一处**整仓**路径：仓库删除经 `repository` 的 `ON DELETE CASCADE`（[0002_asset.sql](apps/server/internal/persistence/migrations/0002_asset.sql#L15)）级联清掉该仓库全部 `asset`，此时按仓库一次性清理索引比逐行维护更直接。
 
@@ -96,6 +96,7 @@
   `search_index_state(id INTEGER PRIMARY KEY CHECK (id = 1), last_id INTEGER NOT NULL DEFAULT 0 CHECK (last_id >= 0), total_rows INTEGER NOT NULL DEFAULT 0 CHECK (total_rows >= 0), completed_at TEXT, updated_at TEXT NOT NULL DEFAULT (datetime('now')))`
 
   初始行 `(1, 0, 0, NULL)`。`completed_at IS NULL` 即表示回填未完成——**不另设 `done` 列**，避免两个字段表达同一状态而漂移。`total_rows` 是回填开始时取的 `asset` 行数快照，仅供进度展示与一致性校验，不参与正确性判定。**不复用 `schema_migrations`**：迁移版本表达「结构已建」，回填完成表达「数据已灌」，两者生命周期不同，混用会让「升级完成」与「搜索已提速」不可区分。单行形态而非按 name 多行：当前只有一个索引，不预留多行；将来若新增索引另起表或扩展主键。
+
 - **迁移内不回填**：迁移器把每个文件放在单个事务里执行（[migrate.go](apps/server/internal/persistence/migrate.go#L11-L42)），且只前向、无 down。百万级回填塞进迁移会把升级变成一次长时间持写锁的不可用事务，且中途失败无法断点恢复。回填交给 §3.2。
 - **启动自检**：迁移建虚拟表若因构建缺少 FTS5 而失败，必须给出可读的中文错误（说明「当前 SQLite 构建不支持 fts5」），而不是让升级挂在一句泛化的 `SQL logic error`。已实测 `modernc.org/sqlite v1.60.1` 支持 `fts5` 与 `tokenize='trigram'`，但自检不依赖该结论。
 
@@ -140,15 +141,15 @@
 
 **逐条语法映射**：
 
-| 既有语法         | 既有谓词                                                               | 新路径                                                                                                                  |
-| ---------------- | ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| 包含词（多词）   | 每词一条 `path LIKE '%t%'`，**AND**                                     | 全部提升为 FTS `MATCH` 的 **AND** 项；每词作为 FTS5 **字符串字面量**（`"` 包裹、内部 `"` 双写）                          |
-| 引号短语         | `path LIKE '%含 空格 短语%'`（整串作为**一个**连续子串）                | 同样是一个 FTS5 字符串字面量；trigram 的短语匹配即连续子串匹配，等价                                                     |
-| 排除词 `-词`     | `path NOT LIKE '%t%'`                                                  | **保留为 SQL 后置谓词**，作用于候选集；不下推进 FTS 的 NOT                                                              |
-| `ext:`           | `path LIKE '%.jar'`（多个为 OR 集合）                                  | **保留为 SQL 后置谓词**                                                                                                 |
-| `-ext:`          | `path NOT LIKE '%.jar'`                                                | 保留为 SQL 后置谓词                                                                                                     |
-| `repo:` / `-repo:` / `format:` / `-format:` | 域层先按仓库元数据收窄成 `repository_id IN (...)`（[repository_service.go](apps/server/internal/domain/repository_service.go#L1089-L1113)） | **不变**，仍在域层收窄，SQL 谓词原样                                                     |
-| 仓库范围 / ACL   | `repository_id IN (...)`（[asset_repo.go](apps/server/internal/repository/asset_repo.go#L267-L273)）                                  | **不变**                                                                                                                 |
+| 既有语法                                    | 既有谓词                                                                                                                                    | 新路径                                                                                          |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| 包含词（多词）                              | 每词一条 `path LIKE '%t%'`，**AND**                                                                                                         | 全部提升为 FTS `MATCH` 的 **AND** 项；每词作为 FTS5 **字符串字面量**（`"` 包裹、内部 `"` 双写） |
+| 引号短语                                    | `path LIKE '%含 空格 短语%'`（整串作为**一个**连续子串）                                                                                    | 同样是一个 FTS5 字符串字面量；trigram 的短语匹配即连续子串匹配，等价                            |
+| 排除词 `-词`                                | `path NOT LIKE '%t%'`                                                                                                                       | **保留为 SQL 后置谓词**，作用于候选集；不下推进 FTS 的 NOT                                      |
+| `ext:`                                      | `path LIKE '%.jar'`（多个为 OR 集合）                                                                                                       | **保留为 SQL 后置谓词**                                                                         |
+| `-ext:`                                     | `path NOT LIKE '%.jar'`                                                                                                                     | 保留为 SQL 后置谓词                                                                             |
+| `repo:` / `-repo:` / `format:` / `-format:` | 域层先按仓库元数据收窄成 `repository_id IN (...)`（[repository_service.go](apps/server/internal/domain/repository_service.go#L1089-L1113)） | **不变**，仍在域层收窄，SQL 谓词原样                                                            |
+| 仓库范围 / ACL                              | `repository_id IN (...)`（[asset_repo.go](apps/server/internal/repository/asset_repo.go#L267-L273)）                                        | **不变**                                                                                        |
 
 **为什么 `ext:` 不进 FTS**：既有语义是 `LIKE '%.jar'` 的**任意位置包含**而非后缀（`foo.jar.txt` 也会命中），把它搬进 FTS 需要让 `.` 参与分词并重定义 `%` / `_` 的转义口径，语义风险高于收益；而它作为候选集上的后置谓词时成本可忽略（候选集通常 10²–10⁴ 行），且能保证与旧实现逐字一致。
 
@@ -221,9 +222,9 @@
 
 **参数**：
 
-| 参数    | 约定                                                                                                                   |
-| ------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `q`     | 必填语义，但**trim 后为空时返回空 `items` 而不是 400**——suggest 是高频被动调用，空输入是常态而非错误                     |
+| 参数    | 约定                                                                                                                                                                              |
+| ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `q`     | 必填语义，但**trim 后为空时返回空 `items` 而不是 400**——suggest 是高频被动调用，空输入是常态而非错误                                                                              |
 | `limit` | 缺省 10，夹取到 `[1, 20]`；超限**夹取而不报错**，对齐 `parseSearchPageSize` 的既有修正口径（[repository_handlers.go](apps/server/internal/api/repository_handlers.go#L951-L968)） |
 
 **响应**：`{"items": [{"type": "package"|"repository", "value": "..."}]}`。
