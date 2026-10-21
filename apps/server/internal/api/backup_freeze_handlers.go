@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
 )
 
-// 写入冻结窗口（FR-135）的接口层窗口策略。
+// 写入冻结窗口的接口层窗口策略。
 //
 // 为什么策略放在这一层而不是 domain：`FreezeController` 刻意保持中性
 // （`until` 零值 = 手动冻结、不自动解冻），时限策略是接口约定而非领域规则。

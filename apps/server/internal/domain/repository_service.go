@@ -17,11 +17,11 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/upstream"
 )
 
-// AnonymousUsername 是内置匿名主体的用户名（FR-66）：迁移脚本创建，
+// AnonymousUsername 是内置匿名主体的用户名：迁移脚本创建，
 // 不可登录、不可删除 / 改密 / 停用；ACL 中作为普通主体承接匿名授权。
 const AnonymousUsername = "anonymous"
 
-// searchTimeoutDefault 是搜索链路总预算的兜底默认值（FR-149 §3.4）。
+// searchTimeoutDefault 是搜索链路总预算的兜底默认值。
 // 生产装配经 SetSearchTimeout 注入 JIAN_SEARCH_TIMEOUT_SECONDS 的解析结果，
 // 本常量只在未注入时兜底（测试构造与未接线的旧路径），必须与 config 的
 // defaultSearchTimeout 保持同值——改一处必须同步改另一处。
@@ -35,24 +35,24 @@ type RepositoryService struct {
 	metadata  *repository.FormatMetadataRepo
 	settings  *SettingService
 	users     *repository.UserRepo
-	groups    *repository.UserGroupRepo // FR-36：展开主体的组归属（nil 退化为「仅用户自身」）
+	groups    *repository.UserGroupRepo // 展开主体的组归属（nil 退化为「仅用户自身」）
 	mutator   *AssetMutationCoordinator
 	recorder  ChangeRecorder
 	writeGate BusinessWriteGate
 	enabled   formats.Set
 	// searchTimeout 是搜索链路（网页搜索 / npm 搜索 / 后续 suggest）的总预算上限。
-	// 每个搜索入口用它派生一次 deadline，三条语句共享同一个 deadline（FR-149 §3.4）。
+	// 每个搜索入口用它派生一次 deadline，三条语句共享同一个 deadline。
 	searchTimeout time.Duration
 }
 
 // NewRepositoryService 构造 RepositoryService。settings 与 users 供匿名判定
-// （全局开关 + anonymous 主体 ACL，FR-66）使用。
+// （全局开关 + anonymous 主体 ACL，）使用。
 func NewRepositoryService(repos *repository.RepoRepo, acls *repository.AclRepo, assets *repository.AssetRepo, settings *SettingService, users *repository.UserRepo) *RepositoryService {
 	return &RepositoryService{repos: repos, acls: acls, assets: assets, settings: settings, users: users, enabled: formats.Default(),
 		searchTimeout: searchTimeoutDefault}
 }
 
-// SetSearchTimeout 注入搜索链路的总预算上限（FR-149 §3.4）。
+// SetSearchTimeout 注入搜索链路的总预算上限。
 // 非正数不覆盖默认值：搜索是无界查询，关掉超时等于开放一个可以无限占用唯一数据库连接的
 // 入口，因此本项**没有禁用语义**（口径同 autoBlockBase，而非 storageCleanupInterval 的 0 禁用）。
 func (s *RepositoryService) SetSearchTimeout(d time.Duration) {
@@ -71,13 +71,13 @@ func (s *RepositoryService) SetEnabledFormats(enabled formats.Set) { s.enabled =
 // EnabledFormats 返回当前进程启用的格式，供管理面展示。
 func (s *RepositoryService) EnabledFormats() []string { return s.enabled.List() }
 
-// SetChangeRecorder 注入复制变更日志记录器（FR-83）；nil 表示不记录。
+// SetChangeRecorder 注入复制变更日志记录器；nil 表示不记录。
 func (s *RepositoryService) SetChangeRecorder(r ChangeRecorder) { s.recorder = r }
 
 // SetBusinessWriteGate 注入备用节点本地业务写栅栏；nil 保持兼容行为。
 func (s *RepositoryService) SetBusinessWriteGate(gate BusinessWriteGate) { s.writeGate = gate }
 
-// SetUserGroupRepo 注入用户组仓储（FR-36）：授权判定时据此展开主体的组归属。
+// SetUserGroupRepo 注入用户组仓储：授权判定时据此展开主体的组归属。
 // 未注入（nil）时 CanAccess 只看用户自身 ACL，等价于接入用户组之前的行为。
 func (s *RepositoryService) SetUserGroupRepo(groups *repository.UserGroupRepo) { s.groups = groups }
 
@@ -482,7 +482,7 @@ func (s *RepositoryService) Rename(name, newName string) (*repository.Repository
 	return renamed, nil
 }
 
-// SetOnline 设置仓库 online/offline 状态（FR-113）。
+// SetOnline 设置仓库 online/offline 状态。
 // 直接落库、不写复制变更日志：online 是节点本地运维状态（M-2 硬约束），
 // 不得经复制传播到对端覆盖其本地状态。仓库不存在返回 ErrNotFound。
 func (s *RepositoryService) SetOnline(name string, online bool) error {
@@ -505,7 +505,7 @@ func (s *RepositoryService) SetOnline(name string, online bool) error {
 //   - proxy：remoteUrl 必填且为合法 http/https 绝对地址，members 与 immutableRelease 须为空或 false，credentialRef 可选且必须是环境变量引用名；
 //   - group：members 必填（≥1），每个成员须存在、与本仓 format 一致且非自引用，remoteUrl、credentialRef 与 immutableRelease 须为空或 false。
 //
-// FR-41：cacheRetentionDays（代理缓存保留）只对 proxy 有意义，hosted/group 必须为 0，
+// cacheRetentionDays（代理缓存保留）只对 proxy 有意义，hosted/group 必须为 0，
 // proxy 上 0 = 关闭（默认）且不接受负数；存储配额 quotaBytes/quotaAssets 为仓库级上限，
 // 0/缺省 = 不限、负数非法，**只有 hosted 接受非 0 配额**：group 不承载写入，
 // proxy 的缓存在读取回源路径上落盘而该路径没有预检与早拒，两者都在这里拒绝非 0 值。
@@ -757,7 +757,7 @@ func (s *RepositoryService) GetAcl(name string) ([]repository.Acl, error) {
 	return s.acls.ListByRepo(r.ID)
 }
 
-// aclActions 是 ACL 可登记的全部动作（FR-36 六档），与 acl.action 的 CHECK 一致。
+// aclActions 是 ACL 可登记的全部动作（六档），与 acl.action 的 CHECK 一致。
 // 之所以要在领域层再校一遍而不是只依赖 SQLite CHECK：CHECK 违规表现为驱动层的
 // 裸 SQL 错误，且是在**整仓 ACL 已被 DELETE 之后**才在 INSERT 上炸出来，
 // 事务回滚后用户看到的是「内部错误」而不是「动作非法」。
@@ -766,7 +766,7 @@ var aclActions = []string{
 	repository.ActionDelete, repository.ActionAclManage, repository.ActionAdmin,
 }
 
-// validateActions 校验待写入的动作是否全部合法（FR-36 六档）；非法返回 ErrValidation。
+// validateActions 校验待写入的动作是否全部合法（六档）；非法返回 ErrValidation。
 func validateActions(entries []repository.Acl) error {
 	for _, e := range entries {
 		if !slices.Contains(aclActions, e.Action) {
@@ -778,7 +778,7 @@ func validateActions(entries []repository.Acl) error {
 
 // SetAcl 覆盖写入仓库 ACL；仓库不存在返回 ErrNotFound。
 // 用户主体条目 SubjectID 有值，用户组主体条目 SubjectGroupID 有值，二者由
-// 表内 CHECK 强制互斥（FR-36）；非法动作返回 ErrValidation。
+// 表内 CHECK 强制互斥；非法动作返回 ErrValidation。
 func (s *RepositoryService) SetAcl(name string, entries []repository.Acl) ([]repository.Acl, error) {
 	if err := requireBusinessWrite(s.writeGate); err != nil {
 		return nil, err
@@ -887,9 +887,9 @@ func (s *RepositoryService) CleanupEmptyMavenArtifacts(name string) (int, error)
 //
 // subject 是**已展开组归属**的主体（见 SubjectFor）。UserID==0 即匿名（可用
 // repository.AnonymousSubject() 构造）：受全局开关约束，开启时 public read 放行，
-// 否则按内置 anonymous 主体的 ACL 判定（FR-66）。匿名不属于任何组，组集合恒为空。
+// 否则按内置 anonymous 主体的 ACL 判定。匿名不属于任何组，组集合恒为空。
 // 已认证主体：public 仓库对 read 放行；其余按 ACL 判定，命中「用户自身」或
-// 「其所属任一用户组」的 ACL 之一即放行（FR-36）。仓库不存在返回 ErrNotFound。
+// 「其所属任一用户组」的 ACL 之一即放行。仓库不存在返回 ErrNotFound。
 func (s *RepositoryService) CanAccess(name string, subject repository.Subject, action string) (bool, error) {
 	r, err := s.repos.GetByName(name)
 	if errors.Is(err, repository.ErrNotFound) {
@@ -993,7 +993,7 @@ func (s *RepositoryService) ReadableRepoIDs(repos []repository.Repository, subje
 	return readable, nil
 }
 
-// SubjectFor 把「用户 ID」组装为鉴权主体：补上该用户所属的用户组 ID 集合（FR-36）。
+// SubjectFor 把「用户 ID」组装为鉴权主体：补上该用户所属的用户组 ID 集合。
 //
 // 这是全系统构造组感知主体的**唯一入口**：授权判定需要组集合，但各调用点（管理面守卫、
 // 协议层 authorize、仓库列表/搜索过滤）拿到的都只是用户 ID，若让它们各自去查组，
@@ -1001,7 +1001,7 @@ func (s *RepositoryService) ReadableRepoIDs(repos []repository.Repository, subje
 // 再由调用点把结果透传给 CanAccess / CanAccessResolved。
 //
 // 用户 ID 为 0（匿名）或组仓储未接线时直接返回无组归属的主体：前者本就不属任何组，
-// 后者退化为「仅按用户自身 ACL 判定」，即 FR-36 之前既有的行为。
+// 后者退化为「仅按用户自身 ACL 判定」，即之前既有的行为。
 // 组查询失败返回 error：查不到组就放行会让组授权的拒绝侧开口子，宁可让请求失败。
 func (s *RepositoryService) SubjectFor(userID int64) (repository.Subject, error) {
 	if userID == 0 || s.groups == nil {
@@ -1047,7 +1047,7 @@ func (s *RepositoryService) anonymousSubjectID() (int64, error) {
 	return u.ID, nil
 }
 
-// ---- FR-54: Tree API ----
+// ---- : Tree API ----
 
 // DirectoryEntry 目录懒加载返回结构：当前层级的子目录（全量）与直接文件。
 // FileTotal / FileBytes 是直接文件的总数与体积合计；Files 可能只是其中一页
@@ -1100,7 +1100,7 @@ func (s *RepositoryService) ListDirectoryPage(name, prefix string, fileLimit, fi
 	}, nil
 }
 
-// ---- FR-30: Search API ----
+// ---- : Search API ----
 
 // SearchResult 全局搜索结果条目。
 type SearchResult struct {
@@ -1114,7 +1114,7 @@ type SearchFacetResult struct {
 	Count    int
 }
 
-// 搜索结果的分组维度（FR-150 §3.7）：`group_by=file` 为既有文件级视图（缺省），
+// 搜索结果的分组维度：`group_by=file` 为既有文件级视图（缺省），
 // `group_by=package` 在文件级视图之外额外给出包级聚合。缺省值必须保持 file——仓库内搜索
 // 依赖 `path asc` 的文件级结果建树，包级视图只在结果页显式请求。
 const (
@@ -1128,7 +1128,7 @@ type SearchOutput struct {
 	Total  int
 	Facets []SearchFacetResult
 
-	// 以下字段只在 `group_by=package` 时填充（FR-150 §3.7）。file 模式下保持零值，
+	// 以下字段只在 `group_by=package` 时填充。file 模式下保持零值，
 	// 因此既有响应形状（items / total / facets）逐字段不变。
 	Packages     []SearchPackage
 	PackageTotal int
@@ -1197,7 +1197,7 @@ func (s *RepositoryService) readableRepoIDs(subjectID int64, isAdmin bool, allRe
 		repoIDs = append(repoIDs, r.ID)
 	}
 	// 已登录主体或匿名映射到的 anonymous 主体：加上 ACL 授权的私有仓库。
-	// 主体按用户 ID 展开组归属，使「组被授 read」的仓库也进入可搜范围（FR-36）。
+	// 主体按用户 ID 展开组归属，使「组被授 read」的仓库也进入可搜范围。
 	// 判定是**一次批量查询**（用户分支 + 组分支各一条 SQL），不随仓库数增长。
 	if aclSubject > 0 && allErr == nil {
 		pubSet := make(map[int64]bool, len(pubRepos))
@@ -1294,16 +1294,16 @@ func (s *RepositoryService) resolveSearchScope(keyword, repoScope string, subjec
 // 严格匹配、"引号短语"。
 // repoScope 非空时限定单仓库（浏览页内搜索，条件下推保证 total 精确）。
 // subjectID==0 表示匿名：受全局开关约束，可搜范围 = public ∪ anonymous 主体
-// 被授 read 的仓库（FR-66）；isAdmin 则搜全部。
-// 已认证主体的可搜范围含「其所属用户组被授 read」的仓库（FR-36）。
+// 被授 read 的仓库；isAdmin 则搜全部。
+// 已认证主体的可搜范围含「其所属用户组被授 read」的仓库。
 // sort/order 控制结果排序，取值见 AssetRepo.SearchByFilter。
 //
-// ctx 是搜索链路的**唯一**超时来源（FR-149 §3.4）：本方法在入口按 searchTimeout 派生一次
+// ctx 是搜索链路的**唯一**超时来源：本方法在入口按 searchTimeout 派生一次
 // deadline 并向下传给三条语句，命中超时统一归一为 ErrSearchTimeout。三个调用方
 // （/api/v1/search、npm registrySearch、后续 suggest）因此共享同一套语义——放在 handler 层
 // 会让每个调用方各写一遍，放在仓储层则拿不到「一次搜索的总预算」。
 //
-// 本方法**只做文件级搜索**：包级聚合（FR-150）在新增的 SearchAggregate 里，两者的签名与
+// 本方法**只做文件级搜索**：包级聚合在新增的 SearchAggregate 里，两者的签名与
 // 响应形状互不影响，因此 npm registrySearch 直接调用本方法时行为一字不变（规格 §3.8）。
 func (s *RepositoryService) SearchAssets(ctx context.Context, keyword, repoScope string, subjectID int64, isAdmin bool, sort, order string, limit, offset int) (*SearchOutput, error) {
 	ctx, cancel := s.searchContext(ctx)
@@ -1364,7 +1364,7 @@ func (s *RepositoryService) SearchAssets(ctx context.Context, keyword, repoScope
 	return out, nil
 }
 
-// SearchAggregate 在文件级搜索结果之外追加包级聚合（FR-150 §3.3 ~ §3.7）。
+// SearchAggregate 在文件级搜索结果之外追加包级聚合（~ §3.7）。
 //
 // groupBy 取 SearchGroupByFile（缺省）或 SearchGroupByPackage。file 模式直接委托给
 // SearchAssets——**行为、签名与查询条数完全不变**，npm registrySearch 因此不受本 FR 影响

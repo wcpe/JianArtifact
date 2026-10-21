@@ -1,4 +1,4 @@
-// 分片上传（FR-137 第三通道）：init → 逐片上传 → 进度 → complete 后导入记录 pending_restart；
+// 分片上传（第三通道）：init → 逐片上传 → 进度 → complete 后导入记录 pending_restart；
 // 取消（abort）会话标记 aborted；续传只补缺失片；缺片错误如实展示。
 //
 // 通道位置（两段式任务台）：上传不再是页面上的一张卡，也不是「导入与传输」弹窗里的一个标签页
@@ -105,7 +105,7 @@ describe("分片上传备份包", () => {
       { timeout: 8000 },
     );
 
-    // 本面板给出「已加入备份列表」回执（FR-40 追加八起不再有"需重启"）。
+    // 本面板给出「已加入备份列表」回执（起不再有"需重启"）。
     await waitFor(
       () => {
         expect(screen.getByText("上传完成，已加入备份列表")).toBeTruthy();
@@ -121,7 +121,7 @@ describe("分片上传备份包", () => {
   }, 30_000);
 
   it("上传只把包存入备份列表：complete 不提交 overwrite/deep，界面也不再出现这两个开关", async () => {
-    // FR-40 追加八改变了上传语义：此前 complete 会走 StartLocalImport → 写 restore.pending，
+    // 改变了上传语义：此前 complete 会走 StartLocalImport → 写 restore.pending，
     // 于是"上传一个包"等于"提交一次覆盖本机数据的恢复"，用户没有校验的机会。
     // 现在上传只入库，因此：
     //   ① 界面不再出现「覆盖已有数据 / 深度校验」两个开关（它们属于恢复动作）；

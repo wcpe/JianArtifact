@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
 )
 
-// FR-149 §3.2：搜索索引的两个运维端点（状态查询与全量重建），均仅管理员。
+// 搜索索引的两个运维端点（状态查询与全量重建），均仅管理员。
 //
 // 两者按 /api/v1/search 的既有先例作为**非契约端点**注册（经 WithProtocolRoutes，
 // 不进 api/openapi.yaml）：它们服务运维观测与故障修复，形状会随后续批次（查询改写、
@@ -20,7 +20,7 @@ import (
 
 // GetSearchIndexStatus 返回搜索索引回填状态（仅管理员）。
 //
-// 响应口径（FR-149 §3.2）：
+// 响应口径：
 //   - ready     —— 回填是否完成。search_index_state 只有 completed_at，NULL 即未完成；
 //     未完成期间搜索整体走既有 LIKE 路径（正确但尚未提速）。
 //   - total     —— 回填开始时的 asset 行数快照（total_rows），仅用于进度展示。

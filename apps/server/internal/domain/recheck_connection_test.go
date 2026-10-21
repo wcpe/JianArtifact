@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
 )
 
-// TestRecheckConnectionFailureToAutoBlocked 手动重测（FR-114）：上游不可达时
+// TestRecheckConnectionFailureToAutoBlocked 手动重测：上游不可达时
 // 立即 HEAD 探测失败 → 进入 AUTO_BLOCKED 并携带阻止窗口；不等待自动窗口。
 func TestRecheckConnectionFailureToAutoBlocked(t *testing.T) {
 	t.Parallel()

@@ -9,7 +9,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// 用户组管理端点（FR-36）：组的增删改查与成员维护。
+// 用户组管理端点：组的增删改查与成员维护。
 //
 // 全部端点仅管理员可用——管理面不做仓库级细粒度授权（规格 §2 明确把
 // `acl_manage` 接到管理端点列为范围外），沿用既有 requireAdmin 守卫。

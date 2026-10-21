@@ -5,9 +5,9 @@
 --          (repository_id, subject_id, action) 三元组与 id 逐条不变；预计耗时：随 acl 行数增长
 --          （重建需全表复制，大库为毫秒～百毫秒级，升级期间占用写锁）
 -- 回滚：不支持 down migration；需要恢复升级前备份
--- 相关：FR-36、docs/specs/0.12.0-user-groups-and-fine-grained-actions.md
+-- 相关：、docs/specs/0.12.0-user-groups-and-fine-grained-actions.md
 --
--- 背景：FR-36 要求两件事——授权主体从「单个用户」扩展到「用户组」，动作从
+-- 背景： 要求两件事——授权主体从「单个用户」扩展到「用户组」，动作从
 -- read / write / admin 三档扩展到 read / write / publish / delete / acl_manage / admin 六档。
 -- 0001 建的 acl 表把主体写死为 subject_id NOT NULL REFERENCES user(id)，且 action 的 CHECK
 -- 只认三值；SQLite 的 ALTER TABLE 既不能放宽 / 新增 CHECK 约束，也不能追加带 REFERENCES 的列

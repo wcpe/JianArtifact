@@ -32,7 +32,7 @@ func newHalfOpenRepo(h *proxyHealth, repoID int64) {
 	forceWindowExpired(h, repoID, StatusHalfOpen, time.Now().Add(-time.Second))
 }
 
-// TestBeginUpstreamAllowsExactlyOneConcurrentProbe 并发闸门（FR-43 §2.3 核心修复）：
+// TestBeginUpstreamAllowsExactlyOneConcurrentProbe 并发闸门（核心修复）：
 // 多 goroutine 同时冲闸门，**恰好一个**被放行，其余在探测结论返回前等效封锁。
 // 判定与置位在同一把锁内完成，故不可能出现两个请求同时放行（-race 下验证）。
 func TestBeginUpstreamAllowsExactlyOneConcurrentProbe(t *testing.T) {

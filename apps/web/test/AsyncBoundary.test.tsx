@@ -1,4 +1,4 @@
-// FR-69 异步加载体验：刷新/翻页时 AsyncBoundary 保留旧数据 + 局部 loading，不整页换骨架。
+//  异步加载体验：刷新/翻页时 AsyncBoundary 保留旧数据 + 局部 loading，不整页换骨架。
 import { AppProvider } from "@jianartifact/ui";
 import { act, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
@@ -24,7 +24,7 @@ function makeState<T>(overrides: Partial<AsyncState<T>>): AsyncState<T> {
   };
 }
 
-describe("AsyncBoundary（FR-69 keep-previous-data）", () => {
+describe("AsyncBoundary（ keep-previous-data）", () => {
   it("首载（无数据）时显示骨架", () => {
     renderWithMantine(
       <AsyncBoundary state={makeState<string>({ loading: true })}>

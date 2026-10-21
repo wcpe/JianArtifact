@@ -1,7 +1,7 @@
 // 全局搜索结果页：/search?q=keyword
 // 支持高级表达式（-排除词 / repo: / format: / ext: / 引号短语），配筛选面板双向同步；
-// 结果以 FR-150 的包级聚合（group_by=package&order=relevance）为主数据源，
-// 渲染成「左栏包/版本/文件折叠树 + 右栏文件详情」的主从双栏（FR-151）。
+// 结果以的包级聚合（group_by=package&order=relevance）为主数据源，
+// 渲染成「左栏包/版本/文件折叠树 + 右栏文件详情」的主从双栏。
 // 窄屏（<820px）降维为单栏两级视图：列表 ⇄ 详情，浏览器返回键可回列表。
 import {
   Box,
@@ -77,8 +77,8 @@ type SortKey = SearchSortKey;
 type SortOrder = SearchSortOrder;
 
 /**
- * 把后端 / 客户端两处超时统一判出来（FR-152）：
- * - 后端搜索预算耗尽（FR-149）返回 HTTP 504 + `search_timeout`；
+ * 把后端 / 客户端两处超时统一判出来：
+ * - 后端搜索预算耗尽返回 HTTP 504 + `search_timeout`；
  * - 客户端 15s 兜底（api/client）抛 `code=timeout`、status 0。
  * 两者都该给「超时」明确文案，而不是泛化的「加载失败」——后者会让人以为可以无脑重试。
  */
@@ -175,7 +175,7 @@ export function SearchPage() {
   // 取数口径固定为「包级聚合 + 相关度」：其余排序键全部在前端重排（规格 §3.9），
   // 因此切换排序不触发请求，也就不用进依赖数组。
   //
-  // abortable（FR-152）：把 signal 透传到 searchAssets → api/client → fetch。新一次搜索发起前
+  // abortable：把 signal 透传到 searchAssets → api/client → fetch。新一次搜索发起前
   // （q / page 变化或点「取消搜索」）都会真的中止上一次请求，而不是只靠 active 标志丢弃响应。
   // 这里选择给 useAsync 加一个可选开关，而不是让本页自管请求状态：缓存回放、keepPreviousData、
   // 刷新失败非阻断、reload 重试这些语义本页都在用，自管等于复制一份并迟早与全局口径漂移。
@@ -250,7 +250,7 @@ export function SearchPage() {
 
   const openRepo = useCallback(
     (repository: string, highlightPath?: string) => {
-      // FR-145：携带命中位置进入仓库详情，避免进仓库后再搜一遍。
+      // 携带命中位置进入仓库详情，避免进仓库后再搜一遍。
       const query = highlightPath ? `?highlight=${encodeURIComponent(highlightPath)}` : "";
       navigate(`/repositories/${encodeURIComponent(repository)}${query}`);
     },
@@ -408,7 +408,7 @@ export function SearchPage() {
       return <ForbiddenState message={t("common.forbidden")} />;
     }
     if (state.error) {
-      // 超时与其它失败分开给文案（FR-152）：504 / search_timeout / 客户端 timeout 三类都落到
+      // 超时与其它失败分开给文案：504 / search_timeout / 客户端 timeout 三类都落到
       // 「搜索超时」，其余仍走通用失败提示，避免把限流、权限、网络问题一律说成超时。
       const timedOut = isTimeoutError(state.error);
       return (
@@ -556,7 +556,7 @@ export function SearchPage() {
       <Box style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 12 }}>
         {/* wrap：窄屏把按钮换到第二行，否则输入框会被挤到只剩几十像素宽没法输入。
             输入框给 minWidth 保底，放不下时让按钮先换行而不是压缩输入框。
-            FR-153：输入框换成带候选下拉的自管组件（防抖 + 中止上一次 + 键盘 ↑↓/Enter/Esc）。
+            输入框是带候选下拉的自管组件（防抖 + 中止上一次 + 键盘 ↑↓/Enter/Esc）。
             回车与「包名候选」确认都走 handleSubmit；仓库名候选只改写表达式、不触发搜索。 */}
         <Group gap="xs" wrap="wrap" align="flex-start">
           <SearchSuggestInput
@@ -695,7 +695,7 @@ export function SearchPage() {
 
         {/* 进度条固定在结果区**内部顶部**：搜索框与 facet 条不被整体卸载（规格要求），
             首载时骨架屏照常显示、换排序 / 翻页时旧结果留在原位，二者与进度条上下共存。
-            取消按钮挂在进度条上，点击即 abort 在途请求并静默回到空闲态（FR-152）。 */}
+            取消按钮挂在进度条上，点击即 abort 在途请求并静默回到空闲态。 */}
         {q ? (
           <Box style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 8 }}>
             {searching && <SearchProgress onCancel={state.cancel} />}

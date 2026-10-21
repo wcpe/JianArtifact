@@ -1,4 +1,4 @@
-// FR-153 前端交互回归（规格 docs/specs/search-index-and-performance.md §3.9）：
+//  前端交互回归（规格 docs/specs/search-index-and-performance.md §3.9）：
 // - 防抖 ≤ 300ms：连续键入只发最后一次请求；去空白后不足 2 字符不发请求；
 // - AbortController + 请求序号：旧响应晚回不得覆盖新候选；
 // - 键盘 ↑/↓ 移动高亮、Enter 确认、Esc 收起、点击外部收起；
@@ -103,7 +103,7 @@ function resolveSuggest(items: SearchSuggestResult["items"], index = pending.len
   pending[index]!.resolve({ items });
 }
 
-describe("SearchPage 搜索建议下拉（FR-153）", () => {
+describe("SearchPage 搜索建议下拉", () => {
   it("首屏 URL 的 q 不触发建议请求（只响应真实键入）", async () => {
     renderPage("spring-core");
     await flush(SUGGEST_DEBOUNCE_MS * 2);

@@ -1,6 +1,6 @@
 package httpserver_test
 
-// FR-103 批量删除：handler 单测覆盖鉴权、校验、逐条尽力与审计/复制联动。
+//  批量删除：handler 单测覆盖鉴权、校验、逐条尽力与审计/复制联动。
 import (
 	"bytes"
 	"encoding/json"
@@ -162,7 +162,7 @@ func TestAssetOperationAPIAuditFailureRollsBackOperation(t *testing.T) {
 	t.Parallel()
 	e := newBatchDeleteEnv(t, "admin")
 	e.seedBatchAssets(t)
-	// 以 seed 完成后的水位为基线：FR-138 后 Put 自身也写 v2 outbox，基线已含若干记录。
+	// 以 seed 完成后的水位为基线： 后 Put 自身也写 v2 outbox，基线已含若干记录。
 	opRepo := repository.NewReplicationOperationRepo(e.db)
 	base, err := opRepo.ListRecordsSince(0, 100)
 	if err != nil {
@@ -358,7 +358,7 @@ func TestBatchDeleteAssetsAdminDeletes(t *testing.T) {
 	e := newBatchDeleteEnv(t, "admin")
 	e.seedBatchAssets(t)
 
-	// FR-138 退役复制通道后，AssetService.Put 自身也会写 v2 outbox 记录，
+	//  退役复制通道后，AssetService.Put 自身也会写 v2 outbox 记录，
 	// 故以 seed 完成后的水位为基线，只度量批量删除产生的增量 operation。
 	opRepo := repository.NewReplicationOperationRepo(e.db)
 	base, err := opRepo.ListRecordsSince(0, 100)

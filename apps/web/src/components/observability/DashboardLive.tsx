@@ -140,7 +140,7 @@ export function DashboardLive() {
   const repos = useAsync(() => listAllRepositories(), [], {
     cacheKey: "dashboard:repos",
   });
-  // FR-144 旧「来源聚合（by-client）」拉取已移除：IP/UA 族占比改由
+  //  旧「来源聚合（by-client）」拉取已移除：IP/UA 族占比改由
   // DownloadGroupedTrend 内部走端点 A（downloads/trend）的 totals，单源不再并行两套口径。
 
   // 任一子请求在途即视为"忙"：慢接口下用它挡住轮询与手动刷新，避免请求在挂起期间累积。
@@ -181,7 +181,7 @@ export function DashboardLive() {
   const capacityGrowth: TrendSeries | null = dashboard.data
     ? relativeGrowth(points(dashboard.data.capacityTrend, "logicalBytes"))
     : null;
-  // FR-143：旧「下载累计趋势」独立图已删除（与请求主图的下载系列重复），
+  // 旧「下载累计趋势」独立图已删除（与请求主图的下载系列重复），
   // 下载分析统一由 DownloadGroupedTrend（分组时序 + 占比饼）承担。
 
   const alertList = (dashboard.data?.alerts ?? []) as OperationsAlert[];
@@ -414,7 +414,7 @@ function DashboardGrid({
 }) {
   const { t } = useTranslation();
   // KPI 指标带第 8 格：上游被阻止的 proxy 仓库数（与仓库状态面板、后端 blockedCount 同口径）。
-  // FR-43：半开也计入——它业务上仍处于封锁效果，只数 AUTO_BLOCKED 会让「正在试探」的仓库
+  // 半开也计入——它业务上仍处于封锁效果，只数 AUTO_BLOCKED 会让「正在试探」的仓库
   // 在封锁窗口到期瞬间从读数为 0，误报成已恢复。
   const blockedRepos = repos.filter((repo) => {
     const status = repo.connectionStatus?.status;
@@ -464,7 +464,7 @@ function DashboardGrid({
                 }
               />
             </Card>
-            {/* FR-143/144：下载分析——旧「下载累计趋势」独立图已删除（与请求主图下载系列重复），
+            {/* /144：下载分析——旧「下载累计趋势」独立图已删除（与请求主图下载系列重复），
                 改由 DownloadGroupedTrend 承担：分组时序多系列 + 请求总量对照 + IP/UA族占比饼。 */}
             <Card withBorder radius="md" padding={density.cardPadding}>
               <DownloadGroupedTrend

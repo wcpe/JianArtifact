@@ -69,7 +69,7 @@ func (r *RepoRepo) GetByID(id int64) (*Repository, error) {
 	return &repo, nil
 }
 
-// GetByIDTx 在调用方事务中按 ID 取仓库，供提交点判定（FR-41 存储配额）读取
+// GetByIDTx 在调用方事务中按 ID 取仓库，供提交点判定（存储配额）读取
 // 与本次写入同一事务视图下的仓库配置。不存在返回 ErrNotFound。
 func (r *RepoRepo) GetByIDTx(tx *sqlx.Tx, id int64) (*Repository, error) {
 	var repo Repository
@@ -221,7 +221,7 @@ func (r *RepoRepo) UpdateConfig(name, config string) error {
 	return affected(res, err)
 }
 
-// SetOnline 设置仓库 online/offline 状态并直接落库（FR-113）。
+// SetOnline 设置仓库 online/offline 状态并直接落库。
 // 仅更新 online 列，不动 config / description 等复制字段。
 func (r *RepoRepo) SetOnline(name string, online bool) error {
 	res, err := r.db.Exec(

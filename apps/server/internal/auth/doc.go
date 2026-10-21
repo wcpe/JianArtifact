@@ -3,5 +3,5 @@
 //
 // 分层（见 internal/doc.go）：auth -> persistence。会话为无状态 JWT，
 // 登出通过 revoked_token 黑名单实现；API Token 仅存 sha256 摘要，明文不落库。
-// 明文口令与明文 Token 不写入数据库、不进日志（NFR-06、AC-05）。
+// 明文口令与明文 Token 不写入数据库、不进日志（N、AC-05）。
 package auth

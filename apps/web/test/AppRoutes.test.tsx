@@ -1,17 +1,17 @@
-// FR-70 路由级代码分割：懒加载路由经 Suspense 解析后正常渲染（守护测试）。
+//  路由级代码分割：懒加载路由经 Suspense 解析后正常渲染（守护测试）。
 import { screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { AppRoutes, publicRepositoryRedirectPath } from "../src/app/router";
 import { renderWithProviders } from "./harness";
 
-describe("路由懒加载（FR-70）", () => {
+describe("路由懒加载", () => {
   it.each([
     ["审计中心", "/audit-logs"],
     ["业务仪表盘", "/dashboard"],
     ["主机监控", "/host-monitoring"],
     ["用户管理", "/users"],
-    // FR-36：用户组同样仅管理员可直达。
+    // 用户组同样仅管理员可直达。
     ["用户组管理", "/user-groups"],
     ["设置", "/settings"],
     ["开源协议", "/licenses"],
@@ -35,7 +35,7 @@ describe("路由懒加载（FR-70）", () => {
     expect(await screen.findByTestId("state-forbidden")).toBeTruthy();
   });
 
-  it("公开别名重定向保留开发态场景查询参数（FR-122）", () => {
+  it("公开别名重定向保留开发态场景查询参数", () => {
     expect(publicRepositoryRedirectPath("raw-hosted", "?__mock=empty")).toBe(
       "/repositories/raw-hosted?__mock=empty",
     );

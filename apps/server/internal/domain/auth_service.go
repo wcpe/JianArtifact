@@ -51,7 +51,7 @@ func (s *AuthService) Bootstrap(username, password string) (token string, user *
 }
 
 // Login 校验口令并签发会话令牌。用户不存在 / 停用 / 口令错误统一返回 ErrInvalidCredentials。
-// 内置 anonymous 主体禁止登录（FR-66）。
+// 内置 anonymous 主体禁止登录。
 func (s *AuthService) Login(username, password string) (token string, user *repository.User, err error) {
 	if username == AnonymousUsername {
 		return "", nil, ErrInvalidCredentials

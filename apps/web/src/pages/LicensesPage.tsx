@@ -1,4 +1,4 @@
-// FR-72: 开源协议页——展示项目 Go / npm 依赖的协议清单。
+// 开源协议页——展示项目 Go / npm 依赖的协议清单。
 // 数据由 scripts/generate-licenses.mjs 构建时产出并内嵌到后端二进制，
 // 经 admin 专属端点 GET /api/v1/licenses 运行时拉取（不打进前端 bundle，
 // 避免依赖名与精确版本清单随静态资源公开暴露）。

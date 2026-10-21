@@ -20,7 +20,7 @@
 // - 首载（尚无数据在场）不受该选项影响，仍按原逻辑显示加载态；失败时旧数据仍在场则走
 //   refreshError（非阻断警告）分支，与缓存回放分支口径一致。
 //
-// abortable（可选，默认 false = 保持既有行为，FR-152）：
+// abortable（可选，默认 false = 保持既有行为，）：
 // - 原实现只靠 `active` 闭包标志**丢弃**过期响应，网络请求照旧跑完——用户取消不了，
 //   换口径时后端也白算一遍。开启后每次 effect 运行都新建 AbortController 并把 signal
 //   透传给 fetcher，cleanup（卸载 / 口径切换）与显式 cancel() 都会真的 abort 请求。
@@ -255,7 +255,7 @@ export function useAsync<T>(
     controllerRef.current?.abort();
   }, []);
 
-  // FR-71：响应页眉刷新按钮的全局刷新事件。
+  // 响应页眉刷新按钮的全局刷新事件。
   useEffect(() => {
     const handler = () => setNonce((n) => n + 1);
     window.addEventListener(REFRESH_EVENT, handler);

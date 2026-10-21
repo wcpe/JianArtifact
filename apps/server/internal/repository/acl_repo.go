@@ -72,7 +72,7 @@ func (r *AclRepo) Replace(repoID int64, entries []Acl) error {
 // action IN (...) 候选集。方向搞反会让权限反向放大（例如「只读」被当成「可写」），
 // 故此处显式按「请求 → 蕴含它的授权」推导。
 //
-// 蕴含关系（FR-36）：
+// 蕴含关系：
 //   - admin 蕴含全部六档，故任何请求都能被 admin 授权满足；
 //   - write 蕴含 read 与 publish，故 read / publish 请求可被 write 授权满足，
 //     而 write 请求不能被 read 授权满足（只读不得反向扩成可写）；
@@ -102,7 +102,7 @@ func satisfyingGrants(action string) []string {
 
 // HasPermission 判断主体对仓库是否拥有指定动作的授权。
 //
-// 判定口径（FR-36）：**用户自身**的 ACL 命中 **或** 该用户所属**任一用户组**的
+// 判定口径：**用户自身**的 ACL 命中 **或** 该用户所属**任一用户组**的
 // ACL 命中，二者取或。组主体只是把「给 N 个用户逐条授予」收敛成一条，不改变
 // 用户自身的既有授权。
 //
@@ -210,7 +210,7 @@ func (r *AclRepo) RepoIDsWithPermission(repoIDs []int64, subject Subject, action
 	return granted, nil
 }
 
-// DeleteByGroup 删除以该用户组为主体的全部 ACL 条目（FR-36）。
+// DeleteByGroup 删除以该用户组为主体的全部 ACL 条目。
 //
 // 删组时表外键本可 CASCADE 清理这些条目，但外键默认关闭的部署（或后续改为
 // 逻辑删除的组）下会留下悬空授权，故在领域层显式清理一次：幂等，删不到行不算错。

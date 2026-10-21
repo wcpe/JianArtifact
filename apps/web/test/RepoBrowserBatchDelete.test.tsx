@@ -1,4 +1,4 @@
-// FR-103/108：旧批删入口回归到统一资产操作 API，选择方式改为树行交互。
+// /108：旧批删入口回归到统一资产操作 API，选择方式改为树行交互。
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
@@ -34,7 +34,7 @@ function renderBrowser(authenticated: boolean, user?: User) {
   );
 }
 
-describe("FR-105 右键资产操作", () => {
+describe("右键资产操作", () => {
   it("仓库信息查询会跨页拼接而不是只读取固定一页", async () => {
     const requests: URL[] = [];
     server.use(

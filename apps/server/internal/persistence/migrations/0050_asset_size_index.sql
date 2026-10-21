@@ -3,7 +3,7 @@
 -- 影响：asset 新增复合索引 idx_asset_repo_size；删除冗余的 idx_asset_repository（其前缀已被覆盖）
 -- 数据处理：无历史回填——纯建/删索引，扫描既有 asset 行建立结构；预计耗时随 asset 行数增长，升级期间会短暂占用写锁
 -- 回滚：不支持 down migration；需要恢复升级前备份（本迁移只影响查询计划，重建旧索引即可回到升级前的计划与空间占用）
--- 相关：FR-149 搜索与查询性能（docs/specs/search-index-and-performance.md）、仪表盘容量聚合、仓库存储配额（FR-41）
+-- 相关：搜索与查询性能（docs/specs/search-index-and-performance.md）、仪表盘容量聚合、仓库存储配额
 --
 -- 背景：两条高频聚合都在整表读 size，却都没有可用的覆盖索引
 --
@@ -13,7 +13,7 @@
 --      repository 上一次计数」（实测 1.06 s）。但 asset 侧仍是**全表顺序扫描**：为了拿一列
 --      size，把 path / blob_hash / content_type / 时间戳等整行数据都读进来。
 --
---   2) 仓库存储配额（asset_repo.go 的 repoStatsQuery，FR-41）
+-- 2) 仓库存储配额（asset_repo.go 的 repoStatsQuery，）
 --      `SELECT ? , COUNT(*), COALESCE(SUM(size),0) FROM asset WHERE repository_id = ?`
 --      这是**每次上传都会走两遍**的热路径（预检 + 提交点复检）。没有含 size 的
 --      (repository_id, ...) 索引，它只能先按 repository_id 定位、再逐行回表取 size。

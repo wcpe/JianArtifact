@@ -8,7 +8,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 )
 
-// AnonymousAccessSetting 是匿名访问全局开关端点的请求 / 响应体（FR-66）。
+// AnonymousAccessSetting 是匿名访问全局开关端点的请求 / 响应体。
 // 非契约端点，与 tree/search/cleanup 同先例，后续统一收编进 OpenAPI 契约。
 type AnonymousAccessSetting struct {
 	Enabled *bool `json:"enabled"`

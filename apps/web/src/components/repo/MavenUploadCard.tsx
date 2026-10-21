@@ -1,4 +1,4 @@
-// FR-73: Maven 网页上传卡（GAV 表单 + packaging + 文件选择）。
+// Maven 网页上传卡（GAV 表单 + packaging + 文件选择）。
 // 服务端自动生成 pom.xml、各文件 .md5/.sha1 与 maven-metadata.xml；仅限 release 版本。
 import {
   Button,

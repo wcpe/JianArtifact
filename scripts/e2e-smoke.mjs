@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // 真实后端联调冒烟：对运行中的单二进制（默认 :8099）驱动全链路 API。
 // 跨平台（Windows/Linux/macOS），仅依赖 Node >=18 自带的 fetch/Buffer；仅用于本地验收，不纳入交付。
-// 覆盖 0.2.0 全链路 + 0.3.0 扩展：Raw/Maven/npm hosted 发布+拉取、制品浏览+使用片段（FR-13~16）；
+// 覆盖 0.2.0 全链路 + 0.3.0 扩展：Raw/Maven/npm hosted 发布+拉取、制品浏览+使用片段（~16）；
 //   可选原生客户端（mvn/npm，自动探测提示）与 proxy/group 回源（--include-proxy，需外网）。
 // 用法：node scripts/e2e-smoke.mjs [--include-proxy]
 import { spawnSync } from "node:child_process";
@@ -219,7 +219,7 @@ async function main() {
   r = await reqRaw("GET", "/repository/raw-public/hello.txt", null, null, null);
   check("public 仓匿名读 200 + 字节一致", r.code === 200 && r.raw === "public payload", r.raw);
 
-  // 10.6) 制品浏览 + 使用片段（0.3.0 / FR-16）
+  // 10.6) 制品浏览 + 使用片段（0.3.0 /）
   r = await req("GET", "/api/v1/repositories/raw-public/assets", adminTok, null);
   check(
     "浏览 raw-public assets 200 + 含 hello.txt",
@@ -245,7 +245,7 @@ async function main() {
   r = await req("GET", "/api/v1/repositories/ghost-none/usage", adminTok, null);
   check("未知仓库 usage 404", r.code === 404, r.code);
 
-  // 10.7) Maven hosted deploy + resolve 闭环（0.3.0 / FR-14）
+  // 10.7) Maven hosted deploy + resolve 闭环（0.3.0 /）
   r = await req("POST", "/api/v1/repositories", adminTok, {
     name: "mvn-hosted",
     format: "maven",
@@ -293,7 +293,7 @@ async function main() {
     r.raw,
   );
 
-  // 10.8) npm publish + install 闭环（0.3.0 / FR-15）
+  // 10.8) npm publish + install 闭环（0.3.0 /）
   r = await req("POST", "/api/v1/repositories", adminTok, {
     name: "npm-hosted",
     format: "npm",

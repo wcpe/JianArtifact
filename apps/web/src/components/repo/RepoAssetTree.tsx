@@ -1,6 +1,6 @@
 // 仓库资产目录树：点目录展开并可作为资产目标选择；点文件回调选中。文件类型图标多态化。
-// FR-54: 支持 onExpandDir 懒加载回调——目录首次展开时触发。
-// FR-105: 管理员可选择文件和目录，选择状态由父组件维护。
+// 支持 onExpandDir 懒加载回调——目录首次展开时触发。
+// 管理员可选择文件和目录，选择状态由父组件维护。
 import { Group, Loader, ScrollArea, Text, UnstyledButton } from "@mantine/core";
 import { useMediaQuery } from "@mantine/hooks";
 import {
@@ -28,22 +28,22 @@ interface Props {
   selectedPath: string | null;
   onSelectFile: (node: AssetTreeNode) => void;
   onSelectDir: (node: AssetTreeNode) => void;
-  /** FR-54: 目录首次展开时触发懒加载；返回 Promise 表示加载中。 */
+  /** 目录首次展开时触发懒加载；返回 Promise 表示加载中。 */
   onExpandDir?: (node: AssetTreeNode) => void;
   maxHeight?: number | string;
   /** 目录默认展开（搜索结果树等已全量加载的场景）。 */
   defaultExpanded?: boolean;
   /** 文件行右侧显示大小（搜索结果等需要直观信息的场景）。 */
   showSize?: boolean;
-  /** FR-145：搜索结果直达的命中路径——路径上的目录初始即展开（子层数据由定位链懒加载）。 */
+  /** 搜索结果直达的命中路径——路径上的目录初始即展开（子层数据由定位链懒加载）。 */
   highlightPath?: string;
-  /** FR-105: 管理员启用文件和目录选择。 */
+  /** 管理员启用文件和目录选择。 */
   selectable?: boolean;
-  /** FR-105: 当前选中的文件和目录路径集合。 */
+  /** 当前选中的文件和目录路径集合。 */
   selectedPaths?: Set<string>;
-  /** FR-105: 普通、Ctrl/Meta、Shift 点击选择回调。 */
+  /** 普通、Ctrl/Meta、Shift 点击选择回调。 */
   onNodeInteraction?: (node: AssetTreeNode, event: ReactMouseEvent<HTMLButtonElement>) => void;
-  /** FR-105: 右键菜单回调。 */
+  /** 右键菜单回调。 */
   onContextMenu?: (node: AssetTreeNode, event: ReactMouseEvent<HTMLButtonElement>) => void;
   /** 兼容旧调用方的选择回调。 */
   onToggleSelect?: (node: AssetTreeNode) => void;
@@ -132,7 +132,7 @@ function TreeNodeRow({
   onContextMenu?: (node: AssetTreeNode, event: ReactMouseEvent<HTMLButtonElement>) => void;
   onToggleSelect?: (node: AssetTreeNode) => void;
 }) {
-  // FR-145：位于定位路径上的目录初始即展开（子层数据由定位链懒加载后填充；用户可手动收起）。
+  // 位于定位路径上的目录初始即展开（子层数据由定位链懒加载后填充；用户可手动收起）。
   const onHighlightPath = highlightPath !== undefined && highlightPath.startsWith(`${node.path}/`);
   const [open, setOpen] = useState(defaultExpanded || onHighlightPath);
   const { t } = useTranslation();
@@ -142,7 +142,7 @@ function TreeNodeRow({
   const selected =
     selectedPath === node.path || (selectable && selectedPaths?.has(node.path) === true);
   const pad = 8 + depth * 14;
-  // FR-54: 目录未加载子节点时 children === undefined
+  // 目录未加载子节点时 children === undefined
   const isLoading = isDir && open && node.children === undefined;
 
   useEffect(() => {
@@ -208,7 +208,7 @@ function TreeNodeRow({
           {!isDir && node.asset && (
             <Text size="xs" c="dimmed" style={{ flexShrink: 0 }}>
               {showSize ? formatBytes(node.asset.size) : null}
-              {/* FR-142：下载次数独立于 showSize（浏览模式也展示）；为 0 时不占位。 */}
+              {/* 下载次数独立于 showSize（浏览模式也展示）；为 0 时不占位。 */}
               {typeof node.downloadCount === "number" && node.downloadCount > 0
                 ? `${showSize ? " · " : ""}${t("repoDetail.downloadCountShort", { count: node.downloadCount })}`
                 : ""}

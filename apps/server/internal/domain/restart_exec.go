@@ -5,7 +5,7 @@ import (
 	"os/exec"
 )
 
-// 本文件是「进程自替换」跨平台部分的共享实现（FR-40 追加七）。
+// 本文件是「进程自替换」跨平台部分的共享实现。
 //
 // 为什么一键重启的正统做法是"自替换"，而不是 systemctl / sudo / polkit：
 // jianartifact 本就有权执行自己的二进制（systemd 的 ExecStart 就是它），

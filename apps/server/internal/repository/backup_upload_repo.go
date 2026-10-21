@@ -8,7 +8,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
 )
 
-// 分片上传会话状态机（FR-137 第三通道）：
+// 分片上传会话状态机（第三通道）：
 // initialized → receiving → completed；中途取消置 aborted。
 const (
 	UploadStatusInitialized = "initialized"

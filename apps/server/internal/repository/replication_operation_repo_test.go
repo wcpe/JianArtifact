@@ -43,7 +43,7 @@ func TestReplicationOperationOutboxUsesGlobalSeqAndAtomicRecord(t *testing.T) {
 	if seq != 1 {
 		t.Fatalf("operation seq=%d，期望首条全局 seq=1", seq)
 	}
-	// FR-138 退役复制通道后，每个 operation 仅在 repl_change 写一条 op='operation' 行，
+	//  退役复制通道后，每个 operation 仅在 repl_change 写一条 op='operation' 行，
 	// 不再单独写 change 行；该记录即作为不可分割的 v2 operation record 返回。
 	records, err := outbox.ListRecordsSince(0, 1)
 	if err != nil {

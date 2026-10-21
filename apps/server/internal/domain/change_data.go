@@ -2,7 +2,7 @@ package domain
 
 import "github.com/wcpe/jianartifact/apps/server/internal/repository"
 
-// 变更日志/原子 operation 信封共用的实体类型、操作与 data 结构（FR-83 / ADR-0013）。
+// 变更日志/原子 operation 信封共用的实体类型、操作与 data 结构（/ ADR-0013）。
 // 复制退役后这些结构仍是**原子 operation 信封**的载荷（asset_mutation 的
 // ApplyWithOutbox* 把它们写入 replication_operation_outbox，同一事务提交），
 // 因此从已删除的 replication.go 中独立出来保留。
@@ -141,7 +141,7 @@ type SettingChangeData struct {
 	Value string `json:"value"`
 }
 
-// UserGroupChangeData 是用户组 put 变更的 data（FR-36）。
+// UserGroupChangeData 是用户组 put 变更的 data。
 //
 // Members 是成员用户名快照（整体快照而非增量）：组与成员是多对多，逐条增量会
 // 让对账方无法判断「漏掉一条」与「没变」；整体快照由收口方直接覆盖，语义明确。
@@ -162,7 +162,7 @@ func AclKey(repoName string) string { return keyPrefixAcl + repoName }
 
 func UserKey(username string) string { return keyPrefixUser + username }
 
-// UserGroupKey 构造用户组自然键（FR-36）：组名全局唯一，可跨节点一致寻址。
+// UserGroupKey 构造用户组自然键：组名全局唯一，可跨节点一致寻址。
 func UserGroupKey(name string) string { return keyPrefixUserGroup + name }
 
 func TokenKey(digest string) string { return keyPrefixToken + digest }

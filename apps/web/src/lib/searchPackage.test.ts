@@ -1,6 +1,6 @@
 // searchPackage.ts 单测：精度徽标映射 / 命中词高亮切分 / fileKind chip 与 `+N` 折叠 /
 // 非 relevance 的前端重排 / 主从联动的默认展开与选中解析。
-// 这些是 FR-151 里唯一"有分支"的纯逻辑，页面只做渲染，因此重点压在这里。
+// 这些是里唯一"有分支"的纯逻辑，页面只做渲染，因此重点压在这里。
 import { describe, expect, it } from "vitest";
 
 import type { SearchPackage, SearchPackageFile } from "../api/endpoints";

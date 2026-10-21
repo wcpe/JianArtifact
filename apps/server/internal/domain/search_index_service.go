@@ -11,10 +11,10 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// FR-149 §3.2：asset_path_fts 的后台异步回填、只读状态快照与全量重建。
+// asset_path_fts 的后台异步回填、只读状态快照与全量重建。
 //
 // 本文件只做**编排**：批次读写与状态推进在 repository.SearchIndexStateRepo，索引行原语在
-// repository/search_index_repo.go。之所以单独一个服务而不是塞进 FR-44 调度器，是因为回填的
+// repository/search_index_repo.go。之所以单独一个服务而不是塞进调度器，是因为回填的
 // 语义与周期作业相反——它要尽快开始、只跑一次、跑完即退出；塞进去还会污染
 // jianartifact_scheduler_job_* 的运行中/失败计数语义。
 //

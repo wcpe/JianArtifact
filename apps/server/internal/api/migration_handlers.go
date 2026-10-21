@@ -153,7 +153,7 @@ func (h *Handlers) ListRemoteNexusRepositories(c *gin.Context) {
 		writeDomainErr(c, err)
 		return
 	}
-	// FR-109：记录本次远程索引读取使用了哪个逻辑凭据引用（不含明文）。
+	// 记录本次远程索引读取使用了哪个逻辑凭据引用（不含明文）。
 	if detail := migrationCredentialAuditDetail(credentialRef, sourceAuth); detail != "" {
 		h.AuditLog(c, "migration.credential_ref", "migration_source", "remote-repositories", "", detail, "ok")
 	}
@@ -339,7 +339,7 @@ func (h *Handlers) DiscoverMigrations(c *gin.Context) {
 	if apiPlan.Stats == nil {
 		apiPlan.Stats = map[string]interface{}{}
 	}
-	// FR-109：凭据引用与来源认证方式审计——只记录逻辑名称与类型，不记录任何明文或摘要。
+	// 凭据引用与来源认证方式审计——只记录逻辑名称与类型，不记录任何明文或摘要。
 	if detail := migrationCredentialAuditDetail(in.CredentialRef, in.SourceAuth); detail != "" {
 		h.AuditLog(c, "migration.credential_ref", "migration", fmt.Sprintf("%d", result.Task.ID), "", detail, "ok")
 	}
@@ -406,7 +406,7 @@ func (h *Handlers) StartMigration(c *gin.Context, id MigrationIdParam) {
 		writeDomainErr(c, err)
 		return
 	}
-	// FR-109：启动审计附带任务使用的逻辑凭据引用/来源认证类型（不含明文）。
+	// 启动审计附带任务使用的逻辑凭据引用/来源认证类型（不含明文）。
 	detail := "includeCount=" + strconv.Itoa(len(include))
 	if credentialDetail := migrationCredentialAuditDetail(credentialRefOf(task), sourceAuthTypeOf(task)); credentialDetail != "" {
 		detail += " " + credentialDetail

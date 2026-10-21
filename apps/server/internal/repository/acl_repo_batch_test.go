@@ -9,7 +9,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
 )
 
-// 本文件钉住 FR-149 §3.5 的 ACL 判定批量化：
+// 本文件钉住的 ACL 判定批量化：
 //
 //  1. **结果必须与逐仓库 HasPermission 完全一致**——批量方法复用 satisfyingGrants（动作蕴含
 //     关系只有一份实现），覆盖用户直授 / 仅组授 / 多组 / 无组 / admin / 匿名 / write 抵扣 read；
@@ -257,7 +257,7 @@ func TestRepoIDsWithPermissionQueryCountDoesNotGrow(t *testing.T) {
 }
 
 // TestRepoIDsWithPermissionActionImplication 钉住「复用 satisfyingGrants」：
-// 只授 write 能读（FR-36 蕴含），只授 publish 不能读，admin 蕴含全部。
+// 只授 write 能读（蕴含），只授 publish 不能读，admin 蕴含全部。
 func TestRepoIDsWithPermissionActionImplication(t *testing.T) {
 	f := newACLBatchFixture(t, 4)
 	writeRepo, publishRepo, adminRepo, plainRepo := f.repos[0], f.repos[1], f.repos[2], f.repos[3]

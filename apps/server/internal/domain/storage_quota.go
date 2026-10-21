@@ -12,18 +12,18 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// ErrRepoStorageQuotaExceeded 表示写入会突破仓库级存储配额（FR-41 §4.1）。
+// ErrRepoStorageQuotaExceeded 表示写入会突破仓库级存储配额。
 // 它只作判定用途：真正的错误值由 StorageQuotaError 承载，并同时满足
 // errors.Is(err, ErrQuotaExceeded)，从而复用既有 429 映射口径。
 var ErrRepoStorageQuotaExceeded = errors.New("仓库存储配额已超限")
 
-// RejectionReasonQuota 是发布拒绝原因的**闭集枚举**取值之一（FR-41 §4.5）。
+// RejectionReasonQuota 是发布拒绝原因的**闭集枚举**取值之一。
 // 该取值与 docs/specs/0.11.0-prometheus-metrics.md 的 reason 标签取值一一对应：
 // **新增取值必须先改规格并同步测试与 OPERATIONS.md**，不得在实现期就地塞入自由字符串
 // （否则会把无界值带进指标标签，违反该规格第 22 行）。
 const RejectionReasonQuota = "quota"
 
-// RejectionRecorder 记录一次发布拒绝，供进程内指标累加（FR-41 §4.5）。
+// RejectionRecorder 记录一次发布拒绝，供进程内指标累加。
 // 由装配层注入 *metrics.Registry；nil 表示不记录（测试与未接线部署）。
 type RejectionRecorder interface {
 	// PublishRejection 累加一次按原因分区的发布拒绝计数；reason 必须是闭集枚举取值。
@@ -75,12 +75,12 @@ func (e *StorageQuotaError) Is(target error) bool {
 	return target == ErrQuotaExceeded || target == ErrRepoStorageQuotaExceeded
 }
 
-// StorageQuotaGuard 在资产提交事务内复检仓库存储配额（FR-41 §4.1 判定时序第 3 级）。
+// StorageQuotaGuard 在资产提交事务内复检仓库存储配额（判定时序第 3 级）。
 // 与资产写入处于同一事务：越限返回错误即整批回滚，因此已提交状态永不越界。
 // items 为本次操作的全部资产项（含删除项）。
 type StorageQuotaGuard func(tx *sqlx.Tx, items []repository.AssetMutationItem) error
 
-// markQuotaExempt 把一次写入标记为豁免仓库存储配额（FR-41 §4.1）。
+// markQuotaExempt 把一次写入标记为豁免仓库存储配额。
 //
 // 只允许迁移导入与备份恢复这类**管理员批量操作**调用：这类操作属可预估的批量写入，
 // 配额不阻断它（计划 §6.3），但提交点会记日志。标记随资产对象流入提交点判定，
@@ -92,7 +92,7 @@ func markQuotaExempt(asset *repository.Asset) *repository.Asset {
 	return asset
 }
 
-// RepoQuotaService 判定仓库级存储配额（FR-41 §4.1）。
+// RepoQuotaService 判定仓库级存储配额。
 //
 // 判定时序分四级，本服务承担其中三级：
 //  1. 已知 Content-Length 的入口调用 Admission（协议层在读取请求体之前调用）；
@@ -113,10 +113,10 @@ func NewRepoQuotaService(repos *repository.RepoRepo, assets *repository.AssetRep
 	return &RepoQuotaService{repos: repos, assets: assets}
 }
 
-// SetRejectionRecorder 注入发布拒绝计数器（FR-41 §4.5）；nil 表示不累加指标。
+// SetRejectionRecorder 注入发布拒绝计数器；nil 表示不累加指标。
 func (s *RepoQuotaService) SetRejectionRecorder(r RejectionRecorder) { s.metrics = r }
 
-// RecordStreamRejection 记录一次由**限额感知读取器**在流中触发的早拒（FR-41 §4.1 第 2 级）。
+// RecordStreamRejection 记录一次由**限额感知读取器**在流中触发的早拒（第 2 级）。
 // 这类拒绝发生在读取器内部、没有经过 Admission/CheckCommit，本服务观察不到，
 // 因此由观察到 ErrQuotaExceeded 的协议层显式上报，避免指标漏计。
 // 预检与提交点的拒绝已由本服务自行累加，调用方不得对它们重复上报。
@@ -173,7 +173,7 @@ func (s *RepoQuotaService) Admission(repoName, path string, size int64) (int64, 
 	return allowed, nil
 }
 
-// CheckCommit 是提交点权威复检（FR-41 §4.1 判定时序第 3 级）：在资产写入的**同一事务内**
+// CheckCommit 是提交点权威复检（判定时序第 3 级）：在资产写入的**同一事务内**
 // 重新判定。事务视图已包含本次写入，故读到的是「当前占用 + 本次净增量」（覆盖写天然抵扣旧大小）。
 //
 // 判定范围与边界：

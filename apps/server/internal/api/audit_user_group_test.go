@@ -6,7 +6,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// TestUserGroupAuditMapping 用户组审计动作的归类（FR-36）：
+// TestUserGroupAuditMapping 用户组审计动作的归类：
 // 组操作的 target.kind 归到 user（与账号同族、不落 other），删组与改组成员属高危。
 //
 // 本阶段只备常量与映射（HTTP handler 在阶段三），此用例守住「映射已接线」这件事，

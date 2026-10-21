@@ -7,7 +7,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/api"
 )
 
-// TestRepositoryOnlineEndpoint 仓库 online/offline 端点（FR-113）：
+// TestRepositoryOnlineEndpoint 仓库 online/offline 端点：
 // 仅管理员可操作；置离线后持久化读回；仓库不存在 404。
 func TestRepositoryOnlineEndpoint(t *testing.T) {
 	t.Parallel()

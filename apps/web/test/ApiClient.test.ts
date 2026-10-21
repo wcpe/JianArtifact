@@ -216,7 +216,7 @@ describe("API 客户端错误响应", () => {
     }
   });
 
-  // FR-152：取消必须是「真实中止网络请求」，而不是只在前端丢弃响应。
+  // 取消必须是「真实中止网络请求」，而不是只在前端丢弃响应。
   it("外部 AbortSignal 中止时真的中断在途请求，并归一化为 aborted", async () => {
     let handlerAborted = false;
     let notifyStarted!: () => void;

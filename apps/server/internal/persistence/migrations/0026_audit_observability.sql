@@ -3,7 +3,7 @@
 -- 影响：新增审计关联字段、复制应用事件及风险确认表
 -- 数据处理：已有审计关联标识使用空值默认值，无历史事件回填；预计耗时：随审计行数增长
 -- 回滚：不支持 down migration；需要恢复升级前备份
--- 相关：FR-118 / ADR-0002
+-- 相关：ADR-0002
 ALTER TABLE audit_log ADD COLUMN correlation_id TEXT NOT NULL DEFAULT '';
 CREATE INDEX idx_audit_log_correlation ON audit_log (correlation_id, ts DESC);
 

@@ -20,7 +20,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/upstream"
 )
 
-// 本文件钉住 FR-149 §3.6 的 npm `registrySearch` 放大修复：
+// 本文件钉住的 npm `registrySearch` 放大修复：
 //
 //   - **语义不变**：group 多成员时结果按 `asset.path` 去重、按成员顺序聚合、`total` 口径不变；
 //   - **只发一次搜索**：成员数增加不得让请求的 SQL 语句数增长（原本每个成员各跑一次完整搜索，

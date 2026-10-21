@@ -17,7 +17,7 @@ import (
 )
 
 // resolveRepoNameSet 把请求里的仓库名解析为「主名 ∪ 全部别名」的去重有序集合，供下载
-// 计量按仓库维度聚合（FR-142）。下载明细按请求路径里的名字落库，别名功能下同一仓库可经
+// 计量按仓库维度聚合。下载明细按请求路径里的名字落库，别名功能下同一仓库可经
 // 多个名字访问（重命名后旧名仍在用、或直接用别名下载），故按主名过滤会少算记在别名下的
 // 部分；查询侧统一按此集合聚合，即可合并同一逻辑仓库的全部下载。
 //
@@ -72,7 +72,7 @@ func (h *Handlers) listAllRepositories(sortBy, order string) ([]repository.Repos
 }
 
 // ListRepositories 仓库列表（分页）。管理员可见全部；普通用户仅见可读（public 或经 ACL 授权）者。
-// 可选鉴权（FR-66）：匿名请求受全局开关约束（关则 401），开则返回匿名可读集合。
+// 可选鉴权：匿名请求受全局开关约束（关则 401），开则返回匿名可读集合。
 // 响应中每个仓库附带 artifactCount/totalSize 统计（GROUP BY 一次查出，避免 N+1）。
 func (h *Handlers) ListRepositories(c *gin.Context, params ListRepositoriesParams) {
 	p, authed := auth.PrincipalFrom(c)
@@ -95,7 +95,7 @@ func (h *Handlers) ListRepositories(c *gin.Context, params ListRepositoriesParam
 	var statsMap map[int64]domain.RepoStats
 	var total int
 	var err error
-	// 主体按用户 ID 展开组归属（FR-36）：组被授 read 的仓库也要列入可见集。
+	// 主体按用户 ID 展开组归属：组被授 read 的仓库也要列入可见集。
 	// 展开失败按未知错误处理（writeDomainErr 默认 500），不泄露内部细节。
 	var subject repository.Subject
 	if !isAdmin && authed {
@@ -143,7 +143,7 @@ func (h *Handlers) ListRepositories(c *gin.Context, params ListRepositoriesParam
 	for i := range rows {
 		stats := statsMap[rows[i].ID]
 		item := toAPIRepository(&rows[i], &stats)
-		// 连接状态为管理面信息（FR-114），仅管理员可见。
+		// 连接状态为管理面信息，仅管理员可见。
 		if isAdmin {
 			item.ConnectionStatus = h.connectionStatus(&rows[i])
 		}
@@ -186,7 +186,7 @@ func (h *Handlers) CreateRepository(c *gin.Context) {
 	if req.ImmutableRelease != nil {
 		cfg.ImmutableRelease = *req.ImmutableRelease
 	}
-	// FR-41：存储治理字段（配额 + 代理缓存保留天数）与其它配置同列落库，创建时整体写入。
+	// 存储治理字段（配额 + 代理缓存保留天数）与其它配置同列落库，创建时整体写入。
 	// 指针缺省即 config 里的 0，与契约的「0 / 缺省 = 不限 / 关闭代理缓存保留」同义。
 	if req.QuotaBytes != nil {
 		cfg.QuotaBytes = *req.QuotaBytes
@@ -206,7 +206,7 @@ func (h *Handlers) CreateRepository(c *gin.Context) {
 		writeDomainErr(c, err)
 		return
 	}
-	// FR-109：审计附带逻辑凭据引用名称（只记名称，绝不记录环境变量名或解析结果）。
+	// 审计附带逻辑凭据引用名称（只记名称，绝不记录环境变量名或解析结果）。
 	detail := "format=" + string(req.Format) + " type=" + string(req.Type)
 	if cfg.CredentialRef != "" {
 		detail += " credentialRef=" + cfg.CredentialRef
@@ -214,7 +214,7 @@ func (h *Handlers) CreateRepository(c *gin.Context) {
 	if len(repo.Aliases) > 0 {
 		detail += " aliases=" + strings.Join(repo.Aliases, ",")
 	}
-	// FR-41：只在真的设了上限 / 保留天数时记账——0 是「不限 / 关闭」的缺省态，写进审计只是噪声。
+	// 只在真的设了上限 / 保留天数时记账——0 是「不限 / 关闭」的缺省态，写进审计只是噪声。
 	if cfg.QuotaBytes > 0 {
 		detail += " quotaBytes=" + strconv.FormatInt(cfg.QuotaBytes, 10)
 	}
@@ -289,7 +289,7 @@ func (h *Handlers) UpdateRepository(c *gin.Context, name RepoNameParam) {
 		if req.ImmutableRelease != nil {
 			cfg.ImmutableRelease = *req.ImmutableRelease
 		}
-		// FR-41：治理字段按指针语义逐字段覆盖——nil 表示不修改，显式 0 表示改为不限 / 关闭代理缓存保留。
+		// 治理字段按指针语义逐字段覆盖——nil 表示不修改，显式 0 表示改为不限 / 关闭代理缓存保留。
 		// 负值与非 proxy 上的非 0 cacheRetentionDays 交由域层 validateConfig 拒绝（400）。
 		if req.QuotaBytes != nil {
 			cfg.QuotaBytes = *req.QuotaBytes
@@ -306,7 +306,7 @@ func (h *Handlers) UpdateRepository(c *gin.Context, name RepoNameParam) {
 		writeDomainErr(c, err)
 		return
 	}
-	// FR-109：审计附带逻辑凭据引用变更（配置或清除），只记名称不记明文。
+	// 审计附带逻辑凭据引用变更（配置或清除），只记名称不记明文。
 	detailParts := make([]string, 0, 6)
 	if req.ImmutableRelease != nil {
 		detailParts = append(detailParts, "immutableRelease="+strconv.FormatBool(*req.ImmutableRelease))
@@ -321,7 +321,7 @@ func (h *Handlers) UpdateRepository(c *gin.Context, name RepoNameParam) {
 	if req.Aliases != nil {
 		detailParts = append(detailParts, "aliases="+strings.Join(*req.Aliases, ","))
 	}
-	// FR-41：治理字段只在请求显式带上时记账（显式 0 也要记：那是「改为不限 / 关闭」这一次变更）。
+	// 治理字段只在请求显式带上时记账（显式 0 也要记：那是「改为不限 / 关闭」这一次变更）。
 	if req.QuotaBytes != nil {
 		detailParts = append(detailParts, "quotaBytes="+strconv.FormatInt(*req.QuotaBytes, 10))
 	}
@@ -360,7 +360,7 @@ func (h *Handlers) RenameRepository(c *gin.Context, name RepoNameParam) {
 	c.JSON(http.StatusOK, h.toRepo(repo, nil))
 }
 
-// SetRepositoryOnline 设置仓库 online/offline 状态，仅管理员（FR-113）。
+// SetRepositoryOnline 设置仓库 online/offline 状态，仅管理员。
 // online 为节点本地运维状态：不写复制变更日志（M-2），对端复制不会覆盖。
 func (h *Handlers) SetRepositoryOnline(c *gin.Context, name RepoNameParam) {
 	if _, ok := requireAdmin(c); !ok {
@@ -392,7 +392,7 @@ func (h *Handlers) SetRepositoryOnline(c *gin.Context, name RepoNameParam) {
 	c.JSON(http.StatusOK, h.toRepo(repo, nil))
 }
 
-// RecheckRepositoryConnection 手动重测仓库上游连接，仅管理员（FR-114）。
+// RecheckRepositoryConnection 手动重测仓库上游连接，仅管理员。
 // 仅 online 的 proxy 仓库可重测：立即 HEAD 探测并更新 auto-block 状态，返回最新状态。
 func (h *Handlers) RecheckRepositoryConnection(c *gin.Context, name RepoNameParam) {
 	if _, ok := requireAdmin(c); !ok {
@@ -536,7 +536,7 @@ func (h *Handlers) SetRepositoryAcl(c *gin.Context, name RepoNameParam) {
 }
 
 // requireRepoAdmin 要求主体对仓库有管理权：全局管理员或该仓库 admin ACL。
-// 判定含主体所属用户组的授权（FR-36）：组被授 admin 等同于该组成员被授 admin。
+// 判定含主体所属用户组的授权：组被授 admin 等同于该组成员被授 admin。
 func (h *Handlers) requireRepoAdmin(c *gin.Context, name RepoNameParam) (*auth.Principal, bool) {
 	p, ok := requirePrincipal(c)
 	if !ok {
@@ -568,7 +568,7 @@ func (h *Handlers) requireRepoAdmin(c *gin.Context, name RepoNameParam) (*auth.P
 
 // requireRepoRead 要求主体对仓库有读权限：全局管理员、public 仓库（含匿名）或该仓库 read/write/admin ACL。
 // 采用可选鉴权：public 仓库允许匿名读；私有仓库匿名 401、已认证但越权 403，与协议层放行策略一致。
-// 已认证主体的判定含其所属用户组的授权（FR-36）。
+// 已认证主体的判定含其所属用户组的授权。
 func (h *Handlers) requireRepoRead(c *gin.Context, name RepoNameParam) (*auth.Principal, bool) {
 	p, authed := auth.PrincipalFrom(c)
 	if authed && p.IsAdmin() {
@@ -601,8 +601,8 @@ func (h *Handlers) requireRepoRead(c *gin.Context, name RepoNameParam) (*auth.Pr
 }
 
 // apiBaseURL 返回对外基址（scheme + host），供使用片段拼接客户端地址。
-// FR-87：配置了 publicURL（对外 CDN 域名）则优先使用，隐藏源站地址；
-// FR-89：改为优先读 setting（web 可运行时修改），未配置回退启动值 / 请求推断。
+// 配置了 publicURL（对外 CDN 域名）则优先使用，隐藏源站地址；
+// 改为优先读 setting（web 可运行时修改），未配置回退启动值 / 请求推断。
 func (h *Handlers) apiBaseURL(c *gin.Context) string {
 	if h.settings != nil {
 		if u := h.settings.PublicURL(); u != "" {
@@ -625,7 +625,7 @@ func (h *Handlers) apiBaseURL(c *gin.Context) string {
 // CleanupEmptyMavenArtifacts 清理 Maven 仓库中无 jar 的 GAV 目录。
 // 非契约端点，经 WithProtocolRoutes 注册。
 //
-// FR-41：这是唯一的「批量物理删除」运维入口，必须留痕（成功与失败都记 repo.cleanup）；
+// 这是唯一的「批量物理删除」运维入口，必须留痕（成功与失败都记 repo.cleanup）；
 // 响应体形状保持不变（{"deleted": n}），审计只发生在服务端。
 func (h *Handlers) CleanupEmptyMavenArtifacts(c *gin.Context) {
 	name := c.Param("name")
@@ -665,7 +665,7 @@ func cleanupFailureReason(err error) string {
 }
 
 // ListPublicRepositories 匿名可读仓库列表（无需认证）：public ∪ anonymous 主体
-// 被授 read 的仓库（FR-66）。全局开关关闭时 401。
+// 被授 read 的仓库。全局开关关闭时 401。
 // 响应附带 pinnedNames（全局置顶且匿名可读的仓库名），使**公开页也能展示置顶**。
 // 路径已在契约内（api/openapi.yaml /api/v1/public/repositories），由生成的
 // ServerInterfaceWrapper 注册，此处实现接口方法。
@@ -702,7 +702,7 @@ func (h *Handlers) ListPublicRepositories(c *gin.Context) {
 	c.JSON(http.StatusOK, PublicRepositoryList{Items: items, Total: len(items), PinnedNames: pinnedNames})
 }
 
-// anonymousAllowed 校验匿名访问全局开关；关闭则写 401 并返回 false（FR-66）。
+// anonymousAllowed 校验匿名访问全局开关；关闭则写 401 并返回 false。
 func (h *Handlers) anonymousAllowed(c *gin.Context) bool {
 	enabled, err := h.settings.AnonymousAccessEnabled()
 	if err != nil {
@@ -738,9 +738,9 @@ func (h *Handlers) ListRepositoryTree(c *gin.Context) {
 		ContentType   string `json:"contentType,omitempty"`
 		CreatedAt     string `json:"createdAt,omitempty"`
 		UpdatedAt     string `json:"updatedAt"`
-		DownloadCount int64  `json:"downloadCount"` // FR-142：累计完整下载次数（原始口径）
+		DownloadCount int64  `json:"downloadCount"` // 累计完整下载次数（原始口径）
 	}
-	// FR-142：本层文件批量取下载计数（单次 IN 查询；空层不发起查询）。
+	// 本层文件批量取下载计数（单次 IN 查询；空层不发起查询）。
 	// 仓库名解析为「主名 ∪ 别名」集合，使经别名访问的下载记数并入主名。
 	var counts map[string]int64
 	if h.assetDownloads != nil {
@@ -795,7 +795,7 @@ type RepositoryDownloadTrendResponse struct {
 // 非契约端点，经 WithProtocolRoutes 注册，与 ListRepositoryTree 同级同风格——tree 不在契约内，
 // 故本端点路径同样不入契约；响应结构已收口至 openapi.yaml components/schemas 的
 // RepositoryDownloadTrendResponse（供文档与前端类型，路径仅此处手写注册）。
-// 权限：与树一致走 requireRepoRead —— 仓库详情页匿名也可见制品树与 downloadCount（FR-142），
+// 权限：与树一致走 requireRepoRead —— 仓库详情页匿名也可见制品树与 downloadCount，
 // 本端点只暴露仓库级聚合时序，不含来源 IP / UA 明文，故不高于树的读权限；
 // 私有仓匿名仍 401、非授权主体 403（由 requireRepoRead 统一判定）。
 func (h *Handlers) GetRepositoryDownloadTrend(c *gin.Context) {
@@ -879,7 +879,7 @@ func (h *Handlers) SearchAssets(c *gin.Context) {
 	default:
 		sort = ""
 	}
-	// 分组维度（FR-150 §3.7）：缺省 file——仓库内搜索依赖 path asc 的文件级结果建树，
+	// 分组维度：缺省 file——仓库内搜索依赖 path asc 的文件级结果建树，
 	// 因此**默认值不能变**。package 只在结果页显式请求时启用。
 	groupBy := c.Query("group_by")
 	if groupBy != domain.SearchGroupByPackage {
@@ -898,7 +898,7 @@ func (h *Handlers) SearchAssets(c *gin.Context) {
 		order = "asc"
 	}
 
-	// 解析主体（可能匿名）；匿名受全局开关约束（FR-66）
+	// 解析主体（可能匿名）；匿名受全局开关约束
 	p, authed := auth.PrincipalFrom(c)
 	if !authed && !h.anonymousAllowed(c) {
 		return
@@ -913,7 +913,7 @@ func (h *Handlers) SearchAssets(c *gin.Context) {
 	// 仓库范围过滤（下推到服务层，保证 total 精确）
 	repoFilter := c.Query("repository")
 	if repoFilter != "" {
-		// 单仓库内搜索：先检查读权限（含主体所属用户组的授权，FR-36）
+		// 单仓库内搜索：先检查读权限（含主体所属用户组的授权，）
 		subject, err := h.subjectOf(p)
 		if err != nil {
 			writeDomainErr(c, err)
@@ -934,7 +934,7 @@ func (h *Handlers) SearchAssets(c *gin.Context) {
 		}
 	}
 
-	// 超时预算由领域层统一施加（FR-149 §3.4）：这里只把请求上下文（含客户端断开即取消）
+	// 超时预算由领域层统一施加：这里只把请求上下文（含客户端断开即取消）
 	// 传下去，不再额外套一层 deadline，避免双层 deadline 让报错语义混乱。
 	out, err := h.repos.SearchAggregate(c.Request.Context(), q, repoFilter, subjectID, isAdmin, sort, order, groupBy, limit, offset)
 	if err != nil {
@@ -947,7 +947,7 @@ func (h *Handlers) SearchAssets(c *gin.Context) {
 		Path       string `json:"path"`
 		Size       int64  `json:"size"`
 		Hash       string `json:"hash"`
-		// Sha1 是纯追加键（FR-150 §3.7）：结果详情面板要用它做校验和展示，老客户端忽略即可。
+		// Sha1 是纯追加键：结果详情面板要用它做校验和展示，老客户端忽略即可。
 		Sha1      string `json:"sha1"`
 		UpdatedAt string `json:"updatedAt"`
 	}
@@ -990,7 +990,7 @@ func (h *Handlers) SearchAssets(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
-// toAPISearchPackages 把领域层的聚合结果转成响应结构（FR-150 §3.7）。
+// toAPISearchPackages 把领域层的聚合结果转成响应结构。
 // files 一律输出为数组（无文件时是 []，不是 null），前端不必区分两种空值形态。
 func toAPISearchPackages(pkgs []domain.SearchPackage) []searchPackage {
 	out := make([]searchPackage, 0, len(pkgs))
@@ -1039,7 +1039,7 @@ func toAPISearchPackageFiles(files []domain.PackageFile) []searchPackageFile {
 	return out
 }
 
-// searchPackage 是响应 packages[] 的单个包节点（FR-150 §3.7）。
+// searchPackage 是响应 packages[] 的单个包节点。
 //
 // files 只在 kind=file 的「无坐标」伪包上出现：规格 §3.2 要求这类条目跳过版本层、
 // 文件直接挂在包下，因此需要包级 files 承载它们。有坐标的包（maven / npm）没有这个键——

@@ -3,7 +3,7 @@
 -- 影响：新增协议指标、容量快照和主机监控表
 -- 数据处理：创建观测数据结构，无历史数据回填；预计耗时：毫秒级
 -- 回滚：不支持 down migration；需要恢复升级前备份
--- 相关：FR-53 / FR-120 / ADR-0002
+-- 相关：ADR-0002
 CREATE TABLE protocol_metric_minute (
   bucket_start      TEXT PRIMARY KEY,
   request_count     INTEGER NOT NULL DEFAULT 0,

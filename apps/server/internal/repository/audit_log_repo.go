@@ -8,7 +8,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
 )
 
-// AuditLogEntry 是 audit_log 表的行模型：一条管理写操作的审计记录（FR-38）。
+// AuditLogEntry 是 audit_log 表的行模型：一条管理写操作的审计记录。
 type AuditLogEntry struct {
 	ID            int64  `db:"id" json:"id"`
 	TS            string `db:"ts" json:"ts"`
@@ -44,13 +44,13 @@ type AuditLogEntry struct {
 	ActorEmail string `db:"actor_email" json:"actorEmail"`
 }
 
-// AuditLogRepo 读写 audit_log 表（审计日志，FR-38）。
+// AuditLogRepo 读写 audit_log 表（审计日志，）。
 type AuditLogRepo struct{ db *persistence.DB }
 
 // NewAuditLogRepo 构造 AuditLogRepo。
 func NewAuditLogRepo(db *persistence.DB) *AuditLogRepo { return &AuditLogRepo{db: db} }
 
-// AuditFilter 是审计日志查询筛选（FR-38）：全可选，空值不参与过滤。
+// AuditFilter 是审计日志查询筛选：全可选，空值不参与过滤。
 type AuditFilter struct {
 	Actor      string // 操作者（精确）
 	UserID     string // 稳定用户 ID（精确）
@@ -68,7 +68,7 @@ type AuditFilter struct {
 	Offset int    // 分页偏移
 }
 
-// Insert 记录一条审计日志；记录失败不阻断业务写（审计尽力而为，见 FR-38）。
+// Insert 记录一条审计日志；记录失败不阻断业务写（审计尽力而为，见）。
 func (r *AuditLogRepo) Insert(e AuditLogEntry) error {
 	return insertAudit(r.db, e)
 }
@@ -97,7 +97,7 @@ func insertAudit(exec auditExecutor, e AuditLogEntry) error {
 	return err
 }
 
-// List 按时间倒序分页返回审计日志，支持筛选（FR-38）。
+// List 按时间倒序分页返回审计日志，支持筛选。
 func (r *AuditLogRepo) List(f AuditFilter) ([]AuditLogEntry, error) {
 	limit := f.Limit
 	if limit <= 0 {
@@ -168,7 +168,7 @@ func (r *AuditLogRepo) List(f AuditFilter) ([]AuditLogEntry, error) {
 	return entries, nil
 }
 
-// Count 返回筛选条件下的审计日志总数（FR-38 分页用）。
+// Count 返回筛选条件下的审计日志总数（分页用）。
 func (r *AuditLogRepo) Count(f AuditFilter) (int, error) {
 	where := ""
 	args := []any{}

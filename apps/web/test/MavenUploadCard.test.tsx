@@ -1,4 +1,4 @@
-// FR-73：Maven 网页上传集成测试——maven hosted 登录态渲染上传卡并完成上传；raw 仓不渲染该卡。
+// Maven 网页上传集成测试——maven hosted 登录态渲染上传卡并完成上传；raw 仓不渲染该卡。
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";

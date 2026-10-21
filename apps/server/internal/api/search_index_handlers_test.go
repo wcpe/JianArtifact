@@ -16,7 +16,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// 本文件钉住 FR-149 §3.2 的两个运维端点：
+// 本文件钉住的两个运维端点：
 //   - GET  /api/v1/search/index        —— 字段与口径（ready/indexed/total/lastId/updatedAt）
 //   - POST /api/v1/search/index/rebuild —— 202 受理 / 运行中重复触发 409 / 非管理员 403 / 匿名 401
 

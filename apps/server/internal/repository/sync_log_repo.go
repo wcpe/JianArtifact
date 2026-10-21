@@ -28,7 +28,7 @@ type SyncLogEntry struct {
 	ErrorText    string  `db:"error_text" json:"errorText,omitempty"`
 }
 
-// SyncLogRepo 读写 repl_sync_log 表（复制同步历史，FR-88 可视化）。
+// SyncLogRepo 读写 repl_sync_log 表（复制同步历史， 可视化）。
 type SyncLogRepo struct{ db *persistence.DB }
 
 // NewSyncLogRepo 构造 SyncLogRepo。

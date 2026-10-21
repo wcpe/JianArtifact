@@ -158,7 +158,7 @@ type AssetService struct {
 	recorder  ChangeRecorder
 	nodeID    func() string
 	health    *proxyHealth
-	negCache  *negativeCache // FR-111：404 负缓存（proxy/group 读路径短窗缓存明确 404）
+	negCache  *negativeCache // 404 负缓存（proxy/group 读路径短窗缓存明确 404）
 }
 
 // NewAssetService 构造 AssetService。upstream 供 proxy 回源使用（hosted-only 部署可传 nil）。
@@ -172,7 +172,7 @@ func NewAssetService(repos *repository.RepoRepo, assets *repository.AssetRepo, b
 // SetMutationCoordinator 注入与其它写路径共享的节点级协调器。
 func (s *AssetService) SetMutationCoordinator(c *AssetMutationCoordinator) { s.mutator = c }
 
-// SetStorageQuotaCheck 注入仓库级存储配额的提交点权威复检（FR-41 §4.1）。
+// SetStorageQuotaCheck 注入仓库级存储配额的提交点权威复检。
 // nil 表示不做存储配额判定（兼容既有装配与只读部署）。
 func (s *AssetService) SetStorageQuotaCheck(check StorageQuotaGuard) {
 	if s.mutator != nil {
@@ -230,12 +230,12 @@ func (s *AssetService) requireBusinessWrite() error {
 // SetAutoBlockBase 调整 auto-block 退避起始时长（默认 40s；装配层注入配置、测试与调优用，<=0 忽略）。
 func (s *AssetService) SetAutoBlockBase(d time.Duration) { s.health.setBase(d) }
 
-// SetUpstreamBlockRecorder 注入上游断路器阻止事件记录器（FR-43 §2.2）；nil 表示不记录。
+// SetUpstreamBlockRecorder 注入上游断路器阻止事件记录器；nil 表示不记录。
 func (s *AssetService) SetUpstreamBlockRecorder(r UpstreamBlockRecorder) {
 	s.health.setBlockRecorder(r)
 }
 
-// BlockedUpstreamCount 返回当前处于阻止态（AUTO_BLOCKED / HALF_OPEN）的上游仓库数（FR-43 §2.2）。
+// BlockedUpstreamCount 返回当前处于阻止态（AUTO_BLOCKED / HALF_OPEN）的上游仓库数。
 // 供装配层把它接进 /metrics 的 jianartifact_upstream_blocked_repositories 仪表；
 // 只读内存态，不查库、不访问网络。
 func (s *AssetService) BlockedUpstreamCount() int { return s.health.blockedCount() }
@@ -243,10 +243,10 @@ func (s *AssetService) BlockedUpstreamCount() int { return s.health.blockedCount
 // SetNegativeCacheTTL 调整 404 负缓存 TTL（默认 60s；测试与调优用，<=0 忽略）。
 func (s *AssetService) SetNegativeCacheTTL(d time.Duration) { s.negCache.setTTL(d) }
 
-// Status 返回 proxy 仓库上游连接状态（供 FR-114 状态展示）。
+// Status 返回 proxy 仓库上游连接状态（供状态展示）。
 func (s *AssetService) Status(repoID int64) RemoteHealth { return s.health.status(repoID) }
 
-// RecheckConnection 手动重测 proxy 仓库上游连接（FR-114）：立即 HEAD 探测并更新
+// RecheckConnection 手动重测 proxy 仓库上游连接：立即 HEAD 探测并更新
 // auto-block 状态，返回最新状态视图。仅 online 仓库可调用（调用方负责校验）。
 func (s *AssetService) RecheckConnection(repoID int64, remoteURL string) RemoteHealth {
 	credentialRef := ""
@@ -259,7 +259,7 @@ func (s *AssetService) RecheckConnection(repoID int64, remoteURL string) RemoteH
 	return s.health.recheck(repoID, remoteURL, credentialRef)
 }
 
-// SetChangeRecorder 注入复制变更日志记录器（FR-83）；nil 表示不记录。
+// SetChangeRecorder 注入复制变更日志记录器；nil 表示不记录。
 // 记录器为 ReplicationService 时，顺带把本服务的 404 负缓存注入对端共享，
 // SetChangeRecorder 注入变更记录器（复制退役后为 no-op 实现，保留注入点）。
 // 另需 SetNodeIdentity 提供节点稳定标识：原子 operation 信封的 version 要用它。
@@ -325,7 +325,7 @@ func (s *AssetService) putWithPrimaryOperation(repoName string, repo *repository
 // 离线路径或缺失时间戳时语义等同 Put。时间按 UTC "YYYY-MM-DD HH:MM:SS" 写入，
 // 与 asset 表 datetime('now') 默认值格式一致。
 //
-// 本方法只服务迁移导入（管理员批量操作），因此**显式豁免仓库存储配额**（FR-41 §4.1）：
+// 本方法只服务迁移导入（管理员批量操作），因此**显式豁免仓库存储配额**：
 // 迁移导入属可预估的批量管理员操作，配额不阻断它，但提交点会记日志。
 func (s *AssetService) PutWithTimestamps(repoName, path string, r io.Reader, contentType string, sourceModified time.Time) (*repository.Asset, error) {
 	if sourceModified.IsZero() {
@@ -911,7 +911,7 @@ func (s *AssetService) resolvePath(ctx context.Context, repoName, path string) (
 
 // resolve 是 Resolve 的内部递归实现，depth 用于遏制 group 成员环引用。
 // 入口先查 404 负缓存：此前「确认不存在」且 TTL 未过期的路径直接 404，
-// 不再回源/探测（覆盖 Resolve/groupGet/proxyGet 各层入口，见 FR-111）。
+// 不再回源/探测（覆盖 Resolve/groupGet/proxyGet 各层入口，见）。
 func (s *AssetService) resolve(ctx context.Context, repo *repository.Repository, path string, depth int) (*repository.Asset, io.ReadCloser, error) {
 	if depth > maxResolveDepth {
 		recordResolveFailure(ctx, ResolveFailureConfirmed)
@@ -989,7 +989,7 @@ func (s *AssetService) proxyGet(ctx context.Context, repo *repository.Repository
 		recordResolveFailure(ctx, ResolveFailureUncertain)
 		return nil, nil, ErrNotFound
 	}
-	// 仓库手动 offline（FR-113）：不回源，快速 404（本地已确认未命中）。
+	// 仓库手动 offline：不回源，快速 404（本地已确认未命中）。
 	if !repo.Online {
 		recordResolveFailure(ctx, ResolveFailureUncertain)
 		return nil, nil, ErrNotFound
@@ -1052,7 +1052,7 @@ func (s *AssetService) fetchProxyAsset(ctx context.Context, repo *repository.Rep
 	if cfg.RemoteURL == "" {
 		return nil, ErrNotFound
 	}
-	// FR-43：半开闸门。shouldBlock 只做外层非占用式过滤；这里才是真正发起上游连接前的
+	// 半开闸门。shouldBlock 只做外层非占用式过滤；这里才是真正发起上游连接前的
 	// **占用式**判定——判定与占位在同一把锁内完成，保证每轮半开只放行一个试探请求，
 	// 其余请求在试探结果返回前等效封锁（快速失败）。
 	if !s.health.beginUpstream(repo.ID) {
@@ -1140,7 +1140,7 @@ func (s *AssetService) ResolveOCIProxy(ctx context.Context, repoName, path, pull
 		if s.requireBusinessWrite() != nil {
 			return nil, ErrNotFound
 		}
-		// FR-43：半开闸门（占用式）。上面兜底过滤只保证「不落在阻止窗口内」，
+		// 半开闸门（占用式）。上面兜底过滤只保证「不落在阻止窗口内」，
 		// 这里在真正发起上游连接前抢占名额，保证每轮半开只放行一个试探请求。
 		// 与普通 proxy 路径的区别是收敛点在 singleflight 内：不同 path 是不同 key，
 		// 因此闸门必须装在这里而非外层。
@@ -1249,7 +1249,7 @@ const groupMemberTimeout = 3 * time.Second
 //
 // 每个成员限时 groupMemberTimeout；不可达成员经 proxyHealth 阻止窗口跳过（零连接）。
 //
-// 全未命中的 404 是否写负缓存（FR-111 M-1）：
+// 全未命中的 404 是否写负缓存（M-1）：
 // 只有「确认不存在」才写——即本次探测中没有任何成员被跳过（offline/auto-block 阻止）
 // 或回源失败（上游 5xx/超时）。任一成员不可判定（可能只是暂时不可用），则不写负缓存，
 // 避免把上游故障误缓存成永久不存在（上游恢复后同路径立即重试成功）。
@@ -1417,7 +1417,7 @@ func (s *AssetService) Delete(repoName, path string) error {
 	} else if err := s.assets.DeleteByPath(repo.ID, path); err != nil {
 		return mapNotFound(err)
 	}
-	// 写路径成功：失效同路径负缓存（FR-111），避免删除后重传的制品被缓存 404 挡住。
+	// 写路径成功：失效同路径负缓存，避免删除后重传的制品被缓存 404 挡住。
 	s.negCache.remove(repo.ID, path)
 	s.recordChange(EntityAsset, AssetKey(repoName, path), OpDelete, TombstoneData{Deleted: true})
 	return nil

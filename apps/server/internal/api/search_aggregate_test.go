@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// 本文件钉住 FR-150 §3.7 的**响应契约**：
+// 本文件钉住的**响应契约**：
 //
 //   - `group_by=file`（缺省）下响应形状与改造前逐字段一致，只多出 items[].sha1 这个纯追加键；
 //   - `group_by=package` 才追加 packages / packageTotal / aggregation / appliedOrder；

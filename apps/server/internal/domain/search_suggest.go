@@ -1,10 +1,10 @@
-// FR-153：搜索建议（suggest）的领域实现。
+// 搜索建议（suggest）的领域实现。
 //
 // 规格：docs/specs/search-index-and-performance.md §3.8。本文件只做三件事——拼装候选、
 // 套可读仓库范围、给出稳定序；它刻意**不新增**下面三样东西（规格 §3.7 的三处「必须共用」）：
 //
 //  1. 不新增包坐标解析规则：包名候选一律由 search_package.go 的 ParseCoordinates 导出
-//     （FR-150 的正式口径），本文件不写第二套「从 path 猜包名」的规则；
+//     （的正式口径），本文件不写第二套「从 path 猜包名」的规则；
 //  2. 不新增权限判定：可读仓库集合走 readableRepoIDs → RepoIDsWithPermission（批量 ACL）；
 //  3. 不新增索引降级判定：候选集查询复用 buildSearchWhereIndexed，索引未就绪时自动退回
 //     LIKE 路径，suggest 功能仍可用（只是没提速）。
@@ -60,7 +60,7 @@ func clampSuggestLimit(limit int) int {
 	return limit
 }
 
-// Suggest 给出搜索框的下拉候选（FR-153）。
+// Suggest 给出搜索框的下拉候选。
 //
 // keyword 是用户当前输入框的原文：**trim 后为空即返回空候选而不是报错**——suggest 是高频
 // 被动调用，空输入是常态而非错误（规格 §3.8）。
@@ -169,7 +169,7 @@ func (s *RepositoryService) Suggest(ctx context.Context, keyword string, subject
 			cands := make([]SearchSuggestion, 0, remain)
 			seen := make(map[string]bool, remain)
 			for _, row := range rows {
-				// 包坐标解析的**唯一**来源：FR-150 的解析函数。解析不出坐标的行（raw 等格式）
+				// 包坐标解析的**唯一**来源： 的解析函数。解析不出坐标的行（raw 等格式）
 				// 不产出候选——降级条目的伪包维度就是仓库名，已由第一类候选覆盖。
 				value := suggestPackageValue(ParseCoordinates(formats[row.RepositoryID], row.Path))
 				if value == "" || used[value] || seen[value] {

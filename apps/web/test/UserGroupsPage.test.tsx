@@ -1,4 +1,4 @@
-// 用户组管理（FR-36）测试：列表渲染、新建 / 改名 / 删除、成员增删。
+// 用户组管理测试：列表渲染、新建 / 改名 / 删除、成员增删。
 // 走 devmock 的 MSW server，断言真实请求体而不是只断言界面文案。
 import { server } from "@jianartifact/devmock/node";
 import { http, HttpResponse } from "msw";

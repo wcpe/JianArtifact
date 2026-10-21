@@ -1,4 +1,4 @@
-// 分片上传面板（FR-137 第三通道）：浏览器内传 GB 级备份包。
+// 分片上传面板（第三通道）：浏览器内传 GB 级备份包。
 // 流程：选文件 → init（取服务端 chunkSize）→ 按 File.slice(chunkSize) 逐片 PUT → 进度条 → complete 触发导入。
 // 支持取消（abort，二次确认）与续传（uploadId 持久化到 localStorage；重开页面时 GET 拉回 uploadedChunks，只补缺失片）。
 //
@@ -82,7 +82,7 @@ export function BackupUploadPanel({
   onResumableChange?: (resumable: boolean) => void;
 }) {
   const { t } = useTranslation();
-  // 覆盖 / 深校验两个开关已随上传语义修正一起移除（FR-40 追加八）：
+  // 覆盖 / 深校验两个开关已随上传语义修正一起移除：
   // 上传只把包收进备份列表，不写 restore.pending，因此没有"目标非空"判定点；
   // 这两个选项属于恢复动作，由列表里的「用这个包恢复」提供。
   const [phase, setPhase] = useState<UploadPhase>("idle");
@@ -130,7 +130,7 @@ export function BackupUploadPanel({
   const completeUpload = useCallback(
     async (uploadId: string) => {
       try {
-        // FR-40 追加八：上传只把包收进备份列表，不再发起恢复，因此这里不提交
+        // 上传只把包收进备份列表，不再发起恢复，因此这里不提交
         // overwrite / deep —— 那两个选项属于"恢复"，而恢复现在是入库之后的独立动作。
         const accepted = await completeBackupUpload(uploadId, {});
         clearPersisted();

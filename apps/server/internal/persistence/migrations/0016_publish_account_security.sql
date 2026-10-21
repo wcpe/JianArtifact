@@ -3,7 +3,7 @@
 -- 影响：新增用户登录限制字段和发布策略表
 -- 数据处理：已有用户/策略使用默认值，无历史数据回填；预计耗时：毫秒级
 -- 回滚：不支持 down migration；需要恢复升级前备份
--- 相关：FR-109 / ADR-0015
+-- 相关：ADR-0015
 ALTER TABLE user ADD COLUMN web_login_disabled INTEGER NOT NULL DEFAULT 0;
 
 -- 用户×仓库的原生协议发布附加策略。前缀为空表示该仓库全部路径。

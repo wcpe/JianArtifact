@@ -38,3 +38,43 @@ function resolve(id) { ... }
 
 - 改一处代码时，发现该处或紧邻位置有英文注释，可顺手译为中文。
 - 禁止为"统一注释语言"对无关代码做大规模翻译式改动（精准修改原则）。
+
+## 5. 禁止在代码中出现 FR 编号
+
+**FR 编号只允许出现在 `docs/` 下的文档**（PRD、specs、adr、API、OPERATIONS、ARCHITECTURE、ROADMAP 等）与 `CHANGELOG.md`。
+
+以下位置**一律不得**出现 FR 编号（`FR-123`、`FR-40 追加七` 等任何形式）：
+
+- 源代码注释（Go、TypeScript、SQL、CSS、配置文件）
+- 代码标识符与命名：变量名、函数名、类型名、测试函数名、文件名
+- 迁移 SQL 的文件名与文件内注释
+- 前端 i18n 文案键名
+
+**为什么**：FR 编号进入代码后，两条分支各自在同一处注释里写不同编号时，Git 会判为冲突——即使代码逻辑完全相同。合并与 rebase 的成本被无谓抬高，冲突无法自动化解。编号对代码读者也没有价值：读者需要的是"这段代码为什么这样写"，而不是"它属于哪张需求单"；需要追溯需求时按关键词搜 `docs/PRD.md` 更可靠。
+
+✅ 正确
+
+```
+// 搜索索引的后台回填：分批推进水位，不阻塞启动，可中断续跑
+func (s *SearchIndexService) Start(ctx context.Context) { ... }
+
+// 测试函数名用行为描述
+func TestSearchIndexBackfillResumesFromWatermark(t *testing.T) { ... }
+```
+
+❌ 错误
+
+```
+// FR-149：搜索索引回填
+func (s *SearchIndexService) Start(ctx context.Context) { ... }
+
+func TestFR149Backfill(t *testing.T) { ... }
+
+// 迁移 0049：FR-149 的 FTS5 索引
+```
+
+**存量处理**（与第 4 条同一精准修改原则）：仓库内已有大量历史 FR 编号引用，**不对其做无差别清理**——大面积改动本身会与主线产生新的冲突，与规则目的相悖。但：
+
+- **新增代码必须遵守本规则**；
+- **改动到某一行时，若该行含 FR 编号，顺手去掉**；
+- 需要指向设计文档时，写文档路径（如 `docs/adr/0030-fts5-search-index.md`），不写编号。

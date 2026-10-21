@@ -1,13 +1,13 @@
--- 0047：备份包来源标记与恢复演练报告（FR-40）
+-- 0047：备份包来源标记与恢复演练报告
 -- 引入版本：未开窗（0.11.0 之后的下一窗口）
 -- 影响：backup_package 新增 origin 列；新增 backup_verification 表及其 package_id 索引
 -- 数据处理：无历史回填——origin 取列默认值 'manual'，与既有行的真实来源一致（0047 之前只有人工触发
 --          的生成入口）；backup_verification 为空表。预计耗时：毫秒级（ADD COLUMN 带常量默认值时
 --          SQLite 只改 schema、不重写表体，见下方说明；建表与建索引无既有数据可扫）
 -- 回滚：不支持 down migration；需要恢复升级前备份
--- 相关：FR-40、docs/specs/0.12.0-auto-backup-and-drill.md
+-- 相关：、docs/specs/0.12.0-auto-backup-and-drill.md
 --
--- 背景：FR-40 要求周期化自动备份与恢复演练两件事。前者需要「这份包是人点的还是作业生成的」
+-- 背景： 要求周期化自动备份与恢复演练两件事。前者需要「这份包是人点的还是作业生成的」
 -- 可分辨（手动包永不自动淘汰，见 domain/backup_retention.go），后者需要把演练报告落库留痕，
 -- 而不是只回一个 ok / error 字符串。
 --

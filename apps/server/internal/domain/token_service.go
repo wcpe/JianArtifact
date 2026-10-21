@@ -20,7 +20,7 @@ func NewTokenService(tokens *repository.TokenRepo, users *repository.UserRepo) *
 	return &TokenService{tokens: tokens, users: users}
 }
 
-// SetChangeRecorder 注入复制变更日志记录器（FR-83）；nil 表示不记录。
+// SetChangeRecorder 注入复制变更日志记录器；nil 表示不记录。
 func (s *TokenService) SetChangeRecorder(r ChangeRecorder) { s.recorder = r }
 
 // SetBusinessWriteGate 注入备用节点本地业务写栅栏；nil 保持兼容行为。

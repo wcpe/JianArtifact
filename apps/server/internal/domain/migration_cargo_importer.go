@@ -63,7 +63,7 @@ func (s *CargoService) importMigrationIndex(repo, name string, body io.Reader) e
 		return err
 	}
 	asset.Path = cargoHostedIndexAssetPath(name)
-	// 迁移导入属管理员批量操作：显式豁免仓库存储配额（FR-41 §4.1）。
+	// 迁移导入属管理员批量操作：显式豁免仓库存储配额。
 	markQuotaExempt(asset)
 	_, err = s.assets.PublishAssets(repo, []*repository.Asset{asset})
 	if err != nil {

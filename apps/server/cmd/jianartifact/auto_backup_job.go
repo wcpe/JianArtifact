@@ -83,7 +83,7 @@ type autoBackupSettings struct {
 // 这正是热生效的全部依赖——作业每轮重新调用它，而不是在注册时读一次。
 type autoBackupSettingsSource func() autoBackupSettings
 
-// registerAutoBackupJob 把 FR-40 周期化自动备份注册为调度器作业。
+// registerAutoBackupJob 把周期化自动备份注册为调度器作业。
 //
 // # 为什么用"心跳 + 每轮判到点"而不是把间隔直接交给调度器
 //

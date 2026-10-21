@@ -8,7 +8,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 )
 
-// FR-153：搜索建议（suggest）端点。
+// 搜索建议（suggest）端点。
 //
 // 与 /api/v1/search 同组同先例，作为**非契约端点**注册（不进 api/openapi.yaml）：它只服务
 // 前端搜索框，候选形状会随包坐标解析口径演进，且不是任何协议客户端依赖的稳定面。把它写进
@@ -38,7 +38,7 @@ func (h *Handlers) SuggestSearch(c *gin.Context) {
 		}
 	}
 
-	// 解析主体（可能匿名）；匿名受全局开关约束（FR-66），关闭时与搜索一致地返回 401。
+	// 解析主体（可能匿名）；匿名受全局开关约束，关闭时与搜索一致地返回 401。
 	p, authed := auth.PrincipalFrom(c)
 	if !authed && !h.anonymousAllowed(c) {
 		return

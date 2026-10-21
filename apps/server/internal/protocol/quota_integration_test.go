@@ -24,7 +24,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// protocolQuotaHarness 是按真实装配构造的协议层发布环境（FR-41）：
+// protocolQuotaHarness 是按真实装配构造的协议层发布环境：
 // SQLite + blobstore + 域服务 + 真实路由 + 真实仓库存储配额服务（预检与提交点都已接线）。
 type protocolQuotaHarness struct {
 	router   *gin.Engine

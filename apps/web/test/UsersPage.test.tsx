@@ -1,5 +1,5 @@
 // 用户管理集成测试：渲染种子用户列表、走完新建用户表单落库回显，
-// 并覆盖发布策略（FR-109）从单仓库到多仓库的批量应用。
+// 并覆盖发布策略从单仓库到多仓库的批量应用。
 import { server } from "@jianartifact/devmock/node";
 import { http, HttpResponse } from "msw";
 import { screen, waitFor, within } from "@testing-library/react";

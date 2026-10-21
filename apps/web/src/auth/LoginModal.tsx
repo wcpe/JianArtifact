@@ -1,4 +1,4 @@
-// FR-67 登录模态框：取代整页 /login。任意位置经 useLoginModal().openLogin() 弹出，
+//  登录模态框：取代整页 /login。任意位置经 useLoginModal.openLogin 弹出，
 // 登录成功后关闭并停留当前页；取消时执行调用方传入的 onCancel（如受保护页回落仓库列表）。
 import { Alert, Button, Group, Modal, PasswordInput, Stack, Text, TextInput } from "@mantine/core";
 import { useForm } from "@mantine/form";
@@ -40,7 +40,7 @@ export function LoginModalProvider({ children }: { children: ReactNode }) {
   // onCancel 用函数状态持有（setState 传入函数会被当 updater，需再包一层）。
   const [onCancel, setOnCancel] = useState<(() => void) | null>(null);
 
-  // FR-34：仅在打开登录框时查询一次 OIDC 是否启用（未配置时后端端点为 404）；
+  // 仅在打开登录框时查询一次 OIDC 是否启用（未配置时后端端点为 404）；
   // 用 ref 做一次性守卫——若用 state 标记，effect 会因依赖变化重跑并把在途结果丢弃。
   const oidcFetchedRef = useRef(false);
   useEffect(() => {
@@ -54,7 +54,7 @@ export function LoginModalProvider({ children }: { children: ReactNode }) {
       .catch(() => setOidcEnabled(false));
   }, [opened]);
 
-  // FR-34：OIDC 回调失败时自动弹出登录框并展示对应提示。
+  // OIDC 回调失败时自动弹出登录框并展示对应提示。
   useEffect(() => {
     if (oidcError) {
       setError(t(oidcError));
@@ -93,7 +93,7 @@ export function LoginModalProvider({ children }: { children: ReactNode }) {
     setError(null);
     login(values.username, values.password)
       .then(() => {
-        // 登录成功：仅关闭，停留当前页（FR-67 取消强制跳转）。
+        // 登录成功：仅关闭，停留当前页（取消强制跳转）。
         setOpened(false);
       })
       .catch((err: unknown) => {

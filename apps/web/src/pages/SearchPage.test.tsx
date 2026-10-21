@@ -1,11 +1,11 @@
-// SearchPage 主从联动回归（FR-151）：
+// SearchPage 主从联动回归：
 // - 默认展开首个包、选中其首版本、右栏显示该版本首个文件；
 // - 点另一个版本 → 右栏就地切换，且不产生新的 /search 请求（排序与选中都是前端行为）；
 // - 四态里的空结果与失败态只替换结果区，搜索框仍在；
 // - 窄屏（820px）下点版本行进入详情、返回按钮回到列表（展开态保留）。
 //
 // 数据用 MSW 覆写 `GET /api/v1/search`：devmock 的搜索 handler 只产出文件级结果，
-// 包级聚合（FR-150 的 group_by=package）在本用例里直接给到前端契约形状。
+// 包级聚合（的 group_by=package）在本用例里直接给到前端契约形状。
 import { MantineProvider } from "@mantine/core";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";

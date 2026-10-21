@@ -4,7 +4,7 @@ import (
 	"context"
 )
 
-// FR-153：搜索建议的候选集查询。
+// 搜索建议的候选集查询。
 //
 // 候选集与搜索主链路共用**同一段 WHERE**（buildSearchWhereIndexed），因此三件事天然一致：
 //   - 索引已就绪且存在可下推的包含词 → 走 asset_path_fts 候选集；

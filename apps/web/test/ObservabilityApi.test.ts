@@ -1,4 +1,4 @@
-// FR-118：页面只能通过 typed API 客户端读取和确认服务端签发的审计批次。
+// 页面只能通过 typed API 客户端读取和确认服务端签发的审计批次。
 import { afterEach, describe, expect, it } from "vitest";
 
 import { ApiError, setToken } from "../src/api/client";

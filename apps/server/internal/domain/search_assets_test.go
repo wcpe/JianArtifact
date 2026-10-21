@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// 本文件钉住 FR-149 第三批在**领域层**的两件事：
+// 本文件钉住第三批在**领域层**的两件事：
 //
 //  1. 超时保护：SearchAssets 在入口施加可配置的总预算，超时统一归一为
 //     domain.ErrSearchTimeout（API 据此映射 504 + search_timeout）；

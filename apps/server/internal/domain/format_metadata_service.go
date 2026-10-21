@@ -98,7 +98,7 @@ func (s *FormatMetadataService) PublishPyPI(repoName, project, version, filename
 // PublishPyPIWithSourceTime 与 PublishPyPI 相同，但将资产行 created_at/updated_at
 // 固定为源端时间（在线迁移保留源时间戳）。sourceModified 为零值时回退 PublishPyPI 语义。
 func (s *FormatMetadataService) PublishPyPIWithSourceTime(repoName, project, version, filename, requiresPython, yanked string, body io.Reader, sourceModified time.Time) (*PypiFile, error) {
-	// 迁移导入属管理员批量操作：显式豁免仓库存储配额（FR-41 §4.1）。
+	// 迁移导入属管理员批量操作：显式豁免仓库存储配额。
 	return s.publishPyPI(repoName, project, version, filename, requiresPython, yanked, body, AssetOperationAudit{}, sourceModified, true)
 }
 
@@ -703,7 +703,7 @@ func (s *FormatMetadataService) PublishNuGet(repoName, id, version, filename, me
 // PublishNuGetWithSourceTime 与 PublishNuGet 相同，但将资产行 created_at/updated_at
 // 固定为源端时间（在线迁移保留源时间戳）。sourceModified 为零值时回退 PublishNuGet 语义。
 func (s *FormatMetadataService) PublishNuGetWithSourceTime(repoName, id, version, filename, metadataJSON string, body io.Reader, sourceModified time.Time) (*NuGetPackage, error) {
-	// 迁移导入属管理员批量操作：显式豁免仓库存储配额（FR-41 §4.1）。
+	// 迁移导入属管理员批量操作：显式豁免仓库存储配额。
 	return s.publishNuGet(repoName, id, version, filename, metadataJSON, body, sourceModified, true)
 }
 

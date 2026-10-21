@@ -12,13 +12,13 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// AuditLogListResponse 是审计日志列表响应（FR-38）。
+// AuditLogListResponse 是审计日志列表响应。
 type AuditLogListResponse struct {
 	Items []repository.AuditLogEntry `json:"items"`
 	Total int                        `json:"total"`
 }
 
-// 用户组相关审计动作与实体类型（FR-36）。
+// 用户组相关审计动作与实体类型。
 //
 // 本阶段只把常量与映射备好（组管理的 HTTP handler 在阶段三落地），
 // 让审计读模型在组端点上线前就认得这些动作，避免上线后组操作在审计里
@@ -34,7 +34,7 @@ const (
 	AuditActionGroupMemberRmv = "group.member.remove"
 )
 
-// GetAuditLogs 返回审计日志（分页 + 筛选），仅管理员（FR-38）。
+// GetAuditLogs 返回审计日志（分页 + 筛选），仅管理员。
 // 非契约端点，经 WithProtocolRoutes 注册。
 func (h *Handlers) GetAuditLogs(c *gin.Context) {
 	if _, ok := requireAdmin(c); !ok {
@@ -91,7 +91,7 @@ func (h *Handlers) GetAuditLogs(c *gin.Context) {
 	c.JSON(http.StatusOK, AuditLogListResponse{Items: items, Total: total})
 }
 
-// AuditLog 记录一条审计日志（尽力而为，失败不阻断）；供各写 handler 在成功后调用（FR-38）。
+// AuditLog 记录一条审计日志（尽力而为，失败不阻断）；供各写 handler 在成功后调用。
 // actor 取当前主体用户名（匿名/无主体为空）；ip 取 X-Forwarded-For 或 RemoteAddr。
 func (h *Handlers) AuditLog(c *gin.Context, action, entityType, entityKey, repo, detail, result string) {
 	if h.auditLogs == nil {

@@ -161,7 +161,7 @@ func TestBackupUploadTwoChunksAndResume(t *testing.T) {
 	}
 }
 
-// TestBackupUploadCompleteAddsToBackupList 覆盖成功链路（FR-40 追加八后的语义）：
+// TestBackupUploadCompleteAddsToBackupList 覆盖成功链路（后的语义）：
 // 生成一份真实备份包 → 按分片上传其字节 → 拼装 → **收进备份列表**。
 //
 // 关键断言：complete 返回 200 与 status=done，且**不产生** restore.pending。

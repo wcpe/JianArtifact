@@ -6,7 +6,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// 本文件钉住 FR-150 的**纯函数规则**（规格 §3.2 ~ §3.5）：
+// 本文件钉住的**纯函数规则**（规格 §3.2 ~ §3.5）：
 // 包坐标解析、命中精度分层、版本向量与 relevance 排序。
 //
 // 这些都是"口径"本身，出错的表现是排序莫名其妙或把噪声顶到前面，且不会报错——

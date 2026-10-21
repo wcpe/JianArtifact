@@ -32,7 +32,7 @@ func (r *AssetRepo) Upsert(repoID int64, path, blobHash string, size int64, cont
 // createdAt/updatedAt 非空（UTC "YYYY-MM-DD HH:MM:SS"）时使用该值，否则回退 datetime('now')。
 // 已存在路径的 created_at 仅在提供新值（非空）时更新，用于复制时间同步 / 回填场景。
 //
-// 索引同步（FR-149）：asset_path_fts 维护与本次写入放在**同一短事务**内，避免「元数据已提交、
+// 索引同步：asset_path_fts 维护与本次写入放在**同一短事务**内，避免「元数据已提交、
 // 索引未写」的窗口（那种漏索引无法靠一次性的历史回填补救）。冲突键就是 path，因此覆盖写时
 // path 必然未变、索引内容无需变更——索引镜像的就是 path 本身，只在真正新增行时补索引。
 // 事务内只做两次主键/唯一索引级别的点查与一次 FTS 写，不含任何耗时操作。
@@ -99,7 +99,7 @@ func (r *AssetRepo) GetByPath(repoID int64, path string) (*Asset, error) {
 
 // DeleteByPath 删除仓库内某路径的资产（blob 内容不即时清理）；不存在返回 ErrNotFound。
 //
-// 索引同步（FR-149）：与删除同事务维护 asset_path_fts。顺序是**先删索引行、再删 asset 行**——
+// 索引同步：与删除同事务维护 asset_path_fts。顺序是**先删索引行、再删 asset 行**——
 // external content 表要靠内容行才知道该 rowid 有哪些词要移除，内容行先消失就清不掉词
 // （见 search_index_repo.go 文件头第 3 条）。
 func (r *AssetRepo) DeleteByPath(repoID int64, path string) error {
@@ -161,7 +161,7 @@ type RepoStats struct {
 }
 
 // repoStatsQuery 是单仓库占用的唯一聚合 SQL（制品数 COUNT(*) 与逻辑字节 SUM(size)）：
-// 仓库存储配额（FR-41）的预检与提交点复检共用它，避免两处口径漂移。
+// 仓库存储配额的预检与提交点复检共用它，避免两处口径漂移。
 const repoStatsQuery = `SELECT ? AS repository_id, COUNT(*) AS count, COALESCE(SUM(size), 0) AS total_size FROM asset WHERE repository_id = ?`
 
 // ListMissingChecksums 返回 sha1 或 md5 为空的资产（历史数据回填用）。
@@ -250,7 +250,7 @@ func (r *AssetRepo) CountAndSizeByRepo(repoID int64) (count int64, totalSize int
 }
 
 // CountAndSizeByRepoTx 在调用方事务中返回单个仓库的制品数量与总字节数。
-// 供仓库存储配额的提交点权威复检（FR-41）读取与本次写入同一事务视图下的占用，
+// 供仓库存储配额的提交点权威复检读取与本次写入同一事务视图下的占用，
 // 复用与 CountAndSizeByRepo 完全相同的聚合 SQL（不另写等价查询）。
 func (r *AssetRepo) CountAndSizeByRepoTx(tx *sqlx.Tx, repoID int64) (count int64, totalSize int64, err error) {
 	var s RepoStats
@@ -295,7 +295,7 @@ type SearchFilter struct {
 	IncludeExts  []string // 扩展名白名单（不含点，小写）
 	ExcludeExts  []string // 扩展名黑名单（不含点，小写）
 
-	// IncludeVersions / ExcludeVersions 是 `version:` / `-version:` 的版本段严格条件（FR-150）。
+	// IncludeVersions / ExcludeVersions 是 `version:` / `-version:` 的版本段严格条件。
 	// IncludeVersions 内部为 OR（命中任一版本即可），ExcludeVersions 内部为 AND（都不相等）。
 	// 它们**不是**子串条件：`1.17.12` 不得命中 `1.17.120/` 或 `1.17.12-rc1/`（见 buildSearchWhere）。
 	IncludeVersions []string
@@ -359,7 +359,7 @@ func buildSearchWhere(f SearchFilter, repoIDs []int64) (string, []any) {
 	return strings.Join(conds, " AND "), args
 }
 
-// versionSegmentPattern 是 `version:` 条件的**段边界**形态（FR-150 §3.6）：
+// versionSegmentPattern 是 `version:` 条件的**段边界**形态：
 //
 //	( path LIKE '%/'||v||'/%'  OR  path LIKE '%-'||v||'.tgz' )
 //
@@ -517,7 +517,7 @@ func (r *AssetRepo) SearchByFilter(ctx context.Context, f SearchFilter, repoIDs 
 	return assets, total, err
 }
 
-// SearchAllByFilter 返回全部命中行（无分页），供包级聚合扫描候选集（FR-150 §3.1）。
+// SearchAllByFilter 返回全部命中行（无分页），供包级聚合扫描候选集。
 //
 // 与 SearchByFilter 共用同一段 WHERE（buildSearchWhereIndexed），因此聚合看到的行集与
 // 分页/计数看到的完全一致。行按 **path 升序**返回：聚合的扫描预算要靠一个确定性顺序截断，

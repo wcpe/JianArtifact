@@ -3,8 +3,8 @@
 -- 影响：重建 repository 表并扩展 format 枚举
 -- 数据处理：迁移既有 repository、ACL 和关联数据；预计耗时：随仓库及关联行数增长
 -- 回滚：不支持 down migration；需要恢复升级前备份
--- 相关：FR-25 / FR-26 / FR-27 / FR-28 / FR-29 / FR-32 / ADR-0002
--- 0020：扩展仓库格式枚举（FR-25～29、FR-32）。
+-- 相关：ADR-0002
+-- 0020：扩展仓库格式枚举（～29、）。
 -- 通过新表替换保留原表名；子表外键仍指向 repository，历史数据与 ID 不变。
 PRAGMA foreign_keys=OFF;
 

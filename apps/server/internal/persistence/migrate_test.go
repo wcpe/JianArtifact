@@ -24,8 +24,8 @@ func TestMigrateCreatesSchema(t *testing.T) {
 	if err := db.Migrate(); err != nil {
 		t.Fatalf("Migrate：%v", err)
 	}
-	// 关键表应存在且可查询。user_group / user_group_member 为 FR-36 引入（迁移 0046）；
-	// backup_verification 为 FR-40 恢复演练报告引入（迁移 0047）。
+	// 关键表应存在且可查询。user_group / user_group_member 为引入（迁移 0046）；
+	// backup_verification 为恢复演练报告引入（迁移 0047）。
 	tables := []string{"user", "api_token", "revoked_token", "repository", "acl", "asset", "user_group", "user_group_member", "migration_task", "setting", "repl_change", "repl_entity_version", "replication_apply_log", "replication_operation_outbox", "replication_relay_record", "replication_relay_blob", "replication_relay_frontier", "replication_operation_receipt", "backup_package", "backup_verification", "backup_import", "backup_upload", "backup_upload_chunk"}
 	for _, tbl := range tables {
 		var count int
@@ -182,7 +182,7 @@ func TestForeignKeysEnforced(t *testing.T) {
 }
 
 // TestMigration0045BuildsCleanupIndexes 校验 0045 的三项要求：
-// 索引真的建出来、真的被 FR-41 清理查询命中、重复迁移后依然存在。
+// 索引真的建出来、真的被清理查询命中、重复迁移后依然存在。
 //
 // 索引存在但不被 planner 使用等于没建，因此这里不止查 sqlite_master，还用
 // EXPLAIN QUERY PLAN 断言计划里出现索引名而不是 SCAN。查询文本镜像自
@@ -326,7 +326,7 @@ func TestMigration0047AddsBackupOriginAndVerification(t *testing.T) {
 // 依赖、无法反向 import，因此只能保持同形状；改那条 SQL 的引用列时必须同步这里。
 const capacityAggregateSQL = `SELECT COUNT(*) AS asset_count, COALESCE(SUM(size),0) AS logical_bytes FROM asset`
 
-// repoStatsSQL 是仓库存储配额（FR-41）的单仓库聚合，镜像自
+// repoStatsSQL 是仓库存储配额的单仓库聚合，镜像自
 // internal/repository/asset_repo.go 的 repoStatsQuery。它不属于 0050 的服务对象，
 // 但必须确认新索引没有把它的计划带偏。
 const repoStatsSQL = `SELECT ? AS repository_id, COUNT(*) AS count, COALESCE(SUM(size), 0) AS total_size FROM asset WHERE repository_id = ?`
@@ -449,7 +449,7 @@ func explainPlanLines(t *testing.T, db *DB, query string, args ...any) []string 
 // 为什么需要它：迁移编号是全局唯一的顺序空间，多人并行开发时很容易两人各写一个
 // 「下一个号」——本方单独跑测试永远发现不了，只有两条分支合到一起才会在启动时
 // 炸出 `UNIQUE constraint failed: schema_migrations.version`。本次 rebase 到主线
-// 时就真实踩到过（主线 FR-40 占了 0047/0048，本分支的搜索迁移也写成 0047/0048）。
+// 时就真实踩到过（主线占了 0047/0048，本分支的搜索迁移也写成 0047/0048）。
 // 编号冲突的代价很高：迁移器只按 version 判重、不校验文件名，冲突一旦发布出去，
 // 已升级的库会记着错误版本号，后续修复需要人工改 schema_migrations。
 //

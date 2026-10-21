@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// TestSearchTimeoutDefaultsAndRejectsNonPositive 覆盖 FR-149 §3.4 的搜索预算解析：
+// TestSearchTimeoutDefaultsAndRejectsNonPositive 覆盖的搜索预算解析：
 // 本项**无禁用语义**——搜索是无界查询，关掉超时等于开放一个可以无限占用唯一数据库连接的
 // 入口，因此缺省、非数字、负数与显式 0 一律回落默认 10s（口径同 autoBlockBase）。
 func TestSearchTimeoutDefaultsAndRejectsNonPositive(t *testing.T) {

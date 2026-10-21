@@ -769,7 +769,7 @@ describe("devmock MSW 端点行为", () => {
     );
   });
 
-  it("账户/服务/可观测性的空态仅返回同路由所需的空数据（FR-122 路由矩阵）", async () => {
+  it("账户/服务/可观测性的空态仅返回同路由所需的空数据（ 路由矩阵）", async () => {
     const emptyHeaders = {
       ...auth,
       [DEV_MOCK_SCENARIO_HEADER]: "empty",
@@ -1122,7 +1122,7 @@ describe("devmock MSW 端点行为", () => {
     expect(body.snippets.find((s) => s.code.includes("npm install"))?.group).toBe("resolve");
   });
 
-  it("仓库列表为 proxy 返回连接状态、hosted 不返回（FR-114）", async () => {
+  it("仓库列表为 proxy 返回连接状态、hosted 不返回", async () => {
     const res = await fetch("http://localhost/api/v1/repositories?page_size=100", {
       headers: auth,
     });
@@ -1136,7 +1136,7 @@ describe("devmock MSW 端点行为", () => {
     expect(hosted?.connectionStatus).toBeUndefined();
   });
 
-  it("半开仓库在列表里返回 HALF_OPEN（FR-43），与 AUTO_BLOCKED 可区分", async () => {
+  it("半开仓库在列表里返回 HALF_OPEN，与 AUTO_BLOCKED 可区分", async () => {
     // 种子 maven-papermc 处于半开、maven-central 处于自动阻止：两者同属阻止态，
     // 但对外取值必须不同，否则管理界面无从区分「窗口内封锁」与「正在试探上游」。
     const res = await fetch("http://localhost/api/v1/repositories?page_size=100", {

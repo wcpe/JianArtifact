@@ -370,7 +370,7 @@ describe("业务仪表盘（真实读模型）", () => {
     expect(screen.getByText("docker-hub")).toBeTruthy();
     expect(screen.getByText("pypi-mirror")).toBeTruthy();
     expect(screen.getAllByText("自动阻止").length).toBeGreaterThanOrEqual(3);
-    // FR-43：半开（窗口已到、正在试探上游）与自动阻止同属阻止态，但必须显示为不同状态，
+    // 半开（窗口已到、正在试探上游）与自动阻止同属阻止态，但必须显示为不同状态，
     // 否则「正在试探」会被误读成「窗口内封锁」。
     expect(screen.getAllByText("试探中").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("不可用").length).toBeGreaterThanOrEqual(1);

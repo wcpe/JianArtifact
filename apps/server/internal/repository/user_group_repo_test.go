@@ -382,7 +382,7 @@ func TestAclGroupSubjectDeleteCleansGrants(t *testing.T) {
 	}
 }
 
-// TestAclActionImplicationMatrix 校验六档动作的蕴含矩阵（FR-36）：
+// TestAclActionImplicationMatrix 校验六档动作的蕴含矩阵：
 // admin 蕴含全部；write 蕴含 read + publish；read/publish/delete/acl_manage 只满足自身。
 // 同时钉住既有三档（read/write/admin）的行为完全不变。
 func TestAclActionImplicationMatrix(t *testing.T) {
@@ -397,7 +397,7 @@ func TestAclActionImplicationMatrix(t *testing.T) {
 		granted string
 		want    map[string]bool
 	}{
-		// 既有三档：行为必须与 FR-36 之前逐项一致。
+		// 既有三档：行为必须与之前逐项一致。
 		{repository.ActionRead, map[string]bool{
 			repository.ActionRead: true, repository.ActionWrite: false, repository.ActionAdmin: false,
 			repository.ActionPublish: false, repository.ActionDelete: false, repository.ActionAclManage: false,

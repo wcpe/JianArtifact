@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/config"
 )
 
-// 本文件是 FR-149 §3.2 两个运维端点的**路由级**冒烟：走生产路由表与生产中间件链，
+// 本文件是两个运维端点的**路由级**冒烟：走生产路由表与生产中间件链，
 // 确认 main.go 的注册真的生效、且鉴权边界与契约端点一致。
 //
 // 端点级的 202/409/403 细节由 internal/api/search_index_handlers_test.go 用桩逐条覆盖

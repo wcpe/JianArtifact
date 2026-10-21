@@ -313,7 +313,7 @@ func parseBackupCounts(countsJSON string) *BackupCounts {
 	}
 }
 
-// backupOriginOrDefault 归一化备份包来源（FR-40）。
+// backupOriginOrDefault 归一化备份包来源。
 //
 // 契约把 origin 声明为 required（枚举 manual / auto），而库列本身也有 DEFAULT 'manual'，
 // 所以正常的行永远带值。这里的兜底是给"绕过 repository 构造的测试夹具 / 手工造的记录"
@@ -339,10 +339,10 @@ func writeBackupErr(c *gin.Context, err error) {
 		auth.WriteError(c, http.StatusConflict, "backup_has_derived", err.Error())
 	case errors.Is(err, domain.ErrBackupIncomplete):
 		auth.WriteError(c, http.StatusConflict, "backup_incomplete", err.Error())
-	// FR-40：包尚未生成完成时没有可演练的包体，属状态冲突而非参数错误。
+	// 包尚未生成完成时没有可演练的包体，属状态冲突而非参数错误。
 	case errors.Is(err, domain.ErrDrillPackageNotDone):
 		auth.WriteError(c, http.StatusConflict, "backup_not_done", err.Error())
-	// FR-40 追加六：恢复前同样要求包已生成完成（不是 done 就不能作为恢复源）。
+	// 恢复前同样要求包已生成完成（不是 done 就不能作为恢复源）。
 	// 与 drill 共用同一个 error_code（语义相同：包还没准备好），消息各自表达。
 	case errors.Is(err, domain.ErrRestorePackageNotDone):
 		auth.WriteError(c, http.StatusConflict, "backup_not_done", err.Error())

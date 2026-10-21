@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
 )
 
-// 本文件钉住 FR-150 §3.6 的 `version:` **段边界条件**：严格相等必须落在 SQL 里，
+// 本文件钉住的 `version:` **段边界条件**：严格相等必须落在 SQL 里，
 // 而不是"先松散 LIKE 再 Go 侧后置过滤"——后者会让 total 变成过滤后的计数、分页语义失真。
 //
 // 关键回归：`1.17.12` 不得命中 `1.17.120/` 与 `1.17.12-rc1/`，但必须命中
@@ -143,7 +143,7 @@ func TestSearchExcludeVersion(t *testing.T) {
 	}
 }
 
-// TestSearchVersionCoexistsWithFTS 钉住版本条件与 FR-149 的 FTS 候选集条件**共存**：
+// TestSearchVersionCoexistsWithFTS 钉住版本条件与的 FTS 候选集条件**共存**：
 // 走索引与走全表 LIKE 两条路径必须给出逐条一致的结果（版本条件不得在走索引时被丢掉）。
 func TestSearchVersionCoexistsWithFTS(t *testing.T) {
 	f := newVersionFilterFixture(t)

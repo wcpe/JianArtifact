@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// TestAutoBlockBaseDefaultsAndRejectsNonPositive 覆盖 FR-43 的退避起始解析：
+// TestAutoBlockBaseDefaultsAndRejectsNonPositive 覆盖的退避起始解析：
 // 与 storageCleanupInterval 的「0 禁用」不同，本项**无禁用语义**——
 // 退避起始为 0 等于失败不阻止，没有意义，因此 0 与负数一律回落默认 40s。
 func TestAutoBlockBaseDefaultsAndRejectsNonPositive(t *testing.T) {

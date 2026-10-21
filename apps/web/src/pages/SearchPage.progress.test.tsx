@@ -1,4 +1,4 @@
-// 搜索页的进度 / 取消 / 超时 / 乱序（FR-152）回归：
+// 搜索页的进度 / 取消 / 超时 / 乱序回归：
 // - 搜索进行中在结果区顶部显示伪进度、阶段文案、已用时长与取消按钮，完成后立即收敛；
 // - 取消经 AbortSignal 真实中止请求，界面静默回到空闲态（不算失败），并可立即重搜；
 // - 后端 504 search_timeout 给「超时」专属文案，其它失败仍是通用文案；
@@ -117,7 +117,7 @@ function hangingResponse(signalSpy?: { aborted: boolean }) {
 const progressBar = () => screen.queryByTestId("search-progress");
 const tree = () => screen.getByTestId("search-package-tree");
 
-describe("SearchPage 搜索进度与取消（FR-152）", () => {
+describe("SearchPage 搜索进度与取消", () => {
   it("搜索进行中显示进度条、阶段文案、已用时长与取消按钮，完成后立即消失", async () => {
     const hanging = hangingResponse();
     mockSearch(hanging.response);

@@ -8,7 +8,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
 )
 
-// 本文件钉住 FR-149 第一批的索引同步行为：asset 的全部写入路径（UpsertWithTime /
+// 本文件钉住第一批的索引同步行为：asset 的全部写入路径（UpsertWithTime /
 // DeleteByPath / 资产操作的 apply 与回滚）都必须与 asset_path_fts 同事务维护索引，
 // 且 external content 表的几条反直觉规则（改路径的 UPDATE 不重建索引、删除要先删索引
 // 再删行、'delete' 命令对未入索引的 rowid 会报错）不被后续改动踩回去。

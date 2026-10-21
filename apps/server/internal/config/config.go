@@ -27,51 +27,51 @@ const (
 	EnvMigrationCredentialKey = "JIAN_MIGRATION_CREDENTIAL_KEY"
 	EnvUpstreamTimeout        = "JIAN_UPSTREAM_TIMEOUT"     // proxy 回源整体超时，单位秒
 	EnvSyncPeerURL            = "JIAN_SYNC_PEER_URL"        // 遗留复制对端基址；主备角色模式下不参与调度
-	EnvSyncInterval           = "JIAN_SYNC_INTERVAL"        // 同步轮询间隔（FR-85），单位秒
-	EnvPublicURL              = "JIAN_PUBLIC_URL"           // 对外基础 URL（FR-87）；CDN 域名，隐藏源站 IP
-	EnvEnabledFormats         = "JIAN_ENABLED_FORMATS"      // 启用的协议格式，逗号分隔（FR-32）
+	EnvSyncInterval           = "JIAN_SYNC_INTERVAL"        // 同步轮询间隔，单位秒
+	EnvPublicURL              = "JIAN_PUBLIC_URL"           // 对外基础 URL；CDN 域名，隐藏源站 IP
+	EnvEnabledFormats         = "JIAN_ENABLED_FORMATS"      // 启用的协议格式，逗号分隔
 	EnvBlobGCInterval         = "JIAN_BLOB_GC_INTERVAL"     // 孤立 blob 定时清理间隔，单位秒；0 禁用
-	EnvTLSAddr                = "JIAN_TLS_ADDR"             // 服务内置 TLS 监听地址（FR-131）；空 = 不启用
-	EnvTLSCert                = "JIAN_TLS_CERT"             // TLS PEM 证书文件路径（FR-131）
-	EnvTLSKey                 = "JIAN_TLS_KEY"              // TLS PEM 私钥文件路径（FR-131）
-	EnvOIDCIssuer             = "JIAN_OIDC_ISSUER"          // OIDC 身份提供方 issuer（FR-34）；空 = 不启用 OIDC 登录
-	EnvOIDCClientID           = "JIAN_OIDC_CLIENT_ID"       // OIDC 客户端 ID（FR-34）
-	EnvOIDCClientSecret       = "JIAN_OIDC_CLIENT_SECRET"   // OIDC 客户端密钥（FR-34）；只从环境变量读取，不入库不打印
-	EnvOIDCRedirectURL        = "JIAN_OIDC_REDIRECT_URL"    // OIDC 回调地址（FR-34），须与 IdP 侧注册一致
-	EnvOIDCUsernameClaim      = "JIAN_OIDC_USERNAME_CLAIM"  // 用户名 claim（FR-34）；缺省 preferred_username
-	EnvOIDCAllowedDomains     = "JIAN_OIDC_ALLOWED_DOMAINS" // 允许自动建号的邮箱域名（FR-34），逗号分隔；空 = 不限制
-	EnvLDAPURL                = "JIAN_LDAP_URL"             // LDAP 目录地址（FR-35，ldap:// 或 ldaps://）；空 = 不启用
-	EnvLDAPBindDN             = "JIAN_LDAP_BIND_DN"         // 检索用服务账号 DN（FR-35）；空 = 改用 DN 模板直接绑定
-	EnvLDAPBindPassword       = "JIAN_LDAP_BIND_PASSWORD"   // 服务账号口令（FR-35）；只从环境变量读取，不入库不打印
-	EnvLDAPBaseDN             = "JIAN_LDAP_BASE_DN"         // 用户检索基准 DN（FR-35）
-	EnvLDAPUserFilter         = "JIAN_LDAP_USER_FILTER"     // 用户检索过滤器（FR-35），必须含 {username} 占位
-	EnvLDAPEmailAttr          = "JIAN_LDAP_EMAIL_ATTR"      // 邮箱属性名（FR-35）；缺省 mail
-	EnvLDAPStartTLS           = "JIAN_LDAP_STARTTLS"        // 对 ldap:// 是否使用 StartTLS（FR-35）；缺省关闭
-	EnvLDAPCAFile             = "JIAN_LDAP_CA_FILE"         // 自定义 CA（PEM）路径（FR-35）；不提供跳过证书校验的开关
+	EnvTLSAddr                = "JIAN_TLS_ADDR"             // 服务内置 TLS 监听地址；空 = 不启用
+	EnvTLSCert                = "JIAN_TLS_CERT"             // TLS PEM 证书文件路径
+	EnvTLSKey                 = "JIAN_TLS_KEY"              // TLS PEM 私钥文件路径
+	EnvOIDCIssuer             = "JIAN_OIDC_ISSUER"          // OIDC 身份提供方 issuer；空 = 不启用 OIDC 登录
+	EnvOIDCClientID           = "JIAN_OIDC_CLIENT_ID"       // OIDC 客户端 ID
+	EnvOIDCClientSecret       = "JIAN_OIDC_CLIENT_SECRET"   // OIDC 客户端密钥；只从环境变量读取，不入库不打印
+	EnvOIDCRedirectURL        = "JIAN_OIDC_REDIRECT_URL"    // OIDC 回调地址，须与 IdP 侧注册一致
+	EnvOIDCUsernameClaim      = "JIAN_OIDC_USERNAME_CLAIM"  // 用户名 claim；缺省 preferred_username
+	EnvOIDCAllowedDomains     = "JIAN_OIDC_ALLOWED_DOMAINS" // 允许自动建号的邮箱域名，逗号分隔；空 = 不限制
+	EnvLDAPURL                = "JIAN_LDAP_URL"             // LDAP 目录地址（，ldap:// 或 ldaps://）；空 = 不启用
+	EnvLDAPBindDN             = "JIAN_LDAP_BIND_DN"         // 检索用服务账号 DN；空 = 改用 DN 模板直接绑定
+	EnvLDAPBindPassword       = "JIAN_LDAP_BIND_PASSWORD"   // 服务账号口令；只从环境变量读取，不入库不打印
+	EnvLDAPBaseDN             = "JIAN_LDAP_BASE_DN"         // 用户检索基准 DN
+	EnvLDAPUserFilter         = "JIAN_LDAP_USER_FILTER"     // 用户检索过滤器，必须含 {username} 占位
+	EnvLDAPEmailAttr          = "JIAN_LDAP_EMAIL_ATTR"      // 邮箱属性名；缺省 mail
+	EnvLDAPStartTLS           = "JIAN_LDAP_STARTTLS"        // 对 ldap:// 是否使用 StartTLS；缺省关闭
+	EnvLDAPCAFile             = "JIAN_LDAP_CA_FILE"         // 自定义 CA（PEM）路径；不提供跳过证书校验的开关
 
-	// FR-41 存储治理清理作业的开关（单独成组：名字更长，并入上一组会只为对齐而重排全部既有行）。
+	//  存储治理清理作业的开关（单独成组：名字更长，并入上一组会只为对齐而重排全部既有行）。
 	EnvStorageCleanupInterval   = "JIAN_STORAGE_CLEANUP_INTERVAL"        // 存储治理清理作业间隔，单位秒；0 禁用
 	EnvStorageMetadataRetention = "JIAN_STORAGE_METADATA_RETENTION_DAYS" // 终态操作与隔离元数据保留天数；0 禁用
 	EnvStorageTempMaxAge        = "JIAN_STORAGE_TEMP_MAX_AGE_HOURS"      // 过期上传临时文件阈值，单位小时；0 禁用
 
-	// FR-40 周期化自动备份与保留策略（单独成组，理由同上）。
+	//  周期化自动备份与保留策略（单独成组，理由同上）。
 	EnvBackupAutoInterval  = "JIAN_BACKUP_AUTO_INTERVAL"  // 自动备份作业间隔，单位秒；0 禁用
 	EnvBackupKeepLast      = "JIAN_BACKUP_KEEP_LAST"      // 保留最近 N 份自动备份；0 = 不按份数限制
 	EnvBackupRetentionDays = "JIAN_BACKUP_RETENTION_DAYS" // 自动备份保留天数；0 = 不限天数
 
-	// FR-40 追加八 备份孤儿回收（单独成组，理由同上）。
+	//  备份孤儿回收（单独成组，理由同上）。
 	EnvBackupOrphanCleanupInterval = "JIAN_BACKUP_ORPHAN_CLEANUP_INTERVAL" // 孤儿备份包回收间隔，单位秒；0 禁用
 	EnvBackupOrphanGraceHours      = "JIAN_BACKUP_ORPHAN_GRACE_HOURS"      // 回收宽限期，单位小时；0 取默认 1
 
-	// FR-43 上游断路器补强：auto-block 退避起始时长，单位秒。
+	//  上游断路器补强：auto-block 退避起始时长，单位秒。
 	EnvAutoBlockBaseSeconds = "JIAN_AUTO_BLOCK_BASE_SECONDS" // proxy 上游首次失败的阻止窗口时长；非正数回落默认
 
-	// FR-40 追加七：一键重启的能力配置（单独成组，理由同上）。
+	// 一键重启的能力配置（单独成组，理由同上）。
 	// 单元名只从环境变量读取，**绝不**接受请求体输入——见 domain/restart_service.go 的注入防护说明。
 	EnvRestartUnit  = "JIAN_RESTART_UNIT"  // 重启目标单元名；缺省 jianartifact
 	EnvRestartScope = "JIAN_RESTART_SCOPE" // 作用域 system / systemd-user / docker；非法值回落 system
 
-	// FR-149 搜索性能：搜索链路（网页搜索 / npm 搜索 / suggest）的总预算，单位秒。
+	//  搜索性能：搜索链路（网页搜索 / npm 搜索 / suggest）的总预算，单位秒。
 	EnvSearchTimeoutSeconds = "JIAN_SEARCH_TIMEOUT_SECONDS" // 一次搜索的总预算上限；非正数回落默认（无禁用语义）
 
 	// 仪表盘容量聚合结果的缓存有效期，单位秒；0 禁用缓存（每次请求实时聚合）。
@@ -86,12 +86,12 @@ const (
 	defaultUpstreamTimeout = 30 * time.Second
 	defaultSyncInterval    = 5 * time.Second // 复制轮询间隔默认 5s（近实时）
 	defaultBlobGCInterval  = 24 * time.Hour  // 孤立 blob 默认每日清理一次
-	// FR-41 存储治理清理的默认阈值：每日一轮、终态元数据保留 7 天、临时文件 24 小时。
+	//  存储治理清理的默认阈值：每日一轮、终态元数据保留 7 天、临时文件 24 小时。
 	// 隔离区空目录的宽限期不设开关（见 domain/storage_cleanup.go 的常量与理由）。
 	defaultStorageCleanupInterval   = 24 * time.Hour
 	defaultStorageMetadataRetention = 7 * 24 * time.Hour
 	defaultStorageTempMaxAge        = 24 * time.Hour
-	// FR-40 自动备份与保留策略的默认值。
+	//  自动备份与保留策略的默认值。
 	//
 	// 间隔默认 0 = **关闭**。这一条是**有意**的，不是遗漏：
 	// 备份是**全量**包（每份 ≈ 数据目录大小），因此默认开启会在用户毫无预期的情况下
@@ -106,17 +106,17 @@ const (
 	defaultBackupAutoInterval  = 0
 	defaultBackupKeepLast      = 7
 	defaultBackupRetentionDays = 30
-	// FR-40 追加八 孤儿备份包回收的默认值：每日一轮、宽限期 1 小时。
+	//  孤儿备份包回收的默认值：每日一轮、宽限期 1 小时。
 	// 间隔默认 24h 而非 0（与自动备份相反）：孤儿文件只会占盘不会自行消失，
 	// 回收是纯粹的兜底动作，开启它不存在"悄悄占磁盘"的风险。
 	// 宽限期保证"拷入 → 界面导入"的操作窗口（见 domain/backup_orphan_cleanup.go）。
 	defaultBackupOrphanCleanupInterval = 24 * time.Hour
 	defaultBackupOrphanGrace           = time.Hour
-	// defaultAutoBlockBase 是 auto-block 退避起始时长（FR-43）。
+	// defaultAutoBlockBase 是 auto-block 退避起始时长。
 	// 与 domain 侧兜底常量 autoBlockInitial（proxy_health.go）保持同值：
 	// 装配层始终注入本值，domain 常量只在未装配/测试构造时兜底。
 	defaultAutoBlockBase = 40 * time.Second
-	// defaultSearchTimeout 是搜索链路总预算的默认值（FR-149 §3.4）。
+	// defaultSearchTimeout 是搜索链路总预算的默认值。
 	// 与 domain 侧兜底常量 searchTimeoutDefault（repository_service.go）保持同值：
 	// 装配层始终注入本值，domain 常量只在未装配/测试构造时兜底。
 	defaultSearchTimeout = 10 * time.Second
@@ -137,7 +137,7 @@ const (
 	// defaultLDAPUserFilter 与 defaultLDAPEmailAttr 是 LDAP 检索的缺省口径（OpenLDAP 风格 uid）。
 	defaultLDAPUserFilter = "(uid={username})"
 	defaultLDAPEmailAttr  = "mail"
-	// FR-40 追加七：一键重启的默认单元名与默认作用域。
+	// 一键重启的默认单元名与默认作用域。
 	// 单元名默认 jianartifact（与部署脚本里的 systemd 单元同名），作用域默认 system（systemctl）。
 	defaultRestartUnit  = "jianartifact"
 	defaultRestartScope = "system"
@@ -158,38 +158,38 @@ type Config struct {
 	JWTSecret              []byte        // JWT HS256 签名密钥（不入库、不打印）
 	MigrationCredentialKey []byte        // 在线迁移凭据 AES-256-GCM 专用密钥（不入库、不打印）
 	UpstreamTimeout        time.Duration // proxy 回源整体超时
-	// AutoBlockBaseSeconds 是 proxy 上游 auto-block 退避起始时长（FR-43）：
+	// AutoBlockBaseSeconds 是 proxy 上游 auto-block 退避起始时长：
 	// 首次失败的阻止窗口，之后每档翻倍。非正数（含非法值）已在解析期回落默认值。
 	AutoBlockBaseSeconds   time.Duration
 	SyncPeerURL            string        // 遗留复制对端基址；仅为兼容旧配置保留，不驱动主备调度
-	SyncInterval           time.Duration // 复制轮询间隔（FR-85）
-	PublicURL              string        // 对外基础 URL（FR-87，如 https://repo.example.com）；空则回退请求 Host 推断
-	EnabledFormats         formats.Set   // 启动时启用的协议格式（FR-32）
+	SyncInterval           time.Duration // 复制轮询间隔
+	PublicURL              string        // 对外基础 URL（，如 https://repo.example.com）；空则回退请求 Host 推断
+	EnabledFormats         formats.Set   // 启动时启用的协议格式
 	BlobGCInterval         time.Duration // primary 孤立 blob 定时清理间隔；0 禁用
-	StorageCleanupInterval time.Duration // FR-41 存储治理清理作业间隔；0 禁用
-	// StorageMetadataRetention 是终态资产操作与隔离元数据的保留期（FR-41）；0 禁用裁剪。
+	StorageCleanupInterval time.Duration //  存储治理清理作业间隔；0 禁用
+	// StorageMetadataRetention 是终态资产操作与隔离元数据的保留期；0 禁用裁剪。
 	StorageMetadataRetention time.Duration
-	// StorageTempMaxAge 是过期上传临时文件（<BlobDir>/tmp/oci-upload）的最长滞留时长（FR-41）；0 禁用。
+	// StorageTempMaxAge 是过期上传临时文件（<BlobDir>/tmp/oci-upload）的最长滞留时长；0 禁用。
 	StorageTempMaxAge time.Duration
-	// BackupAutoInterval 是周期化自动备份作业的间隔（FR-40）；0 禁用（作业不注册）。
+	// BackupAutoInterval 是周期化自动备份作业的间隔；0 禁用（作业不注册）。
 	// 调度间隔在启动时固定、不支持运行时热改——改它需要重启进程（见 docs/OPERATIONS.md）。
 	BackupAutoInterval time.Duration
-	// BackupKeepLast 是自动备份按份数保留的上限（FR-40）；0 = 不按份数限制。
+	// BackupKeepLast 是自动备份按份数保留的上限；0 = 不按份数限制。
 	BackupKeepLast int
-	// BackupRetentionDays 是自动备份按时间的保留上限（FR-40）；0 = 不限天数。
+	// BackupRetentionDays 是自动备份按时间的保留上限；0 = 不限天数。
 	BackupRetentionDays int
-	// BackupOrphanCleanupInterval 是孤儿备份包回收作业的间隔（FR-40 追加八）；0 禁用。
+	// BackupOrphanCleanupInterval 是孤儿备份包回收作业的间隔；0 禁用。
 	BackupOrphanCleanupInterval time.Duration
 	// BackupOrphanGrace 是孤儿回收的宽限期：mtime 晚于此窗口的文件一律保留，
-	// 给"拷入 → 界面导入"留出操作窗口（FR-40 追加八）。
+	// 给"拷入 → 界面导入"留出操作窗口。
 	BackupOrphanGrace time.Duration
-	// RestartUnit 是一键重启的目标单元名（FR-40 追加七）；仅来自环境变量，
+	// RestartUnit 是一键重启的目标单元名；仅来自环境变量，
 	// 绝不从请求体读取——这是防命令注入的第一道边界（见 domain/restart_service.go）。
 	RestartUnit string
-	// RestartScope 是一键重启的作用域（FR-40 追加七）：system / systemd-user / docker；
+	// RestartScope 是一键重启的作用域：system / systemd-user / docker；
 	// 非法值已在解析期回落 system，装配层可放心使用。
 	RestartScope string
-	// SearchTimeout 是搜索链路（网页搜索 / npm 搜索 / suggest）的总预算上限（FR-149 §3.4）；
+	// SearchTimeout 是搜索链路（网页搜索 / npm 搜索 / suggest）的总预算上限；
 	// 非正数（含非法值）已在解析期回落默认值，**无禁用语义**。
 	SearchTimeout time.Duration
 	// CapacityCacheTTL 是仪表盘容量聚合结果的缓存有效期（JIAN_CAPACITY_CACHE_TTL_SECONDS）。
@@ -198,14 +198,14 @@ type Config struct {
 	// SQLiteMaxConns 是 SQLite 连接池上限（JIAN_SQLITE_MAX_CONNS）。
 	// 非正数（含非法值）已在解析期回落默认 defaultSQLiteMaxConns，**无禁用语义**。
 	SQLiteMaxConns int
-	TLSAddr        string     // 服务内置 TLS 监听地址（FR-131）；空 = 不启用
-	TLSCert        string     // TLS PEM 证书文件路径（FR-131）
-	TLSKey         string     // TLS PEM 私钥文件路径（FR-131）
-	OIDC           OIDCConfig // FR-34：OIDC 身份源接入配置（Issuer 空 = 不启用）
-	LDAP           LDAPConfig // FR-35：LDAP 身份源接入配置（URL 空 = 不启用）
+	TLSAddr        string     // 服务内置 TLS 监听地址；空 = 不启用
+	TLSCert        string     // TLS PEM 证书文件路径
+	TLSKey         string     // TLS PEM 私钥文件路径
+	OIDC           OIDCConfig // OIDC 身份源接入配置（Issuer 空 = 不启用）
+	LDAP           LDAPConfig // LDAP 身份源接入配置（URL 空 = 不启用）
 }
 
-// LDAPConfig 是 LDAP 目录接入配置（FR-35，见 ADR-0029）；
+// LDAPConfig 是 LDAP 目录接入配置（，见 ADR-0029）；
 // 服务账号口令只从环境变量解析，不落库、不打印、不进审计。
 type LDAPConfig struct {
 	URL          string // 目录地址（ldap:// 或 ldaps://）
@@ -221,7 +221,7 @@ type LDAPConfig struct {
 // Enabled 报告是否启用 LDAP 登录（配置了 URL 即启用）。
 func (c LDAPConfig) Enabled() bool { return c.URL != "" }
 
-// OIDCConfig 是 OIDC 身份源接入配置（FR-34，见 ADR-0029）；
+// OIDCConfig 是 OIDC 身份源接入配置（，见 ADR-0029）；
 // 凭据只从环境变量解析，不落库、不打印、不进审计。
 type OIDCConfig struct {
 	Issuer         string   // 身份提供方 issuer（discovery 基址）
@@ -427,7 +427,7 @@ func storageTempMaxAge() time.Duration {
 	return envDurationOr(EnvStorageTempMaxAge, defaultStorageTempMaxAge, time.Hour)
 }
 
-// backupAutoInterval 解析 JIAN_BACKUP_AUTO_INTERVAL（秒，FR-40）：周期化自动备份作业的间隔。
+// backupAutoInterval 解析 JIAN_BACKUP_AUTO_INTERVAL（秒，）：周期化自动备份作业的间隔。
 // 缺省、非法与负数取默认值 0（= **关闭**），显式 0 同样是关闭——本项默认关闭，
 // 因为自动备份会在无人确认的情况下持续占用磁盘，必须是运维显式开启的能力。
 // 与 storageCleanupInterval 的「默认开、0 关」不同，但「0 = 不注册作业」的机制完全一致。
@@ -435,7 +435,7 @@ func backupAutoInterval() time.Duration {
 	return envDurationOr(EnvBackupAutoInterval, defaultBackupAutoInterval, time.Second)
 }
 
-// backupKeepLast 解析 JIAN_BACKUP_KEEP_LAST（份，FR-40）：保留最近 N 份**自动**备份。
+// backupKeepLast 解析 JIAN_BACKUP_KEEP_LAST（份，）：保留最近 N 份**自动**备份。
 // 缺省或非法值取 7；显式 0 = **不按份数限制**（只受天数约束），而不是「一份都不留」——
 // 把 0 解释成"全删"会让一个笔误直接清空备份目录，而"不限制"永远只导致多留。
 // 负数与非法值回落默认 7（不采用"负数为不限制"的隐式写法，避免与 0 的语义重叠）。
@@ -443,13 +443,13 @@ func backupKeepLast() int {
 	return envNonNegativeIntOr(EnvBackupKeepLast, defaultBackupKeepLast)
 }
 
-// backupRetentionDays 解析 JIAN_BACKUP_RETENTION_DAYS（天，FR-40）：自动备份的保留天数。
+// backupRetentionDays 解析 JIAN_BACKUP_RETENTION_DAYS（天，）：自动备份的保留天数。
 // 缺省或非法值取 30；显式 0 = 不限天数（只受份数约束）。0 语义与 backupKeepLast 同构。
 func backupRetentionDays() int {
 	return envNonNegativeIntOr(EnvBackupRetentionDays, defaultBackupRetentionDays)
 }
 
-// backupOrphanCleanupInterval 解析 JIAN_BACKUP_ORPHAN_CLEANUP_INTERVAL（秒，FR-40 追加八）：
+// backupOrphanCleanupInterval 解析 JIAN_BACKUP_ORPHAN_CLEANUP_INTERVAL（秒，）：
 // 孤儿备份包回收作业的间隔。缺省或非法值取 24 小时，显式 0 禁用（不注册作业）。
 //
 // 默认开：孤儿文件只占磁盘、不会自行消失，回收是纯兜底动作，不存在"意外删数据"的
@@ -458,7 +458,7 @@ func backupOrphanCleanupInterval() time.Duration {
 	return envDurationOr(EnvBackupOrphanCleanupInterval, defaultBackupOrphanCleanupInterval, time.Second)
 }
 
-// backupOrphanGrace 解析 JIAN_BACKUP_ORPHAN_GRACE_HOURS（小时，FR-40 追加八）：
+// backupOrphanGrace 解析 JIAN_BACKUP_ORPHAN_GRACE_HOURS（小时，）：
 // 孤儿回收的宽限期。缺省或非法值取 1 小时；显式 0 同样回落 1 小时——
 // **不允许零宽限**：那会让"刚拷进来、还没来得及在界面导入"的包在下一轮就被删掉。
 func backupOrphanGrace() time.Duration {
@@ -488,7 +488,7 @@ func envNonNegativeIntOr(key string, fallback int) int {
 	return n
 }
 
-// autoBlockBase 解析 JIAN_AUTO_BLOCK_BASE_SECONDS（秒，FR-43）：proxy 上游首次失败的
+// autoBlockBase 解析 JIAN_AUTO_BLOCK_BASE_SECONDS（秒，）：proxy 上游首次失败的
 // 阻止窗口时长，之后每档翻倍。缺省、非数字、负数与显式 0 都回落默认 40s——
 // 退避起始为 0 等于「失败不阻止」，不是有意义的配置，故本项**无禁用语义**
 // （口径同 upstreamTimeout，而非 storageCleanupInterval 的 0 禁用）。
@@ -496,7 +496,7 @@ func autoBlockBase() time.Duration {
 	return envPositiveDurationOr(EnvAutoBlockBaseSeconds, defaultAutoBlockBase, time.Second)
 }
 
-// searchTimeout 解析 JIAN_SEARCH_TIMEOUT_SECONDS（秒，FR-149 §3.4）：搜索链路
+// searchTimeout 解析 JIAN_SEARCH_TIMEOUT_SECONDS（秒，）：搜索链路
 // （网页搜索 / npm 搜索 / 后续 suggest）的**总预算**，三条语句共享同一个 deadline。
 // 缺省、非数字、负数与显式 0 都回落默认 10s——本项**无禁用语义**：搜索是无界查询，
 // 关掉超时等于开放一个可以长时间占住数据库连接（主库池见 db.go 的 OpenWithMaxConns）
@@ -524,7 +524,7 @@ func searchTimeout() time.Duration {
 //
 // 不设上限夹取：本项只影响展示数字的新鲜度，超长 TTL 不破坏任何安全或正确性属性（进程重启
 // 即自愈，运维看到数字滞后可直接调小），而**静默改写运维显式给出的值**是更糟的语义——口径
-// 同 FR-43 拒绝给 auto-block 退避加上限的既有取舍：配置值应当可预期，不做隐藏的二次加工。
+// 同拒绝给 auto-block 退避加上限的既有取舍：配置值应当可预期，不做隐藏的二次加工。
 func capacityCacheTTL() time.Duration {
 	return envDurationOr(EnvCapacityCacheTTLSeconds, defaultCapacityCacheTTL, time.Second)
 }
@@ -607,7 +607,7 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
-// restartScope 解析 JIAN_RESTART_SCOPE（FR-40 追加七）。
+// restartScope 解析 JIAN_RESTART_SCOPE。
 //
 // 非法值**回落默认而不是报错**：作用域是"怎么重启"的实现细节，写错了应当退化成
 // 最保守的 system 再交给同步预检（Probe）判定可用性——由预检返回 supported:false +
@@ -639,9 +639,9 @@ func upstreamTimeout() time.Duration {
 	return time.Duration(secs) * time.Second
 }
 
-// oidcConfig 解析 OIDC 接入配置（FR-34）。未配置 issuer 时整组不启用；
+// oidcConfig 解析 OIDC 接入配置。未配置 issuer 时整组不启用；
 // 半配置（缺客户端 ID / 密钥 / 回调地址）或非法 URL 直接报错，
-// 避免"以为启用了实际没有"的静默半启用（对齐 FR-131 的防静默降级口径）。
+// 避免"以为启用了实际没有"的静默半启用（对齐的防静默降级口径）。
 func oidcConfig() (OIDCConfig, error) {
 	cfg := OIDCConfig{
 		Issuer:        strings.TrimSpace(os.Getenv(EnvOIDCIssuer)),
@@ -689,9 +689,9 @@ func requireHTTPURL(env, value string) error {
 	return nil
 }
 
-// ldapConfig 解析 LDAP 接入配置（FR-35）。未配置 URL 时整组不启用；
+// ldapConfig 解析 LDAP 接入配置。未配置 URL 时整组不启用；
 // 半配置、过滤器缺占位、StartTLS 与 ldaps 冲突、CA 文件不可读都在启动期直接报错，
-// 避免"以为启用了实际没有"（对齐 OIDC 与 FR-131 的防静默降级口径）。
+// 避免"以为启用了实际没有"（对齐 OIDC 与的防静默降级口径）。
 func ldapConfig() (LDAPConfig, error) {
 	startTLS := os.Getenv(EnvLDAPStartTLS)
 	cfg := LDAPConfig{

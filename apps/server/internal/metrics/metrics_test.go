@@ -187,7 +187,7 @@ func TestRegistryIsConcurrencySafe(t *testing.T) {
 	}
 }
 
-// TestPublishRejectionsRenderClosedSet 发布拒绝指标（FR-41）：reason 是闭集枚举，
+// TestPublishRejectionsRenderClosedSet 发布拒绝指标：reason 是闭集枚举，
 // 闭集外的取值不产生样本；固定指标族即使暂无样本也输出 HELP / TYPE。
 func TestPublishRejectionsRenderClosedSet(t *testing.T) {
 	reg, exp := newTestExposition(nil)
@@ -243,7 +243,7 @@ func TestPublishRejectionConcurrentWithRender(t *testing.T) {
 	}
 }
 
-// TestUpstreamBlockEventsRenderClosedSet 上游断路器阻止事件（FR-43）：reason 是闭集枚举，
+// TestUpstreamBlockEventsRenderClosedSet 上游断路器阻止事件：reason 是闭集枚举，
 // 闭集外的取值不产生样本；该族即使暂无样本也输出 HELP / TYPE。
 func TestUpstreamBlockEventsRenderClosedSet(t *testing.T) {
 	reg, exp := newTestExposition(nil)

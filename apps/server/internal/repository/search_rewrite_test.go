@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
 )
 
-// 本文件钉住 FR-149 第三批的**查询改写**：把可下推的包含词换成
+// 本文件钉住第三批的**查询改写**：把可下推的包含词换成
 // `id IN (SELECT rowid FROM asset_path_fts WHERE asset_path_fts MATCH ?)` 候选集条件之后，
 // 结果集与 total 必须与旧的纯 LIKE 实现（buildSearchWhere，保留为 oracle）**逐条一致**。
 //

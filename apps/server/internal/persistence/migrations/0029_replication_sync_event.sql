@@ -3,7 +3,7 @@
 -- 影响：新增 replication_sync_event 表及同步诊断索引
 -- 数据处理：创建同步诊断结构，无历史数据回填；预计耗时：毫秒级
 -- 回滚：不支持 down migration；需要恢复升级前备份
--- 相关：FR-119 / ADR-0023
+-- 相关：ADR-0023
 CREATE TABLE replication_sync_event (
   event_id TEXT PRIMARY KEY,
   trigger_type TEXT NOT NULL,

@@ -9,7 +9,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// FR-109：凭据引用的配置与使用必须进入审计；审计只记录逻辑名称，绝不记录明文或解析结果。
+// 凭据引用的配置与使用必须进入审计；审计只记录逻辑名称，绝不记录明文或解析结果。
 func TestCredentialRefUsageIsAuditedWithoutSecrets(t *testing.T) {
 	env := newTestEnv(t)
 	var bootstrap api.LoginResponse

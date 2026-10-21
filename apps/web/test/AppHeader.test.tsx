@@ -1,4 +1,4 @@
-// FR-71 页眉打磨：刷新按钮旋转/禁用态随网络活动归零恢复；useAsync 响应全局刷新事件。
+//  页眉打磨：刷新按钮旋转/禁用态随网络活动归零恢复；useAsync 响应全局刷新事件。
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
@@ -21,7 +21,7 @@ function AsyncProbe({ onFetch }: { onFetch: () => void }) {
   return <div data-testid="probe">{loading ? "loading" : `calls:${calls.n}`}</div>;
 }
 
-describe("页眉打磨（FR-71）", () => {
+describe("页眉打磨", () => {
   it("页眉不再提供通知入口（统一收敛到审计日志），账户菜单可用", async () => {
     renderWithProviders(<AppRoutes />, { route: "/dashboard", authenticated: true });
 

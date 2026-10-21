@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// DurationUnit 是自动备份间隔的显示单位（FR-40 追加九）。
+// DurationUnit 是自动备份间隔的显示单位。
 //
 // # 为什么需要
 //

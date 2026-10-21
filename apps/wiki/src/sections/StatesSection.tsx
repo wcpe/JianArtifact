@@ -1,5 +1,5 @@
 // 状态态展台：并列展示加载 / 空 / 错误 / 越权四类业务状态态，
-// 核验它们在验收站与管理端呈现一致（对齐 FR-12 业务模式验收）。
+// 核验它们在验收站与管理端呈现一致（对齐业务模式验收）。
 import { Card, SimpleGrid, Stack, Text } from "@mantine/core";
 import { EmptyState, ErrorState, ForbiddenState, LoadingState } from "@jianartifact/ui";
 import type { ReactNode } from "react";

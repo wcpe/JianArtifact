@@ -1,7 +1,7 @@
-// FR-153：搜索框的候选下拉（规格 docs/specs/search-index-and-performance.md §3.9）。
+// 搜索框的候选下拉（规格 docs/specs/search-index-and-performance.md §3.9）。
 //
 // 这里刻意把「输入框 + 下拉」封成一个自管请求的组件，而不是继续在 SearchPage 里堆状态：
-//   - 请求生命周期（防抖 / 中止 / 乱序保护）只属于这一块，与结果区的 useAsync（FR-152 的
+//   - 请求生命周期（防抖 / 中止 / 乱序保护）只属于这一块，与结果区的 useAsync（的
 //     进度与取消）完全无关，混在一处会让两条 cancellation 语义互相干扰；
 //   - 下拉的开合、高亮与键盘导航是一组必须同源的状态，拆开就会出现「高亮在、面板已关」。
 //

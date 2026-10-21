@@ -1,4 +1,4 @@
-// FR-72: 构建时生成开源依赖协议清单（Go + npm），内嵌到后端二进制并经
+// 构建时生成开源依赖协议清单（Go + npm），内嵌到后端二进制并经
 // admin 专属端点 GET /api/v1/licenses 返回（不再打进前端 bundle）。
 // 用法：node scripts/generate-licenses.mjs（工作目录任意，路径以本文件定位）。
 // 软失败：任一侧工具不可用时保留现有 JSON 并告警，不中断构建。

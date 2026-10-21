@@ -3,7 +3,7 @@
 -- 影响：新增 format_metadata 表及格式查询索引
 -- 数据处理：创建格式元数据结构，无历史数据回填；预计耗时：毫秒级
 -- 回滚：不支持 down migration；需要恢复升级前备份
--- 相关：FR-27 / FR-29 / ADR-0002
+-- 相关：ADR-0002
 -- 0019：格式协议元数据（PyPI Simple / NuGet V3）。
 -- 文件字节仍由 asset/blob 保存；本表只保存生成索引所需的稳定元数据。
 CREATE TABLE format_metadata (

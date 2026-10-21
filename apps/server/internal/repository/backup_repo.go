@@ -8,7 +8,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
 )
 
-// 备份包状态机（FR-132）：queued → snapshotting → packing → done / failed。
+// 备份包状态机：queued → snapshotting → packing → done / failed。
 const (
 	BackupStatusQueued       = "queued"
 	BackupStatusSnapshotting = "snapshotting"
@@ -23,7 +23,7 @@ const (
 	BackupModeFrozen = "frozen"
 )
 
-// 备份包来源（FR-40）：manual = 人工触发，auto = backup-auto 周期作业生成。
+// 备份包来源：manual = 人工触发，auto = backup-auto 周期作业生成。
 //
 // 该标记决定保留策略的作用范围——自动淘汰只作用于 auto 包，手动包是人工决策产物，
 // 不随周期作业消失（见 domain/backup_retention.go）。
@@ -47,7 +47,7 @@ type BackupPackage struct {
 	CreatedAt       string  `db:"created_at" json:"createdAt"`
 	FinishedAt      *string `db:"finished_at" json:"finishedAt,omitempty"`
 	ErrorSummary    string  `db:"error_summary" json:"errorSummary"`
-	// Origin 是生成来源（manual / auto，FR-40）。迁移 0047 之前的行由列默认值补为 manual。
+	// Origin 是生成来源（manual / auto，）。迁移 0047 之前的行由列默认值补为 manual。
 	Origin string `db:"origin" json:"origin"`
 }
 

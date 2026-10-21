@@ -1,4 +1,4 @@
-// 恢复演练的 HTTP 边界（FR-40）。
+// 恢复演练的 HTTP 边界。
 //
 // 两个端点承载同一能力的「发起」与「查询」两侧：
 //
@@ -26,14 +26,14 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// auditActionBackupDrill 是发起恢复演练的审计动作名（FR-40）。
+// auditActionBackupDrill 是发起恢复演练的审计动作名。
 //
 // 本动作名**为本批新增**：既有备份端点（生成 / 删除 / 校验 / 取链接）此前都没有写审计，
 // 因此没有可沿用的 "backup.*" 先例。命名沿用既有 `<实体>.<动作>` 风格；
 // entityType 取 backup_package、entityKey 取包标识，与备份列表的主键口径一致。
 const auditActionBackupDrill = "backup.drill"
 
-// auditActionBackupRestore 是用本机包发起恢复的审计动作名（FR-40 追加六）。
+// auditActionBackupRestore 是用本机包发起恢复的审计动作名。
 // 与 backup.drill 一样 entityType 取 backup_package、entityKey 取包标识。
 const auditActionBackupRestore = "backup.restore"
 

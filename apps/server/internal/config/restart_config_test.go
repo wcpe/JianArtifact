@@ -2,7 +2,7 @@ package config
 
 import "testing"
 
-// 一键重启的配置解析（FR-40 追加七）：单元名缺省 jianartifact，作用域缺省 system。
+// 一键重启的配置解析：单元名缺省 jianartifact，作用域缺省 system。
 func TestRestartUnitDefaultsToJianartifact(t *testing.T) {
 	t.Setenv(EnvRestartUnit, "")
 	if got := envOr(EnvRestartUnit, defaultRestartUnit); got != "jianartifact" {

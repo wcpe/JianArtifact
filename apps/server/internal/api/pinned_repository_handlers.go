@@ -228,7 +228,7 @@ func (h *Handlers) requirePinnable(ids []int64, subject repository.Subject, isAd
 }
 
 // readable 判定主体对仓库是否有读权限（repos 未接线时放行，保持测试/降级装配的旧语义）。
-// 判定含主体所属用户组的授权（FR-36）：组被授 read 即视为该组成员可读。
+// 判定含主体所属用户组的授权：组被授 read 即视为该组成员可读。
 // 组装主体失败视为不可读——查不到组就放行会让拒绝侧开口子。
 func (h *Handlers) readable(name string, subject repository.Subject) bool {
 	if h.repos == nil {

@@ -466,7 +466,7 @@ func TestResolveGroupParallelHitFromLaterMember(t *testing.T) {
 	}
 }
 
-// ---------- FR-112：proxy 上游 auto-block 主动探测恢复 ----------
+// ----------：proxy 上游 auto-block 主动探测恢复 ----------
 
 // waitForStatus 轮询等待仓库上游状态变为 want（后台探测恢复验证用）。
 func waitForStatus(t *testing.T, svc *domain.AssetService, repoID int64, want domain.RemoteStatus, timeout time.Duration) {
@@ -682,7 +682,7 @@ func TestResolveProxyAutoBlockConcurrent(t *testing.T) {
 	}
 }
 
-// ---------- FR-111：404 负缓存 ----------
+// ----------：404 负缓存 ----------
 
 // TestNegativeCacheProxyNotFoundCached 验证 proxy 明确 404 写负缓存：
 // 首次回源得到 404 后，TTL 内同路径再次请求直接 404，不再回源。
@@ -728,7 +728,7 @@ func TestNegativeCacheProxyErrorNotCached(t *testing.T) {
 	fail.Store(true)
 	payload := []byte("recovered after error")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// 后台 HEAD 探测不计入回源次数（FR-112 恢复探测）。
+		// 后台 HEAD 探测不计入回源次数（恢复探测）。
 		if r.Method == http.MethodGet {
 			atomic.AddInt32(&hits, 1)
 		}
@@ -866,7 +866,7 @@ func TestNegativeCacheGroupAutoBlockSkippedNotCached(t *testing.T) {
 	var fail atomic.Bool
 	fail.Store(true)
 	boomSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// 后台 HEAD 探测不计入回源次数（FR-112 恢复探测）。
+		// 后台 HEAD 探测不计入回源次数（恢复探测）。
 		if r.Method == http.MethodGet {
 			atomic.AddInt32(&boomHits, 1)
 		}

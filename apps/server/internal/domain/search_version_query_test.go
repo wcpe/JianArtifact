@@ -7,7 +7,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// 本文件钉住 FR-150 §3.6 的 `version:` 语法解析。既有 TestParseSearchQuery 的断言不动，
+// 本文件钉住的 `version:` 语法解析。既有 TestParseSearchQuery 的断言不动，
 // 这里只针对新分支补用例。
 
 // TestParseSearchQueryVersions 覆盖 version:/-version: 的解析口径，

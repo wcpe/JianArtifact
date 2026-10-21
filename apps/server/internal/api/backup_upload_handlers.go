@@ -1,4 +1,4 @@
-// 分片上传（FR-137 第三通道）的 HTTP 边界。
+// 分片上传（第三通道）的 HTTP 边界。
 //
 // 五端点：发起会话 → 逐片上传（octet-stream）→ 查询会话（续传用）→ 拼装完成 → 取消。
 // 全部仅管理员可见。错误映射复用 backup_import 的冲突/404 词表：target_not_empty /
@@ -135,7 +135,7 @@ func (h *Handlers) CompleteBackupUpload(c *gin.Context, id BackupUploadIdParam) 
 		writeBackupUploadErr(c, err)
 		return
 	}
-	// FR-40 追加八起返回 200 而非 202：complete 不再只是"受理恢复"，
+	// 起返回 200 而非 202：complete 不再只是"受理恢复"，
 	// 它同步完成入库（搬运归档 + 写登记行），请求返回时包已可查。
 	// 202 会暗示"还有个异步过程要继续轮询"，而现在没有。
 	c.JSON(http.StatusOK, toAPIBackupImport(imp))

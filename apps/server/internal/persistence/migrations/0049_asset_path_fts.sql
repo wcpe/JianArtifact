@@ -2,9 +2,9 @@
 -- 引入版本：未开窗（0.11.0 之后的下一窗口）
 -- 影响：新增虚拟表 asset_path_fts（FTS5 external content，索引 asset.path）与单行状态表 search_index_state
 -- 数据处理：**不在迁移内回填**——只建结构并写入一行初始状态（last_id=0、total_rows=0、completed_at 为 NULL）；
---          历史行由启动后的后台分批回填（见 FR-149 后续批次），未回填期间搜索继续走既有 LIKE 路径；预计耗时：毫秒级
+-- 历史行由启动后的后台分批回填（见后续批次），未回填期间搜索继续走既有 LIKE 路径；预计耗时：毫秒级
 -- 回滚：不支持 down migration；需要恢复升级前备份
--- 相关：FR-149、docs/specs/search-index-and-performance.md §3.1、docs/adr/0030-fts5-search-index.md
+-- 相关：、docs/specs/search-index-and-performance.md §3.1、docs/adr/0030-fts5-search-index.md
 --
 -- 背景（为什么需要这张表）：全局搜索把每个关键词译成 `path LIKE '%词%'`（asset_repo.go 的
 -- buildSearchWhere），前导通配让 asset 上的所有 B-Tree 索引都无从定位——0002 的

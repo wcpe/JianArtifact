@@ -1,4 +1,4 @@
-// 连接状态映射完整性守卫（FR-114 + FR-43）。
+// 连接状态映射完整性守卫（+）。
 //
 // `CONN_COLOR` / `CONN_LABEL_KEY` 是 `Record<ConnectionStatusValue, string>` 穷举映射，
 // 契约加枚举会直接编译失败（编译期已兜底）；本用例补运行期两块编译期管不到的事：
@@ -27,7 +27,7 @@ const ALL_STATUSES: ConnectionStatusValue[] = [
   "OFFLINE",
 ];
 
-describe("连接状态映射（FR-114 / FR-43）", () => {
+describe("连接状态映射（ / ）", () => {
   it("每个契约枚举都有颜色与标签键（含新增的 HALF_OPEN）", () => {
     for (const status of ALL_STATUSES) {
       expect(CONN_COLOR[status], `${status} 缺颜色映射`).toBeTruthy();

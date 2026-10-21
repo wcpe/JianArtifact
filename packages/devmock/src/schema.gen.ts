@@ -498,7 +498,7 @@ export interface paths {
         get?: never;
         /**
          * 批量更新用户在多个 Hosted 仓库的发布策略
-         * @description 发布策略是发布账号在**单个仓库**上的仓库级限制（FR-109）：它约束该账号在该仓库
+         * @description 发布策略是发布账号在**单个仓库**上的仓库级限制：它约束该账号在该仓库
          *     可发布的路径前缀、每小时新增制品数、每日上传字节数与单文件字节数，并配合仓库的
          *     immutableRelease 配置拒绝覆盖已发布的 Release 版本。
          *     本端点把同一份策略一次性**批量应用到多个仓库**，等价于对每个仓库分别调用
@@ -577,7 +577,7 @@ export interface paths {
         };
         /**
          * 用户组列表（分页，仅管理员）
-         * @description 仅管理员可见。用户组是授权主体之一（FR-36）：把组作为主体写进仓库 ACL，
+         * @description 仅管理员可见。用户组是授权主体之一：把组作为主体写进仓库 ACL，
          *     等价于给组内每个成员各写一条授权，且成员变动不需要重改 ACL。
          */
         get: operations["listUserGroups"];
@@ -1320,7 +1320,7 @@ export interface paths {
         put?: never;
         /**
          * 发起恢复演练（仅管理员）
-         * @description 对指定备份包发起一次**恢复演练**（FR-40）。演练在**隔离临时目录**内真解包、真校验：
+         * @description 对指定备份包发起一次**恢复演练**。演练在**隔离临时目录**内真解包、真校验：
          *     归档完整性 → 解包 → 解出的 SQLite 跑 `PRAGMA quick_check` 并确认关键表可查询 → blob 规模比对，
          *     逐项结论与耗时落库为可查报告（见 `GET /api/v1/backups/{id}/verifications`）。
          *
@@ -1730,7 +1730,7 @@ export interface paths {
          * 拼装归档并存入备份列表（仅管理员）
          * @description 校验分片齐全后按序拼成归档、核对摘要，再**收进备份列表**（搬运到备份目录 + 建立登记行）。
          *
-         *     自 FR-40 追加八起不再直接发起恢复：上传只入库，恢复是之后的独立动作，
+         *     自 起不再直接发起恢复：上传只入库，恢复是之后的独立动作，
          *     用户可以先校验再决定是否恢复。因此本端点不写 restore.pending、不产生导入记录，
          *     同步返回 `status=done` 的回执，不再需要轮询。
          *
@@ -1879,7 +1879,7 @@ export interface components {
             standbyReport?: components["schemas"]["StandbySyncReport"];
         };
         /**
-         * @description FR-119：primary 经现有复制互信通道（仅 GET 拉取）收到的备用节点观测快照聚合。
+         * @description：primary 经现有复制互信通道（仅 GET 拉取）收到的备用节点观测快照聚合。
          *     仅 role=primary 且至少收到一次上报时返回；不含凭据、令牌、环境变量或对端地址。
          */
         StandbySyncReport: {
@@ -1900,7 +1900,7 @@ export interface components {
             /** @description 备用节点最近上报的同步事件窗口（按开始时间倒序，最多 15 条）。 */
             syncEvents: components["schemas"]["ClusterSyncEvent"][];
         };
-        /** @description 备用节点接收审计的安全瘦身投影（FR-119）；不含 peer URL、令牌或原始错误。 */
+        /** @description 备用节点接收审计的安全瘦身投影；不含 peer URL、令牌或原始错误。 */
         StandbySyncApplyLog: {
             sourceNode: string;
             /** Format: int64 */
@@ -2552,7 +2552,7 @@ export interface components {
             webLoginDisabled?: boolean;
         };
         /**
-         * @description 用户组（FR-36）：授权主体之一。组本身只承载「名字 + 描述」，
+         * @description 用户组：授权主体之一。组本身只承载「名字 + 描述」，
          *     授权关系由仓库 ACL 指向组 ID，成员关系由组 × 用户的关联表承载。
          */
         UserGroup: {
@@ -2867,7 +2867,7 @@ export interface components {
             description?: string;
         };
         /**
-         * @description 一条仓库授权（主体 × 动作）。主体分两类（FR-36）：
+         * @description 一条仓库授权（主体 × 动作）。主体分两类：
          *     - `subjectType=user`（默认）：`subjectId` 必填，填用户 ID；
          *     - `subjectType=group`：`subjectGroupId` 必填，填用户组 ID。
          *     两个 ID 字段互斥：服务端按 `subjectType` 只读取对应那一列，
@@ -2892,7 +2892,7 @@ export interface components {
              */
             subjectGroupId?: number | null;
             /**
-             * @description 授权动作（FR-36 六档，由粗到细）：
+             * @description 授权动作（六档，由粗到细）：
              *     - read 读取 / 下载；
              *     - write 写入，蕴含 read 与 publish；
              *     - publish 仅发布（协议上传），不蕴含写其它路径；

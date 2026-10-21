@@ -44,7 +44,7 @@ const DEV_MOCK_SCENARIO_HEADER = "X-Jian-DevMock-Scenario";
 const DEV_MOCK_ROUTE_HEADER = "X-Jian-DevMock-Route";
 const DEV_MOCK_SCENARIOS = new Set(["normal", "empty", "loading", "error", "standby_read_only"]);
 
-// —— 全局网络活动计数（FR-71）——
+// —— 全局网络活动计数——
 // 页眉刷新按钮据此判断"数据是否已返回"：请求开始 +1、落定 -1，归零即空闲。
 let activeRequestCount = 0;
 const activityListeners = new Set<(count: number) => void>();
@@ -230,7 +230,7 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
         method,
         headers,
         body: payload,
-        // FR-152：把内部控制器交给 fetch，abort 才会真正中断网络请求；
+        // 把内部控制器交给 fetch，abort 才会真正中断网络请求；
         // 只 abort 而不传 signal 时，超时/取消都只是「前端不再等待」，请求仍在后端跑。
         signal: controller.signal,
       });
@@ -387,7 +387,7 @@ export async function putProtocolAsset(
   }
 }
 
-/** 协议层 multipart POST（FR-73 Maven 网页上传）：Bearer + FormData，非契约 JSON 请求。 */
+/** 协议层 multipart POST（Maven 网页上传）：Bearer + FormData，非契约 JSON 请求。 */
 export async function postProtocolForm<T>(url: string, form: FormData): Promise<T> {
   const headers: Record<string, string> = devMockHeaders(url);
   const token = getToken();

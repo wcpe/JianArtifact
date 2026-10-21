@@ -19,7 +19,7 @@ export type ConnectionStatus = Schemas["ConnectionStatus"];
 export type ConnectionStatusValue = ConnectionStatus["status"];
 export type AclEntry = Schemas["AclEntry"];
 export type AclList = Schemas["AclList"];
-// 用户组（FR-36）：授权主体之一，类型直接取自契约，避免手抄偏差。
+// 用户组：授权主体之一，类型直接取自契约，避免手抄偏差。
 export type UserGroup = Schemas["UserGroup"];
 export type UserGroupList = Schemas["UserGroupList"];
 export type UserGroupMember = Schemas["UserGroupMember"];
@@ -40,7 +40,7 @@ export type UsageSnippet = Schemas["UsageSnippet"];
 export type UsageInfo = Schemas["UsageInfo"];
 export type MigrationTask = Schemas["MigrationTask"];
 export type MigrationTaskList = Schemas["MigrationTaskList"];
-// 节点备份与搬迁（FR-132）
+// 节点备份与搬迁
 export type BackupPackage = Schemas["BackupPackage"];
 export type BackupPackageList = Schemas["BackupPackageList"];
 export type BackupPackageMode = Schemas["BackupPackage"]["mode"];
@@ -51,17 +51,17 @@ export type BackupLink = Schemas["BackupLink"];
 export type BackupVerification = Schemas["BackupVerification"];
 // 待重启生效的恢复状态：让界面能解释"为什么现在导入不了"（见 endpoints.getBackupRestoreStatus）。
 export type BackupRestoreStatus = Schemas["BackupRestoreStatus"];
-// 恢复演练与可查报告（FR-40）：与 /verify 的即时校验结论不同，这里读的是落库的历史报告。
+// 恢复演练与可查报告：与 /verify 的即时校验结论不同，这里读的是落库的历史报告。
 export type BackupVerificationReport = Schemas["BackupVerificationReport"];
 export type BackupVerificationList = Schemas["BackupVerificationList"];
 export type BackupVerificationLevel = Schemas["BackupVerificationReport"]["level"];
 export type BackupDrillCheck = Schemas["BackupDrillCheck"];
 export type DrillBackupRequest = Schemas["DrillBackupRequest"];
 export type BackupDrillAccepted = Schemas["BackupDrillAccepted"];
-// 写入冻结窗口（FR-134）与从 URL 导入备份包（FR-137）
+// 写入冻结窗口与从 URL 导入备份包
 export type WriteFreezeState = Schemas["WriteFreezeState"];
 export type FreezeWritesRequest = Schemas["FreezeWritesRequest"];
-// 一键重启（FR-40 追加七）：supported=false 是正常业务结果（HTTP 200），
+// 一键重启：supported=false 是正常业务结果（HTTP 200），
 // 此时 command 给出可复制手动执行的手工等效命令——不是错误分支。
 export type MaintenanceRestartResult = Schemas["MaintenanceRestartResult"];
 export type BackupImport = Schemas["BackupImport"];
@@ -69,19 +69,19 @@ export type BackupImportList = Schemas["BackupImportList"];
 export type BackupImportStatus = Schemas["BackupImportStatus"];
 export type BackupImportOrigin = Schemas["BackupImportOrigin"];
 export type CreateBackupImportRequest = Schemas["CreateBackupImportRequest"];
-// 分片上传会话（FR-137 第三通道）：init 返回服务端决定的 chunkSize，前端据此切分。
+// 分片上传会话（第三通道）：init 返回服务端决定的 chunkSize，前端据此切分。
 export type BackupUploadSession = Schemas["BackupUploadSession"];
 export type BackupUploadStatus = Schemas["BackupUploadStatus"];
 export type CreateBackupUploadRequest = Schemas["CreateBackupUploadRequest"];
 export type CompleteBackupUploadRequest = Schemas["CompleteBackupUploadRequest"];
-// 未管理备份包（FR-40 追加八）：服务器 backups/ 下有包体但登记表无记录的包。
+// 未管理备份包：服务器 backups/ 下有包体但登记表无记录的包。
 // valid=false 的条目无法导入；renamed=true 表示文件名与包内标识不一致（导入以包内为准）。
 export type UnmanagedBackup = Schemas["UnmanagedBackup"];
 export type UnmanagedBackupList = Schemas["UnmanagedBackupList"];
 export type AdoptBackupsRequest = Schemas["AdoptBackupsRequest"];
 export type AdoptedBackup = Schemas["AdoptedBackup"];
 export type AdoptBackupsResult = Schemas["AdoptBackupsResult"];
-// 包内容预览（FR-40 追加十一）：恢复前先看清包里有什么（仓库/账号/制品样例）。
+// 包内容预览：恢复前先看清包里有什么（仓库/账号/制品样例）。
 // 账号概要**不含**口令哈希等敏感字段。
 export type BackupPreview = Schemas["BackupPreview"];
 export type BackupPreviewManifest = Schemas["BackupPreviewManifest"];
@@ -132,10 +132,10 @@ export type RepoFormat = Repository["format"];
 export type RepoType = Repository["type"];
 export type RepoVisibility = Repository["visibility"];
 export type AclAction = AclEntry["action"];
-/** FR-36：ACL 主体类型；缺省按 user 解释（沿用三档时代的请求体）。 */
+/** ACL 主体类型；缺省按 user 解释（沿用三档时代的请求体）。 */
 export type AclSubjectType = NonNullable<AclEntry["subjectType"]>;
 
-/** FR-105：统一资产操作 API 的请求目标。 */
+/** 统一资产操作 API 的请求目标。 */
 export type AssetOperationTargetType =
   "raw_path" | "maven_version" | "maven_artifact" | "npm_package" | "npm_version" | "asset_path";
 
@@ -158,7 +158,7 @@ export interface AssetOperationResponse {
   affected: number;
 }
 
-// 制品下载计量与分析（FR-142~144）
+// 制品下载计量与分析（~144）
 export type DownloadClientRanking = Schemas["DownloadClientRanking"];
 /** 下载趋势桶粒度（服务端按窗口跨度自适应）。 */
 export type ObservabilityBucket = Schemas["ObservabilityBucket"];
@@ -172,7 +172,7 @@ export type DownloadGroupTotal = Schemas["DownloadGroupTotal"];
 export type RepositoryDownloadTrendResponse = Schemas["RepositoryDownloadTrendResponse"];
 /** 仓库下载趋势单点（补零后连续桶）。 */
 export type DownloadTrendPoint = Schemas["DownloadTrendPoint"];
-// 包内容与当前系统的差异对比（FR-40 追加十四）。
+// 包内容与当前系统的差异对比。
 // metadataOnly 恒为 true：只比元数据（路径/大小/哈希），不比对文件内容。
 export type DiffCounts = Schemas["DiffCounts"];
 export type BackupDiff = Schemas["BackupDiff"];

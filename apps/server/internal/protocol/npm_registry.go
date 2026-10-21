@@ -1,4 +1,4 @@
-// npm registry 级端点（FR-82）：挂在 registry 基址 `/npm/:repo/` 下、路径以 `-/`
+// npm registry 级端点：挂在 registry 基址 `/npm/:repo/` 下、路径以 `-/`
 // 开头的标准端点——ping / whoami / login / dist-tag / search / audit 兜底，以及
 // unpublish 系列（修订写与删除，路径不以 `-/` 开头但同属本文件职责）。
 //
@@ -299,7 +299,7 @@ func (h *NpmHandler) unpublishPackage(c *gin.Context, repoName, pkg string) {
 // registrySearch 处理 `npm search`（GET /-/v1/search?text=&size=&from=）：
 // 在本仓（group 则各成员）packument 中按路径子串检索，组装 npm 标准响应。
 //
-// 成员聚合由**一条语句**完成（FR-149 §3.6 的放大修复）：原实现对每个成员循环调用完整的
+// 成员聚合由**一条语句**完成（的放大修复）：原实现对每个成员循环调用完整的
 // SearchAssets——成员越多越慢（每个成员各跑 COUNT + 分页 SELECT + facet 聚合，还要再算一遍
 // 可搜范围与仓库名映射），且每次都把 `from+size` 行拉回内存再去重。现在把成员仓库 ID 集合
 // 交给 SearchPerRepoByFilter，由 SQL 按成员分别取前 `from+size` 条（窗口函数），Go 侧只做
@@ -361,7 +361,7 @@ func (h *NpmHandler) registrySearch(c *gin.Context, repoName string) {
 	assets, serr := h.repoSvc.SearchAssetsPerRepo(c.Request.Context(), keyword, memberIDs, from+size)
 	if serr != nil {
 		// 既有容错口径：搜索失败不让整个请求失败（响应结构不变，返回已得结果）。
-		// 超时单独记一条中文 warn，避免「静默少结果」完全无痕（FR-149 §3.4）。
+		// 超时单独记一条中文 warn，避免「静默少结果」完全无痕。
 		if errors.Is(serr, domain.ErrSearchTimeout) {
 			log.Printf("npm 搜索超时：仓库 %s 的成员检索超过搜索超时上限 %s，按既有容错口径降级为空结果：%v",
 				repoName, h.repoSvc.SearchTimeout(), serr)
@@ -475,7 +475,7 @@ func (h *NpmHandler) savePackument(c *gin.Context, repoName, pkg string, doc map
 		auth.WriteError(c, http.StatusInternalServerError, "internal", "内部错误")
 		return false
 	}
-	// FR-41：packument 覆盖写同样受仓库存储配额约束（path/长度已知，写 blob 之前判定）。
+	// packument 覆盖写同样受仓库存储配额约束（path/长度已知，写 blob 之前判定）。
 	if _, quotaErr := h.admissionFor(repoName, pkg, int64(len(out))); quotaErr != nil {
 		h.auditRejected(c, "npm.packument.put", repoName, pkg, publishRejectionDetail(quotaErr))
 		writePublishErr(c, quotaErr)

@@ -82,7 +82,7 @@ func (s *OCIService) putBlob(repoName, digest string, r io.Reader, sourceModifie
 	}
 	applySourceTimestamp(asset, sourceModified)
 	if quotaExempt {
-		// 迁移导入属管理员批量操作：显式豁免仓库存储配额（FR-41 §4.1）。
+		// 迁移导入属管理员批量操作：显式豁免仓库存储配额。
 		markQuotaExempt(asset)
 	}
 	s.storePending(repo.ID, hexDigest, asset)
@@ -179,7 +179,7 @@ func (s *OCIService) putManifest(repoName, image, reference string, body []byte,
 	manifest.Path = manifestPath
 	applySourceTimestamp(manifest, sourceModified)
 	if quotaExempt {
-		// 迁移导入属管理员批量操作：显式豁免仓库存储配额（FR-41 §4.1）。
+		// 迁移导入属管理员批量操作：显式豁免仓库存储配额。
 		markQuotaExempt(manifest)
 	}
 	pending = append(pending, manifest)

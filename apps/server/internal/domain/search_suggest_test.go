@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// 本文件钉住 FR-153（搜索建议）在**领域层**的口径，逐条对应规格 §3.8 与 §5 的验收项：
+// 本文件钉住 （搜索建议）在**领域层**的口径，逐条对应规格 §3.8 与 §5 的验收项：
 //
 //  1. 空 q / 纯空白 → 空候选且不报错（高频被动调用，空输入是常态）；
 //  2. limit 夹取到 [1, 20]，缺省与非正数回落 10，超上限夹到 20，一律不报错；
@@ -98,7 +98,7 @@ func TestSuggestLimitClamp(t *testing.T) {
 
 // TestSuggestCandidateTypes 覆盖两类候选的来源：
 //   - 仓库名：repository.name 的**子串**匹配（ASCII 大小写不敏感，对齐 SQLite LIKE 的默认口径）；
-//   - 包名：FTS 命中行的 path 经 FR-150 的包坐标解析器导出。
+//   - 包名：FTS 命中行的 path 经的包坐标解析器导出。
 //
 // 仓库名优先占位，包名占剩余名额；两类合计不超过 limit。
 func TestSuggestCandidateTypes(t *testing.T) {

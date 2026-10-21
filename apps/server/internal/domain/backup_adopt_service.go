@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// 未管理备份包（FR-40 追加八）。
+// 未管理备份包。
 //
 // # 为什么需要
 //
@@ -353,7 +353,7 @@ type AdoptUploadedPackage struct {
 	Blobs int
 }
 
-// AdoptUploaded 把一次分片上传组装出来的归档搬进备份列表并登记（FR-40 追加八）。
+// AdoptUploaded 把一次分片上传组装出来的归档搬进备份列表并登记。
 //
 // 与 Adopt 的区别：来源归档不在 backups/ 下（在 backup-uploads/<id>/package.tar.gz），
 // 且不需要"未管理"判定——它还没被登记过。因此这里做的是：校验 manifest → 搬运到

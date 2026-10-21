@@ -3,7 +3,7 @@
 -- 影响：新增 asset_download_minutes 表（分钟桶 × 仓库 × 制品 × 来源 IP × UA 归类）
 -- 数据处理：无历史回填；预计耗时：建表 + 建索引，常量级
 -- 回滚：不支持 down migration；需要恢复升级前备份
--- 相关：FR-142 / docs/specs/download-metrics.md
+-- 相关：docs/specs/download-metrics.md
 --
 -- 背景：仪表盘「下载量」KPI 走 protocol_metric_minute（请求级、刻意不含路径与来源）；
 -- per-制品计数与 IP/UA 聚合需要明细，但不得破坏既有链路的低开销与隐私约束——

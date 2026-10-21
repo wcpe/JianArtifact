@@ -408,7 +408,7 @@ func TestRepositoryListAdminPathUnaffected(t *testing.T) {
 	if out.Total != len(want) {
 		t.Fatalf("管理员 total 应为全量 %d，得 %d", len(want), out.Total)
 	}
-	// 连接状态为管理面信息（FR-114）：管理员响应保留该字段（hosted 仓库为 nil，此处只验证
+	// 连接状态为管理面信息：管理员响应保留该字段（hosted 仓库为 nil，此处只验证
 	// 端点未因批量化改动丢失既有字段处理，故只断言解析成功且条目完整）。
 	for _, item := range out.Items {
 		if item.Id == 0 || item.Visibility == "" {

@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// 本文件钉住 FR-149 §3.2 的后台回填行为：全量回填、中断续跑、幂等重写、完成即跳过、
+// 本文件钉住的后台回填行为：全量回填、中断续跑、幂等重写、完成即跳过、
 // 完成/重建互斥（409 的领域侧判定）。
 //
 // 断言口径与生产查询同形：命中判断一律「MATCH 只取 rowid」，不读 FTS 表列值——external

@@ -9,15 +9,15 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// 实例级基础配置的设置键（FR-89：web 可读可改，运行时生效）。同步间隔复用复制命名空间键。
+// 实例级基础配置的设置键（：web 可读可改，运行时生效）。同步间隔复用复制命名空间键。
 const (
 	settingKeyAnonymousAccess   = "anonymous_access_enabled"
 	SettingKeyPublicURL         = "public_url"
 	SettingKeyUpstreamTimeout   = "upstream_timeout"
 	SettingKeyAllowedHosts      = "allowed_hosts"        // 允许访问的域名白名单（逗号分隔；节点本地）
-	SettingKeyOriginTokenEnable = "origin_token_enabled" // 回源 Token 校验开关（FR-130；节点本地）
-	SettingKeyOriginTokenHeader = "origin_token_header"  // 回源 Token 请求头名（FR-130；节点本地）
-	SettingKeyOriginTokenValue  = "origin_token_value"   // 回源 Token 值（FR-130；节点本地）
+	SettingKeyOriginTokenEnable = "origin_token_enabled" // 回源 Token 校验开关（；节点本地）
+	SettingKeyOriginTokenHeader = "origin_token_header"  // 回源 Token 请求头名（；节点本地）
+	SettingKeyOriginTokenValue  = "origin_token_value"   // 回源 Token 值（；节点本地）
 )
 
 // SettingService 处理实例级全局设置。无缓存：SQLite 直查，写后即生效。
@@ -37,7 +37,7 @@ type SettingsUpdate struct {
 	OriginTokenEnabled *bool
 	OriginTokenHeader  *string
 	OriginTokenValue   *string
-	// FR-40 追加：自动备份与保留策略（运行时可改，写后由作业下一轮读取生效）。
+	//  追加：自动备份与保留策略（运行时可改，写后由作业下一轮读取生效）。
 	BackupAutoInterval  *int
 	BackupKeepLast      *int
 	BackupRetentionDays *int
@@ -48,7 +48,7 @@ func NewSettingService(settings *repository.SettingRepo) *SettingService {
 	return &SettingService{settings: settings}
 }
 
-// SetChangeRecorder 注入复制变更日志记录器（FR-83）；nil 表示不记录。
+// SetChangeRecorder 注入复制变更日志记录器；nil 表示不记录。
 func (s *SettingService) SetChangeRecorder(r ChangeRecorder) { s.recorder = r }
 
 // SetBusinessWriteGate 注入备用节点本地业务写栅栏；nil 保持兼容行为。
@@ -81,7 +81,7 @@ func (s *SettingService) SetAnonymousAccessEnabled(enabled bool) error {
 	return s.UpdateSettings(SettingsUpdate{AnonymousAccess: &enabled})
 }
 
-// PublicURL 返回对外基础 URL（FR-89，读 setting）；未配置返回空串（回退请求 Host 推断）。
+// PublicURL 返回对外基础 URL（，读 setting）；未配置返回空串（回退请求 Host 推断）。
 func (s *SettingService) PublicURL() string {
 	v, err := s.settings.Get(SettingKeyPublicURL)
 	if err != nil {
@@ -95,8 +95,8 @@ func (s *SettingService) SetPublicURL(v string) error {
 	return s.UpdateSettings(SettingsUpdate{PublicURL: &v})
 }
 
-// SyncIntervalSecs 返回同步轮询间隔（秒，FR-89）；未配置或非法返回 0（调度器回退构造值）。
-// SettingKeyReplSyncInterval 是设置页「同步间隔」的存储键（FR-89，用户可见配置；
+// SyncIntervalSecs 返回同步轮询间隔（秒，）；未配置或非法返回 0（调度器回退构造值）。
+// SettingKeyReplSyncInterval 是设置页「同步间隔」的存储键（，用户可见配置；
 // 名字里的 repl: 是历史遗留，复制退役后由该键继续承载此配置项）。
 const SettingKeyReplSyncInterval = "repl:sync_interval"
 
@@ -112,7 +112,7 @@ func (s *SettingService) SetSyncInterval(secs int) error {
 	return s.UpdateSettings(SettingsUpdate{SyncInterval: &secs})
 }
 
-// UpstreamTimeoutSecs 返回回源整体超时（秒，FR-89）；未配置或非法返回 0。
+// UpstreamTimeoutSecs 返回回源整体超时（秒，）；未配置或非法返回 0。
 func (s *SettingService) UpstreamTimeoutSecs() int {
 	return s.secsSetting(SettingKeyUpstreamTimeout)
 }
@@ -122,7 +122,7 @@ func (s *SettingService) SetUpstreamTimeout(secs int) error {
 	return s.UpdateSettings(SettingsUpdate{UpstreamTimeout: &secs})
 }
 
-// 自动备份与保留策略的设置键（FR-40 追加：原先只能经环境变量配置，现放开为运行时可改）。
+// 自动备份与保留策略的设置键（追加：原先只能经环境变量配置，现放开为运行时可改）。
 //
 // 三项均为**节点本地**（见 isNodeLocalSetting）：备份包落在本节点磁盘上，
 // 保留策略是"这台机器怎么用自己的盘"的决策，跨节点复制该设置会让一个节点的
@@ -309,7 +309,7 @@ func settingValues(update SettingsUpdate) []repository.SettingValue {
 	if update.OriginTokenValue != nil {
 		values = append(values, repository.SettingValue{Key: SettingKeyOriginTokenValue, Value: *update.OriginTokenValue})
 	}
-	// FR-40 追加：自动备份三项。0 是合法值（关闭 / 不限制），照写不跳过。
+	//  追加：自动备份三项。0 是合法值（关闭 / 不限制），照写不跳过。
 	if update.BackupAutoInterval != nil {
 		values = append(values, repository.SettingValue{Key: SettingKeyBackupAutoInterval, Value: strconv.Itoa(*update.BackupAutoInterval)})
 	}

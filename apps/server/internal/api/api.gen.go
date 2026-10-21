@@ -1557,13 +1557,13 @@ type AcknowledgeAuditAttentionResponse struct {
 	UnacknowledgedRiskEventCount int `json:"unacknowledgedRiskEventCount"`
 }
 
-// AclEntry 一条仓库授权（主体 × 动作）。主体分两类（FR-36）：
+// AclEntry 一条仓库授权（主体 × 动作）。主体分两类：
 // - `subjectType=user`（默认）：`subjectId` 必填，填用户 ID；
 // - `subjectType=group`：`subjectGroupId` 必填，填用户组 ID。
 // 两个 ID 字段互斥：服务端按 `subjectType` 只读取对应那一列，
 // 另一列即使有值也会被忽略（表内 CHECK 强制恰有其一）。
 type AclEntry struct {
-	// Action 授权动作（FR-36 六档，由粗到细）：
+	// Action 授权动作（六档，由粗到细）：
 	// - read 读取 / 下载；
 	// - write 写入，蕴含 read 与 publish；
 	// - publish 仅发布（协议上传），不蕴含写其它路径；
@@ -1585,7 +1585,7 @@ type AclEntry struct {
 	SubjectType *AclEntrySubjectType `json:"subjectType,omitempty"`
 }
 
-// AclEntryAction 授权动作（FR-36 六档，由粗到细）：
+// AclEntryAction 授权动作（六档，由粗到细）：
 // - read 读取 / 下载；
 // - write 写入，蕴含 read 与 publish；
 // - publish 仅发布（协议上传），不蕴含写其它路径；
@@ -3496,7 +3496,7 @@ type UserRole string
 // UserStatus defines model for User.Status.
 type UserStatus string
 
-// UserGroup 用户组（FR-36）：授权主体之一。组本身只承载「名字 + 描述」，
+// UserGroup 用户组：授权主体之一。组本身只承载「名字 + 描述」，
 // 授权关系由仓库 ACL 指向组 ID，成员关系由组 × 用户的关联表承载。
 type UserGroup struct {
 	CreatedAt string `json:"createdAt"`

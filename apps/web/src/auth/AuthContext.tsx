@@ -46,7 +46,7 @@ export interface AuthContextValue {
   login: (username: string, password: string) => Promise<void>;
   bootstrap: (username: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
-  /** FR-34：OIDC 回调失败时带回的 i18n 键；登录框消费后清空。 */
+  /** OIDC 回调失败时带回的 i18n 键；登录框消费后清空。 */
   oidcError: string | null;
   clearOidcError: () => void;
 }
@@ -128,7 +128,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener(AUTH_EXPIRED_EVENT, handleExpired);
   }, []);
 
-  // FR-34：OIDC 回调以 URL 片段送回会话或错误码——先消费片段并清除（避免残留在地址栏与
+  // OIDC 回调以 URL 片段送回会话或错误码——先消费片段并清除（避免残留在地址栏与
   // 浏览器历史），再据结果建立会话或把错误交给登录框展示。
   useEffect(() => {
     const fragment = window.location.hash.startsWith("#") ? window.location.hash.slice(1) : "";

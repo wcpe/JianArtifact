@@ -54,7 +54,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	jwtMgr := auth.NewJWTManager([]byte("integration-test-secret-key-32byte!!"))
 	authenticator := auth.NewAuthenticator(jwtMgr, domain.NewAuthStore(userRepo, tokenRepo, revokedRepo))
 
-	// FR-114：注入 AssetService（连接探测），供连接状态填充与手动重测端点使用。
+	// 注入 AssetService（连接探测），供连接状态填充与手动重测端点使用。
 	assetSvc := domain.NewAssetService(repoRepo, assetRepo, blobstore.NewStore(t.TempDir()), upstream.NewTestClient(5*time.Second))
 
 	handlers := api.NewHandlers(api.Deps{
@@ -386,7 +386,7 @@ func TestLegacyProxyURLUserinfoNeverAppearsInRepositoryAPI(t *testing.T) {
 
 func stringPointer(value string) *string { return &value }
 
-// TestBrowseAndUsageEndpoints 覆盖制品浏览与使用片段（FR-16）：
+// TestBrowseAndUsageEndpoints 覆盖制品浏览与使用片段：
 // 管理员建 public maven 仓库后，usage 按 format 返回接入片段、assets 空列表；
 // 无 read 权限的私有仓库对非授权用户返回 403。
 func TestBrowseAndUsageEndpoints(t *testing.T) {
@@ -408,12 +408,12 @@ func TestBrowseAndUsageEndpoints(t *testing.T) {
 		api.CreateRepositoryRequest{Name: "mvn-pub", Format: "maven", Type: "hosted", Visibility: &public, Description: &desc}, &created); code != http.StatusCreated {
 		t.Fatalf("建仓库状态码 = %d，期望 201", code)
 	}
-	// FR-81：description 建仓即回显。
+	// description 建仓即回显。
 	if created.Description == nil || *created.Description != desc {
 		t.Errorf("建仓返回 description = %v，期望 %q", created.Description, desc)
 	}
 
-	// FR-81：PATCH 更新描述后列表与 usage 均带出新值。
+	// PATCH 更新描述后列表与 usage 均带出新值。
 	newDesc := "更新后的描述"
 	var patched api.Repository
 	if code := e.do(t, http.MethodPatch, "/api/v1/repositories/mvn-pub", adminToken,
@@ -432,7 +432,7 @@ func TestBrowseAndUsageEndpoints(t *testing.T) {
 	if usage.Format != "maven" || usage.Type != "hosted" {
 		t.Errorf("usage format/type 异常：%+v", usage)
 	}
-	// FR-81：匿名详情页数据来源 usage 也带描述。
+	// 匿名详情页数据来源 usage 也带描述。
 	if usage.Description == nil || *usage.Description != newDesc {
 		t.Errorf("usage description = %v，期望 %q", usage.Description, newDesc)
 	}

@@ -164,7 +164,7 @@ func backupVerify(svc *appServices, args []string) error {
 }
 
 // backupDrill 对已登记的备份包执行一次恢复演练：在隔离临时目录里真解包、真校验，
-// 产出结构化报告并落库（FR-40）。CLI 走同步等待，包大时会跑一会儿。
+// 产出结构化报告并落库。CLI 走同步等待，包大时会跑一会儿。
 //
 // 与 backup verify 的区别：verify 只校验归档自身（可对任意文件路径），
 // drill 额外真解包、对解出的 SQLite 跑 quick_check、写报告落库——

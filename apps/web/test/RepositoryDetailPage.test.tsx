@@ -1,5 +1,5 @@
 // 仓库详情集成测试：目录树逐级展开点选文件后渲染详情/使用说明；匿名访问 private 仓库报未认证。
-// FR-74：整页固定布局（面板内滚）、未登录仅页眉一个登录入口、客户端发布提示收纳为紧凑小字。
+// 整页固定布局（面板内滚）、未登录仅页眉一个登录入口、客户端发布提示收纳为紧凑小字。
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
@@ -88,7 +88,7 @@ describe("仓库详情", () => {
   it("目录树点选文件后渲染详情与使用说明", async () => {
     const user = userEvent.setup();
     renderDetail("maven-releases", true);
-    // FR-54 懒加载目录树：根层仅有 com，逐级点开 maven 坐标目录
+    //  懒加载目录树：根层仅有 com，逐级点开 maven 坐标目录
     await user.click(await screen.findByText("com"));
     await user.click(await screen.findByText("example"));
     await user.click(await screen.findByText("app"));
@@ -160,11 +160,11 @@ describe("仓库详情", () => {
 
   it("匿名访问 private 仓库展示未认证错误", async () => {
     renderDetail("maven-releases", false);
-    // FR-66：匿名仅可读 public 仓库，private 目录树请求 401 → 错误提示
+    // 匿名仅可读 public 仓库，private 目录树请求 401 → 错误提示
     expect((await screen.findAllByText("未认证")).length).toBeGreaterThan(0);
   });
 
-  it("未登录访问详情页仅页眉一个登录入口（FR-74）", async () => {
+  it("未登录访问详情页仅页眉一个登录入口", async () => {
     renderWithProviders(<AppRoutes />, { route: "/repositories/npm-proxy" });
     // 等详情页渲染完成（位置由全局页眉面包屑表达：概览 / 仓库 / npm-proxy）
     const breadcrumbs = await screen.findByTestId("app-breadcrumbs");
@@ -173,14 +173,14 @@ describe("仓库详情", () => {
     expect(screen.getAllByRole("button", { name: "登录" })).toHaveLength(1);
   });
 
-  it("非网页上传仓库的客户端发布提示收纳为紧凑小字（FR-74）", async () => {
+  it("非网页上传仓库的客户端发布提示收纳为紧凑小字", async () => {
     renderDetail("npm-proxy", true);
     // 紧凑提示 + 跳使用说明链接取代大块 Alert
     expect(await screen.findByText("查看使用说明")).toBeTruthy();
     expect(screen.queryByText("请用客户端发布")).toBeNull();
   });
 
-  it("详情页外壳为固定高度布局，面板内滚（FR-74）", async () => {
+  it("详情页外壳为固定高度布局，面板内滚", async () => {
     renderDetail("maven-releases", true);
     await screen.findByText("com");
     const shell = screen.getByTestId("repo-detail-shell");
@@ -188,7 +188,7 @@ describe("仓库详情", () => {
     expect(shell.style.height).toContain("100dvh");
   });
 
-  it("语义 Tab 固定在页头下方，窄屏可横向滚动（FR-122）", async () => {
+  it("语义 Tab 固定在页头下方，窄屏可横向滚动", async () => {
     renderDetail("maven-releases", true);
     const tablist = await screen.findByRole("tablist");
 
@@ -237,7 +237,7 @@ describe("仓库详情", () => {
     expect((await screen.findAllByLabelText(/成员仓库/)).length).toBeGreaterThan(0);
   });
 
-  it("proxy 仓库配置 tab 显示连接状态并支持手动重测（FR-114）", async () => {
+  it("proxy 仓库配置 tab 显示连接状态并支持手动重测", async () => {
     const user = userEvent.setup();
     renderDetail("npm-proxy", true);
     await user.click(await screen.findByText("配置"));
@@ -383,14 +383,14 @@ describe("仓库详情", () => {
     expect(screen.getByText("second.jar")).toBeTruthy();
   });
 
-  it("带 highlight 进入时逐级展开并选中命中文件（FR-145）", async () => {
+  it("带 highlight 进入时逐级展开并选中命中文件", async () => {
     renderDetail("maven-releases", true, "?highlight=com/example/app/1.0.0/app-1.0.0.jar");
     // 祖先目录逐级懒加载展开后自动选中：右侧详情出现完整路径与使用说明（等同手动点选）
     expect(await screen.findByText("com/example/app/1.0.0/app-1.0.0.jar")).toBeTruthy();
     expect(await screen.findByText("解析依赖（pom.xml）")).toBeTruthy();
   });
 
-  it("highlight 指向不存在路径时静默降级：仓库正常打开、不报错（FR-145）", async () => {
+  it("highlight 指向不存在路径时静默降级：仓库正常打开、不报错", async () => {
     renderDetail("maven-releases", true, "?highlight=missing/none.jar");
     // 树根层正常渲染、可交互；失效路径不产生错误提示
     expect(await screen.findByText("com")).toBeTruthy();
@@ -754,7 +754,7 @@ describe("仓库详情", () => {
     expect(screen.queryByRole("button", { name: "重命名" })).toBeNull();
   });
 
-  describe("窄屏浏览（FR-74 后续：树占满高度、详情改底部抽屉）", () => {
+  describe("窄屏浏览（ 后续：树占满高度、详情改底部抽屉）", () => {
     it("窄屏点选文件后弹出抽屉，抽屉内可见制品路径与下载入口，桌面详情卡不再渲染", async () => {
       const user = userEvent.setup();
       const spy = mockNarrowViewport();

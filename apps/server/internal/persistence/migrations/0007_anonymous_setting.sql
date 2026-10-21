@@ -3,8 +3,8 @@
 -- 影响：新增 setting 表并新增 anonymous 用户
 -- 数据处理：插入默认匿名访问设置和匿名主体；预计耗时：毫秒级
 -- 回滚：不支持 down migration；需要恢复升级前备份
--- 相关：FR-66 / ADR-0002
--- 0007（FR-66）：全局设置表 + 内置匿名主体。
+-- 相关：ADR-0002
+-- 0007：全局设置表 + 内置匿名主体。
 -- setting 为通用键值设置存储，当前仅承载匿名访问全局开关（默认开启）。
 CREATE TABLE setting (
     key        TEXT PRIMARY KEY,

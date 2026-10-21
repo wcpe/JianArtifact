@@ -58,7 +58,7 @@ import type {
 import { useAsync } from "../hooks/useAsync";
 import { confirmDanger, notifyError, notifySuccess } from "../lib/feedback";
 
-/** FR-66 内置匿名主体用户名（与后端 domain.AnonymousUsername 一致）。 */
+/** 内置匿名主体用户名（与后端 domain.AnonymousUsername 一致）。 */
 const ANONYMOUS_USERNAME = "anonymous";
 
 /** 把文本域的「每行一个」路径前缀解析成数组（去空白与空行）。 */
@@ -92,7 +92,7 @@ export function UsersPage() {
   const [policyUser, setPolicyUser] = useState<User | null>(null);
   const [policyOpened, setPolicyOpened] = useState(false);
   const [policyRepos, setPolicyRepos] = useState<Repository[]>([]);
-  // 发布策略支持多仓库（FR-109）：选择集是仓库名列表，保存时整体下发到批量端点。
+  // 发布策略支持多仓库：选择集是仓库名列表，保存时整体下发到批量端点。
   const [policyRepoNames, setPolicyRepoNames] = useState<string[]>([]);
   const [policy, setPolicy] = useState<PublishPolicy | null>(null);
   const [policyPrefixes, setPolicyPrefixes] = useState("");
@@ -368,7 +368,7 @@ export function UsersPage() {
                     </Table.Thead>
                     <Table.Tbody>
                       {list.items.map((user) => {
-                        // FR-66：内置匿名主体不可登录/管理，隐藏其管理操作。
+                        // 内置匿名主体不可登录/管理，隐藏其管理操作。
                         const isAnonymous = user.username === ANONYMOUS_USERNAME;
                         // 行内操作统一「图标 + 文字」；抽成变量是因为窄屏要把它从「操作」列
                         // 挪到用户名下方——那里有整行宽度，三个按钮能一行放下，不必竖排撑高。

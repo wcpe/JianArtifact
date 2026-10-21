@@ -25,7 +25,7 @@ func TestCapacityCacheTTLParsing(t *testing.T) {
 		{name: "自定义秒数", value: "5", want: 5 * time.Second},
 		{name: "两侧空白被裁剪", value: "  60  ", want: 60 * time.Second},
 		// 不设上限夹取：超长 TTL 只影响展示数字的新鲜度，静默改写运维显式给出的值是更糟的语义
-		// （口径同 FR-43 拒绝给 auto-block 退避加上限）。
+		// （口径同拒绝给 auto-block 退避加上限）。
 		{name: "超大值原样生效", value: "86400", want: 24 * time.Hour},
 	}
 	for _, tc := range cases {

@@ -1,4 +1,4 @@
-// Package metrics 提供进程内指标累计与 Prometheus 文本暴露格式渲染（FR-39）。
+// Package metrics 提供进程内指标累计与 Prometheus 文本暴露格式渲染。
 //
 // 设计要点见 docs/specs/0.11.0-prometheus-metrics.md：
 //   - 零第三方依赖，文本暴露格式手写渲染；
@@ -40,7 +40,7 @@ const (
 	runtimeGCTotal    = metricPrefix + "runtime_gc_total"
 )
 
-// 发布拒绝原因（FR-41）是**闭集枚举**：v1 只有 quota 一个取值。
+// 发布拒绝原因是**闭集枚举**：v1 只有 quota 一个取值。
 // 该集合与 docs/specs/0.11.0-prometheus-metrics.md 的 reason 标签取值一一对应：
 // **新增取值必须先改规格并同步测试与 OPERATIONS.md**，不允许实现期就地塞入自由字符串
 // （自由字符串会把无界值带进指标标签，违反该规格的标签基数受控约定）。
@@ -49,7 +49,7 @@ var knownRejectionReasons = []string{rejectionQuota}
 // rejectionQuota 是配额（发布额度或仓库存储配额）拒绝。
 const rejectionQuota = "quota"
 
-// 上游断路器阻止事件原因（FR-43 §2.2）同样是**闭集枚举**：
+// 上游断路器阻止事件原因同样是**闭集枚举**：
 //   - probeFailed：后台/手动探测失败，阻止窗口延长一档；
 //   - upstreamError：回源失败触发首次（或再次）自动阻止。
 //
@@ -77,7 +77,7 @@ type Registry struct {
 	mu         sync.Mutex
 	protocol   map[protocolKey]uint64
 	rejections map[string]uint64
-	// blockEvents 是上游断路器阻止事件计数（FR-43），按闭集原因分区。
+	// blockEvents 是上游断路器阻止事件计数，按闭集原因分区。
 	blockEvents map[string]uint64
 }
 
@@ -102,7 +102,7 @@ func (r *Registry) ProtocolRequest(method string, status int, cacheResult string
 	r.mu.Unlock()
 }
 
-// PublishRejection 记录一次发布拒绝（FR-41 §4.5），按原因分区。
+// PublishRejection 记录一次发布拒绝，按原因分区。
 // reason 必须是闭集枚举取值（v1 只有 quota）；闭集外的取值**直接忽略**，
 // 以保证标签基数受控、暴露面与规格完全一致。
 func (r *Registry) PublishRejection(reason string) {
@@ -124,7 +124,7 @@ func isKnownRejectionReason(reason string) bool {
 	return false
 }
 
-// UpstreamBlockEvent 记录一次上游断路器阻止事件（FR-43 §2.2），按原因分区。
+// UpstreamBlockEvent 记录一次上游断路器阻止事件，按原因分区。
 // reason 必须是闭集枚举取值（probe_failed / upstream_error）；闭集外的取值**直接忽略**，
 // 与 PublishRejection 同构，以保证标签基数受控、暴露面与规格完全一致。
 func (r *Registry) UpstreamBlockEvent(reason string) {
@@ -214,7 +214,7 @@ type Exposition struct {
 	registry *Registry
 	jobs     func() []JobStatus  // 定时任务作业快照；nil 表示不输出作业指标
 	runtime  func() RuntimeStats // 运行时快照；测试可替换
-	// blockedRepositories 是当前处于阻止态（AUTO_BLOCKED / HALF_OPEN）的仓库数（FR-43）；
+	// blockedRepositories 是当前处于阻止态（AUTO_BLOCKED / HALF_OPEN）的仓库数；
 	// nil 表示未接入状态机，该族整族不输出（无值可报，不虚构 0）。
 	blockedRepositories func() int
 }
@@ -224,7 +224,7 @@ func NewExposition(registry *Registry, jobs func() []JobStatus) *Exposition {
 	return &Exposition{registry: registry, jobs: jobs, runtime: readRuntimeStats}
 }
 
-// SetBlockedRepositories 注入「当前阻止态仓库数」取数回调（FR-43）。
+// SetBlockedRepositories 注入「当前阻止态仓库数」取数回调。
 // 由装配层在状态机就绪后调用；未调用（nil）时该指标族整族不输出。
 // 回调在每次抓取时调用，不缓存——抓取路径必须只读内存、不查库、不访问网络。
 func (e *Exposition) SetBlockedRepositories(f func() int) { e.blockedRepositories = f }
@@ -334,7 +334,7 @@ func (e *Exposition) protocolFamily() family {
 	return f
 }
 
-// rejectionFamily 汇总发布拒绝计数（FR-41）；进程存在即视为可用，
+// rejectionFamily 汇总发布拒绝计数；进程存在即视为可用，
 // 首抓无样本时仍输出 HELP / TYPE，样本行只反映真实数据。
 func (e *Exposition) rejectionFamily() family {
 	f := family{
@@ -352,7 +352,7 @@ func (e *Exposition) rejectionFamily() family {
 	return f
 }
 
-// blockEventFamily 汇总上游断路器阻止事件计数（FR-43）；进程存在即视为可用，
+// blockEventFamily 汇总上游断路器阻止事件计数；进程存在即视为可用，
 // 首抓无样本时仍输出 HELP / TYPE，样本行只反映真实数据。
 func (e *Exposition) blockEventFamily() family {
 	f := family{
@@ -370,7 +370,7 @@ func (e *Exposition) blockEventFamily() family {
 	return f
 }
 
-// blockedRepositoriesFamily 报告当前处于阻止态（AUTO_BLOCKED / HALF_OPEN）的仓库数（FR-43）。
+// blockedRepositoriesFamily 报告当前处于阻止态（AUTO_BLOCKED / HALF_OPEN）的仓库数。
 // 无标签：仓库名/路径不得作为标签（ARCHITECTURE.md 标签基数约定）。
 // 未接入状态机（回调为 nil）时该族不可用，整族不输出——无值可报，不虚构 0。
 func (e *Exposition) blockedRepositoriesFamily() family {

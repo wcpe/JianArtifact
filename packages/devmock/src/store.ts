@@ -15,7 +15,7 @@ export type TokenCreated = Schemas["TokenCreated"];
 export type Repository = Schemas["Repository"];
 export type ConnectionStatus = Schemas["ConnectionStatus"];
 export type AclEntry = Schemas["AclEntry"];
-// FR-36：用户组（授权主体）与组成员关系。
+// 用户组（授权主体）与组成员关系。
 export type UserGroup = Schemas["UserGroup"];
 export type UserGroupMember = Schemas["UserGroupMember"];
 export type StatusInfo = Schemas["StatusInfo"];
@@ -30,11 +30,11 @@ export type MigrationSourceConfig = Schemas["MigrationSourceConfig"];
 export type MigrationSourceAuth = Schemas["MigrationSourceAuth"];
 export type MigrationSourceAuthType = Schemas["MigrationSourceAuthType"];
 export type RemoteNexusSourceConfig = Schemas["RemoteNexusSourceConfig"];
-// FR-132：节点备份与搬迁
+// 节点备份与搬迁
 export type BackupPackage = Schemas["BackupPackage"];
 export type BackupPackageList = Schemas["BackupPackageList"];
 export type BackupLink = Schemas["BackupLink"];
-// FR-40：来源列（manual / auto）与恢复演练报告
+// 来源列（manual / auto）与恢复演练报告
 export type BackupPackageOrigin = Schemas["BackupPackageOrigin"];
 export type BackupDrillAccepted = Schemas["BackupDrillAccepted"];
 export type BackupDrillCheck = Schemas["BackupDrillCheck"];
@@ -42,7 +42,7 @@ export type BackupVerificationLevel = Schemas["BackupVerificationLevel"];
 export type BackupVerificationList = Schemas["BackupVerificationList"];
 export type BackupVerificationReport = Schemas["BackupVerificationReport"];
 export type DrillBackupRequest = Schemas["DrillBackupRequest"];
-// FR-134 / FR-137：写入冻结窗口与从 URL 导入备份包
+//  /：写入冻结窗口与从 URL 导入备份包
 export type WriteFreezeState = Schemas["WriteFreezeState"];
 export type FreezeWritesRequest = Schemas["FreezeWritesRequest"];
 export type BackupImport = Schemas["BackupImport"];
@@ -52,7 +52,7 @@ export type BackupImportOrigin = Schemas["BackupImportOrigin"];
 export type CreateBackupImportRequest = Schemas["CreateBackupImportRequest"];
 export type PinnedRepositoriesResponse = Schemas["PinnedRepositoriesResponse"];
 export type PublicRepositoryList = Schemas["PublicRepositoryList"];
-/** FR-41：周期作业状态快照（运维作业面）。 */
+/** 周期作业状态快照（运维作业面）。 */
 export type MaintenanceJob = Schemas["MaintenanceJob"];
 
 export interface PublishPolicy {
@@ -75,11 +75,11 @@ export interface ServiceSettings {
   syncInterval: number;
   /** 允许访问的域名白名单（空数组表示不限制）；与真实后端一致按列表存储。 */
   allowedHosts: string[];
-  /** 回源 Token 校验（FR-130）；节点本地配置。 */
+  /** 回源 Token 校验；节点本地配置。 */
   originTokenEnabled: boolean;
   originTokenHeader: string;
   originTokenValue: string;
-  /** 自动备份间隔（秒），0 = 关闭（FR-40）；三者的 0 都是有意义的取值。 */
+  /** 自动备份间隔（秒），0 = 关闭；三者的 0 都是有意义的取值。 */
   backupAutoInterval: number;
   /** 保留最近 N 份自动备份，0 = 不限制份数。 */
   backupKeepLast: number;
@@ -91,7 +91,7 @@ export interface ServiceSettings {
 export const MOCK_TOKEN = "mock.jwt.token";
 /** 第二个管理员会话，仅供审计确认并发 Mock 验收使用。 */
 export const MOCK_SECOND_ADMIN_TOKEN = "mock.jwt.token:admin-2";
-/** FR-41：手动触发作业的模拟执行时延（毫秒），让前端能看到 running 中间态。 */
+/** 手动触发作业的模拟执行时延（毫秒），让前端能看到 running 中间态。 */
 const MOCK_JOB_RUN_MS = 1200;
 
 interface StoredToken extends Token {
@@ -115,10 +115,10 @@ interface State {
   volumeClones: string[];
   /** 上一次物化的档位倍数；1 = 仅种子。用于避免同档重复物化（也会复活被删掉的克隆）。 */
   volumeFactor: number;
-  /** FR-114：proxy 仓库上游连接状态（内存态，按仓库名；hosted/group 不维护）。 */
+  /** proxy 仓库上游连接状态（内存态，按仓库名；hosted/group 不维护）。 */
   connStatus: Record<string, ConnectionStatus>;
   acls: Record<string, AclEntry[]>;
-  // FR-36：用户组与「组 × 用户」成员关系。members 的 key 是组 ID。
+  // 用户组与「组 × 用户」成员关系。members 的 key 是组 ID。
   userGroups: UserGroup[];
   userGroupMembers: Record<number, UserGroupMember[]>;
   assets: Record<string, AssetSummary[]>;
@@ -134,21 +134,21 @@ interface State {
     repo: number;
     migration: number;
     operation: number;
-    /** FR-36：用户组自增 ID。 */
+    /** 用户组自增 ID。 */
     userGroup: number;
   };
-  /** FR-66：实例级匿名访问开关（默认开）。 */
+  /** 实例级匿名访问开关（默认开）。 */
   anonymousAccessEnabled: boolean;
   /** 管理端服务设置；集群拓扑仍由部署配置决定。 */
   serviceSettings: Omit<ServiceSettings, "anonymousAccess">;
-  /** FR-86：复制同步调度启停（默认开）。 */
+  /** 复制同步调度启停（默认开）。 */
   /**
    * 置顶仓库（迁移 0043 语义）：key 为 `global`（匿名/全局兜底）或 `user:<id>`；
    * value 为仓库 ID 数组（顺序即置顶顺序）。覆盖式写入，与后端一致。
    */
   pinned: Record<string, number[]>;
   /**
-   * FR-41：调度器已注册的周期作业状态（内存态，仅运维作业面读写）。
+   * 调度器已注册的周期作业状态（内存态，仅运维作业面读写）。
    * 与真实后端一致：清单由"注册"决定，计数自进程启动累计（这里即 resetStore 后归零）。
    */
   maintenanceJobs: MaintenanceJob[];
@@ -244,7 +244,7 @@ function seed(): State {
         createdAt: "2026-01-01T00:00:00Z",
         artifactCount: 1284,
         totalSize: 8589934592,
-        // FR-41：配额样例——字节与制品数都设上限，用量留有约 20% 余量（管理端显示「正常」）。
+        // 配额样例——字节与制品数都设上限，用量留有约 20% 余量（管理端显示「正常」）。
         quotaBytes: 10737418240,
         quotaAssets: 2000,
       },
@@ -259,7 +259,7 @@ function seed(): State {
         createdAt: "2026-01-02T00:00:00Z",
         artifactCount: 5240,
         totalSize: 12884901888,
-        // FR-41：已超限样例（5240 > 5000），用于核对管理端的超限提示与拒绝写入文案。
+        // 已超限样例（5240 > 5000），用于核对管理端的超限提示与拒绝写入文案。
         quotaAssets: 5000,
       },
       {
@@ -272,7 +272,7 @@ function seed(): State {
         createdAt: "2026-01-03T00:00:00Z",
         artifactCount: 82,
         totalSize: 1503238144,
-        // FR-41：只设字节配额、不设制品数配额（缺省 = 不限），且用量已达 93%
+        // 只设字节配额、不设制品数配额（缺省 = 不限），且用量已达 93%
         // （1.4 GiB / 1.5 GiB）→ 用于核对「接近上限」的橙色预警样式（阈值 90%）。
         quotaBytes: 1610612736,
       },
@@ -301,7 +301,7 @@ function seed(): State {
         createdAt: "2026-01-04T00:00:00Z",
         artifactCount: 12480,
         totalSize: 38654706022,
-        // FR-41：代理缓存保留 30 天（0/缺省 = 关闭代理缓存保留），供管理端演示保留天数表单项。
+        // 代理缓存保留 30 天（0/缺省 = 关闭代理缓存保留），供管理端演示保留天数表单项。
         cacheRetentionDays: 30,
       },
       {
@@ -358,7 +358,7 @@ function seed(): State {
     volumeClones: [],
     volumeFactor: 1,
     acls: { "maven-releases": [{ subjectId: 2, action: "read" }] },
-    // FR-36：种子留一个组，便于演示「组主体」的 ACL 与成员管理。
+    // 种子留一个组，便于演示「组主体」的 ACL 与成员管理。
     userGroups: [
       {
         id: 1,
@@ -372,9 +372,9 @@ function seed(): State {
       1: [{ userId: 2, username: "developer", createdAt: "2026-01-01T00:00:00Z" }],
     },
     connStatus: {
-      // FR-114：各 proxy 上游连接状态内存态——2 可用 / 3 自动阻止 / 1 半开 / 1 不可用，
+      // 各 proxy 上游连接状态内存态——2 可用 / 3 自动阻止 / 1 半开 / 1 不可用，
       // 供列表徽章与状态面板演示。
-      // FR-43：半开（HALF_OPEN）与自动阻止同属阻止态但需可区分，故种子里专门留一个被阻止仓库
+      // 半开（HALF_OPEN）与自动阻止同属阻止态但需可区分，故种子里专门留一个被阻止仓库
       // 处于半开，让状态面板/环形图/徽章的半开分支有真数据可渲染（否则新枚举在 mock 里从不出现）。
       "npm-proxy": { status: "AVAILABLE", description: "上游可用" },
       "gomod-proxy": { status: "AVAILABLE", description: "上游可用" },
@@ -754,13 +754,13 @@ function seed(): State {
       originTokenEnabled: false,
       originTokenHeader: "",
       originTokenValue: "",
-      // FR-40：间隔刻意给 0（关闭）——这是最容易被"空值兜底"写法吞掉的值，
+      // 间隔刻意给 0（关闭）——这是最容易被"空值兜底"写法吞掉的值，
       // 让 mock 默认就落在该分支上，摘要必须显示"已关闭"而不是默认档位。
       backupAutoInterval: 0,
       backupKeepLast: 7,
       backupRetentionDays: 30,
     },
-    // FR-41：与后端已注册的作业一一对应（blob-gc / storage-cleanup，默认间隔均为每日一次）。
+    // 与后端已注册的作业一一对应（blob-gc / storage-cleanup，默认间隔均为每日一次）。
     // 覆盖两种展示分支：blob-gc 执行过且最近一次失败（lastError 有值），
     // storage-cleanup 从未执行过（三个可空字段为 null）。
     maintenanceJobs: [
@@ -947,7 +947,7 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-// FR-36：动作由三档扩为六档，而 devmock 的仓库守卫仍只判三档（细化动作的
+// 动作由三档扩为六档，而 devmock 的仓库守卫仍只判三档（细化动作的
 // 门控目前只在后端 domain 层），因此 `accessRank` 按**六档全量**给出排名：
 // 未在本表里显式登记的档位（publish / delete / acl_manage）各自独立，
 // 取比 read 更低的 rank 0 会让它们互相放行，故给它们单独一档——只有完全相同的
@@ -1113,7 +1113,7 @@ function collectSearchMatches(query: string, allowedRepositories?: readonly stri
   return { matches, facets, terms };
 }
 
-/** FR-114：MD-2 状态合并——offline 优先覆盖为 OFFLINE；hosted 不返回；online 的 proxy 返回内存态。 */
+/** MD-2 状态合并——offline 优先覆盖为 OFFLINE；hosted 不返回；online 的 proxy 返回内存态。 */
 function statusFor(repo: Repository): ConnectionStatus | undefined {
   if (repo.type === "hosted") {
     return undefined;
@@ -1124,7 +1124,7 @@ function statusFor(repo: Repository): ConnectionStatus | undefined {
   return state.connStatus[repo.name] ?? { status: "READY", description: "尚未探测" };
 }
 
-/** FR-114：为仓库响应附加连接状态（不修改内部数据）。 */
+/** 为仓库响应附加连接状态（不修改内部数据）。 */
 function decorate(repo: Repository): Repository {
   const status = statusFor(repo);
   return status ? { ...repo, connectionStatus: status } : { ...repo };
@@ -1139,7 +1139,7 @@ export const store = {
       migrationVersion: state.migrationVersion,
       userCount: state.users.length,
       bootstrapAllowed: !state.initialized && state.users.length === 0,
-      // FR-34：开发环境不接真实 IdP，登录入口保持隐藏（真实 OIDC 流程需顶层跳转，MSW 拦不到）。
+      // 开发环境不接真实 IdP，登录入口保持隐藏（真实 OIDC 流程需顶层跳转，MSW 拦不到）。
       oidcEnabled: false,
     };
   },
@@ -1295,7 +1295,7 @@ export const store = {
     return state.users.length < before;
   },
 
-  // —— 用户组（FR-36）——
+  // —— 用户组——
 
   listUserGroups(page: number, pageSize: number): { items: UserGroup[]; total: number } {
     return { items: pageSlice(state.userGroups, page, pageSize), total: state.userGroups.length };
@@ -1440,7 +1440,7 @@ export const store = {
     };
   },
 
-  /** FR-66：匿名可读仓库列表（mock 近似：public 即匿名可读）。 */
+  /** 匿名可读仓库列表（mock 近似：public 即匿名可读）。 */
   listAnonymousRepositories(
     page: number,
     pageSize: number,
@@ -1452,7 +1452,7 @@ export const store = {
     };
   },
 
-  /** FR-66：匿名访问全局开关。 */
+  /** 匿名访问全局开关。 */
   anonymousAccess(): boolean {
     return state.anonymousAccessEnabled;
   },
@@ -1529,7 +1529,7 @@ export const store = {
     return this.settings();
   },
 
-  // —— FR-41：存储治理运维作业面（admin）——
+  // ——：存储治理运维作业面（admin）——
 
   /** 周期作业清单（返回副本，避免调用方直接改内部态）。 */
   maintenanceJobs(): MaintenanceJob[] {
@@ -1613,14 +1613,14 @@ export const store = {
     if (input.aliases && input.aliases.length > 0) {
       repo.aliases = input.aliases;
     }
-    // FR-41：存储配额（0/缺省 = 不限）。不限时不写键，与后端"零值即不限"的回显一致。
+    // 存储配额（0/缺省 = 不限）。不限时不写键，与后端"零值即不限"的回显一致。
     if (input.quotaBytes !== undefined && input.quotaBytes > 0) {
       repo.quotaBytes = input.quotaBytes;
     }
     if (input.quotaAssets !== undefined && input.quotaAssets > 0) {
       repo.quotaAssets = input.quotaAssets;
     }
-    // FR-41：代理缓存保留天数（0/缺省 = 关闭），语义同配额——不限/关闭时不写键。
+    // 代理缓存保留天数（0/缺省 = 关闭），语义同配额——不限/关闭时不写键。
     if (input.cacheRetentionDays !== undefined && input.cacheRetentionDays > 0) {
       repo.cacheRetentionDays = input.cacheRetentionDays;
     }
@@ -1648,7 +1648,7 @@ export const store = {
     if (patch.visibility) {
       repo.visibility = patch.visibility;
     }
-    // FR-81：description 传空串表示清空。
+    // description 传空串表示清空。
     if (patch.description !== undefined) {
       repo.description = patch.description;
     }
@@ -1662,7 +1662,7 @@ export const store = {
     if (patch.aliases !== undefined) {
       repo.aliases = patch.aliases;
     }
-    // FR-41：配额是局部补丁语义——缺省表示不修改，传 0 表示改为不限（清掉键）。
+    // 配额是局部补丁语义——缺省表示不修改，传 0 表示改为不限（清掉键）。
     if (patch.quotaBytes !== undefined) {
       if (patch.quotaBytes > 0) {
         repo.quotaBytes = patch.quotaBytes;
@@ -1677,7 +1677,7 @@ export const store = {
         delete repo.quotaAssets;
       }
     }
-    // FR-41：代理缓存保留天数同样按局部补丁处理——缺省不修改，传 0 表示关闭（清掉键）。
+    // 代理缓存保留天数同样按局部补丁处理——缺省不修改，传 0 表示关闭（清掉键）。
     if (patch.cacheRetentionDays !== undefined) {
       if (patch.cacheRetentionDays > 0) {
         repo.cacheRetentionDays = patch.cacheRetentionDays;
@@ -1709,7 +1709,7 @@ export const store = {
     return decorate(repo);
   },
 
-  /** FR-113：设置仓库 online/offline（节点本地运维状态，不参与复制）。 */
+  /** 设置仓库 online/offline（节点本地运维状态，不参与复制）。 */
   setOnline(name: string, online: boolean): Repository | null {
     const repo = state.repositories.find((r) => r.name === name);
     if (!repo) {
@@ -1719,7 +1719,7 @@ export const store = {
     return decorate(repo);
   },
 
-  /** FR-114：手动重测 proxy 仓库上游连接（仅 online proxy）。mock 视上游恒可达，
+  /** 手动重测 proxy 仓库上游连接（仅 online proxy）。mock 视上游恒可达，
    *  重测后置为 AVAILABLE 并返回最新状态；非 proxy/offline 返回 null。 */
   recheckConnection(name: string): ConnectionStatus | null {
     const repo = state.repositories.find((r) => r.name === name);
@@ -1785,7 +1785,7 @@ export const store = {
     return { items: pageSlice(all, page, pageSize), total: all.length };
   },
 
-  /** FR-54：按目录懒加载——返回指定前缀下当前层的目录（全路径带尾斜杠）与文件，仓库不存在返回 null。 */
+  /** 按目录懒加载——返回指定前缀下当前层的目录（全路径带尾斜杠）与文件，仓库不存在返回 null。 */
   listDirectory(
     name: string,
     prefix: string,
@@ -2038,7 +2038,7 @@ export const store = {
   },
 
   /**
-   * 开发态包级聚合（FR-150 的 `group_by=package`）：与 `searchAssets` 共享命中集合，
+   * 开发态包级聚合（的 `group_by=package`）：与 `searchAssets` 共享命中集合，
    * 按规格 §3.2–§3.5 聚成包 / 版本 / 文件三级结构。
    *
    * `scanned` 是参与聚合的行数；mock 不模拟 5000 行预算，故 `truncated` 恒为 false。
@@ -2051,7 +2051,7 @@ export const store = {
     return { packages: buildSearchPackages(matches, terms), scanned: matches.length };
   },
 
-  /** FR-73：Maven 网页上传——登记主文件/pom/metadata 及各自校验和的 asset 摘要。
+  /** Maven 网页上传——登记主文件/pom/metadata 及各自校验和的 asset 摘要。
    * 仓库不存在返回 null；非 maven hosted 返回 "conflict"。 */
   uploadMavenArtifact(
     name: string,
@@ -2127,7 +2127,7 @@ export const store = {
     if (!repo) {
       return null;
     }
-    // FR-81：usage 带出描述，供匿名详情页页头展示。
+    // usage 带出描述，供匿名详情页页头展示。
     return {
       format: repo.format,
       type: repo.type,

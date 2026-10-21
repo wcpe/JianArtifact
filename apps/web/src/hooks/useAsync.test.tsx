@@ -1,4 +1,4 @@
-// useAsync 的 abortable 扩展与乱序保护（FR-152）：
+// useAsync 的 abortable 扩展与乱序保护：
 // - 开启 abortable 后 fetcher 收到 AbortSignal，cancel() 真的 abort 在途请求；
 // - 取消不是失败：静默回到空闲态，不落 error / refreshError；
 // - 口径变化（deps 变）会中止上一次请求；

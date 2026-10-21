@@ -411,7 +411,7 @@ export const en = {
     maxFileBytes: "Max Bytes per File",
     immutableRelease: "Protect Release from Overwrite",
     immutableReleaseHint: "When enabled, existing Release versions cannot be overwritten.",
-    // 发布策略多仓库（FR-109 扩展）。
+    // 发布策略多仓库（扩展）。
     policyPurpose:
       "A publish policy constrains the path prefixes and quotas this account may publish under in these repositories, and controls immutable releases.",
     policyMultipleHint: "Saving applies this policy to all selected repositories.",
@@ -446,7 +446,7 @@ export const en = {
     rolesAnonymousHint:
       "A built-in principal that exists only to grant anonymous read access to public repositories; cannot sign in or be managed.",
   },
-  // 用户组（FR-36）：授权主体之一，组内成员共享指向该组的 ACL 授权。
+  // 用户组：授权主体之一，组内成员共享指向该组的 ACL 授权。
   userGroups: {
     title: "User Groups",
     description:
@@ -581,11 +581,11 @@ export const en = {
     membersHint:
       "Reads are aggregated in order; only repositories of the same format can be selected",
     membersRequired: "A group repository requires at least one member repository",
-    // FR-114：连接状态徽章列
+    // 连接状态徽章列
     connectionStatus: "Connection Status",
     statusAvailable: "Available",
     statusAutoBlocked: "Auto-blocked",
-    // FR-43：半开（阻止窗口已到、正在试探上游，业务流量仍等效封锁）
+    // 半开（阻止窗口已到、正在试探上游，业务流量仍等效封锁）
     statusHalfOpen: "Probing",
     statusUnavailable: "Unavailable",
     statusOffline: "Offline",
@@ -603,11 +603,11 @@ export const en = {
     aliasesPlaceholder: "Type an alias and press Enter (multiple allowed, optional)",
     aliasesHint:
       "Aliases share the namespace with the primary name and must be globally unique; they resolve to the same repository",
-    // FR-41：列表里把「当前用量 / 上限」放在同一格（与详情页配置区同一口径）。
+    // 列表里把「当前用量 / 上限」放在同一格（与详情页配置区同一口径）。
     quotaUsage: "{{used}} / {{limit}}",
     quotaTooltip: "{{base}} · Limit {{limit}} ({{status}})",
   },
-  // FR-41 存储治理：配额状态与用量口径（仓库列表、仓库详情共用）。
+  //  存储治理：配额状态与用量口径（仓库列表、仓库详情共用）。
   // 状态阈值固定为「已用 ≥ 上限的 90% 即接近上限」，见 src/lib/quota.ts 的 QUOTA_NEAR_RATIO。
   quota: {
     unlimited: "Unlimited",
@@ -653,7 +653,7 @@ export const en = {
     colPath: "Path",
     colSize: "Size",
     colUpdated: "Updated At",
-    // FR-151：包级聚合主从双栏视图
+    // 包级聚合主从双栏视图
     precisionExact: "Exact",
     precisionPrerelease: "Pre-release",
     precisionSubstring: "Substring",
@@ -685,7 +685,7 @@ export const en = {
     sameVersionFiles: "Files in this version ({{count}})",
     openRepository: "Open Repository",
     backToResults: "Back to results",
-    // FR-152：搜索进度、取消与超时
+    // 搜索进度、取消与超时
     progressStageIndexing: "Searching the index…",
     progressStageFiltering: "Filtering artifacts…",
     progressStageRanking: "Ranking by relevance…",
@@ -696,7 +696,7 @@ export const en = {
     timeoutTitle: "Search timed out",
     timeoutDescription:
       "The search exceeded its time budget and was aborted. Narrow the scope (restrict repo: or ext:, use fewer keywords) and try again.",
-    // FR-153：搜索建议下拉
+    // 搜索建议下拉
     suggestLabel: "Search suggestions",
     suggestTypePackage: "Package",
     suggestTypeRepository: "Repository",
@@ -715,7 +715,7 @@ export const en = {
     addEntry: "Add Entry",
     save: "Save Access Control",
     empty: "No entries configured yet",
-    // FR-36：主体从「只有用户」扩展到「用户 / 用户组」，动作从三档细化为六档。
+    // 主体从「只有用户」扩展到「用户 / 用户组」，动作从三档细化为六档。
     subject: "Grant Subject",
     subjectType: "Subject Type",
     subjectUser: "User",
@@ -777,7 +777,7 @@ export const en = {
     configFormat: "Format",
     configType: "Type",
     configName: "Name",
-    // FR-114：连接状态展示与手动复检
+    // 连接状态展示与手动复检
     configConnection: "Upstream Connection Status",
     configRecheck: "Recheck",
     configRechecking: "Checking…",
@@ -895,7 +895,7 @@ export const en = {
     configRenameSame: "New name must differ from the current name",
     configRenameTaken: "That name is already taken",
     configRenameOk: "Renamed",
-    // FR-41 存储配额（配置页签）：0 / 留空 = 不限；超限后服务端拒绝写入（HTTP 429）
+    //  存储配额（配置页签）：0 / 留空 = 不限；超限后服务端拒绝写入（HTTP 429）
     configQuotaTitle: "Storage Quota",
     configQuotaHint:
       "Set a limit to 0 or leave it empty for unlimited; once a limit is exceeded, writes to this repository are rejected (HTTP 429).",
@@ -914,7 +914,7 @@ export const en = {
     configQuotaAssetsConverted: "= {{count}} artifacts",
     configQuotaUnlimitedInput: "Currently unlimited (limit is 0)",
     configQuotaInvalid: "Enter a number greater than or equal to 0 (0 or empty means unlimited)",
-    // FR-41 代理缓存保留（配置页签，仅 proxy 仓库）：按最后一次写入时间淘汰超期缓存
+    //  代理缓存保留（配置页签，仅 proxy 仓库）：按最后一次写入时间淘汰超期缓存
     configCacheRetention: "Proxy cache retention (days)",
     configCacheRetentionHint:
       "Expired proxy cache entries are cleaned up based on their last write time: entries that stay read-only long enough are removed and fetched from the upstream again on the next request. Set 0 or leave empty to disable automatic cleanup.",
@@ -1054,7 +1054,7 @@ export const en = {
     migrationSwitch: "Switch migration source",
     migrationResult: "Migration result",
     migrationCredentialRef: "Migration credential reference",
-    // FR-41：存储治理新增动作
+    // 存储治理新增动作
     maintenanceJobRun: "Run maintenance job manually",
     repoCleanup: "Clean up empty repository directories",
   },
@@ -1235,7 +1235,7 @@ export const en = {
     // Only the popover title is new — the body reuses the original keys, so writing a fresh
     // set would leave the old ones unreferenced, i.e. silently delete the explanations.
     actionBarHelpTitle: "Using backup & migration",
-    // Pending restart (FR-40 follow-up 6): a successful import only writes restore.pending;
+    // Pending restart (follow-up 6): a successful import only writes restore.pending;
     // the actual replacement happens on the next start. Until then every import is refused
     // with 409, so the UI has to explain why rather than just saying "rejected".
     pendingRestartBadge: "A restore is waiting for a restart",
@@ -1263,7 +1263,7 @@ export const en = {
     factNextDue: "Due shortly",
     factUsageValue: "{{size}} · {{count}} package(s)",
     factNoData: "—",
-    // —— FR-40 追加四：备份包与导入记录聚合进同一张表 ——
+    // ——：备份包与导入记录聚合进同一张表 ——
     // 页面只剩三段：动作 → 关键事实 → 统一事件表；「导入与传输」弹窗与待处理条一并删除。
     eventsSection: "Backup and import events",
     eventsEmpty: "No backup or import events yet",
@@ -1448,11 +1448,11 @@ export const en = {
     fileMissing: "Package file is missing",
     includedNote:
       "A backup package contains only the SQLite snapshot and artifact content, no keys or node-local configuration.",
-    // —— FR-40：来源列（手动 / 自动）——
+    // ——：来源列（手动 / 自动）——
     colOrigin: "Origin",
     origin_manual: "Manual",
     origin_auto: "Automatic",
-    // —— FR-40：恢复演练与可查报告 ——
+    // ——：恢复演练与可查报告 ——
     drillOpen: "Drill",
     drillTitle: "Restore Drill",
     drillHint:
@@ -1487,7 +1487,7 @@ export const en = {
     drillCheck_extract: "Extract",
     drillCheck_sqlite: "SQLite consistency",
     drillCheck_blobs: "Blob scale",
-    // —— FR-40：自动备份与保留策略（配置卡默认折叠，展开后可改，保存即生效）——
+    // ——：自动备份与保留策略（配置卡默认折叠，展开后可改，保存即生效）——
     autoCfgTitle: "Automatic Backup & Retention",
     autoCfgLiveNote: "Saved changes take effect immediately",
     autoCfgSummaryOff: "Automatic backup is off",
@@ -1499,7 +1499,7 @@ export const en = {
     autoCfgHint:
       "Changes made here apply immediately (the automatic backup job re-reads this configuration every cycle, at most one heartbeat later) with no process restart. A value of 0 is meaningful for all three: interval 0 = automatic backup off, count 0 = no count limit, days 0 = no day limit.",
     autoCfgSave: "Save",
-    // —— FR-40 addition 12: capacity estimate ——
+    // ——  addition 12: capacity estimate ——
     autoCfgCapacityTitle: "Estimated disk usage",
     autoCfgCapacityEstimate: "About {{size}} ({{n}} × {{each}} each)",
     autoCfgCapacityUnknown:
@@ -1521,7 +1521,7 @@ export const en = {
       "The equivalent environment variables (JIAN_BACKUP_AUTO_INTERVAL / JIAN_BACKUP_KEEP_LAST / JIAN_BACKUP_RETENTION_DAYS) still serve as initial values for first deployment: they are written only once, when the database has no such configuration yet. Afterwards this card's settings always win, and changing the environment variables no longer overrides them.",
     autoCfgJobsHint:
       "The Maintenance Jobs page always lists backup-auto (the job stays registered so configuration changes take effect immediately); when the interval is 0 it idles and skips every cycle without producing a backup.",
-    // —— FR-134：写入冻结窗口 ——
+    // ——：写入冻结窗口 ——
     freezeStatusWritable: "Writable",
     freezeStatusFrozen: "Frozen",
     freezeUntilLabel: "Auto-unfreeze time",
@@ -1544,7 +1544,7 @@ export const en = {
       "After unfreezing, the node resumes business writes; handle any ongoing migration separately.",
     freezeUnfreezeLabel: "Unfreeze",
     freezeUnfrozen: "Writes unfrozen",
-    // —— FR-137：从 URL 导入备份包 ——
+    // ——：从 URL 导入备份包 ——
     // The wording includes "restore": these three channels really do restore (they replace
     // this instance's data), while "import / upload" reads to users as merely "bring something in".
     // The reported "can only back up, never restore" came from exactly this wording.
@@ -1585,7 +1585,7 @@ export const en = {
       incompatible: "The backup package is not compatible with the current service version.",
       restore_pending:
         "A pending restore already exists; restart the service to finish the replacement.",
-      // FR-40 addition 10: these used to fall through to `internal`.
+      //  addition 10: these used to fall through to `internal`.
       base_missing:
         "Base package missing: this is an incremental package; import its base package first.",
       import_in_progress: "Another import is already running; wait for it to finish and retry.",
@@ -1593,7 +1593,7 @@ export const en = {
         "This backup package is not finished or has failed; it cannot be used as a restore source.",
       internal: "Restore failed: internal error. See the reason below or check server logs.",
     },
-    // —— FR-137 / FR-40 追加八：备份包分片上传（第三条通道） ——
+    // ——  /：备份包分片上传（第三条通道） ——
     // 措辞从 "Restore from file" 改为 "Upload backup package"：上传只把包收进备份列表，
     // 不再直接替换本机数据（恢复是入库之后的独立动作）。
     uploadButton: "Upload backup package",
@@ -1622,7 +1622,7 @@ export const en = {
     uploadError: "Upload failed: {{message}}",
     uploadMissingChunkTitle: "Missing chunks",
 
-    // —— FR-40 追加八：服务器上未被管理的备份包 ——
+    // ——：服务器上未被管理的备份包 ——
     // 这些包在磁盘上有包体但登记表里没有记录（历史残留或手工拷入），
     // 常规列表看不见它们，于是既不能用也不能删。这里补上"列出 + 导入"。
     adoptButton: "Import unmanaged packages",
@@ -1640,7 +1640,7 @@ export const en = {
     adoptDuplicate:
       "Same content as an already registered package (duplicate copy); this file can be deleted safely",
 
-    // —— FR-40 addition 11: backup package content preview ——
+    // ——  addition 11: backup package content preview ——
     previewOpen: "View contents",
     previewTitle: "Backup package contents",
     previewTarget: "Package",
@@ -1663,7 +1663,7 @@ export const en = {
     previewColName: "Name",
     previewColFormat: "Format",
     previewColType: "Type",
-    // —— FR-40 addition 14: package vs current system diff ——
+    // ——  addition 14: package vs current system diff ——
     restoreDiffTitle: "What is inside · diff with this instance",
     diffTitle: "What will change after restoring",
     diffSubtitle:
@@ -1703,7 +1703,7 @@ export const en = {
     adoptResultSummary: "Imported {{adopted}}, skipped {{skipped}}, failed {{failed}}",
     adoptRescan: "Rescan",
 
-    // —— FR-40 addition 9: backup interval supports multiple time units ——
+    // ——  addition 9: backup interval supports multiple time units ——
     autoCfgIntervalUnit: "Unit",
     autoCfgIntervalEquals: "Equals {{n}} seconds",
     autoCfgIntervalOff: "0 disables automatic backup",

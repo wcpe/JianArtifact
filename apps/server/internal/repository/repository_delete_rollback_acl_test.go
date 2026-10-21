@@ -10,7 +10,7 @@ import (
 
 // TestDeleteRollbackRestoresGroupAcl 钉住「仓库删除回滚必须完整恢复组授权」。
 //
-// 背景（FR-36 回归）：用户组主体的授权信息全在 subject_group_id 上、subject_id 为 NULL，
+// 背景（回归）：用户组主体的授权信息全在 subject_group_id 上、subject_id 为 NULL，
 // 而标签为用户的条目靠 subject_type 的列默认值就能兜底。因此回滚恢复语句若只写
 // (repository_id, subject_id, action) 三列，用户授权看不出异常、组授权却会静默丢失——
 // 权限系统里「静默丢授权」与「静默多授权」同样危险，必须用例钉住。
@@ -119,7 +119,7 @@ func TestDeleteRollbackRestoresGroupAcl(t *testing.T) {
 		t.Errorf("回滚未恢复用户主体授权：%+v", after)
 	}
 	if !groupKept {
-		t.Errorf("回滚未恢复组主体授权（FR-36 回归）：%+v", after)
+		t.Errorf("回滚未恢复组主体授权（回归）：%+v", after)
 	}
 
 	// 授权要真的生效，而不只是行存在。

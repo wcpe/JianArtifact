@@ -1,6 +1,6 @@
-// 包级聚合的开发态实现（对应后端 FR-150 的 BuildPackageGroups / ParseCoordinates / MatchPrecision）。
+// 包级聚合的开发态实现（对应后端的 BuildPackageGroups / ParseCoordinates / MatchPrecision）。
 //
-// 为什么 mock 也要实现一遍：搜索结果页（FR-151）的主数据源就是 `group_by=package` 的响应，
+// 为什么 mock 也要实现一遍：搜索结果页的主数据源就是 `group_by=package` 的响应，
 // 若 mock 只给文件级 items，`pnpm dev` 下搜索页会永远空白，场景夹具（empty / loading /
 // standby_read_only）也失去意义。这里按规格 §3.2–§3.5 做等价的最简实现，**只在开发态使用**，
 // 不参与生产构建；与 Go 侧的口径保持一致即可，不追求逐个边界完全复刻。

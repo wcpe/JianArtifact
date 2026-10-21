@@ -1,4 +1,4 @@
-// 进度条组件（FR-152）：阶段文案、已用时长、进度推进与取消按钮。
+// 进度条组件：阶段文案、已用时长、进度推进与取消按钮。
 // 时间用假定时器推进，不真等 3 秒。
 import { MantineProvider } from "@mantine/core";
 import { act, render, screen } from "@testing-library/react";

@@ -1,4 +1,4 @@
-// FR-34：OIDC 登录前端段——入口可见性与回调片段处理。
+// OIDC 登录前端段——入口可见性与回调片段处理。
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";

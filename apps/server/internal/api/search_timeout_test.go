@@ -15,7 +15,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// 本文件钉住 FR-149 §3.4 的**错误码契约**：搜索超出预算时必须映射为
+// 本文件钉住的**错误码契约**：搜索超出预算时必须映射为
 // HTTP 504 + 错误码 `search_timeout`，而不是复用上游的 `upstream_timeout`——
 // 两者的处置方向完全相反（一个该缩小检索范围 / 查索引，一个该查上游）。
 

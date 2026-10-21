@@ -11,7 +11,7 @@ export type StatusInfo = Schemas["StatusInfo"];
 export type LoginResponse = Schemas["LoginResponse"];
 export type User = Schemas["User"];
 export type UserList = Schemas["UserList"];
-/** FR-36：用户组（授权主体之一）与成员相关契约类型。 */
+/** 用户组（授权主体之一）与成员相关契约类型。 */
 export type UserGroup = Schemas["UserGroup"];
 export type UserGroupList = Schemas["UserGroupList"];
 export type UserGroupMember = Schemas["UserGroupMember"];
@@ -37,11 +37,11 @@ export type PublishPoliciesBatchRequest = Schemas["PublishPoliciesBatchRequest"]
 export type PublishPolicyBatchResult = Schemas["PublishPolicyBatchResult"];
 export type PublishPoliciesBatchResponse = Schemas["PublishPoliciesBatchResponse"];
 export type UsageInfo = Schemas["UsageInfo"];
-/** FR-41：存储治理运维作业面。 */
+/** 存储治理运维作业面。 */
 export type MaintenanceJob = Schemas["MaintenanceJob"];
 export type MaintenanceJobList = Schemas["MaintenanceJobList"];
 export type MaintenanceJobRunResult = Schemas["MaintenanceJobRunResult"];
-/** FR-40：备份包来源、恢复演练的受理结果与报告。 */
+/** 备份包来源、恢复演练的受理结果与报告。 */
 export type BackupPackage = Schemas["BackupPackage"];
 export type BackupPackageList = Schemas["BackupPackageList"];
 export type BackupPackageOrigin = Schemas["BackupPackageOrigin"];
@@ -124,7 +124,7 @@ export function mockStatus(version = MOCK_APP_VERSION): StatusInfo {
     migrationVersion: "0001_init",
     userCount: 1,
     bootstrapAllowed: false,
-    // FR-34：开发环境不接真实 IdP，登录入口保持隐藏。
+    // 开发环境不接真实 IdP，登录入口保持隐藏。
     oidcEnabled: false,
   };
 }
@@ -151,7 +151,7 @@ export function mockUserList(): UserList {
   return { items: [mockUser()], total: 1 };
 }
 
-/** 单个用户组的契约响应（FR-36）：授权主体之一。 */
+/** 单个用户组的契约响应：授权主体之一。 */
 export function mockUserGroup(): UserGroup {
   return {
     id: 1,
@@ -211,13 +211,13 @@ export function mockRepository(): Repository {
     visibility: "private",
     createdAt: MOCK_TIME,
     aliases: ["maven-legacy"],
-    // FR-41：仓库存储配额（0/缺省 = 不限）；契约校验覆盖这两个新字段。
+    // 仓库存储配额（0/缺省 = 不限）；契约校验覆盖这两个新字段。
     quotaBytes: 10737418240,
     quotaAssets: 2000,
   };
 }
 
-/** FR-41：GET /api/v1/maintenance/jobs 的契约响应。 */
+/** GET /api/v1/maintenance/jobs 的契约响应。 */
 export function mockMaintenanceJobList(): MaintenanceJobList {
   return {
     jobs: [
@@ -247,12 +247,12 @@ export function mockMaintenanceJobList(): MaintenanceJobList {
   };
 }
 
-/** FR-41：POST /api/v1/maintenance/jobs/{name}/run 的契约响应（202 已受理）。 */
+/** POST /api/v1/maintenance/jobs/{name}/run 的契约响应（202 已受理）。 */
 export function mockMaintenanceJobRunResult(name = "blob-gc"): MaintenanceJobRunResult {
   return { name, started: true };
 }
 
-/** FR-40：GET /api/v1/backups 的单个条目（来源为手动）。 */
+/** GET /api/v1/backups 的单个条目（来源为手动）。 */
 export function mockBackupPackage(): BackupPackage {
   return {
     packageId: "bk-20260910-090000-a1b2c3",
@@ -276,7 +276,7 @@ export function mockBackupPackage(): BackupPackage {
   };
 }
 
-/** FR-40：GET /api/v1/backups 的契约响应（一条手动 + 一条自动，覆盖 origin 两种取值）。 */
+/** GET /api/v1/backups 的契约响应（一条手动 + 一条自动，覆盖 origin 两种取值）。 */
 export function mockBackupPackageList(): BackupPackageList {
   return {
     items: [mockBackupPackage(), { ...mockBackupPackage(), packageId: "bk-auto", origin: "auto" }],
@@ -284,18 +284,18 @@ export function mockBackupPackageList(): BackupPackageList {
   };
 }
 
-/** FR-40：POST /api/v1/backups/{id}/drill 的请求体。 */
+/** POST /api/v1/backups/{id}/drill 的请求体。 */
 export function mockDrillBackupRequest(): DrillBackupRequest {
   return { level: "deep" };
 }
 
-/** FR-40：POST /api/v1/backups/{id}/drill 的契约响应（202 受理，不代表已完成）。 */
+/** POST /api/v1/backups/{id}/drill 的契约响应（202 受理，不代表已完成）。 */
 export function mockBackupDrillAccepted(): BackupDrillAccepted {
   return { packageId: "bk-20260910-090000-a1b2c3", level: "shallow", acceptedAt: MOCK_TIME };
 }
 
 /**
- * FR-40：GET /api/v1/backups/{id}/verifications 的单份报告。
+ * GET /api/v1/backups/{id}/verifications 的单份报告。
  *
  * 刻意给一份**未通过**的报告：失败报告是演练最该留下的产物，
  * 用"全绿"样例做契约校验会让「失败时字段是否齐全」永远不被覆盖。
@@ -319,7 +319,7 @@ export function mockBackupVerificationReport(): BackupVerificationReport {
   };
 }
 
-/** FR-40：GET /api/v1/backups/{id}/verifications 的契约响应。 */
+/** GET /api/v1/backups/{id}/verifications 的契约响应。 */
 export function mockBackupVerificationList(): BackupVerificationList {
   return { items: [mockBackupVerificationReport()], total: 1 };
 }
@@ -344,7 +344,7 @@ export function mockPublicRepositoryList(): PublicRepositoryList {
   return { items: [mockRepository()], total: 1, pinnedNames: ["npm-proxy"] };
 }
 
-/** FR-114：仓库连接状态的契约响应（AUTO_BLOCKED 示例，含阻止窗口）。 */
+/** 仓库连接状态的契约响应（AUTO_BLOCKED 示例，含阻止窗口）。 */
 export function mockConnectionStatus(): ConnectionStatus {
   return {
     status: "AUTO_BLOCKED",
@@ -353,7 +353,7 @@ export function mockConnectionStatus(): ConnectionStatus {
   };
 }
 
-/** FR-43：半开态连接状态的契约响应（阻止窗口已到、正在试探上游，业务流量仍等效封锁）。 */
+/** 半开态连接状态的契约响应（阻止窗口已到、正在试探上游，业务流量仍等效封锁）。 */
 export function mockHalfOpenConnectionStatus(): ConnectionStatus {
   return {
     status: "HALF_OPEN",

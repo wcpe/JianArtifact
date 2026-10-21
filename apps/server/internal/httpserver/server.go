@@ -32,7 +32,7 @@ type Server struct {
 	middlewares             []api.MiddlewareFunc
 	protocolRoutes          func(gin.IRouter)
 	protocolPrefixes        []string
-	writeFreeze             func() domain.FreezeState // FR-135：运行时写入冻结窗口状态读取器（nil 表示不启用）
+	writeFreeze             func() domain.FreezeState // 运行时写入冻结窗口状态读取器（nil 表示不启用）
 	managementSecurityAudit SecurityAuditFunc
 	protocolMetric          func(*gin.Context)
 	allowedHosts            func() []string  // 允许访问的域名白名单（nil 表示不启用限制）
@@ -81,7 +81,7 @@ func WithAllowedHosts(provider func() []string) Option {
 	return func(s *Server) { s.allowedHosts = provider }
 }
 
-// WithOriginTokenGuard 注入回源 Token 校验配置读取器（FR-130，运行时读取最新值）。
+// WithOriginTokenGuard 注入回源 Token 校验配置读取器（，运行时读取最新值）。
 // 非 nil 时启用校验中间件：开启状态下非回环请求必须携带匹配的 Token 头，否则 404。
 func WithOriginTokenGuard(guard originTokenGuard) Option {
 	return func(s *Server) { s.originToken = guard }

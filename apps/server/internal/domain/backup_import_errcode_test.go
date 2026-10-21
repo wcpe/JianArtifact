@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// TestFailStageMapsEveryDomainError 是「错误码被吞成 internal」的回归守卫（FR-40 追加十）。
+// TestFailStageMapsEveryDomainError 是「错误码被吞成 internal」的回归守卫。
 //
 // # 曾经的 bug
 //

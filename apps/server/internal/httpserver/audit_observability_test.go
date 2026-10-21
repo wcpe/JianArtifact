@@ -105,7 +105,7 @@ func TestAuditObservabilitySnapshotAndAtomicAcknowledgement(t *testing.T) {
 	}
 }
 
-// FR-117：消息中心依赖 notifications 端点的筛选、分页与排序扩展；缺省请求保持页眉口径。
+// 消息中心依赖 notifications 端点的筛选、分页与排序扩展；缺省请求保持页眉口径。
 func TestAuditNotificationCenterPaginationAndStatusFilter(t *testing.T) {
 	t.Parallel()
 	db := openMigratedDB(t, filepath.Join(t.TempDir(), "notification-center.db"))

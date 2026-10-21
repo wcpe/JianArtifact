@@ -1,4 +1,4 @@
-// 用户组管理（FR-36）：组的增删改查 + 组内成员管理。
+// 用户组管理：组的增删改查 + 组内成员管理。
 //
 // 组是授权主体之一：仓库访问控制可以把权限授给「用户」或「用户组」，组内成员自动获得
 // 该组的权限。页面本身不展示权限，只维护「组 × 用户」的成员关系。
@@ -40,7 +40,7 @@ import { useAsync, invalidateAsyncCache } from "../hooks/useAsync";
 import { confirmDanger, notifyError, notifySuccess } from "../lib/feedback";
 import { formatStamp } from "../lib/format";
 
-/** FR-66 内置匿名主体用户名（与 UsersPage 口径一致）。 */
+/** 内置匿名主体用户名（与 UsersPage 口径一致）。 */
 const ANONYMOUS_USERNAME = "anonymous";
 
 /** 一行组数据：契约的 UserGroup 不带成员数，故与成员列表并在一起持有。 */
