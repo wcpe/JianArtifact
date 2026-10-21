@@ -25,7 +25,7 @@ func indexDocCount(t *testing.T, repo *SearchIndexStateRepo) int64 {
 	return n
 }
 
-// seedLegacyAssets 绕过仓储直接写 asset，模拟 0047 之前写入、尚未回填的历史行。
+// seedLegacyAssets 绕过仓储直接写 asset，模拟 0049 之前写入、尚未回填的历史行。
 func seedLegacyAssets(t *testing.T, assets *AssetRepo, repoID int64, paths []string) {
 	t.Helper()
 	for _, path := range paths {

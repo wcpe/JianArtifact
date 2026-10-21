@@ -1,6 +1,7 @@
 package persistence
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -441,4 +442,57 @@ func explainPlanLines(t *testing.T, db *DB, query string, args ...any) []string 
 		out = append(out, row.Detail)
 	}
 	return out
+}
+
+// TestMigrationVersionsAreUniqueAndContiguous 守护迁移编号空间的完整性。
+//
+// 为什么需要它：迁移编号是全局唯一的顺序空间，多人并行开发时很容易两人各写一个
+// 「下一个号」——本方单独跑测试永远发现不了，只有两条分支合到一起才会在启动时
+// 炸出 `UNIQUE constraint failed: schema_migrations.version`。本次 rebase 到主线
+// 时就真实踩到过（主线 FR-40 占了 0047/0048，本分支的搜索迁移也写成 0047/0048）。
+// 编号冲突的代价很高：迁移器只按 version 判重、不校验文件名，冲突一旦发布出去，
+// 已升级的库会记着错误版本号，后续修复需要人工改 schema_migrations。
+//
+// 因此在 CI 阶段就把两种退化钉死：
+//   - 重复版本号（两个文件同号）；
+//   - 跳号（中间缺一个数字）——跳号本身不致命，但它往往是「有人改了号却漏改另一个」
+//     的征兆，且会让「下一个可用号」变得难以判断，故一并禁止。
+func TestMigrationVersionsAreUniqueAndContiguous(t *testing.T) {
+	files, err := migrationFiles()
+	if err != nil {
+		t.Fatalf("读取迁移列表：%v", err)
+	}
+	if len(files) == 0 {
+		t.Fatal("迁移列表不能为空")
+	}
+
+	seen := make(map[string]string, len(files))
+	for _, name := range files {
+		version := migrationVersion(name)
+		// 文件名必须是「4 位数字_小写短语.sql」：位数不足会让字典序失真
+		// （例如 "50_x.sql" 会排在 "0049_y.sql" 之前），进而打乱迁移顺序。
+		if len(version) != 4 {
+			t.Errorf("迁移 %s 的版本号不是 4 位：%q", name, version)
+			continue
+		}
+		for _, r := range version {
+			if r < '0' || r > '9' {
+				t.Errorf("迁移 %s 的版本号含非数字字符：%q", name, version)
+				break
+			}
+		}
+		if prev, dup := seen[version]; dup {
+			t.Errorf("迁移版本号重复：%s 与 %s 都是 %s", prev, name, version)
+			continue
+		}
+		seen[version] = name
+	}
+
+	// 连续性：从 0001 起逐个递增，不允许缺号。
+	for i := 1; i <= len(seen); i++ {
+		want := fmt.Sprintf("%04d", i)
+		if _, ok := seen[want]; !ok {
+			t.Errorf("迁移编号不连续：缺少 %s", want)
+		}
+	}
 }

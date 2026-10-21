@@ -7,7 +7,7 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-// 本文件维护 asset.path 的 FTS5 派生索引（asset_path_fts，见迁移 0047 与 ADR-0030）。
+// 本文件维护 asset.path 的 FTS5 派生索引（asset_path_fts，见迁移 0049 与 ADR-0030）。
 //
 // 为什么要单独一个入口：asset_path_fts 是 **external content** 表（content='asset'、
 // content_rowid='id'），rowid 严格等于 asset.id。这样一张表的维护规则与普通表不同，且有几条

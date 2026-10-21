@@ -599,6 +599,19 @@ curl -fsSL -o /tmp/jianartifact "<Release 附件 URL>" && sha256sum /tmp/jianart
 - 降级不受阻：`DROP INDEX idx_asset_repo_size;` + `CREATE INDEX idx_asset_repository ON asset (repository_id);` 即可回到升级前的空间占用与查询计划；旧版本代码不认识新索引也不影响启动与读写（索引由 SQLite 自主维护，与代码无关）；
 - 升级后仪表盘容量卡片与每次上传的配额检查会立刻受益；若观察到容量数字与升级前不一致，那是聚合重新计算的正常结果，索引只改变读法、不改变 `COUNT` / `SUM` 语义。
 
+> **开发/预发环境注意：迁移编号曾被顺延过。** 本批的搜索索引与覆盖索引迁移在开发期间最初写作 `0047` / `0048`，与后来合入主线的 FR-40 备份迁移撞号，已顺延为 **`0049`**（`0049_asset_path_fts.sql`）与 **`0050`**（`0050_asset_size_index.sql`）。
+>
+> 迁移器只按 `schema_migrations.version` 判重、不校验文件名，因此**若某个库曾用顺延前的分支起过服务**，它的 `schema_migrations` 会记着 `0047`/`0048` 指向搜索迁移。升级到本版本后会出现两类故障：主线的备份迁移被误判「已应用」而跳过（`backup_package.origin` 缺失，运行时失败），以及 `0049`/`0050` 重新执行时报 `table asset_path_fts already exists` / `index idx_asset_repo_size already exists`（启动失败）。
+>
+> 受影响时按以下方式确认与处理（仅开发/预发可能需要）：
+>
+> ```sql
+> -- 若该库的 0047 / 0048 记录对应的是搜索迁移（而非备份迁移），需先删除这两行
+> SELECT version, applied_at FROM schema_migrations WHERE version IN ('0047','0048');
+> ```
+>
+> 确认属于撞号情形后，删除这两行记录并删除已建的 `asset_path_fts`（含其影子表）与 `idx_asset_repo_size`，再重新启动让迁移按新编号执行；**生产环境不存在该问题**（从未发布过顺延前的编号），直接从备份恢复也可以。
+
 ### 5.2 备份
 
 **首选做法：生成节点备份包**（FR-132 起）。它把"数据边界"打成一个可校验、可离线搬运的自包含归档：

@@ -161,7 +161,7 @@ func TestSearchIndexLegacyUnindexedRowIsMaintainable(t *testing.T) {
 	assets, _, repoID := searchIndexFixture(t)
 	db := assets.DB()
 
-	// 绕过仓储直接写 asset，模拟 0047 之前写入、尚未回填的历史行。
+	// 绕过仓储直接写 asset，模拟 0049 之前写入、尚未回填的历史行。
 	if _, err := db.Exec(`INSERT INTO asset (repository_id, path, blob_hash, size, content_type, sha1, md5)
 		VALUES (?, ?, ?, ?, ?, '', '')`, repoID, "legacy/x-1.0.0.jar", "h-legacy", int64(3), "text/plain"); err != nil {
 		t.Fatalf("写入历史行：%v", err)

@@ -373,6 +373,8 @@ func (r *OperationsObservabilityRepo) storeCapacity(value CapacitySnapshot) {
 // （约 282 MB）实测中位数约 8.5 s、最小 6.4 s，而 EXPLAIN QUERY PLAN 显示
 // "SCAN repository" + "SEARCH asset USING INDEX idx_asset_repository" +
 // "USE TEMP B-TREE FOR count(DISTINCT)"。
+// 注：该索引已在迁移 0050 中被复合覆盖索引 idx_asset_repo_size 取代并删除，
+// 上面的计划文本是当时的历史记录，不代表当前 schema。
 //
 // 拆成两条单表语句后口径不变：
 //   - repository_count：LEFT JOIN 保留了没有任何资产的仓库，COUNT(DISTINCT repository.id)

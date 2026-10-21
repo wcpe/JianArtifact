@@ -19,7 +19,7 @@ import (
 // content 表在有孤儿索引行时读列值会报 267（见 repository/search_index_repo.go 文件头第 4 条）。
 
 // indexServiceFixture 打开临时库、建仓库并绕开索引直接写 N 条历史资产
-// （模拟 0047 之前写入、尚未回填的行），返回服务、库与仓库 id。
+// （模拟 0049 之前写入、尚未回填的行），返回服务、库与仓库 id。
 func indexServiceFixture(t *testing.T, rows int) (*domain.SearchIndexService, *persistence.DB, int64) {
 	t.Helper()
 	db := newTestDB(t)

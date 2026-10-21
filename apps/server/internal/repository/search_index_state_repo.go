@@ -52,7 +52,7 @@ func NewSearchIndexStateRepo(db *persistence.DB) *SearchIndexStateRepo {
 	return &SearchIndexStateRepo{db: db}
 }
 
-// Load 读回填状态。迁移 0047 已写入初始行，因此不存在「无记录」分支。
+// Load 读回填状态。迁移 0049 已写入初始行，因此不存在「无记录」分支。
 func (r *SearchIndexStateRepo) Load() (SearchIndexState, error) {
 	var st SearchIndexState
 	err := r.db.Get(&st,

@@ -10,7 +10,7 @@
 
 `apps/server/internal/domain/repository_service.go` 的 `SearchAssets`（L1021 起）另有可搜范围的计算成本：非管理员先 `ListPublic()`，再 `List(1000, 0)` 取全量仓库并逐仓库判 `HasPermission`（L1054-1071）；带 `repoScope` 时再 `List(1000, 0)` 一次（L1081）。`apps/server/internal/api/repository_handlers.go` 的 `SearchAssets`（L849）把结果一次性 `c.JSON` 返回，没有超时保护。
 
-`asset` 表（`apps/server/internal/persistence/migrations/0002_asset.sql` L13-23；0005 追加 `sha1`、`md5`）以 `path` 记录制品路径，**没有结构化的版本号列**——版本只是路径文本的一段。因此"按版本号 `1.17.12` 搜索"在语义上等同于任意子串匹配，不存在"按版本列等值或前缀检索"的捷径。现有索引（`idx_asset_repository`、`idx_asset_repo_path`、`idx_asset_path`、`idx_asset_repo_updated`，见 0002 L24、0006 L8-9、0045 L42）全部是 B-Tree，只能服务等值与前缀条件。
+`asset` 表（`apps/server/internal/persistence/migrations/0002_asset.sql` L13-23；0005 追加 `sha1`、`md5`）以 `path` 记录制品路径，**没有结构化的版本号列**——版本只是路径文本的一段。因此"按版本号 `1.17.12` 搜索"在语义上等同于任意子串匹配，不存在"按版本列等值或前缀检索"的捷径。当时存在的索引（`idx_asset_repository`、`idx_asset_repo_path`、`idx_asset_path`、`idx_asset_repo_updated`，见 0002 L24、0006 L8-9、0045 L42）全部是 B-Tree，只能服务等值与前缀条件。（注：`idx_asset_repository` 后来被迁移 `0050` 用复合覆盖索引 `idx_asset_repo_size (repository_id, size)` 取代并删除——那是容量聚合与配额查询的优化，与本文的 FTS 决策无关，此处保留原貌以如实记录当时的判断依据。）
 
 FR-149 的性能目标是百万级 `asset` 下常见关键词与版本号搜索 P95 < 500ms。
 

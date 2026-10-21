@@ -5,14 +5,14 @@ import (
 	"testing"
 )
 
-// TestMigration0047BuildsSearchIndex 校验 0047 的两项结构要求：
+// TestMigration0049BuildsSearchIndex 校验 0049 的两项结构要求：
 //   - asset_path_fts 是 fts5 虚拟表，且是 external content 形态（rowid 取自 asset.id），
 //     不能退化成「另存一份路径」的普通 FTS 表——那会重复存百万条路径并让删除后的索引行不会自动消失；
 //   - search_index_state 只有一行初始状态（水位 0、未完成），且迁移**不做任何回填**。
 //
 // 迁移不做回填是刻意的（见迁移文件头与 ADR-0030）：把百万级回填塞进迁移会变成一次长时间
 // 持写锁的事务，且失败无法断点恢复。这里用「迁移后历史行仍在索引之外」来钉住该约定。
-func TestMigration0047BuildsSearchIndex(t *testing.T) {
+func TestMigration0049BuildsSearchIndex(t *testing.T) {
 	db := openTestDB(t)
 	// 先建一个仓库与两条历史资产（模拟升级前的既有数据），再跑迁移。
 	if err := db.ensureMigrationTable(); err != nil {
@@ -24,7 +24,7 @@ func TestMigration0047BuildsSearchIndex(t *testing.T) {
 	}
 	for _, name := range files {
 		version := migrationVersion(name)
-		if version == "0047" {
+		if version == "0049" {
 			break
 		}
 		if err := db.applyMigration(name, version); err != nil {
@@ -41,7 +41,7 @@ func TestMigration0047BuildsSearchIndex(t *testing.T) {
 		t.Fatalf("写历史资产：%v", err)
 	}
 
-	// 应用 0047 及其后全部迁移。
+	// 应用 0049 及其后全部迁移。
 	if err := db.Migrate(); err != nil {
 		t.Fatalf("升级迁移：%v", err)
 	}
