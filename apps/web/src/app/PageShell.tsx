@@ -18,7 +18,13 @@ import type { CSSProperties, ReactNode } from "react";
 
 import { density } from "../theme/density";
 
-/** 内容区最大宽度：与 density 同源，各页不得再自造 maw。 */
+/**
+ * 内容区最大宽度常量（保留导出以兼容既有引用）。
+ *
+ * 注意：AppLayout 的内容容器现已改为**铺满可用宽度、不设上限、不居中**，
+ * 因此本常量**不再**代表页面的实际宽度口径。各页仍不应自造页面级 maw；
+ * 若将来需要重新引入页面宽度上限，应先在 AppLayout 收口，而不是逐页设置。
+ */
 export const CONTENT_MAX_WIDTH = density.contentMaxWidth;
 
 /** 固定视口高度表达式：与 AppShell.Main 的内边距同源，页面无需各自重算。 */

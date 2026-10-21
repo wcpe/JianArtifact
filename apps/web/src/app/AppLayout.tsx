@@ -796,13 +796,12 @@ export function AppLayout() {
       </AppShell.Navbar>
 
       <AppShell.Main>
-        {/* 内容容器：限定最大宽度并居中，超宽屏下不再把表格与卡片无节制拉长。
-            此前该容器只有注释声称「固定 max-width」，实际仅 width:100%，
-            导致 density.contentMaxWidth 长期空转、各页各自写 maw。 */}
-        <Box
-          data-testid="content-shell"
-          style={{ width: "100%", maxWidth: density.contentMaxWidth, marginInline: "auto" }}
-        >
+        {/* 内容容器：铺满可用宽度并紧贴侧栏左缘，不做居中、不设上限。
+            此前这里是 `maxWidth: density.contentMaxWidth` + `marginInline: "auto"`，
+            在宽屏下把内容收成一条居中窄带、两侧留大片空白，表格与日志类页面尤其浪费空间。
+            现改为纯 `width: 100%`：宽度完全交给 AppShell.Main（侧栏之外的剩余宽），
+            因而天然左对齐；各页面内的局部宽度约束（如搜索框、详情卡）仍然保留。 */}
+        <Box data-testid="content-shell" style={{ width: "100%" }}>
           {/* FR-70：懒加载页面在布局内挂 Suspense，路由切换保持侧栏/页眉不闪。 */}
           {/* 错误边界按路径强制重建：否则一次懒加载失败会把错误态带到后续所有页面。
               没有它时，chunk 加载失败（发版后旧 chunk 404、网络抖动、dev 依赖重构建 504）

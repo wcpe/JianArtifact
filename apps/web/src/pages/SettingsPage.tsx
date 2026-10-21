@@ -155,7 +155,7 @@ function ServiceSettingsForm({
   };
 
   return (
-    // 不再自造 maw：宽度口径统一由 AppLayout 内容容器（density.contentMaxWidth）承担。
+    // 不再自造 maw：宽度口径统一由 AppLayout 内容容器承担（现为铺满可用宽度、不居中）。
     <Stack gap="md" style={{ flex: 1, minHeight: 0, overflowY: "auto", paddingRight: 4 }}>
       {/* 顶部概览带：把「当前生效值」前置，改表单时能一眼对照已保存的口径。
           数据口径来自 normalizeForm(initial)（已保存/生效值），不随未保存的改动跳动。 */}
