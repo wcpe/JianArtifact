@@ -46,7 +46,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/go/bin
-          key: go-tools-${{ runner.os }}-go1.26.9-golangci-lint-v1.64.8-govulncheck-v1.8.0
+          key: go-tools-${{ runner.os }}-go1.26.10-golangci-lint-v1.64.8-govulncheck-v1.8.0
 
       - name: 安装 Go 质量工具
         run: |
