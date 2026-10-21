@@ -54,8 +54,22 @@ const (
 	EnvStorageMetadataRetention = "JIAN_STORAGE_METADATA_RETENTION_DAYS" // 终态操作与隔离元数据保留天数；0 禁用
 	EnvStorageTempMaxAge        = "JIAN_STORAGE_TEMP_MAX_AGE_HOURS"      // 过期上传临时文件阈值，单位小时；0 禁用
 
+	// FR-40 周期化自动备份与保留策略（单独成组，理由同上）。
+	EnvBackupAutoInterval  = "JIAN_BACKUP_AUTO_INTERVAL"  // 自动备份作业间隔，单位秒；0 禁用
+	EnvBackupKeepLast      = "JIAN_BACKUP_KEEP_LAST"      // 保留最近 N 份自动备份；0 = 不按份数限制
+	EnvBackupRetentionDays = "JIAN_BACKUP_RETENTION_DAYS" // 自动备份保留天数；0 = 不限天数
+
+	// FR-40 追加八 备份孤儿回收（单独成组，理由同上）。
+	EnvBackupOrphanCleanupInterval = "JIAN_BACKUP_ORPHAN_CLEANUP_INTERVAL" // 孤儿备份包回收间隔，单位秒；0 禁用
+	EnvBackupOrphanGraceHours      = "JIAN_BACKUP_ORPHAN_GRACE_HOURS"      // 回收宽限期，单位小时；0 取默认 1
+
 	// FR-43 上游断路器补强：auto-block 退避起始时长，单位秒。
 	EnvAutoBlockBaseSeconds = "JIAN_AUTO_BLOCK_BASE_SECONDS" // proxy 上游首次失败的阻止窗口时长；非正数回落默认
+
+	// FR-40 追加七：一键重启的能力配置（单独成组，理由同上）。
+	// 单元名只从环境变量读取，**绝不**接受请求体输入——见 domain/restart_service.go 的注入防护说明。
+	EnvRestartUnit  = "JIAN_RESTART_UNIT"  // 重启目标单元名；缺省 jianartifact
+	EnvRestartScope = "JIAN_RESTART_SCOPE" // 作用域 system / systemd-user / docker；非法值回落 system
 
 	defaultDataDir         = "./data"
 	defaultHTTPAddr        = ":8080"
@@ -67,6 +81,27 @@ const (
 	defaultStorageCleanupInterval   = 24 * time.Hour
 	defaultStorageMetadataRetention = 7 * 24 * time.Hour
 	defaultStorageTempMaxAge        = 24 * time.Hour
+	// FR-40 自动备份与保留策略的默认值。
+	//
+	// 间隔默认 0 = **关闭**。这一条是**有意**的，不是遗漏：
+	// 备份是**全量**包（每份 ≈ 数据目录大小），因此默认开启会在用户毫无预期的情况下
+	// 持续消耗磁盘。实测存在"20GB 数据 / 40GB 磁盘"这类配置——默认开几天就能把盘写满，
+	// 而盘满会连带把服务写挂，代价远高于"少一份备份"。
+	// 反面（默认关闭、出事时没备份）可以由运维事后补配置修复；盘被写满则是运行故障。
+	// 两害相权，默认关闭。
+	//
+	// 保留份数与天数同样只是**上限**，不构成"占用量可控"的保证：
+	// 7 份 × 20GB = 140GB，仍可能远超可用磁盘。因此开启前必须自己算一遍
+	// 份数 × 数据量 ≤ 可用空间，见 docs/OPERATIONS.md「备份占用的容量规划」。
+	defaultBackupAutoInterval  = 0
+	defaultBackupKeepLast      = 7
+	defaultBackupRetentionDays = 30
+	// FR-40 追加八 孤儿备份包回收的默认值：每日一轮、宽限期 1 小时。
+	// 间隔默认 24h 而非 0（与自动备份相反）：孤儿文件只会占盘不会自行消失，
+	// 回收是纯粹的兜底动作，开启它不存在"悄悄占磁盘"的风险。
+	// 宽限期保证"拷入 → 界面导入"的操作窗口（见 domain/backup_orphan_cleanup.go）。
+	defaultBackupOrphanCleanupInterval = 24 * time.Hour
+	defaultBackupOrphanGrace           = time.Hour
 	// defaultAutoBlockBase 是 auto-block 退避起始时长（FR-43）。
 	// 与 domain 侧兜底常量 autoBlockInitial（proxy_health.go）保持同值：
 	// 装配层始终注入本值，domain 常量只在未装配/测试构造时兜底。
@@ -76,6 +111,10 @@ const (
 	// defaultLDAPUserFilter 与 defaultLDAPEmailAttr 是 LDAP 检索的缺省口径（OpenLDAP 风格 uid）。
 	defaultLDAPUserFilter = "(uid={username})"
 	defaultLDAPEmailAttr  = "mail"
+	// FR-40 追加七：一键重启的默认单元名与默认作用域。
+	// 单元名默认 jianartifact（与部署脚本里的 systemd 单元同名），作用域默认 system（systemctl）。
+	defaultRestartUnit  = "jianartifact"
+	defaultRestartScope = "system"
 
 	dbFileName                       = "jianartifact.db"
 	blobDirName                      = "blobs"
@@ -106,11 +145,29 @@ type Config struct {
 	StorageMetadataRetention time.Duration
 	// StorageTempMaxAge 是过期上传临时文件（<BlobDir>/tmp/oci-upload）的最长滞留时长（FR-41）；0 禁用。
 	StorageTempMaxAge time.Duration
+	// BackupAutoInterval 是周期化自动备份作业的间隔（FR-40）；0 禁用（作业不注册）。
+	// 调度间隔在启动时固定、不支持运行时热改——改它需要重启进程（见 docs/OPERATIONS.md）。
+	BackupAutoInterval time.Duration
+	// BackupKeepLast 是自动备份按份数保留的上限（FR-40）；0 = 不按份数限制。
+	BackupKeepLast int
+	// BackupRetentionDays 是自动备份按时间的保留上限（FR-40）；0 = 不限天数。
+	BackupRetentionDays int
+	// BackupOrphanCleanupInterval 是孤儿备份包回收作业的间隔（FR-40 追加八）；0 禁用。
+	BackupOrphanCleanupInterval time.Duration
+	// BackupOrphanGrace 是孤儿回收的宽限期：mtime 晚于此窗口的文件一律保留，
+	// 给"拷入 → 界面导入"留出操作窗口（FR-40 追加八）。
+	BackupOrphanGrace time.Duration
 	TLSAddr           string     // 服务内置 TLS 监听地址（FR-131）；空 = 不启用
 	TLSCert           string     // TLS PEM 证书文件路径（FR-131）
 	TLSKey            string     // TLS PEM 私钥文件路径（FR-131）
 	OIDC              OIDCConfig // FR-34：OIDC 身份源接入配置（Issuer 空 = 不启用）
 	LDAP              LDAPConfig // FR-35：LDAP 身份源接入配置（URL 空 = 不启用）
+	// RestartUnit 是一键重启的目标单元名（FR-40 追加七）；仅来自环境变量，
+	// 绝不从请求体读取——这是防命令注入的第一道边界（见 domain/restart_service.go）。
+	RestartUnit string
+	// RestartScope 是一键重启的作用域（FR-40 追加七）：system / systemd-user / docker；
+	// 非法值已在解析期回落 system，装配层可放心使用。
+	RestartScope string
 }
 
 // LDAPConfig 是 LDAP 目录接入配置（FR-35，见 ADR-0029）；
@@ -146,12 +203,43 @@ func (c OIDCConfig) Enabled() bool { return c.Issuer != "" }
 // Load 从环境变量解析配置并确保 data / blob 目录存在。
 // JWT 密钥优先取 JIAN_JWT_SECRET；缺省时从 data 目录的 jwt.secret 读取，
 // 仍无则生成随机密钥并持久化（0600），同时向 stderr 告警一次。
+//
+// 数据目录的解析交给 ResolveDataDir（见 datadir.go）：显式设置优先，未设置时尝试
+// 自动发现正在运行的实例，最后才回落默认值——并且**每次都会说明依据**。
 func Load() (*Config, error) {
-	dataDir := envOr(EnvDataDir, defaultDataDir)
-	absData, err := filepath.Abs(dataDir)
+	resolved, err := ResolveDataDir(os.Getenv(EnvDataDir))
 	if err != nil {
-		return nil, fmt.Errorf("解析 data 目录：%w", err)
+		return nil, err
 	}
+	// 歧义（发现多个候选）时不能猜：猜错就是操作到另一个库，代价远高于让用户显式指定一次。
+	if len(resolved.Ambiguous) > 0 {
+		return nil, fmt.Errorf(
+			"未设置 %s，且发现多个不同的数据目录，无法确定该用哪一个：\n    %s\n"+
+				"    请显式设置 %s 指定要操作的实例",
+			EnvDataDir, strings.Join(resolved.Ambiguous, "\n    "), EnvDataDir)
+	}
+	if resolved.Warning != "" {
+		// 走 stderr：不能污染 --json 的 stdout（命令的输出要能被管道消费）。
+		fmt.Fprintln(os.Stderr, resolved.Warning)
+	}
+	// 自动发现到实例时，**整份采纳**该实例的 env 文件（只补当前进程未设置的键）。
+	//
+	// 只取目录是不够的：那样该实例的其余配置仍缺失，CLI 会以为 JWT 密钥"未设置"，
+	// 于是在服务的数据目录里现场生成一份，并对 `backup list` 这种只读命令打印误导性警告。
+	// 采纳后 CLI 的行为与服务一致，且不产生任何多余写入。显式设置的环境变量优先级更高——
+	// 它们是调用方刻意的覆盖意图。
+	if resolved.EnvFileContent != "" {
+		applyEnvFileDefaults(resolved.EnvFileContent)
+	}
+	// 采纳之后重新解析目录，因为 env 文件本身可能就带 JIAN_DATA_DIR（此时它同样生效）。
+	if v := os.Getenv(EnvDataDir); strings.TrimSpace(v) != "" {
+		abs, err := absDataDir(v)
+		if err != nil {
+			return nil, err
+		}
+		resolved.Dir = abs
+	}
+	absData := resolved.Dir
 	blobDir := filepath.Join(absData, blobDirName)
 	for _, dir := range []string{absData, blobDir, filepath.Join(blobDir, "tmp")} {
 		if err := os.MkdirAll(dir, 0o750); err != nil {
@@ -182,27 +270,34 @@ func Load() (*Config, error) {
 	}
 
 	return &Config{
-		DataDir:                  absData,
-		HTTPAddr:                 envOr(EnvHTTPAddr, defaultHTTPAddr),
-		DBPath:                   filepath.Join(absData, dbFileName),
-		BlobDir:                  blobDir,
-		JWTSecret:                secret,
-		MigrationCredentialKey:   migrationCredentialKey,
-		UpstreamTimeout:          upstreamTimeout(),
-		AutoBlockBaseSeconds:     autoBlockBase(),
-		SyncPeerURL:              os.Getenv(EnvSyncPeerURL),
-		SyncInterval:             syncInterval(),
-		PublicURL:                os.Getenv(EnvPublicURL),
-		EnabledFormats:           enabledFormats,
-		BlobGCInterval:           blobGCInterval(),
-		StorageCleanupInterval:   storageCleanupInterval(),
-		StorageMetadataRetention: storageMetadataRetention(),
-		StorageTempMaxAge:        storageTempMaxAge(),
-		TLSAddr:                  envOr(EnvTLSAddr, ""),
-		TLSCert:                  os.Getenv(EnvTLSCert),
-		TLSKey:                   os.Getenv(EnvTLSKey),
-		OIDC:                     oidc,
-		LDAP:                     ldap,
+		DataDir:                     absData,
+		HTTPAddr:                    envOr(EnvHTTPAddr, defaultHTTPAddr),
+		DBPath:                      filepath.Join(absData, dbFileName),
+		BlobDir:                     blobDir,
+		JWTSecret:                   secret,
+		MigrationCredentialKey:      migrationCredentialKey,
+		UpstreamTimeout:             upstreamTimeout(),
+		AutoBlockBaseSeconds:        autoBlockBase(),
+		SyncPeerURL:                 os.Getenv(EnvSyncPeerURL),
+		SyncInterval:                syncInterval(),
+		PublicURL:                   os.Getenv(EnvPublicURL),
+		EnabledFormats:              enabledFormats,
+		BlobGCInterval:              blobGCInterval(),
+		StorageCleanupInterval:      storageCleanupInterval(),
+		StorageMetadataRetention:    storageMetadataRetention(),
+		StorageTempMaxAge:           storageTempMaxAge(),
+		BackupAutoInterval:          backupAutoInterval(),
+		BackupKeepLast:              backupKeepLast(),
+		BackupRetentionDays:         backupRetentionDays(),
+		BackupOrphanCleanupInterval: backupOrphanCleanupInterval(),
+		BackupOrphanGrace:           backupOrphanGrace(),
+		TLSAddr:                     envOr(EnvTLSAddr, ""),
+		TLSCert:                     os.Getenv(EnvTLSCert),
+		TLSKey:                      os.Getenv(EnvTLSKey),
+		OIDC:                        oidc,
+		LDAP:                        ldap,
+		RestartUnit:                 envOr(EnvRestartUnit, defaultRestartUnit),
+		RestartScope:                restartScope(),
 	}, nil
 }
 
@@ -294,6 +389,67 @@ func storageTempMaxAge() time.Duration {
 	return envDurationOr(EnvStorageTempMaxAge, defaultStorageTempMaxAge, time.Hour)
 }
 
+// backupAutoInterval 解析 JIAN_BACKUP_AUTO_INTERVAL（秒，FR-40）：周期化自动备份作业的间隔。
+// 缺省、非法与负数取默认值 0（= **关闭**），显式 0 同样是关闭——本项默认关闭，
+// 因为自动备份会在无人确认的情况下持续占用磁盘，必须是运维显式开启的能力。
+// 与 storageCleanupInterval 的「默认开、0 关」不同，但「0 = 不注册作业」的机制完全一致。
+func backupAutoInterval() time.Duration {
+	return envDurationOr(EnvBackupAutoInterval, defaultBackupAutoInterval, time.Second)
+}
+
+// backupKeepLast 解析 JIAN_BACKUP_KEEP_LAST（份，FR-40）：保留最近 N 份**自动**备份。
+// 缺省或非法值取 7；显式 0 = **不按份数限制**（只受天数约束），而不是「一份都不留」——
+// 把 0 解释成"全删"会让一个笔误直接清空备份目录，而"不限制"永远只导致多留。
+// 负数与非法值回落默认 7（不采用"负数为不限制"的隐式写法，避免与 0 的语义重叠）。
+func backupKeepLast() int {
+	return envNonNegativeIntOr(EnvBackupKeepLast, defaultBackupKeepLast)
+}
+
+// backupRetentionDays 解析 JIAN_BACKUP_RETENTION_DAYS（天，FR-40）：自动备份的保留天数。
+// 缺省或非法值取 30；显式 0 = 不限天数（只受份数约束）。0 语义与 backupKeepLast 同构。
+func backupRetentionDays() int {
+	return envNonNegativeIntOr(EnvBackupRetentionDays, defaultBackupRetentionDays)
+}
+
+// backupOrphanCleanupInterval 解析 JIAN_BACKUP_ORPHAN_CLEANUP_INTERVAL（秒，FR-40 追加八）：
+// 孤儿备份包回收作业的间隔。缺省或非法值取 24 小时，显式 0 禁用（不注册作业）。
+//
+// 默认开：孤儿文件只占磁盘、不会自行消失，回收是纯兜底动作，不存在"意外删数据"的
+// 默认风险——真正的护栏是宽限期与身份校验（见 domain/backup_orphan_cleanup.go）。
+func backupOrphanCleanupInterval() time.Duration {
+	return envDurationOr(EnvBackupOrphanCleanupInterval, defaultBackupOrphanCleanupInterval, time.Second)
+}
+
+// backupOrphanGrace 解析 JIAN_BACKUP_ORPHAN_GRACE_HOURS（小时，FR-40 追加八）：
+// 孤儿回收的宽限期。缺省或非法值取 1 小时；显式 0 同样回落 1 小时——
+// **不允许零宽限**：那会让"刚拷进来、还没来得及在界面导入"的包在下一轮就被删掉。
+func backupOrphanGrace() time.Duration {
+	v := os.Getenv(EnvBackupOrphanGraceHours)
+	if v == "" {
+		return defaultBackupOrphanGrace
+	}
+	hours, err := strconv.Atoi(v)
+	if err != nil || hours <= 0 {
+		return defaultBackupOrphanGrace
+	}
+	return time.Duration(hours) * time.Hour
+}
+
+// envNonNegativeIntOr 解析环境变量为整数：缺省、非法与负数取 fallback，显式 0 原样返回。
+// 0 的具体含义由调用方定义并注释（保留策略里是"不限制"），本函数只负责区分
+// 「显式 0」与「未配置 / 配错」这两种在解析层就该分开的情况。
+func envNonNegativeIntOr(key string, fallback int) int {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		return fallback
+	}
+	return n
+}
+
 // autoBlockBase 解析 JIAN_AUTO_BLOCK_BASE_SECONDS（秒，FR-43）：proxy 上游首次失败的
 // 阻止窗口时长，之后每档翻倍。缺省、非数字、负数与显式 0 都回落默认 40s——
 // 退避起始为 0 等于「失败不阻止」，不是有意义的配置，故本项**无禁用语义**
@@ -355,6 +511,25 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// restartScope 解析 JIAN_RESTART_SCOPE（FR-40 追加七）。
+//
+// 非法值**回落默认而不是报错**：作用域是"怎么重启"的实现细节，写错了应当退化成
+// 最保守的 system 再交给同步预检（Probe）判定可用性——由预检返回 supported:false +
+// reason，运维在界面上看到的是"这台机器没法自动重启，请手动执行 xxx"，
+// 比服务因一个拼错的枚举值拒绝启动要好得多。
+//
+// 三个取值与 domain.RestartScope*（restart_service.go）**必须同值**：这里是字面量而非
+// 引用，因为 config 是横切层、不得反向依赖业务层（见 internal/doc.go 的分层约定）。
+// 与 defaultAutoBlockBase 镜像 domain 常量的处理同一口径。
+func restartScope() string {
+	switch v := strings.TrimSpace(os.Getenv(EnvRestartScope)); v {
+	case "system", "systemd-user", "docker":
+		return v
+	default:
+		return defaultRestartScope
+	}
 }
 
 // upstreamTimeout 解析 JIAN_UPSTREAM_TIMEOUT（秒）；缺省或非法（<=0）时取默认值。

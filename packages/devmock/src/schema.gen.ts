@@ -1162,6 +1162,64 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/backups/{id}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 查看备份包内容概要（仅管理员）
+         * @description 恢复前先看清包里到底有什么：仓库、账号、制品样例与规模。
+         *
+         *     此前的列表只给出抽象计数（"多少制品、多少仓库"），而恢复是不可撤销的操作，
+         *     用户需要知道具体内容才能判断这个包是不是自己要的那个。
+         *
+         *     本端点**只读**：把包内的数据库快照解到临时目录、以只读方式打开查询，
+         *     查完立即删除；不改动包体、不写入备份目录、不产生任何标记。
+         *     账号概要**不含**口令哈希等敏感字段。
+         */
+        get: operations["previewBackup"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/backups/{id}/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 对比包内容与当前系统（仅管理员）
+         * @description 恢复前回答"会改什么"：包里有、本机没有的会被**新增**；本机有、包里没有的会**消失**；
+         *     两边都有但内容不同的会**被替换**；完全一致的不变。
+         *
+         *     **只对比元数据**（仓库的 name/format/type/visibility、制品的仓库名+路径+blob 哈希+大小、
+         *     账号的 username/role/status），不比对文件内容——逐字节验证 20GB 需要读两份完整数据，
+         *     且已有「深度校验」承担该职责。响应里的 `metadataOnly` 恒为 true。
+         *
+         *     性能约束：
+         *     - `scope=summary`（默认）只做聚合查询，返回四类**计数**，不搬明细；
+         *     - `scope` 为某实体时返回该分类的**分页明细**，单页上限 200 条；
+         *     - 包内快照解出后缓存在临时目录（TTL 10 分钟、同时最多 2 份），
+         *       因此翻页不会重复触发分钟级解包。
+         */
+        get: operations["getBackupDiff"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/backups/{id}/download": {
         parameters: {
             query?: never;
@@ -1211,6 +1269,95 @@ export interface paths {
         put?: never;
         /** 校验备份包完整性（仅管理员） */
         post: operations["verifyBackup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/backups/{id}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 用本机已有的备份包恢复本机数据（仅管理员）
+         * @description 直接以**本机已登记的备份包**为源发起一次恢复，省去"先下载再上传"的往返。
+         *
+         *     为什么需要它：另外三条恢复通道（`POST /backups/import`、`POST /backups/uploads`、
+         *     CLI `backup import`）都要求包来自**外部**（远端 URL / 本机文件 / 本地路径），
+         *     于是页面上明明列着可用的包，却没有任何按钮能用它恢复——用户会直接得出
+         *     "只能备份、不能恢复"的结论。本端点补上这个缺口。
+         *
+         *     语义与其它通道**完全一致**（刻意复用同一条编排，避免出现"第二条恢复路径行为不同"）：
+         *     校验 → 合并 blob → 暂存 db → 写 `restore.pending`，**需重启服务后才替换数据库**。
+         *     因此返回 **202 + 导入记录**（与 URL 导入同形），进度经 `GET /backups/imports/{id}` 查看。
+         *     `origin` 记为 `local`，便于在事件表里区分"从本机包恢复"与其它来源。
+         *
+         *     前置校验（复用既有规则）：包必须存在且状态为 `done`；目标实例非空时需显式
+         *     `overwrite: true`；已存在待生效恢复（`restore.pending`）时返回 409 `restore_pending`
+         *     （不允许叠加第二次恢复）。
+         */
+        post: operations["restoreFromLocalPackage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/backups/{id}/drill": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 发起恢复演练（仅管理员）
+         * @description 对指定备份包发起一次**恢复演练**（FR-40）。演练在**隔离临时目录**内真解包、真校验：
+         *     归档完整性 → 解包 → 解出的 SQLite 跑 `PRAGMA quick_check` 并确认关键表可查询 → blob 规模比对，
+         *     逐项结论与耗时落库为可查报告（见 `GET /api/v1/backups/{id}/verifications`）。
+         *
+         *     与 `POST /api/v1/backups/{id}/verify` 的区别：verify 只校验归档自身且结论一次性返回；
+         *     drill 额外真解包、真查 SQLite，回答的是「这份包**真的能恢复吗**」，并留下历史报告。
+         *
+         *     **演练是只读路径**：绝不调用恢复暂存，不写 `restore-staging/`、不写 `restore.pending`，
+         *     因此不会在下次重启触发真正的数据替换——这是与真导入/恢复的关键区别。
+         *
+         *     深校验要逐 blob 读取，耗时与包体积同阶，故本端点采用 **202 + 轮询**：
+         *     受理后立即返回，调用方轮询报告列表观察新报告出现。**演练未通过不算接口失败**——
+         *     失败同样会落库为一份 `ok: false` 的报告（含失败原因），这是演练最该留下的产物。
+         *     仅「包不存在 / 尚未生成完成 / 级别非法」这类连演练都无法开始的情况返回错误。
+         */
+        post: operations["drillBackup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/backups/{id}/verifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 恢复演练报告列表（仅管理员）
+         * @description 分页返回指定备份包的历史演练报告，**最近优先**。这是演练的查询面：
+         *     `POST /api/v1/backups/{id}/drill` 受理后，从这里轮询新报告。
+         *     包不存在返回 404（对不存在包的演练历史没有意义，不返回空列表）。
+         */
+        get: operations["listBackupVerifications"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1296,6 +1443,109 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/maintenance/restart": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 探测重启能力（只读，仅管理员）
+         * @description **只读探测：绝不排定任何重启。** 返回与 `POST` 相同的 `MaintenanceRestartResult`
+         *     结构（`supported` / `command` / `reason` / `scope`），但**不含 `delayMs`**——
+         *     没有受理就没有延迟可言（该字段本就只在受理成功时给出）。
+         *
+         *     为什么必须有这个只读端点：`command` 是**手工重启的等效命令**，随部署形态而变
+         *     （root / 非 root / systemd-user / docker），只有后端知道本机该敲哪一条。界面若自行
+         *     硬编码一条（例如 `sudo systemctl restart <unit>`），在自带单元这种部署形态下会因为
+         *     `NoNewPrivileges=true` 阻止 sudo 提权而**照做必失败**——同一台机器上于是同时出现
+         *     两条命令，其中一条是陷阱。命令的真源只能是后端。
+         *
+         *     为什么不能让调用方用 `POST` 代替：`POST` 在 `supported: true` 时**会当场排定重启**，
+         *     于是"打开界面即重启"。本端点因此是唯一允许用来渲染"待重启"说明与可复制命令的入口，
+         *     且**不写审计**（只读，与作业清单查询一致）。
+         *
+         *     探测口径与 `POST` 完全一致（同一次 `Probe`），因此两个端点给出的
+         *     `supported` / `command` / `scope` 逐字一致。
+         *
+         *     **自动重启的判据与 `command` 无关**：真正执行的是**进程自替换**
+         *     （`syscall.Exec` 换新映像，不执行任何外部命令、不引入任何新权限），
+         *     判据只有"本平台支持自替换 / `argv[0]` 可解析为可执行文件 / 触发点已接线"三条。
+         *     `command` 只用于手工重启与降级出路。
+         */
+        get: operations["getRestartCapability"];
+        put?: never;
+        /**
+         * 重启服务进程（仅管理员）
+         * @description 让本节点重新起服（用于备份恢复后生效、或按运维要求重载进程）。
+         *
+         *     **执行路径是进程自替换（`syscall.Exec`），不执行任何外部命令。**
+         *     `jianartifact` 本就有权执行自己的二进制（systemd 的 `ExecStart` 就是它），
+         *     自替换只是"同一进程换新映像"，**不引入任何新权限**——因此不需要 sudo / polkit /
+         *     sudoers，也不受 `NoNewPrivileges=true` 影响，在用户级单元 / 系统级单元 / 容器等
+         *     任何部署形态下都可用。代价与差异见 [`docs/OPERATIONS.md`](docs/OPERATIONS.md)：
+         *     systemd 视角上单元从未停止（`ActiveEnterTimestamp` / `NRestart` 不变），
+         *     且存在一个"先优雅关停、再替换映像"的短暂中断窗口。
+         *
+         *     **顺序契约：先回响应，再重启。** 返回 202 时重启**尚未开始**，只是**已受理**；
+         *     真正开始（优雅关停 → 自替换）在 `delayMs` 毫秒之后（约 1.5~2 秒），
+         *     留出响应送达与前端展示的余量。因此调用方看到 202 后应立刻停止轮询本节点——
+         *     连接随后断开是**预期行为**，不是失败。
+         *
+         *     **能力探测与降级：`supported: false` 是正常业务结果，用 HTTP 200 返回，不是错误。**
+         *     服务在受理前会同步预检（本平台是否支持自替换 / `argv[0]` 是否可解析为可执行文件 /
+         *     触发点是否已接线 / 单元名与作用域是否合法），判据不满足时**不会**返回 4xx/5xx，
+         *     而是返回 200 与 `supported: false` + `reason`（原因）+
+         *     `command`（可复制到终端手动执行的手工等效命令）。
+         *     这样前端能渲染降级 UI 并让运维照抄命令，而不是只看到一个没有出路的失败。
+         *     本接口**绝不假装成功**：只要没有真正受理自动重启，就一定如实回 `supported: false`。
+         *
+         *     `command` 在任何情况下都返回（含成功时），便于审计与人工复现。
+         *     注意它**不是本进程将要执行的命令**（本进程走自替换），而是"若你想手工重启，跑这条"，
+         *     因此它随部署形态而变（`systemd-user` → `systemctl --user restart <unit>`；
+         *     `system` 非 root → `sudo -n systemctl restart <unit>`；root → `systemctl restart <unit>`；
+         *     `docker` → `docker restart <unit>`）。
+         *
+         *     只想**查询**本机能不能自动重启、以及手工命令长什么样时，请用同路径的 `GET`
+         *     （`getRestartCapability`）：本接口会真的排定重启，不能拿来探测。
+         */
+        post: operations["restartService"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/backups/restore-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 查询是否存在待重启生效的备份恢复（仅管理员）
+         * @description 回答「本节点是否有一份已暂存、等待重启才生效的恢复」。
+         *
+         *     为什么需要这个端点：导入/上传成功后只写 `restore.pending` 与 `restore-staging/`，
+         *     真正的数据库替换在**下次启动**完成。在那之前，任何后续导入都会以 409
+         *     `restore_pending` 被拒。此前这个状态只体现在导入记录行的 `pending_restart` 徽章上——
+         *     一旦该行被更近的事件挤出视野，用户就再也看不出「为什么导入一直失败」。
+         *
+         *     `pending` 为真时 `packageId` / `origin` / `stagedAt` 给出待生效那一份的来源，
+         *     供界面如实说明是哪一次搬迁在等重启；未暂存时三者省略（不返回零值占位，
+         *     以免前端把 `0001-01-01` 当成真实时间渲染）。
+         */
+        get: operations["getBackupRestoreStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/backups/import": {
         parameters: {
             query?: never;
@@ -1346,6 +1596,62 @@ export interface paths {
         get: operations["getBackupImport"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/backups/unmanaged": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 列出服务器上未被管理的备份包（仅管理员）
+         * @description 扫描 `${JIAN_DATA_DIR}/backups/` 下"磁盘有包体、登记表无记录"的包（例如历史残留、
+         *     手工拷入）。这些包在常规列表里不可见，因此既不能用也不能删。
+         *
+         *     结果按文件名升序。`valid=false` 的条目表示归档无法打开或不是本产品的节点备份包，
+         *     这类包无法导入。`renamed=true` 表示文件名与包内声明的标识不一致，导入时以包内为准
+         *     （会把包体重命名为包内标识）。
+         *
+         *     未管理不等于该删：需要的用 `adoptBackups` 导入；无人认领的由 `backup-orphan-cleanup`
+         *     作业按宽限期回收，两者基于同一份差集。
+         */
+        get: operations["listUnmanagedBackups"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/backups/adopt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 导入未管理的备份包到管理列表（仅管理员）
+         * @description 对选中的未管理包逐个校验包内 manifest 并补建登记行，使其出现在备份列表中，
+         *     之后可正常校验、演练与恢复。
+         *
+         *     支持单选与多选。单个包失败不中断整批，逐项返回结果：
+         *     - `adopted=true` 表示已建立登记；
+         *     - `skipped=true` 表示未执行（已登记、非法包等），`reason` 说明原因；
+         *     - 二者皆 false 表示执行失败，`reason` 给出错误。
+         *
+         *     导入的包以 `origin=manual` 登记，因此不会被保留策略自动淘汰。
+         */
+        post: operations["adoptBackups"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1421,9 +1727,14 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * 拼装并触发本地导入（仅管理员）
-         * @description 校验分片齐全后按序拼成归档并核对摘要，再交给本地导入状态机（queued → staging → pending_restart）。
-         *     需重启服务才生效。目标非空需 overwrite=true。
+         * 拼装归档并存入备份列表（仅管理员）
+         * @description 校验分片齐全后按序拼成归档、核对摘要，再**收进备份列表**（搬运到备份目录 + 建立登记行）。
+         *
+         *     自 FR-40 追加八起不再直接发起恢复：上传只入库，恢复是之后的独立动作，
+         *     用户可以先校验再决定是否恢复。因此本端点不写 restore.pending、不产生导入记录，
+         *     同步返回 `status=done` 的回执，不再需要轮询。
+         *
+         *     包标识取自归档内 manifest；若列表中已存在同名包则明确拒绝（400），不会静默覆盖。
          */
         post: operations["completeBackupUpload"];
         delete?: never;
@@ -2862,11 +3173,18 @@ export interface components {
             assets?: number;
             formatMetadata?: number;
         };
+        /**
+         * @description 备份包来源：manual = 人工触发（含 CLI 与 Web），auto = `backup-auto` 周期作业生成。
+         *     这是**加性字段**：迁移 0047 之前的存量行按列默认值补为 manual，语义正确。
+         * @enum {string}
+         */
+        BackupPackageOrigin: "manual" | "auto";
         /** @description 节点备份包登记（包体为 tar.gz，不含密钥与节点本地配置）。 */
         BackupPackage: {
             packageId: string;
             /** @enum {string} */
             mode: "hot" | "frozen";
+            origin: components["schemas"]["BackupPackageOrigin"];
             /** @description 非空表示这是基于该基线包生成的增量差包。 */
             basePackageId?: string;
             /** @enum {string} */
@@ -2906,6 +3224,99 @@ export interface components {
             blobs?: number;
             assets?: number;
             error?: string;
+        };
+        /**
+         * @description 是否存在待重启生效的备份恢复。`pending=false` 时其余字段一律省略——
+         *     它们只在确有暂存时才可读，返回零值会让前端渲染出 `0001-01-01` 这类假时间。
+         */
+        BackupRestoreStatus: {
+            /** @description 是否已暂存一份恢复、等待重启替换数据库。 */
+            pending: boolean;
+            /** @description 待生效的包标识（源机器上的标识）。 */
+            packageId?: string;
+            /** @description 该次暂存的来源通道（`url` / `upload` / `cli`）。 */
+            origin?: string;
+            /**
+             * Format: date-time
+             * @description 暂存完成时刻。
+             */
+            stagedAt?: string;
+        };
+        /**
+         * @description 演练强度：shallow 只校验结构摘要与解包可用性；deep 额外逐 blob 比对内容摘要
+         *     （全量读取，耗时与包体积同阶）。
+         * @enum {string}
+         */
+        BackupVerificationLevel: "shallow" | "deep";
+        /** @description 演练报告中的单项结论。检查项**失败后仍继续后续项**，故一份报告里可能多项为 false。 */
+        BackupDrillCheck: {
+            /** @description 检查项标识（稳定，供前端按名渲染）：integrity / extract / sqlite / blobs。 */
+            name: string;
+            ok: boolean;
+            /** @description 人读结论：通过时说明规模，失败时说明原因。 */
+            detail: string;
+            /**
+             * Format: int64
+             * @description 该项耗时（毫秒）；缺省表示未单独计时。
+             */
+            durationMs?: number;
+        };
+        /**
+         * @description 一次恢复演练的**已落库报告**（区别于 /verify 的即时校验结论）。演练在隔离临时目录里
+         *     真解包、真校验，报告无论成败都会落库——失败的报告正是演练最该留下的东西。
+         *     报告随包级联删除（包没了，针对它的报告没有意义）。
+         */
+        BackupVerificationReport: {
+            /**
+             * Format: int64
+             * @description 报告编号（包内递增，可用于定位单条报告）。
+             */
+            id: number;
+            packageId: string;
+            level: components["schemas"]["BackupVerificationLevel"];
+            /** @description 总判定：全部检查项通过才为 true。与 checks 的分项结论一起看，不要只看本字段。 */
+            ok: boolean;
+            startedAt: string;
+            finishedAt: string;
+            /**
+             * Format: int64
+             * @description 演练总耗时（毫秒）。
+             */
+            durationMs: number;
+            /** @description 逐项结论；历史数据缺该项时缺省为空数组。 */
+            checks: components["schemas"]["BackupDrillCheck"][];
+            /** @description 失败原因摘要（取首个致命错误，即根因）；成功时缺省。 */
+            errorSummary?: string;
+        };
+        BackupVerificationList: {
+            items: components["schemas"]["BackupVerificationReport"][];
+            /** @description 该包的历史报告总数（用于分页展示）。 */
+            total: number;
+        };
+        /** @description 用本机已有的备份包发起恢复。请求体可整体省略（等同全部取默认）。 */
+        RestoreFromLocalPackageRequest: {
+            /** @description 目标实例非空时需显式置真。内置 anonymous 主体不计入「非空」。 */
+            overwrite?: boolean;
+            /** @description 暂存前逐 blob 比对内容摘要（耗时与包体积同阶）。 */
+            deep?: boolean;
+        };
+        /**
+         * @description 发起一次恢复演练。请求体可整体省略，省略时按 **deep（深校验）** 执行：
+         *     浅校验只验归档结构，对「内容被静默篡改但 tar/gzip 结构完好」的包会判为通过，
+         *     因此默认取更严格的一档。需要快速预检时可显式传 `shallow`。
+         */
+        DrillBackupRequest: {
+            level?: components["schemas"]["BackupVerificationLevel"];
+        };
+        /**
+         * @description 演练**受理**结果（202）。演练在后台推进，本响应不代表演练已完成——它与报告不同：
+         *     报告要等演练跑完才落库，请轮询 GET /api/v1/backups/{id}/verifications 查看新报告。
+         */
+        BackupDrillAccepted: {
+            packageId: string;
+            level: components["schemas"]["BackupVerificationLevel"];
+            /** @description 受理时刻；轮询时以它为准判断哪条报告属于本次演练（报告 finishedAt 不早于它）。 */
+            acceptedAt: string;
         };
         /** @description 节点写入冻结状态。未冻结时 until/frozenAt 缺省（表示当前无生效窗口）。 */
         WriteFreezeState: {
@@ -2972,8 +3383,54 @@ export interface components {
             name: string;
             started: boolean;
         };
-        /** @enum {string} */
-        BackupImportOrigin: "url" | "upload" | "cli";
+        /**
+         * @description 一键重启的受理结果。
+         *
+         *     自动重启的执行路径是**进程自替换**（`syscall.Exec` 换新映像），不执行任何外部命令、
+         *     不引入任何新权限，因此在任何部署形态下都可用。
+         *
+         *     `supported: false` 是**正常的业务结果**，用 HTTP 200 返回（不是 4xx/5xx）：
+         *     它表示本节点无法自动重启（本平台不支持自替换 / `argv[0]` 不可解析为可执行文件 /
+         *     重启触发点未接线 / 单元名或作用域配置非法 / docker 作用域），
+         *     此时 `command` 给出可复制到终端手工执行的重启命令，`reason` 说明原因。
+         *     服务不会在判据不满足时假装成功，也不会用错误码把降级信息埋掉。
+         *
+         *     两个端点（`GET` 只读探测 / `POST` 受理）回显的
+         *     `supported` / `command` / `scope` 逐字一致：它们取同一次 `Probe` 的结论。
+         */
+        MaintenanceRestartResult: {
+            /** @description 是否已受理自动重启；false 时请用 command 手动执行 */
+            supported: boolean;
+            /**
+             * @description **手工重启的等效命令**（本接口受理时进程走自替换，不执行该命令）；始终返回、可直接复制。
+             *     它随部署形态而变：`systemd-user` → `systemctl --user restart <unit>`；
+             *     `system` 非 root → `sudo -n systemctl restart <unit>`；root → `systemctl restart <unit>`；
+             *     `docker` → `docker restart <unit>`。配置非法时给出一句说明性注释（不回显配置原文）。
+             */
+            command: string;
+            /**
+             * @description 无法自动重启的原因（supported=false 时）：本平台不支持自替换 /
+             *     `argv[0]` 不可解析为可执行文件 / 触发点未接线 / 配置非法 / docker 作用域。
+             */
+            reason?: string;
+            /**
+             * @description 实际使用的作用域：system / systemd-user / docker
+             * @enum {string}
+             */
+            scope?: "system" | "systemd-user" | "docker";
+            /**
+             * Format: int64
+             * @description 受理后延迟多少毫秒执行重启
+             */
+            delayMs?: number;
+        };
+        /**
+         * @description 恢复的来源通道。`local` 表示"用本机已登记的备份包恢复"（
+         *     `POST /backups/{id}/restore`），与另外三条"包从外部来"的通道（`url` / `upload` / `cli`）
+         *     在事件表里区分开——它们最终走同一条编排，但用户来这一页要办的往往是不同的事。
+         * @enum {string}
+         */
+        BackupImportOrigin: "url" | "upload" | "cli" | "local";
         /** @enum {string} */
         BackupUploadStatus: "initialized" | "receiving" | "completed" | "aborted";
         /** @description 一次分片上传会话的视图。uploadedChunks 由磁盘上真实存在的分片推导（以磁盘为准，可续传）。 */
@@ -3032,6 +3489,130 @@ export interface components {
             updatedAt: string;
             finishedAt?: string;
             restorePendingAt?: string;
+        };
+        BackupPreview: {
+            manifest: components["schemas"]["BackupPreviewManifest"];
+            /** @description 包内仓库（按名字排序）。 */
+            repositories: {
+                name: string;
+                format: string;
+                type: string;
+            }[];
+            /** @description 包内账号（按用户名排序）。**不含**口令哈希等敏感字段。 */
+            users: {
+                username: string;
+                role: string;
+                status: string;
+            }[];
+            /** @description 若干条制品路径样例（最多 50 条）。 */
+            sampleAssets: string[];
+            /** @description 制品总数（样例有上限，总数以本字段为准）。 */
+            totalAssets: number;
+            /**
+             * Format: int64
+             * @description 包内 blob 的总字节数。
+             */
+            blobBytes: number;
+        };
+        BackupPreviewManifest: {
+            packageId: string;
+            mode: string;
+            appVersion: string;
+            dbSchemaVersion: number;
+            /** @description 非空表示这是增量差包。 */
+            basePackageId?: string;
+            createdAt?: string;
+        };
+        DiffCounts: {
+            /** @description 包里有、本机没有 —— 恢复后会新增。 */
+            onlyInPackage: number;
+            /** @description 本机有、包里没有 —— 恢复后会消失。 */
+            onlyLocal: number;
+            /** @description 两边都有但内容不同 —— 恢复后会被替换。 */
+            changed: number;
+            /** @description 完全一致 —— 恢复后不变。 */
+            same: number;
+        };
+        BackupDiffDetailItem: {
+            /** @description 稳定标识（仓库名 / 制品路径 / 用户名）。 */
+            key: string;
+            /** @description 供人判断的补充说明（大小变化、哈希前缀等）。 */
+            detail: string;
+        };
+        BackupDiffDetailPage: {
+            items: components["schemas"]["BackupDiffDetailItem"][];
+            /** @description 该分类的真实总数（不受分页影响）。 */
+            total: number;
+            /** @description 是否因分页而未返回全部。 */
+            truncated: boolean;
+        };
+        /**
+         * @description `scope=summary` 时只填 repositories/assets/users 三个计数；
+         *     其他 scope 时填 `detail`。
+         */
+        BackupDiff: {
+            packageId: string;
+            /** @description 恒为 true —— 本次只比元数据（路径/大小/哈希），不比对文件内容。 */
+            metadataOnly: boolean;
+            repositories?: components["schemas"]["DiffCounts"];
+            assets?: components["schemas"]["DiffCounts"];
+            users?: components["schemas"]["DiffCounts"];
+            /** @description 仅 scope 非 summary 时返回。 */
+            detail?: components["schemas"]["BackupDiffDetailPage"];
+        };
+        UnmanagedBackup: {
+            /** @description 由文件名推导的标识（磁盘上的 `<fileId>.tar.gz`）。 */
+            fileId: string;
+            /** @description 归档内 manifest 声明的标识；`valid=false` 时为空串。 */
+            packageId: string;
+            /**
+             * Format: int64
+             * @description 包体文件的字节数。
+             */
+            sizeBytes: number;
+            /** @description 包体文件的最后修改时间（RFC3339，UTC）。 */
+            modifiedAt: string;
+            /** @description 同目录下是否存在 `<fileId>.index` 侧车索引。 */
+            hasSidecar: boolean;
+            /** @description 归档能否打开且 manifest 通过校验。 */
+            valid: boolean;
+            /** @description `valid=false` 时的原因。 */
+            reason?: string;
+            /** @description 文件名与包内标识是否不一致（导入时以包内为准并重命名包体）。 */
+            renamed: boolean;
+            /**
+             * @description 是否为"同一份包的多余副本"——磁盘上该文件的 manifest 标识已登记在列表中。
+             *     这类条目的 `valid` 为 false：不能重复导入，但内容有效、不会被孤儿回收删除。
+             *     用户需自行决定保留哪个副本（删除多余的那个）。
+             */
+            duplicate: boolean;
+        };
+        UnmanagedBackupList: {
+            items: components["schemas"]["UnmanagedBackup"][];
+            total: number;
+        };
+        AdoptBackupsRequest: {
+            /** @description 要导入的包标识（来自 listUnmanagedBackups 的 fileId）。 */
+            fileIds: string[];
+        };
+        AdoptedBackup: {
+            /** @description 请求里给出的包标识（回显）。 */
+            fileId: string;
+            /** @description 最终登记的包标识。 */
+            packageId: string;
+            /** @description 是否成功建立登记。 */
+            adopted: boolean;
+            /** @description 是否跳过未执行（已登记、非法包等）。 */
+            skipped: boolean;
+            /** @description 跳过或失败的原因。 */
+            reason?: string;
+        };
+        AdoptBackupsResult: {
+            /** @description 逐项结果，顺序与请求的 fileIds 一致。 */
+            items: components["schemas"]["AdoptedBackup"][];
+            adopted: number;
+            skipped: number;
+            failed: number;
         };
         BackupImportList: {
             items: components["schemas"]["BackupImport"][];
@@ -5370,6 +5951,70 @@ export interface operations {
             409: components["responses"]["Conflict"];
         };
     };
+    previewBackup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 备份包标识（形如 bk-20260910-162701-a1b2c3）。 */
+                id: components["parameters"]["BackupIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 包内容概要 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupPreview"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["AssetOperationInternalError"];
+        };
+    };
+    getBackupDiff: {
+        parameters: {
+            query?: {
+                /** @description 默认 summary（只返回计数）。 */
+                scope?: "summary" | "repositories" | "assets" | "users";
+                /** @description scope 非 summary 时必填，指定要看哪一类明细。 */
+                kind?: "onlyInPackage" | "onlyLocal" | "changed" | "same";
+                /** @description 明细页码，从 1 开始。 */
+                page?: number;
+                /** @description 单页条数，默认 50，上限 200。 */
+                pageSize?: number;
+            };
+            header?: never;
+            path: {
+                /** @description 备份包标识（形如 bk-20260910-162701-a1b2c3）。 */
+                id: components["parameters"]["BackupIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 对比结果（摘要或明细，取决于 scope） */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupDiff"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
     downloadBackup: {
         parameters: {
             query?: {
@@ -5466,6 +6111,99 @@ export interface operations {
                     "application/json": components["schemas"]["BackupVerification"];
                 };
             };
+        };
+    };
+    restoreFromLocalPackage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 备份包标识（形如 bk-20260910-162701-a1b2c3）。 */
+                id: components["parameters"]["BackupIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["RestoreFromLocalPackageRequest"];
+            };
+        };
+        responses: {
+            /** @description 已受理并开始暂存 */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupImport"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    drillBackup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 备份包标识（形如 bk-20260910-162701-a1b2c3）。 */
+                id: components["parameters"]["BackupIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["DrillBackupRequest"];
+            };
+        };
+        responses: {
+            /** @description 已受理本次演练（不代表已完成，请轮询报告列表） */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupDrillAccepted"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    listBackupVerifications: {
+        parameters: {
+            query?: {
+                page?: components["parameters"]["PageParam"];
+                page_size?: components["parameters"]["PageSizeParam"];
+            };
+            header?: never;
+            path: {
+                /** @description 备份包标识（形如 bk-20260910-162701-a1b2c3）。 */
+                id: components["parameters"]["BackupIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 演练报告列表（最近优先） */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupVerificationList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
     getWriteFreezeState: {
@@ -5588,6 +6326,87 @@ export interface operations {
             409: components["responses"]["Conflict"];
         };
     };
+    getRestartCapability: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /**
+             * @description 探测结果。`supported: false` 是**正常业务结果**（不是错误）：此时 `reason` 说明原因，
+             *     `command` 给出**本机等效**的手工重启命令供运维复制执行。
+             */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaintenanceRestartResult"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    restartService: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /**
+             * @description 未受理自动重启（降级）。**这是正常业务结果，不是错误**：`supported: false` +
+             *     `reason` + `command` 供前端渲染降级 UI、运维照抄命令手动执行。
+             */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaintenanceRestartResult"];
+                };
+            };
+            /** @description 已受理自动重启（响应先于重启命令；约 delayMs 后进程重启，连接会断开） */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaintenanceRestartResult"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    getBackupRestoreStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 待生效恢复状态 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupRestoreStatus"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
     importBackupFromURL: {
         parameters: {
             query?: never;
@@ -5665,6 +6484,55 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+        };
+    };
+    listUnmanagedBackups: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 未管理备份包列表 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnmanagedBackupList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    adoptBackups: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdoptBackupsRequest"];
+            };
+        };
+        responses: {
+            /** @description 导入结果（逐项） */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdoptBackupsResult"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
         };
     };
     createBackupUpload: {
@@ -5769,8 +6637,8 @@ export interface operations {
             };
         };
         responses: {
-            /** @description 已受理并开始导入 */
-            202: {
+            /** @description 已存入备份列表（status=done） */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };

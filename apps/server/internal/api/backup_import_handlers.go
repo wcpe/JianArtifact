@@ -9,6 +9,7 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -18,8 +19,97 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// ImportBackupFromURL 从 URL 拉取备份包并启动导入（仅管理员）。
+// GetBackupRestoreStatus 返回是否存在待重启生效的备份恢复（仅管理员）。
 //
+// 存在的意义是让界面能解释"为什么现在导入不了"：一旦暂存成功，后续导入一律 409
+// restore_pending，直到重启完成替换；而这个状态此前只体现在导入记录行的徽章上，
+// 徽章被更近的事件挤出视野后就再也看不出原因。
+//
+// 失败模式的处理：标记读不了（属主/权限不对）时**不**让端点报错——这只是一条提示性查询，
+// 而"读不了"恰恰是需要如实告知用户的情况（见 ApplyPendingRestore 的同类取舍）。
+// 故仍返回 200 且 pending=false；真正的处置提示由启动告警与 CLI 导入后的属主检查给出。
+func (h *Handlers) GetBackupRestoreStatus(c *gin.Context) {
+	if _, ok := requireAdmin(c); !ok {
+		return
+	}
+	if h.backupImports == nil {
+		auth.WriteError(c, http.StatusServiceUnavailable, "unavailable", "导入服务未启用")
+		return
+	}
+	pending, err := h.backupImports.PendingRestore()
+	if err != nil {
+		// 如实说明读不到，但不阻断界面：此时"没有待生效恢复"仍是可安全假设的默认。
+		c.JSON(http.StatusOK, BackupRestoreStatus{Pending: false})
+		return
+	}
+	if pending == nil {
+		c.JSON(http.StatusOK, BackupRestoreStatus{Pending: false})
+		return
+	}
+	origin := pending.Origin
+	staged := pending.StagedAt
+	packageID := pending.PackageID
+	c.JSON(http.StatusOK, BackupRestoreStatus{
+		Pending:   true,
+		PackageId: &packageID,
+		Origin:    &origin,
+		StagedAt:  &staged,
+	})
+}
+
+// RestoreFromLocalPackage 用本机已有的备份包恢复本机数据（仅管理员）。
+//
+// 为什么需要这个端点：另外三条恢复通道（URL 拉取 / 分片上传 / CLI）都要求包来自**外部**，
+// 于是页面上明明列着可用的包，却没有任何按钮能用它恢复——用户会直接得出
+// "只能备份、不能恢复"的结论（这正是实测收到的反馈）。补的是**入口**，不是新机制：
+// 直接以本机包路径进入既有的 StartLocalImport（→ Stage → restore.pending），
+// 与其它通道共享全部校验与错误语义。
+//
+// origin 记为 "local"：它与另三条在编排上完全相同，但在事件表里要能区分——
+// "我用这台机器自己的包回滚"与"我从别处搬来一个包"是两件不同的事。
+func (h *Handlers) RestoreFromLocalPackage(c *gin.Context, id BackupIdParam) {
+	principal, ok := requireAdmin(c)
+	if !ok {
+		return
+	}
+	if h.backupImports == nil || h.backups == nil {
+		auth.WriteError(c, http.StatusServiceUnavailable, "unavailable", "恢复服务未启用")
+		return
+	}
+	// 请求体可整体省略（等同取默认），故用可选绑定；坏 JSON 仍要报 400。
+	var req RestoreFromLocalPackageRequest
+	if c.Request.ContentLength > 0 && !bindJSON(c, &req) {
+		return
+	}
+
+	rec, err := h.backups.Get(id)
+	if err != nil {
+		writeBackupErr(c, err)
+		return
+	}
+	// 只有已完成的包才能作为恢复源：生成中的包内容不完整，失败的包不该被拿来覆盖现有数据。
+	// 这条判据与演练（drill）保持一致，用户对两者"什么时候能用"的预期才一致。
+	if rec.Status != repository.BackupStatusDone {
+		writeBackupErr(c, fmt.Errorf("%w：%s 当前状态 %s", domain.ErrRestorePackageNotDone, id, rec.Status))
+		return
+	}
+
+	imp, err := h.backupImports.StartLocalImport(c.Request.Context(), domain.LocalImportOptions{
+		SourcePath: h.backups.PackagePath(string(id)),
+		Origin:     "local",
+		Operator:   principal.Username,
+		Overwrite:  req.Overwrite != nil && *req.Overwrite,
+		Deep:       req.Deep != nil && *req.Deep,
+	})
+	if err != nil {
+		writeBackupImportErr(c, err)
+		return
+	}
+	h.AuditLog(c, auditActionBackupRestore, "backup_package", string(id), "", "", "ok")
+	c.JSON(http.StatusAccepted, toAPIBackupImport(imp))
+}
+
+// ImportBackupFromURL 从 URL 拉取备份包并启动导入（仅管理员）。//
 // 立即返回 202 与一条 queued 记录；拉取、校验、合并 blob 与暂存都在后台推进，
 // 调用方轮询 /backups/imports/{id} 观察进度。即使一切顺利，也需重启服务才会
 // 真正替换数据库（见 ADR-0027 决策 5）。

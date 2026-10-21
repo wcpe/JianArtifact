@@ -50,13 +50,33 @@ type Deps struct {
 	OnUpstreamTimeoutChange func(time.Duration)                     // FR-89：回源超时设置变更回调（wiring 注入 upstream.Client.SetTimeout；nil 不触发）
 	Backups                 *domain.BackupService                   // FR-132：节点备份包生成与登记
 	BackupLinkKey           []byte                                  // FR-132：备份下载令牌签名密钥（由启动密钥派生）
+	BackupDrill             *domain.BackupDrillService              // FR-40：恢复演练与可查报告
 	Freeze                  *domain.FreezeController                // FR-135：运行时写入冻结窗口
 	BackupImports           *domain.BackupImportService             // FR-137：导入记录与 URL 拉取
 	BackupUploads           *domain.BackupUploadService             // FR-137：分片上传（Web 第三通道）
+	BackupAdopt             *domain.BackupAdoptService              // FR-40 追加八：未管理备份包的扫描与导入
 	Metrics                 *metrics.Exposition                     // FR-39：Prometheus 指标导出（/metrics；nil 时该端点返回 503）
 	OIDC                    *OIDCDeps                               // FR-34：OIDC 登录端点依赖（nil = 未启用，端点返回 404）
 	LDAPAuth                LDAPAuthenticator                       // FR-35：LDAP 目录侧校验（nil = 未启用，登录不回退目录）
 	MaintenanceJobs         MaintenanceJobController                // FR-41：维护作业清单与手动触发（nil 时端点返回 503）
+	Restart                 RestartController                       // FR-40 追加七：一键重启（nil 时端点返回 503）
+}
+
+// RestartController 是接口层对一键重启能力的最小依赖：同步预检、延迟触发重启动作。
+// 与 MaintenanceJobController 同一抽象风格——刻意不依赖 *domain.RestartService 具体类型，
+// 使接口层可以脱离真实的自替换执行验证鉴权、状态码与"响应先于动作"的顺序。
+type RestartController interface {
+	// Command 返回**手工重启**的等效命令串（不预检，任何情况下都非空）。
+	// 它不是本进程将要执行的命令——自动重启走进程自替换，不执行任何外部命令。
+	Command() string
+	// Scope 返回配置的作用域（system / systemd-user / docker），供契约回显。
+	Scope() string
+	// Probe 同步预检能否自替换（平台支持 / argv[0] 可执行 / 触发点已接线）；
+	// 判据不满足是正常业务结果，不返回 error。
+	Probe() domain.RestartPlan
+	// RestartAfter 在 delay 之后后台触发重启动作并立即返回（不阻塞调用方）。
+	// 传回 Probe 的结论而不是让它重新判一次：响应里说的与后台做的不再同源就会脱节（见 domain.RestartPlan）。
+	RestartAfter(plan domain.RestartPlan, delay time.Duration)
 }
 
 // MaintenanceJobController 是接口层对维护作业调度器的最小依赖：只读状态 + 按名触发一次。
@@ -100,13 +120,16 @@ type Handlers struct {
 	onUpstreamTimeoutChange func(time.Duration)          // FR-89：回源超时设置变更回调
 	backups                 *domain.BackupService        // FR-132：节点备份包
 	backupLinks             *domain.BackupLinkSigner     // FR-132：下载令牌签名
+	backupDrill             *domain.BackupDrillService   // FR-40：恢复演练与校验报告
 	freeze                  *domain.FreezeController     // FR-135：运行时写入冻结
 	backupImports           *domain.BackupImportService  // FR-137：导入记录与 URL 拉取
 	backupUploads           *domain.BackupUploadService  // FR-137：分片上传（Web 第三通道）
+	backupAdopt             *domain.BackupAdoptService   // FR-40 追加八：未管理备份包的扫描与导入
 	metrics                 *metrics.Exposition          // FR-39：Prometheus 指标导出
 	oidc                    *OIDCDeps                    // FR-34：OIDC 登录端点依赖（nil = 未启用）
 	ldapAuth                LDAPAuthenticator            // FR-35：LDAP 目录侧校验（nil = 未启用）
 	maintenanceJobs         MaintenanceJobController     // FR-41：维护作业清单与手动触发
+	restart                 RestartController            // FR-40 追加七：一键重启（nil = 未装配）
 }
 
 // NewHandlers 构造 Handlers。
@@ -138,13 +161,16 @@ func NewHandlers(d Deps) *Handlers {
 		onUpstreamTimeoutChange: d.OnUpstreamTimeoutChange,
 		backups:                 d.Backups,
 		backupLinks:             domain.NewBackupLinkSigner(d.BackupLinkKey),
+		backupDrill:             d.BackupDrill, // FR-40：恢复演练
 		freeze:                  d.Freeze,
 		backupImports:           d.BackupImports,
 		backupUploads:           d.BackupUploads,
+		backupAdopt:             d.BackupAdopt,
 		metrics:                 d.Metrics,
 		oidc:                    d.OIDC,
 		ldapAuth:                d.LDAPAuth,
 		maintenanceJobs:         d.MaintenanceJobs,
+		restart:                 d.Restart,
 	}
 }
 
@@ -346,8 +372,25 @@ func writeDomainErrWithOperationID(c *gin.Context, err error, operationID string
 		write(http.StatusBadGateway, "upstream_error", "上游不可达或返回错误")
 	case errors.Is(err, domain.ErrUpstreamTimeout):
 		write(http.StatusGatewayTimeout, "upstream_timeout", "上游超时")
+	case errors.Is(err, domain.ErrRestoreInProgress):
+		// 并发恢复是**可重试**的正常状态，不是内部故障：等前一个跑完或稍后再点即可。
+		write(http.StatusConflict, "import_in_progress", err.Error())
+	case errors.Is(err, domain.ErrRestoreBaseMissing):
+		// 差包缺基线：运维可处置（先导入基线包），不该伪装成内部错误。
+		write(http.StatusConflict, "base_missing", err.Error())
+	case errors.Is(err, domain.ErrRestorePackageNotDone):
+		write(http.StatusConflict, "package_not_ready", err.Error())
 	default:
-		write(http.StatusInternalServerError, "internal_error", "内部错误")
+		// 兜底：**带上原始错误文本**。
+		//
+		// 早先这里只返回「内部错误」，把真实原因（归档损坏、manifest 非法、
+		// 磁盘权限、暂存目录写失败…）全部吞掉，用户看到的就是一句套话，
+		// 日志里也可能没有对应记录——"查不出原因"正是这么来的。
+		//
+		// 对外的文本仍以"内部错误"开头（不承诺细节稳定），但把 err 附在后面，
+		// 让用户与运维至少能看见发生了什么。本接口只对管理员开放，
+		// 且错误文本来自我们自己的领域逻辑，不含凭据。
+		write(http.StatusInternalServerError, "internal_error", "内部错误："+err.Error())
 	}
 }
 

@@ -301,7 +301,32 @@ func TestRunMaintenanceJobTriggersRealScheduler(t *testing.T) {
 	if len(list.Jobs) != 1 {
 		t.Fatalf("清单应含 1 个作业，得 %d", len(list.Jobs))
 	}
-	job := list.Jobs[0]
+	// 轮询到终态：`<-ran` 只保证作业体被执行过，而 runClaimed 的收尾
+	// （置 LastFinishedAt、清 running）发生在作业体返回**之后**，二者是异步的。
+	// 只读一次清单会在 CI 的高负载下稳定抓到中间态（实测失败于 Running:true 且
+	// LastFinishedAt=nil），这不是产品缺陷，而是断言与调度器收尾时序赛跑。
+	var job MaintenanceJob
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		rec = serveMaintenanceRoute(h, adminPrincipal(), http.MethodGet, "/api/v1/maintenance/jobs")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("读清单应 200，得 %d：%s", rec.Code, rec.Body.String())
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+			t.Fatalf("解析清单：%v", err)
+		}
+		if len(list.Jobs) != 1 {
+			t.Fatalf("清单应含 1 个作业，得 %d", len(list.Jobs))
+		}
+		job = list.Jobs[0]
+		if !job.Running && job.LastFinishedAt != nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("作业未在超时内到达终态：%+v", job)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	if job.Name != "manual-only" || job.IntervalSeconds != 3600 || job.Runs != 1 || job.Failures != 0 {
 		t.Fatalf("触发后清单应回显真实状态：%+v", job)
 	}

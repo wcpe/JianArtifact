@@ -37,6 +37,10 @@ type SettingsUpdate struct {
 	OriginTokenEnabled *bool
 	OriginTokenHeader  *string
 	OriginTokenValue   *string
+	// FR-40 追加：自动备份与保留策略（运行时可改，写后由作业下一轮读取生效）。
+	BackupAutoInterval  *int
+	BackupKeepLast      *int
+	BackupRetentionDays *int
 }
 
 // NewSettingService 构造 SettingService。
@@ -118,6 +122,79 @@ func (s *SettingService) SetUpstreamTimeout(secs int) error {
 	return s.UpdateSettings(SettingsUpdate{UpstreamTimeout: &secs})
 }
 
+// 自动备份与保留策略的设置键（FR-40 追加：原先只能经环境变量配置，现放开为运行时可改）。
+//
+// 三项均为**节点本地**（见 isNodeLocalSetting）：备份包落在本节点磁盘上，
+// 保留策略是"这台机器怎么用自己的盘"的决策，跨节点复制该设置会让一个节点的
+// 磁盘策略被另一个节点改写。
+//
+// 环境变量的角色随之变化：从"唯一真源"降级为**首次播种的初值**——启动时若
+// setting 表没有对应键，用环境变量值写入；此后以 setting 表为准。这样既有部署
+// 的环境变量配置继续有效，同时可被界面覆盖（见 cmd/jianartifact/wiring.go）。
+const (
+	SettingKeyBackupAutoInterval  = "backup_auto_interval"  // 自动备份间隔（秒），0 = 关闭
+	SettingKeyBackupKeepLast      = "backup_keep_last"      // 保留最近 N 份自动备份，0 = 不按份数限制
+	SettingKeyBackupRetentionDays = "backup_retention_days" // 保留最近 N 天的自动备份，0 = 不限天数
+)
+
+// BackupAutoIntervalSecs 返回自动备份间隔（秒）；未配置或非法返回 0（= 关闭）。
+//
+// 与 secsSetting 不同，本方法**允许 0**：对自动备份来说 0 是有意义的配置值
+// （关闭），必须与"未配置"区分开来，否则界面无法把开关拨回关闭状态。
+func (s *SettingService) BackupAutoIntervalSecs() int {
+	return s.nonNegativeIntSetting(SettingKeyBackupAutoInterval)
+}
+
+// BackupKeepLast 返回保留份数；未配置或非法返回 0（= 不按份数限制）。
+func (s *SettingService) BackupKeepLast() int {
+	return s.nonNegativeIntSetting(SettingKeyBackupKeepLast)
+}
+
+// BackupRetentionDays 返回保留天数；未配置或非法返回 0（= 不限天数）。
+func (s *SettingService) BackupRetentionDays() int {
+	return s.nonNegativeIntSetting(SettingKeyBackupRetentionDays)
+}
+
+// nonNegativeIntSetting 读取非负整数设置；未配置或非法返回 0。
+// 与 secsSetting 的差别是接受 0（0 在备份配置里是"关闭 / 不限制"的合法取值）。
+func (s *SettingService) nonNegativeIntSetting(key string) int {
+	v, err := s.settings.Get(key)
+	if err != nil {
+		return 0
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
+}
+
+// SaveBackupSettings 写入自动备份三项配置（并发安全：单次事务写入，写后即生效）。
+func (s *SettingService) SaveBackupSettings(autoInterval, keepLast, retentionDays int) error {
+	return s.UpdateSettings(SettingsUpdate{
+		BackupAutoInterval:  &autoInterval,
+		BackupKeepLast:      &keepLast,
+		BackupRetentionDays: &retentionDays,
+	})
+}
+
+// HasBackupSettings 报告 setting 表里是否已存在三项备份配置中的任意一项。
+//
+// 供启动播种逻辑判断"是否已有界面配置"：表里没有才把环境变量当作初值写入；
+// 已有则一律不动，避免每次重启都把运维在界面上改过的值覆盖回环境变量值。
+func (s *SettingService) HasBackupSettings() bool {
+	for _, key := range []string{
+		SettingKeyBackupAutoInterval,
+		SettingKeyBackupKeepLast,
+		SettingKeyBackupRetentionDays,
+	} {
+		if _, err := s.settings.Get(key); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
 // AllowedHostsList 返回允许访问的域名白名单；未配置或空值返回空切片（不限制）。
 // 条目经逗号分隔、按首尾空白归一化，空项忽略。节点本地配置，不参与复制。
 func (s *SettingService) AllowedHostsList() []string {
@@ -197,7 +274,9 @@ func (s *SettingService) UpdateSettings(update SettingsUpdate) error {
 func isNodeLocalSetting(key string) bool {
 	switch key {
 	case SettingKeyPublicURL, SettingKeyAllowedHosts,
-		SettingKeyOriginTokenEnable, SettingKeyOriginTokenHeader, SettingKeyOriginTokenValue:
+		SettingKeyOriginTokenEnable, SettingKeyOriginTokenHeader, SettingKeyOriginTokenValue,
+		// 备份配置是"本节点怎么用自己的磁盘"的决策，不跨节点复制。
+		SettingKeyBackupAutoInterval, SettingKeyBackupKeepLast, SettingKeyBackupRetentionDays:
 		return true
 	}
 	return strings.HasPrefix(key, SettingKeyClusterPrefix)
@@ -229,6 +308,16 @@ func settingValues(update SettingsUpdate) []repository.SettingValue {
 	}
 	if update.OriginTokenValue != nil {
 		values = append(values, repository.SettingValue{Key: SettingKeyOriginTokenValue, Value: *update.OriginTokenValue})
+	}
+	// FR-40 追加：自动备份三项。0 是合法值（关闭 / 不限制），照写不跳过。
+	if update.BackupAutoInterval != nil {
+		values = append(values, repository.SettingValue{Key: SettingKeyBackupAutoInterval, Value: strconv.Itoa(*update.BackupAutoInterval)})
+	}
+	if update.BackupKeepLast != nil {
+		values = append(values, repository.SettingValue{Key: SettingKeyBackupKeepLast, Value: strconv.Itoa(*update.BackupKeepLast)})
+	}
+	if update.BackupRetentionDays != nil {
+		values = append(values, repository.SettingValue{Key: SettingKeyBackupRetentionDays, Value: strconv.Itoa(*update.BackupRetentionDays)})
 	}
 	return values
 }

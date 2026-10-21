@@ -266,6 +266,7 @@ func toAPIBackupPackage(p repository.BackupPackage) BackupPackage {
 		Status:    BackupPackageStatus(p.Status),
 		SizeBytes: p.SizeBytes,
 		CreatedAt: p.CreatedAt,
+		Origin:    BackupPackageOrigin(backupOriginOrDefault(p.Origin)),
 	}
 	if p.BasePackageID != "" {
 		out.BasePackageId = &p.BasePackageID
@@ -312,6 +313,19 @@ func parseBackupCounts(countsJSON string) *BackupCounts {
 	}
 }
 
+// backupOriginOrDefault 归一化备份包来源（FR-40）。
+//
+// 契约把 origin 声明为 required（枚举 manual / auto），而库列本身也有 DEFAULT 'manual'，
+// 所以正常的行永远带值。这里的兜底是给"绕过 repository 构造的测试夹具 / 手工造的记录"
+// 留一条安全路径：来源未知时按 manual 呈现，而不是吐出一个既不在枚举内、
+// 又会让前端渲染成空白的零值——空串在契约校验下是非法取值。
+func backupOriginOrDefault(origin string) string {
+	if origin == repository.BackupOriginAuto {
+		return repository.BackupOriginAuto
+	}
+	return repository.BackupOriginManual
+}
+
 // writeBackupErr 把备份领域错误映射为明确的状态码。
 func writeBackupErr(c *gin.Context, err error) {
 	switch {
@@ -325,6 +339,15 @@ func writeBackupErr(c *gin.Context, err error) {
 		auth.WriteError(c, http.StatusConflict, "backup_has_derived", err.Error())
 	case errors.Is(err, domain.ErrBackupIncomplete):
 		auth.WriteError(c, http.StatusConflict, "backup_incomplete", err.Error())
+	// FR-40：包尚未生成完成时没有可演练的包体，属状态冲突而非参数错误。
+	case errors.Is(err, domain.ErrDrillPackageNotDone):
+		auth.WriteError(c, http.StatusConflict, "backup_not_done", err.Error())
+	// FR-40 追加六：恢复前同样要求包已生成完成（不是 done 就不能作为恢复源）。
+	// 与 drill 共用同一个 error_code（语义相同：包还没准备好），消息各自表达。
+	case errors.Is(err, domain.ErrRestorePackageNotDone):
+		auth.WriteError(c, http.StatusConflict, "backup_not_done", err.Error())
+	case errors.Is(err, domain.ErrDrillLevelUnknown):
+		auth.WriteError(c, http.StatusBadRequest, "bad_request", err.Error())
 	default:
 		writeDomainErr(c, err)
 	}

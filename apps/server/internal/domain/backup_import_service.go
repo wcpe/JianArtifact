@@ -20,16 +20,23 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/upstream"
 )
 
-// 导入（URL 拉取）上报的 error_code 取值，与契约的错误语义对齐。
+// 导入上报的 error_code 取值，与契约的错误语义对齐。
+//
+// 每个错误码都对应一种**用户可理解、且多数可自行处置**的状态。
+// 只有真正的未知故障才用 internal——把可解释的失败塞进 internal 会让用户
+// 只看到"服务内部错误"而无从下手（这正是 FR-40 追加十修掉的问题）。
 const (
-	errCodeFetchFailed     = "fetch_failed"     // 拉取失败（连接 / 传输 / 上游非 200）
-	errCodePackageOversize = "package_oversize" // 包超过 50 GiB 上限
-	errCodeSHA256Mismatch  = "sha256_mismatch"  // 归档整体摘要与期望不符
-	errCodeManifestInvalid = "manifest_invalid" // 包非法（增量差包不支持等）
-	errCodeTargetNotEmpty  = "target_not_empty" // 目标非空且未 overwrite
-	errCodeIncompatible    = "incompatible"     // 包所需 db 版本高于本程序
-	errCodeRestorePending  = "restore_pending"  // 已存在待生效恢复
-	errCodeInternal        = "internal"
+	errCodeFetchFailed      = "fetch_failed"       // 拉取失败（连接 / 传输 / 上游非 200）
+	errCodePackageOversize  = "package_oversize"   // 包超过 50 GiB 上限
+	errCodeSHA256Mismatch   = "sha256_mismatch"    // 归档整体摘要与期望不符
+	errCodeManifestInvalid  = "manifest_invalid"   // 包非法（增量差包不支持等）
+	errCodeTargetNotEmpty   = "target_not_empty"   // 目标非空且未 overwrite
+	errCodeIncompatible     = "incompatible"       // 包所需 db 版本高于本程序
+	errCodeRestorePending   = "restore_pending"    // 已存在待生效恢复
+	errCodeBaseMissing      = "base_missing"       // 差包缺少基线（先导入基线包）
+	errCodeImportInProgress = "import_in_progress" // 已有导入正在进行（可重试）
+	errCodePackageNotReady  = "package_not_ready"  // 包未生成完成或已失败
+	errCodeInternal         = "internal"           // 真正的未知故障
 )
 
 // maxBackupImportBytes 限制单包下载落盘的上限（防磁盘打满）。备份包本质是用户/运维
@@ -141,6 +148,18 @@ func (s *BackupImportService) Get(importID string) (*repository.BackupImport, er
 	return rec, err
 }
 
+// PendingRestore 返回当前是否存在待重启生效的恢复；不存在时返回 (nil, nil)。
+//
+// 供界面回答「为什么我现在导入不了」：一旦暂存成功，后续导入一律以 409 restore_pending
+// 被拒，直到重启完成替换。此前这个状态只体现在导入记录行的 pending_restart 徽章上，
+// 徽章被更近的事件挤出视野后，用户就再也看不出原因。
+//
+// 标记读不了（属主/权限不对）按"无待生效恢复"对待并交回错误——调用方据此如实说明，
+// 但不应因此让整个端点失败：这只是一个提示性查询。
+func (s *BackupImportService) PendingRestore() (*PendingRestore, error) {
+	return s.restore.MarkedPending()
+}
+
 // LocalImportOptions 描述一次本地导入（CLI 直传 / 分片上传组装后的归档）。
 // SourcePath 是已落地的归档路径；Origin 标注入口（"upload" | "cli"）。
 type LocalImportOptions struct {
@@ -230,6 +249,33 @@ func (s *BackupImportService) process(ctx context.Context, importID string, opts
 	_ = os.Remove(dest)
 }
 
+// restoreFailureLogName 是恢复失败的**文件级**留痕（落在数据目录下）。
+//
+// 为什么不能只写数据库：backup_import 表在数据库里，而恢复会替换整个数据库。
+// 于是一次失败的恢复，其失败记录可能被**它自己的恢复动作**覆盖掉——实测丢失过一次，
+// 导致完全无法定位。文件在数据目录下、不在快照内，因此不会被覆盖。
+const restoreFailureLogName = "restore-failures.log"
+
+// appendRestoreFailureRecord 把一次恢复失败追加到文件日志。
+//
+// 内容刻意包含 operator / origin / package / errorCode / 原始错误，足以在数据库记录
+// 丢失后仍能还原"谁、在什么时候、对哪个包、因为什么失败了"。
+// 任何失败都静默忽略：留痕是尽力而为的附带动作，不该反过来影响主流程。
+func appendRestoreFailureRecord(dataDir, importID, origin, operator, packageID, code, detail string) {
+	if dataDir == "" {
+		return
+	}
+	line := fmt.Sprintf("%s\timport=%s\torigin=%s\toperator=%s\tpackage=%s\tcode=%s\tdetail=%s\n",
+		time.Now().UTC().Format(time.RFC3339), importID, origin, operator, packageID, code, detail)
+	f, err := os.OpenFile(filepath.Join(dataDir, restoreFailureLogName),
+		os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return
+	}
+	defer func() { _ = f.Close() }()
+	_, _ = f.WriteString(line)
+}
+
 // stageAndFinish 是 URL 拉取与本地导入共享的收尾逻辑：置 staging → 调 RestoreService.Stage
 // （同步阻塞：校验→合并 blob→暂存 db→写 restore.pending）→ 成功置 pending_restart；任何失败
 // 经 failStage 把领域错误映射为明确的 error_code 并写 failed 记录。
@@ -247,6 +293,9 @@ func (s *BackupImportService) stageAndFinish(ctx context.Context, importID, sour
 	})
 	if stageErr != nil {
 		failStage(s.repo, importID, stageErr)
+		// 同时写到文件：数据库记录可能被后续的恢复动作覆盖掉（见 restoreFailureLogName）。
+		appendRestoreFailureRecord(s.dataDir, importID, origin, operator,
+			stagePackageHint(sourcePath), stageErrorCode(stageErr), stageErr.Error())
 		return
 	}
 
@@ -367,21 +416,63 @@ func failImport(repo *repository.BackupImportRepo, importID, code, summary strin
 }
 
 // failStage 把恢复暂存的领域错误映射为明确的 error_code 并写失败记录。
+// failStage 把 Stage 的领域错误映射为明确的 error_code 并写 failed 记录。
+//
+// # 为什么必须覆盖全部领域错误
+//
+// 早先这里只认 5 种错误，其余一律归为 internal。后果是用户只看到
+// 「服务内部错误，请稍后重试或查看日志」——而真实原因（基线包缺失、已有导入在跑、
+// 归档损坏、manifest 非法…）完全被丢弃，日志里也没有对应记录。
+// 那正是"恢复一直失败却查不出原因"的来源。
+//
+// 现在的口径是：
+//   - 已知的领域错误 → 各自的明确错误码；
+//   - 未知错误 → 保留 internal，但**把原始错误文本写进 error 字段**，
+//     让用户与运维至少能看到真实原因，而不是一句套话。
 func failStage(repo *repository.BackupImportRepo, importID string, stageErr error) {
-	code := errCodeInternal
+	_ = repo.Finish(importID, repository.ImportStatusFailed, stageErrorCode(stageErr),
+		stageErr.Error(), "", 0, nil)
+}
+
+// stageErrorCode 把 Stage 的领域错误映射为 error_code。
+//
+// 抽成独立函数是为了让"写数据库"与"写文件留痕"共用同一份映射——
+// 两处各写一遍迟早不一致，而它们描述的是同一件事。
+func stageErrorCode(stageErr error) string {
 	switch {
 	case errors.Is(stageErr, ErrRestoreTargetNotEmpty):
-		code = errCodeTargetNotEmpty
+		return errCodeTargetNotEmpty
 	case errors.Is(stageErr, ErrRestoreIncompatible):
-		code = errCodeIncompatible
+		return errCodeIncompatible
 	case errors.Is(stageErr, ErrRestorePending):
-		code = errCodeRestorePending
+		return errCodeRestorePending
 	case errors.Is(stageErr, ErrRestoreIncrementalUnsupported):
-		code = errCodeManifestInvalid
+		return errCodeManifestInvalid
 	case errors.Is(stageErr, ErrRestoreTooLarge):
-		code = errCodePackageOversize
+		return errCodePackageOversize
+	case errors.Is(stageErr, ErrRestoreBaseMissing):
+		// 差包的基线不在本机：这是运维可处置的状态（先导入基线包），不是内部故障。
+		return errCodeBaseMissing
+	case errors.Is(stageErr, ErrRestoreInProgress):
+		// 并发导入是正常的可重试状态，不该伪装成内部错误。
+		return errCodeImportInProgress
+	case errors.Is(stageErr, ErrRestorePackageNotDone):
+		// 包尚未生成完成 / 已失败，不能作为恢复源。
+		return errCodePackageNotReady
 	}
-	_ = repo.Finish(importID, repository.ImportStatusFailed, code, stageErr.Error(), "", 0, nil)
+	return errCodeInternal
+}
+
+// stagePackageHint 从源路径里取出便于人读的包标识（失败留痕用）。
+//
+// 源路径可能是 backup-uploads/<id>/package.tar.gz 或 backups/<id>.tar.gz，
+// 两者都取最后一段并剥掉后缀；剥不出有意义的名字时退回完整路径。
+func stagePackageHint(sourcePath string) string {
+	base := filepath.Base(sourcePath)
+	if base == "package.tar.gz" {
+		return filepath.Base(filepath.Dir(sourcePath))
+	}
+	return strings.TrimSuffix(base, ".tar.gz")
 }
 
 func newBackupImportID(now time.Time) string {

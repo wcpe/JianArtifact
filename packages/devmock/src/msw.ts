@@ -29,8 +29,13 @@ import { MOCK_APP_VERSION, MOCK_SCHEMA_VERSION } from "./version";
 import type { components } from "./schema.gen";
 import type {
   AclEntry,
+  BackupDrillAccepted,
+  BackupDrillCheck,
   BackupPackage,
   BackupImport,
+  BackupVerificationLevel,
+  BackupVerificationReport,
+  DrillBackupRequest,
   WriteFreezeState,
   MigrationPlan,
   MigrationReport,
@@ -42,7 +47,6 @@ import type {
   Repository,
   User,
 } from "./store";
-
 function err(code: string, message: string, status: number) {
   return HttpResponse.json({ error: { code, message } }, { status });
 }
@@ -366,11 +370,16 @@ const notificationStatuses = ["unacknowledged", "acknowledged", "all"] as const;
 
 // —— FR-132 备份包内存态（仅 devmock）——
 // 生成过程用定时器推进状态，便于在浏览器里看到 queued → snapshotting → packing → done。
+//
+// FR-40：预置两条真实来源分布（手动 + 自动），让来源列在 devmock 下就能看到两种取值。
 function seedBackups(): BackupPackage[] {
+  const now = Date.now();
+  const iso = (msAgo: number) => new Date(now - msAgo).toISOString();
   return [
     {
       packageId: "bk-20260910-090000-a1b2c3",
       mode: "hot",
+      origin: "manual",
       status: "done",
       label: "例行备份",
       sizeBytes: 73400320,
@@ -385,8 +394,29 @@ function seedBackups(): BackupPackage[] {
       nodeId: "np-demo",
       appVersion: MOCK_APP_VERSION,
       dbSchemaVersion: MOCK_SCHEMA_VERSION,
-      createdAt: new Date(Date.now() - 6 * 3600 * 1000).toISOString(),
-      finishedAt: new Date(Date.now() - 6 * 3600 * 1000 + 42000).toISOString(),
+      createdAt: iso(6 * 3600 * 1000),
+      finishedAt: iso(6 * 3600 * 1000 - 42000),
+    },
+    {
+      packageId: "bk-20260910-030000-d4e5f6",
+      mode: "hot",
+      origin: "auto",
+      status: "done",
+      label: "周期自动备份",
+      sizeBytes: 71303168,
+      counts: {
+        users: 5,
+        tokens: 8,
+        repositories: 20,
+        acls: 12,
+        assets: 74478,
+        formatMetadata: 74,
+      },
+      nodeId: "np-demo",
+      appVersion: MOCK_APP_VERSION,
+      dbSchemaVersion: MOCK_SCHEMA_VERSION,
+      createdAt: iso(12 * 3600 * 1000),
+      finishedAt: iso(12 * 3600 * 1000 - 38000),
     },
   ];
 }
@@ -394,6 +424,162 @@ function seedBackups(): BackupPackage[] {
 const mockBackups: BackupPackage[] = seedBackups();
 
 let mockBackupSeq = 1;
+
+// —— FR-40 追加八：服务器上未被管理的备份包（仅 devmock）——
+// 模拟 backups/ 目录里"有包体、无登记行"的残留：两个可导入的合法包，一个无法识别的伪包。
+// 导入其中一个后，它会被并入 mockBackups，从而不再出现在 unmanaged 列表里
+// （与后端 Scan 的差集口径一致）。
+const mockUnmanagedBackups: Array<{
+  fileId: string;
+  packageId: string;
+  sizeBytes: number;
+  modifiedAt: string;
+  hasSidecar: boolean;
+  valid: boolean;
+  reason?: string;
+  renamed: boolean;
+}> = [
+  {
+    fileId: "bk-20261013-082334-f7ed3f",
+    packageId: "bk-20261013-082334-f7ed3f",
+    sizeBytes: 210639,
+    modifiedAt: new Date(Date.now() - 5 * 24 * 3600 * 1000).toISOString(),
+    hasSidecar: true,
+    valid: true,
+    renamed: false,
+  },
+  {
+    fileId: "bk-20261014-213902-573c66",
+    packageId: "bk-20261014-213902-573c66",
+    sizeBytes: 542724,
+    modifiedAt: new Date(Date.now() - 4 * 24 * 3600 * 1000).toISOString(),
+    hasSidecar: false,
+    valid: true,
+    renamed: false,
+  },
+  {
+    fileId: "bk-20261015-000000-broken",
+    packageId: "",
+    sizeBytes: 4096,
+    modifiedAt: new Date(Date.now() - 3 * 24 * 3600 * 1000).toISOString(),
+    hasSidecar: false,
+    valid: false,
+    reason: "归档无法打开或不是本产品的节点备份包",
+    renamed: false,
+  },
+];
+
+// —— FR-40：恢复演练报告内存态（仅 devmock）——
+// 按包标识分桶存放报告，最近优先（与后端 ListByPackage 的排序口径一致）。
+// 预置一条**失败**报告：失败报告是演练最该留下的产物，界面必须能如实渲染它，
+// 所以 devmock 默认就该带上一条，而不是只给"一切正常"的样例。
+const mockDrillReports = new Map<string, BackupVerificationReport[]>();
+
+let mockDrillSeq = 1;
+
+function drillReportId(): number {
+  mockDrillSeq += 1;
+  return mockDrillSeq;
+}
+
+/** 按包标识取报告列表（最近优先）；首次访问时注入一条预置失败报告。 */
+function drillReportsFor(packageId: string): BackupVerificationReport[] {
+  const existing = mockDrillReports.get(packageId);
+  if (existing) {
+    return existing;
+  }
+  const seeded: BackupVerificationReport[] = [
+    {
+      id: drillReportId(),
+      packageId,
+      level: "deep",
+      ok: false,
+      startedAt: new Date(Date.now() - 3 * 3600 * 1000).toISOString(),
+      finishedAt: new Date(Date.now() - 3 * 3600 * 1000 + 5230).toISOString(),
+      durationMs: 5230,
+      checks: [
+        {
+          name: "integrity",
+          ok: true,
+          detail: "归档完整：制品 74481 件，blob 74481 个（73400320 字节），级别 deep",
+          durationMs: 4100,
+        },
+        {
+          name: "extract",
+          ok: true,
+          detail: "已解包到隔离目录：/var/lib/jianartifact/backup-drill/…",
+          durationMs: 980,
+        },
+        {
+          name: "sqlite",
+          ok: true,
+          detail: "quick_check 通过，关键表（5 张）可查询",
+          durationMs: 120,
+        },
+        {
+          name: "blobs",
+          ok: false,
+          detail: "解出的 blob 数不符：manifest 74481 实际 74478",
+          durationMs: 30,
+        },
+      ],
+      errorSummary: "解出的 blob 数不符：manifest 74481 实际 74478",
+    },
+  ];
+  mockDrillReports.set(packageId, seeded);
+  return seeded;
+}
+
+/** 生成一次"演练结果"报告：浅校验全通过，深校验按序号交替通过 / 失败，覆盖两种渲染分支。 */
+function buildDrillReport(
+  packageId: string,
+  level: BackupVerificationLevel,
+): BackupVerificationReport {
+  const deep = level === "deep";
+  const assets = findMockBackup(packageId)?.counts?.assets ?? 0;
+  const startedAt = new Date().toISOString();
+  const durationMs = deep ? 4200 : 180;
+  const flaky = deep && drillReportId() % 2 === 0;
+  const checks: BackupDrillCheck[] = [
+    {
+      name: "integrity",
+      ok: true,
+      detail: `归档完整：制品 ${assets} 件，blob ${assets} 个（73400320 字节），级别 ${level}`,
+      durationMs: deep ? 3600 : 90,
+    },
+    {
+      name: "extract",
+      ok: true,
+      detail: "已解包到隔离目录：/var/lib/jianartifact/backup-drill/…",
+      durationMs: deep ? 500 : 60,
+    },
+    { name: "sqlite", ok: true, detail: "quick_check 通过，关键表（5 张）可查询", durationMs: 40 },
+    {
+      name: "blobs",
+      ok: !flaky,
+      detail: flaky
+        ? `解出的 blob 数不符：manifest ${assets} 实际 ${Math.max(0, assets - 3)}`
+        : `解出的 blob 数与 manifest 一致：${assets} 个`,
+      durationMs: 20,
+    },
+  ];
+  return {
+    id: drillReportId(),
+    packageId,
+    level,
+    ok: checks.every((check) => check.ok),
+    startedAt,
+    finishedAt: new Date(Date.parse(startedAt) + durationMs).toISOString(),
+    durationMs,
+    checks,
+    ...(checks.every((check) => check.ok)
+      ? {}
+      : { errorSummary: checks.find((check) => !check.ok)?.detail ?? "" }),
+  };
+}
+
+/** 演练是否"正在跑"：受理后短暂保留，便于界面看到轮询中的加载态。 */
+const pendingDrills = new Set<string>();
 
 // —— FR-134：写入冻结窗口内存态（仅 devmock）——
 // 进程内一个状态对象；未冻结时仅含 frozen:false，避免输出 until/frozenAt。
@@ -458,6 +644,12 @@ function seedImports(): BackupImport[] {
 let mockImports: BackupImport[] = seedImports();
 let mockImportSeq = 1;
 
+// FR-40 追加六：待重启生效的恢复。
+// 只有导入/上传到达 pending_restart 时才置位——这正是后端的真实语义：暂存成功后写
+// restore.pending，此后任何导入都会被 409 restore_pending 拒绝，直到重启完成替换。
+// null 表示无待生效恢复（绝大多数时候）。
+let mockPendingRestore: { packageId: string; origin: string; stagedAt: string } | null = null;
+
 // —— FR-137：分片上传备份包内存态（仅 devmock）——
 // 服务端决定的分片大小固定 8 MiB；uploadedChunks 以实际收到的分片为准（可续传）。
 const UPLOAD_CHUNK_SIZE = 8 * 1024 * 1024;
@@ -512,6 +704,13 @@ function advanceMockImport(importId: string): void {
           r.finishedAt = new Date().toISOString();
           r.restorePendingAt = new Date().toISOString();
           r.updatedAt = new Date().toISOString();
+          // 同步置位"有待生效恢复"：界面据此把两个导入按钮转橙并解释"为什么现在导入不了"，
+          // 与后端写 restore.pending 的效果一一对应。
+          mockPendingRestore = {
+            packageId: r.packageId,
+            origin: r.origin,
+            stagedAt: r.restorePendingAt,
+          };
         }
       }, 500);
     }
@@ -526,9 +725,13 @@ export function resetMockBackups(): void {
   mockFreeze = { frozen: false };
   mockImports = seedImports();
   mockImportSeq = 1;
+  // 待生效恢复也是备份域状态：不复位会让"某用例导入过"泄漏成"下个用例一进来就待重启"。
+  mockPendingRestore = null;
   // 分片上传会话同属备份域，一并复位，避免用例间状态泄漏。
   // 注意 mockUploadIdCounter 不复位：id 需跨会话保持唯一。
   mockUploads = {};
+  // 未管理包列表本身是只读夹具（导入后果是并入 mockBackups，不从这里删除），
+  // 但 mockBackups 已被上面的 seedBackups 复位，所以这里不必额外处理。
 }
 
 function findMockBackup(packageId: string): BackupPackage | undefined {
@@ -544,6 +747,8 @@ function createMockBackup(mode: BackupPackage["mode"], label: string): BackupPac
   return {
     packageId: `bk-${stamp}-dev${String(mockBackupSeq).padStart(3, "0")}`,
     mode,
+    // Web 端发起的生成一律是人工来源；自动来源只由 backup-auto 作业产生。
+    origin: "manual",
     status: "queued",
     label,
     sizeBytes: 0,
@@ -763,6 +968,92 @@ function isValidAssetOperationBody(body: AssetOperationBody): body is ValidAsset
     body.overrideReason.trim().length > 0 &&
     body.overrideReason.length <= 512
   );
+}
+
+/** devmock 版时间单位换算表：与后端 domain/duration_unit.go 的 unitSeconds 对齐。 */
+const MOCK_UNIT_SECONDS: Record<string, number> = {
+  seconds: 1,
+  minutes: 60,
+  hours: 3600,
+  days: 86400,
+  weeks: 7 * 86400,
+  months: 30 * 86400,
+  years: 365 * 86400,
+};
+
+/**
+ * 解析间隔表达式（"5m"/"2h"/"1d"/"1mo"/"1y"，裸数字按秒）。
+ * 无法解析时返回 null，由调用方回落到秒字段。
+ */
+function parseMockDurationExpression(raw: string): number | null {
+  const s = raw.trim().toLowerCase();
+  if (!s) return null;
+  const m = /^(\d+)\s*([a-z]*)$/.exec(s);
+  if (!m) return null;
+  const value = Number(m[1]);
+  if (!Number.isFinite(value) || value < 0) return null;
+  if (value === 0) return 0;
+  const suffix = m[2];
+  if (!suffix) return value;
+  const unitMap: Record<string, string> = {
+    s: "seconds",
+    sec: "seconds",
+    secs: "seconds",
+    second: "seconds",
+    seconds: "seconds",
+    m: "minutes",
+    min: "minutes",
+    mins: "minutes",
+    minute: "minutes",
+    minutes: "minutes",
+    h: "hours",
+    hr: "hours",
+    hour: "hours",
+    hours: "hours",
+    d: "days",
+    day: "days",
+    days: "days",
+    w: "weeks",
+    week: "weeks",
+    weeks: "weeks",
+    mo: "months",
+    month: "months",
+    months: "months",
+    y: "years",
+    year: "years",
+    years: "years",
+  };
+  const unit = unitMap[suffix];
+  if (!unit) return null;
+  return value * (MOCK_UNIT_SECONDS[unit] ?? 1);
+}
+
+/** 秒 → 最适合显示的「数值 + 单位」（天优先于周，与后端一致）。 */
+function mockDurationToParts(seconds: number): { value: number; unit: string } {
+  if (!Number.isFinite(seconds) || seconds <= 0) return { value: 0, unit: "seconds" };
+  for (const unit of ["years", "months", "days", "weeks", "hours", "minutes"]) {
+    const unitSecs = MOCK_UNIT_SECONDS[unit] ?? 1;
+    if (seconds % unitSecs === 0 && seconds / unitSecs >= 1) {
+      return { value: seconds / unitSecs, unit };
+    }
+  }
+  return { value: seconds, unit: "seconds" };
+}
+
+/** 秒 → 中文可读表达（与后端 FormatDurationHuman 对齐）。 */
+function mockFormatDurationHuman(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "关闭";
+  const { value, unit } = mockDurationToParts(seconds);
+  const names: Record<string, string> = {
+    years: "年",
+    months: "个月",
+    weeks: "周",
+    days: "天",
+    hours: "小时",
+    minutes: "分钟",
+    seconds: "秒",
+  };
+  return `${value} ${names[unit]}`;
 }
 
 export const handlers = [
@@ -1312,11 +1603,21 @@ export const handlers = [
     if (denied) {
       return denied;
     }
-    return HttpResponse.json(
-      isEmptyScenario(request)
-        ? { ...store.settings(), anonymousAccess: false, publicUrl: "" }
-        : store.settings(),
-    );
+    const base = isEmptyScenario(request)
+      ? { ...store.settings(), anonymousAccess: false, publicUrl: "" }
+      : store.settings();
+    // FR-40 追加九：后端会回显「数值 + 单位」与人类表达，界面据此回填两个控件。
+    // devmock 必须同口径返回，否则前端拿不到 value/unit，只能退回"按秒显示"。
+    const parts = mockDurationToParts(base.backupAutoInterval);
+    return HttpResponse.json({
+      ...base,
+      backupAutoIntervalExpr: mockFormatDurationHuman(base.backupAutoInterval),
+      backupAutoIntervalValue: parts.value,
+      backupAutoIntervalUnit: parts.unit,
+      // FR-40 追加十二：最近一次成功备份包的大小，供界面估算容量占用。
+      backupLatestPackageBytes:
+        mockBackups.find((b) => b.status === "done" && (b.sizeBytes ?? 0) > 0)?.sizeBytes ?? 0,
+    });
   }),
 
   http.put("*/api/v1/settings", async ({ request }) => {
@@ -1332,8 +1633,23 @@ export const handlers = [
       originTokenEnabled?: boolean;
       originTokenHeader?: string;
       originTokenValue?: string;
+      backupAutoInterval?: number;
+      backupKeepLast?: number;
+      backupRetentionDays?: number;
+      // FR-40 追加九：间隔的人类表达（"5m"/"2h"/"1d"…），优先级高于秒字段。
+      backupAutoIntervalExpr?: string;
     };
     const current = store.settings();
+    // 表达式优先：与后端 resolveBackupAutoInterval 的口径一致。
+    const nextInterval = (() => {
+      if (typeof body.backupAutoIntervalExpr === "string") {
+        const parsed = parseMockDurationExpression(body.backupAutoIntervalExpr);
+        if (parsed !== null) return parsed;
+      }
+      return typeof body.backupAutoInterval === "number"
+        ? body.backupAutoInterval
+        : current.backupAutoInterval;
+    })();
     return HttpResponse.json(
       store.updateSettings({
         anonymousAccess:
@@ -1358,6 +1674,15 @@ export const handlers = [
           typeof body.originTokenValue === "string"
             ? body.originTokenValue
             : current.originTokenValue,
+        // FR-40：三项都按 `typeof === "number"` 判断而非真值判断——0 是合法取值
+        // （关闭 / 不限制），用 `body.x || current.x` 会把 0 悄悄吞回存量值。
+        backupAutoInterval: nextInterval,
+        backupKeepLast:
+          typeof body.backupKeepLast === "number" ? body.backupKeepLast : current.backupKeepLast,
+        backupRetentionDays:
+          typeof body.backupRetentionDays === "number"
+            ? body.backupRetentionDays
+            : current.backupRetentionDays,
       }),
     );
   }),
@@ -2503,6 +2828,284 @@ export const handlers = [
     return HttpResponse.json(mockFreeze);
   }),
 
+  // —— 一键重启（FR-40 追加七，admin）——
+  // mock 环境没有可重启的进程，故如实返回**降级**结果（supported:false + 可复制命令）：
+  // 这正是真实世界里"容器部署 / 无 systemctl"时的形态，也是界面必须能处理的那条分支。
+  // 若这里假装 supported:true，前端探活会一直等一个永不重启的 mock，把降级路径漏测掉。
+  // 只读探测：与 POST 同结构，但**绝不排定重启**（预览环境没有可重启的进程）。
+  // 界面用它显示"本机可用命令"，故这里也如实给降级结果。
+  http.get("*/api/v1/maintenance/restart", ({ request }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    return HttpResponse.json({
+      supported: false,
+      command: "sudo systemctl restart jianartifact",
+      reason: "预览环境不提供自动重启",
+      scope: "system",
+    });
+  }),
+
+  http.post("*/api/v1/maintenance/restart", ({ request }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    return HttpResponse.json({
+      supported: false,
+      command: "sudo systemctl restart jianartifact",
+      reason: "预览环境不提供自动重启",
+      scope: "system",
+    });
+  }),
+
+  // —— 待重启生效的恢复状态（FR-40 追加六，admin）——
+  // 与下面 /backups/import 等一样必须早于 `*/api/v1/backups/:id`，否则会被 :id 通配吞掉。
+  // 默认 pending=false（绝大多数时候如此），由导入/上传的终态推进来翻转，
+  // 这样开发环境也能复现"导入成功后按钮转橙、再导入被拒"的完整链路。
+  http.get("*/api/v1/backups/restore-status", ({ request }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    if (!mockPendingRestore) {
+      // 未暂存时只回 pending，其余字段一律省略（契约要求：不返回零值占位，
+      // 否则前端会把 0001-01-01 当成真实时间渲染出来）。
+      return HttpResponse.json({ pending: false });
+    }
+    return HttpResponse.json({
+      pending: true,
+      packageId: mockPendingRestore.packageId,
+      origin: mockPendingRestore.origin,
+      stagedAt: mockPendingRestore.stagedAt,
+    });
+  }),
+
+  // —— 备份包内容预览（FR-40 追加十一，admin）——
+  // 返回包内仓库/账号/制品样例。必须早于 `*/api/v1/backups/:id`，否则被 :id 通配吞掉。
+  http.get("*/api/v1/backups/:id/preview", ({ request, params }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const id = String(params.id);
+    const pkg = mockBackups.find((b) => b.packageId === id);
+    if (!pkg) {
+      return err("not_found", "备份包不存在", 404);
+    }
+    return HttpResponse.json({
+      manifest: {
+        packageId: pkg.packageId,
+        mode: pkg.mode,
+        appVersion: pkg.appVersion,
+        dbSchemaVersion: pkg.dbSchemaVersion,
+        createdAt: pkg.createdAt,
+      },
+      repositories: [
+        { name: "raw-releases", format: "raw", type: "hosted" },
+        { name: "maven-central", format: "maven", type: "proxy" },
+      ],
+      users: [
+        { username: "admin", role: "admin", status: "active" },
+        { username: "developer", role: "user", status: "active" },
+      ],
+      sampleAssets: ["pkg/item-a/1.0.0/a.jar", "pkg/item-b/2.0.0/b.pom"],
+      totalAssets: pkg.counts?.assets ?? 0,
+      blobBytes: pkg.sizeBytes,
+    });
+  }),
+
+  // —— 包内容与本机差异（FR-40 追加十四，admin）——
+  // 必须早于 `*/api/v1/backups/:id`，否则被 :id 通配吞掉。
+  http.get("*/api/v1/backups/:id/diff", ({ request, params }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const id = String(params.id);
+    const pkg = mockBackups.find((b) => b.packageId === id);
+    if (!pkg) {
+      return err("not_found", "备份包不存在", 404);
+    }
+    const url = new URL(request.url);
+    const scope = url.searchParams.get("scope") ?? "summary";
+    const kind = url.searchParams.get("kind") ?? "";
+    const page = Number(url.searchParams.get("page") ?? "1");
+    const pageSize = Math.min(Number(url.searchParams.get("pageSize") ?? "50"), 200);
+
+    const summary = {
+      packageId: id,
+      metadataOnly: true,
+      repositories: { onlyInPackage: 1, onlyLocal: 0, changed: 0, same: 1 },
+      assets: { onlyInPackage: 3, onlyLocal: 2, changed: 1, same: 10 },
+      users: { onlyInPackage: 0, onlyLocal: 1, changed: 0, same: 2 },
+    };
+    if (scope === "summary") {
+      return HttpResponse.json(summary);
+    }
+    // 明细：生成确定的假数据，便于测试断言分页。
+    const buckets: Record<
+      string,
+      { onlyInPackage: number; onlyLocal: number; changed: number; same: number }
+    > = {
+      repositories: summary.repositories,
+      assets: summary.assets,
+      users: summary.users,
+    };
+    const total = buckets[scope]?.[kind as "onlyInPackage"] ?? 0;
+    const items = [];
+    for (let i = (page - 1) * pageSize; i < Math.min(page * pageSize, total); i++) {
+      items.push({
+        key: `${scope}-${kind}-${i + 1}`,
+        detail: kind === "changed" ? "本机 100 → 包内 200" : "1024 字节",
+      });
+    }
+    return HttpResponse.json({
+      packageId: id,
+      metadataOnly: true,
+      detail: { items, total, truncated: page * pageSize < total },
+    });
+  }),
+
+  // —— 未管理备份包（FR-40 追加八，admin）——
+  // 这些包在磁盘上有包体但登记表无记录。mock 里用一组固定候选模拟"历史残留"。
+  // 必须早于 `*/api/v1/backups/:id`，否则 unmanaged 会被 :id 通配吞掉。
+  http.get("*/api/v1/backups/unmanaged", ({ request }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const items = mockUnmanagedBackups.filter(
+      (it) => !mockBackups.some((b) => b.packageId === it.fileId),
+    );
+    return HttpResponse.json({ items, total: items.length });
+  }),
+
+  http.post("*/api/v1/backups/adopt", async ({ request }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const body = (await request.json().catch(() => ({}))) as { fileIds?: string[] };
+    const ids = body.fileIds ?? [];
+    const items: Array<{
+      fileId: string;
+      packageId: string;
+      adopted: boolean;
+      skipped: boolean;
+      reason?: string;
+    }> = [];
+    let adopted = 0;
+    let skipped = 0;
+    let failed = 0;
+    for (const fileId of ids) {
+      const cand = mockUnmanagedBackups.find((it) => it.fileId === fileId);
+      if (!cand) {
+        items.push({ fileId, packageId: "", adopted: false, skipped: false, reason: "包不存在" });
+        failed += 1;
+        continue;
+      }
+      if (!cand.valid) {
+        items.push({
+          fileId,
+          packageId: "",
+          adopted: false,
+          skipped: true,
+          reason: "归档无法打开或不是本产品的节点备份包",
+        });
+        skipped += 1;
+        continue;
+      }
+      if (mockBackups.some((b) => b.packageId === cand.fileId)) {
+        items.push({
+          fileId,
+          packageId: cand.fileId,
+          adopted: false,
+          skipped: true,
+          reason: "该包已在管理列表中",
+        });
+        skipped += 1;
+        continue;
+      }
+      // 导入 = 补建登记行，包随之出现在列表里。
+      mockBackups.unshift({
+        packageId: cand.fileId,
+        mode: "hot",
+        origin: "manual",
+        status: "done",
+        label: "导入的未管理包",
+        sizeBytes: cand.sizeBytes,
+        counts: {
+          users: 1,
+          tokens: 0,
+          repositories: 1,
+          acls: 0,
+          assets: 1,
+          formatMetadata: 0,
+        },
+        nodeId: "np-demo",
+        appVersion: MOCK_APP_VERSION,
+        dbSchemaVersion: MOCK_SCHEMA_VERSION,
+        createdAt: cand.modifiedAt,
+        finishedAt: cand.modifiedAt,
+      });
+      items.push({ fileId, packageId: cand.fileId, adopted: true, skipped: false });
+      adopted += 1;
+    }
+    return HttpResponse.json({ items, adopted, skipped, failed });
+  }),
+
+  // —— 用本机已有的备份包恢复（FR-40 追加六，admin）——
+  // 补的是"页面上明明有包，却没有任何按钮能用它恢复"这个缺口（实测反馈"只能备份无法恢复"）。
+  // 语义与其它三条恢复通道一致：受理 → 暂存 → 写 restore.pending → 需重启生效，
+  // 故这里也置位 mockPendingRestore，让"待重启"提示与 409 防护在开发环境同样可见。
+  // 必须早于 `*/api/v1/backups/:id`，否则会被 :id 通配吞掉。
+  http.post("*/api/v1/backups/:id/restore", async ({ request, params }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    if (mockPendingRestore) {
+      return err("restore_pending", "已存在待生效的备份恢复，请先重启服务完成替换", 409);
+    }
+    const id = String(params.id);
+    const pkg = mockBackups.find((b) => b.packageId === id);
+    if (!pkg) {
+      return err("not_found", "备份包不存在", 404);
+    }
+    // 只有 done 的包能作为恢复源——与后端一致（生成中/失败的包内容不可靠）。
+    if (pkg.status !== "done") {
+      return err("backup_not_done", "备份包未生成完成或已失败，不能作为恢复源", 409);
+    }
+    const body = (await request.json().catch(() => ({}))) as {
+      overwrite?: boolean;
+      deep?: boolean;
+    };
+    const importId = `imp-${new Date()
+      .toISOString()
+      .replace(/[-:T.]/g, "")
+      .slice(0, 14)}-${String(++mockImportSeq).padStart(3, "0")}`;
+    const record: BackupImport = {
+      importId,
+      origin: "local",
+      status: "queued",
+      operator: store.findUser(mockUserId(request) ?? 0)?.username ?? "admin",
+      overwrite: body.overwrite === true,
+      deep: body.deep === true,
+      totalBytes: 73_400_320,
+      fetchedBytes: 0,
+      blobCount: 0,
+      // 本机包恢复：源就是本机这个包本身，故 packageId 直接是它，无需从别处带回。
+      packageId: id,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    mockImports.unshift(record);
+    advanceMockImport(importId);
+    return HttpResponse.json(record, { status: 202 });
+  }),
+
   // —— 从 URL 导入备份包（FR-137，admin）——
   // 注意路由注册顺序：必须早于 `*/api/v1/backups/:id`，否则 /backups/imports
   // 会被 :id 通配吞掉（与 gin 上实测一致的静默吞路由问题）。
@@ -2510,6 +3113,11 @@ export const handlers = [
     const denied = adminUnauthorized(request);
     if (denied) {
       return denied;
+    }
+    // 已有待生效恢复时拒绝叠加第二次——与后端一致（409 restore_pending）。
+    // 不复现这条，前端就测不出"待重启期间导入被拒"的分支。
+    if (mockPendingRestore) {
+      return err("restore_pending", "已存在待生效的备份恢复，请先重启服务完成替换", 409);
     }
     const body = (await request.json().catch(() => ({}))) as {
       sourceUrl?: string;
@@ -2681,28 +3289,54 @@ export const handlers = [
     };
     session.status = "completed";
     const operator = store.findUser(mockUserId(request) ?? 0)?.username ?? "admin";
+    // FR-40 追加八：complete 不再产生导入记录，只把包收进备份列表。
+    // 因此这里直接返回一条 done 回执，并把包并入备份包列表（下方 push），
+    // 不再走 advanceMockImport 的 queued→…→pending_restart 状态机。
     const importId = `imp-${new Date()
       .toISOString()
       .replace(/[-:T.]/g, "")
       .slice(0, 14)}-${String(++mockImportSeq).padStart(3, "0")}`;
+    const packageId = `bk-${new Date()
+      .toISOString()
+      .replace(/[-:T.]/g, "")
+      .slice(0, 14)}-${String(mockImportSeq).padStart(6, "0")}`;
     const record: BackupImport = {
       importId,
       origin: "upload",
-      status: "queued",
+      status: "done",
       operator,
       overwrite: body.overwrite ?? false,
       deep: body.deep ?? false,
       totalBytes: session.totalBytes,
       fetchedBytes: session.totalBytes,
       blobCount: 0,
-      packageId: "",
+      packageId,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
-    mockImports.unshift(record);
-    // 复用从 URL 导入的推进状态机：queued → fetching → staging → pending_restart。
-    advanceMockImport(importId);
-    return HttpResponse.json(record, { status: 202 });
+    // 包进备份列表：这才是界面接下来要看到的东西。
+    mockBackups.unshift({
+      packageId,
+      mode: "hot",
+      origin: "manual",
+      status: "done",
+      label: "上传的备份包",
+      sizeBytes: session.totalBytes,
+      counts: {
+        users: 1,
+        tokens: 0,
+        repositories: 1,
+        acls: 0,
+        assets: 1,
+        formatMetadata: 0,
+      },
+      nodeId: "np-demo",
+      appVersion: MOCK_APP_VERSION,
+      dbSchemaVersion: MOCK_SCHEMA_VERSION,
+      createdAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString(),
+    });
+    return HttpResponse.json(record, { status: 200 });
   }),
 
   http.post("*/api/v1/backups/uploads/:id/abort", ({ request, params }) => {
@@ -2792,6 +3426,68 @@ export const handlers = [
         Math.floor(Date.now() / 1000) + 1800
       }&token=mock-signature`,
       expiresAt: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+    });
+  }),
+
+  // —— FR-40：恢复演练（202 + 轮询）——
+  // 路由注册顺序与 :id 通配无关（drill / verifications 都在 :id 段之后，不会互相吞），
+  // 但仍集中放在备份端点组内，与后端 api.gen.go 的注册顺序对应。
+  http.post("*/api/v1/backups/:id/drill", async ({ request, params }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const packageId = String(params.id);
+    const found = findMockBackup(packageId);
+    if (!found) {
+      return err("not_found", "备份包不存在", 404);
+    }
+    if (found.status !== "done") {
+      return err("backup_not_done", "备份包尚未生成完成，无法演练", 409);
+    }
+    const body = (await request.json().catch(() => ({}))) as DrillBackupRequest;
+    const level = body.level ?? "shallow";
+    if (level !== "shallow" && level !== "deep") {
+      return err("bad_request", `演练级别只能是 shallow 或 deep，实际 "${level}"`, 400);
+    }
+
+    // 后端是"受理后异步跑、报告稍后落库"；这里用定时器复现同一时序，
+    // 让前端的轮询逻辑在 devmock 下也被真正走一遍（否则轮询分支从不被执行）。
+    // 延迟沿用全局网络档位，使"慢速"档下这条异步时序也一并变慢，便于观察加载态。
+    pendingDrills.add(packageId);
+    const report = buildDrillReport(packageId, level);
+    report.startedAt = new Date().toISOString();
+    setTimeout(() => {
+      report.finishedAt = new Date().toISOString();
+      drillReportsFor(packageId).unshift(report);
+      pendingDrills.delete(packageId);
+    }, mockNetworkDelayMs());
+
+    const accepted: BackupDrillAccepted = {
+      packageId,
+      level,
+      acceptedAt: report.startedAt,
+    };
+    return HttpResponse.json(accepted, { status: 202 });
+  }),
+
+  http.get("*/api/v1/backups/:id/verifications", ({ request, params }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const packageId = String(params.id);
+    if (!findMockBackup(packageId)) {
+      return err("not_found", "备份包不存在", 404);
+    }
+    const url = new URL(request.url);
+    const page = intParam(url, "page", 1);
+    const pageSize = intParam(url, "page_size", 20);
+    const all = drillReportsFor(packageId);
+    const start = (page - 1) * pageSize;
+    return HttpResponse.json({
+      items: all.slice(start, start + pageSize),
+      total: all.length,
     });
   }),
 

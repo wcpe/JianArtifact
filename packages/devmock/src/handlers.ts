@@ -41,6 +41,16 @@ export type UsageInfo = Schemas["UsageInfo"];
 export type MaintenanceJob = Schemas["MaintenanceJob"];
 export type MaintenanceJobList = Schemas["MaintenanceJobList"];
 export type MaintenanceJobRunResult = Schemas["MaintenanceJobRunResult"];
+/** FR-40：备份包来源、恢复演练的受理结果与报告。 */
+export type BackupPackage = Schemas["BackupPackage"];
+export type BackupPackageList = Schemas["BackupPackageList"];
+export type BackupPackageOrigin = Schemas["BackupPackageOrigin"];
+export type BackupVerificationLevel = Schemas["BackupVerificationLevel"];
+export type BackupDrillCheck = Schemas["BackupDrillCheck"];
+export type BackupVerificationReport = Schemas["BackupVerificationReport"];
+export type BackupVerificationList = Schemas["BackupVerificationList"];
+export type DrillBackupRequest = Schemas["DrillBackupRequest"];
+export type BackupDrillAccepted = Schemas["BackupDrillAccepted"];
 
 /** GET /api/v1/audit-logs 的非 OpenAPI 管理面响应。 */
 export interface MockAuditLogEntry {
@@ -240,6 +250,78 @@ export function mockMaintenanceJobList(): MaintenanceJobList {
 /** FR-41：POST /api/v1/maintenance/jobs/{name}/run 的契约响应（202 已受理）。 */
 export function mockMaintenanceJobRunResult(name = "blob-gc"): MaintenanceJobRunResult {
   return { name, started: true };
+}
+
+/** FR-40：GET /api/v1/backups 的单个条目（来源为手动）。 */
+export function mockBackupPackage(): BackupPackage {
+  return {
+    packageId: "bk-20260910-090000-a1b2c3",
+    mode: "hot",
+    origin: "manual",
+    status: "done",
+    label: "例行备份",
+    sizeBytes: 73400320,
+    nodeId: "np-demo",
+    appVersion: MOCK_APP_VERSION,
+    dbSchemaVersion: 43,
+    createdAt: MOCK_TIME,
+    counts: {
+      users: 5,
+      tokens: 8,
+      repositories: 20,
+      acls: 12,
+      assets: 74481,
+      formatMetadata: 74,
+    },
+  };
+}
+
+/** FR-40：GET /api/v1/backups 的契约响应（一条手动 + 一条自动，覆盖 origin 两种取值）。 */
+export function mockBackupPackageList(): BackupPackageList {
+  return {
+    items: [mockBackupPackage(), { ...mockBackupPackage(), packageId: "bk-auto", origin: "auto" }],
+    total: 2,
+  };
+}
+
+/** FR-40：POST /api/v1/backups/{id}/drill 的请求体。 */
+export function mockDrillBackupRequest(): DrillBackupRequest {
+  return { level: "deep" };
+}
+
+/** FR-40：POST /api/v1/backups/{id}/drill 的契约响应（202 受理，不代表已完成）。 */
+export function mockBackupDrillAccepted(): BackupDrillAccepted {
+  return { packageId: "bk-20260910-090000-a1b2c3", level: "shallow", acceptedAt: MOCK_TIME };
+}
+
+/**
+ * FR-40：GET /api/v1/backups/{id}/verifications 的单份报告。
+ *
+ * 刻意给一份**未通过**的报告：失败报告是演练最该留下的产物，
+ * 用"全绿"样例做契约校验会让「失败时字段是否齐全」永远不被覆盖。
+ */
+export function mockBackupVerificationReport(): BackupVerificationReport {
+  return {
+    id: 1,
+    packageId: "bk-20260910-090000-a1b2c3",
+    level: "deep",
+    ok: false,
+    startedAt: MOCK_TIME,
+    finishedAt: MOCK_TIME,
+    durationMs: 5230,
+    checks: [
+      { name: "integrity", ok: true, detail: "归档完整：制品 74481 件", durationMs: 4100 },
+      { name: "extract", ok: true, detail: "已解包到隔离目录" },
+      { name: "sqlite", ok: true, detail: "quick_check 通过，关键表（5 张）可查询" },
+      { name: "blobs", ok: false, detail: "解出的 blob 数不符：manifest 74481 实际 74478" },
+    ],
+    errorSummary: "解出的 blob 数不符：manifest 74481 实际 74478",
+  };
+}
+
+/** FR-40：GET /api/v1/backups/{id}/verifications 的契约响应。 */
+export function mockBackupVerificationList(): BackupVerificationList {
+  return { items: [mockBackupVerificationReport()], total: 1 };
 }
 
 /** GET /api/v1/repositories 的契约响应。 */

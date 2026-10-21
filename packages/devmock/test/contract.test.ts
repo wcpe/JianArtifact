@@ -8,9 +8,15 @@ import {
   mockAclList,
   mockAddUserGroupMemberRequest,
   mockAssetList,
+  mockBackupDrillAccepted,
+  mockBackupPackage,
+  mockBackupPackageList,
+  mockBackupVerificationList,
+  mockBackupVerificationReport,
   mockBatchDeleteAssets,
   mockConnectionStatus,
   mockCreateUserGroupRequest,
+  mockDrillBackupRequest,
   mockHalfOpenConnectionStatus,
   mockHealthz,
   mockLoginResponse,
@@ -386,6 +392,96 @@ describe("devmock ↔ OpenAPI 契约一致性", () => {
     };
     expect(validateProxyRepository(proxyRepo)).toBe(true);
     expect(validateProxyRepository({ ...proxyRepo, cacheRetentionDays: -1 })).toBe(false);
+  });
+
+  // —— FR-40：来源列 + 恢复演练 ——
+  it("备份包来源仅接受 manual / auto，且是 required（漂移可被检出）", () => {
+    expectValid("BackupPackage", mockBackupPackage());
+    expectValid("BackupPackageList", mockBackupPackageList());
+
+    // 两种来源取值都合法；覆盖 mock 里真实出现的两种形状。
+    const validate = ajv.compile(schemaFor("BackupPackage"));
+    for (const origin of ["manual", "auto"]) {
+      expect(validate({ ...mockBackupPackage(), origin })).toBe(true);
+    }
+    // 反向：origin 是 required——缺它必须被拒（否则前端拿到 undefined 会渲染成空白徽章）。
+    const withoutOrigin: Record<string, unknown> = { ...mockBackupPackage() };
+    delete withoutOrigin.origin;
+    expect(validate(withoutOrigin)).toBe(false);
+    // 反向：非法来源取值与大小写近似写法都不得被静默放行。
+    for (const near of ["Manual", "AUTO", "automatic", "手动", ""]) {
+      expect(validate({ ...mockBackupPackage(), origin: near })).toBe(false);
+    }
+    // 枚举本身必须含这两个取值（直接读契约，避免"mock 恰好没用到"掩盖漂移）。
+    const originSchema = schemaFor("BackupPackageOrigin") as { enum?: string[] };
+    expect(originSchema.enum).toEqual(["manual", "auto"]);
+  });
+
+  it("恢复演练的受理结果与报告满足契约，漂移可被检出", () => {
+    expectValid("DrillBackupRequest", mockDrillBackupRequest());
+    expectValid("DrillBackupRequest", {});
+    expectValid("BackupDrillAccepted", mockBackupDrillAccepted());
+    expectValid("BackupDrillCheck", mockBackupVerificationReport().checks[0]!);
+    expectValid("BackupVerificationReport", mockBackupVerificationReport());
+    expectValid("BackupVerificationList", mockBackupVerificationList());
+
+    // 反向：报告缺 required 字段（id / level / ok / 时间 / durationMs / checks）必须被拒。
+    const validateReport = ajv.compile(schemaFor("BackupVerificationReport"));
+    const full = mockBackupVerificationReport();
+    for (const key of [
+      "id",
+      "packageId",
+      "level",
+      "ok",
+      "startedAt",
+      "finishedAt",
+      "durationMs",
+      "checks",
+    ]) {
+      const partial: Record<string, unknown> = { ...full };
+      delete partial[key];
+      expect(validateReport(partial)).toBe(false);
+    }
+    // 反向：级别只接受 shallow / deep。
+    expect(validateReport({ ...full, level: "full" })).toBe(false);
+    // 反向：失败报告不因缺 errorSummary 而非法——它是可选字段（成功时本就没有）。
+    const succeeded: Record<string, unknown> = { ...full, ok: true };
+    delete succeeded.errorSummary;
+    expect(validateReport(succeeded)).toBe(true);
+    // 反向：受理结果缺 acceptedAt 必须被拒（轮询要靠它判断哪条报告属于本次演练）。
+    const validateAccepted = ajv.compile(schemaFor("BackupDrillAccepted"));
+    expect(validateAccepted({ packageId: "bk-a", level: "shallow" })).toBe(false);
+    // 反向：请求体级别非法取值必须被拒。
+    const validateRequest = ajv.compile(schemaFor("DrillBackupRequest"));
+    expect(validateRequest({ level: "ultra" })).toBe(false);
+
+    // 反向：检查项的 detail / name 是 required——报告必须能说清"哪项、为什么"。
+    const validateCheck = ajv.compile(schemaFor("BackupDrillCheck"));
+    expect(validateCheck({ name: "integrity", ok: true })).toBe(false);
+    expect(validateCheck({ ok: true, detail: "缺少检查项名" })).toBe(false);
+  });
+
+  it("两个演练端点已登记在契约里且声明了预期状态码", () => {
+    const doc = loadOpenApi() as unknown as {
+      paths: Record<
+        string,
+        {
+          post?: { operationId?: string; responses?: Record<string, unknown> };
+          get?: { operationId?: string; responses?: Record<string, unknown> };
+        }
+      >;
+    };
+    const drill = doc.paths["/api/v1/backups/{id}/drill"]?.post;
+    expect(drill?.operationId).toBe("drillBackup");
+    // 202 是关键约定：深校验耗时与包体积同阶，端点必须异步受理而不是同步等待。
+    expect(drill?.responses?.["202"]).toBeTruthy();
+    expect(drill?.responses?.["404"]).toBeTruthy();
+    expect(drill?.responses?.["409"]).toBeTruthy();
+
+    const verifications = doc.paths["/api/v1/backups/{id}/verifications"]?.get;
+    expect(verifications?.operationId).toBe("listBackupVerifications");
+    expect(verifications?.responses?.["200"]).toBeTruthy();
+    expect(verifications?.responses?.["404"]).toBeTruthy();
   });
 
   it("契约漂移可被检出：缺 required 字段或非法枚举的响应校验失败", () => {

@@ -1116,14 +1116,61 @@ export const zh = {
     tabExternal: "外部导入",
     tabBackup: "备份与搬迁",
     refresh: "刷新",
+    // —— 任务台信息架构（备份页重做）——
+    // 页面按「先问你现在要做什么」组织：动作 → 关键事实 → 统一事件表。
+    startTitle: "立即备份",
+    startHint: "冻结写入后打一份完整的快照包，可下载到新机器恢复。",
+    startHintFrozen: "写入已冻结，现在打出的包在时间点上是一致的。",
+    // 动作区从「两张常驻卡」收成标题行右侧的一排按钮后，原来的卡内说明文字
+    // 改挂在「说明」气泡上（OpsHelpButton 的既有定位：不占常驻高度，需要时才展开）。
+    // 只新增气泡标题，说明正文复用原有键——另写一套会让旧键变零引用、等于删掉说明。
+    actionBarHelpTitle: "备份与搬迁怎么用",
+    // 待重启生效（FR-40 追加六）：导入成功后只写 restore.pending，真正的替换在下次启动完成；
+    // 在那之前任何导入都会被 409 拒绝。这个状态必须能解释清楚，否则用户只看到"一直被拒"。
+    pendingRestartBadge: "有一份恢复待重启生效",
+    pendingRestartTitle: "需要重启服务完成替换",
+    pendingRestartBody:
+      "已有一份备份包完成校验并暂存，**需重启服务后才会替换本机数据**。在那之前，再发起导入或上传都会被拒绝（避免叠加第二次恢复）。",
+    pendingRestartPackage: "待生效的包",
+    pendingRestartStagedAt: "暂存时间",
+    pendingRestartCommandLabel: "重启命令",
+    pendingRestartAfterRestart:
+      "重启后启动日志会打印已应用的恢复，并保留 pre-restore-<时间戳>/ 作为回滚退路。",
+    moveTitle: "搬迁到新机器",
+    moveHint: "把已有备份包传到目标实例，或从 URL 拉取——三条通道都会替换本机数据，需重启生效。",
+    factLastSuccess: "最近成功备份",
+    factNextAuto: "下次自动备份",
+    factLastVerify: "最近校验",
+    factUsage: "占用",
+    factAutoPolicy: "保留策略",
+    factVerifyPassed: "通过",
+    factVerifyFailed: "未通过",
+    factVerifyNone: "尚未校验",
+    factAutoOff: "已关闭",
+    factNextPending: "等待首次执行",
+    // 「已过点、等心跳来跑」与「确实还没有自动包」是两件不同的事，不能共用一句话：
+    // 前者实例上已有自动包，说成"等待首次执行"是假话（实测踩到）。
+    factNextDue: "即将执行",
+    factUsageValue: "{{size}} · {{count}} 个包",
+    factNoData: "—",
+    // —— FR-40 追加四：备份包与导入记录聚合进同一张表 ——
+    // 页面只剩三段：动作 → 关键事实 → 统一事件表；「导入与传输」弹窗与待处理条一并删除。
+    eventsSection: "备份与导入事件",
+    eventsEmpty: "暂无备份与导入记录",
+    eventsEmptyHint: "生成一个备份包，或从 URL 导入 / 上传一个包，事件会按时间出现在这里。",
+    eventType_package: "本机包",
+    eventType_import: "导入记录",
+    colIdentity: "标识",
+    colError: "错误",
+    importInlineCollapse: "收起",
+    importInlineBusyHint: "上传进行中，无法收起",
+    autoCfgSettingsButton: "自动备份设置",
+    drillPackageMissing:
+      "该备份包可能已被保留策略删除（自动备份包超出份数 / 天数上限后会被淘汰）。刷新列表即可看到最新状态。",
     create: "生成备份包",
-    empty: "暂无备份包",
-    emptyHint: "生成一个备份包，即可把它搬到新机器上恢复。",
-    colPackage: "包标识",
     colMode: "方式",
     colStatus: "状态",
     colSize: "大小",
-    colCounts: "包含",
     colCreated: "创建时间",
     colActions: "操作",
     mode_hot: "热备份",
@@ -1166,15 +1213,174 @@ export const zh = {
     copyFailed: "复制失败",
     verify: "校验",
     verifyDeep: "深度校验",
+    // 三个动作的分工必须能就地读到：菜单项只有几个字，用户看不出"快的只验结构、
+    // 慢的逐字节核对、演练还多一步真解包"。这些 title 是悬停即知的唯一入口。
+    verifyHint: "只读归档本身，回答「这个文件完整吗」。快，不碰本机数据。",
+    verifyDeepHint:
+      "在浅校验之上逐 blob 比对内容摘要，回答「内容有没有被篡改或位腐坏」。慢，耗时与包体积同阶。",
+    drillOpenHint:
+      "在隔离临时目录里真解包、真恢复一次，回答「这份包真的能恢复吗」。只读，不动本机数据。",
+    restoreHint:
+      "用这份包替换本机数据（含校验与暂存）。需重启服务后才生效，期间可回滚到 pre-restore 备份。",
+    restoreFromPackage: "用这个包恢复",
+    // 陈旧行：列表里那一行指向的包已不存在（自动备份每 30 秒生成并淘汰，而这些都是终态变化，列表不会自己刷新）。
+    // 裸报"备份包不存在"会让用户以为功能坏了；这里说清是"页面数据旧了"并已刷新。
+    staleRow:
+      "该备份包已不存在（可能已被保留策略淘汰），列表已刷新。请从最新列表里重试「{{action}}」。",
+    actionGetLink: "获取链接",
+    actionVerify: "校验",
+    actionDelete: "删除",
+    // 陈旧行处置的第四个动作：从列表行直接恢复。弹窗开着时包也可能已被淘汰（实测如此）。
+    actionRestore: "用这个包恢复",
+    restoreConfirmTitle: "用这份包恢复本机数据",
+    restoreConfirmBody:
+      "将以「{{id}}」替换本机现有数据（用户、仓库、制品、设置等）。执行前会先校验包并暂存，**需重启服务后才真正替换**；届时会保留一份 pre-restore 备份作为回滚退路。",
+    restoreOverwriteLabel: "目标实例非空时允许覆盖",
+    restoreOverwriteHint:
+      "本机已有数据时必需。不勾选而本机非空会被拒绝——这是防止误覆盖的保护，不是缺陷。",
+    restoreStart: "开始恢复",
+    restoreAccepted: "已受理，正在校验与暂存；完成后需重启服务生效",
+    // —— 恢复进度弹窗（追加七）——
+    // 受理后原先只弹一个 toast 就没了下文，用户不知道跑到哪、失败没有。
+    // 四条恢复通道（URL / 上传 / 本机包 / CLI）共用这一个弹窗，差别只在 origin。
+    restoreProgressTitle: "恢复进度",
+    // 阶段说明。逐阶段写清"正在做什么"，而不是只说"处理中"——
+    // 恢复是不可逆动作，用户需要据此判断现在能不能走开。
+    restoreStage_queued: "已排队，等待开始。",
+    restoreStage_fetching: "正在从来源拉取备份包。",
+    restoreStage_staging: "正在校验包并把数据暂存到待生效位置（此步最慢）。",
+    restoreStage_pending_restart: "校验与暂存已完成，等待重启服务生效。",
+    restoreStage_done: "已生效：本机数据已被这份包替换。",
+    restoreStage_failed: "恢复未完成，详见下方原因。",
+    restoreProgressBytes: "已拉取 {{fetched}} / {{total}}（{{percent}}%）",
+    // 无字节数可算的阶段（暂存 / 深校验）刻意不给百分比——编一个数字比不显示更误导。
+    restoreProgressIndeterminate: "处理中，共 {{blobs}} 个对象；此阶段耗时与包体积同阶。",
+    restoreReadyTitle: "可以重启了",
+    restoreReadyBody: "重启后本机数据会被替换。重启期间服务会短暂中断，页面需要手动刷新。",
+    // 恢复生效会把整个数据库替换成包里的快照，这条导入记录随之消失——
+    // 所以"读不到记录"在这里通常意味着**恢复已经成功**，界面不能报成读取失败。
+    restoreAppliedTitle: "恢复已生效",
+    restoreAppliedBody:
+      "本机数据已被这份包替换，导入记录随之消失（它写在被替换掉的那份数据库里）。列表已刷新。",
+    restoreAppliedClose: "知道了",
+    restoreFreezeAdvice:
+      "建议先冻结写入：重启会让进行中的写入无处落地，冻结可避免搬迁期间新产生的数据丢失。",
+    restoreFrozenNote: "已冻结写入，重启后记得解冻（否则实例保持只读）。",
+    // —— 一键重启（追加七）——
+    restartButton: "立即重启服务",
+    restartConfirmTitle: "立即重启服务",
+    restartConfirmBody:
+      "服务将在此提示后约 2 秒开始重启（进程自替换，无需额外权限），连接会中断数秒。确认现在重启？",
+    restartConfirm: "确认重启",
+    restartAccepted: "已受理重启，服务即将中断，请稍候刷新页面。",
+    restartWaiting: "等待服务回来…",
+    restartWaitingHint: "重启期间页面与服务器断开属正常现象，恢复后会自动刷新数据。",
+    restartUnsupportedTitle: "无法自动重启",
+    restartUnsupportedBody: "当前部署形态不支持自动重启（{{reason}}），请手动执行：",
+    restartUnsupportedManual: "请手动执行以下命令：",
+    restartDone: "服务已回来，页面数据已刷新。",
+    restartTimeout: "等待服务恢复超时，请手动刷新页面确认。",
+    moreActions: "更多操作",
     verifyOk: "校验通过",
     verifyFailed: "校验未通过",
+    // —— 校验弹窗（追加七）——
+    // 原先「校验」只是 await 一下再弹 toast：用户看不到在查什么、查到哪、结论在哪。
+    // 注意后端 verify 是**同步**接口（一次返回结论），没有中间进度可拉——
+    // 所以这里如实列出"将要执行的检查项"并在结束时就地给出结论，不画假百分比。
+    verifyModalTitle: "校验备份包",
+    verifyModalTitleDeep: "深度校验备份包",
+    verifyRunning: "正在校验，请稍候…",
+    verifyRunningDeep: "正在逐字节核对内容，耗时与包体积同阶，请耐心等待…",
+    verifyTarget: "目标包",
+    // 固定检查序列（与后端 archive.Reader.Verify 的真实步骤一一对应，不得凭空增删）。
+    verifyChecksTitle: "将执行以下检查",
+    verifyCheckManifest: "清单一致性：manifest.json 与包头记录的包标识一致",
+    verifyCheckDb: "数据库快照：db 的体积与 SHA256 摘要均与清单相符",
+    verifyCheckIndex: "对象索引：blobs.index 摘要相符，条目数与总字节与清单一致",
+    verifyCheckComplete: "归档完整性：manifest / db / blobs.index 三者齐备，无缺件多余件",
+    verifyCheckBlobsDeep: "逐对象内容摘要：把每个 blob 重新算一遍摘要与清单比对",
+    // 浅校验的诚实说明：通过 ≠ 能恢复。不写这句，"校验通过"会被读成"这份包没问题"。
+    verifyShallowNotContent:
+      "注意：浅校验不核对对象内容。它通过只说明包的结构与索引完整，不能证明内容未被篡改——需要后者请用深度校验。",
+    verifyResultOk: "校验通过",
+    verifyResultFailed: "校验未通过",
+    verifyResultSummary: "共 {{blobs}} 个对象、{{assets}} 份制品",
+    verifyElapsed: "耗时 {{seconds}} 秒",
+    verifyClose: "关闭",
     deleteTitle: "删除备份包",
     deleteConfirm: "删除备份包 {{id}}？该操作不可恢复。",
     delete: "删除",
     fileMissing: "包体文件缺失",
     includedNote: "备份包只含 SQLite 快照与制品内容，不含任何密钥或节点本地配置。",
+    // —— FR-40：来源列（手动 / 自动）——
+    colOrigin: "来源",
+    origin_manual: "手动",
+    origin_auto: "自动",
+    // —— FR-40：恢复演练与可查报告 ——
+    drillOpen: "演练",
+    drillTitle: "恢复演练",
+    drillHint:
+      "演练在隔离临时目录里真解包、真校验，回答「这份包真的能恢复吗」，并留下可查报告。它是只读路径：不会写入待重启标记，也不会替换本机数据。",
+    drillShallowTitle: "浅校验（只看结构，快）",
+    drillShallowDesc:
+      "校验归档能否打开、结构与件数是否与清单一致、快照是否可读。不逐字节核对 blob 内容，因此对「内容被静默篡改但文件结构完好」的包会判为通过。",
+    drillDeepTitle: "深校验（逐字节核对内容，慢）",
+    drillDeepDesc:
+      "在浅校验之上，额外把每个 blob 的内容重新算一遍摘要并与包内清单比对，能发现内容被篡改或位腐坏。耗时与包体积同阶，包越大越慢。",
+    drillRecommended: "建议",
+    drillLevelShallow: "浅校验",
+    drillLevelDeep: "深校验",
+    drillLevel_shallow: "浅校验",
+    drillLevel_deep: "深校验",
+    drillStart: "发起演练",
+    drillStarted: "已受理演练请求，报告生成后自动出现",
+    drillRunning: "演练进行中…",
+    // 轮询超时：报告永远不会到时必须如实说明，不能无限转圈（实测收到过"一直卡在演练进行中"）。
+    drillTimedOut: "未在预期时间内收到报告，可点「刷新」查看；若包已被保留策略淘汰，该行会消失。",
+    // 演练途中包被保留策略淘汰：必须点明"这次演练被中断了"，否则用户以为是自己点错。
+    drillInterrupted:
+      "本次演练已被中断：包在演练完成前被保留策略淘汰（自动备份包超出份数 / 天数上限后会被清理）。",
+    drillHistory: "历史报告",
+    drillNoReports: "该包还没有演练报告。发起一次演练即可留下第一份。",
+    drillPassed: "通过",
+    drillFailed: "未通过",
+    drillCheck_integrity: "归档完整性",
+    drillCheck_extract: "解包",
+    drillCheck_sqlite: "SQLite 一致性",
+    drillCheck_blobs: "blob 规模",
+    // —— FR-40：自动备份与保留策略（配置卡默认折叠，展开后可改，保存即生效）——
+    autoCfgTitle: "自动备份与保留策略",
+    autoCfgLiveNote: "保存即生效，无需重启",
+    autoCfgSummaryOff: "自动备份已关闭",
+    autoCfgSummaryInterval: "每 {{n}} 秒备份一次",
+    autoCfgSummaryKeep: "保留最近 {{n}} 份",
+    autoCfgSummaryKeepUnlimited: "不限份数",
+    autoCfgSummaryDays: "{{n}} 天内",
+    autoCfgSummaryDaysUnlimited: "不限天数",
+    autoCfgHint:
+      "在此修改后立即生效（自动备份作业每轮重读配置，最迟一个心跳周期内应用），无需重启进程。三项的 0 都是有意义的取值：间隔 0 = 关闭自动备份，份数 0 = 不限份数，天数 0 = 不限天数。",
+    autoCfgSave: "保存",
+    // —— FR-40 追加十二：容量估算 ——
+    // 备份是**全量**包：每份约等于整个数据目录。因此「份数 × 单份大小」就是
+    // 最坏情况的磁盘占用，必须让用户在开启前看到这个数。
+    autoCfgCapacityTitle: "预计磁盘占用",
+    autoCfgCapacityEstimate: "约 {{size}}（{{n}} 份 × 每份 {{each}}）",
+    autoCfgCapacityUnknown: "暂无已完成的备份包，无法估算。生成一份后即可看到实际占用。",
+    autoCfgCapacityHint:
+      "自动备份是全量包，每份大小≈整个数据目录。请确保「份数 × 单份大小」不超过可用磁盘，否则写满会导致服务异常。",
+
+    autoCfgSaved: "自动备份配置已保存，下一轮作业即按新配置执行",
+    autoCfgInterval: "自动备份间隔",
+    autoCfgIntervalDesc: "秒；0 = 关闭（默认）。开启后按间隔生成完整热备份包，不生成差包。",
+    autoCfgKeepLast: "保留份数",
+    autoCfgKeepLastDesc: "保留最近 N 份自动备份；0 = 不按份数限制。仅淘汰自动备份，手动包不删。",
+    autoCfgRetentionDays: "保留天数",
+    autoCfgRetentionDaysDesc: "保留最近 N 天的自动备份；0 = 不限天数。与份数上限取更严格者。",
+    autoCfgEnvNote:
+      "等价的环境变量途径（JIAN_BACKUP_AUTO_INTERVAL / JIAN_BACKUP_KEEP_LAST / JIAN_BACKUP_RETENTION_DAYS）仍可作为首次部署的初值：仅在数据库尚无这组配置时写入一次，此后一律以本卡的设置为准，改环境变量不再覆盖界面配置。",
+    autoCfgJobsHint:
+      "「维护作业」页始终能看到 backup-auto（作业常驻以便配置改动即时生效）；间隔为 0 时它每轮空转跳过，不生成备份。",
     // —— FR-134：写入冻结窗口 ——
-    freezeCardTitle: "写入冻结窗口",
     freezeStatusWritable: "可写",
     freezeStatusFrozen: "已冻结",
     freezeUntilLabel: "自动解冻时间",
@@ -1197,9 +1403,9 @@ export const zh = {
     freezeUnfreezeLabel: "解冻",
     freezeUnfrozen: "已解冻写入",
     // —— FR-137：从 URL 导入备份包 ——
-    importCardTitle: "从 URL 导入",
-    importButton: "从 URL 导入",
-    importModalTitle: "从 URL 导入备份包",
+    // 措辞含"恢复"：这三条通道的实际作用就是恢复（会替换本机数据），而"导入/上传"在
+    // 用户心里只是"把东西弄进来"。实测反馈"只能备份无法恢复"正是被这个措辞误导的。
+    importButton: "从 URL 恢复",
     importFieldUrl: "备份包地址",
     importFieldUrlPlaceholder: "https://example.com/backups/bk.tar.gz",
     importFieldUrlRequired: "请填写合法的 http/https 地址",
@@ -1210,14 +1416,7 @@ export const zh = {
     importSha256: "预期 SHA-256",
     importSha256Placeholder: "可选，拉取完成后核对归档摘要",
     importSubmit: "开始导入",
-    importStarted: "已受理导入请求，进度见下方列表",
-    importColId: "记录标识",
-    importColSource: "来源",
-    importColStatus: "状态",
-    importColProgress: "进度",
-    importColPackage: "包标识",
-    importColCreated: "创建时间",
-    importColError: "错误",
+    importStarted: "已受理导入请求，进度见下方事件表",
     import_status_queued: "排队中",
     import_status_fetching: "拉取中",
     import_status_staging: "暂存中",
@@ -1227,6 +1426,8 @@ export const zh = {
     import_origin_url: "URL",
     import_origin_upload: "上传",
     import_origin_cli: "CLI",
+    // 本机包恢复（POST /backups/{id}/restore）：与另外三条"包从外部来"的通道区分开。
+    import_origin_local: "本机包",
     importPendingRestartHint: "需重启服务后生效",
     backupImportError: {
       fetch_failed: "拉取备份包失败：无法从来源地址下载。",
@@ -1235,14 +1436,22 @@ export const zh = {
       manifest_invalid: "包内 manifest 不合法或缺少必要字段。",
       target_not_empty: "目标实例非空，导入前请开启「覆盖已有数据」。",
       incompatible: "备份包与当前服务版本不兼容。",
-      restore_pending: "写入待重启标记失败，请检查服务状态。",
-      internal: "服务内部错误，请稍后重试或查看日志。",
+      restore_pending: "已存在待重启生效的恢复，请先重启服务完成替换。",
+      // FR-40 追加十：这三个码此前被归入 internal，用户只看到"服务内部错误"。
+      // 它们其实都是可自行处置的状态，必须给出具体做法。
+      base_missing: "缺少基线包：这是增量差包，请先导入它所依赖的基线包。",
+      import_in_progress: "已有导入正在进行，请等它完成后再试。",
+      package_not_ready: "该备份包尚未生成完成或已失败，不能作为恢复源。",
+      // internal 保留给真正的未知故障；后端会把原始错误附在消息里一起返回。
+      internal: "恢复失败：服务内部错误，详情见下方原因或服务端日志。",
     },
-    // —— FR-137：分片上传备份包（第三通道）——
-    uploadCardTitle: "分片上传",
-    uploadButton: "上传本机文件",
+    // —— FR-137 / FR-40 追加八：分片上传备份包（第三通道）——
+    // 措辞从「上传包恢复」改为「上传备份包」：上传只把包收进备份列表，
+    // 不再直接替换本机数据（恢复是入库之后的独立动作，可以先校验）。
+    uploadButton: "上传备份包",
     uploadChooseFile: "选择文件",
-    uploadStarted: "已开始上传，进度见下方",
+    uploadIdleHint:
+      "选择要上传的备份包（.tar.gz）。上传完成后它会被加入备份列表；恢复是之后的独立动作，可以先校验再恢复。",
     uploadProgress: "上传中 {{percent}}%",
     uploadBytes: "{{done}} / {{total}}",
     uploadResumableTitle: "发现未完成的上传",
@@ -1254,11 +1463,99 @@ export const zh = {
     uploadCancelled: "已取消上传",
     uploadDiscardConfirm: "放弃该上传会中止会话并清理已上传的分片，此操作不可恢复。",
     uploadDiscarded: "已放弃上传",
-    uploadComplete: "上传完成，已提交导入",
-    uploadCompleteHint: "需重启服务后生效",
+    uploadComplete: "上传完成，已加入备份列表",
+    uploadCompleteHint: "可在备份列表中校验或恢复；恢复会替换本机数据并需重启生效",
     uploadFileMismatch: "所选文件大小与上传会话不符，请选择原始文件后再续传",
     uploadError: "上传失败：{{message}}",
     uploadMissingChunkTitle: "分片缺失",
+
+    // —— FR-40 追加八：服务器上未被管理的备份包 ——
+    // 这些包在磁盘上有包体但登记表里没有记录（历史残留或手工拷入），
+    // 常规列表看不见它们，于是既不能用也不能删。这里补上「列出 + 导入」。
+    adoptButton: "导入未管理的包",
+    adoptTitle: "服务器上未被管理的备份包",
+    adoptHint:
+      "这些文件存在于备份目录中，但列表里没有记录，因此在常规视图中既不能使用也不能删除。导入会先校验，然后把它加入备份列表。",
+    adoptEmpty: "没有发现未被管理的包。",
+    adoptLoading: "正在扫描服务器备份目录…",
+    adoptSelectAll: "全选",
+    adoptClearAll: "清空",
+    adoptSelected: "已选 {{count}} 个",
+    adoptSubmit: "导入所选",
+    adoptInvalid: "无法导入",
+    adoptRenamed: "文件名与包标识不一致，导入时会重命名",
+    adoptDuplicate: "与已登记的包内容相同（多余副本），可安全删除该文件",
+
+    // —— FR-40 追加十一：备份包内容预览 ——
+    previewOpen: "查看包内容",
+    previewTitle: "备份包内容预览",
+    previewTarget: "要查看的包",
+    previewLoading: "正在读取包内内容…",
+    previewFailed: "读取包内容失败：{{message}}",
+    previewHint:
+      "恢复会用这个包整份覆盖本机数据，且不可撤销。先确认里面的仓库、账号与制品确实是你需要的，再执行恢复。",
+    previewAssets: "制品总数",
+    previewRepos: "仓库数",
+    previewUsers: "账号数",
+    previewSchema: "数据库版本",
+    previewRepoList: "仓库清单",
+    previewUserList: "账号清单",
+    previewUserNoSecret: "仅显示用户名、角色与状态；不含任何口令或密钥。",
+    previewSampleAssets: "制品路径样例",
+    previewEmptyRepos: "包内没有仓库。",
+    previewEmptyUsers: "包内没有账号。",
+    previewEmptyAssets: "包内没有制品。",
+    previewMoreAssets: "还有 {{n}} 条制品未显示（样例最多 50 条）。",
+    previewColName: "名称",
+    previewColFormat: "格式",
+    previewColType: "类型",
+    // —— FR-40 追加十四：包内容与当前系统的差异对比 ——
+    restoreDiffTitle: "包里有什么 · 与本机差异",
+    diffTitle: "恢复后会怎么变",
+    diffSubtitle: "按元数据对比包内与本机：哪些会新增、哪些会消失、哪些会被替换。",
+    diffMetadataOnly:
+      "只对比元数据（路径 / 大小 / 哈希），不比对文件内容。要看内容是否逐字节一致，请用「深度校验」。",
+    diffLoading: "正在计算差异（只跑聚合查询，不解包内容）…",
+    diffFailed: "计算差异失败：{{message}}",
+    diffEntityAssets: "制品",
+    diffEntityRepos: "仓库",
+    diffEntityUsers: "账号",
+    diffKindOnlyInPackage: "包里有、本机没有（恢复后新增）",
+    diffKindOnlyInPackageHint: "这些条目只存在于备份包中，恢复后会出现在本机。",
+    diffKindOnlyLocal: "本机有、包里没有（恢复后消失）",
+    diffKindOnlyLocalHint: "这些条目只存在于本机，恢复后会被覆盖掉——请确认没有你需要保留的内容。",
+    diffKindChanged: "两边都有但内容不同（恢复后替换）",
+    diffKindChangedHint: "路径相同但哈希或大小不同，恢复后本机版本会被包内版本替换。",
+    diffKindSame: "完全一致（恢复后不变）",
+    diffKindSameHint: "元数据完全一致，恢复不会改变它们。",
+    diffDetailLoading: "正在读取明细…",
+    diffDetailEmpty: "没有明细。",
+    diffDetailPage: "第 {{page}} / {{pages}} 页，共 {{total}} 条",
+    diffPrev: "上一页",
+    diffNext: "下一页",
+    // —— 校验档位（合并入口后新增）——
+    verifyDeepen: "再执行深度校验",
+    verifyDeepenHint: "逐字节核对内容，耗时与包体积同阶（大包可达数分钟）。",
+
+    adoptHasSidecar: "索引已存在",
+    adoptNoSidecar: "索引缺失（导入时会重建）",
+    adoptSize: "大小",
+    adoptModified: "修改时间",
+    adoptResultTitle: "导入完成",
+    adoptResultSummary: "成功 {{adopted}} 个 / 跳过 {{skipped}} 个 / 失败 {{failed}} 个",
+    adoptRescan: "重新扫描",
+
+    // —— FR-40 追加九：自动备份间隔支持多种时间单位 ——
+    autoCfgIntervalUnit: "时间单位",
+    autoCfgIntervalEquals: "等于 {{n}} 秒",
+    autoCfgIntervalOff: "0 表示关闭自动备份",
+    unitSeconds: "秒",
+    unitMinutes: "分钟",
+    unitHours: "小时",
+    unitDays: "天",
+    unitWeeks: "周",
+    unitMonths: "个月",
+    unitYears: "年",
   },
   migrations: {
     // 以下键此前缺失（t 未命中时静默回退 defaultValue），补录以保持 i18n 完整。

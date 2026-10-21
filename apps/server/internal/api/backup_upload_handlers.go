@@ -135,7 +135,10 @@ func (h *Handlers) CompleteBackupUpload(c *gin.Context, id BackupUploadIdParam) 
 		writeBackupUploadErr(c, err)
 		return
 	}
-	c.JSON(http.StatusAccepted, toAPIBackupImport(imp))
+	// FR-40 追加八起返回 200 而非 202：complete 不再只是"受理恢复"，
+	// 它同步完成入库（搬运归档 + 写登记行），请求返回时包已可查。
+	// 202 会暗示"还有个异步过程要继续轮询"，而现在没有。
+	c.JSON(http.StatusOK, toAPIBackupImport(imp))
 }
 
 // AbortBackupUpload 取消上传会话（仅管理员）：置 aborted 并清磁盘。

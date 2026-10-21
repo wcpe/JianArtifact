@@ -14,6 +14,7 @@ import (
 
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
+	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
 // 设置端点的边界（FR-89）：秒级配置允许范围与缺省展示值。
@@ -34,7 +35,31 @@ type SettingsResponse struct {
 	OriginTokenEnabled bool     `json:"originTokenEnabled"`
 	OriginTokenHeader  string   `json:"originTokenHeader"`
 	OriginTokenValue   string   `json:"originTokenValue"`
+	// FR-40 追加：自动备份与保留策略（运行时可改，保存后由作业下一轮读取生效）。
+	BackupAutoInterval  int `json:"backupAutoInterval"`
+	BackupKeepLast      int `json:"backupKeepLast"`
+	BackupRetentionDays int `json:"backupRetentionDays"`
+	// FR-40 追加九：间隔的人类表达与拆解结果，供界面直接回填"数值 + 单位"控件，
+	// 避免前端重复实现一遍拆分规则（两处实现迟早不一致）。
+	BackupAutoIntervalExpr  string `json:"backupAutoIntervalExpr"`
+	BackupAutoIntervalValue int64  `json:"backupAutoIntervalValue"`
+	BackupAutoIntervalUnit  string `json:"backupAutoIntervalUnit"`
+	// FR-40 追加十二：最近一次备份包的实际大小，供界面估算容量占用。
+	//
+	// 备份是**全量**包，每份约等于数据目录大小，因此"份数 × 单份大小"就是最坏情况
+	// 下的磁盘占用。没有这个值，用户无法判断"保留 7 份"会不会把自己的盘写满——
+	// 实测存在 20GB 数据 / 40GB 磁盘的配置，7 份需要 140GB，远超可用空间。
+	BackupLatestPackageBytes int64 `json:"backupLatestPackageBytes"`
 }
+
+// 自动备份配置的取值上限。不是"业务规则"，而是防手滑：把间隔输成 99999999
+// 秒（三年）或份数输成 10 万份，都不会报错但会让配置静默失去意义。
+// 有了上限，超范围输入会在保存时被明确拒绝，而不是留下一个看似生效的坏配置。
+const (
+	maxBackupAutoIntervalSecs = 30 * 24 * 3600 // 30 天
+	maxBackupKeepLast         = 1000           // 1000 份
+	maxBackupRetentionDays    = 3650           // 10 年
+)
 
 // SettingsRequest 是设置端点的请求体：可选字段，传哪个改哪个（对齐 cluster 端点风格）。
 type SettingsRequest struct {
@@ -46,6 +71,16 @@ type SettingsRequest struct {
 	OriginTokenEnabled *bool     `json:"originTokenEnabled,omitempty"`
 	OriginTokenHeader  *string   `json:"originTokenHeader,omitempty"`
 	OriginTokenValue   *string   `json:"originTokenValue,omitempty"`
+	// FR-40 追加：自动备份三项（0 分别表示关闭 / 不限制，是合法取值）。
+	BackupAutoInterval  *int `json:"backupAutoInterval,omitempty"`
+	BackupKeepLast      *int `json:"backupKeepLast,omitempty"`
+	BackupRetentionDays *int `json:"backupRetentionDays,omitempty"`
+	// FR-40 追加九：间隔的人类表达（如 "30"、"5m"、"2h"、"1d"、"1mo"、"1y"）。
+	//
+	// 与 BackupAutoInterval（秒）二选一，本字段优先：它就是为了让用户不必心算
+	// "每天一次等于多少秒"。两者都给时以本字段为准并在响应里回显换算结果，
+	// 避免"我填了 1d 但存进去的是 86400"这种不透明的落差。
+	BackupAutoIntervalExpr *string `json:"backupAutoIntervalExpr,omitempty"`
 }
 
 // settingsSnapshot 读取基础配置的当前生效值（未配置的间隔 / 超时回退默认值）。
@@ -71,6 +106,8 @@ func (h *Handlers) settingsSnapshot() SettingsResponse {
 		allowedHosts = h.settings.AllowedHostsList()
 		tokenEnabled, tokenHeader, tokenValue = h.settings.OriginTokenGuard()
 	}
+	// 间隔拆成"数值 + 单位"：界面据此回填两个控件，不需要自己猜该显示成天还是秒。
+	intervalValue, intervalUnit := domain.DurationToParts(int64(h.settingServiceOrZero().BackupAutoIntervalSecs()))
 	return SettingsResponse{
 		AnonymousAccess:    anonymous,
 		PublicURL:          publicURL,
@@ -80,7 +117,84 @@ func (h *Handlers) settingsSnapshot() SettingsResponse {
 		OriginTokenEnabled: tokenEnabled,
 		OriginTokenHeader:  tokenHeader,
 		OriginTokenValue:   tokenValue,
+		// 三项备份配置：0 是有意义的取值（关闭 / 不限制），照实返回不做回退，
+		// 否则界面无法区分"关闭"与"未配置"，也就无法把开关拨回关闭。
+		BackupAutoInterval:       h.settingServiceOrZero().BackupAutoIntervalSecs(),
+		BackupKeepLast:           h.settingServiceOrZero().BackupKeepLast(),
+		BackupRetentionDays:      h.settingServiceOrZero().BackupRetentionDays(),
+		BackupAutoIntervalExpr:   domain.FormatDurationHuman(int64(h.settingServiceOrZero().BackupAutoIntervalSecs())),
+		BackupAutoIntervalValue:  intervalValue,
+		BackupAutoIntervalUnit:   string(intervalUnit),
+		BackupLatestPackageBytes: h.latestBackupPackageBytes(),
 	}
+}
+
+// settingServiceOrZero 在设置服务缺失时返回零值服务，使快照读取无需层层判空。
+func (h *Handlers) settingServiceOrZero() *domain.SettingService {
+	if h.settings == nil {
+		return &domain.SettingService{}
+	}
+	return h.settings
+}
+
+// validateBackupSettings 校验自动备份三项配置的取值。
+//
+// 三项均**允许 0**（关闭 / 不限制），这不是"未配置"：0 是界面把开关拨回关闭的方式，
+// 必须能存下来。负数与超上限一律拒绝——它们不会报错但会让配置静默失去意义
+// （如间隔填成负数等于永久关闭，天数填成 10 万等于永不淘汰）。
+//
+// 间隔若以表达式（backupAutoIntervalExpr）提交，则只校验表达式本身、跳过秒字段的
+// 上限校验——两者语义重叠，对同一个值报两次错只会让用户困惑。
+func validateBackupSettings(req SettingsRequest) error {
+	if req.BackupAutoIntervalExpr != nil {
+		if _, err := domain.ParseDurationExpression(*req.BackupAutoIntervalExpr, maxBackupAutoIntervalSecs); err != nil {
+			return fmt.Errorf("自动备份间隔：%w", err)
+		}
+	} else if req.BackupAutoInterval != nil {
+		if *req.BackupAutoInterval < 0 {
+			return fmt.Errorf("自动备份间隔不能为负数（0 表示关闭）")
+		}
+		if *req.BackupAutoInterval > maxBackupAutoIntervalSecs {
+			return fmt.Errorf("自动备份间隔过大（上限 %s）",
+				domain.FormatDurationHuman(int64(maxBackupAutoIntervalSecs)))
+		}
+	}
+	checks := []struct {
+		name string
+		val  *int
+		max  int
+		unit string
+	}{
+		{"保留份数", req.BackupKeepLast, maxBackupKeepLast, "份"},
+		{"保留天数", req.BackupRetentionDays, maxBackupRetentionDays, "天"},
+	}
+	for _, c := range checks {
+		if c.val == nil {
+			continue
+		}
+		if *c.val < 0 {
+			return fmt.Errorf("%s不能为负数（0 表示关闭 / 不限制）", c.name)
+		}
+		if *c.val > c.max {
+			return fmt.Errorf("%s过大（上限 %d %s）", c.name, c.max, c.unit)
+		}
+	}
+	return nil
+}
+
+// resolveBackupAutoInterval 决定本次请求最终要写入的秒数（nil = 本次不改这一项）。
+//
+// 优先级：表达式 > 秒字段。表达式是给人用的入口，秒字段只为兼容既有调用方保留。
+func resolveBackupAutoInterval(req SettingsRequest) (*int, error) {
+	if req.BackupAutoIntervalExpr != nil {
+		secs, err := domain.ParseDurationExpression(*req.BackupAutoIntervalExpr, maxBackupAutoIntervalSecs)
+		if err != nil {
+			return nil, err
+		}
+		v := int(secs)
+		return &v, nil
+	}
+	return req.BackupAutoInterval, nil
 }
 
 // GetSettings 返回基础配置四项（FR-89），仅管理员。非契约端点，经 WithProtocolRoutes 注册。
@@ -119,15 +233,28 @@ func (h *Handlers) PutSettings(c *gin.Context) {
 		auth.WriteError(c, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
+	if err := validateBackupSettings(req); err != nil {
+		auth.WriteError(c, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	// 表达式优先：把 "5m"/"1d"/"1mo" 换算成秒后写入，存储口径不变。
+	intervalSecs, err := resolveBackupAutoInterval(req)
+	if err != nil {
+		auth.WriteError(c, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
 	if err := h.settings.UpdateSettings(domain.SettingsUpdate{
-		AnonymousAccess:    req.AnonymousAccess,
-		PublicURL:          req.PublicURL,
-		UpstreamTimeout:    req.UpstreamTimeout,
-		SyncInterval:       req.SyncInterval,
-		AllowedHosts:       req.AllowedHosts,
-		OriginTokenEnabled: req.OriginTokenEnabled,
-		OriginTokenHeader:  req.OriginTokenHeader,
-		OriginTokenValue:   req.OriginTokenValue,
+		AnonymousAccess:     req.AnonymousAccess,
+		PublicURL:           req.PublicURL,
+		UpstreamTimeout:     req.UpstreamTimeout,
+		SyncInterval:        req.SyncInterval,
+		AllowedHosts:        req.AllowedHosts,
+		OriginTokenEnabled:  req.OriginTokenEnabled,
+		OriginTokenHeader:   req.OriginTokenHeader,
+		OriginTokenValue:    req.OriginTokenValue,
+		BackupAutoInterval:  intervalSecs,
+		BackupKeepLast:      req.BackupKeepLast,
+		BackupRetentionDays: req.BackupRetentionDays,
 	}); err != nil {
 		writeDomainErr(c, err)
 		return
@@ -309,4 +436,27 @@ func validatePublicURL(v string) error {
 		return errors.New("对外 URL 须为 http/https 绝对地址或留空")
 	}
 	return nil
+}
+
+// latestBackupPackageBytes 返回最近一次**成功**备份包的实际大小（字节）。
+//
+// 用途是让界面估算"保留 N 份大约占多少磁盘"。取"最近一次"而不是平均值：
+// 数据量通常是增长的，用旧的平均值会低估当前占用；而最近一份最接近现状。
+//
+// 任何读不到的情况都返回 0（界面据此不显示估算），不让它影响设置读取本身。
+func (h *Handlers) latestBackupPackageBytes() int64 {
+	if h.backups == nil {
+		return 0
+	}
+	items, err := h.backups.List(20, 0)
+	if err != nil {
+		return 0
+	}
+	for _, it := range items {
+		// 只认已完成的包：生成中的包体积不完整，会严重低估。
+		if it.Status == repository.BackupStatusDone && it.SizeBytes > 0 {
+			return it.SizeBytes
+		}
+	}
+	return 0
 }

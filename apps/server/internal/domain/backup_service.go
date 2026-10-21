@@ -49,6 +49,9 @@ type CreateBackupOptions struct {
 	// BasePackageID 非空时生成增量差包：只携带相对该基线包的新增 blob。
 	// 要求基线包存在、状态 done 且其侧车索引可用（否则 ErrBackupBaseUnavailable）。
 	BasePackageID string
+	// Origin 是生成来源（FR-40）：空值等价于 repository.BackupOriginManual，
+	// 自动备份作业传 repository.BackupOriginAuto。该标记决定保留策略是否可淘汰本包。
+	Origin string
 }
 
 // BackupService 负责节点备份包的生成、登记、校验与下载。
@@ -67,6 +70,12 @@ type BackupService struct {
 
 	mu         sync.Mutex
 	generating bool
+	// diffMu 串行化"挂载包内快照 → 查询 → 卸载"这一段。
+	//
+	// ATTACH 是**连接级**状态：连接池上限为 1，但同一连接上仍可能被并发 goroutine
+	// 交错使用（sqlx 会复用），一旦两个请求交错 ATTACH/DETACH，
+	// 后一个 DETACH 会把前一个正在用的库卸掉。用锁把整段包住最直白也最安全。
+	diffMu sync.Mutex
 }
 
 // NewBackupService 装配备份服务。nodeID 允许为 nil（单节点场景）。
@@ -184,9 +193,14 @@ func (s *BackupService) Verify(packageID string, deep bool) (archive.Manifest, e
 	return m, nil
 }
 
-// Delete 删除备份包文件与登记。
+// Delete 删除备份包文件、侧车索引与登记。
 //
 // 仍被增量差包引用的基线不允许删除：否则派生包在目标端永远无法还原。
+//
+// **侧车索引必须与包体同生共死**：它只服务于"为后续差包求差"，包一旦不存在，
+// 侧车就成了无人引用的孤儿文件。保留策略是周期性淘汰（FR-40），漏删侧车会让
+// `${JIAN_DATA_DIR}/backups/` 里的索引只增不减——包体被淘汰而索引永久残留，
+// 与"保留策略兜住磁盘占用"的设计目的直接冲突。
 func (s *BackupService) Delete(packageID string) error {
 	if _, err := s.Get(packageID); err != nil {
 		return err
@@ -200,6 +214,11 @@ func (s *BackupService) Delete(packageID string) error {
 	}
 	if err := os.Remove(s.PackagePath(packageID)); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("删除备份包文件：%w", err)
+	}
+	// 侧车缺失不算错：早期版本删除时未清理侧车，现存实例可能本就没有它；
+	// 这里的目的是"删干净"，不是"断言它一定存在"。
+	if err := os.Remove(s.SidecarPath(packageID)); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("删除备份包侧车索引：%w", err)
 	}
 	return s.repo.Delete(packageID)
 }
@@ -273,6 +292,36 @@ func (s *BackupService) readPackageManifest(packageID string) (archive.Manifest,
 	return m, true
 }
 
+// readPackageFile 读取磁盘上某**文件标识**对应的归档 manifest 并做完整校验。
+//
+// 与 readPackageManifest 的区别：后者按已登记的 packageID 定位，只做轻量身份判定；
+// 本方法服务于「未管理包」（尚无登记，只有文件名），因此必须走 archive.Manifest.Validate，
+// 把缺字段、版本不符、模式未知的包挡在登记之外——否则一条坏登记会让校验/演练/恢复
+// 在更晚的环节才失败，且错误信息远离根因。
+func (s *BackupService) readPackageFile(fileID string) (archive.Manifest, bool) {
+	path := filepath.Join(s.Dir(), fileID+".tar.gz")
+	if _, err := os.Stat(path); err != nil {
+		return archive.Manifest{}, false
+	}
+	_, m, err := archive.Open(path)
+	if err != nil {
+		return archive.Manifest{}, false
+	}
+	if err := m.Validate(); err != nil {
+		return archive.Manifest{}, false
+	}
+	return m, true
+}
+
+// readPackageBlobIndex 从归档内 blobs.index 读回完整 blob 集合，用于补写侧车。
+func (s *BackupService) readPackageBlobIndex(packageID string) (archive.BlobIndex, error) {
+	r, _, err := s.OpenReader(packageID)
+	if err != nil {
+		return nil, err
+	}
+	return r.BlobIndex()
+}
+
 // Create 登记并启动后台生成，立即返回 queued 记录。
 //
 // 生成耗时与包体积同阶（大仓库为分钟级），不能占用 HTTP 请求线程；调用方轮询列表
@@ -329,6 +378,7 @@ func (s *BackupService) prepare(opts CreateBackupOptions, status string) (reposi
 		CountsJSON:      "{}",
 		DBSchemaVersion: s.dbSchemaVersion(),
 		CreatedAt:       s.now().Format(time.RFC3339Nano),
+		Origin:          normalizeBackupOrigin(opts.Origin),
 	}
 	if err := os.MkdirAll(s.Dir(), 0o750); err != nil {
 		s.endGenerate()
@@ -543,6 +593,18 @@ func parseCounts(countsJSON string) archive.Counts {
 		return archive.Counts{}
 	}
 	return c
+}
+
+// normalizeBackupOrigin 把选项里的来源收敛到列 CHECK 允许的两个取值：
+// 空值（以及任何未知值）一律落到 manual。
+//
+// 为什么未知值不报错而是回落：来源只影响「能否被保留策略自动淘汰」，落成 manual 的后果
+// 是"这份包被保守地多留一份"，而报错会让一次正常的备份生成整体失败。宁可多留，不可失败。
+func normalizeBackupOrigin(origin string) string {
+	if origin == repository.BackupOriginAuto {
+		return repository.BackupOriginAuto
+	}
+	return repository.BackupOriginManual
 }
 
 func errText(err error) string {

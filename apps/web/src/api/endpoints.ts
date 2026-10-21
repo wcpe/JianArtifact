@@ -31,7 +31,18 @@ import type {
   BackupPackageList,
   BackupPackageMode,
   BackupVerification,
+  // FR-40 追加六：待重启生效的恢复状态（解释"为什么现在导入不了"）。
+  BackupRestoreStatus,
+  // FR-40：恢复演练的受理结果、级别与落库报告。
+  BackupDrillAccepted,
+  BackupVerificationLevel,
+  BackupVerificationList,
   BackupImport,
+  BackupPreview,
+  BackupDiff,
+  // FR-40 追加八：服务器上"磁盘有包体、登记无记录"的备份包。
+  UnmanagedBackupList,
+  AdoptBackupsResult,
   BackupImportList,
   BackupUploadSession,
   WriteFreezeState,
@@ -74,6 +85,7 @@ import type {
   UserList,
   UserRole,
   UserStatus,
+  MaintenanceRestartResult,
 } from "./types";
 
 export interface OperationsObservabilityQuery {
@@ -771,6 +783,38 @@ export function verifyBackup(packageId: string, deep = false): Promise<BackupVer
   });
 }
 
+// —— 恢复演练与可查报告（FR-40）——
+// 与 verifyBackup 的分工：verify 只校验归档自身、结论一次性返回；
+// drill 额外真解包 + 真查 SQLite，回答"这份包真的能恢复吗"，并留下可查历史报告。
+
+/**
+ * 发起一次恢复演练，返回 202 受理结果（**不代表已完成**）。
+ *
+ * 深校验要逐 blob 读取，耗时与包体积同阶，故服务端受理后异步执行；
+ * 调用方随后轮询 listBackupVerifications 直到新报告出现。
+ * 演练未通过不算请求失败——失败同样会落库为一份 ok=false 的报告。
+ */
+export function drillBackup(
+  packageId: string,
+  level: BackupVerificationLevel = "deep",
+): Promise<BackupDrillAccepted> {
+  return request<BackupDrillAccepted>(`/backups/${encodeURIComponent(packageId)}/drill`, {
+    method: "POST",
+    body: { level },
+  });
+}
+
+/** 某包的恢复演练报告列表（分页，最近优先）。演练发起后从这里轮询结果。 */
+export function listBackupVerifications(
+  packageId: string,
+  params: Pagination = {},
+): Promise<BackupVerificationList> {
+  return request<BackupVerificationList>(
+    `/backups/${encodeURIComponent(packageId)}/verifications`,
+    { query: { page: params.page, page_size: params.page_size } },
+  );
+}
+
 // —— 写入冻结窗口（FR-134）——
 // 搬迁切换用：冻结 → 生成差包/导入 → 起服 → 解冻。窗口必须有界，不允许无限期。
 
@@ -791,6 +835,36 @@ export function freezeWrites(input: {
 /** 解冻节点写入（幂等）。 */
 export function unfreezeWrites(): Promise<WriteFreezeState> {
   return request<WriteFreezeState>("/maintenance/freeze", { method: "DELETE" });
+}
+
+/**
+ * 一键重启服务（FR-40 追加七）。
+ *
+ * 响应**先于**重启发出（服务端延迟约 2 秒才开始重启），所以这里能正常拿到 202；
+ * 之后连接会断，调用方需自行探活。
+ *
+ * 服务端的执行路径是**进程自替换**（`syscall.Exec` 换新映像），不执行任何外部命令、
+ * 不需要任何额外权限；`command` 是**手工重启的等效命令**（给用户复制执行），不是本进程会跑的命令。
+ *
+ * `supported:false` 不是异常：它表示本节点无法自动重启（平台不支持自替换 / argv[0] 不可执行 /
+ * 容器编排形态 / 配置非法），HTTP 仍是 200，`command` 给出可复制手动执行的等效命令。
+ */
+export function restartService(): Promise<MaintenanceRestartResult> {
+  return request<MaintenanceRestartResult>("/maintenance/restart", { method: "POST" });
+}
+
+/**
+ * 只读探测重启能力（**绝不触发重启**）。
+ *
+ * 为什么不能用 `restartService` 代替：那个 POST 在 `supported:true` 时会**当场排定重启**
+ * （服务端 `RestartAfter`），拿它探测等于"打开页面就重启"。本端点只跑同步预检并回包，
+ * 因此可安全用于挂载即取——界面据此显示**本机真正可用**的那条命令。
+ *
+ * 这条**手工重启**命令随部署形态与运行身份而变（systemd-user / 系统级 root / 系统级非 root /
+ * docker），只有后端知道本机该敲哪条；界面硬编码一条会在部分部署上给出照做必失败的指引。
+ */
+export function getRestartCapability(): Promise<MaintenanceRestartResult> {
+  return request<MaintenanceRestartResult>("/maintenance/restart", { method: "GET" });
 }
 
 // —— 从 URL 导入备份包（FR-137）——
@@ -816,6 +890,34 @@ export function listBackupImports(params: Pagination = {}): Promise<BackupImport
 /** 导入记录详情；id 为 importId。 */
 export function getBackupImport(id: string): Promise<BackupImport> {
   return request<BackupImport>(`/backups/imports/${encodeURIComponent(id)}`);
+}
+
+/**
+ * 是否存在待重启生效的备份恢复。
+ *
+ * 导入/上传成功后只写 restore.pending，真正的数据库替换在下次启动完成；在那之前
+ * 任何后续导入都会被 409 restore_pending 拒绝。这个查询让界面能解释"为什么导入不了"——
+ * 此前该状态只体现在导入记录行的徽章上，徽章被更近的事件挤出视野后就再也看不出原因。
+ */
+export function getBackupRestoreStatus(): Promise<BackupRestoreStatus> {
+  return request<BackupRestoreStatus>("/backups/restore-status");
+}
+
+/**
+ * 用本机已有的备份包恢复本机数据。
+ *
+ * 补的是"页面上明明列着可用的包，却没有任何按钮能用它恢复"这个缺口——另外三条通道
+ * （URL 拉取 / 上传 / CLI）都要求包从外部来，用户因此会得出"只能备份、不能恢复"的结论。
+ * 语义与它们完全一致：202 受理 → 轮询导入记录 → `pending_restart` 表示需重启服务生效。
+ */
+export function restoreFromLocalPackage(
+  packageId: string,
+  opts: { overwrite?: boolean; deep?: boolean } = {},
+): Promise<BackupImport> {
+  return request<BackupImport>(`/backups/${encodeURIComponent(packageId)}/restore`, {
+    method: "POST",
+    body: { overwrite: opts.overwrite, deep: opts.deep },
+  });
 }
 
 // —— 分片上传备份包（FR-137 第三通道）——
@@ -849,10 +951,16 @@ export function getBackupUpload(uploadId: string): Promise<BackupUploadSession> 
   return request<BackupUploadSession>(`/backups/uploads/${encodeURIComponent(uploadId)}`);
 }
 
-/** 拼装并触发本地导入；返回受理记录（202），导入进度随后由导入记录列表轮询可见，需重启服务生效。 */
+/**
+ * 拼装归档并存入备份列表；返回一条已完成回执（200）。
+ *
+ * FR-40 追加八起语义已改变：上传**不再**直接发起恢复，只把包收进列表。
+ * 恢复是之后的独立动作（走 restoreFromLocalPackage），因此不再需要 overwrite；
+ * deep 同样不再在此时生效——校验发生在用户显式发起恢复或深度校验时。
+ */
 export function completeBackupUpload(
   uploadId: string,
-  input?: { sha256?: string; overwrite?: boolean; deep?: boolean },
+  input?: { sha256?: string },
 ): Promise<BackupImport> {
   return request<BackupImport>(`/backups/uploads/${encodeURIComponent(uploadId)}/complete`, {
     method: "POST",
@@ -864,6 +972,68 @@ export function completeBackupUpload(
 export function abortBackupUpload(uploadId: string): Promise<void> {
   return request<void>(`/backups/uploads/${encodeURIComponent(uploadId)}/abort`, {
     method: "POST",
+  });
+}
+
+/**
+ * 查看备份包内容概要（FR-40 追加十一）。
+ *
+ * 恢复不可撤销，而此前只能看到"多少制品"这类抽象计数；本接口让用户先看清
+ * 包里到底有哪些仓库、账号与制品路径，再决定要不要用它覆盖本机数据。
+ *
+ * 纯只读：服务端把包内快照解到临时目录、以只读方式查询后立即删除。
+ */
+export function previewBackup(packageId: string): Promise<BackupPreview> {
+  return request<BackupPreview>(`/backups/${encodeURIComponent(packageId)}/preview`);
+}
+
+/**
+ * 对比包内容与当前系统（FR-40 追加十四）。
+ *
+ * 不含 scope/kind 时返回四类计数（summary 模式，服务端只跑聚合查询）；
+ * 指定 scope+kind 时返回该分类的分页明细。
+ *
+ * 注意：只对比**元数据**（仓库/路径/大小/哈希），不比对文件内容——
+ * 逐字节验证 20GB 不现实，那是「深度校验」的职责。
+ * 服务端会把包内快照缓存在临时目录，因此翻页不会重复触发解包。
+ */
+export function getBackupDiff(
+  packageId: string,
+  opts: {
+    scope?: "summary" | "repositories" | "assets" | "users";
+    kind?: string;
+    page?: number;
+    pageSize?: number;
+  } = {},
+): Promise<BackupDiff> {
+  const q = new URLSearchParams();
+  if (opts.scope) q.set("scope", opts.scope);
+  if (opts.kind) q.set("kind", opts.kind);
+  if (opts.page) q.set("page", String(opts.page));
+  if (opts.pageSize) q.set("pageSize", String(opts.pageSize));
+  const qs = q.toString();
+  return request<BackupDiff>(`/backups/${encodeURIComponent(packageId)}/diff${qs ? `?${qs}` : ""}`);
+}
+
+// —— 未管理备份包（FR-40 追加八）——
+// 服务器 backups/ 下"磁盘有包体、登记表无记录"的包（历史残留、手工拷入）。
+// 它们在常规列表里不可见，既不能用也不能删；这里补上"列出 + 导入"。
+
+/** 列出服务器上未被管理的备份包（按文件名升序）。 */
+export function listUnmanagedBackups(): Promise<UnmanagedBackupList> {
+  return request<UnmanagedBackupList>("/backups/unmanaged");
+}
+
+/**
+ * 把选中的未管理包导入管理列表（支持单选与多选）。
+ *
+ * 返回 200 与逐项结果：`adopted` 成功、`skipped` 未执行（已登记/非法包）、
+ * 二者皆 false 为失败。单个包失败不影响其余。
+ */
+export function adoptBackups(fileIds: string[]): Promise<AdoptBackupsResult> {
+  return request<AdoptBackupsResult>("/backups/adopt", {
+    method: "POST",
+    body: { fileIds },
   });
 }
 
@@ -951,6 +1121,29 @@ export interface SettingsConfig {
   originTokenHeader: string;
   /** 回源 Token 值（粘贴到 CDN 回源请求头规则）。 */
   originTokenValue: string;
+  /** 自动备份间隔（秒），0 = 关闭（FR-40；运行时可改，保存后作业下一轮生效）。 */
+  backupAutoInterval: number;
+  /** 保留最近 N 份自动备份，0 = 不按份数限制。 */
+  backupKeepLast: number;
+  /** 保留最近 N 天的自动备份，0 = 不限天数。 */
+  backupRetentionDays: number;
+  /**
+   * 间隔的人类表达（FR-40 追加九），如「1 天」「5 分钟」。
+   * 由后端格式化，界面直接展示，避免前端重复实现一套渲染规则。
+   */
+  backupAutoIntervalExpr: string;
+  /** 间隔拆解后的数值部分，供"数值 + 单位"控件回填。 */
+  backupAutoIntervalValue: number;
+  /** 间隔拆解后的单位标识（seconds/minutes/hours/days/weeks/months/years）。 */
+  backupAutoIntervalUnit: string;
+  /**
+   * 最近一次成功备份包的大小（字节，FR-40 追加十二）。
+   *
+   * 备份是**全量**包，每份约等于数据目录大小，因此「份数 × 本值」就是最坏情况的
+   * 磁盘占用。界面据此提示容量风险——没有它，用户无法判断"保留 7 份"会不会写满盘。
+   * 0 表示暂无已完成备份，界面不显示估算。
+   */
+  backupLatestPackageBytes: number;
 }
 
 /**
@@ -968,6 +1161,16 @@ function normalizeSettings(raw: SettingsConfig): SettingsConfig {
     originTokenEnabled: raw.originTokenEnabled ?? false,
     originTokenHeader: raw.originTokenHeader ?? "",
     originTokenValue: raw.originTokenValue ?? "",
+    // 三项备份配置同样做兜底：0 是有意义的取值（关闭 / 不限制），
+    // 因此只能用 ?? 判 undefined，不能写成 `|| 7` 之类会把 0 变成默认值的写法。
+    backupAutoInterval: raw.backupAutoInterval ?? 0,
+    backupKeepLast: raw.backupKeepLast ?? 7,
+    backupRetentionDays: raw.backupRetentionDays ?? 30,
+    // 旧后端可能不返回这三个派生字段：按秒回落，界面仍可用（只是不体现单位换算）。
+    backupAutoIntervalExpr: raw.backupAutoIntervalExpr ?? "",
+    backupAutoIntervalValue: raw.backupAutoIntervalValue ?? raw.backupAutoInterval ?? 0,
+    backupAutoIntervalUnit: raw.backupAutoIntervalUnit ?? "seconds",
+    backupLatestPackageBytes: raw.backupLatestPackageBytes ?? 0,
   };
 }
 

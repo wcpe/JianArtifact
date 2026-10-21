@@ -8,25 +8,168 @@
 
 配置通过环境变量、部署 Secret 或 systemd 环境文件注入；真实环境文件不入库。
 
-| 变量                                   | 作用                                     | 默认/约束                                                          |
-| -------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------ |
-| `JIAN_HTTP_ADDR`                       | HTTP 监听地址                            | `:8080`                                                            |
-| `JIAN_DATA_DIR`                        | SQLite 与 blob 数据根目录                | `./data`；生产必须使用持久化绝对路径                               |
-| `JIAN_JWT_SECRET`                      | JWT(HS256) 签名密钥                      | 生产必填、强随机、不得打印                                         |
-| `JIAN_MIGRATION_CREDENTIAL_KEY`        | 在线迁移凭据 AES-256-GCM 密钥            | Base64 编码 32 字节；生产应显式固定                                |
-| `JIAN_UPSTREAM_TIMEOUT`                | proxy 回源整体超时（秒）                 | `30`                                                               |
-| `JIAN_ENABLED_FORMATS`                 | 启用的协议格式                           | 缺省 `raw,maven,npm`；显式空值关闭全部                             |
-| `JIAN_PUBLIC_URL`                      | 对外基础 URL                             | 节点本地配置；影响下载链接与 usage 片段                            |
-| `JIAN_SYNC_INTERVAL`                   | 设置页「同步间隔」的初始默认值（秒）     | `5`；仅在 setting 键不存在时写入，当前无调度器消费（复制退役遗留） |
-| `JIAN_BLOB_GC_INTERVAL`                | 清理遗留 / 孤儿 blob 的间隔（秒）        | `86400`；`0` 禁用                                                  |
-| `JIAN_STORAGE_CLEANUP_INTERVAL`        | 存储治理清理作业的间隔（秒）             | `86400`；`0` 禁用（作业不注册）；非法 / 负数回落默认               |
-| `JIAN_STORAGE_METADATA_RETENTION_DAYS` | 终态操作与隔离元数据的保留天数           | `7`；`0` 禁用元数据裁剪；非法 / 负数回落默认                       |
-| `JIAN_STORAGE_TEMP_MAX_AGE_HOURS`      | 过期 OCI 上传临时文件的最长滞留（小时）  | `24`；`0` 禁用该项清理；非法 / 负数回落默认                        |
-| `JIAN_TLS_ADDR`                        | 内置 HTTPS 监听地址                      | 为空表示不启用                                                     |
-| `JIAN_TLS_CERT` / `JIAN_TLS_KEY`       | TLS 证书和私钥路径                       | 配置 `JIAN_TLS_ADDR` 时必填                                        |
-| `JIAN_AUTO_BLOCK_BASE_SECONDS`         | proxy 上游 auto-block 退避起始时长（秒） | `40`；之后每档翻倍；`0` / 负数 / 非法回落默认（无禁用语义）        |
+| 变量                                   | 作用                                      | 默认/约束                                                                                      |
+| -------------------------------------- | ----------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `JIAN_HTTP_ADDR`                       | HTTP 监听地址                             | `:8080`                                                                                        |
+| `JIAN_DATA_DIR`                        | SQLite 与 blob 数据根目录                 | `./data`；生产必须使用持久化绝对路径（见下方"数据目录解析"）                                   |
+| `JIAN_JWT_SECRET`                      | JWT(HS256) 签名密钥                       | 生产必填、强随机、不得打印                                                                     |
+| `JIAN_MIGRATION_CREDENTIAL_KEY`        | 在线迁移凭据 AES-256-GCM 密钥             | Base64 编码 32 字节；生产应显式固定                                                            |
+| `JIAN_UPSTREAM_TIMEOUT`                | proxy 回源整体超时（秒）                  | `30`                                                                                           |
+| `JIAN_ENABLED_FORMATS`                 | 启用的协议格式                            | 缺省 `raw,maven,npm`；显式空值关闭全部                                                         |
+| `JIAN_PUBLIC_URL`                      | 对外基础 URL                              | 节点本地配置；影响下载链接与 usage 片段                                                        |
+| `JIAN_SYNC_INTERVAL`                   | 设置页「同步间隔」的初始默认值（秒）      | `5`；仅在 setting 键不存在时写入，当前无调度器消费（复制退役遗留）                             |
+| `JIAN_BLOB_GC_INTERVAL`                | 清理遗留 / 孤儿 blob 的间隔（秒）         | `86400`；`0` 禁用                                                                              |
+| `JIAN_STORAGE_CLEANUP_INTERVAL`        | 存储治理清理作业的间隔（秒）              | `86400`；`0` 禁用（作业不注册）；非法 / 负数回落默认                                           |
+| `JIAN_STORAGE_METADATA_RETENTION_DAYS` | 终态操作与隔离元数据的保留天数            | `7`；`0` 禁用元数据裁剪；非法 / 负数回落默认                                                   |
+| `JIAN_STORAGE_TEMP_MAX_AGE_HOURS`      | 过期 OCI 上传临时文件的最长滞留（小时）   | `24`；`0` 禁用该项清理；非法 / 负数回落默认                                                    |
+| `JIAN_BACKUP_AUTO_INTERVAL`            | 自动备份间隔（秒）——**仅作首次部署初值**  | `0`（**默认关闭**）；`0` = 关闭；非法 / 负数回落默认。界面可填 `30s`/`5m`/`2h`/`1d`/`1mo`/`1y` |
+| `JIAN_BACKUP_KEEP_LAST`                | 保留最近 N 份自动备份（份）——**仅作初值** | `7`；`0` = 不按份数限制；非法 / 负数回落默认                                                   |
+| `JIAN_BACKUP_RETENTION_DAYS`           | 自动备份的保留天数（天）——**仅作初值**    | `30`；`0` = 不限天数；非法 / 负数回落默认                                                      |
+| `JIAN_BACKUP_ORPHAN_CLEANUP_INTERVAL`  | 孤儿备份包回收作业的间隔（秒）            | `86400`；`0` 禁用（作业不注册）；非法 / 负数回落默认                                           |
+| `JIAN_BACKUP_ORPHAN_GRACE_HOURS`       | 孤儿回收的宽限期（小时）                  | `1`；`0` / 负数 / 非法回落 1（**不允许零宽限**，见下）                                         |
+| `JIAN_TLS_ADDR`                        | 内置 HTTPS 监听地址                       | 为空表示不启用                                                                                 |
+| `JIAN_TLS_CERT` / `JIAN_TLS_KEY`       | TLS 证书和私钥路径                        | 配置 `JIAN_TLS_ADDR` 时必填                                                                    |
+| `JIAN_AUTO_BLOCK_BASE_SECONDS`         | proxy 上游 auto-block 退避起始时长（秒）  | `40`；之后每档翻倍；`0` / 负数 / 非法回落默认（无禁用语义）                                    |
+| `JIAN_RESTART_UNIT`                    | 一键重启的目标 systemd 单元名             | `jianartifact`；须匹配 `[A-Za-z0-9._@-]`，否则该能力降级为不可用                               |
+| `JIAN_RESTART_SCOPE`                   | 一键重启的作用域                          | `system`；可选 `systemd-user`（**推荐**）/ `docker`；非法回落默认                              |
 
-派生路径固定为 `${JIAN_DATA_DIR}/jianartifact.db` 和 `${JIAN_DATA_DIR}/blobs`。启动会创建数据目录并执行 schema 迁移；不会在启动时扫描活动 blob；遗留 / 孤儿 blob 的定时清理由本实例按 `JIAN_BLOB_GC_INTERVAL` 独立运行；存储治理清理（隔离区空目录、终态操作与隔离元数据裁剪、过期 OCI 上传临时文件、代理缓存保留）由 `storage-cleanup` 作业按 `JIAN_STORAGE_CLEANUP_INTERVAL` 独立运行，两者按目录命名空间各管一块、互不重叠。以上作业**都只在第一个间隔到期后执行**（启动不清理、不扫描历史）。
+派生路径固定为 `${JIAN_DATA_DIR}/jianartifact.db` 和 `${JIAN_DATA_DIR}/blobs`。启动会创建数据目录并执行 schema 迁移；不会在启动时扫描活动 blob；遗留 / 孤儿 blob 的定时清理由本实例按 `JIAN_BLOB_GC_INTERVAL` 独立运行；存储治理清理（隔离区空目录、终态操作与隔离元数据裁剪、过期 OCI 上传临时文件、代理缓存保留）由 `storage-cleanup` 作业按 `JIAN_STORAGE_CLEANUP_INTERVAL` 独立运行；备份孤儿回收（`${JIAN_DATA_DIR}/backups/` 下"有包体、无登记"的残留）由 `backup-orphan-cleanup` 作业按 `JIAN_BACKUP_ORPHAN_CLEANUP_INTERVAL` 独立运行。三者按目录命名空间各管一块、互不重叠。以上作业**都只在第一个间隔到期后执行**（启动不清理、不扫描历史）。
+
+### 自动备份间隔的时间单位（FR-40 追加九）
+
+界面上「自动备份间隔」由**数值 + 单位**两个控件组成，支持秒 / 分钟 / 小时 / 天 / 周 / 个月 / 年。填写时界面会实时显示换算出的秒数，便于核对。
+
+- **存储口径不变**：权威值仍是秒（`setting` 表的 `backup_auto_interval`），本功能只改变"人的表达方式"，不需要迁移，也不改变既有配置的含义。
+- **月与年是保守近似**：1 个月按 30 天、1 年按 365 天换算。自动备份是"至少隔这么久跑一次"的兜底动作，差一两天的语义影响远小于"日历月长度不同导致配置漂移"的困惑。
+- **上限 30 天**：超过上限会**钳制**到上限而不是拒绝保存——填"1 年"的意图是"尽量久"，回落比报错更贴近意图。
+- **`0` 恒等于关闭**，与单位无关（"0 天"也是关闭），不存在"既非开也非关"的状态。
+- **接口层**：`PUT /api/v1/settings` 接受 `backupAutoIntervalExpr`（如 `"1d"`），优先级高于 `backupAutoInterval`（秒）；响应回显 `backupAutoIntervalExpr` / `backupAutoIntervalValue` / `backupAutoIntervalUnit`，供界面直接回填，避免前端重复实现拆分规则。
+- **`m` 是分钟，月必须写 `mo`**：这是 time 包的通用约定。把 `1m` 当成一个月会有 43200 倍的偏差，因此后端对两者严格区分，并有专门的单测守着。
+
+### 恢复失败时能看到真实原因（FR-40 追加十）
+
+早先的失败提示几乎是同一句话：「服务内部错误，请稍后重试或查看日志。」真实原因（基线包缺失、已有导入在跑、包未就绪、归档损坏…）被丢弃，日志里也可能没有对应记录——现场无法自行判断，也无法反馈有效信息。
+
+现在分为两类：
+
+- **可自行处置的失败**会给出各自的错误码与做法：`target_not_empty`（勾选覆盖）、`base_missing`（先导入基线包）、`import_in_progress`（等前一个跑完）、`package_not_ready`（包未生成完成或已失败）、`restore_pending`（先重启）、`incompatible`（升级程序）、`package_oversize`（拆包）。
+- **真正的未知故障**才标 `internal`，并且**把原始错误文本一并返回**（`内部错误：<原始错误>`）与写入导入记录的 `error` 字段。该接口仅对管理员开放，错误文本来自本程序的领域逻辑，不含凭据。
+
+### 恢复前先看包内容，并对比与本机的差异（FR-40 追加十一 / 十四）
+
+恢复确认弹窗内直接展开「包里有什么 · 与本机差异」，回答**恢复后会怎么变**：
+
+| 分类               | 含义                        |
+| ------------------ | --------------------------- |
+| 包里有、本机没有   | 恢复后**新增**              |
+| 本机有、包里没有   | 恢复后**消失** ← 最需要警惕 |
+| 两边都有但内容不同 | 恢复后**被替换**            |
+| 完全一致           | 恢复后不变                  |
+
+**性能设计**（几十万制品时仍然可用）：
+
+- 打开时只请求**摘要**——服务端只跑聚合查询（`ATTACH` 包内快照后一条 SQL 求差集），不搬明细；
+- 点开某一类才拉**分页明细**，单页 50、硬上限 200，界面显示"第几页 / 共多少条"，绝不让用户以为看全了；
+- 包内快照解出后**缓存在临时目录**（TTL 10 分钟、同时最多 2 份）。解包代价与包体积同阶（20GB 是分钟级），不缓存会让每次翻页都重新解一遍；上限 2 份是防止"只想对比一下"把盘写满。
+
+**只对比元数据**（仓库名/格式、制品路径/大小/哈希、账号名/角色/状态），**不比对文件内容**——逐字节验证 20GB 不现实，那是「深度校验」的职责。界面上明确写了这一点，避免"无差异"被误读成"字节一致"。
+
+### 恢复前先看包内容（FR-40 追加十一）
+
+恢复会用备份包**整份覆盖**本机数据且不可撤销。此前界面只给出抽象计数（"多少制品、多少仓库"），无从判断包里到底是什么，恢复等于一次赌博。
+
+现在列表的「⋯」菜单里第一项是「查看包内容」，展示：
+
+- **仓库清单**（名称 / 格式 / 类型）——判断"是不是我要的那个包"最直接的依据；
+- **账号清单**（用户名 / 角色 / 状态）——**不含**口令哈希或任何密钥；
+- **制品路径样例**（最多 50 条）与制品总数；
+- 数据库 schema 版本（低于当前程序即可直接恢复）。
+
+该端点是**纯只读**的：把包内数据库快照解到临时目录、以 `mode=ro` 打开查询，查完立即删除；不改动包体、不写入备份目录、不产生任何标记。因此"看内容"不会影响包本身的可用性。
+
+### 自动备份为什么默认关闭（FR-40 追加十二）
+
+默认间隔是 `0`（**关闭**），这是**有意**的选择，不是遗漏。
+
+原因是备份为**全量**包：每份大小≈整个数据目录。默认开启会在用户毫无预期的情况下持续消耗磁盘，而实测存在 **20GB 数据 / 40GB 磁盘**这类配置——默认开几天就能把盘写满。两者的代价不对称：
+
+- 默认关闭、出事时没备份 → 运维事后补配置即可修复；
+- 默认开启、盘被写满 → 服务写挂，是运行故障。
+
+两害相权，默认关闭。
+
+**保留策略不等于容量可控**：`JIAN_BACKUP_KEEP_LAST` 是"最多留几份"的上限，7 份 × 20GB = 140GB 仍可能远超可用磁盘。因此配置弹窗内按"最近一次包大小 × 保留份数"实时估算并提示；开启前请自己算一遍。
+
+**非法值回落默认（关闭）**：与"零点即关闭"的口径一致，回落目标是本项的默认值。
+
+### 恢复不会抹掉备份列表（FR-40 追加九）
+
+`backup_package` 登记表与被恢复的数据库是同一个文件，而备份包体（`<id>.tar.gz`）在数据目录下、**不在**快照里。恢复一份旧快照会让登记表退回旧内容，于是恢复之后"磁盘上明明有包、列表里却看不见"——用户看到的就是"恢复一次，备份包全没了"，而 restore 恰恰最需要备份兜底。
+
+现在 `ApplyPendingRestore` 在替换数据库后，会以**磁盘为准**补回登记：凡包体存在且 manifest 合法的包，一律重新登记（状态 `done`、来源 `manual`、备注「恢复后补回」）。包体已不存在的旧登记不补（它们本来也没法用）。补回的条数会写进启动日志的恢复摘要里：
+
+```
+已应用待生效的备份恢复：包 bk-xxx：制品 N 件，blob 合并 X / 跳过 Y，回滚备份 …, 补回备份登记 Z 个
+```
+
+看到「补回备份登记 Z 个」说明这份旧快照里没有这些包的记录——它们是被恢复操作"找回"的，不是新产生的。
+
+**导入记录同样会被搬回**（摘要里的「搬回导入记录 N 条」）：`backup_import` 也是库内的表，恢复会把它一并回滚，于是"这次恢复失败了吗、为什么失败"的记录会被**它自己的恢复动作**覆盖掉。现在会从 `pre-restore-<时间戳>/` 那份快照里把导入记录搬回来，其中失败记录的错误码与原因一并保留。
+
+**回滚备份会被自动回收**：每次恢复都会在数据目录下留一份 `pre-restore-<时间戳>/`（含被覆盖前的完整数据库）作为回滚退路。这些目录早先**从不清理**——实测测试站积了 61 个、96MB；按 20GB 数据算，每恢复一次就多 20GB，两次就能写满 40GB 的盘，而这恰恰发生在"用户已因磁盘紧张来恢复"的时刻。
+
+现在由 `backup-orphan-cleanup` 作业统一回收，**保留最近 3 个**（回滚价值在"刚恢复完的那几次"）。日志里会体现：
+
+```
+备份孤儿回收完成：扫描 N 个包体 / … / pre-restore 备份回收 8 个（保留最近 3 个）
+```
+
+**另有一份文件级留痕**：`${JIAN_DATA_DIR}/restore-failures.log`。每行一条恢复失败，包含时间、导入 ID、来源、操作者、包标识、错误码与原始错误。它落在数据目录下、不在数据库快照内，因此**即使数据库被恢复覆盖也不会丢**。排查"恢复为什么失败"时优先看这个文件。
+
+### 备份目录与"未被管理的包"（FR-40 追加八）
+
+`${JIAN_DATA_DIR}/backups/` 里的包体与数据库登记是两套独立的持久化：包体是文件，登记在 SQLite。`BackupService.Delete` 的顺序是**先删文件、再删登记**，因此正常删除与保留策略都不会留下残留；但两者之间没有事务，进程被杀、外部工具直接改库、历史版本缺陷或手工搬运都可能让它们失步，产生"磁盘有包体、登记无记录"的包。
+
+这类包在常规列表里**不可见**（列表读登记表），于是磁盘被占着却既不能用也不能删。为此提供两个配套能力：
+
+- **导入（界面「导入未管理的包」）**：扫描出候选，支持单选与多选，逐个校验包内 manifest 后补建登记行。导入的包以 `origin=manual` 登记，因此**不会被保留策略自动淘汰**——是否保留由人决定。文件名与包内标识不一致时会按包内标识重命名包体。
+- **回收（`backup-orphan-cleanup` 作业）**：把无人认领的残留按两道路径删掉。
+
+两者的候选来自**同一份差集**（磁盘有、登记无），因此不会互相打架。回收作业有两道护栏：
+
+1. **宽限期**：只回收 mtime 早于 `now - JIAN_BACKUP_ORPHAN_GRACE_HOURS` 的文件。刚拷进来、还没来得及在界面导入的包一律保留。宽限期**不允许配成 0**（`0`/负数/非法都回落 1 小时）——零宽限会让"拷入 → 导入"这个操作窗口消失。
+2. **身份校验**：只回收能通过 `archive.Manifest.Validate` 的本产品备份包。无法识别的归档（用户放错的其他 tar.gz、损坏包）一律不动，计入结果的 `Invalid` 而非删除。
+
+**重复副本**：同一份包的多个文件（manifest 标识相同）会在未管理列表里被标为「多余副本」，`valid=false`、`duplicate=true`。它们不能重复导入，但**内容有效**，因此孤儿回收**不会**删除它们——需要运维自行确认后手动删除多余的那一个。这样它们不会卡在"两条列表都看不见"的缝里白占磁盘。
+
+命名空间护栏：只碰 `<id>.tar.gz` 与 `<id>.index`；`<id>.tar.gz.snap` 是生成中的一致性快照临时文件，由生成流程的 defer 自清理，回收作业不碰。单轮删除上限 500 个，首次在积压严重的实例上不会一次打爆磁盘 IO。
+
+> **典型处置流程**：发现未管理包 → 先在界面确认哪些要 → 导入要保留的 → 其余的等宽限期过后由作业回收（或手动触发 `POST /api/v1/maintenance/jobs/backup-orphan-cleanup/run`）。
+
+### 数据目录解析（CLI 与服务的对齐）
+
+服务由 systemd 单元经 `EnvironmentFile` 提供 `JIAN_DATA_DIR`；**CLI 是独立进程，读不到它**。因此 CLI 的数据目录按以下顺序解析（每次都会把结果与依据打印到 stderr）：
+
+1. **`JIAN_DATA_DIR` 已显式设置** → 直接使用。这是唯一权威来源，部署与自动化脚本都应用它。此时**不打印**提示（行为完全由调用方决定），但仍会去找"声明了该目录"的那份实例 env 文件并采纳其配置——见下方关于散件密钥的说明。
+2. **未设置时自动发现**：按序读常见部署位置的环境文件（`/opt/jianartifact/jianartifact.env`、`/etc/jianartifact/…`、`/var/lib/jianartifact/…`）里的 `JIAN_DATA_DIR`。找到**唯一**候选就用它并打印说明；找到**多个不同**候选则列出候选并报错退出（**不猜**——猜错就是操作到另一个库）。
+3. **探测不到** → 回落到默认 `./data`，并打印警告。
+
+> **为什么需要这套机制**：早期 CLI 在 `JIAN_DATA_DIR` 缺失时**静默**回落到 `./data`。后果有两层——CLI 操作的是另一个库（看不到服务侧真实的包，报"归档不存在"，看着像功能缺陷）；且启动会 `MkdirAll` 数据目录并生成 `jwt.secret` / `jianartifact.db`，于是**一次误跑就在原地建出一个完整的空实例**。这正是"莫名其妙多出数据目录"的来源。
+>
+> **自动发现可以是自动的，但不能是静默的**：任何一次解析都要能回答"这次用的是哪个目录、依据是什么"。若你在服务机上跑 CLI 却没设 `JIAN_DATA_DIR`，请核对输出里的数据目录是否与服务的 `${JIAN_DATA_DIR}` 一致。
+>
+> **为什么"采纳实例配置"覆盖了全部三种情形**：只对齐数据目录是不够的。该实例的 `JIAN_JWT_SECRET` / `JIAN_MIGRATION_CREDENTIAL_KEY` 等仍缺失时，CLI 会以为密钥"未设置"，于是**在服务的数据目录里现场生成一份散件**（`jwt.secret` / `migration-credential.key`），并对 `backup list` 这种只读命令打印"未设置 JIAN_JWT_SECRET"的误导性警告——而服务明明设了。散件**不会覆盖**服务实际使用的密钥（env 里的值优先），所以不影响登录，但它是无用文件、且会让人误判配置状态。故只要找到该目录对应的实例 env，就整份采纳（**只补当前进程未设置的键**，显式 export 的值始终优先）。
+
+**用 `sudo` 跑 CLI 时注意属主**（实测事故）：`sudo jianartifact backup import …` 会以 root 写入 `restore.pending`（`0600 root:root`）与 `restore-staging/`。服务通常以普通用户运行，**读不了**该标记。现在的行为是：
+
+- 服务启动时若发现标记读不了，**跳过该恢复并打印含修复命令的告警，但正常起服**（不再因一个可延后的维护动作而整站起不来，见 §5.2）；
+- CLI 导入成功后若检测到标记属主与当前进程不同，会**当场提示**去改属主——问题在产生的当口就暴露。
+
+正确做法：以**服务运行身份**执行 CLI（通常数据目录对它有写权限，无需 sudo），或在重启前 `chown` 回服务用户。
+
+**周期化自动备份**（FR-40）默认**关闭**：间隔为 `0` 时不生成任何备份。开启后按间隔生成**完整热备份包**（不生成差包——无人值守下基线选择不可控且易形成长链），并在每轮收尾应用保留策略（见 §5.2「备份目录保留」）。
+
+三项配置的**真源是数据库**（`setting` 表），可在管理端「迁移与备份 → 备份与搬迁 → 自动备份与保留策略」卡上直接修改，**保存即生效、无需重启**（作业每 30 秒重读一次配置，最迟一个心跳周期内应用）。三个环境变量仅在**首次部署**（该组配置尚不存在时）作为初值写入一次，此后改环境变量不再生效——它们不再是"配置真源"，只是初始化默认值。
 
 **已废弃的环境变量**：`JIAN_REPLICATION_ROLE`、`JIAN_REPLICATION_PRIMARY_URL`、`JIAN_REPLICATION_RELAY_ENABLED` 自复制通道退役（FR-138）起不再被解析；旧环境文件里残留这些键不影响启动（未知键被忽略），可直接删除。
 
@@ -155,9 +298,10 @@ scrape_configs:
 curl -fsS -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/api/v1/maintenance/jobs
 ```
 
-返回本进程**已注册**的周期作业（现状为 `blob-gc` 与 `storage-cleanup`）及状态：名称、间隔秒数、是否运行中、累计执行 / 失败次数、最近开始 / 结束时间、最近错误。要点：
+返回本进程**已注册**的周期作业（现状为 `blob-gc`、`storage-cleanup` 与 `backup-auto`）及状态：名称、间隔秒数、是否运行中、累计执行 / 失败次数、最近开始 / 结束时间、最近错误。要点：
 
 - 清单由注册决定——**间隔 ≤ 0 被禁用的作业不注册，也不出现在清单里**，所以"某个作业没出现"等价于"该作业在本实例被禁用"（例如 `JIAN_STORAGE_CLEANUP_INTERVAL=0`）；
+- **`backup-auto` 是例外，须留意**：它的间隔改为在运行时可配（见 §1.1），因此作业**始终注册**，清单里**总是能看到它**，其 `intervalSeconds` 恒为心跳值 30。它是否真正在备份，取决于「备份与搬迁」页的自动备份间隔是否为 0——**看到 `backup-auto` 不代表自动备份已启用**；
 - 计数自进程启动累计、重启归零；未执行过的作业，时间与错误字段为 `null`。
 
 **手动触发一次**（仅管理员）：
@@ -173,6 +317,52 @@ curl -fsS -X POST -H "Authorization: Bearer $TOKEN" \
 - **403**（非管理员）/ **401**（未登录）；调度器未接线时 503 `unavailable`（兼容分支，生产装配恒为已接线）。
 - 触发成功写审计动作 `maintenance.job_run`。维护命名空间在写入冻结窗口的放行清单内，冻结期间仍可查清单与手动触发。
 - 手动触发**不会**让作业变得"更快"：调度语义不变，触发只是额外跑一轮。
+
+**一键重启服务**（仅管理员，FR-40 追加七）：
+
+```bash
+# 只读探测：本机能不能自动重启、手工等效命令长什么样（不会触发重启，可安全反复调用）
+curl -fsS -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/api/v1/maintenance/restart
+
+# 真正受理重启：响应先回（202），约 delayMs 毫秒后开始关停并自替换
+curl -fsS -X POST -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/api/v1/maintenance/restart
+```
+
+用于「备份恢复后生效」或按需重载进程（也用于搬迁流程的"起服"一步）。要点：
+
+- **执行路径：进程自替换（`syscall.Exec`），不执行任何外部命令。** 这是本功能**唯一且默认**的执行方式，也是它不需要任何权限的原因：`jianartifact` 本就有权执行自己的二进制（systemd 的 `ExecStart` 就是它），`syscall.Exec` 只是"同一个进程换一份新映像"——不 fork、不新建进程、不引入任何新权限。因此：
+  - **不需要 sudo、不需要 polkit 规则、不需要 sudoers 条目、不需要 lingering 之外的任何 systemd 授权**；
+  - **不受 `NoNewPrivileges=true` 影响**（该加固项限制的是**提权**，而自替换压根不提权；系统级单元、rootless 用户级单元、容器里都一样可用——实机验证：在 `NoNewPrivileges=true` + `ProtectSystem=strict` + `ProtectHome=read-only` + `PrivateTmp=true` 全套加固下自替换成功，PID 不变、PPID 仍为 1、`status=0/SUCCESS`）；
+  - 端口可原样重绑：Go 的 socket 默认带 `CLOEXEC`，内核在 exec 时自动关闭旧 fd，因此即使不显式关闭监听器也能重新绑定同一端口（实测）。
+- **两个必须知道的语义差异**（与"用 systemctl 重启"相比，运维视角上确实不同）：
+  - **① unit 状态不变**：systemd 视角上这个单元**从未停止过**——PID 不变，`ActiveEnterTimestamp` / `NRestart` 都不动，`systemctl status` 看不出重启过，`Restart=on-failure` 的重启计数也不会增加。这是**可以接受的**：本功能要的是"应用重新执行一遍启动流程"（备份恢复落地、搬迁起服就靠这条），而不是"让 systemd 记一笔重启"。要判断是否真的重启过，请**看应用日志**（启动横幅 `JianArtifact <version> 正在监听 …`）而不是 `systemctl status`。反过来这也意味着：**`systemctl restart` 能观察到的东西，这里观察不到**；需要那种语义时就手工执行 `command` 里的命令。
+  - **② 存在一个短暂的中断窗口**：顺序是"先优雅关停（停止接受新请求、等在途请求收尾，上限 15 秒）→ 再替换映像"。这期间服务不可用，通常几秒；关停失败会**如实报错并放弃自替换**（不静默带病换映像）。
+- **`command` 字段是"手工等效命令"，不是本进程会执行的命令。** 自动重启走自替换、不执行任何命令；`command` 回答的是"若你想**在终端里手工**重启本节点，敲这条"，因此它随部署形态与运行身份而变，由后端按 `JIAN_RESTART_SCOPE` 生成，任何情况下都返回、可直接复制（配置非法时是一句说明性注释，不回显配置原文）。
+- **`GET` 是只读探测，绝不排定重启**：它返回与 `POST` 相同的结构（`supported` / `command` / `reason` / `scope`，但**不含 `delayMs`**，因为没受理就没有延迟），探测口径与 `POST` 完全一致。**不要用 `POST` 代替探测**——`POST` 在 `supported:true` 时会当场排定重启，"打开页面即重启"。`GET` 不写审计（只读），`POST` 才写。
+- **界面上的可复制命令来自这个只读探测，因此与本机部署形态一致**：只有后端知道本机该敲哪条手工命令，四种形态见下。界面不会给出照做必失败的 `sudo` 命令——例如**仓库自带的 rootless 用户级单元**下探测给出的是 `systemctl --user restart <unit>`，而不是那条在该形态下必然被拒的 `sudo systemctl restart <unit>`。
+- **先回响应，再重启**：返回 **202** 时重启**尚未开始**，真正开始（优雅关停 → 自替换）在 `delayMs` 毫秒后（约 1.8 秒），留出响应送达与前端展示的余量。**看到 202 后连接随即断开是预期行为**，不是失败——请停止轮询本节点，等它重新起来。
+- **`supported: false` 是正常业务结果，用 HTTP 200 返回**（不是 4xx/5xx）：服务在受理前会**同步预检**四条判据——① 本平台是否支持自替换（`syscall.Exec` 仅 Unix）；② `os.Args[0]`（自替换要加载的路径）能否解析为可执行文件；③ 重启触发点是否已接线；④ 单元名与作用域是否合法。不通过时如实返回 `reason`（原因）与 `command`（手工等效命令），供界面渲染降级 UI。**服务不会假装成功**。
+- **四种部署形态对应的"手工等效命令"**（**注意**：这只是"若你要手工重启，敲哪条"，**不是自动重启的前提**——自动重启在任何形态下都走自替换、都不需要这些命令背后的授权）：
+- **① rootless 用户级单元（仓库自带模板就是这一种）**：`JIAN_RESTART_SCOPE=systemd-user` 时手工命令为 `systemctl --user restart <unit>`（单元名默认 `jianartifact`）。仓库自带模板 [`deploy/systemd/jianartifact.service`](../deploy/systemd/jianartifact.service) 是**用户级单元**（装到 `~/.config/systemd/user/`，用 `systemctl --user` 管理），[`deploy/deploy.sh`](../deploy/deploy.sh) 的默认 `SYSTEMD_SCOPE="user"` 与之配套——**这才是仓库的正规部署形态**。**手工执行这条命令也不需要 sudo、不需要 polkit，且不受单元里 `NoNewPrivileges=true` 的影响**：该加固项限制的是提权，而用户级重启走的是该用户自己的 systemd 实例，本就不涉及提权（实机验证：在与服务进程完全相同的限制下执行 `systemctl --user restart`，`exit=0`）。两个前提只影响**手工命令**能否跑通（以及你需要 SSH 登入后执行它）：
+  - **可达性**：`systemctl --user` 要靠 `XDG_RUNTIME_DIR`（通常为 `/run/user/<uid>`）找到用户级 systemd 实例。你自己的交互式 shell 通常已有这个变量；若在脚本 / cron 里执行，可能需要显式给出 `XDG_RUNTIME_DIR=/run/user/$(id -u)`。
+  - **常驻性**：用户级单元默认随该用户最后一个会话结束而停止，**要让它无人登录时也常驻，必须开 lingering**：`loginctl enable-linger <user>`（核对：`loginctl show-user <user> -p Linger` 应为 `Linger=yes`）。这是"用户级能替代系统级"的硬前提。
+- **② 系统级单元（进程非 root）**：`JIAN_RESTART_SCOPE=system` 时手工命令为 `sudo -n systemctl restart <unit>`。**这属于偏离自带设计的形态**，手工执行它需要额外授权：
+
+  ```sudoers
+  # /etc/sudoers.d/jianartifact-restart（用 visudo -f 编辑）
+  # 只放行这一个单元的重启。不要写 ALL。
+  admin ALL=(root) NOPASSWD: /usr/bin/systemctl restart jianartifact
+  ```
+
+  另一条硬约束：**该单元里不能有 `NoNewPrivileges=true`**——该 flag 置位时 sudo 直接报 `The "no new privileges" flag is set, which prevents sudo from running as root`（实测），手工命令必然失败。**注意这只影响手工命令**：界面上的"一键重启服务"按钮走自替换，在带 `NoNewPrivileges=true` 的系统级单元下**照样可用**（这正是本功能改为自替换的直接起因）。
+
+- **③ 系统级单元（进程本身是 root）**：手工命令为不带 sudo 的 `systemctl restart <unit>`（root 本就有权管单元），不需要任何额外授权。
+- **④ 容器 / Docker / K8s**（`JIAN_RESTART_SCOPE=docker`）：**明确不支持自动重启**——容器生命周期由外部编排掌握，自替换只能换掉容器内的一个进程，编排层该做的重建不会被触发；容器里也没有 systemctl，`docker restart` 需要宿主机的守护进程（通常未挂载进容器）。预检一律回 `supported:false`，界面降级为显示手工命令。**降级命令里那一串由后端固定给出为 `docker restart <unit>`，而它只是形态示意**：实例实际由 compose 或 k8s 编排时，真正能让改动生效的命令要换成 `docker compose restart <service>` 或 `kubectl rollout restart deployment/<name>`，并在**宿主机**（不是容器内）执行。宁可让运维多点一次，也不假装成功。
+- **预检与降级**：判据见上（平台支持 / `argv[0]` 可解析 / 触发点已接线 / 配置合法）。任一不满足即降级为 `supported:false`，`reason` 说明具体是哪一条不满足——例如 `argv[0]` 不可解析时原因会**点名那条路径与底层错误**（"二进制被换掉 / 部署目录的符号链接悬空 / 权限不对"是"重启没生效"最常见的根因，必须让人一眼看到）。`command` 里的命令仍可手工执行。
+- **关于 `argv[0]` 与部署目录符号链接**（排查时最值得先看的一条）：自替换加载的是 **`os.Args[0]`**，即 systemd `ExecStart` 里写的那个路径（例如 `/opt/jianartifact/current/jianartifact`），其中 `current` 是部署脚本维护的符号链接。内核在 exec 时**重新解析**该符号链接，因此"先切 `current` 再一键重启"会真正加载到新版本。这也意味着：**若你把 `current` 指向别处、或让那个路径不可执行，一键重启会如实降级**（并在 `reason` 里说明），而不会静默地加载错的东西。
+- **配置**：`JIAN_RESTART_UNIT`（默认 `jianartifact`）与 `JIAN_RESTART_SCOPE`（默认 `system`，可选 `systemd-user` / `docker`，非法值回落 `system`）。**推荐把 `systemd-user` 与仓库自带的用户级单元配套使用**（见上面第 ① 种形态），这样界面上的手工命令与实际部署形态一致。两者都只影响 `command` 这条**手工命令的展示**，不影响自替换本身（自替换加载的是本进程自己的 `argv[0]`，与单元名无关）。
+- **安全**：单元名**只**从环境变量读取，**绝不**从请求体读取（那是直通命令注入的路径），且须匹配 `[A-Za-z0-9._@-]`——含 `;` / `$()` / 空格 / 换行等元字符时一律降级，`command` 只给说明性注释、不回显配置原文（它会被人复制到终端粘贴执行）。**自替换本身没有注入面**：`argv0` / `argv` / `env` 全部来自本进程自身，没有任何外部输入参与。
+- 审计动作 `maintenance.service_restart`：受理记 `ok`（详情含 `command`）、降级记 `failed`（详情含原因）。
 
 **仓库存储配额与代理缓存保留**：
 
@@ -313,6 +503,8 @@ jianartifact-backup-<packageId>.tar.gz
 
 单二进制必须显式传入子命令；无参数或未知命令只打印用法。
 
+**先确认数据目录**：所有 CLI 子命令都作用于 `${JIAN_DATA_DIR}`。未显式设置时，CLI 会尝试自动发现正在运行的实例并打印所用目录与依据（见 §3「数据目录解析」）。**在服务机上执行运维命令前，请先核对这一行输出**——它决定了你操作的是哪一个实例。
+
 - `jianartifact run`：启动服务。
 - `jianartifact status`：读取本地/在线状态、版本、就绪和数据摘要。
 - `jianartifact healthcheck`：读取 `/readyz`，供容器探活。
@@ -324,9 +516,10 @@ jianartifact-backup-<packageId>.tar.gz
 - `jianartifact backup create --base <packageId> [--mode hot|frozen] [--label <备注>]`：以某基线包生成**增量差包**，只携带新增 blob + 新 db，把搬迁停机窗口从"传整个包"缩到"只传新增 blob + 新 db"（分钟级）。基线必须存在、状态 `done`、且其**侧车索引** `${JIAN_DATA_DIR}/backups/<packageId>.index` 存在，否则明确报错。
 - `jianartifact backup list [--json]`：列出本机备份包（状态、大小、创建时间、失败摘要）。
 - `jianartifact backup verify <包标识|归档路径> [--deep]`：校验完整性。不带 `--deep` 只比对 db 与 `blobs.index` 摘要；带 `--deep` 逐 blob 比对内容摘要（耗时与包体积同阶）。目标既可以是已登记的包标识，也可以是外部传入的归档文件路径。
+- `jianartifact backup drill <包标识> [--level shallow|deep]`：**恢复演练**（FR-40），**默认 deep（深校验）**——浅校验只验归档结构，对「内容被静默篡改但 tar/gzip 结构完好」的包会判为通过，而演练回答的是"这份包真的能恢复吗"，故默认取更严格的一档；需快速预检时显式传 `--level shallow`。在隔离临时目录内真解包并校验（归档完整性 → 解包 → 解出的 SQLite `quick_check` + 关键表可查询 → 解出的 blob 数与 manifest 一致），产出结构化报告并落库；未通过时非零退出且报告仍落库。**只读路径：不写 `restore.pending` / `restore-staging/`，不改动本实例、无需重启**。与 `backup verify` 的区别：verify 只校验归档字节（可对任意文件路径），drill 回答的是"这份包真的能恢复吗"。详见 §5.2「恢复演练」。
 - `jianartifact backup link <包标识> [--ttl 30m] [--base https://对外地址]`：签发带时效的下载链接，供新机器直接拉取。`--base` 缺省时回退 `JIAN_PUBLIC_URL`；两者都为空则报错（不签相对链接）。有效期钳制在 1 分钟 ~ 24 小时。
 - `jianartifact backup delete <包标识>`：删除包体与登记；被增量包引用的基线会被拒绝。
-- `jianartifact backup import <归档路径> [--overwrite] [--deep] [--yes]`：校验备份包并暂存，**需重启服务后生效**。`--overwrite`：目标实例非空时必需（内置 `anonymous` 主体不计入"非空"）；`--deep`：逐 blob 比对内容摘要（耗时与包体积同阶）；`--yes`：交互式终端下跳过"确认覆盖"的二次确认（无 TTY 时 `--overwrite` 即视为已确认）。失败不会留下待生效标记。重启后启动日志会打印已应用的恢复，并保留 `pre-restore-<ts>/` 作为回滚退路。
+- `jianartifact backup import <归档路径> [--overwrite] [--deep] [--yes]`：校验备份包并暂存，**需重启服务后生效**。`--overwrite`：目标实例非空时必需（内置 `anonymous` 主体不计入"非空"）；`--deep`：逐 blob 比对内容摘要（耗时与包体积同阶）；`--yes`：交互式终端下跳过"确认覆盖"的二次确认（无 TTY 时 `--overwrite` 即视为已确认）。失败不会留下待生效标记。重启后启动日志会打印已应用的恢复，并保留 `pre-restore-<ts>/` 作为回滚退路。**不要用 `sudo` 跑**：标记文件若属主为 root，服务（通常以普通用户运行）读不了它，需在重启前 `chown` 回服务用户（见 §3「数据目录解析」）。
 
 ## 5. 升级、备份与恢复
 
@@ -379,11 +572,43 @@ curl -fsSL -o /tmp/jianartifact "<Release 附件 URL>" && sha256sum /tmp/jianart
 ```bash
 jianartifact backup create --mode hot --label "每周例行"
 jianartifact backup verify <包标识> --deep     # 可选的深度校验
+jianartifact backup drill <包标识> --level deep # 恢复演练：确认这份包真的能恢复
 ```
 
 包落在 `${JIAN_DATA_DIR}/backups/`，也可从管理台「迁移与搬迁 → 备份与搬迁」生成与下载。热备份不停服，适合例行备份；要求严格一致性时改用冻结窗口。
 
+也可以让服务按周期自动备份（FR-40）：在管理端「迁移与备份 → 备份与搬迁 → 自动备份与保留策略」卡上设置间隔即可（**默认关闭**，需显式开启），并用保留份数 / 天数约束占用（见 §1.1 与下文「备份目录保留」）。
+
+> ⚠️ **开启前务必算一遍容量**。自动备份是**全量**包，每份大小≈整个数据目录。
+> 保留策略只是"最多留几份"的上限，**不是"占用量可控"的保证**：
+> 例如 20GB 数据 + 保留 7 份 ≈ 140GB，磁盘只有 40GB 时开几天就会写满，而盘满会连带把服务写挂。
+> 配置弹窗内会按"最近一次包大小 × 保留份数"实时估算并提示。三项均**保存即生效、无需重启**；首次部署也可经 `JIAN_BACKUP_AUTO_INTERVAL` / `JIAN_BACKUP_KEEP_LAST` / `JIAN_BACKUP_RETENTION_DAYS` 提供初值。
+
 **包内不含密钥**，因此除包之外仍必须另行受保护地保存：生产显式配置的 `JIAN_JWT_SECRET`、`JIAN_MIGRATION_CREDENTIAL_KEY` 与服务环境文件（`deploy/.env`、systemd 环境文件）。这些密钥不随包迁移，新实例必须自行注入。
+
+**备份目录保留**（FR-40）：`${JIAN_DATA_DIR}/backups/` 的自动淘汰只作用于**自动备份**（`origin=auto`，即 `backup-auto` 作业生成的包），两条上限**同时生效、取更严格者**：
+
+| 配置                         | 默认 | `0` 的含义   | 说明                    |
+| ---------------------------- | ---- | ------------ | ----------------------- |
+| `JIAN_BACKUP_KEEP_LAST`      | `7`  | 不按份数限制 | 保留最近 N 份自动备份   |
+| `JIAN_BACKUP_RETENTION_DAYS` | `30` | 不限天数     | 保留最近 N 天的自动备份 |
+
+两条都配 `0` 等于不做任何淘汰（只生成、不清理，需自行盯磁盘）。语义要点：
+
+- **手动备份永不被自动删除**：`jianartifact backup create`、管理台与 API 生成的包都是 `origin=manual`，是人工决策产物，保留策略不触碰它们（不做手动包的自动保留策略）。清单里"淘汰 0 份"因此是正常结果。
+- **被增量差包引用为基线的包跳过不删**，并在作业日志中计入"跳过数"。日志形如 `自动备份完成：包 bk-…；保留策略：候选 3 份 / 淘汰 1 份 / 因被差包引用跳过 1 份 / 失败 0 份`——**跳过数非 0 不是故障**，它表示有差包依赖该基线。
+- 淘汰是 `backup-auto` 作业的**收尾步骤**，随作业一起跑；首个自动备份生成后立即应用一次，不需要等下一轮。
+- 保留策略**只统计状态为 `done` 的自动包**：生成中 / 失败的包不占份数（否则会挤掉一份真正可用的备份），也不被本策略删除。
+- 手工清理仍可用 `jianartifact backup delete <包标识>`；被差包引用的基线会被拒绝（`该备份包仍被增量包引用，不能删除`），与保留策略同一约束。
+
+**恢复演练**（FR-40）：对任意已完成的包在**隔离临时目录**内真解包、真校验，产出结构化报告并落库：
+
+```bash
+jianartifact backup drill <包标识>                # 浅校验（默认）
+jianartifact backup drill <包标识> --level deep   # 深校验：逐 blob 比对内容摘要
+```
+
+演练依次检查四项：归档完整性、解包、解出的 SQLite（`PRAGMA quick_check` + 关键表可查询）、解出的 blob 数与 manifest 一致。耗时与包体积同阶（深校验要逐 blob 读一遍），大包请留足时间。**演练是只读路径**：它**不会**产生 `restore.pending` 或 `restore-staging/`，与 §5.3 的真导入有本质区别——演练不改动本实例，不需要重启。演练未通过时命令以非零退出码结束，报告仍会落库（失败报告正是演练最该留下的东西）；报告随包级联删除。临时目录位于 `${JIAN_DATA_DIR}/backup-drill/`，无论成败都会被清理。
 
 若不用备份包而手工兜底，需一致备份：
 
@@ -396,8 +621,9 @@ jianartifact backup verify <包标识> --deep     # 可选的深度校验
 
 把一份节点备份包应用到本实例：校验 → 合并 blob → 暂存 db → 写待生效标记 → **重启替换**。导入不修改运行中的 SQLite，只写 `restore-staging/` 与 `restore.pending`；下次启动由 `ApplyPendingRestore` 在 `persistence.Open` 之前先做 `pre-restore-<ts>/` 回滚备份、再原子替换数据库。
 
-三通道：
+**四条通道**（前三条要求包来自外部，第四条用本机已有的包）：
 
+- **本机已有的包**：管理端「备份与搬迁」事件表 → 某行「⋯」→ **「用这个包恢复」**（`POST /api/v1/backups/{id}/restore`）。补的是「页面上明明列着可用的包，却没有任何按钮能用它恢复」这个缺口——实测反馈的「只能备份无法恢复」正源于此。语义与其它通道完全一致（同一条编排、同样需重启生效）。
 - **CLI 直传**：`jianartifact backup import <归档路径> [--overwrite] [--deep] [--yes]`（见 §4）。适合已把包传到本机的场景。
 - **Web URL 拉取**：`POST /api/v1/backups/import` 由服务端从 `sourceUrl`（http/https，必填）拉取并异步导入（202 + 记录），进度经 `GET /api/v1/backups/imports`（分页，最近优先）与 `GET /api/v1/backups/imports/{id}` 查看。仅管理员。**SSRF 防护**：拒绝回环/私网/链路本地/云元数据地址，每次拨号重新解析（防 DNS 重绑定），重定向重新校验。
 - **Web 分片上传（FR-137 第三通道）**：前端把 GB 级备份包按服务端约定的 **8 MiB** 分片顺序上传，落盘后组装并交本地导入状态机（仍需重启生效）。状态机 `initialized → receiving → completed`，随时可 `aborted`；会话有效期 **24 小时**，单包上限 **50 GiB**（与 URL 拉取同一护栏）。流程：
@@ -412,6 +638,10 @@ jianartifact backup verify <包标识> --deep     # 可选的深度校验
 状态机 `queued → fetching → staging → pending_restart → done`，失败转 `failed` 并带 `error_code`：`fetch_failed` / `package_oversize` / `sha256_mismatch` / `manifest_invalid` / `target_not_empty`（409）/ `incompatible` / `restore_pending`（409）/ `internal`。
 
 失败处置：任何阶段失败都**不留下待生效标记、不写 `restore.pending`、不留暂存目录**，记录以 `failed` 终态表达错误码；运维按错误码排查——`target_not_empty` 需加 `--overwrite` 或先重启已有 `restore_pending` 的实例；`incompatible` 需先升级本程序；`fetch_failed` 检查来源可达性与 SSRF 策略；`sha256_mismatch` 核对 `expectedSha256` 与来源完整性；`restore_pending` 表示已存在待生效恢复，先重启使其生效或清掉标记。重启后启动日志会打印已应用的恢复，并保留 `pre-restore-<ts>/` 作为回滚退路。
+
+**待生效恢复期间的行为**（`restore.pending` 存在时）：后续导入/上传一律以 **409 `restore_pending`** 拒绝，**不允许叠加第二次恢复**——这是刻意的，避免两次替换互相覆盖。界面会据此把两个导入按钮转橙并可点开说明（含可复制的重启命令），因为它此前只体现在导入记录行的 `pending_restart` 徽章上，徽章滚出视野后就再也看不出"为什么导入一直被拒"。查询该状态的端点：`GET /api/v1/backups/restore-status`（仅管理员，返回 `{pending, packageId?, origin?, stagedAt?}`）。
+
+**标记读不了时服务仍能启动**（实测事故的修复）：若 `restore.pending` 存在但当前进程读不了它（典型成因是用 `sudo` 跑过 CLI 导入、标记属主成了 root），服务**跳过该恢复、打印含 `chown` 修复命令的告警，并正常起服**；标记与暂存目录原样保留，改完属主重启即可完成替换。早期实现把读取失败当致命错误，结果是启动失败 → systemd 重启 → 仍读不了 → 再失败的重启循环，现场只看到全站 502 而看不出真正该做的事。取舍是有意的：待生效恢复是"稍后要应用的一次维护动作"，不是服务提供读服务的前提，不该用可用性去换一个可延后动作。
 
 ## 6. 回滚
 

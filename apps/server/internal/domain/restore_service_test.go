@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -511,6 +512,83 @@ func TestApplyPendingRestoreNoMarker(t *testing.T) {
 	}
 	if applied {
 		t.Fatal("无标记不应应用")
+	}
+}
+
+// TestClassifyMarkerReadErrorUnreadableIsSkippable 覆盖"标记读不了"这条负路径的判定。
+//
+// 这条守卫来自实测事故：用 sudo 跑过 `backup import` 后，restore.pending 属主成了 root、
+// 权限 0600，而服务以普通用户运行。早期实现把读取失败当致命错误返回，于是服务**永远起不来**
+// （启动失败 → systemd 重启 → 同一文件仍读不了 → 再失败），现场只看到全站 502 与反复重启，
+// 完全看不出"改属主"才是解法。重启计数在测试站上冲到过 86。
+//
+// 约定：标记读不了属**环境问题**，跳过本次恢复、如实交回原因，让服务正常起来；
+// 标记与暂存目录原样保留（数据不丢），管理员改完属主重启即可完成替换。
+//
+// 这里直接测判定函数而不走真实文件：走文件需要构造"内容合法但权限不可读"，
+// 而 root 与 Windows 管理员都能无视权限位读取，那条用例在开发机只能 skip——
+// 静默跳过的用例等于没有守卫。
+func TestClassifyMarkerReadErrorUnreadableIsSkippable(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	// 分支一：权限错误 → 可跳过，且交回**可照做**的原因。
+	applied, outcome, err := classifyMarkerReadError(dir, fs.ErrPermission)
+	if err != nil {
+		t.Fatalf("权限类错误不应成为致命错误，否则服务再也起不来：%v", err)
+	}
+	if applied {
+		t.Fatal("跳过时不应声称已应用")
+	}
+	if outcome.SkippedReason == "" {
+		t.Fatal("必须交回跳过原因，否则运维看不到该做什么")
+	}
+	// 告警的全部意义在于"照着做就能修好"，故逐项断言它给出了文件路径与处置动作。
+	for _, want := range []string{pendingPath(dir), "chown", "重启"} {
+		if !strings.Contains(outcome.SkippedReason, want) {
+			t.Fatalf("跳过原因应包含 %q，实际：%s", want, outcome.SkippedReason)
+		}
+	}
+
+	// 分支二：内容损坏等其他错误 → 仍是致命错误（那是数据问题，必须让人知道包坏了）。
+	if _, _, err := classifyMarkerReadError(dir, errors.New("解析待生效标记：unexpected end of JSON")); err == nil {
+		t.Fatal("非权限类错误必须保持致命，否则会把'包坏了'静默吞掉")
+	}
+}
+
+// TestApplyPendingRestoreUnreadableMarkerKeepsMarker 真实文件路径下的端到端确认：
+// 权限不可读的标记既不阻止启动、也不被删除。以 root 运行时跳过（见上条用例的说明）。
+func TestApplyPendingRestoreUnreadableMarkerKeepsMarker(t *testing.T) {
+	t.Parallel()
+	target := newRestoreTargetFixture(t)
+	_ = target.db.Close()
+	blobDir := filepath.Join(target.dir, "blobs")
+
+	marker := pendingPath(target.dir)
+	body := `{"importId":"imp-test","packageId":"bk-test","origin":"cli","operator":"cli",` +
+		`"stagedAt":"2026-01-01T00:00:00Z","stagedDbRelativePath":"restore-staging/jianartifact.db",` +
+		`"dbSchemaVersion":1,"counts":{"assets":0},"blobCount":0,"blobTotalBytes":0,` +
+		`"blobMerged":0,"blobSkipped":0}`
+	if err := os.WriteFile(marker, []byte(body), 0o600); err != nil {
+		t.Fatalf("写入标记：%v", err)
+	}
+	if err := os.Chmod(marker, 0o000); err != nil {
+		t.Fatalf("改权限：%v", err)
+	}
+	if _, err := os.ReadFile(marker); err == nil {
+		t.Skip("当前身份可无视权限位读取该文件（通常是以 root 运行），本用例无法覆盖该分支")
+	}
+
+	applied, outcome, err := ApplyPendingRestore(target.dir, target.dbPath, blobDir)
+	if err != nil {
+		t.Fatalf("标记读不了不应阻止启动：%v", err)
+	}
+	if applied || outcome.SkippedReason == "" {
+		t.Fatalf("应跳过并交回原因，实际 applied=%v reason=%q", applied, outcome.SkippedReason)
+	}
+	// 标记必须原样保留，否则管理员改完属主也无从完成替换。
+	if _, statErr := os.Stat(marker); statErr != nil {
+		t.Fatalf("标记不应被删除：%v", statErr)
 	}
 }
 

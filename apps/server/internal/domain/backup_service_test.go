@@ -281,8 +281,35 @@ func TestBackupDeleteLifecycle(t *testing.T) {
 	if _, statErr := os.Stat(f.svc.PackagePath(rec.PackageID)); !os.IsNotExist(statErr) {
 		t.Fatal("删除后包体文件应消失")
 	}
+	// 侧车索引必须随包体一起删除：保留策略周期性淘汰自动备份，漏删侧车会让
+	// backups/ 目录里的 .index 只增不减（包体已淘汰而索引永久残留）。
+	if _, statErr := os.Stat(f.svc.SidecarPath(rec.PackageID)); !os.IsNotExist(statErr) {
+		t.Fatal("删除后侧车索引应一并消失")
+	}
 	if err := f.svc.Delete("nope"); !errors.Is(err, ErrBackupNotFound) {
 		t.Fatalf("删除不存在的包应返回 ErrBackupNotFound，实际 %v", err)
+	}
+}
+
+// TestBackupDeleteToleratesMissingSidecar 覆盖侧车已被外部删除的情形：
+// Delete 的目标是"删干净"，不是"断言侧车一定存在"，因此不得因为
+// 侧车缺失而报错或留下登记行（早期版本删除时不清理侧车，现存实例可能如此）。
+func TestBackupDeleteToleratesMissingSidecar(t *testing.T) {
+	t.Parallel()
+	f := newBackupFixture(t)
+	f.seedAssets(t, "payload")
+	rec, err := f.svc.Generate(context.Background(), CreateBackupOptions{Mode: archive.ModeHot})
+	if err != nil {
+		t.Fatalf("Generate：%v", err)
+	}
+	if err := os.Remove(f.svc.SidecarPath(rec.PackageID)); err != nil {
+		t.Fatalf("预置侧车缺失：%v", err)
+	}
+	if err := f.svc.Delete(rec.PackageID); err != nil {
+		t.Fatalf("侧车缺失时 Delete 应成功，实际 %v", err)
+	}
+	if _, err := f.svc.Get(rec.PackageID); !errors.Is(err, ErrBackupNotFound) {
+		t.Fatalf("删除后应查不到，实际 %v", err)
 	}
 }
 
