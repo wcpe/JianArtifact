@@ -3,10 +3,12 @@ package protocol
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
@@ -182,6 +184,90 @@ func TestNpmSearchFallbackKeepsAllMembersWhenMergedQueryTimesOut(t *testing.T) {
 	want := strings.Join(npmSearchNames(healthy), ",")
 	if got != want {
 		t.Fatalf("回退结果顺序/内容 = %s，期望与常态一致（%s）", got, want)
+	}
+}
+
+// TestNpmSearchNoFallbackOnNonTimeoutError 钉住「只有超时才回退」：
+// 合并查询遇到数据层故障（表缺失、连接错误）时，逐成员查询必然同样失败，回退只会把
+// 1 次注定失败的查询放大成 N 次并刷出 N 条 warn。这里断言成员检索一次都不发起。
+func TestNpmSearchNoFallbackOnNonTimeoutError(t *testing.T) {
+	env := newNpmSearchEnv(t)
+	members := []string{"npm-db-a", "npm-db-b", "npm-db-c"}
+	createNpmSearchGroup(t, env, "npm-db-grp", members)
+
+	memberCalls := 0
+	stubNpmSearch(t,
+		func(*domain.RepositoryService, context.Context, string, []int64, int) ([]repository.Asset, error) {
+			return nil, errors.New("模拟数据层故障：no such table")
+		},
+		func(*domain.RepositoryService, context.Context, string, string, int) ([]repository.Asset, error) {
+			memberCalls++
+			return nil, errors.New("模拟数据层故障：no such table")
+		},
+	)
+	logs := captureNpmSearchLog(t)
+
+	out, _ := env.search(t, "/npm/npm-db-grp/-/v1/search?text=db-&size=20")
+	if out.Total != 0 || len(out.Objects) != 0 {
+		t.Fatalf("数据层故障应降级为空结果（响应结构不变）：total=%d objects=%d", out.Total, len(out.Objects))
+	}
+	if memberCalls != 0 {
+		t.Fatalf("非超时故障不应回退逐成员检索，实际调用 %d 次", memberCalls)
+	}
+	// 只记 1 条日志，且必须区分成「失败」而不是「超时」（两者排查方向不同）。
+	text := logs.String()
+	if n := strings.Count(text, "npm 搜索失败"); n != 1 {
+		t.Fatalf("非超时故障应只记 1 条失败日志，实际 %d 条：%q", n, text)
+	}
+	if strings.Contains(text, "npm 搜索超时") {
+		t.Fatalf("数据层故障不应被描述成超时：%q", text)
+	}
+	if strings.Contains(text, "回退逐成员检索") {
+		t.Fatalf("数据层故障不应触发回退：%q", text)
+	}
+}
+
+// TestNpmSearchFallbackSharesOneBudget 钉住回退循环的**总预算**：
+// 逐成员回退共享 registrySearch 派生的同一份 deadline，预算耗尽后必须停止继续调用成员检索，
+// 否则 N 个成员就是 N 份独立预算（最坏 N × 搜索上限）。
+//
+// 做法：合并检索桩里等自己的 ctx 超时（把预算真的耗掉），成员检索桩统计调用次数。
+// 断言「成员调用次数 < 成员数」且已经取到的成员结果仍然返回。
+func TestNpmSearchFallbackSharesOneBudget(t *testing.T) {
+	env := newNpmSearchEnv(t)
+	members := []string{"npm-bud-a", "npm-bud-b", "npm-bud-c", "npm-bud-d"}
+	createNpmSearchGroup(t, env, "npm-bud-grp", members)
+	for _, m := range members {
+		env.publishPackument(t, m, "bud-"+strings.TrimPrefix(m, "npm-bud-"))
+	}
+	// 把总预算压到极短，让「预算耗尽」成为确定性事实而不是靠机器速度。
+	env.repoSvc.SetSearchTimeout(20 * time.Millisecond)
+
+	memberCalls := 0
+	stubNpmSearch(t,
+		func(_ *domain.RepositoryService, ctx context.Context, _ string, _ []int64, _ int) ([]repository.Asset, error) {
+			// 等预算真的耗尽，再以超时错误返回（等价于真实链路上的 ctx 超时）。
+			// 兜底定时器保证「上游 ctx 根本没有 deadline」（即总预算没被派生出来）时用例
+			// 不会挂死，而是落到「逐个成员重试」的失败断言上。
+			select {
+			case <-ctx.Done():
+			case <-time.After(2 * time.Second):
+			}
+			return nil, fmt.Errorf("%w（测试注入：合并检索耗尽了总预算）", domain.ErrSearchTimeout)
+		},
+		func(*domain.RepositoryService, context.Context, string, string, int) ([]repository.Asset, error) {
+			memberCalls++
+			return nil, fmt.Errorf("%w（测试注入：成员检索超时）", domain.ErrSearchTimeout)
+		},
+	)
+	captureNpmSearchLog(t)
+
+	out, _ := env.search(t, "/npm/npm-bud-grp/-/v1/search?text=bud-&size=20")
+	if out.Total != 0 {
+		t.Fatalf("预算耗尽后应为空结果（响应结构不变），实际 total=%d", out.Total)
+	}
+	if memberCalls >= len(members) {
+		t.Fatalf("预算耗尽后仍逐个成员重试（%d 次 ≥ 成员数 %d），总预算未被共享", memberCalls, len(members))
 	}
 }
 

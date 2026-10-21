@@ -113,6 +113,10 @@ func TestSearchIndexServiceBackfillsHistory(t *testing.T) {
 // 索引正确性只靠「所有 asset 写入必经仓储层」这一约定，而回填只跑一次；一旦有旁路写入
 // （运维脚本 / 手工 SQL / 未来的迁移），漂移就是**永久静默**的。因此状态必须能报出来，
 // 并且让 ready 说实话——否则用户唯一能感知到的现象就是「某些制品搜不到」。
+//
+// 两个方向分别断言：漏索引（危险，会让 ready 转 false）与孤儿索引行（只浪费空间，ready
+// 保持 true）。孤儿行不能把 ready 打下来：它由仓库级联删除天然产生，否则删一次仓库就让
+// ready 永久为 false。
 func TestSearchIndexServiceStatusReportsDrift(t *testing.T) {
 	const rows = 20
 	svc, db, repoID := indexServiceFixture(t, rows)
@@ -124,8 +128,8 @@ func TestSearchIndexServiceStatusReportsDrift(t *testing.T) {
 	if err != nil {
 		t.Fatalf("读状态快照：%v", err)
 	}
-	if status.IndexRows != rows || status.AssetRows != rows || status.Drifted() || status.Drift() != 0 {
-		t.Fatalf("正常回填后不应有漂移：%+v（差额 %d）", status, status.Drift())
+	if status.IndexRows != rows || status.AssetRows != rows || status.MissingRows != 0 || status.OrphanRows != 0 {
+		t.Fatalf("正常回填后不应有漂移：%+v", status)
 	}
 	if !status.Ready || status.MissingIndexRows() {
 		t.Fatalf("正常回填后 ready 应为 true：%+v", status)
@@ -140,8 +144,8 @@ func TestSearchIndexServiceStatusReportsDrift(t *testing.T) {
 	if err != nil {
 		t.Fatalf("读状态快照：%v", err)
 	}
-	if status.IndexRows != rows || status.AssetRows != rows+1 || status.Drift() != -1 || !status.Drifted() {
-		t.Fatalf("旁路写入后应报差额 -1：%+v（差额 %d）", status, status.Drift())
+	if status.IndexRows != rows || status.AssetRows != rows+1 || status.MissingRows != 1 || status.OrphanRows != 0 {
+		t.Fatalf("旁路写入后应报 1 行漏索引：%+v", status)
 	}
 	if !status.MissingIndexRows() || status.Ready {
 		t.Fatalf("存在漏索引时 ready 必须为 false，否则状态端点仍报「一切正常」：%+v", status)
@@ -160,11 +164,31 @@ func TestSearchIndexServiceStatusReportsDrift(t *testing.T) {
 	if err != nil {
 		t.Fatalf("读状态快照：%v", err)
 	}
-	if status.IndexRows != rows || status.AssetRows != rows-1 || status.Drift() != 1 || !status.Drifted() {
-		t.Fatalf("孤儿索引行应报差额 +1：%+v（差额 %d）", status, status.Drift())
+	if status.IndexRows != rows || status.AssetRows != rows-1 || status.OrphanRows != 1 || status.MissingRows != 0 {
+		t.Fatalf("孤儿索引行应报 1 行：%+v", status)
 	}
 	if status.MissingIndexRows() || !status.Ready {
 		t.Fatalf("孤儿索引行不应把 ready 打下来（不丢结果，重建即可清理）：%+v", status)
+	}
+
+	// 正负抵消：同时漏一行与孤儿一行。取总数差额会得到 0，旧口径因此看不见漏索引；
+	// 分开计数后 MissingRows 仍必须为 1，ready 仍必须为 false。
+	if _, err := db.Exec(`INSERT INTO asset (repository_id, path, blob_hash, size, content_type, sha1, md5)
+		VALUES (?, 'side/late-2.0.0.jar', 'h', 1, 'text/plain', '', '')`, repoID); err != nil {
+		t.Fatalf("再插一条未索引的资产行：%v", err)
+	}
+	status, err = svc.Status()
+	if err != nil {
+		t.Fatalf("读状态快照：%v", err)
+	}
+	if status.IndexRows != status.AssetRows {
+		t.Fatalf("本例前提是两侧行数相等（差额为 0），实际 %+v", status)
+	}
+	if status.MissingRows != 1 || status.OrphanRows != 1 {
+		t.Fatalf("漏索引与孤儿行同时存在时应分别计数（1/1），实际 %+v", status)
+	}
+	if !status.MissingIndexRows() || status.Ready {
+		t.Fatalf("正负抵消时 ready 仍必须为 false（否则漏索引被孤儿行掩盖）：%+v", status)
 	}
 }
 

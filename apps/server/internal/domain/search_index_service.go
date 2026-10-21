@@ -53,6 +53,10 @@ type SearchIndexStatus struct {
 	// Ready 表示索引可用于加速搜索：回填已完成（completed_at 非空）且**没有漏索引**。
 	// 为 false 时上层应把搜索当作「尚未提速」看待。
 	//
+	// 只有 MissingRows > 0 才会把 Ready 打下来：孤儿索引行（OrphanRows）不伪造命中、也不让
+	// 结果缺失，它由仓库级联删除天然产生，若也判成未就绪，任何删过仓库的实例都会永久
+	// ready=false，真正的漏索引信号会被这份噪音埋掉。
+	//
 	// 注意 Ready 只影响**报告**：真正的查询路径判定在 repository.AssetRepo.SearchIndexReady
 	// （只看 completed_at），因此漂移不会让搜索落到降级路径——漂移时索引仍被使用，只是可能
 	// 漏行。这正是必须把漂移单独暴露出来的原因。
@@ -71,21 +75,18 @@ type SearchIndexStatus struct {
 	IndexRows int64
 	// AssetRows 是 asset 真源当前的行数。
 	AssetRows int64
+	// MissingRows 是**漏索引**的行数：asset 里有、索引里没有。危险方向，会把 Ready 打下来。
+	MissingRows int64
+	// OrphanRows 是**孤儿索引行**的行数：索引里有、asset 已不存在。只浪费空间，不影响 Ready。
+	OrphanRows int64
 }
 
-// Drift 返回索引行数相对资产行数的差额：正数是孤儿索引行（资产行已消失、条目残留），
-// 负数是漏索引（资产行存在但索引里没有）。0 表示两者一致。
-func (s SearchIndexStatus) Drift() int64 { return s.IndexRows - s.AssetRows }
-
-// Drifted 报告索引行数与资产行数是否不一致。
-func (s SearchIndexStatus) Drifted() bool { return s.Drift() != 0 }
-
-// MissingIndexRows 报告是否存在**漏索引**（资产行数多于索引行数）。
+// MissingIndexRows 报告是否存在**漏索引**（存在 asset 行但索引里没有它）。
 //
-// 只把这一侧计入 Ready：孤儿索引行（正差额）不伪造命中、也不让结果缺失，代价只是索引偏大
-// ——仓库级联删除天然会留下它，若也判成「未就绪」，任何一次删仓库都会把 ready 永久打成
-// false，信号很快会被运维忽略。反过来，负差额意味着有制品搜不到，必须让 ready 说出来。
-func (s SearchIndexStatus) MissingIndexRows() bool { return s.Drift() < 0 }
+// 只把这一侧计入 Ready：孤儿索引行（OrphanRows）不伪造命中、也不让结果缺失，代价只是索引
+// 偏大——仓库级联删除天然会留下它，若也判成「未就绪」，任何一次删仓库都会把 ready 永久打成
+// false，信号很快会被运维忽略。反过来，漏索引意味着有制品搜不到，必须让 ready 说出来。
+func (s SearchIndexStatus) MissingIndexRows() bool { return s.MissingRows > 0 }
 
 // SearchIndexStore 是回填所需的最小存储能力，由 repository.SearchIndexStateRepo 实现。
 //
@@ -168,6 +169,14 @@ func (s *SearchIndexService) Run(ctx context.Context) error {
 // 除进度字段外，每次都现算一次「索引行数 vs 资产行数」的漂移：索引正确性原本完全依赖
 // 「所有 asset 写入必经仓储层」这一约定，而 completed_at 一旦置位就永不再回填，此后任何
 // 旁路写入都会留下永久静默的漂移——状态若只报进度，用户唯一能感知到的就是「某些制品搜不到」。
+//
+// **该端点不得被前端轮询。** 每次调用要在 asset 与 FTS 影子表上各做一次全表计数，成本与
+// 表大小线性相关（百万级 asset 上是秒级开销），且刻意**没有**加缓存：漂移是「旁路写入后
+// 多久能被看见」的观测信号，加缓存会让刚发生的漂移在窗口内报成正常。调用场景限定为运维
+// 手动查询（以及测试里的收敛轮询），任何人要接自动轮询前先读这段。
+//
+// 口径补充：四个数字一致**不等于**索引内容正确。path 被就地 UPDATE 时索引文本不会重建，
+// 行数却完全一致（盲区细节见 repository.SearchIndexStateRepo.MeasureDrift）。
 func (s *SearchIndexService) Status() (SearchIndexStatus, error) {
 	state, err := s.store.Load()
 	if err != nil {
@@ -182,12 +191,14 @@ func (s *SearchIndexService) Status() (SearchIndexStatus, error) {
 		return SearchIndexStatus{}, fmt.Errorf("统计索引漂移：%w", err)
 	}
 	status := SearchIndexStatus{
-		Indexed:   indexed,
-		Total:     state.TotalRows,
-		LastID:    state.LastID,
-		UpdatedAt: state.UpdatedAt,
-		IndexRows: drift.IndexRows,
-		AssetRows: drift.AssetRows,
+		Indexed:     indexed,
+		Total:       state.TotalRows,
+		LastID:      state.LastID,
+		UpdatedAt:   state.UpdatedAt,
+		IndexRows:   drift.IndexRows,
+		AssetRows:   drift.AssetRows,
+		MissingRows: drift.MissingRows,
+		OrphanRows:  drift.OrphanRows,
 	}
 	status.Ready = state.Completed() && !status.MissingIndexRows()
 	return status, nil
@@ -197,23 +208,25 @@ func (s *SearchIndexService) Status() (SearchIndexStatus, error) {
 // 不该出现在运行日志里）。
 //
 // stage 是调用点的中文前缀（启动自检 / 回填完成），让运维一眼看出这是哪一次比对。
+//
+// 两个方向分开说：漏索引会让制品搜不到（必须重建），孤儿行只是索引偏大（可择机重建）。
+// 合并成一个「差额」会掩盖「漏 k 行 + 孤儿 k 行」这种自相抵消的形态。
 func (s *SearchIndexService) logDrift(stage string) {
 	drift, err := s.store.MeasureDrift()
 	if err != nil {
 		log.Printf("%s：无法比对索引行数与资产行数：%v", stage, err)
 		return
 	}
-	if !drift.Drifted() {
-		log.Printf("%s：索引 %d 行与资产 %d 行一致，无漂移", stage, drift.IndexRows, drift.AssetRows)
+	if !drift.HasMissing() && drift.OrphanRows == 0 {
+		log.Printf("%s：索引 %d 行与资产 %d 行一一对应，无漂移", stage, drift.IndexRows, drift.AssetRows)
 		return
 	}
-	// 漂移分两个方向，处置方式不同：孤儿行只浪费空间（重建可清），漏索引会让制品搜不到。
-	hint := "重建索引可修复（POST /api/v1/search/index/rebuild）"
-	if drift.Delta() < 0 {
-		hint = "存在漏索引的资产行，需重建索引修复（POST /api/v1/search/index/rebuild）"
+	hint := "孤儿索引行只占用索引空间、不影响结果，可择机重建（POST /api/v1/search/index/rebuild）"
+	if drift.HasMissing() {
+		hint = "存在漏索引的资产行（这些制品搜不到），需重建索引修复（POST /api/v1/search/index/rebuild）"
 	}
-	log.Printf("%s：索引漂移——索引 %d 行、资产 %d 行（差额 %+d，正数为孤儿索引行、负数为漏索引）；%s",
-		stage, drift.IndexRows, drift.AssetRows, drift.Delta(), hint)
+	log.Printf("%s：索引漂移——索引 %d 行、资产 %d 行、漏索引 %d 行、孤儿索引行 %d 行；%s",
+		stage, drift.IndexRows, drift.AssetRows, drift.MissingRows, drift.OrphanRows, hint)
 }
 
 // Rebuild 受理一次全量重建：清空索引 → 水位归零 → 后台按回填算法重跑。

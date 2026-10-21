@@ -184,6 +184,10 @@ describe("搜索排序（默认 / 记忆 / 前端重排）", () => {
     expect(calls[0].searchParams.get("order")).toBe("relevance");
     // 相关度不下推 sort：其它排序键由前端重排。
     expect(calls[0].searchParams.get("sort")).toBeNull();
+    // 包级聚合不分页：后端聚合扫描预算固定、total 是 COUNT(*)，分页参数换不出新内容，
+    // 只会多打一次全量聚合，因此**不得**带上（页面也没有分页入口）。
+    expect(calls[0].searchParams.get("page")).toBeNull();
+    expect(calls[0].searchParams.get("page_size")).toBeNull();
   });
 
   it("切换排序写入 localStorage，但不产生新的搜索请求", async () => {

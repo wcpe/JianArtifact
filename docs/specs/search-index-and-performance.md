@@ -1,6 +1,6 @@
 # 功能规格：搜索索引与查询性能改造 / 搜索建议与自动补全（FR-149 / FR-153）
 
-> 状态：草拟 · 2026-10-19 · 新 Schema + 跨模块 + 并发/事务类（迁移 `0049`、后台回填、搜索主链路三语句改写、ACL 判定批量化）· 关联 PRD：FR-149、FR-153 · 索引取舍见 [ADR-0030](../adr/0030-fts5-search-index.md)
+> 状态：**已实现，待实机验收** · 2026-10-19 · 新 Schema + 跨模块 + 并发/事务类（迁移 `0049`、后台回填、搜索主链路三语句改写、ACL 判定批量化）· 关联 PRD：FR-149、FR-153（PRD 记为「已交付@未发布」）· 索引取舍见 [ADR-0030](../adr/0030-fts5-search-index.md)
 >
 > 覆盖两个 FR：**FR-149** 见 §1–§2.1、§3.1–§3.7、§4 第一组、§5 第一批；**FR-153** 见 §2.2、§3.8–§3.9、§4 第二组、§5 第二批。两者共用同一张 FTS 索引与同一套权限收窄实现。
 
@@ -58,8 +58,9 @@
 | 跨节点搜索聚合                                                  | PRD 明示不做                                                                                                                                   |
 | `asset` 表结构变更（版本列、包坐标列）                          | 属 FR-150 的数据模型议题；本批只新增虚拟表与状态表，`asset` 一列不改                                                                           |
 | 拼音 / 同义词 / 拼写纠错 / 搜索历史                             | 无 PRD 条目，且都需要新的词表或语料，YAGNI                                                                                                     |
-| 把成员循环合并成单条 SQL（npm）                                 | 会改变去重口径与 `total` 语义，本批只做加速不做语义变更                                                                                        |
 | suggest 的服务端缓存 / 速率限制                                 | 与「组内成员变动即时生效」的既有授权承诺冲突；限流属网关层议题，本批不做                                                                       |
+
+> **已越出原定范围的一项（如实登记）**：上表原有一行「把成员循环合并成单条 SQL（npm）| 会改变去重口径与 `total` 语义，本批只做加速不做语义变更」，实现阶段已推翻——合并确实做了（`AssetRepo.SearchPerRepoByFilter` 用窗口函数按成员各取 `from+size` 条，见 §3.6）。当时把「合并」与「改语义」看成一体，实测表明可以只做前者：窗口函数按 `repository_id` 分区、区内排序与逐成员搜索逐条一致，Go 侧仍按成员顺序遍历并按 `asset.path` 去重，去重口径与 `total` 一字未变。等价性由 `TestSearchPerRepoByFilterMatchesPerRepoLoop`（`repository/search_rewrite_test.go`）钉住，逐条对比「合并结果」与「逐仓库各搜一次」的每仓前 N 条；对外契约由 `npm_search_contract_test.go` 的响应键集与 golden 断言守。**这一行已从「不做」表中移除**，因为它不再是范围外的事。
 
 ## 3. 设计（怎么做）
 
@@ -111,7 +112,7 @@
 3. 循环批：`SELECT id, path FROM asset WHERE id > ? AND id <= ? ORDER BY id LIMIT 2000` → 写索引 → **同一事务内**把 `last_id` 推进到本批最后一条 `id`。
 4. 取空批即置 `completed_at = datetime('now')` 并记完成日志；否则回第 3 步。每批之间让出调度（短 `sleep` 1ms 或等价让出），并检查进程退出信号用于优雅停机。
 
-**每批必须让出唯一连接（硬约束）**：`persistence/db.go` 里 `SetMaxOpenConns(1)`，全库只有一个连接。回填事务必须短、批与批之间提交并让出，否则会阻塞全部在线读写。
+**每批必须让出（硬约束）**：SQLite 在 WAL 下是「多读 + **单写者**」，同一时刻只有一个连接能拿到写锁，其余写者在锁外等 `busy_timeout`。连接池上限已从早期的 `SetMaxOpenConns(1)` 放宽到默认 **8**（`persistence.DefaultMaxOpenConns`，可用 `JIAN_SQLITE_MAX_CONNS` 调整），**单写者这一点没有变**——放宽只是把并发请求从池外排队改到池内排队，写串行化始终由数据库引擎保证。因此回填事务必须短、批与批之间提交并让出：它长时间持有写事务时，在线写入会一直等在 `busy_timeout` 上，超时后报 `database is locked`，读侧也只能看到回填提交前的旧快照。
 
 **为什么必须幂等写**：`upper` 快照内的某行可能在回填到它之前被**覆盖写**（同一 `repository_id + path` 的 UPDATE）。在线同步会用新 path 更新索引，回填随后又读到同一个 `id`（此时已是新 path，值相同但是第二次写）。不幂等就会在索引里留下两条同 rowid 记录，表现为搜索结果重复。回填的写入原语必须按 §3.1 不变量 4 幂等。
 
@@ -120,7 +121,29 @@
 **观测**：
 
 - **日志**（中文，不含任何路径内容）：进度按「本次进度较上次记录跨过 ≥10%」节流，避免每批一行刷屏；完成与失败各一行，含总行数、已回填行数、耗时。
-- **只读状态端点**：`GET /api/v1/search/index`（仅管理员）→ `{ready, indexed, total, lastId, updatedAt}`。回填中 `ready=false`，`indexed/total` 供判断剩余量。按 `/api/v1/search` 的既有先例作为**非契约端点**注册（[main.go](apps/server/cmd/jianartifact/main.go#L319) 处同一分组）。
+- **只读状态端点**：`GET /api/v1/search/index`（仅管理员）。按 `/api/v1/search` 的既有先例作为**非契约端点**注册（`cmd/jianartifact/main.go` 里同一分组）。实际返回 **9 个字段**，比本节早期稿的 5 个多出漂移四元组中的四项：
+
+  | 字段          | 口径                                                                                                      |
+  | ------------- | --------------------------------------------------------------------------------------------------------- |
+  | `ready`       | 索引可用于加速搜索：回填已完成（`completed_at` 非空）**且没有漏索引**（见下）                             |
+  | `indexed`     | 已回填行数，按 `last_id` 水位回 `asset` 真源计数（`COUNT(*) WHERE id <= last_id`），与 `total` 同源同口径 |
+  | `total`       | 回填开始时的 `asset` 行数快照（`total_rows`），只用于进度展示与一致性校验                                 |
+  | `lastId`      | 水位（已回填到的最大 `asset.id`），`0` 表示尚未开始                                                       |
+  | `updatedAt`   | 状态行最后一次变更时刻，用于判断「回填是否还在推进」                                                      |
+  | `indexedRows` | 索引里**真实存在**的文档数（读 FTS5 的 `docsize` 影子表），与 `indexed` 不是同一口径                      |
+  | `assetRows`   | `asset` 真源当前行数                                                                                      |
+  | `missingRows` | **漏索引**的行数：`asset` 里有、索引里没有。**危险方向**（这些制品搜不到），`ready` 只因数它转 false      |
+  | `orphanRows`  | **孤儿索引行**的行数：索引里有、`asset` 已不存在。仓库级联删除天然产生，只浪费空间、不影响 `ready`        |
+
+  **为什么两个漂移方向必须分开报**：合成一个差额（`indexedRows - assetRows`）时，「漏 k 行 + 孤儿 k 行」恰好抵消成 0；而且任何删过仓库的实例都会带着孤儿行让差额恒为正——无论按差额还是按「差额非 0」告警，第一次删仓库之后告警就永久在响，真正的漏索引信号被埋在噪音里。四个计数放在**同一条 SQL** 里取，保证属于同一时刻（分别查会跨事务，高写入负载下能配出并不存在的漂移）。
+
+  **为什么 `indexed` 不用「索引行数」**：`asset_path_fts` 是 external content 表，`SELECT COUNT(*) FROM asset_path_fts` 实测返回的是**内容表**的行数（索引被清空后仍报全量），不是索引条目数；而读影子表又会把「在线同步新写入的行」与「仓库级联删除留下的孤儿行」一起算进来，使其与 `total` 不可比。按水位回真源计数与 `total` 同源，能直接看出剩余量。
+
+  **该端点不得被前端轮询**：每次调用要在 `asset` 与 FTS 影子表上各做一次全表计数，成本与表大小线性相关（百万级 `asset` 上是秒级开销），且刻意**没有**加缓存——漂移是「旁路写入后多久能被看见」的观测信号，加缓存会让刚发生的漂移在窗口内报成正常。调用场景限定为运维手动查询。
+
+  **`ready` 的语义已扩展，且它覆盖不到查询路径（最该记住的一条）**：`ready` 从「`completed_at` 非空」扩展为「**且没有漏索引**」（`missingRows == 0`），两种成因的处置完全不同——① 回填未完成：搜索整体走既有 `LIKE` 路径，正确但尚未提速，等它跑完即可；② **发现漏索引**：索引**仍被查询路径使用**（查询侧的就绪判定只看 `completed_at`，不看漂移），所以搜索**可能少返回行**，而状态端点不会自己变好——**必须重建（`POST /api/v1/search/index/rebuild`）才能恢复**。孤儿行刻意**不**计入 `ready`：它不伪造命中、也不让结果缺行，而仓库级联删除天然会留下它，若也算成未就绪，任何一次删仓库都会把 `ready` 永久打成 false，这个信号很快会被运维忽略；反过来，漏索引意味着有制品搜不到，必须让它说出来。这正是要额外报漂移的原因：索引正确性依赖「所有 `asset` 写入必经仓储层」的约定，而回填只跑一次，一旦出现旁路写入（运维脚本、手工 SQL、未来的迁移），漂移就是**永久静默**的——端点若只报进度，用户唯一能感知到的就是「某些制品搜不到」。由 `domain/search_index_service_test.go` 的 `TestSearchIndexServiceStatusReportsDrift` 与 `api/search_index_handlers_test.go` 的 `TestGetSearchIndexStatusFields` 钉住两个方向（含「仅孤儿行时 `ready` 仍为 true」）。
+
+  **已知盲区**：四个数字一致**不等于**索引内容正确。某条 `asset` 行的 `path` 被就地 `UPDATE` 时，external content 表不会重建该行索引，行数与 rowid 集合却完全一致，于是端点报「无漂移」，而「新名字搜不到、旧名字还能搜到」——这是最危险的静默错结果。现任写入路径不产生这种 `UPDATE`（冲突键就是 `path`，改名走「插新行 + 删旧行」，`rowid` 随之改变），但运维脚本或手工 SQL 可以，那种情况下只能靠全量重建恢复。要真正覆盖这一盲区得逐行比对索引文本与 `asset.path`，成本等同一次全表重建，不适合放在观测点。
 
 **失败与重建**：
 
@@ -190,7 +213,7 @@
 
 - 新增哨兵 `ErrSearchTimeout`，且 `errors.Is(err, domain.ErrSearchTimeout)` 可判定；`context.DeadlineExceeded` 在域层归一为它。
 - 映射为 **HTTP 504 + 错误码 `search_timeout`**。既有 504 只有 `upstream_timeout`（[handlers.go](apps/server/internal/api/handlers.go#L345-L348)），语义是「上游不畅」，与「本地查询超预算」不同，故新增独立错误码而不复用——复用会让用户与运维分不清该查上游还是查索引。
-- **npm 协议侧不改错误契约**：`registrySearch` 命中超时后按既有容错口径**跳过该成员继续**（现有 [npm_registry.go](apps/server/internal/protocol/npm_registry.go#L334-L336) 已有 `continue`），但同时记一条中文 warn 日志（含成员仓库名与超时值），避免「静默少结果」完全无痕。
+- **npm 协议侧不改错误契约，超时是两级**（实现口径，取代本文早先的「命中超时后跳过该成员继续」单级描述）：`registrySearch` 在**入口**派生一份总预算并把带 deadline 的 `ctx` 下传（`SearchAssets` / `SearchAssetsPerRepo` 内部各自还会再派生一次，子 deadline 取两者更早者），因此合并查询与逐成员回退**共用同一份预算**，最坏耗时是一次 `JIAN_SEARCH_TIMEOUT_SECONDS` 而不是 N 次。① **合并查询失败且成员数 > 1** → 回退**逐成员搜索**，失败的那个成员按既有容错口径**跳过**（`npmSearchCandidates` 里的 `continue`），其余成员结果照常返回——这是引入合并查询之前的容错口径，属可用性底线，同时记一条中文 warn 日志（含成员仓库名与超时值），避免「静默少结果」完全无痕。注意共用预算的实际含义：合并在**快速失败**（SQL 报错等）时回退仍有充裕预算，能救回成员结果；合并**超时**时剩余预算接近零，逐个成员会迅速失败并被跳过，最终返回 200 与空结果——这仍然优于整请求 500，但不要指望超时场景靠回退捞回结果。② **成员数 == 1**（含非 group 仓库）→ 不回退，直接降级为空结果并记 warn：此时「跳过唯一成员」与「整体降级为空」结果相同，重试只会白耗一次往返。两级都由 `TestNpmSearchFallbackSkipsTimedOutMember` / `TestNpmSearchSingleMemberTimeoutKeepsOneBudget` / `TestNpmSearchFallbackKeepsAllMembersWhenMergedQueryTimesOut` 钉住（回退分支在真实库上无法稳定复现，故用注入桩覆盖，生产路径恒为真实实现）。
 
 **可配置上限**：环境变量 **`JIAN_SEARCH_TIMEOUT_SECONDS`**（单位秒，后缀风格对齐 `JIAN_AUTO_BLOCK_BASE_SECONDS` / `JIAN_UPSTREAM_TIMEOUT`），默认 **10 秒**。
 
@@ -210,9 +233,14 @@
 
 ### 3.6 npm `registrySearch` 的收口
 
-- 语义零变更：仍按成员循环、仍 `limit = from+size`、仍按 `asset.path` 去重、仍跳过非 packument、`total` 口径不变。
-- 收益：每个成员调用内部的三条语句由全扫变候选集；`ctx` 贯通后单个成员超时不再拖住整个请求。
-- 不做：不合并成员循环、不改 `from+size` 的上限口径（见 §2.3）。
+原实现让 group 的每个成员各跑一次完整 `SearchAssets`（每次含 `COUNT` + 分页 `SELECT` + facet 聚合 + 可搜范围计算 + 仓库名映射），成员越多越慢。**实现阶段改为一条合并语句**（比 §2.1 第 6 条的「语义零变更、只享受加速」多做了一步，取舍见 §2.3 的说明）：
+
+- **正常路径 = 一次查询**：成员名先批量解析为仓库（`ReposByNames`，含别名），再把成员 ID 集合交给 `AssetRepo.SearchPerRepoByFilter`——SQL 用窗口函数按 `repository_id` 分区、区内按 `path asc` 取前 `from+size` 条，Go 侧只做按成员分桶。语句数与成员数解耦。
+- **语义确实零变更**：仍按成员顺序遍历、仍 `limit = from+size`（每成员各自的窗口）、仍按 `asset.path` 去重、仍跳过非 packument（用完整 `/-/` 标记，`@scope/-weird` 这类合法包名不受影响）、`total` 仍等于「去重且可解析的条目数」、响应仍是 `{objects, total, time}`。`sort=path&order=asc` 硬编码，永远不进 relevance 分支。
+- **超时是两级，不是一级**（§3.4 同款口径，这里只列形状）：① 合并查询失败 → 若成员数 **> 1**，回退到**逐成员搜索**，失败的那个成员按既有容错口径跳过、其余照常返回；② 成员数 **== 1** 时没有「跳过该成员继续」的余地（回退与整体降级的结果同为「没有结果」），直接降级为空并记 warn 日志。回退**不额外增加预算**——`registrySearch` 在入口派生一份总预算，两条路径共用它，最坏耗时是一次 `JIAN_SEARCH_TIMEOUT_SECONDS`。**为什么不能只有合并路径**：合并查询**快速失败**（SQL 报错等）时整次降级为空是白丢结果，而有回退就能救回各成员的结果；至于合并**超时**，剩余预算已接近零，回退大多也只能快速失败并跳过，**但至少仍是 200 + 空结果，而不是 500**。
+- **回退分支的等价性**：合并结果在回退时**整份丢弃**，两条路径不会重复计数。
+- **钉住它的测试**：`repository/search_rewrite_test.go` 的 `TestSearchPerRepoByFilterMatchesPerRepoLoop`（合并查询与「逐仓库各搜一次」逐仓比对前 N 条）与 `TestSearchPerRepoByFilterLimitAndEmpty`（`perRepoLimit` 与空入参边界）；`protocol/npm_search_fallback_test.go` 用注入桩覆盖「合并超时 → 回退并跳过超时成员」「单成员超时只花一份预算」「合并超时后成员结果不丢」三条；`protocol/npm_search_test.go` 的 `TestNpmSearchGroupQueryCountIndependentOfMembers`（成员 1 → 4 时语句数不变）、`TestNpmSearchGroupDedupesAndMerges`（跨成员按 `path` 去重、成员顺序决定先后）、`TestNpmSearchKeepsPerMemberPagination`（每成员各取 `from+size`）；`protocol/npm_search_contract_test.go` 钉住响应键集精确为 `{objects,total,time}`、新参数被忽略。
+- **不改的部分**：`from+size` 的上限口径不变（`size` 夹到 `[1,250]`、`from` 夹到 `[0,10000]`）。
 
 ### 3.7 与 FR-153 的共用衔接点（只列衔接，细节见 §3.8）
 
@@ -268,27 +296,27 @@
 
 **FR-149**
 
-- [ ] 迁移 `0049_asset_path_fts.sql`：FTS5 虚拟表（`tokenize='trigram'`）+ 索引写入同步机制 + `search_index_state` 建表与初始行；文件头五行说明与「不回填」理由
-- [ ] 启动自检：FTS5 不可用时给出可读中文错误
-- [ ] 后台回填：分批 / 上界快照 / 同事务推进 `last_id` / 让出与优雅停机 / 幂等写 / 节流日志
-- [ ] 回填可观测与重建：`GET /api/v1/search/index`、`POST /api/v1/search/index/rebuild`（202 / 409 / 403）
-- [ ] 查询改写：`buildSearchWhere` 追加候选集条件（`id IN (SELECT rowid FROM asset_path_fts WHERE … MATCH ?)`）+ FTS5 字面量转义 + 降级判定函数（收敛在一处）
-- [ ] 超时：`SearchAssets` 接收 `ctx`、`ErrSearchTimeout`、`search_timeout` 映射、`JIAN_SEARCH_TIMEOUT_SECONDS` 解析与默认值、仓储层改 `GetContext` / `SelectContext`
-- [ ] ACL 批量化：`RepoIDsWithPermission` + 调用点改写 + `repoName` 映射改造
-- [ ] npm `registrySearch`：`ctx` 贯通 + 超时跳过并记 warn 日志（语义与响应结构不变）
-- [ ] 等价性测试基座：把旧 `buildSearchWhere` 保留为 oracle，表驱动对比「旧实现 vs 新实现」的结果集与 `total`
+- [x] 迁移 `0049_asset_path_fts.sql`：FTS5 虚拟表（`tokenize='trigram'`）+ 索引写入同步机制 + `search_index_state` 建表与初始行；文件头五行说明与「不回填」理由
+- [x] 启动自检：FTS5 不可用时给出可读中文错误
+- [x] 后台回填：分批 / 上界快照 / 同事务推进 `last_id` / 让出与优雅停机 / 幂等写 / 节流日志
+- [x] 回填可观测与重建：`GET /api/v1/search/index`、`POST /api/v1/search/index/rebuild`（202 / 409 / 403）；状态端点实际返回 9 个字段（含漂移三元组），见 §3.2
+- [x] 查询改写：`buildSearchWhere` 追加候选集条件（`id IN (SELECT rowid FROM asset_path_fts WHERE … MATCH ?)`）+ FTS5 字面量转义 + 降级判定函数（收敛在一处）
+- [x] 超时：`SearchAssets` 接收 `ctx`、`ErrSearchTimeout`、`search_timeout` 映射、`JIAN_SEARCH_TIMEOUT_SECONDS` 解析与默认值、仓储层改 `GetContext` / `SelectContext`
+- [x] ACL 批量化：`RepoIDsWithPermission` + 调用点改写 + `repoName` 映射改造
+- [x] npm `registrySearch`：`ctx` 贯通 + 超时两级处置并记 warn 日志（**实现越出原稿：合并查询已做**，见 §3.6；语义与响应结构不变）
+- [x] 等价性测试基座：把旧 `buildSearchWhere` 保留为 oracle，表驱动对比「旧实现 vs 新实现」的结果集与 `total`
 
 **FR-153**
 
-- [ ] suggest 端点：包名 + 仓库名两类候选、`limit` 夹取、空 `q` 空返回、稳定序、复用批量 ACL
-- [ ] 前端下拉：防抖 ≤ 300ms、`AbortController` 乱序保护、键盘 ↑↓/Enter/Esc、无候选不弹、无障碍属性
-- [ ] 仓库名候选回填走 `buildSearchExpression`（复用既有表达式机制）
-- [ ] 中英文案键集
+- [x] suggest 端点：包名 + 仓库名两类候选、`limit` 夹取、空 `q` 空返回、稳定序、复用批量 ACL
+- [x] 前端下拉：防抖 ≤ 300ms（实现取 250ms）、`AbortController` 乱序保护、键盘 ↑↓/Enter/Esc、无候选不弹、无障碍属性
+- [x] 仓库名候选回填走 `buildSearchExpression`（复用既有表达式机制）
+- [x] 中英文案键集
 
 **文档同步**
 
-- [ ] PRD 状态行（FR-149 / FR-153）、`docs/specs/README.md` 索引、`docs/OPERATIONS.md`（新环境变量、回填与重建运维步骤）、`docs/API.md`（suggest 与两个索引端点、`search_timeout`）、`CHANGELOG`
-- [ ] ADR-0030（[0030-fts5-search-index.md](../adr/0030-fts5-search-index.md)）与本规格交叉引用一致
+- [x] PRD 状态行（FR-149 / FR-153）、`docs/specs/README.md` 索引、`docs/OPERATIONS.md`（新环境变量、回填与重建运维步骤）、`docs/API.md`（suggest 与两个索引端点、`search_timeout`）、`CHANGELOG`
+- [x] ADR-0030（[0030-fts5-search-index.md](../adr/0030-fts5-search-index.md)）与本规格交叉引用一致
 
 ## 5. 验收标准
 
@@ -307,7 +335,7 @@
 
 **超时与权限（自动化）**
 
-8. 注入极小超时 → `/api/v1/search` 返回 **504 + `search_timeout`**；npm `registrySearch` 跳过超时成员继续返回 200 并记 warn 日志；`JIAN_SEARCH_TIMEOUT_SECONDS` 缺省 / 非数字 / ≤ 0 均回落默认值。
+8. 注入极小超时 → `/api/v1/search` 返回 **504 + `search_timeout`**；`JIAN_SEARCH_TIMEOUT_SECONDS` 缺省 / 非数字 / ≤ 0 均回落默认值。npm `registrySearch` 按 §3.4 的两级口径处置：合并查询超时且成员数 > 1 → 回退逐成员、跳过超时成员并返回 200，同时记 warn 日志；成员数 == 1 → 降级为空结果、返回 200 并记 warn 日志，**不**做逐成员重试（`memberCalls` 必须为 0）。
 9. 批量 ACL 判定与逐仓库 `HasPermission` **结果完全一致**（覆盖：用户直授、仅组授、多组、无组、`admin`、匿名主体、`write` 抵扣 `read`）；并断言「一次搜索的 ACL 查询数不随仓库数增长」。
 10. 既有 `/api/v1/search` 的响应结构、字段、排序键白名单与 `page_size` 夹取口径无变化。
 

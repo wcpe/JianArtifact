@@ -25,8 +25,9 @@ import (
 //
 //  4. **索引正确性不能只靠约定**：completed_at 一旦非空就不再回填，此后任何绕过仓储的写入
 //     （运维脚本、手工 SQL、未来的迁移）都会留下**永久静默**的漂移——状态端点照旧报就绪，
-//     用户只看到「某些制品搜不到」。因此本文件另外提供 MeasureDrift 这个行数比对原语，
-//     由状态端点、回填完成与启动自检三处调用，让漂移至少可被观察到。
+//     用户只看到「某些制品搜不到」。因此本文件另外提供 MeasureDrift 这个集合并集比对原语，
+//     由状态端点、回填完成与启动自检三处调用，让漂移至少可被观察到。它把两个方向分开报
+//     （漏索引 / 孤儿索引行），并有一个已知盲区（path 就地 UPDATE），详见该函数的注释。
 
 // SearchIndexState 是 search_index_state 的读模型：回填水位与完成时刻。
 //
@@ -167,22 +168,35 @@ func (r *SearchIndexStateRepo) CountIndexed(lastID int64) (int64, error) {
 }
 
 // SearchIndexDrift 是「索引行数 vs 资产行数」的对比快照。
+//
+// 两个差异方向**分开报**，不再合成一个差额：漏 k 行、孤儿 k 行时合成差额恰好为 0，而两者的
+// 危险程度与处置方式完全不同——漏索引会让制品搜不到（必须重建），孤儿行只浪费索引空间
+// （可择机重建）。任何按单个差额做的告警都会在「删过仓库的实例」上永久为真，把真信号埋掉。
 type SearchIndexDrift struct {
 	// IndexRows 是索引里真实存在的文档数（asset_path_fts_docsize 影子表的行数）。
 	IndexRows int64 `db:"index_rows"`
 	// AssetRows 是 asset 真源当前的行数。
 	AssetRows int64 `db:"asset_rows"`
+	// MissingRows 是**漏索引**的行数：asset 里有、索引里没有的 rowid 个数。这是危险方向。
+	MissingRows int64 `db:"missing_rows"`
+	// OrphanRows 是**孤儿索引行**的行数：索引里有、asset 里已不存在的 rowid 个数。
+	// 仓库删除经 ON DELETE CASCADE 带走 asset 行时天然产生，只浪费空间、不丢失结果。
+	OrphanRows int64 `db:"orphan_rows"`
 }
 
-// Delta 返回索引行数相对资产行数的差额：
-// 正数是**孤儿索引行**（资产行已消失、索引条目残留，例如仓库级联删除）；
-// 负数是**漏索引**（资产行存在但索引里没有，例如绕过仓储层的写入）。
-func (d SearchIndexDrift) Delta() int64 { return d.IndexRows - d.AssetRows }
-
-// Drifted 报告索引行数与资产行数是否不一致。
-func (d SearchIndexDrift) Drifted() bool { return d.Delta() != 0 }
+// HasMissing 报告是否存在漏索引（资产行在、索引条目缺失）。
+func (d SearchIndexDrift) HasMissing() bool { return d.MissingRows > 0 }
 
 // MeasureDrift 取出当前的漂移快照，供状态端点与启动/回填完成的自检使用。
+//
+// **已知盲区：本函数只比对行数与 rowid 集合，"drift 为 0" 不等于"索引内容正确"。**
+// 若某条 asset 行的 path 被就地 UPDATE（`UPDATE asset SET path = ?`），external content 表
+// 不会重建该行的索引（见 search_index_repo.go 文件头第 1 条）：索引里仍是旧文本，行数与
+// rowid 集合却完全一致，因此这里报 0 漂移。结果是「按新名字搜不到、按旧名字能搜到」这种
+// 最危险的静默错结果，而本指标对它完全无感。现任写入路径不会产生这种 UPDATE（冲突键就是
+// path，改名走「插新行、删旧行」，rowid 随之改变），但运维脚本或手工 SQL 可以——那种情况下
+// 只能靠全量重建（POST /api/v1/search/index/rebuild）恢复，不能指望本指标报警。要真正覆盖
+// 这一盲区，得逐行比对索引文本与 asset.path，成本等同一次全表重建，不适合放在观测点。
 //
 // **为什么数 asset_path_fts_docsize，而不是其它两张表**（在本仓库的驱动
 // modernc.org/sqlite v1.60.1 上逐条实测，改之前请重跑对照）：
@@ -197,16 +211,20 @@ func (d SearchIndexDrift) Drifted() bool { return d.Delta() != 0 }
 //  3. `SELECT COUNT(*) FROM asset_path_fts_docsize` —— **正确**。FTS5 为每个已索引文档在这张
 //     影子表里留一行 (id, sz)：实测空索引 0 行、写入 2 条文档 2 行、对同一 rowid 重复插入仍是
 //     2 行（与幂等写入一致）、delete-all 之后回到 0 行、内容行被删而索引行残留时仍保留该行
-//     （正是我们要看见的孤儿）。
+//     （正是我们要看见的孤儿）。它的 id 就是 asset.id，因此可以按 rowid 直接与 asset 做差集。
 //
-// 两个计数放在**同一条语句**里取，保证两份数字属于同一时刻（分别发两条查询会跨事务，
-// 在高写入负载下能配出并不存在的漂移）。成本与表大小线性相关（两次窄表计数），因此只放在
-// 状态端点与启动/回填完成这两个低频观测点上，不进搜索热路径。
+// 四个计数放在**同一条语句**里取，保证四份数字属于同一时刻（分别发查询会跨事务，在高写入
+// 负载下能配出并不存在的漂移）。成本：两次窄表全扫 + 两次主键探针；比纯 COUNT(*) 略高，仍与
+// 表大小线性相关，因此只放在状态端点与启动/回填完成这两个低频观测点上，不进搜索热路径。
 func (r *SearchIndexStateRepo) MeasureDrift() (SearchIndexDrift, error) {
 	var d SearchIndexDrift
 	err := r.db.Get(&d, `SELECT
 		(SELECT COUNT(*) FROM asset_path_fts_docsize) AS index_rows,
-		(SELECT COUNT(*) FROM asset) AS asset_rows`)
+		(SELECT COUNT(*) FROM asset) AS asset_rows,
+		(SELECT COUNT(*) FROM asset_path_fts_docsize AS d
+			WHERE NOT EXISTS (SELECT 1 FROM asset AS a WHERE a.id = d.id)) AS orphan_rows,
+		(SELECT COUNT(*) FROM asset AS a
+			WHERE NOT EXISTS (SELECT 1 FROM asset_path_fts_docsize AS d WHERE d.id = a.id)) AS missing_rows`)
 	if err != nil {
 		return SearchIndexDrift{}, err
 	}

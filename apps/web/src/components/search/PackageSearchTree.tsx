@@ -9,20 +9,27 @@ import { useTranslation } from "react-i18next";
 
 import type { SearchPackage, SearchPackageFile } from "../../api/endpoints";
 import {
+  compileHighlightPattern,
   fileKey,
   fileKindChips,
   packageKey,
   precisionMeta,
   splitChecksumFiles,
-  splitHighlight,
+  splitHighlightWithPattern,
   versionKey,
   type HighlightSegment,
   type SearchSelection,
 } from "../../lib/searchPackage";
 
-/** 命中词高亮的统一渲染：命中片段包 `<mark>`（规格 §3.9 的配色与圆角）。 */
-function Highlighted({ text, keywords }: { text: string; keywords: readonly string[] }) {
-  const segments: HighlightSegment[] = splitHighlight(text, keywords);
+/**
+ * 命中词高亮的统一渲染：命中片段包 `<mark>`（规格 §3.9 的配色与圆角）。
+ *
+ * 入参是**已编译好的正则**而不是关键词数组：高亮按行切分，一个展开的大包可能含数千个
+ * 文件行，逐行现编译会让同样几个关键词被编译上千次。正则由树顶层的
+ * `compileHighlightPattern` + `useMemo` 提供，全树共享一个实例。
+ */
+function Highlighted({ text, pattern }: { text: string; pattern: RegExp | null }) {
+  const segments: HighlightSegment[] = splitHighlightWithPattern(text, pattern);
   return (
     <>
       {segments.map((segment, index) =>
@@ -97,13 +104,13 @@ function FileKindChips({ files }: { files: readonly SearchPackageFile[] }) {
 /** 文件行：`fileKind` + 文件名。 */
 function FileRow({
   file,
-  keywords,
+  pattern,
   depth,
   selected,
   onSelect,
 }: {
   file: SearchPackageFile;
-  keywords: readonly string[];
+  pattern: RegExp | null;
   depth: number;
   selected: boolean;
   onSelect: () => void;
@@ -134,7 +141,7 @@ function FileRow({
           lineClamp={1}
           style={{ flex: 1, minWidth: 0, wordBreak: "break-all" }}
         >
-          <Highlighted text={file.name} keywords={keywords} />
+          <Highlighted text={file.name} pattern={pattern} />
         </Text>
       </Group>
     </UnstyledButton>
@@ -144,7 +151,7 @@ function FileRow({
 /** 版本行：版本号 + 精度徽标 + `N 文件` + 文件类型 chip 组。 */
 function VersionRow({
   version,
-  keywords,
+  pattern,
   open,
   selectedVersion,
   selectedFileKey,
@@ -155,7 +162,7 @@ function VersionRow({
   onToggleChecksums,
 }: {
   version: SearchPackage["versions"][number];
-  keywords: readonly string[];
+  pattern: RegExp | null;
   open: boolean;
   selectedVersion: boolean;
   selectedFileKey: string | null;
@@ -196,7 +203,7 @@ function VersionRow({
         >
           <Group gap={6} wrap="wrap">
             <Text size="xs" fw={selectedVersion ? 600 : 500}>
-              <Highlighted text={version.version} keywords={keywords} />
+              <Highlighted text={version.version} pattern={pattern} />
             </Text>
             {meta.labelKey && (
               <Badge variant="light" color={meta.color} size="xs">
@@ -216,7 +223,7 @@ function VersionRow({
             <FileRow
               key={fileKey(file)}
               file={file}
-              keywords={keywords}
+              pattern={pattern}
               depth={1}
               selected={fileKey(file) === selectedFileKey}
               onSelect={() => onSelectFile(file)}
@@ -242,7 +249,7 @@ function VersionRow({
               <FileRow
                 key={fileKey(file)}
                 file={file}
-                keywords={keywords}
+                pattern={pattern}
                 depth={2}
                 selected={fileKey(file) === selectedFileKey}
                 onSelect={() => onSelectFile(file)}
@@ -278,6 +285,9 @@ export function PackageSearchTree({
     () => (selection ? fileKey({ repository: selection.repository, path: selection.path }) : null),
     [selection],
   );
+  // 高亮正则按「关键词集合」编译一次，供全树所有行共享：逐行现编译会让同样几个关键词
+  // 在展开千行级大包时被重复编译上千次。关键词不变（同一表达式）时实例保持不变。
+  const pattern = useMemo(() => compileHighlightPattern(keywords), [keywords]);
 
   return (
     <Stack gap={2} data-testid="search-package-tree">
@@ -308,7 +318,7 @@ export function PackageSearchTree({
                     {pseudo ? (
                       t("search.noCoordinate")
                     ) : (
-                      <Highlighted text={pkg.coordinate} keywords={keywords} />
+                      <Highlighted text={pkg.coordinate} pattern={pattern} />
                     )}
                   </Text>
                   <Badge variant="light" size="xs" style={{ flexShrink: 0 }}>
@@ -333,7 +343,7 @@ export function PackageSearchTree({
                       <FileRow
                         key={fileKey(file)}
                         file={file}
-                        keywords={keywords}
+                        pattern={pattern}
                         depth={1}
                         selected={fileKey(file) === selectedFileKey}
                         onSelect={() => onSelectFile(pkg, null, file)}
@@ -345,7 +355,7 @@ export function PackageSearchTree({
                         <VersionRow
                           key={vKey}
                           version={version}
-                          keywords={keywords}
+                          pattern={pattern}
                           open={expandedVersions.has(vKey)}
                           selectedVersion={
                             selection?.packageKey === pkgKey &&

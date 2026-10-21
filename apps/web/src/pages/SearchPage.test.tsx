@@ -7,7 +7,7 @@
 // 数据用 MSW 覆写 `GET /api/v1/search`：devmock 的搜索 handler 只产出文件级结果，
 // 包级聚合（的 group_by=package）在本用例里直接给到前端契约形状。
 import { MantineProvider } from "@mantine/core";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
@@ -17,6 +17,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { server } from "@jianartifact/devmock/node";
 
 import type { SearchPackage, SearchResult } from "../api/endpoints";
+import { REFRESH_EVENT } from "../hooks/useAsync";
 import "../i18n";
 import { SearchPage } from "./SearchPage";
 
@@ -305,6 +306,56 @@ describe("SearchPage 主从双栏", () => {
       });
       expect(versionRow("1.17.120")).toBeInTheDocument();
       expect(versionRow("1.17.12")).toBeInTheDocument();
+    } finally {
+      restore();
+    }
+  });
+
+  it("窄屏详情态下选中项失效时，右栏仍给出返回入口（不留死胡同）", async () => {
+    const restore = stubNarrowViewport();
+    try {
+      let first = true;
+      server.use(
+        http.get("*/api/v1/search", () => {
+          if (first) {
+            first = false;
+            return HttpResponse.json(
+              searchResponse(PACKAGES) as unknown as Record<string, unknown>,
+            );
+          }
+          // 刷新后 1.17.120 已经不在结果里：选中项失效，详情面板无从渲染。
+          const pkg = PACKAGES[0]!;
+          const shrunk: SearchPackage = {
+            ...pkg,
+            versionCount: 1,
+            fileCount: 3,
+            topVersion: "1.17.12",
+            versions: pkg.versions.slice(0, 1),
+          };
+          return HttpResponse.json(
+            searchResponse([shrunk, PACKAGES[1]!]) as unknown as Record<string, unknown>,
+          );
+        }),
+      );
+      renderPage();
+
+      await screen.findByTestId("search-package-tree");
+      await userEvent.click(versionRow("1.17.120"));
+      await waitFor(() => expect(detailPanel()).toBeVisible());
+
+      // 同口径后台刷新：选中项在结果里消失。
+      act(() => {
+        window.dispatchEvent(new CustomEvent(REFRESH_EVENT));
+      });
+
+      await waitFor(() => expect(screen.queryByTestId("search-detail-panel")).toBeNull());
+      // 左栏仍隐藏着，返回入口必须由右栏自己提供，否则用户只能刷新页面。
+      expect(tree()).not.toBeVisible();
+      const back = screen.getByRole("button", { name: "返回搜索结果" });
+      expect(back).toBeVisible();
+
+      await userEvent.click(back);
+      await waitFor(() => expect(tree()).toBeVisible());
     } finally {
       restore();
     }

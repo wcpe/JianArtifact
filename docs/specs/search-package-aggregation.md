@@ -1,6 +1,6 @@
 # 功能规格：搜索结果包级聚合与主从双栏视图（FR-150 / FR-151）
 
-> 状态：草拟 · 2026-10-19 · 关联 PRD §4 FR-150 / FR-151 · FR-150 **需 spec**（新增响应结构与排序语义）· FR-151 **免 spec**（纯前端视图重排，不新增 Schema / 端点 / 迁移）
+> 状态：**已实现，待实机验收** · 2026-10-19 · 关联 PRD §4 FR-150 / FR-151（PRD 记为「已交付@未发布」）· FR-150 **需 spec**（新增响应结构与排序语义）· FR-151 **免 spec**（纯前端视图重排，不新增 Schema / 端点 / 迁移）
 
 ## 1. 背景与目标
 
@@ -190,9 +190,9 @@ version:v  →  ( path LIKE '%/'||v||'/%' ESCAPE '\'
 
 **已知取舍**：path 中恰好存在一个叫 `1.17.12` 的**非版本**目录（如某个包名就叫这个）会被命中。这是 path-as-schema 的固有代价，误报率极低，不做额外辨认（§6）。
 
-**前端同步**：`SearchExpression` 必须新增 `versions` / `notVersions`（[searchQuery.ts](apps/web/src/lib/searchQuery.ts#L5) 的接口），否则用户手输 `version:1.17.12` 后一动筛选面板，`buildSearchExpression` 重拼表达式会把该 token 丢掉——表现为"改了个扩展名筛选，版本约束悄悄失效"。
+**前端同步（实测更正）**：设计的本意是让 `SearchExpression` 新增 `versions` / `notVersions`（[searchQuery.ts](apps/web/src/lib/searchQuery.ts#L5) 的接口），否则手输 `version:1.17.12` 后一动筛选面板，`buildSearchExpression` 重拼表达式会把该 token 丢掉——表现为"改了个扩展名筛选，版本约束悄悄失效"。**实现阶段核对后确认这条风险并不成立**：解析器不认识 `version:`，该 token 落进 `terms`（`-version:` 落进 `excludeTerms`），而 `buildSearchExpression` 把这些数组原样回写，所以往返不丢（实测 `-version:1.17.12 ext:jar` → 面板加 `pom` → `-version:1.17.12 ext:jar ext:pom`）。因此本批**没有**新增这两个字段：它们在没有任何面板控件使用时只是多一份需要同步的状态。代价是筛选面板没有版本输入框（只能手输），且该 token 会进高亮关键词列表（它在 `path` 里不出现，视觉上无影响）。若将来给版本加面板输入框，仍需补这两个字段并加往返测试。
 
-**与 FR-149（FTS5 trigram 索引）的衔接**：trigram 索引本身是**子串**语义，`1.17.12` 的索引候选里必然包含 `1.17.120`——这正是必须有 §3.4 分层的原因，索引只负责把候选集取小，**不负责判定精度**。两件事互不替代：FR-149 落地后，`buildSearchWhere` 仍原样生效并于末尾追加索引子查询条件（见 [search-index-and-performance.md](search-index-and-performance.md) §3.4 的「追加一个 AND 条件」形态），本 FR 新增的 `version:` 段边界条件作为其中一个谓词自然参与；精度比较仍在 Go 侧聚合阶段完成，对「走索引」与「走全表 LIKE」两种实现等价。
+**与 FR-149（FTS5 trigram 索引）的衔接**：trigram 索引本身是**子串**语义，`1.17.12` 的索引候选里必然包含 `1.17.120`——这正是必须有 §3.4 分层的原因，索引只负责把候选集取小，**不负责判定精度**。两件事互不替代：FR-149 落地后，`buildSearchWhere` 仍原样生效并于末尾追加索引子查询条件（见 [search-index-and-performance.md](search-index-and-performance.md) §3.3 的「追加一个 AND 条件」形态），本 FR 新增的 `version:` 段边界条件作为其中一个谓词自然参与；精度比较仍在 Go 侧聚合阶段完成，对「走索引」与「走全表 LIKE」两种实现等价。
 
 ### 3.7 响应结构变化
 
@@ -363,25 +363,25 @@ version:v  →  ( path LIKE '%/'||v||'/%' ESCAPE '\'
 
 ### FR-150（后端）
 
-- [ ] `search_query.go`：`parsedSearch` 增加 `versions` / `notVersions`，`parseSearchQuery` 加 `version:` 分支（与 `ext:` 同级），补 `TestParseSearchQuery` 用例（含空值丢弃、`-version:`、与子串词共存）
-- [ ] `asset_repo.go`：`SearchFilter` 增 `IncludeVersions` / `ExcludeVersions`；`buildSearchWhere` 拼段边界条件（含 `%-<v>.tgz` 支）；单测覆盖 `1.17.12` 不命中 `1.17.120/`、不命中 `1.17.12-rc1/`、命中 `pkg/-/pkg-1.17.12.tgz`
-- [ ] `asset_repo.go`：新增 `SearchAllByFilter`（无分页 + `maxAggregateRows` 上限 + `truncated` 回报），复用 `buildSearchWhere`
-- [ ] **新增** `domain/search_package.go`：`ParseCoordinates`（Maven / npm / 降级）、`MatchPrecision`、`BuildPackageGroups`、relevance 比较器；配 `search_package_test.go` 表驱动测试（正例 + 反例 + 边界：`n==3` 的 Maven 扁平路径、scoped packument、`pkg/-/pkg-x.tgz` 剥离失败）
-- [ ] `repository_service.go`：`SearchAggregate`（复用现有 ACL / facet 收窄逻辑，扩展 `repoID → {name, format}` 映射）；`SearchOutput` 增 `Packages` / `PackageTotal` / `Aggregation`
-- [ ] `repository_handlers.go`：解析 `group_by`（`file` 缺省 / `package`）与 `order=relevance`；输出 `packages` / `packageTotal` / `aggregation` / `appliedOrder` / 文件级 `sha1`
-- [ ] 回归：npm `registrySearch` 显式传 `path`/`asc`，断言 `GET /-/v1/search` 响应体与改造前逐字段一致
+- [x] `search_query.go`：`parsedSearch` 增加 `versions` / `notVersions`，`parseSearchQuery` 加 `version:` 分支（与 `ext:` 同级），补 `TestParseSearchQuery` 用例（含空值丢弃、`-version:`、与子串词共存）
+- [x] `asset_repo.go`：`SearchFilter` 增 `IncludeVersions` / `ExcludeVersions`；`buildSearchWhere` 拼段边界条件（含 `%-<v>.tgz` 支）；单测覆盖 `1.17.12` 不命中 `1.17.120/`、不命中 `1.17.12-rc1/`、命中 `pkg/-/pkg-1.17.12.tgz`
+- [x] `asset_repo.go`：新增 `SearchAllByFilter`（无分页 + `maxAggregateRows` 上限 + `truncated` 回报），复用 `buildSearchWhere`
+- [x] **新增** `domain/search_package.go`：`ParseCoordinates`（Maven / npm / 降级）、`MatchPrecision`、`BuildPackageGroups`、relevance 比较器；配 `search_package_test.go` 表驱动测试（正例 + 反例 + 边界：`n==3` 的 Maven 扁平路径、scoped packument、`pkg/-/pkg-x.tgz` 剥离失败）
+- [x] `repository_service.go`：`SearchAggregate`（复用现有 ACL / facet 收窄逻辑，扩展 `repoID → {name, format}` 映射）；`SearchOutput` 增 `Packages` / `PackageTotal` / `Aggregation`
+- [x] `repository_handlers.go`：解析 `group_by`（`file` 缺省 / `package`）与 `order=relevance`；输出 `packages` / `packageTotal` / `aggregation` / `appliedOrder` / 文件级 `sha1`
+- [x] 回归：npm `registrySearch` 显式传 `path`/`asc`，断言 `GET /-/v1/search` 响应体与改造前逐字段一致
 
 ### FR-151（前端）
 
-- [ ] `lib/searchQuery.ts`：`SearchExpression` 增 `versions` / `notVersions`，`parseSearchExpression` / `buildSearchExpression` 双向同步；补测试（手输 `version:x` → 改筛选面板 → 表达式不丢）
-- [ ] `lib/searchPackage.ts`：树构建、版本向量比较、`fileKind` 归类、高亮切分（`splitHighlight`）；配 vitest
-- [ ] `api/endpoints.ts`：`SearchResult` 增 `packages` / `packageTotal` / `aggregation` / `appliedOrder`；`searchAssets` 增 `group_by` 参数
-- [ ] `components/search/PackageSearchTree.tsx`：包/版本/文件三级折叠树 + 精度徽标 + 类型 chip + 校验和折叠
-- [ ] `components/search/SearchDetailPanel.tsx`：详情 + 同版本文件列表 + 高亮
-- [ ] `SearchPage.tsx`：结果区替换为主从双栏；`DEFAULT_SORT` 改 relevance；`SortKey` 增 `relevance`（`sanitizeSort` 同步）；窄屏 820px 单栏降维 + 返回；四态接入
-- [ ] i18n：`search.*` 新键（`precisionExact` / `precisionPrerelease` / `precisionSubstring` / `packagesCount` / `versionsCount` / `filesCount` / `checksums` / `sortRelevance` / `detail*` / `backToResults` / `aggregationTruncated` 等），`zh` / `en` 同步（受 `I18nKeys.test.ts` 守卫）
-- [ ] devmock：`packages` 结构的 mock 响应，供前端独立开发
-- [ ] 文档同步：`docs/API.md` 搜索端点（新增参数与响应字段）、PRD 状态、`docs/CHANGELOG.md`；`api/openapi.yaml` **不动**（§3.7）
+- [x] `lib/searchQuery.ts`：`SearchExpression` 增 `versions` / `notVersions`，`parseSearchExpression` / `buildSearchExpression` 双向同步；补测试（手输 `version:x` → 改筛选面板 → 表达式不丢）——**按「不丢」这一实际风险收口，未新增两个专属字段**：解析器不识别 `version:`，`version:1.17.12` 会落进 `terms`、`-version:1.17.12` 落进 `excludeTerms`，而 `buildSearchExpression` 原样回写这些数组，因此**改一次扩展名筛选后版本约束不会失效**（已实测：`-version:1.17.12 ext:jar` → 面板加 `pom` → `-version:1.17.12 ext:jar ext:pom`）。代价有两点，均不影响搜索正确性：① 筛选面板没有版本输入框（只能手输）；② 该 token 会进高亮关键词列表，但它在 `path` 里不出现，视觉上无影响。若将来要给版本做面板输入框，仍需补这两个字段。
+- [x] `lib/searchPackage.ts`：树构建、版本向量比较、`fileKind` 归类、高亮切分（`splitHighlight`）；配 vitest
+- [x] `api/endpoints.ts`：`SearchResult` 增 `packages` / `packageTotal` / `aggregation` / `appliedOrder`；`searchAssets` 增 `group_by` 参数
+- [x] `components/search/PackageSearchTree.tsx`：包/版本/文件三级折叠树 + 精度徽标 + 类型 chip + 校验和折叠
+- [x] `components/search/SearchDetailPanel.tsx`：详情 + 同版本文件列表 + 高亮
+- [x] `SearchPage.tsx`：结果区替换为主从双栏；`DEFAULT_SORT` 改 relevance；`SortKey` 增 `relevance`（`sanitizeSort` 同步）；窄屏 820px 单栏降维 + 返回；四态接入
+- [x] i18n：`search.*` 新键（`precisionExact` / `precisionPrerelease` / `precisionSubstring` / `packagesCount` / `versionsCount` / `filesCount` / `checksums` / `sortRelevance` / `detail*` / `backToResults` / `aggregationTruncated` 等），`zh` / `en` 同步（受 `I18nKeys.test.ts` 守卫）
+- [x] devmock：`packages` 结构的 mock 响应，供前端独立开发
+- [x] 文档同步：`docs/API.md` 搜索端点（新增参数与响应字段）、PRD 状态、`docs/CHANGELOG.md`；`api/openapi.yaml` **不动**（§3.7）
 
 ## 5. 验收标准
 

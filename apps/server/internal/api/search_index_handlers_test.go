@@ -18,7 +18,7 @@ import (
 
 // 本文件钉住的两个运维端点：
 //   - GET  /api/v1/search/index        —— 字段与口径（ready/indexed/total/lastId/updatedAt
-//     以及漂移三元组 indexedRows/assetRows/drift + drifted）
+//     以及漂移四元组 indexedRows/assetRows/missingRows/orphanRows）
 //   - POST /api/v1/search/index/rebuild —— 202 受理 / 运行中重复触发 409 / 非管理员 403 / 匿名 401
 
 // searchIndexStatusStub 是状态端点用的桩：直接给出快照，避免为了一个纯展示端点去造真实回填。
@@ -64,14 +64,14 @@ func serveSearchIndex(h *Handlers, principal *auth.Principal, method, path strin
 	return rec
 }
 
-// TestGetSearchIndexStatusFields 校验状态端点的字段与口径（回填中 vs 已完成两种形态）。
+// TestGetSearchIndexStatusFields 校验状态端点的字段与口径（回填中 / 已完成 / 仅孤儿行三种形态）。
 func TestGetSearchIndexStatusFields(t *testing.T) {
 	gin.SetMode(gin.ReleaseMode)
 
-	// 回填中：ready=false，indexed < total；索引行数也还落后于资产行数（负差额 = 漏索引）。
+	// 回填中：ready=false，indexed < total；索引行数也还落后于资产行数（存在漏索引）。
 	inProgress := NewHandlers(Deps{SearchIndex: searchIndexStatusStub{status: domain.SearchIndexStatus{
 		Ready: false, Indexed: 4000, Total: 10000, LastID: 4000, UpdatedAt: "2026-10-19 10:00:00",
-		IndexRows: 4000, AssetRows: 10000,
+		IndexRows: 4000, AssetRows: 10000, MissingRows: 6000,
 	}}})
 	rec := serveSearchIndex(inProgress, adminPrincipal(), http.MethodGet, "/api/v1/search/index")
 	if rec.Code != http.StatusOK {
@@ -89,8 +89,8 @@ func TestGetSearchIndexStatusFields(t *testing.T) {
 		"updatedAt":   "2026-10-19 10:00:00",
 		"indexedRows": float64(4000),
 		"assetRows":   float64(10000),
-		"drift":       float64(-6000),
-		"drifted":     true,
+		"missingRows": float64(6000),
+		"orphanRows":  float64(0),
 	} {
 		if got[key] != want {
 			t.Fatalf("字段 %s = %v，期望 %v（body=%s）", key, got[key], want, rec.Body.String())
@@ -116,8 +116,25 @@ func TestGetSearchIndexStatusFields(t *testing.T) {
 		t.Fatalf("已完成字段不符：%s", rec.Body.String())
 	}
 	if got["indexedRows"] != float64(10000) || got["assetRows"] != float64(10000) ||
-		got["drift"] != float64(0) || got["drifted"] != false {
-		t.Fatalf("已完成时应无漂移：%s（孤儿索引行或漏索引都会让 ready 失真）", rec.Body.String())
+		got["missingRows"] != float64(0) || got["orphanRows"] != float64(0) {
+		t.Fatalf("已完成时应无漂移：%s", rec.Body.String())
+	}
+
+	// 仅孤儿索引行（仓库删除后的常态）：ready 仍为 true，但 orphanRows 必须报出来——
+	// 监控按 missingRows 告警时不会被它误触，按 orphanRows 才知道要不要清理空间。
+	orphan := NewHandlers(Deps{SearchIndex: searchIndexStatusStub{status: domain.SearchIndexStatus{
+		Ready: true, Indexed: 10000, Total: 10000, LastID: 10000, UpdatedAt: "2026-10-19 12:00:00",
+		IndexRows: 10003, AssetRows: 10000, OrphanRows: 3,
+	}}})
+	rec = serveSearchIndex(orphan, adminPrincipal(), http.MethodGet, "/api/v1/search/index")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("孤儿行状态码 = %d，期望 200", rec.Code)
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("解析响应：%v", err)
+	}
+	if got["ready"] != true || got["orphanRows"] != float64(3) || got["missingRows"] != float64(0) {
+		t.Fatalf("孤儿索引行不应影响 ready，且要单独可见：%s", rec.Body.String())
 	}
 }
 
@@ -235,7 +252,7 @@ func TestSearchIndexEndpointsWithRealService(t *testing.T) {
 	}
 	// 三行历史行全部入了索引 → 索引行数与资产行数一致，无漂移。
 	if got["indexedRows"] != float64(3) || got["assetRows"] != float64(3) ||
-		got["drift"] != float64(0) || got["drifted"] != false {
+		got["missingRows"] != float64(0) || got["orphanRows"] != float64(0) {
 		t.Fatalf("回填完成后应无漂移：%s", rec.Body.String())
 	}
 

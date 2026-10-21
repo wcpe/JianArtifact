@@ -307,8 +307,9 @@ func (h *NpmHandler) unpublishPackage(c *gin.Context, repoName, pkg string) {
 //
 // 但合并查询**不能是唯一路径**：单条语句只共享一份搜索预算，成员多、库大的 group 上容易整体
 // 超时，而整次降级为空结果会让 `npm search` 从「个别成员没有结果」退化到 `total: 0`——那是
-// 用户可感知的可用性倒退。因此合并查询失败时回退到逐成员搜索（见 npmSearchCandidates）：
-// 每个成员各有一份独立预算，失败的那个按既有容错口径跳过、其余成员结果照常返回。
+// 用户可感知的可用性倒退。因此合并查询因超时失败时回退到逐成员搜索（见 npmSearchCandidates）：
+// 合并检索与逐成员回退共享 registrySearch 派生的**同一份总预算**，成员再多也不会把最坏耗时
+// 放大成 N 份；回退循环在每个成员前检查 ctx，预算耗尽即停止。
 //
 // 语义与响应结构保持不变：仍按成员顺序遍历、仍按 asset.path 去重、仍跳过非 packument、
 // `total` 仍是「去重且可解析的条目数」。
@@ -324,6 +325,14 @@ func (h *NpmHandler) registrySearch(c *gin.Context, repoName string) {
 		c.JSON(http.StatusOK, empty)
 		return
 	}
+	// 整次 registry 搜索只派生**一份**总预算，合并查询与逐成员回退共用它。
+	//
+	// 必须在这里派生：SearchAssets / SearchAssetsPerRepo 各自内部也会从传入 ctx 再派生一次
+	// 完整 deadline，若上游 ctx 没有 deadline，N 个成员就是 N 份独立预算（最坏 N × 搜索上限），
+	// 而这个端点匿名可达、HTTP 服务器也没有写入超时——几条并发慢请求就足以长时间占住
+	// 有限的数据库连接。父 ctx 带上 deadline 后，子 deadline 取两者的更早者，最坏耗时回到一份。
+	ctx, cancel := context.WithTimeout(c.Request.Context(), h.repoSvc.SearchTimeout())
+	defer cancel()
 	repo, err := h.repoSvc.Get(repoName)
 	if err != nil {
 		writeAssetErr(c, err)
@@ -347,7 +356,7 @@ func (h *NpmHandler) registrySearch(c *gin.Context, repoName string) {
 	// 必须用完整的 `/-/` 标记：包名本身允许含 `-`（如 `@scope/-weird`），把条件放宽成
 	// `/-` 会连这类合法 packument 一起排除。
 	keyword := text + ` -"/-/"`
-	byRepo := h.npmSearchCandidates(c.Request.Context(), repoName, resolved, keyword, from+size)
+	byRepo := h.npmSearchCandidates(ctx, repoName, resolved, keyword, from+size)
 	objects := make([]any, 0, size)
 	seen := map[string]bool{}
 	total := 0
@@ -431,9 +440,18 @@ var (
 
 // npmSearchCandidates 取回各成员的候选 packument，返回「成员仓库 ID → 组内 path 升序制品」。
 //
-// 正常路径是一条合并查询（成本与成员数解耦）；**仅在该查询失败时**回退到逐成员搜索：
-// 每个成员各有一份独立预算，失败的那个跳过、其余成员照常返回，避免大 group 因整体超时退化
+// 正常路径是一条合并查询（成本与成员数解耦）；**仅在它因超时失败时**回退到逐成员搜索：
+// 每个成员按顺序尝试，超时或预算耗尽的跳过、其余成员照常返回，避免大 group 因整体超时退化
 // 为空结果。合并查询的结果在回退时整份丢弃，两条路径不会重复计数。
+//
+// 两条边界：
+//
+//   - **只有超时才回退**。合并查询的非超时错误（表缺失、连接故障、SQL 错误）对每个成员都会
+//     同样复现，回退等于把 1 次注定失败的查询放大成 N 次，并刷出 N 条 warn 日志。这类错误
+//     直接降级为空结果，只记 1 条日志，日志本身已区分超时与数据层故障（见 logNpmSearchWarn）。
+//   - **回退共享上游的一份预算**。ctx 由 registrySearch 派生并带了总预算，因此每次成员查询前
+//     检查 ctx.Err()：预算耗尽就停止，不再逐个成员各领一份新的 deadline，最坏耗时不会变成
+//     N 份。已经取到的成员结果仍然返回——那正是回退想保住的部分可用性。
 func (h *NpmHandler) npmSearchCandidates(ctx context.Context, repoName string, members []npmSearchMember, keyword string, limit int) map[int64][]repository.Asset {
 	if len(members) == 0 {
 		return nil
@@ -446,8 +464,13 @@ func (h *NpmHandler) npmSearchCandidates(ctx context.Context, repoName string, m
 	if err == nil {
 		return npmAssetsByRepo(assets)
 	}
+	if !errors.Is(err, domain.ErrSearchTimeout) {
+		// 非超时故障：回退只会把同一个错误重演 N 次，直接降级（响应形状不变）。
+		logNpmSearchWarn("仓库 "+repoName+" 的合并检索", "降级为空结果", h.repoSvc.SearchTimeout(), err)
+		return nil
+	}
 	// 单成员没有「跳过该成员继续」的余地：回退与整体降级的结果同为「没有结果」，
-	// 重试只会把最坏耗时从一份预算翻成两份。
+	// 重试只会白白多跑一次注定超时的查询。
 	if len(members) == 1 {
 		logNpmSearchWarn("仓库 "+repoName+" 的合并检索", "降级为空结果", h.repoSvc.SearchTimeout(), err)
 		return nil
@@ -455,6 +478,12 @@ func (h *NpmHandler) npmSearchCandidates(ctx context.Context, repoName string, m
 	logNpmSearchWarn("仓库 "+repoName+" 的合并检索", "回退逐成员检索", h.repoSvc.SearchTimeout(), err)
 	byRepo := make(map[int64][]repository.Asset, len(members))
 	for _, m := range members {
+		// 预算已耗尽：后续成员必然同样超时，继续调用只会把总耗时拖成 N 份。
+		if cerr := ctx.Err(); cerr != nil {
+			log.Printf("npm 搜索超时（警告）：仓库 %s 的逐成员检索预算已耗尽，跳过剩余成员（已取到 %d/%d 个成员）：%v",
+				repoName, len(byRepo), len(members), cerr)
+			return byRepo
+		}
 		rows, merr := npmSearchMemberAssets(h.repoSvc, ctx, keyword, m.name, limit)
 		if merr != nil {
 			// 既有容错口径：单个成员搜不到就换下一个，不让整个请求失败。

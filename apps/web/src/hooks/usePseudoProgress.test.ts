@@ -2,6 +2,7 @@
 // - 前段 3.2s 缓出爬到 88%，末段 0.7s 冲刺到 100%，之后保持；
 // - 全程单调递增、缓出段不停顿（逐 200ms 至少 1 个百分点），避免「停在接近完成」的假卡死；
 // - 阶段随进度阈值切换；已用时长按采样间隔累加；
+// - 到顶后降为 1Hz 读秒：进度不再推进，但读数继续走、重渲染不再是 20Hz；
 // - 卸载即清除定时器（不留 act 告警与泄漏）。
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +11,7 @@ import {
   CRAWL_MS,
   CRAWL_TARGET,
   SPRINT_MS,
+  TERMINAL_MS,
   TICK_MS,
   pseudoProgressValue,
   stageForProgress,
@@ -134,5 +136,40 @@ describe("usePseudoProgress 计时", () => {
     expect(clearIntervalSpy).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
     clearIntervalSpy.mockRestore();
+  });
+
+  it("到顶后降频：进度不再推进，读秒仍往前走但不再 20Hz 触发", () => {
+    const { result } = renderHook(() => usePseudoProgress());
+    act(() => {
+      vi.advanceTimersByTime(TERMINAL_MS);
+    });
+    expect(result.current.value).toBe(100);
+    expect(result.current.elapsedMs).toBe(TERMINAL_MS);
+
+    // 到顶后的 10s：仍是同一个定时器在跑（没有泄漏出第二个），读数按 1Hz 推进。
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
+    expect(vi.getTimerCount()).toBe(1);
+    expect(result.current.value).toBe(100);
+    expect(result.current.elapsedMs).toBe(TERMINAL_MS + 10_000);
+  });
+
+  it("到顶后每次采样间隔内的重渲染次数不再是 20 次/秒", () => {
+    const renders: number[] = [];
+    const { result } = renderHook(() => {
+      renders.push(1);
+      return usePseudoProgress();
+    });
+    act(() => {
+      vi.advanceTimersByTime(TERMINAL_MS);
+    });
+    const before = renders.length;
+    act(() => {
+      vi.advanceTimersByTime(3_000);
+    });
+    // 3s 若仍按 50ms 采样会有 60 次渲染；降频后应只剩个位数。
+    expect(renders.length - before).toBeLessThanOrEqual(5);
+    expect(result.current.value).toBe(100);
   });
 });

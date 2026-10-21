@@ -198,42 +198,51 @@ export function SearchDetailPanel({
           {siblings.map((item) => {
             const selected = fileKey(item) === currentKey;
             return (
-              <UnstyledButton
+              // 行容器**不能**是按钮：行内的「下载」是 `<a href>`，而 `<button>` 里既不允许
+              // 出现可交互后代（HTML 内容模型禁止），浏览器也会把可聚焦后代从 Tab 序列里剔除，
+              // 键盘用户根本到不了下载链接。故拆成并列的「选中按钮 + 下载链接」两个元素，
+              // 行样式（内边距 / 选中底色）挂在容器上。
+              <Group
                 key={fileKey(item)}
-                onClick={() => onSelectFile(item)}
-                aria-current={selected ? "true" : undefined}
-                data-testid="search-sibling-file"
+                gap={8}
+                wrap="nowrap"
+                data-selected={selected ? "true" : undefined}
                 style={{
-                  display: "block",
-                  width: "100%",
                   padding: "4px 8px",
                   borderRadius: 4,
                   // 选中行高亮：规格指定的蓝 0 号底色。
                   background: selected ? "var(--mantine-color-blue-0)" : undefined,
                 }}
               >
-                <Group gap={8} wrap="nowrap">
-                  <Text size="xs" lineClamp={1} style={{ flex: 1, minWidth: 0 }}>
-                    {item.name}
-                  </Text>
-                  <Text size="xs" c="dimmed" style={{ flexShrink: 0 }}>
-                    {formatBytes(item.size)}
-                  </Text>
-                  <Button
-                    component="a"
-                    href={assetDownloadUrl(item.repository, "", item.path)}
-                    target="_blank"
-                    rel="noreferrer"
-                    size="compact-xs"
-                    variant="subtle"
-                    leftSection={<IconDownload size={12} />}
-                    aria-label={t("repoDetail.download")}
-                    onClick={(event) => event.stopPropagation()}
-                  >
-                    {t("repoDetail.download")}
-                  </Button>
-                </Group>
-              </UnstyledButton>
+                <UnstyledButton
+                  onClick={() => onSelectFile(item)}
+                  aria-current={selected ? "true" : undefined}
+                  data-testid="search-sibling-file"
+                  style={{ display: "block", flex: 1, minWidth: 0, textAlign: "left" }}
+                >
+                  <Group gap={8} wrap="nowrap">
+                    <Text size="xs" lineClamp={1} style={{ flex: 1, minWidth: 0 }}>
+                      {item.name}
+                    </Text>
+                    <Text size="xs" c="dimmed" style={{ flexShrink: 0 }}>
+                      {formatBytes(item.size)}
+                    </Text>
+                  </Group>
+                </UnstyledButton>
+                <Button
+                  component="a"
+                  href={assetDownloadUrl(item.repository, "", item.path)}
+                  target="_blank"
+                  rel="noreferrer"
+                  size="compact-xs"
+                  variant="subtle"
+                  leftSection={<IconDownload size={12} />}
+                  aria-label={`${t("repoDetail.download")} ${item.name}`}
+                  style={{ flexShrink: 0 }}
+                >
+                  {t("repoDetail.download")}
+                </Button>
+              </Group>
             );
           })}
         </Stack>

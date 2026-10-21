@@ -3,12 +3,13 @@
 // - 取消经 AbortSignal 真实中止请求，界面静默回到空闲态（不算失败），并可立即重搜；
 // - 后端 504 search_timeout 给「超时」专属文案，其它失败仍是通用文案；
 // - 快速连续搜索：旧请求被中止，旧响应晚到也不得覆盖新结果；
-// - 翻页沿用 keepPreviousData：旧结果留在原位 + 局部进度反馈，不回到骨架。
+// - 同口径后台刷新沿用 keepPreviousData：旧结果留在原位 + 局部进度反馈，不回到骨架，
+//   且不重置用户已展开 / 已选中的节点；包级聚合没有分页入口。
 //
 // 伪进度本身（曲线 / 阶段 / 时长 / 定时器清理）在 hooks/usePseudoProgress.test.ts 与
 // components/search/SearchProgress.test.tsx 里用假定时器精确断言，本文件只管页面集成。
 import { MantineProvider } from "@mantine/core";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
@@ -18,6 +19,7 @@ import { describe, expect, it } from "vitest";
 import { server } from "@jianartifact/devmock/node";
 
 import type { SearchPackage, SearchResult } from "../api/endpoints";
+import { REFRESH_EVENT } from "../hooks/useAsync";
 import "../i18n";
 import { SearchPage } from "./SearchPage";
 
@@ -247,37 +249,52 @@ describe("SearchPage 搜索进度与取消", () => {
     expect(within(tree()).getByText("com.example:new")).toBeInTheDocument();
   });
 
-  it("翻页保留旧结果并只叠加局部进度，不回到骨架（keepPreviousData）", async () => {
+  it("同口径后台刷新保留旧结果与用户的展开 / 选中，不回到骨架也不重置视图", async () => {
     let releaseSecond: (() => void) | undefined;
     let calls = 0;
     server.use(
       http.get("*/api/v1/search", async () => {
         calls += 1;
         if (calls === 1) {
-          // total=60 → 50 条一页共 2 页，分页器出现。
-          return HttpResponse.json(searchResponse([OLD_PKG], 60) as never);
+          return HttpResponse.json(searchResponse([OLD_PKG, NEW_PKG]) as never);
         }
         await new Promise<void>((resolve) => {
           releaseSecond = resolve;
         });
-        return HttpResponse.json(searchResponse([NEW_PKG], 60) as never);
+        return HttpResponse.json(searchResponse([OLD_PKG, NEW_PKG]) as never);
       }),
     );
 
     renderPage();
     await screen.findByTestId("search-package-tree");
 
-    await userEvent.click(screen.getByRole("button", { name: "2" }));
+    // 把展开与选中都切到第二个包（默认是首个包）：刷新后二者都必须原样保留。
+    await userEvent.click(
+      screen
+        .getAllByTestId("search-package-row")
+        .find((row) => row.getAttribute("data-coordinate") === "com.example:new")!,
+    );
+    const heading = () =>
+      within(screen.getByTestId("search-detail-panel")).getByRole("heading").textContent;
+    await waitFor(() => expect(heading()).toBe("new-1.0.0.jar"));
 
-    // 刷新期间：进度条出现，但旧结果仍在原位、没有退回骨架。
+    // 页眉刷新派发的是全局刷新事件：同一搜索口径的重新取数。
+    act(() => {
+      window.dispatchEvent(new CustomEvent(REFRESH_EVENT));
+    });
+
+    // 刷新期间：进度条出现，旧结果仍在原位、没有退回骨架。
     await waitFor(() => expect(progressBar()).toBeInTheDocument());
     expect(tree()).toBeInTheDocument();
     expect(screen.queryByTestId("state-loading")).toBeNull();
-    expect(within(tree()).getByText("com.example:old")).toBeInTheDocument();
 
     releaseSecond?.();
+    await waitFor(() => expect(progressBar()).toBeNull());
 
-    await waitFor(() => expect(within(tree()).getByText("com.example:new")).toBeInTheDocument());
-    expect(progressBar()).toBeNull();
+    // 刷新落定后：选中项仍是原来那个文件（不跳回首个包的首个版本）。
+    await waitFor(() => expect(heading()).toBe("new-1.0.0.jar"));
+    expect(calls).toBeGreaterThanOrEqual(2);
+    // 包级聚合没有分页入口：`total` 再大也不该出现页码按钮。
+    expect(screen.queryByRole("button", { name: "2" })).toBeNull();
   });
 });

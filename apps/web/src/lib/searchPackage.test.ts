@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import type { SearchPackage, SearchPackageFile } from "../api/endpoints";
 import {
+  compileHighlightPattern,
   defaultOrderFor,
   fileKindChips,
   fileKey,
@@ -16,6 +17,7 @@ import {
   sortPackages,
   splitChecksumFiles,
   splitHighlight,
+  splitHighlightWithPattern,
   toggleInSet,
   versionKey,
 } from "./searchPackage";
@@ -116,6 +118,29 @@ describe("splitHighlight 命中词高亮切分", () => {
 
   it("命中在开头/结尾时不会产生空片段", () => {
     expect(splitHighlight("1.17.12", ["1.17.12"])).toEqual([{ text: "1.17.12", hit: true }]);
+  });
+});
+
+describe("预编译高亮正则 compileHighlightPattern", () => {
+  it("无有效关键词时返回 null（调用方据此跳过匹配）", () => {
+    expect(compileHighlightPattern([])).toBeNull();
+    expect(compileHighlightPattern(["  ", ""])).toBeNull();
+  });
+
+  it("同一批关键词只编译一次，可被多行共享且结果与 splitHighlight 一致", () => {
+    const pattern = compileHighlightPattern(["1.17", "1.17.12"]);
+    expect(pattern).not.toBeNull();
+
+    // 逐行复用同一个实例：matchAll 不会改动它的 lastIndex，因此结果是稳定的。
+    for (let i = 0; i < 3; i += 1) {
+      expect(splitHighlightWithPattern("foo-1.17.12.jar", pattern)).toEqual(
+        splitHighlight("foo-1.17.12.jar", ["1.17", "1.17.12"]),
+      );
+    }
+  });
+
+  it("pattern 为 null 时原样返回单个片段", () => {
+    expect(splitHighlightWithPattern("foo.jar", null)).toEqual([{ text: "foo.jar", hit: false }]);
   });
 });
 

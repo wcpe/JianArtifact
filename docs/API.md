@@ -28,13 +28,101 @@
 - 仓库使用说明：`GET /api/v1/repositories/{name}/usage` 返回 `UsageInfo.snippets`，每个 `UsageSnippet` 含 `group`（`auth` / `resolve` / `publish` / `other`）——它是**结构化分组标记，不参与本地化**（与随 `Accept-Language` 变化的 `title` / `description` 不同），供界面按「认证 / 解析依赖 / 发布制品 / 其他」折叠分区。
 - 仓库别名与重命名：`Repository.aliases` 与 `CreateRepositoryRequest` / `UpdateRepositoryRequest` 的 `aliases` 表达别名集合（别名与主名**共享命名空间、全局唯一**，不得等于主名或与他仓主名/别名冲突）；`POST /api/v1/repositories/{name}/rename`（仅管理员，`{newName}`）重命名后**旧名自动转别名**，旧链接仍可解析。字段、请求体与错误码以 [`../api/openapi.yaml`](../api/openapi.yaml) 为准。
 - 置顶仓库：`GET/PUT /api/v1/me/pinned-repositories` 读写**当前用户**的置顶（登录用户；匿名 `GET` 回退**全局置顶**，匿名 `PUT` 返回 401）；`GET/PUT /api/v1/settings/pinned-repositories` 读写**全局置顶**（仅管理员）。读写为**覆盖式**（按 repositoryId 整体替换，空数组即取消全部置顶），非法仓库 ID 返回 404 且不改动既有置顶；按 ID 持久化使仓库重命名不影响置顶。
-- 制品：仓库文件树、详情、搜索、下载、统一资产操作和格式相关管理操作。
+- 制品：仓库文件树、详情、搜索、下载、统一资产操作和格式相关管理操作。搜索链路的端点、参数与响应字段见下一节「搜索与搜索索引」。
 - 发布策略：`GET/PUT /api/v1/users/{id}/publish-policies/{repo}` 读写发布账号在**单个** Hosted 仓库的仓库级策略（路径前缀、每小时制品数、每日/单文件字节上限）；`PUT /api/v1/users/{id}/publish-policies`（body `{repositories[], ...}`）把同一份策略**批量应用到多个** Hosted 仓库，保存前对全部仓库统一预校验（仓库须存在且为 hosted，任一不合法即整体拒绝），响应按仓库逐条返回 `results[]`（`{repository, ok, error?}`）使部分失败可见。`immutableRelease` 已废弃、只读兼容，写入返回 400 `immutable_release_moved`（改由仓库 `immutableRelease` 配置维护）。
 - 迁移：Nexus 来源发现、计划、显式启动/取消、进度、报告和恢复。
 - 备份与搬迁：节点备份包的生成、列表、详情、删除、完整性校验与下载导出。
 
 - 仓库上游连接状态（FR-114 起，FR-43 扩展）：`Repository.connectionStatus` 是 `ConnectionStatus{status, blockedUntil?, description?}`，**仅 `proxy` / `group` 返回**（`hosted` 无上游概念、字段缺省，向后兼容）。`status` 取值 `READY`（尚未探测）/ `AVAILABLE`（可用）/ `AUTO_BLOCKED`（自动阻止窗口内）/ `HALF_OPEN`（阻止窗口已到期、正在试探上游）/ `UNAVAILABLE`（不可用）/ `OFFLINE`（手动离线）。**`AUTO_BLOCKED` 与 `HALF_OPEN` 同属阻止态**：`HALF_OPEN` 表示后台已发起一轮探测，但业务流量仍**等效封锁**——每轮半开只放行一个探测请求，其余请求快速失败，故展示上不得把它当作「已恢复」；探测成功即回 `AVAILABLE` 并重置退避，失败则回 `AUTO_BLOCKED` 并推进一档窗口（退避为**每档翻倍**，起始 40s 可由 `JIAN_AUTO_BLOCK_BASE_SECONDS` 配置）。`blockedUntil` 只在 `AUTO_BLOCKED` 与 `HALF_OPEN` 两态有值。`online=false` 的仓库一律返回 `OFFLINE`（覆盖内存态）；`POST /api/v1/repositories/{name}/recheck-connection`（仅管理员、仅 online proxy）同步发起一次 HEAD 探测并返回最新状态，不等窗口。字段与枚举真源见 [`../api/openapi.yaml`](../api/openapi.yaml)，语义与闸门设计见 [`specs/0.12.0-upstream-circuit-breaker.md`](specs/0.12.0-upstream-circuit-breaker.md)。
 - 仓库存储治理字段（FR-41）：`Repository.quotaBytes` / `quotaAssets` 是仓库级存储配额上限（计量口径为**逻辑字节** `SUM(asset.size)` 与**制品计数** `COUNT(*)`，0 / 缺省 = 不限），`Repository.cacheRetentionDays` 是代理缓存资产的保留天数（**仅 `type=proxy` 可设**，0 / 缺省 = 关闭）。超出配额后该仓库的写入返回 **429 `quota_exceeded`**，消息含当前占用与上限、不含文件系统路径；配额只对 `hosted` 仓库强制，且计量口径**与去重后的物理占用不等价**。创建与更新请求的对应字段为指针语义（缺省 = 不修改；显式 0 = 改为不限 / 关闭代理缓存保留），负数为 400；**非 `hosted` 仓库（`group` 与 `proxy`）携带非 0 配额一律 400**——`group` 不承载写入，`proxy` 的缓存写入发生在读取回源路径上、没有准入预检与流式早拒，配额强制尚未覆盖该路径（管理端因此只在 `hosted` 仓库渲染这两个输入）。字段真源见 [`../api/openapi.yaml`](../api/openapi.yaml)。
+
+### 搜索与搜索索引（FR-149 / FR-150 / FR-153）
+
+全局搜索与它的两个运维端点、一个建议端点。**这四个端点全部不进入 [`../api/openapi.yaml`](../api/openapi.yaml)**——`/api/v1/search` 一直是非契约端点（前端搜索页与仓库内搜索直接用，协议客户端只走各格式原生接口），其余三个按同一先例注册。因此**本文是它们唯一的登记处**：形状会随后续批次演进，读到字段缺失时以代码为准，不要按契约面理解稳定性。设计见 [`specs/search-index-and-performance.md`](specs/search-index-and-performance.md) 与 [`specs/search-package-aggregation.md`](specs/search-package-aggregation.md)。
+
+#### `GET /api/v1/search`
+
+**参数**：
+
+| 参数         | 约定                                                                                                                                                                    |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `q`          | **必填**，空串返回 400 `bad_request`。支持 `-词` 排除、`"引号短语"`、`repo:` / `-repo:`、`format:` / `-format:`、`ext:` / `-ext:`、`version:` / `-version:`（语法见下） |
+| `repository` | 可选，限定单仓库（浏览页内搜索即走它，条件下推保证 `total` 精确）。调用方对目标仓库无 `read` 权限时：匿名 401、已登录 403；管理员不受限                                 |
+| `sort`       | 白名单 `name` / `repo` / `path` / `size` / `updated`，**非法值静默回落**缺省排序（`path asc`），不报错                                                                  |
+| `order`      | `asc`（缺省）/ `desc` / `relevance`。`relevance` 只在 `group_by=package` 下生效，见「排序」                                                                             |
+| `group_by`   | `file`（缺省）/ `package`。缺省值**不能改**：仓库内搜索依赖 `path asc` 的文件级结果建目录树                                                                             |
+| `page`       | 非正数 / 非法回落 1                                                                                                                                                     |
+| `page_size`  | 缺省 20、上限 100；**超上限夹取到 100 而不是回落默认**（否则请求 200 条会被静默当成 20 条，调用方无从察觉）                                                             |
+
+**响应**（`file` 模式，字段与改造前一致，只多一个纯追加键 `items[].sha1`）：
+
+- `items[]`：`{repository, path, size, hash, sha1, updatedAt}`。`hash` 是内容寻址的 `blob_hash`，`sha1` 是**新增的纯追加键**（详情面板做校验和展示与比对，老客户端忽略即可）。
+- `total`：同条件 `COUNT(*)` 的**精确**匹配文件数，不受分页影响。
+- `facets[]`：`{repository, count}`，按仓库聚合的命中数（钻取导航用）。facet 的口径**忽略 `repo:` 正向限定**——用户点选某仓库钻取后，聚合条上仍要能看到其他仓库的命中数，否则无法切换。
+
+`group_by=package` 时**追加**四个字段（`items` / `total` / `facets` 的语义不变）：
+
+- `packageTotal`：不同**包节点**数（含「无坐标」伪包），与 `total` 不同量纲，不要混用；`aggregation.truncated` 为真时它是**下界**。
+- `packages[]`：`{coordinate, kind, repositories[], versionCount, fileCount, bestPrecision, latestUpdatedAt, topVersion, versions[], files?}`。`kind` 取 `maven` / `npm` / `file`（`file` 即无法解析坐标的降级伪包，按仓库归组）；`versions[]` 为 `{version, precision, fileCount, size, latestUpdatedAt, files[]}`，`files[]` 为 `{name, path, repository, size, sha1, updatedAt, fileKind}`。注意**包层还有一个可选的 `files` 数组**：只出现在 `kind=file` 的伪包上（这类条目跳过版本层、文件直接挂在包下），有坐标的包不返回该键。
+- `aggregation`：`{scanned, truncated}`。单次聚合的扫描预算是 **5000 行**（按 `path ASC` 确定性截断），超出时 `truncated=true`、`packageTotal` 与各 `fileCount` 变成下界；**`total` 不受截断影响**，仍来自 `COUNT(*)`。
+- `appliedOrder`：**实际生效**的排序值，用于消除「前端以为在按相关度排」的静默错位。`group_by=package` 时恒为 `"relevance"`（包序只由相关度比较器决定，其他 `sort` 键只影响文件级 `items`）；`group_by=file` 且请求了 `order=relevance` 时为回落后的 `"asc"`；**其余常规请求不返回该键**。
+
+`precision` / `bestPrecision` 的取值 `exact` → `prerelease` → `substring` → `none`（精度递减）：`exact` 是版本段与关键词完全相等，`prerelease` 是「关键词是版本前缀、余下部分以 `-` 或 `+` 起首」（覆盖 `-rc1` / `-SNAPSHOT` / `-alpha.3` / Maven 时间戳快照 / `+build.7`），`substring` 是其余子串巧合（`1.17.120`），`none` 表示无版本信号或无坐标。`bestPrecision` 取组内最精确的那个。
+
+**排序**：`order=relevance` 的包级比较器为「精度升序 → 版本向量降序（仅精度非 `none` 时参与）→ 最近更新降序 → 坐标升序」。前三键的合力是「精确版本置顶、同精度下新版本优先、无版本信号的查询退化为原来的 `updated desc` 体验」，因此它是搜索结果页的默认排序；第 4 键保证分页稳定可复现。`relevance` **不写进 `sort`**：`sort` 白名单不变，相关度走 `order`。
+
+**`version:` 语法**：`version:1.17.12` 只匹配**版本段严格相等**的制品（`1.17.120`、`1.17.12-rc1` 都不命中），多个 `version:` 之间为 **OR**；`-version:` 为排除（多个为 AND）；`version:`（空值）静默丢弃，与 `repo:` / `ext:` 一致。落地为 SQL 段边界条件（`/v/` 目录段，或 npm 的 `-v.tgz` 文件名尾），**不是等值比较**，因为版本只存在于路径文本里。已知取舍：某非版本目录恰好叫 `1.17.12` 时会误命中（path-as-schema 的固有代价）。
+
+**超时**：搜索链路有统一总预算（环境变量 `JIAN_SEARCH_TIMEOUT_SECONDS`，默认 **10 秒**，`0` / 负数 / 非数字一律回落默认，**不提供「0 = 禁用」**——搜索是无界查询，关掉超时等于开放一个可无限占用连接的入口）。预算覆盖一次搜索的三条语句（计数 / 分页 / facet）与聚合扫描，超时返回 **504 `search_timeout`**，消息提示缩小检索范围。**不复用 `upstream_timeout`**：那个表示「上游不畅」，复用会让用户与运维分不清该查上游还是查索引。
+
+#### `GET /api/v1/search/suggest`
+
+搜索输入框的下拉候选，**与 `/api/v1/search` 同一条权限与超时链路**。
+
+- 参数：`q`（必填语义，但 **trim 后为空返回空 `items` 而不是 400**——suggest 是高频被动调用，空输入是常态而非错误）、`limit`（缺省 10，夹取到 `[1, 20]`；非正数 / 非法回落缺省，超上限夹到上限，**一律不报错**）。
+- 响应 `{"items": [{"type": "package" | "repository", "value": "..."}]}`。**不带命中计数**：为每条候选再算一次 `COUNT` 会把「一次轻量查询」变回多次聚合。
+- **顺序**：仓库名候选优先占位（更短、且用户常拿它做 `repo:` 限定），剩余名额给包名候选；两类合计不超过 `limit`，跨类去重。整体按「候选值长度（rune 数）升序 → 字典序升序」稳定排序，不依赖索引回表顺序。
+- **权限**：候选只落在「public ∪ 主体被授 `read`」的仓库内（管理员搜全部），无 `read` 权限的仓库**连名字都不出现**。允许集合为空时返回 **200 + 空 `items`**，**绝不 403**——403 会把「这里存在一个你看不到的仓库」当作信号泄漏出去。
+- `value` 的形态：npm 即包名（`@scope/pkg` / `pkg`）；Maven 取 artifact（`group:artifact` 里的 `:` 之后部分，因为带 `:` 的坐标当关键词搜索是 0 命中）；解析不出坐标的（`raw` 等）不产出包名候选——它们的「包」维度就是仓库名，已由第一类候选覆盖。**对外只承诺「字符串候选」，不承诺抽取算法**。
+- 错误码与搜索一致：401（匿名访问关闭）/ 504 `search_timeout`。
+
+#### `GET /api/v1/search/index`
+
+**仅管理员**（未登录 401、非管理员 403），索引回填状态与一致性自检快照。只读、不触发任何后台动作、不写审计。
+
+> **该端点不得被前端轮询。** 每次调用要在 `asset` 与 FTS 影子表上各做一次全表计数，成本与表大小线性相关（百万级 `asset` 上是秒级开销），且刻意**不加缓存**——缓存会把刚发生的漂移在窗口内报成正常。调用场景限定为运维手动查询。
+
+响应九个字段：
+
+- `ready`：索引**可用于加速搜索**——回填已完成（`completed_at` 非空）**且没有漏索引**（`missingRows == 0`）。这是给运维看的结论位，**不是查询路径的开关**，两者差异见下。注意**孤儿索引行不会让 `ready` 转 false**（它不丢结果），所以不能只看 `ready` 判断索引是否干净，要看 `missingRows` / `orphanRows`。
+- `indexed`：已回填行数，按 `last_id` 水位回 `asset` 真源计数（`COUNT(*) WHERE id <= last_id`），与 `total` 同源同口径，两者的差就是剩余量。
+- `total`：回填开始时的 `asset` 行数**快照**，只用于进度展示与一致性校验，不参与正确性判定。
+- `lastId`：水位（已回填到的最大 `asset.id`），`0` 表示尚未开始。
+- `updatedAt`：状态行最后一次变更时刻，用于判断「回填是否还在推进」（不再变化 = 卡住或已结束）。
+- `indexedRows`：**索引里真实存在的文档数**（读 FTS5 的 `docsize` 影子表）。与 `indexed` 不是同一口径：后者是「水位以内的资产行数」。
+- `assetRows`：`asset` 真源当前行数。
+- `missingRows`：**漏索引**的行数——`asset` 里有、索引里没有。**这是危险方向**（这些制品搜不到），`ready` 只因数它转 false，监控要盯的就是这个字段。
+- `orphanRows`：**孤儿索引行**的行数——索引里有、`asset` 已不存在。仓库删除经级联带走 `asset` 行时天然产生，只浪费索引空间、不丢结果，因此不影响 `ready`。
+
+**为什么两个方向必须分开报**：合成一个差额（`indexedRows - assetRows`）时，「漏 k 行 + 孤儿 k 行」恰好抵消成 0；而且任何删过仓库的实例都会带着孤儿行让差额恒为正——无论按差额还是按「差额非 0」告警，第一次删仓库之后告警就永久在响，真正的漏索引信号被埋在噪音里。四个数字放在同一条 SQL 里取，保证属于同一时刻。
+
+**`ready` 的语义与它覆盖不到的地方（重要）**：`ready=false` 有两种成因，处置完全不同——① **回填未完成**：搜索整体走既有 `LIKE` 路径，结果正确但没有提速，等它跑完即可；② **发现漏索引**（`missingRows > 0`）：此时索引**仍然被查询路径使用**（查询路径的就绪判定只看 `completed_at`，不看漂移），因此搜索**可能少返回行**，而状态端点不会自己变好——**必须重建（`POST /api/v1/search/index/rebuild`）才能恢复**。这正是要额外报漂移的原因：索引正确性依赖「所有 `asset` 写入必经仓储层」的约定，而回填只跑一次，一旦出现旁路写入（运维脚本、手工 SQL、未来的迁移），漂移就是**永久静默**的——端点若只报进度，用户唯一能感知到的就是「某些制品搜不到」。
+
+**已知盲区（如实登记）**：这四个数字一致**不等于**索引内容正确。若某条 `asset` 行的 `path` 被就地 `UPDATE`，external content 表不会重建该行索引，行数与 rowid 集合却完全一致，于是端点报「无漂移」，而**新名字搜不到、旧名字还能搜到**。现任写入路径不产生这种 `UPDATE`（冲突键就是 `path`，改名走「插新行 + 删旧行」、`rowid` 随之改变），但运维脚本或手工 SQL 可以——那种情况下唯一手段是全量重建。
+
+索引服务未装配时返回 **503 `unavailable`**（兼容分支，生产装配恒为已接线）。
+
+#### `POST /api/v1/search/index/rebuild`
+
+**仅管理员**，受理一次全量重建。
+
+- **202 + `{"accepted": true}` 只表示已受理**：清空索引 → 水位归零（`completed_at=NULL, last_id=0`）→ 后台分批重灌全部在服务内异步进行。进度看 `GET /api/v1/search/index` 的 `indexed` / `total` / `updatedAt`，但**请人工偶尔查一次，不要做成自动轮询**——那个端点每次都要全表计数（见上）。重建本身不需要盯：完成后 `ready` 转 true，未完成期间搜索走降级路径、结果仍然正确。
+- 已有回填或重建在跑时返回 **409 `job_running`**（对齐维护作业手动触发的既有口径），不排队、不并发重入。
+- **重建全程在线**：清空后 `completed_at=NULL`，搜索自动退回降级路径，正确性不受影响；代价只是重建期间搜索变慢。
+- 不提供「按 id 区间局部修补」：漂移范围不可知，全量重建更简单也更可信。
+- 未登录 401、非管理员 403；索引服务未装配 503 `unavailable`。
+
+错误码小结：**504 `search_timeout`** 是搜索链路的专属超时码（不是 500），见上；`GET /api/v1/search` 关键词为空 **400 `bad_request`**；搜索与 suggest 在匿名访问关闭时对匿名为 **401**。
 
 ### 用户组与授权主体（FR-36）
 

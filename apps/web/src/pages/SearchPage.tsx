@@ -11,7 +11,6 @@ import {
   Code,
   Collapse,
   Group,
-  Pagination,
   Paper,
   Popover,
   Select,
@@ -23,6 +22,7 @@ import {
 import { useLocalStorage, useMediaQuery } from "@mantine/hooks";
 import {
   IconAlertTriangle,
+  IconArrowLeft,
   IconChevronDown,
   IconChevronUp,
   IconFilter,
@@ -30,7 +30,7 @@ import {
   IconSearch,
 } from "@tabler/icons-react";
 import { ErrorState, ForbiddenState } from "@jianartifact/ui";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
@@ -40,7 +40,12 @@ import { PackageSearchTree } from "../components/search/PackageSearchTree";
 import { SearchDetailPanel } from "../components/search/SearchDetailPanel";
 import { SearchProgress } from "../components/search/SearchProgress";
 import { SearchSuggestInput } from "../components/search/SearchSuggestInput";
-import { searchAssets, type SearchPackage, type SearchPackageFile } from "../api/endpoints";
+import {
+  searchAssets,
+  type SearchPackage,
+  type SearchPackageFile,
+  type SearchResult,
+} from "../api/endpoints";
 import { ApiError } from "../api/client";
 import { useAsync } from "../hooks/useAsync";
 import {
@@ -66,7 +71,6 @@ import {
 } from "../lib/searchQuery";
 import { currentLocaleTag } from "../i18n/current";
 
-const PAGE_SIZE = 50;
 const FORMAT_OPTIONS = ["maven", "raw", "npm"];
 
 /** 本页唯一的窄屏断点：820px（规格 §3.10 要求同页不并存两套断点）。 */
@@ -89,6 +93,12 @@ function isTimeoutError(error: ApiError): boolean {
 interface SortPreference {
   by: SortKey;
   order: SortOrder;
+}
+
+/** 一次搜索的取数结果 + 它所属的关键词（用于判定当前展示结果是否已切到新口径）。 */
+interface SearchPayload {
+  query: string;
+  result: SearchResult;
 }
 
 /** 排序偏好持久化键：沿用全站 `jianartifact.*` 前缀（见 i18n/language.ts、usePinnedRepos.ts）。 */
@@ -141,7 +151,6 @@ export function SearchPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const q = searchParams.get("q") ?? "";
-  const [page, setPage] = useState(1);
   const [input, setInput] = useState(q);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const isNarrow = useMediaQuery(NARROW_QUERY) ?? false;
@@ -152,47 +161,57 @@ export function SearchPage() {
     getInitialValueInEffect: false,
   });
   const { by: sortBy, order: sortOrder } = sanitizeSort(sortPref);
-  // 排序变化回到第一页：文件级分页与包级聚合无关，但口径变了就不该停在旧页。
+  // 排序口径的稳定标识：用于判定「排序是否真的变了」，避免把同一次渲染里的对象重建当成变化。
+  const sortToken = `${sortBy}:${sortOrder}`;
+  // 排序是纯前端重排，不发请求；主从视图的重置由下面的排序世代 effect 负责。
   const changeSort = (value: string | null) => {
     const next = isSortKey(value) ? value : "relevance";
     setSortPref({ by: next, order: defaultOrderFor(next) });
-    setPage(1);
   };
 
-  // URL 的 q 变化（如 Header 搜索栏跳转）时同步输入框并回到第一页
+  // URL 的 q 变化（如 Header 搜索栏跳转）时同步输入框
   useEffect(() => {
     setInput(q);
-    setPage(1);
   }, [q]);
 
   // 取数口径固定为「包级聚合 + 相关度」：其余排序键全部在前端重排（规格 §3.9），
   // 因此切换排序不触发请求，也就不用进依赖数组。
   //
+  // 不带 page / page_size：包级聚合**没有分页**——后端聚合每次扫描固定的候选预算
+  // （不受 limit 影响），`total` 是 COUNT(*) 的精确文件数，而 `items` 只是同一段 WHERE
+  // 下的文件级切片。本页只消费 packages / packageTotal / aggregation / facets / total，
+  // 从不渲染 items，请求分页既换不出新内容，又会多打一次全量聚合。要文件级分页就得有
+  // 文件级视图，那是另一套口径，不在本页。
+  //
+  // 返回值把「这份数据属于哪个关键词」一并带上：主从视图的重置要靠它判断当前展示的是
+  // 新口径的结果还是 keepPreviousData 暂留的旧结果（见下面重置 effect）。
+  //
   // abortable：把 signal 透传到 searchAssets → api/client → fetch。新一次搜索发起前
-  // （q / page 变化或点「取消搜索」）都会真的中止上一次请求，而不是只靠 active 标志丢弃响应。
+  // （q 变化或点「取消搜索」）都会真的中止上一次请求，而不是只靠 active 标志丢弃响应。
   // 这里选择给 useAsync 加一个可选开关，而不是让本页自管请求状态：缓存回放、keepPreviousData、
   // 刷新失败非阻断、reload 重试这些语义本页都在用，自管等于复制一份并迟早与全局口径漂移。
-  const state = useAsync(
+  const state = useAsync<SearchPayload>(
     (signal: AbortSignal | undefined) =>
       q
-        ? searchAssets({
-            q,
-            group_by: "package",
-            order: "relevance",
-            page,
-            page_size: PAGE_SIZE,
-            signal,
-          })
-        : Promise.resolve({ items: [], total: 0, facets: [] }),
-    [q, page],
-    // keepPreviousData：换排序 / 翻页时保留旧结果、仅后台刷新，避免整块内容被骨架替换。
-    { cacheKey: `search:package:${q}:${page}`, keepPreviousData: true, abortable: true },
+        ? searchAssets({ q, group_by: "package", order: "relevance", signal }).then((result) => ({
+            query: q,
+            result,
+          }))
+        : Promise.resolve<SearchPayload>({
+            query: q,
+            result: { items: [], total: 0, facets: [] },
+          }),
+    [q],
+    // keepPreviousData：换关键词 / 后台刷新时保留旧结果、仅后台刷新，避免整块内容被骨架替换。
+    { cacheKey: `search:package:${q}`, keepPreviousData: true, abortable: true },
   );
 
-  // 「搜索进行中」：首载（骨架屏）与换排序 / 翻页的后台刷新都算，二者共用同一条进度条。
+  // 「搜索进行中」：首载（骨架屏）与换关键词 / 后台刷新都算，二者共用同一条进度条。
   const searching = state.loading || state.refreshing;
 
-  const totalPages = Math.ceil((state.data?.total ?? 0) / PAGE_SIZE);
+  // 当前展示的数据及其所属关键词：keepPreviousData 期间 result 仍是上一口径的，query 也是。
+  const dataQuery = state.data?.query ?? null;
+  const result = state.data?.result ?? null;
 
   // 筛选面板与输入框双向同步：面板改动即重拼表达式写回输入框
   const expr = useMemo(() => parseSearchExpression(input), [input]);
@@ -219,7 +238,6 @@ export function SearchPage() {
       return;
     }
     navigate(`/search?q=${encodeURIComponent(next)}`);
-    setPage(1);
   };
 
   // 仓库名候选的确认语义（规格 §3.9）：复用既有的表达式拼装写回输入框，**不立即搜索**——
@@ -238,7 +256,7 @@ export function SearchPage() {
     }
   };
 
-  const facets = state.data?.facets ?? [];
+  const facets = result?.facets ?? [];
   const facetTotal = facets.reduce((sum, f) => sum + f.count, 0);
 
   const openRepo = useCallback(
@@ -253,10 +271,10 @@ export function SearchPage() {
   // 高亮关键词：只用正向关键词（排除词不该高亮），且不区分大小写匹配。
   const keywords = useMemo(() => activeQ.terms, [activeQ]);
 
-  // 包数组必须稳定引用：`state.data?.packages ?? []` 会在数据未就绪时每次渲染都造一个新空数组，
+  // 包数组必须稳定引用：`result?.packages ?? []` 会在数据未就绪时每次渲染都造一个新空数组，
   // 让下游 useMemo（重排）与默认展开 effect 的依赖永远"在变"，进而 setState → 重渲染 → 再变，
-  // 形成无限渲染循环。这里按数据对象本身缓存兜底空数组。
-  const packages = useMemo(() => state.data?.packages ?? [], [state.data]);
+  // 形成无限渲染循环。这里按结果对象本身缓存兜底空数组。
+  const packages = useMemo(() => result?.packages ?? [], [result]);
   const sortedPackages = useMemo(
     () => sortPackages(packages, sortBy, sortOrder),
     [packages, sortBy, sortOrder],
@@ -266,11 +284,30 @@ export function SearchPage() {
   const [view, setView] = useState<SearchViewState>(() => initialViewState([]));
   const [detailOpen, setDetailOpen] = useState(false);
 
-  // 数据 / 排序变化后重新套用默认展开与选中（规格 §3.9）；
-  // 同一次数据内的手动展开与选中不会被这个 effect 覆盖（它只随 sortedPackages 变化触发）。
+  // 默认展开与选中的重置口径：**只在关键词或排序换代时**重算（规格 §3.9）。
+  // 同一口径下的重新取数（页眉刷新、失败后重试、缓存回放后的重拉）一律不动用户的展开态与
+  // 选中项——数据对象换代不等于浏览意图失效，每来一份新 data 就套一次默认值，只会让人刚
+  // 翻开的包被折叠、选中项跳回第一个包。
+  //
+  // 判定「换代」而不是「数据对象变了」：keepPreviousData 期间 state.data 会先换成旧口径的
+  // 结果再换成新口径的，靠对象身份判断会在切换途中误重置。payload 自带所属关键词，
+  // `dataQuery === q` 才是「这份结果已经属于当前口径」。
+  const resultReady = dataQuery === q;
+  const viewScope = `${q}::${sortToken}`;
+  const appliedScopeRef = useRef<string | null>(null);
   useEffect(() => {
+    // 新口径的数据还没到（或当前口径本身无命中）：都不算「已套用默认视图」。
+    // 尤其不能在这种情况下记录口径——否则紧接着的那次成功（重试、放宽关键词）会被判成
+    // 同口径刷新而跳过默认展开与选中，界面停在一棵没有展开项的树。
+    if (!resultReady || sortedPackages.length === 0) {
+      return;
+    }
+    if (appliedScopeRef.current === viewScope) {
+      return;
+    }
+    appliedScopeRef.current = viewScope;
     setView(initialViewState(sortedPackages));
-  }, [sortedPackages]);
+  }, [resultReady, sortedPackages, viewScope]);
 
   // 跨过断点回宽屏时收起单栏详情：双栏下右栏恒可见，详情态没有意义。
   useEffect(() => {
@@ -389,10 +426,10 @@ export function SearchPage() {
   };
 
   const hasResult = packages.length > 0;
-  const truncated = state.data?.aggregation?.truncated ?? false;
-  const scanned = state.data?.aggregation?.scanned ?? 0;
-  const packageTotal = state.data?.packageTotal ?? 0;
-  const totalFiles = state.data?.total ?? 0;
+  const truncated = result?.aggregation?.truncated ?? false;
+  const scanned = result?.aggregation?.scanned ?? 0;
+  const packageTotal = result?.packageTotal ?? 0;
+  const totalFiles = result?.total ?? 0;
 
   // 结果区（四态只替换这一块，搜索框与 facet 条始终在）：
   // 无权 / 失败 / 首载骨架 / 空结果 / 双栏。
@@ -515,11 +552,6 @@ export function SearchPage() {
             onSelectVersion={selectVersion}
             onSelectFile={selectFile}
           />
-          {totalPages > 1 && (
-            <Group justify="center" mt="sm">
-              <Pagination value={page} onChange={setPage} total={totalPages} size="sm" />
-            </Group>
-          )}
         </Box>
 
         {/* 右栏：选中文件详情。窄屏未进详情时隐藏但不卸载。
@@ -538,7 +570,21 @@ export function SearchPage() {
               }
             />
           ) : (
-            <Stack align="center" gap={4} py="xl">
+            <Stack gap={8} py="xl" align="center">
+              {/* 选中项失效（结果刷新后原文件已不在集合里）时右栏照常渲染，因此这里必须自带
+                  返回入口：否则窄屏下左栏被隐藏、详情面板又不渲染，返回按钮随面板一起消失，
+                  用户只剩刷新页面这一条出路。 */}
+              {isNarrow && (
+                <Button
+                  variant="subtle"
+                  size="compact-sm"
+                  leftSection={<IconArrowLeft size={14} />}
+                  onClick={closeDetail}
+                  aria-label={t("search.backToResults")}
+                >
+                  {t("search.backToResults")}
+                </Button>
+              )}
               <Text c="dimmed" size="sm">
                 {t("search.selectFileHint")}
               </Text>

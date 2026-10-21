@@ -352,14 +352,16 @@ func TestCountStarOnExternalContentCountsContentRows(t *testing.T) {
 	}
 }
 
-// TestMeasureDriftDetectsMissingAndOrphanEntries 钉住漂移原语的两个方向，以及「为什么数
+// TestMeasureDriftDetectsMissingAndOrphanEntries 钉住漂移原语的三个口径，以及「为什么数
 // docsize 影子表」这条实测结论：
 //
-//   - 漏索引（资产行在、索引里没有）→ 负差额。这是 completed_at 置位之后任何旁路写入
-//     （运维脚本 / 手工 SQL / 未来迁移）留下的**永久静默**状态：回填不会再跑，用户只看到
-//     「某些制品搜不到」，所以必须能被动观察；
-//   - 孤儿索引行（资产行已删、条目残留）→ 正差额，来自仓库级联删除；
-//   - 两者一致 → 无漂移。
+//   - 漏索引（资产行在、索引里没有）→ MissingRows > 0。这是 completed_at 置位之后任何旁路
+//     写入（运维脚本 / 手工 SQL / 未来迁移）留下的**永久静默**状态：回填不会再跑，用户只
+//     看到「某些制品搜不到」，所以必须能被动观察；
+//   - 孤儿索引行（资产行已删、条目残留）→ OrphanRows > 0，来自仓库级联删除；
+//   - 两者一致 → 两个计数都为 0；
+//   - **两个方向分开计数**：漏 k 行 + 孤儿 k 行时，旧的单差额口径恰好抵消为 0，会把漏索引
+//     藏起来；本用例专门固定这个反例。
 //
 // 计数手段的选择依据见 MeasureDrift 的注释；本用例顺带把「asset_path_fts_data 不等于文档数」
 // 现场再证一次，防止后来者把它当成行数来源。
@@ -377,8 +379,9 @@ func TestMeasureDriftDetectsMissingAndOrphanEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("取漂移快照：%v", err)
 	}
-	if drift.IndexRows != 0 || drift.AssetRows != 3 || drift.Delta() != -3 || !drift.Drifted() {
-		t.Fatalf("空索引时应报 3 行缺失，实际 %+v（差额 %d）", drift, drift.Delta())
+	if drift.IndexRows != 0 || drift.AssetRows != 3 || drift.MissingRows != 3 ||
+		drift.OrphanRows != 0 || !drift.HasMissing() {
+		t.Fatalf("空索引时应报 3 行缺失，实际 %+v", drift)
 	}
 	// 同一时刻 asset_path_fts_data 已经有结构段行：它不是文档数，不能作为行数来源。
 	var dataRows int64
@@ -399,8 +402,9 @@ func TestMeasureDriftDetectsMissingAndOrphanEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("取漂移快照：%v", err)
 	}
-	if drift.IndexRows != 2 || drift.AssetRows != 3 || drift.Delta() != -1 || !drift.Drifted() {
-		t.Fatalf("漏掉一行时应报差额 -1，实际 %+v（差额 %d）", drift, drift.Delta())
+	if drift.IndexRows != 2 || drift.AssetRows != 3 || drift.MissingRows != 1 ||
+		drift.OrphanRows != 0 || !drift.HasMissing() {
+		t.Fatalf("漏掉一行时应报 MissingRows=1，实际 %+v", drift)
 	}
 
 	// 补上漏掉的那一行：漂移归零。
@@ -412,11 +416,11 @@ func TestMeasureDriftDetectsMissingAndOrphanEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("取漂移快照：%v", err)
 	}
-	if drift.Drifted() || drift.Delta() != 0 || drift.IndexRows != 3 || drift.AssetRows != 3 {
-		t.Fatalf("索引与资产一致时不应报漂移，实际 %+v（差额 %d）", drift, drift.Delta())
+	if drift.HasMissing() || drift.OrphanRows != 0 || drift.IndexRows != 3 || drift.AssetRows != 3 {
+		t.Fatalf("索引与资产一致时不应报漂移，实际 %+v", drift)
 	}
 
-	// 反方向：直接删 asset 行、留下索引行（仓库级联删除的形状）→ 正差额。
+	// 反方向：直接删 asset 行、留下索引行（仓库级联删除的形状）→ 孤儿计数。
 	if _, err := db.Exec(`DELETE FROM asset WHERE path = 'drift/b-2.0.0.jar'`); err != nil {
 		t.Fatalf("删内容行制造孤儿：%v", err)
 	}
@@ -424,7 +428,26 @@ func TestMeasureDriftDetectsMissingAndOrphanEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("取漂移快照：%v", err)
 	}
-	if drift.IndexRows != 3 || drift.AssetRows != 2 || drift.Delta() != 1 || !drift.Drifted() {
-		t.Fatalf("孤儿索引行应报差额 +1，实际 %+v（差额 %d）", drift, drift.Delta())
+	if drift.IndexRows != 3 || drift.AssetRows != 2 || drift.OrphanRows != 1 ||
+		drift.MissingRows != 0 || drift.HasMissing() {
+		t.Fatalf("孤儿索引行应报 OrphanRows=1，实际 %+v", drift)
+	}
+
+	// 正负抵消：再漏掉一条资产行（drift/a），同时保留一条孤儿 → 索引 3 行、资产 2 行，
+	// 若只看总数差额会得到 0，旧口径因此完全看不见漏索引。分开计数后 MissingRows=1、
+	// OrphanRows=1 各自成立。
+	if _, err := db.Exec(`DELETE FROM asset_path_fts WHERE rowid = (
+		SELECT id FROM asset WHERE path = 'drift/a-1.0.0.jar')`); err != nil {
+		t.Fatalf("删一条索引条目制造漏索引：%v", err)
+	}
+	drift, err = repo.MeasureDrift()
+	if err != nil {
+		t.Fatalf("取漂移快照：%v", err)
+	}
+	if drift.IndexRows != 2 || drift.AssetRows != 2 || drift.MissingRows != 1 || drift.OrphanRows != 1 {
+		t.Fatalf("漏索引与孤儿行同时存在时应分别计数（1/1），实际 %+v", drift)
+	}
+	if !drift.HasMissing() {
+		t.Fatalf("正负抵消时仍必须报告漏索引，实际 %+v", drift)
 	}
 }

@@ -55,22 +55,41 @@ function escapeRegExp(value: string): string {
 }
 
 /**
- * 按关键词切分文本为「前置 / 命中 / 后置」片段（大小写不敏感，但保留原文大小写）。
+ * 按关键词预编译高亮正则。
+ *
+ * 高亮是按行切分的：一个大包展开后可能有数千个文件行，若每行都现编译一次
+ * `new RegExp(...)`，就会平白构造数千个等价正则。把编译结果提到「关键词集合」这一层，
+ * 同一批关键词的全部分片共享一个正则；关键词不变时调用方还能用 memo 复用同一个实例。
+ *
+ * 返回 null 表示无需高亮（无关键词 / 全是空白）。正则带 `g` 标志，供 `matchAll` 使用；
+ * `matchAll` 内部会克隆正则，不会改动这里实例的 `lastIndex`，因此可安全跨行复用。
+ */
+export function compileHighlightPattern(keywords: readonly string[]): RegExp | null {
+  const keys = [
+    ...new Set(keywords.map((keyword) => keyword.trim()).filter((keyword) => keyword.length > 0)),
+  ];
+  if (keys.length === 0) {
+    return null;
+  }
+  // 长词优先，让 `1.17.12` 整体命中而不是被短词 `1.17` 先切碎。
+  keys.sort((a, b) => b.length - a.length);
+  return new RegExp(keys.map(escapeRegExp).join("|"), "giu");
+}
+
+/**
+ * 用预编译正则把文本切成「前置 / 命中 / 后置」片段（大小写不敏感，保留原文大小写）。
  *
  * 多个关键词各自高亮；重叠命中（如同时搜 `1.17` 与 `1.17.12`）合并为一段，
  * 避免同一段文字被嵌套渲染成两层 `<mark>`。无命中时返回整段单个片段，
  * 调用方无需为"有没有高亮"写两套渲染分支。
  */
-export function splitHighlight(text: string, keywords: readonly string[]): HighlightSegment[] {
-  const keys = [
-    ...new Set(keywords.map((keyword) => keyword.trim()).filter((keyword) => keyword.length > 0)),
-  ];
-  if (!text || keys.length === 0) {
+export function splitHighlightWithPattern(
+  text: string,
+  pattern: RegExp | null,
+): HighlightSegment[] {
+  if (!text || pattern === null) {
     return [{ text, hit: false }];
   }
-  // 长词优先，让 `1.17.12` 整体命中而不是被短词 `1.17` 先切碎。
-  keys.sort((a, b) => b.length - a.length);
-  const pattern = new RegExp(keys.map(escapeRegExp).join("|"), "giu");
   const ranges: [number, number][] = [];
   for (const match of text.matchAll(pattern)) {
     const start = match.index ?? 0;
@@ -102,6 +121,16 @@ export function splitHighlight(text: string, keywords: readonly string[]): Highl
     segments.push({ text: text.slice(cursor), hit: false });
   }
   return segments;
+}
+
+/**
+ * 按关键词切分文本为「前置 / 命中 / 后置」片段。
+ *
+ * 单次调用入口：内部现编译正则。适合只切一两段文本的场景；同一批关键词要切很多行时，
+ * 改用 `compileHighlightPattern` + `splitHighlightWithPattern`，避免逐行重复编译。
+ */
+export function splitHighlight(text: string, keywords: readonly string[]): HighlightSegment[] {
+  return splitHighlightWithPattern(text, compileHighlightPattern(keywords));
 }
 
 /**

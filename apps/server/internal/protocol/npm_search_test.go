@@ -34,6 +34,7 @@ type npmSearchEnv struct {
 	engine  *gin.Engine
 	assets  *domain.AssetService
 	repos   *repository.RepoRepo
+	repoSvc *domain.RepositoryService
 	counter *int64
 }
 
@@ -57,7 +58,7 @@ func newNpmSearchEnv(t *testing.T) *npmSearchEnv {
 		domain.NewSettingService(repository.NewSettingRepo(db)), repository.NewUserRepo(db))
 	engine := gin.New()
 	RegisterNpmRoutes(engine, NewNpmHandler(NewRawHandler(assetSvc, repoSvc), nil, nil, ""))
-	return &npmSearchEnv{engine: engine, assets: assetSvc, repos: repos, counter: counter}
+	return &npmSearchEnv{engine: engine, assets: assetSvc, repos: repos, repoSvc: repoSvc, counter: counter}
 }
 
 // publishPackument 直接写入一份 packument（路径即包名，内容为最小可解析文档）。
