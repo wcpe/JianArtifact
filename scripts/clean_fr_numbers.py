@@ -23,7 +23,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 INCLUDE_SUFFIXES = {".go", ".ts", ".tsx", ".js", ".mjs", ".sql", ".css", ".json", ".yaml", ".yml"}
-SEARCH_DIRS = ["apps", "packages", "scripts"]
+SEARCH_DIRS = ["apps", "packages", "scripts", "api"]
 SKIP_DIRS = {"node_modules", "dist", "build", ".git", "vendor", ".tmp", "coverage", "__pycache__"}
 
 # 完整编号 token：FR-NN、FR-NN 追加七、FR-NN §3.4、FR-25c 变体。

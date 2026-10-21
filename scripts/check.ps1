@@ -30,6 +30,10 @@ foreach ($tool in @("pnpm", "go", "gofmt", "golangci-lint")) {
   Require-Command $tool
 }
 
+# 放在最前：只读文件、耗时极短，让违规在跑完几分钟测试之前就暴露。
+# 规则见 .claude/rules/comments.md §5。
+Invoke-Checked "规范门禁：需求编号不得进入代码" { bash ./scripts/check-fr-numbers.sh }
+
 Invoke-Checked "安装前端依赖" { pnpm install --frozen-lockfile }
 Invoke-Checked "前端格式检查" { pnpm format:check }
 Invoke-Checked "前端静态检查" { pnpm lint }

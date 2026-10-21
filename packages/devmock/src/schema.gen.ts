@@ -1730,7 +1730,7 @@ export interface paths {
          * 拼装归档并存入备份列表（仅管理员）
          * @description 校验分片齐全后按序拼成归档、核对摘要，再**收进备份列表**（搬运到备份目录 + 建立登记行）。
          *
-         *     自 起不再直接发起恢复：上传只入库，恢复是之后的独立动作，
+         *     目前不再直接发起恢复：上传只入库，恢复是之后的独立动作，
          *     用户可以先校验再决定是否恢复。因此本端点不写 restore.pending、不产生导入记录，
          *     同步返回 `status=done` 的回执，不再需要轮询。
          *
@@ -1879,7 +1879,7 @@ export interface components {
             standbyReport?: components["schemas"]["StandbySyncReport"];
         };
         /**
-         * @description：primary 经现有复制互信通道（仅 GET 拉取）收到的备用节点观测快照聚合。
+         * @description 主备同步投影：primary 经现有复制互信通道（仅 GET 拉取）收到的备用节点观测快照聚合。
          *     仅 role=primary 且至少收到一次上报时返回；不含凭据、令牌、环境变量或对端地址。
          */
         StandbySyncReport: {
