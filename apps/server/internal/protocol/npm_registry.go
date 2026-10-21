@@ -13,6 +13,7 @@ package protocol
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -299,11 +300,15 @@ func (h *NpmHandler) unpublishPackage(c *gin.Context, repoName, pkg string) {
 // registrySearch 处理 `npm search`（GET /-/v1/search?text=&size=&from=）：
 // 在本仓（group 则各成员）packument 中按路径子串检索，组装 npm 标准响应。
 //
-// 成员聚合由**一条语句**完成（的放大修复）：原实现对每个成员循环调用完整的
-// SearchAssets——成员越多越慢（每个成员各跑 COUNT + 分页 SELECT + facet 聚合，还要再算一遍
-// 可搜范围与仓库名映射），且每次都把 `from+size` 行拉回内存再去重。现在把成员仓库 ID 集合
-// 交给 SearchPerRepoByFilter，由 SQL 按成员分别取前 `from+size` 条（窗口函数），Go 侧只做
-// 去重与 packument 解析。
+// 成员聚合的**正常路径**是一条语句：原实现对每个成员循环调用完整的 SearchAssets——成员越多
+// 越慢（每个成员各跑 COUNT + 分页 SELECT + facet 聚合，还要再算一遍可搜范围与仓库名映射），
+// 且每次都把 `from+size` 行拉回内存再去重。现在把成员仓库 ID 集合交给 SearchPerRepoByFilter，
+// 由 SQL 按成员分别取前 `from+size` 条（窗口函数），Go 侧只做去重与 packument 解析。
+//
+// 但合并查询**不能是唯一路径**：单条语句只共享一份搜索预算，成员多、库大的 group 上容易整体
+// 超时，而整次降级为空结果会让 `npm search` 从「个别成员没有结果」退化到 `total: 0`——那是
+// 用户可感知的可用性倒退。因此合并查询失败时回退到逐成员搜索（见 npmSearchCandidates）：
+// 每个成员各有一份独立预算，失败的那个按既有容错口径跳过、其余成员结果照常返回。
 //
 // 语义与响应结构保持不变：仍按成员顺序遍历、仍按 asset.path 去重、仍跳过非 packument、
 // `total` 仍是「去重且可解析的条目数」。
@@ -324,58 +329,25 @@ func (h *NpmHandler) registrySearch(c *gin.Context, repoName string) {
 		writeAssetErr(c, err)
 		return
 	}
-	members := []string{repoName}
+	// 非 group：当前仓库就是唯一成员，直接用刚读到的元数据，省掉一次批量名字解析。
+	resolved := []npmSearchMember{{name: repo.Name, id: repo.ID}}
 	if repo.Type == "group" {
 		cfg, cerr := repo.DecodeConfig()
 		if cerr != nil {
 			writeAssetErr(c, cerr)
 			return
 		}
-		members = cfg.Members
-	}
-	// 成员名解析为仓库（含别名）：一次批量解析，避免逐个成员往返。
-	// 成员不存在就跳过（既有实现同样只是「这个成员搜不到东西」，静默跳过不改口径）。
-	type npmSearchMember struct {
-		name string // 主名：用于读取 packument
-		id   int64
-	}
-	byName, err := h.repoSvc.ReposByNames(members)
-	if err != nil {
-		writeAssetErr(c, err)
-		return
-	}
-	resolved := make([]npmSearchMember, 0, len(members))
-	seenMember := make(map[int64]bool, len(members))
-	memberIDs := make([]int64, 0, len(members))
-	for _, name := range members {
-		m, ok := byName[name]
-		if !ok || seenMember[m.ID] {
-			continue
+		resolved, err = h.npmSearchMembers(cfg.Members)
+		if err != nil {
+			writeAssetErr(c, err)
+			return
 		}
-		seenMember[m.ID] = true
-		memberIDs = append(memberIDs, m.ID)
-		resolved = append(resolved, npmSearchMember{name: m.Name, id: m.ID})
 	}
-	// 排除 tarball 路径（含 /-/），仅命中 packument（路径即包名）。
-	keyword := text + ` -"/-"`
-	assets, serr := h.repoSvc.SearchAssetsPerRepo(c.Request.Context(), keyword, memberIDs, from+size)
-	if serr != nil {
-		// 既有容错口径：搜索失败不让整个请求失败（响应结构不变，返回已得结果）。
-		// 超时单独记一条中文 warn，避免「静默少结果」完全无痕。
-		if errors.Is(serr, domain.ErrSearchTimeout) {
-			log.Printf("npm 搜索超时：仓库 %s 的成员检索超过搜索超时上限 %s，按既有容错口径降级为空结果：%v",
-				repoName, h.repoSvc.SearchTimeout(), serr)
-		} else {
-			log.Printf("npm 搜索失败：仓库 %s 的成员检索出错，按既有容错口径降级为空结果：%v", repoName, serr)
-		}
-		assets = nil
-	}
-	// 还原「逐成员搜索」的先后：先按 repository_id 分组，再按成员顺序遍历。
-	// 组内已是 path 升序（SQL 的 ORDER BY），因此结果顺序与成员循环时一致。
-	byRepo := make(map[int64][]repository.Asset, len(resolved))
-	for _, a := range assets {
-		byRepo[a.RepositoryID] = append(byRepo[a.RepositoryID], a)
-	}
+	// 排除 tarball 路径（含 `/-/`），仅命中 packument（路径即包名）。
+	// 必须用完整的 `/-/` 标记：包名本身允许含 `-`（如 `@scope/-weird`），把条件放宽成
+	// `/-` 会连这类合法 packument 一起排除。
+	keyword := text + ` -"/-/"`
+	byRepo := h.npmSearchCandidates(c.Request.Context(), repoName, resolved, keyword, from+size)
 	objects := make([]any, 0, size)
 	seen := map[string]bool{}
 	total := 0
@@ -400,6 +372,119 @@ func (h *NpmHandler) registrySearch(c *gin.Context, repoName string) {
 		"total":   total,
 		"time":    time.Now().UTC().Format(http.TimeFormat),
 	})
+}
+
+// npmSearchMember 是一次 npm 搜索的聚合成员。
+type npmSearchMember struct {
+	name string // 主名（别名已解析）：用于读取 packument 与限定检索范围
+	id   int64  // 仓库 ID：用于把合并查询的行按成员分组
+}
+
+// npmSearchMembers 把 group 成员名批量解析为仓库（含别名），按配置顺序去重。
+//
+// 一次批量解析替代逐个 Get（后者每个成员两条查询）。成员不存在就跳过：这与既有口径一致
+// ——不存在的成员只是「这里搜不到东西」，不影响其余成员。
+func (h *NpmHandler) npmSearchMembers(names []string) ([]npmSearchMember, error) {
+	if len(names) == 0 {
+		return nil, nil
+	}
+	byName, err := h.repoSvc.ReposByNames(names)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]npmSearchMember, 0, len(names))
+	seen := make(map[int64]bool, len(names))
+	for _, name := range names {
+		m, ok := byName[name]
+		if !ok || seen[m.ID] {
+			continue
+		}
+		seen[m.ID] = true
+		out = append(out, npmSearchMember{name: m.Name, id: m.ID})
+	}
+	return out, nil
+}
+
+// npmSearchMerged / npmSearchMemberAssets 是 registrySearch 依赖的两个搜索原语。
+//
+// 声明成变量只为留一个测试缝：「合并查询超时、逐成员查询不超时」在真实数据库上无法稳定复现
+// （两条路径共用同一个驱动与同一份超时预算），没有注入点就覆盖不到回退分支。生产路径恒为
+// 下面这两份实现，测试替换后必须复原。
+var (
+	npmSearchMerged = func(svc *domain.RepositoryService, ctx context.Context, keyword string, repoIDs []int64, perRepoLimit int) ([]repository.Asset, error) {
+		return svc.SearchAssetsPerRepo(ctx, keyword, repoIDs, perRepoLimit)
+	}
+	npmSearchMemberAssets = func(svc *domain.RepositoryService, ctx context.Context, keyword, repoName string, limit int) ([]repository.Asset, error) {
+		// 仓库级 read 已由 authorize 判定，isAdmin=true 跳过二次 ACL；
+		// repoScope 限定单仓库保证不越权。
+		out, err := svc.SearchAssets(ctx, keyword, repoName, 0, true, "path", "asc", limit, 0)
+		if err != nil {
+			return nil, err
+		}
+		assets := make([]repository.Asset, 0, len(out.Items))
+		for _, item := range out.Items {
+			assets = append(assets, item.Asset)
+		}
+		return assets, nil
+	}
+)
+
+// npmSearchCandidates 取回各成员的候选 packument，返回「成员仓库 ID → 组内 path 升序制品」。
+//
+// 正常路径是一条合并查询（成本与成员数解耦）；**仅在该查询失败时**回退到逐成员搜索：
+// 每个成员各有一份独立预算，失败的那个跳过、其余成员照常返回，避免大 group 因整体超时退化
+// 为空结果。合并查询的结果在回退时整份丢弃，两条路径不会重复计数。
+func (h *NpmHandler) npmSearchCandidates(ctx context.Context, repoName string, members []npmSearchMember, keyword string, limit int) map[int64][]repository.Asset {
+	if len(members) == 0 {
+		return nil
+	}
+	ids := make([]int64, 0, len(members))
+	for _, m := range members {
+		ids = append(ids, m.id)
+	}
+	assets, err := npmSearchMerged(h.repoSvc, ctx, keyword, ids, limit)
+	if err == nil {
+		return npmAssetsByRepo(assets)
+	}
+	// 单成员没有「跳过该成员继续」的余地：回退与整体降级的结果同为「没有结果」，
+	// 重试只会把最坏耗时从一份预算翻成两份。
+	if len(members) == 1 {
+		logNpmSearchWarn("仓库 "+repoName+" 的合并检索", "降级为空结果", h.repoSvc.SearchTimeout(), err)
+		return nil
+	}
+	logNpmSearchWarn("仓库 "+repoName+" 的合并检索", "回退逐成员检索", h.repoSvc.SearchTimeout(), err)
+	byRepo := make(map[int64][]repository.Asset, len(members))
+	for _, m := range members {
+		rows, merr := npmSearchMemberAssets(h.repoSvc, ctx, keyword, m.name, limit)
+		if merr != nil {
+			// 既有容错口径：单个成员搜不到就换下一个，不让整个请求失败。
+			logNpmSearchWarn("仓库 "+repoName+" 的成员 "+m.name+" 检索", "跳过该成员继续", h.repoSvc.SearchTimeout(), merr)
+			continue
+		}
+		byRepo[m.id] = rows
+	}
+	return byRepo
+}
+
+// npmAssetsByRepo 把「按成员顺序 + 组内 path 升序」的行集按仓库分组，顺序原样保留。
+func npmAssetsByRepo(assets []repository.Asset) map[int64][]repository.Asset {
+	byRepo := make(map[int64][]repository.Asset, len(assets))
+	for _, a := range assets {
+		byRepo[a.RepositoryID] = append(byRepo[a.RepositoryID], a)
+	}
+	return byRepo
+}
+
+// logNpmSearchWarn 记一条中文 warn 日志：scope 说明出问题的检索范围，action 说明处置动作。
+//
+// 超时与其它故障分开描述：前者是预算不够（调搜索超时上限解决），后者是数据层故障，
+// 排查方向不同。日志不含制品路径。
+func logNpmSearchWarn(scope, action string, timeout time.Duration, err error) {
+	if errors.Is(err, domain.ErrSearchTimeout) {
+		log.Printf("npm 搜索超时（警告）：%s超过搜索超时上限 %s，%s：%v", scope, timeout, action, err)
+		return
+	}
+	log.Printf("npm 搜索失败（警告）：%s出错，%s：%v", scope, action, err)
 }
 
 // searchObject 读取 packument 提炼搜索条目；非 packument（解析失败/无 name）返回 nil。

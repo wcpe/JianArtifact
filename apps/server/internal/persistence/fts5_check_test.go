@@ -1,8 +1,11 @@
 package persistence
 
 import (
+	"context"
 	"strings"
 	"testing"
+
+	"github.com/jmoiron/sqlx"
 )
 
 // TestMigration0049BuildsSearchIndex 校验 0049 的两项结构要求：
@@ -119,5 +122,50 @@ func TestCheckFTS5SupportSucceeds(t *testing.T) {
 	}
 	if leftover != 0 {
 		t.Fatalf("自检不应在主库留下探测对象，实际 %d 个", leftover)
+	}
+}
+
+// TestFileMemoryProbeIsPerConnection 钉住 SetMaxOpenConns(1) 的理由：
+// `file::memory:` 是**每条连接一份**的独立空库，池里的第二条连接看不到第一条连接建的表。
+//
+// 自检要在同一张探测表上「建 → 写 → 查 → drop」，一旦池启用第二条连接，drop 就会因
+// "no such table" 失败，把「构建缺能力」误报成「自检失败」。若某天这里的行为变了（例如
+// 驱动改成共享缓存的内存库），说明 fts5_check.go 里的单连接上限可以重新评估。
+func TestFileMemoryProbeIsPerConnection(t *testing.T) {
+	probe, err := sqlx.Connect("sqlite", "file::memory:")
+	if err != nil {
+		t.Fatalf("打开内存库：%v", err)
+	}
+	t.Cleanup(func() { _ = probe.Close() })
+	probe.SetMaxOpenConns(2)
+	probe.SetMaxIdleConns(2)
+
+	ctx := context.Background()
+	first, err := probe.Conn(ctx) // 占住第一条连接
+	if err != nil {
+		t.Fatalf("取第一条连接：%v", err)
+	}
+	defer func() { _ = first.Close() }()
+	if _, err := first.ExecContext(ctx, `CREATE VIRTUAL TABLE fts_probe USING fts5(path)`); err != nil {
+		t.Fatalf("在第一条连接上建探测表：%v", err)
+	}
+
+	// 第二条连接（第一条被占住，池必须新开一条）：看不到第一条建的表。
+	second, err := probe.Conn(ctx)
+	if err != nil {
+		t.Fatalf("取第二条连接：%v", err)
+	}
+	defer func() { _ = second.Close() }()
+	var n int
+	if err := second.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sqlite_master WHERE name = 'fts_probe'`).Scan(&n); err != nil {
+		t.Fatalf("在第二条连接上查探测表：%v", err)
+	}
+	if n != 0 {
+		t.Fatal("实测结论已变化：file::memory: 的探测表在连接间可见，fts5 自检的单连接上限需重新评估")
+	}
+	// 这正是自检里 drop 会失败的那条路径：第二条连接上执行 DROP 必然找不到表。
+	if _, err := second.ExecContext(ctx, `DROP TABLE fts_probe`); err == nil {
+		t.Fatal("第二条连接上 DROP 探测表本应失败（no such table），实测却成功了")
 	}
 }

@@ -108,6 +108,66 @@ func TestSearchIndexServiceBackfillsHistory(t *testing.T) {
 	}
 }
 
+// TestSearchIndexServiceStatusReportsDrift 校验状态快照里的漂移口径：
+//
+// 索引正确性只靠「所有 asset 写入必经仓储层」这一约定，而回填只跑一次；一旦有旁路写入
+// （运维脚本 / 手工 SQL / 未来的迁移），漂移就是**永久静默**的。因此状态必须能报出来，
+// 并且让 ready 说实话——否则用户唯一能感知到的现象就是「某些制品搜不到」。
+func TestSearchIndexServiceStatusReportsDrift(t *testing.T) {
+	const rows = 20
+	svc, db, repoID := indexServiceFixture(t, rows)
+	if err := svc.Run(context.Background()); err != nil {
+		t.Fatalf("回填：%v", err)
+	}
+
+	status, err := svc.Status()
+	if err != nil {
+		t.Fatalf("读状态快照：%v", err)
+	}
+	if status.IndexRows != rows || status.AssetRows != rows || status.Drifted() || status.Drift() != 0 {
+		t.Fatalf("正常回填后不应有漂移：%+v（差额 %d）", status, status.Drift())
+	}
+	if !status.Ready || status.MissingIndexRows() {
+		t.Fatalf("正常回填后 ready 应为 true：%+v", status)
+	}
+
+	// 旁路写入：直接插 asset 行、不写索引。回填已完成，因此这条漂移不会自愈。
+	if _, err := db.Exec(`INSERT INTO asset (repository_id, path, blob_hash, size, content_type, sha1, md5)
+		VALUES (?, 'side/door-1.0.0.jar', 'h', 1, 'text/plain', '', '')`, repoID); err != nil {
+		t.Fatalf("旁路写入资产行：%v", err)
+	}
+	status, err = svc.Status()
+	if err != nil {
+		t.Fatalf("读状态快照：%v", err)
+	}
+	if status.IndexRows != rows || status.AssetRows != rows+1 || status.Drift() != -1 || !status.Drifted() {
+		t.Fatalf("旁路写入后应报差额 -1：%+v（差额 %d）", status, status.Drift())
+	}
+	if !status.MissingIndexRows() || status.Ready {
+		t.Fatalf("存在漏索引时 ready 必须为 false，否则状态端点仍报「一切正常」：%+v", status)
+	}
+
+	// 反方向（孤儿索引行）：资产行已消失、索引条目残留，是仓库级联删除的形状。
+	// 它只让索引偏大、不丢结果，因此不把 ready 打下来——否则删一次仓库就会让 ready 永久为
+	// false，真出问题时这个信号早已被忽略。
+	if _, err := db.Exec(`DELETE FROM asset WHERE path = 'side/door-1.0.0.jar'`); err != nil {
+		t.Fatalf("清掉旁路行：%v", err)
+	}
+	if _, err := db.Exec(`DELETE FROM asset WHERE path = 'legacy/pkg-0000-1.0.0.jar'`); err != nil {
+		t.Fatalf("删一条已索引的资产行制造孤儿：%v", err)
+	}
+	status, err = svc.Status()
+	if err != nil {
+		t.Fatalf("读状态快照：%v", err)
+	}
+	if status.IndexRows != rows || status.AssetRows != rows-1 || status.Drift() != 1 || !status.Drifted() {
+		t.Fatalf("孤儿索引行应报差额 +1：%+v（差额 %d）", status, status.Drift())
+	}
+	if status.MissingIndexRows() || !status.Ready {
+		t.Fatalf("孤儿索引行不应把 ready 打下来（不丢结果，重建即可清理）：%+v", status)
+	}
+}
+
 // TestSearchIndexServiceEmptyInstanceBecomesReady 空实例也应立刻标记完成：
 // 否则「全新部署」会永远显示 ready=false，把 is-ready 变成一个无意义信号。
 func TestSearchIndexServiceEmptyInstanceBecomesReady(t *testing.T) {

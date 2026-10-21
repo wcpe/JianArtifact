@@ -665,8 +665,9 @@ export const en = {
     checksums: "Checksums ({{count}})",
     noCoordinate: "(no coordinate)",
     emptyHint: "Try ext:jar, repo:NAME, -sources, or version:1.2.3",
+    // 与中文侧同义：截断会让排序靠后的包整包缺席，不只是计数取下界。
     aggregationTruncated:
-      "Too many matches; only the first {{scanned}} files were aggregated, so counts are lower bounds. Narrow the keywords.",
+      "Too many matches; only the first {{scanned}} files were aggregated: counts are lower bounds, and packages sorted later may be missing from the list entirely. Narrow the keywords.",
     sortLabel: "Sort",
     sortRelevance: "Relevance",
     sortName: "Name",

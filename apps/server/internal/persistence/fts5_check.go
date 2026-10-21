@@ -18,13 +18,19 @@ import (
 // ①不往业务库里塞探测对象，进程在探测中途被杀也不会留下残留表；②不与主库争用连接池
 // （主库池见 OpenWithMaxConns），探测与业务查询互不影响。
 //
-// 调用时机：Migrate() 成功之后、开始对外服务之前（wiring.go 的 openServices）。
+// 探测库固定单连接（SetMaxOpenConns(1)）：`file::memory:` 是**每条连接各一份**的独立空库，
+// 池里若出现第二条连接，它看不到第一条连接建的探测表，DROP TABLE 会以 "no such table" 失败，
+// 把「构建缺能力」误报成「自检失败」这种自伤。上限 1 让整个探测始终落在同一条连接上。
+//
+// 调用时机：Migrate() **之前**、开始对外服务之前（wiring.go 的 openServices）。必须早于
+// 迁移，因为迁移 0049 的第一条语句就是建 fts5 虚拟表——排在后面就又会先抛泛化 SQL 错误。
 func CheckFTS5Support() error {
 	probe, err := sqlx.Connect("sqlite", "file::memory:")
 	if err != nil {
 		return fmt.Errorf("搜索索引自检失败：无法打开临时内存库（%v）", err)
 	}
 	defer func() { _ = probe.Close() }()
+	probe.SetMaxOpenConns(1)
 
 	// fts5 模块本身：先建最简虚拟表，确认编译期带上了 fts5。
 	if _, err := probe.Exec(`CREATE VIRTUAL TABLE fts_probe USING fts5(path)`); err != nil {

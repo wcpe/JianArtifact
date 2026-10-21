@@ -259,6 +259,27 @@ describe("SearchPage 主从双栏", () => {
     expect(calls.length).toBeGreaterThanOrEqual(2);
   });
 
+  it("聚合截断时说明计数为下界，并点明部分包可能完全未出现", async () => {
+    // 截断按路径排序取前 N 条：排序靠后的包会整包缺席左侧列表，不只是计数变小。
+    mockSearch({
+      ...searchResponse(PACKAGES),
+      total: 812345,
+      packageTotal: 3,
+      aggregation: { scanned: 5000, truncated: true },
+    });
+    renderPage();
+
+    await screen.findByTestId("search-package-tree");
+
+    // 计数仍走下界写法（`≥ N`），数值展示逻辑保持不变。
+    expect(screen.getByText(/· ≥3 个包/)).toBeInTheDocument();
+
+    const hint = screen.getByTestId("search-aggregation-truncated");
+    expect(hint).toHaveTextContent("5000");
+    expect(hint).toHaveTextContent("下界");
+    expect(hint).toHaveTextContent("部分包可能完全未出现在左侧列表");
+  });
+
   it("窄屏下点版本行进详情，返回按钮回到列表并保留展开态", async () => {
     const restore = stubNarrowViewport();
     try {

@@ -470,9 +470,15 @@ export function SearchPage() {
                   })}
                 </Text>
                 {truncated && (
-                  <Group gap={4} wrap="nowrap">
-                    <IconAlertTriangle size={12} color="var(--mantine-color-yellow-7)" />
-                    <Text size="xs" c="yellow.8">
+                  // 提示分两层意思：①计数只是下界；②按路径排序靠后的包整包缺席。
+                  // 后者用文字点明，否则用户会把「左侧看不到」误读成「该仓库没有命中」。
+                  <Group gap={4} wrap="nowrap" align="flex-start">
+                    <IconAlertTriangle
+                      size={12}
+                      color="var(--mantine-color-yellow-7)"
+                      style={{ flexShrink: 0, marginTop: 2 }}
+                    />
+                    <Text size="xs" c="yellow.8" data-testid="search-aggregation-truncated">
                       {t("search.aggregationTruncated", { scanned })}
                     </Text>
                   </Group>

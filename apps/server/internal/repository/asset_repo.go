@@ -403,13 +403,16 @@ func indexableTerms(terms []string) []string {
 // 用户输入绝不能直接拼进 MATCH：FTS5 的匹配串有独立语法（AND / OR / NOT / NEAR / * / ^ / :
 // / 括号），把 `a OR b` 直接交给 MATCH 会变成布尔查询而不是「包含子串 a OR b」——既是语义
 // 回退，也是注入面。包成字面量后内部只剩字面量文本（内部的 `"` 按 FTS5 规则双写转义），
-// trigram 分词器再把它切成三字词元，等价于原来的 `path LIKE '%词%'`。
+// trigram 分词器再把它切成三字词元，得到与 `path LIKE '%词%'` 同类的子串匹配。
+// 注意二者的匹配范围并不相同（trigram 折叠整个 Unicode，LIKE 只折叠 ASCII），因此它只用于
+// 收敛候选集，最终由后置 LIKE 定案——论证见 buildSearchWhereIndexed。
 func ftsPhraseLiteral(term string) string {
 	return `"` + strings.ReplaceAll(term, `"`, `""`) + `"`
 }
 
 // ftsMatchExpression 把多个可下推词组合成一个 FTS5 匹配串：每词一个字面量短语、词间 AND。
-// 与原来的「多条 path LIKE '%词%' 用 AND 连接」逐字等价（包含词之间本来就是 AND 语义）。
+// 组合口径与原来的「多条 path LIKE '%词%' 用 AND 连接」一致（包含词之间本来就是 AND 语义）；
+// 但整体匹配范围是那些 LIKE 条件的**超集**，所以它只能当候选集条件用，不能替代 LIKE 过滤。
 func ftsMatchExpression(terms []string) string {
 	parts := make([]string, 0, len(terms))
 	for _, t := range terms {
@@ -418,57 +421,45 @@ func ftsMatchExpression(terms []string) string {
 	return strings.Join(parts, " AND ")
 }
 
-// buildSearchWhereIndexed 是 SearchByFilter / SearchFacetsByFilter / SearchPerRepoByFilter
-// 实际使用的 WHERE 构造点，也是**唯一**的候选集下推点（三条语句共用同一段 WHERE，避免各拼
-// 一遍而漂移）。
+// buildSearchWhereIndexed 是 SearchByFilter / SearchFacetsByFilter / SearchPerRepoByFilter /
+// SearchAllByFilter / SuggestPaths 实际使用的 WHERE 构造点，也是**唯一**的候选集下推点
+// （多条语句共用同一段 WHERE，避免各拼一遍而漂移）。
 //
-// 与 buildSearchWhere 的唯一差别：UseFullTextIndex 为真且存在可下推的包含词时，把这些词合并成
-// 一个 FTS 候选集条件前置到 WHERE：
+// 与 buildSearchWhere 的差别只有一处：UseFullTextIndex 为真且存在可下推的包含词时额外前置一个
+// FTS 候选集条件——**原有的 LIKE 条件一个都不删**：
 //
-//	id IN (SELECT rowid FROM asset_path_fts WHERE asset_path_fts MATCH ?)
+//	id IN (SELECT rowid FROM asset_path_fts WHERE asset_path_fts MATCH ?) AND <buildSearchWhere 的结果>
 //
 // 形态固定为「只读 rowid 的子查询」，绝不读 asset_path_fts 的列值：external content 表一旦按
 // 列过滤，仓库级联删除留下的孤儿索引行会让 SQLite 报 267 missing row from content table
 // （见 search_index_repo.go 文件头第 4 条）。子查询形态还顺带保住了 buildSearchWhere 与
 // searchOrderBy 里的裸列名 `path`（JOIN 形态会让它变成 ambiguous column name）。
 //
-// 等价性：trigram 的子串匹配与 `path LIKE '%词%'` 同义；多个词用 FTS 的 AND 组合，与原多条
-// LIKE 的 AND 一致。不可下推的部分（短于 3 字符的词、排除词、扩展名、仓库范围）原样留在
-// LIKE / IN 条件里，作为候选集上的**后置**谓词——它们只会进一步收窄，不会放宽。
+// **下推词必须同时保留 LIKE，这是语义要求而不是可选优化**：trigram 分词器对每个码点做大小写
+// 折叠，折叠表覆盖整个 Unicode；SQLite 的 LIKE 默认只折叠 ASCII。于是 FTS 的子串匹配是 LIKE 的
+// **超集**。实测语料 `i18n/Ärger-1.0.jar` + `i18n/ärger-2.0.jar`：`q=ärger` 时 FTS 命中 2 条、
+// LIKE 只命中 1 条（`q=Ärger` 对称地把另一条留下）。若把下推词从 LIKE 里剔除、只走 FTS，索引
+// 路径就会比降级路径多返回行——静默多结果，与「索引只是加速、不改结果」的前提直接冲突。
 //
-// 降级：索引未就绪、或没有任何可下推词时，整体退回 buildSearchWhere，行为与今天逐字一致。
+// 因此分工是：FTS 负责收敛候选行集（走索引，快），LIKE 在收敛后的小集合上复核（精确，且因为
+// 集合已小所以便宜）。合起来与引入索引前的纯 LIKE 结果集逐条一致，FTS 的索引收益仍然在。
+// 短词（rune < 3，索引里没有对应词元）、排除词、扩展名、版本条件与仓库范围本来就只存在于
+// LIKE / IN 侧，原样保留。
+//
+// 降级：索引未就绪、或没有任何可下推词时整体退回 buildSearchWhere，行为与引入索引前一致。
 func buildSearchWhereIndexed(f SearchFilter, repoIDs []int64) (string, []any) {
 	pushed := indexableTerms(f.IncludeTerms)
 	if !f.UseFullTextIndex || len(pushed) == 0 {
 		return buildSearchWhere(f, repoIDs)
 	}
-	// 剩下的短词仍用 LIKE 表达（AND 语义不变），排除词、扩展名与版本条件一并原样保留。
-	// 版本条件尤其不能漏：它没有 FTS 等价形态，丢了就等于「走索引时 version: 静默失效」。
-	pushSet := make(map[string]bool, len(pushed))
-	for _, t := range pushed {
-		pushSet[t] = true
-	}
-	rest := make([]string, 0, len(f.IncludeTerms))
-	for _, t := range f.IncludeTerms {
-		if !pushSet[t] {
-			rest = append(rest, t)
-		}
-	}
-	remainder := SearchFilter{
-		IncludeTerms:    rest,
-		ExcludeTerms:    f.ExcludeTerms,
-		IncludeExts:     f.IncludeExts,
-		ExcludeExts:     f.ExcludeExts,
-		IncludeVersions: f.IncludeVersions,
-		ExcludeVersions: f.ExcludeVersions,
-	}
-	where, args := buildSearchWhere(remainder, repoIDs)
+	// 这里传的是**原始** filter，不做词剔除：每个下推词仍各自保留一条 `path LIKE '%词%'`，
+	// 作为候选集上的复核条件。剔除会丢掉非 ASCII 大小写这一层收窄（见上面的超集论证）。
+	where, args := buildSearchWhere(f, repoIDs)
 	cond := `id IN (SELECT rowid FROM asset_path_fts WHERE asset_path_fts MATCH ?)`
 	// 候选集条件放在最前：它是最具选择性的谓词，先收敛行集再让后置 LIKE 复核。
 	args = append([]any{ftsMatchExpression(pushed)}, args...)
-	if where == "1=1" {
-		return cond, args
-	}
+	// pushed 非空蕴含 IncludeTerms 非空，因此 where 必然含至少一条 LIKE 条件、不可能是空条件
+	// 占位 "1=1"，这里可以直接拼接。
 	return cond + " AND " + where, args
 }
 
@@ -597,9 +588,17 @@ func (r *AssetRepo) SearchPerRepoByFilter(ctx context.Context, f SearchFilter, r
 // 由领域层在**每次搜索入口**调用一次，不做进程内缓存：全量重建会把 completed_at 打回 NULL，
 // 而缓存里的 true 会让重建期间的搜索继续走已被清空的索引——结果是静默漏结果。这条查询是单行
 // 主键点查，成本远低于缓存失效设计带来的正确性风险。
+//
+// 状态行缺失（`sql.ErrNoRows`）按**未就绪**处理而不是报错：领域层把本方法的错误直接上抛，
+// 一旦这里返回错误，整条搜索链路就从「慢但可用」退化成「完全不可用」（500）。而状态行缺失
+// 只会让索引无法被判为可用，此时退回 path LIKE 路径得到的结果依然完整，代价只是慢一点——
+// 这正是降级路径存在的意义，没有理由把它变成故障。
 func (r *AssetRepo) SearchIndexReady() (bool, error) {
 	var ready bool
 	err := r.db.Get(&ready, `SELECT completed_at IS NOT NULL FROM search_index_state WHERE id = 1`)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
 	return ready, err
 }
 

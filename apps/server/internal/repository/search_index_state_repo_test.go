@@ -351,3 +351,80 @@ func TestCountStarOnExternalContentCountsContentRows(t *testing.T) {
 		t.Fatalf("CountIndexed(极大水位) = %d（err=%v），期望 2", indexed, err)
 	}
 }
+
+// TestMeasureDriftDetectsMissingAndOrphanEntries 钉住漂移原语的两个方向，以及「为什么数
+// docsize 影子表」这条实测结论：
+//
+//   - 漏索引（资产行在、索引里没有）→ 负差额。这是 completed_at 置位之后任何旁路写入
+//     （运维脚本 / 手工 SQL / 未来迁移）留下的**永久静默**状态：回填不会再跑，用户只看到
+//     「某些制品搜不到」，所以必须能被动观察；
+//   - 孤儿索引行（资产行已删、条目残留）→ 正差额，来自仓库级联删除；
+//   - 两者一致 → 无漂移。
+//
+// 计数手段的选择依据见 MeasureDrift 的注释；本用例顺带把「asset_path_fts_data 不等于文档数」
+// 现场再证一次，防止后来者把它当成行数来源。
+func TestMeasureDriftDetectsMissingAndOrphanEntries(t *testing.T) {
+	assets, _, repoID := searchIndexFixture(t)
+	db := assets.DB()
+	repo := NewSearchIndexStateRepo(db)
+
+	seedLegacyAssets(t, assets, repoID, []string{
+		"drift/a-1.0.0.jar", "drift/b-2.0.0.jar", "drift/c-3.0.0.jar",
+	})
+
+	// 空索引 + 3 条资产：三行全是「缺失」。
+	drift, err := repo.MeasureDrift()
+	if err != nil {
+		t.Fatalf("取漂移快照：%v", err)
+	}
+	if drift.IndexRows != 0 || drift.AssetRows != 3 || drift.Delta() != -3 || !drift.Drifted() {
+		t.Fatalf("空索引时应报 3 行缺失，实际 %+v（差额 %d）", drift, drift.Delta())
+	}
+	// 同一时刻 asset_path_fts_data 已经有结构段行：它不是文档数，不能作为行数来源。
+	var dataRows int64
+	if err := db.Get(&dataRows, `SELECT COUNT(*) FROM asset_path_fts_data`); err != nil {
+		t.Fatalf("数 asset_path_fts_data：%v", err)
+	}
+	if dataRows == drift.IndexRows {
+		t.Fatalf("实测结论已变化：asset_path_fts_data 行数(%d)竟等于文档数(%d)，需重新评估 MeasureDrift 的实现",
+			dataRows, drift.IndexRows)
+	}
+
+	// 构造「asset 有行但索引缺失」：只给前两行写索引，第三行故意漏掉。
+	if _, err := db.Exec(`INSERT INTO asset_path_fts(rowid, path)
+		SELECT id, path FROM asset WHERE path <> 'drift/c-3.0.0.jar'`); err != nil {
+		t.Fatalf("灌入部分索引：%v", err)
+	}
+	drift, err = repo.MeasureDrift()
+	if err != nil {
+		t.Fatalf("取漂移快照：%v", err)
+	}
+	if drift.IndexRows != 2 || drift.AssetRows != 3 || drift.Delta() != -1 || !drift.Drifted() {
+		t.Fatalf("漏掉一行时应报差额 -1，实际 %+v（差额 %d）", drift, drift.Delta())
+	}
+
+	// 补上漏掉的那一行：漂移归零。
+	if _, err := db.Exec(`INSERT INTO asset_path_fts(rowid, path)
+		SELECT id, path FROM asset WHERE path = 'drift/c-3.0.0.jar'`); err != nil {
+		t.Fatalf("补齐索引：%v", err)
+	}
+	drift, err = repo.MeasureDrift()
+	if err != nil {
+		t.Fatalf("取漂移快照：%v", err)
+	}
+	if drift.Drifted() || drift.Delta() != 0 || drift.IndexRows != 3 || drift.AssetRows != 3 {
+		t.Fatalf("索引与资产一致时不应报漂移，实际 %+v（差额 %d）", drift, drift.Delta())
+	}
+
+	// 反方向：直接删 asset 行、留下索引行（仓库级联删除的形状）→ 正差额。
+	if _, err := db.Exec(`DELETE FROM asset WHERE path = 'drift/b-2.0.0.jar'`); err != nil {
+		t.Fatalf("删内容行制造孤儿：%v", err)
+	}
+	drift, err = repo.MeasureDrift()
+	if err != nil {
+		t.Fatalf("取漂移快照：%v", err)
+	}
+	if drift.IndexRows != 3 || drift.AssetRows != 2 || drift.Delta() != 1 || !drift.Drifted() {
+		t.Fatalf("孤儿索引行应报差额 +1，实际 %+v（差额 %d）", drift, drift.Delta())
+	}
+}

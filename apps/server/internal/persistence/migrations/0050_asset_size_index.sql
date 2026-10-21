@@ -13,7 +13,7 @@
 --      repository 上一次计数」（实测 1.06 s）。但 asset 侧仍是**全表顺序扫描**：为了拿一列
 --      size，把 path / blob_hash / content_type / 时间戳等整行数据都读进来。
 --
--- 2) 仓库存储配额（asset_repo.go 的 repoStatsQuery，）
+-- 2) 仓库存储配额（asset_repo.go 的 repoStatsQuery）
 --      `SELECT ? , COUNT(*), COALESCE(SUM(size),0) FROM asset WHERE repository_id = ?`
 --      这是**每次上传都会走两遍**的热路径（预检 + 提交点复检）。没有含 size 的
 --      (repository_id, ...) 索引，它只能先按 repository_id 定位、再逐行回表取 size。

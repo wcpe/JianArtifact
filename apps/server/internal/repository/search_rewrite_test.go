@@ -19,19 +19,22 @@ import (
 //     不在本批变更范围）；
 //   - 每个用例都同时跑 oracle（UseFullTextIndex=false）与新实现（true），任一处不同即失败。
 //
-// 为什么必须有这组测试：trigram 的下限是 3 字符、大小写折叠只覆盖 ASCII、FTS5 有独立语法，
-// 任何一处判断失误都会表现为「静默漏结果」——那是最难在实机发现、也是本批最危险的错误模式。
+// 为什么必须有这组测试：trigram 的下限是 3 字符、**大小写折叠范围与 LIKE 不同**、FTS5 有独立
+// 语法，任何一处判断失误都会表现为「静默漏结果」或「静默多结果」——那是最难在实机发现、
+// 也是本批最危险的错误模式。
 
 // rewriteFixture 建库并把语料写进 asset（Upsert 会在同一事务内同步 FTS 索引）。
 type rewriteFixture struct {
 	assets *AssetRepo
 	state  *SearchIndexStateRepo
+	db     *persistence.DB
 	repo1  int64
 	repo2  int64
 	repo3  int64
 }
 
-// rewriteCorpus 是等价性测试的语料：覆盖大小写、版本号前缀、特殊字符、中文、扩展名与多仓库。
+// rewriteCorpus 是等价性测试的语料：覆盖 ASCII 大小写、非 ASCII 大小写、版本号前缀、
+// 特殊字符、中文、扩展名与多仓库。
 var rewriteCorpus = []string{
 	"libs/alpha-1.2.3.jar",
 	"libs/alpha-1.2.30.jar",
@@ -55,6 +58,12 @@ var rewriteCorpus = []string{
 	`weird/apostrophe's.txt`,
 	"中文/标签-1.0.jar",
 	"中文/中文标签-2.0.jar",
+	// 非 ASCII 大小写的**分歧语料**：这是「FTS 子串匹配是 LIKE 的超集」的最小可复现样本。
+	// trigram 分词器按码点折叠，折叠表覆盖整个 Unicode（Ä→ä）；而 SQLite 的 LIKE 默认
+	// 只折叠 ASCII。于是 `q=ärger` 时 FTS 命中两条、LIKE 只命中一条——两条路径的唯一差别
+	// 就是「有没有后置 LIKE 复核」，缺了它索引路径就会比降级路径多返回一行。
+	"i18n/Ärger-1.0.jar",
+	"i18n/ärger-2.0.jar",
 	"npm/@scope/pkg",
 	"npm/@scope/pkg-extra",
 	// 下面两条让「短词」在语料里具备**区分性**：短词 `1.` 只出现在版本号路径上，
@@ -94,7 +103,7 @@ func newRewriteFixture(t *testing.T) *rewriteFixture {
 	if err := state.MarkCompleted(); err != nil {
 		t.Fatalf("标记索引完成：%v", err)
 	}
-	return &rewriteFixture{assets: assets, state: state, repo1: ids[0], repo2: ids[1], repo3: ids[2]}
+	return &rewriteFixture{assets: assets, state: state, db: db, repo1: ids[0], repo2: ids[1], repo3: ids[2]}
 }
 
 // runIDs 跑一次搜索并返回排序后的 id 列表、total 与 facet 计数合计。
@@ -168,6 +177,11 @@ func TestSearchIndexEquivalence(t *testing.T) {
 		{name: "仅短词", filter: SearchFilter{IncludeTerms: []string{"1", "2"}}},
 		{name: "大小写互命中（小写查大写）", filter: SearchFilter{IncludeTerms: []string{"gamma"}}},
 		{name: "大小写互命中（大写查小写）", filter: SearchFilter{IncludeTerms: []string{"GAMMA"}}},
+		{name: "非 ASCII 大小写（小写查大写文件名）", filter: SearchFilter{IncludeTerms: []string{"ärger"}}},
+		{name: "非 ASCII 大小写（大写查小写文件名）", filter: SearchFilter{IncludeTerms: []string{"Ärger"}}},
+		{name: "非 ASCII 短词与可下推词并存", filter: SearchFilter{IncludeTerms: []string{"Är", "1.0"}}},
+		{name: "非 ASCII 大小写与扩展名组合", filter: SearchFilter{IncludeTerms: []string{"ärger"}, IncludeExts: []string{"jar"}}},
+		{name: "非 ASCII 大小写与排除词组合", filter: SearchFilter{IncludeTerms: []string{"ärger"}, ExcludeTerms: []string{"2.0"}}},
 		{name: "非 ASCII 不做大小写折叠", filter: SearchFilter{IncludeTerms: []string{"标签-1.0"}}},
 		{name: "scope 路径", filter: SearchFilter{IncludeTerms: []string{"@scope/pkg"}}},
 		{name: "限定单仓库", filter: SearchFilter{IncludeTerms: []string{"alpha"}}, repoIDs: []int64{fx.repo1}},
@@ -197,6 +211,54 @@ func TestSearchIndexEquivalence(t *testing.T) {
 				if gotIDs[i] != wantIDs[i] {
 					t.Fatalf("命中 id 不一致：oracle=%v FTS=%v", gotIDs, wantIDs)
 				}
+			}
+		})
+	}
+}
+
+// TestSearchIndexNonASCIICaseNeedsLikeRecheck 钉住「FTS 子串匹配是 LIKE 的**超集**」这条实测事实，
+// 以及由此得出的实现约束：下推词必须**同时**保留为 LIKE 后置谓词。
+//
+// 实测分歧：trigram 分词器对每个码点做大小写折叠，折叠表覆盖整个 Unicode（`Ä`→`ä`）；而 SQLite
+// 的 LIKE 默认只折叠 ASCII。语料里同时有 `i18n/Ärger-1.0.jar` 与 `i18n/ärger-2.0.jar`：
+//
+//   - `q=ärger`：FTS 命中 2 条，LIKE 命中 1 条（只有小写文件名的那个）；
+//   - `q=Ärger`：FTS 命中 2 条，LIKE 命中 1 条（只有大写文件名的那个）。
+//
+// 所以「把下推词从 LIKE 里剔除、只走 FTS」会让索引路径多返回一行（静默多结果）。这条用例
+// 就是那个缺口的回归闸门：删掉后置 LIKE 复核，它立刻失败。
+func TestSearchIndexNonASCIICaseNeedsLikeRecheck(t *testing.T) {
+	fx := newRewriteFixture(t)
+	ctx := context.Background()
+
+	cases := []struct {
+		term     string
+		wantPath string
+	}{
+		{term: "ärger", wantPath: "i18n/ärger-2.0.jar"},
+		{term: "Ärger", wantPath: "i18n/Ärger-1.0.jar"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.term, func(t *testing.T) {
+			indexed := SearchFilter{IncludeTerms: []string{tc.term}, UseFullTextIndex: true}
+			assets, total, err := fx.assets.SearchByFilter(ctx, indexed, nil, "path", "asc", 100, 0)
+			if err != nil {
+				t.Fatalf("搜索失败：%v", err)
+			}
+			if total != 1 || len(assets) != 1 || assets[0].Path != tc.wantPath {
+				t.Fatalf("走索引时只应命中按 LIKE 口径相等的那一条（%s），实际 total=%d paths=%v",
+					tc.wantPath, total, pathsOf(assets))
+			}
+
+			// 与降级路径（纯 LIKE，即 oracle）逐条一致。
+			oracle := SearchFilter{IncludeTerms: []string{tc.term}}
+			oracleAssets, oracleTotal, err := fx.assets.SearchByFilter(ctx, oracle, nil, "path", "asc", 100, 0)
+			if err != nil {
+				t.Fatalf("降级路径搜索失败：%v", err)
+			}
+			if oracleTotal != total || !equalStrings(pathsOf(oracleAssets), pathsOf(assets)) {
+				t.Fatalf("索引路径与降级路径不一致：索引 total=%d %v / 降级 total=%d %v",
+					total, pathsOf(assets), oracleTotal, pathsOf(oracleAssets))
 			}
 		})
 	}
@@ -364,6 +426,59 @@ func TestSearchIndexReadyReflectsState(t *testing.T) {
 	}
 }
 
+// TestSearchIndexReadyMissingStateRowDegrades 钉住「状态行缺失不得把搜索变成错误」：
+// 删掉 search_index_state 的唯一一行后，就绪判定必须降级为未就绪（而不是把 sql.ErrNoRows
+// 抛给领域层），并且按该判定走的搜索仍与纯 LIKE 路径逐条一致。
+//
+// 为什么重要：领域层在**每次搜索入口**调用就绪判定并直接上抛其错误，一次状态行缺失就能把
+// 「慢但可用」的搜索变成 500——降级路径本来就是为这种情况准备的，没有理由反而让它报错。
+func TestSearchIndexReadyMissingStateRowDegrades(t *testing.T) {
+	fx := newRewriteFixture(t)
+	ctx := context.Background()
+	if _, err := fx.db.Exec(`DELETE FROM search_index_state`); err != nil {
+		t.Fatalf("删除索引状态行：%v", err)
+	}
+	ready, err := fx.assets.SearchIndexReady()
+	if err != nil {
+		t.Fatalf("状态行缺失时应降级为未就绪，不得上抛错误：%v", err)
+	}
+	if ready {
+		t.Fatal("状态行缺失时不得判为就绪")
+	}
+
+	oracle := SearchFilter{IncludeTerms: []string{"alpha"}}
+	oracleAssets, oracleTotal, err := fx.assets.SearchByFilter(ctx, oracle, nil, "path", "asc", 100, 0)
+	if err != nil {
+		t.Fatalf("纯 LIKE 路径搜索失败：%v", err)
+	}
+	if oracleTotal == 0 {
+		t.Fatal("语料里应存在 alpha 命中，否则本用例证明不了降级路径可用")
+	}
+
+	// 领域层拿到 ready=false 后就是这样构造 filter 的：UseFullTextIndex 保持 false。
+	filtered := SearchFilter{IncludeTerms: []string{"alpha"}, UseFullTextIndex: ready}
+	assets, total, err := fx.assets.SearchByFilter(ctx, filtered, nil, "path", "asc", 100, 0)
+	if err != nil {
+		t.Fatalf("降级路径搜索失败：%v", err)
+	}
+	if total != oracleTotal || !equalStrings(pathsOf(assets), pathsOf(oracleAssets)) {
+		t.Fatalf("降级路径与纯 LIKE 不一致：total=%d/%d paths=%v/%v",
+			total, oracleTotal, pathsOf(assets), pathsOf(oracleAssets))
+	}
+	// facet 与分页共用同一段 WHERE，降级后也必须一致。
+	facets, err := fx.assets.SearchFacetsByFilter(ctx, filtered, nil)
+	if err != nil {
+		t.Fatalf("降级路径 facet 聚合失败：%v", err)
+	}
+	facetSum := 0
+	for _, f := range facets {
+		facetSum += f.Count
+	}
+	if facetSum != oracleTotal {
+		t.Fatalf("降级路径 facet 合计=%d，期望 %d", facetSum, oracleTotal)
+	}
+}
+
 // TestSearchPerRepoByFilterMatchesPerRepoLoop 钉住 npm 收口依赖的「按仓库分别取前 N 条」：
 // 一条窗口函数语句的结果必须与「逐仓库各搜一次」逐条一致（含每仓独立分页）。
 func TestSearchPerRepoByFilterMatchesPerRepoLoop(t *testing.T) {
@@ -441,6 +556,59 @@ func TestSearchPerRepoByFilterLimitAndEmpty(t *testing.T) {
 		if n > 1 {
 			t.Fatalf("仓库 %d 返回 %d 条，超过 perRepoLimit=1", id, n)
 		}
+	}
+}
+
+// TestSuggestPathsScope 钉住 suggest 候选集的仓库范围防护：
+//   - 非 nil 的空仓库集合必须返回空结果（fail-closed），不得退化成全租户扫描；
+//   - nil 表示不限（管理员的既有契约），候选数与「不限范围搜索」的 total 相同；
+//   - 显式给定的仓库集合内只返回该集合的路径，且顺序稳定（path 升序）。
+func TestSuggestPathsScope(t *testing.T) {
+	fx := newRewriteFixture(t)
+	ctx := context.Background()
+	f := SearchFilter{IncludeTerms: []string{"alpha"}, UseFullTextIndex: true}
+
+	// 1) 空切片 = 一个可读仓库都没有：必须空结果，绝不放宽成「不限」。
+	if rows, err := fx.assets.SuggestPaths(ctx, f, []int64{}, 50); err != nil || rows != nil {
+		t.Fatalf("空仓库切片应返回空结果（fail-closed），实际 rows=%v err=%v", rows, err)
+	}
+
+	// 2) nil = 不限（管理员）：候选行数必须等于同一条件在不限范围下的 total。
+	allRows, err := fx.assets.SuggestPaths(ctx, f, nil, 1000)
+	if err != nil {
+		t.Fatalf("不限范围查询失败：%v", err)
+	}
+	_, totalAll, err := fx.assets.SearchByFilter(ctx, f, nil, "path", "asc", 1000, 0)
+	if err != nil {
+		t.Fatalf("不限范围搜索失败：%v", err)
+	}
+	if len(allRows) != totalAll {
+		t.Fatalf("nil 应表示不限：候选行数=%d，不限范围 total=%d", len(allRows), totalAll)
+	}
+
+	// 3) 收窄到单仓库：只回该仓库的行，且按 path 升序（稳定序）。
+	scoped, err := fx.assets.SuggestPaths(ctx, f, []int64{fx.repo1}, 1000)
+	if err != nil {
+		t.Fatalf("单仓库查询失败：%v", err)
+	}
+	if len(scoped) == 0 {
+		t.Fatal("单仓库应有候选行，否则本用例证明不了范围收窄")
+	}
+	if len(scoped) >= len(allRows) {
+		t.Fatalf("收窄到单仓库后候选未减少：%d vs 不限 %d", len(scoped), len(allRows))
+	}
+	for i, row := range scoped {
+		if row.RepositoryID != fx.repo1 {
+			t.Fatalf("候选越出给定范围：repository_id=%d 期望 %d", row.RepositoryID, fx.repo1)
+		}
+		if i > 0 && scoped[i-1].Path > scoped[i].Path {
+			t.Fatalf("候选顺序不是 path 升序：%q 在 %q 之前", scoped[i-1].Path, scoped[i].Path)
+		}
+	}
+
+	// 4) limit 防护不变：非正值返回空结果。
+	if rows, err := fx.assets.SuggestPaths(ctx, f, nil, 0); err != nil || rows != nil {
+		t.Fatalf("非正 limit 应返回空结果，实际 rows=%v err=%v", rows, err)
 	}
 }
 

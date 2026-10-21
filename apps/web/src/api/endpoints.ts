@@ -1489,11 +1489,14 @@ export interface SearchResult {
   total: number;
   /** 按仓库聚合的命中数（钻取导航用，按命中数降序）。 */
   facets?: { repository: string; count: number }[];
-  /** 包节点数（含「无坐标」伪包）；`aggregation.truncated` 时为下界。仅 `group_by=package` 有。 */
+  /**
+   * 包节点数（含「无坐标」伪包）；`aggregation.truncated` 时为下界，且排序靠后的包
+   * 可能整包缺失。仅 `group_by=package` 有。
+   */
   packageTotal?: number;
   /** 包级聚合结果，仅 `group_by=package` 有。 */
   packages?: SearchPackage[];
-  /** 聚合扫描口径，仅 `group_by=package` 有。 */
+  /** 聚合扫描口径，仅 `group_by=package` 有；`truncated` 为真表示只聚合了前 `scanned` 条文件。 */
   aggregation?: { scanned: number; truncated: boolean };
   /** 后端回报的实际生效排序（relevance 回落 / 缺省时用来"不猜"）。 */
   appliedOrder?: string;

@@ -81,16 +81,19 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := db.Migrate(); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("应用数据库迁移：%w", err)
-	}
-	// fts5 与 trigram 是 SQLite 的构建期能力，缺能力时搜索索引（asset_path_fts，迁移 0049）
-	// 根本无法工作。这里在迁移成功后立刻自检，把「构建不支持」这种环境问题变成一句可读的中文
-	// 启动错误，而不是等到第一次写资产才在事务里冒出一句泛化的 SQL logic error。
+	// fts5 与 trigram 是 SQLite 的**构建期**能力，缺能力时搜索索引（asset_path_fts，迁移 0049）
+	// 根本无法建立。自检必须跑在 Migrate **之前**：0049 的第一条语句就是
+	// `CREATE VIRTUAL TABLE asset_path_fts USING fts5(...)`，一旦放在迁移之后，首次升级时
+	// 缺能力的部署会先撞上迁移抛出的那句泛化 SQL logic error——正是本自检要消灭的场景。
+	// 放在前面是安全的：自检只在独立的内存库上建/删探测表，既不依赖主库 schema（此时主库可能
+	// 还没建表），也不与主库连接池争用（见 persistence.CheckFTS5Support）。
 	if err := persistence.CheckFTS5Support(); err != nil {
 		_ = db.Close()
 		return nil, err
+	}
+	if err := db.Migrate(); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("应用数据库迁移：%w", err)
 	}
 
 	userRepo := repository.NewUserRepo(db)

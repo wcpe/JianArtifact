@@ -22,6 +22,11 @@ import (
 //
 //  3. **清空索引只能用 'delete-all'**：DELETE FROM / rebuild 的实测差异见
 //     search_index_repo.go 的 searchIndexClearAll 注释，重置（Reset）复用那一个入口。
+//
+//  4. **索引正确性不能只靠约定**：completed_at 一旦非空就不再回填，此后任何绕过仓储的写入
+//     （运维脚本、手工 SQL、未来的迁移）都会留下**永久静默**的漂移——状态端点照旧报就绪，
+//     用户只看到「某些制品搜不到」。因此本文件另外提供 MeasureDrift 这个行数比对原语，
+//     由状态端点、回填完成与启动自检三处调用，让漂移至少可被观察到。
 
 // SearchIndexState 是 search_index_state 的读模型：回填水位与完成时刻。
 //
@@ -153,8 +158,57 @@ func (r *SearchIndexStateRepo) Reset() error {
 // 实测返回的是**内容表**的行数（索引被清空后仍报全量），根本不是索引条目数；而读 FTS 影子表
 // 又会把「在线同步新写入的行」与「仓库级联删除留下的孤儿行」一起算进来，与 total（同一张
 // asset 表上的快照）不可比。按水位回真源计数与 total 同源同口径，能直接看出「还剩多少没回填」。
+//
+// 与索引真实条目数的比对不是这里的事，见 MeasureDrift。
 func (r *SearchIndexStateRepo) CountIndexed(lastID int64) (int64, error) {
 	var n int64
 	err := r.db.Get(&n, `SELECT COUNT(*) FROM asset WHERE id <= ?`, lastID)
 	return n, err
+}
+
+// SearchIndexDrift 是「索引行数 vs 资产行数」的对比快照。
+type SearchIndexDrift struct {
+	// IndexRows 是索引里真实存在的文档数（asset_path_fts_docsize 影子表的行数）。
+	IndexRows int64 `db:"index_rows"`
+	// AssetRows 是 asset 真源当前的行数。
+	AssetRows int64 `db:"asset_rows"`
+}
+
+// Delta 返回索引行数相对资产行数的差额：
+// 正数是**孤儿索引行**（资产行已消失、索引条目残留，例如仓库级联删除）；
+// 负数是**漏索引**（资产行存在但索引里没有，例如绕过仓储层的写入）。
+func (d SearchIndexDrift) Delta() int64 { return d.IndexRows - d.AssetRows }
+
+// Drifted 报告索引行数与资产行数是否不一致。
+func (d SearchIndexDrift) Drifted() bool { return d.Delta() != 0 }
+
+// MeasureDrift 取出当前的漂移快照，供状态端点与启动/回填完成的自检使用。
+//
+// **为什么数 asset_path_fts_docsize，而不是其它两张表**（在本仓库的驱动
+// modernc.org/sqlite v1.60.1 上逐条实测，改之前请重跑对照）：
+//
+//  1. `SELECT COUNT(*) FROM asset_path_fts` —— **不能用**。external content 表上它数的是
+//     **内容表**（asset）的行数：实测 3 条 asset、索引为空时仍返回 3，索引被 delete-all 清空后
+//     依旧报全量，完全量不出索引条目。
+//  2. `SELECT COUNT(*) FROM asset_path_fts_data` —— **也不能用**。这张影子表存的是索引 b-tree
+//     的**段数据 blob**，与文档数无关：实测空索引已有 2 行（结构段），写入 2 条文档后变 3 行，
+//     对同一 rowid 重复插入后涨到 4 行，delete-all 之后仍为 2 行。把它当行数会得到一个恒定非零
+//     且随写入次数漂移的数字。
+//  3. `SELECT COUNT(*) FROM asset_path_fts_docsize` —— **正确**。FTS5 为每个已索引文档在这张
+//     影子表里留一行 (id, sz)：实测空索引 0 行、写入 2 条文档 2 行、对同一 rowid 重复插入仍是
+//     2 行（与幂等写入一致）、delete-all 之后回到 0 行、内容行被删而索引行残留时仍保留该行
+//     （正是我们要看见的孤儿）。
+//
+// 两个计数放在**同一条语句**里取，保证两份数字属于同一时刻（分别发两条查询会跨事务，
+// 在高写入负载下能配出并不存在的漂移）。成本与表大小线性相关（两次窄表计数），因此只放在
+// 状态端点与启动/回填完成这两个低频观测点上，不进搜索热路径。
+func (r *SearchIndexStateRepo) MeasureDrift() (SearchIndexDrift, error) {
+	var d SearchIndexDrift
+	err := r.db.Get(&d, `SELECT
+		(SELECT COUNT(*) FROM asset_path_fts_docsize) AS index_rows,
+		(SELECT COUNT(*) FROM asset) AS asset_rows`)
+	if err != nil {
+		return SearchIndexDrift{}, err
+	}
+	return d, nil
 }

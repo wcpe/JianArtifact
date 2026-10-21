@@ -4,7 +4,7 @@
 -- 数据处理：**不在迁移内回填**——只建结构并写入一行初始状态（last_id=0、total_rows=0、completed_at 为 NULL）；
 -- 历史行由启动后的后台分批回填（见后续批次），未回填期间搜索继续走既有 LIKE 路径；预计耗时：毫秒级
 -- 回滚：不支持 down migration；需要恢复升级前备份
--- 相关：、docs/specs/search-index-and-performance.md §3.1、docs/adr/0030-fts5-search-index.md
+-- 相关：docs/specs/search-index-and-performance.md §3.1、docs/adr/0030-fts5-search-index.md
 --
 -- 背景（为什么需要这张表）：全局搜索把每个关键词译成 `path LIKE '%词%'`（asset_repo.go 的
 -- buildSearchWhere），前导通配让 asset 上的所有 B-Tree 索引都无从定位——0002 的
@@ -16,19 +16,24 @@
 -- 形态口径（由 ADR-0030 决策）：
 --   - external content（content='asset'、content_rowid='id'），rowid 严格等于 asset.id，
 --     索引不复制路径文本。asset 仍是唯一真源，本表是纯派生索引：内容以 rowid 回 asset 取真值。
---   - tokenize='trigram' 固定，且**不开启 case_sensitive**：既有 LIKE 在 SQLite 默认设置下
---     只对 ASCII 折叠大小写，trigram 分词器默认同样仅折叠 ASCII，二者天然对齐；
---     一旦开启 case_sensitive，`Foo` 就查不到 `foo`，与旧实现分叉。
+--   - tokenize='trigram' 固定，且**不开启 case_sensitive**：一旦开启，`Foo` 就查不到 `foo`，
+--     与旧实现分叉。但两种匹配方式的大小写折叠范围**并不对齐**：SQLite 的 LIKE 默认只折叠
+--     ASCII，trigram 分词器折叠整个 Unicode，因此 trigram 的子串匹配是 LIKE 的**超集**
+--     （实测语料 `i18n/Ärger-1.0.jar` + `i18n/ärger-2.0.jar`：查 `ärger` 时 trigram 命中 2 条、
+--     LIKE 只命中 1 条）。结论：**查询侧必须保留后置 LIKE 复核**——FTS 只用来收敛候选行集，
+--     结果集最终仍由 LIKE 决定（实现见 asset_repo.go 的 buildSearchWhereIndexed）。
 --   - 索引由**应用层在 asset 写入的同一事务内显式维护**（repository/search_index_repo.go），
 --     不使用触发器：asset 的写入点可穷举，而 external content 表上改 path 的 UPDATE 不会重建
 --     索引，正确维护必须「先删后插」成对执行，把这套易错操作封进一个可测试的入口比固化进
 --     只增不改的迁移里的触发器更可控。
 --
 -- 为什么不在迁移里回填（关键）：迁移器把每个文件放在**单个事务**里执行（persistence/migrate.go），
--- 只前向、无 down。把百万级回填塞进迁移，升级会变成一次长时间持写锁的不可用事务——本库只有
--- 单个连接（db.go 的 SetMaxOpenConns(1)），持锁期间所有写入排队——而且中途失败无法断点恢复，
+-- 只前向、无 down。把百万级回填塞进迁移，升级会变成一次长时间持写锁的不可用事务——本库始终
+-- 只有**一个写者**（WAL 的「多读 + 单写」；连接池上限已放宽到 8 条，但写事务仍由 SQLite 串行化，
+-- 见 db.go 的 OpenWithMaxConns），持锁期间所有写入都在锁外排队——而且中途失败无法断点恢复，
 -- 只能整体重来。因此本迁移只建结构；回填交给启动后的后台分批任务（按 last_id 水位推进、
--- 任意时刻可中断续跑）。回填完成前搜索整体走既有 LIKE 路径：正确但尚未提速，这是刻意取舍。
+-- 任意时刻可中断续跑，批与批之间让出写锁）。回填完成前搜索整体走既有 LIKE 路径：
+-- 正确但尚未提速，这是刻意取舍。
 --
 -- 关于状态表：索引状态**不复用 schema_migrations**。「结构已建」与「数据已灌」生命周期不同，
 -- 混用会让「升级完成」与「搜索已提速」不可区分。单行语义用 CHECK (id = 1) 钉住，

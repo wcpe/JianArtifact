@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"log"
 	"net/http"
 	"net/url"
 	"time"
@@ -398,16 +399,31 @@ func writeDomainErrWithOperationID(c *gin.Context, err error, operationID string
 		// 复用会让用户与运维分不清该查上游还是该缩小检索范围 / 查索引。
 		write(http.StatusGatewayTimeout, "search_timeout", "搜索超时，请缩小检索范围后重试")
 	default:
-		// 兜底：**带上原始错误文本**。
+		// 兜底：**只有管理员**能看到原始错误文本。
 		//
-		// 早先这里只返回「内部错误」，把真实原因（归档损坏、manifest 非法、
-		// 磁盘权限、暂存目录写失败…）全部吞掉，用户看到的就是一句套话，
-		// 日志里也可能没有对应记录——"查不出原因"正是这么来的。
+		// 早先这里对所有调用方都只返回「内部错误」，把真实原因（归档损坏、manifest 非法、
+		// 磁盘权限、暂存目录写失败…）全部吞掉，用户看到的就是一句套话，日志里也可能没有
+		// 对应记录——"查不出原因"正是这么来的。故管理面保留原始文本，便于自助排查。
 		//
-		// 对外的文本仍以"内部错误"开头（不承诺细节稳定），但把 err 附在后面，
-		// 让用户与运维至少能看见发生了什么。本接口只对管理员开放，
-		// 且错误文本来自我们自己的领域逻辑，不含凭据。
-		write(http.StatusInternalServerError, "internal_error", "内部错误："+err.Error())
+		// 但本函数并非只服务于管理端点：/api/v1/search、/api/v1/search/suggest、
+		// /api/v1/public/repositories、/api/v1/repositories 都是可选鉴权、**匿名可达**的，
+		// 它们的失败路径同样落在这个兜底分支（例如仓库列表的批量 ACL 查询失败）。
+		// 若不加区分地回显，驱动原文（库名、表名、SQL 片段）就泄漏给了匿名用户——
+		// 这是可达的对外信息泄漏路径，不是理论风险。
+		//
+		// 因此：原始错误一律先写服务端日志（中文前缀，错误来自本系统的领域逻辑与驱动，
+		// 不含凭据）；响应体只对管理员附带细节，其余主体（含匿名）得到固定文案。
+		// 日志带上请求方法与路径，否则一句「内部错误：…」在日志里无法定位到端点。
+		var method, path string
+		if c.Request != nil {
+			method, path = c.Request.Method, c.Request.URL.Path
+		}
+		log.Printf("内部错误：%v（%s %s）", err, method, path)
+		if p, ok := auth.PrincipalFrom(c); ok && p != nil && p.IsAdmin() {
+			write(http.StatusInternalServerError, "internal_error", "内部错误："+err.Error())
+			return
+		}
+		write(http.StatusInternalServerError, "internal_error", "内部错误")
 	}
 }
 

@@ -50,7 +50,12 @@ var ErrSearchIndexRunning = errors.New("搜索索引回填正在运行")
 
 // SearchIndexStatus 是状态端点（GET /api/v1/search/index）的领域快照。
 type SearchIndexStatus struct {
-	// Ready 表示回填是否已完成（completed_at 非空）。为 false 时搜索走既有 LIKE 路径。
+	// Ready 表示索引可用于加速搜索：回填已完成（completed_at 非空）且**没有漏索引**。
+	// 为 false 时上层应把搜索当作「尚未提速」看待。
+	//
+	// 注意 Ready 只影响**报告**：真正的查询路径判定在 repository.AssetRepo.SearchIndexReady
+	// （只看 completed_at），因此漂移不会让搜索落到降级路径——漂移时索引仍被使用，只是可能
+	// 漏行。这正是必须把漂移单独暴露出来的原因。
 	Ready bool
 	// Indexed 是已回填行数（按 last_id 水位回 asset 真源计数）。
 	Indexed int64
@@ -60,7 +65,27 @@ type SearchIndexStatus struct {
 	LastID int64
 	// UpdatedAt 是状态行最后一次变更时刻，供排查「回填是否还在推进」。
 	UpdatedAt string
+	// IndexRows 是索引里真实存在的文档数（读 FTS5 的 docsize 影子表，见
+	// repository.SearchIndexStateRepo.MeasureDrift）。与 Indexed 的区别：后者是「水位以内的
+	// 资产行数」，前者是「索引里到底有多少条」。
+	IndexRows int64
+	// AssetRows 是 asset 真源当前的行数。
+	AssetRows int64
 }
+
+// Drift 返回索引行数相对资产行数的差额：正数是孤儿索引行（资产行已消失、条目残留），
+// 负数是漏索引（资产行存在但索引里没有）。0 表示两者一致。
+func (s SearchIndexStatus) Drift() int64 { return s.IndexRows - s.AssetRows }
+
+// Drifted 报告索引行数与资产行数是否不一致。
+func (s SearchIndexStatus) Drifted() bool { return s.Drift() != 0 }
+
+// MissingIndexRows 报告是否存在**漏索引**（资产行数多于索引行数）。
+//
+// 只把这一侧计入 Ready：孤儿索引行（正差额）不伪造命中、也不让结果缺失，代价只是索引偏大
+// ——仓库级联删除天然会留下它，若也判成「未就绪」，任何一次删仓库都会把 ready 永久打成
+// false，信号很快会被运维忽略。反过来，负差额意味着有制品搜不到，必须让 ready 说出来。
+func (s SearchIndexStatus) MissingIndexRows() bool { return s.Drift() < 0 }
 
 // SearchIndexStore 是回填所需的最小存储能力，由 repository.SearchIndexStateRepo 实现。
 //
@@ -84,6 +109,8 @@ type SearchIndexStore interface {
 	Reset() error
 	// CountIndexed 数出水位以内的 asset 行数。
 	CountIndexed(lastID int64) (int64, error)
+	// MeasureDrift 取「索引行数 vs 资产行数」的对比快照。
+	MeasureDrift() (repository.SearchIndexDrift, error)
 }
 
 // SearchIndexService 编排索引回填与重建。零值不可用，用 NewSearchIndexService 构造。
@@ -137,6 +164,10 @@ func (s *SearchIndexService) Run(ctx context.Context) error {
 }
 
 // Status 返回状态快照（只读）。
+//
+// 除进度字段外，每次都现算一次「索引行数 vs 资产行数」的漂移：索引正确性原本完全依赖
+// 「所有 asset 写入必经仓储层」这一约定，而 completed_at 一旦置位就永不再回填，此后任何
+// 旁路写入都会留下永久静默的漂移——状态若只报进度，用户唯一能感知到的就是「某些制品搜不到」。
 func (s *SearchIndexService) Status() (SearchIndexStatus, error) {
 	state, err := s.store.Load()
 	if err != nil {
@@ -146,13 +177,43 @@ func (s *SearchIndexService) Status() (SearchIndexStatus, error) {
 	if err != nil {
 		return SearchIndexStatus{}, fmt.Errorf("统计已回填行数：%w", err)
 	}
-	return SearchIndexStatus{
-		Ready:     state.Completed(),
+	drift, err := s.store.MeasureDrift()
+	if err != nil {
+		return SearchIndexStatus{}, fmt.Errorf("统计索引漂移：%w", err)
+	}
+	status := SearchIndexStatus{
 		Indexed:   indexed,
 		Total:     state.TotalRows,
 		LastID:    state.LastID,
 		UpdatedAt: state.UpdatedAt,
-	}, nil
+		IndexRows: drift.IndexRows,
+		AssetRows: drift.AssetRows,
+	}
+	status.Ready = state.Completed() && !status.MissingIndexRows()
+	return status, nil
+}
+
+// logDrift 打一条「索引行数 vs 资产行数」的中文自检日志（**不含任何制品路径**：路径是用户数据，
+// 不该出现在运行日志里）。
+//
+// stage 是调用点的中文前缀（启动自检 / 回填完成），让运维一眼看出这是哪一次比对。
+func (s *SearchIndexService) logDrift(stage string) {
+	drift, err := s.store.MeasureDrift()
+	if err != nil {
+		log.Printf("%s：无法比对索引行数与资产行数：%v", stage, err)
+		return
+	}
+	if !drift.Drifted() {
+		log.Printf("%s：索引 %d 行与资产 %d 行一致，无漂移", stage, drift.IndexRows, drift.AssetRows)
+		return
+	}
+	// 漂移分两个方向，处置方式不同：孤儿行只浪费空间（重建可清），漏索引会让制品搜不到。
+	hint := "重建索引可修复（POST /api/v1/search/index/rebuild）"
+	if drift.Delta() < 0 {
+		hint = "存在漏索引的资产行，需重建索引修复（POST /api/v1/search/index/rebuild）"
+	}
+	log.Printf("%s：索引漂移——索引 %d 行、资产 %d 行（差额 %+d，正数为孤儿索引行、负数为漏索引）；%s",
+		stage, drift.IndexRows, drift.AssetRows, drift.Delta(), hint)
 }
 
 // Rebuild 受理一次全量重建：清空索引 → 水位归零 → 后台按回填算法重跑。
@@ -214,7 +275,12 @@ func (s *SearchIndexService) backfill(ctx context.Context) error {
 		return fmt.Errorf("搜索索引回填失败：读取回填状态出错：%w", err)
 	}
 	if state.Completed() {
-		// 已完成：立刻退出，零开销（这是每次进程启动的常态路径）。
+		// 已完成：立刻退出，不做任何回填（这是每次进程启动的常态路径）。
+		//
+		// 但「不再回填」不等于「不检查」：completed_at 一旦置位，回填就永不再跑，此后任何绕过
+		// 仓储层的写入都会留下永久静默的漂移。这条早退分支正是进程启动的必经之路，因此在
+		// 这里做一次行数比对并记日志——它是「某些制品搜不到」唯一的早期信号。
+		s.logDrift("搜索索引启动自检")
 		return nil
 	}
 	upper, total, err := s.store.SnapshotBounds()
@@ -292,6 +358,9 @@ func (s *SearchIndexService) backfill(ctx context.Context) error {
 	}
 	log.Printf("搜索索引回填完成：共 %d 行，本次补入 %d 行，水位 %d，耗时 %s",
 		total, filled, lastID, time.Since(started).Round(time.Millisecond))
+	// 完成时刻的漂移比对：回填按「上界快照」推进，上界之后的新行靠在线同步；若中途有写入
+	// 绕过仓储层，这里就是唯一能发现它的地方（回填此后再也不会跑）。
+	s.logDrift("搜索索引回填完成自检")
 	return nil
 }
 

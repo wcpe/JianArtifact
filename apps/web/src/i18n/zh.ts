@@ -629,7 +629,9 @@ export const zh = {
     checksums: "校验和 ({{count}})",
     noCoordinate: "（无坐标）",
     emptyHint: "可试试 ext:jar、repo:仓库名、-sources 或 version:1.2.3",
-    aggregationTruncated: "命中过多，仅聚合了前 {{scanned}} 条文件，计数为下界；请收窄关键词",
+    // 截断不只是「数字变小」：聚合按路径排序取前 N 条，排序靠后的包整包都不会出现。
+    aggregationTruncated:
+      "命中过多，仅聚合了前 {{scanned}} 条文件：计数为下界，排序靠后的部分包可能完全未出现在左侧列表；请收窄关键词",
     sortLabel: "排序",
     sortRelevance: "相关度",
     sortName: "名称",
