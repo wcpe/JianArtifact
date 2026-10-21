@@ -30,6 +30,9 @@
 | `JIAN_TLS_ADDR`                        | 内置 HTTPS 监听地址                       | 为空表示不启用                                                                                 |
 | `JIAN_TLS_CERT` / `JIAN_TLS_KEY`       | TLS 证书和私钥路径                        | 配置 `JIAN_TLS_ADDR` 时必填                                                                    |
 | `JIAN_AUTO_BLOCK_BASE_SECONDS`         | proxy 上游 auto-block 退避起始时长（秒）  | `40`；之后每档翻倍；`0` / 负数 / 非法回落默认（无禁用语义）                                    |
+| `JIAN_SEARCH_TIMEOUT_SECONDS`          | 搜索链路（网页搜索 / npm 搜索）总预算（秒） | `10`；三条搜索 SQL 共享同一 deadline；缺省 / 非数字 / 负数 / `0` 均回落默认（**无禁用语义**）  |
+| `JIAN_CAPACITY_CACHE_TTL_SECONDS`      | 仪表盘容量聚合结果的缓存有效期（秒）      | `30`；显式 `0` **禁用缓存**（每次实时聚合），非法 / 负数回落默认                               |
+| `JIAN_SQLITE_MAX_CONNS`                | SQLite 连接池上限（条）                   | `8`；WAL 下多读并发 + 单写；非正数 / 非法回落默认（**无禁用语义**）                            |
 | `JIAN_RESTART_UNIT`                    | 一键重启的目标 systemd 单元名             | `jianartifact`；须匹配 `[A-Za-z0-9._@-]`，否则该能力降级为不可用                               |
 | `JIAN_RESTART_SCOPE`                   | 一键重启的作用域                          | `system`；可选 `systemd-user`（**推荐**）/ `docker`；非法回落默认                              |
 
@@ -172,6 +175,29 @@
 三项配置的**真源是数据库**（`setting` 表），可在管理端「迁移与备份 → 备份与搬迁 → 自动备份与保留策略」卡上直接修改，**保存即生效、无需重启**（作业每 30 秒重读一次配置，最迟一个心跳周期内应用）。三个环境变量仅在**首次部署**（该组配置尚不存在时）作为初值写入一次，此后改环境变量不再生效——它们不再是"配置真源"，只是初始化默认值。
 
 **已废弃的环境变量**：`JIAN_REPLICATION_ROLE`、`JIAN_REPLICATION_PRIMARY_URL`、`JIAN_REPLICATION_RELAY_ENABLED` 自复制通道退役（FR-138）起不再被解析；旧环境文件里残留这些键不影响启动（未知键被忽略），可直接删除。
+
+## 搜索索引（FR-149）
+
+全局搜索（`GET /api/v1/search`）在 `asset.path` 上使用 FTS5 trigram 派生索引（`asset_path_fts`）。升级到含迁移 `0047` 的版本后：
+
+- **结构在迁移里建，数据不在迁移里灌**。迁移只建虚拟表与状态表（`search_index_state` 单行，`completed_at IS NULL` 表示未回填），历史行由启动后的后台任务按 `last_id` 水位**分批**回填。百万级库预计分钟级完成。
+- **回填完成前搜索仍然可用**，但走的是旧的 `path LIKE '%词%'` 全表扫描路径——结果正确、尚未提速。这是刻意取舍（宁可慢而全，不可快而漏）。
+- 进程中途重启会从水位**续跑**，不需要人工干预。
+- 本库只有**单个数据库连接**（`SetMaxOpenConns(1)`），回填按批提交并在批间让出，不会长时间阻塞在线读写。
+
+**观测**（仅管理员）：
+
+- `GET /api/v1/search/index` → `{ready, indexed, total, lastId, updatedAt}`。`ready=false` 表示回填未完成；`indexed/total` 用于判断剩余量。
+- `POST /api/v1/search/index/rebuild` → `202` 表示已受理，后台执行「清空索引 → 水位归零 → 重新分批回填」；**正在运行时重复触发返回 `409`**。重建全程在线，清空后搜索自动退回降级路径，正确性不受影响。
+
+**何时需要重建**：索引与 `asset` 出现漂移（例如人工改库，或将来新增了未同步索引的写入路径）。重建同时会清掉仓库级联删除留下的孤儿索引行。
+
+**磁盘**：trigram 索引随 `path` 文本量增长，需为数据库文件预留额外空间；`path` 越长的部署增量越明显。
+
+**已知限制**：
+
+- 短于 3 字符的查询词无法走 trigram 索引（自动退回 `LIKE`），`jar` 这类命中率极高的宽泛词可能**不比扫描快**——这类查询靠 `JIAN_SEARCH_TIMEOUT_SECONDS` 兜底。
+- 搜索超时返回 **504 `search_timeout`**，前端应提示可缩小范围后重试。
 
 ### 1.2 节点搬迁（替代原主备复制）
 
@@ -564,6 +590,14 @@ curl -fsSL -o /tmp/jianartifact "<Release 附件 URL>" && sha256sum /tmp/jianart
 - 回滚**不能只回滚代码**——旧版本代码不认识 `acl` 新增的 `subject_type` / `subject_group_id` 两列，也无法理解六档动作，只回退二进制会让服务在新库上跑不起来或判错权限。降级必须**从升级前的备份恢复数据库**（与 §6 回滚「若新版本执行了不可逆 schema 迁移，必须同时恢复对应数据备份」同一口径）；
 - 升级后可对若干仓库抽样核对 ACL 条目数与可见性未变（`user_group` / `user_group_member` 在全新库上为空属预期）；
 - **权限口径变更需管理员关注**：动作由三档扩为六档后，**`write` 不再蕴含 `delete`**（`delete` 现在要单独授予）。本次不会让既有账号失去删除能力——升级前协议层删除本就**仅全局管理员可用**，所以能删的人照旧能删；变化是删除权**放开**成了可授予的仓库级动作。若此前为了「让某人能删某个仓库」而把该账号加成了全局管理员，升级后建议改为按仓库授予 `delete` 并回收全局管理员，避免实例级权限被当仓库级权限发放。
+
+**迁移 `0048_asset_size_index.sql`：新增 `(repository_id, size)` 覆盖索引并删除被取代的 `idx_asset_repository`**：本次给 `asset` 加一个复合覆盖索引，让两条高频聚合不再回表读整行——仪表盘容量聚合（`COUNT(*)` + `SUM(size)`）改走完整覆盖索引扫描，仓库存储配额（`WHERE repository_id = ?` + `COUNT(*)` + `SUM(size)`，每次上传预检与提交点复检各跑一次）改走前导列等值定位的覆盖索引扫描。**不改表结构、不回填数据**，也不改变任何查询的返回口径，因此升级只需常规快照，不必按上面 `0046` 那样准备降级用的库恢复：
+
+- 迁移耗时随 `asset` 行数增长，期间短暂占用写锁（与其他 DDL 迁移同口径）；
+- 索引带来约 **+1.4 MB / 10 万行** 的库文件增长，这是用磁盘换聚合延迟的固定成本；同时**删除了 `idx_asset_repository`**（被复合索引的前缀完全覆盖），因此净增空间小于「新增一个索引」的字面值；
+- **删除 `idx_asset_repository` 是替换而不是减少覆盖**：SQLite 对「只按 `repository_id` 过滤」的查询可以直接使用复合索引的前导列，原本走旧索引的查询改走 `idx_asset_repo_size`，查询计划不受影响。若观察到某条仓库维度查询变慢，请用 `EXPLAIN QUERY PLAN` 确认其计划——正常情况下应仍显示 `USING [COVERING] INDEX idx_asset_repo_size`；
+- 降级不受阻：`DROP INDEX idx_asset_repo_size;` + `CREATE INDEX idx_asset_repository ON asset (repository_id);` 即可回到升级前的空间占用与查询计划；旧版本代码不认识新索引也不影响启动与读写（索引由 SQLite 自主维护，与代码无关）；
+- 升级后仪表盘容量卡片与每次上传的配额检查会立刻受益；若观察到容量数字与升级前不一致，那是聚合重新计算的正常结果，索引只改变读法、不改变 `COUNT` / `SUM` 语义。
 
 ### 5.2 备份
 

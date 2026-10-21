@@ -318,3 +318,127 @@ func TestMigration0047AddsBackupOriginAndVerification(t *testing.T) {
 		t.Fatalf("删除包后演练报告应随级联清除，剩余 %d 条", reports)
 	}
 }
+
+// capacityAggregateSQL 是仪表盘容量聚合里针对 asset 的那条语句，镜像自
+// internal/repository/operations_observability_repo.go 的 aggregateCapacity：
+// 唯一的引用列是 size，没有任何 WHERE / ORDER BY 子句。persistence 被 repository
+// 依赖、无法反向 import，因此只能保持同形状；改那条 SQL 的引用列时必须同步这里。
+const capacityAggregateSQL = `SELECT COUNT(*) AS asset_count, COALESCE(SUM(size),0) AS logical_bytes FROM asset`
+
+// repoStatsSQL 是仓库存储配额（FR-41）的单仓库聚合，镜像自
+// internal/repository/asset_repo.go 的 repoStatsQuery。它不属于 0048 的服务对象，
+// 但必须确认新索引没有把它的计划带偏。
+const repoStatsSQL = `SELECT ? AS repository_id, COUNT(*) AS count, COALESCE(SUM(size), 0) AS total_size FROM asset WHERE repository_id = ?`
+
+// TestMigration0048BuildsAssetSizeCoveringIndex 校验 0048 的三项要求：
+//  1. 建出**复合**覆盖索引 (repository_id, size)——两条聚合都在整表/整仓读 size；
+//  2. 配额查询（每次上传走两遍的热路径）命中该索引且**覆盖**（不回表）；
+//  3. 冗余的 idx_asset_repository 已被删除（其前缀被复合索引覆盖）。
+//
+// 为什么断言计划而不只断言索引存在：索引存在但不被命中等于白占空间和写放大。
+// 为什么必须断言 "COVERING"：本查询只引用 size 与 repository_id，若计划退化成
+// `SCAN asset USING INDEX ...`（非覆盖），SQLite 要为每一行回表取值，代价比全表扫更高，
+// 说明索引列定义已经不对了，必须报错。
+//
+// 关于统计信息：断言不依赖 ANALYZE。planner 在「顺序扫表」与「顺序扫覆盖索引」之间取舍时
+// 依据索引行宽小于表行宽，与 sqlite_stat1 的基数估计无关；这里**故意不建统计信息**，
+// 让测试同时锁住「不需要 ANALYZE 也走覆盖索引」这一前提。
+//
+// 空表也要断言：迁移刚建库时 asset 为 0 行，若计划在空表上退回 "SCAN asset"，
+// 说明该优化在「刚升级、还没数据」的窗口里不生效。
+func TestMigration0048BuildsAssetSizeCoveringIndex(t *testing.T) {
+	db := openTestDB(t)
+	if err := db.Migrate(); err != nil {
+		t.Fatalf("Migrate：%v", err)
+	}
+	// 索引存在、且恰好是 (repository_id, size) 两列、顺序固定（前导列必须是 repository_id，
+	// 否则配额查询的等值定位用不上它）。
+	var columns []string
+	if err := db.Select(&columns, `SELECT name FROM pragma_index_info('idx_asset_repo_size') ORDER BY seqno`); err != nil {
+		t.Fatalf("读取 idx_asset_repo_size 列定义：%v", err)
+	}
+	if len(columns) != 2 || columns[0] != "repository_id" || columns[1] != "size" {
+		t.Fatalf("idx_asset_repo_size 应为 (repository_id, size)，实际列 = %v", columns)
+	}
+
+	// 冗余索引必须已被删除：留着它只会让每次 asset 写入多维护一棵被完全覆盖的 B-Tree。
+	var legacy int
+	if err := db.Get(&legacy, `SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_asset_repository'`); err != nil {
+		t.Fatalf("检查 idx_asset_repository 是否残留：%v", err)
+	}
+	if legacy != 0 {
+		t.Errorf("idx_asset_repository 应已被 0048 删除（其前缀被 idx_asset_repo_size 覆盖），实际仍存在")
+	}
+
+	// 空表 + 有数据两种状态都必须命中：空表用迁移刚完成的状态，有数据用插入后的状态。
+	// 有数据状态先建仓库：asset.repository_id 是指向 repository(id) 的外键，
+	// 连接串开启了 foreign_keys，直接插资产会被约束拒绝。
+	if _, err := db.Exec(`INSERT INTO repository (id, name, format, type) VALUES
+		(1, 'cap-a', 'raw', 'hosted'),
+		(2, 'cap-b', 'raw', 'hosted')`); err != nil {
+		t.Fatalf("写测试仓库：%v", err)
+	}
+	for _, stage := range []string{"空表", "有数据"} {
+		if stage == "有数据" {
+			if _, err := db.Exec(`INSERT INTO asset (id, repository_id, path, blob_hash, size) VALUES
+				(1, 1, 'a.bin', 'h1', 100),
+				(2, 1, 'b.bin', 'h2', 2048),
+				(3, 2, 'c.bin', 'h3', 4096)`); err != nil {
+				t.Fatalf("写测试资产：%v", err)
+			}
+		}
+		plan := strings.Join(explainPlanLines(t, db, capacityAggregateSQL), " | ")
+		if !strings.Contains(plan, "SCAN asset USING COVERING INDEX idx_asset_repo_size") {
+			t.Errorf("%s：容量聚合未走 idx_asset_repo_size 覆盖索引，计划 = %s", stage, plan)
+		}
+	}
+
+	// 结果口径不受索引影响：覆盖索引只改变读法，不改变 COUNT/SUM 的语义。
+	var got struct {
+		Count int64 `db:"asset_count"`
+		Bytes int64 `db:"logical_bytes"`
+	}
+	if err := db.Get(&got, capacityAggregateSQL); err != nil {
+		t.Fatalf("执行容量聚合：%v", err)
+	}
+	if got.Count != 3 || got.Bytes != 6244 {
+		t.Fatalf("容量聚合结果 = %+v，期望 count=3 bytes=6244", got)
+	}
+
+	// 配额查询（热路径）：必须是覆盖索引扫描。这里**钉死索引名与 COVERING**，
+	// 因为 0048 的主要收益就在这条语句（实测 91.95ms → 1.10ms）；若它退化为回表，
+	// 说明复合索引的列顺序或内容被改坏了，必须报错而不是放过。
+	repoPlan := strings.Join(explainPlanLines(t, db, repoStatsSQL, int64(1), int64(1)), " | ")
+	if !strings.Contains(repoPlan, "USING COVERING INDEX idx_asset_repo_size") {
+		t.Errorf("单仓库配额聚合未走 idx_asset_repo_size 覆盖索引，计划 = %s", repoPlan)
+	}
+
+	// 幂等：重复迁移不得重复建索引或报错。
+	if err := db.Migrate(); err != nil {
+		t.Fatalf("重复 Migrate：%v", err)
+	}
+	again := strings.Join(explainPlanLines(t, db, capacityAggregateSQL), " | ")
+	if !strings.Contains(again, "SCAN asset USING COVERING INDEX idx_asset_repo_size") {
+		t.Errorf("重复迁移后覆盖索引不再命中，计划 = %s", again)
+	}
+}
+
+// explainPlanLines 返回 EXPLAIN QUERY PLAN 的 detail 列。
+// EXPLAIN QUERY PLAN 固定四列，sqlx 要求字段与列一一对应。
+func explainPlanLines(t *testing.T, db *DB, query string, args ...any) []string {
+	t.Helper()
+	var rows []struct {
+		ID     int    `db:"id"`
+		Parent int    `db:"parent"`
+		NotUsd int    `db:"notused"`
+		Detail string `db:"detail"`
+	}
+	if err := db.Select(&rows, "EXPLAIN QUERY PLAN "+query, args...); err != nil {
+		t.Fatalf("EXPLAIN QUERY PLAN：%v", err)
+	}
+	out := make([]string, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, row.Detail)
+	}
+	return out
+}

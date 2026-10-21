@@ -35,7 +35,8 @@ type appServices struct {
 	ociSvc              *domain.OCIService
 	formatMetadataSvc   *domain.FormatMetadataService
 	publishPolicySvc    *domain.PublishPolicyService
-	userGroupSvc        *domain.UserGroupService // FR-36：用户组（授权主体之一）的 CRUD 与成员维护
+	userGroupSvc        *domain.UserGroupService   // FR-36：用户组（授权主体之一）的 CRUD 与成员维护
+	searchIndexSvc      *domain.SearchIndexService // FR-149：搜索索引后台回填与全量重建
 	assetSvc            *domain.AssetService
 	migrationSvc        *domain.MigrationService
 	settingSvc          *domain.SettingService
@@ -74,13 +75,22 @@ type appServices struct {
 
 // openServices 打开数据库、执行迁移并装配领域服务。调用方负责在返回的 db 上 Close。
 func openServices(cfg *config.Config) (*appServices, error) {
-	db, err := persistence.Open(cfg.DBPath)
+	// SQLite 连接池上限来自 JIAN_SQLITE_MAX_CONNS（缺省/非正回落 8）。
+	// WAL 支持「多读 + 单写」，池放宽后读侧才真正并发；写仍由 SQLite 自身串行化。
+	db, err := persistence.OpenWithMaxConns(cfg.DBPath, cfg.SQLiteMaxConns)
 	if err != nil {
 		return nil, err
 	}
 	if err := db.Migrate(); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("应用数据库迁移：%w", err)
+	}
+	// FR-149：fts5 与 trigram 是 SQLite 的构建期能力，缺能力时搜索索引（asset_path_fts，迁移 0047）
+	// 根本无法工作。这里在迁移成功后立刻自检，把「构建不支持」这种环境问题变成一句可读的中文
+	// 启动错误，而不是等到第一次写资产才在事务里冒出一句泛化的 SQL logic error。
+	if err := persistence.CheckFTS5Support(); err != nil {
+		_ = db.Close()
+		return nil, err
 	}
 
 	userRepo := repository.NewUserRepo(db)
@@ -104,6 +114,9 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	repoSvc.SetFormatMetadataRepo(formatMetadataRepo)
 	// FR-36：授权判定据此展开主体的组归属；不注入则退化成「仅按用户自身 ACL」。
 	repoSvc.SetUserGroupRepo(userGroupRepo)
+	// FR-149 §3.4：搜索链路总预算来自 JIAN_SEARCH_TIMEOUT_SECONDS（缺省/非法回落 10s）；
+	// 未注入时 domain 侧以 searchTimeoutDefault 常量兜底（两者必须同值）。
+	repoSvc.SetSearchTimeout(cfg.SearchTimeout)
 	assetSvc := domain.NewAssetService(repoRepo, assetRepo, blobs, upstreamClient)
 	// FR-43：auto-block 退避起始时长来自 JIAN_AUTO_BLOCK_BASE_SECONDS（缺省/非法回落 40s）；
 	// 未注入时 domain 侧以 autoBlockInitial 常量兜底（两者必须同值）。
@@ -187,6 +200,10 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	auditLogRepo := repository.NewAuditLogRepo(db)
 	auditObservabilityRepo := repository.NewAuditObservabilityRepo(db)
 	operationsMetrics := repository.NewOperationsObservabilityRepo(db)
+	// 仪表盘容量聚合的缓存有效期来自 JIAN_CAPACITY_CACHE_TTL_SECONDS
+	// （缺省/非法回落 30s，显式 0 = 禁用缓存、每次请求实时聚合）；
+	// 未注入时 repository 侧以 defaultCapacityCacheTTL 常量兜底（两者必须同值）。
+	operationsMetrics.SetCapacityCacheTTL(cfg.CapacityCacheTTL)
 	operationsAlertRepo := repository.NewOperationsAlertRepo(db)
 	dashboardSvc := domain.NewOperationsDashboardService(operationsMetrics)
 	assetDownloadRepo := repository.NewAssetDownloadRepo(db)
@@ -236,6 +253,9 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	backupRepo := repository.NewBackupPackageRepo(db)
 	backupSvc := domain.NewBackupService(db, backupRepo, blobs, cfg.DataDir, cfg.DBPath, version, nodeIdentity.NodeID)
 
+	// FR-149 §3.2：搜索索引的后台异步回填服务。只做编排（分批推进水位 / 可中断续跑 / 可重建），
+	// 索引行与状态表的维护原语都在 repository 层；真正的启动点在各子命令就绪后调用 Start。
+	searchIndexSvc := domain.NewSearchIndexService(repository.NewSearchIndexStateRepo(db))
 	// FR-44：维护类周期作业统一经调度器驱动（间隔 0 禁用；启动不立即执行）。
 	schedulerSvc := scheduler.New()
 	// FR-40 追加七：一键重启。单元名与作用域只来自启动配置（环境变量），
@@ -352,6 +372,7 @@ func openServices(cfg *config.Config) (*appServices, error) {
 		formatMetadataSvc:   formatMetadataSvc,
 		publishPolicySvc:    publishPolicySvc,
 		userGroupSvc:        userGroupSvc,
+		searchIndexSvc:      searchIndexSvc,
 		quotaSvc:            quotaSvc,
 		assetSvc:            assetSvc,
 		migrationSvc:        migrationSvc,
@@ -464,9 +485,10 @@ func (s *appServices) handlers(version string, checks []func() error) *api.Handl
 		PublicURL:               s.publicURL,
 		EnabledFormats:          s.repoSvc.EnabledFormats(),
 		PublishPolicies:         s.publishPolicySvc,
-		UserGroups:              s.userGroupSvc, // FR-36：用户组管理端点（仅管理员）
-		MaintenanceJobs:         s.scheduler,    // FR-41：维护作业清单与手动触发
-		Restart:                 s.restartSvc,   // FR-40 追加七：一键重启（先回响应，再重启）
+		UserGroups:              s.userGroupSvc,   // FR-36：用户组管理端点（仅管理员）
+		SearchIndex:             s.searchIndexSvc, // FR-149：搜索索引状态与重建端点（仅管理员）
+		MaintenanceJobs:         s.scheduler,      // FR-41：维护作业清单与手动触发
+		Restart:                 s.restartSvc,     // FR-40 追加七：一键重启（先回响应，再重启）
 		OnUpstreamTimeoutChange: func(d time.Duration) {
 			if s.upstreamClient != nil {
 				s.upstreamClient.SetTimeout(d)

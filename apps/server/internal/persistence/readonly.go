@@ -27,6 +27,7 @@ func AssetBlobs(dbPath string) (map[string]int64, error) {
 		return nil, fmt.Errorf("打开快照 %s：%w", dbPath, err)
 	}
 	defer func() { _ = conn.Close() }()
+	// 专用单用途池：本函数顺序发出一条聚合查询再逐行扫描，不需要第二条连接。
 	conn.SetMaxOpenConns(1)
 
 	rows, err := conn.Query(`SELECT blob_hash, MAX(size) FROM asset GROUP BY blob_hash`)
@@ -58,6 +59,7 @@ func RowCounts(dbPath string, tables []string) (map[string]int, error) {
 		return nil, fmt.Errorf("打开快照 %s：%w", dbPath, err)
 	}
 	defer func() { _ = conn.Close() }()
+	// 专用单用途池：逐表 COUNT 都是顺序执行，不需要第二条连接。
 	conn.SetMaxOpenConns(1)
 
 	out := make(map[string]int, len(tables))

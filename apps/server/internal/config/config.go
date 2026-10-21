@@ -71,6 +71,16 @@ const (
 	EnvRestartUnit  = "JIAN_RESTART_UNIT"  // 重启目标单元名；缺省 jianartifact
 	EnvRestartScope = "JIAN_RESTART_SCOPE" // 作用域 system / systemd-user / docker；非法值回落 system
 
+	// FR-149 搜索性能：搜索链路（网页搜索 / npm 搜索 / suggest）的总预算，单位秒。
+	EnvSearchTimeoutSeconds = "JIAN_SEARCH_TIMEOUT_SECONDS" // 一次搜索的总预算上限；非正数回落默认（无禁用语义）
+
+	// 仪表盘容量聚合结果的缓存有效期，单位秒；0 禁用缓存（每次请求实时聚合）。
+	EnvCapacityCacheTTLSeconds = "JIAN_CAPACITY_CACHE_TTL_SECONDS"
+
+	// SQLite 连接池上限。WAL 允许「多读 + 单写」，把池放宽才能真正吃到并发读的收益；
+	// 非正数与非法值回落默认（池上限取 0 等于禁用连接池，不是有意义的配置，故无禁用语义）。
+	EnvSQLiteMaxConns = "JIAN_SQLITE_MAX_CONNS"
+
 	defaultDataDir         = "./data"
 	defaultHTTPAddr        = ":8080"
 	defaultUpstreamTimeout = 30 * time.Second
@@ -106,6 +116,22 @@ const (
 	// 与 domain 侧兜底常量 autoBlockInitial（proxy_health.go）保持同值：
 	// 装配层始终注入本值，domain 常量只在未装配/测试构造时兜底。
 	defaultAutoBlockBase = 40 * time.Second
+	// defaultSearchTimeout 是搜索链路总预算的默认值（FR-149 §3.4）。
+	// 与 domain 侧兜底常量 searchTimeoutDefault（repository_service.go）保持同值：
+	// 装配层始终注入本值，domain 常量只在未装配/测试构造时兜底。
+	defaultSearchTimeout = 10 * time.Second
+	// defaultCapacityCacheTTL 是仪表盘容量聚合缓存有效期的默认值（JIAN_CAPACITY_CACHE_TTL_SECONDS）。
+	// 与 repository 侧兜底常量 defaultCapacityCacheTTL（operations_observability_repo.go）保持同值：
+	// 装配层始终注入本值，repository 常量只在未装配 / 测试构造时兜底。
+	// 取 30 秒：容量聚合要遍历整张 asset 表（线上约 8.6 GB），而仪表盘是常用落地页；
+	// 30 秒的滞后对运维展示无影响，却能把重复加载的聚合次数压到「每分钟最多两次」。
+	defaultCapacityCacheTTL = 30 * time.Second
+	// defaultSQLiteMaxConns 是 SQLite 连接池上限的默认值（JIAN_SQLITE_MAX_CONNS）。
+	// 与 persistence 侧兜底常量 persistence.DefaultMaxOpenConns 保持同值：
+	// 装配层始终注入本值，Open 在未显式给值时用同一个数兜底。
+	// 取 8：WAL 下读并发收益在 8 条连接上已基本吃满，再放宽只是增加 SQLite 侧的
+	// 页面缓存副本与文件句柄，收益递减。
+	defaultSQLiteMaxConns = 8
 	// defaultOIDCUsernameClaim 是 OIDC 用户名的缺省 claim；各 IdP 常见取值见 OPERATIONS。
 	defaultOIDCUsernameClaim = "preferred_username"
 	// defaultLDAPUserFilter 与 defaultLDAPEmailAttr 是 LDAP 检索的缺省口径（OpenLDAP 风格 uid）。
@@ -157,17 +183,26 @@ type Config struct {
 	// BackupOrphanGrace 是孤儿回收的宽限期：mtime 晚于此窗口的文件一律保留，
 	// 给"拷入 → 界面导入"留出操作窗口（FR-40 追加八）。
 	BackupOrphanGrace time.Duration
-	TLSAddr           string     // 服务内置 TLS 监听地址（FR-131）；空 = 不启用
-	TLSCert           string     // TLS PEM 证书文件路径（FR-131）
-	TLSKey            string     // TLS PEM 私钥文件路径（FR-131）
-	OIDC              OIDCConfig // FR-34：OIDC 身份源接入配置（Issuer 空 = 不启用）
-	LDAP              LDAPConfig // FR-35：LDAP 身份源接入配置（URL 空 = 不启用）
 	// RestartUnit 是一键重启的目标单元名（FR-40 追加七）；仅来自环境变量，
 	// 绝不从请求体读取——这是防命令注入的第一道边界（见 domain/restart_service.go）。
 	RestartUnit string
 	// RestartScope 是一键重启的作用域（FR-40 追加七）：system / systemd-user / docker；
 	// 非法值已在解析期回落 system，装配层可放心使用。
 	RestartScope string
+	// SearchTimeout 是搜索链路（网页搜索 / npm 搜索 / suggest）的总预算上限（FR-149 §3.4）；
+	// 非正数（含非法值）已在解析期回落默认值，**无禁用语义**。
+	SearchTimeout time.Duration
+	// CapacityCacheTTL 是仪表盘容量聚合结果的缓存有效期（JIAN_CAPACITY_CACHE_TTL_SECONDS）。
+	// 0 = 禁用缓存（每次请求实时聚合），非数字 / 负数已在解析期回落默认 30s。
+	CapacityCacheTTL time.Duration
+	// SQLiteMaxConns 是 SQLite 连接池上限（JIAN_SQLITE_MAX_CONNS）。
+	// 非正数（含非法值）已在解析期回落默认 defaultSQLiteMaxConns，**无禁用语义**。
+	SQLiteMaxConns int
+	TLSAddr        string     // 服务内置 TLS 监听地址（FR-131）；空 = 不启用
+	TLSCert        string     // TLS PEM 证书文件路径（FR-131）
+	TLSKey         string     // TLS PEM 私钥文件路径（FR-131）
+	OIDC           OIDCConfig // FR-34：OIDC 身份源接入配置（Issuer 空 = 不启用）
+	LDAP           LDAPConfig // FR-35：LDAP 身份源接入配置（URL 空 = 不启用）
 }
 
 // LDAPConfig 是 LDAP 目录接入配置（FR-35，见 ADR-0029）；
@@ -291,6 +326,9 @@ func Load() (*Config, error) {
 		BackupRetentionDays:         backupRetentionDays(),
 		BackupOrphanCleanupInterval: backupOrphanCleanupInterval(),
 		BackupOrphanGrace:           backupOrphanGrace(),
+		SearchTimeout:               searchTimeout(),
+		CapacityCacheTTL:            capacityCacheTTL(),
+		SQLiteMaxConns:              sqliteMaxConns(),
 		TLSAddr:                     envOr(EnvTLSAddr, ""),
 		TLSCert:                     os.Getenv(EnvTLSCert),
 		TLSKey:                      os.Getenv(EnvTLSKey),
@@ -458,6 +496,47 @@ func autoBlockBase() time.Duration {
 	return envPositiveDurationOr(EnvAutoBlockBaseSeconds, defaultAutoBlockBase, time.Second)
 }
 
+// searchTimeout 解析 JIAN_SEARCH_TIMEOUT_SECONDS（秒，FR-149 §3.4）：搜索链路
+// （网页搜索 / npm 搜索 / 后续 suggest）的**总预算**，三条语句共享同一个 deadline。
+// 缺省、非数字、负数与显式 0 都回落默认 10s——本项**无禁用语义**：搜索是无界查询，
+// 关掉超时等于开放一个可以长时间占住数据库连接（主库池见 db.go 的 OpenWithMaxConns）
+// 的入口。这与 JIAN_STORAGE_CLEANUP_INTERVAL 的「0 = 禁用」形态不同，口径同 upstreamTimeout /
+// autoBlockBase（取 0 无意义）。
+func searchTimeout() time.Duration {
+	return envPositiveDurationOr(EnvSearchTimeoutSeconds, defaultSearchTimeout, time.Second)
+}
+
+// capacityCacheTTL 解析 JIAN_CAPACITY_CACHE_TTL_SECONDS（秒）：仪表盘容量聚合结果的缓存有效期。
+// 缺省、非数字与负数回落默认 30s；**显式 0 = 禁用缓存**（每次请求都重新聚合）。
+//
+// 为什么本项**有**禁用语义（与 searchTimeout / autoBlockBase 的「0 也回落默认」相反）：
+// 判据不是「取 0 是否常见」，而是「取 0 是否会放开一个无界的、可能伤害系统的操作」。
+//   - 容量缓存不是授权数据：鉴权与 ACL 判定仍逐请求读库，组归属与仓库可见性变更即时生效，
+//     与本缓存无关；缓存的只是「仓库数 / 资产数 / 逻辑字节数」这类展示口径。
+//   - 禁用它的代价是**每次多跑一次有界聚合**（两条单表语句，最坏是整表扫描），而不是放开
+//     一个可以无限占住唯一数据库连接的入口——这正是 JIAN_SEARCH_TIMEOUT_SECONDS 拒绝提供
+//     禁用语义的理由（关闭超时 = 无界查询），本项不具备该性质。
+//   - 反过来，「要实时数字」确是真实的运维需求：批量导入 / 迁移核对期间，运维需要仪表盘
+//     立刻反映真实占用；重启进程虽也能清掉缓存，但那不是一个可用于日常运维的手段。
+//
+// 因此这里沿用 JIAN_STORAGE_CLEANUP_INTERVAL / JIAN_BLOB_GC_INTERVAL 的「0 = 禁用」形态：
+// 把「关掉一个纯粹的性能优化」当作正当配置，而不是当成非法值。
+//
+// 不设上限夹取：本项只影响展示数字的新鲜度，超长 TTL 不破坏任何安全或正确性属性（进程重启
+// 即自愈，运维看到数字滞后可直接调小），而**静默改写运维显式给出的值**是更糟的语义——口径
+// 同 FR-43 拒绝给 auto-block 退避加上限的既有取舍：配置值应当可预期，不做隐藏的二次加工。
+func capacityCacheTTL() time.Duration {
+	return envDurationOr(EnvCapacityCacheTTLSeconds, defaultCapacityCacheTTL, time.Second)
+}
+
+// sqliteMaxConns 解析 JIAN_SQLITE_MAX_CONNS（连接条数，纯数量而非时长）：
+// SQLite 主库连接池上限。缺省、非数字、负数与显式 0 都回落默认 8——本项**无禁用语义**，
+// 池上限为 0 在 database/sql 里表示「无上限」，既不是想要的语义，也会让 SQLite 侧的
+// 页面缓存副本与文件句柄随负载无界增长，因此与非正数一并按非法值处理。
+func sqliteMaxConns() int {
+	return envPositiveIntOr(EnvSQLiteMaxConns, defaultSQLiteMaxConns)
+}
+
 // envDurationOr 按给定单位解析环境变量为时长：缺省、非法与负数取 fallback，显式 0 原样返回（禁用语义）。
 func envDurationOr(key string, fallback, unit time.Duration) time.Duration {
 	v := strings.TrimSpace(os.Getenv(key))
@@ -484,6 +563,21 @@ func envPositiveDurationOr(key string, fallback, unit time.Duration) time.Durati
 		return fallback
 	}
 	return time.Duration(n) * unit
+}
+
+// envPositiveIntOr 解析环境变量为纯数量（非时长）：缺省、非法与 <=0 都取 fallback。
+// 语义对齐 envPositiveDurationOr 的**无禁用语义**口径，只是不做单位换算
+// （连接条数这类配置不存在「取 0 = 禁用」的合理解释）。
+func envPositiveIntOr(key string, fallback int) int {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return fallback
+	}
+	return n
 }
 
 // loadOrCreateSecret 解析 JWT 签名密钥：环境变量 > 本地持久化文件 > 新生成并落盘。

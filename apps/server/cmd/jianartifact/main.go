@@ -327,6 +327,17 @@ func newApplicationHandler(cfg *config.Config, svc *appServices, assets fs.FS) h
 			// 由 RegisterHandlersWithOptions 注册，不再经此处手写注册。
 			// FR-30: 全局搜索
 			r.GET("/api/v1/search", authMW, apiHandlers.SearchAssets)
+			// FR-149 §3.2: 搜索索引回填状态与全量重建（仅管理员，admin 校验在 handler 内）。
+			// 与上一行同组同先例——**非契约端点**，不写入 api/openapi.yaml：它们只服务运维观测
+			// 与故障修复，形状会随后续批次（查询改写、suggest）演进，不为易变的内部进度形状
+			// 引入对外承诺。理由详见 internal/api/search_index_handlers.go 文件头。
+			r.GET("/api/v1/search/index", authMW, apiHandlers.GetSearchIndexStatus)
+			r.POST("/api/v1/search/index/rebuild", authMW, apiHandlers.RebuildSearchIndex)
+			// FR-153: 搜索建议（搜索框下拉候选：包名 + 仓库名）。
+			// 同上为**非契约端点**，不写入 api/openapi.yaml：它只服务前端搜索框，候选形状会随
+			// 包坐标解析口径演进，不是协议客户端依赖的稳定面。权限（管理员搜全部 / 其余
+			// public ∪ 被授 read）在领域层统一判定，可读集合为空时返回 200 + 空 items 而非 403。
+			r.GET("/api/v1/search/suggest", authMW, apiHandlers.SuggestSearch)
 			// FR-66: 匿名访问全局开关（admin，主体由 Optional 注入，handler 内校验）
 			r.GET("/api/v1/settings/anonymous-access", authMW, apiHandlers.GetAnonymousAccessSetting)
 			r.PUT("/api/v1/settings/anonymous-access", authMW, apiHandlers.PutAnonymousAccessSetting)
@@ -408,6 +419,10 @@ func run() error {
 	svc.hostMonitoringSvc.Start(ctx, time.Now)
 	// FR-44：维护类周期作业的统一调度器（作业已在 wiring 装配期注册完毕）。
 	svc.scheduler.Start(ctx)
+	// FR-149 §3.2：搜索索引的后台异步回填。一次性任务、不阻塞启动（这里只是挂 goroutine），
+	// 分批推进水位、可中断续跑；未完成期间搜索照常可用（走既有 LIKE 路径）。
+	// 不用 FR-44 调度器：回填要尽快开始、只跑一次、跑完即退出，与周期作业语义相反。
+	svc.searchIndexSvc.Start(ctx)
 
 	errCh := make(chan error, 1)
 	go func() {
