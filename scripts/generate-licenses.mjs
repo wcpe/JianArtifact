@@ -142,10 +142,23 @@ if (existsSync(outFile)) {
 const npm = collectNpm() ?? previous.npm ?? [];
 const go = collectGo() ?? previous.go ?? [];
 
+// ---------- 时间戳幂等：清单内容未变时沿用旧 generatedAt ----------
+// generatedAt 的语义是「清单内容生成时间」，而不是「上次执行构建的时间」。此前每次构建都
+// 无条件写入当前时间，而 apps/web 的 build 首步就调用本脚本，于是每跑一次构建就把已入库的
+// licenses.json 改脏——「构建」这种本应只读的操作产生了源码 diff。
+// 这里改为比较清单本体（go/npm，不含 generatedAt 自身）：内容一致就沿用旧时间戳，使重复
+// 构建的输出字节完全一致、工作区保持干净。首次生成、旧文件缺失或损坏时仍取当前时间。
+const manifestUnchanged =
+  JSON.stringify({ go, npm }) ===
+  JSON.stringify({ go: previous.go ?? [], npm: previous.npm ?? [] });
+const previousStamp =
+  typeof previous.generatedAt === "string" && previous.generatedAt ? previous.generatedAt : null;
+const reusedStamp = manifestUnchanged && previousStamp !== null;
+const generatedAt = reusedStamp ? previousStamp : new Date().toISOString();
+
 mkdirSync(dirname(outFile), { recursive: true });
-writeFileSync(
-  outFile,
-  JSON.stringify({ generatedAt: new Date().toISOString(), go, npm }, null, 2) + "\n",
-  "utf8",
+writeFileSync(outFile, JSON.stringify({ generatedAt, go, npm }, null, 2) + "\n", "utf8");
+console.log(
+  `[licenses] 写入 ${outFile}：Go ${go.length} 条，npm ${npm.length} 条` +
+    (reusedStamp ? `（内容未变，沿用生成时间 ${generatedAt}）` : ""),
 );
-console.log(`[licenses] 写入 ${outFile}：Go ${go.length} 条，npm ${npm.length} 条`);
