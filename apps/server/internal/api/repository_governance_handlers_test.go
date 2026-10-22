@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// newRepoGovernanceTestHandlers 组装 FR-41 存储治理端点（仓库配额 / 代理缓存保留 / 空目录清理）的测试环境。
+// newRepoGovernanceTestHandlers 组装存储治理端点（仓库配额 / 代理缓存保留 / 空目录清理）的测试环境。
 // 审计仓储一并接上：这些用例既要断言字段生效，也要断言治理变更真的留痕（含 detail 内容）。
 func newRepoGovernanceTestHandlers(t *testing.T) (*Handlers, *repository.AuditLogRepo) {
 	t.Helper()

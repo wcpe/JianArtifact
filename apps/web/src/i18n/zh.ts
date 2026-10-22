@@ -392,7 +392,7 @@ export const zh = {
     maxFileBytes: "单文件字节数上限",
     immutableRelease: "禁止覆盖 Release",
     immutableReleaseHint: "开启后已存在的 Release 版本不可覆盖。",
-    // 发布策略多仓库（FR-109 扩展）。
+    // 发布策略多仓库（扩展）。
     policyPurpose: "发布策略约束该账号在此仓库可发布的路径前缀与配额，并控制不可变 Release。",
     policyMultipleHint: "保存将把当前策略统一应用到所选仓库。",
     policyInconsistent: "所选仓库策略不同，保存将统一覆盖。",
@@ -421,7 +421,7 @@ export const zh = {
     rolesAnonymous: "匿名主体（anonymous）",
     rolesAnonymousHint: "内置主体，仅为公开仓库的匿名读取授权而存在，不可登录或管理。",
   },
-  // 用户组（FR-36）：授权主体之一，组内成员共享指向该组的 ACL 授权。
+  // 用户组：授权主体之一，组内成员共享指向该组的 ACL 授权。
   userGroups: {
     title: "用户组",
     description: "把多个用户收成一个授权主体，仓库访问控制可直接对组授权",
@@ -546,11 +546,11 @@ export const zh = {
     membersLabel: "成员仓库",
     membersHint: "按顺序聚合读取，仅可选择同格式仓库",
     membersRequired: "group 仓库至少选择一个成员仓库",
-    // FR-114：连接状态徽章列
+    // 连接状态徽章列
     connectionStatus: "连接状态",
     statusAvailable: "可用",
     statusAutoBlocked: "自动阻止",
-    // FR-43：半开（阻止窗口已到、正在试探上游，业务流量仍等效封锁）
+    // 半开（阻止窗口已到、正在试探上游，业务流量仍等效封锁）
     statusHalfOpen: "试探中",
     statusUnavailable: "不可用",
     statusOffline: "离线",
@@ -567,11 +567,11 @@ export const zh = {
     aliasesLabel: "别名",
     aliasesPlaceholder: "输入别名后回车添加（可多个，可选）",
     aliasesHint: "别名与主名共享命名空间、全局唯一，可用别名等价访问该仓库",
-    // FR-41：列表里把「当前用量 / 上限」放在同一格（与详情页配置区同一口径）。
+    // 列表里把「当前用量 / 上限」放在同一格（与详情页配置区同一口径）。
     quotaUsage: "{{used}} / {{limit}}",
     quotaTooltip: "{{base}} · 上限 {{limit}}（{{status}}）",
   },
-  // FR-41 存储治理：配额状态与用量口径（仓库列表、仓库详情共用）。
+  //  存储治理：配额状态与用量口径（仓库列表、仓库详情共用）。
   // 状态阈值固定为「已用 ≥ 上限的 90% 即接近上限」，见 src/lib/quota.ts 的 QUOTA_NEAR_RATIO。
   quota: {
     unlimited: "不限",
@@ -617,6 +617,56 @@ export const zh = {
     colPath: "路径",
     colSize: "大小",
     colUpdated: "修改时间",
+    // 包级聚合主从双栏视图
+    precisionExact: "精确",
+    precisionPrerelease: "预发布",
+    precisionSubstring: "子串",
+    packagesCount: "{{count}} 个包",
+    versionsCount: "{{count}} 个版本",
+    filesCount: "{{count}} 文件",
+    packageSummary: "{{versions}} 个版本 · {{files}} 文件",
+    resultSummary: "共 {{files}} 个文件 · {{packages}} 个包",
+    checksums: "校验和 ({{count}})",
+    noCoordinate: "（无坐标）",
+    emptyHint: "可试试 ext:jar、repo:仓库名、-sources 或 version:1.2.3",
+    // 截断不只是「数字变小」：聚合按路径排序取前 N 条，排序靠后的包整包都不会出现。
+    aggregationTruncated:
+      "命中过多，仅聚合了前 {{scanned}} 条文件：计数为下界，排序靠后的部分包可能完全未出现在左侧列表；请收窄关键词",
+    // 结果区仍是上一口径的内容（换关键词后新结果尚未到达）：点名，避免误读成新词的结果。
+    staleResultsHint: "以下为上一次搜索的结果，新结果到达后自动替换",
+    sortLabel: "排序",
+    sortRelevance: "相关度",
+    sortName: "名称",
+    sortRepo: "仓库",
+    sortPath: "路径",
+    sortSize: "大小",
+    sortUpdated: "修改时间",
+    selectFileHint: "在左侧选择一个文件，查看详情",
+    detailCoordinate: "包坐标",
+    detailVersion: "版本",
+    detailRepository: "仓库",
+    detailPath: "路径",
+    detailSize: "大小",
+    detailUpdated: "修改",
+    detailSha1: "SHA1",
+    sameVersionFiles: "同版本文件 ({{count}})",
+    openRepository: "打开仓库",
+    backToResults: "返回搜索结果",
+    // 搜索进度、取消与超时
+    progressStageIndexing: "正在检索索引…",
+    progressStageFiltering: "正在筛选制品…",
+    progressStageRanking: "正在按相关度排序…",
+    progressStageFinalizing: "即将完成…",
+    elapsed: " · {{seconds}}s",
+    cancel: "取消搜索",
+    cancelledHint: "搜索已取消，可重新发起",
+    timeoutTitle: "搜索超时",
+    timeoutDescription:
+      "检索耗时超出限制，请求已被中止。请缩小检索范围（限定 repo: 或 ext:、减少关键词）后重试。",
+    // 搜索建议下拉
+    suggestLabel: "搜索建议",
+    suggestTypePackage: "包名",
+    suggestTypeRepository: "仓库",
   },
   acl: {
     // 以下键此前缺失（t 未命中时静默回退 defaultValue），补录以保持 i18n 完整。
@@ -631,7 +681,7 @@ export const zh = {
     addEntry: "添加条目",
     save: "保存访问控制",
     empty: "尚未配置任何条目",
-    // FR-36：主体从「只有用户」扩展到「用户 / 用户组」，动作从三档细化为六档。
+    // 主体从「只有用户」扩展到「用户 / 用户组」，动作从三档细化为六档。
     subject: "授权主体",
     subjectType: "主体类型",
     subjectUser: "用户",
@@ -686,7 +736,7 @@ export const zh = {
     configFormat: "格式",
     configType: "类型",
     configName: "名称",
-    // FR-114：连接状态展示与手动重测
+    // 连接状态展示与手动重测
     configConnection: "上游连接状态",
     configRecheck: "重新探测",
     configRechecking: "探测中…",
@@ -793,7 +843,7 @@ export const zh = {
     configRenameSame: "新名称不能与当前名称相同",
     configRenameTaken: "该名称已被占用",
     configRenameOk: "已重命名",
-    // FR-41 存储配额（配置页签）：0 / 留空 = 不限；超限后服务端拒绝写入（HTTP 429）
+    //  存储配额（配置页签）：0 / 留空 = 不限；超限后服务端拒绝写入（HTTP 429）
     configQuotaTitle: "存储配额",
     configQuotaHint: "上限填 0 或留空表示不限；超出上限后该仓库的写入会被拒绝（HTTP 429）。",
     configQuotaHostedOnly:
@@ -809,7 +859,7 @@ export const zh = {
     configQuotaAssetsConverted: "= {{count}} 个制品",
     configQuotaUnlimitedInput: "当前不限（上限为 0）",
     configQuotaInvalid: "请填写不小于 0 的数字（0 或留空表示不限）",
-    // FR-41 代理缓存保留（配置页签，仅 proxy 仓库）：按最后一次写入时间淘汰超期缓存
+    //  代理缓存保留（配置页签，仅 proxy 仓库）：按最后一次写入时间淘汰超期缓存
     configCacheRetention: "代理缓存保留天数",
     configCacheRetentionHint:
       "到期按最后一次写入时间清理本仓库的代理缓存：长期只读的缓存条目会被清理，下次访问时从上游重新拉取。0 或留空表示关闭，不自动清理。",
@@ -948,7 +998,7 @@ export const zh = {
     migrationSwitch: "切换迁移源",
     migrationResult: "迁移结果",
     migrationCredentialRef: "迁移凭据引用",
-    // FR-41：存储治理新增动作
+    // 存储治理新增动作
     maintenanceJobRun: "手动触发维护作业",
     repoCleanup: "清理仓库空目录",
   },
@@ -1125,7 +1175,7 @@ export const zh = {
     // 改挂在「说明」气泡上（OpsHelpButton 的既有定位：不占常驻高度，需要时才展开）。
     // 只新增气泡标题，说明正文复用原有键——另写一套会让旧键变零引用、等于删掉说明。
     actionBarHelpTitle: "备份与搬迁怎么用",
-    // 待重启生效（FR-40 追加六）：导入成功后只写 restore.pending，真正的替换在下次启动完成；
+    // 待重启生效：导入成功后只写 restore.pending，真正的替换在下次启动完成；
     // 在那之前任何导入都会被 409 拒绝。这个状态必须能解释清楚，否则用户只看到"一直被拒"。
     pendingRestartBadge: "有一份恢复待重启生效",
     pendingRestartTitle: "需要重启服务完成替换",
@@ -1153,7 +1203,7 @@ export const zh = {
     factNextDue: "即将执行",
     factUsageValue: "{{size}} · {{count}} 个包",
     factNoData: "—",
-    // —— FR-40 追加四：备份包与导入记录聚合进同一张表 ——
+    // ——：备份包与导入记录聚合进同一张表 ——
     // 页面只剩三段：动作 → 关键事实 → 统一事件表；「导入与传输」弹窗与待处理条一并删除。
     eventsSection: "备份与导入事件",
     eventsEmpty: "暂无备份与导入记录",
@@ -1312,11 +1362,11 @@ export const zh = {
     delete: "删除",
     fileMissing: "包体文件缺失",
     includedNote: "备份包只含 SQLite 快照与制品内容，不含任何密钥或节点本地配置。",
-    // —— FR-40：来源列（手动 / 自动）——
+    // ——：来源列（手动 / 自动）——
     colOrigin: "来源",
     origin_manual: "手动",
     origin_auto: "自动",
-    // —— FR-40：恢复演练与可查报告 ——
+    // ——：恢复演练与可查报告 ——
     drillOpen: "演练",
     drillTitle: "恢复演练",
     drillHint:
@@ -1348,7 +1398,7 @@ export const zh = {
     drillCheck_extract: "解包",
     drillCheck_sqlite: "SQLite 一致性",
     drillCheck_blobs: "blob 规模",
-    // —— FR-40：自动备份与保留策略（配置卡默认折叠，展开后可改，保存即生效）——
+    // ——：自动备份与保留策略（配置卡默认折叠，展开后可改，保存即生效）——
     autoCfgTitle: "自动备份与保留策略",
     autoCfgLiveNote: "保存即生效，无需重启",
     autoCfgSummaryOff: "自动备份已关闭",
@@ -1360,7 +1410,7 @@ export const zh = {
     autoCfgHint:
       "在此修改后立即生效（自动备份作业每轮重读配置，最迟一个心跳周期内应用），无需重启进程。三项的 0 都是有意义的取值：间隔 0 = 关闭自动备份，份数 0 = 不限份数，天数 0 = 不限天数。",
     autoCfgSave: "保存",
-    // —— FR-40 追加十二：容量估算 ——
+    // ——：容量估算 ——
     // 备份是**全量**包：每份约等于整个数据目录。因此「份数 × 单份大小」就是
     // 最坏情况的磁盘占用，必须让用户在开启前看到这个数。
     autoCfgCapacityTitle: "预计磁盘占用",
@@ -1380,7 +1430,7 @@ export const zh = {
       "等价的环境变量途径（JIAN_BACKUP_AUTO_INTERVAL / JIAN_BACKUP_KEEP_LAST / JIAN_BACKUP_RETENTION_DAYS）仍可作为首次部署的初值：仅在数据库尚无这组配置时写入一次，此后一律以本卡的设置为准，改环境变量不再覆盖界面配置。",
     autoCfgJobsHint:
       "「维护作业」页始终能看到 backup-auto（作业常驻以便配置改动即时生效）；间隔为 0 时它每轮空转跳过，不生成备份。",
-    // —— FR-134：写入冻结窗口 ——
+    // ——：写入冻结窗口 ——
     freezeStatusWritable: "可写",
     freezeStatusFrozen: "已冻结",
     freezeUntilLabel: "自动解冻时间",
@@ -1402,7 +1452,7 @@ export const zh = {
     freezeUnfreezeMessage: "解冻后节点恢复业务写入；进行中的搬迁请另行处理。",
     freezeUnfreezeLabel: "解冻",
     freezeUnfrozen: "已解冻写入",
-    // —— FR-137：从 URL 导入备份包 ——
+    // ——：从 URL 导入备份包 ——
     // 措辞含"恢复"：这三条通道的实际作用就是恢复（会替换本机数据），而"导入/上传"在
     // 用户心里只是"把东西弄进来"。实测反馈"只能备份无法恢复"正是被这个措辞误导的。
     importButton: "从 URL 恢复",
@@ -1437,7 +1487,7 @@ export const zh = {
       target_not_empty: "目标实例非空，导入前请开启「覆盖已有数据」。",
       incompatible: "备份包与当前服务版本不兼容。",
       restore_pending: "已存在待重启生效的恢复，请先重启服务完成替换。",
-      // FR-40 追加十：这三个码此前被归入 internal，用户只看到"服务内部错误"。
+      // 这三个码此前被归入 internal，用户只看到"服务内部错误"。
       // 它们其实都是可自行处置的状态，必须给出具体做法。
       base_missing: "缺少基线包：这是增量差包，请先导入它所依赖的基线包。",
       import_in_progress: "已有导入正在进行，请等它完成后再试。",
@@ -1445,7 +1495,7 @@ export const zh = {
       // internal 保留给真正的未知故障；后端会把原始错误附在消息里一起返回。
       internal: "恢复失败：服务内部错误，详情见下方原因或服务端日志。",
     },
-    // —— FR-137 / FR-40 追加八：分片上传备份包（第三通道）——
+    // ——  /：分片上传备份包（第三通道）——
     // 措辞从「上传包恢复」改为「上传备份包」：上传只把包收进备份列表，
     // 不再直接替换本机数据（恢复是入库之后的独立动作，可以先校验）。
     uploadButton: "上传备份包",
@@ -1469,7 +1519,7 @@ export const zh = {
     uploadError: "上传失败：{{message}}",
     uploadMissingChunkTitle: "分片缺失",
 
-    // —— FR-40 追加八：服务器上未被管理的备份包 ——
+    // ——：服务器上未被管理的备份包 ——
     // 这些包在磁盘上有包体但登记表里没有记录（历史残留或手工拷入），
     // 常规列表看不见它们，于是既不能用也不能删。这里补上「列出 + 导入」。
     adoptButton: "导入未管理的包",
@@ -1486,7 +1536,7 @@ export const zh = {
     adoptRenamed: "文件名与包标识不一致，导入时会重命名",
     adoptDuplicate: "与已登记的包内容相同（多余副本），可安全删除该文件",
 
-    // —— FR-40 追加十一：备份包内容预览 ——
+    // ——：备份包内容预览 ——
     previewOpen: "查看包内容",
     previewTitle: "备份包内容预览",
     previewTarget: "要查看的包",
@@ -1509,7 +1559,7 @@ export const zh = {
     previewColName: "名称",
     previewColFormat: "格式",
     previewColType: "类型",
-    // —— FR-40 追加十四：包内容与当前系统的差异对比 ——
+    // ——：包内容与当前系统的差异对比 ——
     restoreDiffTitle: "包里有什么 · 与本机差异",
     diffTitle: "恢复后会怎么变",
     diffSubtitle: "按元数据对比包内与本机：哪些会新增、哪些会消失、哪些会被替换。",
@@ -1545,7 +1595,7 @@ export const zh = {
     adoptResultSummary: "成功 {{adopted}} 个 / 跳过 {{skipped}} 个 / 失败 {{failed}} 个",
     adoptRescan: "重新扫描",
 
-    // —— FR-40 追加九：自动备份间隔支持多种时间单位 ——
+    // ——：自动备份间隔支持多种时间单位 ——
     autoCfgIntervalUnit: "时间单位",
     autoCfgIntervalEquals: "等于 {{n}} 秒",
     autoCfgIntervalOff: "0 表示关闭自动备份",

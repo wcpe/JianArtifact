@@ -3,6 +3,7 @@ package repository
 import (
 	"database/sql"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
@@ -85,10 +86,52 @@ type HostNetworkInterfaceSample struct {
 }
 
 // OperationsObservabilityRepo 保存当前节点的可视化聚合；它从不参与复制。
-type OperationsObservabilityRepo struct{ db *persistence.DB }
+type OperationsObservabilityRepo struct {
+	db *persistence.DB
+
+	// 容量聚合的短期缓存。容量数字只是仪表盘上的规模展示，不属于授权判定，
+	// 因此允许在短窗内复用上一次的聚合结果（见 CurrentCapacity 的说明）。
+	capacityMu    sync.Mutex
+	capacityValue CapacitySnapshot
+	capacityUntil time.Time
+	capacityValid bool
+	// capacityTTL 是缓存有效期；<= 0 表示禁用缓存。由装配层经 SetCapacityCacheTTL 注入
+	// （JIAN_CAPACITY_CACHE_TTL_SECONDS 的解析结果），未注入时取 defaultCapacityCacheTTL。
+	capacityTTL time.Duration
+	// capacityNow 是可注入的时钟，测试用来确定性地驱动 TTL 过期；生产为 time.Now。
+	capacityNow func() time.Time
+}
+
+// defaultCapacityCacheTTL 是容量聚合结果缓存有效期的**兜底默认值**（装配层经
+// SetCapacityCacheTTL 注入 JIAN_CAPACITY_CACHE_TTL_SECONDS 的解析结果）。
+//
+// 为什么可以缓存：容量统计不是授权数据——鉴权与 ACL 判定仍逐请求读库，组内成员变动、
+// 仓库可见性变更都即时生效，与本缓存无关；这里缓存的只是「仓库数 / 资产数 / 逻辑字节数」
+// 这类规模数字，几十秒的滞后对运维展示没有影响。反过来，代价却很大：仪表盘是常用落地页，
+// 每次加载都会调用本查询，而它必须遍历整张 asset 表（线上约 8.6 GB）。
+//
+// 与 config 侧 defaultCapacityCacheTTL 保持同值：装配层始终注入解析结果，
+// 本常量只在未装配（测试直接构造）时兜底。
+const defaultCapacityCacheTTL = 30 * time.Second
 
 func NewOperationsObservabilityRepo(db *persistence.DB) *OperationsObservabilityRepo {
-	return &OperationsObservabilityRepo{db: db}
+	return &OperationsObservabilityRepo{db: db, capacityTTL: defaultCapacityCacheTTL, capacityNow: time.Now}
+}
+
+// SetCapacityCacheTTL 设定容量聚合结果的缓存有效期：<= 0 表示**禁用缓存**（每次调用都重新
+// 聚合），> 0 为复用窗口。语义由装配层（JIAN_CAPACITY_CACHE_TTL_SECONDS）决定，仓储层不
+// 再对取值做二次加工——这里若擅自夹取，会让运维显式配置的值与实际行为不符。
+//
+// 有效期变化后**必须让既有缓存立即失效**：现有缓存值的截止时间是按旧 TTL 算出来的，
+// 若沿用它，「从 30s 改成 60s」在第一次重算前仍按旧窗口返回、改小则可能继续超期返回。
+// 写入在锁内完成，与 cachedCapacity / storeCapacity 互斥，不存在撕裂读。
+func (r *OperationsObservabilityRepo) SetCapacityCacheTTL(ttl time.Duration) {
+	r.capacityMu.Lock()
+	defer r.capacityMu.Unlock()
+	r.capacityTTL = ttl
+	r.capacityValue = CapacitySnapshot{}
+	r.capacityUntil = time.Time{}
+	r.capacityValid = false
 }
 
 func (r *OperationsObservabilityRepo) AddProtocolMinute(value ProtocolMinute) error {
@@ -276,12 +319,97 @@ func (r *OperationsObservabilityRepo) LatestHostSample() (*HostMetricSample, err
 	return &item, nil
 }
 
+// CurrentCapacity 返回当前逻辑容量：仓库数、资产数、逻辑字节数。
+// 三个字段的口径与历史上的单条 JOIN 聚合完全一致（见 aggregateCapacity）。
+//
+// 结果按实例的 capacityTTL（来自 JIAN_CAPACITY_CACHE_TTL_SECONDS）缓存：容量数字非授权
+// 数据，短窗滞后可接受，而每次重算都要遍历整张 asset 表。缓存未命中时在锁外执行聚合——
+// 锁只保护缓存字段的读写，不用于串行化查询（项目红线：持锁执行磁盘 IO）。
+// 并发未命中最多让每个请求各算一次，结果幂等，不会写坏缓存。
+// TTL <= 0 表示禁用缓存：每次调用都走这条完整的「聚合 → 返回」路径。
 func (r *OperationsObservabilityRepo) CurrentCapacity() (CapacitySnapshot, error) {
-	var item CapacitySnapshot
-	// DISTINCT 防止 LEFT JOIN 资产行放大仓库计数（每仓库按资产数重复统计）。
-	err := r.db.Get(&item, `SELECT COUNT(DISTINCT repository.id) AS repository_count, COALESCE(SUM(size),0) AS logical_bytes, COUNT(asset.id) AS asset_count
-		FROM repository LEFT JOIN asset ON asset.repository_id = repository.id`)
-	return item, err
+	if value, ok := r.cachedCapacity(); ok {
+		return value, nil
+	}
+	value, err := r.aggregateCapacity()
+	if err != nil {
+		// 失败不写缓存：不把一次查询错误固化成 TTL 内的「有效值」。
+		return CapacitySnapshot{}, err
+	}
+	r.storeCapacity(value)
+	return value, nil
+}
+
+// cachedCapacity 返回仍在有效期内的缓存值；过期、禁用缓存或从未填充时返回 false。
+func (r *OperationsObservabilityRepo) cachedCapacity() (CapacitySnapshot, bool) {
+	r.capacityMu.Lock()
+	defer r.capacityMu.Unlock()
+	// TTL <= 0 = 禁用缓存：直接判定未命中，不必读时钟也不必看是否有旧值。
+	if r.capacityTTL <= 0 {
+		return CapacitySnapshot{}, false
+	}
+	if !r.capacityValid || !r.capacityNow().Before(r.capacityUntil) {
+		return CapacitySnapshot{}, false
+	}
+	return r.capacityValue, true
+}
+
+// storeCapacity 写入缓存并顺延有效期；禁用缓存时直接跳过，不保留任何「有效值」。
+func (r *OperationsObservabilityRepo) storeCapacity(value CapacitySnapshot) {
+	r.capacityMu.Lock()
+	defer r.capacityMu.Unlock()
+	if r.capacityTTL <= 0 {
+		return
+	}
+	r.capacityValue = value
+	r.capacityUntil = r.capacityNow().Add(r.capacityTTL)
+	r.capacityValid = true
+}
+
+// aggregateCapacity 聚合当前逻辑容量。
+//
+// 历史实现是单条 repository LEFT JOIN asset：每个仓库按 idx_asset_repository 索引进
+// asset 表逐行取数（随机页读），外加 COUNT(DISTINCT) 的临时 B 树。50 万行合成资产
+// （约 282 MB）实测中位数约 8.5 s、最小 6.4 s，而 EXPLAIN QUERY PLAN 显示
+// "SCAN repository" + "SEARCH asset USING INDEX idx_asset_repository" +
+// "USE TEMP B-TREE FOR count(DISTINCT)"。
+// 注：该索引已在迁移 0050 中被复合覆盖索引 idx_asset_repo_size 取代并删除，
+// 上面的计划文本是当时的历史记录，不代表当前 schema。
+//
+// 拆成两条单表语句后口径不变：
+//   - repository_count：LEFT JOIN 保留了没有任何资产的仓库，COUNT(DISTINCT repository.id)
+//     去重后每个仓库恰好计一次，等价于 repository 表的行数。
+//   - asset_count / logical_bytes：asset.repository_id 是 NOT NULL 外键，指向 repository
+//     的主键（唯一），任一资产行最多匹配一个仓库行，JOIN 不会放大行数，COUNT(asset.id)
+//     与 COUNT(*) 同值、SUM(size) 也不受 JOIN 影响。因此可直接在 asset 上聚合
+//     （执行计划退化为一次顺序 SCAN asset，无临时 B 树）。
+//   - 唯一的口径差异是「孤儿资产」（repository_id 指向不存在的仓库）：旧写法不计、
+//     新写法会计。连接 DSN 启用了 foreign_keys(ON)，且有 ON DELETE CASCADE，
+//     孤儿行无法存在，故两种写法等价。
+func (r *OperationsObservabilityRepo) aggregateCapacity() (CapacitySnapshot, error) {
+	// 两条统计合并成**一条**语句。
+	//
+	// 为什么不能分两次查：资产统计与仓库计数若各自成句，整仓删除恰好提交在两者之间时，
+	// 会得到「资产非零、仓库为零」这种自相矛盾的快照，且它会被缓存 30 秒（见
+	// CapacitySnapshot 的 TTL 说明）。合成一条语句后两者来自同一读事务，不可能撕裂。
+	// 仓库用标量子查询，仍是覆盖索引上的计数，计划与原先一致。
+	var row struct {
+		AssetCount      int64 `db:"asset_count"`
+		LogicalBytes    int64 `db:"logical_bytes"`
+		RepositoryCount int64 `db:"repository_count"`
+	}
+	if err := r.db.Get(&row, `SELECT
+		COUNT(*) AS asset_count,
+		COALESCE(SUM(size),0) AS logical_bytes,
+		(SELECT COUNT(*) FROM repository) AS repository_count
+		FROM asset`); err != nil {
+		return CapacitySnapshot{}, err
+	}
+	return CapacitySnapshot{
+		RepositoryCount: row.RepositoryCount,
+		AssetCount:      row.AssetCount,
+		LogicalBytes:    row.LogicalBytes,
+	}, nil
 }
 
 func (r *OperationsObservabilityRepo) DeleteBefore(cutoff time.Time) error {

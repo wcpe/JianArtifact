@@ -1,4 +1,4 @@
-// FR-72 开源协议页：数据经 admin 端点运行时拉取（不打进前端 bundle），
+//  开源协议页：数据经 admin 端点运行时拉取（不打进前端 bundle），
 // 渲染 Go/npm 两段依赖协议表格（含版本列）。
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -11,7 +11,7 @@ import {
 import { LicensesPage } from "../src/pages/LicensesPage";
 import { renderWithProviders } from "./harness";
 
-describe("开源协议页（FR-72）", () => {
+describe("开源协议页", () => {
   it("登录后拉取清单渲染两段依赖表格（含版本列）", async () => {
     renderWithProviders(<LicensesPage />, { route: "/licenses", authenticated: true });
     // 分段标题带条数：条数随真实依赖清单变化，故只断言"存在计数"而不写死数值。

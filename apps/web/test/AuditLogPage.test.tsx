@@ -1,4 +1,4 @@
-// FR-118：真实审计读模型的页面状态、批次确认和 attention_stale 回归。
+// 真实审计读模型的页面状态、批次确认和 attention_stale 回归。
 import { HttpResponse, http } from "msw";
 import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";

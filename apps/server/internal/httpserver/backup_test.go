@@ -31,7 +31,7 @@ type backupEnv struct {
 	dir string
 	// blobs 与 svc 内部使用的是同一个根目录，seed 时必须写进同一个存储。
 	blobs *blobstore.Store
-	// freeze 与 backupImports 为 FR-135 / FR-137 的handler级测试补充依赖；
+	// freeze 与 backupImports 为  /  的handler级测试补充依赖；
 	// 同一实例同时注入 Deps 与 WithWriteFreeze，确保「冻上就拦截写」与「handler 读状态」一致。
 	freeze        *domain.FreezeController
 	backupImports *domain.BackupImportService
@@ -54,14 +54,14 @@ func newBackupEnv(t *testing.T) *backupEnv {
 	jwtMgr := auth.NewJWTManager([]byte("backup-integration-test-secret-32b!!"))
 	authenticator := auth.NewAuthenticator(jwtMgr, domain.NewAuthStore(userRepo, tokenRepo, revokedRepo))
 
-	// FR-135：冻结控制器（base=nil，单节点兼容）。FR-137：导入服务。
+	// 冻结控制器（base=nil，单节点兼容）。：导入服务。
 	// 用 upstream.NewTestClient 放行回环，使 URL 拉取测试可指向本地 httptest 服务。
 	freeze := domain.NewFreezeController(nil)
 	restoreSvc := domain.NewRestoreService(db, dir, dbPath, filepath.Join(dir, "restore-blobs"))
 	importSvc := domain.NewBackupImportService(
 		repository.NewBackupImportRepo(db), restoreSvc, dir, upstream.NewTestClient(0),
 	)
-	// FR-40 追加八：上传只入库不恢复，因此上传服务依赖 adopt 服务而非导入服务。
+	// 上传只入库不恢复，因此上传服务依赖 adopt 服务而非导入服务。
 	backupRepo := repository.NewBackupPackageRepo(db)
 	adoptSvc := domain.NewBackupAdoptService(backupSvc, backupRepo)
 	uploadSvc := domain.NewBackupUploadService(repository.NewBackupUploadRepo(db), adoptSvc, dir)

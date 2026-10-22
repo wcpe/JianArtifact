@@ -13,7 +13,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// ApplyRepositoryAssetOperation 应用统一原子制品操作（FR-105）。
+// ApplyRepositoryAssetOperation 应用统一原子制品操作。
 func (h *Handlers) ApplyRepositoryAssetOperation(c *gin.Context, name RepoNameParam) {
 	operationID := domain.NewOperationID()
 	if !requireAssetOperationAdmin(c, operationID) {

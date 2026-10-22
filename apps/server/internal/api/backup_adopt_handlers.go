@@ -1,4 +1,4 @@
-// 未管理备份包的 HTTP 边界（FR-40 追加八）。
+// 未管理备份包的 HTTP 边界。
 //
 // 两个端点：列出"磁盘有包体、登记无记录"的包，以及把选中的包导入管理列表。
 // 权限沿用备份域的统一口径：仅管理员。
@@ -99,7 +99,7 @@ func (h *Handlers) AdoptBackups(c *gin.Context) {
 // 编译期断言：确保 domain 的服务类型在此文件被引用（防止未来重构时静默丢字段）。
 var _ = (*domain.BackupAdoptService)(nil)
 
-// PreviewBackup 查看备份包内容概要（仅管理员，FR-40 追加十一）。
+// PreviewBackup 查看备份包内容概要（仅管理员）。
 //
 // 为什么需要：恢复是不可撤销的操作，而此前列表只给出抽象计数（"多少制品、多少仓库"），
 // 用户无法判断这个包是不是自己要的那个。本端点让"看清里面有什么"成为可能。
@@ -182,7 +182,7 @@ func toAPIBackupPreview(pv domain.BackupPreview) BackupPreview {
 	return out
 }
 
-// GetBackupDiff 对比包内容与当前系统（仅管理员，FR-40 追加十四）。
+// GetBackupDiff 对比包内容与当前系统（仅管理员）。
 //
 // 两种模式共用一个端点，用 scope 区分：
 //   - summary（默认）：只返回四类计数（聚合查询，代价小）；

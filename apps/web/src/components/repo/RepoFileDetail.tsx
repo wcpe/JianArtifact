@@ -36,7 +36,7 @@ export function RepoFileDetail({ repoName, format, asset, usage, showDownload = 
         </Text>
       </div>
 
-      {/* FR-81：结构化元数据（大小含精确字节、类型、创建/更新时间），比徽章承载更多信息 */}
+      {/* 结构化元数据（大小含精确字节、类型、创建/更新时间），比徽章承载更多信息 */}
       <Stack gap={4}>
         <MetaRow
           label={t("repoDetail.assetSize")}
@@ -127,7 +127,7 @@ export function RepoFileDetail({ repoName, format, asset, usage, showDownload = 
   );
 }
 
-/** 元数据行（标签 + 值），FR-81 文件详情结构化展示。 */
+/** 元数据行（标签 + 值）， 文件详情结构化展示。 */
 function MetaRow({ label, value }: { label: string; value: string }) {
   return (
     <Group gap="xs" wrap="nowrap">

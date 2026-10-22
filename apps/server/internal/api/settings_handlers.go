@@ -17,7 +17,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// 设置端点的边界（FR-89）：秒级配置允许范围与缺省展示值。
+// 设置端点的边界：秒级配置允许范围与缺省展示值。
 const (
 	minConfigSecs           = 1
 	maxConfigSecs           = 3600
@@ -25,7 +25,7 @@ const (
 	defaultUpstreamTimeout  = 30
 )
 
-// SettingsResponse 是设置端点（FR-89）的响应体：基础配置的当前生效值。
+// SettingsResponse 是设置端点的响应体：基础配置的当前生效值。
 type SettingsResponse struct {
 	AnonymousAccess    bool     `json:"anonymousAccess"`
 	PublicURL          string   `json:"publicUrl"`
@@ -35,16 +35,16 @@ type SettingsResponse struct {
 	OriginTokenEnabled bool     `json:"originTokenEnabled"`
 	OriginTokenHeader  string   `json:"originTokenHeader"`
 	OriginTokenValue   string   `json:"originTokenValue"`
-	// FR-40 追加：自动备份与保留策略（运行时可改，保存后由作业下一轮读取生效）。
+	// 自动备份与保留策略（运行时可改，保存后由作业下一轮读取生效）。
 	BackupAutoInterval  int `json:"backupAutoInterval"`
 	BackupKeepLast      int `json:"backupKeepLast"`
 	BackupRetentionDays int `json:"backupRetentionDays"`
-	// FR-40 追加九：间隔的人类表达与拆解结果，供界面直接回填"数值 + 单位"控件，
+	// 间隔的人类表达与拆解结果，供界面直接回填"数值 + 单位"控件，
 	// 避免前端重复实现一遍拆分规则（两处实现迟早不一致）。
 	BackupAutoIntervalExpr  string `json:"backupAutoIntervalExpr"`
 	BackupAutoIntervalValue int64  `json:"backupAutoIntervalValue"`
 	BackupAutoIntervalUnit  string `json:"backupAutoIntervalUnit"`
-	// FR-40 追加十二：最近一次备份包的实际大小，供界面估算容量占用。
+	// 最近一次备份包的实际大小，供界面估算容量占用。
 	//
 	// 备份是**全量**包，每份约等于数据目录大小，因此"份数 × 单份大小"就是最坏情况
 	// 下的磁盘占用。没有这个值，用户无法判断"保留 7 份"会不会把自己的盘写满——
@@ -71,11 +71,11 @@ type SettingsRequest struct {
 	OriginTokenEnabled *bool     `json:"originTokenEnabled,omitempty"`
 	OriginTokenHeader  *string   `json:"originTokenHeader,omitempty"`
 	OriginTokenValue   *string   `json:"originTokenValue,omitempty"`
-	// FR-40 追加：自动备份三项（0 分别表示关闭 / 不限制，是合法取值）。
+	// 自动备份三项（0 分别表示关闭 / 不限制，是合法取值）。
 	BackupAutoInterval  *int `json:"backupAutoInterval,omitempty"`
 	BackupKeepLast      *int `json:"backupKeepLast,omitempty"`
 	BackupRetentionDays *int `json:"backupRetentionDays,omitempty"`
-	// FR-40 追加九：间隔的人类表达（如 "30"、"5m"、"2h"、"1d"、"1mo"、"1y"）。
+	// 间隔的人类表达（如 "30"、"5m"、"2h"、"1d"、"1mo"、"1y"）。
 	//
 	// 与 BackupAutoInterval（秒）二选一，本字段优先：它就是为了让用户不必心算
 	// "每天一次等于多少秒"。两者都给时以本字段为准并在响应里回显换算结果，
@@ -197,7 +197,7 @@ func resolveBackupAutoInterval(req SettingsRequest) (*int, error) {
 	return req.BackupAutoInterval, nil
 }
 
-// GetSettings 返回基础配置四项（FR-89），仅管理员。非契约端点，经 WithProtocolRoutes 注册。
+// GetSettings 返回基础配置四项，仅管理员。非契约端点，经 WithProtocolRoutes 注册。
 func (h *Handlers) GetSettings(c *gin.Context) {
 	if _, ok := requireAdmin(c); !ok {
 		return
@@ -205,7 +205,7 @@ func (h *Handlers) GetSettings(c *gin.Context) {
 	c.JSON(http.StatusOK, h.settingsSnapshot())
 }
 
-// PutSettings 部分写入基础配置（FR-89），仅管理员。写后运行时生效：
+// PutSettings 部分写入基础配置，仅管理员。写后运行时生效：
 // 匿名开关 / 对外 URL 由读取方动态读 setting；同步间隔由调度器下一轮应用；
 // 回源超时经 OnUpstreamTimeoutChange 回调立即同步到回源客户端。
 func (h *Handlers) PutSettings(c *gin.Context) {

@@ -73,7 +73,7 @@ type StoredToken struct {
 	RevokedAt *string `db:"revoked_at"`
 }
 
-// GetByDigest 按摘要查 Token（含已吊销），供复制应用（FR-83）定位本地记录；无匹配返回 ErrNotFound。
+// GetByDigest 按摘要查 Token（含已吊销），供复制应用定位本地记录；无匹配返回 ErrNotFound。
 func (r *TokenRepo) GetByDigest(digest string) (*StoredToken, error) {
 	var t StoredToken
 	err := r.db.Get(&t,

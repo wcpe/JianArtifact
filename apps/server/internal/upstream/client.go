@@ -45,7 +45,7 @@ func (e *StatusError) Error() string {
 }
 
 // Client 是回源 HTTP 客户端，持有带超时的 *http.Client。
-// 超时可在运行时经 SetTimeout 调整（FR-89 回源超时动态配置）；
+// 超时可在运行时经 SetTimeout 调整（回源超时动态配置）；
 // 内部用 RWMutex 保护 http.Client 的替换，Fetch 与 SetTimeout 并发安全。
 type Client struct {
 	mu     sync.RWMutex

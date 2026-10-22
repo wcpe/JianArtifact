@@ -18,7 +18,7 @@ import (
 var downloadTrendBase = time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC)
 
 // newDownloadTrendTestHandlers 组装趋势端点测试环境：仓库服务（含 public/private 各一）
-// 与下载计量仓储。匿名访问全局开关走默认开启（键缺失视为开启，FR-66）。
+// 与下载计量仓储。匿名访问全局开关走默认开启（键缺失视为开启）。
 func newDownloadTrendTestHandlers(t *testing.T) (*Handlers, *repository.AssetDownloadRepo) {
 	t.Helper()
 	gin.SetMode(gin.ReleaseMode)
@@ -182,7 +182,7 @@ func TestGetRepositoryDownloadTrendPermissions(t *testing.T) {
 	if rec := serveDownloadTrend(handlers, adminPrincipal(), "/api/v1/repositories/trend-private/download-trend"+window); rec.Code != http.StatusOK {
 		t.Fatalf("管理员读 private 仓趋势应 200，得 %d：%s", rec.Code, rec.Body.String())
 	}
-	// 仓库详情页匿名也可见制品树（FR-66 开关默认开 + public 仓），下载趋势同权限。
+	// 仓库详情页匿名也可见制品树（开关默认开 + public 仓），下载趋势同权限。
 	if rec := serveDownloadTrend(handlers, nil, "/api/v1/repositories/trend-public/download-trend"+window); rec.Code != http.StatusOK {
 		t.Fatalf("匿名读 public 仓趋势应 200，得 %d：%s", rec.Code, rec.Body.String())
 	}

@@ -20,7 +20,7 @@ func NewUserService(users *repository.UserRepo) *UserService {
 	return &UserService{users: users}
 }
 
-// SetChangeRecorder 注入复制变更日志记录器（FR-83）；nil 表示不记录。
+// SetChangeRecorder 注入复制变更日志记录器；nil 表示不记录。
 func (s *UserService) SetChangeRecorder(r ChangeRecorder) { s.recorder = r }
 
 // SetBusinessWriteGate 注入备用节点本地业务写栅栏；nil 保持兼容行为。
@@ -156,7 +156,7 @@ func (s *UserService) ChangePassword(id int64, password string) error {
 	return nil
 }
 
-// rejectAnonymous 对内置 anonymous 用户的管理操作返回 ErrValidation（FR-66）。
+// rejectAnonymous 对内置 anonymous 用户的管理操作返回 ErrValidation。
 func (s *UserService) rejectAnonymous(id int64) error {
 	u, err := s.users.GetByID(id)
 	if err != nil {

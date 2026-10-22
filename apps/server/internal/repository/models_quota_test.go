@@ -8,7 +8,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// TestRepositoryConfigStorageQuotaRoundTrip 仓库存储配额配置（FR-41）的解析与序列化：
+// TestRepositoryConfigStorageQuotaRoundTrip 仓库存储配额配置的解析与序列化：
 // 显式值可往返；缺省/空配置解析为零值（0 = 不限），序列化时省略不写。
 func TestRepositoryConfigStorageQuotaRoundTrip(t *testing.T) {
 	repo := &repository.Repository{Config: `{"quotaBytes":1024,"quotaAssets":5}`}

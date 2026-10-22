@@ -1,4 +1,4 @@
-// FR-73: Maven 网页上传端点（非契约，面向管理端表单）。
+// Maven 网页上传端点（非契约，面向管理端表单）。
 //
 // POST /api/v1/repositories/:name/maven-upload（multipart：groupId/artifactId/version/
 // packaging/file）。服务端自动生成最小 pom.xml、各文件 .md5/.sha1，并读-改-写 artifact 级
@@ -164,7 +164,7 @@ func (h *MavenHandler) UploadForm(c *gin.Context) {
 	}
 
 	// 1) 主文件 + 校验和。
-	// FR-41：网页上传在 multipart 解析后长度已确定，故在任何内容进入 blob 存储之前
+	// 网页上传在 multipart 解析后长度已确定，故在任何内容进入 blob 存储之前
 	// 先做仓库存储配额预检（这是本入口的预检点；本入口不存在未定长度的流式读取）。
 	mainPath := versionDir + "/" + artifactID + "-" + version + "." + packaging
 	if _, quotaErr := h.admissionFor(repoName, mainPath, fileHeader.Size); quotaErr != nil {

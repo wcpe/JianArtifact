@@ -25,7 +25,7 @@ type AssetMutationCoordinator struct {
 	finalize           func(blobstore.QuarantineEntry) error
 	finalizeSnapshot   func(blobstore.RollbackSnapshot) error
 	removeUnreferenced func(string) error
-	// quotaCheck 是提交点权威的仓库存储配额复检（FR-41）：与资产写入同一事务执行，
+	// quotaCheck 是提交点权威的仓库存储配额复检：与资产写入同一事务执行，
 	// 越限返回错误即整批回滚。nil 表示不做存储配额判定。
 	quotaCheck StorageQuotaGuard
 	gate       sync.RWMutex
@@ -48,7 +48,7 @@ func NewAssetMutationCoordinatorDeferred(db *persistence.DB, blobs *blobstore.St
 	return &AssetMutationCoordinator{mutations: repository.NewAssetMutationRepo(db), blobs: blobs, finalize: blobs.Finalize, finalizeSnapshot: blobs.FinalizeRollbackSnapshot, removeUnreferenced: blobs.Remove}
 }
 
-// SetStorageQuotaCheck 注入仓库级存储配额的提交点复检（FR-41 §4.1）。
+// SetStorageQuotaCheck 注入仓库级存储配额的提交点复检。
 // 复检与资产写入处于同一事务：判定失败即整批回滚，已提交状态永不越界。
 // nil 表示不做存储配额判定（兼容既有装配与只读部署）。
 func (c *AssetMutationCoordinator) SetStorageQuotaCheck(check StorageQuotaGuard) {
@@ -178,7 +178,7 @@ func (c *AssetMutationCoordinator) applyLockedWithEnvelopeAndHook(items []reposi
 			return id, c.rollbackBeforeCompletion(id, entries, snapshot, err)
 		}
 	}
-	// 完成事务的钩子顺序：先做仓库存储配额权威复检（FR-41），再执行调用方的附加
+	// 完成事务的钩子顺序：先做仓库存储配额权威复检，再执行调用方的附加
 	// 元数据 / 审计钩子。越限时复检返回错误使整个事务回滚，附加状态一律不落库。
 	hooks := make([]repository.MutationCompletionHook, 0, 2)
 	if c.quotaCheck != nil {

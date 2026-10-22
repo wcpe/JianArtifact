@@ -8,13 +8,13 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
 )
 
-// 演练级别（FR-40）：shallow 只校验结构摘要，deep 额外逐 blob 比对内容摘要。
+// 演练级别：shallow 只校验结构摘要，deep 额外逐 blob 比对内容摘要。
 const (
 	VerificationLevelShallow = "shallow"
 	VerificationLevelDeep    = "deep"
 )
 
-// BackupVerification 是一次恢复演练的报告（FR-40）。
+// BackupVerification 是一次恢复演练的报告。
 //
 // 报告随包级联删除（外键 ON DELETE CASCADE）：包没了，针对它的报告没有意义。
 type BackupVerification struct {

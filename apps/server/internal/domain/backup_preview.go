@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/archive"
 )
 
-// 备份包内容预览（FR-40 追加十一）。
+// 备份包内容预览。
 //
 // # 为什么需要
 //

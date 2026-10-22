@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// 数据目录解析（FR-40 追加六）。
+// 数据目录解析。
 //
 // 要解决的问题（实测踩到、且用户反馈"老出现莫名其妙的数据目录"）：
 // CLI 是**独立进程**，读不到 systemd 单元的 EnvironmentFile，于是 JIAN_DATA_DIR 缺失时

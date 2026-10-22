@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// 备份孤儿回收（FR-40 追加八）。
+// 备份孤儿回收。
 //
 // # 什么问题
 //
@@ -80,7 +80,7 @@ type BackupOrphanCleanupResult struct {
 	Failed int
 	// Capped 表示本轮因达到单轮上限而提前结束。
 	Capped bool
-	// PreRestoreDeleted 是回收的 pre-restore 回滚备份目录数（FR-40 追加十三）。
+	// PreRestoreDeleted 是回收的 pre-restore 回滚备份目录数。
 	PreRestoreDeleted int
 	// PreRestoreKept 是保留的 pre-restore 目录数。
 	PreRestoreKept int

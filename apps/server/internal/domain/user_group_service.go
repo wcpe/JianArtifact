@@ -8,7 +8,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// UserGroupService 处理用户组管理（FR-36）：组的增删改查与成员维护。
+// UserGroupService 处理用户组管理：组的增删改查与成员维护。
 //
 // 组本身只是「名字 + 描述 + 成员集合」的授权载体：真正产生权限的是把组作为主体
 // 写进某个仓库的 ACL。因此本服务不判定权限（Permission 判定在 RepositoryService），
@@ -28,7 +28,7 @@ func NewUserGroupService(groups *repository.UserGroupRepo, acls *repository.AclR
 	return &UserGroupService{groups: groups, acls: acls, users: users}
 }
 
-// SetChangeRecorder 注入复制变更日志记录器（FR-83）；nil 表示不记录。
+// SetChangeRecorder 注入复制变更日志记录器；nil 表示不记录。
 func (s *UserGroupService) SetChangeRecorder(r ChangeRecorder) { s.recorder = r }
 
 // SetBusinessWriteGate 注入备用节点本地业务写栅栏；nil 保持兼容行为。

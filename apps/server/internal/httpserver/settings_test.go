@@ -18,7 +18,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// TestSettingsEndpoints 设置端点（FR-89）：鉴权、默认生效值、部分写入回读、非法拒绝、
+// TestSettingsEndpoints 设置端点：鉴权、默认生效值、部分写入回读、非法拒绝、
 // 回源超时回调触发。
 func TestSettingsEndpoints(t *testing.T) {
 	t.Parallel()
@@ -266,7 +266,7 @@ func TestSettingsOriginTokenAndAllowedHosts(t *testing.T) {
 	}
 }
 
-// TestSettingsPublicURLDynamicEffect 写 publicUrl 后 usage 立即用新值（FR-89 对外 URL 动态生效）。
+// TestSettingsPublicURLDynamicEffect 写 publicUrl 后 usage 立即用新值（对外 URL 动态生效）。
 func TestSettingsPublicURLDynamicEffect(t *testing.T) {
 	t.Parallel()
 	db := openMigratedDB(t, filepath.Join(t.TempDir(), "settings-usage.db"))

@@ -10,9 +10,11 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -27,8 +29,8 @@ type RawHandler struct {
 	assets         *domain.AssetService
 	repoSvc        *domain.RepositoryService
 	publish        *domain.PublishPolicyService
-	quota          QuotaGuard         // FR-41：仓库级存储配额判定（nil 不判定）
-	audit          AuditFunc          // FR-38：审计记录回调（main 注入；nil 不记录）
+	quota          QuotaGuard         // 仓库级存储配额判定（nil 不判定）
+	audit          AuditFunc          // 审计记录回调（main 注入；nil 不记录）
 	operationAudit OperationAuditFunc // 原子制品操作的同事务审计构造器
 }
 
@@ -56,7 +58,7 @@ func (r *quotaReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// QuotaGuard 是仓库级存储配额判定（FR-41 §4.1）。协议层只需要两个能力：
+// QuotaGuard 是仓库级存储配额判定。协议层只需要两个能力：
 // 准入判定（已知长度直接给结论，长度未知返回流式读取上限）与流式早拒上报。
 // 由装配层注入 *domain.RepoQuotaService；接口在此声明是为了让协议单测可注入桩。
 type QuotaGuard interface {
@@ -66,14 +68,14 @@ type QuotaGuard interface {
 	RecordStreamRejection()
 }
 
-// AuditFunc 是审计记录回调（FR-38）：写操作成功后记录一条审计日志。
+// AuditFunc 是审计记录回调：写操作成功后记录一条审计日志。
 // 由 main 组装时注入（闭包绑定 api.Handlers.AuditLog），避免 protocol 依赖 api 包。
 type AuditFunc func(c *gin.Context, action, entityType, entityKey, repo, detail, result string)
 
 // OperationAuditFunc 从原生协议请求提取操作主体及同事务审计回调。
 type OperationAuditFunc func(c *gin.Context, action, repo string) domain.AssetOperationAudit
 
-// SetAudit 注入审计记录回调（FR-38）；nil 表示不记录。
+// SetAudit 注入审计记录回调；nil 表示不记录。
 func (h *RawHandler) SetAudit(f AuditFunc) { h.audit = f }
 
 // SetOperationAudit 注入原子制品操作审计构造器；nil 表示保持旧装配兼容。
@@ -82,10 +84,10 @@ func (h *RawHandler) SetOperationAudit(f OperationAuditFunc) { h.operationAudit 
 // SetPublishPolicy 注入发布账号策略校验；为空时保持旧行为，供兼容测试和只读部署使用。
 func (h *RawHandler) SetPublishPolicy(s *domain.PublishPolicyService) { h.publish = s }
 
-// SetQuotaGuard 注入仓库级存储配额判定（FR-41）；nil 表示不做判定，供兼容测试与只读部署使用。
+// SetQuotaGuard 注入仓库级存储配额判定；nil 表示不做判定，供兼容测试与只读部署使用。
 func (h *RawHandler) SetQuotaGuard(g QuotaGuard) { h.quota = g }
 
-// admissionFor 统一做仓库存储配额的准入判定（FR-41 §4.1 判定时序第 1/2 级）。
+// admissionFor 统一做仓库存储配额的准入判定（判定时序第 1/2 级）。
 // 所有原生协议（raw/maven/npm/cargo/oci/pypi/nuget）的发布入口都经此一处调用，
 // 避免逐协议各写一遍判定而漏掉某条绕过通道；越限错误经既有 ErrQuotaExceeded
 // 映射落到 429 quota_exceeded，与发布额度的 429 口径一致。
@@ -110,7 +112,7 @@ func minLimit(a, b int64) int64 {
 	return b
 }
 
-// recordQuotaRejection 在协议层观察到配额拒绝时上报一次（FR-41 §4.5 指标）。
+// recordQuotaRejection 在协议层观察到配额拒绝时上报一次（指标）。
 // 预检与提交点的拒绝以 *domain.StorageQuotaError 形式返回、已由配额服务累加；
 // 只在限额感知读取器于流中中断时（裸 ErrQuotaExceeded）才需要协议层补报，避免重复计数。
 func (h *RawHandler) recordQuotaRejection(err error) {
@@ -132,7 +134,7 @@ func (h *RawHandler) nativeOperationAudit(c *gin.Context, action, repo string) d
 }
 
 func (h *RawHandler) beginPublish(c *gin.Context, repo, path string, size int64) (func(bool), error) {
-	// FR-41：仓库存储配额预检先于发布额度预留——越限时既不读请求体也不占额度。
+	// 仓库存储配额预检先于发布额度预留——越限时既不读请求体也不占额度。
 	if _, err := h.admissionFor(repo, path, size); err != nil {
 		return nil, err
 	}
@@ -147,7 +149,21 @@ func (h *RawHandler) beginPublish(c *gin.Context, repo, path string, size int64)
 	if err != nil {
 		return nil, err
 	}
-	return func(success bool) { _ = h.publish.Settle(id, success) }, nil
+	// 结算只允许发生一次：调用方普遍写成「defer settle(false) + 成功时 settle(true)」，
+	// 而 defer 会在成功路径上**再调一次** settle(false)。若首次 settle(true) 因事务失败
+	// （满载下的 busy/timeout）而没有把 settled_at 置位，第二次的 settle(false) 会把这条
+	// 预约整条删掉——用量从未累加、预约也消失，下一次 Resolve 便看到 used=0/reserved=0
+	// 而放行，额度被静默绕过。一次性化后，成功路径的 defer 不生效；失败时预约保持未结算，
+	// 仍会被算进 reserved，额度不会漏。
+	var once sync.Once
+	return func(success bool) {
+		once.Do(func() {
+			if err := h.publish.Settle(id, success); err != nil {
+				// 不再丢弃：结算失败意味着账本可能不准，必须可从日志追查。
+				log.Printf("发布额度结算失败（reservation=%d success=%v）：%v", id, success, err)
+			}
+		})
+	}, nil
 }
 
 func NewRawHandler(assets *domain.AssetService, repoSvc *domain.RepositoryService) *RawHandler {
@@ -255,7 +271,7 @@ func (h *RawHandler) Get(c *gin.Context) {
 
 // Put 处理 PUT：鉴权 publish → 流式入库；成功返回 201 与制品摘要。
 //
-// 动作从 write 收窄为 publish（FR-36）：「能写某个路径」与「能发布新版本」在细化后的
+// 动作从 write 收窄为 publish：「能写某个路径」与「能发布新版本」在细化后的
 // 动作集里是两件事。向后兼容由 Publish 的蕴含关系保证——write 蕴含 publish，
 // 故存量 write 授权照旧可以发布，而新授予的 publish 不再顺带拿到 write/read。
 func (h *RawHandler) Put(c *gin.Context) {
@@ -346,7 +362,7 @@ func (h *RawHandler) beginRawPublish(c *gin.Context, repo, path string) (func(bo
 		settle, err := h.beginPublish(c, repo, path, c.Request.ContentLength)
 		return func(ok bool, _ int64) { settle(ok) }, 0, err
 	}
-	// FR-41：长度未知——路径已知，配额给出抵扣覆盖写旧大小后的流式早拒上限。
+	// 长度未知——路径已知，配额给出抵扣覆盖写旧大小后的流式早拒上限。
 	quotaLimit, err := h.admissionFor(repo, path, -1)
 	if err != nil {
 		return nil, 0, err
@@ -362,11 +378,20 @@ func (h *RawHandler) beginRawPublish(c *gin.Context, repo, path string) (func(bo
 	if err != nil {
 		return nil, 0, err
 	}
-	return func(ok bool, size int64) { _ = h.publish.SettleSize(id, ok, size) }, minLimit(limit, quotaLimit), nil
+	// 一次性结算，理由同 beginPublish：避免成功路径上的 defer settle(false) 把
+	// 结算失败的预约整条删掉，从而漏算额度。
+	var once sync.Once
+	return func(ok bool, size int64) {
+		once.Do(func() {
+			if err := h.publish.SettleSize(id, ok, size); err != nil {
+				log.Printf("发布额度结算失败（reservation=%d success=%v size=%d）：%v", id, ok, size, err)
+			}
+		})
+	}, minLimit(limit, quotaLimit), nil
 }
 
 // beginUnresolvedPublish 为「路径尚未解析」的发布做预检（multipart / 上传会话建立时）。
-// FR-41：路径未知时无法计算覆盖写抵扣，只能给出不会误拒合法写入的安全上限（整仓配额），
+// 路径未知时无法计算覆盖写抵扣，只能给出不会误拒合法写入的安全上限（整仓配额），
 // 精确判定由路径解析后的 validateUnresolvedPublish 与提交点复检负责。
 func (h *RawHandler) beginUnresolvedPublish(c *gin.Context, repo string) (func(bool, int64), int64, error) {
 	quotaLimit, err := h.admissionFor(repo, "", -1)
@@ -384,11 +409,19 @@ func (h *RawHandler) beginUnresolvedPublish(c *gin.Context, repo string) (func(b
 	if err != nil {
 		return nil, 0, err
 	}
-	return func(ok bool, size int64) { _ = h.publish.SettleSize(id, ok, size) }, minLimit(limit, quotaLimit), nil
+	// 一次性结算，理由同 beginPublish。
+	var once sync.Once
+	return func(ok bool, size int64) {
+		once.Do(func() {
+			if err := h.publish.SettleSize(id, ok, size); err != nil {
+				log.Printf("发布额度结算失败（reservation=%d success=%v size=%d）：%v", id, ok, size, err)
+			}
+		})
+	}, minLimit(limit, quotaLimit), nil
 }
 
 // validateUnresolvedPublish 在制品路径解析出来后补做准入判定与发布额度路径校验。
-// FR-41：此时路径已知，可做精确判定（件数上限 + 字节上限 + 覆盖写抵扣），
+// 此时路径已知，可做精确判定（件数上限 + 字节上限 + 覆盖写抵扣），
 // 判定发生在任何内容进入 blob 存储之前，越限即 429。
 func (h *RawHandler) validateUnresolvedPublish(c *gin.Context, repo, path string) error {
 	if _, err := h.admissionFor(repo, path, -1); err != nil {
@@ -427,7 +460,7 @@ func writePublishErr(c *gin.Context, err error) {
 
 // Delete 处理 DELETE：管理员，或对该仓库持有 delete 授权的主体（blob 内容保留）。
 //
-// 删除权从「仅全局管理员」放开到 ACL 的 delete 动作（FR-36）：仓库级删除授权此前
+// 删除权从「仅全局管理员」放开到 ACL 的 delete 动作：仓库级删除授权此前
 // 只能靠给账号加全局管理员，等于把实例级权限当仓库级权限发。delete 只蕴含自身，
 // 故授予 delete 不会顺带拿到 read/write/publish；全局管理员分支原样保留。
 func (h *RawHandler) Delete(c *gin.Context) {
@@ -585,7 +618,7 @@ func writeUnauthorized(c *gin.Context) {
 	auth.WriteError(c, http.StatusUnauthorized, "unauthenticated", "未认证或凭据无效")
 }
 
-// quotaRejectionMessage 给出配额超限的可读提示。仓库存储配额（FR-41）的
+// quotaRejectionMessage 给出配额超限的可读提示。仓库存储配额的
 // 「当前占用 / 上限」文本由领域层构造，只含仓库名与数字，**不含文件系统路径**（docs/API.md:10）。
 func quotaRejectionMessage(err error) string {
 	var quotaErr *domain.StorageQuotaError

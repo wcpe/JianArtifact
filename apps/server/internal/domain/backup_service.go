@@ -34,7 +34,7 @@ var (
 )
 
 // backupCountTables 是包内计数的表白名单，顺序固定以产出稳定结果。
-// user_group / user_group_member 是 FR-36 的授权元数据（迁移 0046）：它们与 acl 一样决定
+// user_group / user_group_member 是的授权元数据（迁移 0046）：它们与 acl 一样决定
 // 「谁能访问什么」，备份包漏掉它们会让恢复后的节点丢失组授权，故一并计入。
 var backupCountTables = []string{"user", "api_token", "repository", "acl", "asset", "format_metadata", "user_group", "user_group_member"}
 
@@ -49,7 +49,7 @@ type CreateBackupOptions struct {
 	// BasePackageID 非空时生成增量差包：只携带相对该基线包的新增 blob。
 	// 要求基线包存在、状态 done 且其侧车索引可用（否则 ErrBackupBaseUnavailable）。
 	BasePackageID string
-	// Origin 是生成来源（FR-40）：空值等价于 repository.BackupOriginManual，
+	// Origin 是生成来源：空值等价于 repository.BackupOriginManual，
 	// 自动备份作业传 repository.BackupOriginAuto。该标记决定保留策略是否可淘汰本包。
 	Origin string
 }
@@ -198,7 +198,7 @@ func (s *BackupService) Verify(packageID string, deep bool) (archive.Manifest, e
 // 仍被增量差包引用的基线不允许删除：否则派生包在目标端永远无法还原。
 //
 // **侧车索引必须与包体同生共死**：它只服务于"为后续差包求差"，包一旦不存在，
-// 侧车就成了无人引用的孤儿文件。保留策略是周期性淘汰（FR-40），漏删侧车会让
+// 侧车就成了无人引用的孤儿文件。保留策略是周期性淘汰，漏删侧车会让
 // `${JIAN_DATA_DIR}/backups/` 里的索引只增不减——包体被淘汰而索引永久残留，
 // 与"保留策略兜住磁盘占用"的设计目的直接冲突。
 func (s *BackupService) Delete(packageID string) error {
@@ -226,7 +226,7 @@ func (s *BackupService) Delete(packageID string) error {
 // ReconcileStartup 收口进程重启遗留的生成中包，不让列表里留下永久"生成中"幻影：
 //   - 归档完整可读（manifest 身份正确）→ 判为 done。还原进来的包正是这种形态：它的内嵌
 //     快照取自生成过程中，登记行仍是生成中，但包体在本节点可用；误标 failed 会让目标节点
-//     无法基于它继续生成增量差包（FR-134 要求基线为 done）。
+//     无法基于它继续生成增量差包（要求基线为 done）。
 //   - 归档缺失或不可读 → 判为 failed（真中断）。
 func (s *BackupService) ReconcileStartup() (int64, error) {
 	const pageSize = 200

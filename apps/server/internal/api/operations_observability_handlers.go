@@ -60,7 +60,7 @@ func (h *Handlers) GetOperationsDashboard(c *gin.Context, params GetOperationsDa
 	c.JSON(http.StatusOK, response)
 }
 
-// assetDownloadTrend 查询并转换下载累计趋势（FR-143；原始口径，与 KPI 走同一采集点）。
+// assetDownloadTrend 查询并转换下载累计趋势（原始口径，与 KPI 走同一采集点）。
 // repo 未接线时返回空集——不伪造数据，也不因可选依赖缺失而整体 500。
 func (h *Handlers) assetDownloadTrend(c *gin.Context, from, to time.Time, bucket string) ([]DownloadTrendPoint, bool) {
 	points := make([]DownloadTrendPoint, 0)
@@ -82,7 +82,7 @@ func (h *Handlers) assetDownloadTrend(c *gin.Context, from, to time.Time, bucket
 	return points, true
 }
 
-// GetDownloadByClient 返回下载来源聚合（FR-144；独立来源口径：同 IP + 同制品 1 小时窗口
+// GetDownloadByClient 返回下载来源聚合（独立来源口径：同 IP + 同制品 1 小时窗口
 // 只计一次贡献）。IP 明文仅管理员可见；客户端类型为 UA 归类结果，不含原始 UA 串。
 func (h *Handlers) GetDownloadByClient(c *gin.Context, params GetDownloadByClientParams) {
 	if _, ok := requireAdmin(c); !ok {
@@ -633,7 +633,7 @@ func (h *Handlers) currentOperationsAlerts(now time.Time) []OperationsAlert {
 					continue
 				}
 				health := h.assets.Status(repo.ID)
-				// FR-43：HALF_OPEN（窗口已到、正在试探）对业务流量同样处于阻止效果，
+				// HALF_OPEN（窗口已到、正在试探）对业务流量同样处于阻止效果，
 				// 告警不应在半开期被判定为「已恢复」而闪断，故与 AUTO_BLOCKED 同等对待。
 				if health.Status != domain.StatusAutoBlocked && health.Status != domain.StatusHalfOpen {
 					continue

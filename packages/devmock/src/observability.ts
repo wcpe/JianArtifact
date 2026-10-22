@@ -1,4 +1,4 @@
-// FR-118：开发态统一审计读模型。
+// 开发态统一审计读模型。
 // 该模块只保存脱敏后的不可变事件夹具与本节点确认状态，供六个观测端点共享。
 import type { components } from "./schema.gen";
 
@@ -18,7 +18,7 @@ export type AuditAttentionPage = Schemas["AuditAttentionPage"];
 export type AuditAcknowledgement = Schemas["AuditAcknowledgement"];
 export type AcknowledgeAuditAttentionResponse = Schemas["AcknowledgeAuditAttentionResponse"];
 
-/** 通知中心查询参数（FR-117）：缺省为页眉口径（最近 24 小时未确认预览）。 */
+/** 通知中心查询参数：缺省为页眉口径（最近 24 小时未确认预览）。 */
 export interface NotificationQuery {
   from?: string;
   to?: string;
@@ -771,7 +771,7 @@ export const observabilityStore = {
   },
 
   notifications(query: NotificationQuery = {}): AuditAttentionNotificationList {
-    // FR-117：缺省请求保持页眉口径（最近 24 小时未确认、失败优先、至多 20 条）；
+    // 缺省请求保持页眉口径（最近 24 小时未确认、失败优先、至多 20 条）；
     // 显式筛选时按 status 口径分页并按最新时间排序。
     const explicit =
       query.from !== undefined ||

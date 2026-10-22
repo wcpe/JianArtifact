@@ -4,6 +4,13 @@
 import type { components } from "./schema.gen";
 import { mockVolumeFactor, subscribeMockConsole } from "./console";
 import { resetObservabilityStore } from "./observability";
+import {
+  buildSearchPackages,
+  parseCoordinates,
+  searchTermsOf,
+  type Coordinates,
+  type MockSearchPackage,
+} from "./searchPackage";
 import { MOCK_APP_VERSION, MOCK_MIGRATION_VERSION } from "./version";
 
 type Schemas = components["schemas"];
@@ -14,7 +21,7 @@ export type TokenCreated = Schemas["TokenCreated"];
 export type Repository = Schemas["Repository"];
 export type ConnectionStatus = Schemas["ConnectionStatus"];
 export type AclEntry = Schemas["AclEntry"];
-// FR-36：用户组（授权主体）与组成员关系。
+// 用户组（授权主体）与组成员关系。
 export type UserGroup = Schemas["UserGroup"];
 export type UserGroupMember = Schemas["UserGroupMember"];
 export type StatusInfo = Schemas["StatusInfo"];
@@ -29,11 +36,11 @@ export type MigrationSourceConfig = Schemas["MigrationSourceConfig"];
 export type MigrationSourceAuth = Schemas["MigrationSourceAuth"];
 export type MigrationSourceAuthType = Schemas["MigrationSourceAuthType"];
 export type RemoteNexusSourceConfig = Schemas["RemoteNexusSourceConfig"];
-// FR-132：节点备份与搬迁
+// 节点备份与搬迁
 export type BackupPackage = Schemas["BackupPackage"];
 export type BackupPackageList = Schemas["BackupPackageList"];
 export type BackupLink = Schemas["BackupLink"];
-// FR-40：来源列（manual / auto）与恢复演练报告
+// 来源列（manual / auto）与恢复演练报告
 export type BackupPackageOrigin = Schemas["BackupPackageOrigin"];
 export type BackupDrillAccepted = Schemas["BackupDrillAccepted"];
 export type BackupDrillCheck = Schemas["BackupDrillCheck"];
@@ -41,7 +48,7 @@ export type BackupVerificationLevel = Schemas["BackupVerificationLevel"];
 export type BackupVerificationList = Schemas["BackupVerificationList"];
 export type BackupVerificationReport = Schemas["BackupVerificationReport"];
 export type DrillBackupRequest = Schemas["DrillBackupRequest"];
-// FR-134 / FR-137：写入冻结窗口与从 URL 导入备份包
+//  /：写入冻结窗口与从 URL 导入备份包
 export type WriteFreezeState = Schemas["WriteFreezeState"];
 export type FreezeWritesRequest = Schemas["FreezeWritesRequest"];
 export type BackupImport = Schemas["BackupImport"];
@@ -51,7 +58,7 @@ export type BackupImportOrigin = Schemas["BackupImportOrigin"];
 export type CreateBackupImportRequest = Schemas["CreateBackupImportRequest"];
 export type PinnedRepositoriesResponse = Schemas["PinnedRepositoriesResponse"];
 export type PublicRepositoryList = Schemas["PublicRepositoryList"];
-/** FR-41：周期作业状态快照（运维作业面）。 */
+/** 周期作业状态快照（运维作业面）。 */
 export type MaintenanceJob = Schemas["MaintenanceJob"];
 
 export interface PublishPolicy {
@@ -74,11 +81,11 @@ export interface ServiceSettings {
   syncInterval: number;
   /** 允许访问的域名白名单（空数组表示不限制）；与真实后端一致按列表存储。 */
   allowedHosts: string[];
-  /** 回源 Token 校验（FR-130）；节点本地配置。 */
+  /** 回源 Token 校验；节点本地配置。 */
   originTokenEnabled: boolean;
   originTokenHeader: string;
   originTokenValue: string;
-  /** 自动备份间隔（秒），0 = 关闭（FR-40）；三者的 0 都是有意义的取值。 */
+  /** 自动备份间隔（秒），0 = 关闭；三者的 0 都是有意义的取值。 */
   backupAutoInterval: number;
   /** 保留最近 N 份自动备份，0 = 不限制份数。 */
   backupKeepLast: number;
@@ -90,7 +97,7 @@ export interface ServiceSettings {
 export const MOCK_TOKEN = "mock.jwt.token";
 /** 第二个管理员会话，仅供审计确认并发 Mock 验收使用。 */
 export const MOCK_SECOND_ADMIN_TOKEN = "mock.jwt.token:admin-2";
-/** FR-41：手动触发作业的模拟执行时延（毫秒），让前端能看到 running 中间态。 */
+/** 手动触发作业的模拟执行时延（毫秒），让前端能看到 running 中间态。 */
 const MOCK_JOB_RUN_MS = 1200;
 
 interface StoredToken extends Token {
@@ -114,10 +121,10 @@ interface State {
   volumeClones: string[];
   /** 上一次物化的档位倍数；1 = 仅种子。用于避免同档重复物化（也会复活被删掉的克隆）。 */
   volumeFactor: number;
-  /** FR-114：proxy 仓库上游连接状态（内存态，按仓库名；hosted/group 不维护）。 */
+  /** proxy 仓库上游连接状态（内存态，按仓库名；hosted/group 不维护）。 */
   connStatus: Record<string, ConnectionStatus>;
   acls: Record<string, AclEntry[]>;
-  // FR-36：用户组与「组 × 用户」成员关系。members 的 key 是组 ID。
+  // 用户组与「组 × 用户」成员关系。members 的 key 是组 ID。
   userGroups: UserGroup[];
   userGroupMembers: Record<number, UserGroupMember[]>;
   assets: Record<string, AssetSummary[]>;
@@ -133,21 +140,21 @@ interface State {
     repo: number;
     migration: number;
     operation: number;
-    /** FR-36：用户组自增 ID。 */
+    /** 用户组自增 ID。 */
     userGroup: number;
   };
-  /** FR-66：实例级匿名访问开关（默认开）。 */
+  /** 实例级匿名访问开关（默认开）。 */
   anonymousAccessEnabled: boolean;
   /** 管理端服务设置；集群拓扑仍由部署配置决定。 */
   serviceSettings: Omit<ServiceSettings, "anonymousAccess">;
-  /** FR-86：复制同步调度启停（默认开）。 */
+  /** 复制同步调度启停（默认开）。 */
   /**
    * 置顶仓库（迁移 0043 语义）：key 为 `global`（匿名/全局兜底）或 `user:<id>`；
    * value 为仓库 ID 数组（顺序即置顶顺序）。覆盖式写入，与后端一致。
    */
   pinned: Record<string, number[]>;
   /**
-   * FR-41：调度器已注册的周期作业状态（内存态，仅运维作业面读写）。
+   * 调度器已注册的周期作业状态（内存态，仅运维作业面读写）。
    * 与真实后端一致：清单由"注册"决定，计数自进程启动累计（这里即 resetStore 后归零）。
    */
   maintenanceJobs: MaintenanceJob[];
@@ -243,7 +250,7 @@ function seed(): State {
         createdAt: "2026-01-01T00:00:00Z",
         artifactCount: 1284,
         totalSize: 8589934592,
-        // FR-41：配额样例——字节与制品数都设上限，用量留有约 20% 余量（管理端显示「正常」）。
+        // 配额样例——字节与制品数都设上限，用量留有约 20% 余量（管理端显示「正常」）。
         quotaBytes: 10737418240,
         quotaAssets: 2000,
       },
@@ -258,7 +265,7 @@ function seed(): State {
         createdAt: "2026-01-02T00:00:00Z",
         artifactCount: 5240,
         totalSize: 12884901888,
-        // FR-41：已超限样例（5240 > 5000），用于核对管理端的超限提示与拒绝写入文案。
+        // 已超限样例（5240 > 5000），用于核对管理端的超限提示与拒绝写入文案。
         quotaAssets: 5000,
       },
       {
@@ -271,7 +278,7 @@ function seed(): State {
         createdAt: "2026-01-03T00:00:00Z",
         artifactCount: 82,
         totalSize: 1503238144,
-        // FR-41：只设字节配额、不设制品数配额（缺省 = 不限），且用量已达 93%
+        // 只设字节配额、不设制品数配额（缺省 = 不限），且用量已达 93%
         // （1.4 GiB / 1.5 GiB）→ 用于核对「接近上限」的橙色预警样式（阈值 90%）。
         quotaBytes: 1610612736,
       },
@@ -300,7 +307,7 @@ function seed(): State {
         createdAt: "2026-01-04T00:00:00Z",
         artifactCount: 12480,
         totalSize: 38654706022,
-        // FR-41：代理缓存保留 30 天（0/缺省 = 关闭代理缓存保留），供管理端演示保留天数表单项。
+        // 代理缓存保留 30 天（0/缺省 = 关闭代理缓存保留），供管理端演示保留天数表单项。
         cacheRetentionDays: 30,
       },
       {
@@ -357,7 +364,7 @@ function seed(): State {
     volumeClones: [],
     volumeFactor: 1,
     acls: { "maven-releases": [{ subjectId: 2, action: "read" }] },
-    // FR-36：种子留一个组，便于演示「组主体」的 ACL 与成员管理。
+    // 种子留一个组，便于演示「组主体」的 ACL 与成员管理。
     userGroups: [
       {
         id: 1,
@@ -371,9 +378,9 @@ function seed(): State {
       1: [{ userId: 2, username: "developer", createdAt: "2026-01-01T00:00:00Z" }],
     },
     connStatus: {
-      // FR-114：各 proxy 上游连接状态内存态——2 可用 / 3 自动阻止 / 1 半开 / 1 不可用，
+      // 各 proxy 上游连接状态内存态——2 可用 / 3 自动阻止 / 1 半开 / 1 不可用，
       // 供列表徽章与状态面板演示。
-      // FR-43：半开（HALF_OPEN）与自动阻止同属阻止态但需可区分，故种子里专门留一个被阻止仓库
+      // 半开（HALF_OPEN）与自动阻止同属阻止态但需可区分，故种子里专门留一个被阻止仓库
       // 处于半开，让状态面板/环形图/徽章的半开分支有真数据可渲染（否则新枚举在 mock 里从不出现）。
       "npm-proxy": { status: "AVAILABLE", description: "上游可用" },
       "gomod-proxy": { status: "AVAILABLE", description: "上游可用" },
@@ -753,13 +760,13 @@ function seed(): State {
       originTokenEnabled: false,
       originTokenHeader: "",
       originTokenValue: "",
-      // FR-40：间隔刻意给 0（关闭）——这是最容易被"空值兜底"写法吞掉的值，
+      // 间隔刻意给 0（关闭）——这是最容易被"空值兜底"写法吞掉的值，
       // 让 mock 默认就落在该分支上，摘要必须显示"已关闭"而不是默认档位。
       backupAutoInterval: 0,
       backupKeepLast: 7,
       backupRetentionDays: 30,
     },
-    // FR-41：与后端已注册的作业一一对应（blob-gc / storage-cleanup，默认间隔均为每日一次）。
+    // 与后端已注册的作业一一对应（blob-gc / storage-cleanup，默认间隔均为每日一次）。
     // 覆盖两种展示分支：blob-gc 执行过且最近一次失败（lastError 有值），
     // storage-cleanup 从未执行过（三个可空字段为 null）。
     maintenanceJobs: [
@@ -946,7 +953,7 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-// FR-36：动作由三档扩为六档，而 devmock 的仓库守卫仍只判三档（细化动作的
+// 动作由三档扩为六档，而 devmock 的仓库守卫仍只判三档（细化动作的
 // 门控目前只在后端 domain 层），因此 `accessRank` 按**六档全量**给出排名：
 // 未在本表里显式登记的档位（publish / delete / acl_manage）各自独立，
 // 取比 read 更低的 rank 0 会让它们互相放行，故给它们单独一档——只有完全相同的
@@ -1050,7 +1057,118 @@ function searchTokens(query: string): string[] {
   return query.match(/(?:[^\s"]+|"[^"]*")+/g) ?? [];
 }
 
-/** FR-114：MD-2 状态合并——offline 优先覆盖为 OFFLINE；hosted 不返回；online 的 proxy 返回内存态。 */
+/** 命中行：仓库 format 一并带上——包级聚合的坐标解析要按仓库格式门控（规格 §3.2）。 */
+type SearchMatch = AssetSummary & { repository: string; format: string };
+
+/**
+ * 解析搜索表达式并返回命中集合 / 仓库分面 / 普通关键词。
+ *
+ * 抽出来的原因：文件级列表（`searchAssets`）与包级聚合（`searchPackages`）必须共享
+ * **同一套**筛选口径，否则 mock 里会出现"树里的文件与列表条数对不上"这种假 bug。
+ */
+function collectSearchMatches(
+  query: string,
+  allowedRepositories?: readonly string[],
+): {
+  matches: SearchMatch[];
+  facets: Map<string, number>;
+  terms: string[];
+} {
+  const tokens = searchTokens(query);
+  const repos = new Set<string>();
+  const excludedRepos = new Set<string>();
+  const formats = new Set<string>();
+  const extensions = new Set<string>();
+  const excludedExtensions = new Set<string>();
+  const versions = new Set<string>();
+  const excludedVersions = new Set<string>();
+  const terms: string[] = [];
+  const excludedTerms: string[] = [];
+  for (const rawToken of tokens) {
+    const token = rawToken.replace(/^"|"$/g, "");
+    if (token.startsWith("repo:")) repos.add(token.slice("repo:".length));
+    else if (token.startsWith("-repo:")) excludedRepos.add(token.slice("-repo:".length));
+    else if (token.startsWith("format:")) formats.add(token.slice("format:".length));
+    else if (token.startsWith("ext:")) extensions.add(token.slice("ext:".length));
+    else if (token.startsWith("-ext:")) excludedExtensions.add(token.slice("-ext:".length));
+    else if (token.startsWith("version:")) versions.add(token.slice("version:".length));
+    else if (token.startsWith("-version:")) excludedVersions.add(token.slice("-version:".length));
+    else if (token.startsWith("-")) excludedTerms.push(token.slice(1).toLowerCase());
+    else terms.push(token.toLowerCase());
+  }
+  const allowed = allowedRepositories ? new Set(allowedRepositories) : null;
+  const all: SearchMatch[] = state.repositories
+    .filter((repo) => !allowed || allowed.has(repo.name))
+    .flatMap((repo) =>
+      (state.assets[repo.name] ?? []).map((asset) => ({
+        repository: repo.name,
+        format: repo.format,
+        ...asset,
+      })),
+    );
+  const matches = all.filter((asset) => {
+    const path = asset.path.toLowerCase();
+    const extension = asset.path.split(".").at(-1) ?? "";
+    // 版本过滤与后端同口径：取坐标解析出的版本段，**严格相等**（不是子串包含）。
+    // 解析不出版本（如 raw 仓库）时视为无版本，只在有 version: 条件时被排除。
+    const assetVersion = parseCoordinates(asset)?.version ?? "";
+    return (
+      (repos.size === 0 || repos.has(asset.repository)) &&
+      !excludedRepos.has(asset.repository) &&
+      (formats.size === 0 || formats.has(asset.format)) &&
+      (extensions.size === 0 || extensions.has(extension)) &&
+      !excludedExtensions.has(extension) &&
+      (versions.size === 0 || versions.has(assetVersion)) &&
+      !excludedVersions.has(assetVersion) &&
+      terms.every((term) => path.includes(term)) &&
+      excludedTerms.every((term) => !path.includes(term))
+    );
+  });
+  const facets = new Map<string, number>();
+  for (const asset of matches) {
+    facets.set(asset.repository, (facets.get(asset.repository) ?? 0) + 1);
+  }
+  return { matches, facets, terms };
+}
+
+/**
+ * suggest 候选的稳定序：候选值长度（rune 数）升序 → 字典序升序。
+ *
+ * 长度按 rune 而不是 UTF-16 码元：中文候选按码元算会与「短候选优先」的直觉相反。
+ * 字典序用 `<` 比较（码元序），与后端 Go 的字节序一致，且只依赖候选值本身——
+ * 不依赖命中行的遍历顺序，因此同一输入每次调用得到同一顺序。
+ */
+function sortSuggestions<T extends { value: string }>(items: T[]): T[] {
+  return items.sort(
+    (left, right) =>
+      [...left.value].length - [...right.value].length ||
+      (left.value < right.value ? -1 : left.value > right.value ? 1 : 0),
+  );
+}
+
+/**
+ * 把解析出的坐标转成「可直接作为搜索词命中该包」的候选值。
+ *
+ * Maven 的展示坐标是 `group:artifact`，而 asset.path 里存在的是 `group/artifact/...`——
+ * 含 `:` 的坐标当关键词搜索是 0 命中，因此取 `:` 之后的部分（artifact）。
+ * npm 的坐标本身就是包名，原样返回。
+ * 解析不出坐标的行（`kind=file` 的降级伪包）返回空串，调用方据此跳过：它们的「包」
+ * 维度就是仓库名，已由仓库名候选覆盖。
+ */
+function suggestPackageValue(coordinates: Coordinates): string {
+  if (coordinates.kind === "file") {
+    return "";
+  }
+  if (coordinates.kind === "maven") {
+    const separator = coordinates.coordinate.lastIndexOf(":");
+    if (separator >= 0 && separator < coordinates.coordinate.length - 1) {
+      return coordinates.coordinate.slice(separator + 1);
+    }
+  }
+  return coordinates.coordinate;
+}
+
+/** MD-2 状态合并——offline 优先覆盖为 OFFLINE；hosted 不返回；online 的 proxy 返回内存态。 */
 function statusFor(repo: Repository): ConnectionStatus | undefined {
   if (repo.type === "hosted") {
     return undefined;
@@ -1061,7 +1179,7 @@ function statusFor(repo: Repository): ConnectionStatus | undefined {
   return state.connStatus[repo.name] ?? { status: "READY", description: "尚未探测" };
 }
 
-/** FR-114：为仓库响应附加连接状态（不修改内部数据）。 */
+/** 为仓库响应附加连接状态（不修改内部数据）。 */
 function decorate(repo: Repository): Repository {
   const status = statusFor(repo);
   return status ? { ...repo, connectionStatus: status } : { ...repo };
@@ -1076,7 +1194,7 @@ export const store = {
       migrationVersion: state.migrationVersion,
       userCount: state.users.length,
       bootstrapAllowed: !state.initialized && state.users.length === 0,
-      // FR-34：开发环境不接真实 IdP，登录入口保持隐藏（真实 OIDC 流程需顶层跳转，MSW 拦不到）。
+      // 开发环境不接真实 IdP，登录入口保持隐藏（真实 OIDC 流程需顶层跳转，MSW 拦不到）。
       oidcEnabled: false,
     };
   },
@@ -1232,7 +1350,7 @@ export const store = {
     return state.users.length < before;
   },
 
-  // —— 用户组（FR-36）——
+  // —— 用户组——
 
   listUserGroups(page: number, pageSize: number): { items: UserGroup[]; total: number } {
     return { items: pageSlice(state.userGroups, page, pageSize), total: state.userGroups.length };
@@ -1377,7 +1495,7 @@ export const store = {
     };
   },
 
-  /** FR-66：匿名可读仓库列表（mock 近似：public 即匿名可读）。 */
+  /** 匿名可读仓库列表（mock 近似：public 即匿名可读）。 */
   listAnonymousRepositories(
     page: number,
     pageSize: number,
@@ -1389,7 +1507,7 @@ export const store = {
     };
   },
 
-  /** FR-66：匿名访问全局开关。 */
+  /** 匿名访问全局开关。 */
   anonymousAccess(): boolean {
     return state.anonymousAccessEnabled;
   },
@@ -1466,7 +1584,7 @@ export const store = {
     return this.settings();
   },
 
-  // —— FR-41：存储治理运维作业面（admin）——
+  // —— 存储治理运维作业面（admin）——
 
   /** 周期作业清单（返回副本，避免调用方直接改内部态）。 */
   maintenanceJobs(): MaintenanceJob[] {
@@ -1550,14 +1668,14 @@ export const store = {
     if (input.aliases && input.aliases.length > 0) {
       repo.aliases = input.aliases;
     }
-    // FR-41：存储配额（0/缺省 = 不限）。不限时不写键，与后端"零值即不限"的回显一致。
+    // 存储配额（0/缺省 = 不限）。不限时不写键，与后端"零值即不限"的回显一致。
     if (input.quotaBytes !== undefined && input.quotaBytes > 0) {
       repo.quotaBytes = input.quotaBytes;
     }
     if (input.quotaAssets !== undefined && input.quotaAssets > 0) {
       repo.quotaAssets = input.quotaAssets;
     }
-    // FR-41：代理缓存保留天数（0/缺省 = 关闭），语义同配额——不限/关闭时不写键。
+    // 代理缓存保留天数（0/缺省 = 关闭），语义同配额——不限/关闭时不写键。
     if (input.cacheRetentionDays !== undefined && input.cacheRetentionDays > 0) {
       repo.cacheRetentionDays = input.cacheRetentionDays;
     }
@@ -1585,7 +1703,7 @@ export const store = {
     if (patch.visibility) {
       repo.visibility = patch.visibility;
     }
-    // FR-81：description 传空串表示清空。
+    // description 传空串表示清空。
     if (patch.description !== undefined) {
       repo.description = patch.description;
     }
@@ -1599,7 +1717,7 @@ export const store = {
     if (patch.aliases !== undefined) {
       repo.aliases = patch.aliases;
     }
-    // FR-41：配额是局部补丁语义——缺省表示不修改，传 0 表示改为不限（清掉键）。
+    // 配额是局部补丁语义——缺省表示不修改，传 0 表示改为不限（清掉键）。
     if (patch.quotaBytes !== undefined) {
       if (patch.quotaBytes > 0) {
         repo.quotaBytes = patch.quotaBytes;
@@ -1614,7 +1732,7 @@ export const store = {
         delete repo.quotaAssets;
       }
     }
-    // FR-41：代理缓存保留天数同样按局部补丁处理——缺省不修改，传 0 表示关闭（清掉键）。
+    // 代理缓存保留天数同样按局部补丁处理——缺省不修改，传 0 表示关闭（清掉键）。
     if (patch.cacheRetentionDays !== undefined) {
       if (patch.cacheRetentionDays > 0) {
         repo.cacheRetentionDays = patch.cacheRetentionDays;
@@ -1646,7 +1764,7 @@ export const store = {
     return decorate(repo);
   },
 
-  /** FR-113：设置仓库 online/offline（节点本地运维状态，不参与复制）。 */
+  /** 设置仓库 online/offline（节点本地运维状态，不参与复制）。 */
   setOnline(name: string, online: boolean): Repository | null {
     const repo = state.repositories.find((r) => r.name === name);
     if (!repo) {
@@ -1656,7 +1774,7 @@ export const store = {
     return decorate(repo);
   },
 
-  /** FR-114：手动重测 proxy 仓库上游连接（仅 online proxy）。mock 视上游恒可达，
+  /** 手动重测 proxy 仓库上游连接（仅 online proxy）。mock 视上游恒可达，
    *  重测后置为 AVAILABLE 并返回最新状态；非 proxy/offline 返回 null。 */
   recheckConnection(name: string): ConnectionStatus | null {
     const repo = state.repositories.find((r) => r.name === name);
@@ -1722,7 +1840,7 @@ export const store = {
     return { items: pageSlice(all, page, pageSize), total: all.length };
   },
 
-  /** FR-54：按目录懒加载——返回指定前缀下当前层的目录（全路径带尾斜杠）与文件，仓库不存在返回 null。 */
+  /** 按目录懒加载——返回指定前缀下当前层的目录（全路径带尾斜杠）与文件，仓库不存在返回 null。 */
   listDirectory(
     name: string,
     prefix: string,
@@ -1927,51 +2045,7 @@ export const store = {
     total: number;
     facets: { repository: string; count: number }[];
   } {
-    const tokens = searchTokens(query);
-    const repos = new Set<string>();
-    const excludedRepos = new Set<string>();
-    const formats = new Set<string>();
-    const extensions = new Set<string>();
-    const excludedExtensions = new Set<string>();
-    const terms: string[] = [];
-    const excludedTerms: string[] = [];
-    for (const rawToken of tokens) {
-      const token = rawToken.replace(/^"|"$/g, "");
-      if (token.startsWith("repo:")) repos.add(token.slice("repo:".length));
-      else if (token.startsWith("-repo:")) excludedRepos.add(token.slice("-repo:".length));
-      else if (token.startsWith("format:")) formats.add(token.slice("format:".length));
-      else if (token.startsWith("ext:")) extensions.add(token.slice("ext:".length));
-      else if (token.startsWith("-ext:")) excludedExtensions.add(token.slice("-ext:".length));
-      else if (token.startsWith("-")) excludedTerms.push(token.slice(1).toLowerCase());
-      else terms.push(token.toLowerCase());
-    }
-    const allowed = allowedRepositories ? new Set(allowedRepositories) : null;
-    const all = state.repositories
-      .filter((repo) => !allowed || allowed.has(repo.name))
-      .flatMap((repo) =>
-        (state.assets[repo.name] ?? []).map((asset) => ({
-          repository: repo.name,
-          format: repo.format,
-          ...asset,
-        })),
-      );
-    const matches = all.filter((asset) => {
-      const path = asset.path.toLowerCase();
-      const extension = asset.path.split(".").at(-1) ?? "";
-      return (
-        (repos.size === 0 || repos.has(asset.repository)) &&
-        !excludedRepos.has(asset.repository) &&
-        (formats.size === 0 || formats.has(asset.format)) &&
-        (extensions.size === 0 || extensions.has(extension)) &&
-        !excludedExtensions.has(extension) &&
-        terms.every((term) => path.includes(term)) &&
-        excludedTerms.every((term) => !path.includes(term))
-      );
-    });
-    const facets = new Map<string, number>();
-    for (const asset of matches) {
-      facets.set(asset.repository, (facets.get(asset.repository) ?? 0) + 1);
-    }
+    const { matches, facets } = collectSearchMatches(query, allowedRepositories);
     const direction = order === "desc" ? -1 : 1;
     matches.sort((left, right) => {
       const leftValue =
@@ -2018,7 +2092,84 @@ export const store = {
     };
   },
 
-  /** FR-73：Maven 网页上传——登记主文件/pom/metadata 及各自校验和的 asset 摘要。
+  /**
+   * 开发态包级聚合（的 `group_by=package`）：与 `searchAssets` 共享命中集合，
+   * 按规格 §3.2–§3.5 聚成包 / 版本 / 文件三级结构。
+   *
+   * `scanned` 是参与聚合的行数；mock 不模拟 5000 行预算，故 `truncated` 恒为 false。
+   */
+  searchPackages(
+    query: string,
+    allowedRepositories?: readonly string[],
+  ): { packages: MockSearchPackage[]; scanned: number } {
+    const { matches, terms } = collectSearchMatches(query, allowedRepositories);
+    return { packages: buildSearchPackages(matches, terms), scanned: matches.length };
+  },
+
+  /**
+   * 开发态搜索建议（`GET /api/v1/search/suggest`）：仓库名与包名两类候选。
+   *
+   * 口径与后端一致，细节见 docs/API.md 的 suggest 小节：
+   *   - `q` trim 后为空 → 空候选（不是 400：suggest 是高频被动调用，空输入是常态）；
+   *   - `limit` 缺省 10、夹取到 [1, 20]，非正数回落缺省，**一律不报错**；
+   *   - 仓库名候选优先占位（更短、且用户常拿它做 `repo:` 限定），剩余名额给包名；
+   *   - 类内按「候选值长度（rune 数）升序 → 字典序升序」排序，类间恒为仓库在前——
+   *     因此合并结果**不是**全局有序的（仓库候选 `zzz-repo` 会排在包名候选中 `abc` 之前）。
+   *     这条顺序只依赖候选值本身，不依赖命中行的遍历顺序，同一输入的候选顺序稳定；
+   *   - 跨类去重：某个包名恰好等于某个仓库名时只保留仓库候选；
+   *   - `allowedRepositories` 为 undefined 表示不限（管理员），否则只在该集合内取候选——
+   *     无 `read` 权限的仓库**连名字都不出现**。
+   *
+   * 包名候选的抽取**复用**包级聚合的坐标解析（parseCoordinates），不另写一套规则：
+   * Maven 取 `group:artifact` 里 `:` 之后的部分（含 `:` 的坐标当关键词搜是 0 命中），
+   * npm 直接取包名，解析不出坐标的（`file` 降级条目）不产出候选。
+   * 只有输入含**普通关键词**时才扫包名候选：只输入 `-sources` / `ext:jar` / `repo:x`
+   * 时把整仓路径当候选池扫一遍，给出的都是无关包名。
+   */
+  searchSuggest(
+    query: string,
+    allowedRepositories: readonly string[] | undefined,
+    limit: number,
+  ): { type: "package" | "repository"; value: string }[] {
+    type Suggestion = { type: "package" | "repository"; value: string };
+    const q = query.trim();
+    if (!q) {
+      return [];
+    }
+    const capped = limit <= 0 ? 10 : Math.min(limit, 20);
+    const allowed = allowedRepositories ? new Set(allowedRepositories) : null;
+    const needle = q.toLowerCase();
+    const repoCandidates: Suggestion[] = state.repositories
+      .filter((repository) => !allowed || allowed.has(repository.name))
+      .filter((repository) => repository.name.toLowerCase().includes(needle))
+      .map((repository) => ({ type: "repository", value: repository.name }));
+    sortSuggestions(repoCandidates);
+    const out = repoCandidates.slice(0, capped);
+    const remain = capped - out.length;
+    if (remain === 0) {
+      return out;
+    }
+    // 没有正向关键词就没有候选驱动条件，直接返回仓库名候选。
+    if (searchTermsOf(q).length === 0) {
+      return out;
+    }
+    const used = new Set(out.map((item) => item.value));
+    const seen = new Set<string>();
+    const packageCandidates: Suggestion[] = [];
+    for (const match of collectSearchMatches(q, allowedRepositories).matches) {
+      const value = suggestPackageValue(parseCoordinates(match));
+      if (!value || used.has(value) || seen.has(value)) {
+        continue;
+      }
+      seen.add(value);
+      packageCandidates.push({ type: "package", value });
+    }
+    sortSuggestions(packageCandidates);
+    out.push(...packageCandidates.slice(0, remain));
+    return out;
+  },
+
+  /** Maven 网页上传——登记主文件/pom/metadata 及各自校验和的 asset 摘要。
    * 仓库不存在返回 null；非 maven hosted 返回 "conflict"。 */
   uploadMavenArtifact(
     name: string,
@@ -2094,7 +2245,7 @@ export const store = {
     if (!repo) {
       return null;
     }
-    // FR-81：usage 带出描述，供匿名详情页页头展示。
+    // usage 带出描述，供匿名详情页页头展示。
     return {
       format: repo.format,
       type: repo.type,

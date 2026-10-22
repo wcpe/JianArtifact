@@ -1,6 +1,7 @@
 package domain_test
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -20,7 +21,7 @@ func newAnonTestSvc(t *testing.T) (*domain.RepositoryService, *domain.SettingSer
 }
 
 // TestAnonymousAclRead anonymous 主体经 ACL 授 read 后，匿名（subjectID=0）可读 private 仓库；
-// 未授权的 private 仓库仍拒绝；public 仓库始终可读（FR-66）。
+// 未授权的 private 仓库仍拒绝；public 仓库始终可读。
 func TestAnonymousAclRead(t *testing.T) {
 	t.Parallel()
 	svc, _, userRepo, aclRepo := newAnonTestSvc(t)
@@ -66,7 +67,7 @@ func TestAnonymousAclRead(t *testing.T) {
 }
 
 // TestAnonymousGlobalSwitch 全局开关关闭后一切匿名访问拒绝（public 也不例外）、
-// 已认证主体不受影响；重新开启后恢复（FR-66）。
+// 已认证主体不受影响；重新开启后恢复。
 func TestAnonymousGlobalSwitch(t *testing.T) {
 	t.Parallel()
 	svc, settings, userRepo, aclRepo := newAnonTestSvc(t)
@@ -101,7 +102,7 @@ func TestAnonymousGlobalSwitch(t *testing.T) {
 		t.Error("开关关闭不应影响已认证主体")
 	}
 	// 匿名搜索兜底：开关关闭返回空集。
-	if out, err := svc.SearchAssets("any", "", 0, false, "", "asc", 10, 0); err != nil || out.Total != 0 || len(out.Items) != 0 {
+	if out, err := svc.SearchAssets(context.Background(), "any", "", 0, false, "", "asc", 10, 0); err != nil || out.Total != 0 || len(out.Items) != 0 {
 		t.Errorf("开关关闭时匿名搜索应空集，得 out=%+v err=%v", out, err)
 	}
 
@@ -113,7 +114,7 @@ func TestAnonymousGlobalSwitch(t *testing.T) {
 	}
 }
 
-// TestAnonymousUserProtection 内置 anonymous 用户禁登录、禁删除 / 改密 / 改角色（FR-66），
+// TestAnonymousUserProtection 内置 anonymous 用户禁登录、禁删除 / 改密 / 改角色，
 // 且不影响自举判断（Bootstrap 不把 anonymous 计为已初始化）。
 func TestAnonymousUserProtection(t *testing.T) {
 	t.Parallel()

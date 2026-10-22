@@ -2,7 +2,7 @@ package domain
 
 // ChangeRecorder 记录实体变更。
 //
-// 复制/集群退役（FR-138）后，repl_change 变更日志不再写入——它唯一的消费方是
+// 复制/集群退役后，repl_change 变更日志不再写入——它唯一的消费方是
 // 已退役的复制拉取通道。接口与注入点保留，是为了避免为摘除而改动 9 个写路径
 // 服务的字段与构造；具体实现换成了 NoopChangeRecorder。
 //

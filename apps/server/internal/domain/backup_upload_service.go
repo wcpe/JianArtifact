@@ -18,7 +18,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// 分片上传（FR-137 第三通道）的常量护栏。
+// 分片上传（第三通道）的常量护栏。
 const (
 	// uploadChunkSize 是服务端决定的分片大小（8 MiB），在 Init 响应里返回给前端，
 	// 前端据此切分；服务端不再信任客户端自报的块大小。
@@ -62,7 +62,7 @@ type UploadView struct {
 // BackupUploadService 编排「Web 分片上传 → 组装归档 → 收进备份列表」的流程：
 // initialized → receiving → completed（取消置 aborted）。
 //
-// FR-40 追加八改变了交接对象：组装完成后不再直接发起恢复（StartLocalImport），
+// 改变了交接对象：组装完成后不再直接发起恢复（StartLocalImport），
 // 而是交给 BackupAdoptService 落进 backups/ 并登记，之后由用户显式发起恢复。
 type BackupUploadService struct {
 	repo    *repository.BackupUploadRepo
@@ -296,7 +296,7 @@ func (s *BackupUploadService) Complete(ctx context.Context, uploadID, clientSHA2
 		return repository.BackupImport{}, fmt.Errorf("%w：包摘要与客户端 sha256 不符（期望 %s 实际 %s）", ErrValidation, strings.ToLower(clientSHA256), sum)
 	}
 
-	// 收进备份列表（FR-40 追加八）：只登记，不恢复。
+	// 收进备份列表：只登记，不恢复。
 	//
 	// 此前这里直接调 StartLocalImport → Stage → 写 restore.pending，于是"上传一个包"
 	// 等于"提交一次覆盖本机数据的恢复"，用户没有校验的机会。现在改为：把归档搬进

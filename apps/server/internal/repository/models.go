@@ -43,7 +43,7 @@ type Repository struct {
 	Visibility  string `db:"visibility"`
 	Description string `db:"description"` // 仓库描述（管理后台可配置，详情页展示）
 	Config      string `db:"config"`      // 结构化配置 JSON（上游 URL、成员列表等）
-	Online      bool   `db:"online"`      // 是否在线（默认 true；管理员可手动置 offline，FR-113）
+	Online      bool   `db:"online"`      // 是否在线（默认 true；管理员可手动置 offline）
 	CreatedAt   string `db:"created_at"`
 	// Aliases 是仓库的别名列表（非列字段，由服务层按需填充；别名与主名共享命名空间）。
 	Aliases []string `db:"-"`
@@ -57,14 +57,14 @@ type RepositoryConfig struct {
 	CredentialRef    string   `json:"credentialRef,omitempty"`
 	Members          []string `json:"members,omitempty"`
 	ImmutableRelease bool     `json:"immutableRelease,omitempty"`
-	// CacheRetentionDays 是 proxy 仓库代理缓存资产的保留天数（FR-41）：
+	// CacheRetentionDays 是 proxy 仓库代理缓存资产的保留天数：
 	// 0/缺省 = 关闭（默认），仅允许 proxy 类型取非 0；负数非法。
 	// 由 storage-cleanup 作业按此值淘汰超期缓存，删除走既有资产变更通道。
 	CacheRetentionDays int `json:"cacheRetentionDays,omitempty"`
-	// QuotaBytes 是仓库的存储配额上限（FR-41），口径为逻辑字节 SUM(asset.size)：
+	// QuotaBytes 是仓库的存储配额上限，口径为逻辑字节 SUM(asset.size)：
 	// 0/缺省 = 不限，负数非法；group 类型不承载写入，必须为 0。
 	QuotaBytes int64 `json:"quotaBytes,omitempty"`
-	// QuotaAssets 是仓库的制品数配额上限（FR-41），口径为 COUNT(*)：
+	// QuotaAssets 是仓库的制品数配额上限，口径为 COUNT(*)：
 	// 0/缺省 = 不限，负数非法；group 类型不承载写入，必须为 0。
 	QuotaAssets int64 `json:"quotaAssets,omitempty"`
 }
@@ -104,7 +104,7 @@ func EncodeRepositoryConfig(c RepositoryConfig) (string, error) {
 
 // Acl 是 acl 表中一条授权（主体 × 动作）。
 //
-// 主体分两类（FR-36，迁移 0046）：用户主体用 SubjectID 标记、SubjectGroupID 恒为 0；
+// 主体分两类（迁移 0046）：用户主体用 SubjectID 标记、SubjectGroupID 恒为 0；
 // 用户组主体用 SubjectGroupID 标记、SubjectID 恒为 0。两列互斥由表内 CHECK 强制，
 // 因此写入前必须把「不用的那一列」显式写 NULL。
 type Acl struct {
@@ -120,7 +120,7 @@ const (
 	SubjectTypeGroup = "group"
 )
 
-// acl 动作取值（FR-36 六档，对应 acl.action 的 CHECK）。
+// acl 动作取值（六档，对应 acl.action 的 CHECK）。
 // 三档 read / write / admin 是既有语义，publish / delete / acl_manage 为本次细化新增。
 const (
 	ActionRead      = "read"
@@ -171,7 +171,7 @@ func (s Subject) groupIDs() []int64 {
 	return out
 }
 
-// UserGroup 是 user_group 表的行模型（FR-36）：授权主体之一是「用户组」。
+// UserGroup 是 user_group 表的行模型：授权主体之一是「用户组」。
 // 组名全局唯一；ACL 里引用的是 id，故组改名不影响既有授权。
 type UserGroup struct {
 	ID          int64  `db:"id"`
@@ -200,7 +200,7 @@ type Asset struct {
 	Md5          string `db:"md5"`
 	CreatedAt    string `db:"created_at"`
 	UpdatedAt    string `db:"updated_at"`
-	// QuotaExempt 是仓库存储配额豁免标记（FR-41）：**非持久化字段**，仅供迁移导入与
+	// QuotaExempt 是仓库存储配额豁免标记：**非持久化字段**，仅供迁移导入与
 	// 备份恢复等管理员批量操作在提交点声明「本次写入不受仓库配额约束」。零值表示
 	// 正常受配额约束；协议发布路径不得置位（配额守卫在提交点读取它）。
 	QuotaExempt bool `db:"-" json:"-"`

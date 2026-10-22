@@ -258,9 +258,19 @@ func (r *AssetMutationRepo) complete(id string, items []AssetMutationItem, outbo
 	return tx.Commit()
 }
 
+// applyMutationItem 在调用方事务内把单条资产变更应用到 asset 表，并同步维护全文索引
+// （asset_path_fts，见 search_index_repo.go）。索引写与 asset 写同事务，任一步失败整批回滚。
+//
+// 各分支的索引处理口径：
+//   - 删除：先删索引行（此时 asset 行仍在，external content 才取得到要移除的词），再删 asset 行；
+//   - 路径变更（先插新、再删旧）：新行取到 id 后建索引，旧行按上面的顺序清索引；
+//   - 同路径 upsert：path 未变，索引内容不变，因此**只有真正新插入的行**才需要建索引。
 func applyMutationItem(tx *sqlx.Tx, item AssetMutationItem) error {
 	var current Asset
 	err := tx.Get(&current, `SELECT id, repository_id, path, blob_hash, size, content_type, sha1, md5, created_at, updated_at FROM asset WHERE repository_id=? AND path=?`, item.RepositoryID, item.Path)
+	// exists 记录本次变更前该 (repository_id, path) 是否已有行：与上面 err 的四种组合一一对应，
+	// 后面同路径 upsert 分支据此区分「覆盖写（索引无需变更）」与「新插入（需建索引）」。
+	exists := err == nil
 	if errors.Is(err, sql.ErrNoRows) {
 		if item.Before != nil {
 			return fmt.Errorf("资产前镜像不匹配：%d/%s", item.RepositoryID, item.Path)
@@ -271,6 +281,11 @@ func applyMutationItem(tx *sqlx.Tx, item AssetMutationItem) error {
 		return fmt.Errorf("资产已被其他操作修改：%d/%s", item.RepositoryID, item.Path)
 	}
 	if item.After == nil {
+		if exists {
+			if err := searchIndexDelete(tx, current.ID, current.Path); err != nil {
+				return err
+			}
+		}
 		_, err = tx.Exec(`DELETE FROM asset WHERE repository_id=? AND path=?`, item.RepositoryID, item.Path)
 		return err
 	}
@@ -290,6 +305,23 @@ func applyMutationItem(tx *sqlx.Tx, item AssetMutationItem) error {
 		if err != nil {
 			return err
 		}
+		// 新路径的行刚插入，取回自增 id 作为索引 rowid 后建索引。
+		newID, ok, err := assetRowID(tx, item.After.RepositoryID, item.After.Path)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("资产目标路径写入后查不到：%d/%s", item.After.RepositoryID, item.After.Path)
+		}
+		if err := searchIndexInsert(tx, newID, item.After.Path); err != nil {
+			return err
+		}
+		// 旧路径的行随后删除：先清索引（此时旧 asset 行仍在），再删行。
+		if exists {
+			if err := searchIndexDelete(tx, current.ID, current.Path); err != nil {
+				return err
+			}
+		}
 		_, err = tx.Exec(`DELETE FROM asset WHERE repository_id=? AND path=?`, item.RepositoryID, item.Path)
 		return err
 	}
@@ -299,9 +331,26 @@ func applyMutationItem(tx *sqlx.Tx, item AssetMutationItem) error {
 		content_type=excluded.content_type, sha1=excluded.sha1, md5=excluded.md5, updated_at=excluded.updated_at`,
 		item.After.RepositoryID, item.After.Path, item.After.BlobHash, item.After.Size, item.After.ContentType,
 		item.After.Sha1, item.After.Md5, item.After.CreatedAt, item.After.UpdatedAt)
-	return err
+	if err != nil {
+		return err
+	}
+	if exists {
+		// 覆盖写：path 未变，索引镜像的内容也不变，无需改动。
+		return nil
+	}
+	newID, ok, err := assetRowID(tx, item.After.RepositoryID, item.After.Path)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("资产写入后查不到：%d/%s", item.After.RepositoryID, item.After.Path)
+	}
+	return searchIndexInsert(tx, newID, item.After.Path)
 }
 
+// restoreMutationItem 在调用方事务内把单条资产变更回滚到前镜像，并同步维护全文索引。
+// 索引处理与 applyMutationItem 对称：删 After 行前先清索引；回插 Before 行时只有真正新插入
+// 的行才建索引（同路径覆盖写时 path 未变、索引内容不变）。
 func restoreMutationItem(tx *sqlx.Tx, item AssetMutationItem) error {
 	if item.After != nil {
 		var current Asset
@@ -313,6 +362,10 @@ func restoreMutationItem(tx *sqlx.Tx, item AssetMutationItem) error {
 			return fmt.Errorf("资产回滚前镜像不匹配：%d/%s", item.After.RepositoryID, item.After.Path)
 		}
 		if err == nil {
+			// 先清索引再删行：external content 表需要内容行才能定位要移除的词。
+			if err := searchIndexDelete(tx, current.ID, current.Path); err != nil {
+				return err
+			}
 			if _, err := tx.Exec(`DELETE FROM asset WHERE repository_id=? AND path=?`, item.After.RepositoryID, item.After.Path); err != nil {
 				return err
 			}
@@ -321,14 +374,32 @@ func restoreMutationItem(tx *sqlx.Tx, item AssetMutationItem) error {
 	if item.Before == nil {
 		return nil
 	}
-	_, err := tx.Exec(`INSERT INTO asset (repository_id, path, blob_hash, size, content_type, sha1, md5, created_at, updated_at)
+	// 回插前先判存在性：上面若已删掉 After 行，这里通常是新插入（需要建索引）；
+	// 若 After 为 nil 且该行仍在（apply 未删成），则是覆盖写，索引内容不变。
+	_, existed, err := assetRowID(tx, item.Before.RepositoryID, item.Before.Path)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO asset (repository_id, path, blob_hash, size, content_type, sha1, md5, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?,''), datetime('now')), COALESCE(NULLIF(?,''), datetime('now')))
 		ON CONFLICT(repository_id, path) DO UPDATE SET blob_hash=excluded.blob_hash, size=excluded.size,
 		content_type=excluded.content_type, sha1=excluded.sha1, md5=excluded.md5,
 		created_at=excluded.created_at, updated_at=excluded.updated_at`,
 		item.Before.RepositoryID, item.Before.Path, item.Before.BlobHash, item.Before.Size, item.Before.ContentType,
-		item.Before.Sha1, item.Before.Md5, item.Before.CreatedAt, item.Before.UpdatedAt)
-	return err
+		item.Before.Sha1, item.Before.Md5, item.Before.CreatedAt, item.Before.UpdatedAt); err != nil {
+		return err
+	}
+	if existed {
+		return nil
+	}
+	newID, ok, err := assetRowID(tx, item.Before.RepositoryID, item.Before.Path)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("资产回滚写入后查不到：%d/%s", item.Before.RepositoryID, item.Before.Path)
+	}
+	return searchIndexInsert(tx, newID, item.Before.Path)
 }
 
 // GetIncomplete 返回尚未完成的 intent，供进程启动恢复。

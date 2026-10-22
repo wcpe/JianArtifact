@@ -119,7 +119,7 @@ func TestRepoUpdateConfig(t *testing.T) {
 }
 
 // TestRepoOnlinePersistence 新建仓库默认在线（online=true）；SetOnline 置离线后
-// 持久化读回一致（FR-113）。
+// 持久化读回一致。
 func TestRepoOnlinePersistence(t *testing.T) {
 	repos := newRepoRepo(t)
 	if _, err := repos.Create("raw-proxy", "raw", "proxy", "private", ""); err != nil {

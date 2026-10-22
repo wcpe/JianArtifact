@@ -23,7 +23,7 @@ type ExternalIdentity struct {
 }
 
 // LoginExternal 按外部身份绑定既有账号或建号，并签发与本地登录同构的会话
-// （FR-34/35，见 ADR-0029）。绑定优先顺序：
+// （/35，见 ADR-0029）。绑定优先顺序：
 // external_subject 命中 → 用户名命中且未绑定 → 新建账号（角色固定 user）。
 //
 // 一律拒绝：停用、禁止网页登录、内置 anonymous 主体、管理员账号的自动绑定

@@ -49,7 +49,7 @@ func TestLDAPFullConfigParsed(t *testing.T) {
 }
 
 // TestLDAPHalfConfigAndContradictionsRejected 半配置与自相矛盾的组合必须在启动期报错，
-// 不静默半启用（对齐 OIDC 与 FR-131 的防静默降级口径）。
+// 不静默半启用（对齐 OIDC 侧的防静默降级口径）。
 func TestLDAPHalfConfigAndContradictionsRejected(t *testing.T) {
 	base := func() {
 		t.Setenv(EnvLDAPURL, "ldap://ldap.example.com:389")

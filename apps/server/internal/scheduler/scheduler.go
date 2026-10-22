@@ -1,6 +1,6 @@
 // Package scheduler 提供进程内周期作业调度：统一触发语义、失败隔离与状态可见。
 //
-// 语义固化见 docs/specs/0.11.0-job-scheduler.md（FR-44）。
+// 语义固化见 docs/specs/0.11.0-job-scheduler.md。
 package scheduler
 
 import (
@@ -21,7 +21,7 @@ var (
 	ErrJobRunning = errors.New("作业正在运行")
 )
 
-// JobStatus 是单个作业的运行状态快照，供诊断与指标导出（FR-39）。
+// JobStatus 是单个作业的运行状态快照，供诊断与指标导出。
 type JobStatus struct {
 	// Name 是注册时的作业名称。
 	Name string

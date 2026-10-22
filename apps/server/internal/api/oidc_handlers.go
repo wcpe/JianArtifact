@@ -24,7 +24,7 @@ type OIDCLogin interface {
 	Exchange(ctx context.Context, code string, flow auth.OIDCFlow) (auth.ExternalUser, error)
 }
 
-// OIDCDeps 汇集 OIDC 登录端点所需依赖（FR-34）；为 nil 表示未启用 OIDC 登录。
+// OIDCDeps 汇集 OIDC 登录端点所需依赖；为 nil 表示未启用 OIDC 登录。
 type OIDCDeps struct {
 	Verifier       OIDCLogin            // 协议侧校验器
 	FlowSigner     *auth.OIDCFlowSigner // 流程状态签名器（启动密钥派生）
@@ -32,7 +32,7 @@ type OIDCDeps struct {
 	RedirectAfter  string               // 回前端的基础路径（如 /login）
 }
 
-// StartOidcLogin 起跳授权码流程（FR-34）：生成短时流程状态（签名 Cookie 承载，无服务端状态），
+// StartOidcLogin 起跳授权码流程：生成短时流程状态（签名 Cookie 承载，无服务端状态），
 // 再重定向到 IdP。未启用 OIDC 时返回 404。
 func (h *Handlers) StartOidcLogin(c *gin.Context) {
 	if h.oidc == nil {
@@ -56,7 +56,7 @@ func (h *Handlers) StartOidcLogin(c *gin.Context) {
 	c.Redirect(http.StatusFound, target)
 }
 
-// CompleteOidcLogin 完成授权码流程（FR-34）：校验流程状态 → 兑换并校验身份 → 绑定或建号 →
+// CompleteOidcLogin 完成授权码流程：校验流程状态 → 兑换并校验身份 → 绑定或建号 →
 // 携会话令牌重定向前端。令牌经 URL 片段下发（片段不进入服务端访问日志）。
 func (h *Handlers) CompleteOidcLogin(c *gin.Context, params CompleteOidcLoginParams) {
 	if h.oidc == nil {

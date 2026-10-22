@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/archive"
 )
 
-// 包内容与当前系统的差异对比（FR-40 追加十四）。
+// 包内容与当前系统的差异对比。
 //
 // # 性能是这个功能的第一约束
 //

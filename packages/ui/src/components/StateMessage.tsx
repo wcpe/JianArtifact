@@ -1,5 +1,5 @@
 // 业务状态态组件：加载 / 空 / 错误 / 越权。管理端各视图与 wiki 验收站复用同一套状态呈现，
-// 保证空态与权限态在全站一致（对齐 FR-12 业务模式验收）。
+// 保证空态与权限态在全站一致（对齐业务模式验收）。
 import { Button, Center, Loader, Stack, Text, ThemeIcon } from "@mantine/core";
 import type { ReactNode } from "react";
 

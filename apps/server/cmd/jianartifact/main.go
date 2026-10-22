@@ -203,7 +203,7 @@ func newApplicationHandler(cfg *config.Config, svc *appServices, assets fs.FS) h
 	checks := []func() error{svc.db.Ping, blobWritableCheck(cfg.BlobDir)}
 	// 允许访问的域名白名单（后台设置，节点本地；空列表不限制）。
 	allowedHosts := func() []string { return svc.settingSvc.AllowedHostsList() }
-	// FR-130：回源 Token 校验（后台「设置-安全防护」；节点本地，运行时生效）。
+	// 回源 Token 校验（后台「设置-安全防护」；节点本地，运行时生效）。
 	originTokenGuard := func() (bool, string, string) { return svc.settingSvc.OriginTokenGuard() }
 	authenticator := auth.NewAuthenticator(svc.jwt, svc.store, auth.WithAllowedHosts(allowedHosts))
 	apiHandlers := svc.handlers(version, checks)
@@ -213,7 +213,7 @@ func newApplicationHandler(cfg *config.Config, svc *appServices, assets fs.FS) h
 	if cfg.EnabledFormats.Any() {
 		rawHandler = protocol.NewRawHandler(svc.assetSvc, svc.repoSvc)
 		rawHandler.SetPublishPolicy(svc.publishPolicySvc)
-		rawHandler.SetQuotaGuard(svc.quotaSvc) // FR-41：仓库存储配额（预检早拒 + 提交点权威复检）
+		rawHandler.SetQuotaGuard(svc.quotaSvc) // 仓库存储配额（预检早拒 + 提交点权威复检）
 		rawHandler.SetAudit(apiHandlers.AuditLog)
 		rawHandler.SetOperationAudit(apiHandlers.ProtocolAssetOperationAudit)
 	}
@@ -266,7 +266,7 @@ func newApplicationHandler(cfg *config.Config, svc *appServices, assets fs.FS) h
 	srv := httpserver.New(version,
 		httpserver.WithReadinessCheck(svc.db.Ping),
 		httpserver.WithReadinessCheck(blobWritableCheck(cfg.BlobDir)),
-		httpserver.WithWriteFreeze(svc.freeze.State), // FR-135：运行时写入冻结窗口（未冻结时中间件为空操作）
+		httpserver.WithWriteFreeze(svc.freeze.State), // 运行时写入冻结窗口（未冻结时中间件为空操作）
 		httpserver.WithHandlers(apiHandlers),
 		httpserver.WithManagementSecurityAudit(apiHandlers.AuditLog),
 		httpserver.WithAllowedHosts(allowedHosts),
@@ -275,9 +275,9 @@ func newApplicationHandler(cfg *config.Config, svc *appServices, assets fs.FS) h
 		httpserver.WithProtocolMetric(func(c *gin.Context) {
 			cacheResult, _ := c.Get(protocol.CacheResultContextKey)
 			svc.dashboardSvc.RecordProtocol(domain.ProtocolMetric{CompletedAt: time.Now().UTC(), Method: c.Request.Method, Status: c.Writer.Status(), CacheResult: cacheResultString(cacheResult)})
-			// FR-39：Prometheus 指标——复用同一钩子累加协议请求计数（进程内，不写库）。
+			// Prometheus 指标——复用同一钩子累加协议请求计数（进程内，不写库）。
 			svc.metricsReg.ProtocolRequest(c.Request.Method, c.Writer.Status(), cacheResultString(cacheResult))
-			// FR-142：制品下载计量（只认 GET+200 的完整传输；该钩子只服务制品协议请求，
+			// 制品下载计量（只认 GET+200 的完整传输；该钩子只服务制品协议请求，
 			// 路径解析与 UA 归类在服务内完成——原始 UA 串不落库）。
 			svc.assetDownloadSvc.RecordDownload(c.Request.Method, c.Writer.Status(), c.Request.URL.Path, c.ClientIP(), c.Request.UserAgent(), time.Now().UTC())
 		}),
@@ -312,31 +312,42 @@ func newApplicationHandler(cfg *config.Config, svc *appServices, assets fs.FS) h
 			r.POST("/api/v1/migrations/offline-index/cancel", authMW, apiHandlers.CancelOfflineDirIndex)
 			// 运维端点
 			r.POST("/api/v1/repositories/:name/cleanup", authMW, apiHandlers.CleanupEmptyMavenArtifacts)
-			// FR-73: Maven 网页上传仅在 Maven 启用时注册。
+			// Maven 网页上传仅在 Maven 启用时注册。
 			if mavenHandler != nil {
 				r.POST("/api/v1/repositories/:name/maven-upload", authMW, mavenHandler.UploadForm)
 			}
-			// FR-54: 目录懒加载 tree API
+			// 目录懒加载 tree API
 			r.GET("/api/v1/repositories/:name/tree", authMW, apiHandlers.ListRepositoryTree)
-			// FR-142: 仓库详情下载趋势与总下载（权限同 tree；非契约端点，结构收口在
+			// 仓库详情下载趋势与总下载（权限同 tree；非契约端点，结构收口在
 			// openapi.yaml 的 RepositoryDownloadTrendResponse，路径按 tree 先例不入契约）
 			r.GET("/api/v1/repositories/:name/download-trend", authMW, apiHandlers.GetRepositoryDownloadTrend)
-			// FR-142: 分组下载趋势 /api/v1/observability/downloads/trend 已收口进契约，
+			// 分组下载趋势 /api/v1/observability/downloads/trend 已收口进契约，
 			// 由 RegisterHandlersWithOptions 注册（勿在此重复注册，避免 gin 路由冲突）。
 			// 公开接口 /api/v1/public/repositories 同样已收口进契约（响应含全局置顶名），
 			// 由 RegisterHandlersWithOptions 注册，不再经此处手写注册。
-			// FR-30: 全局搜索
+			// 全局搜索
 			r.GET("/api/v1/search", authMW, apiHandlers.SearchAssets)
-			// FR-66: 匿名访问全局开关（admin，主体由 Optional 注入，handler 内校验）
+			// 搜索索引回填状态与全量重建（仅管理员，admin 校验在 handler 内）。
+			// 与上一行同组同先例——**非契约端点**，不写入 api/openapi.yaml：它们只服务运维观测
+			// 与故障修复，形状会随后续批次（查询改写、suggest）演进，不为易变的内部进度形状
+			// 引入对外承诺。理由详见 internal/api/search_index_handlers.go 文件头。
+			r.GET("/api/v1/search/index", authMW, apiHandlers.GetSearchIndexStatus)
+			r.POST("/api/v1/search/index/rebuild", authMW, apiHandlers.RebuildSearchIndex)
+			// 搜索建议（搜索框下拉候选：包名 + 仓库名）。
+			// 同上为**非契约端点**，不写入 api/openapi.yaml：它只服务前端搜索框，候选形状会随
+			// 包坐标解析口径演进，不是协议客户端依赖的稳定面。权限（管理员搜全部 / 其余
+			// public ∪ 被授 read）在领域层统一判定，可读集合为空时返回 200 + 空 items 而非 403。
+			r.GET("/api/v1/search/suggest", authMW, apiHandlers.SuggestSearch)
+			// 匿名访问全局开关（admin，主体由 Optional 注入，handler 内校验）
 			r.GET("/api/v1/settings/anonymous-access", authMW, apiHandlers.GetAnonymousAccessSetting)
 			r.PUT("/api/v1/settings/anonymous-access", authMW, apiHandlers.PutAnonymousAccessSetting)
-			// FR-89: 设置读写端点（admin，基础配置四项：匿名开关/对外 URL/回源超时/同步间隔）
+			// 设置读写端点（admin，基础配置四项：匿名开关/对外 URL/回源超时/同步间隔）
 			r.GET("/api/v1/settings", authMW, apiHandlers.GetSettings)
 			r.PUT("/api/v1/settings", authMW, apiHandlers.PutSettings)
 			// 开源协议清单（admin 专属；清单不再打进前端 bundle，见 internal/licenses）
 			r.GET("/api/v1/licenses", authMW, apiHandlers.GetLicenses)
 			// 复制退役：数据面 /api/v1/cluster/sync/* 与管理面 /api/v1/cluster* 均已摘除。
-			// FR-38: 审计日志（分页 + 筛选：actor/action/repo/from/to，仅管理员）
+			// 审计日志（分页 + 筛选：actor/action/repo/from/to，仅管理员）
 			r.GET("/api/v1/audit-logs", authMW, apiHandlers.GetAuditLogs)
 		}),
 		httpserver.WithProtocolPrefixes(formats.AllPrefixes()...),
@@ -358,7 +369,7 @@ func run() error {
 		return fmt.Errorf("加载配置：%w", err)
 	}
 
-	// FR-137：在打开数据库连接之前应用待生效的备份恢复（替换 db 文件时不能有打开的连接）。
+	// 在打开数据库连接之前应用待生效的备份恢复（替换 db 文件时不能有打开的连接）。
 	if applied, outcome, err := domain.ApplyPendingRestore(cfg.DataDir, cfg.DBPath, cfg.BlobDir); err != nil {
 		return fmt.Errorf("应用待生效的备份恢复：%w", err)
 	} else if applied {
@@ -387,27 +398,31 @@ func run() error {
 	defer stop()
 
 	// 复制退役：出站同步调度器已随集群功能移除。
-	// FR-132：收尾上次进程遗留的"生成中"备份包，避免列表里留下永久幻影。
+	// 收尾上次进程遗留的"生成中"备份包，避免列表里留下永久幻影。
 	if n, err := svc.backupSvc.ReconcileStartup(); err == nil && n > 0 {
 		fmt.Fprintf(os.Stderr, "备份：标记 %d 个服务重启遗留的生成中包为失败\n", n)
 	}
-	// FR-137：清理崩在导入中途留下的暂存目录（有 restore.pending 时不清理，
+	// 清理崩在导入中途留下的暂存目录（有 restore.pending 时不清理，
 	// 那是等待本次启动替换数据库的正品，由 ApplyPendingRestore 处理）。
 	if err := svc.restoreSvc.ReconcileStaleStaging(); err != nil {
 		fmt.Fprintf(os.Stderr, "导入：清理残留暂存目录失败：%v\n", err)
 	}
-	// FR-137：清理到期未完成的分片上传会话（磁盘 + 记录）；失败仅记日志，不影响启动。
+	// 清理到期未完成的分片上传会话（磁盘 + 记录）；失败仅记日志，不影响启动。
 	if n, err := svc.backupUploads.ReconcileExpired(time.Now()); err != nil {
 		fmt.Fprintf(os.Stderr, "分片上传：清理过期会话失败：%v\n", err)
 	} else if n > 0 {
 		fmt.Fprintf(os.Stderr, "分片上传：清理 %d 个过期上传会话\n", n)
 	}
-	// FR-53/120：分钟聚合与当前主机采样只由运行期定时任务驱动，启动不扫描历史数据。
+	// 分钟聚合与当前主机采样只由运行期定时任务驱动，启动不扫描历史数据。
 	svc.dashboardSvc.Start(ctx, time.Now)
 	svc.assetDownloadSvc.Start(ctx, time.Now)
 	svc.hostMonitoringSvc.Start(ctx, time.Now)
-	// FR-44：维护类周期作业的统一调度器（作业已在 wiring 装配期注册完毕）。
+	// 维护类周期作业的统一调度器（作业已在 wiring 装配期注册完毕）。
 	svc.scheduler.Start(ctx)
+	// 搜索索引的后台异步回填。一次性任务、不阻塞启动（这里只是挂 goroutine），
+	// 分批推进水位、可中断续跑；未完成期间搜索照常可用（走既有 LIKE 路径）。
+	// 不用调度器：回填要尽快开始、只跑一次、跑完即退出，与周期作业语义相反。
+	svc.searchIndexSvc.Start(ctx)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -416,7 +431,7 @@ func run() error {
 			errCh <- err
 		}
 	}()
-	// FR-131：服务内置 TLS 双监听（与 HTTP 共用同一 handler），供 CDN 回源 HTTPS。
+	// 服务内置 TLS 双监听（与 HTTP 共用同一 handler），供 CDN 回源 HTTPS。
 	// 显式配置了 TLS 地址但证书缺失 / 格式错误 → 启动失败并明确报错，
 	// 防止"以为加密了实际没有"的静默降级；未配置 TLS 地址时保持纯 HTTP。
 	//
@@ -437,7 +452,7 @@ func run() error {
 		}()
 	}
 
-	// FR-40 追加七：一键重启的"该重启了"信号（触发点已在装配期接到领域服务上）。
+	// 一键重启的"该重启了"信号（触发点已在装配期接到领域服务上）。
 	// 它由 HTTP 端点受理后延迟发出，因此这条分支就是"重启"本身：
 	// 先优雅关停（与 SIGTERM 同一条路），再自替换映像。
 	restartCh := svc.restartCh
@@ -452,6 +467,7 @@ func run() error {
 		return fmt.Errorf("HTTP 服务异常：%w", err)
 	case <-ctx.Done():
 		fmt.Println("收到关停信号，正在优雅关停……")
+		noteSearchBackfillInterrupted()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if err := httpServer.Shutdown(shutdownCtx); err != nil {
@@ -475,6 +491,7 @@ func run() error {
 		// 就换映像，等于把"没关干净"这件事藏起来——新映像启动时看到的是一份半关停的现场，
 		// 而日志里一个字都不会提。
 		fmt.Println("收到一键重启请求，正在优雅关停并自替换……")
+		noteSearchBackfillInterrupted()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if err := httpServer.Shutdown(shutdownCtx); err != nil {
@@ -501,6 +518,23 @@ func run() error {
 	}
 }
 
+// noteSearchBackfillInterrupted 在关停路径上说明「后台索引回填可能被本批中断」。
+//
+// 为什么不在关停时等它退出：回填跑在 domain.SearchIndexService 自己的 goroutine 里，
+// 关停只需要停止推进水位，而**等待**会把关停时长绑在「当前批次还剩多少行」上——
+// 大库上一批可能是几十万行，SIGTERM 后的 15 秒关停窗口（k8s 的 terminationGracePeriod
+// 同理）根本不够，结果是关停超时被杀，反而丢掉「本批已提交到哪」之外的全部收尾动作。
+//
+// 不等待是安全的：水位（search_index_state.last_id）在**每批提交时**落库，被中断的那一批
+// 至多回退到该批起点，下次启动从 last_id 续跑，不重复灌也不漏行；未完成期间搜索走既有
+// 全表 LIKE 路径，结果仍然正确。代价只是「本批白做一次」，所以不在关停路径里等。
+//
+// 但仍然要打这一行日志：否则运维在「刚重启后 indexed 比关停前还少一点」时无从判断
+// 是回退了还是索引坏了。
+func noteSearchBackfillInterrupted() {
+	fmt.Fprintln(os.Stderr, "提示：搜索索引的后台回填可能在本批中被中断；水位按批提交，下次启动将从 last_id 续跑，无需人工干预。")
+}
+
 // registerBlobGCJob 把孤立 blob 定时清理注册为调度器作业：按固定间隔执行、启动不立即扫描；
 // 间隔 <= 0 或清理函数为空时不注册（禁用语义，对齐 JIAN_BLOB_GC_INTERVAL=0）。
 // 复制退役后不再有 standby（此前 standby 不 GC 以免误删对端仍引用的 blob）；
@@ -521,7 +555,7 @@ func registerBlobGCJob(sched *scheduler.Scheduler, interval time.Duration, clean
 	})
 }
 
-// buildTLSServer 构造服务内置 TLS 的 http.Server(FR-131)。
+// buildTLSServer 构造服务内置 TLS 的 http.Server。
 // 先加载并校验 PEM 证书对;失败返回错误,由调用方决定整体启动失败(防静默降级)。
 func buildTLSServer(cfg *config.Config, handler http.Handler) (*http.Server, error) {
 	if strings.TrimSpace(cfg.TLSCert) == "" || strings.TrimSpace(cfg.TLSKey) == "" {

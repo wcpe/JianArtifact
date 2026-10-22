@@ -9,7 +9,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// BackupRetentionOptions 是一轮保留策略的阈值（FR-40；初始值来自环境变量，
+// BackupRetentionOptions 是一轮保留策略的阈值（；初始值来自环境变量，
 // 之后可经界面修改并在下一轮生效）。
 //
 // 两个阈值**同时生效、取更严格者**：任一条判定为「超限」就淘汰，而不是要求两条都超。
@@ -50,7 +50,7 @@ func (r BackupRetentionResult) Summary() string {
 		r.Candidates, r.Deleted, r.Skipped, r.Failed)
 }
 
-// BackupRetentionService 对自动备份包执行保留策略（FR-40 §2.2）。
+// BackupRetentionService 对自动备份包执行保留策略。
 //
 // # 只淘汰 origin='auto'
 //
@@ -80,7 +80,7 @@ func (r BackupRetentionResult) Summary() string {
 type BackupRetentionService struct {
 	backupSvc *BackupService
 	repo      *repository.BackupPackageRepo
-	// mu 保护 opts：作业每轮用最新配置覆盖阈值（FR-40 追加：配置改为运行时可改），
+	// mu 保护 opts：作业每轮用最新配置覆盖阈值（追加：配置改为运行时可改），
 	// 而 Run 可能正被手动触发或上一轮心跳调用，两者必须串行读，避免读到写一半的值。
 	mu   sync.RWMutex
 	opts BackupRetentionOptions
@@ -97,7 +97,7 @@ func NewBackupRetentionService(backupSvc *BackupService, repo *repository.Backup
 	}
 }
 
-// SetOptions 用最新配置覆盖阈值（FR-40 追加：三项配置改为运行时可改）。
+// SetOptions 用最新配置覆盖阈值（追加：三项配置改为运行时可改）。
 //
 // 每次 Run 之前由作业调用，使"界面上改完配置"在下一轮即生效，无需重启。
 // 只覆盖阈值，不动 now（测试注入的时间基准必须保持稳定）。

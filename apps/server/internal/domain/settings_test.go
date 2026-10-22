@@ -18,7 +18,7 @@ func (r *recordingRecorder) Record(entityType, entityKey, op string, data any) e
 	return nil
 }
 
-// TestSettingsDynamicConfig 基础配置动态化（FR-89）：缺省回退、写后读一致、非法值归零。
+// TestSettingsDynamicConfig 基础配置动态化：缺省回退、写后读一致、非法值归零。
 func TestSettingsDynamicConfig(t *testing.T) {
 	t.Parallel()
 	db := newTestDB(t)
@@ -100,7 +100,7 @@ func TestSettingsSetManyRollback(t *testing.T) {
 	}
 }
 
-// TestSettingsWriteRecordsChange 设置写入记录复制变更日志（FR-83 链路）。
+// TestSettingsWriteRecordsChange 设置写入记录复制变更日志（链路）。
 func TestSettingsWriteRecordsChange(t *testing.T) {
 	t.Parallel()
 	db := newTestDB(t)

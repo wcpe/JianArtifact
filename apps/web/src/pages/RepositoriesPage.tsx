@@ -1,5 +1,5 @@
 // 仓库管理：列表（分页 + format 图标）+ 新建 + 切换可见性 + 删除 + 清理。
-// FR-68：固定布局（页头/筛选/分页固定，表格区内滚 + sticky 表头）；匿名视图隐藏管理操作。
+// 固定布局（页头/筛选/分页固定，表格区内滚 + sticky 表头）；匿名视图隐藏管理操作。
 // 每页条数随表格滚动区高度自适应（下限 10，见 rowsPerPage），高屏不再留大片空白。
 import {
   ActionIcon,
@@ -126,7 +126,7 @@ const TYPE_COLOR: Record<string, string> = {
 const CONN_ICON: Record<ConnectionStatusValue, typeof IconCircleCheck> = {
   AVAILABLE: IconCircleCheck,
   AUTO_BLOCKED: IconBan,
-  // FR-43：半开是过渡态（正在试探上游），用「雷达/探测」形状与禁行标志区分——
+  // 半开是过渡态（正在试探上游），用「雷达/探测」形状与禁行标志区分——
   // 二者同属阻止态，靠形状差别才能一眼看出仍在试探、尚未恢复。
   HALF_OPEN: IconRadar,
   UNAVAILABLE: IconCircleX,
@@ -135,7 +135,7 @@ const CONN_ICON: Record<ConnectionStatusValue, typeof IconCircleCheck> = {
 };
 
 /**
- * 置顶行的视觉高亮（FR-56 置顶语义的可见反馈）。
+ * 置顶行的视觉高亮（置顶语义的可见反馈）。
  *
  * 为什么用 `backgroundImage` 而不是 `backgroundColor`：
  * Mantine v7 的表格把「斑马纹底」与 `highlightOnHover` 都写成**类选择器**的
@@ -205,7 +205,7 @@ function MetricCell({
   hint: string;
   value: ReactNode;
   /**
-   * FR-41：该维度的配额状态。接近上限着橙、已超限着红（正常与不限保持默认前景色）；
+   * 该维度的配额状态。接近上限着橙、已超限着红（正常与不限保持默认前景色）；
    * 状态同时落到 `data-quota-state`，供用例断言"哪个维度被判定成了什么状态"，
    * 不必依赖颜色（颜色断言在 jsdom 下既脆弱又读不出语义）。
    */
@@ -227,7 +227,7 @@ function MetricCell({
   );
 }
 
-/** FR-114：连接状态列（状态图标 + 悬浮说明；hosted 仓库无上游连接概念 → 占位符「—」）。 */
+/** 连接状态列（状态图标 + 悬浮说明；hosted 仓库无上游连接概念 → 占位符「—」）。 */
 function ConnectionStatusCell({ status }: { status?: ConnectionStatusValue }) {
   const { t } = useTranslation();
   const title = t("repositories.connectionStatus", { defaultValue: "连接状态" });
@@ -303,7 +303,7 @@ export function RepositoriesPage() {
   // 此时只保留「名称 + 操作」，被裁掉的类型/制品数/大小改由名称下方副文本承载。
   const isNarrow = useMediaQuery("(max-width: 48em)") ?? false;
 
-  // 每页条数随表格滚动区高度自适应（FR-68 固定布局的补全）：容器高度固定后，
+  // 每页条数随表格滚动区高度自适应（固定布局的补全）：容器高度固定后，
   // 写死 10 行会在高屏上留大片空白（"高度铺满了但数据还是固定的"）。
   // 量出滚动区实际高度与真实行高换算每页行数；下限仍是 PAGE_SIZE（矮屏回落为内滚），
   // 上限 MAX_ROWS_PER_PAGE 防止超高屏一次渲染过多行。jsdom 无布局（行高量出 0）时
@@ -333,7 +333,7 @@ export function RepositoriesPage() {
     return Math.min(Math.max(capacity, PAGE_SIZE), MAX_ROWS_PER_PAGE);
     // isNarrow 变化会改变行高（副文本两行），需重算。
   }, [scrollerHeight, scrollerNode, isNarrow]);
-  // FR-56: 排序与分组；视图偏好（排序/方向/分组/名称筛选）持久化到 localStorage，跨会话记忆。
+  // 排序与分组；视图偏好（排序/方向/分组/名称筛选）持久化到 localStorage，跨会话记忆。
   const [view, setView] = useLocalStorage<RepoViewPrefs>({
     key: REPO_VIEW_KEY,
     defaultValue: { sortBy: "name", sortOrder: "asc", groupBy: "none", nameFilter: "" },
@@ -357,7 +357,7 @@ export function RepositoriesPage() {
   // 服务端都无从参与。继续用服务端分页会让置顶只在当前页内生效、筛选漏掉其它页的匹配项。
   const state = useAsync(
     () => listAllRepositories({ sort: sortBy, order: sortOrder }),
-    // FR-67：登录态变化（模态框登录成功/登出）后重拉列表，匿名与全量集合不同。
+    // 登录态变化（模态框登录成功/登出）后重拉列表，匿名与全量集合不同。
     [sortBy, sortOrder, user],
     { cacheKey: `repositories:all:${sortBy}:${sortOrder}:${user?.id ?? "anon"}` },
   );
@@ -415,7 +415,7 @@ export function RepositoriesPage() {
       members: [] as string[],
       // 别名（可选）：与主名共享命名空间、全局唯一，可用别名等价访问该仓库。
       aliases: [] as string[],
-      // FR-41：创建时即可设存储治理三项（可选项；0 / 留空 = 不限 / 关闭）。
+      // 创建时即可设存储治理三项（可选项；0 / 留空 = 不限 / 关闭）。
       // 字节按所选单位填写，保存时换算成字节——与详情页配置区共用同一套换算与校验。
       quotaBytesText: "0",
       quotaBytesUnit: "GB" as QuotaUnit,
@@ -450,7 +450,7 @@ export function RepositoriesPage() {
     .filter((r) => r.format === form.values.format && r.name !== form.values.name)
     .map((r) => r.name);
 
-  // FR-41：新建弹窗的治理字段（null = 非法输入，需内联提示并阻止提交）。
+  // 新建弹窗的治理字段（null = 非法输入，需内联提示并阻止提交）。
   // 配额两项只在 hosted 类型下渲染与校验（group 不承载写入，proxy 的缓存写入在读取回源路径上、
   // 没有准入预检与流式早拒，后端对这两类仓库提交非 0 配额直接 400）；
   // 保留天数只在 proxy 类型下渲染与校验，避免「换成其他类型后隐藏字段里残留的非法值卡住提交」。
@@ -481,11 +481,11 @@ export function RepositoriesPage() {
       format: values.format,
       type: values.type,
       visibility: values.visibility,
-      // FR-81：仓库描述（可选），详情页页头展示。
+      // 仓库描述（可选），详情页页头展示。
       ...(values.description.trim() ? { description: values.description.trim() } : {}),
       ...(values.type === "proxy" ? { remoteUrl: values.remoteUrl.trim() } : {}),
       ...(values.type === "group" ? { members: values.members } : {}),
-      // FR-41：配额只有 hosted 可设（0 = 不限），保留天数只有 proxy 可设（0 = 关闭）；
+      // 配额只有 hosted 可设（0 = 不限），保留天数只有 proxy 可设（0 = 关闭）；
       // 其他类型不提交这两个字段，避免发出必然被后端 400 的值。
       ...(values.type === "hosted"
         ? { quotaBytes: createQuotaBytesValue ?? 0, quotaAssets: createQuotaAssetsValue ?? 0 }
@@ -588,10 +588,10 @@ export function RepositoriesPage() {
 
   return (
     <>
-      {/* FR-68 固定布局：页面撑满内容区高度，body 不滚；页头/筛选/分页固定，表格区内滚。
+      {/* 固定布局：页面撑满内容区高度，body 不滚；页头/筛选/分页固定，表格区内滚。
           高度口径统一由 PageShell 提供（dvh + header-offset），页面不再各自手算。 */}
       <PageShell>
-        {/* FR-56: 排序与分组控件 + 名称筛选；右侧为新建仓库入口（与筛选同一行，避免多余空白带） */}
+        {/* 排序与分组控件 + 名称筛选；右侧为新建仓库入口（与筛选同一行，避免多余空白带） */}
         <Group gap="sm" mb="md" wrap="wrap" justify="space-between">
           {/* 窄屏 align=flex-end：同行控件自带 label，底部对齐才能让「新建」图标按钮与输入框齐平。 */}
           <Group gap="sm" wrap="wrap" align={isNarrow ? "flex-end" : "center"}>
@@ -823,7 +823,7 @@ export function RepositoriesPage() {
                             repo.visibility === "public"
                               ? t("repositories.visibilityPublic")
                               : t("repositories.visibilityPrivate");
-                          // FR-41：把「当前用量 / 上限」放在同一格（此前只显示用量，管理员要自己去
+                          // 把「当前用量 / 上限」放在同一格（此前只显示用量，管理员要自己去
                           // 配置页才知道有没有上限）。状态色沿用 quota.ts 的统一口径：
                           // ≥90% 橙（接近上限）、≥100% 红（已超限，服务端开始 429 拒绝写入）。
                           const quotaStateOfRepo = repoQuotaState(repo);
@@ -1082,7 +1082,7 @@ export function RepositoriesPage() {
                                             n: repo.artifactCount ?? 0,
                                           })}{" "}
                                           · {formatBytes(repo.totalSize ?? 0)}
-                                          {/* FR-41：窄屏没有用量列，超限/接近上限时补一句状态，
+                                          {/* 窄屏没有用量列，超限/接近上限时补一句状态，
                                               否则手机上看不出这个仓库已经写不进去了。 */}
                                           {quotaStateOfRepo === "over" ||
                                           quotaStateOfRepo === "near"
@@ -1126,7 +1126,7 @@ export function RepositoriesPage() {
                                 ) : null}
                                 {user && !isNarrow ? (
                                   <Table.Td>
-                                    {/* FR-114：连接状态（仅 proxy/group 有 connectionStatus） */}
+                                    {/* 连接状态（仅 proxy/group 有 connectionStatus） */}
                                     <ConnectionStatusCell status={repo.connectionStatus?.status} />
                                   </Table.Td>
                                 ) : null}
@@ -1280,7 +1280,7 @@ export function RepositoriesPage() {
             allowDeselect={false}
             {...form.getInputProps("visibility")}
           />
-          {/* FR-81：仓库描述（可选），详情页页头展示 */}
+          {/* 仓库描述（可选），详情页页头展示 */}
           <Textarea
             mt="sm"
             label={t("repositories.descriptionLabel")}
@@ -1300,7 +1300,7 @@ export function RepositoriesPage() {
             {...form.getInputProps("aliases")}
           />
 
-          {/* FR-41：存储治理（可选，创建后仍可在详情页配置页签修改）。
+          {/* 存储治理（可选，创建后仍可在详情页配置页签修改）。
               配额两项只对 hosted 出现；标签与提示复用 repoDetail.configQuota* 键，保证两处措辞同源。 */}
           <Divider mt="md" mb="sm" />
           {createQuotaEditable ? (

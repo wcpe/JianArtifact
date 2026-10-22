@@ -171,7 +171,7 @@ func (s *CargoService) publishCargo(ctx context.Context, repoName string, r io.R
 	crateAsset.Path = cratePath
 	indexAsset.Path = indexPath
 	if quotaExempt {
-		// 迁移导入属管理员批量操作：显式豁免仓库存储配额（FR-41 §4.1）。
+		// 迁移导入属管理员批量操作：显式豁免仓库存储配额。
 		markQuotaExempt(crateAsset)
 		markQuotaExempt(indexAsset)
 	}

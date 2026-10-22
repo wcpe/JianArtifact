@@ -1,0 +1,53 @@
+-- 0050：asset 的仓库维度覆盖索引（repository_id, size），并移除被它取代的冗余单列索引
+-- 引入版本：未开窗（0.11.0 之后的下一窗口）
+-- 影响：asset 新增复合索引 idx_asset_repo_size；删除冗余的 idx_asset_repository（其前缀已被覆盖）
+-- 数据处理：无历史回填——纯建/删索引，扫描既有 asset 行建立结构；预计耗时随 asset 行数增长，升级期间会短暂占用写锁
+-- 回滚：不支持 down migration；需要恢复升级前备份（本迁移只影响查询计划，重建旧索引即可回到升级前的计划与空间占用）
+-- 相关：搜索与查询性能（docs/specs/search-index-and-performance.md）、仪表盘容量聚合、仓库存储配额
+--
+-- 背景：两条高频聚合都在整表读 size，却都没有可用的覆盖索引
+--
+--   1) 仪表盘容量聚合（operations_observability_repo.go 的 CurrentCapacity / aggregateCapacity）
+--      需要整表 `COUNT(*)` 与 `SUM(size)`。此前已做过拆解优化：把原来的
+--      `repository LEFT JOIN asset` 单条聚合（实测中位数 8.5 s）改成「asset 上一次聚合 +
+--      repository 上一次计数」（实测 1.06 s）。但 asset 侧仍是**全表顺序扫描**：为了拿一列
+--      size，把 path / blob_hash / content_type / 时间戳等整行数据都读进来。
+--
+-- 2) 仓库存储配额（asset_repo.go 的 repoStatsQuery）
+--      `SELECT ? , COUNT(*), COALESCE(SUM(size),0) FROM asset WHERE repository_id = ?`
+--      这是**每次上传都会走两遍**的热路径（预检 + 提交点复检）。没有含 size 的
+--      (repository_id, ...) 索引，它只能先按 repository_id 定位、再逐行回表取 size。
+--
+-- 索引口径：为什么是复合 (repository_id, size)，而不是单列 (size)
+--
+--   - 两个查询都要 size，且其中一个带 `repository_id = ?` 等值条件。复合索引
+--     (repository_id, size) 对两者都是**覆盖索引**：
+--       · 配额查询：前导列等值定位 + 索引页内含 size，COUNT(*) 与 SUM(size) 无需回表；
+--       · 全局聚合：无 WHERE 时退化为一次完整索引扫描，索引页只存 (repository_id, size, rowid)，
+--         比扫表页窄得多，仍然只读索引。
+--   - 实测（10 万行，9 次取中位数）：配额查询 91.95 ms → 1.10 ms（约 83 倍）；全局聚合
+--     单列 (size) 10.40 ms、复合 12.44 ms（复合略慢约 2 ms，但该结果有 30 秒缓存兜底，
+--     而配额查询是每次上传都跑、且没有缓存）。取复合是整体最优，不是局部最优。
+--   - 为什么不额外保留单列 (size)：单列只在「无 WHERE 的全局聚合」上快 2 ms，却要多付一份
+--     索引的磁盘与每次写入的 B-Tree 维护；复合索引已能覆盖该聚合（只是稍宽），不值得为 2 ms
+--     再养一个索引。
+--
+-- 顺带移除冗余索引：idx_asset_repository 被完全取代
+--
+--   0002_asset.sql 建了 `idx_asset_repository ON asset (repository_id)`。复合索引
+--   (repository_id, size) 以 repository_id 为前导列，SQLite 对「只按 repository_id 过滤/排序」
+--   的查询可以直接用它的前缀，功能上是 idx_asset_repository 的严格超集。保留两个索引会让
+--   每次 asset 写入多维护一棵多余的 B-Tree，并白占磁盘。故在同一迁移内删掉旧索引：
+--   这是**替换**，不是减少索引覆盖——原本能走 idx_asset_repository 的所有查询，
+--   改走 idx_asset_repo_size 的前缀，计划不受影响。
+--
+--   注：其它既有索引不动。0006 的 (repository_id, path) / (path) 与 0045 的
+--   (repository_id, updated_at, path) 都带 path 前导或后缀，服务的是路径前缀检索与清理扫描，
+--   与本次聚合用途不同；UNIQUE(repository_id, path) 承担唯一性约束，均与 size 无关。
+--
+-- 幂等性说明：迁移器把每个文件放在单个事务里执行（见 persistence/migrate.go），
+-- 建索引 / 删索引与 schema_migrations 记录同事务提交，不存在半成品状态；
+-- 因此这里按 0043 / 0044 / 0045 的既有写法用裸 CREATE INDEX / DROP INDEX，不加 IF NOT EXISTS。
+CREATE INDEX idx_asset_repo_size ON asset (repository_id, size);
+
+DROP INDEX idx_asset_repository;

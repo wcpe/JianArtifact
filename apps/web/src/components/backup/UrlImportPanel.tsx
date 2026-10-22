@@ -1,4 +1,4 @@
-// 从 URL 导入（FR-137）：只负责表单本体，容器（内联展开区）由 ImportInline 承担。
+// 从 URL 导入：只负责表单本体，容器（内联展开区）由 ImportInline 承担。
 //
 // body-only 的理由与 BackupUploadPanel 一致：它曾经自带一张卡（ImportFromUrlCard），
 // 展开后就与备份列表抢页面高度；后来进弹窗，现在直接展开在页面里，由 ImportInline 控制显隐。

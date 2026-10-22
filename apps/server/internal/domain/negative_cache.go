@@ -10,7 +10,7 @@ import (
 // ErrNotFound，不再回源/探测；TTL 过期自动失效（新制品最长 60s 后可见，可接受权衡）。
 const negativeCacheTTL = 60 * time.Second
 
-// negativeCache 是 proxy/group 读路径的 404 负缓存（FR-111）：
+// negativeCache 是 proxy/group 读路径的 404 负缓存：
 // 记录 (repoID, path) 最近一次「确认不存在」的时间，TTL 内同路径读请求直接 404，
 // 避免对同一缺失路径反复回源/探测（如 Gradle 反复尝试缺失子模块）。
 //

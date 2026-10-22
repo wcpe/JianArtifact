@@ -99,11 +99,11 @@ export function RepositoryDetailPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { name = "" } = useParams();
-  // FR-145：搜索直达的命中路径（仅作进入时的初始定位提示，不随后续交互写回）。
+  // 搜索直达的命中路径（仅作进入时的初始定位提示，不随后续交互写回）。
   const [searchParams, setSearchParams] = useSearchParams();
   const highlightPath = searchParams.get("highlight") ?? undefined;
   const { user } = useAuth();
-  // 管理员判定走集中工具（FR-36）：角色口径只有一处，页面不再自己解释 role 字段。
+  // 管理员判定走集中工具：角色口径只有一处，页面不再自己解释 role 字段。
   const isAdmin = useIsAdmin();
   const requestedTab = searchParams.get("tab");
   const tab =
@@ -240,14 +240,14 @@ export function RepositoryDetailPage() {
                     ? t("repositories.visibilityPublic")
                     : t("repositories.visibilityPrivate")}
                 </Badge>
-                {/* FR-41：配额状态（接近上限 / 已超限）对所有登录用户可见，只读。 */}
+                {/* 配额状态（接近上限 / 已超限）对所有登录用户可见，只读。 */}
                 <QuotaStatusBadge repo={repo} />
               </>
             ) : (
               // 慢接口下也保持页头有形，避免左侧长时间是空的。
               <Skeleton height={20} width={150} radius="sm" />
             )}
-            {/* FR-74：未登录的登录入口收敛到页眉（AppLayout），此处仅保留返回。 */}
+            {/* 未登录的登录入口收敛到页眉（AppLayout），此处仅保留返回。 */}
             <Button
               size="compact-xs"
               variant="default"
@@ -259,7 +259,7 @@ export function RepositoryDetailPage() {
           </Group>
         </Group>
 
-        {/* FR-81：描述独立成一行，最多一行高（不再用页头大标题）。 */}
+        {/* 描述独立成一行，最多一行高（不再用页头大标题）。 */}
         {repo?.description ? (
           <Text size="xs" c="dimmed" lineClamp={1} mb="xs">
             {repo.description}
@@ -325,7 +325,7 @@ function DetailStat({ label, value, color }: { label: string; value: string; col
 }
 
 /**
- * FR-41：用量行的文字颜色——只在需要预警的两个状态着色（接近上限橙、已超限红）；
+ * 用量行的文字颜色——只在需要预警的两个状态着色（接近上限橙、已超限红）；
  * 正常与不限保持默认前景色（灰色会被误读成「禁用/失效」）。
  */
 function quotaLineColor(state: QuotaState): string | undefined {
@@ -333,7 +333,7 @@ function quotaLineColor(state: QuotaState): string | undefined {
 }
 
 /**
- * FR-41：页头的仓库配额状态徽章（管理员与非管理员都能看到，只读）。
+ * 页头的仓库配额状态徽章（管理员与非管理员都能看到，只读）。
  *
  * 只在「接近上限 / 已超限」时渲染：正常与不限状态下没有信息量，不该给每个仓库都挂一个绿徽章。
  * 超限的含义是服务端开始拒绝写入（HTTP 429 / quota_exceeded），故用红色并给出明确提示。
@@ -398,18 +398,18 @@ function ConfigTab({
   const [members, setMembers] = useState<string[]>([]);
   // 仓库别名：与主名共享命名空间、全局唯一；随「保存配置」一并覆盖式提交。
   const [aliases, setAliases] = useState<string[]>([]);
-  // FR-41 存储配额：字节按所选单位（MB/GB/字节）填写，保存时换算成字节；0 或留空 = 不限。
+  //  存储配额：字节按所选单位（MB/GB/字节）填写，保存时换算成字节；0 或留空 = 不限。
   // 存成字符串是为了区分「空输入」（= 不限）与「非法输入」（负数/非数字，需拦截）。
   const [quotaBytesText, setQuotaBytesText] = useState("0");
   const [quotaBytesUnit, setQuotaBytesUnit] = useState<QuotaUnit>("GB");
   const [quotaAssetsText, setQuotaAssetsText] = useState("0");
-  // FR-41 代理缓存保留天数（仅 proxy 仓库可设）；0 或留空 = 关闭（不自动清理）。
+  //  代理缓存保留天数（仅 proxy 仓库可设）；0 或留空 = 关闭（不自动清理）。
   const [cacheRetentionText, setCacheRetentionText] = useState("0");
   const [saving, setSaving] = useState(false);
   const [online, setOnline] = useState(true);
   const [togglingOnline, setTogglingOnline] = useState(false);
   const [rechecking, setRechecking] = useState(false);
-  // FR-114：连接状态（本地 state 承载重测后的即时更新，避免等待整页刷新）
+  // 连接状态（本地 state 承载重测后的即时更新，避免等待整页刷新）
   const [connStatus, setConnStatus] = useState<ConnectionStatusValue | null>(null);
   // 重命名弹窗：仅管理员；成功后旧名自动转为别名，需导航到新名详情。
   const [renameOpened, setRenameOpened] = useState(false);
@@ -431,12 +431,12 @@ function ConfigTab({
       setDescription(repo.description ?? "");
       setMembers(repo.members ?? []);
       setAliases(repo.aliases ?? []);
-      // FR-41：配额回显成「数值 + 单位」（能整除 GB 就用 GB），避免管理员对着字节数心算。
+      // 配额回显成「数值 + 单位」（能整除 GB 就用 GB），避免管理员对着字节数心算。
       const quotaBytesInput = splitQuotaBytes(repo.quotaBytes);
       setQuotaBytesText(quotaBytesInput.value);
       setQuotaBytesUnit(quotaBytesInput.unit);
       setQuotaAssetsText(String(hasQuotaLimit(repo.quotaAssets) ? repo.quotaAssets : 0));
-      // FR-41：保留天数 0 / 缺省 = 关闭（对非 proxy 仓库后端恒为 0，这里一并按关闭渲染）。
+      // 保留天数 0 / 缺省 = 关闭（对非 proxy 仓库后端恒为 0，这里一并按关闭渲染）。
       setCacheRetentionText(
         String(hasQuotaLimit(repo.cacheRetentionDays) ? repo.cacheRetentionDays : 0),
       );
@@ -452,7 +452,7 @@ function ConfigTab({
   const quotaBytesValue = parseQuotaBytes(quotaBytesText, quotaBytesUnit);
   const quotaAssetsValue = parseNonNegativeInt(quotaAssetsText);
   const cacheRetentionValue = parseNonNegativeInt(cacheRetentionText);
-  // FR-41：存储配额只有承载写入的 hosted 仓库可设——group 不承载写入，proxy 的缓存在读取回源
+  // 存储配额只有承载写入的 hosted 仓库可设——group 不承载写入，proxy 的缓存在读取回源
   // 路径上落盘、没有准入预检与流式早拒，后端对这两类仓库提交非 0 配额直接 400。
   // 因此配额两项按类型出现/隐藏，校验与提交也只对 hosted 生效（与「保留天数仅 proxy」同一范式）。
   const quotaEditable = repo?.type === "hosted";
@@ -465,13 +465,13 @@ function ConfigTab({
   const repoQuota = repoQuotaState(repo ?? {});
   const quotaUnlimitedText = t("quota.unlimited");
 
-  // FR-113：online/offline 开关（仅管理员；本地运维状态，不参与复制）。
+  // online/offline 开关（仅管理员；本地运维状态，不参与复制）。
   const handleToggleOnline = (next: boolean) => {
     setTogglingOnline(true);
     setRepositoryOnline(repoName, next)
       .then(() => {
         setOnline(next);
-        // FR-114：离线后状态优先显示「离线」；上线后回到内存态。
+        // 离线后状态优先显示「离线」；上线后回到内存态。
         setConnStatus(next ? (repo?.connectionStatus?.status ?? "READY") : "OFFLINE");
         onUpdated();
         notifySuccess(t("common.saved"));
@@ -480,7 +480,7 @@ function ConfigTab({
       .finally(() => setTogglingOnline(false));
   };
 
-  // FR-114：手动重测上游连接（仅 online proxy），成功后用返回状态即时更新。
+  // 手动重测上游连接（仅 online proxy），成功后用返回状态即时更新。
   const handleRecheck = () => {
     setRechecking(true);
     recheckConnection(repoName)
@@ -499,7 +499,7 @@ function ConfigTab({
       notifyError(t(aliasErrorKey));
       return;
     }
-    // FR-41：配额非法（负数 / 非数字）时不提交，避免把 NaN 或负值发给服务端。
+    // 配额非法（负数 / 非数字）时不提交，避免把 NaN 或负值发给服务端。
     if (quotaInvalid) {
       notifyError(t("repoDetail.configQuotaInvalid"));
       return;
@@ -608,7 +608,7 @@ function ConfigTab({
           </Text>
         </Stack>
 
-        {/* FR-113：online/offline 开关（本地运维状态，不参与复制） */}
+        {/* online/offline 开关（本地运维状态，不参与复制） */}
         <Switch
           label={t("repoDetail.configOnlineLabel", { defaultValue: "在线" })}
           description={t("repoDetail.configOnlineHint", {
@@ -619,7 +619,7 @@ function ConfigTab({
           onChange={(e) => handleToggleOnline(e.currentTarget.checked)}
         />
 
-        {/* FR-114：连接状态展示 + 手动重测（仅 proxy 仓库可重测） */}
+        {/* 连接状态展示 + 手动重测（仅 proxy 仓库可重测） */}
         <Group gap="sm" align="center" wrap="wrap">
           <Text size="sm" c="dimmed">
             {t("repoDetail.configConnection", { defaultValue: "上游连接状态" })}：
@@ -661,7 +661,7 @@ function ConfigTab({
           allowDeselect={false}
         />
 
-        {/* FR-81：仓库描述，详情页页头展示 */}
+        {/* 仓库描述，详情页页头展示 */}
         <Textarea
           label={t("repoDetail.configDescription")}
           placeholder={t("repoDetail.configDescriptionPlaceholder")}
@@ -705,7 +705,7 @@ function ConfigTab({
           />
         )}
 
-        {/* FR-41 存储配额：用量展示（只读统计）+ 上限编辑（0 = 不限）。
+        {/* 存储配额：用量展示（只读统计）+ 上限编辑（0 = 不限）。
             用量口径与服务端拒绝点一致：逻辑字节 SUM(asset.size) 与制品计数 COUNT(*)。 */}
         <Divider />
         <Stack gap="xs" data-testid="repo-quota-section">
@@ -808,7 +808,7 @@ function ConfigTab({
             </>
           ) : null}
 
-          {/* FR-41 代理缓存保留：只对 proxy 有意义（hosted/group 无「可重拉的缓存」语义，
+          {/* 代理缓存保留：只对 proxy 有意义（hosted/group 无「可重拉的缓存」语义，
               后端对这些类型提交非 0 值会直接拒绝），因此整块按类型出现/隐藏。 */}
           {repo.type === "proxy" ? (
             <>
@@ -884,7 +884,7 @@ function ConfigTab({
 /**
  * ACL 管理面板：从 AclPage 提取的核心逻辑，接收 repoName prop。
  *
- * FR-36：主体从「只有用户」扩展到「用户 / 用户组」，动作从三档细化为六档。
+ * 主体从「只有用户」扩展到「用户 / 用户组」，动作从三档细化为六档。
  *
  * 覆盖写语义：PUT /repositories/{name}/acl 是**整份替换**，因此任何改动都必须基于
  * `entries`（当前完整列表）构造请求体——只提交新增/修改的那一条会把其余条目全部抹掉。

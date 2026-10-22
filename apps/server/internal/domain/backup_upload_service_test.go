@@ -30,7 +30,7 @@ type uploadFixture struct {
 
 // newUploadFixture 装配一个完整的上传链路夹具（各自独立数据目录）。
 //
-// FR-40 追加八改变了上传的终点：组装完成后不再发起恢复，而是把包收进备份列表，
+// 改变了上传的终点：组装完成后不再发起恢复，而是把包收进备份列表，
 // 因此夹具需要一套真实的 BackupService + 登记仓库供 adopt 服务使用。
 func newUploadFixture(t *testing.T) *uploadFixture {
 	t.Helper()
@@ -74,7 +74,7 @@ func chunkData(t *testing.T, data []byte, chunkSize int) [][]byte {
 
 // waitImport 轮询导入记录直到终态；失败则 t.Fatal。
 // TestBackupUploadRoundTrip 覆盖 init → 逐片 PutChunk → Get 反映已传分片 →
-// Complete 组装成包并**收进备份列表**（FR-40 追加八起不再触发恢复）。
+// Complete 组装成包并**收进备份列表**（起不再触发恢复）。
 func TestBackupUploadRoundTrip(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

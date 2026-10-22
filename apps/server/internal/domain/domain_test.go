@@ -94,7 +94,7 @@ func TestCanAccessPublicRead(t *testing.T) {
 	if ok, _ := svc.CanAccess("public-repo", repository.UserSubject(strangerID), repository.ActionWrite); ok {
 		t.Error("public 仓库 write 不应无 ACL 放行")
 	}
-	// FR-36：public 仓库也不得让无 ACL 主体获得 delete / acl_manage。
+	// public 仓库也不得让无 ACL 主体获得 delete / acl_manage。
 	for _, action := range []string{repository.ActionDelete, repository.ActionAclManage} {
 		if ok, _ := svc.CanAccess("public-repo", repository.UserSubject(strangerID), action); ok {
 			t.Errorf("public 仓库 %s 不应无 ACL 放行", action)
@@ -112,7 +112,7 @@ func TestCanAccessNotFound(t *testing.T) {
 	}
 }
 
-// TestCreateConfigValidation 校验 proxy/group 仓库配置的校验规则（FR-13）：
+// TestCreateConfigValidation 校验 proxy/group 仓库配置的校验规则：
 // proxy 必填合法 remoteUrl；group 必填成员且均存在、同 format、禁止自引用。
 func TestCreateConfigValidation(t *testing.T) {
 	t.Parallel()
@@ -280,7 +280,7 @@ func TestProxyCredentialRefValidationAndPersistence(t *testing.T) {
 	}
 }
 
-// TestListAssetsPaginationAndPrefix 校验制品浏览（FR-16）：前缀过滤、分页与总数。
+// TestListAssetsPaginationAndPrefix 校验制品浏览：前缀过滤、分页与总数。
 func TestListAssetsPaginationAndPrefix(t *testing.T) {
 	t.Parallel()
 	db := newTestDB(t)
@@ -336,7 +336,7 @@ func TestListAssetsPaginationAndPrefix(t *testing.T) {
 	}
 }
 
-// TestUsageByFormat 校验使用片段（FR-16）：按 format 返回正确接入片段，
+// TestUsageByFormat 校验使用片段：按 format 返回正确接入片段，
 // hosted 含发布 / 上传片段，proxy 仅含下载 / 解析片段。
 func TestUsageByFormat(t *testing.T) {
 	t.Parallel()
@@ -397,7 +397,7 @@ func TestUsageByFormat(t *testing.T) {
 	}
 }
 
-// TestPasswordNotStoredInPlaintext 建用户后 DB 中的口令哈希不得为明文（NFR-06）。
+// TestPasswordNotStoredInPlaintext 建用户后 DB 中的口令哈希不得为明文（N）。
 func TestPasswordNotStoredInPlaintext(t *testing.T) {
 	t.Parallel()
 	db := newTestDB(t)

@@ -166,7 +166,7 @@ func TestNpmUnpublish(t *testing.T) {
 	if rec := e.rawReq(http.MethodGet, "/npm/npm-up/lodash/-/lodash-2.0.0.tgz", auth, "", nil); rec.Code != http.StatusOK {
 		t.Fatalf("修订 PUT 后 tarball 必须仍可读，状态码 = %d", rec.Code)
 	}
-	// 以 unpublish 前的水位为基线：FR-138 后 publish/修订 PUT 都会写 v2 outbox，
+	// 以 unpublish 前的水位为基线： 后 publish/修订 PUT 都会写 v2 outbox，
 	// 只度量 unpublish DELETE 产生的增量 operation。
 	opRepo := repository.NewReplicationOperationRepo(e.db)
 	base, err := opRepo.ListRecordsSince(0, 100)
@@ -246,7 +246,7 @@ func TestNpmUnpublishAuditFailureLeavesPackumentAndTarballUntouched(t *testing.T
 	if _, code := e.npmJSON(t, http.MethodPut, "/npm/npm-audit-failure/demo/-rev/1-abc", authHeader, map[string]any{"name": "demo"}); code != http.StatusCreated {
 		t.Fatalf("修订 PUT 状态码 = %d，期望 201", code)
 	}
-	// 以审计失败前的水位为基线：FR-138 后 publish/修订 PUT 都会写 v2 outbox，
+	// 以审计失败前的水位为基线： 后 publish/修订 PUT 都会写 v2 outbox，
 	// 只验证失败操作不新增任何 outbox 记录（资产视图与 outbox 同事务回滚）。
 	opRepo := repository.NewReplicationOperationRepo(e.db)
 	base, err := opRepo.ListRecordsSince(0, 100)

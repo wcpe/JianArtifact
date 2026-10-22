@@ -737,6 +737,50 @@ describe("devmock MSW 端点行为", () => {
     await expect(cleanup.json()).resolves.toEqual({ deleted: 0 });
   });
 
+  // 搜索建议：前端搜索框已经实际调用该端点，mock 里没有处理器时 `pnpm dev` 下整块功能
+  // 静默不可见。这里按 docs/API.md 的 suggest 口径钉住形状、空输入、上限夹取与
+  // 「无 read 权限的仓库连名字都不出现」。
+  it("搜索建议返回仓库名与包名两类候选，且不泄漏无权仓库", async () => {
+    const suggest = async (
+      query: string,
+      headers: Record<string, string> = auth,
+      limit?: number,
+    ) => {
+      const suffix = limit === undefined ? "" : `&limit=${limit}`;
+      const res = await fetch(
+        `http://localhost/api/v1/search/suggest?q=${encodeURIComponent(query)}${suffix}`,
+        { headers },
+      );
+      expect(res.status).toBe(200);
+      return (await res.json()) as { items: { type: string; value: string }[] };
+    };
+
+    // 仓库名候选：子串匹配（`maven` 命中 `maven-releases`），类型为 repository。
+    const byRepository = await suggest("maven");
+    expect(byRepository.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "repository", value: "maven-releases" }),
+      ]),
+    );
+
+    // 包名候选：Maven 取 artifact（`group:artifact` 里 `:` 之后的部分）。
+    const byPackage = await suggest("app");
+    const packageItems = byPackage.items.filter((item) => item.type === "package");
+    expect(packageItems.length).toBeGreaterThan(0);
+    expect(packageItems.every((item) => !item.value.includes(":"))).toBe(true);
+
+    // 空 q（含纯空白）返回空 items，而不是 400：suggest 是高频被动调用。
+    await expect(suggest("   ")).resolves.toEqual({ items: [] });
+
+    // limit：缺省 10、夹取到 [1, 20]，超限与非法值都不报错。
+    expect((await suggest("a", auth, 1)).items.length).toBeLessThanOrEqual(1);
+    expect((await suggest("a", auth, 999)).items.length).toBeLessThanOrEqual(20);
+
+    // 匿名：无 read 权限的仓库连名字都不出现（403 会把「这里存在一个你看不到的仓库」泄漏出去）。
+    const anonymous = await suggest("maven", {});
+    expect(anonymous.items.map((item) => item.value)).not.toContain("maven-releases");
+  });
+
   it("仓库与公开浏览的空态仅返回同路由所需的空数据", async () => {
     const emptyHeaders = {
       ...auth,
@@ -762,14 +806,13 @@ describe("devmock MSW 端点行为", () => {
       headers: emptyHeaders,
     });
     await expect(search.json()).resolves.toEqual({ items: [], total: 0, facets: [] });
-
     const licenses = await fetch("http://localhost/api/v1/licenses", { headers: emptyHeaders });
     await expect(licenses.json()).resolves.toEqual(
       expect.objectContaining({ go: [], npm: [], generatedAt: expect.any(String) }),
     );
   });
 
-  it("账户/服务/可观测性的空态仅返回同路由所需的空数据（FR-122 路由矩阵）", async () => {
+  it("账户/服务/可观测性的空态仅返回同路由所需的空数据（路由矩阵）", async () => {
     const emptyHeaders = {
       ...auth,
       [DEV_MOCK_SCENARIO_HEADER]: "empty",
@@ -1122,7 +1165,7 @@ describe("devmock MSW 端点行为", () => {
     expect(body.snippets.find((s) => s.code.includes("npm install"))?.group).toBe("resolve");
   });
 
-  it("仓库列表为 proxy 返回连接状态、hosted 不返回（FR-114）", async () => {
+  it("仓库列表为 proxy 返回连接状态、hosted 不返回", async () => {
     const res = await fetch("http://localhost/api/v1/repositories?page_size=100", {
       headers: auth,
     });
@@ -1136,7 +1179,7 @@ describe("devmock MSW 端点行为", () => {
     expect(hosted?.connectionStatus).toBeUndefined();
   });
 
-  it("半开仓库在列表里返回 HALF_OPEN（FR-43），与 AUTO_BLOCKED 可区分", async () => {
+  it("半开仓库在列表里返回 HALF_OPEN，与 AUTO_BLOCKED 可区分", async () => {
     // 种子 maven-papermc 处于半开、maven-central 处于自动阻止：两者同属阻止态，
     // 但对外取值必须不同，否则管理界面无从区分「窗口内封锁」与「正在试探上游」。
     const res = await fetch("http://localhost/api/v1/repositories?page_size=100", {
@@ -1470,9 +1513,47 @@ describe("devmock MSW 端点行为", () => {
     const search = await fetch("http://localhost/api/v1/search?q=app");
     expect(search.status).toBe(200);
     await expect(search.json()).resolves.toEqual({ items: [], total: 0, facets: [] });
+    // repository= 限定：匿名对「存在但无权」与「仓库不存在」拿到**同一个** 404，
+    // 两者不可区分——否则反复改参数就能枚举出私有仓库是否存在（与后端同口径）。
     expect(
       (await fetch("http://localhost/api/v1/search?q=app&repository=maven-releases")).status,
-    ).toBe(401);
+    ).toBe(404);
+    expect(
+      (await fetch("http://localhost/api/v1/search?q=app&repository=no-such-repo")).status,
+    ).toBe(404);
+  });
+
+  it("搜索语法 version: 与 -version: 按版本段严格匹配，不退化为路径子串", async () => {
+    const search = async (q: string) => {
+      const res = await fetch(`http://localhost/api/v1/search?q=${encodeURIComponent(q)}`, {
+        headers: auth,
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { items: { path: string }[]; total: number };
+      return body;
+    };
+
+    // 先确认语料里存在版本 1.0.0 的制品
+    const all = await search("app");
+    expect(all.total).toBeGreaterThan(0);
+
+    const exact = await search("version:1.0.0");
+    // 严格相等：每个命中都必须真的落在 1.0.0 版本段上，不能只因路径里含该子串
+    expect(exact.total).toBeGreaterThan(0);
+    for (const item of exact.items) {
+      expect(item.path).toContain("/1.0.0/");
+    }
+
+    // 区分「严格相等」与「路径子串」的关键用例：`1.0` 是 `1.0.0` 的前缀，
+    // 若把 version: 当普通包含词（缺陷行为），会命中 app-1.0.0.jar；
+    // 正确实现按版本段严格相等比较，必须零命中。
+    const prefix = await search("version:1.0");
+    expect(prefix.total).toBe(0);
+
+    const excluded = await search("-version:1.0.0");
+    for (const item of excluded.items) {
+      expect(item.path).not.toContain("/1.0.0/");
+    }
   });
 
   it("旧批量删除要求覆盖理由，成功时保持兼容响应", async () => {

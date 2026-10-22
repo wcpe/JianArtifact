@@ -1,4 +1,4 @@
-// FR-105：管理员在资产树中选择文件和目录，并通过右键菜单调用统一资产操作 API。
+// 管理员在资产树中选择文件和目录，并通过右键菜单调用统一资产操作 API。
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
@@ -127,7 +127,7 @@ function treeItem(path: string) {
   return item;
 }
 
-describe("FR-105 资产树操作", () => {
+describe("资产树操作", () => {
   it("Maven 文件不提升为父级逻辑删除目标", () => {
     for (const path of [
       "com/example/demo/1.0/demo-1.0.pom",

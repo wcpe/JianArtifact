@@ -77,7 +77,7 @@ type DrillResult struct {
 	StagingDir string `json:"stagingDir,omitempty"`
 }
 
-// BackupDrillService 执行恢复演练：在隔离临时目录里真解包、真校验，产出结构化报告（FR-40 §2.3）。
+// BackupDrillService 执行恢复演练：在隔离临时目录里真解包、真校验，产出结构化报告。
 //
 // # 与真恢复的边界（关键约束）
 //

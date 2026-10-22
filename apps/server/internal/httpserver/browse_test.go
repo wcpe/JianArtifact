@@ -179,7 +179,7 @@ func (e *protocolEnv) seedAssetRows(t *testing.T, repoName string, paths ...stri
 	}
 }
 
-// TestBrowseListsAllDirsWhenOneSubtreeIsHuge 回归 FR-25c：某顶层目录下制品极多时，
+// TestBrowseListsAllDirsWhenOneSubtreeIsHuge 回归：某顶层目录下制品极多时，
 // 同层的其它顶层目录必须照样列出。旧实现按「前缀下的前 1000 条制品」推导直接子项，
 // 路径全局升序会让 a/ 的制品吃满配额，z/ 整片消失——列表既不完整也不正确。
 func TestBrowseListsAllDirsWhenOneSubtreeIsHuge(t *testing.T) {

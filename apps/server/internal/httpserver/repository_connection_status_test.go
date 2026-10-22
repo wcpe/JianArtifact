@@ -19,7 +19,7 @@ func bootstrapAndLogin(t *testing.T, e *testEnv) string {
 	return boot.Token
 }
 
-// TestRepositoryConnectionStatusFilled 连接状态填充（FR-114 + MD-2 合并规则）：
+// TestRepositoryConnectionStatusFilled 连接状态填充（+ MD-2 合并规则）：
 //   - 列表对管理员返回 connectionStatus：online 的 proxy 按内存态（未探测=READY），
 //     offline 优先覆盖为 OFFLINE，hosted 不返回；
 //   - 普通用户列表不返回 connectionStatus（管理面信息）。
@@ -135,7 +135,7 @@ func TestRepositoryOfflineStatusOverrides(t *testing.T) {
 	}
 }
 
-// TestRecheckConnectionEndpoint 手动重测端点（FR-114）：
+// TestRecheckConnectionEndpoint 手动重测端点：
 // 仅管理员；仅 online 的 proxy 可重测；重测触发上游探测并返回最新状态。
 func TestRecheckConnectionEndpoint(t *testing.T) {
 	t.Parallel()
@@ -228,7 +228,7 @@ func TestRecheckConnectionEndpoint(t *testing.T) {
 	}
 }
 
-// TestRecheckConnectionOfflineRejected offline 仓库不可重测（FR-114：仅 online 可重测）。
+// TestRecheckConnectionOfflineRejected offline 仓库不可重测（：仅 online 可重测）。
 func TestRecheckConnectionOfflineRejected(t *testing.T) {
 	t.Parallel()
 	e := newTestEnv(t)

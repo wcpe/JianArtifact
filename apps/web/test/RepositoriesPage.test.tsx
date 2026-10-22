@@ -1,4 +1,4 @@
-// 仓库管理集成测试：渲染种子仓库；匿名（FR-68）仅见 public 仓库且无管理操作。
+// 仓库管理集成测试：渲染种子仓库；匿名仅见 public 仓库且无管理操作。
 import { server } from "@jianartifact/devmock/node";
 import {
   releaseDevMockPendingRequests,
@@ -198,7 +198,7 @@ describe("仓库管理", () => {
     expect(screen.getByText("maven-releases")).toBeTruthy();
   });
 
-  it("proxy 仓库行的连接状态收敛为状态图标，文字经无障碍标签可达（FR-114）", async () => {
+  it("proxy 仓库行的连接状态收敛为状态图标，文字经无障碍标签可达", async () => {
     renderWithProviders(<RepositoriesPage />, { route: "/repositories", authenticated: true });
     // devmock 种子：npm-proxy / gomod-proxy 上游可达 → 「可用」（多个）。
     // 列表 8 列在 1152 视口只有 ~870px，文字徽章会把类型/可见性列压成「P...」「公.」，
@@ -209,7 +209,7 @@ describe("仓库管理", () => {
     expect(screen.getAllByText("—").length).toBeGreaterThan(0);
   });
 
-  it("半开状态（FR-43）在列表里独立成态，不被并入自动阻止", async () => {
+  it("半开状态在列表里独立成态，不被并入自动阻止", async () => {
     renderWithProviders(<RepositoriesPage />, { route: "/repositories", authenticated: true });
     // devmock 种子：maven-papermc 处于 HALF_OPEN（窗口已到、正在试探上游），
     // maven-central 等处于 AUTO_BLOCKED。两者同属阻止态但文案必须可区分。

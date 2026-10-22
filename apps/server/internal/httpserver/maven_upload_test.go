@@ -1,6 +1,6 @@
 package httpserver_test
 
-// FR-73: Maven 网页上传端点测试。
+// Maven 网页上传端点测试。
 // POST /api/v1/repositories/:name/maven-upload（multipart：GAV + packaging + file）
 // 服务端自动生成 pom.xml、各文件 .md5/.sha1、更新 artifact 级 maven-metadata.xml 及其校验和。
 import (

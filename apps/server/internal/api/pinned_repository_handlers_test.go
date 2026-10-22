@@ -23,7 +23,7 @@ type pinnedTestEnv struct {
 }
 
 // newPinnedTestEnv 组装置顶端点测试环境：admin(id=1)/bob(id=2) 两个用户（外键需要），
-// 匿名访问开关默认开启（键缺失即开启，FR-66）。
+// 匿名访问开关默认开启（键缺失即开启）。
 func newPinnedTestEnv(t *testing.T) *pinnedTestEnv {
 	t.Helper()
 	gin.SetMode(gin.ReleaseMode)

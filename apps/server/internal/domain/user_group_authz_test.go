@@ -1,6 +1,7 @@
 package domain_test
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -32,7 +33,7 @@ func createPrivateRepo(t *testing.T, svc *domain.RepositoryService, name string)
 	}
 }
 
-// TestCanAccessViaGroupMembership 组作为 ACL 主体的放行与拒绝（FR-36 核心）：
+// TestCanAccessViaGroupMembership 组作为 ACL 主体的放行与拒绝（核心）：
 // 组成员经组授权命中；非组成员不命中；同一用户在不同组的授权互不串台。
 func TestCanAccessViaGroupMembership(t *testing.T) {
 	t.Parallel()
@@ -279,7 +280,7 @@ func TestCanAccessPublicRepoWithGroups(t *testing.T) {
 }
 
 // TestCanAccessWithoutGroupRepoInjected 未注入组仓储时，授权退化为「仅按用户自身 ACL」
-// 判定——即 FR-36 之前的既有行为：该用户所属组的组授权此时**不生效**。
+// 判定——即之前的既有行为：该用户所属组的组授权此时**不生效**。
 // 保证降级装配（如测试夹具、部分 command 路径）不会反过来引入提权。
 func TestCanAccessWithoutGroupRepoInjected(t *testing.T) {
 	t.Parallel()
@@ -368,7 +369,7 @@ func TestSetAclRejectsUnknownAction(t *testing.T) {
 }
 
 // TestSearchAssetsIncludesGroupGrantedRepos 组被授 read 的私有仓库进入该组成员
-// 的搜索范围（FR-36 在搜索侧的落地）。
+// 的搜索范围（在搜索侧的落地）。
 func TestSearchAssetsIncludesGroupGrantedRepos(t *testing.T) {
 	t.Parallel()
 	svc, groups, _, users := newGroupAuthzEnv(t)
@@ -392,7 +393,7 @@ func TestSearchAssetsIncludesGroupGrantedRepos(t *testing.T) {
 	}
 
 	// 传入用户 ID：服务层自行展开组归属，命中组授权的仓库。
-	out, err := svc.SearchAssets("anything", "", uid, false, "path", "asc", 10, 0)
+	out, err := svc.SearchAssets(context.Background(), "anything", "", uid, false, "path", "asc", 10, 0)
 	if err != nil {
 		t.Fatalf("搜索：%v", err)
 	}

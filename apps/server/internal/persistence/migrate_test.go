@@ -1,6 +1,7 @@
 package persistence
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -23,8 +24,8 @@ func TestMigrateCreatesSchema(t *testing.T) {
 	if err := db.Migrate(); err != nil {
 		t.Fatalf("Migrate：%v", err)
 	}
-	// 关键表应存在且可查询。user_group / user_group_member 为 FR-36 引入（迁移 0046）；
-	// backup_verification 为 FR-40 恢复演练报告引入（迁移 0047）。
+	// 关键表应存在且可查询。user_group / user_group_member 为引入（迁移 0046）；
+	// backup_verification 为恢复演练报告引入（迁移 0047）。
 	tables := []string{"user", "api_token", "revoked_token", "repository", "acl", "asset", "user_group", "user_group_member", "migration_task", "setting", "repl_change", "repl_entity_version", "replication_apply_log", "replication_operation_outbox", "replication_relay_record", "replication_relay_blob", "replication_relay_frontier", "replication_operation_receipt", "backup_package", "backup_verification", "backup_import", "backup_upload", "backup_upload_chunk"}
 	for _, tbl := range tables {
 		var count int
@@ -181,7 +182,7 @@ func TestForeignKeysEnforced(t *testing.T) {
 }
 
 // TestMigration0045BuildsCleanupIndexes 校验 0045 的三项要求：
-// 索引真的建出来、真的被 FR-41 清理查询命中、重复迁移后依然存在。
+// 索引真的建出来、真的被清理查询命中、重复迁移后依然存在。
 //
 // 索引存在但不被 planner 使用等于没建，因此这里不止查 sqlite_master，还用
 // EXPLAIN QUERY PLAN 断言计划里出现索引名而不是 SCAN。查询文本镜像自
@@ -316,5 +317,206 @@ func TestMigration0047AddsBackupOriginAndVerification(t *testing.T) {
 	}
 	if reports != 0 {
 		t.Fatalf("删除包后演练报告应随级联清除，剩余 %d 条", reports)
+	}
+}
+
+// capacityAggregateSQL 是仪表盘容量聚合里针对 asset 的那条语句，镜像自
+// internal/repository/operations_observability_repo.go 的 aggregateCapacity：
+// 唯一的引用列是 size，没有任何 WHERE / ORDER BY 子句。persistence 被 repository
+// 依赖、无法反向 import，因此只能保持同形状；改那条 SQL 的引用列时必须同步这里。
+const capacityAggregateSQL = `SELECT COUNT(*) AS asset_count, COALESCE(SUM(size),0) AS logical_bytes FROM asset`
+
+// repoStatsSQL 是仓库存储配额的单仓库聚合，镜像自
+// internal/repository/asset_repo.go 的 repoStatsQuery。它不属于 0050 的服务对象，
+// 但必须确认新索引没有把它的计划带偏。
+const repoStatsSQL = `SELECT ? AS repository_id, COUNT(*) AS count, COALESCE(SUM(size), 0) AS total_size FROM asset WHERE repository_id = ?`
+
+// TestMigration0050BuildsAssetSizeCoveringIndex 校验 0050 的三项要求：
+//  1. 建出**复合**覆盖索引 (repository_id, size)——两条聚合都在整表/整仓读 size；
+//  2. 配额查询（每次上传走两遍的热路径）命中该索引且**覆盖**（不回表）；
+//  3. 冗余的 idx_asset_repository 已被删除（其前缀被复合索引覆盖）。
+//
+// 为什么断言计划而不只断言索引存在：索引存在但不被命中等于白占空间和写放大。
+// 为什么必须断言 "COVERING"：本查询只引用 size 与 repository_id，若计划退化成
+// `SCAN asset USING INDEX ...`（非覆盖），SQLite 要为每一行回表取值，代价比全表扫更高，
+// 说明索引列定义已经不对了，必须报错。
+//
+// 关于统计信息：前一组断言**故意不建统计信息**，用来锁住「不需要 ANALYZE 也走覆盖索引」
+// 这一前提——planner 在「顺序扫表」与「顺序扫覆盖索引」之间取舍时主要依据索引行宽小于
+// 表行宽，与 sqlite_stat1 的基数估计无关。但生产库会不定时跑 ANALYZE，因此本用例末尾
+// 追加一段「ANALYZE asset 之后再断言一次」：有统计信息时若计划翻成回表扫，收益同样归零，
+// 而那只会在装好统计信息的实例上出现——正是测试数据最容易漏掉的状态。
+//
+// 空表也要断言：迁移刚建库时 asset 为 0 行，若计划在空表上退回 "SCAN asset"，
+// 说明该优化在「刚升级、还没数据」的窗口里不生效。
+func TestMigration0050BuildsAssetSizeCoveringIndex(t *testing.T) {
+	db := openTestDB(t)
+	if err := db.Migrate(); err != nil {
+		t.Fatalf("Migrate：%v", err)
+	}
+	// 索引存在、且恰好是 (repository_id, size) 两列、顺序固定（前导列必须是 repository_id，
+	// 否则配额查询的等值定位用不上它）。
+	var columns []string
+	if err := db.Select(&columns, `SELECT name FROM pragma_index_info('idx_asset_repo_size') ORDER BY seqno`); err != nil {
+		t.Fatalf("读取 idx_asset_repo_size 列定义：%v", err)
+	}
+	if len(columns) != 2 || columns[0] != "repository_id" || columns[1] != "size" {
+		t.Fatalf("idx_asset_repo_size 应为 (repository_id, size)，实际列 = %v", columns)
+	}
+
+	// 冗余索引必须已被删除：留着它只会让每次 asset 写入多维护一棵被完全覆盖的 B-Tree。
+	var legacy int
+	if err := db.Get(&legacy, `SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_asset_repository'`); err != nil {
+		t.Fatalf("检查 idx_asset_repository 是否残留：%v", err)
+	}
+	if legacy != 0 {
+		t.Errorf("idx_asset_repository 应已被 0050 删除（其前缀被 idx_asset_repo_size 覆盖），实际仍存在")
+	}
+
+	// 空表 + 有数据两种状态都必须命中：空表用迁移刚完成的状态，有数据用插入后的状态。
+	// 有数据状态先建仓库：asset.repository_id 是指向 repository(id) 的外键，
+	// 连接串开启了 foreign_keys，直接插资产会被约束拒绝。
+	if _, err := db.Exec(`INSERT INTO repository (id, name, format, type) VALUES
+		(1, 'cap-a', 'raw', 'hosted'),
+		(2, 'cap-b', 'raw', 'hosted')`); err != nil {
+		t.Fatalf("写测试仓库：%v", err)
+	}
+	for _, stage := range []string{"空表", "有数据"} {
+		if stage == "有数据" {
+			if _, err := db.Exec(`INSERT INTO asset (id, repository_id, path, blob_hash, size) VALUES
+				(1, 1, 'a.bin', 'h1', 100),
+				(2, 1, 'b.bin', 'h2', 2048),
+				(3, 2, 'c.bin', 'h3', 4096)`); err != nil {
+				t.Fatalf("写测试资产：%v", err)
+			}
+		}
+		plan := strings.Join(explainPlanLines(t, db, capacityAggregateSQL), " | ")
+		if !strings.Contains(plan, "SCAN asset USING COVERING INDEX idx_asset_repo_size") {
+			t.Errorf("%s：容量聚合未走 idx_asset_repo_size 覆盖索引，计划 = %s", stage, plan)
+		}
+	}
+
+	// 结果口径不受索引影响：覆盖索引只改变读法，不改变 COUNT/SUM 的语义。
+	var got struct {
+		Count int64 `db:"asset_count"`
+		Bytes int64 `db:"logical_bytes"`
+	}
+	if err := db.Get(&got, capacityAggregateSQL); err != nil {
+		t.Fatalf("执行容量聚合：%v", err)
+	}
+	if got.Count != 3 || got.Bytes != 6244 {
+		t.Fatalf("容量聚合结果 = %+v，期望 count=3 bytes=6244", got)
+	}
+
+	// 配额查询（热路径）：必须是覆盖索引扫描。这里**钉死索引名与 COVERING**，
+	// 因为 0050 的主要收益就在这条语句（实测 91.95ms → 1.10ms）；若它退化为回表，
+	// 说明复合索引的列顺序或内容被改坏了，必须报错而不是放过。
+	repoPlan := strings.Join(explainPlanLines(t, db, repoStatsSQL, int64(1), int64(1)), " | ")
+	if !strings.Contains(repoPlan, "USING COVERING INDEX idx_asset_repo_size") {
+		t.Errorf("单仓库配额聚合未走 idx_asset_repo_size 覆盖索引，计划 = %s", repoPlan)
+	}
+
+	// 统计信息存在时的计划回归：生产库会跑 ANALYZE，planner 届时按真实基数估算代价，
+	// 有可能把「顺序扫覆盖索引」换成「顺序扫表 + 回表」。两条语句都再断言一次。
+	if _, err := db.Exec(`ANALYZE asset`); err != nil {
+		t.Fatalf("ANALYZE asset：%v", err)
+	}
+	// 前置校验：统计信息确实建出来了，否则这段断言等于又跑了一遍前一组。
+	var statRows int
+	if err := db.Get(&statRows, `SELECT COUNT(*) FROM sqlite_stat1 WHERE tbl = 'asset'`); err != nil {
+		t.Fatalf("读取 sqlite_stat1：%v", err)
+	}
+	if statRows == 0 {
+		t.Fatal("ANALYZE asset 之后 sqlite_stat1 里没有 asset 的统计行，计划断言失去意义")
+	}
+	if plan := strings.Join(explainPlanLines(t, db, capacityAggregateSQL), " | "); !strings.Contains(plan,
+		"SCAN asset USING COVERING INDEX idx_asset_repo_size") {
+		t.Errorf("ANALYZE 后容量聚合未走 idx_asset_repo_size 覆盖索引，计划 = %s", plan)
+	}
+	if plan := strings.Join(explainPlanLines(t, db, repoStatsSQL, int64(1), int64(1)), " | "); !strings.Contains(plan,
+		"USING COVERING INDEX idx_asset_repo_size") {
+		t.Errorf("ANALYZE 后单仓库配额聚合未走 idx_asset_repo_size 覆盖索引，计划 = %s", plan)
+	}
+
+	// 幂等：重复迁移不得重复建索引或报错。
+	if err := db.Migrate(); err != nil {
+		t.Fatalf("重复 Migrate：%v", err)
+	}
+	again := strings.Join(explainPlanLines(t, db, capacityAggregateSQL), " | ")
+	if !strings.Contains(again, "SCAN asset USING COVERING INDEX idx_asset_repo_size") {
+		t.Errorf("重复迁移后覆盖索引不再命中，计划 = %s", again)
+	}
+}
+
+// explainPlanLines 返回 EXPLAIN QUERY PLAN 的 detail 列。
+// EXPLAIN QUERY PLAN 固定四列，sqlx 要求字段与列一一对应。
+func explainPlanLines(t *testing.T, db *DB, query string, args ...any) []string {
+	t.Helper()
+	var rows []struct {
+		ID     int    `db:"id"`
+		Parent int    `db:"parent"`
+		NotUsd int    `db:"notused"`
+		Detail string `db:"detail"`
+	}
+	if err := db.Select(&rows, "EXPLAIN QUERY PLAN "+query, args...); err != nil {
+		t.Fatalf("EXPLAIN QUERY PLAN：%v", err)
+	}
+	out := make([]string, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, row.Detail)
+	}
+	return out
+}
+
+// TestMigrationVersionsAreUniqueAndContiguous 守护迁移编号空间的完整性。
+//
+// 为什么需要它：迁移编号是全局唯一的顺序空间，多人并行开发时很容易两人各写一个
+// 「下一个号」——本方单独跑测试永远发现不了，只有两条分支合到一起才会在启动时
+// 炸出 `UNIQUE constraint failed: schema_migrations.version`。本次 rebase 到主线
+// 时就真实踩到过（主线占了 0047/0048，本分支的搜索迁移也写成 0047/0048）。
+// 编号冲突的代价很高：迁移器只按 version 判重、不校验文件名，冲突一旦发布出去，
+// 已升级的库会记着错误版本号，后续修复需要人工改 schema_migrations。
+//
+// 因此在 CI 阶段就把两种退化钉死：
+//   - 重复版本号（两个文件同号）；
+//   - 跳号（中间缺一个数字）——跳号本身不致命，但它往往是「有人改了号却漏改另一个」
+//     的征兆，且会让「下一个可用号」变得难以判断，故一并禁止。
+func TestMigrationVersionsAreUniqueAndContiguous(t *testing.T) {
+	files, err := migrationFiles()
+	if err != nil {
+		t.Fatalf("读取迁移列表：%v", err)
+	}
+	if len(files) == 0 {
+		t.Fatal("迁移列表不能为空")
+	}
+
+	seen := make(map[string]string, len(files))
+	for _, name := range files {
+		version := migrationVersion(name)
+		// 文件名必须是「4 位数字_小写短语.sql」：位数不足会让字典序失真
+		// （例如 "50_x.sql" 会排在 "0049_y.sql" 之前），进而打乱迁移顺序。
+		if len(version) != 4 {
+			t.Errorf("迁移 %s 的版本号不是 4 位：%q", name, version)
+			continue
+		}
+		for _, r := range version {
+			if r < '0' || r > '9' {
+				t.Errorf("迁移 %s 的版本号含非数字字符：%q", name, version)
+				break
+			}
+		}
+		if prev, dup := seen[version]; dup {
+			t.Errorf("迁移版本号重复：%s 与 %s 都是 %s", prev, name, version)
+			continue
+		}
+		seen[version] = name
+	}
+
+	// 连续性：从 0001 起逐个递增，不允许缺号。
+	for i := 1; i <= len(seen); i++ {
+		want := fmt.Sprintf("%04d", i)
+		if _, ok := seen[want]; !ok {
+			t.Errorf("迁移编号不连续：缺少 %s", want)
+		}
 	}
 }

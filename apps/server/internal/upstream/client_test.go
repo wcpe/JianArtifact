@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// TestSetTimeout 验证 SetTimeout 后回源整体超时按新值生效（FR-89 回源超时动态配置）。
+// TestSetTimeout 验证 SetTimeout 后回源整体超时按新值生效（回源超时动态配置）。
 func TestSetTimeout(t *testing.T) {
 	// 慢服务器：固定 200ms 后才响应。
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

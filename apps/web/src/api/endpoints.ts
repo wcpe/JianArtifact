@@ -31,16 +31,16 @@ import type {
   BackupPackageList,
   BackupPackageMode,
   BackupVerification,
-  // FR-40 追加六：待重启生效的恢复状态（解释"为什么现在导入不了"）。
+  // 待重启生效的恢复状态（解释"为什么现在导入不了"）。
   BackupRestoreStatus,
-  // FR-40：恢复演练的受理结果、级别与落库报告。
+  // 恢复演练的受理结果、级别与落库报告。
   BackupDrillAccepted,
   BackupVerificationLevel,
   BackupVerificationList,
   BackupImport,
   BackupPreview,
   BackupDiff,
-  // FR-40 追加八：服务器上"磁盘有包体、登记无记录"的备份包。
+  // 服务器上"磁盘有包体、登记无记录"的备份包。
   UnmanagedBackupList,
   AdoptBackupsResult,
   BackupImportList,
@@ -155,7 +155,7 @@ export function getRepositoryDownloadTrend(
   );
 }
 
-/** 下载来源聚合（FR-144；仅管理员；独立来源口径，IP 明文与 UA 归类可见）。 */
+/** 下载来源聚合（仅管理员；独立来源口径，IP 明文与 UA 归类可见）。 */
 export function getDownloadByClient(
   query: OperationsObservabilityQuery = {},
 ): Promise<DownloadClientRanking> {
@@ -194,12 +194,12 @@ export function getStatus(): Promise<StatusInfo> {
   return request<StatusInfo>("/status");
 }
 
-/** FR-34：取当前会话对应的用户（OIDC 回调只带回令牌，身份快照需另行取回）。 */
+/** 取当前会话对应的用户（OIDC 回调只带回令牌，身份快照需另行取回）。 */
 export function currentUser(): Promise<User> {
   return request<User>("/auth/me");
 }
 
-/** FR-32：读取本进程启动时启用的格式（仅管理员）。 */
+/** 读取本进程启动时启用的格式（仅管理员）。 */
 export function getEnabledFormats(): Promise<EnabledFormats> {
   return request<EnabledFormats>("/formats/enabled");
 }
@@ -252,7 +252,7 @@ export function changePassword(id: number, password: string): Promise<void> {
   return request<void>(`/users/${id}/password`, { method: "POST", body: { password } });
 }
 
-// —— 用户组（FR-36）——
+// —— 用户组——
 // 八个端点均仅管理员可用；组是 ACL 的主体之一，成员关系由组 × 用户承载。
 
 /** 用户组列表（分页窗口 + total 总数）。 */
@@ -305,7 +305,7 @@ export function removeUserGroupMember(id: number, userId: number): Promise<void>
   return request<void>(`/user-groups/${id}/members/${userId}`, { method: "DELETE" });
 }
 
-/** FR-109：管理员读取指定用户在 hosted 仓库的发布策略。 */
+/** 管理员读取指定用户在 hosted 仓库的发布策略。 */
 export interface PublishPolicy {
   userId: number;
   username: string;
@@ -318,7 +318,7 @@ export interface PublishPolicy {
   immutableRelease: boolean;
 }
 
-/** FR-109：读取发布账号策略与 hosted Release 不可变开关。 */
+/** 读取发布账号策略与 hosted Release 不可变开关。 */
 export function getPublishPolicy(userId: number, repository: string): Promise<PublishPolicy> {
   return request<PublishPolicy>(
     `/users/${userId}/publish-policies/${encodeURIComponent(repository)}`,
@@ -326,7 +326,7 @@ export function getPublishPolicy(userId: number, repository: string): Promise<Pu
 }
 
 /**
- * FR-109：全量保存发布账号策略；空前缀数组表示允许全部路径。
+ * 全量保存发布账号策略；空前缀数组表示允许全部路径。
  *
  * 注意 payload 不含 immutableRelease：该字段是仓库级配置（只读展示），单仓库与批量端点
  * 都对写入返回 400 immutable_release_moved。
@@ -343,7 +343,7 @@ export function updatePublishPolicy(
 }
 
 /**
- * FR-109：可写入的发布策略字段（单仓库与批量共用）。
+ * 可写入的发布策略字段（单仓库与批量共用）。
  * 不含 immutableRelease——它由仓库配置决定，端点对它的写入一律拒绝。
  */
 export type PublishPolicyBatchPayload = Omit<
@@ -352,7 +352,7 @@ export type PublishPolicyBatchPayload = Omit<
 >;
 
 /**
- * FR-109：把同一份发布策略批量应用到多个 Hosted 仓库。
+ * 把同一份发布策略批量应用到多个 Hosted 仓库。
  *
  * 服务端先对各仓库做统一预校验，任一仓库不存在或非 hosted 会整体拒绝（HTTP 4xx），
  * 因此抛错即表示「没有任何仓库被写入」；返回结果里的逐仓库条目的 ok=false 表示个别仓库
@@ -397,11 +397,11 @@ export function createRepository(input: {
   members?: string[];
   /** 仓库别名（可选；与主名共享命名空间、全局唯一，不得等于主名或与他仓主名/别名冲突）。 */
   aliases?: string[];
-  /** FR-41：仓库存储配额上限（字节）；0 / 缺省表示不限。 */
+  /** 仓库存储配额上限（字节）；0 / 缺省表示不限。 */
   quotaBytes?: number;
-  /** FR-41：仓库制品数配额上限；0 / 缺省表示不限。 */
+  /** 仓库制品数配额上限；0 / 缺省表示不限。 */
   quotaAssets?: number;
-  /** FR-41：代理缓存保留天数（仅 type=proxy 可设）；0 / 缺省表示关闭。 */
+  /** 代理缓存保留天数（仅 type=proxy 可设）；0 / 缺省表示关闭。 */
   cacheRetentionDays?: number;
 }): Promise<Repository> {
   return request<Repository>("/repositories", { method: "POST", body: input });
@@ -416,11 +416,11 @@ export function updateRepository(
     members?: string[];
     /** 覆盖式更新别名集合（空数组表示清空；与主名共享命名空间、全局唯一）。 */
     aliases?: string[];
-    /** FR-41：存储配额上限（字节）；传 0 表示改为不限，缺省表示不修改。 */
+    /** 存储配额上限（字节）；传 0 表示改为不限，缺省表示不修改。 */
     quotaBytes?: number;
-    /** FR-41：制品数配额上限；传 0 表示改为不限，缺省表示不修改。 */
+    /** 制品数配额上限；传 0 表示改为不限，缺省表示不修改。 */
     quotaAssets?: number;
-    /** FR-41：代理缓存保留天数（仅 type=proxy 可设）；传 0 表示关闭，缺省表示不修改。 */
+    /** 代理缓存保留天数（仅 type=proxy 可设）；传 0 表示关闭，缺省表示不修改。 */
     cacheRetentionDays?: number;
   },
 ): Promise<Repository> {
@@ -443,12 +443,12 @@ export function deleteRepository(name: string): Promise<void> {
   return request<void>(`/repositories/${name}`, { method: "DELETE" });
 }
 
-/** FR-113：设置仓库 online/offline 状态（仅管理员；本地运维状态，不参与复制）。 */
+/** 设置仓库 online/offline 状态（仅管理员；本地运维状态，不参与复制）。 */
 export function setRepositoryOnline(name: string, online: boolean): Promise<Repository> {
   return request<Repository>(`/repositories/${name}/online`, { method: "PUT", body: { online } });
 }
 
-/** FR-114：手动重测仓库上游连接（仅管理员；仅 online proxy 可重测），返回最新状态。 */
+/** 手动重测仓库上游连接（仅管理员；仅 online proxy 可重测），返回最新状态。 */
 export function recheckConnection(name: string): Promise<ConnectionStatus> {
   return request<ConnectionStatus>(`/repositories/${name}/recheck-connection`, {
     method: "POST",
@@ -530,7 +530,7 @@ export function uploadRawAsset(
   return putProtocolAsset(url, file, file.type || "application/octet-stream");
 }
 
-/** FR-102: 协议层删除制品（DELETE /repository/{name}/{path}；元数据删除，blob 内容保留）。 */
+/** 协议层删除制品（DELETE /repository/{name}/{path}；元数据删除，blob 内容保留）。 */
 export function deleteAsset(repo: string, path: string): Promise<void> {
   const enc = path
     .split("/")
@@ -541,7 +541,7 @@ export function deleteAsset(repo: string, path: string): Promise<void> {
   return deleteProtocolAsset(url);
 }
 
-/** FR-103: 管理端批量删除制品（仅管理员；逐条尽力，返回成功数与失败明细）。 */
+/** 管理端批量删除制品（仅管理员；逐条尽力，返回成功数与失败明细）。 */
 export function batchDeleteAssets(
   repo: string,
   paths: string[],
@@ -555,7 +555,7 @@ export function batchDeleteAssets(
   );
 }
 
-/** FR-105：调用统一资产操作事务（删除、移动、重命名）。 */
+/** 调用统一资产操作事务（删除、移动、重命名）。 */
 export function applyAssetOperation(
   repo: string,
   input: AssetOperationInput,
@@ -572,7 +572,7 @@ export function applyAssetOperation(
   );
 }
 
-/** FR-73: Maven 网页上传表单字段。 */
+/** Maven 网页上传表单字段。 */
 export interface MavenUploadForm {
   groupId: string;
   artifactId: string;
@@ -581,7 +581,7 @@ export interface MavenUploadForm {
   file: File;
 }
 
-/** FR-73: Maven 网页上传（POST multipart，服务端生成 pom.xml/.md5/.sha1/maven-metadata.xml）。 */
+/** Maven 网页上传（POST multipart，服务端生成 pom.xml/.md5/.sha1/maven-metadata.xml）。 */
 export function uploadMavenArtifact(
   repo: string,
   form: MavenUploadForm,
@@ -739,7 +739,7 @@ export function finalizeMigration(id: number): Promise<MigrationTask> {
   return request<MigrationTask>(`/migrations/${id}/finalize`, { method: "POST" });
 }
 
-// —— 节点备份与搬迁（FR-132）——
+// —— 节点备份与搬迁——
 // 备份包是搬迁的传输单位：生成 → 取签名链接 → 新机拉取 → 导入。
 
 /** 备份包列表（分页）。 */
@@ -783,7 +783,7 @@ export function verifyBackup(packageId: string, deep = false): Promise<BackupVer
   });
 }
 
-// —— 恢复演练与可查报告（FR-40）——
+// —— 恢复演练与可查报告——
 // 与 verifyBackup 的分工：verify 只校验归档自身、结论一次性返回；
 // drill 额外真解包 + 真查 SQLite，回答"这份包真的能恢复吗"，并留下可查历史报告。
 
@@ -815,7 +815,7 @@ export function listBackupVerifications(
   );
 }
 
-// —— 写入冻结窗口（FR-134）——
+// —— 写入冻结窗口——
 // 搬迁切换用：冻结 → 生成差包/导入 → 起服 → 解冻。窗口必须有界，不允许无限期。
 
 /** 查询当前写入冻结状态。 */
@@ -838,7 +838,7 @@ export function unfreezeWrites(): Promise<WriteFreezeState> {
 }
 
 /**
- * 一键重启服务（FR-40 追加七）。
+ * 一键重启服务。
  *
  * 响应**先于**重启发出（服务端延迟约 2 秒才开始重启），所以这里能正常拿到 202；
  * 之后连接会断，调用方需自行探活。
@@ -867,7 +867,7 @@ export function getRestartCapability(): Promise<MaintenanceRestartResult> {
   return request<MaintenanceRestartResult>("/maintenance/restart", { method: "GET" });
 }
 
-// —— 从 URL 导入备份包（FR-137）——
+// —— 从 URL 导入备份包——
 // 仅接受 http/https，由服务端拉取；校验/暂存完成后需重启服务替换。
 
 /** 从 URL 拉取并导入备份包；返回受理记录（202），导入进度随后由列表轮询可见。 */
@@ -920,7 +920,7 @@ export function restoreFromLocalPackage(
   });
 }
 
-// —— 分片上传备份包（FR-137 第三通道）——
+// —— 分片上传备份包（第三通道）——
 // 浏览器内传 GB 级包：init 取服务端 chunkSize → 按 File.slice(chunkSize) 逐片 PUT → complete 触发导入。
 // 支持续传（GET 拉回 uploadedChunks，只补缺失片）与取消（abort 置 aborted 并清分片）。
 
@@ -954,7 +954,7 @@ export function getBackupUpload(uploadId: string): Promise<BackupUploadSession> 
 /**
  * 拼装归档并存入备份列表；返回一条已完成回执（200）。
  *
- * FR-40 追加八起语义已改变：上传**不再**直接发起恢复，只把包收进列表。
+ * 追加八起语义已改变：上传**不再**直接发起恢复，只把包收进列表。
  * 恢复是之后的独立动作（走 restoreFromLocalPackage），因此不再需要 overwrite；
  * deep 同样不再在此时生效——校验发生在用户显式发起恢复或深度校验时。
  */
@@ -976,7 +976,7 @@ export function abortBackupUpload(uploadId: string): Promise<void> {
 }
 
 /**
- * 查看备份包内容概要（FR-40 追加十一）。
+ * 查看备份包内容概要。
  *
  * 恢复不可撤销，而此前只能看到"多少制品"这类抽象计数；本接口让用户先看清
  * 包里到底有哪些仓库、账号与制品路径，再决定要不要用它覆盖本机数据。
@@ -988,7 +988,7 @@ export function previewBackup(packageId: string): Promise<BackupPreview> {
 }
 
 /**
- * 对比包内容与当前系统（FR-40 追加十四）。
+ * 对比包内容与当前系统。
  *
  * 不含 scope/kind 时返回四类计数（summary 模式，服务端只跑聚合查询）；
  * 指定 scope+kind 时返回该分类的分页明细。
@@ -1015,7 +1015,7 @@ export function getBackupDiff(
   return request<BackupDiff>(`/backups/${encodeURIComponent(packageId)}/diff${qs ? `?${qs}` : ""}`);
 }
 
-// —— 未管理备份包（FR-40 追加八）——
+// —— 未管理备份包——
 // 服务器 backups/ 下"磁盘有包体、登记表无记录"的包（历史残留、手工拷入）。
 // 它们在常规列表里不可见，既不能用也不能删；这里补上"列出 + 导入"。
 
@@ -1087,7 +1087,7 @@ export function putGlobalPinnedRepositories(
   });
 }
 
-// —— FR-66: 匿名访问全局开关（admin）——
+// —— : 匿名访问全局开关（admin）——
 
 /** 查询实例级匿名访问开关。 */
 export function getAnonymousAccessSetting(): Promise<{ enabled: boolean }> {
@@ -1102,7 +1102,7 @@ export function putAnonymousAccessSetting(enabled: boolean): Promise<{ enabled: 
   });
 }
 
-// —— FR-89: 基础设置（admin，非契约）——
+// —— : 基础设置（admin，非契约）——
 
 export interface SettingsConfig {
   /** 匿名访问全局开关。 */
@@ -1115,20 +1115,20 @@ export interface SettingsConfig {
   syncInterval: number;
   /** 允许访问的域名白名单（空数组 = 不限制；仅白名单内的 Host 可访问，节点本地）。 */
   allowedHosts: string[];
-  /** 回源 Token 校验开关（FR-130，节点本地）。 */
+  /** 回源 Token 校验开关（节点本地）。 */
   originTokenEnabled: boolean;
   /** 回源 Token 请求头名（CDN 回源时注入）。 */
   originTokenHeader: string;
   /** 回源 Token 值（粘贴到 CDN 回源请求头规则）。 */
   originTokenValue: string;
-  /** 自动备份间隔（秒），0 = 关闭（FR-40；运行时可改，保存后作业下一轮生效）。 */
+  /** 自动备份间隔（秒），0 = 关闭（运行时可改，保存后作业下一轮生效）。 */
   backupAutoInterval: number;
   /** 保留最近 N 份自动备份，0 = 不按份数限制。 */
   backupKeepLast: number;
   /** 保留最近 N 天的自动备份，0 = 不限天数。 */
   backupRetentionDays: number;
   /**
-   * 间隔的人类表达（FR-40 追加九），如「1 天」「5 分钟」。
+   * 间隔的人类表达，如「1 天」「5 分钟」。
    * 由后端格式化，界面直接展示，避免前端重复实现一套渲染规则。
    */
   backupAutoIntervalExpr: string;
@@ -1137,7 +1137,7 @@ export interface SettingsConfig {
   /** 间隔拆解后的单位标识（seconds/minutes/hours/days/weeks/months/years）。 */
   backupAutoIntervalUnit: string;
   /**
-   * 最近一次成功备份包的大小（字节，FR-40 追加十二）。
+   * 最近一次成功备份包的大小（字节）。
    *
    * 备份是**全量**包，每份约等于数据目录大小，因此「份数 × 本值」就是最坏情况的
    * 磁盘占用。界面据此提示容量风险——没有它，用户无法判断"保留 7 份"会不会写满盘。
@@ -1148,7 +1148,7 @@ export interface SettingsConfig {
 
 /**
  * 归一化设置响应：旧后端 / 旧 devmock 场景可能缺少
- * allowedHosts 与 originToken* 字段（FR-129/130 后新增），补齐默认值，
+ * allowedHosts 与 originToken* 字段（/130 后新增），补齐默认值，
  * 避免表单层对 undefined 调 join 等方法崩溃。
  */
 function normalizeSettings(raw: SettingsConfig): SettingsConfig {
@@ -1231,7 +1231,7 @@ export interface AuditLogList {
   total: number;
 }
 
-/** 审计日志查询参数（FR-38，全可选）。 */
+/** 审计日志查询参数（全可选）。 */
 export interface AuditLogQuery {
   actor?: string;
   userId?: string;
@@ -1247,7 +1247,7 @@ export interface AuditLogQuery {
   offset?: number;
 }
 
-/** 审计日志（FR-38，分页 + 筛选，仅管理员）。 */
+/** 审计日志（分页 + 筛选，仅管理员）。 */
 export function getAuditLogs(q: AuditLogQuery = {}): Promise<AuditLogList> {
   const params = new URLSearchParams();
   if (q.actor) params.set("actor", q.actor);
@@ -1265,7 +1265,7 @@ export function getAuditLogs(q: AuditLogQuery = {}): Promise<AuditLogList> {
   return request<AuditLogList>(`/audit-logs?${params.toString()}`);
 }
 
-/** FR-118：统一审计观测筛选。category/result 可多选；时间为空时由服务端固定为最近 24 小时。 */
+/** 统一审计观测筛选。category/result 可多选；时间为空时由服务端固定为最近 24 小时。 */
 export interface AuditObservabilityQuery {
   from?: string;
   to?: string;
@@ -1379,7 +1379,7 @@ export function acknowledgeAuditAttention(
   );
 }
 
-/** FR-117：通知查询参数。缺省为页眉口径（最近 24 小时未确认风险预览）。 */
+/** 通知查询参数。缺省为页眉口径（最近 24 小时未确认风险预览）。 */
 export interface AuditNotificationQuery {
   from?: string;
   to?: string;
@@ -1397,7 +1397,7 @@ export function getAuditAttentionNotifications(
   );
 }
 
-// ---- FR-54: Tree API ----
+// ---- Tree API ----
 
 export interface TreeEntry {
   directories: string[];
@@ -1410,7 +1410,7 @@ export interface TreeEntry {
     contentType?: string;
     createdAt?: string;
     updatedAt: string;
-    /** FR-142：累计完整下载次数（原始口径，公开） */
+    /** 累计完整下载次数（原始口径，公开） */
     downloadCount?: number;
   }[];
 }
@@ -1422,23 +1422,103 @@ export function getRepositoryTree(name: string, prefix?: string): Promise<TreeEn
   });
 }
 
-// ---- FR-30: Search API ----
+// ---- Search API ----
+
+/**
+ * 命中精度分层：后端比较「查询里的版本串 T」与「结果里的版本段 V」得出。
+ * `none` 表示没有版本信号（既不精确也不近似），UI 不显示精度徽标。
+ */
+export type SearchPrecision = "exact" | "prerelease" | "substring" | "none";
+
+/** 包节点的协议归类：`file` 是「无坐标」伪包（按仓库归组，没有版本层）。 */
+export type SearchPackageKind = "maven" | "npm" | "file";
+
+/** 聚合结果里的单个文件行（`packages[].versions[].files[]` / 伪包的 `files[]`）。 */
+export interface SearchPackageFile {
+  name: string;
+  path: string;
+  repository: string;
+  size: number;
+  /** 新增：详情面板展示的 SHA-1（可能为空串）。 */
+  sha1: string;
+  updatedAt: string;
+  /** 附录 A 的封闭集合：jar / war / tgz / sources / javadoc / tests / pom / packument / metadata / other / checksum。 */
+  fileKind: string;
+}
+
+/** 包节点下的版本组。 */
+export interface SearchPackageVersion {
+  version: string;
+  precision: SearchPrecision;
+  fileCount: number;
+  /** 组内文件体积合计。 */
+  size: number;
+  latestUpdatedAt: string;
+  files: SearchPackageFile[];
+}
+
+/** 包级聚合节点（`group_by=package` 才有）。 */
+export interface SearchPackage {
+  /** 展示坐标；无坐标伪包为仓库名。 */
+  coordinate: string;
+  kind: SearchPackageKind;
+  repositories: string[];
+  versionCount: number;
+  fileCount: number;
+  bestPrecision: SearchPrecision;
+  latestUpdatedAt: string;
+  topVersion: string;
+  versions: SearchPackageVersion[];
+  /**
+   * 仅 `kind=file` 的「无坐标」伪包携带该键：这类条目跳过版本层，文件直接挂在包下。
+   * 有坐标的包（maven / npm）后端不输出此键（`omitempty`）。
+   */
+  files?: SearchPackageFile[];
+}
 
 export interface SearchResult {
-  items: { repository: string; path: string; size: number; hash: string; updatedAt: string }[];
+  items: {
+    repository: string;
+    path: string;
+    size: number;
+    hash: string;
+    /** 新增的纯追加键：详情面板展示的 SHA-1。 */
+    sha1?: string;
+    updatedAt: string;
+  }[];
   total: number;
   /** 按仓库聚合的命中数（钻取导航用，按命中数降序）。 */
   facets?: { repository: string; count: number }[];
+  /**
+   * 包节点数（含「无坐标」伪包）；`aggregation.truncated` 时为下界，且排序靠后的包
+   * 可能整包缺失。仅 `group_by=package` 有。
+   */
+  packageTotal?: number;
+  /** 包级聚合结果，仅 `group_by=package` 有。 */
+  packages?: SearchPackage[];
+  /** 聚合扫描口径，仅 `group_by=package` 有；`truncated` 为真表示只聚合了前 `scanned` 条文件。 */
+  aggregation?: { scanned: number; truncated: boolean };
+  /** 后端回报的实际生效排序（relevance 回落 / 缺省时用来"不猜"）。 */
+  appliedOrder?: string;
 }
+
+/** 搜索结果的分组维度：缺省 `file`（文件级扁平列表），`package` 走包级聚合。 */
+export type SearchGroupBy = "file" | "package";
+
+/** 搜索结果排序方向；`relevance` 仅在 `group_by=package` 下生效（其余情况后端静默回落）。 */
+export type SearchOrder = "asc" | "desc" | "relevance";
 
 /** 全局跨仓库制品搜索。 */
 export function searchAssets(params: {
   q: string;
   repository?: string;
   sort?: string;
-  order?: "asc" | "desc";
+  order?: SearchOrder;
+  group_by?: SearchGroupBy;
   page?: number;
   page_size?: number;
+  /** 外部中止信号（取消 / 换口径时中止上一次），透传给客户端由 fetch 真实中断。 */
+  signal?: AbortSignal;
 }): Promise<SearchResult> {
   return request<SearchResult>("/search", {
     query: {
@@ -1446,13 +1526,51 @@ export function searchAssets(params: {
       repository: params.repository,
       sort: params.sort,
       order: params.order,
+      group_by: params.group_by,
       page: params.page,
       page_size: params.page_size,
     },
+    signal: params.signal,
   });
 }
 
-// ---- FR-56: Sorted repo list ----
+// ---- 搜索建议（搜索框下拉候选） ----
+
+/**
+ * 候选类型决定确认语义（规格 §3.9）：
+ * - `package` → 写入输入框并**直接发起搜索**；
+ * - `repository` → 写成 `repo:` 限定、**不立即搜索**（用户可继续追加关键词）。
+ */
+export type SearchSuggestionType = "package" | "repository";
+
+export interface SearchSuggestion {
+  type: SearchSuggestionType;
+  /** 候选值：仓库名，或可直接作为搜索词命中该包的包名。 */
+  value: string;
+}
+
+export interface SearchSuggestResult {
+  items: SearchSuggestion[];
+}
+
+/**
+ * 取搜索框下拉候选（非契约端点 `/api/v1/search/suggest`）。
+ *
+ * 空 `q`（trim 后）后端返回空 `items` 而不是 400；`limit` 由后端夹取到 [1, 20]。
+ * `signal` 供调用方在每次新请求前中止上一次，避免旧响应覆盖新候选（规格 §3.9）。
+ */
+export function suggestSearch(params: {
+  q: string;
+  limit?: number;
+  signal?: AbortSignal;
+}): Promise<SearchSuggestResult> {
+  return request<SearchSuggestResult>("/search/suggest", {
+    query: { q: params.q, limit: params.limit },
+    signal: params.signal,
+  });
+}
+
+// ---- Sorted repo list ----
 
 export interface RepoListParams extends Pagination {
   sort?: string;

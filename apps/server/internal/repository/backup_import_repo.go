@@ -8,7 +8,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
 )
 
-// 导入状态机（FR-137）：queued → fetching → staging → pending_restart；任意失败置 failed。
+// 导入状态机：queued → fetching → staging → pending_restart；任意失败置 failed。
 const (
 	ImportStatusQueued         = "queued"
 	ImportStatusFetching       = "fetching"

@@ -3,8 +3,8 @@
 -- 影响：重建 replication_apply_log 以支持逐实体主键
 -- 数据处理：迁移既有接收审计记录；预计耗时：随审计行数增长
 -- 回滚：不支持 down migration；需要恢复升级前备份
--- 相关：FR-105 / ADR-0021
--- 0021（FR-105）：operation 接收审计按制品项保存同一 operation_id。
+-- 相关：ADR-0021
+-- 0021：operation 接收审计按制品项保存同一 operation_id。
 -- 旧主键只能标识一条来源 seq，无法承载同一 operation 的多个制品项，故重建为逐实体主键。
 CREATE TABLE replication_apply_log_v2 (
   source_node    TEXT    NOT NULL,

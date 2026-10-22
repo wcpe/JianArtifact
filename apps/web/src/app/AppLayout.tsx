@@ -122,7 +122,7 @@ const NAV_SECTIONS: NavSection[] = [
     titleKey: "nav.sectionAdministration",
     items: [
       { labelKey: "nav.users", path: "/users", icon: <IconUsers size={18} />, adminOnly: true },
-      // FR-36：用户组是授权主体之一，仅管理员可管理。
+      // 用户组是授权主体之一，仅管理员可管理。
       {
         labelKey: "nav.userGroups",
         path: "/user-groups",
@@ -268,12 +268,12 @@ export function AppLayout() {
   const compactHeader = useMediaQuery("(max-width: 62em)") ?? false;
   const toggleNav = () => setNavExpanded((value) => !value);
   const [version, setVersion] = useState<string | null>(null);
-  // FR-55: 未登录时拉取公开仓库列表供侧边栏展示
+  // 未登录时拉取公开仓库列表供侧边栏展示
   const [publicRepos, setPublicRepos] = useState<Repository[]>([]);
-  // FR-59: 搜索栏状态
+  // 搜索栏状态
   const [searchQuery, setSearchQuery] = useState("");
 
-  // 管理员判定走集中工具（FR-36）：角色口径只有一处，侧栏不再自己解释 role 字段。
+  // 管理员判定走集中工具：角色口径只有一处，侧栏不再自己解释 role 字段。
   const isAdmin = useIsAdmin();
   const expanded = isMobile ? true : navExpanded;
 
@@ -296,7 +296,7 @@ export function AppLayout() {
     // navigate 引用稳定；登录 / 登出后重取以刷新版本号展示。
   }, [isAuthenticated]);
 
-  // FR-55: 未登录时加载公开仓库列表
+  // 未登录时加载公开仓库列表
   useEffect(() => {
     if (!isAuthenticated) {
       listPublicRepositories()
@@ -305,8 +305,8 @@ export function AppLayout() {
     }
   }, [isAuthenticated]);
 
-  // FR-67：登出后落地仓库列表（匿名视图），不再有整页登录。
-  // FR-71：登出为异步操作，期间按钮呈 loading 防重复点击。
+  // 登出后落地仓库列表（匿名视图），不再有整页登录。
+  // 登出为异步操作，期间按钮呈 loading 防重复点击。
   const [loggingOut, setLoggingOut] = useState(false);
   const handleLogout = () => {
     setLoggingOut(true);
@@ -407,7 +407,7 @@ export function AppLayout() {
   };
   const roleLabel = isAdmin ? t("common.roleAdmin") : t("common.roleUser");
 
-  // FR-59: Header 搜索提交
+  // Header 搜索提交
   const handleSearch = () => {
     if (searchQuery.trim()) {
       navigate(`/search?q=${encodeURIComponent(searchQuery.trim())}`);
@@ -415,7 +415,7 @@ export function AppLayout() {
     }
   };
 
-  // FR-59/FR-71: 刷新当前页——派发全局刷新事件，useAsync 与自管数据组件重新拉取；
+  // /: 刷新当前页——派发全局刷新事件，useAsync 与自管数据组件重新拉取；
   // 按钮进入旋转态，待网络活动归零（且满足最短时长防闪烁）后恢复。
   const [refreshing, setRefreshing] = useState(false);
   const handleRefresh = () => {
@@ -526,7 +526,7 @@ export function AppLayout() {
               </Group>
             )}
           </Group>
-          {/* FR-59: Header 搜索栏 */}
+          {/* Header 搜索栏 */}
           <Group
             gap="sm"
             wrap="nowrap"
@@ -583,7 +583,7 @@ export function AppLayout() {
               </>
             ) : (
               <>
-                {/* FR-59/FR-71: 刷新按钮——刷新期间禁用并旋转 */}
+                {/* /: 刷新按钮——刷新期间禁用并旋转 */}
                 <Button
                   size="compact-sm"
                   variant="subtle"
@@ -675,7 +675,7 @@ export function AppLayout() {
         </Group>
 
         <ScrollArea style={{ flex: 1 }}>
-          {/* FR-55: 未登录 — 精简侧边栏。
+          {/* 未登录 — 精简侧边栏。
               补「全部仓库」固定入口：此前匿名侧栏只列公开仓库名，进入某个仓库详情后
               没有任何路径回到列表（面包屑当时也不可点），等于"进去就出不来"。 */}
           {!isAuthenticated ? (
@@ -796,14 +796,13 @@ export function AppLayout() {
       </AppShell.Navbar>
 
       <AppShell.Main>
-        {/* 内容容器：限定最大宽度并居中，超宽屏下不再把表格与卡片无节制拉长。
-            此前该容器只有注释声称「固定 max-width」，实际仅 width:100%，
-            导致 density.contentMaxWidth 长期空转、各页各自写 maw。 */}
-        <Box
-          data-testid="content-shell"
-          style={{ width: "100%", maxWidth: density.contentMaxWidth, marginInline: "auto" }}
-        >
-          {/* FR-70：懒加载页面在布局内挂 Suspense，路由切换保持侧栏/页眉不闪。 */}
+        {/* 内容容器：铺满可用宽度并紧贴侧栏左缘，不做居中、不设上限。
+            此前这里是 `maxWidth: density.contentMaxWidth` + `marginInline: "auto"`，
+            在宽屏下把内容收成一条居中窄带、两侧留大片空白，表格与日志类页面尤其浪费空间。
+            现改为纯 `width: 100%`：宽度完全交给 AppShell.Main（侧栏之外的剩余宽），
+            因而天然左对齐；各页面内的局部宽度约束（如搜索框、详情卡）仍然保留。 */}
+        <Box data-testid="content-shell" style={{ width: "100%" }}>
+          {/* 懒加载页面在布局内挂 Suspense，路由切换保持侧栏/页眉不闪。 */}
           {/* 错误边界按路径强制重建：否则一次懒加载失败会把错误态带到后续所有页面。
               没有它时，chunk 加载失败（发版后旧 chunk 404、网络抖动、dev 依赖重构建 504）
               会让整棵树崩成白屏。 */}

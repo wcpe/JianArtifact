@@ -53,7 +53,7 @@ func newProtocolEnvWithFormats(t *testing.T, enabled formats.Set) *protocolEnv {
 	return newProtocolEnvConfigured(t, "", enabled)
 }
 
-// newProtocolEnvWithPublicURL 构造带对外基础 URL（FR-87）的协议测试环境。
+// newProtocolEnvWithPublicURL 构造带对外基础 URL的协议测试环境。
 func newProtocolEnvWithPublicURL(t *testing.T, publicURL string) *protocolEnv {
 	return newProtocolEnvOpts(t, publicURL)
 }
@@ -134,7 +134,7 @@ func newProtocolEnvConfigured(t *testing.T, publicURL string, enabled formats.Se
 			protocol.RegisterPypiRoutes(r, pypiHandler, protocolMW)
 			protocol.RegisterGoProxyRoutes(r, goProxyHandler, protocolMW)
 			protocol.RegisterNuGetRoutes(r, nugetHandler, protocolMW)
-			// FR-73: Maven 网页上传（与 main.go 同款注册）
+			// Maven 网页上传（与 main.go 同款注册）
 			r.POST("/api/v1/repositories/:name/maven-upload", authenticator.Optional(), mavenHandler.UploadForm)
 			// 开源协议清单（admin 专属，与 main.go 同款注册）
 			r.GET("/api/v1/licenses", authenticator.Optional(), handlers.GetLicenses)
@@ -876,7 +876,7 @@ func TestRawDeleteAuditFailureLeavesAssetAndOutboxUntouched(t *testing.T) {
 	if rec := e.rawReq(http.MethodPut, "/repository/raw-audit-failure/keep.txt", "Bearer "+adminToken, "text/plain", []byte("keep")); rec.Code != http.StatusCreated {
 		t.Fatalf("准备 Raw 制品状态码 = %d", rec.Code)
 	}
-	// 以审计失败前的水位为基线：FR-138 后 Put 自身也会写 v2 outbox，
+	// 以审计失败前的水位为基线： 后 Put 自身也会写 v2 outbox，
 	// 只验证失败操作不新增任何 outbox 记录（资产视图与 outbox 同事务回滚）。
 	opRepo := repository.NewReplicationOperationRepo(e.db)
 	base, err := opRepo.ListRecordsSince(0, 100)

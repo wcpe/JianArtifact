@@ -1,4 +1,4 @@
-// FR-105：文件详情不提供删除入口，危险操作仅从资产树右键菜单发起。
+// 文件详情不提供删除入口，危险操作仅从资产树右键菜单发起。
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
@@ -35,7 +35,7 @@ function renderBrowser(authenticated: boolean, user?: User) {
   });
 }
 
-describe("FR-105 文件详情", () => {
+describe("文件详情", () => {
   it("管理员选中文件后不显示删除按钮", async () => {
     const user = userEvent.setup();
     renderBrowser(true);

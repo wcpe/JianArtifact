@@ -1,11 +1,11 @@
-// ACL 编辑的共享口径（FR-36）：六档动作、主体类型判定与展示名解析。
+// ACL 编辑的共享口径：六档动作、主体类型判定与展示名解析。
 //
 // 抽成模块的原因：仓库详情页的 ACL 面板与（兼容重定向前的）ACL 页都要用同一套
 // 「主体 → 展示名」「动作 → 文案」映射，两处各写一遍就会出现同一条授权在两个页面
 // 显示成不同名字的情况。
 import type { AclAction, AclEntry, AclSubjectType } from "../api/types";
 
-/** FR-36 六档动作，由粗到细；顺序即下拉里的展示顺序。 */
+/** 六档动作，由粗到细；顺序即下拉里的展示顺序。 */
 export const ACL_ACTIONS: AclAction[] = [
   "read",
   "publish",

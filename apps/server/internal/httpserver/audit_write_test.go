@@ -1,6 +1,6 @@
 package httpserver_test
 
-// FR-38 审计写路径：仓库更新与集群配置变更须写入审计日志（回归测试）。
+//  审计写路径：仓库更新与集群配置变更须写入审计日志（回归测试）。
 import (
 	"encoding/json"
 	"net/http"

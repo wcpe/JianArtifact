@@ -9,7 +9,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/scheduler"
 )
 
-// registerStorageCleanupJob 把 FR-41 存储治理清理注册为调度器作业：
+// registerStorageCleanupJob 把存储治理清理注册为调度器作业：
 // 按固定间隔执行、启动不立即清理；间隔 <= 0 或清理函数为空时不注册
 // （禁用语义，对齐 JIAN_STORAGE_CLEANUP_INTERVAL=0）。
 //

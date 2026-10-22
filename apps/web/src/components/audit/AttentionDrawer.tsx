@@ -1,4 +1,4 @@
-// 风险批次详情抽屉（FR-118）：完整成员分页加载 + 二次确认防误触。
+// 风险批次详情抽屉：完整成员分页加载 + 二次确认防误触。
 // 深链 attentionId、attention_stale 处理与确认流语义与旧实现保持一致。
 import { useEffect, useRef, useState } from "react";
 import { IconCheck, IconRefresh } from "@tabler/icons-react";

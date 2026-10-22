@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"log"
 	"net/http"
 	"net/url"
 	"time"
@@ -31,35 +32,36 @@ type Deps struct {
 	Users                   *domain.UserService
 	Tokens                  *domain.TokenService
 	Repos                   *domain.RepositoryService
-	Assets                  *domain.AssetService // FR-103：制品批量删除
+	Assets                  *domain.AssetService // 制品批量删除
 	Migrations              *domain.MigrationService
 	Settings                *domain.SettingService
-	AuditLogs               *repository.AuditLogRepo                // FR-38：审计日志
-	AuditObservability      *repository.AuditObservabilityRepo      // FR-118：统一审计读模型
-	OperationsObservability *repository.OperationsObservabilityRepo // FR-53/120：当前节点业务与主机读模型
+	AuditLogs               *repository.AuditLogRepo                // 审计日志
+	AuditObservability      *repository.AuditObservabilityRepo      // 统一审计读模型
+	OperationsObservability *repository.OperationsObservabilityRepo // 当前节点业务与主机读模型
 	OperationsAlerts        *repository.OperationsAlertRepo         // v0.8.0：运维告警去重持久化
-	AssetDownloads          *repository.AssetDownloadRepo           // FR-142：制品下载计量明细（tree 计数列）
+	AssetDownloads          *repository.AssetDownloadRepo           // 制品下载计量明细（tree 计数列）
 	Pinned                  *repository.PinnedRepoRepo              // 置顶仓库（用户级 + 全局兜底，迁移 0043）
-	AuditAttentionKey       []byte                                  // FR-118：关注标识签名密钥（由启动密钥派生）
-	AuditSourceNode         string                                  // FR-109：本节点审计标识
-	ClusterTokenSet         bool                                    // FR-86：同步令牌是否已配置（不暴露明文）
-	PublicURL               string                                  // FR-87：对外基础 URL（CDN 域名，隐藏源站 IP）
-	EnabledFormats          []string                                // FR-32：启动时启用的格式清单
-	PublishPolicies         *domain.PublishPolicyService            // FR-109：发布账号策略管理
-	UserGroups              *domain.UserGroupService                // FR-36：用户组管理的授权载体
-	OnUpstreamTimeoutChange func(time.Duration)                     // FR-89：回源超时设置变更回调（wiring 注入 upstream.Client.SetTimeout；nil 不触发）
-	Backups                 *domain.BackupService                   // FR-132：节点备份包生成与登记
-	BackupLinkKey           []byte                                  // FR-132：备份下载令牌签名密钥（由启动密钥派生）
-	BackupDrill             *domain.BackupDrillService              // FR-40：恢复演练与可查报告
-	Freeze                  *domain.FreezeController                // FR-135：运行时写入冻结窗口
-	BackupImports           *domain.BackupImportService             // FR-137：导入记录与 URL 拉取
-	BackupUploads           *domain.BackupUploadService             // FR-137：分片上传（Web 第三通道）
-	BackupAdopt             *domain.BackupAdoptService              // FR-40 追加八：未管理备份包的扫描与导入
-	Metrics                 *metrics.Exposition                     // FR-39：Prometheus 指标导出（/metrics；nil 时该端点返回 503）
-	OIDC                    *OIDCDeps                               // FR-34：OIDC 登录端点依赖（nil = 未启用，端点返回 404）
-	LDAPAuth                LDAPAuthenticator                       // FR-35：LDAP 目录侧校验（nil = 未启用，登录不回退目录）
-	MaintenanceJobs         MaintenanceJobController                // FR-41：维护作业清单与手动触发（nil 时端点返回 503）
-	Restart                 RestartController                       // FR-40 追加七：一键重启（nil 时端点返回 503）
+	AuditAttentionKey       []byte                                  // 关注标识签名密钥（由启动密钥派生）
+	AuditSourceNode         string                                  // 本节点审计标识
+	ClusterTokenSet         bool                                    // 同步令牌是否已配置（不暴露明文）
+	PublicURL               string                                  // 对外基础 URL（CDN 域名，隐藏源站 IP）
+	EnabledFormats          []string                                // 启动时启用的格式清单
+	PublishPolicies         *domain.PublishPolicyService            // 发布账号策略管理
+	UserGroups              *domain.UserGroupService                // 用户组管理的授权载体
+	OnUpstreamTimeoutChange func(time.Duration)                     // 回源超时设置变更回调（wiring 注入 upstream.Client.SetTimeout；nil 不触发）
+	Backups                 *domain.BackupService                   // 节点备份包生成与登记
+	BackupLinkKey           []byte                                  // 备份下载令牌签名密钥（由启动密钥派生）
+	BackupDrill             *domain.BackupDrillService              // 恢复演练与可查报告
+	Freeze                  *domain.FreezeController                // 运行时写入冻结窗口
+	BackupImports           *domain.BackupImportService             // 导入记录与 URL 拉取
+	BackupUploads           *domain.BackupUploadService             // 分片上传（Web 第三通道）
+	BackupAdopt             *domain.BackupAdoptService              // 未管理备份包的扫描与导入
+	Metrics                 *metrics.Exposition                     // Prometheus 指标导出（/metrics；nil 时该端点返回 503）
+	OIDC                    *OIDCDeps                               // OIDC 登录端点依赖（nil = 未启用，端点返回 404）
+	LDAPAuth                LDAPAuthenticator                       // LDAP 目录侧校验（nil = 未启用，登录不回退目录）
+	MaintenanceJobs         MaintenanceJobController                // 维护作业清单与手动触发（nil 时端点返回 503）
+	Restart                 RestartController                       // 一键重启（nil 时端点返回 503）
+	SearchIndex             SearchIndexController                   // 搜索索引回填状态与全量重建（nil 时端点返回 503）
 }
 
 // RestartController 是接口层对一键重启能力的最小依赖：同步预检、延迟触发重启动作。
@@ -89,6 +91,16 @@ type MaintenanceJobController interface {
 	Run(name string) error
 }
 
+// SearchIndexController 是接口层对索引回填服务的最小依赖：只读状态快照 + 受理一次重建。
+// 与 MaintenanceJobController 同一抽象风格：测试可注入桩，从而确定性地覆盖
+// 「运行中重复触发 409」这类并发语义，不必依赖真实回填的时序。
+type SearchIndexController interface {
+	// Status 返回回填状态快照（只读、可并发调用）。
+	Status() (domain.SearchIndexStatus, error)
+	// Rebuild 受理一次全量重建并立即返回；已有任务在跑时返回 domain.ErrSearchIndexRunning。
+	Rebuild() error
+}
+
 // LDAPAuthenticator 是 LDAP 目录侧校验能力（由 auth.LDAPVerifier 适配；测试可替换）。
 type LDAPAuthenticator func(ctx context.Context, username, password string) (auth.ExternalUser, error)
 
@@ -104,32 +116,33 @@ type Handlers struct {
 	assets                  *domain.AssetService
 	migrations              *domain.MigrationService
 	settings                *domain.SettingService
-	auditLogs               *repository.AuditLogRepo // FR-38：审计日志
+	auditLogs               *repository.AuditLogRepo // 审计日志
 	auditObservability      *repository.AuditObservabilityRepo
 	operationsObservability *repository.OperationsObservabilityRepo
 	operationsAlertStore    *repository.OperationsAlertRepo
-	assetDownloads          *repository.AssetDownloadRepo // FR-142：制品下载计量明细（tree 计数列）
+	assetDownloads          *repository.AssetDownloadRepo // 制品下载计量明细（tree 计数列）
 	pinned                  *repository.PinnedRepoRepo    // 置顶仓库（用户级 + 全局兜底）
 	auditAttentionKey       []byte
-	auditSourceNode         string // FR-109：本节点审计标识
+	auditSourceNode         string // 本节点审计标识
 	clusterTokenSet         bool
-	publicURL               string                       // FR-87：对外基础 URL（CDN 域名）
-	enabledFormats          []string                     // FR-32：启动时启用的格式清单
-	publishPolicies         *domain.PublishPolicyService // FR-109：发布账号策略管理
-	userGroups              *domain.UserGroupService     // FR-36：用户组（授权主体之一）的 CRUD 与成员维护
-	onUpstreamTimeoutChange func(time.Duration)          // FR-89：回源超时设置变更回调
-	backups                 *domain.BackupService        // FR-132：节点备份包
-	backupLinks             *domain.BackupLinkSigner     // FR-132：下载令牌签名
-	backupDrill             *domain.BackupDrillService   // FR-40：恢复演练与校验报告
-	freeze                  *domain.FreezeController     // FR-135：运行时写入冻结
-	backupImports           *domain.BackupImportService  // FR-137：导入记录与 URL 拉取
-	backupUploads           *domain.BackupUploadService  // FR-137：分片上传（Web 第三通道）
-	backupAdopt             *domain.BackupAdoptService   // FR-40 追加八：未管理备份包的扫描与导入
-	metrics                 *metrics.Exposition          // FR-39：Prometheus 指标导出
-	oidc                    *OIDCDeps                    // FR-34：OIDC 登录端点依赖（nil = 未启用）
-	ldapAuth                LDAPAuthenticator            // FR-35：LDAP 目录侧校验（nil = 未启用）
-	maintenanceJobs         MaintenanceJobController     // FR-41：维护作业清单与手动触发
-	restart                 RestartController            // FR-40 追加七：一键重启（nil = 未装配）
+	publicURL               string                       // 对外基础 URL（CDN 域名）
+	enabledFormats          []string                     // 启动时启用的格式清单
+	publishPolicies         *domain.PublishPolicyService // 发布账号策略管理
+	userGroups              *domain.UserGroupService     // 用户组（授权主体之一）的 CRUD 与成员维护
+	onUpstreamTimeoutChange func(time.Duration)          // 回源超时设置变更回调
+	backups                 *domain.BackupService        // 节点备份包
+	backupLinks             *domain.BackupLinkSigner     // 下载令牌签名
+	backupDrill             *domain.BackupDrillService   // 恢复演练与校验报告
+	freeze                  *domain.FreezeController     // 运行时写入冻结
+	backupImports           *domain.BackupImportService  // 导入记录与 URL 拉取
+	backupUploads           *domain.BackupUploadService  // 分片上传（Web 第三通道）
+	backupAdopt             *domain.BackupAdoptService   // 未管理备份包的扫描与导入
+	metrics                 *metrics.Exposition          // Prometheus 指标导出
+	oidc                    *OIDCDeps                    // OIDC 登录端点依赖（nil = 未启用）
+	ldapAuth                LDAPAuthenticator            // LDAP 目录侧校验（nil = 未启用）
+	maintenanceJobs         MaintenanceJobController     // 维护作业清单与手动触发
+	restart                 RestartController            // 一键重启（nil = 未装配）
+	searchIndex             SearchIndexController        // 搜索索引回填状态与全量重建
 }
 
 // NewHandlers 构造 Handlers。
@@ -161,7 +174,7 @@ func NewHandlers(d Deps) *Handlers {
 		onUpstreamTimeoutChange: d.OnUpstreamTimeoutChange,
 		backups:                 d.Backups,
 		backupLinks:             domain.NewBackupLinkSigner(d.BackupLinkKey),
-		backupDrill:             d.BackupDrill, // FR-40：恢复演练
+		backupDrill:             d.BackupDrill, // 恢复演练
 		freeze:                  d.Freeze,
 		backupImports:           d.BackupImports,
 		backupUploads:           d.BackupUploads,
@@ -171,6 +184,7 @@ func NewHandlers(d Deps) *Handlers {
 		ldapAuth:                d.LDAPAuth,
 		maintenanceJobs:         d.MaintenanceJobs,
 		restart:                 d.Restart,
+		searchIndex:             d.SearchIndex,
 	}
 }
 
@@ -195,7 +209,7 @@ func (h *Handlers) versionFor(c *gin.Context) string {
 	return ""
 }
 
-// GetMetrics 指标导出（FR-39）：Prometheus 文本暴露格式；匿名可见且不输出
+// GetMetrics 指标导出：Prometheus 文本暴露格式；匿名可见且不输出
 // 版本等指纹信息（与 /healthz、/readyz、/api/v1/status 的脱敏口径一致）。
 func (h *Handlers) GetMetrics(c *gin.Context) {
 	if h.metrics == nil {
@@ -237,7 +251,7 @@ func (h *Handlers) GetStatus(c *gin.Context) {
 		UserCount:   count,
 		// 复制退役：不再有 standby，自举只取决于是否已有用户。
 		BootstrapAllowed: count == 0,
-		// FR-34：前端据 oidcEnabled 决定是否展示 OIDC 登录入口。
+		// 前端据 oidcEnabled 决定是否展示 OIDC 登录入口。
 		OidcEnabled: h.oidc != nil,
 	}
 	if _, ok := auth.PrincipalFrom(c); ok {
@@ -310,7 +324,7 @@ func requireAdmin(c *gin.Context) (*auth.Principal, bool) {
 // 不必各自拼一段同样的错误。
 var errInternalSubject = errors.New("无法组装鉴权主体")
 
-// subjectOf 把请求中的 principal 转成鉴权主体（含其所属用户组，FR-36）。
+// subjectOf 把请求中的 principal 转成鉴权主体（含其所属用户组）。
 //
 // 单独抽出来是为了让「按组织造鉴权主体」这一件事只有一个写法：api 层的每个仓库
 // 守卫都要这么做，而漏做一处的后果是——该端点静默退化成不含组授权的老行为，
@@ -380,17 +394,53 @@ func writeDomainErrWithOperationID(c *gin.Context, err error, operationID string
 		write(http.StatusConflict, "base_missing", err.Error())
 	case errors.Is(err, domain.ErrRestorePackageNotDone):
 		write(http.StatusConflict, "package_not_ready", err.Error())
+	case errors.Is(err, context.Canceled):
+		// 客户端已断开（浏览器关页、curl Ctrl-C、反向代理掐断）：请求上下文被取消，
+		// 下游查询随之失败。这**不是服务端故障**，但也不属于任何一种可回给调用方的结果。
+		//
+		// 因此这里什么都不写：既不落响应体，也不进下面的兜底分支记「内部错误」日志。
+		//   - 写响应体没意义——连接已断，写进去的内容没有任何人会读到；
+		//   - 记「内部错误」更糟——客户端的每一次断开都会留下一条假警报，比超时噪音更难
+		//     从日志里捞真正的故障。取消是**正常**的请求生命周期终点。
+		//
+		// 必须排在 ErrSearchTimeout 之前：deadline 耗尽才该是 504 search_timeout，
+		// 而客户端主动取消（context.Canceled）与预算超时（context.DeadlineExceeded）
+		// 是两件事，领域层只把后者归一为 ErrSearchTimeout，前者原样返回。
+		//
+		// Abort 只是阻止后续 handler/中间件继续写，真正生效的是「不调用任何写响应的
+		// 方法」：gin 不会自动补写状态码，net/http 在连接已断时丢弃这次响应。
+		c.Abort()
+		return
+	case errors.Is(err, domain.ErrSearchTimeout):
+		// 本地查询超出预算：不复用 upstream_timeout——那个表示「上游不畅」，
+		// 复用会让用户与运维分不清该查上游还是该缩小检索范围 / 查索引。
+		write(http.StatusGatewayTimeout, "search_timeout", "搜索超时，请缩小检索范围后重试")
 	default:
-		// 兜底：**带上原始错误文本**。
+		// 兜底：**只有管理员**能看到原始错误文本。
 		//
-		// 早先这里只返回「内部错误」，把真实原因（归档损坏、manifest 非法、
-		// 磁盘权限、暂存目录写失败…）全部吞掉，用户看到的就是一句套话，
-		// 日志里也可能没有对应记录——"查不出原因"正是这么来的。
+		// 早先这里对所有调用方都只返回「内部错误」，把真实原因（归档损坏、manifest 非法、
+		// 磁盘权限、暂存目录写失败…）全部吞掉，用户看到的就是一句套话，日志里也可能没有
+		// 对应记录——"查不出原因"正是这么来的。故管理面保留原始文本，便于自助排查。
 		//
-		// 对外的文本仍以"内部错误"开头（不承诺细节稳定），但把 err 附在后面，
-		// 让用户与运维至少能看见发生了什么。本接口只对管理员开放，
-		// 且错误文本来自我们自己的领域逻辑，不含凭据。
-		write(http.StatusInternalServerError, "internal_error", "内部错误："+err.Error())
+		// 但本函数并非只服务于管理端点：/api/v1/search、/api/v1/search/suggest、
+		// /api/v1/public/repositories、/api/v1/repositories 都是可选鉴权、**匿名可达**的，
+		// 它们的失败路径同样落在这个兜底分支（例如仓库列表的批量 ACL 查询失败）。
+		// 若不加区分地回显，驱动原文（库名、表名、SQL 片段）就泄漏给了匿名用户——
+		// 这是可达的对外信息泄漏路径，不是理论风险。
+		//
+		// 因此：原始错误一律先写服务端日志（中文前缀，错误来自本系统的领域逻辑与驱动，
+		// 不含凭据）；响应体只对管理员附带细节，其余主体（含匿名）得到固定文案。
+		// 日志带上请求方法与路径，否则一句「内部错误：…」在日志里无法定位到端点。
+		var method, path string
+		if c.Request != nil {
+			method, path = c.Request.Method, c.Request.URL.Path
+		}
+		log.Printf("内部错误：%v（%s %s）", err, method, path)
+		if p, ok := auth.PrincipalFrom(c); ok && p != nil && p.IsAdmin() {
+			write(http.StatusInternalServerError, "internal_error", "内部错误："+err.Error())
+			return
+		}
+		write(http.StatusInternalServerError, "internal_error", "内部错误")
 	}
 }
 
@@ -404,6 +454,9 @@ func bindJSON(c *gin.Context, dst any) bool {
 }
 
 // pageOffset 解析分页参数，返回 (limit, offset)。默认第 1 页、每页 20，上限 100。
+// 页码与每页条数都走「夹取而非报错」的口径（见 parseSearchPage / parseSearchPageSize）：
+// 页码必须有上界，否则 (page-1)*pageSize 会整数溢出成负数，而 SQLite 把负 OFFSET 当 0，
+// 表现为「静默返回第一页」——既不报错也不返回空页，最容易被误判成数据错乱。
 func pageOffset(page, pageSize *int) (int, int) {
 	p, ps := 1, 20
 	if page != nil && *page > 0 {
@@ -412,8 +465,11 @@ func pageOffset(page, pageSize *int) (int, int) {
 	if pageSize != nil && *pageSize > 0 {
 		ps = *pageSize
 	}
-	if ps > 100 {
-		ps = 100
+	if ps > searchPageSizeMax {
+		ps = searchPageSizeMax
+	}
+	if p > searchPageMax {
+		p = searchPageMax
 	}
 	return ps, (p - 1) * ps
 }
@@ -462,7 +518,7 @@ func toAPIRepository(r *repository.Repository, stats *domain.RepoStats) Reposito
 			members := cfg.Members
 			out.Members = &members
 		}
-		// FR-41：治理字段（0 / 缺省 = 不限 / 关闭代理缓存保留）只在设了非 0 值时回显，
+		// 治理字段（0 / 缺省 = 不限 / 关闭代理缓存保留）只在设了非 0 值时回显，
 		// 与前端 hasQuotaLimit 的「缺省即不限」判定以及 devmock 样例的省略写法保持一致。
 		if cfg.QuotaBytes > 0 {
 			quotaBytes := cfg.QuotaBytes
@@ -493,14 +549,14 @@ func safeRemoteURLForResponse(raw string) bool {
 	return err == nil && u.IsAbs() && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" && u.User == nil && u.RawQuery == "" && u.Fragment == ""
 }
 
-// toRepo 把行模型转为契约 Repository，并按 MD-2 规则填充连接状态（FR-114）。
+// toRepo 把行模型转为契约 Repository，并按 MD-2 规则填充连接状态。
 func (h *Handlers) toRepo(r *repository.Repository, stats *domain.RepoStats) Repository {
 	out := toAPIRepository(r, stats)
 	out.ConnectionStatus = h.connectionStatus(r)
 	return out
 }
 
-// connectionStatus 返回仓库连接状态（FR-114）：assets 未注入或 hosted 仓库返回 nil。
+// connectionStatus 返回仓库连接状态：assets 未注入或 hosted 仓库返回 nil。
 func (h *Handlers) connectionStatus(r *repository.Repository) *ConnectionStatus {
 	if h.assets == nil {
 		return nil
@@ -529,7 +585,7 @@ func toAPIConnectionStatus(r *repository.Repository, h domain.RemoteHealth) *Con
 		}
 		return out
 	case domain.StatusHalfOpen:
-		// FR-43：半开期（阻止窗口已到、正在试探上游）对业务流量同样等效封锁——
+		// 半开期（阻止窗口已到、正在试探上游）对业务流量同样等效封锁——
 		// 每轮半开只放行一个探测请求，其余快速失败——因此对外必须呈现为阻止态。
 		// 契约已新增 HALF_OPEN 枚举，故与 AUTO_BLOCKED 分开映射：展示侧据此
 		// 区分「窗口内封锁」与「正在试探」，而不再把半开期误报成自动阻止。

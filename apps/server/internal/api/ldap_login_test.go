@@ -17,7 +17,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// TestLoginWithLDAPFallback 登录的目录回退语义（FR-35）：
+// TestLoginWithLDAPFallback 登录的目录回退语义：
 // 本地优先；本地未通过且启用目录时再试目录；目录身份同样经绑定/建号与状态校验。
 func TestLoginWithLDAPFallback(t *testing.T) {
 	gin.SetMode(gin.TestMode)

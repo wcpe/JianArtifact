@@ -9,7 +9,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
 )
 
-// 覆盖 FR-142 持久层口径：分钟桶内同组合累加合并、维度分行、per-制品聚合不串仓库、
+// 覆盖持久层口径：分钟桶内同组合累加合并、维度分行、per-制品聚合不串仓库、
 // 以及 30 天保留清理（PurgeBefore）。
 func TestAssetDownloadRepoAccumulatesSumsAndPurges(t *testing.T) {
 	db, err := persistence.Open(filepath.Join(t.TempDir(), "asset-download.db"))

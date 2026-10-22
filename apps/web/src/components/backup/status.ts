@@ -23,7 +23,7 @@ export function backupModeTone(mode: string): OpsTone {
 }
 
 /**
- * 备份包来源色调（FR-40）：自动备份用青色与手动区分。
+ * 备份包来源色调：自动备份用青色与手动区分。
  *
  * 刻意不用绿 / 红：那两色在本页已被"已完成 / 失败"状态占用，
  * 来源与状态是两个正交维度，共色会让人误读成状态。
@@ -47,7 +47,7 @@ export function drillVerdictTone(ok: boolean): OpsTone {
   return ok ? "green" : "red";
 }
 
-// 从 URL 导入备份包状态映射（FR-137）：queued 灰、fetching/staging 蓝、
+// 从 URL 导入备份包状态映射：queued 灰、fetching/staging 蓝、
 // pending_restart 橙（需重启服务）、done 绿、failed 红。
 const IMPORT_STATUS_TONE: Record<string, OpsTone> = {
   queued: "gray",

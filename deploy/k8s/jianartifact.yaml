@@ -78,6 +78,15 @@ spec:
                 name: jianartifact-config
             - secretRef:
                 name: jianartifact-secret
+          # 迁移在监听器起来之前执行；大库建索引可能远超 liveness 的容忍窗口。
+          # 没有 startupProbe 时，迁移期间探针失败会导致 SIGKILL → 回滚 → 重来，
+          # 形成崩溃循环、升级永远完不成。
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 30
+            failureThreshold: 20
           livenessProbe:
             httpGet:
               path: /healthz

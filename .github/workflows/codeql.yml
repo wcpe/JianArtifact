@@ -57,6 +57,8 @@ jobs:
         uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
+          # 扫描范围见该文件：排除 devmock（test mock 层），生产路径保持完整规则集。
+          config-file: ./.github/codeql/codeql-config.yml
 
       # Go 侧用 modernc.org/sqlite（纯 Go，无 CGO），autobuild 可正常编译；
       # 前端为 Vite 应用，CodeQL 对 JS/TS 不需要构建即可分析。

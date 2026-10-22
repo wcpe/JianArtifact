@@ -159,7 +159,7 @@ export function ActionBar({
       >
         {t("backups.uploadButton")}
       </Button>
-      {/* 导入未管理的包（FR-40 追加八）：与上面两个通道一样不写 restore.pending，
+      {/* 导入未管理的包：与上面两个通道一样不写 restore.pending，
           因此待重启生效时也允许打开——它只是把包纳入管理，不触碰本机数据。 */}
       <Button
         size="xs"

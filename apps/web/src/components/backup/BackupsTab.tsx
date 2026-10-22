@@ -1,4 +1,4 @@
-// 备份与搬迁 Tab —— 任务台信息架构（FR-40 追加四聚合 + 追加五动作收编）。
+// 备份与搬迁 Tab —— 任务台信息架构（聚合 + 追加五动作收编）。
 //
 // 页面已收敛为**两段**，操作入口不再占据页面顶部，而是挂在事件表区块的标题行上：
 //   ① 内联导入区  —— 两条导入通道就地展开（收起时 display:none，仍常驻挂载）
@@ -99,7 +99,7 @@ export function BackupsTab() {
   const [drillPackageId, setDrillPackageId] = useState<string | null>(null);
   /** 待恢复的包（「用这个包恢复」的确认弹窗）；null 表示关闭。 */
   const [restorePkg, setRestorePkg] = useState<BackupPackage | null>(null);
-  // 预览的包标识（FR-40 追加十一）：null = 弹窗关闭。
+  // 预览的包标识：null = 弹窗关闭。
   const [previewPkg, setPreviewPkg] = useState<string | null>(null);
   /** 内联导入区当前展开的通道；null 表示收起。 */
   const [channel, setChannel] = useState<ImportChannel | null>(null);
@@ -486,7 +486,7 @@ export function BackupsTab() {
         state={freezeState}
       />
 
-      {/* 包内容预览（FR-40 追加十一）：恢复前先看清包里有什么。
+      {/* 包内容预览：恢复前先看清包里有什么。
           放在恢复弹窗之前，与菜单里的顺序一致（先看内容，再决定是否恢复）。 */}
       <BackupPreviewModal packageId={previewPkg} onClose={() => setPreviewPkg(null)} />
 

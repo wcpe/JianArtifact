@@ -9,6 +9,7 @@
 //	repo:名称      —— 限定仓库（多个为 OR）；-repo:名称 排除仓库
 //	format:格式    —— 限定仓库格式 raw/maven/npm（多个为 OR）；-format: 排除
 //	ext:扩展名     —— 路径以 .扩展名 结尾（多个为 OR）；-ext: 排除
+//	version:版本   —— 版本段严格相等（多个为 OR）；-version: 排除（多个为 AND，皆不等）
 package domain
 
 import (
@@ -19,11 +20,13 @@ import (
 
 // parsedSearch 高级搜索表达式解析结果。
 type parsedSearch struct {
-	filter     repository.SearchFilter // 路径子串 / 扩展名条件（下推存储层）
-	repos      []string                // repo: 限定（OR）
-	notRepos   []string                // -repo: 排除
-	formats    []string                // format: 限定（OR，已归一化小写）
-	notFormats []string                // -format: 排除
+	filter      repository.SearchFilter // 路径子串 / 扩展名 / 版本条件（下推存储层）
+	repos       []string                // repo: 限定（OR）
+	notRepos    []string                // -repo: 排除
+	formats     []string                // format: 限定（OR，已归一化小写）
+	notFormats  []string                // -format: 排除
+	versions    []string                // version: 限定（OR，版本段严格相等）
+	notVersions []string                // -version: 排除（AND，皆不相等）
 }
 
 // hasRepoMeta 返回表达式是否包含需要仓库元数据参与的条件。
@@ -96,6 +99,18 @@ func parseSearchQuery(q string) parsedSearch {
 			} else {
 				p.filter.IncludeExts = append(p.filter.IncludeExts, e)
 			}
+		case strings.HasPrefix(lower, "version:"):
+			// 版本限定与 ext: 同级：值**只进版本条件，绝不进 IncludeTerms**——否则
+			// `version:1.17.12` 会被当成子串去匹配包名与文件名，失去"严格相等"语义（§3.6）。
+			v := strings.TrimSpace(tok[len("version:"):])
+			if v == "" {
+				continue
+			}
+			if neg {
+				p.notVersions = append(p.notVersions, v)
+			} else {
+				p.versions = append(p.versions, v)
+			}
 		default:
 			if neg {
 				p.filter.ExcludeTerms = append(p.filter.ExcludeTerms, tok)
@@ -104,5 +119,9 @@ func parseSearchQuery(q string) parsedSearch {
 			}
 		}
 	}
+	// 版本条件在这里一次性落到 SearchFilter 上（出口是唯一落点）：解析结果与下推条件是
+	// 同一份数据的两个视图，逐分支写两处迟早漂移。
+	p.filter.IncludeVersions = p.versions
+	p.filter.ExcludeVersions = p.notVersions
 	return p
 }

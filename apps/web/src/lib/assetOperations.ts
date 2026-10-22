@@ -1,4 +1,4 @@
-// FR-105：将文件树节点转换为后端统一资产操作目标。
+// 将文件树节点转换为后端统一资产操作目标。
 import type { AssetOperationTarget, AssetOperationTargetType } from "../api/types";
 
 export function assetOperationTarget(

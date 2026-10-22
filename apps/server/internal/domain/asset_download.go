@@ -27,7 +27,7 @@ type assetDownloadKey struct {
 
 // AssetDownloadService 累积「完整传输」的制品下载（GET + 200），按分钟桶在内存合并、
 // 周期批量落库——下载路径不逐请求写 SQLite（与观测域同一设计原则）；Range 分段（206）
-// 不计，避免断点续传与重试虚高。设计见 docs/specs/download-metrics.md（FR-142）。
+// 不计，避免断点续传与重试虚高。设计见 docs/specs/download-metrics.md。
 type AssetDownloadService struct {
 	repo    *repository.AssetDownloadRepo
 	mu      sync.Mutex

@@ -1,6 +1,6 @@
 // 仓库浏览器：左树右详情两栏固定布局；可选 Raw 上传；管理端与公开页共用。
-// FR-54: 文件树懒加载（基于 tree API 按目录按需加载）。
-// FR-57: 浏览页内搜索（调用 searchAssets 带 repository 过滤）。
+// 文件树懒加载（基于 tree API 按目录按需加载）。
+// 浏览页内搜索（调用 searchAssets 带 repository 过滤）。
 import {
   Alert,
   Anchor,
@@ -88,7 +88,7 @@ interface Props {
   /** 公开页已知的 format（来自 usage） */
   forcedFormat?: string;
   forcedType?: string;
-  /** FR-145：搜索结果直达的命中路径（进入时逐级展开并选中；失效静默降级）。 */
+  /** 搜索结果直达的命中路径（进入时逐级展开并选中；失效静默降级）。 */
   highlightPath?: string;
   /**
    * 仓库级下载趋势：常驻渲染在右侧详情卡片顶部，与「当前选中文件」无关。
@@ -187,10 +187,10 @@ export function RepoBrowser({
 }: Props) {
   const { t } = useTranslation();
   const { user } = useAuth();
-  // FR-105：资产操作仅全局管理员可见可用。
+  // 资产操作仅全局管理员可见可用。
   const isAdmin = user?.role === "admin";
   const [selected, setSelected] = useState<AssetSummary | null>(null);
-  // FR-105：文件和目录的选择路径集合。
+  // 文件和目录的选择路径集合。
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   const [selectionAnchor, setSelectionAnchor] = useState<string | null>(null);
   const [operationBusy, setOperationBusy] = useState(false);
@@ -205,7 +205,7 @@ export function RepoBrowser({
   // 窄屏底部抽屉：选中文件时自动打开；未选中文件时由树卡下方的「使用说明」入口打开。
   const [usageDrawerOpen, setUsageDrawerOpen] = useState(false);
 
-  // FR-99: 左树宽度可拖拽调整（分割条），偏好本地持久化；min 280 / max 720。
+  // 左树宽度可拖拽调整（分割条），偏好本地持久化；min 280 / max 720。
   const [treeWidth, setTreeWidth] = useLocalStorage<number>({
     key: "jianartifact.treeWidth",
     defaultValue: 360,
@@ -236,13 +236,13 @@ export function RepoBrowser({
     window.addEventListener("mouseup", onUp);
   };
 
-  // FR-54: 懒加载树状态
+  // 懒加载树状态
   const [treeNodes, setTreeNodes] = useState<AssetTreeNode[]>([]);
   const [treeLoading, setTreeLoading] = useState(true);
   const [treeError, setTreeError] = useState<string | null>(null);
   const [treeActionError, setTreeActionError] = useState<string | null>(null);
 
-  // FR-57: 仓库内搜索
+  // 仓库内搜索
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<AssetTreeNode[] | null>(null);
   // 分页累积的原始结果（供「加载更多」追加后重建树）与后端命中的总数
@@ -272,10 +272,10 @@ export function RepoBrowser({
   const format = forcedFormat || repoState.data?.format || usageState.data?.format || "raw";
   const repoType = forcedType || repoState.data?.type || usageState.data?.type || "hosted";
   const canUpload = allowUpload && format === "raw" && repoType === "hosted" && !publicMode;
-  // FR-73: Maven hosted 走 GAV 表单网页上传
+  // Maven hosted 走 GAV 表单网页上传
   const canMavenUpload = allowUpload && format === "maven" && repoType === "hosted" && !publicMode;
 
-  // FR-54: 加载根目录；FR-69: 仅仓库切换时清空重置，刷新（上传/全局刷新）保留旧树避免整页重刷
+  // 加载根目录；: 仅仓库切换时清空重置，刷新（上传/全局刷新）保留旧树避免整页重刷
   const prevRepoRef = useRef<string | null>(null);
   useEffect(() => {
     const repoChanged = prevRepoRef.current !== repoName;
@@ -299,7 +299,7 @@ export function RepoBrowser({
       .finally(() => setTreeLoading(false));
   }, [repoName, reloadNonce]);
 
-  // FR-54: 目录懒加载回调——递归更新树状态
+  // 目录懒加载回调——递归更新树状态
   const updateNodeChildren = useCallback(
     (nodes: AssetTreeNode[], targetPath: string, children: AssetTreeNode[]): AssetTreeNode[] =>
       nodes.map((n) => {
@@ -318,7 +318,7 @@ export function RepoBrowser({
     (node: AssetTreeNode) => {
       const prefix = node.path.endsWith("/") ? node.path : node.path + "/";
       setTreeActionError(null);
-      // 返回本次加载出的子节点（FR-145 的逐级定位需要按序等待；既有调用忽略返回值，兼容）。
+      // 返回本次加载出的子节点（的逐级定位需要按序等待；既有调用忽略返回值，兼容）。
       return getRepositoryTree(repoName, prefix)
         .then((entry) => {
           const children = treeEntryToNodes(entry.directories, entry.files);
@@ -333,7 +333,7 @@ export function RepoBrowser({
     [repoName, t, updateNodeChildren],
   );
 
-  // FR-57: 仓库内搜索（结果拼成目录树展示，而非拍平列表）
+  // 仓库内搜索（结果拼成目录树展示，而非拍平列表）
   const handleInRepoSearch = () => {
     const q = searchQuery.trim();
     setSelectedPaths(new Set());
@@ -434,7 +434,7 @@ export function RepoBrowser({
       return assetOperationTarget(format, node.path, node.kind);
     });
 
-  // FR-105：在当前可见树顺序中处理普通、Ctrl/Meta、Shift 选择。
+  // 在当前可见树顺序中处理普通、Ctrl/Meta、Shift 选择。
   const onNodeInteraction = (node: AssetTreeNode, event: React.MouseEvent<HTMLButtonElement>) => {
     if (!isAdmin) {
       if (node.kind === "dir") onSelectDir();
@@ -478,7 +478,7 @@ export function RepoBrowser({
       .finally(() => setOperationBusy(false));
   };
 
-  // FR-105：统一删除事务成功后才清空选择；失败时保留选择以便重试。
+  // 统一删除事务成功后才清空选择；失败时保留选择以便重试。
   const handleBatchDelete = () => {
     const paths = [...selectedPaths];
     if (paths.length === 0) {
@@ -557,7 +557,7 @@ export function RepoBrowser({
     return () => window.removeEventListener(REFRESH_EVENT, handler);
   }, []);
 
-  // FR-145：搜索结果直达——启动一次定位，内部等待根层就绪后逐级懒加载展开并选中命中文件；
+  // 搜索结果直达——启动一次定位，内部等待根层就绪后逐级懒加载展开并选中命中文件；
   // 路径失效静默降级。注意两点：
   // 1) 定位链**不能**随 effect 依赖变化被取消——每次展开都会 setTreeNodes，若依赖它做 cleanup，
   //    链会在第一步展开后被打断且 consumed 标记已写、不再重启（线上真实网络延迟下必现）；
@@ -652,7 +652,7 @@ export function RepoBrowser({
 
   return (
     <Stack gap={isNarrow ? "sm" : "md"} style={{ height: "100%", overflow: "hidden" }}>
-      {/* FR-81：format/type/visibility 徽章由详情页页头统一渲染，此处不再重复一层。 */}
+      {/* format/type/visibility 徽章由详情页页头统一渲染，此处不再重复一层。 */}
 
       {/* 上传区默认收起：点击按钮展开（Raw / Maven hosted），不挤占文件树空间 */}
       {(canUpload || canMavenUpload) && (
@@ -699,7 +699,7 @@ export function RepoBrowser({
                   </Stack>
                 </Card>
               )}
-              {/* FR-73: Maven hosted 网页上传（GAV 表单，服务端生成 pom/校验和/metadata） */}
+              {/* Maven hosted 网页上传（GAV 表单，服务端生成 pom/校验和/metadata） */}
               {canMavenUpload && (
                 <MavenUploadCard
                   repoName={repoName}
@@ -711,7 +711,7 @@ export function RepoBrowser({
         </Box>
       )}
 
-      {/* FR-74：客户端发布提示收纳为紧凑小字 + 跳使用说明链接，不占大块。
+      {/* 客户端发布提示收纳为紧凑小字 + 跳使用说明链接，不占大块。
           窄屏用短文案（完整版要折两行、约 48px；短版本一行约 22px），链接照旧可点。 */}
       {allowUpload && !canUpload && !canMavenUpload && (
         <Text size="xs" c="dimmed">
@@ -758,7 +758,7 @@ export function RepoBrowser({
             // 窄屏改为上下堆叠（见 isNarrow 说明），宽屏保持左右并排。
             flexDirection: isNarrow ? "column" : "row",
             gap: "var(--mantine-spacing-md)",
-            // FR-74：填满页面固定高外壳的剩余空间，树/详情各自内滚。
+            // 填满页面固定高外壳的剩余空间，树/详情各自内滚。
             flex: 1,
             minHeight: 240,
           }}
@@ -792,7 +792,7 @@ export function RepoBrowser({
                 minHeight: 0,
               }}
             >
-              {/* FR-69: 刷新期间保留旧树，仅叠加覆盖层 */}
+              {/* 刷新期间保留旧树，仅叠加覆盖层 */}
               <LoadingOverlay
                 visible={treeLoading}
                 zIndex={10}
@@ -800,7 +800,7 @@ export function RepoBrowser({
                 loaderProps={{ size: "sm" }}
                 transitionProps={{ duration: 150 }}
               />
-              {/* FR-57: 仓库内搜索栏 */}
+              {/* 仓库内搜索栏 */}
               <TextInput
                 size="xs"
                 placeholder={t("repoDetail.searchPlaceholder", {
@@ -876,7 +876,7 @@ export function RepoBrowser({
             </Box>
           </Card>
 
-          {/* FR-99: 拖拽分割条——左右面板宽度自由调整（窄屏上下堆叠时无意义，不渲染） */}
+          {/* 拖拽分割条——左右面板宽度自由调整（窄屏上下堆叠时无意义，不渲染） */}
           {isNarrow ? null : (
             <Box
               onMouseDown={onSplitterMouseDown}

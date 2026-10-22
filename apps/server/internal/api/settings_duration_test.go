@@ -6,7 +6,7 @@ import (
 
 // TestResolveBackupAutoInterval 覆盖"表达式优先于秒字段"的取值规则。
 //
-// 这是 FR-40 追加九的接口语义：前端提交的是 "1d" 这样的表达式，
+// 这是 的接口语义：前端提交的是 "1d" 这样的表达式，
 // 而秒字段只为兼容既有调用方保留。两者同时给出时表达式必须赢——
 // 否则界面上的单位选择会被静默忽略，用户看到的与实际生效的不一致。
 func TestResolveBackupAutoInterval(t *testing.T) {

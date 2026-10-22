@@ -72,7 +72,7 @@ func (r *AclRepo) Replace(repoID int64, entries []Acl) error {
 // action IN (...) 候选集。方向搞反会让权限反向放大（例如「只读」被当成「可写」），
 // 故此处显式按「请求 → 蕴含它的授权」推导。
 //
-// 蕴含关系（FR-36）：
+// 蕴含关系：
 //   - admin 蕴含全部六档，故任何请求都能被 admin 授权满足；
 //   - write 蕴含 read 与 publish，故 read / publish 请求可被 write 授权满足，
 //     而 write 请求不能被 read 授权满足（只读不得反向扩成可写）；
@@ -102,7 +102,7 @@ func satisfyingGrants(action string) []string {
 
 // HasPermission 判断主体对仓库是否拥有指定动作的授权。
 //
-// 判定口径（FR-36）：**用户自身**的 ACL 命中 **或** 该用户所属**任一用户组**的
+// 判定口径：**用户自身**的 ACL 命中 **或** 该用户所属**任一用户组**的
 // ACL 命中，二者取或。组主体只是把「给 N 个用户逐条授予」收敛成一条，不改变
 // 用户自身的既有授权。
 //
@@ -127,7 +127,7 @@ func (r *AclRepo) HasPermission(repoID int64, subject Subject, action string) (b
 // countGrants 统计匹配的 ACL 行数是否大于 0。
 //
 // 参数互斥：groupIDs 为空时按用户主体查（subject_id = userID）；
-// 非空时按组主体查（subject_id IS NULL AND subject_group_id IN (...)），userID 被忽略。
+// 非空时按组主体查（subject_id IS NULL AND subject_group_id IN (...)，userID 被忽略）。
 func (r *AclRepo) countGrants(repoID, userID int64, groupIDs []int64, grants []string) (bool, error) {
 	var (
 		query string
@@ -155,7 +155,66 @@ func (r *AclRepo) countGrants(repoID, userID int64, groupIDs []int64, grants []s
 	return n > 0, nil
 }
 
-// DeleteByGroup 删除以该用户组为主体的全部 ACL 条目（FR-36）。
+// RepoIDsWithPermission 一次性求出 repoIDs 中主体拥有指定动作授权的仓库集合。
+//
+// 语义与「对每个仓库各调一次 HasPermission」完全一致（用户自身 ∪ 所属各组，动作蕴含关系由
+// satisfyingGrants 展开——**必须复用同一个函数**，否则两条路径会在「只授 write 能否读」
+// 这类情形上悄悄分叉，那是权限语义分叉，比性能回归严重得多）。
+//
+// 查询次数固定为 1 条（主体不属任何组）或 2 条（用户分支 + 组分支），与仓库数无关：
+// 原来每次搜索要按仓库逐个往返，私有仓库一多就退化成 O(N) 次查询，与搜索本身的开销相乘。
+//
+// 返回 map 中只包含**有权限**的仓库；未出现的 ID 一律视为无权限（与 HasPermission 的布尔
+// 口径一致，不需要区分「无权限」与「仓库不存在」）。
+func (r *AclRepo) RepoIDsWithPermission(repoIDs []int64, subject Subject, action string) (map[int64]bool, error) {
+	granted := make(map[int64]bool, len(repoIDs))
+	if len(repoIDs) == 0 {
+		return granted, nil
+	}
+	grants := satisfyingGrants(action)
+	// 用户分支：与 countGrants 的用户口径同形，只把「单仓库 = ?」换成「仓库 IN (...)」。
+	userQuery, userArgs, err := sqlx.In(
+		`SELECT DISTINCT repository_id FROM acl
+			WHERE repository_id IN (?) AND subject_type = 'user' AND subject_id = ? AND action IN (?)`,
+		repoIDs, subject.UserID, grants,
+	)
+	if err != nil {
+		return nil, err
+	}
+	var hits []int64
+	if err := r.db.Select(&hits, r.db.Rebind(userQuery), userArgs...); err != nil {
+		return nil, err
+	}
+	for _, id := range hits {
+		granted[id] = true
+	}
+	// 组分支：主体不属任何组时整条跳过（与 HasPermission 同口径，避免构造空的 IN ()）。
+	groups := subject.groupIDs()
+	if len(groups) == 0 {
+		return granted, nil
+	}
+	groupQuery, groupArgs, err := sqlx.In(
+		`SELECT DISTINCT repository_id FROM acl
+			WHERE repository_id IN (?) AND subject_type = 'group' AND subject_group_id IN (?) AND action IN (?)`,
+		repoIDs, groups, grants,
+	)
+	if err != nil {
+		return nil, err
+	}
+	// 用独立变量而不是复用上面的 hits：两批结果只应**取并集**写入 granted。
+	// 复用同一个切片会依赖「sqlx 是追加而不是重置切片」这一未言明的实现细节，
+	// 读者很容易把它误判成「第二次 Select 覆盖了第一次」的 bug。
+	var groupHits []int64
+	if err := r.db.Select(&groupHits, r.db.Rebind(groupQuery), groupArgs...); err != nil {
+		return nil, err
+	}
+	for _, id := range groupHits {
+		granted[id] = true
+	}
+	return granted, nil
+}
+
+// DeleteByGroup 删除以该用户组为主体的全部 ACL 条目。
 //
 // 删组时表外键本可 CASCADE 清理这些条目，但外键默认关闭的部署（或后续改为
 // 逻辑删除的组）下会留下悬空授权，故在领域层显式清理一次：幂等，删不到行不算错。

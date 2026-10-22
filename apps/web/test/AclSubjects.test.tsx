@@ -1,4 +1,4 @@
-// FR-36 ACL 主体与六档动作测试：
+//  ACL 主体与六档动作测试：
 // - 组主体条目渲染组名（而不是退化成 #0）；
 // - 新增条目可选「用户 / 用户组」并带 subjectType / subjectGroupId；
 // - 保存是整份覆盖写，新增条目不得抹掉既有条目。
@@ -26,7 +26,7 @@ async function openAclTab(user: ReturnType<typeof userEvent.setup>, name = "mave
   await screen.findByText(/整份覆盖/);
 }
 
-describe("仓库 ACL 主体与六档动作（FR-36）", () => {
+describe("仓库 ACL 主体与六档动作", () => {
   it("用户主体条目渲染用户名", async () => {
     const user = userEvent.setup();
     await openAclTab(user);

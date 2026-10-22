@@ -1,4 +1,4 @@
-// FR-41 存储配额（前端）集成测试：
+//  存储配额（前端）集成测试：
 // 1) 仓库详情「配置」页签——用量/上限只读展示、状态区分（正常/接近上限/已超限）、
 //    带单位的编辑（GB/MB/字节，0 或留空 = 不限）、保存换算、非法输入拦截、失败提示；
 // 2) 页头只读配额徽章——超限/接近上限对所有登录用户可见，非管理员仍不能编辑；
@@ -53,7 +53,7 @@ async function openQuotaSection(
   return { user, section };
 }
 
-describe("FR-41 仓库配额：详情页配置区", () => {
+describe("仓库配额：详情页配置区", () => {
   it("展示当前用量与上限，并按配额回显「数值 + 单位」", async () => {
     const { section } = await openQuotaSection();
     // 种子 maven-releases：artifactCount 1284 / quotaAssets 2000、totalSize 8 GiB / quotaBytes 10 GiB
@@ -262,7 +262,7 @@ describe("FR-41 仓库配额：详情页配置区", () => {
   });
 });
 
-describe("FR-41 仓库配额：只读可见性", () => {
+describe("仓库配额：只读可见性", () => {
   it("页头配额徽章对非管理员可见，但不提供配置页签（只读）", async () => {
     renderDetail("npm-proxy", { user: MEMBER_USER });
 
@@ -280,7 +280,7 @@ describe("FR-41 仓库配额：只读可见性", () => {
   });
 });
 
-describe("FR-41 仓库配额：列表展示", () => {
+describe("仓库配额：列表展示", () => {
   it("用量列同时显示当前用量与上限，未设上限的维度保持原样", async () => {
     renderWithProviders(<RepositoriesPage />, { route: "/repositories", authenticated: true });
 
@@ -341,7 +341,7 @@ describe("FR-41 仓库配额：列表展示", () => {
   });
 });
 
-describe("FR-41 代理缓存保留天数", () => {
+describe("代理缓存保留天数", () => {
   it("proxy 仓库显示保留天数输入并回显种子值（maven-central：30 天）", async () => {
     const { section } = await openQuotaSection("maven-central");
 
@@ -421,7 +421,7 @@ describe("FR-41 代理缓存保留天数", () => {
   });
 });
 
-describe("FR-41 新建仓库弹窗的治理字段", () => {
+describe("新建仓库弹窗的治理字段", () => {
   /** 打开「新建仓库」弹窗并返回其 dialog 节点。 */
   async function openCreateModal() {
     const user = userEvent.setup();

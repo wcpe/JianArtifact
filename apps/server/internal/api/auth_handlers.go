@@ -29,7 +29,7 @@ func (h *Handlers) Bootstrap(c *gin.Context) {
 }
 
 // GetCurrentUser 返回当前会话对应的用户：OIDC 回调后前端据此取身份快照，
-// 避免把用户信息塞进 URL 片段（FR-34）。
+// 避免把用户信息塞进 URL 片段。
 func (h *Handlers) GetCurrentUser(c *gin.Context) {
 	p, ok := requirePrincipal(c)
 	if !ok {
@@ -43,7 +43,7 @@ func (h *Handlers) GetCurrentUser(c *gin.Context) {
 	c.JSON(http.StatusOK, toAPIUser(u))
 }
 
-// Login 用户名 + 口令换取会话 JWT；本地口令优先，未通过且启用 LDAP 时再试目录（FR-35）。
+// Login 用户名 + 口令换取会话 JWT；本地口令优先，未通过且启用 LDAP 时再试目录。
 func (h *Handlers) Login(c *gin.Context) {
 	var req LoginRequest
 	if !bindJSON(c, &req) {

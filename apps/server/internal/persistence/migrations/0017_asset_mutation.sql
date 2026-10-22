@@ -3,8 +3,8 @@
 -- 影响：新增 asset_mutation 及其明细/回收记录表
 -- 数据处理：创建变更协调结构，无历史数据回填；预计耗时：毫秒级
 -- 回滚：不支持 down migration；需要恢复升级前备份
--- 相关：FR-104 / ADR-0014
--- 0017（FR-104）：资产变更 intent、前镜像与隔离回收记录。
+-- 相关：ADR-0014
+-- 0017：资产变更 intent、前镜像与隔离回收记录。
 -- 状态机使 SQLite 事务与文件系统原子移动之间具备可恢复边界。
 CREATE TABLE asset_mutation (
   id           TEXT PRIMARY KEY,

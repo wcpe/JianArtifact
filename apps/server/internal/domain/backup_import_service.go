@@ -24,7 +24,7 @@ import (
 //
 // 每个错误码都对应一种**用户可理解、且多数可自行处置**的状态。
 // 只有真正的未知故障才用 internal——把可解释的失败塞进 internal 会让用户
-// 只看到"服务内部错误"而无从下手（这正是 FR-40 追加十修掉的问题）。
+// 只看到"服务内部错误"而无从下手（这正是 修掉的问题）。
 const (
 	errCodeFetchFailed      = "fetch_failed"       // 拉取失败（连接 / 传输 / 上游非 200）
 	errCodePackageOversize  = "package_oversize"   // 包超过 50 GiB 上限

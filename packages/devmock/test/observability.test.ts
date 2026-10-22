@@ -1,4 +1,4 @@
-// FR-118 / FR-122：统一审计 Mock 的端到端契约行为。
+//  /：统一审计 Mock 的端到端契约行为。
 // 先覆盖管理员边界、关注批次原子确认、快照失效和通知上限，再实现处理器。
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
@@ -372,7 +372,7 @@ describe("统一审计观测 Mock", () => {
     expect(pagedBody.nextCursor).toBe("2");
   });
 
-  it("FR-117：通知中心按 status 筛选、时间排序并支持游标分页", async () => {
+  it("：通知中心按 status 筛选、时间排序并支持游标分页", async () => {
     const fetchNotifications = async (query = "") => {
       const response = await fetch(
         `http://localhost/api/v1/observability/audit/notifications${query}`,

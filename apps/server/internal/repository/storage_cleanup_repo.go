@@ -6,7 +6,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
 )
 
-// 本文件承载 FR-41 存储治理清理作业专用的元数据读写。
+// 本文件承载存储治理清理作业专用的元数据读写。
 //
 // 与 AssetMutationRepo / AssetRepo 分成不同文件与类型：清理作业的查询条件
 // （终态状态 + 时间窗裁剪、按 updated_at 选最旧资产）与业务读写路径完全不同，

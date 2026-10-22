@@ -20,7 +20,7 @@ func grantAcls(t *testing.T, e *protocolEnv, adminToken, repoName string, entrie
 
 // TestPublishActionConsistentAcrossProtocols 「发布」在所有协议端点上是同一个动作。
 //
-// 背景：FR-36 把 write 细化为 publish 后，若只有 raw 端点改判 publish 而 npm/oci/
+// 背景： 把 write 细化为 publish 后，若只有 raw 端点改判 publish 而 npm/oci/
 // pypi/cargo/maven 仍判 write，则「只发 publish 授权」的账号能走 raw 发布却发不了
 // npm 包——同一权限动作在不同协议给出不同结果。本用例把两类端点放在同一个仓库
 // 授权下对照，钉住「改动后仍需一致」这件事：

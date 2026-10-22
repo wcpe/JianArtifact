@@ -1,4 +1,4 @@
-// FR-117：设置页只保留可在管理端保存的服务配置。
+// 设置页只保留可在管理端保存的服务配置。
 // 布局（v0.8.x）：顶部概览带（当前生效值 + 已保存/未保存 + 保存）→ 双栏分区卡
 // （左「服务设置」，右「安全防护」+「允许访问的域名」）→ 底部「生效与回滚」说明（默认收起）；
 // 窄屏自动回落单栏。
@@ -38,7 +38,7 @@ const MAX_SECS = 3600;
 
 /**
  * 归一化设置对象：旧后端 / 旧 Mock 场景可能缺少 allowedHosts 与
- * originToken* 字段（FR-129/130 后新增），在表单状态初始化时补齐默认值，
+ * originToken* 字段（/130 后新增），在表单状态初始化时补齐默认值，
  * 避免对 undefined 调用 join 等方法崩溃。
  */
 function normalizeForm(initial: SettingsConfig): SettingsConfig {
@@ -57,7 +57,7 @@ function normalizeForm(initial: SettingsConfig): SettingsConfig {
     backupAutoInterval: initial.backupAutoInterval ?? 0,
     backupKeepLast: initial.backupKeepLast ?? 7,
     backupRetentionDays: initial.backupRetentionDays ?? 30,
-    // FR-40 追加九的派生字段同样要透传：本页不编辑它们，但整对象提交时
+    // 的派生字段同样要透传：本页不编辑它们，但整对象提交时
     // 缺失会让后端拿到空值。回落到"按秒表达"是安全的，语义与旧行为一致。
     backupAutoIntervalExpr: initial.backupAutoIntervalExpr ?? "",
     backupAutoIntervalValue: initial.backupAutoIntervalValue ?? initial.backupAutoInterval ?? 0,
@@ -155,7 +155,7 @@ function ServiceSettingsForm({
   };
 
   return (
-    // 不再自造 maw：宽度口径统一由 AppLayout 内容容器（density.contentMaxWidth）承担。
+    // 不再自造 maw：宽度口径统一由 AppLayout 内容容器承担（现为铺满可用宽度、不居中）。
     <Stack gap="md" style={{ flex: 1, minHeight: 0, overflowY: "auto", paddingRight: 4 }}>
       {/* 顶部概览带：把「当前生效值」前置，改表单时能一眼对照已保存的口径。
           数据口径来自 normalizeForm(initial)（已保存/生效值），不随未保存的改动跳动。 */}

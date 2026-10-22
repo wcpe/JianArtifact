@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
 )
 
-// TestResolveProxyHalfOpenBlocksBusinessTrafficBehindProbe 端到端验证 FR-43 的流量闸门：
+// TestResolveProxyHalfOpenBlocksBusinessTrafficBehindProbe 端到端验证的流量闸门：
 // 上游持续 5xx → AUTO_BLOCKED；窗口到期进入 HALF_OPEN（对外状态可见，不再误报
 // AUTO_BLOCKED）；本轮唯一的探测（后台 HEAD）停在飞行中时，并发发起多个真实业务请求，
 // **一个都不放行**（快速失败），上游在此期间不再被真实回源碰一次。

@@ -9,7 +9,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/scheduler"
 )
 
-// registerBackupOrphanCleanupJob 把 FR-40 追加八的备份孤儿回收注册为调度器作业：
+// registerBackupOrphanCleanupJob 把 的备份孤儿回收注册为调度器作业：
 // 按固定间隔执行、启动不立即回收；间隔 <= 0 或回收函数为空时不注册
 // （禁用语义，对齐 JIAN_BACKUP_ORPHAN_CLEANUP_INTERVAL=0）。
 //

@@ -35,47 +35,60 @@ type appServices struct {
 	ociSvc              *domain.OCIService
 	formatMetadataSvc   *domain.FormatMetadataService
 	publishPolicySvc    *domain.PublishPolicyService
-	userGroupSvc        *domain.UserGroupService // FR-36：用户组（授权主体之一）的 CRUD 与成员维护
+	userGroupSvc        *domain.UserGroupService   // 用户组（授权主体之一）的 CRUD 与成员维护
+	searchIndexSvc      *domain.SearchIndexService // 搜索索引后台回填与全量重建
 	assetSvc            *domain.AssetService
 	migrationSvc        *domain.MigrationService
 	settingSvc          *domain.SettingService
-	auditLogs           *repository.AuditLogRepo                // FR-38：审计日志
-	auditObservability  *repository.AuditObservabilityRepo      // FR-118：统一审计读模型
-	operationsMetrics   *repository.OperationsObservabilityRepo // FR-53/120：当前节点业务与主机读模型
+	auditLogs           *repository.AuditLogRepo                // 审计日志
+	auditObservability  *repository.AuditObservabilityRepo      // 统一审计读模型
+	operationsMetrics   *repository.OperationsObservabilityRepo // 当前节点业务与主机读模型
 	operationsAlertRepo *repository.OperationsAlertRepo         // v0.8.0：运维告警去重持久化
-	assetDownloadRepo   *repository.AssetDownloadRepo           // FR-142：制品下载计量明细
+	assetDownloadRepo   *repository.AssetDownloadRepo           // 制品下载计量明细
 	pinnedRepo          *repository.PinnedRepoRepo              // 置顶仓库（用户级 + 全局兜底）
 	dashboardSvc        *domain.OperationsDashboardService
 	assetDownloadSvc    *domain.AssetDownloadService
 	hostMonitoringSvc   *domain.HostMonitoringService
-	backupSvc           *domain.BackupService      // FR-132：节点备份包生成与登记
-	backupDrillSvc      *domain.BackupDrillService // FR-40：恢复演练与校验报告
-	freeze              *domain.FreezeController   // FR-135：全局共享的运行时写入冻结控制器
+	backupSvc           *domain.BackupService      // 节点备份包生成与登记
+	backupDrillSvc      *domain.BackupDrillService // 恢复演练与校验报告
+	freeze              *domain.FreezeController   // 全局共享的运行时写入冻结控制器
 	restoreSvc          *domain.RestoreService
-	backupImports       *domain.BackupImportService // FR-137：导入记录与 URL 拉取
-	backupUploads       *domain.BackupUploadService // FR-137：分片上传（Web 第三通道）
-	backupAdopt         *domain.BackupAdoptService  // FR-40 追加八：未管理备份包的扫描与导入
-	auditAttentionKey   []byte                      // FR-118：由启动密钥派生的关注标识签名输入
+	backupImports       *domain.BackupImportService // 导入记录与 URL 拉取
+	backupUploads       *domain.BackupUploadService // 分片上传（Web 第三通道）
+	backupAdopt         *domain.BackupAdoptService  // 未管理备份包的扫描与导入
+	auditAttentionKey   []byte                      // 由启动密钥派生的关注标识签名输入
 	nodeIdentity        *domain.NodeIdentity
 	syncTokenSet        bool             // 历史集群状态兼容字段；主备不再以环境令牌配置
-	publicURL           string           // FR-115：备用节点从启动配置读取的只读协议回退 URL
-	upstreamClient      *upstream.Client // FR-89：回源客户端（web 改回源超时时 SetTimeout）
+	publicURL           string           // 备用节点从启动配置读取的只读协议回退 URL
+	upstreamClient      *upstream.Client // 回源客户端（web 改回源超时时 SetTimeout）
 	store               auth.Store
 	jwt                 *auth.JWTManager
-	metricsReg          *metrics.Registry        // FR-39：进程内指标登记（协议请求计数）
-	metricsExp          *metrics.Exposition      // FR-39：/metrics 文本暴露渲染器
-	scheduler           *scheduler.Scheduler     // FR-44：维护类周期作业调度器
-	restartSvc          *domain.RestartService   // FR-40 追加七：一键重启（能力预检 + 延迟触发）
-	restartCh           chan struct{}            // FR-40 追加七：重启请求信号，由 main 的 select 接收
-	quotaSvc            *domain.RepoQuotaService // FR-41：仓库存储配额（预检早拒 + 提交点权威复检）
-	oidcDeps            *api.OIDCDeps            // FR-34：OIDC 登录端点依赖（nil = 未启用）
-	ldapAuth            api.LDAPAuthenticator    // FR-35：LDAP 目录侧校验（nil = 未启用）
+	metricsReg          *metrics.Registry        // 进程内指标登记（协议请求计数）
+	metricsExp          *metrics.Exposition      // /metrics 文本暴露渲染器
+	scheduler           *scheduler.Scheduler     // 维护类周期作业调度器
+	restartSvc          *domain.RestartService   // 一键重启（能力预检 + 延迟触发）
+	restartCh           chan struct{}            // 重启请求信号，由 main 的 select 接收
+	quotaSvc            *domain.RepoQuotaService // 仓库存储配额（预检早拒 + 提交点权威复检）
+	oidcDeps            *api.OIDCDeps            // OIDC 登录端点依赖（nil = 未启用）
+	ldapAuth            api.LDAPAuthenticator    // LDAP 目录侧校验（nil = 未启用）
 }
 
 // openServices 打开数据库、执行迁移并装配领域服务。调用方负责在返回的 db 上 Close。
 func openServices(cfg *config.Config) (*appServices, error) {
-	db, err := persistence.Open(cfg.DBPath)
+	// SQLite 连接池上限来自 JIAN_SQLITE_MAX_CONNS（缺省/非正回落 8）。
+	// WAL 支持「多读 + 单写」，池放宽后读侧才真正并发；写仍由 SQLite 自身串行化。
+	db, err := persistence.OpenWithMaxConns(cfg.DBPath, cfg.SQLiteMaxConns)
 	if err != nil {
+		return nil, err
+	}
+	// fts5 与 trigram 是 SQLite 的**构建期**能力，缺能力时搜索索引（asset_path_fts，迁移 0049）
+	// 根本无法建立。自检必须跑在 Migrate **之前**：0049 的第一条语句就是
+	// `CREATE VIRTUAL TABLE asset_path_fts USING fts5(...)`，一旦放在迁移之后，首次升级时
+	// 缺能力的部署会先撞上迁移抛出的那句泛化 SQL logic error——正是本自检要消灭的场景。
+	// 放在前面是安全的：自检只在独立的内存库上建/删探测表，既不依赖主库 schema（此时主库可能
+	// 还没建表），也不与主库连接池争用（见 persistence.CheckFTS5Support）。
+	if err := persistence.CheckFTS5Support(); err != nil {
+		_ = db.Close()
 		return nil, err
 	}
 	if err := db.Migrate(); err != nil {
@@ -88,7 +101,7 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	revokedRepo := repository.NewRevokedRepo(db)
 	repoRepo := repository.NewRepoRepo(db)
 	aclRepo := repository.NewAclRepo(db)
-	userGroupRepo := repository.NewUserGroupRepo(db) // FR-36：用户组（授权主体之一）
+	userGroupRepo := repository.NewUserGroupRepo(db) // 用户组（授权主体之一）
 	assetRepo := repository.NewAssetRepo(db)
 	formatMetadataRepo := repository.NewFormatMetadataRepo(db)
 	publishPolicyRepo := repository.NewPublishPolicyRepo(db)
@@ -102,14 +115,17 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	repoSvc := domain.NewRepositoryService(repoRepo, aclRepo, assetRepo, settingSvc, userRepo)
 	repoSvc.SetEnabledFormats(cfg.EnabledFormats)
 	repoSvc.SetFormatMetadataRepo(formatMetadataRepo)
-	// FR-36：授权判定据此展开主体的组归属；不注入则退化成「仅按用户自身 ACL」。
+	// 授权判定据此展开主体的组归属；不注入则退化成「仅按用户自身 ACL」。
 	repoSvc.SetUserGroupRepo(userGroupRepo)
+	// 搜索链路总预算来自 JIAN_SEARCH_TIMEOUT_SECONDS（缺省/非法回落 10s）；
+	// 未注入时 domain 侧以 searchTimeoutDefault 常量兜底（两者必须同值）。
+	repoSvc.SetSearchTimeout(cfg.SearchTimeout)
 	assetSvc := domain.NewAssetService(repoRepo, assetRepo, blobs, upstreamClient)
-	// FR-43：auto-block 退避起始时长来自 JIAN_AUTO_BLOCK_BASE_SECONDS（缺省/非法回落 40s）；
+	// auto-block 退避起始时长来自 JIAN_AUTO_BLOCK_BASE_SECONDS（缺省/非法回落 40s）；
 	// 未注入时 domain 侧以 autoBlockInitial 常量兜底（两者必须同值）。
 	assetSvc.SetAutoBlockBase(cfg.AutoBlockBaseSeconds)
 	repoSvc.SetMutationCoordinator(assetSvc.MutationCoordinator())
-	// FR-135：全局共享的冻结控制器。复制退役后不再有角色派生的静态只读栅栏，
+	// 全局共享的冻结控制器。复制退役后不再有角色派生的静态只读栅栏，
 	// 底座传 nil；冻结窗口（搬迁切换用）由该实例统一承载。
 	// 所有写栅栏必须装同一个 freeze 实例：只要有一个服务仍挂静态栅栏，冻结期间就
 	// 有写路径漏网，"停写" 语义不再成立——而搬迁切换依赖它成立。
@@ -117,7 +133,7 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	settingSvc.SetBusinessWriteGate(freeze)
 	repoSvc.SetBusinessWriteGate(freeze)
 	assetSvc.SetBusinessWriteGate(freeze)
-	// FR-137：导入编排（校验 → 合并 blob → 暂存 db → 写 restore.pending）；
+	// 导入编排（校验 → 合并 blob → 暂存 db → 写 restore.pending）；
 	// 真正的数据库替换由启动期 ApplyPendingRestore 在 persistence.Open 之前完成。
 	restoreSvc := domain.NewRestoreService(db, cfg.DataDir, cfg.DBPath, cfg.BlobDir)
 	// 复制退役后节点不再是 standby，启动恢复走本地资产操作恢复路径。
@@ -142,13 +158,13 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	}
 	userSvc := domain.NewUserService(userRepo)
 	tokenSvc := domain.NewTokenService(tokenRepo, userRepo)
-	// FR-36：用户组管理（组的 CRUD 与成员维护）。ACL 仓储供删组时清理组主体条目。
+	// 用户组管理（组的 CRUD 与成员维护）。ACL 仓储供删组时清理组主体条目。
 	userGroupSvc := domain.NewUserGroupService(userGroupRepo, aclRepo, userRepo)
 	userGroupSvc.SetBusinessWriteGate(freeze)
 	userSvc.SetBusinessWriteGate(freeze)
 	tokenSvc.SetBusinessWriteGate(freeze)
 
-	// 复制退役（FR-138）：repl_change 变更日志不再写入，写路径注入 no-op 记录器。
+	// 复制退役：repl_change 变更日志不再写入，写路径注入 no-op 记录器。
 	// 原子 operation 信封不受影响——asset_mutation 的 ApplyWithOutbox* 仍把制品操作
 	// 写入 replication_operation_outbox（同一事务），那是制品操作与审计的真源。
 	nodeIdentity := domain.NewNodeIdentity(settingRepo)
@@ -160,12 +176,12 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	tokenSvc.SetChangeRecorder(domain.NoopChangeRecorder{})
 	settingSvc.SetChangeRecorder(domain.NoopChangeRecorder{})
 
-	// FR-89：环境变量仅在 setting 键不存在时写入初始默认；显式清空必须跨重启保留。
+	// 环境变量仅在 setting 键不存在时写入初始默认；显式清空必须跨重启保留。
 	{
 		defaults := []repository.SettingValue{
 			{Key: domain.SettingKeyPublicURL, Value: cfg.PublicURL},
 			{Key: domain.SettingKeyUpstreamTimeout, Value: strconv.Itoa(int(cfg.UpstreamTimeout.Seconds()))},
-			// 同步间隔仍是设置页暴露的四项基础配置之一（FR-89），保留其默认 seed。
+			// 同步间隔仍是设置页暴露的四项基础配置之一，保留其默认 seed。
 			{Key: domain.SettingKeyReplSyncInterval, Value: strconv.Itoa(int(cfg.SyncInterval.Seconds()))},
 		}
 		for _, value := range defaults {
@@ -178,7 +194,7 @@ func openServices(cfg *config.Config) (*appServices, error) {
 			upstreamClient.SetTimeout(time.Duration(secs) * time.Second)
 		}
 	}
-	// FR-40 追加：自动备份三项配置的初始值来自环境变量，此后以 setting 表为准
+	// 自动备份三项配置的初始值来自环境变量，此后以 setting 表为准
 	// （运行时可经界面修改并热生效）。只播种整组都缺失的情况，理由见函数注释。
 	if err := seedBackupSettings(settingSvc, settingRepo, cfg); err != nil {
 		_ = db.Close()
@@ -187,6 +203,10 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	auditLogRepo := repository.NewAuditLogRepo(db)
 	auditObservabilityRepo := repository.NewAuditObservabilityRepo(db)
 	operationsMetrics := repository.NewOperationsObservabilityRepo(db)
+	// 仪表盘容量聚合的缓存有效期来自 JIAN_CAPACITY_CACHE_TTL_SECONDS
+	// （缺省/非法回落 30s，显式 0 = 禁用缓存、每次请求实时聚合）；
+	// 未注入时 repository 侧以 defaultCapacityCacheTTL 常量兜底（两者必须同值）。
+	operationsMetrics.SetCapacityCacheTTL(cfg.CapacityCacheTTL)
 	operationsAlertRepo := repository.NewOperationsAlertRepo(db)
 	dashboardSvc := domain.NewOperationsDashboardService(operationsMetrics)
 	assetDownloadRepo := repository.NewAssetDownloadRepo(db)
@@ -227,18 +247,21 @@ func openServices(cfg *config.Config) (*appServices, error) {
 
 	publicURL := ""
 
-	// FR-137：分片上传服务依赖导入服务（组装完成后走本地导入状态机）。
+	// 分片上传服务依赖导入服务（组装完成后走本地导入状态机）。
 	backupImportsSvc := domain.NewBackupImportService(repository.NewBackupImportRepo(db), restoreSvc, cfg.DataDir, upstreamClient)
 
-	// FR-132 / FR-40：备份服务是生成、保留策略与演练三者共用的同一实例——
+	// 备份服务是生成、保留策略与演练三者共用的同一实例——
 	// 保留策略的候选集查询与删除都经它走同一条已装配的连接与生成槽位，
 	// 避免"策略看到的包"与"生成写下的包"来自两个视图。
 	backupRepo := repository.NewBackupPackageRepo(db)
 	backupSvc := domain.NewBackupService(db, backupRepo, blobs, cfg.DataDir, cfg.DBPath, version, nodeIdentity.NodeID)
 
-	// FR-44：维护类周期作业统一经调度器驱动（间隔 0 禁用；启动不立即执行）。
+	// 搜索索引的后台异步回填服务。只做编排（分批推进水位 / 可中断续跑 / 可重建），
+	// 索引行与状态表的维护原语都在 repository 层；真正的启动点在各子命令就绪后调用 Start。
+	searchIndexSvc := domain.NewSearchIndexService(repository.NewSearchIndexStateRepo(db))
+	// 维护类周期作业统一经调度器驱动（间隔 0 禁用；启动不立即执行）。
 	schedulerSvc := scheduler.New()
-	// FR-40 追加七：一键重启。单元名与作用域只来自启动配置（环境变量），
+	// 一键重启。单元名与作用域只来自启动配置（环境变量），
 	// 请求体不参与命令构造——这是防命令注入的第一道边界（见 domain/restart_service.go）。
 	//
 	// 执行路径是**进程自替换**（syscall.Exec 换新映像），不执行任何外部命令：
@@ -263,7 +286,7 @@ func openServices(cfg *config.Config) (*appServices, error) {
 		}
 	})
 	registerBlobGCJob(schedulerSvc, cfg.BlobGCInterval, assetSvc.CleanupUnreferencedBlobs)
-	// FR-41：存储治理清理（隔离区空目录 / 过期 OCI 上传临时文件 / 终态元数据裁剪 / 代理缓存保留）。
+	// 存储治理清理（隔离区空目录 / 过期 OCI 上传临时文件 / 终态元数据裁剪 / 代理缓存保留）。
 	// 只做「不触碰任何在途文件」的四类清理；pending_gc 滞留件回收留待后续增量
 	// （前置能力缺口：操作引擎没有「在写门下判定是否在途」的入口）。
 	storageCleanupSvc := domain.NewStorageCleanupService(
@@ -276,7 +299,7 @@ func openServices(cfg *config.Config) (*appServices, error) {
 		},
 	)
 	registerStorageCleanupJob(schedulerSvc, cfg.StorageCleanupInterval, storageCleanupSvc.Run)
-	// FR-40：周期化自动备份 + 保留策略。间隔的当前值取自 setting 表
+	// 周期化自动备份 + 保留策略。间隔的当前值取自 setting 表
 	// （初值由环境变量 JIAN_BACKUP_AUTO_INTERVAL 播种），因此界面上改完下一轮即生效；
 	// 间隔为 0 表示关闭（作业仍在心跳，但每轮跳过）。
 	backupRetentionSvc := domain.NewBackupRetentionService(backupSvc, backupRepo, domain.BackupRetentionOptions{
@@ -293,31 +316,31 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	}, func(ctx context.Context, settings autoBackupSettings) (autoBackupRun, error) {
 		return runAutoBackup(ctx, backupSvc, backupRetentionSvc, settings)
 	})
-	// FR-40：恢复演练服务（CLI 与 API 共用同一实现；API 端点在后续阶段接入）。
+	// 恢复演练服务（CLI 与 API 共用同一实现；API 端点在后续阶段接入）。
 	backupDrillSvc := domain.NewBackupDrillService(backupSvc, repository.NewBackupVerificationRepo(db), cfg.DataDir)
-	// FR-40 追加八：未管理备份包（磁盘有包体、登记无记录）的扫描与导入。
+	// 未管理备份包（磁盘有包体、登记无记录）的扫描与导入。
 	// 与孤儿回收共用同一份差集口径，因此两者都由 adopt 服务给出候选。
 	backupAdoptSvc := domain.NewBackupAdoptService(backupSvc, backupRepo)
-	// FR-40 追加八：孤儿备份包回收。宽限期保证"拷入 → 界面导入"的窗口，
+	// 孤儿备份包回收。宽限期保证"拷入 → 界面导入"的窗口，
 	// 身份校验保证不误删用户放错的其他归档（见 domain/backup_orphan_cleanup.go）。
 	backupOrphanSvc := domain.NewBackupOrphanCleanupService(backupSvc, backupAdoptSvc,
 		domain.BackupOrphanCleanupOptions{Grace: cfg.BackupOrphanGrace})
 	registerBackupOrphanCleanupJob(schedulerSvc, cfg.BackupOrphanCleanupInterval, backupOrphanSvc.Run)
-	// FR-39：指标登记与 /metrics 渲染器；协议请求计数由 HTTP 层钩子（run）累加。
+	// 指标登记与 /metrics 渲染器；协议请求计数由 HTTP 层钩子（run）累加。
 	metricsReg := metrics.New()
 	metricsExp := metrics.NewExposition(metricsReg, schedulerJobStatuses(schedulerSvc))
-	// FR-43：上游断路器指标。阻止事件计数按闭集 reason 分区（probe_failed / upstream_error，
+	// 上游断路器指标。阻止事件计数按闭集 reason 分区（probe_failed / upstream_error，
 	// 由 domain 定义、装配层注入）；阻止态仓库数在每次抓取时实时取数（只读内存态，
 	// 不查库、不访问网络，符合 /metrics 的抓取路径约定）。
 	assetSvc.SetUpstreamBlockRecorder(metricsReg)
 	metricsExp.SetBlockedRepositories(assetSvc.BlockedUpstreamCount)
-	// FR-41：仓库级存储配额判定。预检（已知长度/流式）走 Admission，提交点权威复检走 CheckCommit；
+	// 仓库级存储配额判定。预检（已知长度/流式）走 Admission，提交点权威复检走 CheckCommit；
 	// 拒绝原因以闭集枚举累加进 jianartifact_publish_rejections_total{reason="quota"}。
 	quotaSvc := domain.NewRepoQuotaService(repoRepo, assetRepo)
 	quotaSvc.SetRejectionRecorder(metricsReg)
 	assetSvc.SetStorageQuotaCheck(quotaSvc.CheckCommit)
 
-	// FR-34：OIDC 登录端点依赖；未配置 issuer 时保持 nil，端点返回 404（存在即启用）。
+	// OIDC 登录端点依赖；未配置 issuer 时保持 nil，端点返回 404（存在即启用）。
 	var oidcDeps *api.OIDCDeps
 	if cfg.OIDC.Enabled() {
 		oidcDeps = &api.OIDCDeps{
@@ -330,7 +353,7 @@ func openServices(cfg *config.Config) (*appServices, error) {
 		}
 	}
 
-	// FR-35：LDAP 目录侧校验；未配置 URL 时保持 nil，登录不回退目录。
+	// LDAP 目录侧校验；未配置 URL 时保持 nil，登录不回退目录。
 	var ldapAuth api.LDAPAuthenticator
 	if cfg.LDAP.Enabled() {
 		ldapVerifier, err := auth.NewLDAPVerifier(cfg.LDAP)
@@ -352,6 +375,7 @@ func openServices(cfg *config.Config) (*appServices, error) {
 		formatMetadataSvc:   formatMetadataSvc,
 		publishPolicySvc:    publishPolicySvc,
 		userGroupSvc:        userGroupSvc,
+		searchIndexSvc:      searchIndexSvc,
 		quotaSvc:            quotaSvc,
 		assetSvc:            assetSvc,
 		migrationSvc:        migrationSvc,
@@ -439,7 +463,7 @@ func (s *appServices) handlers(version string, checks []func() error) *api.Handl
 		Users:                   s.userSvc,
 		Tokens:                  s.tokenSvc,
 		Repos:                   s.repoSvc,
-		Assets:                  s.assetSvc, // FR-103：制品批量删除
+		Assets:                  s.assetSvc, // 制品批量删除
 		Migrations:              s.migrationSvc,
 		Settings:                s.settingSvc,
 		AuditLogs:               s.auditLogs,
@@ -451,11 +475,11 @@ func (s *appServices) handlers(version string, checks []func() error) *api.Handl
 		AuditAttentionKey:       s.auditAttentionKey,
 		AuditSourceNode:         s.nodeIdentity.NodeID(),
 		Backups:                 s.backupSvc,
-		BackupDrill:             s.backupDrillSvc, // FR-40：恢复演练端点（202 受理 + 报告查询）
+		BackupDrill:             s.backupDrillSvc, // 恢复演练端点（202 受理 + 报告查询）
 		Freeze:                  s.freeze,
 		BackupImports:           s.backupImports,
 		BackupUploads:           s.backupUploads,
-		BackupAdopt:             s.backupAdopt, // FR-40 追加八：未管理备份包的扫描与导入
+		BackupAdopt:             s.backupAdopt, // 未管理备份包的扫描与导入
 		Metrics:                 s.metricsExp,
 		OIDC:                    s.oidcDeps,
 		LDAPAuth:                s.ldapAuth,
@@ -464,9 +488,10 @@ func (s *appServices) handlers(version string, checks []func() error) *api.Handl
 		PublicURL:               s.publicURL,
 		EnabledFormats:          s.repoSvc.EnabledFormats(),
 		PublishPolicies:         s.publishPolicySvc,
-		UserGroups:              s.userGroupSvc, // FR-36：用户组管理端点（仅管理员）
-		MaintenanceJobs:         s.scheduler,    // FR-41：维护作业清单与手动触发
-		Restart:                 s.restartSvc,   // FR-40 追加七：一键重启（先回响应，再重启）
+		UserGroups:              s.userGroupSvc,   // 用户组管理端点（仅管理员）
+		SearchIndex:             s.searchIndexSvc, // 搜索索引状态与重建端点（仅管理员）
+		MaintenanceJobs:         s.scheduler,      // 维护作业清单与手动触发
+		Restart:                 s.restartSvc,     // 一键重启（先回响应，再重启）
 		OnUpstreamTimeoutChange: func(d time.Duration) {
 			if s.upstreamClient != nil {
 				s.upstreamClient.SetTimeout(d)
@@ -475,7 +500,7 @@ func (s *appServices) handlers(version string, checks []func() error) *api.Handl
 	})
 }
 
-// schedulerJobStatuses 把调度器作业状态适配为指标渲染快照（FR-39）；
+// schedulerJobStatuses 把调度器作业状态适配为指标渲染快照；
 // 由渲染器在每次抓取时调用，不缓存。
 func schedulerJobStatuses(s *scheduler.Scheduler) func() []metrics.JobStatus {
 	return func() []metrics.JobStatus {

@@ -239,6 +239,26 @@ function repositoryReadUnauthorized(request: Request, repository: string) {
     : err("forbidden", "无权访问该仓库", 403);
 }
 
+/**
+ * 搜索的 `repository=` 限定：非管理员 / 匿名对「仓库不存在」与「存在但无权」返回**同一个**
+ * 404 not_found，两者不可区分。
+ *
+ * 与 repositoryReadUnauthorized（仓库内浏览用，401 / 403）刻意不同：全局搜索是匿名可达的
+ * 入口，若两种情形给出不同响应，调用方反复改 `repository=` 参数就能枚举出实例上有哪些私有
+ * 仓库存在。管理员不受限——他本就搜得到全部仓库，没有可泄漏的差异。
+ */
+function searchRepositoryDenied(userId: number, repository: string) {
+  if (isGlobalAdmin(userId)) {
+    return null;
+  }
+  // 有 read 权限：照常搜索（不是「限定即拒绝」）。
+  if (store.canAccess(repository, userId, "read")) {
+    return null;
+  }
+  // 不存在（canAccess 返回 null）与存在但无权（false）合流到同一个响应。
+  return err("not_found", "资源不存在", 404);
+}
+
 function integerQuery(url: URL, key: string): { value?: number; invalid: boolean } {
   const raw = url.searchParams.get(key);
   if (raw === null) {
@@ -368,10 +388,10 @@ function isEmptyScenario(request: Request): boolean {
 
 const notificationStatuses = ["unacknowledged", "acknowledged", "all"] as const;
 
-// —— FR-132 备份包内存态（仅 devmock）——
+// ——  备份包内存态（仅 devmock）——
 // 生成过程用定时器推进状态，便于在浏览器里看到 queued → snapshotting → packing → done。
 //
-// FR-40：预置两条真实来源分布（手动 + 自动），让来源列在 devmock 下就能看到两种取值。
+// 预置两条真实来源分布（手动 + 自动），让来源列在 devmock 下就能看到两种取值。
 function seedBackups(): BackupPackage[] {
   const now = Date.now();
   const iso = (msAgo: number) => new Date(now - msAgo).toISOString();
@@ -425,7 +445,7 @@ const mockBackups: BackupPackage[] = seedBackups();
 
 let mockBackupSeq = 1;
 
-// —— FR-40 追加八：服务器上未被管理的备份包（仅 devmock）——
+// —— 服务器上未被管理的备份包（仅 devmock）——
 // 模拟 backups/ 目录里"有包体、无登记行"的残留：两个可导入的合法包，一个无法识别的伪包。
 // 导入其中一个后，它会被并入 mockBackups，从而不再出现在 unmanaged 列表里
 // （与后端 Scan 的差集口径一致）。
@@ -469,7 +489,7 @@ const mockUnmanagedBackups: Array<{
   },
 ];
 
-// —— FR-40：恢复演练报告内存态（仅 devmock）——
+// —— 恢复演练报告内存态（仅 devmock）——
 // 按包标识分桶存放报告，最近优先（与后端 ListByPackage 的排序口径一致）。
 // 预置一条**失败**报告：失败报告是演练最该留下的产物，界面必须能如实渲染它，
 // 所以 devmock 默认就该带上一条，而不是只给"一切正常"的样例。
@@ -581,11 +601,11 @@ function buildDrillReport(
 /** 演练是否"正在跑"：受理后短暂保留，便于界面看到轮询中的加载态。 */
 const pendingDrills = new Set<string>();
 
-// —— FR-134：写入冻结窗口内存态（仅 devmock）——
+// —— 写入冻结窗口内存态（仅 devmock）——
 // 进程内一个状态对象；未冻结时仅含 frozen:false，避免输出 until/frozenAt。
 let mockFreeze: WriteFreezeState = { frozen: false };
 
-// —— FR-137：从 URL 导入备份包内存态（仅 devmock）——
+// —— 从 URL 导入备份包内存态（仅 devmock）——
 // 预置 2~3 条真实分布：一条待重启、一条成功、一条失败（带 errorCode + error）。
 function seedImports(): BackupImport[] {
   const now = Date.now();
@@ -644,13 +664,13 @@ function seedImports(): BackupImport[] {
 let mockImports: BackupImport[] = seedImports();
 let mockImportSeq = 1;
 
-// FR-40 追加六：待重启生效的恢复。
+// 待重启生效的恢复。
 // 只有导入/上传到达 pending_restart 时才置位——这正是后端的真实语义：暂存成功后写
 // restore.pending，此后任何导入都会被 409 restore_pending 拒绝，直到重启完成替换。
 // null 表示无待生效恢复（绝大多数时候）。
 let mockPendingRestore: { packageId: string; origin: string; stagedAt: string } | null = null;
 
-// —— FR-137：分片上传备份包内存态（仅 devmock）——
+// —— 分片上传备份包内存态（仅 devmock）——
 // 服务端决定的分片大小固定 8 MiB；uploadedChunks 以实际收到的分片为准（可续传）。
 const UPLOAD_CHUNK_SIZE = 8 * 1024 * 1024;
 type UploadStatus = "initialized" | "receiving" | "completed" | "aborted";
@@ -790,7 +810,7 @@ function advanceMockBackup(packageId: string): void {
     }
   }, 2600);
 }
-/** FR-117：解析通知中心查询参数；非法组合返回 null（映射 400）。 */
+/** 解析通知中心查询参数；非法组合返回 null（映射 400）。 */
 function notificationQuery(url: URL): NotificationQuery | null {
   const params = url.searchParams;
   const from = params.get("from") ?? undefined;
@@ -898,7 +918,7 @@ interface UpdateUserBody {
   status?: User["status"];
   webLoginDisabled?: boolean;
 }
-/** FR-36：新建 / 更新 / 加成员的请求体（与契约 schema 同形）。 */
+/** 新建 / 更新 / 加成员的请求体（与契约 schema 同形）。 */
 interface CreateUserGroupBody {
   name?: string;
   description?: string;
@@ -919,10 +939,10 @@ interface CreateRepoBody {
   remoteUrl?: string;
   members?: string[];
   aliases?: string[];
-  /** FR-41：存储配额（0/缺省 = 不限）。 */
+  /** 存储配额（0/缺省 = 不限）。 */
   quotaBytes?: number;
   quotaAssets?: number;
-  /** FR-41：代理缓存保留天数（0/缺省 = 关闭；仅 proxy 有语义）。 */
+  /** 代理缓存保留天数（0/缺省 = 关闭；仅 proxy 有语义）。 */
   cacheRetentionDays?: number;
 }
 
@@ -1073,16 +1093,16 @@ export const handlers = [
   // —— 健康 / 状态（公开）——
   http.get("*/healthz", () => HttpResponse.json({ status: "ok", version: store.status().version })),
   http.get("*/readyz", () => HttpResponse.json({ status: "ok", version: store.status().version })),
-  // FR-34：`/auth/me` 供 OIDC 回调后的前端取身份快照（开发环境返回 mock 用户）。
+  // `/auth/me` 供 OIDC 回调后的前端取身份快照（开发环境返回 mock 用户）。
   http.get("*/api/v1/auth/me", () => HttpResponse.json(mockUser())),
-  // FR-34：OIDC 登录（开发环境不接真实 IdP：起跳指向示例地址，回调直接回带 mock 会话令牌）。
+  // OIDC 登录（开发环境不接真实 IdP：起跳指向示例地址，回调直接回带 mock 会话令牌）。
   http.get("*/api/v1/auth/oidc/start", () =>
     HttpResponse.redirect("https://idp.example.com/authorize?client_id=devmock&state=devmock"),
   ),
   http.get("*/api/v1/auth/oidc/callback", () =>
     HttpResponse.redirect(`/login#token=${encodeURIComponent(MOCK_TOKEN)}`),
   ),
-  // FR-39：运维指标端点（文本暴露格式，与后端 /metrics 同口径）。
+  // 运维指标端点（文本暴露格式，与后端 /metrics 同口径）。
   http.get(
     "*/metrics",
     () =>
@@ -1123,22 +1143,67 @@ export const handlers = [
       ? undefined
       : store.readableRepositoryNames(userId);
     if (repository) {
-      const denied = repositoryReadUnauthorized(request, repository);
+      const denied = searchRepositoryDenied(userId, repository);
       if (denied) {
         return denied;
       }
     }
     const order = url.searchParams.get("order") === "desc" ? "desc" : "asc";
-    return HttpResponse.json(
-      store.searchAssets(
-        url.searchParams.get("q") ?? "",
-        url.searchParams.get("sort") ?? "path",
-        order,
-        intParam(url, "page", 1),
-        intParam(url, "page_size", 50),
-        readableRepositories,
-      ),
+    const base = store.searchAssets(
+      url.searchParams.get("q") ?? "",
+      url.searchParams.get("sort") ?? "path",
+      order,
+      intParam(url, "page", 1),
+      intParam(url, "page_size", 50),
+      readableRepositories,
     );
+    // `group_by=package` 才追加聚合字段，其余情形响应形状与改造前逐字段一致
+    // （file 模式只多出 items[].sha1 这类纯追加键时也保持一致）。
+    const groupByPackage = url.searchParams.get("group_by") === "package";
+    if (!groupByPackage) {
+      return HttpResponse.json(base);
+    }
+    const { packages, scanned } = store.searchPackages(
+      url.searchParams.get("q") ?? "",
+      readableRepositories,
+    );
+    return HttpResponse.json({
+      ...base,
+      packageTotal: packages.length,
+      packages,
+      aggregation: { scanned, truncated: false },
+      // package 模式下 appliedOrder **恒为 relevance**：包序只由相关度比较器决定，
+      // 请求里的 sort 键只影响文件级 items（order=relevance 时连 sort 都不生效，
+      // items 固定 path asc）。与后端一致，见 docs/API.md 的 appliedOrder 说明。
+      appliedOrder: "relevance",
+    });
+  }),
+
+  // —— 搜索建议（开发态，非契约端点）——
+  //
+  // 前端搜索框已经在调这个端点（SearchSuggestInput），mock 里若没有处理器，`pnpm dev`
+  // 下该功能会静默不可见（请求落到 SPA 回退或直接 404）。
+  //
+  // 口径与后端一致：空 q 返回空 items 而不是 400；limit 缺省 10、夹取到 [1, 20] 且
+  // 不报错；候选只落在可读仓库内（无 read 权限的仓库连名字都不出现），可读集合为空
+  // 时返回 200 + 空 items，绝不 403（403 会把「这里存在一个你看不到的仓库」泄漏出去）。
+  http.get("*/api/v1/search/suggest", ({ request }) => {
+    const url = new URL(request.url);
+    const userId = mockUserId(request) ?? MOCK_ANONYMOUS_ID;
+    if (userId === MOCK_ANONYMOUS_ID && !store.anonymousAccess()) {
+      return err("unauthorized", "未认证", 401);
+    }
+    if (isEmptyScenario(request)) {
+      return HttpResponse.json({ items: [] });
+    }
+    // undefined = 不限（管理员搜全部）；否则收窄到「public ∪ 主体被授 read」。
+    const readable = isGlobalAdmin(userId) ? undefined : store.readableRepositoryNames(userId);
+    const items = store.searchSuggest(
+      url.searchParams.get("q") ?? "",
+      readable,
+      intParam(url, "limit", 10),
+    );
+    return HttpResponse.json({ items });
   }),
 
   // —— 认证（公开）——
@@ -1251,7 +1316,7 @@ export const handlers = [
       : err("not_found", "用户不存在", 404);
   }),
 
-  // FR-109：管理员发布账号策略，mock 与真实管理接口保持同一路径与字段。
+  // 管理员发布账号策略，mock 与真实管理接口保持同一路径与字段。
   http.get("*/api/v1/users/:id/publish-policies/:repo", ({ request, params }) => {
     const denied = adminUnauthorized(request);
     if (denied) return denied;
@@ -1289,7 +1354,7 @@ export const handlers = [
     return policy ? HttpResponse.json(policy) : err("not_found", "用户或 Hosted 仓库不存在", 404);
   }),
 
-  // FR-109：批量应用发布策略。与真实后端同源：先对全部仓库做统一预校验，任一仓库不存在或
+  // 批量应用发布策略。与真实后端同源：先对全部仓库做统一预校验，任一仓库不存在或
   // 不是 hosted 即整体拒绝（4xx，消息点名仓库）；否则逐仓库落库并返回逐仓库结果。
   http.put("*/api/v1/users/:id/publish-policies", async ({ request, params }) => {
     const denied = adminUnauthorized(request);
@@ -1345,7 +1410,7 @@ export const handlers = [
     return HttpResponse.json({ results: results.results });
   }),
 
-  // —— 用户组（FR-36）：八个端点均仅管理员可用 ——
+  // —— 用户组：八个端点均仅管理员可用 ——
   http.get("*/api/v1/user-groups", ({ request }) => {
     const denied = adminUnauthorized(request);
     if (denied) {
@@ -1473,7 +1538,7 @@ export const handlers = [
   }),
 
   // —— 仓库 ——
-  // FR-66：匿名（无 Bearer）也可列仓库——开关开时返回匿名可读集合，关时 401。
+  // 匿名（无 Bearer）也可列仓库——开关开时返回匿名可读集合，关时 401。
   http.get("*/api/v1/repositories", ({ request }) => {
     const url = new URL(request.url);
     const page = intParam(url, "page", 1);
@@ -1578,7 +1643,7 @@ export const handlers = [
     return HttpResponse.json(store.pinnedResponse(null));
   }),
 
-  // —— 匿名访问全局开关（FR-66，admin）——
+  // —— 匿名访问全局开关（admin）——
   http.get(
     "*/api/v1/settings/anonymous-access",
     ({ request }) =>
@@ -1606,7 +1671,7 @@ export const handlers = [
     const base = isEmptyScenario(request)
       ? { ...store.settings(), anonymousAccess: false, publicUrl: "" }
       : store.settings();
-    // FR-40 追加九：后端会回显「数值 + 单位」与人类表达，界面据此回填两个控件。
+    // 后端会回显「数值 + 单位」与人类表达，界面据此回填两个控件。
     // devmock 必须同口径返回，否则前端拿不到 value/unit，只能退回"按秒显示"。
     const parts = mockDurationToParts(base.backupAutoInterval);
     return HttpResponse.json({
@@ -1614,7 +1679,7 @@ export const handlers = [
       backupAutoIntervalExpr: mockFormatDurationHuman(base.backupAutoInterval),
       backupAutoIntervalValue: parts.value,
       backupAutoIntervalUnit: parts.unit,
-      // FR-40 追加十二：最近一次成功备份包的大小，供界面估算容量占用。
+      // 最近一次成功备份包的大小，供界面估算容量占用。
       backupLatestPackageBytes:
         mockBackups.find((b) => b.status === "done" && (b.sizeBytes ?? 0) > 0)?.sizeBytes ?? 0,
     });
@@ -1636,7 +1701,7 @@ export const handlers = [
       backupAutoInterval?: number;
       backupKeepLast?: number;
       backupRetentionDays?: number;
-      // FR-40 追加九：间隔的人类表达（"5m"/"2h"/"1d"…），优先级高于秒字段。
+      // 间隔的人类表达（"5m"/"2h"/"1d"…），优先级高于秒字段。
       backupAutoIntervalExpr?: string;
     };
     const current = store.settings();
@@ -1674,7 +1739,7 @@ export const handlers = [
           typeof body.originTokenValue === "string"
             ? body.originTokenValue
             : current.originTokenValue,
-        // FR-40：三项都按 `typeof === "number"` 判断而非真值判断——0 是合法取值
+        // 三项都按 `typeof === "number"` 判断而非真值判断——0 是合法取值
         // （关闭 / 不限制），用 `body.x || current.x` 会把 0 悄悄吞回存量值。
         backupAutoInterval: nextInterval,
         backupKeepLast:
@@ -1687,7 +1752,7 @@ export const handlers = [
     );
   }),
 
-  // FR-118：当前节点统一审计观测。旧 /audit-logs 仍保留在下方兼容既有页面。
+  // 当前节点统一审计观测。旧 /audit-logs 仍保留在下方兼容既有页面。
   http.get("*/api/v1/observability/audit/summary", ({ request }) => {
     const denied = adminUnauthorized(request);
     if (denied) return denied;
@@ -1850,7 +1915,7 @@ export const handlers = [
         cacheHitRate: (78 + jitter(6, 5)) / 84,
       },
       requestTrend: trendBuckets,
-      // FR-143：下载累计趋势（与 requestTrend 同桶口径；预览数据取请求趋势的下载分量做基线，
+      // 下载累计趋势（与 requestTrend 同桶口径；预览数据取请求趋势的下载分量做基线，
       // 保证「下载 ≤ 请求」的直觉关系，且刷新时随快照序号抖动）。
       downloadTrend: trendBuckets.map((bucket, index) => ({
         from: bucket.from,
@@ -1907,7 +1972,7 @@ export const handlers = [
   }),
 
   http.get("*/api/v1/observability/downloads/by-client", () => {
-    // FR-144：来源聚合（独立来源口径）。预览数据给固定来源集 + 快照抖动，
+    // 来源聚合（独立来源口径）。预览数据给固定来源集 + 快照抖动，
     // 便于验证 Top 排名与族分布渲染；真实口径以服务端为准。
     const tick = nextSnapshotTick("download-clients");
     const jitter = (salt: number, amplitude: number) => snapshotJitter(tick, salt, amplitude);
@@ -2125,7 +2190,7 @@ export const handlers = [
     return HttpResponse.json(response);
   }),
 
-  // FR-38：管理审计日志（非 OpenAPI 端点，仅管理员可读）。
+  // 管理审计日志（非 OpenAPI 端点，仅管理员可读）。
   http.get("*/api/v1/audit-logs", ({ request }) => {
     const denied = adminUnauthorized(request);
     if (denied) {
@@ -2200,7 +2265,7 @@ export const handlers = [
     return HttpResponse.json(repo, { status: 201 });
   }),
 
-  // FR-32：开发态返回当前实例启动时启用的格式。
+  // 开发态返回当前实例启动时启用的格式。
   http.get("*/api/v1/formats/enabled", ({ request }) => {
     const denied = adminUnauthorized(request);
     if (denied) {
@@ -2220,10 +2285,10 @@ export const handlers = [
       remoteUrl?: string;
       members?: string[];
       aliases?: string[];
-      /** FR-41：存储配额局部补丁（缺省 = 不修改，0 = 改为不限）。 */
+      /** 存储配额局部补丁（缺省 = 不修改，0 = 改为不限）。 */
       quotaBytes?: number;
       quotaAssets?: number;
-      /** FR-41：代理缓存保留天数局部补丁（缺省 = 不修改，0 = 关闭）。 */
+      /** 代理缓存保留天数局部补丁（缺省 = 不修改，0 = 关闭）。 */
       cacheRetentionDays?: number;
     };
     const repo = store.updateRepository(String(params.name), body);
@@ -2275,7 +2340,7 @@ export const handlers = [
     return HttpResponse.json({ deleted });
   }),
 
-  // FR-113：仓库 online/offline 开关（仅管理员；本地运维状态，不参与复制）。
+  // 仓库 online/offline 开关（仅管理员；本地运维状态，不参与复制）。
   http.put("*/api/v1/repositories/:name/online", async ({ request, params }) => {
     const denied = adminUnauthorized(request);
     if (denied) {
@@ -2289,7 +2354,7 @@ export const handlers = [
     return repo ? HttpResponse.json(repo) : err("not_found", "仓库不存在", 404);
   }),
 
-  // FR-114：手动重测仓库上游连接（仅管理员；仅 online 的 proxy 可重测）。
+  // 手动重测仓库上游连接（仅管理员；仅 online 的 proxy 可重测）。
   http.post("*/api/v1/repositories/:name/recheck-connection", ({ request, params }) => {
     const denied = adminUnauthorized(request);
     if (denied) {
@@ -2383,7 +2448,7 @@ export const handlers = [
     return HttpResponse.json(result);
   }),
 
-  // FR-103：已弃用的批量删除兼容入口，委托统一原子操作。
+  // 已弃用的批量删除兼容入口，委托统一原子操作。
   http.post("*/api/v1/repositories/:name/assets/batch-delete", async ({ request, params }) => {
     const denied = adminUnauthorized(request);
     if (denied) {
@@ -2455,7 +2520,7 @@ export const handlers = [
     return HttpResponse.json(response);
   }),
 
-  // FR-54：目录懒加载。匿名仅在全局开关开启且仓库 public 时可读。
+  // 目录懒加载。匿名仅在全局开关开启且仓库 public 时可读。
   http.get("*/api/v1/repositories/:name/tree", ({ request, params }) => {
     const name = String(params.name);
     const denied = repositoryReadUnauthorized(request, name);
@@ -2482,7 +2547,7 @@ export const handlers = [
     return result ? HttpResponse.json(result) : err("not_found", "仓库不存在", 404);
   }),
 
-  // FR-73：Maven 网页上传（服务端生成 pom/校验和/metadata；mock 仅登记 asset 摘要）。
+  // Maven 网页上传（服务端生成 pom/校验和/metadata；mock 仅登记 asset 摘要）。
   http.post("*/api/v1/repositories/:name/maven-upload", async ({ request, params }) => {
     const denied = repositoryActionUnauthorized(request, String(params.name), "write");
     if (denied) {
@@ -2756,7 +2821,7 @@ export const handlers = [
     return HttpResponse.json(result);
   }),
 
-  // —— FR-41：存储治理运维作业面（admin）——
+  // —— 存储治理运维作业面（admin）——
   // 作业清单由 store 的"注册表"决定；手动触发复用后端语义：未知作业名 404、正在运行 409。
   http.get("*/api/v1/maintenance/jobs", ({ request }) => {
     const denied = adminUnauthorized(request);
@@ -2782,8 +2847,8 @@ export const handlers = [
     return HttpResponse.json({ name: result.name, started: true }, { status: 202 });
   }),
 
-  // —— 节点备份与搬迁（FR-132）——
-  // —— 写入冻结窗口（FR-134，admin）——
+  // —— 节点备份与搬迁——
+  // —— 写入冻结窗口（admin）——
   // 冻结期间节点拒绝本地业务与管理写入，但放行读 / 登录 / 备份导入路径。
   http.get(
     "*/api/v1/maintenance/freeze",
@@ -2828,7 +2893,7 @@ export const handlers = [
     return HttpResponse.json(mockFreeze);
   }),
 
-  // —— 一键重启（FR-40 追加七，admin）——
+  // —— 一键重启（admin）——
   // mock 环境没有可重启的进程，故如实返回**降级**结果（supported:false + 可复制命令）：
   // 这正是真实世界里"容器部署 / 无 systemctl"时的形态，也是界面必须能处理的那条分支。
   // 若这里假装 supported:true，前端探活会一直等一个永不重启的 mock，把降级路径漏测掉。
@@ -2860,7 +2925,7 @@ export const handlers = [
     });
   }),
 
-  // —— 待重启生效的恢复状态（FR-40 追加六，admin）——
+  // —— 待重启生效的恢复状态（admin）——
   // 与下面 /backups/import 等一样必须早于 `*/api/v1/backups/:id`，否则会被 :id 通配吞掉。
   // 默认 pending=false（绝大多数时候如此），由导入/上传的终态推进来翻转，
   // 这样开发环境也能复现"导入成功后按钮转橙、再导入被拒"的完整链路。
@@ -2882,7 +2947,7 @@ export const handlers = [
     });
   }),
 
-  // —— 备份包内容预览（FR-40 追加十一，admin）——
+  // —— 备份包内容预览（admin）——
   // 返回包内仓库/账号/制品样例。必须早于 `*/api/v1/backups/:id`，否则被 :id 通配吞掉。
   http.get("*/api/v1/backups/:id/preview", ({ request, params }) => {
     const denied = adminUnauthorized(request);
@@ -2916,7 +2981,7 @@ export const handlers = [
     });
   }),
 
-  // —— 包内容与本机差异（FR-40 追加十四，admin）——
+  // —— 包内容与本机差异（admin）——
   // 必须早于 `*/api/v1/backups/:id`，否则被 :id 通配吞掉。
   http.get("*/api/v1/backups/:id/diff", ({ request, params }) => {
     const denied = adminUnauthorized(request);
@@ -2968,7 +3033,7 @@ export const handlers = [
     });
   }),
 
-  // —— 未管理备份包（FR-40 追加八，admin）——
+  // —— 未管理备份包（admin）——
   // 这些包在磁盘上有包体但登记表无记录。mock 里用一组固定候选模拟"历史残留"。
   // 必须早于 `*/api/v1/backups/:id`，否则 unmanaged 会被 :id 通配吞掉。
   http.get("*/api/v1/backups/unmanaged", ({ request }) => {
@@ -3056,7 +3121,7 @@ export const handlers = [
     return HttpResponse.json({ items, adopted, skipped, failed });
   }),
 
-  // —— 用本机已有的备份包恢复（FR-40 追加六，admin）——
+  // —— 用本机已有的备份包恢复（admin）——
   // 补的是"页面上明明有包，却没有任何按钮能用它恢复"这个缺口（实测反馈"只能备份无法恢复"）。
   // 语义与其它三条恢复通道一致：受理 → 暂存 → 写 restore.pending → 需重启生效，
   // 故这里也置位 mockPendingRestore，让"待重启"提示与 409 防护在开发环境同样可见。
@@ -3106,7 +3171,7 @@ export const handlers = [
     return HttpResponse.json(record, { status: 202 });
   }),
 
-  // —— 从 URL 导入备份包（FR-137，admin）——
+  // —— 从 URL 导入备份包（admin）——
   // 注意路由注册顺序：必须早于 `*/api/v1/backups/:id`，否则 /backups/imports
   // 会被 :id 通配吞掉（与 gin 上实测一致的静默吞路由问题）。
   http.post("*/api/v1/backups/import", async ({ request }) => {
@@ -3182,7 +3247,7 @@ export const handlers = [
     return found ? HttpResponse.json(found) : err("not_found", "导入记录不存在", 404);
   }),
 
-  // —— 分片上传备份包（FR-137 第三通道，admin）——
+  // —— 分片上传备份包（第三通道，admin）——
   // 路由注册顺序：必须早于 `*/api/v1/backups/:id`，否则 `POST /api/v1/backups/uploads`
   // 会被 :id 通配吞掉（与 gin 上实测一致的静默吞路由问题，同 backups/imports 的处理）。
   http.post("*/api/v1/backups/uploads", async ({ request }) => {
@@ -3289,7 +3354,7 @@ export const handlers = [
     };
     session.status = "completed";
     const operator = store.findUser(mockUserId(request) ?? 0)?.username ?? "admin";
-    // FR-40 追加八：complete 不再产生导入记录，只把包收进备份列表。
+    // complete 不再产生导入记录，只把包收进备份列表。
     // 因此这里直接返回一条 done 回执，并把包并入备份包列表（下方 push），
     // 不再走 advanceMockImport 的 queued→…→pending_restart 状态机。
     const importId = `imp-${new Date()
@@ -3429,7 +3494,7 @@ export const handlers = [
     });
   }),
 
-  // —— FR-40：恢复演练（202 + 轮询）——
+  // —— 恢复演练（202 + 轮询）——
   // 路由注册顺序与 :id 通配无关（drill / verifications 都在 :id 段之后，不会互相吞），
   // 但仍集中放在备份端点组内，与后端 api.gen.go 的注册顺序对应。
   http.post("*/api/v1/backups/:id/drill", async ({ request, params }) => {

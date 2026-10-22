@@ -298,7 +298,7 @@ func TestUserGroupServiceDeleteCleansAclExplicitly(t *testing.T) {
 	}
 }
 
-// allActions 是 FR-36 的全部六档 ACL 动作，供蕴含 / 清理类用例遍历。
+// allActions 是的全部六档 ACL 动作，供蕴含 / 清理类用例遍历。
 var allActions = []string{
 	repository.ActionRead, repository.ActionWrite, repository.ActionPublish,
 	repository.ActionDelete, repository.ActionAclManage, repository.ActionAdmin,

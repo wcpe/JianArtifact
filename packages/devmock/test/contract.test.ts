@@ -108,7 +108,7 @@ describe("devmock ↔ OpenAPI 契约一致性", () => {
     expectValid("AclEntry", { subjectId: 1, action: "read" });
     // 组主体：subjectType=group + subjectGroupId。
     expectValid("AclEntry", { subjectType: "group", subjectGroupId: 7, action: "publish" });
-    // 六档动作全部合法（FR-36 由三档扩为六档）。
+    // 六档动作全部合法（由三档扩为六档）。
     for (const action of ["read", "write", "publish", "delete", "acl_manage", "admin"]) {
       expectValid("AclEntry", { subjectId: 1, action });
     }
@@ -157,7 +157,7 @@ describe("devmock ↔ OpenAPI 契约一致性", () => {
     expect(validate({ description: "缺少状态" })).toBe(false);
   });
 
-  it("契约枚举含 HALF_OPEN（FR-43），缺它或漂移都能被检出", () => {
+  it("契约枚举含 HALF_OPEN，缺它或漂移都能被检出", () => {
     // 正向：阻止态的六个取值全部合法，HALF_OPEN 不被当作未知状态拒绝。
     for (const status of [
       "READY",
@@ -394,7 +394,7 @@ describe("devmock ↔ OpenAPI 契约一致性", () => {
     expect(validateProxyRepository({ ...proxyRepo, cacheRetentionDays: -1 })).toBe(false);
   });
 
-  // —— FR-40：来源列 + 恢复演练 ——
+  // —— 来源列 + 恢复演练 ——
   it("备份包来源仅接受 manual / auto，且是 required（漂移可被检出）", () => {
     expectValid("BackupPackage", mockBackupPackage());
     expectValid("BackupPackageList", mockBackupPackageList());

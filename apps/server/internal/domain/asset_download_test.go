@@ -7,7 +7,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// 覆盖 FR-142 采集口径：只计 GET+200 的完整传输（206/POST/非制品路径不计）、
+// 覆盖采集口径：只计 GET+200 的完整传输（206/POST/非制品路径不计）、
 // UA 归类、分钟桶内存合并后批量落库，以及 flush 失败时的保留重试语义。
 func TestAssetDownloadServiceRecordsOnlyCompleteTransfers(t *testing.T) {
 	t.Parallel()
