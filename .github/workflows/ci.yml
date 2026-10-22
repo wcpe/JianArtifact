@@ -99,6 +99,9 @@ jobs:
           JIAN_GATE_SCOPE: build-dist
         run: bash scripts/check.sh
       # 只上传后端 embed 所需的那份，避免两份重复存储。
+      # 层级约定：artifact 内保留 apps/server/web/dist 之下的相对结构；下载端下载到同一
+      # 目录即可还原。scripts/check.sh 的 sync_dist 在复用前会校验 index.html 的位置，
+      # 万一层级不符（出现 dist/dist）会先纠正再继续，并给出明确提示。
       - name: 上传 embed 产物
         uses: actions/upload-artifact@v5
         with:

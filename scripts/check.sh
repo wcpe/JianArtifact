@@ -67,10 +67,32 @@ GO_TEST_SHARD_COUNT=3
 sync_dist() {
   # 后端 //go:embed all:dist：dist 目录不入库（见 .gitignore），没有产物时 go build 会直接
   # 报 "pattern all:dist: no matching files found"。因此任何 Go 步骤都必须在产物就绪之后。
-  echo "==> 同步前端产物到后端 embed 目录（apps/server/web/dist）"
-  rm -rf apps/server/web/dist
-  mkdir -p apps/server/web/dist
-  cp -a apps/web/dist/. apps/server/web/dist/
+  #
+  # 两种就绪来源，按顺序判断：
+  #   1. 本机刚构建出 apps/web/dist（build-dist 或 all 分支的前一步）；
+  #   2. CI 的后端 job 通过 artifact 直接把产物下载到 apps/server/web/dist —— 那里没有
+  #      apps/web/dist，若仍无条件 rm -rf 再复制，就会把已下载的产物删掉并因 cp 失败而中断
+  #      （拆分 CI 时踩过：四个后端 job 全部在 15 秒内失败）。
+  if [ -d apps/web/dist ] && [ -n "$(ls -A apps/web/dist 2>/dev/null)" ]; then
+    echo "==> 同步前端产物到后端 embed 目录（apps/server/web/dist）"
+    rm -rf apps/server/web/dist
+    mkdir -p apps/server/web/dist
+    cp -a apps/web/dist/. apps/server/web/dist/
+    return
+  fi
+  if [ -d apps/server/web/dist ] && [ -n "$(ls -A apps/server/web/dist 2>/dev/null)" ]; then
+    # 校验解包结果：artifact 若被套成了 dist/dist/，embed 会打进错误层级，
+    # 表现为「构建成功但页面 404」。这里提前失败并说清原因。
+    if [ ! -f apps/server/web/dist/index.html ] && [ -f apps/server/web/dist/dist/index.html ]; then
+      echo "后端 embed 产物层级异常（apps/server/web/dist/dist/），正在上提一层" >&2
+      mv apps/server/web/dist/dist/* apps/server/web/dist/ 2>/dev/null || true
+    fi
+    echo "==> 复用已有的后端 embed 产物（apps/server/web/dist 已就绪，无需从 apps/web/dist 同步）"
+    return
+  fi
+  echo "缺少前端产物：apps/web/dist 与 apps/server/web/dist 均为空。" >&2
+  echo "本地请先跑 JIAN_GATE_SCOPE=build-dist（或直接跑不带参数的全量）；CI 中该 job 需下载 web-dist artifact。" >&2
+  exit 1
 }
 
 run_fr_numbers() {
