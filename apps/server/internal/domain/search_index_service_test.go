@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -592,22 +593,59 @@ func TestSearchIndexServiceRejectsConcurrentRebuild(t *testing.T) {
 //
 // 之所以要记录顺序而不是只看结果：这两步的**先后**就是正确性本身——先置完成再自检时，
 // 中间窗口里查询路径已经在用带缺口的索引返回结果，而任何「最后状态对不对」的断言都看不出来。
+//
+// 记录器必须加锁：`Rebuild` 把回填放到后台 goroutine 里跑，于是 `Rebuild` 受理之后，
+// 记录器会被两个 goroutine 同时读写（后台回填追加、用例侧重置与读取），
+// 无锁时 `-race` 会直接报数据竞争（CI 上曾据此把整条质量门判红）。
 type orderStore struct {
 	*repository.SearchIndexStateRepo
+
+	mu       sync.Mutex
 	events   []string
 	driftErr error
 }
 
+// record 追加一条动作记录；后台回填与用例侧都可能调用，故统一走锁。
+func (s *orderStore) record(action string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = append(s.events, action)
+}
+
+// resetEvents 清空记录，用于只观察「从现在起」的动作顺序。
+func (s *orderStore) resetEvents() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = nil
+}
+
+// eventsJoined 返回当前动作序列的快照，避免用例侧读到正在追加的切片。
+func (s *orderStore) eventsJoined() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return strings.Join(s.events, "→")
+}
+
+// setDriftErr 切换漂移比对失败的注入状态。
+func (s *orderStore) setDriftErr(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.driftErr = err
+}
+
 func (s *orderStore) MeasureDrift() (repository.SearchIndexDrift, error) {
-	s.events = append(s.events, "drift")
-	if s.driftErr != nil {
-		return repository.SearchIndexDrift{}, s.driftErr
+	s.record("drift")
+	s.mu.Lock()
+	err := s.driftErr
+	s.mu.Unlock()
+	if err != nil {
+		return repository.SearchIndexDrift{}, err
 	}
 	return s.SearchIndexStateRepo.MeasureDrift()
 }
 
 func (s *orderStore) MarkCompleted() error {
-	s.events = append(s.events, "completed")
+	s.record("completed")
 	return s.SearchIndexStateRepo.MarkCompleted()
 }
 
@@ -621,7 +659,7 @@ func TestSearchIndexServiceDriftCheckPrecedesCompletion(t *testing.T) {
 	if err := svc.Run(context.Background()); err != nil {
 		t.Fatalf("回填：%v", err)
 	}
-	if got := strings.Join(store.events, "→"); got != "drift→completed" {
+	if got := store.eventsJoined(); got != "drift→completed" {
 		t.Fatalf("回填结束时的动作顺序 = %s，期望「drift→completed」（先自检再置完成）", got)
 	}
 	if !indexState(t, db).Completed() {
@@ -650,17 +688,17 @@ func TestSearchIndexServiceKeepsIncompleteWhenDriftUnmeasurable(t *testing.T) {
 	if indexState(t, db).Completed() {
 		t.Fatal("无法比对漂移时不得标记完成，否则未知缺口会被永久当成「已就绪」")
 	}
-	if got := strings.Join(store.events, "→"); got != "drift" {
+	if got := store.eventsJoined(); got != "drift" {
 		t.Fatalf("比对失败时不应再调用 MarkCompleted，实际动作 = %s", got)
 	}
 
 	// 比对恢复正常后，下一次回填应能正常置完成（失败不是终态）。
-	store.driftErr = nil
-	store.events = nil
+	store.setDriftErr(nil)
+	store.resetEvents()
 	if err := svc.Run(context.Background()); err != nil {
 		t.Fatalf("比对恢复后重跑：%v", err)
 	}
-	if got := strings.Join(store.events, "→"); got != "drift→completed" {
+	if got := store.eventsJoined(); got != "drift→completed" {
 		t.Fatalf("重跑动作顺序 = %s，期望「drift→completed」", got)
 	}
 	if !indexState(t, db).Completed() {
@@ -780,7 +818,7 @@ func TestSearchIndexServiceDemotesOnMissingAtStartup(t *testing.T) {
 	// 连续两轮是为了钉住「反复重启不会反复重现漏结果窗口」；同时统计 MarkCompleted 的调用
 	// 次数——只看最终状态会被「先置完成、再检出、又降级」蒙混过去，而那个窗口里查询路径
 	// 用的就是带缺口的索引。
-	store.events = nil
+	store.resetEvents()
 	for round := 2; round <= 3; round++ {
 		if err := svc.Run(context.Background()); err == nil {
 			t.Fatalf("第 %d 次运行：水位以内有缺口，本次无法置完成，应如实报错", round)
@@ -789,7 +827,7 @@ func TestSearchIndexServiceDemotesOnMissingAtStartup(t *testing.T) {
 			t.Fatalf("第 %d 次运行后 completed_at 仍不得置位（续跑覆盖不到水位以内的缺口）", round)
 		}
 	}
-	if got := strings.Join(store.events, "→"); strings.Contains(got, "completed") {
+	if got := store.eventsJoined(); strings.Contains(got, "completed") {
 		t.Fatalf("有缺口时不得调用 MarkCompleted，实际动作序列 = %s", got)
 	}
 	if got := indexHitCount(t, db, "pkg-"); got != rows-len(dropped) {
