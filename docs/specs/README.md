@@ -12,35 +12,28 @@
 | 架构决策 | [`../adr/README.md`](../adr/README.md)             | 为什么采用或否决某种长期方案         |
 | 功能规格 | 本目录                                             | 某个 FR 的开发目标、设计、任务和验收 |
 
-## 2. 0.11.0 规格（开发中）
+## 2. 0.12.0 规格（已发布）
 
-`0.11.0` 是 M3 窗口（`VERSION=0.11.0`，进行中）。
+`0.12.0` 收尾 M3 剩余条目并改造搜索体验（`VERSION=0.12.0`，已随附注 tag `v0.12.0` 发布）。下表 FR 状态为发版时的定稿。
 
-| FR       | 规格                                                                             | 主题                       | 状态                             |
-| -------- | -------------------------------------------------------------------------------- | -------------------------- | -------------------------------- |
-| FR-44    | [`0.11.0-job-scheduler.md`](0.11.0-job-scheduler.md)                             | 定时任务调度器             | 开发完成，待用户验收             |
-| FR-39    | [`0.11.0-prometheus-metrics.md`](0.11.0-prometheus-metrics.md)                   | Prometheus 指标导出        | 开发完成，待用户验收             |
-| FR-34/35 | [`0.11.0-external-identity-providers.md`](0.11.0-external-identity-providers.md) | 外部身份源（OIDC/LDAP）    | OIDC 段完成待验收；LDAP 段待开发 |
-| FR-41    | [`0.11.0-storage-governance.md`](0.11.0-storage-governance.md)                   | 存储治理（配额/清理/保留） | 开发完成，待用户验收             |
+| FR              | 规格                                                                                               | 主题                          | 状态           |
+| --------------- | -------------------------------------------------------------------------------------------------- | ----------------------------- | -------------- |
+| FR-36           | [`0.12.0-user-groups-and-fine-grained-actions.md`](0.12.0-user-groups-and-fine-grained-actions.md) | 用户组与更细粒度权限动作      | 已交付@v0.12.0 |
+| FR-40           | [`0.12.0-auto-backup-and-drill.md`](0.12.0-auto-backup-and-drill.md)                               | 周期化自动备份与恢复演练      | 已交付@v0.12.0 |
+| FR-43           | [`0.12.0-upstream-circuit-breaker.md`](0.12.0-upstream-circuit-breaker.md)                         | 上游断路器补强                | 已交付@v0.12.0 |
+| FR-149 / FR-153 | [`search-index-and-performance.md`](search-index-and-performance.md)                               | 搜索索引与查询性能 / 搜索建议 | 已交付@v0.12.0 |
+| FR-150 / FR-151 | [`search-package-aggregation.md`](search-package-aggregation.md)                                   | 包级聚合与分层排序 / 主从双栏 | 已交付@v0.12.0 |
 
-## 2.1 未开窗规格（FR-36、FR-40、FR-43）
+## 2.1 0.11.0 规格（已发布）
 
-FR-36 与 FR-43 均已开发完成并待验收，FR-40 已开发完成、待用户验收；但下一个开发窗口尚未开启（`VERSION` 仍为 `0.11.0`），版本号待定，故单列于此、不并入上面已开窗的 `0.11.0` 节。规格文件名沿用了阶段一写稿时的 `0.12.0-` 前缀，**该前缀只是当时对下一窗口的占位预期，不是已确定的版本号**，一切版本归属以 `docs/PRD.md` 与根目录 `VERSION` 为准。
+`0.11.0` 是 M3 认证与运维窗口（`VERSION=0.11.0`，已随附注 tag `v0.11.0` 发布）。
 
-| FR    | 规格                                                                                               | 主题                     | 状态                 |
-| ----- | -------------------------------------------------------------------------------------------------- | ------------------------ | -------------------- |
-| FR-36 | [`0.12.0-user-groups-and-fine-grained-actions.md`](0.12.0-user-groups-and-fine-grained-actions.md) | 用户组与更细粒度权限动作 | 开发完成，待用户验收 |
-| FR-40 | [`0.12.0-auto-backup-and-drill.md`](0.12.0-auto-backup-and-drill.md)                               | 周期化自动备份与恢复演练 | 开发完成，待用户验收 |
-| FR-43 | [`0.12.0-upstream-circuit-breaker.md`](0.12.0-upstream-circuit-breaker.md)                         | 上游断路器补强           | 开发完成，待用户验收 |
-
-## 2.2 未定版本规格（搜索体验与性能，FR-149 ~ FR-153）
-
-搜索体验与性能改造（PRD §4.4.2）**已开发完成、待实机验收**（PRD 中相关需求标为「已交付@未发布」：索引表 `asset_path_fts`、后台回填与全量重建、suggest 端点、包级聚合均已落地并有自动化测试覆盖；剩下的只是需用户确认的实机项，见各规格的验收清单）。版本归属待开窗时确定，故单列于此。其中需要 spec 的项已起草；免 spec 的两项，规格仅作开发与验收依据。
-
-| FR              | 规格                                                                 | 主题                          | 状态                   |
-| --------------- | -------------------------------------------------------------------- | ----------------------------- | ---------------------- |
-| FR-149 / FR-153 | [`search-index-and-performance.md`](search-index-and-performance.md) | 搜索索引与查询性能 / 搜索建议 | 已开发完成、待实机验收 |
-| FR-150 / FR-151 | [`search-package-aggregation.md`](search-package-aggregation.md)     | 包级聚合与分层排序 / 主从双栏 | 已开发完成、待实机验收 |
+| FR       | 规格                                                                             | 主题                       | 状态           |
+| -------- | -------------------------------------------------------------------------------- | -------------------------- | -------------- |
+| FR-44    | [`0.11.0-job-scheduler.md`](0.11.0-job-scheduler.md)                             | 定时任务调度器             | 已交付@v0.11.0 |
+| FR-39    | [`0.11.0-prometheus-metrics.md`](0.11.0-prometheus-metrics.md)                   | Prometheus 指标导出        | 已交付@v0.11.0 |
+| FR-34/35 | [`0.11.0-external-identity-providers.md`](0.11.0-external-identity-providers.md) | 外部身份源（OIDC/LDAP）    | 已交付@v0.11.0 |
+| FR-41    | [`0.11.0-storage-governance.md`](0.11.0-storage-governance.md)                   | 存储治理（配额/清理/保留） | 已交付@v0.11.0 |
 
 ## 3. 0.9.0 规格（已发布）
 

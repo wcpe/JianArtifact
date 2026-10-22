@@ -4,9 +4,7 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## 未发布
-
-> 本段登记**尚未开窗**的变更：`VERSION` 仍为 `0.11.0`，版本号待下一个开发窗口开启时统一确定，故此处不写具体版本。
+## 0.12.0（2026-10-23）
 
 ### 新增
 
