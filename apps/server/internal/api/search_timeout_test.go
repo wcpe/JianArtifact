@@ -155,9 +155,14 @@ func TestSearchHandlerTimeoutPath(t *testing.T) {
 	}
 
 	// 预算耗尽：领域层把 deadline 归一为 ErrSearchTimeout，必须映射为 504 + search_timeout。
-	// 压到 1ns 让 deadline 必然先于任何检索语句生效（这是确定性构造，不是抢时序）。
-	e.svc.SetSearchTimeout(time.Nanosecond)
-	rec = e.serveSearch(t, nil, "q=timeout")
+	//
+	// 构造方式：让**父上下文已经过期**（deadline 设在过去），而不是把 SetSearchTimeout 压到
+	// 1ns。后者看似「必然先于检索语句生效」，实际仍取决于定时器回调与查询执行谁先被调度——
+	// 实测 5 次里失败 4 次，属于抢时序的伪确定性写法。父上下文已过期则是纯状态检查：领域层
+	// 派生预算时立刻就能看到 DeadlineExceeded，与调度无关。
+	expired, cancelExpired := context.WithDeadline(context.Background(), time.Now().Add(-time.Hour))
+	defer cancelExpired()
+	rec = e.serveSearch(t, expired, "q=timeout")
 	if rec.Code != http.StatusGatewayTimeout {
 		t.Fatalf("超时状态码 = %d（体：%s），期望 504", rec.Code, rec.Body.String())
 	}

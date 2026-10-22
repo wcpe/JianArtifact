@@ -94,9 +94,17 @@ interface SortPreference {
   order: SearchSortOrder;
 }
 
-/** 一次搜索的取数结果 + 它所属的关键词（用于判定当前展示结果是否已切到新口径）。 */
+/** 一次搜索的取数结果 + 它所属的关键词与取数主体（用于判定当前展示结果是否已切到新口径）。 */
 interface SearchPayload {
   query: string;
+  /**
+   * 这份结果所属的会话身份（`user:<id>` / `anon`）。
+   *
+   * 只带关键词是不够的：私有仓库的可见性随登录态变化，同一个关键词在不同身份下是**不同的
+   * 结果集**。会话过期后重新发起的是匿名请求，若只比对关键词，上一身份的私有命中仍会被判为
+   * “属于当前口径”而继续展示——这正是必须把身份写进 payload 的原因。
+   */
+  identity: string;
   result: SearchResult;
 }
 
@@ -182,6 +190,10 @@ export function SearchPage() {
     setInput(q);
   }, [q]);
 
+  // 会话身份标识：既是取数依赖、缓存键的一部分，也是结果归属与视图作废的判定依据。
+  // 与 AuthContext 的身份口径保持一致（`user:<id>` / 匿名为 `anon`）。
+  const identity = user ? `user:${user.id}` : "anon";
+
   // 取数口径固定为「包级聚合 + 相关度」：其余排序键全部在前端重排（规格 §3.9），
   // 因此切换排序不触发请求，也就不用进依赖数组。
   //
@@ -191,8 +203,8 @@ export function SearchPage() {
   // 从不渲染 items，请求分页既换不出新内容，又会多打一次全量聚合。要文件级分页就得有
   // 文件级视图，那是另一套口径，不在本页。
   //
-  // 返回值把「这份数据属于哪个关键词」一并带上：主从视图的重置要靠它判断当前展示的是
-  // 新口径的结果还是 keepPreviousData 暂留的旧结果（见下面重置 effect）。
+  // 返回值把「这份数据属于哪个关键词、哪个身份」一并带上：主从视图的重置要靠它判断当前
+  // 展示的是新口径的结果还是 keepPreviousData 暂留的旧结果（见下面重置 effect）。
   //
   // abortable：把 signal 透传到 searchAssets → api/client → fetch。新一次搜索发起前
   // （q 变化或点「取消搜索」）都会真的中止上一次请求，而不是只靠 active 标志丢弃响应。
@@ -203,22 +215,27 @@ export function SearchPage() {
       q
         ? searchAssets({ q, group_by: "package", order: "relevance", signal }).then((result) => ({
             query: q,
+            identity,
             result,
           }))
         : Promise.resolve<SearchPayload>({
             query: q,
+            identity,
             result: { items: [], total: 0, facets: [] },
           }),
     // 登录身份必须进依赖：私有仓库的可见性由会话决定，身份变了取数口径就变了。
     // 少了它，登录后本页不会重拉，刚登录的用户看不到自己的私有仓库命中。
     [q, user],
-    // keepPreviousData：换关键词 / 后台刷新时保留旧结果、仅后台刷新，避免整块内容被骨架替换。
-    //
-    // 缓存键同样要带身份：asyncCache 是模块级 Map，只在 AuthContext 观察到身份变化时整体清空；
-    // 键里不带身份时，匿名与登录两种口径会共用同一条缓存，切账号后可能先回放上一个身份的结果。
     {
-      cacheKey: `search:package:${user?.id ?? "anon"}:${q}`,
+      // 缓存键同样要带身份：asyncCache 是模块级 Map，只在 AuthContext 观察到身份变化时整体清空；
+      // 键里不带身份时，匿名与登录两种口径会共用同一条缓存，切账号后可能先回放上一个身份的结果。
+      cacheKey: `search:package:${identity}:${q}`,
+      // keepPreviousData：换关键词 / 后台刷新时保留旧结果、仅后台刷新，避免整块内容被骨架替换。
       keepPreviousData: true,
+      // 但旧数据的保留**不得跨身份**：缓存键只隔离得了 asyncCache，隔离不了本组件手里的
+      // data state（clearAsyncCache() 清不到它）。身份一变就立刻作废，否则会话过期后上一主体
+      // 的私有仓库名、路径与校验和会一直挂在界面上——新发的匿名请求失败或被取消时尤其如此。
+      identityKey: identity,
       abortable: true,
     },
   );
@@ -226,9 +243,14 @@ export function SearchPage() {
   // 「搜索进行中」：首载（骨架屏）与换关键词 / 后台刷新都算，二者共用同一条进度条。
   const searching = state.loading || state.refreshing;
 
-  // 当前展示的数据及其所属关键词：keepPreviousData 期间 result 仍是上一口径的，query 也是。
-  const dataQuery = state.data?.query ?? null;
-  const result = state.data?.result ?? null;
+  // 当前展示的数据及其所属关键词 / 身份：keepPreviousData 期间 result 仍是上一口径的，
+  // query 与 identity 也都是上一份 payload 的。
+  //
+  // 身份不匹配的 payload 一律当作“没有数据”：即使组件里还留着上一主体的一份 data，
+  // 也不会在换身份的那一帧（effect 清空之前）被渲染出来。
+  const payload = state.data !== null && state.data.identity === identity ? state.data : null;
+  const dataQuery = payload?.query ?? null;
+  const result = payload?.result ?? null;
 
   // 筛选面板与输入框双向同步：面板改动即重拼表达式写回输入框
   const expr = useMemo(() => parseSearchExpression(input), [input]);
@@ -307,8 +329,8 @@ export function SearchPage() {
   // 翻开的包被折叠、选中项跳回第一个包。
   //
   // 判定「换代」而不是「数据对象变了」：keepPreviousData 期间 state.data 会先换成旧口径的
-  // 结果再换成新口径的，靠对象身份判断会在切换途中误重置。payload 自带所属关键词，
-  // `dataQuery === q` 才是「这份结果已经属于当前口径」。
+  // 结果再换成新口径的，靠对象身份判断会在切换途中误重置。payload 自带所属关键词与身份，
+  // 只有「关键词 + 身份」都对得上，才算「这份结果已经属于当前口径」。
   const resultReady = dataQuery === q;
   const viewScope = `${q}::${sortToken}`;
   const appliedScopeRef = useRef<string | null>(null);
@@ -325,6 +347,22 @@ export function SearchPage() {
     appliedScopeRef.current = viewScope;
     setView(initialViewState(sortedPackages));
   }, [resultReady, sortedPackages, viewScope]);
+
+  // 身份换代：立即作废上一主体的浏览状态。
+  //
+  // 结果本身由 useAsync 的 identityKey 负责清空，但组件这里还独立持有展开态与选中项——
+  // 它们记着上一主体的包键、仓库名与文件路径，不清就会在结果清空后继续挂在右栏 /
+  // 历史标记里。`appliedScopeRef` 一并复位，让新身份的结果到达时重新套用默认视图。
+  const identityRef = useRef(identity);
+  useEffect(() => {
+    if (identityRef.current === identity) {
+      return;
+    }
+    identityRef.current = identity;
+    appliedScopeRef.current = null;
+    setView(initialViewState([]));
+    setDetailOpen(false);
+  }, [identity]);
 
   // 跨过断点回宽屏时收起单栏详情：双栏下右栏恒可见，详情态没有意义。
   useEffect(() => {
@@ -522,7 +560,7 @@ export function SearchPage() {
         />
       );
     }
-    if (state.data === null) {
+    if (payload === null) {
       // 用户取消（不是失败）：静默回到空闲态，既不显示骨架也不报错，提示可重新发起。
       if (state.cancelled) {
         return (
@@ -690,7 +728,11 @@ export function SearchPage() {
             输入框是带候选下拉的自管组件（防抖 + 中止上一次 + 键盘 ↑↓/Enter/Esc）。
             回车与「包名候选」确认都走 handleSubmit；仓库名候选只改写表达式、不触发搜索。 */}
         <Group gap="xs" wrap="wrap" align="flex-start">
+          {/* key={identity}：候选下拉同样按主体隔离。suggest 会返回仓库名（含私有仓库），
+              候选列表又只存在组件自己的 state 里——换身份时强制重挂即可清空，不必在组件内
+              再造一套身份判定。重挂不丢输入：input 由本页持有并继续作为 value 传入。 */}
           <SearchSuggestInput
+            key={identity}
             placeholder={t("search.placeholder")}
             value={input}
             onChange={setInput}

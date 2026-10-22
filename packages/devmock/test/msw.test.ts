@@ -806,7 +806,6 @@ describe("devmock MSW 端点行为", () => {
       headers: emptyHeaders,
     });
     await expect(search.json()).resolves.toEqual({ items: [], total: 0, facets: [] });
-
     const licenses = await fetch("http://localhost/api/v1/licenses", { headers: emptyHeaders });
     await expect(licenses.json()).resolves.toEqual(
       expect.objectContaining({ go: [], npm: [], generatedAt: expect.any(String) }),
@@ -1522,6 +1521,39 @@ describe("devmock MSW 端点行为", () => {
     expect(
       (await fetch("http://localhost/api/v1/search?q=app&repository=no-such-repo")).status,
     ).toBe(404);
+  });
+
+  it("搜索语法 version: 与 -version: 按版本段严格匹配，不退化为路径子串", async () => {
+    const search = async (q: string) => {
+      const res = await fetch(`http://localhost/api/v1/search?q=${encodeURIComponent(q)}`, {
+        headers: auth,
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { items: { path: string }[]; total: number };
+      return body;
+    };
+
+    // 先确认语料里存在版本 1.0.0 的制品
+    const all = await search("app");
+    expect(all.total).toBeGreaterThan(0);
+
+    const exact = await search("version:1.0.0");
+    // 严格相等：每个命中都必须真的落在 1.0.0 版本段上，不能只因路径里含该子串
+    expect(exact.total).toBeGreaterThan(0);
+    for (const item of exact.items) {
+      expect(item.path).toContain("/1.0.0/");
+    }
+
+    // 区分「严格相等」与「路径子串」的关键用例：`1.0` 是 `1.0.0` 的前缀，
+    // 若把 version: 当普通包含词（缺陷行为），会命中 app-1.0.0.jar；
+    // 正确实现按版本段严格相等比较，必须零命中。
+    const prefix = await search("version:1.0");
+    expect(prefix.total).toBe(0);
+
+    const excluded = await search("-version:1.0.0");
+    for (const item of excluded.items) {
+      expect(item.path).not.toContain("/1.0.0/");
+    }
   });
 
   it("旧批量删除要求覆盖理由，成功时保持兼容响应", async () => {

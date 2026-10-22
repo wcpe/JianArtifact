@@ -33,6 +33,14 @@
 // - abortable 模式下**不参与同键在途去重**：去重共享的是同一个 Promise，无法只中止其中一个
 //   订阅者；且 React StrictMode 的「挂载→清理→再挂载」会把第一个控制器的请求 abort 掉，
 //   若第二次挂载复用到这个已被 abort 的 Promise，数据将永远拉不回来。
+//
+// identityKey（可选，默认 undefined = 保持既有行为）：
+// - 语义是「这份数据属于哪个取数主体」（典型：登录用户与匿名）。缓存键里带身份只能隔离
+//   asyncCache，**隔离不了组件 state**：keepPreviousData 跨键保留的是本组件手里的那份 data，
+//   clearAsyncCache() 再彻底也清不到它。身份一变（会话过期、切账号），旧主体的数据就会在
+//   新身份下继续展示，直到新请求成功为止；而新请求一旦失败或被取消，它就一直留在界面上。
+// - 因此身份变化必须按「换代」而不是「换键」处理：立即丢弃旧数据回到首载态、不回放缓存，
+//   即便 keepPreviousData 为 true 也不保留。同身份内的跨键切换仍按上面的 keepPreviousData 语义。
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError } from "../api/client";
@@ -94,6 +102,12 @@ export interface UseAsyncOptions {
    * 时真的中止上一次请求。见文件头 abortable 段。
    */
   abortable?: boolean;
+  /**
+   * 取数主体标识（默认 undefined）：如 `user:1` / `anon`。
+   * 该值变化时按「身份换代」处理——立即丢弃组件内旧数据并回到首载态，即使
+   * keepPreviousData 为 true 也不保留、也不回放缓存。见文件头 identityKey 段。
+   */
+  identityKey?: string;
 }
 
 interface AsyncCacheEntry {
@@ -229,6 +243,7 @@ export function useAsync<T>(
   const staleMs = options.staleMs ?? DEFAULT_STALE_MS;
   const keepPreviousData = options.keepPreviousData ?? false;
   const abortable = options.abortable ?? false;
+  const identityKey = options.identityKey;
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(
     () => cacheKey === undefined || readAsyncCache(cacheKey, staleMs) === null,
@@ -242,6 +257,8 @@ export function useAsync<T>(
   // ref 而非 state，供异步回调判定“旧数据是否在场”而不受闭包过期值影响。
   const dataKeyRef = useRef<string | undefined>(undefined);
   const hasDataRef = useRef(false);
+  // 上一轮取数的主体标识：与本次不同即判为「身份换代」，旧数据一律作废。
+  const identityRef = useRef(identityKey);
   // 在途请求的控制器：cancel() 通过它中止当前请求（仅 abortable 模式会赋值）。
   const controllerRef = useRef<AbortController | null>(null);
 
@@ -269,7 +286,12 @@ export function useAsync<T>(
     controllerRef.current = controller;
     // 新一次取数开始即退出「已取消」态，UI 回到正常的加载/刷新反馈。
     setCancelled(false);
-    const cached = cacheKey !== undefined ? readAsyncCache<T>(cacheKey, staleMs) : null;
+    // 身份是否在本轮换过：换身份等于换主体，上一主体的数据不得继续展示，也不得回放缓存。
+    // 缓存回放同样要挡——若调用方的 cacheKey 没把身份编进去，回放等于把别人的数据还给新身份。
+    const identityChanged = identityRef.current !== identityKey;
+    identityRef.current = identityKey;
+    const cached =
+      identityChanged || cacheKey === undefined ? null : readAsyncCache<T>(cacheKey, staleMs);
     if (cached !== null) {
       // 缓存回放：立即展示旧数据，同时保持刷新反馈（refreshing=true），
       // 请求挂起或缓慢时用户能看到局部加载态，而不是“无感卡死”。
@@ -278,8 +300,8 @@ export function useAsync<T>(
       setData(cached);
       setLoading(false);
       setRefreshing(true);
-    } else if (dataKeyRef.current !== cacheKey) {
-      if (keepPreviousData && hasDataRef.current) {
+    } else if (identityChanged || dataKeyRef.current !== cacheKey) {
+      if (keepPreviousData && hasDataRef.current && !identityChanged) {
         // 跨键但保留旧数据：不清空内容，只置后台刷新态，旧内容留在原位、布局不跳；
         // 待新数据到达后在 .then 就地替换。dataKeyRef 前移到新键，使失败时 catch 走
         // refreshError（旧数据仍在场）分支而非整页报错，与缓存回放分支口径一致。
@@ -288,6 +310,8 @@ export function useAsync<T>(
         setError(null);
         setRefreshError(null);
       } else {
+        // 含「身份换代」：旧主体（或旧口径）的数据立刻作废，哪怕当前没有在途请求、
+        // 哪怕新请求最终失败或被取消，界面上也不会残留上一份内容。
         dataKeyRef.current = cacheKey;
         hasDataRef.current = false;
         setData(null);
@@ -352,7 +376,7 @@ export function useAsync<T>(
       controller?.abort();
       controllerRef.current = null;
     };
-  }, [nonce, cacheKey, keepPreviousData, abortable, ...deps]);
+  }, [nonce, cacheKey, keepPreviousData, abortable, identityKey, ...deps]);
 
   return {
     data,

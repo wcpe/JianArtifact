@@ -477,14 +477,19 @@ func buildSearchWhereIndexed(f SearchFilter, repoIDs []int64) (string, []any) {
 // 结果集（甚至空结果），而整条链路上没有任何信号——这正是本仓库反复强调要避免的
 // 「静默少结果」。
 //
-// 修法：把复核与查询放进同一个读快照。SQLite 的读快照由事务界定，因此这里把复核与查询
-// 收进同一事务：事务以 deferred 方式开启（不带 BEGIN IMMEDIATE），不在建事务时抢写锁，
-// 因此既不阻塞唯一的写者、也不被写者长期阻塞。同一快照内不可能出现「判定时就绪、查询时
-// 索引已空」。顺带把 COUNT 与分页 SELECT 也收进同一快照，total 与结果页不再可能来自两个
-// 不同版本。
+// 修法：把复核与查询放进同一个读快照。SQLite 的读快照由事务界定，因此这里开一个
+// **只读事务**（TxOptions.ReadOnly）。驱动（modernc.org/sqlite v1.60.1，tx.go 的 newTx）
+// 的 begin 语句选择是 `if !opts.ReadOnly && c.beginMode != ""` —— 只读事务**明确跳过**
+// 主库 DSN 里 _txlock=immediate 注入的 `begin immediate`，退化为裸 `begin`（deferred），
+// 因此建事务时不抢写锁、不阻塞写者（实测：持只读事务期间并发写 6.9ms 完成）。同一快照内
+// 不可能出现「判定时就绪、查询时索引已空」。顺带把 COUNT 与分页 SELECT 也收进同一快照，
+// total 与结果页不再可能来自两个不同版本。
 //
-// **为什么不按最初设想把就绪判定内联进 WHERE**：实测（modernc.org/sqlite v1.60.1，
-// 5 万行语料）形如
+// **不要改成 BeginTxx(ctx, nil)**：nil 不是「无选项」，它会同样吃 _txlock=immediate，
+// 让每次搜索都先抢写锁，实测并发写会被完全阻塞（搜索是读密集主路径，代价不可接受）。
+// 两者只差一个 ReadOnly 标记，行为却相反，改动时务必保留。
+//
+// **为什么不把就绪判定内联进 WHERE**：实测（modernc.org/sqlite v1.60.1，5 万行语料）形如
 //
 //	(id IN (SELECT rowid FROM asset_path_fts WHERE asset_path_fts MATCH ?) OR <未就绪>)
 //
@@ -497,13 +502,18 @@ func buildSearchWhereIndexed(f SearchFilter, repoIDs []int64) (string, []any) {
 //
 // 复核方向是单向的：领域层给的 UseFullTextIndex 为假时不做任何额外读取（已经在降级路径上）；
 // 为真时以本快照的判定为准，未就绪则退回纯 LIKE——宁可慢而全，不可快而漏。
+// searchSnapshotProbe 是**仅测试使用**的观测点：非 nil 时每次建立搜索快照前被调用一次。
+//
+// 它存在的唯一目的，是让白盒测试能够断言「一次搜索只开一个只读快照」这类结构性约束——
+// 结果对不对无法证明快照数，而快照数正是 SearchAggregateByFilter 与逐次调用各仓储方法的
+// 唯一差别。生产路径恒为 nil（只多一次 nil 判断，不改变任何可观测行为）。
+var searchSnapshotProbe func()
+
 func (r *AssetRepo) searchSnapshot(ctx context.Context, f SearchFilter, fn func(*sqlx.Tx, SearchFilter) error) error {
-	// 事务选项传 nil 而不是 &sql.TxOptions{ReadOnly: true}：modernc.org/sqlite 不支持
-	// 只读事务选项，会直接返回 "driver does not support read-only transactions"，
-	// 而那会让整条搜索链路以错误告终（npm 合并检索据此降级为空结果）。传 nil 时
-	// 建事务走的是不带后缀的 `begin`（deferred），不取写锁、不阻塞写者，同样能提供
-	// 一致性读快照——本函数要的正是「判定与查询看到同一份数据」，只读标记并非必需。
-	tx, err := r.db.BeginTxx(ctx, nil)
+	if searchSnapshotProbe != nil {
+		searchSnapshotProbe()
+	}
+	tx, err := r.db.BeginTxx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return err
 	}
@@ -549,6 +559,75 @@ func searchOrderBy(sort, order string) string {
 	return col + " " + dir + ", path ASC, id ASC"
 }
 
+// searchCountIn 在给定快照内统计命中数。
+//
+// 本函数与 searchPageIn / searchFacetsIn / searchScanIn 是同一次搜索的四条语句，
+// 它们的 WHERE 一律由 buildSearchWhereIndexed 生成（同一个拼装点），因此计数、分页、
+// facet 聚合与聚合扫描看到的行集完全一致；四条语句共用的**快照**由调用方保证——
+// 见 SearchAggregateByFilter 与 searchSnapshot。
+func searchCountIn(ctx context.Context, tx *sqlx.Tx, f SearchFilter, repoIDs []int64) (int, error) {
+	var total int
+	where, args := buildSearchWhereIndexed(f, repoIDs)
+	if err := tx.GetContext(ctx, &total, `SELECT COUNT(*) FROM asset WHERE `+where, args...); err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
+// searchPageIn 在给定快照内取一页命中行。
+func searchPageIn(ctx context.Context, tx *sqlx.Tx, f SearchFilter, repoIDs []int64, sort, order string, limit, offset int) ([]Asset, error) {
+	var assets []Asset
+	where, args := buildSearchWhereIndexed(f, repoIDs)
+	err := tx.SelectContext(ctx, &assets,
+		`SELECT id, repository_id, path, blob_hash, size, content_type, sha1, md5, created_at, updated_at
+			FROM asset WHERE `+where+` ORDER BY `+searchOrderBy(sort, order)+` LIMIT ? OFFSET ?`,
+		append(args, limit, offset)...,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return assets, nil
+}
+
+// searchFacetsIn 在给定快照内按仓库聚合命中数（按命中数降序）。
+func searchFacetsIn(ctx context.Context, tx *sqlx.Tx, f SearchFilter, repoIDs []int64) ([]SearchFacet, error) {
+	var facets []SearchFacet
+	where, args := buildSearchWhereIndexed(f, repoIDs)
+	err := tx.SelectContext(ctx, &facets,
+		`SELECT repository_id, COUNT(*) AS count FROM asset WHERE `+where+
+			` GROUP BY repository_id ORDER BY count DESC`,
+		args...,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return facets, nil
+}
+
+// searchScanIn 在给定快照内取聚合扫描候选行（path 升序），并判定是否被预算截断。
+//
+// 多取一行用于判定截断，避免再发一条 COUNT。maxRows <= 0 按 1 处理：预算为零没有语义，
+// 而 LIMIT 0 会让调用方拿到「扫了 0 行且未截断」的自相矛盾结果。
+func searchScanIn(ctx context.Context, tx *sqlx.Tx, f SearchFilter, repoIDs []int64, maxRows int) ([]Asset, bool, error) {
+	if maxRows <= 0 {
+		maxRows = 1
+	}
+	var assets []Asset
+	where, args := buildSearchWhereIndexed(f, repoIDs)
+	err := tx.SelectContext(ctx, &assets,
+		`SELECT id, repository_id, path, blob_hash, size, content_type, sha1, md5, created_at, updated_at
+			FROM asset WHERE `+where+` ORDER BY path ASC, id ASC LIMIT ?`,
+		append(args, maxRows+1)...,
+	)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(assets) > maxRows {
+		return assets[:maxRows], true, nil
+	}
+	return assets, false, nil
+}
+
 // SearchByFilter 跨仓库搜索制品路径，全部条件下推 SQL。repoIDs 为空搜全部。
 // sort 取值 name/repo/path/size/updated（其余按 path），order 取值 asc/desc。
 //
@@ -557,19 +636,19 @@ func searchOrderBy(sort, order string) string {
 //
 // COUNT 与分页 SELECT 还在**同一个读快照**内执行（searchSnapshot），因此 total 恒等于
 // 结果页所属版本的总数，不会出现「total 与翻到的行来自两个版本」的错位。
+//
+// 需要把 facet 聚合或聚合扫描也纳入**同一份快照**时不要连续调用本方法与其它搜索方法，
+// 改用 SearchAggregateByFilter：本方法每次调用都会各自开一份快照。
 func (r *AssetRepo) SearchByFilter(ctx context.Context, f SearchFilter, repoIDs []int64, sort, order string, limit, offset int) ([]Asset, int, error) {
 	var assets []Asset
 	var total int
 	err := r.searchSnapshot(ctx, f, func(tx *sqlx.Tx, f SearchFilter) error {
-		where, args := buildSearchWhereIndexed(f, repoIDs)
-		if err := tx.GetContext(ctx, &total, `SELECT COUNT(*) FROM asset WHERE `+where, args...); err != nil {
+		var err error
+		if total, err = searchCountIn(ctx, tx, f, repoIDs); err != nil {
 			return err
 		}
-		return tx.SelectContext(ctx, &assets,
-			`SELECT id, repository_id, path, blob_hash, size, content_type, sha1, md5, created_at, updated_at
-				FROM asset WHERE `+where+` ORDER BY `+searchOrderBy(sort, order)+` LIMIT ? OFFSET ?`,
-			append(args, limit, offset)...,
-		)
+		assets, err = searchPageIn(ctx, tx, f, repoIDs, sort, order, limit, offset)
+		return err
 	})
 	return assets, total, err
 }
@@ -588,26 +667,19 @@ func (r *AssetRepo) SearchByFilter(ctx context.Context, f SearchFilter, repoIDs 
 // maxRows 是扫描上限；命中行超过上限时返回前 maxRows 行并置 truncated——此时聚合得到的
 // 计数是下界，但**不影响 total**（total 仍由 SearchByFilter 的 COUNT(*) 精确给出）。
 func (r *AssetRepo) SearchAllByFilter(ctx context.Context, f SearchFilter, repoIDs []int64, maxRows int) ([]Asset, bool, error) {
-	if maxRows <= 0 {
-		maxRows = 1
-	}
-	var assets []Asset
-	// 多取一行用于判定是否被截断，避免再发一条 COUNT。
+	var (
+		assets    []Asset
+		truncated bool
+	)
 	err := r.searchSnapshot(ctx, f, func(tx *sqlx.Tx, f SearchFilter) error {
-		where, args := buildSearchWhereIndexed(f, repoIDs)
-		return tx.SelectContext(ctx, &assets,
-			`SELECT id, repository_id, path, blob_hash, size, content_type, sha1, md5, created_at, updated_at
-				FROM asset WHERE `+where+` ORDER BY path ASC, id ASC LIMIT ?`,
-			append(args, maxRows+1)...,
-		)
+		var err error
+		assets, truncated, err = searchScanIn(ctx, tx, f, repoIDs, maxRows)
+		return err
 	})
 	if err != nil {
 		return nil, false, err
 	}
-	if len(assets) > maxRows {
-		return assets[:maxRows], true, nil
-	}
-	return assets, false, nil
+	return assets, truncated, nil
 }
 
 // SearchFacet 是搜索结果按仓库聚合的单条计数。
@@ -619,17 +691,90 @@ type SearchFacet struct {
 // SearchFacetsByFilter 返回同一搜索条件下各仓库的命中数（按命中数降序），
 // 供前端做「按仓库聚合」的钻取导航。repoIDs 为空统计全部仓库。
 // 与分页 SELECT 共用同一段 WHERE（含候选集条件），因此计数与分页不会互相矛盾。
+//
+// 注意这只是「WHERE 一致」而不是「数据一致」：本方法自带一份快照，与另一次
+// SearchByFilter 调用之间仍可能夹进并发写入。需要与计数/分页/聚合扫描严格同源的
+// facet 请走 SearchAggregateByFilter。
 func (r *AssetRepo) SearchFacetsByFilter(ctx context.Context, f SearchFilter, repoIDs []int64) ([]SearchFacet, error) {
 	var facets []SearchFacet
 	err := r.searchSnapshot(ctx, f, func(tx *sqlx.Tx, f SearchFilter) error {
-		where, args := buildSearchWhereIndexed(f, repoIDs)
-		return tx.SelectContext(ctx, &facets,
-			`SELECT repository_id, COUNT(*) AS count FROM asset WHERE `+where+
-				` GROUP BY repository_id ORDER BY count DESC`,
-			args...,
-		)
+		var err error
+		facets, err = searchFacetsIn(ctx, tx, f, repoIDs)
+		return err
 	})
 	return facets, err
+}
+
+// SearchAggregateQuery 描述一次搜索请求要在**同一份读快照**内执行的全部查询。
+type SearchAggregateQuery struct {
+	Filter  SearchFilter
+	RepoIDs []int64 // 计数与分页的仓库范围；nil 表示不限
+	// FacetIDs 是 facet 统计的仓库范围，通常与 RepoIDs 不同（忽略 repo: 正向限定，
+	// 以便用户钻取到单仓库后仍能看到其它仓库的命中数）。
+	FacetIDs      []int64
+	Sort, Order   string
+	Limit         int
+	Offset        int
+	MaxRows       int  // 聚合扫描的行预算
+	SkipAssetRows bool // 为真时跳过计数/分页/聚合扫描，只做 facet 统计
+}
+
+// SearchAggregateResult 是 SearchAggregateByFilter 的产物：四个查询同源的结果。
+type SearchAggregateResult struct {
+	Items     []Asset       // 分页结果
+	Total     int           // 精确命中数（COUNT(*)）
+	Facets    []SearchFacet // 按仓库聚合的命中数
+	Rows      []Asset       // 聚合扫描候选行（path 升序，最多 MaxRows 行）
+	Truncated bool          // 聚合扫描是否被预算截断
+}
+
+// SearchAggregateByFilter 在**单个只读快照**内依次执行计数、分页、facet 聚合与聚合扫描。
+//
+// 为什么必须合成一个入口：共用同一段 WHERE 只保证「条件相同」，不保证「数据版本相同」。
+// 若让领域层依次调用 SearchByFilter / SearchFacetsByFilter / SearchAllByFilter，每次调用都会
+// 各自开启并提交一份独立快照，于是同一个响应里的 total、items、facets 与聚合扫描结果来自
+// **不同时刻**的数据。最坏情形：COUNT 之后命中的唯一资产被并发删除，响应里 total=1、
+// items 有数据，但聚合扫描（搜索页真正渲染的内容）看到 0 行 → packages 为空、
+// truncated=false，用户看到「无结果」而响应本身自相矛盾。合成一次快照后这种错位不可能出现。
+//
+// 快照仍然只读（searchSnapshot 的 TxOptions.ReadOnly 不可改，理由见该函数的注释）：
+// 故意**不嵌套事务**——SQLite 没有嵌套事务，sqlx 在已开启的事务上再 Begin 行为未定义。
+// 本方法只是把四条语句依次挂在同一个 tx 上，语句数与逐次调用完全一致。
+//
+// SkipAssetRows 供「本次请求没有主查询条件（收窄后仓库集合为空）」的场景使用：此时既不发
+// COUNT 也不发分页/扫描，但仍要在同一份快照里做 facet 统计（与逐次调用时的语义一致）。
+func (r *AssetRepo) SearchAggregateByFilter(ctx context.Context, q SearchAggregateQuery) (*SearchAggregateResult, error) {
+	out := &SearchAggregateResult{}
+	err := r.searchSnapshot(ctx, q.Filter, func(tx *sqlx.Tx, f SearchFilter) error {
+		if !q.SkipAssetRows {
+			total, err := searchCountIn(ctx, tx, f, q.RepoIDs)
+			if err != nil {
+				return err
+			}
+			out.Total = total
+			if out.Items, err = searchPageIn(ctx, tx, f, q.RepoIDs, q.Sort, q.Order, q.Limit, q.Offset); err != nil {
+				return err
+			}
+		}
+		facets, err := searchFacetsIn(ctx, tx, f, q.FacetIDs)
+		if err != nil {
+			return err
+		}
+		out.Facets = facets
+		if q.SkipAssetRows {
+			return nil
+		}
+		rows, truncated, err := searchScanIn(ctx, tx, f, q.RepoIDs, q.MaxRows)
+		if err != nil {
+			return err
+		}
+		out.Rows, out.Truncated = rows, truncated
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // SearchPerRepoByFilter 在**每个**仓库内分别取前 perRepoLimit 条命中（各自按 path 升序），

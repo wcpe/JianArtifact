@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"fmt"
 	"sync/atomic"
 
 	"github.com/jmoiron/sqlx"
@@ -81,6 +82,24 @@ func (c countingConn) QueryContext(ctx context.Context, query string, args []dri
 	}
 	atomic.AddInt64(c.count, 1)
 	return q.QueryContext(ctx, query, args)
+}
+
+// BeginTx 必须显式转发，不能只靠内嵌 driver.Conn 的默认实现。
+//
+// 原因：database/sql 只有在底层实现了 driver.ConnBeginTx 时才把 TxOptions 交给驱动；
+// 否则一旦调用方传入非默认选项（例如搜索用的只读事务），它会直接返回
+// "driver does not support read-only transactions"，而不是忽略该选项。内嵌 driver.Conn
+// 并不携带 BeginTx（它属于另一个可选接口），因此这里不写就会丢掉驱动的只读事务能力，
+// 表现为「生产可用的只读事务在计数连接上整体失败」。这里不计数：事务本身不产生语句，
+// 其内部的查询仍会经过 ExecContext/QueryContext 被统计。
+func (c countingConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
+	b, ok := c.Conn.(driver.ConnBeginTx)
+	if !ok {
+		// 本包装器只用于测试，底层恒为 modernc.org/sqlite（实现了 ConnBeginTx）。
+		// 不退回已废弃的 Conn.Begin：那会让只读事务静默失去语义，恰好掩盖本函数要防的问题。
+		return nil, fmt.Errorf("计数连接：底层驱动不支持带选项的事务，无法保证只读语义")
+	}
+	return b.BeginTx(ctx, opts)
 }
 
 // OpenCountingForTest 打开一个**语句级计数**的 SQLite 连接，返回连接与计数器指针。

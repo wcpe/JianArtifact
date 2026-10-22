@@ -18,6 +18,8 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
 // 候选类型（规格 §3.8 响应里的 type）。前端据此决定确认语义：
@@ -88,7 +90,9 @@ func (s *RepositoryService) Suggest(ctx context.Context, keyword string, subject
 	ctx, cancel := s.searchContext(ctx)
 	defer cancel()
 
-	// 仓库全量列举只做一次：仓库名候选、包坐标解析所需的格式映射与 repo:/format: 收窄都复用它。
+	// 仓库全量列举只做一次：仓库名候选、repo:/format: 收窄都复用它。它**有分页上限**
+	// （1000 条），因此不能拿它当「包坐标解析所需格式映射」的唯一来源——见
+	// suggestRepoFormats（按命中行补齐）。
 	allRepos, allErr := s.repos.List(1000, 0)
 	repoIDs, readable, err := s.readableRepoIDs(subjectID, isAdmin, allRepos, allErr)
 	if err != nil {
@@ -169,9 +173,9 @@ func (s *RepositoryService) Suggest(ctx context.Context, keyword string, subject
 			if err != nil {
 				return nil, normalizeSearchErr(ctx, err)
 			}
-			formats := make(map[int64]string, len(allRepos))
-			for _, r := range allRepos {
-				formats[r.ID] = r.Format
+			formats, err := s.suggestRepoFormats(rows, allRepos)
+			if err != nil {
+				return nil, err
 			}
 			cands := make([]SearchSuggestion, 0, remain)
 			seen := make(map[string]bool, remain)
@@ -194,6 +198,51 @@ func (s *RepositoryService) Suggest(ctx context.Context, keyword string, subject
 		}
 	}
 	return out, nil
+}
+
+// suggestRepoFormats 返回候选行所需的「仓库 ID → 格式」映射。
+//
+// 为什么要单独补齐：包坐标解析（ParseCoordinates）的入参是 (仓库格式, 路径)，格式为空串时
+// 一律降级成「无坐标」，候选随即被丢弃。而仓库全量列举（repos.List(1000, 0)）**有上限**：
+// 第 1001 个及之后的仓库不在那份列表里，若格式映射只取自它，这些仓库下的命中行就会
+// 静默消失（SQL 明明查出了路径，用户却看不到任何候选，也没有任何截断提示）。
+//
+// 做法：先复用调用方已有的全量列举（绝大多数请求在这里就能覆盖全部命中行），再对**命中行里
+// 缺席的仓库 ID** 去重后批量补一次元数据（RepoRepo.ListByIDs，固定 1 条 IN 查询，与仓库总数
+// 无关）。这样既不依赖「前 1000 个」的假设，也不会为了候选把全部仓库读进内存。
+//
+// 补不到的 ID（仓库已被并发删除）留空串：该行随之解析失败并被跳过——仓库都不存在了，
+// 它的包名候选本就不该出现。
+func (s *RepositoryService) suggestRepoFormats(rows []repository.SuggestRow, allRepos []repository.Repository) (map[int64]string, error) {
+	formats := make(map[int64]string, len(allRepos))
+	for _, r := range allRepos {
+		formats[r.ID] = r.Format
+	}
+	missing := make([]int64, 0, len(rows))
+	seen := make(map[int64]bool, len(rows))
+	for _, row := range rows {
+		if _, ok := formats[row.RepositoryID]; ok || seen[row.RepositoryID] {
+			continue
+		}
+		seen[row.RepositoryID] = true
+		missing = append(missing, row.RepositoryID)
+	}
+	if len(missing) == 0 {
+		return formats, nil
+	}
+	extra, err := s.repos.ListByIDs(missing)
+	if err != nil {
+		return nil, err
+	}
+	for id, r := range extra {
+		formats[id] = r.Format
+	}
+	for _, id := range missing {
+		if _, ok := formats[id]; !ok {
+			formats[id] = ""
+		}
+	}
+	return formats, nil
 }
 
 // suggestNameMatches 判断仓库名是否**包含**输入（子串匹配）。

@@ -338,6 +338,93 @@ func TestSearchAggregatePaginationKeepsTotal(t *testing.T) {
 	}
 }
 
+// TestSearchAggregateResponseIsInternallyConsistent 钉住响应**内部自洽**：
+// 同一个响应里的 total、items、facets、packages、aggregation 必须是同一份数据的四种视图。
+//
+// 回归的是「四条查询各开一份快照」导致的错位：共用 WHERE 只保证条件相同，不保证数据版本
+// 相同。最坏情形是 COUNT 之后命中的资产被并发删除 → total=1、items 非空，而聚合扫描看到
+// 0 行 → packages=[] 且 truncated=false。搜索页只渲染 packages，用户看到「无结果」，
+// 响应自身却前后矛盾（total 说有 1 条，包列表说有 0 条）。
+//
+// 这里不靠并发时序（那样只能概率性复现），而是直接断言「同一份快照」蕴含的不变式：
+//   - 未截断时，聚合扫描行数 = total（扫描与计数看到同一行集）；
+//   - 未截断时，各包 fileCount 之和 = total（包视图不丢行、也不重复计数）；
+//   - items 的每一条都必须出现在聚合出的包里（分页是扫描结果的子集）；
+//   - facets 的计数之和 = total（facet 与计数同源）。
+//
+// 快照数为 1 的事实由仓储层的 TestSearchAggregateByFilterUsesSingleSnapshot 直接断言，
+// 两者合起来才完整：仓储层证明「只开一份快照」，这里证明「一份快照的结果自洽」。
+func TestSearchAggregateResponseIsInternallyConsistent(t *testing.T) {
+	env := newAggregateEnv(t)
+	env.put(t, env.mavenID, "com/example/foo/1.0.0/foo-1.0.0.jar", "2026-10-18 09:00:00")
+	env.put(t, env.mavenID, "com/example/foo/1.0.0/foo-1.0.0.pom", "2026-10-18 09:00:00")
+	env.put(t, env.mavenID, "com/example/foo/2.0.0/foo-2.0.0.jar", "2026-10-17 09:00:00")
+	env.put(t, env.proxyID, "com/example/bar/1.5.0/bar-1.5.0.jar", "2026-10-16 09:00:00")
+	env.put(t, env.rawID, "docs/foo-notes.txt", "2026-10-15 09:00:00")
+
+	cases := []struct {
+		name          string
+		query         string
+		limit, offset int
+	}{
+		{name: "全量", query: "foo", limit: 50, offset: 0},
+		{name: "分页第 1 页", query: "foo", limit: 2, offset: 0},
+		{name: "分页越界", query: "foo", limit: 2, offset: 10},
+		{name: "跨仓库关键词", query: "com/example", limit: 50, offset: 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out := env.search(t, tc.query, "", "asc", domain.SearchGroupByPackage, tc.limit, tc.offset)
+			if out.Aggregation.Truncated {
+				t.Fatalf("语料远小于扫描预算，不应截断：%+v", out.Aggregation)
+			}
+			if out.Aggregation.Scanned != out.Total {
+				t.Fatalf("扫描行数 = %d，期望等于 total=%d（两者必须来自同一份快照）",
+					out.Aggregation.Scanned, out.Total)
+			}
+			packageFiles := 0
+			for _, p := range out.Packages {
+				packageFiles += p.FileCount
+			}
+			if packageFiles != out.Total {
+				t.Fatalf("各包 fileCount 之和 = %d，期望等于 total=%d（包视图不得丢行或重复计数）",
+					packageFiles, out.Total)
+			}
+			if out.PackageTotal != len(out.Packages) {
+				t.Fatalf("packageTotal = %d 与 packages 长度 %d 不一致", out.PackageTotal, len(out.Packages))
+			}
+			// 分页条目必须是聚合扫描结果的子集：出现了不在任何包里的条目，就说明
+			// 「items 与 packages 来自两份不同快照」。
+			inPackages := map[string]bool{}
+			for _, p := range out.Packages {
+				for _, v := range p.Versions {
+					for _, f := range v.Files {
+						inPackages[f.Repository+"|"+f.Path] = true
+					}
+				}
+				for _, f := range p.Files {
+					inPackages[f.Repository+"|"+f.Path] = true
+				}
+			}
+			for _, item := range out.Items {
+				key := item.RepoName + "|" + item.Asset.Path
+				if !inPackages[key] {
+					t.Fatalf("分页条目 %s 不在任何聚合包里（items 与 packages 不同源）：%+v",
+						key, out.Packages)
+				}
+			}
+			facetSum := 0
+			for _, f := range out.Facets {
+				facetSum += f.Count
+			}
+			if facetSum != out.Total {
+				t.Fatalf("facets 计数之和 = %d，期望等于 total=%d（facet 与计数必须同源）",
+					facetSum, out.Total)
+			}
+		})
+	}
+}
+
 // TestSearchAggregateTruncatesAtBudget 钉住扫描预算（规格 §3.7）：
 // 超过 maxAggregateRows 时 truncated=true、各计数变下界，而 total 仍是精确 COUNT(*)。
 func TestSearchAggregateTruncatesAtBudget(t *testing.T) {

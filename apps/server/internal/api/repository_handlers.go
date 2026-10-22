@@ -887,6 +887,11 @@ func (h *Handlers) SearchAssets(c *gin.Context) {
 		// relevance 的排序在领域层聚合阶段完成（§3.5），不下推 SQL；文件级 items 仍按
 		// path asc 分页——relevance 需要全量候选集，而分页是无状态的，两者只能解耦。
 		sort, order = "", "asc"
+	case relevanceRequested:
+		// 文件模式下 relevance 没有可下推的 SQL 排序键（相关度只能在全量候选集上算），
+		// 因此退化为 path asc。这里必须**同时清掉 sort**：只改 order 会让
+		// `sort=size&order=relevance` 实际按 size 升序返回，与文档承诺的 path asc 不符。
+		sort, order = "", "asc"
 	case order == "desc":
 		order = "desc"
 	default:

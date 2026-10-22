@@ -1311,10 +1311,10 @@ func (s *RepositoryService) resolveSearchScope(keyword, repoScope string, subjec
 // sort/order 控制结果排序，取值见 AssetRepo.SearchByFilter。
 //
 // ctx 是搜索链路的超时来源：本方法在入口按 searchTimeout 派生一次 deadline，它**只覆盖
-// asset 检索语句**（SearchByFilter / SearchFacetsByFilter 这类下发到 SQL 的查询），命中
-// DeadlineExceeded 归一为 ErrSearchTimeout。可搜范围解析那一段（SearchIndexReady、仓库全量
-// 列举、主体展开、批量 ACL 判定）目前不接收 ctx，因此**不受这份预算约束**——那些是窄表上的
-// 小查询，排查「为什么慢」时不要按「整条链路都在预算内」的假设去找。
+// asset 检索语句**（SearchAggregateByFilter 一次下发的计数 / 分页 / facet 聚合三条查询），
+// 命中 DeadlineExceeded 归一为 ErrSearchTimeout。可搜范围解析那一段（SearchIndexReady、
+// 仓库全量列举、主体展开、批量 ACL 判定）目前不接收 ctx，因此**不受这份预算约束**——那些是
+// 窄表上的小查询，排查「为什么慢」时不要按「整条链路都在预算内」的假设去找。
 //
 // 客户端断开（context.Canceled）**不**归一为超时，原因原样返回，见 normalizeSearchErr。
 //
@@ -1336,21 +1336,23 @@ func (s *RepositoryService) SearchAssets(ctx context.Context, keyword, repoScope
 		return empty, nil
 	}
 	parsed, repoIDs, facetIDs, allRepos := scope.parsed, scope.repoIDs, scope.facetIDs, scope.allRepos
-	var (
-		assets []repository.Asset
-		total  int
-	)
-	if scope.hasQuery {
-		assets, total, err = s.assets.SearchByFilter(ctx, parsed.filter, repoIDs, sort, order, limit, offset)
-		if err != nil {
-			return nil, normalizeSearchErr(ctx, err)
-		}
-	}
-	// 同一路径条件的按仓库聚合（钻取导航用）
-	rawFacets, err := s.assets.SearchFacetsByFilter(ctx, parsed.filter, facetIDs)
+	// 计数 / 分页 / facet 聚合一并下推到**同一个只读快照**（SearchAggregateByFilter）：
+	// 逐条调用时每个方法各开一份快照，total、items 与 facets 可能来自三个不同版本的数据。
+	// 无主查询条件（hasQuery=false）时跳过计数与分页，只做 facet 统计——与逐条调用时一致。
+	res, err := s.assets.SearchAggregateByFilter(ctx, repository.SearchAggregateQuery{
+		Filter:        parsed.filter,
+		RepoIDs:       repoIDs,
+		FacetIDs:      facetIDs,
+		Sort:          sort,
+		Order:         order,
+		Limit:         limit,
+		Offset:        offset,
+		SkipAssetRows: !scope.hasQuery,
+	})
 	if err != nil {
 		return nil, normalizeSearchErr(ctx, err)
 	}
+	assets, total, rawFacets := res.Items, res.Total, res.Facets
 	// 构建 repoID -> name 映射（结果条目与 facets 共用）：复用上面的全量仓库列表一次遍历，
 	// 未命中才回落单条查询（防御「两次查询之间仓库被删」的窗口；返回值口径不变，查不到为空串）。
 	idNameMap := make(map[int64]string, len(allRepos))
@@ -1385,12 +1387,18 @@ func (s *RepositoryService) SearchAssets(ctx context.Context, keyword, repoScope
 // SearchAggregate 在文件级搜索结果之外追加包级聚合（见 §3.7）。
 //
 // groupBy 取 SearchGroupByFile（缺省）或 SearchGroupByPackage。file 模式直接委托给
-// SearchAssets——**行为、签名与查询条数完全不变**，npm registrySearch 因此不受本 FR 影响
-// （规格 §3.8 理由 1）。
+// SearchAssets——**行为、签名与下发的 SQL 语句数完全不变**，npm registrySearch 因此不受本 FR
+// 影响（规格 §3.8 理由 1）。
 //
 // package 模式在 SearchAssets 的全部既有产物（items / total / facets，语义与分页都不变）
-// 之外多扫一次候选行（SearchAllByFilter，预算 maxAggregateRows），在 Go 侧聚合成
+// 之外多扫一次候选行（预算 maxAggregateRows），在 Go 侧聚合成
 // packages / packageTotal / aggregation。`total` 仍来自 COUNT(*)，不因聚合改写。
+//
+// 这四条查询（计数、分页、facet 聚合、聚合扫描）**共用同一个只读快照**
+// （AssetRepo.SearchAggregateByFilter）。逐条调用各仓储方法时每个方法各开一份快照，
+// 共用 WHERE 只保证条件相同、不保证数据版本相同：COUNT 之后命中的资产若被并发删除，
+// 响应就可能是 total=1 而 packages=[] 且 truncated=false——搜索页只渲染 packages，
+// 于是用户看到「无结果」，而响应自身的前后字段互相矛盾。
 func (s *RepositoryService) SearchAggregate(ctx context.Context, keyword, repoScope string, subjectID int64, isAdmin bool, sort, order, groupBy string, limit, offset int) (*SearchOutput, error) {
 	if groupBy != SearchGroupByPackage {
 		return s.SearchAssets(ctx, keyword, repoScope, subjectID, isAdmin, sort, order, limit, offset)
@@ -1407,31 +1415,24 @@ func (s *RepositoryService) SearchAggregate(ctx context.Context, keyword, repoSc
 		return empty, nil
 	}
 	parsed, repoIDs, facetIDs, allRepos := scope.parsed, scope.repoIDs, scope.facetIDs, scope.allRepos
-	var (
-		assets []repository.Asset
-		total  int
-	)
-	if scope.hasQuery {
-		assets, total, err = s.assets.SearchByFilter(ctx, parsed.filter, repoIDs, sort, order, limit, offset)
-		if err != nil {
-			return nil, normalizeSearchErr(ctx, err)
-		}
-	}
-	rawFacets, err := s.assets.SearchFacetsByFilter(ctx, parsed.filter, facetIDs)
+	// 一次快照内跑完四条查询（详见函数注释与 SearchAggregateQuery）。
+	// 聚合扫描与分页/计数共用同一段 WHERE，因此聚合看到的就是「命中的全部文件」的同一版本。
+	res, err := s.assets.SearchAggregateByFilter(ctx, repository.SearchAggregateQuery{
+		Filter:        parsed.filter,
+		RepoIDs:       repoIDs,
+		FacetIDs:      facetIDs,
+		Sort:          sort,
+		Order:         order,
+		Limit:         limit,
+		Offset:        offset,
+		MaxRows:       maxAggregateRows,
+		SkipAssetRows: !scope.hasQuery,
+	})
 	if err != nil {
 		return nil, normalizeSearchErr(ctx, err)
 	}
-	// 聚合扫描：与分页/计数共用同一段 WHERE，因此聚合看到的就是「命中的全部文件」。
-	var (
-		rows      []repository.Asset
-		truncated bool
-	)
-	if scope.hasQuery {
-		rows, truncated, err = s.assets.SearchAllByFilter(ctx, parsed.filter, repoIDs, maxAggregateRows)
-		if err != nil {
-			return nil, normalizeSearchErr(ctx, err)
-		}
-	}
+	assets, total, rawFacets := res.Items, res.Total, res.Facets
+	rows, truncated := res.Rows, res.Truncated
 
 	// 仓库元数据映射：复用同一次全量列举，未命中的才回查单条（防御「两次查询之间仓库被删」）。
 	byID := make(map[int64]repository.Repository, len(allRepos))

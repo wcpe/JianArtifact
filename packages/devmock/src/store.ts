@@ -1080,6 +1080,8 @@ function collectSearchMatches(
   const formats = new Set<string>();
   const extensions = new Set<string>();
   const excludedExtensions = new Set<string>();
+  const versions = new Set<string>();
+  const excludedVersions = new Set<string>();
   const terms: string[] = [];
   const excludedTerms: string[] = [];
   for (const rawToken of tokens) {
@@ -1089,6 +1091,8 @@ function collectSearchMatches(
     else if (token.startsWith("format:")) formats.add(token.slice("format:".length));
     else if (token.startsWith("ext:")) extensions.add(token.slice("ext:".length));
     else if (token.startsWith("-ext:")) excludedExtensions.add(token.slice("-ext:".length));
+    else if (token.startsWith("version:")) versions.add(token.slice("version:".length));
+    else if (token.startsWith("-version:")) excludedVersions.add(token.slice("-version:".length));
     else if (token.startsWith("-")) excludedTerms.push(token.slice(1).toLowerCase());
     else terms.push(token.toLowerCase());
   }
@@ -1105,12 +1109,17 @@ function collectSearchMatches(
   const matches = all.filter((asset) => {
     const path = asset.path.toLowerCase();
     const extension = asset.path.split(".").at(-1) ?? "";
+    // 版本过滤与后端同口径：取坐标解析出的版本段，**严格相等**（不是子串包含）。
+    // 解析不出版本（如 raw 仓库）时视为无版本，只在有 version: 条件时被排除。
+    const assetVersion = parseCoordinates(asset)?.version ?? "";
     return (
       (repos.size === 0 || repos.has(asset.repository)) &&
       !excludedRepos.has(asset.repository) &&
       (formats.size === 0 || formats.has(asset.format)) &&
       (extensions.size === 0 || extensions.has(extension)) &&
       !excludedExtensions.has(extension) &&
+      (versions.size === 0 || versions.has(assetVersion)) &&
+      !excludedVersions.has(assetVersion) &&
       terms.every((term) => path.includes(term)) &&
       excludedTerms.every((term) => !path.includes(term))
     );

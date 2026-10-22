@@ -379,3 +379,99 @@ func TestSuggestTimeout(t *testing.T) {
 		t.Fatalf("期望 ErrSearchTimeout，得 %v", err)
 	}
 }
+
+// TestSuggestCoversReposBeyondListPage 钉住「候选行的仓库格式必须逐行可得」：
+// 仓库数超过仓库全量列举的分页上限（1000）时，第 1001 个及之后仓库的包名候选不得消失。
+//
+// 回归的是这样一条静默丢候选的链路：仓库全量列举只取前 1000 个 → 格式映射里没有第 1001 个
+// 仓库 → ParseCoordinates("", path) 直接降级成「无坐标」→ 候选值为空被跳过。
+// SQL 明明查出了该仓库下的路径，用户却看不到任何候选，也没有任何截断提示（suggest 的响应
+// 里没有 truncated 字段，静默丢结果就是纯粹的缺陷）。
+//
+// 语料刻意只给最后一个仓库造资产：一是让用例足够快（仓库元数据 1001 条、资产 1 条），
+// 二是让命中行必然落在扫描预算（500 行）之内，从而把「格式缺失」变成唯一可能的原因。
+func TestSuggestCoversReposBeyondListPage(t *testing.T) {
+	svc, repos, _, _, _, assets, _, db := newSearchSvcEnvWithDB(t)
+	// 单事务批量插入 1000 个元数据仓库（只造元数据、不造资产），把真正的仓库挤到第 1001 位。
+	const filler = 1000
+	tx, err := db.Beginx()
+	if err != nil {
+		t.Fatalf("开启事务：%v", err)
+	}
+	stmt, err := tx.Preparex(`INSERT INTO repository (name, format, type, visibility, config)
+		VALUES (?, 'raw', 'hosted', 'public', '{}')`)
+	if err != nil {
+		t.Fatalf("准备语句：%v", err)
+	}
+	for i := 0; i < filler; i++ {
+		if _, err := stmt.Exec(fmt.Sprintf("filler-%04d", i)); err != nil {
+			t.Fatalf("插入第 %d 个填充仓库：%v", i, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("提交：%v", err)
+	}
+	// 真正的仓库必然是第 1001 个（id 最大），因此不在前 1000 条全量列举里。
+	lateRepo, err := repos.Create("late-maven", "maven", "hosted", "public", "")
+	if err != nil {
+		t.Fatalf("建仓库：%v", err)
+	}
+	if err := assets.Upsert(lateRepo, "org/demo/latepkg/1.0.0/latepkg-1.0.0.jar", "h", 1,
+		"application/java-archive", "s", "m"); err != nil {
+		t.Fatalf("写入资产：%v", err)
+	}
+	// 前提自检：该仓库确实不在全量列举的分页范围内，否则本用例没有覆盖到目标场景。
+	page, err := repos.List(1000, 0)
+	if err != nil {
+		t.Fatalf("全量列举失败：%v", err)
+	}
+	if len(page) != filler {
+		t.Fatalf("全量列举条数 = %d，期望 %d", len(page), filler)
+	}
+	for _, r := range page {
+		if r.ID == lateRepo {
+			t.Fatalf("前提不成立：仓库 %d 仍在前 %d 条列举里", lateRepo, filler)
+		}
+	}
+
+	items, err := svc.Suggest(context.Background(), "latepkg", 0, true, 10)
+	if err != nil {
+		t.Fatalf("建议查询失败：%v", err)
+	}
+	found := false
+	for _, item := range items {
+		if item.Type == domain.SuggestTypePackage && item.Value == "latepkg" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("第 1001 个仓库的包名候选缺失（格式映射只取自前 1000 个仓库时会如此）：%v",
+			suggestValues(items))
+	}
+}
+
+// TestSuggestPackageCandidateSurvivesRepoDeleted 钉住「仓库元数据补不齐时不臆造候选」：
+// 命中行所属仓库在查询之后被删除时，按 ID 补齐会缺席，此时该行必须解析失败并被跳过，
+// 而不是靠空格式蒙出一个错误坐标。这里用一个不存在的仓库 ID 直连候选行来构造该状态。
+func TestSuggestPackageCandidateSurvivesRepoDeleted(t *testing.T) {
+	svc, repos, _, _, _, assets, _ := newSearchSvcEnv(t)
+	repoID, err := repos.Create("ghost-maven", "maven", "hosted", "public", "")
+	if err != nil {
+		t.Fatalf("建仓库：%v", err)
+	}
+	if err := assets.Upsert(repoID, "org/demo/ghostpkg/1.0.0/ghostpkg-1.0.0.jar", "h", 1,
+		"application/java-archive", "s", "m"); err != nil {
+		t.Fatalf("写入资产：%v", err)
+	}
+	if err := repos.Delete("ghost-maven"); err != nil {
+		t.Fatalf("删除仓库：%v", err)
+	}
+
+	items, err := svc.Suggest(context.Background(), "ghostpkg", 0, true, 10)
+	if err != nil {
+		t.Fatalf("仓库被删后建议查询不应报错：%v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("仓库已删除时不应产出候选（格式缺失不得臆造坐标），得 %v", suggestValues(items))
+	}
+}

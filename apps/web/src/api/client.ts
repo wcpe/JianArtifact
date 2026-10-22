@@ -154,10 +154,35 @@ function isAbortError(error: unknown): boolean {
   );
 }
 
-async function parseSuccessJson<T>(response: Response): Promise<T> {
+/** 归一化「中止类」失败：超时与用户取消共用一条路径，只有 code 与文案不同。 */
+function abortedError(timedOut: boolean): ApiError {
+  return new ApiError(
+    timedOut ? "timeout" : "aborted",
+    timedOut ? "请求超时" : "请求已取消或超时",
+    0,
+  );
+}
+
+/**
+ * 解析成功响应体；读取期间被中止时仍归一为「取消 / 超时」。
+ *
+ * 两点都很关键：
+ * 1. `response.json()` 才是真正从网络读字节的一步——响应头先返回、包整体积很大时，读取要持续
+ *    一段时间。这段窗口里 abort 会让响应体流以 AbortError 失败；不单独判它，就会被兜底 catch
+ *    误报成「接口返回了无效 JSON（unexpected_response）」，页面既拿不到取消语义也拿不到超时语义。
+ * 2. 调用方必须 `await` 本函数（见 request / requestBinary 的注释），否则外层 finally 会在读取
+ *    结束前就执行，把计时器、外部取消监听和网络活动计数提前清掉。
+ */
+async function parseSuccessJson<T>(
+  response: Response,
+  abort?: { signal: AbortSignal; isTimedOut: () => boolean },
+): Promise<T> {
   try {
     return (await response.json()) as T;
-  } catch {
+  } catch (error) {
+    if (abort !== undefined && (abort.signal.aborted || isAbortError(error))) {
+      throw abortedError(abort.isTimedOut());
+    }
     throw new ApiError("unexpected_response", "接口返回了无效 JSON 响应", response.status);
   }
 }
@@ -236,11 +261,7 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
       });
     } catch (e) {
       if (signal?.aborted || isAbortError(e)) {
-        throw new ApiError(
-          timedOut ? "timeout" : "aborted",
-          timedOut ? "请求超时" : "请求已取消或超时",
-          0,
-        );
+        throw abortedError(timedOut);
       }
       throw new ApiError("network", e instanceof Error ? e.message : "网络错误", 0);
     }
@@ -256,7 +277,13 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     if (!isJsonResponse(response)) {
       throw new ApiError("unexpected_response", "接口返回了非 JSON 响应", response.status);
     }
-    return parseSuccessJson<T>(response);
+    // 必须 await 到响应体读完：响应头已返回、响应体仍在传输时，取消按钮与超时兜底都要继续有效。
+    // 直接 `return parseSuccessJson(...)` 会让 finally 先跑——清计时器、摘掉外部取消监听、
+    // 递减网络活动计数全都提前发生，这段窗口就再也中止不了读取，15s 兜底也随之失效。
+    return await parseSuccessJson<T>(response, {
+      signal: controller.signal,
+      isTimedOut: () => timedOut,
+    });
   } finally {
     window.clearTimeout(timer);
     signal?.removeEventListener("abort", onExternalAbort);
@@ -319,11 +346,7 @@ export async function requestBinary<T>(
       });
     } catch (e) {
       if (signal?.aborted || isAbortError(e)) {
-        throw new ApiError(
-          timedOut ? "timeout" : "aborted",
-          timedOut ? "请求超时" : "请求已取消或超时",
-          0,
-        );
+        throw abortedError(timedOut);
       }
       throw new ApiError("network", e instanceof Error ? e.message : "网络错误", 0);
     }
@@ -339,7 +362,11 @@ export async function requestBinary<T>(
     if (!isJsonResponse(response)) {
       throw new ApiError("unexpected_response", "接口返回了非 JSON 响应", response.status);
     }
-    return parseSuccessJson<T>(response);
+    // 与 request() 一致：await 到响应体读完，finally 才清理计时器 / 取消监听 / 活动计数。
+    return await parseSuccessJson<T>(response, {
+      signal: controller.signal,
+      isTimedOut: () => timedOut,
+    });
   } finally {
     window.clearTimeout(timer);
     signal?.removeEventListener("abort", onExternalAbort);

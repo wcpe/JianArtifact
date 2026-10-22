@@ -520,9 +520,15 @@ func TestSearchIndexServiceGivesUpWithoutAdvancingWatermark(t *testing.T) {
 // waitForReady 轮询状态直到「已完成且已回填到期望行数」（重建是异步受理的 202 语义，
 // 测试用轮询对齐运维观测口径）。带 wantIndexed 的理由：重建刚受理时状态可能仍是
 // 「重建前」的快照，只看 ready 会提前返回。
+//
+// 等待上限取 30 秒而非数秒：回填本身是异步的，而质量门与 CI 会把所有包的测试并行拉满，
+// 满载时一个批次可能被推迟到远超空闲机器的耗时。轮询在达标后立即返回，因此放大上限只
+// 增加失败时的等待成本，不影响通过路径的耗时；反之上限过紧会让满载下的正常回填被误判成
+// 超时失败。
 func waitForReady(t *testing.T, svc *domain.SearchIndexService, wantIndexed int64) {
 	t.Helper()
-	for i := 0; i < 600; i++ {
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
 		status, err := svc.Status()
 		if err != nil {
 			t.Fatalf("读状态：%v", err)
@@ -532,7 +538,7 @@ func waitForReady(t *testing.T, svc *domain.SearchIndexService, wantIndexed int6
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatalf("等待回填完成超时（3 秒），期望 ready=true 且 indexed=%d", wantIndexed)
+	t.Fatalf("等待回填完成超时（30 秒），期望 ready=true 且 indexed=%d", wantIndexed)
 }
 
 // blockingStore 让回填停在「已受理但仍在跑」的状态，用于确定性地覆盖并发互斥（409 的领域侧）。

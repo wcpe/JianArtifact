@@ -117,6 +117,44 @@ func (r *RepoRepo) ListPublic() ([]Repository, error) {
 	return repos, err
 }
 
+// ListByIDs 按 ID 批量取仓库元数据，返回以 ID 为键的映射。
+//
+// 与 ListByNames 一样把查询次数固定为 1 条（IN 查询），与 ID 个数无关；解析不到的 ID
+// 不出现在结果里（调用方按缺席处理，通常是「该仓库已被删除」）。
+//
+// 存在的理由：调用方常常只知道「某批命中行属于哪些仓库」，却需要它们的 format 才能解析
+// 包坐标。仓库全量列举有分页上限（见调用方的 1000 条），超出上限的仓库不在那份列表里，
+// 靠全量列举取 format 会让这些仓库的命中行静默消失；按 ID 精确补齐则与仓库总数无关。
+func (r *RepoRepo) ListByIDs(ids []int64) (map[int64]Repository, error) {
+	out := make(map[int64]Repository, len(ids))
+	cleaned := make([]int64, 0, len(ids))
+	seen := make(map[int64]bool, len(ids))
+	for _, id := range ids {
+		if id <= 0 || seen[id] {
+			continue
+		}
+		seen[id] = true
+		cleaned = append(cleaned, id)
+	}
+	if len(cleaned) == 0 {
+		return out, nil
+	}
+	query, args, err := sqlx.In(
+		`SELECT id, name, format, type, visibility, description, config, online, created_at
+			FROM repository WHERE id IN (?)`, cleaned)
+	if err != nil {
+		return nil, err
+	}
+	var repos []Repository
+	if err := r.db.Select(&repos, r.db.Rebind(query), args...); err != nil {
+		return nil, err
+	}
+	for i := range repos {
+		out[repos[i].ID] = repos[i]
+	}
+	return out, nil
+}
+
 // ListByNames 批量按名字解析仓库，返回以**请求名**为键的映射（别名也作为键）。
 //
 // 语义与逐个 GetByName 一致：先按主名匹配，未命中的再按别名解析到所属仓库（别名唯一，
