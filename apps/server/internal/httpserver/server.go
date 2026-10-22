@@ -162,7 +162,21 @@ func (s *Server) Handler(assets fs.FS) http.Handler {
 	routeMiddlewares := make([]api.MiddlewareFunc, 0, len(s.middlewares)+1)
 	routeMiddlewares = append(routeMiddlewares, api.MiddlewareFunc(auditctx.ServerTimingMiddleware()))
 	routeMiddlewares = append(routeMiddlewares, s.middlewares...)
-	api.RegisterHandlersWithOptions(r, s, api.GinServerOptions{Middlewares: routeMiddlewares})
+	// 只有注入了 handler 才注册契约路由。
+	//
+	// 为什么必须判断：契约路由的 wrapper 形如 `siw.Handler.Xxx(c)`，若内嵌接口为 nil，
+	// **任何**命中契约路径的请求都会 nil pointer panic（被 Recovery 兜成 500 并打一整段堆栈）。
+	// 此前无条件注册，装配用例（只测健康探针与静态回退）之所以没暴露，是因为它们只访问
+	// /healthz、/readyz —— 这两个由 Server 自己实现，不经过内嵌接口。
+	//
+	// 这也与 Server 字段注释「未注入时仅健康探针可用」一致：不注册即真正不可用（404），
+	// 而不是命中后崩溃。健康探针与就绪探针单独注册，保持无依赖装配可用。
+	if s.ServerInterface != nil {
+		api.RegisterHandlersWithOptions(r, s, api.GinServerOptions{Middlewares: routeMiddlewares})
+	} else {
+		r.GET("/healthz", s.GetHealthz)
+		r.GET("/readyz", s.GetReadyz)
+	}
 
 	if s.protocolRoutes != nil {
 		s.protocolRoutes(r)
