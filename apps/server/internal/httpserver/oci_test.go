@@ -280,7 +280,17 @@ func TestOCIPublishPolicyRejectionsAuditActor(t *testing.T) {
 	}
 	second := []byte("oci-policy-second")
 	if rec := e.rawReq(http.MethodPost, "/v2/oci-policy/demo/blobs/uploads/?digest="+url.QueryEscape(ociTestDigest(second)), basic, "application/octet-stream", second); rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("OCI 额度超限状态码=%d，期望 429", rec.Code)
+		// 失败信息带上额度账本，便于判断是「额度没算上」还是「策略没命中」：
+		// used/reserved 都为 0 说明第一次上传没有被计入（策略查不到或 settle 失败），
+		// 而非结算语义本身有问题。
+		var used, reserved, policyRows, reservations int64
+		_ = e.db.QueryRow(`SELECT
+			COALESCE((SELECT used_assets FROM quota_usage WHERE window_kind='hour' AND window_start=strftime('%Y-%m-%dT%H:00:00Z','now')),0),
+			COALESCE((SELECT SUM(assets) FROM quota_reservation WHERE settled_at IS NULL),0)`).Scan(&used, &reserved)
+		_ = e.db.QueryRow(`SELECT COUNT(*) FROM publish_policy`).Scan(&policyRows)
+		_ = e.db.QueryRow(`SELECT COUNT(*) FROM quota_reservation`).Scan(&reservations)
+		t.Fatalf("OCI 额度超限状态码=%d，期望 429（额度账本：used=%d reserved=%d 策略行数=%d 预约行数=%d 用户=%d）",
+			rec.Code, used, reserved, policyRows, reservations, user.Id)
 	}
 	manifest, err := json.Marshal(map[string]any{"schemaVersion": 2, "config": map[string]any{"digest": firstDigest, "size": len(first)}})
 	if err != nil {
