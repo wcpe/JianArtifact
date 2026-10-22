@@ -10,9 +10,11 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -147,7 +149,21 @@ func (h *RawHandler) beginPublish(c *gin.Context, repo, path string, size int64)
 	if err != nil {
 		return nil, err
 	}
-	return func(success bool) { _ = h.publish.Settle(id, success) }, nil
+	// 结算只允许发生一次：调用方普遍写成「defer settle(false) + 成功时 settle(true)」，
+	// 而 defer 会在成功路径上**再调一次** settle(false)。若首次 settle(true) 因事务失败
+	// （满载下的 busy/timeout）而没有把 settled_at 置位，第二次的 settle(false) 会把这条
+	// 预约整条删掉——用量从未累加、预约也消失，下一次 Resolve 便看到 used=0/reserved=0
+	// 而放行，额度被静默绕过。一次性化后，成功路径的 defer 不生效；失败时预约保持未结算，
+	// 仍会被算进 reserved，额度不会漏。
+	var once sync.Once
+	return func(success bool) {
+		once.Do(func() {
+			if err := h.publish.Settle(id, success); err != nil {
+				// 不再丢弃：结算失败意味着账本可能不准，必须可从日志追查。
+				log.Printf("发布额度结算失败（reservation=%d success=%v）：%v", id, success, err)
+			}
+		})
+	}, nil
 }
 
 func NewRawHandler(assets *domain.AssetService, repoSvc *domain.RepositoryService) *RawHandler {
@@ -362,7 +378,16 @@ func (h *RawHandler) beginRawPublish(c *gin.Context, repo, path string) (func(bo
 	if err != nil {
 		return nil, 0, err
 	}
-	return func(ok bool, size int64) { _ = h.publish.SettleSize(id, ok, size) }, minLimit(limit, quotaLimit), nil
+	// 一次性结算，理由同 beginPublish：避免成功路径上的 defer settle(false) 把
+	// 结算失败的预约整条删掉，从而漏算额度。
+	var once sync.Once
+	return func(ok bool, size int64) {
+		once.Do(func() {
+			if err := h.publish.SettleSize(id, ok, size); err != nil {
+				log.Printf("发布额度结算失败（reservation=%d success=%v size=%d）：%v", id, ok, size, err)
+			}
+		})
+	}, minLimit(limit, quotaLimit), nil
 }
 
 // beginUnresolvedPublish 为「路径尚未解析」的发布做预检（multipart / 上传会话建立时）。
@@ -384,7 +409,15 @@ func (h *RawHandler) beginUnresolvedPublish(c *gin.Context, repo string) (func(b
 	if err != nil {
 		return nil, 0, err
 	}
-	return func(ok bool, size int64) { _ = h.publish.SettleSize(id, ok, size) }, minLimit(limit, quotaLimit), nil
+	// 一次性结算，理由同 beginPublish。
+	var once sync.Once
+	return func(ok bool, size int64) {
+		once.Do(func() {
+			if err := h.publish.SettleSize(id, ok, size); err != nil {
+				log.Printf("发布额度结算失败（reservation=%d success=%v size=%d）：%v", id, ok, size, err)
+			}
+		})
+	}, minLimit(limit, quotaLimit), nil
 }
 
 // validateUnresolvedPublish 在制品路径解析出来后补做准入判定与发布额度路径校验。

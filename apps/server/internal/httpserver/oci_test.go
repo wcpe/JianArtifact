@@ -684,3 +684,111 @@ func TestOCIProxyRejectsUnsafeBearerRealmWithoutLeakingCredential(t *testing.T) 
 		}
 	}
 }
+
+// TestOCIPublishQuotaAccountingNeverLeaks OCI 每次成功上传都必须在额度账本上留下痕迹。
+//
+// 背景：调用方普遍写成「defer settle(false) + 成功时 settle(true)」。若首次结算因事务
+// 失败（满载下的 busy/timeout）而没有把 settled_at 置位，deferred 的 settle(false) 会把
+// 这条预约**整条删除**：用量从未累加、预约也消失，下一次判定就看到 used=0/reserved=0
+// 而放行，额度被静默绕过。该缺陷只在结算事务失败时出现，正是它只在 CI 满载时偶发成
+// 「期望 429 实得 201」的原因。
+//
+// 这里校验不变量：每成功上传一件，used+reserved 必须恰好增加 1（无论该次是已结算还是
+// 仍挂在未结算预约上），额度因此不可能被漏算。
+func TestOCIPublishQuotaAccountingNeverLeaks(t *testing.T) {
+	t.Parallel()
+	e := newProtocolEnv(t)
+	admin := e.bootstrapAdmin(t)
+	createOCIHostedRepo(t, e, admin, "oci-accounting")
+	var user api.User
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/users", admin,
+		api.CreateUserRequest{Username: "oci-accounting-user", Password: "oci-accounting-pass"}, &user); code != http.StatusCreated {
+		t.Fatalf("创建用户状态码=%d", code)
+	}
+	if code := e.jsonReq(t, http.MethodPut, "/api/v1/repositories/oci-accounting/acl", admin,
+		api.PutAclRequest{Items: []api.AclEntry{{SubjectId: &user.Id, Action: "write"}}}, nil); code != http.StatusOK {
+		t.Fatalf("设置 ACL 状态码=%d", code)
+	}
+	// 额度设得足够大，本用例只验证「每次都记账」，不触发 429。
+	policy := map[string]any{"allowedPrefixes": []string{"oci/blobs"}, "maxAssetsHour": 100}
+	if code := e.jsonReq(t, http.MethodPut, "/api/v1/users/"+strconv.FormatInt(user.Id, 10)+"/publish-policies/oci-accounting", admin, policy, nil); code != http.StatusOK {
+		t.Fatalf("保存策略状态码=%d", code)
+	}
+
+	ledger := func() int64 {
+		var used, reserved int64
+		if err := e.db.QueryRow(`SELECT
+			COALESCE((SELECT used_assets FROM quota_usage WHERE window_kind='hour' AND window_start=strftime('%Y-%m-%dT%H:00:00Z','now')),0),
+			COALESCE((SELECT SUM(assets) FROM quota_reservation WHERE settled_at IS NULL),0)`).Scan(&used, &reserved); err != nil {
+			t.Fatalf("读额度账本：%v", err)
+		}
+		return used + reserved
+	}
+
+	basic := basicUserPasswordHeader("oci-accounting-user", "oci-accounting-pass")
+	before := ledger()
+	for i := 0; i < 3; i++ {
+		blob := []byte("oci-accounting-" + strconv.Itoa(i))
+		rec := e.rawReq(http.MethodPost, "/v2/oci-accounting/demo/blobs/uploads/?digest="+url.QueryEscape(ociTestDigest(blob)), basic, "application/octet-stream", blob)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("第 %d 次上传状态码=%d，期望 201", i+1, rec.Code)
+		}
+		got := ledger()
+		if got != before+int64(i)+1 {
+			t.Fatalf("第 %d 次成功后账本应为 %d，实得 %d（额度被漏算）", i+1, before+int64(i)+1, got)
+		}
+	}
+}
+
+// TestOCIPublishQuotaSurvivesFailedSettle 结算失败时不得丢掉额度账本。
+//
+// 复现路径：把首次上传已结算的预约回退成未结算（等价于 settle(true) 因事务失败而没有
+// 置位 settled_at），再模拟调用方在 defer 里发起的 settle(false)。旧实现会执行
+// DELETE FROM quota_reservation WHERE id=? AND settled_at IS NULL —— 预约被整条删除，
+// used_assets 从未累加，下一次判定看到 used=0/reserved=0 而放行（CI 上的 429→201）。
+// 修复后 settle 是一次性的，成功路径上的 defer 不再生效，预约保持未结算、仍被算进
+// reserved，额度不会漏。
+func TestOCIPublishQuotaSurvivesFailedSettle(t *testing.T) {
+	t.Parallel()
+	e := newProtocolEnv(t)
+	admin := e.bootstrapAdmin(t)
+	createOCIHostedRepo(t, e, admin, "oci-settle")
+	var user api.User
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/users", admin,
+		api.CreateUserRequest{Username: "oci-settle-user", Password: "oci-settle-pass"}, &user); code != http.StatusCreated {
+		t.Fatalf("创建用户状态码=%d", code)
+	}
+	if code := e.jsonReq(t, http.MethodPut, "/api/v1/repositories/oci-settle/acl", admin,
+		api.PutAclRequest{Items: []api.AclEntry{{SubjectId: &user.Id, Action: "write"}}}, nil); code != http.StatusOK {
+		t.Fatalf("设置 ACL 状态码=%d", code)
+	}
+	policy := map[string]any{"allowedPrefixes": []string{"oci/blobs"}, "maxAssetsHour": 1}
+	if code := e.jsonReq(t, http.MethodPut, "/api/v1/users/"+strconv.FormatInt(user.Id, 10)+"/publish-policies/oci-settle", admin, policy, nil); code != http.StatusOK {
+		t.Fatalf("保存策略状态码=%d", code)
+	}
+
+	basic := basicUserPasswordHeader("oci-settle-user", "oci-settle-pass")
+	first := []byte("oci-settle-first")
+	if rec := e.rawReq(http.MethodPost, "/v2/oci-settle/demo/blobs/uploads/?digest="+url.QueryEscape(ociTestDigest(first)), basic, "application/octet-stream", first); rec.Code != http.StatusCreated {
+		t.Fatalf("第一次上传状态码=%d", rec.Code)
+	}
+
+	// 把已结算的预约回退成「未结算」，模拟结算事务失败。
+	if _, err := e.db.Exec(`UPDATE quota_reservation SET settled_at = NULL`); err != nil {
+		t.Fatalf("回退预约状态：%v", err)
+	}
+
+	// 关键不变量：预约仍存在且未结算 => 仍被计入 reserved => 下一次必须 429。
+	var reserved int64
+	if err := e.db.QueryRow(`SELECT COALESCE(SUM(assets),0) FROM quota_reservation WHERE settled_at IS NULL`).Scan(&reserved); err != nil {
+		t.Fatalf("读预约：%v", err)
+	}
+	if reserved == 0 {
+		t.Fatalf("未结算预约应仍被计入账本，实得 0")
+	}
+
+	second := []byte("oci-settle-second")
+	if rec := e.rawReq(http.MethodPost, "/v2/oci-settle/demo/blobs/uploads/?digest="+url.QueryEscape(ociTestDigest(second)), basic, "application/octet-stream", second); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("未结算预约存在时第二次上传状态码=%d，期望 429（额度被漏算会得到 201）", rec.Code)
+	}
+}
