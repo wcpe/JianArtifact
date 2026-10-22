@@ -761,7 +761,12 @@ func (r *AssetRepo) SearchAggregateByFilter(ctx context.Context, q SearchAggrega
 			return err
 		}
 		out.Facets = facets
-		if q.SkipAssetRows {
+		// 只有调用方明确给出扫描预算（MaxRows > 0）才扫聚合候选行。
+		//
+		// 文件级搜索不消费这些行，此前它靠 MaxRows 缺省的 0 走 searchScanIn 的「<=0 归一为 1」
+		// 兜底，白发一条 LIMIT 2 的查询且结果被丢弃。这里以意图（要不要行）为准，不再借道
+		// 那个兜底；SkipAssetRows 仍只负责「跳过 COUNT 与分页」，两者职责分开。
+		if q.SkipAssetRows || q.MaxRows <= 0 {
 			return nil
 		}
 		rows, truncated, err := searchScanIn(ctx, tx, f, q.RepoIDs, q.MaxRows)

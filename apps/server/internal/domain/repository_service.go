@@ -1338,7 +1338,12 @@ func (s *RepositoryService) SearchAssets(ctx context.Context, keyword, repoScope
 	parsed, repoIDs, facetIDs, allRepos := scope.parsed, scope.repoIDs, scope.facetIDs, scope.allRepos
 	// 计数 / 分页 / facet 聚合一并下推到**同一个只读快照**（SearchAggregateByFilter）：
 	// 逐条调用时每个方法各开一份快照，total、items 与 facets 可能来自三个不同版本的数据。
-	// 无主查询条件（hasQuery=false）时跳过计数与分页，只做 facet 统计——与逐条调用时一致。
+	//
+	// SkipAssetRows 必须跟着 hasQuery 走、不能恒为真。hasQuery 的判据是
+	// 「主查询仓库集非空，或管理员未限定仓库」，为假只出现在「收窄后主查询仓库集为空、
+	// 但 facet 仍有统计范围」这一种情形——那时要跳过的**不只是**聚合候选行，还有计数与
+	// 分页本身（否则会对空集合发无意义的 COUNT/SELECT）。恒为真会让正常请求也不返回 items
+	// （实测打挂 TestSearchAssets* 系列用例）。
 	res, err := s.assets.SearchAggregateByFilter(ctx, repository.SearchAggregateQuery{
 		Filter:        parsed.filter,
 		RepoIDs:       repoIDs,

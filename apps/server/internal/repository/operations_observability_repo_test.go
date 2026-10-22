@@ -428,8 +428,8 @@ func TestOperationsObservabilityCurrentCapacityCacheReusesAndExpires(t *testing.
 	if err != nil {
 		t.Fatalf("首次读取容量：%v", err)
 	}
-	if statements := atomic.LoadInt64(counter); statements != 2 {
-		t.Fatalf("未命中时语句数=%d，期望 2（资产侧 + 仓库侧各一条）", statements)
+	if statements := atomic.LoadInt64(counter); statements != 1 {
+		t.Fatalf("未命中时语句数=%d，期望 1（资产与仓库合并在同一条语句里）", statements)
 	}
 	if want := (CapacitySnapshot{RepositoryCount: 1, AssetCount: 2, LogicalBytes: 300}); first != want {
 		t.Fatalf("首次容量=%+v，期望 %+v", first, want)
@@ -469,7 +469,7 @@ func TestOperationsObservabilityCurrentCapacityCacheReusesAndExpires(t *testing.
 	if err != nil {
 		t.Fatalf("过期后读取容量：%v", err)
 	}
-	if statements := atomic.LoadInt64(counter); statements != 2 {
+	if statements := atomic.LoadInt64(counter); statements != 1 {
 		t.Fatalf("过期后语句数=%d，期望 2（重新聚合）", statements)
 	}
 	if want := (CapacitySnapshot{RepositoryCount: 1, AssetCount: 3, LogicalBytes: 700}); expired != want {
@@ -612,7 +612,7 @@ func TestOperationsObservabilityCurrentCapacityCacheTTLIsConfigurable(t *testing
 	if err != nil {
 		t.Fatalf("首次读取容量：%v", err)
 	}
-	if statements := atomic.LoadInt64(fixture.counter); statements != 2 {
+	if statements := atomic.LoadInt64(fixture.counter); statements != 1 {
 		t.Fatalf("未命中时语句数=%d，期望 2", statements)
 	}
 	if want := (CapacitySnapshot{RepositoryCount: 1, AssetCount: 1, LogicalBytes: 100}); first != want {
@@ -637,7 +637,7 @@ func TestOperationsObservabilityCurrentCapacityCacheTTLIsConfigurable(t *testing
 	if err != nil {
 		t.Fatalf("过期后读取容量：%v", err)
 	}
-	if statements := atomic.LoadInt64(fixture.counter); statements != 2 {
+	if statements := atomic.LoadInt64(fixture.counter); statements != 1 {
 		t.Fatalf("过期后语句数=%d，期望 2（重新聚合）", statements)
 	}
 	if want := (CapacitySnapshot{RepositoryCount: 1, AssetCount: 2, LogicalBytes: 300}); expired != want {
@@ -677,7 +677,7 @@ func TestOperationsObservabilityCurrentCapacityCacheDisabledWhenTTLZero(t *testi
 		if err != nil {
 			t.Fatalf("第 %d 次读取容量：%v", index+1, err)
 		}
-		if statements := atomic.LoadInt64(fixture.counter); statements != 2 {
+		if statements := atomic.LoadInt64(fixture.counter); statements != 1 {
 			t.Fatalf("第 %d 次语句数=%d，期望 2（禁用缓存后每次都重算）", index+1, statements)
 		}
 		if got.LogicalBytes != want || got.AssetCount != int64(index+1) {
@@ -708,7 +708,7 @@ func TestOperationsObservabilitySetCapacityCacheTTLInvalidatesWarmCache(t *testi
 	if err != nil {
 		t.Fatalf("改档后读取容量：%v", err)
 	}
-	if statements := atomic.LoadInt64(fixture.counter); statements != 2 {
+	if statements := atomic.LoadInt64(fixture.counter); statements != 1 {
 		t.Fatalf("改档后语句数=%d，期望 2（旧缓存必须失效并重算）", statements)
 	}
 	if afterSwitch.AssetCount != 2 || afterSwitch.LogicalBytes != 300 {
@@ -723,7 +723,7 @@ func TestOperationsObservabilitySetCapacityCacheTTLInvalidatesWarmCache(t *testi
 	if err != nil {
 		t.Fatalf("改成禁用后读取容量：%v", err)
 	}
-	if statements := atomic.LoadInt64(fixture.counter); statements != 2 {
+	if statements := atomic.LoadInt64(fixture.counter); statements != 1 {
 		t.Fatalf("改成禁用后语句数=%d，期望 2（立即重算）", statements)
 	}
 	if afterDisable.AssetCount != 3 || afterDisable.LogicalBytes != 700 {

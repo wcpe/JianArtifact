@@ -687,14 +687,9 @@ func TestOCIProxyRejectsUnsafeBearerRealmWithoutLeakingCredential(t *testing.T) 
 
 // TestOCIPublishQuotaAccountingNeverLeaks OCI 每次成功上传都必须在额度账本上留下痕迹。
 //
-// 背景：调用方普遍写成「defer settle(false) + 成功时 settle(true)」。若首次结算因事务
-// 失败（满载下的 busy/timeout）而没有把 settled_at 置位，deferred 的 settle(false) 会把
-// 这条预约**整条删除**：用量从未累加、预约也消失，下一次判定就看到 used=0/reserved=0
-// 而放行，额度被静默绕过。该缺陷只在结算事务失败时出现，正是它只在 CI 满载时偶发成
-// 「期望 429 实得 201」的原因。
-//
-// 这里校验不变量：每成功上传一件，used+reserved 必须恰好增加 1（无论该次是已结算还是
-// 仍挂在未结算预约上），额度因此不可能被漏算。
+// 校验的不变量：每成功上传一件，used+reserved 必须恰好增加 1。它守的是「账本不丢数」这条
+// 底线——历史上正是因为结算失败时可能把预约整条删掉、用量也不累加，才让额度被静默绕过
+// （CI 上表现为「期望 429 实得 201」）。修复方式是一次性 settle，见 beginPublish 的注释。
 func TestOCIPublishQuotaAccountingNeverLeaks(t *testing.T) {
 	t.Parallel()
 	e := newProtocolEnv(t)
@@ -740,15 +735,17 @@ func TestOCIPublishQuotaAccountingNeverLeaks(t *testing.T) {
 	}
 }
 
-// TestOCIPublishQuotaSurvivesFailedSettle 结算失败时不得丢掉额度账本。
+// TestOCIPublishQuotaSettleFailureKeepsReservation 结算失败时预约必须保留，不得静默丢账。
 //
-// 复现路径：把首次上传已结算的预约回退成未结算（等价于 settle(true) 因事务失败而没有
-// 置位 settled_at），再模拟调用方在 defer 里发起的 settle(false)。旧实现会执行
-// DELETE FROM quota_reservation WHERE id=? AND settled_at IS NULL —— 预约被整条删除，
-// used_assets 从未累加，下一次判定看到 used=0/reserved=0 而放行（CI 上的 429→201）。
-// 修复后 settle 是一次性的，成功路径上的 defer 不再生效，预约保持未结算、仍被算进
-// reserved，额度不会漏。
-func TestOCIPublishQuotaSurvivesFailedSettle(t *testing.T) {
+// 用触发器让 quota_usage 写入失败（等价于 CI 满载时结算事务 busy/timeout 回滚），断言：
+// used_assets 没有累加，但那条未结算的预约仍在、并计进 reserved。
+//
+// 这条能真正抓住原缺陷：旧实现里调用方写的是「defer settle(false) + 成功时 settle(true)」，
+// 一旦 settle(true) 失败、settled_at 仍为空，deferred 的 settle(false) 就会
+// DELETE FROM quota_reservation WHERE id=? AND settled_at IS NULL，把预约整条删掉 ——
+// 用量没加、预约也没了，下一次判定看到 used=0/reserved=0 直接放行（CI 上的 429→201）。
+// 把 beginPublish 里的 sync.Once 去掉，这里的 reserved 断言会稳定变红。
+func TestOCIPublishQuotaSettleFailureKeepsReservation(t *testing.T) {
 	t.Parallel()
 	e := newProtocolEnv(t)
 	admin := e.bootstrapAdmin(t)
@@ -768,27 +765,36 @@ func TestOCIPublishQuotaSurvivesFailedSettle(t *testing.T) {
 	}
 
 	basic := basicUserPasswordHeader("oci-settle-user", "oci-settle-pass")
+
+	// 让真实结算失败：quota_usage 写入被触发器拒绝，SettleBytes 的事务整体回滚，
+	// 于是 settled_at 保持为空、used_assets 不累加。这复现了 CI 满载时结算事务失败的形态。
+	if _, err := e.db.Exec(`CREATE TRIGGER fail_quota_usage BEFORE INSERT ON quota_usage
+		BEGIN SELECT RAISE(ABORT, '注入结算失败'); END`); err != nil {
+		t.Fatalf("安装结算失败触发器：%v", err)
+	}
+
 	first := []byte("oci-settle-first")
 	if rec := e.rawReq(http.MethodPost, "/v2/oci-settle/demo/blobs/uploads/?digest="+url.QueryEscape(ociTestDigest(first)), basic, "application/octet-stream", first); rec.Code != http.StatusCreated {
-		t.Fatalf("第一次上传状态码=%d", rec.Code)
+		t.Fatalf("第一次上传状态码=%d（上传本身应成功，失败发生在结算）", rec.Code)
 	}
 
-	// 把已结算的预约回退成「未结算」，模拟结算事务失败。
-	if _, err := e.db.Exec(`UPDATE quota_reservation SET settled_at = NULL`); err != nil {
-		t.Fatalf("回退预约状态：%v", err)
+	var used, reserved int64
+	if err := e.db.QueryRow(`SELECT
+		COALESCE((SELECT used_assets FROM quota_usage WHERE window_kind='hour' AND window_start=strftime('%Y-%m-%dT%H:00:00Z','now')),0),
+		COALESCE((SELECT SUM(assets) FROM quota_reservation WHERE settled_at IS NULL),0)`).Scan(&used, &reserved); err != nil {
+		t.Fatalf("读额度账本：%v", err)
 	}
-
-	// 关键不变量：预约仍存在且未结算 => 仍被计入 reserved => 下一次必须 429。
-	var reserved int64
-	if err := e.db.QueryRow(`SELECT COALESCE(SUM(assets),0) FROM quota_reservation WHERE settled_at IS NULL`).Scan(&reserved); err != nil {
-		t.Fatalf("读预约：%v", err)
+	// 这是本用例的核心断言：结算失败时用量没加上，但预约必须仍在（未结算），
+	// 否则这次上传就从账本上彻底消失了。旧的「defer settle(false)」实现会把它删掉。
+	if used != 0 {
+		t.Fatalf("结算失败时 used_assets 不应累加，实得 %d", used)
 	}
-	if reserved == 0 {
-		t.Fatalf("未结算预约应仍被计入账本，实得 0")
+	if reserved != 1 {
+		t.Fatalf("结算失败时未结算预约必须保留且计 1，实得 %d（被删掉即额度漏算）", reserved)
 	}
 
 	second := []byte("oci-settle-second")
 	if rec := e.rawReq(http.MethodPost, "/v2/oci-settle/demo/blobs/uploads/?digest="+url.QueryEscape(ociTestDigest(second)), basic, "application/octet-stream", second); rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("未结算预约存在时第二次上传状态码=%d，期望 429（额度被漏算会得到 201）", rec.Code)
+		t.Fatalf("未结算预约仍占用额度时第二次上传状态码=%d，期望 429", rec.Code)
 	}
 }

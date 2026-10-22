@@ -387,23 +387,28 @@ func (r *OperationsObservabilityRepo) storeCapacity(value CapacitySnapshot) {
 //     新写法会计。连接 DSN 启用了 foreign_keys(ON)，且有 ON DELETE CASCADE，
 //     孤儿行无法存在，故两种写法等价。
 func (r *OperationsObservabilityRepo) aggregateCapacity() (CapacitySnapshot, error) {
-	// 资产侧：一次顺序扫描同时得到资产数与逻辑字节数。
-	var assets struct {
-		AssetCount   int64 `db:"asset_count"`
-		LogicalBytes int64 `db:"logical_bytes"`
+	// 两条统计合并成**一条**语句。
+	//
+	// 为什么不能分两次查：资产统计与仓库计数若各自成句，整仓删除恰好提交在两者之间时，
+	// 会得到「资产非零、仓库为零」这种自相矛盾的快照，且它会被缓存 30 秒（见
+	// CapacitySnapshot 的 TTL 说明）。合成一条语句后两者来自同一读事务，不可能撕裂。
+	// 仓库用标量子查询，仍是覆盖索引上的计数，计划与原先一致。
+	var row struct {
+		AssetCount      int64 `db:"asset_count"`
+		LogicalBytes    int64 `db:"logical_bytes"`
+		RepositoryCount int64 `db:"repository_count"`
 	}
-	if err := r.db.Get(&assets, `SELECT COUNT(*) AS asset_count, COALESCE(SUM(size),0) AS logical_bytes FROM asset`); err != nil {
-		return CapacitySnapshot{}, err
-	}
-	// 仓库侧：覆盖索引上的计数，含没有任何资产的仓库。
-	var repositoryCount int64
-	if err := r.db.Get(&repositoryCount, `SELECT COUNT(*) FROM repository`); err != nil {
+	if err := r.db.Get(&row, `SELECT
+		COUNT(*) AS asset_count,
+		COALESCE(SUM(size),0) AS logical_bytes,
+		(SELECT COUNT(*) FROM repository) AS repository_count
+		FROM asset`); err != nil {
 		return CapacitySnapshot{}, err
 	}
 	return CapacitySnapshot{
-		RepositoryCount: repositoryCount,
-		AssetCount:      assets.AssetCount,
-		LogicalBytes:    assets.LogicalBytes,
+		RepositoryCount: row.RepositoryCount,
+		AssetCount:      row.AssetCount,
+		LogicalBytes:    row.LogicalBytes,
 	}, nil
 }
 
