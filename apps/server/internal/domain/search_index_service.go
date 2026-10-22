@@ -301,6 +301,16 @@ func (s *SearchIndexService) begin() bool {
 	return true
 }
 
+// Running 报告是否已有回填或重建任务在执行（只读，不占用运行槽）。
+//
+// 存在的理由：Rebuild 是**异步受理**（返回 nil 只表示已入队），调用方若需要「任务真的结束」
+// 而不是「数据看起来够了」，必须能观测运行槽。测试用它避免在后台协程仍在收尾时就关掉数据库。
+func (s *SearchIndexService) Running() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.running
+}
+
 // end 释放运行槽。
 func (s *SearchIndexService) end() {
 	s.mu.Lock()

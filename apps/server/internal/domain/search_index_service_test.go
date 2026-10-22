@@ -525,6 +525,10 @@ func TestSearchIndexServiceGivesUpWithoutAdvancingWatermark(t *testing.T) {
 // 满载时一个批次可能被推迟到远超空闲机器的耗时。轮询在达标后立即返回，因此放大上限只
 // 增加失败时的等待成本，不影响通过路径的耗时；反之上限过紧会让满载下的正常回填被误判成
 // 超时失败。
+//
+// 达标之后还要等**后台协程真正收尾**（见下方 running 检查）：Rebuild 是异步受理，
+// Status 达标只说明数据已写够，协程可能仍在返回路径上。若测试随即结束、用例的 t.Cleanup
+// 关掉数据库，后台协程就会在已关闭的连接上出错（表现为整段 goroutine 栈的 panic）。
 func waitForReady(t *testing.T, svc *domain.SearchIndexService, wantIndexed int64) {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
@@ -534,6 +538,11 @@ func waitForReady(t *testing.T, svc *domain.SearchIndexService, wantIndexed int6
 			t.Fatalf("读状态：%v", err)
 		}
 		if status.Ready && status.Indexed == wantIndexed {
+			// 再确认任务已退出：达标只说明数据写够，异步受理的协程可能仍在返回路径上。
+			if svc.Running() {
+				time.Sleep(5 * time.Millisecond)
+				continue
+			}
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
