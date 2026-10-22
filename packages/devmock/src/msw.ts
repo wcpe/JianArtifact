@@ -239,6 +239,26 @@ function repositoryReadUnauthorized(request: Request, repository: string) {
     : err("forbidden", "无权访问该仓库", 403);
 }
 
+/**
+ * 搜索的 `repository=` 限定：非管理员 / 匿名对「仓库不存在」与「存在但无权」返回**同一个**
+ * 404 not_found，两者不可区分。
+ *
+ * 与 repositoryReadUnauthorized（仓库内浏览用，401 / 403）刻意不同：全局搜索是匿名可达的
+ * 入口，若两种情形给出不同响应，调用方反复改 `repository=` 参数就能枚举出实例上有哪些私有
+ * 仓库存在。管理员不受限——他本就搜得到全部仓库，没有可泄漏的差异。
+ */
+function searchRepositoryDenied(userId: number, repository: string) {
+  if (isGlobalAdmin(userId)) {
+    return null;
+  }
+  // 有 read 权限：照常搜索（不是「限定即拒绝」）。
+  if (store.canAccess(repository, userId, "read")) {
+    return null;
+  }
+  // 不存在（canAccess 返回 null）与存在但无权（false）合流到同一个响应。
+  return err("not_found", "资源不存在", 404);
+}
+
 function integerQuery(url: URL, key: string): { value?: number; invalid: boolean } {
   const raw = url.searchParams.get(key);
   if (raw === null) {
@@ -425,7 +445,7 @@ const mockBackups: BackupPackage[] = seedBackups();
 
 let mockBackupSeq = 1;
 
-// ——：服务器上未被管理的备份包（仅 devmock）——
+// —— 服务器上未被管理的备份包（仅 devmock）——
 // 模拟 backups/ 目录里"有包体、无登记行"的残留：两个可导入的合法包，一个无法识别的伪包。
 // 导入其中一个后，它会被并入 mockBackups，从而不再出现在 unmanaged 列表里
 // （与后端 Scan 的差集口径一致）。
@@ -469,7 +489,7 @@ const mockUnmanagedBackups: Array<{
   },
 ];
 
-// ——：恢复演练报告内存态（仅 devmock）——
+// —— 恢复演练报告内存态（仅 devmock）——
 // 按包标识分桶存放报告，最近优先（与后端 ListByPackage 的排序口径一致）。
 // 预置一条**失败**报告：失败报告是演练最该留下的产物，界面必须能如实渲染它，
 // 所以 devmock 默认就该带上一条，而不是只给"一切正常"的样例。
@@ -581,11 +601,11 @@ function buildDrillReport(
 /** 演练是否"正在跑"：受理后短暂保留，便于界面看到轮询中的加载态。 */
 const pendingDrills = new Set<string>();
 
-// ——：写入冻结窗口内存态（仅 devmock）——
+// —— 写入冻结窗口内存态（仅 devmock）——
 // 进程内一个状态对象；未冻结时仅含 frozen:false，避免输出 until/frozenAt。
 let mockFreeze: WriteFreezeState = { frozen: false };
 
-// ——：从 URL 导入备份包内存态（仅 devmock）——
+// —— 从 URL 导入备份包内存态（仅 devmock）——
 // 预置 2~3 条真实分布：一条待重启、一条成功、一条失败（带 errorCode + error）。
 function seedImports(): BackupImport[] {
   const now = Date.now();
@@ -650,7 +670,7 @@ let mockImportSeq = 1;
 // null 表示无待生效恢复（绝大多数时候）。
 let mockPendingRestore: { packageId: string; origin: string; stagedAt: string } | null = null;
 
-// ——：分片上传备份包内存态（仅 devmock）——
+// —— 分片上传备份包内存态（仅 devmock）——
 // 服务端决定的分片大小固定 8 MiB；uploadedChunks 以实际收到的分片为准（可续传）。
 const UPLOAD_CHUNK_SIZE = 8 * 1024 * 1024;
 type UploadStatus = "initialized" | "receiving" | "completed" | "aborted";
@@ -1123,7 +1143,7 @@ export const handlers = [
       ? undefined
       : store.readableRepositoryNames(userId);
     if (repository) {
-      const denied = repositoryReadUnauthorized(request, repository);
+      const denied = searchRepositoryDenied(userId, repository);
       if (denied) {
         return denied;
       }
@@ -1137,10 +1157,9 @@ export const handlers = [
       intParam(url, "page_size", 50),
       readableRepositories,
     );
-    // `group_by=package&order=relevance` 才追加聚合字段，其余情形响应形状与
-    // 改造前逐字段一致（file 模式只多出 items[].sha1 这类纯追加键时也保持一致）。
+    // `group_by=package` 才追加聚合字段，其余情形响应形状与改造前逐字段一致
+    // （file 模式只多出 items[].sha1 这类纯追加键时也保持一致）。
     const groupByPackage = url.searchParams.get("group_by") === "package";
-    const relevanceRequested = url.searchParams.get("order") === "relevance";
     if (!groupByPackage) {
       return HttpResponse.json(base);
     }
@@ -1153,9 +1172,38 @@ export const handlers = [
       packageTotal: packages.length,
       packages,
       aggregation: { scanned, truncated: false },
-      // relevance 在 package 模式下恒为生效排序（mock 也按同一比较器排好了包序）。
-      appliedOrder: relevanceRequested ? "relevance" : order,
+      // package 模式下 appliedOrder **恒为 relevance**：包序只由相关度比较器决定，
+      // 请求里的 sort 键只影响文件级 items（order=relevance 时连 sort 都不生效，
+      // items 固定 path asc）。与后端一致，见 docs/API.md 的 appliedOrder 说明。
+      appliedOrder: "relevance",
     });
+  }),
+
+  // —— 搜索建议（开发态，非契约端点）——
+  //
+  // 前端搜索框已经在调这个端点（SearchSuggestInput），mock 里若没有处理器，`pnpm dev`
+  // 下该功能会静默不可见（请求落到 SPA 回退或直接 404）。
+  //
+  // 口径与后端一致：空 q 返回空 items 而不是 400；limit 缺省 10、夹取到 [1, 20] 且
+  // 不报错；候选只落在可读仓库内（无 read 权限的仓库连名字都不出现），可读集合为空
+  // 时返回 200 + 空 items，绝不 403（403 会把「这里存在一个你看不到的仓库」泄漏出去）。
+  http.get("*/api/v1/search/suggest", ({ request }) => {
+    const url = new URL(request.url);
+    const userId = mockUserId(request) ?? MOCK_ANONYMOUS_ID;
+    if (userId === MOCK_ANONYMOUS_ID && !store.anonymousAccess()) {
+      return err("unauthorized", "未认证", 401);
+    }
+    if (isEmptyScenario(request)) {
+      return HttpResponse.json({ items: [] });
+    }
+    // undefined = 不限（管理员搜全部）；否则收窄到「public ∪ 主体被授 read」。
+    const readable = isGlobalAdmin(userId) ? undefined : store.readableRepositoryNames(userId);
+    const items = store.searchSuggest(
+      url.searchParams.get("q") ?? "",
+      readable,
+      intParam(url, "limit", 10),
+    );
+    return HttpResponse.json({ items });
   }),
 
   // —— 认证（公开）——
@@ -2773,7 +2821,7 @@ export const handlers = [
     return HttpResponse.json(result);
   }),
 
-  // ——：存储治理运维作业面（admin）——
+  // —— 存储治理运维作业面（admin）——
   // 作业清单由 store 的"注册表"决定；手动触发复用后端语义：未知作业名 404、正在运行 409。
   http.get("*/api/v1/maintenance/jobs", ({ request }) => {
     const denied = adminUnauthorized(request);
@@ -3446,7 +3494,7 @@ export const handlers = [
     });
   }),
 
-  // ——：恢复演练（202 + 轮询）——
+  // —— 恢复演练（202 + 轮询）——
   // 路由注册顺序与 :id 通配无关（drill / verifications 都在 :id 段之后，不会互相吞），
   // 但仍集中放在备份端点组内，与后端 api.gen.go 的注册顺序对应。
   http.post("*/api/v1/backups/:id/drill", async ({ request, params }) => {

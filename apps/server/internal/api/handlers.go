@@ -37,7 +37,7 @@ type Deps struct {
 	Settings                *domain.SettingService
 	AuditLogs               *repository.AuditLogRepo                // 审计日志
 	AuditObservability      *repository.AuditObservabilityRepo      // 统一审计读模型
-	OperationsObservability *repository.OperationsObservabilityRepo // /120：当前节点业务与主机读模型
+	OperationsObservability *repository.OperationsObservabilityRepo // 当前节点业务与主机读模型
 	OperationsAlerts        *repository.OperationsAlertRepo         // v0.8.0：运维告警去重持久化
 	AssetDownloads          *repository.AssetDownloadRepo           // 制品下载计量明细（tree 计数列）
 	Pinned                  *repository.PinnedRepoRepo              // 置顶仓库（用户级 + 全局兜底，迁移 0043）
@@ -394,6 +394,23 @@ func writeDomainErrWithOperationID(c *gin.Context, err error, operationID string
 		write(http.StatusConflict, "base_missing", err.Error())
 	case errors.Is(err, domain.ErrRestorePackageNotDone):
 		write(http.StatusConflict, "package_not_ready", err.Error())
+	case errors.Is(err, context.Canceled):
+		// 客户端已断开（浏览器关页、curl Ctrl-C、反向代理掐断）：请求上下文被取消，
+		// 下游查询随之失败。这**不是服务端故障**，但也不属于任何一种可回给调用方的结果。
+		//
+		// 因此这里什么都不写：既不落响应体，也不进下面的兜底分支记「内部错误」日志。
+		//   - 写响应体没意义——连接已断，写进去的内容没有任何人会读到；
+		//   - 记「内部错误」更糟——客户端的每一次断开都会留下一条假警报，比超时噪音更难
+		//     从日志里捞真正的故障。取消是**正常**的请求生命周期终点。
+		//
+		// 必须排在 ErrSearchTimeout 之前：deadline 耗尽才该是 504 search_timeout，
+		// 而客户端主动取消（context.Canceled）与预算超时（context.DeadlineExceeded）
+		// 是两件事，领域层只把后者归一为 ErrSearchTimeout，前者原样返回。
+		//
+		// Abort 只是阻止后续 handler/中间件继续写，真正生效的是「不调用任何写响应的
+		// 方法」：gin 不会自动补写状态码，net/http 在连接已断时丢弃这次响应。
+		c.Abort()
+		return
 	case errors.Is(err, domain.ErrSearchTimeout):
 		// 本地查询超出预算：不复用 upstream_timeout——那个表示「上游不畅」，
 		// 复用会让用户与运维分不清该查上游还是该缩小检索范围 / 查索引。
@@ -437,6 +454,9 @@ func bindJSON(c *gin.Context, dst any) bool {
 }
 
 // pageOffset 解析分页参数，返回 (limit, offset)。默认第 1 页、每页 20，上限 100。
+// 页码与每页条数都走「夹取而非报错」的口径（见 parseSearchPage / parseSearchPageSize）：
+// 页码必须有上界，否则 (page-1)*pageSize 会整数溢出成负数，而 SQLite 把负 OFFSET 当 0，
+// 表现为「静默返回第一页」——既不报错也不返回空页，最容易被误判成数据错乱。
 func pageOffset(page, pageSize *int) (int, int) {
 	p, ps := 1, 20
 	if page != nil && *page > 0 {
@@ -445,8 +465,11 @@ func pageOffset(page, pageSize *int) (int, int) {
 	if pageSize != nil && *pageSize > 0 {
 		ps = *pageSize
 	}
-	if ps > 100 {
-		ps = 100
+	if ps > searchPageSizeMax {
+		ps = searchPageSizeMax
+	}
+	if p > searchPageMax {
+		p = searchPageMax
 	}
 	return ps, (p - 1) * ps
 }

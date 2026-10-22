@@ -668,6 +668,9 @@ export const en = {
     // 与中文侧同义：截断会让排序靠后的包整包缺席，不只是计数取下界。
     aggregationTruncated:
       "Too many matches; only the first {{scanned}} files were aggregated: counts are lower bounds, and packages sorted later may be missing from the list entirely. Narrow the keywords.",
+    // 与中文侧同义：结果区仍是上一口径的内容，新结果到达后自动替换。
+    staleResultsHint:
+      "Showing results from the previous search; they will be replaced when this search finishes.",
     sortLabel: "Sort",
     sortRelevance: "Relevance",
     sortName: "Name",

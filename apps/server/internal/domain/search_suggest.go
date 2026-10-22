@@ -66,14 +66,17 @@ func clampSuggestLimit(limit int) int {
 // 被动调用，空输入是常态而非错误（规格 §3.8）。
 //
 // 候选由两类组成，仓库名优先占位（它们更短、且用户常用来做 repo: 限定），剩余名额给包名；
-// 两类合计不超过 limit，且按「候选值长度升序 → 字典序升序」排序后截断——顺序不得依赖 FTS
-// 内部回表顺序，否则键盘选择的落点会随请求抖动。
+// 两类合计不超过 limit。排序只在**类内**进行（候选值长度升序 → 字典序升序），类间恒为
+// 「仓库在前、包名在后」：两类各自排序、各自截断后直接拼接，因此合并结果**不是**全局有序的
+// （例如仓库候选 `zzz-repo` 会排在包名候选 `abc` 之前）。这条顺序必须稳定——它不得依赖
+// FTS 内部回表顺序，否则键盘选择的落点会随请求抖动。
 //
 // 权限是硬约束：非管理员只能看到「public ∪ 主体被授 read」的仓库下的候选；可读集合为空时
 // 返回空候选而**不是 403**（403 会把「这里存在一个你看不到的仓库」作为信号泄漏出去）。
 //
-// ctx 与搜索主链路同源：入口派生一次总预算（JIAN_SEARCH_TIMEOUT_SECONDS），超时归一为
-// ErrSearchTimeout。
+// ctx 与搜索主链路同源：入口派生一次预算（JIAN_SEARCH_TIMEOUT_SECONDS），**耗尽**时归一为
+// ErrSearchTimeout；客户端断开不归一（原样返回），见 normalizeSearchErr。该预算只覆盖下发到
+// SQL 的候选扫描，可读仓库集合的解析不在其中（见 searchContext）。
 func (s *RepositoryService) Suggest(ctx context.Context, keyword string, subjectID int64, isAdmin bool, limit int) ([]SearchSuggestion, error) {
 	limit = clampSuggestLimit(limit)
 	out := make([]SearchSuggestion, 0, limit)
@@ -84,12 +87,6 @@ func (s *RepositoryService) Suggest(ctx context.Context, keyword string, subject
 	// 超时预算：与搜索主链路共用同一套语义（规格 §3.7 衔接点 3）。
 	ctx, cancel := s.searchContext(ctx)
 	defer cancel()
-
-	// 索引是否就绪：与搜索同一个判定函数，每次现算不缓存（重建会把 completed_at 打回 NULL）。
-	indexReady, err := s.assets.SearchIndexReady()
-	if err != nil {
-		return nil, err
-	}
 
 	// 仓库全量列举只做一次：仓库名候选、包坐标解析所需的格式映射与 repo:/format: 收窄都复用它。
 	allRepos, allErr := s.repos.List(1000, 0)
@@ -139,7 +136,15 @@ func (s *RepositoryService) Suggest(ctx context.Context, keyword string, subject
 	parsed := parseSearchQuery(q)
 	// 没有正向包含词就没有候选驱动条件（规格 §3.3 的降级口径）：只输入 -sources / ext:jar /
 	// repo:x 时不该把整个仓库的路径当候选池扫一遍，那样给出的都是无关包名。
+	//
+	// include-term 判定放在索引状态点查**之前**：suggest 是逐键触发的高频端点，而只输入
+	// 过滤器时这里就直接返回了，不该为一次注定不发生的候选扫描先付一次索引状态查询。
 	if len(parsed.filter.IncludeTerms) > 0 {
+		// 索引是否就绪：与搜索同一个判定函数，每次现算不缓存（重建会把 completed_at 打回 NULL）。
+		indexReady, err := s.assets.SearchIndexReady()
+		if err != nil {
+			return nil, err
+		}
 		parsed.filter.UseFullTextIndex = indexReady
 		// repo:/format: 限定按仓库元数据收窄候选范围：与搜索共用同一个收窄函数（不另写判定）。
 		// nil 在本函数里表示「不限」（管理员），而收窄函数的空结果同样是 nil，故另用布尔量
@@ -147,6 +152,8 @@ func (s *RepositoryService) Suggest(ctx context.Context, keyword string, subject
 		pkgRepoIDs := repoIDs
 		skipPackages := false
 		if parsed.hasRepoMeta() {
+			// 非管理员的全量列举失败已在 readableRepoIDs 里上抛；这里兜住管理员
+			// （它不走批量 ACL 分支），收窄仓库范围仍然需要 allRepos。
 			if allErr != nil {
 				return nil, allErr
 			}
@@ -169,8 +176,9 @@ func (s *RepositoryService) Suggest(ctx context.Context, keyword string, subject
 			cands := make([]SearchSuggestion, 0, remain)
 			seen := make(map[string]bool, remain)
 			for _, row := range rows {
-				// 包坐标解析的**唯一**来源： 的解析函数。解析不出坐标的行（raw 等格式）
-				// 不产出候选——降级条目的伪包维度就是仓库名，已由第一类候选覆盖。
+				// 包坐标解析的**唯一**来源：ParseCoordinates（同包 search_package.go）的解析函数。
+				// 解析不出坐标的行（raw 等格式）不产出候选——降级条目的伪包维度就是仓库名，
+				// 已由第一类候选覆盖。
 				value := suggestPackageValue(ParseCoordinates(formats[row.RepositoryID], row.Path))
 				if value == "" || used[value] || seen[value] {
 					continue // 同上：去重不去掉「不同类型」的语义，但同一字符串只出现一次

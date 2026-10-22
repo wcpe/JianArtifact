@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,12 +19,14 @@ import (
 // 断言口径与生产查询同形：命中判断一律「MATCH 只取 rowid」，不读 FTS 表列值——external
 // content 表在有孤儿索引行时读列值会报 267（见 repository/search_index_repo.go 文件头第 4 条）。
 
-// indexServiceFixture 打开临时库、建仓库并绕开索引直接写 N 条历史资产
-// （模拟 0049 之前写入、尚未回填的行），返回服务、库与仓库 id。
-func indexServiceFixture(t *testing.T, rows int) (*domain.SearchIndexService, *persistence.DB, int64) {
+// indexRowsFixture 打开临时库、建仓库并绕开索引直接写 N 条历史资产
+// （模拟 0049 之前写入、尚未回填的行），返回库与仓库 id。
+//
+// 服务由调用方自己构造：需要注入行为（延迟取批、注入漂移）的用例要包装 store。
+func indexRowsFixture(t *testing.T, repoName, pathPrefix string, rows int) (*persistence.DB, int64) {
 	t.Helper()
 	db := newTestDB(t)
-	repoID, err := repository.NewRepoRepo(db).Create("backfill-hosted", "raw", "hosted", "public", "")
+	repoID, err := repository.NewRepoRepo(db).Create(repoName, "raw", "hosted", "public", "")
 	if err != nil {
 		t.Fatalf("建仓库：%v", err)
 	}
@@ -31,12 +34,36 @@ func indexServiceFixture(t *testing.T, rows int) (*domain.SearchIndexService, *p
 		// 路径里带序号，便于逐条断言「在不在索引里」。
 		if _, err := db.Exec(`INSERT INTO asset (repository_id, path, blob_hash, size, content_type, sha1, md5)
 			VALUES (?, ?, 'h', 1, 'text/plain', '', '')`,
-			repoID, fmt.Sprintf("legacy/pkg-%04d-1.0.0.jar", i)); err != nil {
+			repoID, fmt.Sprintf("%s/pkg-%04d-1.0.0.jar", pathPrefix, i)); err != nil {
 			t.Fatalf("写入历史行 %d：%v", i, err)
 		}
 	}
+	return db, repoID
+}
+
+// indexServiceFixture 同 indexRowsFixture，额外用真实仓储构造服务（路径前缀固定为 legacy）。
+func indexServiceFixture(t *testing.T, rows int) (*domain.SearchIndexService, *persistence.DB, int64) {
+	t.Helper()
+	db, repoID := indexRowsFixture(t, "backfill-hosted", "legacy", rows)
 	svc := domain.NewSearchIndexService(repository.NewSearchIndexStateRepo(db))
 	return svc, db, repoID
+}
+
+// dropIndexEntry 移除某条资产行的索引条目，模拟「索引条目丢失」——漏索引最危险的形态：
+// asset 行还在（搜索里本该有它），索引里已经没有它。
+//
+// external content 表的移除必须同时带 rowid 与**当前** path，且要在 asset 行仍在时执行
+// （见 repository/search_index_repo.go 文件头第 2、3 条）。
+func dropIndexEntry(t *testing.T, db *persistence.DB, path string) {
+	t.Helper()
+	var id int64
+	if err := db.Get(&id, `SELECT id FROM asset WHERE path = ?`, path); err != nil {
+		t.Fatalf("取 %s 的 id：%v", path, err)
+	}
+	if _, err := db.Exec(`INSERT INTO asset_path_fts(asset_path_fts, rowid, path) VALUES('delete', ?, ?)`,
+		id, path); err != nil {
+		t.Fatalf("移除 %s 的索引条目：%v", path, err)
+	}
 }
 
 // indexHitCount 用生产形态（MATCH + 回表）统计某个子串命中的 asset 行数。
@@ -544,4 +571,222 @@ func TestSearchIndexServiceRejectsConcurrentRebuild(t *testing.T) {
 	}
 	close(store.release)
 	waitForReady(t, svc, 0)
+}
+
+// orderStore 记录「漂移自检」与「标记完成」的调用先后，并可按需注入比对失败。
+//
+// 之所以要记录顺序而不是只看结果：这两步的**先后**就是正确性本身——先置完成再自检时，
+// 中间窗口里查询路径已经在用带缺口的索引返回结果，而任何「最后状态对不对」的断言都看不出来。
+type orderStore struct {
+	*repository.SearchIndexStateRepo
+	events   []string
+	driftErr error
+}
+
+func (s *orderStore) MeasureDrift() (repository.SearchIndexDrift, error) {
+	s.events = append(s.events, "drift")
+	if s.driftErr != nil {
+		return repository.SearchIndexDrift{}, s.driftErr
+	}
+	return s.SearchIndexStateRepo.MeasureDrift()
+}
+
+func (s *orderStore) MarkCompleted() error {
+	s.events = append(s.events, "completed")
+	return s.SearchIndexStateRepo.MarkCompleted()
+}
+
+// TestSearchIndexServiceDriftCheckPrecedesCompletion 钉住「回填结束时先自检、后置完成」：
+// 无漏索引时两边都发生，但顺序不可交换（理由见 orderStore）。
+func TestSearchIndexServiceDriftCheckPrecedesCompletion(t *testing.T) {
+	db, _ := indexRowsFixture(t, "order-hosted", "order", 10)
+	store := &orderStore{SearchIndexStateRepo: repository.NewSearchIndexStateRepo(db)}
+	svc := domain.NewSearchIndexService(store)
+
+	if err := svc.Run(context.Background()); err != nil {
+		t.Fatalf("回填：%v", err)
+	}
+	if got := strings.Join(store.events, "→"); got != "drift→completed" {
+		t.Fatalf("回填结束时的动作顺序 = %s，期望「drift→completed」（先自检再置完成）", got)
+	}
+	if !indexState(t, db).Completed() {
+		t.Fatal("无漏索引时应正常标记完成")
+	}
+	if got := indexHitCount(t, db, "pkg-"); got != 10 {
+		t.Fatalf("回填后命中 = %d，期望 10", got)
+	}
+}
+
+// TestSearchIndexServiceKeepsIncompleteWhenDriftUnmeasurable 钉住「完整性未知时不置位」：
+// 比对本身失败也意味着无法确认没有缺口，此时宁可下次启动重跑（搜索走 LIKE，正确但慢），
+// 也不能把 completed_at 置上——置上之后就再没有第二次自检机会。
+func TestSearchIndexServiceKeepsIncompleteWhenDriftUnmeasurable(t *testing.T) {
+	db, _ := indexRowsFixture(t, "unmeasurable-hosted", "unmeasurable", 10)
+	store := &orderStore{
+		SearchIndexStateRepo: repository.NewSearchIndexStateRepo(db),
+		driftErr:             errors.New("模拟漂移比对失败"),
+	}
+	svc := domain.NewSearchIndexService(store)
+
+	err := svc.Run(context.Background())
+	if err == nil {
+		t.Fatal("无法比对漂移时 Run 应返回错误（本次回填未能确认完整）")
+	}
+	if indexState(t, db).Completed() {
+		t.Fatal("无法比对漂移时不得标记完成，否则未知缺口会被永久当成「已就绪」")
+	}
+	if got := strings.Join(store.events, "→"); got != "drift" {
+		t.Fatalf("比对失败时不应再调用 MarkCompleted，实际动作 = %s", got)
+	}
+
+	// 比对恢复正常后，下一次回填应能正常置完成（失败不是终态）。
+	store.driftErr = nil
+	store.events = nil
+	if err := svc.Run(context.Background()); err != nil {
+		t.Fatalf("比对恢复后重跑：%v", err)
+	}
+	if got := strings.Join(store.events, "→"); got != "drift→completed" {
+		t.Fatalf("重跑动作顺序 = %s，期望「drift→completed」", got)
+	}
+	if !indexState(t, db).Completed() {
+		t.Fatal("比对恢复且无漂移时应标记完成")
+	}
+}
+
+// driftInjectStore 在回填的**最后一次取批**（返回空集，即循环即将退出）时插入一条绕过
+// 仓储层的资产行，制造「回填完成的那一刻存在漏索引」：新行 id 大于上界快照，回填覆盖不到它，
+// 也永远不会再回头补。
+//
+// completedCalls 记录 MarkCompleted 被调用的次数：只看最终状态是不够的——「先置完成、再自检、
+// 检出问题后又降级」最终状态同样是未完成，但它**中间开了一个窗口**，查询路径在那个窗口里
+// 用的就是带缺口的索引。真正的约束是这个调用次数必须为 0。
+type driftInjectStore struct {
+	*repository.SearchIndexStateRepo
+	db             *persistence.DB
+	repoID         int64
+	injected       bool
+	completedCalls int
+}
+
+func (s *driftInjectStore) MarkCompleted() error {
+	s.completedCalls++
+	return s.SearchIndexStateRepo.MarkCompleted()
+}
+
+func (s *driftInjectStore) FetchBatch(after, upper int64, limit int) ([]repository.SearchIndexRow, error) {
+	rows, err := s.SearchIndexStateRepo.FetchBatch(after, upper, limit)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 && !s.injected {
+		s.injected = true
+		if _, err := s.db.Exec(`INSERT INTO asset (repository_id, path, blob_hash, size, content_type, sha1, md5)
+			VALUES (?, 'side/door-1.0.0.jar', 'h', 1, 'text/plain', '', '')`, s.repoID); err != nil {
+			return nil, err
+		}
+	}
+	return rows, nil
+}
+
+// TestSearchIndexServiceKeepsIncompleteWhenDriftAtCompletion 是「先置完成再自检」的直接回归：
+// 回填跑完时存在漏索引 → **一次都不能**置 completed_at，且本次 Run 如实报错。
+//
+// 若在这里置位，SearchIndexReady（只看 completed_at）会立刻把带缺口的索引投入使用：这些制品
+// 搜不到，而状态端点与日志都在说「一切正常」。事后再降级也补不回那个窗口。
+func TestSearchIndexServiceKeepsIncompleteWhenDriftAtCompletion(t *testing.T) {
+	const rows = 30
+	db, repoID := indexRowsFixture(t, "drift-hosted", "drift", rows)
+	store := &driftInjectStore{SearchIndexStateRepo: repository.NewSearchIndexStateRepo(db), db: db, repoID: repoID}
+	svc := domain.NewSearchIndexService(store)
+
+	err := svc.Run(context.Background())
+	if err == nil {
+		t.Fatal("回填完成时检出漏索引应如实报错，而不是假装成功")
+	}
+	if !store.injected {
+		t.Fatal("测试装置未按预期注入旁路资产行")
+	}
+	if store.completedCalls != 0 {
+		t.Fatalf("检出（或即将检出）漏索引时不得调用 MarkCompleted，实际调用 %d 次"+
+			"（先置完成再自检会开出一个「带缺口却已就绪」的窗口）", store.completedCalls)
+	}
+	state := indexState(t, db)
+	if state.Completed() {
+		t.Fatal("检出漏索引时不得置 completed_at（否则搜索用带缺口的索引静默少返回结果）")
+	}
+
+	// 缺口确实存在：旁路行在 asset 里、不在索引里。
+	status, statusErr := svc.Status()
+	if statusErr != nil {
+		t.Fatalf("读状态快照：%v", statusErr)
+	}
+	if status.MissingRows != 1 || status.Ready {
+		t.Fatalf("应报 1 行漏索引且 ready=false，实际 %+v", status)
+	}
+}
+
+// TestSearchIndexServiceDemotesOnMissingAtStartup 钉住「漏索引 → 降级 → 不再虚假置完成」
+// 这条完整链条（DemoteOnMissing 此前零覆盖，而它是漂移唯一的自动处置动作）：
+//
+//  1. 启动自检检出漏索引 → 降级（completed_at 清空），搜索退回全表检索（慢但完整）；
+//  2. 降级只清 completed_at、**保留水位**，因此下一次回填的 FetchBatch 返回空集；
+//  3. 这一轮**不得**把 completed_at 重新置位——否则每次重启都会重演「静默漏结果」的窗口；
+//  4. 只有全量重建能补齐缺口并恢复加速。
+func TestSearchIndexServiceDemotesOnMissingAtStartup(t *testing.T) {
+	const rows = 20
+	db, _ := indexRowsFixture(t, "demote-hosted", "legacy", rows)
+	store := &orderStore{SearchIndexStateRepo: repository.NewSearchIndexStateRepo(db)}
+	svc := domain.NewSearchIndexService(store)
+	if err := svc.Run(context.Background()); err != nil {
+		t.Fatalf("首次回填：%v", err)
+	}
+	if !indexState(t, db).Completed() {
+		t.Fatal("首次回填后应标记完成")
+	}
+
+	// 制造缺口：抹掉 3 行的索引条目，asset 行仍在 → 这 3 条制品「搜不到」。
+	dropped := []int{1, 5, 9}
+	for _, i := range dropped {
+		dropIndexEntry(t, db, fmt.Sprintf("legacy/pkg-%04d-1.0.0.jar", i))
+	}
+	if got := indexHitCount(t, db, "pkg-"); got != rows-len(dropped) {
+		t.Fatalf("缺口制造后索引命中 = %d，期望 %d", got, rows-len(dropped))
+	}
+
+	// 第一次运行：状态仍是「已完成」，因此走启动自检分支 → 检出漏索引 → 降级。
+	if err := svc.Run(context.Background()); err != nil {
+		t.Fatalf("启动自检：%v", err)
+	}
+	if indexState(t, db).Completed() {
+		t.Fatal("启动自检检出漏索引后必须降级为未完成，否则搜索继续用带缺口的索引")
+	}
+
+	// 之后每次启动都会进入回填分支，但水位已到上界：既补不上缺口，也不得重新置完成。
+	// 连续两轮是为了钉住「反复重启不会反复重现漏结果窗口」；同时统计 MarkCompleted 的调用
+	// 次数——只看最终状态会被「先置完成、再检出、又降级」蒙混过去，而那个窗口里查询路径
+	// 用的就是带缺口的索引。
+	store.events = nil
+	for round := 2; round <= 3; round++ {
+		if err := svc.Run(context.Background()); err == nil {
+			t.Fatalf("第 %d 次运行：水位以内有缺口，本次无法置完成，应如实报错", round)
+		}
+		if indexState(t, db).Completed() {
+			t.Fatalf("第 %d 次运行后 completed_at 仍不得置位（续跑覆盖不到水位以内的缺口）", round)
+		}
+	}
+	if got := strings.Join(store.events, "→"); strings.Contains(got, "completed") {
+		t.Fatalf("有缺口时不得调用 MarkCompleted，实际动作序列 = %s", got)
+	}
+	if got := indexHitCount(t, db, "pkg-"); got != rows-len(dropped) {
+		t.Fatalf("续跑不应声称补齐缺口：索引命中 = %d，期望 %d", got, rows-len(dropped))
+	}
+
+	// 唯一可用的修复路径：全量重建后缺口消失、ready 恢复。
+	if err := svc.Rebuild(); err != nil {
+		t.Fatalf("受理重建：%v", err)
+	}
+	waitForReady(t, svc, rows)
+	if got := indexHitCount(t, db, "pkg-"); got != rows {
+		t.Fatalf("重建后命中 = %d，期望 %d", got, rows)
+	}
 }

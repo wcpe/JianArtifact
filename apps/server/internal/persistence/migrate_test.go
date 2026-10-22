@@ -341,9 +341,11 @@ const repoStatsSQL = `SELECT ? AS repository_id, COUNT(*) AS count, COALESCE(SUM
 // `SCAN asset USING INDEX ...`（非覆盖），SQLite 要为每一行回表取值，代价比全表扫更高，
 // 说明索引列定义已经不对了，必须报错。
 //
-// 关于统计信息：断言不依赖 ANALYZE。planner 在「顺序扫表」与「顺序扫覆盖索引」之间取舍时
-// 依据索引行宽小于表行宽，与 sqlite_stat1 的基数估计无关；这里**故意不建统计信息**，
-// 让测试同时锁住「不需要 ANALYZE 也走覆盖索引」这一前提。
+// 关于统计信息：前一组断言**故意不建统计信息**，用来锁住「不需要 ANALYZE 也走覆盖索引」
+// 这一前提——planner 在「顺序扫表」与「顺序扫覆盖索引」之间取舍时主要依据索引行宽小于
+// 表行宽，与 sqlite_stat1 的基数估计无关。但生产库会不定时跑 ANALYZE，因此本用例末尾
+// 追加一段「ANALYZE asset 之后再断言一次」：有统计信息时若计划翻成回表扫，收益同样归零，
+// 而那只会在装好统计信息的实例上出现——正是测试数据最容易漏掉的状态。
 //
 // 空表也要断言：迁移刚建库时 asset 为 0 行，若计划在空表上退回 "SCAN asset"，
 // 说明该优化在「刚升级、还没数据」的窗口里不生效。
@@ -412,6 +414,28 @@ func TestMigration0050BuildsAssetSizeCoveringIndex(t *testing.T) {
 	repoPlan := strings.Join(explainPlanLines(t, db, repoStatsSQL, int64(1), int64(1)), " | ")
 	if !strings.Contains(repoPlan, "USING COVERING INDEX idx_asset_repo_size") {
 		t.Errorf("单仓库配额聚合未走 idx_asset_repo_size 覆盖索引，计划 = %s", repoPlan)
+	}
+
+	// 统计信息存在时的计划回归：生产库会跑 ANALYZE，planner 届时按真实基数估算代价，
+	// 有可能把「顺序扫覆盖索引」换成「顺序扫表 + 回表」。两条语句都再断言一次。
+	if _, err := db.Exec(`ANALYZE asset`); err != nil {
+		t.Fatalf("ANALYZE asset：%v", err)
+	}
+	// 前置校验：统计信息确实建出来了，否则这段断言等于又跑了一遍前一组。
+	var statRows int
+	if err := db.Get(&statRows, `SELECT COUNT(*) FROM sqlite_stat1 WHERE tbl = 'asset'`); err != nil {
+		t.Fatalf("读取 sqlite_stat1：%v", err)
+	}
+	if statRows == 0 {
+		t.Fatal("ANALYZE asset 之后 sqlite_stat1 里没有 asset 的统计行，计划断言失去意义")
+	}
+	if plan := strings.Join(explainPlanLines(t, db, capacityAggregateSQL), " | "); !strings.Contains(plan,
+		"SCAN asset USING COVERING INDEX idx_asset_repo_size") {
+		t.Errorf("ANALYZE 后容量聚合未走 idx_asset_repo_size 覆盖索引，计划 = %s", plan)
+	}
+	if plan := strings.Join(explainPlanLines(t, db, repoStatsSQL, int64(1), int64(1)), " | "); !strings.Contains(plan,
+		"USING COVERING INDEX idx_asset_repo_size") {
+		t.Errorf("ANALYZE 后单仓库配额聚合未走 idx_asset_repo_size 覆盖索引，计划 = %s", plan)
 	}
 
 	// 幂等：重复迁移不得重复建索引或报错。

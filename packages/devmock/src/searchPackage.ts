@@ -108,7 +108,7 @@ export function classifyFileKind(path: string, format: string): string {
 }
 
 /** 版本段解析结果：`coordinate` 为展示坐标，`version` 为空表示未版本化。 */
-interface Coordinates {
+export interface Coordinates {
   kind: "maven" | "npm" | "file";
   coordinate: string;
   version: string;

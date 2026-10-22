@@ -4,6 +4,7 @@
 // 渲染成「左栏包/版本/文件折叠树 + 右栏文件详情」的主从双栏。
 // 窄屏（<820px）降维为单栏两级视图：列表 ⇄ 详情，浏览器返回键可回列表。
 import {
+  Alert,
   Box,
   Button,
   Checkbox,
@@ -27,6 +28,7 @@ import {
   IconChevronUp,
   IconFilter,
   IconHelp,
+  IconRefresh,
   IconSearch,
 } from "@tabler/icons-react";
 import { ErrorState, ForbiddenState } from "@jianartifact/ui";
@@ -35,6 +37,7 @@ import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { PageShell } from "../app/PageShell";
+import { useAuth } from "../auth/AuthContext";
 import { ContentSkeleton } from "../components/AsyncBoundary";
 import { PackageSearchTree } from "../components/search/PackageSearchTree";
 import { SearchDetailPanel } from "../components/search/SearchDetailPanel";
@@ -76,10 +79,6 @@ const FORMAT_OPTIONS = ["maven", "raw", "npm"];
 /** 本页唯一的窄屏断点：820px（规格 §3.10 要求同页不并存两套断点）。 */
 const NARROW_QUERY = "(max-width: 51.25em)";
 
-type SortKey = SearchSortKey;
-
-type SortOrder = SearchSortOrder;
-
 /**
  * 把后端 / 客户端两处超时统一判出来：
  * - 后端搜索预算耗尽返回 HTTP 504 + `search_timeout`；
@@ -91,8 +90,8 @@ function isTimeoutError(error: ApiError): boolean {
 }
 
 interface SortPreference {
-  by: SortKey;
-  order: SortOrder;
+  by: SearchSortKey;
+  order: SearchSortOrder;
 }
 
 /** 一次搜索的取数结果 + 它所属的关键词（用于判定当前展示结果是否已切到新口径）。 */
@@ -107,9 +106,16 @@ export const SEARCH_SORT_KEY = "jianartifact.search.sort";
 /** 默认排序：相关度（服务端聚合序）。 */
 const DEFAULT_SORT: SortPreference = { by: "relevance", order: "relevance" };
 
-const SORT_KEYS: readonly SortKey[] = ["relevance", "name", "repo", "path", "size", "updated"];
+const SORT_KEYS: readonly SearchSortKey[] = [
+  "relevance",
+  "name",
+  "repo",
+  "path",
+  "size",
+  "updated",
+];
 
-function isSortKey(value: unknown): value is SortKey {
+function isSortKey(value: unknown): value is SearchSortKey {
   return typeof value === "string" && (SORT_KEYS as readonly string[]).includes(value);
 }
 
@@ -149,6 +155,8 @@ const SYNTAX_ROWS: [string, string, string][] = [
 export function SearchPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  // 会话身份：既是取数依赖也是缓存键的一部分（私有仓库可见性随登录态变化）。
+  const { user } = useAuth();
   const [searchParams] = useSearchParams();
   const q = searchParams.get("q") ?? "";
   const [input, setInput] = useState(q);
@@ -201,9 +209,18 @@ export function SearchPage() {
             query: q,
             result: { items: [], total: 0, facets: [] },
           }),
-    [q],
+    // 登录身份必须进依赖：私有仓库的可见性由会话决定，身份变了取数口径就变了。
+    // 少了它，登录后本页不会重拉，刚登录的用户看不到自己的私有仓库命中。
+    [q, user],
     // keepPreviousData：换关键词 / 后台刷新时保留旧结果、仅后台刷新，避免整块内容被骨架替换。
-    { cacheKey: `search:package:${q}`, keepPreviousData: true, abortable: true },
+    //
+    // 缓存键同样要带身份：asyncCache 是模块级 Map，只在 AuthContext 观察到身份变化时整体清空；
+    // 键里不带身份时，匿名与登录两种口径会共用同一条缓存，切账号后可能先回放上一个身份的结果。
+    {
+      cacheKey: `search:package:${user?.id ?? "anon"}:${q}`,
+      keepPreviousData: true,
+      abortable: true,
+    },
   );
 
   // 「搜索进行中」：首载（骨架屏）与换关键词 / 后台刷新都算，二者共用同一条进度条。
@@ -315,6 +332,18 @@ export function SearchPage() {
       setDetailOpen(false);
     }
   }, [isNarrow]);
+
+  // 搜索口径换代（换关键词 / 换排序）时一并退出窄屏详情：详情态属于上一份结果，
+  // 不退出的话窄屏左栏仍是 display:none，用户会以为新搜索没生效。
+  // 详情态对应的那条 `searchDetail` 历史标记也要撤销——它标记的「上一屏」已随口径切换失效，
+  // 留着会让返回键停在一个不存在的详情态上（只改当前历史项的状态，不动 URL）。
+  useEffect(() => {
+    setDetailOpen(false);
+    const historyState = window.history.state as { searchDetail?: boolean } | null;
+    if (historyState?.searchDetail === true) {
+      window.history.replaceState({ ...historyState, searchDetail: false }, "");
+    }
+  }, [viewScope]);
 
   // 浏览器返回键回列表：进入详情时压入一条带标记的历史项，popstate 时按标记判定。
   useEffect(() => {
@@ -431,6 +460,49 @@ export function SearchPage() {
   const packageTotal = result?.packageTotal ?? 0;
   const totalFiles = result?.total ?? 0;
 
+  // 后台刷新失败的非阻断告警（与 AsyncBoundary 同一套写法）。
+  //
+  // 为什么必须单独渲染：本页开了 cacheKey + keepPreviousData，useAsync 的约定是「旧数据还在场
+  // 时失败只置 refreshError，error 保持 null」。只看 error 会让失败彻底静默——搜 A 成功后搜 B
+  // 失败，搜索框是 B、结果树却仍是 A 的内容，用户会把它当成 B 的结果；A 无命中时更会把失败
+  // 显示成「B 没有结果」。这里保留旧数据、单独告知并给一键重试。
+  const refreshAlert = state.refreshError ? (
+    <Alert
+      color="yellow"
+      variant="light"
+      icon={<IconAlertTriangle size={16} />}
+      title={t("common.refreshFailedTitle")}
+      data-testid="search-refresh-error"
+    >
+      <Stack gap="xs">
+        <Text size="sm">
+          {t("common.refreshFailedDescription")}
+          {state.refreshError.message ? ` ${state.refreshError.message}` : ""}
+        </Text>
+        <Button
+          size="xs"
+          variant="light"
+          color="yellow"
+          w="fit-content"
+          leftSection={<IconRefresh size={14} />}
+          onClick={state.reload}
+        >
+          {t("common.retry")}
+        </Button>
+      </Stack>
+    </Alert>
+  ) : null;
+
+  // 当前展示的仍是上一口径的结果（keepPreviousData 暂留 / 刷新失败后旧数据继续在场）：
+  // 在结果区顶部点名，避免用户把上一份结果误读成新关键词的结果。
+  // 刷新失败时由上一条告警统一说明「仍展示上次数据」，此处不再重复。
+  const staleHint =
+    result !== null && !resultReady && !state.refreshError ? (
+      <Text size="xs" c="dimmed" data-testid="search-stale-results">
+        {t("search.staleResultsHint")}
+      </Text>
+    ) : null;
+
   // 结果区（四态只替换这一块，搜索框与 facet 条始终在）：
   // 无权 / 失败 / 首载骨架 / 空结果 / 双栏。
   const resultArea = (() => {
@@ -474,6 +546,11 @@ export function SearchPage() {
       );
     }
     if (!hasResult) {
+      // 上一口径本就无命中、新一次搜索又失败：此时没有任何结果可展示，
+      // 再渲染「未找到匹配的制品」等于把失败说成「新关键词没有结果」，只留告警。
+      if (state.refreshError) {
+        return refreshAlert;
+      }
       return (
         <Stack align="center" gap={4} py="xl" data-testid="search-empty">
           <Text c="dimmed">{t("search.noResults")}</Text>
@@ -484,112 +561,121 @@ export function SearchPage() {
       );
     }
     return (
-      <Box style={{ display: "flex", gap: 16, flex: 1, minHeight: 0 }}>
-        {/* 左栏：包级折叠树。窄屏进详情时只隐藏不卸载——展开态与滚动位置得以保留。 */}
-        <Box style={leftColumnStyle(isNarrow, isNarrow && detailOpen)}>
-          {/* 工具条吸顶：计数 + 排序。滚动容器内的 sticky，树从它下面滚过。 */}
-          <Box
-            style={{
-              position: "sticky",
-              top: 0,
-              zIndex: 2,
-              background: "var(--mantine-color-body)",
-              borderBottom: "1px solid var(--mantine-color-default-border)",
-              paddingBottom: 6,
-            }}
-          >
-            <Group justify="space-between" gap="xs" wrap="nowrap" align="flex-end">
-              <Stack gap={2} style={{ minWidth: 0 }}>
-                <Text size="sm" c="dimmed">
-                  {t("search.resultSummary", {
-                    files: totalFiles.toLocaleString(currentLocaleTag()),
-                    packages: `${truncated ? "≥" : ""}${packageTotal.toLocaleString(currentLocaleTag())}`,
-                  })}
-                </Text>
-                {truncated && (
-                  // 提示分两层意思：①计数只是下界；②按路径排序靠后的包整包缺席。
-                  // 后者用文字点明，否则用户会把「左侧看不到」误读成「该仓库没有命中」。
-                  <Group gap={4} wrap="nowrap" align="flex-start">
-                    <IconAlertTriangle
-                      size={12}
-                      color="var(--mantine-color-yellow-7)"
-                      style={{ flexShrink: 0, marginTop: 2 }}
-                    />
-                    <Text size="xs" c="yellow.8" data-testid="search-aggregation-truncated">
-                      {t("search.aggregationTruncated", { scanned })}
-                    </Text>
-                  </Group>
-                )}
-              </Stack>
-              <Select
-                size="xs"
-                w={110}
-                aria-label={t("search.sortLabel")}
-                value={sortBy}
-                onChange={changeSort}
-                allowDeselect={false}
-                data={[
-                  { value: "relevance", label: t("search.sortRelevance") },
-                  { value: "name", label: t("search.sortName") },
-                  { value: "repo", label: t("search.sortRepo") },
-                  { value: "path", label: t("search.sortPath") },
-                  { value: "size", label: t("search.sortSize") },
-                  { value: "updated", label: t("search.sortUpdated") },
-                ]}
-              />
-            </Group>
-          </Box>
-          <PackageSearchTree
-            packages={sortedPackages}
-            keywords={keywords}
-            expandedPackages={view.expandedPackages}
-            expandedVersions={view.expandedVersions}
-            expandedChecksums={view.expandedChecksums}
-            selection={selection}
-            onTogglePackage={togglePackage}
-            onToggleVersion={toggleVersion}
-            onToggleChecksums={toggleVersionChecksums}
-            onSelectVersion={selectVersion}
-            onSelectFile={selectFile}
-          />
-        </Box>
-
-        {/* 右栏：选中文件详情。窄屏未进详情时隐藏但不卸载。
-            窄屏进详情、以及"选中项已失效"这两种情况都要给出可读的落点。 */}
-        <Box style={rightColumnStyle(isNarrow, detailOpen)}>
-          {resolved ? (
-            <SearchDetailPanel
-              pkg={resolved.pkg}
-              version={resolved.version}
-              file={resolved.file}
-              siblings={resolved.siblings}
-              onBack={isNarrow ? closeDetail : undefined}
-              onOpenRepository={openRepo}
-              onSelectFile={(file) =>
-                selectFile(resolved.pkg, resolved.version?.version ?? null, file)
-              }
+      // 提示条与双栏上下叠放：提示不随左栏滚动，也不会在窄屏进详情时被 display:none 藏掉。
+      <Box style={{ display: "flex", flexDirection: "column", gap: 8, flex: 1, minHeight: 0 }}>
+        {refreshAlert || staleHint ? (
+          <Stack gap={6}>
+            {refreshAlert}
+            {staleHint}
+          </Stack>
+        ) : null}
+        <Box style={{ display: "flex", gap: 16, flex: 1, minHeight: 0 }}>
+          {/* 左栏：包级折叠树。窄屏进详情时只隐藏不卸载——展开态与滚动位置得以保留。 */}
+          <Box style={leftColumnStyle(isNarrow, isNarrow && detailOpen)}>
+            {/* 工具条吸顶：计数 + 排序。滚动容器内的 sticky，树从它下面滚过。 */}
+            <Box
+              style={{
+                position: "sticky",
+                top: 0,
+                zIndex: 2,
+                background: "var(--mantine-color-body)",
+                borderBottom: "1px solid var(--mantine-color-default-border)",
+                paddingBottom: 6,
+              }}
+            >
+              <Group justify="space-between" gap="xs" wrap="nowrap" align="flex-end">
+                <Stack gap={2} style={{ minWidth: 0 }}>
+                  <Text size="sm" c="dimmed">
+                    {t("search.resultSummary", {
+                      files: totalFiles.toLocaleString(currentLocaleTag()),
+                      packages: `${truncated ? "≥" : ""}${packageTotal.toLocaleString(currentLocaleTag())}`,
+                    })}
+                  </Text>
+                  {truncated && (
+                    // 提示分两层意思：①计数只是下界；②按路径排序靠后的包整包缺席。
+                    // 后者用文字点明，否则用户会把「左侧看不到」误读成「该仓库没有命中」。
+                    <Group gap={4} wrap="nowrap" align="flex-start">
+                      <IconAlertTriangle
+                        size={12}
+                        color="var(--mantine-color-yellow-7)"
+                        style={{ flexShrink: 0, marginTop: 2 }}
+                      />
+                      <Text size="xs" c="yellow.8" data-testid="search-aggregation-truncated">
+                        {t("search.aggregationTruncated", { scanned })}
+                      </Text>
+                    </Group>
+                  )}
+                </Stack>
+                <Select
+                  size="xs"
+                  w={110}
+                  aria-label={t("search.sortLabel")}
+                  value={sortBy}
+                  onChange={changeSort}
+                  allowDeselect={false}
+                  data={[
+                    { value: "relevance", label: t("search.sortRelevance") },
+                    { value: "name", label: t("search.sortName") },
+                    { value: "repo", label: t("search.sortRepo") },
+                    { value: "path", label: t("search.sortPath") },
+                    { value: "size", label: t("search.sortSize") },
+                    { value: "updated", label: t("search.sortUpdated") },
+                  ]}
+                />
+              </Group>
+            </Box>
+            <PackageSearchTree
+              packages={sortedPackages}
+              keywords={keywords}
+              expandedPackages={view.expandedPackages}
+              expandedVersions={view.expandedVersions}
+              expandedChecksums={view.expandedChecksums}
+              selection={selection}
+              onTogglePackage={togglePackage}
+              onToggleVersion={toggleVersion}
+              onToggleChecksums={toggleVersionChecksums}
+              onSelectVersion={selectVersion}
+              onSelectFile={selectFile}
             />
-          ) : (
-            <Stack gap={8} py="xl" align="center">
-              {/* 选中项失效（结果刷新后原文件已不在集合里）时右栏照常渲染，因此这里必须自带
+          </Box>
+
+          {/* 右栏：选中文件详情。窄屏未进详情时隐藏但不卸载。
+            窄屏进详情、以及"选中项已失效"这两种情况都要给出可读的落点。 */}
+          <Box style={rightColumnStyle(isNarrow, detailOpen)}>
+            {resolved ? (
+              <SearchDetailPanel
+                pkg={resolved.pkg}
+                version={resolved.version}
+                file={resolved.file}
+                siblings={resolved.siblings}
+                onBack={isNarrow ? closeDetail : undefined}
+                onOpenRepository={openRepo}
+                onSelectFile={(file) =>
+                  selectFile(resolved.pkg, resolved.version?.version ?? null, file)
+                }
+              />
+            ) : (
+              <Stack gap={8} py="xl" align="center">
+                {/* 选中项失效（结果刷新后原文件已不在集合里）时右栏照常渲染，因此这里必须自带
                   返回入口：否则窄屏下左栏被隐藏、详情面板又不渲染，返回按钮随面板一起消失，
                   用户只剩刷新页面这一条出路。 */}
-              {isNarrow && (
-                <Button
-                  variant="subtle"
-                  size="compact-sm"
-                  leftSection={<IconArrowLeft size={14} />}
-                  onClick={closeDetail}
-                  aria-label={t("search.backToResults")}
-                >
-                  {t("search.backToResults")}
-                </Button>
-              )}
-              <Text c="dimmed" size="sm">
-                {t("search.selectFileHint")}
-              </Text>
-            </Stack>
-          )}
+                {isNarrow && (
+                  <Button
+                    variant="subtle"
+                    size="compact-sm"
+                    leftSection={<IconArrowLeft size={14} />}
+                    onClick={closeDetail}
+                    aria-label={t("search.backToResults")}
+                  >
+                    {t("search.backToResults")}
+                  </Button>
+                )}
+                <Text c="dimmed" size="sm">
+                  {t("search.selectFileHint")}
+                </Text>
+              </Stack>
+            )}
+          </Box>
         </Box>
       </Box>
     );

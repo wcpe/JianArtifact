@@ -21,6 +21,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type FocusEvent,
   type KeyboardEvent,
 } from "react";
 import { useTranslation } from "react-i18next";
@@ -212,10 +213,27 @@ export function SearchSuggestInput({
 
   const activeId = activeIndex >= 0 ? `${listboxId}-option-${activeIndex}` : undefined;
 
+  // 焦点整体离开组件时收起面板（键盘 Tab 走开的主路径）。
+  //
+  // 只用 mousedown 判断「点击外部」是不够的：键盘用户按 Tab 离开不会产生 mousedown，
+  // 面板会一直展开并盖住下方的筛选区，aria-expanded 也还停在 true。
+  // 用 focusout（React 的 onBlur 即为冒泡版）配合 relatedTarget 判定：焦点仍在根节点内
+  // （例如从输入框移到面板里的可聚焦元素）时不动；真正离开才关闭。
+  // relatedTarget 为 null（焦点落到 document / 浏览器 UI）同样视为离开。
+  // 鼠标点选候选的路径不受影响：面板项的 mousedown 已 preventDefault，焦点不会先离开。
+  const handleBlur = (event: FocusEvent<HTMLDivElement>) => {
+    if (!rootRef.current?.contains(event.relatedTarget as Node | null)) {
+      close();
+    }
+  };
+
   return (
-    <div ref={rootRef} style={{ position: "relative", ...style }}>
+    <div ref={rootRef} style={{ position: "relative", ...style }} onBlur={handleBlur}>
       <TextInput
         placeholder={placeholder}
+        // 可访问名称：只有 placeholder 时读屏软件不会把它当成一个具名输入框，
+        // 且 placeholder 会随输入消失。统一用搜索框的既有文案键。
+        aria-label={t("search.placeholder")}
         leftSection={<IconSearch size={16} />}
         value={value}
         onChange={(e) => {

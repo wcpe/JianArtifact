@@ -276,3 +276,155 @@ func TestSearchIndexEndpointsWithRealService(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 }
+
+// searchIndexBlockingStub 模拟「不支持 context、且计数很慢」的真实实现：
+// Status() 一直阻塞到用例结束，用来验证 API 层的等待侧收口。
+type searchIndexBlockingStub struct {
+	release chan struct{}
+}
+
+func (s *searchIndexBlockingStub) Status() (domain.SearchIndexStatus, error) {
+	<-s.release
+	return domain.SearchIndexStatus{Ready: true}, nil
+}
+
+func (s *searchIndexBlockingStub) Rebuild() error { return nil }
+
+// serveSearchIndexCtx 与 serveSearchIndex 同路由形状，但允许指定请求上下文。
+func serveSearchIndexCtx(h *Handlers, principal *auth.Principal, ctx context.Context) *httptest.ResponseRecorder {
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		if principal != nil {
+			c.Set("auth.principal", principal)
+		}
+	})
+	router.GET("/api/v1/search/index", func(c *gin.Context) { h.GetSearchIndexStatus(c) })
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/search/index", nil).WithContext(ctx))
+	return rec
+}
+
+// TestGetSearchIndexStatusBoundedByContext 钉住状态端点的等待侧收口：
+//
+//   - 请求上下文的 deadline 已过 → 不再等底层计数，直接 504 + search_index_status_timeout；
+//   - 请求上下文被取消（客户端断开）→ 静默丢弃：不写响应体，也不是 5xx。
+//
+// 用「已过期的 deadline / 已取消的上下文」构造，是确定性的：不需要把真实预算改小，
+// 也不会与查询抢时序。底层计数在这两个用例里始终阻塞，因此能确定地验证「没有被等」。
+func TestGetSearchIndexStatusBoundedByContext(t *testing.T) {
+	gin.SetMode(gin.ReleaseMode)
+
+	// 预算耗尽：父上下文 deadline 已过，handler 派生的 ctx 立刻是 DeadlineExceeded。
+	expired, cancelExpired := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	t.Cleanup(cancelExpired)
+	blocked := &searchIndexBlockingStub{release: make(chan struct{})}
+	t.Cleanup(func() { close(blocked.release) })
+	h := NewHandlers(Deps{SearchIndex: blocked})
+
+	rec := serveSearchIndexCtx(h, adminPrincipal(), expired)
+	if rec.Code != http.StatusGatewayTimeout {
+		t.Fatalf("预算耗尽状态码 = %d（体：%s），期望 504", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("解析错误响应：%v（体：%s）", err, rec.Body.String())
+	}
+	// 不复用 search_timeout：那个的错误码语义是「检索范围太大 / 该查索引」，处置方向不同。
+	if body.Error.Code != "search_index_status_timeout" {
+		t.Fatalf("错误码 = %q，期望 search_index_status_timeout", body.Error.Code)
+	}
+
+	// 客户端取消：连接已断，不写响应体，也不记「内部错误」。
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	rec = serveSearchIndexCtx(h, adminPrincipal(), cancelled)
+	if rec.Code >= 500 {
+		t.Fatalf("客户端取消不应映射为 5xx，实得 %d（体：%s）", rec.Code, rec.Body.String())
+	}
+	if rec.Body.Len() != 0 {
+		t.Fatalf("客户端取消不应写响应体，实得：%s", rec.Body.String())
+	}
+}
+
+// TestGetSearchIndexStatusPrefersContextualStatus 钉住可选扩展的优先级：实现方若支持
+// context，就必须走 StatusContext（并把 ctx 传下去），而不是退化成后台 goroutine。
+func TestGetSearchIndexStatusPrefersContextualStatus(t *testing.T) {
+	gin.SetMode(gin.ReleaseMode)
+	stub := &searchIndexContextualStub{}
+	h := NewHandlers(Deps{SearchIndex: stub})
+	rec := serveSearchIndex(h, adminPrincipal(), http.MethodGet, "/api/v1/search/index")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("状态码 = %d（体：%s），期望 200", rec.Code, rec.Body.String())
+	}
+	if !stub.contextualCalled {
+		t.Fatal("实现方支持 context 时应调用 StatusContext，而不是回落到 Status")
+	}
+	if stub.legacyCalled {
+		t.Fatal("不应同时调用不带 context 的 Status")
+	}
+}
+
+// searchIndexContextualStub 同时实现 Status 与 StatusContext，用于验证分派优先级。
+type searchIndexContextualStub struct {
+	contextualCalled bool
+	legacyCalled     bool
+}
+
+func (s *searchIndexContextualStub) Status() (domain.SearchIndexStatus, error) {
+	s.legacyCalled = true
+	return domain.SearchIndexStatus{}, nil
+}
+
+func (s *searchIndexContextualStub) StatusContext(ctx context.Context) (domain.SearchIndexStatus, error) {
+	s.contextualCalled = true
+	return domain.SearchIndexStatus{Ready: true}, nil
+}
+
+func (s *searchIndexContextualStub) Rebuild() error { return nil }
+
+// TestRebuildSearchIndexWritesAudit 校验重建留痕：受理成功后必须写一条 search.index_rebuild，
+// 且 409 / 未授权路径都不得留下「重建了」的假账。
+func TestRebuildSearchIndexWritesAudit(t *testing.T) {
+	gin.SetMode(gin.ReleaseMode)
+	db := openAPITestDB(t)
+	auditLogs := repository.NewAuditLogRepo(db)
+
+	// 受理成功 → 1 条审计。
+	h := NewHandlers(Deps{SearchIndex: &searchIndexRebuildStub{}, AuditLogs: auditLogs})
+	if rec := serveSearchIndex(h, adminPrincipal(), http.MethodPost, "/api/v1/search/index/rebuild"); rec.Code != http.StatusAccepted {
+		t.Fatalf("受理状态码 = %d（体：%s），期望 202", rec.Code, rec.Body.String())
+	}
+	entries, err := auditLogs.List(repository.AuditFilter{Action: "search.index_rebuild"})
+	if err != nil {
+		t.Fatalf("查审计：%v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("受理成功应写 1 条审计，实际 %d 条", len(entries))
+	}
+	entry := entries[0]
+	if entry.Action != "search.index_rebuild" || entry.EntityType != "search_index" ||
+		entry.Result != "ok" || entry.Actor != "admin" {
+		t.Fatalf("审计内容不符：%+v", entry)
+	}
+
+	// 运行中重复触发（409）→ 不新增审计。
+	busy := NewHandlers(Deps{SearchIndex: &searchIndexRebuildStub{err: domain.ErrSearchIndexRunning}, AuditLogs: auditLogs})
+	if rec := serveSearchIndex(busy, adminPrincipal(), http.MethodPost, "/api/v1/search/index/rebuild"); rec.Code != http.StatusConflict {
+		t.Fatalf("冲突状态码 = %d，期望 409", rec.Code)
+	}
+	// 非管理员（403）→ 同样不新增审计。
+	if rec := serveSearchIndex(h, userPrincipal(), http.MethodPost, "/api/v1/search/index/rebuild"); rec.Code != http.StatusForbidden {
+		t.Fatalf("非管理员状态码 = %d，期望 403", rec.Code)
+	}
+	entries, err = auditLogs.List(repository.AuditFilter{Action: "search.index_rebuild"})
+	if err != nil {
+		t.Fatalf("查审计：%v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("未真正触发重建的请求不应写审计，实际 %d 条", len(entries))
+	}
+}

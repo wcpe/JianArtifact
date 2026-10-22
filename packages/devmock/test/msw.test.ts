@@ -737,6 +737,50 @@ describe("devmock MSW 端点行为", () => {
     await expect(cleanup.json()).resolves.toEqual({ deleted: 0 });
   });
 
+  // 搜索建议：前端搜索框已经实际调用该端点，mock 里没有处理器时 `pnpm dev` 下整块功能
+  // 静默不可见。这里按 docs/API.md 的 suggest 口径钉住形状、空输入、上限夹取与
+  // 「无 read 权限的仓库连名字都不出现」。
+  it("搜索建议返回仓库名与包名两类候选，且不泄漏无权仓库", async () => {
+    const suggest = async (
+      query: string,
+      headers: Record<string, string> = auth,
+      limit?: number,
+    ) => {
+      const suffix = limit === undefined ? "" : `&limit=${limit}`;
+      const res = await fetch(
+        `http://localhost/api/v1/search/suggest?q=${encodeURIComponent(query)}${suffix}`,
+        { headers },
+      );
+      expect(res.status).toBe(200);
+      return (await res.json()) as { items: { type: string; value: string }[] };
+    };
+
+    // 仓库名候选：子串匹配（`maven` 命中 `maven-releases`），类型为 repository。
+    const byRepository = await suggest("maven");
+    expect(byRepository.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "repository", value: "maven-releases" }),
+      ]),
+    );
+
+    // 包名候选：Maven 取 artifact（`group:artifact` 里 `:` 之后的部分）。
+    const byPackage = await suggest("app");
+    const packageItems = byPackage.items.filter((item) => item.type === "package");
+    expect(packageItems.length).toBeGreaterThan(0);
+    expect(packageItems.every((item) => !item.value.includes(":"))).toBe(true);
+
+    // 空 q（含纯空白）返回空 items，而不是 400：suggest 是高频被动调用。
+    await expect(suggest("   ")).resolves.toEqual({ items: [] });
+
+    // limit：缺省 10、夹取到 [1, 20]，超限与非法值都不报错。
+    expect((await suggest("a", auth, 1)).items.length).toBeLessThanOrEqual(1);
+    expect((await suggest("a", auth, 999)).items.length).toBeLessThanOrEqual(20);
+
+    // 匿名：无 read 权限的仓库连名字都不出现（403 会把「这里存在一个你看不到的仓库」泄漏出去）。
+    const anonymous = await suggest("maven", {});
+    expect(anonymous.items.map((item) => item.value)).not.toContain("maven-releases");
+  });
+
   it("仓库与公开浏览的空态仅返回同路由所需的空数据", async () => {
     const emptyHeaders = {
       ...auth,
@@ -769,7 +813,7 @@ describe("devmock MSW 端点行为", () => {
     );
   });
 
-  it("账户/服务/可观测性的空态仅返回同路由所需的空数据（ 路由矩阵）", async () => {
+  it("账户/服务/可观测性的空态仅返回同路由所需的空数据（路由矩阵）", async () => {
     const emptyHeaders = {
       ...auth,
       [DEV_MOCK_SCENARIO_HEADER]: "empty",
@@ -1470,9 +1514,14 @@ describe("devmock MSW 端点行为", () => {
     const search = await fetch("http://localhost/api/v1/search?q=app");
     expect(search.status).toBe(200);
     await expect(search.json()).resolves.toEqual({ items: [], total: 0, facets: [] });
+    // repository= 限定：匿名对「存在但无权」与「仓库不存在」拿到**同一个** 404，
+    // 两者不可区分——否则反复改参数就能枚举出私有仓库是否存在（与后端同口径）。
     expect(
       (await fetch("http://localhost/api/v1/search?q=app&repository=maven-releases")).status,
-    ).toBe(401);
+    ).toBe(404);
+    expect(
+      (await fetch("http://localhost/api/v1/search?q=app&repository=no-such-repo")).status,
+    ).toBe(404);
   });
 
   it("旧批量删除要求覆盖理由，成功时保持兼容响应", async () => {

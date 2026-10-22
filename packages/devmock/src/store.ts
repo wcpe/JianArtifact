@@ -4,7 +4,13 @@
 import type { components } from "./schema.gen";
 import { mockVolumeFactor, subscribeMockConsole } from "./console";
 import { resetObservabilityStore } from "./observability";
-import { buildSearchPackages, type MockSearchPackage } from "./searchPackage";
+import {
+  buildSearchPackages,
+  parseCoordinates,
+  searchTermsOf,
+  type Coordinates,
+  type MockSearchPackage,
+} from "./searchPackage";
 import { MOCK_APP_VERSION, MOCK_MIGRATION_VERSION } from "./version";
 
 type Schemas = components["schemas"];
@@ -1116,6 +1122,43 @@ function collectSearchMatches(
   return { matches, facets, terms };
 }
 
+/**
+ * suggest 候选的稳定序：候选值长度（rune 数）升序 → 字典序升序。
+ *
+ * 长度按 rune 而不是 UTF-16 码元：中文候选按码元算会与「短候选优先」的直觉相反。
+ * 字典序用 `<` 比较（码元序），与后端 Go 的字节序一致，且只依赖候选值本身——
+ * 不依赖命中行的遍历顺序，因此同一输入每次调用得到同一顺序。
+ */
+function sortSuggestions<T extends { value: string }>(items: T[]): T[] {
+  return items.sort(
+    (left, right) =>
+      [...left.value].length - [...right.value].length ||
+      (left.value < right.value ? -1 : left.value > right.value ? 1 : 0),
+  );
+}
+
+/**
+ * 把解析出的坐标转成「可直接作为搜索词命中该包」的候选值。
+ *
+ * Maven 的展示坐标是 `group:artifact`，而 asset.path 里存在的是 `group/artifact/...`——
+ * 含 `:` 的坐标当关键词搜索是 0 命中，因此取 `:` 之后的部分（artifact）。
+ * npm 的坐标本身就是包名，原样返回。
+ * 解析不出坐标的行（`kind=file` 的降级伪包）返回空串，调用方据此跳过：它们的「包」
+ * 维度就是仓库名，已由仓库名候选覆盖。
+ */
+function suggestPackageValue(coordinates: Coordinates): string {
+  if (coordinates.kind === "file") {
+    return "";
+  }
+  if (coordinates.kind === "maven") {
+    const separator = coordinates.coordinate.lastIndexOf(":");
+    if (separator >= 0 && separator < coordinates.coordinate.length - 1) {
+      return coordinates.coordinate.slice(separator + 1);
+    }
+  }
+  return coordinates.coordinate;
+}
+
 /** MD-2 状态合并——offline 优先覆盖为 OFFLINE；hosted 不返回；online 的 proxy 返回内存态。 */
 function statusFor(repo: Repository): ConnectionStatus | undefined {
   if (repo.type === "hosted") {
@@ -1532,7 +1575,7 @@ export const store = {
     return this.settings();
   },
 
-  // ——：存储治理运维作业面（admin）——
+  // —— 存储治理运维作业面（admin）——
 
   /** 周期作业清单（返回副本，避免调用方直接改内部态）。 */
   maintenanceJobs(): MaintenanceJob[] {
@@ -2052,6 +2095,69 @@ export const store = {
   ): { packages: MockSearchPackage[]; scanned: number } {
     const { matches, terms } = collectSearchMatches(query, allowedRepositories);
     return { packages: buildSearchPackages(matches, terms), scanned: matches.length };
+  },
+
+  /**
+   * 开发态搜索建议（`GET /api/v1/search/suggest`）：仓库名与包名两类候选。
+   *
+   * 口径与后端一致，细节见 docs/API.md 的 suggest 小节：
+   *   - `q` trim 后为空 → 空候选（不是 400：suggest 是高频被动调用，空输入是常态）；
+   *   - `limit` 缺省 10、夹取到 [1, 20]，非正数回落缺省，**一律不报错**；
+   *   - 仓库名候选优先占位（更短、且用户常拿它做 `repo:` 限定），剩余名额给包名；
+   *   - 类内按「候选值长度（rune 数）升序 → 字典序升序」排序，类间恒为仓库在前——
+   *     因此合并结果**不是**全局有序的（仓库候选 `zzz-repo` 会排在包名候选中 `abc` 之前）。
+   *     这条顺序只依赖候选值本身，不依赖命中行的遍历顺序，同一输入的候选顺序稳定；
+   *   - 跨类去重：某个包名恰好等于某个仓库名时只保留仓库候选；
+   *   - `allowedRepositories` 为 undefined 表示不限（管理员），否则只在该集合内取候选——
+   *     无 `read` 权限的仓库**连名字都不出现**。
+   *
+   * 包名候选的抽取**复用**包级聚合的坐标解析（parseCoordinates），不另写一套规则：
+   * Maven 取 `group:artifact` 里 `:` 之后的部分（含 `:` 的坐标当关键词搜是 0 命中），
+   * npm 直接取包名，解析不出坐标的（`file` 降级条目）不产出候选。
+   * 只有输入含**普通关键词**时才扫包名候选：只输入 `-sources` / `ext:jar` / `repo:x`
+   * 时把整仓路径当候选池扫一遍，给出的都是无关包名。
+   */
+  searchSuggest(
+    query: string,
+    allowedRepositories: readonly string[] | undefined,
+    limit: number,
+  ): { type: "package" | "repository"; value: string }[] {
+    type Suggestion = { type: "package" | "repository"; value: string };
+    const q = query.trim();
+    if (!q) {
+      return [];
+    }
+    const capped = limit <= 0 ? 10 : Math.min(limit, 20);
+    const allowed = allowedRepositories ? new Set(allowedRepositories) : null;
+    const needle = q.toLowerCase();
+    const repoCandidates: Suggestion[] = state.repositories
+      .filter((repository) => !allowed || allowed.has(repository.name))
+      .filter((repository) => repository.name.toLowerCase().includes(needle))
+      .map((repository) => ({ type: "repository", value: repository.name }));
+    sortSuggestions(repoCandidates);
+    const out = repoCandidates.slice(0, capped);
+    const remain = capped - out.length;
+    if (remain === 0) {
+      return out;
+    }
+    // 没有正向关键词就没有候选驱动条件，直接返回仓库名候选。
+    if (searchTermsOf(q).length === 0) {
+      return out;
+    }
+    const used = new Set(out.map((item) => item.value));
+    const seen = new Set<string>();
+    const packageCandidates: Suggestion[] = [];
+    for (const match of collectSearchMatches(q, allowedRepositories).matches) {
+      const value = suggestPackageValue(parseCoordinates(match));
+      if (!value || used.has(value) || seen.has(value)) {
+        continue;
+      }
+      seen.add(value);
+      packageCandidates.push({ type: "package", value });
+    }
+    sortSuggestions(packageCandidates);
+    out.push(...packageCandidates.slice(0, remain));
+    return out;
   },
 
   /** Maven 网页上传——登记主文件/pom/metadata 及各自校验和的 asset 摘要。

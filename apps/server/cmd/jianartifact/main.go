@@ -413,7 +413,7 @@ func run() error {
 	} else if n > 0 {
 		fmt.Fprintf(os.Stderr, "分片上传：清理 %d 个过期上传会话\n", n)
 	}
-	// /120：分钟聚合与当前主机采样只由运行期定时任务驱动，启动不扫描历史数据。
+	// 分钟聚合与当前主机采样只由运行期定时任务驱动，启动不扫描历史数据。
 	svc.dashboardSvc.Start(ctx, time.Now)
 	svc.assetDownloadSvc.Start(ctx, time.Now)
 	svc.hostMonitoringSvc.Start(ctx, time.Now)
@@ -467,6 +467,7 @@ func run() error {
 		return fmt.Errorf("HTTP 服务异常：%w", err)
 	case <-ctx.Done():
 		fmt.Println("收到关停信号，正在优雅关停……")
+		noteSearchBackfillInterrupted()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if err := httpServer.Shutdown(shutdownCtx); err != nil {
@@ -490,6 +491,7 @@ func run() error {
 		// 就换映像，等于把"没关干净"这件事藏起来——新映像启动时看到的是一份半关停的现场，
 		// 而日志里一个字都不会提。
 		fmt.Println("收到一键重启请求，正在优雅关停并自替换……")
+		noteSearchBackfillInterrupted()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if err := httpServer.Shutdown(shutdownCtx); err != nil {
@@ -514,6 +516,23 @@ func run() error {
 		// ReplaceSelf 改成"可返回成功"的实现后，本函数静默地走完却没重启。
 		return errors.New("一键重启：自替换未生效，进程仍在运行")
 	}
+}
+
+// noteSearchBackfillInterrupted 在关停路径上说明「后台索引回填可能被本批中断」。
+//
+// 为什么不在关停时等它退出：回填跑在 domain.SearchIndexService 自己的 goroutine 里，
+// 关停只需要停止推进水位，而**等待**会把关停时长绑在「当前批次还剩多少行」上——
+// 大库上一批可能是几十万行，SIGTERM 后的 15 秒关停窗口（k8s 的 terminationGracePeriod
+// 同理）根本不够，结果是关停超时被杀，反而丢掉「本批已提交到哪」之外的全部收尾动作。
+//
+// 不等待是安全的：水位（search_index_state.last_id）在**每批提交时**落库，被中断的那一批
+// 至多回退到该批起点，下次启动从 last_id 续跑，不重复灌也不漏行；未完成期间搜索走既有
+// 全表 LIKE 路径，结果仍然正确。代价只是「本批白做一次」，所以不在关停路径里等。
+//
+// 但仍然要打这一行日志：否则运维在「刚重启后 indexed 比关停前还少一点」时无从判断
+// 是回退了还是索引坏了。
+func noteSearchBackfillInterrupted() {
+	fmt.Fprintln(os.Stderr, "提示：搜索索引的后台回填可能在本批中被中断；水位按批提交，下次启动将从 last_id 续跑，无需人工干预。")
 }
 
 // registerBlobGCJob 把孤立 blob 定时清理注册为调度器作业：按固定间隔执行、启动不立即扫描；

@@ -35,7 +35,7 @@ type SettingsResponse struct {
 	OriginTokenEnabled bool     `json:"originTokenEnabled"`
 	OriginTokenHeader  string   `json:"originTokenHeader"`
 	OriginTokenValue   string   `json:"originTokenValue"`
-	//  追加：自动备份与保留策略（运行时可改，保存后由作业下一轮读取生效）。
+	// 自动备份与保留策略（运行时可改，保存后由作业下一轮读取生效）。
 	BackupAutoInterval  int `json:"backupAutoInterval"`
 	BackupKeepLast      int `json:"backupKeepLast"`
 	BackupRetentionDays int `json:"backupRetentionDays"`
@@ -71,7 +71,7 @@ type SettingsRequest struct {
 	OriginTokenEnabled *bool     `json:"originTokenEnabled,omitempty"`
 	OriginTokenHeader  *string   `json:"originTokenHeader,omitempty"`
 	OriginTokenValue   *string   `json:"originTokenValue,omitempty"`
-	//  追加：自动备份三项（0 分别表示关闭 / 不限制，是合法取值）。
+	// 自动备份三项（0 分别表示关闭 / 不限制，是合法取值）。
 	BackupAutoInterval  *int `json:"backupAutoInterval,omitempty"`
 	BackupKeepLast      *int `json:"backupKeepLast,omitempty"`
 	BackupRetentionDays *int `json:"backupRetentionDays,omitempty"`

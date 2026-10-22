@@ -58,8 +58,9 @@ type SearchIndexStatus struct {
 	// ready=false，真正的漏索引信号会被这份噪音埋掉。
 	//
 	// 注意 Ready 只影响**报告**：真正的查询路径判定在 repository.AssetRepo.SearchIndexReady
-	// （只看 completed_at），因此漂移不会让搜索落到降级路径——漂移时索引仍被使用，只是可能
-	// 漏行。这正是必须把漂移单独暴露出来的原因。
+	// （只看 completed_at）。因此漂移被检出后，必须由观测点显式降级（见 checkDrift /
+	// demoteOnMissing）才会让搜索落到降级路径；在降级之前索引仍被使用，只是可能漏行。
+	// 这正是必须把漂移单独暴露出来的原因。
 	Ready bool
 	// Indexed 是已回填行数（按 last_id 水位回 asset 真源计数）。
 	Indexed int64
@@ -206,35 +207,57 @@ func (s *SearchIndexService) Status() (SearchIndexStatus, error) {
 	return status, nil
 }
 
-// logDrift 打一条「索引行数 vs 资产行数」的中文自检日志（**不含任何制品路径**：路径是用户数据，
-// 不该出现在运行日志里）。
+// checkDrift 取一次「索引行数 vs 资产行数」的比对快照（**只读**，不改任何状态）。
 //
-// stage 是调用点的中文前缀（启动自检 / 回填完成），让运维一眼看出这是哪一次比对。
+// stage 是调用点的中文前缀（启动自检 / 回填完成自检），让运维一眼看出这是哪一次比对。
 //
-// 两个方向分开说：漏索引会让制品搜不到（必须重建），孤儿行只是索引偏大（可择机重建）。
-// 合并成一个「差额」会掩盖「漏 k 行 + 孤儿 k 行」这种自相抵消的形态。
-func (s *SearchIndexService) logDrift(stage string) {
+// 之所以把判定单独拎出来：漂移判定现在参与「能不能标记完成」这一决定，判定、记日志、降级
+// 必须是三个可以分别指认的动作。上一版只有一个名为 logDrift 的函数，实际内部会调
+// DemoteOnMissing 改状态——这正是「先置完成、再自检」这个顺序错误长期没被认出来的原因。
+//
+// 比对失败时如实返回错误，由调用方决定完整性未知时怎么办（见 backfill 里两处调用点：
+// 回填完成点选择**不置位**，启动自检选择保持既有标记）。
+func (s *SearchIndexService) checkDrift(stage string) (repository.SearchIndexDrift, error) {
 	drift, err := s.store.MeasureDrift()
 	if err != nil {
 		log.Printf("%s：无法比对索引行数与资产行数：%v", stage, err)
-		return
+		return repository.SearchIndexDrift{}, err
 	}
+	return drift, nil
+}
+
+// logDrift 打一条「索引行数 vs 资产行数」的中文自检日志（**不含任何制品路径**：路径是用户数据，
+// 不该出现在运行日志里）。纯日志，不参与任何状态变更。
+//
+// 两个方向分开说：漏索引会让制品搜不到（必须重建），孤儿行只是索引偏大（可择机重建）。
+// 合并成一个「差额」会掩盖「漏 k 行 + 孤儿 k 行」这种自相抵消的形态。
+func logDrift(stage string, drift repository.SearchIndexDrift) {
 	if !drift.HasMissing() && drift.OrphanRows == 0 {
 		log.Printf("%s：索引 %d 行与资产 %d 行一一对应，无漂移", stage, drift.IndexRows, drift.AssetRows)
 		return
 	}
 	hint := "孤儿索引行只占用索引空间、不影响结果，可择机重建（POST /api/v1/search/index/rebuild）"
 	if drift.HasMissing() {
-		hint = "存在漏索引的资产行（这些制品搜不到），已自动降级为全表检索以保证结果完整，需重建索引恢复加速（POST /api/v1/search/index/rebuild）"
-		// 降级而不只是报告：查询路径只看 completed_at，若不联动，端点会报 ready=false
-		// 而搜索仍在用索引、继续静默少返回行。清掉 completed_at 后搜索立即退回 LIKE
-		// （慢但完整），重建完成时 MarkCompleted 会自动恢复。
-		if err := s.store.DemoteOnMissing(); err != nil {
-			log.Printf("%s：漏索引降级失败（搜索仍在用不完整索引）：%v", stage, err)
-		}
+		hint = "这些制品搜不到，需重建索引恢复（POST /api/v1/search/index/rebuild）"
 	}
 	log.Printf("%s：索引漂移——索引 %d 行、资产 %d 行、漏索引 %d 行、孤儿索引行 %d 行；%s",
 		stage, drift.IndexRows, drift.AssetRows, drift.MissingRows, drift.OrphanRows, hint)
+}
+
+// demoteOnMissing 在检出漏索引时把完成标记降级为未完成，让查询退回全表检索（显式的状态变更）。
+//
+// 为什么必须联动：查询路径的就绪判定只看 completed_at（repository.AssetRepo.SearchIndexReady），
+// 若不联动，端点会报 ready=false 而搜索仍在用索引、继续静默少返回行。清掉 completed_at 后
+// 搜索立即退回 LIKE（慢但完整），重建完成时 MarkCompleted 自动恢复。
+//
+// 只降级、不重建：重建是管理员动作（可能要跑很久），自动触发会把一次偶发漂移放大成长时间的
+// 慢搜索。
+func (s *SearchIndexService) demoteOnMissing(stage string) {
+	if err := s.store.DemoteOnMissing(); err != nil {
+		log.Printf("%s：漏索引降级失败（搜索仍在用不完整索引）：%v", stage, err)
+		return
+	}
+	log.Printf("%s：已把搜索降级为全表检索（结果完整、速度下降），重建索引即可恢复加速", stage)
 }
 
 // Rebuild 受理一次全量重建：清空索引 → 水位归零 → 后台按回填算法重跑。
@@ -285,10 +308,10 @@ func (s *SearchIndexService) end() {
 	s.mu.Unlock()
 }
 
-// backfill 是 §3.2 的算法本体：读水位 → 上界快照 → 分批推进 → 置完成。
+// backfill 是 §3.2 的算法本体：读水位 → 上界快照 → 分批推进 → 完成自检 → 置完成。
 //
-// 返回错误表示本次回填失败（此时不置 completed_at；已推进的水位保留，下次启动续跑）。
-// ctx 取消不算失败：把已推进的水位留在库里，返回 nil。
+// 返回错误表示本次回填失败或**无法确认完整**（此时不置 completed_at；已推进的水位保留，
+// 下次启动续跑）。ctx 取消不算失败：把已推进的水位留在库里，返回 nil。
 func (s *SearchIndexService) backfill(ctx context.Context) error {
 	started := time.Now()
 	state, err := s.store.Load()
@@ -301,7 +324,16 @@ func (s *SearchIndexService) backfill(ctx context.Context) error {
 		// 但「不再回填」不等于「不检查」：completed_at 一旦置位，回填就永不再跑，此后任何绕过
 		// 仓储层的写入都会留下永久静默的漂移。这条早退分支正是进程启动的必经之路，因此在
 		// 这里做一次行数比对并记日志——它是「某些制品搜不到」唯一的早期信号。
-		s.logDrift("搜索索引启动自检")
+		drift, driftErr := s.checkDrift("搜索索引启动自检")
+		if driftErr != nil {
+			// 比对失败时保持既有标记：completed_at 是上一次「校验通过」留下的结论，一次测量
+			// 失败不该把用户直接打回全表检索。若漂移是真的，下一次测量成功时会降级并说明。
+			return nil
+		}
+		logDrift("搜索索引启动自检", drift)
+		if drift.HasMissing() {
+			s.demoteOnMissing("搜索索引启动自检")
+		}
 		return nil
 	}
 	upper, total, err := s.store.SnapshotBounds()
@@ -374,14 +406,32 @@ func (s *SearchIndexService) backfill(ctx context.Context) error {
 		}
 	}
 
+	// 完成自检必须**先于** MarkCompleted，理由是一条完整的失败链：
+	// completed_at 一旦置位，查询路径立刻改用这份索引返回结果（SearchIndexReady 只看它）；
+	// 而漏掉的行走水位之前的 id，下次启动 FetchBatch(lastID=水位, upper) 返回空集，于是又
+	// 走到这里并把 completed_at 重新置位——缺口从此没有任何自愈路径，用户看到「搜索少结果」，
+	// 运维看到「一切正常」，且每次重启都会重演同一个窗口。
+	drift, driftErr := s.checkDrift("搜索索引回填完成自检")
+	if driftErr != nil {
+		// 完整性未知时不置位：宁可下次启动重跑（搜索走 LIKE，正确但慢），也不要带着未知缺口
+		// 标记完成。
+		return fmt.Errorf("搜索索引回填已跑完全部批次，但无法比对索引与资产行数，因此未标记完成（搜索继续走全表检索，下次启动重跑）：%w", driftErr)
+	}
+	logDrift("搜索索引回填完成自检", drift)
+	if drift.HasMissing() {
+		// 漏索引的行 id ≤ 水位，续跑永远覆盖不到它们，只能靠全量重建修复，因此这里既不置位
+		// 也不假装成功。显式降级一次：本路径里 completed_at 通常本就是 NULL（回填的前提），
+		// 这里覆盖的是「回填期间被外部置位」的极端情形，让「检出漏索引 ⇒ 未完成」成为一条
+		// 不依赖调用点的硬约束。
+		s.demoteOnMissing("搜索索引回填完成自检")
+		return fmt.Errorf("搜索索引回填未标记完成：仍检出 %d 行漏索引（水位 %d 已到上界，续跑无法覆盖它们），搜索继续走全表检索；需重建索引（POST /api/v1/search/index/rebuild），耗时 %s",
+			drift.MissingRows, lastID, time.Since(started).Round(time.Millisecond))
+	}
 	if err := s.store.MarkCompleted(); err != nil {
 		return fmt.Errorf("搜索索引回填失败：标记完成出错：%w", err)
 	}
 	log.Printf("搜索索引回填完成：共 %d 行，本次补入 %d 行，水位 %d，耗时 %s",
 		total, filled, lastID, time.Since(started).Round(time.Millisecond))
-	// 完成时刻的漂移比对：回填按「上界快照」推进，上界之后的新行靠在线同步；若中途有写入
-	// 绕过仓储层，这里就是唯一能发现它的地方（回填此后再也不会跑）。
-	s.logDrift("搜索索引回填完成自检")
 	return nil
 }
 

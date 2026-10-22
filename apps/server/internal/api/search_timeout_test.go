@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -47,16 +48,23 @@ func TestSearchTimeoutErrorMapping(t *testing.T) {
 	}
 }
 
-// 搜索 handler 的端到端行为：正常预算下结构不变；请求上下文被取消（客户端断开 / 预算耗尽）
-// 时返回 504 + search_timeout。
+// 搜索 handler 的端到端行为：正常预算下结构不变；预算耗尽 → 504 + search_timeout；
+// 客户端主动取消 → 静默丢弃（不写响应体、不是 5xx）。
 //
-// 这里用「已取消的请求上下文」而不是极小超时：setTimeout 级别的预算与查询存在竞态
-// （查询可能在定时器触发前就跑完），会让用例时好时坏；取消上下文是确定性的，且正是
+// 两种上下文终止必须分开验证：
+//   - 客户端取消（浏览器关页、反代掐断）是**正常**的请求生命周期终点，连接已断，写响应
+//     没有意义，映射成 504 或 500 都会把「客户端走了」记成服务端故障，让日志里全是假警报；
+//   - 只有预算耗尽（deadline）才是 search_timeout，它指向的是「检索范围太大 / 索引没建」。
+//
+// 这里用「已取消的请求上下文」而不是极小超时来构造取消：setTimeout 级别的预算与查询存在
+// 竞态（查询可能在定时器触发前就跑完），会让用例时好时坏；取消上下文是确定性的，且正是
 // handler 把 c.Request.Context() 交给领域层这条链路的真实语义。
+// 预算耗尽那一侧则把领域层的检索预算压到 1ns，让 deadline 必然先于任何查询生效。
 
 // searchTimeoutEnv 是一个只关心搜索错误映射的最小环境。
 type searchTimeoutEnv struct {
 	handlers *Handlers
+	svc      *domain.RepositoryService
 	repos    *repository.RepoRepo
 	assets   *repository.AssetRepo
 }
@@ -76,6 +84,7 @@ func newSearchTimeoutEnv(t *testing.T) *searchTimeoutEnv {
 	svc := domain.NewRepositoryService(repoRepo, repository.NewAclRepo(db), assets, settings, users)
 	return &searchTimeoutEnv{
 		handlers: NewHandlers(Deps{Repos: svc, Settings: settings}),
+		svc:      svc,
 		repos:    repoRepo,
 		assets:   assets,
 	}
@@ -110,7 +119,8 @@ func (e *searchTimeoutEnv) serveSearch(t *testing.T, ctx context.Context, query 
 	return rec
 }
 
-// TestSearchHandlerTimeoutPath 验证 handler 把请求上下文交给领域层，并映射为 504。
+// TestSearchHandlerTimeoutPath 验证 handler 把请求上下文交给领域层，并按上下文终止的
+// 两种原因给出不同结果：客户端取消静默丢弃，预算耗尽 504 search_timeout。
 func TestSearchHandlerTimeoutPath(t *testing.T) {
 	e := newSearchTimeoutEnv(t)
 	e.seed(t)
@@ -132,10 +142,22 @@ func TestSearchHandlerTimeoutPath(t *testing.T) {
 		t.Fatalf("应命中 1 条，得 total=%d items=%d", ok.Total, len(ok.Items))
 	}
 
-	// 请求上下文已取消：与客户端断开 / 预算耗尽同一条链路，必须 504 + search_timeout。
+	// 客户端取消：连接已断，写响应体没有任何人会读到，因此必须**静默丢弃**。
+	// 断言两条：不写响应体（不是把错误塞进已断的连接），也不是 5xx（不记成服务端故障）。
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
 	rec = e.serveSearch(t, cancelled, "q=timeout")
+	if rec.Code >= 500 {
+		t.Fatalf("客户端取消不应映射为 5xx，实得 %d（体：%s）", rec.Code, rec.Body.String())
+	}
+	if rec.Body.Len() != 0 {
+		t.Fatalf("客户端取消不应写响应体，实得：%s", rec.Body.String())
+	}
+
+	// 预算耗尽：领域层把 deadline 归一为 ErrSearchTimeout，必须映射为 504 + search_timeout。
+	// 压到 1ns 让 deadline 必然先于任何检索语句生效（这是确定性构造，不是抢时序）。
+	e.svc.SetSearchTimeout(time.Nanosecond)
+	rec = e.serveSearch(t, nil, "q=timeout")
 	if rec.Code != http.StatusGatewayTimeout {
 		t.Fatalf("超时状态码 = %d（体：%s），期望 504", rec.Code, rec.Body.String())
 	}

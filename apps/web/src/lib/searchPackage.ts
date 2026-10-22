@@ -408,7 +408,10 @@ export function sortPackages(
   order: SearchSortOrder,
 ): SearchPackage[] {
   if (by === "relevance") {
-    return packages as SearchPackage[];
+    // 复制一份再交出去：入参是 readonly，直接 `as SearchPackage[]` 会把**同一份引用**
+    // 交给调用方，后续任何就地 mutate 都会改到 asyncCache 里的缓存对象（结果区与缓存
+    // 会互相污染）。浅拷贝成本可忽略，换来「返回值可安全改写」的口径一致。
+    return packages.slice();
   }
   const key: OrderingKey = by;
   const direction = order === "desc" ? -1 : 1;

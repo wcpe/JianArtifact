@@ -179,18 +179,35 @@ func TestConcurrentWriteAndReadNoLockedError(t *testing.T) {
 }
 
 // TestDeferredTransactionLocksUnderSameLoad 是对照组：同样的负载、同样的连接池，
-// 只把事务模式退回默认的 BEGIN DEFERRED。
+// 只把事务模式退回默认的 BEGIN DEFERRED，用来观测「读锁升级写锁」是否真的会撞上
+// database is locked。
 //
-// 期望结果是**出现 database is locked**——它证明 _txlock=immediate 是必要配置，
-// 而不是可以随手删掉的装饰。若某天驱动或 SQLite 行为变化使 deferred 也不再报错，
-// 本用例会失败并提示可以重新评估该配置（而不是让配置静默地失去理由）。
+// **期望出现锁冲突，但不以它作为通过条件**：是否真的撞上，取决于调度与锁竞争时序——
+// 核数少、负载低、或写事务恰好错开时，deferred 也可能整轮跑完都不报错。把它写成硬断言
+// 会让 CI 在这些机器上随机变红（与本仓库之前修掉的「后台探测线程调度竞态」是同一类问题：
+// 用测试去证明一件本质上依赖时序的事）。
+//
+// 因此这里保留对照实验的**信息价值**而不阻塞闸门：
+//   - 观测到锁冲突 → 记日志，说明 _txlock=immediate 仍有必要；
+//   - 一次都没观测到 → 跳过并写明原因，提示可以重新评估该配置（而不是失败）。
+//
+// 真正必须成立的那一半（生产 DSN 一次锁冲突都不能有、且写入无丢失）在
+// TestConcurrentWriteAndReadNoLockedError 里，那是硬断言。
 func TestDeferredTransactionLocksUnderSameLoad(t *testing.T) {
-	runWriteReadMix(t, "对照 DSN（BEGIN DEFERRED）", deferredDSN, true)
+	locked, writes := runWriteReadMix(t, "对照 DSN（BEGIN DEFERRED）", deferredDSN, true)
+	if locked == 0 {
+		t.Skip("本轮未复现 database is locked：deferred 事务的锁升级冲突依赖调度与锁竞争时序，" +
+			"核数少或负载低时可能整轮错开。若在满负载机器上稳定复现不出来，" +
+			"可重新评估 DSN 里的 _txlock 是否仍有必要（该配置的价值见 buildDSN 注释）")
+	}
+	t.Logf("对照 DSN（BEGIN DEFERRED）：实测出现 %d 次锁冲突、%d 次成功写事务——"+
+		"这正是生产 DSN 必须用 BEGIN IMMEDIATE 的原因", locked, writes)
 }
 
-// runWriteReadMix 跑「多写者 + 多读者」混合负载。
-// wantLocked 为 true 时要求确实观测到锁冲突（对照组），为 false 时要求一次都不出现（生产组）。
-func runWriteReadMix(t *testing.T, label string, dsn func(string) string, wantLocked bool) {
+// runWriteReadMix 跑「多写者 + 多读者」混合负载，返回观测到的锁冲突次数与成功写事务数。
+// wantLocked 为 true 时表示这是对照组（锁冲突是**预期但非必须**的结果，由调用方决定如何处置）；
+// 为 false 时要求一次都不出现，且写入完整性必须成立。
+func runWriteReadMix(t *testing.T, label string, dsn func(string) string, wantLocked bool) (int64, int64) {
 	t.Helper()
 	db := openForConcurrencyTest(t, dsn)
 
@@ -287,19 +304,9 @@ func runWriteReadMix(t *testing.T, label string, dsn func(string) string, wantLo
 
 	locked := lockErrs.Load()
 	if wantLocked {
-		if locked == 0 {
-			t.Fatalf("%s：期望观测到 database is locked，实际 0 次。"+
-				"说明当前驱动/SQLite 已不再受 deferred 锁升级限制，可重新评估 DSN 里的 _txlock",
-				label)
-		}
-		var msg string
-		select {
-		case msg = <-firstLockMsg:
-		default:
-		}
-		t.Logf("%s：实测出现 %d 次锁冲突（首条：%s）——这正是生产 DSN 必须用 BEGIN IMMEDIATE 的原因",
-			label, locked, msg)
-		return
+		// 对照组：锁冲突是预期结果，但不作为通过条件（是否复现依赖调度与锁竞争时序）。
+		// 由调用方决定记日志还是跳过，这里只把观测值交出去。
+		return locked, writes.Load()
 	}
 
 	if locked > 0 {
@@ -324,6 +331,7 @@ func runWriteReadMix(t *testing.T, label string, dsn func(string) string, wantLo
 	}
 	t.Logf("%s：%d 写者 × %d 轮 = %d 次成功写事务，%d 读者并发，锁冲突 0 次，seed.touch = %d（与成功提交数一致）",
 		label, concurrencyWriters, concurrencyWriteTimes, writes.Load(), concurrencyReaders, seedTouch)
+	return locked, writes.Load()
 }
 
 // TestNewConnectionsOpenWhileWriteLocked 验证一个只有「池上限 > 1」才会暴露的隐患：

@@ -72,12 +72,20 @@ func TestSearchAssetsTimesOutWithSentinel(t *testing.T) {
 		}
 	})
 
-	t.Run("父上下文已取消也归一为超时", func(t *testing.T) {
+	t.Run("父上下文取消不归一为超时", func(t *testing.T) {
+		// 客户端断开是高频事件：把它记成「搜索超时」会让超时这个运维信号长期虚高，
+		// 真正的预算不足被埋掉。因此取消原因必须原样返回，不得变成 ErrSearchTimeout。
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		_, err := svc.SearchAssets(ctx, "timeout", "", 0, true, "", "asc", 10, 0)
-		if !errors.Is(err, domain.ErrSearchTimeout) {
-			t.Fatalf("期望 ErrSearchTimeout，得 %v", err)
+		if err == nil {
+			t.Fatal("已取消的上下文下搜索应返回错误")
+		}
+		if errors.Is(err, domain.ErrSearchTimeout) {
+			t.Fatalf("取消不得归一为 ErrSearchTimeout（会被记成超时并映射 504），得 %v", err)
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("应保留取消原因（errors.Is(err, context.Canceled)），得 %v", err)
 		}
 	})
 

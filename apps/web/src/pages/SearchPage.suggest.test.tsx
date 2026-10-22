@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vite
 
 import type { SearchResult, SearchSuggestResult } from "../api/endpoints";
 import { searchAssets, suggestSearch } from "../api/endpoints";
+import { AuthProvider } from "../auth/AuthContext";
 import "../i18n";
 import { SUGGEST_DEBOUNCE_MS, SUGGEST_MIN_CHARS } from "../components/search/SearchSuggestInput";
 import { SearchPage } from "./SearchPage";
@@ -76,13 +77,17 @@ async function flush(ms = SUGGEST_DEBOUNCE_MS): Promise<void> {
 /**
  * 渲染搜索页。初始 q 取 `seed` 而不是 `spring`：用例里键入的字符串必须与初始值不同，
  * 否则输入框值没变化、effect 不会重跑，测的就不是「键入触发建议」了。
+ *
+ * 搜索页要读会话身份（取数依赖与缓存键都带 user.id），因此必须包在 AuthProvider 里。
  */
 function renderPage(q = "seed") {
   return render(
     <MantineProvider>
-      <MemoryRouter initialEntries={[`/search?q=${encodeURIComponent(q)}`]}>
-        <SearchPage />
-      </MemoryRouter>
+      <AuthProvider>
+        <MemoryRouter initialEntries={[`/search?q=${encodeURIComponent(q)}`]}>
+          <SearchPage />
+        </MemoryRouter>
+      </AuthProvider>
     </MantineProvider>,
   );
 }
@@ -310,5 +315,35 @@ describe("SearchPage 搜索建议下拉", () => {
 
     fireEvent.mouseDown(document.body);
     expect(listbox()).toBeNull();
+  });
+
+  it("焦点离开组件（键盘 Tab 走开）时收起面板", async () => {
+    renderPage();
+    await flush(0);
+    type("spring");
+    await flush();
+    resolveSuggest([{ type: "package", value: "spring-core" }]);
+    await flush(0);
+
+    const input = searchInput();
+    expect(input).toHaveAttribute("aria-expanded", "true");
+
+    // 键盘 Tab 离开不会产生 mousedown：焦点整体移出组件时必须自己收起，
+    // 否则面板一直展开并盖住下方筛选区，aria-expanded 也停在 true。
+    await act(async () => {
+      input.dispatchEvent(
+        new FocusEvent("focusout", { bubbles: true, relatedTarget: document.body }),
+      );
+    });
+
+    expect(listbox()).toBeNull();
+    expect(input).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("搜索框有可访问名称（不只靠 placeholder）", async () => {
+    renderPage();
+    await flush(0);
+    // 具名输入框：读屏软件能读出「这是什么输入框」，且名称不随输入内容消失。
+    expect(screen.getByRole("combobox", { name: /搜索制品/ })).toBe(searchInput());
   });
 });

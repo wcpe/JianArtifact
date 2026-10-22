@@ -215,6 +215,17 @@ func TestSearchAggregateMergesAcrossRepos(t *testing.T) {
 	if p.FileCount != 2 || p.VersionCount != 1 {
 		t.Fatalf("计数 = %d 文件 / %d 版本，期望 2 / 1", p.FileCount, p.VersionCount)
 	}
+	// 组内文件顺序：两条记录的 path 完全相同（同坐标同文件名），只能由末位的仓库名次级键决定
+	// 顺序。少了它，比较器对这两条双向返回 false，顺序会随输入到达顺序（SQL 对同 path 不保证
+	// 相对顺序）与 sort.Slice 的非稳定性抖动。
+	files := p.Versions[0].Files
+	if len(files) != 2 {
+		t.Fatalf("版本组内文件数 = %d，期望 2", len(files))
+	}
+	if files[0].Repository != "agg-maven" || files[1].Repository != "agg-proxy" {
+		t.Fatalf("同 path 的跨仓库文件应按仓库名升序（agg-maven, agg-proxy），得 %s, %s",
+			files[0].Repository, files[1].Repository)
+	}
 }
 
 // TestSearchAggregateGroupByFileMatchesSearchAssets 是**回归保护**：

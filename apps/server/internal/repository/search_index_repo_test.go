@@ -334,3 +334,104 @@ func TestSearchIndexStateSeededByMigration(t *testing.T) {
 		t.Fatalf("状态初始行不符：%+v", state)
 	}
 }
+
+// TestSearchIndexDeleteWithoutIndexedRow 钉住 searchIndexDelete 对「内容行在、索引行不在」
+// 的处理——这是**迁移刚完成、历史行尚未回填**这一常态下的必经路径。
+//
+// 为什么必须单独一条：FTS5 在「内容行存在、但索引里没有该 rowid」时执行移除会报 267
+// `database disk image is malformed`（无论用 'delete' 专用命令还是 DELETE FROM），
+// 而 searchIndexDelete 规避它的手段是「先插一次同 rowid 同 path、再移除」。
+// 这条规避的正确性完全建立在一组实测结论上（见 search_index_repo.go 文件头第 2 条），
+// 而在此之前**没有任何用例直接断言它**：一旦驱动或 SQLite 版本改了行为，症状是
+// 「老库升级后第一次删资产直接 500」，而不是一条容易归因的测试失败。
+//
+// 断言口径：删除必须成功、索引与真源都不再有该行、且 MeasureDrift 报 0 残留
+// （既不能留下孤儿索引行，也不能留下漏索引行）。
+func TestSearchIndexDeleteWithoutIndexedRow(t *testing.T) {
+	assets, _, repoID := searchIndexFixture(t)
+	db := assets.DB()
+
+	// 绕过仓储直接写 asset 行：这样才有「内容行在、索引行不在」的状态
+	// （走 Upsert 会顺带把索引写好，构造不出该前提）。
+	const legacyPath = "legacy/never-indexed-1.0.0.jar"
+	if _, err := db.Exec(`INSERT INTO asset (repository_id, path, blob_hash, size, content_type, sha1, md5)
+		VALUES (?, ?, 'h-legacy', 7, 'text/plain', '', '')`, repoID, legacyPath); err != nil {
+		t.Fatalf("写入未入索引的历史行：%v", err)
+	}
+	// 前提校验：索引里确实没有这个 rowid，否则本用例证明不了要证明的事。
+	if got := matchRowIDs(t, db, "never-indexed"); len(got) != 0 {
+		t.Fatalf("前提不成立：索引里已有该行 %v", got)
+	}
+
+	// 关键一步：删一个从未入索引的行必须成功（而不是 267）。
+	if err := assets.DeleteByPath(repoID, legacyPath); err != nil {
+		t.Fatalf("删除未入索引的历史行：%v（FTS5 的 267 规避逻辑已失效）", err)
+	}
+	if _, err := assets.GetByPath(repoID, legacyPath); err == nil {
+		t.Fatal("删除后 asset 行仍可读到")
+	}
+	// 索引侧也不能残留条目（先插后删如果只做了一半，这里会有命中）。
+	if got := matchRowIDs(t, db, "never-indexed"); len(got) != 0 {
+		t.Fatalf("删除后索引仍命中 rowid = %v，期望无命中", got)
+	}
+
+	drift, err := NewSearchIndexStateRepo(db).MeasureDrift()
+	if err != nil {
+		t.Fatalf("测量漂移：%v", err)
+	}
+	if drift.MissingRows != 0 || drift.OrphanRows != 0 {
+		t.Fatalf("删除后漂移应为 0，实际漏索引 %d 行、孤儿 %d 行", drift.MissingRows, drift.OrphanRows)
+	}
+	if drift.IndexRows != 0 || drift.AssetRows != 0 {
+		t.Fatalf("删除后索引与真源都应为空，实际 index=%d asset=%d", drift.IndexRows, drift.AssetRows)
+	}
+}
+
+// TestSearchIndexDeleteWithoutIndexedRowKeepsOtherEntries 确认上面那条规避逻辑不会**污染
+// 同表的其它条目**：删一个未入索引的行之后，别的索引行仍可正常命中、正常删除。
+//
+// 之所以单独一条：FTS5 的 267 一旦发生，受影响的不只是当次操作，同一连接上针对该表的
+// 后续操作也会被牵连（实测，见文件头第 2 条）。只断言「本次删除成功」还不足以排除这种
+// 污染，必须再走一次正常的写入与删除。
+func TestSearchIndexDeleteWithoutIndexedRowKeepsOtherEntries(t *testing.T) {
+	assets, _, repoID := searchIndexFixture(t)
+	db := assets.DB()
+
+	if err := assets.Upsert(repoID, "libs/alpha-1.2.3.jar", "h-alpha", 10, "text/plain", "", ""); err != nil {
+		t.Fatalf("写入已入索引的资产：%v", err)
+	}
+	var alphaID int64
+	if err := db.Get(&alphaID, `SELECT id FROM asset WHERE repository_id = ? AND path = ?`,
+		repoID, "libs/alpha-1.2.3.jar"); err != nil {
+		t.Fatalf("取 alpha 的 id：%v", err)
+	}
+
+	// 插入一条未入索引的历史行再删掉它（触发先插后删的规避路径）。
+	const legacyPath = "legacy/ghost-2.0.0.jar"
+	if _, err := db.Exec(`INSERT INTO asset (repository_id, path, blob_hash, size, content_type, sha1, md5)
+		VALUES (?, ?, 'h-ghost', 3, 'text/plain', '', '')`, repoID, legacyPath); err != nil {
+		t.Fatalf("写入未入索引的历史行：%v", err)
+	}
+	if err := assets.DeleteByPath(repoID, legacyPath); err != nil {
+		t.Fatalf("删除未入索引的历史行：%v", err)
+	}
+
+	// 不受牵连：alpha 仍在索引里，可命中。
+	if got := matchRowIDs(t, db, "1.2.3"); len(got) != 1 || got[0] != alphaID {
+		t.Fatalf("历史行删除后 alpha 命中 rowid = %v，期望 [%d]", got, alphaID)
+	}
+	// 并且它仍能被正常删除（说明该表在连接上的状态没有被弄乱）。
+	if err := assets.DeleteByPath(repoID, "libs/alpha-1.2.3.jar"); err != nil {
+		t.Fatalf("删除已入索引的资产：%v", err)
+	}
+	if got := matchRowIDs(t, db, "1.2.3"); len(got) != 0 {
+		t.Fatalf("删除后索引仍命中 rowid = %v，期望无命中", got)
+	}
+	drift, err := NewSearchIndexStateRepo(db).MeasureDrift()
+	if err != nil {
+		t.Fatalf("测量漂移：%v", err)
+	}
+	if drift.MissingRows != 0 || drift.OrphanRows != 0 {
+		t.Fatalf("漂移应为 0，实际漏索引 %d 行、孤儿 %d 行", drift.MissingRows, drift.OrphanRows)
+	}
+}

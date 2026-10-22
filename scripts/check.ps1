@@ -26,7 +26,10 @@ function Invoke-Checked {
   }
 }
 
-foreach ($tool in @("pnpm", "go", "gofmt", "golangci-lint")) {
+# bash：规范门禁脚本（check-fr-numbers.sh）是 bash 写的，本脚本按 bash 调用它。
+# 一并纳入预检，缺它时在第一步就跑出「缺少工具」的友好报错，而不是等到门禁步骤
+# 抛出无法解释的命令未找到。
+foreach ($tool in @("pnpm", "go", "gofmt", "golangci-lint", "bash")) {
   Require-Command $tool
 }
 

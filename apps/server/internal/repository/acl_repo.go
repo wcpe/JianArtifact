@@ -201,10 +201,14 @@ func (r *AclRepo) RepoIDsWithPermission(repoIDs []int64, subject Subject, action
 	if err != nil {
 		return nil, err
 	}
-	if err := r.db.Select(&hits, r.db.Rebind(groupQuery), groupArgs...); err != nil {
+	// 用独立变量而不是复用上面的 hits：两批结果只应**取并集**写入 granted。
+	// 复用同一个切片会依赖「sqlx 是追加而不是重置切片」这一未言明的实现细节，
+	// 读者很容易把它误判成「第二次 Select 覆盖了第一次」的 bug。
+	var groupHits []int64
+	if err := r.db.Select(&groupHits, r.db.Rebind(groupQuery), groupArgs...); err != nil {
 		return nil, err
 	}
-	for _, id := range hits {
+	for _, id := range groupHits {
 		granted[id] = true
 	}
 	return granted, nil

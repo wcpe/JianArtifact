@@ -276,8 +276,15 @@ describe("sortPackages 非 relevance 的前端重排", () => {
     }),
   ];
 
-  it("relevance 原样返回后端顺序（不重排、不改引用）", () => {
-    expect(sortPackages(packages, "relevance", "relevance")).toBe(packages);
+  it("relevance 保持后端顺序，但不交出只读入参的原引用", () => {
+    const sorted = sortPackages(packages, "relevance", "relevance");
+    // 顺序原样：相关度序由后端给定，前端不重排。
+    expect(sorted).toEqual(packages);
+    // 但必须是另一份数组：入参是 readonly，直接把原引用交出去会让调用方的任何就地
+    // mutate 改到 asyncCache 里的缓存对象。这里锁住「浅拷贝后返回」的约定。
+    expect(sorted).not.toBe(packages);
+    sorted.push(sorted[0]!);
+    expect(packages).toHaveLength(3);
   });
 
   it("按名称升序 / 降序", () => {

@@ -2,9 +2,13 @@
 //
 // 职责边界：只渲染 + 抛事件，展开与选中状态由 SearchPage 持有——这样窄屏切到详情时
 // 树只是被隐藏（display:none），展开态与被隐藏前的滚动位置都原样保留。
+//
+// 渲染成本：单个包可能有数百上千个文件行，展开一个节点若引发整树重渲染，代价是每行都要
+// 现算切分与高亮。因此 VersionRow / FileRow 都是 memo 组件，且回调一律用稳定引用
+// （见 useStableCallback）——否则每次渲染都新建的箭头函数会让 memo 立即失效。
 import { Badge, Box, Group, Stack, Text, UnstyledButton } from "@mantine/core";
 import { IconChevronDown, IconChevronRight, IconFile } from "@tabler/icons-react";
-import { useMemo } from "react";
+import { memo, useCallback, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { SearchPackage, SearchPackageFile } from "../../api/endpoints";
@@ -17,6 +21,7 @@ import {
   splitChecksumFiles,
   splitHighlightWithPattern,
   versionKey,
+  type FileKindChips as FileKindChipsData,
   type HighlightSegment,
   type SearchSelection,
 } from "../../lib/searchPackage";
@@ -61,6 +66,21 @@ function kindBadge(pkg: SearchPackage): string {
   return pkg.kind === "file" ? (pkg.repositories[0] ?? pkg.coordinate) : pkg.kind;
 }
 
+/**
+ * 把「每次渲染都可能是新引用」的回调包成稳定引用。
+ *
+ * memo 化的行组件只按 props 浅比较：父组件每次渲染传入新的箭头函数，memo 就永远不生效。
+ * 这里用 ref 持有最新实现、对外暴露恒定函数，既保住 memo，又不会读到过期的闭包状态
+ * （调用时读 ref 的当前值）。
+ */
+function useStableCallback<Args extends unknown[]>(
+  fn: (...args: Args) => void,
+): (...args: Args) => void {
+  const ref = useRef(fn);
+  ref.current = fn;
+  return useCallback((...args: Args) => ref.current(...args), []);
+}
+
 interface PackageSearchTreeProps {
   packages: readonly SearchPackage[];
   /** 高亮关键词（来自当前搜索表达式，仅用于坐标 / 版本号 / 文件名）。 */
@@ -76,12 +96,9 @@ interface PackageSearchTreeProps {
   onSelectFile: (pkg: SearchPackage, version: string | null, file: SearchPackageFile) => void;
 }
 
-/**
- * 文件类型 chip 组（前 4 个 + `+N`）。
- * 单独成组件是因为版本行与伪包行都要用，而 chip 计算依赖版本内文件集合。
- */
-function FileKindChips({ files }: { files: readonly SearchPackageFile[] }) {
-  const { kinds, overflow } = fileKindChips(files);
+/** 文件类型 chip 组（前 4 个 + `+N`）；切分结果由调用方 memo 后传入。 */
+const FileKindChips = memo(function FileKindChips({ chips }: { chips: FileKindChipsData }) {
+  const { kinds, overflow } = chips;
   if (kinds.length === 0 && overflow === 0) {
     return null;
   }
@@ -99,25 +116,39 @@ function FileKindChips({ files }: { files: readonly SearchPackageFile[] }) {
       )}
     </Group>
   );
-}
+});
 
-/** 文件行：`fileKind` + 文件名。 */
-function FileRow({
-  file,
-  pattern,
-  depth,
-  selected,
-  onSelect,
-}: {
+interface FileRowProps {
+  /** 所属包：只用于把点击回抛给上层，保持回调引用稳定。 */
+  pkg: SearchPackage;
+  /** 所属版本；无坐标伪包为 null。 */
+  version: string | null;
   file: SearchPackageFile;
   pattern: RegExp | null;
   depth: number;
   selected: boolean;
-  onSelect: () => void;
-}) {
+  onSelectFile: (pkg: SearchPackage, version: string | null, file: SearchPackageFile) => void;
+}
+
+/** 文件行：`fileKind` + 文件名。 */
+const FileRow = memo(function FileRow({
+  pkg,
+  version,
+  file,
+  pattern,
+  depth,
+  selected,
+  onSelectFile,
+}: FileRowProps) {
+  // 在子组件内部组装回调：props 里的都是稳定引用（数据未换代时 pkg / file 不变，
+  // onSelectFile 由 useStableCallback 固定），因此这里的 onClick 也保持稳定。
+  const handleSelect = useCallback(
+    () => onSelectFile(pkg, version, file),
+    [onSelectFile, pkg, version, file],
+  );
   return (
     <UnstyledButton
-      onClick={onSelect}
+      onClick={handleSelect}
       aria-current={selected ? "true" : undefined}
       data-testid="search-file-row"
       // 稳定定位用（高亮会把文件名切成多个元素，测试与端到端脚本不能依赖纯文本查询）。
@@ -146,42 +177,61 @@ function FileRow({
       </Group>
     </UnstyledButton>
   );
-}
+});
 
-/** 版本行：版本号 + 精度徽标 + `N 文件` + 文件类型 chip 组。 */
-function VersionRow({
-  version,
-  pattern,
-  open,
-  selectedVersion,
-  selectedFileKey,
-  onToggle,
-  onSelect,
-  onSelectFile,
-  showChecksums,
-  onToggleChecksums,
-}: {
+interface VersionRowProps {
+  pkg: SearchPackage;
   version: SearchPackage["versions"][number];
   pattern: RegExp | null;
   open: boolean;
   selectedVersion: boolean;
   selectedFileKey: string | null;
-  onToggle: () => void;
-  onSelect: () => void;
-  onSelectFile: (file: SearchPackageFile) => void;
+  onToggleVersion: (pkg: SearchPackage, version: string) => void;
+  onSelectVersion: (pkg: SearchPackage, version: string) => void;
+  onSelectFile: (pkg: SearchPackage, version: string | null, file: SearchPackageFile) => void;
   showChecksums: boolean;
-  onToggleChecksums: () => void;
-}) {
+  onToggleChecksums: (pkg: SearchPackage, version: string) => void;
+}
+
+/** 版本行：版本号 + 精度徽标 + `N 文件` + 文件类型 chip 组。 */
+const VersionRow = memo(function VersionRow({
+  pkg,
+  version,
+  pattern,
+  open,
+  selectedVersion,
+  selectedFileKey,
+  onToggleVersion,
+  onSelectVersion,
+  onSelectFile,
+  showChecksums,
+  onToggleChecksums,
+}: VersionRowProps) {
   const { t } = useTranslation();
-  const { primary, checksums } = splitChecksumFiles(version.files);
+  // 文件集合不变时（同一份数据、同一展开态）不重算：单个版本可有上千个文件。
+  const { primary, checksums } = useMemo(() => splitChecksumFiles(version.files), [version.files]);
+  const chips = useMemo(() => fileKindChips(version.files), [version.files]);
   const meta = precisionMeta(version.precision);
   const toggleLabel = open ? t("common.collapse") : t("common.expand");
+
+  const handleToggle = useCallback(
+    () => onToggleVersion(pkg, version.version),
+    [onToggleVersion, pkg, version.version],
+  );
+  const handleSelect = useCallback(
+    () => onSelectVersion(pkg, version.version),
+    [onSelectVersion, pkg, version.version],
+  );
+  const handleToggleChecksums = useCallback(
+    () => onToggleChecksums(pkg, version.version),
+    [onToggleChecksums, pkg, version.version],
+  );
 
   return (
     <>
       <Group gap={0} wrap="nowrap" align="flex-start">
         <UnstyledButton
-          onClick={onToggle}
+          onClick={handleToggle}
           aria-label={toggleLabel}
           aria-expanded={open}
           style={{ padding: "4px 2px 4px 8px", borderRadius: 4 }}
@@ -189,7 +239,7 @@ function VersionRow({
           {open ? <IconChevronDown size={12} /> : <IconChevronRight size={12} />}
         </UnstyledButton>
         <UnstyledButton
-          onClick={onSelect}
+          onClick={handleSelect}
           data-testid="search-version-row"
           data-version={version.version}
           aria-current={selectedVersion ? "true" : undefined}
@@ -213,7 +263,7 @@ function VersionRow({
             <Text size="xs" c="dimmed">
               {t("search.filesCount", { count: version.fileCount })}
             </Text>
-            <FileKindChips files={version.files} />
+            <FileKindChips chips={chips} />
           </Group>
         </UnstyledButton>
       </Group>
@@ -222,17 +272,19 @@ function VersionRow({
           {primary.map((file) => (
             <FileRow
               key={fileKey(file)}
+              pkg={pkg}
+              version={version.version}
               file={file}
               pattern={pattern}
               depth={1}
               selected={fileKey(file) === selectedFileKey}
-              onSelect={() => onSelectFile(file)}
+              onSelectFile={onSelectFile}
             />
           ))}
           {checksums.length > 0 && (
             // 校验和默认折成一行（与既有「隐藏校验和」心智一致，规格 §3.9）。
             <UnstyledButton
-              onClick={onToggleChecksums}
+              onClick={handleToggleChecksums}
               aria-expanded={showChecksums}
               style={{ display: "block", width: "100%", padding: `3px 8px 3px ${8 + 14}px` }}
             >
@@ -248,11 +300,13 @@ function VersionRow({
             checksums.map((file) => (
               <FileRow
                 key={fileKey(file)}
+                pkg={pkg}
+                version={version.version}
                 file={file}
                 pattern={pattern}
                 depth={2}
                 selected={fileKey(file) === selectedFileKey}
-                onSelect={() => onSelectFile(file)}
+                onSelectFile={onSelectFile}
               />
             ))}
           {primary.length === 0 && checksums.length === 0 && (
@@ -264,7 +318,7 @@ function VersionRow({
       )}
     </>
   );
-}
+});
 
 /** 包搜索树：包行 → 版本行 → 文件行。 */
 export function PackageSearchTree({
@@ -289,6 +343,14 @@ export function PackageSearchTree({
   // 在展开千行级大包时被重复编译上千次。关键词不变（同一表达式）时实例保持不变。
   const pattern = useMemo(() => compileHighlightPattern(keywords), [keywords]);
 
+  // 上层回调每次渲染都可能是新引用，这里统一转成稳定引用，memo 化的行组件才不会被
+  // 「永远变化的 props」废掉。调用时读 ref，拿到的仍是最新实现。
+  const togglePackage = useStableCallback(onTogglePackage);
+  const toggleVersion = useStableCallback(onToggleVersion);
+  const toggleChecksums = useStableCallback(onToggleChecksums);
+  const selectVersion = useStableCallback(onSelectVersion);
+  const selectFile = useStableCallback(onSelectFile);
+
   return (
     <Stack gap={2} data-testid="search-package-tree">
       {packages.map((pkg) => {
@@ -300,7 +362,7 @@ export function PackageSearchTree({
           <Box key={pkgKey}>
             <Group gap={0} wrap="nowrap" align="flex-start">
               <UnstyledButton
-                onClick={() => onTogglePackage(pkg)}
+                onClick={() => togglePackage(pkg)}
                 aria-label={open ? t("common.collapse") : t("common.expand")}
                 aria-expanded={open}
                 style={{ padding: "4px 2px 4px 8px", borderRadius: 4 }}
@@ -308,7 +370,7 @@ export function PackageSearchTree({
                 {open ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />}
               </UnstyledButton>
               <UnstyledButton
-                onClick={() => onTogglePackage(pkg)}
+                onClick={() => togglePackage(pkg)}
                 data-testid="search-package-row"
                 data-coordinate={pkg.coordinate}
                 style={{ flex: 1, minWidth: 0, padding: "3px 8px 3px 0", borderRadius: 4 }}
@@ -342,11 +404,13 @@ export function PackageSearchTree({
                     pkgFiles.map((file) => (
                       <FileRow
                         key={fileKey(file)}
+                        pkg={pkg}
+                        version={null}
                         file={file}
                         pattern={pattern}
                         depth={1}
                         selected={fileKey(file) === selectedFileKey}
-                        onSelect={() => onSelectFile(pkg, null, file)}
+                        onSelectFile={selectFile}
                       />
                     ))
                   : pkg.versions.map((version) => {
@@ -354,6 +418,7 @@ export function PackageSearchTree({
                       return (
                         <VersionRow
                           key={vKey}
+                          pkg={pkg}
                           version={version}
                           pattern={pattern}
                           open={expandedVersions.has(vKey)}
@@ -362,11 +427,11 @@ export function PackageSearchTree({
                             selection.version === version.version
                           }
                           selectedFileKey={selectedFileKey}
-                          onToggle={() => onToggleVersion(pkg, version.version)}
-                          onSelect={() => onSelectVersion(pkg, version.version)}
-                          onSelectFile={(file) => onSelectFile(pkg, version.version, file)}
+                          onToggleVersion={toggleVersion}
+                          onSelectVersion={selectVersion}
+                          onSelectFile={selectFile}
                           showChecksums={expandedChecksums.has(vKey)}
-                          onToggleChecksums={() => onToggleChecksums(pkg, version.version)}
+                          onToggleChecksums={toggleChecksums}
                         />
                       );
                     })}

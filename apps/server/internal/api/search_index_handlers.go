@@ -1,8 +1,10 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -18,11 +20,64 @@ import (
 // 进度形状引入对外承诺，代价高于收益；若将来前端需要长期展示进度，再连同生成物
 // 与 devmock 一并收口。
 
+// searchIndexStatusBudget 是状态端点单次查询的**服务端预算**。
+//
+// 该端点的三个计数（水位回填数、索引行数、资产行数）都是全表扫描，成本随表大小线性增长，
+// 百万级 asset 上是秒级开销（见 GetSearchIndexStatus 的说明）。预算取 15 秒：常规实例
+// （秒级）留有十倍以上余量，而真正跑飞的查询不会把连接与调用方一起拖住。
+const searchIndexStatusBudget = 15 * time.Second
+
+// SearchIndexStatusContextual 是 SearchIndexController 的**可选**扩展能力：若实现方支持
+// context，状态查询就能带上调用方的取消与预算语义。
+//
+// 做成可选接口而不是直接改 Status 的签名，是因为接口层无法单独决定这件事：domain 侧
+// SearchIndexService.Status() 目前不带 ctx，其下游 SearchIndexStore 的 Load / CountIndexed /
+// MeasureDrift 也都不带 ctx——只把接口层改成 Status(ctx) 会立刻打断装配层的实现匹配。
+// 等 domain 侧提供 StatusContext(context.Context) (domain.SearchIndexStatus, error) 之后，
+// 装配进来的实现会自动走进带 ctx 的分支，本文件无需再改。
+type SearchIndexStatusContextual interface {
+	StatusContext(ctx context.Context) (domain.SearchIndexStatus, error)
+}
+
+// searchIndexStatus 在给定 context 下取回填状态快照。
+//
+// 两条路径：
+//   - 实现方支持 context → 直接把 ctx 传下去，取消 / 预算由下游查询自行响应（最优）；
+//   - 实现方不支持 → 用「后台执行 + 只等 ctx」把它包起来。此时**只能限制调用方的等待时间，
+//     不能中断底层计数**：Status() 不接受 ctx，goroutine 会一直跑到计数结束才退出，期间仍
+//     占着连接。这是当前 domain 签名的硬限制，不是本层的选择。
+func (h *Handlers) searchIndexStatus(ctx context.Context) (domain.SearchIndexStatus, error) {
+	if ctxScoped, ok := h.searchIndex.(SearchIndexStatusContextual); ok {
+		return ctxScoped.StatusContext(ctx)
+	}
+	type result struct {
+		status domain.SearchIndexStatus
+		err    error
+	}
+	// 缓冲 1：即使已经超时返回，后台 goroutine 仍能写入并退出，不会永久阻塞在发送上。
+	done := make(chan result, 1)
+	go func() {
+		status, err := h.searchIndex.Status()
+		done <- result{status: status, err: err}
+	}()
+	select {
+	case r := <-done:
+		return r.status, r.err
+	case <-ctx.Done():
+		return domain.SearchIndexStatus{}, ctx.Err()
+	}
+}
+
 // GetSearchIndexStatus 返回搜索索引回填状态（仅管理员）。
 //
 // **该端点不得被前端轮询**：每次调用要在 asset 表与 FTS 影子表上各做一次全表计数，成本与
 // 表大小线性相关（百万级 asset 上是秒级开销），且刻意不加缓存——缓存会把刚发生的漂移在
 // 窗口内报成正常。调用场景限定为运维手动查询。
+//
+// **超时与取消**：单次调用有 searchIndexStatusBudget 的服务端预算，客户端断开时不再继续
+// 等待。但**底层计数无法被中断**——domain 侧的 Status() 不接受 context，本层只能在等待侧
+// 收口（详见 searchIndexStatus）。因此这条预算限制的是「调用方等多久」，不是「查询跑多久」。
+// 若客户端断开，本端点不写响应体、也不记内部错误日志（口径与 writeDomainErr 的取消分支一致）。
 //
 // 响应口径：
 //   - ready       —— 索引可用于加速搜索：回填已完成（completed_at 非空）且没有**漏索引**。
@@ -68,8 +123,24 @@ func (h *Handlers) GetSearchIndexStatus(c *gin.Context) {
 		auth.WriteError(c, http.StatusServiceUnavailable, "unavailable", "搜索索引服务未启用")
 		return
 	}
-	status, err := h.searchIndex.Status()
+	ctx, cancel := context.WithTimeout(c.Request.Context(), searchIndexStatusBudget)
+	defer cancel()
+	status, err := h.searchIndexStatus(ctx)
 	if err != nil {
+		switch {
+		case errors.Is(err, context.Canceled):
+			// 客户端已断开：写响应体没人会读，也不能记成服务端故障（口径同 writeDomainErr
+			// 的取消分支）。这里显式处理，是因为取消很可能由本函数的预算包裹直接产生。
+			c.Abort()
+			return
+		case errors.Is(err, context.DeadlineExceeded):
+			// 服务端预算耗尽。注意「底层计数并未被中断」——它仍在后台跑，见 searchIndexStatus
+			// 的说明。错误码刻意不复用 search_timeout：那个表示「检索范围太大 / 该查索引」，
+			// 而这里是运维诊断查询本身太重，处置方向不同（稍后重试或看日志里的回填进度）。
+			auth.WriteError(c, http.StatusGatewayTimeout, "search_index_status_timeout",
+				"索引状态查询超出预算（表较大时属正常），请稍后重试")
+			return
+		}
 		writeDomainErr(c, err)
 		return
 	}
@@ -92,6 +163,11 @@ func (h *Handlers) GetSearchIndexStatus(c *gin.Context) {
 // 重建全程在线——清空后 completed_at 为 NULL，搜索自动走降级路径，正确性不受影响。
 // 已有回填或重建在跑时重复触发返回 409（错误码 job_running，对齐既有运维接口
 // 手动触发维护作业时的口径）。
+//
+// 这是**破坏性管理动作**：Reset() 会清空整张 FTS 索引并把水位归零，重建期间搜索退回全表
+// LIKE。同类入口都留痕（维护作业手动触发写 maintenance.job_run，空 Maven 制品清理明写
+// 「唯一的批量物理删除入口，必须留痕」），这里同样在受理成功后写一条 search.index_rebuild，
+// 否则「索引为什么被清空过」在事后无从追溯。
 func (h *Handlers) RebuildSearchIndex(c *gin.Context) {
 	if _, ok := requireAdmin(c); !ok {
 		return
@@ -108,5 +184,9 @@ func (h *Handlers) RebuildSearchIndex(c *gin.Context) {
 		writeDomainErr(c, err)
 		return
 	}
+	// 只在**受理成功**后留痕：409（已有任务在跑）与 503（服务未启用）都没有真正触发重建，
+	// 记一条「重建了」反而是假账。
+	h.AuditLog(c, "search.index_rebuild", "search_index", "asset_path_fts", "",
+		"全量重建已受理：清空索引并重置水位，随后后台分批重灌", "ok")
 	c.JSON(http.StatusAccepted, gin.H{"accepted": true})
 }

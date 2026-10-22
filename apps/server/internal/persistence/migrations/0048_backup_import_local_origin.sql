@@ -1,10 +1,10 @@
--- 0048：备份导入来源新增 local
+-- 0048：备份导入来源新增 local（FR-40 追加六）
 -- 引入版本：未开窗（0.11.0 之后的下一窗口）
 -- 影响：重建 backup_import 表以放宽 origin 的 CHECK 约束（新增取值 'local'）
 -- 数据处理：既有行原样复制，import_id 与其余各列逐条不变；预计耗时：随 backup_import 行数增长
 --          （重建需全表复制，该表是「每次导入一行」的量级，实际为毫秒级）
 -- 回滚：不支持 down migration；需要恢复升级前备份
--- 相关：、docs/specs/0.12.0-backup-restore-entry.md
+-- 相关：FR-40、docs/specs/0.12.0-backup-restore-entry.md
 --
 -- 背景：新增「用本机已有的备份包恢复」入口（POST /api/v1/backups/{id}/restore）后，
 -- 导入记录的 origin 需要能表达"这份包来自本机"（'local'），以便在事件表里与另外三条

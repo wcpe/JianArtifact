@@ -155,7 +155,7 @@ export function getRepositoryDownloadTrend(
   );
 }
 
-/** 下载来源聚合（；仅管理员；独立来源口径，IP 明文与 UA 归类可见）。 */
+/** 下载来源聚合（仅管理员；独立来源口径，IP 明文与 UA 归类可见）。 */
 export function getDownloadByClient(
   query: OperationsObservabilityQuery = {},
 ): Promise<DownloadClientRanking> {
@@ -1121,7 +1121,7 @@ export interface SettingsConfig {
   originTokenHeader: string;
   /** 回源 Token 值（粘贴到 CDN 回源请求头规则）。 */
   originTokenValue: string;
-  /** 自动备份间隔（秒），0 = 关闭（；运行时可改，保存后作业下一轮生效）。 */
+  /** 自动备份间隔（秒），0 = 关闭（运行时可改，保存后作业下一轮生效）。 */
   backupAutoInterval: number;
   /** 保留最近 N 份自动备份，0 = 不按份数限制。 */
   backupKeepLast: number;
@@ -1397,7 +1397,7 @@ export function getAuditAttentionNotifications(
   );
 }
 
-// ---- : Tree API ----
+// ---- Tree API ----
 
 export interface TreeEntry {
   directories: string[];
@@ -1422,7 +1422,7 @@ export function getRepositoryTree(name: string, prefix?: string): Promise<TreeEn
   });
 }
 
-// ---- : Search API ----
+// ---- Search API ----
 
 /**
  * 命中精度分层：后端比较「查询里的版本串 T」与「结果里的版本段 V」得出。
@@ -1534,7 +1534,7 @@ export function searchAssets(params: {
   });
 }
 
-// ---- : 搜索建议（搜索框下拉候选） ----
+// ---- 搜索建议（搜索框下拉候选） ----
 
 /**
  * 候选类型决定确认语义（规格 §3.9）：
@@ -1570,7 +1570,7 @@ export function suggestSearch(params: {
   });
 }
 
-// ---- : Sorted repo list ----
+// ---- Sorted repo list ----
 
 export interface RepoListParams extends Pagination {
   sort?: string;

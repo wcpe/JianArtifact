@@ -21,7 +21,7 @@ import (
 // 不可登录、不可删除 / 改密 / 停用；ACL 中作为普通主体承接匿名授权。
 const AnonymousUsername = "anonymous"
 
-// searchTimeoutDefault 是搜索链路总预算的兜底默认值。
+// searchTimeoutDefault 是检索语句预算的兜底默认值。
 // 生产装配经 SetSearchTimeout 注入 JIAN_SEARCH_TIMEOUT_SECONDS 的解析结果，
 // 本常量只在未注入时兜底（测试构造与未接线的旧路径），必须与 config 的
 // defaultSearchTimeout 保持同值——改一处必须同步改另一处。
@@ -40,8 +40,9 @@ type RepositoryService struct {
 	recorder  ChangeRecorder
 	writeGate BusinessWriteGate
 	enabled   formats.Set
-	// searchTimeout 是搜索链路（网页搜索 / npm 搜索 / 后续 suggest）的总预算上限。
-	// 每个搜索入口用它派生一次 deadline，三条语句共享同一个 deadline。
+	// searchTimeout 是一次搜索里**下发到 SQL 的检索语句**的预算上限（网页搜索 / npm 搜索 /
+	// suggest / npm 的按成员检索）。每个搜索入口用它派生一次 deadline，同一次检索的多条语句
+	// 共享同一个 deadline。它**不覆盖**可搜范围解析那一段查询（见 searchContext 的说明）。
 	searchTimeout time.Duration
 }
 
@@ -52,7 +53,7 @@ func NewRepositoryService(repos *repository.RepoRepo, acls *repository.AclRepo, 
 		searchTimeout: searchTimeoutDefault}
 }
 
-// SetSearchTimeout 注入搜索链路的总预算上限。
+// SetSearchTimeout 注入检索语句的预算上限（覆盖范围见 searchContext）。
 // 非正数不覆盖默认值：搜索是无界查询，关掉超时等于开放一个可以无限占用唯一数据库连接的
 // 入口，因此本项**没有禁用语义**（口径同 autoBlockBase，而非 storageCleanupInterval 的 0 禁用）。
 func (s *RepositoryService) SetSearchTimeout(d time.Duration) {
@@ -62,7 +63,7 @@ func (s *RepositoryService) SetSearchTimeout(d time.Duration) {
 	s.searchTimeout = d
 }
 
-// SearchTimeout 返回当前生效的搜索总预算，供协议层/运维排查读取。
+// SearchTimeout 返回当前生效的检索语句预算，供协议层/运维排查读取。
 func (s *RepositoryService) SearchTimeout() time.Duration { return s.searchTimeout }
 
 // SetEnabledFormats 注入启动期格式能力集合。集合仅在装配阶段设置，运行中不切换。
@@ -1047,7 +1048,7 @@ func (s *RepositoryService) anonymousSubjectID() (int64, error) {
 	return u.ID, nil
 }
 
-// ---- : Tree API ----
+// ---- Tree API ----
 
 // DirectoryEntry 目录懒加载返回结构：当前层级的子目录（全量）与直接文件。
 // FileTotal / FileBytes 是直接文件的总数与体积合计；Files 可能只是其中一页
@@ -1100,7 +1101,7 @@ func (s *RepositoryService) ListDirectoryPage(name, prefix string, fileLimit, fi
 	}, nil
 }
 
-// ---- : Search API ----
+// ---- Search API ----
 
 // SearchResult 全局搜索结果条目。
 type SearchResult struct {
@@ -1167,8 +1168,11 @@ type searchScope struct {
 // （固定两条 SQL，与逐仓库 HasPermission 结果一致）。
 //
 // allRepos/allErr 由调用方传入：仓库全量列举是同一请求内多处共用的产物（表达式收窄、仓库名
-// 映射、suggest 的 format 映射），此处不再重复查询。allErr 非空时**静默跳过私有仓库补充**
-// ——这是改造成批量判定前的既有容错口径（公开仓库仍可搜），本函数保持它不变。
+// 映射、suggest 的 format 映射），此处不再重复查询。
+//
+// allErr 非空时**上抛**：以「只搜公开仓库」继续会让已授权私有仓库的用户看到结果数量莫名下降，
+// 而链路上没有任何信号。搜索主链路已有 writeDomainErr 兜底（管理员可见原始错误），
+// 保守失败比静默降级正确。
 func (s *RepositoryService) readableRepoIDs(subjectID int64, isAdmin bool, allRepos []repository.Repository, allErr error) ([]int64, bool, error) {
 	if isAdmin {
 		// 管理员搜全部：nil 表示不限。
@@ -1199,7 +1203,13 @@ func (s *RepositoryService) readableRepoIDs(subjectID int64, isAdmin bool, allRe
 	// 已登录主体或匿名映射到的 anonymous 主体：加上 ACL 授权的私有仓库。
 	// 主体按用户 ID 展开组归属，使「组被授 read」的仓库也进入可搜范围。
 	// 判定是**一次批量查询**（用户分支 + 组分支各一条 SQL），不随仓库数增长。
-	if aclSubject > 0 && allErr == nil {
+	//
+	// 全量列举失败时不降级：没有 allRepos 就无法区分「私有仓库」与「公开仓库」，
+	// 只能退回「仅公开」，那会让已授权私有仓库的用户看到结果数量下降却毫无信号。
+	if aclSubject > 0 {
+		if allErr != nil {
+			return nil, false, allErr
+		}
 		pubSet := make(map[int64]bool, len(pubRepos))
 		for _, r := range pubRepos {
 			pubSet[r.ID] = true
@@ -1261,6 +1271,8 @@ func (s *RepositoryService) resolveSearchScope(keyword, repoScope string, subjec
 	// 让用户点选某仓库钻取后，聚合条上仍能看到其他仓库的命中数以便切换。
 	facetIDs := repoIDs
 	if repoScope != "" || parsed.hasRepoMeta() {
+		// 非管理员的全量列举失败已在 readableRepoIDs 里上抛；这里兜住**管理员**：
+		// 管理员不走批量 ACL 分支，不会触发那次上抛，而收窄仍然需要 allRepos。
 		if allErr != nil {
 			return nil, false, allErr
 		}
@@ -1298,9 +1310,15 @@ func (s *RepositoryService) resolveSearchScope(keyword, repoScope string, subjec
 // 已认证主体的可搜范围含「其所属用户组被授 read」的仓库。
 // sort/order 控制结果排序，取值见 AssetRepo.SearchByFilter。
 //
-// ctx 是搜索链路的**唯一**超时来源：本方法在入口按 searchTimeout 派生一次
-// deadline 并向下传给三条语句，命中超时统一归一为 ErrSearchTimeout。三个调用方
-// （/api/v1/search、npm registrySearch、后续 suggest）因此共享同一套语义——放在 handler 层
+// ctx 是搜索链路的超时来源：本方法在入口按 searchTimeout 派生一次 deadline，它**只覆盖
+// asset 检索语句**（SearchByFilter / SearchFacetsByFilter 这类下发到 SQL 的查询），命中
+// DeadlineExceeded 归一为 ErrSearchTimeout。可搜范围解析那一段（SearchIndexReady、仓库全量
+// 列举、主体展开、批量 ACL 判定）目前不接收 ctx，因此**不受这份预算约束**——那些是窄表上的
+// 小查询，排查「为什么慢」时不要按「整条链路都在预算内」的假设去找。
+//
+// 客户端断开（context.Canceled）**不**归一为超时，原因原样返回，见 normalizeSearchErr。
+//
+// 三个调用方（/api/v1/search、npm registrySearch、suggest）共享同一套语义——放在 handler 层
 // 会让每个调用方各写一遍，放在仓储层则拿不到「一次搜索的总预算」。
 //
 // 本方法**只做文件级搜索**：包级聚合在新增的 SearchAggregate 里，两者的签名与
@@ -1470,7 +1488,10 @@ func (s *RepositoryService) SearchAggregate(ctx context.Context, keyword, repoSc
 // 成本与成员数解耦，返回的行集与「逐成员各搜一次」逐条一致，去重与 total 口径仍由调用方在
 // Go 侧按成员顺序完成（语义不变）。
 //
-// 不做 ACL 判定：调用方已完成仓库级授权，并用显式 repoIDs 限定范围。
+// 不做**主体级** ACL 判定：repoIDs 由调用方决定并承担授权责任。npm group 搜索的口径是
+// 「对 group 可读即视为可读其成员」，调用方只校验了 group 自身的 read 权限，成员仓库自身的
+// ACL **没有**被检查——这是既有产品口径，不是本方法的疏漏；若将来要收紧，需在调用方逐个成员
+// 做授权判定，本方法只负责按给定 id 集合检索。
 func (s *RepositoryService) SearchAssetsPerRepo(ctx context.Context, keyword string, repoIDs []int64, perRepoLimit int) ([]repository.Asset, error) {
 	if len(repoIDs) == 0 || perRepoLimit <= 0 {
 		return nil, nil
@@ -1503,11 +1524,18 @@ func (s *RepositoryService) SearchAssetsPerRepo(ctx context.Context, keyword str
 	return assets, nil
 }
 
-// searchContext 为一次搜索派生带总预算的 ctx。
+// searchContext 为一次搜索派生带预算的 ctx。
 //
-// 上限是「一次搜索」的预算，而不是「一条语句」的预算：COUNT、分页 SELECT 与 facet 聚合共享
-// 同一个 deadline，这才是用户感知到的响应时间。ctx 为空（未接线的旧调用）时退化为
-// context.Background()，仍受同一个上限保护。
+// 这份预算**只覆盖下发到 SQL 的 asset 检索语句**（COUNT / 分页 SELECT / facet 聚合 /
+// suggest 的候选扫描 / npm 的按成员检索），它们共享同一个 deadline，因此用户感知到的
+// 「检索语句花了多久」受它约束。
+//
+// 它**不覆盖**可搜范围的解析：SearchIndexReady、仓库全量列举、SubjectFor、
+// RepoIDsWithPermission、ListPublic 都不接收 ctx，慢在这里不会触发 ErrSearchTimeout。
+// 这些是窄表上的小查询，现状可接受；但排查「一次搜索为什么慢」时必须知道预算没有覆盖它们。
+// 后续若要让预算覆盖整条链路，正确做法是给这些仓储方法补 ctx 版本（SelectContext 系列），
+// 而不是靠这里调大上限。ctx 为空（未接线的旧调用）时退化为 context.Background()，
+// 仍受同一个上限保护。
 func (s *RepositoryService) searchContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -1515,20 +1543,20 @@ func (s *RepositoryService) searchContext(ctx context.Context) (context.Context,
 	return context.WithTimeout(ctx, s.searchTimeout)
 }
 
-// normalizeSearchErr 把搜索链路的中止原因归一为 ErrSearchTimeout。
+// normalizeSearchErr 把搜索链路的**预算耗尽**归一为 ErrSearchTimeout。
 //
-// 驱动在 ctx 超时/取消时返回的错误文案不统一（context deadline exceeded、context canceled
-// 或被包装过的版本），领域侧统一成一个可 errors.Is 判定的哨兵，供 API 映射 504 + search_timeout、
-// 供 npm 侧记 warn 日志。非超时错误原样返回，不掩饰真实故障。
+// 只归一 DeadlineExceeded：上层传进来的是请求上下文，客户端断开（context.Canceled）是高频
+// 事件，若也记成「超过搜索超时」，超时这个运维信号会长期虚高，把真正的预算不足埋掉。取消
+// 原样返回，由 API 层按「请求已被取消」处理（客户端已经走了，既不需要 504 也不需要告警）。
+//
+// 驱动在 ctx 超时后返回的错误文案不统一（context deadline exceeded 或被包装过的版本），
+// 因此同时用 errors.Is 与 ctx 自身状态两条路径判定；非超时错误原样返回，不掩饰真实故障。
 func normalizeSearchErr(ctx context.Context, err error) error {
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-		return fmt.Errorf("%w（%v）", ErrSearchTimeout, err)
-	}
-	// 驱动可能返回与 ctx 无关的文案：以 ctx 自身状态兜底判定，避免超时被当成 500。
-	if ctx.Err() != nil {
+	if errors.Is(err, context.DeadlineExceeded) ||
+		(ctx != nil && errors.Is(ctx.Err(), context.DeadlineExceeded)) {
 		return fmt.Errorf("%w（%v）", ErrSearchTimeout, err)
 	}
 	return err

@@ -2,6 +2,8 @@ package repository
 
 import (
 	"context"
+
+	"github.com/jmoiron/sqlx"
 )
 
 // 搜索建议的候选集查询。
@@ -30,6 +32,10 @@ type SuggestRow struct {
 // 给出不同的候选池，去重后的结果随之抖动（规格 §3.8「稳定序」）。这里固定 `ORDER BY path ASC`
 // 截断，与 SearchAllByFilter 的聚合预算同一手法：水位由路径决定，不随执行计划变化。
 //
+// 排序键补到**全序**（`path ASC, id ASC`）而不是只按 path：唯一约束是 (repository_id, path)，
+// 跨仓库的同名路径在 path 上完全并列，SQLite 对并列行的返回顺序不作保证；只按 path 截断时，
+// 边界上的并列行仍可能在两次执行间互换，去重后的包名候选池跟着抖动。
+//
 // ctx 承载领域层施加的搜索总预算（与三条搜索语句共享同一个 deadline）。
 //
 // repoIDs 的**nil 与空切片含义不同**，这是本方法与其它搜索方法的唯一差别：
@@ -48,11 +54,13 @@ func (r *AssetRepo) SuggestPaths(ctx context.Context, f SearchFilter, repoIDs []
 	if repoIDs != nil && len(repoIDs) == 0 {
 		return nil, nil
 	}
-	where, args := buildSearchWhereIndexed(f, repoIDs)
 	var rows []SuggestRow
-	err := r.db.SelectContext(ctx, &rows,
-		`SELECT repository_id, path FROM asset WHERE `+where+` ORDER BY path ASC LIMIT ?`,
-		append(args, limit)...,
-	)
+	err := r.searchSnapshot(ctx, f, func(tx *sqlx.Tx, f SearchFilter) error {
+		where, args := buildSearchWhereIndexed(f, repoIDs)
+		return tx.SelectContext(ctx, &rows,
+			`SELECT repository_id, path FROM asset WHERE `+where+` ORDER BY path ASC, id ASC LIMIT ?`,
+			append(args, limit)...,
+		)
+	})
 	return rows, err
 }

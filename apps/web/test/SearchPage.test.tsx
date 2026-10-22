@@ -267,11 +267,47 @@ describe("搜索排序（默认 / 记忆 / 前端重排）", () => {
     await waitFor(() => expect(callCount).toBeGreaterThan(1));
     expect(packageRow("com.example:app")).toBeTruthy();
     expect(screen.queryByTestId("state-loading")).toBeNull();
+    // 此时展示的仍是上一次搜索的结果，必须在结果区顶部点名，避免误读成新关键词的结果。
+    expect(screen.getByTestId("search-stale-results")).toBeTruthy();
 
     release?.();
     // 新数据到达后就地替换，全程没有退化成骨架。
     await waitFor(() => expect(packageRow("com.example:sorted")).toBeTruthy());
     expect(screen.queryByTestId("state-loading")).toBeNull();
     expect(screen.queryAllByTestId("search-package-row")).toHaveLength(1);
+    // 结果已属于当前关键词：上一次结果的提示随之消失。
+    expect(screen.queryByTestId("search-stale-results")).toBeNull();
+  });
+
+  it("换关键词后搜索失败：保留旧结果并给出非阻断告警与重试入口", async () => {
+    const user = userEvent.setup();
+    let callCount = 0;
+    server.use(
+      http.get("*/api/v1/search", () => {
+        callCount += 1;
+        // 首次搜索成功；换关键词后的那次失败（500）。
+        return callCount > 1
+          ? HttpResponse.json(
+              { error: { code: "upstream_error", message: "搜索服务暂不可用" } },
+              { status: 500 },
+            )
+          : packageResponse(["com/example/app/1.0.0/app-1.0.0.jar"]);
+      }),
+    );
+    renderWithProviders(<SearchPage />, { route: "/search?q=app", authenticated: true });
+    expect(await screen.findByTestId("search-package-tree")).toBeTruthy();
+
+    const input = screen.getByPlaceholderText(/搜索制品/);
+    await user.clear(input);
+    await user.type(input, "sorted{Enter}");
+
+    // 刷新失败不替换内容：旧结果仍在场，只多出一条非阻断告警（不是整块错误态）。
+    const alert = await screen.findByTestId("search-refresh-error");
+    expect(within(alert).getByText("刷新失败")).toBeTruthy();
+    expect(within(alert).getByText(/搜索服务暂不可用/)).toBeTruthy();
+    expect(within(alert).getByRole("button", { name: "重试" })).toBeTruthy();
+    expect(packageRow("com.example:app")).toBeTruthy();
+    // 告警已说明「仍展示上次数据」，不必再叠一条上一次结果的提示。
+    expect(screen.queryByTestId("search-stale-results")).toBeNull();
   });
 });

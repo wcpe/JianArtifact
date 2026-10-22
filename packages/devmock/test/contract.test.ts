@@ -394,7 +394,7 @@ describe("devmock ↔ OpenAPI 契约一致性", () => {
     expect(validateProxyRepository({ ...proxyRepo, cacheRetentionDays: -1 })).toBe(false);
   });
 
-  // ——：来源列 + 恢复演练 ——
+  // —— 来源列 + 恢复演练 ——
   it("备份包来源仅接受 manual / auto，且是 required（漂移可被检出）", () => {
     expectValid("BackupPackage", mockBackupPackage());
     expectValid("BackupPackageList", mockBackupPackageList());

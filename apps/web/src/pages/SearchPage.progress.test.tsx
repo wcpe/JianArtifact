@@ -19,6 +19,7 @@ import { describe, expect, it } from "vitest";
 import { server } from "@jianartifact/devmock/node";
 
 import type { SearchPackage, SearchResult } from "../api/endpoints";
+import { AuthProvider } from "../auth/AuthContext";
 import { REFRESH_EVENT } from "../hooks/useAsync";
 import "../i18n";
 import { SearchPage } from "./SearchPage";
@@ -77,9 +78,12 @@ function searchResponse(packages: SearchPackage[], total = packages.length): Sea
 function renderPage(q = "keyword") {
   return render(
     <MantineProvider>
-      <MemoryRouter initialEntries={[`/search?q=${encodeURIComponent(q)}`]}>
-        <SearchPage />
-      </MemoryRouter>
+      {/* 搜索页要读会话身份（取数依赖与缓存键都带 user.id），必须包在 AuthProvider 里。 */}
+      <AuthProvider>
+        <MemoryRouter initialEntries={[`/search?q=${encodeURIComponent(q)}`]}>
+          <SearchPage />
+        </MemoryRouter>
+      </AuthProvider>
     </MantineProvider>,
   );
 }

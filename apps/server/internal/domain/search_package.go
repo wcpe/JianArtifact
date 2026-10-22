@@ -262,6 +262,12 @@ func matchPrecisionRank(terms []string, version string) int {
 //	latest                   → 空向量（等价于全 0）
 //
 // 这是"足够好"的数字比较，不是严格 semver 语义（规格 §2.3 明确不做）。
+//
+// 已知边界：单段超出 int64 范围时 ParseInt 失败，向量在该段处**截断**（例如纳秒时间戳段
+// `20240101120000000000` 会把 `1.20240101120000000000` 退化成 [1]），排序退化为「只比较
+// 前缀」，不会 panic、也不会乱序。大数版本串（时间戳式版本）因此可能并列，由 SortSearchPackages
+// 的后两级键（updated_at、坐标）兜底出确定顺序。要真正支持这类版本，应改成「先比段长、
+// 再比数值」，而不是加宽位宽（位宽总有下一个边界）。
 func versionVector(version string) []int64 {
 	if version == "" {
 		return nil
@@ -317,6 +323,26 @@ var checksumExts = map[string]bool{
 	"sha1": true, "md5": true, "sha256": true, "sha512": true, "asc": true,
 }
 
+// jarClassifier 返回 jar 的 classifier 种类（sources / javadoc / tests），不是 classifier jar
+// 时返回空串。
+//
+// 判定只认「位于文件名末尾的 `-<classifier>.jar`」。早期用 strings.Contains 判子串，会把
+// `my-tests-utils-1.0.jar` 这种**构件名里含 tests** 的主构件降级成 tests（优先级 4，排在 pom
+// 之后），主构件被挤到列表中部。classifier 在 Maven 命名里永远紧跟在版本段之后、且位于
+// 扩展名之前，因此「末尾」是既准确又不必依赖版本解析的判据——路径里的版本串未必等于解析出的
+// 版本（version: 过滤、非标准命名都会让两者不一致）。
+func jarClassifier(name string) string {
+	switch {
+	case strings.HasSuffix(name, "-sources.jar"):
+		return "sources"
+	case strings.HasSuffix(name, "-javadoc.jar"):
+		return "javadoc"
+	case strings.HasSuffix(name, "-tests.jar"):
+		return "tests"
+	}
+	return ""
+}
+
 // classifyFile 返回文件的 fileKind 与其排序优先级（规格附录 A）。
 //
 // 判定顺序自上而下、首个命中即停；优先级越小越靠前（主构件在前、校验和垫底）。
@@ -328,19 +354,20 @@ func classifyFile(coords Coordinates, path string) (string, int) {
 		name = path[i+1:]
 	}
 	ext := fileExt(name)
+	// classifier 判定只看文件名末尾，理由见 jarClassifier。
+	classifier := jarClassifier(name)
 	switch {
-	case ext == "jar" && !strings.Contains(name, "-sources") &&
-		!strings.Contains(name, "-javadoc") && !strings.Contains(name, "-tests"):
+	case ext == "jar" && classifier == "":
 		return "jar", 0
 	case ext == "war" || ext == "ear" || ext == "aar":
 		return ext, 1
 	case ext == "tgz":
 		return "tgz", 1
-	case ext == "jar" && strings.Contains(name, "-sources"):
+	case classifier == "sources":
 		return "sources", 2
-	case ext == "jar" && strings.Contains(name, "-javadoc"):
+	case classifier == "javadoc":
 		return "javadoc", 3
-	case ext == "jar" && strings.Contains(name, "-tests"):
+	case classifier == "tests":
 		return "tests", 4
 	case ext == "pom":
 		return "pom", 5
@@ -540,14 +567,22 @@ func baseName(path string) string {
 	return path
 }
 
-// sortPackageFiles 按「fileKind 优先级升序 → path 升序」排列（规格 §3.5）：
+// sortPackageFiles 按「fileKind 优先级升序 → path 升序 → 仓库名升序」排列（规格 §3.5）：
 // 主构件在最前、校验和垫底，同类型内按路径稳定。
+//
+// 末位的仓库名不是可选键：包身份键刻意不含仓库（同坐标跨仓库合并为一个节点），因此同一坐标
+// 在 hosted 与 proxy 各有一份时，两条记录的 priority 与 path 完全相同。少了这个次级键，
+// 比较器双向都返回 false，最终顺序就取决于输入到达顺序（`ORDER BY path ASC` 对同 path 不保证
+// 相对顺序）与 sort.Slice 的**非稳定**排序——同一份数据在不同执行计划下能排出不同结果。
 func sortPackageFiles(files []PackageFile) {
 	sort.Slice(files, func(i, j int) bool {
 		if files[i].kindPriority != files[j].kindPriority {
 			return files[i].kindPriority < files[j].kindPriority
 		}
-		return files[i].Path < files[j].Path
+		if files[i].Path != files[j].Path {
+			return files[i].Path < files[j].Path
+		}
+		return files[i].Repository < files[j].Repository
 	})
 }
 

@@ -9,15 +9,16 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// 实例级基础配置的设置键（：web 可读可改，运行时生效）。同步间隔复用复制命名空间键。
+// 实例级基础配置的设置键（web 可读可改，运行时生效）。同步间隔复用复制命名空间键。
 const (
-	settingKeyAnonymousAccess   = "anonymous_access_enabled"
-	SettingKeyPublicURL         = "public_url"
-	SettingKeyUpstreamTimeout   = "upstream_timeout"
-	SettingKeyAllowedHosts      = "allowed_hosts"        // 允许访问的域名白名单（逗号分隔；节点本地）
-	SettingKeyOriginTokenEnable = "origin_token_enabled" // 回源 Token 校验开关（；节点本地）
-	SettingKeyOriginTokenHeader = "origin_token_header"  // 回源 Token 请求头名（；节点本地）
-	SettingKeyOriginTokenValue  = "origin_token_value"   // 回源 Token 值（；节点本地）
+	settingKeyAnonymousAccess = "anonymous_access_enabled"
+	SettingKeyPublicURL       = "public_url"
+	SettingKeyUpstreamTimeout = "upstream_timeout"
+	SettingKeyAllowedHosts    = "allowed_hosts" // 允许访问的域名白名单（逗号分隔；节点本地）
+	// 回源 Token 三项都是节点本地配置：只影响本节点的回源校验。
+	SettingKeyOriginTokenEnable = "origin_token_enabled" // 回源 Token 校验开关（节点本地）
+	SettingKeyOriginTokenHeader = "origin_token_header"  // 回源 Token 请求头名（节点本地）
+	SettingKeyOriginTokenValue  = "origin_token_value"   // 回源 Token 值（节点本地，不打印）
 )
 
 // SettingService 处理实例级全局设置。无缓存：SQLite 直查，写后即生效。
@@ -37,7 +38,7 @@ type SettingsUpdate struct {
 	OriginTokenEnabled *bool
 	OriginTokenHeader  *string
 	OriginTokenValue   *string
-	//  追加：自动备份与保留策略（运行时可改，写后由作业下一轮读取生效）。
+	// 自动备份与保留策略三项（运行时可改，写后由作业下一轮读取生效）。
 	BackupAutoInterval  *int
 	BackupKeepLast      *int
 	BackupRetentionDays *int
@@ -309,7 +310,7 @@ func settingValues(update SettingsUpdate) []repository.SettingValue {
 	if update.OriginTokenValue != nil {
 		values = append(values, repository.SettingValue{Key: SettingKeyOriginTokenValue, Value: *update.OriginTokenValue})
 	}
-	//  追加：自动备份三项。0 是合法值（关闭 / 不限制），照写不跳过。
+	// 自动备份三项。0 是合法值（关闭 / 不限制），照写不跳过。
 	if update.BackupAutoInterval != nil {
 		values = append(values, repository.SettingValue{Key: SettingKeyBackupAutoInterval, Value: strconv.Itoa(*update.BackupAutoInterval)})
 	}

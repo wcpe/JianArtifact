@@ -42,7 +42,7 @@ type appServices struct {
 	settingSvc          *domain.SettingService
 	auditLogs           *repository.AuditLogRepo                // 审计日志
 	auditObservability  *repository.AuditObservabilityRepo      // 统一审计读模型
-	operationsMetrics   *repository.OperationsObservabilityRepo // /120：当前节点业务与主机读模型
+	operationsMetrics   *repository.OperationsObservabilityRepo // 当前节点业务与主机读模型
 	operationsAlertRepo *repository.OperationsAlertRepo         // v0.8.0：运维告警去重持久化
 	assetDownloadRepo   *repository.AssetDownloadRepo           // 制品下载计量明细
 	pinnedRepo          *repository.PinnedRepoRepo              // 置顶仓库（用户级 + 全局兜底）
@@ -194,7 +194,7 @@ func openServices(cfg *config.Config) (*appServices, error) {
 			upstreamClient.SetTimeout(time.Duration(secs) * time.Second)
 		}
 	}
-	//  追加：自动备份三项配置的初始值来自环境变量，此后以 setting 表为准
+	// 自动备份三项配置的初始值来自环境变量，此后以 setting 表为准
 	// （运行时可经界面修改并热生效）。只播种整组都缺失的情况，理由见函数注释。
 	if err := seedBackupSettings(settingSvc, settingRepo, cfg); err != nil {
 		_ = db.Close()
@@ -250,7 +250,7 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	// 分片上传服务依赖导入服务（组装完成后走本地导入状态机）。
 	backupImportsSvc := domain.NewBackupImportService(repository.NewBackupImportRepo(db), restoreSvc, cfg.DataDir, upstreamClient)
 
-	//  /：备份服务是生成、保留策略与演练三者共用的同一实例——
+	// 备份服务是生成、保留策略与演练三者共用的同一实例——
 	// 保留策略的候选集查询与删除都经它走同一条已装配的连接与生成槽位，
 	// 避免"策略看到的包"与"生成写下的包"来自两个视图。
 	backupRepo := repository.NewBackupPackageRepo(db)

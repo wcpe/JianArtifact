@@ -68,7 +68,7 @@ type AuditFilter struct {
 	Offset int    // 分页偏移
 }
 
-// Insert 记录一条审计日志；记录失败不阻断业务写（审计尽力而为，见）。
+// Insert 记录一条审计日志；记录失败不阻断业务写（审计尽力而为，失败只影响可追溯性）。
 func (r *AuditLogRepo) Insert(e AuditLogEntry) error {
 	return insertAudit(r.db, e)
 }

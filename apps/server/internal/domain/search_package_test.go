@@ -449,6 +449,11 @@ func TestClassifyFile(t *testing.T) {
 		{"maven", "com/example/foo/1.0.0/foo-1.0.0-sources.jar", "sources"},
 		{"maven", "com/example/foo/1.0.0/foo-1.0.0-javadoc.jar", "javadoc"},
 		{"maven", "com/example/foo/1.0.0/foo-1.0.0-tests.jar", "tests"},
+		// classifier 只认文件名末尾的 `-<classifier>.jar`：构件名中间出现这些词不得降级，
+		// 否则主构件会被排到 pom 之后（优先级 4）。
+		{"maven", "com/example/foo/1.0.0/my-tests-utils-1.0.jar", "jar"},
+		{"maven", "com/example/foo/1.0.0/my-sources-utils-1.0.jar", "jar"},
+		{"maven", "com/example/foo/1.0.0/my-javadoc-utils-1.0.jar", "jar"},
 		{"maven", "com/example/foo/1.0.0/foo-1.0.0.pom", "pom"},
 		{"npm", "pkg-a", "packument"},
 		{"npm", "@scope/pkg", "packument"},
@@ -468,6 +473,36 @@ func TestClassifyFile(t *testing.T) {
 				t.Fatalf("classifyFile(%s) = %q，期望 %q", tc.path, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestSortPackageFilesRepositoryTiebreak 钉住组内文件排序的**末位次级键**（仓库名）。
+//
+// 包身份键刻意不含仓库，因此同一坐标在 hosted 与 proxy 各有一份时，两条文件的 kindPriority
+// 与 path 完全相同。少了仓库名这一键，比较器双向都返回 false，顺序就只由输入到达顺序与
+// sort.Slice 的非稳定性决定（SQL 对同 path 不排序），表现为顺序随执行计划抖动。
+func TestSortPackageFilesRepositoryTiebreak(t *testing.T) {
+	t.Parallel()
+	const path = "com/example/foo/1.0.0/foo-1.0.0.jar"
+	// 输入顺序刻意与期望相反：修好之前这两条是全等的，顺序就是输入顺序。
+	files := []PackageFile{
+		{Name: "foo-1.0.0.jar", Path: path, Repository: "zz-proxy", FileKind: "jar", kindPriority: 0},
+		{Name: "foo-1.0.0.jar", Path: path, Repository: "aa-hosted", FileKind: "jar", kindPriority: 0},
+	}
+	sortPackageFiles(files)
+	if files[0].Repository != "aa-hosted" || files[1].Repository != "zz-proxy" {
+		t.Fatalf("同 path 的跨仓库文件应按仓库名升序，得 %s,%s",
+			files[0].Repository, files[1].Repository)
+	}
+
+	// 优先级与路径仍是更靠前的键：低优先级（数字更小）先出，与仓库名无关。
+	mixed := []PackageFile{
+		{Path: "a/foo-1.0.0.jar.sha1", Repository: "aa-hosted", kindPriority: 9},
+		{Path: "a/foo-1.0.0.jar", Repository: "zz-proxy", kindPriority: 0},
+	}
+	sortPackageFiles(mixed)
+	if mixed[0].kindPriority != 0 || mixed[1].kindPriority != 9 {
+		t.Fatalf("优先级必须先于仓库名生效，得 %d,%d", mixed[0].kindPriority, mixed[1].kindPriority)
 	}
 }
 

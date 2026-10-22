@@ -213,7 +213,7 @@
 
 - 新增哨兵 `ErrSearchTimeout`，且 `errors.Is(err, domain.ErrSearchTimeout)` 可判定；`context.DeadlineExceeded` 在域层归一为它。
 - 映射为 **HTTP 504 + 错误码 `search_timeout`**。既有 504 只有 `upstream_timeout`（[handlers.go](apps/server/internal/api/handlers.go#L345-L348)），语义是「上游不畅」，与「本地查询超预算」不同，故新增独立错误码而不复用——复用会让用户与运维分不清该查上游还是查索引。
-- **npm 协议侧不改错误契约，超时是两级**（实现口径，取代本文早先的「命中超时后跳过该成员继续」单级描述）：`registrySearch` 在**入口**派生一份总预算并把带 deadline 的 `ctx` 下传（`SearchAssets` / `SearchAssetsPerRepo` 内部各自还会再派生一次，子 deadline 取两者更早者），因此合并查询与逐成员回退**共用同一份预算**，最坏耗时是一次 `JIAN_SEARCH_TIMEOUT_SECONDS` 而不是 N 次。① **合并查询失败且成员数 > 1** → 回退**逐成员搜索**，失败的那个成员按既有容错口径**跳过**（`npmSearchCandidates` 里的 `continue`），其余成员结果照常返回——这是引入合并查询之前的容错口径，属可用性底线，同时记一条中文 warn 日志（含成员仓库名与超时值），避免「静默少结果」完全无痕。注意共用预算的实际含义：合并在**快速失败**（SQL 报错等）时回退仍有充裕预算，能救回成员结果；合并**超时**时剩余预算接近零，逐个成员会迅速失败并被跳过，最终返回 200 与空结果——这仍然优于整请求 500，但不要指望超时场景靠回退捞回结果。② **成员数 == 1**（含非 group 仓库）→ 不回退，直接降级为空结果并记 warn：此时「跳过唯一成员」与「整体降级为空」结果相同，重试只会白耗一次往返。两级都由 `TestNpmSearchFallbackSkipsTimedOutMember` / `TestNpmSearchSingleMemberTimeoutKeepsOneBudget` / `TestNpmSearchFallbackKeepsAllMembersWhenMergedQueryTimesOut` 钉住（回退分支在真实库上无法稳定复现，故用注入桩覆盖，生产路径恒为真实实现）。
+- **npm 协议侧不改错误契约，超时是两级**（实现口径，取代本文早先的「命中超时后跳过该成员继续」单级描述）：`registrySearch` 在**入口**派生一份总预算并把带 deadline 的 `ctx` 下传（`SearchAssets` / `SearchAssetsPerRepo` 内部各自还会再派生一次，子 deadline 取两者更早者），因此合并查询与逐成员回退**共用同一份预算**，最坏耗时是一次 `JIAN_SEARCH_TIMEOUT_SECONDS` 而不是 N 次。① **合并查询超时且成员数 > 1** → 回退**逐成员搜索**，失败的那个成员按既有容错口径**跳过**（`npmSearchCandidates` 里的 `continue`），其余成员结果照常返回——这是引入合并查询之前的容错口径，属可用性底线，同时记一条中文 warn 日志（含成员仓库名与超时值），避免「静默少结果」完全无痕。这里必须看清共用预算的实际含义：合并超时时剩余预算已接近零，逐个成员会迅速失败并被跳过，最终返回 200 与空结果——回退的作用是「至少不至于整请求 500」，**不要指望超时场景靠回退捞回结果**。② **成员数 == 1**（含非 group 仓库）→ 不回退，直接降级为空结果并记 warn：此时「跳过唯一成员」与「整体降级为空」结果相同，重试只会白耗一次往返。③ **非超时故障（数据层报错：表缺失、连接故障、SQL 错误）一律不回退**，直接降级为空结果并只记 1 条 warn：这类错误对每个成员必然同样复现，回退等于把一次故障放大成 N 次查询与 N 条日志。两级回退与不回退分支都由 `TestNpmSearchFallbackSkipsTimedOutMember` / `TestNpmSearchSingleMemberTimeoutKeepsOneBudget` / `TestNpmSearchFallbackKeepsAllMembersWhenMergedQueryTimesOut` 钉住（回退分支在真实库上无法稳定复现，故用注入桩覆盖，生产路径恒为真实实现）。
 
 **可配置上限**：环境变量 **`JIAN_SEARCH_TIMEOUT_SECONDS`**（单位秒，后缀风格对齐 `JIAN_AUTO_BLOCK_BASE_SECONDS` / `JIAN_UPSTREAM_TIMEOUT`），默认 **10 秒**。
 
@@ -237,7 +237,7 @@
 
 - **正常路径 = 一次查询**：成员名先批量解析为仓库（`ReposByNames`，含别名），再把成员 ID 集合交给 `AssetRepo.SearchPerRepoByFilter`——SQL 用窗口函数按 `repository_id` 分区、区内按 `path asc` 取前 `from+size` 条，Go 侧只做按成员分桶。语句数与成员数解耦。
 - **语义确实零变更**：仍按成员顺序遍历、仍 `limit = from+size`（每成员各自的窗口）、仍按 `asset.path` 去重、仍跳过非 packument（用完整 `/-/` 标记，`@scope/-weird` 这类合法包名不受影响）、`total` 仍等于「去重且可解析的条目数」、响应仍是 `{objects, total, time}`。`sort=path&order=asc` 硬编码，永远不进 relevance 分支。
-- **超时是两级，不是一级**（§3.4 同款口径，这里只列形状）：① 合并查询失败 → 若成员数 **> 1**，回退到**逐成员搜索**，失败的那个成员按既有容错口径跳过、其余照常返回；② 成员数 **== 1** 时没有「跳过该成员继续」的余地（回退与整体降级的结果同为「没有结果」），直接降级为空并记 warn 日志。回退**不额外增加预算**——`registrySearch` 在入口派生一份总预算，两条路径共用它，最坏耗时是一次 `JIAN_SEARCH_TIMEOUT_SECONDS`。**为什么不能只有合并路径**：合并查询**快速失败**（SQL 报错等）时整次降级为空是白丢结果，而有回退就能救回各成员的结果；至于合并**超时**，剩余预算已接近零，回退大多也只能快速失败并跳过，**但至少仍是 200 + 空结果，而不是 500**。
+- **超时是两级，不是一级**（§3.4 同款口径，这里只列形状）：① 合并查询**超时** → 若成员数 **> 1**，回退到**逐成员搜索**，超时/失败的成员按既有容错口径跳过、其余照常返回；② 成员数 **== 1** 时没有「跳过该成员继续」的余地（回退与整体降级的结果同为「没有结果」），直接降级为空并记 warn 日志。回退**不额外增加预算**——`registrySearch` 在入口派生一份总预算，两条路径共用它，最坏耗时是一次 `JIAN_SEARCH_TIMEOUT_SECONDS`。**为什么回退只认超时**：合并查询的非超时故障（SQL 报错、数据层错误等）对每个成员必然同样复现，回退等于把一次故障放大成 N 次注定失败的查询与 N 条 warn 日志，因此**直接降级为空结果**（响应形状不变，只记 1 条日志，且日志本身区分超时与数据层故障）；而合并**超时**时剩余预算虽已接近零，回退至少能把响应保持在 **200 + 空结果**，而不是 500。
 - **回退分支的等价性**：合并结果在回退时**整份丢弃**，两条路径不会重复计数。
 - **钉住它的测试**：`repository/search_rewrite_test.go` 的 `TestSearchPerRepoByFilterMatchesPerRepoLoop`（合并查询与「逐仓库各搜一次」逐仓比对前 N 条）与 `TestSearchPerRepoByFilterLimitAndEmpty`（`perRepoLimit` 与空入参边界）；`protocol/npm_search_fallback_test.go` 用注入桩覆盖「合并超时 → 回退并跳过超时成员」「单成员超时只花一份预算」「合并超时后成员结果不丢」三条；`protocol/npm_search_test.go` 的 `TestNpmSearchGroupQueryCountIndependentOfMembers`（成员 1 → 4 时语句数不变）、`TestNpmSearchGroupDedupesAndMerges`（跨成员按 `path` 去重、成员顺序决定先后）、`TestNpmSearchKeepsPerMemberPagination`（每成员各取 `from+size`）；`protocol/npm_search_contract_test.go` 钉住响应键集精确为 `{objects,total,time}`、新参数被忽略。
 - **不改的部分**：`from+size` 的上限口径不变（`size` 夹到 `[1,250]`、`from` 夹到 `[0,10000]`）。
@@ -335,7 +335,7 @@
 
 **超时与权限（自动化）**
 
-8. 注入极小超时 → `/api/v1/search` 返回 **504 + `search_timeout`**；`JIAN_SEARCH_TIMEOUT_SECONDS` 缺省 / 非数字 / ≤ 0 均回落默认值。npm `registrySearch` 按 §3.4 的两级口径处置：合并查询超时且成员数 > 1 → 回退逐成员、跳过超时成员并返回 200，同时记 warn 日志；成员数 == 1 → 降级为空结果、返回 200 并记 warn 日志，**不**做逐成员重试（`memberCalls` 必须为 0）。
+8. 注入极小超时 → `/api/v1/search` 返回 **504 + `search_timeout`**；`JIAN_SEARCH_TIMEOUT_SECONDS` 缺省 / 非数字 / ≤ 0 均回落默认值。npm `registrySearch` 按 §3.4 的两级口径处置：合并查询超时且成员数 > 1 → 回退逐成员、跳过超时成员并返回 200，同时记 warn 日志；成员数 == 1 → 降级为空结果、返回 200 并记 warn 日志，**不**做逐成员重试（`memberCalls` 必须为 0）；合并查询**非超时**报错（数据层故障）→ 同样返回 200 与空结果，但**不**回退（`memberCalls` 必须为 0，日志只 1 条）。
 9. 批量 ACL 判定与逐仓库 `HasPermission` **结果完全一致**（覆盖：用户直授、仅组授、多组、无组、`admin`、匿名主体、`write` 抵扣 `read`）；并断言「一次搜索的 ACL 查询数不随仓库数增长」。
 10. 既有 `/api/v1/search` 的响应结构、字段、排序键白名单与 `page_size` 夹取口径无变化。
 

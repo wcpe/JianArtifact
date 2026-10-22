@@ -447,6 +447,10 @@ func ftsMatchExpression(terms []string) string {
 // LIKE / IN 侧，原样保留。
 //
 // 降级：索引未就绪、或没有任何可下推词时整体退回 buildSearchWhere，行为与引入索引前一致。
+//
+// **就绪判定不在这里做，也不允许在这一层内联进 WHERE**：判定要求与查询同处一个读快照
+// （理由与实测数据见 searchSnapshot）。本函数只按调用方传入的 UseFullTextIndex 拼装，
+// 保持为纯函数，便于两条路径共用与单测。
 func buildSearchWhereIndexed(f SearchFilter, repoIDs []int64) (string, []any) {
 	pushed := indexableTerms(f.IncludeTerms)
 	if !f.UseFullTextIndex || len(pushed) == 0 {
@@ -461,6 +465,60 @@ func buildSearchWhereIndexed(f SearchFilter, repoIDs []int64) (string, []any) {
 	// pushed 非空蕴含 IncludeTerms 非空，因此 where 必然含至少一条 LIKE 条件、不可能是空条件
 	// 占位 "1=1"，这里可以直接拼接。
 	return cond + " AND " + where, args
+}
+
+// searchSnapshot 在**同一个读快照**里执行一次搜索，并在这份快照里复核索引是否就绪。
+//
+// 为什么必须这样（就绪判定与查询之间的 TOCTOU）：领域层在搜索入口先调一次
+// SearchIndexReady() 决定是否置 SearchFilter.UseFullTextIndex，再把查询发到本层；而
+// SearchIndexStateRepo.Reset() 会在**一个事务**里清空整张 asset_path_fts 并把 completed_at
+// 打回 NULL。如果那次提交正好落在「读就绪」与「发查询」之间，本请求就会带着
+// UseFullTextIndex=true 去查一张**已被清空**的索引：候选集条件命中 0 行，返回明显偏少的
+// 结果集（甚至空结果），而整条链路上没有任何信号——这正是本仓库反复强调要避免的
+// 「静默少结果」。
+//
+// 修法：把复核与查询放进同一个读快照。SQLite 的读快照由事务界定，因此这里把复核与查询
+// 收进同一事务：事务以 deferred 方式开启（不带 BEGIN IMMEDIATE），不在建事务时抢写锁，
+// 因此既不阻塞唯一的写者、也不被写者长期阻塞。同一快照内不可能出现「判定时就绪、查询时
+// 索引已空」。顺带把 COUNT 与分页 SELECT 也收进同一快照，total 与结果页不再可能来自两个
+// 不同版本。
+//
+// **为什么不按最初设想把就绪判定内联进 WHERE**：实测（modernc.org/sqlite v1.60.1，
+// 5 万行语料）形如
+//
+//	(id IN (SELECT rowid FROM asset_path_fts WHERE asset_path_fts MATCH ?) OR <未就绪>)
+//
+// 会让 asset 侧的计划从 `SEARCH asset USING INTEGER PRIMARY KEY (rowid=?)`（FTS 驱动、
+// 按候选 rowid 逐行回表）退化成 `SCAN asset USING INDEX idx_asset_path`（索引全扫），
+// 与降级路径同型。高选择性检索词（5 万行里只命中 5 行，也正是全文索引存在的理由）实测：
+// COUNT 168µs → 24.2ms、聚合取全量 174µs → 23.5ms、分页 506µs → 26.9ms，候选集下推的
+// 收益全部归零。SQLite 无法在保住索引驱动的同时表达「条件性约束」，因此改用事务达成
+// 同一目标（判定与查询同快照），执行计划一字未改。
+//
+// 复核方向是单向的：领域层给的 UseFullTextIndex 为假时不做任何额外读取（已经在降级路径上）；
+// 为真时以本快照的判定为准，未就绪则退回纯 LIKE——宁可慢而全，不可快而漏。
+func (r *AssetRepo) searchSnapshot(ctx context.Context, f SearchFilter, fn func(*sqlx.Tx, SearchFilter) error) error {
+	// 事务选项传 nil 而不是 &sql.TxOptions{ReadOnly: true}：modernc.org/sqlite 不支持
+	// 只读事务选项，会直接返回 "driver does not support read-only transactions"，
+	// 而那会让整条搜索链路以错误告终（npm 合并检索据此降级为空结果）。传 nil 时
+	// 建事务走的是不带后缀的 `begin`（deferred），不取写锁、不阻塞写者，同样能提供
+	// 一致性读快照——本函数要的正是「判定与查询看到同一份数据」，只读标记并非必需。
+	tx, err := r.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if f.UseFullTextIndex {
+		ready, err := searchIndexReadyIn(tx)
+		if err != nil {
+			return err
+		}
+		f.UseFullTextIndex = ready
+	}
+	if err := fn(tx, f); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // searchOrderBy 把排序键映射为 ORDER BY 表达式（白名单，防注入）。
@@ -481,11 +539,14 @@ func searchOrderBy(sort, order string) string {
 	if order == "desc" {
 		dir = "DESC"
 	}
-	// path 作次级排序，保证分页稳定
+	// path 作次级排序，保证分页稳定；但 path 本身**不唯一**（唯一约束是
+	// (repository_id, path)），跨仓库的同名路径在 path 上完全并列，SQLite 对并列行的
+	// 返回顺序不作保证。因此末尾一律再补 id（主键，全局唯一）把排序键收成全序，
+	// 否则分页/截断的边界行会在两次执行之间抖动。
 	if col == "path" {
-		return "path " + dir
+		return "path " + dir + ", id ASC"
 	}
-	return col + " " + dir + ", path ASC"
+	return col + " " + dir + ", path ASC, id ASC"
 }
 
 // SearchByFilter 跨仓库搜索制品路径，全部条件下推 SQL。repoIDs 为空搜全部。
@@ -493,18 +554,23 @@ func searchOrderBy(sort, order string) string {
 //
 // ctx 承载领域层施加的搜索总预算：COUNT 与分页 SELECT 共享同一个 deadline（不是各给一份），
 // 超时即中止，避免病态查询长时间占住池里的连接（主库池见 db.go 的 OpenWithMaxConns）。
+//
+// COUNT 与分页 SELECT 还在**同一个读快照**内执行（searchSnapshot），因此 total 恒等于
+// 结果页所属版本的总数，不会出现「total 与翻到的行来自两个版本」的错位。
 func (r *AssetRepo) SearchByFilter(ctx context.Context, f SearchFilter, repoIDs []int64, sort, order string, limit, offset int) ([]Asset, int, error) {
-	where, args := buildSearchWhereIndexed(f, repoIDs)
-	var total int
-	if err := r.db.GetContext(ctx, &total, `SELECT COUNT(*) FROM asset WHERE `+where, args...); err != nil {
-		return nil, 0, err
-	}
 	var assets []Asset
-	err := r.db.SelectContext(ctx, &assets,
-		`SELECT id, repository_id, path, blob_hash, size, content_type, sha1, md5, created_at, updated_at
-			FROM asset WHERE `+where+` ORDER BY `+searchOrderBy(sort, order)+` LIMIT ? OFFSET ?`,
-		append(args, limit, offset)...,
-	)
+	var total int
+	err := r.searchSnapshot(ctx, f, func(tx *sqlx.Tx, f SearchFilter) error {
+		where, args := buildSearchWhereIndexed(f, repoIDs)
+		if err := tx.GetContext(ctx, &total, `SELECT COUNT(*) FROM asset WHERE `+where, args...); err != nil {
+			return err
+		}
+		return tx.SelectContext(ctx, &assets,
+			`SELECT id, repository_id, path, blob_hash, size, content_type, sha1, md5, created_at, updated_at
+				FROM asset WHERE `+where+` ORDER BY `+searchOrderBy(sort, order)+` LIMIT ? OFFSET ?`,
+			append(args, limit, offset)...,
+		)
+	})
 	return assets, total, err
 }
 
@@ -514,20 +580,27 @@ func (r *AssetRepo) SearchByFilter(ctx context.Context, f SearchFilter, repoIDs 
 // 分页/计数看到的完全一致。行按 **path 升序**返回：聚合的扫描预算要靠一个确定性顺序截断，
 // 否则截断点会随执行计划抖动、同一请求两次返回不同的包集合。
 //
+// 截断顺序必须**全序**，所以排序键是 `path ASC, id ASC` 而不是只有 path：唯一约束是
+// (repository_id, path)，跨仓库的同名路径在 path 上完全并列，SQLite 对并列行的返回顺序
+// 不作保证；只按 path 截断时，边界上的并列行仍可能在两次执行间互换，聚合出的包集合与
+// truncated 随之抖动——正是本注释想避免的现象。
+//
 // maxRows 是扫描上限；命中行超过上限时返回前 maxRows 行并置 truncated——此时聚合得到的
 // 计数是下界，但**不影响 total**（total 仍由 SearchByFilter 的 COUNT(*) 精确给出）。
 func (r *AssetRepo) SearchAllByFilter(ctx context.Context, f SearchFilter, repoIDs []int64, maxRows int) ([]Asset, bool, error) {
 	if maxRows <= 0 {
 		maxRows = 1
 	}
-	where, args := buildSearchWhereIndexed(f, repoIDs)
 	var assets []Asset
 	// 多取一行用于判定是否被截断，避免再发一条 COUNT。
-	err := r.db.SelectContext(ctx, &assets,
-		`SELECT id, repository_id, path, blob_hash, size, content_type, sha1, md5, created_at, updated_at
-			FROM asset WHERE `+where+` ORDER BY path ASC LIMIT ?`,
-		append(args, maxRows+1)...,
-	)
+	err := r.searchSnapshot(ctx, f, func(tx *sqlx.Tx, f SearchFilter) error {
+		where, args := buildSearchWhereIndexed(f, repoIDs)
+		return tx.SelectContext(ctx, &assets,
+			`SELECT id, repository_id, path, blob_hash, size, content_type, sha1, md5, created_at, updated_at
+				FROM asset WHERE `+where+` ORDER BY path ASC, id ASC LIMIT ?`,
+			append(args, maxRows+1)...,
+		)
+	})
 	if err != nil {
 		return nil, false, err
 	}
@@ -547,13 +620,15 @@ type SearchFacet struct {
 // 供前端做「按仓库聚合」的钻取导航。repoIDs 为空统计全部仓库。
 // 与分页 SELECT 共用同一段 WHERE（含候选集条件），因此计数与分页不会互相矛盾。
 func (r *AssetRepo) SearchFacetsByFilter(ctx context.Context, f SearchFilter, repoIDs []int64) ([]SearchFacet, error) {
-	where, args := buildSearchWhereIndexed(f, repoIDs)
 	var facets []SearchFacet
-	err := r.db.SelectContext(ctx, &facets,
-		`SELECT repository_id, COUNT(*) AS count FROM asset WHERE `+where+
-			` GROUP BY repository_id ORDER BY count DESC`,
-		args...,
-	)
+	err := r.searchSnapshot(ctx, f, func(tx *sqlx.Tx, f SearchFilter) error {
+		where, args := buildSearchWhereIndexed(f, repoIDs)
+		return tx.SelectContext(ctx, &facets,
+			`SELECT repository_id, COUNT(*) AS count FROM asset WHERE `+where+
+				` GROUP BY repository_id ORDER BY count DESC`,
+			args...,
+		)
+	})
 	return facets, err
 }
 
@@ -564,21 +639,26 @@ func (r *AssetRepo) SearchFacetsByFilter(ctx context.Context, f SearchFilter, re
 // 窗口函数按 repository_id 分区、按 path 升序编号，只保留编号 <= perRepoLimit 的行；返回按
 // (repository_id, path) 升序，调用方按自己的成员顺序分组即可还原成员循环的顺序。
 // repoIDs 为空时无事可做（成员集合为空意味着调用方已判定无须搜索）。
+//
+// 分区内的排序键同样补到全序（`path ASC, id ASC`）：同一仓库内 path 唯一，补 id 只是
+// 为了与其它搜索入口的截断口径保持一致，不改变既有语义。
 func (r *AssetRepo) SearchPerRepoByFilter(ctx context.Context, f SearchFilter, repoIDs []int64, perRepoLimit int) ([]Asset, error) {
 	if len(repoIDs) == 0 || perRepoLimit <= 0 {
 		return nil, nil
 	}
-	where, args := buildSearchWhereIndexed(f, repoIDs)
 	var assets []Asset
-	err := r.db.SelectContext(ctx, &assets,
-		`SELECT id, repository_id, path, blob_hash, size, content_type, sha1, md5, created_at, updated_at
-			FROM (
-				SELECT id, repository_id, path, blob_hash, size, content_type, sha1, md5, created_at, updated_at,
-					ROW_NUMBER() OVER (PARTITION BY repository_id ORDER BY path ASC) AS rn
-				FROM asset WHERE `+where+`
-			) WHERE rn <= ? ORDER BY repository_id ASC, path ASC`,
-		append(args, perRepoLimit)...,
-	)
+	err := r.searchSnapshot(ctx, f, func(tx *sqlx.Tx, f SearchFilter) error {
+		where, args := buildSearchWhereIndexed(f, repoIDs)
+		return tx.SelectContext(ctx, &assets,
+			`SELECT id, repository_id, path, blob_hash, size, content_type, sha1, md5, created_at, updated_at
+				FROM (
+					SELECT id, repository_id, path, blob_hash, size, content_type, sha1, md5, created_at, updated_at,
+						ROW_NUMBER() OVER (PARTITION BY repository_id ORDER BY path ASC, id ASC) AS rn
+					FROM asset WHERE `+where+`
+				) WHERE rn <= ? ORDER BY repository_id ASC, path ASC, id ASC`,
+			append(args, perRepoLimit)...,
+		)
+	})
 	return assets, err
 }
 
@@ -594,8 +674,21 @@ func (r *AssetRepo) SearchPerRepoByFilter(ctx context.Context, f SearchFilter, r
 // 只会让索引无法被判为可用，此时退回 path LIKE 路径得到的结果依然完整，代价只是慢一点——
 // 这正是降级路径存在的意义，没有理由把它变成故障。
 func (r *AssetRepo) SearchIndexReady() (bool, error) {
+	return searchIndexReadyIn(r.db)
+}
+
+// gettable 抽象「能按单行取值」的执行器，使就绪判定既能在连接池上跑（SearchIndexReady，
+// 供领域层在搜索入口粗筛），也能在搜索用的只读事务里跑（searchSnapshot，判定与查询同快照）。
+// *sqlx.DB 与 *sqlx.Tx 都满足它。
+type gettable interface {
+	Get(dest any, query string, args ...any) error
+}
+
+// searchIndexReadyIn 在给定执行器上读索引就绪状态，语义与 SearchIndexReady 完全一致：
+// 状态行缺失按未就绪处理（不报错），因为「慢但可用」永远优于把搜索变成 500。
+func searchIndexReadyIn(q gettable) (bool, error) {
 	var ready bool
-	err := r.db.Get(&ready, `SELECT completed_at IS NOT NULL FROM search_index_state WHERE id = 1`)
+	err := q.Get(&ready, `SELECT completed_at IS NOT NULL FROM search_index_state WHERE id = 1`)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}

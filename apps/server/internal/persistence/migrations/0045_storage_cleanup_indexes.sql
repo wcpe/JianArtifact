@@ -3,9 +3,9 @@
 -- 影响：asset_mutation 新增 (status, updated_at) 索引；asset 新增 (repository_id, updated_at, path) 索引
 -- 数据处理：无历史回填——纯建索引，扫描既有行建立结构；预计耗时：随两张表行数增长（大库首次升级可能到秒级，升级期间会短暂占用写锁）
 -- 回滚：不支持 down migration；需要恢复升级前备份
--- 相关：存储治理（docs/PRD.md）、storage-cleanup 周期作业（docs/specs/0.11.0-job-scheduler.md）
+-- 相关：FR-41 存储治理（docs/PRD.md）、storage-cleanup 周期作业（docs/specs/0.11.0-job-scheduler.md）
 --
--- 背景： 的 storage-cleanup 作业每轮都要跑两条跨库范围的查询（见
+-- 背景：FR-41 的 storage-cleanup 作业每轮都要跑两条跨库范围的查询（见
 -- internal/repository/storage_cleanup_repo.go），而这两条在本次迁移前都没有可用索引：
 -- asset_mutation 只有主键（TEXT id），asset 只有 (repository_id) 与 (repository_id, path)。
 -- 库一大就退化成每轮全表扫：作业耗时随库增长且不可预期，还会在扫描期间吃满 IO。

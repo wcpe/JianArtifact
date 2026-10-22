@@ -49,21 +49,21 @@ const (
 	EnvLDAPStartTLS           = "JIAN_LDAP_STARTTLS"        // 对 ldap:// 是否使用 StartTLS；缺省关闭
 	EnvLDAPCAFile             = "JIAN_LDAP_CA_FILE"         // 自定义 CA（PEM）路径；不提供跳过证书校验的开关
 
-	//  存储治理清理作业的开关（单独成组：名字更长，并入上一组会只为对齐而重排全部既有行）。
+	// 存储治理清理作业的开关（单独成组：名字更长，并入上一组会只为对齐而重排全部既有行）。
 	EnvStorageCleanupInterval   = "JIAN_STORAGE_CLEANUP_INTERVAL"        // 存储治理清理作业间隔，单位秒；0 禁用
 	EnvStorageMetadataRetention = "JIAN_STORAGE_METADATA_RETENTION_DAYS" // 终态操作与隔离元数据保留天数；0 禁用
 	EnvStorageTempMaxAge        = "JIAN_STORAGE_TEMP_MAX_AGE_HOURS"      // 过期上传临时文件阈值，单位小时；0 禁用
 
-	//  周期化自动备份与保留策略（单独成组，理由同上）。
+	// 周期化自动备份与保留策略（单独成组，理由同上）。
 	EnvBackupAutoInterval  = "JIAN_BACKUP_AUTO_INTERVAL"  // 自动备份作业间隔，单位秒；0 禁用
 	EnvBackupKeepLast      = "JIAN_BACKUP_KEEP_LAST"      // 保留最近 N 份自动备份；0 = 不按份数限制
 	EnvBackupRetentionDays = "JIAN_BACKUP_RETENTION_DAYS" // 自动备份保留天数；0 = 不限天数
 
-	//  备份孤儿回收（单独成组，理由同上）。
+	// 备份孤儿回收（单独成组，理由同上）。
 	EnvBackupOrphanCleanupInterval = "JIAN_BACKUP_ORPHAN_CLEANUP_INTERVAL" // 孤儿备份包回收间隔，单位秒；0 禁用
 	EnvBackupOrphanGraceHours      = "JIAN_BACKUP_ORPHAN_GRACE_HOURS"      // 回收宽限期，单位小时；0 取默认 1
 
-	//  上游断路器补强：auto-block 退避起始时长，单位秒。
+	// 上游断路器补强：auto-block 退避起始时长，单位秒。
 	EnvAutoBlockBaseSeconds = "JIAN_AUTO_BLOCK_BASE_SECONDS" // proxy 上游首次失败的阻止窗口时长；非正数回落默认
 
 	// 一键重启的能力配置（单独成组，理由同上）。
@@ -71,7 +71,7 @@ const (
 	EnvRestartUnit  = "JIAN_RESTART_UNIT"  // 重启目标单元名；缺省 jianartifact
 	EnvRestartScope = "JIAN_RESTART_SCOPE" // 作用域 system / systemd-user / docker；非法值回落 system
 
-	//  搜索性能：搜索链路（网页搜索 / npm 搜索 / suggest）的总预算，单位秒。
+	// 搜索性能：搜索链路（网页搜索 / npm 搜索 / suggest）的总预算，单位秒。
 	EnvSearchTimeoutSeconds = "JIAN_SEARCH_TIMEOUT_SECONDS" // 一次搜索的总预算上限；非正数回落默认（无禁用语义）
 
 	// 仪表盘容量聚合结果的缓存有效期，单位秒；0 禁用缓存（每次请求实时聚合）。
@@ -86,12 +86,12 @@ const (
 	defaultUpstreamTimeout = 30 * time.Second
 	defaultSyncInterval    = 5 * time.Second // 复制轮询间隔默认 5s（近实时）
 	defaultBlobGCInterval  = 24 * time.Hour  // 孤立 blob 默认每日清理一次
-	//  存储治理清理的默认阈值：每日一轮、终态元数据保留 7 天、临时文件 24 小时。
+	// 存储治理清理的默认阈值：每日一轮、终态元数据保留 7 天、临时文件 24 小时。
 	// 隔离区空目录的宽限期不设开关（见 domain/storage_cleanup.go 的常量与理由）。
 	defaultStorageCleanupInterval   = 24 * time.Hour
 	defaultStorageMetadataRetention = 7 * 24 * time.Hour
 	defaultStorageTempMaxAge        = 24 * time.Hour
-	//  自动备份与保留策略的默认值。
+	// 自动备份与保留策略的默认值。
 	//
 	// 间隔默认 0 = **关闭**。这一条是**有意**的，不是遗漏：
 	// 备份是**全量**包（每份 ≈ 数据目录大小），因此默认开启会在用户毫无预期的情况下
@@ -106,7 +106,7 @@ const (
 	defaultBackupAutoInterval  = 0
 	defaultBackupKeepLast      = 7
 	defaultBackupRetentionDays = 30
-	//  孤儿备份包回收的默认值：每日一轮、宽限期 1 小时。
+	// 孤儿备份包回收的默认值：每日一轮、宽限期 1 小时。
 	// 间隔默认 24h 而非 0（与自动备份相反）：孤儿文件只会占盘不会自行消失，
 	// 回收是纯粹的兜底动作，开启它不存在"悄悄占磁盘"的风险。
 	// 宽限期保证"拷入 → 界面导入"的操作窗口（见 domain/backup_orphan_cleanup.go）。
@@ -132,6 +132,14 @@ const (
 	// 取 8：WAL 下读并发收益在 8 条连接上已基本吃满，再放宽只是增加 SQLite 侧的
 	// 页面缓存副本与文件句柄，收益递减。
 	defaultSQLiteMaxConns = 8
+	// maxSQLiteMaxConns 是连接池上限的**宽松上界**，超限按非法值夹取到本值并打警告。
+	//
+	// 为什么需要上界：本项是纯数量配置，一个笔误（8 后面多打一个 0 → 80）就会开出
+	// 几十条连接与文件句柄常驻，且每条连接各自持有一份 SQLite 页面缓存——内存与句柄
+	// 都会按倍数放大，而日志里不会有任何异常，只有「这台机器怎么这么多连接」。
+	// 为什么取 64 而不是更小：单机 SQLite 的读并发上限远低于此，64 已经宽松到不影响
+	// 任何正当用法（宽表扫描、批量导入时的读并发也在其内），只把明显的数量级笔误挡住。
+	maxSQLiteMaxConns = 64
 	// defaultOIDCUsernameClaim 是 OIDC 用户名的缺省 claim；各 IdP 常见取值见 OPERATIONS。
 	defaultOIDCUsernameClaim = "preferred_username"
 	// defaultLDAPUserFilter 与 defaultLDAPEmailAttr 是 LDAP 检索的缺省口径（OpenLDAP 风格 uid）。
@@ -166,7 +174,7 @@ type Config struct {
 	PublicURL              string        // 对外基础 URL（如 https://repo.example.com）；空则回退请求 Host 推断
 	EnabledFormats         formats.Set   // 启动时启用的协议格式
 	BlobGCInterval         time.Duration // primary 孤立 blob 定时清理间隔；0 禁用
-	StorageCleanupInterval time.Duration //  存储治理清理作业间隔；0 禁用
+	StorageCleanupInterval time.Duration // 存储治理清理作业间隔；0 禁用
 	// StorageMetadataRetention 是终态资产操作与隔离元数据的保留期；0 禁用裁剪。
 	StorageMetadataRetention time.Duration
 	// StorageTempMaxAge 是过期上传临时文件（<BlobDir>/tmp/oci-upload）的最长滞留时长；0 禁用。
@@ -196,7 +204,8 @@ type Config struct {
 	// 0 = 禁用缓存（每次请求实时聚合），非数字 / 负数已在解析期回落默认 30s。
 	CapacityCacheTTL time.Duration
 	// SQLiteMaxConns 是 SQLite 连接池上限（JIAN_SQLITE_MAX_CONNS）。
-	// 非正数（含非法值）已在解析期回落默认 defaultSQLiteMaxConns，**无禁用语义**。
+	// 非正数（含非法值）已在解析期回落默认 defaultSQLiteMaxConns，**无禁用语义**；
+	// 超过 maxSQLiteMaxConns 的上界时夹取到上界并打一条警告（防数量级笔误）。
 	SQLiteMaxConns int
 	TLSAddr        string     // 服务内置 TLS 监听地址；空 = 不启用
 	TLSCert        string     // TLS PEM 证书文件路径
@@ -533,8 +542,21 @@ func capacityCacheTTL() time.Duration {
 // SQLite 主库连接池上限。缺省、非数字、负数与显式 0 都回落默认 8——本项**无禁用语义**，
 // 池上限为 0 在 database/sql 里表示「无上限」，既不是想要的语义，也会让 SQLite 侧的
 // 页面缓存副本与文件句柄随负载无界增长，因此与非正数一并按非法值处理。
+//
+// 超过 maxSQLiteMaxConns 同样按非法值处理**并打一条中文警告**，而不是静默接受：
+// 本项是纯数量配置，多打一个 0 是现实存在的笔误（8 → 80），而后果是几十条连接与
+// 文件句柄常驻、每个连接各带一份 SQLite 页面缓存。夹取到上限再警告（而不是报错退出）
+// 的理由与 restartScope 的非法值回落同一口径：配置瑕疵不该让服务起不来，但**必须留痕**，
+// 否则运维会以为改生效了。
 func sqliteMaxConns() int {
-	return envPositiveIntOr(EnvSQLiteMaxConns, defaultSQLiteMaxConns)
+	conns := envPositiveIntOr(EnvSQLiteMaxConns, defaultSQLiteMaxConns)
+	if conns > maxSQLiteMaxConns {
+		fmt.Fprintf(os.Stderr,
+			"警告：%s=%d 超过上限 %d，已按上限 %d 使用（本项为连接条数，出现数量级笔误时请核对）。\n",
+			EnvSQLiteMaxConns, conns, maxSQLiteMaxConns, maxSQLiteMaxConns)
+		return maxSQLiteMaxConns
+	}
+	return conns
 }
 
 // envDurationOr 按给定单位解析环境变量为时长：缺省、非法与负数取 fallback，显式 0 原样返回（禁用语义）。
@@ -641,7 +663,7 @@ func upstreamTimeout() time.Duration {
 
 // oidcConfig 解析 OIDC 接入配置。未配置 issuer 时整组不启用；
 // 半配置（缺客户端 ID / 密钥 / 回调地址）或非法 URL 直接报错，
-// 避免"以为启用了实际没有"的静默半启用（对齐的防静默降级口径）。
+// 避免"以为启用了实际没有"的静默半启用（对齐 LDAP 侧的防静默降级口径）。
 func oidcConfig() (OIDCConfig, error) {
 	cfg := OIDCConfig{
 		Issuer:        strings.TrimSpace(os.Getenv(EnvOIDCIssuer)),
@@ -691,7 +713,7 @@ func requireHTTPURL(env, value string) error {
 
 // ldapConfig 解析 LDAP 接入配置。未配置 URL 时整组不启用；
 // 半配置、过滤器缺占位、StartTLS 与 ldaps 冲突、CA 文件不可读都在启动期直接报错，
-// 避免"以为启用了实际没有"（对齐 OIDC 与的防静默降级口径）。
+// 避免"以为启用了实际没有"（对齐 OIDC 侧的防静默降级口径）。
 func ldapConfig() (LDAPConfig, error) {
 	startTLS := os.Getenv(EnvLDAPStartTLS)
 	cfg := LDAPConfig{

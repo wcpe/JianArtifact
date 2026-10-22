@@ -862,12 +862,7 @@ func (h *Handlers) SearchAssets(c *gin.Context) {
 		auth.WriteError(c, http.StatusBadRequest, "bad_request", "搜索关键词不能为空")
 		return
 	}
-	page := 1
-	if v := c.Query("page"); v != "" {
-		if n, err := parseIntQuery(v); err == nil && n > 0 {
-			page = n
-		}
-	}
+	page := parseSearchPage(c.Query("page"))
 	pageSize := parseSearchPageSize(c.Query("page_size"))
 	limit := pageSize
 	offset := (page - 1) * pageSize
@@ -913,23 +908,40 @@ func (h *Handlers) SearchAssets(c *gin.Context) {
 	// 仓库范围过滤（下推到服务层，保证 total 精确）
 	repoFilter := c.Query("repository")
 	if repoFilter != "" {
-		// 单仓库内搜索：先检查读权限（含主体所属用户组的授权）
+		// 单仓库内搜索：先检查读权限（含主体所属用户组的授权）。
+		//
+		// **口径：无权限与仓库不存在必须返回同一个响应。**
+		//
+		// CanAccess 对「仓库不存在」返回 ErrNotFound、对「存在但无权」返回 (false, nil)。
+		// 若把两者分别映射成 404 与 401/403，调用方只要反复改动 repository= 参数就能把
+		// 二者区分开，从而枚举出实例上有哪些私有仓库存在——这是一条匿名可达的信息泄漏
+		// 路径，且与 suggest 立的口径直接冲突（可读集合为空时返回空结果，绝不 403：
+		// 403 会把「这里存在一个你看不到的仓库」泄漏出去）。
+		//
+		// 因此非管理员 / 匿名一律 **404 not_found**，与「仓库不存在」不可区分：
+		// 选 404 而不是一律 403，是因为 404 是「你看不到任何东西」的中性回答，
+		// 而 403 本身就承认了资源存在（这正是上面要消除的信号）。
+		// 只有管理员例外——他本就搜得到全部仓库，不存在可泄漏的差异，故按原错误映射走。
 		subject, err := h.subjectOf(p)
 		if err != nil {
 			writeDomainErr(c, err)
 			return
 		}
 		allowed, err := h.repos.CanAccess(repoFilter, subject, repository.ActionRead)
-		if err != nil {
+		switch {
+		case isAdmin:
+			if err != nil {
+				writeDomainErr(c, err)
+				return
+			}
+		case err != nil && !errors.Is(err, domain.ErrNotFound):
+			// 真正的内部故障（数据库不可用等）：照实上抛。它与「仓库是否存在」无关，
+			// 不构成枚举信号，伪装成 404 只会把故障藏起来。
 			writeDomainErr(c, err)
 			return
-		}
-		if !allowed && !isAdmin {
-			if !authed {
-				auth.WriteError(c, http.StatusUnauthorized, "unauthenticated", "未认证")
-			} else {
-				auth.WriteError(c, http.StatusForbidden, "forbidden", "无权访问")
-			}
+		case err != nil || !allowed:
+			// 仓库不存在 / 存在但无权：同一个响应，不可区分。
+			auth.WriteError(c, http.StatusNotFound, "not_found", "资源不存在")
 			return
 		}
 	}
@@ -1085,6 +1097,14 @@ type searchPackageFile struct {
 const (
 	searchPageSizeDefault = 20
 	searchPageSizeMax     = 100
+	// searchPageMax 是页码的夹取上界（夹取而非报错，与 page_size 同一口径）。
+	//
+	// 上界不只是「不要无意义地深翻页」：offset = (page-1)*pageSize 是整数乘法，
+	// fmt.Sscanf 能把极大的 page（直到 int 上限）解析出来，乘法会**溢出成负数**。
+	// 而 SQLite 把负 OFFSET 当作 0，结果是「静默返回第一页」——既不报错也不返回空页，
+	// 调用方完全看不出参数被吞了。10000 页 × 100 条 = 上限 offset 999,900，
+	// 距任何平台的 int 范围都远，乘法不可能溢出。
+	searchPageMax = 10000
 )
 
 func parseSearchPageSize(raw string) int {
@@ -1097,6 +1117,22 @@ func parseSearchPageSize(raw string) int {
 	}
 	if n > searchPageSizeMax {
 		return searchPageSizeMax
+	}
+	return n
+}
+
+// parseSearchPage 解析页码：非法/非正数回落第 1 页，超上限夹取到 searchPageMax。
+// 口径与 parseSearchPageSize 保持一致（夹取而非 400），避免两个分页参数两套脾气。
+func parseSearchPage(raw string) int {
+	if raw == "" {
+		return 1
+	}
+	n, err := parseIntQuery(raw)
+	if err != nil || n <= 0 {
+		return 1
+	}
+	if n > searchPageMax {
+		return searchPageMax
 	}
 	return n
 }
