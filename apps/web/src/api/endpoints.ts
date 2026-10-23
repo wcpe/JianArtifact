@@ -71,6 +71,9 @@ import type {
   RepoType,
   RepoVisibility,
   StatusInfo,
+  UpstreamHealthRecent,
+  UpstreamHealthSeries,
+  UpstreamHealthSourceValue,
   TokenCreated,
   TokenList,
   UsageInfo,
@@ -453,6 +456,50 @@ export function recheckConnection(name: string): Promise<ConnectionStatus> {
   return request<ConnectionStatus>(`/repositories/${name}/recheck-connection`, {
     method: "POST",
   });
+}
+
+/** 上游健康历史的查询参数。from/to 省略时服务端取最近 24 小时。 */
+export interface UpstreamHealthQuery {
+  from?: string;
+  to?: string;
+  /** 来源过滤：省略表示 request 与 probe 两路都取；前端应分别展示而不是合并平均。 */
+  source?: UpstreamHealthSourceValue;
+}
+
+/**
+ * 读取仓库上游健康历史（时间序列 + 按来源分组的汇总），仅管理员。
+ *
+ * `request` 与 `probe` 是两条独立序列：前者反映真实用户可用性，后者反映无流量时的补齐探测。
+ * 汇总按来源分别给出，因此「探测 100% 成功但真实请求 60%」这种分化不会被平均掉。
+ * 窗口内没有采样时 `points` 为空、`summaries` 为空——调用方必须显示「尚无采样」，
+ * 绝不能把它当作 100% 连通。
+ */
+export function getUpstreamHealth(
+  name: string,
+  query: UpstreamHealthQuery = {},
+): Promise<UpstreamHealthSeries> {
+  const params = new URLSearchParams();
+  if (query.from) params.set("from", query.from);
+  if (query.to) params.set("to", query.to);
+  if (query.source) params.set("source", query.source);
+  const suffix = params.toString();
+  return request<UpstreamHealthSeries>(
+    suffix
+      ? `/repositories/${encodeURIComponent(name)}/upstream-health?${suffix}`
+      : `/repositories/${encodeURIComponent(name)}/upstream-health`,
+  );
+}
+
+/**
+ * 读取最近 N 个分钟桶的上游健康明细摘要，仅管理员。
+ *
+ * **口径限制**：明细来自分钟桶聚合而非逐请求日志，同一分钟内的多次请求只有一行
+ * （`samples` 是该分钟的样本数）。界面文案必须交代这一点，否则会被误读成丢数据。
+ */
+export function getUpstreamHealthRecent(name: string, limit = 50): Promise<UpstreamHealthRecent> {
+  return request<UpstreamHealthRecent>(
+    `/repositories/${encodeURIComponent(name)}/upstream-health/recent?limit=${limit}`,
+  );
 }
 
 export function getAcl(name: string): Promise<AclList> {

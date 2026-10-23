@@ -38,6 +38,7 @@ import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { PageShell } from "../app/PageShell";
 import { currentLocaleTag } from "../i18n/current";
 import { RepoBrowser, type RepoDownloadTrendView } from "../components/repo/RepoBrowser";
+import { UpstreamHealthPanel } from "../components/repo/UpstreamHealthPanel";
 import { AsyncBoundary } from "../components/AsyncBoundary";
 import {
   getAcl,
@@ -291,7 +292,13 @@ export function RepositoryDetailPage() {
             pt={isNarrow ? "xs" : "sm"}
             style={{ flex: 1, minHeight: 0, overflowY: "auto" }}
           >
-            <ConfigTab repoName={name} repo={repo} onUpdated={repoState.reload} />
+            <Stack gap={density.gridSpacing}>
+              <ConfigTab repoName={name} repo={repo} onUpdated={repoState.reload} />
+              {/* 上游健康历史：只对 proxy 仓库渲染——hosted 没有上游、group 没有
+                  独立上游，端点对它们返回 400。把它放在「配置」页签而不是新建页签：
+                  它属于这个仓库的运维视角，和上面的连接状态是同一件事的两个时间尺度。 */}
+              {repo?.type === "proxy" ? <UpstreamHealthPanel repoName={name} /> : null}
+            </Stack>
           </Tabs.Panel>
         )}
 

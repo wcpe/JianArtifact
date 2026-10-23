@@ -44,18 +44,20 @@ type StorageCleanupResult struct {
 	EmptyDirs      int // 删除的隔离区空目录
 	TempFiles      int // 删除的过期上传临时文件
 	CacheAssets    int // 删除的过期代理缓存资产
+	// UpstreamHealth int 是裁剪掉的上游健康历史分钟桶行。
+	UpstreamHealth int
 }
 
 // Empty 报告本轮是否什么都没清掉（用于抑制无意义的日志输出）。
 func (r StorageCleanupResult) Empty() bool {
 	return r.MutationRows == 0 && r.ItemRows == 0 && r.QuarantineRows == 0 &&
-		r.EmptyDirs == 0 && r.TempFiles == 0 && r.CacheAssets == 0
+		r.EmptyDirs == 0 && r.TempFiles == 0 && r.CacheAssets == 0 && r.UpstreamHealth == 0
 }
 
 // Summary 输出一轮清理的中文计数摘要（作业日志用）。
 func (r StorageCleanupResult) Summary() string {
-	return fmt.Sprintf("终态操作 %d 行 / 操作明细 %d 行 / 隔离终态记录 %d 行 / 空隔离目录 %d 个 / 过期上传临时文件 %d 个 / 代理缓存资产 %d 个",
-		r.MutationRows, r.ItemRows, r.QuarantineRows, r.EmptyDirs, r.TempFiles, r.CacheAssets)
+	return fmt.Sprintf("终态操作 %d 行 / 操作明细 %d 行 / 隔离终态记录 %d 行 / 空隔离目录 %d 个 / 过期上传临时文件 %d 个 / 代理缓存资产 %d 个 / 上游健康历史 %d 行",
+		r.MutationRows, r.ItemRows, r.QuarantineRows, r.EmptyDirs, r.TempFiles, r.CacheAssets, r.UpstreamHealth)
 }
 
 // StorageCleanupService 执行 storage-cleanup 调度作业的全部子步骤：
@@ -96,6 +98,9 @@ type StorageCleanupService struct {
 	blobs    *blobstore.Store
 	opts     StorageCleanupOptions
 	now      func() time.Time
+	// upstreamHealth 是上游健康历史的保留清理入口；nil 表示跳过该步骤。
+	// 它是「顺带清理」而非新增作业：规格 §2.2 明确要求复用 storage-cleanup。
+	upstreamHealth *repository.UpstreamHealthRepo
 	// cacheDeletesPerRun 覆盖单轮代理缓存删除上限；<= 0 时回落到 maxProxyCacheDeletesPerRun。
 	cacheDeletesPerRun int
 }
@@ -117,6 +122,34 @@ func (s *StorageCleanupService) SetProxyCacheDeletesPerRun(n int) {
 		return
 	}
 	s.cacheDeletesPerRun = n
+}
+
+// SetUpstreamHealthRepo 注入上游健康历史的清理入口。
+//
+// 用 setter 而不是扩展 NewStorageCleanupService 的签名：既有装配与测试都已按四参数
+// 构造，改签名会波及一批与本次需求无关的调用点（项目的既有做法也是「先构造、再注入」）。
+// nil 表示跳过该步骤（未接线部署与不需要该清理的测试）。
+func (s *StorageCleanupService) SetUpstreamHealthRepo(r *repository.UpstreamHealthRepo) {
+	if s == nil {
+		return
+	}
+	s.upstreamHealth = r
+}
+
+// pruneUpstreamHealth 清理超过 30 天的上游健康历史。
+//
+// **只针对 upstream_health_minute 一张表**：SQL 里写死了表名，不与其他分钟表共用
+// 任何「按前缀批量删」的通用逻辑，避免顺手误删 host_metric_minute 等无关表（规格 §5.1）。
+func (s *StorageCleanupService) pruneUpstreamHealth(now time.Time) (int, error) {
+	if s == nil || s.upstreamHealth == nil {
+		return 0, nil
+	}
+	cutoff := repository.UpstreamHealthBucketStart(now.Add(-repository.UpstreamHealthRetention))
+	removed, err := s.upstreamHealth.PruneUpstreamHealth(cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return removed, nil
 }
 
 // proxyCacheDeleteLimit 返回本轮生效的删除上限；零值/未设置时回落到默认常量，
@@ -177,6 +210,14 @@ func (s *StorageCleanupService) Run() (StorageCleanupResult, error) {
 		errs = append(errs, err)
 	}
 	result.CacheAssets = cacheDeleted
+
+	// 上游健康历史的 30 天保留。与其它子步骤彼此独立：
+	// 它失败不影响上面已完成的清理，也不因上面失败而被跳过。
+	healthRemoved, err := s.pruneUpstreamHealth(now)
+	if err != nil {
+		errs = append(errs, err)
+	}
+	result.UpstreamHealth = healthRemoved
 
 	return result, errors.Join(errs...)
 }

@@ -117,6 +117,22 @@ func (r *RepoRepo) ListPublic() ([]Repository, error) {
 	return repos, err
 }
 
+// ListByTypeAndOnline 返回指定类型且在线状态匹配的仓库（按 id 升序）。
+//
+// 供上游健康历史的定时探测挑选候选：它只该探测「有独立上游且未被用户停用」
+// 的仓库，因此把两个过滤条件都放进 SQL——在 Go 侧筛会先读回全部仓库，
+// hosted / group 越多浪费越大，而这两类恰恰是探测时必须彻底排除的。
+func (r *RepoRepo) ListByTypeAndOnline(repoType string, online bool) ([]Repository, error) {
+	var repos []Repository
+	flag := 0
+	if online {
+		flag = 1
+	}
+	err := r.db.Select(&repos, `SELECT id, name, format, type, visibility, description, config, online, created_at
+		FROM repository WHERE type = ? AND online = ? ORDER BY id`, repoType, flag)
+	return repos, err
+}
+
 // ListByIDs 按 ID 批量取仓库元数据，返回以 ID 为键的映射。
 //
 // 与 ListByNames 一样把查询次数固定为 1 条（IN 查询），与 ID 个数无关；解析不到的 ID

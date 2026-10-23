@@ -24,7 +24,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
 )
 
-// 清理任务状态。取值与迁移 0051 的注释一一对应。
+// 清理任务状态。取值与迁移 0052 的注释一一对应。
 const (
 	CleanTaskQueued      = "queued"
 	CleanTaskRunning     = "running"

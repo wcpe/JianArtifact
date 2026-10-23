@@ -67,14 +67,17 @@ type appServices struct {
 	upstreamClient      *upstream.Client // 回源客户端（web 改回源超时时 SetTimeout）
 	store               auth.Store
 	jwt                 *auth.JWTManager
-	metricsReg          *metrics.Registry        // 进程内指标登记（协议请求计数）
-	metricsExp          *metrics.Exposition      // /metrics 文本暴露渲染器
-	scheduler           *scheduler.Scheduler     // 维护类周期作业调度器
-	restartSvc          *domain.RestartService   // 一键重启（能力预检 + 延迟触发）
-	restartCh           chan struct{}            // 重启请求信号，由 main 的 select 接收
-	quotaSvc            *domain.RepoQuotaService // 仓库存储配额（预检早拒 + 提交点权威复检）
-	oidcDeps            *api.OIDCDeps            // OIDC 登录端点依赖（nil = 未启用）
-	ldapAuth            api.LDAPAuthenticator    // LDAP 目录侧校验（nil = 未启用）
+	metricsReg          *metrics.Registry              // 进程内指标登记（协议请求计数）
+	metricsExp          *metrics.Exposition            // /metrics 文本暴露渲染器
+	scheduler           *scheduler.Scheduler           // 维护类周期作业调度器
+	restartSvc          *domain.RestartService         // 一键重启（能力预检 + 延迟触发）
+	restartCh           chan struct{}                  // 重启请求信号，由 main 的 select 接收
+	quotaSvc            *domain.RepoQuotaService       // 仓库存储配额（预检早拒 + 提交点权威复检）
+	upstreamHealthSvc   *domain.UpstreamHealthService  // 上游健康历史采样
+	upstreamHealthRepo  *repository.UpstreamHealthRepo // 上游健康历史读写（查询端点 + 保留清理）
+	upstreamProbeSvc    *domain.UpstreamProbeService   // upstream-probe 调度作业
+	oidcDeps            *api.OIDCDeps                  // OIDC 登录端点依赖（nil = 未启用）
+	ldapAuth            api.LDAPAuthenticator          // LDAP 目录侧校验（nil = 未启用）
 }
 
 // openServices 打开数据库、执行迁移并装配领域服务。调用方负责在返回的 db 上 Close。
@@ -128,6 +131,15 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	// auto-block 退避起始时长来自 JIAN_AUTO_BLOCK_BASE_SECONDS（缺省/非法回落 40s）；
 	// 未注入时 domain 侧以 autoBlockInitial 常量兜底（两者必须同值）。
 	assetSvc.SetAutoBlockBase(cfg.AutoBlockBaseSeconds)
+	// group 成员**确认阶段**预算来自 JIAN_GROUP_MEMBER_TIMEOUT（缺省/非法/非正数回落 3s，
+	// 上限 60s 超限夹取）：只约束「该成员是否及时给出上游响应头」，落盘预算仍由
+	// JIAN_UPSTREAM_TIMEOUT 承担（见 domain 侧 groupGet 的首字节看门狗）。
+	// 未注入时 domain 侧以 groupMemberTimeoutDefault 常量兜底（两者必须同值）。
+	assetSvc.SetGroupMemberTimeout(cfg.GroupMemberTimeout)
+	// 404 负缓存 TTL 来自 JIAN_NEGATIVE_CACHE_TTL（缺省/非法回落 60s，显式 0 = 关闭负缓存）。
+	// 注入点必须在 NewAssetService 之后、第一个请求之前：该 setter 此前只有定义、
+	// 装配层从未调用，负缓存 TTL 实际是一个运行时改不了的常量，这里是它第一次真正接线。
+	assetSvc.SetNegativeCacheTTL(cfg.NegativeCacheTTL)
 	repoSvc.SetMutationCoordinator(assetSvc.MutationCoordinator())
 	// 全局共享的冻结控制器。复制退役后不再有角色派生的静态只读栅栏，
 	// 底座传 nil；冻结窗口（搬迁切换用）由该实例统一承载。
@@ -288,6 +300,16 @@ func openServices(cfg *config.Config) (*appServices, error) {
 		}
 		return names, nil
 	})
+
+	// 上游健康历史：分钟桶采样 + 后台定时探测。
+	//
+	// 采样分两路写同一张表、用 source 区分（request 反映真实可用性，probe 补无流量时的空窗），
+	// 绝不混在一行——混了就看不出「探测 100% 成功但真实请求 60%」这一关键分化。
+	// 真实请求的采样走进程内小批量合并后刷盘（每 5s 一次 + 关停前 flush），
+	// 因此回源主路径不承担写库成本；探测在后台作业里，天然不阻塞任何请求。
+	upstreamHealthRepo := repository.NewUpstreamHealthRepo(db)
+	upstreamHealthSvc := domain.NewUpstreamHealthService(upstreamHealthRepo)
+	assetSvc.SetUpstreamHealthService(upstreamHealthSvc)
 	// 维护类周期作业统一经调度器驱动（间隔 0 禁用；启动不立即执行）。
 	schedulerSvc := scheduler.New()
 	// 一键重启。单元名与作用域只来自启动配置（环境变量），
@@ -327,7 +349,13 @@ func openServices(cfg *config.Config) (*appServices, error) {
 			TempMaxAge:        cfg.StorageTempMaxAge,        // JIAN_STORAGE_TEMP_MAX_AGE_HOURS（小时），0 禁用
 		},
 	)
+	// 上游健康历史的 30 天保留由 storage-cleanup **顺带清理**（规格 §2.2 明确不新增作业）。
+	// 只清理 upstream_health_minute 一张表，不波及 host_metric_minute 等同类分钟表。
+	storageCleanupSvc.SetUpstreamHealthRepo(upstreamHealthRepo)
 	registerStorageCleanupJob(schedulerSvc, cfg.StorageCleanupInterval, storageCleanupSvc.Run)
+	// 上游健康定时探测：只探 type=proxy 且 online 的仓库，绝不改断路器状态。
+	upstreamProbeSvc := domain.NewUpstreamProbeService(repoRepo, assetSvc, upstreamHealthSvc)
+	registerUpstreamProbeJob(schedulerSvc, cfg.UpstreamProbeInterval, upstreamProbeSvc.Run)
 	// 周期化自动备份 + 保留策略。间隔的当前值取自 setting 表
 	// （初值由环境变量 JIAN_BACKUP_AUTO_INTERVAL 播种），因此界面上改完下一轮即生效；
 	// 间隔为 0 表示关闭（作业仍在心跳，但每轮跳过）。
@@ -366,6 +394,12 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	// 不查库、不访问网络，符合 /metrics 的抓取路径约定）。
 	assetSvc.SetUpstreamBlockRecorder(metricsReg)
 	metricsExp.SetBlockedRepositories(assetSvc.BlockedUpstreamCount)
+	// 解析结果指标。与上面的阻断事件**不是同一维度**：这里记的是「请求解析的结论」
+	// （confirmed / uncertain），由顶层解析出口读回既有判定后累加一次；采样点唯一性
+	// 由 domain 侧保证（不在成员层累加，否则一次 group 请求会被计成多次）。
+	// 负缓存条目数在每次抓取时实时取数（只读内存态并顺带清理过期条目，不查库、不访问网络）。
+	assetSvc.SetResolveFailureRecorder(metricsReg)
+	metricsExp.SetNegativeCacheEntries(assetSvc.NegativeCacheEntriesCount)
 	// 仓库级存储配额判定。预检（已知长度/流式）走 Admission，提交点权威复检走 CheckCommit；
 	// 拒绝原因以闭集枚举累加进 jianartifact_publish_rejections_total{reason="quota"}。
 	quotaSvc := domain.NewRepoQuotaService(repoRepo, assetRepo)
@@ -413,6 +447,9 @@ func openServices(cfg *config.Config) (*appServices, error) {
 		cleanTaskRepo:       cleanTaskRepo,
 		trashSvc:            trashSvc,
 		quotaSvc:            quotaSvc,
+		upstreamHealthSvc:   upstreamHealthSvc,
+		upstreamHealthRepo:  upstreamHealthRepo,
+		upstreamProbeSvc:    upstreamProbeSvc,
 		assetSvc:            assetSvc,
 		migrationSvc:        migrationSvc,
 		settingSvc:          settingSvc,
@@ -524,14 +561,15 @@ func (s *appServices) handlers(version string, checks []func() error) *api.Handl
 		PublicURL:               s.publicURL,
 		EnabledFormats:          s.repoSvc.EnabledFormats(),
 		PublishPolicies:         s.publishPolicySvc,
-		UserGroups:              s.userGroupSvc,     // 用户组管理端点（仅管理员）
-		SearchIndex:             s.searchIndexSvc,   // 搜索索引状态与重建端点（仅管理员）
-		StorageHealth:           s.storageHealthSvc, // 存储体检快照（只读，仅管理员）
-		Cleanup:                 s.cleanupSvc,       // 定向清理（移入回收站）
-		CleanTasks:              s.cleanTaskRepo,    // 清理任务队列只读查询
-		Trash:                   s.trashSvc,         // 回收站（恢复 / 彻底删除 / 清空）
-		MaintenanceJobs:         s.scheduler,        // 维护作业清单与手动触发
-		Restart:                 s.restartSvc,       // 一键重启（先回响应，再重启）
+		UserGroups:              s.userGroupSvc,       // 用户组管理端点（仅管理员）
+		SearchIndex:             s.searchIndexSvc,     // 搜索索引状态与重建端点（仅管理员）
+		StorageHealth:           s.storageHealthSvc,   // 存储体检快照（只读，仅管理员）
+		Cleanup:                 s.cleanupSvc,         // 定向清理（移入回收站）
+		CleanTasks:              s.cleanTaskRepo,      // 清理任务队列只读查询
+		Trash:                   s.trashSvc,           // 回收站（恢复 / 彻底删除 / 清空）
+		UpstreamHealth:          s.upstreamHealthRepo, // 上游健康历史查询
+		MaintenanceJobs:         s.scheduler,          // 维护作业清单与手动触发
+		Restart:                 s.restartSvc,         // 一键重启（先回响应，再重启）
 		OnUpstreamTimeoutChange: func(d time.Duration) {
 			if s.upstreamClient != nil {
 				s.upstreamClient.SetTimeout(d)

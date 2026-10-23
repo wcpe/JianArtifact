@@ -265,6 +265,8 @@ func TestUpstreamBlockEventsRenderClosedSet(t *testing.T) {
 	reg.UpstreamBlockEvent("probe_failed")
 	reg.UpstreamBlockEvent("probe_failed")
 	reg.UpstreamBlockEvent("upstream_error")
+	// upstream_timeout 属「被判为不阻断」的类别，仍按闭集枚举累加在同一个事件族里。
+	reg.UpstreamBlockEvent("upstream_timeout")
 	// 闭集外的取值必须被忽略：标签基数受控，不得把仓库名等无界值带进标签。
 	reg.UpstreamBlockEvent("bogus")
 	reg.UpstreamBlockEvent("")
@@ -273,6 +275,7 @@ func TestUpstreamBlockEventsRenderClosedSet(t *testing.T) {
 	for _, want := range []string{
 		`jianartifact_upstream_block_events_total{reason="probe_failed"} 2`,
 		`jianartifact_upstream_block_events_total{reason="upstream_error"} 1`,
+		`jianartifact_upstream_block_events_total{reason="upstream_timeout"} 1`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("输出缺少 %q：\n%s", want, out)
@@ -283,8 +286,60 @@ func TestUpstreamBlockEventsRenderClosedSet(t *testing.T) {
 			t.Fatalf("闭集外取值不得进入样本（%q）：\n%s", unwanted, out)
 		}
 	}
-	if n := strings.Count(out, "jianartifact_upstream_block_events_total{"); n != 2 {
-		t.Fatalf("闭集只允许 2 个 reason 取值，实际 %d 行：\n%s", n, out)
+	if n := strings.Count(out, "jianartifact_upstream_block_events_total{"); n != 3 {
+		// 本用例只制造了三个 reason 的事件，因此样本行必须恰好三行（无多余样本）。
+		// 闭集当前包含五个取值，
+		// 那部分由 TestUpstreamBlockEventsTransferFailureReasons 覆盖。
+		t.Fatalf("本用例记录的 3 个 reason 应恰好产生 3 行样本，实际 %d 行：\n%s", n, out)
+	}
+}
+
+// TestUpstreamBlockEventsTransferFailureReasons 覆盖 （spec §2.3）新增的两个 reason：
+// slow_transfer / transfer_aborted 必须作为同一事件族的新取值被累加并渲染，
+// 且既有三个 reason 的样本文本与计数口径一字不变；闭集外取值仍被忽略。
+func TestUpstreamBlockEventsTransferFailureReasons(t *testing.T) {
+	reg, exp := newTestExposition(nil)
+
+	// 既有三个 reason 与新增两个 reason 混合累加，验证「同一族、同一闭集」。
+	reg.UpstreamBlockEvent("probe_failed")
+	reg.UpstreamBlockEvent("upstream_error")
+	reg.UpstreamBlockEvent("upstream_timeout")
+	reg.UpstreamBlockEvent("slow_transfer")
+	reg.UpstreamBlockEvent("slow_transfer")
+	reg.UpstreamBlockEvent("slow_transfer")
+	reg.UpstreamBlockEvent("transfer_aborted")
+	// 闭集外取值（含看似合理的新词与仓库名）一律不产生样本。
+	reg.UpstreamBlockEvent("slow_rate")
+	reg.UpstreamBlockEvent("local_write_failure")
+	reg.UpstreamBlockEvent("some-repo-name")
+	reg.UpstreamBlockEvent("")
+
+	out := render(t, exp)
+	for _, want := range []string{
+		// 既有三个 reason 的样本文本必须保持不变。
+		`jianartifact_upstream_block_events_total{reason="probe_failed"} 1`,
+		`jianartifact_upstream_block_events_total{reason="upstream_error"} 1`,
+		`jianartifact_upstream_block_events_total{reason="upstream_timeout"} 1`,
+		// 新增两个 reason。
+		`jianartifact_upstream_block_events_total{reason="slow_transfer"} 3`,
+		`jianartifact_upstream_block_events_total{reason="transfer_aborted"} 1`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("输出缺少 %q：\n%s", want, out)
+		}
+	}
+	for _, unwanted := range []string{`reason="slow_rate"`, `reason="local_write_failure"`, "some-repo-name", `reason=""`} {
+		if strings.Contains(out, unwanted) {
+			t.Fatalf("闭集外取值不得进入样本（%q）：\n%s", unwanted, out)
+		}
+	}
+	// 闭集恰好五个取值：不新增指标族，也不额外产生样本行。
+	if n := strings.Count(out, "jianartifact_upstream_block_events_total{"); n != 5 {
+		t.Fatalf("闭集只允许 5 个 reason 取值，实际 %d 行：\n%s", n, out)
+	}
+	// 不新增指标族：事件族仍然只有一个名字。
+	if n := strings.Count(out, "# TYPE jianartifact_upstream_block_events_total"); n != 1 {
+		t.Fatalf("该族应只有一个 TYPE 行，实际 %d 行：\n%s", n, out)
 	}
 }
 
