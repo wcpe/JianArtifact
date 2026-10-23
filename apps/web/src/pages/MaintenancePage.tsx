@@ -5,6 +5,10 @@
 //   - 每个 Tab 内是「关键事实（固定高度）+ 一个 `OpsSection` 表格（flex:1 独占剩余高度）」；
 //   - 折叠/展开类交互（预览清单、确认、详情）一律**弹模态框**，不把页面越撑越长。
 //
+// 表格统一带 `miw={720}`：不给最小宽度时，窄屏下列会被压到一字一行（原路径被拆成竖排），
+// 这不属于横向溢出所以不会被溢出检查发现，但可读性已经崩了。给最小宽度后，窄屏改为在
+// 表格容器内横向滚动，宽屏仍撑满容器。
+//
 // 破坏性动作的防护分层是本页的核心设计：
 //   - `cleanup`（移入回收站）与 `purge`（彻底删除）走**三层防护**：
 //     预览清单（可逐项勾选）→ 二次确认 → 输入确认词「清理」；
@@ -200,7 +204,7 @@ function CleanTasksTab({ refreshKey }: { refreshKey: number }) {
           </Text>
         </Box>
       ) : (
-        <Table striped verticalSpacing={6} stickyHeader>
+        <Table striped verticalSpacing={6} stickyHeader miw={720}>
           <Table.Thead>
             <Table.Tr>
               <Table.Th>{t("maintenance.colKind")}</Table.Th>
@@ -382,7 +386,7 @@ function TrashTab({ refreshKey, onChanged }: { refreshKey: number; onChanged: ()
             </Stack>
           </Box>
         ) : (
-          <Table striped verticalSpacing={6} stickyHeader>
+          <Table striped verticalSpacing={6} stickyHeader miw={720}>
             <Table.Thead>
               <Table.Tr>
                 <Table.Th style={{ width: 36 }} />
@@ -496,7 +500,7 @@ function JobsTab() {
               );
             }
             return (
-              <Table striped verticalSpacing={6} stickyHeader>
+              <Table striped verticalSpacing={6} stickyHeader miw={720}>
                 <Table.Thead>
                   <Table.Tr>
                     <Table.Th>{t("maintenance.colJob")}</Table.Th>
