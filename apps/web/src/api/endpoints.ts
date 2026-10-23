@@ -1616,3 +1616,158 @@ export async function listAllRepositories(
   }
   return { items, total: first.total };
 }
+
+// ---- 维护与清理 ----
+// 这四组端点都是**非契约端点**（登记在 docs/API.md），不进 api/openapi.yaml：
+// 它们服务运维手动排障与清理，形状随清理能力演进。
+
+/** 清理类别：与后端 domain.CleanupKind* 一一对应。 */
+export type CleanupKind = "empty_dirs" | "stale_uploads" | "pre_restore" | "quarantine";
+
+export interface StorageHealth {
+  orphanBlobs: number;
+  orphanBlobBytes: number;
+  quarantinedBlobs: number;
+  quarantinedBytes: number;
+  emptyDirs: number;
+  preRestoreDirs: number;
+  preRestoreBytes: number;
+  backupUploadsBytes: number;
+  backupImportsBytes: number;
+  backupDrillBytes: number;
+  totalBytes: number;
+  partialError?: string;
+}
+
+export interface CleanupCandidate {
+  /** 相对数据目录的路径；对外只暴露相对路径，前端不得拼绝对路径。 */
+  path: string;
+  isDir: boolean;
+  bytes: number;
+}
+
+export interface CleanupPreview {
+  kind: CleanupKind;
+  items: CleanupCandidate[];
+  itemCount: number;
+  freedBytes: number;
+  skipped?: string[];
+}
+
+export interface CleanTask {
+  ID: number;
+  Kind: string;
+  Status: string;
+  TotalItems: number;
+  ProcessedItems: number;
+  FreedBytes: number;
+  ErrorMessage: string | null;
+  CreatedAt: string;
+  StartedAt: string | null;
+  FinishedAt: string | null;
+}
+
+export interface TrashEntry {
+  ID: number;
+  TaskID: number;
+  Kind: string;
+  OriginalPath: string;
+  TrashPath: string;
+  IsDir: boolean;
+  Bytes: number;
+  Status: string;
+  CreatedAt: string;
+  ResolvedAt: string | null;
+}
+
+export interface TrashConflict {
+  id: number;
+  originalPath: string;
+  reason: string;
+}
+
+export interface MaintenanceJob {
+  name: string;
+  intervalSeconds: number;
+  running: boolean;
+  runs?: number;
+  failures?: number;
+  lastStartedAt?: string | null;
+  lastFinishedAt?: string | null;
+  lastError?: string | null;
+}
+
+/** 存储体检快照（只读）。 */
+export function getStorageHealth(): Promise<StorageHealth> {
+  return request<StorageHealth>("/maintenance/storage-health");
+}
+
+/** 清理预览（**只读**，绝不删东西）。 */
+export function previewCleanup(kind: CleanupKind, keepLast?: number): Promise<CleanupPreview> {
+  return request<CleanupPreview>("/maintenance/cleanup/preview", {
+    method: "POST",
+    body: { kind, ...(keepLast === undefined ? {} : { keepLast }) },
+  });
+}
+
+/** 执行清理：只把目标**移入回收站**，不物理删除。 */
+export function executeCleanup(input: {
+  kind: CleanupKind;
+  items?: string[];
+  keepLast?: number;
+}): Promise<{ taskId: number; status: string }> {
+  return request("/maintenance/cleanup", { method: "POST", body: input });
+}
+
+/** 清理任务历史与进度。 */
+export function listCleanTasks(
+  page = 1,
+  pageSize = 20,
+): Promise<{
+  items: CleanTask[];
+  total: number;
+  page: number;
+  pageSize: number;
+}> {
+  return request("/maintenance/clean-tasks", { query: { page, page_size: pageSize } });
+}
+
+/** 回收站列表（含占用统计）。 */
+export function listTrash(
+  page = 1,
+  pageSize = 20,
+): Promise<{
+  items: TrashEntry[];
+  total: number;
+  stats: { entries: number; bytes: number };
+}> {
+  return request("/maintenance/trash", { query: { page, page_size: pageSize } });
+}
+
+/** 恢复回收站条目（反向操作；目标已存在时跳过并回 conflicts）。 */
+export function restoreTrash(ids: number[]): Promise<{
+  restored: number;
+  conflicts?: TrashConflict[];
+}> {
+  return request("/maintenance/trash/restore", { method: "POST", body: { ids } });
+}
+
+/** 彻底删除回收站条目（**不可逆**）。 */
+export function purgeTrash(ids: number[]): Promise<{ purged: number; freedBytes: number }> {
+  return request("/maintenance/trash/purge", { method: "POST", body: { ids } });
+}
+
+/** 清空回收站（**不可逆**）。 */
+export function purgeAllTrash(): Promise<{ purged: number; freedBytes: number }> {
+  return request("/maintenance/trash/purge-all", { method: "POST" });
+}
+
+/** 维护作业清单。 */
+export function listMaintenanceJobs(): Promise<{ items: MaintenanceJob[] }> {
+  return request("/maintenance/jobs");
+}
+
+/** 手动触发维护作业（**物理删除**，不进回收站）。 */
+export function runMaintenanceJob(name: string): Promise<{ name: string; started: boolean }> {
+  return request(`/maintenance/jobs/${encodeURIComponent(name)}/run`, { method: "POST" });
+}

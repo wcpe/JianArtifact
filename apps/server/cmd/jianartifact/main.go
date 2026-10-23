@@ -338,6 +338,18 @@ func newApplicationHandler(cfg *config.Config, svc *appServices, assets fs.FS) h
 			// 依赖的稳定面。**刻意只读**：仓库删除与 blob 回收不可逆，自动清理会把一次
 			// 误判变成数据丢失，清理仍交给既有作业按明确间隔执行。
 			r.GET("/api/v1/maintenance/storage-health", authMW, apiHandlers.GetStorageHealth)
+			// 定向清理与清理任务队列（仅管理员，非契约端点）。
+			// 执行端点只把目标**移入回收站**，不做物理删除——误点可恢复。
+			r.POST("/api/v1/maintenance/cleanup/preview", authMW, apiHandlers.PreviewCleanup)
+			r.POST("/api/v1/maintenance/cleanup", authMW, apiHandlers.ExecuteCleanup)
+			r.GET("/api/v1/maintenance/clean-tasks", authMW, apiHandlers.ListCleanTasks)
+			r.GET("/api/v1/maintenance/clean-tasks/:id", authMW, apiHandlers.GetCleanTask)
+			// 回收站（仅管理员，非契约端点）：让定向清理可逆。
+			// restore 是反向操作，不做二次防护；purge / purge-all 不可逆，防护在界面上。
+			r.GET("/api/v1/maintenance/trash", authMW, apiHandlers.ListTrash)
+			r.POST("/api/v1/maintenance/trash/restore", authMW, apiHandlers.RestoreTrash)
+			r.POST("/api/v1/maintenance/trash/purge", authMW, apiHandlers.PurgeTrash)
+			r.POST("/api/v1/maintenance/trash/purge-all", authMW, apiHandlers.PurgeAllTrash)
 			// 搜索建议（搜索框下拉候选：包名 + 仓库名）。
 			// 同上为**非契约端点**，不写入 api/openapi.yaml：它只服务前端搜索框，候选形状会随
 			// 包坐标解析口径演进，不是协议客户端依赖的稳定面。权限（管理员搜全部 / 其余

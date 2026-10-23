@@ -63,6 +63,9 @@ type Deps struct {
 	Restart                 RestartController                       // 一键重启（nil 时端点返回 503）
 	SearchIndex             SearchIndexController                   // 搜索索引回填状态与全量重建（nil 时端点返回 503）
 	StorageHealth           StorageHealthController                 // 存储体检快照（只读，nil 时端点返回 503）
+	Cleanup                 CleanupController                       // 定向清理（预览 / 执行，nil 时端点返回 503）
+	CleanTasks              CleanTaskController                     // 清理任务队列只读查询
+	Trash                   TrashController                         // 回收站（恢复 / 彻底删除 / 清空）
 }
 
 // RestartController 是接口层对一键重启能力的最小依赖：同步预检、延迟触发重启动作。
@@ -145,6 +148,9 @@ type Handlers struct {
 	restart                 RestartController            // 一键重启（nil = 未装配）
 	searchIndex             SearchIndexController        // 搜索索引回填状态与全量重建
 	storageHealth           StorageHealthController      // 存储体检（只读，nil = 未装配）
+	cleanup                 CleanupController            // 定向清理
+	cleanTasks              CleanTaskController          // 清理任务队列
+	trash                   TrashController              // 回收站
 }
 
 // StorageHealthController 提供存储体检快照（只读，不做任何清理）。
@@ -195,6 +201,9 @@ func NewHandlers(d Deps) *Handlers {
 		restart:                 d.Restart,
 		searchIndex:             d.SearchIndex,
 		storageHealth:           d.StorageHealth,
+		cleanup:                 d.Cleanup,
+		cleanTasks:              d.CleanTasks,
+		trash:                   d.Trash,
 	}
 }
 
