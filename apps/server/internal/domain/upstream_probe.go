@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// 本文件实现 FR-159 的后台定时探测作业（调度器作业名 upstream-probe）。
+// 本文件实现上游健康的后台定时探测作业（调度器作业名 upstream-probe）。
 //
 // 两条不可动摇的约束（见 docs/specs/0.13.0-upstream-health-history.md）：
 //  1. **探测不得影响断路器状态机**：不调 recordFailure / recordSuccess，因此既不改

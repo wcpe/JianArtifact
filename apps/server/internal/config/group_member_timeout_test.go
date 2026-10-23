@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// TestGroupMemberTimeoutParsing 覆盖 JIAN_GROUP_MEMBER_TIMEOUT 的解析口径（FR-156）。
+// TestGroupMemberTimeoutParsing 覆盖 JIAN_GROUP_MEMBER_TIMEOUT 的解析口径。
 //
 // 本项**无禁用语义**：0 秒确认预算等于「每个成员都立刻超时」，整条 group 读会退化成
 // 不可判定失败，只因一处手误就会让整个 group 仓库不可用。因此缺省 / 非数字 / 负数 /

@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
 )
 
-// 本文件覆盖 FR-156 的装配面：两项配置经 setter 注入后**真的改变运行时行为**。
+// 本文件覆盖两项配置的装配面：两项配置经 setter 注入后**真的改变运行时行为**。
 //
 // 只断言「配置解析对了」不足以证明接线成功——装配层此前从未调用过
 // SetNegativeCacheTTL，负缓存 TTL 实际是运行时改不了的常量，因此这里从
@@ -146,7 +146,7 @@ func TestGroupMemberTimeoutInjectedLongBudget(t *testing.T) {
 	}
 }
 
-// TestGroupMemberTimeoutDefaultUnchanged 钉住默认值不变（3s）：这是 FR-154 定稿的语义，
+// TestGroupMemberTimeoutDefaultUnchanged 钉住默认值不变（3s）：这是两阶段预算定稿的语义，
 // 本 FR 只把数值变可配置，不得改变默认行为。3s 足够宽裕，因此这里可以同时断言
 // 「挂起成员被真实请求 1 次」与「整体在 3s 量级返回」。
 func TestGroupMemberTimeoutDefaultUnchanged(t *testing.T) {

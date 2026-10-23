@@ -22,7 +22,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/upstream"
 )
 
-// 本文件覆盖 FR-154（group 回源预算与落盘预算解耦）的验收用例。
+// 本文件覆盖 group 回源预算与落盘预算解耦的验收用例。
 //
 // 预算模型：group 成员的 3s（groupMemberTimeout）只约束「该成员是否及时给出响应头」，
 // 一旦拿到 2xx 响应头就撤销该预算，剩余落盘预算改由回源整体超时（JIAN_UPSTREAM_TIMEOUT）承担。
@@ -58,7 +58,7 @@ func flushNow(w http.ResponseWriter) {
 // slowArtifactServer 构造「慢制品」上游夹具：立即回 200 响应头并 Flush，
 // 随后按 chunk 分块滴流写 payload，块间 sleep interval。
 //
-// 这正是 FR-154 的现场：响应头秒回（成员确认命中），但整份下载远超 3s 确认预算。
+// 这正是该解耦要解决的现场：响应头秒回（成员确认命中），但整份下载远超 3s 确认预算。
 // 客户端断开（ctx 结束）时立即返回，保证 srv.Close 不被挂起请求拖住。
 func slowArtifactServer(t *testing.T, payload []byte, chunk int, interval time.Duration) (*httptest.Server, *int32) {
 	t.Helper()
@@ -234,7 +234,7 @@ func TestGroupRealMissingStaysFast404(t *testing.T) {
 		t.Fatalf("真实缺失应返回 ErrNotFound，实际：%v", err)
 	}
 	if elapsed >= 3*time.Second {
-		t.Fatalf("真实缺失应在 3s 内返回（FR-110 收益不得退化），实际耗时 %s", elapsed)
+		t.Fatalf("真实缺失应在 3s 内返回（成员确认命中的快速返回不得退化），实际耗时 %s", elapsed)
 	}
 	// 负缓存已写：第二次直接 404，不再探测成员。
 	if _, _, err := svc.Resolve(context.Background(), "g-missing", "missing.jar"); !errors.Is(err, domain.ErrNotFound) {

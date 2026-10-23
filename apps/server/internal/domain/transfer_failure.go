@@ -15,7 +15,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/upstream"
 )
 
-// 本文件实现 FR-158（回源失败原因五分类）里「已拿到响应头之后」的那一半判定。
+// 本文件实现「回源失败原因五分类」里「已拿到响应头之后」的那一半判定。
 //
 // 为什么必须与 classifyUpstreamFailure 分成两个函数（见 docs/specs/0.13.0-upstream-failure-classification.md）：
 // 前者只能拿到 err，无法知道「是否已拿到响应头」，而这两件事的判据完全不同——
@@ -164,7 +164,7 @@ func isConnectionReset(err error) bool {
 
 // logTransferFailure 输出一条传输阶段失败的结构化中文日志（见 docs/specs/0.13.0-upstream-failure-classification.md）。
 //
-// 脱敏与 FR-157 的诊断行同口径：只输出仓库名、路径（控制字符转义 + 截断）、类别、
+// 脱敏与解析失败的诊断行同口径：只输出仓库名、路径（控制字符转义 + 截断）、类别、
 // 已传 / 声明字节、耗时与上游 scheme://host；**绝不**输出凭据、完整上游 URL、
 // 内网地址或请求头。
 func (s *AssetService) logTransferFailure(repoName, path string, verdict upstreamFailureVerdict, transferred, declared int64, elapsed time.Duration) {

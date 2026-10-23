@@ -13,7 +13,7 @@ import (
 )
 
 // 本文件钉住「真实回源请求结束时记一次采样」这条接入（规格 §2.1 / §3.2）：
-// 采样必须复用 FR-158 的判定结果、类别落列正确，且 local_write_failure 与 canceled 不计入。
+// 采样必须复用五分类的判定结果、类别落列正确，且 local_write_failure 与 canceled 不计入。
 //
 // 走的是真实的 proxy 回源链路（Resolve → fetchProxyAsset → upstream 客户端），
 // 不是直接调采样服务——否则「接了线但分类没跟着走」这类缺陷测不出来。

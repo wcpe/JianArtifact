@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// 本文件覆盖 FR-156 在 domain 侧的「0 = 关闭负缓存」语义。
+// 本文件覆盖 domain 侧的「0 = 关闭负缓存」语义。
 //
 // 为什么用内部测试（package domain）而非 domain_test：关闭语义的关键证据是
 // 「map 不再增长」，而 m 是不导出字段——只从 hit/add 的外部行为看，关闭态与
@@ -94,7 +94,7 @@ func TestNegativeCacheExpiryStillWorks(t *testing.T) {
 }
 
 // TestNegativeCacheClosedKeepsMaxEntries 钉住「TTL 关闭」与「容量上限」互不干扰
-// （FR-157 的 maxEntries 与 FR-156 的 TTL 是两件事，不得互相覆盖）：
+// （容量上限 maxEntries 与 TTL 是两件事，不得互相覆盖）：
 // 关闭 TTL 不改变上限；设置上限也不重新打开负缓存。
 func TestNegativeCacheClosedKeepsMaxEntries(t *testing.T) {
 	c := newNegativeCache()

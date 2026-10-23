@@ -10,14 +10,14 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// 本文件实现 FR-159（上游健康历史）的领域层：
+// 本文件实现上游健康历史的领域层：
 //   - UpstreamHealthRecorder 接口（领域定义、装配注入、nil 表示不记录，对齐 RejectionRecorder 范式）；
 //   - UpstreamHealthService：把真实请求与后台探测的采样在进程内小批量累积后刷盘。
 //
-// 与 FR-114 的分工：那里回答「此刻上游通不通」（六态内存态），这里回答
+// 与「当前连接状态」的分工：那里回答「此刻上游通不通」（六态内存态），这里回答
 // 「过去一段时间通不通、失败分别是什么原因」（持久化时间序列）。两者不互相替代。
 //
-// 与 FR-158 的分工：那里判定失败属于哪一类，这里**只消费**它的结论，绝不重新判一次——
+// 与「回源失败原因五分类」的分工：那里判定失败属于哪一类，这里**只消费**它的结论，绝不重新判一次——
 // 两处判定必然漂移（见 docs/specs/0.13.0-upstream-health-history.md）。
 
 // UpstreamHealthRecorder 把一批采样增量累加进分钟桶，供持久化实现注入。
@@ -74,7 +74,7 @@ func NewUpstreamHealthService(recorder UpstreamHealthRecorder) *UpstreamHealthSe
 // Enabled 报告采样是否已接线（未接线时调用方可以完全跳过采样构造，省掉无用的时间计算）。
 func (s *UpstreamHealthService) Enabled() bool { return s != nil && s.recorder != nil }
 
-// upstreamHealthCategoryToColumn 把 FR-158 的可观测类别映射到分钟桶的统计列。
+// upstreamHealthCategoryToColumn 把回源失败的可观测类别映射到分钟桶的统计列。
 //
 // 这是**唯一的映射点**：采样写入不做第二套判定，只在分类结果上落列。
 // 返回值 collected=false 表示该类别**不进入任何列**：
@@ -163,7 +163,7 @@ func (s *UpstreamHealthService) recordUpstreamSample(repoID int64, source, categ
 }
 
 // RecordRequest 记录一次**真实回源请求**的采样结果，供回源路径调用。
-// category 直接取 FR-158 判定结果的 category（失败时）或空串（成功时）。
+// category 直接取五分类判定结果的 category（失败时）或空串（成功时）。
 // 本方法只做内存合并，不碰磁盘，因此可以安全地放在回源结束后的收尾位置。
 func (s *UpstreamHealthService) RecordRequest(repoID int64, category string, latency time.Duration) {
 	s.recordUpstreamSample(repoID, repository.UpstreamHealthSourceRequest, category, latency)
@@ -249,7 +249,7 @@ func (s *UpstreamHealthService) Start(ctx context.Context) {
 	}()
 }
 
-// upstreamProbeFailCategory 把一次探测失败归类为 FR-158 的可观测类别。
+// upstreamProbeFailCategory 把一次探测失败归类为回源失败的可观测类别。
 //
 // 复用既有判定而不是另造一套：
 //   - 拿到 status 但与既有 shouldBlockStatus 一致地视为失败（5xx / 401 / 403）→ unreachable，

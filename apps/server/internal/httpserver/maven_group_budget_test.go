@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// TestMavenGroupConfirmedHitStagingTimeoutIs504 是 FR-154 在协议层的验收断言：
+// TestMavenGroupConfirmedHitStagingTimeoutIs504 是「group 回源预算与落盘预算解耦」在协议层的验收断言：
 // 上游立即回 200 响应头（成员确认命中）但 body 长期滴流，落盘阶段撞上回源整体超时后，
 // maven handler 必须回 504（不是 404「制品不存在」，也不是 500「内部错误」）。
 //

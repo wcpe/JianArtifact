@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// 本文件钉住 FR-159 领域层的两条硬性要求（规格 §5.1）：
+// 本文件钉住上游健康历史领域层的两条硬性要求（规格 §5.1）：
 //   - 探测**不得**改变断路器状态、不得产生 block 事件；
 //   - 只探测 type=proxy 且 online=true 的仓库（hosted / group / offline 一律跳过）。
 //
@@ -62,7 +62,7 @@ func (r *countingBlockRecorder) count() int {
 }
 
 // 探测失败后：断路器 Status / BlockedUntil / 退避档位**均不变**，且不产生 block 事件。
-// 这是 FR-159 最关键的一条约束——探测是观测，不是判定。
+// 这是本设计最关键的一条约束——探测是观测，不是判定。
 func TestUpstreamProbeDoesNotTouchCircuitBreaker(t *testing.T) {
 	t.Parallel()
 	// 上游永远返回 500：探测必然失败。

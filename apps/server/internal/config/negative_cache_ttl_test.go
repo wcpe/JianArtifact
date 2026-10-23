@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// TestNegativeCacheTTLParsing 覆盖 JIAN_NEGATIVE_CACHE_TTL 的解析口径（FR-156）。
+// TestNegativeCacheTTLParsing 覆盖 JIAN_NEGATIVE_CACHE_TTL 的解析口径。
 //
 // 本项**有禁用语义**：负缓存是纯性能优化，关掉它最坏只是多几次回源，而排查
 // 「制品明明有却报 404」时运维需要一个不看记忆、只跑真实链路的开关。因此显式 0

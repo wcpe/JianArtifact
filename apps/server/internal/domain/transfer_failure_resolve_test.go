@@ -23,7 +23,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/upstream"
 )
 
-// 本文件覆盖 FR-158（回源失败原因五分类）的**端到端**验收（spec §5.1）：
+// 本文件覆盖「回源失败原因五分类」的**端到端**验收（spec §5.1）：
 // 用真实上游夹具制造「慢」「没响应」「中途断」「本地写失败」四类现场，
 // 断言类别、指标事件、阻断结论、负缓存与日志。
 //
@@ -57,7 +57,7 @@ func newFR158Service(t *testing.T) (*domain.AssetService, *repository.RepoRepo, 
 	return svc, repos, spy
 }
 
-// trickleBodyServer 构造「响应头秒回、正文滴流」的上游夹具（FR-158 的 slow_rate 现场）：
+// trickleBodyServer 构造「响应头秒回、正文滴流」的上游夹具（slow_rate 的现场）：
 // 立即回 200 + 声明 declared 字节，随后每 interval 写 chunk 字节。
 //
 // 客户端超时（或断开）后立即返回，保证 srv.Close 不被挂起请求拖住。
@@ -249,7 +249,7 @@ func TestResolveProxyNoResponseCategories(t *testing.T) {
 		if !errors.Is(resolveErr, domain.ErrUpstreamTimeout) {
 			t.Fatalf("上游不响应应为 ErrUpstreamTimeout（对外 504），实际：%v", resolveErr)
 		}
-		// 拿头之前的超时沿用既有 upstream_timeout 事件语义（FR-155 不变）。
+		// 拿头之前的超时沿用既有 upstream_timeout 事件语义（既有语义不变）。
 		if reasons := spy.reasons(); len(reasons) != 1 || reasons[0] != "upstream_timeout" {
 			t.Fatalf("应只记录一次 upstream_timeout，实际 %v", reasons)
 		}

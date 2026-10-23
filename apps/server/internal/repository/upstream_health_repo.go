@@ -7,7 +7,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
 )
 
-// 本文件实现 FR-159（上游健康历史）的持久化层：分钟桶的累加写、按仓库/时间窗读、保留清理。
+// 本文件实现上游健康历史的持久化层：分钟桶的累加写、按仓库/时间窗读、保留清理。
 //
 // 分层口径与 OperationsObservabilityRepo 一致：读写原语在 repository 层，
 // 「什么时候记一次样本」「采样是否需要异步批量」这类编排留在 domain 层。
@@ -24,7 +24,7 @@ const (
 	UpstreamHealthSourceProbe = "probe"
 )
 
-// 分钟桶里统计的失败类别列名（与 FR-158 的五分类对齐）。
+// 分钟桶里统计的失败类别列名（与回源失败的五分类对齐）。
 // 只有这四类计入列；local_write_failure（本地故障）与 canceled（正常取消）
 // **不进入任何列**——它们不是上游健康信号（规格 §2.2）。
 const (

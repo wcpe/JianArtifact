@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// 本文件覆盖 FR-159 查询端点的验收项（规格 §2.3 与 §5.1）：
+// 本文件覆盖上游健康历史查询端点的验收项（规格 §2.3 与 §5.1）：
 // 非 proxy 返回 400、未知仓库 404、未接线 503、非管理员 403、按仓库隔离、
 // 空态 connectivity 为 null（而不是 0 或 100%）。
 

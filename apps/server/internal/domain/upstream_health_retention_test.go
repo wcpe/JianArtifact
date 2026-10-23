@@ -7,7 +7,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
-// 本文件钉住 FR-159 的保留策略（规格 §2.2 与 §5.1）：
+// 本文件钉住上游健康历史的保留策略（规格 §2.2 与 §5.1）：
 //   - 上游健康历史保留 30 天，由 storage-cleanup 作业**顺带清理**（不新增作业）；
 //   - 清理只针对 upstream_health_minute 一张表，不误删 host_metric_minute 等其它表。
 //

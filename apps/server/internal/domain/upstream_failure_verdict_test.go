@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/upstream"
 )
 
-// 本文件覆盖 FR-155 的核心判据：回源失败的「慢 / 不可达」分类与收口。
+// 本文件覆盖「慢 / 不可达」分类的核心判据：回源失败的「慢 / 不可达」分类与收口。
 // 分类只有一处实现（classifyUpstreamFailure），由 fetchProxyAsset 与 ResolveOCIProxy 共用，
 // 因此这里直接对判定函数与收口函数做表驱动断言，避免两个调用点各写一套判定后漂移。
 

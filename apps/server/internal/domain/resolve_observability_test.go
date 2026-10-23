@@ -15,7 +15,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
 )
 
-// 本文件覆盖 FR-157 的可观测契约：解析失败结论指标、uncertain 诊断行（含脱敏）、
+// 本文件覆盖代理解析可观测契约：解析失败结论指标、uncertain 诊断行（含脱敏）、
 // 负缓存容量上限与查看/清理能力。
 //
 // 组织约定：用例分两类。
@@ -250,7 +250,7 @@ func diagnosticLines(logs string) []string {
 	return out
 }
 
-// --- 诊断行脱敏（NFR-06）---
+// --- 诊断行脱敏 ---
 
 // 控制字符必须被转义：路径来自客户端，未转义的换行会伪造出一条诊断行（日志注入）。
 func TestResolveDiagnosticEscapesControlCharacters(t *testing.T) {
@@ -483,7 +483,7 @@ func TestNegativeCacheSnapshotFilters(t *testing.T) {
 	}
 }
 
-// --- 负缓存容量上限（FR-157 前置改动）---
+// --- 负缓存容量上限 ---
 
 // 达到上限后淘汰写入时间最早的一条，条目数不超过上限。
 func TestNegativeCacheMaxEntriesEvictsOldest(t *testing.T) {

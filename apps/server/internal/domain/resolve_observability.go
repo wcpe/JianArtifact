@@ -26,7 +26,7 @@ import (
 //  2. **采样点唯一**。recordResolveFailure 会在递归层、group 成员层被多次调用，且语义是
 //     「一旦 uncertain 就不被覆盖」。因此指标累加与诊断行只在**顶层解析出口**做一次；
 //     绝不在 recordResolveFailure 或成员层里顺手加，否则一次 group 请求会被计成多次。
-//  3. **不改返回码、超时、阻断语义**（那些属 FIX-1 / FR-154 / FR-155）。
+//  3. **不改返回码、超时、阻断语义**（那些属已定的错误语义与预算划分）。
 
 // 成员失败类别闭集。全部取自既有代码分支的判定结果，不新造分类：
 //   - 回源侧：timeout（超时）、gone（410 下架）、upstream_error（其余回源失败）；
@@ -151,7 +151,7 @@ func (s *AssetService) observeResolveOutcome(ctx context.Context, diag *resolveD
 
 // logUncertainResolve 输出一条「解析不可判定」诊断行。一个请求一行，不按成员多行。
 //
-// 脱敏（NFR-06）：只输出仓库名、路径（控制字符转义 + 截断）、成员名与类别、
+// 脱敏：只输出仓库名、路径（控制字符转义 + 截断）、成员名与类别、
 // 上游 scheme://host 与耗时；**绝不**输出凭据引用名、Authorization、上游 URL 的
 // path/query、用户名或请求头。
 func (s *AssetService) logUncertainResolve(repoName, path string, diag *resolveDiagnostics, started time.Time, err error) {

@@ -8,7 +8,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/scheduler"
 )
 
-// registerUpstreamProbeJob 把「上游健康定时探测」注册为调度器作业（FR-159）。
+// registerUpstreamProbeJob 把「上游健康定时探测」注册为调度器作业。
 //
 // 间隔 <= 0 或探测函数为空时不注册（禁用语义，对齐 JIAN_UPSTREAM_PROBE_INTERVAL=0）。
 // 作业名固定为 upstream-probe：它同时是维护作业清单（/admin/maintenance/jobs）里

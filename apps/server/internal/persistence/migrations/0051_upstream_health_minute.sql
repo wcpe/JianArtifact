@@ -1,18 +1,18 @@
--- 0051：上游健康历史（FR-159）的分钟级采样表 upstream_health_minute
+-- 0051：上游健康历史的分钟级采样表 upstream_health_minute
 -- 引入版本：未开窗（0.11.0 之后的下一窗口）
 -- 影响：新增表 upstream_health_minute 与索引 idx_upstream_health_repo_bucket；不改动任何既有表
 -- 数据处理：无历史回填——新表从本迁移生效时刻起才开始积累，不伪造历史（规格 §1.3「不做历史数据回填」）
 -- 回滚：不支持 down migration；需要恢复升级前备份。本表只承载新增的观测数据，
 --       直接 DROP TABLE upstream_health_minute 与 DROP INDEX idx_upstream_health_repo_bucket
 --       即可回到迁移前的结构，不影响任何既有功能读取
--- 相关：FR-159 上游健康历史（docs/specs/0.13.0-upstream-health-history.md）、
---       FR-114 当前连接状态展示、FR-158 回源失败原因五分类、storage-cleanup 周期作业（30 天保留）
+-- 相关：上游健康历史（docs/specs/0.13.0-upstream-health-history.md）、
+--       当前连接状态展示、回源失败原因五分类、storage-cleanup 周期作业（30 天保留）
 --
--- 背景：FR-114 交付的「上游当前连接状态」是**内存态**——重启归零，只有一个「此刻」，
+-- 背景：既有的「上游当前连接状态」是**内存态**——重启归零，只有一个「此刻」，
 -- 没有「过去一小时连通率多少」「昨天挂过几次、每次多久恢复」。断路器侧的
 -- jianartifact_upstream_block_events_total 是累计计数器，没有时间维度，无法还原趋势。
 -- 本表把「多次请求的可连接性与健康」持久化成时间序列，作为当前状态的**历史补充**
--- （不替换、不改动 FR-114 的六态展示）。
+-- （不替换、不改动既有的六态展示）。
 --
 -- 两路来源写入同一张表，用 source 区分：
 --   - source='request'：每次真实回源请求结束时记一次，反映**真实用户可用性**；
@@ -25,7 +25,7 @@
 --     因为 local_write_failure（本地磁盘故障）与 canceled（客户端断连 / 同组落选 / 停机）
 --     **不计入任何列**——前者不是上游故障，后者是正常的请求生命周期终点，
 --     两者都不是上游健康信号（规格 §2.2）。
---   - 失败列与 FR-158 的五分类对齐（classifyUpstreamFailure / classifyTransferFailure 的
+--   - 失败列与回源失败的五分类对齐（classifyUpstreamFailure / classifyTransferFailure 的
 --     category 取值），采样处不再独立判定一次——两处判定必然漂移。
 --   - avg_latency_ms / max_latency_ms 只在**成功样本**上统计；无成功样本时为 NULL，
 --     不写 0：0ms 是一个不存在的延迟读数，会在趋势图上伪造「极快」的假象。

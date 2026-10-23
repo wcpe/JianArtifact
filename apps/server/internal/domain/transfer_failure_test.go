@@ -25,7 +25,7 @@ type logSinkFunc func([]byte) (int, error)
 
 func (f logSinkFunc) Write(p []byte) (int, error) { return f(p) }
 
-// 本文件覆盖 FR-158（回源失败原因五分类）的**判定层**用例：
+// 本文件覆盖「回源失败原因五分类」的**判定层**用例：
 // countingReader、declaredContentLength、classifyTransferFailure 的类别表、
 // 以及「三类传输失败都不阻断」的收口结论。
 //

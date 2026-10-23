@@ -1,6 +1,6 @@
-// 仓库详情页的「上游健康」区块（FR-159）。
+// 仓库详情页的「上游健康」区块。
 //
-// 定位：它是 FR-114「当前连接状态」的**历史补充**，不替代那块六态徽章——
+// 定位：它是「当前连接状态」的**历史补充**，不替代那块六态徽章——
 // 上面回答「此刻通不通」，这里回答「过去一段时间通不通、失败分别是什么原因」。
 //
 // 四条界面约束（规格 §2.4，逐条对应实现）：
@@ -52,7 +52,7 @@ const RECENT_TABLE_MIN_WIDTH = 520;
 /** 窄屏趋势图最小宽度：低于它时折线会挤成噪声，改为横向滚动查看。 */
 const TREND_MIN_WIDTH = 520;
 
-/** 失败原因在分布里的展示顺序（与 FR-158 的分类一一对应）。 */
+/** 失败原因在分布里的展示顺序（与回源失败分类一一对应）。 */
 const FAILURE_COLUMNS = [
   { key: "timeout", labelKey: "repoDetail.upstreamHealthFailureTimeout", color: "orange" },
   { key: "unreachable", labelKey: "repoDetail.upstreamHealthFailureUnreachable", color: "red" },
