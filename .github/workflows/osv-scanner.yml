@@ -28,7 +28,7 @@ permissions:
 jobs:
   scan:
     name: osv-scanner 全量扫描
-    uses: "google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.6.0"
+    uses: "google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.7.0"
     with:
       # 递归扫描整个仓库：覆盖前端 workspace 与后端 Go 模块。
       scan-args: |-
