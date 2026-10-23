@@ -333,6 +333,11 @@ func newApplicationHandler(cfg *config.Config, svc *appServices, assets fs.FS) h
 			// 引入对外承诺。理由详见 internal/api/search_index_handlers.go 文件头。
 			r.GET("/api/v1/search/index", authMW, apiHandlers.GetSearchIndexStatus)
 			r.POST("/api/v1/search/index/rebuild", authMW, apiHandlers.RebuildSearchIndex)
+			// 存储体检（只读，仅管理员）。同上为**非契约端点**：它服务运维手动排障，
+			// 返回「此刻磁盘上可回收的东西有多少」，形状随清理能力演进，不属于协议客户端
+			// 依赖的稳定面。**刻意只读**：仓库删除与 blob 回收不可逆，自动清理会把一次
+			// 误判变成数据丢失，清理仍交给既有作业按明确间隔执行。
+			r.GET("/api/v1/maintenance/storage-health", authMW, apiHandlers.GetStorageHealth)
 			// 搜索建议（搜索框下拉候选：包名 + 仓库名）。
 			// 同上为**非契约端点**，不写入 api/openapi.yaml：它只服务前端搜索框，候选形状会随
 			// 包坐标解析口径演进，不是协议客户端依赖的稳定面。权限（管理员搜全部 / 其余

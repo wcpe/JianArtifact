@@ -62,6 +62,7 @@ type Deps struct {
 	MaintenanceJobs         MaintenanceJobController                // 维护作业清单与手动触发（nil 时端点返回 503）
 	Restart                 RestartController                       // 一键重启（nil 时端点返回 503）
 	SearchIndex             SearchIndexController                   // 搜索索引回填状态与全量重建（nil 时端点返回 503）
+	StorageHealth           StorageHealthController                 // 存储体检快照（只读，nil 时端点返回 503）
 }
 
 // RestartController 是接口层对一键重启能力的最小依赖：同步预检、延迟触发重启动作。
@@ -143,6 +144,14 @@ type Handlers struct {
 	maintenanceJobs         MaintenanceJobController     // 维护作业清单与手动触发
 	restart                 RestartController            // 一键重启（nil = 未装配）
 	searchIndex             SearchIndexController        // 搜索索引回填状态与全量重建
+	storageHealth           StorageHealthController      // 存储体检（只读，nil = 未装配）
+}
+
+// StorageHealthController 提供存储体检快照（只读，不做任何清理）。
+//
+// 与 SearchIndexController 同一抽象风格：不依赖具体领域类型，便于测试注入桩。
+type StorageHealthController interface {
+	Snapshot() (domain.StorageHealth, error)
 }
 
 // NewHandlers 构造 Handlers。
@@ -185,6 +194,7 @@ func NewHandlers(d Deps) *Handlers {
 		maintenanceJobs:         d.MaintenanceJobs,
 		restart:                 d.Restart,
 		searchIndex:             d.SearchIndex,
+		storageHealth:           d.StorageHealth,
 	}
 }
 
