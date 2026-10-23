@@ -178,3 +178,15 @@ export type DiffCounts = Schemas["DiffCounts"];
 export type BackupDiff = Schemas["BackupDiff"];
 export type BackupDiffDetailItem = Schemas["BackupDiffDetailItem"];
 export type BackupDiffDetailPage = Schemas["BackupDiffDetailPage"];
+
+// —— 上游健康历史——
+/** 采样来源：request（真实回源请求）/ probe（后台定时探测）。两者是独立序列，不可合并平均。 */
+export type UpstreamHealthSourceValue = Schemas["UpstreamHealthSource"];
+/** 一个分钟桶的聚合采样点。 */
+export type UpstreamHealthPoint = Schemas["UpstreamHealthPoint"];
+/** 整窗汇总：connectivity 在 samples=0 时为 null（「尚无采样」不等于 100%）。 */
+export type UpstreamHealthSummary = Schemas["UpstreamHealthSummary"];
+/** 时间序列 + 按来源分组的汇总。 */
+export type UpstreamHealthSeries = Schemas["UpstreamHealthSeries"];
+/** 最近采样明细（分钟桶摘要，非逐请求日志）。 */
+export type UpstreamHealthRecent = Schemas["UpstreamHealthRecent"];

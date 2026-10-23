@@ -44,8 +44,10 @@ const autoBlockInitial = 40 * time.Second
 // probeTimeout 是单次上游 HEAD 探测的超时；后台线程等待业务探测结论也以它为上限。
 const probeTimeout = 5 * time.Second
 
-// UpstreamBlockReason 是上游断路器阻止事件的**闭集枚举**取值。
-// 该集合与 docs/specs/0.12.0-upstream-circuit-breaker.md 的 reason 标签取值一一对应：
+// UpstreamBlockReason 是上游断路器判定事件的**闭集枚举**取值。
+// 该集合与 docs/specs/0.12.0-upstream-circuit-breaker.md 的 reason 标签取值一一对应，
+// upstream_timeout 由 docs/specs/0.13.0-upstream-slow-not-unreachable.md 引入，
+// slow_transfer / transfer_aborted 由 docs/specs/0.13.0-upstream-failure-classification.md 引入：
 // **新增取值必须先改规格并同步测试与 OPERATIONS.md**，不得在实现期就地塞入自由字符串
 // （自由字符串会把无界值带进指标标签，违反 ARCHITECTURE.md 的标签基数受控约定）。
 type UpstreamBlockReason string
@@ -55,6 +57,19 @@ const (
 	UpstreamBlockReasonProbeFailed UpstreamBlockReason = "probe_failed"
 	// UpstreamBlockReasonUpstreamError 回源失败触发（或延长）自动阻止。
 	UpstreamBlockReasonUpstreamError UpstreamBlockReason = "upstream_error"
+	// UpstreamBlockReasonTimeout 回源超时被判定为「不构成不可达证据」的**事件**类别。
+	// 该取值**只记事件、不阻断**：它出现表示「发生过一次被正确豁免的慢回源」，
+	// 不是「发生了仓库级阻断」——超时既不改状态，也不推进退避。
+	UpstreamBlockReasonTimeout UpstreamBlockReason = "upstream_timeout"
+	// UpstreamBlockReasonSlowTransfer 已拿到响应头、有传输进展但未在回源超时内传完
+	// （带宽不足）。由 docs/specs/0.13.0-upstream-failure-classification.md 引入：
+	// 与 upstream_timeout 分开，是为了让「该调超时 / 等带宽」与「上游没响应」可区分。
+	// 同样**只记事件、不阻断**。
+	UpstreamBlockReasonSlowTransfer UpstreamBlockReason = "slow_transfer"
+	// UpstreamBlockReasonTransferAborted 已拿到响应头、传输中途被中断（连接重置 /
+	// 提前 EOF）。处置方向与 slow_transfer 完全不同（查上游主动断连 / 中间设备），
+	// 因此单列。同样**只记事件、不阻断**。
+	UpstreamBlockReasonTransferAborted UpstreamBlockReason = "transfer_aborted"
 )
 
 // UpstreamBlockRecorder 记录一次上游断路器阻止事件，供进程内指标累加。
@@ -121,7 +136,8 @@ func (h *proxyHealth) setBlockRecorder(r UpstreamBlockRecorder) {
 	h.recorder = r
 }
 
-// recordBlockEvent 累加一次阻止事件计数；未接线时静默忽略。
+// recordBlockEvent 累加一次断路器**判定事件**计数（该族按类目记录判定结果，
+// 其中 upstream_timeout 属「被判为不阻断」的类别）；未接线时静默忽略。
 // 刻意在**不持 h.mu** 的情况下调用：记录器自带锁，避免与指标渲染路径形成锁序纠缠。
 func (h *proxyHealth) recordBlockEvent(reason UpstreamBlockReason) {
 	h.mu.Lock()
@@ -247,9 +263,13 @@ func (h *proxyHealth) beginUpstream(repoID int64) bool {
 }
 
 // releaseProbe 释放 HALF_OPEN 的探测名额并收口本轮，但**不改动状态与退避窗口**。
-// 供「上游可达但资源缺失」的收口路径调用（404/410：现有语义不据此改状态，
-// 以免把上游可达误报成可用或不可用），避免名额被占住让后续请求整轮被无限封锁。
-// 对非半开路径（roundDone 为空）是幂等空操作。
+// 供「本项失败不构成状态判据」的收口路径调用：
+//   - 「上游可达但资源缺失」（404/410）：现有语义不据此改状态，以免把上游可达
+//     误报成可用或不可用；
+//   - 「回源超时」：慢不构成不可达证据，既不改状态也不推进退避。
+//
+// 两类都不应占着名额，否则后续请求会在 probeInFlight 处被无限快速失败——
+// 那本身就会复现「整仓不可用」。对非半开路径（roundDone 为空）是幂等空操作。
 func (h *proxyHealth) releaseProbe(repoID int64) {
 	h.mu.Lock()
 	defer h.mu.Unlock()

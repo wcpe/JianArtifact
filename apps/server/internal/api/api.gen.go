@@ -1190,6 +1190,24 @@ func (e UpdateUserRequestStatus) Valid() bool {
 	}
 }
 
+// Defines values for UpstreamHealthSource.
+const (
+	UpstreamHealthSourceProbe   UpstreamHealthSource = "probe"
+	UpstreamHealthSourceRequest UpstreamHealthSource = "request"
+)
+
+// Valid indicates whether the value is a known member of the UpstreamHealthSource enum.
+func (e UpstreamHealthSource) Valid() bool {
+	switch e {
+	case UpstreamHealthSourceProbe:
+		return true
+	case UpstreamHealthSourceRequest:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for UsageSnippetGroup.
 const (
 	UsageSnippetGroupAuth    UsageSnippetGroup = "auth"
@@ -1313,6 +1331,24 @@ func (e DownloadGroupByParam) Valid() bool {
 	case DownloadGroupByParamFamily:
 		return true
 	case DownloadGroupByParamIp:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UpstreamHealthSourceParam.
+const (
+	UpstreamHealthSourceParamProbe   UpstreamHealthSourceParam = "probe"
+	UpstreamHealthSourceParamRequest UpstreamHealthSourceParam = "request"
+)
+
+// Valid indicates whether the value is a known member of the UpstreamHealthSourceParam enum.
+func (e UpstreamHealthSourceParam) Valid() bool {
+	switch e {
+	case UpstreamHealthSourceParamProbe:
+		return true
+	case UpstreamHealthSourceParamRequest:
 		return true
 	default:
 		return false
@@ -1532,6 +1568,24 @@ func (e GetDownloadTrendGroupedParamsGroupBy) Valid() bool {
 	case GetDownloadTrendGroupedParamsGroupByFamily:
 		return true
 	case GetDownloadTrendGroupedParamsGroupByIp:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GetRepositoryUpstreamHealthParamsSource.
+const (
+	GetRepositoryUpstreamHealthParamsSourceProbe   GetRepositoryUpstreamHealthParamsSource = "probe"
+	GetRepositoryUpstreamHealthParamsSourceRequest GetRepositoryUpstreamHealthParamsSource = "request"
+)
+
+// Valid indicates whether the value is a known member of the GetRepositoryUpstreamHealthParamsSource enum.
+func (e GetRepositoryUpstreamHealthParamsSource) Valid() bool {
+	switch e {
+	case GetRepositoryUpstreamHealthParamsSourceProbe:
+		return true
+	case GetRepositoryUpstreamHealthParamsSourceRequest:
 		return true
 	default:
 		return false
@@ -3014,6 +3068,48 @@ type MigrationTaskList struct {
 // MigrationTaskStatus defines model for MigrationTaskStatus.
 type MigrationTaskStatus string
 
+// NegativeCacheItem 单条负缓存条目。`repositoryId` + `path` 唯一确定条目，因此无需额外 id。
+type NegativeCacheItem struct {
+	// Path 制品路径（原样；控制字符已转义）。
+	Path string `json:"path"`
+
+	// RemainingSeconds 剩余有效期（秒）；到 0 即失效。
+	RemainingSeconds int64 `json:"remainingSeconds"`
+
+	// Repository 仓库名（由仓库表补全）；仓库已被删除时缺省。
+	Repository *string `json:"repository,omitempty"`
+
+	// RepositoryId 写入该条目的仓库 ID。
+	RepositoryId int64 `json:"repositoryId"`
+
+	// WrittenAt 条目写入时间。
+	WrittenAt time.Time `json:"writtenAt"`
+}
+
+// NegativeCachePurgeResult 负缓存清理结果；`removed` 只统计仍然有效的条目（已过期的条目不计数）。
+type NegativeCachePurgeResult struct {
+	// Removed 实际删除的有效条目数。
+	Removed int64 `json:"removed"`
+}
+
+// NegativeCacheSummary 404 负缓存的只读快照（纯内存，重启即清）。
+//
+// `total` 是**过滤前**的有效条目总数（清理过期后统计）：带 `repo` / `path_prefix`
+// 过滤时它不变，用途是让人知道「全量有多大」，而不是「这一页有多大」。
+type NegativeCacheSummary struct {
+	// Items 过滤后按写入时间升序的前 `limit` 条。
+	Items []NegativeCacheItem `json:"items"`
+
+	// MaxEntries 条目数上限；达到上限后写入会先清理过期条目，仍满则淘汰写入最早的一条。
+	MaxEntries int64 `json:"maxEntries"`
+
+	// Total 过滤前的有效条目总数（清理过期后统计）。
+	Total int64 `json:"total"`
+
+	// TtlSeconds 当前负缓存 TTL（秒）。
+	TtlSeconds int64 `json:"ttlSeconds"`
+}
+
 // ObservabilityBucket defines model for ObservabilityBucket.
 type ObservabilityBucket string
 
@@ -3453,6 +3549,115 @@ type UpdateUserRequestRole string
 // UpdateUserRequestStatus defines model for UpdateUserRequest.Status.
 type UpdateUserRequestStatus string
 
+// UpstreamHealthPoint 一个分钟桶的聚合采样点。
+type UpstreamHealthPoint struct {
+	// Aborted 传输中途被中断的样本数（对应  的 transfer_aborted）。
+	Aborted int64 `json:"aborted"`
+
+	// AvgLatencyMs 平均耗时（毫秒），只统计成功样本。无成功样本时显式为 null（不是 0）。
+	AvgLatencyMs *int64 `json:"avgLatencyMs"`
+
+	// BucketStart 分钟桶起点（UTC，格式 `YYYY-MM-DD HH:MM:00`，与 `host_metric_minute` 同口径）。
+	// 前端按浏览器时区渲染（对齐 ）。
+	BucketStart string `json:"bucketStart"`
+
+	// MaxLatencyMs 最大耗时（毫秒），只统计成功样本。无成功样本时显式为 null（不是 0）。
+	MaxLatencyMs *int64 `json:"maxLatencyMs"`
+
+	// Ok 成功样本数（含「上游可达但资源不存在」的 404/410，它们证明连通性）。
+	Ok int64 `json:"ok"`
+
+	// Samples 该分钟内的样本总数。0 只可能出现在汇总里，不会出现在时间序列的桶上。
+	Samples int64 `json:"samples"`
+
+	// Slow 传输过慢的样本数（对应  的 slow_rate）。
+	Slow int64 `json:"slow"`
+
+	// Source 采样来源。`request` 表示真实回源请求（反映真实用户可用性）；
+	// `probe` 表示后台定时 HEAD 探测（补齐无流量时的空窗）。
+	// 两者是**独立序列**，连通率必须分别计算，不能合并平均。
+	Source UpstreamHealthSource `json:"source"`
+
+	// Timeout 未响应的样本数（对应  的 no_response）。
+	Timeout int64 `json:"timeout"`
+
+	// Unreachable 不可达的样本数（对应  的 unreachable：连接/DNS/TLS 失败、上游 5xx/401/403）。
+	Unreachable int64 `json:"unreachable"`
+}
+
+// UpstreamHealthRecent defines model for UpstreamHealthRecent.
+type UpstreamHealthRecent struct {
+	// Items 最近若干个分钟桶，按时间倒序。**同分钟内多次请求只有一行聚合摘要**——
+	// 这是本版本明确采用的保守口径，不是逐请求日志（见端点 description）。
+	Items []UpstreamHealthPoint `json:"items"`
+
+	// Repository 仓库名。
+	Repository string `json:"repository"`
+}
+
+// UpstreamHealthSeries defines model for UpstreamHealthSeries.
+type UpstreamHealthSeries struct {
+	// From 实际生效的窗口起点（回显解析后的值）。
+	From *time.Time `json:"from"`
+
+	// Points 按 (source, bucketStart) 升序的采样点。`request` 与 `probe` 各自成序列，
+	// 同一分钟可能出现两行（各一行）。空数组表示窗口内**没有任何采样**。
+	Points []UpstreamHealthPoint `json:"points"`
+
+	// Repository 仓库名（回显请求路径里的名字，便于调用方对齐）。
+	Repository string `json:"repository"`
+
+	// Summaries 按来源分组的汇总（`request` / `probe` 键）。只包含窗口内实际出现过的来源；
+	// 请求指定 `source` 时仅含该来源。缺失某个键表示该来源在窗口内没有采样，
+	// 调用方不得把它当作「连通率 100%」。
+	Summaries map[string]UpstreamHealthSummary `json:"summaries"`
+
+	// To 实际生效的窗口终点（不包含）。
+	To *time.Time `json:"to"`
+}
+
+// UpstreamHealthSource 采样来源。`request` 表示真实回源请求（反映真实用户可用性）；
+// `probe` 表示后台定时 HEAD 探测（补齐无流量时的空窗）。
+// 两者是**独立序列**，连通率必须分别计算，不能合并平均。
+type UpstreamHealthSource string
+
+// UpstreamHealthSummary 整窗汇总。`connectivity` 在 `samples=0` 时为 null——「尚无采样」与「100% 健康」
+// 是两件不同的事，用 0 或 100 代替任一方都会误导。
+type UpstreamHealthSummary struct {
+	// Aborted 传输中断样本总数。
+	Aborted int64 `json:"aborted"`
+
+	// AvgLatencyMs 窗口内成功样本的加权平均耗时（毫秒）；无成功样本时显式为 null。
+	AvgLatencyMs *int64 `json:"avgLatencyMs"`
+
+	// Connectivity 连通率（0~1，= ok ÷ samples）。`samples=0` 时**显式为 null**（不是 0、也不是 1），调用方必须按「尚无采样」展示。
+	Connectivity *float64 `json:"connectivity"`
+
+	// Failed 四类失败之和（= timeout + unreachable + slow + aborted），方便前端直接展示。
+	Failed *int64 `json:"failed"`
+
+	// Ok 成功样本总数。
+	Ok int64 `json:"ok"`
+
+	// P95LatencyMs 窗口内成功样本的 p95 耗时（毫秒）；无成功样本时为 null。
+	// 由于底表按分钟桶聚合（只保留桶内平均与最大值），p95 是按**桶平均延迟**的
+	// 样本数加权估出的分钟桶分位数，不是逐请求的精确分位数——用它看趋势量级是可靠的，
+	// 不要把它当作 SLA 口径的精确值。
+	P95LatencyMs *int64 `json:"p95LatencyMs"`
+
+	// Samples 窗口内的样本总数。
+	Samples int64 `json:"samples"`
+
+	// Slow 传输过慢样本总数。
+	Slow int64 `json:"slow"`
+
+	// Timeout 未响应样本总数。
+	Timeout int64 `json:"timeout"`
+
+	// Unreachable 不可达样本总数。
+	Unreachable int64 `json:"unreachable"`
+}
+
 // UsageInfo defines model for UsageInfo.
 type UsageInfo struct {
 	// Description 仓库描述（匿名详情页页头展示）
@@ -3639,6 +3844,18 @@ type MaintenanceJobNameParam = string
 // MigrationIdParam defines model for MigrationIdParam.
 type MigrationIdParam = int64
 
+// NegativeCacheLimitParam defines model for NegativeCacheLimitParam.
+type NegativeCacheLimitParam = int
+
+// NegativeCachePathParam defines model for NegativeCachePathParam.
+type NegativeCachePathParam = string
+
+// NegativeCachePathPrefixParam defines model for NegativeCachePathPrefixParam.
+type NegativeCachePathPrefixParam = string
+
+// NegativeCacheRepoQueryParam defines model for NegativeCacheRepoQueryParam.
+type NegativeCacheRepoQueryParam = string
+
 // ObservabilityFromParam defines model for ObservabilityFromParam.
 type ObservabilityFromParam = time.Time
 
@@ -3659,6 +3876,18 @@ type RepoNameParam = string
 
 // TokenIdParam defines model for TokenIdParam.
 type TokenIdParam = int64
+
+// UpstreamHealthFromParam defines model for UpstreamHealthFromParam.
+type UpstreamHealthFromParam = time.Time
+
+// UpstreamHealthLimitParam defines model for UpstreamHealthLimitParam.
+type UpstreamHealthLimitParam = int
+
+// UpstreamHealthSourceParam defines model for UpstreamHealthSourceParam.
+type UpstreamHealthSourceParam string
+
+// UpstreamHealthToParam defines model for UpstreamHealthToParam.
+type UpstreamHealthToParam = time.Time
 
 // UserGroupIdParam defines model for UserGroupIdParam.
 type UserGroupIdParam = int64
@@ -3698,6 +3927,9 @@ type Forbidden = Error
 
 // NotFound defines model for NotFound.
 type NotFound = Error
+
+// ServiceUnavailable defines model for ServiceUnavailable.
+type ServiceUnavailable = Error
 
 // Unauthorized defines model for Unauthorized.
 type Unauthorized = Error
@@ -3761,6 +3993,27 @@ type ListBackupVerificationsParams struct {
 type VerifyBackupParams struct {
 	// Deep 为 true 时逐 blob 比对内容摘要（全量读取，耗时与包等大）。
 	Deep *bool `form:"deep,omitempty" json:"deep,omitempty"`
+}
+
+// PurgeNegativeCacheParams defines parameters for PurgeNegativeCache.
+type PurgeNegativeCacheParams struct {
+	// Repo 仓库名；省略表示不限仓库（查看时为过滤条件，清理时为清理范围）。
+	Repo *NegativeCacheRepoQueryParam `form:"repo,omitempty" json:"repo,omitempty"`
+
+	// Path 制品路径（精确匹配）；仅清理端点接受本参数，且必须与 repo 同时给出。
+	Path *NegativeCachePathParam `form:"path,omitempty" json:"path,omitempty"`
+}
+
+// GetNegativeCacheParams defines parameters for GetNegativeCache.
+type GetNegativeCacheParams struct {
+	// Repo 仓库名；省略表示不限仓库（查看时为过滤条件，清理时为清理范围）。
+	Repo *NegativeCacheRepoQueryParam `form:"repo,omitempty" json:"repo,omitempty"`
+
+	// PathPrefix 制品路径前缀；省略表示不限前缀。仅查看端点接受本参数。
+	PathPrefix *NegativeCachePathPrefixParam `form:"path_prefix,omitempty" json:"path_prefix,omitempty"`
+
+	// Limit 返回条目数上限（默认 100，最大 500）；超出上限由服务端截断到 500，不报错。
+	Limit *NegativeCacheLimitParam `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
 // ListMigrationsParams defines parameters for ListMigrations.
@@ -4035,6 +4288,28 @@ type ListRepositoryAssetsParams struct {
 
 	// Prefix 按制品路径前缀过滤
 	Prefix *PrefixParam `form:"prefix,omitempty" json:"prefix,omitempty"`
+}
+
+// GetRepositoryUpstreamHealthParams defines parameters for GetRepositoryUpstreamHealth.
+type GetRepositoryUpstreamHealthParams struct {
+	// From 时间窗起点（含）。RFC3339 时间；缺省为 `to` 前 24 小时。
+	From *UpstreamHealthFromParam `form:"from,omitempty" json:"from,omitempty"`
+
+	// To 时间窗终点（**不含**，与其它观测端点的左闭右开口径一致）。RFC3339 时间；缺省为当前时刻。
+	To *UpstreamHealthToParam `form:"to,omitempty" json:"to,omitempty"`
+
+	// Source 采样来源过滤：`request`（真实回源请求）、`probe`（后台定时探测）。
+	// 省略时两路都返回。两条序列代表不同的可用性含义，调用方应分别展示而不是合并平均。
+	Source *GetRepositoryUpstreamHealthParamsSource `form:"source,omitempty" json:"source,omitempty"`
+}
+
+// GetRepositoryUpstreamHealthParamsSource defines parameters for GetRepositoryUpstreamHealth.
+type GetRepositoryUpstreamHealthParamsSource string
+
+// GetRepositoryUpstreamHealthRecentParams defines parameters for GetRepositoryUpstreamHealthRecent.
+type GetRepositoryUpstreamHealthRecentParams struct {
+	// Limit 返回的分钟桶条数上限；缺省 50，最大 500。
+	Limit *UpstreamHealthLimitParam `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
 // ListUserGroupsParams defines parameters for ListUserGroups.
@@ -4550,6 +4825,12 @@ type ServerInterface interface {
 	// RunMaintenanceJob 手动触发一次周期作业（仅管理员）
 	// (POST /api/v1/maintenance/jobs/{name}/run)
 	RunMaintenanceJob(c *gin.Context, name MaintenanceJobNameParam)
+	// PurgeNegativeCache 清理 404 负缓存（仅管理员）
+	// (DELETE /api/v1/maintenance/negative-cache)
+	PurgeNegativeCache(c *gin.Context, params PurgeNegativeCacheParams)
+	// GetNegativeCache 查看 404 负缓存（仅管理员）
+	// (GET /api/v1/maintenance/negative-cache)
+	GetNegativeCache(c *gin.Context, params GetNegativeCacheParams)
 	// GetRestartCapability 探测重启能力（只读，仅管理员）
 	// (GET /api/v1/maintenance/restart)
 	GetRestartCapability(c *gin.Context)
@@ -4669,6 +4950,12 @@ type ServerInterface interface {
 	// RenameRepository 重命名仓库（仅管理员）
 	// (POST /api/v1/repositories/{name}/rename)
 	RenameRepository(c *gin.Context, name RepoNameParam)
+	// GetRepositoryUpstreamHealth 仓库上游健康历史时间序列与汇总（仅管理员）
+	// (GET /api/v1/repositories/{name}/upstream-health)
+	GetRepositoryUpstreamHealth(c *gin.Context, name RepoNameParam, params GetRepositoryUpstreamHealthParams)
+	// GetRepositoryUpstreamHealthRecent 仓库上游健康最近采样明细（仅管理员）
+	// (GET /api/v1/repositories/{name}/upstream-health/recent)
+	GetRepositoryUpstreamHealthRecent(c *gin.Context, name RepoNameParam, params GetRepositoryUpstreamHealthRecentParams)
 	// GetRepositoryUsage 仓库客户端使用片段（据 format/type 返回接入命令）
 	// (GET /api/v1/repositories/{name}/usage)
 	GetRepositoryUsage(c *gin.Context, name RepoNameParam)
@@ -5570,6 +5857,84 @@ func (siw *ServerInterfaceWrapper) RunMaintenanceJob(c *gin.Context) {
 	}
 
 	siw.Handler.RunMaintenanceJob(c, name)
+}
+
+// PurgeNegativeCache operation middleware
+func (siw *ServerInterfaceWrapper) PurgeNegativeCache(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params PurgeNegativeCacheParams
+
+	// ------------- Optional query parameter "repo" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "repo", c.Request.URL.Query(), &params.Repo, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter repo: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "path" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "path", c.Request.URL.Query(), &params.Path, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter path: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.PurgeNegativeCache(c, params)
+}
+
+// GetNegativeCache operation middleware
+func (siw *ServerInterfaceWrapper) GetNegativeCache(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetNegativeCacheParams
+
+	// ------------- Optional query parameter "repo" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "repo", c.Request.URL.Query(), &params.Repo, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter repo: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "path_prefix" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "path_prefix", c.Request.URL.Query(), &params.PathPrefix, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter path_prefix: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", c.Request.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter limit: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetNegativeCache(c, params)
 }
 
 // GetRestartCapability operation middleware
@@ -6957,6 +7322,94 @@ func (siw *ServerInterfaceWrapper) RenameRepository(c *gin.Context) {
 	siw.Handler.RenameRepository(c, name)
 }
 
+// GetRepositoryUpstreamHealth operation middleware
+func (siw *ServerInterfaceWrapper) GetRepositoryUpstreamHealth(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "name" -------------
+	var name RepoNameParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "name", c.Param("name"), &name, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter name: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetRepositoryUpstreamHealthParams
+
+	// ------------- Optional query parameter "from" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "from", c.Request.URL.Query(), &params.From, runtime.BindQueryParameterOptions{Type: "string", Format: "date-time"})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter from: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "to" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "to", c.Request.URL.Query(), &params.To, runtime.BindQueryParameterOptions{Type: "string", Format: "date-time"})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter to: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "source" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "source", c.Request.URL.Query(), &params.Source, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter source: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetRepositoryUpstreamHealth(c, name, params)
+}
+
+// GetRepositoryUpstreamHealthRecent operation middleware
+func (siw *ServerInterfaceWrapper) GetRepositoryUpstreamHealthRecent(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "name" -------------
+	var name RepoNameParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "name", c.Param("name"), &name, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter name: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetRepositoryUpstreamHealthRecentParams
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", c.Request.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter limit: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetRepositoryUpstreamHealthRecent(c, name, params)
+}
+
 // GetRepositoryUsage operation middleware
 func (siw *ServerInterfaceWrapper) GetRepositoryUsage(c *gin.Context) {
 
@@ -7611,6 +8064,8 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.PUT(options.BaseURL+"/api/v1/repositories/:name/online", wrapper.SetRepositoryOnline)
 	router.POST(options.BaseURL+"/api/v1/repositories/:name/rename", wrapper.RenameRepository)
 	router.POST(options.BaseURL+"/api/v1/repositories/:name/recheck-connection", wrapper.RecheckRepositoryConnection)
+	router.GET(options.BaseURL+"/api/v1/repositories/:name/upstream-health", wrapper.GetRepositoryUpstreamHealth)
+	router.GET(options.BaseURL+"/api/v1/repositories/:name/upstream-health/recent", wrapper.GetRepositoryUpstreamHealthRecent)
 	router.GET(options.BaseURL+"/api/v1/repositories/:name/assets", wrapper.ListRepositoryAssets)
 	router.POST(options.BaseURL+"/api/v1/repositories/:name/assets/batch-delete", wrapper.BatchDeleteRepositoryAssets)
 	router.POST(options.BaseURL+"/api/v1/repositories/:name/assets/operations", wrapper.ApplyRepositoryAssetOperation)
@@ -7648,6 +8103,8 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.POST(options.BaseURL+"/api/v1/maintenance/freeze", wrapper.FreezeWrites)
 	router.GET(options.BaseURL+"/api/v1/maintenance/jobs", wrapper.ListMaintenanceJobs)
 	router.POST(options.BaseURL+"/api/v1/maintenance/jobs/:name/run", wrapper.RunMaintenanceJob)
+	router.DELETE(options.BaseURL+"/api/v1/maintenance/negative-cache", wrapper.PurgeNegativeCache)
+	router.GET(options.BaseURL+"/api/v1/maintenance/negative-cache", wrapper.GetNegativeCache)
 	router.GET(options.BaseURL+"/api/v1/maintenance/restart", wrapper.GetRestartCapability)
 	router.POST(options.BaseURL+"/api/v1/maintenance/restart", wrapper.RestartService)
 	router.GET(options.BaseURL+"/api/v1/backups/restore-status", wrapper.GetBackupRestoreStatus)

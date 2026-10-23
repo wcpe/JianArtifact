@@ -417,6 +417,10 @@ func run() error {
 	svc.dashboardSvc.Start(ctx, time.Now)
 	svc.assetDownloadSvc.Start(ctx, time.Now)
 	svc.hostMonitoringSvc.Start(ctx, time.Now)
+	// 上游健康采样的定期落盘（每 5s 一次 + ctx 结束后最后一次 flush）。
+	// 它必须在 scheduler.Start 之前挂上：回源请求随时可能开始产生采样，
+	// 早一秒开始刷盘就少一段只存在内存里、等不到落盘就关停的数据。
+	svc.upstreamHealthSvc.Start(ctx)
 	// 维护类周期作业的统一调度器（作业已在 wiring 装配期注册完毕）。
 	svc.scheduler.Start(ctx)
 	// 搜索索引的后台异步回填。一次性任务、不阻塞启动（这里只是挂 goroutine），

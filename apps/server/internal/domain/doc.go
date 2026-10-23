@@ -26,6 +26,10 @@ var (
 	ErrUpstreamTimeout = errors.New("上游回源超时")
 	// ErrUpstreamGone proxy 回源明确返回 410，由需保留该语义的协议映射。
 	ErrUpstreamGone = errors.New("上游资源已下架")
+	// ErrLocalStorage 回源正文已到达、但写本地存储失败（磁盘满 / 权限 / 配额）。
+	// **不是上游故障**：与 ErrUpstream / ErrUpstreamTimeout 刻意分开，让协议层把它落到
+	// 默认的 500 分支而不是 502/504，避免把运维引向「查上游」。
+	ErrLocalStorage = errors.New("本地存储写入失败")
 	// ErrSearchTimeout 搜索链路超出总预算（映射 504 + search_timeout）。
 	// 与 ErrUpstreamTimeout 刻意分开：一个是「本地查询超出预算、该缩检索范围或查索引」，
 	// 另一个是「上游不畅」，复用同一个错误码会让用户与运维分不清该修哪一头。

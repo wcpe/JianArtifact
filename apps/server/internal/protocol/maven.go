@@ -221,12 +221,16 @@ func (h *MavenHandler) Get(c *gin.Context) {
 		// SNAPSHOT 时间戳解析与校验和现算均失败时，回退按字面路径解析：
 		// 客户端可能直接发布了 artifact-version-SNAPSHOT.ext 字面文件（Gradle 快照发布），
 		// 其 maven-metadata.xml 未必带顶层 <snapshot> timestamp/buildNumber，直接 Resolve 命中即返回。
-		if asset, rc, err := h.resolveMaven(c.Request.Context(), repo, artPath); err == nil {
+		asset, rc, err := h.resolveMaven(c.Request.Context(), repo, artPath)
+		if err == nil {
 			defer func() { _ = rc.Close() }()
 			writeArtifact(c, asset.ContentType, asset.Size, asset.BlobHash, rc)
 			return
 		}
-		auth.WriteError(c, http.StatusNotFound, "not_found", "资源不存在")
+		// 回退也失败：按错误类别映射状态码。不能在这里写死 404——group 仓库把成员的上游
+		// 超时/上游故障上抛为 ErrUpstreamTimeout / ErrUpstream（见 domain.groupGet），
+		// 折叠成 404 会让客户端把「上游慢或不可用」读成「制品不存在」，从而永久失败。
+		writeAssetErr(c, err)
 		return
 	}
 

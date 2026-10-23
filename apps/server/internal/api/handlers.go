@@ -62,6 +62,7 @@ type Deps struct {
 	MaintenanceJobs         MaintenanceJobController                // 维护作业清单与手动触发（nil 时端点返回 503）
 	Restart                 RestartController                       // 一键重启（nil 时端点返回 503）
 	SearchIndex             SearchIndexController                   // 搜索索引回填状态与全量重建（nil 时端点返回 503）
+	UpstreamHealth          *repository.UpstreamHealthRepo          // 上游健康历史读写（nil 时端点返回 503）
 }
 
 // RestartController 是接口层对一键重启能力的最小依赖：同步预检、延迟触发重启动作。
@@ -125,24 +126,25 @@ type Handlers struct {
 	auditAttentionKey       []byte
 	auditSourceNode         string // 本节点审计标识
 	clusterTokenSet         bool
-	publicURL               string                       // 对外基础 URL（CDN 域名）
-	enabledFormats          []string                     // 启动时启用的格式清单
-	publishPolicies         *domain.PublishPolicyService // 发布账号策略管理
-	userGroups              *domain.UserGroupService     // 用户组（授权主体之一）的 CRUD 与成员维护
-	onUpstreamTimeoutChange func(time.Duration)          // 回源超时设置变更回调
-	backups                 *domain.BackupService        // 节点备份包
-	backupLinks             *domain.BackupLinkSigner     // 下载令牌签名
-	backupDrill             *domain.BackupDrillService   // 恢复演练与校验报告
-	freeze                  *domain.FreezeController     // 运行时写入冻结
-	backupImports           *domain.BackupImportService  // 导入记录与 URL 拉取
-	backupUploads           *domain.BackupUploadService  // 分片上传（Web 第三通道）
-	backupAdopt             *domain.BackupAdoptService   // 未管理备份包的扫描与导入
-	metrics                 *metrics.Exposition          // Prometheus 指标导出
-	oidc                    *OIDCDeps                    // OIDC 登录端点依赖（nil = 未启用）
-	ldapAuth                LDAPAuthenticator            // LDAP 目录侧校验（nil = 未启用）
-	maintenanceJobs         MaintenanceJobController     // 维护作业清单与手动触发
-	restart                 RestartController            // 一键重启（nil = 未装配）
-	searchIndex             SearchIndexController        // 搜索索引回填状态与全量重建
+	publicURL               string                         // 对外基础 URL（CDN 域名）
+	enabledFormats          []string                       // 启动时启用的格式清单
+	publishPolicies         *domain.PublishPolicyService   // 发布账号策略管理
+	userGroups              *domain.UserGroupService       // 用户组（授权主体之一）的 CRUD 与成员维护
+	onUpstreamTimeoutChange func(time.Duration)            // 回源超时设置变更回调
+	backups                 *domain.BackupService          // 节点备份包
+	backupLinks             *domain.BackupLinkSigner       // 下载令牌签名
+	backupDrill             *domain.BackupDrillService     // 恢复演练与校验报告
+	freeze                  *domain.FreezeController       // 运行时写入冻结
+	backupImports           *domain.BackupImportService    // 导入记录与 URL 拉取
+	backupUploads           *domain.BackupUploadService    // 分片上传（Web 第三通道）
+	backupAdopt             *domain.BackupAdoptService     // 未管理备份包的扫描与导入
+	metrics                 *metrics.Exposition            // Prometheus 指标导出
+	oidc                    *OIDCDeps                      // OIDC 登录端点依赖（nil = 未启用）
+	ldapAuth                LDAPAuthenticator              // LDAP 目录侧校验（nil = 未启用）
+	maintenanceJobs         MaintenanceJobController       // 维护作业清单与手动触发
+	restart                 RestartController              // 一键重启（nil = 未装配）
+	searchIndex             SearchIndexController          // 搜索索引回填状态与全量重建
+	upstreamHealth          *repository.UpstreamHealthRepo // 上游健康历史
 }
 
 // NewHandlers 构造 Handlers。
@@ -185,6 +187,7 @@ func NewHandlers(d Deps) *Handlers {
 		maintenanceJobs:         d.MaintenanceJobs,
 		restart:                 d.Restart,
 		searchIndex:             d.SearchIndex,
+		upstreamHealth:          d.UpstreamHealth,
 	}
 }
 

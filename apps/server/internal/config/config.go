@@ -66,6 +66,10 @@ const (
 	// 上游断路器补强：auto-block 退避起始时长，单位秒。
 	EnvAutoBlockBaseSeconds = "JIAN_AUTO_BLOCK_BASE_SECONDS" // proxy 上游首次失败的阻止窗口时长；非正数回落默认
 
+	// 上游健康历史的定时探测间隔，单位秒；0 = 关闭定时探测。
+	// 关闭后「真实请求」那条序列照常积累，只是没有流量时不再补空窗。
+	EnvUpstreamProbeInterval = "JIAN_UPSTREAM_PROBE_INTERVAL"
+
 	// 一键重启的能力配置（单独成组，理由同上）。
 	// 单元名只从环境变量读取，**绝不**接受请求体输入——见 domain/restart_service.go 的注入防护说明。
 	EnvRestartUnit  = "JIAN_RESTART_UNIT"  // 重启目标单元名；缺省 jianartifact
@@ -76,6 +80,10 @@ const (
 
 	// 仪表盘容量聚合结果的缓存有效期，单位秒；0 禁用缓存（每次请求实时聚合）。
 	EnvCapacityCacheTTLSeconds = "JIAN_CAPACITY_CACHE_TTL_SECONDS"
+
+	// proxy/group 读路径的两个调优项，单位均为秒。
+	EnvGroupMemberTimeout = "JIAN_GROUP_MEMBER_TIMEOUT" // group 成员**确认阶段**预算；非正数回落默认（无禁用语义）
+	EnvNegativeCacheTTL   = "JIAN_NEGATIVE_CACHE_TTL"   // 404 负缓存 TTL；显式 0 = 关闭负缓存
 
 	// SQLite 连接池上限。WAL 允许「多读 + 单写」，把池放宽才能真正吃到并发读的收益；
 	// 非正数与非法值回落默认（池上限取 0 等于禁用连接池，不是有意义的配置，故无禁用语义）。
@@ -112,6 +120,12 @@ const (
 	// 宽限期保证"拷入 → 界面导入"的操作窗口（见 domain/backup_orphan_cleanup.go）。
 	defaultBackupOrphanCleanupInterval = 24 * time.Hour
 	defaultBackupOrphanGrace           = time.Hour
+	// defaultUpstreamProbeInterval 是上游健康定时探测的默认间隔（60s，与分钟桶对齐）。
+	//
+	// 与「真实请求」采样不同，探测会**主动**给每个 proxy 上游每分钟发一次 HEAD：
+	// 上游数量多的实例需要能调大间隔或整体关闭（规格 §6 R2），因此本项显式提供
+	// 0 = 关闭的语义（口径同 storageCleanupInterval，而非 autoBlockBase 的「无禁用语义」）。
+	defaultUpstreamProbeInterval = 60 * time.Second
 	// defaultAutoBlockBase 是 auto-block 退避起始时长。
 	// 与 domain 侧兜底常量 autoBlockInitial（proxy_health.go）保持同值：
 	// 装配层始终注入本值，domain 常量只在未装配/测试构造时兜底。
@@ -126,6 +140,33 @@ const (
 	// 取 30 秒：容量聚合要遍历整张 asset 表（线上约 8.6 GB），而仪表盘是常用落地页；
 	// 30 秒的滞后对运维展示无影响，却能把重复加载的聚合次数压到「每分钟最多两次」。
 	defaultCapacityCacheTTL = 30 * time.Second
+	// defaultGroupMemberTimeout 是 group 成员**确认阶段**预算的默认值（JIAN_GROUP_MEMBER_TIMEOUT）：
+	// 只约束「该成员是否及时给出上游响应头」，不约束响应体传输——落盘预算由
+	// UpstreamTimeout（JIAN_UPSTREAM_TIMEOUT）承担，见 domain 侧 groupGet 的首字节看门狗。
+	// 与 domain 侧兜底常量 groupMemberTimeoutDefault 保持同值：装配层始终注入本值，
+	// domain 常量只在未装配 / 测试构造时兜底。
+	// 取 3 秒：不可达上游要快速失败，否则单个成员就能把整条 group 读拖到回源整体超时。
+	defaultGroupMemberTimeout = 3 * time.Second
+	// maxGroupMemberTimeout 是成员确认阶段预算的上限，超限夹取到本值并打一条中文警告。
+	//
+	// 为什么要夹取（与 capacityCacheTTL 明确不夹取的取舍不同）：本项直接决定「每个成员
+	// 最多等多久」，调大它不只是变慢——group 读在成员不可达时会把缺失路径的响应时间按
+	// 该上限放大，而缺失路径（Gradle 反复试探子模块、错误配置的客户端）恰恰是最频繁的
+	// 请求类型。60s 已远超任何正当的跨地域确认需求，上限只用来挡数量级笔误（3 → 300）。
+	maxGroupMemberTimeout = 60 * time.Second
+	// defaultNegativeCacheTTL 是 404 负缓存 TTL 的默认值（JIAN_NEGATIVE_CACHE_TTL）。
+	// 与 domain 侧兜底常量 negativeCacheTTL 保持同值（同上）。
+	defaultNegativeCacheTTL = 60 * time.Second
+	// maxNegativeCacheTTL 是 404 负缓存 TTL 的上限，超限夹取到本值并打一条中文警告。
+	//
+	// 为什么本项夹取而 capacityCacheTTL 明确不夹取：判据不是「配置值应当可预期」这一条
+	// 单独成立与否，而是「笔误的后果能否被及时察觉」。容量缓存 TTL 过大只是展示数字滞后
+	// （进程重启即自愈，一眼看得出来）；而 group 层负缓存**不因成员后续上传而失效**
+	// （见 docs/specs/0.7.1-404-negative-cache.md §6），TTL 被笔误成一天会让新发布的制品
+	// 长期不可见且不自愈，现场通常先怀疑上游或权限，排查成本高。
+	// 上限取 3600s，与设置页秒级配置的既有上界 maxConfigSecs（settings_handlers.go）对齐，
+	// 避免出现「环境变量能配 86400、界面最多 3600」两个入口口径不一致。
+	maxNegativeCacheTTL = 3600 * time.Second
 	// defaultSQLiteMaxConns 是 SQLite 连接池上限的默认值（JIAN_SQLITE_MAX_CONNS）。
 	// 与 persistence 侧兜底常量 persistence.DefaultMaxOpenConns 保持同值：
 	// 装配层始终注入本值，Open 在未显式给值时用同一个数兜底。
@@ -168,7 +209,11 @@ type Config struct {
 	UpstreamTimeout        time.Duration // proxy 回源整体超时
 	// AutoBlockBaseSeconds 是 proxy 上游 auto-block 退避起始时长：
 	// 首次失败的阻止窗口，之后每档翻倍。非正数（含非法值）已在解析期回落默认值。
-	AutoBlockBaseSeconds   time.Duration
+	AutoBlockBaseSeconds time.Duration
+	// UpstreamProbeInterval 是上游健康历史定时探测的间隔（JIAN_UPSTREAM_PROBE_INTERVAL）。
+	// 0 = 关闭定时探测（真实请求序列照常积累，只是无流量时不再补空窗）。
+	// 缺省与非法值回落默认 60s；负数回落默认（负间隔不是有意义的配置）。
+	UpstreamProbeInterval  time.Duration
 	SyncPeerURL            string        // 遗留复制对端基址；仅为兼容旧配置保留，不驱动主备调度
 	SyncInterval           time.Duration // 复制轮询间隔
 	PublicURL              string        // 对外基础 URL（如 https://repo.example.com）；空则回退请求 Host 推断
@@ -203,6 +248,15 @@ type Config struct {
 	// CapacityCacheTTL 是仪表盘容量聚合结果的缓存有效期（JIAN_CAPACITY_CACHE_TTL_SECONDS）。
 	// 0 = 禁用缓存（每次请求实时聚合），非数字 / 负数已在解析期回落默认 30s。
 	CapacityCacheTTL time.Duration
+	// GroupMemberTimeout 是 group 逐成员并行解析时的**确认阶段**预算（JIAN_GROUP_MEMBER_TIMEOUT）：
+	// 只约束「该成员是否及时给出上游响应头」，落盘预算由 UpstreamTimeout 承担。
+	// 非正数（含非法值）已在解析期回落默认 3s，**无禁用语义**（0 秒预算等于每个成员立刻超时）；
+	// 超过 maxGroupMemberTimeout 的上界时夹取到上界并打一条警告。
+	GroupMemberTimeout time.Duration
+	// NegativeCacheTTL 是 404 负缓存 TTL（JIAN_NEGATIVE_CACHE_TTL）。
+	// 0 = **关闭负缓存**（每个请求都真实回源 / 探测成员），非数字与负数已在解析期回落默认 60s；
+	// 超过 maxNegativeCacheTTL 的上界时夹取到上界并打一条警告。
+	NegativeCacheTTL time.Duration
 	// SQLiteMaxConns 是 SQLite 连接池上限（JIAN_SQLITE_MAX_CONNS）。
 	// 非正数（含非法值）已在解析期回落默认 defaultSQLiteMaxConns，**无禁用语义**；
 	// 超过 maxSQLiteMaxConns 的上界时夹取到上界并打一条警告（防数量级笔误）。
@@ -327,6 +381,7 @@ func Load() (*Config, error) {
 		PublicURL:                   os.Getenv(EnvPublicURL),
 		EnabledFormats:              enabledFormats,
 		BlobGCInterval:              blobGCInterval(),
+		UpstreamProbeInterval:       upstreamProbeInterval(),
 		StorageCleanupInterval:      storageCleanupInterval(),
 		StorageMetadataRetention:    storageMetadataRetention(),
 		StorageTempMaxAge:           storageTempMaxAge(),
@@ -337,6 +392,8 @@ func Load() (*Config, error) {
 		BackupOrphanGrace:           backupOrphanGrace(),
 		SearchTimeout:               searchTimeout(),
 		CapacityCacheTTL:            capacityCacheTTL(),
+		GroupMemberTimeout:          groupMemberTimeout(),
+		NegativeCacheTTL:            negativeCacheTTL(),
 		SQLiteMaxConns:              sqliteMaxConns(),
 		TLSAddr:                     envOr(EnvTLSAddr, ""),
 		TLSCert:                     os.Getenv(EnvTLSCert),
@@ -416,6 +473,13 @@ func blobGCInterval() time.Duration {
 		return defaultBlobGCInterval
 	}
 	return time.Duration(secs) * time.Second
+}
+
+// upstreamProbeInterval 解析 JIAN_UPSTREAM_PROBE_INTERVAL（秒）：上游健康历史定时探测的间隔。
+// 缺省或非法值取 60s，显式 0 禁用（与 storageCleanupInterval / blobGCInterval 同构）——
+// 探测会主动给每个 proxy 上游发 HEAD，因此必须允许运维整体关掉它（规格 §6 R2）。
+func upstreamProbeInterval() time.Duration {
+	return envDurationOr(EnvUpstreamProbeInterval, defaultUpstreamProbeInterval, time.Second)
 }
 
 // storageCleanupInterval 解析 JIAN_STORAGE_CLEANUP_INTERVAL（秒）；
@@ -536,6 +600,53 @@ func searchTimeout() time.Duration {
 // 同拒绝给 auto-block 退避加上限的既有取舍：配置值应当可预期，不做隐藏的二次加工。
 func capacityCacheTTL() time.Duration {
 	return envDurationOr(EnvCapacityCacheTTLSeconds, defaultCapacityCacheTTL, time.Second)
+}
+
+// groupMemberTimeout 解析 JIAN_GROUP_MEMBER_TIMEOUT（秒）：group 仓库逐成员并行解析时的
+// **确认阶段**预算——只约束「该成员是否及时给出上游响应头」，不约束响应体传输
+// （落盘预算由 JIAN_UPSTREAM_TIMEOUT 承担，见 domain 侧 groupGet 的首字节看门狗）。
+//
+// 缺省、非数字、负数与显式 0 都回落默认 3s——本项**无禁用语义**：0 秒预算等于
+// 「每个成员都立刻超时」，整条 group 读会 100% 退化成不可判定失败，只因一处手误就会让
+// 整个 group 仓库不可用。口径同 upstreamTimeout / autoBlockBase / searchTimeout。
+//
+// 超过 maxGroupMemberTimeout 时夹取到上限并打一条中文警告（不报错退出，口径同 sqliteMaxConns）：
+// 配置瑕疵不该让服务起不来，但必须留痕，否则运维会以为改生效了。
+func groupMemberTimeout() time.Duration {
+	d := envPositiveDurationOr(EnvGroupMemberTimeout, defaultGroupMemberTimeout, time.Second)
+	if d > maxGroupMemberTimeout {
+		fmt.Fprintf(os.Stderr,
+			"警告：%s=%ds 超过上限 %ds，已按上限 %ds 使用（本项是 group 成员的确认阶段预算，调大会直接拖慢缺失路径的失败返回）。\n",
+			EnvGroupMemberTimeout, int(d.Seconds()),
+			int(maxGroupMemberTimeout.Seconds()), int(maxGroupMemberTimeout.Seconds()))
+		return maxGroupMemberTimeout
+	}
+	return d
+}
+
+// negativeCacheTTL 解析 JIAN_NEGATIVE_CACHE_TTL（秒）：proxy/group 读路径 404 负缓存的有效期。
+// 缺省、非数字与负数回落默认 60s；**显式 0 = 关闭负缓存**（每个请求都真实回源 / 探测成员）。
+//
+// 为什么本项**有**禁用语义：负缓存是纯性能优化，关掉它最坏只是多几次回源（这是「关闭」的
+// 应有代价），而排查「制品明明有却报 404」时，运维需要一个不看记忆、只跑真实链路的开关。
+// 口径同 capacityCacheTTL 的「显式 0 = 禁用缓存」。
+//
+// 为什么负数**不**当成关闭：关闭是明确的运维意图，应当用显式的 0 表达。把 -600 这类笔误
+// 解读成关闭，等于一次手误就静默放大上游压力（每次缺失请求都要探测全部 group 成员），
+// 恰好落在最不该静默的地方；因此负数与非法值一并回落默认，口径同 capacityCacheTTL。
+//
+// 超过 maxNegativeCacheTTL 时夹取到上限并打一条中文警告，理由见 maxNegativeCacheTTL 的注释。
+func negativeCacheTTL() time.Duration {
+	d := envDurationOr(EnvNegativeCacheTTL, defaultNegativeCacheTTL, time.Second)
+	// 0（关闭）不做任何加工：夹取只针对「大得离谱」的值。
+	if d > maxNegativeCacheTTL {
+		fmt.Fprintf(os.Stderr,
+			"警告：%s=%ds 超过上限 %ds，已按上限 %ds 使用（负缓存过久会让新发布的制品长期 404 且不自愈）。\n",
+			EnvNegativeCacheTTL, int(d.Seconds()),
+			int(maxNegativeCacheTTL.Seconds()), int(maxNegativeCacheTTL.Seconds()))
+		return maxNegativeCacheTTL
+	}
+	return d
 }
 
 // sqliteMaxConns 解析 JIAN_SQLITE_MAX_CONNS（连接条数，纯数量而非时长）：
