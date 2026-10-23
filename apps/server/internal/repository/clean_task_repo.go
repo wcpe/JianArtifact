@@ -24,7 +24,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
 )
 
-// 清理任务状态。取值与迁移 0052 的注释一一对应。
+// 清理任务状态。取值与迁移 0051 的注释一一对应。
 const (
 	CleanTaskQueued      = "queued"
 	CleanTaskRunning     = "running"
@@ -304,8 +304,10 @@ func (errInvalidTrashStatus) Error() string { return "非法的回收站条目�
 
 // TrashStats 是回收站当前占用（供容量护栏与界面展示）。
 type TrashStats struct {
-	Entries int   `db:"entries"`
-	Bytes   int64 `db:"bytes"`
+	// 显式 json tag：本类型同时用于 db 扫描与 HTTP 响应，缺 tag 时按 Go 字段名
+	// 输出（Entries/Bytes），前端按小写读会拿到 undefined，界面显示成「项 / NAN KB」。
+	Entries int   `db:"entries" json:"entries"`
+	Bytes   int64 `db:"bytes" json:"bytes"`
 }
 
 // StagedTrashStats 统计 staged 条目的数量与字节合计。
