@@ -1732,14 +1732,18 @@ export function listCleanTasks(
   return request("/maintenance/clean-tasks", { query: { page, page_size: pageSize } });
 }
 
-/** 回收站列表（含占用统计）。 */
+/** 回收站列表（含占用统计）。
+ *
+ * `stats` 用 small-camel 字段（后端已加 json tag 统一）。但页面侧仍必须做兜底：
+ * 一旦字段名再漂移，读 undefined 会显示成「项 / NAN KB」而不是崩掉——
+ * 这类"半坏"状态比白屏更难发现，所以宁可显式 ?? 默认值。 */
 export function listTrash(
   page = 1,
   pageSize = 20,
 ): Promise<{
   items: TrashEntry[];
   total: number;
-  stats: { entries: number; bytes: number };
+  stats?: { entries?: number; bytes?: number };
 }> {
   return request("/maintenance/trash", { query: { page, page_size: pageSize } });
 }
@@ -1762,8 +1766,12 @@ export function purgeAllTrash(): Promise<{ purged: number; freedBytes: number }>
   return request("/maintenance/trash/purge-all", { method: "POST" });
 }
 
-/** 维护作业清单。 */
-export function listMaintenanceJobs(): Promise<{ items: MaintenanceJob[] }> {
+/** 维护作业清单。
+ *
+ * 注意字段名是 `jobs` 而不是 `items`：本端点沿用后端既有形状（`MaintenanceJobList`），
+ * 与其它列表接口的分页形状不同。写成 `items` 会让 `res.items` 为 undefined，
+ * 页面读 `.length` 直接白屏——这正是上线时踩到的坑。 */
+export function listMaintenanceJobs(): Promise<{ jobs: MaintenanceJob[] }> {
   return request("/maintenance/jobs");
 }
 

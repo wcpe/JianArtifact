@@ -136,7 +136,14 @@ export const en = {
   // Maintenance & cleanup. Wording keeps "recoverable"
   // and "irreversible" clearly apart — confusing the two is the main risk here.
   maintenance: {
+    tabHealth: "Storage health",
+    tabTrash: "Recycle bin",
+    tabTasks: "Cleanup tasks",
+    tabJobs: "Jobs",
+    healthBodyHint:
+      "Health only reports what is definitively reclaimable and never guesses. Cleanup moves items into the recycle bin (restorable); maintenance jobs delete permanently and bypass the recycle bin.",
     healthTitle: "Storage health",
+    healthDetailTitle: "What health checks",
     healthHint: "Read-only stats; nothing is deleted",
     partialError: "Some stats failed: {{reason}}",
     orphanBlobs: "Orphan blobs",

@@ -126,7 +126,14 @@ export const zh = {
   // 维护与清理。文案刻意把「可恢复」与「不可恢复」分开写：
   // 用户分不清这两者，是这个页面最容易出事的地方。
   maintenance: {
+    tabHealth: "存储体检",
+    tabTrash: "回收站",
+    tabTasks: "清理任务",
+    tabJobs: "维护作业",
+    healthBodyHint:
+      "体检只统计「确定可回收」的类别，不猜看起来没用的文件。清理会把选中项移入回收站，可随时恢复；维护作业为物理删除，不进回收站。",
     healthTitle: "存储体检",
+    healthDetailTitle: "体检说明",
     healthHint: "只读统计，不会删除任何东西",
     partialError: "部分统计失败：{{reason}}",
     orphanBlobs: "孤儿 blob",
