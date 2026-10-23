@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/jmoiron/sqlx"
@@ -446,5 +447,117 @@ func TestAssetOperationNpmVersionUpdatesPackument(t *testing.T) {
 		t.Fatalf("旧 tarball 应删除，得 %v", err)
 	} else if rc != nil {
 		_ = rc.Close()
+	}
+}
+
+// TestAssetOperationRejectsNonHostedRepository 钉住「proxy / group 仓库的资产写操作」
+// 的失败口径：必须报 ErrRepositoryNotWritable（可读地说明「该仓库类型不支持写入」），
+// 而不是此前那支 ErrConflict —— 后者会被映射成「资源已存在」，与真实原因无关，
+// 线上表现为「删代理仓里的缓存制品，却被告知资源已存在」。
+func TestAssetOperationRejectsNonHostedRepository(t *testing.T) {
+	t.Parallel()
+	db := newTestDB(t)
+	repos := repository.NewRepoRepo(db)
+	assets := repository.NewAssetRepo(db)
+	blobs := blobstore.NewStore(t.TempDir())
+	svc := domain.NewAssetService(repos, assets, blobs, nil)
+	svc.SetChangeRecorder(domain.NoopChangeRecorder{})
+	svc.SetNodeIdentity(domain.NewNodeIdentity(repository.NewSettingRepo(db)))
+
+	for _, repoType := range []string{"proxy", "group"} {
+		name := "raw-" + repoType
+		if _, err := repos.Create(name, "raw", repoType, "private", ""); err != nil {
+			t.Fatalf("建 %s 仓库：%v", repoType, err)
+		}
+		_, err := svc.ApplyOperation(name, domain.AssetOperation{
+			Action:  domain.AssetOperationDelete,
+			Targets: []domain.AssetOperationTarget{{Type: domain.AssetTargetRawPath, Path: "a.txt"}},
+		})
+		if !errors.Is(err, domain.ErrRepositoryNotWritable) {
+			t.Fatalf("%s 仓库删除应返回 ErrRepositoryNotWritable，实际：%v", repoType, err)
+		}
+		// 包装 ErrOperationUnsupported，既有「格式不支持」判定不应被改变。
+		if !errors.Is(err, domain.ErrOperationUnsupported) {
+			t.Fatalf("%s 仓库删除应仍满足 ErrOperationUnsupported，实际：%v", repoType, err)
+		}
+		// 绝不能再呈现成「资源已存在」：这类仓库里的制品是缓存或聚合产物，
+		// 说它「已存在」既不是原因，也把排障引向错误方向。
+		//
+		// 注意断言的是**文案**而不是哨兵：为兼容协议层（raw/npm/nuget/oci/cargo 一律用
+		// ErrConflict 判定「非 hosted → 409」），该错误在 errors.Is 层面必须同时满足
+		// ErrConflict，靠哨兵区分不出来；用户看到的是 message，这里就钉 message。
+		if msg := err.Error(); strings.Contains(msg, "资源已存在") {
+			t.Fatalf("%s 仓库删除的文案不得为「资源已存在」，实际：%s", repoType, msg)
+		}
+	}
+}
+
+// TestAssetOperationMavenAssetPathDeletesOwnVersion 钉住「Maven 仓库删单个文件」的语义：
+// 前端对文件节点发的是 asset_path，后端必须把它解析回**所属版本**并按版本做格式感知删除，
+// 而不是只删那一个文件。
+//
+// 为什么不能只删文件：一个 Maven 版本由 jar / pom / 各校验和 + artifact 级 metadata 构成，
+// 只删其中一份会让 metadata 与校验和指向不存在的文件，仓库进入半残状态。语义与 npm 的
+// asset_path 解析（tarball → 所属版本）一致。
+// 此前 asset_path 在 maven 仓库上被直接判为「必须使用格式感知的逻辑删除目标」，于是界面上
+// 选中单个文件点删除必然失败。
+func TestAssetOperationMavenAssetPathDeletesOwnVersion(t *testing.T) {
+	t.Parallel()
+	db := newTestDB(t)
+	repos := repository.NewRepoRepo(db)
+	assets := repository.NewAssetRepo(db)
+	blobs := blobstore.NewStore(t.TempDir())
+	svc := domain.NewAssetService(repos, assets, blobs, nil)
+	svc.SetChangeRecorder(domain.NoopChangeRecorder{})
+	svc.SetNodeIdentity(domain.NewNodeIdentity(repository.NewSettingRepo(db)))
+
+	if _, err := repos.Create("maven-asset-path", "maven", "hosted", "private", ""); err != nil {
+		t.Fatalf("建仓库：%v", err)
+	}
+	// 两个版本：只应删掉目标文件所属的那一个。
+	for _, p := range []string{
+		"com/example/demo/1.0/demo-1.0.jar",
+		"com/example/demo/1.0/demo-1.0.pom",
+		"com/example/demo/2.0/demo-2.0.jar",
+		"com/example/demo/2.0/demo-2.0.pom",
+	} {
+		if _, err := svc.Put("maven-asset-path", p, bytes.NewBufferString(p), "application/octet-stream"); err != nil {
+			t.Fatalf("发布 %s：%v", p, err)
+		}
+	}
+
+	result, err := svc.ApplyOperation("maven-asset-path", domain.AssetOperation{
+		Action:  domain.AssetOperationDelete,
+		Targets: []domain.AssetOperationTarget{{Type: domain.AssetTargetAssetPath, Path: "com/example/demo/1.0/demo-1.0.jar"}},
+	})
+	if err != nil {
+		t.Fatalf("删单文件应解析到所属版本并成功，实际：%v", err)
+	}
+	if result.Affected != 2 {
+		t.Fatalf("应删掉 1.0 版本的 2 个文件，实际 affected=%d", result.Affected)
+	}
+	for _, p := range []string{"com/example/demo/1.0/demo-1.0.jar", "com/example/demo/1.0/demo-1.0.pom"} {
+		if _, rc, err := svc.Get("maven-asset-path", p); !errors.Is(err, domain.ErrNotFound) {
+			if rc != nil {
+				_ = rc.Close()
+			}
+			t.Fatalf("%s 应已删除，实际 err=%v", p, err)
+		}
+	}
+	// 另一个版本必须完好。
+	for _, p := range []string{"com/example/demo/2.0/demo-2.0.jar", "com/example/demo/2.0/demo-2.0.pom"} {
+		if _, rc, err := svc.Get("maven-asset-path", p); err != nil {
+			t.Fatalf("%s 不应被牵连删除：%v", p, err)
+		} else {
+			_ = rc.Close()
+		}
+	}
+
+	// 路径不存在时必须 404，不能被静默当成「删整个版本」。
+	if _, err := svc.ApplyOperation("maven-asset-path", domain.AssetOperation{
+		Action:  domain.AssetOperationDelete,
+		Targets: []domain.AssetOperationTarget{{Type: domain.AssetTargetAssetPath, Path: "com/example/demo/2.0/nope.jar"}},
+	}); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("不存在的文件路径应返回 ErrNotFound，实际：%v", err)
 	}
 }

@@ -350,6 +350,19 @@ func writeDomainErr(c *gin.Context, err error) {
 	writeDomainErrWithOperationID(c, err, "")
 }
 
+// domainErrMessage 在错误携带了可读上下文时返回带上下文的文案，否则回落 canonical 文案。
+//
+// 为什么需要：错误哨兵（如 ErrConflict）本身只有一句泛化描述，真实原因在 fmt.Errorf 的
+// wrapper 里。把文案写死会让「删 proxy 仓缓存制品」和「metadata 解析失败」呈现成同一句
+// 与事实无关的话，排障时无从下手。
+func domainErrMessage(err error, canonical string) string {
+	msg := err.Error()
+	if msg == "" || msg == canonical {
+		return canonical
+	}
+	return msg
+}
+
 // writeDomainErrWithOperationID 将领域错误映射为契约约定的 HTTP 状态与错误码。
 // operationID 仅用于已进入统一资产操作执行阶段的失败，其他端点保持既有错误响应形状。
 func writeDomainErrWithOperationID(c *gin.Context, err error, operationID string) {
@@ -368,8 +381,16 @@ func writeDomainErrWithOperationID(c *gin.Context, err error, operationID string
 		write(http.StatusUnauthorized, "invalid_credentials", "用户名或口令错误")
 	case errors.Is(err, domain.ErrAlreadyInitialized):
 		write(http.StatusConflict, "already_initialized", "实例已初始化，自举关闭")
+	// 必须排在 ErrConflict 之前：ErrRepositoryNotWritable 为兼容协议层判定同时满足
+	// ErrConflict 与 ErrOperationUnsupported，若先命中 ErrConflict 分支，管理端点就会
+	// 继续回「conflict / 资源已存在」——正是本次要修的错误结论。
+	case errors.Is(err, domain.ErrRepositoryNotWritable):
+		write(http.StatusConflict, "repository_not_writable", err.Error())
 	case errors.Is(err, domain.ErrConflict):
-		write(http.StatusConflict, "conflict", "资源已存在")
+		// 不能写死「资源已存在」：ErrConflict 被多种原因包装（metadata 非法、事务引擎未就绪、
+		// 目标路径冲突…），写死会让调用方永远只看到一个与真实原因无关的结论。裸哨兵仍用
+		// 原文案，带上下文时把上下文一并带出。
+		write(http.StatusConflict, "conflict", domainErrMessage(err, "资源已存在"))
 	case errors.Is(err, domain.ErrFormatDisabled):
 		write(http.StatusConflict, "format_disabled", "请求的格式未启用")
 	case errors.Is(err, domain.ErrLogicalDeleteRequired):

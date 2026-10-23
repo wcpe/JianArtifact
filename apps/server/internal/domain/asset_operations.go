@@ -79,9 +79,35 @@ var (
 	ErrOperationLimit = errors.New("制品操作超过 500 条上限")
 	// ErrOperationUnsupported 表示该格式不支持动作。
 	ErrOperationUnsupported = errors.New("制品操作不支持")
+	// ErrRepositoryNotWritable 表示该仓库类型不承载写入（proxy 缓存 / group 聚合），
+	// 因此删除、移动、重命名这类写操作一律不可用。
+	//
+	// 为什么单列而不是直接复用 ErrConflict：proxy / group 仓库里**看得到**缓存或聚合出来的
+	// 制品，用户点删除是完全合理的操作，回「资源已存在」既不成立也无法定位（此前正是如此）。
+	//
+	// 判定口径：同时满足 ErrConflict（协议层 raw / npm / nuget / oci / cargo 一律以它判定
+	// 「仓库非 hosted → 409」，不能改）与 ErrOperationUnsupported（管理 API 据此给出更精确的
+	// repository_not_writable）。文案只保留真实原因，不拼接被 join 的哨兵文本。
+	ErrRepositoryNotWritable error = repositoryNotWritableError{}
 	// ErrClusterPeerUpgradeRequired 表示活动复制对端未全部支持 v2 原子操作。
 	ErrClusterPeerUpgradeRequired = fmt.Errorf("%w: 活动集群对端不支持 v2 原子操作", ErrConflict)
 )
+
+// repositoryNotWritableError 是「该仓库类型不承载写入」的哨兵错误。
+//
+// 为什么自定义而不是 fmt.Errorf 包一层：需要同时满足两个既有判定（ErrConflict、
+// ErrOperationUnsupported），而 %w 只能包一个；errors.Join 虽能多包，但 Error() 会把
+// 各哨兵文案用换行拼起来，回给用户的 message 会变成难读的多行串。
+// 这里只让 Is 覆盖两个哨兵，Error() 保留单句真实原因。
+type repositoryNotWritableError struct{}
+
+func (repositoryNotWritableError) Error() string {
+	return "该仓库类型不支持写入，仅 hosted 仓库可发布或删除"
+}
+
+func (repositoryNotWritableError) Is(target error) bool {
+	return target == ErrOperationUnsupported || target == ErrConflict
+}
 
 // ApplyOperation 在 hosted 仓库中规划并原子执行删除、Raw 移动或单项重命名。
 func (s *AssetService) ApplyOperation(repoName string, op AssetOperation) (*AssetOperationResult, error) {
@@ -97,7 +123,7 @@ func (s *AssetService) ApplyOperation(repoName string, op AssetOperation) (*Asse
 		return fail(mapNotFound(err))
 	}
 	if repo.Type != "hosted" {
-		return fail(ErrConflict)
+		return fail(fmt.Errorf("%w（当前为 %s 仓库）", ErrRepositoryNotWritable, repo.Type))
 	}
 	if s.mutator == nil {
 		return fail(fmt.Errorf("%w: 资产事务引擎未就绪", ErrConflict))
@@ -322,12 +348,21 @@ func (s *AssetService) planDelete(repo *repository.Repository, targets []AssetOp
 			}
 			selected, err = s.expandPath(repo.ID, target.Path)
 		case "maven":
-			if target.Type != AssetTargetMavenVersion && target.Type != AssetTargetMavenArtifact {
+			if target.Type != AssetTargetMavenVersion && target.Type != AssetTargetMavenArtifact && target.Type != AssetTargetAssetPath {
 				return nil, nil, ErrLogicalDeleteRequired
 			}
-			selected, err = s.expandMavenTarget(repo.ID, target)
-			if err == nil && target.Type == AssetTargetMavenVersion {
-				extra, created, err = s.planMavenMetadata(repo.ID, target.Path, created)
+			logical := target
+			if target.Type == AssetTargetAssetPath {
+				// 文件路径按 npm 的同一先例解析回所属逻辑版本：Maven 制品是一组文件
+				//（jar / pom / 校验和 / metadata），只删其中一个会让 metadata 与校验和
+				// 指向不存在的文件，因此「删文件」在这里的语义是「删它所属的版本」。
+				logical, err = s.resolveMavenAssetPath(repo.ID, target.Path)
+			}
+			if err == nil {
+				selected, err = s.expandMavenTarget(repo.ID, logical)
+			}
+			if err == nil && logical.Type == AssetTargetMavenVersion {
+				extra, created, err = s.planMavenMetadata(repo.ID, logical.Path, created)
 			}
 		case "npm":
 			if target.Type != AssetTargetNpmPackage && target.Type != AssetTargetNpmVersion && target.Type != AssetTargetAssetPath {
@@ -402,6 +437,32 @@ func (s *AssetService) expandPath(repoID int64, raw string) ([]repository.Asset,
 		return nil, ErrOperationLimit
 	}
 	return assets, nil
+}
+
+// resolveMavenAssetPath 把 Maven 仓库里的**文件路径**解析回它所属的逻辑版本目标。
+//
+// 为什么要解析而不是只删该文件：Maven 的一个版本由一组文件构成（jar / pom / 各校验和，
+// 以及 artifact 级 maven-metadata.xml）。只删其中一份会让 metadata 与校验和继续指向不存在
+// 的文件，仓库进入半残状态，且后续部署会拿到 404 的校验和。语义与 npm 的 asset_path
+// 解析（tarball → 所属版本）保持一致。
+//
+// 合法的文件形态是 group/artifact/version/<file>（至少 4 段）；不足 4 段无法确定版本，
+// 按「必须使用格式感知的逻辑删除目标」拒绝，与既有的 maven 目标校验口径一致。
+func (s *AssetService) resolveMavenAssetPath(repoID int64, raw string) (AssetOperationTarget, error) {
+	p, err := normalizeOperationPath(raw)
+	if err != nil {
+		return AssetOperationTarget{}, err
+	}
+	parts := strings.Split(p, "/")
+	if len(parts) < 4 || !isMavenFileTarget(parts[len(parts)-1]) {
+		return AssetOperationTarget{}, fmt.Errorf("%w: Maven 文件必须位于 group/artifact/version 之下", ErrLogicalDeleteRequired)
+	}
+	versionPath := strings.Join(parts[:len(parts)-1], "/")
+	// 必须确实存在，避免把拼错的文件路径静默当成「删整个版本」。
+	if _, err := s.assets.GetByPath(repoID, p); err != nil {
+		return AssetOperationTarget{}, mapNotFound(err)
+	}
+	return AssetOperationTarget{Type: AssetTargetMavenVersion, Path: versionPath}, nil
 }
 
 func (s *AssetService) expandMavenTarget(repoID int64, target AssetOperationTarget) ([]repository.Asset, error) {
