@@ -348,20 +348,27 @@ func (s *CleanupService) Execute(opts ExecuteOptions) (*repository.CleanTask, er
 	}
 
 	processed := 0
-	entries := make([]repository.TrashEntry, 0, len(selected))
+	moved := make([]repository.TrashEntry, 0, len(selected))
 	for _, item := range selected {
 		entry, moveErr := s.moveToTrash(task.ID, opts.Kind, item)
 		if moveErr != nil {
-			_ = s.tasks.MarkFailed(task.ID, processed, moveErr.Error())
+			// 逐项落库而不是「全部移完再一次性写」：后者一旦第 N 项失败，
+			// 前面已 rename 进 data/trash/<taskID>/ 的文件就没有任何 DB 记录，
+			// 既列不出来、也无法恢复，而 trash-gc 只扫 staged 记录，永远清不到——
+			// 它们会静默占盘且不可见。
+			s.rollbackMoved(moved)
+			_ = s.tasks.MarkFailed(task.ID, 0, moveErr.Error())
 			return s.tasks.Get(task.ID)
 		}
-		entries = append(entries, entry)
+		if err := s.tasks.InsertTrashEntries([]repository.TrashEntry{entry}); err != nil {
+			// 记录写不进去就把刚移动的那一项也搬回原位，避免「磁盘已改、DB 无记录」。
+			s.rollbackMoved(append(moved, entry))
+			_ = s.tasks.MarkFailed(task.ID, 0, err.Error())
+			return s.tasks.Get(task.ID)
+		}
+		moved = append(moved, entry)
 		processed++
 		_ = s.tasks.UpdateProgress(task.ID, processed)
-	}
-	if err := s.tasks.InsertTrashEntries(entries); err != nil {
-		_ = s.tasks.MarkFailed(task.ID, processed, err.Error())
-		return s.tasks.Get(task.ID)
 	}
 	// freed_bytes 记 0：移入回收站时磁盘尚未释放，真正腾空发生在 purge（见迁移注释）。
 	if err := s.tasks.MarkSucceeded(task.ID, processed, 0); err != nil {
@@ -401,6 +408,34 @@ func filterSelected(all []CleanupCandidate, wanted []string) ([]CleanupCandidate
 // 用序号而不是原路径在回收站里重建目录树：两类目标的原始路径可能很深
 // （backup-uploads/<session>/chunks/...），按原样重建会在回收站里制造同样的深路径，
 // 而恢复只需要"原路径"这一个字段就能还原。
+//
+// undoMove 把单条已移入回收站的文件搬回原位，用于「移动后写记录失败」的自愈。
+func (s *CleanupService) undoMove(entry repository.TrashEntry) error {
+	if err := os.MkdirAll(filepath.Dir(entry.OriginalPath), 0o750); err != nil {
+		return err
+	}
+	return os.Rename(entry.TrashPath, entry.OriginalPath)
+}
+
+// rollbackMoved 把本次任务已成功移入回收站的条目全部搬回原位。
+//
+// 只在整批失败时调用：清理要么是「一批可恢复的移动」，要么什么都没发生，
+// 不能留下「一部分移走了、任务记为失败、用户分不清哪些被动过」的中间态。
+// 已落库的记录一并标为 restored，避免回收站里留下指向已搬回原位的死条目。
+func (s *CleanupService) rollbackMoved(moved []repository.TrashEntry) {
+	for i := len(moved) - 1; i >= 0; i-- {
+		if undoErr := s.undoMove(moved[i]); undoErr != nil {
+			// 搬不回去就保留 staged 记录：宁可让用户在回收站里看到并能手动恢复，
+			// 也不要留下一个不可见的孤儿目录。
+			continue
+		}
+		if moved[i].ID != 0 {
+			_ = s.tasks.MarkTrashResolved(moved[i].ID, repository.TrashRestored)
+		}
+	}
+}
+
+// moveToTrash 把单个候选移入回收站（同盘 rename），并返回待落库的条目。
 func (s *CleanupService) moveToTrash(taskID int64, kind string, item CleanupCandidate) (repository.TrashEntry, error) {
 	src, err := s.safeJoin(filepath.FromSlash(item.Path))
 	if err != nil {

@@ -502,6 +502,21 @@ func (r *AssetMutationRepo) MarkQuarantine(id, hash, status, reason string) erro
 	return err
 }
 
+// HasPendingQuarantine 报告该操作是否仍有**待恢复**的隔离条目。
+//
+// 判据是 status='staged'：此时隔离副本是回滚的唯一依赖，删掉它等于让一次失败的
+// 资产变更无法回到变更前。一旦进入 restored（已放回）或 pending_gc/deleted
+// （已完成、等待回收），隔离目录已不再承担恢复职责，可以安全回收。
+func (r *AssetMutationRepo) HasPendingQuarantine(operationID string) (bool, error) {
+	var count int
+	err := r.db.Get(&count,
+		`SELECT COUNT(*) FROM blob_quarantine WHERE operation_id=? AND status='staged'`, operationID)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 // CountBlobReferences 返回全库活动资产对 hash 的引用数。
 func (r *AssetMutationRepo) CountBlobReferences(hash string) (int, error) {
 	var count int

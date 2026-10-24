@@ -258,3 +258,90 @@ func equalStringSlices(a, b []string) bool {
 	}
 	return true
 }
+
+// TestCleanupQuarantineSkipsOperationsWithPendingRestore 钉住隔离区「宁可少收」这条安全边界。
+//
+// 隔离目录的一级子目录名是**资产变更操作的 operationID**。只要该操作仍有 staged 的隔离
+// 记录，这份副本就是那次变更唯一的回滚依据，绝不能当垃圾收走。
+//
+// 变异验证方式：删掉 wiring 里的 SetPendingRestoreChecker 接线（或让判定恒假），本用例
+// 必须转红——此时被引用的操作目录会被错误地列进清理候选。
+func TestCleanupQuarantineSkipsOperationsWithPendingRestore(t *testing.T) {
+	t.Parallel()
+	db := newTestDB(t)
+	svc, dataDir := newCleanupEnv(t, db)
+
+	pendingOp := "01a16a23-0000-7000-8000-000000000001"
+	idleOp := "01a16a23-0000-7000-8000-000000000002"
+	writeFile(t, filepath.Join(dataDir, "blobs", "quarantine", pendingOp, "aabb"), "rollback-copy")
+	writeFile(t, filepath.Join(dataDir, "blobs", "quarantine", idleOp, "ccdd"), "leftover")
+
+	// 只有 pendingOp 存在 staged 隔离记录；idleOp 没有。
+	mutations := repository.NewAssetMutationRepo(db)
+	if err := mutations.Begin(pendingOp, nil); err != nil {
+		t.Fatalf("建操作 intent：%v", err)
+	}
+	if err := mutations.MarkStaged(pendingOp, []repository.BlobQuarantine{{
+		OperationID:    pendingOp,
+		BlobHash:       "aabb",
+		QuarantinePath: filepath.Join(dataDir, "blobs", "quarantine", pendingOp, "aabb"),
+	}}); err != nil {
+		t.Fatalf("写隔离记录：%v", err)
+	}
+
+	// 接线方式与生产一致：问 blob_quarantine 该操作是否仍有 staged 记录。
+	svc.SetPendingRestoreChecker(func(operationID string) bool {
+		pending, err := mutations.HasPendingQuarantine(operationID)
+		return err != nil || pending
+	})
+
+	preview, err := svc.Preview(domain.CleanupKindQuarantine, 0)
+	if err != nil {
+		t.Fatalf("预览隔离区：%v", err)
+	}
+
+	if preview.ItemCount != 1 {
+		t.Fatalf("候选数 = %d，期望 1（只应收 idleOp）；候选：%+v", preview.ItemCount, preview.Items)
+	}
+	if got := preview.Items[0].Path; got != "blobs/quarantine/"+idleOp {
+		t.Fatalf("候选路径 = %q，期望只含未被引用的 %q", got, idleOp)
+	}
+	// 被引用的目录必须仍在磁盘上，且出现在 skipped 里。
+	if _, err := os.Stat(filepath.Join(dataDir, "blobs", "quarantine", pendingOp, "aabb")); err != nil {
+		t.Fatalf("被待生效操作引用的隔离副本不得被回收：%v", err)
+	}
+	if len(preview.Skipped) != 1 {
+		t.Fatalf("跳过项数 = %d，期望 1（应如实报告被跳过的目录）", len(preview.Skipped))
+	}
+}
+
+// TestAssetMutationHasPendingQuarantineTracksStatus 钉住判据本身的状态迁移。
+//
+// 判据必须只看 staged：一旦隔离副本被放回（restored）或进入待回收（pending_gc/deleted），
+// 它已不再承担回滚职责，此时仍报「被引用」会让隔离区永远清不掉。
+func TestAssetMutationHasPendingQuarantineTracksStatus(t *testing.T) {
+	t.Parallel()
+	db := newTestDB(t)
+	mutations := repository.NewAssetMutationRepo(db)
+
+	const op = "01a16a23-0000-7000-8000-000000000003"
+	if err := mutations.Begin(op, nil); err != nil {
+		t.Fatalf("建操作 intent：%v", err)
+	}
+	if err := mutations.MarkStaged(op, []repository.BlobQuarantine{{
+		OperationID: op, BlobHash: "aabb", QuarantinePath: "/tmp/x/aabb",
+	}}); err != nil {
+		t.Fatalf("写隔离记录：%v", err)
+	}
+
+	if pending, err := mutations.HasPendingQuarantine(op); err != nil || !pending {
+		t.Fatalf("staged 状态应判为仍被引用：pending=%v err=%v", pending, err)
+	}
+
+	if err := mutations.MarkQuarantine(op, "aabb", "restored", ""); err != nil {
+		t.Fatalf("标记已放回：%v", err)
+	}
+	if pending, err := mutations.HasPendingQuarantine(op); err != nil || pending {
+		t.Fatalf("restored 后不应再判为被引用：pending=%v err=%v", pending, err)
+	}
+}

@@ -216,6 +216,14 @@ func openServices(cfg *config.Config) (*appServices, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("初始化自动备份设置：%w", err)
 	}
+	// proxy/group 调优两项同理：环境变量只是首次播种的初值，此后以 setting 表为准。
+	if err := seedProxyTuningSettings(settingRepo, cfg); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("初始化代理调优设置：%w", err)
+	}
+	// 播种之后按**生效值**再注入一次：上面两处 setter 用的是环境变量解析结果，
+	// 而 setting 表可能已被界面改过且跨重启保留（环境变量此时已不是真源）。
+	applyProxyTuningSettings(settingSvc, assetSvc)
 	auditLogRepo := repository.NewAuditLogRepo(db)
 	auditObservabilityRepo := repository.NewAuditObservabilityRepo(db)
 	operationsMetrics := repository.NewOperationsObservabilityRepo(db)
@@ -299,6 +307,22 @@ func openServices(cfg *config.Config) (*appServices, error) {
 			names = append(names, rec.UploadID)
 		}
 		return names, nil
+	})
+	// 隔离区候选判据：隔离目录的一级子目录名是**资产变更操作的 operationID**
+	// （见 asset_mutation.go 的 blobs.Stage(hash, id)），不是恢复操作的标识。
+	// 所以「是否被待生效操作引用」要问 blob_quarantine：该操作仍有 staged 记录时，
+	// 隔离副本是那次变更的唯一回滚依据，绝不能当垃圾收走。
+	//
+	// 不接这一条会让 collectQuarantine 的跳过条件恒假，隔离区被全量回收——
+	// 与规格要求的「宁可少收」正好相反。
+	mutationRepoForCleanup := repository.NewAssetMutationRepo(db)
+	cleanupSvc.SetPendingRestoreChecker(func(operationID string) bool {
+		pending, err := mutationRepoForCleanup.HasPendingQuarantine(operationID)
+		if err != nil {
+			// 查不到就当作「仍在引用」：清理是破坏性动作，无法确认时必须保守。
+			return true
+		}
+		return pending
 	})
 
 	// 上游健康历史：分钟桶采样 + 后台定时探测。
@@ -526,6 +550,46 @@ func seedBackupSettings(settingSvc *domain.SettingService, settings *repository.
 	return nil
 }
 
+// seedProxyTuningSettings 把环境变量里的两项 proxy/group 调优作为**初值**播种进 setting 表。
+//
+// 与 seedBackupSettings 的差别只有一点，但这点必须说清：**逐键播**，不做整组判断。
+// 备份三项在语义上是一组（"这本盘怎么留备份"），任何一项被界面改过就说明整组已由界面管过；
+// 而成员确认预算与负缓存 TTL 是两个互不相干的旋钮——运维只想调负缓存、从没碰过成员预算，
+// 整组判断会让成员预算永远拿不到环境变量里的初值，而它又确实被配在了环境变量里。
+//
+// 复用 seedSettingDefault 而不是无条件 Set：两项的初值都不可能是空串（秒数字面量），
+// 因此"非空才写 + 键缺失才写"正好就是"缺键时用环境变量播种、已有值一律不动"。
+// 显式 0（关闭负缓存）也照常播种：它是合法初值，不能被当成"未配置"跳过。
+func seedProxyTuningSettings(settings *repository.SettingRepo, cfg *config.Config) error {
+	defaults := []repository.SettingValue{
+		{Key: domain.SettingKeyGroupMemberTimeout, Value: strconv.Itoa(int(cfg.GroupMemberTimeout.Seconds()))},
+		{Key: domain.SettingKeyNegativeCacheTTL, Value: strconv.Itoa(int(cfg.NegativeCacheTTL.Seconds()))},
+	}
+	for _, value := range defaults {
+		if err := seedSettingDefault(settings, value.Key, value.Value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// applyProxyTuningSettings 把 setting 表里的两项 proxy/group 调优注入 AssetService。
+//
+// 两次调用的差异不是笔误，而是两项的语义不同：
+//   - 成员确认预算**无禁用语义**（0 秒预算 = 每个成员立刻超时），0/缺失都表示"沿用当前值"，
+//     因此只在 secs > 0 时应用；
+//   - 负缓存 TTL 的 0 是"关闭"的显式表达，必须用 (secs, ok) 判定：ok=true 且 secs==0
+//     要照实注入（真的关掉），ok=false 才回退——否则一次播种失败或 DB 抖动就会静默
+//     关掉负缓存，把每个缺失路径都变成真实回源。
+func applyProxyTuningSettings(settingSvc *domain.SettingService, assetSvc *domain.AssetService) {
+	if secs := settingSvc.GroupMemberTimeoutSecs(); secs > 0 {
+		assetSvc.SetGroupMemberTimeout(time.Duration(secs) * time.Second)
+	}
+	if secs, ok := settingSvc.NegativeCacheTTLSecs(); ok {
+		assetSvc.SetNegativeCacheTTL(time.Duration(secs) * time.Second)
+	}
+}
+
 // handlers 用给定版本与就绪检查构造 api.Handlers。
 func (s *appServices) handlers(version string, checks []func() error) *api.Handlers {
 	return api.NewHandlers(api.Deps{
@@ -573,6 +637,21 @@ func (s *appServices) handlers(version string, checks []func() error) *api.Handl
 		OnUpstreamTimeoutChange: func(d time.Duration) {
 			if s.upstreamClient != nil {
 				s.upstreamClient.SetTimeout(d)
+			}
+		},
+		// 两项 proxy/group 调优的热生效链路：设置页保存 → PutSettings 回调 →
+		// AssetService 的 setter（内部有锁保护，与在途 group 读并发安全）。
+		// 注入点必须在 NewAssetService 之后、第一个请求之前，而 handlers 是在
+		// 服务启动装配的最后一步构造的，早于任何请求。
+		OnGroupMemberTimeoutChange: func(d time.Duration) {
+			if s.assetSvc != nil {
+				s.assetSvc.SetGroupMemberTimeout(d)
+			}
+		},
+		OnNegativeCacheTTLChange: func(d time.Duration) {
+			if s.assetSvc != nil {
+				// 0 = 关闭负缓存，必须原样传给 setter（setter 的守卫只忽略负数）。
+				s.assetSvc.SetNegativeCacheTTL(d)
 			}
 		},
 	})
