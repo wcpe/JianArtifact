@@ -1,6 +1,7 @@
 package domain_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -109,5 +110,50 @@ func TestStorageHealthReportsOnlyCollectableGarbage(t *testing.T) {
 		if _, statErr := os.Stat(filepath.Join(dataDir, name)); statErr != nil {
 			t.Fatalf("体检不得删除 %s：%v", name, statErr)
 		}
+	}
+}
+
+// failingBlobScanner 模拟「磁盘扫描本身失败」：用于验证单项失败不整份失败。
+type failingBlobScanner struct{}
+
+func (failingBlobScanner) WalkActive(func(string) error) error {
+	return errors.New("模拟扫描失败")
+}
+
+// TestStorageHealthPartialFailureStillReturnsOtherItems 钉住「单项统计失败不整份失败」。
+//
+// 为什么这条重要：体检是运维判断「要不要清理」的唯一依据。某个目录因为权限、挂载或
+// IO 错误读不到时，如果整份报告变成 500，运维得到的信息量是零——连那些**读得到**的
+// 可回收数据都看不到。所以正确行为是「能算的都算，把失败原因附在 partialError 里」。
+//
+// 变异验证：把 Snapshot 里 keep(err) 之后改成「err != nil 就 return」，本用例必须转红。
+func TestStorageHealthPartialFailureStillReturnsOtherItems(t *testing.T) {
+	t.Parallel()
+	dataDir := t.TempDir()
+
+	// 造一个「读得到」的可回收项：空的分片目录。
+	if err := os.MkdirAll(filepath.Join(dataDir, "blobs", "cc"), 0o755); err != nil {
+		t.Fatalf("建空目录：%v", err)
+	}
+
+	// 引用集合读取失败 + blob 扫描失败，两者都是「单项失败」。
+	svc := domain.NewStorageHealthService(
+		dataDir,
+		failingBlobScanner{},
+		func() (map[string]struct{}, error) { return nil, errors.New("模拟引用集合读取失败") },
+	)
+
+	health, err := svc.Snapshot()
+	if err == nil {
+		t.Fatal("应如实返回失败原因（供 handler 写 partialError），实际 nil")
+	}
+	// 关键：其余项仍应被统计到——空目录数必须还是 1，不能因为别的项失败就归零。
+	if health.EmptyDirs != 1 {
+		t.Fatalf("读得到的项仍应统计：EmptyDirs = %d，期望 1", health.EmptyDirs)
+	}
+	// 失败的项留空而不是给出错值（不给运维假数据）。
+	if health.OrphanBlobs != 0 || health.OrphanBlobBytes != 0 {
+		t.Fatalf("扫描失败的项应留空，实际 OrphanBlobs=%d OrphanBlobBytes=%d",
+			health.OrphanBlobs, health.OrphanBlobBytes)
 	}
 }
