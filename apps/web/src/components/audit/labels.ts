@@ -170,6 +170,14 @@ export const ACTION_LABEL_KEYS: Record<string, string> = {
   "repository.delete": "auditAction.repoDelete",
   //  存储治理：手动触发维护作业与仓库空目录清理（后端新增写入的两个动作）。
   "maintenance.job_run": "auditAction.maintenanceJobRun",
+  //  维护与清理控制台：定向清理、回收站三类动作、负缓存清理。
+  //  恢复与彻底删除分开映射，是因为前者可逆、后者不可逆——审计列表里混成一条
+  //  会让读者只能靠 detail 猜语义。
+  "maintenance.cleanup": "auditAction.maintenanceCleanup",
+  "maintenance.trash.restore": "auditAction.maintenanceTrashRestore",
+  "maintenance.trash.purge": "auditAction.maintenanceTrashPurge",
+  "maintenance.trash.purge_all": "auditAction.maintenanceTrashPurgeAll",
+  "maintenance.negative_cache_purge": "auditAction.maintenanceNegativeCachePurge",
   "repo.cleanup": "auditAction.repoCleanup",
 };
 

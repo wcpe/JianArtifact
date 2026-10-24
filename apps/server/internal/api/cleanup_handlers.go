@@ -21,6 +21,14 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
+// 定向清理执行的审计动作。取值写进审计库后不可随意更名：
+// 前端 auditAction 文案与按 action 的筛选都依赖这个字面量。
+//
+// 用维护类动作名（maintenance.*）而不是仓库维度的 repo.cleanup：清理的四类候选都是
+// 数据目录下的运维残留，与单个仓库不是同一维度（口径对齐 maintenance.job_run /
+// maintenance.negative_cache_purge）。
+const auditActionMaintenanceCleanup = "maintenance.cleanup"
+
 // CleanupController 是接口层对清理能力的依赖（便于测试注入桩）。
 type CleanupController interface {
 	Preview(kind string, keepLast int) (domain.CleanupPreview, error)
@@ -42,6 +50,11 @@ type cleanupRequest struct {
 }
 
 // PreviewCleanup 计算候选集并返回清单（**纯只读**）。
+//
+// 不写审计：本端点不删除、不移动、不写库，只把"此刻有哪些东西可回收"算出来给管理员看。
+// 只读操作留痕会把审计变成访问日志——真正需要追责的执行动作反而被埋进噪音里；而且预览
+// 会被前端反复点击（切换类别、调整保留数各算一次），记录它们无助于回答"东西是谁删的"。
+// 口径与负缓存查看端点、作业清单查询一致：写动作才记审计。
 func (h *Handlers) PreviewCleanup(c *gin.Context) {
 	if _, ok := requireAdmin(c); !ok {
 		return
@@ -94,6 +107,15 @@ func (h *Handlers) ExecuteCleanup(c *gin.Context) {
 		writeDomainErr(c, err)
 		return
 	}
+	// 受理即记一条审计：清理会把文件移出原位置（虽可恢复），"谁在何时用哪个 kind 动了多少项"
+	// 必须可追溯。只在受理成功后记——参数非法、类别未知、单并发冲突都已提前返回，
+	// 一次被拒的请求不是"已执行的动作"，记下来会让审计与事实不符。
+	//
+	// 不另记 maintenance.cleanup_done：执行结果（状态 / 进度 / 释放字节 / 失败原因）已经在
+	// clean_task 表里，审计只回答"谁发起了什么"，避免一次清理产生两条噪音记录
+	// （口径对齐 maintenance.job_run，见规格 0.13.0 审计小节）。
+	h.AuditLog(c, auditActionMaintenanceCleanup, "maintenance", "cleanup", "",
+		cleanupAuditDetail(task, len(req.Items)), "ok")
 	c.JSON(http.StatusAccepted, gin.H{
 		"taskId":         task.ID,
 		"status":         task.Status,
@@ -101,6 +123,28 @@ func (h *Handlers) ExecuteCleanup(c *gin.Context) {
 		"processedItems": task.ProcessedItems,
 		"totalItems":     task.TotalItems,
 	})
+}
+
+// cleanupAuditDetail 生成清理审计详情：kind、请求删除项数、是否整类（items 为空即整类），
+// 外加受理项数与任务号。
+//
+// 为什么补这两个字段：整类清理时"请求项数"是 0，只靠它读不出这次到底动了多大的范围，
+// 而受理项数是服务端按白名单重算后的真实规模；任务号则把这条审计与 clean_task 记录对上，
+// 事后才能从"记了一笔"走到"逐项看删了什么"。
+//
+// 不列 items 的具体路径：任务表与回收站条目已逐项留痕，审计详情保持单行可读，也避免
+// 一次整类清理把详情撑爆。kind 在此处必然属于四个已校验的类别（未知 kind 在执行前就报错
+// 返回，走不到这里），因此无需额外转义即不含控制字符。
+func cleanupAuditDetail(task *repository.CleanTask, requestedItems int) string {
+	scope := "定向"
+	if requestedItems == 0 {
+		scope = "整类"
+	}
+	return "类型=" + task.Kind +
+		" 请求项数=" + strconv.Itoa(requestedItems) +
+		" 范围=" + scope +
+		" 受理项数=" + strconv.Itoa(task.TotalItems) +
+		" 任务=" + strconv.FormatInt(task.ID, 10)
 }
 
 // GetCleanTask 返回单个清理任务的进度与结果。

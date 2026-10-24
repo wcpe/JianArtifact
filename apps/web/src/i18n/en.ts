@@ -90,6 +90,15 @@ export const en = {
       "External access endpoint (including scheme, e.g. https://repo.example.com); leave empty to infer from the request domain.",
     publicUrlEmpty: "No public base URL configured yet; the request domain is used for inference.",
     upstreamTimeoutLabel: "Upstream timeout (seconds)",
+    groupMemberTimeoutLabel: "Group member confirmation budget (seconds)",
+    groupMemberTimeoutHint:
+      "Maximum wait for a single member to confirm whether an artifact exists when probing a group repository (1–3600s; 0 or negative falls back to the default 3s). Takes effect immediately without a restart; a larger value makes unreachable members slow down failure on missing paths.",
+    negativeCacheTTLLabel: "404 negative cache TTL (seconds)",
+    negativeCacheTTLHint:
+      "An artifact confirmed missing returns 404 directly within the cache window without hitting upstream or probing members; 0 disables the negative cache (every request goes upstream, raising upstream load). Takes effect immediately without a restart.",
+    groupMemberTimeoutRange:
+      "Group member confirmation budget must be between 1 and 3600 seconds (this setting has no off state)",
+    negativeCacheTTLRange: "Negative cache TTL must be between 0 and 3600 seconds (0 disables it)",
     allowedHostsLabel: "Allowed domains",
     allowedHostsHint:
       "Domain or IP allowlist; only domains on the list can access this service. You can paste full URLs — scheme, path and port are stripped automatically on save. Leave empty for no restriction.",
@@ -176,13 +185,21 @@ export const en = {
     colStatus: "Status",
     colProgress: "Progress",
     colCreated: "Time",
+    colFreedBytes: "Freed",
+    colElapsed: "Duration",
+    colFailure: "Failure reason",
     colPath: "Original path",
     colSize: "Size",
+    colRetention: "Days left",
     colActions: "Actions",
     colJob: "Job",
     colInterval: "Interval",
     colLastRun: "Last run",
     colFailures: "Failures",
+    colRunning: "Running",
+    jobRunningNow: "Running",
+    jobIdle: "Idle",
+    loadFailedHint: "Refresh failed; still showing the last data. Use Refresh to retry.",
     refresh: "Refresh",
     trashTitle: "Recycle bin",
     trashUsage: "{{count}} items / {{bytes}}",
@@ -1186,6 +1203,12 @@ export const en = {
     // 存储治理新增动作
     maintenanceJobRun: "Run maintenance job manually",
     repoCleanup: "Clean up empty repository directories",
+    // 维护与清理控制台：定向清理、回收站三类动作、负缓存清理
+    maintenanceCleanup: "Run targeted cleanup",
+    maintenanceTrashRestore: "Restore from recycle bin",
+    maintenanceTrashPurge: "Permanently delete recycle bin entries",
+    maintenanceTrashPurgeAll: "Empty recycle bin",
+    maintenanceNegativeCachePurge: "Purge 404 negative cache",
   },
   auditWorkbench: {
     // 审计工作台（方案 A · 双栏排查工作台）：页标题由页眉面包屑渲染

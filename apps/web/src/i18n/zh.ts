@@ -84,6 +84,14 @@ export const zh = {
     publicUrlHint: "对外访问入口（含协议，如 https://repo.example.com）；留空则按请求域名推断。",
     publicUrlEmpty: "尚未配置对外基础 URL，当前将按请求域名推断。",
     upstreamTimeoutLabel: "回源超时（秒）",
+    groupMemberTimeoutLabel: "group 成员确认预算（秒）",
+    groupMemberTimeoutHint:
+      "group 仓库逐成员探测时，单个成员「确认制品是否存在」的最长等待（1–3600 秒，0 或负数按默认 3 秒处理）。改动即时生效、无需重启；调大会让不可达成员拖慢缺失路径的失败返回。",
+    negativeCacheTTLLabel: "404 负缓存 TTL（秒）",
+    negativeCacheTTLHint:
+      "确认不存在的制品在缓存期内直接返回 404、不再回源或探测成员；0 = 关闭负缓存（每个请求都真实回源，上游压力随之上升）。改动即时生效、无需重启。",
+    groupMemberTimeoutRange: "group 成员确认预算须在 1–3600 秒之间（本项没有关闭语义）",
+    negativeCacheTTLRange: "负缓存 TTL 须在 0–3600 秒之间（0 表示关闭负缓存）",
     allowedHostsLabel: "允许访问的域名",
     allowedHostsHint:
       "域名或 IP 白名单，仅列表内的域名可访问本服务；可粘贴完整 URL，保存时自动去掉协议、路径与端口。留空表示不限制。",
@@ -165,13 +173,21 @@ export const zh = {
     colStatus: "状态",
     colProgress: "进度",
     colCreated: "时间",
+    colFreedBytes: "释放字节",
+    colElapsed: "耗时",
+    colFailure: "失败原因",
     colPath: "原路径",
     colSize: "大小",
+    colRetention: "剩余保留天数",
     colActions: "操作",
     colJob: "作业",
     colInterval: "间隔",
     colLastRun: "最近执行",
     colFailures: "失败次数",
+    colRunning: "是否运行中",
+    jobRunningNow: "运行中",
+    jobIdle: "空闲",
+    loadFailedHint: "刷新失败，仍在展示上次数据。可点「刷新」重试。",
     refresh: "刷新",
     trashTitle: "回收站",
     trashUsage: "{{count}} 项 / {{bytes}}",
@@ -1120,6 +1136,12 @@ export const zh = {
     // 存储治理新增动作
     maintenanceJobRun: "手动触发维护作业",
     repoCleanup: "清理仓库空目录",
+    // 维护与清理控制台：定向清理、回收站三类动作、负缓存清理
+    maintenanceCleanup: "执行定向清理",
+    maintenanceTrashRestore: "从回收站恢复",
+    maintenanceTrashPurge: "彻底删除回收站条目",
+    maintenanceTrashPurgeAll: "清空回收站",
+    maintenanceNegativeCachePurge: "清理 404 负缓存",
   },
   auditWorkbench: {
     // 审计工作台（方案 A · 双栏调查工作台）：页面标题由页眉面包屑承担
