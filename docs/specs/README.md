@@ -16,15 +16,15 @@
 
 `0.13.0` 是**代理回源正确性与上游韧性**窗口：修正「慢被当成不存在」的语义缺陷，并把此前硬编码的超时预算与负缓存 TTL 开放为配置。起因是一次线上现象——group 仓库下某坐标的 POM 全部 200、同坐标的 jar 全部 404，且只与制品体积相关。
 
-| FR                                | 规格                                                                                     | 主题                                                    | 状态                 |
-| --------------------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------- | -------------------- |
-| FR-154                            | [`0.13.0-group-two-phase-budget.md`](0.13.0-group-two-phase-budget.md)                   | group 回源预算解耦（两阶段）                            | 开发完成，待用户验收 |
-| FR-155                            | [`0.13.0-upstream-slow-not-unreachable.md`](0.13.0-upstream-slow-not-unreachable.md)     | 断路器不复用「回源慢」作不可达判据                      | 开发完成，待用户验收 |
-| FR-156                            | [`0.13.0-proxy-timeout-tuning-config.md`](0.13.0-proxy-timeout-tuning-config.md)         | group 成员超时与负缓存 TTL 配置化                       | 开发完成，待用户验收 |
-| FR-157                            | [`0.13.0-proxy-resolve-observability.md`](0.13.0-proxy-resolve-observability.md)         | 代理解析结果可观测                                      | 开发完成，待用户验收 |
-| FR-158                            | [`0.13.0-upstream-failure-classification.md`](0.13.0-upstream-failure-classification.md) | 回源失败原因五分类                                      | 开发完成，待用户验收 |
-| FR-159                            | [`0.13.0-upstream-health-history.md`](0.13.0-upstream-health-history.md)                 | 上游健康历史                                            | 开发完成，待用户验收 |
-| FR-160 / FR-161 / FR-162 / FR-163 | [`0.13.0-maintenance-cleanup-console.md`](0.13.0-maintenance-cleanup-console.md)         | 维护与清理控制台（任务队列 / 定向清理 / 页面 / 回收站） | 开发完成，待用户验收 |
+| FR                                         | 规格                                                                                     | 主题                                                    | 状态                 |
+| ------------------------------------------ | ---------------------------------------------------------------------------------------- | ------------------------------------------------------- | -------------------- |
+| FR-154                                     | [`0.13.0-group-two-phase-budget.md`](0.13.0-group-two-phase-budget.md)                   | group 回源预算解耦（两阶段）                            | 开发完成，待用户验收 |
+| FR-155                                     | [`0.13.0-upstream-slow-not-unreachable.md`](0.13.0-upstream-slow-not-unreachable.md)     | 断路器不复用「回源慢」作不可达判据                      | 开发完成，待用户验收 |
+| FR-156                                     | [`0.13.0-proxy-timeout-tuning-config.md`](0.13.0-proxy-timeout-tuning-config.md)         | group 成员超时与负缓存 TTL 配置化                       | 开发完成，待用户验收 |
+| FR-157                                     | [`0.13.0-proxy-resolve-observability.md`](0.13.0-proxy-resolve-observability.md)         | 代理解析结果可观测                                      | 开发完成，待用户验收 |
+| FR-158                                     | [`0.13.0-upstream-failure-classification.md`](0.13.0-upstream-failure-classification.md) | 回源失败原因五分类                                      | 开发完成，待用户验收 |
+| FR-159                                     | [`0.13.0-upstream-health-history.md`](0.13.0-upstream-health-history.md)                 | 上游健康历史                                            | 开发完成，待用户验收 |
+| FR-160 / FR-161 / FR-162 / FR-163 / FR-164 | [`0.13.0-maintenance-cleanup-console.md`](0.13.0-maintenance-cleanup-console.md)         | 维护与清理控制台（任务队列 / 定向清理 / 页面 / 回收站） | 开发完成，待用户验收 |
 
 > 同窗口另含一条**不单列 FR 的缺陷修正**（FIX-1）：group 读路径把不可判定失败折叠成 404 —— 现按 `ResolveFailure` 分流为 `Confirmed→404` / `含超时→504` / `其余不可判定→502`。该条属 FR-110 已交付实现的归真，只记 CHANGELOG 与 PRD 括注，理由见 [`0.13.0-group-two-phase-budget.md`](0.13.0-group-two-phase-budget.md) §2.3。
 
