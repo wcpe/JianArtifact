@@ -1191,6 +1191,10 @@ export interface SettingsConfig {
    * 0 表示暂无已完成备份，界面不显示估算。
    */
   backupLatestPackageBytes: number;
+  /** group 成员确认预算（秒）：单个成员「确认是否存在」的最长等待，1–3600。 */
+  groupMemberTimeout: number;
+  /** 404 负缓存 TTL（秒）：0 = 关闭负缓存（每次请求都真实回源）。 */
+  negativeCacheTTL: number;
 }
 
 /**
@@ -1218,6 +1222,10 @@ function normalizeSettings(raw: SettingsConfig): SettingsConfig {
     backupAutoIntervalValue: raw.backupAutoIntervalValue ?? raw.backupAutoInterval ?? 0,
     backupAutoIntervalUnit: raw.backupAutoIntervalUnit ?? "seconds",
     backupLatestPackageBytes: raw.backupLatestPackageBytes ?? 0,
+    // 两项 proxy/group 调优：缺省值与后端一致（3s / 60s）。负缓存 TTL 的 0 是
+    // 「关闭」，只能用 ?? 判 undefined，不能写成 `|| 60` —— 那会把关闭态打回默认。
+    groupMemberTimeout: raw.groupMemberTimeout ?? 3,
+    negativeCacheTTL: raw.negativeCacheTTL ?? 60,
   };
 }
 
