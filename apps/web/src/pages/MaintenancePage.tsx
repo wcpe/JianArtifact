@@ -7,7 +7,12 @@
 //
 // 表格统一带 `miw={720}`：不给最小宽度时，窄屏下列会被压到一字一行（原路径被拆成竖排），
 // 这不属于横向溢出所以不会被溢出检查发现，但可读性已经崩了。给最小宽度后，窄屏改为在
-// 表格容器内横向滚动，宽屏仍撑满容器。
+// 表格容器内横向滚动，宽屏仍撑满容器。新增列不再抬高这个下限：列多了就让内容自然变宽、
+// 容器横向滚动，把 min-width 一路调大反而会让宽屏也白留一片。
+//
+// 列表加载失败**不清空数据**（清理任务与回收站两个 Tab 的共同约定）：清空过一次任务列表，
+// 轮询驱动的那条链就断了——`hasRunning` 变 false → 定时器停 → 进行中的任务从界面消失，
+// 一次网络抖动看起来像"任务丢了"。失败只置一条提示，下次成功自动恢复。
 //
 // 破坏性动作的防护分层是本页的核心设计：
 //   - `cleanup`（移入回收站）与 `purge`（彻底删除）走**三层防护**：
@@ -42,6 +47,7 @@ import { useSearchParams } from "react-router-dom";
 import { PageShell } from "../app/PageShell";
 import { AsyncBoundary } from "../components/AsyncBoundary";
 import { OpsSection } from "../components/ops/OpsKit";
+import { formatDuration } from "../components/audit/labels";
 import { DestructiveConfirmModal } from "../components/maintenance/DestructiveConfirmModal";
 import {
   executeCleanup,
@@ -64,6 +70,7 @@ import type {
   TrashEntry,
 } from "../api/endpoints";
 import { useAsync } from "../hooks/useAsync";
+import { parseUtc } from "../lib/timeFormat";
 import { density } from "../theme/density";
 
 const CLEANUP_KINDS: { kind: CleanupKind; labelKey: string }[] = [
@@ -91,6 +98,23 @@ function formatStamp(stamp: string | null | undefined): string {
   const parsed = new Date(stamp.includes("T") ? stamp : `${stamp.replace(" ", "T")}Z`);
   if (Number.isNaN(parsed.getTime())) return stamp;
   return parsed.toLocaleString();
+}
+
+/**
+ * 任务耗时：`StartedAt → FinishedAt`。
+ *
+ * 两端任一为空（排队中 / 仍在跑）就是算不出来，如实显示「—」，不用当前时间硬减——
+ * 那会把"还在跑"渲染成一个不断变大的假耗时。时间解析复用 `lib/timeFormat` 的
+ * `parseUtc`（后端既有 naive UTC 与 RFC3339 两种形状都由它统一），毫秒转文案复用
+ * 审计工作台既有的 `formatDuration`，避免同一产品里出现第三套耗时写法。
+ */
+function formatElapsed(startedAt: string | null, finishedAt: string | null): string {
+  const start = parseUtc(startedAt);
+  const finish = parseUtc(finishedAt);
+  if (!start || !finish) return "—";
+  const ms = finish.getTime() - start.getTime();
+  if (!Number.isFinite(ms) || ms < 0) return "—";
+  return formatDuration(ms);
 }
 
 /** 关键事实条：一行固定高度指标，不参与滚动。 */
@@ -157,14 +181,19 @@ function CleanTasksTab({ refreshKey }: { refreshKey: number }) {
   const { t } = useTranslation();
   const [tasks, setTasks] = useState<CleanTask[]>([]);
   const [total, setTotal] = useState(0);
+  const [loadFailed, setLoadFailed] = useState(false);
 
   const load = useCallback(() => {
     listCleanTasks(1, 20)
       .then((res) => {
         setTasks(res.items ?? []);
         setTotal(res.total ?? 0);
+        setLoadFailed(false);
       })
-      .catch(() => setTasks([]));
+      // 失败时**绝不**清空列表：本 Tab 由轮询驱动，清空会让 `hasRunning` 立刻变 false、
+      // 定时器随之停掉，进行中的任务就此从界面消失——一次网络抖动看起来就像"任务丢了"。
+      // 保留上次数据并置一条失败提示，下一轮成功即自动恢复。
+      .catch(() => setLoadFailed(true));
   }, []);
 
   useEffect(load, [load, refreshKey]);
@@ -197,6 +226,18 @@ function CleanTasksTab({ refreshKey }: { refreshKey: number }) {
         </Button>
       }
     >
+      {loadFailed ? (
+        <Box px="md" pt="sm">
+          <Alert
+            color="yellow"
+            variant="light"
+            icon={<IconAlertTriangle size={16} />}
+            title={t("common.refreshFailedTitle")}
+          >
+            {t("maintenance.loadFailedHint")}
+          </Alert>
+        </Box>
+      ) : null}
       {tasks.length === 0 ? (
         <Box p="xl">
           <Text size="sm" c="dimmed">
@@ -210,7 +251,10 @@ function CleanTasksTab({ refreshKey }: { refreshKey: number }) {
               <Table.Th>{t("maintenance.colKind")}</Table.Th>
               <Table.Th>{t("maintenance.colStatus")}</Table.Th>
               <Table.Th>{t("maintenance.colProgress")}</Table.Th>
+              <Table.Th>{t("maintenance.colFreedBytes")}</Table.Th>
+              <Table.Th>{t("maintenance.colElapsed")}</Table.Th>
               <Table.Th>{t("maintenance.colCreated")}</Table.Th>
+              <Table.Th>{t("maintenance.colFailure")}</Table.Th>
             </Table.Tr>
           </Table.Thead>
           <Table.Tbody>
@@ -243,13 +287,21 @@ function CleanTasksTab({ refreshKey }: { refreshKey: number }) {
                     </Text>
                   )}
                 </Table.Td>
+                <Table.Td>{formatBytes(task.FreedBytes)}</Table.Td>
+                <Table.Td>{formatElapsed(task.StartedAt, task.FinishedAt)}</Table.Td>
                 <Table.Td>
                   <Text size="sm">{formatStamp(task.CreatedAt)}</Text>
+                </Table.Td>
+                <Table.Td>
                   {task.ErrorMessage ? (
-                    <Text size="xs" c="red">
+                    <Text size="sm" c="red" style={{ wordBreak: "break-word" }}>
                       {task.ErrorMessage}
                     </Text>
-                  ) : null}
+                  ) : (
+                    <Text size="sm" c="dimmed">
+                      —
+                    </Text>
+                  )}
                 </Table.Td>
               </Table.Tr>
             ))}
@@ -267,6 +319,9 @@ function TrashTab({ refreshKey, onChanged }: { refreshKey: number; onChanged: ()
   const [stats, setStats] = useState({ entries: 0, bytes: 0 });
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [pendingPurge, setPendingPurge] = useState<{ ids: number[]; all: boolean } | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
+  // 彻底删除请求在途：用于禁用确认按钮，避免连点发出多次不可逆请求。
+  const [purging, setPurging] = useState(false);
 
   const load = useCallback(() => {
     listTrash(1, 50)
@@ -274,8 +329,11 @@ function TrashTab({ refreshKey, onChanged }: { refreshKey: number; onChanged: ()
         setEntries(res.items ?? []);
         setStats({ entries: res.stats?.entries ?? 0, bytes: res.stats?.bytes ?? 0 });
         setSelected(new Set());
+        setLoadFailed(false);
       })
-      .catch(() => setEntries([]));
+      // 与清理任务 Tab 同一口径：失败保留上次数据，只提示不抹掉。
+      // 列表被清空会连带让"清空回收站"按钮变成禁用——一次网络抖动看起来像回收站真的空了。
+      .catch(() => setLoadFailed(true));
   }, []);
 
   useEffect(load, [load, refreshKey]);
@@ -313,7 +371,8 @@ function TrashTab({ refreshKey, onChanged }: { refreshKey: number; onChanged: ()
   };
 
   const runPendingPurge = () => {
-    if (!pendingPurge) return;
+    if (!pendingPurge || purging) return;
+    setPurging(true);
     const action = pendingPurge.all ? purgeAllTrash() : purgeTrash(pendingPurge.ids);
     action
       .then(() => {
@@ -322,7 +381,8 @@ function TrashTab({ refreshKey, onChanged }: { refreshKey: number; onChanged: ()
         load();
         onChanged();
       })
-      .catch(() => notifications.show({ color: "red", message: t("maintenance.actionFailed") }));
+      .catch(() => notifications.show({ color: "red", message: t("maintenance.actionFailed") }))
+      .finally(() => setPurging(false));
   };
 
   return (
@@ -374,6 +434,18 @@ function TrashTab({ refreshKey, onChanged }: { refreshKey: number; onChanged: ()
           </Group>
         }
       >
+        {loadFailed ? (
+          <Box px="md" pt="sm">
+            <Alert
+              color="yellow"
+              variant="light"
+              icon={<IconAlertTriangle size={16} />}
+              title={t("common.refreshFailedTitle")}
+            >
+              {t("maintenance.loadFailedHint")}
+            </Alert>
+          </Box>
+        ) : null}
         {entries.length === 0 ? (
           <Box p="xl">
             <Stack gap={4}>
@@ -394,6 +466,7 @@ function TrashTab({ refreshKey, onChanged }: { refreshKey: number; onChanged: ()
                 <Table.Th>{t("maintenance.colPath")}</Table.Th>
                 <Table.Th>{t("maintenance.colSize")}</Table.Th>
                 <Table.Th>{t("maintenance.colCreated")}</Table.Th>
+                <Table.Th>{t("maintenance.colRetention")}</Table.Th>
                 <Table.Th>{t("maintenance.colActions")}</Table.Th>
               </Table.Tr>
             </Table.Thead>
@@ -413,6 +486,15 @@ function TrashTab({ refreshKey, onChanged }: { refreshKey: number; onChanged: ()
                   </Table.Td>
                   <Table.Td>{formatBytes(entry.Bytes)}</Table.Td>
                   <Table.Td>{formatStamp(entry.CreatedAt)}</Table.Td>
+                  <Table.Td>
+                    {/* 后端未返回保留期，前端不猜：保留天数只存在于服务端配置
+                        `JIAN_TRASH_RETENTION_DAYS`，而 GET /maintenance/trash 既不回保留天数、
+                        也不回过期时间；照默认值硬编码 7 天，在运维把它改成别的天数或改成 0
+                        （不自动清理）时就会直接说错话。接口补出该字段前一律显示「—」。 */}
+                    <Text size="sm" c="dimmed">
+                      —
+                    </Text>
+                  </Table.Td>
                   <Table.Td>
                     <Group gap={4}>
                       <Button
@@ -448,6 +530,7 @@ function TrashTab({ refreshKey, onChanged }: { refreshKey: number; onChanged: ()
         }
         onConfirm={runPendingPurge}
         onClose={() => setPendingPurge(null)}
+        pending={purging}
       />
     </>
   );
@@ -458,15 +541,19 @@ function JobsTab() {
   const { t } = useTranslation();
   const state = useAsync(listMaintenanceJobs, [], { cacheKey: "maintenance-jobs" });
   const [pendingJob, setPendingJob] = useState<MaintenanceJob | null>(null);
+  // 触发请求在途：禁用确认按钮，避免连点把同一作业触发多轮（作业是物理删除）。
+  const [starting, setStarting] = useState(false);
 
   const runPendingJob = () => {
-    if (!pendingJob) return;
+    if (!pendingJob || starting) return;
+    setStarting(true);
     runMaintenanceJob(pendingJob.name)
       .then(() => {
         notifications.show({ color: "green", message: t("maintenance.jobAccepted") });
         setPendingJob(null);
       })
-      .catch(() => notifications.show({ color: "red", message: t("maintenance.actionFailed") }));
+      .catch(() => notifications.show({ color: "red", message: t("maintenance.actionFailed") }))
+      .finally(() => setStarting(false));
   };
 
   return (
@@ -507,6 +594,7 @@ function JobsTab() {
                     <Table.Th>{t("maintenance.colInterval")}</Table.Th>
                     <Table.Th>{t("maintenance.colLastRun")}</Table.Th>
                     <Table.Th>{t("maintenance.colFailures")}</Table.Th>
+                    <Table.Th>{t("maintenance.colRunning")}</Table.Th>
                     <Table.Th>{t("maintenance.colActions")}</Table.Th>
                   </Table.Tr>
                 </Table.Thead>
@@ -517,6 +605,18 @@ function JobsTab() {
                       <Table.Td>{job.intervalSeconds}s</Table.Td>
                       <Table.Td>{formatStamp(job.lastFinishedAt ?? job.lastStartedAt)}</Table.Td>
                       <Table.Td>{job.failures ?? 0}</Table.Td>
+                      <Table.Td>
+                        {/* 运行中态直接取自接口的 `running`（进程内实际状态），
+                            不靠"最近执行时间是否很近"去猜——猜错会把空闲作业画成在跑。 */}
+                        <Badge
+                          size="sm"
+                          variant="light"
+                          color={job.running ? "blue" : "gray"}
+                          data-job-running={job.running ? "true" : "false"}
+                        >
+                          {job.running ? t("maintenance.jobRunningNow") : t("maintenance.jobIdle")}
+                        </Badge>
+                      </Table.Td>
                       <Table.Td>
                         <Button
                           size="compact-xs"
@@ -542,6 +642,7 @@ function JobsTab() {
         message={t("maintenance.runJobIrreversible")}
         onConfirm={runPendingJob}
         onClose={() => setPendingJob(null)}
+        pending={starting}
       />
     </>
   );
@@ -685,6 +786,9 @@ export function MaintenancePage() {
     bytes: number;
   } | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  // 清理请求在途：用于禁用确认按钮。这条请求会移走上百个目录，
+  // 手抖连点会让第二、三次点击撞 409，界面看起来像"清理失败"。
+  const [cleaning, setCleaning] = useState(false);
 
   const bump = () => setRefreshKey((n) => n + 1);
 
@@ -696,7 +800,8 @@ export function MaintenancePage() {
   };
 
   const runCleanup = () => {
-    if (!confirming) return;
+    if (!confirming || cleaning) return;
+    setCleaning(true);
     executeCleanup({ kind: confirming.kind, items: confirming.items })
       .then(() => {
         notifications.show({ color: "green", message: t("maintenance.cleanupDone") });
@@ -713,7 +818,8 @@ export function MaintenancePage() {
             ? t("maintenance.cleanupRunning")
             : t("maintenance.actionFailed"),
         });
-      });
+      })
+      .finally(() => setCleaning(false));
   };
 
   return (
@@ -827,6 +933,7 @@ export function MaintenancePage() {
         })}
         onConfirm={runCleanup}
         onClose={() => setConfirming(null)}
+        pending={cleaning}
       />
     </PageShell>
   );
