@@ -73,6 +73,10 @@ type CleanupService struct {
 	clock func() time.Time
 	// trashCapacity 是回收站字节上限（0 = 不限制）；超限时拒绝新清理。
 	trashCapacity int64
+	// rename 是移入/搬回回收站时使用的重命名操作；默认 os.Rename。
+	// 抽成字段是为了让「中途失败必须回滚」这条一致性要求可被测试精确验证——
+	// 靠制造真实跨设备/权限失败来触发第二项失败既不可靠也难以跨平台。
+	rename func(oldpath, newpath string) error
 }
 
 // SetTrashCapacity 设置回收站容量护栏（0 = 不限制）。
@@ -80,9 +84,21 @@ func (s *CleanupService) SetTrashCapacity(maxBytes int64) {
 	s.trashCapacity = maxBytes
 }
 
+// SetRenameForTest 替换移入回收站时使用的重命名实现，仅供测试注入失败用。
+//
+// 为什么需要： 「中途失败必须回滚」是这条链路最重要的一致性要求，但要靠真实的
+// 跨设备/权限失败来让**第二项**恰好失败，在 Linux 与 Windows 上行为不一致，
+// 用普通文件占位又会让第一项就失败、回滚路径根本没被执行到。
+// 生产代码不会调用本方法，rename 恒为 os.Rename。
+func (s *CleanupService) SetRenameForTest(fn func(oldpath, newpath string) error) {
+	if fn != nil {
+		s.rename = fn
+	}
+}
+
 // NewCleanupService 构造清理服务。
 func NewCleanupService(dataDir string, tasks *repository.CleanTaskRepo) *CleanupService {
-	return &CleanupService{dataDir: dataDir, tasks: tasks, clock: time.Now}
+	return &CleanupService{dataDir: dataDir, tasks: tasks, clock: time.Now, rename: os.Rename}
 }
 
 // SetBackupUploadExpiredSource 注入过期上传会话来源（复用既有 24h TTL 口径，不另造常量）。
@@ -360,13 +376,16 @@ func (s *CleanupService) Execute(opts ExecuteOptions) (*repository.CleanTask, er
 			_ = s.tasks.MarkFailed(task.ID, 0, moveErr.Error())
 			return s.tasks.Get(task.ID)
 		}
-		if err := s.tasks.InsertTrashEntries([]repository.TrashEntry{entry}); err != nil {
+		// 传切片而非单个值：InsertTrashEntries 会把自增 id 回填进来，
+		// 失败回滚要靠它把已落库的记录标成 restored。
+		batch := []repository.TrashEntry{entry}
+		if err := s.tasks.InsertTrashEntries(batch); err != nil {
 			// 记录写不进去就把刚移动的那一项也搬回原位，避免「磁盘已改、DB 无记录」。
-			s.rollbackMoved(append(moved, entry))
+			s.rollbackMoved(append(moved, batch[0]))
 			_ = s.tasks.MarkFailed(task.ID, 0, err.Error())
 			return s.tasks.Get(task.ID)
 		}
-		moved = append(moved, entry)
+		moved = append(moved, batch[0])
 		processed++
 		_ = s.tasks.UpdateProgress(task.ID, processed)
 	}
@@ -414,7 +433,7 @@ func (s *CleanupService) undoMove(entry repository.TrashEntry) error {
 	if err := os.MkdirAll(filepath.Dir(entry.OriginalPath), 0o750); err != nil {
 		return err
 	}
-	return os.Rename(entry.TrashPath, entry.OriginalPath)
+	return s.rename(entry.TrashPath, entry.OriginalPath)
 }
 
 // rollbackMoved 把本次任务已成功移入回收站的条目全部搬回原位。
@@ -423,15 +442,23 @@ func (s *CleanupService) undoMove(entry repository.TrashEntry) error {
 // 不能留下「一部分移走了、任务记为失败、用户分不清哪些被动过」的中间态。
 // 已落库的记录一并标为 restored，避免回收站里留下指向已搬回原位的死条目。
 func (s *CleanupService) rollbackMoved(moved []repository.TrashEntry) {
+	allBack := true
 	for i := len(moved) - 1; i >= 0; i-- {
 		if undoErr := s.undoMove(moved[i]); undoErr != nil {
 			// 搬不回去就保留 staged 记录：宁可让用户在回收站里看到并能手动恢复，
 			// 也不要留下一个不可见的孤儿目录。
+			allBack = false
 			continue
 		}
 		if moved[i].ID != 0 {
 			_ = s.tasks.MarkTrashResolved(moved[i].ID, repository.TrashRestored)
 		}
+	}
+	// 全部搬回后，本次任务建的空目录（trash/<taskID>）就没有存在意义了。
+	// 留着会在回收站根下累积一串空目录，让「回收站占了多少」看着莫名其妙。
+	if allBack && len(moved) > 0 {
+		dir := filepath.Join(s.dataDir, TrashDirName, fmt.Sprintf("%d", moved[0].TaskID))
+		_ = os.Remove(dir) // 只在空目录时成功；非空说明还有别的东西，保留原样
 	}
 }
 
@@ -454,7 +481,7 @@ func (s *CleanupService) moveToTrash(taskID int64, kind string, item CleanupCand
 		return repository.TrashEntry{}, err
 	}
 	dst := filepath.Join(dstDir, fmt.Sprintf("%d", time.Now().UnixNano()))
-	if err := os.Rename(src, dst); err != nil {
+	if err := s.rename(src, dst); err != nil {
 		// 跨文件系统时 rename 会失败（EXDEV）。这里**不退化到复制**：把几十 GB 目录复制一遍
 		// 会让"清理"变成一次长时间高 IO 的操作，复制失败留下的半成品更难收拾；而回收站与
 		// 目标本来就在同一数据目录下，正常部署不会跨盘。如实报错并给出处置建议即可。

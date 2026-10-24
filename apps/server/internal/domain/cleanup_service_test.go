@@ -345,3 +345,58 @@ func TestAssetMutationHasPendingQuarantineTracksStatus(t *testing.T) {
 		t.Fatalf("restored 后不应再判为被引用：pending=%v err=%v", pending, err)
 	}
 }
+
+// TestCleanupFailureRollsBackMovedItems 钉住「失败不得留下不可见孤儿」这条一致性要求。
+//
+// 原实现是「先把所有项 rename 进回收站，循环结束才一次性写 DB 记录」：第 N 项失败时，
+// 前面已落盘的文件没有任何 trash_entry，回收站列不出来、无法恢复，而 trash-gc 只扫
+// staged 记录，也永远清不到——静默占盘且不可见。
+//
+// 现在改为逐项落库 + 失败回滚。本用例让**第二次**移动失败（第一次成功），
+// 验证确实走了回滚路径：原目录全部回到原位、回收站不留任何条目、任务记为 failed。
+func TestCleanupFailureRollsBackMovedItems(t *testing.T) {
+	t.Parallel()
+	db := newTestDB(t)
+	svc, dataDir := newCleanupEnv(t, db)
+
+	first := mkdir(t, filepath.Join(dataDir, "blobs", "0a", "ea"))
+	second := mkdir(t, filepath.Join(dataDir, "blobs", "11", "bb"))
+
+	// 第 2 次移动失败，模拟跨设备（EXDEV）或权限问题。
+	calls := 0
+	svc.SetRenameForTest(func(oldpath, newpath string) error {
+		calls++
+		if calls == 2 {
+			return errors.New("模拟移动失败")
+		}
+		return os.Rename(oldpath, newpath)
+	})
+
+	task, err := svc.Execute(domain.ExecuteOptions{Kind: domain.CleanupKindEmptyDirs})
+	if err != nil {
+		t.Fatalf("执行清理：%v", err)
+	}
+	if task.Status != repository.CleanTaskFailed {
+		t.Fatalf("任务状态 = %q，期望 failed", task.Status)
+	}
+
+	// 两项都必须回到原位：第一项虽然已移动成功，但整批失败后必须被搬回。
+	for _, dir := range []string{first, second} {
+		if _, statErr := os.Stat(dir); statErr != nil {
+			t.Fatalf("失败回滚后 %s 应回到原位：%v", dir, statErr)
+		}
+	}
+	// 回收站不留条目：否则会指向已被搬回原位的副本。
+	entries, _, listErr := repository.NewCleanTaskRepo(db).ListTrash("", 100, 0)
+	if listErr != nil {
+		t.Fatalf("列回收站：%v", listErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("失败任务不得留下回收站条目，实际 %d 条：%+v", len(entries), entries)
+	}
+	// 回收站目录下不得残留文件。
+	leftover := snapshotTree(t, filepath.Join(dataDir, domain.TrashDirName))
+	if len(leftover) > 1 { // 只允许 trash 根自身
+		t.Fatalf("回收站目录下残留了文件：%v", leftover)
+	}
+}

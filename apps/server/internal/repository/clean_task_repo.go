@@ -238,12 +238,20 @@ func (r *CleanTaskRepo) InsertTrashEntries(entries []TrashEntry) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	for _, e := range entries {
-		if _, err := tx.Exec(
+	for i := range entries {
+		res, err := tx.Exec(
 			`INSERT INTO trash_entry (task_id, kind, original_path, trash_path, is_dir, bytes, status)
 			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			e.TaskID, e.Kind, e.OriginalPath, e.TrashPath, e.IsDir, e.Bytes, TrashStaged); err != nil {
+			entries[i].TaskID, entries[i].Kind, entries[i].OriginalPath,
+			entries[i].TrashPath, entries[i].IsDir, entries[i].Bytes, TrashStaged)
+		if err != nil {
 			return err
+		}
+		// 回填自增 id：调用方在失败回滚时要按 id 把记录标为 restored，
+		// 拿不到 id 就只能留下指向已搬回原位的死条目。
+		id, idErr := res.LastInsertId()
+		if idErr == nil {
+			entries[i].ID = id
 		}
 	}
 	return tx.Commit()
