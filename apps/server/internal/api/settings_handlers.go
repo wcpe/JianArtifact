@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -172,9 +173,57 @@ func (h *Handlers) settingServiceOrZero() *domain.SettingService {
 //
 // 间隔若以表达式（backupAutoIntervalExpr）提交，则只校验表达式本身、跳过秒字段的
 // 上限校验——两者语义重叠，对同一个值报两次错只会让用户困惑。
+// looksLikeDisplayedInterval 判断该值是否是「回显格式」而不是「用户输入」。
+//
+// 为什么需要这个判断：GET 响应里的 backupAutoIntervalExpr 是**给人看的中文串**
+// （如 "30 秒"、"2 天"、"关闭"），而 PUT 的同名字段是**输入**。二者共用字段名，
+// 于是「把 GET 结果原样 PUT 回去」这种最自然的读-改-写用法必然 400
+// （未知的时间单位后缀 "秒"）——脚本化/第三方客户端一定会踩到。
+//
+// 判据刻意收窄，只认 FormatDurationHuman 会产出的那几种形态，不猜其他：
+//   - "关闭"（0 秒的回显）
+//   - "<数字> <中文单位>"（秒/分钟/小时/天/周/个月/年）
+//
+// 命中即视为「未提供本字段」，交由秒字段决定；这样既修好读-改-写，又不改变
+// 任何合法英文表达式（"30"、"5m"、"1d"）的解析。
+func looksLikeDisplayedInterval(raw string) bool {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return false
+	}
+	if s == "关闭" {
+		return true
+	}
+	for _, unit := range []string{"秒钟", "秒", "分钟", "小时", "天", "周", "个月", "年"} {
+		if strings.HasSuffix(s, unit) {
+			// 数字部分必须能解析，避免把 "abc天" 这种真正的错误输入也吞掉。
+			numPart := strings.TrimSpace(strings.TrimSuffix(s, unit))
+			if numPart == "" {
+				return false
+			}
+			if _, err := strconv.ParseInt(numPart, 10, 64); err != nil {
+				return false
+			}
+			return true
+		}
+	}
+	return false
+}
+
+// effectiveIntervalExpr 返回真正该当作输入处理的表达式（回显值视为未提供）。
+func effectiveIntervalExpr(req SettingsRequest) *string {
+	if req.BackupAutoIntervalExpr == nil {
+		return nil
+	}
+	if looksLikeDisplayedInterval(*req.BackupAutoIntervalExpr) {
+		return nil
+	}
+	return req.BackupAutoIntervalExpr
+}
+
 func validateBackupSettings(req SettingsRequest) error {
-	if req.BackupAutoIntervalExpr != nil {
-		if _, err := domain.ParseDurationExpression(*req.BackupAutoIntervalExpr, maxBackupAutoIntervalSecs); err != nil {
+	if expr := effectiveIntervalExpr(req); expr != nil {
+		if _, err := domain.ParseDurationExpression(*expr, maxBackupAutoIntervalSecs); err != nil {
 			return fmt.Errorf("自动备份间隔：%w", err)
 		}
 	} else if req.BackupAutoInterval != nil {
@@ -213,8 +262,8 @@ func validateBackupSettings(req SettingsRequest) error {
 //
 // 优先级：表达式 > 秒字段。表达式是给人用的入口，秒字段只为兼容既有调用方保留。
 func resolveBackupAutoInterval(req SettingsRequest) (*int, error) {
-	if req.BackupAutoIntervalExpr != nil {
-		secs, err := domain.ParseDurationExpression(*req.BackupAutoIntervalExpr, maxBackupAutoIntervalSecs)
+	if expr := effectiveIntervalExpr(req); expr != nil {
+		secs, err := domain.ParseDurationExpression(*expr, maxBackupAutoIntervalSecs)
 		if err != nil {
 			return nil, err
 		}
