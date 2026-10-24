@@ -419,6 +419,14 @@ func run() error {
 	if n, err := svc.backupSvc.ReconcileStartup(); err == nil && n > 0 {
 		fmt.Fprintf(os.Stderr, "备份：标记 %d 个服务重启遗留的生成中包为失败\n", n)
 	}
+	// 清理任务收口：把上次进程遗留的 queued/running 标为 interrupted。
+	// 不做这一步的后果不是「少一条记录」——单并发守卫以「是否存在 running」为判据，
+	// 残留的 running 会让此后每一次清理都被 409 拒绝且无法自愈，表现为「清理功能坏了」。
+	if n, err := svc.cleanTaskRepo.MarkInterruptedOnStartup(); err != nil {
+		fmt.Fprintf(os.Stderr, "清理任务：标记重启遗留任务失败：%v\n", err)
+	} else if n > 0 {
+		fmt.Fprintf(os.Stderr, "清理任务：标记 %d 个服务重启遗留的任务为中断\n", n)
+	}
 	// 清理崩在导入中途留下的暂存目录（有 restore.pending 时不清理，
 	// 那是等待本次启动替换数据库的正品，由 ApplyPendingRestore 处理）。
 	if err := svc.restoreSvc.ReconcileStaleStaging(); err != nil {
