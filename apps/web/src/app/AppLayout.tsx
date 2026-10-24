@@ -36,6 +36,7 @@ import {
   IconSearch,
   IconSettings,
   IconTransfer,
+  IconTrash,
   IconUsers,
   IconUsersGroup,
 } from "@tabler/icons-react";
@@ -134,6 +135,13 @@ const NAV_SECTIONS: NavSection[] = [
         labelKey: "nav.migrations",
         path: "/migrations",
         icon: <IconTransfer size={18} />,
+        adminOnly: true,
+      },
+      // 维护与清理：存储体检、清理任务、回收站与维护作业，仅管理员。
+      {
+        labelKey: "nav.maintenance",
+        path: "/maintenance",
+        icon: <IconTrash size={18} />,
         adminOnly: true,
       },
       {

@@ -390,3 +390,28 @@ func TestMavenGroupMetadataSkipsOversizedMember(t *testing.T) {
 		t.Errorf("超限成员应被跳过，其版本不得进入合并结果：%s", body)
 	}
 }
+
+// TestMavenSnapshotGroupUpstreamErrorNotMaskedAs404 验证 FIX-1 在协议层的收口：
+// group 仓库的成员上游故障时，SNAPSHOT 分支必须按错误类别返回 502，
+// 不能把「上游不可用」写死成「制品不存在」的 404。
+//
+// 覆盖路径：SNAPSHOT 时间戳解析（探测 maven-metadata.xml）与字面路径回退都失败后，
+// 最终失败必须经 writeAssetErr 统一映射，而不是无条件写 404。
+func TestMavenSnapshotGroupUpstreamErrorNotMaskedAs404(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	e := newProtocolEnv(t)
+	adminToken := e.bootstrapAdmin(t)
+	e.createMavenRepo(t, adminToken, "mvn-snap-err-proxy", "proxy", srv.URL, nil)
+	e.createMavenRepo(t, adminToken, "mvn-snap-err-group", "group", "", []string{"mvn-snap-err-proxy"})
+	path := "/repository/mvn-snap-err-group/com/example/app/1.0-SNAPSHOT/app-1.0-SNAPSHOT.jar"
+
+	rec := e.rawReq(http.MethodGet, path, "Bearer "+adminToken, "", nil)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("group 成员上游 5xx 时 SNAPSHOT 请求状态码 = %d，期望 502（不得折叠成 404）", rec.Code)
+	}
+}

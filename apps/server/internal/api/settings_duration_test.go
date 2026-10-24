@@ -161,3 +161,65 @@ func TestValidateBackupSettingsWithExpr(t *testing.T) {
 		})
 	}
 }
+
+// TestDisplayedIntervalIsTreatedAsAbsent 钉住「读-改-写」可用性。
+//
+// GET /api/v1/settings 返回的 backupAutoIntervalExpr 是**给人看的中文串**
+// （"30 秒" / "2 天" / "关闭"），而 PUT 的同名字段是**输入**。二者共用字段名，
+// 于是「把 GET 结果原样 PUT 回去」这种最自然的用法曾经必然 400
+// （未知的时间单位后缀 "秒"）——脚本化与第三方客户端一定会踩到。
+//
+// 修复口径：识别出回显格式时视为「未提供本字段」，交由秒字段决定。
+// 本用例同时钉住反方向：任意真正的错误输入（"abc 天"、"30 光年"）仍然报错，
+// 不能因为加了这个判断而把错误输入静默吞掉。
+func TestDisplayedIntervalIsTreatedAsAbsent(t *testing.T) {
+	t.Parallel()
+
+	intPtr := func(v int) *int { return &v }
+	strPtr := func(v string) *string { return &v }
+
+	t.Run("回显值视为未提供，回落到秒字段", func(t *testing.T) {
+		t.Parallel()
+		for _, displayed := range []string{"30 秒", "5 分钟", "2 小时", "1 天", "2 周", "1 个月", "1 年", "关闭"} {
+			req := SettingsRequest{
+				BackupAutoIntervalExpr: strPtr(displayed),
+				BackupAutoInterval:     intPtr(7200),
+			}
+			if err := validateBackupSettings(req); err != nil {
+				t.Fatalf("回显值 %q 不应报错：%v", displayed, err)
+			}
+			got, err := resolveBackupAutoInterval(req)
+			if err != nil {
+				t.Fatalf("回显值 %q 解析应回落到秒字段：%v", displayed, err)
+			}
+			if got == nil || *got != 7200 {
+				t.Fatalf("回显值 %q 应回落到秒字段 7200，实际 %v", displayed, got)
+			}
+		}
+	})
+
+	t.Run("真正的错误输入仍然报错", func(t *testing.T) {
+		t.Parallel()
+		for _, bad := range []string{"abc 天", "30 光年", "天", " ", "1.5 天"} {
+			req := SettingsRequest{BackupAutoIntervalExpr: strPtr(bad), BackupAutoInterval: intPtr(60)}
+			if err := validateBackupSettings(req); err == nil {
+				t.Fatalf("输入 %q 应报错，却被接受", bad)
+			}
+		}
+	})
+
+	t.Run("合法英文表达式不受影响", func(t *testing.T) {
+		t.Parallel()
+		cases := map[string]int{"30": 30, "5m": 300, "2h": 7200, "1d": 86400}
+		for expr, want := range cases {
+			req := SettingsRequest{BackupAutoIntervalExpr: strPtr(expr), BackupAutoInterval: intPtr(1)}
+			got, err := resolveBackupAutoInterval(req)
+			if err != nil {
+				t.Fatalf("表达式 %q 解析失败：%v", expr, err)
+			}
+			if got == nil || *got != want {
+				t.Fatalf("表达式 %q 应换算为 %d，实际 %v", expr, want, got)
+			}
+		}
+	})
+}

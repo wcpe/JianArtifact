@@ -3,10 +3,12 @@ package api
 import (
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,6 +25,12 @@ const (
 	maxConfigSecs           = 3600
 	defaultSyncIntervalSecs = 5
 	defaultUpstreamTimeout  = 30
+	// 两项 proxy/group 调优的缺省展示值，必须与 config 层同名默认值同值
+	// （config.defaultGroupMemberTimeout / config.defaultNegativeCacheTTL）。
+	// 正常路径下启动播种已把初值写进 setting 表，这两个常量只兜「播种失败」与
+	// 「从旧版本升级上来但尚未播种」两种情况，让界面不至于显示 0 秒/关闭这种假象。
+	defaultGroupMemberTimeoutSecs = 3
+	defaultNegativeCacheTTLSecs   = 60
 )
 
 // SettingsResponse 是设置端点的响应体：基础配置的当前生效值。
@@ -50,6 +58,10 @@ type SettingsResponse struct {
 	// 下的磁盘占用。没有这个值，用户无法判断"保留 7 份"会不会把自己的盘写满——
 	// 实测存在 20GB 数据 / 40GB 磁盘的配置，7 份需要 140GB，远超可用空间。
 	BackupLatestPackageBytes int64 `json:"backupLatestPackageBytes"`
+	// proxy/group 读路径调优两项的当前生效值（秒）。回填的是**真的在用的值**：
+	// 负缓存 TTL 的 0 表示"关闭"，必须照实返回，否则界面无法把开关拨回关闭态。
+	GroupMemberTimeout int `json:"groupMemberTimeout"`
+	NegativeCacheTTL   int `json:"negativeCacheTTL"`
 }
 
 // 自动备份配置的取值上限。不是"业务规则"，而是防手滑：把间隔输成 99999999
@@ -81,6 +93,9 @@ type SettingsRequest struct {
 	// "每天一次等于多少秒"。两者都给时以本字段为准并在响应里回显换算结果，
 	// 避免"我填了 1d 但存进去的是 86400"这种不透明的落差。
 	BackupAutoIntervalExpr *string `json:"backupAutoIntervalExpr,omitempty"`
+	// proxy/group 读路径调优两项（秒）。负缓存 TTL 的 0 是"关闭"的合法取值。
+	GroupMemberTimeout *int `json:"groupMemberTimeout,omitempty"`
+	NegativeCacheTTL   *int `json:"negativeCacheTTL,omitempty"`
 }
 
 // settingsSnapshot 读取基础配置的当前生效值（未配置的间隔 / 超时回退默认值）。
@@ -89,6 +104,8 @@ func (h *Handlers) settingsSnapshot() SettingsResponse {
 	publicURL := ""
 	syncSecs := defaultSyncIntervalSecs
 	timeoutSecs := defaultUpstreamTimeout
+	groupMemberSecs := defaultGroupMemberTimeoutSecs
+	negCacheTTLSecs := defaultNegativeCacheTTLSecs
 	var allowedHosts []string
 	var tokenEnabled bool
 	var tokenHeader, tokenValue string
@@ -102,6 +119,15 @@ func (h *Handlers) settingsSnapshot() SettingsResponse {
 		}
 		if v := h.settings.UpstreamTimeoutSecs(); v > 0 {
 			timeoutSecs = v
+		}
+		// 成员确认预算只在 >0 时采用（本项无禁用语义，0/缺失回退默认）。
+		if v := h.settings.GroupMemberTimeoutSecs(); v > 0 {
+			groupMemberSecs = v
+		}
+		// 负缓存 TTL 必须用 (secs, ok) 判定：ok=false 才是"未配置/值非法"，
+		// 而 ok=true 且 secs==0 是用户显式关闭，界面要照实显示 0。
+		if v, ok := h.settings.NegativeCacheTTLSecs(); ok {
+			negCacheTTLSecs = v
 		}
 		allowedHosts = h.settings.AllowedHostsList()
 		tokenEnabled, tokenHeader, tokenValue = h.settings.OriginTokenGuard()
@@ -126,6 +152,8 @@ func (h *Handlers) settingsSnapshot() SettingsResponse {
 		BackupAutoIntervalValue:  intervalValue,
 		BackupAutoIntervalUnit:   string(intervalUnit),
 		BackupLatestPackageBytes: h.latestBackupPackageBytes(),
+		GroupMemberTimeout:       groupMemberSecs,
+		NegativeCacheTTL:         negCacheTTLSecs,
 	}
 }
 
@@ -145,9 +173,57 @@ func (h *Handlers) settingServiceOrZero() *domain.SettingService {
 //
 // 间隔若以表达式（backupAutoIntervalExpr）提交，则只校验表达式本身、跳过秒字段的
 // 上限校验——两者语义重叠，对同一个值报两次错只会让用户困惑。
+// looksLikeDisplayedInterval 判断该值是否是「回显格式」而不是「用户输入」。
+//
+// 为什么需要这个判断：GET 响应里的 backupAutoIntervalExpr 是**给人看的中文串**
+// （如 "30 秒"、"2 天"、"关闭"），而 PUT 的同名字段是**输入**。二者共用字段名，
+// 于是「把 GET 结果原样 PUT 回去」这种最自然的读-改-写用法必然 400
+// （未知的时间单位后缀 "秒"）——脚本化/第三方客户端一定会踩到。
+//
+// 判据刻意收窄，只认 FormatDurationHuman 会产出的那几种形态，不猜其他：
+//   - "关闭"（0 秒的回显）
+//   - "<数字> <中文单位>"（秒/分钟/小时/天/周/个月/年）
+//
+// 命中即视为「未提供本字段」，交由秒字段决定；这样既修好读-改-写，又不改变
+// 任何合法英文表达式（"30"、"5m"、"1d"）的解析。
+func looksLikeDisplayedInterval(raw string) bool {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return false
+	}
+	if s == "关闭" {
+		return true
+	}
+	for _, unit := range []string{"秒钟", "秒", "分钟", "小时", "天", "周", "个月", "年"} {
+		if strings.HasSuffix(s, unit) {
+			// 数字部分必须能解析，避免把 "abc天" 这种真正的错误输入也吞掉。
+			numPart := strings.TrimSpace(strings.TrimSuffix(s, unit))
+			if numPart == "" {
+				return false
+			}
+			if _, err := strconv.ParseInt(numPart, 10, 64); err != nil {
+				return false
+			}
+			return true
+		}
+	}
+	return false
+}
+
+// effectiveIntervalExpr 返回真正该当作输入处理的表达式（回显值视为未提供）。
+func effectiveIntervalExpr(req SettingsRequest) *string {
+	if req.BackupAutoIntervalExpr == nil {
+		return nil
+	}
+	if looksLikeDisplayedInterval(*req.BackupAutoIntervalExpr) {
+		return nil
+	}
+	return req.BackupAutoIntervalExpr
+}
+
 func validateBackupSettings(req SettingsRequest) error {
-	if req.BackupAutoIntervalExpr != nil {
-		if _, err := domain.ParseDurationExpression(*req.BackupAutoIntervalExpr, maxBackupAutoIntervalSecs); err != nil {
+	if expr := effectiveIntervalExpr(req); expr != nil {
+		if _, err := domain.ParseDurationExpression(*expr, maxBackupAutoIntervalSecs); err != nil {
 			return fmt.Errorf("自动备份间隔：%w", err)
 		}
 	} else if req.BackupAutoInterval != nil {
@@ -186,8 +262,8 @@ func validateBackupSettings(req SettingsRequest) error {
 //
 // 优先级：表达式 > 秒字段。表达式是给人用的入口，秒字段只为兼容既有调用方保留。
 func resolveBackupAutoInterval(req SettingsRequest) (*int, error) {
-	if req.BackupAutoIntervalExpr != nil {
-		secs, err := domain.ParseDurationExpression(*req.BackupAutoIntervalExpr, maxBackupAutoIntervalSecs)
+	if expr := effectiveIntervalExpr(req); expr != nil {
+		secs, err := domain.ParseDurationExpression(*expr, maxBackupAutoIntervalSecs)
 		if err != nil {
 			return nil, err
 		}
@@ -195,6 +271,55 @@ func resolveBackupAutoInterval(req SettingsRequest) (*int, error) {
 		return &v, nil
 	}
 	return req.BackupAutoInterval, nil
+}
+
+// clampGroupMemberTimeoutSecs 把 group 成员确认阶段预算夹到设置页的合法区间（1–3600 秒）。
+//
+// 为什么是"夹取 + 警告"而不是像 validateSecs 那样直接拒绝 400：本项的口径由 config 层
+// 定调（JIAN_GROUP_MEMBER_TIMEOUT 超上限就是夹取并打中文警告，见 config.groupMemberTimeout），
+// 而设置页只是同一配置的第二个入口。两个入口对同一个输入给出不同结论（环境变量接受并夹取、
+// 界面报 400）会让"到底哪个才是真源"变成一次无谓的争论。
+//
+// 本项**无禁用语义**：0 秒预算等于每个成员都立刻超时，group 读会 100% 退化成不可判定失败，
+// 只因一处手误就会让整个 group 仓库不可用，因此 0 与负数一律回退默认 3 秒并留痕——
+// 口径同 config 层的 envPositiveDurationOr。
+func clampGroupMemberTimeoutSecs(v int) int {
+	if v <= 0 {
+		log.Printf("警告：group 成员确认预算 %d 秒无效（0 秒等于每个成员都立刻超时，本项无关闭语义），已回退默认 %d 秒。",
+			v, defaultGroupMemberTimeoutSecs)
+		return defaultGroupMemberTimeoutSecs
+	}
+	if v > maxConfigSecs {
+		log.Printf("警告：group 成员确认预算 %d 秒超过上限 %d 秒，已按上限 %d 秒使用（调大会直接拖慢缺失路径的失败返回）。",
+			v, maxConfigSecs, maxConfigSecs)
+		return maxConfigSecs
+	}
+	return v
+}
+
+// clampNegativeCacheTTLSecs 把负缓存 TTL 夹到 0–3600 秒。
+//
+// 与上一项的差别是这里**0 是合法且有意义的值**（关闭负缓存，每个请求都真实回源），
+// 必须原样保留，不能被当成"未配置"而回退默认——那正是界面关不掉负缓存的经典缺陷。
+//
+// 负数不解读为关闭：关闭应当是明确的运维意图，用显式的 0 表达。把 -600 这类笔误当成
+// 关闭，等于一次手误就静默放大上游压力（每个缺失路径都要探测全部 group 成员），
+// 恰好落在最不该静默的地方；因此负数回退默认 60 秒并留痕，口径同 config.negativeCacheTTL。
+func clampNegativeCacheTTLSecs(v int) int {
+	if v == 0 {
+		return 0
+	}
+	if v < 0 {
+		log.Printf("警告：负缓存 TTL %d 秒无效（负数不等于关闭，关闭请显式填 0），已回退默认 %d 秒。",
+			v, defaultNegativeCacheTTLSecs)
+		return defaultNegativeCacheTTLSecs
+	}
+	if v > maxConfigSecs {
+		log.Printf("警告：负缓存 TTL %d 秒超过上限 %d 秒，已按上限 %d 秒使用（负缓存过久会让新发布的制品长期 404 且不自愈）。",
+			v, maxConfigSecs, maxConfigSecs)
+		return maxConfigSecs
+	}
+	return v
 }
 
 // GetSettings 返回基础配置四项，仅管理员。非契约端点，经 WithProtocolRoutes 注册。
@@ -207,7 +332,9 @@ func (h *Handlers) GetSettings(c *gin.Context) {
 
 // PutSettings 部分写入基础配置，仅管理员。写后运行时生效：
 // 匿名开关 / 对外 URL 由读取方动态读 setting；同步间隔由调度器下一轮应用；
-// 回源超时经 OnUpstreamTimeoutChange 回调立即同步到回源客户端。
+// 回源超时经 OnUpstreamTimeoutChange 回调立即同步到回源客户端；
+// proxy/group 调优两项经 OnGroupMemberTimeoutChange / OnNegativeCacheTTLChange
+// 回调立即同步到 AssetService（成员确认预算与负缓存 TTL），不需重启。
 func (h *Handlers) PutSettings(c *gin.Context) {
 	if _, ok := requireAdmin(c); !ok {
 		return
@@ -243,6 +370,18 @@ func (h *Handlers) PutSettings(c *gin.Context) {
 		auth.WriteError(c, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
+	// 两项调优在写入前先夹到合法区间：存进去的就是**实际会生效的值**，
+	// 避免出现"表里是 99999、运行时被夹到 3600"这种界面与行为对不上的状态。
+	groupMemberSecs := req.GroupMemberTimeout
+	if groupMemberSecs != nil {
+		v := clampGroupMemberTimeoutSecs(*groupMemberSecs)
+		groupMemberSecs = &v
+	}
+	negCacheSecs := req.NegativeCacheTTL
+	if negCacheSecs != nil {
+		v := clampNegativeCacheTTLSecs(*negCacheSecs)
+		negCacheSecs = &v
+	}
 	if err := h.settings.UpdateSettings(domain.SettingsUpdate{
 		AnonymousAccess:     req.AnonymousAccess,
 		PublicURL:           req.PublicURL,
@@ -255,12 +394,21 @@ func (h *Handlers) PutSettings(c *gin.Context) {
 		BackupAutoInterval:  intervalSecs,
 		BackupKeepLast:      req.BackupKeepLast,
 		BackupRetentionDays: req.BackupRetentionDays,
+		GroupMemberTimeout:  groupMemberSecs,
+		NegativeCacheTTL:    negCacheSecs,
 	}); err != nil {
 		writeDomainErr(c, err)
 		return
 	}
 	if req.UpstreamTimeout != nil && h.onUpstreamTimeoutChange != nil {
 		h.onUpstreamTimeoutChange(time.Duration(*req.UpstreamTimeout) * time.Second)
+	}
+	// 热生效：写入成功后立即把生效值推给持有运行时状态的持有者，不等重启。
+	if groupMemberSecs != nil && h.onGroupMemberTimeoutChange != nil {
+		h.onGroupMemberTimeoutChange(time.Duration(*groupMemberSecs) * time.Second)
+	}
+	if negCacheSecs != nil && h.onNegativeCacheTTLChange != nil {
+		h.onNegativeCacheTTLChange(time.Duration(*negCacheSecs) * time.Second)
 	}
 	h.AuditLog(c, "setting.set", "setting", "settings", "", "基础设置更新", "ok")
 	c.JSON(http.StatusOK, h.settingsSnapshot())

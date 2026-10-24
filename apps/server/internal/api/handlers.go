@@ -25,43 +25,50 @@ import (
 // Deps 汇集 Handlers 的依赖。健康 / 就绪端点仅用 Version 与 Checks，
 // 管理端点用各 domain 服务；Migration 供 /status 报告迁移版本。
 type Deps struct {
-	Version                 string
-	Checks                  []func() error
-	Migration               func() (string, error)
-	Auth                    *domain.AuthService
-	Users                   *domain.UserService
-	Tokens                  *domain.TokenService
-	Repos                   *domain.RepositoryService
-	Assets                  *domain.AssetService // 制品批量删除
-	Migrations              *domain.MigrationService
-	Settings                *domain.SettingService
-	AuditLogs               *repository.AuditLogRepo                // 审计日志
-	AuditObservability      *repository.AuditObservabilityRepo      // 统一审计读模型
-	OperationsObservability *repository.OperationsObservabilityRepo // 当前节点业务与主机读模型
-	OperationsAlerts        *repository.OperationsAlertRepo         // v0.8.0：运维告警去重持久化
-	AssetDownloads          *repository.AssetDownloadRepo           // 制品下载计量明细（tree 计数列）
-	Pinned                  *repository.PinnedRepoRepo              // 置顶仓库（用户级 + 全局兜底，迁移 0043）
-	AuditAttentionKey       []byte                                  // 关注标识签名密钥（由启动密钥派生）
-	AuditSourceNode         string                                  // 本节点审计标识
-	ClusterTokenSet         bool                                    // 同步令牌是否已配置（不暴露明文）
-	PublicURL               string                                  // 对外基础 URL（CDN 域名，隐藏源站 IP）
-	EnabledFormats          []string                                // 启动时启用的格式清单
-	PublishPolicies         *domain.PublishPolicyService            // 发布账号策略管理
-	UserGroups              *domain.UserGroupService                // 用户组管理的授权载体
-	OnUpstreamTimeoutChange func(time.Duration)                     // 回源超时设置变更回调（wiring 注入 upstream.Client.SetTimeout；nil 不触发）
-	Backups                 *domain.BackupService                   // 节点备份包生成与登记
-	BackupLinkKey           []byte                                  // 备份下载令牌签名密钥（由启动密钥派生）
-	BackupDrill             *domain.BackupDrillService              // 恢复演练与可查报告
-	Freeze                  *domain.FreezeController                // 运行时写入冻结窗口
-	BackupImports           *domain.BackupImportService             // 导入记录与 URL 拉取
-	BackupUploads           *domain.BackupUploadService             // 分片上传（Web 第三通道）
-	BackupAdopt             *domain.BackupAdoptService              // 未管理备份包的扫描与导入
-	Metrics                 *metrics.Exposition                     // Prometheus 指标导出（/metrics；nil 时该端点返回 503）
-	OIDC                    *OIDCDeps                               // OIDC 登录端点依赖（nil = 未启用，端点返回 404）
-	LDAPAuth                LDAPAuthenticator                       // LDAP 目录侧校验（nil = 未启用，登录不回退目录）
-	MaintenanceJobs         MaintenanceJobController                // 维护作业清单与手动触发（nil 时端点返回 503）
-	Restart                 RestartController                       // 一键重启（nil 时端点返回 503）
-	SearchIndex             SearchIndexController                   // 搜索索引回填状态与全量重建（nil 时端点返回 503）
+	Version                    string
+	Checks                     []func() error
+	Migration                  func() (string, error)
+	Auth                       *domain.AuthService
+	Users                      *domain.UserService
+	Tokens                     *domain.TokenService
+	Repos                      *domain.RepositoryService
+	Assets                     *domain.AssetService // 制品批量删除
+	Migrations                 *domain.MigrationService
+	Settings                   *domain.SettingService
+	AuditLogs                  *repository.AuditLogRepo                // 审计日志
+	AuditObservability         *repository.AuditObservabilityRepo      // 统一审计读模型
+	OperationsObservability    *repository.OperationsObservabilityRepo // 当前节点业务与主机读模型
+	OperationsAlerts           *repository.OperationsAlertRepo         // v0.8.0：运维告警去重持久化
+	AssetDownloads             *repository.AssetDownloadRepo           // 制品下载计量明细（tree 计数列）
+	Pinned                     *repository.PinnedRepoRepo              // 置顶仓库（用户级 + 全局兜底，迁移 0043）
+	AuditAttentionKey          []byte                                  // 关注标识签名密钥（由启动密钥派生）
+	AuditSourceNode            string                                  // 本节点审计标识
+	ClusterTokenSet            bool                                    // 同步令牌是否已配置（不暴露明文）
+	PublicURL                  string                                  // 对外基础 URL（CDN 域名，隐藏源站 IP）
+	EnabledFormats             []string                                // 启动时启用的格式清单
+	PublishPolicies            *domain.PublishPolicyService            // 发布账号策略管理
+	UserGroups                 *domain.UserGroupService                // 用户组管理的授权载体
+	OnUpstreamTimeoutChange    func(time.Duration)                     // 回源超时设置变更回调（wiring 注入 upstream.Client.SetTimeout；nil 不触发）
+	OnGroupMemberTimeoutChange func(time.Duration)                     // group 成员确认预算变更回调（wiring 注入 AssetService.SetGroupMemberTimeout；nil 不触发）
+	OnNegativeCacheTTLChange   func(time.Duration)                     // 负缓存 TTL 变更回调（wiring 注入 AssetService.SetNegativeCacheTTL；nil 不触发）
+	Backups                    *domain.BackupService                   // 节点备份包生成与登记
+	BackupLinkKey              []byte                                  // 备份下载令牌签名密钥（由启动密钥派生）
+	BackupDrill                *domain.BackupDrillService              // 恢复演练与可查报告
+	Freeze                     *domain.FreezeController                // 运行时写入冻结窗口
+	BackupImports              *domain.BackupImportService             // 导入记录与 URL 拉取
+	BackupUploads              *domain.BackupUploadService             // 分片上传（Web 第三通道）
+	BackupAdopt                *domain.BackupAdoptService              // 未管理备份包的扫描与导入
+	Metrics                    *metrics.Exposition                     // Prometheus 指标导出（/metrics；nil 时该端点返回 503）
+	OIDC                       *OIDCDeps                               // OIDC 登录端点依赖（nil = 未启用，端点返回 404）
+	LDAPAuth                   LDAPAuthenticator                       // LDAP 目录侧校验（nil = 未启用，登录不回退目录）
+	MaintenanceJobs            MaintenanceJobController                // 维护作业清单与手动触发（nil 时端点返回 503）
+	Restart                    RestartController                       // 一键重启（nil 时端点返回 503）
+	SearchIndex                SearchIndexController                   // 搜索索引回填状态与全量重建（nil 时端点返回 503）
+	StorageHealth              StorageHealthController                 // 存储体检快照（只读，nil 时端点返回 503）
+	Cleanup                    CleanupController                       // 定向清理（预览 / 执行，nil 时端点返回 503）
+	CleanTasks                 CleanTaskController                     // 清理任务队列只读查询
+	Trash                      TrashController                         // 回收站（恢复 / 彻底删除 / 清空）
+	UpstreamHealth             *repository.UpstreamHealthRepo          // 上游健康历史读写（nil 时端点返回 503）
 }
 
 // RestartController 是接口层对一键重启能力的最小依赖：同步预检、延迟触发重启动作。
@@ -106,85 +113,106 @@ type LDAPAuthenticator func(ctx context.Context, username, password string) (aut
 
 // Handlers 实现 ServerInterface 的全部端点。
 type Handlers struct {
-	version                 string
-	checks                  []func() error
-	migration               func() (string, error)
-	auth                    *domain.AuthService
-	users                   *domain.UserService
-	tokens                  *domain.TokenService
-	repos                   *domain.RepositoryService
-	assets                  *domain.AssetService
-	migrations              *domain.MigrationService
-	settings                *domain.SettingService
-	auditLogs               *repository.AuditLogRepo // 审计日志
-	auditObservability      *repository.AuditObservabilityRepo
-	operationsObservability *repository.OperationsObservabilityRepo
-	operationsAlertStore    *repository.OperationsAlertRepo
-	assetDownloads          *repository.AssetDownloadRepo // 制品下载计量明细（tree 计数列）
-	pinned                  *repository.PinnedRepoRepo    // 置顶仓库（用户级 + 全局兜底）
-	auditAttentionKey       []byte
-	auditSourceNode         string // 本节点审计标识
-	clusterTokenSet         bool
-	publicURL               string                       // 对外基础 URL（CDN 域名）
-	enabledFormats          []string                     // 启动时启用的格式清单
-	publishPolicies         *domain.PublishPolicyService // 发布账号策略管理
-	userGroups              *domain.UserGroupService     // 用户组（授权主体之一）的 CRUD 与成员维护
-	onUpstreamTimeoutChange func(time.Duration)          // 回源超时设置变更回调
-	backups                 *domain.BackupService        // 节点备份包
-	backupLinks             *domain.BackupLinkSigner     // 下载令牌签名
-	backupDrill             *domain.BackupDrillService   // 恢复演练与校验报告
-	freeze                  *domain.FreezeController     // 运行时写入冻结
-	backupImports           *domain.BackupImportService  // 导入记录与 URL 拉取
-	backupUploads           *domain.BackupUploadService  // 分片上传（Web 第三通道）
-	backupAdopt             *domain.BackupAdoptService   // 未管理备份包的扫描与导入
-	metrics                 *metrics.Exposition          // Prometheus 指标导出
-	oidc                    *OIDCDeps                    // OIDC 登录端点依赖（nil = 未启用）
-	ldapAuth                LDAPAuthenticator            // LDAP 目录侧校验（nil = 未启用）
-	maintenanceJobs         MaintenanceJobController     // 维护作业清单与手动触发
-	restart                 RestartController            // 一键重启（nil = 未装配）
-	searchIndex             SearchIndexController        // 搜索索引回填状态与全量重建
+	version                    string
+	checks                     []func() error
+	migration                  func() (string, error)
+	auth                       *domain.AuthService
+	users                      *domain.UserService
+	tokens                     *domain.TokenService
+	repos                      *domain.RepositoryService
+	assets                     *domain.AssetService
+	migrations                 *domain.MigrationService
+	settings                   *domain.SettingService
+	auditLogs                  *repository.AuditLogRepo // 审计日志
+	auditObservability         *repository.AuditObservabilityRepo
+	operationsObservability    *repository.OperationsObservabilityRepo
+	operationsAlertStore       *repository.OperationsAlertRepo
+	assetDownloads             *repository.AssetDownloadRepo // 制品下载计量明细（tree 计数列）
+	pinned                     *repository.PinnedRepoRepo    // 置顶仓库（用户级 + 全局兜底）
+	auditAttentionKey          []byte
+	auditSourceNode            string // 本节点审计标识
+	clusterTokenSet            bool
+	publicURL                  string                         // 对外基础 URL（CDN 域名）
+	enabledFormats             []string                       // 启动时启用的格式清单
+	publishPolicies            *domain.PublishPolicyService   // 发布账号策略管理
+	userGroups                 *domain.UserGroupService       // 用户组（授权主体之一）的 CRUD 与成员维护
+	onUpstreamTimeoutChange    func(time.Duration)            // 回源超时设置变更回调
+	onGroupMemberTimeoutChange func(time.Duration)            // group 成员确认预算变更回调
+	onNegativeCacheTTLChange   func(time.Duration)            // 负缓存 TTL 变更回调
+	backups                    *domain.BackupService          // 节点备份包
+	backupLinks                *domain.BackupLinkSigner       // 下载令牌签名
+	backupDrill                *domain.BackupDrillService     // 恢复演练与校验报告
+	freeze                     *domain.FreezeController       // 运行时写入冻结
+	backupImports              *domain.BackupImportService    // 导入记录与 URL 拉取
+	backupUploads              *domain.BackupUploadService    // 分片上传（Web 第三通道）
+	backupAdopt                *domain.BackupAdoptService     // 未管理备份包的扫描与导入
+	metrics                    *metrics.Exposition            // Prometheus 指标导出
+	oidc                       *OIDCDeps                      // OIDC 登录端点依赖（nil = 未启用）
+	ldapAuth                   LDAPAuthenticator              // LDAP 目录侧校验（nil = 未启用）
+	maintenanceJobs            MaintenanceJobController       // 维护作业清单与手动触发
+	restart                    RestartController              // 一键重启（nil = 未装配）
+	searchIndex                SearchIndexController          // 搜索索引回填状态与全量重建
+	storageHealth              StorageHealthController        // 存储体检（只读，nil = 未装配）
+	cleanup                    CleanupController              // 定向清理
+	cleanTasks                 CleanTaskController            // 清理任务队列
+	trash                      TrashController                // 回收站
+	upstreamHealth             *repository.UpstreamHealthRepo // 上游健康历史
+}
+
+// StorageHealthController 提供存储体检快照（只读，不做任何清理）。
+//
+// 与 SearchIndexController 同一抽象风格：不依赖具体领域类型，便于测试注入桩。
+type StorageHealthController interface {
+	Snapshot() (domain.StorageHealth, error)
 }
 
 // NewHandlers 构造 Handlers。
 func NewHandlers(d Deps) *Handlers {
 	return &Handlers{
-		version:                 d.Version,
-		checks:                  d.Checks,
-		migration:               d.Migration,
-		auth:                    d.Auth,
-		users:                   d.Users,
-		tokens:                  d.Tokens,
-		repos:                   d.Repos,
-		assets:                  d.Assets,
-		migrations:              d.Migrations,
-		settings:                d.Settings,
-		auditLogs:               d.AuditLogs,
-		auditObservability:      d.AuditObservability,
-		operationsObservability: d.OperationsObservability,
-		operationsAlertStore:    d.OperationsAlerts,
-		assetDownloads:          d.AssetDownloads,
-		pinned:                  d.Pinned,
-		auditAttentionKey:       auditAttentionKey(d.AuditAttentionKey, d.AuditSourceNode),
-		auditSourceNode:         d.AuditSourceNode,
-		clusterTokenSet:         d.ClusterTokenSet,
-		publicURL:               d.PublicURL,
-		enabledFormats:          append([]string(nil), d.EnabledFormats...),
-		publishPolicies:         d.PublishPolicies,
-		userGroups:              d.UserGroups,
-		onUpstreamTimeoutChange: d.OnUpstreamTimeoutChange,
-		backups:                 d.Backups,
-		backupLinks:             domain.NewBackupLinkSigner(d.BackupLinkKey),
-		backupDrill:             d.BackupDrill, // 恢复演练
-		freeze:                  d.Freeze,
-		backupImports:           d.BackupImports,
-		backupUploads:           d.BackupUploads,
-		backupAdopt:             d.BackupAdopt,
-		metrics:                 d.Metrics,
-		oidc:                    d.OIDC,
-		ldapAuth:                d.LDAPAuth,
-		maintenanceJobs:         d.MaintenanceJobs,
-		restart:                 d.Restart,
-		searchIndex:             d.SearchIndex,
+		version:                    d.Version,
+		checks:                     d.Checks,
+		migration:                  d.Migration,
+		auth:                       d.Auth,
+		users:                      d.Users,
+		tokens:                     d.Tokens,
+		repos:                      d.Repos,
+		assets:                     d.Assets,
+		migrations:                 d.Migrations,
+		settings:                   d.Settings,
+		auditLogs:                  d.AuditLogs,
+		auditObservability:         d.AuditObservability,
+		operationsObservability:    d.OperationsObservability,
+		operationsAlertStore:       d.OperationsAlerts,
+		assetDownloads:             d.AssetDownloads,
+		pinned:                     d.Pinned,
+		auditAttentionKey:          auditAttentionKey(d.AuditAttentionKey, d.AuditSourceNode),
+		auditSourceNode:            d.AuditSourceNode,
+		clusterTokenSet:            d.ClusterTokenSet,
+		publicURL:                  d.PublicURL,
+		enabledFormats:             append([]string(nil), d.EnabledFormats...),
+		publishPolicies:            d.PublishPolicies,
+		userGroups:                 d.UserGroups,
+		onUpstreamTimeoutChange:    d.OnUpstreamTimeoutChange,
+		onGroupMemberTimeoutChange: d.OnGroupMemberTimeoutChange,
+		onNegativeCacheTTLChange:   d.OnNegativeCacheTTLChange,
+		backups:                    d.Backups,
+		backupLinks:                domain.NewBackupLinkSigner(d.BackupLinkKey),
+		backupDrill:                d.BackupDrill, // 恢复演练
+		freeze:                     d.Freeze,
+		backupImports:              d.BackupImports,
+		backupUploads:              d.BackupUploads,
+		backupAdopt:                d.BackupAdopt,
+		metrics:                    d.Metrics,
+		oidc:                       d.OIDC,
+		ldapAuth:                   d.LDAPAuth,
+		maintenanceJobs:            d.MaintenanceJobs,
+		restart:                    d.Restart,
+		searchIndex:                d.SearchIndex,
+		storageHealth:              d.StorageHealth,
+		cleanup:                    d.Cleanup,
+		cleanTasks:                 d.CleanTasks,
+		trash:                      d.Trash,
+		upstreamHealth:             d.UpstreamHealth,
 	}
 }
 
@@ -350,6 +378,19 @@ func writeDomainErr(c *gin.Context, err error) {
 	writeDomainErrWithOperationID(c, err, "")
 }
 
+// domainErrMessage 在错误携带了可读上下文时返回带上下文的文案，否则回落 canonical 文案。
+//
+// 为什么需要：错误哨兵（如 ErrConflict）本身只有一句泛化描述，真实原因在 fmt.Errorf 的
+// wrapper 里。把文案写死会让「删 proxy 仓缓存制品」和「metadata 解析失败」呈现成同一句
+// 与事实无关的话，排障时无从下手。
+func domainErrMessage(err error, canonical string) string {
+	msg := err.Error()
+	if msg == "" || msg == canonical {
+		return canonical
+	}
+	return msg
+}
+
 // writeDomainErrWithOperationID 将领域错误映射为契约约定的 HTTP 状态与错误码。
 // operationID 仅用于已进入统一资产操作执行阶段的失败，其他端点保持既有错误响应形状。
 func writeDomainErrWithOperationID(c *gin.Context, err error, operationID string) {
@@ -368,8 +409,16 @@ func writeDomainErrWithOperationID(c *gin.Context, err error, operationID string
 		write(http.StatusUnauthorized, "invalid_credentials", "用户名或口令错误")
 	case errors.Is(err, domain.ErrAlreadyInitialized):
 		write(http.StatusConflict, "already_initialized", "实例已初始化，自举关闭")
+	// 必须排在 ErrConflict 之前：ErrRepositoryNotWritable 为兼容协议层判定同时满足
+	// ErrConflict 与 ErrOperationUnsupported，若先命中 ErrConflict 分支，管理端点就会
+	// 继续回「conflict / 资源已存在」——正是本次要修的错误结论。
+	case errors.Is(err, domain.ErrRepositoryNotWritable):
+		write(http.StatusConflict, "repository_not_writable", err.Error())
 	case errors.Is(err, domain.ErrConflict):
-		write(http.StatusConflict, "conflict", "资源已存在")
+		// 不能写死「资源已存在」：ErrConflict 被多种原因包装（metadata 非法、事务引擎未就绪、
+		// 目标路径冲突…），写死会让调用方永远只看到一个与真实原因无关的结论。裸哨兵仍用
+		// 原文案，带上下文时把上下文一并带出。
+		write(http.StatusConflict, "conflict", domainErrMessage(err, "资源已存在"))
 	case errors.Is(err, domain.ErrFormatDisabled):
 		write(http.StatusConflict, "format_disabled", "请求的格式未启用")
 	case errors.Is(err, domain.ErrLogicalDeleteRequired):

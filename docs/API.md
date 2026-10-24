@@ -192,6 +192,26 @@
 
 两个接口均要求管理员（未登录 401 / 非管理员 403）；`/api/v1/maintenance/` 在写入冻结窗口的放行清单内。清理作业自身的行为（隔离区空目录、终态元数据裁剪、过期上传临时文件、代理缓存保留）与本批的配额语义见 [`specs/0.11.0-storage-governance.md`](specs/0.11.0-storage-governance.md)。
 
+### 存储体检（只读）
+
+`GET /api/v1/maintenance/storage-health`（**仅管理员**）返回一次磁盘现状快照，用于判断"有没有可回收的东西"。
+
+- **非契约端点**：与 `/api/v1/search/index` 同一先例，不进 `api/openapi.yaml`。它服务运维手动排障，形状随清理能力演进，不属于协议客户端依赖的稳定面。
+- **只读，绝不清理**：仓库删除与 blob 回收都是不可逆的运维决策，把一次误判变成自动删除就是数据丢失。真正的清理仍由 `blob-gc` / `storage-cleanup` / `backup-orphan-cleanup` 按各自间隔执行（三者**默认每日一次**，显式设 0 才禁用）。
+- **不得被前端轮询**：一次体检要遍历 blob 目录与若干暂存目录，成本随数据规模线性增长。单次调用有 15 秒服务端预算，超时返回 **504 `storage_health_timeout`**；客户端断开不写响应体。
+- 响应字段：`orphanBlobs` / `orphanBlobBytes`（磁盘有、asset 无引用的 blob；只由 `blob-gc` 回收）、`quarantinedBlobs` / `quarantinedBytes`（隔离区待回收）、`emptyDirs`（活动 blob 目录下被清空的分片目录）、`preRestoreDirs` / `preRestoreBytes`（恢复前回滚备份，按"保留最近 N 个"回收）、`backupUploadsBytes` / `backupImportsBytes` / `backupDrillBytes`（暂存占用）、`totalBytes`（数据目录总占用）。
+- **单项统计失败不整份失败**：仍返回已统计到的项，并附 `partialError` 说明缺项原因——看到一个有缺项的全貌比什么都看不到更接近排障需要。
+- **判定口径刻意保守**：只报确定可回收的类别，不猜"看起来没用"的文件（把业务数据误报成垃圾，比漏报危险得多）。
+
+### 404 负缓存诊断与清理（FR-157）
+
+proxy/group 读路径对「确认不存在」的路径做短窗负缓存（默认 TTL 60s，见 `JIAN_NEGATIVE_CACHE_TTL`）。这两个接口用于回答「某个路径现在是不是被钉成 404 了」并在必要时提前放它回源。**仅管理员**；**本批只交付 API，没有配套管理页面**（日志已能回答「为什么 404」的日常问题，为此再建一个有界缓冲与一套 UI 不划算，见 [`specs/0.13.0-proxy-resolve-observability.md`](specs/0.13.0-proxy-resolve-observability.md) §3.3）。
+
+- `GET /api/v1/maintenance/negative-cache`：返回进程内负缓存的有效条目快照（`NegativeCacheSummary`：`total` 为**过滤前**的有效条目总数，`entries` 按写入时间升序、最多 `limit` 条，每项含仓库、路径、写入时间与剩余 TTL）。支持 `repo` / `path_prefix` / `limit`（默认 100、上限 500）过滤。路径按**原样**返回（控制字符已转义）——管理员本就能通过仓库制品列表看到全量路径，此处不构成新增暴露面，而脱敏后的路径对排障没有价值。**只读，不清理、不改状态、不写审计**。
+- `DELETE /api/v1/maintenance/negative-cache`：语义按参数递进——**无参数 = 全清；仅 `repo` = 按仓库清；`repo` + `path` = 精确清这一条**。只传 `path` 不传 `repo` 返回 **400**；未知仓库返回 **404**。清理写审计，登记清理的条数与范围。典型场景：上游已修好但同路径仍是 404（负缓存 TTL 内不再回源），清掉对应条目即可立即回源。
+
+负缓存是**纯内存**的，重启即清空；条目数有上限（默认 10000，满时先清过期、仍满则淘汰最早写入的一条），因此不会随运行时长无界增长。相关指标见 [`OPERATIONS.md`](OPERATIONS.md) 的「代理解析结果指标」。两个接口均要求管理员（未登录 401 / 非管理员 403）；未接线时返回 503。
+
 ### 一键重启服务（FR-40 追加七）
 
 让本节点重新起服（备份恢复后生效、或按运维要求重载进程）。**仅管理员**。

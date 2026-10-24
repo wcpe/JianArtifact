@@ -63,6 +63,10 @@ function normalizeForm(initial: SettingsConfig): SettingsConfig {
     backupAutoIntervalValue: initial.backupAutoIntervalValue ?? initial.backupAutoInterval ?? 0,
     backupAutoIntervalUnit: initial.backupAutoIntervalUnit ?? "seconds",
     backupLatestPackageBytes: initial.backupLatestPackageBytes ?? 0,
+    // 两项 proxy/group 调优（本页可编辑）。缺省值与后端一致；负缓存 TTL 的 0
+    // 是「关闭」的合法取值，必须用 ?? 而不是 ||，否则关闭态会被打回 60。
+    groupMemberTimeout: initial.groupMemberTimeout ?? 3,
+    negativeCacheTTL: initial.negativeCacheTTL ?? 60,
   };
 }
 
@@ -102,6 +106,8 @@ function formSignature(form: SettingsConfig): string {
     form.originTokenEnabled,
     form.originTokenHeader,
     form.originTokenValue,
+    form.groupMemberTimeout,
+    form.negativeCacheTTL,
   ]);
 }
 
@@ -133,6 +139,16 @@ function ServiceSettingsForm({
       notifyError(t("settings.validationRange"));
       return;
     }
+    // 成员确认预算无「关闭」语义：0 秒等于每个成员都立刻超时，因此下限是 1。
+    if (form.groupMemberTimeout < MIN_SECS || form.groupMemberTimeout > MAX_SECS) {
+      notifyError(t("settings.groupMemberTimeoutRange"));
+      return;
+    }
+    // 负缓存 TTL 的下限是 0——0 恰恰是「关闭负缓存」的显式取值，不能被前端拦掉。
+    if (form.negativeCacheTTL < 0 || form.negativeCacheTTL > MAX_SECS) {
+      notifyError(t("settings.negativeCacheTTLRange"));
+      return;
+    }
     setSaving(true);
     putSettings({
       anonymousAccess: form.anonymousAccess,
@@ -142,6 +158,8 @@ function ServiceSettingsForm({
       originTokenEnabled: form.originTokenEnabled,
       originTokenHeader: form.originTokenHeader.trim(),
       originTokenValue: form.originTokenValue.trim(),
+      groupMemberTimeout: form.groupMemberTimeout,
+      negativeCacheTTL: form.negativeCacheTTL,
     })
       .then((res) => {
         const next = normalizeForm(res);
@@ -278,6 +296,27 @@ function ServiceSettingsForm({
               value={form.upstreamTimeout}
               disabled={saving}
               onChange={(value) => setForm({ ...form, upstreamTimeout: Number(value) || 0 })}
+            />
+            {/* 两项 proxy/group 调优。放在「服务设置」而非安全区：它们调的是读路径的
+                失败速度与记忆时长，不涉及访问控制。帮助文案必须写明「改动即时生效、
+                无需重启」与「0 = 关闭负缓存」——后者是界面上唯一能表达关闭语义的地方。 */}
+            <NumberInput
+              label={t("settings.groupMemberTimeoutLabel")}
+              description={t("settings.groupMemberTimeoutHint")}
+              min={MIN_SECS}
+              max={MAX_SECS}
+              value={form.groupMemberTimeout}
+              disabled={saving}
+              onChange={(value) => setForm({ ...form, groupMemberTimeout: Number(value) || 0 })}
+            />
+            <NumberInput
+              label={t("settings.negativeCacheTTLLabel")}
+              description={t("settings.negativeCacheTTLHint")}
+              min={0}
+              max={MAX_SECS}
+              value={form.negativeCacheTTL}
+              disabled={saving}
+              onChange={(value) => setForm({ ...form, negativeCacheTTL: Number(value) || 0 })}
             />
           </Stack>
         </OpsSection>

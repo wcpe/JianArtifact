@@ -42,6 +42,9 @@ type SettingsUpdate struct {
 	BackupAutoInterval  *int
 	BackupKeepLast      *int
 	BackupRetentionDays *int
+	// proxy/group 读路径调优两项（运行时可改，保存后经装配层回调热生效，无需重启）。
+	GroupMemberTimeout *int
+	NegativeCacheTTL   *int
 }
 
 // NewSettingService 构造 SettingService。
@@ -196,6 +199,53 @@ func (s *SettingService) HasBackupSettings() bool {
 	return false
 }
 
+// proxy/group 读路径调优两项的设置键（运行时可改，保存后经装配层回调热生效）。
+//
+// 两项都是**节点本地**（见 isNodeLocalSetting）：
+//   - group_member_timeout 是「本节点到上游的网络条件能给出多少确认预算」——同一 group
+//     里不同节点到同一上游的时延本就不同，把一个节点的预算复制给另一个节点没有意义；
+//   - negative_cache_ttl 是「本进程内存态负缓存活多久」——负缓存本身就是进程内 map，
+//     另一个节点根本没有这份缓存，复制该值只会把本节点策略强加给它。
+//
+// 环境变量的角色与备份三项逐字相同：从「唯一真源」降级为**首次播种的初值**——启动时
+// 若 setting 表没有对应键，用环境变量值写入；此后以 setting 表为准（见 wiring.go）。
+const (
+	// SettingKeyGroupMemberTimeout 是 group 成员确认阶段预算（秒）。本项**无禁用语义**：
+	// 0 秒预算等于每个成员都立刻超时，整条 group 读会退化成不可判定失败，故非正数回退默认。
+	SettingKeyGroupMemberTimeout = "group_member_timeout"
+	// SettingKeyNegativeCacheTTL 是 404 负缓存 TTL（秒）。**0 = 关闭负缓存**，是合法取值。
+	SettingKeyNegativeCacheTTL = "negative_cache_ttl"
+)
+
+// GroupMemberTimeoutSecs 返回 group 成员确认阶段预算（秒）；未配置或非法返回 0。
+//
+// 复用 secsSetting 是**正确**的：本项确实没有禁用语义，0 与「未配置」都应当表示
+// 「沿用环境变量/默认值」，调用方据此只在 secs > 0 时应用。口径同 UpstreamTimeoutSecs。
+func (s *SettingService) GroupMemberTimeoutSecs() int {
+	return s.secsSetting(SettingKeyGroupMemberTimeout)
+}
+
+// NegativeCacheTTLSecs 返回负缓存 TTL（秒）与「键是否已配置」。
+//
+// 为什么不能复用 secsSetting / nonNegativeIntSetting：
+//   - secsSetting 把 0 归零成「未配置」，与「0 = 关闭负缓存」直接冲突，关不掉；
+//   - nonNegativeIntSetting 接受 0，但**缺失时也返回 0**，于是一个被删掉的键（或一次
+//     播种失败）会静默变成「关闭负缓存」——那会让每个缺失路径都真实回源、放大上游压力。
+//
+// 因此这里用 ok 把「显式关闭」与「未配置 / 值非法」彻底分开：
+// 只有 ok=true 且 secs==0 才是关闭；ok=false 时调用方必须回退环境变量/默认值。
+func (s *SettingService) NegativeCacheTTLSecs() (secs int, ok bool) {
+	v, err := s.settings.Get(SettingKeyNegativeCacheTTL)
+	if err != nil {
+		return 0, false
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		return 0, false
+	}
+	return n, true
+}
+
 // AllowedHostsList 返回允许访问的域名白名单；未配置或空值返回空切片（不限制）。
 // 条目经逗号分隔、按首尾空白归一化，空项忽略。节点本地配置，不参与复制。
 func (s *SettingService) AllowedHostsList() []string {
@@ -277,7 +327,10 @@ func isNodeLocalSetting(key string) bool {
 	case SettingKeyPublicURL, SettingKeyAllowedHosts,
 		SettingKeyOriginTokenEnable, SettingKeyOriginTokenHeader, SettingKeyOriginTokenValue,
 		// 备份配置是"本节点怎么用自己的磁盘"的决策，不跨节点复制。
-		SettingKeyBackupAutoInterval, SettingKeyBackupKeepLast, SettingKeyBackupRetentionDays:
+		SettingKeyBackupAutoInterval, SettingKeyBackupKeepLast, SettingKeyBackupRetentionDays,
+		// proxy/group 调优两项同属节点本地：成员确认预算取决于本节点到上游的时延，
+		// 负缓存 TTL 约束的是本进程内存态的存活期（理由见键定义处的注释）。
+		SettingKeyGroupMemberTimeout, SettingKeyNegativeCacheTTL:
 		return true
 	}
 	return strings.HasPrefix(key, SettingKeyClusterPrefix)
@@ -319,6 +372,14 @@ func settingValues(update SettingsUpdate) []repository.SettingValue {
 	}
 	if update.BackupRetentionDays != nil {
 		values = append(values, repository.SettingValue{Key: SettingKeyBackupRetentionDays, Value: strconv.Itoa(*update.BackupRetentionDays)})
+	}
+	// proxy/group 调优两项。0 在负缓存 TTL 里是「关闭」的合法取值，照写不跳过
+	// （跳过等于把「关闭」存成「未配置」，下一轮读取又会退回默认 60s）。
+	if update.GroupMemberTimeout != nil {
+		values = append(values, repository.SettingValue{Key: SettingKeyGroupMemberTimeout, Value: strconv.Itoa(*update.GroupMemberTimeout)})
+	}
+	if update.NegativeCacheTTL != nil {
+		values = append(values, repository.SettingValue{Key: SettingKeyNegativeCacheTTL, Value: strconv.Itoa(*update.NegativeCacheTTL)})
 	}
 	return values
 }
