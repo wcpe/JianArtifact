@@ -162,8 +162,14 @@ const (
 	// 为什么要夹取（与 capacityCacheTTL 明确不夹取的取舍不同）：本项直接决定「每个成员
 	// 最多等多久」，调大它不只是变慢——group 读在成员不可达时会把缺失路径的响应时间按
 	// 该上限放大，而缺失路径（Gradle 反复试探子模块、错误配置的客户端）恰恰是最频繁的
-	// 请求类型。60s 已远超任何正当的跨地域确认需求，上限只用来挡数量级笔误（3 → 300）。
-	maxGroupMemberTimeout = 60 * time.Second
+	// 请求类型。上限只用来挡数量级笔误（3 → 300）。
+	//
+	// 上限取 3600s，与设置页秒级配置的既有上界 maxConfigSecs（settings_handlers.go）对齐：
+	// 同一参数经环境变量与设置页两个入口配置，若上界不同就会出现「环境变量最多 60s、
+	// 界面最多 3600s」的口径分裂，运维无从判断哪个才是真上限。
+	// 代价要说清：真调到 3600s 时，一个不可达成员就能让缺失路径等上一小时，
+	// 所以默认值仍是 3s，文档与界面文案都提示「调大只会让不可达成员等更久」。
+	maxGroupMemberTimeout = 3600 * time.Second
 	// defaultNegativeCacheTTL 是 404 负缓存 TTL 的默认值（JIAN_NEGATIVE_CACHE_TTL）。
 	// 与 domain 侧兜底常量 negativeCacheTTL 保持同值（同上）。
 	defaultNegativeCacheTTL = 60 * time.Second

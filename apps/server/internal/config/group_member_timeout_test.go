@@ -26,7 +26,8 @@ func TestGroupMemberTimeoutParsing(t *testing.T) {
 		// 上限夹取：调大本项会把缺失路径的响应时间按上限放大（成员不可达时每个成员都要等满），
 		// 因此超限夹取到 60s 并打警告，而不是原样生效。
 		{name: "恰好上限原样生效", value: "60", want: 60 * time.Second},
-		{name: "超上限夹取到六十秒", value: "300", want: 60 * time.Second},
+		{name: "超上限夹取到一小时", value: "7200", want: 3600 * time.Second},
+		{name: "恰好等于上限不夹取", value: "3600", want: 3600 * time.Second},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -49,7 +50,7 @@ func TestLoadCarriesGroupMemberTimeout(t *testing.T) {
 	}{
 		{name: "默认值", value: "", want: 3 * time.Second},
 		{name: "显式值", value: "8", want: 8 * time.Second},
-		{name: "超上限被夹取", value: "600", want: 60 * time.Second},
+		{name: "超上限被夹取", value: "7200", want: 3600 * time.Second},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
