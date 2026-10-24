@@ -63,6 +63,11 @@ const (
 	EnvBackupOrphanCleanupInterval = "JIAN_BACKUP_ORPHAN_CLEANUP_INTERVAL" // 孤儿备份包回收间隔，单位秒；0 禁用
 	EnvBackupOrphanGraceHours      = "JIAN_BACKUP_ORPHAN_GRACE_HOURS"      // 回收宽限期，单位小时；0 取默认 1
 
+	// 回收站（维护与清理控制台，单独成组）。
+	EnvTrashRetentionDays = "JIAN_TRASH_RETENTION_DAYS" // 回收站保留天数；0 = 不自动清理
+	EnvTrashMaxBytes      = "JIAN_TRASH_MAX_BYTES"      // 回收站字节上限；0 = 不限制（超限拒绝新清理）
+	EnvTrashGCInterval    = "JIAN_TRASH_GC_INTERVAL"    // 回收站保留期回收作业间隔，单位秒；0 禁用
+
 	// 上游断路器补强：auto-block 退避起始时长，单位秒。
 	EnvAutoBlockBaseSeconds = "JIAN_AUTO_BLOCK_BASE_SECONDS" // proxy 上游首次失败的阻止窗口时长；非正数回落默认
 
@@ -91,6 +96,11 @@ const (
 	defaultStorageCleanupInterval   = 24 * time.Hour
 	defaultStorageMetadataRetention = 7 * 24 * time.Hour
 	defaultStorageTempMaxAge        = 24 * time.Hour
+	// 回收站默认：保留 7 天、上限 2 GiB、每日回收一次。
+	// 上限给具体值而不是「不限制」：回收站本身占盘，反复清理会把磁盘占满而不自知。
+	defaultTrashRetentionDays = 7
+	defaultTrashMaxBytes      = 2 << 30 // 2 GiB
+	defaultTrashGCInterval    = 24 * time.Hour
 	// 自动备份与保留策略的默认值。
 	//
 	// 间隔默认 0 = **关闭**。这一条是**有意**的，不是遗漏：
@@ -179,6 +189,12 @@ type Config struct {
 	StorageMetadataRetention time.Duration
 	// StorageTempMaxAge 是过期上传临时文件（<BlobDir>/tmp/oci-upload）的最长滞留时长；0 禁用。
 	StorageTempMaxAge time.Duration
+	// TrashRetentionDays 是回收站条目保留天数；0 = 不自动清理（只保留手动彻底删除）。
+	TrashRetentionDays int
+	// TrashMaxBytes 是回收站字节上限；0 = 不限制。超限时拒绝新清理，而不是淘汰旧条目。
+	TrashMaxBytes int64
+	// TrashGCInterval 是回收站保留期回收作业间隔；0 禁用。
+	TrashGCInterval time.Duration
 	// BackupAutoInterval 是周期化自动备份作业的间隔；0 禁用（作业不注册）。
 	// 调度间隔在启动时固定、不支持运行时热改——改它需要重启进程（见 docs/OPERATIONS.md）。
 	BackupAutoInterval time.Duration
@@ -330,6 +346,9 @@ func Load() (*Config, error) {
 		StorageCleanupInterval:      storageCleanupInterval(),
 		StorageMetadataRetention:    storageMetadataRetention(),
 		StorageTempMaxAge:           storageTempMaxAge(),
+		TrashRetentionDays:          trashRetentionDays(),
+		TrashMaxBytes:               trashMaxBytes(),
+		TrashGCInterval:             trashGCInterval(),
 		BackupAutoInterval:          backupAutoInterval(),
 		BackupKeepLast:              backupKeepLast(),
 		BackupRetentionDays:         backupRetentionDays(),
@@ -751,4 +770,30 @@ func ldapConfig() (LDAPConfig, error) {
 		}
 	}
 	return cfg, nil
+}
+
+// trashRetentionDays 解析 JIAN_TRASH_RETENTION_DAYS（天）；缺省或非法值取 7，显式 0 = 不自动清理。
+//
+// 0 的语义是「不清理」而不是「立刻全删」：把 0 解释成立刻清空，会让一次配置笔误把
+// 整个回收站抹掉；而「不清理」最坏只是多占磁盘，用户随时可以手动彻底删除。
+func trashRetentionDays() int {
+	return envNonNegativeIntOr(EnvTrashRetentionDays, defaultTrashRetentionDays)
+}
+
+// trashMaxBytes 解析 JIAN_TRASH_MAX_BYTES（字节）；缺省或非法值取 2 GiB，显式 0 = 不限制。
+func trashMaxBytes() int64 {
+	v := os.Getenv(EnvTrashMaxBytes)
+	if v == "" {
+		return defaultTrashMaxBytes
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || n < 0 {
+		return defaultTrashMaxBytes
+	}
+	return n
+}
+
+// trashGCInterval 解析 JIAN_TRASH_GC_INTERVAL（秒）；缺省或非法值取每日一次，显式 0 禁用。
+func trashGCInterval() time.Duration {
+	return envDurationOr(EnvTrashGCInterval, defaultTrashGCInterval, time.Second)
 }

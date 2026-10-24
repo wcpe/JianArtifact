@@ -26,6 +26,7 @@
 #   DEPLOY_DIR           远端发布根（未设则由 deploy.sh 按远端 home 推导）
 #   DEPLOY_SERVICE       systemd 用户服务名，默认 jianartifact
 #   HEALTH_URL           远端探活，默认 http://127.0.0.1:8080/readyz
+#   SKIP_WEB_BUILD       设为 1 则跳过前端构建、复用现有 embed 产物（仅后端改动时用）
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -100,6 +101,36 @@ cmd_show_pubkey() {
   cat "${DEFAULT_KEY}.pub"
 }
 
+cmd_build_web() {
+  # 后端用 //go:embed all:dist 内嵌 apps/server/web/dist，而该目录不入库。
+  # 不重建前端就直接编译，会把**上一次的** dist 打进新二进制：部署「成功」、健康检查也过，
+  # 但页面还是旧的——表现为新接口在、对应界面不在，验收时极难判断到底是哪一层没更新。
+  # 因此默认总是重建；只有明确知道前端产物已是最新时才允许跳过。
+  if [[ "${SKIP_WEB_BUILD:-0}" == "1" ]]; then
+    log "已按 SKIP_WEB_BUILD=1 跳过前端构建，复用现有 apps/server/web/dist。"
+    log "  注意：仅在后端改动、且确认前端产物已是最新时这样做。"
+  else
+    command -v pnpm >/dev/null 2>&1 ||
+      die "未找到 pnpm，无法构建前端产物（确认要用旧产物可设 SKIP_WEB_BUILD=1）。"
+    log "构建前端产物（pnpm install --frozen-lockfile && pnpm build）…"
+    (
+      cd "${ROOT_DIR}"
+      pnpm install --frozen-lockfile
+      pnpm build
+    )
+    [[ -d "${ROOT_DIR}/apps/web/dist" ]] || die "前端构建结束但未找到 apps/web/dist。"
+    [[ -n "$(ls -A "${ROOT_DIR}/apps/web/dist" 2>/dev/null)" ]] || die "apps/web/dist 为空，embed 会打进空目录。"
+    log "同步前端产物到后端 embed 目录（apps/server/web/dist）…"
+    rm -rf "${ROOT_DIR}/apps/server/web/dist"
+    mkdir -p "${ROOT_DIR}/apps/server/web/dist"
+    cp -a "${ROOT_DIR}/apps/web/dist/." "${ROOT_DIR}/apps/server/web/dist/"
+  fi
+  # 无论走哪条路径，embed 源目录都必须有产物：否则 go build 会报
+  # "pattern all:dist: no matching files found"，那时错误信息指向 Go，容易误判成代码问题。
+  [[ -n "$(ls -A "${ROOT_DIR}/apps/server/web/dist" 2>/dev/null)" ]] ||
+    die "apps/server/web/dist 为空，go:embed 会失败；请构建前端（去掉 SKIP_WEB_BUILD=1）。"
+}
+
 cmd_build() {
   # 始终交叉编译 Linux amd64（本机可能是 Windows/macOS）
   # 版本号优先读仓库根 VERSION 文件，注入 main.version（管理端 /status 展示）
@@ -109,6 +140,8 @@ cmd_build() {
     ver="$(tr -d '[:space:]' < "${ROOT_DIR}/VERSION")"
     [[ -n "${ver}" ]] || ver="0.0.0-dev"
   fi
+  # 必须在前端产物就绪之后才编译：embed 在编译期读取 dist。
+  cmd_build_web
   log "构建 Linux amd64 二进制（CGO_ENABLED=0 GOOS=linux version=${ver}）…"
   (
     cd "${ROOT_DIR}/apps/server"

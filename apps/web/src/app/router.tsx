@@ -33,6 +33,9 @@ const MigrationDetailPage = lazy(() =>
 const MigrationsPage = lazy(() =>
   import("../pages/MigrationsPage").then((m) => ({ default: m.MigrationsPage })),
 );
+const MaintenancePage = lazy(() =>
+  import("../pages/MaintenancePage").then((m) => ({ default: m.MaintenancePage })),
+);
 const MigrationWizardPage = lazy(() =>
   import("../pages/MigrationWizardPage").then((m) => ({ default: m.MigrationWizardPage })),
 );
@@ -205,6 +208,17 @@ export function AppRoutes() {
               <RequireAuth>
                 <RequireAdmin>
                   <MigrationsPage />
+                </RequireAdmin>
+              </RequireAuth>
+            }
+          />
+          {/* 维护与清理（仅管理员）：体检 / 清理任务 / 回收站 / 维护作业 */}
+          <Route
+            path="/maintenance"
+            element={
+              <RequireAuth>
+                <RequireAdmin>
+                  <MaintenancePage />
                 </RequireAdmin>
               </RequireAuth>
             }

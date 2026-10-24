@@ -192,6 +192,17 @@
 
 两个接口均要求管理员（未登录 401 / 非管理员 403）；`/api/v1/maintenance/` 在写入冻结窗口的放行清单内。清理作业自身的行为（隔离区空目录、终态元数据裁剪、过期上传临时文件、代理缓存保留）与本批的配额语义见 [`specs/0.11.0-storage-governance.md`](specs/0.11.0-storage-governance.md)。
 
+### 存储体检（只读）
+
+`GET /api/v1/maintenance/storage-health`（**仅管理员**）返回一次磁盘现状快照，用于判断"有没有可回收的东西"。
+
+- **非契约端点**：与 `/api/v1/search/index` 同一先例，不进 `api/openapi.yaml`。它服务运维手动排障，形状随清理能力演进，不属于协议客户端依赖的稳定面。
+- **只读，绝不清理**：仓库删除与 blob 回收都是不可逆的运维决策，把一次误判变成自动删除就是数据丢失。真正的清理仍由 `blob-gc` / `storage-cleanup` / `backup-orphan-cleanup` 按各自间隔执行（三者**默认每日一次**，显式设 0 才禁用）。
+- **不得被前端轮询**：一次体检要遍历 blob 目录与若干暂存目录，成本随数据规模线性增长。单次调用有 15 秒服务端预算，超时返回 **504 `storage_health_timeout`**；客户端断开不写响应体。
+- 响应字段：`orphanBlobs` / `orphanBlobBytes`（磁盘有、asset 无引用的 blob；只由 `blob-gc` 回收）、`quarantinedBlobs` / `quarantinedBytes`（隔离区待回收）、`emptyDirs`（活动 blob 目录下被清空的分片目录）、`preRestoreDirs` / `preRestoreBytes`（恢复前回滚备份，按"保留最近 N 个"回收）、`backupUploadsBytes` / `backupImportsBytes` / `backupDrillBytes`（暂存占用）、`totalBytes`（数据目录总占用）。
+- **单项统计失败不整份失败**：仍返回已统计到的项，并附 `partialError` 说明缺项原因——看到一个有缺项的全貌比什么都看不到更接近排障需要。
+- **判定口径刻意保守**：只报确定可回收的类别，不猜"看起来没用"的文件（把业务数据误报成垃圾，比漏报危险得多）。
+
 ### 一键重启服务（FR-40 追加七）
 
 让本节点重新起服（备份恢复后生效、或按运维要求重载进程）。**仅管理员**。

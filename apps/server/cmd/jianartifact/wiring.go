@@ -35,8 +35,12 @@ type appServices struct {
 	ociSvc              *domain.OCIService
 	formatMetadataSvc   *domain.FormatMetadataService
 	publishPolicySvc    *domain.PublishPolicyService
-	userGroupSvc        *domain.UserGroupService   // 用户组（授权主体之一）的 CRUD 与成员维护
-	searchIndexSvc      *domain.SearchIndexService // 搜索索引后台回填与全量重建
+	userGroupSvc        *domain.UserGroupService     // 用户组（授权主体之一）的 CRUD 与成员维护
+	searchIndexSvc      *domain.SearchIndexService   // 搜索索引后台回填与全量重建
+	storageHealthSvc    *domain.StorageHealthService // 存储体检（只读，不做清理）
+	cleanupSvc          *domain.CleanupService       // 定向清理（移入回收站）
+	cleanTaskRepo       *repository.CleanTaskRepo    // 清理任务队列
+	trashSvc            *domain.TrashService         // 回收站（恢复 / 彻底删除 / 清空）
 	assetSvc            *domain.AssetService
 	migrationSvc        *domain.MigrationService
 	settingSvc          *domain.SettingService
@@ -259,6 +263,31 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	// 搜索索引的后台异步回填服务。只做编排（分批推进水位 / 可中断续跑 / 可重建），
 	// 索引行与状态表的维护原语都在 repository 层；真正的启动点在各子命令就绪后调用 Start。
 	searchIndexSvc := domain.NewSearchIndexService(repository.NewSearchIndexStateRepo(db))
+	// 存储体检：只统计「确定可回收」的类别（孤儿 blob、隔离区、空目录、暂存目录），
+	// 不清理任何东西——仓库删除与 blob 回收都是不可逆的运维决策，自动清理会把一次误判
+	// 直接变成数据丢失。清理动作仍由既有作业按明确间隔执行。
+	storageHealthSvc := domain.NewStorageHealthService(cfg.DataDir, blobs, assetRepo.ListReferencedBlobHashes)
+	// 定向清理：把四类可回收垃圾移入回收站（不是物理删除）。过期上传会话复用既有
+	// uploadTTL 口径（BackupUploadService 的 expires_at 字段），不另造 idle 常量。
+	cleanTaskRepo := repository.NewCleanTaskRepo(db)
+	cleanupSvc := domain.NewCleanupService(cfg.DataDir, cleanTaskRepo)
+	trashSvc := domain.NewTrashService(cfg.DataDir, cleanTaskRepo)
+	// 回收站容量护栏：超上限时拒绝新的清理（而不是自动淘汰最旧条目——静默删除等于
+	// 绕过用户确认）。0 = 不限制。
+	cleanupSvc.SetTrashCapacity(cfg.TrashMaxBytes)
+	// 过期上传会话复用既有 uploadTTL 口径（backup_upload.expires_at），不另造 idle 常量。
+	backupUploadRepoForCleanup := repository.NewBackupUploadRepo(db)
+	cleanupSvc.SetBackupUploadExpiredSource(func() ([]string, error) {
+		expired, err := backupUploadRepoForCleanup.ListExpired(time.Now().UTC().Format(time.RFC3339Nano))
+		if err != nil {
+			return nil, err
+		}
+		names := make([]string, 0, len(expired))
+		for _, rec := range expired {
+			names = append(names, rec.UploadID)
+		}
+		return names, nil
+	})
 	// 维护类周期作业统一经调度器驱动（间隔 0 禁用；启动不立即执行）。
 	schedulerSvc := scheduler.New()
 	// 一键重启。单元名与作用域只来自启动配置（环境变量），
@@ -326,6 +355,9 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	backupOrphanSvc := domain.NewBackupOrphanCleanupService(backupSvc, backupAdoptSvc,
 		domain.BackupOrphanCleanupOptions{Grace: cfg.BackupOrphanGrace})
 	registerBackupOrphanCleanupJob(schedulerSvc, cfg.BackupOrphanCleanupInterval, backupOrphanSvc.Run)
+	// 回收站保留期回收：只删回收站副本，不触碰 original_path（那是 restore 的职责）。
+	registerTrashGCJob(schedulerSvc, cfg.TrashGCInterval,
+		time.Duration(cfg.TrashRetentionDays)*24*time.Hour, trashSvc.ReconcileExpired)
 	// 指标登记与 /metrics 渲染器；协议请求计数由 HTTP 层钩子（run）累加。
 	metricsReg := metrics.New()
 	metricsExp := metrics.NewExposition(metricsReg, schedulerJobStatuses(schedulerSvc))
@@ -376,6 +408,10 @@ func openServices(cfg *config.Config) (*appServices, error) {
 		publishPolicySvc:    publishPolicySvc,
 		userGroupSvc:        userGroupSvc,
 		searchIndexSvc:      searchIndexSvc,
+		storageHealthSvc:    storageHealthSvc,
+		cleanupSvc:          cleanupSvc,
+		cleanTaskRepo:       cleanTaskRepo,
+		trashSvc:            trashSvc,
 		quotaSvc:            quotaSvc,
 		assetSvc:            assetSvc,
 		migrationSvc:        migrationSvc,
@@ -488,10 +524,14 @@ func (s *appServices) handlers(version string, checks []func() error) *api.Handl
 		PublicURL:               s.publicURL,
 		EnabledFormats:          s.repoSvc.EnabledFormats(),
 		PublishPolicies:         s.publishPolicySvc,
-		UserGroups:              s.userGroupSvc,   // 用户组管理端点（仅管理员）
-		SearchIndex:             s.searchIndexSvc, // 搜索索引状态与重建端点（仅管理员）
-		MaintenanceJobs:         s.scheduler,      // 维护作业清单与手动触发
-		Restart:                 s.restartSvc,     // 一键重启（先回响应，再重启）
+		UserGroups:              s.userGroupSvc,     // 用户组管理端点（仅管理员）
+		SearchIndex:             s.searchIndexSvc,   // 搜索索引状态与重建端点（仅管理员）
+		StorageHealth:           s.storageHealthSvc, // 存储体检快照（只读，仅管理员）
+		Cleanup:                 s.cleanupSvc,       // 定向清理（移入回收站）
+		CleanTasks:              s.cleanTaskRepo,    // 清理任务队列只读查询
+		Trash:                   s.trashSvc,         // 回收站（恢复 / 彻底删除 / 清空）
+		MaintenanceJobs:         s.scheduler,        // 维护作业清单与手动触发
+		Restart:                 s.restartSvc,       // 一键重启（先回响应，再重启）
 		OnUpstreamTimeoutChange: func(d time.Duration) {
 			if s.upstreamClient != nil {
 				s.upstreamClient.SetTimeout(d)

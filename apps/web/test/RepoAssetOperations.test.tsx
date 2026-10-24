@@ -418,16 +418,19 @@ describe("资产树操作", () => {
     );
   });
 
-  it.each(["proxy", "group"] as const)("Raw %s 不显示移动或重命名", async (type) => {
+  it.each(["proxy", "group"] as const)("Raw %s 不提供任何资产写操作入口", async (type) => {
     useRawTree();
     const { unmount } = renderWithProviders(
       <RepoBrowser repoName={`raw-${type}`} forcedFormat="raw" forcedType={type} />,
       { authenticated: true, user: ADMIN },
     );
 
+    // proxy 的制品是上游缓存、group 的是成员聚合，后端 ApplyOperation 对非 hosted 仓库
+    // 一律拒绝写操作。此前这里仍显示「删除」并允许选中，点下去才被后端拒（且回的是
+    // 「资源已存在」），属于把不可执行的操作暴露给用户；现在入口本身就不出现。
     fireEvent.contextMenu(await screen.findByText("a.txt"));
 
-    expect(screen.getByRole("menuitem", { name: "删除" })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: "删除" })).toBeNull();
     expect(screen.queryByRole("menuitem", { name: "移动" })).toBeNull();
     expect(screen.queryByRole("menuitem", { name: "重命名" })).toBeNull();
     unmount();
