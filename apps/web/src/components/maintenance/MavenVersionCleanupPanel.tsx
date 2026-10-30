@@ -365,6 +365,20 @@ export function AssetTrashPanel({
   onPurge: (ids: number[]) => void;
 }) {
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  // 条目集合变化后清理失效的勾选：恢复/彻底清理成功会让这些 id 从列表中消失，
+  // 而选中集合不会自动跟着变——留着会让按钮显示「恢复所选（2）」但列表已空，
+  // 点下去是一批不存在的 id。这里按当前列表做交集，只保留仍存在的条目。
+  useEffect(() => {
+    setSelected((prev) => {
+      if (prev.size === 0) return prev;
+      const alive = new Set(entries.map((e) => e.id));
+      const next = new Set<number>();
+      for (const id of prev) if (alive.has(id)) next.add(id);
+      // 内容未变时返回原引用，避免无谓的重渲染。
+      return next.size === prev.size ? prev : next;
+    });
+  }, [entries]);
+
   const toggle = (id: number) => {
     setSelected((prev) => {
       const next = new Set(prev);
