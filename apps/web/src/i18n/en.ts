@@ -150,6 +150,12 @@ export const en = {
     runtimePolicyCollapse: "Collapse",
     runtimePolicyOverviewHint:
       "Expand to edit each item; every field states its unit, the meaning of 0 and its real effect timing (not all of them apply immediately).",
+    runtimePolicySaveOne: 'Save "{{label}}"',
+    runtimePolicySaveOneShort: "Save",
+    runtimePolicyNoChange: "Matches the currently applied value, nothing to save",
+    runtimePolicyClamped: "{{label}} was clamped to the backend limit and saved as {{value}}",
+    runtimePolicyInvalidNumber: "{{label}} must be a number",
+    runtimePolicyRangeHint: "Allowed range: {{min}} – {{max}}",
     runtimePolicyGroupJobIntervals: "Job intervals",
     runtimePolicyGroupRetention: "Retention rules",
     runtimePolicyGroupThresholds: "Capacity & thresholds",

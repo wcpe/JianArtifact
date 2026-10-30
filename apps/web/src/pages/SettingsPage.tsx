@@ -1,10 +1,8 @@
 // 设置页只保留可在管理端保存的服务配置。
 // 布局（v0.8.x）：顶部概览带（当前生效值 + 已保存/未保存 + 保存）→ 双栏分区卡
 // （左「服务设置」，右「安全防护」+「允许访问的域名」）→ 全宽的「运行期策略」分区
-// （13 项，默认折叠概览）→ 窄屏自动回落单栏。
+// （13 项全部铺开、逐项独立保存）→ 窄屏自动回落单栏。
 import {
-  IconChevronDown,
-  IconChevronUp,
   IconClock,
   IconCopy,
   IconDeviceFloppy,
@@ -310,13 +308,78 @@ function ServiceSettingsForm({
   const [form, setForm] = useState<SettingsConfig>(() => normalizeForm(initial));
   const [savedSignature, setSavedSignature] = useState(() => formSignature(normalizeForm(initial)));
   const [saving, setSaving] = useState(false);
-  // 「运行期策略」分区默认折叠：13 个数字输入框常驻会把页面撑到需要反复滚动，
-  // 而进设置页的常见目的只是改一两个字段。
-  const [policyExpanded, setPolicyExpanded] = useState(false);
+  // 逐项保存中的字段：只禁用该行，其余字段仍可继续编辑。
+  const [savingField, setSavingField] = useState<RuntimePolicyKey | null>(null);
+  // 逐项校验结果与「输入已完成」标记。校验只在失焦/回车后给出，
+  // 不在每次按键时弹错——边打字边报错会让「删掉旧值准备重输」的中间态一直显示错误。
+  const [touchedFields, setTouchedFields] = useState<Partial<Record<RuntimePolicyKey, boolean>>>(
+    {},
+  );
   const dirty = formSignature(form) !== savedSignature;
   // 概览带口径：展示「已保存 / 生效」值（来自 normalizeForm(initial)），不随未保存的
   // 表单改动跳动——改配置时能一眼对照当前线上口径。
   const effective = normalizeForm(initial);
+
+  /**
+   * 单项运行期策略的校验结果。
+   *
+   * 返回 null 表示可保存；返回文案表示不可保存。边界与后端同源（field.min / field.max），
+   * 前端只做「保存前拦明显笔误」，真正的夹取仍在后端。
+   */
+  const validateRuntimeField = (field: RuntimePolicyField, value: number): string | null => {
+    const label = t(runtimePolicyTextKeys(field.key).label);
+    if (!Number.isFinite(value)) {
+      return t("settings.runtimePolicyInvalidNumber", { label });
+    }
+    if (value < field.min) {
+      return field.min > 0
+        ? t("settings.runtimePolicyPositiveRequired", { label })
+        : t("settings.runtimePolicyNonNegative", { label });
+    }
+    if (value > field.max) {
+      return t("settings.runtimePolicyTooLarge", { label, max: field.max });
+    }
+    return null;
+  };
+
+  /** 只提交被改动的这一项；后端是部分更新，未传的键保持原值。 */
+  const saveRuntimeField = (field: RuntimePolicyField) => {
+    const error = validateRuntimeField(field, form[field.key]);
+    if (error) {
+      notifyError(error);
+      return;
+    }
+    const before = effective[field.key];
+    const after = form[field.key];
+    if (before === after) {
+      notifySuccess(t("settings.runtimePolicyNoChange"));
+      return;
+    }
+    setSavingField(field.key);
+    putSettings({ [field.key]: after } as Partial<SettingsConfig>)
+      .then((res) => {
+        const next = normalizeForm(res);
+        const nextForm = { ...form, [field.key]: next[field.key] };
+        setForm(nextForm);
+        setSavedSignature(formSignature(nextForm));
+        // 后端可能夹取（例如超过上界），回填后与提交值不同就必须如实告知，
+        // 否则用户以为「我填的 99999 被采纳了」。
+        const applied = next[field.key];
+        if (applied !== after) {
+          notifySuccess(
+            t("settings.runtimePolicyClamped", {
+              label: t(runtimePolicyTextKeys(field.key).label),
+              value: applied,
+            }),
+          );
+        } else {
+          notifySuccess(t("common.saved"));
+        }
+        onSaved();
+      })
+      .catch(notifyError)
+      .finally(() => setSavingField(null));
+  };
 
   const save = () => {
     if (form.upstreamTimeout < MIN_SECS || form.upstreamTimeout > MAX_SECS) {
@@ -647,106 +710,115 @@ function ServiceSettingsForm({
         </Stack>
       </SimpleGrid>
 
-      {/* 运行期策略：13 项塞不进上面两栏（纵向会拉到两三屏高），单独成区并默认折叠成概览。
-          折叠态只报「四组各几项」，刻意不在折叠态写任何生效时机——
-          四组内部的时机并不统一（如「保留策略」里回收站保留天数是下一次清理生效，
-          其余三项是下一次作业生效），按组写一句时机就是错的。
+      {/* 运行期策略：13 项全部铺开，每项独立保存。
+          不再做成可折叠分区——折叠让「改哪一项」变成先找再展开的两步操作，
+          而这里的字段本就是运维最常反复调整的对象。
 
           flexShrink: 0 不能省：外层是可滚动 flex 列（flex-basis: 0），卡片默认允许收缩，
           展开后会按剩余空间被压扁成一行多高，而卡片自身 overflow: hidden 把下面的
-          字段整块裁掉——表现为「点开只看到第一行，其余输入框既不可见也点不到」。 */}
+          字段整块裁掉——表现为「只看到第一行，其余输入框既不可见也点不到」。 */}
       <OpsSection
         title={t("settings.runtimePolicyTitle")}
         meta={t("settings.runtimePolicyHint")}
         style={{ flexShrink: 0 }}
-        actions={
-          <Button
-            size="compact-sm"
-            variant="subtle"
-            aria-expanded={policyExpanded}
-            leftSection={
-              policyExpanded ? <IconChevronUp size={16} /> : <IconChevronDown size={16} />
-            }
-            onClick={() => setPolicyExpanded(!policyExpanded)}
-          >
-            {policyExpanded
-              ? t("settings.runtimePolicyCollapse")
-              : t("settings.runtimePolicyExpand")}
-          </Button>
-        }
         testId="settings-runtime-policy"
       >
-        {policyExpanded ? (
-          <Stack gap="lg">
-            {RUNTIME_POLICY_GROUPS.map((group) => (
-              <Stack gap="sm" key={group.id}>
-                <Text size="xs" fw={700} c="dimmed">
-                  {t(group.titleKey)}
-                </Text>
-                <SimpleGrid cols={{ base: 1, sm: 2, lg: 3 }} spacing="md" verticalSpacing="md">
-                  {group.fields.map((field) => {
-                    const keys = runtimePolicyTextKeys(field.key);
-                    const timing = RUNTIME_POLICY_TIMING[field.timing];
-                    const label = t(keys.label);
-                    return (
-                      <Stack gap={4} key={field.key}>
-                        <Group justify="space-between" gap="xs" wrap="nowrap" align="center">
-                          <Text size="sm" fw={500}>
-                            {label}
-                          </Text>
-                          {/* 生效时机逐项标注。位置固定在标签行右侧：它是每项的必读信息，
-                              塞进 description 尾部会被长帮助文案淹掉。 */}
-                          <Badge size="xs" variant="light" color={timing.tone}>
-                            {t(timing.textKey)}
-                          </Badge>
-                        </Group>
+        <Stack gap="lg">
+          {RUNTIME_POLICY_GROUPS.map((group) => (
+            <Stack gap="sm" key={group.id}>
+              <Text size="xs" fw={700} c="dimmed">
+                {t(group.titleKey)}
+              </Text>
+              <SimpleGrid cols={{ base: 1, sm: 2, lg: 3 }} spacing="md" verticalSpacing="md">
+                {group.fields.map((field) => {
+                  const keys = runtimePolicyTextKeys(field.key);
+                  const timing = RUNTIME_POLICY_TIMING[field.timing];
+                  const label = t(keys.label);
+                  const fieldError = validateRuntimeField(field, form[field.key]);
+                  // 只在「这一项被改过」时才允许单独保存，避免把未改动的项也提交一遍。
+                  const fieldDirty = form[field.key] !== effective[field.key];
+                  const fieldSaving = savingField === field.key;
+                  // 校验文案只在用户完成输入后（失焦/回车）才显示，不在打字途中弹。
+                  const showError = touchedFields[field.key] && fieldError !== null;
+                  return (
+                    <Stack gap={4} key={field.key}>
+                      <Group justify="space-between" gap="xs" wrap="nowrap" align="center">
+                        <Text size="sm" fw={500}>
+                          {label}
+                        </Text>
+                        {/* 生效时机逐项标注。位置固定在标签行右侧：它是每项的必读信息，
+                            塞进 description 尾部会被长帮助文案淹掉。 */}
+                        <Badge size="xs" variant="light" color={timing.tone}>
+                          {t(timing.textKey)}
+                        </Badge>
+                      </Group>
+                      <Group gap="xs" wrap="nowrap" align="flex-start">
                         <NumberInput
+                          style={{ flex: 1 }}
                           aria-label={label}
                           description={t(keys.help)}
                           min={field.min}
                           max={field.max}
                           allowDecimal={false}
+                          // clampBehavior="none"：默认行为会在键入时就把值夹到区间内，
+                          // 于是「填了 99999」会静默变成 3600 且永不报越界——用户以为
+                          // 自己填的值被接受，实际被悄悄改写。关掉内部夹取，交给下面的
+                          // 校验显式报错，也才谈得上「输入完成即验证是否可行」。
+                          clampBehavior="none"
                           value={form[field.key]}
-                          disabled={saving}
+                          disabled={fieldSaving}
+                          error={showError ? fieldError : undefined}
                           onChange={(value) =>
                             setForm({ ...form, [field.key]: Number(value) || 0 })
                           }
+                          onBlur={() =>
+                            setTouchedFields((prev) => ({ ...prev, [field.key]: true }))
+                          }
+                          onKeyDown={(event) => {
+                            // 回车＝确认这一项：先标记已校验，再在可保存时单独提交。
+                            if (event.key === "Enter") {
+                              setTouchedFields((prev) => ({ ...prev, [field.key]: true }));
+                              if (validateRuntimeField(field, form[field.key]) === null) {
+                                saveRuntimeField(field);
+                              }
+                            }
+                          }}
                         />
-                        {field.key === "trashMaxBytes" ? (
-                          // 字节数直接输入没人算得清，旁边给出可读换算；
-                          // 但提交值仍是字节——换算只用于显示，取整误差会让上限与实际可用空间对不上。
-                          <Text size="xs" c="dimmed">
-                            {t("settings.runtimePolicyBytesPreview", {
-                              human: formatBytes(form.trashMaxBytes),
-                            })}
-                          </Text>
-                        ) : null}
-                      </Stack>
-                    );
-                  })}
-                </SimpleGrid>
-              </Stack>
-            ))}
-          </Stack>
-        ) : (
-          <Stack gap="xs">
-            <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="sm" verticalSpacing="sm">
-              {RUNTIME_POLICY_GROUPS.map((group) => (
-                <Stack gap={0} key={group.id}>
-                  <Text size="sm" fw={500}>
-                    {t(group.titleKey)}
-                  </Text>
-                  <Text size="xs" c="dimmed">
-                    {t("settings.runtimePolicyGroupCount", { count: group.fields.length })}
-                  </Text>
-                </Stack>
-              ))}
-            </SimpleGrid>
-            <Text size="xs" c="dimmed">
-              {t("settings.runtimePolicyOverviewHint")}
-            </Text>
-          </Stack>
-        )}
+                        <Button
+                          size="compact-sm"
+                          variant={fieldDirty ? "light" : "subtle"}
+                          loading={fieldSaving}
+                          disabled={!fieldDirty || fieldError !== null || savingField !== null}
+                          onClick={() => saveRuntimeField(field)}
+                          aria-label={t("settings.runtimePolicySaveOne", { label })}
+                        >
+                          {t("settings.runtimePolicySaveOneShort")}
+                        </Button>
+                      </Group>
+                      {field.key === "trashMaxBytes" ? (
+                        // 字节数直接输入没人算得清，旁边给出可读换算；
+                        // 但提交值仍是字节——换算只用于显示，取整误差会让上限与实际可用空间对不上。
+                        <Text size="xs" c="dimmed">
+                          {t("settings.runtimePolicyBytesPreview", {
+                            human: formatBytes(form.trashMaxBytes),
+                          })}
+                        </Text>
+                      ) : null}
+                      {/* 合法区间如实写出：越界时用户需要知道「能填多少」，
+                          只报「超限」等于让他自己猜。 */}
+                      <Text size="xs" c="dimmed">
+                        {t("settings.runtimePolicyRangeHint", {
+                          min: field.min,
+                          max: field.max,
+                        })}
+                      </Text>
+                    </Stack>
+                  );
+                })}
+              </SimpleGrid>
+            </Stack>
+          ))}
+        </Stack>
       </OpsSection>
     </Stack>
   );
