@@ -489,3 +489,107 @@ func TestSchedulerRunSharesRunningFlagWithLoop(t *testing.T) {
 	}
 	close(release)
 }
+
+// TestSetIntervalTakesEffectNextRound 钉住「运行期改间隔从下一轮生效」。
+//
+// 为什么要这条：作业间隔现在能在设置页改，如果改动不生效或立即打断当轮，
+// 运维会得到与预期不同的行为——改小了却没变快，或者当轮被腰斩留下半成品。
+//
+// 用短间隔验证，不依赖 wall clock 长等。
+func TestSetIntervalTakesEffectNextRound(t *testing.T) {
+	t.Parallel()
+	s := New()
+	var (
+		mu    sync.Mutex
+		times []time.Time
+	)
+	s.Register("probe", 10*time.Second, func(context.Context) error {
+		mu.Lock()
+		times = append(times, time.Now())
+		mu.Unlock()
+		return nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s.Start(ctx)
+
+	// 改小到 50ms：下一轮开始密集触发。
+	if ok := s.SetInterval("probe", 50*time.Millisecond); !ok {
+		t.Fatal("已注册作业的 SetInterval 应返回 true")
+	}
+
+	// 原间隔 10s，若没生效这里一次都不会跑到。
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		n := len(times)
+		mu.Unlock()
+		if n >= 2 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	mu.Lock()
+	n := len(times)
+	mu.Unlock()
+	if n < 2 {
+		t.Fatalf("改间隔后 2s 内应至少触发 2 次，实际 %d 次（说明新间隔未生效）", n)
+	}
+
+	// Status 也应反映新间隔。
+	if got := s.Status()[0].Interval; got != 50*time.Millisecond {
+		t.Fatalf("Status 的 interval = %s，期望 50ms", got)
+	}
+}
+
+// TestSetIntervalRejectsUnknownAndNonPositive 钉住 SetInterval 的拒绝分支。
+//
+// 未注册作业与 d<=0 都返回 false 而不是 panic / 忙等：
+// 0 间隔会让 time.NewTimer(0) 立即触发，loop 变成 CPU 忙等。
+func TestSetIntervalRejectsUnknownAndNonPositive(t *testing.T) {
+	t.Parallel()
+	s := New()
+	s.Register("probe", time.Second, func(context.Context) error { return nil })
+
+	if ok := s.SetInterval("nope", time.Second); ok {
+		t.Fatal("未注册作业应返回 false")
+	}
+	if ok := s.SetInterval("probe", 0); ok {
+		t.Fatal("0 间隔应返回 false（禁用应通过不注册表达，否则 loop 忙等）")
+	}
+	if ok := s.SetInterval("probe", -time.Second); ok {
+		t.Fatal("负间隔应返回 false")
+	}
+	if got := s.Status()[0].Interval; got != time.Second {
+		t.Fatalf("被拒绝的调用不得改动间隔，实际 %s", got)
+	}
+}
+
+// TestSetIntervalConcurrentWithLoop 用 -race 验证 interval 的原子读写。
+//
+// 变异验证：把 job.intervalNanos 换回普通 time.Duration 字段，本用例在 -race 下必须报竞态。
+func TestSetIntervalConcurrentWithLoop(t *testing.T) {
+	t.Parallel()
+	s := New()
+	s.Register("probe", 20*time.Millisecond, func(context.Context) error { return nil })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s.Start(ctx)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 200; i++ {
+			s.SetInterval("probe", time.Duration(10+i%40)*time.Millisecond)
+		}
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		_ = s.Status()
+	}
+	<-done
+}

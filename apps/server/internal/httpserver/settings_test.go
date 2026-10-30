@@ -67,14 +67,14 @@ func TestSettingsEndpoints(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &def); err != nil {
 		t.Fatalf("解析响应：%v", err)
 	}
-	if !def.AnonymousAccess || def.PublicURL != "" || def.UpstreamTimeout != 30 || def.SyncInterval != 5 {
+	if !def.AnonymousAccess || def.PublicURL != "" || def.UpstreamTimeout != 30 || def.BlobGCInterval == 0 || def.SearchTimeoutSeconds == 0 {
 		t.Errorf("缺省设置值不符：%+v", def)
 	}
 
 	// admin PUT 全字段 → 200 回显新值。
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPut, "/api/v1/settings",
-		strings.NewReader(`{"anonymousAccess":false,"publicUrl":"https://cdn.example","upstreamTimeout":45,"syncInterval":10}`))
+		strings.NewReader(`{"anonymousAccess":false,"publicUrl":"https://cdn.example","upstreamTimeout":45}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Test-Role", "admin")
 	r.ServeHTTP(rec, req)
@@ -85,7 +85,7 @@ func TestSettingsEndpoints(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &after); err != nil {
 		t.Fatalf("解析响应：%v", err)
 	}
-	if after.AnonymousAccess || after.PublicURL != "https://cdn.example" || after.UpstreamTimeout != 45 || after.SyncInterval != 10 {
+	if after.AnonymousAccess || after.PublicURL != "https://cdn.example" || after.UpstreamTimeout != 45 {
 		t.Errorf("PUT 后设置值不符：%+v", after)
 	}
 	// 回源超时回调已触发。
@@ -105,7 +105,7 @@ func TestSettingsEndpoints(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &reread); err != nil {
 		t.Fatalf("解析响应：%v", err)
 	}
-	if reread.PublicURL != "https://cdn.example" || reread.UpstreamTimeout != 45 || reread.SyncInterval != 10 {
+	if reread.PublicURL != "https://cdn.example" || reread.UpstreamTimeout != 45 {
 		t.Errorf("写后读回不符：%+v", reread)
 	}
 
@@ -113,7 +113,7 @@ func TestSettingsEndpoints(t *testing.T) {
 	timeoutUpdated = nil
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPut, "/api/v1/settings",
-		strings.NewReader(`{"anonymousAccess":true,"publicUrl":"https://partial.example","upstreamTimeout":60,"syncInterval":0}`))
+		strings.NewReader(`{"anonymousAccess":true,"publicUrl":"https://partial.example","upstreamTimeout":99999}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Test-Role", "admin")
 	r.ServeHTTP(rec, req)
@@ -123,19 +123,18 @@ func TestSettingsEndpoints(t *testing.T) {
 	if anonymous, err := settingSvc.AnonymousAccessEnabled(); err != nil || anonymous {
 		t.Errorf("非法 PUT 后匿名开关不应变化，值=%v err=%v", anonymous, err)
 	}
-	if settingSvc.PublicURL() != "https://cdn.example" || settingSvc.UpstreamTimeoutSecs() != 45 || settingSvc.SyncIntervalSecs() != 10 {
-		t.Errorf("非法 PUT 后设置不应部分写入：URL=%q timeout=%d interval=%d",
-			settingSvc.PublicURL(), settingSvc.UpstreamTimeoutSecs(), settingSvc.SyncIntervalSecs())
+	if settingSvc.PublicURL() != "https://cdn.example" || settingSvc.UpstreamTimeoutSecs() != 45 {
+		t.Errorf("非法 PUT 后设置不应部分写入：URL=%q timeout=%d",
+			settingSvc.PublicURL(), settingSvc.UpstreamTimeoutSecs())
 	}
 	if timeoutUpdated != nil {
 		t.Errorf("非法 PUT 不应触发回源超时回调，得 %v", *timeoutUpdated)
 	}
 
-	// 非法值 → 400：超时越界、间隔越界、非 http URL。
+	// 非法值 → 400：超时越界、非 http URL。
 	for _, body := range []string{
 		`{"upstreamTimeout":0}`,
 		`{"upstreamTimeout":3601}`,
-		`{"syncInterval":-1}`,
 		`{"publicUrl":"ftp://x"}`,
 	} {
 		rec = httptest.NewRecorder()
@@ -150,7 +149,7 @@ func TestSettingsEndpoints(t *testing.T) {
 
 	// 非 admin PUT → 403。
 	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPut, "/api/v1/settings", strings.NewReader(`{"syncInterval":10}`))
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/settings", strings.NewReader(`{"upstreamTimeout":45}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Test-Role", "user")
 	r.ServeHTTP(rec, req)

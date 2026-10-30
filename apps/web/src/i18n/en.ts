@@ -141,6 +141,68 @@ export const en = {
       "The domain allowlist and Origin Token are node-local configuration and are not moved to other nodes by a consistency backup package.",
     effectsLockout:
       "Before changing the allowlist, confirm that the new domain already resolves: requests from outside the list return 404 directly, including your own access.",
+    // Runtime policy section (13 settings). Effect timing must be stated honestly —
+    // claiming "takes effect immediately" makes operators verify right away and
+    // conclude that the configuration did not apply.
+    runtimePolicyTitle: "Runtime policy",
+    runtimePolicyHint: "Job intervals, retention rules and thresholds (node-local)",
+    runtimePolicyExpand: "Expand to edit",
+    runtimePolicyCollapse: "Collapse",
+    runtimePolicyOverviewHint:
+      "Expand to edit each item; every field states its unit, the meaning of 0 and its real effect timing (not all of them apply immediately).",
+    runtimePolicyGroupJobIntervals: "Job intervals",
+    runtimePolicyGroupRetention: "Retention rules",
+    runtimePolicyGroupThresholds: "Capacity & thresholds",
+    runtimePolicyGroupUpstream: "Upstream & search",
+    runtimePolicyGroupCount: "{{count}} items",
+    runtimePolicyTimingJobIntervals: "Takes effect from the next run",
+    runtimePolicyTimingNextJobRun: "Takes effect on the next job run",
+    runtimePolicyTimingNextCleanup: "Takes effect on the next cleanup",
+    runtimePolicyTimingNextRequest: "Takes effect on the next request",
+    runtimePolicyBytesPreview: "≈ {{human}} (bytes are still what gets submitted)",
+    runtimePolicyPositiveRequired:
+      "{{label}} must be greater than 0 (this setting has no off state)",
+    runtimePolicyNonNegative: "{{label}} cannot be negative (0 disables it or removes the limit)",
+    runtimePolicyTooLarge: "{{label}} exceeds the upper limit {{max}}",
+    runtimePolicyBlobGcIntervalLabel: "Orphan blob GC interval (seconds)",
+    runtimePolicyBlobGcIntervalHelp:
+      "Reclaims blobs no longer referenced by any asset; 0 disables the job. A very small interval keeps the disk scan busy continuously.",
+    runtimePolicyStorageCleanupIntervalLabel: "Storage cleanup interval (seconds)",
+    runtimePolicyStorageCleanupIntervalHelp:
+      "Cleans stale upload temp files and terminal-state metadata; 0 disables the job. A very small interval keeps directory traversal busy continuously.",
+    runtimePolicyBackupOrphanCleanupIntervalLabel: "Orphan backup package GC interval (seconds)",
+    runtimePolicyBackupOrphanCleanupIntervalHelp:
+      "Reclaims packages under backups/ that are not registered anywhere; 0 disables the job. A very small interval rescans the whole backup directory repeatedly.",
+    runtimePolicyTrashGcIntervalLabel: "Recycle bin retention GC interval (seconds)",
+    runtimePolicyTrashGcIntervalHelp:
+      "Removes recycle bin entries past the retention period; 0 disables the job. A very small interval walks the bin repeatedly.",
+    runtimePolicyUpstreamProbeIntervalLabel: "Upstream health probe interval (seconds)",
+    runtimePolicyUpstreamProbeIntervalHelp:
+      "Probes each proxy upstream of this node periodically; 0 disables scheduled probing (sampling from real requests keeps accumulating). A very small interval means constant load on upstreams.",
+    runtimePolicyBackupOrphanGraceHoursLabel: "Orphan backup grace period (hours)",
+    runtimePolicyBackupOrphanGraceHoursHelp:
+      "An orphan package can only be reclaimed once it is older than this; 0 is not accepted — a zero grace period deletes packages still being copied in or not yet imported.",
+    runtimePolicyStorageMetadataRetentionDaysLabel: "Storage metadata retention (days)",
+    runtimePolicyStorageMetadataRetentionDaysHelp:
+      "Keeps terminal-state metadata for the most recent N days; 0 means no trimming (the metadata table keeps growing).",
+    runtimePolicyStorageTempMaxAgeHoursLabel: "Max age of upload temp files (hours)",
+    runtimePolicyStorageTempMaxAgeHoursHelp:
+      "Temp files from interrupted uploads are cleaned after this age; 0 means they are not cleaned (they keep occupying disk).",
+    runtimePolicyTrashRetentionDaysLabel: "Recycle bin retention (days)",
+    runtimePolicyTrashRetentionDaysHelp:
+      "How long recycle bin entries are kept before the GC job removes them; 0 means no automatic cleanup (you can still purge manually).",
+    runtimePolicyTrashMaxBytesLabel: "Recycle bin capacity limit (bytes)",
+    runtimePolicyTrashMaxBytesHelp:
+      "Upper bound on total recycle bin usage; new cleanups are rejected once exceeded; 0 means no limit. Entered in bytes.",
+    runtimePolicyAutoBlockBaseSecondsLabel: "Circuit breaker base backoff (seconds)",
+    runtimePolicyAutoBlockBaseSecondsHelp:
+      "Initial backoff window after repeated upstream failures; 0 or a negative value falls back to the default (this setting has no off state). Too large a value turns a brief upstream hiccup into a long outage.",
+    runtimePolicySearchTimeoutSecondsLabel: "Search total budget (seconds)",
+    runtimePolicySearchTimeoutSecondsHelp:
+      "Total time budget for one search request; 0 or a negative value falls back to the default (this setting has no off state). Too large a budget lets slow queries hold a database connection for a long time.",
+    runtimePolicyCapacityCacheTtlSecondsLabel: "Capacity cache TTL (seconds)",
+    runtimePolicyCapacityCacheTtlSecondsHelp:
+      "Cache lifetime for the dashboard capacity aggregation; 0 disables the cache (aggregated on every request at the cost of an extra full scan).",
   },
   // Maintenance & cleanup. Wording keeps "recoverable"
   // and "irreversible" clearly apart — confusing the two is the main risk here.
