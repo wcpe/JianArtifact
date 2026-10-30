@@ -31,7 +31,7 @@ import {
 } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
 import { IconAlertTriangle, IconSearch, IconTrash } from "@tabler/icons-react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   planMavenVersion,
   trashMavenVersion,
@@ -79,7 +79,16 @@ function parseCoordinate(raw: string): ParsedCoordinate | null {
 }
 
 export function MavenVersionCleanupPanel({ repositories, onTrashed }: MavenVersionCleanupPanelProps) {
+  // 同 MavenPackageBatchPanel：仓库列表异步加载，初始值不能只取一次，
+  // 否则组件首次挂载时列表为空、repo 永远停在空串。
   const [repo, setRepo] = useState(repositories[0]?.name ?? "");
+  useEffect(() => {
+    const first = repositories[0];
+    if (!first) return;
+    setRepo((current) =>
+      current && repositories.some((r) => r.name === current) ? current : first.name,
+    );
+  }, [repositories]);
   const [coordinate, setCoordinate] = useState("");
   const [plan, setPlan] = useState<MavenVersionPlan | null>(null);
   const [loading, setLoading] = useState(false);

@@ -31,7 +31,7 @@ import {
 } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
 import { IconAlertTriangle, IconSearch, IconTrash } from "@tabler/icons-react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   searchMavenPackageVersions,
   trashMavenVersionsBatch,
@@ -54,7 +54,17 @@ function versionKey(v: MavenPackageVersion): string {
 }
 
 export function MavenPackageBatchPanel({ repositories, onTrashed }: MavenPackageBatchPanelProps) {
+  // 初始值不能只取一次：仓库列表是异步加载的，组件首次挂载时通常还是空数组，
+  // 那样 repo 会永远停在空串，搜索按钮永久 disabled、下拉框显示的值与状态也不一致。
+  // 这里用「当前选中值仍在列表中则保留，否则回落到第一个」的同步逻辑。
   const [repo, setRepo] = useState(repositories[0]?.name ?? "");
+  useEffect(() => {
+    const first = repositories[0];
+    if (!first) return;
+    setRepo((current) =>
+      current && repositories.some((r) => r.name === current) ? current : first.name,
+    );
+  }, [repositories]);
   const [groupId, setGroupId] = useState("");
   const [artifactId, setArtifactId] = useState("");
   const [versionPattern, setVersionPattern] = useState("");
