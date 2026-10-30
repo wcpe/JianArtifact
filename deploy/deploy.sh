@@ -147,11 +147,44 @@ deploy_compose() {
 # systemd-user=用户级 rootless 单元（~/.config/systemd/user，需 lingering）。
 # 两者重启命令不同，用错会报 "Unit not found" 或 "Failed to connect to bus"。
 SYSTEMD_SCOPE="user"
+
+# restart_unit_in_system_scope 以「有序候选」重启系统级单元。
+#
+# 为什么不是单条命令：系统级单元常以非 root 用户运行（User=<非 root>），此时重启需要额外授权，
+# 而两条路径的可用性取决于部署形态——
+#   ① 免密 sudo：`sudo -n systemctl restart`，适用于装了 NOPASSWD 规则的机器；
+#   ② 裸 systemctl：走 polkit，适用于已授予 manage-units 动作的机器。
+# 实测（测试站：系统级单元 + User=admin + NoNewPrivileges=true）裸命令被 polkit 拒于
+# "Interactive authentication required"，而 `sudo -n` 成功——固定用裸命令会让部署在任何
+# 这类机器上必然失败；反过来只认 sudo 也不行（没配 NOPASSWD 时不可用）。
+# 因此按 ①→② 逐个尝试，全失败时把两条路径各自的原因一并报出，便于判断该补哪种授权。
+restart_unit_in_system_scope() {
+  local svc="$1"
+  local sudo_err bare_err
+  # 已是 root 时不需要 sudo，直接走裸命令。
+  if [[ "$(run_remote 'id -u' 2>/dev/null | tr -d "[:space:]")" == "0" ]]; then
+    run_remote "systemctl restart '${svc}'"
+    return $?
+  fi
+  if sudo_err="$(run_remote "sudo -n systemctl restart '${svc}'" 2>&1)"; then
+    return 0
+  fi
+  log "免密 sudo 重启不可用（${sudo_err}），改用 systemctl + polkit 重试。"
+  if bare_err="$(run_remote "systemctl restart '${svc}'" 2>&1)"; then
+    return 0
+  fi
+  echo "[部署][错误] 重启 ${svc} 的两条路径都失败：
+  · 免密 sudo：${sudo_err}
+  · polkit   ：${bare_err}
+若该单元其实位于 ~/.config/systemd/user（用户级），请把环境文件里的 DEPLOY_MODE 改为 systemd-user；
+否则请为部署用户补 NOPASSWD 规则（sudoers）或 polkit 的 manage-units 授权。" >&2
+  return 1
+}
+
 systemctl_restart() {
   local svc="$1"
   if [[ "${SYSTEMD_SCOPE}" == "system" ]]; then
-    run_remote "systemctl restart '${svc}'" || die "重启失败：${svc} 不在系统级作用域。
-若该单元其实位于 ~/.config/systemd/user（用户级），请把环境文件里的 DEPLOY_MODE 改为 systemd-user。"
+    restart_unit_in_system_scope "${svc}"
   else
     run_remote "systemctl --user restart '${svc}'" || die "重启失败：${svc} 不在用户级作用域。
 若该单元其实位于 /etc/systemd/system（系统级），请把环境文件里的 DEPLOY_MODE 改为 systemd，
@@ -160,10 +193,23 @@ systemctl_restart() {
 }
 
 # 切换 current 并重启服务：部署与回滚共用的唯一动作。
+#
+# 重启失败必须把 current 切回去：切换与重启是两步，只切不重启会留下
+# 「符号链接指向新版本、进程仍在跑旧版本」的不一致态——运维看 current 以为已升级，
+# 实际行为还是旧的，且下次重启会突然变成新版本。切回原指向才是失败时的正确收尾。
 switch_and_restart() {
   local target="$1"
+  local previous
+  previous="$(run_remote "readlink -f '${RELEASE_DIR}/current' 2>/dev/null || true")"
   run_remote "ln -sfn '${target}' '${RELEASE_DIR}/current'"
-  systemctl_restart "${DEPLOY_SERVICE}"
+  if systemctl_restart "${DEPLOY_SERVICE}"; then
+    return 0
+  fi
+  if [[ -n "${previous}" && "${previous}" != "${target}" ]]; then
+    log "重启失败，把 current 回滚到 ${previous}。"
+    run_remote "ln -sfn '${previous}' '${RELEASE_DIR}/current'"
+  fi
+  return 1
 }
 
 # 部署前置检查：远端必须已有 EnvironmentFile，否则重启后会因缺关键变量而起不来。
@@ -211,11 +257,12 @@ deploy_systemd() {
   local previous
   previous="$(run_remote "readlink -f '${RELEASE_DIR}/current' 2>/dev/null || true")"
 
-  switch_and_restart "${release}"
+  # 重启失败时 switch_and_restart 已把 current 切回原指向，这里只需如实退出。
+  switch_and_restart "${release}" || die "部署失败：新版本未能启动，current 已回滚到切换前的版本。"
   if ! healthcheck; then
     log "健康检查失败，自动回滚。"
     if [[ -n "${previous}" ]]; then
-      switch_and_restart "${previous}"
+      switch_and_restart "${previous}" || die "回滚重启失败，请人工介入（原版本 ${previous}）。"
       healthcheck || die "回滚后健康检查仍失败，请人工介入。"
       die "部署失败并已回滚至 ${previous}。"
     fi

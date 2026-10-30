@@ -274,6 +274,10 @@ export function RepoBrowser({
   const canUpload = allowUpload && format === "raw" && repoType === "hosted" && !publicMode;
   // Maven hosted 走 GAV 表单网页上传
   const canMavenUpload = allowUpload && format === "maven" && repoType === "hosted" && !publicMode;
+  // 资产写操作（删除/移动/重命名）只对 hosted 仓库成立：proxy 的制品是上游缓存、group 的是
+  // 成员聚合，二者都不承载本地写入。此前这里只判 isAdmin，于是管理员在 proxy/group 仓库里
+  // 能选中制品并点删除，请求打到后端才被拒——且回的是「资源已存在」，与真实原因无关。
+  const canMutateAssets = isAdmin && repoType === "hosted";
 
   // 加载根目录；: 仅仓库切换时清空重置，刷新（上传/全局刷新）保留旧树避免整页重刷
   const prevRepoRef = useRef<string | null>(null);
@@ -480,6 +484,9 @@ export function RepoBrowser({
 
   // 统一删除事务成功后才清空选择；失败时保留选择以便重试。
   const handleBatchDelete = () => {
+    // 防御性守卫：入口已按 canMutateAssets 收敛，但删除是不可逆操作，
+    // 任何新入口漏判都不该把「proxy/group 不支持写入」的请求发到后端。
+    if (!canMutateAssets) return;
     const paths = [...selectedPaths];
     if (paths.length === 0) {
       notifyError(t("repoDetail.batchDeleteEmptySelection"));
@@ -867,10 +874,10 @@ export function RepoBrowser({
                   defaultExpanded={searchResults !== null}
                   highlightPath={highlightPath}
                   showSize={searchResults !== null}
-                  selectable={isAdmin}
+                  selectable={canMutateAssets}
                   selectedPaths={selectedPaths}
-                  onNodeInteraction={isAdmin ? onNodeInteraction : undefined}
-                  onContextMenu={isAdmin ? handleContextMenu : undefined}
+                  onNodeInteraction={canMutateAssets ? onNodeInteraction : undefined}
+                  onContextMenu={canMutateAssets ? handleContextMenu : undefined}
                 />
               </ScrollArea>
             </Box>

@@ -8,35 +8,76 @@
 
 配置通过环境变量、部署 Secret 或 systemd 环境文件注入；真实环境文件不入库。
 
-| 变量                                   | 作用                                        | 默认/约束                                                                                      |
-| -------------------------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `JIAN_HTTP_ADDR`                       | HTTP 监听地址                               | `:8080`                                                                                        |
-| `JIAN_DATA_DIR`                        | SQLite 与 blob 数据根目录                   | `./data`；生产必须使用持久化绝对路径（见下方"数据目录解析"）                                   |
-| `JIAN_JWT_SECRET`                      | JWT(HS256) 签名密钥                         | 生产必填、强随机、不得打印                                                                     |
-| `JIAN_MIGRATION_CREDENTIAL_KEY`        | 在线迁移凭据 AES-256-GCM 密钥               | Base64 编码 32 字节；生产应显式固定                                                            |
-| `JIAN_UPSTREAM_TIMEOUT`                | proxy 回源整体超时（秒）                    | `30`                                                                                           |
-| `JIAN_ENABLED_FORMATS`                 | 启用的协议格式                              | 缺省 `raw,maven,npm`；显式空值关闭全部                                                         |
-| `JIAN_PUBLIC_URL`                      | 对外基础 URL                                | 节点本地配置；影响下载链接与 usage 片段                                                        |
-| `JIAN_SYNC_INTERVAL`                   | 设置页「同步间隔」的初始默认值（秒）        | `5`；仅在 setting 键不存在时写入，当前无调度器消费（复制退役遗留）                             |
-| `JIAN_BLOB_GC_INTERVAL`                | 清理遗留 / 孤儿 blob 的间隔（秒）           | `86400`；`0` 禁用                                                                              |
-| `JIAN_STORAGE_CLEANUP_INTERVAL`        | 存储治理清理作业的间隔（秒）                | `86400`；`0` 禁用（作业不注册）；非法 / 负数回落默认                                           |
-| `JIAN_STORAGE_METADATA_RETENTION_DAYS` | 终态操作与隔离元数据的保留天数              | `7`；`0` 禁用元数据裁剪；非法 / 负数回落默认                                                   |
-| `JIAN_STORAGE_TEMP_MAX_AGE_HOURS`      | 过期 OCI 上传临时文件的最长滞留（小时）     | `24`；`0` 禁用该项清理；非法 / 负数回落默认                                                    |
-| `JIAN_BACKUP_AUTO_INTERVAL`            | 自动备份间隔（秒）——**仅作首次部署初值**    | `0`（**默认关闭**）；`0` = 关闭；非法 / 负数回落默认。界面可填 `30s`/`5m`/`2h`/`1d`/`1mo`/`1y` |
-| `JIAN_BACKUP_KEEP_LAST`                | 保留最近 N 份自动备份（份）——**仅作初值**   | `7`；`0` = 不按份数限制；非法 / 负数回落默认                                                   |
-| `JIAN_BACKUP_RETENTION_DAYS`           | 自动备份的保留天数（天）——**仅作初值**      | `30`；`0` = 不限天数；非法 / 负数回落默认                                                      |
-| `JIAN_BACKUP_ORPHAN_CLEANUP_INTERVAL`  | 孤儿备份包回收作业的间隔（秒）              | `86400`；`0` 禁用（作业不注册）；非法 / 负数回落默认                                           |
-| `JIAN_BACKUP_ORPHAN_GRACE_HOURS`       | 孤儿回收的宽限期（小时）                    | `1`；`0` / 负数 / 非法回落 1（**不允许零宽限**，见下）                                         |
-| `JIAN_TLS_ADDR`                        | 内置 HTTPS 监听地址                         | 为空表示不启用                                                                                 |
-| `JIAN_TLS_CERT` / `JIAN_TLS_KEY`       | TLS 证书和私钥路径                          | 配置 `JIAN_TLS_ADDR` 时必填                                                                    |
-| `JIAN_AUTO_BLOCK_BASE_SECONDS`         | proxy 上游 auto-block 退避起始时长（秒）    | `40`；之后每档翻倍；`0` / 负数 / 非法回落默认（无禁用语义）                                    |
-| `JIAN_SEARCH_TIMEOUT_SECONDS`          | 搜索链路（网页搜索 / npm 搜索）总预算（秒） | `10`；三条搜索 SQL 共享同一 deadline；缺省 / 非数字 / 负数 / `0` 均回落默认（**无禁用语义**）  |
-| `JIAN_CAPACITY_CACHE_TTL_SECONDS`      | 仪表盘容量聚合结果的缓存有效期（秒）        | `30`；显式 `0` **禁用缓存**（每次实时聚合），非法 / 负数回落默认                               |
-| `JIAN_SQLITE_MAX_CONNS`                | SQLite 连接池上限（条）                     | `8`；WAL 下多读并发 + 单写；非正数 / 非法回落默认（**无禁用语义**）                            |
-| `JIAN_RESTART_UNIT`                    | 一键重启的目标 systemd 单元名               | `jianartifact`；须匹配 `[A-Za-z0-9._@-]`，否则该能力降级为不可用                               |
-| `JIAN_RESTART_SCOPE`                   | 一键重启的作用域                            | `system`；可选 `systemd-user`（**推荐**）/ `docker`；非法回落默认                              |
+| 变量                                   | 作用                                        | 默认/约束                                                                                                                                                    |
+| -------------------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `JIAN_HTTP_ADDR`                       | HTTP 监听地址                               | `:8080`                                                                                                                                                      |
+| `JIAN_DATA_DIR`                        | SQLite 与 blob 数据根目录                   | `./data`；生产必须使用持久化绝对路径（见下方"数据目录解析"）                                                                                                 |
+| `JIAN_JWT_SECRET`                      | JWT(HS256) 签名密钥                         | 生产必填、强随机、不得打印                                                                                                                                   |
+| `JIAN_MIGRATION_CREDENTIAL_KEY`        | 在线迁移凭据 AES-256-GCM 密钥               | Base64 编码 32 字节；生产应显式固定                                                                                                                          |
+| `JIAN_UPSTREAM_TIMEOUT`                | proxy 回源整体超时（秒）                    | `30`                                                                                                                                                         |
+| `JIAN_ENABLED_FORMATS`                 | 启用的协议格式                              | 缺省 `raw,maven,npm`；显式空值关闭全部                                                                                                                       |
+| `JIAN_PUBLIC_URL`                      | 对外基础 URL                                | 节点本地配置；影响下载链接与 usage 片段                                                                                                                      |
+| `JIAN_SYNC_INTERVAL`                   | 设置页「同步间隔」的初始默认值（秒）        | `5`；仅在 setting 键不存在时写入，当前无调度器消费（复制退役遗留）                                                                                           |
+| `JIAN_BLOB_GC_INTERVAL`                | 清理遗留 / 孤儿 blob 的间隔（秒）           | `86400`；`0` 禁用                                                                                                                                            |
+| `JIAN_STORAGE_CLEANUP_INTERVAL`        | 存储治理清理作业的间隔（秒）                | `86400`；`0` 禁用（作业不注册）；非法 / 负数回落默认                                                                                                         |
+| `JIAN_STORAGE_METADATA_RETENTION_DAYS` | 终态操作与隔离元数据的保留天数              | `7`；`0` 禁用元数据裁剪；非法 / 负数回落默认                                                                                                                 |
+| `JIAN_STORAGE_TEMP_MAX_AGE_HOURS`      | 过期 OCI 上传临时文件的最长滞留（小时）     | `24`；`0` 禁用该项清理；非法 / 负数回落默认                                                                                                                  |
+| `JIAN_BACKUP_AUTO_INTERVAL`            | 自动备份间隔（秒）——**仅作首次部署初值**    | `0`（**默认关闭**）；`0` = 关闭；非法 / 负数回落默认。界面可填 `30s`/`5m`/`2h`/`1d`/`1mo`/`1y`                                                               |
+| `JIAN_BACKUP_KEEP_LAST`                | 保留最近 N 份自动备份（份）——**仅作初值**   | `7`；`0` = 不按份数限制；非法 / 负数回落默认                                                                                                                 |
+| `JIAN_BACKUP_RETENTION_DAYS`           | 自动备份的保留天数（天）——**仅作初值**      | `30`；`0` = 不限天数；非法 / 负数回落默认                                                                                                                    |
+| `JIAN_BACKUP_ORPHAN_CLEANUP_INTERVAL`  | 孤儿备份包回收作业的间隔（秒）              | `86400`；`0` 禁用（作业不注册）；非法 / 负数回落默认                                                                                                         |
+| `JIAN_BACKUP_ORPHAN_GRACE_HOURS`       | 孤儿回收的宽限期（小时）                    | `1`；`0` / 负数 / 非法回落 1（**不允许零宽限**，见下）                                                                                                       |
+| `JIAN_TLS_ADDR`                        | 内置 HTTPS 监听地址                         | 为空表示不启用                                                                                                                                               |
+| `JIAN_TLS_CERT` / `JIAN_TLS_KEY`       | TLS 证书和私钥路径                          | 配置 `JIAN_TLS_ADDR` 时必填                                                                                                                                  |
+| `JIAN_AUTO_BLOCK_BASE_SECONDS`         | proxy 上游 auto-block 退避起始时长（秒）    | `40`；之后每档翻倍；`0` / 负数 / 非法回落默认（无禁用语义）                                                                                                  |
+| `JIAN_GROUP_MEMBER_TIMEOUT`            | group 成员**确认阶段**预算（秒）            | `3`；仅作**首次播种的初值**（表里没有该键时才写入）；之后以设置页为准、改动即时生效；非法 / 负数 / `0` 回落默认；上限 `3600s` 超限夹取并告警（与设置页同界） |
+| `JIAN_NEGATIVE_CACHE_TTL`              | 404 负缓存 TTL（秒）                        | `60`；仅作**首次播种的初值**；显式 `0` **关闭负缓存**（每次真实回源）；之后以设置页为准、改动即时生效                                                        |
+| `JIAN_SEARCH_TIMEOUT_SECONDS`          | 搜索链路（网页搜索 / npm 搜索）总预算（秒） | `10`；三条搜索 SQL 共享同一 deadline；缺省 / 非数字 / 负数 / `0` 均回落默认（**无禁用语义**）                                                                |
+| `JIAN_CAPACITY_CACHE_TTL_SECONDS`      | 仪表盘容量聚合结果的缓存有效期（秒）        | `30`；显式 `0` **禁用缓存**（每次实时聚合），非法 / 负数回落默认                                                                                             |
+| `JIAN_SQLITE_MAX_CONNS`                | SQLite 连接池上限（条）                     | `8`；WAL 下多读并发 + 单写；非正数 / 非法回落默认（**无禁用语义**）                                                                                          |
+| `JIAN_RESTART_UNIT`                    | 一键重启的目标 systemd 单元名               | `jianartifact`；须匹配 `[A-Za-z0-9._@-]`，否则该能力降级为不可用                                                                                             |
+| `JIAN_RESTART_SCOPE`                   | 一键重启的作用域                            | `system`；可选 `systemd-user`（**推荐**）/ `docker`；非法回落默认                                                                                            |
+| `JIAN_UPSTREAM_PROBE_INTERVAL`         | 上游健康定时探测间隔（秒）                  | `60`；显式 `0` **关闭定时探测**（真实请求序列照常积累）；非法 / 负数回落默认                                                                                 |
+| `JIAN_TRASH_RETENTION_DAYS`            | 回收站保留天数                              | `7`；显式 `0` **不自动清理**（回收站只增不减，需人工彻底删除）；非法 / 负数回落默认                                                                          |
+| `JIAN_TRASH_MAX_BYTES`                 | 回收站占用上限（字节）                      | `2147483648`（2 GiB）；显式 `0` **不限制**；超限时**拒绝新的清理**（不会静默淘汰最旧条目）；非法回落默认                                                     |
+| `JIAN_TRASH_GC_INTERVAL`               | 回收站保留期回收作业间隔（秒）              | `86400`；显式 `0` 禁用该作业（作业不注册）；非法 / 负数回落默认                                                                                              |
 
-派生路径固定为 `${JIAN_DATA_DIR}/jianartifact.db` 和 `${JIAN_DATA_DIR}/blobs`。启动会创建数据目录并执行 schema 迁移；不会在启动时扫描活动 blob；遗留 / 孤儿 blob 的定时清理由本实例按 `JIAN_BLOB_GC_INTERVAL` 独立运行；存储治理清理（隔离区空目录、终态操作与隔离元数据裁剪、过期 OCI 上传临时文件、代理缓存保留）由 `storage-cleanup` 作业按 `JIAN_STORAGE_CLEANUP_INTERVAL` 独立运行；备份孤儿回收（`${JIAN_DATA_DIR}/backups/` 下"有包体、无登记"的残留）由 `backup-orphan-cleanup` 作业按 `JIAN_BACKUP_ORPHAN_CLEANUP_INTERVAL` 独立运行。三者按目录命名空间各管一块、互不重叠。以上作业**都只在第一个间隔到期后执行**（启动不清理、不扫描历史）。
+`JIAN_GROUP_MEMBER_TIMEOUT` 与 `JIAN_NEGATIVE_CACHE_TTL` 走**设置页热生效**（与回源超时同一套链路）：环境变量只负责**首次播种**——启动时若设置表里还没有该键，用环境变量值写入；此后以设置表为准，在设置页保存后**立即生效、无需重启**。改动环境变量不会覆盖已有的设置表值，要改请走设置页（或先删掉该设置键再重启）。
+
+两项都是**节点本地**设置，不参与跨节点复制。两个入口对同一个参数给出**同一上界**（`3600s`）：环境变量超限夹取并告警，设置页同样夹取——此前一度是「环境变量最多 60s、界面最多 3600s」，运维无从判断哪个才是真上限。
+
+三点口径必须注意：
+
+- `JIAN_GROUP_MEMBER_TIMEOUT` **默认 3s，能配到 3600s 不代表应该配**：它的真实代价是「一个不可达成员就能让缺失路径等上这么久」，而缺失路径（Gradle 反复试探子模块、错误配置的客户端）恰恰是最频繁的请求类型。调大前先确认慢的到底是「响应头慢」还是「传输慢」——后者归 `JIAN_UPSTREAM_TIMEOUT` 管。
+- `JIAN_GROUP_MEMBER_TIMEOUT` 是 group 成员的**确认阶段**预算，不是成员解析全流程预算。它只决定「该成员是否及时给出上游响应头」，响应体落盘由 `JIAN_UPSTREAM_TIMEOUT`（默认 30s）承担——所以调大它不会让大制品更容易下完，只会让不可达成员等得更久；调大前先确认慢的到底是「响应头慢」还是「传输慢」。
+- `JIAN_NEGATIVE_CACHE_TTL=0` 是**关闭**负缓存：每个缺失路径请求都会真实回源 / 探测全部 group 成员。这是排查「制品明明有却报 404」时确认是否为负缓存滞留的手段，**不是性能优化开关**——大流量站点长期开启会成倍放大上游压力。排查完请改回默认值。
+
+`JIAN_UPSTREAM_PROBE_INTERVAL` 只需要注意一件事：探测是**主动**流量。
+
+- 每轮探测会对**每个** `type=proxy` 且 `online=true` 的仓库各发一次 `HEAD`（`hosted` 无上游、`group` 无独立上游、`offline` 是用户明确要求停用，三者一律跳过），单轮并发上限 8。实例上有 N 个在线 proxy 仓库时，每分钟就是 N 次 HEAD——上游数量多的部署应调大间隔。
+- 置 `0` 表示**关闭定时探测**：库里 `source='probe'` 那条序列不再增长，但 `source='request'` 的真实请求采样照常积累，界面上仍能看到真实可用性趋势；只是没有流量时不再补空窗。
+
+`JIAN_TRASH_*` 三项都服务于回收站（`/maintenance` 的清理会把目标**移入**回收站而不是物理删除）。有两点口径必须注意：
+
+- `JIAN_TRASH_MAX_BYTES` 超限时**拒绝新的清理**，不会自动淘汰最旧条目。这是刻意的：静默淘汰等于绕过用户确认再删一次数据。出现「清理被拒绝」时应先在界面里彻底删除不再需要的回收站条目，或评估调大上限，而不是直接把上限改成 `0`（那会让回收站无界增长，最终吃满磁盘）。
+- `JIAN_TRASH_RETENTION_DAYS=0` 是**不自动清理**，不是「立即清空」。回收站会只增不减，需要人工在界面里彻底删除或清空；长期这样配置请配 `JIAN_TRASH_MAX_BYTES` 一起监控。
+- 回收站**不是备份系统**：它只记录原位置，文件内容没有额外副本。清理后若同一路径被重新写入，恢复会因目标已存在而跳过（**绝不覆盖**），此时只能彻底删除该条目。
+- 这三项与具体的 `JIAN_GROUP_MEMBER_TIMEOUT` / `JIAN_NEGATIVE_CACHE_TTL` 一样，均为**启动时读取**，改动需重启本实例生效。
+- 探测**不改**断路器状态：它不会触发自动阻断、不会延长退避窗口、不产生 `upstream_block_events`。所以「探测失败」与「仓库被自动阻断」是两件事，排查时不要把它们混为一谈。
+
+派生路径固定为 `${JIAN_DATA_DIR}/jianartifact.db` 和 `${JIAN_DATA_DIR}/blobs`。启动会创建数据目录并执行 schema 迁移；不会在启动时扫描活动 blob；遗留 / 孤儿 blob 的定时清理由本实例按 `JIAN_BLOB_GC_INTERVAL` 独立运行；存储治理清理（隔离区空目录、终态操作与隔离元数据裁剪、过期 OCI 上传临时文件、代理缓存保留、**上游健康历史 30 天保留**）由 `storage-cleanup` 作业按 `JIAN_STORAGE_CLEANUP_INTERVAL` 独立运行；备份孤儿回收（`${JIAN_DATA_DIR}/backups/` 下"有包体、无登记"的残留）由 `backup-orphan-cleanup` 作业按 `JIAN_BACKUP_ORPHAN_CLEANUP_INTERVAL` 独立运行。三者按目录命名空间各管一块、互不重叠。以上作业**都只在第一个间隔到期后执行**（启动不清理、不扫描历史）。
+
+### 上游健康历史（`upstream_health_minute`）
+
+`upstream_health_minute` 保存每个 proxy 仓库的分钟级上游健康采样，是「当前连接状态」（内存态、重启归零）的历史补充。
+
+- **两路来源、两条序列**：`source='request'`（真实回源请求，反映真实用户可用性）与 `source='probe'`（后台定时探测，补齐无流量时的空窗）。`source` 在**主键里**，同一分钟会各占一行——两条序列的连通率必须分开看，混合统计会把「探测 100% 成功但真实请求 60%」这个关键分化平均掉。
+- **失败列口径**：`timeout`（未响应）、`unreachable`（不可达）、`slow`（传输过慢）、`aborted`（传输中断）对应回源失败五分类；`ok + 四类失败 = samples`。**本地写失败与请求取消不计入任何列**（前者是本地故障、后者是正常请求生命周期终点），因此它们不会抬高或拉低任何连通率。
+- **延迟口径**：`avg_latency_ms` / `max_latency_ms` 只统计成功样本；一整分钟没有成功样本时为 `NULL`（不写 0——0ms 是一个不存在的读数）。
+- **保留 30 天**，由 `storage-cleanup` **顺带清理**（不新增作业），与 `host_metric_minute` 的既有口径一致。清理只删本表，不波及其它分钟表。
+- **写入不阻塞回源**：真实请求的采样先在进程内按 (分钟桶, 仓库, 来源) 合并，每 5 秒刷一次盘，进程关停前再 flush 一次。因此单次回源不为采样付出写库代价；代价是进程被强杀（`SIGKILL`）时最多丢最后约 5 秒的采样。
+- **容量估算**：每个在线 proxy 仓库每分钟左右 2 行（request 一行、probe 一行），30 天约 8.6 万行/仓库。100 个 proxy 仓库约 860 万行，上线前请按此估算磁盘与查询延迟（规格 §6 R5）。
+- **不回填历史**：本表从迁移生效时刻开始积累，之前的可用性无从重建——界面上「尚无采样」就是这个意思，不是「一直健康」。
 
 ### 自动备份间隔的时间单位（FR-40 追加九）
 
@@ -275,7 +316,22 @@ curl -fsS http://127.0.0.1:8080/metrics | head
 
 - **指标口径**：`jianartifact_protocol_requests_total{method,status,cache_result}`（制品协议请求完成计数，缓存结果取 `hit` / `miss` / `unknown`）、`jianartifact_publish_rejections_total{reason}`（发布被拒绝的累计次数，见下）、`jianartifact_upstream_block_events_total{reason}`（上游断路器阻止事件的累计次数，见下）、`jianartifact_upstream_blocked_repositories`（当前处于阻止态——自动阻止或半开试探——的上游仓库数，无标签）、`jianartifact_scheduler_job_*{job}`（定时任务作业的执行 / 失败次数、是否运行中、最近执行时间与最近是否失败）、`jianartifact_runtime_*`（协程数、堆占用、累计 GC 次数）。
 - **发布拒绝原因（闭集枚举）**：`jianartifact_publish_rejections_total{reason}` 的 `reason` 是**闭集枚举**，v1 只有 `quota` 一个取值——它同时覆盖「发布额度拒绝」与「仓库存储配额拒绝」这两类共用 429 `quota_exceeded` 口径的拒绝。**闭集之外的取值会被直接忽略**（标签基数受控）；**新增取值必须先改规格**（[`specs/0.11.0-storage-governance.md`](specs/0.11.0-storage-governance.md) §3.5）并同步测试与本文，不允许就地塞入自由字符串。该指标族即使尚无拒绝样本也输出 `# HELP` / `# TYPE`，样本行只在真的发生过拒绝后出现。
-- **上游断路器指标（FR-43）**：`jianartifact_upstream_block_events_total{reason}` 的 `reason` 同样是**闭集枚举**，v1 有 `probe_failed`（探测失败导致阻止窗口延长）与 `upstream_error`（回源失败触发自动阻止）两个取值；闭集之外的取值被直接忽略。该族即使尚无阻止事件也输出 `# HELP` / `# TYPE`。`jianartifact_upstream_blocked_repositories` 报告当前处于 `AUTO_BLOCKED` 或 `HALF_OPEN` 的仓库数——**按仓库名打标签会让标签基数随仓库数无界增长，故该指标刻意不带任何标签**；排障时要定位到具体仓库，请查管理界面的仓库列表 / 详情或 `/api/v1/operations/alerts` 的 `upstream_auto_blocked` 告警。**新增取值必须先改规格**（[`specs/0.12.0-upstream-circuit-breaker.md`](specs/0.12.0-upstream-circuit-breaker.md) §3.3）并同步测试与本文。
+- **上游断路器指标（FR-43 / FR-155）**：`jianartifact_upstream_block_events_total{reason}` 的 `reason` 同样是**闭集枚举**，现有三个取值：`probe_failed`（探测失败导致阻止窗口延长）、`upstream_error`（回源失败触发自动阻止）、`upstream_timeout`（**回源超时 —— 只记事件、不触发仓库级阻断**，见下）；闭集之外的取值被直接忽略。该族即使尚无事件也输出 `# HELP` / `# TYPE`。`jianartifact_upstream_blocked_repositories` 报告当前处于 `AUTO_BLOCKED` 或 `HALF_OPEN` 的仓库数——**按仓库名打标签会让标签基数随仓库数无界增长，故该指标刻意不带任何标签**；排障时要定位到具体仓库，请查管理界面的仓库列表 / 详情或 `/api/v1/operations/alerts` 的 `upstream_auto_blocked` 告警。**新增取值必须先改规格**（[`specs/0.12.0-upstream-circuit-breaker.md`](specs/0.12.0-upstream-circuit-breaker.md) §3.3、[`specs/0.13.0-upstream-slow-not-unreachable.md`](specs/0.13.0-upstream-slow-not-unreachable.md) §3.6）并同步测试与本文。
+- **「回源慢」不再等同于「上游不可达」（FR-155）**：`upstream_timeout` 记的是「在预算内没拿到答案」，不构成上游不可达的证据，因此**不推退避、不改状态、不阻止该仓库的其它路径**——一次 15MB 大制品的超时不会连带同仓库的小制品一起失败。真正的不可达（连接失败 / DNS / TLS / 5xx）仍按既有退避进入 `AUTO_BLOCKED` 并记 `upstream_error`。该指标族 HELP 文本已由「阻止事件」改为「判定事件」，**样本行的计数语义对既有两个 reason 完全未变**。
+- **代理解析结果指标（FR-157）**：`jianartifact_resolve_failures_total{resolution}` 按结果维度区分 `confirmed`（已确认不存在）与 `uncertain`（成员超时 / 熔断阻止 / 离线等不可判定）；`jianartifact_negative_cache_entries` 报告当前负缓存条目数（无标签）。两族与上面的**阻断事件维度互不重叠**：同一次故障会各自累加，但**不可相加**（一次请求可能涉及多个成员）。标签基数受控——**不得带仓库名或路径标签**。
+- **回源失败原因细分（FR-158）**：`jianartifact_upstream_block_events_total{reason}` 的 `reason` 现为**五类**（见下），另有两类失败**不记入本族**。这套分类的依据是**是否已拿到响应头**：拿到头 ⟺ 上游可达且确实持有该制品，之后的失败属传输侧。
+
+  | `reason`           | 含义                                                       | 是否阻断 | 该怎么处置                                 |
+  | ------------------ | ---------------------------------------------------------- | -------- | ------------------------------------------ |
+  | `upstream_error`   | 真不可达（连接 / DNS / TLS 失败、上游 5xx / 401 / 403）    | **是**   | 查上游存活、网络与凭据                     |
+  | `upstream_timeout` | 上游没响应（未拿到响应头即超时，**或拿到头但零字节传出**） | 否       | 查上游是否过载或卡死                       |
+  | `slow_transfer`    | **拿到响应头**、有传输进展、超时 —— 带宽不足               | 否       | 等带宽恢复，或调大 `JIAN_UPSTREAM_TIMEOUT` |
+  | `transfer_aborted` | **拿到响应头**、非超时的连接重置 / 提前 EOF                | 否       | 查中间设备或上游主动断连                   |
+  | `probe_failed`     | 后台探测失败导致阻止窗口延长                               | （维持） | —                                          |
+
+  另有二类**不产生** `upstream_block_events` 样本，但会出现在日志的 `category` 字段里：`local_write_failure`（本地磁盘写失败——**不是上游问题**，对外 500，看到它该查本机磁盘与权限而不是上游）、`canceled`（客户端取消或 group 中兄弟成员已成功后取消落选者——正常生命周期终点，只上抛取消，不记日志）。传输失败日志另带**已传字节 / 声明大小 / 耗时**，使「慢」可被量化；`slow_transfer` 与 `transfer_aborted` 的日志文案与建议不同，前者提到 `JIAN_UPSTREAM_TIMEOUT`、后者指向中间代理。
+
+- **负缓存运维入口（FR-157）**：`GET /api/v1/maintenance/negative-cache` 查看当前负缓存条目（仓库、路径、写入时间、剩余 TTL，支持 `repo` / `path_prefix` / `limit` 过滤），`DELETE /api/v1/maintenance/negative-cache` 按「无参数=全清 / 仅 `repo`=按仓库清 / `repo`+`path`=精确清一条」三档递进清理（均仅管理员，详见 [`API.md`](API.md)）。**典型用途**：上游修好但同路径仍返回 404 时，先确认不是负缓存命中（条目 TTL 默认 60s，`JIAN_NEGATIVE_CACHE_TTL` 可调、置 0 关闭），再清理对应条目使其立即回源。只读查看**不写审计**，清理会写审计。
 - **抓取开销**：全部取自进程内数据，**不查询数据库、不访问网络**；标签基数受控——未知方法与异常状态码归 `other`，路径 / 仓库名 / 用户等无界值不做标签。
 - **匿名口径**：与 `/healthz`、`/readyz` 一致免认证，但**不含版本等指纹信息**；需要限制访问范围时在网络层收口（安全组 / 反向代理）。
 - **抓取配置示例**：
@@ -342,9 +398,10 @@ scrape_configs:
 curl -fsS -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/api/v1/maintenance/jobs
 ```
 
-返回本进程**已注册**的周期作业（现状为 `blob-gc`、`storage-cleanup` 与 `backup-auto`）及状态：名称、间隔秒数、是否运行中、累计执行 / 失败次数、最近开始 / 结束时间、最近错误。要点：
+返回本进程**已注册**的周期作业（现状为 `blob-gc`、`storage-cleanup`、`backup-orphan-cleanup`、`upstream-probe` 与 `backup-auto`）及状态：名称、间隔秒数、是否运行中、累计执行 / 失败次数、最近开始 / 结束时间、最近错误。要点：
 
-- 清单由注册决定——**间隔 ≤ 0 被禁用的作业不注册，也不出现在清单里**，所以"某个作业没出现"等价于"该作业在本实例被禁用"（例如 `JIAN_STORAGE_CLEANUP_INTERVAL=0`）；
+- 清单由注册决定——**间隔 ≤ 0 被禁用的作业不注册，也不出现在清单里**，所以"某个作业没出现"等价于"该作业在本实例被禁用"（例如 `JIAN_STORAGE_CLEANUP_INTERVAL=0`、`JIAN_UPSTREAM_PROBE_INTERVAL=0`）；
+- **`upstream-probe` 的失败不代表上游坏了**：单个上游不可达是正常的观测结果，作业本身不会因此记失败（`failures` / `lastError` 只在读库等作业级错误时变化）。判断上游健康状况请看仓库详情页的「上游健康历史」区块，而不是这个作业的 `lastError`；
 - **`backup-auto` 是例外，须留意**：它的间隔改为在运行时可配（见 §1.1），因此作业**始终注册**，清单里**总是能看到它**，其 `intervalSeconds` 恒为心跳值 30。它是否真正在备份，取决于「备份与搬迁」页的自动备份间隔是否为 0——**看到 `backup-auto` 不代表自动备份已启用**；
 - 计数自进程启动累计、重启归零；未执行过的作业，时间与错误字段为 `null`。
 

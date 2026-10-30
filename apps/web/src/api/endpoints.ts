@@ -71,6 +71,9 @@ import type {
   RepoType,
   RepoVisibility,
   StatusInfo,
+  UpstreamHealthRecent,
+  UpstreamHealthSeries,
+  UpstreamHealthSourceValue,
   TokenCreated,
   TokenList,
   UsageInfo,
@@ -453,6 +456,50 @@ export function recheckConnection(name: string): Promise<ConnectionStatus> {
   return request<ConnectionStatus>(`/repositories/${name}/recheck-connection`, {
     method: "POST",
   });
+}
+
+/** 上游健康历史的查询参数。from/to 省略时服务端取最近 24 小时。 */
+export interface UpstreamHealthQuery {
+  from?: string;
+  to?: string;
+  /** 来源过滤：省略表示 request 与 probe 两路都取；前端应分别展示而不是合并平均。 */
+  source?: UpstreamHealthSourceValue;
+}
+
+/**
+ * 读取仓库上游健康历史（时间序列 + 按来源分组的汇总），仅管理员。
+ *
+ * `request` 与 `probe` 是两条独立序列：前者反映真实用户可用性，后者反映无流量时的补齐探测。
+ * 汇总按来源分别给出，因此「探测 100% 成功但真实请求 60%」这种分化不会被平均掉。
+ * 窗口内没有采样时 `points` 为空、`summaries` 为空——调用方必须显示「尚无采样」，
+ * 绝不能把它当作 100% 连通。
+ */
+export function getUpstreamHealth(
+  name: string,
+  query: UpstreamHealthQuery = {},
+): Promise<UpstreamHealthSeries> {
+  const params = new URLSearchParams();
+  if (query.from) params.set("from", query.from);
+  if (query.to) params.set("to", query.to);
+  if (query.source) params.set("source", query.source);
+  const suffix = params.toString();
+  return request<UpstreamHealthSeries>(
+    suffix
+      ? `/repositories/${encodeURIComponent(name)}/upstream-health?${suffix}`
+      : `/repositories/${encodeURIComponent(name)}/upstream-health`,
+  );
+}
+
+/**
+ * 读取最近 N 个分钟桶的上游健康明细摘要，仅管理员。
+ *
+ * **口径限制**：明细来自分钟桶聚合而非逐请求日志，同一分钟内的多次请求只有一行
+ * （`samples` 是该分钟的样本数）。界面文案必须交代这一点，否则会被误读成丢数据。
+ */
+export function getUpstreamHealthRecent(name: string, limit = 50): Promise<UpstreamHealthRecent> {
+  return request<UpstreamHealthRecent>(
+    `/repositories/${encodeURIComponent(name)}/upstream-health/recent?limit=${limit}`,
+  );
 }
 
 export function getAcl(name: string): Promise<AclList> {
@@ -1144,6 +1191,10 @@ export interface SettingsConfig {
    * 0 表示暂无已完成备份，界面不显示估算。
    */
   backupLatestPackageBytes: number;
+  /** group 成员确认预算（秒）：单个成员「确认是否存在」的最长等待，1–3600。 */
+  groupMemberTimeout: number;
+  /** 404 负缓存 TTL（秒）：0 = 关闭负缓存（每次请求都真实回源）。 */
+  negativeCacheTTL: number;
 }
 
 /**
@@ -1171,6 +1222,10 @@ function normalizeSettings(raw: SettingsConfig): SettingsConfig {
     backupAutoIntervalValue: raw.backupAutoIntervalValue ?? raw.backupAutoInterval ?? 0,
     backupAutoIntervalUnit: raw.backupAutoIntervalUnit ?? "seconds",
     backupLatestPackageBytes: raw.backupLatestPackageBytes ?? 0,
+    // 两项 proxy/group 调优：缺省值与后端一致（3s / 60s）。负缓存 TTL 的 0 是
+    // 「关闭」，只能用 ?? 判 undefined，不能写成 `|| 60` —— 那会把关闭态打回默认。
+    groupMemberTimeout: raw.groupMemberTimeout ?? 3,
+    negativeCacheTTL: raw.negativeCacheTTL ?? 60,
   };
 }
 
@@ -1615,4 +1670,167 @@ export async function listAllRepositories(
     items.push(...page.items);
   }
   return { items, total: first.total };
+}
+
+// ---- 维护与清理 ----
+// 这四组端点都是**非契约端点**（登记在 docs/API.md），不进 api/openapi.yaml：
+// 它们服务运维手动排障与清理，形状随清理能力演进。
+
+/** 清理类别：与后端 domain.CleanupKind* 一一对应。 */
+export type CleanupKind = "empty_dirs" | "stale_uploads" | "pre_restore" | "quarantine";
+
+export interface StorageHealth {
+  orphanBlobs: number;
+  orphanBlobBytes: number;
+  quarantinedBlobs: number;
+  quarantinedBytes: number;
+  emptyDirs: number;
+  preRestoreDirs: number;
+  preRestoreBytes: number;
+  backupUploadsBytes: number;
+  backupImportsBytes: number;
+  backupDrillBytes: number;
+  totalBytes: number;
+  partialError?: string;
+}
+
+export interface CleanupCandidate {
+  /** 相对数据目录的路径；对外只暴露相对路径，前端不得拼绝对路径。 */
+  path: string;
+  isDir: boolean;
+  bytes: number;
+}
+
+export interface CleanupPreview {
+  kind: CleanupKind;
+  items: CleanupCandidate[];
+  itemCount: number;
+  freedBytes: number;
+  skipped?: string[];
+}
+
+export interface CleanTask {
+  ID: number;
+  Kind: string;
+  Status: string;
+  TotalItems: number;
+  ProcessedItems: number;
+  FreedBytes: number;
+  ErrorMessage: string | null;
+  CreatedAt: string;
+  StartedAt: string | null;
+  FinishedAt: string | null;
+}
+
+export interface TrashEntry {
+  ID: number;
+  TaskID: number;
+  Kind: string;
+  OriginalPath: string;
+  TrashPath: string;
+  IsDir: boolean;
+  Bytes: number;
+  Status: string;
+  CreatedAt: string;
+  ResolvedAt: string | null;
+}
+
+export interface TrashConflict {
+  id: number;
+  originalPath: string;
+  reason: string;
+}
+
+export interface MaintenanceJob {
+  name: string;
+  intervalSeconds: number;
+  running: boolean;
+  runs?: number;
+  failures?: number;
+  lastStartedAt?: string | null;
+  lastFinishedAt?: string | null;
+  lastError?: string | null;
+}
+
+/** 存储体检快照（只读）。 */
+export function getStorageHealth(): Promise<StorageHealth> {
+  return request<StorageHealth>("/maintenance/storage-health");
+}
+
+/** 清理预览（**只读**，绝不删东西）。 */
+export function previewCleanup(kind: CleanupKind, keepLast?: number): Promise<CleanupPreview> {
+  return request<CleanupPreview>("/maintenance/cleanup/preview", {
+    method: "POST",
+    body: { kind, ...(keepLast === undefined ? {} : { keepLast }) },
+  });
+}
+
+/** 执行清理：只把目标**移入回收站**，不物理删除。 */
+export function executeCleanup(input: {
+  kind: CleanupKind;
+  items?: string[];
+  keepLast?: number;
+}): Promise<{ taskId: number; status: string }> {
+  return request("/maintenance/cleanup", { method: "POST", body: input });
+}
+
+/** 清理任务历史与进度。 */
+export function listCleanTasks(
+  page = 1,
+  pageSize = 20,
+): Promise<{
+  items: CleanTask[];
+  total: number;
+  page: number;
+  pageSize: number;
+}> {
+  return request("/maintenance/clean-tasks", { query: { page, page_size: pageSize } });
+}
+
+/** 回收站列表（含占用统计）。
+ *
+ * `stats` 用 small-camel 字段（后端已加 json tag 统一）。但页面侧仍必须做兜底：
+ * 一旦字段名再漂移，读 undefined 会显示成「项 / NAN KB」而不是崩掉——
+ * 这类"半坏"状态比白屏更难发现，所以宁可显式 ?? 默认值。 */
+export function listTrash(
+  page = 1,
+  pageSize = 20,
+): Promise<{
+  items: TrashEntry[];
+  total: number;
+  stats?: { entries?: number; bytes?: number };
+}> {
+  return request("/maintenance/trash", { query: { page, page_size: pageSize } });
+}
+
+/** 恢复回收站条目（反向操作；目标已存在时跳过并回 conflicts）。 */
+export function restoreTrash(ids: number[]): Promise<{
+  restored: number;
+  conflicts?: TrashConflict[];
+}> {
+  return request("/maintenance/trash/restore", { method: "POST", body: { ids } });
+}
+
+/** 彻底删除回收站条目（**不可逆**）。 */
+export function purgeTrash(ids: number[]): Promise<{ purged: number; freedBytes: number }> {
+  return request("/maintenance/trash/purge", { method: "POST", body: { ids } });
+}
+
+/** 清空回收站（**不可逆**）。 */
+export function purgeAllTrash(): Promise<{ purged: number; freedBytes: number }> {
+  return request("/maintenance/trash/purge-all", { method: "POST" });
+}
+
+/** 维护作业清单。
+ *
+ * 注意字段名是 `jobs` 而不是 `items`：本端点沿用后端既有形状（`MaintenanceJobList`），
+ * 与其它列表接口的分页形状不同。写成 `items` 会让 `res.items` 为 undefined，
+ * 页面读 `.length` 直接白屏——这正是上线时踩到的坑。 */
+export function listMaintenanceJobs(): Promise<{ jobs: MaintenanceJob[] }> {
+  return request("/maintenance/jobs");
+}
+
+/** 手动触发维护作业（**物理删除**，不进回收站）。 */
+export function runMaintenanceJob(name: string): Promise<{ name: string; started: boolean }> {
+  return request(`/maintenance/jobs/${encodeURIComponent(name)}/run`, { method: "POST" });
 }

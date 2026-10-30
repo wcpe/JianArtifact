@@ -698,6 +698,12 @@ func validCredentialRef(ref string) bool {
 }
 
 // Delete 删除仓库。
+//
+// 三种类型都允许删除：hosted 删的是本地制品，proxy 删的是它的缓存制品，group 通常没有
+// 制品。此前 proxy / group 一律被拒（规格 0.8.0-asset-lifecycle.md 曾如此约定），但那让
+// 「界面上有删除按钮、点下去必失败」成为常态，也让误建的代理仓再也清不掉；删除仓库是
+// 管理员对**仓库本身**的动作，与「代理仓不承载写入」是两回事——后者约束的是往仓里写制品
+// （见 ApplyOperation 的守卫），不是删仓。
 func (s *RepositoryService) Delete(name string) error {
 	if err := requireBusinessWrite(s.writeGate); err != nil {
 		return err
@@ -705,9 +711,6 @@ func (s *RepositoryService) Delete(name string) error {
 	repo, err := s.repos.GetByName(name)
 	if err != nil {
 		return mapNotFound(err)
-	}
-	if repo.Type != "hosted" {
-		return ErrConflict
 	}
 	assets, err := s.assets.ListByRepo(repo.ID, "", maxAssetOperationItems+1, 0)
 	if err != nil {

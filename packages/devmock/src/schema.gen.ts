@@ -779,6 +779,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/repositories/{name}/upstream-health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 仓库上游健康历史时间序列与汇总（仅管理员）
+         * @description 仅管理员可读（响应含失败原因分布与上游判定细节，不宜匿名暴露）。
+         *     返回窗口 `[from, to)` 内按分钟聚类的采样点与整窗汇总，`request` 与 `probe` 是
+         *     **两条独立序列**（用 `source` 区分）：前者来自真实回源请求，反映真实用户可用性；
+         *     后者来自后台定时 HEAD 探测，用于补齐无流量时的空窗。两条序列**不得平均合并**——
+         *     「探测 100% 成功但真实请求 60%」正是需要被看见的关键分化。
+         *
+         *     `source` 省略时两路都返回。非 proxy 仓库返回 400（hosted 无上游、group 无独立上游）。
+         *     采样自本表启用时刻起积累，**不回填历史**；窗口内没有任何采样时返回空的 `points`
+         *     与 `samples=0`，调用方不得把「无采样」推导为「100% 健康」。
+         *
+         *     口径：`ok` 与四类失败（`timeout` / `unreachable` / `slow` / `aborted`）之和等于
+         *     `samples`；`localWriteFailure` 与 `canceled` 不计入任何列（前者是本地故障、
+         *     后者是正常请求生命周期终点），因此它们不会出现在任何计数里。
+         *     延迟只在**成功样本**上统计，无成功样本时 `avgLatencyMs` / `maxLatencyMs` 为 null。
+         */
+        get: operations["getRepositoryUpstreamHealth"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/repositories/{name}/upstream-health/recent": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 仓库上游健康最近采样明细（仅管理员）
+         * @description 仅管理员可读。返回最近 `limit` 个分钟桶的明细摘要（按时间倒序，两路来源都含）。
+         *
+         *     **限制（口径取舍，见规格 §6 R3）**：明细来自**分钟桶聚合**而非逐请求日志，
+         *     因此同一分钟内的多次请求只会看到一行聚合摘要（`samples` 为该分钟内的样本数），
+         *     不是逐条记录。需要逐条记录必须改用环形缓冲（内存、重启丢失）或新增明细表（写放大），
+         *     本版本明确不采用。
+         *
+         *     空数组表示「尚无采样」，不得据此推断上游健康。非 proxy 仓库返回 400。
+         */
+        get: operations["getRepositoryUpstreamHealthRecent"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/repositories/{name}/assets": {
         parameters: {
             query?: never;
@@ -1438,6 +1498,55 @@ export interface paths {
          */
         post: operations["runMaintenanceJob"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/maintenance/negative-cache": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 查看 404 负缓存（仅管理员）
+         * @description 返回进程内 404 负缓存的有效条目快照（纯内存，重启即清）。
+         *
+         *     **能回答的问题**：某个路径现在是不是被钉成 404 了、是谁写的、还能钉多久。
+         *     `total` 是**过滤前**的有效条目总数（清理过期后统计），因此分页/过滤时它不变。
+         *     条目按写入时间升序，最多返回 `limit` 条（默认 100，上限 500）。
+         *
+         *     路径按**原样**返回（控制字符已转义）：管理员本就能通过仓库制品列表看到全量路径，
+         *     这里给出路径不构成新增暴露面，而脱敏后的路径对排障没有价值。
+         *
+         *     只读接口：不清理任何条目、不修改任何状态，因此**不写审计**。
+         */
+        get: operations["getNegativeCache"];
+        put?: never;
+        post?: never;
+        /**
+         * 清理 404 负缓存（仅管理员）
+         * @description 清理进程内 404 负缓存，用于「上游明明有了、本地还是 404」的排障场景
+         *     （负缓存 TTL 内同路径不再回源，只能靠本接口或等 TTL 过期）。
+         *
+         *     语义按参数递进：
+         *     - 无参数 → **全清**；
+         *     - 仅 `repo` → 按仓库清；
+         *     - `repo` + `path` → 精确清这一条。
+         *
+         *     清理只影响命中率、不影响正确性：负缓存是纯优化，丢条目最坏是多一次回源。
+         *     已过期（但尚未被顺带清理）的条目不计数——它们本就不再生效。
+         *     仓库名不存在返回 404；`path` 未指定 `repo` 返回 400。
+         *
+         *     **破坏性动作**：清理是对运行态记忆的破坏，写入审计；仅管理员可调用。
+         *
+         *     **本期只提供 API，不做界面**：负缓存是 60s 生命周期的进程内性能缓存，清理是排障时的
+         *     一次性动作；为它造页面要连带导航项、i18n 中英文案、空态与表格交互，收益远低于一句
+         *     `curl`。等真的出现「运维必须自助操作」的诉求再做页面，届时以真实交互需求驱动设计。
+         */
+        delete: operations["purgeNegativeCache"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2867,6 +2976,157 @@ export interface components {
             description?: string;
         };
         /**
+         * @description 采样来源。`request` 表示真实回源请求（反映真实用户可用性）；
+         *     `probe` 表示后台定时 HEAD 探测（补齐无流量时的空窗）。
+         *     两者是**独立序列**，连通率必须分别计算，不能合并平均。
+         * @enum {string}
+         */
+        UpstreamHealthSource: "request" | "probe";
+        /** @description 一个分钟桶的聚合采样点。 */
+        UpstreamHealthPoint: {
+            /**
+             * @description 分钟桶起点（UTC，格式 `YYYY-MM-DD HH:MM:00`，与 `host_metric_minute` 同口径）。
+             *     前端按浏览器时区渲染（对齐 ）。
+             */
+            bucketStart: string;
+            source: components["schemas"]["UpstreamHealthSource"];
+            /**
+             * Format: int64
+             * @description 该分钟内的样本总数。0 只可能出现在汇总里，不会出现在时间序列的桶上。
+             */
+            samples: number;
+            /**
+             * Format: int64
+             * @description 成功样本数（含「上游可达但资源不存在」的 404/410，它们证明连通性）。
+             */
+            ok: number;
+            /**
+             * Format: int64
+             * @description 未响应的样本数（对应  的 no_response）。
+             */
+            timeout: number;
+            /**
+             * Format: int64
+             * @description 不可达的样本数（对应  的 unreachable：连接/DNS/TLS 失败、上游 5xx/401/403）。
+             */
+            unreachable: number;
+            /**
+             * Format: int64
+             * @description 传输过慢的样本数（对应  的 slow_rate）。
+             */
+            slow: number;
+            /**
+             * Format: int64
+             * @description 传输中途被中断的样本数（对应  的 transfer_aborted）。
+             */
+            aborted: number;
+            /**
+             * Format: int64
+             * @description 平均耗时（毫秒），只统计成功样本。无成功样本时显式为 null（不是 0）。
+             */
+            avgLatencyMs?: number | null;
+            /**
+             * Format: int64
+             * @description 最大耗时（毫秒），只统计成功样本。无成功样本时显式为 null（不是 0）。
+             */
+            maxLatencyMs?: number | null;
+        };
+        /**
+         * @description 整窗汇总。`connectivity` 在 `samples=0` 时为 null——「尚无采样」与「100% 健康」
+         *     是两件不同的事，用 0 或 100 代替任一方都会误导。
+         */
+        UpstreamHealthSummary: {
+            /**
+             * Format: int64
+             * @description 窗口内的样本总数。
+             */
+            samples: number;
+            /**
+             * Format: int64
+             * @description 成功样本总数。
+             */
+            ok: number;
+            /**
+             * Format: int64
+             * @description 未响应样本总数。
+             */
+            timeout: number;
+            /**
+             * Format: int64
+             * @description 不可达样本总数。
+             */
+            unreachable: number;
+            /**
+             * Format: int64
+             * @description 传输过慢样本总数。
+             */
+            slow: number;
+            /**
+             * Format: int64
+             * @description 传输中断样本总数。
+             */
+            aborted: number;
+            /**
+             * Format: int64
+             * @description 四类失败之和（= timeout + unreachable + slow + aborted），方便前端直接展示。
+             */
+            failed?: number;
+            /**
+             * Format: double
+             * @description 连通率（0~1，= ok ÷ samples）。`samples=0` 时**显式为 null**（不是 0、也不是 1），调用方必须按「尚无采样」展示。
+             */
+            connectivity?: number | null;
+            /**
+             * Format: int64
+             * @description 窗口内成功样本的加权平均耗时（毫秒）；无成功样本时显式为 null。
+             */
+            avgLatencyMs?: number | null;
+            /**
+             * Format: int64
+             * @description 窗口内成功样本的 p95 耗时（毫秒）；无成功样本时为 null。
+             *     由于底表按分钟桶聚合（只保留桶内平均与最大值），p95 是按**桶平均延迟**的
+             *     样本数加权估出的分钟桶分位数，不是逐请求的精确分位数——用它看趋势量级是可靠的，
+             *     不要把它当作 SLA 口径的精确值。
+             */
+            p95LatencyMs?: number | null;
+        };
+        UpstreamHealthSeries: {
+            /** @description 仓库名（回显请求路径里的名字，便于调用方对齐）。 */
+            repository: string;
+            /**
+             * Format: date-time
+             * @description 实际生效的窗口起点（回显解析后的值）。
+             */
+            from?: string;
+            /**
+             * Format: date-time
+             * @description 实际生效的窗口终点（不包含）。
+             */
+            to?: string;
+            /**
+             * @description 按 (source, bucketStart) 升序的采样点。`request` 与 `probe` 各自成序列，
+             *     同一分钟可能出现两行（各一行）。空数组表示窗口内**没有任何采样**。
+             */
+            points: components["schemas"]["UpstreamHealthPoint"][];
+            /**
+             * @description 按来源分组的汇总（`request` / `probe` 键）。只包含窗口内实际出现过的来源；
+             *     请求指定 `source` 时仅含该来源。缺失某个键表示该来源在窗口内没有采样，
+             *     调用方不得把它当作「连通率 100%」。
+             */
+            summaries: {
+                [key: string]: components["schemas"]["UpstreamHealthSummary"];
+            };
+        };
+        UpstreamHealthRecent: {
+            /** @description 仓库名。 */
+            repository: string;
+            /**
+             * @description 最近若干个分钟桶，按时间倒序。**同分钟内多次请求只有一行聚合摘要**——
+             *     这是本版本明确采用的保守口径，不是逐请求日志（见端点 description）。
+             */
+            items: components["schemas"]["UpstreamHealthPoint"][];
+        };
+        /**
          * @description 一条仓库授权（主体 × 动作）。主体分两类：
          *     - `subjectType=user`（默认）：`subjectId` 必填，填用户 ID；
          *     - `subjectType=group`：`subjectGroupId` 必填，填用户组 ID。
@@ -3383,6 +3643,61 @@ export interface components {
             name: string;
             started: boolean;
         };
+        /** @description 单条负缓存条目。`repositoryId` + `path` 唯一确定条目，因此无需额外 id。 */
+        NegativeCacheItem: {
+            /**
+             * Format: int64
+             * @description 写入该条目的仓库 ID。
+             */
+            repositoryId: number;
+            /** @description 仓库名（由仓库表补全）；仓库已被删除时缺省。 */
+            repository?: string;
+            /** @description 制品路径（原样；控制字符已转义）。 */
+            path: string;
+            /**
+             * Format: date-time
+             * @description 条目写入时间。
+             */
+            writtenAt: string;
+            /**
+             * Format: int64
+             * @description 剩余有效期（秒）；到 0 即失效。
+             */
+            remainingSeconds: number;
+        };
+        /**
+         * @description 404 负缓存的只读快照（纯内存，重启即清）。
+         *
+         *     `total` 是**过滤前**的有效条目总数（清理过期后统计）：带 `repo` / `path_prefix`
+         *     过滤时它不变，用途是让人知道「全量有多大」，而不是「这一页有多大」。
+         */
+        NegativeCacheSummary: {
+            /**
+             * Format: int64
+             * @description 过滤前的有效条目总数（清理过期后统计）。
+             */
+            total: number;
+            /**
+             * Format: int64
+             * @description 当前负缓存 TTL（秒）。
+             */
+            ttlSeconds: number;
+            /**
+             * Format: int64
+             * @description 条目数上限；达到上限后写入会先清理过期条目，仍满则淘汰写入最早的一条。
+             */
+            maxEntries: number;
+            /** @description 过滤后按写入时间升序的前 `limit` 条。 */
+            items: components["schemas"]["NegativeCacheItem"][];
+        };
+        /** @description 负缓存清理结果；`removed` 只统计仍然有效的条目（已过期的条目不计数）。 */
+        NegativeCachePurgeResult: {
+            /**
+             * Format: int64
+             * @description 实际删除的有效条目数。
+             */
+            removed: number;
+        };
         /**
          * @description 一键重启的受理结果。
          *
@@ -3676,6 +3991,19 @@ export interface components {
             };
         };
         /**
+         * @description 能力未接线或依赖不可用。本契约里出现该状态的端点包括：
+         *     - 上游健康历史（`/upstream-health*`）：采样仓储未装配时返回 503 而非空序列——
+         *       空序列的语义是「尚无采样」，把「未接线」也报成空序列会让运维排查方向完全错。
+         */
+        ServiceUnavailable: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /**
          * @description 写入被配额拒绝（HTTP 429），错误体沿用统一信封 `{error:{code,message}}`。
          *     配额类拒绝的错误码固定为 `quota_exceeded`，共两种触发来源，口径一致：
          *     - 用户发布额度超限（`PublishPolicyRequest` 的每小时制品数 / 每日字节 / 单文件字节）；
@@ -3758,6 +4086,17 @@ export interface components {
         UserGroupMemberUserIdParam: number;
         TokenIdParam: number;
         RepoNameParam: string;
+        /** @description 时间窗起点（含）。RFC3339 时间；缺省为 `to` 前 24 小时。 */
+        UpstreamHealthFromParam: string;
+        /** @description 时间窗终点（**不含**，与其它观测端点的左闭右开口径一致）。RFC3339 时间；缺省为当前时刻。 */
+        UpstreamHealthToParam: string;
+        /**
+         * @description 采样来源过滤：`request`（真实回源请求）、`probe`（后台定时探测）。
+         *     省略时两路都返回。两条序列代表不同的可用性含义，调用方应分别展示而不是合并平均。
+         */
+        UpstreamHealthSourceParam: "request" | "probe";
+        /** @description 返回的分钟桶条数上限；缺省 50，最大 500。 */
+        UpstreamHealthLimitParam: number;
         MigrationIdParam: number;
         /** @description 按制品路径前缀过滤 */
         PrefixParam: string;
@@ -3828,6 +4167,14 @@ export interface components {
         BackupUploadChunkIndexParam: number;
         /** @description 调度器注册的作业名（如 blob-gc / storage-cleanup）；未注册的名称一律 404。 */
         MaintenanceJobNameParam: string;
+        /** @description 仓库名；省略表示不限仓库（查看时为过滤条件，清理时为清理范围）。 */
+        NegativeCacheRepoQueryParam: string;
+        /** @description 制品路径前缀；省略表示不限前缀。仅查看端点接受本参数。 */
+        NegativeCachePathPrefixParam: string;
+        /** @description 制品路径（精确匹配）；仅清理端点接受本参数，且必须与 repo 同时给出。 */
+        NegativeCachePathParam: string;
+        /** @description 返回条目数上限（默认 100，最大 500）；超出上限由服务端截断到 500，不报错。 */
+        NegativeCacheLimitParam: number;
     };
     requestBodies: never;
     headers: never;
@@ -5293,6 +5640,73 @@ export interface operations {
             404: components["responses"]["NotFound"];
         };
     };
+    getRepositoryUpstreamHealth: {
+        parameters: {
+            query?: {
+                /** @description 时间窗起点（含）。RFC3339 时间；缺省为 `to` 前 24 小时。 */
+                from?: components["parameters"]["UpstreamHealthFromParam"];
+                /** @description 时间窗终点（**不含**，与其它观测端点的左闭右开口径一致）。RFC3339 时间；缺省为当前时刻。 */
+                to?: components["parameters"]["UpstreamHealthToParam"];
+                /**
+                 * @description 采样来源过滤：`request`（真实回源请求）、`probe`（后台定时探测）。
+                 *     省略时两路都返回。两条序列代表不同的可用性含义，调用方应分别展示而不是合并平均。
+                 */
+                source?: components["parameters"]["UpstreamHealthSourceParam"];
+            };
+            header?: never;
+            path: {
+                name: components["parameters"]["RepoNameParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 上游健康时间序列与汇总 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpstreamHealthSeries"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    getRepositoryUpstreamHealthRecent: {
+        parameters: {
+            query?: {
+                /** @description 返回的分钟桶条数上限；缺省 50，最大 500。 */
+                limit?: components["parameters"]["UpstreamHealthLimitParam"];
+            };
+            header?: never;
+            path: {
+                name: components["parameters"]["RepoNameParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 最近采样明细（分钟桶摘要） */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpstreamHealthRecent"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
     listRepositoryAssets: {
         parameters: {
             query?: {
@@ -6324,6 +6738,66 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+        };
+    };
+    getNegativeCache: {
+        parameters: {
+            query?: {
+                /** @description 仓库名；省略表示不限仓库（查看时为过滤条件，清理时为清理范围）。 */
+                repo?: components["parameters"]["NegativeCacheRepoQueryParam"];
+                /** @description 制品路径前缀；省略表示不限前缀。仅查看端点接受本参数。 */
+                path_prefix?: components["parameters"]["NegativeCachePathPrefixParam"];
+                /** @description 返回条目数上限（默认 100，最大 500）；超出上限由服务端截断到 500，不报错。 */
+                limit?: components["parameters"]["NegativeCacheLimitParam"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 负缓存快照 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NegativeCacheSummary"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    purgeNegativeCache: {
+        parameters: {
+            query?: {
+                /** @description 仓库名；省略表示不限仓库（查看时为过滤条件，清理时为清理范围）。 */
+                repo?: components["parameters"]["NegativeCacheRepoQueryParam"];
+                /** @description 制品路径（精确匹配）；仅清理端点接受本参数，且必须与 repo 同时给出。 */
+                path?: components["parameters"]["NegativeCachePathParam"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 清理结果 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NegativeCachePurgeResult"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
     getRestartCapability: {

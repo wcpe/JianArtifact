@@ -135,3 +135,23 @@ describe("右键资产操作", () => {
     expect(screen.queryByRole("button", { name: /删除所选/ })).toBeNull();
   });
 });
+
+describe("非 hosted 仓库的写操作门控", () => {
+  // proxy 的制品是上游缓存、group 的是成员聚合，二者都不承载本地写入。
+  // 此前删除入口只判 isAdmin，于是管理员能选中制品点删除，请求打到后端才被拒
+  //（且当时回的是「资源已存在」）。这条守卫钉住入口本身不出现。
+  it.each(["proxy", "group"] as const)("%s 仓库不提供右键删除入口", async (repoType) => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <RepoBrowser repoName="maven-releases" forcedFormat="raw" forcedType={repoType} />,
+      // 不传 user：夹具默认以管理员身份渲染，断言点就是「即便是管理员也不给写入口」。
+      { route: "/", authenticated: true },
+    );
+    await expandToVersion(user);
+    // 不出现多选复选框，右键也不弹菜单。
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    fireEvent.contextMenu(screen.getByText("app-1.0.0.jar"));
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(screen.queryByRole("button", { name: /删除所选/ })).toBeNull();
+  });
+});

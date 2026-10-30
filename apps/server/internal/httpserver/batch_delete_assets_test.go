@@ -539,3 +539,31 @@ func TestBatchDeleteAssetsRepoNotFound(t *testing.T) {
 	}
 	assertFailureOperationID(t, rec)
 }
+
+// TestAssetOperationRejectsNonHostedRepository 钉住对外错误码：在 proxy / group 仓库
+// 上执行资产写操作必须返回 409 `repository_not_writable`，而不是 `conflict`
+// （后者的文案被写成「资源已存在」，线上表现为「删代理仓缓存制品却提示资源已存在」）。
+func TestAssetOperationRejectsNonHostedRepository(t *testing.T) {
+	t.Parallel()
+	for _, repoType := range []string{"proxy", "group"} {
+		repoType := repoType
+		t.Run(repoType+" 仓库返回 repository_not_writable", func(t *testing.T) {
+			t.Parallel()
+			e := newBatchDeleteEnv(t, "admin")
+			if _, err := e.repoRepo.Create("readonly-"+repoType, "raw", repoType, "private", ""); err != nil {
+				t.Fatalf("建 %s 仓库：%v", repoType, err)
+			}
+			rec, _ := e.postOperationAt("readonly-"+repoType, api.AssetOperationRequest{
+				Action:         api.AssetOperationRequestActionDelete,
+				OverrideReason: "验证非 hosted 仓库拒绝写入",
+				Targets:        []api.AssetOperationTarget{{Type: api.RawPath, Path: "cached.txt"}},
+			})
+			assertAssetOperationFailure(t, rec, http.StatusConflict, "repository_not_writable")
+			assertFailureOperationID(t, rec)
+			// 文案必须点明真实原因，不能再出现与事实无关的「资源已存在」。
+			if body := rec.Body.String(); strings.Contains(body, "资源已存在") {
+				t.Fatalf("错误文案不得为「资源已存在」（体：%s）", body)
+			}
+		})
+	}
+}

@@ -123,6 +123,47 @@ func recordResolveFailure(ctx context.Context, status ResolveFailureStatus) {
 	}
 }
 
+// upstreamStartedContextKey 是「上游已开始」信号的 context 键（未导出，避免跨包误用）。
+type upstreamStartedContextKey struct{}
+
+// upstreamStartedRecorder 持有一条解析链路的「上游已开始」信号：链路上有上游返回 2xx 响应头即置位。
+// parent 用于嵌套 group 向上传递——内层成员拿到响应头同样证明外层成员持有该制品，
+// 否则外层看门狗会在内层传输途中误取消（嵌套 group 是最常见的 maven-public 配置）。
+type upstreamStartedRecorder struct {
+	once   sync.Once
+	ch     chan struct{}
+	parent *upstreamStartedRecorder
+}
+
+// fire 幂等地置位信号（多次触发不阻塞、不 panic），并向上层记录器传递。
+func (r *upstreamStartedRecorder) fire() {
+	r.once.Do(func() {
+		close(r.ch)
+		if r.parent != nil {
+			r.parent.fire()
+		}
+	})
+}
+
+// WithUpstreamStarted 为一次解析挂载「上游已开始」信号，返回的通道在该链路收到首个上游响应头时关闭。
+//
+// group 读借此把成员预算从「总预算」改为「首字节看门狗」：响应头一到即撤销成员预算，
+// 剩余落盘预算交给回源整体超时（见 groupGet 与 ）。未挂载时 markUpstreamStarted
+// 是无操作，因此代理直连、后台探测、格式元数据回退等调用方无需感知本机制。
+func WithUpstreamStarted(ctx context.Context) (context.Context, <-chan struct{}) {
+	parent, _ := ctx.Value(upstreamStartedContextKey{}).(*upstreamStartedRecorder)
+	r := &upstreamStartedRecorder{ch: make(chan struct{}), parent: parent}
+	return context.WithValue(ctx, upstreamStartedContextKey{}, r), r.ch
+}
+
+// markUpstreamStarted 报告本条解析链路已收到上游 2xx 响应头（即上游确实持有该制品）。
+// 无记录器时静默忽略，语义与 recordResolveFailure 等 ctx 记录器一致。
+func markUpstreamStarted(ctx context.Context) {
+	if r, ok := ctx.Value(upstreamStartedContextKey{}).(*upstreamStartedRecorder); ok {
+		r.fire()
+	}
+}
+
 // recordCacheOutcome 把一次 proxy 解析的缓存来源写入 ctx 上的记录器；无记录器时静默忽略。
 // 判定点就在各 proxy 读路径「先查本地、未命中再回源」的分叉处，因此只对 proxy 仓库产生非空值。
 func recordCacheOutcome(ctx context.Context, outcome CacheOutcome) {
@@ -159,12 +200,26 @@ type AssetService struct {
 	nodeID    func() string
 	health    *proxyHealth
 	negCache  *negativeCache // 404 负缓存（proxy/group 读路径短窗缓存明确 404）
+	// groupBudget 是 group 逐成员并行解析的**确认阶段**预算（首字节看门狗时长）。
+	// 由常量改为实例字段的原因：JIAN_GROUP_MEMBER_TIMEOUT 需在装配期注入、测试也要能缩短。
+	// 由 groupBudgetMu 保护读写（读取见 memberConfirmBudget）。
+	groupBudgetMu sync.Mutex
+	groupBudget   time.Duration
+	// failureRecorder 记录解析失败的最终结论（指标维度）；nil 表示不记录。
+	failureRecorder ResolveFailureRecorder
+	// upstreamHealth 记录上游健康采样；nil 表示不采样。
+	// 与 health（内存态「此刻」）并存：两者一个回答现在通不通，一个回答过去怎么通。
+	upstreamHealth *UpstreamHealthService
 }
 
 // NewAssetService 构造 AssetService。upstream 供 proxy 回源使用（hosted-only 部署可传 nil）。
 func NewAssetService(repos *repository.RepoRepo, assets *repository.AssetRepo, blobs *blobstore.Store, up *upstream.Client) *AssetService {
 	mutator := NewAssetMutationCoordinatorDeferred(assets.DB(), blobs)
-	svc := &AssetService{repos: repos, assets: assets, blobs: blobs, upstream: up, mutator: mutator, negCache: newNegativeCache()}
+	svc := &AssetService{
+		repos: repos, assets: assets, blobs: blobs, upstream: up, mutator: mutator,
+		negCache:    newNegativeCache(),
+		groupBudget: groupMemberTimeoutDefault,
+	}
 	svc.health = newProxyHealth(svc.probeUpstream)
 	return svc
 }
@@ -240,8 +295,62 @@ func (s *AssetService) SetUpstreamBlockRecorder(r UpstreamBlockRecorder) {
 // 只读内存态，不查库、不访问网络。
 func (s *AssetService) BlockedUpstreamCount() int { return s.health.blockedCount() }
 
-// SetNegativeCacheTTL 调整 404 负缓存 TTL（默认 60s；测试与调优用，<=0 忽略）。
+// SetUpstreamHealthService 注入上游健康采样服务；nil 表示不采样。
+// 与 SetUpstreamBlockRecorder 同一装配范式：领域定义接口、装配层注入、nil 不记录。
+// 采样只写「历史序列」，**不参与任何状态判定**——断路器仍只由 settleUpstreamFailure 决定。
+func (s *AssetService) SetUpstreamHealthService(h *UpstreamHealthService) { s.upstreamHealth = h }
+
+// ProbeOnly 发起一次上游 HEAD 探测并返回状态码，**不触碰断路器状态机**。
+//
+// 与 probeUpstream 的区别只有一个，但很关键：probeUpstream 是断路器内部用的探测判据
+// （只把 err 交给状态机决定「成功/失败」）；本方法把**原始状态码**交回调用方，
+// 让定时探测作业能按  的五分类记下「是超时、还是 5xx、还是 DNS 失败」，
+// 同时不调用任何 record 系列方法。走的是同一个客户端与同一条凭据解析路径
+// （upstream.Client.ProbeWithCredential），因此不存在「探测与回源两套口径」。
+func (s *AssetService) ProbeOnly(ctx context.Context, remoteURL, credentialRef string) (int, error) {
+	if s == nil || s.upstream == nil {
+		return 0, ErrUpstream
+	}
+	if remoteURL == "" {
+		return 0, ErrUpstream
+	}
+	return s.upstream.ProbeWithCredential(ctx, remoteURL, credentialRef)
+}
+
+// SetNegativeCacheTTL 调整 404 负缓存 TTL（默认 60s）。
+//
+// 0 = **关闭负缓存**（每个请求都真实回源 / 探测成员），负数忽略（配置层已回落默认，
+// 这里是第二道保险）。装配层在 NewAssetService 之后、第一个请求之前注入
+// JIAN_NEGATIVE_CACHE_TTL 的解析结果；测试与调优也用它。
 func (s *AssetService) SetNegativeCacheTTL(d time.Duration) { s.negCache.setTTL(d) }
+
+// SetGroupMemberTimeout 调整 group 成员**确认阶段**预算（默认 3s；非正数忽略）。
+//
+// 只影响「该成员是否及时给出上游响应头」这一件事，不约束响应体传输——落盘预算仍由
+// 回源整体超时（JIAN_UPSTREAM_TIMEOUT）承担，见 groupGet 的首字节看门狗。
+// 装配层在 NewAssetService 之后、第一个请求之前注入 JIAN_GROUP_MEMBER_TIMEOUT 的解析结果。
+func (s *AssetService) SetGroupMemberTimeout(d time.Duration) {
+	s.groupBudgetMu.Lock()
+	defer s.groupBudgetMu.Unlock()
+	if d > 0 {
+		s.groupBudget = d
+	}
+}
+
+// memberConfirmBudget 返回当前的成员确认阶段预算，是看门狗**唯一**的取值来源。
+//
+// 读路径加锁的理由：热改与在途 group 读之间是真实的数据竞态（-race 会抓到），
+// 与 negativeCache 保护 ttl 的做法同构。
+func (s *AssetService) memberConfirmBudget() time.Duration {
+	s.groupBudgetMu.Lock()
+	defer s.groupBudgetMu.Unlock()
+	if s.groupBudget <= 0 {
+		// 兜底：零值构造（未走 NewAssetService）不得让预算变成「立刻超时」，
+		// 那会把整条 group 读退化成不可判定失败。
+		return groupMemberTimeoutDefault
+	}
+	return s.groupBudget
+}
 
 // Status 返回 proxy 仓库上游连接状态（供状态展示）。
 func (s *AssetService) Status(repoID int64) RemoteHealth { return s.health.status(repoID) }
@@ -875,9 +984,13 @@ func (s *AssetService) Get(repoName, path string) (*repository.Asset, io.ReadClo
 // 返回的 HTML 目录索引页当成制品缓存（文件树出现空白名的 text/html 假文件）。
 func (s *AssetService) Resolve(ctx context.Context, repoName, path string) (*repository.Asset, io.ReadCloser, error) {
 	if path == "" || strings.HasSuffix(path, "/") {
+		// 早期返回不计入解析结果指标：目录形路径不是制品，补写 Confirmed 会连带改变
+		// maven 的 notFound memo 行为（它读的正是同一个结论），属本 FR 边界之外。
 		return nil, nil, ErrNotFound
 	}
-	return s.resolvePath(ctx, repoName, path)
+	return s.resolveObserved(ctx, repoName, path, func(ctx context.Context) (*repository.Asset, io.ReadCloser, error) {
+		return s.resolvePath(ctx, repoName, path)
+	})
 }
 
 // ResolveWithRepo 使用调用方已解析的仓库快照执行制品解析，避免协议层重复查库。
@@ -888,7 +1001,9 @@ func (s *AssetService) ResolveWithRepo(ctx context.Context, repo *repository.Rep
 	if repo == nil {
 		return nil, nil, ErrNotFound
 	}
-	return s.resolve(ctx, repo, path, 0)
+	return s.resolveObserved(ctx, repo.Name, path, func(ctx context.Context) (*repository.Asset, io.ReadCloser, error) {
+		return s.resolve(ctx, repo, path, 0)
+	})
 }
 
 // ResolveIndex 解析并缓存 proxy 的目录索引。
@@ -898,7 +1013,9 @@ func (s *AssetService) ResolveIndex(ctx context.Context, repoName, path string) 
 	if path == "" || !strings.HasSuffix(path, "/") {
 		return nil, nil, ErrNotFound
 	}
-	return s.resolvePath(ctx, repoName, path)
+	return s.resolveObserved(ctx, repoName, path, func(ctx context.Context) (*repository.Asset, io.ReadCloser, error) {
+		return s.resolvePath(ctx, repoName, path)
+	})
 }
 
 func (s *AssetService) resolvePath(ctx context.Context, repoName, path string) (*repository.Asset, io.ReadCloser, error) {
@@ -1052,6 +1169,10 @@ func (s *AssetService) fetchProxyAsset(ctx context.Context, repo *repository.Rep
 	if cfg.RemoteURL == "" {
 		return nil, ErrNotFound
 	}
+	// 上游健康采样的计时起点：从「即将发起上游连接」算到「本次回源收尾」，
+	// 因此包含传输与落盘耗时。它不包含闸门快速失败与本地缓存命中的时间——
+	// 那些路径根本没有产生上游信号，不该进上游延迟统计。
+	upstreamStarted := time.Now()
 	// 半开闸门。shouldBlock 只做外层非占用式过滤；这里才是真正发起上游连接前的
 	// **占用式**判定——判定与占位在同一把锁内完成，保证每轮半开只放行一个试探请求，
 	// 其余请求在试探结果返回前等效封锁（快速失败）。
@@ -1060,35 +1181,106 @@ func (s *AssetService) fetchProxyAsset(ctx context.Context, repo *repository.Rep
 	}
 	body, header, err := s.upstream.FetchWithCredential(ctx, cfg.RemoteURL, path, cfg.CredentialRef)
 	if err != nil {
-		switch {
-		case errors.Is(err, upstream.ErrNotFound):
+		// 错误分类统一走 classifyUpstreamFailure（与 ResolveOCIProxy 共用同一实现），
+		// 404 / 410 的豁免语义逐字保留，超时在此单列——慢不构成不可达证据。
+		verdict := classifyUpstreamFailure(err)
+		// 采样**只消费**这个判定结果，不再判一次（见 docs/specs/0.13.0-upstream-failure-classification.md）。唯一的补充是把「请求被取消」
+		// 在采样这一层摘出来（见 upstreamHealthCategoryFor 的说明），不改变上面的判定本身。
+		s.recordUpstreamHealthRequest(repo.ID, upstreamHealthCategoryFor(err, verdict.category), upstreamStarted)
+		switch verdict.kind {
+		case upstreamFailureNotFound:
 			s.negCache.add(repo.ID, path)
 			recordResolveFailure(ctx, ResolveFailureConfirmed)
 			// 上游可达但资源缺失：不据此改状态，但必须释放试探名额，否则后续请求被无限封锁。
 			s.health.releaseProbe(repo.ID)
-		case errors.Is(err, upstream.ErrGone):
+		case upstreamFailureGone:
 			// 410 表示当前资源永久下架，不代表上游仓库不可达；
 			// 不能因此触发仓库级 auto-block，否则 Go proxy 等客户端的
 			// 后续请求会被错误改写成 502，无法按标准链路回退。
 			recordResolveFailure(ctx, ResolveFailureUncertain)
 			s.health.releaseProbe(repo.ID)
 		default:
+			// 超时 → 只记 upstream_timeout 事件 + 释放名额（不改状态、不推进退避）；
+			// 其余（连接 / DNS / TLS 失败、5xx 等）→ recordFailure 维持既有阻断。
 			recordResolveFailure(ctx, ResolveFailureUncertain)
-			s.health.recordFailure(repo.ID, cfg.RemoteURL, cfg.CredentialRef, UpstreamBlockReasonUpstreamError)
+			s.settleUpstreamFailure(repo.ID, cfg.RemoteURL, cfg.CredentialRef, verdict)
 		}
 		return nil, mapUpstreamErr(err)
 	}
 	defer func() { _ = body.Close() }()
+	// 拿到 2xx 响应头即「确认命中」：该成员确实持有该制品。先置位「上游已开始」信号，
+	// group 读据此撤销成员的确认预算，此后 body 传输只受回源整体超时约束。
+	// 未挂载信号时为无操作，代理直连 / 后台探测 / 格式元数据回退均不受影响。
+	markUpstreamStarted(ctx)
 	s.health.recordSuccess(repo.ID)
-	hash, sha1sum, md5sum, size, err := s.putStagedBlob(body)
+	// 传输阶段（已拿到 2xx 响应头）的失败与「拿头之前」完全不同：只可能是上游慢、
+	// 上游中途断连，或本地磁盘写不进去——都不构成「上游不可达」的证据，因此一律不阻断。
+	// 进度不能依赖 blobstore 的返回值（它在 io.Copy 失败时把已传字节数丢弃），
+	// 因此在其外层包计数 reader；声明长度直接取已持有的响应头，不额外发请求（见 docs/specs/0.13.0-upstream-failure-classification.md）。
+	declared := declaredContentLength(header)
+	progress := &countingReader{r: body}
+	transferStarted := time.Now()
+	hash, sha1sum, md5sum, size, err := s.putStagedBlob(progress)
 	if err != nil {
-		return nil, err
+		// 落盘阶段的失败发生在「确认命中」之后：上游确实持有该制品，失败只可能来自
+		// 传输中断、超时或本地磁盘。必须按类别分流，不能折叠成 ErrNotFound（假的永久 404），
+		// 也不能让裸错误落到协议层 default 分支被映射成 500（本地写失败除外，它本就该是 500）。
+		// 同时记 Uncertain：该成员不得被判成「确认不存在」，因而不写负缓存、下次仍会重试。
+		verdict := classifyTransferFailure(err, progress.n, declared)
+		// 同一份判定结果进入采样：slow_rate → slow 列、transfer_aborted → aborted 列、
+		// no_response → timeout 列；local_write_failure / canceled 由采样服务丢弃。
+		s.recordUpstreamHealthRequest(repo.ID, verdict.category, upstreamStarted)
+		if verdict.kind != upstreamFailureCanceled {
+			recordResolveFailure(ctx, ResolveFailureUncertain)
+			s.logTransferFailure(repo.Name, path, verdict, progress.n, declared, time.Since(transferStarted))
+		}
+		switch verdict.kind {
+		case upstreamFailureCanceled:
+			// 客户端已断开 / 同组其它成员已成功：这是请求生命周期的终点，不是故障，
+			// 原样上抛取消，既不记上游判定事件也不改写成因（与协议层对取消的处理一致）。
+			return nil, err
+		case upstreamFailureLocalWrite:
+			// **本地磁盘写满 / 权限失败不是上游故障**：对外 500、且不记任何上游判定事件，
+			// 否则会把运维引向「查上游」的错误方向（见 docs/specs/0.13.0-upstream-failure-classification.md）。
+			return nil, fmt.Errorf("%w: %v", ErrLocalStorage, err)
+		default:
+			// no_response / slow_rate / transfer_aborted：三类都只记事件 + 释放半开名额，
+			// 不推进退避、不改状态；对外统一 504（它们都发生在「已确认命中」之后）。
+			s.settleUpstreamFailure(repo.ID, cfg.RemoteURL, cfg.CredentialRef, verdict)
+			return nil, fmt.Errorf("%w: %v", ErrUpstreamTimeout, err)
+		}
 	}
 	contentType := header.Get("Content-Type")
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
+	// 成功采样：空类别即「上游可达且完整取回」，落 ok 列并计入延迟统计。
+	s.recordUpstreamHealthRequest(repo.ID, "", upstreamStarted)
 	return &repository.Asset{RepositoryID: repo.ID, Path: path, BlobHash: hash, Size: size, ContentType: contentType, Sha1: sha1sum, Md5: md5sum}, nil
+}
+
+// recordUpstreamHealthRequest 是回源路径记录「真实请求」采样的唯一入口。
+// 未接线（nil）时不采样；采样只做进程内合并，不碰磁盘，因此放在回源收尾处不阻塞主路径。
+func (s *AssetService) recordUpstreamHealthRequest(repoID int64, category string, started time.Time) {
+	if s.upstreamHealth == nil {
+		return
+	}
+	s.upstreamHealth.RecordRequest(repoID, category, time.Since(started))
+}
+
+// upstreamHealthCategoryFor 是采样点在  分类结果之上的**唯一**补充判定。
+//
+// 为什么需要它：classifyUpstreamFailure 面向断路器，把「客户端断开 / 优雅停机」这类
+// context.Canceled 一路落到 unreachable——对断路器这是可接受的口径（取消不该放行），
+// 但作为**上游健康信号**它必须被丢弃，否则每次用户中断大文件下载都会往「不可达」上记一笔，
+// 把连通率压低到与上游无关的水平（见 docs/specs/0.13.0-upstream-failure-classification.md）。
+//
+// 只在采样这一层做，**不改** classifyUpstreamFailure 的判定与词表（断路器行为不受影响）。
+func upstreamHealthCategoryFor(err error, category string) string {
+	if errors.Is(err, context.Canceled) {
+		return upstreamCategoryCanceled
+	}
+	return category
 }
 
 func (s *AssetService) cleanupFailedWrite(hash string, cause error) error {
@@ -1144,29 +1336,66 @@ func (s *AssetService) ResolveOCIProxy(ctx context.Context, repoName, path, pull
 		// 这里在真正发起上游连接前抢占名额，保证每轮半开只放行一个试探请求。
 		// 与普通 proxy 路径的区别是收敛点在 singleflight 内：不同 path 是不同 key，
 		// 因此闸门必须装在这里而非外层。
+		// 上游健康采样计时起点（仅覆盖真正发起上游连接之后的耗时）。
+		upstreamStarted := time.Now()
 		if !s.health.beginUpstream(repo.ID) {
 			return nil, ErrUpstream
 		}
 		session, sessionErr := s.upstream.NewSession(cfg.RemoteURL, cfg.CredentialRef)
 		if sessionErr != nil {
+			// 构造会话失败（地址不合法等）视同不可达：采样与断路器判定同源，不另判一次。
+			s.recordUpstreamHealthRequest(repo.ID, classifyUpstreamFailure(sessionErr).category, upstreamStarted)
 			s.health.recordFailure(repo.ID, cfg.RemoteURL, cfg.CredentialRef, UpstreamBlockReasonUpstreamError)
 			return nil, mapUpstreamErr(sessionErr)
 		}
 		body, header, fetchErr := session.ReadOCIPath(ctx, path, pullScope)
 		if fetchErr != nil {
-			if !errors.Is(fetchErr, upstream.ErrNotFound) {
-				s.health.recordFailure(repo.ID, cfg.RemoteURL, cfg.CredentialRef, UpstreamBlockReasonUpstreamError)
-			} else {
+			// 与 fetchProxyAsset 共用同一分类判定（classifyUpstreamFailure）：
+			// 超时只记事件 + 释放名额，不阻断；其余非 404 维持 recordFailure。
+			verdict := classifyUpstreamFailure(fetchErr)
+			s.recordUpstreamHealthRequest(repo.ID, verdict.category, upstreamStarted)
+			switch verdict.kind {
+			case upstreamFailureNotFound:
 				// 上游可达但资源缺失：不改状态，但必须释放试探名额。
 				s.health.releaseProbe(repo.ID)
+			case upstreamFailureGone:
+				// OCI 路径只豁免 404、不豁免 410：与 raw 路径的这一差异属既有行为，
+				// 不在本 FR 范围内统一（见 0.13.0-upstream-slow-not-unreachable §6.2）。
+				// 这里只把**超时**从阻断分支摘出，410 仍按原口径计入不可达。
+				s.health.recordFailure(repo.ID, cfg.RemoteURL, cfg.CredentialRef, UpstreamBlockReasonUpstreamError)
+			default:
+				s.settleUpstreamFailure(repo.ID, cfg.RemoteURL, cfg.CredentialRef, verdict)
 			}
 			return nil, mapUpstreamErr(fetchErr)
 		}
 		defer func() { _ = body.Close() }()
 		s.health.recordSuccess(repo.ID)
-		hash, sha1sum, md5sum, size, putErr := s.putStagedBlob(body)
+		// 传输阶段的判定与 fetchProxyAsset 完全同构，因此复用同一函数：
+		// ReadOCIPath 返回 nil 错误即代表**已拿到 2xx 响应头**（readResponse 只在 2xx 时
+		// 返回 body，非 2xx / 404 / 410 一律走错误分支），此刻之后的失败只可能发生在正文
+		// 传输阶段，与「是否已拿到响应头」这一判据的时点一一对齐（见 docs/specs/0.13.0-upstream-failure-classification.md）。
+		// 注：OCI 的 manifest 与 blob 是**两次独立调用**，各自有各自的拿头时点，
+		// 因此不存在「两段混在一起、拿头时点不可判定」的问题。
+		declared := declaredContentLength(header)
+		progress := &countingReader{r: body}
+		transferStarted := time.Now()
+		hash, sha1sum, md5sum, size, putErr := s.putStagedBlob(progress)
 		if putErr != nil {
-			return nil, putErr
+			verdict := classifyTransferFailure(putErr, progress.n, declared)
+			s.recordUpstreamHealthRequest(repo.ID, verdict.category, upstreamStarted)
+			if verdict.kind != upstreamFailureCanceled {
+				recordResolveFailure(ctx, ResolveFailureUncertain)
+				s.logTransferFailure(repo.Name, path, verdict, progress.n, declared, time.Since(transferStarted))
+			}
+			switch verdict.kind {
+			case upstreamFailureCanceled:
+				return nil, putErr
+			case upstreamFailureLocalWrite:
+				return nil, fmt.Errorf("%w: %v", ErrLocalStorage, putErr)
+			default:
+				s.settleUpstreamFailure(repo.ID, cfg.RemoteURL, cfg.CredentialRef, verdict)
+				return nil, fmt.Errorf("%w: %v", ErrUpstreamTimeout, putErr)
+			}
 		}
 		if !ociDigestMatches(hash, expectedDigest, header.Get("Docker-Content-Digest")) {
 			s.removeUnreferencedBlob(hash)
@@ -1187,6 +1416,9 @@ func (s *AssetService) ResolveOCIProxy(ctx context.Context, repoName, path, pull
 			return nil, putErr
 		}
 		s.releaseStagedBlob(hash)
+		// 成功采样必须在「摘要校验通过 + 资产已登记」之后：摘要不匹配的响应不是一次
+		// 可用的成功回源，把它记成 ok 会让连通率偏高。
+		s.recordUpstreamHealthRequest(repo.ID, "", upstreamStarted)
 		cached, getErr := s.assets.GetByPath(repo.ID, path)
 		if getErr != nil {
 			return nil, getErr
@@ -1236,20 +1468,45 @@ func ociDigestMatches(hash, expectedDigest, contentDigest string) bool {
 	return hash == strings.TrimPrefix(contentDigest, "sha256:")
 }
 
-// groupMemberTimeout 是 group 仓库逐成员解析时每个成员的最大等待时间。
+// groupMemberTimeoutDefault 是 group 仓库逐成员解析时**确认阶段**预算的兜底默认值：
+// 只约束「该成员是否及时给出上游响应头」这一件事，不约束响应体传输（落盘预算由回源整体
+// 超时 JIAN_UPSTREAM_TIMEOUT 承担，见 groupGet 的首字节看门狗）。
 // 防止单个不可达 proxy 成员阻塞后续成员的探测；配合并行探测与 auto-block 阻止，
 // 值取小（3s）让不可达上游快速失败、整体响应控制在秒级。
-const groupMemberTimeout = 3 * time.Second
+//
+// 生产装配经 SetGroupMemberTimeout 注入 JIAN_GROUP_MEMBER_TIMEOUT 的解析结果，本常量只在
+// 未注入时兜底（测试构造与未接线的路径），因此必须与 config 的 defaultGroupMemberTimeout
+// 保持同值——改一处必须同步改另一处。
+// 注意：看门狗的计时器只读 AssetService.memberConfirmBudget()，不得另硬编码一份时长。
+const groupMemberTimeoutDefault = 3 * time.Second
 
-// groupGet 处理 group 仓库读，目标是"本地命中优先、缺失快速 404"：
+// groupGet 处理 group 仓库读，目标是"本地命中优先、缺失快速失败"：
 //  1. 先串行快查全部成员的本地缓存（hosted / 已缓存 proxy 命中即返回，不触发网络）——
 //     保持成员顺序语义（先成员命中优先）。
-//  2. 本地全未命中 → 对未被 auto-block 阻止的 proxy 成员并行回源（取最快成功；首个成功后取消其余），
-//     全部失败或超时快速返回 ErrNotFound。
+//  2. 本地全未命中 → 对未被 auto-block 阻止的 proxy 成员并行回源（取最快成功；首个成功后取消其余）。
+//     不可达成员经 proxyHealth 阻止窗口跳过（零连接）。
 //
-// 每个成员限时 groupMemberTimeout；不可达成员经 proxyHealth 阻止窗口跳过（零连接）。
+// 成员预算的两阶段模型：
+//   - 确认阶段：成员确认预算（JIAN_GROUP_MEMBER_TIMEOUT，默认 3s）只约束「该成员是否及时
+//     给出上游 2xx 响应头，或给出结论」；
+//   - 落盘阶段：一旦确认命中，该成员的预算立即撤销，剩余传输只受回源整体超时
+//     （JIAN_UPSTREAM_TIMEOUT，默认 30s）约束——即首字节看门狗，见下方并行回源的实现。
 //
-// 全未命中的 404 是否写负缓存（M-1）：
+// 为什么必须解耦：把两者塞进同一个 3s 会让「大制品」必挂——15MB 制品需约 5MB/s 才能
+// 在 3s 内下完，而 3s 到期会让 resp.Body.Read 失败，整个制品随后被判成不可判定甚至缺失。
+//
+// 全未命中时的返回码按成员失败类别分流（不可判定绝不折叠成 404）：
+//   - 所有成员都确认不存在 → ErrNotFound（对外 404）；
+//   - 存在不可判定成员且其中有超时 → ErrUpstreamTimeout（对外 504）；
+//   - 存在不可判定成员是本地存储写入失败（且无超时）→ ErrLocalStorage（对外 500）：
+//     这是服务端自身故障，报成 502 会让人去查上游；
+//   - 其余不可判定成员不是超时（上游 5xx、熔断阻止、离线、成员查找失败）→ ErrUpstream（对外 502）。
+//
+// 为什么必须分流：上游只是「慢」或「暂时不可用」并不证明制品不存在。折叠成 404 的后果是
+// 客户端认为该制品永久缺失（Gradle/Maven 直接回退下一仓库或构建失败），而这次超时又不写
+// 负缓存，于是每次重试都重新超时——表现为一个永不消失、也无法自愈的假 404。
+//
+// 全未命中是否写负缓存（M-1）：
 // 只有「确认不存在」才写——即本次探测中没有任何成员被跳过（offline/auto-block 阻止）
 // 或回源失败（上游 5xx/超时）。任一成员不可判定（可能只是暂时不可用），则不写负缓存，
 // 避免把上游故障误缓存成永久不存在（上游恢复后同路径立即重试成功）。
@@ -1260,6 +1517,7 @@ func (s *AssetService) groupGet(ctx context.Context, repo *repository.Repository
 	if err != nil {
 		return nil, nil, err
 	}
+	// 环路保护：深度超限是确定的结构性结论（不是「上游可能只是慢」），因此仍按确认不存在处理。
 	if depth > maxResolveDepth {
 		recordResolveFailure(ctx, ResolveFailureConfirmed)
 		return nil, nil, ErrNotFound
@@ -1267,11 +1525,22 @@ func (s *AssetService) groupGet(ctx context.Context, repo *repository.Repository
 
 	// 成员快照只解析一次，并始终按配置原始顺序保存，供两个阶段共同复用。
 	members := make([]*repository.Repository, len(cfg.Members))
-	var uncertain atomic.Bool
+	// 成员级失败按两类累计，把「不可判定」细分成可区分的返回码：
+	//   timedOut —— 至少一个成员以超时告终（成员预算耗尽或回源超时）→ 504；
+	//   failed   —— 至少一个成员因其它原因不可判定（上游 5xx、熔断阻止、离线、成员查找失败）→ 502。
+	// 两者的并集就是「本轮存在不可判定成员」，它同时是「不写 404 负缓存」的判据。
+	// 已确认不存在的成员不进入任一累计——那才是真正的 404 证据。
+	var timedOut, failed atomic.Bool
+	// localFailed 单独累计「本地存储写入失败」：它既不能证明制品不存在，也不是上游不可达，
+	// 与 failed 混在一起会让整体对外变成 502，把运维引向查上游。
+	var localFailed atomic.Bool
+	// undecided 报告本轮是否存在不可判定成员。
+	undecided := func() bool { return timedOut.Load() || failed.Load() }
 	for i, name := range cfg.Members {
 		member, getErr := s.repos.GetByName(name)
 		if getErr != nil {
-			uncertain.Store(true)
+			failed.Store(true)
+			recordResolveFailureMember(ctx, name, resolveFailureKindMemberUnknown)
 			continue
 		}
 		members[i] = member
@@ -1283,7 +1552,7 @@ func (s *AssetService) groupGet(ctx context.Context, repo *repository.Repository
 			continue
 		}
 		if !member.Online {
-			uncertain.Store(true)
+			failed.Store(true)
 			continue
 		}
 		if asset, rc, localErr := s.localGet(member, path); localErr == nil {
@@ -1305,48 +1574,129 @@ func (s *AssetService) groupGet(ctx context.Context, repo *repository.Repository
 			continue
 		}
 		if !member.Online {
-			uncertain.Store(true)
+			failed.Store(true)
+			recordResolveFailureMember(ctx, member.Name, resolveFailureKindOffline)
 			continue
 		}
 		if member.Type != "proxy" {
+			recordResolveFailureMember(ctx, member.Name, resolveFailureKindNotProxy)
 			continue
 		}
 		if s.health.shouldBlock(member.ID) {
-			uncertain.Store(true)
+			failed.Store(true)
+			recordResolveFailureMember(ctx, member.Name, resolveFailureKindBlocked)
 			continue
 		}
 		jobs = append(jobs, job{idx: i, member: member})
 	}
 	if len(jobs) == 0 {
-		if uncertain.Load() {
+		// 没有任何成员可回源：本分支不会发生超时，不可判定一律归到上游故障侧。
+		if undecided() {
 			recordResolveFailure(ctx, ResolveFailureUncertain)
-		} else {
-			s.negCache.add(repo.ID, path)
-			recordResolveFailure(ctx, ResolveFailureConfirmed)
+			return nil, nil, ErrUpstream
 		}
+		s.negCache.add(repo.ID, path)
+		recordResolveFailure(ctx, ResolveFailureConfirmed)
 		return nil, nil, ErrNotFound
 	}
 
 	results := make([]bool, len(members))
 	groupCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	// 确认预算只读一次：同一请求内所有成员用同一个上界，避免热改让同一轮探测里不同成员
+	// 拿到不同预算（那会让「本轮到底给了多少预算」在排查时无法复现）。
+	// 这里是看门狗时长的**唯一**取值点，setter 注入的值经 memberConfirmBudget 到达。
+	confirmBudget := s.memberConfirmBudget()
 	var wg sync.WaitGroup
 	for _, j := range jobs {
 		wg.Add(1)
 		go func(j job) {
 			defer wg.Done()
-			memberCtx, mCancel := context.WithTimeout(groupCtx, groupMemberTimeout)
+			// 成员 ctx 只带取消、**不带 deadline**：groupMemberTimeout 是「确认预算」而非
+			// 「成员总预算」。不能改用更长的 WithTimeout——子 ctx 的 deadline 只能收紧、
+			// 无法在收到响应头后撤回，那正是本次要修的故障。
+			memberCtx, mCancel := context.WithCancel(groupCtx)
 			defer mCancel()
+			memberCtx, started := WithUpstreamStarted(memberCtx)
 			memberCtx = WithResolveFailure(memberCtx)
-			asset, rc, resolveErr := s.resolve(memberCtx, j.member, path, depth+1)
+
+			// resolve 放进内层 goroutine，外层只做「等结论 / 等首字节」的竞速。
+			// resolveErr / memberRC 由内层写入，必须等 done 关闭后才能读取（否则 -race 报竞态）。
+			done := make(chan struct{})
+			var resolveErr error
+			var memberRC io.ReadCloser
+			go func() {
+				defer close(done)
+				_, memberRC, resolveErr = s.resolve(memberCtx, j.member, path, depth+1)
+			}()
+
+			// 同时就绪时偏向宽容侧：先做一次非阻塞的确认检查，再进 select。
+			// 误取消的代价是把本可下载完的制品判成缺失（正是本 FR 要修的故障），
+			// 多等的代价只是一次回源整体超时，两者不可对称。
+			alreadyStarted := false
+			select {
+			case <-started:
+				alreadyStarted = true
+			default:
+			}
+			watchdogFired := false
+			if !alreadyStarted {
+				// 计时器独立于 ctx：只有它能在不设 deadline 的前提下提供确认阶段上界。
+				timer := time.NewTimer(confirmBudget)
+				defer timer.Stop()
+				select {
+				case <-started:
+					// 已确认该成员持有该制品 → 撤销确认预算，余下交给回源整体超时。
+				case <-done:
+					// 成员已给出结论（含快速 404）。
+				case <-timer.C:
+					// 计时器到点的瞬间成员可能刚给出结论、或刚收到响应头，仍按宽容侧复查一次，
+					// 避免在边界上误取消一个其实可用的成员。
+					select {
+					case <-started:
+					case <-done:
+					default:
+						// 确认预算内既无响应头也无结论 → 判为不可判定；取消该成员让
+						// resp.Body.Read 立即失败，释放上游连接与内层 goroutine。
+						mCancel()
+						watchdogFired = true
+					}
+				}
+			}
+			// 任何收尾路径都必须等内层真正退出：既避免对 resolveErr 的数据竞态，也避免 goroutine 泄漏。
+			<-done
+
+			if watchdogFired {
+				// 看门狗已判过「不可判定且是超时」，不再参与下面的分类：
+				// 否则被取消产生的错误还会被记成 failed，让整体落到 502 而不是 504。
+				timedOut.Store(true)
+				recordResolveFailureMember(ctx, j.member.Name, resolveFailureKindTimeout)
+				return
+			}
 			if resolveErr != nil {
-				if !errors.Is(resolveErr, ErrNotFound) || ResolveFailureFromContext(memberCtx) != ResolveFailureConfirmed {
-					uncertain.Store(true)
+				// 失败类别决定整体返回码：不能一律折叠成「制品不存在」。
+				switch {
+				case errors.Is(resolveErr, ErrNotFound) && ResolveFailureFromContext(memberCtx) == ResolveFailureConfirmed:
+					// 该成员确实确认不存在：真实的 404 证据，不做不可判定记账。
+				case memberCtx.Err() == context.DeadlineExceeded || errors.Is(resolveErr, ErrUpstreamTimeout):
+					// 请求级 ctx 到期或回源超时：上游可能只是慢（大制品下完要更久）→ 504。
+					timedOut.Store(true)
+					recordResolveFailureMember(ctx, j.member.Name, resolveFailureKindTimeout)
+				case errors.Is(resolveErr, ErrLocalStorage):
+					// 本地写入失败：服务端自身故障，不是上游不可达也不是制品不存在，
+					// 因此单独累计并按内部错误上抛（对外 500），不推进任何上游阻断。
+					localFailed.Store(true)
+					recordResolveFailureMember(ctx, j.member.Name, classifyResolveFailureKind(resolveErr))
+				default:
+					// 上游 5xx、熔断/离线跳过、成员查找失败，以及被同伴成功取消的被动终止：
+					// 都无法证明「制品不存在」→ 502（宁可让客户端重试，也不给一个假的永久 404）。
+					failed.Store(true)
+					recordResolveFailureMember(ctx, j.member.Name, classifyResolveFailureKind(resolveErr))
 				}
 				return
 			}
-			_ = rc.Close()
-			_ = asset
+			// 该成员已把内容落盘并可本地读到：关闭本次读流，稍后按下标统一重新 localGet。
+			_ = memberRC.Close()
 			results[j.idx] = true
 			cancel()
 		}(j)
@@ -1359,14 +1709,28 @@ func (s *AssetService) groupGet(ctx context.Context, repo *repository.Repository
 			if localErr == nil {
 				return asset, rc, nil
 			}
+			// 已确认某个成员持有内容却读不回本地副本（并发删除 / 清理竞态）：这是本地读失败，
+			// 更不是「制品不存在」，同样不得折叠成 404。
+			failed.Store(true)
 		}
 	}
-	if uncertain.Load() {
+	// 全未命中：按失败类别分流返回码。只要存在不可判定成员，就绝不返回 ErrNotFound。
+	if timedOut.Load() {
 		recordResolveFailure(ctx, ResolveFailureUncertain)
-	} else {
-		s.negCache.add(repo.ID, path)
-		recordResolveFailure(ctx, ResolveFailureConfirmed)
+		return nil, nil, ErrUpstreamTimeout
 	}
+	if localFailed.Load() {
+		// 没有任何成员超时，但有成员写本地失败：按内部错误上抛（对外 500），
+		// 不要伪装成 502「上游不可达」。
+		recordResolveFailure(ctx, ResolveFailureUncertain)
+		return nil, nil, ErrLocalStorage
+	}
+	if failed.Load() {
+		recordResolveFailure(ctx, ResolveFailureUncertain)
+		return nil, nil, ErrUpstream
+	}
+	s.negCache.add(repo.ID, path)
+	recordResolveFailure(ctx, ResolveFailureConfirmed)
 	return nil, nil, ErrNotFound
 }
 
@@ -1423,8 +1787,104 @@ func (s *AssetService) Delete(repoName, path string) error {
 	return nil
 }
 
+// upstreamFailureKind 是回源失败在断路器语境下的语义类别。
+// 判定顺序与 mapUpstreamErr **必须一致**，避免两处对同一错误给出不同结论。
+type upstreamFailureKind int
+
+const (
+	// upstreamFailureUnreachable 连接失败 / DNS 解析失败 / TLS 握手失败 / 上游 5xx、401、403：
+	// 计入「上游不可达」，触发（或延长）仓库级阻断。
+	upstreamFailureUnreachable upstreamFailureKind = iota
+	// upstreamFailureTimeout 预算内没拿到答案（调用方预算耗尽或回源客户端自身超时）：
+	// **没有证据表明上游不可达**，因此不参与仓库级阻断，只记判定事件。
+	upstreamFailureTimeout
+	// upstreamFailureGone 上游明确 410：资源永久下架，但上游本身可达，不阻断。
+	upstreamFailureGone
+	// upstreamFailureNotFound 上游明确 404：资源缺失，上游本身可达，不阻断。
+	upstreamFailureNotFound
+	// upstreamFailureTransferAborted 已拿到响应头、传输中途被中断（连接重置 / 提前 EOF）。
+	// 与超时一样**没有证据表明上游不可达**，因此不阻断，对外按 504 语义返回。
+	upstreamFailureTransferAborted
+	// upstreamFailureLocalWrite 本地存储写入失败（磁盘满 / 权限 / 配额）。
+	// **不是上游故障**：不记任何上游判定事件、不阻断，由调用方映射为内部错误（对外 500）。
+	// 单列这一类就是为了不让它被误报成「上游慢」或「上游失败」，把运维引向错误方向。
+	upstreamFailureLocalWrite
+	// upstreamFailureCanceled 请求被取消（客户端断连、同组其它成员已成功、优雅停机）。
+	// 正常的请求生命周期终点：不记事件、不阻断、不记日志，原样把取消上抛。
+	upstreamFailureCanceled
+)
+
+// upstreamFailureVerdict 是一次回源失败对断路器的判定结果。
+// 只做**分类**，不做副作用：记事件、放名额、写负缓存一律留在调用点，
+// 便于两个回源调用点（fetchProxyAsset / ResolveOCIProxy）各自决定收口细节。
+type upstreamFailureVerdict struct {
+	kind   upstreamFailureKind // 失败的语义类别
+	reason UpstreamBlockReason // 需要记录的判定事件类别；空串表示上游可达、不记录（404 / 410）
+	block  bool                // true 表示应 recordFailure 进入（或延长）仓库级阻断
+	// category 是可观测类别（见 docs/specs/0.13.0-upstream-failure-classification.md），只用于结构化日志，
+	// 不参与阻断判定。与 kind 并存是因为两者面向不同读者：kind 回答「要不要阻断」，
+	// category 回答「该调超时、该重试、该查上游、还是该查本地磁盘」。
+	category string
+}
+
+// classifyUpstreamFailure 把回源失败分类为断路器判定结果（本函数是唯一实现，
+// 由 fetchProxyAsset 与 ResolveOCIProxy 共用，防止两条回源链路给出不同结论）。
+//
+// 分类顺序与 mapUpstreamErr 保持一致：404 → 410 → 超时 → 其余（不可达）。
+// 超时判定复用 upstream.IsTimeout，不自造第二套超时嗅探；该函数同时覆盖两条来源：
+// 调用方预算耗尽（context.DeadlineExceeded，含 group 成员确认阶段的预算）与
+// 回源客户端自身超时（*url.Error 实现了 Timeout()）。
+// 语义要点：「慢」不等于「连不上」。超时只作为事件记录（upstream_timeout），
+// 不推进退避、不改状态，避免单个慢/大制品让整个 proxy 仓库进入 AUTO_BLOCKED。
+//
+// 本函数只负责「**还没拿到响应头**」的失败；「拿到响应头之后」的传输失败由
+// classifyTransferFailure 判定。两者共用同一个
+// upstreamFailureVerdict 与 settleUpstreamFailure，因此结论口径一致。
+func classifyUpstreamFailure(err error) upstreamFailureVerdict {
+	// 取消必须最先摘出来，而且要看 context.Canceled 之外还可能是 DeadlineExceeded 的
+	// 「我方取消」形态——但这里只认 Canceled：
+	//   - group 里快成员成功后 cancel() 其余成员；
+	//   - 调用方（客户端）主动断开；
+	//   - 进程停机。
+	// 这些都不是「上游不可达」的证据。漏掉这一条会在 group 里造成误阻断：
+	// 慢成员还没拿到响应头就被同伴取消 → 落到 default → block=true →
+	// recordFailure → 整个 proxy 仓库被判 AUTO_BLOCKED，40s 起逐档退避。
+	// 那正好复现了本批要修的「整仓不可用」，等于用新故障换掉旧故障。
+	if errors.Is(err, context.Canceled) {
+		return upstreamFailureVerdict{kind: upstreamFailureCanceled, category: upstreamCategoryCanceled}
+	}
+	switch {
+	case errors.Is(err, upstream.ErrNotFound):
+		return upstreamFailureVerdict{kind: upstreamFailureNotFound, category: upstreamCategoryConfirmedMissing}
+	case errors.Is(err, upstream.ErrGone):
+		return upstreamFailureVerdict{kind: upstreamFailureGone, category: upstreamCategoryConfirmedMissing}
+	case upstream.IsTimeout(err):
+		return upstreamFailureVerdict{kind: upstreamFailureTimeout, reason: UpstreamBlockReasonTimeout, category: upstreamCategoryNoResponse}
+	default:
+		return upstreamFailureVerdict{kind: upstreamFailureUnreachable, reason: UpstreamBlockReasonUpstreamError, block: true, category: upstreamCategoryUnreachable}
+	}
+}
+
+// settleUpstreamFailure 按共享判定收口一次「非 404/410」的回源失败：
+//   - 不可达：recordFailure 进入或延长仓库级阻断（既有退避规则不变）；
+//   - 超时：只记 upstream_timeout 事件并释放半开名额，**不调 recordFailure**、
+//     不推进退避、不改状态——否则单个慢/大制品会让同仓库其它路径一起零连接快速失败。
+//
+// 超时也必须释放名额：beginUpstream 已占住本轮 HALF_OPEN 的探测名额，占着不放会让
+// 后续请求在 probeInFlight 处被无限快速失败，同样复现「整仓不可用」。
+// 404 / 410 的豁免与附加动作（负缓存、Confirmed 记录）留在各自调用点，逐字保留。
+func (s *AssetService) settleUpstreamFailure(repoID int64, remoteURL, credentialRef string, verdict upstreamFailureVerdict) {
+	if verdict.block {
+		s.health.recordFailure(repoID, remoteURL, credentialRef, verdict.reason)
+		return
+	}
+	s.health.recordBlockEvent(verdict.reason)
+	s.health.releaseProbe(repoID)
+}
+
 // mapUpstreamErr 把 upstream 层错误映射为领域错误：404 视为未命中（ErrNotFound）、
 // 410 同时保留通用回源失败和明确下架语义、超时映射 ErrUpstreamTimeout，其余映射 ErrUpstream。
+// 分类顺序与 classifyUpstreamFailure 保持一致。
 func mapUpstreamErr(err error) error {
 	switch {
 	case errors.Is(err, upstream.ErrNotFound):

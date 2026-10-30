@@ -153,6 +153,23 @@ func (r *AssetRepo) ListAllPaths(repoID int64) ([]string, error) {
 	return paths, err
 }
 
+// ListReferencedBlobHashes 返回当前被任一 asset 引用的 blob 哈希集合（去重）。
+//
+// 只供存储体检判断「磁盘上的 blob 是否还有引用」：它必须覆盖**全部仓库**，
+// 因此不按 repository_id 过滤，也不分页——漏掉任一仓库都会把在用的 blob 误报成孤儿。
+// 只取一列，避免为了一次体检把 asset 的整行都读出来。
+func (r *AssetRepo) ListReferencedBlobHashes() (map[string]struct{}, error) {
+	var hashes []string
+	if err := r.db.Select(&hashes, `SELECT DISTINCT blob_hash FROM asset`); err != nil {
+		return nil, err
+	}
+	used := make(map[string]struct{}, len(hashes))
+	for _, hash := range hashes {
+		used[hash] = struct{}{}
+	}
+	return used, nil
+}
+
 // RepoStats 是单仓库的制品统计（数量与总大小）。
 type RepoStats struct {
 	RepositoryID int64 `db:"repository_id"`

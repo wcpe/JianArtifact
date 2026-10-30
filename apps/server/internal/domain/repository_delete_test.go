@@ -61,7 +61,7 @@ func TestDeleteRepositoryCascadesAssets(t *testing.T) {
 	}
 }
 
-func TestDeleteRepositoryRejectsNonHostedAndOverLimitWithoutSideEffects(t *testing.T) {
+func TestDeleteRepositoryNonHostedAndOverLimit(t *testing.T) {
 	t.Parallel()
 	db := newTestDB(t)
 	repoRepo := repository.NewRepoRepo(db)
@@ -74,14 +74,46 @@ func TestDeleteRepositoryRejectsNonHostedAndOverLimitWithoutSideEffects(t *testi
 	}
 	repoSvc.SetMutationCoordinator(mutator)
 
-	if _, err := repoSvc.Create("proxy", "raw", "proxy", "private", "", repository.RepositoryConfig{RemoteURL: "https://example.invalid"}); err != nil {
-		t.Fatalf("创建 proxy：%v", err)
+	// proxy 与 group 都能删除：删仓是管理员对仓库本身的动作，与「代理仓不承载写入」
+	// 分属两件事。此前一律拒绝，导致误建的代理仓再也清不掉、界面点删除必失败。
+	// group 仓库按规格必须至少有一个同格式成员，先建一个 hosted 成员供其引用。
+	if _, err := repoSvc.Create("non-hosted-member", "raw", "hosted", "private", "", repository.RepositoryConfig{}); err != nil {
+		t.Fatalf("创建 group 成员：%v", err)
 	}
-	if err := repoSvc.Delete("proxy"); !errors.Is(err, domain.ErrConflict) {
-		t.Fatalf("删除非 hosted 仓库应拒绝，实际：%v", err)
-	}
-	if _, err := repoSvc.Get("proxy"); err != nil {
-		t.Fatalf("非 hosted 拒绝后仓库不得消失：%v", err)
+	for _, repoType := range []string{"proxy", "group"} {
+		name := "non-hosted-" + repoType
+		// group 是成员聚合，不接受 remoteUrl、但必须有成员；proxy 需要上游地址。
+		cfg := repository.RepositoryConfig{}
+		if repoType == "proxy" {
+			cfg.RemoteURL = "https://example.invalid"
+		} else {
+			cfg.Members = []string{"non-hosted-member"}
+		}
+		if _, err := repoSvc.Create(name, "raw", repoType, "private", "", cfg); err != nil {
+			t.Fatalf("创建 %s：%v", repoType, err)
+		}
+		// 给 proxy 造一条缓存制品，验证删仓时连带清理。
+		if repoType == "proxy" {
+			repo, err := repoRepo.GetByName(name)
+			if err != nil {
+				t.Fatalf("读取 %s：%v", repoType, err)
+			}
+			// 用真实 blob 写入再建 asset 行：删除链路会校验 blob 哈希格式，
+			// 手造假哈希会在删仓时被判「非法的 blob 哈希」而与本用例无关。
+			hash, sha1sum, md5sum, size, err := blobs.Put(bytes.NewReader([]byte("cached")))
+			if err != nil {
+				t.Fatalf("写入 %s 缓存 blob：%v", repoType, err)
+			}
+			if err := assetRepo.Upsert(repo.ID, "cached.bin", hash, size, "application/octet-stream", sha1sum, md5sum); err != nil {
+				t.Fatalf("造 %s 缓存制品：%v", repoType, err)
+			}
+		}
+		if err := repoSvc.Delete(name); err != nil {
+			t.Fatalf("删除 %s 仓库应成功，实际：%v", repoType, err)
+		}
+		if _, err := repoSvc.Get(name); err == nil {
+			t.Fatalf("%s 仓库应已删除", repoType)
+		}
 	}
 
 	hosted, err := repoSvc.Create("too-many", "raw", "hosted", "private", "", repository.RepositoryConfig{})

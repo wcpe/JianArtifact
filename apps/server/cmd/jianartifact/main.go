@@ -333,6 +333,23 @@ func newApplicationHandler(cfg *config.Config, svc *appServices, assets fs.FS) h
 			// 引入对外承诺。理由详见 internal/api/search_index_handlers.go 文件头。
 			r.GET("/api/v1/search/index", authMW, apiHandlers.GetSearchIndexStatus)
 			r.POST("/api/v1/search/index/rebuild", authMW, apiHandlers.RebuildSearchIndex)
+			// 存储体检（只读，仅管理员）。同上为**非契约端点**：它服务运维手动排障，
+			// 返回「此刻磁盘上可回收的东西有多少」，形状随清理能力演进，不属于协议客户端
+			// 依赖的稳定面。**刻意只读**：仓库删除与 blob 回收不可逆，自动清理会把一次
+			// 误判变成数据丢失，清理仍交给既有作业按明确间隔执行。
+			r.GET("/api/v1/maintenance/storage-health", authMW, apiHandlers.GetStorageHealth)
+			// 定向清理与清理任务队列（仅管理员，非契约端点）。
+			// 执行端点只把目标**移入回收站**，不做物理删除——误点可恢复。
+			r.POST("/api/v1/maintenance/cleanup/preview", authMW, apiHandlers.PreviewCleanup)
+			r.POST("/api/v1/maintenance/cleanup", authMW, apiHandlers.ExecuteCleanup)
+			r.GET("/api/v1/maintenance/clean-tasks", authMW, apiHandlers.ListCleanTasks)
+			r.GET("/api/v1/maintenance/clean-tasks/:id", authMW, apiHandlers.GetCleanTask)
+			// 回收站（仅管理员，非契约端点）：让定向清理可逆。
+			// restore 是反向操作，不做二次防护；purge / purge-all 不可逆，防护在界面上。
+			r.GET("/api/v1/maintenance/trash", authMW, apiHandlers.ListTrash)
+			r.POST("/api/v1/maintenance/trash/restore", authMW, apiHandlers.RestoreTrash)
+			r.POST("/api/v1/maintenance/trash/purge", authMW, apiHandlers.PurgeTrash)
+			r.POST("/api/v1/maintenance/trash/purge-all", authMW, apiHandlers.PurgeAllTrash)
 			// 搜索建议（搜索框下拉候选：包名 + 仓库名）。
 			// 同上为**非契约端点**，不写入 api/openapi.yaml：它只服务前端搜索框，候选形状会随
 			// 包坐标解析口径演进，不是协议客户端依赖的稳定面。权限（管理员搜全部 / 其余
@@ -402,6 +419,14 @@ func run() error {
 	if n, err := svc.backupSvc.ReconcileStartup(); err == nil && n > 0 {
 		fmt.Fprintf(os.Stderr, "备份：标记 %d 个服务重启遗留的生成中包为失败\n", n)
 	}
+	// 清理任务收口：把上次进程遗留的 queued/running 标为 interrupted。
+	// 不做这一步的后果不是「少一条记录」——单并发守卫以「是否存在 running」为判据，
+	// 残留的 running 会让此后每一次清理都被 409 拒绝且无法自愈，表现为「清理功能坏了」。
+	if n, err := svc.cleanTaskRepo.MarkInterruptedOnStartup(); err != nil {
+		fmt.Fprintf(os.Stderr, "清理任务：标记重启遗留任务失败：%v\n", err)
+	} else if n > 0 {
+		fmt.Fprintf(os.Stderr, "清理任务：标记 %d 个服务重启遗留的任务为中断\n", n)
+	}
 	// 清理崩在导入中途留下的暂存目录（有 restore.pending 时不清理，
 	// 那是等待本次启动替换数据库的正品，由 ApplyPendingRestore 处理）。
 	if err := svc.restoreSvc.ReconcileStaleStaging(); err != nil {
@@ -417,6 +442,10 @@ func run() error {
 	svc.dashboardSvc.Start(ctx, time.Now)
 	svc.assetDownloadSvc.Start(ctx, time.Now)
 	svc.hostMonitoringSvc.Start(ctx, time.Now)
+	// 上游健康采样的定期落盘（每 5s 一次 + ctx 结束后最后一次 flush）。
+	// 它必须在 scheduler.Start 之前挂上：回源请求随时可能开始产生采样，
+	// 早一秒开始刷盘就少一段只存在内存里、等不到落盘就关停的数据。
+	svc.upstreamHealthSvc.Start(ctx)
 	// 维护类周期作业的统一调度器（作业已在 wiring 装配期注册完毕）。
 	svc.scheduler.Start(ctx)
 	// 搜索索引的后台异步回填。一次性任务、不阻塞启动（这里只是挂 goroutine），
