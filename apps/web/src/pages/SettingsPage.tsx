@@ -650,10 +650,15 @@ function ServiceSettingsForm({
       {/* 运行期策略：13 项塞不进上面两栏（纵向会拉到两三屏高），单独成区并默认折叠成概览。
           折叠态只报「四组各几项」，刻意不在折叠态写任何生效时机——
           四组内部的时机并不统一（如「保留策略」里回收站保留天数是下一次清理生效，
-          其余三项是下一次作业生效），按组写一句时机就是错的。 */}
+          其余三项是下一次作业生效），按组写一句时机就是错的。
+
+          flexShrink: 0 不能省：外层是可滚动 flex 列（flex-basis: 0），卡片默认允许收缩，
+          展开后会按剩余空间被压扁成一行多高，而卡片自身 overflow: hidden 把下面的
+          字段整块裁掉——表现为「点开只看到第一行，其余输入框既不可见也点不到」。 */}
       <OpsSection
         title={t("settings.runtimePolicyTitle")}
         meta={t("settings.runtimePolicyHint")}
+        style={{ flexShrink: 0 }}
         actions={
           <Button
             size="compact-sm"
