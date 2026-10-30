@@ -123,6 +123,22 @@ describe("设置页", () => {
     expect(screen.getAllByText("下一次请求生效")).toHaveLength(3);
   });
 
+  // 展开后卡片被外层 flex 压缩会把内容裁掉：卡片自身 overflow: hidden，
+  // 被压到一行多高时其下 12 个输入框既不可见也点不到，而折叠态一切正常，
+  // 仅靠「13 项都渲染出来了」的断言发现不了（jsdom 不算布局，只能用样式断言兜住）。
+  it("运行期策略卡片不参与外层 flex 收缩，展开后内容不被裁掉", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<SettingsPage />, { route: "/settings", authenticated: true });
+
+    const card = await screen.findByTestId("settings-runtime-policy");
+    expect(card.style.flexShrink).toBe("0");
+
+    await user.click(screen.getByRole("button", { name: "展开编辑" }));
+
+    // 展开不应改变该约束（约束写在卡片上，而不是只在折叠态生效）。
+    expect(screen.getByTestId("settings-runtime-policy").style.flexShrink).toBe("0");
+  });
+
   it("13 项运行期策略整批进入提交体，且 0 不被当成空值", async () => {
     // 0 是「禁用作业 / 不限制」的合法取值：归一化若用 `|| 86400`，这里会拿到默认值。
     api.getSettings.mockResolvedValue({ ...baseSettings, blobGcInterval: 0, trashMaxBytes: 0 });
