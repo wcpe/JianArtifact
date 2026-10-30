@@ -130,6 +130,66 @@ export const zh = {
     effectsLocalScope: "域名白名单与回源 Token 属节点本地配置，不随一致性备份包搬迁到其它节点。",
     effectsLockout:
       "改白名单前先确认新域名解析已生效：名单外的请求会直接返回 404，包括你自己的访问。",
+    // 运行期策略分区（13 项）。生效时机必须如实标注——写「立即生效」会让运维
+    // 改完立刻去验证，然后得出「配置没生效」的错误结论。
+    runtimePolicyTitle: "运行期策略",
+    runtimePolicyHint: "作业间隔、保留策略与各项阈值（节点本地）",
+    runtimePolicyExpand: "展开编辑",
+    runtimePolicyCollapse: "收起",
+    runtimePolicyOverviewHint:
+      "展开后可逐项编辑；每项都标注了单位、0 的含义与真实生效时机（并非全部「立即生效」）。",
+    runtimePolicyGroupJobIntervals: "作业间隔",
+    runtimePolicyGroupRetention: "保留策略",
+    runtimePolicyGroupThresholds: "容量与阈值",
+    runtimePolicyGroupUpstream: "回源与搜索",
+    runtimePolicyGroupCount: "{{count}} 项",
+    runtimePolicyTimingJobIntervals: "保存后从下一轮起生效",
+    runtimePolicyTimingNextJobRun: "下一次作业运行时生效",
+    runtimePolicyTimingNextCleanup: "下一次清理时生效",
+    runtimePolicyTimingNextRequest: "下一次请求生效",
+    runtimePolicyBytesPreview: "≈ {{human}}（提交的仍是字节数）",
+    runtimePolicyPositiveRequired: "{{label}}必须大于 0（本项没有关闭语义）",
+    runtimePolicyNonNegative: "{{label}}不能为负数（0 表示禁用或取消限制）",
+    runtimePolicyTooLarge: "{{label}}超出上限 {{max}}",
+    runtimePolicyBlobGcIntervalLabel: "孤儿 blob 回收间隔（秒）",
+    runtimePolicyBlobGcIntervalHelp:
+      "回收无人引用的 blob 文件；0 = 禁用该作业。间隔过小会让磁盘扫描持续占用 IO。",
+    runtimePolicyStorageCleanupIntervalLabel: "存储治理清理间隔（秒）",
+    runtimePolicyStorageCleanupIntervalHelp:
+      "清理过期上传临时文件与终态元数据；0 = 禁用该作业。间隔过小会让目录遍历持续占用 IO。",
+    runtimePolicyBackupOrphanCleanupIntervalLabel: "孤儿备份包回收间隔（秒）",
+    runtimePolicyBackupOrphanCleanupIntervalHelp:
+      "回收 backups/ 下未被登记的孤儿包；0 = 禁用该作业。间隔过小会让备份目录被反复全量扫描。",
+    runtimePolicyTrashGcIntervalLabel: "回收站保留期回收间隔（秒）",
+    runtimePolicyTrashGcIntervalHelp:
+      "按回收站保留天数回收过期条目；0 = 禁用该作业。间隔过小会让回收站被反复遍历。",
+    runtimePolicyUpstreamProbeIntervalLabel: "上游健康探测间隔（秒）",
+    runtimePolicyUpstreamProbeIntervalHelp:
+      "对本节点每个 proxy 上游定期探测一次；0 = 关闭定时探测（真实请求的采样照常积累）。间隔过小等于持续压上游。",
+    runtimePolicyBackupOrphanGraceHoursLabel: "孤儿备份包宽限期（小时）",
+    runtimePolicyBackupOrphanGraceHoursHelp:
+      "孤儿包存在时间超过该值才可能被回收；不接受 0——零宽限会把正在拷入、尚未导入的备份包误删。",
+    runtimePolicyStorageMetadataRetentionDaysLabel: "存储元数据保留（天）",
+    runtimePolicyStorageMetadataRetentionDaysHelp:
+      "只保留最近该天数的终态元数据；0 = 不裁剪（元数据表会持续膨胀）。",
+    runtimePolicyStorageTempMaxAgeHoursLabel: "上传临时文件最长存活（小时）",
+    runtimePolicyStorageTempMaxAgeHoursHelp:
+      "中断的上传临时文件超过该时长后清理；0 = 不清理这类文件（会长期占盘）。",
+    runtimePolicyTrashRetentionDaysLabel: "回收站保留（天）",
+    runtimePolicyTrashRetentionDaysHelp:
+      "回收站条目的保留天数，超期由回收作业清理；0 = 不自动清理（仍可手动彻底删除）。",
+    runtimePolicyTrashMaxBytesLabel: "回收站容量上限（字节）",
+    runtimePolicyTrashMaxBytesHelp:
+      "回收站总占用上限，超过后新的清理会被拒绝；0 = 不限制。以字节为单位填写。",
+    runtimePolicyAutoBlockBaseSecondsLabel: "断路器退避起始（秒）",
+    runtimePolicyAutoBlockBaseSecondsHelp:
+      "上游连续失败后的起始退避窗口；0 或负数按默认处理（本项没有关闭语义）。退避起始过长会把上游的短暂抖动放大成长时间不可用。",
+    runtimePolicySearchTimeoutSecondsLabel: "搜索总预算（秒）",
+    runtimePolicySearchTimeoutSecondsHelp:
+      "一次搜索链路的总时间预算；0 或负数按默认处理（本项没有关闭语义）。预算过长会让慢查询长时间占住数据库连接。",
+    runtimePolicyCapacityCacheTtlSecondsLabel: "容量缓存有效期（秒）",
+    runtimePolicyCapacityCacheTtlSecondsHelp:
+      "仪表盘容量聚合结果的缓存有效期；0 = 禁用缓存（每次请求实时聚合，代价是多跑一次全表扫描）。",
   },
   // 维护与清理。文案刻意把「可恢复」与「不可恢复」分开写：
   // 用户分不清这两者，是这个页面最容易出事的地方。

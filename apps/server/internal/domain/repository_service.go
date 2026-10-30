@@ -9,6 +9,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -43,28 +44,41 @@ type RepositoryService struct {
 	// searchTimeout 是一次搜索里**下发到 SQL 的检索语句**的预算上限（网页搜索 / npm 搜索 /
 	// suggest / npm 的按成员检索）。每个搜索入口用它派生一次 deadline，同一次检索的多条语句
 	// 共享同一个 deadline。它**不覆盖**可搜范围解析那一段查询（见 searchContext 的说明）。
-	searchTimeout time.Duration
+	//
+	// 存纳秒的原子量而不是 time.Duration：本项现在可以在设置页改（JIAN_SEARCH_TIMEOUT_SECONDS
+	// 降级为播种初值），写入发生在 HTTP 处理 goroutine、读取发生在并发的搜索请求里。
+	// 普通字段就是数据竞态——-race 会抓到，生产上则表现为"偶发读到半个值"这种更难查的形态。
+	searchTimeoutNanos atomic.Int64
 }
 
 // NewRepositoryService 构造 RepositoryService。settings 与 users 供匿名判定
 // （全局开关 + anonymous 主体 ACL）使用。
 func NewRepositoryService(repos *repository.RepoRepo, acls *repository.AclRepo, assets *repository.AssetRepo, settings *SettingService, users *repository.UserRepo) *RepositoryService {
-	return &RepositoryService{repos: repos, acls: acls, assets: assets, settings: settings, users: users, enabled: formats.Default(),
-		searchTimeout: searchTimeoutDefault}
+	s := &RepositoryService{repos: repos, acls: acls, assets: assets, settings: settings, users: users, enabled: formats.Default()}
+	s.searchTimeoutNanos.Store(int64(searchTimeoutDefault))
+	return s
 }
 
 // SetSearchTimeout 注入检索语句的预算上限（覆盖范围见 searchContext）。
 // 非正数不覆盖默认值：搜索是无界查询，关掉超时等于开放一个可以无限占用唯一数据库连接的
 // 入口，因此本项**没有禁用语义**（口径同 autoBlockBase，而非 storageCleanupInterval 的 0 禁用）。
+//
+// 运行期可调用（设置页保存后由装配层回调注入）：内部是原子写，与在途搜索请求并发安全。
 func (s *RepositoryService) SetSearchTimeout(d time.Duration) {
 	if d <= 0 {
 		return
 	}
-	s.searchTimeout = d
+	s.searchTimeoutNanos.Store(int64(d))
 }
 
 // SearchTimeout 返回当前生效的检索语句预算，供协议层/运维排查读取。
-func (s *RepositoryService) SearchTimeout() time.Duration { return s.searchTimeout }
+func (s *RepositoryService) SearchTimeout() time.Duration {
+	if n := s.searchTimeoutNanos.Load(); n > 0 {
+		return time.Duration(n)
+	}
+	// 零值/未初始化时回落到兜底常量，避免零值服务派生出一个立即过期的 deadline。
+	return searchTimeoutDefault
+}
 
 // SetEnabledFormats 注入启动期格式能力集合。集合仅在装配阶段设置，运行中不切换。
 func (s *RepositoryService) SetEnabledFormats(enabled formats.Set) { s.enabled = enabled }
@@ -1549,7 +1563,7 @@ func (s *RepositoryService) searchContext(ctx context.Context) (context.Context,
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return context.WithTimeout(ctx, s.searchTimeout)
+	return context.WithTimeout(ctx, s.SearchTimeout())
 }
 
 // normalizeSearchErr 把搜索链路的**预算耗尽**归一为 ErrSearchTimeout。

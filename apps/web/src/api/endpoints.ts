@@ -1159,7 +1159,6 @@ export interface SettingsConfig {
   /** 回源整体超时（秒）。 */
   upstreamTimeout: number;
   /** 同步轮询间隔（秒）。 */
-  syncInterval: number;
   /** 允许访问的域名白名单（空数组 = 不限制；仅白名单内的 Host 可访问，节点本地）。 */
   allowedHosts: string[];
   /** 回源 Token 校验开关（节点本地）。 */
@@ -1195,6 +1194,45 @@ export interface SettingsConfig {
   groupMemberTimeout: number;
   /** 404 负缓存 TTL（秒）：0 = 关闭负缓存（每次请求都真实回源）。 */
   negativeCacheTTL: number;
+
+  // —— 运行期策略 13 项 ——
+  // 分组与设置页「运行期策略」分区一致；接口返回的是**实际会生效的值**，
+  // 因此 10 项的 0（作业禁用 / 不自动清理 / 不限制 / 禁用缓存）必须原样保留，
+  // 归一化时一律只能用 `??` 判 undefined，不能写成 `|| 86400`。
+  //
+  // 生效时机各不相同（见各字段注释），界面文案必须如实标注，不能一律写「立即生效」。
+
+  /** 孤儿 blob 回收间隔（秒）：0 = 禁用该作业；保存后从下一轮作业起生效。 */
+  blobGcInterval: number;
+  /** 存储治理清理间隔（秒）：0 = 禁用该作业；保存后从下一轮作业起生效。 */
+  storageCleanupInterval: number;
+  /** 孤儿备份包回收间隔（秒）：0 = 禁用该作业；保存后从下一轮作业起生效。 */
+  backupOrphanCleanupInterval: number;
+  /** 回收站保留期回收间隔（秒）：0 = 禁用该作业；保存后从下一轮作业起生效。 */
+  trashGcInterval: number;
+  /** 上游健康探测间隔（秒）：0 = 关闭定时探测；保存后从下一轮作业起生效。 */
+  upstreamProbeInterval: number;
+  /** 孤儿备份包宽限期（小时）：**不允许 0**（零宽限会误删正在拷入的包）；下一次作业运行时生效。 */
+  backupOrphanGraceHours: number;
+  /** 存储元数据保留天数：0 = 不裁剪终态元数据；下一次作业运行时生效。 */
+  storageMetadataRetentionDays: number;
+  /** 上传临时文件最长存活（小时）：0 = 不清理；下一次作业运行时生效。 */
+  storageTempMaxAgeHours: number;
+  /** 回收站保留天数：0 = 不自动清理（仍可手动彻底删除）；下一次清理时生效。 */
+  trashRetentionDays: number;
+  /**
+   * 回收站容量上限（**字节**）：0 = 不限制；下一次清理的前置检查时生效。
+   *
+   * 以字节提交、不做单位换算：超上限时后端会把清除请求拒掉，
+   * 单位换算一旦有取整误差就会让上限与实际可用空间对不上。
+   */
+  trashMaxBytes: number;
+  /** 断路器退避起始（秒）：0/负数回落默认；下一次请求生效。 */
+  autoBlockBaseSeconds: number;
+  /** 搜索链路总预算（秒）：0/负数回落默认；下一次请求生效。 */
+  searchTimeoutSeconds: number;
+  /** 仪表盘容量缓存 TTL（秒）：0 = 禁用缓存（每次实时聚合）；下一次请求生效。 */
+  capacityCacheTtlSeconds: number;
 }
 
 /**
@@ -1207,7 +1245,6 @@ function normalizeSettings(raw: SettingsConfig): SettingsConfig {
     anonymousAccess: raw.anonymousAccess ?? false,
     publicUrl: raw.publicUrl ?? "",
     upstreamTimeout: raw.upstreamTimeout ?? 30,
-    syncInterval: raw.syncInterval ?? 5,
     allowedHosts: Array.isArray(raw.allowedHosts) ? raw.allowedHosts : [],
     originTokenEnabled: raw.originTokenEnabled ?? false,
     originTokenHeader: raw.originTokenHeader ?? "",
@@ -1226,6 +1263,27 @@ function normalizeSettings(raw: SettingsConfig): SettingsConfig {
     // 「关闭」，只能用 ?? 判 undefined，不能写成 `|| 60` —— 那会把关闭态打回默认。
     groupMemberTimeout: raw.groupMemberTimeout ?? 3,
     negativeCacheTTL: raw.negativeCacheTTL ?? 60,
+    // 运行期策略 13 项：缺省值与后端 settings_handlers.go 的同名常量一致
+    // （defaultBlobGCIntervalSecs 等），避免旧后端 / 未播种实例让界面显示假象。
+    //
+    // 全部只能 `??`：其中 10 项的 0 是合法且有意义的取值（作业禁用 / 不自动清理 /
+    // 不限制 / 禁用缓存）。写成 `|| 86400` 会把「已禁用」显示成「每天一次」，
+    // 界面上的值与真实行为相反，运维据此判断就会得出错误结论。
+    blobGcInterval: raw.blobGcInterval ?? 86400,
+    storageCleanupInterval: raw.storageCleanupInterval ?? 86400,
+    backupOrphanCleanupInterval: raw.backupOrphanCleanupInterval ?? 86400,
+    trashGcInterval: raw.trashGcInterval ?? 86400,
+    upstreamProbeInterval: raw.upstreamProbeInterval ?? 60,
+    backupOrphanGraceHours: raw.backupOrphanGraceHours ?? 1,
+    storageMetadataRetentionDays: raw.storageMetadataRetentionDays ?? 7,
+    storageTempMaxAgeHours: raw.storageTempMaxAgeHours ?? 24,
+    trashRetentionDays: raw.trashRetentionDays ?? 7,
+    // 2 GiB 已超 32 位 int，且这里必须写成 `2 * 1024 ** 3` 而不是 `2 << 30`
+    // ——JS 的位运算按 32 位有符号整数执行，`2 << 30` 会得到 -2147483648。
+    trashMaxBytes: raw.trashMaxBytes ?? 2 * 1024 ** 3,
+    autoBlockBaseSeconds: raw.autoBlockBaseSeconds ?? 40,
+    searchTimeoutSeconds: raw.searchTimeoutSeconds ?? 10,
+    capacityCacheTtlSeconds: raw.capacityCacheTtlSeconds ?? 30,
   };
 }
 

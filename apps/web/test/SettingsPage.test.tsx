@@ -18,7 +18,6 @@ const baseSettings = {
   anonymousAccess: true,
   publicUrl: "https://repo.example.com",
   upstreamTimeout: 30,
-  syncInterval: 5,
   allowedHosts: [] as string[],
   originTokenEnabled: false,
   originTokenHeader: "",
@@ -97,5 +96,59 @@ describe("设置页", () => {
     await user.click(screen.getByRole("button", { name: "保存设置" }));
     await waitFor(() => expect(api.putSettings).toHaveBeenCalledTimes(1));
     expect(await screen.findByText("已保存")).toBeTruthy();
+  });
+
+  // 13 项运行期策略的生效时机**不统一**：作业间隔要等下一轮、请求预算下一次请求就生效。
+  // 一律写「立即生效」会让运维改完立刻验证，然后得出「配置没生效」的结论，
+  // 故按类计数断言——任何一项被错标成别的时机都会让计数对不上。
+  it("运行期策略默认折叠概览，展开后 13 项按四组呈现且逐项标注生效时机", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<SettingsPage />, { route: "/settings", authenticated: true });
+
+    expect(await screen.findByTestId("settings-runtime-policy")).toBeTruthy();
+    // 折叠态只有四组概览，不渲染任何输入框（否则页面会被 13 个输入框撑长）。
+    expect(screen.queryByLabelText("孤儿 blob 回收间隔（秒）")).toBeNull();
+    expect(screen.getByText("作业间隔")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "展开编辑" }));
+
+    expect(screen.getByLabelText("孤儿 blob 回收间隔（秒）")).toBeTruthy();
+    expect(screen.getByLabelText("回收站容量上限（字节）")).toBeTruthy();
+    // 5 个作业间隔 / 3 个「下一次作业运行」的保留策略 / 2 个清理类 / 3 个请求预算。
+    // 注意「保留策略」组内本是 4 项，其中回收站保留天数在下一次清理时才生效，
+    // 因此这里 3 + 2 而不是 4 + 1。
+    expect(screen.getAllByText("保存后从下一轮起生效")).toHaveLength(5);
+    expect(screen.getAllByText("下一次作业运行时生效")).toHaveLength(3);
+    expect(screen.getAllByText("下一次清理时生效")).toHaveLength(2);
+    expect(screen.getAllByText("下一次请求生效")).toHaveLength(3);
+  });
+
+  it("13 项运行期策略整批进入提交体，且 0 不被当成空值", async () => {
+    // 0 是「禁用作业 / 不限制」的合法取值：归一化若用 `|| 86400`，这里会拿到默认值。
+    api.getSettings.mockResolvedValue({ ...baseSettings, blobGcInterval: 0, trashMaxBytes: 0 });
+    const user = userEvent.setup();
+    renderWithProviders(<SettingsPage />, { route: "/settings", authenticated: true });
+
+    await screen.findByTestId("settings-runtime-policy");
+    await user.click(screen.getByRole("button", { name: "保存设置" }));
+    await waitFor(() => expect(api.putSettings).toHaveBeenCalledTimes(1));
+
+    expect(api.putSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        blobGcInterval: 0,
+        trashMaxBytes: 0,
+        storageCleanupInterval: 86400,
+        backupOrphanCleanupInterval: 86400,
+        trashGcInterval: 86400,
+        upstreamProbeInterval: 60,
+        backupOrphanGraceHours: 1,
+        storageMetadataRetentionDays: 7,
+        storageTempMaxAgeHours: 24,
+        trashRetentionDays: 7,
+        autoBlockBaseSeconds: 40,
+        searchTimeoutSeconds: 10,
+        capacityCacheTtlSeconds: 30,
+      }),
+    );
   });
 });
