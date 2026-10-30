@@ -139,7 +139,7 @@ jobs:
           command -v golangci-lint >/dev/null || go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8
           command -v govulncheck >/dev/null || go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
       - name: 下载 embed 产物
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: web-dist
           path: apps/server/web/dist
@@ -162,7 +162,7 @@ jobs:
           go-version-file: apps/server/go.mod
           cache-dependency-path: apps/server/go.sum
       - name: 下载 embed 产物
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: web-dist
           path: apps/server/web/dist
@@ -193,7 +193,7 @@ jobs:
           go-version-file: apps/server/go.mod
           cache-dependency-path: apps/server/go.sum
       - name: 下载 embed 产物
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: web-dist
           path: apps/server/web/dist
@@ -224,7 +224,7 @@ jobs:
           go-version-file: apps/server/go.mod
           cache-dependency-path: apps/server/go.sum
       - name: 下载 embed 产物
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: web-dist
           path: apps/server/web/dist
