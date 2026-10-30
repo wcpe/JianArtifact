@@ -49,19 +49,25 @@ import { AsyncBoundary } from "../components/AsyncBoundary";
 import { OpsSection } from "../components/ops/OpsKit";
 import { formatDuration } from "../components/audit/labels";
 import { DestructiveConfirmModal } from "../components/maintenance/DestructiveConfirmModal";
+import { AssetTrashPanel, MavenVersionCleanupPanel } from "../components/maintenance/MavenVersionCleanupPanel";
 import {
   executeCleanup,
   getStorageHealth,
+  listAssetTrash,
   listCleanTasks,
   listMaintenanceJobs,
+  listRepositories,
   listTrash,
   previewCleanup,
   purgeAllTrash,
+  purgeAssetTrash,
   purgeTrash,
+  restoreAssetTrash,
   restoreTrash,
   runMaintenanceJob,
 } from "../api/endpoints";
 import type {
+  AssetTrashEntry,
   CleanTask,
   CleanupKind,
   CleanupPreview,
@@ -309,6 +315,96 @@ function CleanTasksTab({ refreshKey }: { refreshKey: number }) {
         </Table>
       )}
     </OpsSection>
+  );
+}
+
+/** 资产回收站 Tab：Maven 版本软删除的落地处。 */
+//
+// 与 TrashTab 分开而不是合并成一个列表：两类条目字段与恢复机制都不同
+// （那些是磁盘路径 + rename，这些是 asset 快照 + 重建行）。
+// 但**保留期与清理作业是同一套**，所以它们出现在同一页面的相邻 Tab，
+// 用户不需要去两个地方理解"东西删了还在不在"。
+function AssetTrashTab({ refreshKey, onChanged }: { refreshKey: number; onChanged: () => void }) {
+  const { t } = useTranslation();
+  const [entries, setEntries] = useState<AssetTrashEntry[]>([]);
+  const [stats, setStats] = useState({ entries: 0, bytes: 0 });
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [pendingPurge, setPendingPurge] = useState<number[] | null>(null);
+  const [purging, setPurging] = useState(false);
+
+  const load = useCallback(() => {
+    listAssetTrash(1, 100)
+      .then((res) => {
+        setEntries(res.items ?? []);
+        setStats({ entries: res.stats?.entries ?? 0, bytes: res.stats?.bytes ?? 0 });
+        setLoadFailed(false);
+      })
+      // 与页内其它 Tab 同一口径：失败保留上次数据，只提示不抹掉。
+      .catch(() => setLoadFailed(true));
+  }, []);
+
+  useEffect(load, [load, refreshKey]);
+
+  // 恢复只做一次点击（与 TrashTab 同口径：反向操作不需要三道关）。
+  const handleRestore = (ids: number[]) => {
+    restoreAssetTrash(ids)
+      .then((res) => {
+        const problems = [...(res.conflicts ?? []), ...(res.missing ?? [])];
+        if (problems.length > 0) {
+          notifications.show({
+            color: "yellow",
+            title: "部分条目未恢复",
+            message: problems.map((c) => `${c.path}：${c.reason}`).join("\n"),
+          });
+        }
+        if (res.restored > 0) {
+          notifications.show({ color: "green", message: `已恢复 ${res.restored} 个文件` });
+        }
+        load();
+        onChanged();
+      })
+      .catch(() => notifications.show({ color: "red", message: t("maintenance.actionFailed") }));
+  };
+
+  const runPurge = () => {
+    if (!pendingPurge || purging) return;
+    setPurging(true);
+    purgeAssetTrash(pendingPurge)
+      .then((res) => {
+        notifications.show({
+          color: "green",
+          message: `已彻底清理 ${res.purged} 个文件，释放 ${formatBytes(res.freedBytes)}`,
+        });
+        setPendingPurge(null);
+        load();
+        onChanged();
+      })
+      .catch(() => notifications.show({ color: "red", message: t("maintenance.actionFailed") }))
+      .finally(() => setPurging(false));
+  };
+
+  return (
+    <>
+      <AssetTrashPanel
+        entries={entries}
+        stats={stats}
+        loadFailed={loadFailed}
+        onRestore={handleRestore}
+        onPurge={(ids) => setPendingPurge(ids)}
+      />
+      <DestructiveConfirmModal
+        opened={pendingPurge !== null}
+        title="确认彻底清理"
+        message={
+          `将永久释放 ${pendingPurge?.length ?? 0} 个文件占用的磁盘空间，此操作**不可恢复**。\n\n` +
+          `若只是想腾出可见空间、仍可能用到这些文件，请改用「恢复」。`
+        }
+        requirePhrase
+        pending={purging}
+        onConfirm={runPurge}
+        onClose={() => setPendingPurge(null)}
+      />
+    </>
   );
 }
 
@@ -769,7 +865,30 @@ export function MaintenancePage() {
   const [params, setParams] = useSearchParams();
   // Tab 走查询参数（与迁移与备份页 ?tab= 同约定），直链与刷新后保持位置。
   const raw = params.get("tab");
-  const tab = raw === "tasks" || raw === "trash" || raw === "jobs" ? raw : "health";
+  const tab =
+    raw === "tasks" || raw === "trash" || raw === "jobs" ||
+    raw === "maven-versions" || raw === "asset-trash"
+      ? raw
+      : "health";
+
+  // Maven 版本清理面板需要可选的 hosted 仓库清单。
+  // 只取 maven + hosted：版本清理是写动作，proxy/group 一律不支持（后端会 409），
+  // 把它们列进下拉框只会让用户点出一个必然失败的选项。
+  const [mavenRepos, setMavenRepos] = useState<{ name: string }[]>([]);
+  useEffect(() => {
+    listRepositories({ page: 1, page_size: 100 })
+      .then((res) => {
+        const items = (res.items ?? []) as { name: string; format?: string; type?: string }[];
+        setMavenRepos(
+          items
+            .filter((r) => r.format === "maven" && r.type === "hosted")
+            .map((r) => ({ name: r.name })),
+        );
+      })
+      // 失败不弹错：这只是下拉候选，用户仍可手动输入坐标；
+      // 弹一条红字会让"页面进不去"看起来像功能坏了。
+      .catch(() => setMavenRepos([]));
+  }, []);
 
   const changeTab = (value: string | null) => {
     const next = new URLSearchParams(params);
@@ -833,6 +952,8 @@ export function MaintenancePage() {
         <Tabs.List style={{ flexShrink: 0 }}>
           <Tabs.Tab value="health">{t("maintenance.tabHealth")}</Tabs.Tab>
           <Tabs.Tab value="trash">{t("maintenance.tabTrash")}</Tabs.Tab>
+          <Tabs.Tab value="maven-versions">Maven 版本清理</Tabs.Tab>
+          <Tabs.Tab value="asset-trash">资产回收站</Tabs.Tab>
           <Tabs.Tab value="tasks">{t("maintenance.tabTasks")}</Tabs.Tab>
           <Tabs.Tab value="jobs">{t("maintenance.tabJobs")}</Tabs.Tab>
         </Tabs.List>
@@ -892,6 +1013,22 @@ export function MaintenancePage() {
           style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
         >
           <TrashTab refreshKey={refreshKey} onChanged={bump} />
+        </Tabs.Panel>
+
+        <Tabs.Panel
+          value="maven-versions"
+          pt="md"
+          style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
+        >
+          <MavenVersionCleanupPanel repositories={mavenRepos} onTrashed={bump} />
+        </Tabs.Panel>
+
+        <Tabs.Panel
+          value="asset-trash"
+          pt="md"
+          style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
+        >
+          <AssetTrashTab refreshKey={refreshKey} onChanged={bump} />
         </Tabs.Panel>
 
         <Tabs.Panel

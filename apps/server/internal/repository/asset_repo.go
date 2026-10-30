@@ -153,14 +153,21 @@ func (r *AssetRepo) ListAllPaths(repoID int64) ([]string, error) {
 	return paths, err
 }
 
-// ListReferencedBlobHashes 返回当前被任一 asset 引用的 blob 哈希集合（去重）。
+// ListReferencedBlobHashes 返回当前仍被**活引用**的 blob 哈希集合（去重）。
 //
 // 只供存储体检判断「磁盘上的 blob 是否还有引用」：它必须覆盖**全部仓库**，
 // 因此不按 repository_id 过滤，也不分页——漏掉任一仓库都会把在用的 blob 误报成孤儿。
 // 只取一列，避免为了一次体检把 asset 的整行都读出来。
+//
+// 回收站里 staged 的条目同样算活引用：那批 blob 只是「当前不可见」，仍然可恢复，
+// 报告成孤儿会诱导运维去手工清理，等于把可恢复的数据标成垃圾。口径与
+// AssetMutationRepo.CountBlobReferences 严格保持一致，两处不能各说各话。
 func (r *AssetRepo) ListReferencedBlobHashes() (map[string]struct{}, error) {
 	var hashes []string
-	if err := r.db.Select(&hashes, `SELECT DISTINCT blob_hash FROM asset`); err != nil {
+	if err := r.db.Select(&hashes, `
+		SELECT DISTINCT blob_hash FROM asset
+		UNION
+		SELECT DISTINCT blob_hash FROM asset_trash WHERE status = ?`, AssetTrashStaged); err != nil {
 		return nil, err
 	}
 	used := make(map[string]struct{}, len(hashes))

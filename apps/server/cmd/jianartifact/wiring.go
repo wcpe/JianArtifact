@@ -140,6 +140,12 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	assetSvc := domain.NewAssetService(repoRepo, assetRepo, blobs, upstreamClient)
 	assetSvc.SetCredentialRevalidator(userRepo)
 	assetSvc.SetRepositoryService(repoSvc)
+	// 资产回收站（Maven 版本级软删除）。与存储清理回收站是**同名的两件事**：
+	// 后者记磁盘路径、靠 rename 恢复；本仓储记 asset 元数据快照、靠重建行恢复。
+	// 装配在这里而不是 NewAssetService 内：装配层统一注入是既有约定，
+	// 由 domain 自行 new 仓储会让测试无法替换。
+	assetTrashRepo := repository.NewAssetTrashRepo(db)
+	assetSvc.SetAssetTrashRepo(assetTrashRepo)
 	// auto-block 退避起始时长来自 JIAN_AUTO_BLOCK_BASE_SECONDS（缺省/非法回落 40s）；
 	// 未注入时 domain 侧以 autoBlockInitial 常量兜底（两者必须同值）。
 	assetSvc.SetAutoBlockBase(cfg.AutoBlockBaseSeconds)
@@ -482,6 +488,10 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	// 回收站保留期回收：只删回收站副本，不触碰 original_path（那是 restore 的职责）。
 	// 保留期用闭包每轮现读（0 = 不自动清理），而不是在注册时固定：
 	// 这正是「下一次作业运行生效」这条生效时机的实现方式。
+	//
+	// 一个作业、一个保留期，驱动两个回收站：存储清理回收站（目录/临时文件）
+	// 与资产回收站（Maven 版本软删除）。任一失败不影响另一个——先跑存储侧，
+	// 记录其错误后仍尝试资产侧，最后返回合并错误；字节合并上报。
 	registerTrashGCJob(schedulerSvc,
 		effectivePolicyDuration(settingSvc.TrashGCIntervalSecs, cfg.TrashGCInterval),
 		func() time.Duration { return effectiveTrashRetention(settingSvc, cfg) },
@@ -490,8 +500,16 @@ func openServices(cfg *config.Config) (*appServices, error) {
 			if !jobEnabled(settingSvc.TrashGCIntervalSecs) {
 				return domain.TrashPurgeResult{}, nil
 			}
-			// 保留期 <= 0（不自动清理）由 ReconcileExpired 自己空转，无需在此重复判断。
-			return trashSvc.ReconcileExpired(retention)
+			storageResult, storageErr := trashSvc.ReconcileExpired(retention)
+			assetResult, assetErr := assetSvc.ReconcileExpiredAssetTrash(retention, 200)
+			merged := domain.TrashPurgeResult{
+				Purged:     storageResult.Purged + assetResult.Purged,
+				FreedBytes: storageResult.FreedBytes + assetResult.FreedBytes,
+			}
+			if storageErr != nil {
+				return merged, storageErr
+			}
+			return merged, assetErr
 		})
 	// 安全治理规则检测投影按 15 秒周期运行（单一 worker；幂等键保证重复运行不增行）。
 	schedulerSvc.Register("security-finding-projector", 15*time.Second, func(ctx context.Context) error {

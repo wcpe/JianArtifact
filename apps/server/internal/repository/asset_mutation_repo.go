@@ -531,10 +531,25 @@ func (r *AssetMutationRepo) HasPendingQuarantine(operationID string) (bool, erro
 	return pending, err
 }
 
-// CountBlobReferences 返回全库活动资产对 hash 的引用数。
+// CountBlobReferences 返回全库对 hash 的**活引用**数。
+//
+// 活引用有且只有两个来源，必须一并统计：
+//  1. asset 表——当前可见的制品；
+//  2. asset_trash 表中 staged 的条目——已被软删除、但仍可恢复的制品。
+//
+// 为什么第二类必须算进来：软删除只移走元数据、把 blob 留着等恢复；若这里只数 asset 表，
+// 每次删除都会让该 blob 立即「零引用」，随后被孤立回收（RemoveIfUnreferenced /
+// 定时 blob-gc）物理删除。用户再点恢复，拿到的将是一条指向已消失 blob 的资产行——
+// 恢复看起来成功，下载却失败，属于最隐蔽的数据丢失形态。
+//
+// 两者用 UNION ALL 后 SUM 而不是两次查询相加：SQLite 一次往返即可，
+// 且不会因为两次查询之间的事务推进而读到不自洽的中间态。
 func (r *AssetMutationRepo) CountBlobReferences(hash string) (int, error) {
 	var count int
-	err := r.db.Get(&count, `SELECT COUNT(*) FROM asset WHERE blob_hash=?`, hash)
+	err := r.db.Get(&count, `
+		SELECT COALESCE((SELECT COUNT(*) FROM asset WHERE blob_hash = ?), 0)
+		     + COALESCE((SELECT COUNT(*) FROM asset_trash WHERE blob_hash = ? AND status = ?), 0)`,
+		hash, hash, AssetTrashStaged)
 	return count, err
 }
 
