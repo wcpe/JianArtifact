@@ -103,7 +103,7 @@ jobs:
       # 目录即可还原。scripts/check.sh 的 sync_dist 在复用前会校验 index.html 的位置，
       # 万一层级不符（出现 dist/dist）会先纠正再继续，并给出明确提示。
       - name: 上传 embed 产物
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: web-dist
           path: apps/server/web/dist
@@ -172,7 +172,7 @@ jobs:
         run: bash scripts/check.sh
       - name: 上传覆盖率
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: go-coverage-1
           path: .tmp/go-coverage-1.out
@@ -203,7 +203,7 @@ jobs:
         run: bash scripts/check.sh
       - name: 上传覆盖率
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: go-coverage-2
           path: .tmp/go-coverage-2.out
@@ -234,7 +234,7 @@ jobs:
         run: bash scripts/check.sh
       - name: 上传覆盖率
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: go-coverage-3
           path: .tmp/go-coverage-3.out
