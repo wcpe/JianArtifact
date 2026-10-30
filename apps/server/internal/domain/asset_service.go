@@ -1841,6 +1841,18 @@ type upstreamFailureVerdict struct {
 // classifyTransferFailure 判定。两者共用同一个
 // upstreamFailureVerdict 与 settleUpstreamFailure，因此结论口径一致。
 func classifyUpstreamFailure(err error) upstreamFailureVerdict {
+	// 取消必须最先摘出来，而且要看 context.Canceled 之外还可能是 DeadlineExceeded 的
+	// 「我方取消」形态——但这里只认 Canceled：
+	//   - group 里快成员成功后 cancel() 其余成员；
+	//   - 调用方（客户端）主动断开；
+	//   - 进程停机。
+	// 这些都不是「上游不可达」的证据。漏掉这一条会在 group 里造成误阻断：
+	// 慢成员还没拿到响应头就被同伴取消 → 落到 default → block=true →
+	// recordFailure → 整个 proxy 仓库被判 AUTO_BLOCKED，40s 起逐档退避。
+	// 那正好复现了本批要修的「整仓不可用」，等于用新故障换掉旧故障。
+	if errors.Is(err, context.Canceled) {
+		return upstreamFailureVerdict{kind: upstreamFailureCanceled, category: upstreamCategoryCanceled}
+	}
 	switch {
 	case errors.Is(err, upstream.ErrNotFound):
 		return upstreamFailureVerdict{kind: upstreamFailureNotFound, category: upstreamCategoryConfirmedMissing}

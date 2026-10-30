@@ -1351,3 +1351,57 @@ func TestResolveOCIProxyFailureClassification(t *testing.T) {
 		}
 	}
 }
+
+// TestGroupCanceledMemberDoesNotBlockProxy 钉住「被同伴取消 ≠ 上游不可达」。
+//
+// group 并行探测时，快成员一成功就 cancel() 其余成员。若某个慢成员当时还没拿到
+// 响应头，它的回源会以 context.Canceled 结束。这类取消**不构成上游不可达的证据**：
+// 一旦被当成 unreachable，会触发 recordFailure 让该 proxy 仓库进入 AUTO_BLOCKED，
+// 并逐档退避——同仓库所有其它路径随之零连接快速失败。那正好复现了本批要修的
+// 「整仓不可用」，等于用一个新故障换掉旧故障。
+//
+// 变异验证：把 classifyUpstreamFailure 里 context.Canceled 的分支删掉，本用例必须转红。
+func TestGroupCanceledMemberDoesNotBlockProxy(t *testing.T) {
+	t.Parallel()
+
+	// 慢成员：连上后永不回包，保证在「拿到响应头之前」被取消。
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer slow.Close()
+
+	// 快成员：立刻返回内容，触发 cancel()。
+	fast := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		_, _ = w.Write([]byte("payload"))
+	}))
+	defer fast.Close()
+
+	svc, repos := newAssetService(t)
+
+	slowID, err := repos.Create("cancel-slow", "raw", "proxy", "private", proxyConfigJSON(t, slow.URL))
+	if err != nil {
+		t.Fatalf("建慢成员：%v", err)
+	}
+	if _, err := repos.Create("cancel-fast", "raw", "proxy", "private", proxyConfigJSON(t, fast.URL)); err != nil {
+		t.Fatalf("建快成员：%v", err)
+	}
+	if _, err := repos.Create("cancel-group", "raw", "group", "private",
+		`{"members":["cancel-slow","cancel-fast"]}`); err != nil {
+		t.Fatalf("建 group：%v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, rc, _ := svc.Resolve(ctx, "cancel-group", "dir/file.txt")
+	if rc != nil {
+		_ = rc.Close()
+	}
+
+	// 阻断状态机是异步落定的，给它一点时间；若真的误阻断，这段时间足够置位。
+	time.Sleep(300 * time.Millisecond)
+
+	if got := svc.Status(slowID).Status; got == domain.StatusAutoBlocked {
+		t.Fatalf("被同伴取消的慢成员不得被判为不可达：status = %s", got)
+	}
+}

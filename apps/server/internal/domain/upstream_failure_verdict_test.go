@@ -80,6 +80,16 @@ func TestClassifyUpstreamFailure(t *testing.T) {
 			wantBlock:  false,
 		},
 		{
+			// group 里快成员成功后 cancel() 其余成员，落选者的回源会返回 context.Canceled；
+			// 若把它当「不可达」去阻断，整个 proxy 仓库会被误判 AUTO_BLOCKED——
+			// 那正好复现本批要修的「整仓不可用」。
+			name:       "取消（被同伴成功取消 / 客户端断连 / 停机）：不阻断也不记事件",
+			err:        fmt.Errorf("回源中断：%w", context.Canceled),
+			wantKind:   upstreamFailureCanceled,
+			wantReason: "",
+			wantBlock:  false,
+		},
+		{
 			name:       "连接失败：阻断，记 upstream_error",
 			err:        dialFailure(),
 			wantKind:   upstreamFailureUnreachable,
