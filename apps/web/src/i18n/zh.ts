@@ -138,6 +138,12 @@ export const zh = {
     runtimePolicyCollapse: "收起",
     runtimePolicyOverviewHint:
       "展开后可逐项编辑；每项都标注了单位、0 的含义与真实生效时机（并非全部「立即生效」）。",
+    runtimePolicySaveOne: "保存「{{label}}」",
+    runtimePolicySaveOneShort: "保存",
+    runtimePolicyNoChange: "该项与当前生效值一致，无需保存",
+    runtimePolicyClamped: "{{label}}已按后端上限调整并保存为 {{value}}",
+    runtimePolicyInvalidNumber: "{{label}}必须填写数字",
+    runtimePolicyRangeHint: "允许范围：{{min}} – {{max}}",
     runtimePolicyGroupJobIntervals: "作业间隔",
     runtimePolicyGroupRetention: "保留策略",
     runtimePolicyGroupThresholds: "容量与阈值",
