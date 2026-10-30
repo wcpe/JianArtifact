@@ -1615,6 +1615,64 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/repositories/{name}/maven-packages/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 按 Maven 包名搜索版本（仅全局管理员）
+         * @description 按包名（`group:artifact`）列出该包下所有版本，用于批量维护。
+         *     既有资产浏览只能逐层进目录、逐个版本删，清理几十个陈旧版本要点几十次；
+         *     这个入口直接以包为起点。
+         *
+         *     `groupId` / `artifactId` / `version` 支持 `*` 通配（只匹配坐标，不匹配路径）。
+         *     `snapshotOnly` 只保留 SNAPSHOT 版本（版本名以 `-SNAPSHOT` 结尾，或目录内含字面
+         *     `-SNAPSHOT` 文件）；返回的 `suspect` 标出「有字面 SNAPSHOT 文件但无任何时间戳构建」
+         *     的疑似幽灵快照——正是 Nexus 事故里的形态。
+         *
+         *     本端点只读，不产生任何变更。删除请用 `POST .../maven-versions/trash-batch`
+         *     并回传具体版本坐标。
+         */
+        get: operations["searchMavenPackageVersions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/repositories/{name}/maven-versions/trash-batch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 批量把 Maven 版本移入回收站（仅全局管理员）
+         * @description 逐版本复用单版本删除，因此语义与 `POST .../maven-versions/trash` 完全一致：
+         *     软删除、保留 blob、可恢复、单版本内按批原子。
+         *
+         *     **部分成功是正常结果**：单个版本失败（如并发被改）不令其余回滚，
+         *     失败明细在 `failures` 中如实返回。全部失败时返回错误，
+         *     而不是一个显示「清理完成 0 个」的成功响应。
+         *
+         *     请求必须回传**用户在预览里确认过的具体版本坐标**，不接受筛选条件——
+         *     条件在两次请求之间可能匹配到新版本，凭条件删除等于删掉用户没看见的东西。
+         */
+        post: operations["trashMavenVersionsBatch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/maintenance/asset-trash": {
         parameters: {
             query?: never;
@@ -4450,6 +4508,64 @@ export interface components {
         AssetList: {
             items: components["schemas"]["AssetSummary"][];
             total: number;
+        };
+        MavenPackageVersion: {
+            coordinate: components["schemas"]["MavenVersionCoordinate"];
+            versionDir: string;
+            fileCount: number;
+            /** Format: int64 */
+            bytes: number;
+            updatedAt: string;
+            createdAt?: string;
+            /** @description 文件名含 `-SNAPSHOT` 的文件数（字面快照形态） */
+            literalSnapshotFiles?: number;
+            /** @description 该版本内识别出的 SNAPSHOT 时间戳构建数 */
+            timestampBuilds?: number;
+            /**
+             * @description 疑似幽灵快照：有字面 SNAPSHOT 文件但没有任何时间戳构建。
+             *     这正是「快照内容混进不该有的仓库」的典型形态。
+             */
+            suspect: boolean;
+        };
+        MavenPackageSearchResult: {
+            query: components["schemas"]["MavenPackageQuery"];
+            repository: string;
+            artifactDirs?: string[];
+            versions: components["schemas"]["MavenPackageVersion"][];
+            /** @description 筛选前的候选版本数 */
+            totalVersions: number;
+            /** Format: int64 */
+            matchedBytes: number;
+            /** @description 结果被 limit 截断，应收窄条件 */
+            truncated: boolean;
+        };
+        MavenPackageQuery: {
+            groupId?: string;
+            artifactId?: string;
+            version?: string;
+            snapshotOnly?: boolean;
+            updatedBefore?: string;
+            /** Format: int64 */
+            minBytes?: number;
+            /** Format: int64 */
+            maxBytes?: number;
+            limit?: number;
+        };
+        MavenBatchTrashRequest: {
+            versions: components["schemas"]["MavenVersionCoordinate"][];
+            overrideReason: string;
+        };
+        MavenBatchTrashResponse: {
+            operationId: string;
+            trashedVersions: number;
+            trashedFiles: number;
+            /** Format: int64 */
+            freedBytes: number;
+            failures?: components["schemas"]["MavenBatchFailure"][];
+        };
+        MavenBatchFailure: {
+            coordinate: components["schemas"]["MavenVersionCoordinate"];
+            reason: string;
         };
         CoordinateDuplicateSource: {
             repository: string;
@@ -8434,6 +8550,79 @@ export interface operations {
             400: components["responses"]["AssetOperationBadRequest"];
             401: components["responses"]["AssetOperationUnauthorized"];
             403: components["responses"]["AssetOperationForbidden"];
+            500: components["responses"]["AssetOperationInternalError"];
+        };
+    };
+    searchMavenPackageVersions: {
+        parameters: {
+            query?: {
+                /** @description 支持 `*` 通配（如 `com.tbao.*`） */
+                groupId?: string;
+                /** @description 支持 `*` 通配（如 `tbaoolib`、`lib*`） */
+                artifactId?: string;
+                /** @description 留空不限；支持 `*`（如 `1.17*`） */
+                version?: string;
+                snapshotOnly?: boolean;
+                /** @description 只保留更新时间早于该时间的版本（`YYYY-MM-DD` 或 `YYYY-MM-DD HH:MM:SS`） */
+                updatedBefore?: string;
+                minBytes?: number;
+                maxBytes?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                name: components["parameters"]["RepoNameParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 匹配的版本列表 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MavenPackageSearchResult"];
+                };
+            };
+            400: components["responses"]["AssetOperationBadRequest"];
+            401: components["responses"]["AssetOperationUnauthorized"];
+            403: components["responses"]["AssetOperationForbidden"];
+            404: components["responses"]["AssetOperationNotFound"];
+            409: components["responses"]["AssetOperationConflict"];
+            500: components["responses"]["AssetOperationInternalError"];
+        };
+    };
+    trashMavenVersionsBatch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: components["parameters"]["RepoNameParam"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MavenBatchTrashRequest"];
+            };
+        };
+        responses: {
+            /** @description 批量清理结果（含部分成功） */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MavenBatchTrashResponse"];
+                };
+            };
+            400: components["responses"]["AssetOperationBadRequest"];
+            401: components["responses"]["AssetOperationUnauthorized"];
+            403: components["responses"]["AssetOperationForbidden"];
+            404: components["responses"]["AssetOperationNotFound"];
+            409: components["responses"]["AssetOperationConflict"];
             500: components["responses"]["AssetOperationInternalError"];
         };
     };

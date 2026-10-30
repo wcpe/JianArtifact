@@ -58,6 +58,111 @@ func (h *Handlers) PlanMavenVersionCleanup(c *gin.Context, name RepoNameParam, p
 	c.JSON(http.StatusOK, plan)
 }
 
+// SearchMavenPackageVersions 按 Maven 包名搜索版本（只读）。
+func (h *Handlers) SearchMavenPackageVersions(c *gin.Context, name RepoNameParam, params SearchMavenPackageVersionsParams) {
+	if !requireAssetOperationAdmin(c, "") {
+		return
+	}
+	if h.assets == nil {
+		auth.WriteError(c, http.StatusConflict, "conflict", "制品存储未就绪")
+		return
+	}
+	q := domain.MavenPackageQuery{}
+	// nil 指针表示用户没传该参数，与"传了空串"语义相同（都视为不限），
+	// 因此统一用取值辅助函数，避免到处写 nil 判断。
+	q.GroupID = stringValue(params.GroupId)
+	q.ArtifactID = stringValue(params.ArtifactId)
+	q.Version = stringValue(params.Version)
+	if params.SnapshotOnly != nil {
+		q.SnapshotOnly = *params.SnapshotOnly
+	}
+	q.UpdatedBefore = stringValue(params.UpdatedBefore)
+	if params.MinBytes != nil {
+		q.MinBytes = *params.MinBytes
+	}
+	if params.MaxBytes != nil {
+		q.MaxBytes = *params.MaxBytes
+	}
+	if params.Limit != nil {
+		q.Limit = *params.Limit
+	}
+	result, err := h.assets.SearchMavenPackageVersions(string(name), q)
+	if err != nil {
+		writeDomainErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+// TrashMavenVersionsBatch 批量把 Maven 版本移入回收站。
+func (h *Handlers) TrashMavenVersionsBatch(c *gin.Context, name RepoNameParam) {
+	operationID := domain.NewOperationID()
+	if !requireAssetOperationAdmin(c, operationID) {
+		return
+	}
+	if h.assets == nil {
+		writeAssetOperationError(c, http.StatusConflict, "conflict", "制品存储未就绪", operationID)
+		return
+	}
+	var req MavenBatchTrashRequest
+	if !bindAssetOperationJSON(c, &req, operationID) {
+		return
+	}
+	reason := strings.TrimSpace(req.OverrideReason)
+	if reason == "" || len([]rune(reason)) > 512 {
+		writeAssetOperationError(c, http.StatusBadRequest, "bad_request",
+			"overrideReason 必填且长度不得超过 512", operationID)
+		return
+	}
+	batch := domain.MavenBatchTrashRequest{
+		Versions: make([]domain.MavenVersionCoordinate, 0, len(req.Versions)),
+	}
+	for _, v := range req.Versions {
+		coord := domain.MavenVersionCoordinate{
+			GroupID:    strings.TrimSpace(v.GroupId),
+			ArtifactID: strings.TrimSpace(v.ArtifactId),
+			Version:    strings.TrimSpace(v.Version),
+		}
+		if v.BuildId != nil {
+			coord.BuildID = strings.TrimSpace(*v.BuildId)
+		}
+		batch.Versions = append(batch.Versions, coord)
+	}
+	actor := ""
+	if p, ok := auth.PrincipalFrom(c); ok {
+		actor = p.Username
+	}
+
+	result, err := h.assets.TrashMavenVersionsBatch(string(name), batch, actor)
+	if err != nil {
+		// 部分成功时仍要写审计：已删掉的版本必须留痕，
+		// 否则一次"部分失败"在审计里会变成完全没发生。
+		if result != nil && result.TrashedVersions > 0 {
+			h.AuditLog(c, auditActionMavenVersionTrash, "asset", string(name), string(name),
+				batchTrashAuditDetail(reason, result), "partial")
+		}
+		writeDomainErr(c, err)
+		return
+	}
+	h.AuditLog(c, auditActionMavenVersionTrash, "asset", string(name), string(name),
+		batchTrashAuditDetail(reason, result), "ok")
+	c.JSON(http.StatusOK, result)
+}
+
+// batchTrashAuditDetail 生成批量清理的审计详情。
+func batchTrashAuditDetail(reason string, result *domain.MavenBatchTrashResult) string {
+	if result == nil {
+		return reason
+	}
+	detail := reason + "；版本 " + strconv.Itoa(result.TrashedVersions) +
+		"，文件 " + strconv.Itoa(result.TrashedFiles) +
+		"，字节 " + strconv.FormatInt(result.FreedBytes, 10)
+	if n := len(result.Failures); n > 0 {
+		detail += "，失败 " + strconv.Itoa(n)
+	}
+	return detail
+}
+
 // DiagnoseMavenCoordinate 诊断同一 Maven 坐标的跨仓重复（只读）。
 func (h *Handlers) DiagnoseMavenCoordinate(c *gin.Context, name RepoNameParam, params DiagnoseMavenCoordinateParams) {
 	if !requireAssetOperationAdmin(c, "") {

@@ -2078,6 +2078,86 @@ export function trashMavenVersion(
   });
 }
 
+// ===== Maven 包名搜索与批量清理 =====
+//
+// 入口是"包"而不是"目录"：运维脑子里想的是 com.tbao:tbaoolib，
+// 既有的资产浏览只能逐层进目录、逐个版本删，清理几十个版本要点几十次。
+
+/** 搜索结果中的一个版本。 */
+export type MavenPackageVersion = {
+  coordinate: { groupId: string; artifactId: string; version: string; buildId?: string };
+  versionDir: string;
+  fileCount: number;
+  bytes: number;
+  updatedAt: string;
+  createdAt: string;
+  literalSnapshotFiles: number;
+  timestampBuilds: number;
+  /** 疑似幽灵快照：有字面 SNAPSHOT 文件但没有任何时间戳构建。 */
+  suspect: boolean;
+};
+
+/** 包名搜索结果。 */
+export type MavenPackageSearchResult = {
+  query: Record<string, unknown>;
+  repository: string;
+  artifactDirs?: string[];
+  versions: MavenPackageVersion[];
+  totalVersions: number;
+  matchedBytes: number;
+  /** 结果被 limit 截断，应收窄条件。 */
+  truncated: boolean;
+};
+
+/** 按 Maven 包名搜索版本（只读）。 */
+export function searchMavenPackageVersions(
+  repo: string,
+  params: {
+    groupId?: string;
+    artifactId?: string;
+    version?: string;
+    snapshotOnly?: boolean;
+    updatedBefore?: string;
+    minBytes?: number;
+    maxBytes?: number;
+    limit?: number;
+  },
+): Promise<MavenPackageSearchResult> {
+  const query: Record<string, string | number | undefined> = {
+    groupId: params.groupId,
+    artifactId: params.artifactId,
+    version: params.version,
+    updatedBefore: params.updatedBefore,
+    minBytes: params.minBytes,
+    maxBytes: params.maxBytes,
+    limit: params.limit,
+  };
+  // 布尔按本项目既有约定用字符串表达（见 deep 校验参数），
+  // 且只在为 true 时传：false 与缺省同义，传出去只会让 URL 变长。
+  if (params.snapshotOnly) query.snapshotOnly = "true";
+  return request(`/repositories/${encodeURIComponent(repo)}/maven-packages/search`, { query });
+}
+
+/** 批量把 Maven 版本移入回收站（部分成功是正常结果）。 */
+export function trashMavenVersionsBatch(
+  repo: string,
+  body: {
+    versions: { groupId: string; artifactId: string; version: string; buildId?: string }[];
+    overrideReason: string;
+  },
+): Promise<{
+  operationId: string;
+  trashedVersions: number;
+  trashedFiles: number;
+  freedBytes: number;
+  failures?: { coordinate: { groupId: string; artifactId: string; version: string }; reason: string }[];
+}> {
+  return request(`/repositories/${encodeURIComponent(repo)}/maven-versions/trash-batch`, {
+    method: "POST",
+    body,
+  });
+}
+
 
 /** 维护作业清单。
  *

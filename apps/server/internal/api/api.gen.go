@@ -4089,6 +4089,74 @@ type MaintenanceRestartResult struct {
 // MaintenanceRestartResultScope 实际使用的作用域：system / systemd-user / docker
 type MaintenanceRestartResultScope string
 
+// MavenBatchFailure defines model for MavenBatchFailure.
+type MavenBatchFailure struct {
+	Coordinate MavenVersionCoordinate `json:"coordinate"`
+	Reason     string                 `json:"reason"`
+}
+
+// MavenBatchTrashRequest defines model for MavenBatchTrashRequest.
+type MavenBatchTrashRequest struct {
+	OverrideReason string                   `json:"overrideReason"`
+	Versions       []MavenVersionCoordinate `json:"versions"`
+}
+
+// MavenBatchTrashResponse defines model for MavenBatchTrashResponse.
+type MavenBatchTrashResponse struct {
+	Failures        *[]MavenBatchFailure `json:"failures,omitempty"`
+	FreedBytes      int64                `json:"freedBytes"`
+	OperationId     string               `json:"operationId"`
+	TrashedFiles    int                  `json:"trashedFiles"`
+	TrashedVersions int                  `json:"trashedVersions"`
+}
+
+// MavenPackageQuery defines model for MavenPackageQuery.
+type MavenPackageQuery struct {
+	ArtifactId    *string `json:"artifactId,omitempty"`
+	GroupId       *string `json:"groupId,omitempty"`
+	Limit         *int    `json:"limit,omitempty"`
+	MaxBytes      *int64  `json:"maxBytes,omitempty"`
+	MinBytes      *int64  `json:"minBytes,omitempty"`
+	SnapshotOnly  *bool   `json:"snapshotOnly,omitempty"`
+	UpdatedBefore *string `json:"updatedBefore,omitempty"`
+	Version       *string `json:"version,omitempty"`
+}
+
+// MavenPackageSearchResult defines model for MavenPackageSearchResult.
+type MavenPackageSearchResult struct {
+	ArtifactDirs *[]string         `json:"artifactDirs,omitempty"`
+	MatchedBytes int64             `json:"matchedBytes"`
+	Query        MavenPackageQuery `json:"query"`
+	Repository   string            `json:"repository"`
+
+	// TotalVersions 筛选前的候选版本数
+	TotalVersions int `json:"totalVersions"`
+
+	// Truncated 结果被 limit 截断，应收窄条件
+	Truncated bool                  `json:"truncated"`
+	Versions  []MavenPackageVersion `json:"versions"`
+}
+
+// MavenPackageVersion defines model for MavenPackageVersion.
+type MavenPackageVersion struct {
+	Bytes      int64                  `json:"bytes"`
+	Coordinate MavenVersionCoordinate `json:"coordinate"`
+	CreatedAt  *string                `json:"createdAt,omitempty"`
+	FileCount  int                    `json:"fileCount"`
+
+	// LiteralSnapshotFiles 文件名含 `-SNAPSHOT` 的文件数（字面快照形态）
+	LiteralSnapshotFiles *int `json:"literalSnapshotFiles,omitempty"`
+
+	// Suspect 疑似幽灵快照：有字面 SNAPSHOT 文件但没有任何时间戳构建。
+	// 这正是「快照内容混进不该有的仓库」的典型形态。
+	Suspect bool `json:"suspect"`
+
+	// TimestampBuilds 该版本内识别出的 SNAPSHOT 时间戳构建数
+	TimestampBuilds *int   `json:"timestampBuilds,omitempty"`
+	UpdatedAt       string `json:"updatedAt"`
+	VersionDir      string `json:"versionDir"`
+}
+
 // MavenSnapshotBuild defines model for MavenSnapshotBuild.
 type MavenSnapshotBuild struct {
 	BuildId   string `json:"buildId"`
@@ -6193,6 +6261,25 @@ type ListRepositoryAssetsParams struct {
 	Prefix *PrefixParam `form:"prefix,omitempty" json:"prefix,omitempty"`
 }
 
+// SearchMavenPackageVersionsParams defines parameters for SearchMavenPackageVersions.
+type SearchMavenPackageVersionsParams struct {
+	// GroupId 支持 `*` 通配（如 `com.tbao.*`）
+	GroupId *string `form:"groupId,omitempty" json:"groupId,omitempty"`
+
+	// ArtifactId 支持 `*` 通配（如 `tbaoolib`、`lib*`）
+	ArtifactId *string `form:"artifactId,omitempty" json:"artifactId,omitempty"`
+
+	// Version 留空不限；支持 `*`（如 `1.17*`）
+	Version      *string `form:"version,omitempty" json:"version,omitempty"`
+	SnapshotOnly *bool   `form:"snapshotOnly,omitempty" json:"snapshotOnly,omitempty"`
+
+	// UpdatedBefore 只保留更新时间早于该时间的版本（`YYYY-MM-DD` 或 `YYYY-MM-DD HH:MM:SS`）
+	UpdatedBefore *string `form:"updatedBefore,omitempty" json:"updatedBefore,omitempty"`
+	MinBytes      *int64  `form:"minBytes,omitempty" json:"minBytes,omitempty"`
+	MaxBytes      *int64  `form:"maxBytes,omitempty" json:"maxBytes,omitempty"`
+	Limit         *int    `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
 // DiagnoseMavenCoordinateParams defines parameters for DiagnoseMavenCoordinate.
 type DiagnoseMavenCoordinateParams struct {
 	GroupId    string `form:"groupId" json:"groupId"`
@@ -6407,6 +6494,9 @@ type ApplyRepositoryAssetOperationJSONRequestBody = AssetOperationRequest
 
 // TrashMavenVersionJSONRequestBody defines body for TrashMavenVersion for application/json ContentType.
 type TrashMavenVersionJSONRequestBody = MavenVersionTrashRequest
+
+// TrashMavenVersionsBatchJSONRequestBody defines body for TrashMavenVersionsBatch for application/json ContentType.
+type TrashMavenVersionsBatchJSONRequestBody = MavenBatchTrashRequest
 
 // SetRepositoryOnlineJSONRequestBody defines body for SetRepositoryOnline for application/json ContentType.
 type SetRepositoryOnlineJSONRequestBody = SetRepositoryOnlineRequest
@@ -7035,6 +7125,9 @@ type ServerInterface interface {
 	// ApplyRepositoryAssetOperation 原子应用仓库制品操作（仅全局管理员）
 	// (POST /api/v1/repositories/{name}/assets/operations)
 	ApplyRepositoryAssetOperation(c *gin.Context, name RepoNameParam)
+	// SearchMavenPackageVersions 按 Maven 包名搜索版本（仅全局管理员）
+	// (GET /api/v1/repositories/{name}/maven-packages/search)
+	SearchMavenPackageVersions(c *gin.Context, name RepoNameParam, params SearchMavenPackageVersionsParams)
 	// DiagnoseMavenCoordinate 诊断同一 Maven 坐标的跨仓重复（仅全局管理员）
 	// (GET /api/v1/repositories/{name}/maven-versions/diagnose)
 	DiagnoseMavenCoordinate(c *gin.Context, name RepoNameParam, params DiagnoseMavenCoordinateParams)
@@ -7044,6 +7137,9 @@ type ServerInterface interface {
 	// TrashMavenVersion 把 Maven 版本移入资产回收站（仅全局管理员）
 	// (POST /api/v1/repositories/{name}/maven-versions/trash)
 	TrashMavenVersion(c *gin.Context, name RepoNameParam)
+	// TrashMavenVersionsBatch 批量把 Maven 版本移入回收站（仅全局管理员）
+	// (POST /api/v1/repositories/{name}/maven-versions/trash-batch)
+	TrashMavenVersionsBatch(c *gin.Context, name RepoNameParam)
 	// SetRepositoryOnline 设置仓库 online/offline 状态（仅管理员）
 	// (PUT /api/v1/repositories/{name}/online)
 	SetRepositoryOnline(c *gin.Context, name RepoNameParam)
@@ -9848,6 +9944,98 @@ func (siw *ServerInterfaceWrapper) ApplyRepositoryAssetOperation(c *gin.Context)
 	siw.Handler.ApplyRepositoryAssetOperation(c, name)
 }
 
+// SearchMavenPackageVersions operation middleware
+func (siw *ServerInterfaceWrapper) SearchMavenPackageVersions(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "name" -------------
+	var name RepoNameParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "name", c.Param("name"), &name, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter name: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params SearchMavenPackageVersionsParams
+
+	// ------------- Optional query parameter "groupId" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "groupId", c.Request.URL.Query(), &params.GroupId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter groupId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "artifactId" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "artifactId", c.Request.URL.Query(), &params.ArtifactId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter artifactId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "version" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "version", c.Request.URL.Query(), &params.Version, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter version: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "snapshotOnly" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "snapshotOnly", c.Request.URL.Query(), &params.SnapshotOnly, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter snapshotOnly: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "updatedBefore" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "updatedBefore", c.Request.URL.Query(), &params.UpdatedBefore, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter updatedBefore: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "minBytes" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "minBytes", c.Request.URL.Query(), &params.MinBytes, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter minBytes: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "maxBytes" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "maxBytes", c.Request.URL.Query(), &params.MaxBytes, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter maxBytes: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", c.Request.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter limit: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.SearchMavenPackageVersions(c, name, params)
+}
+
 // DiagnoseMavenCoordinate operation middleware
 func (siw *ServerInterfaceWrapper) DiagnoseMavenCoordinate(c *gin.Context) {
 
@@ -9983,6 +10171,31 @@ func (siw *ServerInterfaceWrapper) TrashMavenVersion(c *gin.Context) {
 	}
 
 	siw.Handler.TrashMavenVersion(c, name)
+}
+
+// TrashMavenVersionsBatch operation middleware
+func (siw *ServerInterfaceWrapper) TrashMavenVersionsBatch(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "name" -------------
+	var name RepoNameParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "name", c.Param("name"), &name, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter name: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.TrashMavenVersionsBatch(c, name)
 }
 
 // SetRepositoryOnline operation middleware
@@ -11398,6 +11611,8 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/api/v1/repositories/:name/maven-versions/plan", wrapper.PlanMavenVersionCleanup)
 	router.POST(options.BaseURL+"/api/v1/repositories/:name/maven-versions/trash", wrapper.TrashMavenVersion)
 	router.GET(options.BaseURL+"/api/v1/repositories/:name/maven-versions/diagnose", wrapper.DiagnoseMavenCoordinate)
+	router.GET(options.BaseURL+"/api/v1/repositories/:name/maven-packages/search", wrapper.SearchMavenPackageVersions)
+	router.POST(options.BaseURL+"/api/v1/repositories/:name/maven-versions/trash-batch", wrapper.TrashMavenVersionsBatch)
 	router.GET(options.BaseURL+"/api/v1/maintenance/asset-trash", wrapper.ListAssetTrash)
 	router.POST(options.BaseURL+"/api/v1/maintenance/asset-trash/restore", wrapper.RestoreAssetTrash)
 	router.POST(options.BaseURL+"/api/v1/maintenance/asset-trash/purge", wrapper.PurgeAssetTrash)

@@ -50,6 +50,7 @@ import { OpsSection } from "../components/ops/OpsKit";
 import { formatDuration } from "../components/audit/labels";
 import { DestructiveConfirmModal } from "../components/maintenance/DestructiveConfirmModal";
 import { AssetTrashPanel, MavenVersionCleanupPanel } from "../components/maintenance/MavenVersionCleanupPanel";
+import { MavenPackageBatchPanel } from "../components/maintenance/MavenPackageBatchPanel";
 import {
   executeCleanup,
   getStorageHealth,
@@ -867,7 +868,7 @@ export function MaintenancePage() {
   const raw = params.get("tab");
   const tab =
     raw === "tasks" || raw === "trash" || raw === "jobs" ||
-    raw === "maven-versions" || raw === "asset-trash"
+    raw === "maven-versions" || raw === "maven-packages" || raw === "asset-trash"
       ? raw
       : "health";
 
@@ -952,6 +953,7 @@ export function MaintenancePage() {
         <Tabs.List style={{ flexShrink: 0 }}>
           <Tabs.Tab value="health">{t("maintenance.tabHealth")}</Tabs.Tab>
           <Tabs.Tab value="trash">{t("maintenance.tabTrash")}</Tabs.Tab>
+          <Tabs.Tab value="maven-packages">Maven 包清理</Tabs.Tab>
           <Tabs.Tab value="maven-versions">Maven 版本清理</Tabs.Tab>
           <Tabs.Tab value="asset-trash">资产回收站</Tabs.Tab>
           <Tabs.Tab value="tasks">{t("maintenance.tabTasks")}</Tabs.Tab>
@@ -1013,6 +1015,14 @@ export function MaintenancePage() {
           style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
         >
           <TrashTab refreshKey={refreshKey} onChanged={bump} />
+        </Tabs.Panel>
+
+        <Tabs.Panel
+          value="maven-packages"
+          pt="md"
+          style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
+        >
+          <MavenPackageBatchPanel repositories={mavenRepos} onTrashed={bump} />
         </Tabs.Panel>
 
         <Tabs.Panel
