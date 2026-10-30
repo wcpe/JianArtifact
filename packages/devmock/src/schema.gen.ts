@@ -1536,6 +1536,148 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/repositories/{name}/maven-versions/plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 预览 Maven 版本的清理计划（仅全局管理员）
+         * @description 按 group:artifactId:version 展开该版本目录下的**全部**文件（主档 / classifier /
+         *     校验和 / metadata / SNAPSHOT 历史构建），按类别汇总后返回，供删除前核对。
+         *
+         *     展开按目录前缀进行而非文件名模式匹配：命名变体无法穷举，前缀才是可靠边界，
+         *     因此同一版本下的任何新增命名都会被自动纳入。
+         *
+         *     `buildId` 仅对 SNAPSHOT 版本有效，指定后表示只清理该次时间戳构建。
+         *     该端点只读，不产生任何变更。
+         */
+        get: operations["planMavenVersionCleanup"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/repositories/{name}/maven-versions/trash": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 把 Maven 版本移入资产回收站（仅全局管理员）
+         * @description 软删除：把该版本的文件移出 asset 视图并写入资产回收站，**保留 blob**，
+         *     因此可随时通过回收站恢复。彻底清理（释放 blob）是回收站的独立动作。
+         *
+         *     可按批跨越 500 条上限：每批自身是完整原子操作，批间不保证原子性。
+         *     失败时已完成的批次保留（可见、可恢复、可继续删）。
+         */
+        post: operations["trashMavenVersion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/repositories/{name}/maven-versions/diagnose": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 诊断同一 Maven 坐标的跨仓重复（仅全局管理员）
+         * @description 扫描全部 Maven hosted 仓库，报告该坐标在哪些仓库存在、各自文件数与字节，
+         *     并给出**内容指纹**。
+         *
+         *     存在意义：同一坐标同时存在于 releases 与 snapshots 时，聚合仓会按成员顺序
+         *     遮蔽其中一份，客户端可能长期拿到旧内容，而两份只差几十 KB 时完全看不出来。
+         *     换 group 成员顺序不能解决，只能把"哪个被遮蔽"换到另一边——前提是先看得见重复。
+         *
+         *     指纹相同 = 纯冗余（删任一副本都安全）；指纹不同 = 真遮蔽风险，需人工判定正确来源。
+         *     本端点只读，不做任何修复。
+         */
+        get: operations["diagnoseMavenCoordinate"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/maintenance/asset-trash": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 列出资产回收站条目（仅管理员）
+         * @description 资产回收站与存储清理回收站**共用同一个保留期与清理作业**，
+         *     但条目语义不同：资产条目保存 asset 元数据快照，恢复即重建该行。
+         */
+        get: operations["listAssetTrash"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/maintenance/asset-trash/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 从资产回收站恢复（仅管理员）
+         * @description 按条目重建 asset 行。目标路径已存在时**保护性跳过**并如实报告冲突，
+         *     绝不覆盖——覆盖等于执行一次删除，与「恢复」语义相反。
+         */
+        post: operations["restoreAssetTrash"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/maintenance/asset-trash/purge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 彻底清理资产回收站条目（仅管理员，不可逆）
+         * @description 释放 blob 并标记条目为 purged。仅释放"无其它活引用"的 blob：
+         *     同一内容仍被别的路径引用时保持不动。
+         */
+        post: operations["purgeAssetTrash"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/repositories/{name}/usage": {
         parameters: {
             query?: never;
@@ -4308,6 +4450,150 @@ export interface components {
         AssetList: {
             items: components["schemas"]["AssetSummary"][];
             total: number;
+        };
+        CoordinateDuplicateSource: {
+            repository: string;
+            type: string;
+            fileCount: number;
+            /** Format: int64 */
+            bytes: number;
+            /** @description 内容指纹；相同表示内容与布局完全一致（纯冗余而非遮蔽风险） */
+            fingerprint: string;
+            snapshotBuilds?: string[];
+            hasLiteralSnapshot: boolean;
+        };
+        CoordinateDuplicateReport: {
+            coordinate: components["schemas"]["MavenVersionCoordinate"];
+            sources: components["schemas"]["CoordinateDuplicateSource"][];
+            identical: boolean;
+            distinctFingerprints: number;
+            warning?: string;
+        };
+        MavenVersionTrashRequest: {
+            /** @description Maven groupId（如 com.example，不允许含路径分隔符或 ..） */
+            groupId: string;
+            artifactId: string;
+            version: string;
+            /** @description 仅 SNAPSHOT 版本有效；留空表示整个版本，指定则只清理该次时间戳构建 */
+            buildId?: string;
+            /**
+             * @description 可选的待删路径子集。留空表示删除计划中的全部文件；
+             *     非空时必须是计划路径的子集，否则整批拒绝（防止前端删除用户未见过的文件）。
+             */
+            paths?: string[];
+            /** @description 管理员执行删除的原因 */
+            overrideReason: string;
+        };
+        MavenVersionTrashResponse: {
+            operationId: string;
+            repository: string;
+            /** @description 移入回收站的文件数 */
+            trashed: number;
+            /** @description 实际提交的批次数（每批为一个独立原子操作） */
+            batches: number;
+            /** Format: int64 */
+            bytes: number;
+            /** @description 该版本在仓库内的目录 */
+            archivePath: string;
+        };
+        MavenVersionPlan: {
+            coordinate: components["schemas"]["MavenVersionCoordinate"];
+            repository: string;
+            directory: string;
+            files: components["schemas"]["MavenVersionFile"][];
+            categories?: components["schemas"]["MavenVersionCategoryStat"][];
+            /** @description 仅 SNAPSHOT 版本：列出全部历史构建（字面 SNAPSHOT 记为 buildId=SNAPSHOT） */
+            snapshotBuilds?: components["schemas"]["MavenSnapshotBuild"][];
+            literalSnapshotFiles?: number;
+            totalFiles: number;
+            /** Format: int64 */
+            totalBytes: number;
+            exists: boolean;
+        };
+        MavenVersionCoordinate: {
+            groupId: string;
+            artifactId: string;
+            version: string;
+            buildId?: string;
+        };
+        MavenVersionFile: {
+            path: string;
+            /** Format: int64 */
+            size: number;
+            /** @enum {string} */
+            category: "primary" | "classifier" | "checksum" | "metadata" | "other";
+            blobHash?: string;
+            checksumType?: string;
+            buildId?: string;
+            updatedAt?: string;
+        };
+        MavenVersionCategoryStat: {
+            /** @enum {string} */
+            category: "primary" | "classifier" | "checksum" | "metadata" | "other";
+            fileCount: number;
+            /** Format: int64 */
+            bytes: number;
+        };
+        MavenSnapshotBuild: {
+            buildId: string;
+            fileCount: number;
+            /** Format: int64 */
+            bytes: number;
+        };
+        AssetTrashListResponse: {
+            items: components["schemas"]["AssetTrashEntry"][];
+            total: number;
+            page: number;
+            pageSize: number;
+            stats: components["schemas"]["AssetTrashStats"];
+        };
+        AssetTrashEntry: {
+            /** Format: int64 */
+            id: number;
+            /** Format: int64 */
+            repositoryId: number;
+            repositoryName?: string;
+            path: string;
+            blobHash?: string;
+            /** Format: int64 */
+            size: number;
+            contentType?: string;
+            sha1?: string;
+            md5?: string;
+            createdAt?: string;
+            updatedAt?: string;
+            /** @enum {string} */
+            scope?: "version" | "snapshot_build" | "artifact";
+            actor?: string;
+            operationId?: string;
+            /** @enum {string} */
+            status: "staged" | "restored" | "purged";
+            trashedAt: string;
+            resolvedAt?: string;
+        };
+        AssetTrashStats: {
+            entries: number;
+            /** Format: int64 */
+            bytes: number;
+        };
+        AssetTrashIDsRequest: {
+            ids: number[];
+        };
+        AssetTrashConflict: {
+            /** Format: int64 */
+            id: number;
+            path: string;
+            reason: string;
+        };
+        AssetTrashRestoreResponse: {
+            restored: number;
+            conflicts?: components["schemas"]["AssetTrashConflict"][];
+            missing?: components["schemas"]["AssetTrashConflict"][];
+        };
+        AssetTrashPurgeResponse: {
+            purged: number;
+            /** Format: int64 */
+            freedBytes: number;
         };
         BatchDeleteAssetsRequest: {
             /** @description 待删除的制品路径列表（单条非空，上限 500 条） */
@@ -8052,6 +8338,182 @@ export interface operations {
             404: components["responses"]["AssetOperationNotFound"];
             409: components["responses"]["AssetOperationConflict"];
             500: components["responses"]["AssetOperationInternalError"];
+        };
+    };
+    planMavenVersionCleanup: {
+        parameters: {
+            query: {
+                /** @description Maven groupId（如 com.example） */
+                groupId: string;
+                artifactId: string;
+                version: string;
+                /** @description 仅 SNAPSHOT 版本有效，形如 20260317.215705-3；留空表示整个版本 */
+                buildId?: string;
+            };
+            header?: never;
+            path: {
+                name: components["parameters"]["RepoNameParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 清理计划 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MavenVersionPlan"];
+                };
+            };
+            400: components["responses"]["AssetOperationBadRequest"];
+            401: components["responses"]["AssetOperationUnauthorized"];
+            403: components["responses"]["AssetOperationForbidden"];
+            404: components["responses"]["AssetOperationNotFound"];
+            409: components["responses"]["AssetOperationConflict"];
+            500: components["responses"]["AssetOperationInternalError"];
+        };
+    };
+    trashMavenVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: components["parameters"]["RepoNameParam"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MavenVersionTrashRequest"];
+            };
+        };
+        responses: {
+            /** @description 已移入回收站 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MavenVersionTrashResponse"];
+                };
+            };
+            400: components["responses"]["AssetOperationBadRequest"];
+            401: components["responses"]["AssetOperationUnauthorized"];
+            403: components["responses"]["AssetOperationForbidden"];
+            404: components["responses"]["AssetOperationNotFound"];
+            409: components["responses"]["AssetOperationConflict"];
+            500: components["responses"]["AssetOperationInternalError"];
+        };
+    };
+    diagnoseMavenCoordinate: {
+        parameters: {
+            query: {
+                groupId: string;
+                artifactId: string;
+                version: string;
+            };
+            header?: never;
+            path: {
+                name: components["parameters"]["RepoNameParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 重复诊断报告 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CoordinateDuplicateReport"];
+                };
+            };
+            400: components["responses"]["AssetOperationBadRequest"];
+            401: components["responses"]["AssetOperationUnauthorized"];
+            403: components["responses"]["AssetOperationForbidden"];
+            500: components["responses"]["AssetOperationInternalError"];
+        };
+    };
+    listAssetTrash: {
+        parameters: {
+            query?: {
+                page?: number;
+                pageSize?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 回收站条目与占用统计 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssetTrashListResponse"];
+                };
+            };
+            401: components["responses"]["AssetOperationUnauthorized"];
+            403: components["responses"]["AssetOperationForbidden"];
+        };
+    };
+    restoreAssetTrash: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AssetTrashIDsRequest"];
+            };
+        };
+        responses: {
+            /** @description 恢复结果 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssetTrashRestoreResponse"];
+                };
+            };
+            400: components["responses"]["AssetOperationBadRequest"];
+            401: components["responses"]["AssetOperationUnauthorized"];
+            403: components["responses"]["AssetOperationForbidden"];
+        };
+    };
+    purgeAssetTrash: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AssetTrashIDsRequest"];
+            };
+        };
+        responses: {
+            /** @description 清理结果 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssetTrashPurgeResponse"];
+                };
+            };
+            400: components["responses"]["AssetOperationBadRequest"];
+            401: components["responses"]["AssetOperationUnauthorized"];
+            403: components["responses"]["AssetOperationForbidden"];
         };
     };
     getRepositoryUsage: {

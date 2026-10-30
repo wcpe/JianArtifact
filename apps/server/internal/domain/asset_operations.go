@@ -516,6 +516,17 @@ func isMavenFileTarget(name string) bool {
 	return false
 }
 
+// isMavenLogicalRoot 判定 root 是否是一个完整的 Maven artifact 或 version 根。
+//
+// 判据是「该目录下存在至少一个属于本坐标的文件」，而不是「文件名恰好等于
+// `<artifact>-<version>.<ext>`」。后者是曾经的写法，它漏掉了所有 classifier 与
+// 时间戳构建形态——`demo-1.0-sources.jar`、`demo-1.0-20260317.215705-3.jar` 都不以
+// `demo-1.0.` 起首，于是一个只含 classifier 的版本会被判定成"不是逻辑根"，
+// 删除请求被拒（logical_delete_required），用户永远删不掉它。
+//
+// 新判据按前缀归属判断：文件名以 `<artifact>-<version>` 起首即属于本坐标
+// （后续可能是 `.`、`-classifier.` 或 `-timestamp-build.`），这正好覆盖
+// Maven 的全部命名形态。artifact 根同理，只要求位于某个版本子目录下。
 func isMavenLogicalRoot(root string, targetType AssetOperationTargetType, assets []repository.Asset) bool {
 	parts := strings.Split(root, "/")
 	artifact := parts[len(parts)-1]
@@ -528,13 +539,48 @@ func isMavenLogicalRoot(root string, targetType AssetOperationTargetType, assets
 		relative := strings.TrimPrefix(asset.Path, root+"/")
 		segments := strings.Split(relative, "/")
 		if targetType == AssetTargetMavenVersion {
-			if len(segments) == 1 && strings.HasPrefix(segments[0], artifact+"-"+version+".") {
+			// 版本根下必须直接是文件（不是更深一层目录）。
+			if len(segments) != 1 {
+				continue
+			}
+			if mavenFileBelongsToVersion(segments[0], artifact, version) {
 				return true
 			}
 			continue
 		}
-		if len(segments) == 2 && strings.HasPrefix(segments[1], artifact+"-"+segments[0]+".") {
+		// artifact 根下必须是 <version>/<file> 形态。
+		if len(segments) == 2 && mavenFileBelongsToVersion(segments[1], artifact, segments[0]) {
 			return true
+		}
+	}
+	return false
+}
+
+// mavenFileBelongsToVersion 判断文件名是否属于 `<artifact>:<version>` 这个坐标。
+//
+// 覆盖三种形态（与 classifyMavenVersionFile 的判定保持一致）：
+//   - `<artifact>-<version>.<ext>`（主档）
+//   - `<artifact>-<version>-<classifier>.<ext>`（classifier）
+//   - `<artifact>-<version去SNAPSHOT>-<timestamp>-<build>[...].<ext>`（时间戳构建）
+//
+// 版本号可能自带 `-SNAPSHOT`，而时间戳构建的文件名里版本不含该后缀，
+// 因此两种形态都要试；否则 SNAPSHOT 版本会被误判成"不是本坐标"。
+func mavenFileBelongsToVersion(filename, artifact, version string) bool {
+	prefix := artifact + "-"
+	if !strings.HasPrefix(filename, prefix) {
+		return false
+	}
+	rest := strings.TrimPrefix(filename, prefix)
+	for _, v := range []string{version, strings.TrimSuffix(version, "-SNAPSHOT")} {
+		if v == "" {
+			continue
+		}
+		// 版本之后必须是边界字符：`.`（主档）、`-`（classifier / 时间戳构建）。
+		// 加这条是为了避免 `demo-1.0` 误吞 `demo-1.0.1.jar`（不同版本）。
+		if after, ok := strings.CutPrefix(rest, v); ok {
+			if after == "" || strings.HasPrefix(after, ".") || strings.HasPrefix(after, "-") {
+				return true
+			}
 		}
 	}
 	return false

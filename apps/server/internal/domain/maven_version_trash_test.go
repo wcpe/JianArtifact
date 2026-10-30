@@ -38,6 +38,103 @@ func publishMavenVersionFiles(t *testing.T, svc *domain.AssetService, repoName, 
 	}
 }
 
+// TestPlanClassifiesMainArtifactsAsPrimary 是线上暴露的缺陷回归：
+// 无 classifier 的主档（`tbaoolib-2.0.0.jar` / `.pom`）曾被误判成 classifier。
+//
+// 根因：剥掉 artifactId 后剩下 `2.0.0`，恰好**等于**版本号本身（没有 `-` 前缀），
+// 而旧逻辑只处理「以 `-<version>` 结尾」这一种形态，于是整段没被剥掉，
+// 被当成 classifier 返回。这会让用户以为版本里只有衍生文件、没有主档。
+func TestPlanClassifiesMainArtifactsAsPrimary(t *testing.T) {
+	t.Parallel()
+	svc, _, _ := newMavenTrashFixture(t, "maven-primary")
+	dir := "com/tbao/tbaoolib/2.0.0"
+	publishMavenVersionFiles(t, svc, "maven-primary", dir, map[string]string{
+		"tbaoolib-2.0.0.jar":         "jar",
+		"tbaoolib-2.0.0.pom":         "pom",
+		"tbaoolib-2.0.0-sources.jar": "sources",
+		"tbaoolib-2.0.0-javadoc.jar": "javadoc",
+		"tbaoolib-2.0.0.jar.sha1":    "sha1",
+	})
+	plan, err := svc.PlanMavenVersion("maven-primary", domain.MavenVersionCoordinate{
+		GroupID: "com.tbao", ArtifactID: "tbaoolib", Version: "2.0.0",
+	})
+	if err != nil {
+		t.Fatalf("生成计划：%v", err)
+	}
+	byPath := make(map[string]domain.MavenVersionFile, len(plan.Files))
+	for _, file := range plan.Files {
+		byPath[file.Path] = file
+	}
+	cases := []struct {
+		name string
+		want domain.MavenVersionFileCategory
+	}{
+		{"tbaoolib-2.0.0.jar", domain.MavenFilePrimary},
+		{"tbaoolib-2.0.0.pom", domain.MavenFilePrimary},
+		{"tbaoolib-2.0.0-sources.jar", domain.MavenFileClassifier},
+		{"tbaoolib-2.0.0-javadoc.jar", domain.MavenFileClassifier},
+		{"tbaoolib-2.0.0.jar.sha1", domain.MavenFileChecksum},
+	}
+	for _, c := range cases {
+		file, ok := byPath[dir+"/"+c.name]
+		if !ok {
+			t.Fatalf("计划缺少 %s", c.name)
+		}
+		if file.Category != c.want {
+			t.Fatalf("%s 类别应为 %s，得 %s", c.name, c.want, file.Category)
+		}
+	}
+}
+
+// TestLogicalDeleteAcceptsClassifierOnlyVersion 是既有缺陷回归（非本次新增代码）：
+// 只含 classifier / 时间戳构建的版本曾被判定成"不是逻辑根"，删除被拒
+// （logical_delete_required），用户永远删不掉它。
+//
+// 根因：旧判据要求文件名以 `<artifact>-<version>.` 起首，而
+// `demo-1.0-sources.jar`、`demo-1.0-20260317.215705-3.jar` 都不满足。
+// 这与本次功能直接相关——"多个命名锚点"正是既有代码漏判的那部分。
+func TestLogicalDeleteAcceptsClassifierOnlyVersion(t *testing.T) {
+	t.Parallel()
+	svc, _, _ := newMavenTrashFixture(t, "maven-classifier-del")
+	dir := "com/example/cls/1.0"
+	// 刻意只发 classifier，不发主档：这正是旧实现拒绝删除的形态。
+	publishMavenVersionFiles(t, svc, "maven-classifier-del", dir, map[string]string{
+		"cls-1.0-sources.jar": "sources",
+		"cls-1.0-javadoc.jar": "javadoc",
+	})
+	result, err := svc.ApplyOperation("maven-classifier-del", domain.AssetOperation{
+		Action: domain.AssetOperationDelete,
+		Targets: []domain.AssetOperationTarget{
+			{Type: domain.AssetTargetMavenVersion, Path: dir},
+		},
+	})
+	if err != nil {
+		t.Fatalf("只含 classifier 的版本应可删除，得 %v", err)
+	}
+	if result.Affected != 2 {
+		t.Fatalf("应删除 2 个文件，得 %d", result.Affected)
+	}
+}
+
+// TestLogicalDeleteAcceptsSnapshotTimestampVersion 验证时间戳构建形态同样被识别。
+func TestLogicalDeleteAcceptsSnapshotTimestampVersion(t *testing.T) {
+	t.Parallel()
+	svc, _, _ := newMavenTrashFixture(t, "maven-snapshot-del")
+	dir := "com/example/snap/1.0-SNAPSHOT"
+	publishMavenVersionFiles(t, svc, "maven-snapshot-del", dir, map[string]string{
+		"snap-1.0-20260317.215705-3.jar": "jar",
+		"snap-1.0-20260317.215705-3.pom": "pom",
+	})
+	if _, err := svc.ApplyOperation("maven-snapshot-del", domain.AssetOperation{
+		Action: domain.AssetOperationDelete,
+		Targets: []domain.AssetOperationTarget{
+			{Type: domain.AssetTargetMavenVersion, Path: dir},
+		},
+	}); err != nil {
+		t.Fatalf("时间戳构建版本应可删除，得 %v", err)
+	}
+}
+
 // TestMavenVersionPlanGroupsAllNamingAnchors 验证「不同命名锚点一次性找出来」：
 // 版本目录下的 jar/pom/sources/javadoc/校验和/metadata 全部出现在同一份计划里，
 // 并各自归入正确的类别。

@@ -191,25 +191,33 @@ func classifyMavenVersionFile(artifactID, version, filename string) (MavenVersio
 		return MavenFileChecksum, buildID, checksumType
 	}
 
-	withinBuild := base
+	// 剥掉扩展名与构建号，得到 `<artifactId>-<version>[-<classifier>]` 形态的骨架。
+	stem := strings.TrimSuffix(base, mavenExtension(base))
 	if buildID != "" {
-		withinBuild = strings.Replace(base, "-"+buildID, "", 1)
+		stem = strings.Replace(stem, "-"+buildID, "", 1)
 	}
-
-	// 去掉尾部 version。对时间戳构建，version 在文件名里表现为去 SNAPSHOT 的形态
-	// （1.17-SNAPSHOT → 1.17），因此两种形态都要试。
-	stem := strings.TrimSuffix(withinBuild, mavenExtension(withinBuild))
+	// 去掉 artifactId 前缀（Maven 文件名约定以 `<artifactId>-` 起首）。
 	if strings.HasPrefix(stem, artifactID+"-") {
 		stem = strings.TrimPrefix(stem, artifactID+"-")
 	}
+
+	// 剥离版本号。三种形态都要覆盖，缺一种就会把主档误判成 classifier：
+	//   1. 剩余部分**恰好等于**版本号（无 classifier 的主档，最常见）；
+	//   2. 剩余部分以 `<version>-` 起首（带 classifier）；
+	//   3. 版本号去掉 `-SNAPSHOT` 后再试一遍（时间戳构建的文件名里版本不含 SNAPSHOT）。
 	for _, v := range []string{version, strings.TrimSuffix(version, "-SNAPSHOT")} {
-		if trimmed := trimVersionAndBuild(stem, v); trimmed != stem {
-			stem = trimmed
+		if v == "" {
+			continue
+		}
+		if stem == v {
+			// 形态 1：整段就是版本号 → 没有 classifier。
+			return MavenFilePrimary, buildID, ""
+		}
+		if rest, ok := strings.CutPrefix(stem, v+"-"); ok {
+			stem = rest
 			break
 		}
 	}
-	// stem 现在只剩 classifier（可能为空）。注意 classifier 位于版本号之后，
-	// 因此上面剥离后若还有内容，它就是 classifier。
 	stem = strings.Trim(stem, "-")
 	if stem == "" {
 		return MavenFilePrimary, buildID, ""
@@ -223,15 +231,6 @@ func mavenExtension(name string) string {
 		return name[i:]
 	}
 	return ""
-}
-
-// trimVersionAndBuild 从尾部去掉 `-<version>`；不匹配时原样返回。
-func trimVersionAndBuild(name, version string) string {
-	suffix := "-" + version
-	if strings.HasSuffix(name, suffix) {
-		return strings.TrimSuffix(name, suffix)
-	}
-	return name
 }
 
 // extractSnapshotBuildID 从文件名中识别 Maven SNAPSHOT 的 `<timestamp>-<buildNumber>`。
