@@ -2,32 +2,31 @@
 //
 // 为什么需要它（而不是继续用逐版本清理面板）：
 // 逐版本面板要求用户已经知道确切的 `group:artifact:version`。实际维护时想的是
-// 「把 tbaoolib 下所有 1.x 清掉」「把带 SNAPSHOT 的版本都找出来」这类**包级意图**，
+// 「把 shopcart 下所有 1.x 清掉」「把带 SNAPSHOT 的版本都找出来」这类**包级意图**，
 // 逐个版本输入坐标要几十次，且每次都得自己记哪些删过了。
 //
-// 四类筛选对应四类真实维护场景：
-//   - 包名/版本通配：清掉某个包的历史版本；
-//   - 含 SNAPSHOT：找出快照污染（字面 SNAPSHOT 且无时间戳构建的会被标为"疑似幽灵"）；
-//   - 时间范围：清理陈旧版本；
-//   - 体积区间：找出占空间的大版本。
+// 四类筛选对应四类真实维护场景：坐标通配 / 含 SNAPSHOT / 时间范围 / 体积区间。
 //
-// 防护分层沿用本页既有范式：勾选清单 → 二次确认 → 输入确认词「清理」。
-// 删除仍是**可恢复**的（进资产回收站），确认文案必须写明这点，
-// 否则用户会以为不可逆而不敢用。
+// **只用 Mantine 组件，不写内联样式**：外壳一律用 Stack/Group/Card/SimpleGrid 布局，
+// 尺寸走 Mantine 的 size/spacing 体系；此前用原生 <select> + style={{}} 的做法
+// 会绕开主题（暗色模式下配色、聚焦环、禁用态都不一致），也拿不到组件库的键盘可达性。
 import {
   Alert,
   Badge,
-  Box,
   Button,
+  Card,
   Checkbox,
   Code,
+  Divider,
   Group,
   NumberInput,
-  ScrollArea,
+  Select,
+  SimpleGrid,
   Stack,
   Table,
   Text,
   TextInput,
+  ScrollArea,
 } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
 import { IconAlertTriangle, IconSearch, IconTrash } from "@tabler/icons-react";
@@ -54,10 +53,8 @@ function versionKey(v: MavenPackageVersion): string {
 }
 
 export function MavenPackageBatchPanel({ repositories, onTrashed }: MavenPackageBatchPanelProps) {
-  // 初始值不能只取一次：仓库列表是异步加载的，组件首次挂载时通常还是空数组，
-  // 那样 repo 会永远停在空串，搜索按钮永久 disabled、下拉框显示的值与状态也不一致。
-  // 这里用「当前选中值仍在列表中则保留，否则回落到第一个」的同步逻辑。
-  const [repo, setRepo] = useState(repositories[0]?.name ?? "");
+  // 仓库列表异步加载：初始值不能只取一次，否则首次挂载时列表为空、repo 永远停在空串。
+  const [repo, setRepo] = useState<string | null>(repositories[0]?.name ?? null);
   useEffect(() => {
     const first = repositories[0];
     if (!first) return;
@@ -65,13 +62,14 @@ export function MavenPackageBatchPanel({ repositories, onTrashed }: MavenPackage
       current && repositories.some((r) => r.name === current) ? current : first.name,
     );
   }, [repositories]);
+
   const [groupId, setGroupId] = useState("");
   const [artifactId, setArtifactId] = useState("");
   const [versionPattern, setVersionPattern] = useState("");
   const [snapshotOnly, setSnapshotOnly] = useState(false);
   const [updatedBefore, setUpdatedBefore] = useState("");
-  const [minBytes, setMinBytes] = useState<number | "">("");
-  const [maxBytes, setMaxBytes] = useState<number | "">("");
+  const [minBytes, setMinBytes] = useState<number | string>("");
+  const [maxBytes, setMaxBytes] = useState<number | string>("");
 
   const [versions, setVersions] = useState<MavenPackageVersion[]>([]);
   const [truncated, setTruncated] = useState(false);
@@ -80,7 +78,7 @@ export function MavenPackageBatchPanel({ repositories, onTrashed }: MavenPackage
   const [error, setError] = useState<string | null>(null);
   const [searched, setSearched] = useState(false);
 
-  // 勾选以坐标字符串为键：版本对象在每次搜索后是新引用，按下标或按对象做键都会失效。
+  // 勾选以坐标字符串为键：版本对象每次搜索后是新引用，按对象做键会失效。
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [trashing, setTrashing] = useState(false);
@@ -111,8 +109,7 @@ export function MavenPackageBatchPanel({ repositories, onTrashed }: MavenPackage
         setTruncated(res.truncated);
         setTotalVersions(res.totalVersions);
         setSearched(true);
-        // 默认全不选：批量删除的危险性来自"手滑全选"，
-        // 让用户主动勾选比默认勾上再逐个取消更安全。
+        // 默认全不选：批量删除的危险来自"手滑全选"，让用户主动勾更安全。
         setSelected(new Set());
       })
       .catch((err) => {
@@ -145,7 +142,7 @@ export function MavenPackageBatchPanel({ repositories, onTrashed }: MavenPackage
   };
 
   const runTrash = () => {
-    if (selectedVersions.length === 0 || trashing) return;
+    if (!repo || selectedVersions.length === 0 || trashing) return;
     setTrashing(true);
     trashMavenVersionsBatch(repo, {
       versions: selectedVersions.map((v) => ({
@@ -186,90 +183,82 @@ export function MavenPackageBatchPanel({ repositories, onTrashed }: MavenPackage
   };
 
   return (
-    <Stack gap="sm" style={{ flex: 1, minHeight: 0 }}>
+    <Stack gap="md" h="100%" style={{ minHeight: 0 }}>
       <Alert color="blue" variant="light" icon={<IconAlertTriangle size={16} />}>
-        删除是<strong>可恢复</strong>的：移入下方「资产回收站」，blob 保留到你彻底清理或保留期到期。
+        删除是<strong>可恢复</strong>的：移入「回收站」，blob 保留到你彻底清理或保留期到期。
       </Alert>
 
-      <Group align="flex-end" gap="sm" wrap="wrap">
-        <Box style={{ minWidth: 170 }}>
-          <Text size="xs" c="dimmed" mb={4}>
-            仓库
-          </Text>
-          <select
-            value={repo}
-            onChange={(e) => setRepo(e.currentTarget.value)}
-            aria-label="Maven 仓库"
-            style={{ width: "100%", height: 36, borderRadius: 4, padding: "0 8px" }}
-          >
-            {repositories.map((r) => (
-              <option key={r.name} value={r.name}>
-                {r.name}
-              </option>
-            ))}
-          </select>
-        </Box>
-        <TextInput
-          label="groupId"
-          placeholder="com.tbao 或 com.tbao.*"
-          value={groupId}
-          onChange={(e) => setGroupId(e.currentTarget.value)}
-          style={{ minWidth: 190 }}
-        />
-        <TextInput
-          label="artifactId"
-          placeholder="tbaoolib 或 lib*"
-          value={artifactId}
-          onChange={(e) => setArtifactId(e.currentTarget.value)}
-          style={{ minWidth: 170 }}
-        />
-        <TextInput
-          label="版本"
-          placeholder="留空=全部，如 1.17*"
-          value={versionPattern}
-          onChange={(e) => setVersionPattern(e.currentTarget.value)}
-          style={{ minWidth: 150 }}
-        />
-        <Button
-          leftSection={<IconSearch size={16} />}
-          onClick={search}
-          loading={loading}
-          disabled={!repo}
-        >
-          搜索版本
-        </Button>
-      </Group>
+      <Card withBorder radius="md" padding="md">
+        <Stack gap="sm">
+          <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="sm">
+            <Select
+              label="仓库"
+              placeholder="选择仓库"
+              data={repositories.map((r) => ({ value: r.name, label: r.name }))}
+              value={repo}
+              onChange={setRepo}
+              allowDeselect={false}
+              checkIconPosition="right"
+            />
+            <TextInput
+              label="groupId"
+              placeholder="com.tbao 或 com.tbao.*"
+              value={groupId}
+              onChange={(e) => setGroupId(e.currentTarget.value)}
+            />
+            <TextInput
+              label="artifactId"
+              placeholder="tbaoolib 或 lib*"
+              value={artifactId}
+              onChange={(e) => setArtifactId(e.currentTarget.value)}
+            />
+            <TextInput
+              label="版本"
+              placeholder="留空=全部，如 1.17*"
+              value={versionPattern}
+              onChange={(e) => setVersionPattern(e.currentTarget.value)}
+            />
+          </SimpleGrid>
 
-      <Group align="flex-end" gap="sm" wrap="wrap">
-        <Checkbox
-          label="只看含 SNAPSHOT 的版本"
-          checked={snapshotOnly}
-          onChange={(e) => setSnapshotOnly(e.currentTarget.checked)}
-        />
-        <TextInput
-          label="早于"
-          placeholder="YYYY-MM-DD"
-          value={updatedBefore}
-          onChange={(e) => setUpdatedBefore(e.currentTarget.value)}
-          style={{ minWidth: 150 }}
-        />
-        <NumberInput
-          label="最小字节"
-          placeholder="不限"
-          value={minBytes}
-          onChange={(v) => setMinBytes(typeof v === "number" ? v : "")}
-          min={0}
-          style={{ minWidth: 130 }}
-        />
-        <NumberInput
-          label="最大字节"
-          placeholder="不限"
-          value={maxBytes}
-          onChange={(v) => setMaxBytes(typeof v === "number" ? v : "")}
-          min={0}
-          style={{ minWidth: 130 }}
-        />
-      </Group>
+          <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="sm">
+            <TextInput
+              label="更新时间早于"
+              placeholder="YYYY-MM-DD"
+              value={updatedBefore}
+              onChange={(e) => setUpdatedBefore(e.currentTarget.value)}
+            />
+            <NumberInput
+              label="最小字节"
+              placeholder="不限"
+              value={minBytes}
+              onChange={setMinBytes}
+              min={0}
+              thousandSeparator=","
+            />
+            <NumberInput
+              label="最大字节"
+              placeholder="不限"
+              value={maxBytes}
+              onChange={setMaxBytes}
+              min={0}
+              thousandSeparator=","
+            />
+            <Stack gap={4} justify="flex-end">
+              <Checkbox
+                label="只看含 SNAPSHOT 的版本"
+                checked={snapshotOnly}
+                onChange={(e) => setSnapshotOnly(e.currentTarget.checked)}
+              />
+            </Stack>
+          </SimpleGrid>
+
+          <Group justify="flex-end">
+            <Button leftSection={<IconSearch size={16} />} onClick={search} loading={loading}>
+              搜索版本
+            </Button>
+          </Group>
+        </Stack>
+      </Card>
 
       {error && (
         <Alert color="red" variant="light">
@@ -290,9 +279,9 @@ export function MavenPackageBatchPanel({ repositories, onTrashed }: MavenPackage
       )}
 
       {versions.length > 0 && (
-        <>
-          <Group justify="space-between">
-            <Group gap="xs">
+        <Card withBorder radius="md" padding={0} style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+          <Group justify="space-between" p="md" wrap="wrap" gap="sm">
+            <Group gap="sm">
               <Button size="xs" variant="subtle" onClick={toggleAll}>
                 {selected.size === versions.length ? "取消全选" : `全选（${versions.length}）`}
               </Button>
@@ -310,9 +299,9 @@ export function MavenPackageBatchPanel({ repositories, onTrashed }: MavenPackage
               批量移入回收站（{selectedVersions.length}）
             </Button>
           </Group>
-
-          <ScrollArea style={{ flex: 1, minHeight: 120 }}>
-            <Table striped highlightOnHover miw={860} stickyHeader>
+          <Divider />
+          <ScrollArea style={{ flex: 1, minHeight: 0 }}>
+            <Table striped highlightOnHover miw={860} stickyHeader verticalSpacing={6}>
               <Table.Thead>
                 <Table.Tr>
                   <Table.Th w={40} />
@@ -320,7 +309,7 @@ export function MavenPackageBatchPanel({ repositories, onTrashed }: MavenPackage
                   <Table.Th w={90}>文件数</Table.Th>
                   <Table.Th w={100}>大小</Table.Th>
                   <Table.Th w={150}>更新时间</Table.Th>
-                  <Table.Th w={120}>标记</Table.Th>
+                  <Table.Th w={130}>标记</Table.Th>
                 </Table.Tr>
               </Table.Thead>
               <Table.Tbody>
@@ -336,7 +325,7 @@ export function MavenPackageBatchPanel({ repositories, onTrashed }: MavenPackage
                         />
                       </Table.Td>
                       <Table.Td>
-                        <Code style={{ wordBreak: "break-all" }}>{key}</Code>
+                        <Code>{key}</Code>
                       </Table.Td>
                       <Table.Td>{v.fileCount}</Table.Td>
                       <Table.Td>{formatBytes(v.bytes)}</Table.Td>
@@ -346,13 +335,13 @@ export function MavenPackageBatchPanel({ repositories, onTrashed }: MavenPackage
                         </Text>
                       </Table.Td>
                       <Table.Td>
-                        <Group gap={4}>
+                        <Group gap={4} wrap="nowrap">
                           {v.suspect && (
                             <Badge size="sm" color="red" variant="light">
                               疑似幽灵快照
                             </Badge>
                           )}
-                          {v.suspect === false && v.literalSnapshotFiles > 0 && (
+                          {!v.suspect && v.literalSnapshotFiles > 0 && (
                             <Badge size="sm" color="yellow" variant="light">
                               含字面快照
                             </Badge>
@@ -370,16 +359,16 @@ export function MavenPackageBatchPanel({ repositories, onTrashed }: MavenPackage
               </Table.Tbody>
             </Table>
           </ScrollArea>
-        </>
+        </Card>
       )}
 
       <DestructiveConfirmModal
         opened={confirmOpen}
         title="确认批量移入回收站"
         message={
-          `将从 ${repo} 移出 ${selectedVersions.length} 个版本（${selectedFiles} 个文件 / ` +
+          `将从 ${repo ?? ""} 移出 ${selectedVersions.length} 个版本（${selectedFiles} 个文件 / ` +
           `${formatBytes(selectedBytes)}）。\n\n` +
-          `这些版本会进入资产回收站，可随时恢复；只有彻底清理或保留期到期才会真正释放磁盘。`
+          `这些版本会进入回收站，可随时恢复；只有彻底清理或保留期到期才会真正释放磁盘。`
         }
         requirePhrase
         confirmLabel={DESTRUCTIVE_CONFIRM_WORD}

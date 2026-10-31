@@ -17,12 +17,14 @@
 import {
   Alert,
   Badge,
-  Box,
   Button,
+  Card,
   Checkbox,
   Code,
+  Divider,
   Group,
   ScrollArea,
+  Select,
   SimpleGrid,
   Stack,
   Table,
@@ -30,7 +32,16 @@ import {
   TextInput,
 } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
-import { IconAlertTriangle, IconSearch, IconTrash } from "@tabler/icons-react";
+import {
+  IconAlertTriangle,
+  IconChartPie,
+  IconCheckbox,
+  IconDatabase,
+  IconFile,
+  IconSearch,
+  IconTrash,
+} from "@tabler/icons-react";
+import { KpiCard } from "./KpiCard";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   planMavenVersion,
@@ -81,7 +92,9 @@ function parseCoordinate(raw: string): ParsedCoordinate | null {
 export function MavenVersionCleanupPanel({ repositories, onTrashed }: MavenVersionCleanupPanelProps) {
   // 同 MavenPackageBatchPanel：仓库列表异步加载，初始值不能只取一次，
   // 否则组件首次挂载时列表为空、repo 永远停在空串。
-  const [repo, setRepo] = useState(repositories[0]?.name ?? "");
+  // Select 的值是 string|null（可清空），因此状态也用可空类型，
+  // 避免"用空串表示未选"这种约定与组件库语义打架。
+  const [repo, setRepo] = useState<string | null>(repositories[0]?.name ?? null);
   useEffect(() => {
     const first = repositories[0];
     if (!first) return;
@@ -134,7 +147,7 @@ export function MavenVersionCleanupPanel({ repositories, onTrashed }: MavenVersi
   const selectedBytes = selectedFiles.reduce((sum, f) => sum + f.size, 0);
 
   const runTrash = () => {
-    if (!parsed || trashing) return;
+    if (!parsed || !repo || trashing) return;
     setTrashing(true);
     trashMavenVersion(repo, {
       groupId: parsed.groupId,
@@ -164,46 +177,44 @@ export function MavenVersionCleanupPanel({ repositories, onTrashed }: MavenVersi
   };
 
   return (
-    <Stack gap="sm" style={{ flex: 1, minHeight: 0 }}>
+    <Stack gap="md" h="100%" style={{ minHeight: 0 }}>
       <Alert color="blue" variant="light" icon={<IconAlertTriangle size={16} />}>
-        删除是<strong>可恢复</strong>的：文件会进入下方「资产回收站」，blob 保留到你彻底清理或保留期到期。
+        删除是<strong>可恢复</strong>的：文件会进入「回收站」，blob 保留到你彻底清理或保留期到期。
       </Alert>
 
-      <Group align="flex-end" gap="sm" wrap="wrap">
-        <Box style={{ minWidth: 200 }}>
-          <Text size="xs" c="dimmed" mb={4}>
-            仓库
-          </Text>
-          <select
-            value={repo}
-            onChange={(e) => setRepo(e.currentTarget.value)}
-            aria-label="Maven 仓库"
-            style={{ width: "100%", height: 36, borderRadius: 4, padding: "0 8px" }}
-          >
-            {repositories.map((r) => (
-              <option key={r.name} value={r.name}>
-                {r.name}
-              </option>
-            ))}
-          </select>
-        </Box>
-        <TextInput
-          label="坐标"
-          placeholder="com.example:demo:1.17-SNAPSHOT"
-          description="group:artifact:version，SNAPSHOT 可在第 4 段指定单次构建"
-          value={coordinate}
-          onChange={(e) => setCoordinate(e.currentTarget.value)}
-          style={{ flex: 1, minWidth: 280 }}
-        />
-        <Button
-          leftSection={<IconSearch size={16} />}
-          onClick={loadPlan}
-          loading={loading}
-          disabled={!repo || !parsed}
-        >
-          预览清单
-        </Button>
-      </Group>
+      <Card withBorder radius="md" padding="md">
+        <Stack gap="sm">
+          <SimpleGrid cols={{ base: 1, md: 3 }} spacing="sm">
+            <Select
+              label="仓库"
+              placeholder="选择仓库"
+              data={repositories.map((r) => ({ value: r.name, label: r.name }))}
+              value={repo}
+              onChange={setRepo}
+              allowDeselect={false}
+              checkIconPosition="right"
+            />
+            <TextInput
+              label="坐标"
+              placeholder="com.example:demo:1.17-SNAPSHOT"
+              description="group:artifact:version，SNAPSHOT 可在第 4 段指定单次构建"
+              value={coordinate}
+              onChange={(e) => setCoordinate(e.currentTarget.value)}
+            />
+            <Stack gap={4} justify="flex-end">
+              <Button
+                leftSection={<IconSearch size={16} />}
+                onClick={loadPlan}
+                loading={loading}
+                disabled={!repo || !parsed}
+                fullWidth
+              >
+                预览清单
+              </Button>
+            </Stack>
+          </SimpleGrid>
+        </Stack>
+      </Card>
 
       {error && (
         <Alert color="red" variant="light">
@@ -219,95 +230,108 @@ export function MavenVersionCleanupPanel({ repositories, onTrashed }: MavenVersi
 
       {plan && plan.exists && (
         <>
-          <SimpleGrid cols={{ base: 2, sm: 4 }} spacing="sm">
-            <Stat label="文件总数" value={String(plan.totalFiles)} />
-            <Stat label="总大小" value={formatBytes(plan.totalBytes)} />
-            <Stat label="已选" value={String(selectedFiles.length)} />
-            <Stat label="已选大小" value={formatBytes(selectedBytes)} />
+          <SimpleGrid cols={{ base: 2, sm: 4 }} spacing="md">
+            <KpiCard icon={<IconFile size={20} />} label="文件总数" value={String(plan.totalFiles)} />
+            <KpiCard icon={<IconDatabase size={20} />} label="总大小" value={formatBytes(plan.totalBytes)} />
+            <KpiCard icon={<IconCheckbox size={20} />} label="已选文件" value={String(selectedFiles.length)} color="teal" />
+            <KpiCard icon={<IconChartPie size={20} />} label="已选大小" value={formatBytes(selectedBytes)} color="teal" />
           </SimpleGrid>
 
-          {plan.categories && plan.categories.length > 0 && (
-            <Group gap={4}>
-              {plan.categories.map((c) => (
-                <Badge key={c.category} variant="light">
-                  {CATEGORY_LABELS[c.category as MavenVersionFile["category"]] ?? c.category}{" "}
-                  {c.fileCount}
-                </Badge>
-              ))}
-            </Group>
-          )}
-
-          {plan.snapshotBuilds && plan.snapshotBuilds.length > 0 && (
-            <Box>
-              <Text size="sm" fw={600} mb={4}>
-                快照历史构建（{plan.snapshotBuilds.length}）
-              </Text>
-              <ScrollArea h={92} type="auto">
-                <Group gap={4}>
-                  {plan.snapshotBuilds.map((b) => (
-                    <Badge key={b.buildId} variant={b.buildId === "SNAPSHOT" ? "filled" : "outline"}>
-                      {b.buildId} · {b.fileCount} 文件
-                    </Badge>
-                  ))}
-                </Group>
-              </ScrollArea>
-            </Box>
-          )}
-
-          <Box style={{ flex: 1, minHeight: 120, overflow: "auto" }}>
-            <Table striped highlightOnHover miw={720} stickyHeader>
-              <Table.Thead>
-                <Table.Tr>
-                  <Table.Th w={40} />
-                  <Table.Th>路径</Table.Th>
-                  <Table.Th w={110}>类别</Table.Th>
-                  <Table.Th w={110}>构建</Table.Th>
-                  <Table.Th w={100}>大小</Table.Th>
-                </Table.Tr>
-              </Table.Thead>
-              <Table.Tbody>
-                {plan.files.map((file) => (
-                  <Table.Tr key={file.path}>
-                    <Table.Td>
-                      <Checkbox
-                        checked={selected.has(file.path)}
-                        onChange={() => toggle(file.path)}
-                        aria-label={`选择 ${file.path}`}
-                      />
-                    </Table.Td>
-                    <Table.Td>
-                      <Code style={{ wordBreak: "break-all" }}>{file.path}</Code>
-                    </Table.Td>
-                    <Table.Td>
-                      <Badge size="sm" variant="light">
-                        {CATEGORY_LABELS[file.category] ?? file.category}
+          {(plan.categories?.length || plan.snapshotBuilds?.length) && (
+            <Card withBorder radius="md" padding="md">
+              <Stack gap="sm">
+                {plan.categories && plan.categories.length > 0 && (
+                  <Group gap="xs">
+                    <Text size="sm" c="dimmed">
+                      按类别：
+                    </Text>
+                    {plan.categories.map((c) => (
+                      <Badge key={c.category} variant="light">
+                        {CATEGORY_LABELS[c.category as MavenVersionFile["category"]] ?? c.category}{" "}
+                        {c.fileCount}
                       </Badge>
-                    </Table.Td>
-                    <Table.Td>
-                      <Text size="xs" c="dimmed">
-                        {file.buildId ?? "—"}
-                      </Text>
-                    </Table.Td>
-                    <Table.Td>{formatBytes(file.size)}</Table.Td>
-                  </Table.Tr>
-                ))}
-              </Table.Tbody>
-            </Table>
-          </Box>
+                    ))}
+                  </Group>
+                )}
+                {plan.snapshotBuilds && plan.snapshotBuilds.length > 0 && (
+                  <Stack gap={4}>
+                    <Text size="sm" c="dimmed">
+                      快照历史构建（{plan.snapshotBuilds.length}）
+                    </Text>
+                    <ScrollArea h={72} type="auto">
+                      <Group gap="xs">
+                        {plan.snapshotBuilds.map((b) => (
+                          <Badge
+                            key={b.buildId}
+                            variant={b.buildId === "SNAPSHOT" ? "filled" : "outline"}
+                          >
+                            {b.buildId} · {b.fileCount} 文件
+                          </Badge>
+                        ))}
+                      </Group>
+                    </ScrollArea>
+                  </Stack>
+                )}
+              </Stack>
+            </Card>
+          )}
 
-          <Group justify="space-between">
-            <Text size="xs" c="dimmed">
-              目录：<Code>{plan.directory}</Code>
-            </Text>
-            <Button
-              color="red"
-              leftSection={<IconTrash size={16} />}
-              disabled={selectedFiles.length === 0}
-              onClick={() => setConfirmOpen(true)}
-            >
-              移入回收站（{selectedFiles.length}）
-            </Button>
-          </Group>
+          <Card withBorder radius="md" padding={0} style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+            <Group justify="space-between" p="md" wrap="wrap" gap="sm">
+              <Text size="sm" c="dimmed">
+                目录：<Code>{plan.directory}</Code>
+              </Text>
+              <Button
+                color="red"
+                leftSection={<IconTrash size={16} />}
+                disabled={selectedFiles.length === 0}
+                onClick={() => setConfirmOpen(true)}
+              >
+                移入回收站（{selectedFiles.length}）
+              </Button>
+            </Group>
+            <Divider />
+            <ScrollArea style={{ flex: 1, minHeight: 0 }}>
+              <Table striped highlightOnHover miw={720} stickyHeader verticalSpacing={6}>
+                <Table.Thead>
+                  <Table.Tr>
+                    <Table.Th w={40} />
+                    <Table.Th>路径</Table.Th>
+                    <Table.Th w={110}>类别</Table.Th>
+                    <Table.Th w={140}>构建</Table.Th>
+                    <Table.Th w={100}>大小</Table.Th>
+                  </Table.Tr>
+                </Table.Thead>
+                <Table.Tbody>
+                  {plan.files.map((file) => (
+                    <Table.Tr key={file.path}>
+                      <Table.Td>
+                        <Checkbox
+                          checked={selected.has(file.path)}
+                          onChange={() => toggle(file.path)}
+                          aria-label={`选择 ${file.path}`}
+                        />
+                      </Table.Td>
+                      <Table.Td>
+                        <Code>{file.path}</Code>
+                      </Table.Td>
+                      <Table.Td>
+                        <Badge size="sm" variant="light">
+                          {CATEGORY_LABELS[file.category] ?? file.category}
+                        </Badge>
+                      </Table.Td>
+                      <Table.Td>
+                        <Text size="xs" c="dimmed">
+                          {file.buildId ?? "—"}
+                        </Text>
+                      </Table.Td>
+                      <Table.Td>{formatBytes(file.size)}</Table.Td>
+                    </Table.Tr>
+                  ))}
+                </Table.Tbody>
+              </Table>
+            </ScrollArea>
+          </Card>
         </>
       )}
 
@@ -315,10 +339,10 @@ export function MavenVersionCleanupPanel({ repositories, onTrashed }: MavenVersi
         opened={confirmOpen}
         title="确认移入回收站"
         message={
-          `将从 ${repo} 移出 ${selectedFiles.length} 个文件 / ${formatBytes(selectedBytes)}，` +
+          `将从 ${repo ?? ""} 移出 ${selectedFiles.length} 个文件 / ${formatBytes(selectedBytes)}，` +
           `坐标 ${parsed?.groupId ?? ""}:${parsed?.artifactId ?? ""}:${parsed?.version ?? ""}` +
           `${parsed?.buildId ? `（构建 ${parsed.buildId}）` : ""}。\n\n` +
-          `这些文件会进入资产回收站，可随时恢复；只有彻底清理或保留期到期才会真正释放磁盘。`
+          `这些文件会进入回收站，可随时恢复；只有彻底清理或保留期到期才会真正释放磁盘。`
         }
         requirePhrase
         confirmLabel={DESTRUCTIVE_CONFIRM_WORD}
@@ -327,18 +351,6 @@ export function MavenVersionCleanupPanel({ repositories, onTrashed }: MavenVersi
         onClose={() => setConfirmOpen(false)}
       />
     </Stack>
-  );
-}
-
-/** 紧凑统计块。 */
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <Box>
-      <Text size="xs" c="dimmed">
-        {label}
-      </Text>
-      <Text fw={600}>{value}</Text>
-    </Box>
   );
 }
 

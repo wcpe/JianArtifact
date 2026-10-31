@@ -39,8 +39,20 @@ import {
   Text,
 } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
-import { IconAlertTriangle, IconRefresh, IconTrash } from "@tabler/icons-react";
+import {
+  IconAlertTriangle,
+  IconChartPie,
+  IconDatabase,
+  IconFolderOff,
+  IconHistory,
+  IconRefresh,
+  IconShieldLock,
+  IconTrash,
+  IconUpload,
+} from "@tabler/icons-react";
+import { KpiCard } from "../components/maintenance/KpiCard";
 import { useCallback, useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
@@ -120,58 +132,114 @@ function formatElapsed(startedAt: string | null, finishedAt: string | null): str
 function FactsStrip({
   health,
   onCleanup,
+  onRefresh,
 }: {
   health: StorageHealth | null;
   onCleanup: (k: CleanupKind) => void;
+  onRefresh: () => void;
 }) {
   const { t } = useTranslation();
-  const items: { label: string; value: string; kind?: CleanupKind }[] = [
-    { label: t("maintenance.orphanBlobs"), value: `${health?.orphanBlobs ?? 0}` },
-    { label: t("maintenance.quarantined"), value: `${health?.quarantinedBlobs ?? 0}` },
-    { label: t("maintenance.emptyDirs"), value: `${health?.emptyDirs ?? 0}`, kind: "empty_dirs" },
+  // 六项指标各自配一个图标：形状比文字更容易扫读，且窄屏换行后仍能快速定位。
+  const items: {
+    label: string;
+    value: string;
+    icon: ReactNode;
+    color: string;
+    kind?: CleanupKind;
+  }[] = [
+    {
+      label: t("maintenance.orphanBlobs"),
+      value: `${health?.orphanBlobs ?? 0}`,
+      icon: <IconDatabase size={20} />,
+      color: "red",
+    },
+    {
+      label: t("maintenance.quarantined"),
+      value: `${health?.quarantinedBlobs ?? 0}`,
+      icon: <IconShieldLock size={20} />,
+      color: "orange",
+    },
+    {
+      label: t("maintenance.emptyDirs"),
+      value: `${health?.emptyDirs ?? 0}`,
+      icon: <IconFolderOff size={20} />,
+      color: "blue",
+      kind: "empty_dirs",
+    },
     {
       label: t("maintenance.preRestore"),
       value: `${health?.preRestoreDirs ?? 0}`,
+      icon: <IconHistory size={20} />,
+      color: "grape",
       kind: "pre_restore",
     },
     {
       label: t("maintenance.staleUploads"),
       value: formatBytes(health?.backupUploadsBytes ?? 0),
+      icon: <IconUpload size={20} />,
+      color: "cyan",
       kind: "stale_uploads",
     },
-    { label: t("maintenance.total"), value: formatBytes(health?.totalBytes ?? 0) },
+    {
+      label: t("maintenance.total"),
+      value: formatBytes(health?.totalBytes ?? 0),
+      icon: <IconChartPie size={20} />,
+      color: "teal",
+    },
   ];
   return (
-    <Card withBorder radius="md" padding={density.cardPadding}>
-      <Group justify="space-between" align="flex-end" wrap="wrap" gap="md">
-        <SimpleGrid cols={{ base: 2, sm: 3, lg: 6 }} spacing="lg" style={{ flex: 1, minWidth: 0 }}>
-          {items.map((item) => (
-            <Box key={item.label}>
-              <Text size="xs" c="dimmed">
-                {item.label}
-              </Text>
-              <Text size="lg" fw={600}>
-                {item.value}
-              </Text>
-            </Box>
-          ))}
-        </SimpleGrid>
-        <Group gap="xs" wrap="wrap">
-          {CLEANUP_KINDS.map(({ kind, labelKey }) => (
+    <Stack gap="md" style={{ minHeight: 0 }}>
+      <SimpleGrid cols={{ base: 2, sm: 3, lg: 6 }} spacing="md">
+        {items.map((item) => (
+          <KpiCard
+            key={item.label}
+            icon={item.icon}
+            label={item.label}
+            value={item.value}
+            color={item.color}
+            testId={`kpi-${item.kind ?? "total"}`}
+          />
+        ))}
+      </SimpleGrid>
+
+      {/* 清理动作放在「体检说明」这一块的表头，而不是散在指标卡旁边：
+          它们是"基于体检结论的操作"，归到说明区读起来才是一件事。
+          这块不再用 flex:1 撑满——里面只有一句说明，撑满会留出大片空白。 */}
+      <Card withBorder radius="md" padding={density.cardPadding}>
+        <Group justify="space-between" align="center" wrap="wrap" gap="sm">
+          <Stack gap={2} style={{ minWidth: 0 }}>
+            <Text fw={600} size="sm">
+              {t("maintenance.healthDetailTitle")}
+            </Text>
+            <Text size="xs" c="dimmed">
+              {t("maintenance.healthBodyHint")}
+            </Text>
+          </Stack>
+          <Group gap="xs" wrap="wrap">
+            {CLEANUP_KINDS.map(({ kind, labelKey }) => (
+              <Button
+                key={kind}
+                size="xs"
+                variant="light"
+                leftSection={<IconTrash size={14} />}
+                onClick={() => onCleanup(kind)}
+                data-cleanup-kind={kind}
+              >
+                {t(labelKey)}
+              </Button>
+            ))}
             <Button
-              key={kind}
               size="xs"
-              variant="light"
-              leftSection={<IconTrash size={14} />}
-              onClick={() => onCleanup(kind)}
-              data-cleanup-kind={kind}
+              variant="subtle"
+              leftSection={<IconRefresh size={14} />}
+              onClick={onRefresh}
             >
-              {t(labelKey)}
+              {t("maintenance.refresh")}
             </Button>
-          ))}
+          </Group>
         </Group>
-      </Group>
-    </Card>
+      </Card>
+    </Stack>
   );
 }
 
@@ -647,48 +715,18 @@ export function MaintenancePage() {
           pt="md"
           style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 12 }}
         >
-          <Box style={{ flexShrink: 0 }}>
-            <AsyncBoundary state={healthState}>
-              {(health: StorageHealth) => (
-                <Stack gap="xs">
-                  {health.partialError ? (
-                    <Alert color="yellow" variant="light" icon={<IconAlertTriangle size={16} />}>
-                      {t("maintenance.partialError", { reason: health.partialError })}
-                    </Alert>
-                  ) : null}
-                  <FactsStrip health={health} onCleanup={openPreview} />
-                </Stack>
-              )}
-            </AsyncBoundary>
-          </Box>
-          <OpsSection
-            title={t("maintenance.healthDetailTitle")}
-            meta={t("maintenance.healthHint")}
-            testId="health-section"
-            style={{
-              flex: 1,
-              minHeight: 150,
-              display: "flex",
-              flexDirection: "column",
-              overflow: "hidden",
-            }}
-            bodyStyle={{ flex: 1, minHeight: 0, overflow: "auto" }}
-            bodyPadding="md"
-            actions={
-              <Button
-                size="xs"
-                variant="subtle"
-                leftSection={<IconRefresh size={14} />}
-                onClick={healthState.reload}
-              >
-                {t("maintenance.refresh")}
-              </Button>
-            }
-          >
-            <Text size="sm" c="dimmed">
-              {t("maintenance.healthBodyHint")}
-            </Text>
-          </OpsSection>
+          <AsyncBoundary state={healthState}>
+            {(health: StorageHealth) => (
+              <Stack gap="md" style={{ flex: 1, minHeight: 0 }}>
+                {health.partialError ? (
+                  <Alert color="yellow" variant="light" icon={<IconAlertTriangle size={16} />}>
+                    {t("maintenance.partialError", { reason: health.partialError })}
+                  </Alert>
+                ) : null}
+                <FactsStrip health={health} onCleanup={openPreview} onRefresh={healthState.reload} />
+              </Stack>
+            )}
+          </AsyncBoundary>
         </Tabs.Panel>
 
         <Tabs.Panel
