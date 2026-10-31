@@ -22,12 +22,16 @@ import (
 //
 // 间隔 <= 0 不注册（禁用语义，对齐其余清理作业）；保留期 <= 0 时本作业即使注册也每轮空转
 // （不自动清理），因此不需要两处都判。
-func registerTrashGCJob(sched *scheduler.Scheduler, interval, retention time.Duration, gc func(time.Duration) (domain.TrashPurgeResult, error)) {
-	if interval <= 0 || gc == nil {
+//
+// retention 是**函数**而不是固定值：保留天数现在可以在设置页改，作业每轮调用它现读
+// 才能让改动在下一轮生效（这正是规格里"下一次作业运行生效"的实现方式）。
+// 若按注册时的值固定，界面改完就必须重启，与本次需求正好相反。
+func registerTrashGCJob(sched *scheduler.Scheduler, interval time.Duration, retention func() time.Duration, gc func(time.Duration) (domain.TrashPurgeResult, error)) {
+	if interval <= 0 || retention == nil || gc == nil {
 		return
 	}
 	sched.Register("trash-gc", interval, func(context.Context) error {
-		result, err := gc(retention)
+		result, err := gc(retention())
 		if err != nil {
 			// 单条失败不中断整轮：把已完成的部分写进日志再上报失败，便于定位。
 			if result.Purged > 0 {

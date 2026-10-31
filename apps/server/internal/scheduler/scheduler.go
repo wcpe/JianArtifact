@@ -10,6 +10,7 @@ import (
 	"log"
 	"runtime/debug"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -50,9 +51,14 @@ type jobFailure struct {
 
 // job 是单个已注册作业及其运行状态。
 type job struct {
-	name     string
-	interval time.Duration
-	run      func(ctx context.Context) error
+	name string
+	// intervalNanos 存间隔的纳秒值，用原子读写。
+	//
+	// 为什么不是普通字段：间隔现在可以在运行期被设置页改（SetInterval），
+	// 而 loop 在另一 goroutine 里读它。普通字段就是数据竞态——-race 会抓到，
+	// 但在生产上表现为「偶发读到半个值」这种更难查的形态。
+	intervalNanos atomic.Int64
+	run           func(ctx context.Context) error
 
 	mu         sync.Mutex
 	runs       int64
@@ -61,6 +67,16 @@ type job struct {
 	lastStart  time.Time
 	lastFinish time.Time
 	lastError  string
+}
+
+// interval 读当前间隔。热改后 loop 的下一轮即采用新值。
+func (j *job) interval() time.Duration {
+	return time.Duration(j.intervalNanos.Load())
+}
+
+// setInterval 更新间隔（纳秒）。调用方保证 d > 0。
+func (j *job) setInterval(d time.Duration) {
+	j.intervalNanos.Store(int64(d))
 }
 
 // Scheduler 在进程内按固定间隔运行已注册作业，触发语义统一固化：
@@ -86,7 +102,9 @@ func (s *Scheduler) Register(name string, interval time.Duration, run func(ctx c
 	if name == "" || interval <= 0 || run == nil {
 		return
 	}
-	s.jobs = append(s.jobs, &job{name: name, interval: interval, run: run})
+	next := &job{name: name, run: run}
+	next.setInterval(interval)
+	s.jobs = append(s.jobs, next)
 }
 
 // Start 为每个已注册作业启动独立循环，随 ctx 取消优雅停止。
@@ -144,13 +162,36 @@ func (s *Scheduler) runContext() context.Context {
 }
 
 // Status 返回全部作业的状态快照（副本，可并发调用）。
+// SetInterval 在运行期修改某个已注册作业的执行间隔。
+//
+// 语义边界（刻意如此，别改成"立即重启该作业"）：
+//   - 从**下一轮**起生效，当轮不打断——当轮可能正在写盘，强行中断会留下半成品；
+//   - 已在运行的那一轮跑完后，再按新间隔起算，仍保持「同一作业不自我重叠」；
+//   - 未注册的作业名返回 false，不报错（与 Register「静默跳过」的口径一致）；
+//   - d <= 0 同样返回 false：0 表示禁用，而"禁用"应当通过不注册表达，
+//     运行期把间隔改成 0 会让 loop 进入忙等（time.NewTimer(0) 立即触发）。
+//
+// 为什么改原子变量而不是重建作业：重建会丢掉 runs / failures 等历史计数，
+// 且与 Run（手动触发）的独占状态位存在竞态窗口。
+func (s *Scheduler) SetInterval(name string, d time.Duration) bool {
+	if d <= 0 {
+		return false
+	}
+	j := s.job(name)
+	if j == nil {
+		return false
+	}
+	j.setInterval(d)
+	return true
+}
+
 func (s *Scheduler) Status() []JobStatus {
 	out := make([]JobStatus, 0, len(s.jobs))
 	for _, j := range s.jobs {
 		j.mu.Lock()
 		out = append(out, JobStatus{
 			Name:       j.name,
-			Interval:   j.interval,
+			Interval:   j.interval(),
 			Runs:       j.runs,
 			Failures:   j.failures,
 			Running:    j.running,
@@ -166,7 +207,7 @@ func (s *Scheduler) Status() []JobStatus {
 // loop 按间隔驱动单个作业：每轮重新起算定时，作业耗时超过间隔时不会补跑连发。
 func (j *job) loop(ctx context.Context) {
 	for {
-		timer := time.NewTimer(j.interval)
+		timer := time.NewTimer(j.interval())
 		select {
 		case <-ctx.Done():
 			timer.Stop()

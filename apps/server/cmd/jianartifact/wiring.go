@@ -197,8 +197,6 @@ func openServices(cfg *config.Config) (*appServices, error) {
 		defaults := []repository.SettingValue{
 			{Key: domain.SettingKeyPublicURL, Value: cfg.PublicURL},
 			{Key: domain.SettingKeyUpstreamTimeout, Value: strconv.Itoa(int(cfg.UpstreamTimeout.Seconds()))},
-			// 同步间隔仍是设置页暴露的四项基础配置之一，保留其默认 seed。
-			{Key: domain.SettingKeyReplSyncInterval, Value: strconv.Itoa(int(cfg.SyncInterval.Seconds()))},
 		}
 		for _, value := range defaults {
 			if err := seedSettingDefault(settingRepo, value.Key, value.Value); err != nil {
@@ -221,16 +219,26 @@ func openServices(cfg *config.Config) (*appServices, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("初始化代理调优设置：%w", err)
 	}
+	// 运行期策略 13 项同理：作业间隔 / 保留策略 / 容量与阈值。
+	if err := seedRuntimePolicySettings(settingRepo, cfg); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("初始化运行期策略设置：%w", err)
+	}
 	// 播种之后按**生效值**再注入一次：上面两处 setter 用的是环境变量解析结果，
 	// 而 setting 表可能已被界面改过且跨重启保留（环境变量此时已不是真源）。
 	applyProxyTuningSettings(settingSvc, assetSvc)
+	// 同理，运行期策略里三项"请求路径按需读取"的阈值也按生效值再注入一次：
+	// 上面两处 setter 用的是环境变量解析结果，而 setting 表可能已被界面改过且跨重启保留。
+	applyRuntimePolicySettings(settingSvc, cfg, repoSvc, assetSvc)
 	auditLogRepo := repository.NewAuditLogRepo(db)
 	auditObservabilityRepo := repository.NewAuditObservabilityRepo(db)
 	operationsMetrics := repository.NewOperationsObservabilityRepo(db)
 	// 仪表盘容量聚合的缓存有效期来自 JIAN_CAPACITY_CACHE_TTL_SECONDS
 	// （缺省/非法回落 30s，显式 0 = 禁用缓存、每次请求实时聚合）；
 	// 未注入时 repository 侧以 defaultCapacityCacheTTL 常量兜底（两者必须同值）。
-	operationsMetrics.SetCapacityCacheTTL(cfg.CapacityCacheTTL)
+	// 这里取 setting 表的生效值：初值由环境变量播种，之后可在设置页改并热生效。
+	operationsMetrics.SetCapacityCacheTTL(
+		effectivePolicyDuration(settingSvc.CapacityCacheTTLSeconds, cfg.CapacityCacheTTL))
 	operationsAlertRepo := repository.NewOperationsAlertRepo(db)
 	dashboardSvc := domain.NewOperationsDashboardService(operationsMetrics)
 	assetDownloadRepo := repository.NewAssetDownloadRepo(db)
@@ -293,8 +301,9 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	cleanupSvc := domain.NewCleanupService(cfg.DataDir, cleanTaskRepo)
 	trashSvc := domain.NewTrashService(cfg.DataDir, cleanTaskRepo)
 	// 回收站容量护栏：超上限时拒绝新的清理（而不是自动淘汰最旧条目——静默删除等于
-	// 绕过用户确认）。0 = 不限制。
-	cleanupSvc.SetTrashCapacity(cfg.TrashMaxBytes)
+	// 绕过用户确认）。0 = 不限制。初值来自 JIAN_TRASH_MAX_BYTES 播种，此后以 setting 表为准，
+	// 保存时经 OnTrashCapacityChange 热注入（下一次清理的前置检查即生效）。
+	cleanupSvc.SetTrashCapacity(effectiveTrashMaxBytes(settingSvc, cfg))
 	// 过期上传会话复用既有 uploadTTL 口径（backup_upload.expires_at），不另造 idle 常量。
 	backupUploadRepoForCleanup := repository.NewBackupUploadRepo(db)
 	cleanupSvc.SetBackupUploadExpiredSource(func() ([]string, error) {
@@ -360,7 +369,20 @@ func openServices(cfg *config.Config) (*appServices, error) {
 		default:
 		}
 	})
-	registerBlobGCJob(schedulerSvc, cfg.BlobGCInterval, assetSvc.CleanupUnreferencedBlobs)
+	// 五个周期作业的**初始**间隔取自 setting 表（初值由环境变量播种），此后可在设置页
+	// 运行期改（经 PutSettings → OnRuntimePolicyChange → scheduler.SetInterval）。
+	//
+	// 0 仍然表示「不注册」：调度器的 Register 对 interval <= 0 是静默跳过。
+	// 而**启动之后**把间隔改成 0 由作业自己的每轮检查接管（见 jobEnabled）：
+	// 作业仍注册、每轮空转，这样"关掉一个跑着的清理作业"不需要重启。
+	registerBlobGCJob(schedulerSvc,
+		effectivePolicyDuration(settingSvc.BlobGCIntervalSecs, cfg.BlobGCInterval),
+		func() (int, error) {
+			if !jobEnabled(settingSvc.BlobGCIntervalSecs) {
+				return 0, nil
+			}
+			return assetSvc.CleanupUnreferencedBlobs()
+		})
 	// 存储治理清理（隔离区空目录 / 过期 OCI 上传临时文件 / 终态元数据裁剪 / 代理缓存保留）。
 	// 只做「不触碰任何在途文件」的四类清理；pending_gc 滞留件回收留待后续增量
 	// （前置能力缺口：操作引擎没有「在写门下判定是否在途」的入口）。
@@ -368,18 +390,34 @@ func openServices(cfg *config.Config) (*appServices, error) {
 		repository.NewStorageCleanupRepo(db),
 		assetSvc,
 		blobs,
-		domain.StorageCleanupOptions{
-			MetadataRetention: cfg.StorageMetadataRetention, // JIAN_STORAGE_METADATA_RETENTION_DAYS（天），0 禁用
-			TempMaxAge:        cfg.StorageTempMaxAge,        // JIAN_STORAGE_TEMP_MAX_AGE_HOURS（小时），0 禁用
-		},
+		effectiveStorageCleanupOptions(settingSvc, cfg),
 	)
 	// 上游健康历史的 30 天保留由 storage-cleanup **顺带清理**（规格 §2.2 明确不新增作业）。
 	// 只清理 upstream_health_minute 一张表，不波及 host_metric_minute 等同类分钟表。
 	storageCleanupSvc.SetUpstreamHealthRepo(upstreamHealthRepo)
-	registerStorageCleanupJob(schedulerSvc, cfg.StorageCleanupInterval, storageCleanupSvc.Run)
+	registerStorageCleanupJob(schedulerSvc,
+		effectivePolicyDuration(settingSvc.StorageCleanupIntervalSecs, cfg.StorageCleanupInterval),
+		func() (domain.StorageCleanupResult, error) {
+			// 间隔改成 0 表示禁用（下一轮起空转），见 jobEnabled 的说明。
+			if !jobEnabled(settingSvc.StorageCleanupIntervalSecs) {
+				return domain.StorageCleanupResult{}, nil
+			}
+			// 保留策略在**每轮开始时**现读 setting 表：这是"界面改完下一轮即生效"的全部来源，
+			// 也是本作业唯一需要热生效的两个阈值。
+			storageCleanupSvc.SetRetentionOptions(effectiveStorageCleanupOptions(settingSvc, cfg))
+			return storageCleanupSvc.Run()
+		})
 	// 上游健康定时探测：只探 type=proxy 且 online 的仓库，绝不改断路器状态。
 	upstreamProbeSvc := domain.NewUpstreamProbeService(repoRepo, assetSvc, upstreamHealthSvc)
-	registerUpstreamProbeJob(schedulerSvc, cfg.UpstreamProbeInterval, upstreamProbeSvc.Run)
+	registerUpstreamProbeJob(schedulerSvc,
+		effectivePolicyDuration(settingSvc.UpstreamProbeIntervalSecs, cfg.UpstreamProbeInterval),
+		func(ctx context.Context) (domain.UpstreamProbeResult, error) {
+			// 0 = 关闭定时探测（真实请求采样照常积累，只是无流量时不再补空窗）。
+			if !jobEnabled(settingSvc.UpstreamProbeIntervalSecs) {
+				return domain.UpstreamProbeResult{}, nil
+			}
+			return upstreamProbeSvc.Run(ctx)
+		})
 	// 周期化自动备份 + 保留策略。间隔的当前值取自 setting 表
 	// （初值由环境变量 JIAN_BACKUP_AUTO_INTERVAL 播种），因此界面上改完下一轮即生效；
 	// 间隔为 0 表示关闭（作业仍在心跳，但每轮跳过）。
@@ -405,11 +443,35 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	// 孤儿备份包回收。宽限期保证"拷入 → 界面导入"的窗口，
 	// 身份校验保证不误删用户放错的其他归档（见 domain/backup_orphan_cleanup.go）。
 	backupOrphanSvc := domain.NewBackupOrphanCleanupService(backupSvc, backupAdoptSvc,
-		domain.BackupOrphanCleanupOptions{Grace: cfg.BackupOrphanGrace})
-	registerBackupOrphanCleanupJob(schedulerSvc, cfg.BackupOrphanCleanupInterval, backupOrphanSvc.Run)
+		domain.BackupOrphanCleanupOptions{
+			Grace: effectivePositiveHours(settingSvc.BackupOrphanGraceHours, cfg.BackupOrphanGrace),
+		})
+	registerBackupOrphanCleanupJob(schedulerSvc,
+		effectivePolicyDuration(settingSvc.BackupOrphanCleanupIntervalSecs, cfg.BackupOrphanCleanupInterval),
+		func() (domain.BackupOrphanCleanupResult, error) {
+			// 间隔改成 0 表示禁用（下一轮起空转），见 jobEnabled 的说明。
+			if !jobEnabled(settingSvc.BackupOrphanCleanupIntervalSecs) {
+				return domain.BackupOrphanCleanupResult{}, nil
+			}
+			// 宽限期每轮现读：它在 Run 里决定"mtime 早于 now-grace 才算孤儿"，
+			// 现读才能让界面改完下一轮即生效。
+			backupOrphanSvc.SetGrace(effectivePositiveHours(settingSvc.BackupOrphanGraceHours, cfg.BackupOrphanGrace))
+			return backupOrphanSvc.Run()
+		})
 	// 回收站保留期回收：只删回收站副本，不触碰 original_path（那是 restore 的职责）。
-	registerTrashGCJob(schedulerSvc, cfg.TrashGCInterval,
-		time.Duration(cfg.TrashRetentionDays)*24*time.Hour, trashSvc.ReconcileExpired)
+	// 保留期用闭包每轮现读（0 = 不自动清理），而不是在注册时固定：
+	// 这正是「下一次作业运行生效」这条生效时机的实现方式。
+	registerTrashGCJob(schedulerSvc,
+		effectivePolicyDuration(settingSvc.TrashGCIntervalSecs, cfg.TrashGCInterval),
+		func() time.Duration { return effectiveTrashRetention(settingSvc, cfg) },
+		func(retention time.Duration) (domain.TrashPurgeResult, error) {
+			// 间隔改成 0 表示禁用（下一轮起空转），见 jobEnabled 的说明。
+			if !jobEnabled(settingSvc.TrashGCIntervalSecs) {
+				return domain.TrashPurgeResult{}, nil
+			}
+			// 保留期 <= 0（不自动清理）由 ReconcileExpired 自己空转，无需在此重复判断。
+			return trashSvc.ReconcileExpired(retention)
+		})
 	// 指标登记与 /metrics 渲染器；协议请求计数由 HTTP 层钩子（run）累加。
 	metricsReg := metrics.New()
 	metricsExp := metrics.NewExposition(metricsReg, schedulerJobStatuses(schedulerSvc))
@@ -590,6 +652,167 @@ func applyProxyTuningSettings(settingSvc *domain.SettingService, assetSvc *domai
 	}
 }
 
+// seedRuntimePolicySettings 把运行期策略 13 项的环境变量值作为**初值**播种进 setting 表。
+//
+// # 为什么逐键播、不做整组判断
+//
+// 与 seedProxyTuningSettings 同一理由，而且这里更明显：13 项分属四组、彼此不相干
+// （改过回收站上限不代表运维碰过 blob-gc 间隔）。整组判断会让「运维只调了搜索预算」
+// 变成「其余 12 项永远拿不到环境变量里的初值」，而它们确实被配在环境变量里。
+//
+// # 为什么复用 seedSettingDefault
+//
+// 它的语义正是本函数需要的：**键缺失才写**。这条例行是硬要求——每次重启都无条件写
+// 会把运维在界面上改过的值覆盖回环境变量值，症状是「我明明改成 6 小时了，重启又变回
+// 一天」这种最难排查的形态。
+//
+// 0 值也照常播种：本函数把 0 格式化成 "0"（非空串），seedSettingDefault 的「非空才写」
+// 判据因此不会误跳——而 0 在 10 项上是**合法且有意义**的初值（禁用作业 / 不限制），
+// 跳过它等于让「环境变量里特意关掉的作业」在重启后被默认值重新打开。
+func seedRuntimePolicySettings(settings *repository.SettingRepo, cfg *config.Config) error {
+	defaults := []repository.SettingValue{
+		// 作业间隔（秒）；0 = 禁用。
+		{Key: domain.SettingKeyBlobGCInterval, Value: strconv.Itoa(int(cfg.BlobGCInterval.Seconds()))},
+		{Key: domain.SettingKeyStorageCleanupInterval, Value: strconv.Itoa(int(cfg.StorageCleanupInterval.Seconds()))},
+		{Key: domain.SettingKeyBackupOrphanCleanupInterval, Value: strconv.Itoa(int(cfg.BackupOrphanCleanupInterval.Seconds()))},
+		{Key: domain.SettingKeyTrashGCInterval, Value: strconv.Itoa(int(cfg.TrashGCInterval.Seconds()))},
+		{Key: domain.SettingKeyUpstreamProbeInterval, Value: strconv.Itoa(int(cfg.UpstreamProbeInterval.Seconds()))},
+		// 保留策略：宽限期按小时、两个存储阈值分别按小时与天、回收站保留按天。
+		{Key: domain.SettingKeyBackupOrphanGraceHours, Value: strconv.Itoa(int(cfg.BackupOrphanGrace.Hours()))},
+		{Key: domain.SettingKeyStorageMetadataRetentionDays, Value: strconv.Itoa(int(cfg.StorageMetadataRetention.Hours() / 24))},
+		{Key: domain.SettingKeyStorageTempMaxAgeHours, Value: strconv.Itoa(int(cfg.StorageTempMaxAge.Hours()))},
+		{Key: domain.SettingKeyTrashRetentionDays, Value: strconv.Itoa(cfg.TrashRetentionDays)},
+		// 容量与阈值。
+		{Key: domain.SettingKeyTrashMaxBytes, Value: strconv.FormatInt(cfg.TrashMaxBytes, 10)},
+		{Key: domain.SettingKeyAutoBlockBaseSeconds, Value: strconv.Itoa(int(cfg.AutoBlockBaseSeconds.Seconds()))},
+		{Key: domain.SettingKeySearchTimeoutSeconds, Value: strconv.Itoa(int(cfg.SearchTimeout.Seconds()))},
+		{Key: domain.SettingKeyCapacityCacheTTLSeconds, Value: strconv.Itoa(int(cfg.CapacityCacheTTL.Seconds()))},
+	}
+	for _, value := range defaults {
+		if err := seedSettingDefault(settings, value.Key, value.Value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// effectivePolicyDuration 返回一项「0 有语义」的时长类策略的**当前生效值**。
+//
+// 关键口径：ok=true 且值为 0 表示运维显式禁用，必须返回 0（作业不注册 / 服务关掉缓存），
+// 不得回退 fallback；只有 ok=false（键缺失或值非法）才回退——那是「尚未播种」或
+// 「播种失败」的情况，此时环境变量解析结果就是唯一可信的初值。
+//
+// 这与既有 applyProxyTuningSettings 对负缓存 TTL 的处理逐字同构，理由也一样：
+// 若把 0 当成「未配置」，运维在界面上关掉的作业会在下次重启时自己回来。
+func effectivePolicyDuration(get func() (int, bool), fallback time.Duration) time.Duration {
+	if secs, ok := get(); ok {
+		return time.Duration(secs) * time.Second
+	}
+	return fallback
+}
+
+// effectivePositiveDuration 返回一项「0 无意义」的时长类策略的当前生效值。
+//
+// 与上面的差别只有一点：本类配置的 0 不是禁用，而是等价于「未配置」，故只在 > 0 时采用，
+// 否则回退启动配置（口径同 domain 侧 SetSearchTimeout / SetAutoBlockBase 的守卫）。
+func effectivePositiveDuration(get func() int, fallback time.Duration) time.Duration {
+	if secs := get(); secs > 0 {
+		return time.Duration(secs) * time.Second
+	}
+	return fallback
+}
+
+// effectivePositiveHours 是「0 无意义」的小时量纲版本（孤儿包回收宽限期）。
+func effectivePositiveHours(get func() int, fallback time.Duration) time.Duration {
+	if hours := get(); hours > 0 {
+		return time.Duration(hours) * time.Hour
+	}
+	return fallback
+}
+
+// effectiveStorageCleanupOptions 返回本轮生效的存储治理清理阈值（每轮现读）。
+func effectiveStorageCleanupOptions(settingSvc *domain.SettingService, cfg *config.Config) domain.StorageCleanupOptions {
+	opts := domain.StorageCleanupOptions{}
+	// 两个 0 都表示禁用对应子步骤，必须用 (值, ok) 区分「显式禁用」与「未配置」。
+	if days, ok := settingSvc.StorageMetadataRetentionDays(); ok {
+		opts.MetadataRetention = time.Duration(days) * 24 * time.Hour
+	} else {
+		opts.MetadataRetention = cfg.StorageMetadataRetention
+	}
+	if hours, ok := settingSvc.StorageTempMaxAgeHours(); ok {
+		opts.TempMaxAge = time.Duration(hours) * time.Hour
+	} else {
+		opts.TempMaxAge = cfg.StorageTempMaxAge
+	}
+	return opts
+}
+
+// effectiveTrashRetention 返回本轮生效的回收站保留期（0 = 不自动清理）。
+func effectiveTrashRetention(settingSvc *domain.SettingService, cfg *config.Config) time.Duration {
+	if days, ok := settingSvc.TrashRetentionDays(); ok {
+		return time.Duration(days) * 24 * time.Hour
+	}
+	return time.Duration(cfg.TrashRetentionDays) * 24 * time.Hour
+}
+
+// effectiveTrashMaxBytes 返回回收站容量上限的生效值（0 = 不限制）。
+func effectiveTrashMaxBytes(settingSvc *domain.SettingService, cfg *config.Config) int64 {
+	if n, ok := settingSvc.TrashMaxBytes(); ok {
+		return n
+	}
+	return cfg.TrashMaxBytes
+}
+
+// applyRuntimePolicySettings 把「请求路径按需读取」的三项阈值按 setting 表现值注入一次。
+//
+// 为什么启动时还要再注入一次：上方构造服务时用的是环境变量解析结果，而 setting 表里的值
+// 可能已被界面改过并跨重启保留——不补这一次，重启后运行时会退回环境变量值，
+// 症状是"我昨天改的值今天又变回去了"（与 applyProxyTuningSettings 同一理由）。
+//
+// 三项的口径各不相同，因此不能共用一个读取函数：
+//   - 搜索预算与断路器退避**无禁用语义**（0 会让搜索变成无界查询、退避变成不阻止），
+//     故只在 > 0 时注入；
+//   - 容量缓存 TTL 的 0 是合法的"禁用缓存"，必须用 (值, ok) 判定，否则关不掉。
+func applyRuntimePolicySettings(settingSvc *domain.SettingService, cfg *config.Config, repoSvc *domain.RepositoryService, assetSvc *domain.AssetService) {
+	if repoSvc != nil {
+		repoSvc.SetSearchTimeout(effectivePositiveDuration(settingSvc.SearchTimeoutSeconds, cfg.SearchTimeout))
+	}
+	if assetSvc != nil {
+		assetSvc.SetAutoBlockBase(effectivePositiveDuration(settingSvc.AutoBlockBaseSeconds, cfg.AutoBlockBaseSeconds))
+	}
+}
+
+// runtimePolicyJobNames 把「设置键」映射到**调度器里实际注册的作业名**。
+//
+// 这张表必须与各 registerXxxJob 里写死的名字逐字一致（blob-gc / storage-cleanup /
+// backup-orphan-cleanup / trash-gc / upstream-probe）。名字写错不会报错——
+// Scheduler.SetInterval 对未知作业名只返回 false（与 Register「静默跳过」同口径）——
+// 所以这里的错误只能靠本表 + 单测来保证，不能靠"看起来对"。
+var runtimePolicyJobNames = map[string]string{
+	domain.SettingKeyBlobGCInterval:              "blob-gc",
+	domain.SettingKeyStorageCleanupInterval:      "storage-cleanup",
+	domain.SettingKeyBackupOrphanCleanupInterval: "backup-orphan-cleanup",
+	domain.SettingKeyTrashGCInterval:             "trash-gc",
+	domain.SettingKeyUpstreamProbeInterval:       "upstream-probe",
+}
+
+// jobEnabled 报告某个「0 = 禁用」的作业在当前配置下是否应当真正执行。
+//
+// # 为什么需要这个每轮检查
+//
+// Scheduler.SetInterval 刻意拒绝 d <= 0（那会让 loop 进入 time.NewTimer(0) 的忙等），
+// 而「0 表示禁用」是本批作业间隔的核心语义。若只靠 SetInterval，界面上把间隔改成 0
+// 会**什么都不发生**——作业继续按旧间隔跑，运维却以为已经关了。这是最坏的一类缺陷：
+// 关不掉，界面还显示"已关闭"。
+//
+// 因此这里采用与本仓 backup-auto 作业相同的做法：作业保持注册，每轮开始时现读配置，
+// 0 就空转跳过。代价（操作文档需写清）：作业仍出现在「维护作业」清单里、仍可手动触发，
+// 「看到它」不代表「它开着」；重启之后间隔为 0 的作业才彻底不注册。
+func jobEnabled(get func() (int, bool)) bool {
+	secs, ok := get()
+	return !ok || secs > 0
+}
+
 // handlers 用给定版本与就绪检查构造 api.Handlers。
 func (s *appServices) handlers(version string, checks []func() error) *api.Handlers {
 	return api.NewHandlers(api.Deps{
@@ -654,7 +877,67 @@ func (s *appServices) handlers(version string, checks []func() error) *api.Handl
 				s.assetSvc.SetNegativeCacheTTL(d)
 			}
 		},
+		// 运行期策略里时长类的 8 项热生效链路：设置页保存 → PutSettings → 这里按 key 分发。
+		//
+		// 为什么把分发放在装配层而不是 api 层：key → 目标的映射是装配知识
+		// （作业在调度器里叫什么名字、哪个服务持有该阈值）。放在 api 层会让作业改名时
+		// 静默失配——SetInterval 对未知作业名只返回 false，不报错。
+		OnRuntimePolicyChange: func(key string, d time.Duration) {
+			s.applyRuntimePolicyChange(key, d)
+		},
+		// 回收站容量上限（字节，0 = 不限制）。量纲不是时长，故单独一条回调。
+		OnTrashCapacityChange: func(maxBytes int64) {
+			if s.cleanupSvc != nil {
+				s.cleanupSvc.SetTrashCapacity(maxBytes)
+			}
+		},
 	})
+}
+
+// applyRuntimePolicyChange 把一项时长类运行期策略推给持有它的运行时状态。
+//
+// 五个作业间隔走 Scheduler.SetInterval：从**下一轮**起生效，当轮不打断
+// （当轮可能正在写盘，强行中断会留下半成品）。
+//
+// 间隔被改成 0（禁用）时**不调用** SetInterval：它会拒绝 d <= 0（0 会让 loop 进入
+// time.NewTimer(0) 忙等）。真正的禁用由作业自己的每轮检查完成（见 jobEnabled）——
+// 下一轮起空转跳过。作业仍留在「维护作业」清单里，重启后才彻底不注册。
+//
+// 未注册的作业名会返回 false 且不报错（与 Register「静默跳过」同口径）。这里**必须
+// 打一条警告**：那个 false 的真实含义是「这个作业在启动时间隔就是 0，因此没有注册，
+// 你的新间隔不会生效，需要重启一次」——静默吞掉它，运维会以为改成功了。
+func (s *appServices) applyRuntimePolicyChange(key string, d time.Duration) {
+	if jobName, ok := runtimePolicyJobNames[key]; ok {
+		if s.scheduler == nil {
+			return
+		}
+		if d <= 0 {
+			log.Printf("提示：作业 %s 的间隔已设为 0（禁用），将从下一轮起跳过执行；"+
+				"作业仍保留在维护作业清单里，重启后不再注册。", jobName)
+			return
+		}
+		if !s.scheduler.SetInterval(jobName, d) {
+			log.Printf("警告：作业 %s 未注册，间隔 %s 未生效。"+
+				"该作业可能因**启动时**间隔为 0 而被禁用，需重启进程后才会按新值注册。",
+				jobName, d)
+		}
+		return
+	}
+	switch key {
+	case domain.SettingKeySearchTimeoutSeconds:
+		if s.repoSvc != nil {
+			s.repoSvc.SetSearchTimeout(d)
+		}
+	case domain.SettingKeyAutoBlockBaseSeconds:
+		if s.assetSvc != nil {
+			s.assetSvc.SetAutoBlockBase(d)
+		}
+	case domain.SettingKeyCapacityCacheTTLSeconds:
+		if s.operationsMetrics != nil {
+			// 0 = 禁用缓存，必须原样传入（setter 内部会顺带让既有缓存立即失效）。
+			s.operationsMetrics.SetCapacityCacheTTL(d)
+		}
+	}
 }
 
 // schedulerJobStatuses 把调度器作业状态适配为指标渲染快照；

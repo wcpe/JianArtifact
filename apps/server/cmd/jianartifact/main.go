@@ -360,6 +360,7 @@ func newApplicationHandler(cfg *config.Config, svc *appServices, assets fs.FS) h
 			r.PUT("/api/v1/settings/anonymous-access", authMW, apiHandlers.PutAnonymousAccessSetting)
 			// 设置读写端点（admin，基础配置四项：匿名开关/对外 URL/回源超时/同步间隔）
 			r.GET("/api/v1/settings", authMW, apiHandlers.GetSettings)
+			r.GET("/api/v1/settings/history", authMW, apiHandlers.GetSettingHistory)
 			r.PUT("/api/v1/settings", authMW, apiHandlers.PutSettings)
 			// 开源协议清单（admin 专属；清单不再打进前端 bundle，见 internal/licenses）
 			r.GET("/api/v1/licenses", authMW, apiHandlers.GetLicenses)

@@ -51,6 +51,8 @@ type Deps struct {
 	OnUpstreamTimeoutChange    func(time.Duration)                     // 回源超时设置变更回调（wiring 注入 upstream.Client.SetTimeout；nil 不触发）
 	OnGroupMemberTimeoutChange func(time.Duration)                     // group 成员确认预算变更回调（wiring 注入 AssetService.SetGroupMemberTimeout；nil 不触发）
 	OnNegativeCacheTTLChange   func(time.Duration)                     // 负缓存 TTL 变更回调（wiring 注入 AssetService.SetNegativeCacheTTL；nil 不触发）
+	OnRuntimePolicyChange      func(key string, d time.Duration)       // 时长类运行期策略变更回调（wiring 按 key 分发到调度器或对应服务；nil 不触发）
+	OnTrashCapacityChange      func(maxBytes int64)                    // 回收站容量上限变更回调（wiring 注入 CleanupService.SetTrashCapacity；nil 不触发）
 	Backups                    *domain.BackupService                   // 节点备份包生成与登记
 	BackupLinkKey              []byte                                  // 备份下载令牌签名密钥（由启动密钥派生）
 	BackupDrill                *domain.BackupDrillService              // 恢复演练与可查报告
@@ -132,31 +134,42 @@ type Handlers struct {
 	auditAttentionKey          []byte
 	auditSourceNode            string // 本节点审计标识
 	clusterTokenSet            bool
-	publicURL                  string                         // 对外基础 URL（CDN 域名）
-	enabledFormats             []string                       // 启动时启用的格式清单
-	publishPolicies            *domain.PublishPolicyService   // 发布账号策略管理
-	userGroups                 *domain.UserGroupService       // 用户组（授权主体之一）的 CRUD 与成员维护
-	onUpstreamTimeoutChange    func(time.Duration)            // 回源超时设置变更回调
-	onGroupMemberTimeoutChange func(time.Duration)            // group 成员确认预算变更回调
-	onNegativeCacheTTLChange   func(time.Duration)            // 负缓存 TTL 变更回调
-	backups                    *domain.BackupService          // 节点备份包
-	backupLinks                *domain.BackupLinkSigner       // 下载令牌签名
-	backupDrill                *domain.BackupDrillService     // 恢复演练与校验报告
-	freeze                     *domain.FreezeController       // 运行时写入冻结
-	backupImports              *domain.BackupImportService    // 导入记录与 URL 拉取
-	backupUploads              *domain.BackupUploadService    // 分片上传（Web 第三通道）
-	backupAdopt                *domain.BackupAdoptService     // 未管理备份包的扫描与导入
-	metrics                    *metrics.Exposition            // Prometheus 指标导出
-	oidc                       *OIDCDeps                      // OIDC 登录端点依赖（nil = 未启用）
-	ldapAuth                   LDAPAuthenticator              // LDAP 目录侧校验（nil = 未启用）
-	maintenanceJobs            MaintenanceJobController       // 维护作业清单与手动触发
-	restart                    RestartController              // 一键重启（nil = 未装配）
-	searchIndex                SearchIndexController          // 搜索索引回填状态与全量重建
-	storageHealth              StorageHealthController        // 存储体检（只读，nil = 未装配）
-	cleanup                    CleanupController              // 定向清理
-	cleanTasks                 CleanTaskController            // 清理任务队列
-	trash                      TrashController                // 回收站
-	upstreamHealth             *repository.UpstreamHealthRepo // 上游健康历史
+	publicURL                  string                       // 对外基础 URL（CDN 域名）
+	enabledFormats             []string                     // 启动时启用的格式清单
+	publishPolicies            *domain.PublishPolicyService // 发布账号策略管理
+	userGroups                 *domain.UserGroupService     // 用户组（授权主体之一）的 CRUD 与成员维护
+	onUpstreamTimeoutChange    func(time.Duration)          // 回源超时设置变更回调
+	onGroupMemberTimeoutChange func(time.Duration)          // group 成员确认预算变更回调
+	onNegativeCacheTTLChange   func(time.Duration)          // 负缓存 TTL 变更回调
+	// onRuntimePolicyChange 在「时长类」运行期策略保存后触发，key 是设置键。
+	//
+	// 为什么用 key 分发而不是给 8 个字段各配一个回调：key → 目标（调度器作业名、
+	// 具体服务）的映射是**装配知识**，只有 wiring 同时看得到调度器与各服务。
+	// 若在 api 层写死"blob_gc_interval 对应 blob-gc 作业"，等于把装配关系搬进 HTTP 层，
+	// 作业改名时会静默失配（SetInterval 对未知作业名只返回 false，不报错）。
+	onRuntimePolicyChange func(key string, d time.Duration)
+	// onTrashCapacityChange 在回收站容量上限变更后触发（0 = 不限制）。
+	// 单独一个回调而不是塞进上面那个：本项量纲是字节而非时长，混用会把
+	// "2147483648 纳秒"这种单位错配变成静默的行为错误。
+	onTrashCapacityChange func(maxBytes int64)
+	backups               *domain.BackupService          // 节点备份包
+	backupLinks           *domain.BackupLinkSigner       // 下载令牌签名
+	backupDrill           *domain.BackupDrillService     // 恢复演练与校验报告
+	freeze                *domain.FreezeController       // 运行时写入冻结
+	backupImports         *domain.BackupImportService    // 导入记录与 URL 拉取
+	backupUploads         *domain.BackupUploadService    // 分片上传（Web 第三通道）
+	backupAdopt           *domain.BackupAdoptService     // 未管理备份包的扫描与导入
+	metrics               *metrics.Exposition            // Prometheus 指标导出
+	oidc                  *OIDCDeps                      // OIDC 登录端点依赖（nil = 未启用）
+	ldapAuth              LDAPAuthenticator              // LDAP 目录侧校验（nil = 未启用）
+	maintenanceJobs       MaintenanceJobController       // 维护作业清单与手动触发
+	restart               RestartController              // 一键重启（nil = 未装配）
+	searchIndex           SearchIndexController          // 搜索索引回填状态与全量重建
+	storageHealth         StorageHealthController        // 存储体检（只读，nil = 未装配）
+	cleanup               CleanupController              // 定向清理
+	cleanTasks            CleanTaskController            // 清理任务队列
+	trash                 TrashController                // 回收站
+	upstreamHealth        *repository.UpstreamHealthRepo // 上游健康历史
 }
 
 // StorageHealthController 提供存储体检快照（只读，不做任何清理）。
@@ -195,6 +208,8 @@ func NewHandlers(d Deps) *Handlers {
 		onUpstreamTimeoutChange:    d.OnUpstreamTimeoutChange,
 		onGroupMemberTimeoutChange: d.OnGroupMemberTimeoutChange,
 		onNegativeCacheTTLChange:   d.OnNegativeCacheTTLChange,
+		onRuntimePolicyChange:      d.OnRuntimePolicyChange,
+		onTrashCapacityChange:      d.OnTrashCapacityChange,
 		backups:                    d.Backups,
 		backupLinks:                domain.NewBackupLinkSigner(d.BackupLinkKey),
 		backupDrill:                d.BackupDrill, // 恢复演练

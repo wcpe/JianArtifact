@@ -3,6 +3,8 @@ node_modules/
 dist/
 coverage/
 .turbo/
+# Git 工作树是本地并行开发的产物，里面的 Helm 模板同样无法解析，不应参与格式检查
+.worktrees/
 **/*.gen.ts
 apps/server/
 .gomodcache/
