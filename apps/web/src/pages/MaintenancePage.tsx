@@ -49,32 +49,24 @@ import { AsyncBoundary } from "../components/AsyncBoundary";
 import { OpsSection } from "../components/ops/OpsKit";
 import { formatDuration } from "../components/audit/labels";
 import { DestructiveConfirmModal } from "../components/maintenance/DestructiveConfirmModal";
-import { AssetTrashPanel, MavenVersionCleanupPanel } from "../components/maintenance/MavenVersionCleanupPanel";
+import { MavenVersionCleanupPanel } from "../components/maintenance/MavenVersionCleanupPanel";
 import { MavenPackageBatchPanel } from "../components/maintenance/MavenPackageBatchPanel";
+import { UnifiedTrashPanel } from "../components/maintenance/UnifiedTrashPanel";
 import {
   executeCleanup,
   getStorageHealth,
-  listAssetTrash,
   listCleanTasks,
   listMaintenanceJobs,
   listRepositories,
-  listTrash,
   previewCleanup,
-  purgeAllTrash,
-  purgeAssetTrash,
-  purgeTrash,
-  restoreAssetTrash,
-  restoreTrash,
   runMaintenanceJob,
 } from "../api/endpoints";
 import type {
-  AssetTrashEntry,
   CleanTask,
   CleanupKind,
   CleanupPreview,
   MaintenanceJob,
   StorageHealth,
-  TrashEntry,
 } from "../api/endpoints";
 import { useAsync } from "../hooks/useAsync";
 import { parseUtc } from "../lib/timeFormat";
@@ -319,319 +311,6 @@ function CleanTasksTab({ refreshKey }: { refreshKey: number }) {
   );
 }
 
-/** 资产回收站 Tab：Maven 版本软删除的落地处。 */
-//
-// 与 TrashTab 分开而不是合并成一个列表：两类条目字段与恢复机制都不同
-// （那些是磁盘路径 + rename，这些是 asset 快照 + 重建行）。
-// 但**保留期与清理作业是同一套**，所以它们出现在同一页面的相邻 Tab，
-// 用户不需要去两个地方理解"东西删了还在不在"。
-function AssetTrashTab({ refreshKey, onChanged }: { refreshKey: number; onChanged: () => void }) {
-  const { t } = useTranslation();
-  const [entries, setEntries] = useState<AssetTrashEntry[]>([]);
-  const [stats, setStats] = useState({ entries: 0, bytes: 0 });
-  const [loadFailed, setLoadFailed] = useState(false);
-  const [pendingPurge, setPendingPurge] = useState<number[] | null>(null);
-  const [purging, setPurging] = useState(false);
-
-  const load = useCallback(() => {
-    listAssetTrash(1, 100)
-      .then((res) => {
-        setEntries(res.items ?? []);
-        setStats({ entries: res.stats?.entries ?? 0, bytes: res.stats?.bytes ?? 0 });
-        setLoadFailed(false);
-      })
-      // 与页内其它 Tab 同一口径：失败保留上次数据，只提示不抹掉。
-      .catch(() => setLoadFailed(true));
-  }, []);
-
-  useEffect(load, [load, refreshKey]);
-
-  // 恢复只做一次点击（与 TrashTab 同口径：反向操作不需要三道关）。
-  const handleRestore = (ids: number[]) => {
-    restoreAssetTrash(ids)
-      .then((res) => {
-        const problems = [...(res.conflicts ?? []), ...(res.missing ?? [])];
-        if (problems.length > 0) {
-          notifications.show({
-            color: "yellow",
-            title: "部分条目未恢复",
-            message: problems.map((c) => `${c.path}：${c.reason}`).join("\n"),
-          });
-        }
-        if (res.restored > 0) {
-          notifications.show({ color: "green", message: `已恢复 ${res.restored} 个文件` });
-        }
-        load();
-        onChanged();
-      })
-      .catch(() => notifications.show({ color: "red", message: t("maintenance.actionFailed") }));
-  };
-
-  const runPurge = () => {
-    if (!pendingPurge || purging) return;
-    setPurging(true);
-    purgeAssetTrash(pendingPurge)
-      .then((res) => {
-        notifications.show({
-          color: "green",
-          message: `已彻底清理 ${res.purged} 个文件，释放 ${formatBytes(res.freedBytes)}`,
-        });
-        setPendingPurge(null);
-        load();
-        onChanged();
-      })
-      .catch(() => notifications.show({ color: "red", message: t("maintenance.actionFailed") }))
-      .finally(() => setPurging(false));
-  };
-
-  return (
-    <>
-      <AssetTrashPanel
-        entries={entries}
-        stats={stats}
-        loadFailed={loadFailed}
-        onRestore={handleRestore}
-        onPurge={(ids) => setPendingPurge(ids)}
-      />
-      <DestructiveConfirmModal
-        opened={pendingPurge !== null}
-        title="确认彻底清理"
-        message={
-          `将永久释放 ${pendingPurge?.length ?? 0} 个文件占用的磁盘空间，此操作**不可恢复**。\n\n` +
-          `若只是想腾出可见空间、仍可能用到这些文件，请改用「恢复」。`
-        }
-        requirePhrase
-        pending={purging}
-        onConfirm={runPurge}
-        onClose={() => setPendingPurge(null)}
-      />
-    </>
-  );
-}
-
-/** 回收站 Tab：表格独占剩余高度，恢复/彻底删除走行内按钮 + 模态框确认。 */
-function TrashTab({ refreshKey, onChanged }: { refreshKey: number; onChanged: () => void }) {
-  const { t } = useTranslation();
-  const [entries, setEntries] = useState<TrashEntry[]>([]);
-  const [stats, setStats] = useState({ entries: 0, bytes: 0 });
-  const [selected, setSelected] = useState<Set<number>>(new Set());
-  const [pendingPurge, setPendingPurge] = useState<{ ids: number[]; all: boolean } | null>(null);
-  const [loadFailed, setLoadFailed] = useState(false);
-  // 彻底删除请求在途：用于禁用确认按钮，避免连点发出多次不可逆请求。
-  const [purging, setPurging] = useState(false);
-
-  const load = useCallback(() => {
-    listTrash(1, 50)
-      .then((res) => {
-        setEntries(res.items ?? []);
-        setStats({ entries: res.stats?.entries ?? 0, bytes: res.stats?.bytes ?? 0 });
-        setSelected(new Set());
-        setLoadFailed(false);
-      })
-      // 与清理任务 Tab 同一口径：失败保留上次数据，只提示不抹掉。
-      // 列表被清空会连带让"清空回收站"按钮变成禁用——一次网络抖动看起来像回收站真的空了。
-      .catch(() => setLoadFailed(true));
-  }, []);
-
-  useEffect(load, [load, refreshKey]);
-
-  const toggle = (id: number) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  };
-
-  // 恢复只做一次点击：反向操作加三道关只会让人更不敢用。
-  const handleRestore = (ids: number[]) => {
-    restoreTrash(ids)
-      .then((res) => {
-        if (res.conflicts && res.conflicts.length > 0) {
-          notifications.show({
-            color: "yellow",
-            title: t("maintenance.restoreConflictsTitle"),
-            message: res.conflicts.map((c) => `${c.originalPath}：${c.reason}`).join("\n"),
-          });
-        }
-        if (res.restored > 0) {
-          notifications.show({
-            color: "green",
-            message: t("maintenance.restored", { count: res.restored }),
-          });
-        }
-        load();
-        onChanged();
-      })
-      .catch(() => notifications.show({ color: "red", message: t("maintenance.actionFailed") }));
-  };
-
-  const runPendingPurge = () => {
-    if (!pendingPurge || purging) return;
-    setPurging(true);
-    const action = pendingPurge.all ? purgeAllTrash() : purgeTrash(pendingPurge.ids);
-    action
-      .then(() => {
-        notifications.show({ color: "green", message: t("maintenance.purged") });
-        setPendingPurge(null);
-        load();
-        onChanged();
-      })
-      .catch(() => notifications.show({ color: "red", message: t("maintenance.actionFailed") }))
-      .finally(() => setPurging(false));
-  };
-
-  return (
-    <>
-      <OpsSection
-        title={t("maintenance.trashTitle")}
-        meta={t("maintenance.trashUsage", {
-          count: stats.entries,
-          bytes: formatBytes(stats.bytes),
-        })}
-        testId="trash-section"
-        style={{
-          flex: 1,
-          minHeight: 150,
-          display: "flex",
-          flexDirection: "column",
-          overflow: "hidden",
-        }}
-        bodyStyle={{ flex: 1, minHeight: 0, overflow: "auto" }}
-        bodyPadding={0}
-        actions={
-          <Group gap="xs">
-            <Button
-              size="xs"
-              variant="default"
-              disabled={selected.size === 0}
-              onClick={() => handleRestore([...selected])}
-            >
-              {t("maintenance.restoreSelected")}
-            </Button>
-            <Button
-              size="xs"
-              color="red"
-              variant="light"
-              disabled={selected.size === 0}
-              onClick={() => setPendingPurge({ ids: [...selected], all: false })}
-            >
-              {t("maintenance.purgeSelected")}
-            </Button>
-            <Button
-              size="xs"
-              color="red"
-              variant="subtle"
-              disabled={stats.entries === 0}
-              onClick={() => setPendingPurge({ ids: [], all: true })}
-            >
-              {t("maintenance.purgeAll")}
-            </Button>
-          </Group>
-        }
-      >
-        {loadFailed ? (
-          <Box px="md" pt="sm">
-            <Alert
-              color="yellow"
-              variant="light"
-              icon={<IconAlertTriangle size={16} />}
-              title={t("common.refreshFailedTitle")}
-            >
-              {t("maintenance.loadFailedHint")}
-            </Alert>
-          </Box>
-        ) : null}
-        {entries.length === 0 ? (
-          <Box p="xl">
-            <Stack gap={4}>
-              <Text size="sm" c="dimmed">
-                {t("maintenance.trashEmpty")}
-              </Text>
-              <Text size="xs" c="dimmed">
-                {t("maintenance.trashHint")}
-              </Text>
-            </Stack>
-          </Box>
-        ) : (
-          <Table striped verticalSpacing={6} stickyHeader miw={720}>
-            <Table.Thead>
-              <Table.Tr>
-                <Table.Th style={{ width: 36 }} />
-                <Table.Th>{t("maintenance.colKind")}</Table.Th>
-                <Table.Th>{t("maintenance.colPath")}</Table.Th>
-                <Table.Th>{t("maintenance.colSize")}</Table.Th>
-                <Table.Th>{t("maintenance.colCreated")}</Table.Th>
-                <Table.Th>{t("maintenance.colRetention")}</Table.Th>
-                <Table.Th>{t("maintenance.colActions")}</Table.Th>
-              </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
-              {entries.map((entry) => (
-                <Table.Tr key={entry.ID} data-trash-id={entry.ID}>
-                  <Table.Td>
-                    <Checkbox
-                      aria-label={entry.OriginalPath}
-                      checked={selected.has(entry.ID)}
-                      onChange={() => toggle(entry.ID)}
-                    />
-                  </Table.Td>
-                  <Table.Td>{entry.Kind}</Table.Td>
-                  <Table.Td>
-                    <Code style={{ wordBreak: "break-all" }}>{entry.OriginalPath}</Code>
-                  </Table.Td>
-                  <Table.Td>{formatBytes(entry.Bytes)}</Table.Td>
-                  <Table.Td>{formatStamp(entry.CreatedAt)}</Table.Td>
-                  <Table.Td>
-                    {/* 后端未返回保留期，前端不猜：保留天数只存在于服务端配置
-                        `JIAN_TRASH_RETENTION_DAYS`，而 GET /maintenance/trash 既不回保留天数、
-                        也不回过期时间；照默认值硬编码 7 天，在运维把它改成别的天数或改成 0
-                        （不自动清理）时就会直接说错话。接口补出该字段前一律显示「—」。 */}
-                    <Text size="sm" c="dimmed">
-                      —
-                    </Text>
-                  </Table.Td>
-                  <Table.Td>
-                    <Group gap={4}>
-                      <Button
-                        size="compact-xs"
-                        variant="default"
-                        onClick={() => handleRestore([entry.ID])}
-                      >
-                        {t("maintenance.restore")}
-                      </Button>
-                      <Button
-                        size="compact-xs"
-                        color="red"
-                        variant="subtle"
-                        onClick={() => setPendingPurge({ ids: [entry.ID], all: false })}
-                      >
-                        {t("maintenance.purge")}
-                      </Button>
-                    </Group>
-                  </Table.Td>
-                </Table.Tr>
-              ))}
-            </Table.Tbody>
-          </Table>
-        )}
-      </OpsSection>
-      <DestructiveConfirmModal
-        opened={pendingPurge !== null}
-        title={pendingPurge?.all ? t("maintenance.purgeAllTitle") : t("maintenance.purgeTitle")}
-        message={
-          pendingPurge?.all
-            ? t("maintenance.purgeAllMessage", { count: stats.entries })
-            : t("maintenance.purgeMessage", { count: pendingPurge?.ids.length ?? 0 })
-        }
-        onConfirm={runPendingPurge}
-        onClose={() => setPendingPurge(null)}
-        pending={purging}
-      />
-    </>
-  );
-}
 
 /** 维护作业 Tab：清单表独占剩余高度，执行走确认弹窗（物理删除，不可恢复）。 */
 function JobsTab() {
@@ -865,11 +544,15 @@ export function MaintenancePage() {
   const { t } = useTranslation();
   const [params, setParams] = useSearchParams();
   // Tab 走查询参数（与迁移与备份页 ?tab= 同约定），直链与刷新后保持位置。
+  //
+  // 兼容旧深链接：`?tab=asset-trash` 是合并前的独立 Tab，现已并入 `trash`。
+  // 直接落到 health 会让收藏过该链接的人以为功能没了，因此映射过去。
   const raw = params.get("tab");
+  const normalized = raw === "asset-trash" ? "trash" : raw;
   const tab =
-    raw === "tasks" || raw === "trash" || raw === "jobs" ||
-    raw === "maven-versions" || raw === "maven-packages" || raw === "asset-trash"
-      ? raw
+    normalized === "tasks" || normalized === "trash" || normalized === "jobs" ||
+    normalized === "maven-versions" || normalized === "maven-packages"
+      ? normalized
       : "health";
 
   // Maven 版本清理面板需要可选的 hosted 仓库清单。
@@ -955,7 +638,6 @@ export function MaintenancePage() {
           <Tabs.Tab value="trash">{t("maintenance.tabTrash")}</Tabs.Tab>
           <Tabs.Tab value="maven-packages">Maven 包清理</Tabs.Tab>
           <Tabs.Tab value="maven-versions">Maven 版本清理</Tabs.Tab>
-          <Tabs.Tab value="asset-trash">资产回收站</Tabs.Tab>
           <Tabs.Tab value="tasks">{t("maintenance.tabTasks")}</Tabs.Tab>
           <Tabs.Tab value="jobs">{t("maintenance.tabJobs")}</Tabs.Tab>
         </Tabs.List>
@@ -1014,7 +696,9 @@ export function MaintenancePage() {
           pt="md"
           style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
         >
-          <TrashTab refreshKey={refreshKey} onChanged={bump} />
+          {/* 一个入口、两个分区：制品（删除的版本）与存储清理（作业扫出的垃圾）。
+              早先它们是两个并列 Tab，用户删完东西不知道该去哪个找。 */}
+          <UnifiedTrashPanel refreshKey={refreshKey} onChanged={bump} />
         </Tabs.Panel>
 
         <Tabs.Panel
@@ -1031,14 +715,6 @@ export function MaintenancePage() {
           style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
         >
           <MavenVersionCleanupPanel repositories={mavenRepos} onTrashed={bump} />
-        </Tabs.Panel>
-
-        <Tabs.Panel
-          value="asset-trash"
-          pt="md"
-          style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
-        >
-          <AssetTrashTab refreshKey={refreshKey} onChanged={bump} />
         </Tabs.Panel>
 
         <Tabs.Panel

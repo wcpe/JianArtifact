@@ -97,11 +97,15 @@ describe("维护与清理页：固定布局与 Tab", () => {
     useMaintenanceHandlers();
     renderPage();
 
-    // 四个 Tab 都在。
+    // 外层 Tab 都在。回收站是唯一入口（内含「制品」与「存储清理」两个分区）。
     expect(await screen.findByRole("tab", { name: "存储体检" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "回收站" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Maven 包清理" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Maven 版本清理" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "清理任务" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "维护作业" })).toBeTruthy();
+    // 合并后不应再有第二个「资产回收站」入口。
+    expect(screen.queryByRole("tab", { name: "资产回收站" })).toBeNull();
 
     // 默认 Tab 是体检：显示事实条（空分片目录 21），且**不**同时渲染回收站表格。
     await waitFor(() => expect(screen.getByText("21")).toBeTruthy());
@@ -114,6 +118,8 @@ describe("维护与清理页：固定布局与 Tab", () => {
     renderPage();
 
     await user.click(await screen.findByRole("tab", { name: "回收站" }));
+    // 回收站内含两个分区；存储清理条目在第二个分区里。
+    await user.click(await screen.findByRole("tab", { name: /存储清理/ }));
     // keepMounted={false}：切过去才挂载，才发请求。
     await waitFor(() => expect(screen.getByText("/data/blobs/0a/ea")).toBeTruthy());
     // 占用显示为数字而不是 NaN。
@@ -172,7 +178,8 @@ describe("维护与清理页：固定布局与 Tab", () => {
 
     // 回收站：kind / 原始路径 / 大小 / 移入时间 / 剩余保留天数。
     await user.click(screen.getByRole("tab", { name: "回收站" }));
-    const trash = await screen.findByTestId("trash-section");
+    await user.click(screen.getByRole("tab", { name: /存储清理/ }));
+    const trash = await screen.findByTestId("storage-trash-section");
     for (const header of ["类别", "原路径", "大小", "时间", "剩余保留天数"]) {
       expect(within(trash).getByRole("columnheader", { name: header })).toBeTruthy();
     }
@@ -278,6 +285,7 @@ describe("维护与清理页：三层防护", () => {
     renderPage();
 
     await user.click(await screen.findByRole("tab", { name: "回收站" }));
+    await user.click(await screen.findByRole("tab", { name: /存储清理/ }));
     const restoreBtn = await screen.findByRole("button", { name: "恢复" });
     await user.click(restoreBtn);
 
@@ -385,6 +393,7 @@ describe("维护与清理页：刷新失败不清空列表", () => {
     renderPage();
 
     await user.click(await screen.findByRole("tab", { name: "回收站" }));
+    await user.click(await screen.findByRole("tab", { name: /存储清理/ }));
     expect(await screen.findByText("/data/blobs/0a/ea")).toBeTruthy();
 
     // 恢复成功后回拉，此时列表接口开始失败。
