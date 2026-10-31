@@ -1299,6 +1299,29 @@ export function putSettings(patch: Partial<SettingsConfig>): Promise<SettingsCon
   );
 }
 
+/** 一条设置变更历史（前后值均为库里存的原始字符串，展示时按量纲可读化）。 */
+export interface SettingHistoryEntry {
+  ts: string;
+  actor: string;
+  oldValue: string;
+  newValue: string;
+}
+
+/**
+ * 查询某个设置键的变更历史（仅 admin）。
+ *
+ * `key` 用的是 setting 表键名（如 `blob_gc_interval`），不是 API JSON 字段名：
+ * 审计按表键落库，用字段名查不到任何记录。
+ */
+export function getSettingHistory(
+  key: string,
+  limit = 20,
+): Promise<{ key: string; entries: SettingHistoryEntry[] }> {
+  return request<{ key: string; entries: SettingHistoryEntry[] }>(
+    `/settings/history?key=${encodeURIComponent(key)}&limit=${limit}`,
+  );
+}
+
 // —— 开源协议清单（admin 专属，非契约）——
 
 export interface LicenseEntry {

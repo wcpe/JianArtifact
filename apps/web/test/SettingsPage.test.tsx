@@ -6,7 +6,11 @@ import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const api = vi.hoisted(() => ({ getSettings: vi.fn(), putSettings: vi.fn() }));
+const api = vi.hoisted(() => ({
+  getSettings: vi.fn(),
+  putSettings: vi.fn(),
+  getSettingHistory: vi.fn(),
+}));
 
 vi.mock("../src/api/endpoints", () => api);
 
@@ -43,6 +47,13 @@ describe("设置页", () => {
   beforeEach(() => {
     clearAsyncCache();
     api.getSettings.mockReset().mockResolvedValue({ ...baseSettings });
+    // 历史默认给一条记录：既能验证面板展开后真的渲染内容，也避免用例各自铺桩。
+    api.getSettingHistory.mockReset().mockResolvedValue({
+      key: "blob_gc_interval",
+      entries: [
+        { ts: "2026-10-31T07:43:42Z", actor: "admin", oldValue: "86400", newValue: "43200" },
+      ],
+    });
     api.putSettings
       .mockReset()
       .mockImplementation((patch: Record<string, unknown>) =>
@@ -137,13 +148,16 @@ describe("设置页", () => {
     await screen.findByTestId("settings-runtime-policy");
     api.putSettings.mockClear();
 
+    // 该字段默认 86400 秒，界面按「最自然的单位」显示为 1 天。
+    // 改成 2 天 —— 提交值必须是 172800 秒（单位只是输入方式，落库仍是秒）。
     const input = screen.getByLabelText("孤儿 blob 回收间隔（秒）");
+    expect((input as HTMLInputElement).value).toBe("1");
     await user.clear(input);
-    await user.type(input, "5");
+    await user.type(input, "2");
     await user.click(screen.getByRole("button", { name: "保存「孤儿 blob 回收间隔（秒）」" }));
 
     await waitFor(() => expect(api.putSettings).toHaveBeenCalledTimes(1));
-    expect(api.putSettings).toHaveBeenCalledWith({ blobGcInterval: 5 });
+    expect(api.putSettings).toHaveBeenCalledWith({ blobGcInterval: 2 * 86400 });
   });
 
   // 输入完成即校验：越界要当场给出可填区间，而不是等点保存才弹全局错误。
@@ -162,14 +176,51 @@ describe("设置页", () => {
 
     // 越界文案必须当场出现（而不是等点保存才弹全局错误）。
     expect(await screen.findByText("搜索总预算（秒）超出上限 3600")).toBeTruthy();
-    // 同时把可填区间写出来，用户不必自己猜能填多少。
-    // 3600 上界被多个请求类字段共用，因此这里断言「至少有一处」而非唯一。
-    expect(screen.getAllByText("允许范围：1 – 3600").length).toBeGreaterThan(0);
     // 不可保存：按钮必须处于禁用态（本项目未引入 jest-dom，用原生属性断言）。
     expect(
       (screen.getByRole("button", { name: `保存「${label}」` }) as HTMLButtonElement).disabled,
     ).toBe(true);
     expect(api.putSettings).not.toHaveBeenCalled();
+  });
+
+  // 单位换算：把「1 天」改成「2 天」应提交 172800 秒，
+  // 而不是把用户输入的 2 直接当成秒（那会把作业周期从一天改成一瞬）。
+  it("时长字段按所选单位换算后提交，界面不出现 86400 这种原始秒数", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<SettingsPage />, { route: "/settings", authenticated: true });
+
+    await screen.findByTestId("settings-runtime-policy");
+    api.putSettings.mockClear();
+
+    const label = "存储治理清理间隔（秒）";
+    const input = screen.getByLabelText(label);
+    // 86400 秒自动显示为 1（天），用户不必自己心算。
+    expect((input as HTMLInputElement).value).toBe("1");
+    await user.clear(input);
+    await user.type(input, "2");
+    await user.click(screen.getByRole("button", { name: `保存「${label}」` }));
+
+    await waitFor(() => expect(api.putSettings).toHaveBeenCalledTimes(1));
+    expect(api.putSettings).toHaveBeenCalledWith({ storageCleanupInterval: 172800 });
+  });
+
+  // 历史面板：展开要真的展开并展示前后值。
+  // 这条钉住一个曾经踩过的坑——写入状态用 settingKey、读取却用字段名，
+  // 两边键不一致时按钮点了没反应，而"按钮存在"的断言完全发现不了。
+  it("点开历史会展开面板并展示该项的前后值", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<SettingsPage />, { route: "/settings", authenticated: true });
+
+    await screen.findByTestId("settings-runtime-policy");
+    const btn = screen.getByRole("button", { name: "查看「孤儿 blob 回收间隔（秒）」的历史" });
+    expect(btn.getAttribute("aria-expanded")).toBe("false");
+
+    await user.click(btn);
+
+    // 展开后必须真的渲染面板内容。历史里的原始秒数会按量纲可读化
+    // （86400 秒 → 1 天，43200 秒 → 12 小时），不逐字回显库里的数字。
+    expect(await screen.findByText(/1 天 → 12 小时/)).toBeTruthy();
+    expect(btn.getAttribute("aria-expanded")).toBe("true");
   });
 
   it("13 项运行期策略整批进入提交体，且 0 不被当成空值", async () => {

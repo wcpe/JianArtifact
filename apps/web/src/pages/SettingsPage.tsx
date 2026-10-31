@@ -15,8 +15,10 @@ import {
   Alert,
   Badge,
   Button,
+  Card,
   Group,
   NumberInput,
+  Select,
   SimpleGrid,
   Stack,
   Switch,
@@ -27,7 +29,13 @@ import {
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { getSettings, putSettings, type SettingsConfig } from "../api/endpoints";
+import {
+  getSettingHistory,
+  getSettings,
+  putSettings,
+  type SettingHistoryEntry,
+  type SettingsConfig,
+} from "../api/endpoints";
 import { AsyncBoundary } from "../components/AsyncBoundary";
 import {
   OpsHelpButton,
@@ -37,6 +45,16 @@ import {
   type OpsTone,
 } from "../components/ops/OpsKit";
 import { useAsync } from "../hooks/useAsync";
+import {
+  BYTE_UNITS,
+  DURATION_UNITS,
+  bytesToBytes,
+  durationToSeconds,
+  splitBytes,
+  splitSeconds,
+  type ByteUnit,
+  type DurationUnit,
+} from "../lib/units";
 import { formatBytes } from "../lib/format";
 import { notifyError, notifySuccess } from "../lib/feedback";
 import { PageShell } from "../app/PageShell";
@@ -83,6 +101,15 @@ type RuntimePolicyKey =
  */
 type RuntimePolicyTiming = "jobInterval" | "nextJobRun" | "nextCleanup" | "nextRequest";
 
+/**
+ * 数值量纲：决定界面用哪种单位控件输入。
+ *
+ * - seconds：以秒为提交单位，界面可切到分钟/小时/天（避免面对 86400 这种数字）
+ * - hours / days：单位固定，只显示后缀（这些项换单位没有意义，1.5 天不如 36 小时直观）
+ * - bytes：以字节为提交单位，界面可切到 MB/GB/TB
+ */
+type RuntimePolicyDimension = "seconds" | "hours" | "days" | "bytes";
+
 /** 单项运行期策略的声明式描述。 */
 interface RuntimePolicyField {
   key: RuntimePolicyKey;
@@ -93,6 +120,10 @@ interface RuntimePolicyField {
   min: number;
   max: number;
   timing: RuntimePolicyTiming;
+  /** 量纲：决定界面单位控件与后缀。 */
+  dimension: RuntimePolicyDimension;
+  /** 对应的 setting 表键名，用于查历史（与 API JSON 字段名不同）。 */
+  settingKey: string;
 }
 
 interface RuntimePolicyGroup {
@@ -114,16 +145,46 @@ const RUNTIME_POLICY_GROUPS: RuntimePolicyGroup[] = [
     id: "jobIntervals",
     titleKey: "settings.runtimePolicyGroupJobIntervals",
     fields: [
-      { key: "blobGcInterval", min: 0, max: MAX_JOB_INTERVAL_SECS, timing: "jobInterval" },
-      { key: "storageCleanupInterval", min: 0, max: MAX_JOB_INTERVAL_SECS, timing: "jobInterval" },
+      {
+        key: "blobGcInterval",
+        min: 0,
+        max: MAX_JOB_INTERVAL_SECS,
+        timing: "jobInterval",
+        dimension: "seconds",
+        settingKey: "blob_gc_interval",
+      },
+      {
+        key: "storageCleanupInterval",
+        min: 0,
+        max: MAX_JOB_INTERVAL_SECS,
+        timing: "jobInterval",
+        dimension: "seconds",
+        settingKey: "storage_cleanup_interval",
+      },
       {
         key: "backupOrphanCleanupInterval",
         min: 0,
         max: MAX_JOB_INTERVAL_SECS,
         timing: "jobInterval",
+        dimension: "seconds",
+        settingKey: "backup_orphan_cleanup_interval",
       },
-      { key: "trashGcInterval", min: 0, max: MAX_JOB_INTERVAL_SECS, timing: "jobInterval" },
-      { key: "upstreamProbeInterval", min: 0, max: MAX_JOB_INTERVAL_SECS, timing: "jobInterval" },
+      {
+        key: "trashGcInterval",
+        min: 0,
+        max: MAX_JOB_INTERVAL_SECS,
+        timing: "jobInterval",
+        dimension: "seconds",
+        settingKey: "trash_gc_interval",
+      },
+      {
+        key: "upstreamProbeInterval",
+        min: 0,
+        max: MAX_JOB_INTERVAL_SECS,
+        timing: "jobInterval",
+        dimension: "seconds",
+        settingKey: "upstream_probe_interval",
+      },
     ],
   },
   {
@@ -132,12 +193,40 @@ const RUNTIME_POLICY_GROUPS: RuntimePolicyGroup[] = [
     fields: [
       // 宽限期是唯一**不允许 0** 的一项：零宽限会让「刚拷进 backups/、还没在界面导入」
       // 的包在下一轮就被判为孤儿删掉，而这正是宽限期存在的唯一目的。
-      { key: "backupOrphanGraceHours", min: 1, max: MAX_CONFIG_HOURS, timing: "nextJobRun" },
-      { key: "storageMetadataRetentionDays", min: 0, max: MAX_CONFIG_DAYS, timing: "nextJobRun" },
-      { key: "storageTempMaxAgeHours", min: 0, max: MAX_CONFIG_HOURS, timing: "nextJobRun" },
+      {
+        key: "backupOrphanGraceHours",
+        min: 1,
+        max: MAX_CONFIG_HOURS,
+        timing: "nextJobRun",
+        dimension: "hours",
+        settingKey: "backup_orphan_grace_hours",
+      },
+      {
+        key: "storageMetadataRetentionDays",
+        min: 0,
+        max: MAX_CONFIG_DAYS,
+        timing: "nextJobRun",
+        dimension: "days",
+        settingKey: "storage_metadata_retention_days",
+      },
+      {
+        key: "storageTempMaxAgeHours",
+        min: 0,
+        max: MAX_CONFIG_HOURS,
+        timing: "nextJobRun",
+        dimension: "hours",
+        settingKey: "storage_temp_max_age_hours",
+      },
       // 与上面三项不同：回收站在下一次 cleanup / trash-gc 的前置判断时才读，
       // 故单独标 nextCleanup。同组的 4 项不同时机，正说明时机必须逐项标而不能按组标。
-      { key: "trashRetentionDays", min: 0, max: MAX_CONFIG_DAYS, timing: "nextCleanup" },
+      {
+        key: "trashRetentionDays",
+        min: 0,
+        max: MAX_CONFIG_DAYS,
+        timing: "nextCleanup",
+        dimension: "days",
+        settingKey: "trash_retention_days",
+      },
     ],
   },
   {
@@ -145,8 +234,22 @@ const RUNTIME_POLICY_GROUPS: RuntimePolicyGroup[] = [
     titleKey: "settings.runtimePolicyGroupThresholds",
     fields: [
       // 上限以字节提交：超上限时清理请求会被拒，换算上的取整误差会让上限和实际可用空间对不上。
-      { key: "trashMaxBytes", min: 0, max: MAX_TRASH_BYTES, timing: "nextCleanup" },
-      { key: "capacityCacheTtlSeconds", min: 0, max: MAX_SECS, timing: "nextRequest" },
+      {
+        key: "trashMaxBytes",
+        min: 0,
+        max: MAX_TRASH_BYTES,
+        timing: "nextCleanup",
+        dimension: "bytes",
+        settingKey: "trash_max_bytes",
+      },
+      {
+        key: "capacityCacheTtlSeconds",
+        min: 0,
+        max: MAX_SECS,
+        timing: "nextRequest",
+        dimension: "seconds",
+        settingKey: "capacity_cache_ttl_seconds",
+      },
     ],
   },
   {
@@ -155,8 +258,22 @@ const RUNTIME_POLICY_GROUPS: RuntimePolicyGroup[] = [
     fields: [
       // 断路器退避与搜索预算都**没有禁用语义**（0 窗口等于失败不阻止、0 预算等于放开无界查询），
       // 非正数由后端回落默认，因此下限是 1。
-      { key: "autoBlockBaseSeconds", min: 1, max: MAX_SECS, timing: "nextRequest" },
-      { key: "searchTimeoutSeconds", min: 1, max: MAX_SECS, timing: "nextRequest" },
+      {
+        key: "autoBlockBaseSeconds",
+        min: 1,
+        max: MAX_SECS,
+        timing: "nextRequest",
+        dimension: "seconds",
+        settingKey: "auto_block_base_seconds",
+      },
+      {
+        key: "searchTimeoutSeconds",
+        min: 1,
+        max: MAX_SECS,
+        timing: "nextRequest",
+        dimension: "seconds",
+        settingKey: "search_timeout_seconds",
+      },
     ],
   },
 ];
@@ -165,6 +282,136 @@ const RUNTIME_POLICY_GROUPS: RuntimePolicyGroup[] = [
 const RUNTIME_POLICY_FIELDS: RuntimePolicyField[] = RUNTIME_POLICY_GROUPS.flatMap(
   (group) => group.fields,
 );
+
+/** 输入框当前值 + 所选单位（仅 seconds / bytes 量纲会用到单位）。 */
+interface UnitDraft {
+  value: number;
+  unit: string;
+}
+
+/**
+ * 推断某字段初次渲染时应显示的单位与数值。
+ *
+ * 时长按「能整除的最大单位」拆（86400 秒 → 1 天）；小时/天量纲本就是原值；
+ * 字节按 MB/GB/TB 拆（2 GiB → 2 GB）。
+ */
+function inferUnitDraft(field: RuntimePolicyField, base: number): UnitDraft {
+  if (field.dimension === "bytes") {
+    const { value, unit } = splitBytes(base);
+    return { value, unit };
+  }
+  if (field.dimension === "seconds") {
+    const { value, unit } = splitSeconds(base);
+    return { value, unit };
+  }
+  return { value: base, unit: field.dimension };
+}
+
+/** 把「输入框里的数值 + 单位」换算回提交用的基础单位（秒 / 字节）。 */
+function unitToBase(field: RuntimePolicyField, value: number, unit: string): number {
+  if (field.dimension === "bytes") return bytesToBytes(value, unit as ByteUnit);
+  if (field.dimension === "seconds") return durationToSeconds(value, unit as DurationUnit);
+  return value;
+}
+
+/** 换算成另一单位下应显示的数值（换单位不改已生效的基础值）。 */
+function replotInUnit(field: RuntimePolicyField, base: number, unit: string): number {
+  if (field.dimension === "bytes") {
+    const found = BYTE_UNITS.find((it) => it.value === unit);
+    return found ? base / found.bytes : base;
+  }
+  if (field.dimension === "seconds") {
+    const found = DURATION_UNITS.find((it) => it.value === unit);
+    return found ? base / found.seconds : base;
+  }
+  return base;
+}
+
+/** 固定单位字段的后缀文案；可切换单位的项由下拉承载，不再重复显示后缀。 */
+function unitSuffix(field: RuntimePolicyField, draft: UnitDraft): string | undefined {
+  if (field.dimension === "hours") return "小时";
+  if (field.dimension === "days") return "天";
+  // 秒/字节量纲：单位已在右侧下拉里显示，输入框内不再叠一个后缀。
+  void draft;
+  return undefined;
+}
+
+/** 把秒数写成人类可读形式（用于「将提交 N 秒」这类说明）。 */
+function humanizeSeconds(total: number): string {
+  const { value, unit } = splitSeconds(total);
+  if (unit === "seconds") return `${value} 秒`;
+  if (unit === "minutes") return `${value} 分钟`;
+  if (unit === "hours") return `${value} 小时`;
+  return `${value} 天`;
+}
+
+/**
+ * 历史里的值按字段量纲做可读化：库里存的是秒/字节，直接摆出来运维还得自己换算。
+ * 空串表示「该项此前没有存储值」。
+ */
+function formatHistoryValue(field: RuntimePolicyField, raw: string): string {
+  if (raw === "") return "—";
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return raw;
+  if (field.dimension === "bytes") return formatBytes(n);
+  if (field.dimension === "seconds") return humanizeSeconds(n);
+  if (field.dimension === "hours") return `${n} 小时`;
+  if (field.dimension === "days") return `${n} 天`;
+  return raw;
+}
+
+/**
+ * 单项的历史变更列表。
+ *
+ * 空态明确写「暂无记录」而不是留白：留白会让人以为功能坏了，
+ * 而实际上「从没改过」是完全正常的状态。
+ */
+function SettingHistoryList({
+  entries,
+  loading,
+  error,
+  formatValue,
+}: {
+  entries: SettingHistoryEntry[] | undefined;
+  loading: boolean;
+  error?: string;
+  formatValue: (raw: string) => string;
+}) {
+  const { t } = useTranslation();
+  return (
+    <Card withBorder radius="sm" p="xs" bg="var(--mantine-color-default-hover)">
+      {loading ? (
+        <Text size="xs" c="dimmed">
+          {t("settings.runtimePolicyHistoryLoading")}
+        </Text>
+      ) : error ? (
+        <Text size="xs" c="red">
+          {t("settings.runtimePolicyHistoryError")}
+        </Text>
+      ) : !entries || entries.length === 0 ? (
+        <Text size="xs" c="dimmed">
+          {t("settings.runtimePolicyHistoryEmpty")}
+        </Text>
+      ) : (
+        <Stack gap={2}>
+          {entries.map((entry, idx) => (
+            <Group key={`${entry.ts}-${idx}`} gap="xs" wrap="nowrap" align="baseline">
+              <Text size="xs" c="dimmed" style={{ whiteSpace: "nowrap" }}>
+                {entry.ts}
+              </Text>
+              <Text size="xs" c="dimmed" style={{ whiteSpace: "nowrap" }}>
+                {entry.actor || "—"}
+              </Text>
+              <Text size="xs">
+                {formatValue(entry.oldValue)} → {formatValue(entry.newValue)}
+              </Text>
+            </Group>
+          ))}
+        </Stack>
+      )}
+    </Card>
+  );
+}
 
 /**
  * 生效时机的展示口径：文案键 + 徽章色。
@@ -315,6 +562,36 @@ function ServiceSettingsForm({
   const [touchedFields, setTouchedFields] = useState<Partial<Record<RuntimePolicyKey, boolean>>>(
     {},
   );
+  // 每项当前所选单位（键是设置字段名）。缺失表示「按当前值自动推断」。
+  const [unitDrafts, setUnitDrafts] = useState<Partial<Record<RuntimePolicyKey, UnitDraft>>>({});
+  // 历史面板：按设置键缓存，展开才拉取（13 项一次性全拉没有意义）。
+  const [historyOpen, setHistoryOpen] = useState<Record<string, boolean>>({});
+  const [historyData, setHistoryData] = useState<Record<string, SettingHistoryEntry[] | undefined>>(
+    {},
+  );
+  const [historyLoading, setHistoryLoading] = useState<Record<string, boolean>>({});
+  const [historyError, setHistoryError] = useState<Record<string, string | undefined>>({});
+
+  /** 展开/收起某一项的历史；首次展开时拉取。 */
+  const toggleHistory = (settingKey: string) => {
+    const nextOpen = !historyOpen[settingKey];
+    setHistoryOpen((prev) => ({ ...prev, [settingKey]: nextOpen }));
+    if (!nextOpen || historyData[settingKey] !== undefined) return;
+    setHistoryLoading((prev) => ({ ...prev, [settingKey]: true }));
+    setHistoryError((prev) => ({ ...prev, [settingKey]: undefined }));
+    getSettingHistory(settingKey)
+      .then((res) => {
+        setHistoryData((prev) => ({ ...prev, [settingKey]: res.entries }));
+      })
+      .catch((err: unknown) => {
+        setHistoryError((prev) => ({
+          ...prev,
+          [settingKey]: err instanceof Error ? err.message : String(err),
+        }));
+      })
+      .finally(() => setHistoryLoading((prev) => ({ ...prev, [settingKey]: false })));
+  };
+
   const dirty = formSignature(form) !== savedSignature;
   // 概览带口径：展示「已保存 / 生效」值（来自 normalizeForm(initial)），不随未保存的
   // 表单改动跳动——改配置时能一眼对照当前线上口径。
@@ -740,6 +1017,11 @@ function ServiceSettingsForm({
                   const fieldSaving = savingField === field.key;
                   // 校验文案只在用户完成输入后（失焦/回车）才显示，不在打字途中弹。
                   const showError = touchedFields[field.key] && fieldError !== null;
+                  // 单位草稿：用户选了什么单位就记住，切换字段时不被重新推断覆盖。
+                  const draft = unitDrafts[field.key] ?? inferUnitDraft(field, form[field.key]);
+                  const isDuration = field.dimension === "seconds";
+                  const isBytes = field.dimension === "bytes";
+                  const unitOptions = isBytes ? BYTE_UNITS : DURATION_UNITS;
                   return (
                     <Stack gap={4} key={field.key}>
                       <Group justify="space-between" gap="xs" wrap="nowrap" align="center">
@@ -757,20 +1039,29 @@ function ServiceSettingsForm({
                           style={{ flex: 1 }}
                           aria-label={label}
                           description={t(keys.help)}
-                          min={field.min}
-                          max={field.max}
                           allowDecimal={false}
                           // clampBehavior="none"：默认行为会在键入时就把值夹到区间内，
                           // 于是「填了 99999」会静默变成 3600 且永不报越界——用户以为
                           // 自己填的值被接受，实际被悄悄改写。关掉内部夹取，交给下面的
                           // 校验显式报错，也才谈得上「输入完成即验证是否可行」。
                           clampBehavior="none"
-                          value={form[field.key]}
+                          // 这里显示的是「所选单位下的数值」，提交前统一换算回基础单位。
+                          value={draft.value}
+                          // 固定单位（小时/天）只显示后缀，不给切换控件。
+                          suffix={unitSuffix(field, draft)}
                           disabled={fieldSaving}
                           error={showError ? fieldError : undefined}
-                          onChange={(value) =>
-                            setForm({ ...form, [field.key]: Number(value) || 0 })
-                          }
+                          onChange={(value) => {
+                            const raw = Number(value) || 0;
+                            setUnitDrafts((prev) => ({
+                              ...prev,
+                              [field.key]: { value: raw, unit: draft.unit },
+                            }));
+                            setForm({
+                              ...form,
+                              [field.key]: unitToBase(field, raw, draft.unit),
+                            });
+                          }}
                           onBlur={() =>
                             setTouchedFields((prev) => ({ ...prev, [field.key]: true }))
                           }
@@ -784,6 +1075,35 @@ function ServiceSettingsForm({
                             }
                           }}
                         />
+                        {/* 可换单位的项给一个紧凑下拉：86400 秒 vs 1 天，
+                            后者才是运维脑子里的那个数。 */}
+                        {isDuration || isBytes ? (
+                          <Select
+                            aria-label={t("settings.runtimePolicyUnit", { label })}
+                            data={unitOptions.map((u) => ({
+                              value: u.value,
+                              label: t(u.labelKey),
+                            }))}
+                            value={draft.unit}
+                            allowDeselect={false}
+                            comboboxProps={{ withinPortal: true }}
+                            w={92}
+                            size="sm"
+                            disabled={fieldSaving}
+                            onChange={(next) => {
+                              if (!next) return;
+                              // 换单位只改「怎么显示」，不动已生效的秒/字节值：
+                              // 先把当前数值按旧单位折回基础值，再按新单位拆出来显示。
+                              const base = unitToBase(field, draft.value, draft.unit);
+                              const replot = replotInUnit(field, base, next);
+                              setUnitDrafts((prev) => ({
+                                ...prev,
+                                [field.key]: { value: replot, unit: next as never },
+                              }));
+                              setForm({ ...form, [field.key]: base });
+                            }}
+                          />
+                        ) : null}
                         <Button
                           size="compact-sm"
                           variant={fieldDirty ? "light" : "subtle"}
@@ -794,24 +1114,41 @@ function ServiceSettingsForm({
                         >
                           {t("settings.runtimePolicySaveOneShort")}
                         </Button>
+                        <Button
+                          size="compact-sm"
+                          variant="subtle"
+                          aria-label={t("settings.runtimePolicyHistoryFor", { label })}
+                          aria-expanded={historyOpen[field.settingKey] === true}
+                          onClick={() => toggleHistory(field.settingKey)}
+                        >
+                          {t("settings.runtimePolicyHistory")}
+                        </Button>
                       </Group>
-                      {field.key === "trashMaxBytes" ? (
-                        // 字节数直接输入没人算得清，旁边给出可读换算；
-                        // 但提交值仍是字节——换算只用于显示，取整误差会让上限与实际可用空间对不上。
-                        <Text size="xs" c="dimmed">
-                          {t("settings.runtimePolicyBytesPreview", {
-                            human: formatBytes(form.trashMaxBytes),
-                          })}
-                        </Text>
-                      ) : null}
-                      {/* 合法区间如实写出：越界时用户需要知道「能填多少」，
-                          只报「超限」等于让他自己猜。 */}
+                      {/* 提交值的可读口径：让用户确认「1 天」确实会以 86400 秒落库。 */}
                       <Text size="xs" c="dimmed">
-                        {t("settings.runtimePolicyRangeHint", {
-                          min: field.min,
-                          max: field.max,
-                        })}
+                        {isBytes
+                          ? t("settings.runtimePolicyCommittedBytes", {
+                              bytes: String(form[field.key]),
+                              human: formatBytes(form[field.key]),
+                            })
+                          : isDuration
+                            ? t("settings.runtimePolicyCommittedSeconds", {
+                                seconds: String(form[field.key]),
+                                human: humanizeSeconds(form[field.key]),
+                              })
+                            : t("settings.runtimePolicyRangeHint", {
+                                min: field.min,
+                                max: field.max,
+                              })}
                       </Text>
+                      {historyOpen[field.settingKey] ? (
+                        <SettingHistoryList
+                          entries={historyData[field.settingKey]}
+                          loading={historyLoading[field.settingKey] === true}
+                          error={historyError[field.settingKey]}
+                          formatValue={(raw) => formatHistoryValue(field, raw)}
+                        />
+                      ) : null}
                     </Stack>
                   );
                 })}
