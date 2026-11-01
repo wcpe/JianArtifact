@@ -63,6 +63,11 @@ var sensitiveKeys = map[string]bool{
 	"authorization": true,
 	"credential":    true,
 	"private_key":   true,
+	// 设置接口的回源 Token 值：JSON 键是 originTokenValue（小写后 origintokenvalue）。
+	// 少了这一条，PUT /api/v1/settings 的请求体预览会把 Token 明文写进 audit_log.body_preview，
+	// 而审计日志是给多人查看的——等于给 Token 换了个地方长期留存。
+	"origintokenvalue":   true,
+	"origin_token_value": true,
 }
 
 // TimingMiddleware 记录请求开始时间；必须在业务处理前注册。

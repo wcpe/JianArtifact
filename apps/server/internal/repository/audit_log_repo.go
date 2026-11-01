@@ -60,21 +60,19 @@ const settingHistorySep = "\x1f"
 
 // EncodeSettingHistoryDetail 把「旧值 → 新值」编码成可回读的审计 detail。
 //
-// 值 ≤0 视为「该项此前没有存储值」，用空串表示，界面上显示为「未设置」。
+// 空串表示「该键此前从未落库」（首次设置），界面上按「未设置」展示。
 func EncodeSettingHistoryDetail(oldVal, newVal string) string {
 	return oldVal + settingHistorySep + newVal
 }
 
 // decodeSettingHistoryDetail 从审计 detail 还原前后值。
 //
-// 解析不出分隔符时返回两个空串：历史记录宁可显示「未知」，
-// 也不要把一条格式不符的 detail 当作真实取值展示给运维。
-func decodeSettingHistoryDetail(detail string) (string, string) {
-	oldVal, newVal, ok := strings.Cut(detail, settingHistorySep)
-	if !ok {
-		return "", ""
-	}
-	return oldVal, newVal
+// ok=false 表示这条 detail 不是本格式（例如 0.14 之前遗留的
+// 「基础设置更新」摘要行、或置顶仓库那条「全局置顶更新：n=N」）。
+// 调用方据此丢弃该行：它无法回答「从什么改成什么」，
+// 把它当 (空 → 空) 展示会凭空造出一条「— → —」的假变更。
+func decodeSettingHistoryDetail(detail string) (oldVal, newVal string, ok bool) {
+	return strings.Cut(detail, settingHistorySep)
 }
 
 // SettingHistoryEntry 是一条设置变更历史（供设置页逐项展示）。
@@ -113,7 +111,11 @@ func (r *AuditLogRepo) ListSettingHistory(key string, limit int) ([]SettingHisto
 	}
 	out := make([]SettingHistoryEntry, 0, len(rows))
 	for _, row := range rows {
-		oldVal, newVal := decodeSettingHistoryDetail(row.Detail)
+		oldVal, newVal, ok := decodeSettingHistoryDetail(row.Detail)
+		if !ok {
+			// 不是本格式的旧行（摘要类）直接跳过，不产出语义不明的条目。
+			continue
+		}
 		out = append(out, SettingHistoryEntry{
 			TS: row.TS, Actor: row.Actor, OldVal: oldVal, NewVal: newVal,
 		})

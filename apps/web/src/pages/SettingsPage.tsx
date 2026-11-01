@@ -55,7 +55,7 @@ import {
   type ByteUnit,
   type DurationUnit,
 } from "../lib/units";
-import { formatBytes } from "../lib/format";
+import { formatBytes, formatStamp } from "../lib/format";
 import { notifyError, notifySuccess } from "../lib/feedback";
 import { PageShell } from "../app/PageShell";
 
@@ -285,7 +285,14 @@ const RUNTIME_POLICY_FIELDS: RuntimePolicyField[] = RUNTIME_POLICY_GROUPS.flatMa
 
 /** 输入框当前值 + 所选单位（仅 seconds / bytes 量纲会用到单位）。 */
 interface UnitDraft {
-  value: number;
+  /**
+   * 输入框里的数值。null 表示「当前是空输入」。
+   *
+   * 必须区分 null 与 0：对 10 项运行期策略来说 0 是**合法且有语义**的取值
+   * （禁用作业 / 不限制 / 关闭缓存）。若把空输入折成 0，
+   * 「清空准备重输」这一中间态就会被存成「显式关闭」，两者意图完全不同。
+   */
+  value: number | null;
   unit: string;
 }
 
@@ -327,36 +334,58 @@ function replotInUnit(field: RuntimePolicyField, base: number, unit: string): nu
   return base;
 }
 
+/**
+ * 单位文案的 i18n 键。三个展示函数共用，避免各处再写一遍中文
+ * （英文界面里出现「小时」「天」正是这么来的）。
+ */
+const UNIT_LABEL_KEYS: Record<string, string> = {
+  seconds: "settings.unitSeconds",
+  minutes: "settings.unitMinutes",
+  hours: "settings.unitHours",
+  days: "settings.unitDays",
+};
+
+/** 把单位标识翻成当前语言的单位名。 */
+function unitLabel(t: (key: string) => string, unit: string): string {
+  const key = UNIT_LABEL_KEYS[unit];
+  return key ? t(key) : unit;
+}
+
 /** 固定单位字段的后缀文案；可切换单位的项由下拉承载，不再重复显示后缀。 */
-function unitSuffix(field: RuntimePolicyField, draft: UnitDraft): string | undefined {
-  if (field.dimension === "hours") return "小时";
-  if (field.dimension === "days") return "天";
+function unitSuffix(
+  t: (key: string) => string,
+  field: RuntimePolicyField,
+  draft: UnitDraft,
+): string | undefined {
+  if (field.dimension === "hours") return unitLabel(t, "hours");
+  if (field.dimension === "days") return unitLabel(t, "days");
   // 秒/字节量纲：单位已在右侧下拉里显示，输入框内不再叠一个后缀。
   void draft;
   return undefined;
 }
 
 /** 把秒数写成人类可读形式（用于「将提交 N 秒」这类说明）。 */
-function humanizeSeconds(total: number): string {
+function humanizeSeconds(t: (key: string) => string, total: number): string {
   const { value, unit } = splitSeconds(total);
-  if (unit === "seconds") return `${value} 秒`;
-  if (unit === "minutes") return `${value} 分钟`;
-  if (unit === "hours") return `${value} 小时`;
-  return `${value} 天`;
+  return `${value} ${unitLabel(t, unit)}`;
 }
 
 /**
  * 历史里的值按字段量纲做可读化：库里存的是秒/字节，直接摆出来运维还得自己换算。
- * 空串表示「该项此前没有存储值」。
+ * 空串表示「该键此前从未落库」（首次设置）。
  */
-function formatHistoryValue(field: RuntimePolicyField, raw: string): string {
-  if (raw === "") return "—";
+function formatHistoryValue(
+  t: (key: string) => string,
+  field: RuntimePolicyField,
+  raw: string,
+): string {
+  if (raw === "") return t("settings.runtimePolicyHistoryUnset");
   const n = Number(raw);
   if (!Number.isFinite(n)) return raw;
   if (field.dimension === "bytes") return formatBytes(n);
-  if (field.dimension === "seconds") return humanizeSeconds(n);
-  if (field.dimension === "hours") return `${n} 小时`;
-  if (field.dimension === "days") return `${n} 天`;
+  if (field.dimension === "seconds") return humanizeSeconds(t, n);
+  if (field.dimension === "hours") return `${n} ${unitLabel(t, "hours")}`;
+  if (field.dimension === "days") return `${n} ${unitLabel(t, "days")}`;
   return raw;
 }
 
@@ -396,8 +425,10 @@ function SettingHistoryList({
         <Stack gap={2}>
           {entries.map((entry, idx) => (
             <Group key={`${entry.ts}-${idx}`} gap="xs" wrap="nowrap" align="baseline">
+              {/* 走项目既有 formatStamp：后端时间可能是 SQLite naive UTC 或 RFC3339，
+                  直接回显原始串在英文界面里会看到一串机器格式。 */}
               <Text size="xs" c="dimmed" style={{ whiteSpace: "nowrap" }}>
-                {entry.ts}
+                {formatStamp(entry.ts)}
               </Text>
               <Text size="xs" c="dimmed" style={{ whiteSpace: "nowrap" }}>
                 {entry.actor || "—"}
@@ -553,7 +584,12 @@ function ServiceSettingsForm({
 }) {
   const { t } = useTranslation();
   const [form, setForm] = useState<SettingsConfig>(() => normalizeForm(initial));
-  const [savedSignature, setSavedSignature] = useState(() => formSignature(normalizeForm(initial)));
+  // 已保存值按**字段**记录，而不是维护一个整体签名。
+  //
+  // 为什么不能用一个全局签名：逐项保存时只有该字段落库，其余字段可能还带着未保存的改动。
+  // 若拿「当前整表」重算签名写回，那些未提交的改动会被一并算进「已保存」，
+  // 顶部随即显示「已保存」——用户据此离开页面，改动就静默丢了。
+  const [savedValues, setSavedValues] = useState<SettingsConfig>(() => normalizeForm(initial));
   const [saving, setSaving] = useState(false);
   // 逐项保存中的字段：只禁用该行，其余字段仍可继续编辑。
   const [savingField, setSavingField] = useState<RuntimePolicyKey | null>(null);
@@ -592,7 +628,7 @@ function ServiceSettingsForm({
       .finally(() => setHistoryLoading((prev) => ({ ...prev, [settingKey]: false })));
   };
 
-  const dirty = formSignature(form) !== savedSignature;
+  const dirty = formSignature(form) !== formSignature(savedValues);
   // 概览带口径：展示「已保存 / 生效」值（来自 normalizeForm(initial)），不随未保存的
   // 表单改动跳动——改配置时能一眼对照当前线上口径。
   const effective = normalizeForm(initial);
@@ -636,12 +672,25 @@ function ServiceSettingsForm({
     putSettings({ [field.key]: after } as Partial<SettingsConfig>)
       .then((res) => {
         const next = normalizeForm(res);
-        const nextForm = { ...form, [field.key]: next[field.key] };
-        setForm(nextForm);
-        setSavedSignature(formSignature(nextForm));
+        const applied = next[field.key];
+        // 函数式更新：只覆盖这一项，避免把在途期间用户对其它行的编辑回滚成旧值。
+        setForm((prev) => ({ ...prev, [field.key]: applied }));
+        setSavedValues((prev) => ({ ...prev, [field.key]: applied }));
+        // 单位草稿必须跟着回填值走（R4）：否则后端夹取后输入框仍显示旧数字，
+        // 与「将提交 …」那行互相矛盾，且 fieldDirty 变 false 导致无法再修正。
+        setUnitDrafts((prev) => ({
+          ...prev,
+          [field.key]: inferUnitDraft(field, applied),
+        }));
+        // 保存成功后清掉该项的历史缓存：否则展开历史看不到刚写下的这条，
+        // 会被误判成「保存没进审计」。
+        setHistoryData((prev) => {
+          const cleared = { ...prev };
+          delete cleared[field.settingKey];
+          return cleared;
+        });
         // 后端可能夹取（例如超过上界），回填后与提交值不同就必须如实告知，
         // 否则用户以为「我填的 99999 被采纳了」。
-        const applied = next[field.key];
         if (applied !== after) {
           notifySuccess(
             t("settings.runtimePolicyClamped", {
@@ -723,7 +772,7 @@ function ServiceSettingsForm({
       .then((res) => {
         const next = normalizeForm(res);
         setForm(next);
-        setSavedSignature(formSignature(next));
+        setSavedValues(next);
         notifySuccess(t("common.saved"));
         onSaved();
       })
@@ -1011,14 +1060,19 @@ function ServiceSettingsForm({
                   const keys = runtimePolicyTextKeys(field.key);
                   const timing = RUNTIME_POLICY_TIMING[field.timing];
                   const label = t(keys.label);
-                  const fieldError = validateRuntimeField(field, form[field.key]);
+                  // 单位草稿：用户选了什么单位就记住，切换字段时不被重新推断覆盖。
+                  const draft = unitDrafts[field.key] ?? inferUnitDraft(field, form[field.key]);
+                  // 空输入是独立状态，必须单独拦：此时 form 里仍是上一次的值，
+                  // 若只按 form 校验会判定「合法可保存」，而用户看到的输入框是空的。
+                  const isEmptyInput = draft.value === null;
+                  const fieldError = isEmptyInput
+                    ? t("settings.runtimePolicyRequired", { label })
+                    : validateRuntimeField(field, form[field.key]);
                   // 只在「这一项被改过」时才允许单独保存，避免把未改动的项也提交一遍。
-                  const fieldDirty = form[field.key] !== effective[field.key];
+                  const fieldDirty = form[field.key] !== savedValues[field.key];
                   const fieldSaving = savingField === field.key;
                   // 校验文案只在用户完成输入后（失焦/回车）才显示，不在打字途中弹。
                   const showError = touchedFields[field.key] && fieldError !== null;
-                  // 单位草稿：用户选了什么单位就记住，切换字段时不被重新推断覆盖。
-                  const draft = unitDrafts[field.key] ?? inferUnitDraft(field, form[field.key]);
                   const isDuration = field.dimension === "seconds";
                   const isBytes = field.dimension === "bytes";
                   const unitOptions = isBytes ? BYTE_UNITS : DURATION_UNITS;
@@ -1046,21 +1100,26 @@ function ServiceSettingsForm({
                           // 校验显式报错，也才谈得上「输入完成即验证是否可行」。
                           clampBehavior="none"
                           // 这里显示的是「所选单位下的数值」，提交前统一换算回基础单位。
-                          value={draft.value}
+                          value={draft.value === null ? "" : draft.value}
                           // 固定单位（小时/天）只显示后缀，不给切换控件。
-                          suffix={unitSuffix(field, draft)}
+                          suffix={unitSuffix(t, field, draft)}
                           disabled={fieldSaving}
                           error={showError ? fieldError : undefined}
                           onChange={(value) => {
-                            const raw = Number(value) || 0;
+                            // 空串是 Mantine 在清空时的取值。保持 null 而不是折成 0：
+                            // 0 在这些项上等于「禁用作业 / 不限制」，与「还没填」语义相反。
+                            const isEmpty = value === "" || value === undefined || value === null;
+                            const raw = isEmpty ? null : Number(value);
                             setUnitDrafts((prev) => ({
                               ...prev,
                               [field.key]: { value: raw, unit: draft.unit },
                             }));
-                            setForm({
-                              ...form,
+                            // 空态时表单值保持不变（不落 0），保存按钮由校验拦住。
+                            if (raw === null || !Number.isFinite(raw)) return;
+                            setForm((prev) => ({
+                              ...prev,
                               [field.key]: unitToBase(field, raw, draft.unit),
-                            });
+                            }));
                           }}
                           onBlur={() =>
                             setTouchedFields((prev) => ({ ...prev, [field.key]: true }))
@@ -1094,6 +1153,14 @@ function ServiceSettingsForm({
                               if (!next) return;
                               // 换单位只改「怎么显示」，不动已生效的秒/字节值：
                               // 先把当前数值按旧单位折回基础值，再按新单位拆出来显示。
+                              // 空态时不做折算（保持空输入，仅换掉单位标注）。
+                              if (draft.value === null) {
+                                setUnitDrafts((prev) => ({
+                                  ...prev,
+                                  [field.key]: { value: null, unit: next as never },
+                                }));
+                                return;
+                              }
                               const base = unitToBase(field, draft.value, draft.unit);
                               const replot = replotInUnit(field, base, next);
                               setUnitDrafts((prev) => ({
@@ -1134,7 +1201,7 @@ function ServiceSettingsForm({
                           : isDuration
                             ? t("settings.runtimePolicyCommittedSeconds", {
                                 seconds: String(form[field.key]),
-                                human: humanizeSeconds(form[field.key]),
+                                human: humanizeSeconds(t, form[field.key]),
                               })
                             : t("settings.runtimePolicyRangeHint", {
                                 min: field.min,
@@ -1146,7 +1213,7 @@ function ServiceSettingsForm({
                           entries={historyData[field.settingKey]}
                           loading={historyLoading[field.settingKey] === true}
                           error={historyError[field.settingKey]}
-                          formatValue={(raw) => formatHistoryValue(field, raw)}
+                          formatValue={(raw) => formatHistoryValue(t, field, raw)}
                         />
                       ) : null}
                     </Stack>

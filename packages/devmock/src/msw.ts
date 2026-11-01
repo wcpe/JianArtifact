@@ -21,7 +21,9 @@ import {
 import {
   MOCK_SECOND_ADMIN_TOKEN,
   MOCK_TOKEN,
+  mockSettingHistory,
   nextSnapshotTick,
+  num,
   snapshotJitter,
   store,
 } from "./store";
@@ -1685,6 +1687,26 @@ export const handlers = [
     });
   }),
 
+  // 设置变更历史（非契约端点，见 GET /api/v1/settings/history）。
+  // 注册在 PUT /settings 之前：MSW 按注册顺序匹配，放在前面可避免
+  // 后续加入通配 handler 时把 `/settings/history` 误捕获成设置读写。
+  http.get("*/api/v1/settings/history", ({ request }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const url = new URL(request.url);
+    const key = url.searchParams.get("key") ?? "";
+    const limit = Number(url.searchParams.get("limit") ?? "20") || 20;
+    if (!key) {
+      return HttpResponse.json({ error: "缺少 key 参数" }, { status: 400 });
+    }
+    return HttpResponse.json({
+      key,
+      entries: (mockSettingHistory[key] ?? []).slice(0, Math.min(limit, 100)),
+    });
+  }),
+
   http.put("*/api/v1/settings", async ({ request }) => {
     const denied = adminUnauthorized(request);
     if (denied) {
@@ -1703,6 +1725,20 @@ export const handlers = [
       backupRetentionDays?: number;
       // 间隔的人类表达（"5m"/"2h"/"1d"…），优先级高于秒字段。
       backupAutoIntervalExpr?: string;
+      // 运行期策略 13 项（逐项保存时每次只带一个键）。
+      blobGcInterval?: number;
+      storageCleanupInterval?: number;
+      backupOrphanCleanupInterval?: number;
+      trashGcInterval?: number;
+      upstreamProbeInterval?: number;
+      backupOrphanGraceHours?: number;
+      storageMetadataRetentionDays?: number;
+      storageTempMaxAgeHours?: number;
+      trashRetentionDays?: number;
+      trashMaxBytes?: number;
+      autoBlockBaseSeconds?: number;
+      searchTimeoutSeconds?: number;
+      capacityCacheTtlSeconds?: number;
     };
     const current = store.settings();
     // 表达式优先：与后端 resolveBackupAutoInterval 的口径一致。
@@ -1748,6 +1784,27 @@ export const handlers = [
           typeof body.backupRetentionDays === "number"
             ? body.backupRetentionDays
             : current.backupRetentionDays,
+        // 运行期策略 13 项同口径：用 `typeof === "number"` 而非真值判断，
+        // 否则 0（禁用作业 / 不限制）会被当成"没传"而悄悄保留旧值。
+        blobGcInterval: num(body.blobGcInterval, current.blobGcInterval),
+        storageCleanupInterval: num(body.storageCleanupInterval, current.storageCleanupInterval),
+        backupOrphanCleanupInterval: num(
+          body.backupOrphanCleanupInterval,
+          current.backupOrphanCleanupInterval,
+        ),
+        trashGcInterval: num(body.trashGcInterval, current.trashGcInterval),
+        upstreamProbeInterval: num(body.upstreamProbeInterval, current.upstreamProbeInterval),
+        backupOrphanGraceHours: num(body.backupOrphanGraceHours, current.backupOrphanGraceHours),
+        storageMetadataRetentionDays: num(
+          body.storageMetadataRetentionDays,
+          current.storageMetadataRetentionDays,
+        ),
+        storageTempMaxAgeHours: num(body.storageTempMaxAgeHours, current.storageTempMaxAgeHours),
+        trashRetentionDays: num(body.trashRetentionDays, current.trashRetentionDays),
+        trashMaxBytes: num(body.trashMaxBytes, current.trashMaxBytes),
+        autoBlockBaseSeconds: num(body.autoBlockBaseSeconds, current.autoBlockBaseSeconds),
+        searchTimeoutSeconds: num(body.searchTimeoutSeconds, current.searchTimeoutSeconds),
+        capacityCacheTtlSeconds: num(body.capacityCacheTtlSeconds, current.capacityCacheTtlSeconds),
       }),
     );
   }),

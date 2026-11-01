@@ -1158,7 +1158,6 @@ export interface SettingsConfig {
   publicUrl: string;
   /** 回源整体超时（秒）。 */
   upstreamTimeout: number;
-  /** 同步轮询间隔（秒）。 */
   /** 允许访问的域名白名单（空数组 = 不限制；仅白名单内的 Host 可访问，节点本地）。 */
   allowedHosts: string[];
   /** 回源 Token 校验开关（节点本地）。 */
@@ -1223,8 +1222,9 @@ export interface SettingsConfig {
   /**
    * 回收站容量上限（**字节**）：0 = 不限制；下一次清理的前置检查时生效。
    *
-   * 以字节提交、不做单位换算：超上限时后端会把清除请求拒掉，
-   * 单位换算一旦有取整误差就会让上限与实际可用空间对不上。
+   * 提交值始终是字节：界面虽然提供 MB/GB/TB 切换，但换算只发生在展示层，
+   * `bytesToBytes` 会把用户输入折算回字节再上行。不做"提交数值 + 单位"的组合——
+   * 那样后端与前端各存一份单位语义，取整误差就会让上限与实际可用空间对不上。
    */
   trashMaxBytes: number;
   /** 断路器退避起始（秒）：0/负数回落默认；下一次请求生效。 */
@@ -1287,7 +1287,7 @@ function normalizeSettings(raw: SettingsConfig): SettingsConfig {
   };
 }
 
-/** 读取实例级基础配置（匿名开关 / 对外 URL / 回源超时 / 同步间隔 / 域名白名单 / 回源 Token，仅 admin）。 */
+/** 读取实例级基础配置（匿名开关 / 对外 URL / 回源超时 / 域名单 / 回源 Token / 备份三项 / 运行期策略 13 项，仅 admin）。 */
 export function getSettings(): Promise<SettingsConfig> {
   return request<SettingsConfig>("/settings").then(normalizeSettings);
 }

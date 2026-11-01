@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -95,10 +96,12 @@ func TestSettingHistoryRecordsChangePerKey(t *testing.T) {
 	if body.Entries[0].Actor != "admin" {
 		t.Errorf("操作者应为 admin，得 %q", body.Entries[0].Actor)
 	}
-	// 第一次是从「当前生效值」改到 5。旧值取的是真实生效值（代码默认 86400），
-	// 而不是空串——历史要能回答「从多少改到多少」，给出「未设置」会让人无从判断。
-	if body.Entries[1].NewVal != "5" || body.Entries[1].OldVal != "86400" {
-		t.Errorf("最早一条应为 86400 → 5，得 %q → %q", body.Entries[1].OldVal, body.Entries[1].NewVal)
+	// 第一次是从「未落库」改到 5：旧值取的是 setting 表里真实存在的值，
+	// 该键此前从未写入过，因此是空串（界面显示为「未设置」）。
+	// 不取代码默认值 86400——历史要回答的是「实际存过什么」，把默认值伪装成
+	// 「改之前就是这个」会让运维误以为有人设过它。
+	if body.Entries[1].NewVal != "5" || body.Entries[1].OldVal != "" {
+		t.Errorf("最早一条应为 (未设置) → 5，得 %q → %q", body.Entries[1].OldVal, body.Entries[1].NewVal)
 	}
 }
 
@@ -169,5 +172,84 @@ func TestSettingHistoryRequiresKeyAndAdmin(t *testing.T) {
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("非法 limit 应 400，得 %d", rec.Code)
+	}
+}
+
+// TestSettingHistoryCoversAllWrittenKeys 审计覆盖必须与「真正写库的键集合」一致。
+//
+// 这条钉住一次回归：审计曾由 api 层另维护的快照 map 决定，而那份 map 漏了
+// anonymous_access_enabled / allowed_hosts / origin_token_* 五个键——于是改主机白名单
+// （等价于 CDN / 防火墙准入）与回源 Token 开关都不会留下任何记录，
+// 而原有的「基础设置更新」摘要行又已被删除，形成审计真空。
+func TestSettingHistoryCoversAllWrittenKeys(t *testing.T) {
+	t.Parallel()
+	r, _ := newSettingHistoryRouter(t)
+
+	// 一次提交覆盖全部曾遗漏的键（originTokenValue 用可识别的假值以便断言"未落明文"）。
+	putSettingsAsAdmin(t, r, `{"anonymousAccess":false,"allowedHosts":["a.example"],`+
+		`"originTokenEnabled":true,"originTokenHeader":"X-Origin-Token",`+
+		`"originTokenValue":"super-secret-token-value"}`)
+
+	query := func(key string) []repository.SettingHistoryEntry {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/settings/history?key="+key, nil)
+		req.Header.Set("X-Test-Role", "admin")
+		r.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("历史查询 %s 应 200，得 %d", key, rec.Code)
+		}
+		var body struct {
+			Entries []repository.SettingHistoryEntry `json:"entries"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("解析 %s 响应：%v", key, err)
+		}
+		return body.Entries
+	}
+
+	for _, key := range []string{
+		"anonymous_access_enabled", "allowed_hosts",
+		"origin_token_enabled", "origin_token_header", "origin_token_value",
+	} {
+		if got := len(query(key)); got != 1 {
+			t.Errorf("%s 应有 1 条审计记录，得 %d（该键被写入却没有留痕）", key, got)
+		}
+	}
+
+	// 回源 Token 值的明文绝不能进审计 detail：审计会被多人查看，
+	// 把 Token 写进去等于给它换了个地方长期留存。
+	for _, entry := range query("origin_token_value") {
+		if strings.Contains(entry.NewVal, "super-secret-token-value") ||
+			strings.Contains(entry.OldVal, "super-secret-token-value") {
+			t.Errorf("审计 detail 泄露了回源 Token 明文：%q → %q", entry.OldVal, entry.NewVal)
+		}
+	}
+}
+
+// TestSettingHistoryLimitAndParsingEdges limit 夹取与「无法解析的遗留行」的处理。
+func TestSettingHistoryLimitAndParsingEdges(t *testing.T) {
+	t.Parallel()
+	r, _ := newSettingHistoryRouter(t)
+
+	// 制造超过上限的历史：limit 应被夹到 100 而不是回 400 或全量返回。
+	for i := 0; i < 5; i++ {
+		putSettingsAsAdmin(t, r, `{"blobGcInterval":`+strconv.Itoa(100+i)+`}`)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/settings/history?key=blob_gc_interval&limit=1000", nil)
+	req.Header.Set("X-Test-Role", "admin")
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("超上限 limit 应夹取后 200，得 %d（体：%s）", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Entries []repository.SettingHistoryEntry `json:"entries"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("解析响应：%v", err)
+	}
+	if len(body.Entries) != 5 {
+		t.Errorf("应有 5 条历史，得 %d", len(body.Entries))
 	}
 }
