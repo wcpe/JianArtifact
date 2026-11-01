@@ -15,13 +15,14 @@ import {
   Alert,
   Badge,
   Button,
-  Card,
   Group,
+  Modal,
   NumberInput,
   Select,
   SimpleGrid,
   Stack,
   Switch,
+  Table,
   TagsInput,
   Text,
   TextInput,
@@ -390,57 +391,74 @@ function formatHistoryValue(
 }
 
 /**
- * 单项的历史变更列表。
+ * 单项设置的历史变更**模态框**。
+ *
+ * 为什么是 Modal 而不是内联展开：设置页内容区是定高可滚动容器，
+ * 就地展开一份历史会把同一行的相邻字段挤到下一行、整页跳动。
+ * 「看历史」是随手查一下的动作，不应改变页面上任何既有元素的位置。
  *
  * 空态明确写「暂无记录」而不是留白：留白会让人以为功能坏了，
  * 而实际上「从没改过」是完全正常的状态。
  */
-function SettingHistoryList({
+function SettingHistoryModal({
+  opened,
+  title,
   entries,
   loading,
   error,
   formatValue,
+  onClose,
 }: {
-  entries: SettingHistoryEntry[] | undefined;
+  opened: boolean;
+  title: string;
+  entries: SettingHistoryEntry[];
   loading: boolean;
   error?: string;
   formatValue: (raw: string) => string;
+  onClose: () => void;
 }) {
   const { t } = useTranslation();
   return (
-    <Card withBorder radius="sm" p="xs" bg="var(--mantine-color-default-hover)">
+    <Modal opened={opened} onClose={onClose} title={title} size="lg" centered>
       {loading ? (
-        <Text size="xs" c="dimmed">
+        <Text size="sm" c="dimmed">
           {t("settings.runtimePolicyHistoryLoading")}
         </Text>
       ) : error ? (
-        <Text size="xs" c="red">
+        <Text size="sm" c="red">
           {t("settings.runtimePolicyHistoryError")}
         </Text>
-      ) : !entries || entries.length === 0 ? (
-        <Text size="xs" c="dimmed">
+      ) : entries.length === 0 ? (
+        <Text size="sm" c="dimmed">
           {t("settings.runtimePolicyHistoryEmpty")}
         </Text>
       ) : (
-        <Stack gap={2}>
-          {entries.map((entry, idx) => (
-            <Group key={`${entry.ts}-${idx}`} gap="xs" wrap="nowrap" align="baseline">
-              {/* 走项目既有 formatStamp：后端时间可能是 SQLite naive UTC 或 RFC3339，
-                  直接回显原始串在英文界面里会看到一串机器格式。 */}
-              <Text size="xs" c="dimmed" style={{ whiteSpace: "nowrap" }}>
-                {formatStamp(entry.ts)}
-              </Text>
-              <Text size="xs" c="dimmed" style={{ whiteSpace: "nowrap" }}>
-                {entry.actor || "—"}
-              </Text>
-              <Text size="xs">
-                {formatValue(entry.oldValue)} → {formatValue(entry.newValue)}
-              </Text>
-            </Group>
-          ))}
-        </Stack>
+        <Table striped highlightOnHover withTableBorder>
+          <Table.Thead>
+            <Table.Tr>
+              <Table.Th>{t("settings.runtimePolicyHistoryColTime")}</Table.Th>
+              <Table.Th>{t("settings.runtimePolicyHistoryColActor")}</Table.Th>
+              <Table.Th>{t("settings.runtimePolicyHistoryColChange")}</Table.Th>
+            </Table.Tr>
+          </Table.Thead>
+          <Table.Tbody>
+            {entries.map((entry, idx) => (
+              <Table.Tr key={`${entry.ts}-${idx}`}>
+                {/* 走项目既有 formatStamp：后端时间可能是 SQLite naive UTC 或 RFC3339，
+                    直接回显原始串在英文界面里会看到一串机器格式。 */}
+                <Table.Td style={{ whiteSpace: "nowrap" }}>{formatStamp(entry.ts)}</Table.Td>
+                <Table.Td style={{ whiteSpace: "nowrap" }}>{entry.actor || "—"}</Table.Td>
+                <Table.Td>
+                  <Text size="sm" ff="monospace">
+                    {formatValue(entry.oldValue)} → {formatValue(entry.newValue)}
+                  </Text>
+                </Table.Td>
+              </Table.Tr>
+            ))}
+          </Table.Tbody>
+        </Table>
       )}
-    </Card>
+    </Modal>
   );
 }
 
@@ -600,32 +618,29 @@ function ServiceSettingsForm({
   );
   // 每项当前所选单位（键是设置字段名）。缺失表示「按当前值自动推断」。
   const [unitDrafts, setUnitDrafts] = useState<Partial<Record<RuntimePolicyKey, UnitDraft>>>({});
-  // 历史面板：按设置键缓存，展开才拉取（13 项一次性全拉没有意义）。
-  const [historyOpen, setHistoryOpen] = useState<Record<string, boolean>>({});
-  const [historyData, setHistoryData] = useState<Record<string, SettingHistoryEntry[] | undefined>>(
-    {},
-  );
-  const [historyLoading, setHistoryLoading] = useState<Record<string, boolean>>({});
-  const [historyError, setHistoryError] = useState<Record<string, string | undefined>>({});
+  // 历史用**模态框**展示，绝不在页面上就地展开。
+  //
+  // 为什么必须用 Modal 而不是内联展开：设置页内容区是定高可滚动容器，
+  // 内联展开一份历史会把同一行的其它字段挤到下一行、整页跳动；
+  // 而「看历史」是随手查一下的动作，不该改变页面上任何既有元素的位置。
+  // 只保留「当前查看的是哪个键」这一个状态，数据不带多份缓存。
+  const [historyKey, setHistoryKey] = useState<string | null>(null);
+  const [historyEntries, setHistoryEntries] = useState<SettingHistoryEntry[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | undefined>(undefined);
 
-  /** 展开/收起某一项的历史；首次展开时拉取。 */
-  const toggleHistory = (settingKey: string) => {
-    const nextOpen = !historyOpen[settingKey];
-    setHistoryOpen((prev) => ({ ...prev, [settingKey]: nextOpen }));
-    if (!nextOpen || historyData[settingKey] !== undefined) return;
-    setHistoryLoading((prev) => ({ ...prev, [settingKey]: true }));
-    setHistoryError((prev) => ({ ...prev, [settingKey]: undefined }));
+  /** 打开某项的历史模态框并拉取数据。 */
+  const openHistory = (settingKey: string) => {
+    setHistoryKey(settingKey);
+    setHistoryEntries([]);
+    setHistoryError(undefined);
+    setHistoryLoading(true);
     getSettingHistory(settingKey)
-      .then((res) => {
-        setHistoryData((prev) => ({ ...prev, [settingKey]: res.entries }));
-      })
+      .then((res) => setHistoryEntries(res.entries))
       .catch((err: unknown) => {
-        setHistoryError((prev) => ({
-          ...prev,
-          [settingKey]: err instanceof Error ? err.message : String(err),
-        }));
+        setHistoryError(err instanceof Error ? err.message : String(err));
       })
-      .finally(() => setHistoryLoading((prev) => ({ ...prev, [settingKey]: false })));
+      .finally(() => setHistoryLoading(false));
   };
 
   const dirty = formSignature(form) !== formSignature(savedValues);
@@ -682,13 +697,6 @@ function ServiceSettingsForm({
           ...prev,
           [field.key]: inferUnitDraft(field, applied),
         }));
-        // 保存成功后清掉该项的历史缓存：否则展开历史看不到刚写下的这条，
-        // 会被误判成「保存没进审计」。
-        setHistoryData((prev) => {
-          const cleared = { ...prev };
-          delete cleared[field.settingKey];
-          return cleared;
-        });
         // 后端可能夹取（例如超过上界），回填后与提交值不同就必须如实告知，
         // 否则用户以为「我填的 99999 被采纳了」。
         if (applied !== after) {
@@ -782,81 +790,92 @@ function ServiceSettingsForm({
 
   return (
     // 不再自造 maw：宽度口径统一由 AppLayout 内容容器承担（现为铺满可用宽度、不居中）。
+    //
+    // 关于子项被压扁：本容器是定高可滚动 flex 列（flex-basis: 0），而 flex 子项默认
+    // flex-shrink: 1，内容超高时会被**按比例压缩**；卡片自身又是 overflow: hidden，
+    // 于是内部字段被裁掉。
+    //
+    // 修复方式刻意是「各卡片自己加 flexShrink: 0」而不是在容器上写
+    // `styles={{ root: { "& > *": ... } }}`：后者会让 Mantine 生成一个 <style> 元素，
+    // 而它作为 flex 子项会**被渲染成可见文本**（页面上出现一长串 `--sg-spacing-x:`），
+    // 反而制造出一个更显眼的渲染缺陷。
     <Stack gap="md" style={{ flex: 1, minHeight: 0, overflowY: "auto", paddingRight: 4 }}>
       {/* 顶部概览带：把「当前生效值」前置，改表单时能一眼对照已保存的口径。
           数据口径来自 normalizeForm(initial)（已保存/生效值），不随未保存的改动跳动。 */}
-      <OpsKpiBand
-        variant="strip"
-        label={t("settings.summaryLabel")}
-        cols={{ base: 2, sm: 4 }}
-        items={[
-          {
-            label: t("settings.summaryAnonymous"),
-            value: effective.anonymousAccess
-              ? t("settings.summaryAnonymousOn")
-              : t("settings.summaryAnonymousOff"),
-            icon: <IconWorld size={16} />,
-            hint: t("settings.summaryHint"),
-          },
-          {
-            label: t("settings.summaryAllowedHosts"),
-            value:
-              effective.allowedHosts.length === 0
-                ? t("settings.summaryAllowedHostsAll")
-                : t("settings.allowedHostsCount", { count: effective.allowedHosts.length }),
-            icon: <IconShieldCheck size={16} />,
-            hint: t("settings.summaryHint"),
-          },
-          {
-            label: t("settings.summaryOriginToken"),
-            value: effective.originTokenEnabled
-              ? t("settings.summaryOriginTokenOn")
-              : t("settings.summaryOriginTokenOff"),
-            icon: <IconKey size={16} />,
-            hint: t("settings.summaryHint"),
-          },
-          {
-            label: t("settings.summaryUpstreamTimeout"),
-            value: t("settings.summaryTimeoutValue", { secs: effective.upstreamTimeout }),
-            icon: <IconClock size={16} />,
-            hint: t("settings.summaryHint"),
-          },
-        ]}
-        actions={
-          <>
-            {/* 生效与回滚说明搬到工具栏按钮上（气泡里），不再占页面布局。 */}
-            <OpsHelpButton
-              title={t("settings.effectsTitle")}
-              items={[
-                {
-                  label: t("settings.effectsImmediateLabel", { defaultValue: "立即生效" }),
-                  value: t("settings.effectsImmediate"),
-                },
-                {
-                  label: t("settings.effectsLocalScopeLabel", { defaultValue: "节点本地" }),
-                  value: t("settings.effectsLocalScope"),
-                },
-                {
-                  label: t("settings.effectsLockoutLabel", { defaultValue: "锁死风险" }),
-                  value: t("settings.effectsLockout"),
-                },
-              ]}
-            />
-            <StatusPill
-              tone={dirty ? "yellow" : "gray"}
-              text={dirty ? t("settings.unsaved") : t("settings.saved")}
-            />
-            <Button
-              size="sm"
-              leftSection={<IconDeviceFloppy size={16} />}
-              loading={saving}
-              onClick={save}
-            >
-              {t("settings.save")}
-            </Button>
-          </>
-        }
-      />
+      <div style={{ flexShrink: 0 }}>
+        <OpsKpiBand
+          variant="strip"
+          label={t("settings.summaryLabel")}
+          cols={{ base: 2, sm: 4 }}
+          items={[
+            {
+              label: t("settings.summaryAnonymous"),
+              value: effective.anonymousAccess
+                ? t("settings.summaryAnonymousOn")
+                : t("settings.summaryAnonymousOff"),
+              icon: <IconWorld size={16} />,
+              hint: t("settings.summaryHint"),
+            },
+            {
+              label: t("settings.summaryAllowedHosts"),
+              value:
+                effective.allowedHosts.length === 0
+                  ? t("settings.summaryAllowedHostsAll")
+                  : t("settings.allowedHostsCount", { count: effective.allowedHosts.length }),
+              icon: <IconShieldCheck size={16} />,
+              hint: t("settings.summaryHint"),
+            },
+            {
+              label: t("settings.summaryOriginToken"),
+              value: effective.originTokenEnabled
+                ? t("settings.summaryOriginTokenOn")
+                : t("settings.summaryOriginTokenOff"),
+              icon: <IconKey size={16} />,
+              hint: t("settings.summaryHint"),
+            },
+            {
+              label: t("settings.summaryUpstreamTimeout"),
+              value: t("settings.summaryTimeoutValue", { secs: effective.upstreamTimeout }),
+              icon: <IconClock size={16} />,
+              hint: t("settings.summaryHint"),
+            },
+          ]}
+          actions={
+            <>
+              {/* 生效与回滚说明搬到工具栏按钮上（气泡里），不再占页面布局。 */}
+              <OpsHelpButton
+                title={t("settings.effectsTitle")}
+                items={[
+                  {
+                    label: t("settings.effectsImmediateLabel", { defaultValue: "立即生效" }),
+                    value: t("settings.effectsImmediate"),
+                  },
+                  {
+                    label: t("settings.effectsLocalScopeLabel", { defaultValue: "节点本地" }),
+                    value: t("settings.effectsLocalScope"),
+                  },
+                  {
+                    label: t("settings.effectsLockoutLabel", { defaultValue: "锁死风险" }),
+                    value: t("settings.effectsLockout"),
+                  },
+                ]}
+              />
+              <StatusPill
+                tone={dirty ? "yellow" : "gray"}
+                text={dirty ? t("settings.unsaved") : t("settings.saved")}
+              />
+              <Button
+                size="sm"
+                leftSection={<IconDeviceFloppy size={16} />}
+                loading={saving}
+                onClick={save}
+              >
+                {t("settings.save")}
+              </Button>
+            </>
+          }
+        />
+      </div>
 
       <SimpleGrid cols={{ base: 1, lg: 2 }} spacing="md" verticalSpacing="md">
         {/* 左栏：服务设置 */}
@@ -1110,6 +1129,11 @@ function ServiceSettingsForm({
                             // 0 在这些项上等于「禁用作业 / 不限制」，与「还没填」语义相反。
                             const isEmpty = value === "" || value === undefined || value === null;
                             const raw = isEmpty ? null : Number(value);
+                            // 输入即校验：一开始打字就把该项标为「已校验」，
+                            // 错误文案随每次输入实时更新，不必等失焦才出现。
+                            // 保存按钮的禁用条件本就是 fieldError !== null，
+                            // 因此「校验不过 → 存不下去」在输入过程中就已生效。
+                            setTouchedFields((prev) => ({ ...prev, [field.key]: true }));
                             setUnitDrafts((prev) => ({
                               ...prev,
                               [field.key]: { value: raw, unit: draft.unit },
@@ -1185,8 +1209,7 @@ function ServiceSettingsForm({
                           size="compact-sm"
                           variant="subtle"
                           aria-label={t("settings.runtimePolicyHistoryFor", { label })}
-                          aria-expanded={historyOpen[field.settingKey] === true}
-                          onClick={() => toggleHistory(field.settingKey)}
+                          onClick={() => openHistory(field.settingKey)}
                         >
                           {t("settings.runtimePolicyHistory")}
                         </Button>
@@ -1208,14 +1231,6 @@ function ServiceSettingsForm({
                                 max: field.max,
                               })}
                       </Text>
-                      {historyOpen[field.settingKey] ? (
-                        <SettingHistoryList
-                          entries={historyData[field.settingKey]}
-                          loading={historyLoading[field.settingKey] === true}
-                          error={historyError[field.settingKey]}
-                          formatValue={(raw) => formatHistoryValue(t, field, raw)}
-                        />
-                      ) : null}
                     </Stack>
                   );
                 })}
@@ -1224,6 +1239,28 @@ function ServiceSettingsForm({
           ))}
         </Stack>
       </OpsSection>
+
+      {/* 历史统一走模态框：不占页面空间、不改变任何既有元素的位置。 */}
+      <SettingHistoryModal
+        opened={historyKey !== null}
+        title={(() => {
+          // 按 settingKey 反查字段，取它的 i18n 标签做标题。
+          const field = RUNTIME_POLICY_FIELDS.find((f) => f.settingKey === historyKey);
+          return field
+            ? t("settings.runtimePolicyHistoryTitle", {
+                label: t(runtimePolicyTextKeys(field.key).label),
+              })
+            : t("settings.runtimePolicyHistoryTitleFallback");
+        })()}
+        entries={historyEntries}
+        loading={historyLoading}
+        error={historyError}
+        formatValue={(raw) => {
+          const field = RUNTIME_POLICY_FIELDS.find((f) => f.settingKey === historyKey);
+          return field ? formatHistoryValue(t, field, raw) : raw;
+        }}
+        onClose={() => setHistoryKey(null)}
+      />
     </Stack>
   );
 }

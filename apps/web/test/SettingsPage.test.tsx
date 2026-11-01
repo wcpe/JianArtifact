@@ -207,20 +207,21 @@ describe("设置页", () => {
   // 历史面板：展开要真的展开并展示前后值。
   // 这条钉住一个曾经踩过的坑——写入状态用 settingKey、读取却用字段名，
   // 两边键不一致时按钮点了没反应，而"按钮存在"的断言完全发现不了。
-  it("点开历史会展开面板并展示该项的前后值", async () => {
+  // 历史必须用**模态框**展示，不能在页面上就地展开。
+  // 就地展开会把同一行的相邻字段挤到下一行、整页跳动——用户明确要求过不许改布局。
+  it("点开历史会弹出模态框并展示前后值，且不在页面上留内联面板", async () => {
     const user = userEvent.setup();
     renderWithProviders(<SettingsPage />, { route: "/settings", authenticated: true });
 
     await screen.findByTestId("settings-runtime-policy");
     const btn = screen.getByRole("button", { name: "查看「孤儿 blob 回收间隔（秒）」的历史" });
-    expect(btn.getAttribute("aria-expanded")).toBe("false");
 
     await user.click(btn);
 
-    // 展开后必须真的渲染面板内容。历史里的原始秒数会按量纲可读化
-    // （86400 秒 → 1 天，43200 秒 → 12 小时），不逐字回显库里的数字。
+    // 弹出的是 dialog，不是就地插入的卡片。
+    expect(await screen.findByRole("dialog")).toBeTruthy();
+    // 历史里的原始秒数按量纲可读化（86400 秒 → 1 天，43200 秒 → 12 小时）。
     expect(await screen.findByText(/1 天 → 12 小时/)).toBeTruthy();
-    expect(btn.getAttribute("aria-expanded")).toBe("true");
   });
 
   // 逐项保存只回填这一项，不能把其它未保存的改动算成「已保存」。
