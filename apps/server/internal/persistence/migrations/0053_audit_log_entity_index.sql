@@ -5,6 +5,12 @@
 -- 回滚：不支持 down migration；本索引只影响查询计划，旧版本代码不认识它也不受影响，回滚代码即可
 -- 相关：设置页逐项历史（docs/specs/0.14.0-web-configurable-runtime-settings.md）
 --
+-- ⚠ 编号冲突提示：feat/maven-version-trash 分支也新增了 0053（0053_asset_trash.sql）。
+--   迁移表按**编号**记录已应用集合（schema_migrations 里只有 "0053" 这样的数字），
+--   因此两支合并时**必须有一支重编号**——否则先跑过的那支会把编号占掉，
+--   后合入的那支被判定「已应用」而静默跳过，索引/表都没建却查不到任何报错。
+--   合并顺序确定后，由后者改为下一个空闲编号（并同步文件名）。
+--
 -- 为什么要这个索引：
 --   设置历史查询是 `WHERE action=? AND entity_type=? AND entity_key=? ORDER BY ts DESC, id DESC`。
 --   已有的索引全是单列（ts / actor / action / repo），没有 (entity_type, entity_key) 这一维，
