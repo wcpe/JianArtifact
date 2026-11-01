@@ -16,8 +16,8 @@ import {
   Badge,
   Button,
   Group,
-  Modal,
   NumberInput,
+  Popover,
   Select,
   SimpleGrid,
   Stack,
@@ -400,26 +400,20 @@ function formatHistoryValue(
  * 空态明确写「暂无记录」而不是留白：留白会让人以为功能坏了，
  * 而实际上「从没改过」是完全正常的状态。
  */
-function SettingHistoryModal({
-  opened,
-  title,
+function SettingHistoryBody({
   entries,
   loading,
   error,
   formatValue,
-  onClose,
 }: {
-  opened: boolean;
-  title: string;
   entries: SettingHistoryEntry[];
   loading: boolean;
   error?: string;
   formatValue: (raw: string) => string;
-  onClose: () => void;
 }) {
   const { t } = useTranslation();
   return (
-    <Modal opened={opened} onClose={onClose} title={title} size="lg" centered>
+    <>
       {loading ? (
         <Text size="sm" c="dimmed">
           {t("settings.runtimePolicyHistoryLoading")}
@@ -458,7 +452,7 @@ function SettingHistoryModal({
           </Table.Tbody>
         </Table>
       )}
-    </Modal>
+    </>
   );
 }
 
@@ -1123,7 +1117,26 @@ function ServiceSettingsForm({
                           // 固定单位（小时/天）只显示后缀，不给切换控件。
                           suffix={unitSuffix(t, field, draft)}
                           disabled={fieldSaving}
-                          error={showError ? fieldError : undefined}
+                          // error 只用于红框与无障碍标记；具体原因统一由底部状态行给出，
+                          // 两边都渲染会让同一句报错在界面上出现两次。
+                          error={showError ? true : undefined}
+                          // 绿 / 红描边：校验通过给绿、不通过给红。
+                          // error 属性只能染红，绿框要单独覆盖 border 颜色；
+                          // 未输入（touched 为 false）时保持默认，避免一进页面满屏绿。
+                          styles={
+                            touchedFields[field.key]
+                              ? {
+                                  input: {
+                                    borderColor: fieldError
+                                      ? "var(--mantine-color-red-6)"
+                                      : "var(--mantine-color-teal-6)",
+                                    boxShadow: fieldError
+                                      ? "0 0 0 1px var(--mantine-color-red-6)"
+                                      : "0 0 0 1px var(--mantine-color-teal-6)",
+                                  },
+                                }
+                              : undefined
+                          }
                           onChange={(value) => {
                             // 空串是 Mantine 在清空时的取值。保持 null 而不是折成 0：
                             // 0 在这些项上等于「禁用作业 / 不限制」，与「还没填」语义相反。
@@ -1205,32 +1218,87 @@ function ServiceSettingsForm({
                         >
                           {t("settings.runtimePolicySaveOneShort")}
                         </Button>
-                        <Button
-                          size="compact-sm"
-                          variant="subtle"
-                          aria-label={t("settings.runtimePolicyHistoryFor", { label })}
-                          onClick={() => openHistory(field.settingKey)}
+                        {/* 历史走 Popover 浮层：锚在按钮上、覆盖在内容之上，
+                            不占页面空间也不改变任何既有元素的位置。
+                            不用 Modal——看历史通常只是「改之前确认上次是谁改的」，
+                            模态框会把整页压暗、逼用户先关掉才能继续编辑。 */}
+                        <Popover
+                          opened={historyKey === field.settingKey}
+                          onChange={(next) => {
+                            if (!next) setHistoryKey(null);
+                          }}
+                          position="bottom-end"
+                          width={440}
+                          shadow="md"
+                          withinPortal
+                          trapFocus={false}
+                          closeOnClickOutside
                         >
-                          {t("settings.runtimePolicyHistory")}
-                        </Button>
+                          <Popover.Target>
+                            <Button
+                              size="compact-sm"
+                              variant="subtle"
+                              aria-label={t("settings.runtimePolicyHistoryFor", { label })}
+                              onClick={() => openHistory(field.settingKey)}
+                            >
+                              {t("settings.runtimePolicyHistory")}
+                            </Button>
+                          </Popover.Target>
+                          <Popover.Dropdown>
+                            <Stack gap="xs">
+                              <Text size="sm" fw={600}>
+                                {t("settings.runtimePolicyHistoryTitle", { label })}
+                              </Text>
+                              <SettingHistoryBody
+                                entries={historyEntries}
+                                loading={historyLoading}
+                                error={historyError}
+                                formatValue={(raw) => formatHistoryValue(t, field, raw)}
+                              />
+                            </Stack>
+                          </Popover.Dropdown>
+                        </Popover>
                       </Group>
-                      {/* 提交值的可读口径：让用户确认「1 天」确实会以 86400 秒落库。 */}
-                      <Text size="xs" c="dimmed">
-                        {isBytes
-                          ? t("settings.runtimePolicyCommittedBytes", {
-                              bytes: String(form[field.key]),
-                              human: formatBytes(form[field.key]),
-                            })
-                          : isDuration
-                            ? t("settings.runtimePolicyCommittedSeconds", {
-                                seconds: String(form[field.key]),
-                                human: humanizeSeconds(t, form[field.key]),
+                      {/* 底部状态行：校验不通过时给**具体原因**（红），
+                          通过时给「将提交多少」并标为可保存（绿）。
+                          两者位置固定，不随状态变化而增删，避免行高跳动。 */}
+                      {showError ? (
+                        <Text size="xs" c="red" fw={500}>
+                          {fieldError}
+                        </Text>
+                      ) : touchedFields[field.key] ? (
+                        <Text size="xs" c="teal" fw={500}>
+                          ✓{" "}
+                          {isBytes
+                            ? t("settings.runtimePolicyValidBytes", {
+                                human: formatBytes(form[field.key]),
                               })
-                            : t("settings.runtimePolicyRangeHint", {
-                                min: field.min,
-                                max: field.max,
-                              })}
-                      </Text>
+                            : isDuration
+                              ? t("settings.runtimePolicyValidSeconds", {
+                                  seconds: String(form[field.key]),
+                                  human: humanizeSeconds(t, form[field.key]),
+                                })
+                              : t("settings.runtimePolicyValidPlain")}
+                        </Text>
+                      ) : (
+                        // 还没动过这一项：只报静态口径（单位 / 允许范围），不做评价。
+                        <Text size="xs" c="dimmed">
+                          {isBytes
+                            ? t("settings.runtimePolicyCommittedBytes", {
+                                bytes: String(form[field.key]),
+                                human: formatBytes(form[field.key]),
+                              })
+                            : isDuration
+                              ? t("settings.runtimePolicyCommittedSeconds", {
+                                  seconds: String(form[field.key]),
+                                  human: humanizeSeconds(t, form[field.key]),
+                                })
+                              : t("settings.runtimePolicyRangeHint", {
+                                  min: field.min,
+                                  max: field.max,
+                                })}
+                        </Text>
+                      )}
                     </Stack>
                   );
                 })}
@@ -1239,28 +1307,6 @@ function ServiceSettingsForm({
           ))}
         </Stack>
       </OpsSection>
-
-      {/* 历史统一走模态框：不占页面空间、不改变任何既有元素的位置。 */}
-      <SettingHistoryModal
-        opened={historyKey !== null}
-        title={(() => {
-          // 按 settingKey 反查字段，取它的 i18n 标签做标题。
-          const field = RUNTIME_POLICY_FIELDS.find((f) => f.settingKey === historyKey);
-          return field
-            ? t("settings.runtimePolicyHistoryTitle", {
-                label: t(runtimePolicyTextKeys(field.key).label),
-              })
-            : t("settings.runtimePolicyHistoryTitleFallback");
-        })()}
-        entries={historyEntries}
-        loading={historyLoading}
-        error={historyError}
-        formatValue={(raw) => {
-          const field = RUNTIME_POLICY_FIELDS.find((f) => f.settingKey === historyKey);
-          return field ? formatHistoryValue(t, field, raw) : raw;
-        }}
-        onClose={() => setHistoryKey(null)}
-      />
     </Stack>
   );
 }
