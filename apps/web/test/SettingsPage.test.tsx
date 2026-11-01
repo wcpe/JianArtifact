@@ -123,7 +123,7 @@ describe("设置页", () => {
     // 5 个作业间隔 / 3 个「下一次作业运行」的保留策略 / 2 个清理类 / 3 个请求预算。
     // 注意「保留策略」组内本是 4 项，其中回收站保留天数在下一次清理时才生效，
     // 因此这里 3 + 2 而不是 4 + 1。
-    expect(screen.getAllByText("保存后从下一轮起生效")).toHaveLength(5);
+    expect(screen.getAllByText("从下一轮起生效（不重排当前等待）")).toHaveLength(5);
     expect(screen.getAllByText("下一次作业运行时生效")).toHaveLength(3);
     expect(screen.getAllByText("下一次清理时生效")).toHaveLength(2);
     expect(screen.getAllByText("下一次请求生效")).toHaveLength(3);
@@ -221,6 +221,60 @@ describe("设置页", () => {
     // （86400 秒 → 1 天，43200 秒 → 12 小时），不逐字回显库里的数字。
     expect(await screen.findByText(/1 天 → 12 小时/)).toBeTruthy();
     expect(btn.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  // 逐项保存只回填这一项，不能把其它未保存的改动算成「已保存」。
+  // 曾经用整体签名重算，导致「改 A → 改 B → 只保存 A」后顶部立刻显示已保存，
+  // 用户据此离开页面，B 的改动就静默丢了。
+  it("保存一项后其它未保存的改动仍然标记为未保存", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<SettingsPage />, { route: "/settings", authenticated: true });
+
+    await screen.findByTestId("settings-runtime-policy");
+    api.putSettings.mockClear();
+
+    // 改 A（孤儿 blob 回收间隔）：1 天 → 2 天。
+    const aLabel = "孤儿 blob 回收间隔（秒）";
+    const aInput = screen.getByLabelText(aLabel);
+    await user.clear(aInput);
+    await user.type(aInput, "2");
+
+    // 改 B（存储治理清理间隔）：1 天 → 3 天，但不保存。
+    const bLabel = "存储治理清理间隔（秒）";
+    const bInput = screen.getByLabelText(bLabel);
+    await user.clear(bInput);
+    await user.type(bInput, "3");
+
+    // 只保存 A。
+    await user.click(screen.getByRole("button", { name: `保存「${aLabel}」` }));
+    await waitFor(() => expect(api.putSettings).toHaveBeenCalledTimes(1));
+    expect(api.putSettings).toHaveBeenCalledWith({ blobGcInterval: 2 * 86400 });
+
+    // B 仍未保存：它必须仍处于「可保存」状态（未改动时该按钮是禁用的）。
+    expect(
+      (screen.getByRole("button", { name: `保存「${bLabel}」` }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
+  // 清空输入框不能被静默当成 0：0 在这些项上是「禁用作业 / 不限制」，
+  // 与「还没填」语义相反，落库后果完全不同。
+  it("清空输入框时该项报错且不可保存，不会静默变成 0", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<SettingsPage />, { route: "/settings", authenticated: true });
+
+    await screen.findByTestId("settings-runtime-policy");
+    api.putSettings.mockClear();
+
+    const label = "孤儿 blob 回收间隔（秒）";
+    const input = screen.getByLabelText(label);
+    await user.clear(input);
+    await user.tab(); // 失焦视为输入完成
+
+    expect(await screen.findByText("孤儿 blob 回收间隔（秒）不能为空")).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: `保存「${label}」` }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(api.putSettings).not.toHaveBeenCalled();
   });
 
   it("13 项运行期策略整批进入提交体，且 0 不被当成空值", async () => {

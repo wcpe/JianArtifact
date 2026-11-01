@@ -638,7 +638,9 @@ func (h *Handlers) GetSettingHistory(c *gin.Context) {
 		return
 	}
 	if h.auditLogs == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "审计日志未启用"})
+		// 与 GetAuditLogs 同口径（409 conflict）：两者都是「审计存储未装配」，
+		// 出现两套状态码会让调用方对同一类失败写两份判断。
+		auth.WriteError(c, http.StatusConflict, "conflict", "审计日志存储未就绪")
 		return
 	}
 	key := strings.TrimSpace(c.Query("key"))
@@ -729,10 +731,9 @@ func (h *Handlers) PutSettings(c *gin.Context) {
 	}
 	// 运行期策略 13 项同口径：写入前夹取，表中存的就是实际会生效的值。
 	policy := clampRuntimePolicy(req)
-	// 写入前取一份生效快照：审计要记「从什么改成什么」，而 UpdateSettings 之后就
-	// 只剩新值了。快照必须取在写入之前，且只用于算前后差异。
-	beforeSnapshot := h.settingsSnapshot()
-	if err := h.settings.UpdateSettings(domain.SettingsUpdate{
+	// 用 WithChanges 拿到本次真正写入的每个键的前后值：审计需要「从什么改成什么」，
+	// 且键集合必须与写库集合同源，否则新增设置项时会静默漏审计。
+	settingChanges, err := h.settings.UpdateSettingsWithChanges(domain.SettingsUpdate{
 		AnonymousAccess:     req.AnonymousAccess,
 		PublicURL:           req.PublicURL,
 		UpstreamTimeout:     req.UpstreamTimeout,
@@ -759,7 +760,8 @@ func (h *Handlers) PutSettings(c *gin.Context) {
 		AutoBlockBaseSeconds:         policy.AutoBlockBaseSeconds,
 		SearchTimeoutSeconds:         policy.SearchTimeoutSeconds,
 		CapacityCacheTTLSeconds:      policy.CapacityCacheTTLSeconds,
-	}); err != nil {
+	})
+	if err != nil {
 		writeDomainErr(c, err)
 		return
 	}
@@ -777,57 +779,34 @@ func (h *Handlers) PutSettings(c *gin.Context) {
 	// 逐键落审计：设置页要展示「这一项谁在什么时候改成了什么」，
 	// 只写一条「基础设置更新」摘要无法支撑按 key 查询（历史上也确实查不到）。
 	// 只记录本次请求真的提交过、且值确实发生变化的键——未提交的键不该出现在历史里。
-	h.auditSettingChanges(c, beforeSnapshot, h.settingsSnapshot())
+	h.auditSettingChanges(c, settingChanges)
 	c.JSON(http.StatusOK, h.settingsSnapshot())
 }
 
-// auditSettingChanges 为本次请求中真正发生变化的设置键各写一条审计。
+// auditSettingChanges 为本次写入的每个「值确实变化」的设置键各写一条审计。
 //
-// before/after 都是完整的生效快照，逐键比对即可覆盖所有设置项（含运行期策略 13 项），
-// 无需在每个字段上重复判断「这次传没传」。
-func (h *Handlers) auditSettingChanges(c *gin.Context, before, after SettingsResponse) {
-	beforeValues := settingSnapshotValues(before)
-	afterValues := settingSnapshotValues(after)
-	for key, newVal := range afterValues {
-		oldVal := beforeValues[key]
-		if oldVal == newVal {
+// changes 由 domain.UpdateSettingsWithChanges 提供，其键集合与真正写库的键集合同源
+// （都来自 settingValues）——不再由 api 层另维护一份清单，避免新增设置项时静默漏审计。
+func (h *Handlers) auditSettingChanges(c *gin.Context, changes []domain.SettingChange) {
+	for _, change := range changes {
+		if change.Old == change.New {
 			continue
 		}
+		oldVal, newVal := change.Old, change.New
+		// 回源 Token 只记「发生了变更」，不记值：审计日志会被多人查看，
+		// 把 Token 明文写进 detail 等于给它换了个地方长期留存。
+		if change.Key == domain.SettingKeyOriginTokenValue {
+			oldVal, newVal = maskingPlaceholder, maskingPlaceholder
+		}
 		h.AuditLog(
-			c, repository.SettingAuditAction, "setting", key, "",
+			c, repository.SettingAuditAction, "setting", change.Key, "",
 			repository.EncodeSettingHistoryDetail(oldVal, newVal), "ok",
 		)
 	}
 }
 
-// settingSnapshotValues 把设置快照摊平成「设置键 → 字符串值」。
-//
-// 键名与 setting 表的键名一致（而非 API 的 JSON 字段名）：历史查询按设置键过滤，
-// 两者不一致会让「按 key 查历史」查不到任何记录。
-func settingSnapshotValues(s SettingsResponse) map[string]string {
-	return map[string]string{
-		"public_url":                      s.PublicURL,
-		"upstream_timeout":                strconv.Itoa(s.UpstreamTimeout),
-		"group_member_timeout":            strconv.Itoa(s.GroupMemberTimeout),
-		"negative_cache_ttl":              strconv.Itoa(s.NegativeCacheTTL),
-		"blob_gc_interval":                strconv.Itoa(s.BlobGCInterval),
-		"storage_cleanup_interval":        strconv.Itoa(s.StorageCleanupInterval),
-		"backup_orphan_cleanup_interval":  strconv.Itoa(s.BackupOrphanCleanupInterval),
-		"trash_gc_interval":               strconv.Itoa(s.TrashGCInterval),
-		"upstream_probe_interval":         strconv.Itoa(s.UpstreamProbeInterval),
-		"backup_orphan_grace_hours":       strconv.Itoa(s.BackupOrphanGraceHours),
-		"storage_metadata_retention_days": strconv.Itoa(s.StorageMetadataRetentionDays),
-		"storage_temp_max_age_hours":      strconv.Itoa(s.StorageTempMaxAgeHours),
-		"trash_retention_days":            strconv.Itoa(s.TrashRetentionDays),
-		"trash_max_bytes":                 strconv.FormatInt(s.TrashMaxBytes, 10),
-		"auto_block_base_seconds":         strconv.Itoa(s.AutoBlockBaseSeconds),
-		"search_timeout_seconds":          strconv.Itoa(s.SearchTimeoutSeconds),
-		"capacity_cache_ttl_seconds":      strconv.Itoa(s.CapacityCacheTTLSeconds),
-		"backup_auto_interval":            strconv.Itoa(s.BackupAutoInterval),
-		"backup_keep_last":                strconv.Itoa(s.BackupKeepLast),
-		"backup_retention_days":           strconv.Itoa(s.BackupRetentionDays),
-	}
-}
+// maskingPlaceholder 用于「值不可展示，但需要留下变更痕迹」的键。
+const maskingPlaceholder = "<已变更>"
 
 // applyRuntimePolicy 把已写入的 13 项运行期策略推给持有运行时状态的一方。
 //

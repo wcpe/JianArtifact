@@ -470,14 +470,47 @@ func (s *SettingService) secsSetting(key string) int {
 	return secs
 }
 
+// SettingChange 是一次设置写入中单个键的前后值。
+//
+// Old 取自写入前的读取；键此前从未落库时为空串（界面上按「未设置」展示）。
+// New 是写入值。
+type SettingChange struct {
+	Key string
+	Old string
+	New string
+}
+
 // UpdateSettings 在同一数据库事务内写入全部基础设置，提交后再记录复制变更。
 func (s *SettingService) UpdateSettings(update SettingsUpdate) error {
+	_, err := s.UpdateSettingsWithChanges(update)
+	return err
+}
+
+// UpdateSettingsWithChanges 与 UpdateSettings 等价，但额外返回本次真正写入的每个键的前后值。
+//
+// 为什么由 domain 提供而不是让 api 层自己比对快照：需要审计的键集合必须与真正写库的
+// 键集合同源（都来自 settingValues）。api 层另维护一份清单，新增设置项时就会漏——
+// 漏掉的那些键会连审计都消失，而这一点在界面上完全看不出来。
+//
+// 旧值在写入**之前**逐键读取，因此不受并发写入影响：读到什么就是本次覆盖掉的值。
+func (s *SettingService) UpdateSettingsWithChanges(update SettingsUpdate) ([]SettingChange, error) {
 	if err := requireBusinessWrite(s.writeGate); err != nil {
-		return err
+		return nil, err
 	}
 	values := settingValues(update)
+	// 先取旧值再写：写完之后读到的就是新值了，届时无从得知被覆盖掉的是什么。
+	changes := make([]SettingChange, 0, len(values))
+	for _, value := range values {
+		old, err := s.getRaw(value.Key)
+		if err != nil {
+			// 键不存在是正常情况（首次设置），其它读取错误同样按「无旧值」处理：
+			// 审计记不下 old 不该阻断一次合法的配置写入。
+			old = ""
+		}
+		changes = append(changes, SettingChange{Key: value.Key, Old: old, New: value.Value})
+	}
 	if err := s.settings.SetMany(values); err != nil {
-		return err
+		return nil, err
 	}
 	for _, value := range values {
 		if isNodeLocalSetting(value.Key) {
@@ -487,7 +520,7 @@ func (s *SettingService) UpdateSettings(update SettingsUpdate) error {
 			Key: value.Key, Value: value.Value,
 		})
 	}
-	return nil
+	return changes, nil
 }
 
 // isNodeLocalSetting 返回不应跨节点复制的设置键。
