@@ -278,6 +278,27 @@ describe("设置页", () => {
     expect(api.putSettings).not.toHaveBeenCalled();
   });
 
+  // 保存后不能整页刷新：靠父组件 reload 才能更新的话，AsyncBoundary 的
+  // LoadingOverlay 会盖住整页，改一个字段就闪一下。
+  // 这里断言「保存成功后不再重新拉取设置」——重拉正是那次整页刷新的来源。
+  it("保存后不重新拉取设置，避免整页 loading 遮罩", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<SettingsPage />, { route: "/settings", authenticated: true });
+
+    await screen.findByTestId("settings-runtime-policy");
+    api.getSettings.mockClear();
+
+    const label = "回源超时（秒）";
+    const input = screen.getByLabelText(label);
+    await user.clear(input);
+    await user.type(input, "45");
+    await user.click(screen.getByRole("button", { name: "保存设置" }));
+
+    await waitFor(() => expect(api.putSettings).toHaveBeenCalledTimes(1));
+    // 关键断言：保存成功后没有再次 getSettings（即没有触发全局 reload）。
+    expect(api.getSettings).not.toHaveBeenCalled();
+  });
+
   it("13 项运行期策略整批进入提交体，且 0 不被当成空值", async () => {
     // 0 是「禁用作业 / 不限制」的合法取值：归一化若用 `|| 86400`，这里会拿到默认值。
     api.getSettings.mockResolvedValue({ ...baseSettings, blobGcInterval: 0, trashMaxBytes: 0 });
