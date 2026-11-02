@@ -347,6 +347,29 @@ describe("设置页", () => {
     ).toBe(true);
   });
 
+  // 光是聚焦/点进输入框不该变绿：绿框的含义是「这一项已改且通过」，
+  // 一聚焦就绿会让整页看起来处处已通过，信号随即失效。
+  it("聚焦输入框不会变绿，只有改动后才会", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<SettingsPage />, { route: "/settings", authenticated: true });
+
+    // 描边类挂在 NumberInput 的包裹元素上，用类选择器断言即可（不是内层 input 本身）。
+    const input = await screen.findByLabelText("回源超时（秒）");
+    await user.click(input); // 只聚焦
+
+    expect(document.querySelector(".ja-field-valid")).toBeNull();
+    expect(
+      Array.from(document.querySelectorAll("*")).filter(
+        (n) => n.children.length === 0 && /校验通过/.test(n.textContent || ""),
+      ),
+    ).toHaveLength(0);
+
+    // 真正改动后才变绿。
+    await user.clear(input);
+    await user.type(input, "45");
+    expect(document.querySelector(".ja-field-valid")).not.toBeNull();
+  });
+
   // 逐项保存后不再有「整批提交」，但「0 不能被当成空值而吞掉」仍必须成立：
   // 0 在这些项上是「禁用作业 / 不限制」的合法取值。
   it("运行期策略逐项提交时 0 不被当成空值", async () => {

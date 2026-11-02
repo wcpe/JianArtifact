@@ -493,10 +493,18 @@ function countDroppedHosts(raw: string[]): number {
   return dropped;
 }
 
-/** 校验描边类名：未碰过返回 undefined（保持默认外观）。 */
-function fieldOutlineClass(touched: boolean, invalid: boolean): string | undefined {
-  if (!touched) return undefined;
-  return invalid ? "ja-field-invalid" : "ja-field-valid";
+/**
+ * 校验描边类名。
+ *
+ * **只有「改动过」才描边**，仅仅是聚焦/点进去不算：
+ * 一聚焦就变绿会让整个页面看起来处处「已通过」，这个信号随即失去意义。
+ * 未改动时返回 undefined，保持输入框默认外观（有错仍会通过 error 属性染红，
+ * 因为「填错了」本身就是要立刻告知的信息，不需要等用户改完）。
+ */
+function fieldOutlineClass(touched: boolean, dirty: boolean, invalid: boolean): string | undefined {
+  if (invalid) return "ja-field-invalid";
+  if (!touched || !dirty) return undefined;
+  return "ja-field-valid";
 }
 
 /**
@@ -1171,6 +1179,7 @@ function ServiceSettingsForm({ initial }: { initial: SettingsConfig }) {
                 disabled={savingField === "publicUrl"}
                 className={fieldOutlineClass(
                   touchedFields.publicUrl === true,
+                  form.publicUrl !== savedValues.publicUrl,
                   textView("publicUrl").invalid,
                 )}
                 error={textView("publicUrl").invalid || undefined}
@@ -1210,6 +1219,7 @@ function ServiceSettingsForm({ initial }: { initial: SettingsConfig }) {
                 disabled={savingField === "upstreamTimeout"}
                 className={fieldOutlineClass(
                   touchedFields.upstreamTimeout === true,
+                  form.upstreamTimeout !== savedValues.upstreamTimeout,
                   viewOf("upstreamTimeout", MIN_SECS, MAX_SECS).invalid,
                 )}
                 onChange={(value) =>
@@ -1264,6 +1274,7 @@ function ServiceSettingsForm({ initial }: { initial: SettingsConfig }) {
                 disabled={savingField === "groupMemberTimeout"}
                 className={fieldOutlineClass(
                   touchedFields.groupMemberTimeout === true,
+                  form.groupMemberTimeout !== savedValues.groupMemberTimeout,
                   viewOf("groupMemberTimeout", MIN_SECS, MAX_SECS).invalid,
                 )}
                 error={viewOf("groupMemberTimeout", MIN_SECS, MAX_SECS).invalid || undefined}
@@ -1315,6 +1326,7 @@ function ServiceSettingsForm({ initial }: { initial: SettingsConfig }) {
                 disabled={savingField === "negativeCacheTTL"}
                 className={fieldOutlineClass(
                   touchedFields.negativeCacheTTL === true,
+                  form.negativeCacheTTL !== savedValues.negativeCacheTTL,
                   viewOf("negativeCacheTTL", 0, MAX_SECS).invalid,
                 )}
                 error={viewOf("negativeCacheTTL", 0, MAX_SECS).invalid || undefined}
@@ -1415,6 +1427,7 @@ function ServiceSettingsForm({ initial }: { initial: SettingsConfig }) {
                   disabled={savingField === "originTokenHeader" || !form.originTokenEnabled}
                   className={fieldOutlineClass(
                     touchedFields.originTokenHeader === true,
+                    form.originTokenHeader !== savedValues.originTokenHeader,
                     textView("originTokenHeader").invalid,
                   )}
                   error={textView("originTokenHeader").invalid || undefined}
@@ -1451,6 +1464,7 @@ function ServiceSettingsForm({ initial }: { initial: SettingsConfig }) {
                   disabled={savingField === "originTokenValue" || !form.originTokenEnabled}
                   className={fieldOutlineClass(
                     touchedFields.originTokenValue === true,
+                    form.originTokenValue !== savedValues.originTokenValue,
                     textView("originTokenValue").invalid,
                   )}
                   error={textView("originTokenValue").invalid || undefined}
