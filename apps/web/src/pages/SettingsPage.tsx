@@ -86,6 +86,38 @@ type EditableTextFieldKey = "publicUrl" | "originTokenHeader" | "originTokenValu
 /** 开关类字段（没有输入框，但同样需要逐项保存）。 */
 type EditableSwitchKey = "anonymousAccess" | "originTokenEnabled";
 
+/**
+ * 各字段在 setting 表里的真实键名（用于查变更历史）。
+ *
+ * 必须与后端 domain.SettingKey* 常量逐字一致：历史按 setting 键过滤，
+ * 写成 API 的 JSON 字段名（如 publicUrl）会一条也查不到。
+ */
+const SETTING_KEY_BY_FIELD: Record<EditableFieldKey, string> = {
+  anonymousAccess: "anonymous_access_enabled",
+  publicUrl: "public_url",
+  upstreamTimeout: "upstream_timeout",
+  groupMemberTimeout: "group_member_timeout",
+  negativeCacheTTL: "negative_cache_ttl",
+  originTokenEnabled: "origin_token_enabled",
+  originTokenHeader: "origin_token_header",
+  originTokenValue: "origin_token_value",
+  allowedHosts: "allowed_hosts",
+  // 13 项运行期策略的键名由各自的声明提供（见 RuntimePolicyField.settingKey）。
+  blobGcInterval: "blob_gc_interval",
+  storageCleanupInterval: "storage_cleanup_interval",
+  backupOrphanCleanupInterval: "backup_orphan_cleanup_interval",
+  trashGcInterval: "trash_gc_interval",
+  upstreamProbeInterval: "upstream_probe_interval",
+  backupOrphanGraceHours: "backup_orphan_grace_hours",
+  storageMetadataRetentionDays: "storage_metadata_retention_days",
+  storageTempMaxAgeHours: "storage_temp_max_age_hours",
+  trashRetentionDays: "trash_retention_days",
+  trashMaxBytes: "trash_max_bytes",
+  autoBlockBaseSeconds: "auto_block_base_seconds",
+  searchTimeoutSeconds: "search_timeout_seconds",
+  capacityCacheTtlSeconds: "capacity_cache_ttl_seconds",
+};
+
 /** 设置页里所有会被校验与标注状态的字段（数值 + 文本 + 开关）。 */
 type EditableFieldKey = EditableNumberKey | EditableTextFieldKey | EditableSwitchKey;
 
@@ -523,6 +555,7 @@ function FieldRow({
   invalid,
   saving,
   onSave,
+  onHistory,
 }: {
   children: ReactNode;
   /** 该项的可访问名称，用于拼保存按钮的 aria-label。 */
@@ -531,11 +564,23 @@ function FieldRow({
   invalid: boolean;
   saving: boolean;
   onSave: () => void;
+  /** 打开该项的变更历史（浮层）。缺省时不渲染历史按钮。 */
+  onHistory?: () => void;
 }) {
   const { t } = useTranslation();
   return (
     <Group gap="xs" wrap="nowrap" align="flex-start">
       <Box style={{ flex: 1, minWidth: 0 }}>{children}</Box>
+      {onHistory ? (
+        <Button
+          size="compact-sm"
+          variant="subtle"
+          onClick={onHistory}
+          aria-label={t("settings.runtimePolicyHistoryFor", { label: savedLabel })}
+        >
+          {t("settings.runtimePolicyHistory")}
+        </Button>
+      ) : null}
       <Button
         size="compact-sm"
         variant={dirty ? "light" : "subtle"}
@@ -1144,6 +1189,16 @@ function ServiceSettingsForm({ initial }: { initial: SettingsConfig }) {
                 />
                 <Button
                   size="compact-sm"
+                  variant="subtle"
+                  aria-label={t("settings.runtimePolicyHistoryFor", {
+                    label: t("settings.anonymousLabel"),
+                  })}
+                  onClick={() => openHistory(SETTING_KEY_BY_FIELD.anonymousAccess)}
+                >
+                  {t("settings.runtimePolicyHistory")}
+                </Button>
+                <Button
+                  size="compact-sm"
                   variant={
                     form.anonymousAccess !== savedValues.anonymousAccess ? "light" : "subtle"
                   }
@@ -1162,6 +1217,7 @@ function ServiceSettingsForm({ initial }: { initial: SettingsConfig }) {
             </Group>
             <FieldRow
               savedLabel={t("settings.publicUrlLabel")}
+              onHistory={() => openHistory(SETTING_KEY_BY_FIELD["publicUrl"])}
               dirty={form.publicUrl !== savedValues.publicUrl}
               invalid={textView("publicUrl").invalid}
               saving={savingField === "publicUrl"}
@@ -1200,6 +1256,7 @@ function ServiceSettingsForm({ initial }: { initial: SettingsConfig }) {
             />
             <FieldRow
               savedLabel={t("settings.upstreamTimeoutLabel")}
+              onHistory={() => openHistory(SETTING_KEY_BY_FIELD["upstreamTimeout"])}
               dirty={form.upstreamTimeout !== savedValues.upstreamTimeout}
               invalid={viewOf("upstreamTimeout", MIN_SECS, MAX_SECS).invalid}
               saving={savingField === "upstreamTimeout"}
@@ -1252,6 +1309,7 @@ function ServiceSettingsForm({ initial }: { initial: SettingsConfig }) {
                 无需重启」与「0 = 关闭负缓存」——后者是界面上唯一能表达关闭语义的地方。 */}
             <FieldRow
               savedLabel={t("settings.groupMemberTimeoutLabel")}
+              onHistory={() => openHistory(SETTING_KEY_BY_FIELD["groupMemberTimeout"])}
               dirty={form.groupMemberTimeout !== savedValues.groupMemberTimeout}
               invalid={viewOf("groupMemberTimeout", MIN_SECS, MAX_SECS).invalid}
               saving={savingField === "groupMemberTimeout"}
@@ -1304,6 +1362,7 @@ function ServiceSettingsForm({ initial }: { initial: SettingsConfig }) {
             />
             <FieldRow
               savedLabel={t("settings.negativeCacheTTLLabel")}
+              onHistory={() => openHistory(SETTING_KEY_BY_FIELD["negativeCacheTTL"])}
               dirty={form.negativeCacheTTL !== savedValues.negativeCacheTTL}
               invalid={viewOf("negativeCacheTTL", 0, MAX_SECS).invalid}
               saving={savingField === "negativeCacheTTL"}
@@ -1391,6 +1450,16 @@ function ServiceSettingsForm({ initial }: { initial: SettingsConfig }) {
                   />
                   <Button
                     size="compact-sm"
+                    variant="subtle"
+                    aria-label={t("settings.runtimePolicyHistoryFor", {
+                      label: t("settings.originTokenLabel"),
+                    })}
+                    onClick={() => openHistory(SETTING_KEY_BY_FIELD.originTokenEnabled)}
+                  >
+                    {t("settings.runtimePolicyHistory")}
+                  </Button>
+                  <Button
+                    size="compact-sm"
                     variant={
                       form.originTokenEnabled !== savedValues.originTokenEnabled
                         ? "light"
@@ -1411,6 +1480,7 @@ function ServiceSettingsForm({ initial }: { initial: SettingsConfig }) {
               </Group>
               <FieldRow
                 savedLabel={t("settings.originTokenHeaderLabel")}
+                onHistory={() => openHistory(SETTING_KEY_BY_FIELD["originTokenHeader"])}
                 dirty={form.originTokenHeader !== savedValues.originTokenHeader}
                 invalid={textView("originTokenHeader").invalid}
                 saving={savingField === "originTokenHeader"}
@@ -1448,6 +1518,7 @@ function ServiceSettingsForm({ initial }: { initial: SettingsConfig }) {
               />
               <FieldRow
                 savedLabel={t("settings.originTokenValueLabel")}
+                onHistory={() => openHistory(SETTING_KEY_BY_FIELD["originTokenValue"])}
                 dirty={form.originTokenValue !== savedValues.originTokenValue}
                 invalid={textView("originTokenValue").invalid}
                 saving={savingField === "originTokenValue"}
@@ -1524,6 +1595,7 @@ function ServiceSettingsForm({ initial }: { initial: SettingsConfig }) {
           >
             <FieldRow
               savedLabel={t("settings.allowedHostsLabel")}
+              onHistory={() => openHistory(SETTING_KEY_BY_FIELD.allowedHosts)}
               dirty={
                 form.allowedHosts.length !== savedValues.allowedHosts.length ||
                 form.allowedHosts.some((h, i) => h !== savedValues.allowedHosts[i])
