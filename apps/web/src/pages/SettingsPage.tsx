@@ -556,6 +556,9 @@ function FieldRow({
   saving,
   onSave,
   onHistory,
+  onHistoryClose,
+  historyOpened = false,
+  historyContent,
 }: {
   children: ReactNode;
   /** 该项的可访问名称，用于拼保存按钮的 aria-label。 */
@@ -566,20 +569,51 @@ function FieldRow({
   onSave: () => void;
   /** 打开该项的变更历史（浮层）。缺省时不渲染历史按钮。 */
   onHistory?: () => void;
+  /** 关闭该项的历史浮层。 */
+  onHistoryClose?: () => void;
+  /** 该项的历史浮层是否展开。 */
+  historyOpened?: boolean;
+  /** 浮层内容（历史表格），由调用方按该项的量纲渲染。 */
+  historyContent?: ReactNode;
 }) {
   const { t } = useTranslation();
   return (
     <Group gap="xs" wrap="nowrap" align="flex-start">
       <Box style={{ flex: 1, minWidth: 0 }}>{children}</Box>
       {onHistory ? (
-        <Button
-          size="compact-sm"
-          variant="subtle"
-          onClick={onHistory}
-          aria-label={t("settings.runtimePolicyHistoryFor", { label: savedLabel })}
+        // 历史浮层就锚在这个按钮上：不占布局、不改变任何既有元素的位置。
+        // 浮层内容由调用方通过 historyContent 传入（它需要该项自己的 formatValue）。
+        <Popover
+          opened={historyOpened}
+          onChange={(next) => {
+            if (!next) onHistoryClose?.();
+          }}
+          position="bottom-end"
+          width={440}
+          shadow="md"
+          withinPortal
+          trapFocus={false}
+          closeOnClickOutside
         >
-          {t("settings.runtimePolicyHistory")}
-        </Button>
+          <Popover.Target>
+            <Button
+              size="compact-sm"
+              variant="subtle"
+              onClick={onHistory}
+              aria-label={t("settings.runtimePolicyHistoryFor", { label: savedLabel })}
+            >
+              {t("settings.runtimePolicyHistory")}
+            </Button>
+          </Popover.Target>
+          <Popover.Dropdown>
+            <Stack gap="xs">
+              <Text size="sm" fw={600}>
+                {t("settings.runtimePolicyHistoryTitle", { label: savedLabel })}
+              </Text>
+              {historyContent}
+            </Stack>
+          </Popover.Dropdown>
+        </Popover>
       ) : null}
       <Button
         size="compact-sm"
@@ -1029,6 +1063,31 @@ function ServiceSettingsForm({ initial }: { initial: SettingsConfig }) {
       .finally(() => setSavingField(null));
   };
 
+  /**
+   * 某一项的「历史浮层」props：展开态、关闭回调与内容。
+   *
+   * 抽成函数是因为 9 个字段都要这套东西，逐处手写既冗长又容易漏
+   * （漏 historyContent 就会弹出空浮层——不报错，只是看不见东西）。
+   * formatValue 按该字段自己的量纲渲染（秒→天、字节→GB）。
+   */
+  const historyPropsFor = (key: EditableFieldKey) => {
+    const settingKey = SETTING_KEY_BY_FIELD[key];
+    const field = RUNTIME_POLICY_FIELDS.find((f) => f.key === key);
+    return {
+      onHistory: () => openHistory(settingKey),
+      onHistoryClose: () => setHistoryKey(null),
+      historyOpened: historyKey === settingKey,
+      historyContent: (
+        <SettingHistoryBody
+          entries={historyEntries}
+          loading={historyLoading}
+          error={historyError}
+          formatValue={(raw) => (field ? formatHistoryValue(t, field, raw) : raw)}
+        />
+      ),
+    };
+  };
+
   /** 只提交被改动的这一项；后端是部分更新，未传的键保持原值。 */
   const saveRuntimeField = (field: RuntimePolicyField) => {
     const error = validateRuntimeField(field, form[field.key]);
@@ -1187,16 +1246,46 @@ function ServiceSettingsForm({ initial }: { initial: SettingsConfig }) {
                     setForm({ ...form, anonymousAccess: event.currentTarget.checked })
                   }
                 />
-                <Button
-                  size="compact-sm"
-                  variant="subtle"
-                  aria-label={t("settings.runtimePolicyHistoryFor", {
-                    label: t("settings.anonymousLabel"),
-                  })}
-                  onClick={() => openHistory(SETTING_KEY_BY_FIELD.anonymousAccess)}
+                <Popover
+                  opened={historyKey === SETTING_KEY_BY_FIELD.anonymousAccess}
+                  onChange={(next) => {
+                    if (!next) setHistoryKey(null);
+                  }}
+                  position="bottom-end"
+                  width={440}
+                  shadow="md"
+                  withinPortal
+                  trapFocus={false}
+                  closeOnClickOutside
                 >
-                  {t("settings.runtimePolicyHistory")}
-                </Button>
+                  <Popover.Target>
+                    <Button
+                      size="compact-sm"
+                      variant="subtle"
+                      aria-label={t("settings.runtimePolicyHistoryFor", {
+                        label: t("settings.anonymousLabel"),
+                      })}
+                      onClick={() => openHistory(SETTING_KEY_BY_FIELD.anonymousAccess)}
+                    >
+                      {t("settings.runtimePolicyHistory")}
+                    </Button>
+                  </Popover.Target>
+                  <Popover.Dropdown>
+                    <Stack gap="xs">
+                      <Text size="sm" fw={600}>
+                        {t("settings.runtimePolicyHistoryTitle", {
+                          label: t("settings.anonymousLabel"),
+                        })}
+                      </Text>
+                      <SettingHistoryBody
+                        entries={historyEntries}
+                        loading={historyLoading}
+                        error={historyError}
+                        formatValue={(raw) => raw}
+                      />
+                    </Stack>
+                  </Popover.Dropdown>
+                </Popover>
                 <Button
                   size="compact-sm"
                   variant={
@@ -1217,7 +1306,7 @@ function ServiceSettingsForm({ initial }: { initial: SettingsConfig }) {
             </Group>
             <FieldRow
               savedLabel={t("settings.publicUrlLabel")}
-              onHistory={() => openHistory(SETTING_KEY_BY_FIELD["publicUrl"])}
+              {...historyPropsFor("publicUrl")}
               dirty={form.publicUrl !== savedValues.publicUrl}
               invalid={textView("publicUrl").invalid}
               saving={savingField === "publicUrl"}
@@ -1256,7 +1345,7 @@ function ServiceSettingsForm({ initial }: { initial: SettingsConfig }) {
             />
             <FieldRow
               savedLabel={t("settings.upstreamTimeoutLabel")}
-              onHistory={() => openHistory(SETTING_KEY_BY_FIELD["upstreamTimeout"])}
+              {...historyPropsFor("upstreamTimeout")}
               dirty={form.upstreamTimeout !== savedValues.upstreamTimeout}
               invalid={viewOf("upstreamTimeout", MIN_SECS, MAX_SECS).invalid}
               saving={savingField === "upstreamTimeout"}
@@ -1309,7 +1398,7 @@ function ServiceSettingsForm({ initial }: { initial: SettingsConfig }) {
                 无需重启」与「0 = 关闭负缓存」——后者是界面上唯一能表达关闭语义的地方。 */}
             <FieldRow
               savedLabel={t("settings.groupMemberTimeoutLabel")}
-              onHistory={() => openHistory(SETTING_KEY_BY_FIELD["groupMemberTimeout"])}
+              {...historyPropsFor("groupMemberTimeout")}
               dirty={form.groupMemberTimeout !== savedValues.groupMemberTimeout}
               invalid={viewOf("groupMemberTimeout", MIN_SECS, MAX_SECS).invalid}
               saving={savingField === "groupMemberTimeout"}
@@ -1362,7 +1451,7 @@ function ServiceSettingsForm({ initial }: { initial: SettingsConfig }) {
             />
             <FieldRow
               savedLabel={t("settings.negativeCacheTTLLabel")}
-              onHistory={() => openHistory(SETTING_KEY_BY_FIELD["negativeCacheTTL"])}
+              {...historyPropsFor("negativeCacheTTL")}
               dirty={form.negativeCacheTTL !== savedValues.negativeCacheTTL}
               invalid={viewOf("negativeCacheTTL", 0, MAX_SECS).invalid}
               saving={savingField === "negativeCacheTTL"}
@@ -1448,16 +1537,46 @@ function ServiceSettingsForm({ initial }: { initial: SettingsConfig }) {
                       setForm({ ...form, originTokenEnabled: event.currentTarget.checked })
                     }
                   />
-                  <Button
-                    size="compact-sm"
-                    variant="subtle"
-                    aria-label={t("settings.runtimePolicyHistoryFor", {
-                      label: t("settings.originTokenLabel"),
-                    })}
-                    onClick={() => openHistory(SETTING_KEY_BY_FIELD.originTokenEnabled)}
+                  <Popover
+                    opened={historyKey === SETTING_KEY_BY_FIELD.originTokenEnabled}
+                    onChange={(next) => {
+                      if (!next) setHistoryKey(null);
+                    }}
+                    position="bottom-end"
+                    width={440}
+                    shadow="md"
+                    withinPortal
+                    trapFocus={false}
+                    closeOnClickOutside
                   >
-                    {t("settings.runtimePolicyHistory")}
-                  </Button>
+                    <Popover.Target>
+                      <Button
+                        size="compact-sm"
+                        variant="subtle"
+                        aria-label={t("settings.runtimePolicyHistoryFor", {
+                          label: t("settings.originTokenLabel"),
+                        })}
+                        onClick={() => openHistory(SETTING_KEY_BY_FIELD.originTokenEnabled)}
+                      >
+                        {t("settings.runtimePolicyHistory")}
+                      </Button>
+                    </Popover.Target>
+                    <Popover.Dropdown>
+                      <Stack gap="xs">
+                        <Text size="sm" fw={600}>
+                          {t("settings.runtimePolicyHistoryTitle", {
+                            label: t("settings.originTokenLabel"),
+                          })}
+                        </Text>
+                        <SettingHistoryBody
+                          entries={historyEntries}
+                          loading={historyLoading}
+                          error={historyError}
+                          formatValue={(raw) => raw}
+                        />
+                      </Stack>
+                    </Popover.Dropdown>
+                  </Popover>
                   <Button
                     size="compact-sm"
                     variant={
@@ -1480,7 +1599,7 @@ function ServiceSettingsForm({ initial }: { initial: SettingsConfig }) {
               </Group>
               <FieldRow
                 savedLabel={t("settings.originTokenHeaderLabel")}
-                onHistory={() => openHistory(SETTING_KEY_BY_FIELD["originTokenHeader"])}
+                {...historyPropsFor("originTokenHeader")}
                 dirty={form.originTokenHeader !== savedValues.originTokenHeader}
                 invalid={textView("originTokenHeader").invalid}
                 saving={savingField === "originTokenHeader"}
@@ -1518,7 +1637,7 @@ function ServiceSettingsForm({ initial }: { initial: SettingsConfig }) {
               />
               <FieldRow
                 savedLabel={t("settings.originTokenValueLabel")}
-                onHistory={() => openHistory(SETTING_KEY_BY_FIELD["originTokenValue"])}
+                {...historyPropsFor("originTokenValue")}
                 dirty={form.originTokenValue !== savedValues.originTokenValue}
                 invalid={textView("originTokenValue").invalid}
                 saving={savingField === "originTokenValue"}
@@ -1595,7 +1714,7 @@ function ServiceSettingsForm({ initial }: { initial: SettingsConfig }) {
           >
             <FieldRow
               savedLabel={t("settings.allowedHostsLabel")}
-              onHistory={() => openHistory(SETTING_KEY_BY_FIELD.allowedHosts)}
+              {...historyPropsFor("allowedHosts")}
               dirty={
                 form.allowedHosts.length !== savedValues.allowedHosts.length ||
                 form.allowedHosts.some((h, i) => h !== savedValues.allowedHosts[i])
