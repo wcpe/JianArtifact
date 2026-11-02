@@ -70,7 +70,10 @@ describe("设置页", () => {
     expect(screen.getByText("允许访问的域名")).toBeTruthy();
     // 「未限制」现在同时出现在白名单分区与顶部概览带的「域名白名单」取值上，故用 getAllByText。
     expect(screen.getAllByText("未限制").length).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: "保存设置" })).toBeTruthy();
+    // 保存改为逐项按钮：不再有全局「保存设置」。
+    expect(screen.queryByRole("button", { name: "保存设置" })).toBeNull();
+    expect(screen.getByRole("button", { name: "保存「对外基础 URL」" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "保存「允许访问的域名」" })).toBeTruthy();
     expect(screen.queryByText("集群")).toBeNull();
     expect(screen.queryByText(/JIAN_/)).toBeNull();
   });
@@ -87,11 +90,9 @@ describe("设置页", () => {
     expect(await screen.findByText("mirror.example.net")).toBeTruthy();
     expect(screen.getByText("共 1 条")).toBeTruthy();
 
-    await user.click(screen.getByRole("button", { name: "保存设置" }));
+    await user.click(screen.getByRole("button", { name: "保存「允许访问的域名」" }));
     await waitFor(() => expect(api.putSettings).toHaveBeenCalledTimes(1));
-    expect(api.putSettings).toHaveBeenCalledWith(
-      expect.objectContaining({ allowedHosts: ["mirror.example.net"] }),
-    );
+    expect(api.putSettings).toHaveBeenCalledWith({ allowedHosts: ["mirror.example.net"] });
   });
 
   it("改动出现未保存提示，保存成功后消除", async () => {
@@ -110,8 +111,13 @@ describe("设置页", () => {
     await user.type(screen.getByLabelText("请求头名"), "X-Jian-Origin-Token");
     await user.type(screen.getByLabelText("Token 值"), "token-value-for-test");
 
-    await user.click(screen.getByRole("button", { name: "保存设置" }));
+    // 逐项保存：开关、头名、值各自提交一次，全部完成后才回到「已保存」。
+    await user.click(screen.getByRole("button", { name: "保存「回源 Token 校验」" }));
     await waitFor(() => expect(api.putSettings).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole("button", { name: "保存「请求头名」" }));
+    await waitFor(() => expect(api.putSettings).toHaveBeenCalledTimes(2));
+    await user.click(screen.getByRole("button", { name: "保存「Token 值」" }));
+    await waitFor(() => expect(api.putSettings).toHaveBeenCalledTimes(3));
     expect(await screen.findByText("已保存")).toBeTruthy();
   });
 
@@ -298,7 +304,7 @@ describe("设置页", () => {
     const input = screen.getByLabelText(label);
     await user.clear(input);
     await user.type(input, "45");
-    await user.click(screen.getByRole("button", { name: "保存设置" }));
+    await user.click(screen.getByRole("button", { name: "保存「回源超时（秒）」" }));
 
     await waitFor(() => expect(api.putSettings).toHaveBeenCalledTimes(1));
     // 关键断言：保存成功后没有再次 getSettings（即没有触发全局 reload）。
@@ -317,9 +323,9 @@ describe("设置页", () => {
     await user.type(input, "ftp://not-allowed");
 
     expect(await screen.findByText("对外基础 URL必须是 http/https 开头的完整地址")).toBeTruthy();
-    expect((screen.getByRole("button", { name: "保存设置" }) as HTMLButtonElement).disabled).toBe(
-      true,
-    );
+    expect(
+      (screen.getByRole("button", { name: "保存「对外基础 URL」" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
     expect(api.putSettings).not.toHaveBeenCalled();
   });
 
@@ -332,37 +338,39 @@ describe("设置页", () => {
 
     expect(await screen.findByText("请求头名不能为空")).toBeTruthy();
     expect(screen.getByText("Token 值不能为空")).toBeTruthy();
-    expect((screen.getByRole("button", { name: "保存设置" }) as HTMLButtonElement).disabled).toBe(
-      true,
-    );
+    // 两项各自的保存按钮都被禁用（不存在全局保存按钮可绕过）。
+    expect(
+      (screen.getByRole("button", { name: "保存「请求头名」" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(
+      (screen.getByRole("button", { name: "保存「Token 值」" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
   });
 
-  it("13 项运行期策略整批进入提交体，且 0 不被当成空值", async () => {
-    // 0 是「禁用作业 / 不限制」的合法取值：归一化若用 `|| 86400`，这里会拿到默认值。
+  // 逐项保存后不再有「整批提交」，但「0 不能被当成空值而吞掉」仍必须成立：
+  // 0 在这些项上是「禁用作业 / 不限制」的合法取值。
+  it("运行期策略逐项提交时 0 不被当成空值", async () => {
     api.getSettings.mockResolvedValue({ ...baseSettings, blobGcInterval: 0, trashMaxBytes: 0 });
     const user = userEvent.setup();
     renderWithProviders(<SettingsPage />, { route: "/settings", authenticated: true });
 
     await screen.findByTestId("settings-runtime-policy");
-    await user.click(screen.getByRole("button", { name: "保存设置" }));
-    await waitFor(() => expect(api.putSettings).toHaveBeenCalledTimes(1));
+    api.putSettings.mockClear();
 
-    expect(api.putSettings).toHaveBeenCalledWith(
-      expect.objectContaining({
-        blobGcInterval: 0,
-        trashMaxBytes: 0,
-        storageCleanupInterval: 86400,
-        backupOrphanCleanupInterval: 86400,
-        trashGcInterval: 86400,
-        upstreamProbeInterval: 60,
-        backupOrphanGraceHours: 1,
-        storageMetadataRetentionDays: 7,
-        storageTempMaxAgeHours: 24,
-        trashRetentionDays: 7,
-        autoBlockBaseSeconds: 40,
-        searchTimeoutSeconds: 10,
-        capacityCacheTtlSeconds: 30,
-      }),
-    );
+    // 把「回收站容量上限」改成一个非零值再存，验证提交值是该字段自己的字节数。
+    const label = "回收站容量上限（字节）";
+    const input = screen.getByLabelText(label);
+    await user.clear(input);
+    await user.type(input, "3");
+    await user.click(screen.getByRole("button", { name: `保存「${label}」` }));
+
+    await waitFor(() => expect(api.putSettings).toHaveBeenCalledTimes(1));
+    // 只提交这一个键，且**以字节提交**（不是把界面上的 3 直接当字节）。
+    // 具体字节数取决于当前单位（初始值 0 时按 MB 显示，故 3 → 3 MiB），
+    // 因此断言「是 3 的整数倍且远大于 3」，而不是钉死某一个单位下的值。
+    const payload = api.putSettings.mock.calls[0]?.[0] as { trashMaxBytes?: number };
+    expect(Object.keys(payload)).toEqual(["trashMaxBytes"]);
+    expect(payload.trashMaxBytes).toBeGreaterThan(1024);
+    expect(payload.trashMaxBytes! % 3).toBe(0);
   });
 });
