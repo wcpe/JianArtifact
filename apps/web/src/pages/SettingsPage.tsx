@@ -5,7 +5,6 @@
 import {
   IconClock,
   IconCopy,
-  IconDeviceFloppy,
   IconKey,
   IconRefresh,
   IconShieldCheck,
@@ -13,6 +12,7 @@ import {
 } from "@tabler/icons-react";
 import {
   Alert,
+  Box,
   Badge,
   Button,
   Group,
@@ -27,7 +27,7 @@ import {
   Text,
   TextInput,
 } from "@mantine/core";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 import {
@@ -83,8 +83,11 @@ type EditableNumberKey =
 /** 设置页里所有走「绿/红描边 + 状态行」的文本字段键。 */
 type EditableTextFieldKey = "publicUrl" | "originTokenHeader" | "originTokenValue" | "allowedHosts";
 
-/** 设置页里所有会被校验与标注状态的字段（数值 + 文本）。 */
-type EditableFieldKey = EditableNumberKey | EditableTextFieldKey;
+/** 开关类字段（没有输入框，但同样需要逐项保存）。 */
+type EditableSwitchKey = "anonymousAccess" | "originTokenEnabled";
+
+/** 设置页里所有会被校验与标注状态的字段（数值 + 文本 + 开关）。 */
+type EditableFieldKey = EditableNumberKey | EditableTextFieldKey | EditableSwitchKey;
 
 /** 运行期策略分区的字段键（顺序与规格 §2.1 的迁移清单一致）。 */
 type RuntimePolicyKey =
@@ -496,15 +499,62 @@ function fieldOutlineClass(touched: boolean, invalid: boolean): string | undefin
   return invalid ? "ja-field-invalid" : "ja-field-valid";
 }
 
+/**
+ * 单个设置项的「输入框 + 保存按钮」行。
+ *
+ * 逐项保存而不是一个总按钮：总按钮会把其它字段的未保存改动一并提交，
+ * 改错一个就得全部回滚；逐项保存让每次提交只影响它自己那一项。
+ *
+ * 按钮只在该项「有改动且校验通过」时可点——没改动时保存等于空提交，
+ * 校验不过时后端必然拒绝，两者都不该给用户按下去的机会。
+ */
+function FieldRow({
+  children,
+  savedLabel,
+  dirty,
+  invalid,
+  saving,
+  onSave,
+}: {
+  children: ReactNode;
+  /** 该项的可访问名称，用于拼保存按钮的 aria-label。 */
+  savedLabel: string;
+  dirty: boolean;
+  invalid: boolean;
+  saving: boolean;
+  onSave: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <Group gap="xs" wrap="nowrap" align="flex-start">
+      <Box style={{ flex: 1, minWidth: 0 }}>{children}</Box>
+      <Button
+        size="compact-sm"
+        variant={dirty ? "light" : "subtle"}
+        loading={saving}
+        disabled={!dirty || invalid}
+        onClick={onSave}
+        aria-label={t("settings.saveField", { label: savedLabel })}
+      >
+        {t("settings.saveFieldShort")}
+      </Button>
+    </Group>
+  );
+}
+
 /** 一行状态提示：三态三色，位置固定（不随状态增删，避免行高跳动）。 */
 function FieldStatusLine({
   touched,
+  dirty,
   invalid,
   reason,
   okText,
   idleText,
 }: {
+  /** 用户是否碰过这一项（决定是否显示校验结论）。 */
   touched: boolean;
+  /** 该项是否相对「已保存值」发生了改动。 */
+  dirty: boolean;
   invalid: boolean;
   reason: string;
   okText: string;
@@ -523,7 +573,10 @@ function FieldStatusLine({
       </Text>
     );
   }
-  if (!touched) {
+  if (!touched || !dirty) {
+    // 没碰过、或值与已保存的一致（等于没改）：只报静态说明。
+    // 绿色「校验通过」只在**确实改动了**且通过时出现——
+    // 否则一进页面满屏「✓ 校验通过」，这个标记就失去意义了。
     return (
       <Text size="xs" c="dimmed">
         {idleText}
@@ -733,9 +786,8 @@ function ServiceSettingsForm({ initial }: { initial: SettingsConfig }) {
   // 若拿「当前整表」重算签名写回，那些未提交的改动会被一并算进「已保存」，
   // 顶部随即显示「已保存」——用户据此离开页面，改动就静默丢了。
   const [savedValues, setSavedValues] = useState<SettingsConfig>(() => normalizeForm(initial));
-  const [saving, setSaving] = useState(false);
   // 逐项保存中的字段：只禁用该行，其余字段仍可继续编辑。
-  const [savingField, setSavingField] = useState<RuntimePolicyKey | null>(null);
+  const [savingField, setSavingField] = useState<EditableFieldKey | null>(null);
   // 逐项校验结果与「输入已完成」标记。校验只在失焦/回车后给出，
   // 不在每次按键时弹错——边打字边报错会让「删掉旧值准备重输」的中间态一直显示错误。
   // 已校验过的字段（键可以是运行期策略字段名，也可以是服务设置里的普通数字字段名）。
@@ -880,16 +932,49 @@ function ServiceSettingsForm({ initial }: { initial: SettingsConfig }) {
     return "";
   };
 
-  const hasInvalidField =
-    viewOf("upstreamTimeout", MIN_SECS, MAX_SECS).invalid ||
-    viewOf("groupMemberTimeout", MIN_SECS, MAX_SECS).invalid ||
-    viewOf("negativeCacheTTL", 0, MAX_SECS).invalid ||
-    RUNTIME_POLICY_FIELDS.some((field) => validateRuntimeField(field, form[field.key]) !== null) ||
-    // allowedHosts 不在此列：它的非法条目会被过滤掉并单独提示，
-    // 不构成「无法保存」的阻塞（白名单本身仍是可提交的）。
-    (["publicUrl", "originTokenHeader", "originTokenValue"] as const).some(
-      (key) => textView(key).invalid,
-    );
+  /**
+   * 保存单个「服务设置 / 安全防护」字段。
+   *
+   * 与运行期策略的 saveRuntimeField 同一套语义：只提交这一个键，
+   * 后端是部分更新、未传的键保持原值；成功后只回填这一项，不整页刷新。
+   *
+   * 为什么每个字段都需要自己的保存入口而不是一个总按钮：
+   * 总按钮会把「其它字段的未保存改动」一起提交，用户改错一个就必须全部回滚；
+   * 逐项保存让每一次提交都只影响它自己那一项。
+   */
+  const saveSingleField = (
+    key: EditableFieldKey,
+    invalid: boolean,
+    payload: Partial<SettingsConfig>,
+  ) => {
+    if (invalid) {
+      notifyError(t("settings.fieldCannotSave"));
+      return;
+    }
+    setSavingField(key);
+    putSettings(payload)
+      .then((res) => {
+        const next = normalizeForm(res);
+        // 只覆盖本次提交过的键：其余字段可能还有未保存的编辑，不能被一并冲掉。
+        setForm((prev) => {
+          const merged = { ...prev };
+          for (const k of Object.keys(payload) as (keyof SettingsConfig)[]) {
+            (merged as Record<string, unknown>)[k] = next[k];
+          }
+          return merged;
+        });
+        setSavedValues((prev) => {
+          const merged = { ...prev };
+          for (const k of Object.keys(payload) as (keyof SettingsConfig)[]) {
+            (merged as Record<string, unknown>)[k] = next[k];
+          }
+          return merged;
+        });
+        notifySuccess(t("common.saved"));
+      })
+      .catch(notifyError)
+      .finally(() => setSavingField(null));
+  };
 
   /** 只提交被改动的这一项；后端是部分更新，未传的键保持原值。 */
   const saveRuntimeField = (field: RuntimePolicyField) => {
@@ -933,78 +1018,6 @@ function ServiceSettingsForm({ initial }: { initial: SettingsConfig }) {
       })
       .catch(notifyError)
       .finally(() => setSavingField(null));
-  };
-
-  const save = () => {
-    if (form.upstreamTimeout < MIN_SECS || form.upstreamTimeout > MAX_SECS) {
-      notifyError(t("settings.validationRange"));
-      return;
-    }
-    // 成员确认预算无「关闭」语义：0 秒等于每个成员都立刻超时，因此下限是 1。
-    if (form.groupMemberTimeout < MIN_SECS || form.groupMemberTimeout > MAX_SECS) {
-      notifyError(t("settings.groupMemberTimeoutRange"));
-      return;
-    }
-    // 负缓存 TTL 的下限是 0——0 恰恰是「关闭负缓存」的显式取值，不能被前端拦掉。
-    if (form.negativeCacheTTL < 0 || form.negativeCacheTTL > MAX_SECS) {
-      notifyError(t("settings.negativeCacheTTLRange"));
-      return;
-    }
-    // 13 项运行期策略：逐项按声明区间检查，报错时带上字段名，
-    // 免得用户在一屏 13 个输入框里自己找是哪一项不合规。
-    // 这里只拦「明显笔误」；真正的夹取与中文警告由后端完成（两个入口必须同口径）。
-    for (const field of RUNTIME_POLICY_FIELDS) {
-      const label = t(runtimePolicyTextKeys(field.key).label);
-      const value = form[field.key];
-      if (value < field.min) {
-        notifyError(
-          field.min > 0
-            ? t("settings.runtimePolicyPositiveRequired", { label })
-            : t("settings.runtimePolicyNonNegative", { label }),
-        );
-        return;
-      }
-      if (value > field.max) {
-        notifyError(t("settings.runtimePolicyTooLarge", { label, max: field.max }));
-        return;
-      }
-    }
-    setSaving(true);
-    putSettings({
-      anonymousAccess: form.anonymousAccess,
-      publicUrl: form.publicUrl.trim(),
-      upstreamTimeout: form.upstreamTimeout,
-      allowedHosts: form.allowedHosts,
-      originTokenEnabled: form.originTokenEnabled,
-      originTokenHeader: form.originTokenHeader.trim(),
-      originTokenValue: form.originTokenValue.trim(),
-      groupMemberTimeout: form.groupMemberTimeout,
-      negativeCacheTTL: form.negativeCacheTTL,
-      // 13 项运行期策略必须逐项提交：后端是「传哪个改哪个」，
-      // 漏传即等于保持原值，而用户会以为改动已保存。
-      blobGcInterval: form.blobGcInterval,
-      storageCleanupInterval: form.storageCleanupInterval,
-      backupOrphanCleanupInterval: form.backupOrphanCleanupInterval,
-      trashGcInterval: form.trashGcInterval,
-      upstreamProbeInterval: form.upstreamProbeInterval,
-      backupOrphanGraceHours: form.backupOrphanGraceHours,
-      storageMetadataRetentionDays: form.storageMetadataRetentionDays,
-      storageTempMaxAgeHours: form.storageTempMaxAgeHours,
-      trashRetentionDays: form.trashRetentionDays,
-      // 提交的始终是字节数，界面上的「≈ 2.0 GB」只是显示换算。
-      trashMaxBytes: form.trashMaxBytes,
-      autoBlockBaseSeconds: form.autoBlockBaseSeconds,
-      searchTimeoutSeconds: form.searchTimeoutSeconds,
-      capacityCacheTtlSeconds: form.capacityCacheTtlSeconds,
-    })
-      .then((res) => {
-        const next = normalizeForm(res);
-        setForm(next);
-        setSavedValues(next);
-        notifySuccess(t("common.saved"));
-      })
-      .catch(notifyError)
-      .finally(() => setSaving(false));
   };
 
   return (
@@ -1079,19 +1092,12 @@ function ServiceSettingsForm({ initial }: { initial: SettingsConfig }) {
                   },
                 ]}
               />
+              {/* 保存已改为逐项按钮（每个字段各自一个）：一个总按钮会把其它字段的
+                  未保存改动一并提交，改错一个就得全部回滚。这里只保留整体状态。 */}
               <StatusPill
                 tone={dirty ? "yellow" : "gray"}
                 text={dirty ? t("settings.unsaved") : t("settings.saved")}
               />
-              <Button
-                size="sm"
-                leftSection={<IconDeviceFloppy size={16} />}
-                loading={saving}
-                disabled={hasInvalidField}
-                onClick={save}
-              >
-                {t("settings.save")}
-              </Button>
             </>
           }
         />
@@ -1119,62 +1125,108 @@ function ServiceSettingsForm({ initial }: { initial: SettingsConfig }) {
                   {t("settings.anonymousHint")}
                 </Text>
               </Stack>
-              <Switch
-                checked={form.anonymousAccess}
-                disabled={saving}
-                aria-label={t("settings.anonymousLabel")}
-                onChange={(event) =>
-                  setForm({ ...form, anonymousAccess: event.currentTarget.checked })
-                }
-              />
+              <Group gap="xs" wrap="nowrap">
+                <Switch
+                  checked={form.anonymousAccess}
+                  disabled={savingField === "anonymousAccess"}
+                  aria-label={t("settings.anonymousLabel")}
+                  onChange={(event) =>
+                    setForm({ ...form, anonymousAccess: event.currentTarget.checked })
+                  }
+                />
+                <Button
+                  size="compact-sm"
+                  variant={
+                    form.anonymousAccess !== savedValues.anonymousAccess ? "light" : "subtle"
+                  }
+                  loading={savingField === "anonymousAccess"}
+                  disabled={form.anonymousAccess === savedValues.anonymousAccess}
+                  aria-label={t("settings.saveField", { label: t("settings.anonymousLabel") })}
+                  onClick={() =>
+                    saveSingleField("anonymousAccess", false, {
+                      anonymousAccess: form.anonymousAccess,
+                    })
+                  }
+                >
+                  {t("settings.saveFieldShort")}
+                </Button>
+              </Group>
             </Group>
-            <TextInput
-              label={t("settings.publicUrlLabel")}
-              description={t("settings.publicUrlHint")}
-              placeholder="https://repo.example.com"
-              value={form.publicUrl}
-              disabled={saving}
-              className={fieldOutlineClass(
-                touchedFields.publicUrl === true,
-                textView("publicUrl").invalid,
-              )}
-              error={textView("publicUrl").invalid || undefined}
-              onChange={(event) => {
-                markTouched("publicUrl");
-                setForm({ ...form, publicUrl: event.currentTarget.value });
-              }}
-              onFocus={() => markTouched("publicUrl")}
-            />
+            <FieldRow
+              savedLabel={t("settings.publicUrlLabel")}
+              dirty={form.publicUrl !== savedValues.publicUrl}
+              invalid={textView("publicUrl").invalid}
+              saving={savingField === "publicUrl"}
+              onSave={() =>
+                saveSingleField("publicUrl", textView("publicUrl").invalid, {
+                  publicUrl: form.publicUrl.trim(),
+                })
+              }
+            >
+              <TextInput
+                label={t("settings.publicUrlLabel")}
+                description={t("settings.publicUrlHint")}
+                placeholder="https://repo.example.com"
+                value={form.publicUrl}
+                disabled={savingField === "publicUrl"}
+                className={fieldOutlineClass(
+                  touchedFields.publicUrl === true,
+                  textView("publicUrl").invalid,
+                )}
+                error={textView("publicUrl").invalid || undefined}
+                onChange={(event) => {
+                  markTouched("publicUrl");
+                  setForm({ ...form, publicUrl: event.currentTarget.value });
+                }}
+                onFocus={() => markTouched("publicUrl")}
+              />
+            </FieldRow>
             <FieldStatusLine
               touched={touchedFields.publicUrl === true}
+              dirty={form.publicUrl !== savedValues.publicUrl}
               invalid={textView("publicUrl").invalid}
               reason={textReason("publicUrl", t("settings.publicUrlLabel"))}
               okText={t("settings.fieldValidUrl")}
               idleText={t("settings.fieldIdleUrl")}
             />
-            <NumberInput
-              label={t("settings.upstreamTimeoutLabel")}
-              min={MIN_SECS}
-              max={MAX_SECS}
-              value={form.upstreamTimeout}
-              disabled={saving}
-              className={fieldOutlineClass(
-                touchedFields.upstreamTimeout === true,
-                viewOf("upstreamTimeout", MIN_SECS, MAX_SECS).invalid,
-              )}
-              onChange={(value) =>
-                setNumberField("upstreamTimeout", value, (next) =>
-                  setForm({ ...form, upstreamTimeout: next }),
+            <FieldRow
+              savedLabel={t("settings.upstreamTimeoutLabel")}
+              dirty={form.upstreamTimeout !== savedValues.upstreamTimeout}
+              invalid={viewOf("upstreamTimeout", MIN_SECS, MAX_SECS).invalid}
+              saving={savingField === "upstreamTimeout"}
+              onSave={() =>
+                saveSingleField(
+                  "upstreamTimeout",
+                  viewOf("upstreamTimeout", MIN_SECS, MAX_SECS).invalid,
+                  { upstreamTimeout: form.upstreamTimeout },
                 )
               }
-              onFocus={() => markTouched("upstreamTimeout")}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") markTouched("upstreamTimeout");
-              }}
-              error={viewOf("upstreamTimeout", MIN_SECS, MAX_SECS).invalid || undefined}
-            />
+            >
+              <NumberInput
+                label={t("settings.upstreamTimeoutLabel")}
+                min={MIN_SECS}
+                max={MAX_SECS}
+                value={form.upstreamTimeout}
+                disabled={savingField === "upstreamTimeout"}
+                className={fieldOutlineClass(
+                  touchedFields.upstreamTimeout === true,
+                  viewOf("upstreamTimeout", MIN_SECS, MAX_SECS).invalid,
+                )}
+                onChange={(value) =>
+                  setNumberField("upstreamTimeout", value, (next) =>
+                    setForm({ ...form, upstreamTimeout: next }),
+                  )
+                }
+                onFocus={() => markTouched("upstreamTimeout")}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") markTouched("upstreamTimeout");
+                }}
+                error={viewOf("upstreamTimeout", MIN_SECS, MAX_SECS).invalid || undefined}
+              />
+            </FieldRow>
             <FieldStatusLine
               touched={touchedFields.upstreamTimeout === true}
+              dirty={form.upstreamTimeout !== savedValues.upstreamTimeout}
               invalid={viewOf("upstreamTimeout", MIN_SECS, MAX_SECS).invalid}
               reason={fieldReason(
                 "upstreamTimeout",
@@ -1188,30 +1240,47 @@ function ServiceSettingsForm({ initial }: { initial: SettingsConfig }) {
             {/* 两项 proxy/group 调优。放在「服务设置」而非安全区：它们调的是读路径的
                 失败速度与记忆时长，不涉及访问控制。帮助文案必须写明「改动即时生效、
                 无需重启」与「0 = 关闭负缓存」——后者是界面上唯一能表达关闭语义的地方。 */}
-            <NumberInput
-              label={t("settings.groupMemberTimeoutLabel")}
-              description={t("settings.groupMemberTimeoutHint")}
-              min={MIN_SECS}
-              max={MAX_SECS}
-              value={form.groupMemberTimeout}
-              disabled={saving}
-              className={fieldOutlineClass(
-                touchedFields.groupMemberTimeout === true,
-                viewOf("groupMemberTimeout", MIN_SECS, MAX_SECS).invalid,
-              )}
-              error={viewOf("groupMemberTimeout", MIN_SECS, MAX_SECS).invalid || undefined}
-              onChange={(value) =>
-                setNumberField("groupMemberTimeout", value, (next) =>
-                  setForm({ ...form, groupMemberTimeout: next }),
+            <FieldRow
+              savedLabel={t("settings.groupMemberTimeoutLabel")}
+              dirty={form.groupMemberTimeout !== savedValues.groupMemberTimeout}
+              invalid={viewOf("groupMemberTimeout", MIN_SECS, MAX_SECS).invalid}
+              saving={savingField === "groupMemberTimeout"}
+              onSave={() =>
+                saveSingleField(
+                  "groupMemberTimeout",
+                  viewOf("groupMemberTimeout", MIN_SECS, MAX_SECS).invalid,
+                  {
+                    groupMemberTimeout: form.groupMemberTimeout,
+                  },
                 )
               }
-              onFocus={() => markTouched("groupMemberTimeout")}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") markTouched("groupMemberTimeout");
-              }}
-            />
+            >
+              <NumberInput
+                label={t("settings.groupMemberTimeoutLabel")}
+                description={t("settings.groupMemberTimeoutHint")}
+                min={MIN_SECS}
+                max={MAX_SECS}
+                value={form.groupMemberTimeout}
+                disabled={savingField === "groupMemberTimeout"}
+                className={fieldOutlineClass(
+                  touchedFields.groupMemberTimeout === true,
+                  viewOf("groupMemberTimeout", MIN_SECS, MAX_SECS).invalid,
+                )}
+                error={viewOf("groupMemberTimeout", MIN_SECS, MAX_SECS).invalid || undefined}
+                onChange={(value) =>
+                  setNumberField("groupMemberTimeout", value, (next) =>
+                    setForm({ ...form, groupMemberTimeout: next }),
+                  )
+                }
+                onFocus={() => markTouched("groupMemberTimeout")}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") markTouched("groupMemberTimeout");
+                }}
+              />
+            </FieldRow>
             <FieldStatusLine
               touched={touchedFields.groupMemberTimeout === true}
+              dirty={form.groupMemberTimeout !== savedValues.groupMemberTimeout}
               invalid={viewOf("groupMemberTimeout", MIN_SECS, MAX_SECS).invalid}
               reason={fieldReason(
                 "groupMemberTimeout",
@@ -1222,30 +1291,47 @@ function ServiceSettingsForm({ initial }: { initial: SettingsConfig }) {
               okText={t("settings.runtimePolicyValidPlain")}
               idleText={t("settings.runtimePolicyRangeHint", { min: MIN_SECS, max: MAX_SECS })}
             />
-            <NumberInput
-              label={t("settings.negativeCacheTTLLabel")}
-              description={t("settings.negativeCacheTTLHint")}
-              min={0}
-              max={MAX_SECS}
-              value={form.negativeCacheTTL}
-              disabled={saving}
-              className={fieldOutlineClass(
-                touchedFields.negativeCacheTTL === true,
-                viewOf("negativeCacheTTL", 0, MAX_SECS).invalid,
-              )}
-              error={viewOf("negativeCacheTTL", 0, MAX_SECS).invalid || undefined}
-              onChange={(value) =>
-                setNumberField("negativeCacheTTL", value, (next) =>
-                  setForm({ ...form, negativeCacheTTL: next }),
+            <FieldRow
+              savedLabel={t("settings.negativeCacheTTLLabel")}
+              dirty={form.negativeCacheTTL !== savedValues.negativeCacheTTL}
+              invalid={viewOf("negativeCacheTTL", 0, MAX_SECS).invalid}
+              saving={savingField === "negativeCacheTTL"}
+              onSave={() =>
+                saveSingleField(
+                  "negativeCacheTTL",
+                  viewOf("negativeCacheTTL", 0, MAX_SECS).invalid,
+                  {
+                    negativeCacheTTL: form.negativeCacheTTL,
+                  },
                 )
               }
-              onFocus={() => markTouched("negativeCacheTTL")}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") markTouched("negativeCacheTTL");
-              }}
-            />
+            >
+              <NumberInput
+                label={t("settings.negativeCacheTTLLabel")}
+                description={t("settings.negativeCacheTTLHint")}
+                min={0}
+                max={MAX_SECS}
+                value={form.negativeCacheTTL}
+                disabled={savingField === "negativeCacheTTL"}
+                className={fieldOutlineClass(
+                  touchedFields.negativeCacheTTL === true,
+                  viewOf("negativeCacheTTL", 0, MAX_SECS).invalid,
+                )}
+                error={viewOf("negativeCacheTTL", 0, MAX_SECS).invalid || undefined}
+                onChange={(value) =>
+                  setNumberField("negativeCacheTTL", value, (next) =>
+                    setForm({ ...form, negativeCacheTTL: next }),
+                  )
+                }
+                onFocus={() => markTouched("negativeCacheTTL")}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") markTouched("negativeCacheTTL");
+                }}
+              />
+            </FieldRow>
             <FieldStatusLine
               touched={touchedFields.negativeCacheTTL === true}
+              dirty={form.negativeCacheTTL !== savedValues.negativeCacheTTL}
               invalid={viewOf("negativeCacheTTL", 0, MAX_SECS).invalid}
               reason={fieldReason(
                 "negativeCacheTTL",
@@ -1282,56 +1368,102 @@ function ServiceSettingsForm({ initial }: { initial: SettingsConfig }) {
                     {t("settings.originTokenHint")}
                   </Text>
                 </Stack>
-                <Switch
-                  checked={form.originTokenEnabled}
-                  disabled={saving}
-                  aria-label={t("settings.originTokenLabel")}
-                  onChange={(event) =>
-                    setForm({ ...form, originTokenEnabled: event.currentTarget.checked })
-                  }
-                />
+                <Group gap="xs" wrap="nowrap">
+                  <Switch
+                    checked={form.originTokenEnabled}
+                    disabled={savingField === "originTokenEnabled"}
+                    aria-label={t("settings.originTokenLabel")}
+                    onChange={(event) =>
+                      setForm({ ...form, originTokenEnabled: event.currentTarget.checked })
+                    }
+                  />
+                  <Button
+                    size="compact-sm"
+                    variant={
+                      form.originTokenEnabled !== savedValues.originTokenEnabled
+                        ? "light"
+                        : "subtle"
+                    }
+                    loading={savingField === "originTokenEnabled"}
+                    disabled={form.originTokenEnabled === savedValues.originTokenEnabled}
+                    aria-label={t("settings.saveField", { label: t("settings.originTokenLabel") })}
+                    onClick={() =>
+                      saveSingleField("originTokenEnabled", false, {
+                        originTokenEnabled: form.originTokenEnabled,
+                      })
+                    }
+                  >
+                    {t("settings.saveFieldShort")}
+                  </Button>
+                </Group>
               </Group>
-              <TextInput
-                label={t("settings.originTokenHeaderLabel")}
-                placeholder="X-Jian-Origin-Token"
-                value={form.originTokenHeader}
-                disabled={saving || !form.originTokenEnabled}
-                className={fieldOutlineClass(
-                  touchedFields.originTokenHeader === true,
-                  textView("originTokenHeader").invalid,
-                )}
-                error={textView("originTokenHeader").invalid || undefined}
-                onChange={(event) => {
-                  markTouched("originTokenHeader");
-                  setForm({ ...form, originTokenHeader: event.currentTarget.value });
-                }}
-                onFocus={() => markTouched("originTokenHeader")}
-              />
+              <FieldRow
+                savedLabel={t("settings.originTokenHeaderLabel")}
+                dirty={form.originTokenHeader !== savedValues.originTokenHeader}
+                invalid={textView("originTokenHeader").invalid}
+                saving={savingField === "originTokenHeader"}
+                onSave={() =>
+                  saveSingleField("originTokenHeader", textView("originTokenHeader").invalid, {
+                    originTokenHeader: form.originTokenHeader.trim(),
+                  })
+                }
+              >
+                <TextInput
+                  label={t("settings.originTokenHeaderLabel")}
+                  placeholder="X-Jian-Origin-Token"
+                  value={form.originTokenHeader}
+                  disabled={savingField === "originTokenHeader" || !form.originTokenEnabled}
+                  className={fieldOutlineClass(
+                    touchedFields.originTokenHeader === true,
+                    textView("originTokenHeader").invalid,
+                  )}
+                  error={textView("originTokenHeader").invalid || undefined}
+                  onChange={(event) => {
+                    markTouched("originTokenHeader");
+                    setForm({ ...form, originTokenHeader: event.currentTarget.value });
+                  }}
+                  onFocus={() => markTouched("originTokenHeader")}
+                />
+              </FieldRow>
               <FieldStatusLine
                 touched={touchedFields.originTokenHeader === true}
+                dirty={form.originTokenHeader !== savedValues.originTokenHeader}
                 invalid={textView("originTokenHeader").invalid}
                 reason={textReason("originTokenHeader", t("settings.originTokenHeaderLabel"))}
                 okText={t("settings.fieldValidHeaderName")}
                 idleText={t("settings.fieldIdleHeaderName")}
               />
-              <TextInput
-                label={t("settings.originTokenValueLabel")}
-                description={t("settings.originTokenValueHint")}
-                value={form.originTokenValue}
-                disabled={saving || !form.originTokenEnabled}
-                className={fieldOutlineClass(
-                  touchedFields.originTokenValue === true,
-                  textView("originTokenValue").invalid,
-                )}
-                error={textView("originTokenValue").invalid || undefined}
-                onChange={(event) => {
-                  markTouched("originTokenValue");
-                  setForm({ ...form, originTokenValue: event.currentTarget.value });
-                }}
-                onFocus={() => markTouched("originTokenValue")}
-              />
+              <FieldRow
+                savedLabel={t("settings.originTokenValueLabel")}
+                dirty={form.originTokenValue !== savedValues.originTokenValue}
+                invalid={textView("originTokenValue").invalid}
+                saving={savingField === "originTokenValue"}
+                onSave={() =>
+                  saveSingleField("originTokenValue", textView("originTokenValue").invalid, {
+                    originTokenValue: form.originTokenValue.trim(),
+                  })
+                }
+              >
+                <TextInput
+                  label={t("settings.originTokenValueLabel")}
+                  description={t("settings.originTokenValueHint")}
+                  value={form.originTokenValue}
+                  disabled={savingField === "originTokenValue" || !form.originTokenEnabled}
+                  className={fieldOutlineClass(
+                    touchedFields.originTokenValue === true,
+                    textView("originTokenValue").invalid,
+                  )}
+                  error={textView("originTokenValue").invalid || undefined}
+                  onChange={(event) => {
+                    markTouched("originTokenValue");
+                    setForm({ ...form, originTokenValue: event.currentTarget.value });
+                  }}
+                  onFocus={() => markTouched("originTokenValue")}
+                />
+              </FieldRow>
               <FieldStatusLine
                 touched={touchedFields.originTokenValue === true}
+                dirty={form.originTokenValue !== savedValues.originTokenValue}
                 invalid={textView("originTokenValue").invalid}
                 reason={textReason("originTokenValue", t("settings.originTokenValueLabel"))}
                 okText={t("settings.fieldValidToken")}
@@ -1376,23 +1508,38 @@ function ServiceSettingsForm({ initial }: { initial: SettingsConfig }) {
                 : t("settings.allowedHostsUnlimited")
             }
           >
-            <TagsInput
-              aria-label={t("settings.allowedHostsLabel")}
-              description={t("settings.allowedHostsHint")}
-              placeholder="repo.example.com"
-              value={form.allowedHosts}
-              disabled={saving}
-              clearable
-              onChange={(value) => {
-                markTouched("allowedHosts");
-                const dropped = countDroppedHosts(value);
-                setDroppedHostCount(dropped);
-                setForm({
-                  ...form,
-                  allowedHosts: Array.from(new Set(value.map(normalizeHostInput).filter(Boolean))),
-                });
-              }}
-            />
+            <FieldRow
+              savedLabel={t("settings.allowedHostsLabel")}
+              dirty={
+                form.allowedHosts.length !== savedValues.allowedHosts.length ||
+                form.allowedHosts.some((h, i) => h !== savedValues.allowedHosts[i])
+              }
+              invalid={false}
+              saving={savingField === "allowedHosts"}
+              onSave={() =>
+                saveSingleField("allowedHosts", false, { allowedHosts: form.allowedHosts })
+              }
+            >
+              <TagsInput
+                aria-label={t("settings.allowedHostsLabel")}
+                description={t("settings.allowedHostsHint")}
+                placeholder="repo.example.com"
+                value={form.allowedHosts}
+                disabled={savingField === "allowedHosts"}
+                clearable
+                onChange={(value) => {
+                  markTouched("allowedHosts");
+                  const dropped = countDroppedHosts(value);
+                  setDroppedHostCount(dropped);
+                  setForm({
+                    ...form,
+                    allowedHosts: Array.from(
+                      new Set(value.map(normalizeHostInput).filter(Boolean)),
+                    ),
+                  });
+                }}
+              />
+            </FieldRow>
             {/* 被过滤的条目必须报出来：白名单的既有行为是静默丢弃非法条目，
                 用户粘一行乱码时那一行直接消失、界面上毫无提示。 */}
             {droppedHostCount > 0 ? (
