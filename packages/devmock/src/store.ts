@@ -78,7 +78,6 @@ export interface ServiceSettings {
   anonymousAccess: boolean;
   publicUrl: string;
   upstreamTimeout: number;
-  syncInterval: number;
   /** 允许访问的域名白名单（空数组表示不限制）；与真实后端一致按列表存储。 */
   allowedHosts: string[];
   /** 回源 Token 校验；节点本地配置。 */
@@ -91,6 +90,23 @@ export interface ServiceSettings {
   backupKeepLast: number;
   /** 保留最近 N 天的自动备份，0 = 不限天数。 */
   backupRetentionDays: number;
+  // 运行期策略 13 项。与真实后端同口径：单位是秒 / 小时 / 天 / 字节，
+  // 且 0 在多数项上是**合法取值**（禁用作业 / 不清理 / 不限制 / 禁用缓存）。
+  // 缺了这些字段，开发态的逐项保存会被 mock 丢弃 → 前端兜底成默认值 →
+  // 弹出「已按后端上限调整」的错误提示，等于开发态根本验不了这个功能。
+  blobGcInterval: number;
+  storageCleanupInterval: number;
+  backupOrphanCleanupInterval: number;
+  trashGcInterval: number;
+  upstreamProbeInterval: number;
+  backupOrphanGraceHours: number;
+  storageMetadataRetentionDays: number;
+  storageTempMaxAgeHours: number;
+  trashRetentionDays: number;
+  trashMaxBytes: number;
+  autoBlockBaseSeconds: number;
+  searchTimeoutSeconds: number;
+  capacityCacheTtlSeconds: number;
 }
 
 /** 开发/测试态签发的固定会话令牌明文；鉴权守卫据此放行。 */
@@ -755,7 +771,6 @@ function seed(): State {
     serviceSettings: {
       publicUrl: "https://repo.example.com",
       upstreamTimeout: 30,
-      syncInterval: 5,
       allowedHosts: [],
       originTokenEnabled: false,
       originTokenHeader: "",
@@ -765,6 +780,21 @@ function seed(): State {
       backupAutoInterval: 0,
       backupKeepLast: 7,
       backupRetentionDays: 30,
+      // 运行期策略 13 项：与后端 default* 常量同值，保证开发态看到的
+      // 「生效值」与真实部署一致。
+      blobGcInterval: 86400,
+      storageCleanupInterval: 86400,
+      backupOrphanCleanupInterval: 86400,
+      trashGcInterval: 86400,
+      upstreamProbeInterval: 60,
+      backupOrphanGraceHours: 1,
+      storageMetadataRetentionDays: 7,
+      storageTempMaxAgeHours: 24,
+      trashRetentionDays: 7,
+      trashMaxBytes: 2 * 1024 ** 3,
+      autoBlockBaseSeconds: 40,
+      searchTimeoutSeconds: 10,
+      capacityCacheTtlSeconds: 30,
     },
     // 与后端已注册的作业一一对应（blob-gc / storage-cleanup，默认间隔均为每日一次）。
     // 覆盖两种展示分支：blob-gc 执行过且最近一次失败（lastError 有值），
@@ -1570,7 +1600,7 @@ export const store = {
   },
 
   /** 保存管理端服务设置；同步间隔保持只读，不由设置页写入。 */
-  updateSettings(patch: Omit<ServiceSettings, "syncInterval">): ServiceSettings {
+  updateSettings(patch: Omit<ServiceSettings, never>): ServiceSettings {
     state.anonymousAccessEnabled = patch.anonymousAccess;
     state.serviceSettings.publicUrl = patch.publicUrl;
     state.serviceSettings.upstreamTimeout = patch.upstreamTimeout;
@@ -2702,3 +2732,37 @@ reconcileVolumeRepositories(mockVolumeFactor());
 subscribeMockConsole(() => {
   reconcileVolumeRepositories(mockVolumeFactor());
 });
+
+/**
+ * 数值字段的"传了就用、没传就沿用"取值。
+ *
+ * 刻意不用 `body.x || current.x`：运行期策略多项的 0 是**合法语义**
+ * （禁用作业 / 不清理 / 不限制 / 关闭缓存），真值判断会把 0 吞成旧值。
+ */
+export function num(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+/** 设置变更历史的一条记录（与后端 SettingHistoryEntry 同形）。 */
+export interface MockSettingHistoryEntry {
+  ts: string;
+  actor: string;
+  oldValue: string;
+  newValue: string;
+}
+
+/**
+ * 设置变更历史的 mock 数据（键是 setting 表键名）。
+ *
+ * 给出一两条样例，让历史面板在开发态就有内容可看；
+ * 重点是**不能为空**——空数组只能验到"暂无记录"这一种分支。
+ */
+export const mockSettingHistory: Record<string, MockSettingHistoryEntry[]> = {
+  blob_gc_interval: [
+    { ts: "2026-10-30T09:12:00Z", actor: "admin", oldValue: "43200", newValue: "86400" },
+    { ts: "2026-10-28T15:03:00Z", actor: "admin", oldValue: "", newValue: "43200" },
+  ],
+  trash_retention_days: [
+    { ts: "2026-10-29T02:40:00Z", actor: "admin", oldValue: "30", newValue: "7" },
+  ],
+};

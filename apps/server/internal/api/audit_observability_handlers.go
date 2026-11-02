@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"sort"
@@ -1240,12 +1241,123 @@ func safeAuditAction(event repository.ObservabilityEvent) string {
 	}
 	return event.Action
 }
+
+// safeAuditSummary 生成「这次到底做了什么」的一句话说明。
+//
+// 此前对所有成功事件一律返回「操作已完成」，于是审计列表里全是同一句话——
+// 运维想回答「谁把匿名访问关了」「谁删了哪个制品」只能逐条展开看详情，
+// 而这正是审计页最主要的用途。现在按 action 结合 detail 给出可读说明。
+//
+// detail 由各写入点以 `key=value` 空格分隔的形式提供（见调用 h.AuditLog 处），
+// 这里只做解析与措辞，不臆造没记录的字段：拿不到就退回动作本身的描述。
 func safeAuditSummary(event repository.ObservabilityEvent) string {
 	if classifyAuditResult(event) == AuditResultFailure {
 		return "操作被拒绝或未完成"
 	}
 	if event.Source == replicationSource {
 		return "复制接收状态已记录"
+	}
+	fields := parseAuditDetail(event.Detail)
+	if s := describeAuditEvent(event, fields); s != "" {
+		return s
+	}
+	return actionFallbackSummary(event.Action)
+}
+
+// parseAuditDetail 解析 `key=value` 形式的 detail；无法解析的片段忽略。
+func parseAuditDetail(detail string) map[string]string {
+	out := make(map[string]string)
+	for _, token := range strings.Fields(detail) {
+		k, v, ok := strings.Cut(token, "=")
+		if !ok || k == "" {
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
+// describeAuditEvent 按动作类型给出「做了什么」的说明；返回空串表示无法细化。
+func describeAuditEvent(event repository.ObservabilityEvent, fields map[string]string) string {
+	switch event.Action {
+	case repository.SettingAuditAction:
+		// 设置变更的 detail 是「旧值  新值」编码（见 EncodeSettingHistoryDetail）。
+		oldVal, newVal, ok := strings.Cut(event.Detail, "")
+		if !ok {
+			return "修改设置 " + event.EntityKey
+		}
+		return fmt.Sprintf("修改设置 %s：%s → %s", event.EntityKey, showOrUnset(oldVal), showOrUnset(newVal))
+	case "repo.create":
+		return "创建仓库 " + event.EntityKey
+	case "repo.update":
+		return "修改仓库配置 " + event.EntityKey
+	case "repo.rename":
+		if fields["oldName"] != "" && fields["newName"] != "" {
+			return fmt.Sprintf("重命名仓库：%s → %s", fields["oldName"], fields["newName"])
+		}
+		return "重命名仓库 " + event.EntityKey
+	case "repo.delete":
+		return "删除仓库 " + event.EntityKey
+	case "repo.online":
+		if fields["online"] != "" {
+			return fmt.Sprintf("切换仓库在线状态 %s → online=%s", event.EntityKey, fields["online"])
+		}
+		return "切换仓库在线状态 " + event.EntityKey
+	case "repo.recheck":
+		return "重新检测仓库上游 " + event.EntityKey
+	case "acl.set":
+		if fields["entries"] != "" {
+			return fmt.Sprintf("调整仓库 ACL %s：共 %s 条授权", event.EntityKey, fields["entries"])
+		}
+		return "调整仓库 ACL " + event.EntityKey
+	case "asset.put":
+		return "上传制品 " + event.EntityKey
+	case "asset.delete":
+		return "删除制品 " + event.EntityKey
+	case "user.create":
+		return "创建用户 " + event.EntityKey
+	case "user.delete":
+		return "删除用户 " + event.EntityKey
+	case "token.create":
+		return "创建访问令牌 " + event.EntityKey
+	case "token.revoke":
+		return "吊销访问令牌 " + event.EntityKey
+	}
+	if strings.HasPrefix(event.Action, "migration.") {
+		if fields["detail"] != "" {
+			return "迁移：" + fields["detail"]
+		}
+		return "迁移操作 " + event.Action
+	}
+	if strings.HasPrefix(event.Action, "maintenance.") {
+		if fields["来源"] != "" {
+			return fmt.Sprintf("运维作业 %s（%s）", event.EntityKey, fields["来源"])
+		}
+		return "运维作业 " + event.EntityKey
+	}
+	return ""
+}
+
+// showOrUnset 把空值显示为「未设置」，避免摘要里出现看不出含义的空白。
+func showOrUnset(v string) string {
+	if strings.TrimSpace(v) == "" {
+		return "未设置"
+	}
+	return v
+}
+
+// actionFallbackSummary 是无法细化时的兜底描述：至少说明动作类别，
+// 不再一律笼统地写「操作已完成」。
+func actionFallbackSummary(action string) string {
+	switch {
+	case strings.HasSuffix(action, ".delete") || strings.HasSuffix(action, ".revoke"):
+		return "删除类操作已完成"
+	case strings.HasSuffix(action, ".create"):
+		return "创建类操作已完成"
+	case strings.HasSuffix(action, ".update") || strings.HasSuffix(action, ".set"):
+		return "修改类操作已完成"
+	case strings.HasSuffix(action, ".put"):
+		return "上传类操作已完成"
 	}
 	return "操作已完成"
 }

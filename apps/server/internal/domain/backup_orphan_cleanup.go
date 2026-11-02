@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -44,8 +45,10 @@ import (
 type BackupOrphanCleanupService struct {
 	backups *BackupService
 	adopt   *BackupAdoptService
-	// grace 是宽限期：mtime 晚于 now-grace 的文件一律保留。
-	grace time.Duration
+	// graceNanos 是宽限期的纳秒值，用原子读写：宽限期现在可以在设置页改
+	// （JIAN_BACKUP_ORPHAN_GRACE_HOURS 降级为播种初值），写入来自 HTTP 处理 goroutine、
+	// 读取来自作业 goroutine 里的一轮 Run。
+	graceNanos atomic.Int64
 	// maxDeletesPerRun 限制单轮删除数，避免首次上线在积压很久的实例上一次删掉海量文件。
 	maxDeletesPerRun int
 	now              func() time.Time
@@ -108,17 +111,41 @@ func (r BackupOrphanCleanupResult) Summary() string {
 
 // NewBackupOrphanCleanupService 装配孤儿回收服务。
 func NewBackupOrphanCleanupService(backups *BackupService, adopt *BackupAdoptService, opts BackupOrphanCleanupOptions) *BackupOrphanCleanupService {
-	grace := opts.Grace
-	if grace <= 0 {
-		grace = defaultBackupOrphanGrace
-	}
-	return &BackupOrphanCleanupService{
+	s := &BackupOrphanCleanupService{
 		backups:          backups,
 		adopt:            adopt,
-		grace:            grace,
 		maxDeletesPerRun: maxBackupOrphanDeletesPerRun,
 		now:              func() time.Time { return time.Now().UTC() },
 	}
+	s.SetGrace(opts.Grace)
+	return s
+}
+
+// SetGrace 更新孤儿回收的宽限期（<= 0 回落默认 1 小时）。
+//
+// 由作业在**每轮开始时**调用一次（见 wiring.go 的 backup-orphan-cleanup 注册处）：
+// 宽限期是"这一轮怎么判孤儿"的阈值，每轮现读才能让界面改完下一轮即生效。
+//
+// 为什么 <= 0 必须回落到默认而不是当成"零宽限"：零宽限会在文件刚被拷入、
+// 还没来得及在界面导入时把它判成孤儿删掉——那正是宽限期存在的唯一目的。
+// 与 config.backupOrphanGrace 的 hours <= 0 回落同口径，一处都不能松。
+func (s *BackupOrphanCleanupService) SetGrace(d time.Duration) {
+	if s == nil {
+		return
+	}
+	if d <= 0 {
+		d = defaultBackupOrphanGrace
+	}
+	s.graceNanos.Store(int64(d))
+}
+
+// grace 返回当前生效的宽限期；零值/未初始化时回落到兜底常量，
+// 使直接构造的零值服务保持与今天完全一致的行为。
+func (s *BackupOrphanCleanupService) grace() time.Duration {
+	if n := s.graceNanos.Load(); n > 0 {
+		return time.Duration(n)
+	}
+	return defaultBackupOrphanGrace
 }
 
 // Run 执行一轮孤儿回收。单个包删除失败不中断整轮，失败数如实上报。
@@ -166,7 +193,7 @@ func (s *BackupOrphanCleanupService) Run() (BackupOrphanCleanupResult, error) {
 		return result, nil
 	}
 
-	cutoff := s.now().Add(-s.grace)
+	cutoff := s.now().Add(-s.grace())
 	var errs []string
 	for _, cand := range candidates {
 		if result.Deleted >= s.maxDeletesPerRun {

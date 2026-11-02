@@ -29,9 +29,6 @@ func TestSettingsDynamicConfig(t *testing.T) {
 	if got := svc.PublicURL(); got != "" {
 		t.Errorf("缺省 PublicURL = %q，期望空串", got)
 	}
-	if got := svc.SyncIntervalSecs(); got != 0 {
-		t.Errorf("缺省 SyncIntervalSecs = %d，期望 0", got)
-	}
 	if got := svc.UpstreamTimeoutSecs(); got != 0 {
 		t.Errorf("缺省 UpstreamTimeoutSecs = %d，期望 0", got)
 	}
@@ -42,12 +39,6 @@ func TestSettingsDynamicConfig(t *testing.T) {
 	}
 	if got := svc.PublicURL(); got != "https://repo.example.com" {
 		t.Errorf("PublicURL = %q，期望 https://repo.example.com", got)
-	}
-	if err := svc.SetSyncInterval(10); err != nil {
-		t.Fatalf("SetSyncInterval：%v", err)
-	}
-	if got := svc.SyncIntervalSecs(); got != 10 {
-		t.Errorf("SyncIntervalSecs = %d，期望 10", got)
 	}
 	if err := svc.SetUpstreamTimeout(60); err != nil {
 		t.Fatalf("SetUpstreamTimeout：%v", err)
@@ -65,17 +56,17 @@ func TestSettingsDynamicConfig(t *testing.T) {
 	}
 
 	// 非法值读取归零（直接写 setting 表模拟脏数据）。
-	if err := settings.Set(domain.SettingKeyReplSyncInterval, "abc"); err != nil {
+	if err := settings.Set(domain.SettingKeyUpstreamTimeout, "abc"); err != nil {
 		t.Fatalf("写脏数据：%v", err)
 	}
-	if got := svc.SyncIntervalSecs(); got != 0 {
-		t.Errorf("非法 SyncIntervalSecs = %d，期望 0", got)
+	if got := svc.UpstreamTimeoutSecs(); got != 0 {
+		t.Errorf("非法 UpstreamTimeoutSecs = %d，期望 0", got)
 	}
-	if err := settings.Set(domain.SettingKeyReplSyncInterval, "0"); err != nil {
+	if err := settings.Set(domain.SettingKeyUpstreamTimeout, "0"); err != nil {
 		t.Fatalf("写脏数据：%v", err)
 	}
-	if got := svc.SyncIntervalSecs(); got != 0 {
-		t.Errorf("越界 SyncIntervalSecs = %d，期望 0", got)
+	if got := svc.UpstreamTimeoutSecs(); got != 0 {
+		t.Errorf("越界 UpstreamTimeoutSecs = %d，期望 0", got)
 	}
 }
 
@@ -120,9 +111,9 @@ func TestSettingsWriteRecordsChange(t *testing.T) {
 	}
 }
 
-// TestSettingsClusterKeyNotReplicated 集群配置键（repl:*）绝不记录复制变更日志，
-// 避免同步间隔等节点本地配置被复制到对端造成混乱（用户约束）。
-func TestSettingsClusterKeyNotReplicated(t *testing.T) {
+// TestSettingsNodeLocalKeyNotReplicated 节点本地配置键绝不记录复制变更日志，
+// 避免磁盘策略、作业频率等节点专属配置被复制到对端造成混乱（用户约束）。
+func TestSettingsNodeLocalKeyNotReplicated(t *testing.T) {
 	t.Parallel()
 	db := newTestDB(t)
 	settings := repository.NewSettingRepo(db)
@@ -130,12 +121,12 @@ func TestSettingsClusterKeyNotReplicated(t *testing.T) {
 	rec := &recordingRecorder{}
 	svc.SetChangeRecorder(rec)
 
-	// SetSyncInterval 写 repl:sync_interval（集群键）→ 不应记录变更日志。
-	if err := svc.SetSyncInterval(10); err != nil {
-		t.Fatalf("SetSyncInterval：%v", err)
+	// public_url 是节点本地域名，不应进入复制变更日志。
+	if err := svc.SetPublicURL("https://node-a.example"); err != nil {
+		t.Fatalf("SetPublicURL：%v", err)
 	}
 	if len(rec.records) != 0 {
-		t.Fatalf("集群键 repl:sync_interval 不应记录复制变更，得 %d 条：%+v", len(rec.records), rec.records)
+		t.Fatalf("节点本地 public_url 不应记录复制变更，得 %d 条：%+v", len(rec.records), rec.records)
 	}
 
 	// 对照：业务键 SetUpstreamTimeout 仍应记录。
@@ -144,13 +135,5 @@ func TestSettingsClusterKeyNotReplicated(t *testing.T) {
 	}
 	if len(rec.records) != 1 {
 		t.Fatalf("业务键应记录 1 条变更，得 %d", len(rec.records))
-	}
-
-	// public_url 是节点本地域名，不应进入复制变更日志。
-	if err := svc.SetPublicURL("https://node-a.example"); err != nil {
-		t.Fatalf("SetPublicURL：%v", err)
-	}
-	if len(rec.records) != 1 {
-		t.Fatalf("节点本地 public_url 不应记录复制变更，得 %d 条", len(rec.records))
 	}
 }

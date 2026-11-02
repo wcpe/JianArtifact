@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
@@ -72,7 +73,10 @@ type CleanupService struct {
 	// clock 便于测试固定时间。
 	clock func() time.Time
 	// trashCapacity 是回收站字节上限（0 = 不限制）；超限时拒绝新清理。
-	trashCapacity int64
+	//
+	// 存原子量而不是普通 int64：本项现在可以在设置页改（JIAN_TRASH_MAX_BYTES 降级为
+	// 播种初值），写入发生在 HTTP 处理 goroutine、读取发生在并发的清理请求里。
+	trashCapacity atomic.Int64
 	// rename 是移入/搬回回收站时使用的重命名操作；默认 os.Rename。
 	// 抽成字段是为了让「中途失败必须回滚」这条一致性要求可被测试精确验证——
 	// 靠制造真实跨设备/权限失败来触发第二项失败既不可靠也难以跨平台。
@@ -80,8 +84,10 @@ type CleanupService struct {
 }
 
 // SetTrashCapacity 设置回收站容量护栏（0 = 不限制）。
+//
+// 运行期可调用（设置页保存后由装配层回调注入）：内部是原子写，与并发的清理请求互不干扰。
 func (s *CleanupService) SetTrashCapacity(maxBytes int64) {
-	s.trashCapacity = maxBytes
+	s.trashCapacity.Store(maxBytes)
 }
 
 // SetRenameForTest 替换移入回收站时使用的重命名实现，仅供测试注入失败用。
@@ -344,14 +350,16 @@ func (s *CleanupService) Execute(opts ExecuteOptions) (*repository.CleanTask, er
 	//
 	// 刻意"拒绝"而不是"自动淘汰最旧条目"：静默删除会让用户以为东西还在回收站里，
 	// 而实际早已被系统清掉——这比直接报错危险得多。
-	if s.trashCapacity > 0 {
+	//
+	// 上限在每次请求时现读（不缓存到局部变量以外的结构），使设置页改完立即影响下一次清理。
+	if capacity := s.trashCapacity.Load(); capacity > 0 {
 		stats, err := s.tasks.StagedTrashStats()
 		if err != nil {
 			return nil, err
 		}
-		if stats.Bytes >= s.trashCapacity {
+		if stats.Bytes >= capacity {
 			return nil, fmt.Errorf("%w：回收站已占用 %d 字节（上限 %d），请先彻底删除或清空回收站",
-				ErrValidation, stats.Bytes, s.trashCapacity)
+				ErrValidation, stats.Bytes, capacity)
 		}
 	}
 

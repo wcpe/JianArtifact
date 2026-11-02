@@ -1,0 +1,27 @@
+-- 0053：审计日志按实体查询的复合索引
+-- 引入版本：未开窗（0.14.0 窗口）
+-- 影响：新增一个索引；不改动任何表结构
+-- 数据处理：无；索引由 SQLite 在首次迁移时构建
+-- 回滚：不支持 down migration；本索引只影响查询计划，旧版本代码不认识它也不受影响，回滚代码即可
+-- 相关：设置页逐项历史（docs/specs/0.14.0-web-configurable-runtime-settings.md）
+--
+-- ⚠ 编号冲突提示：feat/maven-version-trash 分支也新增了 0053（0053_asset_trash.sql）。
+--   迁移表按**编号**记录已应用集合（schema_migrations 里只有 "0053" 这样的数字），
+--   因此两支合并时**必须有一支重编号**——否则先跑过的那支会把编号占掉，
+--   后合入的那支被判定「已应用」而静默跳过，索引/表都没建却查不到任何报错。
+--   合并顺序确定后，由后者改为下一个空闲编号（并同步文件名）。
+--
+-- 为什么要这个索引：
+--   设置历史查询是 `WHERE action=? AND entity_type=? AND entity_key=? ORDER BY ts DESC, id DESC`。
+--   已有的索引全是单列（ts / actor / action / repo），没有 (entity_type, entity_key) 这一维，
+--   因此 SQLite 会走 idx_audit_log_ts 反向扫描、再逐行过滤 entity_key。
+--   对「很少被改」的设置键（如 trash_retention_days），要扫过大半张审计表才能凑够 20 行。
+--
+--   审计表只增不减，这个代价会随时间单调恶化——上线时数据量小看不出问题，
+--   恰恰是这类缺陷最容易被放过的地方。
+--
+-- 列顺序为什么是 (entity_type, entity_key, action, ts DESC)：
+--   前两列是等值过滤且选择性最高（entity_key 直接定位到单个设置键），
+--   action 同为等值过滤，ts DESC 让 ORDER BY 直接走索引顺序、省掉排序步骤。
+CREATE INDEX IF NOT EXISTS idx_audit_log_entity
+	ON audit_log (entity_type, entity_key, action, ts DESC);

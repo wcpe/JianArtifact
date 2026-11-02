@@ -26,8 +26,6 @@ const (
 	EnvJWTSecret              = "JIAN_JWT_SECRET"
 	EnvMigrationCredentialKey = "JIAN_MIGRATION_CREDENTIAL_KEY"
 	EnvUpstreamTimeout        = "JIAN_UPSTREAM_TIMEOUT"     // proxy 回源整体超时，单位秒
-	EnvSyncPeerURL            = "JIAN_SYNC_PEER_URL"        // 遗留复制对端基址；主备角色模式下不参与调度
-	EnvSyncInterval           = "JIAN_SYNC_INTERVAL"        // 同步轮询间隔，单位秒
 	EnvPublicURL              = "JIAN_PUBLIC_URL"           // 对外基础 URL；CDN 域名，隐藏源站 IP
 	EnvEnabledFormats         = "JIAN_ENABLED_FORMATS"      // 启用的协议格式，逗号分隔
 	EnvBlobGCInterval         = "JIAN_BLOB_GC_INTERVAL"     // 孤立 blob 定时清理间隔，单位秒；0 禁用
@@ -97,8 +95,7 @@ const (
 	defaultDataDir         = "./data"
 	defaultHTTPAddr        = ":8080"
 	defaultUpstreamTimeout = 30 * time.Second
-	defaultSyncInterval    = 5 * time.Second // 复制轮询间隔默认 5s（近实时）
-	defaultBlobGCInterval  = 24 * time.Hour  // 孤立 blob 默认每日清理一次
+	defaultBlobGCInterval  = 24 * time.Hour // 孤立 blob 默认每日清理一次
 	// 存储治理清理的默认阈值：每日一轮、终态元数据保留 7 天、临时文件 24 小时。
 	// 隔离区空目录的宽限期不设开关（见 domain/storage_cleanup.go 的常量与理由）。
 	defaultStorageCleanupInterval   = 24 * time.Hour
@@ -230,8 +227,6 @@ type Config struct {
 	// 0 = 关闭定时探测（真实请求序列照常积累，只是无流量时不再补空窗）。
 	// 缺省与非法值回落默认 60s；负数回落默认（负间隔不是有意义的配置）。
 	UpstreamProbeInterval  time.Duration
-	SyncPeerURL            string        // 遗留复制对端基址；仅为兼容旧配置保留，不驱动主备调度
-	SyncInterval           time.Duration // 复制轮询间隔
 	PublicURL              string        // 对外基础 URL（如 https://repo.example.com）；空则回退请求 Host 推断
 	EnabledFormats         formats.Set   // 启动时启用的协议格式
 	BlobGCInterval         time.Duration // primary 孤立 blob 定时清理间隔；0 禁用
@@ -398,8 +393,6 @@ func Load() (*Config, error) {
 		MigrationCredentialKey:      migrationCredentialKey,
 		UpstreamTimeout:             upstreamTimeout(),
 		AutoBlockBaseSeconds:        autoBlockBase(),
-		SyncPeerURL:                 os.Getenv(EnvSyncPeerURL),
-		SyncInterval:                syncInterval(),
 		PublicURL:                   os.Getenv(EnvPublicURL),
 		EnabledFormats:              enabledFormats,
 		BlobGCInterval:              blobGCInterval(),
@@ -472,19 +465,6 @@ func enabledFormats() (formats.Set, error) {
 		return formats.Set{}, fmt.Errorf("解析 %s：%w", EnvEnabledFormats, err)
 	}
 	return set, nil
-}
-
-// syncInterval 解析 JIAN_SYNC_INTERVAL（秒）；缺省或非法（<=0）时取默认值。
-func syncInterval() time.Duration {
-	v := os.Getenv(EnvSyncInterval)
-	if v == "" {
-		return defaultSyncInterval
-	}
-	secs, err := strconv.Atoi(v)
-	if err != nil || secs <= 0 {
-		return defaultSyncInterval
-	}
-	return time.Duration(secs) * time.Second
 }
 
 // blobGCInterval 解析 JIAN_BLOB_GC_INTERVAL（秒）；缺省或非法值取每日一次，显式 0 禁用。

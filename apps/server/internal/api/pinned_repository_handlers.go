@@ -157,7 +157,7 @@ func (h *Handlers) PutGlobalPinnedRepositories(c *gin.Context) {
 		writePinnedErr(c, err)
 		return
 	}
-	h.AuditLog(c, "setting.set", "setting", "pinned-repositories", "", "全局置顶更新：n="+strconv.Itoa(len(resp.RepositoryIds)), "ok")
+	h.AuditLog(c, repository.SettingAuditAction, "setting", "pinned-repositories", "", "全局置顶更新：n="+strconv.Itoa(len(resp.RepositoryIds)), "ok")
 	c.JSON(http.StatusOK, resp)
 }
 
