@@ -101,8 +101,14 @@ describe("设置页", () => {
     await screen.findByPlaceholderText("repo.example.com");
     expect(await screen.findByText("已保存")).toBeTruthy();
 
+    // 用开关制造改动（不必依赖某个字段的具体取值）。
     await user.click(screen.getByRole("switch", { name: "回源 Token 校验" }));
     expect(await screen.findByText("有未保存的改动")).toBeTruthy();
+
+    // 打开回源校验后头名与值必填——这是后端的既有约束，前端现在提前拦住。
+    // 因此这里先补齐，才能走到「保存成功」。
+    await user.type(screen.getByLabelText("请求头名"), "X-Jian-Origin-Token");
+    await user.type(screen.getByLabelText("Token 值"), "token-value-for-test");
 
     await user.click(screen.getByRole("button", { name: "保存设置" }));
     await waitFor(() => expect(api.putSettings).toHaveBeenCalledTimes(1));
@@ -297,6 +303,38 @@ describe("设置页", () => {
     await waitFor(() => expect(api.putSettings).toHaveBeenCalledTimes(1));
     // 关键断言：保存成功后没有再次 getSettings（即没有触发全局 reload）。
     expect(api.getSettings).not.toHaveBeenCalled();
+  });
+
+  // 文本字段与数值字段共用同一套三态反馈：红框 + 原因、绿框 + 可用。
+  // 对外 URL 只接受 http/https 绝对地址（后端 validatePublicURL 同口径），
+  // 前端提前拦住可以避免「填完点保存才被拒」。
+  it("对外 URL 格式非法时红框报错且禁用保存", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<SettingsPage />, { route: "/settings", authenticated: true });
+
+    const input = await screen.findByLabelText("对外基础 URL");
+    await user.clear(input);
+    await user.type(input, "ftp://not-allowed");
+
+    expect(await screen.findByText("对外基础 URL必须是 http/https 开头的完整地址")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "保存设置" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    expect(api.putSettings).not.toHaveBeenCalled();
+  });
+
+  // 开启回源校验却不填头名与值，后端必然拒绝；前端现在提前禁用保存。
+  it("开启回源校验后头名与值必填，缺失时禁止保存", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<SettingsPage />, { route: "/settings", authenticated: true });
+
+    await user.click(await screen.findByRole("switch", { name: "回源 Token 校验" }));
+
+    expect(await screen.findByText("请求头名不能为空")).toBeTruthy();
+    expect(screen.getByText("Token 值不能为空")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "保存设置" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
   });
 
   it("13 项运行期策略整批进入提交体，且 0 不被当成空值", async () => {
