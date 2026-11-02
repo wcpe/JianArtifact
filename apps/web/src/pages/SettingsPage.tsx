@@ -76,6 +76,10 @@ const MAX_CONFIG_DAYS = 365;
 // `1 << 40` 实际得到 256，上界会静默变成一个荒谬的小值。
 const MAX_TRASH_BYTES = 1024 ** 4;
 
+/** 设置页里所有走「绿/红描边 + 状态行」的数值字段键。 */
+type EditableNumberKey =
+  RuntimePolicyKey | "upstreamTimeout" | "groupMemberTimeout" | "negativeCacheTTL";
+
 /** 运行期策略分区的字段键（顺序与规格 §2.1 的迁移清单一致）。 */
 type RuntimePolicyKey =
   | "blobGcInterval"
@@ -400,6 +404,72 @@ function formatHistoryValue(
  * 空态明确写「暂无记录」而不是留白：留白会让人以为功能坏了，
  * 而实际上「从没改过」是完全正常的状态。
  */
+/**
+ * 数值字段的校验辅助：把「描边类名 + 是否显示错误 + 底部状态行」收成一处。
+ *
+ * 为什么做成共享的：设置页有 16 个数值输入（13 项运行期策略 + 回源超时 +
+ * 成员确认预算 + 负缓存 TTL）。三套各自手写，迟早出现「有的字段红框但不报原因」
+ * 这类不一致；集中一处后，新增字段只填区间即可获得同样的反馈。
+ *
+ * 状态口径（三态，缺一不可）：
+ *   untouched  —— 还没碰过：默认外观，底部只报静态口径（单位 / 允许范围）
+ *   invalid    —— 校验不过：红框 + 红字原因，保存按钮禁用
+ *   valid      —— 校验通过：绿框 + 绿字「将提交 …」，保存按钮可用
+ *
+ * 不做成「一进页面就全绿」：那样绿框失去「这一项已确认可用」的含义。
+ */
+function validateNumberField(
+  value: number,
+  min: number,
+  max: number,
+): { ok: true } | { ok: false; reason: "empty" | "tooSmall" | "tooLarge" } {
+  if (!Number.isFinite(value)) return { ok: false, reason: "empty" };
+  if (value < min) return { ok: false, reason: "tooSmall" };
+  if (value > max) return { ok: false, reason: "tooLarge" };
+  return { ok: true };
+}
+
+/** 校验描边类名：未碰过返回 undefined（保持默认外观）。 */
+function fieldOutlineClass(touched: boolean, invalid: boolean): string | undefined {
+  if (!touched) return undefined;
+  return invalid ? "ja-field-invalid" : "ja-field-valid";
+}
+
+/** 一行状态提示：三态三色，位置固定（不随状态增删，避免行高跳动）。 */
+function FieldStatusLine({
+  touched,
+  invalid,
+  reason,
+  okText,
+  idleText,
+}: {
+  touched: boolean;
+  invalid: boolean;
+  reason: string;
+  okText: string;
+  idleText: string;
+}) {
+  if (!touched) {
+    return (
+      <Text size="xs" c="dimmed">
+        {idleText}
+      </Text>
+    );
+  }
+  if (invalid) {
+    return (
+      <Text size="xs" c="red" fw={500}>
+        {reason}
+      </Text>
+    );
+  }
+  return (
+    <Text size="xs" c="teal" fw={500}>
+      ✓ {okText}
+    </Text>
+  );
+}
+
 function SettingHistoryBody({
   entries,
   loading,
@@ -587,13 +657,7 @@ function generateOriginToken(): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-function ServiceSettingsForm({
-  initial,
-  onSaved,
-}: {
-  initial: SettingsConfig;
-  onSaved: () => void;
-}) {
+function ServiceSettingsForm({ initial }: { initial: SettingsConfig }) {
   const { t } = useTranslation();
   const [form, setForm] = useState<SettingsConfig>(() => normalizeForm(initial));
   // 已保存值按**字段**记录，而不是维护一个整体签名。
@@ -607,7 +671,9 @@ function ServiceSettingsForm({
   const [savingField, setSavingField] = useState<RuntimePolicyKey | null>(null);
   // 逐项校验结果与「输入已完成」标记。校验只在失焦/回车后给出，
   // 不在每次按键时弹错——边打字边报错会让「删掉旧值准备重输」的中间态一直显示错误。
-  const [touchedFields, setTouchedFields] = useState<Partial<Record<RuntimePolicyKey, boolean>>>(
+  // 已校验过的字段（键可以是运行期策略字段名，也可以是服务设置里的普通数字字段名）。
+  // 只有碰过的字段才显示绿/红描边与状态行，未碰过保持默认外观。
+  const [touchedFields, setTouchedFields] = useState<Partial<Record<EditableNumberKey, boolean>>>(
     {},
   );
   // 每项当前所选单位（键是设置字段名）。缺失表示「按当前值自动推断」。
@@ -638,9 +704,13 @@ function ServiceSettingsForm({
   };
 
   const dirty = formSignature(form) !== formSignature(savedValues);
-  // 概览带口径：展示「已保存 / 生效」值（来自 normalizeForm(initial)），不随未保存的
-  // 表单改动跳动——改配置时能一眼对照当前线上口径。
-  const effective = normalizeForm(initial);
+  // 概览带 / 逐项「已保存值」的口径：展示已落库的值，不随未保存的改动跳动。
+  //
+  // 它刻意派生自本地 savedValues 而不是 props.initial：保存后如果靠父组件 reload 才能
+  // 更新，页面会被整块刷新遮罩盖住（AsyncBoundary 的 LoadingOverlay 由 refreshing 驱动），
+  // 改一个字段就整页闪一下。让 savedValues 成为唯一口径，保存成功即本地更新，
+  // 无需重新拉取整个设置。
+  const effective = savedValues;
 
   /**
    * 单项运行期策略的校验结果。
@@ -663,6 +733,65 @@ function ServiceSettingsForm({
     }
     return null;
   };
+
+  /** 标记某字段已被用户碰过（开始显示绿/红描边与状态行）。 */
+  const markTouched = (key: EditableNumberKey) =>
+    setTouchedFields((prev) => (prev[key] ? prev : { ...prev, [key]: true }));
+
+  /** 普通数字字段的取值：空输入保持原值，避免被静默折成 0。 */
+  const setNumberField = (
+    key: EditableNumberKey,
+    raw: string | number,
+    apply: (next: number) => void,
+  ) => {
+    markTouched(key);
+    const isEmpty = raw === "" || raw === undefined || raw === null;
+    if (isEmpty) return;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return;
+    apply(n);
+  };
+
+  /** 普通数字字段的校验视图（与运行期策略同口径：区间与后端常量一致）。 */
+  const viewOf = (
+    key: "upstreamTimeout" | "groupMemberTimeout" | "negativeCacheTTL",
+    min: number,
+    max: number,
+  ) => {
+    const result = validateNumberField(form[key], min, max);
+    return { invalid: !result.ok };
+  };
+
+  /** 普通数字字段的失败原因文案。 */
+  const fieldReason = (
+    key: "upstreamTimeout" | "groupMemberTimeout" | "negativeCacheTTL",
+    label: string,
+    min: number,
+    max: number,
+  ): string => {
+    const result = validateNumberField(form[key], min, max);
+    if (result.ok) return "";
+    const error = validateRuntimeField(
+      {
+        key: "blobGcInterval",
+        min,
+        max,
+        timing: "nextRequest",
+        dimension: "seconds",
+        settingKey: "",
+      },
+      form[key],
+    );
+    return error ?? t("settings.runtimePolicyInvalidNumber", { label });
+  };
+
+  // 任一字段校验不过就不允许整体保存：与逐项保存同一口径
+  // （逐项那侧由 fieldError !== null 禁用），避免「逐项存不下去、整体却能存」的矛盾。
+  const hasInvalidField =
+    viewOf("upstreamTimeout", MIN_SECS, MAX_SECS).invalid ||
+    viewOf("groupMemberTimeout", MIN_SECS, MAX_SECS).invalid ||
+    viewOf("negativeCacheTTL", 0, MAX_SECS).invalid ||
+    RUNTIME_POLICY_FIELDS.some((field) => validateRuntimeField(field, form[field.key]) !== null);
 
   /** 只提交被改动的这一项；后端是部分更新，未传的键保持原值。 */
   const saveRuntimeField = (field: RuntimePolicyField) => {
@@ -703,7 +832,6 @@ function ServiceSettingsForm({
         } else {
           notifySuccess(t("common.saved"));
         }
-        onSaved();
       })
       .catch(notifyError)
       .finally(() => setSavingField(null));
@@ -776,7 +904,6 @@ function ServiceSettingsForm({
         setForm(next);
         setSavedValues(next);
         notifySuccess(t("common.saved"));
-        onSaved();
       })
       .catch(notifyError)
       .finally(() => setSaving(false));
@@ -862,6 +989,7 @@ function ServiceSettingsForm({
                 size="sm"
                 leftSection={<IconDeviceFloppy size={16} />}
                 loading={saving}
+                disabled={hasInvalidField}
                 onClick={save}
               >
                 {t("settings.save")}
@@ -916,7 +1044,32 @@ function ServiceSettingsForm({
               max={MAX_SECS}
               value={form.upstreamTimeout}
               disabled={saving}
-              onChange={(value) => setForm({ ...form, upstreamTimeout: Number(value) || 0 })}
+              className={fieldOutlineClass(
+                touchedFields.upstreamTimeout === true,
+                viewOf("upstreamTimeout", MIN_SECS, MAX_SECS).invalid,
+              )}
+              onChange={(value) =>
+                setNumberField("upstreamTimeout", value, (next) =>
+                  setForm({ ...form, upstreamTimeout: next }),
+                )
+              }
+              onFocus={() => markTouched("upstreamTimeout")}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") markTouched("upstreamTimeout");
+              }}
+              error={viewOf("upstreamTimeout", MIN_SECS, MAX_SECS).invalid || undefined}
+            />
+            <FieldStatusLine
+              touched={touchedFields.upstreamTimeout === true}
+              invalid={viewOf("upstreamTimeout", MIN_SECS, MAX_SECS).invalid}
+              reason={fieldReason(
+                "upstreamTimeout",
+                t("settings.upstreamTimeoutLabel"),
+                MIN_SECS,
+                MAX_SECS,
+              )}
+              okText={t("settings.runtimePolicyValidPlain")}
+              idleText={t("settings.runtimePolicyRangeHint", { min: MIN_SECS, max: MAX_SECS })}
             />
             {/* 两项 proxy/group 调优。放在「服务设置」而非安全区：它们调的是读路径的
                 失败速度与记忆时长，不涉及访问控制。帮助文案必须写明「改动即时生效、
@@ -928,7 +1081,32 @@ function ServiceSettingsForm({
               max={MAX_SECS}
               value={form.groupMemberTimeout}
               disabled={saving}
-              onChange={(value) => setForm({ ...form, groupMemberTimeout: Number(value) || 0 })}
+              className={fieldOutlineClass(
+                touchedFields.groupMemberTimeout === true,
+                viewOf("groupMemberTimeout", MIN_SECS, MAX_SECS).invalid,
+              )}
+              error={viewOf("groupMemberTimeout", MIN_SECS, MAX_SECS).invalid || undefined}
+              onChange={(value) =>
+                setNumberField("groupMemberTimeout", value, (next) =>
+                  setForm({ ...form, groupMemberTimeout: next }),
+                )
+              }
+              onFocus={() => markTouched("groupMemberTimeout")}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") markTouched("groupMemberTimeout");
+              }}
+            />
+            <FieldStatusLine
+              touched={touchedFields.groupMemberTimeout === true}
+              invalid={viewOf("groupMemberTimeout", MIN_SECS, MAX_SECS).invalid}
+              reason={fieldReason(
+                "groupMemberTimeout",
+                t("settings.groupMemberTimeoutLabel"),
+                MIN_SECS,
+                MAX_SECS,
+              )}
+              okText={t("settings.runtimePolicyValidPlain")}
+              idleText={t("settings.runtimePolicyRangeHint", { min: MIN_SECS, max: MAX_SECS })}
             />
             <NumberInput
               label={t("settings.negativeCacheTTLLabel")}
@@ -937,7 +1115,32 @@ function ServiceSettingsForm({
               max={MAX_SECS}
               value={form.negativeCacheTTL}
               disabled={saving}
-              onChange={(value) => setForm({ ...form, negativeCacheTTL: Number(value) || 0 })}
+              className={fieldOutlineClass(
+                touchedFields.negativeCacheTTL === true,
+                viewOf("negativeCacheTTL", 0, MAX_SECS).invalid,
+              )}
+              error={viewOf("negativeCacheTTL", 0, MAX_SECS).invalid || undefined}
+              onChange={(value) =>
+                setNumberField("negativeCacheTTL", value, (next) =>
+                  setForm({ ...form, negativeCacheTTL: next }),
+                )
+              }
+              onFocus={() => markTouched("negativeCacheTTL")}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") markTouched("negativeCacheTTL");
+              }}
+            />
+            <FieldStatusLine
+              touched={touchedFields.negativeCacheTTL === true}
+              invalid={viewOf("negativeCacheTTL", 0, MAX_SECS).invalid}
+              reason={fieldReason(
+                "negativeCacheTTL",
+                t("settings.negativeCacheTTLLabel"),
+                0,
+                MAX_SECS,
+              )}
+              okText={t("settings.runtimePolicyValidPlain")}
+              idleText={t("settings.runtimePolicyRangeHint", { min: 0, max: MAX_SECS })}
             />
           </Stack>
         </OpsSection>
@@ -1312,7 +1515,7 @@ export function SettingsPage() {
   return (
     <PageShell testId="settings-page">
       <AsyncBoundary state={settingsState}>
-        {(settings) => <ServiceSettingsForm initial={settings} onSaved={settingsState.reload} />}
+        {(settings) => <ServiceSettingsForm initial={settings} />}
       </AsyncBoundary>
     </PageShell>
   );
