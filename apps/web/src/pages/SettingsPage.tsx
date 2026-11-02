@@ -80,6 +80,12 @@ const MAX_TRASH_BYTES = 1024 ** 4;
 type EditableNumberKey =
   RuntimePolicyKey | "upstreamTimeout" | "groupMemberTimeout" | "negativeCacheTTL";
 
+/** 设置页里所有走「绿/红描边 + 状态行」的文本字段键。 */
+type EditableTextFieldKey = "publicUrl" | "originTokenHeader" | "originTokenValue" | "allowedHosts";
+
+/** 设置页里所有会被校验与标注状态的字段（数值 + 文本）。 */
+type EditableFieldKey = EditableNumberKey | EditableTextFieldKey;
+
 /** 运行期策略分区的字段键（顺序与规格 §2.1 的迁移清单一致）。 */
 type RuntimePolicyKey =
   | "blobGcInterval"
@@ -429,6 +435,61 @@ function validateNumberField(
   return { ok: true };
 }
 
+/**
+ * 文本字段的校验规则。
+ *
+ * 返回 null 表示通过，否则返回失败原因的分类（由调用方翻成当前语言的文案）。
+ *
+ * 这些规则刻意与后端同源，但**不重复后端的全部判断**：
+ * 后端 `validatePublicURL` 才是权威（非空必须是 http/https 绝对地址），
+ * 前端这层只是让用户在输入过程中就知道格式不对，不必等保存被拒。
+ */
+type TextFieldError = "required" | "notUrl" | "notHost" | "notHeaderName";
+
+/** 对外基础 URL：空串合法（未配置时按请求域名推断）；非空必须是 http/https 绝对地址。 */
+function validatePublicUrl(v: string): TextFieldError | null {
+  const trimmed = v.trim();
+  if (trimmed === "") return null;
+  // 用 URL 解析而不是正则：正则很难同时覆盖端口、路径、IPv6 与大小写，
+  // 而后端用的就是 url.Parse，两边同源才不会出现「前端放行、后端拒绝」。
+  try {
+    const u = new URL(trimmed);
+    if (!u.host || (u.protocol !== "http:" && u.protocol !== "https:")) return "notUrl";
+    return null;
+  } catch {
+    return "notUrl";
+  }
+}
+
+/** 回源 Token 请求头名：启用时必须是非空、且只含 token 字符。 */
+function validateHeaderName(v: string, required: boolean): TextFieldError | null {
+  const trimmed = v.trim();
+  if (trimmed === "") return required ? "required" : null;
+  // HTTP 头名只允许 RFC 7230 的 token 字符；带空格或冒号会让请求头直接非法。
+  return /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(trimmed) ? null : "notHeaderName";
+}
+
+/** 回源 Token 值：启用时必须非空。 */
+function validateRequired(v: string, required: boolean): TextFieldError | null {
+  if (!required) return null;
+  return v.trim() === "" ? "required" : null;
+}
+
+/**
+ * 域名白名单的校验：返回被丢弃的条目数（去协议/路径/端口后为空的那些）。
+ *
+ * 白名单的既有行为是把非法条目**静默过滤掉**（`normalizeHostInput(v).filter(Boolean)`），
+ * 于是用户粘进一行乱码时，界面上那一行直接消失、也没有任何提示——
+ * 看起来像「粘贴没生效」。这里把丢弃数报出来，让过滤可见。
+ */
+function countDroppedHosts(raw: string[]): number {
+  let dropped = 0;
+  for (const item of raw) {
+    if (item.trim() !== "" && normalizeHostInput(item) === "") dropped += 1;
+  }
+  return dropped;
+}
+
 /** 校验描边类名：未碰过返回 undefined（保持默认外观）。 */
 function fieldOutlineClass(touched: boolean, invalid: boolean): string | undefined {
   if (!touched) return undefined;
@@ -449,17 +510,23 @@ function FieldStatusLine({
   okText: string;
   idleText: string;
 }) {
-  if (!touched) {
-    return (
-      <Text size="xs" c="dimmed">
-        {idleText}
-      </Text>
-    );
-  }
+  // 无效时**无视 touched** 一律报原因。
+  //
+  // 为什么：有些字段的必填性由别处驱动（如「回源 Token 校验」开关一打开，
+  // 头名与值立刻变成必填）。只看 touched 的话，用户没碰过那两个输入框，
+  // 界面就只显示「保存」被禁用却不说为什么——比提前报错更糟。
+  // 绿色仍然只在碰过之后才出现，避免一进页面满屏绿。
   if (invalid) {
     return (
       <Text size="xs" c="red" fw={500}>
         {reason}
+      </Text>
+    );
+  }
+  if (!touched) {
+    return (
+      <Text size="xs" c="dimmed">
+        {idleText}
       </Text>
     );
   }
@@ -673,9 +740,11 @@ function ServiceSettingsForm({ initial }: { initial: SettingsConfig }) {
   // 不在每次按键时弹错——边打字边报错会让「删掉旧值准备重输」的中间态一直显示错误。
   // 已校验过的字段（键可以是运行期策略字段名，也可以是服务设置里的普通数字字段名）。
   // 只有碰过的字段才显示绿/红描边与状态行，未碰过保持默认外观。
-  const [touchedFields, setTouchedFields] = useState<Partial<Record<EditableNumberKey, boolean>>>(
+  const [touchedFields, setTouchedFields] = useState<Partial<Record<EditableFieldKey, boolean>>>(
     {},
   );
+  // 白名单里被过滤掉的条目数（见 countDroppedHosts 的说明）。
+  const [droppedHostCount, setDroppedHostCount] = useState(0);
   // 每项当前所选单位（键是设置字段名）。缺失表示「按当前值自动推断」。
   const [unitDrafts, setUnitDrafts] = useState<Partial<Record<RuntimePolicyKey, UnitDraft>>>({});
   // 历史用**模态框**展示，绝不在页面上就地展开。
@@ -735,7 +804,7 @@ function ServiceSettingsForm({ initial }: { initial: SettingsConfig }) {
   };
 
   /** 标记某字段已被用户碰过（开始显示绿/红描边与状态行）。 */
-  const markTouched = (key: EditableNumberKey) =>
+  const markTouched = (key: EditableFieldKey) =>
     setTouchedFields((prev) => (prev[key] ? prev : { ...prev, [key]: true }));
 
   /** 普通数字字段的取值：空输入保持原值，避免被静默折成 0。 */
@@ -787,11 +856,40 @@ function ServiceSettingsForm({ initial }: { initial: SettingsConfig }) {
 
   // 任一字段校验不过就不允许整体保存：与逐项保存同一口径
   // （逐项那侧由 fieldError !== null 禁用），避免「逐项存不下去、整体却能存」的矛盾。
+  /** 文本字段的校验视图：与数值字段共用同一套三态与描边。 */
+  const textView = (key: Exclude<EditableTextFieldKey, "allowedHosts">) => {
+    const err =
+      key === "publicUrl"
+        ? validatePublicUrl(form.publicUrl)
+        : key === "originTokenHeader"
+          ? validateHeaderName(form.originTokenHeader, form.originTokenEnabled)
+          : validateRequired(form.originTokenValue, form.originTokenEnabled);
+    return { invalid: err !== null, error: err };
+  };
+
+  /** 文本字段的失败原因文案。 */
+  const textReason = (
+    key: Exclude<EditableTextFieldKey, "allowedHosts">,
+    label: string,
+  ): string => {
+    const { error } = textView(key);
+    if (error === "required") return t("settings.fieldRequired", { label });
+    if (error === "notUrl") return t("settings.fieldNotUrl", { label });
+    if (error === "notHeaderName") return t("settings.fieldNotHeaderName", { label });
+    if (error === "notHost") return t("settings.fieldNotHost", { label });
+    return "";
+  };
+
   const hasInvalidField =
     viewOf("upstreamTimeout", MIN_SECS, MAX_SECS).invalid ||
     viewOf("groupMemberTimeout", MIN_SECS, MAX_SECS).invalid ||
     viewOf("negativeCacheTTL", 0, MAX_SECS).invalid ||
-    RUNTIME_POLICY_FIELDS.some((field) => validateRuntimeField(field, form[field.key]) !== null);
+    RUNTIME_POLICY_FIELDS.some((field) => validateRuntimeField(field, form[field.key]) !== null) ||
+    // allowedHosts 不在此列：它的非法条目会被过滤掉并单独提示，
+    // 不构成「无法保存」的阻塞（白名单本身仍是可提交的）。
+    (["publicUrl", "originTokenHeader", "originTokenValue"] as const).some(
+      (key) => textView(key).invalid,
+    );
 
   /** 只提交被改动的这一项；后端是部分更新，未传的键保持原值。 */
   const saveRuntimeField = (field: RuntimePolicyField) => {
@@ -1036,7 +1134,23 @@ function ServiceSettingsForm({ initial }: { initial: SettingsConfig }) {
               placeholder="https://repo.example.com"
               value={form.publicUrl}
               disabled={saving}
-              onChange={(event) => setForm({ ...form, publicUrl: event.currentTarget.value })}
+              className={fieldOutlineClass(
+                touchedFields.publicUrl === true,
+                textView("publicUrl").invalid,
+              )}
+              error={textView("publicUrl").invalid || undefined}
+              onChange={(event) => {
+                markTouched("publicUrl");
+                setForm({ ...form, publicUrl: event.currentTarget.value });
+              }}
+              onFocus={() => markTouched("publicUrl")}
+            />
+            <FieldStatusLine
+              touched={touchedFields.publicUrl === true}
+              invalid={textView("publicUrl").invalid}
+              reason={textReason("publicUrl", t("settings.publicUrlLabel"))}
+              okText={t("settings.fieldValidUrl")}
+              idleText={t("settings.fieldIdleUrl")}
             />
             <NumberInput
               label={t("settings.upstreamTimeoutLabel")}
@@ -1182,18 +1296,46 @@ function ServiceSettingsForm({ initial }: { initial: SettingsConfig }) {
                 placeholder="X-Jian-Origin-Token"
                 value={form.originTokenHeader}
                 disabled={saving || !form.originTokenEnabled}
-                onChange={(event) =>
-                  setForm({ ...form, originTokenHeader: event.currentTarget.value })
-                }
+                className={fieldOutlineClass(
+                  touchedFields.originTokenHeader === true,
+                  textView("originTokenHeader").invalid,
+                )}
+                error={textView("originTokenHeader").invalid || undefined}
+                onChange={(event) => {
+                  markTouched("originTokenHeader");
+                  setForm({ ...form, originTokenHeader: event.currentTarget.value });
+                }}
+                onFocus={() => markTouched("originTokenHeader")}
+              />
+              <FieldStatusLine
+                touched={touchedFields.originTokenHeader === true}
+                invalid={textView("originTokenHeader").invalid}
+                reason={textReason("originTokenHeader", t("settings.originTokenHeaderLabel"))}
+                okText={t("settings.fieldValidHeaderName")}
+                idleText={t("settings.fieldIdleHeaderName")}
               />
               <TextInput
                 label={t("settings.originTokenValueLabel")}
                 description={t("settings.originTokenValueHint")}
                 value={form.originTokenValue}
                 disabled={saving || !form.originTokenEnabled}
-                onChange={(event) =>
-                  setForm({ ...form, originTokenValue: event.currentTarget.value })
-                }
+                className={fieldOutlineClass(
+                  touchedFields.originTokenValue === true,
+                  textView("originTokenValue").invalid,
+                )}
+                error={textView("originTokenValue").invalid || undefined}
+                onChange={(event) => {
+                  markTouched("originTokenValue");
+                  setForm({ ...form, originTokenValue: event.currentTarget.value });
+                }}
+                onFocus={() => markTouched("originTokenValue")}
+              />
+              <FieldStatusLine
+                touched={touchedFields.originTokenValue === true}
+                invalid={textView("originTokenValue").invalid}
+                reason={textReason("originTokenValue", t("settings.originTokenValueLabel"))}
+                okText={t("settings.fieldValidToken")}
+                idleText={t("settings.fieldIdleToken")}
               />
               {/* 生成 / 复制从输入框右侧图标移出为「图标 + 文字」按钮：
                   图标-only 看不出是生成还是复制，且 rightSection 里也塞不下文字。 */}
@@ -1241,13 +1383,23 @@ function ServiceSettingsForm({ initial }: { initial: SettingsConfig }) {
               value={form.allowedHosts}
               disabled={saving}
               clearable
-              onChange={(value) =>
+              onChange={(value) => {
+                markTouched("allowedHosts");
+                const dropped = countDroppedHosts(value);
+                setDroppedHostCount(dropped);
                 setForm({
                   ...form,
                   allowedHosts: Array.from(new Set(value.map(normalizeHostInput).filter(Boolean))),
-                })
-              }
+                });
+              }}
             />
+            {/* 被过滤的条目必须报出来：白名单的既有行为是静默丢弃非法条目，
+                用户粘一行乱码时那一行直接消失、界面上毫无提示。 */}
+            {droppedHostCount > 0 ? (
+              <Text size="xs" c="red" fw={500}>
+                {t("settings.allowedHostsDropped", { count: droppedHostCount })}
+              </Text>
+            ) : null}
           </OpsSection>
         </Stack>
       </SimpleGrid>
