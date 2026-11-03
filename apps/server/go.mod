@@ -10,7 +10,7 @@ require (
 	github.com/go-ldap/ldap/v3 v3.4.15
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/jmoiron/sqlx v1.4.0
-	github.com/oapi-codegen/runtime v1.7.0
+	github.com/oapi-codegen/runtime v1.8.0
 	github.com/vjeantet/ldapserver v1.0.1
 	golang.org/x/crypto v0.58.0
 	golang.org/x/net v0.61.0
