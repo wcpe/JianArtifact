@@ -13,7 +13,7 @@ require (
 	github.com/oapi-codegen/runtime v1.7.0
 	github.com/vjeantet/ldapserver v1.0.1
 	golang.org/x/crypto v0.58.0
-	golang.org/x/net v0.61.0
+	golang.org/x/net v0.62.0
 	golang.org/x/oauth2 v0.37.0
 	golang.org/x/sync v0.24.0
 	golang.org/x/sys v0.49.0
