@@ -1446,6 +1446,7 @@ const (
 	SecurityAuditEventObjectObjectKindManifest   SecurityAuditEventObjectObjectKind = "manifest"
 	SecurityAuditEventObjectObjectKindPackage    SecurityAuditEventObjectObjectKind = "package"
 	SecurityAuditEventObjectObjectKindRepository SecurityAuditEventObjectObjectKind = "repository"
+	SecurityAuditEventObjectObjectKindUser       SecurityAuditEventObjectObjectKind = "user"
 	SecurityAuditEventObjectObjectKindVersion    SecurityAuditEventObjectObjectKind = "version"
 )
 
@@ -1461,6 +1462,8 @@ func (e SecurityAuditEventObjectObjectKind) Valid() bool {
 	case SecurityAuditEventObjectObjectKindPackage:
 		return true
 	case SecurityAuditEventObjectObjectKindRepository:
+		return true
+	case SecurityAuditEventObjectObjectKindUser:
 		return true
 	case SecurityAuditEventObjectObjectKindVersion:
 		return true
@@ -1498,6 +1501,7 @@ const (
 	AssetChangeCommitted  SecurityAuditEventType = "asset.change_committed"
 	AssetResponseObserved SecurityAuditEventType = "asset.response_observed"
 	AuthAttempt           SecurityAuditEventType = "auth.attempt"
+	AuthPasswordChanged   SecurityAuditEventType = "auth.password_changed"
 	AuthSessionCreated    SecurityAuditEventType = "auth.session_created"
 	ProtocolWriteDenied   SecurityAuditEventType = "protocol.write_denied"
 )
@@ -1510,6 +1514,8 @@ func (e SecurityAuditEventType) Valid() bool {
 	case AssetResponseObserved:
 		return true
 	case AuthAttempt:
+		return true
+	case AuthPasswordChanged:
 		return true
 	case AuthSessionCreated:
 		return true
@@ -3910,7 +3916,8 @@ type SecurityAuditEvent struct {
 	// EventId 不透明稳定事件标识。
 	EventId string `json:"eventId"`
 
-	// EventType 当前事件仓储支持的事件类型；采集缺口由覆盖和健康视图单独表达。
+	// EventType 采集缺口由覆盖和健康视图单独表达。`auth.password_changed` 仅表示已提交的改密事实，
+	// 对象页仅有一个 `user` 目标。不记录口令、哈希或内部代次。
 	EventType    SecurityAuditEventType `json:"eventType"`
 	EventVersion int                    `json:"eventVersion"`
 
@@ -3954,9 +3961,11 @@ type SecurityAuditEventProxyTrust string
 
 // SecurityAuditEventObject defines model for SecurityAuditEventObject.
 type SecurityAuditEventObject struct {
-	CanonicalPath          *string                            `json:"canonicalPath,omitempty"`
-	Digest                 *string                            `json:"digest,omitempty"`
-	ManifestDigest         *string                            `json:"manifestDigest,omitempty"`
+	CanonicalPath  *string `json:"canonicalPath,omitempty"`
+	Digest         *string `json:"digest,omitempty"`
+	ManifestDigest *string `json:"manifestDigest,omitempty"`
+
+	// ObjectId 对于用户目标，必须是服务端账号 ID 的规范正十进制字符串，不使用用户名。
 	ObjectId               *string                            `json:"objectId,omitempty"`
 	ObjectKind             SecurityAuditEventObjectObjectKind `json:"objectKind"`
 	Ordinal                int                                `json:"ordinal"`
@@ -4001,7 +4010,8 @@ type SecurityAuditEventPage struct {
 // SecurityAuditEventPageProjectionHealth 投影的可用状态，不表示采集覆盖。
 type SecurityAuditEventPageProjectionHealth string
 
-// SecurityAuditEventType 当前事件仓储支持的事件类型；采集缺口由覆盖和健康视图单独表达。
+// SecurityAuditEventType 采集缺口由覆盖和健康视图单独表达。`auth.password_changed` 仅表示已提交的改密事实，
+// 对象页仅有一个 `user` 目标。不记录口令、哈希或内部代次。
 type SecurityAuditEventType string
 
 // SecurityAuditOutcome defines model for SecurityAuditOutcome.
@@ -4534,6 +4544,9 @@ type BadRequest = Error
 
 // Conflict defines model for Conflict.
 type Conflict = Error
+
+// CredentialVersionConflict defines model for CredentialVersionConflict.
+type CredentialVersionConflict = Error
 
 // Forbidden defines model for Forbidden.
 type Forbidden = Error

@@ -708,6 +708,90 @@ describe("devmock ↔ OpenAPI 契约一致性", () => {
     expect(validateObject({ ...object, body: "不是对象字段" })).toBe(false);
   });
 
+  it("改密提交事实与用户目标只公开稳定标识", () => {
+    const validateType = ajv.compile(schemaFor("SecurityAuditEventType"));
+    expect(validateType("auth.password_changed")).toBe(true);
+    expect(validateType("auth.password_reset")).toBe(false);
+    const at = "2026-01-01T00:00:00.000Z";
+    const event = {
+      eventId: "event-a",
+      eventVersion: 1,
+      eventType: "auth.password_changed",
+      occurredAt: at,
+      ingestedAt: at,
+      actorKind: "user",
+      actorUserId: 1,
+      proxyTrust: "unknown",
+      operationId: "operation-a",
+      outcome: "succeeded",
+      committed: "committed",
+    };
+    expectValid("SecurityAuditEvent", event);
+    const validateEvent = ajv.compile(schemaFor("SecurityAuditEvent"));
+    const validateObject = ajv.compile(schemaFor("SecurityAuditEventObject"));
+    const target = { ordinal: 1, objectKind: "user", objectId: "2" };
+    expect(validateObject(target)).toBe(true);
+    expect(validateObject({ ...target, objectId: undefined })).toBe(false);
+    for (const objectId of [2, "0", "-1", "02", "display-name"]) {
+      expect(validateObject({ ...target, objectId }), String(objectId)).toBe(false);
+    }
+    expect(validateObject({ ...target, digest: "不属于账号目标" })).toBe(false);
+    for (const field of ["password", "passwordHash", "accountEpoch", "securityEpoch"]) {
+      expect(validateEvent({ ...event, [field]: "仅用于断言" }), field).toBe(false);
+      expect(validateObject({ ...target, [field]: "仅用于断言" }), field).toBe(false);
+    }
+  });
+
+  it("改密沿用旧请求和无响应体的 204，新增失败沿用嵌套错误", () => {
+    type Response = {
+      $ref?: string;
+      description?: string;
+      content?: { "application/json": { schema: { $ref: string } } };
+    };
+    const doc = loadOpenApi() as unknown as {
+      paths: Record<
+        string,
+        {
+          post?: {
+            operationId: string;
+            requestBody: Response;
+            responses: Record<string, Response>;
+          };
+        }
+      >;
+      components: { responses: Record<string, Response> };
+    };
+    const operation = doc.paths["/api/v1/users/{id}/password"]?.post;
+    expect(operation?.operationId).toBe("changePassword");
+    expect(operation?.requestBody.content?.["application/json"].schema.$ref).toBe(
+      "#/components/schemas/PasswordChangeRequest",
+    );
+    const responses = operation!.responses;
+    expect(Object.keys(responses).sort()).toEqual([
+      "204",
+      "400",
+      "401",
+      "403",
+      "404",
+      "409",
+      "503",
+    ]);
+    expect(responses["204"]?.content).toBeUndefined();
+    expect(responses["204"]?.description).toContain(
+      "同值经事务确认仍返回 204，不推进代次，不追加新的改密成功事件",
+    );
+    for (const [status, key, code] of [
+      ["409", "CredentialVersionConflict", "credential_version_conflict"],
+      ["503", "SecurityAuditUnavailable", "security_audit_unavailable"],
+    ] as const) {
+      expect(responses[status]?.$ref).toBe(`#/components/responses/${key}`);
+      const error = doc.components.responses[key];
+      expect(error?.description).toContain(`\`${code}\``);
+      expect(error?.content?.["application/json"].schema.$ref).toBe("#/components/schemas/Error");
+      expectValid("Error", { error: { code, message: "改密未确认为成功" } });
+    }
+  });
+
   it("安全审计页区分投影与覆盖且不返回总计数或内部锚点", () => {
     const page = {
       items: [],

@@ -247,6 +247,16 @@ describe("安全审计管理查询", () => {
       expect(await health.json()).toEqual({ state: "starting", coverage: "unknown" });
     }
   });
+  it("改密事件可按类型和账号目标筛选，模拟库不编造已提交事件", async () => {
+    const response = await fetch(
+      `${base}/security-events?${range}&eventType=auth.password_changed&objectId=2`,
+      {
+        headers: auth(MOCK_TOKEN),
+      },
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ items: [], hasMore: false, coverage: "unknown" });
+  });
   it("筛选边界与无下一页语义", async () => {
     for (const query of [
       `${range}&limit=100&ip=192.0.2.1`,

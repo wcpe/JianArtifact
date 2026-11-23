@@ -572,7 +572,12 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** 修改 / 重置用户口令 */
+        /**
+         * 修改 / 重置用户口令
+         * @description 口令实际变更时，确认变更和安全审计事务提交后返回 204，不返回口令、哈希或内部代次。
+         *     已检测到目标版本冲突时返回 409 `credential_version_conflict`；审计不可用或无法确认提交结果时
+         *     返回 503 `security_audit_unavailable`，不将未确认结果报告为成功。此端点不保证跨 HTTP 请求重放幂等。
+         */
         post: operations["changePassword"];
         delete?: never;
         options?: never;
@@ -2402,10 +2407,11 @@ export interface components {
             };
         };
         /**
-         * @description 当前事件仓储支持的事件类型；采集缺口由覆盖和健康视图单独表达。
+         * @description 采集缺口由覆盖和健康视图单独表达。`auth.password_changed` 仅表示已提交的改密事实，
+         *     对象页仅有一个 `user` 目标。不记录口令、哈希或内部代次。
          * @enum {string}
          */
-        SecurityAuditEventType: "auth.attempt" | "auth.session_created" | "protocol.write_denied" | "asset.change_committed" | "asset.response_observed";
+        SecurityAuditEventType: "auth.attempt" | "auth.session_created" | "auth.password_changed" | "protocol.write_denied" | "asset.change_committed" | "asset.response_observed";
         /** @enum {string} */
         SecurityAuditOutcome: "succeeded" | "denied" | "failed" | "pending" | "unknown";
         /**
@@ -2468,7 +2474,8 @@ export interface components {
             repositoryId?: number;
             canonicalPath?: string;
             /** @enum {string} */
-            objectKind: "asset" | "repository" | "package" | "version" | "manifest" | "blob";
+            objectKind: "asset" | "repository" | "package" | "version" | "manifest" | "blob" | "user";
+            /** @description 对于用户目标，必须是服务端账号 ID 的规范正十进制字符串，不使用用户名。 */
             objectId?: string;
             digest?: string;
             /** Format: int64 */
@@ -4252,6 +4259,15 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
+        /** @description 凭据版本已变更，当前变更未提交；`error.code` 为 `credential_version_conflict`。 */
+        CredentialVersionConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
         /** @description 安全审计暂不可用；`error.code` 为 `security_audit_unavailable`。 */
         SecurityAuditUnavailable: {
             headers: {
@@ -5464,7 +5480,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description 已修改 */
+            /** @description 已修改；同值经事务确认仍返回 204，不推进代次，不追加新的改密成功事件。 */
             204: {
                 headers: {
                     [name: string]: unknown;
@@ -5475,6 +5491,8 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["CredentialVersionConflict"];
+            503: components["responses"]["SecurityAuditUnavailable"];
         };
     };
     putPublishPolicies: {

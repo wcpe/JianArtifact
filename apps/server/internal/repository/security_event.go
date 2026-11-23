@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -149,7 +150,11 @@ func validateSecurityEvent(event SecurityEvent, objects []SecurityEventObject) e
 	}
 	total := headerBytes
 	for _, object := range objects {
-		if !validSecurityEventObject(object) {
+		valid := validSecurityEventObject(object)
+		if event.EventType == SecurityEventPasswordChanged {
+			valid = validPasswordChangedObject(object)
+		}
+		if !valid {
 			return invalidSecurityEvent("对象字段")
 		}
 		total += 64 + len(object.CanonicalPath) + len(object.ObjectKind) + len(object.ObjectID) + len(object.Digest) +
@@ -169,6 +174,17 @@ func validateSecurityEventFact(e SecurityEvent, objectCount int) error {
 	case "asset.change_committed":
 		if e.Committed != "committed" || objectCount == 0 {
 			return invalidSecurityEvent("制品提交事实")
+		}
+	case SecurityEventPasswordChanged:
+		if e.Committed != "committed" || objectCount != 1 || e.RepositoryID != nil ||
+			e.CredentialID != "" || e.SessionID != "" || e.TaskID != "" || e.ActionID != "" ||
+			!securityEventOneOf(e.ActorKind, "user", "local_operator") {
+			return invalidSecurityEvent("改密提交事实")
+		}
+		if e.ActorKind == "local_operator" && (e.RequestID != "" || e.OriginRequestID != "" || e.SourceTrustVersion != "" ||
+			e.PeerIP.IsValid() || e.ClientIP.IsValid() || e.ProxyTrust != "unknown" || e.UserAgent != "" ||
+			e.AuthMethod != "" || e.AuthStrength != "") {
+			return invalidSecurityEvent("本机改密来源")
 		}
 	case "auth.session_created":
 		if e.Committed != "committed" || e.ActorKind != "user" || objectCount != 0 {
@@ -216,6 +232,15 @@ func validSecurityEventSource(e SecurityEvent) bool {
 	default:
 		return false
 	}
+}
+
+func validPasswordChangedObject(o SecurityEventObject) bool {
+	if o.Ordinal != 1 || o.ObjectKind != "user" || o.RepositoryID != nil || o.CanonicalPath != "" || o.Digest != "" ||
+		o.SizeBytes != nil || o.ManifestDigest != "" || o.TargetVersion != "" || o.RepositoryNameSnapshot != "" {
+		return false
+	}
+	id, err := strconv.ParseInt(o.ObjectID, 10, 64)
+	return err == nil && id > 0 && strconv.FormatInt(id, 10) == o.ObjectID
 }
 
 func validSecurityEventObject(o SecurityEventObject) bool {
@@ -334,7 +359,7 @@ func validSecurityEventTime(value time.Time) bool {
 }
 
 func validSecurityEventType(value string) bool {
-	return securityEventOneOf(value, "auth.attempt", "auth.session_created", "protocol.write_denied", "asset.change_committed", "asset.response_observed")
+	return securityEventOneOf(value, "auth.attempt", "auth.session_created", SecurityEventPasswordChanged, "protocol.write_denied", "asset.change_committed", "asset.response_observed")
 }
 
 func validSecurityEventOutcome(value string) bool {

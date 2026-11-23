@@ -817,6 +817,10 @@ paths:
     post:
       operationId: changePassword
       summary: 修改 / 重置用户口令
+      description: |
+        口令实际变更时，确认变更和安全审计事务提交后返回 204，不返回口令、哈希或内部代次。
+        已检测到目标版本冲突时返回 409 `credential_version_conflict`；审计不可用或无法确认提交结果时
+        返回 503 `security_audit_unavailable`，不将未确认结果报告为成功。此端点不保证跨 HTTP 请求重放幂等。
       parameters:
         - $ref: "#/components/parameters/UserIdParam"
       requestBody:
@@ -827,7 +831,7 @@ paths:
               $ref: "#/components/schemas/PasswordChangeRequest"
       responses:
         "204":
-          description: 已修改
+          description: 已修改；同值经事务确认仍返回 204，不推进代次，不追加新的改密成功事件。
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -836,6 +840,10 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/CredentialVersionConflict"
+        "503":
+          $ref: "#/components/responses/SecurityAuditUnavailable"
   /api/v1/users/{id}/publish-policies:
     put:
       operationId: putPublishPolicies
@@ -3336,6 +3344,12 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
+    CredentialVersionConflict:
+      description: 凭据版本已变更，当前变更未提交；`error.code` 为 `credential_version_conflict`。
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
     SecurityAuditUnavailable:
       description: 安全审计暂不可用；`error.code` 为 `security_audit_unavailable`。
       content:
@@ -4239,11 +4253,14 @@ components:
               type: string
     SecurityAuditEventType:
       type: string
-      description: 当前事件仓储支持的事件类型；采集缺口由覆盖和健康视图单独表达。
+      description: |
+        采集缺口由覆盖和健康视图单独表达。`auth.password_changed` 仅表示已提交的改密事实，
+        对象页仅有一个 `user` 目标。不记录口令、哈希或内部代次。
       enum:
         [
           auth.attempt,
           auth.session_created,
+          auth.password_changed,
           protocol.write_denied,
           asset.change_committed,
           asset.response_observed,
@@ -4356,13 +4373,30 @@ components:
         canonicalPath: { type: string, minLength: 1, maxLength: 1024 }
         objectKind:
           type: string
-          enum: [asset, repository, package, version, manifest, blob]
-        objectId: { type: string, minLength: 1 }
+          enum: [asset, repository, package, version, manifest, blob, user]
+        objectId:
+          type: string
+          minLength: 1
+          description: 对于用户目标，必须是服务端账号 ID 的规范正十进制字符串，不使用用户名。
         digest: { type: string, minLength: 1 }
         sizeBytes: { type: integer, format: int64, minimum: 0 }
         manifestDigest: { type: string, minLength: 1 }
         targetVersion: { type: string, minLength: 1, maxLength: 128 }
         repositoryNameSnapshot: { type: string, minLength: 1, maxLength: 128 }
+      # 排除不满足最小账号目标形状的 user 对象，不限制既有对象类型。
+      not:
+        type: object
+        required: [objectKind]
+        properties:
+          objectKind: { type: string, enum: [user] }
+        not:
+          type: object
+          additionalProperties: false
+          required: [ordinal, objectKind, objectId]
+          properties:
+            ordinal: { type: integer }
+            objectKind: { type: string }
+            objectId: { type: string, pattern: "^[1-9][0-9]*$" }
     SecurityAuditEventPage:
       type: object
       additionalProperties: false

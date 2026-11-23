@@ -1,12 +1,14 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
+	"github.com/wcpe/jianartifact/apps/server/internal/domain"
 )
 
 // ListUsers 用户列表（分页），仅管理员可见。
@@ -109,8 +111,12 @@ func (h *Handlers) ChangePassword(c *gin.Context, id UserIdParam) {
 		auth.WriteError(c, http.StatusBadRequest, "bad_request", "口令不能为空")
 		return
 	}
-	if err := h.users.ChangePassword(id, req.Password); err != nil {
-		writeDomainErr(c, err)
+	if err := h.users.ChangePasswordForPrincipal(c.Request.Context(), p, id, req.Password); err != nil {
+		if errors.Is(err, domain.ErrCredentialVersionConflict) {
+			auth.WriteError(c, http.StatusConflict, "credential_version_conflict", "账号或口令状态已变更")
+		} else {
+			writeDomainErr(c, err)
+		}
 		return
 	}
 	h.AuditLog(c, "user.password", "user", strconv.FormatInt(id, 10), "", "", "ok")

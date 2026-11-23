@@ -131,31 +131,6 @@ func (s *UserService) Delete(id int64) error {
 	return nil
 }
 
-// ChangePassword 重置用户口令。内置 anonymous 用户不可改密。
-func (s *UserService) ChangePassword(id int64, password string) error {
-	if err := requireBusinessWrite(s.writeGate); err != nil {
-		return err
-	}
-	if err := s.rejectAnonymous(id); err != nil {
-		return err
-	}
-	u, err := s.users.GetByID(id)
-	if err != nil {
-		return mapNotFound(err)
-	}
-	hash, err := auth.HashPassword(password)
-	if err != nil {
-		return err
-	}
-	if err := s.users.UpdatePassword(id, hash); err != nil {
-		return mapNotFound(err)
-	}
-	s.recordChange(EntityUser, UserKey(u.Username), OpPut, UserChangeData{
-		Username: u.Username, Role: u.Role, Status: u.Status, PasswordHash: hash, WebLoginDisabled: u.WebLoginDisabled, CreatedAt: u.CreatedAt,
-	})
-	return nil
-}
-
 // rejectAnonymous 对内置 anonymous 用户的管理操作返回 ErrValidation。
 func (s *UserService) rejectAnonymous(id int64) error {
 	u, err := s.users.GetByID(id)

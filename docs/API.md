@@ -23,6 +23,7 @@
 ### 用户、令牌、仓库和制品
 
 - 用户与令牌：用户列表/创建/更新/禁用/改密，API Token 创建和吊销。
+- `POST /api/v1/users/{id}/password`：本人或获准管理员修改既有账号口令，成功仍返回无响应体的 `204`。同值在事务中复核后也返回 `204`，不增加账号凭据代次，不追加 `auth.password_changed`。实际变更时，口令、代次、回执与成功事件一同提交。事件的操作者与被改账号分开，目标仅以 `user` 对象的 `objectId` 标识。账号版本冲突返回 `409 credential_version_conflict`，审计或提交结果不能确认返回 `503 security_audit_unavailable`；不要把新请求当作原操作的幂等重放。此改动不表示旧会话或 API Token 已按代次失效。
 - 仓库与 ACL：仓库 CRUD、成员授权、仓库格式/可见性/上游配置和使用统计。授权主体分 `user` / `group` 两态（`AclEntry.subjectType`，缺省 `user` 以兼容既有请求体），`subjectId` 与 `subjectGroupId` 按 `subjectType` 二选一必填、另一列被忽略；动作 `action` 为六档 `read` / `write` / `publish` / `delete` / `acl_manage` / `admin`。蕴含关系（判定动作 → 能使之通过的已授权动作集合）：`read` ← `read`/`write`/`admin`；`publish` ← `publish`/`write`/`admin`；`write` ← `write`/`admin`；`delete` ← `delete`/`admin`；`acl_manage` ← `acl_manage`/`admin`；`admin` ← `admin`。即 **`write` 蕴含 `read` 与 `publish` 但不蕴含 `delete`**（`delete` 需单独授予），`publish` / `delete` / `acl_manage` 各自只蕴含自身且彼此互不满足、均**不蕴含** `read`。判定取「用户自身条目」∪「其所属各组条目」的并集，组内成员变动即时生效。字段与枚举以 [`../api/openapi.yaml`](../api/openapi.yaml) 为准，语义取舍见 [`specs/0.12.0-user-groups-and-fine-grained-actions.md`](specs/0.12.0-user-groups-and-fine-grained-actions.md)。
 - 公开仓库列表：`GET /api/v1/public/repositories`（无需认证）在 `items` / `total` 之外附带 `pinnedNames`——**全局置顶**仓库的当前主名（有序），公开页据此置顶前置并显示图钉。
 - 仓库使用说明：`GET /api/v1/repositories/{name}/usage` 返回 `UsageInfo.snippets`，每个 `UsageSnippet` 含 `group`（`auth` / `resolve` / `publish` / `other`）——它是**结构化分组标记，不参与本地化**（与随 `Accept-Language` 变化的 `title` / `description` 不同），供界面按「认证 / 解析依赖 / 发布制品 / 其他」折叠分区。

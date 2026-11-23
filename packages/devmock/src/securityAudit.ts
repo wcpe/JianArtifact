@@ -30,6 +30,7 @@ const refKeys = ["requestId", "originRequestId", "operationId", "taskId", "actio
 const eventTypes = new Set([
   "auth.attempt",
   "auth.session_created",
+  "auth.password_changed",
   "protocol.write_denied",
   "asset.change_committed",
   "asset.response_observed",
