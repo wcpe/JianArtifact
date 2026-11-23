@@ -36,9 +36,6 @@ import { AttentionDrawer, dispatchGlobalRefresh } from "./AttentionDrawer";
 import { RecordsStream } from "./RecordsStream";
 import { useAuditQuery } from "./useAuditQuery";
 
-// 窄屏主指标在 kpiItems 里的下标（总数 / 失败 / 高危 / 成功率 / 平均耗时 / 待确认批次）。
-const NARROW_KPI_INDEXES = [0, 2, 3, 4, 5, 10];
-
 export function AuditWorkbenchView() {
   const { t } = useTranslation();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -98,36 +95,78 @@ export function AuditWorkbenchView() {
 
   const summary = model.summary.data;
 
+  // KPI 点击联动：把「指标」直接变成「筛选动作」，看到异常数字即可一键下钻，
+  // 不必再去筛选条里逐个还原同样的条件。
+  const { filters, setFilters } = model;
+
+  /** 切换数组型筛选（结果 / 类别）：已选中则取消，否则只选这一项。 */
+  const toggleArrayFilter = useCallback(
+    (key: "result" | "category", value: string) => {
+      const current = filters[key] as string[];
+      const next = current.includes(value)
+        ? current.filter((item) => item !== value)
+        : [value];
+      setFilters({ ...filters, [key]: next });
+    },
+    [filters, setFilters],
+  );
+
+  /**
+   * 高危指标：服务端 isHighRisk 是一组固定 action 的白名单，而事件接口只接受单个
+   * `action` 精确匹配，无法一次查询多值。这里不伪造筛选（会让数字与列表对不上），
+   * 改为聚焦到「失败」——高危与失败共同构成风险事件的主要来源，且结果筛选是
+   * 服务端真实支持的维度。
+   */
+  const applyHighRisk = useCallback(() => {
+    toggleArrayFilter("result", "failure");
+  }, [toggleArrayFilter]);
+
   // 12 个指标在窄屏要占 4 行（近半屏），而记录表才是这页的主体。
-  // 窄屏只渲染 6 个主指标（总数/失败/高危/成功率/平均耗时/待确认批次），其余用「更多指标」展开；
-  // 宽屏（cards 变体）保持 12 个全展示。索引对应下方 kpiItems 的顺序。
+  // 窄屏只渲染带 primary 标记的主指标（总数/失败/高危/待确认批次/成功率/平均耗时），
+  // 其余用「更多指标」展开；宽屏（cards 变体）保持 12 个全展示。
   const kpiItems: OpsKpiItem[] = [
     {
       label: t("auditWorkbench.kpiTotal"),
       value: summary ? summary.totalCount.toLocaleString(currentLocaleTag()) : "—",
       hint: t("auditWorkbench.kpiTotalHint"),
       tone: "blue",
+      primary: true,
       icon: <IconFileAnalytics size={18} />,
+      // 总数 = 清空所有筛选，回到全量视图。
+      onSelect: () => setFilters({ category: [], result: [] }),
+      active: filters.category.length === 0 && filters.result.length === 0,
+      selectHint: t("auditWorkbench.kpiClearFilters"),
     },
     {
       label: t("auditWorkbench.kpiSuccess"),
       value: summary ? summary.successCount.toLocaleString(currentLocaleTag()) : "—",
       tone: "green",
       icon: <IconCircleCheck size={18} />,
+      onSelect: () => toggleArrayFilter("result", "success"),
+      active: filters.result.includes("success"),
+      selectHint: t("auditWorkbench.kpiFilterSuccess"),
     },
     {
       label: t("auditWorkbench.kpiFailure"),
       value: summary ? summary.failureCount.toLocaleString(currentLocaleTag()) : "—",
       tone: "red",
+      primary: true,
       danger: Boolean(summary && summary.failureCount > 0),
       icon: <IconCircleX size={18} />,
+      onSelect: () => toggleArrayFilter("result", "failure"),
+      active: filters.result.includes("failure"),
+      selectHint: t("auditWorkbench.kpiFilterFailure"),
     },
     {
       label: t("auditWorkbench.kpiHighRisk"),
       value: summary ? summary.highRiskCount.toLocaleString(currentLocaleTag()) : "—",
       tone: "orange",
+      primary: true,
       danger: Boolean(summary && summary.highRiskCount > 0),
       icon: <IconAlertTriangle size={18} />,
+      onSelect: applyHighRisk,
+      active: filters.result.includes("failure"),
+      selectHint: t("auditWorkbench.kpiFilterHighRisk"),
     },
     {
       label: t("auditWorkbench.kpiSuccessRate"),
@@ -137,6 +176,7 @@ export function AuditWorkbenchView() {
           : `${((1 - summary.failureRate) * 100).toFixed(1)}%`,
       hint: t("auditWorkbench.kpiSuccessRateHint"),
       tone: "teal",
+      primary: true,
       icon: <IconPercentage size={18} />,
     },
     {
@@ -144,6 +184,7 @@ export function AuditWorkbenchView() {
       value:
         !summary || summary.totalCount === 0 ? "—" : formatDuration(summary.averageDurationMs ?? 0),
       tone: "cyan",
+      primary: true,
       icon: <IconClock size={18} />,
     },
     {
@@ -183,8 +224,17 @@ export function AuditWorkbenchView() {
       value: model.pendingAttentionCount.toLocaleString(currentLocaleTag()),
       hint: t("auditWorkbench.kpiPendingHint"),
       tone: "yellow",
+      primary: true,
       danger: model.pendingAttentionCount > 0,
       icon: <IconBell size={18} />,
+      // 待确认批次：切到「待处理」风险状态筛选（服务端支持的 attention 维度）。
+      onSelect: () =>
+        setFilters({
+          ...filters,
+          attention: filters.attention === "pending" ? undefined : "pending",
+        }),
+      active: filters.attention === "pending",
+      selectHint: t("auditWorkbench.kpiFilterPending"),
     },
     {
       label: t("auditWorkbench.kpiActors"),
@@ -195,9 +245,9 @@ export function AuditWorkbenchView() {
     },
   ];
 
-  const narrowKpiItems = NARROW_KPI_INDEXES.map((index) => kpiItems[index]).filter(
-    (item): item is OpsKpiItem => Boolean(item),
-  );
+  // 主指标由 kpiItems 自身的 primary 标记决定，不再依赖数组下标——
+  // 下标方案在指标增删/重排后会静默错位。
+  const narrowKpiItems = kpiItems.filter((item) => item.primary);
   const visibleKpiItems = isNarrow && !kpiExpanded ? narrowKpiItems : kpiItems;
 
   return (
