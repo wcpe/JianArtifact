@@ -130,6 +130,9 @@ func (s *TokenService) resolveIssue(ctx context.Context, p *auth.Principal, in C
 	if days > machineTokenMaxDays {
 		return issue, fmt.Errorf("%w：期限不能超过 %d 天", ErrCredentialScopeDenied, machineTokenMaxDays)
 	}
+	// 期限对全部用途生效：旧式凭据同样受默认/最长期限约束，
+	// 且签发响应需回显真实到期时间（仓储层另有兜底，避免不一致）。
+	issue.ExpiresAt = time.Now().Add(time.Duration(days) * 24 * time.Hour).Unix()
 	if in.Purpose == auth.TokenPurposeLegacy {
 		return issue, nil
 	}
@@ -182,7 +185,6 @@ func (s *TokenService) resolveIssue(ctx context.Context, p *auth.Principal, in C
 		return issue, err
 	}
 	issue.ScopesJSON = string(raw)
-	issue.ExpiresAt = time.Now().Add(time.Duration(days) * 24 * time.Hour).Unix()
 	return issue, nil
 }
 
