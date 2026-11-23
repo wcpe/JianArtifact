@@ -24,7 +24,7 @@ import { IconHelpCircle } from "@tabler/icons-react";
 import { useTranslation } from "react-i18next";
 
 export type OpsTone =
-  "green" | "blue" | "orange" | "red" | "gray" | "teal" | "cyan" | "yellow" | "indigo";
+  "green" | "blue" | "orange" | "red" | "gray" | "teal" | "cyan" | "yellow" | "indigo" | "grape";
 
 /** 状态徽章：统一走 Mantine Badge（light 底色随 tone），不再手写 span+圆点。 */
 export function StatusPill({ tone, text }: { tone: OpsTone; text: string }) {
@@ -135,6 +135,14 @@ export interface OpsKpiItem {
   active?: boolean;
   /** 可点指标的提示文案（解释点击后会做什么）。 */
   selectHint?: string;
+  /**
+   * 供测试定位单项指标。
+   *
+   * 卡片本身没有语义角色，按文案定位会随文案（含语言切换）漂移；
+   * 调用方必须给**每一项**一个稳定且唯一的 id——早期维护页按「有无清理动作」
+   * 推导 id，导致六个指标里三个都落在同一个 `kpi-total` 上，测试无法区分。
+   */
+  testId?: string;
 }
 
 /**
@@ -253,7 +261,14 @@ export function OpsKpiBand({
             <Card
               withBorder
               radius="md"
-              padding="sm"
+              // 卡片内边距与图标尺寸都收紧：6 列布局下每张卡只有约 154px 宽，
+              // 图标 36px + 内边距 12×2 + 图标与文字间距 12 就吃掉 72px，
+              // 留给数值只剩约 80px——而 `170.9 MB` 实测需要 85px，
+              // 于是最后一位被截成 `170.9 ME`（实测确认，不是理论风险）。
+              // 把图标缩到 32、内边距收到 xs，可腾出约 20px，中英两种语言的
+              // 常见体积文案都能完整显示。
+              padding="xs"
+              data-testid={item.testId}
               onClick={item.onSelect}
               role={item.onSelect ? "button" : undefined}
               tabIndex={item.onSelect ? 0 : undefined}
@@ -283,8 +298,8 @@ export function OpsKpiBand({
                   : null),
               }}
             >
-              <Group gap="sm" wrap="nowrap" align="center">
-                <ThemeIcon variant="light" color={item.tone ?? "gray"} size={36} radius="md">
+              <Group gap="xs" wrap="nowrap" align="center">
+                <ThemeIcon variant="light" color={item.tone ?? "gray"} size={32} radius="md">
                   {item.icon}
                 </ThemeIcon>
                 <Stack gap={0} style={{ minWidth: 0, flex: 1 }}>
@@ -295,9 +310,17 @@ export function OpsKpiBand({
                     size="lg"
                     fw={700}
                     lh={1.2}
-                    truncate
+                    // 数值**不加 truncate**：它是指标卡的主体信息，被省略号截掉
+                    // 就等于这张卡失去意义。宁可让字号自适应（见下方 style），
+                    // 也不让用户看到 `170.9 ME` 这种残缺数字。
                     c={item.danger ? "red" : undefined}
-                    style={{ fontVariantNumeric: "tabular-nums" }}
+                    style={{
+                      fontVariantNumeric: "tabular-nums",
+                      // 允许在极窄容器里略微缩小，而不是截断；`1em` 是上限，
+                      // 正常宽度下不会触发。
+                      fontSize: "clamp(0.8rem, 1.15vw, 1.125rem)",
+                      whiteSpace: "nowrap",
+                    }}
                   >
                     {item.value}
                   </Text>

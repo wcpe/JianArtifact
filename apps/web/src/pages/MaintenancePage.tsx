@@ -30,9 +30,9 @@ import {
   Code,
   Group,
   Modal,
+  Pagination,
   Progress,
   ScrollArea,
-  SimpleGrid,
   Stack,
   Table,
   Tabs,
@@ -50,19 +50,20 @@ import {
   IconTrash,
   IconUpload,
 } from "@tabler/icons-react";
-import { KpiCard } from "../components/maintenance/KpiCard";
 import { useCallback, useEffect, useState } from "react";
-import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
 import { PageShell } from "../app/PageShell";
 import { AsyncBoundary } from "../components/AsyncBoundary";
-import { OpsSection } from "../components/ops/OpsKit";
+import { OpsKpiBand, OpsSection } from "../components/ops/OpsKit";
+import type { OpsKpiItem } from "../components/ops/OpsKit";
 import { formatDuration } from "../components/audit/labels";
 import { DestructiveConfirmModal } from "../components/maintenance/DestructiveConfirmModal";
 import { MavenVersionCleanupPanel } from "../components/maintenance/MavenVersionCleanupPanel";
 import { MavenPackageBatchPanel } from "../components/maintenance/MavenPackageBatchPanel";
+import { ReclaimablePanel } from "../components/maintenance/ReclaimablePanel";
+import { RecentCleanupPanel } from "../components/maintenance/RecentCleanupPanel";
 import { UnifiedTrashPanel } from "../components/maintenance/UnifiedTrashPanel";
 import {
   executeCleanup,
@@ -131,76 +132,87 @@ function formatElapsed(startedAt: string | null, finishedAt: string | null): str
 /** 关键事实条：一行固定高度指标，不参与滚动。 */
 function FactsStrip({
   health,
+  refreshKey,
   onCleanup,
   onRefresh,
+  onViewAllTasks,
 }: {
   health: StorageHealth | null;
+  /** 外部刷新信号，透传给最近活动区块。 */
+  refreshKey: number;
   onCleanup: (k: CleanupKind) => void;
   onRefresh: () => void;
+  /** 跳转到「清理任务」Tab（最近活动区块的「查看全部」）。 */
+  onViewAllTasks: () => void;
 }) {
   const { t } = useTranslation();
   // 六项指标各自配一个图标：形状比文字更容易扫读，且窄屏换行后仍能快速定位。
-  const items: {
-    label: string;
-    value: string;
-    icon: ReactNode;
-    color: string;
-    kind?: CleanupKind;
-  }[] = [
+  //
+  // `id` 必须逐项显式给出：卡片没有语义角色，测试只能靠 testid 定位；早先按
+  // 「有无清理动作」推导 id（`kpi-${kind ?? "total"}`），六个指标里三个都落在
+  // 同一个 `kpi-total` 上，按 id 定位拿到的永远是第一张卡。
+  const items: (OpsKpiItem & { id: string })[] = [
     {
+      id: "orphan-blobs",
       label: t("maintenance.orphanBlobs"),
       value: `${health?.orphanBlobs ?? 0}`,
       icon: <IconDatabase size={20} />,
-      color: "red",
+      tone: "red",
+      danger: (health?.orphanBlobs ?? 0) > 0,
+      hint: t("maintenance.orphanBlobsHint"),
     },
     {
+      id: "quarantined",
       label: t("maintenance.quarantined"),
       value: `${health?.quarantinedBlobs ?? 0}`,
       icon: <IconShieldLock size={20} />,
-      color: "orange",
+      tone: "orange",
+      hint: t("maintenance.quarantinedHint"),
     },
     {
+      id: "empty-dirs",
       label: t("maintenance.emptyDirs"),
       value: `${health?.emptyDirs ?? 0}`,
       icon: <IconFolderOff size={20} />,
-      color: "blue",
-      kind: "empty_dirs",
+      tone: "blue",
+      hint: t("maintenance.emptyDirsHint"),
     },
     {
+      id: "pre-restore",
       label: t("maintenance.preRestore"),
       value: `${health?.preRestoreDirs ?? 0}`,
       icon: <IconHistory size={20} />,
-      color: "grape",
-      kind: "pre_restore",
+      tone: "grape",
+      hint: t("maintenance.preRestoreHint"),
     },
     {
+      id: "stale-uploads",
       label: t("maintenance.staleUploads"),
       value: formatBytes(health?.backupUploadsBytes ?? 0),
       icon: <IconUpload size={20} />,
-      color: "cyan",
-      kind: "stale_uploads",
+      tone: "cyan",
+      hint: t("maintenance.staleUploadsHint"),
     },
     {
+      id: "total",
       label: t("maintenance.total"),
       value: formatBytes(health?.totalBytes ?? 0),
       icon: <IconChartPie size={20} />,
-      color: "teal",
+      tone: "teal",
+      hint: t("maintenance.totalHint"),
     },
   ];
   return (
     <Stack gap="md" style={{ minHeight: 0 }}>
-      <SimpleGrid cols={{ base: 2, sm: 3, lg: 6 }} spacing="md">
-        {items.map((item) => (
-          <KpiCard
-            key={item.label}
-            icon={item.icon}
-            label={item.label}
-            value={item.value}
-            color={item.color}
-            testId={`kpi-${item.kind ?? "total"}`}
-          />
-        ))}
-      </SimpleGrid>
+      <OpsKpiBand
+        label={t("maintenance.healthTitle")}
+        cols={{ base: 2, sm: 3, lg: 6 }}
+        items={items.map((item) => ({ ...item, testId: `kpi-${item.id}` }))}
+      />
+
+      {/* 占比面板紧跟指标带：它读的正是上面那六个数，两者要能连起来看。
+          放在说明卡之前——结论先于操作说明。 */}
+      {health ? <ReclaimablePanel health={health} /> : null}
 
       {/* 清理动作放在「体检说明」这一块的表头，而不是散在指标卡旁边：
           它们是"基于体检结论的操作"，归到说明区读起来才是一件事。
@@ -239,19 +251,29 @@ function FactsStrip({
           </Group>
         </Group>
       </Card>
+
+      {/* 最近清理活动垫在最后：体检页在固定视口下原本只用掉约 60% 高度
+          （实测主内容到 y=540、视口 900），下半屏是空的。这块回答的是
+          "上次清是什么时候、清掉了没有"——它和上面的体检结论必须挨着看才有用，
+          而完整的任务历史仍在「清理任务」Tab，这里不复制表格。 */}
+      <RecentCleanupPanel refreshKey={refreshKey} onViewAll={onViewAllTasks} />
     </Stack>
   );
 }
+
+/** 清理任务每页条数。 */
+const CLEAN_TASK_PAGE_SIZE = 20;
 
 /** 清理任务 Tab：历史表独占剩余高度。 */
 function CleanTasksTab({ refreshKey }: { refreshKey: number }) {
   const { t } = useTranslation();
   const [tasks, setTasks] = useState<CleanTask[]>([]);
   const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
   const [loadFailed, setLoadFailed] = useState(false);
 
   const load = useCallback(() => {
-    listCleanTasks(1, 20)
+    listCleanTasks(page, CLEAN_TASK_PAGE_SIZE)
       .then((res) => {
         setTasks(res.items ?? []);
         setTotal(res.total ?? 0);
@@ -261,17 +283,30 @@ function CleanTasksTab({ refreshKey }: { refreshKey: number }) {
       // 定时器随之停掉，进行中的任务就此从界面消失——一次网络抖动看起来就像"任务丢了"。
       // 保留上次数据并置一条失败提示，下一轮成功即自动恢复。
       .catch(() => setLoadFailed(true));
-  }, []);
+  }, [page]);
 
   useEffect(load, [load, refreshKey]);
 
   // 仅在有进行中任务时轮询，终态立即停止。
-  const hasRunning = tasks.some((task) => task.Status === "running" || task.Status === "queued");
+  //
+  // 分页带来的坑：`hasRunning` 只反映**当前页**。任务按创建时间倒序排，进行中的任务
+  // 通常就在第 1 页，但用户翻到第 2 页后第 1 页的任务就从 `tasks` 里消失了——若只据
+  // 当前页判断，轮询会在有任务仍在跑时停掉，而那些任务再也刷新不出来。
+  // 因此「是否该轮询」的判据放宽为「**任意**任务存在即轮询」：多轮询几次的代价远小于
+  // "任务从界面上消失"。终态页（全部 succeeded/failed）仍会停止，不会空转。
+  const pageHasRunning = tasks.some(
+    (task) => task.Status === "running" || task.Status === "queued",
+  );
+  // 不在第 1 页时假装还有可能在进行中：第 1 页才是新任务的落点，翻页后无法从本地
+  // 数据判断"外面还有没有在跑的"，宁可继续轮询（1.5s 一次、只查一页，代价可控）。
+  const mayHaveRunning = pageHasRunning || page > 1;
   useEffect(() => {
-    if (!hasRunning) return;
+    if (!mayHaveRunning) return;
     const timer = window.setInterval(load, 1500);
     return () => window.clearInterval(timer);
-  }, [hasRunning, load]);
+  }, [mayHaveRunning, load]);
+
+  const totalPages = Math.max(1, Math.ceil(total / CLEAN_TASK_PAGE_SIZE));
 
   return (
     <OpsSection
@@ -288,9 +323,20 @@ function CleanTasksTab({ refreshKey }: { refreshKey: number }) {
       bodyStyle={{ flex: 1, minHeight: 0, overflow: "auto" }}
       bodyPadding={0}
       actions={
-        <Button size="xs" variant="subtle" leftSection={<IconRefresh size={14} />} onClick={load}>
-          {t("maintenance.refresh")}
-        </Button>
+        <Group gap="xs">
+          {totalPages > 1 ? (
+            <Pagination
+              value={page}
+              onChange={setPage}
+              total={totalPages}
+              size="sm"
+              data-testid="clean-tasks-pagination"
+            />
+          ) : null}
+          <Button size="xs" variant="subtle" leftSection={<IconRefresh size={14} />} onClick={load}>
+            {t("maintenance.refresh")}
+          </Button>
+        </Group>
       }
     >
       {loadFailed ? (
@@ -378,7 +424,6 @@ function CleanTasksTab({ refreshKey }: { refreshKey: number }) {
     </OpsSection>
   );
 }
-
 
 /** 维护作业 Tab：清单表独占剩余高度，执行走确认弹窗（物理删除，不可恢复）。 */
 function JobsTab() {
@@ -618,8 +663,11 @@ export function MaintenancePage() {
   const raw = params.get("tab");
   const normalized = raw === "asset-trash" ? "trash" : raw;
   const tab =
-    normalized === "tasks" || normalized === "trash" || normalized === "jobs" ||
-    normalized === "maven-versions" || normalized === "maven-packages"
+    normalized === "tasks" ||
+    normalized === "trash" ||
+    normalized === "jobs" ||
+    normalized === "maven-versions" ||
+    normalized === "maven-packages"
       ? normalized
       : "health";
 
@@ -704,8 +752,8 @@ export function MaintenancePage() {
         <Tabs.List style={{ flexShrink: 0 }}>
           <Tabs.Tab value="health">{t("maintenance.tabHealth")}</Tabs.Tab>
           <Tabs.Tab value="trash">{t("maintenance.tabTrash")}</Tabs.Tab>
-          <Tabs.Tab value="maven-packages">Maven 包清理</Tabs.Tab>
-          <Tabs.Tab value="maven-versions">Maven 版本清理</Tabs.Tab>
+          <Tabs.Tab value="maven-packages">{t("maintenance.tabMavenPackages")}</Tabs.Tab>
+          <Tabs.Tab value="maven-versions">{t("maintenance.tabMavenVersions")}</Tabs.Tab>
           <Tabs.Tab value="tasks">{t("maintenance.tabTasks")}</Tabs.Tab>
           <Tabs.Tab value="jobs">{t("maintenance.tabJobs")}</Tabs.Tab>
         </Tabs.List>
@@ -723,7 +771,13 @@ export function MaintenancePage() {
                     {t("maintenance.partialError", { reason: health.partialError })}
                   </Alert>
                 ) : null}
-                <FactsStrip health={health} onCleanup={openPreview} onRefresh={healthState.reload} />
+                <FactsStrip
+                  health={health}
+                  refreshKey={refreshKey}
+                  onCleanup={openPreview}
+                  onRefresh={healthState.reload}
+                  onViewAllTasks={() => changeTab("tasks")}
+                />
               </Stack>
             )}
           </AsyncBoundary>
