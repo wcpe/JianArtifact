@@ -10,7 +10,7 @@ import (
 type credentialProofKey struct{}
 
 // WithCredentialProof 把已验证凭据引用随请求上下文传入写路径；
-// 最终事务用它在同一事务内重查账号/会话/凭据当前状态（FR-166 §3.3）。
+// 最终事务用它在同一事务内重查账号/会话/凭据当前状态。
 func WithCredentialProof(ctx context.Context, proof auth.CredentialProof) context.Context {
 	return context.WithValue(ctx, credentialProofKey{}, proof)
 }

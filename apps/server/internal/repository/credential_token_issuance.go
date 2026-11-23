@@ -10,7 +10,7 @@ import (
 
 const credentialTokenTTL = 30 * 24 * time.Hour
 
-// MachineTokenLimit 是每账号同时有效的机器凭据上限（FR-166）。
+// MachineTokenLimit 是每账号同时有效的机器凭据上限。
 const MachineTokenLimit = 32
 
 // CredentialTokenIssue 是一次机器凭据签发输入；用途/作用域/期限在提交前已定形。

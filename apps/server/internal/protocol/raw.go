@@ -325,7 +325,7 @@ func (h *RawHandler) Put(c *gin.Context) {
 	actor := principalUserID(c)
 	if principal, ok := auth.PrincipalFrom(c); ok {
 		ctx = domain.WithSecurityAuditIdentity(ctx, domain.SecurityAuditIdentity{ActorUserID: actor, AuthMethod: principal.AuthSource})
-		// 最终完成事务内按同一证明重查凭据状态（FR-166 最终复核）。
+		// 最终完成事务内按同一证明重查凭据状态。
 		ctx = domain.WithCredentialProof(ctx, principal.CredentialProof())
 	}
 	var asset *repository.Asset

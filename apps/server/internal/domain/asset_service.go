@@ -195,7 +195,7 @@ type AssetService struct {
 	upstream  *upstream.Client
 	mutator   *AssetMutationCoordinator
 	writeGate BusinessWriteGate
-	// users 供发布完成事务内重查凭据当前状态（FR-166 最终复核）；nil 保持兼容行为。
+	// users 供发布完成事务内重查凭据当前状态；nil 保持兼容行为。
 	users    *repository.UserRepo
 	sf       singleflight.Group
 	recorder ChangeRecorder

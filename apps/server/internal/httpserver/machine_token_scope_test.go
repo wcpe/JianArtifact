@@ -1,4 +1,4 @@
-// FR-166：受限机器凭据在协议入口取 scope 交集、在管理面被通道拒绝。
+// 受限机器凭据在协议入口取 scope 交集、在管理面被通道拒绝。
 package httpserver_test
 
 import (

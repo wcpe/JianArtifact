@@ -57,7 +57,7 @@ func (s *TokenService) List(userID int64) ([]repository.Token, error) {
 }
 
 const (
-	// MachineTokenScopeLimit 是单枚机器凭据的作用域条数上限（FR-166）。
+	// MachineTokenScopeLimit 是单枚机器凭据的作用域条数上限。
 	MachineTokenScopeLimit = 16
 	// machineTokenDefaultDays 与 machineTokenMaxDays 是机器凭据默认与最长有效期。
 	machineTokenDefaultDays = 30

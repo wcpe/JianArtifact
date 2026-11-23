@@ -1,4 +1,4 @@
--- FR-166 机器 Token 用途与作用域：
+-- 机器 Token 用途与作用域（受限签发凭据）：
 --   purpose 取值：''（过渡期的未限用途旧凭据）、artifact_read、artifact_publish；
 --   scopes_json 为 [{repository_id,path_prefix,actions[]}] 的 JSON 数组，作用域
 --   在每次鉴权时与实时 ACL 取交集，角色不放大 Token 权限。
