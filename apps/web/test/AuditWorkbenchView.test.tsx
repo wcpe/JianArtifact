@@ -124,7 +124,9 @@ describe("审计工作台（单列表 + 顶部 KPI）", () => {
     await user.click(rows[0]!);
     expect(await screen.findByText("请求 ID")).toBeTruthy();
     expect(screen.getByText("User-Agent")).toBeTruthy();
-    expect(screen.getByText("请求体（已脱敏）")).toBeTruthy();
+    // 服务端已停止返回请求体预览（旧字段兼容保留契约，详情不再下发），
+    // 防回归：脱敏请求体段落不得再渲染。
+    expect(screen.queryByText("请求体（已脱敏）")).toBeNull();
   });
 });
 

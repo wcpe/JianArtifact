@@ -326,6 +326,12 @@ func TestSecurityAuditHTTPProviderOIDCAttribution(t *testing.T) {
 			verifier := auth.NewOIDCVerifier(config.OIDCConfig{Issuer: idp.URL, ClientID: "test-client", ClientSecret: "test-only-client-secret", UsernameClaim: "preferred_username"})
 			signer := auth.NewOIDCFlowSigner(cfg.JWTSecret)
 			flow := verifier.NewFlow()
+			// 真实 Begin 会把库内签发水位钉进流程状态；直接造流程时要补同样的钉扎。
+			revision, err := svc.authSvc.CredentialRevision(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			flow.CredentialRevision = &revision
 			flowCookie, err := signer.Encode(flow)
 			if err != nil {
 				t.Fatal(err)
