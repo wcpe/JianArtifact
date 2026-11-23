@@ -56,6 +56,110 @@ function err(code: string, message: string, status: number) {
   return HttpResponse.json({ error: { code, message } }, { status });
 }
 
+/** 后端 `CleanupKind*` 常量：未知类别必须 400，不能静默返回空清单。 */
+const KNOWN_CLEANUP_KINDS = new Set(["empty_dirs", "stale_uploads", "pre_restore", "quarantine"]);
+
+function isKnownCleanupKind(kind: string): boolean {
+  return KNOWN_CLEANUP_KINDS.has(kind);
+}
+
+/**
+ * 从请求体读 `ids`；空数组或格式错误返回 null（调用方据此回 400）。
+ *
+ * 后端的约定是「ids 必填且不能为空」——mock 也必须 400，否则前端漏传时
+ * 本地会显示"恢复成功 0 条"，线上才暴露成错误。
+ */
+async function readIds(request: Request): Promise<number[] | null> {
+  const body = (await request.json().catch(() => null)) as { ids?: unknown } | null;
+  if (!body || !Array.isArray(body.ids) || body.ids.length === 0) {
+    return null;
+  }
+  return body.ids.filter((id): id is number => typeof id === "number");
+}
+
+/** 存储回收站样本：三种 kind 各一条，让状态与类别列在本地都能看到非空态。 */
+const MOCK_TRASH_ENTRIES = [
+  {
+    ID: 1,
+    TaskID: 1,
+    Kind: "empty_dirs",
+    OriginalPath: "/data/blobs/0a/ea",
+    TrashPath: "/data/trash/1/1",
+    IsDir: true,
+    Bytes: 0,
+    Status: "staged",
+    CreatedAt: "2026-10-30 09:12:00",
+    ResolvedAt: null,
+  },
+  {
+    ID: 2,
+    TaskID: 2,
+    Kind: "stale_uploads",
+    OriginalPath: "/data/backup-uploads/partial-1",
+    TrashPath: "/data/trash/2/1",
+    IsDir: true,
+    Bytes: 10_020_101,
+    Status: "staged",
+    CreatedAt: "2026-10-30 08:40:00",
+    ResolvedAt: null,
+  },
+  {
+    ID: 3,
+    TaskID: 3,
+    Kind: "pre_restore",
+    OriginalPath: "/data/pre-restore-20261030",
+    TrashPath: "/data/trash/3/1",
+    IsDir: true,
+    Bytes: 5_242_880,
+    Status: "staged",
+    CreatedAt: "2026-10-29 18:05:00",
+    ResolvedAt: null,
+  },
+];
+
+const MOCK_TRASH_BYTES = MOCK_TRASH_ENTRIES.reduce((sum, e) => sum + e.Bytes, 0);
+
+/** 四类清理各自的候选样本：key 与后端 `CleanupKind*` 常量一致。 */
+function cleanupCandidates(kind: string): { path: string; isDir: boolean; bytes: number }[] {
+  switch (kind) {
+    case "empty_dirs":
+      return [
+        { path: "blobs/0a/ea", isDir: true, bytes: 0 },
+        { path: "blobs/23/5c", isDir: true, bytes: 0 },
+      ];
+    case "stale_uploads":
+      return [{ path: "backup-uploads/partial-1", isDir: true, bytes: 10_020_101 }];
+    case "pre_restore":
+      return [{ path: "pre-restore-20261030", isDir: true, bytes: 5_242_880 }];
+    case "quarantine":
+      return [{ path: "blobs/quarantine/aa", isDir: false, bytes: 15_728_640 }];
+    default:
+      return [];
+  }
+}
+
+/** 资产回收站样本：覆盖两种 scope，用于验收「来源」列与恢复/清理按钮。 */
+const MOCK_ASSET_TRASH_ENTRIES = [
+  {
+    id: 1,
+    repositoryId: 1,
+    repositoryName: "maven-hosted",
+    path: "com/example/demo/1.17.0/demo-1.17.0.jar",
+    scope: "whole_version" as const,
+    size: 2_167_993,
+    trashedAt: "2026-10-30 09:12:00",
+  },
+  {
+    id: 2,
+    repositoryId: 1,
+    repositoryName: "maven-hosted",
+    path: "com/example/demo/1.17-SNAPSHOT/demo-1.17-20261030.101500-3.jar",
+    scope: "snapshot_build" as const,
+    size: 2_152_067,
+    trashedAt: "2026-10-29 22:40:00",
+  },
+];
+
 const MOCK_USER_TOKEN = "mock.jwt.token:user";
 const MOCK_ANONYMOUS_ID = 0;
 const MOCK_ADMIN_ID = 1;
@@ -2414,6 +2518,218 @@ export const handlers = [
     return HttpResponse.json({ deleted });
   }),
 
+  // —— Maven 版本清理与包名批量清理（仅管理员）——
+  //
+  // 三个端点此前全部缺失，导致「Maven 版本清理」「Maven 包清理」两个 Tab 在本地
+  // 一点就报错，无法验收。仓库类型校验严格对齐后端：非 Maven hosted 一律 409
+  // `repository_not_writable`（不是 400，也不是静默通过）——version 清理与包搜索
+  // 都只对 hosted 有意义，proxy/group 在本地若"看起来可用"，线上才发现不能删。
+  http.get("*/api/v1/repositories/:name/maven-versions/plan", ({ request, params }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const repo = store.findRepository(String(params.name));
+    if (!repo) {
+      return err("not_found", "仓库不存在", 404);
+    }
+    if (repo.format !== "maven" || repo.type !== "hosted") {
+      return err("repository_not_writable", "仅 Maven hosted 仓库可清理版本", 409);
+    }
+    const url = new URL(request.url);
+    const groupId = url.searchParams.get("groupId") ?? "";
+    const artifactId = url.searchParams.get("artifactId") ?? "";
+    const version = url.searchParams.get("version") ?? "";
+    const buildId = url.searchParams.get("buildId") ?? undefined;
+    // 用坐标里的 artifact/version 派生一批看起来像真的文件名，
+    // 让「按类别」「SNAPSHOT 历史构建」「逐文件勾选」在本地都有东西可看。
+    const dir = `${groupId.replaceAll(".", "/")}/${artifactId}/${version}`;
+    const isSnapshot = version.endsWith("-SNAPSHOT");
+    const stem = `${artifactId}-${isSnapshot ? (buildId ?? version) : version}`;
+    const files = [
+      {
+        path: `${dir}/${stem}.jar`,
+        size: 2_167_993,
+        category: "primary" as const,
+        ...(buildId ? { buildId } : {}),
+      },
+      {
+        path: `${dir}/${stem}.pom`,
+        size: 4_182,
+        category: "metadata" as const,
+        ...(buildId ? { buildId } : {}),
+      },
+      {
+        path: `${dir}/${stem}-sources.jar`,
+        size: 182_331,
+        category: "classifier" as const,
+        ...(buildId ? { buildId } : {}),
+      },
+      {
+        path: `${dir}/${stem}.jar.sha1`,
+        size: 40,
+        category: "checksum" as const,
+        checksumType: "sha1",
+      },
+      {
+        path: `${dir}/${stem}.jar.md5`,
+        size: 32,
+        category: "checksum" as const,
+        checksumType: "md5",
+      },
+    ];
+    const totalBytes = files.reduce((sum, f) => sum + f.size, 0);
+    return HttpResponse.json({
+      coordinate: { groupId, artifactId, version, ...(buildId ? { buildId } : {}) },
+      repository: String(params.name),
+      directory: dir,
+      files,
+      categories: [
+        { category: "primary", fileCount: 1, bytes: 2_167_993 },
+        { category: "metadata", fileCount: 1, bytes: 4_182 },
+        { category: "classifier", fileCount: 1, bytes: 182_331 },
+        { category: "checksum", fileCount: 2, bytes: 72 },
+      ],
+      snapshotBuilds: isSnapshot
+        ? [
+            { buildId: "SNAPSHOT", fileCount: 2, bytes: 4_182 },
+            { buildId: "20261030.101500-3", fileCount: 3, bytes: 2_350_324 },
+          ]
+        : [],
+      literalSnapshotFiles: isSnapshot ? 2 : 0,
+      totalFiles: files.length,
+      totalBytes,
+      exists: true,
+    });
+  }),
+
+  http.post("*/api/v1/repositories/:name/maven-versions/trash", async ({ request, params }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const repo = store.findRepository(String(params.name));
+    if (!repo) {
+      return err("not_found", "仓库不存在", 404);
+    }
+    if (repo.format !== "maven" || repo.type !== "hosted") {
+      return err("repository_not_writable", "仅 Maven hosted 仓库可清理版本", 409);
+    }
+    const body = (await request.json().catch(() => null)) as { paths?: unknown } | null;
+    const paths = Array.isArray(body?.paths) ? (body.paths as string[]) : [];
+    if (paths.length === 0) {
+      return err("bad_request", "paths 不能为空", 400);
+    }
+    return HttpResponse.json({
+      operationId: `mock-${Date.now()}`,
+      repository: String(params.name),
+      trashed: paths.length,
+      batches: 1,
+      bytes: paths.length * 2_000_000,
+      archivePath: `/data/asset-trash/${Date.now()}`,
+    });
+  }),
+
+  http.get("*/api/v1/repositories/:name/maven-packages/search", ({ request, params }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const repo = store.findRepository(String(params.name));
+    if (!repo) {
+      return err("not_found", "仓库不存在", 404);
+    }
+    if (repo.format !== "maven" || repo.type !== "hosted") {
+      return err("repository_not_writable", "仅 Maven hosted 仓库可按包搜索", 409);
+    }
+    const url = new URL(request.url);
+    // 至少要有 groupId 或 artifactId —— 与后端一致的 400。
+    const groupId = url.searchParams.get("groupId") ?? "";
+    const artifactId = url.searchParams.get("artifactId") ?? "";
+    if (!groupId.trim() && !artifactId.trim()) {
+      return err("validation_failed", "至少填写 groupId 或 artifactId", 400);
+    }
+    const g = groupId || "com.example";
+    const a = artifactId || "demo";
+    const snapshotOnly = url.searchParams.get("snapshotOnly") === "true";
+    const all = [
+      { version: "1.18.1", files: 6, bytes: 2_354_506, literal: 0, builds: 0, suspect: false },
+      { version: "1.18.0", files: 6, bytes: 2_350_112, literal: 0, builds: 0, suspect: false },
+      // 疑似幽灵快照：有字面 SNAPSHOT 文件却没有任何时间戳构建——正是要标红的那种。
+      { version: "1.17-SNAPSHOT", files: 2, bytes: 4_182, literal: 2, builds: 0, suspect: true },
+      { version: "1.17.0", files: 6, bytes: 2_167_993, literal: 0, builds: 0, suspect: false },
+      {
+        version: "2.0.0-SNAPSHOT",
+        files: 5,
+        bytes: 2_352_506,
+        literal: 1,
+        builds: 3,
+        suspect: false,
+      },
+    ];
+    const filtered = snapshotOnly ? all.filter((v) => v.version.includes("SNAPSHOT")) : all;
+    const versions = filtered.map((v) => ({
+      coordinate: { groupId: g, artifactId: a, version: v.version },
+      versionDir: `${g.replaceAll(".", "/")}/${a}/${v.version}`,
+      fileCount: v.files,
+      bytes: v.bytes,
+      updatedAt: "2026-10-30 09:12:00",
+      createdAt: "2026-09-01 00:00:00",
+      literalSnapshotFiles: v.literal,
+      timestampBuilds: v.builds,
+      suspect: v.suspect,
+    }));
+    return HttpResponse.json({
+      query: { groupId: g, artifactId: a },
+      repository: String(params.name),
+      artifactDirs: [`${g.replaceAll(".", "/")}/${a}`],
+      versions,
+      totalVersions: versions.length,
+      matchedBytes: versions.reduce((sum, v) => sum + v.bytes, 0),
+      truncated: false,
+    });
+  }),
+
+  http.post(
+    "*/api/v1/repositories/:name/maven-versions/trash-batch",
+    async ({ request, params }) => {
+      const denied = adminUnauthorized(request);
+      if (denied) {
+        return denied;
+      }
+      const repo = store.findRepository(String(params.name));
+      if (!repo) {
+        return err("not_found", "仓库不存在", 404);
+      }
+      if (repo.format !== "maven" || repo.type !== "hosted") {
+        return err("repository_not_writable", "仅 Maven hosted 仓库可批量清理", 409);
+      }
+      const body = (await request.json().catch(() => null)) as { versions?: unknown } | null;
+      const versions = Array.isArray(body?.versions) ? (body.versions as unknown[]) : [];
+      if (versions.length === 0) {
+        return err("bad_request", "versions 不能为空", 400);
+      }
+      // 部分成功是正常结果：留一个失败样本，让"部分完成"的黄色通知在本地可见。
+      // 全部成功反而掩盖了这条分支——而它正是批量清理最该被验收的路径。
+      const failures =
+        versions.length > 1
+          ? [
+              {
+                coordinate: { groupId: "com.example", artifactId: "demo", version: "1.17.0" },
+                reason: "该版本已被并发删除",
+              },
+            ]
+          : [];
+      return HttpResponse.json({
+        operationId: `mock-${Date.now()}`,
+        trashedVersions: Math.max(0, versions.length - failures.length),
+        trashedFiles: (versions.length - failures.length) * 6,
+        freedBytes: (versions.length - failures.length) * 2_000_000,
+        failures,
+      });
+    },
+  ),
+
   // 仓库 online/offline 开关（仅管理员；本地运维状态，不参与复制）。
   http.put("*/api/v1/repositories/:name/online", async ({ request, params }) => {
     const denied = adminUnauthorized(request);
@@ -2897,6 +3213,242 @@ export const handlers = [
 
   // —— 存储治理运维作业面（admin）——
   // 作业清单由 store 的"注册表"决定；手动触发复用后端语义：未知作业名 404、正在运行 409。
+  //
+  // 存储体检快照：前端维护页的体检 Tab 完全依赖它，缺这条路由会让该 Tab 永远停在
+  // 「加载失败」，本地无法验收任何健康页改动。数值刻意取"有垃圾但也有正常数据"的
+  // 组合，这样 KPI 卡、可回收占比面板与各类清理按钮在本地都能看到非空态。
+  http.get("*/api/v1/maintenance/storage-health", ({ request }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    return HttpResponse.json({
+      orphanBlobs: 3,
+      orphanBlobBytes: 2_516_582,
+      quarantinedBlobs: 12,
+      quarantinedBytes: 15_728_640,
+      emptyDirs: 21,
+      preRestoreDirs: 3,
+      preRestoreBytes: 5_242_880,
+      backupUploadsBytes: 10_020_101,
+      backupImportsBytes: 0,
+      backupDrillBytes: 0,
+      totalBytes: 179_247_950,
+    });
+  }),
+
+  // 清理任务历史：体检页的「最近清理活动」与「清理任务」Tab 都读它。
+  // 缺这条路由时请求会落到 SPA 回退、拿到 index.html，前端解析失败后显示
+  // 「刷新失败」——看起来像功能坏了，实际只是 mock 少了一条。
+  // 给 3 条不同状态（成功 / 失败 / 中断）的样本，让状态徽章与分页计数都能验收；
+  // 数量不足以触发分页，翻页控件仍走真实逻辑（>1 页才出现）。
+  http.get("*/api/v1/maintenance/clean-tasks", ({ request }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const url = new URL(request.url);
+    const page = Number(url.searchParams.get("page") ?? "1");
+    const pageSize = Number(url.searchParams.get("pageSize") ?? "20");
+    const items = [
+      {
+        ID: 3,
+        Kind: "empty_dirs",
+        Status: "succeeded",
+        TotalItems: 21,
+        ProcessedItems: 21,
+        FreedBytes: 0,
+        ErrorMessage: null,
+        CreatedAt: "2026-10-30 09:12:00",
+        StartedAt: "2026-10-30 09:12:00",
+        FinishedAt: "2026-10-30 09:12:01",
+      },
+      {
+        ID: 2,
+        Kind: "stale_uploads",
+        Status: "failed",
+        TotalItems: 5,
+        ProcessedItems: 2,
+        FreedBytes: 0,
+        ErrorMessage: "磁盘只读",
+        CreatedAt: "2026-10-29 22:40:00",
+        StartedAt: "2026-10-29 22:40:00",
+        FinishedAt: "2026-10-29 22:40:02",
+      },
+      {
+        ID: 1,
+        Kind: "pre_restore",
+        Status: "interrupted",
+        TotalItems: 3,
+        ProcessedItems: 1,
+        FreedBytes: 5_242_880,
+        ErrorMessage: null,
+        CreatedAt: "2026-10-29 18:05:00",
+        StartedAt: "2026-10-29 18:05:00",
+        FinishedAt: null,
+      },
+    ];
+    const start = (page - 1) * pageSize;
+    return HttpResponse.json({
+      items: items.slice(start, start + pageSize),
+      total: items.length,
+      page,
+      pageSize,
+    });
+  }),
+
+  // —— 存储清理（预览 / 执行）与两类回收站 ——
+  //
+  // 这一组此前全部缺失，导致维护页的三个 Tab（体检的清理按钮、回收站、Maven 两个面板）
+  // 在本地一律走 SPA 回退、拿到 index.html 后报「刷新失败」——看起来像功能坏了。
+  //
+  // 语义严格对齐后端，缺一不可：
+  //   - 未知类别 → 400（后端 `collectCandidates` 的 default 分支返回 `ErrValidation`）；
+  //   - ids 为空 → 400（不是静默成功）；
+  //   - 权限 → 401 / 403（`adminUnauthorized`）。
+  // 状态码写错会让本地"看起来能用"、线上才发现差异，这正是 mock 最该避免的失败模式。
+  http.post("*/api/v1/maintenance/cleanup/preview", async ({ request }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const body = (await request.json().catch(() => null)) as { kind?: string } | null;
+    if (!body || typeof body.kind !== "string") {
+      return err("bad_request", "请求体格式错误", 400);
+    }
+    const items = cleanupCandidates(body.kind);
+    // 未知类别与"已知但没候选"必须分开：前者是调用方写错了 kind（400），
+    // 后者是正常的空结果（200 + 空清单）。
+    if (items.length === 0 && !isKnownCleanupKind(body.kind)) {
+      return err("validation_failed", `未知的清理类别 ${body.kind}`, 400);
+    }
+    return HttpResponse.json({
+      kind: body.kind,
+      items,
+      itemCount: items.length,
+      freedBytes: items.reduce((sum, item) => sum + item.bytes, 0),
+      skipped: [],
+    });
+  }),
+
+  http.post("*/api/v1/maintenance/cleanup", async ({ request }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const body = (await request.json().catch(() => null)) as { kind?: string } | null;
+    if (!body || typeof body.kind !== "string" || !isKnownCleanupKind(body.kind)) {
+      return err("validation_failed", `未知的清理类别 ${String(body?.kind)}`, 400);
+    }
+    // 202 + taskId：语义是"已受理"，是否跑完要看 clean-tasks。与后端一致，
+    // 不因为"四类候选都是毫秒级"就改回 200。
+    return HttpResponse.json({ taskId: 1, status: "succeeded" }, { status: 202 });
+  }),
+
+  http.get("*/api/v1/maintenance/trash", ({ request }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const url = new URL(request.url);
+    const page = Math.max(1, Number(url.searchParams.get("page") ?? "1") || 1);
+    const pageSizeRaw = Number(url.searchParams.get("page_size") ?? "20") || 20;
+    // 与后端同样把 size 钳在 [1, 100]：不钳的话前端传 1000 本地"能用"、
+    // 线上被截到 100，又是一处只在生产暴露的差异。
+    const pageSize = Math.min(Math.max(1, pageSizeRaw), 100);
+    const start = (page - 1) * pageSize;
+    const items = MOCK_TRASH_ENTRIES.slice(start, start + pageSize);
+    return HttpResponse.json({
+      items,
+      total: MOCK_TRASH_ENTRIES.length,
+      page,
+      pageSize,
+      stats: { entries: MOCK_TRASH_ENTRIES.length, bytes: MOCK_TRASH_BYTES },
+    });
+  }),
+
+  http.post("*/api/v1/maintenance/trash/restore", async ({ request }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const ids = await readIds(request);
+    if (ids === null) {
+      return err("bad_request", "ids 不能为空", 400);
+    }
+    return HttpResponse.json({ restored: ids.length, conflicts: [], missing: [] });
+  }),
+
+  http.post("*/api/v1/maintenance/trash/purge", async ({ request }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const ids = await readIds(request);
+    if (ids === null) {
+      return err("bad_request", "ids 不能为空", 400);
+    }
+    return HttpResponse.json({ purged: ids.length, freedBytes: 0 });
+  }),
+
+  http.post("*/api/v1/maintenance/trash/purge-all", ({ request }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    return HttpResponse.json({ purged: MOCK_TRASH_ENTRIES.length, freedBytes: MOCK_TRASH_BYTES });
+  }),
+
+  // —— 资产回收站（Maven 版本软删除）——
+  http.get("*/api/v1/maintenance/asset-trash", ({ request }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const url = new URL(request.url);
+    const page = Math.max(1, Number(url.searchParams.get("page") ?? "1") || 1);
+    // 注意参数名：资产回收站用 `pageSize`（camel），存储回收站用 `page_size`（snake），
+    // 这是后端既有形状，不能统一——统一了本地就会掩盖真实契约。
+    const pageSizeRaw = Number(url.searchParams.get("pageSize") ?? "20") || 20;
+    const pageSize = Math.min(Math.max(1, pageSizeRaw), 100);
+    const start = (page - 1) * pageSize;
+    const items = MOCK_ASSET_TRASH_ENTRIES.slice(start, start + pageSize);
+    return HttpResponse.json({
+      items,
+      total: MOCK_ASSET_TRASH_ENTRIES.length,
+      page,
+      pageSize,
+      stats: {
+        entries: MOCK_ASSET_TRASH_ENTRIES.length,
+        bytes: MOCK_ASSET_TRASH_ENTRIES.reduce((sum, e) => sum + e.size, 0),
+      },
+    });
+  }),
+
+  http.post("*/api/v1/maintenance/asset-trash/restore", async ({ request }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const ids = await readIds(request);
+    if (ids === null) {
+      return err("bad_request", "ids 必填且不能为空", 400);
+    }
+    return HttpResponse.json({ restored: ids.length, conflicts: [], missing: [] });
+  }),
+
+  http.post("*/api/v1/maintenance/asset-trash/purge", async ({ request }) => {
+    const denied = adminUnauthorized(request);
+    if (denied) {
+      return denied;
+    }
+    const ids = await readIds(request);
+    if (ids === null) {
+      return err("bad_request", "ids 必填且不能为空", 400);
+    }
+    return HttpResponse.json({ purged: ids.length, freedBytes: 0 });
+  }),
+
   http.get("*/api/v1/maintenance/jobs", ({ request }) => {
     const denied = adminUnauthorized(request);
     if (denied) {

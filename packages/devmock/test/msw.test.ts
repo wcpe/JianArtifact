@@ -1767,3 +1767,189 @@ describe("devmock MSW 端点行为", () => {
     expect(job).toMatchObject({ running: true, runs: 1 });
   });
 });
+
+// 维护域：清理、回收站与 Maven 清理。
+//
+// 这一组此前在 devmock 里**完全缺失**，导致维护页多数 Tab 在本地一点就报错
+// （请求落到 SPA 回退拿到 index.html）。补上之后必须钉住语义——mock 最该避免的
+// 失败模式是"本地看起来能用、线上才发现差异"。
+describe("devmock 维护域：清理与回收站", () => {
+  it("清理预览按类别返回候选，未知类别 400", async () => {
+    const headers = { ...auth, "Content-Type": "application/json" };
+    const ok = await fetch("http://localhost/api/v1/maintenance/cleanup/preview", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ kind: "empty_dirs" }),
+    });
+    expect(ok.status).toBe(200);
+    const preview = (await ok.json()) as { kind: string; itemCount: number; freedBytes: number };
+    expect(preview.kind).toBe("empty_dirs");
+    expect(preview.itemCount).toBeGreaterThan(0);
+    // freedBytes 必须等于各项之和，不能是写死的常量。
+    expect(preview.freedBytes).toBe(0);
+
+    const bad = await fetch("http://localhost/api/v1/maintenance/cleanup/preview", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ kind: "nope" }),
+    });
+    expect(bad.status).toBe(400);
+    await expect(bad.json()).resolves.toMatchObject({
+      error: expect.objectContaining({ code: "validation_failed" }),
+    });
+  });
+
+  it("清理执行返回 202 而不是 200（语义是已受理）", async () => {
+    const res = await fetch("http://localhost/api/v1/maintenance/cleanup", {
+      method: "POST",
+      headers: { ...auth, "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "quarantine" }),
+    });
+    expect(res.status).toBe(202);
+    await expect(res.json()).resolves.toMatchObject({ taskId: expect.any(Number) });
+  });
+
+  it("存储回收站分页把 page_size 钳在 [1,100]，stats 为全量而非本页", async () => {
+    const res = await fetch("http://localhost/api/v1/maintenance/trash?page=1&page_size=1000", {
+      headers: auth,
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      items: unknown[];
+      total: number;
+      pageSize: number;
+      stats: { entries: number };
+    };
+    // 不钳的话本地"能用"、线上被截到 100，又是一处只在生产暴露的差异。
+    expect(body.pageSize).toBe(100);
+    expect(body.stats.entries).toBe(body.total);
+  });
+
+  it("回收站恢复与清空：ids 为空必须 400，不能静默成功", async () => {
+    for (const path of [
+      "trash/restore",
+      "trash/purge",
+      "asset-trash/restore",
+      "asset-trash/purge",
+    ]) {
+      const res = await fetch(`http://localhost/api/v1/maintenance/${path}`, {
+        method: "POST",
+        headers: { ...auth, "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: [] }),
+      });
+      expect(res.status, `${path} 空 ids 应当 400`).toBe(400);
+    }
+
+    const purged = await fetch("http://localhost/api/v1/maintenance/trash/purge-all", {
+      method: "POST",
+      headers: auth,
+    });
+    expect(purged.status).toBe(200);
+    await expect(purged.json()).resolves.toMatchObject({ purged: expect.any(Number) });
+  });
+
+  it("资产回收站用 pageSize（camel）而非 page_size，两者不能混", async () => {
+    // 这是后端既有形状：资产回收站 camel、存储回收站 snake。统一了会掩盖真实契约。
+    const res = await fetch("http://localhost/api/v1/maintenance/asset-trash?page=1&pageSize=1", {
+      headers: auth,
+    });
+    const body = (await res.json()) as { items: unknown[]; pageSize: number };
+    expect(body.pageSize).toBe(1);
+    expect(body.items).toHaveLength(1);
+  });
+
+  it("非管理员访问维护域一律 403", async () => {
+    const res = await fetch("http://localhost/api/v1/maintenance/trash", { headers: userAuth });
+    expect(res.status).toBe(403);
+  });
+});
+
+describe("devmock 维护域：Maven 清理", () => {
+  it("版本清理计划按坐标派生文件与分类，SNAPSHOT 带历史构建", async () => {
+    const res = await fetch(
+      "http://localhost/api/v1/repositories/maven-releases/maven-versions/plan" +
+        "?groupId=com.example&artifactId=demo&version=2.0.0-SNAPSHOT",
+      { headers: auth },
+    );
+    expect(res.status).toBe(200);
+    const plan = (await res.json()) as {
+      files: { category: string }[];
+      totalFiles: number;
+      totalBytes: number;
+      snapshotBuilds: unknown[];
+      literalSnapshotFiles: number;
+      exists: boolean;
+    };
+    expect(plan.exists).toBe(true);
+    expect(plan.totalFiles).toBe(plan.files.length);
+    // totalBytes 必须等于逐文件之和——写死常量会在改样本时悄悄漂移。
+    expect(plan.totalBytes).toBeGreaterThan(0);
+    expect(plan.snapshotBuilds.length).toBeGreaterThan(0);
+    expect(plan.literalSnapshotFiles).toBeGreaterThan(0);
+  });
+
+  it("包名搜索：缺坐标 400，snapshotOnly 只回 SNAPSHOT，幽灵快照被标出", async () => {
+    const bad = await fetch(
+      "http://localhost/api/v1/repositories/maven-releases/maven-packages/search",
+      { headers: auth },
+    );
+    expect(bad.status).toBe(400);
+
+    const res = await fetch(
+      "http://localhost/api/v1/repositories/maven-releases/maven-packages/search" +
+        "?artifactId=demo&snapshotOnly=true",
+      { headers: auth },
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      versions: { coordinate: { version: string }; suspect: boolean }[];
+      totalVersions: number;
+      truncated: boolean;
+    };
+    expect(body.versions.length).toBeGreaterThan(0);
+    for (const v of body.versions) {
+      expect(v.coordinate.version).toContain("SNAPSHOT");
+    }
+    // 幽灵快照样本必须在，否则「疑似幽灵快照」这条分支本地永远看不到。
+    expect(body.versions.some((v) => v.suspect)).toBe(true);
+    expect(body.totalVersions).toBe(body.versions.length);
+    expect(body.truncated).toBe(false);
+  });
+
+  it("批量清理返回失败明细，让「部分完成」这条分支在本地可见", async () => {
+    const res = await fetch(
+      "http://localhost/api/v1/repositories/maven-releases/maven-versions/trash-batch",
+      {
+        method: "POST",
+        headers: { ...auth, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          versions: [
+            { groupId: "com.example", artifactId: "demo", version: "1.18.1" },
+            { groupId: "com.example", artifactId: "demo", version: "1.17.0" },
+          ],
+          overrideReason: "测试",
+        }),
+      },
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      trashedVersions: number;
+      failures: { reason: string }[];
+    };
+    // 部分成功是正常结果；全成功反而掩盖了那条最该被验收的分支。
+    expect(body.failures.length).toBeGreaterThan(0);
+    expect(body.trashedVersions).toBe(1);
+  });
+
+  it("非 Maven hosted 仓库一律 409 repository_not_writable", async () => {
+    const res = await fetch(
+      "http://localhost/api/v1/repositories/npm-proxy/maven-versions/plan" +
+        "?groupId=a&artifactId=b&version=1.0",
+      { headers: auth },
+    );
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toMatchObject({
+      error: expect.objectContaining({ code: "repository_not_writable" }),
+    });
+  });
+});
