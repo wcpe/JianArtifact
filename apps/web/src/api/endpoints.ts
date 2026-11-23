@@ -2150,14 +2150,16 @@ export function trashMavenVersionsBatch(
   trashedVersions: number;
   trashedFiles: number;
   freedBytes: number;
-  failures?: { coordinate: { groupId: string; artifactId: string; version: string }; reason: string }[];
+  failures?: {
+    coordinate: { groupId: string; artifactId: string; version: string };
+    reason: string;
+  }[];
 }> {
   return request(`/repositories/${encodeURIComponent(repo)}/maven-versions/trash-batch`, {
     method: "POST",
     body,
   });
 }
-
 
 /** 维护作业清单。
  *
