@@ -325,6 +325,8 @@ func (h *RawHandler) Put(c *gin.Context) {
 	actor := principalUserID(c)
 	if principal, ok := auth.PrincipalFrom(c); ok {
 		ctx = domain.WithSecurityAuditIdentity(ctx, domain.SecurityAuditIdentity{ActorUserID: actor, AuthMethod: principal.AuthSource})
+		// 最终完成事务内按同一证明重查凭据状态（FR-166 最终复核）。
+		ctx = domain.WithCredentialProof(ctx, principal.CredentialProof())
 	}
 	var asset *repository.Asset
 	var operationID string
@@ -660,6 +662,15 @@ func (h *RawHandler) authorize(c *gin.Context, repo, action string) bool {
 		withRepositorySnapshot(c, repoSnapshot)
 	}
 	principal, hasPrincipal := auth.PrincipalFrom(c)
+	// 受限机器凭据：用途先收窄动作，再按仓库/路径 scope 与 ACL 取交集；
+	// 不识别制品路径参数的路径按仓库级操作处理，仅根 scope 可命中。
+	if hasPrincipal && principal.Kind == auth.KindToken && principal.TokenPurpose != auth.TokenPurposeLegacy {
+		if !auth.MachinePurposeAllows(principal.TokenPurpose, action) ||
+			!auth.MachineScopeAllowed(principal.TokenScopes, repoSnapshot.ID, cleanArtifactPath(c.Param("artifactPath")), action) {
+			auth.WriteError(c, http.StatusForbidden, "credential_scope_denied", "机器凭据作用域不允许此操作")
+			return false
+		}
+	}
 	if hasPrincipal && principal.IsAdmin() {
 		return true
 	}
@@ -716,6 +727,9 @@ func quotaRejectionMessage(err error) string {
 // 回源上游失败 502、回源超时 504、其余 500。
 func writeAssetErr(c *gin.Context, err error) {
 	switch {
+	case errors.Is(err, repository.ErrCredentialRejected):
+		// 最终事务重查发现凭据已失效：发布未完成，按当前状态拒绝。
+		auth.WriteError(c, http.StatusForbidden, "credential_scope_denied", "凭据在提交前已失效")
 	case errors.Is(err, domain.ErrSecurityAuditUnavailable):
 		auth.WriteError(c, http.StatusServiceUnavailable, "security_audit_unavailable", "安全审计暂不可用")
 	case errors.Is(err, domain.ErrNotFound):

@@ -6,6 +6,7 @@ import (
 	"io"
 
 	"github.com/jmoiron/sqlx"
+	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
@@ -17,7 +18,11 @@ type securityAuditedPublish struct {
 	audit       *SecurityAuditService
 	actor       int64
 	reservation *PublishCommitReservation
-	failed      bool
+	// proof 是入口已验证的凭据引用；非空时在完成事务内重查当前状态，
+	// 撤销/降代先提交则本次公开事务失败，反之保留原成功。
+	proof  *auth.CredentialProof
+	users  *repository.UserRepo
+	failed bool
 }
 
 func (a *securityAuditedPublish) mapWriteError(err error) error {
@@ -47,7 +52,10 @@ func (s *AssetService) PutWithReservedSecurityAudit(ctx context.Context, audit *
 	if err := s.requireBusinessWrite(); err != nil {
 		return nil, "", err
 	}
-	audited := &securityAuditedPublish{ctx: ctx, audit: audit, actor: actorUserID, reservation: reservation}
+	audited := &securityAuditedPublish{ctx: ctx, audit: audit, actor: actorUserID, reservation: reservation, users: s.users}
+	if proof, ok := credentialProofFrom(ctx); ok {
+		audited.proof = &proof
+	}
 	repo, err := s.repos.GetByName(repoName)
 	if err != nil {
 		return nil, "", audited.mapWriteError(mapNotFound(err))
@@ -75,6 +83,13 @@ func (a *securityAuditedPublish) bind(operationID string, items []repository.Ass
 	}
 	commit := a.audit.CommitHook(a.ctx, operationID, a.actor, assets...)
 	return func(tx *sqlx.Tx) error {
+		if a.users != nil && a.proof != nil {
+			// 排队有权不代表有公开权：最终事务按同一证明重查凭据当前状态。
+			// 此刻事务未提交，拒绝是确定失败而非结果未决，不置 failed。
+			if _, err := a.users.RevalidateCredentialTx(a.ctx, tx, *a.proof); err != nil {
+				return err
+			}
+		}
 		if existing != nil {
 			if err := existing(tx); err != nil {
 				return err

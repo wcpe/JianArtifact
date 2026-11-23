@@ -195,7 +195,9 @@ type AssetService struct {
 	upstream  *upstream.Client
 	mutator   *AssetMutationCoordinator
 	writeGate BusinessWriteGate
-	sf        singleflight.Group
+	// users 供发布完成事务内重查凭据当前状态（FR-166 最终复核）；nil 保持兼容行为。
+	users *repository.UserRepo
+	sf    singleflight.Group
 	recorder  ChangeRecorder
 	nodeID    func() string
 	health    *proxyHealth
@@ -226,6 +228,9 @@ func NewAssetService(repos *repository.RepoRepo, assets *repository.AssetRepo, b
 
 // SetMutationCoordinator 注入与其它写路径共享的节点级协调器。
 func (s *AssetService) SetMutationCoordinator(c *AssetMutationCoordinator) { s.mutator = c }
+
+// SetCredentialRevalidator 注入凭据仓储，供发布完成事务按同一输入重查状态。
+func (s *AssetService) SetCredentialRevalidator(users *repository.UserRepo) { s.users = users }
 
 // SetStorageQuotaCheck 注入仓库级存储配额的提交点权威复检。
 // nil 表示不做存储配额判定（兼容既有装配与只读部署）。
