@@ -164,6 +164,21 @@ func (s *RepositoryService) Stats(repoID int64) (RepoStats, error) {
 	return RepoStats{Count: count, TotalSize: totalSize}, nil
 }
 
+// RepositoryNames 批量解析仓库 ID 到名称；不存在或查询失败的 ID 省略，
+// 调用方对缺失项应自行降级（如回退为 ID 字符串），不得据此放行权限判定。
+func (s *RepositoryService) RepositoryNames(ids []int64) map[int64]string {
+	out := make(map[int64]string, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			continue
+		}
+		if r, err := s.repos.GetByID(id); err == nil && r != nil {
+			out[id] = r.Name
+		}
+	}
+	return out
+}
+
 // Get 按名取仓库（名字可为别名，返回的是主名仓库并带出别名列表）。
 func (s *RepositoryService) Get(name string) (*repository.Repository, error) {
 	r, err := s.repos.GetByName(name)

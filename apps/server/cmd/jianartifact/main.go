@@ -25,6 +25,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/api"
+	"github.com/wcpe/jianartifact/apps/server/internal/auditctx"
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 	"github.com/wcpe/jianartifact/apps/server/internal/config"
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
@@ -216,6 +217,7 @@ func newApplicationHandler(cfg *config.Config, svc *appServices, assets fs.FS) h
 		rawHandler.SetQuotaGuard(svc.quotaSvc) // 仓库存储配额（预检早拒 + 提交点权威复检）
 		rawHandler.SetAudit(apiHandlers.AuditLog)
 		rawHandler.SetOperationAudit(apiHandlers.ProtocolAssetOperationAudit)
+		rawHandler.SetSecurityAudit(svc.securityAudit)
 	}
 
 	var dispatcher *protocol.Dispatcher
@@ -264,14 +266,25 @@ func newApplicationHandler(cfg *config.Config, svc *appServices, assets fs.FS) h
 	}
 
 	srv := httpserver.New(version,
+		httpserver.WithSourcePolicy(cfg.SourcePolicy),
+		httpserver.WithIngressGate(&svc.ingressGate),
 		httpserver.WithReadinessCheck(svc.db.Ping),
 		httpserver.WithReadinessCheck(blobWritableCheck(cfg.BlobDir)),
 		httpserver.WithWriteFreeze(svc.freeze.State), // 运行时写入冻结窗口（未冻结时中间件为空操作）
 		httpserver.WithHandlers(apiHandlers),
 		httpserver.WithManagementSecurityAudit(apiHandlers.AuditLog),
+		httpserver.WithSecurityAuditRead(authenticator.SecurityAuditPrincipal(api.RejectSecurityAuditPrincipal), func() api.HealthStatusAuditCollection {
+			return api.SecurityAuditCollectionProbe(svc.securityAudit.Health())
+		}),
 		httpserver.WithAllowedHosts(allowedHosts),
 		httpserver.WithOriginTokenGuard(originTokenGuard),
-		httpserver.WithMiddleware(api.MiddlewareFunc(authenticator.Optional())),
+		httpserver.WithMiddleware(func(c *gin.Context) {
+			// 候选详情独立区分凭据无效、通道不许与鉴权仓储不可用。
+			if c.Request.Method == http.MethodGet && c.FullPath() == "/api/v1/security/admission/candidates/:operationId" {
+				return
+			}
+			authenticator.Optional()(c)
+		}),
 		httpserver.WithProtocolMetric(func(c *gin.Context) {
 			cacheResult, _ := c.Get(protocol.CacheResultContextKey)
 			svc.dashboardSvc.RecordProtocol(domain.ProtocolMetric{CompletedAt: time.Now().UTC(), Method: c.Request.Method, Status: c.Writer.Status(), CacheResult: cacheResultString(cacheResult)})
@@ -279,7 +292,7 @@ func newApplicationHandler(cfg *config.Config, svc *appServices, assets fs.FS) h
 			svc.metricsReg.ProtocolRequest(c.Request.Method, c.Writer.Status(), cacheResultString(cacheResult))
 			// 制品下载计量（只认 GET+200 的完整传输；该钩子只服务制品协议请求，
 			// 路径解析与 UA 归类在服务内完成——原始 UA 串不落库）。
-			svc.assetDownloadSvc.RecordDownload(c.Request.Method, c.Writer.Status(), c.Request.URL.Path, c.ClientIP(), c.Request.UserAgent(), time.Now().UTC())
+			svc.assetDownloadSvc.RecordDownload(c.Request.Method, c.Writer.Status(), c.Request.URL.Path, auditctx.ClientIP(c.Request.Context()), c.Request.UserAgent(), time.Now().UTC())
 		}),
 		httpserver.WithProtocolRoutes(func(r gin.IRouter) {
 			protocolMW := authenticator.Protocol().Optional()
@@ -397,22 +410,41 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = svc.db.Close() }()
+	closed := false
+	defer func() {
+		if !closed {
+			_ = svc.db.Close()
+		}
+	}()
 
 	assets, err := web.Assets()
 	if err != nil {
 		return fmt.Errorf("加载内嵌前端资源：%w", err)
 	}
 
-	httpServer := &http.Server{
-		Addr:              cfg.HTTPAddr,
-		Handler:           newApplicationHandler(cfg, svc, assets),
-		ReadHeaderTimeout: 10 * time.Second,
+	handler := newApplicationHandler(cfg, svc, assets)
+	ingressCtx, stopIngress := context.WithCancel(context.Background())
+	defer stopIngress()
+	baseIngress := func(net.Listener) context.Context { return ingressCtx }
+	httpServer := &http.Server{Addr: cfg.HTTPAddr, Handler: handler, ReadHeaderTimeout: 10 * time.Second, BaseContext: baseIngress}
+	var tlsServer *http.Server
+	if cfg.TLSAddr != "" {
+		tlsServer, err = buildTLSServer(cfg, handler)
+		if err != nil {
+			return fmt.Errorf("配置了 %s 但 TLS 启动失败：%w", config.EnvTLSAddr, err)
+		}
+		tlsServer.BaseContext = baseIngress
 	}
-	addr := cfg.HTTPAddr
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	signalCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	auditCtx, stopAudit := context.WithCancel(context.Background())
+	defer stopAudit()
+	if err := svc.securityAudit.Start(auditCtx); err != nil {
+		return fmt.Errorf("启动安全审计：%w", err)
+	}
 
 	// 复制退役：出站同步调度器已随集群功能移除。
 	// 收尾上次进程遗留的"生成中"备份包，避免列表里留下永久幻影。
@@ -453,26 +485,14 @@ func run() error {
 	// 不用调度器：回填要尽快开始、只跑一次、跑完即退出，与周期作业语义相反。
 	svc.searchIndexSvc.Start(ctx)
 
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 2)
 	go func() {
-		fmt.Printf("JianArtifact %s 正在监听 %s\n", version, addr)
+		fmt.Printf("JianArtifact %s 正在监听 %s\n", version, cfg.HTTPAddr)
 		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
 	}()
-	// 服务内置 TLS 双监听（与 HTTP 共用同一 handler），供 CDN 回源 HTTPS。
-	// 显式配置了 TLS 地址但证书缺失 / 格式错误 → 启动失败并明确报错，
-	// 防止"以为加密了实际没有"的静默降级；未配置 TLS 地址时保持纯 HTTP。
-	//
-	// tlsServer 在 select 之前声明（而不是原来的 if 块内短声明）：一键重启分支也要关停它，
-	// 块内短声明的变量在 select 处已不可见。
-	var tlsServer *http.Server
-	if cfg.TLSAddr != "" {
-		built, err := buildTLSServer(cfg, newApplicationHandler(cfg, svc, assets))
-		if err != nil {
-			return fmt.Errorf("配置了 %s 但 TLS 启动失败：%w", config.EnvTLSAddr, err)
-		}
-		tlsServer = built
+	if tlsServer != nil {
 		go func() {
 			fmt.Printf("JianArtifact %s TLS 正在监听 %s\n", version, cfg.TLSAddr)
 			if err := tlsServer.ListenAndServeTLS(cfg.TLSCert, cfg.TLSKey); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -491,68 +511,48 @@ func run() error {
 		restartCh = make(chan struct{})
 	}
 
+	var serveErr error
+	restart := false
 	select {
 	case err := <-errCh:
-		return fmt.Errorf("HTTP 服务异常：%w", err)
-	case <-ctx.Done():
+		serveErr = fmt.Errorf("HTTP 服务异常：%w", err)
+	case <-signalCtx.Done():
 		fmt.Println("收到关停信号，正在优雅关停……")
-		noteSearchBackfillInterrupted()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		if err := httpServer.Shutdown(shutdownCtx); err != nil {
-			return fmt.Errorf("优雅关停失败：%w", err)
-		}
+	case <-restartCh:
+		restart = true
+		fmt.Println("收到一键重启请求，正在优雅关停……")
+	}
+	noteSearchBackfillInterrupted()
+	shutdownErr := svc.shutdownApplication(func() {
+		stopIngress()
+		stopAudit()
+	}, cancel, httpServer, tlsServer)
+	closed = true
+	return finishApplication(errors.Join(serveErr, shutdownErr), restart, domain.ReplaceSelf)
+}
+
+func finishApplication(shutdownErr error, restart bool, replaceSelf func() error) error {
+	if shutdownErr != nil {
+		return shutdownErr
+	}
+	if !restart {
 		fmt.Println("已关停。")
 		return nil
-	case <-restartCh:
-		// 一键重启：**先优雅关停，再自替换**。
-		//
-		// 顺序必须是这个（反过来是错的，两个具体后果）：
-		//  1. 新映像要在关停之后才绑定同一端口。若先 Exec，旧监听器还没关，
-		//     新映像就只能绑到一个已被占用的端口上；虽然 Go 的 fd 默认带 O_CLOEXEC、
-		//     内核会在 exec 时关掉旧 fd（实测可重绑），但那是"靠内核兜底"，
-		//     一旦哪天某个监听器的 fd 被清掉 CLOEXEC 或被继承，就变成新映像起不来；
-		//  2. 正在服务的在途请求与数据库连接需要有收尾的机会。Exec 一到，旧映像的内存状态
-		//     连同 goroutine 一起消失，没有任何机会把请求写完、把事务提交完。
-		//     所以这里走与 SIGTERM 完全相同的 15s 上限的 Shutdown。
-		//
-		// 关停失败**如实报错并返回**，绝不静默 Exec：在途请求或 SQLite 连接残留着
-		// 就换映像，等于把"没关干净"这件事藏起来——新映像启动时看到的是一份半关停的现场，
-		// 而日志里一个字都不会提。
-		fmt.Println("收到一键重启请求，正在优雅关停并自替换……")
-		noteSearchBackfillInterrupted()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		if err := httpServer.Shutdown(shutdownCtx); err != nil {
-			return fmt.Errorf("一键重启：优雅关停 HTTP 失败，已放弃自替换：%w", err)
-		}
-		if tlsServer != nil {
-			if err := tlsServer.Shutdown(shutdownCtx); err != nil {
-				return fmt.Errorf("一键重启：优雅关停 TLS 失败，已放弃自替换：%w", err)
-			}
-		}
-		fmt.Println("已关停，正在自替换进程映像……")
-
-		// 自替换：不执行任何外部命令，只是把本进程的映像换成 argv[0] 指向的那份
-		// （**必须是 os.Args[0]，不能用 os.Executable()**——理由见 domain/restart_exec.go，
-		// 用错会让"部署切换后重启"等于没有切换）。本调用成功后不会返回：
-		// 新映像从 run() 的第一行重新开始，于是 ApplyPendingRestore（见本函数开头的调用）
-		// 会被再执行一次——这才是"一键重启"真正的意义：备份恢复的落地就靠这一次启动。
-		if err := domain.ReplaceSelf(); err != nil {
-			return fmt.Errorf("一键重启：自替换失败（argv[0]=%q）：%w", os.Args[0], err)
-		}
-		// 理论上到不了这里（Exec 成功即换映像）。留一句防御性返回，避免将来有人把
-		// ReplaceSelf 改成"可返回成功"的实现后，本函数静默地走完却没重启。
-		return errors.New("一键重启：自替换未生效，进程仍在运行")
 	}
+
+	// 只有入口、采集和数据库全部关停后才自替换，否则新进程可能接手未完成的操作。
+	fmt.Println("已关停，正在自替换进程映像……")
+	if err := replaceSelf(); err != nil {
+		return fmt.Errorf("一键重启：自替换失败（argv[0]=%q）：%w", os.Args[0], err)
+	}
+	return errors.New("一键重启：自替换未生效，进程仍在运行")
 }
 
 // noteSearchBackfillInterrupted 在关停路径上说明「后台索引回填可能被本批中断」。
 //
 // 为什么不在关停时等它退出：回填跑在 domain.SearchIndexService 自己的 goroutine 里，
-// 关停只需要停止推进水位，而**等待**会把关停时长绑在「当前批次还剩多少行」上——
-// 大库上一批可能是几十万行，SIGTERM 后的 15 秒关停窗口（k8s 的 terminationGracePeriod
-// 同理）根本不够，结果是关停超时被杀，反而丢掉「本批已提交到哪」之外的全部收尾动作。
+// 关停只需要停止推进水位，等待会把关停时间额外绑在「当前批次还剩多少行」上。
+// 大库一批可能有几十万行，等待可能耗尽外部编排器的终止预算；HTTP 的 15 秒只限制优雅排空。
 //
 // 不等待是安全的：水位（search_index_state.last_id）在**每批提交时**落库，被中断的那一批
 // 至多回退到该批起点，下次启动从 last_id 续跑，不重复灌也不漏行；未完成期间搜索走既有

@@ -975,10 +975,10 @@ func auditSummary(events []repository.ObservabilityEvent, filter auditViewFilter
 	return summary
 }
 
-// toAPIAuditHTTP 组装脱敏后的 HTTP 上下文；无任何字段时返回 nil（不返回空对象）。
+// toAPIAuditHTTP 只组装允许返回的 HTTP 上下文，历史凭据和正文预览不出站。
 func toAPIAuditHTTP(event repository.ObservabilityEvent) *AuditHttpContext {
 	if event.HTTPMethod == "" && event.HTTPPath == "" && event.StatusCode == 0 &&
-		event.RequestID == "" && event.UserAgent == "" && event.TokenPreview == "" && event.BodyPreview == "" {
+		event.RequestID == "" && event.UserAgent == "" {
 		return nil
 	}
 	context := &AuditHttpContext{
@@ -996,14 +996,6 @@ func toAPIAuditHTTP(event repository.ObservabilityEvent) *AuditHttpContext {
 	if event.UserAgent != "" {
 		userAgent := event.UserAgent
 		context.UserAgent = &userAgent
-	}
-	if event.TokenPreview != "" {
-		preview := event.TokenPreview
-		context.TokenPreview = &preview
-	}
-	if event.BodyPreview != "" {
-		body := event.BodyPreview
-		context.BodyPreview = &body
 	}
 	if event.HTTPHeaders != "" {
 		headers := event.HTTPHeaders

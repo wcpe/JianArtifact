@@ -1,21 +1,48 @@
 package domain
 
 import (
+	"context"
 	"errors"
 	"log"
 	"strings"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
 // AuthService 处理自举、登录与登出。
 type AuthService struct {
-	users     *repository.UserRepo
-	revoked   *repository.RevokedRepo
-	jwt       *auth.JWTManager
-	recorder  ChangeRecorder
-	writeGate BusinessWriteGate
+	users         *repository.UserRepo
+	revoked       *repository.RevokedRepo
+	jwt           *auth.JWTManager
+	recorder      ChangeRecorder
+	writeGate     BusinessWriteGate
+	securityAudit *SecurityAuditService
+}
+
+// SetSecurityAudit 在装配阶段注入实例安全审计服务。
+func (s *AuthService) SetSecurityAudit(audit *SecurityAuditService) { s.securityAudit = audit }
+
+// LoginContext 只记录实际口令核验，不声明已建立持久会话或已写出 HTTP 响应。
+func (s *AuthService) LoginContext(ctx context.Context, username, password string) (string, *repository.User, error) {
+	token, user, err := s.Login(username, password)
+	s.recordAuthAttempt(ctx, "password", user, err)
+	return token, user, err
+}
+
+func (s *AuthService) recordAuthAttempt(ctx context.Context, method string, user *repository.User, err error) {
+	if s.securityAudit == nil {
+		return
+	}
+	switch {
+	case err == nil && user != nil:
+		s.securityAudit.RecordAuthAttemptSucceeded(ctx, user.ID, method, 0)
+	case errors.Is(err, ErrInvalidCredentials), errors.Is(err, ErrExternalIdentityInvalid):
+		s.securityAudit.RecordDenied(ctx, SecurityAuditDenied{EventType: "auth.attempt", ErrorCode: "invalid_credentials", AuthMethod: method})
+	default:
+		s.securityAudit.RecordAuthAttemptFailed(ctx, method, 0)
+	}
 }
 
 // NewAuthService 构造 AuthService。
@@ -35,14 +62,10 @@ func (s *AuthService) Bootstrap(username, password string) (token string, user *
 	if err := requireBusinessWrite(s.writeGate); err != nil {
 		return "", nil, err
 	}
-	n, err := s.users.CountExcluding(AnonymousUsername)
-	if err != nil {
-		return "", nil, err
+	if username == AnonymousUsername {
+		return "", nil, ErrValidation
 	}
-	if n > 0 {
-		return "", nil, ErrAlreadyInitialized
-	}
-	token, user, err = s.createSessionForNewUser(username, password, "admin")
+	token, user, err = s.createSessionForNewUser(username, password)
 	if err != nil {
 		return "", nil, err
 	}
@@ -56,7 +79,8 @@ func (s *AuthService) Login(username, password string) (token string, user *repo
 	if username == AnonymousUsername {
 		return "", nil, ErrInvalidCredentials
 	}
-	u, err := s.users.GetByUsername(username)
+	ctx := context.Background()
+	u, err := s.users.CredentialAccountByUsername(ctx, username)
 	if errors.Is(err, repository.ErrNotFound) {
 		return "", nil, ErrInvalidCredentials
 	}
@@ -72,11 +96,9 @@ func (s *AuthService) Login(username, password string) (token string, user *repo
 	if err := auth.VerifyPassword(password, u.PasswordHash); err != nil {
 		return "", nil, ErrInvalidCredentials
 	}
-	signed, _, _, err := s.jwt.Issue(u.ID, u.Role)
-	if err != nil {
-		return "", nil, err
-	}
-	return signed, u, nil
+	return s.issueCredentialSession(ctx, func(tx *sqlx.Tx) (repository.CredentialAccount, error) {
+		return s.users.LoginCredentialAccountTx(ctx, tx, u)
+	})
 }
 
 // Logout 把会话 jti 记入黑名单直至过期。expiresAt 为 Unix 秒。
@@ -90,27 +112,51 @@ func (s *AuthService) Logout(jti string, expiresAt int64) error {
 	return s.revoked.Revoke(jti, expiresAt)
 }
 
-func (s *AuthService) createSessionForNewUser(username, password, role string) (string, *repository.User, error) {
+func (s *AuthService) createSessionForNewUser(username, password string) (string, *repository.User, error) {
 	hash, err := auth.HashPassword(password)
 	if err != nil {
 		return "", nil, err
 	}
-	id, err := s.users.Create(username, hash, role)
-	if err != nil {
-		if isUniqueViolation(err) {
-			return "", nil, ErrConflict
+	ctx := context.Background()
+	return s.issueCredentialSession(ctx, func(tx *sqlx.Tx) (repository.CredentialAccount, error) {
+		u, err := repository.BootstrapCredentialAccountTx(ctx, tx, username, hash, AnonymousUsername)
+		if errors.Is(err, repository.ErrCredentialRejected) {
+			err = ErrAlreadyInitialized
 		}
-		return "", nil, err
+		return u, err
+	})
+}
+
+func (s *AuthService) issueCredentialSession(ctx context.Context, account func(*sqlx.Tx) (repository.CredentialAccount, error)) (string, *repository.User, error) {
+	var token string
+	var user repository.CredentialAccount
+	err := s.users.CredentialWrite(ctx, func(tx *sqlx.Tx) error {
+		current, err := account(tx)
+		if err != nil {
+			return err
+		}
+		signed, claims, err := s.jwt.IssueBound(current.ID, current.Role, current.Epoch)
+		if err != nil {
+			return err
+		}
+		if err := repository.InsertCredentialSessionTx(ctx, tx, current, claims); err != nil {
+			return err
+		}
+		user, token = current, signed
+		return nil
+	})
+	if errors.Is(err, repository.ErrCredentialRejected) {
+		err = ErrInvalidCredentials
 	}
-	u, err := s.users.GetByID(id)
 	if err != nil {
 		return "", nil, err
 	}
-	signed, _, _, err := s.jwt.Issue(u.ID, u.Role)
-	if err != nil {
-		return "", nil, err
-	}
-	return signed, u, nil
+	return token, &user.User, nil
+}
+
+// CredentialRevision 固定外部认证开始时的库内签发水位。
+func (s *AuthService) CredentialRevision(ctx context.Context) (int64, error) {
+	return s.users.CredentialRevision(ctx)
 }
 
 func (s *AuthService) recordUserChange(user *repository.User) {

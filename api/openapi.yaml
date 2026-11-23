@@ -327,6 +327,195 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+  /api/v1/observability/audit/security-events:
+    get:
+      operationId: listSecurityAuditEvents
+      summary: 当前节点安全事件快照分页
+      description: |
+        仅允许全局管理员交互会话；先授权，再校验查询。必须显式给出发生时间的 UTC 半开区间
+        `[from,to)`，跨度最多 30 天。`from` 与 `to` 接受带 `Z` 或合法数字时差的 RFC3339 时间，按 UTC 时刻比较。
+        小数秒须能无损表示为毫秒：第四位及以后必须全为零，即使超过九位。不满足时返回 400
+        `invalid_security_filter`，不四舍五入或截断。
+        `ip` 精确匹配已记录的 `clientIp`，与 `cidr` 互斥；其他过滤为精确匹配。
+        不接受空值、重复参数或未列出的参数；不支持 offset 或总数查询。
+        首页固定持久入库水位，按入库顺序降序翻页；续页游标绑定会话和规范筛选条件，首签有效期 15 分钟。
+        空页或投影与快照水位相同均不证明采集覆盖完整。
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: from
+          in: query
+          required: true
+          description: 发生时间下界（含），接受带合法时差且可无损表示为毫秒的 RFC3339 时间。
+          schema:
+            type: string
+            format: date-time
+            pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,3}0*)?(Z|[+-]([01][0-9]|2[0-3]):[0-5][0-9])$'
+        - name: to
+          in: query
+          required: true
+          description: 发生时间上界（不含），接受带合法时差且可无损表示为毫秒的 RFC3339 时间。
+          schema:
+            type: string
+            format: date-time
+            pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,3}0*)?(Z|[+-]([01][0-9]|2[0-3]):[0-5][0-9])$'
+        - $ref: "#/components/parameters/SecurityAuditLimitParam"
+        - $ref: "#/components/parameters/SecurityAuditCursorParam"
+        - name: ip
+          in: query
+          description: 精确匹配已记录的可信客户端 IPv4 或 IPv6 地址。
+          schema: { type: string, minLength: 1, maxLength: 64 }
+        - name: cidr
+          in: query
+          description: 匹配已记录的可信客户端地址所属网段。
+          schema: { type: string, minLength: 1, maxLength: 64 }
+        - name: eventType
+          in: query
+          schema:
+            $ref: "#/components/schemas/SecurityAuditEventType"
+        - name: outcome
+          in: query
+          schema:
+            $ref: "#/components/schemas/SecurityAuditOutcome"
+        - name: actorUserId
+          in: query
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: repositoryId
+          in: query
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: credentialId
+          in: query
+          schema: { type: string, minLength: 1 }
+        - name: sessionId
+          in: query
+          schema: { type: string, minLength: 1 }
+        - name: requestId
+          in: query
+          schema: { type: string, minLength: 1 }
+        - name: originRequestId
+          in: query
+          schema: { type: string, minLength: 1 }
+        - name: operationId
+          in: query
+          schema: { type: string, minLength: 1 }
+        - name: taskId
+          in: query
+          schema: { type: string, minLength: 1 }
+        - name: actionId
+          in: query
+          schema: { type: string, minLength: 1 }
+        - name: canonicalPath
+          in: query
+          schema: { type: string, minLength: 1, maxLength: 1024 }
+        - name: objectId
+          in: query
+          schema: { type: string, minLength: 1 }
+        - name: digest
+          in: query
+          schema: { type: string, minLength: 1 }
+      responses:
+        "200":
+          description: 固定快照下的事件头分页与采集覆盖
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SecurityAuditEventPage"
+        "400":
+          $ref: "#/components/responses/InvalidSecurityAuditFilter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "410":
+          $ref: "#/components/responses/SecurityAuditCursorExpired"
+        "503":
+          $ref: "#/components/responses/SecurityAuditUnavailable"
+  /api/v1/observability/audit/security-events/{eventId}:
+    get:
+      operationId: getSecurityAuditEvent
+      summary: 读取当前节点一条安全事件
+      description: |
+        仅允许全局管理员交互会话；先授权，再校验参数或判断事件是否存在。
+        只返回安全事件头，不返回旧审计视图、凭据预览或请求正文；对象另行分页。
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/SecurityAuditEventIdParam"
+      responses:
+        "200":
+          description: 安全事件头
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SecurityAuditEvent"
+        "400":
+          $ref: "#/components/responses/InvalidSecurityAuditFilter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/SecurityAuditEventNotFound"
+        "503":
+          $ref: "#/components/responses/SecurityAuditUnavailable"
+  /api/v1/observability/audit/security-events/{eventId}/objects:
+    get:
+      operationId: listSecurityAuditEventObjects
+      summary: 独立分页读取一条安全事件的对象
+      description: |
+        仅允许全局管理员交互会话；先授权，再校验参数或判断事件是否存在。
+        按事件内对象序号递增翻页；游标绑定会话及父事件，不与事件列表的游标互换。
+        不接受空值、重复参数或未列出的参数，不返回总数。
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/SecurityAuditEventIdParam"
+        - $ref: "#/components/parameters/SecurityAuditLimitParam"
+        - $ref: "#/components/parameters/SecurityAuditCursorParam"
+      responses:
+        "200":
+          description: 安全事件对象分页
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SecurityAuditEventObjectPage"
+        "400":
+          $ref: "#/components/responses/InvalidSecurityAuditFilter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/SecurityAuditEventNotFound"
+        "410":
+          $ref: "#/components/responses/SecurityAuditCursorExpired"
+        "503":
+          $ref: "#/components/responses/SecurityAuditUnavailable"
+  /api/v1/observability/audit/collection-health:
+    get:
+      operationId: getSecurityAuditCollectionHealth
+      summary: 读取当前节点安全审计采集健康
+      description: |
+        仅允许全局管理员交互会话；先授权，再校验查询。此端点不接受任何查询参数，包括未知参数、空值或重复参数。
+        读取进程内有界快照，不查库、不外联；仅返回状态、覆盖、已证水位、计数及最近缺口。
+        不返回账户、路径、地址或原始错误。采集降级或覆盖未知不改变公共探针的存活与就绪语义。
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: 脱敏的采集健康快照，包括已知的降级或未知状态
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SecurityAuditCollectionHealth"
+        "400":
+          $ref: "#/components/responses/InvalidSecurityAuditFilter"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/SecurityAuditUnavailable"
   /api/v1/observability/downloads/by-client:
     get:
       operationId: getDownloadByClient
@@ -587,6 +776,9 @@ paths:
     patch:
       operationId: updateUser
       summary: 更新用户（角色 / 状态）
+      description: |
+        停用账号、下调全局管理员角色或禁止网页登录时收窄账号级资格，使旧凭据失效；不涉及仓库级权限。
+        恢复或扩展资格不会恢复旧凭据。版本冲突返回 409；审计不可用或事务结果未确认时返回 503。
       parameters:
         - $ref: "#/components/parameters/UserIdParam"
       requestBody:
@@ -610,6 +802,10 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/CredentialVersionConflict"
+        "503":
+          $ref: "#/components/responses/SecurityAuditUnavailable"
     delete:
       operationId: deleteUser
       summary: 删除用户
@@ -624,10 +820,42 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+  /api/v1/security/admission/candidates/{operationId}:
+    get:
+      operationId: getPrivateAdmissionCandidate
+      summary: 查询本人私有候选的状态
+      description: |
+        只允许通过验证的交互会话。仅原发起者且当前仍有目标发布资格时返回脱敏状态；非法操作号、未知目标、非本人和撤权统一返回 404。
+        仅返回白名单元数据，不接受客户端写入，不提供下载、字节、内部路径或代次。
+        查询可触发服务端幂等完整性或到期对账并持久更新状态（拒绝或过期），但不发放发布权或删除文件。
+        `staged` 表示私有接收已封存，不表示已扫描、批准或发布。
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PrivateAdmissionOperationIdParam"
+      responses:
+        "200":
+          description: 当前候选的脱敏元数据
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PrivateAdmissionCandidateStatus"
+        "401":
+          $ref: "#/components/responses/PrivateAdmissionUnauthenticated"
+        "403":
+          $ref: "#/components/responses/PrivateAdmissionForbidden"
+        "404":
+          $ref: "#/components/responses/PrivateAdmissionNotFound"
+        "503":
+          $ref: "#/components/responses/PrivateAdmissionUnavailable"
   /api/v1/users/{id}/password:
     post:
       operationId: changePassword
       summary: 修改 / 重置用户口令
+      description: |
+        口令实际变更时，确认变更和安全审计事务提交后返回 204，不返回口令、哈希或内部代次。
+        已检测到目标版本冲突时返回 409 `credential_version_conflict`；审计不可用或无法确认提交结果时
+        返回 503 `security_audit_unavailable`，不将未确认结果报告为成功。此端点不保证跨 HTTP 请求重放幂等。
       parameters:
         - $ref: "#/components/parameters/UserIdParam"
       requestBody:
@@ -638,7 +866,7 @@ paths:
               $ref: "#/components/schemas/PasswordChangeRequest"
       responses:
         "204":
-          description: 已修改
+          description: 已修改；同值经事务确认仍返回 204，不推进代次，不追加新的改密成功事件。
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -647,6 +875,10 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/CredentialVersionConflict"
+        "503":
+          $ref: "#/components/responses/SecurityAuditUnavailable"
   /api/v1/users/{id}/publish-policies:
     put:
       operationId: putPublishPolicies
@@ -660,6 +892,8 @@ paths:
         为避免「部分仓库成功、部分仓库失败」的静默不一致：保存前先对所有仓库做统一预校验
         （仓库必须存在且为 hosted），任一仓库不合法即**整体拒绝**，错误信息会点名问题仓库。
         响应按仓库逐条返回结果，便于调用方在个别仓库落库失败时精确定位，而不会被静默吞掉。
+        若请求包含 `webLoginDisabled`，账号资格子步与逐仓库策略分属不同事务；资格子步失败时不执行仓库策略，
+        已提交的账号状态不会因随后仓库策略失败而回滚。
       parameters:
         - $ref: "#/components/parameters/UserIdParam"
       requestBody:
@@ -684,7 +918,9 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          $ref: "#/components/responses/Conflict"
+          $ref: "#/components/responses/PublishPolicyWriteConflict"
+        "503":
+          $ref: "#/components/responses/SecurityAuditUnavailable"
   /api/v1/users/{id}/publish-policies/{repo}:
     get:
       operationId: getPublishPolicy
@@ -712,6 +948,9 @@ paths:
     put:
       operationId: putPublishPolicy
       summary: 更新用户在 Hosted 仓库的发布策略
+      description: |
+        若请求包含 `webLoginDisabled`，账号资格子步与仓库策略分属不同事务；资格子步失败时不执行仓库策略，
+        已提交的账号状态不会因随后仓库策略失败而回滚。
       parameters:
         - $ref: "#/components/parameters/UserIdParam"
         - name: repo
@@ -741,7 +980,9 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          $ref: "#/components/responses/Conflict"
+          $ref: "#/components/responses/PublishPolicyWriteConflict"
+        "503":
+          $ref: "#/components/responses/SecurityAuditUnavailable"
   /api/v1/tokens:
     get:
       operationId: listTokens
@@ -2782,6 +3023,32 @@ components:
       description: 按制品路径前缀过滤
       schema:
         type: string
+    PrivateAdmissionOperationIdParam:
+      name: operationId
+      in: path
+      required: true
+      description: 服务端分配的规范小写 UUIDv4，不是访问凭证。
+      schema:
+        {
+          type: string,
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+        }
+    SecurityAuditLimitParam:
+      name: limit
+      in: query
+      description: 页大小，省略时为 50，合法范围为 1 至 100。
+      schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+    SecurityAuditCursorParam:
+      name: cursor
+      in: query
+      description: 省略表示第一页；提供时必须为非空且只能出现一次，不能跨用途使用。
+      schema: { type: string, minLength: 1 }
+    SecurityAuditEventIdParam:
+      name: eventId
+      in: path
+      required: true
+      description: 不透明事件标识。
+      schema: { type: string, minLength: 1, maxLength: 128 }
     AuditFromParam:
       name: from
       in: query
@@ -3113,6 +3380,66 @@ components:
         maximum: 500
         default: 100
   responses:
+    InvalidSecurityAuditFilter:
+      description: 参数非法、游标无效或游标与查询、会话不匹配；`error.code` 为 `invalid_security_filter`。
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    SecurityAuditEventNotFound:
+      description: 通过授权后未找到事件；`error.code` 为 `security_event_not_found`。
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    SecurityAuditCursorExpired:
+      description: 已验证的游标过期，或其快照因留存、删除、重启或恢复不能继续；`error.code` 为 `security_cursor_expired`。
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    PrivateAdmissionUnauthenticated:
+      description: 无有效认证；`error.code` 为 `unauthenticated`。
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    PrivateAdmissionForbidden:
+      description: 已识别但不是允许的交互会话；`error.code` 为 `admission_forbidden`。
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    PrivateAdmissionNotFound:
+      description: 目标不存在或当前主体无权读取；`error.code` 为 `admission_not_found`。
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    PrivateAdmissionUnavailable:
+      description: 无法确认候选状态或当前读取资格；`error.code` 为 `admission_unavailable`。
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    PublishPolicyWriteConflict:
+      description: 发布策略冲突；账号资格子步发生版本冲突时，`error.code` 为 `credential_version_conflict`。
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    CredentialVersionConflict:
+      description: 凭据版本已变更，当前变更未提交；`error.code` 为 `credential_version_conflict`。
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    SecurityAuditUnavailable:
+      description: 安全审计暂不可用；`error.code` 为 `security_audit_unavailable`。
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
     BadRequest:
       description: 参数错误
       content:
@@ -3970,13 +4297,21 @@ components:
           enum: [ok, degraded, unavailable]
         version:
           type: string
+        auditCollection:
+          type: string
+          enum: [healthy, degraded, unknown, unavailable]
+          description: 脱敏采集状态；不改变当前探针的存活或就绪语义。
     Error:
       type: object
       required: [error]
       properties:
+        requestId:
+          type: string
+          minLength: 1
+          description: 来自服务端可信请求上下文的标识；无法确定时省略。
         operationId:
           type: string
-          description: 统一制品操作失败时返回的追踪标识
+          description: 统一制品操作失败时返回的追踪标识；仅在已确认存在且主体有权时提供。
         error:
           type: object
           required: [code, message]
@@ -4000,6 +4335,319 @@ components:
               type: string
             message:
               type: string
+    PrivateAdmissionCandidateStatus:
+      type: object
+      additionalProperties: false
+      required: [operationId, repositoryId, targetVersion, state, coverage, expiresAt]
+      properties:
+        operationId:
+          type: string
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        repositoryId: { type: integer, format: int64, minimum: 1 }
+        targetVersion: { type: integer, format: int64, minimum: 1 }
+        manifestVersion:
+          type: integer
+          format: int64
+          minimum: 1
+          description: 已确认的清单版本，未确认时省略。
+        manifestDigest:
+          type: string
+          pattern: "^sha256:[0-9a-f]{64}$"
+          description: 已确认的清单摘要，未确认时省略。
+        state:
+          type: string
+          enum: [staged, rejected, expired]
+          description: 已封存、拒绝或已过期；已封存不表示已发布。
+        coverage:
+          type: string
+          enum: [unknown]
+          description: 仅跟踪私有状态，不证明扫描覆盖。
+        expiresAt:
+          type: string
+          format: date-time
+          description: 候选在服务端的 UTC 到期时间。
+        errorCode:
+          type: string
+          enum: [admission_integrity_failed]
+          description: 已确认的硬完整性失败；无此事实时省略。
+    SecurityAuditEventType:
+      type: string
+      description: |
+        采集缺口由覆盖和健康视图单独表达。`auth.password_changed` 和 `auth.account_access_changed` 仅表示已提交的改密或账号级资格变化，
+        各自只有一个 `user` 目标，不记录口令、口令哈希或内部代次。`admission.candidate_staged` 只表示私有接收已封存，
+        有一个带实际摘要和字节数的 `asset` 对象，不表示公开发布。
+      enum:
+        [
+          auth.attempt,
+          auth.session_created,
+          auth.password_changed,
+          auth.account_access_changed,
+          admission.candidate_staged,
+          protocol.write_denied,
+          asset.change_committed,
+          asset.response_observed,
+        ]
+    SecurityAuditOutcome:
+      type: string
+      enum: [succeeded, denied, failed, pending, unknown]
+    SecurityAuditCoverage:
+      type: string
+      description: 时间窗口的实际采集覆盖；未知不等于无缺口。
+      enum: [complete, gapped, unknown]
+    SecurityAuditEvent:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          eventId,
+          eventVersion,
+          eventType,
+          occurredAt,
+          ingestedAt,
+          actorKind,
+          proxyTrust,
+          outcome,
+          committed,
+        ]
+      properties:
+        eventId:
+          type: string
+          minLength: 1
+          description: 不透明稳定事件标识。
+        eventVersion: { type: integer, minimum: 1 }
+        eventType:
+          $ref: "#/components/schemas/SecurityAuditEventType"
+        occurredAt:
+          type: string
+          format: date-time
+          description: 服务端观测的 UTC 发生时间，毫秒精度。
+        ingestedAt:
+          type: string
+          format: date-time
+          description: UTC 入库时间，毫秒精度；不是业务回执的提交时间。
+        requestId: { type: string, minLength: 1 }
+        originRequestId: { type: string, minLength: 1 }
+        operationId: { type: string, minLength: 1 }
+        taskId: { type: string, minLength: 1 }
+        actionId: { type: string, minLength: 1 }
+        actorKind:
+          type: string
+          enum: [user, anonymous, unknown, system, local_operator]
+        actorUserId: { type: integer, format: int64, minimum: 1 }
+        actorNameSnapshot: { type: string, minLength: 1, maxLength: 128 }
+        credentialId:
+          type: string
+          minLength: 1
+          description: 非秘密关联标识，不可用于认证。
+        sessionId:
+          type: string
+          minLength: 1
+          description: 非秘密关联标识，不是登录凭据。
+        authMethod:
+          type: string
+          enum:
+            [
+              web_jwt,
+              bearer_token,
+              basic_token,
+              cargo_token,
+              basic,
+              password,
+              oidc_callback,
+              ldap_bind,
+              totp,
+              recovery_code,
+              local_claim,
+              unknown,
+            ]
+        authStrength:
+          type: string
+          enum: [none, password, mfa, machine, recovery]
+        peerIp: { type: string, minLength: 1 }
+        clientIp: { type: string, minLength: 1 }
+        proxyTrust:
+          type: string
+          enum: [direct, trusted, invalid_forwarding, unknown]
+        forwardedChain:
+          type: array
+          maxItems: 8
+          description: 仅包含经过授权的转发链地址。
+          items: { type: string, minLength: 1 }
+        userAgent: { type: string, minLength: 1, maxLength: 256 }
+        repositoryId: { type: integer, format: int64, minimum: 1 }
+        outcome:
+          $ref: "#/components/schemas/SecurityAuditOutcome"
+        committed:
+          type: string
+          enum: [not_applicable, not_committed, committed, unknown]
+        httpStatus: { type: integer, minimum: 100, maximum: 599 }
+        errorCode:
+          type: string
+          minLength: 1
+          description: 稳定的裁决原因码，不含原始错误。
+    SecurityAuditEventObject:
+      type: object
+      additionalProperties: false
+      required: [ordinal, objectKind]
+      properties:
+        ordinal: { type: integer, minimum: 1 }
+        repositoryId: { type: integer, format: int64, minimum: 1 }
+        canonicalPath: { type: string, minLength: 1, maxLength: 1024 }
+        objectKind:
+          type: string
+          enum: [asset, repository, package, version, manifest, blob, user]
+        objectId:
+          type: string
+          minLength: 1
+          description: 对于用户目标，必须是服务端账号 ID 的规范正十进制字符串，不使用用户名。
+        digest: { type: string, minLength: 1 }
+        sizeBytes: { type: integer, format: int64, minimum: 0 }
+        manifestDigest: { type: string, minLength: 1 }
+        targetVersion: { type: string, minLength: 1, maxLength: 128 }
+        repositoryNameSnapshot: { type: string, minLength: 1, maxLength: 128 }
+      # 排除不满足最小账号目标形状的 user 对象，不限制既有对象类型。
+      not:
+        type: object
+        required: [objectKind]
+        properties:
+          objectKind: { type: string, enum: [user] }
+        not:
+          type: object
+          additionalProperties: false
+          required: [ordinal, objectKind, objectId]
+          properties:
+            ordinal: { type: integer }
+            objectKind: { type: string }
+            objectId: { type: string, pattern: "^[1-9][0-9]*$" }
+    SecurityAuditEventPage:
+      type: object
+      additionalProperties: false
+      required: [items, hasMore, snapshotWatermark, projectionWatermark, projectionHealth, coverage]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items:
+            $ref: "#/components/schemas/SecurityAuditEvent"
+        hasMore: { type: boolean }
+        nextCursor:
+          type: string
+          minLength: 1
+          description: 仅在存在下一页时提供。
+        snapshotWatermark:
+          type: integer
+          format: int64
+          minimum: 0
+          description: 首页固定的持久入库水位。
+        projectionWatermark:
+          type: integer
+          format: int64
+          minimum: 0
+          description: 同一入库顺序域的最高连续投影水位；此原始查询使用原始可读水位。
+        projectionHealth:
+          type: string
+          enum: [healthy, degraded, unknown, unavailable]
+          description: 投影的可用状态，不表示采集覆盖。
+        coverage:
+          $ref: "#/components/schemas/SecurityAuditCoverage"
+    SecurityAuditEventObjectPage:
+      type: object
+      additionalProperties: false
+      required: [items, hasMore]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items:
+            $ref: "#/components/schemas/SecurityAuditEventObject"
+        hasMore: { type: boolean }
+        nextCursor:
+          type: string
+          minLength: 1
+          description: 仅在存在下一页时提供，为对象页专用游标。
+    SecurityAuditCollectionHealth:
+      type: object
+      additionalProperties: false
+      required: [state, coverage]
+      properties:
+        state:
+          type: string
+          enum: [starting, running, degraded, stopping, stopped]
+        coverage:
+          $ref: "#/components/schemas/SecurityAuditCoverage"
+        failure:
+          type: string
+          enum: [storage_unavailable, writer_busy, worker_fenced, worker_cancelled]
+          description: 有界失败类别；无已知故障时省略。
+        lastSuccess:
+          type: string
+          format: date-time
+          description: 最近成功确认持久检查点的 UTC 时间，未知时省略。
+        heartbeatAt:
+          type: string
+          format: date-time
+          description: 已证实的持久心跳 UTC 时间，未知时省略。
+        coveredFrom:
+          type: string
+          format: date-time
+          description: 覆盖区间的 UTC 下界（含），未知时省略。
+        coveredThrough:
+          type: string
+          format: date-time
+          description: 覆盖区间的 UTC 上界（不含），未知时省略。
+        watermark:
+          type: integer
+          format: int64
+          minimum: 0
+          description: 最近一次已证事务可见的持久事件水位，未知时省略。
+        queued: { type: integer, minimum: 0 }
+        queueBytes: { type: integer, minimum: 0 }
+        observedCount:
+          type: integer
+          format: int64
+          minimum: 0
+          description: 本进程实际观察数，不是已入库数；未知时省略。
+        suppressedCount:
+          type: integer
+          format: int64
+          minimum: 0
+          description: 本进程实际抑制数，不表示窗口总量；未知时省略。
+        lastGap:
+          $ref: "#/components/schemas/SecurityAuditCollectionGap"
+    SecurityAuditCollectionGap:
+      type: object
+      additionalProperties: false
+      required: [windowStart, windowEnd, gapReason, coverage]
+      properties:
+        windowStart: { type: string, format: date-time, description: 缺口窗口的 UTC 下界（含）。 }
+        windowEnd: { type: string, format: date-time, description: 缺口窗口的 UTC 上界（不含）。 }
+        gapReason:
+          type: string
+          enum:
+            [
+              global_rate,
+              source_rate,
+              source_table_full,
+              queue_full,
+              database_unavailable,
+              invalid_fact,
+              counter_overflow,
+              restart,
+              unclean_restart,
+            ]
+        coverage:
+          type: string
+          enum: [gapped, unknown]
+        observedCount:
+          type: integer
+          format: int64
+          minimum: 0
+          description: 已证观察数，覆盖未知时省略。
+        suppressedCount:
+          type: integer
+          format: int64
+          minimum: 0
+          description: 已证抑制数，覆盖未知时省略。
     AuditCategory:
       type: string
       description: 服务端归一化的审计分类，不以底层技术来源作为主分类。
@@ -4202,7 +4850,7 @@ components:
       description: |
         脱敏后的 HTTP 上下文：请求方法、归一化路由模板、响应状态码与排障辅助信息。
         路径为路由模板（如 /api/v1/admin/accounts/{id}），不含查询串或内部地址。
-        请求体与令牌预览必须脱敏（掩码/截断），不得出现凭据原文。
+        凭据与请求体预览不再返回；旧字段仅为兼容已生成的客户端类型保留。
       required: [method, path]
       properties:
         method:
@@ -4229,14 +4877,14 @@ components:
           maxLength: 512
         tokenPreview:
           type: string
-          description: 认证令牌的脱敏预览（形如 Bearer eyJhbG****1dnM）。
+          deprecated: true
+          description: 旧客户端兼容字段；服务端不再返回令牌预览。
           minLength: 1
           maxLength: 128
         bodyPreview:
           type: string
-          description: |
-            脱敏后的请求体（JSON 文本，敏感字段已掩码）。
-            仅管理员审计视图返回，不得包含凭据、令牌或个人信息原文。
+          deprecated: true
+          description: 旧客户端兼容字段；服务端不再返回请求体预览。
           maxLength: 4096
         # 仅捕获白名单内常用协商/溯源头；Authorization 等敏感头既不在白名单、
         # 也由敏感键名单二次拦截，绝不入列；单头值按字符截断到 256。
@@ -4929,8 +5577,33 @@ components:
           format: int64
         name:
           type: string
+        purpose:
+          type: string
+          description: 机器凭据用途；空为过渡期未限用途旧凭据。
+          enum: ["", artifact_read, artifact_publish]
+        scopes:
+          type: array
+          items:
+            $ref: "#/components/schemas/MachineTokenScope"
+        expiresAt:
+          type: string
         createdAt:
           type: string
+    MachineTokenScope:
+      type: object
+      required: [repository, actions]
+      properties:
+        repository:
+          type: string
+          description: 仓库名，签发时解析为稳定 ID。
+        pathPrefix:
+          type: string
+          description: 规范路径段前缀；空前缀覆盖仓库下全部路径。
+        actions:
+          type: array
+          items:
+            type: string
+            enum: [read, publish]
     TokenList:
       type: object
       required: [items]
@@ -4945,6 +5618,18 @@ components:
       properties:
         name:
           type: string
+        purpose:
+          type: string
+          enum: ["", artifact_read, artifact_publish]
+        scopes:
+          type: array
+          maxItems: 16
+          items:
+            $ref: "#/components/schemas/MachineTokenScope"
+        expiresDays:
+          type: integer
+          description: 有效期天数，默认 30，上限 90。
+          maximum: 90
     TokenCreated:
       type: object
       required: [id, name, token, createdAt]
@@ -4957,6 +5642,11 @@ components:
         token:
           type: string
           description: 明文令牌，仅此次返回一次。
+        purpose:
+          type: string
+          enum: ["", artifact_read, artifact_publish]
+        expiresAt:
+          type: string
         createdAt:
           type: string
     Repository:

@@ -108,6 +108,68 @@ func TestClassifyAuditResultTreatsPartialAsFailure(t *testing.T) {
 	}
 }
 
+func TestLegacyAuditResponsesOmitSensitivePreviews(t *testing.T) {
+	db := openAPITestDB(t)
+	logs := repository.NewAuditLogRepo(db)
+	history := repository.AuditLogEntry{
+		TS: time.Now().UTC().Format(time.RFC3339Nano), Actor: "admin", Action: "asset.put", EntityType: "asset",
+		EntityKey: "example/item.bin", Repo: "example", Result: "ok", HTTPMethod: "PUT", HTTPPath: "/raw/{repo}/{path}",
+		StatusCode: http.StatusCreated, RequestID: "stored-request-id",
+		TokenPreview: "synthetic-token-preview", BodyPreview: "synthetic-body-preview",
+	}
+	if err := logs.Insert(history); err != nil {
+		t.Fatal(err)
+	}
+	h := NewHandlers(Deps{AuditLogs: logs, AuditObservability: repository.NewAuditObservabilityRepo(db), AuditSourceNode: "node-a"})
+	r := gin.New()
+	r.GET("/audit-logs", func(c *gin.Context) {
+		c.Set("auth.principal", &auth.Principal{Kind: auth.KindSession, Role: "admin"})
+		h.GetAuditLogs(c)
+	})
+	legacy := httptest.NewRecorder()
+	r.ServeHTTP(legacy, httptest.NewRequest(http.MethodGet, "/audit-logs", nil))
+	observed := serveAuditEventsList(h, ListAuditObservabilityEventsParams{})
+	for name, rec := range map[string]*httptest.ResponseRecorder{"audit-logs": legacy, "observability": observed} {
+		var page struct {
+			Items []struct {
+				RequestID string                     `json:"requestId"`
+				HTTP      map[string]json.RawMessage `json:"http"`
+			} `json:"items"`
+		}
+		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &page) != nil || len(page.Items) != 1 {
+			t.Errorf("%s 未保留旧记录：状态=%d 条数=%d", name, rec.Code, len(page.Items))
+			continue
+		}
+		var raw struct {
+			Items []map[string]json.RawMessage `json:"items"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+			t.Fatal(err)
+		}
+		for _, field := range []string{"tokenPreview", "bodyPreview"} {
+			if _, ok := raw.Items[0][field]; ok {
+				t.Errorf("%s 顶层仍输出已停用的 %s", name, field)
+			}
+			if _, ok := page.Items[0].HTTP[field]; ok {
+				t.Errorf("%s 的 HTTP 上下文仍输出已停用的 %s", name, field)
+			}
+		}
+		var httpRequestID string
+		if v, ok := page.Items[0].HTTP["requestId"]; ok {
+			if err := json.Unmarshal(v, &httpRequestID); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if page.Items[0].RequestID != history.RequestID && httpRequestID != history.RequestID {
+			t.Errorf("%s 不应丢弃安全排障字段", name)
+		}
+	}
+	stored, err := logs.List(repository.AuditFilter{Limit: 1})
+	if err != nil || len(stored) != 1 || stored[0].TokenPreview != history.TokenPreview || stored[0].BodyPreview != history.BodyPreview {
+		t.Fatalf("出站脱敏不得修改历史库：条数=%d 错误=%v", len(stored), err)
+	}
+}
+
 // serveAuditEventsList 以管理员身份调用 GET /observability/audit/events。
 func serveAuditEventsList(handler *Handlers, params ListAuditObservabilityEventsParams) *httptest.ResponseRecorder {
 	router := gin.New()

@@ -7,6 +7,7 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/wcpe/jianartifact/apps/server/internal/blobstore"
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
 	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
@@ -264,8 +265,7 @@ func equalStringSlices(a, b []string) bool {
 // 隔离目录的一级子目录名是**资产变更操作的 operationID**。只要该操作仍有 staged 的隔离
 // 记录，这份副本就是那次变更唯一的回滚依据，绝不能当垃圾收走。
 //
-// 变异验证方式：删掉 wiring 里的 SetPendingRestoreChecker 接线（或让判定恒假），本用例
-// 必须转红——此时被引用的操作目录会被错误地列进清理候选。
+// 预览接入共享协调器后，待恢复目录必须保全，不相关目录仍应成为候选。
 func TestCleanupQuarantineSkipsOperationsWithPendingRestore(t *testing.T) {
 	t.Parallel()
 	db := newTestDB(t)
@@ -289,11 +289,8 @@ func TestCleanupQuarantineSkipsOperationsWithPendingRestore(t *testing.T) {
 		t.Fatalf("写隔离记录：%v", err)
 	}
 
-	// 接线方式与生产一致：问 blob_quarantine 该操作是否仍有 staged 记录。
-	svc.SetPendingRestoreChecker(func(operationID string) bool {
-		pending, err := mutations.HasPendingQuarantine(operationID)
-		return err != nil || pending
-	})
+	// 接线方式与生产一致：预览与移动复用资产协调器的隔离目录保护。
+	svc.SetAssetMutationCoordinator(domain.NewAssetMutationCoordinatorDeferred(db, blobstore.NewStore(filepath.Join(dataDir, "blobs"))))
 
 	preview, err := svc.Preview(domain.CleanupKindQuarantine, 0)
 	if err != nil {
@@ -317,8 +314,7 @@ func TestCleanupQuarantineSkipsOperationsWithPendingRestore(t *testing.T) {
 
 // TestAssetMutationHasPendingQuarantineTracksStatus 钉住判据本身的状态迁移。
 //
-// 判据必须只看 staged：一旦隔离副本被放回（restored）或进入待回收（pending_gc/deleted），
-// 它已不再承担回滚职责，此时仍报「被引用」会让隔离区永远清不掉。
+// 隔离条目状态不能替代 intent 的终态：隔离原件已放回或删除时，快照仍可能用于恢复。
 func TestAssetMutationHasPendingQuarantineTracksStatus(t *testing.T) {
 	t.Parallel()
 	db := newTestDB(t)
@@ -341,8 +337,17 @@ func TestAssetMutationHasPendingQuarantineTracksStatus(t *testing.T) {
 	if err := mutations.MarkQuarantine(op, "aabb", "restored", ""); err != nil {
 		t.Fatalf("标记已放回：%v", err)
 	}
+	if pending, err := mutations.HasPendingQuarantine(op); err != nil || !pending {
+		t.Fatalf("原件 restored 但 intent 未终结，仍应保全：pending=%v err=%v", pending, err)
+	}
+	if err := mutations.MarkRollingBack(op, "测试恢复"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mutations.MarkRolledBack(op, "测试恢复"); err != nil {
+		t.Fatal(err)
+	}
 	if pending, err := mutations.HasPendingQuarantine(op); err != nil || pending {
-		t.Fatalf("restored 后不应再判为被引用：pending=%v err=%v", pending, err)
+		t.Fatalf("原件已放回且 intent 已终结，不应再判为被引用：pending=%v err=%v", pending, err)
 	}
 }
 

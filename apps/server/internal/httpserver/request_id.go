@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/wcpe/jianartifact/apps/server/internal/auditctx"
 )
 
 const (
@@ -17,22 +19,40 @@ const (
 	requestIDBytes      = 16
 )
 
-// requestIDMiddleware 为所有 HTTP 请求统一保留或生成请求标识，供审计与客户端关联同一次请求。
-func requestIDMiddleware() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		id := c.GetHeader(requestIDHeader)
-		if id == "" {
-			generated, err := newRequestID()
-			if err != nil {
-				c.AbortWithStatus(http.StatusInternalServerError)
-				return
-			}
-			id = generated
+// requestSourceHandler 在路由匹配前建立可信来源，并为路由器直接生成的响应设置请求标识。
+func requestSourceHandler(policy auditctx.Policy, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id, err := newRequestID()
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
 		}
-		c.Set(requestIDContextKey, id)
-		c.Header(requestIDHeader, id)
-		c.Next()
+		req := r.WithContext(auditctx.WithSource(r.Context(), policy.Resolve(r, id)))
+		// Gin 的自动跳转会改写 URL；复制它和头映射，保持调用方的请求和正文不变。
+		u := *r.URL
+		req.URL = &u
+		req.Header = r.Header.Clone()
+		if req.Header == nil {
+			req.Header = make(http.Header)
+		}
+		// 当前来源策略不支持转发前缀；Gin 会在路由中间件之前读取它。
+		req.Header.Del("X-Forwarded-Prefix")
+		// 旧审计仍读同名请求头，只向应用提供生成的值。
+		req.Header.Set(requestIDHeader, id)
+		w.Header().Set(requestIDHeader, id)
+		next.ServeHTTP(w, req)
+	})
+}
+
+// requestIDMiddleware 仅从内部上下文向仍依赖 Gin 上下文的调用方提供请求标识。
+func requestIDMiddleware(c *gin.Context) {
+	source, ok := auditctx.SourceFrom(c.Request.Context())
+	if !ok || source.RequestID == "" {
+		c.AbortWithStatus(http.StatusInternalServerError)
+		return
 	}
+	c.Set(requestIDContextKey, source.RequestID)
+	c.Next()
 }
 
 func newRequestID() (string, error) {

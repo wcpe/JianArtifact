@@ -2,7 +2,7 @@
 
 ## 状态
 
-已接受（第 4、6 项的运行时引用命名空间约束由 [ADR-0022](0022-restricted-runtime-reference-namespaces.md) 取代；online REST 迁移的直接 URL 与加密任务凭据由 [ADR-0025](0025-direct-online-migration-url.md) 部分取代）
+已接受（第 4、6 项的运行时引用命名空间约束由 [ADR-0022](0022-restricted-runtime-reference-namespaces.md) 取代；online REST 迁移的直接 URL 与加密任务凭据由 [ADR-0025](0025-direct-online-migration-url.md) 部分取代）。第 7 项的请求来源、结果采集与落库语义已被 [ADR-0031](0031-trusted-security-events.md) 部分取代；第 1、2、8 项对长期协议口令或原 Token 资格的承诺已被 [ADR-0032](0032-credential-epochs-and-strong-authentication.md) 部分取代。原生载体、协议 TLS、Web JWT 非协议凭据、`web_login_disabled` 管理限制及发布额/前缀/不可变/上游政策保留；新决策待分批实现，以下历史正文不变。
 
 ## 背景
 

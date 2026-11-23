@@ -8,6 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/jmoiron/sqlx"
 
+	"github.com/wcpe/jianartifact/apps/server/internal/auditctx"
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
@@ -132,13 +133,14 @@ func (h *Handlers) operationAudit(c *gin.Context, action, repoName, detail strin
 	return domain.AssetOperationAudit{
 		Actor: actor,
 		Commit: func(operationID string, items []repository.AssetMutationItem) repository.MutationCompletionHook {
+			ip := auditctx.ClientIP(c.Request.Context())
 			return func(tx *sqlx.Tx) error {
 				for _, item := range items {
 					if err := h.auditLogs.InsertTx(tx, repository.AuditLogEntry{
 						TS: time.Now().UTC().Format(time.RFC3339Nano), Actor: actor.Username, Action: action,
 						EntityType: "asset", EntityKey: repoName + "/" + item.Path, Repo: repoName,
 						Detail: "operationId=" + operationID + " " + detail, Result: "ok",
-						IP: c.ClientIP(), UserID: actor.UserID, AuthSource: actor.AuthSource, TokenID: tokenID,
+						IP: ip, UserID: actor.UserID, AuthSource: actor.AuthSource, TokenID: tokenID,
 						TokenName: tokenName, UserAgent: c.GetHeader("User-Agent"), RequestID: requestID(c), SourceNode: h.auditSourceNode,
 						CorrelationID: operationID,
 					}); err != nil {

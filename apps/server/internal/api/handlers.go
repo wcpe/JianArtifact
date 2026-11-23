@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -35,8 +36,11 @@ type Deps struct {
 	Assets                     *domain.AssetService // 制品批量删除
 	Migrations                 *domain.MigrationService
 	Settings                   *domain.SettingService
-	AuditLogs                  *repository.AuditLogRepo                // 审计日志
-	AuditObservability         *repository.AuditObservabilityRepo      // 统一审计读模型
+	AuditLogs                  *repository.AuditLogRepo           // 审计日志
+	AuditObservability         *repository.AuditObservabilityRepo // 统一审计读模型
+	SecurityAuditQuery         *SecurityAuditQuery                // 安全事件查询与采集健康
+	Admission                  *domain.AdmissionService
+	AdmissionPrincipal         func(*http.Request) (*auth.Principal, error)
 	OperationsObservability    *repository.OperationsObservabilityRepo // 当前节点业务与主机读模型
 	OperationsAlerts           *repository.OperationsAlertRepo         // v0.8.0：运维告警去重持久化
 	AssetDownloads             *repository.AssetDownloadRepo           // 制品下载计量明细（tree 计数列）
@@ -125,6 +129,9 @@ type Handlers struct {
 	settings                   *domain.SettingService
 	auditLogs                  *repository.AuditLogRepo // 审计日志
 	auditObservability         *repository.AuditObservabilityRepo
+	securityAuditQuery         *SecurityAuditQuery
+	admission                  *domain.AdmissionService
+	admissionPrincipal         func(*http.Request) (*auth.Principal, error)
 	operationsObservability    *repository.OperationsObservabilityRepo
 	operationsAlertStore       *repository.OperationsAlertRepo
 	assetDownloads             *repository.AssetDownloadRepo // 制品下载计量明细（tree 计数列）
@@ -181,6 +188,9 @@ func NewHandlers(d Deps) *Handlers {
 		settings:                   d.Settings,
 		auditLogs:                  d.AuditLogs,
 		auditObservability:         d.AuditObservability,
+		securityAuditQuery:         d.SecurityAuditQuery,
+		admission:                  d.Admission,
+		admissionPrincipal:         d.AdmissionPrincipal,
 		operationsObservability:    d.OperationsObservability,
 		operationsAlertStore:       d.OperationsAlerts,
 		assetDownloads:             d.AssetDownloads,
@@ -329,6 +339,11 @@ func requirePrincipal(c *gin.Context) (*auth.Principal, bool) {
 		auth.WriteError(c, http.StatusForbidden, "web_login_disabled", "该账号已禁止登录管理端")
 		return nil, false
 	}
+	// 受限机器凭据只承载协议动作，不能进入管理面；未限用途旧凭据保留过渡兼容。
+	if p.Kind == auth.KindToken && p.TokenPurpose != auth.TokenPurposeLegacy {
+		auth.WriteError(c, http.StatusForbidden, "credential_channel_denied", "机器凭据不允许访问管理接口")
+		return nil, false
+	}
 	return p, true
 }
 
@@ -405,6 +420,8 @@ func writeDomainErrWithOperationID(c *gin.Context, err error, operationID string
 		})
 	}
 	switch {
+	case errors.Is(err, domain.ErrSecurityAuditUnavailable):
+		write(http.StatusServiceUnavailable, "security_audit_unavailable", "安全审计暂不可用")
 	case errors.Is(err, domain.ErrInvalidCredentials):
 		write(http.StatusUnauthorized, "invalid_credentials", "用户名或口令错误")
 	case errors.Is(err, domain.ErrAlreadyInitialized):
@@ -429,6 +446,10 @@ func writeDomainErrWithOperationID(c *gin.Context, err error, operationID string
 		write(http.StatusBadRequest, "operation_limit", "单次实际制品数不得超过 500")
 	case errors.Is(err, domain.ErrNotFound):
 		write(http.StatusNotFound, "not_found", "资源不存在")
+	case errors.Is(err, domain.ErrCredentialScopeDenied):
+		write(http.StatusBadRequest, "invalid_credential_scope", domainErrMessage(err, "机器凭据用途或作用域不允许"))
+	case errors.Is(err, domain.ErrCredentialVersionConflict):
+		write(http.StatusConflict, "credential_version_conflict", domainErrMessage(err, "账号或口令状态已变更"))
 	case errors.Is(err, domain.ErrValidation):
 		write(http.StatusBadRequest, "validation_error", err.Error())
 	case errors.Is(err, domain.ErrUpstream):
@@ -657,9 +678,34 @@ func toAPIConnectionStatus(r *repository.Repository, h domain.RemoteHealth) *Con
 	}
 }
 
-// toAPIToken 把行模型转为契约 Token。
-func toAPIToken(t repository.Token) Token {
-	return Token{Id: t.ID, Name: t.Name, CreatedAt: t.CreatedAt}
+// toAPIToken 把持久 Token 投影为契约对象；names 为仓库 ID→名称，
+// 缺失时回退为 ID 字符串（回显不退化成无法与签发输入对齐的裸 ID）。
+func toAPIToken(t repository.Token, names map[int64]string) Token {
+	out := Token{Id: t.ID, Name: t.Name, CreatedAt: t.CreatedAt}
+	if t.Purpose != "" {
+		purpose := TokenPurpose(t.Purpose)
+		out.Purpose = &purpose
+	}
+	if scopes, err := auth.ParseMachineScopes(t.ScopesJSON); err == nil && len(scopes) > 0 {
+		list := make([]MachineTokenScope, 0, len(scopes))
+		for _, sc := range scopes {
+			repoName, ok := names[sc.RepositoryID]
+			if !ok {
+				repoName = strconv.FormatInt(sc.RepositoryID, 10)
+			}
+			item := MachineTokenScope{Repository: repoName, PathPrefix: &sc.PathPrefix}
+			for _, a := range sc.Actions {
+				item.Actions = append(item.Actions, MachineTokenScopeActions(a))
+			}
+			list = append(list, item)
+		}
+		out.Scopes = &list
+	}
+	if t.ExpiresAt != nil {
+		expiresAt := time.Unix(*t.ExpiresAt, 0).UTC().Format(time.RFC3339)
+		out.ExpiresAt = &expiresAt
+	}
+	return out
 }
 
 // toAPIAsset 把 asset 行模型转为契约 AssetSummary。

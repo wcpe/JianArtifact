@@ -13,6 +13,7 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/blobstore"
 	"github.com/wcpe/jianartifact/apps/server/internal/config"
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
+	"github.com/wcpe/jianartifact/apps/server/internal/httpserver"
 	"github.com/wcpe/jianartifact/apps/server/internal/metrics"
 	"github.com/wcpe/jianartifact/apps/server/internal/migration/credential"
 	"github.com/wcpe/jianartifact/apps/server/internal/migration/offindex"
@@ -28,6 +29,10 @@ type appServices struct {
 	db                  *persistence.DB
 	users               *repository.UserRepo
 	authSvc             *domain.AuthService
+	securityAudit       *domain.SecurityAuditService
+	securityAuditQuery  *api.SecurityAuditQuery
+	admission           *domain.AdmissionService
+	ingressGate         httpserver.IngressGate
 	userSvc             *domain.UserService
 	tokenSvc            *domain.TokenService
 	repoSvc             *domain.RepositoryService
@@ -128,6 +133,8 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	// 未注入时 domain 侧以 searchTimeoutDefault 常量兜底（两者必须同值）。
 	repoSvc.SetSearchTimeout(cfg.SearchTimeout)
 	assetSvc := domain.NewAssetService(repoRepo, assetRepo, blobs, upstreamClient)
+	assetSvc.SetCredentialRevalidator(userRepo)
+	assetSvc.SetRepositoryService(repoSvc)
 	// auto-block 退避起始时长来自 JIAN_AUTO_BLOCK_BASE_SECONDS（缺省/非法回落 40s）；
 	// 未注入时 domain 侧以 autoBlockInitial 常量兜底（两者必须同值）。
 	assetSvc.SetAutoBlockBase(cfg.AutoBlockBaseSeconds)
@@ -174,6 +181,7 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	}
 	userSvc := domain.NewUserService(userRepo)
 	tokenSvc := domain.NewTokenService(tokenRepo, userRepo)
+	tokenSvc.SetRepositoryService(repoSvc)
 	// 用户组管理（组的 CRUD 与成员维护）。ACL 仓储供删组时清理组主体条目。
 	userGroupSvc := domain.NewUserGroupService(userGroupRepo, aclRepo, userRepo)
 	userGroupSvc.SetBusinessWriteGate(freeze)
@@ -266,6 +274,13 @@ func openServices(cfg *config.Config) (*appServices, error) {
 		return nil, fmt.Errorf("回收中断的迁移任务：%w", err)
 	}
 	authSvc := domain.NewAuthService(userRepo, revokedRepo, jwtMgr)
+	securityAudit := domain.NewSecurityAuditService(db)
+	securityAuditQuery, err := api.NewSecurityAuditQuery(repository.NewSecurityEventRepo(db), securityAudit, cfg.JWTSecret, nodeIdentity.NodeID())
+	if err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("初始化安全审计查询：%w", err)
+	}
+	authSvc.SetSecurityAudit(securityAudit)
 	authSvc.SetBusinessWriteGate(freeze)
 	authSvc.SetChangeRecorder(domain.NoopChangeRecorder{})
 
@@ -308,22 +323,8 @@ func openServices(cfg *config.Config) (*appServices, error) {
 		}
 		return names, nil
 	})
-	// 隔离区候选判据：隔离目录的一级子目录名是**资产变更操作的 operationID**
-	// （见 asset_mutation.go 的 blobs.Stage(hash, id)），不是恢复操作的标识。
-	// 所以「是否被待生效操作引用」要问 blob_quarantine：该操作仍有 staged 记录时，
-	// 隔离副本是那次变更的唯一回滚依据，绝不能当垃圾收走。
-	//
-	// 不接这一条会让 collectQuarantine 的跳过条件恒假，隔离区被全量回收——
-	// 与规格要求的「宁可少收」正好相反。
-	mutationRepoForCleanup := repository.NewAssetMutationRepo(db)
-	cleanupSvc.SetPendingRestoreChecker(func(operationID string) bool {
-		pending, err := mutationRepoForCleanup.HasPendingQuarantine(operationID)
-		if err != nil {
-			// 查不到就当作「仍在引用」：清理是破坏性动作，无法确认时必须保守。
-			return true
-		}
-		return pending
-	})
+	// 管理清理与资产变更/恢复共用节点写门，在实际移动前重新核对目录的恢复职责。
+	cleanupSvc.SetAssetMutationCoordinator(assetSvc.MutationCoordinator())
 
 	// 上游健康历史：分钟桶采样 + 后台定时探测。
 	//
@@ -413,6 +414,9 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	// 指标登记与 /metrics 渲染器；协议请求计数由 HTTP 层钩子（run）累加。
 	metricsReg := metrics.New()
 	metricsExp := metrics.NewExposition(metricsReg, schedulerJobStatuses(schedulerSvc))
+	metricsExp.SetSecurityAuditState(func() metrics.SecurityAuditCollectionState {
+		return metrics.SecurityAuditCollectionState(api.SecurityAuditCollectionProbe(securityAudit.Health()))
+	})
 	// 上游断路器指标。阻止事件计数按闭集 reason 分区（probe_failed / upstream_error，
 	// 由 domain 定义、装配层注入）；阻止态仓库数在每次抓取时实时取数（只读内存态，
 	// 不查库、不访问网络，符合 /metrics 的抓取路径约定）。
@@ -457,6 +461,9 @@ func openServices(cfg *config.Config) (*appServices, error) {
 		db:                  db,
 		users:               userRepo,
 		authSvc:             authSvc,
+		securityAudit:       securityAudit,
+		securityAuditQuery:  securityAuditQuery,
+		admission:           domain.NewAdmissionService(db, blobs, userRepo, repoRepo, freeze),
 		userSvc:             userSvc,
 		tokenSvc:            tokenSvc,
 		repoSvc:             repoSvc,
@@ -605,6 +612,9 @@ func (s *appServices) handlers(version string, checks []func() error) *api.Handl
 		Settings:                s.settingSvc,
 		AuditLogs:               s.auditLogs,
 		AuditObservability:      s.auditObservability,
+		SecurityAuditQuery:      s.securityAuditQuery,
+		Admission:               s.admission,
+		AdmissionPrincipal:      auth.NewAuthenticator(s.jwt, s.store).AdmissionPrincipal,
 		OperationsObservability: s.operationsMetrics,
 		OperationsAlerts:        s.operationsAlertRepo,
 		AssetDownloads:          s.assetDownloadRepo,

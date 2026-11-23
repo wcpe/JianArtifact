@@ -13,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/archive"
+	"github.com/wcpe/jianartifact/apps/server/internal/auditctx"
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
@@ -248,11 +249,7 @@ func (h *Handlers) authorizeBackupDownload(c *gin.Context, id BackupIdParam, par
 func (h *Handlers) backupDownloadURL(c *gin.Context, packageID string, exp time.Time) string {
 	base := strings.TrimRight(h.publicURL, "/")
 	if base == "" {
-		scheme := "http"
-		if c.Request.TLS != nil || strings.EqualFold(c.GetHeader("X-Forwarded-Proto"), "https") {
-			scheme = "https"
-		}
-		base = scheme + "://" + c.Request.Host
+		base = auditctx.RequestOrigin(c.Request)
 	}
 	return fmt.Sprintf("%s/api/v1/backups/%s/download?exp=%d&token=%s",
 		base, url.PathEscape(packageID), exp.Unix(), h.backupLinks.Sign(packageID, exp))

@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/wcpe/jianartifact/apps/server/internal/auditctx"
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
@@ -612,14 +613,7 @@ func (h *Handlers) apiBaseURL(c *gin.Context) string {
 	if h.publicURL != "" {
 		return h.publicURL
 	}
-	scheme := "http"
-	if c.Request.TLS != nil {
-		scheme = "https"
-	}
-	if proto := c.GetHeader("X-Forwarded-Proto"); proto != "" {
-		scheme = proto
-	}
-	return scheme + "://" + c.Request.Host
+	return auditctx.RequestOrigin(c.Request)
 }
 
 // CleanupEmptyMavenArtifacts 清理 Maven 仓库中无 jar 的 GAV 目录。

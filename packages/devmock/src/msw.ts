@@ -4,6 +4,7 @@
 import { http, HttpResponse } from "msw";
 
 import { mockAuditLogList, mockMetrics, mockUser } from "./handlers";
+import { securityAuditHandlers } from "./securityAudit";
 import {
   observabilityStore,
   type AuditCategory,
@@ -1077,9 +1078,9 @@ function mockFormatDurationHuman(seconds: number): string {
 }
 
 export const handlers = [
-  // 开发态通用场景必须先于业务 handler 处理；undefined 时继续走既有路由。
-  // 同一个前置守卫顺带承担"网速"模拟：按控制台档位在放行前等待一段延迟，
-  // 这样任何端点都受网速档位影响，无需逐 handler 改造。
+  ...securityAuditHandlers,
+  // 安全管理路由先鉴权，其余业务路由由通用场景守卫处理。
+  // 同一个前置守卫承担网速模拟，未命中场景时继续走既有路由。
   http.all("*", async ({ request }) => {
     const scenarioResponse = await interceptDevMockScenario(request);
     if (scenarioResponse) return scenarioResponse;
@@ -1091,7 +1092,13 @@ export const handlers = [
   }),
 
   // —— 健康 / 状态（公开）——
-  http.get("*/healthz", () => HttpResponse.json({ status: "ok", version: store.status().version })),
+  http.get("*/healthz", () =>
+    HttpResponse.json({
+      status: "ok",
+      version: store.status().version,
+      auditCollection: "unknown",
+    }),
+  ),
   http.get("*/readyz", () => HttpResponse.json({ status: "ok", version: store.status().version })),
   // `/auth/me` 供 OIDC 回调后的前端取身份快照（开发环境返回 mock 用户）。
   http.get("*/api/v1/auth/me", () => HttpResponse.json(mockUser())),

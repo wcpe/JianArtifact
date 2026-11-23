@@ -213,6 +213,16 @@ describe("devmock ↔ OpenAPI 契约一致性", () => {
     expect(validateResponse({ results: [{ repository: "a" }] })).toBe(false);
   });
 
+  it("旧审计预览字段在契约中只作可选的弃用字段保留", () => {
+    const context = schemaFor("AuditHttpContext") as {
+      required?: string[];
+      properties: Record<string, { deprecated?: boolean }>;
+    };
+    for (const field of ["tokenPreview", "bodyPreview"]) {
+      expect(context.required).not.toContain(field);
+      expect(context.properties[field]?.deprecated).toBe(true);
+    }
+  });
   it("统一制品操作的全部失败响应都要求 operationId 并声明 500", () => {
     const operationError = schemaFor("AssetOperationError");
     expect(operationError.required).toContain("operationId");
@@ -482,6 +492,462 @@ describe("devmock ↔ OpenAPI 契约一致性", () => {
     expect(verifications?.operationId).toBe("listBackupVerifications");
     expect(verifications?.responses?.["200"]).toBeTruthy();
     expect(verifications?.responses?.["404"]).toBeTruthy();
+  });
+
+  it("安全审计登记四条交互管理员查询及独立失败状态", () => {
+    const root = "/api/v1/observability/audit";
+    type Response = {
+      $ref?: string;
+      description?: string;
+      content?: { "application/json": { schema: { $ref: string } } };
+    };
+    const doc = loadOpenApi() as unknown as {
+      paths: Record<
+        string,
+        {
+          get?: {
+            operationId: string;
+            description: string;
+            security: unknown;
+            responses: Record<string, Response>;
+          };
+        }
+      >;
+      components: { responses: Record<string, Response> };
+    };
+    const errors: Record<string, readonly [string, string?]> = {
+      "400": ["InvalidSecurityAuditFilter", "invalid_security_filter"],
+      "401": ["Unauthorized"],
+      "403": ["Forbidden"],
+      "404": ["SecurityAuditEventNotFound", "security_event_not_found"],
+      "410": ["SecurityAuditCursorExpired", "security_cursor_expired"],
+      "503": ["SecurityAuditUnavailable", "security_audit_unavailable"],
+    };
+    const routes = [
+      ["/security-events", "listSecurityAuditEvents", "SecurityAuditEventPage", [400, 410]],
+      ["/security-events/{eventId}", "getSecurityAuditEvent", "SecurityAuditEvent", [400, 404]],
+      [
+        "/security-events/{eventId}/objects",
+        "listSecurityAuditEventObjects",
+        "SecurityAuditEventObjectPage",
+        [400, 404, 410],
+      ],
+      [
+        "/collection-health",
+        "getSecurityAuditCollectionHealth",
+        "SecurityAuditCollectionHealth",
+        [400],
+      ],
+    ] as const;
+    for (const [path, operationId, schema, extraStatuses] of routes) {
+      const operation = doc.paths[root + path]?.get;
+      expect(operation?.operationId).toBe(operationId);
+      expect(operation?.description).toContain("全局管理员交互会话");
+      expect(operation?.security).toEqual([{ bearerAuth: [] }]);
+      const responses = operation!.responses;
+      expect(Object.keys(responses).sort()).toEqual(
+        [200, 401, 403, 503, ...extraStatuses].sort().map(String),
+      );
+      expect(responses["200"]?.content?.["application/json"].schema.$ref).toBe(
+        `#/components/schemas/${schema}`,
+      );
+      for (const [status, response] of Object.entries(responses)) {
+        if (status === "200") continue;
+        const [name, code] = errors[status]!;
+        expect(response.$ref).toBe(`#/components/responses/${name}`);
+        const error = doc.components.responses[name];
+        expect(error?.content?.["application/json"].schema.$ref).toBe("#/components/schemas/Error");
+        if (code) expect(error?.description).toContain(`\`${code}\``);
+      }
+    }
+    expect(doc.paths[`${root}/events`]?.get?.operationId).toBe("listAuditObservabilityEvents");
+    expect(doc.paths[`${root}/events/{eventId}`]?.get?.operationId).toBe(
+      "getAuditObservabilityEvent",
+    );
+  });
+
+  it("安全审计仅登记仓储支持的过滤条件与独立对象分页参数", () => {
+    type Param = { name: string; in: string; required?: boolean; schema: Record<string, unknown> };
+    const doc = loadOpenApi() as unknown as {
+      paths: Record<
+        string,
+        { get: { parameters: (Param | { $ref: string })[]; description: string } }
+      >;
+      components: { parameters: Record<string, Param> };
+    };
+    const path = "/api/v1/observability/audit/security-events";
+    const parametersFor = (route: string) =>
+      Object.fromEntries(
+        doc.paths[route]!.get.parameters.map((param) => {
+          const resolved =
+            "$ref" in param ? doc.components.parameters[param.$ref.split("/").pop()!]! : param;
+          return [resolved.name, resolved];
+        }),
+      );
+    const list = parametersFor(path);
+    expect(Object.keys(list).sort()).toEqual(
+      [
+        "from",
+        "to",
+        "limit",
+        "cursor",
+        "ip",
+        "cidr",
+        "eventType",
+        "outcome",
+        "actorUserId",
+        "repositoryId",
+        "credentialId",
+        "sessionId",
+        "requestId",
+        "originRequestId",
+        "operationId",
+        "taskId",
+        "actionId",
+        "canonicalPath",
+        "objectId",
+        "digest",
+      ].sort(),
+    );
+    for (const name of ["from", "to"]) {
+      const param = list[name]!;
+      expect(param).toMatchObject({
+        in: "query",
+        required: true,
+        schema: { type: "string", format: "date-time" },
+      });
+      const validate = ajv.compile(param.schema);
+      for (const value of [
+        "2026-01-01T00:00:00.1234Z",
+        "2026-01-01T00:00:00.0000000001Z",
+        "2026-01-01T05:30:00.123000000001+05:30",
+        "2026-01-01T00:00:00.1200+24:00",
+        "2026-01-01T00:00:00.1200-03:60",
+        "2026-01-01T00:00:00.123",
+      ]) {
+        expect(validate(value), `${name} 不接受 ${value}`).toBe(false);
+      }
+      for (const value of [
+        "2026-01-01T00:00:00Z",
+        "2026-01-01T00:00:00.1Z",
+        "2026-01-01T00:00:00.12Z",
+        "2026-01-01T00:00:00.123Z",
+        "2026-01-01T00:00:00.1230Z",
+        "2026-01-01T05:30:00.123000000000+05:30",
+        "2025-12-31T20:30:00.123000000000-03:30",
+        "2026-01-01T00:00:00.000000000000Z",
+      ]) {
+        expect(validate(value), `${name} 接受 ${value}`).toBe(true);
+      }
+    }
+    const detail = parametersFor(`${path}/{eventId}`);
+    expect(Object.keys(detail)).toEqual(["eventId"]);
+    const objects = parametersFor(`${path}/{eventId}/objects`);
+    expect(Object.keys(objects).sort()).toEqual(["cursor", "eventId", "limit"]);
+    expect(objects.eventId).toMatchObject({ in: "path", required: true, schema: { minLength: 1 } });
+    for (const params of [list, objects]) {
+      expect(params.limit?.schema).toMatchObject({
+        type: "integer",
+        minimum: 1,
+        default: 50,
+        maximum: 100,
+      });
+      expect(params.cursor?.required).not.toBe(true);
+      expect(params.cursor?.schema).toMatchObject({ type: "string", minLength: 1 });
+    }
+    expect(doc.paths[path]!.get.description).toContain("UTC 半开区间");
+    expect(doc.paths[path]!.get.description).toContain("30 天");
+    expect(doc.paths[path]!.get.description).toContain("互斥");
+    expect(doc.paths[path]!.get.description).toContain("重复");
+  });
+
+  it("安全审计事件和对象只接受脱敏字段，不借用业务回执时间", () => {
+    const at = "2026-01-01T00:00:00.000Z";
+    const event = {
+      eventId: "event-a",
+      eventVersion: 1,
+      eventType: "auth.attempt",
+      occurredAt: at,
+      ingestedAt: at,
+      actorKind: "unknown",
+      outcome: "denied",
+      committed: "not_applicable",
+      proxyTrust: "unknown",
+      errorCode: "authentication_failed",
+    };
+    expectValid("SecurityAuditEvent", event);
+    const validateEvent = ajv.compile(schemaFor("SecurityAuditEvent"));
+    for (const field of [
+      "committedAt",
+      "recordedAt",
+      "body",
+      "details",
+      "tokenPreview",
+      "jti",
+      "error",
+      "rawError",
+      "accountEpoch",
+      "securityEpoch",
+      "retentionGeneration",
+      "sourceTrustVersion",
+    ]) {
+      expect(validateEvent({ ...event, [field]: "不是公开字段" }), field).toBe(false);
+    }
+    expect(validateEvent({ ...event, outcome: "ok" })).toBe(false);
+    const object = {
+      ordinal: 1,
+      objectKind: "asset",
+      repositoryId: 1,
+      canonicalPath: "example/file",
+      sizeBytes: 0,
+    };
+    expectValid("SecurityAuditEventObject", object);
+    const validateObject = ajv.compile(schemaFor("SecurityAuditEventObject"));
+    expect(validateObject({ ...object, ordinal: 0 })).toBe(false);
+    expect(validateObject({ ...object, sizeBytes: -1 })).toBe(false);
+    expect(validateObject({ ...object, body: "不是对象字段" })).toBe(false);
+  });
+
+  it("候选与资格收窄契约仅公开批准的元数据、词表和错误", () => {
+    const doc = loadOpenApi() as unknown as {
+      paths: Record<
+        string,
+        Record<string, { operationId: string; responses: Record<string, unknown> }>
+      >;
+    };
+    const update = doc.paths["/api/v1/users/{id}"]?.patch;
+    expect(update?.operationId).toBe("updateUser");
+    expect(update?.responses["409"]).toEqual({
+      $ref: "#/components/responses/CredentialVersionConflict",
+    });
+    expect(update?.responses["503"]).toEqual({
+      $ref: "#/components/responses/SecurityAuditUnavailable",
+    });
+    const path = doc.paths["/api/v1/security/admission/candidates/{operationId}"];
+    expect(Object.keys(path ?? {})).toEqual(["get"]);
+    expect(path?.get?.operationId).toBe("getPrivateAdmissionCandidate");
+    expect(Object.keys(path!.get!.responses).sort()).toEqual(["200", "401", "403", "404", "503"]);
+    const validate = ajv.compile(schemaFor("PrivateAdmissionCandidateStatus"));
+    const body = {
+      operationId: "f4f6df7b-a5d9-4f8a-9e90-8e92237cb582",
+      repositoryId: 1,
+      targetVersion: 2,
+      state: "staged",
+      coverage: "unknown",
+      expiresAt: "2026-01-02T00:00:00Z",
+      manifestVersion: 1,
+      manifestDigest: `sha256:${"a".repeat(64)}`,
+    };
+    expect(validate(body)).toBe(true);
+    expect(validate({ ...body, state: "published" })).toBe(false);
+    expect(validate({ ...body, coverage: "complete" })).toBe(false);
+    expect(validate({ ...body, operationId: "f4f6df7b-a5d9-7f8a-9e90-8e92237cb582" })).toBe(false);
+    for (const key of [
+      "source",
+      "canonicalPath",
+      "downloadUrl",
+      "accountEpoch",
+      "privateObjectKey",
+    ]) {
+      expect(validate({ ...body, [key]: "不公开" }), key).toBe(false);
+    }
+    const validateType = ajv.compile(schemaFor("SecurityAuditEventType"));
+    expect(validateType("auth.account_access_changed")).toBe(true);
+    expect(validateType("admission.candidate_staged")).toBe(true);
+  });
+
+  it("私有候选对账契约区分元数据查询与服务端状态更新", () => {
+    const doc = loadOpenApi() as unknown as {
+      paths: Record<string, { get?: { description: string; requestBody?: unknown } }>;
+    };
+    const get = doc.paths["/api/v1/security/admission/candidates/{operationId}"]?.get;
+    expect(get?.description).toContain("可触发服务端幂等完整性或到期对账并持久更新状态");
+    expect(get?.description).toContain("不接受客户端写入，不提供下载");
+    expect(get?.description).toContain("不发放发布权或删除文件");
+    expect(get?.description).not.toContain("只读");
+    expect(get?.requestBody).toBeUndefined();
+  });
+
+  it.each([
+    ["/api/v1/users/{id}/publish-policies", "putPublishPolicies"],
+    ["/api/v1/users/{id}/publish-policies/{repo}", "putPublishPolicy"],
+  ])("发布策略资格失败契约保留 %s 的通用冲突并声明嵌套错误", (path, operationId) => {
+    type Response = {
+      $ref?: string;
+      description?: string;
+      content?: { "application/json": { schema: { $ref: string } } };
+    };
+    const doc = loadOpenApi() as unknown as {
+      paths: Record<string, { put?: { operationId: string; responses: Record<string, Response> } }>;
+      components: { responses: Record<string, Response> };
+    };
+    const put = doc.paths[path]?.put;
+    expect(put?.operationId).toBe(operationId);
+    expect(Object.keys(put!.responses).sort()).toEqual([
+      "200",
+      "400",
+      "401",
+      "403",
+      "404",
+      "409",
+      "503",
+    ]);
+    for (const [status, component, code] of [
+      ["409", "PublishPolicyWriteConflict", "credential_version_conflict"],
+      ["503", "SecurityAuditUnavailable", "security_audit_unavailable"],
+    ] as const) {
+      expect(put!.responses[status]?.$ref).toBe(`#/components/responses/${component}`);
+      const error = doc.components.responses[component];
+      expect(error?.description).toContain(`\`${code}\``);
+      expect(error?.content?.["application/json"].schema.$ref).toBe("#/components/schemas/Error");
+    }
+    expect(doc.components.responses.PublishPolicyWriteConflict?.description).toContain(
+      "发布策略冲突",
+    );
+  });
+
+  it("改密提交事实与用户目标只公开稳定标识", () => {
+    const validateType = ajv.compile(schemaFor("SecurityAuditEventType"));
+    expect(validateType("auth.password_changed")).toBe(true);
+    expect(validateType("auth.password_reset")).toBe(false);
+    const at = "2026-01-01T00:00:00.000Z";
+    const event = {
+      eventId: "event-a",
+      eventVersion: 1,
+      eventType: "auth.password_changed",
+      occurredAt: at,
+      ingestedAt: at,
+      actorKind: "user",
+      actorUserId: 1,
+      proxyTrust: "unknown",
+      operationId: "operation-a",
+      outcome: "succeeded",
+      committed: "committed",
+    };
+    expectValid("SecurityAuditEvent", event);
+    const validateEvent = ajv.compile(schemaFor("SecurityAuditEvent"));
+    const validateObject = ajv.compile(schemaFor("SecurityAuditEventObject"));
+    const target = { ordinal: 1, objectKind: "user", objectId: "2" };
+    expect(validateObject(target)).toBe(true);
+    expect(validateObject({ ...target, objectId: undefined })).toBe(false);
+    for (const objectId of [2, "0", "-1", "02", "display-name"]) {
+      expect(validateObject({ ...target, objectId }), String(objectId)).toBe(false);
+    }
+    expect(validateObject({ ...target, digest: "不属于账号目标" })).toBe(false);
+    for (const field of ["password", "passwordHash", "accountEpoch", "securityEpoch"]) {
+      expect(validateEvent({ ...event, [field]: "仅用于断言" }), field).toBe(false);
+      expect(validateObject({ ...target, [field]: "仅用于断言" }), field).toBe(false);
+    }
+  });
+
+  it("改密沿用旧请求和无响应体的 204，新增失败沿用嵌套错误", () => {
+    type Response = {
+      $ref?: string;
+      description?: string;
+      content?: { "application/json": { schema: { $ref: string } } };
+    };
+    const doc = loadOpenApi() as unknown as {
+      paths: Record<
+        string,
+        {
+          post?: {
+            operationId: string;
+            requestBody: Response;
+            responses: Record<string, Response>;
+          };
+        }
+      >;
+      components: { responses: Record<string, Response> };
+    };
+    const operation = doc.paths["/api/v1/users/{id}/password"]?.post;
+    expect(operation?.operationId).toBe("changePassword");
+    expect(operation?.requestBody.content?.["application/json"].schema.$ref).toBe(
+      "#/components/schemas/PasswordChangeRequest",
+    );
+    const responses = operation!.responses;
+    expect(Object.keys(responses).sort()).toEqual([
+      "204",
+      "400",
+      "401",
+      "403",
+      "404",
+      "409",
+      "503",
+    ]);
+    expect(responses["204"]?.content).toBeUndefined();
+    expect(responses["204"]?.description).toContain(
+      "同值经事务确认仍返回 204，不推进代次，不追加新的改密成功事件",
+    );
+    for (const [status, key, code] of [
+      ["409", "CredentialVersionConflict", "credential_version_conflict"],
+      ["503", "SecurityAuditUnavailable", "security_audit_unavailable"],
+    ] as const) {
+      expect(responses[status]?.$ref).toBe(`#/components/responses/${key}`);
+      const error = doc.components.responses[key];
+      expect(error?.description).toContain(`\`${code}\``);
+      expect(error?.content?.["application/json"].schema.$ref).toBe("#/components/schemas/Error");
+      expectValid("Error", { error: { code, message: "改密未确认为成功" } });
+    }
+  });
+
+  it("安全审计页区分投影与覆盖且不返回总计数或内部锚点", () => {
+    const page = {
+      items: [],
+      hasMore: false,
+      snapshotWatermark: 0,
+      projectionWatermark: 0,
+      projectionHealth: "healthy",
+      coverage: "unknown",
+    };
+    expectValid("SecurityAuditEventPage", page);
+    const validateList = ajv.compile(schemaFor("SecurityAuditEventPage"));
+    for (const field of Object.keys(page)) {
+      const partial: Record<string, unknown> = { ...page };
+      delete partial[field];
+      expect(validateList(partial), field).toBe(false);
+    }
+    expect(validateList({ ...page, count: 0 })).toBe(false);
+    expect(validateList({ ...page, projectionHealth: "gapped" })).toBe(false);
+    expect(validateList({ ...page, coverage: "healthy" })).toBe(false);
+    expectValid("SecurityAuditEventObjectPage", { items: [], hasMore: false });
+    const validateObjects = ajv.compile(schemaFor("SecurityAuditEventObjectPage"));
+    expect(validateObjects({ items: [], hasMore: true, nextCursor: "" })).toBe(false);
+    expect(validateObjects({ items: [], hasMore: false, eventSequence: 1 })).toBe(false);
+  });
+
+  it("安全审计健康只公开有界状态和已知事实，通用错误保留嵌套外形", () => {
+    const validatePublicHealth = ajv.compile(schemaFor("HealthStatus"));
+    for (const status of ["healthy", "degraded", "unknown", "unavailable"]) {
+      expect(validatePublicHealth({ ...mockHealthz(), auditCollection: status })).toBe(true);
+    }
+    expect(
+      validatePublicHealth({ ...mockHealthz(), auditCollection: { clientIp: "192.0.2.2" } }),
+    ).toBe(false);
+    expect(schemaFor("Error").properties).toHaveProperty(
+      "requestId",
+      expect.objectContaining({ type: "string" }),
+    );
+    const error = { error: { code: "invalid_security_filter", message: "查询条件无效" } };
+    expectValid("Error", error);
+    expectValid("Error", { ...error, requestId: "server-request-a" });
+    expect(ajv.compile(schemaFor("Error"))({ errorCode: "invalid_security_filter" })).toBe(false);
+
+    const health = { state: "starting", coverage: "unknown" };
+    expectValid("SecurityAuditCollectionHealth", health);
+    const gap = {
+      windowStart: "2026-01-01T00:00:00.000Z",
+      windowEnd: "2026-01-01T00:01:00.000Z",
+      gapReason: "unclean_restart",
+      coverage: "unknown",
+    };
+    expectValid("SecurityAuditCollectionHealth", { ...health, lastGap: gap });
+    const validate = ajv.compile(schemaFor("SecurityAuditCollectionHealth"));
+    expect(validate({ ...health, failure: "原始错误不可公开" })).toBe(false);
+    expect(validate({ ...health, observedCount: -1 })).toBe(false);
+    for (const field of ["clientIp", "actorUserId", "canonicalPath", "workerId"]) {
+      expect(validate({ ...health, [field]: "不是健康字段" }), field).toBe(false);
+    }
+    expect(validate({ ...health, lastGap: { ...gap, source: "不是缺口字段" } })).toBe(false);
   });
 
   it("契约漂移可被检出：缺 required 字段或非法枚举的响应校验失败", () => {

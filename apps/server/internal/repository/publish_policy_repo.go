@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/wcpe/jianartifact/apps/server/internal/persistence"
 )
 
@@ -165,6 +166,34 @@ func (r *PublishPolicyRepo) SettleBytes(id int64, success bool, bytes int64) err
 			return err
 		}
 	}
+	if err := incrementPublishUsage(tx, row.UserID, row.RepoID, row.Assets, row.Bytes); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE quota_reservation SET settled_at = datetime('now') WHERE id = ?`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// SettlePublishedAssetTx 只在调用方的完成事务中结算尚未使用、且属于已验证主体和仓库的预留。
+func (r *PublishPolicyRepo) SettlePublishedAssetTx(tx *sqlx.Tx, id, userID, repoID, size int64) error {
+	if id == 0 {
+		return nil
+	}
+	if id < 0 || userID <= 0 || repoID <= 0 || size < 0 {
+		return errors.New("发布额度结算参数无效")
+	}
+	// 只接受已预留一件的行；0 字节预留也用于只有件数上限的流式上传。
+	res, err := tx.Exec(`UPDATE quota_reservation SET assets=1, bytes=?, settled_at=datetime('now')
+		WHERE id=? AND user_id=? AND repository_id=? AND settled_at IS NULL AND assets=1 AND (bytes=0 OR bytes>=?)`,
+		size, id, userID, repoID, size)
+	if err := affected(res, err); err != nil {
+		return err
+	}
+	return incrementPublishUsage(tx, userID, repoID, 1, size)
+}
+
+func incrementPublishUsage(tx *sqlx.Tx, userID, repoID, assets, bytes int64) error {
 	for _, kind := range []string{"hour", "day"} {
 		start := "strftime('%Y-%m-%dT%H:00:00Z', 'now')"
 		if kind == "day" {
@@ -174,14 +203,11 @@ func (r *PublishPolicyRepo) SettleBytes(id int64, success bool, bytes int64) err
 			VALUES (?, ?, ?, `+start+`, ?, ?)
 			ON CONFLICT(user_id, repository_id, window_kind, window_start) DO UPDATE SET
 			used_assets = used_assets + excluded.used_assets, used_bytes = used_bytes + excluded.used_bytes`,
-			row.UserID, row.RepoID, kind, row.Assets, row.Bytes); err != nil {
+			userID, repoID, kind, assets, bytes); err != nil {
 			return err
 		}
 	}
-	if _, err := tx.Exec(`UPDATE quota_reservation SET settled_at = datetime('now') WHERE id = ?`, id); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return nil
 }
 
 // ReleaseExpired 在进程启动时释放上次进程遗留的全部未结算预留，返回释放数量。

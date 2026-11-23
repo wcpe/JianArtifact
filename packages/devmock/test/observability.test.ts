@@ -92,19 +92,25 @@ describe("统一审计观测 Mock", () => {
       expect(response.status).toBe(headers === user ? 403 : 401);
     }
 
-    const response = await fetch("http://localhost/api/v1/observability/audit/events?limit=1", {
+    const response = await fetch("http://localhost/api/v1/observability/audit/events?limit=100", {
       headers: admin,
     });
+    expect(response.status).toBe(200);
     const serialized = JSON.stringify(await response.json());
-    // 仍然禁止：内部地址、明文凭据、原始诊断字段。
-    for (const forbidden of ["peerUrl", '"password": "admin"', "secret", "127.0.0.1"]) {
+    // 管理员也不接收令牌或正文预览；即使已经掩码也不返回字段。
+    for (const forbidden of [
+      "peerUrl",
+      '"password": "admin"',
+      "secret",
+      "127.0.0.1",
+      "tokenPreview",
+      "bodyPreview",
+    ]) {
       expect(serialized).not.toContain(forbidden);
     }
-    // 排障字段（按管理员审计视图策略返回）应当存在，且凭据必须已掩码。
-    for (const required of ["requestId", "userAgent", "clientIp", "bodyPreview"]) {
+    for (const required of ["requestId", "userAgent", "clientIp", "httpHeaders"]) {
       expect(serialized).toContain(required);
     }
-    expect(serialized).toContain("****");
   });
 
   it("__mock=empty 为审计读接口返回完整且可继续分页的空读模型", async () => {

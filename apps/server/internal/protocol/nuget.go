@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/wcpe/jianartifact/apps/server/internal/auditctx"
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
 	"github.com/wcpe/jianartifact/apps/server/internal/nugetpackage"
@@ -310,9 +311,5 @@ func (h *NuGetHandler) baseURL(c *gin.Context) string {
 	if h.publicURL != "" {
 		return h.publicURL
 	}
-	scheme := "http"
-	if c.Request.TLS != nil || strings.EqualFold(c.GetHeader("X-Forwarded-Proto"), "https") {
-		scheme = "https"
-	}
-	return scheme + "://" + c.Request.Host
+	return auditctx.RequestOrigin(c.Request)
 }

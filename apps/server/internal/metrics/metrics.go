@@ -314,6 +314,7 @@ type Exposition struct {
 	blockedRepositories func() int
 	// negativeCacheEntries 是当前负缓存有效条目数；nil 表示未接线，该族整族不输出。
 	negativeCacheEntries func() int
+	securityAuditState   func() SecurityAuditCollectionState
 }
 
 // NewExposition 构造渲染器；jobs 与 blockedRepositories 均可为 nil。
@@ -331,6 +332,32 @@ func (e *Exposition) SetBlockedRepositories(f func() int) { e.blockedRepositorie
 // 回调在每次抓取时调用，只读内存态（内部会顺带清理过期条目），
 // 不查库、不访问网络。
 func (e *Exposition) SetNegativeCacheEntries(f func() int) { e.negativeCacheEntries = f }
+
+// SecurityAuditCollectionState 是唯一可公开的采集状态标签。
+type SecurityAuditCollectionState string
+
+// SetSecurityAuditState 注入只读内存的采集状态回调；未接线不输出该指标。
+func (e *Exposition) SetSecurityAuditState(f func() SecurityAuditCollectionState) {
+	e.securityAuditState = f
+}
+
+func (e *Exposition) securityAuditCollectionFamily() family {
+	f := family{name: metricPrefix + "security_audit_collection_state", kind: "gauge", help: "安全审计采集状态，当前状态为一，其余为零"}
+	if e.securityAuditState == nil {
+		return f
+	}
+	f.available = true
+	state := e.securityAuditState()
+	switch state {
+	case "healthy", "degraded", "unavailable":
+	default:
+		state = "unknown"
+	}
+	for _, label := range []SecurityAuditCollectionState{"healthy", "degraded", "unknown", "unavailable"} {
+		f.samples = append(f.samples, sample{labels: []labelPair{{name: "state", value: string(label)}}, value: boolValue(label == state)})
+	}
+	return f
+}
 
 // WritePrometheus 按文本暴露格式写出当前指标快照。
 func (e *Exposition) WritePrometheus(w io.Writer) {
@@ -367,6 +394,7 @@ func (e *Exposition) render() string {
 		e.blockedRepositoriesFamily(),
 		e.resolveFailureFamily(),
 		e.negativeCacheEntriesFamily(),
+		e.securityAuditCollectionFamily(),
 		e.schedulerFamily("runs_total", "counter", "定时任务作业累计执行次数", func(st JobStatus) *sample {
 			return &sample{labels: jobLabels(st.Name), value: strconv.FormatInt(st.Runs, 10)}
 		}),

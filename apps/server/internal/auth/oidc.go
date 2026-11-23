@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -30,10 +32,11 @@ const OIDCFlowLifetime = 10 * time.Minute
 // OIDCFlow 是授权码流程中必须跨重定向保存的短时数据。
 // 它只含随机数与 PKCE 校验串，不含任何令牌；以签名 Cookie 形式保存在浏览器，不落库。
 type OIDCFlow struct {
-	State        string `json:"state"`
-	Nonce        string `json:"nonce"`
-	CodeVerifier string `json:"code_verifier"`
-	ExpiresAt    int64  `json:"expires_at"` // Unix 秒
+	State              string `json:"state"`
+	Nonce              string `json:"nonce"`
+	CodeVerifier       string `json:"code_verifier"`
+	ExpiresAt          int64  `json:"expires_at"` // Unix 秒
+	CredentialRevision *int64 `json:"credential_revision,omitempty"`
 }
 
 // OIDCFlowSigner 用启动密钥派生的 HMAC 对流程数据做完整性签名（无服务端状态）。
@@ -119,7 +122,10 @@ func (v *OIDCVerifier) endpoints(ctx context.Context) (*oauth2.Config, *oidc.IDT
 	}
 	provider, err := oidc.NewProvider(ctx, v.cfg.Issuer)
 	if err != nil {
-		return nil, nil, fmt.Errorf("发现 OIDC 提供方：%w", err)
+		if ctx.Err() == context.Canceled {
+			return nil, nil, errExternalAuthIndeterminate
+		}
+		return nil, nil, ErrExternalAuthUnavailable
 	}
 	v.oauth = &oauth2.Config{
 		ClientID:     v.cfg.ClientID,
@@ -164,27 +170,66 @@ func (v *OIDCVerifier) Exchange(ctx context.Context, code string, flow OIDCFlow)
 	}
 	token, err := oauthCfg.Exchange(ctx, code, oauth2.VerifierOption(flow.CodeVerifier))
 	if err != nil {
-		return ExternalUser{}, fmt.Errorf("兑换授权码：%w", err)
+		return ExternalUser{}, classifyOIDCTokenExchange(err, oauthCfg.Endpoint.TokenURL)
 	}
 	rawIDToken, ok := token.Extra("id_token").(string)
 	if !ok || rawIDToken == "" {
-		return ExternalUser{}, errors.New("令牌响应缺少 id_token")
+		return ExternalUser{}, ErrExternalAuthUnavailable
 	}
 	idToken, err := verifier.Verify(ctx, rawIDToken)
 	if err != nil {
-		return ExternalUser{}, fmt.Errorf("校验 ID Token：%w", err)
+		var expired *oidc.TokenExpiredError
+		if errors.As(err, &expired) {
+			return ExternalUser{}, ErrExternalIdentityRejected
+		}
+		// 库把远程公钥读取与验签失败压成同一种不透明错误，不能从文本猜测来源。
+		return ExternalUser{}, errExternalAuthIndeterminate
 	}
 	if idToken.Nonce != flow.Nonce {
-		return ExternalUser{}, errors.New("ID Token 的 nonce 与流程状态不符")
+		return ExternalUser{}, ErrExternalIdentityRejected
 	}
 	return v.claimsFrom(idToken)
+}
+
+func classifyOIDCTokenExchange(err error, tokenURL string) error {
+	if errors.Is(err, context.Canceled) {
+		return errExternalAuthIndeterminate
+	}
+	var transport *url.Error
+	if errors.Is(err, context.DeadlineExceeded) || errors.As(err, &transport) {
+		return ErrExternalAuthUnavailable
+	}
+	var retrieved *oauth2.RetrieveError
+	if !errors.As(err, &retrieved) || retrieved.Response == nil || retrieved.Response.Request == nil || retrieved.Response.Request.URL == nil {
+		return errExternalAuthIndeterminate
+	}
+	endpoint, parseErr := url.Parse(tokenURL)
+	actual := retrieved.Response.Request.URL
+	if parseErr != nil || endpoint.Scheme != actual.Scheme || !strings.EqualFold(endpoint.Host, actual.Host) {
+		// 不能用跨源重定向后的响应推断已配置的令牌端点拒绝凭据。
+		return errExternalAuthIndeterminate
+	}
+	status := retrieved.Response.StatusCode
+	if status >= 500 && status < 600 || status == http.StatusTooManyRequests || status == http.StatusRequestTimeout {
+		return ErrExternalAuthUnavailable
+	}
+	if status == http.StatusBadRequest && retrieved.ErrorCode == "invalid_grant" {
+		return ErrExternalIdentityRejected
+	}
+	if status == http.StatusBadRequest || status == http.StatusUnauthorized {
+		switch retrieved.ErrorCode {
+		case "temporarily_unavailable", "server_error", "invalid_client", "unauthorized_client", "unsupported_grant_type", "invalid_scope":
+			return ErrExternalAuthUnavailable
+		}
+	}
+	return errExternalAuthIndeterminate
 }
 
 // claimsFrom 从已验签的 ID Token 中提取登录所需声明。
 func (v *OIDCVerifier) claimsFrom(idToken *oidc.IDToken) (ExternalUser, error) {
 	var raw map[string]any
 	if err := idToken.Claims(&raw); err != nil {
-		return ExternalUser{}, fmt.Errorf("解析 ID Token 声明：%w", err)
+		return ExternalUser{}, fmt.Errorf("解析 ID Token 声明：%w", ErrExternalIdentityRejected)
 	}
 	claims := ExternalUser{
 		Subject:  idToken.Subject,
@@ -192,14 +237,14 @@ func (v *OIDCVerifier) claimsFrom(idToken *oidc.IDToken) (ExternalUser, error) {
 		Email:    stringClaim(raw, "email"),
 	}
 	if claims.Subject == "" {
-		return ExternalUser{}, errors.New("ID Token 缺少 sub")
+		return ExternalUser{}, fmt.Errorf("ID Token 缺少 sub：%w", ErrExternalIdentityRejected)
 	}
 	if claims.Username == "" {
-		return ExternalUser{}, fmt.Errorf("ID Token 缺少用户名字段（%s）", v.cfg.UsernameClaim)
+		return ExternalUser{}, fmt.Errorf("ID Token 缺少用户名字段（%s）：%w", v.cfg.UsernameClaim, ErrExternalIdentityRejected)
 	}
 	// 邮箱仅作审计与白名单输入：IdP 明确标记未验证时一律拒绝，避免用他人邮箱冒充。
 	if verified, ok := raw["email_verified"].(bool); ok && !verified && claims.Email != "" {
-		return ExternalUser{}, errors.New("ID Token 的邮箱未通过验证")
+		return ExternalUser{}, fmt.Errorf("ID Token 的邮箱未通过验证：%w", ErrExternalIdentityRejected)
 	}
 	return claims, nil
 }

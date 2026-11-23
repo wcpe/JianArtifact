@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"context"
 	"errors"
 	"log"
 
@@ -87,29 +88,13 @@ func (s *UserService) Create(username, password, role string) (*repository.User,
 	return u, nil
 }
 
-// Update 更新角色 / 状态（空串不改）。内置 anonymous 用户不可修改。
+// Update 为受信本机调用更新账号资格；Web 调用必须使用 UpdateForPrincipal。
 func (s *UserService) Update(id int64, role, status string, webLoginDisabled ...*bool) (*repository.User, error) {
-	if err := requireBusinessWrite(s.writeGate); err != nil {
-		return nil, err
-	}
-	if err := s.rejectAnonymous(id); err != nil {
-		return nil, err
-	}
 	var disabled *bool
 	if len(webLoginDisabled) > 0 {
 		disabled = webLoginDisabled[0]
 	}
-	if err := s.users.Update(id, role, status, disabled); err != nil {
-		return nil, mapNotFound(err)
-	}
-	u, err := s.users.GetByID(id)
-	if err != nil {
-		return nil, err
-	}
-	s.recordChange(EntityUser, UserKey(u.Username), OpPut, UserChangeData{
-		Username: u.Username, Role: u.Role, Status: u.Status, PasswordHash: u.PasswordHash, WebLoginDisabled: u.WebLoginDisabled, CreatedAt: u.CreatedAt,
-	})
-	return u, nil
+	return s.updateAccountAccess(context.Background(), nil, id, role, status, disabled)
 }
 
 // Delete 删除用户。内置 anonymous 用户不可删除。
@@ -128,31 +113,6 @@ func (s *UserService) Delete(id int64) error {
 		return mapNotFound(err)
 	}
 	s.recordChange(EntityUser, UserKey(u.Username), OpDelete, TombstoneData{Deleted: true})
-	return nil
-}
-
-// ChangePassword 重置用户口令。内置 anonymous 用户不可改密。
-func (s *UserService) ChangePassword(id int64, password string) error {
-	if err := requireBusinessWrite(s.writeGate); err != nil {
-		return err
-	}
-	if err := s.rejectAnonymous(id); err != nil {
-		return err
-	}
-	u, err := s.users.GetByID(id)
-	if err != nil {
-		return mapNotFound(err)
-	}
-	hash, err := auth.HashPassword(password)
-	if err != nil {
-		return err
-	}
-	if err := s.users.UpdatePassword(id, hash); err != nil {
-		return mapNotFound(err)
-	}
-	s.recordChange(EntityUser, UserKey(u.Username), OpPut, UserChangeData{
-		Username: u.Username, Role: u.Role, Status: u.Status, PasswordHash: hash, WebLoginDisabled: u.WebLoginDisabled, CreatedAt: u.CreatedAt,
-	})
 	return nil
 }
 

@@ -67,8 +67,8 @@ type CleanupService struct {
 	tasks   *repository.CleanTaskRepo
 	// backupUploadExpired 返回过期上传会话的目录名；nil 表示不处理该类。
 	backupUploadExpired func() ([]string, error)
-	// pendingRestore 判断某隔离区操作是否仍被待生效恢复引用；nil 表示一律视为未被引用。
-	pendingRestore func(operationID string) bool
+	// mutations 与资产变更共享隔离目录的恢复所有权；未装配时不回收隔离目录。
+	mutations *AssetMutationCoordinator
 	// clock 便于测试固定时间。
 	clock func() time.Time
 	// trashCapacity 是回收站字节上限（0 = 不限制）；超限时拒绝新清理。
@@ -106,9 +106,9 @@ func (s *CleanupService) SetBackupUploadExpiredSource(fn func() ([]string, error
 	s.backupUploadExpired = fn
 }
 
-// SetPendingRestoreChecker 注入"隔离区操作是否被待生效恢复引用"的判定。
-func (s *CleanupService) SetPendingRestoreChecker(fn func(operationID string) bool) {
-	s.pendingRestore = fn
+// SetAssetMutationCoordinator 注入与资产写入、恢复共用的隔离目录协调器。
+func (s *CleanupService) SetAssetMutationCoordinator(c *AssetMutationCoordinator) {
+	s.mutations = c
 }
 
 // Preview 计算候选集，**纯只读**。
@@ -252,10 +252,7 @@ func (s *CleanupService) collectPreRestore(keepLast int) ([]CleanupCandidate, []
 	return items, nil, nil
 }
 
-// collectQuarantine 收集隔离区里**不被待生效恢复引用**的条目。
-//
-// 隔离区可能是失败回滚的中间态：删错会让数据无法恢复。因此宁可少收——被待生效恢复
-// 引用的操作整目录跳过。
+// collectQuarantine 只预览可回收的隔离目录；未解除恢复职责的操作整目录跳过。
 func (s *CleanupService) collectQuarantine() ([]CleanupCandidate, []string, error) {
 	root, err := s.safeJoin(filepath.Join("blobs", "quarantine"))
 	if err != nil {
@@ -275,7 +272,7 @@ func (s *CleanupService) collectQuarantine() ([]CleanupCandidate, []string, erro
 			continue
 		}
 		operationID := entry.Name()
-		if s.pendingRestore != nil && s.pendingRestore(operationID) {
+		if s.mutations.quarantineNeedsRecovery(operationID) {
 			skipped = append(skipped, s.relPath(filepath.Join(root, operationID)))
 			continue
 		}
@@ -462,8 +459,22 @@ func (s *CleanupService) rollbackMoved(moved []repository.TrashEntry) {
 	}
 }
 
-// moveToTrash 把单个候选移入回收站（同盘 rename），并返回待落库的条目。
+// moveToTrash 对隔离区候选重新判定恢复职责，并将判定与移动放在同一个写门内。
 func (s *CleanupService) moveToTrash(taskID int64, kind string, item CleanupCandidate) (repository.TrashEntry, error) {
+	if kind != CleanupKindQuarantine {
+		return s.moveItemToTrash(taskID, kind, item)
+	}
+	var entry repository.TrashEntry
+	err := s.mutations.withReclaimableQuarantine(filepath.Base(item.Path), func() error {
+		var err error
+		entry, err = s.moveItemToTrash(taskID, kind, item)
+		return err
+	})
+	return entry, err
+}
+
+// moveItemToTrash 把单个候选以同盘 rename 移入回收站，返回待落库的条目。
+func (s *CleanupService) moveItemToTrash(taskID int64, kind string, item CleanupCandidate) (repository.TrashEntry, error) {
 	src, err := s.safeJoin(filepath.FromSlash(item.Path))
 	if err != nil {
 		return repository.TrashEntry{}, err

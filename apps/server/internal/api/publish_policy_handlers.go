@@ -71,9 +71,10 @@ func (h *Handlers) GetPublishPolicy(c *gin.Context, _ UserIdParam, _ string) {
 	c.JSON(http.StatusOK, toPublishPolicyResponse(user, repoName, policy, cfg.ImmutableRelease))
 }
 
-// PutPublishPolicy 原子更新账号 Web 登录开关、路径前缀与额度。
+// PutPublishPolicy 先更新可选的账号 Web 登录资格，再独立保存仓库策略。
 func (h *Handlers) PutPublishPolicy(c *gin.Context, _ UserIdParam, _ string) {
-	if _, ok := requireAdmin(c); !ok {
+	actor, ok := requireAdmin(c)
+	if !ok {
 		return
 	}
 	userID, repoName, ok := publishPolicyPath(c)
@@ -99,9 +100,9 @@ func (h *Handlers) PutPublishPolicy(c *gin.Context, _ UserIdParam, _ string) {
 		return
 	}
 	if req.WebLoginDisabled != nil {
-		user, err = h.users.Update(userID, "", "", req.WebLoginDisabled)
+		user, err = h.users.UpdateForPrincipal(c.Request.Context(), actor, userID, "", "", req.WebLoginDisabled)
 		if err != nil {
-			writeDomainErr(c, err)
+			writePublishPolicyAccountErr(c, err)
 			return
 		}
 	}
@@ -152,7 +153,8 @@ func (r publishPolicyRequest) patch() domain.PublishPolicyPatch {
 // 不一致；逐条结果让调用方（管理端 UI）能精确提示「哪个仓库失败、为什么」。
 // 契约见 PUT /api/v1/users/{id}/publish-policies。
 func (h *Handlers) PutPublishPolicies(c *gin.Context, _ UserIdParam) {
-	if _, ok := requireAdmin(c); !ok {
+	actor, ok := requireAdmin(c)
+	if !ok {
 		return
 	}
 	userID, ok := publishPolicyUserID(c)
@@ -179,8 +181,8 @@ func (h *Handlers) PutPublishPolicies(c *gin.Context, _ UserIdParam) {
 	// 顺序与单仓库端点一致（先账号开关、再仓库策略）；策略侧由服务层整体预校验保证
 	// 「要么全写、要么全不写」，账号开关与其是不同资源，失败时不会被静默回滚。
 	if req.WebLoginDisabled != nil {
-		if _, err := h.users.Update(userID, "", "", req.WebLoginDisabled); err != nil {
-			writeDomainErr(c, err)
+		if _, err := h.users.UpdateForPrincipal(c.Request.Context(), actor, userID, "", "", req.WebLoginDisabled); err != nil {
+			writePublishPolicyAccountErr(c, err)
 			return
 		}
 	}
@@ -213,6 +215,15 @@ func (h *Handlers) PutPublishPolicies(c *gin.Context, _ UserIdParam) {
 		strings.Join(req.Repositories, ","),
 		fmt.Sprintf("repositories=%d succeeded=%d", len(results), succeeded), auditResult)
 	c.JSON(http.StatusOK, out)
+}
+
+// writePublishPolicyAccountErr 沿用用户资格更新的脱敏错误映射。
+func writePublishPolicyAccountErr(c *gin.Context, err error) {
+	if errors.Is(err, domain.ErrCredentialVersionConflict) {
+		auth.WriteError(c, http.StatusConflict, "credential_version_conflict", "账号或口令状态已变更")
+		return
+	}
+	writeDomainErr(c, err)
 }
 
 // batchPatch 把批量请求体翻译成策略补丁，口径与单仓库端点一致。

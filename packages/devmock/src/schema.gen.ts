@@ -247,6 +247,98 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/observability/audit/security-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 当前节点安全事件快照分页
+         * @description 仅允许全局管理员交互会话；先授权，再校验查询。必须显式给出发生时间的 UTC 半开区间
+         *     `[from,to)`，跨度最多 30 天。`from` 与 `to` 接受带 `Z` 或合法数字时差的 RFC3339 时间，按 UTC 时刻比较。
+         *     小数秒须能无损表示为毫秒：第四位及以后必须全为零，即使超过九位。不满足时返回 400
+         *     `invalid_security_filter`，不四舍五入或截断。
+         *     `ip` 精确匹配已记录的 `clientIp`，与 `cidr` 互斥；其他过滤为精确匹配。
+         *     不接受空值、重复参数或未列出的参数；不支持 offset 或总数查询。
+         *     首页固定持久入库水位，按入库顺序降序翻页；续页游标绑定会话和规范筛选条件，首签有效期 15 分钟。
+         *     空页或投影与快照水位相同均不证明采集覆盖完整。
+         */
+        get: operations["listSecurityAuditEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/observability/audit/security-events/{eventId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 读取当前节点一条安全事件
+         * @description 仅允许全局管理员交互会话；先授权，再校验参数或判断事件是否存在。
+         *     只返回安全事件头，不返回旧审计视图、凭据预览或请求正文；对象另行分页。
+         */
+        get: operations["getSecurityAuditEvent"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/observability/audit/security-events/{eventId}/objects": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 独立分页读取一条安全事件的对象
+         * @description 仅允许全局管理员交互会话；先授权，再校验参数或判断事件是否存在。
+         *     按事件内对象序号递增翻页；游标绑定会话及父事件，不与事件列表的游标互换。
+         *     不接受空值、重复参数或未列出的参数，不返回总数。
+         */
+        get: operations["listSecurityAuditEventObjects"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/observability/audit/collection-health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 读取当前节点安全审计采集健康
+         * @description 仅允许全局管理员交互会话；先授权，再校验查询。此端点不接受任何查询参数，包括未知参数、空值或重复参数。
+         *     读取进程内有界快照，不查库、不外联；仅返回状态、覆盖、已证水位、计数及最近缺口。
+         *     不返回账户、路径、地址或原始错误。采集降级或覆盖未知不改变公共探针的存活与就绪语义。
+         */
+        get: operations["getSecurityAuditCollectionHealth"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/observability/downloads/by-client": {
         parameters: {
             query?: never;
@@ -467,8 +559,35 @@ export interface paths {
         delete: operations["deleteUser"];
         options?: never;
         head?: never;
-        /** 更新用户（角色 / 状态） */
+        /**
+         * 更新用户（角色 / 状态）
+         * @description 停用账号、下调全局管理员角色或禁止网页登录时收窄账号级资格，使旧凭据失效；不涉及仓库级权限。
+         *     恢复或扩展资格不会恢复旧凭据。版本冲突返回 409；审计不可用或事务结果未确认时返回 503。
+         */
         patch: operations["updateUser"];
+        trace?: never;
+    };
+    "/api/v1/security/admission/candidates/{operationId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 查询本人私有候选的状态
+         * @description 只允许通过验证的交互会话。仅原发起者且当前仍有目标发布资格时返回脱敏状态；非法操作号、未知目标、非本人和撤权统一返回 404。
+         *     仅返回白名单元数据，不接受客户端写入，不提供下载、字节、内部路径或代次。
+         *     查询可触发服务端幂等完整性或到期对账并持久更新状态（拒绝或过期），但不发放发布权或删除文件。
+         *     `staged` 表示私有接收已封存，不表示已扫描、批准或发布。
+         */
+        get: operations["getPrivateAdmissionCandidate"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/users/{id}/password": {
@@ -480,7 +599,12 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** 修改 / 重置用户口令 */
+        /**
+         * 修改 / 重置用户口令
+         * @description 口令实际变更时，确认变更和安全审计事务提交后返回 204，不返回口令、哈希或内部代次。
+         *     已检测到目标版本冲突时返回 409 `credential_version_conflict`；审计不可用或无法确认提交结果时
+         *     返回 503 `security_audit_unavailable`，不将未确认结果报告为成功。此端点不保证跨 HTTP 请求重放幂等。
+         */
         post: operations["changePassword"];
         delete?: never;
         options?: never;
@@ -506,6 +630,8 @@ export interface paths {
          *     为避免「部分仓库成功、部分仓库失败」的静默不一致：保存前先对所有仓库做统一预校验
          *     （仓库必须存在且为 hosted），任一仓库不合法即**整体拒绝**，错误信息会点名问题仓库。
          *     响应按仓库逐条返回结果，便于调用方在个别仓库落库失败时精确定位，而不会被静默吞掉。
+         *     若请求包含 `webLoginDisabled`，账号资格子步与逐仓库策略分属不同事务；资格子步失败时不执行仓库策略，
+         *     已提交的账号状态不会因随后仓库策略失败而回滚。
          */
         put: operations["putPublishPolicies"];
         post?: never;
@@ -524,7 +650,11 @@ export interface paths {
         };
         /** 获取用户在 Hosted 仓库的发布策略 */
         get: operations["getPublishPolicy"];
-        /** 更新用户在 Hosted 仓库的发布策略 */
+        /**
+         * 更新用户在 Hosted 仓库的发布策略
+         * @description 若请求包含 `webLoginDisabled`，账号资格子步与仓库策略分属不同事务；资格子步失败时不执行仓库策略，
+         *     已提交的账号状态不会因随后仓库策略失败而回滚。
+         */
         put: operations["putPublishPolicy"];
         post?: never;
         delete?: never;
@@ -2285,9 +2415,16 @@ export interface components {
             /** @enum {string} */
             status: "ok" | "degraded" | "unavailable";
             version: string;
+            /**
+             * @description 脱敏采集状态；不改变当前探针的存活或就绪语义。
+             * @enum {string}
+             */
+            auditCollection?: "healthy" | "degraded" | "unknown" | "unavailable";
         };
         Error: {
-            /** @description 统一制品操作失败时返回的追踪标识 */
+            /** @description 来自服务端可信请求上下文的标识；无法确定时省略。 */
+            requestId?: string;
+            /** @description 统一制品操作失败时返回的追踪标识；仅在已确认存在且主体有权时提供。 */
             operationId?: string;
             error: {
                 code: string;
@@ -2301,6 +2438,221 @@ export interface components {
                 code: string;
                 message: string;
             };
+        };
+        PrivateAdmissionCandidateStatus: {
+            operationId: string;
+            /** Format: int64 */
+            repositoryId: number;
+            /** Format: int64 */
+            targetVersion: number;
+            /**
+             * Format: int64
+             * @description 已确认的清单版本，未确认时省略。
+             */
+            manifestVersion?: number;
+            /** @description 已确认的清单摘要，未确认时省略。 */
+            manifestDigest?: string;
+            /**
+             * @description 已封存、拒绝或已过期；已封存不表示已发布。
+             * @enum {string}
+             */
+            state: "staged" | "rejected" | "expired";
+            /**
+             * @description 仅跟踪私有状态，不证明扫描覆盖。
+             * @enum {string}
+             */
+            coverage: "unknown";
+            /**
+             * Format: date-time
+             * @description 候选在服务端的 UTC 到期时间。
+             */
+            expiresAt: string;
+            /**
+             * @description 已确认的硬完整性失败；无此事实时省略。
+             * @enum {string}
+             */
+            errorCode?: "admission_integrity_failed";
+        };
+        /**
+         * @description 采集缺口由覆盖和健康视图单独表达。`auth.password_changed` 和 `auth.account_access_changed` 仅表示已提交的改密或账号级资格变化，
+         *     各自只有一个 `user` 目标，不记录口令、口令哈希或内部代次。`admission.candidate_staged` 只表示私有接收已封存，
+         *     有一个带实际摘要和字节数的 `asset` 对象，不表示公开发布。
+         * @enum {string}
+         */
+        SecurityAuditEventType: "auth.attempt" | "auth.session_created" | "auth.password_changed" | "auth.account_access_changed" | "admission.candidate_staged" | "protocol.write_denied" | "asset.change_committed" | "asset.response_observed";
+        /** @enum {string} */
+        SecurityAuditOutcome: "succeeded" | "denied" | "failed" | "pending" | "unknown";
+        /**
+         * @description 时间窗口的实际采集覆盖；未知不等于无缺口。
+         * @enum {string}
+         */
+        SecurityAuditCoverage: "complete" | "gapped" | "unknown";
+        SecurityAuditEvent: {
+            /** @description 不透明稳定事件标识。 */
+            eventId: string;
+            eventVersion: number;
+            eventType: components["schemas"]["SecurityAuditEventType"];
+            /**
+             * Format: date-time
+             * @description 服务端观测的 UTC 发生时间，毫秒精度。
+             */
+            occurredAt: string;
+            /**
+             * Format: date-time
+             * @description UTC 入库时间，毫秒精度；不是业务回执的提交时间。
+             */
+            ingestedAt: string;
+            requestId?: string;
+            originRequestId?: string;
+            operationId?: string;
+            taskId?: string;
+            actionId?: string;
+            /** @enum {string} */
+            actorKind: "user" | "anonymous" | "unknown" | "system" | "local_operator";
+            /** Format: int64 */
+            actorUserId?: number;
+            actorNameSnapshot?: string;
+            /** @description 非秘密关联标识，不可用于认证。 */
+            credentialId?: string;
+            /** @description 非秘密关联标识，不是登录凭据。 */
+            sessionId?: string;
+            /** @enum {string} */
+            authMethod?: "web_jwt" | "bearer_token" | "basic_token" | "cargo_token" | "basic" | "password" | "oidc_callback" | "ldap_bind" | "totp" | "recovery_code" | "local_claim" | "unknown";
+            /** @enum {string} */
+            authStrength?: "none" | "password" | "mfa" | "machine" | "recovery";
+            peerIp?: string;
+            clientIp?: string;
+            /** @enum {string} */
+            proxyTrust: "direct" | "trusted" | "invalid_forwarding" | "unknown";
+            /** @description 仅包含经过授权的转发链地址。 */
+            forwardedChain?: string[];
+            userAgent?: string;
+            /** Format: int64 */
+            repositoryId?: number;
+            outcome: components["schemas"]["SecurityAuditOutcome"];
+            /** @enum {string} */
+            committed: "not_applicable" | "not_committed" | "committed" | "unknown";
+            httpStatus?: number;
+            /** @description 稳定的裁决原因码，不含原始错误。 */
+            errorCode?: string;
+        };
+        SecurityAuditEventObject: {
+            ordinal: number;
+            /** Format: int64 */
+            repositoryId?: number;
+            canonicalPath?: string;
+            /** @enum {string} */
+            objectKind: "asset" | "repository" | "package" | "version" | "manifest" | "blob" | "user";
+            /** @description 对于用户目标，必须是服务端账号 ID 的规范正十进制字符串，不使用用户名。 */
+            objectId?: string;
+            digest?: string;
+            /** Format: int64 */
+            sizeBytes?: number;
+            manifestDigest?: string;
+            targetVersion?: string;
+            repositoryNameSnapshot?: string;
+        };
+        SecurityAuditEventPage: {
+            items: components["schemas"]["SecurityAuditEvent"][];
+            hasMore: boolean;
+            /** @description 仅在存在下一页时提供。 */
+            nextCursor?: string;
+            /**
+             * Format: int64
+             * @description 首页固定的持久入库水位。
+             */
+            snapshotWatermark: number;
+            /**
+             * Format: int64
+             * @description 同一入库顺序域的最高连续投影水位；此原始查询使用原始可读水位。
+             */
+            projectionWatermark: number;
+            /**
+             * @description 投影的可用状态，不表示采集覆盖。
+             * @enum {string}
+             */
+            projectionHealth: "healthy" | "degraded" | "unknown" | "unavailable";
+            coverage: components["schemas"]["SecurityAuditCoverage"];
+        };
+        SecurityAuditEventObjectPage: {
+            items: components["schemas"]["SecurityAuditEventObject"][];
+            hasMore: boolean;
+            /** @description 仅在存在下一页时提供，为对象页专用游标。 */
+            nextCursor?: string;
+        };
+        SecurityAuditCollectionHealth: {
+            /** @enum {string} */
+            state: "starting" | "running" | "degraded" | "stopping" | "stopped";
+            coverage: components["schemas"]["SecurityAuditCoverage"];
+            /**
+             * @description 有界失败类别；无已知故障时省略。
+             * @enum {string}
+             */
+            failure?: "storage_unavailable" | "writer_busy" | "worker_fenced" | "worker_cancelled";
+            /**
+             * Format: date-time
+             * @description 最近成功确认持久检查点的 UTC 时间，未知时省略。
+             */
+            lastSuccess?: string;
+            /**
+             * Format: date-time
+             * @description 已证实的持久心跳 UTC 时间，未知时省略。
+             */
+            heartbeatAt?: string;
+            /**
+             * Format: date-time
+             * @description 覆盖区间的 UTC 下界（含），未知时省略。
+             */
+            coveredFrom?: string;
+            /**
+             * Format: date-time
+             * @description 覆盖区间的 UTC 上界（不含），未知时省略。
+             */
+            coveredThrough?: string;
+            /**
+             * Format: int64
+             * @description 最近一次已证事务可见的持久事件水位，未知时省略。
+             */
+            watermark?: number;
+            queued?: number;
+            queueBytes?: number;
+            /**
+             * Format: int64
+             * @description 本进程实际观察数，不是已入库数；未知时省略。
+             */
+            observedCount?: number;
+            /**
+             * Format: int64
+             * @description 本进程实际抑制数，不表示窗口总量；未知时省略。
+             */
+            suppressedCount?: number;
+            lastGap?: components["schemas"]["SecurityAuditCollectionGap"];
+        };
+        SecurityAuditCollectionGap: {
+            /**
+             * Format: date-time
+             * @description 缺口窗口的 UTC 下界（含）。
+             */
+            windowStart: string;
+            /**
+             * Format: date-time
+             * @description 缺口窗口的 UTC 上界（不含）。
+             */
+            windowEnd: string;
+            /** @enum {string} */
+            gapReason: "global_rate" | "source_rate" | "source_table_full" | "queue_full" | "database_unavailable" | "invalid_fact" | "counter_overflow" | "restart" | "unclean_restart";
+            /** @enum {string} */
+            coverage: "gapped" | "unknown";
+            /**
+             * Format: int64
+             * @description 已证观察数，覆盖未知时省略。
+             */
+            observedCount?: number;
+            /**
+             * Format: int64
+             * @description 已证抑制数，覆盖未知时省略。
+             */
+            suppressedCount?: number;
         };
         /**
          * @description 服务端归一化的审计分类，不以底层技术来源作为主分类。
@@ -2410,7 +2762,7 @@ export interface components {
         /**
          * @description 脱敏后的 HTTP 上下文：请求方法、归一化路由模板、响应状态码与排障辅助信息。
          *     路径为路由模板（如 /api/v1/admin/accounts/{id}），不含查询串或内部地址。
-         *     请求体与令牌预览必须脱敏（掩码/截断），不得出现凭据原文。
+         *     凭据与请求体预览不再返回；旧字段仅为兼容已生成的客户端类型保留。
          */
         AuditHttpContext: {
             /** @enum {string} */
@@ -2422,11 +2774,14 @@ export interface components {
             requestId?: string;
             /** @description 客户端 User-Agent 原文（仅管理员审计视图返回）。 */
             userAgent?: string;
-            /** @description 认证令牌的脱敏预览（形如 Bearer eyJhbG****1dnM）。 */
+            /**
+             * @deprecated
+             * @description 旧客户端兼容字段；服务端不再返回令牌预览。
+             */
             tokenPreview?: string;
             /**
-             * @description 脱敏后的请求体（JSON 文本，敏感字段已掩码）。
-             *     仅管理员审计视图返回，不得包含凭据、令牌或个人信息原文。
+             * @deprecated
+             * @description 旧客户端兼容字段；服务端不再返回请求体预览。
              */
             bodyPreview?: string;
             /**
@@ -3945,6 +4300,96 @@ export interface components {
         };
     };
     responses: {
+        /** @description 参数非法、游标无效或游标与查询、会话不匹配；`error.code` 为 `invalid_security_filter`。 */
+        InvalidSecurityAuditFilter: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description 通过授权后未找到事件；`error.code` 为 `security_event_not_found`。 */
+        SecurityAuditEventNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description 已验证的游标过期，或其快照因留存、删除、重启或恢复不能继续；`error.code` 为 `security_cursor_expired`。 */
+        SecurityAuditCursorExpired: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description 无有效认证；`error.code` 为 `unauthenticated`。 */
+        PrivateAdmissionUnauthenticated: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description 已识别但不是允许的交互会话；`error.code` 为 `admission_forbidden`。 */
+        PrivateAdmissionForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description 目标不存在或当前主体无权读取；`error.code` 为 `admission_not_found`。 */
+        PrivateAdmissionNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description 无法确认候选状态或当前读取资格；`error.code` 为 `admission_unavailable`。 */
+        PrivateAdmissionUnavailable: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description 发布策略冲突；账号资格子步发生版本冲突时，`error.code` 为 `credential_version_conflict`。 */
+        PublishPolicyWriteConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description 凭据版本已变更，当前变更未提交；`error.code` 为 `credential_version_conflict`。 */
+        CredentialVersionConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description 安全审计暂不可用；`error.code` 为 `security_audit_unavailable`。 */
+        SecurityAuditUnavailable: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
         /** @description 参数错误 */
         BadRequest: {
             headers: {
@@ -4100,6 +4545,14 @@ export interface components {
         MigrationIdParam: number;
         /** @description 按制品路径前缀过滤 */
         PrefixParam: string;
+        /** @description 服务端分配的规范小写 UUIDv4，不是访问凭证。 */
+        PrivateAdmissionOperationIdParam: string;
+        /** @description 页大小，省略时为 50，合法范围为 1 至 100。 */
+        SecurityAuditLimitParam: number;
+        /** @description 省略表示第一页；提供时必须为非空且只能出现一次，不能跨用途使用。 */
+        SecurityAuditCursorParam: string;
+        /** @description 不透明事件标识。 */
+        SecurityAuditEventIdParam: string;
         /** @description UTC 时间范围下界（含）。与 `to` 同时提供或同时省略；省略时服务端使用最近 24 小时。 */
         AuditFromParam: string;
         /** @description UTC 时间范围上界（不含）。与 `from` 同时提供或同时省略；范围最长 30 天。 */
@@ -4618,6 +5071,144 @@ export interface operations {
             403: components["responses"]["Forbidden"];
         };
     };
+    listSecurityAuditEvents: {
+        parameters: {
+            query: {
+                /** @description 发生时间下界（含），接受带合法时差且可无损表示为毫秒的 RFC3339 时间。 */
+                from: string;
+                /** @description 发生时间上界（不含），接受带合法时差且可无损表示为毫秒的 RFC3339 时间。 */
+                to: string;
+                /** @description 页大小，省略时为 50，合法范围为 1 至 100。 */
+                limit?: components["parameters"]["SecurityAuditLimitParam"];
+                /** @description 省略表示第一页；提供时必须为非空且只能出现一次，不能跨用途使用。 */
+                cursor?: components["parameters"]["SecurityAuditCursorParam"];
+                /** @description 精确匹配已记录的可信客户端 IPv4 或 IPv6 地址。 */
+                ip?: string;
+                /** @description 匹配已记录的可信客户端地址所属网段。 */
+                cidr?: string;
+                eventType?: components["schemas"]["SecurityAuditEventType"];
+                outcome?: components["schemas"]["SecurityAuditOutcome"];
+                actorUserId?: number;
+                repositoryId?: number;
+                credentialId?: string;
+                sessionId?: string;
+                requestId?: string;
+                originRequestId?: string;
+                operationId?: string;
+                taskId?: string;
+                actionId?: string;
+                canonicalPath?: string;
+                objectId?: string;
+                digest?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 固定快照下的事件头分页与采集覆盖 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecurityAuditEventPage"];
+                };
+            };
+            400: components["responses"]["InvalidSecurityAuditFilter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            410: components["responses"]["SecurityAuditCursorExpired"];
+            503: components["responses"]["SecurityAuditUnavailable"];
+        };
+    };
+    getSecurityAuditEvent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 不透明事件标识。 */
+                eventId: components["parameters"]["SecurityAuditEventIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 安全事件头 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecurityAuditEvent"];
+                };
+            };
+            400: components["responses"]["InvalidSecurityAuditFilter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["SecurityAuditEventNotFound"];
+            503: components["responses"]["SecurityAuditUnavailable"];
+        };
+    };
+    listSecurityAuditEventObjects: {
+        parameters: {
+            query?: {
+                /** @description 页大小，省略时为 50，合法范围为 1 至 100。 */
+                limit?: components["parameters"]["SecurityAuditLimitParam"];
+                /** @description 省略表示第一页；提供时必须为非空且只能出现一次，不能跨用途使用。 */
+                cursor?: components["parameters"]["SecurityAuditCursorParam"];
+            };
+            header?: never;
+            path: {
+                /** @description 不透明事件标识。 */
+                eventId: components["parameters"]["SecurityAuditEventIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 安全事件对象分页 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecurityAuditEventObjectPage"];
+                };
+            };
+            400: components["responses"]["InvalidSecurityAuditFilter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["SecurityAuditEventNotFound"];
+            410: components["responses"]["SecurityAuditCursorExpired"];
+            503: components["responses"]["SecurityAuditUnavailable"];
+        };
+    };
+    getSecurityAuditCollectionHealth: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 脱敏的采集健康快照，包括已知的降级或未知状态 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecurityAuditCollectionHealth"];
+                };
+            };
+            400: components["responses"]["InvalidSecurityAuditFilter"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            503: components["responses"]["SecurityAuditUnavailable"];
+        };
+    };
     getDownloadByClient: {
         parameters: {
             query?: {
@@ -4987,6 +5578,35 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["CredentialVersionConflict"];
+            503: components["responses"]["SecurityAuditUnavailable"];
+        };
+    };
+    getPrivateAdmissionCandidate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 服务端分配的规范小写 UUIDv4，不是访问凭证。 */
+                operationId: components["parameters"]["PrivateAdmissionOperationIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 当前候选的脱敏元数据 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrivateAdmissionCandidateStatus"];
+                };
+            };
+            401: components["responses"]["PrivateAdmissionUnauthenticated"];
+            403: components["responses"]["PrivateAdmissionForbidden"];
+            404: components["responses"]["PrivateAdmissionNotFound"];
+            503: components["responses"]["PrivateAdmissionUnavailable"];
         };
     };
     changePassword: {
@@ -5004,7 +5624,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description 已修改 */
+            /** @description 已修改；同值经事务确认仍返回 204，不推进代次，不追加新的改密成功事件。 */
             204: {
                 headers: {
                     [name: string]: unknown;
@@ -5015,6 +5635,8 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["CredentialVersionConflict"];
+            503: components["responses"]["SecurityAuditUnavailable"];
         };
     };
     putPublishPolicies: {
@@ -5045,7 +5667,8 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
-            409: components["responses"]["Conflict"];
+            409: components["responses"]["PublishPolicyWriteConflict"];
+            503: components["responses"]["SecurityAuditUnavailable"];
         };
     };
     getPublishPolicy: {
@@ -5103,7 +5726,8 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
-            409: components["responses"]["Conflict"];
+            409: components["responses"]["PublishPolicyWriteConflict"];
+            503: components["responses"]["SecurityAuditUnavailable"];
         };
     };
     listTokens: {

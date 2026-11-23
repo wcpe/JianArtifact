@@ -23,6 +23,8 @@
 ### 用户、令牌、仓库和制品
 
 - 用户与令牌：用户列表/创建/更新/禁用/改密，API Token 创建和吊销。
+- `PATCH /api/v1/users/{id}`：停用、管理员降为普通用户、禁止网页登录都会撤销该账号此前签发的会话和 API Token；一份请求同时收窄多项只升一次代次。恢复原角色或重新启用只允许重新登录、换发凭据，不复活旧凭据。仓库发布策略中对网页登录资格的变更遵循相同规则；账号变更与每仓策略写入不是一个整体事务。
+- `POST /api/v1/users/{id}/password`：本人或获准管理员修改既有账号口令，成功仍返回无响应体的 `204`。同值在事务中复核后也返回 `204`，不增加账号凭据代次，不追加 `auth.password_changed`。实际变更时，口令、代次、回执与成功事件一同提交。事件的操作者与被改账号分开，目标仅以 `user` 对象的 `objectId` 标识。账号版本冲突返回 `409 credential_version_conflict`，审计或提交结果不能确认返回 `503 security_audit_unavailable`；不要把新请求当作原操作的幂等重放。真正改密后，之前签发的会话和 API Token 不能再通过当前账号的代次校验。
 - 仓库与 ACL：仓库 CRUD、成员授权、仓库格式/可见性/上游配置和使用统计。授权主体分 `user` / `group` 两态（`AclEntry.subjectType`，缺省 `user` 以兼容既有请求体），`subjectId` 与 `subjectGroupId` 按 `subjectType` 二选一必填、另一列被忽略；动作 `action` 为六档 `read` / `write` / `publish` / `delete` / `acl_manage` / `admin`。蕴含关系（判定动作 → 能使之通过的已授权动作集合）：`read` ← `read`/`write`/`admin`；`publish` ← `publish`/`write`/`admin`；`write` ← `write`/`admin`；`delete` ← `delete`/`admin`；`acl_manage` ← `acl_manage`/`admin`；`admin` ← `admin`。即 **`write` 蕴含 `read` 与 `publish` 但不蕴含 `delete`**（`delete` 需单独授予），`publish` / `delete` / `acl_manage` 各自只蕴含自身且彼此互不满足、均**不蕴含** `read`。判定取「用户自身条目」∪「其所属各组条目」的并集，组内成员变动即时生效。字段与枚举以 [`../api/openapi.yaml`](../api/openapi.yaml) 为准，语义取舍见 [`specs/0.12.0-user-groups-and-fine-grained-actions.md`](specs/0.12.0-user-groups-and-fine-grained-actions.md)。
 - 公开仓库列表：`GET /api/v1/public/repositories`（无需认证）在 `items` / `total` 之外附带 `pinnedNames`——**全局置顶**仓库的当前主名（有序），公开页据此置顶前置并显示图钉。
 - 仓库使用说明：`GET /api/v1/repositories/{name}/usage` 返回 `UsageInfo.snippets`，每个 `UsageSnippet` 含 `group`（`auth` / `resolve` / `publish` / `other`）——它是**结构化分组标记，不参与本地化**（与随 `Accept-Language` 变化的 `title` / `description` 不同），供界面按「认证 / 解析依赖 / 发布制品 / 其他」折叠分区。
@@ -150,12 +152,24 @@
 
 **组操作的审计动作**（`entityType=user_group`）：`group.create` / `group.update` / `group.delete` / `group.member.add` / `group.member.remove`。前三者 `entityKey` 为组名、detail 带 `id=<组 ID>`（`repo` 为空）；成员增删 `entityKey` 为组 ID，detail 带 `userId=<用户 ID>`（`member.add` 另带 username）。
 
+### 私有候选状态
+
+`GET /api/v1/security/admission/candidates/{operationId}` 返回已登记候选的脱敏元数据，不提供原始字节、内部文件名或下载链接。使用受信接收服务返回的操作号；普通 Raw PUT 仍按既有协议发布，不会生成候选查询号。服务以原数据库和私有卷重启后，操作号不变。
+
+只有经过身份验证、仍有目标仓库发布权的原发起人可查询。未认证或会话失效返回 `401`；已识别但不允许的凭据通道返回 `403`；操作号不存在、不归本人或发布权已收回，均返回 `404 admission_not_found`。无法确认数据库或文件状态时返回 `503 admission_unavailable`，不是不存在。`staged` 仅表示私有接收已封存，`coverage: unknown` 不代表检测通过。查询可能触发服务端幂等核验并记录拒绝或到期，但不删除字节、不批准也不发布。
+
 ### 设置与审计
 
 - `GET/PUT /api/v1/settings`：实例基础设置（匿名访问开关、对外基础 URL、上游超时、域名白名单、回源 Token、遗留的同步间隔项，以及**自动备份与保留策略**三项）；全部为节点本地配置，不参与任何跨实例传播。
   - FR-40 追加的三个字段：`backupAutoInterval`（秒，`0` = 关闭）、`backupKeepLast`（份，`0` = 不按份数限制）、`backupRetentionDays`（天，`0` = 不限天数）。**三项的 `0` 都是合法取值**，不是"未设置"，因此既可读也会照写；写后由 `backup-auto` 作业在下一轮读取生效（**无需重启**）。
   - 校验：三项均拒绝负数；上限分别为 30 天 / 1000 份 / 3650 天，超限返回 400（防手滑录入无意义的大值，而不是静默接受）。
-- `/api/v1/observability/audit/*`：当前节点审计概览、记录、风险批次、通知和确认；只读或按确认接口定义的最小写入。
+- 既有 `/api/v1/observability/audit/*` 概览、记录、风险批次、通知和确认保留原有语义。旧响应不再返回 `tokenPreview` 或 `bodyPreview`；请求 ID、`clientIp` 前缀筛选和历史确认不变，不改写已保存的记录。
+- **安全事件查询**使用同一前缀下的四个 `GET`。仅限当前节点的全局管理员交互会话；未认证为 `401`，普通用户或机器凭据为 `403`，均先于参数和事件存在性检查。字段以 [OpenAPI](../api/openapi.yaml) 为准。
+  - `security-events`：必须提供 RFC 3339 的 `from`、`to`，按发生时间查半开区间 `[from,to)`，最长 30 天。`Z` 或合法数字时差均按同一 UTC 时刻比较；边界必须能精确表示为毫秒，第三位小数后的零可保留，有非零位则返回 `400`，不截断。`ip` 是客户端 IP 精确匹配，`cidr` 是网段匹配，不能同时使用。可叠加类型、结果、主体、仓库、关联标识或对象键。`limit` 默认 50，范围 1–100；不接受空值、重复或未知参数，不提供 offset 或总数。
+  - 下一页沿用时间范围和筛选，只在 `hasMore=true` 时取 `nextCursor`。首页固定入库水位；之后入库的事件即使发生得更早，也不会插入旧快照。`projectionHealth` 说明能否读取投影，`coverage` 单独说明所选时段证据是否完整（`complete` / `gapped` / `unknown`）。**空列表不等于期间没有活动。**
+  - `security-events/{eventId}` 只返回事件头；`security-events/{eventId}/objects` 按事件内序号递增翻页，使用自己的 `limit` 和 `cursor`。仅在授权后才返回 `404 security_event_not_found`。事件中的非秘密关联标识不是登录凭据，`ingestedAt` 也不是业务提交时间。
+  - `collection-health`：从内存快照读取采集状态、已证水位、证明覆盖的时间范围及最近缺口；无法重建的缺口计数省略，不填 0。公共探针只增可选的组件状态 `auditCollection`，不把采集降级当成进程死亡，也不公开账户、地址、路径或诊断原文。
+  - 错误沿用嵌套 `error.code` / `error.message`，受信请求标识可在顶层 `requestId` 返回。筛选或游标无效为 `400 invalid_security_filter`；已正确绑定的游标到达首签 15 分钟期限或原快照失效为 `410 security_cursor_expired`，客户端应从首页重查。数据源不可用为 `503 security_audit_unavailable`，不能当作无记录。
 - `GET /api/v1/observability/host?from=&to=&interface=`：当前节点主机监控（CPU / 内存 / 磁盘 / 网络 / 进程）。`interface` 为可选网卡名（取自响应 `networkInterfaces[].name`），省略时按全部非回环网卡聚合，指定时速率图与累计总量都按该网卡；趋势点 `HostMetricPoint` 另暴露 `networkReceiveBytesTotal` / `networkTransmitBytesTotal`（自网卡启动以来的累计字节，可空），响应含 `networkInterfaces: HostNetworkInterface[]`（各网卡名与该网卡累计总量，无数据时省略）。字段以 [`../api/openapi.yaml`](../api/openapi.yaml) 为准。
 - `GET /api/v1/licenses`：管理员读取内嵌依赖协议清单。
 

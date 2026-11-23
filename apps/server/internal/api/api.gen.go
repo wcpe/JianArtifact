@@ -626,6 +626,27 @@ func (e CreateRepositoryRequestVisibility) Valid() bool {
 	}
 }
 
+// Defines values for CreateTokenRequestPurpose.
+const (
+	CreateTokenRequestPurposeArtifactPublish CreateTokenRequestPurpose = "artifact_publish"
+	CreateTokenRequestPurposeArtifactRead    CreateTokenRequestPurpose = "artifact_read"
+	CreateTokenRequestPurposeEmpty           CreateTokenRequestPurpose = ""
+)
+
+// Valid indicates whether the value is a known member of the CreateTokenRequestPurpose enum.
+func (e CreateTokenRequestPurpose) Valid() bool {
+	switch e {
+	case CreateTokenRequestPurposeArtifactPublish:
+		return true
+	case CreateTokenRequestPurposeArtifactRead:
+		return true
+	case CreateTokenRequestPurposeEmpty:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CreateUserRequestRole.
 const (
 	CreateUserRequestRoleAdmin CreateUserRequestRole = "admin"
@@ -698,6 +719,30 @@ func (e EnabledFormatsFormats) Valid() bool {
 	}
 }
 
+// Defines values for HealthStatusAuditCollection.
+const (
+	HealthStatusAuditCollectionDegraded    HealthStatusAuditCollection = "degraded"
+	HealthStatusAuditCollectionHealthy     HealthStatusAuditCollection = "healthy"
+	HealthStatusAuditCollectionUnavailable HealthStatusAuditCollection = "unavailable"
+	HealthStatusAuditCollectionUnknown     HealthStatusAuditCollection = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the HealthStatusAuditCollection enum.
+func (e HealthStatusAuditCollection) Valid() bool {
+	switch e {
+	case HealthStatusAuditCollectionDegraded:
+		return true
+	case HealthStatusAuditCollectionHealthy:
+		return true
+	case HealthStatusAuditCollectionUnavailable:
+		return true
+	case HealthStatusAuditCollectionUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for HealthStatusStatus.
 const (
 	HealthStatusStatusDegraded    HealthStatusStatus = "degraded"
@@ -721,19 +766,37 @@ func (e HealthStatusStatus) Valid() bool {
 
 // Defines values for HostMonitoringHostState.
 const (
-	Healthy HostMonitoringHostState = "healthy"
-	Stale   HostMonitoringHostState = "stale"
-	Unknown HostMonitoringHostState = "unknown"
+	HostMonitoringHostStateHealthy HostMonitoringHostState = "healthy"
+	HostMonitoringHostStateStale   HostMonitoringHostState = "stale"
+	HostMonitoringHostStateUnknown HostMonitoringHostState = "unknown"
 )
 
 // Valid indicates whether the value is a known member of the HostMonitoringHostState enum.
 func (e HostMonitoringHostState) Valid() bool {
 	switch e {
-	case Healthy:
+	case HostMonitoringHostStateHealthy:
 		return true
-	case Stale:
+	case HostMonitoringHostStateStale:
 		return true
-	case Unknown:
+	case HostMonitoringHostStateUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MachineTokenScopeActions.
+const (
+	MachineTokenScopeActionsPublish MachineTokenScopeActions = "publish"
+	MachineTokenScopeActionsRead    MachineTokenScopeActions = "read"
+)
+
+// Valid indicates whether the value is a known member of the MachineTokenScopeActions enum.
+func (e MachineTokenScopeActions) Valid() bool {
+	switch e {
+	case MachineTokenScopeActionsPublish:
+		return true
+	case MachineTokenScopeActionsRead:
 		return true
 	default:
 		return false
@@ -1040,6 +1103,57 @@ func (e OperationsAlertSeverity) Valid() bool {
 	}
 }
 
+// Defines values for PrivateAdmissionCandidateStatusCoverage.
+const (
+	PrivateAdmissionCandidateStatusCoverageUnknown PrivateAdmissionCandidateStatusCoverage = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the PrivateAdmissionCandidateStatusCoverage enum.
+func (e PrivateAdmissionCandidateStatusCoverage) Valid() bool {
+	switch e {
+	case PrivateAdmissionCandidateStatusCoverageUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PrivateAdmissionCandidateStatusErrorCode.
+const (
+	AdmissionIntegrityFailed PrivateAdmissionCandidateStatusErrorCode = "admission_integrity_failed"
+)
+
+// Valid indicates whether the value is a known member of the PrivateAdmissionCandidateStatusErrorCode enum.
+func (e PrivateAdmissionCandidateStatusErrorCode) Valid() bool {
+	switch e {
+	case AdmissionIntegrityFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PrivateAdmissionCandidateStatusState.
+const (
+	Expired  PrivateAdmissionCandidateStatusState = "expired"
+	Rejected PrivateAdmissionCandidateStatusState = "rejected"
+	Staged   PrivateAdmissionCandidateStatusState = "staged"
+)
+
+// Valid indicates whether the value is a known member of the PrivateAdmissionCandidateStatusState enum.
+func (e PrivateAdmissionCandidateStatusState) Valid() bool {
+	switch e {
+	case Expired:
+		return true
+	case Rejected:
+		return true
+	case Staged:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RemoteNexusRepositoryType.
 const (
 	RemoteNexusRepositoryTypeGroup  RemoteNexusRepositoryType = "group"
@@ -1130,6 +1244,447 @@ func (e RepositoryVisibility) Valid() bool {
 	case RepositoryVisibilityPrivate:
 		return true
 	case RepositoryVisibilityPublic:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecurityAuditCollectionGapCoverage.
+const (
+	SecurityAuditCollectionGapCoverageGapped  SecurityAuditCollectionGapCoverage = "gapped"
+	SecurityAuditCollectionGapCoverageUnknown SecurityAuditCollectionGapCoverage = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the SecurityAuditCollectionGapCoverage enum.
+func (e SecurityAuditCollectionGapCoverage) Valid() bool {
+	switch e {
+	case SecurityAuditCollectionGapCoverageGapped:
+		return true
+	case SecurityAuditCollectionGapCoverageUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecurityAuditCollectionGapGapReason.
+const (
+	CounterOverflow     SecurityAuditCollectionGapGapReason = "counter_overflow"
+	DatabaseUnavailable SecurityAuditCollectionGapGapReason = "database_unavailable"
+	GlobalRate          SecurityAuditCollectionGapGapReason = "global_rate"
+	InvalidFact         SecurityAuditCollectionGapGapReason = "invalid_fact"
+	QueueFull           SecurityAuditCollectionGapGapReason = "queue_full"
+	Restart             SecurityAuditCollectionGapGapReason = "restart"
+	SourceRate          SecurityAuditCollectionGapGapReason = "source_rate"
+	SourceTableFull     SecurityAuditCollectionGapGapReason = "source_table_full"
+	UncleanRestart      SecurityAuditCollectionGapGapReason = "unclean_restart"
+)
+
+// Valid indicates whether the value is a known member of the SecurityAuditCollectionGapGapReason enum.
+func (e SecurityAuditCollectionGapGapReason) Valid() bool {
+	switch e {
+	case CounterOverflow:
+		return true
+	case DatabaseUnavailable:
+		return true
+	case GlobalRate:
+		return true
+	case InvalidFact:
+		return true
+	case QueueFull:
+		return true
+	case Restart:
+		return true
+	case SourceRate:
+		return true
+	case SourceTableFull:
+		return true
+	case UncleanRestart:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecurityAuditCollectionHealthFailure.
+const (
+	StorageUnavailable SecurityAuditCollectionHealthFailure = "storage_unavailable"
+	WorkerCancelled    SecurityAuditCollectionHealthFailure = "worker_cancelled"
+	WorkerFenced       SecurityAuditCollectionHealthFailure = "worker_fenced"
+	WriterBusy         SecurityAuditCollectionHealthFailure = "writer_busy"
+)
+
+// Valid indicates whether the value is a known member of the SecurityAuditCollectionHealthFailure enum.
+func (e SecurityAuditCollectionHealthFailure) Valid() bool {
+	switch e {
+	case StorageUnavailable:
+		return true
+	case WorkerCancelled:
+		return true
+	case WorkerFenced:
+		return true
+	case WriterBusy:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecurityAuditCollectionHealthState.
+const (
+	SecurityAuditCollectionHealthStateDegraded SecurityAuditCollectionHealthState = "degraded"
+	SecurityAuditCollectionHealthStateRunning  SecurityAuditCollectionHealthState = "running"
+	SecurityAuditCollectionHealthStateStarting SecurityAuditCollectionHealthState = "starting"
+	SecurityAuditCollectionHealthStateStopped  SecurityAuditCollectionHealthState = "stopped"
+	SecurityAuditCollectionHealthStateStopping SecurityAuditCollectionHealthState = "stopping"
+)
+
+// Valid indicates whether the value is a known member of the SecurityAuditCollectionHealthState enum.
+func (e SecurityAuditCollectionHealthState) Valid() bool {
+	switch e {
+	case SecurityAuditCollectionHealthStateDegraded:
+		return true
+	case SecurityAuditCollectionHealthStateRunning:
+		return true
+	case SecurityAuditCollectionHealthStateStarting:
+		return true
+	case SecurityAuditCollectionHealthStateStopped:
+		return true
+	case SecurityAuditCollectionHealthStateStopping:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecurityAuditCoverage.
+const (
+	SecurityAuditCoverageComplete SecurityAuditCoverage = "complete"
+	SecurityAuditCoverageGapped   SecurityAuditCoverage = "gapped"
+	SecurityAuditCoverageUnknown  SecurityAuditCoverage = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the SecurityAuditCoverage enum.
+func (e SecurityAuditCoverage) Valid() bool {
+	switch e {
+	case SecurityAuditCoverageComplete:
+		return true
+	case SecurityAuditCoverageGapped:
+		return true
+	case SecurityAuditCoverageUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecurityAuditEventActorKind.
+const (
+	SecurityAuditEventActorKindAnonymous     SecurityAuditEventActorKind = "anonymous"
+	SecurityAuditEventActorKindLocalOperator SecurityAuditEventActorKind = "local_operator"
+	SecurityAuditEventActorKindSystem        SecurityAuditEventActorKind = "system"
+	SecurityAuditEventActorKindUnknown       SecurityAuditEventActorKind = "unknown"
+	SecurityAuditEventActorKindUser          SecurityAuditEventActorKind = "user"
+)
+
+// Valid indicates whether the value is a known member of the SecurityAuditEventActorKind enum.
+func (e SecurityAuditEventActorKind) Valid() bool {
+	switch e {
+	case SecurityAuditEventActorKindAnonymous:
+		return true
+	case SecurityAuditEventActorKindLocalOperator:
+		return true
+	case SecurityAuditEventActorKindSystem:
+		return true
+	case SecurityAuditEventActorKindUnknown:
+		return true
+	case SecurityAuditEventActorKindUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecurityAuditEventAuthMethod.
+const (
+	SecurityAuditEventAuthMethodBasic        SecurityAuditEventAuthMethod = "basic"
+	SecurityAuditEventAuthMethodBasicToken   SecurityAuditEventAuthMethod = "basic_token"
+	SecurityAuditEventAuthMethodBearerToken  SecurityAuditEventAuthMethod = "bearer_token"
+	SecurityAuditEventAuthMethodCargoToken   SecurityAuditEventAuthMethod = "cargo_token"
+	SecurityAuditEventAuthMethodLdapBind     SecurityAuditEventAuthMethod = "ldap_bind"
+	SecurityAuditEventAuthMethodLocalClaim   SecurityAuditEventAuthMethod = "local_claim"
+	SecurityAuditEventAuthMethodOidcCallback SecurityAuditEventAuthMethod = "oidc_callback"
+	SecurityAuditEventAuthMethodPassword     SecurityAuditEventAuthMethod = "password"
+	SecurityAuditEventAuthMethodRecoveryCode SecurityAuditEventAuthMethod = "recovery_code"
+	SecurityAuditEventAuthMethodTotp         SecurityAuditEventAuthMethod = "totp"
+	SecurityAuditEventAuthMethodUnknown      SecurityAuditEventAuthMethod = "unknown"
+	SecurityAuditEventAuthMethodWebJwt       SecurityAuditEventAuthMethod = "web_jwt"
+)
+
+// Valid indicates whether the value is a known member of the SecurityAuditEventAuthMethod enum.
+func (e SecurityAuditEventAuthMethod) Valid() bool {
+	switch e {
+	case SecurityAuditEventAuthMethodBasic:
+		return true
+	case SecurityAuditEventAuthMethodBasicToken:
+		return true
+	case SecurityAuditEventAuthMethodBearerToken:
+		return true
+	case SecurityAuditEventAuthMethodCargoToken:
+		return true
+	case SecurityAuditEventAuthMethodLdapBind:
+		return true
+	case SecurityAuditEventAuthMethodLocalClaim:
+		return true
+	case SecurityAuditEventAuthMethodOidcCallback:
+		return true
+	case SecurityAuditEventAuthMethodPassword:
+		return true
+	case SecurityAuditEventAuthMethodRecoveryCode:
+		return true
+	case SecurityAuditEventAuthMethodTotp:
+		return true
+	case SecurityAuditEventAuthMethodUnknown:
+		return true
+	case SecurityAuditEventAuthMethodWebJwt:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecurityAuditEventAuthStrength.
+const (
+	SecurityAuditEventAuthStrengthMachine  SecurityAuditEventAuthStrength = "machine"
+	SecurityAuditEventAuthStrengthMfa      SecurityAuditEventAuthStrength = "mfa"
+	SecurityAuditEventAuthStrengthNone     SecurityAuditEventAuthStrength = "none"
+	SecurityAuditEventAuthStrengthPassword SecurityAuditEventAuthStrength = "password"
+	SecurityAuditEventAuthStrengthRecovery SecurityAuditEventAuthStrength = "recovery"
+)
+
+// Valid indicates whether the value is a known member of the SecurityAuditEventAuthStrength enum.
+func (e SecurityAuditEventAuthStrength) Valid() bool {
+	switch e {
+	case SecurityAuditEventAuthStrengthMachine:
+		return true
+	case SecurityAuditEventAuthStrengthMfa:
+		return true
+	case SecurityAuditEventAuthStrengthNone:
+		return true
+	case SecurityAuditEventAuthStrengthPassword:
+		return true
+	case SecurityAuditEventAuthStrengthRecovery:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecurityAuditEventCommitted.
+const (
+	SecurityAuditEventCommittedCommitted     SecurityAuditEventCommitted = "committed"
+	SecurityAuditEventCommittedNotApplicable SecurityAuditEventCommitted = "not_applicable"
+	SecurityAuditEventCommittedNotCommitted  SecurityAuditEventCommitted = "not_committed"
+	SecurityAuditEventCommittedUnknown       SecurityAuditEventCommitted = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the SecurityAuditEventCommitted enum.
+func (e SecurityAuditEventCommitted) Valid() bool {
+	switch e {
+	case SecurityAuditEventCommittedCommitted:
+		return true
+	case SecurityAuditEventCommittedNotApplicable:
+		return true
+	case SecurityAuditEventCommittedNotCommitted:
+		return true
+	case SecurityAuditEventCommittedUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecurityAuditEventProxyTrust.
+const (
+	SecurityAuditEventProxyTrustDirect            SecurityAuditEventProxyTrust = "direct"
+	SecurityAuditEventProxyTrustInvalidForwarding SecurityAuditEventProxyTrust = "invalid_forwarding"
+	SecurityAuditEventProxyTrustTrusted           SecurityAuditEventProxyTrust = "trusted"
+	SecurityAuditEventProxyTrustUnknown           SecurityAuditEventProxyTrust = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the SecurityAuditEventProxyTrust enum.
+func (e SecurityAuditEventProxyTrust) Valid() bool {
+	switch e {
+	case SecurityAuditEventProxyTrustDirect:
+		return true
+	case SecurityAuditEventProxyTrustInvalidForwarding:
+		return true
+	case SecurityAuditEventProxyTrustTrusted:
+		return true
+	case SecurityAuditEventProxyTrustUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecurityAuditEventObjectObjectKind.
+const (
+	SecurityAuditEventObjectObjectKindAsset      SecurityAuditEventObjectObjectKind = "asset"
+	SecurityAuditEventObjectObjectKindBlob       SecurityAuditEventObjectObjectKind = "blob"
+	SecurityAuditEventObjectObjectKindManifest   SecurityAuditEventObjectObjectKind = "manifest"
+	SecurityAuditEventObjectObjectKindPackage    SecurityAuditEventObjectObjectKind = "package"
+	SecurityAuditEventObjectObjectKindRepository SecurityAuditEventObjectObjectKind = "repository"
+	SecurityAuditEventObjectObjectKindUser       SecurityAuditEventObjectObjectKind = "user"
+	SecurityAuditEventObjectObjectKindVersion    SecurityAuditEventObjectObjectKind = "version"
+)
+
+// Valid indicates whether the value is a known member of the SecurityAuditEventObjectObjectKind enum.
+func (e SecurityAuditEventObjectObjectKind) Valid() bool {
+	switch e {
+	case SecurityAuditEventObjectObjectKindAsset:
+		return true
+	case SecurityAuditEventObjectObjectKindBlob:
+		return true
+	case SecurityAuditEventObjectObjectKindManifest:
+		return true
+	case SecurityAuditEventObjectObjectKindPackage:
+		return true
+	case SecurityAuditEventObjectObjectKindRepository:
+		return true
+	case SecurityAuditEventObjectObjectKindUser:
+		return true
+	case SecurityAuditEventObjectObjectKindVersion:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecurityAuditEventPageProjectionHealth.
+const (
+	SecurityAuditEventPageProjectionHealthDegraded    SecurityAuditEventPageProjectionHealth = "degraded"
+	SecurityAuditEventPageProjectionHealthHealthy     SecurityAuditEventPageProjectionHealth = "healthy"
+	SecurityAuditEventPageProjectionHealthUnavailable SecurityAuditEventPageProjectionHealth = "unavailable"
+	SecurityAuditEventPageProjectionHealthUnknown     SecurityAuditEventPageProjectionHealth = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the SecurityAuditEventPageProjectionHealth enum.
+func (e SecurityAuditEventPageProjectionHealth) Valid() bool {
+	switch e {
+	case SecurityAuditEventPageProjectionHealthDegraded:
+		return true
+	case SecurityAuditEventPageProjectionHealthHealthy:
+		return true
+	case SecurityAuditEventPageProjectionHealthUnavailable:
+		return true
+	case SecurityAuditEventPageProjectionHealthUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecurityAuditEventType.
+const (
+	AdmissionCandidateStaged SecurityAuditEventType = "admission.candidate_staged"
+	AssetChangeCommitted     SecurityAuditEventType = "asset.change_committed"
+	AssetResponseObserved    SecurityAuditEventType = "asset.response_observed"
+	AuthAccountAccessChanged SecurityAuditEventType = "auth.account_access_changed"
+	AuthAttempt              SecurityAuditEventType = "auth.attempt"
+	AuthPasswordChanged      SecurityAuditEventType = "auth.password_changed"
+	AuthSessionCreated       SecurityAuditEventType = "auth.session_created"
+	ProtocolWriteDenied      SecurityAuditEventType = "protocol.write_denied"
+)
+
+// Valid indicates whether the value is a known member of the SecurityAuditEventType enum.
+func (e SecurityAuditEventType) Valid() bool {
+	switch e {
+	case AdmissionCandidateStaged:
+		return true
+	case AssetChangeCommitted:
+		return true
+	case AssetResponseObserved:
+		return true
+	case AuthAccountAccessChanged:
+		return true
+	case AuthAttempt:
+		return true
+	case AuthPasswordChanged:
+		return true
+	case AuthSessionCreated:
+		return true
+	case ProtocolWriteDenied:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecurityAuditOutcome.
+const (
+	SecurityAuditOutcomeDenied    SecurityAuditOutcome = "denied"
+	SecurityAuditOutcomeFailed    SecurityAuditOutcome = "failed"
+	SecurityAuditOutcomePending   SecurityAuditOutcome = "pending"
+	SecurityAuditOutcomeSucceeded SecurityAuditOutcome = "succeeded"
+	SecurityAuditOutcomeUnknown   SecurityAuditOutcome = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the SecurityAuditOutcome enum.
+func (e SecurityAuditOutcome) Valid() bool {
+	switch e {
+	case SecurityAuditOutcomeDenied:
+		return true
+	case SecurityAuditOutcomeFailed:
+		return true
+	case SecurityAuditOutcomePending:
+		return true
+	case SecurityAuditOutcomeSucceeded:
+		return true
+	case SecurityAuditOutcomeUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TokenPurpose.
+const (
+	TokenPurposeArtifactPublish TokenPurpose = "artifact_publish"
+	TokenPurposeArtifactRead    TokenPurpose = "artifact_read"
+	TokenPurposeEmpty           TokenPurpose = ""
+)
+
+// Valid indicates whether the value is a known member of the TokenPurpose enum.
+func (e TokenPurpose) Valid() bool {
+	switch e {
+	case TokenPurposeArtifactPublish:
+		return true
+	case TokenPurposeArtifactRead:
+		return true
+	case TokenPurposeEmpty:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TokenCreatedPurpose.
+const (
+	TokenCreatedPurposeArtifactPublish TokenCreatedPurpose = "artifact_publish"
+	TokenCreatedPurposeArtifactRead    TokenCreatedPurpose = "artifact_read"
+	TokenCreatedPurposeEmpty           TokenCreatedPurpose = ""
+)
+
+// Valid indicates whether the value is a known member of the TokenCreatedPurpose enum.
+func (e TokenCreatedPurpose) Valid() bool {
+	switch e {
+	case TokenCreatedPurposeArtifactPublish:
+		return true
+	case TokenCreatedPurposeArtifactRead:
+		return true
+	case TokenCreatedPurposeEmpty:
 		return true
 	default:
 		return false
@@ -1970,7 +2525,7 @@ type AuditEvent struct {
 
 	// Http 脱敏后的 HTTP 上下文：请求方法、归一化路由模板、响应状态码与排障辅助信息。
 	// 路径为路由模板（如 /api/v1/admin/accounts/{id}），不含查询串或内部地址。
-	// 请求体与令牌预览必须脱敏（掩码/截断），不得出现凭据原文。
+	// 凭据与请求体预览不再返回；旧字段仅为兼容已生成的客户端类型保留。
 	Http       *AuditHttpContext `json:"http,omitempty"`
 	OccurredAt time.Time         `json:"occurredAt"`
 
@@ -2043,10 +2598,10 @@ type AuditEventSafeDetails struct {
 
 // AuditHttpContext 脱敏后的 HTTP 上下文：请求方法、归一化路由模板、响应状态码与排障辅助信息。
 // 路径为路由模板（如 /api/v1/admin/accounts/{id}），不含查询串或内部地址。
-// 请求体与令牌预览必须脱敏（掩码/截断），不得出现凭据原文。
+// 凭据与请求体预览不再返回；旧字段仅为兼容已生成的客户端类型保留。
 type AuditHttpContext struct {
-	// BodyPreview 脱敏后的请求体（JSON 文本，敏感字段已掩码）。
-	// 仅管理员审计视图返回，不得包含凭据、令牌或个人信息原文。
+	// BodyPreview 旧客户端兼容字段；服务端不再返回请求体预览。
+	// Deprecated: this property has been marked as deprecated upstream, but no `x-deprecated-reason` was set
 	BodyPreview *string `json:"bodyPreview,omitempty"`
 
 	// HttpHeaders 常用白名单请求头的紧凑 JSON 文本（如 {"Accept":"application/json"}）。
@@ -2062,7 +2617,8 @@ type AuditHttpContext struct {
 	// StatusCode HTTP 响应状态码。
 	StatusCode *int `json:"statusCode,omitempty"`
 
-	// TokenPreview 认证令牌的脱敏预览（形如 Bearer eyJhbG****1dnM）。
+	// TokenPreview 旧客户端兼容字段；服务端不再返回令牌预览。
+	// Deprecated: this property has been marked as deprecated upstream, but no `x-deprecated-reason` was set
 	TokenPreview *string `json:"tokenPreview,omitempty"`
 
 	// UserAgent 客户端 User-Agent 原文（仅管理员审计视图返回）。
@@ -2590,8 +3146,15 @@ type CreateRepositoryRequestVisibility string
 
 // CreateTokenRequest defines model for CreateTokenRequest.
 type CreateTokenRequest struct {
-	Name string `json:"name"`
+	// ExpiresDays 有效期天数，默认 30，上限 90。
+	ExpiresDays *int                       `json:"expiresDays,omitempty"`
+	Name        string                     `json:"name"`
+	Purpose     *CreateTokenRequestPurpose `json:"purpose,omitempty"`
+	Scopes      *[]MachineTokenScope       `json:"scopes,omitempty"`
 }
+
+// CreateTokenRequestPurpose defines model for CreateTokenRequest.Purpose.
+type CreateTokenRequestPurpose string
 
 // CreateUserGroupRequest defines model for CreateUserGroupRequest.
 type CreateUserGroupRequest struct {
@@ -2715,8 +3278,11 @@ type Error struct {
 		Message string `json:"message"`
 	} `json:"error"`
 
-	// OperationId 统一制品操作失败时返回的追踪标识
+	// OperationId 统一制品操作失败时返回的追踪标识；仅在已确认存在且主体有权时提供。
 	OperationId *string `json:"operationId,omitempty"`
+
+	// RequestId 来自服务端可信请求上下文的标识；无法确定时省略。
+	RequestId *string `json:"requestId,omitempty"`
 }
 
 // FreezeWritesRequest until 与 ttlSeconds 二选一；都给时 until 优先。都不给则用 ttlSeconds 默认 7200。窗口上限 24 小时。
@@ -2728,9 +3294,14 @@ type FreezeWritesRequest struct {
 
 // HealthStatus defines model for HealthStatus.
 type HealthStatus struct {
-	Status  HealthStatusStatus `json:"status"`
-	Version string             `json:"version"`
+	// AuditCollection 脱敏采集状态；不改变当前探针的存活或就绪语义。
+	AuditCollection *HealthStatusAuditCollection `json:"auditCollection,omitempty"`
+	Status          HealthStatusStatus           `json:"status"`
+	Version         string                       `json:"version"`
 }
+
+// HealthStatusAuditCollection 脱敏采集状态；不改变当前探针的存活或就绪语义。
+type HealthStatusAuditCollection string
 
 // HealthStatusStatus defines model for HealthStatus.Status.
 type HealthStatusStatus string
@@ -2816,6 +3387,20 @@ type LoginResponse struct {
 	Token string `json:"token"`
 	User  User   `json:"user"`
 }
+
+// MachineTokenScope defines model for MachineTokenScope.
+type MachineTokenScope struct {
+	Actions []MachineTokenScopeActions `json:"actions"`
+
+	// PathPrefix 规范路径段前缀；空前缀覆盖仓库下全部路径。
+	PathPrefix *string `json:"pathPrefix,omitempty"`
+
+	// Repository 仓库名，签发时解析为稳定 ID。
+	Repository string `json:"repository"`
+}
+
+// MachineTokenScopeActions defines model for MachineTokenScope.Actions.
+type MachineTokenScopeActions string
 
 // MaintenanceJob 单个周期作业的状态快照。计数自进程启动累计（重启归零）；
 // 未执行过时 lastStartedAt / lastFinishedAt / lastError 缺省（等价于 null）。
@@ -3169,6 +3754,39 @@ type PinnedRepositoriesResponse struct {
 	RepositoryIds []int64 `json:"repositoryIds"`
 }
 
+// PrivateAdmissionCandidateStatus defines model for PrivateAdmissionCandidateStatus.
+type PrivateAdmissionCandidateStatus struct {
+	// Coverage 仅跟踪私有状态，不证明扫描覆盖。
+	Coverage PrivateAdmissionCandidateStatusCoverage `json:"coverage"`
+
+	// ErrorCode 已确认的硬完整性失败；无此事实时省略。
+	ErrorCode *PrivateAdmissionCandidateStatusErrorCode `json:"errorCode,omitempty"`
+
+	// ExpiresAt 候选在服务端的 UTC 到期时间。
+	ExpiresAt time.Time `json:"expiresAt"`
+
+	// ManifestDigest 已确认的清单摘要，未确认时省略。
+	ManifestDigest *string `json:"manifestDigest,omitempty"`
+
+	// ManifestVersion 已确认的清单版本，未确认时省略。
+	ManifestVersion *int64 `json:"manifestVersion,omitempty"`
+	OperationId     string `json:"operationId"`
+	RepositoryId    int64  `json:"repositoryId"`
+
+	// State 已封存、拒绝或已过期；已封存不表示已发布。
+	State         PrivateAdmissionCandidateStatusState `json:"state"`
+	TargetVersion int64                                `json:"targetVersion"`
+}
+
+// PrivateAdmissionCandidateStatusCoverage 仅跟踪私有状态，不证明扫描覆盖。
+type PrivateAdmissionCandidateStatusCoverage string
+
+// PrivateAdmissionCandidateStatusErrorCode 已确认的硬完整性失败；无此事实时省略。
+type PrivateAdmissionCandidateStatusErrorCode string
+
+// PrivateAdmissionCandidateStatusState 已封存、拒绝或已过期；已封存不表示已发布。
+type PrivateAdmissionCandidateStatusState string
+
 // ProtocolMetricPoint defines model for ProtocolMetricPoint.
 type ProtocolMetricPoint struct {
 	CacheHitCount  int64     `json:"cacheHitCount"`
@@ -3403,6 +4021,196 @@ type RestoreFromLocalPackageRequest struct {
 	Overwrite *bool `json:"overwrite,omitempty"`
 }
 
+// SecurityAuditCollectionGap defines model for SecurityAuditCollectionGap.
+type SecurityAuditCollectionGap struct {
+	Coverage  SecurityAuditCollectionGapCoverage  `json:"coverage"`
+	GapReason SecurityAuditCollectionGapGapReason `json:"gapReason"`
+
+	// ObservedCount 已证观察数，覆盖未知时省略。
+	ObservedCount *int64 `json:"observedCount,omitempty"`
+
+	// SuppressedCount 已证抑制数，覆盖未知时省略。
+	SuppressedCount *int64 `json:"suppressedCount,omitempty"`
+
+	// WindowEnd 缺口窗口的 UTC 上界（不含）。
+	WindowEnd time.Time `json:"windowEnd"`
+
+	// WindowStart 缺口窗口的 UTC 下界（含）。
+	WindowStart time.Time `json:"windowStart"`
+}
+
+// SecurityAuditCollectionGapCoverage defines model for SecurityAuditCollectionGap.Coverage.
+type SecurityAuditCollectionGapCoverage string
+
+// SecurityAuditCollectionGapGapReason defines model for SecurityAuditCollectionGap.GapReason.
+type SecurityAuditCollectionGapGapReason string
+
+// SecurityAuditCollectionHealth defines model for SecurityAuditCollectionHealth.
+type SecurityAuditCollectionHealth struct {
+	// Coverage 时间窗口的实际采集覆盖；未知不等于无缺口。
+	Coverage SecurityAuditCoverage `json:"coverage"`
+
+	// CoveredFrom 覆盖区间的 UTC 下界（含），未知时省略。
+	CoveredFrom *time.Time `json:"coveredFrom,omitempty"`
+
+	// CoveredThrough 覆盖区间的 UTC 上界（不含），未知时省略。
+	CoveredThrough *time.Time `json:"coveredThrough,omitempty"`
+
+	// Failure 有界失败类别；无已知故障时省略。
+	Failure *SecurityAuditCollectionHealthFailure `json:"failure,omitempty"`
+
+	// HeartbeatAt 已证实的持久心跳 UTC 时间，未知时省略。
+	HeartbeatAt *time.Time                  `json:"heartbeatAt,omitempty"`
+	LastGap     *SecurityAuditCollectionGap `json:"lastGap,omitempty"`
+
+	// LastSuccess 最近成功确认持久检查点的 UTC 时间，未知时省略。
+	LastSuccess *time.Time `json:"lastSuccess,omitempty"`
+
+	// ObservedCount 本进程实际观察数，不是已入库数；未知时省略。
+	ObservedCount *int64                             `json:"observedCount,omitempty"`
+	QueueBytes    *int                               `json:"queueBytes,omitempty"`
+	Queued        *int                               `json:"queued,omitempty"`
+	State         SecurityAuditCollectionHealthState `json:"state"`
+
+	// SuppressedCount 本进程实际抑制数，不表示窗口总量；未知时省略。
+	SuppressedCount *int64 `json:"suppressedCount,omitempty"`
+
+	// Watermark 最近一次已证事务可见的持久事件水位，未知时省略。
+	Watermark *int64 `json:"watermark,omitempty"`
+}
+
+// SecurityAuditCollectionHealthFailure 有界失败类别；无已知故障时省略。
+type SecurityAuditCollectionHealthFailure string
+
+// SecurityAuditCollectionHealthState defines model for SecurityAuditCollectionHealth.State.
+type SecurityAuditCollectionHealthState string
+
+// SecurityAuditCoverage 时间窗口的实际采集覆盖；未知不等于无缺口。
+type SecurityAuditCoverage string
+
+// SecurityAuditEvent defines model for SecurityAuditEvent.
+type SecurityAuditEvent struct {
+	ActionId          *string                         `json:"actionId,omitempty"`
+	ActorKind         SecurityAuditEventActorKind     `json:"actorKind"`
+	ActorNameSnapshot *string                         `json:"actorNameSnapshot,omitempty"`
+	ActorUserId       *int64                          `json:"actorUserId,omitempty"`
+	AuthMethod        *SecurityAuditEventAuthMethod   `json:"authMethod,omitempty"`
+	AuthStrength      *SecurityAuditEventAuthStrength `json:"authStrength,omitempty"`
+	ClientIp          *string                         `json:"clientIp,omitempty"`
+	Committed         SecurityAuditEventCommitted     `json:"committed"`
+
+	// CredentialId 非秘密关联标识，不可用于认证。
+	CredentialId *string `json:"credentialId,omitempty"`
+
+	// ErrorCode 稳定的裁决原因码，不含原始错误。
+	ErrorCode *string `json:"errorCode,omitempty"`
+
+	// EventId 不透明稳定事件标识。
+	EventId string `json:"eventId"`
+
+	// EventType 采集缺口由覆盖和健康视图单独表达。`auth.password_changed` 和 `auth.account_access_changed` 仅表示已提交的改密或账号级资格变化，
+	// 各自只有一个 `user` 目标，不记录口令、口令哈希或内部代次。`admission.candidate_staged` 只表示私有接收已封存，
+	// 有一个带实际摘要和字节数的 `asset` 对象，不表示公开发布。
+	EventType    SecurityAuditEventType `json:"eventType"`
+	EventVersion int                    `json:"eventVersion"`
+
+	// ForwardedChain 仅包含经过授权的转发链地址。
+	ForwardedChain *[]string `json:"forwardedChain,omitempty"`
+	HttpStatus     *int      `json:"httpStatus,omitempty"`
+
+	// IngestedAt UTC 入库时间，毫秒精度；不是业务回执的提交时间。
+	IngestedAt time.Time `json:"ingestedAt"`
+
+	// OccurredAt 服务端观测的 UTC 发生时间，毫秒精度。
+	OccurredAt      time.Time                    `json:"occurredAt"`
+	OperationId     *string                      `json:"operationId,omitempty"`
+	OriginRequestId *string                      `json:"originRequestId,omitempty"`
+	Outcome         SecurityAuditOutcome         `json:"outcome"`
+	PeerIp          *string                      `json:"peerIp,omitempty"`
+	ProxyTrust      SecurityAuditEventProxyTrust `json:"proxyTrust"`
+	RepositoryId    *int64                       `json:"repositoryId,omitempty"`
+	RequestId       *string                      `json:"requestId,omitempty"`
+
+	// SessionId 非秘密关联标识，不是登录凭据。
+	SessionId *string `json:"sessionId,omitempty"`
+	TaskId    *string `json:"taskId,omitempty"`
+	UserAgent *string `json:"userAgent,omitempty"`
+}
+
+// SecurityAuditEventActorKind defines model for SecurityAuditEvent.ActorKind.
+type SecurityAuditEventActorKind string
+
+// SecurityAuditEventAuthMethod defines model for SecurityAuditEvent.AuthMethod.
+type SecurityAuditEventAuthMethod string
+
+// SecurityAuditEventAuthStrength defines model for SecurityAuditEvent.AuthStrength.
+type SecurityAuditEventAuthStrength string
+
+// SecurityAuditEventCommitted defines model for SecurityAuditEvent.Committed.
+type SecurityAuditEventCommitted string
+
+// SecurityAuditEventProxyTrust defines model for SecurityAuditEvent.ProxyTrust.
+type SecurityAuditEventProxyTrust string
+
+// SecurityAuditEventObject defines model for SecurityAuditEventObject.
+type SecurityAuditEventObject struct {
+	CanonicalPath  *string `json:"canonicalPath,omitempty"`
+	Digest         *string `json:"digest,omitempty"`
+	ManifestDigest *string `json:"manifestDigest,omitempty"`
+
+	// ObjectId 对于用户目标，必须是服务端账号 ID 的规范正十进制字符串，不使用用户名。
+	ObjectId               *string                            `json:"objectId,omitempty"`
+	ObjectKind             SecurityAuditEventObjectObjectKind `json:"objectKind"`
+	Ordinal                int                                `json:"ordinal"`
+	RepositoryId           *int64                             `json:"repositoryId,omitempty"`
+	RepositoryNameSnapshot *string                            `json:"repositoryNameSnapshot,omitempty"`
+	SizeBytes              *int64                             `json:"sizeBytes,omitempty"`
+	TargetVersion          *string                            `json:"targetVersion,omitempty"`
+}
+
+// SecurityAuditEventObjectObjectKind defines model for SecurityAuditEventObject.ObjectKind.
+type SecurityAuditEventObjectObjectKind string
+
+// SecurityAuditEventObjectPage defines model for SecurityAuditEventObjectPage.
+type SecurityAuditEventObjectPage struct {
+	HasMore bool                       `json:"hasMore"`
+	Items   []SecurityAuditEventObject `json:"items"`
+
+	// NextCursor 仅在存在下一页时提供，为对象页专用游标。
+	NextCursor *string `json:"nextCursor,omitempty"`
+}
+
+// SecurityAuditEventPage defines model for SecurityAuditEventPage.
+type SecurityAuditEventPage struct {
+	// Coverage 时间窗口的实际采集覆盖；未知不等于无缺口。
+	Coverage SecurityAuditCoverage `json:"coverage"`
+	HasMore  bool                  `json:"hasMore"`
+	Items    []SecurityAuditEvent  `json:"items"`
+
+	// NextCursor 仅在存在下一页时提供。
+	NextCursor *string `json:"nextCursor,omitempty"`
+
+	// ProjectionHealth 投影的可用状态，不表示采集覆盖。
+	ProjectionHealth SecurityAuditEventPageProjectionHealth `json:"projectionHealth"`
+
+	// ProjectionWatermark 同一入库顺序域的最高连续投影水位；此原始查询使用原始可读水位。
+	ProjectionWatermark int64 `json:"projectionWatermark"`
+
+	// SnapshotWatermark 首页固定的持久入库水位。
+	SnapshotWatermark int64 `json:"snapshotWatermark"`
+}
+
+// SecurityAuditEventPageProjectionHealth 投影的可用状态，不表示采集覆盖。
+type SecurityAuditEventPageProjectionHealth string
+
+// SecurityAuditEventType 采集缺口由覆盖和健康视图单独表达。`auth.password_changed` 和 `auth.account_access_changed` 仅表示已提交的改密或账号级资格变化，
+// 各自只有一个 `user` 目标，不记录口令、口令哈希或内部代次。`admission.candidate_staged` 只表示私有接收已封存，
+// 有一个带实际摘要和字节数的 `asset` 对象，不表示公开发布。
+type SecurityAuditEventType string
+
+// SecurityAuditOutcome defines model for SecurityAuditOutcome.
+type SecurityAuditOutcome string
+
 // SetRepositoryOnlineRequest defines model for SetRepositoryOnlineRequest.
 type SetRepositoryOnlineRequest struct {
 	// Online 是否在线（true=在线，false=离线；必填）
@@ -3431,20 +4239,33 @@ type StatusInfo struct {
 
 // Token defines model for Token.
 type Token struct {
-	CreatedAt string `json:"createdAt"`
-	Id        int64  `json:"id"`
-	Name      string `json:"name"`
+	CreatedAt string  `json:"createdAt"`
+	ExpiresAt *string `json:"expiresAt,omitempty"`
+	Id        int64   `json:"id"`
+	Name      string  `json:"name"`
+
+	// Purpose 机器凭据用途；空为过渡期未限用途旧凭据。
+	Purpose *TokenPurpose        `json:"purpose,omitempty"`
+	Scopes  *[]MachineTokenScope `json:"scopes,omitempty"`
 }
+
+// TokenPurpose 机器凭据用途；空为过渡期未限用途旧凭据。
+type TokenPurpose string
 
 // TokenCreated defines model for TokenCreated.
 type TokenCreated struct {
-	CreatedAt string `json:"createdAt"`
-	Id        int64  `json:"id"`
-	Name      string `json:"name"`
+	CreatedAt string               `json:"createdAt"`
+	ExpiresAt *string              `json:"expiresAt,omitempty"`
+	Id        int64                `json:"id"`
+	Name      string               `json:"name"`
+	Purpose   *TokenCreatedPurpose `json:"purpose,omitempty"`
 
 	// Token 明文令牌，仅此次返回一次。
 	Token string `json:"token"`
 }
+
+// TokenCreatedPurpose defines model for TokenCreated.Purpose.
+type TokenCreatedPurpose string
 
 // TokenList defines model for TokenList.
 type TokenList struct {
@@ -3871,8 +4692,20 @@ type PageSizeParam = int
 // PrefixParam defines model for PrefixParam.
 type PrefixParam = string
 
+// PrivateAdmissionOperationIdParam defines model for PrivateAdmissionOperationIdParam.
+type PrivateAdmissionOperationIdParam = string
+
 // RepoNameParam defines model for RepoNameParam.
 type RepoNameParam = string
+
+// SecurityAuditCursorParam defines model for SecurityAuditCursorParam.
+type SecurityAuditCursorParam = string
+
+// SecurityAuditEventIdParam defines model for SecurityAuditEventIdParam.
+type SecurityAuditEventIdParam = string
+
+// SecurityAuditLimitParam defines model for SecurityAuditLimitParam.
+type SecurityAuditLimitParam = int
 
 // TokenIdParam defines model for TokenIdParam.
 type TokenIdParam = int64
@@ -3922,11 +4755,41 @@ type BadRequest = Error
 // Conflict defines model for Conflict.
 type Conflict = Error
 
+// CredentialVersionConflict defines model for CredentialVersionConflict.
+type CredentialVersionConflict = Error
+
 // Forbidden defines model for Forbidden.
 type Forbidden = Error
 
+// InvalidSecurityAuditFilter defines model for InvalidSecurityAuditFilter.
+type InvalidSecurityAuditFilter = Error
+
 // NotFound defines model for NotFound.
 type NotFound = Error
+
+// PrivateAdmissionForbidden defines model for PrivateAdmissionForbidden.
+type PrivateAdmissionForbidden = Error
+
+// PrivateAdmissionNotFound defines model for PrivateAdmissionNotFound.
+type PrivateAdmissionNotFound = Error
+
+// PrivateAdmissionUnauthenticated defines model for PrivateAdmissionUnauthenticated.
+type PrivateAdmissionUnauthenticated = Error
+
+// PrivateAdmissionUnavailable defines model for PrivateAdmissionUnavailable.
+type PrivateAdmissionUnavailable = Error
+
+// PublishPolicyWriteConflict defines model for PublishPolicyWriteConflict.
+type PublishPolicyWriteConflict = Error
+
+// SecurityAuditCursorExpired defines model for SecurityAuditCursorExpired.
+type SecurityAuditCursorExpired = Error
+
+// SecurityAuditEventNotFound defines model for SecurityAuditEventNotFound.
+type SecurityAuditEventNotFound = Error
+
+// SecurityAuditUnavailable defines model for SecurityAuditUnavailable.
+type SecurityAuditUnavailable = Error
 
 // ServiceUnavailable defines model for ServiceUnavailable.
 type ServiceUnavailable = Error
@@ -4177,6 +5040,50 @@ type ListAuditAttentionNotificationsParams struct {
 
 	// Cursor 从上一页响应取得的不透明游标；不得解析或改写。
 	Cursor *AuditCursorParam `form:"cursor,omitempty" json:"cursor,omitempty"`
+}
+
+// ListSecurityAuditEventsParams defines parameters for ListSecurityAuditEvents.
+type ListSecurityAuditEventsParams struct {
+	// From 发生时间下界（含），接受带合法时差且可无损表示为毫秒的 RFC3339 时间。
+	From time.Time `form:"from" json:"from"`
+
+	// To 发生时间上界（不含），接受带合法时差且可无损表示为毫秒的 RFC3339 时间。
+	To time.Time `form:"to" json:"to"`
+
+	// Limit 页大小，省略时为 50，合法范围为 1 至 100。
+	Limit *SecurityAuditLimitParam `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Cursor 省略表示第一页；提供时必须为非空且只能出现一次，不能跨用途使用。
+	Cursor *SecurityAuditCursorParam `form:"cursor,omitempty" json:"cursor,omitempty"`
+
+	// Ip 精确匹配已记录的可信客户端 IPv4 或 IPv6 地址。
+	Ip *string `form:"ip,omitempty" json:"ip,omitempty"`
+
+	// Cidr 匹配已记录的可信客户端地址所属网段。
+	Cidr            *string                 `form:"cidr,omitempty" json:"cidr,omitempty"`
+	EventType       *SecurityAuditEventType `form:"eventType,omitempty" json:"eventType,omitempty"`
+	Outcome         *SecurityAuditOutcome   `form:"outcome,omitempty" json:"outcome,omitempty"`
+	ActorUserId     *int64                  `form:"actorUserId,omitempty" json:"actorUserId,omitempty"`
+	RepositoryId    *int64                  `form:"repositoryId,omitempty" json:"repositoryId,omitempty"`
+	CredentialId    *string                 `form:"credentialId,omitempty" json:"credentialId,omitempty"`
+	SessionId       *string                 `form:"sessionId,omitempty" json:"sessionId,omitempty"`
+	RequestId       *string                 `form:"requestId,omitempty" json:"requestId,omitempty"`
+	OriginRequestId *string                 `form:"originRequestId,omitempty" json:"originRequestId,omitempty"`
+	OperationId     *string                 `form:"operationId,omitempty" json:"operationId,omitempty"`
+	TaskId          *string                 `form:"taskId,omitempty" json:"taskId,omitempty"`
+	ActionId        *string                 `form:"actionId,omitempty" json:"actionId,omitempty"`
+	CanonicalPath   *string                 `form:"canonicalPath,omitempty" json:"canonicalPath,omitempty"`
+	ObjectId        *string                 `form:"objectId,omitempty" json:"objectId,omitempty"`
+	Digest          *string                 `form:"digest,omitempty" json:"digest,omitempty"`
+}
+
+// ListSecurityAuditEventObjectsParams defines parameters for ListSecurityAuditEventObjects.
+type ListSecurityAuditEventObjectsParams struct {
+	// Limit 页大小，省略时为 50，合法范围为 1 至 100。
+	Limit *SecurityAuditLimitParam `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Cursor 省略表示第一页；提供时必须为非空且只能出现一次，不能跨用途使用。
+	Cursor *SecurityAuditCursorParam `form:"cursor,omitempty" json:"cursor,omitempty"`
 }
 
 // GetAuditObservabilitySummaryParams defines parameters for GetAuditObservabilitySummary.
@@ -4885,6 +5792,9 @@ type ServerInterface interface {
 	// ListAuditAttentions 当前节点风险关注批次（仅管理员）
 	// (GET /api/v1/observability/audit/attentions)
 	ListAuditAttentions(c *gin.Context, params ListAuditAttentionsParams)
+	// GetSecurityAuditCollectionHealth 读取当前节点安全审计采集健康
+	// (GET /api/v1/observability/audit/collection-health)
+	GetSecurityAuditCollectionHealth(c *gin.Context)
 	// ListAuditObservabilityEvents 当前节点统一审计事件（仅管理员）
 	// (GET /api/v1/observability/audit/events)
 	ListAuditObservabilityEvents(c *gin.Context, params ListAuditObservabilityEventsParams)
@@ -4894,6 +5804,15 @@ type ServerInterface interface {
 	// ListAuditAttentionNotifications 当前节点风险通知批次分页（仅管理员）
 	// (GET /api/v1/observability/audit/notifications)
 	ListAuditAttentionNotifications(c *gin.Context, params ListAuditAttentionNotificationsParams)
+	// ListSecurityAuditEvents 当前节点安全事件快照分页
+	// (GET /api/v1/observability/audit/security-events)
+	ListSecurityAuditEvents(c *gin.Context, params ListSecurityAuditEventsParams)
+	// GetSecurityAuditEvent 读取当前节点一条安全事件
+	// (GET /api/v1/observability/audit/security-events/{eventId})
+	GetSecurityAuditEvent(c *gin.Context, eventId SecurityAuditEventIdParam)
+	// ListSecurityAuditEventObjects 独立分页读取一条安全事件的对象
+	// (GET /api/v1/observability/audit/security-events/{eventId}/objects)
+	ListSecurityAuditEventObjects(c *gin.Context, eventId SecurityAuditEventIdParam, params ListSecurityAuditEventObjectsParams)
 	// GetAuditObservabilitySummary 当前节点统一审计概览（仅管理员）
 	// (GET /api/v1/observability/audit/summary)
 	GetAuditObservabilitySummary(c *gin.Context, params GetAuditObservabilitySummaryParams)
@@ -4959,6 +5878,9 @@ type ServerInterface interface {
 	// GetRepositoryUsage 仓库客户端使用片段（据 format/type 返回接入命令）
 	// (GET /api/v1/repositories/{name}/usage)
 	GetRepositoryUsage(c *gin.Context, name RepoNameParam)
+	// GetPrivateAdmissionCandidate 查询本人私有候选的状态
+	// (GET /api/v1/security/admission/candidates/{operationId})
+	GetPrivateAdmissionCandidate(c *gin.Context, operationId PrivateAdmissionOperationIdParam)
 	// GetGlobalPinnedRepositories 全局置顶仓库（仅管理员）
 	// (GET /api/v1/settings/pinned-repositories)
 	GetGlobalPinnedRepositories(c *gin.Context)
@@ -6450,6 +7372,19 @@ func (siw *ServerInterfaceWrapper) ListAuditAttentions(c *gin.Context) {
 	siw.Handler.ListAuditAttentions(c, params)
 }
 
+// GetSecurityAuditCollectionHealth operation middleware
+func (siw *ServerInterfaceWrapper) GetSecurityAuditCollectionHealth(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetSecurityAuditCollectionHealth(c)
+}
+
 // ListAuditObservabilityEvents operation middleware
 func (siw *ServerInterfaceWrapper) ListAuditObservabilityEvents(c *gin.Context) {
 
@@ -6695,6 +7630,254 @@ func (siw *ServerInterfaceWrapper) ListAuditAttentionNotifications(c *gin.Contex
 	}
 
 	siw.Handler.ListAuditAttentionNotifications(c, params)
+}
+
+// ListSecurityAuditEvents operation middleware
+func (siw *ServerInterfaceWrapper) ListSecurityAuditEvents(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListSecurityAuditEventsParams
+
+	// ------------- Required query parameter "from" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "from", c.Request.URL.Query(), &params.From, runtime.BindQueryParameterOptions{Type: "string", Format: "date-time"})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter from: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Required query parameter "to" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "to", c.Request.URL.Query(), &params.To, runtime.BindQueryParameterOptions{Type: "string", Format: "date-time"})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter to: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", c.Request.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter limit: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", c.Request.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter cursor: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "ip" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "ip", c.Request.URL.Query(), &params.Ip, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter ip: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "cidr" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cidr", c.Request.URL.Query(), &params.Cidr, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter cidr: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "eventType" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "eventType", c.Request.URL.Query(), &params.EventType, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter eventType: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "outcome" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "outcome", c.Request.URL.Query(), &params.Outcome, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter outcome: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "actorUserId" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "actorUserId", c.Request.URL.Query(), &params.ActorUserId, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter actorUserId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "repositoryId" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "repositoryId", c.Request.URL.Query(), &params.RepositoryId, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter repositoryId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "credentialId" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "credentialId", c.Request.URL.Query(), &params.CredentialId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter credentialId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "sessionId" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "sessionId", c.Request.URL.Query(), &params.SessionId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter sessionId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "requestId" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "requestId", c.Request.URL.Query(), &params.RequestId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter requestId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "originRequestId" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "originRequestId", c.Request.URL.Query(), &params.OriginRequestId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter originRequestId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "operationId" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "operationId", c.Request.URL.Query(), &params.OperationId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter operationId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "taskId" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "taskId", c.Request.URL.Query(), &params.TaskId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter taskId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "actionId" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "actionId", c.Request.URL.Query(), &params.ActionId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter actionId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "canonicalPath" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "canonicalPath", c.Request.URL.Query(), &params.CanonicalPath, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter canonicalPath: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "objectId" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "objectId", c.Request.URL.Query(), &params.ObjectId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter objectId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "digest" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "digest", c.Request.URL.Query(), &params.Digest, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter digest: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ListSecurityAuditEvents(c, params)
+}
+
+// GetSecurityAuditEvent operation middleware
+func (siw *ServerInterfaceWrapper) GetSecurityAuditEvent(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "eventId" -------------
+	var eventId SecurityAuditEventIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "eventId", c.Param("eventId"), &eventId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter eventId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetSecurityAuditEvent(c, eventId)
+}
+
+// ListSecurityAuditEventObjects operation middleware
+func (siw *ServerInterfaceWrapper) ListSecurityAuditEventObjects(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "eventId" -------------
+	var eventId SecurityAuditEventIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "eventId", c.Param("eventId"), &eventId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter eventId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListSecurityAuditEventObjectsParams
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", c.Request.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter limit: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", c.Request.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter cursor: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ListSecurityAuditEventObjects(c, eventId, params)
 }
 
 // GetAuditObservabilitySummary operation middleware
@@ -7435,6 +8618,31 @@ func (siw *ServerInterfaceWrapper) GetRepositoryUsage(c *gin.Context) {
 	siw.Handler.GetRepositoryUsage(c, name)
 }
 
+// GetPrivateAdmissionCandidate operation middleware
+func (siw *ServerInterfaceWrapper) GetPrivateAdmissionCandidate(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "operationId" -------------
+	var operationId PrivateAdmissionOperationIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "operationId", c.Param("operationId"), &operationId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter operationId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetPrivateAdmissionCandidate(c, operationId)
+}
+
 // GetGlobalPinnedRepositories operation middleware
 func (siw *ServerInterfaceWrapper) GetGlobalPinnedRepositories(c *gin.Context) {
 
@@ -8026,6 +9234,10 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/api/v1/observability/audit/attention/:attentionId", wrapper.GetAuditAttention)
 	router.PUT(options.BaseURL+"/api/v1/observability/audit/attention-acknowledgements", wrapper.AcknowledgeAuditAttention)
 	router.GET(options.BaseURL+"/api/v1/observability/audit/notifications", wrapper.ListAuditAttentionNotifications)
+	router.GET(options.BaseURL+"/api/v1/observability/audit/security-events", wrapper.ListSecurityAuditEvents)
+	router.GET(options.BaseURL+"/api/v1/observability/audit/security-events/:eventId", wrapper.GetSecurityAuditEvent)
+	router.GET(options.BaseURL+"/api/v1/observability/audit/security-events/:eventId/objects", wrapper.ListSecurityAuditEventObjects)
+	router.GET(options.BaseURL+"/api/v1/observability/audit/collection-health", wrapper.GetSecurityAuditCollectionHealth)
 	router.GET(options.BaseURL+"/api/v1/observability/downloads/by-client", wrapper.GetDownloadByClient)
 	router.GET(options.BaseURL+"/api/v1/observability/downloads/trend", wrapper.GetDownloadTrendGrouped)
 	router.GET(options.BaseURL+"/api/v1/observability/dashboard", wrapper.GetOperationsDashboard)
@@ -8040,6 +9252,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.POST(options.BaseURL+"/api/v1/users", wrapper.CreateUser)
 	router.DELETE(options.BaseURL+"/api/v1/users/:id", wrapper.DeleteUser)
 	router.PATCH(options.BaseURL+"/api/v1/users/:id", wrapper.UpdateUser)
+	router.GET(options.BaseURL+"/api/v1/security/admission/candidates/:operationId", wrapper.GetPrivateAdmissionCandidate)
 	router.POST(options.BaseURL+"/api/v1/users/:id/password", wrapper.ChangePassword)
 	router.PUT(options.BaseURL+"/api/v1/users/:id/publish-policies", wrapper.PutPublishPolicies)
 	router.GET(options.BaseURL+"/api/v1/users/:id/publish-policies/:repo", wrapper.GetPublishPolicy)

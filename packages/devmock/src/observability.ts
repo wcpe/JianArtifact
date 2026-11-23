@@ -133,11 +133,6 @@ function seedEvents(now: Date): StoredAuditEvent[] {
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36 Edg/152.0.0.0",
         // 白名单常用头紧凑 JSON：敏感头（Authorization 等）永不入列，单头值截断 256 字符。
         httpHeaders: `{"Accept":"application/json","Content-Type":"application/json"}`,
-        bodyPreview: `{
-  "username": "admin",
-  "password": "****",
-  "remember": true
-}`,
       },
       durationMs: 96,
       // 单段服务端耗时（进入业务路由处理 → 审计落笔），恒不大于总耗时 durationMs。
@@ -173,12 +168,7 @@ function seedEvents(now: Date): StoredAuditEvent[] {
         requestId: "8d42b7c9-1e05-4f28-b3aa-59d6c0f41e77",
         userAgent:
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36 Edg/152.0.0.0",
-        tokenPreview: "Bearer eyJhbG****1dnM",
         httpHeaders: `{"Content-Type":"application/json","User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/152.0.0.0"}`,
-        bodyPreview: `{
-  "reason": "cleanup",
-  "force": true
-}`,
       },
       durationMs: 1240,
       durationServerMs: 1183,
@@ -208,10 +198,6 @@ function seedEvents(now: Date): StoredAuditEvent[] {
         requestId: "5b90cc17-4a6e-42d1-8f30-7c2ad9e5b1f4",
         userAgent: "jianartifact-node/0.2.0 (replication-worker)",
         httpHeaders: `{"Content-Type":"application/json","User-Agent":"jianartifact-node/0.2.0 (replication-worker)"}`,
-        bodyPreview: `{
-  "batch_id": "repl-batch-118",
-  "mode": "incremental"
-}`,
       },
       durationMs: 3310,
       durationServerMs: 3268,
@@ -247,12 +233,7 @@ function seedEvents(now: Date): StoredAuditEvent[] {
         requestId: "a7e31d08-6c92-4b57-91fd-0e5a3c8b2d61",
         userAgent:
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36 Edg/152.0.0.0",
-        tokenPreview: "Bearer eyJhbG****1dnM",
         httpHeaders: `{"Accept":"application/json","Content-Type":"application/json"}`,
-        bodyPreview: `{
-  "anonymous_access": false,
-  "public_url": "https://repo.example.com"
-}`,
       },
       durationMs: 74,
       durationServerMs: 52,
@@ -310,27 +291,11 @@ function seedEvents(now: Date): StoredAuditEvent[] {
             index % 2 === 0
               ? "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36 Edg/152.0.0.0"
               : "jianartifact-node/0.2.0 (replication-worker)",
-          ...(index % 2 === 0 ? { tokenPreview: "Bearer eyJhbG****1dnM" } : {}),
           // 白名单常用头紧凑 JSON：管理写请求带内容协商头，复制请求带节点标识 UA。
           httpHeaders:
             index % 2 === 0
               ? `{"Accept":"application/json","Content-Type":"application/json"}`
               : `{"Content-Type":"application/json","User-Agent":"jianartifact-node/0.2.0 (replication-worker)"}`,
-          bodyPreview:
-            index % 2 === 0
-              ? `{
-  "account_ids": [
-    ${index + 5},
-    ${index + 3},
-    2,
-    1
-  ],
-  "force": true
-}`
-              : `{
-  "batch_id": "repl-batch-${100 + index}",
-  "mode": "incremental"
-}`,
         },
         durationMs,
         // 单段服务端耗时（进入业务路由处理 → 审计落笔），恒不大于总耗时。

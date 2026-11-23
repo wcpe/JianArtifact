@@ -41,11 +41,37 @@ type Principal struct {
 	AuthSource string
 	TokenID    int64
 	TokenName  string
+	// TokenPurpose 与 TokenScopes 仅对 KindToken 生效：机器凭据的用途与作用域，
+	// 在协议裁决时与实时 ACL 取交集；空用途为过渡期旧凭据。
+	TokenPurpose string
+	TokenScopes  []MachineTokenScope
 	// Email 是账号绑定邮箱（可空）；供审计身份快照使用。
 	Email            string
 	WebLoginDisabled bool
 	JTI              string    // 会话 jti（仅 KindSession），登出黑名单键
 	ExpiresAt        time.Time // 会话过期时间（仅 KindSession）
+	AccountEpoch     int64
+	SessionID        string
+	Protocol         bool
+}
+
+// CredentialProof 仅携带已经验证的凭据引用，不能从请求输入构造用于授权。
+type CredentialProof struct {
+	UserID, Epoch, TokenID int64
+	Kind                   Kind
+	SessionID, JTI         string
+	ExpiresAt              time.Time
+	Protocol               bool
+}
+
+func (p *Principal) CredentialProof() CredentialProof {
+	return CredentialProof{UserID: p.UserID, Epoch: p.AccountEpoch, TokenID: p.TokenID, Kind: p.Kind,
+		SessionID: p.SessionID, JTI: p.JTI, ExpiresAt: p.ExpiresAt, Protocol: p.Protocol}
+}
+
+// SessionStore 是生产装配使用的持久会话裁决器。
+type SessionStore interface {
+	PrincipalBySession(CredentialProof) (*Principal, error)
 }
 
 // IsAdmin 判断主体是否管理员。
@@ -65,6 +91,23 @@ type Store interface {
 
 // ErrUnauthenticated 表示凭据缺失或无效。
 var ErrUnauthenticated = errors.New("未认证")
+
+// ErrCredentialStateUnavailable 表示认证仓储状态未知，不能按匿名处理。
+var ErrCredentialStateUnavailable = errors.New("无法裁决凭据状态")
+
+// AdmissionPrincipal 解析候选入口的管理通道凭据，保留状态未知与确认无效的区别。
+func (a *Authenticator) AdmissionPrincipal(r *http.Request) (*Principal, error) {
+	return a.resolveFor(r, false)
+}
+
+func rejectCredentialResolution(c *gin.Context, err error) {
+	if errors.Is(err, ErrCredentialStateUnavailable) {
+		WriteError(c, http.StatusServiceUnavailable, "security_state_unavailable", "凭据状态暂不可确认")
+	} else {
+		WriteError(c, http.StatusUnauthorized, "unauthenticated", "未认证或凭据无效")
+	}
+	c.Abort()
+}
 
 // Authenticator 解析 Authorization: Bearer 凭据并注入 principal。
 type Authenticator struct {
@@ -116,13 +159,13 @@ func (a *Authenticator) Require() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		principal, err := a.resolveFor(c.Request, a.protocol)
 		if err != nil {
-			WriteError(c, http.StatusUnauthorized, "unauthenticated", "未认证或凭据无效")
-			c.Abort()
+			rejectCredentialResolution(c, err)
 			return
 		}
 		if a.rejectDisabledManagementPrincipal(c, principal) {
 			return
 		}
+		principal.Protocol = a.protocol
 		c.Set(principalKey, principal)
 		c.Next()
 	}
@@ -136,32 +179,65 @@ func (a *Authenticator) Optional() gin.HandlerFunc {
 			if a.rejectDisabledManagementPrincipal(c, principal) {
 				return
 			}
+			principal.Protocol = a.protocol
 			c.Set(principalKey, principal)
-		} else if a.protocol && protocolCredentialsPresented(c.Request) {
-			// 原生协议携带了凭据但认证失败时，不能回落为匿名请求进入 handler，
-			// 否则 HTTP 传输限制会在鉴权后才被拒绝并留下无主体审计。
-			WriteError(c, http.StatusUnauthorized, "unauthenticated", "未认证或凭据无效")
-			c.Abort()
+		} else if credentialsPresented(c.Request, a.protocol) {
+			// 显式携带凭据不能回落成匿名。
+			rejectCredentialResolution(c, err)
 			return
 		}
 		c.Next()
 	}
 }
 
+// SecurityAuditPrincipal 在安全审计读取入口按既有管理面规则解析主体。
+// 禁止登录管理端的已认证主体由入口按当地契约拒绝，不写入主体上下文。
+func (a *Authenticator) SecurityAuditPrincipal(rejectDisabled gin.HandlerFunc) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		principal, err := a.resolveFor(c.Request, false)
+		if err != nil {
+			return
+		}
+		if principal.WebLoginDisabled {
+			c.Abort()
+			rejectDisabled(c)
+			return
+		}
+		c.Set(principalKey, principal)
+	}
+}
+
 // protocolCredentialsPresented 判断请求是否显式携带原生协议可识别的凭据。
 // 无凭据的公共读请求仍必须允许进入协议 handler 按仓库可见性处理。
+func credentialsPresented(r *http.Request, protocol bool) bool {
+	if protocol {
+		return protocolCredentialsPresented(r)
+	}
+	return strings.TrimSpace(r.Header.Get("Authorization")) != ""
+}
+
 func protocolCredentialsPresented(r *http.Request) bool {
 	return strings.TrimSpace(r.Header.Get("Authorization")) != "" ||
 		strings.TrimSpace(r.Header.Get("X-NuGet-ApiKey")) != ""
 }
 
 func (a *Authenticator) rejectDisabledManagementPrincipal(c *gin.Context, principal *Principal) bool {
-	if a.protocol || !principal.WebLoginDisabled {
+	if a.protocol {
 		return false
 	}
-	WriteError(c, http.StatusForbidden, "web_login_disabled", "该账号已禁止登录管理端")
-	c.Abort()
-	return true
+	if principal.WebLoginDisabled {
+		WriteError(c, http.StatusForbidden, "web_login_disabled", "该账号已禁止登录管理端")
+		c.Abort()
+		return true
+	}
+	// 受限机器凭据只承载协议动作：用途非空的 KindToken 主体不得进入管理面，
+	// 管理员名下 Token 亦然；未限用途旧凭据保留过渡兼容。
+	if principal.Kind == KindToken && principal.TokenPurpose != TokenPurposeLegacy {
+		WriteError(c, http.StatusForbidden, "credential_channel_denied", "机器凭据不允许访问管理接口")
+		c.Abort()
+		return true
+	}
+	return false
 }
 
 // resolve 从请求头解析出主体：优先 Authorization: Bearer（jat_ 前缀走 API Token，
@@ -217,7 +293,7 @@ func (a *Authenticator) resolveFor(r *http.Request, protocol bool) (*Principal, 
 			if err != nil {
 				return nil, err
 			}
-			p.AuthSource = AuthSourceBasic
+			p.AuthSource, p.Protocol = AuthSourceBasic, protocol
 			return p, nil
 		}
 	}
@@ -239,6 +315,9 @@ func (a *Authenticator) resolveToken(raw, source string) (*Principal, error) {
 	}
 	p, err := a.store.PrincipalByTokenDigest(DigestToken(raw))
 	if err != nil {
+		if errors.Is(err, ErrCredentialStateUnavailable) {
+			return nil, err
+		}
 		return nil, ErrUnauthenticated
 	}
 	p.Kind = KindToken
@@ -252,16 +331,26 @@ func (a *Authenticator) resolveSession(raw string) (*Principal, error) {
 	if err != nil {
 		return nil, ErrUnauthenticated
 	}
-	revoked, err := a.store.IsTokenRevoked(claims.ID)
-	if err != nil || revoked {
-		return nil, ErrUnauthenticated
-	}
 	id, err := strconv.ParseInt(claims.Subject, 10, 64)
-	if err != nil {
+	if err != nil || id <= 0 || claims.ID == "" || claims.ExpiresAt == nil ||
+		(claims.SessionID == "") != (claims.AccountEpoch == 0) || claims.AccountEpoch < 0 {
 		return nil, ErrUnauthenticated
 	}
-	p, err := a.store.PrincipalByID(id)
+	var p *Principal
+	if store, ok := a.store.(SessionStore); ok {
+		p, err = store.PrincipalBySession(CredentialProof{UserID: id, Kind: KindSession, Epoch: claims.AccountEpoch,
+			SessionID: claims.SessionID, JTI: claims.ID, ExpiresAt: claims.ExpiresAt.Time})
+	} else {
+		revoked, revokeErr := a.store.IsTokenRevoked(claims.ID)
+		if revokeErr != nil || revoked || claims.SessionID != "" {
+			return nil, ErrUnauthenticated
+		}
+		p, err = a.store.PrincipalByID(id)
+	}
 	if err != nil {
+		if errors.Is(err, ErrCredentialStateUnavailable) {
+			return nil, err
+		}
 		return nil, ErrUnauthenticated
 	}
 	p.Kind = KindSession

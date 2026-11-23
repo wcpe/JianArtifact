@@ -32,6 +32,10 @@ type Token struct {
 	UserID    int64  `db:"user_id"`
 	Name      string `db:"name"`
 	CreatedAt string `db:"created_at"`
+	// Purpose 与 ScopesJSON 为机器凭据用途与作用域；空用途是过渡期旧凭据。
+	Purpose    string `db:"purpose"`
+	ScopesJSON string `db:"scopes_json"`
+	ExpiresAt  *int64 `db:"expires_at"`
 }
 
 // Repository 是 repository 表的行模型。

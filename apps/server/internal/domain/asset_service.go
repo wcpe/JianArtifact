@@ -195,11 +195,15 @@ type AssetService struct {
 	upstream  *upstream.Client
 	mutator   *AssetMutationCoordinator
 	writeGate BusinessWriteGate
-	sf        singleflight.Group
-	recorder  ChangeRecorder
-	nodeID    func() string
-	health    *proxyHealth
-	negCache  *negativeCache // 404 负缓存（proxy/group 读路径短窗缓存明确 404）
+	// users 供发布完成事务内重查凭据当前状态；nil 保持兼容行为。
+	users *repository.UserRepo
+	// repoSvc 供发布完成事务内复核 ACL 授权；nil 保持兼容行为。
+	repoSvc  *RepositoryService
+	sf       singleflight.Group
+	recorder ChangeRecorder
+	nodeID   func() string
+	health   *proxyHealth
+	negCache *negativeCache // 404 负缓存（proxy/group 读路径短窗缓存明确 404）
 	// groupBudget 是 group 逐成员并行解析的**确认阶段**预算（首字节看门狗时长）。
 	// 由常量改为实例字段的原因：JIAN_GROUP_MEMBER_TIMEOUT 需在装配期注入、测试也要能缩短。
 	// 由 groupBudgetMu 保护读写（读取见 memberConfirmBudget）。
@@ -226,6 +230,12 @@ func NewAssetService(repos *repository.RepoRepo, assets *repository.AssetRepo, b
 
 // SetMutationCoordinator 注入与其它写路径共享的节点级协调器。
 func (s *AssetService) SetMutationCoordinator(c *AssetMutationCoordinator) { s.mutator = c }
+
+// SetCredentialRevalidator 注入凭据仓储，供发布完成事务按同一输入重查状态。
+func (s *AssetService) SetCredentialRevalidator(users *repository.UserRepo) { s.users = users }
+
+// SetRepositoryService 注入仓库服务，供发布完成事务内复核主体对目标仓库的实时 ACL。
+func (s *AssetService) SetRepositoryService(r *RepositoryService) { s.repoSvc = r }
 
 // SetStorageQuotaCheck 注入仓库级存储配额的提交点权威复检。
 // nil 表示不做存储配额判定（兼容既有装配与只读部署）。
@@ -389,7 +399,7 @@ func (s *AssetService) NodeID() string {
 
 // Put 向 hosted 仓库发布一件制品：流式写入 blob，再覆盖写 asset 元数据。
 // 仓库不存在返回 ErrNotFound；非 hosted 仓库（proxy/group）返回 ErrConflict。
-// 格式（raw/maven/npm）语义由协议层按仓库 format 分派后自行处理，此处仅按内容寻址存字节。
+// 格式语义由协议层处理。此兼容入口不产生可信安全事件；非样例入口尚未全部接入。
 func (s *AssetService) Put(repoName, path string, r io.Reader, contentType string) (*repository.Asset, error) {
 	if err := s.requireBusinessWrite(); err != nil {
 		return nil, err
@@ -556,7 +566,7 @@ func (s *AssetService) releaseStagedBlob(hash string) {
 // PublishAssets 将一组已落盘 blob 的资产引用一次性公开。
 // 当复制服务可用时，同一 SQLite 事务会同步写入一个 v2 operation outbox。
 func (s *AssetService) PublishAssets(repoName string, after []*repository.Asset) (string, error) {
-	return s.publishAssets(repoName, after, nil)
+	return s.publishAssets(repoName, after, nil, nil)
 }
 
 // PublishAssetsWithCommitHook 将一组资产和附加元数据作为同一事务公开。
@@ -564,16 +574,16 @@ func (s *AssetService) PublishAssetsWithCommitHook(repoName string, after []*rep
 	if hook == nil {
 		return "", ErrValidation
 	}
-	return s.publishAssets(repoName, after, hook)
+	return s.publishAssets(repoName, after, hook, nil)
 }
 
-func (s *AssetService) publishAssets(repoName string, after []*repository.Asset, hook repository.MutationCompletionHook) (string, error) {
+func (s *AssetService) publishAssets(repoName string, after []*repository.Asset, hook repository.MutationCompletionHook, audited *securityAuditedPublish) (string, error) {
 	if err := s.requireBusinessWrite(); err != nil {
 		return "", err
 	}
 	repo, err := s.repos.GetByName(repoName)
 	if err != nil {
-		return "", mapNotFound(err)
+		return "", audited.mapWriteError(mapNotFound(err))
 	}
 	proxyMetadataBatch := (repo.Format == "pypi" || repo.Format == "nuget") && repo.Type == "proxy" && hook != nil
 	if (repo.Type != "hosted" && !proxyMetadataBatch) || len(after) == 0 {
@@ -581,20 +591,28 @@ func (s *AssetService) publishAssets(repoName string, after []*repository.Asset,
 	}
 	items, err := s.publishMutationItems(repo, after)
 	if err != nil {
-		return "", err
+		return "", audited.mapWriteError(err)
 	}
 	operationID := newOperationID()
+	if audited != nil {
+		hook = audited.bind(operationID, items, hook)
+	}
 	if repo.Type == "hosted" {
 		nid := s.NodeID()
 		envelope, envelopeErr := ociOperationEnvelope(nid, repoName, operationID, items)
 		if envelopeErr != nil {
 			return "", envelopeErr
 		}
-		if err := s.mutator.ApplyWithOutboxAndHook(items, envelope, hook); err != nil {
-			return "", err
+		err = s.mutator.ApplyWithOutboxAndHook(items, envelope, hook)
+	} else {
+		_, err = s.mutator.ApplyWithOperationIDAndHook(operationID, items, hook)
+	}
+	if err != nil {
+		if audited != nil && errors.Is(err, errAssetCommitUnknown) {
+			// Begin 已确认落盘的原 intent；仅内部返回，协议不得据此替代授权。
+			return operationID, audited.mapWriteError(err)
 		}
-	} else if _, err := s.mutator.ApplyWithOperationIDAndHook(operationID, items, hook); err != nil {
-		return "", err
+		return "", audited.mapWriteError(err)
 	}
 	s.releasePublishedBlobs(after)
 	return operationID, nil
@@ -1284,6 +1302,10 @@ func upstreamHealthCategoryFor(err error, category string) string {
 }
 
 func (s *AssetService) cleanupFailedWrite(hash string, cause error) error {
+	if errors.Is(cause, errAssetCommitUnknown) || errors.Is(cause, errAssetRecoveryPending) {
+		// 原 intent 尚待判定或恢复，不提前释放新 blob 的暂存保护。
+		return cause
+	}
 	s.releaseStagedBlob(hash)
 	if s.mutator == nil {
 		if err := s.blobs.Remove(hash); err != nil {

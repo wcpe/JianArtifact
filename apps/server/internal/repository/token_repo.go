@@ -29,7 +29,7 @@ func (r *TokenRepo) Create(userID int64, name, digest string) (int64, error) {
 func (r *TokenRepo) ListByUser(userID int64) ([]Token, error) {
 	var ts []Token
 	err := r.db.Select(&ts,
-		`SELECT id, user_id, name, created_at FROM api_token
+		`SELECT id, user_id, name, created_at, purpose, scopes_json, expires_at FROM api_token
 		 WHERE user_id = ? AND revoked_at IS NULL ORDER BY id`, userID)
 	return ts, err
 }

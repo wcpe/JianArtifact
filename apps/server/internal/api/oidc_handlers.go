@@ -39,7 +39,13 @@ func (h *Handlers) StartOidcLogin(c *gin.Context) {
 		c.AbortWithStatus(http.StatusNotFound)
 		return
 	}
+	revision, err := h.auth.CredentialRevision(c.Request.Context())
+	if err != nil {
+		h.oidcFail(c, "provider_unavailable")
+		return
+	}
 	flow := h.oidc.Verifier.NewFlow()
+	flow.CredentialRevision = &revision
 	encoded, err := h.oidc.FlowSigner.Encode(flow)
 	if err != nil {
 		auth.WriteError(c, http.StatusInternalServerError, "internal_error", "生成登录流程状态失败")
@@ -48,9 +54,8 @@ func (h *Handlers) StartOidcLogin(c *gin.Context) {
 	h.setOIDCFlowCookie(c, encoded, int(auth.OIDCFlowLifetime.Seconds()))
 	target, err := h.oidc.Verifier.AuthCodeURL(c.Request.Context(), flow)
 	if err != nil {
-		// IdP 不可达：详细原因进日志，对外只回笼统错误码。
-		log.Printf("OIDC 登录起跳失败：%v", err)
-		h.oidcFail(c, "provider_unavailable")
+		log.Print("OIDC 登录起跳失败")
+		h.oidcAttemptRejected(c, "provider_unavailable", "internal_error", auth.ClassifyProviderAuthFailure(err))
 		return
 	}
 	c.Redirect(http.StatusFound, target)
@@ -66,58 +71,59 @@ func (h *Handlers) CompleteOidcLogin(c *gin.Context, params CompleteOidcLoginPar
 	// 流程状态只消费一次：无论成败都先清除 Cookie。
 	h.setOIDCFlowCookie(c, "", -1)
 
-	if providerErr := derefString(params.Error); providerErr != "" {
-		log.Printf("OIDC 提供方返回错误：%s", providerErr)
-		h.oidcFail(c, "provider_error")
+	if derefString(params.Error) != "" {
+		// 未验证的回调参数只证明本请求被拒绝，不证明上游故障或用户凭据错误。
+		h.oidcAttemptRejected(c, "provider_error", "unauthorized", auth.ProviderAuthDenied)
 		return
 	}
 	value, err := c.Cookie(auth.OIDCFlowCookieName)
 	if err != nil {
-		h.oidcFail(c, "flow_expired")
+		h.oidcAttemptRejected(c, "flow_expired", "invalid_credentials", auth.ProviderAuthDenied)
 		return
 	}
 	flow, err := h.oidc.FlowSigner.Decode(value, time.Now())
-	if err != nil {
-		log.Printf("OIDC 流程状态不可用：%v", err)
-		h.oidcFail(c, "flow_expired")
+	if err != nil || flow.CredentialRevision == nil {
+		h.oidcAttemptRejected(c, "flow_expired", "invalid_credentials", auth.ProviderAuthDenied)
 		return
 	}
 	if derefString(params.State) != flow.State {
-		log.Print("OIDC 回调 state 与流程状态不符，疑似跨站重放")
-		h.oidcFail(c, "state_mismatch")
+		h.oidcAttemptRejected(c, "state_mismatch", "invalid_credentials", auth.ProviderAuthDenied)
 		return
 	}
 	code := derefString(params.Code)
 	if code == "" {
-		h.oidcFail(c, "missing_code")
+		h.oidcAttemptRejected(c, "missing_code", "bad_request", auth.ProviderAuthDenied)
 		return
 	}
-	claims, err := h.oidc.Verifier.Exchange(c.Request.Context(), code, flow)
+	ctx := c.Request.Context()
+	claims, err := h.oidc.Verifier.Exchange(ctx, code, flow)
 	if err != nil {
-		log.Printf("OIDC 身份校验失败：%v", err)
-		h.oidcFail(c, "verify_failed")
+		h.oidcAttemptRejected(c, "verify_failed", "invalid_credentials", auth.ClassifyProviderAuthFailure(err))
 		return
 	}
 	if !h.oidcEmailAllowed(claims.Email) {
-		log.Printf("OIDC 登录被域名白名单拒绝：%s", claims.Email)
-		h.oidcFail(c, "not_allowed")
+		h.oidcAttemptRejected(c, "not_allowed", "forbidden", auth.ProviderAuthDenied)
 		return
 	}
-	token, _, err := h.auth.LoginExternal(domain.ExternalIdentity{
+	token, _, err := h.auth.LoginExternalContext(ctx, domain.ExternalIdentity{
 		Source:   "oidc",
 		Subject:  claims.Subject,
 		Username: claims.Username,
 		Email:    claims.Email,
-	})
+	}, *flow.CredentialRevision)
 	if err != nil {
-		log.Printf("OIDC 登录被拒绝（%s）：%v", claims.Username, err)
 		h.oidcFail(c, "login_rejected")
 		return
 	}
 	c.Redirect(http.StatusFound, h.oidc.RedirectAfter+"#token="+url.QueryEscape(token))
 }
 
-// oidcFail 以片段错误码重定向前端登录页；详细原因只进服务端日志。
+func (h *Handlers) oidcAttemptRejected(c *gin.Context, redirectCode, auditCode string, outcome auth.ProviderAuthOutcome) {
+	h.auth.RecordExternalAuthRejection(c.Request.Context(), "oidc", auditCode, outcome)
+	h.oidcFail(c, redirectCode)
+}
+
+// oidcFail 以固定的片段错误码重定向前端登录页。
 func (h *Handlers) oidcFail(c *gin.Context, code string) {
 	c.Redirect(http.StatusFound, h.oidc.RedirectAfter+"#error="+url.QueryEscape(code))
 }
