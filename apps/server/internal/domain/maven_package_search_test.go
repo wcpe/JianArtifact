@@ -107,17 +107,6 @@ func TestSearchMavenPackageWildcards(t *testing.T) {
 	}
 }
 
-// splitPath 返回路径最后一段（artifactID），供测试拼文件名。
-func splitPath(dir string) string {
-	last := ""
-	for i := len(dir) - 1; i >= 0; i-- {
-		if dir[i] == '/' {
-			return dir[i+1:]
-		}
-	}
-	return last
-}
-
 // TestSearchMavenSnapshotOnlyFlagsSuspect 验证污染检测：字面 SNAPSHOT 且无时间戳构建
 // 应被标记为 Suspect——这正是 Nexus 事故里的形态。
 func TestSearchMavenSnapshotOnlyFlagsSuspect(t *testing.T) {
