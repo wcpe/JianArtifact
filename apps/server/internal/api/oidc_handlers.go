@@ -39,7 +39,13 @@ func (h *Handlers) StartOidcLogin(c *gin.Context) {
 		c.AbortWithStatus(http.StatusNotFound)
 		return
 	}
+	revision, err := h.auth.CredentialRevision(c.Request.Context())
+	if err != nil {
+		h.oidcFail(c, "provider_unavailable")
+		return
+	}
 	flow := h.oidc.Verifier.NewFlow()
+	flow.CredentialRevision = &revision
 	encoded, err := h.oidc.FlowSigner.Encode(flow)
 	if err != nil {
 		auth.WriteError(c, http.StatusInternalServerError, "internal_error", "生成登录流程状态失败")
@@ -76,7 +82,7 @@ func (h *Handlers) CompleteOidcLogin(c *gin.Context, params CompleteOidcLoginPar
 		return
 	}
 	flow, err := h.oidc.FlowSigner.Decode(value, time.Now())
-	if err != nil {
+	if err != nil || flow.CredentialRevision == nil {
 		h.oidcAttemptRejected(c, "flow_expired", "invalid_credentials", auth.ProviderAuthDenied)
 		return
 	}
@@ -104,7 +110,7 @@ func (h *Handlers) CompleteOidcLogin(c *gin.Context, params CompleteOidcLoginPar
 		Subject:  claims.Subject,
 		Username: claims.Username,
 		Email:    claims.Email,
-	})
+	}, *flow.CredentialRevision)
 	if err != nil {
 		h.oidcFail(c, "login_rejected")
 		return

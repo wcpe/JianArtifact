@@ -1064,6 +1064,57 @@ func (e OperationsAlertSeverity) Valid() bool {
 	}
 }
 
+// Defines values for PrivateAdmissionCandidateStatusCoverage.
+const (
+	PrivateAdmissionCandidateStatusCoverageUnknown PrivateAdmissionCandidateStatusCoverage = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the PrivateAdmissionCandidateStatusCoverage enum.
+func (e PrivateAdmissionCandidateStatusCoverage) Valid() bool {
+	switch e {
+	case PrivateAdmissionCandidateStatusCoverageUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PrivateAdmissionCandidateStatusErrorCode.
+const (
+	AdmissionIntegrityFailed PrivateAdmissionCandidateStatusErrorCode = "admission_integrity_failed"
+)
+
+// Valid indicates whether the value is a known member of the PrivateAdmissionCandidateStatusErrorCode enum.
+func (e PrivateAdmissionCandidateStatusErrorCode) Valid() bool {
+	switch e {
+	case AdmissionIntegrityFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PrivateAdmissionCandidateStatusState.
+const (
+	Expired  PrivateAdmissionCandidateStatusState = "expired"
+	Rejected PrivateAdmissionCandidateStatusState = "rejected"
+	Staged   PrivateAdmissionCandidateStatusState = "staged"
+)
+
+// Valid indicates whether the value is a known member of the PrivateAdmissionCandidateStatusState enum.
+func (e PrivateAdmissionCandidateStatusState) Valid() bool {
+	switch e {
+	case Expired:
+		return true
+	case Rejected:
+		return true
+	case Staged:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RemoteNexusRepositoryType.
 const (
 	RemoteNexusRepositoryTypeGroup  RemoteNexusRepositoryType = "group"
@@ -1498,20 +1549,26 @@ func (e SecurityAuditEventPageProjectionHealth) Valid() bool {
 
 // Defines values for SecurityAuditEventType.
 const (
-	AssetChangeCommitted  SecurityAuditEventType = "asset.change_committed"
-	AssetResponseObserved SecurityAuditEventType = "asset.response_observed"
-	AuthAttempt           SecurityAuditEventType = "auth.attempt"
-	AuthPasswordChanged   SecurityAuditEventType = "auth.password_changed"
-	AuthSessionCreated    SecurityAuditEventType = "auth.session_created"
-	ProtocolWriteDenied   SecurityAuditEventType = "protocol.write_denied"
+	AdmissionCandidateStaged SecurityAuditEventType = "admission.candidate_staged"
+	AssetChangeCommitted     SecurityAuditEventType = "asset.change_committed"
+	AssetResponseObserved    SecurityAuditEventType = "asset.response_observed"
+	AuthAccountAccessChanged SecurityAuditEventType = "auth.account_access_changed"
+	AuthAttempt              SecurityAuditEventType = "auth.attempt"
+	AuthPasswordChanged      SecurityAuditEventType = "auth.password_changed"
+	AuthSessionCreated       SecurityAuditEventType = "auth.session_created"
+	ProtocolWriteDenied      SecurityAuditEventType = "protocol.write_denied"
 )
 
 // Valid indicates whether the value is a known member of the SecurityAuditEventType enum.
 func (e SecurityAuditEventType) Valid() bool {
 	switch e {
+	case AdmissionCandidateStaged:
+		return true
 	case AssetChangeCommitted:
 		return true
 	case AssetResponseObserved:
+		return true
+	case AuthAccountAccessChanged:
 		return true
 	case AuthAttempt:
 		return true
@@ -3595,6 +3652,39 @@ type PinnedRepositoriesResponse struct {
 	RepositoryIds []int64 `json:"repositoryIds"`
 }
 
+// PrivateAdmissionCandidateStatus defines model for PrivateAdmissionCandidateStatus.
+type PrivateAdmissionCandidateStatus struct {
+	// Coverage 仅跟踪私有状态，不证明扫描覆盖。
+	Coverage PrivateAdmissionCandidateStatusCoverage `json:"coverage"`
+
+	// ErrorCode 已确认的硬完整性失败；无此事实时省略。
+	ErrorCode *PrivateAdmissionCandidateStatusErrorCode `json:"errorCode,omitempty"`
+
+	// ExpiresAt 候选在服务端的 UTC 到期时间。
+	ExpiresAt time.Time `json:"expiresAt"`
+
+	// ManifestDigest 已确认的清单摘要，未确认时省略。
+	ManifestDigest *string `json:"manifestDigest,omitempty"`
+
+	// ManifestVersion 已确认的清单版本，未确认时省略。
+	ManifestVersion *int64 `json:"manifestVersion,omitempty"`
+	OperationId     string `json:"operationId"`
+	RepositoryId    int64  `json:"repositoryId"`
+
+	// State 已封存、拒绝或已过期；已封存不表示已发布。
+	State         PrivateAdmissionCandidateStatusState `json:"state"`
+	TargetVersion int64                                `json:"targetVersion"`
+}
+
+// PrivateAdmissionCandidateStatusCoverage 仅跟踪私有状态，不证明扫描覆盖。
+type PrivateAdmissionCandidateStatusCoverage string
+
+// PrivateAdmissionCandidateStatusErrorCode 已确认的硬完整性失败；无此事实时省略。
+type PrivateAdmissionCandidateStatusErrorCode string
+
+// PrivateAdmissionCandidateStatusState 已封存、拒绝或已过期；已封存不表示已发布。
+type PrivateAdmissionCandidateStatusState string
+
 // ProtocolMetricPoint defines model for ProtocolMetricPoint.
 type ProtocolMetricPoint struct {
 	CacheHitCount  int64     `json:"cacheHitCount"`
@@ -3916,8 +4006,9 @@ type SecurityAuditEvent struct {
 	// EventId 不透明稳定事件标识。
 	EventId string `json:"eventId"`
 
-	// EventType 采集缺口由覆盖和健康视图单独表达。`auth.password_changed` 仅表示已提交的改密事实，
-	// 对象页仅有一个 `user` 目标。不记录口令、哈希或内部代次。
+	// EventType 采集缺口由覆盖和健康视图单独表达。`auth.password_changed` 和 `auth.account_access_changed` 仅表示已提交的改密或账号级资格变化，
+	// 各自只有一个 `user` 目标，不记录口令、口令哈希或内部代次。`admission.candidate_staged` 只表示私有接收已封存，
+	// 有一个带实际摘要和字节数的 `asset` 对象，不表示公开发布。
 	EventType    SecurityAuditEventType `json:"eventType"`
 	EventVersion int                    `json:"eventVersion"`
 
@@ -4010,8 +4101,9 @@ type SecurityAuditEventPage struct {
 // SecurityAuditEventPageProjectionHealth 投影的可用状态，不表示采集覆盖。
 type SecurityAuditEventPageProjectionHealth string
 
-// SecurityAuditEventType 采集缺口由覆盖和健康视图单独表达。`auth.password_changed` 仅表示已提交的改密事实，
-// 对象页仅有一个 `user` 目标。不记录口令、哈希或内部代次。
+// SecurityAuditEventType 采集缺口由覆盖和健康视图单独表达。`auth.password_changed` 和 `auth.account_access_changed` 仅表示已提交的改密或账号级资格变化，
+// 各自只有一个 `user` 目标，不记录口令、口令哈希或内部代次。`admission.candidate_staged` 只表示私有接收已封存，
+// 有一个带实际摘要和字节数的 `asset` 对象，不表示公开发布。
 type SecurityAuditEventType string
 
 // SecurityAuditOutcome defines model for SecurityAuditOutcome.
@@ -4485,6 +4577,9 @@ type PageSizeParam = int
 // PrefixParam defines model for PrefixParam.
 type PrefixParam = string
 
+// PrivateAdmissionOperationIdParam defines model for PrivateAdmissionOperationIdParam.
+type PrivateAdmissionOperationIdParam = string
+
 // RepoNameParam defines model for RepoNameParam.
 type RepoNameParam = string
 
@@ -4556,6 +4651,21 @@ type InvalidSecurityAuditFilter = Error
 
 // NotFound defines model for NotFound.
 type NotFound = Error
+
+// PrivateAdmissionForbidden defines model for PrivateAdmissionForbidden.
+type PrivateAdmissionForbidden = Error
+
+// PrivateAdmissionNotFound defines model for PrivateAdmissionNotFound.
+type PrivateAdmissionNotFound = Error
+
+// PrivateAdmissionUnauthenticated defines model for PrivateAdmissionUnauthenticated.
+type PrivateAdmissionUnauthenticated = Error
+
+// PrivateAdmissionUnavailable defines model for PrivateAdmissionUnavailable.
+type PrivateAdmissionUnavailable = Error
+
+// PublishPolicyWriteConflict defines model for PublishPolicyWriteConflict.
+type PublishPolicyWriteConflict = Error
 
 // SecurityAuditCursorExpired defines model for SecurityAuditCursorExpired.
 type SecurityAuditCursorExpired = Error
@@ -5653,6 +5763,9 @@ type ServerInterface interface {
 	// GetRepositoryUsage 仓库客户端使用片段（据 format/type 返回接入命令）
 	// (GET /api/v1/repositories/{name}/usage)
 	GetRepositoryUsage(c *gin.Context, name RepoNameParam)
+	// GetPrivateAdmissionCandidate 查询本人私有候选的状态
+	// (GET /api/v1/security/admission/candidates/{operationId})
+	GetPrivateAdmissionCandidate(c *gin.Context, operationId PrivateAdmissionOperationIdParam)
 	// GetGlobalPinnedRepositories 全局置顶仓库（仅管理员）
 	// (GET /api/v1/settings/pinned-repositories)
 	GetGlobalPinnedRepositories(c *gin.Context)
@@ -8390,6 +8503,31 @@ func (siw *ServerInterfaceWrapper) GetRepositoryUsage(c *gin.Context) {
 	siw.Handler.GetRepositoryUsage(c, name)
 }
 
+// GetPrivateAdmissionCandidate operation middleware
+func (siw *ServerInterfaceWrapper) GetPrivateAdmissionCandidate(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "operationId" -------------
+	var operationId PrivateAdmissionOperationIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "operationId", c.Param("operationId"), &operationId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter operationId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetPrivateAdmissionCandidate(c, operationId)
+}
+
 // GetGlobalPinnedRepositories operation middleware
 func (siw *ServerInterfaceWrapper) GetGlobalPinnedRepositories(c *gin.Context) {
 
@@ -8999,6 +9137,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.POST(options.BaseURL+"/api/v1/users", wrapper.CreateUser)
 	router.DELETE(options.BaseURL+"/api/v1/users/:id", wrapper.DeleteUser)
 	router.PATCH(options.BaseURL+"/api/v1/users/:id", wrapper.UpdateUser)
+	router.GET(options.BaseURL+"/api/v1/security/admission/candidates/:operationId", wrapper.GetPrivateAdmissionCandidate)
 	router.POST(options.BaseURL+"/api/v1/users/:id/password", wrapper.ChangePassword)
 	router.PUT(options.BaseURL+"/api/v1/users/:id/publish-policies", wrapper.PutPublishPolicies)
 	router.GET(options.BaseURL+"/api/v1/users/:id/publish-policies/:repo", wrapper.GetPublishPolicy)

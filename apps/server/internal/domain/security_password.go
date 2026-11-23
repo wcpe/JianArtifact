@@ -16,7 +16,7 @@ var ErrCredentialVersionConflict = errors.New("账号或口令状态已变更")
 // ChangePassword 供本机管理员命令使用；不从 HTTP 上下文继承来源。
 func (s *UserService) ChangePassword(id int64, password string) error {
 	e := repository.SecurityEvent{ActorKind: "local_operator", ProxyTrust: "unknown"}
-	return s.changePassword(context.Background(), id, password, e)
+	return s.changePassword(context.Background(), id, password, e, nil)
 }
 
 // ChangePasswordForPrincipal 使用入口已验证的真实操作者，而非被改密的目标。
@@ -28,17 +28,27 @@ func (s *UserService) ChangePasswordForPrincipal(ctx context.Context, principal 
 	// 旧 JTI 和令牌均不是新模型的安全关联标识，不复制到事件。
 	e.SessionID, e.CredentialID, e.AuthStrength = "", "", ""
 	e.AuthMethod = principal.AuthSource
-	return s.changePassword(ctx, id, password, e)
+	proof := principal.CredentialProof()
+	return s.changePassword(ctx, id, password, e, &proof)
 }
 
-func (s *UserService) changePassword(ctx context.Context, id int64, password string, event repository.SecurityEvent) error {
+func (s *UserService) changePassword(ctx context.Context, id int64, password string, event repository.SecurityEvent, proof *auth.CredentialProof) error {
 	if err := requireBusinessWrite(s.writeGate); err != nil {
 		return err
 	}
 	if password == "" {
 		return ErrValidation
 	}
-	target, err := s.users.ReadCredentialPassword(ctx, id)
+	var target repository.CredentialPasswordSnapshot
+	var err error
+	if proof == nil {
+		target, err = s.users.ReadCredentialPassword(ctx, id)
+	} else {
+		target, err = s.users.ReadAuthorizedCredentialPassword(ctx, id, *proof)
+	}
+	if errors.Is(err, repository.ErrCredentialRejected) {
+		return ErrCredentialVersionConflict
+	}
 	if errors.Is(err, repository.ErrNotFound) {
 		return ErrNotFound
 	}
@@ -55,7 +65,7 @@ func (s *UserService) changePassword(ctx context.Context, id int64, password str
 	event.EventID, event.OperationID = repository.NewSecurityEventID(), NewOperationID()
 	event.EventType, event.Outcome, event.Committed = repository.SecurityEventPasswordChanged, "succeeded", "committed"
 	event.OccurredAt = time.Now().UTC()
-	changed, err := s.users.ApplyCredentialPassword(ctx, repository.CredentialPasswordChange{Event: event, Target: target, NewHash: hash})
+	changed, err := s.users.ApplyCredentialPassword(ctx, repository.CredentialPasswordChange{Event: event, Target: target, NewHash: hash, Proof: proof})
 	switch {
 	case errors.Is(err, repository.ErrPasswordVersionConflict):
 		return ErrCredentialVersionConflict

@@ -57,7 +57,8 @@ func (h *Handlers) CreateUser(c *gin.Context) {
 
 // UpdateUser 更新用户角色 / 状态，仅管理员。
 func (h *Handlers) UpdateUser(c *gin.Context, id UserIdParam) {
-	if _, ok := requireAdmin(c); !ok {
+	p, ok := requireAdmin(c)
+	if !ok {
 		return
 	}
 	var req UpdateUserRequest
@@ -71,9 +72,17 @@ func (h *Handlers) UpdateUser(c *gin.Context, id UserIdParam) {
 	if req.Status != nil {
 		status = string(*req.Status)
 	}
-	user, err := h.users.Update(id, role, status, req.WebLoginDisabled)
+	if (req.Role != nil && role == "") || (req.Status != nil && status == "") {
+		auth.WriteError(c, http.StatusBadRequest, "validation_error", "账号角色或状态不能为空")
+		return
+	}
+	user, err := h.users.UpdateForPrincipal(c.Request.Context(), p, id, role, status, req.WebLoginDisabled)
 	if err != nil {
-		writeDomainErr(c, err)
+		if errors.Is(err, domain.ErrCredentialVersionConflict) {
+			auth.WriteError(c, http.StatusConflict, "credential_version_conflict", "账号或口令状态已变更")
+		} else {
+			writeDomainErr(c, err)
+		}
 		return
 	}
 	h.AuditLog(c, "user.update", "user", user.Username, "", "role="+role+" status="+status, "ok")

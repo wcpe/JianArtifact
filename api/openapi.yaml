@@ -776,6 +776,9 @@ paths:
     patch:
       operationId: updateUser
       summary: 更新用户（角色 / 状态）
+      description: |
+        停用账号、下调全局管理员角色或禁止网页登录时收窄账号级资格，使旧凭据失效；不涉及仓库级权限。
+        恢复或扩展资格不会恢复旧凭据。版本冲突返回 409；审计不可用或事务结果未确认时返回 503。
       parameters:
         - $ref: "#/components/parameters/UserIdParam"
       requestBody:
@@ -799,6 +802,10 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/CredentialVersionConflict"
+        "503":
+          $ref: "#/components/responses/SecurityAuditUnavailable"
     delete:
       operationId: deleteUser
       summary: 删除用户
@@ -813,6 +820,34 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+  /api/v1/security/admission/candidates/{operationId}:
+    get:
+      operationId: getPrivateAdmissionCandidate
+      summary: 查询本人私有候选的状态
+      description: |
+        只允许通过验证的交互会话。仅原发起者且当前仍有目标发布资格时返回脱敏状态；非法操作号、未知目标、非本人和撤权统一返回 404。
+        仅返回白名单元数据，不接受客户端写入，不提供下载、字节、内部路径或代次。
+        查询可触发服务端幂等完整性或到期对账并持久更新状态（拒绝或过期），但不发放发布权或删除文件。
+        `staged` 表示私有接收已封存，不表示已扫描、批准或发布。
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PrivateAdmissionOperationIdParam"
+      responses:
+        "200":
+          description: 当前候选的脱敏元数据
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PrivateAdmissionCandidateStatus"
+        "401":
+          $ref: "#/components/responses/PrivateAdmissionUnauthenticated"
+        "403":
+          $ref: "#/components/responses/PrivateAdmissionForbidden"
+        "404":
+          $ref: "#/components/responses/PrivateAdmissionNotFound"
+        "503":
+          $ref: "#/components/responses/PrivateAdmissionUnavailable"
   /api/v1/users/{id}/password:
     post:
       operationId: changePassword
@@ -857,6 +892,8 @@ paths:
         为避免「部分仓库成功、部分仓库失败」的静默不一致：保存前先对所有仓库做统一预校验
         （仓库必须存在且为 hosted），任一仓库不合法即**整体拒绝**，错误信息会点名问题仓库。
         响应按仓库逐条返回结果，便于调用方在个别仓库落库失败时精确定位，而不会被静默吞掉。
+        若请求包含 `webLoginDisabled`，账号资格子步与逐仓库策略分属不同事务；资格子步失败时不执行仓库策略，
+        已提交的账号状态不会因随后仓库策略失败而回滚。
       parameters:
         - $ref: "#/components/parameters/UserIdParam"
       requestBody:
@@ -881,7 +918,9 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          $ref: "#/components/responses/Conflict"
+          $ref: "#/components/responses/PublishPolicyWriteConflict"
+        "503":
+          $ref: "#/components/responses/SecurityAuditUnavailable"
   /api/v1/users/{id}/publish-policies/{repo}:
     get:
       operationId: getPublishPolicy
@@ -909,6 +948,9 @@ paths:
     put:
       operationId: putPublishPolicy
       summary: 更新用户在 Hosted 仓库的发布策略
+      description: |
+        若请求包含 `webLoginDisabled`，账号资格子步与仓库策略分属不同事务；资格子步失败时不执行仓库策略，
+        已提交的账号状态不会因随后仓库策略失败而回滚。
       parameters:
         - $ref: "#/components/parameters/UserIdParam"
         - name: repo
@@ -938,7 +980,9 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          $ref: "#/components/responses/Conflict"
+          $ref: "#/components/responses/PublishPolicyWriteConflict"
+        "503":
+          $ref: "#/components/responses/SecurityAuditUnavailable"
   /api/v1/tokens:
     get:
       operationId: listTokens
@@ -2979,6 +3023,16 @@ components:
       description: 按制品路径前缀过滤
       schema:
         type: string
+    PrivateAdmissionOperationIdParam:
+      name: operationId
+      in: path
+      required: true
+      description: 服务端分配的规范小写 UUIDv4，不是访问凭证。
+      schema:
+        {
+          type: string,
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+        }
     SecurityAuditLimitParam:
       name: limit
       in: query
@@ -3340,6 +3394,36 @@ components:
             $ref: "#/components/schemas/Error"
     SecurityAuditCursorExpired:
       description: 已验证的游标过期，或其快照因留存、删除、重启或恢复不能继续；`error.code` 为 `security_cursor_expired`。
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    PrivateAdmissionUnauthenticated:
+      description: 无有效认证；`error.code` 为 `unauthenticated`。
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    PrivateAdmissionForbidden:
+      description: 已识别但不是允许的交互会话；`error.code` 为 `admission_forbidden`。
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    PrivateAdmissionNotFound:
+      description: 目标不存在或当前主体无权读取；`error.code` 为 `admission_not_found`。
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    PrivateAdmissionUnavailable:
+      description: 无法确认候选状态或当前读取资格；`error.code` 为 `admission_unavailable`。
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    PublishPolicyWriteConflict:
+      description: 发布策略冲突；账号资格子步发生版本冲突时，`error.code` 为 `credential_version_conflict`。
       content:
         application/json:
           schema:
@@ -4251,16 +4335,54 @@ components:
               type: string
             message:
               type: string
+    PrivateAdmissionCandidateStatus:
+      type: object
+      additionalProperties: false
+      required: [operationId, repositoryId, targetVersion, state, coverage, expiresAt]
+      properties:
+        operationId:
+          type: string
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        repositoryId: { type: integer, format: int64, minimum: 1 }
+        targetVersion: { type: integer, format: int64, minimum: 1 }
+        manifestVersion:
+          type: integer
+          format: int64
+          minimum: 1
+          description: 已确认的清单版本，未确认时省略。
+        manifestDigest:
+          type: string
+          pattern: "^sha256:[0-9a-f]{64}$"
+          description: 已确认的清单摘要，未确认时省略。
+        state:
+          type: string
+          enum: [staged, rejected, expired]
+          description: 已封存、拒绝或已过期；已封存不表示已发布。
+        coverage:
+          type: string
+          enum: [unknown]
+          description: 仅跟踪私有状态，不证明扫描覆盖。
+        expiresAt:
+          type: string
+          format: date-time
+          description: 候选在服务端的 UTC 到期时间。
+        errorCode:
+          type: string
+          enum: [admission_integrity_failed]
+          description: 已确认的硬完整性失败；无此事实时省略。
     SecurityAuditEventType:
       type: string
       description: |
-        采集缺口由覆盖和健康视图单独表达。`auth.password_changed` 仅表示已提交的改密事实，
-        对象页仅有一个 `user` 目标。不记录口令、哈希或内部代次。
+        采集缺口由覆盖和健康视图单独表达。`auth.password_changed` 和 `auth.account_access_changed` 仅表示已提交的改密或账号级资格变化，
+        各自只有一个 `user` 目标，不记录口令、口令哈希或内部代次。`admission.candidate_staged` 只表示私有接收已封存，
+        有一个带实际摘要和字节数的 `asset` 对象，不表示公开发布。
       enum:
         [
           auth.attempt,
           auth.session_created,
           auth.password_changed,
+          auth.account_access_changed,
+          admission.candidate_staged,
           protocol.write_denied,
           asset.change_committed,
           asset.response_observed,

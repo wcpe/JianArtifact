@@ -257,6 +257,45 @@ describe("安全审计管理查询", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ items: [], hasMore: false, coverage: "unknown" });
   });
+  it("候选与资格收窄模拟先验证通道且不编造候选", async () => {
+    const candidate =
+      "http://localhost/api/v1/security/admission/candidates/f4f6df7b-a5d9-4f8a-9e90-8e92237cb582";
+    const machine = store.createToken(1, "候选查询测试");
+    try {
+      for (const [headers, status, code] of [
+        [{ [DEV_MOCK_SCENARIO_HEADER]: "error" }, 401, "unauthenticated"],
+        [
+          { ...auth(machine.token), [DEV_MOCK_SCENARIO_HEADER]: "error" },
+          403,
+          "admission_forbidden",
+        ],
+        [auth(MOCK_TOKEN), 404, "admission_not_found"],
+        [auth(MOCK_SECOND_ADMIN_TOKEN), 404, "admission_not_found"],
+        [
+          { ...auth(MOCK_TOKEN), [DEV_MOCK_SCENARIO_HEADER]: "error" },
+          503,
+          "admission_unavailable",
+        ],
+      ] as const) {
+        const response = await fetch(candidate, { headers });
+        expect(response.status).toBe(status);
+        expect(await response.json()).toEqual({ error: { code, message: expect.any(String) } });
+      }
+    } finally {
+      store.deleteToken(machine.id, 1);
+    }
+  });
+
+  it("候选与资格收窄模拟接受新增的事件类型筛选", async () => {
+    for (const type of ["auth.account_access_changed", "admission.candidate_staged"]) {
+      const response = await fetch(`${base}/security-events?${range}&eventType=${type}`, {
+        headers: auth(MOCK_TOKEN),
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ items: [], coverage: "unknown" });
+    }
+  });
+
   it("筛选边界与无下一页语义", async () => {
     for (const query of [
       `${range}&limit=100&ip=192.0.2.1`,

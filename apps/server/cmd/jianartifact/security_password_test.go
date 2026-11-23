@@ -86,7 +86,11 @@ func TestPasswordSecurityHTTP(t *testing.T) {
 			t.Fatalf("对象回读包含不允许的字段形态：%q", field)
 		}
 	}
-	if _, _, err := svc.authSvc.Login(target.Username, newPassword); err != nil {
+	if status, _, _ := change(memberToken, target.ID, newPassword); status != http.StatusUnauthorized {
+		t.Fatalf("改密前会话未被撤销：%d", status)
+	}
+	memberToken, _, err = svc.authSvc.Login(target.Username, newPassword)
+	if err != nil {
 		t.Fatal("新口令不能登录")
 	}
 	hash, epoch := state()
@@ -121,7 +125,7 @@ func TestPasswordSecurityHTTP(t *testing.T) {
 	if _, err := svc.db.Exec(`UPDATE user SET account_epoch=9223372036854775807 WHERE id=?`, target.ID); err != nil {
 		t.Fatal(err)
 	}
-	if status, _, body := change(memberToken, target.ID, "local-test-password-version-conflict"); status != http.StatusConflict || !strings.Contains(body, "credential_version_conflict") || strings.Contains(body, "operationId") {
+	if status, _, body := change(adminToken, target.ID, "local-test-password-version-conflict"); status != http.StatusConflict || !strings.Contains(body, "credential_version_conflict") || strings.Contains(body, "operationId") {
 		t.Fatalf("有界代次拒绝未返回约定错误：%d", status)
 	}
 	if current, currentEpoch := state(); current != hash || currentEpoch != 9223372036854775807 || len(list()) != 1 {

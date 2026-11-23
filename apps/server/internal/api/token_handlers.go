@@ -41,7 +41,7 @@ func (h *Handlers) CreateToken(c *gin.Context) {
 		auth.WriteError(c, http.StatusBadRequest, "bad_request", "令牌名称不能为空")
 		return
 	}
-	plaintext, tok, err := h.tokens.Create(p.UserID, req.Name)
+	plaintext, tok, err := h.tokens.CreateForPrincipal(c.Request.Context(), p, req.Name)
 	if err != nil {
 		writeDomainErr(c, err)
 		return

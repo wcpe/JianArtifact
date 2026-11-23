@@ -1,4 +1,5 @@
 import { http, HttpResponse } from "msw";
+import { currentDevMockScenario } from "./scenario";
 import type { components } from "./schema.gen";
 import { MOCK_SECOND_ADMIN_TOKEN, MOCK_TOKEN, store } from "./store";
 
@@ -31,6 +32,8 @@ const eventTypes = new Set([
   "auth.attempt",
   "auth.session_created",
   "auth.password_changed",
+  "auth.account_access_changed",
+  "admission.candidate_staged",
   "protocol.write_denied",
   "asset.change_committed",
   "asset.response_observed",
@@ -41,7 +44,7 @@ function error(code: string, status: number) {
   const body: ErrorBody = { error: { code, message: code } };
   return HttpResponse.json(body, { status });
 }
-function authorize(request: Request) {
+function mockSecurityPrincipal(request: Request) {
   const header = request.headers.get("Authorization") ?? "";
   const token = /^bearer /i.test(header) ? header.slice(7).trim() : "";
   const id =
@@ -54,8 +57,7 @@ function authorize(request: Request) {
           : undefined;
   if (id !== undefined) {
     const user = store.findUser(id);
-    if (!user || user.status !== "active") return error("unauthenticated", 401);
-    return user.role === "admin" && !user.webLoginDisabled ? null : error("forbidden", 403);
+    return user?.status === "active" ? { user, interactive: true } : undefined;
   }
   let owner = store.machineTokenOwner(token);
   if (!owner && /^basic /i.test(header)) {
@@ -72,7 +74,16 @@ function authorize(request: Request) {
       // 无效编码不是已认证主体。
     }
   }
-  return owner?.status === "active" ? error("forbidden", 403) : error("unauthenticated", 401);
+  return owner?.status === "active" ? { user: owner, interactive: false } : undefined;
+}
+function authorize(request: Request) {
+  const principal = mockSecurityPrincipal(request);
+  if (!principal) return error("unauthenticated", 401);
+  return principal.interactive &&
+    principal.user.role === "admin" &&
+    !principal.user.webLoginDisabled
+    ? null
+    : error("forbidden", 403);
 }
 function paramsValid(url: string, allowed: Set<string>) {
   const marker = url.indexOf("?");
@@ -241,7 +252,21 @@ function validList(url: string): boolean {
 const invalid = () => error("invalid_security_filter", 400);
 const notFound = () => error("security_event_not_found", 404);
 const eventIdValid = (id: string) => /^[a-zA-Z0-9_-]{1,128}$/.test(id) && !/^jat_/i.test(id);
+const privateAdmissionOperationId =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
 export const securityAuditHandlers = [
+  http.get("*/api/v1/security/admission/candidates/:operationId", ({ request, params }) => {
+    const principal = mockSecurityPrincipal(request);
+    if (!principal) return error("unauthenticated", 401);
+    if (!principal.interactive || principal.user.webLoginDisabled)
+      return error("admission_forbidden", 403);
+    if (!privateAdmissionOperationId.test(String(params.operationId)))
+      return error("admission_not_found", 404);
+    if (currentDevMockScenario(request) === "error") return error("admission_unavailable", 503);
+    // 模拟库没有服务端已登记的私有候选，不生成虚构的封存状态。
+    return error("admission_not_found", 404);
+  }),
   http.get(`${root}/security-events`, ({ request }) => {
     const denied = authorize(request);
     if (denied) return denied;

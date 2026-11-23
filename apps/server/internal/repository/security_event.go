@@ -13,6 +13,11 @@ import (
 )
 
 const (
+	// SecurityEventAccountAccessChanged 表示已提交的账号级资格变化。
+	SecurityEventAccountAccessChanged = "auth.account_access_changed"
+	// SecurityEventAdmissionCandidateStaged 表示私有候选已封存，不代表公开发布。
+	SecurityEventAdmissionCandidateStaged = "admission.candidate_staged"
+
 	securityEventMaxObjects = 256
 	securityEventMaxBytes   = 256 * 1024
 	securityEventMaxHeader  = 4 * 1024
@@ -150,9 +155,16 @@ func validateSecurityEvent(event SecurityEvent, objects []SecurityEventObject) e
 	}
 	total := headerBytes
 	for _, object := range objects {
-		valid := validSecurityEventObject(object)
-		if event.EventType == SecurityEventPasswordChanged {
+		var valid bool
+		switch event.EventType {
+		case SecurityEventPasswordChanged, SecurityEventAccountAccessChanged:
 			valid = validPasswordChangedObject(object)
+		case SecurityEventAdmissionCandidateStaged:
+			valid = validSecurityEventObject(object) && object.ObjectKind == "asset" && object.ObjectID == "" &&
+				object.RepositoryID != nil && event.RepositoryID != nil && *object.RepositoryID == *event.RepositoryID &&
+				strings.HasPrefix(object.Digest, "sha256:") && object.SizeBytes != nil
+		default:
+			valid = validSecurityEventObject(object)
 		}
 		if !valid {
 			return invalidSecurityEvent("对象字段")
@@ -175,7 +187,11 @@ func validateSecurityEventFact(e SecurityEvent, objectCount int) error {
 		if e.Committed != "committed" || objectCount == 0 {
 			return invalidSecurityEvent("制品提交事实")
 		}
-	case SecurityEventPasswordChanged:
+	case SecurityEventAdmissionCandidateStaged:
+		if e.Committed != "committed" || e.ActorKind != "user" || e.RepositoryID == nil || objectCount != 1 {
+			return invalidSecurityEvent("私有候选封存事实")
+		}
+	case SecurityEventPasswordChanged, SecurityEventAccountAccessChanged:
 		if e.Committed != "committed" || objectCount != 1 || e.RepositoryID != nil ||
 			e.CredentialID != "" || e.SessionID != "" || e.TaskID != "" || e.ActionID != "" ||
 			!securityEventOneOf(e.ActorKind, "user", "local_operator") {
@@ -255,6 +271,9 @@ func validSecurityEventObject(o SecurityEventObject) bool {
 	}
 	return validSecurityEventPath(o.CanonicalPath)
 }
+
+// ValidSecurityEventPath 按安全事件的权威路径规则校验资产键，不进行存储访问。
+func ValidSecurityEventPath(path string) bool { return validSecurityEventPath(path) }
 
 func validSecurityEventPath(path string) bool {
 	// 路径是资产的权威键；只校验路径及文本形态，不用展示词表改写或拒绝其身份。
@@ -359,7 +378,8 @@ func validSecurityEventTime(value time.Time) bool {
 }
 
 func validSecurityEventType(value string) bool {
-	return securityEventOneOf(value, "auth.attempt", "auth.session_created", SecurityEventPasswordChanged, "protocol.write_denied", "asset.change_committed", "asset.response_observed")
+	return securityEventOneOf(value, "auth.attempt", "auth.session_created", SecurityEventPasswordChanged, SecurityEventAccountAccessChanged,
+		"protocol.write_denied", "asset.change_committed", "asset.response_observed", SecurityEventAdmissionCandidateStaged)
 }
 
 func validSecurityEventOutcome(value string) bool {

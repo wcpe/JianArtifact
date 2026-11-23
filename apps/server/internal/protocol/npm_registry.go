@@ -131,7 +131,8 @@ func (h *NpmHandler) registryLogin(c *gin.Context) {
 		auth.WriteError(c, http.StatusUnauthorized, "unauthenticated", "用户名或口令错误")
 		return
 	}
-	plaintext, _, err := h.tokens.Create(p.UserID, "npm login "+req.Name+"@"+time.Now().Format("2006-01-02 15:04"))
+	p.Protocol = true
+	plaintext, _, err := h.tokens.CreateForPrincipal(c.Request.Context(), p, "npm login "+req.Name+"@"+time.Now().Format("2006-01-02 15:04"))
 	if err != nil {
 		auth.WriteError(c, http.StatusInternalServerError, "internal", "内部错误")
 		return

@@ -278,7 +278,13 @@ func newApplicationHandler(cfg *config.Config, svc *appServices, assets fs.FS) h
 		}),
 		httpserver.WithAllowedHosts(allowedHosts),
 		httpserver.WithOriginTokenGuard(originTokenGuard),
-		httpserver.WithMiddleware(api.MiddlewareFunc(authenticator.Optional())),
+		httpserver.WithMiddleware(func(c *gin.Context) {
+			// 候选详情独立区分凭据无效、通道不许与鉴权仓储不可用。
+			if c.Request.Method == http.MethodGet && c.FullPath() == "/api/v1/security/admission/candidates/:operationId" {
+				return
+			}
+			authenticator.Optional()(c)
+		}),
 		httpserver.WithProtocolMetric(func(c *gin.Context) {
 			cacheResult, _ := c.Get(protocol.CacheResultContextKey)
 			svc.dashboardSvc.RecordProtocol(domain.ProtocolMetric{CompletedAt: time.Now().UTC(), Method: c.Request.Method, Status: c.Writer.Status(), CacheResult: cacheResultString(cacheResult)})

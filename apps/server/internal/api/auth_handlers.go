@@ -54,6 +54,15 @@ func (h *Handlers) Login(c *gin.Context) {
 		return
 	}
 	ctx := c.Request.Context()
+	var revision int64
+	if h.ldapAuth != nil {
+		var err error
+		revision, err = h.auth.CredentialRevision(ctx)
+		if err != nil {
+			writeDomainErr(c, domain.ErrSecurityAuditUnavailable)
+			return
+		}
+	}
 	token, user, err := h.auth.LoginContext(ctx, req.Username, req.Password)
 	if err == nil {
 		c.JSON(http.StatusOK, LoginResponse{Token: token, User: toAPIUser(user)})
@@ -69,7 +78,7 @@ func (h *Handlers) Login(c *gin.Context) {
 				Username: identity.Username,
 				Email:    identity.Email,
 			}
-			if t, u, externalErr := h.auth.LoginExternalContext(ctx, external); externalErr == nil {
+			if t, u, externalErr := h.auth.LoginExternalContext(ctx, external, revision); externalErr == nil {
 				c.JSON(http.StatusOK, LoginResponse{Token: t, User: toAPIUser(u)})
 				return
 			}

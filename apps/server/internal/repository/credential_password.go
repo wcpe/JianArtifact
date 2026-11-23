@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jmoiron/sqlx"
+	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 )
 
 const SecurityEventPasswordChanged = "auth.password_changed"
@@ -28,8 +29,29 @@ type CredentialPasswordSnapshot struct {
 const passwordSnapshotSQL = `SELECT id, username, password_hash, role, status, web_login_disabled, created_at, account_epoch FROM user WHERE id=?`
 
 func (r *UserRepo) ReadCredentialPassword(ctx context.Context, id int64) (CredentialPasswordSnapshot, error) {
+	return readPasswordSnapshot(ctx, r.db, id)
+}
+
+// ReadAuthorizedCredentialPassword 在暴露目标状态前确认调用者的现行权限。
+func (r *UserRepo) ReadAuthorizedCredentialPassword(ctx context.Context, id int64, proof auth.CredentialProof) (CredentialPasswordSnapshot, error) {
+	var target CredentialPasswordSnapshot
+	err := r.CredentialWrite(ctx, func(tx *sqlx.Tx) error {
+		actor, err := r.RevalidateCredentialTx(ctx, tx, proof)
+		if err != nil {
+			return err
+		}
+		if actor.ID != id && actor.Role != "admin" {
+			return ErrCredentialRejected
+		}
+		target, err = readPasswordSnapshot(ctx, tx, id)
+		return err
+	})
+	return target, err
+}
+
+func readPasswordSnapshot(ctx context.Context, q sqlx.QueryerContext, id int64) (CredentialPasswordSnapshot, error) {
 	var snapshot CredentialPasswordSnapshot
-	err := r.db.GetContext(ctx, &snapshot, passwordSnapshotSQL, id)
+	err := sqlx.GetContext(ctx, q, &snapshot, passwordSnapshotSQL, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = ErrNotFound
 	}
@@ -41,6 +63,7 @@ type CredentialPasswordChange struct {
 	Event   SecurityEvent
 	Target  CredentialPasswordSnapshot
 	NewHash string
+	Proof   *auth.CredentialProof
 }
 
 // ApplyCredentialPassword 以同一连接的短事务复核和写入；仅 Commit 报错才从独立连接回读。
@@ -79,7 +102,7 @@ func (r *UserRepo) writeCredentialPassword(ctx context.Context, change Credentia
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if err := checkCredentialPasswordActor(ctx, tx, change); err != nil {
+	if err := r.checkCredentialPasswordActor(ctx, tx, change); err != nil {
 		return false, err
 	}
 	if replay, err := readCredentialPasswordReceipt(ctx, tx, change); err != nil || replay {
@@ -113,17 +136,24 @@ func (r *UserRepo) writeCredentialPassword(ctx context.Context, change Credentia
 	return true, nil
 }
 
-func checkCredentialPasswordActor(ctx context.Context, tx *sqlx.Tx, change CredentialPasswordChange) error {
-	if change.Event.ActorUserID == nil {
+func (r *UserRepo) checkCredentialPasswordActor(ctx context.Context, tx *sqlx.Tx, change CredentialPasswordChange) error {
+	if change.Event.ActorUserID == nil && change.Proof == nil {
 		return nil
 	}
-	var allowed int
-	id := *change.Event.ActorUserID
-	err := tx.GetContext(ctx, &allowed, `SELECT 1 FROM user WHERE id=? AND status='active' AND web_login_disabled=0 AND (id=? OR role='admin')`, id, change.Target.ID)
-	if errors.Is(err, sql.ErrNoRows) {
+	if change.Event.ActorUserID == nil || change.Proof == nil || change.Proof.Protocol || *change.Event.ActorUserID != change.Proof.UserID {
 		return ErrPasswordVersionConflict
 	}
-	return err
+	actor, err := r.RevalidateCredentialTx(ctx, tx, *change.Proof)
+	if errors.Is(err, ErrCredentialRejected) {
+		return ErrPasswordVersionConflict
+	}
+	if err != nil {
+		return err
+	}
+	if actor.ID != change.Target.ID && actor.Role != "admin" {
+		return ErrPasswordVersionConflict
+	}
+	return nil
 }
 
 func (r *UserRepo) persistCredentialPassword(ctx context.Context, tx *sqlx.Tx, change CredentialPasswordChange) error {

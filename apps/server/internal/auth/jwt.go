@@ -16,7 +16,9 @@ var ErrInvalidToken = errors.New("无效的会话令牌")
 
 // Claims 是会话 JWT 的载荷：subject 存用户 ID，附带角色与标准注册声明。
 type Claims struct {
-	Role string `json:"role"`
+	Role         string `json:"role"`
+	SessionID    string `json:"sid,omitempty"`
+	AccountEpoch int64  `json:"ae,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -34,23 +36,35 @@ func NewJWTManager(secret []byte) *JWTManager {
 
 // Issue 为指定用户签发会话令牌，返回签名串、jti 与过期时间。
 func (m *JWTManager) Issue(userID int64, role string) (token, jti string, expiresAt time.Time, err error) {
+	signed, claims, err := m.issue(userID, role, "", 0)
+	if err != nil {
+		return "", "", time.Time{}, err
+	}
+	return signed, claims.ID, claims.ExpiresAt.Time, nil
+}
+
+// IssueBound 签发需在发布响应前持久化的会话载体。
+func (m *JWTManager) IssueBound(userID int64, role string, epoch int64) (string, *Claims, error) {
+	if userID <= 0 || epoch <= 0 {
+		return "", nil, ErrInvalidToken
+	}
+	return m.issue(userID, role, newJTI(), epoch)
+}
+
+func (m *JWTManager) issue(userID int64, role, sessionID string, epoch int64) (string, *Claims, error) {
 	now := m.now()
-	expiresAt = now.Add(m.ttl)
-	jti = newJTI()
-	claims := Claims{
-		Role: role,
+	claims := &Claims{
+		Role: role, SessionID: sessionID, AccountEpoch: epoch,
 		RegisteredClaims: jwt.RegisteredClaims{
-			Subject:   fmt.Sprintf("%d", userID),
-			ID:        jti,
-			IssuedAt:  jwt.NewNumericDate(now),
-			ExpiresAt: jwt.NewNumericDate(expiresAt),
+			Subject: fmt.Sprintf("%d", userID), ID: newJTI(), IssuedAt: jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(now.Add(m.ttl)),
 		},
 	}
 	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(m.secret)
 	if err != nil {
-		return "", "", time.Time{}, fmt.Errorf("签发会话令牌：%w", err)
+		return "", nil, fmt.Errorf("签发会话令牌：%w", err)
 	}
-	return signed, jti, expiresAt, nil
+	return signed, claims, nil
 }
 
 // Parse 校验令牌签名与有效期，返回解析后的 Claims。
@@ -61,7 +75,7 @@ func (m *JWTManager) Parse(token string) (*Claims, error) {
 			return nil, fmt.Errorf("非预期的签名算法：%v", t.Header["alg"])
 		}
 		return m.secret, nil
-	}, jwt.WithTimeFunc(m.now))
+	}, jwt.WithTimeFunc(m.now), jwt.WithValidMethods([]string{"HS256"}), jwt.WithExpirationRequired())
 	if err != nil || !parsed.Valid {
 		return nil, ErrInvalidToken
 	}

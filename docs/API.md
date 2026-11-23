@@ -23,7 +23,8 @@
 ### 用户、令牌、仓库和制品
 
 - 用户与令牌：用户列表/创建/更新/禁用/改密，API Token 创建和吊销。
-- `POST /api/v1/users/{id}/password`：本人或获准管理员修改既有账号口令，成功仍返回无响应体的 `204`。同值在事务中复核后也返回 `204`，不增加账号凭据代次，不追加 `auth.password_changed`。实际变更时，口令、代次、回执与成功事件一同提交。事件的操作者与被改账号分开，目标仅以 `user` 对象的 `objectId` 标识。账号版本冲突返回 `409 credential_version_conflict`，审计或提交结果不能确认返回 `503 security_audit_unavailable`；不要把新请求当作原操作的幂等重放。此改动不表示旧会话或 API Token 已按代次失效。
+- `PATCH /api/v1/users/{id}`：停用、管理员降为普通用户、禁止网页登录都会撤销该账号此前签发的会话和 API Token；一份请求同时收窄多项只升一次代次。恢复原角色或重新启用只允许重新登录、换发凭据，不复活旧凭据。仓库发布策略中对网页登录资格的变更遵循相同规则；账号变更与每仓策略写入不是一个整体事务。
+- `POST /api/v1/users/{id}/password`：本人或获准管理员修改既有账号口令，成功仍返回无响应体的 `204`。同值在事务中复核后也返回 `204`，不增加账号凭据代次，不追加 `auth.password_changed`。实际变更时，口令、代次、回执与成功事件一同提交。事件的操作者与被改账号分开，目标仅以 `user` 对象的 `objectId` 标识。账号版本冲突返回 `409 credential_version_conflict`，审计或提交结果不能确认返回 `503 security_audit_unavailable`；不要把新请求当作原操作的幂等重放。真正改密后，之前签发的会话和 API Token 不能再通过当前账号的代次校验。
 - 仓库与 ACL：仓库 CRUD、成员授权、仓库格式/可见性/上游配置和使用统计。授权主体分 `user` / `group` 两态（`AclEntry.subjectType`，缺省 `user` 以兼容既有请求体），`subjectId` 与 `subjectGroupId` 按 `subjectType` 二选一必填、另一列被忽略；动作 `action` 为六档 `read` / `write` / `publish` / `delete` / `acl_manage` / `admin`。蕴含关系（判定动作 → 能使之通过的已授权动作集合）：`read` ← `read`/`write`/`admin`；`publish` ← `publish`/`write`/`admin`；`write` ← `write`/`admin`；`delete` ← `delete`/`admin`；`acl_manage` ← `acl_manage`/`admin`；`admin` ← `admin`。即 **`write` 蕴含 `read` 与 `publish` 但不蕴含 `delete`**（`delete` 需单独授予），`publish` / `delete` / `acl_manage` 各自只蕴含自身且彼此互不满足、均**不蕴含** `read`。判定取「用户自身条目」∪「其所属各组条目」的并集，组内成员变动即时生效。字段与枚举以 [`../api/openapi.yaml`](../api/openapi.yaml) 为准，语义取舍见 [`specs/0.12.0-user-groups-and-fine-grained-actions.md`](specs/0.12.0-user-groups-and-fine-grained-actions.md)。
 - 公开仓库列表：`GET /api/v1/public/repositories`（无需认证）在 `items` / `total` 之外附带 `pinnedNames`——**全局置顶**仓库的当前主名（有序），公开页据此置顶前置并显示图钉。
 - 仓库使用说明：`GET /api/v1/repositories/{name}/usage` 返回 `UsageInfo.snippets`，每个 `UsageSnippet` 含 `group`（`auth` / `resolve` / `publish` / `other`）——它是**结构化分组标记，不参与本地化**（与随 `Accept-Language` 变化的 `title` / `description` 不同），供界面按「认证 / 解析依赖 / 发布制品 / 其他」折叠分区。
@@ -150,6 +151,12 @@
 错误码：全部端点未登录 **401**、非管理员 **403**；`GET`/`PATCH`/`DELETE /{id}` 与成员两个端点在目标不存在时 **404**；`POST /{id}` 与 `PATCH /{id}` 在组名非法 / 重名时分别为 **400** / **409**。
 
 **组操作的审计动作**（`entityType=user_group`）：`group.create` / `group.update` / `group.delete` / `group.member.add` / `group.member.remove`。前三者 `entityKey` 为组名、detail 带 `id=<组 ID>`（`repo` 为空）；成员增删 `entityKey` 为组 ID，detail 带 `userId=<用户 ID>`（`member.add` 另带 username）。
+
+### 私有候选状态
+
+`GET /api/v1/security/admission/candidates/{operationId}` 返回已登记候选的脱敏元数据，不提供原始字节、内部文件名或下载链接。使用受信接收服务返回的操作号；普通 Raw PUT 仍按既有协议发布，不会生成候选查询号。服务以原数据库和私有卷重启后，操作号不变。
+
+只有经过身份验证、仍有目标仓库发布权的原发起人可查询。未认证或会话失效返回 `401`；已识别但不允许的凭据通道返回 `403`；操作号不存在、不归本人或发布权已收回，均返回 `404 admission_not_found`。无法确认数据库或文件状态时返回 `503 admission_unavailable`，不是不存在。`staged` 仅表示私有接收已封存，`coverage: unknown` 不代表检测通过。查询可能触发服务端幂等核验并记录拒绝或到期，但不删除字节、不批准也不发布。
 
 ### 设置与审计
 

@@ -32,10 +32,11 @@ const OIDCFlowLifetime = 10 * time.Minute
 // OIDCFlow 是授权码流程中必须跨重定向保存的短时数据。
 // 它只含随机数与 PKCE 校验串，不含任何令牌；以签名 Cookie 形式保存在浏览器，不落库。
 type OIDCFlow struct {
-	State        string `json:"state"`
-	Nonce        string `json:"nonce"`
-	CodeVerifier string `json:"code_verifier"`
-	ExpiresAt    int64  `json:"expires_at"` // Unix 秒
+	State              string `json:"state"`
+	Nonce              string `json:"nonce"`
+	CodeVerifier       string `json:"code_verifier"`
+	ExpiresAt          int64  `json:"expires_at"` // Unix 秒
+	CredentialRevision *int64 `json:"credential_revision,omitempty"`
 }
 
 // OIDCFlowSigner 用启动密钥派生的 HMAC 对流程数据做完整性签名（无服务端状态）。

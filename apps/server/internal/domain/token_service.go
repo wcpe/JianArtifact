@@ -1,6 +1,8 @@
 package domain
 
 import (
+	"context"
+	"errors"
 	"log"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
@@ -42,14 +44,29 @@ func (s *TokenService) List(userID int64) ([]repository.Token, error) {
 }
 
 // Create 生成一枚 Token，仅存摘要，返回明文（仅此次）与记录。
-func (s *TokenService) Create(userID int64, name string) (plaintext string, tok *repository.Token, err error) {
+func (s *TokenService) Create(userID int64, name string) (string, *repository.Token, error) {
+	return s.createCredential(context.Background(), userID, name, nil)
+}
+
+func (s *TokenService) CreateForPrincipal(ctx context.Context, p *auth.Principal, name string) (string, *repository.Token, error) {
+	if p == nil || p.UserID <= 0 {
+		return "", nil, ErrCredentialVersionConflict
+	}
+	proof := p.CredentialProof()
+	return s.createCredential(ctx, p.UserID, name, &proof)
+}
+
+func (s *TokenService) createCredential(ctx context.Context, userID int64, name string, proof *auth.CredentialProof) (string, *repository.Token, error) {
 	if err := requireBusinessWrite(s.writeGate); err != nil {
 		return "", nil, err
 	}
 	plain, digest := auth.GenerateToken()
-	id, err := s.tokens.Create(userID, name, digest)
+	id, err := s.users.IssueCredentialToken(ctx, userID, name, digest, proof)
+	if errors.Is(err, repository.ErrCredentialRejected) {
+		return "", nil, ErrCredentialVersionConflict
+	}
 	if err != nil {
-		return "", nil, err
+		return "", nil, ErrSecurityAuditUnavailable
 	}
 	u, err := s.users.GetByID(userID)
 	if err == nil {

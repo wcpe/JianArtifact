@@ -708,6 +708,104 @@ describe("devmock ↔ OpenAPI 契约一致性", () => {
     expect(validateObject({ ...object, body: "不是对象字段" })).toBe(false);
   });
 
+  it("候选与资格收窄契约仅公开批准的元数据、词表和错误", () => {
+    const doc = loadOpenApi() as unknown as {
+      paths: Record<
+        string,
+        Record<string, { operationId: string; responses: Record<string, unknown> }>
+      >;
+    };
+    const update = doc.paths["/api/v1/users/{id}"]?.patch;
+    expect(update?.operationId).toBe("updateUser");
+    expect(update?.responses["409"]).toEqual({
+      $ref: "#/components/responses/CredentialVersionConflict",
+    });
+    expect(update?.responses["503"]).toEqual({
+      $ref: "#/components/responses/SecurityAuditUnavailable",
+    });
+    const path = doc.paths["/api/v1/security/admission/candidates/{operationId}"];
+    expect(Object.keys(path ?? {})).toEqual(["get"]);
+    expect(path?.get?.operationId).toBe("getPrivateAdmissionCandidate");
+    expect(Object.keys(path!.get!.responses).sort()).toEqual(["200", "401", "403", "404", "503"]);
+    const validate = ajv.compile(schemaFor("PrivateAdmissionCandidateStatus"));
+    const body = {
+      operationId: "f4f6df7b-a5d9-4f8a-9e90-8e92237cb582",
+      repositoryId: 1,
+      targetVersion: 2,
+      state: "staged",
+      coverage: "unknown",
+      expiresAt: "2026-01-02T00:00:00Z",
+      manifestVersion: 1,
+      manifestDigest: `sha256:${"a".repeat(64)}`,
+    };
+    expect(validate(body)).toBe(true);
+    expect(validate({ ...body, state: "published" })).toBe(false);
+    expect(validate({ ...body, coverage: "complete" })).toBe(false);
+    expect(validate({ ...body, operationId: "f4f6df7b-a5d9-7f8a-9e90-8e92237cb582" })).toBe(false);
+    for (const key of [
+      "source",
+      "canonicalPath",
+      "downloadUrl",
+      "accountEpoch",
+      "privateObjectKey",
+    ]) {
+      expect(validate({ ...body, [key]: "不公开" }), key).toBe(false);
+    }
+    const validateType = ajv.compile(schemaFor("SecurityAuditEventType"));
+    expect(validateType("auth.account_access_changed")).toBe(true);
+    expect(validateType("admission.candidate_staged")).toBe(true);
+  });
+
+  it("私有候选对账契约区分元数据查询与服务端状态更新", () => {
+    const doc = loadOpenApi() as unknown as {
+      paths: Record<string, { get?: { description: string; requestBody?: unknown } }>;
+    };
+    const get = doc.paths["/api/v1/security/admission/candidates/{operationId}"]?.get;
+    expect(get?.description).toContain("可触发服务端幂等完整性或到期对账并持久更新状态");
+    expect(get?.description).toContain("不接受客户端写入，不提供下载");
+    expect(get?.description).toContain("不发放发布权或删除文件");
+    expect(get?.description).not.toContain("只读");
+    expect(get?.requestBody).toBeUndefined();
+  });
+
+  it.each([
+    ["/api/v1/users/{id}/publish-policies", "putPublishPolicies"],
+    ["/api/v1/users/{id}/publish-policies/{repo}", "putPublishPolicy"],
+  ])("发布策略资格失败契约保留 %s 的通用冲突并声明嵌套错误", (path, operationId) => {
+    type Response = {
+      $ref?: string;
+      description?: string;
+      content?: { "application/json": { schema: { $ref: string } } };
+    };
+    const doc = loadOpenApi() as unknown as {
+      paths: Record<string, { put?: { operationId: string; responses: Record<string, Response> } }>;
+      components: { responses: Record<string, Response> };
+    };
+    const put = doc.paths[path]?.put;
+    expect(put?.operationId).toBe(operationId);
+    expect(Object.keys(put!.responses).sort()).toEqual([
+      "200",
+      "400",
+      "401",
+      "403",
+      "404",
+      "409",
+      "503",
+    ]);
+    for (const [status, component, code] of [
+      ["409", "PublishPolicyWriteConflict", "credential_version_conflict"],
+      ["503", "SecurityAuditUnavailable", "security_audit_unavailable"],
+    ] as const) {
+      expect(put!.responses[status]?.$ref).toBe(`#/components/responses/${component}`);
+      const error = doc.components.responses[component];
+      expect(error?.description).toContain(`\`${code}\``);
+      expect(error?.content?.["application/json"].schema.$ref).toBe("#/components/schemas/Error");
+    }
+    expect(doc.components.responses.PublishPolicyWriteConflict?.description).toContain(
+      "发布策略冲突",
+    );
+  });
+
   it("改密提交事实与用户目标只公开稳定标识", () => {
     const validateType = ajv.compile(schemaFor("SecurityAuditEventType"));
     expect(validateType("auth.password_changed")).toBe(true);

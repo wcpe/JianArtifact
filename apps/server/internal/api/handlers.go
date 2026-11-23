@@ -35,9 +35,11 @@ type Deps struct {
 	Assets                     *domain.AssetService // 制品批量删除
 	Migrations                 *domain.MigrationService
 	Settings                   *domain.SettingService
-	AuditLogs                  *repository.AuditLogRepo                // 审计日志
-	AuditObservability         *repository.AuditObservabilityRepo      // 统一审计读模型
-	SecurityAuditQuery         *SecurityAuditQuery                     // 安全事件查询与采集健康
+	AuditLogs                  *repository.AuditLogRepo           // 审计日志
+	AuditObservability         *repository.AuditObservabilityRepo // 统一审计读模型
+	SecurityAuditQuery         *SecurityAuditQuery                // 安全事件查询与采集健康
+	Admission                  *domain.AdmissionService
+	AdmissionPrincipal         func(*http.Request) (*auth.Principal, error)
 	OperationsObservability    *repository.OperationsObservabilityRepo // 当前节点业务与主机读模型
 	OperationsAlerts           *repository.OperationsAlertRepo         // v0.8.0：运维告警去重持久化
 	AssetDownloads             *repository.AssetDownloadRepo           // 制品下载计量明细（tree 计数列）
@@ -127,6 +129,8 @@ type Handlers struct {
 	auditLogs                  *repository.AuditLogRepo // 审计日志
 	auditObservability         *repository.AuditObservabilityRepo
 	securityAuditQuery         *SecurityAuditQuery
+	admission                  *domain.AdmissionService
+	admissionPrincipal         func(*http.Request) (*auth.Principal, error)
 	operationsObservability    *repository.OperationsObservabilityRepo
 	operationsAlertStore       *repository.OperationsAlertRepo
 	assetDownloads             *repository.AssetDownloadRepo // 制品下载计量明细（tree 计数列）
@@ -184,6 +188,8 @@ func NewHandlers(d Deps) *Handlers {
 		auditLogs:                  d.AuditLogs,
 		auditObservability:         d.AuditObservability,
 		securityAuditQuery:         d.SecurityAuditQuery,
+		admission:                  d.Admission,
+		admissionPrincipal:         d.AdmissionPrincipal,
 		operationsObservability:    d.OperationsObservability,
 		operationsAlertStore:       d.OperationsAlerts,
 		assetDownloads:             d.AssetDownloads,

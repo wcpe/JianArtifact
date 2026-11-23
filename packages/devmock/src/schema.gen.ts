@@ -559,8 +559,35 @@ export interface paths {
         delete: operations["deleteUser"];
         options?: never;
         head?: never;
-        /** 更新用户（角色 / 状态） */
+        /**
+         * 更新用户（角色 / 状态）
+         * @description 停用账号、下调全局管理员角色或禁止网页登录时收窄账号级资格，使旧凭据失效；不涉及仓库级权限。
+         *     恢复或扩展资格不会恢复旧凭据。版本冲突返回 409；审计不可用或事务结果未确认时返回 503。
+         */
         patch: operations["updateUser"];
+        trace?: never;
+    };
+    "/api/v1/security/admission/candidates/{operationId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 查询本人私有候选的状态
+         * @description 只允许通过验证的交互会话。仅原发起者且当前仍有目标发布资格时返回脱敏状态；非法操作号、未知目标、非本人和撤权统一返回 404。
+         *     仅返回白名单元数据，不接受客户端写入，不提供下载、字节、内部路径或代次。
+         *     查询可触发服务端幂等完整性或到期对账并持久更新状态（拒绝或过期），但不发放发布权或删除文件。
+         *     `staged` 表示私有接收已封存，不表示已扫描、批准或发布。
+         */
+        get: operations["getPrivateAdmissionCandidate"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/users/{id}/password": {
@@ -603,6 +630,8 @@ export interface paths {
          *     为避免「部分仓库成功、部分仓库失败」的静默不一致：保存前先对所有仓库做统一预校验
          *     （仓库必须存在且为 hosted），任一仓库不合法即**整体拒绝**，错误信息会点名问题仓库。
          *     响应按仓库逐条返回结果，便于调用方在个别仓库落库失败时精确定位，而不会被静默吞掉。
+         *     若请求包含 `webLoginDisabled`，账号资格子步与逐仓库策略分属不同事务；资格子步失败时不执行仓库策略，
+         *     已提交的账号状态不会因随后仓库策略失败而回滚。
          */
         put: operations["putPublishPolicies"];
         post?: never;
@@ -621,7 +650,11 @@ export interface paths {
         };
         /** 获取用户在 Hosted 仓库的发布策略 */
         get: operations["getPublishPolicy"];
-        /** 更新用户在 Hosted 仓库的发布策略 */
+        /**
+         * 更新用户在 Hosted 仓库的发布策略
+         * @description 若请求包含 `webLoginDisabled`，账号资格子步与仓库策略分属不同事务；资格子步失败时不执行仓库策略，
+         *     已提交的账号状态不会因随后仓库策略失败而回滚。
+         */
         put: operations["putPublishPolicy"];
         post?: never;
         delete?: never;
@@ -2406,12 +2439,47 @@ export interface components {
                 message: string;
             };
         };
+        PrivateAdmissionCandidateStatus: {
+            operationId: string;
+            /** Format: int64 */
+            repositoryId: number;
+            /** Format: int64 */
+            targetVersion: number;
+            /**
+             * Format: int64
+             * @description 已确认的清单版本，未确认时省略。
+             */
+            manifestVersion?: number;
+            /** @description 已确认的清单摘要，未确认时省略。 */
+            manifestDigest?: string;
+            /**
+             * @description 已封存、拒绝或已过期；已封存不表示已发布。
+             * @enum {string}
+             */
+            state: "staged" | "rejected" | "expired";
+            /**
+             * @description 仅跟踪私有状态，不证明扫描覆盖。
+             * @enum {string}
+             */
+            coverage: "unknown";
+            /**
+             * Format: date-time
+             * @description 候选在服务端的 UTC 到期时间。
+             */
+            expiresAt: string;
+            /**
+             * @description 已确认的硬完整性失败；无此事实时省略。
+             * @enum {string}
+             */
+            errorCode?: "admission_integrity_failed";
+        };
         /**
-         * @description 采集缺口由覆盖和健康视图单独表达。`auth.password_changed` 仅表示已提交的改密事实，
-         *     对象页仅有一个 `user` 目标。不记录口令、哈希或内部代次。
+         * @description 采集缺口由覆盖和健康视图单独表达。`auth.password_changed` 和 `auth.account_access_changed` 仅表示已提交的改密或账号级资格变化，
+         *     各自只有一个 `user` 目标，不记录口令、口令哈希或内部代次。`admission.candidate_staged` 只表示私有接收已封存，
+         *     有一个带实际摘要和字节数的 `asset` 对象，不表示公开发布。
          * @enum {string}
          */
-        SecurityAuditEventType: "auth.attempt" | "auth.session_created" | "auth.password_changed" | "protocol.write_denied" | "asset.change_committed" | "asset.response_observed";
+        SecurityAuditEventType: "auth.attempt" | "auth.session_created" | "auth.password_changed" | "auth.account_access_changed" | "admission.candidate_staged" | "protocol.write_denied" | "asset.change_committed" | "asset.response_observed";
         /** @enum {string} */
         SecurityAuditOutcome: "succeeded" | "denied" | "failed" | "pending" | "unknown";
         /**
@@ -4259,6 +4327,51 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
+        /** @description 无有效认证；`error.code` 为 `unauthenticated`。 */
+        PrivateAdmissionUnauthenticated: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description 已识别但不是允许的交互会话；`error.code` 为 `admission_forbidden`。 */
+        PrivateAdmissionForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description 目标不存在或当前主体无权读取；`error.code` 为 `admission_not_found`。 */
+        PrivateAdmissionNotFound: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description 无法确认候选状态或当前读取资格；`error.code` 为 `admission_unavailable`。 */
+        PrivateAdmissionUnavailable: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description 发布策略冲突；账号资格子步发生版本冲突时，`error.code` 为 `credential_version_conflict`。 */
+        PublishPolicyWriteConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
         /** @description 凭据版本已变更，当前变更未提交；`error.code` 为 `credential_version_conflict`。 */
         CredentialVersionConflict: {
             headers: {
@@ -4432,6 +4545,8 @@ export interface components {
         MigrationIdParam: number;
         /** @description 按制品路径前缀过滤 */
         PrefixParam: string;
+        /** @description 服务端分配的规范小写 UUIDv4，不是访问凭证。 */
+        PrivateAdmissionOperationIdParam: string;
         /** @description 页大小，省略时为 50，合法范围为 1 至 100。 */
         SecurityAuditLimitParam: number;
         /** @description 省略表示第一页；提供时必须为非空且只能出现一次，不能跨用途使用。 */
@@ -5463,6 +5578,35 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["CredentialVersionConflict"];
+            503: components["responses"]["SecurityAuditUnavailable"];
+        };
+    };
+    getPrivateAdmissionCandidate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description 服务端分配的规范小写 UUIDv4，不是访问凭证。 */
+                operationId: components["parameters"]["PrivateAdmissionOperationIdParam"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 当前候选的脱敏元数据 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrivateAdmissionCandidateStatus"];
+                };
+            };
+            401: components["responses"]["PrivateAdmissionUnauthenticated"];
+            403: components["responses"]["PrivateAdmissionForbidden"];
+            404: components["responses"]["PrivateAdmissionNotFound"];
+            503: components["responses"]["PrivateAdmissionUnavailable"];
         };
     };
     changePassword: {
@@ -5523,7 +5667,8 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
-            409: components["responses"]["Conflict"];
+            409: components["responses"]["PublishPolicyWriteConflict"];
+            503: components["responses"]["SecurityAuditUnavailable"];
         };
     };
     getPublishPolicy: {
@@ -5581,7 +5726,8 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
-            409: components["responses"]["Conflict"];
+            409: components["responses"]["PublishPolicyWriteConflict"];
+            503: components["responses"]["SecurityAuditUnavailable"];
         };
     };
     listTokens: {

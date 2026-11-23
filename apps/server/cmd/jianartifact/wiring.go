@@ -31,6 +31,7 @@ type appServices struct {
 	authSvc             *domain.AuthService
 	securityAudit       *domain.SecurityAuditService
 	securityAuditQuery  *api.SecurityAuditQuery
+	admission           *domain.AdmissionService
 	ingressGate         httpserver.IngressGate
 	userSvc             *domain.UserService
 	tokenSvc            *domain.TokenService
@@ -459,6 +460,7 @@ func openServices(cfg *config.Config) (*appServices, error) {
 		authSvc:             authSvc,
 		securityAudit:       securityAudit,
 		securityAuditQuery:  securityAuditQuery,
+		admission:           domain.NewAdmissionService(db, blobs, userRepo, repoRepo, freeze),
 		userSvc:             userSvc,
 		tokenSvc:            tokenSvc,
 		repoSvc:             repoSvc,
@@ -608,6 +610,8 @@ func (s *appServices) handlers(version string, checks []func() error) *api.Handl
 		AuditLogs:               s.auditLogs,
 		AuditObservability:      s.auditObservability,
 		SecurityAuditQuery:      s.securityAuditQuery,
+		Admission:               s.admission,
+		AdmissionPrincipal:      auth.NewAuthenticator(s.jwt, s.store).AdmissionPrincipal,
 		OperationsObservability: s.operationsMetrics,
 		OperationsAlerts:        s.operationsAlertRepo,
 		AssetDownloads:          s.assetDownloadRepo,
