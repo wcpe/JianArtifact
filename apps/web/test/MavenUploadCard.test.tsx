@@ -16,15 +16,32 @@ function renderDetail(name: string) {
   );
 }
 
+/** 上传卡默认收在 Collapse 里（display:none）；jsdom 30.1.3 起隐藏容器内的
+ * 元素不可聚焦，user.type 键入会静默丢失——先点「上传制品」展开，再等字段
+ * 可聚焦，与真实用户操作顺序一致。 */
+async function expandUploadCard(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: "上传制品" }));
+}
+
+async function waitFocusableUploadField(label: string) {
+  const input = await screen.findByLabelText(label);
+  await waitFor(() => {
+    input.focus();
+    expect(document.activeElement).toBe(input);
+  });
+  return input;
+}
+
 describe("Maven 网页上传", () => {
   it("maven hosted 仓库渲染 GAV 表单，填表选文件后上传成功并清空 Version", async () => {
     const user = userEvent.setup();
     const { container } = renderDetail("maven-releases");
     // 上传卡与 GAV 字段就位
+    await expandUploadCard(user);
     expect(await screen.findByText("上传制品（Maven hosted）")).toBeTruthy();
-    await user.type(screen.getByLabelText("GroupId"), "com.example");
-    await user.type(screen.getByLabelText("ArtifactId"), "demo");
-    await user.type(screen.getByLabelText("Version"), "1.2.3");
+    await user.type(await waitFocusableUploadField("GroupId"), "com.example");
+    await user.type(await waitFocusableUploadField("ArtifactId"), "demo");
+    await user.type(await waitFocusableUploadField("Version"), "1.2.3");
     // FileButton 渲染隐藏 file input，选择文件即触发上传
     const fileInput = container.querySelector('input[type="file"]');
     expect(fileInput).toBeTruthy();
@@ -43,10 +60,11 @@ describe("Maven 网页上传", () => {
   it("SNAPSHOT 版本给出错误提示且不触发上传", async () => {
     const user = userEvent.setup();
     const { container } = renderDetail("maven-releases");
+    await expandUploadCard(user);
     await screen.findByText("上传制品（Maven hosted）");
-    await user.type(screen.getByLabelText("GroupId"), "com.example");
-    await user.type(screen.getByLabelText("ArtifactId"), "demo");
-    await user.type(screen.getByLabelText("Version"), "1.0.0-SNAPSHOT");
+    await user.type(await waitFocusableUploadField("GroupId"), "com.example");
+    await user.type(await waitFocusableUploadField("ArtifactId"), "demo");
+    await user.type(await waitFocusableUploadField("Version"), "1.0.0-SNAPSHOT");
     await user.upload(
       container.querySelector('input[type="file"]') as HTMLInputElement,
       new File(["x"], "demo.jar"),
