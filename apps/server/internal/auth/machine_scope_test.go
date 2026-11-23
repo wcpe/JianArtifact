@@ -19,7 +19,7 @@ func TestMachineScopeAllowed(t *testing.T) {
 		{1, "com/acmeX/lib.jar", "publish", false}, // 段边界：foo 不命中 foobar
 		{1, "com/acme", "read", true},              // 根 scope 兜底 read
 		{1, "anywhere.txt", "read", true},
-		{1, "", "read", true},  // 仓库级操作仅根 scope 命中
+		{1, "", "read", true}, // 仓库级操作仅根 scope 命中
 		{1, "", "publish", false},
 		{1, "com/acme/lib.jar", "delete", false},
 		{2, "org/x/a.jar", "publish", true},
