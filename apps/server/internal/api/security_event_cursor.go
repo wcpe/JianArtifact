@@ -89,7 +89,10 @@ type securityEventCursorCodec struct {
 // 稳定密钥要求至少 32 字节且由服务端随机生成；启动栅栏须由装配方每次启动独立随机生成。
 // 密钥和节点身份跨重启保持不变，才能将同节点旧签名识别为过期。时钟由服务端提供。
 func newSecurityEventCursorCodec(key []byte, nodeID string, boot [16]byte, now func() time.Time) (*securityEventCursorCodec, error) {
-	if len(key) < sha256.Size || !securityEventCursorRef(nodeID, true) || boot == [16]byte{} {
+	// nodeID 只参与游标绑定的 HMAC（原标识不入游标），不受引用字符集约束；
+	// 已有部署的节点标识可能含冒号等字符，按原值绑定不能阻止服务启动。
+	// 但空值与首尾空白按明显配置错误拒绝（不渲染、不索引，仅作绑定输入前也要求非退化）。
+	if len(key) < sha256.Size || nodeID == "" || strings.TrimSpace(nodeID) != nodeID || boot == [16]byte{} {
 		return nil, errSecurityEventCursorConfig
 	}
 	if now == nil {
