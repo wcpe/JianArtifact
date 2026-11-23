@@ -134,6 +134,7 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	repoSvc.SetSearchTimeout(cfg.SearchTimeout)
 	assetSvc := domain.NewAssetService(repoRepo, assetRepo, blobs, upstreamClient)
 	assetSvc.SetCredentialRevalidator(userRepo)
+	assetSvc.SetRepositoryService(repoSvc)
 	// auto-block 退避起始时长来自 JIAN_AUTO_BLOCK_BASE_SECONDS（缺省/非法回落 40s）；
 	// 未注入时 domain 侧以 autoBlockInitial 常量兜底（两者必须同值）。
 	assetSvc.SetAutoBlockBase(cfg.AutoBlockBaseSeconds)

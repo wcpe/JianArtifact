@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/jmoiron/sqlx"
+	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 	"github.com/wcpe/jianartifact/apps/server/internal/blobstore"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
@@ -70,5 +71,79 @@ func TestSecurityAuditedPublishPreservesExistingCommitHook(t *testing.T) {
 	var count int
 	if err := db.Get(&count, `SELECT count(*) FROM test_existing_hook JOIN security_event ON marker='kept' WHERE operation_id=?`, op); err != nil || count != 1 {
 		t.Fatalf("已有钩子未随安全事件提交：%d / %v", count, err)
+	}
+}
+
+func TestSecurityAuditedPublishRechecksPermissionAtCommit(t *testing.T) {
+	db := mutationTestDB(t)
+	repos := repository.NewRepoRepo(db)
+	assetRepo := repository.NewAssetRepo(db)
+	aclRepo := repository.NewAclRepo(db)
+	users := repository.NewUserRepo(db)
+	svc := NewAssetService(repos, assetRepo, blobstore.NewStore(t.TempDir()), nil)
+	svc.SetRepositoryService(NewRepositoryService(repos, aclRepo, assetRepo, NewSettingService(repository.NewSettingRepo(db)), users))
+	user, err := users.Create("publish-recheck-user", "test-hash", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repos.Create("raw", "raw", "hosted", "private", ""); err != nil {
+		t.Fatal(err)
+	}
+	repo, err := repos.GetByName("raw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	staged := func() *repository.Asset {
+		asset, err := svc.StageBlob(strings.NewReader("字节"), "text/plain")
+		if err != nil {
+			t.Fatal(err)
+		}
+		asset.Path = "recheck.txt"
+		return asset
+	}
+	auditedFor := func() *securityAuditedPublish {
+		return &securityAuditedPublish{
+			ctx:       context.Background(),
+			audit:     NewSecurityAuditService(db),
+			actor:     user,
+			principal: &auth.Principal{UserID: user, Role: "user", Kind: auth.KindSession},
+			repoSvc:   svc.repoSvc,
+			repo:      repo,
+		}
+	}
+
+	// 无发布 ACL 的主体在最终事务复核中被拒，资产不得公开。
+	if _, err := svc.publishAssets("raw", []*repository.Asset{staged()}, nil, auditedFor()); !errors.Is(err, repository.ErrCredentialRejected) {
+		t.Fatalf("无发布 ACL 仍完成公开：%v", err)
+	}
+	if got, _ := assetRepo.GetByPath(repo.ID, "recheck.txt"); got != nil {
+		t.Fatal("被拒的资产仍写入仓库")
+	}
+
+	// 入口授权后管理员撤销发布 ACL：在途上传在提交时复核失败。
+	if err := aclRepo.Replace(repo.ID, []repository.Acl{{SubjectID: user, SubjectType: repository.SubjectTypeUser, Action: repository.ActionPublish}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.publishAssets("raw", []*repository.Asset{staged()}, nil, auditedFor()); err != nil {
+		t.Fatalf("持有发布 ACL 被拒：%v", err)
+	}
+	if err := aclRepo.Replace(repo.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.publishAssets("raw", []*repository.Asset{staged()}, nil, auditedFor()); !errors.Is(err, repository.ErrCredentialRejected) {
+		t.Fatalf("撤销发布后仍完成公开：%v", err)
+	}
+
+	// 机器凭据作用域不含本路径，即使主体持有 ACL 也在提交时拒。
+	if err := aclRepo.Replace(repo.ID, []repository.Acl{{SubjectID: user, SubjectType: repository.SubjectTypeUser, Action: repository.ActionPublish}}); err != nil {
+		t.Fatal(err)
+	}
+	scoped := auditedFor()
+	scoped.principal = &auth.Principal{
+		UserID: user, Role: "user", Kind: auth.KindToken, TokenPurpose: auth.TokenPurposeArtifactPublish,
+		TokenScopes: []auth.MachineTokenScope{{RepositoryID: repo.ID, Actions: []string{auth.MachineActionPublish}, PathPrefix: "other/"}},
+	}
+	if _, err := svc.publishAssets("raw", []*repository.Asset{staged()}, nil, scoped); !errors.Is(err, repository.ErrCredentialRejected) {
+		t.Fatalf("作用域外路径仍完成公开：%v", err)
 	}
 }

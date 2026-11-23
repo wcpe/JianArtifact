@@ -327,6 +327,8 @@ func (h *RawHandler) Put(c *gin.Context) {
 		ctx = domain.WithSecurityAuditIdentity(ctx, domain.SecurityAuditIdentity{ActorUserID: actor, AuthMethod: principal.AuthSource})
 		// 最终完成事务内按同一证明重查凭据状态。
 		ctx = domain.WithCredentialProof(ctx, principal.CredentialProof())
+		// 同一事务内再复核实时 ACL 与机器凭据作用域（排队有权不代表公开有权）。
+		ctx = domain.WithPublishPrincipal(ctx, principal)
 	}
 	var asset *repository.Asset
 	var operationID string
@@ -582,6 +584,11 @@ func (h *RawHandler) requireDelete(c *gin.Context, repo string, operationID stri
 		writeRawDeleteErrorResponse(c, http.StatusUnauthorized, "unauthenticated", "未认证或凭据无效", operationID)
 		return false
 	}
+	// 受限机器凭据的作用域词汇不含删除动作：任何受限用途一律拒绝，管理员名下亦然。
+	if principal.Kind == auth.KindToken && principal.TokenPurpose != auth.TokenPurposeLegacy {
+		writeRawDeleteErrorResponse(c, http.StatusForbidden, "credential_scope_denied", "机器凭据作用域不允许此操作", operationID)
+		return false
+	}
 	if principal.IsAdmin() {
 		return true
 	}
@@ -662,11 +669,16 @@ func (h *RawHandler) authorize(c *gin.Context, repo, action string) bool {
 		withRepositorySnapshot(c, repoSnapshot)
 	}
 	principal, hasPrincipal := auth.PrincipalFrom(c)
-	// 受限机器凭据：用途先收窄动作，再按仓库/路径 scope 与 ACL 取交集；
-	// 不识别制品路径参数的路径按仓库级操作处理，仅根 scope 可命中。
+	// 受限机器凭据：用途先收窄动作，再按仓库/路径 scope 与 ACL 取交集。
+	// 通用路由读 artifactPath，原生协议路由（npm/cargo/oci 等）路径在 rest；
+	// 两者都没有的路径按仓库级操作处理，仅根 scope 可命中。
 	if hasPrincipal && principal.Kind == auth.KindToken && principal.TokenPurpose != auth.TokenPurposeLegacy {
+		scopePath := cleanArtifactPath(c.Param("artifactPath"))
+		if scopePath == "" {
+			scopePath = cleanArtifactPath(c.Param("rest"))
+		}
 		if !auth.MachinePurposeAllows(principal.TokenPurpose, action) ||
-			!auth.MachineScopeAllowed(principal.TokenScopes, repoSnapshot.ID, cleanArtifactPath(c.Param("artifactPath")), action) {
+			!auth.MachineScopeAllowed(principal.TokenScopes, repoSnapshot.ID, scopePath, action) {
 			auth.WriteError(c, http.StatusForbidden, "credential_scope_denied", "机器凭据作用域不允许此操作")
 			return false
 		}

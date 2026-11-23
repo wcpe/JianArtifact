@@ -20,9 +20,14 @@ type securityAuditedPublish struct {
 	reservation *PublishCommitReservation
 	// proof 是入口已验证的凭据引用；非空时在完成事务内重查当前状态，
 	// 撤销/降代先提交则本次公开事务失败，反之保留原成功。
-	proof  *auth.CredentialProof
-	users  *repository.UserRepo
-	failed bool
+	proof *auth.CredentialProof
+	// principal 是入口鉴权时的主体快照；非空时在完成事务内复核
+	// 实时 ACL 与机器凭据作用域仍允许本次公开（排队有权不代表公开有权）。
+	principal *auth.Principal
+	users     *repository.UserRepo
+	repoSvc   *RepositoryService
+	repo      *repository.Repository
+	failed    bool
 }
 
 func (a *securityAuditedPublish) mapWriteError(err error) error {
@@ -52,14 +57,18 @@ func (s *AssetService) PutWithReservedSecurityAudit(ctx context.Context, audit *
 	if err := s.requireBusinessWrite(); err != nil {
 		return nil, "", err
 	}
-	audited := &securityAuditedPublish{ctx: ctx, audit: audit, actor: actorUserID, reservation: reservation, users: s.users}
+	audited := &securityAuditedPublish{ctx: ctx, audit: audit, actor: actorUserID, reservation: reservation, users: s.users, repoSvc: s.repoSvc}
 	if proof, ok := credentialProofFrom(ctx); ok {
 		audited.proof = &proof
+	}
+	if p, ok := publishPrincipalFrom(ctx); ok {
+		audited.principal = p
 	}
 	repo, err := s.repos.GetByName(repoName)
 	if err != nil {
 		return nil, "", audited.mapWriteError(mapNotFound(err))
 	}
+	audited.repo = repo
 	if repo.Type != "hosted" {
 		return nil, "", ErrConflict
 	}
@@ -76,6 +85,54 @@ func (s *AssetService) PutWithReservedSecurityAudit(ctx context.Context, audit *
 	return asset, operationID, nil
 }
 
+// recheckPublishPermission 在完成事务内按实时 ACL 与机器凭据作用域复核公开权限：
+// 入口鉴权后若管理员撤销仓库 ACL 或收窄凭据，在途上传不得继续公开。
+// 未装配仓库服务或缺少主体快照时保持既有兼容行为（不降级为拒绝，也不新增放行）。
+func (a *securityAuditedPublish) recheckPublishPermission(assets []repository.Asset) error {
+	p := a.principal
+	if p == nil || a.repoSvc == nil || a.repo == nil {
+		return nil
+	}
+	scoped := p.Kind == auth.KindToken && p.TokenPurpose != auth.TokenPurposeLegacy
+	if scoped && !auth.MachinePurposeAllows(p.TokenPurpose, auth.MachineActionPublish) {
+		return repository.ErrCredentialRejected
+	}
+	if p.IsAdmin() && !scoped {
+		return nil
+	}
+	var subject repository.Subject
+	if !p.IsAdmin() {
+		var err error
+		subject, err = a.repoSvc.SubjectFor(p.UserID)
+		if err != nil {
+			return err
+		}
+	}
+	for _, asset := range assets {
+		repo := a.repo
+		if asset.RepositoryID != repo.ID {
+			resolved, err := a.repoSvc.repos.GetByID(asset.RepositoryID)
+			if err != nil || resolved == nil {
+				return repository.ErrCredentialRejected
+			}
+			repo = resolved
+		}
+		if !p.IsAdmin() {
+			allowed, err := a.repoSvc.CanAccessResolved(repo, subject, repository.ActionPublish)
+			if err != nil {
+				return err
+			}
+			if !allowed {
+				return repository.ErrCredentialRejected
+			}
+		}
+		if scoped && !auth.MachineScopeAllowed(p.TokenScopes, asset.RepositoryID, asset.Path, auth.MachineActionPublish) {
+			return repository.ErrCredentialRejected
+		}
+	}
+	return nil
+}
+
 func (a *securityAuditedPublish) bind(operationID string, items []repository.AssetMutationItem, existing repository.MutationCompletionHook) repository.MutationCompletionHook {
 	assets := make([]repository.Asset, 0, len(items))
 	for _, item := range items {
@@ -89,6 +146,10 @@ func (a *securityAuditedPublish) bind(operationID string, items []repository.Ass
 			if _, err := a.users.RevalidateCredentialTx(a.ctx, tx, *a.proof); err != nil {
 				return err
 			}
+		}
+		if err := a.recheckPublishPermission(assets); err != nil {
+			// 权限复核同样是确定性拒绝：撤销先行则本次公开确定失败。
+			return err
 		}
 		if existing != nil {
 			if err := existing(tx); err != nil {
