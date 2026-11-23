@@ -1609,18 +1609,16 @@ export const store = {
     return { anonymousAccess: state.anonymousAccessEnabled, ...state.serviceSettings };
   },
 
-  /** 保存管理端服务设置；同步间隔保持只读，不由设置页写入。 */
+  /** 保存管理端服务设置；同步间隔保持只读，不由设置页写入。
+   *
+   * 整体展开而不是逐字段赋值：ServiceSettings 新增字段（如运行期策略 13 项）
+   * 时逐字段写法会被静默落下——保存返回 200 却回显旧值，前端只能报
+   * 「已按后端上限调整」这种误导提示。展开后新增字段自动持久化。 */
   updateSettings(patch: Omit<ServiceSettings, never>): ServiceSettings {
     state.anonymousAccessEnabled = patch.anonymousAccess;
-    state.serviceSettings.publicUrl = patch.publicUrl;
-    state.serviceSettings.upstreamTimeout = patch.upstreamTimeout;
-    state.serviceSettings.allowedHosts = [...patch.allowedHosts];
-    state.serviceSettings.originTokenEnabled = patch.originTokenEnabled;
-    state.serviceSettings.originTokenHeader = patch.originTokenHeader;
-    state.serviceSettings.originTokenValue = patch.originTokenValue;
-    state.serviceSettings.backupAutoInterval = patch.backupAutoInterval;
-    state.serviceSettings.backupKeepLast = patch.backupKeepLast;
-    state.serviceSettings.backupRetentionDays = patch.backupRetentionDays;
+    const { anonymousAccess: _dropped, ...rest } = patch;
+    void _dropped;
+    state.serviceSettings = { ...state.serviceSettings, ...rest };
     return this.settings();
   },
 
