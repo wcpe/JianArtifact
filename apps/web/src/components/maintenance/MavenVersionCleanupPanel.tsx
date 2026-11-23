@@ -41,25 +41,38 @@ import {
   IconSearch,
   IconTrash,
 } from "@tabler/icons-react";
-import { KpiCard } from "./KpiCard";
+import { OpsKpiBand } from "../ops/OpsKit";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   planMavenVersion,
   trashMavenVersion,
   type MavenVersionFile,
   type MavenVersionPlan,
 } from "../../api/endpoints";
-import { DestructiveConfirmModal, DESTRUCTIVE_CONFIRM_WORD } from "./DestructiveConfirmModal";
+import { DestructiveConfirmModal } from "./DestructiveConfirmModal";
 import { formatBytes } from "../../lib/format";
 
-/** 类别到中文标签。顺序即展示顺序，与后端 Categories 的固定顺序一致。 */
-const CATEGORY_LABELS: Record<MavenVersionFile["category"], string> = {
-  primary: "主档",
-  classifier: "Classifiers",
-  checksum: "校验和",
-  metadata: "元数据",
-  other: "其它",
-};
+/**
+ * 类别 → 本地化标签。
+ *
+ * 不用模块级常量表：标签要跟随界面语言，常量表在模块加载时就定死了，
+ * 切换语言后不会重算。顺序仍与后端 Categories 的固定顺序一致。
+ */
+function categoryLabel(t: (key: string) => string, category: MavenVersionFile["category"]): string {
+  switch (category) {
+    case "primary":
+      return t("maintenance.verCategoryPrimary");
+    case "classifier":
+      return t("maintenance.verCategoryClassifier");
+    case "checksum":
+      return t("maintenance.verCategoryChecksum");
+    case "metadata":
+      return t("maintenance.verCategoryMetadata");
+    default:
+      return t("maintenance.verCategoryOther");
+  }
+}
 
 export interface MavenVersionCleanupPanelProps {
   /** 可选仓库（当前实例的 Maven hosted 仓库）。 */
@@ -89,7 +102,11 @@ function parseCoordinate(raw: string): ParsedCoordinate | null {
   return coord;
 }
 
-export function MavenVersionCleanupPanel({ repositories, onTrashed }: MavenVersionCleanupPanelProps) {
+export function MavenVersionCleanupPanel({
+  repositories,
+  onTrashed,
+}: MavenVersionCleanupPanelProps) {
+  const { t } = useTranslation();
   // 同 MavenPackageBatchPanel：仓库列表异步加载，初始值不能只取一次，
   // 否则组件首次挂载时列表为空、repo 永远停在空串。
   // Select 的值是 string|null（可清空），因此状态也用可空类型，
@@ -115,7 +132,7 @@ export function MavenVersionCleanupPanel({ repositories, onTrashed }: MavenVersi
 
   const loadPlan = useCallback(() => {
     if (!repo || !parsed) {
-      setError("请填写形如 group:artifact:version 的坐标");
+      setError(t("maintenance.verErrBadCoordinate"));
       return;
     }
     setLoading(true);
@@ -129,10 +146,10 @@ export function MavenVersionCleanupPanel({ repositories, onTrashed }: MavenVersi
       })
       .catch((err) => {
         setPlan(null);
-        setError(err instanceof Error ? err.message : "预览失败");
+        setError(err instanceof Error ? err.message : t("maintenance.verErrPreviewFailed"));
       })
       .finally(() => setLoading(false));
-  }, [repo, parsed]);
+  }, [t, repo, parsed]);
 
   const toggle = (path: string) => {
     setSelected((prev) => {
@@ -155,12 +172,18 @@ export function MavenVersionCleanupPanel({ repositories, onTrashed }: MavenVersi
       version: parsed.version,
       ...(parsed.buildId ? { buildId: parsed.buildId } : {}),
       paths: selectedFiles.map((f) => f.path),
-      overrideReason: `从维护页清理 Maven 版本 ${parsed.groupId}:${parsed.artifactId}:${parsed.version}`,
+      overrideReason: t("maintenance.verTrashReason", {
+        coordinate: `${parsed.groupId}:${parsed.artifactId}:${parsed.version}`,
+      }),
     })
       .then((res) => {
         notifications.show({
           color: "green",
-          message: `已移入回收站：${res.trashed} 个文件 / ${formatBytes(res.bytes)}（${res.batches} 批）`,
+          message: t("maintenance.verTrashed", {
+            files: res.trashed,
+            bytes: formatBytes(res.bytes),
+            batches: res.batches,
+          }),
         });
         setConfirmOpen(false);
         // 删完重新预览：让用户立刻看到该版本还剩什么（可能是部分删除或已空）。
@@ -170,7 +193,7 @@ export function MavenVersionCleanupPanel({ repositories, onTrashed }: MavenVersi
       .catch((err) =>
         notifications.show({
           color: "red",
-          message: err instanceof Error ? err.message : "删除失败",
+          message: err instanceof Error ? err.message : t("maintenance.verErrDeleteFailed"),
         }),
       )
       .finally(() => setTrashing(false));
@@ -179,15 +202,15 @@ export function MavenVersionCleanupPanel({ repositories, onTrashed }: MavenVersi
   return (
     <Stack gap="md" h="100%" style={{ minHeight: 0 }}>
       <Alert color="blue" variant="light" icon={<IconAlertTriangle size={16} />}>
-        删除是<strong>可恢复</strong>的：文件会进入「回收站」，blob 保留到你彻底清理或保留期到期。
+        {t("maintenance.verReversibleNotice")}
       </Alert>
 
       <Card withBorder radius="md" padding="md">
         <Stack gap="sm">
           <SimpleGrid cols={{ base: 1, md: 3 }} spacing="sm">
             <Select
-              label="仓库"
-              placeholder="选择仓库"
+              label={t("maintenance.verRepo")}
+              placeholder={t("maintenance.verRepoPlaceholder")}
               data={repositories.map((r) => ({ value: r.name, label: r.name }))}
               value={repo}
               onChange={setRepo}
@@ -195,9 +218,9 @@ export function MavenVersionCleanupPanel({ repositories, onTrashed }: MavenVersi
               checkIconPosition="right"
             />
             <TextInput
-              label="坐标"
+              label={t("maintenance.verCoordinate")}
               placeholder="com.example:demo:1.17-SNAPSHOT"
-              description="group:artifact:version，SNAPSHOT 可在第 4 段指定单次构建"
+              description={t("maintenance.verCoordinateDescription")}
               value={coordinate}
               onChange={(e) => setCoordinate(e.currentTarget.value)}
             />
@@ -209,7 +232,7 @@ export function MavenVersionCleanupPanel({ repositories, onTrashed }: MavenVersi
                 disabled={!repo || !parsed}
                 fullWidth
               >
-                预览清单
+                {t("maintenance.verPreview")}
               </Button>
             </Stack>
           </SimpleGrid>
@@ -224,18 +247,46 @@ export function MavenVersionCleanupPanel({ repositories, onTrashed }: MavenVersi
 
       {plan && !plan.exists && (
         <Alert color="yellow" variant="light">
-          该坐标在 <Code>{repo}</Code> 下没有制品。请检查 group/artifact/version 是否正确。
+          {t("maintenance.verNotFound", { repo })}
         </Alert>
       )}
 
       {plan && plan.exists && (
         <>
-          <SimpleGrid cols={{ base: 2, sm: 4 }} spacing="md">
-            <KpiCard icon={<IconFile size={20} />} label="文件总数" value={String(plan.totalFiles)} />
-            <KpiCard icon={<IconDatabase size={20} />} label="总大小" value={formatBytes(plan.totalBytes)} />
-            <KpiCard icon={<IconCheckbox size={20} />} label="已选文件" value={String(selectedFiles.length)} color="teal" />
-            <KpiCard icon={<IconChartPie size={20} />} label="已选大小" value={formatBytes(selectedBytes)} color="teal" />
-          </SimpleGrid>
+          <OpsKpiBand
+            label={t("maintenance.versionPlanTitle")}
+            cols={{ base: 2, sm: 4 }}
+            items={[
+              {
+                label: t("maintenance.planTotalFiles"),
+                value: String(plan.totalFiles),
+                icon: <IconFile size={20} />,
+                tone: "blue",
+                testId: "plan-total-files",
+              },
+              {
+                label: t("maintenance.planTotalBytes"),
+                value: formatBytes(plan.totalBytes),
+                icon: <IconDatabase size={20} />,
+                tone: "blue",
+                testId: "plan-total-bytes",
+              },
+              {
+                label: t("maintenance.planSelectedFiles"),
+                value: String(selectedFiles.length),
+                icon: <IconCheckbox size={20} />,
+                tone: "teal",
+                testId: "plan-selected-files",
+              },
+              {
+                label: t("maintenance.planSelectedBytes"),
+                value: formatBytes(selectedBytes),
+                icon: <IconChartPie size={20} />,
+                tone: "teal",
+                testId: "plan-selected-bytes",
+              },
+            ]}
+          />
 
           {(plan.categories?.length || plan.snapshotBuilds?.length) && (
             <Card withBorder radius="md" padding="md">
@@ -243,12 +294,11 @@ export function MavenVersionCleanupPanel({ repositories, onTrashed }: MavenVersi
                 {plan.categories && plan.categories.length > 0 && (
                   <Group gap="xs">
                     <Text size="sm" c="dimmed">
-                      按类别：
+                      {t("maintenance.verByCategory")}
                     </Text>
                     {plan.categories.map((c) => (
                       <Badge key={c.category} variant="light">
-                        {CATEGORY_LABELS[c.category as MavenVersionFile["category"]] ?? c.category}{" "}
-                        {c.fileCount}
+                        {categoryLabel(t, c.category as MavenVersionFile["category"])} {c.fileCount}
                       </Badge>
                     ))}
                   </Group>
@@ -256,7 +306,7 @@ export function MavenVersionCleanupPanel({ repositories, onTrashed }: MavenVersi
                 {plan.snapshotBuilds && plan.snapshotBuilds.length > 0 && (
                   <Stack gap={4}>
                     <Text size="sm" c="dimmed">
-                      快照历史构建（{plan.snapshotBuilds.length}）
+                      {t("maintenance.verSnapshotBuilds", { count: plan.snapshotBuilds.length })}
                     </Text>
                     <ScrollArea h={72} type="auto">
                       <Group gap="xs">
@@ -265,7 +315,10 @@ export function MavenVersionCleanupPanel({ repositories, onTrashed }: MavenVersi
                             key={b.buildId}
                             variant={b.buildId === "SNAPSHOT" ? "filled" : "outline"}
                           >
-                            {b.buildId} · {b.fileCount} 文件
+                            {t("maintenance.verSnapshotBuild", {
+                              buildId: b.buildId,
+                              count: b.fileCount,
+                            })}
                           </Badge>
                         ))}
                       </Group>
@@ -276,10 +329,15 @@ export function MavenVersionCleanupPanel({ repositories, onTrashed }: MavenVersi
             </Card>
           )}
 
-          <Card withBorder radius="md" padding={0} style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+          <Card
+            withBorder
+            radius="md"
+            padding={0}
+            style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
+          >
             <Group justify="space-between" p="md" wrap="wrap" gap="sm">
               <Text size="sm" c="dimmed">
-                目录：<Code>{plan.directory}</Code>
+                {t("maintenance.verDirectory")} <Code>{plan.directory}</Code>
               </Text>
               <Button
                 color="red"
@@ -287,7 +345,7 @@ export function MavenVersionCleanupPanel({ repositories, onTrashed }: MavenVersi
                 disabled={selectedFiles.length === 0}
                 onClick={() => setConfirmOpen(true)}
               >
-                移入回收站（{selectedFiles.length}）
+                {t("maintenance.verTrashSelected", { count: selectedFiles.length })}
               </Button>
             </Group>
             <Divider />
@@ -296,10 +354,10 @@ export function MavenVersionCleanupPanel({ repositories, onTrashed }: MavenVersi
                 <Table.Thead>
                   <Table.Tr>
                     <Table.Th w={40} />
-                    <Table.Th>路径</Table.Th>
-                    <Table.Th w={110}>类别</Table.Th>
-                    <Table.Th w={140}>构建</Table.Th>
-                    <Table.Th w={100}>大小</Table.Th>
+                    <Table.Th>{t("maintenance.verColPath")}</Table.Th>
+                    <Table.Th w={110}>{t("maintenance.verColCategory")}</Table.Th>
+                    <Table.Th w={140}>{t("maintenance.verColBuild")}</Table.Th>
+                    <Table.Th w={100}>{t("maintenance.verColSize")}</Table.Th>
                   </Table.Tr>
                 </Table.Thead>
                 <Table.Tbody>
@@ -309,7 +367,7 @@ export function MavenVersionCleanupPanel({ repositories, onTrashed }: MavenVersi
                         <Checkbox
                           checked={selected.has(file.path)}
                           onChange={() => toggle(file.path)}
-                          aria-label={`选择 ${file.path}`}
+                          aria-label={t("maintenance.verSelectRow", { path: file.path })}
                         />
                       </Table.Td>
                       <Table.Td>
@@ -317,7 +375,7 @@ export function MavenVersionCleanupPanel({ repositories, onTrashed }: MavenVersi
                       </Table.Td>
                       <Table.Td>
                         <Badge size="sm" variant="light">
-                          {CATEGORY_LABELS[file.category] ?? file.category}
+                          {categoryLabel(t, file.category)}
                         </Badge>
                       </Table.Td>
                       <Table.Td>
@@ -337,15 +395,17 @@ export function MavenVersionCleanupPanel({ repositories, onTrashed }: MavenVersi
 
       <DestructiveConfirmModal
         opened={confirmOpen}
-        title="确认移入回收站"
-        message={
-          `将从 ${repo ?? ""} 移出 ${selectedFiles.length} 个文件 / ${formatBytes(selectedBytes)}，` +
-          `坐标 ${parsed?.groupId ?? ""}:${parsed?.artifactId ?? ""}:${parsed?.version ?? ""}` +
-          `${parsed?.buildId ? `（构建 ${parsed.buildId}）` : ""}。\n\n` +
-          `这些文件会进入回收站，可随时恢复；只有彻底清理或保留期到期才会真正释放磁盘。`
-        }
+        title={t("maintenance.verConfirmTitle")}
+        message={t("maintenance.verConfirmMessage", {
+          repo: repo ?? "",
+          files: selectedFiles.length,
+          bytes: formatBytes(selectedBytes),
+          coordinate: `${parsed?.groupId ?? ""}:${parsed?.artifactId ?? ""}:${parsed?.version ?? ""}`,
+          buildPart: parsed?.buildId
+            ? t("maintenance.verConfirmBuildPart", { buildId: parsed.buildId })
+            : "",
+        })}
         requirePhrase
-        confirmLabel={DESTRUCTIVE_CONFIRM_WORD}
         pending={trashing}
         onConfirm={runTrash}
         onClose={() => setConfirmOpen(false)}
@@ -353,4 +413,3 @@ export function MavenVersionCleanupPanel({ repositories, onTrashed }: MavenVersi
     </Stack>
   );
 }
-

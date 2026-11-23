@@ -31,12 +31,13 @@ import {
 import { notifications } from "@mantine/notifications";
 import { IconAlertTriangle, IconSearch, IconTrash } from "@tabler/icons-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   searchMavenPackageVersions,
   trashMavenVersionsBatch,
   type MavenPackageVersion,
 } from "../../api/endpoints";
-import { DestructiveConfirmModal, DESTRUCTIVE_CONFIRM_WORD } from "./DestructiveConfirmModal";
+import { DestructiveConfirmModal } from "./DestructiveConfirmModal";
 import { formatBytes } from "../../lib/format";
 
 export interface MavenPackageBatchPanelProps {
@@ -53,6 +54,7 @@ function versionKey(v: MavenPackageVersion): string {
 }
 
 export function MavenPackageBatchPanel({ repositories, onTrashed }: MavenPackageBatchPanelProps) {
+  const { t } = useTranslation();
   // 仓库列表异步加载：初始值不能只取一次，否则首次挂载时列表为空、repo 永远停在空串。
   const [repo, setRepo] = useState<string | null>(repositories[0]?.name ?? null);
   useEffect(() => {
@@ -85,11 +87,11 @@ export function MavenPackageBatchPanel({ repositories, onTrashed }: MavenPackage
 
   const search = useCallback(() => {
     if (!repo) {
-      setError("请选择仓库");
+      setError(t("maintenance.pkgErrNoRepo"));
       return;
     }
     if (!groupId.trim() && !artifactId.trim()) {
-      setError("至少填写 groupId 或 artifactId（支持 * 通配）");
+      setError(t("maintenance.pkgErrNoCoordinate"));
       return;
     }
     setLoading(true);
@@ -115,10 +117,20 @@ export function MavenPackageBatchPanel({ repositories, onTrashed }: MavenPackage
       .catch((err) => {
         setVersions([]);
         setSearched(true);
-        setError(err instanceof Error ? err.message : "搜索失败");
+        setError(err instanceof Error ? err.message : t("maintenance.pkgErrSearchFailed"));
       })
       .finally(() => setLoading(false));
-  }, [repo, groupId, artifactId, versionPattern, snapshotOnly, updatedBefore, minBytes, maxBytes]);
+  }, [
+    t,
+    repo,
+    groupId,
+    artifactId,
+    versionPattern,
+    snapshotOnly,
+    updatedBefore,
+    minBytes,
+    maxBytes,
+  ]);
 
   const toggle = (key: string) => {
     setSelected((prev) => {
@@ -150,23 +162,33 @@ export function MavenPackageBatchPanel({ repositories, onTrashed }: MavenPackage
         artifactId: v.coordinate.artifactId,
         version: v.coordinate.version,
       })),
-      overrideReason: `批量清理 Maven 版本（${selectedVersions.length} 个，来自包名搜索）`,
+      overrideReason: t("maintenance.pkgTrashReason", { count: selectedVersions.length }),
     })
       .then((res) => {
         // 部分成功是正常结果：必须把失败明细摊开，否则用户以为全删了。
         if (res.failures && res.failures.length > 0) {
           notifications.show({
             color: "yellow",
-            title: `部分完成：成功 ${res.trashedVersions} 个，失败 ${res.failures.length} 个`,
+            title: t("maintenance.pkgPartialTitle", {
+              ok: res.trashedVersions,
+              failed: res.failures.length,
+            }),
             message: res.failures
               .slice(0, 5)
-              .map((f) => `${f.coordinate.groupId}:${f.coordinate.artifactId}:${f.coordinate.version} — ${f.reason}`)
+              .map(
+                (f) =>
+                  `${f.coordinate.groupId}:${f.coordinate.artifactId}:${f.coordinate.version} — ${f.reason}`,
+              )
               .join("\n"),
           });
         } else {
           notifications.show({
             color: "green",
-            message: `已移入回收站：${res.trashedVersions} 个版本 / ${res.trashedFiles} 个文件 / ${formatBytes(res.freedBytes)}`,
+            message: t("maintenance.pkgTrashed", {
+              versions: res.trashedVersions,
+              files: res.trashedFiles,
+              bytes: formatBytes(res.freedBytes),
+            }),
           });
         }
         setConfirmOpen(false);
@@ -176,7 +198,7 @@ export function MavenPackageBatchPanel({ repositories, onTrashed }: MavenPackage
       .catch((err) =>
         notifications.show({
           color: "red",
-          message: err instanceof Error ? err.message : "批量清理失败",
+          message: err instanceof Error ? err.message : t("maintenance.pkgErrTrashFailed"),
         }),
       )
       .finally(() => setTrashing(false));
@@ -185,15 +207,15 @@ export function MavenPackageBatchPanel({ repositories, onTrashed }: MavenPackage
   return (
     <Stack gap="md" h="100%" style={{ minHeight: 0 }}>
       <Alert color="blue" variant="light" icon={<IconAlertTriangle size={16} />}>
-        删除是<strong>可恢复</strong>的：移入「回收站」，blob 保留到你彻底清理或保留期到期。
+        {t("maintenance.pkgReversibleNotice")}
       </Alert>
 
       <Card withBorder radius="md" padding="md">
         <Stack gap="sm">
           <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="sm">
             <Select
-              label="仓库"
-              placeholder="选择仓库"
+              label={t("maintenance.pkgRepo")}
+              placeholder={t("maintenance.pkgRepoPlaceholder")}
               data={repositories.map((r) => ({ value: r.name, label: r.name }))}
               value={repo}
               onChange={setRepo}
@@ -202,19 +224,19 @@ export function MavenPackageBatchPanel({ repositories, onTrashed }: MavenPackage
             />
             <TextInput
               label="groupId"
-              placeholder="com.tbao 或 com.tbao.*"
+              placeholder={t("maintenance.pkgGroupIdPlaceholder")}
               value={groupId}
               onChange={(e) => setGroupId(e.currentTarget.value)}
             />
             <TextInput
               label="artifactId"
-              placeholder="tbaoolib 或 lib*"
+              placeholder={t("maintenance.pkgArtifactIdPlaceholder")}
               value={artifactId}
               onChange={(e) => setArtifactId(e.currentTarget.value)}
             />
             <TextInput
-              label="版本"
-              placeholder="留空=全部，如 1.17*"
+              label={t("maintenance.pkgVersion")}
+              placeholder={t("maintenance.pkgVersionPlaceholder")}
               value={versionPattern}
               onChange={(e) => setVersionPattern(e.currentTarget.value)}
             />
@@ -222,22 +244,22 @@ export function MavenPackageBatchPanel({ repositories, onTrashed }: MavenPackage
 
           <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="sm">
             <TextInput
-              label="更新时间早于"
-              placeholder="YYYY-MM-DD"
+              label={t("maintenance.pkgUpdatedBefore")}
+              placeholder={t("maintenance.pkgUpdatedBeforePlaceholder")}
               value={updatedBefore}
               onChange={(e) => setUpdatedBefore(e.currentTarget.value)}
             />
             <NumberInput
-              label="最小字节"
-              placeholder="不限"
+              label={t("maintenance.pkgMinBytes")}
+              placeholder={t("maintenance.pkgBytesUnlimited")}
               value={minBytes}
               onChange={setMinBytes}
               min={0}
               thousandSeparator=","
             />
             <NumberInput
-              label="最大字节"
-              placeholder="不限"
+              label={t("maintenance.pkgMaxBytes")}
+              placeholder={t("maintenance.pkgBytesUnlimited")}
               value={maxBytes}
               onChange={setMaxBytes}
               min={0}
@@ -245,7 +267,7 @@ export function MavenPackageBatchPanel({ repositories, onTrashed }: MavenPackage
             />
             <Stack gap={4} justify="flex-end">
               <Checkbox
-                label="只看含 SNAPSHOT 的版本"
+                label={t("maintenance.pkgSnapshotOnly")}
                 checked={snapshotOnly}
                 onChange={(e) => setSnapshotOnly(e.currentTarget.checked)}
               />
@@ -254,7 +276,7 @@ export function MavenPackageBatchPanel({ repositories, onTrashed }: MavenPackage
 
           <Group justify="flex-end">
             <Button leftSection={<IconSearch size={16} />} onClick={search} loading={loading}>
-              搜索版本
+              {t("maintenance.pkgSearch")}
             </Button>
           </Group>
         </Stack>
@@ -268,26 +290,36 @@ export function MavenPackageBatchPanel({ repositories, onTrashed }: MavenPackage
 
       {truncated && (
         <Alert color="yellow" variant="light">
-          结果被截断（共 {totalVersions} 个版本，仅显示前 {versions.length} 个），请收窄筛选条件。
+          {t("maintenance.pkgTruncated", { total: totalVersions, shown: versions.length })}
         </Alert>
       )}
 
       {searched && versions.length === 0 && !error && (
         <Alert color="gray" variant="light">
-          没有匹配的版本。若包确实存在，请检查 groupId 是否写全（如 com.tbao 而非 tbao）。
+          {t("maintenance.pkgEmpty")}
         </Alert>
       )}
 
       {versions.length > 0 && (
-        <Card withBorder radius="md" padding={0} style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+        <Card
+          withBorder
+          radius="md"
+          padding={0}
+          style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
+        >
           <Group justify="space-between" p="md" wrap="wrap" gap="sm">
             <Group gap="sm">
               <Button size="xs" variant="subtle" onClick={toggleAll}>
-                {selected.size === versions.length ? "取消全选" : `全选（${versions.length}）`}
+                {selected.size === versions.length
+                  ? t("maintenance.pkgDeselectAll")
+                  : t("maintenance.pkgSelectAll", { count: versions.length })}
               </Button>
               <Text size="sm" c="dimmed">
-                已选 {selectedVersions.length} 个版本 / {selectedFiles} 个文件 /{" "}
-                {formatBytes(selectedBytes)}
+                {t("maintenance.pkgSelection", {
+                  versions: selectedVersions.length,
+                  files: selectedFiles,
+                  bytes: formatBytes(selectedBytes),
+                })}
               </Text>
             </Group>
             <Button
@@ -296,7 +328,7 @@ export function MavenPackageBatchPanel({ repositories, onTrashed }: MavenPackage
               disabled={selectedVersions.length === 0}
               onClick={() => setConfirmOpen(true)}
             >
-              批量移入回收站（{selectedVersions.length}）
+              {t("maintenance.pkgTrashSelected", { count: selectedVersions.length })}
             </Button>
           </Group>
           <Divider />
@@ -305,11 +337,11 @@ export function MavenPackageBatchPanel({ repositories, onTrashed }: MavenPackage
               <Table.Thead>
                 <Table.Tr>
                   <Table.Th w={40} />
-                  <Table.Th>版本</Table.Th>
-                  <Table.Th w={90}>文件数</Table.Th>
-                  <Table.Th w={100}>大小</Table.Th>
-                  <Table.Th w={150}>更新时间</Table.Th>
-                  <Table.Th w={130}>标记</Table.Th>
+                  <Table.Th>{t("maintenance.pkgColVersion")}</Table.Th>
+                  <Table.Th w={90}>{t("maintenance.pkgColFiles")}</Table.Th>
+                  <Table.Th w={100}>{t("maintenance.pkgColSize")}</Table.Th>
+                  <Table.Th w={150}>{t("maintenance.pkgColUpdated")}</Table.Th>
+                  <Table.Th w={130}>{t("maintenance.pkgColFlags")}</Table.Th>
                 </Table.Tr>
               </Table.Thead>
               <Table.Tbody>
@@ -321,7 +353,7 @@ export function MavenPackageBatchPanel({ repositories, onTrashed }: MavenPackage
                         <Checkbox
                           checked={selected.has(key)}
                           onChange={() => toggle(key)}
-                          aria-label={`选择 ${key}`}
+                          aria-label={t("maintenance.pkgSelectRow", { key })}
                         />
                       </Table.Td>
                       <Table.Td>
@@ -338,17 +370,17 @@ export function MavenPackageBatchPanel({ repositories, onTrashed }: MavenPackage
                         <Group gap={4} wrap="nowrap">
                           {v.suspect && (
                             <Badge size="sm" color="red" variant="light">
-                              疑似幽灵快照
+                              {t("maintenance.pkgFlagGhostSnapshot")}
                             </Badge>
                           )}
                           {!v.suspect && v.literalSnapshotFiles > 0 && (
                             <Badge size="sm" color="yellow" variant="light">
-                              含字面快照
+                              {t("maintenance.pkgFlagLiteralSnapshot")}
                             </Badge>
                           )}
                           {v.timestampBuilds > 0 && (
                             <Badge size="sm" variant="outline">
-                              {v.timestampBuilds} 构建
+                              {t("maintenance.pkgTimestampBuilds", { count: v.timestampBuilds })}
                             </Badge>
                           )}
                         </Group>
@@ -364,14 +396,14 @@ export function MavenPackageBatchPanel({ repositories, onTrashed }: MavenPackage
 
       <DestructiveConfirmModal
         opened={confirmOpen}
-        title="确认批量移入回收站"
-        message={
-          `将从 ${repo ?? ""} 移出 ${selectedVersions.length} 个版本（${selectedFiles} 个文件 / ` +
-          `${formatBytes(selectedBytes)}）。\n\n` +
-          `这些版本会进入回收站，可随时恢复；只有彻底清理或保留期到期才会真正释放磁盘。`
-        }
+        title={t("maintenance.pkgConfirmTitle")}
+        message={t("maintenance.pkgConfirmMessage", {
+          repo: repo ?? "",
+          versions: selectedVersions.length,
+          files: selectedFiles,
+          bytes: formatBytes(selectedBytes),
+        })}
         requirePhrase
-        confirmLabel={DESTRUCTIVE_CONFIRM_WORD}
         pending={trashing}
         onConfirm={runTrash}
         onClose={() => setConfirmOpen(false)}
