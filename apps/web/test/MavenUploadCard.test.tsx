@@ -16,15 +16,30 @@ function renderDetail(name: string) {
   );
 }
 
+async function typeStable(
+  user: ReturnType<typeof userEvent.setup>,
+  label: string,
+  text: string,
+) {
+  // jsdom 事件时序偶发丢失键入；值未落地则清空重试
+  const input = screen.getByLabelText(label) as HTMLInputElement;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await user.clear(input);
+    await user.type(input, text);
+    if (input.value === text) return;
+  }
+  expect(input.value).toBe(text);
+}
+
 describe("Maven 网页上传", () => {
   it("maven hosted 仓库渲染 GAV 表单，填表选文件后上传成功并清空 Version", async () => {
     const user = userEvent.setup();
     const { container } = renderDetail("maven-releases");
     // 上传卡与 GAV 字段就位
     expect(await screen.findByText("上传制品（Maven hosted）")).toBeTruthy();
-    await user.type(screen.getByLabelText("GroupId"), "com.example");
-    await user.type(screen.getByLabelText("ArtifactId"), "demo");
-    await user.type(screen.getByLabelText("Version"), "1.2.3");
+    await typeStable(user, "GroupId", "com.example");
+    await typeStable(user, "ArtifactId", "demo");
+    await typeStable(user, "Version", "1.2.3");
     // FileButton 渲染隐藏 file input，选择文件即触发上传
     const fileInput = container.querySelector('input[type="file"]');
     expect(fileInput).toBeTruthy();
@@ -44,9 +59,9 @@ describe("Maven 网页上传", () => {
     const user = userEvent.setup();
     const { container } = renderDetail("maven-releases");
     await screen.findByText("上传制品（Maven hosted）");
-    await user.type(screen.getByLabelText("GroupId"), "com.example");
-    await user.type(screen.getByLabelText("ArtifactId"), "demo");
-    await user.type(screen.getByLabelText("Version"), "1.0.0-SNAPSHOT");
+    await typeStable(user, "GroupId", "com.example");
+    await typeStable(user, "ArtifactId", "demo");
+    await typeStable(user, "Version", "1.0.0-SNAPSHOT");
     await user.upload(
       container.querySelector('input[type="file"]') as HTMLInputElement,
       new File(["x"], "demo.jar"),
