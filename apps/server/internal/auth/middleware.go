@@ -148,6 +148,23 @@ func (a *Authenticator) Optional() gin.HandlerFunc {
 	}
 }
 
+// SecurityAuditPrincipal 在安全审计读取入口按既有管理面规则解析主体。
+// 禁止登录管理端的已认证主体由入口按当地契约拒绝，不写入主体上下文。
+func (a *Authenticator) SecurityAuditPrincipal(rejectDisabled gin.HandlerFunc) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		principal, err := a.resolveFor(c.Request, false)
+		if err != nil {
+			return
+		}
+		if principal.WebLoginDisabled {
+			c.Abort()
+			rejectDisabled(c)
+			return
+		}
+		c.Set(principalKey, principal)
+	}
+}
+
 // protocolCredentialsPresented 判断请求是否显式携带原生协议可识别的凭据。
 // 无凭据的公共读请求仍必须允许进入协议 handler 按仓库可见性处理。
 func protocolCredentialsPresented(r *http.Request) bool {

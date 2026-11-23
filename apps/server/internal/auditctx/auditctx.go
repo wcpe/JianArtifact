@@ -1,16 +1,12 @@
-// Package auditctx 承载审计事件的请求级上下文：中间件写入、审计写入方读取，
-// 以及令牌与请求体的脱敏工具。独立成包以免 api 与 httpserver 相互依赖。
+// Package auditctx 承载可信请求来源与审计辅助信息，独立于业务层和仓储。
 package auditctx
 
 import (
-	"bytes"
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 )
@@ -19,24 +15,16 @@ import (
 const (
 	// StartKey 记录请求开始时间（time.Time），用于计算处理耗时。
 	StartKey = "jianartifact.audit.start"
-	// BodyKey 记录脱敏后的请求体预览（string），仅管理写请求。
-	BodyKey = "jianartifact.audit.body"
 	// HeadersKey 记录常用白名单请求头的紧凑 JSON 文本（string），由 HeadersMiddleware 写入。
 	HeadersKey = "jianartifact.audit.headers"
 	// ServerStartKey 记录进入业务路由处理的起点（time.Time），用于计算单段服务端耗时。
 	ServerStartKey = "jianartifact.audit.server.start"
 )
 
-// maxBodyPreview 是请求体预览的读取上限：只读取前 4KB 用于脱敏展示。
-const maxBodyPreview = 4096
-
-// maxHeaderValueRunes 是单个请求头值的截断上限（字符数）：
-// 防止超长头值（如异常客户端塞入的巨型 Referer/X-Forwarded-For）把审计行撑爆。
+// maxHeaderValueRunes 限制单个旧审计请求头的字符数。
 const maxHeaderValueRunes = 256
 
-// headerAllowlist 是允许入审计列的常用请求头白名单（canonical 名）。
-// 只记录这些常用协商/溯源头；Authorization 不在白名单内（认证走 TokenPreview 机制），
-// 且任何命中 sensitiveKeys 名单的头名在 CaptureHeaders 中都会被二次拦截，绝不入列。
+// headerAllowlist 是可以写入旧审计快照的标准头；不采集凭据或原始转发声明。
 var headerAllowlist = []string{
 	"User-Agent",
 	"Referer",
@@ -45,24 +33,25 @@ var headerAllowlist = []string{
 	"Accept-Language",
 	"X-Request-ID",
 	"Origin",
-	"X-Forwarded-For",
 }
 
-// 需要在预览中掩码的敏感键（小写比较）。
+// 旧请求头快照禁止记录的敏感键（小写比较）。
 var sensitiveKeys = map[string]bool{
-	"password":      true,
-	"new_password":  true,
-	"old_password":  true,
-	"token":         true,
-	"access_token":  true,
-	"refresh_token": true,
-	"secret":        true,
-	"client_secret": true,
-	"api_key":       true,
-	"apikey":        true,
-	"authorization": true,
-	"credential":    true,
-	"private_key":   true,
+	"password":            true,
+	"new_password":        true,
+	"old_password":        true,
+	"token":               true,
+	"access_token":        true,
+	"refresh_token":       true,
+	"secret":              true,
+	"client_secret":       true,
+	"api_key":             true,
+	"apikey":              true,
+	"authorization":       true,
+	"proxy-authorization": true,
+	"cookie":              true,
+	"credential":          true,
+	"private_key":         true,
 }
 
 // TimingMiddleware 记录请求开始时间；必须在业务处理前注册。
@@ -90,7 +79,7 @@ func HeadersMiddleware() gin.HandlerFunc {
 // （RegisterHandlersWithOptions 的 GinServerOptions.Middlewares）的链首。
 //
 // 口径定义（duration_server_ms 的分段耗时）：
-//   - 起点：请求通过全局中间件链（Recovery/请求标识/审计计时/请求体预览/管理安全审计等）
+//   - 起点：请求通过全局中间件链（异常恢复、请求标识、审计计时、管理安全审计等）
 //     并进入契约路由处理的时刻；
 //   - 终点：审计落笔时刻（handler 内调用 AuditLog，约等于业务处理结束）。
 //
@@ -99,28 +88,6 @@ func HeadersMiddleware() gin.HandlerFunc {
 func ServerTimingMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Set(ServerStartKey, time.Now())
-		c.Next()
-	}
-}
-
-// BodyPreviewMiddleware 捕获管理写请求的请求体预览（脱敏、截断），并复原请求体供后续读取。
-// 仅对非幂等方法生效，读取上限 4KB；读取失败时静默跳过，不影响业务。
-func BodyPreviewMiddleware(isWrite func(method, path string) bool) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		if isWrite == nil || !isWrite(c.Request.Method, c.Request.URL.Path) || c.Request.Body == nil {
-			c.Next()
-			return
-		}
-		head, err := io.ReadAll(io.LimitReader(c.Request.Body, maxBodyPreview))
-		// 无论截断与否都要把已读部分放回，保证后续 handler 能读到完整请求体。
-		c.Request.Body = io.NopCloser(io.MultiReader(bytes.NewReader(head), c.Request.Body))
-		if err != nil || len(head) == 0 {
-			c.Next()
-			return
-		}
-		if preview := SanitizeBody(head); preview != "" {
-			c.Set(BodyKey, preview)
-		}
 		c.Next()
 	}
 }
@@ -179,7 +146,7 @@ func CaptureHeaders(header http.Header) string {
 		if len(values) == 0 {
 			continue
 		}
-		// 多值头（如多个 X-Forwarded-For 段）合并为单行文本后统一截断。
+		// 多值协商头合并为单行文本后统一截断。
 		joined := strings.Join(values, ", ")
 		if strings.EqualFold(name, "Referer") {
 			// Referer 的 query/fragment 可能携带签名、一次性码或搜索词；userinfo 也不应进入审计。
@@ -227,95 +194,14 @@ func truncateHeaderValue(value string) string {
 	return string(runes[:maxHeaderValueRunes]) + "…"
 }
 
-// BodyFrom 返回中间件捕获的脱敏请求体预览（未捕获时为空串）。
-func BodyFrom(c *gin.Context) string {
-	value, ok := c.Get(BodyKey)
-	if !ok {
-		return ""
-	}
-	preview, _ := value.(string)
-	return preview
-}
+// BodyFrom 保留旧调用方式；新请求不读取或保存正文预览。
+func BodyFrom(_ *gin.Context) string { return "" }
 
-// TokenPreview 生成认证令牌的脱敏预览（形如 Bearer eyJhbG****1dnM）：
-// 保留 scheme 与首尾少量字符，其余掩码；过短或空值不回显原文。
-func TokenPreview(raw string) string {
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" {
-		return ""
-	}
-	scheme, token := "", trimmed
-	if parts := strings.SplitN(trimmed, " ", 2); len(parts) == 2 {
-		scheme = parts[0]
-		token = strings.TrimSpace(parts[1])
-	}
-	if token == "" {
-		return ""
-	}
-	masked := "****"
-	switch {
-	case len(token) > 10:
-		masked = token[:6] + "****" + token[len(token)-4:]
-	case scheme != "" && len(token) > 4:
-		masked = token[:2] + "****"
-	}
-	if scheme == "" {
-		return masked
-	}
-	return scheme + " " + masked
-}
+// TokenPreview 保留旧调用方式；新请求不记录凭据的任何部分。
+func TokenPreview(_ string) string { return "" }
 
-// SanitizeBody 生成脱敏后的请求体文本：JSON 掩码敏感键并缩进输出；非 JSON 截断为纯文本。
-func SanitizeBody(raw []byte) string {
-	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 {
-		return ""
-	}
-	// 非 UTF-8（如 GBK 客户端）必须在这里拦下：Go 的 json.Unmarshal 对非法 UTF-8 是
-	// 宽容的（把坏字节静默替换为 U+FFFD 而不报错），放行会在前端呈现一片乱码、且
-	// 看起来像真实数据——明确标注而非伪装。
-	if !utf8.Valid(trimmed) {
-		return "（请求体不是合法 UTF-8，预览已省略——请检查客户端请求编码）"
-	}
-	var parsed any
-	if err := json.Unmarshal(trimmed, &parsed); err == nil {
-		masked := maskValue(parsed)
-		if out, err := json.MarshalIndent(masked, "", "  "); err == nil {
-			return truncatePreview(string(out))
-		}
-	}
-	return truncatePreview(string(trimmed))
-}
-
-func maskValue(value any) any {
-	switch typed := value.(type) {
-	case map[string]any:
-		result := make(map[string]any, len(typed))
-		for key, item := range typed {
-			if sensitiveKeys[strings.ToLower(key)] {
-				result[key] = "****"
-				continue
-			}
-			result[key] = maskValue(item)
-		}
-		return result
-	case []any:
-		result := make([]any, len(typed))
-		for index, item := range typed {
-			result[index] = maskValue(item)
-		}
-		return result
-	default:
-		return value
-	}
-}
-
-func truncatePreview(text string) string {
-	if len(text) <= maxBodyPreview {
-		return text
-	}
-	return text[:maxBodyPreview] + "…"
-}
+// SanitizeBody 保留旧调用方式；新请求不记录任意正文。
+func SanitizeBody(_ []byte) string { return "" }
 
 // IsManagementWrite 判断是否为需要审计的管理写请求（与方法/路由前缀无关的纯判定）。
 func IsManagementWrite(method, path string) bool {

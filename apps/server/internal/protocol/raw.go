@@ -32,7 +32,11 @@ type RawHandler struct {
 	quota          QuotaGuard         // 仓库级存储配额判定（nil 不判定）
 	audit          AuditFunc          // 审计记录回调（main 注入；nil 不记录）
 	operationAudit OperationAuditFunc // 原子制品操作的同事务审计构造器
+	securityAudit  *domain.SecurityAuditService
 }
+
+// SetSecurityAudit 将实例安全审计接入使用本处理器 Put 的发布样例。
+func (h *RawHandler) SetSecurityAudit(audit *domain.SecurityAuditService) { h.securityAudit = audit }
 
 // quotaReader 在流式上传超过预留上限时立即终止读取，避免先落盘再拒绝。
 type quotaReader struct {
@@ -133,21 +137,24 @@ func (h *RawHandler) nativeOperationAudit(c *gin.Context, action, repo string) d
 	return h.operationAudit(c, action, repo)
 }
 
-func (h *RawHandler) beginPublish(c *gin.Context, repo, path string, size int64) (func(bool), error) {
-	// 仓库存储配额预检先于发布额度预留——越限时既不读请求体也不占额度。
+func (h *RawHandler) reserveKnownPublish(c *gin.Context, repo, path string, size int64) (int64, error) {
+	// 仓库存储配额预检先于发布额度预留，越限时不读取请求体。
 	if _, err := h.admissionFor(repo, path, size); err != nil {
+		return 0, err
+	}
+	if h.publish == nil {
+		return 0, nil
+	}
+	return h.publish.Begin(principalUserID(c), repo, path, size)
+}
+
+func (h *RawHandler) beginPublish(c *gin.Context, repo, path string, size int64) (func(bool), error) {
+	id, err := h.reserveKnownPublish(c, repo, path, size)
+	if err != nil {
 		return nil, err
 	}
 	if h.publish == nil {
 		return func(bool) {}, nil
-	}
-	userID := int64(0)
-	if p, ok := auth.PrincipalFrom(c); ok {
-		userID = p.UserID
-	}
-	id, err := h.publish.Begin(userID, repo, path, size)
-	if err != nil {
-		return nil, err
 	}
 	// 结算只允许发生一次：调用方普遍写成「defer settle(false) + 成功时 settle(true)」，
 	// 而 defer 会在成功路径上**再调一次** settle(false)。若首次 settle(true) 因事务失败
@@ -279,27 +286,69 @@ func (h *RawHandler) Put(c *gin.Context) {
 	artPath := cleanArtifactPath(c.Param("artifactPath"))
 	if artPath == "" {
 		h.auditRejected(c, "asset.put", repo, artPath, "invalid_path")
+		h.recordPutDenied(c, "bad_request", http.StatusBadRequest)
 		auth.WriteError(c, http.StatusBadRequest, "invalid_path", "制品路径不能为空")
 		return
 	}
 	if !h.authorize(c, repo, repository.ActionPublish) {
 		h.auditRejected(c, "asset.put", repo, artPath, "authorization_denied")
+		switch c.Writer.Status() {
+		case http.StatusUnauthorized:
+			h.recordPutDenied(c, "unauthorized", http.StatusUnauthorized)
+		case http.StatusForbidden:
+			h.recordPutDenied(c, "forbidden", http.StatusForbidden)
+		}
 		return
 	}
-	settle, limit, err := h.beginRawPublish(c, repo, artPath)
+	var settle func(bool, int64)
+	var reservationID, limit int64
+	var err error
+	if h.securityAudit == nil {
+		settle, limit, err = h.beginRawPublish(c, repo, artPath)
+	} else {
+		reservationID, limit, err = h.reserveRawPublish(c, repo, artPath)
+	}
 	if err != nil {
 		h.auditRejected(c, "asset.put", repo, artPath, publishRejectionDetail(err))
 		h.recordQuotaRejection(err)
 		writePublishErr(c, err)
 		return
 	}
-	defer func() { settle(false, 0) }()
+	if settle != nil {
+		defer func() { settle(false, 0) }()
+	}
 	body := io.Reader(c.Request.Body)
 	if c.Request.ContentLength < 0 && limit > 0 {
 		body = &quotaReader{r: c.Request.Body, left: limit, limit: limit}
 	}
-	asset, err := h.assets.Put(repo, artPath, body, c.GetHeader("Content-Type"))
+	ctx := c.Request.Context()
+	actor := principalUserID(c)
+	if principal, ok := auth.PrincipalFrom(c); ok {
+		ctx = domain.WithSecurityAuditIdentity(ctx, domain.SecurityAuditIdentity{ActorUserID: actor, AuthMethod: principal.AuthSource})
+	}
+	var asset *repository.Asset
+	var operationID string
+	if h.securityAudit == nil {
+		asset, err = h.assets.Put(repo, artPath, body, c.GetHeader("Content-Type"))
+	} else {
+		var reservation *domain.PublishCommitReservation
+		if reservationID != 0 {
+			reservation = h.publish.CommitReservation(reservationID)
+		}
+		asset, operationID, err = h.assets.PutWithReservedSecurityAudit(ctx, h.securityAudit, reservation, actor, repo, artPath, body, c.GetHeader("Content-Type"))
+	}
 	if err != nil {
+		if operationID != "" && errors.Is(err, domain.ErrSecurityAuditUnavailable) {
+			// 未决不是拒绝，也不表示可以重试写入。既有 Raw 错误封套不公开内部操作号。
+			auth.WriteError(c, http.StatusServiceUnavailable, "security_audit_unavailable", "提交结果暂无法确认，请勿据此重试写入")
+			return
+		}
+		// 只有完成结果确定失败时才释放；未决预约留给启动恢复收口。
+		if reservationID != 0 {
+			if releaseErr := h.publish.Settle(reservationID, false); releaseErr != nil {
+				log.Printf("未提交发布的额度预留释放失败（reservation=%d）：%v", reservationID, releaseErr)
+			}
+		}
 		h.auditRejected(c, "asset.put", repo, artPath, publishRejectionDetail(err))
 		if errors.Is(err, domain.ErrQuotaExceeded) {
 			h.recordQuotaRejection(err)
@@ -309,13 +358,14 @@ func (h *RawHandler) Put(c *gin.Context) {
 		writeAssetErr(c, err)
 		return
 	}
-	if h.publish != nil {
+	if settle != nil {
 		settle(true, asset.Size)
 	}
 	if h.audit != nil {
 		h.audit(c, "asset.put", "asset", repo+"/"+asset.Path, repo,
 			"size="+strconv.FormatInt(asset.Size, 10), "ok")
 	}
+	responseErrors := len(c.Errors)
 	c.JSON(http.StatusCreated, assetSummary{
 		Repository:  repo,
 		Path:        asset.Path,
@@ -323,6 +373,30 @@ func (h *RawHandler) Put(c *gin.Context) {
 		Size:        asset.Size,
 		ContentType: asset.ContentType,
 	})
+	if h.securityAudit != nil {
+		fact := domain.SecurityAuditResponse{OperationID: operationID, Outcome: "succeeded", ActorUserID: actor, RepositoryID: asset.RepositoryID}
+		if c.Writer.Written() {
+			fact.HTTPStatus = c.Writer.Status()
+		}
+		if len(c.Errors) > responseErrors || ctx.Err() != nil {
+			fact.Outcome, fact.ErrorCode = "failed", "internal_error"
+		}
+		h.securityAudit.RecordResponse(ctx, fact)
+	}
+}
+
+func (h *RawHandler) recordPutDenied(c *gin.Context, code string, status int) {
+	if h.securityAudit == nil {
+		return
+	}
+	fact := domain.SecurityAuditDenied{EventType: "protocol.write_denied", ErrorCode: code, HTTPStatus: status}
+	if p, ok := auth.PrincipalFrom(c); ok {
+		fact.ActorUserID = p.UserID
+	}
+	if repo, _ := repositorySnapshot(c, c.Param("repo")); repo != nil {
+		fact.RepositoryID = repo.ID
+	}
+	h.securityAudit.RecordDenied(c.Request.Context(), fact)
 }
 
 // auditRejected 记录可预期的协议拒绝；仅保存稳定的拒绝类别，不拼接错误文本或请求凭据。
@@ -362,21 +436,12 @@ func (h *RawHandler) beginRawPublish(c *gin.Context, repo, path string) (func(bo
 		settle, err := h.beginPublish(c, repo, path, c.Request.ContentLength)
 		return func(ok bool, _ int64) { settle(ok) }, 0, err
 	}
-	// 长度未知——路径已知，配额给出抵扣覆盖写旧大小后的流式早拒上限。
-	quotaLimit, err := h.admissionFor(repo, path, -1)
+	id, limit, err := h.reserveRawPublish(c, repo, path)
 	if err != nil {
 		return nil, 0, err
 	}
 	if h.publish == nil {
-		return func(bool, int64) {}, quotaLimit, nil
-	}
-	userID := int64(0)
-	if p, ok := auth.PrincipalFrom(c); ok {
-		userID = p.UserID
-	}
-	id, limit, err := h.publish.BeginStreaming(userID, repo, path)
-	if err != nil {
-		return nil, 0, err
+		return func(bool, int64) {}, limit, nil
 	}
 	// 一次性结算，理由同 beginPublish：避免成功路径上的 defer settle(false) 把
 	// 结算失败的预约整条删掉，从而漏算额度。
@@ -387,7 +452,26 @@ func (h *RawHandler) beginRawPublish(c *gin.Context, repo, path string) (func(bo
 				log.Printf("发布额度结算失败（reservation=%d success=%v size=%d）：%v", id, ok, size, err)
 			}
 		})
-	}, minLimit(limit, quotaLimit), nil
+	}, limit, nil
+}
+
+func (h *RawHandler) reserveRawPublish(c *gin.Context, repo, path string) (id, limit int64, err error) {
+	if size := c.Request.ContentLength; size >= 0 {
+		id, err = h.reserveKnownPublish(c, repo, path, size)
+		return id, 0, err
+	}
+	quotaLimit, err := h.admissionFor(repo, path, -1)
+	if err != nil {
+		return 0, 0, err
+	}
+	if h.publish == nil {
+		return 0, quotaLimit, nil
+	}
+	id, limit, err = h.publish.BeginStreaming(principalUserID(c), repo, path)
+	if err != nil {
+		return 0, 0, err
+	}
+	return id, minLimit(limit, quotaLimit), nil
 }
 
 // beginUnresolvedPublish 为「路径尚未解析」的发布做预检（multipart / 上传会话建立时）。
@@ -632,6 +716,8 @@ func quotaRejectionMessage(err error) string {
 // 回源上游失败 502、回源超时 504、其余 500。
 func writeAssetErr(c *gin.Context, err error) {
 	switch {
+	case errors.Is(err, domain.ErrSecurityAuditUnavailable):
+		auth.WriteError(c, http.StatusServiceUnavailable, "security_audit_unavailable", "安全审计暂不可用")
 	case errors.Is(err, domain.ErrNotFound):
 		auth.WriteError(c, http.StatusNotFound, "not_found", "资源不存在")
 	case errors.Is(err, domain.ErrConflict):

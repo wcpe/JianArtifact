@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -20,11 +21,13 @@ import (
 // AssetMutationCoordinator 串行化本节点资产引用变更，并协调 SQLite intent 与 blob 隔离移动。
 // 文件系统操作始终在 SQLite 写事务之外执行；读门保证读请求不会看到半完成视图。
 type AssetMutationCoordinator struct {
-	mutations          *repository.AssetMutationRepo
-	blobs              *blobstore.Store
-	finalize           func(blobstore.QuarantineEntry) error
-	finalizeSnapshot   func(blobstore.RollbackSnapshot) error
-	removeUnreferenced func(string) error
+	mutations            *repository.AssetMutationRepo
+	blobs                *blobstore.Store
+	finalize             func(blobstore.QuarantineEntry) error
+	finalizeSnapshot     func(blobstore.RollbackSnapshot) error
+	removeUnreferenced   func(string) error
+	completeMutation     func(string, []repository.AssetMutationItem, *repository.OperationEnvelope, ...repository.MutationCompletionHook) error
+	readCompletionStatus func(context.Context, string) (string, error)
 	// quotaCheck 是提交点权威的仓库存储配额复检：与资产写入同一事务执行，
 	// 越限返回错误即整批回滚。nil 表示不做存储配额判定。
 	quotaCheck StorageQuotaGuard
@@ -45,8 +48,27 @@ func NewAssetMutationCoordinator(db *persistence.DB, blobs *blobstore.Store) (*A
 // NewAssetMutationCoordinatorDeferred 构造节点级资产变更协调器，但不处理既有
 // intent。调用方必须在确认当前节点允许恢复本地业务历史后显式调用 Recover。
 func NewAssetMutationCoordinatorDeferred(db *persistence.DB, blobs *blobstore.Store) *AssetMutationCoordinator {
-	return &AssetMutationCoordinator{mutations: repository.NewAssetMutationRepo(db), blobs: blobs, finalize: blobs.Finalize, finalizeSnapshot: blobs.FinalizeRollbackSnapshot, removeUnreferenced: blobs.Remove}
+	mutations := repository.NewAssetMutationRepo(db)
+	return &AssetMutationCoordinator{
+		mutations: mutations, blobs: blobs, finalize: blobs.Finalize,
+		finalizeSnapshot: blobs.FinalizeRollbackSnapshot, removeUnreferenced: blobs.Remove,
+		readCompletionStatus: mutations.ReadCompletionStatus,
+		completeMutation: func(id string, items []repository.AssetMutationItem, envelope *repository.OperationEnvelope, hooks ...repository.MutationCompletionHook) error {
+			if envelope == nil {
+				return mutations.CompleteWithHooks(id, items, hooks...)
+			}
+			outbox := repository.NewReplicationOperationRepo(db)
+			return mutations.CompleteWithOutboxAndHooks(id, items, outbox, *envelope, hooks...)
+		},
+	}
 }
+
+const assetCompletionReadBudget = 250 * time.Millisecond
+
+var (
+	errAssetCommitUnknown   = errors.New("资产提交结果暂不可判")
+	errAssetRecoveryPending = errors.New("资产回滚尚待恢复")
+)
 
 // SetStorageQuotaCheck 注入仓库级存储配额的提交点复检。
 // 复检与资产写入处于同一事务：判定失败即整批回滚，已提交状态永不越界。
@@ -60,6 +82,29 @@ func (c *AssetMutationCoordinator) Read(fn func() error) error {
 	c.gate.RLock()
 	defer c.gate.RUnlock()
 	return fn()
+}
+
+// quarantineNeedsRecovery 为只读预览判断目录是否需要保全。不把读错当作无人引用。
+func (c *AssetMutationCoordinator) quarantineNeedsRecovery(operationID string) bool {
+	if c == nil {
+		return true
+	}
+	pending, err := c.mutations.HasPendingQuarantine(operationID)
+	return err != nil || pending
+}
+
+// withReclaimableQuarantine 在资产变更和恢复的同一个写门内重检，再执行单项移动。
+// 状态查询结束后才调用 move，不在 SQLite 事务中操作文件。
+func (c *AssetMutationCoordinator) withReclaimableQuarantine(operationID string, move func() error) error {
+	if c == nil {
+		return fmt.Errorf("%w：无法确认隔离目录可回收，请重新预览", ErrValidation)
+	}
+	c.gate.Lock()
+	defer c.gate.Unlock()
+	if c.quarantineNeedsRecovery(operationID) {
+		return fmt.Errorf("%w：无法确认隔离目录可回收，请重新预览", ErrValidation)
+	}
+	return move()
 }
 
 // Apply 原子应用一组资产变更。items 必须按确定顺序传入；空批次拒绝。
@@ -156,15 +201,13 @@ func (c *AssetMutationCoordinator) applyLockedWithEnvelopeAndHook(items []reposi
 	}
 	entries, err := c.stageUnreferenced(id, items)
 	if err != nil {
-		_ = c.mutations.MarkRollingBack(id, err.Error())
-		c.restore(id, entries)
-		_ = c.mutations.MarkRolledBack(id, err.Error())
-		return id, err
+		return id, c.rollbackUnrecordedStaging(id, entries, err)
 	}
 	if err := c.mutations.MarkStaged(id, quarantineRecords(entries)); err != nil {
-		c.restore(id, entries)
-		_ = c.mutations.MarkRolledBack(id, err.Error())
-		return id, err
+		if errors.Is(err, repository.ErrAssetMutationTransition) {
+			return id, errors.Join(errAssetRecoveryPending, err)
+		}
+		return id, c.rollbackUnrecordedStaging(id, entries, err)
 	}
 	snapshot, err := c.blobs.CreateRollbackSnapshot(entries)
 	if err != nil {
@@ -187,15 +230,23 @@ func (c *AssetMutationCoordinator) applyLockedWithEnvelopeAndHook(items []reposi
 	if hook != nil {
 		hooks = append(hooks, hook)
 	}
-	var completeErr error
-	if envelope == nil {
-		completeErr = c.mutations.CompleteWithHooks(id, items, hooks...)
-	} else {
-		outbox := repository.NewReplicationOperationRepo(c.mutations.DB())
-		completeErr = c.mutations.CompleteWithOutboxAndHooks(id, items, outbox, *envelope, hooks...)
-	}
-	if completeErr != nil {
-		return id, c.rollbackBeforeCompletion(id, entries, snapshot, completeErr)
+	if err := c.completeMutation(id, items, envelope, hooks...); err != nil {
+		if !errors.Is(err, repository.ErrAssetMutationCommitUnconfirmed) {
+			return id, c.rollbackBeforeCompletion(id, entries, snapshot, err)
+		}
+		// 仍在原写门内，独立于请求取消，只读回持久回执。
+		// committing 与 completed 在同一事务，因此只有 staged 能证明此次完成事务未提交。
+		ctx, cancel := context.WithTimeout(context.Background(), assetCompletionReadBudget)
+		status, readErr := c.readCompletionStatus(ctx, id)
+		cancel()
+		switch {
+		case readErr != nil:
+			return id, errors.Join(errAssetCommitUnknown, err, fmt.Errorf("核对原提交回执：%w", readErr))
+		case status == "staged":
+			return id, c.rollbackBeforeCompletion(id, entries, snapshot, err)
+		case status != "completed":
+			return id, errors.Join(errAssetCommitUnknown, err, errors.New("原提交回执不在预期阶段"))
+		}
 	}
 	if snapshot.OperationID != "" {
 		if err := c.finalizeSnapshot(snapshot); err != nil {
@@ -215,17 +266,24 @@ func (c *AssetMutationCoordinator) applyLockedWithEnvelopeAndHook(items []reposi
 }
 
 func (c *AssetMutationCoordinator) rollbackBeforeCompletion(id string, entries []blobstore.QuarantineEntry, snapshot blobstore.RollbackSnapshot, cause error) error {
-	_ = c.mutations.MarkRollingBack(id, cause.Error())
-	if err := c.restoreEntries(entries, snapshot); err != nil {
-		return fmt.Errorf("物理回收失败且无法恢复 blob：%w", err)
+	if err := c.mutations.MarkRollingBack(id, cause.Error()); err != nil {
+		// 无法取得非终态的恢复权限时，不触碰任何恢复材料。
+		return errors.Join(cause, errAssetRecoveryPending, err)
 	}
+	if err := c.restoreEntries(entries, snapshot); err != nil {
+		return errors.Join(cause, errAssetRecoveryPending, fmt.Errorf("无法恢复 blob：%w", err))
+	}
+	return c.finishRollback(id, entries, cause)
+}
+
+func (c *AssetMutationCoordinator) finishRollback(id string, entries []blobstore.QuarantineEntry, cause error) error {
 	for _, entry := range entries {
 		if err := c.mutations.MarkQuarantine(id, entry.Hash, "restored", cause.Error()); err != nil {
-			return err
+			return errors.Join(cause, errAssetRecoveryPending, err)
 		}
 	}
 	if err := c.mutations.MarkRolledBack(id, cause.Error()); err != nil {
-		return err
+		return errors.Join(cause, errAssetRecoveryPending, err)
 	}
 	return cause
 }
@@ -356,14 +414,16 @@ func afterHash(asset *repository.Asset) string {
 	return asset.BlobHash
 }
 
-func (c *AssetMutationCoordinator) restore(id string, staged []blobstore.QuarantineEntry) {
-	for _, entry := range staged {
-		if err := c.blobs.Restore(entry); err != nil {
-			_ = c.mutations.MarkQuarantine(id, entry.Hash, "staged", err.Error())
-			continue
-		}
-		_ = c.mutations.MarkQuarantine(id, entry.Hash, "restored", "")
+func (c *AssetMutationCoordinator) rollbackUnrecordedStaging(id string, entries []blobstore.QuarantineEntry, cause error) error {
+	// 还未调用完成事务，写门内持有实际移动清单；若清单尚未持久化，
+	// 即使数据库刚失效也应按该清单还原，不等待无法重建清单的启动恢复。
+	if err := c.restoreEntries(entries, blobstore.RollbackSnapshot{}); err != nil {
+		return errors.Join(cause, errAssetRecoveryPending, err)
 	}
+	if err := c.mutations.MarkRollingBack(id, cause.Error()); err != nil {
+		return errors.Join(cause, errAssetRecoveryPending, err)
+	}
+	return c.finishRollback(id, entries, cause)
 }
 
 // Recover 恢复进程崩溃时遗留的全部 intent，并重试已完成操作的快照清理。
@@ -386,6 +446,9 @@ func (c *AssetMutationCoordinator) recover(receivedOnly bool) error {
 		return err
 	}
 	for _, op := range incomplete {
+		if err := c.mutations.MarkRollingBack(op.ID, "进程恢复回滚未完成资产操作"); err != nil {
+			return err
+		}
 		entries, err := c.mutations.ListQuarantine(op.ID)
 		if err != nil {
 			return err

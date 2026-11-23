@@ -88,11 +88,15 @@ func (h *Handlers) GetAuditLogs(c *gin.Context) {
 		writeDomainErr(c, err)
 		return
 	}
+	// 保留历史库与检索行为，只在发送前省略已停用的敏感预览。
+	for i := range items {
+		items[i].TokenPreview, items[i].BodyPreview = "", ""
+	}
 	c.JSON(http.StatusOK, AuditLogListResponse{Items: items, Total: total})
 }
 
 // AuditLog 记录一条审计日志（尽力而为，失败不阻断）；供各写 handler 在成功后调用。
-// actor 取当前主体用户名（匿名/无主体为空）；ip 取 X-Forwarded-For 或 RemoteAddr。
+// 操作者取当前主体用户名，客户端地址取已验证来源；未知来源留空。
 func (h *Handlers) AuditLog(c *gin.Context, action, entityType, entityKey, repo, detail, result string) {
 	if h.auditLogs == nil {
 		return
@@ -113,7 +117,7 @@ func (h *Handlers) auditLogEntry(c *gin.Context, action, entityType, entityKey, 
 			tokenName = p.TokenName
 		}
 	}
-	ip := c.ClientIP()
+	ip := auditctx.ClientIP(c.Request.Context())
 	email := ""
 	if p, ok := auth.PrincipalFrom(c); ok {
 		email = p.Email
@@ -149,8 +153,6 @@ func (h *Handlers) auditLogEntry(c *gin.Context, action, entityType, entityKey, 
 		HTTPPath:         httpPath,
 		StatusCode:       status,
 		DurationMs:       auditctx.DurationMs(c),
-		TokenPreview:     auditctx.TokenPreview(c.GetHeader("Authorization")),
-		BodyPreview:      auditctx.BodyFrom(c),
 		HTTPHeaders:      auditctx.HeadersFrom(c),
 		DurationServerMs: auditctx.ServerDurationMs(c),
 		ActorEmail:       email,

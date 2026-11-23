@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/wcpe/jianartifact/apps/server/internal/auditctx"
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
@@ -327,14 +328,7 @@ func cargoCode(err error) string {
 }
 
 func requestBaseURL(c *gin.Context) string {
-	scheme := c.GetHeader("X-Forwarded-Proto")
-	if scheme != "http" && scheme != "https" {
-		scheme = "http"
-		if c.Request.TLS != nil {
-			scheme = "https"
-		}
-	}
-	return scheme + "://" + c.Request.Host
+	return auditctx.RequestOrigin(c.Request)
 }
 
 func stringInt64(value int64) string {

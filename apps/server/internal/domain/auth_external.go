@@ -1,8 +1,10 @@
 package domain
 
 import (
+	"context"
 	"errors"
 
+	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
@@ -60,6 +62,43 @@ func (s *AuthService) LoginExternal(identity ExternalIdentity) (token string, us
 		return "", nil, err
 	}
 	return signed, u, nil
+}
+
+// LoginExternalContext 记录已核验的外部身份在本实例的登录结果，不记录外部标识。
+func (s *AuthService) LoginExternalContext(ctx context.Context, identity ExternalIdentity) (string, *repository.User, error) {
+	method, ok := externalAuthAuditMethod(identity.Source)
+	token, user, err := s.LoginExternal(identity)
+	if ok {
+		s.recordAuthAttempt(ctx, method, user, err)
+	}
+	return token, user, err
+}
+
+// RecordExternalAuthRejection 记录在外部身份绑定之前结束的尝试，调用方只传固定裁决码。
+func (s *AuthService) RecordExternalAuthRejection(ctx context.Context, source, code string, outcome auth.ProviderAuthOutcome) {
+	method, ok := externalAuthAuditMethod(source)
+	if !ok || s.securityAudit == nil {
+		return
+	}
+	switch outcome {
+	case auth.ProviderAuthFailed:
+		s.securityAudit.RecordAuthAttemptFailed(ctx, method, 0)
+	case auth.ProviderAuthDenied:
+		s.securityAudit.RecordDenied(ctx, SecurityAuditDenied{EventType: "auth.attempt", ErrorCode: code, AuthMethod: method})
+	default:
+		s.securityAudit.RecordAuthAttemptUnknown(ctx, method, 0)
+	}
+}
+
+func externalAuthAuditMethod(source string) (method string, ok bool) {
+	switch source {
+	case "ldap":
+		return "ldap_bind", true
+	case "oidc":
+		return "oidc_callback", true
+	default:
+		return "", false
+	}
 }
 
 // bindOrCreateExternal 在外部标识未绑定时：按用户名绑定本地普通账号，否则新建外部来源账号。

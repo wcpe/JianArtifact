@@ -25,6 +25,19 @@ func render(t *testing.T, exp *Exposition) string {
 	return buf.String()
 }
 
+func TestExpositionSecurityAuditStateIsBounded(t *testing.T) {
+	_, exp := newTestExposition(nil)
+	const metric = "jianartifact_security_audit_collection_state"
+	if strings.Contains(render(t, exp), metric) {
+		t.Fatal("无状态源不应输出采集指标")
+	}
+	exp.SetSecurityAuditState(func() SecurityAuditCollectionState { return "test-non-enum" })
+	out := render(t, exp)
+	if strings.Contains(out, "test-non-enum") || strings.Count(out, metric+"{") != 4 || !strings.Contains(out, metric+`{state="unknown"} 1`) {
+		t.Fatalf("采集指标没有约束到四个固定状态：%s", out)
+	}
+}
+
 func TestExpositionAlwaysIncludesRuntimeMetrics(t *testing.T) {
 	_, exp := newTestExposition(nil)
 	out := render(t, exp)

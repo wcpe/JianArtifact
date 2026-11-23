@@ -398,6 +398,20 @@ func (s *PublishPolicyService) ValidateUnresolvedPublish(userID int64, repoName,
 	return nil
 }
 
+// PublishCommitReservation 只由服务端预留结果构造，用于同事务核对并结算单件制品。
+type PublishCommitReservation struct {
+	id       int64
+	policies *repository.PublishPolicyRepo
+}
+
+// CommitReservation 将已有预留交给资产完成事务；零预留不需要结算。
+func (s *PublishPolicyService) CommitReservation(id int64) *PublishCommitReservation {
+	if id == 0 {
+		return nil
+	}
+	return &PublishCommitReservation{id: id, policies: s.policies}
+}
+
 // Settle 完成或释放一次发布预留。
 func (s *PublishPolicyService) Settle(id int64, success bool) error {
 	if err := requireBusinessWrite(s.writeGate); err != nil {

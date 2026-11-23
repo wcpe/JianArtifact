@@ -34,6 +34,10 @@ type Server struct {
 	protocolPrefixes        []string
 	writeFreeze             func() domain.FreezeState // 运行时写入冻结窗口状态读取器（nil 表示不启用）
 	managementSecurityAudit SecurityAuditFunc
+	securityAuditPrincipal  gin.HandlerFunc
+	securityAuditProbe      func() api.HealthStatusAuditCollection
+	sourcePolicy            auditctx.Policy
+	ingressGate             *IngressGate
 	protocolMetric          func(*gin.Context)
 	allowedHosts            func() []string  // 允许访问的域名白名单（nil 表示不启用限制）
 	originToken             originTokenGuard // 回源 Token 校验配置读取器（nil 表示不启用）
@@ -41,6 +45,23 @@ type Server struct {
 
 // Option 配置 Server。
 type Option func(*Server)
+
+// WithSourcePolicy 注入显式验证的代理来源策略；不注入则只使用直连事实。
+func WithSourcePolicy(policy auditctx.Policy) Option {
+	return func(s *Server) { s.sourcePolicy = policy }
+}
+
+// WithIngressGate 在路由前登记在途请求，可由多个监听器共享。
+func WithIngressGate(gate *IngressGate) Option {
+	return func(s *Server) { s.ingressGate = gate }
+}
+
+// WithSecurityAuditRead 注入四条审计读取契约的主体解析和公开内存状态。
+func WithSecurityAuditRead(principal gin.HandlerFunc, probe func() api.HealthStatusAuditCollection) Option {
+	return func(s *Server) {
+		s.securityAuditPrincipal, s.securityAuditProbe = principal, probe
+	}
+}
 
 // WithReadinessCheck 追加一个就绪自检钩子。
 func WithReadinessCheck(c ReadinessCheck) Option {
@@ -110,27 +131,43 @@ func (s *Server) versionFor(c *gin.Context) string {
 
 // GetHealthz 存活探针：进程存活即 200；版本号仅对已认证请求返回。
 func (s *Server) GetHealthz(c *gin.Context) {
-	c.JSON(http.StatusOK, api.HealthStatus{Status: api.HealthStatusStatusOk, Version: s.versionFor(c)})
+	c.JSON(http.StatusOK, s.healthStatus(c, api.HealthStatusStatusOk))
 }
 
 // GetReadyz 就绪探针：全部就绪自检通过才 200，任一未过返回 503；版本号仅对已认证请求返回。
 func (s *Server) GetReadyz(c *gin.Context) {
 	for _, check := range s.checks {
 		if err := check(); err != nil {
-			c.JSON(http.StatusServiceUnavailable, api.HealthStatus{Status: api.HealthStatusStatusUnavailable, Version: s.versionFor(c)})
+			c.JSON(http.StatusServiceUnavailable, s.healthStatus(c, api.HealthStatusStatusUnavailable))
 			return
 		}
 	}
-	c.JSON(http.StatusOK, api.HealthStatus{Status: api.HealthStatusStatusOk, Version: s.versionFor(c)})
+	c.JSON(http.StatusOK, s.healthStatus(c, api.HealthStatusStatusOk))
 }
 
-// Handler 装配并返回完整的 gin.Engine：契约路由优先，其余交给内嵌前端静态资源
+func (s *Server) healthStatus(c *gin.Context, status api.HealthStatusStatus) api.HealthStatus {
+	result := api.HealthStatus{Status: status, Version: s.versionFor(c)}
+	if s.securityAuditProbe != nil {
+		state := s.securityAuditProbe()
+		if !state.Valid() {
+			state = api.HealthStatusAuditCollectionUnknown
+		}
+		result.AuditCollection = &state
+	}
+	return result
+}
+
+// Handler 装配 HTTP 入口和 Gin 路由：契约路由优先，其余交给内嵌前端静态资源
 // （带 SPA 回退）。assets 为 nil 时不挂载静态资源（便于测试）。
 func (s *Server) Handler(assets fs.FS) http.Handler {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
+	// 可信转发只由来源策略解析，禁用 Gin 的默认代理信任及头回退。
+	_ = r.SetTrustedProxies(nil) // 空列表不含需要解析的 CIDR。
+	r.ForwardedByClientIP = false
+	r.RemoteIPHeaders = nil
 	r.Use(gin.Recovery())
-	r.Use(requestIDMiddleware())
+	r.Use(requestIDMiddleware)
 	if s.allowedHosts != nil {
 		r.Use(hostFilterMiddleware(s.allowedHosts))
 	}
@@ -145,11 +182,9 @@ func (s *Server) Handler(assets fs.FS) http.Handler {
 			}
 		})
 	}
-	// 审计上下文中间件：记录请求耗时、捕获常用白名单请求头与脱敏请求体（仅管理写请求），
-	// 供审计写入方填充 http_method/http_path/status_code/duration_ms/http_headers/body_preview。
+	// 旧审计继续记录请求耗时与白名单头，不读取正文。
 	r.Use(auditctx.TimingMiddleware())
 	r.Use(auditctx.HeadersMiddleware())
-	r.Use(auditctx.BodyPreviewMiddleware(auditctx.IsManagementWrite))
 	if s.managementSecurityAudit != nil {
 		r.Use(managementSecurityAuditMiddleware(s.managementSecurityAudit))
 	}
@@ -172,7 +207,8 @@ func (s *Server) Handler(assets fs.FS) http.Handler {
 	// 这也与 Server 字段注释「未注入时仅健康探针可用」一致：不注册即真正不可用（404），
 	// 而不是命中后崩溃。健康探针与就绪探针单独注册，保持无依赖装配可用。
 	if s.ServerInterface != nil {
-		api.RegisterHandlersWithOptions(r, s, api.GinServerOptions{Middlewares: routeMiddlewares})
+		router := securityAuditReadRouter{IRouter: r, middleware: routeMiddlewares, principal: s.securityAuditPrincipal}
+		api.RegisterHandlersWithOptions(router, s, router.options())
 	} else {
 		r.GET("/healthz", s.GetHealthz)
 		r.GET("/readyz", s.GetReadyz)
@@ -185,7 +221,11 @@ func (s *Server) Handler(assets fs.FS) http.Handler {
 	if assets != nil {
 		s.mountStatic(r, assets)
 	}
-	return r
+	var next http.Handler = r
+	if s.ingressGate != nil {
+		next = s.ingressGate.wrap(next)
+	}
+	return requestSourceHandler(s.sourcePolicy, next)
 }
 
 func (s *Server) isProtocolPath(requestPath string) bool {

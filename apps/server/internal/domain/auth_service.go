@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"context"
 	"errors"
 	"log"
 	"strings"
@@ -11,11 +12,36 @@ import (
 
 // AuthService 处理自举、登录与登出。
 type AuthService struct {
-	users     *repository.UserRepo
-	revoked   *repository.RevokedRepo
-	jwt       *auth.JWTManager
-	recorder  ChangeRecorder
-	writeGate BusinessWriteGate
+	users         *repository.UserRepo
+	revoked       *repository.RevokedRepo
+	jwt           *auth.JWTManager
+	recorder      ChangeRecorder
+	writeGate     BusinessWriteGate
+	securityAudit *SecurityAuditService
+}
+
+// SetSecurityAudit 在装配阶段注入实例安全审计服务。
+func (s *AuthService) SetSecurityAudit(audit *SecurityAuditService) { s.securityAudit = audit }
+
+// LoginContext 只记录实际口令核验，不声明已建立持久会话或已写出 HTTP 响应。
+func (s *AuthService) LoginContext(ctx context.Context, username, password string) (string, *repository.User, error) {
+	token, user, err := s.Login(username, password)
+	s.recordAuthAttempt(ctx, "password", user, err)
+	return token, user, err
+}
+
+func (s *AuthService) recordAuthAttempt(ctx context.Context, method string, user *repository.User, err error) {
+	if s.securityAudit == nil {
+		return
+	}
+	switch {
+	case err == nil && user != nil:
+		s.securityAudit.RecordAuthAttemptSucceeded(ctx, user.ID, method, 0)
+	case errors.Is(err, ErrInvalidCredentials), errors.Is(err, ErrExternalIdentityInvalid):
+		s.securityAudit.RecordDenied(ctx, SecurityAuditDenied{EventType: "auth.attempt", ErrorCode: "invalid_credentials", AuthMethod: method})
+	default:
+		s.securityAudit.RecordAuthAttemptFailed(ctx, method, 0)
+	}
 }
 
 // NewAuthService 构造 AuthService。

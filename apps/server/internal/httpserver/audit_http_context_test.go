@@ -133,11 +133,11 @@ func TestAuditEventsExposeHTTPContextAndFilters(t *testing.T) {
 		}
 
 		oldest := page.Items[2]
-		if oldest.Http == nil || oldest.Http.TokenPreview == nil || *oldest.Http.TokenPreview != "Bearer eyJhbG****1dnM" {
-			t.Fatalf("期望令牌脱敏预览，实际 %+v", oldest.Http)
+		if oldest.Http == nil {
+			t.Fatal("历史事件应保留安全的 HTTP 上下文")
 		}
-		if oldest.Http.BodyPreview == nil || !strings.Contains(*oldest.Http.BodyPreview, "force") {
-			t.Fatalf("期望脱敏请求体，实际 %v", oldest.Http.BodyPreview)
+		if oldest.Http.TokenPreview != nil || oldest.Http.BodyPreview != nil {
+			t.Fatal("历史请求体和凭据预览不得通过审计接口返回")
 		}
 		if oldest.Actor.Email == nil || *oldest.Actor.Email != "admin@example.com" {
 			t.Fatalf("期望操作者邮箱快照，实际 %v", oldest.Actor.Email)
@@ -280,9 +280,10 @@ func TestAuditWriteCapturesRequestContext(t *testing.T) {
 	t.Parallel()
 	router, db := newUnauthenticatedAuditRouter(t)
 
-	// 未认证的管理写请求会被拒绝并记录审计：验证中间件确实抓到了方法与请求体。
+	// 拒绝的管理写请求仍记录方法与服务端标识，但不采集凭据或正文。
 	body := `{"name":"release","password":"s3cret-value"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/repositories", strings.NewReader(body))
+	req.RemoteAddr = "198.51.100.27:4321"
 	req.Header.Set("User-Agent", "audit-test-agent/1.0")
 	req.Header.Set("X-Request-ID", "req-http-context-1")
 	req.Header.Set("Authorization", "Bearer eyJhbGciOiJIUzI1NiJ9.payloadpart.signaturepart")
@@ -307,6 +308,9 @@ func TestAuditWriteCapturesRequestContext(t *testing.T) {
 		t.Fatal("管理写请求应产生审计记录")
 	}
 	entry := entries[0]
+	if entry.IP != "198.51.100.27" {
+		t.Errorf("旧审计仅应使用直连客户端地址，实际 %q", entry.IP)
+	}
 	if entry.HTTPMethod != http.MethodPost {
 		t.Fatalf("期望记录请求方法 POST，实际 %q", entry.HTTPMethod)
 	}
@@ -316,17 +320,15 @@ func TestAuditWriteCapturesRequestContext(t *testing.T) {
 	if entry.StatusCode != rec.Code {
 		t.Fatalf("期望状态码 %d，实际 %d", rec.Code, entry.StatusCode)
 	}
-	if entry.RequestID != "req-http-context-1" {
-		t.Fatalf("期望请求 ID 透传，实际 %q", entry.RequestID)
+	responseID := rec.Header().Get("X-Request-ID")
+	if responseID == "" || responseID == "req-http-context-1" || entry.RequestID != responseID {
+		t.Errorf("审计请求 ID 须与响应的服务端标识一致，实际 %q / %q", entry.RequestID, responseID)
 	}
 	if entry.UserAgent != "audit-test-agent/1.0" {
 		t.Fatalf("期望 User-Agent 记录，实际 %q", entry.UserAgent)
 	}
-	if !strings.HasPrefix(entry.TokenPreview, "Bearer ") || !strings.Contains(entry.TokenPreview, "****") {
-		t.Fatalf("期望令牌脱敏预览，实际 %q", entry.TokenPreview)
-	}
-	if !strings.Contains(entry.BodyPreview, "****") || strings.Contains(entry.BodyPreview, "s3cret-value") {
-		t.Fatalf("请求体应脱敏且不含明文凭据，实际 %q", entry.BodyPreview)
+	if entry.TokenPreview != "" || entry.BodyPreview != "" {
+		t.Error("不应新增认证令牌或任意请求体预览")
 	}
 
 	// 常用白名单头已落库为紧凑 JSON，且逐键命中。
@@ -336,19 +338,18 @@ func TestAuditWriteCapturesRequestContext(t *testing.T) {
 	}
 	for name, want := range map[string]string{
 		"User-Agent":      "audit-test-agent/1.0",
-		"X-Request-ID":    "req-http-context-1",
+		"X-Request-ID":    responseID,
 		"Content-Type":    "application/json",
 		"Accept-Language": "zh-CN",
 		"Origin":          "https://artifact.example.com",
 		"Referer":         "https://artifact.example.com/admin",
-		"X-Forwarded-For": "203.0.113.55",
 	} {
 		if captured[name] != want {
 			t.Fatalf("http_headers 缺少 %s：want %q, got %+v", name, want, captured)
 		}
 	}
-	// Authorization 走 TokenPreview 机制，连同白名单外头与凭据原文绝不入列。
-	for _, banned := range []string{"Authorization", "eyJhbGciOiJIUzI1NiJ9", "X-Custom-Debug", "should-not-appear"} {
+	// 禁止写入凭据、原始转发头、外来请求标识和白名单外的头。
+	for _, banned := range []string{"Authorization", "eyJhbGciOiJIUzI1NiJ9", "X-Custom-Debug", "should-not-appear", "X-Forwarded-For", "203.0.113.55", "req-http-context-1"} {
 		if strings.Contains(entry.HTTPHeaders, banned) {
 			t.Fatalf("http_headers 不得包含 %q：%s", banned, entry.HTTPHeaders)
 		}

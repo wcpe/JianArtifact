@@ -1442,6 +1442,16 @@ export const store = {
     };
   },
 
+  machineTokenOwner(plaintext: string): User | undefined {
+    if (!plaintext) return undefined;
+    const token = state.tokens.find((item) => item.plaintext === plaintext);
+    return token ? state.users.find((user) => user.id === token.ownerId) : undefined;
+  },
+
+  isMachineToken(plaintext: string): boolean {
+    return this.machineTokenOwner(plaintext) !== undefined;
+  },
+
   createToken(ownerId: number, name: string): TokenCreated {
     const id = ++state.seq.token;
     const plaintext = `jat_${Math.random().toString(36).slice(2, 12)}`;

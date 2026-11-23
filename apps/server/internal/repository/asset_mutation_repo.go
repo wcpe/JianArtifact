@@ -1,7 +1,9 @@
 package repository
 
 import (
+	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 
@@ -130,7 +132,7 @@ func (r *AssetMutationRepo) MarkStaged(id string, entries []BlobQuarantine) erro
 			return err
 		}
 	}
-	if _, err := tx.Exec(`UPDATE asset_mutation SET status='staged', updated_at=datetime('now') WHERE id=?`, id); err != nil {
+	if err := requireMutationTransition(tx.Exec(`UPDATE asset_mutation SET status='staged', updated_at=datetime('now') WHERE id=? AND status='prepared'`, id)); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -138,14 +140,14 @@ func (r *AssetMutationRepo) MarkStaged(id string, entries []BlobQuarantine) erro
 
 // MarkRollingBack 将失败 intent 标为恢复中，便于启动恢复继续处理。
 func (r *AssetMutationRepo) MarkRollingBack(id, reason string) error {
-	_, err := r.db.Exec(`UPDATE asset_mutation SET status='rolling_back', error=?, updated_at=datetime('now') WHERE id=?`, reason, id)
-	return err
+	return requireMutationTransition(r.db.Exec(`UPDATE asset_mutation SET status='rolling_back', error=?, updated_at=datetime('now')
+		WHERE id=? AND status IN ('prepared','staged','committing','rolling_back')`, reason, id))
 }
 
-// MarkRolledBack 记录恢复完成。
+// MarkRolledBack 仅结束已进入恢复的 intent，不可覆盖完成回执。
 func (r *AssetMutationRepo) MarkRolledBack(id, reason string) error {
-	_, err := r.db.Exec(`UPDATE asset_mutation SET status='rolled_back', error=?, updated_at=datetime('now') WHERE id=?`, reason, id)
-	return err
+	return requireMutationTransition(r.db.Exec(`UPDATE asset_mutation SET status='rolled_back', error=?, updated_at=datetime('now')
+		WHERE id=? AND status='rolling_back'`, reason, id))
 }
 
 // DeleteRolledBack 移除已经完整恢复的失败 intent，允许同一远端 operationId 幂等重试。
@@ -227,12 +229,20 @@ func (r *AssetMutationRepo) RollbackCompleted(id string, items []AssetMutationIt
 }
 
 func (r *AssetMutationRepo) complete(id string, items []AssetMutationItem, outbox *ReplicationOperationRepo, envelope *OperationEnvelope, hooks ...MutationCompletionHook) error {
-	tx, err := r.db.Beginx()
+	ctx := context.Background()
+	conn, err := r.db.Connx(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+	tx, err := conn.BeginTxx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.Exec(`UPDATE asset_mutation SET status='committing', updated_at=datetime('now') WHERE id=? AND status='staged'`, id); err != nil {
+	// 无物理隔离的旧调用方可直接从 prepared 完成；协调器仍从 staged 进入。
+	if err := requireMutationTransition(tx.Exec(`UPDATE asset_mutation SET status='committing', updated_at=datetime('now')
+		WHERE id=? AND status IN ('prepared','staged')`, id)); err != nil {
 		return err
 	}
 	for _, item := range items {
@@ -252,10 +262,16 @@ func (r *AssetMutationRepo) complete(id string, items []AssetMutationItem, outbo
 			}
 		}
 	}
-	if _, err := tx.Exec(`UPDATE asset_mutation SET status='completed', updated_at=datetime('now'), error='' WHERE id=?`, id); err != nil {
+	if err := requireMutationTransition(tx.Exec(`UPDATE asset_mutation SET status='completed', updated_at=datetime('now'), error=''
+		WHERE id=? AND status='committing'`, id)); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		// 驱动尝试回滚却不报告其失败；淘汰该连接，避免回读看到连接内未提交的标记。
+		_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+		return errors.Join(ErrAssetMutationCommitUnconfirmed, err)
+	}
+	return nil
 }
 
 // applyMutationItem 在调用方事务内把单条资产变更应用到 asset 表，并同步维护全文索引
@@ -502,19 +518,17 @@ func (r *AssetMutationRepo) MarkQuarantine(id, hash, status, reason string) erro
 	return err
 }
 
-// HasPendingQuarantine 报告该操作是否仍有**待恢复**的隔离条目。
-//
-// 判据是 status='staged'：此时隔离副本是回滚的唯一依赖，删掉它等于让一次失败的
-// 资产变更无法回到变更前。一旦进入 restored（已放回）或 pending_gc/deleted
-// （已完成、等待回收），隔离目录已不再承担恢复职责，可以安全回收。
+// HasPendingQuarantine 报告隔离目录是否仍可能承担恢复职责。
+// 非终态 intent 优先：原件即使已进入 pending_gc/deleted，回滚快照仍可能是唯一副本。
+// 即使 intent 已终态，也保全仍登记为 staged 的隔离副本。查询出错时调用方不得回收。
 func (r *AssetMutationRepo) HasPendingQuarantine(operationID string) (bool, error) {
-	var count int
-	err := r.db.Get(&count,
-		`SELECT COUNT(*) FROM blob_quarantine WHERE operation_id=? AND status='staged'`, operationID)
-	if err != nil {
-		return false, err
-	}
-	return count > 0, nil
+	var pending bool
+	err := r.db.Get(&pending, `SELECT EXISTS (
+		SELECT 1 FROM asset_mutation WHERE id=? AND status NOT IN ('completed','rolled_back')
+	) OR EXISTS (
+		SELECT 1 FROM blob_quarantine WHERE operation_id=? AND status='staged'
+	)`, operationID, operationID)
+	return pending, err
 }
 
 // CountBlobReferences 返回全库活动资产对 hash 的引用数。

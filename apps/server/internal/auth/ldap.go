@@ -16,9 +16,15 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/config"
 )
 
-// ErrLDAPAuthFailed 表示目录侧认证未通过（用户不存在、口令错误或目录不可达统一归此）。
+// ErrLDAPAuthFailed 是目录登录未通过的通用错误，不指明是凭据拒绝还是目录故障。
 // 调用方对外应表现为与本地登录失败一致，不泄露账号是否存在。
 var ErrLDAPAuthFailed = errors.New("LDAP 认证失败")
+
+// 分类不保留目录响应、连接地址或绑定凭据，仍兼容通用失败判定。
+var (
+	errLDAPUnavailable   = fmt.Errorf("%w：%w", ErrLDAPAuthFailed, ErrExternalAuthUnavailable)
+	errLDAPIndeterminate = fmt.Errorf("%w：%w", ErrLDAPAuthFailed, errExternalAuthIndeterminate)
+)
 
 // ldapDialTimeout 是目录连接与单次读取的超时：目录不可达或不响应时必须快速失败，
 // 不能把登录请求挂死。
@@ -58,7 +64,7 @@ func (v *LDAPVerifier) Authenticate(ctx context.Context, username, password stri
 	}
 	conn, err := v.dial()
 	if err != nil {
-		return ExternalUser{}, ErrLDAPAuthFailed
+		return ExternalUser{}, errLDAPUnavailable
 	}
 	defer conn.Close()
 	_ = ctx // 目录调用本身带超时（见 dial 的 Timeout），ctx 仅用于上层取消语义
@@ -69,9 +75,32 @@ func (v *LDAPVerifier) Authenticate(ctx context.Context, username, password stri
 	}
 	// 以用户本人凭据重新绑定：这一步才是真正的口令校验。
 	if err := conn.Bind(dn, password); err != nil {
-		return ExternalUser{}, ErrLDAPAuthFailed
+		return ExternalUser{}, classifyLDAPUserBindError(err, conn.IsClosing())
 	}
 	return ExternalUser{Subject: dn, Username: username, Email: email}, nil
+}
+
+func classifyLDAPUserBindError(err error, connectionClosing bool) error {
+	var bindErr *ldap.Error
+	if errors.As(err, &bindErr) {
+		switch bindErr.ResultCode {
+		case ldap.LDAPResultInvalidCredentials, ldap.LDAPResultNoSuchObject:
+			return ErrLDAPAuthFailed
+		case ldap.LDAPResultBusy, ldap.LDAPResultUnavailable:
+			return errLDAPUnavailable
+		case ldap.ErrorNetwork, ldap.LDAPResultServerDown, ldap.LDAPResultTimeout, ldap.LDAPResultConnectError:
+			// 无响应包时才将库的网络错误归为传输故障，避免把不透明协议响应算作明确故障。
+			if bindErr.Packet == nil {
+				return errLDAPUnavailable
+			}
+		}
+		return errLDAPIndeterminate
+	}
+	// 读循环关闭连接时库可能只返回不透明错误；关闭状态只证明传输不再可用。
+	if connectionClosing {
+		return errLDAPUnavailable
+	}
+	return errLDAPIndeterminate
 }
 
 // dial 建立连接并按配置升级到 TLS（ldaps 直接加密；ldap 可选 StartTLS）。
@@ -99,12 +128,12 @@ func (v *LDAPVerifier) resolveUserDN(conn *ldap.Conn, username string) (dn, emai
 		// DN 模板模式：用过滤器里的属性名拼出 <attr>=<username>,<BaseDN>；不检索。
 		attr := filterAttribute(v.cfg.UserFilter)
 		if attr == "" {
-			return "", "", ErrLDAPAuthFailed
+			return "", "", errLDAPUnavailable
 		}
 		return fmt.Sprintf("%s=%s,%s", attr, ldap.EscapeDN(username), v.cfg.BaseDN), "", nil
 	}
 	if err := conn.Bind(v.cfg.BindDN, v.cfg.BindPassword); err != nil {
-		return "", "", ErrLDAPAuthFailed
+		return "", "", errLDAPUnavailable
 	}
 	filter := strings.ReplaceAll(v.cfg.UserFilter, "{username}", ldap.EscapeFilter(username))
 	res, err := conn.Search(ldap.NewSearchRequest(
@@ -112,7 +141,7 @@ func (v *LDAPVerifier) resolveUserDN(conn *ldap.Conn, username string) (dn, emai
 		filter, []string{v.cfg.EmailAttr}, nil,
 	))
 	if err != nil {
-		return "", "", ErrLDAPAuthFailed
+		return "", "", errLDAPUnavailable
 	}
 	if len(res.Entries) != 1 {
 		// 命中多个视为不可信：不猜哪一个才是本人。

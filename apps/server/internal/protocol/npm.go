@@ -28,6 +28,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/wcpe/jianartifact/apps/server/internal/auditctx"
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
@@ -505,14 +506,7 @@ func (h *NpmHandler) requestBaseURL(c *gin.Context) string {
 	if h.publicURL != "" {
 		return h.publicURL
 	}
-	scheme := "http"
-	if c.Request.TLS != nil {
-		scheme = "https"
-	}
-	if p := c.GetHeader("X-Forwarded-Proto"); p != "" {
-		scheme = p
-	}
-	return scheme + "://" + c.Request.Host
+	return auditctx.RequestOrigin(c.Request)
 }
 
 // rewritePackument 把 doc 内每个 version 的 dist.tarball 重写为

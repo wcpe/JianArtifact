@@ -53,7 +53,8 @@ func (h *Handlers) Login(c *gin.Context) {
 		auth.WriteError(c, http.StatusBadRequest, "bad_request", "用户名与口令不能为空")
 		return
 	}
-	token, user, err := h.auth.Login(req.Username, req.Password)
+	ctx := c.Request.Context()
+	token, user, err := h.auth.LoginContext(ctx, req.Username, req.Password)
 	if err == nil {
 		c.JSON(http.StatusOK, LoginResponse{Token: token, User: toAPIUser(user)})
 		return
@@ -61,17 +62,19 @@ func (h *Handlers) Login(c *gin.Context) {
 	// 本地未通过：启用 LDAP 时再试目录。目录侧的身份同样要过 AuthService 的绑定/建号与
 	// 状态校验（管理员不会被自动绑定、内置主体不可登录），故这里不绕过领域逻辑。
 	if h.ldapAuth != nil && errors.Is(err, domain.ErrInvalidCredentials) {
-		if identity, ldapErr := h.ldapAuth(c.Request.Context(), req.Username, req.Password); ldapErr == nil {
+		if identity, ldapErr := h.ldapAuth(ctx, req.Username, req.Password); ldapErr == nil {
 			external := domain.ExternalIdentity{
 				Source:   "ldap",
 				Subject:  identity.Subject,
 				Username: identity.Username,
 				Email:    identity.Email,
 			}
-			if t, u, externalErr := h.auth.LoginExternal(external); externalErr == nil {
+			if t, u, externalErr := h.auth.LoginExternalContext(ctx, external); externalErr == nil {
 				c.JSON(http.StatusOK, LoginResponse{Token: t, User: toAPIUser(u)})
 				return
 			}
+		} else {
+			h.auth.RecordExternalAuthRejection(ctx, "ldap", "invalid_credentials", auth.ClassifyProviderAuthFailure(ldapErr))
 		}
 	}
 	// 本地与目录都未通过：对外表现与纯本地失败完全一致（不泄露账号存在于哪一侧）。

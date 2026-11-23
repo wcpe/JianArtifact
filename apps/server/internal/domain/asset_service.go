@@ -389,7 +389,7 @@ func (s *AssetService) NodeID() string {
 
 // Put 向 hosted 仓库发布一件制品：流式写入 blob，再覆盖写 asset 元数据。
 // 仓库不存在返回 ErrNotFound；非 hosted 仓库（proxy/group）返回 ErrConflict。
-// 格式（raw/maven/npm）语义由协议层按仓库 format 分派后自行处理，此处仅按内容寻址存字节。
+// 格式语义由协议层处理。此兼容入口不产生可信安全事件；非样例入口尚未全部接入。
 func (s *AssetService) Put(repoName, path string, r io.Reader, contentType string) (*repository.Asset, error) {
 	if err := s.requireBusinessWrite(); err != nil {
 		return nil, err
@@ -556,7 +556,7 @@ func (s *AssetService) releaseStagedBlob(hash string) {
 // PublishAssets 将一组已落盘 blob 的资产引用一次性公开。
 // 当复制服务可用时，同一 SQLite 事务会同步写入一个 v2 operation outbox。
 func (s *AssetService) PublishAssets(repoName string, after []*repository.Asset) (string, error) {
-	return s.publishAssets(repoName, after, nil)
+	return s.publishAssets(repoName, after, nil, nil)
 }
 
 // PublishAssetsWithCommitHook 将一组资产和附加元数据作为同一事务公开。
@@ -564,16 +564,16 @@ func (s *AssetService) PublishAssetsWithCommitHook(repoName string, after []*rep
 	if hook == nil {
 		return "", ErrValidation
 	}
-	return s.publishAssets(repoName, after, hook)
+	return s.publishAssets(repoName, after, hook, nil)
 }
 
-func (s *AssetService) publishAssets(repoName string, after []*repository.Asset, hook repository.MutationCompletionHook) (string, error) {
+func (s *AssetService) publishAssets(repoName string, after []*repository.Asset, hook repository.MutationCompletionHook, audited *securityAuditedPublish) (string, error) {
 	if err := s.requireBusinessWrite(); err != nil {
 		return "", err
 	}
 	repo, err := s.repos.GetByName(repoName)
 	if err != nil {
-		return "", mapNotFound(err)
+		return "", audited.mapWriteError(mapNotFound(err))
 	}
 	proxyMetadataBatch := (repo.Format == "pypi" || repo.Format == "nuget") && repo.Type == "proxy" && hook != nil
 	if (repo.Type != "hosted" && !proxyMetadataBatch) || len(after) == 0 {
@@ -581,20 +581,28 @@ func (s *AssetService) publishAssets(repoName string, after []*repository.Asset,
 	}
 	items, err := s.publishMutationItems(repo, after)
 	if err != nil {
-		return "", err
+		return "", audited.mapWriteError(err)
 	}
 	operationID := newOperationID()
+	if audited != nil {
+		hook = audited.bind(operationID, items, hook)
+	}
 	if repo.Type == "hosted" {
 		nid := s.NodeID()
 		envelope, envelopeErr := ociOperationEnvelope(nid, repoName, operationID, items)
 		if envelopeErr != nil {
 			return "", envelopeErr
 		}
-		if err := s.mutator.ApplyWithOutboxAndHook(items, envelope, hook); err != nil {
-			return "", err
+		err = s.mutator.ApplyWithOutboxAndHook(items, envelope, hook)
+	} else {
+		_, err = s.mutator.ApplyWithOperationIDAndHook(operationID, items, hook)
+	}
+	if err != nil {
+		if audited != nil && errors.Is(err, errAssetCommitUnknown) {
+			// Begin 已确认落盘的原 intent；仅内部返回，协议不得据此替代授权。
+			return operationID, audited.mapWriteError(err)
 		}
-	} else if _, err := s.mutator.ApplyWithOperationIDAndHook(operationID, items, hook); err != nil {
-		return "", err
+		return "", audited.mapWriteError(err)
 	}
 	s.releasePublishedBlobs(after)
 	return operationID, nil
@@ -1284,6 +1292,10 @@ func upstreamHealthCategoryFor(err error, category string) string {
 }
 
 func (s *AssetService) cleanupFailedWrite(hash string, cause error) error {
+	if errors.Is(cause, errAssetCommitUnknown) || errors.Is(cause, errAssetRecoveryPending) {
+		// 原 intent 尚待判定或恢复，不提前释放新 blob 的暂存保护。
+		return cause
+	}
 	s.releaseStagedBlob(hash)
 	if s.mutator == nil {
 		if err := s.blobs.Remove(hash); err != nil {

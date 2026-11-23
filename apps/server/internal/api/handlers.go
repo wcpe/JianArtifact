@@ -37,6 +37,7 @@ type Deps struct {
 	Settings                   *domain.SettingService
 	AuditLogs                  *repository.AuditLogRepo                // 审计日志
 	AuditObservability         *repository.AuditObservabilityRepo      // 统一审计读模型
+	SecurityAuditQuery         *SecurityAuditQuery                     // 安全事件查询与采集健康
 	OperationsObservability    *repository.OperationsObservabilityRepo // 当前节点业务与主机读模型
 	OperationsAlerts           *repository.OperationsAlertRepo         // v0.8.0：运维告警去重持久化
 	AssetDownloads             *repository.AssetDownloadRepo           // 制品下载计量明细（tree 计数列）
@@ -125,6 +126,7 @@ type Handlers struct {
 	settings                   *domain.SettingService
 	auditLogs                  *repository.AuditLogRepo // 审计日志
 	auditObservability         *repository.AuditObservabilityRepo
+	securityAuditQuery         *SecurityAuditQuery
 	operationsObservability    *repository.OperationsObservabilityRepo
 	operationsAlertStore       *repository.OperationsAlertRepo
 	assetDownloads             *repository.AssetDownloadRepo // 制品下载计量明细（tree 计数列）
@@ -181,6 +183,7 @@ func NewHandlers(d Deps) *Handlers {
 		settings:                   d.Settings,
 		auditLogs:                  d.AuditLogs,
 		auditObservability:         d.AuditObservability,
+		securityAuditQuery:         d.SecurityAuditQuery,
 		operationsObservability:    d.OperationsObservability,
 		operationsAlertStore:       d.OperationsAlerts,
 		assetDownloads:             d.AssetDownloads,
@@ -405,6 +408,8 @@ func writeDomainErrWithOperationID(c *gin.Context, err error, operationID string
 		})
 	}
 	switch {
+	case errors.Is(err, domain.ErrSecurityAuditUnavailable):
+		write(http.StatusServiceUnavailable, "security_audit_unavailable", "安全审计暂不可用")
 	case errors.Is(err, domain.ErrInvalidCredentials):
 		write(http.StatusUnauthorized, "invalid_credentials", "用户名或口令错误")
 	case errors.Is(err, domain.ErrAlreadyInitialized):

@@ -629,7 +629,7 @@ func TestRawBasicWriteCarriesRequestID(t *testing.T) {
 		requestID string
 	}{
 		{name: "未传入请求标识时生成", path: "generated.txt"},
-		{name: "传入请求标识时保留", path: "provided.txt", requestID: "client-request-id-42"},
+		{name: "传入请求标识时仍由服务端生成", path: "provided.txt", requestID: "client-request-id-42"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPut, "/repository/raw-request-id/"+tt.path, bytes.NewReader([]byte(tt.name)))
@@ -647,19 +647,11 @@ func TestRawBasicWriteCarriesRequestID(t *testing.T) {
 			}
 
 			responseID := rec.Header().Get("X-Request-ID")
-			if responseID == "" {
-				t.Fatal("响应缺少 X-Request-ID")
+			if responseID == tt.requestID || len(responseID) != 32 {
+				t.Fatalf("响应须返回新的 32 字符服务端标识，实际 %q", responseID)
 			}
-			if tt.requestID != "" && responseID != tt.requestID {
-				t.Fatalf("响应 X-Request-ID = %q，期望保留 %q", responseID, tt.requestID)
-			}
-			if tt.requestID == "" {
-				if len(responseID) != 32 {
-					t.Fatalf("生成的 X-Request-ID 长度 = %d，期望 32", len(responseID))
-				}
-				if _, err := hex.DecodeString(responseID); err != nil {
-					t.Fatalf("生成的 X-Request-ID 不是十六进制随机标识 %q：%v", responseID, err)
-				}
+			if _, err := hex.DecodeString(responseID); err != nil {
+				t.Fatalf("生成的 X-Request-ID 不是十六进制标识：%v", err)
 			}
 
 			entries, err := e.auditLogs.List(repository.AuditFilter{Action: "asset.put", Repos: []string{"raw-request-id"}, Limit: 10})

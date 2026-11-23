@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wcpe/jianartifact/apps/server/internal/auditctx"
 	"github.com/wcpe/jianartifact/apps/server/internal/formats"
 )
 
@@ -216,13 +217,14 @@ const (
 
 // Config 是解析后的运行配置。路径均为绝对化后的结果，便于日志与探错一致。
 type Config struct {
-	DataDir                string        // 数据根目录（SQLite 与 blob 存放）
-	HTTPAddr               string        // HTTP 监听地址
-	DBPath                 string        // SQLite 文件路径（DataDir/jianartifact.db）
-	BlobDir                string        // blob 存储目录（DataDir/blobs）
-	JWTSecret              []byte        // JWT HS256 签名密钥（不入库、不打印）
-	MigrationCredentialKey []byte        // 在线迁移凭据 AES-256-GCM 专用密钥（不入库、不打印）
-	UpstreamTimeout        time.Duration // proxy 回源整体超时
+	DataDir                string          // 数据根目录（SQLite 与 blob 存放）
+	HTTPAddr               string          // HTTP 监听地址
+	SourcePolicy           auditctx.Policy // 服务端显式可信代理策略；零值不信任转发头
+	DBPath                 string          // SQLite 文件路径（DataDir/jianartifact.db）
+	BlobDir                string          // blob 存储目录（DataDir/blobs）
+	JWTSecret              []byte          // JWT HS256 签名密钥（不入库、不打印）
+	MigrationCredentialKey []byte          // 在线迁移凭据 AES-256-GCM 专用密钥（不入库、不打印）
+	UpstreamTimeout        time.Duration   // proxy 回源整体超时
 	// AutoBlockBaseSeconds 是 proxy 上游 auto-block 退避起始时长：
 	// 首次失败的阻止窗口，之后每档翻倍。非正数（含非法值）已在解析期回落默认值。
 	AutoBlockBaseSeconds time.Duration
@@ -351,6 +353,10 @@ func Load() (*Config, error) {
 	if resolved.EnvFileContent != "" {
 		applyEnvFileDefaults(resolved.EnvFileContent)
 	}
+	sourcePolicy, err := loadSourcePolicy()
+	if err != nil {
+		return nil, err
+	}
 	// 采纳之后重新解析目录，因为 env 文件本身可能就带 JIAN_DATA_DIR（此时它同样生效）。
 	if v := os.Getenv(EnvDataDir); strings.TrimSpace(v) != "" {
 		abs, err := absDataDir(v)
@@ -392,6 +398,7 @@ func Load() (*Config, error) {
 	return &Config{
 		DataDir:                     absData,
 		HTTPAddr:                    envOr(EnvHTTPAddr, defaultHTTPAddr),
+		SourcePolicy:                sourcePolicy,
 		DBPath:                      filepath.Join(absData, dbFileName),
 		BlobDir:                     blobDir,
 		JWTSecret:                   secret,
