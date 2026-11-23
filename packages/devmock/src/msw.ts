@@ -138,14 +138,26 @@ function cleanupCandidates(kind: string): { path: string; isDir: boolean; bytes:
   }
 }
 
-/** 资产回收站样本：覆盖两种 scope，用于验收「来源」列与恢复/清理按钮。 */
-const MOCK_ASSET_TRASH_ENTRIES = [
+/** 资产回收站样本：覆盖两种 scope，用于验收「来源」列与恢复/清理按钮。
+ *
+ * 可变数组是刻意的：版本清理/批量清理/恢复/彻底清理都要真实增删条目，
+ * 「移入回收站 → 在回收站里看到 → 恢复/清理后消失」这条闭环在本地必须可走通，
+ * 只回成功不落数据等于"移入黑洞"，前后两端都验不到。 */
+const MOCK_ASSET_TRASH_ENTRIES: {
+  id: number;
+  repositoryId: number;
+  repositoryName: string;
+  path: string;
+  scope: string;
+  size: number;
+  trashedAt: string;
+}[] = [
   {
     id: 1,
     repositoryId: 1,
     repositoryName: "maven-hosted",
     path: "com/example/demo/1.17.0/demo-1.17.0.jar",
-    scope: "whole_version" as const,
+    scope: "whole_version",
     size: 2_167_993,
     trashedAt: "2026-10-30 09:12:00",
   },
@@ -154,11 +166,69 @@ const MOCK_ASSET_TRASH_ENTRIES = [
     repositoryId: 1,
     repositoryName: "maven-hosted",
     path: "com/example/demo/1.17-SNAPSHOT/demo-1.17-20261030.101500-3.jar",
-    scope: "snapshot_build" as const,
+    scope: "snapshot_build",
     size: 2_152_067,
     trashedAt: "2026-10-29 22:40:00",
   },
 ];
+
+/** nextAssetTrashId 分配递增的回收站条目 id。 */
+let nextAssetTrashId = MOCK_ASSET_TRASH_ENTRIES.length + 1;
+
+/** mockTrashedAt 生成与样本同格式的入站时间戳。 */
+function mockTrashedAt(): string {
+  return new Date().toISOString().slice(0, 19).replace("T", " ");
+}
+
+/** appendAssetTrashEntries 把移入回收站的路径落成可查询的条目。 */
+function appendAssetTrashEntries(
+  repoName: string,
+  paths: string[],
+  scope: "whole_version" | "snapshot_build",
+): void {
+  for (const path of paths) {
+    MOCK_ASSET_TRASH_ENTRIES.push({
+      id: nextAssetTrashId++,
+      repositoryId: 1,
+      repositoryName: repoName,
+      path,
+      scope,
+      size: 2_000_000,
+      trashedAt: mockTrashedAt(),
+    });
+  }
+}
+
+/** removeAssetTrashEntries 按 id 移除条目（恢复或彻底清理后不再可见）。 */
+function removeAssetTrashEntries(ids: number[]): void {
+  const gone = new Set(ids);
+  for (let i = MOCK_ASSET_TRASH_ENTRIES.length - 1; i >= 0; i--) {
+    const entry = MOCK_ASSET_TRASH_ENTRIES[i];
+    if (entry && gone.has(entry.id)) {
+      MOCK_ASSET_TRASH_ENTRIES.splice(i, 1);
+    }
+  }
+}
+
+/** mockMavenVersionFilePaths 按坐标派生一批与 plan 端点一致形态的文件清单，
+ * 供版本清理/批量清理落入回收站（与 plan 同源的文件名才能让「移入的正是预览里看见的」成立）。 */
+function mockMavenVersionFilePaths(
+  groupId: string,
+  artifactId: string,
+  version: string,
+  buildId?: string,
+): string[] {
+  const dir = `${groupId.replaceAll(".", "/")}/${artifactId}/${version}`;
+  const isSnapshot = version.endsWith("-SNAPSHOT");
+  const stem = `${artifactId}-${isSnapshot ? (buildId ?? version) : version}`;
+  return [
+    `${dir}/${stem}.jar`,
+    `${dir}/${stem}.pom`,
+    `${dir}/${stem}-sources.jar`,
+    `${dir}/${stem}.jar.sha1`,
+    `${dir}/${stem}.jar.md5`,
+  ];
+}
 
 const MOCK_USER_TOKEN = "mock.jwt.token:user";
 const MOCK_ANONYMOUS_ID = 0;
@@ -2620,6 +2690,12 @@ export const handlers = [
     if (paths.length === 0) {
       return err("bad_request", "paths 不能为空", 400);
     }
+    // 落进回收站列表：只回成功不落数据，「移入 → 在回收站看到 → 恢复」这条闭环就验不到。
+    // 路径里带 *-SNAPSHOT 目录段的按单次快照构建记账，其余按整版本。
+    const scope = paths.some((p) => p.includes("-SNAPSHOT/"))
+      ? ("snapshot_build" as const)
+      : ("whole_version" as const);
+    appendAssetTrashEntries(String(params.name), paths, scope);
     return HttpResponse.json({
       operationId: `mock-${Date.now()}`,
       repository: String(params.name),
@@ -2720,6 +2796,22 @@ export const handlers = [
               },
             ]
           : [];
+      // 成功的版本按 plan 同源的文件清单落进回收站；失败坐标不进回收站。
+      const failedKeys = new Set(
+        failures.map((f) => `${f.coordinate.groupId}:${f.coordinate.artifactId}:${f.coordinate.version}`),
+      );
+      for (const raw of versions) {
+        const coord = raw as { groupId?: string; artifactId?: string; version?: string; buildId?: string };
+        const key = `${coord.groupId ?? ""}:${coord.artifactId ?? ""}:${coord.version ?? ""}`;
+        if (!coord.groupId || !coord.artifactId || !coord.version || failedKeys.has(key)) {
+          continue;
+        }
+        appendAssetTrashEntries(
+          String(params.name),
+          mockMavenVersionFilePaths(coord.groupId, coord.artifactId, coord.version, coord.buildId),
+          coord.buildId ? "snapshot_build" : "whole_version",
+        );
+      }
       return HttpResponse.json({
         operationId: `mock-${Date.now()}`,
         trashedVersions: Math.max(0, versions.length - failures.length),
@@ -3434,6 +3526,8 @@ export const handlers = [
     if (ids === null) {
       return err("bad_request", "ids 必填且不能为空", 400);
     }
+    // 恢复后条目必须从列表消失：列表只装 staged 状态，restored/purged 不再返回。
+    removeAssetTrashEntries(ids);
     return HttpResponse.json({ restored: ids.length, conflicts: [], missing: [] });
   }),
 
@@ -3446,6 +3540,7 @@ export const handlers = [
     if (ids === null) {
       return err("bad_request", "ids 必填且不能为空", 400);
     }
+    removeAssetTrashEntries(ids);
     return HttpResponse.json({ purged: ids.length, freedBytes: 0 });
   }),
 
