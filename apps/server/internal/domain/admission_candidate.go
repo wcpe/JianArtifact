@@ -10,6 +10,7 @@ import (
 	"io"
 	"mime"
 	"path"
+	"strings"
 	"sync"
 	"time"
 
@@ -397,8 +398,11 @@ func admissionStatus(r repository.AdmissionCandidateRow) AdmissionStatus {
 		ManifestDigest: r.ManifestDigest, ExpiresAt: time.Unix(r.ExpiresUnix, 0).UTC(), ErrorCode: r.ErrorCode}
 }
 
+// 准入候选的规范路径比审计事件路径更严：审计须覆盖制品键的全部合法字符（含
+// `#` 这类文件名），候选登记则不接受 `#`——其在若干协议坐标中另有含义，
+// 入选范围按规范收窄而不是随制品键全集放行。
 func validAdmissionPath(p string) bool {
-	return repository.ValidSecurityEventPath(p) && path.Clean(p) == p
+	return repository.ValidSecurityEventPath(p) && !strings.Contains(p, "#") && path.Clean(p) == p
 }
 
 func admissionManifestDigest(r repository.AdmissionCandidateRow, hash string, size int64) string {

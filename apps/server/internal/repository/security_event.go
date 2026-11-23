@@ -277,7 +277,9 @@ func ValidSecurityEventPath(path string) bool { return validSecurityEventPath(pa
 
 func validSecurityEventPath(path string) bool {
 	// 路径是资产的权威键；只校验路径及文本形态，不用展示词表改写或拒绝其身份。
-	if !validSecurityEventTextShape(path, 1024) || strings.ContainsAny(path, "?#\\") {
+	// `#` 在制品键里是合法文件名字符（客户端经 %23 编码上传、路由已解码），
+	// 与查询筛选共用同一校验；`?` 不会出现在解码后的路径段，`\` 非规范路径字符。
+	if !validSecurityEventTextShape(path, 1024) || strings.ContainsAny(path, "?\\") {
 		return false
 	}
 	for segment := range strings.SplitSeq(path, "/") {

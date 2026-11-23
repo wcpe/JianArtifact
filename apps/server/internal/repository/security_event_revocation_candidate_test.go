@@ -16,7 +16,8 @@ func TestValidSecurityEventPathMatchesAuditRule(t *testing.T) {
 		{"测试/制品.jar", true},
 		{"", false},
 		{"group//release.bin", false},
-		{"group/release.bin#preview", false},
+		// `#` 是制品键的合法文件名字符（Raw PUT 经 %23 解码放行），审计路径规则与之一致。
+		{"group/release.bin#preview", true},
 		{strings.Repeat("a", 1025), false},
 	} {
 		if got := ValidSecurityEventPath(tc.path); got != tc.want || got != validSecurityEventPath(tc.path) {
