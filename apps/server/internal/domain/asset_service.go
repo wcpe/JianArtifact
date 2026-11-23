@@ -196,12 +196,12 @@ type AssetService struct {
 	mutator   *AssetMutationCoordinator
 	writeGate BusinessWriteGate
 	// users 供发布完成事务内重查凭据当前状态（FR-166 最终复核）；nil 保持兼容行为。
-	users *repository.UserRepo
-	sf    singleflight.Group
-	recorder  ChangeRecorder
-	nodeID    func() string
-	health    *proxyHealth
-	negCache  *negativeCache // 404 负缓存（proxy/group 读路径短窗缓存明确 404）
+	users    *repository.UserRepo
+	sf       singleflight.Group
+	recorder ChangeRecorder
+	nodeID   func() string
+	health   *proxyHealth
+	negCache *negativeCache // 404 负缓存（proxy/group 读路径短窗缓存明确 404）
 	// groupBudget 是 group 逐成员并行解析的**确认阶段**预算（首字节看门狗时长）。
 	// 由常量改为实例字段的原因：JIAN_GROUP_MEMBER_TIMEOUT 需在装配期注入、测试也要能缩短。
 	// 由 groupBudgetMu 保护读写（读取见 memberConfirmBudget）。
