@@ -2,7 +2,7 @@
 
 ## 状态
 
-已接受；取代 ADR-0019 第 3 项的异步隔离 GC 语义。
+已接受；取代 ADR-0019 第 3 项的异步隔离 GC 语义。提交后快照清理失败可撤销已提交业务、必须清完临时副本才返回成功及其衍生成功/审计语义，已被 [ADR-0031](0031-trusted-security-events.md) 与 [ADR-0034](0034-private-candidates-and-publication-admission.md) 部分取代。提交前同卷暂存、归零 blob 退出活动存储、流式回滚快照与失败补偿保留，并受 [ADR-0033](0033-incident-restrictions-and-recovery-gate.md) 保全/恢复闸扩展约束；新决策待分批实现，以下历史正文不变。
 
 ## 背景
 

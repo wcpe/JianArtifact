@@ -2,7 +2,7 @@
 
 ## 状态
 
-已接受
+已接受；无票网页自举、CLI 重设后凭口令取得管理会话、无状态 JWT/仅 `jti` 撤销和管理端兼容 API Token 身份的范围已被 [ADR-0032](0032-credential-epochs-and-strong-authentication.md) 部分取代。JWT HS256 传输封装、argon2id、机器秘密摘要与一次展示及单二进制部署保留；新决策待分批实现，以下历史正文不变。
 
 ## 背景
 
