@@ -25,6 +25,7 @@ import {
   Checkbox,
   Code,
   Group,
+  Pagination,
   Stack,
   Table,
   Tabs,
@@ -59,11 +60,12 @@ export interface UnifiedTrashPanelProps {
 type TrashPartition = "artifacts" | "storage";
 
 export function UnifiedTrashPanel({ refreshKey, onChanged }: UnifiedTrashPanelProps) {
+  const { t } = useTranslation();
   const [partition, setPartition] = useState<TrashPartition>("artifacts");
   return (
     <Stack gap="sm" style={{ flex: 1, minHeight: 0 }}>
       <Alert color="blue" variant="light" icon={<IconAlertTriangle size={16} />}>
-        这里的条目都<strong>仍占用磁盘</strong>，且都能恢复。只有「彻底清理」或保留期到期才会真正释放空间。
+        {t("maintenance.trashStillOnDisk")}
       </Alert>
 
       <Tabs
@@ -73,8 +75,8 @@ export function UnifiedTrashPanel({ refreshKey, onChanged }: UnifiedTrashPanelPr
         style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
       >
         <Tabs.List style={{ flexShrink: 0 }}>
-          <Tabs.Tab value="artifacts">制品（删除的版本）</Tabs.Tab>
-          <Tabs.Tab value="storage">存储清理（作业扫出的垃圾）</Tabs.Tab>
+          <Tabs.Tab value="artifacts">{t("maintenance.trashPartitionArtifacts")}</Tabs.Tab>
+          <Tabs.Tab value="storage">{t("maintenance.trashPartitionStorage")}</Tabs.Tab>
         </Tabs.List>
 
         <Tabs.Panel
@@ -99,27 +101,39 @@ export function UnifiedTrashPanel({ refreshKey, onChanged }: UnifiedTrashPanelPr
 
 // ───────────────────────── 分区一：制品 ─────────────────────────
 
+/** 每页条数。后端 `AssetTrashRepo.List` 把 limit 钳到 100，取 20 与之无冲突。 */
+const ASSET_TRASH_PAGE_SIZE = 20;
+
 function ArtifactTrashSection({ refreshKey, onChanged }: UnifiedTrashPanelProps) {
   const { t } = useTranslation();
   const [entries, setEntries] = useState<AssetTrashEntry[]>([]);
   const [stats, setStats] = useState({ entries: 0, bytes: 0 });
+  // 服务端返回的**全量** staged 条数（不是本页条数）。分页页数由它算，
+  // 不能拿 `entries.length` 算——那永远只有一页。
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [loadFailed, setLoadFailed] = useState(false);
   const [pendingPurge, setPendingPurge] = useState<number[] | null>(null);
   const [purging, setPurging] = useState(false);
 
+  // 分页拉取：早先固定 `listAssetTrash(1, 100)`，超过 100 条的部分既看不到也选不到，
+  // 而顶部仍显示真实总数——用户以为「就这些」。现在按页取，且总数如实来自后端。
   const load = useCallback(() => {
-    listAssetTrash(1, 100)
+    listAssetTrash(page, ASSET_TRASH_PAGE_SIZE)
       .then((res) => {
         setEntries(res.items ?? []);
         setStats({ entries: res.stats?.entries ?? 0, bytes: res.stats?.bytes ?? 0 });
+        setTotal(res.total ?? 0);
         setLoadFailed(false);
       })
       // 失败保留上次数据：清空会让"回收站真的空了"与"加载失败"看起来一样。
       .catch(() => setLoadFailed(true));
-  }, []);
+  }, [page]);
 
   useEffect(load, [load, refreshKey]);
+
+  const totalPages = Math.max(1, Math.ceil(total / ASSET_TRASH_PAGE_SIZE));
 
   // 条目集合变化后清理失效勾选：恢复/清理会让 id 从列表消失，
   // 选中集合不自动收敛，会留下一个"显示 2 条但列表已空"的按钮。
@@ -150,12 +164,15 @@ function ArtifactTrashSection({ refreshKey, onChanged }: UnifiedTrashPanelProps)
         if (problems.length > 0) {
           notifications.show({
             color: "yellow",
-            title: "部分条目未恢复",
+            title: t("maintenance.restoreConflictsTitle"),
             message: problems.map((c) => `${c.path}：${c.reason}`).join("\n"),
           });
         }
         if (res.restored > 0) {
-          notifications.show({ color: "green", message: `已恢复 ${res.restored} 个文件` });
+          notifications.show({
+            color: "green",
+            message: t("maintenance.trashRestoredFiles", { count: res.restored }),
+          });
         }
         load();
         onChanged();
@@ -170,7 +187,10 @@ function ArtifactTrashSection({ refreshKey, onChanged }: UnifiedTrashPanelProps)
       .then((res) => {
         notifications.show({
           color: "green",
-          message: `已彻底清理 ${res.purged} 个文件，释放 ${formatBytes(res.freedBytes)}`,
+          message: t("maintenance.trashPurgedFiles", {
+            count: res.purged,
+            bytes: formatBytes(res.freedBytes),
+          }),
         });
         setPendingPurge(null);
         load();
@@ -185,11 +205,25 @@ function ArtifactTrashSection({ refreshKey, onChanged }: UnifiedTrashPanelProps)
     .reduce((sum, e) => sum + e.size, 0);
 
   return (
-    <Box data-testid="asset-trash-section" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+    <Box
+      data-testid="asset-trash-section"
+      style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
+    >
       <Group justify="space-between" mb="xs">
         <Text size="sm" c="dimmed">
-          共 {stats.entries} 条 / {formatBytes(stats.bytes)}
-          {selected.size > 0 && `（已选 ${selected.size} 条 / ${formatBytes(selectedBytes)}）`}
+          {/* 计数必须带出「当前页范围 / 全量」：只显示总数会让用户以为列表就是全部，
+              而实际每页只有 ASSET_TRASH_PAGE_SIZE 条。 */}
+          {t("maintenance.trashPageUsage", {
+            from: total === 0 ? 0 : (page - 1) * ASSET_TRASH_PAGE_SIZE + 1,
+            to: Math.min(page * ASSET_TRASH_PAGE_SIZE, total),
+            total,
+            bytes: formatBytes(stats.bytes),
+          })}
+          {selected.size > 0 &&
+            t("maintenance.trashSelectedSuffix", {
+              count: selected.size,
+              bytes: formatBytes(selectedBytes),
+            })}
         </Text>
         <Group gap="xs">
           <Button
@@ -198,7 +232,7 @@ function ArtifactTrashSection({ refreshKey, onChanged }: UnifiedTrashPanelProps)
             disabled={selected.size === 0}
             onClick={() => handleRestore([...selected])}
           >
-            恢复所选（{selected.size}）
+            {t("maintenance.trashRestoreSelectedCount", { count: selected.size })}
           </Button>
           <Button
             size="xs"
@@ -207,14 +241,14 @@ function ArtifactTrashSection({ refreshKey, onChanged }: UnifiedTrashPanelProps)
             disabled={selected.size === 0}
             onClick={() => setPendingPurge([...selected])}
           >
-            彻底清理（{selected.size}）
+            {t("maintenance.trashPurgeSelectedCount", { count: selected.size })}
           </Button>
         </Group>
       </Group>
 
       {loadFailed && (
         <Alert color="yellow" variant="light" mb="xs">
-          加载失败，列表可能不是最新状态；下方内容为上次成功加载的结果。
+          {t("maintenance.trashStaleHint")}
         </Alert>
       )}
 
@@ -223,12 +257,12 @@ function ArtifactTrashSection({ refreshKey, onChanged }: UnifiedTrashPanelProps)
           <Table.Thead>
             <Table.Tr>
               <Table.Th w={36} />
-              <Table.Th w={130}>仓库</Table.Th>
-              <Table.Th>路径</Table.Th>
-              <Table.Th w={90}>大小</Table.Th>
-              <Table.Th w={150}>删除时间</Table.Th>
-              <Table.Th w={110}>来源</Table.Th>
-              <Table.Th w={150}>操作</Table.Th>
+              <Table.Th w={130}>{t("maintenance.trashColRepository")}</Table.Th>
+              <Table.Th>{t("maintenance.colPath")}</Table.Th>
+              <Table.Th w={90}>{t("maintenance.colSize")}</Table.Th>
+              <Table.Th w={150}>{t("maintenance.trashColTrashedAt")}</Table.Th>
+              <Table.Th w={110}>{t("maintenance.trashColSource")}</Table.Th>
+              <Table.Th w={150}>{t("maintenance.colActions")}</Table.Th>
             </Table.Tr>
           </Table.Thead>
           <Table.Tbody>
@@ -236,7 +270,7 @@ function ArtifactTrashSection({ refreshKey, onChanged }: UnifiedTrashPanelProps)
               <Table.Tr>
                 <Table.Td colSpan={7}>
                   <Text size="sm" c="dimmed" ta="center" py="lg">
-                    {loadFailed ? "—" : "没有已删除的制品。在「Maven 包清理」里删除的版本会出现在这里。"}
+                    {loadFailed ? "—" : t("maintenance.trashArtifactsEmpty")}
                   </Text>
                 </Table.Td>
               </Table.Tr>
@@ -262,13 +296,19 @@ function ArtifactTrashSection({ refreshKey, onChanged }: UnifiedTrashPanelProps)
                   </Table.Td>
                   <Table.Td>
                     <Badge size="sm" variant="light">
-                      {entry.scope === "snapshot_build" ? "快照构建" : "整个版本"}
+                      {entry.scope === "snapshot_build"
+                        ? t("maintenance.trashScopeSnapshotBuild")
+                        : t("maintenance.trashScopeWholeVersion")}
                     </Badge>
                   </Table.Td>
                   <Table.Td>
                     <Group gap={4}>
-                      <Button size="compact-xs" variant="default" onClick={() => handleRestore([entry.id])}>
-                        恢复
+                      <Button
+                        size="compact-xs"
+                        variant="default"
+                        onClick={() => handleRestore([entry.id])}
+                      >
+                        {t("maintenance.restore")}
                       </Button>
                       <Button
                         size="compact-xs"
@@ -276,7 +316,7 @@ function ArtifactTrashSection({ refreshKey, onChanged }: UnifiedTrashPanelProps)
                         variant="subtle"
                         onClick={() => setPendingPurge([entry.id])}
                       >
-                        彻底清理
+                        {t("maintenance.purge")}
                       </Button>
                     </Group>
                   </Table.Td>
@@ -287,13 +327,25 @@ function ArtifactTrashSection({ refreshKey, onChanged }: UnifiedTrashPanelProps)
         </Table>
       </Box>
 
+      {/* 分页只在多于一页时出现：单页时留一排页码只会让人以为还有别处内容。 */}
+      {totalPages > 1 ? (
+        <Group justify="center" mt="xs">
+          <Pagination
+            value={page}
+            onChange={setPage}
+            total={totalPages}
+            size="sm"
+            data-testid="asset-trash-pagination"
+          />
+        </Group>
+      ) : null}
+
       <DestructiveConfirmModal
         opened={pendingPurge !== null}
-        title="确认彻底清理"
-        message={
-          `将永久释放 ${pendingPurge?.length ?? 0} 个文件占用的磁盘空间，此操作**不可恢复**。\n\n` +
-          `若只是想腾出可见空间、仍可能用到这些文件，请改用「恢复」。`
-        }
+        title={t("maintenance.trashPurgeConfirmTitle")}
+        message={t("maintenance.trashPurgeConfirmMessage", {
+          count: pendingPurge?.length ?? 0,
+        })}
         requirePhrase
         pending={purging}
         onConfirm={runPurge}
@@ -305,27 +357,38 @@ function ArtifactTrashSection({ refreshKey, onChanged }: UnifiedTrashPanelProps)
 
 // ───────────────────────── 分区二：存储清理 ─────────────────────────
 
+/** 每页条数。与资产分区分开取值：两类条目形态不同，共用常量会互相牵制。 */
+const STORAGE_TRASH_PAGE_SIZE = 20;
+
 function StorageTrashSection({ refreshKey, onChanged }: UnifiedTrashPanelProps) {
   const { t } = useTranslation();
   const [entries, setEntries] = useState<TrashEntry[]>([]);
   const [stats, setStats] = useState({ entries: 0, bytes: 0 });
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [pendingPurge, setPendingPurge] = useState<{ ids: number[]; all: boolean } | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [purging, setPurging] = useState(false);
 
+  // 早先固定 `listTrash(1, 50)`，而顶部用的是 `stats.entries`（全表计数）：
+  // 真实有 200 条时界面显示「共 200 项」却只列 50 行，"清空回收站"又会真的删光 200 条
+  // ——看到的和发生的不是一回事。现在按页取，计数改由 `total` 驱动。
   const load = useCallback(() => {
-    listTrash(1, 50)
+    listTrash(page, STORAGE_TRASH_PAGE_SIZE)
       .then((res) => {
         setEntries(res.items ?? []);
         setStats({ entries: res.stats?.entries ?? 0, bytes: res.stats?.bytes ?? 0 });
+        setTotal(res.total ?? 0);
         setSelected(new Set());
         setLoadFailed(false);
       })
       .catch(() => setLoadFailed(true));
-  }, []);
+  }, [page]);
 
   useEffect(load, [load, refreshKey]);
+
+  const totalPages = Math.max(1, Math.ceil(total / STORAGE_TRASH_PAGE_SIZE));
 
   const toggle = (id: number) => {
     setSelected((prev) => {
@@ -374,10 +437,18 @@ function StorageTrashSection({ refreshKey, onChanged }: UnifiedTrashPanelProps) 
   };
 
   return (
-    <Box data-testid="storage-trash-section" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+    <Box
+      data-testid="storage-trash-section"
+      style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
+    >
       <Group justify="space-between" mb="xs">
         <Text size="sm" c="dimmed">
-          共 {stats.entries} 条 / {formatBytes(stats.bytes)}
+          {t("maintenance.trashPageUsage", {
+            from: total === 0 ? 0 : (page - 1) * STORAGE_TRASH_PAGE_SIZE + 1,
+            to: Math.min(page * STORAGE_TRASH_PAGE_SIZE, total),
+            total,
+            bytes: formatBytes(stats.bytes),
+          })}
         </Text>
         <Group gap="xs">
           <Button
@@ -470,7 +541,11 @@ function StorageTrashSection({ refreshKey, onChanged }: UnifiedTrashPanelProps) 
                   </Table.Td>
                   <Table.Td>
                     <Group gap={4}>
-                      <Button size="compact-xs" variant="default" onClick={() => handleRestore([entry.ID])}>
+                      <Button
+                        size="compact-xs"
+                        variant="default"
+                        onClick={() => handleRestore([entry.ID])}
+                      >
                         {t("maintenance.restore")}
                       </Button>
                       <Button
@@ -490,12 +565,26 @@ function StorageTrashSection({ refreshKey, onChanged }: UnifiedTrashPanelProps) 
         )}
       </Box>
 
+      {totalPages > 1 ? (
+        <Group justify="center" mt="xs">
+          <Pagination
+            value={page}
+            onChange={setPage}
+            total={totalPages}
+            size="sm"
+            data-testid="storage-trash-pagination"
+          />
+        </Group>
+      ) : null}
+
       <DestructiveConfirmModal
         opened={pendingPurge !== null}
         title={pendingPurge?.all ? t("maintenance.purgeAllTitle") : t("maintenance.purgeTitle")}
         message={
           pendingPurge?.all
-            ? t("maintenance.purgeAllMessage", { count: stats.entries })
+            ? // 「清空」会删掉**全量**而非当前页，所以数必须用 `total`——
+              // 用当前页条数会让用户以为只清这些，实际删得更多。
+              t("maintenance.purgeAllMessage", { count: total })
             : t("maintenance.purgeMessage", { count: pendingPurge?.ids.length ?? 0 })
         }
         onConfirm={runPendingPurge}
