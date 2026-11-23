@@ -146,9 +146,7 @@ function kpiSelectableStyle(active: boolean): CSSProperties {
     cursor: "pointer",
     textAlign: "left",
     width: "100%",
-    border: active
-      ? "1px solid var(--mantine-color-blue-5)"
-      : "1px solid transparent",
+    border: active ? "1px solid var(--mantine-color-blue-5)" : "1px solid transparent",
     borderRadius: 8,
     background: active ? "var(--mantine-color-blue-0)" : undefined,
     transition: "background 120ms ease, border-color 120ms ease",

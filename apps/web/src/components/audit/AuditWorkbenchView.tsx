@@ -103,9 +103,7 @@ export function AuditWorkbenchView() {
   const toggleArrayFilter = useCallback(
     (key: "result" | "category", value: string) => {
       const current = filters[key] as string[];
-      const next = current.includes(value)
-        ? current.filter((item) => item !== value)
-        : [value];
+      const next = current.includes(value) ? current.filter((item) => item !== value) : [value];
       setFilters({ ...filters, [key]: next });
     },
     [filters, setFilters],
