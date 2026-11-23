@@ -86,6 +86,7 @@ func newProtocolEnvConfigured(t *testing.T, publicURL string, enabled formats.Se
 	repoSvc := domain.NewRepositoryService(repoRepo, aclRepo, assetRepo, domain.NewSettingService(settings), userRepo)
 	repoSvc.SetEnabledFormats(enabled)
 	repoSvc.SetChangeRecorder(domain.NoopChangeRecorder{})
+	tokenSvc.SetRepositoryService(repoSvc)
 	assetSvc := domain.NewAssetService(repoRepo, assetRepo, blobs, upstream.NewTestClient(5*time.Second))
 	assetSvc.SetChangeRecorder(domain.NoopChangeRecorder{})
 	nodeIdentity := domain.NewNodeIdentity(settings)

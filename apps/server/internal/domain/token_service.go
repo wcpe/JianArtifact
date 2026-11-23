@@ -133,6 +133,10 @@ func (s *TokenService) resolveIssue(ctx context.Context, p *auth.Principal, in C
 	if in.Purpose == auth.TokenPurposeLegacy {
 		return issue, nil
 	}
+	if s.repos == nil {
+		// 受限签发需要仓库/ACL 权威；未装配时不降级为未校验签发。
+		return issue, fmt.Errorf("%w：凭据授权服务未装配", ErrCredentialScopeDenied)
+	}
 	subject, err := s.repos.SubjectFor(p.UserID)
 	if err != nil {
 		return issue, err

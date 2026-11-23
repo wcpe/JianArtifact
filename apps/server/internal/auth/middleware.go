@@ -222,12 +222,22 @@ func protocolCredentialsPresented(r *http.Request) bool {
 }
 
 func (a *Authenticator) rejectDisabledManagementPrincipal(c *gin.Context, principal *Principal) bool {
-	if a.protocol || !principal.WebLoginDisabled {
+	if a.protocol {
 		return false
 	}
-	WriteError(c, http.StatusForbidden, "web_login_disabled", "该账号已禁止登录管理端")
-	c.Abort()
-	return true
+	if principal.WebLoginDisabled {
+		WriteError(c, http.StatusForbidden, "web_login_disabled", "该账号已禁止登录管理端")
+		c.Abort()
+		return true
+	}
+	// 受限机器凭据只承载协议动作：用途非空的 KindToken 主体不得进入管理面，
+	// 管理员名下 Token 亦然；未限用途旧凭据保留过渡兼容。
+	if principal.Kind == KindToken && principal.TokenPurpose != TokenPurposeLegacy {
+		WriteError(c, http.StatusForbidden, "credential_channel_denied", "机器凭据不允许访问管理接口")
+		c.Abort()
+		return true
+	}
+	return false
 }
 
 // resolve 从请求头解析出主体：优先 Authorization: Bearer（jat_ 前缀走 API Token，
