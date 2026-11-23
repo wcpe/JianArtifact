@@ -131,7 +131,13 @@ function BatchOverview({
         });
 
   return (
-    <Card withBorder radius="sm" padding="sm" component="section" aria-label={t("auditWorkbench.drawerOverview")}>
+    <Card
+      withBorder
+      radius="sm"
+      padding="sm"
+      component="section"
+      aria-label={t("auditWorkbench.drawerOverview")}
+    >
       <Text size="xs" c="dimmed" fw={600} mb={6}>
         {t("auditWorkbench.drawerOverview")}
       </Text>
@@ -140,13 +146,17 @@ function BatchOverview({
           <Text size="xs" c="dimmed" w={64} style={{ flexShrink: 0 }}>
             {t("auditWorkbench.drawerWho")}
           </Text>
-          <Text size="sm" fw={600}>{actorSummary}</Text>
+          <Text size="sm" fw={600}>
+            {actorSummary}
+          </Text>
         </Group>
         <Group gap={6} wrap="wrap" align="baseline">
           <Text size="xs" c="dimmed" w={64} style={{ flexShrink: 0 }}>
             {t("auditWorkbench.drawerWhat")}
           </Text>
-          <Text size="sm" fw={600}>{actionSummary}</Text>
+          <Text size="sm" fw={600}>
+            {actionSummary}
+          </Text>
         </Group>
         <Group gap={6} wrap="wrap" align="baseline">
           <Text size="xs" c="dimmed" w={64} style={{ flexShrink: 0 }}>
@@ -199,12 +209,12 @@ function BatchMemberRow({ event }: { event: AuditEvent }) {
   const target = asText(event.target);
   const hasContext = Boolean(
     http?.requestId ||
-      http?.userAgent ||
-      http?.tokenPreview ||
-      http?.bodyPreview ||
-      event.clientIp ||
-      event.durationMs ||
-      event.durationServerMs,
+    http?.userAgent ||
+    http?.tokenPreview ||
+    http?.bodyPreview ||
+    event.clientIp ||
+    event.durationMs ||
+    event.durationServerMs,
   );
 
   return (
@@ -253,7 +263,11 @@ function BatchMemberRow({ event }: { event: AuditEvent }) {
         ) : null}
       </Group>
       {opened && hasContext ? (
-        <Box mt="xs" pl="xs" style={{ borderLeft: "2px solid var(--mantine-color-default-border)" }}>
+        <Box
+          mt="xs"
+          pl="xs"
+          style={{ borderLeft: "2px solid var(--mantine-color-default-border)" }}
+        >
           <Stack gap={2}>
             {http?.method || http?.path ? (
               <Text size="xs" c="dimmed" style={{ overflowWrap: "anywhere" }}>
@@ -265,7 +279,9 @@ function BatchMemberRow({ event }: { event: AuditEvent }) {
               </Text>
             ) : null}
             {event.clientIp ? (
-              <Text size="xs" c="dimmed">{t("auditWorkbench.drawerContextIp", { ip: event.clientIp })}</Text>
+              <Text size="xs" c="dimmed">
+                {t("auditWorkbench.drawerContextIp", { ip: event.clientIp })}
+              </Text>
             ) : null}
             {event.durationMs || event.durationServerMs ? (
               <Text size="xs" c="dimmed">
@@ -281,7 +297,9 @@ function BatchMemberRow({ event }: { event: AuditEvent }) {
               </Text>
             ) : null}
             {http?.tokenPreview ? (
-              <Text size="xs" c="dimmed">{t("auditWorkbench.drawerContextToken", { token: http.tokenPreview })}</Text>
+              <Text size="xs" c="dimmed">
+                {t("auditWorkbench.drawerContextToken", { token: http.tokenPreview })}
+              </Text>
             ) : null}
             {http?.userAgent ? (
               <Text size="xs" c="dimmed" style={{ overflowWrap: "anywhere" }}>
@@ -290,8 +308,13 @@ function BatchMemberRow({ event }: { event: AuditEvent }) {
             ) : null}
             {http?.bodyPreview ? (
               <Box mt={2}>
-                <Text size="xs" c="dimmed" mb={2}>{t("auditWorkbench.drawerContextBody")}</Text>
-                <Code block style={{ fontSize: 11, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+                <Text size="xs" c="dimmed" mb={2}>
+                  {t("auditWorkbench.drawerContextBody")}
+                </Text>
+                <Code
+                  block
+                  style={{ fontSize: 11, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}
+                >
                   {http.bodyPreview}
                 </Code>
               </Box>
@@ -302,7 +325,6 @@ function BatchMemberRow({ event }: { event: AuditEvent }) {
     </Box>
   );
 }
-
 
 export function AttentionDrawer({
   attentionId,

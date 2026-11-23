@@ -1209,7 +1209,7 @@ function EventDetail({
         ]}
       />
 
-            {/*
+      {/*
  排障上下文（请求 ID / UA / 令牌 / 请求头 / 请求体）默认折叠：
           这些字段只在真正排查单条请求时才需要，全量铺开会让一次普通设置变更
           也撑出十几行，反而盖住「谁做了什么」这一层信息。 */}
@@ -1236,7 +1236,9 @@ function EventDetail({
                 items={[
                   {
                     label: t("auditWorkbench.detailRequestId"),
-                    value: <span style={{ fontFamily: "monospace" }}>{http?.requestId ?? "—"}</span>,
+                    value: (
+                      <span style={{ fontFamily: "monospace" }}>{http?.requestId ?? "—"}</span>
+                    ),
                   },
                   { label: t("auditWorkbench.detailToken"), value: http?.tokenPreview ?? "—" },
                   { label: t("auditWorkbench.detailUserAgent"), value: http?.userAgent ?? "—" },
