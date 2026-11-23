@@ -40,7 +40,10 @@ func (r *UserRepo) IssueCredentialToken(ctx context.Context, userID int64, in Cr
 			}
 		}
 		var active int
-		if err := tx.GetContext(ctx, &active, `SELECT count(*) FROM api_token WHERE user_id=? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>?)`, userID, time.Now().Unix()); err != nil {
+		// 额度按与认证相同的有效谓词统计：改密升代后失效的旧代凭据不再占名额，
+		// 否则账号凭据被撤销一次就永远不能再补发（无到期旧式凭据尤甚）。
+		if err := tx.GetContext(ctx, &active, `SELECT count(*) FROM api_token t JOIN user u ON u.id=t.user_id
+  WHERE t.user_id=? AND `+tokenCurrentSQL, userID, time.Now().Unix()); err != nil {
 			return err
 		}
 		if active >= MachineTokenLimit {
