@@ -16,11 +16,7 @@ function renderDetail(name: string) {
   );
 }
 
-async function typeStable(
-  user: ReturnType<typeof userEvent.setup>,
-  label: string,
-  text: string,
-) {
+async function typeStable(user: ReturnType<typeof userEvent.setup>, label: string, text: string) {
   // jsdom 事件时序偶发丢失键入；值未落地则清空重试
   const input = screen.getByLabelText(label) as HTMLInputElement;
   for (let attempt = 0; attempt < 3; attempt += 1) {
