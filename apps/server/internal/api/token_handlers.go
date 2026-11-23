@@ -3,10 +3,12 @@ package api
 import (
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
+	"github.com/wcpe/jianartifact/apps/server/internal/domain"
 )
 
 // ListTokens 返回当前用户名下未吊销的 API Token（不含明文）。
@@ -41,18 +43,47 @@ func (h *Handlers) CreateToken(c *gin.Context) {
 		auth.WriteError(c, http.StatusBadRequest, "bad_request", "令牌名称不能为空")
 		return
 	}
-	plaintext, tok, err := h.tokens.CreateForPrincipal(c.Request.Context(), p, req.Name)
+	in := domain.CreateTokenInput{Name: req.Name}
+	if req.Purpose != nil {
+		in.Purpose = string(*req.Purpose)
+	}
+	if req.ExpiresDays != nil {
+		in.ExpiresDays = *req.ExpiresDays
+	}
+	if req.Scopes != nil {
+		in.Scopes = make([]domain.MachineTokenScopeInput, 0, len(*req.Scopes))
+		for _, sc := range *req.Scopes {
+			item := domain.MachineTokenScopeInput{Repository: sc.Repository}
+			if sc.PathPrefix != nil {
+				item.PathPrefix = *sc.PathPrefix
+			}
+			for _, a := range sc.Actions {
+				item.Actions = append(item.Actions, string(a))
+			}
+			in.Scopes = append(in.Scopes, item)
+		}
+	}
+	plaintext, tok, err := h.tokens.CreateScopedForPrincipal(c.Request.Context(), p, in)
 	if err != nil {
 		writeDomainErr(c, err)
 		return
 	}
 	h.AuditLog(c, "token.create", "token", tok.Name, "", "tokenId="+strconv.FormatInt(tok.ID, 10), "ok")
-	c.JSON(http.StatusCreated, TokenCreated{
+	created := TokenCreated{
 		Id:        tok.ID,
 		Name:      tok.Name,
 		Token:     plaintext,
 		CreatedAt: tok.CreatedAt,
-	})
+	}
+	if tok.Purpose != "" {
+		purpose := TokenCreatedPurpose(tok.Purpose)
+		created.Purpose = &purpose
+	}
+	if tok.ExpiresAt != nil {
+		expiresAt := time.Unix(*tok.ExpiresAt, 0).UTC().Format(time.RFC3339)
+		created.ExpiresAt = &expiresAt
+	}
+	c.JSON(http.StatusCreated, created)
 }
 
 // DeleteToken 吊销当前用户名下的 API Token。

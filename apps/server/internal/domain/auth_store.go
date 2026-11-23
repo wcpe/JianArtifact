@@ -41,12 +41,19 @@ func (s *authStore) PrincipalBySession(proof auth.CredentialProof) (*auth.Princi
 }
 
 func (s *authStore) PrincipalByTokenDigest(digest string) (*auth.Principal, error) {
-	u, id, name, err := s.users.CredentialTokenAccount(context.Background(), digest)
+	u, token, err := s.users.CredentialTokenAccount(context.Background(), digest)
 	if err != nil {
 		return nil, credentialResolutionError(err)
 	}
 	p := principalOf(&u.User)
-	p.AccountEpoch, p.TokenID, p.TokenName = u.Epoch, id, name
+	p.AccountEpoch, p.TokenID, p.TokenName = u.Epoch, token.ID, token.Name
+	p.TokenPurpose = token.Purpose
+	if scopes, err := auth.ParseMachineScopes(token.ScopesJSON); err == nil {
+		p.TokenScopes = scopes
+	} else {
+		// 存储内容损坏不降级放行：凭据按失效拒绝。
+		return nil, auth.ErrUnauthenticated
+	}
 	return p, nil
 }
 

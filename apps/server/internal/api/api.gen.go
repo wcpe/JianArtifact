@@ -626,6 +626,27 @@ func (e CreateRepositoryRequestVisibility) Valid() bool {
 	}
 }
 
+// Defines values for CreateTokenRequestPurpose.
+const (
+	CreateTokenRequestPurposeArtifactPublish CreateTokenRequestPurpose = "artifact_publish"
+	CreateTokenRequestPurposeArtifactRead    CreateTokenRequestPurpose = "artifact_read"
+	CreateTokenRequestPurposeEmpty           CreateTokenRequestPurpose = ""
+)
+
+// Valid indicates whether the value is a known member of the CreateTokenRequestPurpose enum.
+func (e CreateTokenRequestPurpose) Valid() bool {
+	switch e {
+	case CreateTokenRequestPurposeArtifactPublish:
+		return true
+	case CreateTokenRequestPurposeArtifactRead:
+		return true
+	case CreateTokenRequestPurposeEmpty:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CreateUserRequestRole.
 const (
 	CreateUserRequestRoleAdmin CreateUserRequestRole = "admin"
@@ -758,6 +779,24 @@ func (e HostMonitoringHostState) Valid() bool {
 	case HostMonitoringHostStateStale:
 		return true
 	case HostMonitoringHostStateUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MachineTokenScopeActions.
+const (
+	MachineTokenScopeActionsPublish MachineTokenScopeActions = "publish"
+	MachineTokenScopeActionsRead    MachineTokenScopeActions = "read"
+)
+
+// Valid indicates whether the value is a known member of the MachineTokenScopeActions enum.
+func (e MachineTokenScopeActions) Valid() bool {
+	switch e {
+	case MachineTokenScopeActionsPublish:
+		return true
+	case MachineTokenScopeActionsRead:
 		return true
 	default:
 		return false
@@ -1604,6 +1643,48 @@ func (e SecurityAuditOutcome) Valid() bool {
 	case SecurityAuditOutcomeSucceeded:
 		return true
 	case SecurityAuditOutcomeUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TokenPurpose.
+const (
+	TokenPurposeArtifactPublish TokenPurpose = "artifact_publish"
+	TokenPurposeArtifactRead    TokenPurpose = "artifact_read"
+	TokenPurposeEmpty           TokenPurpose = ""
+)
+
+// Valid indicates whether the value is a known member of the TokenPurpose enum.
+func (e TokenPurpose) Valid() bool {
+	switch e {
+	case TokenPurposeArtifactPublish:
+		return true
+	case TokenPurposeArtifactRead:
+		return true
+	case TokenPurposeEmpty:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TokenCreatedPurpose.
+const (
+	TokenCreatedPurposeArtifactPublish TokenCreatedPurpose = "artifact_publish"
+	TokenCreatedPurposeArtifactRead    TokenCreatedPurpose = "artifact_read"
+	TokenCreatedPurposeEmpty           TokenCreatedPurpose = ""
+)
+
+// Valid indicates whether the value is a known member of the TokenCreatedPurpose enum.
+func (e TokenCreatedPurpose) Valid() bool {
+	switch e {
+	case TokenCreatedPurposeArtifactPublish:
+		return true
+	case TokenCreatedPurposeArtifactRead:
+		return true
+	case TokenCreatedPurposeEmpty:
 		return true
 	default:
 		return false
@@ -3065,8 +3146,15 @@ type CreateRepositoryRequestVisibility string
 
 // CreateTokenRequest defines model for CreateTokenRequest.
 type CreateTokenRequest struct {
-	Name string `json:"name"`
+	// ExpiresDays 有效期天数，默认 30，上限 90。
+	ExpiresDays *int                       `json:"expiresDays,omitempty"`
+	Name        string                     `json:"name"`
+	Purpose     *CreateTokenRequestPurpose `json:"purpose,omitempty"`
+	Scopes      *[]MachineTokenScope       `json:"scopes,omitempty"`
 }
+
+// CreateTokenRequestPurpose defines model for CreateTokenRequest.Purpose.
+type CreateTokenRequestPurpose string
 
 // CreateUserGroupRequest defines model for CreateUserGroupRequest.
 type CreateUserGroupRequest struct {
@@ -3299,6 +3387,20 @@ type LoginResponse struct {
 	Token string `json:"token"`
 	User  User   `json:"user"`
 }
+
+// MachineTokenScope defines model for MachineTokenScope.
+type MachineTokenScope struct {
+	Actions []MachineTokenScopeActions `json:"actions"`
+
+	// PathPrefix 规范路径段前缀；空前缀覆盖仓库下全部路径。
+	PathPrefix *string `json:"pathPrefix,omitempty"`
+
+	// Repository 仓库名，签发时解析为稳定 ID。
+	Repository string `json:"repository"`
+}
+
+// MachineTokenScopeActions defines model for MachineTokenScope.Actions.
+type MachineTokenScopeActions string
 
 // MaintenanceJob 单个周期作业的状态快照。计数自进程启动累计（重启归零）；
 // 未执行过时 lastStartedAt / lastFinishedAt / lastError 缺省（等价于 null）。
@@ -4137,20 +4239,33 @@ type StatusInfo struct {
 
 // Token defines model for Token.
 type Token struct {
-	CreatedAt string `json:"createdAt"`
-	Id        int64  `json:"id"`
-	Name      string `json:"name"`
+	CreatedAt string  `json:"createdAt"`
+	ExpiresAt *string `json:"expiresAt,omitempty"`
+	Id        int64   `json:"id"`
+	Name      string  `json:"name"`
+
+	// Purpose 机器凭据用途；空为过渡期未限用途旧凭据。
+	Purpose *TokenPurpose        `json:"purpose,omitempty"`
+	Scopes  *[]MachineTokenScope `json:"scopes,omitempty"`
 }
+
+// TokenPurpose 机器凭据用途；空为过渡期未限用途旧凭据。
+type TokenPurpose string
 
 // TokenCreated defines model for TokenCreated.
 type TokenCreated struct {
-	CreatedAt string `json:"createdAt"`
-	Id        int64  `json:"id"`
-	Name      string `json:"name"`
+	CreatedAt string               `json:"createdAt"`
+	ExpiresAt *string              `json:"expiresAt,omitempty"`
+	Id        int64                `json:"id"`
+	Name      string               `json:"name"`
+	Purpose   *TokenCreatedPurpose `json:"purpose,omitempty"`
 
 	// Token 明文令牌，仅此次返回一次。
 	Token string `json:"token"`
 }
+
+// TokenCreatedPurpose defines model for TokenCreated.Purpose.
+type TokenCreatedPurpose string
 
 // TokenList defines model for TokenList.
 type TokenList struct {

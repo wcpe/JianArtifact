@@ -41,6 +41,10 @@ type Principal struct {
 	AuthSource string
 	TokenID    int64
 	TokenName  string
+	// TokenPurpose 与 TokenScopes 仅对 KindToken 生效：机器凭据的用途与作用域，
+	// 在协议裁决时与实时 ACL 取交集；空用途为过渡期旧凭据。
+	TokenPurpose string
+	TokenScopes  []MachineTokenScope
 	// Email 是账号绑定邮箱（可空）；供审计身份快照使用。
 	Email            string
 	WebLoginDisabled bool

@@ -132,19 +132,27 @@ func credentialAccountForProof(ctx context.Context, q sqlx.QueryerContext, p aut
 const tokenCurrentSQL = `t.revoked_at IS NULL AND ((t.account_epoch IS NULL AND t.expires_at IS NULL AND u.account_epoch=1)
  OR (t.account_epoch=u.account_epoch AND t.expires_at>?))`
 
-// CredentialTokenAccount 以一次索引查询裁决秘密摘要、单项吊销、期限与账号代次。
-func (r *UserRepo) CredentialTokenAccount(ctx context.Context, digest string) (CredentialAccount, int64, string, error) {
+// CredentialToken 是机器凭据随账号快照一并裁决的持久字段。
+type CredentialToken struct {
+	ID         int64  `db:"credential_token_id"`
+	Name       string `db:"credential_token_name"`
+	Purpose    string `db:"credential_token_purpose"`
+	ScopesJSON string `db:"credential_token_scopes"`
+}
+
+// CredentialTokenAccount 以一次索引查询裁决秘密摘要、单项吊销、期限、账号代次与用途作用域。
+func (r *UserRepo) CredentialTokenAccount(ctx context.Context, digest string) (CredentialAccount, CredentialToken, error) {
 	var row struct {
 		CredentialAccount
-		TokenID   int64  `db:"credential_token_id"`
-		TokenName string `db:"credential_token_name"`
+		CredentialToken
 	}
-	err := r.db.GetContext(ctx, &row, `SELECT `+credentialUserColumns+`,t.id AS credential_token_id,t.name AS credential_token_name
+	err := r.db.GetContext(ctx, &row, `SELECT `+credentialUserColumns+`,t.id AS credential_token_id,t.name AS credential_token_name,
+  t.purpose AS credential_token_purpose,t.scopes_json AS credential_token_scopes
   FROM api_token t JOIN user u ON u.id=t.user_id WHERE t.token_digest=? AND u.status='active' AND `+tokenCurrentSQL, digest, time.Now().Unix())
 	if errors.Is(err, sql.ErrNoRows) {
 		err = ErrCredentialRejected
 	}
-	return row.CredentialAccount, row.TokenID, row.TokenName, err
+	return row.CredentialAccount, row.CredentialToken, err
 }
 
 func InsertCredentialSessionTx(ctx context.Context, tx *sqlx.Tx, u CredentialAccount, claims *auth.Claims) error {

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strconv"
 	"net/url"
 	"time"
 
@@ -338,6 +339,11 @@ func requirePrincipal(c *gin.Context) (*auth.Principal, bool) {
 		auth.WriteError(c, http.StatusForbidden, "web_login_disabled", "该账号已禁止登录管理端")
 		return nil, false
 	}
+	// 受限机器凭据只承载协议动作，不能进入管理面；未限用途旧凭据保留过渡兼容。
+	if p.Kind == auth.KindToken && p.TokenPurpose != auth.TokenPurposeLegacy {
+		auth.WriteError(c, http.StatusForbidden, "credential_channel_denied", "机器凭据不允许访问管理接口")
+		return nil, false
+	}
 	return p, true
 }
 
@@ -440,6 +446,10 @@ func writeDomainErrWithOperationID(c *gin.Context, err error, operationID string
 		write(http.StatusBadRequest, "operation_limit", "单次实际制品数不得超过 500")
 	case errors.Is(err, domain.ErrNotFound):
 		write(http.StatusNotFound, "not_found", "资源不存在")
+	case errors.Is(err, domain.ErrCredentialScopeDenied):
+		write(http.StatusBadRequest, "invalid_credential_scope", domainErrMessage(err, "机器凭据用途或作用域不允许"))
+	case errors.Is(err, domain.ErrCredentialVersionConflict):
+		write(http.StatusConflict, "credential_version_conflict", domainErrMessage(err, "账号或口令状态已变更"))
 	case errors.Is(err, domain.ErrValidation):
 		write(http.StatusBadRequest, "validation_error", err.Error())
 	case errors.Is(err, domain.ErrUpstream):
@@ -670,7 +680,27 @@ func toAPIConnectionStatus(r *repository.Repository, h domain.RemoteHealth) *Con
 
 // toAPIToken 把行模型转为契约 Token。
 func toAPIToken(t repository.Token) Token {
-	return Token{Id: t.ID, Name: t.Name, CreatedAt: t.CreatedAt}
+	out := Token{Id: t.ID, Name: t.Name, CreatedAt: t.CreatedAt}
+	if t.Purpose != "" {
+		purpose := TokenPurpose(t.Purpose)
+		out.Purpose = &purpose
+	}
+	if scopes, err := auth.ParseMachineScopes(t.ScopesJSON); err == nil && len(scopes) > 0 {
+		list := make([]MachineTokenScope, 0, len(scopes))
+		for _, sc := range scopes {
+			item := MachineTokenScope{Repository: strconv.FormatInt(sc.RepositoryID, 10), PathPrefix: &sc.PathPrefix}
+			for _, a := range sc.Actions {
+				item.Actions = append(item.Actions, MachineTokenScopeActions(a))
+			}
+			list = append(list, item)
+		}
+		out.Scopes = &list
+	}
+	if t.ExpiresAt != nil {
+		expiresAt := time.Unix(*t.ExpiresAt, 0).UTC().Format(time.RFC3339)
+		out.ExpiresAt = &expiresAt
+	}
+	return out
 }
 
 // toAPIAsset 把 asset 行模型转为契约 AssetSummary。

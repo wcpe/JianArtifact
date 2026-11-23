@@ -5577,8 +5577,33 @@ components:
           format: int64
         name:
           type: string
+        purpose:
+          type: string
+          description: 机器凭据用途；空为过渡期未限用途旧凭据。
+          enum: ["", artifact_read, artifact_publish]
+        scopes:
+          type: array
+          items:
+            $ref: "#/components/schemas/MachineTokenScope"
+        expiresAt:
+          type: string
         createdAt:
           type: string
+    MachineTokenScope:
+      type: object
+      required: [repository, actions]
+      properties:
+        repository:
+          type: string
+          description: 仓库名，签发时解析为稳定 ID。
+        pathPrefix:
+          type: string
+          description: 规范路径段前缀；空前缀覆盖仓库下全部路径。
+        actions:
+          type: array
+          items:
+            type: string
+            enum: [read, publish]
     TokenList:
       type: object
       required: [items]
@@ -5593,6 +5618,18 @@ components:
       properties:
         name:
           type: string
+        purpose:
+          type: string
+          enum: ["", artifact_read, artifact_publish]
+        scopes:
+          type: array
+          maxItems: 16
+          items:
+            $ref: "#/components/schemas/MachineTokenScope"
+        expiresDays:
+          type: integer
+          description: 有效期天数，默认 30，上限 90。
+          maximum: 90
     TokenCreated:
       type: object
       required: [id, name, token, createdAt]
@@ -5605,6 +5642,11 @@ components:
         token:
           type: string
           description: 明文令牌，仅此次返回一次。
+        purpose:
+          type: string
+          enum: ["", artifact_read, artifact_publish]
+        expiresAt:
+          type: string
         createdAt:
           type: string
     Repository:
