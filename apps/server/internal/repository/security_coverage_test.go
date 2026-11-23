@@ -13,7 +13,7 @@ func TestSecurityCoverageDurableReplayAndFencing(t *testing.T) {
 	r := NewSecurityCoverageRepo(db)
 	ctx := context.Background()
 	start := time.Date(2026, 1, 1, 1, 0, 0, 0, time.UTC)
-	first, second := NewSecurityEventID(), NewSecurityEventID()
+	first, second := "w1-first", "w2-second"
 	initial, err := r.Open(ctx, first, start)
 	if err != nil || !initial.CoveredFrom.Equal(start) || !initial.CoveredThrough.Equal(start) || initial.Coverage != "unknown" {
 		t.Fatalf("首个检查点错误：%+v，%v", initial, err)
@@ -63,7 +63,7 @@ func TestSecurityCoverageDurableReplayAndFencing(t *testing.T) {
 
 func TestSecurityCoverageFirstBaselineExcludesExistingEvents(t *testing.T) {
 	db := openSecurityEventDB(t)
-	ctx, worker := context.Background(), NewSecurityEventID()
+	ctx, worker := context.Background(), "w1-worker"
 	existing := securityEventFixture("")
 	tx, err := db.BeginTxx(ctx, nil)
 	if err != nil {
@@ -96,7 +96,7 @@ func TestSecurityCoverageFirstBaselineExcludesExistingEvents(t *testing.T) {
 
 func TestSecurityCoverageCountOverflowStaysUnknown(t *testing.T) {
 	db := openSecurityEventDB(t)
-	repo, ctx, worker := NewSecurityCoverageRepo(db), context.Background(), NewSecurityEventID()
+	repo, ctx, worker := NewSecurityCoverageRepo(db), context.Background(), "w1-worker"
 	at := time.Date(2026, 1, 1, 1, 0, 0, 0, time.UTC)
 	if _, err := repo.Open(ctx, worker, at); err != nil {
 		t.Fatal(err)
@@ -123,7 +123,7 @@ func TestSecurityCoverageLowPriorityDoesNotWaitForSQLiteWriter(t *testing.T) {
 	r := NewSecurityCoverageRepo(db)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	lease := NewSecurityEventID()
+	lease := "w1-lease"
 	at := time.Now().UTC().Truncate(time.Millisecond)
 	if _, err := r.Open(ctx, lease, at); err != nil {
 		t.Fatal(err)

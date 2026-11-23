@@ -27,7 +27,7 @@ func TestSecurityQueryViewCoverageWindows(t *testing.T) {
 		}
 	}
 	read(at, at.Add(time.Minute), SecurityQueryCoverageUnknown)
-	collection, worker := NewSecurityCoverageRepo(db), NewSecurityEventID()
+	collection, worker := NewSecurityCoverageRepo(db), "w1-worker"
 	if _, err := collection.Open(ctx, worker, at); err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,7 @@ func TestSecurityQueryViewCoverageWindows(t *testing.T) {
 func TestSecurityQueryViewRetentionFence(t *testing.T) {
 	db, repo, at := securityQueryFixture(t)
 	ctx := context.Background()
-	collection, worker := NewSecurityCoverageRepo(db), NewSecurityEventID()
+	collection, worker := NewSecurityCoverageRepo(db), "w1-worker"
 	if _, err := collection.Open(ctx, worker, at); err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +148,7 @@ func TestSecurityQueryViewObjectFence(t *testing.T) {
 		objects = append(objects, SecurityEventObject{ObjectKind: "asset", CanonicalPath: path})
 	}
 	writeSecurityEvent(t, db, repo, e, objects)
-	collection, worker := NewSecurityCoverageRepo(db), NewSecurityEventID()
+	collection, worker := NewSecurityCoverageRepo(db), "w1-worker"
 	from, through := e.OccurredAt.Add(-time.Second), e.OccurredAt.Add(time.Second)
 	if _, err := collection.Open(ctx, worker, from); err != nil {
 		t.Fatal(err)

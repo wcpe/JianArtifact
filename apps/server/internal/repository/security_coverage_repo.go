@@ -5,6 +5,10 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"math"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -32,12 +36,15 @@ type securityAuditCheckpointRow struct {
 	Watermark   int64  `db:"event_watermark"`
 	CleanStop   bool   `db:"clean_stop"`
 	Coverage    string `db:"coverage"`
+	LeaseEpoch  int64  `db:"lease_epoch"`
 }
 
 // Open 建立写者检查点；旧水位之后未证明覆盖的时间不能恢复计数。
 // at 为零时，在持有写事务的连接上采样服务端时间，不以进程开始或首次尝试的时间倒填。
+// worker 为空时发放新一代写者标识 w<epoch>-<rand> 并接管；显式标识必须是
+// w<epoch>-<rand> 形态且代次高于已发放代次才能接管，旧代一律按失效写者拒绝。
 func (r *SecurityCoverageRepo) Open(ctx context.Context, worker string, at time.Time) (result SecurityAuditCheckpoint, err error) {
-	if worker == "" || !validSecurityEventRef(worker) || (!at.IsZero() && !validSecurityEventTime(at)) {
+	if !validSecurityEventRef(worker) || (!at.IsZero() && !validSecurityEventTime(at)) {
 		return result, ErrSecurityCoverageOrder
 	}
 	err = r.writeLowPriority(ctx, func(tx *sqlx.Tx) error {
@@ -45,36 +52,49 @@ func (r *SecurityCoverageRepo) Open(ctx context.Context, worker string, at time.
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return securityAuditSQLiteError(err)
 		}
-		if row.Worker != worker {
-			if err := activateSecurityAuditWorker(ctx, tx, worker); err != nil {
+		if row.Worker == worker && worker != "" {
+			result, err = currentSecurityAuditCheckpoint(ctx, tx, row)
+			return err
+		}
+		var epoch int64
+		if worker == "" {
+			epoch = row.LeaseEpoch + 1
+			worker = mintSecurityAuditWorkerID(epoch)
+		} else if epoch, err = securityAuditWorkerEpoch(worker); err != nil {
+			return err
+		} else if epoch <= row.LeaseEpoch {
+			// 旧代写者即使墓碑行已被逐出也永远失效，不能靠逐出窗口重放为写者。
+			return ErrSecurityCoverageLease
+		}
+		if err := activateSecurityAuditWorker(ctx, tx, worker, epoch); err != nil {
+			return err
+		}
+		baseline := at
+		if baseline.IsZero() {
+			baseline = time.Now()
+		}
+		now := baseline.UnixMilli()
+		if row.Worker == "" {
+			// 只建立起点；需有后续持久水位才能证明非空覆盖区间。
+			row.CoveredFrom, row.Coverage = now, "pending"
+		} else {
+			// 重叠或墙钟回拨时也不抹掉旧写者留下的未知尾段。
+			now = max(now, row.Heartbeat, row.Covered+1)
+			reason := "unclean_restart"
+			if row.CleanStop {
+				reason = "restart"
+			}
+			gap := SecurityAuditGap{Start: auditSQLTime(row.Covered), End: auditSQLTime(now), Reason: reason, Coverage: "unknown"}
+			if _, err := upsertSecurityAuditGap(ctx, tx, gap); err != nil {
 				return err
 			}
-			baseline := at
-			if baseline.IsZero() {
-				baseline = time.Now()
-			}
-			now := baseline.UnixMilli()
-			if row.Worker == "" {
-				// 只建立起点；需有后续持久水位才能证明非空覆盖区间。
-				row.CoveredFrom, row.Coverage = now, "pending"
-			} else {
-				// 重叠或墙钟回拨时也不抹掉旧写者留下的未知尾段。
-				now = max(now, row.Heartbeat, row.Covered+1)
-				reason := "unclean_restart"
-				if row.CleanStop {
-					reason = "restart"
-				}
-				gap := SecurityAuditGap{Start: auditSQLTime(row.Covered), End: auditSQLTime(now), Reason: reason, Coverage: "unknown"}
-				if _, err := upsertSecurityAuditGap(ctx, tx, gap); err != nil {
-					return err
-				}
-				row.Coverage = "unknown"
-			}
-			row.Worker, row.LastBatch, row.BatchDigest = worker, 0, nil
-			row.Heartbeat, row.Covered, row.CleanStop = now, now, false
-			if err := writeSecurityAuditCheckpoint(ctx, tx, row); err != nil {
-				return err
-			}
+			row.Coverage = "unknown"
+		}
+		row.Worker, row.LastBatch, row.BatchDigest = worker, 0, nil
+		row.Heartbeat, row.Covered, row.CleanStop = now, now, false
+		row.LeaseEpoch = max(row.LeaseEpoch, epoch)
+		if err := writeSecurityAuditCheckpoint(ctx, tx, row); err != nil {
+			return err
 		}
 		result, err = currentSecurityAuditCheckpoint(ctx, tx, row)
 		return err
@@ -85,8 +105,31 @@ func (r *SecurityCoverageRepo) Open(ctx context.Context, worker string, at time.
 	return result, nil
 }
 
-func activateSecurityAuditWorker(ctx context.Context, tx *sqlx.Tx, worker string) error {
-	result, err := tx.ExecContext(ctx, `INSERT INTO security_audit_worker(worker_id) VALUES (?) ON CONFLICT DO NOTHING`, worker)
+// mintSecurityAuditWorkerID 发放内嵌代次的写者标识；代次由检查点单调发放，
+// 写者不能自选更高代次抢占，也不能让旧代次重放。
+func mintSecurityAuditWorkerID(epoch int64) string {
+	return fmt.Sprintf("w%d-%s", epoch, NewSecurityEventID())
+}
+
+// securityAuditWorkerEpoch 从写者标识解析代次；非发放形态按无效输入拒绝。
+func securityAuditWorkerEpoch(worker string) (int64, error) {
+	rest, ok := strings.CutPrefix(worker, "w")
+	if !ok {
+		return 0, ErrSecurityCoverageOrder
+	}
+	digits, rand, ok := strings.Cut(rest, "-")
+	if !ok || rand == "" {
+		return 0, ErrSecurityCoverageOrder
+	}
+	epoch, err := strconv.ParseInt(digits, 10, 64)
+	if err != nil || epoch <= 0 || epoch == math.MaxInt64 {
+		return 0, ErrSecurityCoverageOrder
+	}
+	return epoch, nil
+}
+
+func activateSecurityAuditWorker(ctx context.Context, tx *sqlx.Tx, worker string, epoch int64) error {
+	result, err := tx.ExecContext(ctx, `INSERT INTO security_audit_worker(worker_id,epoch) VALUES (?,?) ON CONFLICT DO NOTHING`, worker, epoch)
 	if err != nil {
 		return securityAuditSQLiteError(err)
 	}
@@ -96,6 +139,11 @@ func activateSecurityAuditWorker(ctx context.Context, tx *sqlx.Tx, worker string
 	}
 	if n != 1 {
 		return ErrSecurityCoverageLease
+	}
+	// 租约表只保留最近 SecurityAuditLeaseRetain 代作审计环；
+	// 更早代次靠检查点的单调 lease_epoch 继续拒绝，不依赖行存续。
+	if _, err := tx.ExecContext(ctx, `DELETE FROM security_audit_worker WHERE epoch <= ?`, epoch-SecurityAuditLeaseRetain); err != nil {
+		return securityAuditSQLiteError(err)
 	}
 	return nil
 }
@@ -166,18 +214,18 @@ func (r *SecurityCoverageRepo) applySecurityAuditBatch(ctx context.Context, tx *
 
 func readSecurityAuditCheckpoint(ctx context.Context, tx *sqlx.Tx) (securityAuditCheckpointRow, error) {
 	var row securityAuditCheckpointRow
-	err := tx.GetContext(ctx, &row, `SELECT worker_id,last_batch,batch_digest,heartbeat_at,covered_from,covered_through,event_watermark,clean_stop,coverage FROM security_audit_checkpoint WHERE singleton=1`)
+	err := tx.GetContext(ctx, &row, `SELECT worker_id,last_batch,batch_digest,heartbeat_at,covered_from,covered_through,event_watermark,clean_stop,coverage,lease_epoch FROM security_audit_checkpoint WHERE singleton=1`)
 	return row, err
 }
 
 func writeSecurityAuditCheckpoint(ctx context.Context, tx *sqlx.Tx, row securityAuditCheckpointRow) error {
 	_, err := tx.ExecContext(ctx, `INSERT INTO security_audit_checkpoint
-		(singleton,worker_id,last_batch,batch_digest,heartbeat_at,covered_from,covered_through,event_watermark,clean_stop,coverage)
-		VALUES (1,?,?,?,?,?,?,?,?,?) ON CONFLICT(singleton) DO UPDATE SET worker_id=excluded.worker_id,
+		(singleton,worker_id,last_batch,batch_digest,heartbeat_at,covered_from,covered_through,event_watermark,clean_stop,coverage,lease_epoch)
+		VALUES (1,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(singleton) DO UPDATE SET worker_id=excluded.worker_id,
 		last_batch=excluded.last_batch,batch_digest=excluded.batch_digest,heartbeat_at=excluded.heartbeat_at,
 		covered_through=excluded.covered_through,event_watermark=excluded.event_watermark,
-		clean_stop=excluded.clean_stop,coverage=excluded.coverage`, row.Worker, row.LastBatch, row.BatchDigest,
-		row.Heartbeat, row.CoveredFrom, row.Covered, row.Watermark, row.CleanStop, row.Coverage)
+		clean_stop=excluded.clean_stop,coverage=excluded.coverage,lease_epoch=excluded.lease_epoch`, row.Worker, row.LastBatch, row.BatchDigest,
+		row.Heartbeat, row.CoveredFrom, row.Covered, row.Watermark, row.CleanStop, row.Coverage, row.LeaseEpoch)
 	return securityAuditSQLiteError(err)
 }
 
@@ -198,7 +246,7 @@ func upsertSecurityAuditGap(ctx context.Context, tx *sqlx.Tx, gap SecurityAuditG
 }
 
 func currentSecurityAuditCheckpoint(ctx context.Context, tx *sqlx.Tx, row securityAuditCheckpointRow) (SecurityAuditCheckpoint, error) {
-	result := SecurityAuditCheckpoint{HeartbeatAt: auditSQLTime(row.Heartbeat), CoveredFrom: auditSQLTime(row.CoveredFrom),
+	result := SecurityAuditCheckpoint{Worker: row.Worker, HeartbeatAt: auditSQLTime(row.Heartbeat), CoveredFrom: auditSQLTime(row.CoveredFrom),
 		CoveredThrough: auditSQLTime(row.Covered), Watermark: row.Watermark, Coverage: row.Coverage}
 	if row.Covered == row.CoveredFrom {
 		result.Coverage = "unknown"

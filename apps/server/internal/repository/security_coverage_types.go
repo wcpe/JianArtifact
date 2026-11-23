@@ -21,6 +21,9 @@ const (
 	SecurityAuditBatchLimit = 50
 	// SecurityAuditGapWindowLimit 是内存中完整保留的 UTC 分钟数。
 	SecurityAuditGapWindowLimit = 64
+	// SecurityAuditLeaseRetain 是持久租约记录保留的最近代次数；
+	// 接管只按单调代次裁决，更早代次的行被逐出也不影响失效写者重放防护。
+	SecurityAuditLeaseRetain = 8
 )
 
 // SecurityAuditObservation 是低优先级的非关键事实，至多附一个已知的拒绝对象。
@@ -85,6 +88,7 @@ type SecurityAuditBatch struct {
 // Coverage 仅适用于 [CoveredFrom, CoveredThrough)，区间之外或为空均未知。
 // 区间内仍须查看缺口；已有事件、水位或心跳不是完整覆盖的证明。
 type SecurityAuditCheckpoint struct {
+	Worker                                   string
 	HeartbeatAt, CoveredFrom, CoveredThrough time.Time
 	Watermark                                int64
 	Coverage                                 string

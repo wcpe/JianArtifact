@@ -19,12 +19,14 @@ const (
 
 func (s *SecurityAuditService) runWorker(ctx context.Context) {
 	defer s.finishWorker(ctx)
-	worker := repository.NewSecurityEventID()
+	// 写者标识由仓储按单调代次发放；空串请求发放新一代并接管检查点。
+	var worker string
 	for {
 		writeCtx, cancel := context.WithTimeout(ctx, securityAuditWriteTimeout)
-		checkpoint, err := s.coverage.Open(writeCtx, worker, time.Time{})
+		checkpoint, err := s.coverage.Open(writeCtx, "", time.Time{})
 		cancel()
 		if err == nil {
+			worker = checkpoint.Worker
 			s.confirmCheckpoint(checkpoint, nil, false)
 			break
 		}
