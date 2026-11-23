@@ -79,7 +79,7 @@ func TestPrivateCandidateStreamAndLimit(t *testing.T) {
 					}
 				}
 			}
-			encoded, err := json.Marshal(candidate)
+			encoded, err := json.Marshal(candidate) //nolint:staticcheck // SA9005：断言不透明句柄序列化为 {} 正是本测试语义。
 			if err != nil || string(encoded) != "{}" {
 				t.Fatalf("句柄不应序列化内部字段：%s，%v", encoded, err)
 			}

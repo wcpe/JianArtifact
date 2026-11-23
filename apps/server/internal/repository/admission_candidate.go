@@ -53,7 +53,7 @@ func (r *AdmissionCandidateRepo) Read(ctx context.Context, fn func(*sqlx.Tx) err
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	return fn(tx)
 }
 
@@ -68,7 +68,7 @@ func (r *AdmissionCandidateRepo) Write(ctx context.Context, fn func(*sqlx.Tx) er
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if err := fn(tx); err != nil {
 		return err
 	}
