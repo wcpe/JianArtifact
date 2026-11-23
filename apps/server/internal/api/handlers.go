@@ -678,8 +678,9 @@ func toAPIConnectionStatus(r *repository.Repository, h domain.RemoteHealth) *Con
 	}
 }
 
-// toAPIToken 把行模型转为契约 Token。
-func toAPIToken(t repository.Token) Token {
+// toAPIToken 把持久 Token 投影为契约对象；names 为仓库 ID→名称，
+// 缺失时回退为 ID 字符串（回显不退化成无法与签发输入对齐的裸 ID）。
+func toAPIToken(t repository.Token, names map[int64]string) Token {
 	out := Token{Id: t.ID, Name: t.Name, CreatedAt: t.CreatedAt}
 	if t.Purpose != "" {
 		purpose := TokenPurpose(t.Purpose)
@@ -688,7 +689,11 @@ func toAPIToken(t repository.Token) Token {
 	if scopes, err := auth.ParseMachineScopes(t.ScopesJSON); err == nil && len(scopes) > 0 {
 		list := make([]MachineTokenScope, 0, len(scopes))
 		for _, sc := range scopes {
-			item := MachineTokenScope{Repository: strconv.FormatInt(sc.RepositoryID, 10), PathPrefix: &sc.PathPrefix}
+			repoName, ok := names[sc.RepositoryID]
+			if !ok {
+				repoName = strconv.FormatInt(sc.RepositoryID, 10)
+			}
+			item := MachineTokenScope{Repository: repoName, PathPrefix: &sc.PathPrefix}
 			for _, a := range sc.Actions {
 				item.Actions = append(item.Actions, MachineTokenScopeActions(a))
 			}

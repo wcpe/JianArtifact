@@ -22,9 +22,25 @@ func (h *Handlers) ListTokens(c *gin.Context) {
 		writeDomainErr(c, err)
 		return
 	}
+	var names map[int64]string
+	seen := map[int64]bool{}
+	var ids []int64
+	for _, t := range rows {
+		if scopes, err := auth.ParseMachineScopes(t.ScopesJSON); err == nil {
+			for _, sc := range scopes {
+				if !seen[sc.RepositoryID] {
+					seen[sc.RepositoryID] = true
+					ids = append(ids, sc.RepositoryID)
+				}
+			}
+		}
+	}
+	if len(ids) > 0 && h.repos != nil {
+		names = h.repos.RepositoryNames(ids)
+	}
 	items := make([]Token, 0, len(rows))
 	for _, t := range rows {
-		items = append(items, toAPIToken(t))
+		items = append(items, toAPIToken(t, names))
 	}
 	c.JSON(http.StatusOK, TokenList{Items: items})
 }
