@@ -182,6 +182,7 @@ func TestAccountRevocationLegacyAndTransitions(t *testing.T) {
 
 func TestAccountRevocationIssuanceFence(t *testing.T) {
 	cfg, svc := newSourceTestApplication(t, "raw")
+	svc.authSvc.SetMfaService(nil)
 	_, u, err := svc.authSvc.Bootstrap("issuance-admin", auditTestPassword)
 	if err != nil {
 		t.Fatal(err)
@@ -234,6 +235,7 @@ func TestAccountRevocationIssuanceFence(t *testing.T) {
 
 func TestAccountRevocationSingleCredentialAndExpiry(t *testing.T) {
 	cfg, svc := newSourceTestApplication(t, "raw")
+	svc.authSvc.SetMfaService(nil)
 	jwt, u, err := svc.authSvc.Bootstrap("single-revoke-admin", auditTestPassword)
 	if err != nil {
 		t.Fatal(err)

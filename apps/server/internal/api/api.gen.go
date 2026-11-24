@@ -3518,10 +3518,21 @@ type MaintenanceRestartResultScope string
 // MetricGroupState defines model for MetricGroupState.
 type MetricGroupState string
 
+// MfaClaimRequest defines model for MfaClaimRequest.
+type MfaClaimRequest struct {
+	// ClaimTicket 受控操作者出具的一次性认领票明文
+	ClaimTicket string `json:"claimTicket"`
+	Password    string `json:"password"`
+	Username    string `json:"username"`
+}
+
 // MfaConfirmRequest defines model for MfaConfirmRequest.
 type MfaConfirmRequest struct {
 	ChallengeToken string `json:"challengeToken"`
-	Otp            string `json:"otp"`
+
+	// ClaimTicket 认领来源挑战必须出示的在途 claim_admin 票（仅认领流程使用）
+	ClaimTicket *string `json:"claimTicket,omitempty"`
+	Otp         string  `json:"otp"`
 }
 
 // MfaEnrollResponse defines model for MfaEnrollResponse.
@@ -5327,6 +5338,9 @@ type BootstrapJSONRequestBody = BootstrapRequest
 // LoginJSONRequestBody defines body for Login for application/json ContentType.
 type LoginJSONRequestBody = LoginRequest
 
+// ClaimMfaEnrollJSONRequestBody defines body for ClaimMfaEnroll for application/json ContentType.
+type ClaimMfaEnrollJSONRequestBody = MfaClaimRequest
+
 // ConfirmMfaEnrollJSONRequestBody defines body for ConfirmMfaEnroll for application/json ContentType.
 type ConfirmMfaEnrollJSONRequestBody = MfaConfirmRequest
 
@@ -5738,6 +5752,9 @@ type ServerInterface interface {
 	// GetCurrentUser 当前会话对应的用户（OIDC 回调后前端据此取身份快照）
 	// (GET /api/v1/auth/me)
 	GetCurrentUser(c *gin.Context)
+	// ClaimMfaEnroll 第一因素 + 认领票进入受控登记（返回挑战与登记 URI）
+	// (POST /api/v1/auth/mfa/claim)
+	ClaimMfaEnroll(c *gin.Context)
 	// BeginMfaEnroll 发起强因子登记（返回挑战与登记 URI；会话内限一次活跃登记）
 	// (POST /api/v1/auth/mfa/enroll)
 	BeginMfaEnroll(c *gin.Context)
@@ -6131,6 +6148,19 @@ func (siw *ServerInterfaceWrapper) GetCurrentUser(c *gin.Context) {
 	}
 
 	siw.Handler.GetCurrentUser(c)
+}
+
+// ClaimMfaEnroll operation middleware
+func (siw *ServerInterfaceWrapper) ClaimMfaEnroll(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ClaimMfaEnroll(c)
 }
 
 // BeginMfaEnroll operation middleware
@@ -9425,6 +9455,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.POST(options.BaseURL+"/api/v1/auth/login", wrapper.Login)
 	router.POST(options.BaseURL+"/api/v1/auth/mfa/verify", wrapper.VerifyLoginMfa)
 	router.POST(options.BaseURL+"/api/v1/auth/mfa/recover", wrapper.RecoverLoginMfa)
+	router.POST(options.BaseURL+"/api/v1/auth/mfa/claim", wrapper.ClaimMfaEnroll)
 	router.GET(options.BaseURL+"/api/v1/auth/mfa/status", wrapper.GetMfaStatus)
 	router.POST(options.BaseURL+"/api/v1/auth/mfa/enroll", wrapper.BeginMfaEnroll)
 	router.POST(options.BaseURL+"/api/v1/auth/mfa/enroll/confirm", wrapper.ConfirmMfaEnroll)

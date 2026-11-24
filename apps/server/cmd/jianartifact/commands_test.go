@@ -163,6 +163,7 @@ func canLogin(t *testing.T, username, password string) bool {
 		t.Fatalf("装配服务：%v", err)
 	}
 	defer func() { _ = svc.db.Close() }()
+	svc.authSvc.SetMfaService(nil)
 	_, _, err = svc.authSvc.Login(username, password)
 	return err == nil
 }
@@ -488,10 +489,12 @@ func TestApplicationHandlerLoginJWTAuthenticatesManagementWrite(t *testing.T) {
 	if code := request(http.MethodPost, "/api/v1/auth/bootstrap", "", api.BootstrapRequest{Username: "admin", Password: "admin-pass-123"}, &bootstrap); code != http.StatusCreated {
 		t.Fatalf("HTTP 自举状态 = %d", code)
 	}
+	// 未登记强因子的管理员凭密码登录只得 claim_required；可凭据来自自举会话。
 	var login api.LoginResponse
-	if code := request(http.MethodPost, "/api/v1/auth/login", "", api.LoginRequest{Username: "admin", Password: "admin-pass-123"}, &login); code != http.StatusOK || login.Token == "" {
-		t.Fatalf("HTTP 登录状态 = %d，token 长度=%d", code, len(login.Token))
+	if code := request(http.MethodPost, "/api/v1/auth/login", "", api.LoginRequest{Username: "admin", Password: "admin-pass-123"}, &login); code != http.StatusOK || login.Next != api.ClaimRequired || login.Token != "" {
+		t.Fatalf("HTTP 登录状态 = %d next=%q，期望 claim_required", code, login.Next)
 	}
+	login.Token = bootstrap.Token
 	format := api.CreateRepositoryRequestFormat("raw")
 	repoType := api.CreateRepositoryRequestType("hosted")
 	if code := request(http.MethodPost, "/api/v1/repositories", login.Token, api.CreateRepositoryRequest{

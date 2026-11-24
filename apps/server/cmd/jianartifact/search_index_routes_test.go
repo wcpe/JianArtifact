@@ -75,17 +75,21 @@ func TestSearchIndexRoutesRegisteredThroughProductionRouter(t *testing.T) {
 	}
 
 	// 管理员：先自举再登录。
+	// 自举签发的首个管理员会话仍然有效；未登记强因子的管理员
+	// 再走密码登录只会得到 claim_required，不能取得第二个会话。
+	var boot api.LoginResponse
 	if code, body := request(http.MethodPost, "/api/v1/auth/bootstrap", "", api.BootstrapRequest{
 		Username: "admin", Password: "admin-pass-123",
-	}, nil); code != http.StatusCreated {
+	}, &boot); code != http.StatusCreated {
 		t.Fatalf("自举状态 = %d：%s", code, body)
 	}
 	var login api.LoginResponse
 	if code, body := request(http.MethodPost, "/api/v1/auth/login", "", api.LoginRequest{
 		Username: "admin", Password: "admin-pass-123",
-	}, &login); code != http.StatusOK {
-		t.Fatalf("登录状态 = %d：%s", code, body)
+	}, &login); code != http.StatusOK || login.Next != api.ClaimRequired || login.Token != "" {
+		t.Fatalf("登录状态 = %d next=%q：%s，期望 claim_required", code, login.Next, body)
 	}
+	login.Token = boot.Token
 
 	// 状态端点：字段齐全（全新库上回填未开始 → ready=false、计数为 0）。
 	var status map[string]any

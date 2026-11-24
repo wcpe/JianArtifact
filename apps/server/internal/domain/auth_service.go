@@ -228,8 +228,9 @@ func (s *AuthService) createSessionForNewUser(username, password string) (string
 		if errors.Is(err, repository.ErrCredentialRejected) {
 			err = ErrAlreadyInitialized
 		}
+		// 空库首个管理员的安装认领票门属 claim_install 增量；当前 bootstrap 不过门。
 		return u, err
-	}, "", true)
+	}, "", false)
 	if err != nil {
 		return "", nil, err
 	}
@@ -261,6 +262,13 @@ func (s *AuthService) issueCredentialOutcome(ctx context.Context, account func(*
 				o.ChallengeID = ch.ChallengeID
 				o.ChallengeToken = challengeToken
 				o.ExpiresAt = time.Unix(ch.ExpiresAt, 0)
+				outcome = o
+				return nil
+			}
+			// 管理员未登记强因子不得获完整会话：仅口令只够进入认领引导，
+			// 须由受控认领票 + 因子登记完成后重新登录。
+			if current.Role == "admin" {
+				o.Next = AuthNextClaimRequired
 				outcome = o
 				return nil
 			}

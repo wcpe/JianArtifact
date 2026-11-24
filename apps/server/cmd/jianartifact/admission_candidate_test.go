@@ -204,6 +204,9 @@ func TestAdmissionCandidateApplicationRestart(t *testing.T) {
 	}
 
 	next, err := openServices(cfg)
+	if err == nil {
+		next.authSvc.SetMfaService(nil)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/api"
+	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
 // testTotpAt 用 RFC 6238 口径计算指定步的 OTP（与领域实现同一算法，避免跨包私用）。
@@ -169,5 +170,64 @@ func TestMfaLoginGateEndToEnd(t *testing.T) {
 	if code := e.jsonReq(t, http.MethodPost, "/api/v1/auth/mfa/verify", "",
 		api.MfaVerifyRequest{ChallengeToken: *gated3.ChallengeToken, Otp: nextStepOtp(t, e, newSecret)}, &relogin); code != http.StatusOK || relogin.Token == "" {
 		t.Fatalf("恢复后兑现状态码 = %d，期望 200 且签发会话", code)
+	}
+
+	// ── 受控认领：未登记管理员登录只得 claim_required，须持票完成认领。 ──
+	adminRole := api.CreateUserRequestRoleAdmin
+	var admin2 api.User
+	// done 会话已被恢复流程的账号代次提升撤销，使用恢复后的会话。
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/users", relogin.Token,
+		api.CreateUserRequest{Username: "admin-claim", Password: "claim-pass-123", Role: &adminRole}, &admin2); code != http.StatusCreated {
+		t.Fatalf("创建管理员状态码 = %d，期望 201", code)
+	}
+	var noFactor api.LoginResponse
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/auth/login", "",
+		api.LoginRequest{Username: "admin-claim", Password: "claim-pass-123"}, &noFactor); code != http.StatusOK {
+		t.Fatalf("未登记管理员登录状态码 = %d，期望 200", code)
+	}
+	if noFactor.Next != api.ClaimRequired || noFactor.Token != "" {
+		t.Fatalf("未登记管理员裁决 = %q，期望 claim_required 且无会话令牌", noFactor.Next)
+	}
+
+	// 本机受控 CLI 出具 claim_admin 票（测试直连领域服务，等价 admin mfa-claim 命令）。
+	ticket, err := e.mfaSvc.IssueClaimTicket(t.Context(), "admin-claim", repository.ClaimPurposeAdmin, "cli", "test-claim")
+	if err != nil {
+		t.Fatalf("出具认领票：%v", err)
+	}
+	var claimEn api.MfaEnrollResponse
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/auth/mfa/claim", "",
+		api.MfaClaimRequest{Username: "admin-claim", Password: "claim-pass-123", ClaimTicket: ticket.Ticket}, &claimEn); code != http.StatusOK || claimEn.EnrollmentUri == "" {
+		t.Fatalf("认领兑换状态码 = %d，期望 200 且返回登记 URI", code)
+	}
+	claimSecret := totpSecretFromURI(t, claimEn.EnrollmentUri)
+
+	// 认领挑战缺票确认 → 401（一次认领成立要求）。
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/auth/mfa/enroll/confirm", "",
+		api.MfaConfirmRequest{ChallengeToken: claimEn.ChallengeToken, Otp: testTotp(t, claimSecret, time.Now())}, &bad); code != http.StatusUnauthorized {
+		t.Fatalf("缺票确认状态码 = %d，期望 401", code)
+	}
+	claimTicket := ticket.Ticket
+	var claimCodes api.MfaRecoveryCodes
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/auth/mfa/enroll/confirm", "",
+		api.MfaConfirmRequest{ChallengeToken: claimEn.ChallengeToken, Otp: testTotp(t, claimSecret, time.Now()), ClaimTicket: &claimTicket}, &claimCodes); code != http.StatusOK || len(claimCodes.RecoveryCodes) != 10 {
+		t.Fatalf("认领确认状态码 = %d，期望 200 且 10 枚码", code)
+	}
+
+	// 票一次性：同票再次兑换被拒。
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/auth/mfa/claim", "",
+		api.MfaClaimRequest{Username: "admin-claim", Password: "claim-pass-123", ClaimTicket: ticket.Ticket}, &bad); code != http.StatusUnauthorized {
+		t.Fatalf("票重放状态码 = %d，期望 401", code)
+	}
+
+	// 认领完成 → 登录走标准 mfa_required 门。
+	var cg api.LoginResponse
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/auth/login", "",
+		api.LoginRequest{Username: "admin-claim", Password: "claim-pass-123"}, &cg); code != http.StatusOK || cg.Next != api.MfaRequired {
+		t.Fatalf("认领后登录状态码 = %d 裁决 = %q，期望 mfa_required", code, cg.Next)
+	}
+	var cdone api.LoginResponse
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/auth/mfa/verify", "",
+		api.MfaVerifyRequest{ChallengeToken: *cg.ChallengeToken, Otp: nextStepOtp(t, e, claimSecret)}, &cdone); code != http.StatusOK || cdone.Token == "" {
+		t.Fatalf("认领后兑现状态码 = %d，期望 200 且签发会话", code)
 	}
 }

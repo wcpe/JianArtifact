@@ -29,6 +29,9 @@ func newSourceTestApplication(t *testing.T, formats string) (*config.Config, *ap
 	if err != nil {
 		t.Fatalf("装配服务：%v", err)
 	}
+	// 本夹具覆盖审计/协议链路，管理员强认证门由 httpserver 端到端验收；
+	// 关掉签发门避免夹具管理员登录被 claim_required 拦截。
+	svc.authSvc.SetMfaService(nil)
 	t.Cleanup(func() { _ = svc.db.Close() })
 	return cfg, svc
 }

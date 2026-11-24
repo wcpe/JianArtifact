@@ -137,12 +137,44 @@ func (h *Handlers) ConfirmMfaEnroll(c *gin.Context) {
 	if p, has := auth.PrincipalFrom(c); has && p.Kind == auth.KindSession {
 		binding = p.SessionID
 	}
-	codes, err := h.mfa.ConfirmFactorEnrollment(c.Request.Context(), req.ChallengeToken, req.Otp, binding)
+	var claimTicket string
+	if req.ClaimTicket != nil {
+		claimTicket = *req.ClaimTicket
+	}
+	codes, err := h.mfa.ConfirmFactorEnrollment(c.Request.Context(), req.ChallengeToken, req.Otp, claimTicket, binding)
 	if err != nil {
 		writeDomainErr(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, MfaRecoveryCodes{RecoveryCodes: codes})
+}
+
+// ClaimMfaEnroll 用第一因素 + 认领票进入受控登记：
+// 管理员未登记强因子登录只会得到 claim_required，须持受控票在此换登记挑战，
+// 再与票一起提交 enroll/confirm 完成一次认领。无会话要求（登录不上的人才需要认领）。
+func (h *Handlers) ClaimMfaEnroll(c *gin.Context) {
+	if h.mfa == nil {
+		writeDomainErr(c, domain.ErrMfaFactorUnavailable)
+		return
+	}
+	var req MfaClaimRequest
+	if !bindJSON(c, &req) {
+		return
+	}
+	if req.Username == "" || req.Password == "" || req.ClaimTicket == "" {
+		auth.WriteError(c, http.StatusBadRequest, "bad_request", "账号、口令与认领票不能为空")
+		return
+	}
+	binding := ""
+	if p, has := auth.PrincipalFrom(c); has && p.Kind == auth.KindSession {
+		binding = p.SessionID
+	}
+	en, err := h.mfa.RedeemClaimTicket(c.Request.Context(), req.Username, req.Password, req.ClaimTicket, binding)
+	if err != nil {
+		writeDomainErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, mfaEnrollResponse(en))
 }
 
 func mfaEnrollResponse(en *domain.MfaEnrollment) MfaEnrollResponse {

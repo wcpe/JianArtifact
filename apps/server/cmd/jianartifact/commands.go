@@ -37,6 +37,8 @@ func adminCmd(args []string) error {
 		return adminBackfillTimes(args[1:])
 	case "emit-asset-times":
 		return adminEmitAssetTimes(args[1:])
+	case "mfa-claim":
+		return adminMfaClaim(args[1:])
 	default:
 		return fmt.Errorf("未知 admin 子命令：%s（支持 reset / backfill-checksums / backfill-times / emit-asset-times）", args[0])
 	}
@@ -222,6 +224,40 @@ func parseNexusTime(s string) (string, error) {
 // adminReset 离线直连 SQLite 重置 / 创建管理员账号与口令：
 // 该用户名不存在则以 admin 角色创建；已存在则重置口令并确保 admin / active。
 // 未提供 --password 时交互式安全录入（不回显）。用于账号锁死后的恢复。
+// adminMfaClaim 本机受控出具一次性 claim_admin 认领票（仅 OS 授权操作者可执行本命令）。
+// 票绑定目标账号当前代次，15 分钟/5 次尝试；明文仅此处展示一次，用于网页认领引导。
+func adminMfaClaim(args []string) error {
+	fs := flag.NewFlagSet("admin mfa-claim", flag.ContinueOnError)
+	username := fs.String("username", "", "目标账号用户名（必填）")
+	reason := fs.String("reason", "", "认领原因（审计留痕）")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *username == "" {
+		return errors.New("必须提供 --username")
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("加载配置：%w", err)
+	}
+	svc, err := openServices(cfg)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = svc.db.Close() }()
+	if svc.mfaSvc == nil {
+		return errors.New("强认证服务未装配（因子密钥缺失）")
+	}
+	t, err := svc.mfaSvc.IssueClaimTicket(context.Background(), *username,
+		repository.ClaimPurposeAdmin, "cli", *reason)
+	if err != nil {
+		return fmt.Errorf("出具认领票失败：%w", err)
+	}
+	fmt.Printf("已为账号 %q 出具一次性认领票（%s 过期，仅展示一次）：\n%s\n",
+		t.Username, t.ExpiresAt.Local().Format("2006-01-02 15:04:05"), t.Ticket)
+	return nil
+}
+
 func adminReset(args []string) error {
 	fs := flag.NewFlagSet("admin reset", flag.ContinueOnError)
 	username := fs.String("username", "admin", "管理员用户名")

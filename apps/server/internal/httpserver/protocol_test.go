@@ -41,6 +41,8 @@ type protocolEnv struct {
 	auditLogs  *repository.AuditLogRepo
 	blobs      *blobstore.Store
 	sourceNode string
+	mfaSvc     *domain.SecurityMfaService
+	userRepo   *repository.UserRepo
 }
 
 // newProtocolEnv 装配完整服务端：契约路由 + Raw 协议路由（真实持久化 + blob 存储）。
@@ -156,6 +158,7 @@ func newProtocolEnvConfigured(t *testing.T, publicURL string, enabled formats.Se
 		h:  srv.Handler(nil), rawHandler: rawHandler, repoRepo: repoRepo, assetRepo: assetRepo,
 		formatMeta: formatMetadataRepo,
 		auditLogs:  auditLogs, blobs: blobs, sourceNode: nodeIdentity.NodeID(),
+		mfaSvc: mfaSvc, userRepo: userRepo,
 	}
 }
 

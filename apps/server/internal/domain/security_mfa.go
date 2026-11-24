@@ -209,7 +209,7 @@ func (s *SecurityMfaService) BeginFactorEnrollment(ctx context.Context, account 
 // 读事务只取挑战与因子状态，口令比对在锁外；命中走条件写（消耗步、消费挑战、
 // 退役旧因子、激活新因子、签发恢复码），未命中走独立的尝试扣减事务——
 // 失败也必须落额度扣减，不能随验证错误回滚。
-func (s *SecurityMfaService) ConfirmFactorEnrollment(ctx context.Context, challengeToken, otp, sessionBinding string) ([]string, error) {
+func (s *SecurityMfaService) ConfirmFactorEnrollment(ctx context.Context, challengeToken, otp, claimTicket, sessionBinding string) ([]string, error) {
 	now := s.now().Unix()
 	var challenge repository.SecurityAuthChallenge
 	var factor repository.SecurityTotpFactor
@@ -231,6 +231,20 @@ func (s *SecurityMfaService) ConfirmFactorEnrollment(ctx context.Context, challe
 		}
 		if f.ChallengeID != c.ChallengeID {
 			return repository.ErrSecurityChallengeRejected
+		}
+		// 认领来源挑战要求一次认领成立：提交方必须同时出示绑定同账号同代次的
+		// 在途 claim_admin 票，票在激活事务内消费；缺票/错票统一拒绝。
+		if c.AuthSource == "claim" {
+			if claimTicket == "" {
+				return repository.ErrSecurityChallengeRejected
+			}
+			t, terr := repository.TouchClaimTicketTx(ctx, tx, hashChallengeToken(claimTicket), repository.ClaimPurposeAdmin, now)
+			if terr != nil {
+				return terr
+			}
+			if t.UserID == nil || *t.UserID != c.UserID || t.AccountEpoch != c.AccountEpoch {
+				return repository.ErrSecurityChallengeRejected
+			}
 		}
 		challenge, factor = c, f
 		return nil
@@ -283,6 +297,16 @@ func (s *SecurityMfaService) ConfirmFactorEnrollment(ctx context.Context, challe
 		}
 		if err := repository.ActivateTotpFactorTx(ctx, tx, factor.FactorID, challenge.UserID, now); err != nil {
 			return err
+		}
+		// 认领票与因子激活同事务消费：票只用一次，失败重试须操作者重新出具。
+		if challenge.AuthSource == "claim" {
+			t, terr := repository.ClaimTicketByTokenHashTx(ctx, tx, hashChallengeToken(claimTicket))
+			if terr != nil {
+				return terr
+			}
+			if err := repository.ConsumeClaimTicketTx(ctx, tx, t.TicketID, now); err != nil {
+				return err
+			}
 		}
 		issued, err := s.issueRecoveryBatch(ctx, tx, challenge.UserID, factor.FactorID, now)
 		if err != nil {

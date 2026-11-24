@@ -712,6 +712,29 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "429":
           $ref: "#/components/responses/TooManyRequests"
+  /api/v1/auth/mfa/claim:
+    post:
+      operationId: claimMfaEnroll
+      summary: 第一因素 + 认领票进入受控登记（返回挑战与登记 URI）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MfaClaimRequest"
+      responses:
+        "200":
+          description: 票与口令有效，返回登记挑战与 URI
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MfaEnrollResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
   /api/v1/auth/mfa/status:
     get:
       operationId: getMfaStatus
@@ -5455,6 +5478,20 @@ components:
           type: string
           minLength: 6
           maxLength: 6
+        claimTicket:
+          type: string
+          description: 认领来源挑战必须出示的在途 claim_admin 票（仅认领流程使用）
+    MfaClaimRequest:
+      type: object
+      required: [username, password, claimTicket]
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+        claimTicket:
+          type: string
+          description: 受控操作者出具的一次性认领票明文
     MfaVerifyRequest:
       type: object
       required: [challengeToken, otp]
