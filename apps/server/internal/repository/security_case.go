@@ -135,17 +135,17 @@ func CaseTimelineTx(ctx context.Context, tx *sqlx.Tx, caseID string, limit int) 
 
 // SecurityCaseUploadRow uploads 栏：关联事件的对象明细。
 type SecurityCaseUploadRow struct {
-	EventID                string  `db:"event_id"`
-	EventType              string  `db:"event_type"`
-	CanonicalPath          string  `db:"canonical_path"`
-	ObjectKind             string  `db:"object_kind"`
-	ObjectID               string  `db:"object_id"`
-	Digest                 string  `db:"digest"`
-	SizeBytes              *int64  `db:"size_bytes"`
-	ManifestDigest         string  `db:"manifest_digest"`
-	TargetVersion          string  `db:"target_version"`
-	RepositoryNameSnapshot string  `db:"repository_name_snapshot"`
-	LinkKind               string  `db:"link_kind"`
+	EventID                string `db:"event_id"`
+	EventType              string `db:"event_type"`
+	CanonicalPath          string `db:"canonical_path"`
+	ObjectKind             string `db:"object_kind"`
+	ObjectID               string `db:"object_id"`
+	Digest                 string `db:"digest"`
+	SizeBytes              *int64 `db:"size_bytes"`
+	ManifestDigest         string `db:"manifest_digest"`
+	TargetVersion          string `db:"target_version"`
+	RepositoryNameSnapshot string `db:"repository_name_snapshot"`
+	LinkKind               string `db:"link_kind"`
 }
 
 // CaseUploadsTx 返回案件关联事件的对象（上传清单证据）。
@@ -162,16 +162,16 @@ func CaseUploadsTx(ctx context.Context, tx *sqlx.Tx, caseID string, limit int) (
 
 // SecurityCaseIdentityRow identity 栏：关联事件的主体/来源去重组。
 type SecurityCaseIdentityRow struct {
-	ActorUserID       *int64  `db:"actor_user_id"`
-	ActorNameSnapshot string  `db:"actor_name_snapshot"`
-	CredentialID      string  `db:"credential_id"`
-	SessionID         string  `db:"session_id"`
-	AuthMethod        string  `db:"auth_method"`
-	AuthStrength      string  `db:"auth_strength"`
-	ClientIPFamily    int     `db:"client_ip_family"`
-	ClientIP          []byte  `db:"client_ip"`
-	UserAgent         string  `db:"user_agent"`
-	Events            int     `db:"events"`
+	ActorUserID       *int64 `db:"actor_user_id"`
+	ActorNameSnapshot string `db:"actor_name_snapshot"`
+	CredentialID      string `db:"credential_id"`
+	SessionID         string `db:"session_id"`
+	AuthMethod        string `db:"auth_method"`
+	AuthStrength      string `db:"auth_strength"`
+	ClientIPFamily    int    `db:"client_ip_family"`
+	ClientIP          []byte `db:"client_ip"`
+	UserAgent         string `db:"user_agent"`
+	Events            int    `db:"events"`
 }
 
 // CaseIdentityTx 按主体×凭据×会话×来源去重统计关联事件。

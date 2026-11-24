@@ -2,9 +2,9 @@ package domain
 
 import (
 	"context"
-	"time"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 

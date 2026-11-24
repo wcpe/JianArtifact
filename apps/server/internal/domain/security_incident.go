@@ -16,7 +16,8 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 
-	"regexp")
+	"regexp"
+)
 
 // FR-168：事故处置动作生命周期——预览→确认→执行，幂等、逐项结果、近期强认证由处理层裁决。
 
@@ -936,6 +937,14 @@ func (s *SecurityIncidentService) SetQQBinding(ctx context.Context, p *auth.Prin
 		return ErrAdmissionForbidden
 	}
 	if targetUserID <= 0 || !qqOpenidPattern.MatchString(openid) {
+		return ErrValidation
+	}
+	// 绑定目标必须仍是活动管理员（QQ 通知只投管理员；绑定降级账号没有意义）。
+	u, err := s.users.GetByID(targetUserID)
+	if err != nil {
+		return err
+	}
+	if u.Role != "admin" || u.Status != "active" {
 		return ErrValidation
 	}
 	return s.repo.Write(ctx, func(tx *sqlx.Tx) error {

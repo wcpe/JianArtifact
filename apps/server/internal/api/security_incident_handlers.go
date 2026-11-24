@@ -624,7 +624,7 @@ func (h *Handlers) GetSecurityCase(c *gin.Context, caseID string) {
 	}
 	d, err := h.incident.SecurityCaseDetail(c.Request.Context(), p, caseID)
 	if err != nil {
-		auth.WriteError(c, http.StatusNotFound, "security_case_not_found", "案件不存在")
+		writeDomainErr(c, err)
 		return
 	}
 	out := SecurityCaseDetail{Case: caseRowToModel(&d.Case), Findings: []SecurityFinding{}, Links: []SecurityCaseLink{}}
@@ -680,7 +680,7 @@ func (h *Handlers) GetSecurityCaseSection(c *gin.Context, caseID string, section
 	case Timeline:
 		rows, err := h.incident.SecurityCaseTimeline(ctx, p, caseID, limit)
 		if err != nil {
-			auth.WriteError(c, http.StatusNotFound, "security_case_not_found", "案件不存在")
+			writeDomainErr(c, err)
 			return
 		}
 		items := make([]gin.H, 0, len(rows))
@@ -693,7 +693,7 @@ func (h *Handlers) GetSecurityCaseSection(c *gin.Context, caseID string, section
 	case Uploads:
 		rows, err := h.incident.SecurityCaseUploads(ctx, p, caseID, limit)
 		if err != nil {
-			auth.WriteError(c, http.StatusNotFound, "security_case_not_found", "案件不存在")
+			writeDomainErr(c, err)
 			return
 		}
 		items := make([]gin.H, 0, len(rows))
@@ -707,7 +707,7 @@ func (h *Handlers) GetSecurityCaseSection(c *gin.Context, caseID string, section
 	case Identity:
 		rows, err := h.incident.SecurityCaseIdentity(ctx, p, caseID, limit)
 		if err != nil {
-			auth.WriteError(c, http.StatusNotFound, "security_case_not_found", "案件不存在")
+			writeDomainErr(c, err)
 			return
 		}
 		items := make([]gin.H, 0, len(rows))
@@ -721,7 +721,7 @@ func (h *Handlers) GetSecurityCaseSection(c *gin.Context, caseID string, section
 	case ActionsEvidence:
 		out, err := h.incident.SecurityCaseActionsEvidence(ctx, p, caseID, limit)
 		if err != nil {
-			auth.WriteError(c, http.StatusNotFound, "security_case_not_found", "案件不存在")
+			writeDomainErr(c, err)
 			return
 		}
 		findings := make([]gin.H, 0, len(out.Findings))
