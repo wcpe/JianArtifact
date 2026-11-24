@@ -108,7 +108,7 @@ export function SecurityCaseDetailPage() {
         <Tabs.Panel value="timeline" pt="sm">
           {loading === "timeline" ? <Loader size="sm" /> : <MiniTable
             cols={[{ label: "时间", key: "occurredAt" }, { label: "事件", key: "eventType" }, { label: "结果", key: "outcome" }, { label: "错误", key: "errorCode" }, { label: "来源", key: "clientIp" }, { label: "关联", key: "linkKind" }]}
-            rows={items("timeline")} />}
+            rows={items("timeline").map((r) => ({ ...r, occurredAt: r.occurredAt ? new Date(Number(r.occurredAt) * 1000).toLocaleString() : "-" }))} />}
         </Tabs.Panel>
         <Tabs.Panel value="uploads" pt="sm">
           {loading === "uploads" ? <Loader size="sm" /> : <MiniTable
