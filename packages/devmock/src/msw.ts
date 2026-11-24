@@ -2798,10 +2798,17 @@ export const handlers = [
           : [];
       // 成功的版本按 plan 同源的文件清单落进回收站；失败坐标不进回收站。
       const failedKeys = new Set(
-        failures.map((f) => `${f.coordinate.groupId}:${f.coordinate.artifactId}:${f.coordinate.version}`),
+        failures.map(
+          (f) => `${f.coordinate.groupId}:${f.coordinate.artifactId}:${f.coordinate.version}`,
+        ),
       );
       for (const raw of versions) {
-        const coord = raw as { groupId?: string; artifactId?: string; version?: string; buildId?: string };
+        const coord = raw as {
+          groupId?: string;
+          artifactId?: string;
+          version?: string;
+          buildId?: string;
+        };
         const key = `${coord.groupId ?? ""}:${coord.artifactId ?? ""}:${coord.version ?? ""}`;
         if (!coord.groupId || !coord.artifactId || !coord.version || failedKeys.has(key)) {
           continue;

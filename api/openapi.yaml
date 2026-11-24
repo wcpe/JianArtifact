@@ -7975,7 +7975,8 @@ components:
         status:
           type: string
           enum: [staged, restored, purged]
-          x-enum-varnames: [AssetTrashStatusStaged, AssetTrashStatusRestored, AssetTrashStatusPurged]
+          x-enum-varnames:
+            [AssetTrashStatusStaged, AssetTrashStatusRestored, AssetTrashStatusPurged]
         trashedAt:
           type: string
         resolvedAt:
