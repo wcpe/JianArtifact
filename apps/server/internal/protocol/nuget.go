@@ -226,10 +226,41 @@ func (h *NuGetHandler) Push(c *gin.Context) {
 		auth.WriteError(c, http.StatusInternalServerError, "internal", "读取 nupkg 失败")
 		return
 	}
-	if _, err := h.metadata.PublishNuGet(repo, id, version, filename, metadataJSON, packageFile); err != nil {
+	var body io.Reader = packageFile
+	var candRow repository.AdmissionCandidateRow
+	var candP *auth.Principal
+	if h.admission != nil {
+		if p, hasP := auth.PrincipalFrom(c); hasP {
+			if snap, _ := repositorySnapshot(c, repo); snap != nil && snap.Type == "hosted" && snap.Format == "nuget" {
+				var candErr error
+				candRow, candErr = h.admission.IntakeCandidate(c.Request.Context(), p, snap.ID, artifactPath, "application/octet-stream", packageFile)
+				if candErr != nil {
+					h.auditRejected(c, "nuget.publish", repo, artifactPath, "admission_intake_failed")
+					writeAdmissionPutErr(c, candErr)
+					return
+				}
+				prc, _, candErr := h.admission.PromoteBytes(c.Request.Context(), candRow)
+				if candErr != nil {
+					h.auditRejected(c, "nuget.publish", repo, artifactPath, "admission_promote_failed")
+					writeAdmissionPutErr(c, candErr)
+					return
+				}
+				defer func() { _ = prc.Close() }()
+				body, candP = prc, p
+			}
+		}
+	}
+	pkg, err := h.metadata.PublishNuGet(repo, id, version, filename, metadataJSON, body)
+	if err != nil {
 		h.auditRejected(c, "nuget.publish", repo, artifactPath, publishRejectionDetail(err))
 		writePublishErr(c, err)
 		return
+	}
+	if candRow.OperationID != "" {
+		if _, err := h.admission.MarkPublished(c.Request.Context(), candP, candRow, pkg.AssetID); err != nil {
+			auth.WriteError(c, http.StatusServiceUnavailable, "admission_unavailable", "候选发布状态回写失败")
+			return
+		}
 	}
 	settle(true, packageSize)
 	h.auditPublish(c, "nuget.publish", repo, artifactPath, packageSize)

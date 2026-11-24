@@ -1,6 +1,7 @@
 package main
 
 import (
+	"archive/zip"
 	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
@@ -501,5 +502,134 @@ func TestOCIPublishViaAdmissionEndToEnd(t *testing.T) {
 	status, _, body = auditTestRequest(t, server, http.MethodGet, "/v2/"+repo.Name+"/demo/blobs/"+digest, "", "", "")
 	if status != http.StatusOK || body != string(blob) {
 		t.Fatalf("发布后 blob 读取不符：%d %q", status, body)
+	}
+}
+
+// TestNuGetPushViaAdmissionEndToEnd nupkg 推包经私有候选准入：封存→裁定→提升→published。
+func TestNuGetPushViaAdmissionEndToEnd(t *testing.T) {
+	cfg, app := newSourceTestApplication(t, "nuget")
+	if _, _, err := app.authSvc.Bootstrap("nu-adm", auditTestPassword); err != nil {
+		t.Fatal(err)
+	}
+	owner, err := app.userSvc.Create("nu-owner", auditTestPassword, "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := app.repoSvc.Create("nu-adm-hosted", "nuget", "hosted", "public", "", repository.RepositoryConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.NewAclRepo(app.db).Replace(repo.ID, []repository.Acl{{SubjectID: owner.ID, Action: repository.ActionPublish}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.securityAudit.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(newApplicationHandler(cfg, app, nil))
+	t.Cleanup(server.Close)
+	issuer, _, err := app.tokenSvc.Create(owner.ID, "nu-issuer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	part, err := w.CreateFormFile("package", "probe.1.0.0.nupkg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := testNuGetPackageBytes(t)
+	if _, err := part.Write(pkg); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	status, _, body := auditTestRequest(t, server, http.MethodPut, "/nuget/"+repo.Name+"/api/v2/package", w.FormDataContentType(), buf.String(), issuer)
+	if status != http.StatusCreated {
+		t.Fatalf("NuGet 推包准入应 201：%d %s", status, body)
+	}
+	var state string
+	var assetID *int64
+	if err := app.db.QueryRow(`SELECT state,published_asset_id FROM private_admission_candidate ORDER BY rowid DESC LIMIT 1`).Scan(&state, &assetID); err != nil {
+		t.Fatal(err)
+	}
+	if state != "published" || assetID == nil {
+		t.Fatalf("NuGet 候选应提升为 published：%s", state)
+	}
+}
+
+// testNuGetPackageBytes 生成最小合法 nupkg（含单个 nuspec 的 zip）。
+func testNuGetPackageBytes(t *testing.T) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	f, err := zw.Create("probe.nuspec")
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := `<?xml version="1.0"?><package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd"><metadata><id>probe</id><version>1.0.0</version><description>p</description><authors>a</authors></metadata></package>`
+	if _, err := f.Write([]byte(spec)); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// TestPyPIUploadViaAdmissionEndToEnd Twine 上传经私有候选准入：封存→裁定→提升→published。
+func TestPyPIUploadViaAdmissionEndToEnd(t *testing.T) {
+	cfg, app := newSourceTestApplication(t, "pypi")
+	if _, _, err := app.authSvc.Bootstrap("py-adm", auditTestPassword); err != nil {
+		t.Fatal(err)
+	}
+	owner, err := app.userSvc.Create("py-owner", auditTestPassword, "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := app.repoSvc.Create("py-adm-hosted", "pypi", "hosted", "public", "", repository.RepositoryConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.NewAclRepo(app.db).Replace(repo.ID, []repository.Acl{{SubjectID: owner.ID, Action: repository.ActionPublish}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.securityAudit.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(newApplicationHandler(cfg, app, nil))
+	t.Cleanup(server.Close)
+	issuer, _, err := app.tokenSvc.Create(owner.ID, "py-issuer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	for k, v := range map[string]string{"name": "probe", "version": "1.0.0", "filetype": "sdist", "pyversion": "source"} {
+		if err := w.WriteField(k, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	part, err := w.CreateFormFile("content", "probe-1.0.0.tar.gz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write([]byte("fake-sdist-bytes")); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	status, _, body := auditTestRequest(t, server, http.MethodPost, "/pypi/"+repo.Name+"/legacy/", w.FormDataContentType(), buf.String(), issuer)
+	if status != http.StatusOK {
+		t.Fatalf("PyPI 上传准入应 200：%d %s", status, body)
+	}
+	var state string
+	var assetID *int64
+	if err := app.db.QueryRow(`SELECT state,published_asset_id FROM private_admission_candidate ORDER BY rowid DESC LIMIT 1`).Scan(&state, &assetID); err != nil {
+		t.Fatal(err)
+	}
+	if state != "published" || assetID == nil {
+		t.Fatalf("PyPI 候选应提升为 published：%s", state)
 	}
 }
