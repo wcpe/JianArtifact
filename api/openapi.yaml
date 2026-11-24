@@ -1170,6 +1170,108 @@ paths:
           $ref: "#/components/responses/PrivateAdmissionNotFound"
         "503":
           $ref: "#/components/responses/PrivateAdmissionUnavailable"
+  /api/v1/security/cases:
+    get:
+      operationId: listSecurityCases
+      summary: 风险调查案件清单
+      security: [bearerAuth: []]
+      parameters:
+        - name: state
+          in: query
+          schema:
+            type: string
+            enum: [open, claimed, closed]
+      responses:
+        "200":
+          description: 案件列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SecurityCase"
+        "401":
+          $ref: "#/components/responses/PrivateAdmissionUnauthenticated"
+        "403":
+          $ref: "#/components/responses/RecentMfaRequired"
+    post:
+      operationId: openSecurityCase
+      summary: 建案（人工或规则入口共用）
+      security: [bearerAuth: []]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SecurityCaseOpenRequest"
+      responses:
+        "200":
+          description: 已建案件
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SecurityCase"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/PrivateAdmissionUnauthenticated"
+        "403":
+          $ref: "#/components/responses/RecentMfaRequired"
+  /api/v1/security/cases/{caseId}/transitions:
+    post:
+      operationId: transitionSecurityCase
+      summary: 认领/结案/重开案件
+      description: claim/close/reopen；close 需 reason+resolutionCode，全部绑定 targetVersion。
+      security: [bearerAuth: []]
+      parameters:
+        - name: caseId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SecurityCaseTransitionRequest"
+      responses:
+        "200":
+          description: 更新后的案件
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SecurityCase"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/RecentMfaRequired"
+        "404":
+          $ref: "#/components/responses/PrivateAdmissionNotFound"
+        "409":
+          description: targetVersion 漂移，`security_confirmation_stale`。
+  /api/v1/security/cases/{caseId}/links:
+    get:
+      operationId: listSecurityCaseLinks
+      summary: 案件关联事件（fact/candidate）
+      security: [bearerAuth: []]
+      parameters:
+        - name: caseId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 关联列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SecurityCaseLink"
+        "403":
+          $ref: "#/components/responses/RecentMfaRequired"
   /api/v1/security/admission/candidates/{operationId}/decisions/preview:
     post:
       operationId: previewPrivateAdmissionDecision
@@ -4804,6 +4906,57 @@ components:
           type: string
           minLength: 1
           maxLength: 512
+    SecurityCase:
+      type: object
+      additionalProperties: false
+      required: [caseId, title, state, severity, targetVersion]
+      properties:
+        caseId: {type: string}
+        title: {type: string}
+        state: {type: string, enum: [open, claimed, closed]}
+        severity: {type: string, enum: [low, medium, high, critical]}
+        resolution: {type: string}
+        targetVersion: {type: integer, format: int64}
+        ownerUserId: {type: integer, format: int64}
+        reason: {type: string}
+        createdUnix: {type: integer, format: int64}
+        updatedUnix: {type: integer, format: int64}
+    SecurityCaseOpenRequest:
+      type: object
+      additionalProperties: false
+      required: [title, severity, reason]
+      properties:
+        title: {type: string, minLength: 1, maxLength: 200}
+        severity: {type: string, enum: [low, medium, high, critical]}
+        reason: {type: string, minLength: 1, maxLength: 512}
+        eventLinks:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [eventId, linkKind]
+            properties:
+              eventId: {type: string}
+              linkKind: {type: string, enum: [fact, candidate]}
+    SecurityCaseTransitionRequest:
+      type: object
+      additionalProperties: false
+      required: [action, targetVersion]
+      properties:
+        action: {type: string, enum: [claim, close, reopen]}
+        targetVersion: {type: integer, format: int64}
+        reason: {type: string, maxLength: 512}
+        resolutionCode: {type: string, maxLength: 64}
+    SecurityCaseLink:
+      type: object
+      additionalProperties: false
+      required: [caseId, eventId, linkKind]
+      properties:
+        caseId: {type: string}
+        eventId: {type: string}
+        linkKind: {type: string, enum: [fact, candidate]}
+        linkedBy: {type: string}
+        linkedUnix: {type: integer, format: int64}
     PrivateAdmissionDecisionPreviewResponse:
       type: object
       additionalProperties: false

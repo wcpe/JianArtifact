@@ -1108,16 +1108,16 @@ func (e ObservabilityBucket) Valid() bool {
 
 // Defines values for OperationsAlertSeverity.
 const (
-	Critical OperationsAlertSeverity = "critical"
-	Warning  OperationsAlertSeverity = "warning"
+	OperationsAlertSeverityCritical OperationsAlertSeverity = "critical"
+	OperationsAlertSeverityWarning  OperationsAlertSeverity = "warning"
 )
 
 // Valid indicates whether the value is a known member of the OperationsAlertSeverity enum.
 func (e OperationsAlertSeverity) Valid() bool {
 	switch e {
-	case Critical:
+	case OperationsAlertSeverityCritical:
 		return true
-	case Warning:
+	case OperationsAlertSeverityWarning:
 		return true
 	default:
 		return false
@@ -1772,6 +1772,132 @@ func (e SecurityAuditOutcome) Valid() bool {
 	}
 }
 
+// Defines values for SecurityCaseSeverity.
+const (
+	SecurityCaseSeverityCritical SecurityCaseSeverity = "critical"
+	SecurityCaseSeverityHigh     SecurityCaseSeverity = "high"
+	SecurityCaseSeverityLow      SecurityCaseSeverity = "low"
+	SecurityCaseSeverityMedium   SecurityCaseSeverity = "medium"
+)
+
+// Valid indicates whether the value is a known member of the SecurityCaseSeverity enum.
+func (e SecurityCaseSeverity) Valid() bool {
+	switch e {
+	case SecurityCaseSeverityCritical:
+		return true
+	case SecurityCaseSeverityHigh:
+		return true
+	case SecurityCaseSeverityLow:
+		return true
+	case SecurityCaseSeverityMedium:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecurityCaseState.
+const (
+	SecurityCaseStateClaimed SecurityCaseState = "claimed"
+	SecurityCaseStateClosed  SecurityCaseState = "closed"
+	SecurityCaseStateOpen    SecurityCaseState = "open"
+)
+
+// Valid indicates whether the value is a known member of the SecurityCaseState enum.
+func (e SecurityCaseState) Valid() bool {
+	switch e {
+	case SecurityCaseStateClaimed:
+		return true
+	case SecurityCaseStateClosed:
+		return true
+	case SecurityCaseStateOpen:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecurityCaseLinkLinkKind.
+const (
+	SecurityCaseLinkLinkKindCandidate SecurityCaseLinkLinkKind = "candidate"
+	SecurityCaseLinkLinkKindFact      SecurityCaseLinkLinkKind = "fact"
+)
+
+// Valid indicates whether the value is a known member of the SecurityCaseLinkLinkKind enum.
+func (e SecurityCaseLinkLinkKind) Valid() bool {
+	switch e {
+	case SecurityCaseLinkLinkKindCandidate:
+		return true
+	case SecurityCaseLinkLinkKindFact:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecurityCaseOpenRequestEventLinksLinkKind.
+const (
+	SecurityCaseOpenRequestEventLinksLinkKindCandidate SecurityCaseOpenRequestEventLinksLinkKind = "candidate"
+	SecurityCaseOpenRequestEventLinksLinkKindFact      SecurityCaseOpenRequestEventLinksLinkKind = "fact"
+)
+
+// Valid indicates whether the value is a known member of the SecurityCaseOpenRequestEventLinksLinkKind enum.
+func (e SecurityCaseOpenRequestEventLinksLinkKind) Valid() bool {
+	switch e {
+	case SecurityCaseOpenRequestEventLinksLinkKindCandidate:
+		return true
+	case SecurityCaseOpenRequestEventLinksLinkKindFact:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecurityCaseOpenRequestSeverity.
+const (
+	SecurityCaseOpenRequestSeverityCritical SecurityCaseOpenRequestSeverity = "critical"
+	SecurityCaseOpenRequestSeverityHigh     SecurityCaseOpenRequestSeverity = "high"
+	SecurityCaseOpenRequestSeverityLow      SecurityCaseOpenRequestSeverity = "low"
+	SecurityCaseOpenRequestSeverityMedium   SecurityCaseOpenRequestSeverity = "medium"
+)
+
+// Valid indicates whether the value is a known member of the SecurityCaseOpenRequestSeverity enum.
+func (e SecurityCaseOpenRequestSeverity) Valid() bool {
+	switch e {
+	case SecurityCaseOpenRequestSeverityCritical:
+		return true
+	case SecurityCaseOpenRequestSeverityHigh:
+		return true
+	case SecurityCaseOpenRequestSeverityLow:
+		return true
+	case SecurityCaseOpenRequestSeverityMedium:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecurityCaseTransitionRequestAction.
+const (
+	Claim  SecurityCaseTransitionRequestAction = "claim"
+	Close  SecurityCaseTransitionRequestAction = "close"
+	Reopen SecurityCaseTransitionRequestAction = "reopen"
+)
+
+// Valid indicates whether the value is a known member of the SecurityCaseTransitionRequestAction enum.
+func (e SecurityCaseTransitionRequestAction) Valid() bool {
+	switch e {
+	case Claim:
+		return true
+	case Close:
+		return true
+	case Reopen:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TokenPurpose.
 const (
 	TokenPurposeArtifactPublish TokenPurpose = "artifact_publish"
@@ -2264,6 +2390,27 @@ func (e GetRepositoryUpstreamHealthParamsSource) Valid() bool {
 	case GetRepositoryUpstreamHealthParamsSourceProbe:
 		return true
 	case GetRepositoryUpstreamHealthParamsSourceRequest:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListSecurityCasesParamsState.
+const (
+	ListSecurityCasesParamsStateClaimed ListSecurityCasesParamsState = "claimed"
+	ListSecurityCasesParamsStateClosed  ListSecurityCasesParamsState = "closed"
+	ListSecurityCasesParamsStateOpen    ListSecurityCasesParamsState = "open"
+)
+
+// Valid indicates whether the value is a known member of the ListSecurityCasesParamsState enum.
+func (e ListSecurityCasesParamsState) Valid() bool {
+	switch e {
+	case ListSecurityCasesParamsStateClaimed:
+		return true
+	case ListSecurityCasesParamsStateClosed:
+		return true
+	case ListSecurityCasesParamsStateOpen:
 		return true
 	default:
 		return false
@@ -4541,6 +4688,66 @@ type SecurityAuditEventType string
 // SecurityAuditOutcome defines model for SecurityAuditOutcome.
 type SecurityAuditOutcome string
 
+// SecurityCase defines model for SecurityCase.
+type SecurityCase struct {
+	CaseId        string               `json:"caseId"`
+	CreatedUnix   *int64               `json:"createdUnix,omitempty"`
+	OwnerUserId   *int64               `json:"ownerUserId,omitempty"`
+	Reason        *string              `json:"reason,omitempty"`
+	Resolution    *string              `json:"resolution,omitempty"`
+	Severity      SecurityCaseSeverity `json:"severity"`
+	State         SecurityCaseState    `json:"state"`
+	TargetVersion int64                `json:"targetVersion"`
+	Title         string               `json:"title"`
+	UpdatedUnix   *int64               `json:"updatedUnix,omitempty"`
+}
+
+// SecurityCaseSeverity defines model for SecurityCase.Severity.
+type SecurityCaseSeverity string
+
+// SecurityCaseState defines model for SecurityCase.State.
+type SecurityCaseState string
+
+// SecurityCaseLink defines model for SecurityCaseLink.
+type SecurityCaseLink struct {
+	CaseId     string                   `json:"caseId"`
+	EventId    string                   `json:"eventId"`
+	LinkKind   SecurityCaseLinkLinkKind `json:"linkKind"`
+	LinkedBy   *string                  `json:"linkedBy,omitempty"`
+	LinkedUnix *int64                   `json:"linkedUnix,omitempty"`
+}
+
+// SecurityCaseLinkLinkKind defines model for SecurityCaseLink.LinkKind.
+type SecurityCaseLinkLinkKind string
+
+// SecurityCaseOpenRequest defines model for SecurityCaseOpenRequest.
+type SecurityCaseOpenRequest struct {
+	EventLinks *[]struct {
+		EventId  string                                    `json:"eventId"`
+		LinkKind SecurityCaseOpenRequestEventLinksLinkKind `json:"linkKind"`
+	} `json:"eventLinks,omitempty"`
+	Reason   string                          `json:"reason"`
+	Severity SecurityCaseOpenRequestSeverity `json:"severity"`
+	Title    string                          `json:"title"`
+}
+
+// SecurityCaseOpenRequestEventLinksLinkKind defines model for SecurityCaseOpenRequest.EventLinks.LinkKind.
+type SecurityCaseOpenRequestEventLinksLinkKind string
+
+// SecurityCaseOpenRequestSeverity defines model for SecurityCaseOpenRequest.Severity.
+type SecurityCaseOpenRequestSeverity string
+
+// SecurityCaseTransitionRequest defines model for SecurityCaseTransitionRequest.
+type SecurityCaseTransitionRequest struct {
+	Action         SecurityCaseTransitionRequestAction `json:"action"`
+	Reason         *string                             `json:"reason,omitempty"`
+	ResolutionCode *string                             `json:"resolutionCode,omitempty"`
+	TargetVersion  int64                               `json:"targetVersion"`
+}
+
+// SecurityCaseTransitionRequestAction defines model for SecurityCaseTransitionRequest.Action.
+type SecurityCaseTransitionRequestAction string
+
 // SetRepositoryOnlineRequest defines model for SetRepositoryOnlineRequest.
 type SetRepositoryOnlineRequest struct {
 	// Online 是否在线（true=在线，false=离线；必填）
@@ -5555,6 +5762,14 @@ type GetRepositoryUpstreamHealthRecentParams struct {
 	Limit *UpstreamHealthLimitParam `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
+// ListSecurityCasesParams defines parameters for ListSecurityCases.
+type ListSecurityCasesParams struct {
+	State *ListSecurityCasesParamsState `form:"state,omitempty" json:"state,omitempty"`
+}
+
+// ListSecurityCasesParamsState defines parameters for ListSecurityCases.
+type ListSecurityCasesParamsState string
+
 // BeginRecoveryIsolationJSONBody defines parameters for BeginRecoveryIsolation.
 type BeginRecoveryIsolationJSONBody struct {
 	Reason    *string `json:"reason,omitempty"`
@@ -5691,6 +5906,12 @@ type DecidePrivateAdmissionCandidateJSONRequestBody = PrivateAdmissionDecisionRe
 
 // PreviewPrivateAdmissionDecisionJSONRequestBody defines body for PreviewPrivateAdmissionDecision for application/json ContentType.
 type PreviewPrivateAdmissionDecisionJSONRequestBody = PrivateAdmissionDecisionPreviewRequest
+
+// OpenSecurityCaseJSONRequestBody defines body for OpenSecurityCase for application/json ContentType.
+type OpenSecurityCaseJSONRequestBody = SecurityCaseOpenRequest
+
+// TransitionSecurityCaseJSONRequestBody defines body for TransitionSecurityCase for application/json ContentType.
+type TransitionSecurityCaseJSONRequestBody = SecurityCaseTransitionRequest
 
 // BeginRecoveryIsolationJSONRequestBody defines body for BeginRecoveryIsolation for application/json ContentType.
 type BeginRecoveryIsolationJSONRequestBody BeginRecoveryIsolationJSONBody
@@ -6310,6 +6531,18 @@ type ServerInterface interface {
 	// PreviewPrivateAdmissionDecision 预览候选裁决可行性并签发短效确认令牌
 	// (POST /api/v1/security/admission/candidates/{operationId}/decisions/preview)
 	PreviewPrivateAdmissionDecision(c *gin.Context, operationId PrivateAdmissionOperationIdParam)
+	// ListSecurityCases 风险调查案件清单
+	// (GET /api/v1/security/cases)
+	ListSecurityCases(c *gin.Context, params ListSecurityCasesParams)
+	// OpenSecurityCase 建案（人工或规则入口共用）
+	// (POST /api/v1/security/cases)
+	OpenSecurityCase(c *gin.Context)
+	// ListSecurityCaseLinks 案件关联事件（fact/candidate）
+	// (GET /api/v1/security/cases/{caseId}/links)
+	ListSecurityCaseLinks(c *gin.Context, caseId string)
+	// TransitionSecurityCase 认领/结案/重开案件
+	// (POST /api/v1/security/cases/{caseId}/transitions)
+	TransitionSecurityCase(c *gin.Context, caseId string)
 	// ListEvidenceHolds 保全持有清单（管理员只读）
 	// (GET /api/v1/security/holds)
 	ListEvidenceHolds(c *gin.Context)
@@ -9279,6 +9512,96 @@ func (siw *ServerInterfaceWrapper) PreviewPrivateAdmissionDecision(c *gin.Contex
 	siw.Handler.PreviewPrivateAdmissionDecision(c, operationId)
 }
 
+// ListSecurityCases operation middleware
+func (siw *ServerInterfaceWrapper) ListSecurityCases(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListSecurityCasesParams
+
+	// ------------- Optional query parameter "state" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "state", c.Request.URL.Query(), &params.State, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter state: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ListSecurityCases(c, params)
+}
+
+// OpenSecurityCase operation middleware
+func (siw *ServerInterfaceWrapper) OpenSecurityCase(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.OpenSecurityCase(c)
+}
+
+// ListSecurityCaseLinks operation middleware
+func (siw *ServerInterfaceWrapper) ListSecurityCaseLinks(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "caseId" -------------
+	var caseId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "caseId", c.Param("caseId"), &caseId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter caseId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ListSecurityCaseLinks(c, caseId)
+}
+
+// TransitionSecurityCase operation middleware
+func (siw *ServerInterfaceWrapper) TransitionSecurityCase(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "caseId" -------------
+	var caseId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "caseId", c.Param("caseId"), &caseId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter caseId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.TransitionSecurityCase(c, caseId)
+}
+
 // ListEvidenceHolds operation middleware
 func (siw *ServerInterfaceWrapper) ListEvidenceHolds(c *gin.Context) {
 
@@ -9969,6 +10292,10 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.DELETE(options.BaseURL+"/api/v1/users/:id", wrapper.DeleteUser)
 	router.PATCH(options.BaseURL+"/api/v1/users/:id", wrapper.UpdateUser)
 	router.GET(options.BaseURL+"/api/v1/security/admission/candidates/:operationId", wrapper.GetPrivateAdmissionCandidate)
+	router.GET(options.BaseURL+"/api/v1/security/cases", wrapper.ListSecurityCases)
+	router.POST(options.BaseURL+"/api/v1/security/cases", wrapper.OpenSecurityCase)
+	router.POST(options.BaseURL+"/api/v1/security/cases/:caseId/transitions", wrapper.TransitionSecurityCase)
+	router.GET(options.BaseURL+"/api/v1/security/cases/:caseId/links", wrapper.ListSecurityCaseLinks)
 	router.POST(options.BaseURL+"/api/v1/security/admission/candidates/:operationId/decisions/preview", wrapper.PreviewPrivateAdmissionDecision)
 	router.POST(options.BaseURL+"/api/v1/security/admission/candidates/:operationId/decisions", wrapper.DecidePrivateAdmissionCandidate)
 	router.POST(options.BaseURL+"/api/v1/users/:id/password", wrapper.ChangePassword)

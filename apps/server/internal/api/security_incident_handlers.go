@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 
@@ -8,6 +9,7 @@ import (
 
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
+	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
 // FR-168：事故处置动作——预览/确认执行；执行须近期强认证（step_up 水位）。
@@ -306,4 +308,126 @@ func (h *Handlers) ConfirmRecovery(c *gin.Context) {
 		return
 	}
 	c.Status(http.StatusNoContent)
+}
+
+// ── FR-171 风险调查案件 ────────────────────────────────────────────────────
+
+func caseRowToModel(r *repository.SecurityCaseRow) SecurityCase {
+	out := SecurityCase{CaseId: r.CaseID, Title: r.Title, State: SecurityCaseState(r.State),
+		Severity:      SecurityCaseSeverity(r.Severity),
+		TargetVersion: r.TargetVersion, CreatedUnix: &r.CreatedUnix, UpdatedUnix: &r.UpdatedUnix}
+	if r.Resolution != "" {
+		out.Resolution = &r.Resolution
+	}
+	if r.Reason != "" {
+		out.Reason = &r.Reason
+	}
+	if r.OwnerUserID != nil {
+		out.OwnerUserId = r.OwnerUserID
+	}
+	return out
+}
+
+func (h *Handlers) ListSecurityCases(c *gin.Context, params ListSecurityCasesParams) {
+	c.Header("Cache-Control", "private, no-store")
+	p, ok := requireAdmin(c)
+	if !ok || !h.requireRecentMfa(c, p) {
+		return
+	}
+	state := ""
+	if params.State != nil {
+		state = string(*params.State)
+	}
+	rows, err := h.incident.ListSecurityCases(c.Request.Context(), state, 200)
+	if err != nil {
+		auth.WriteError(c, http.StatusServiceUnavailable, "security_unavailable", "案件查询暂不可用")
+		return
+	}
+	out := make([]SecurityCase, 0, len(rows))
+	for i := range rows {
+		out = append(out, caseRowToModel(&rows[i]))
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+func (h *Handlers) OpenSecurityCase(c *gin.Context) {
+	c.Header("Cache-Control", "private, no-store")
+	p, ok := requireAdmin(c)
+	if !ok || !h.requireRecentMfa(c, p) {
+		return
+	}
+	var req SecurityCaseOpenRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		auth.WriteError(c, http.StatusBadRequest, "bad_request", "请求体无效")
+		return
+	}
+	var links []repository.SecurityCaseLinkRow
+	if req.EventLinks != nil {
+		for _, l := range *req.EventLinks {
+			links = append(links, repository.SecurityCaseLinkRow{EventID: l.EventId, LinkKind: string(l.LinkKind)})
+		}
+	}
+	row, err := h.incident.OpenSecurityCase(c.Request.Context(), p, req.Title, string(req.Severity), req.Reason, links)
+	if err != nil {
+		if errors.Is(err, domain.ErrValidation) {
+			auth.WriteError(c, http.StatusBadRequest, "bad_request", "建案参数无效")
+			return
+		}
+		auth.WriteError(c, http.StatusServiceUnavailable, "security_unavailable", "建案暂不可用")
+		return
+	}
+	c.JSON(http.StatusOK, caseRowToModel(row))
+}
+
+func (h *Handlers) TransitionSecurityCase(c *gin.Context, caseID string) {
+	c.Header("Cache-Control", "private, no-store")
+	p, ok := requireAdmin(c)
+	if !ok || !h.requireRecentMfa(c, p) {
+		return
+	}
+	var req SecurityCaseTransitionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		auth.WriteError(c, http.StatusBadRequest, "bad_request", "请求体无效")
+		return
+	}
+	var reason, resCode string
+	if req.Reason != nil {
+		reason = *req.Reason
+	}
+	if req.ResolutionCode != nil {
+		resCode = *req.ResolutionCode
+	}
+	row, err := h.incident.TransitionSecurityCase(c.Request.Context(), p, caseID, string(req.Action), reason, resCode, req.TargetVersion)
+	if err != nil {
+		switch {
+		case errors.Is(err, repository.ErrNotFound):
+			auth.WriteError(c, http.StatusNotFound, "security_case_not_found", "案件不存在")
+		case errors.Is(err, domain.ErrValidation):
+			auth.WriteError(c, http.StatusBadRequest, "bad_request", "转态参数无效")
+		case errors.Is(err, domain.ErrSecurityConfirmationStale):
+			auth.WriteError(c, http.StatusConflict, "security_confirmation_stale", "目标版本漂移")
+		default:
+			auth.WriteError(c, http.StatusServiceUnavailable, "security_unavailable", "转态暂不可用")
+		}
+		return
+	}
+	c.JSON(http.StatusOK, caseRowToModel(row))
+}
+
+func (h *Handlers) ListSecurityCaseLinks(c *gin.Context, caseID string) {
+	c.Header("Cache-Control", "private, no-store")
+	p, ok := requireAdmin(c)
+	if !ok || !h.requireRecentMfa(c, p) {
+		return
+	}
+	links, err := h.incident.SecurityCaseLinks(c.Request.Context(), caseID)
+	if err != nil {
+		auth.WriteError(c, http.StatusServiceUnavailable, "security_unavailable", "关联查询暂不可用")
+		return
+	}
+	out := make([]SecurityCaseLink, 0, len(links))
+	for _, l := range links {
+		out = append(out, SecurityCaseLink{CaseId: l.CaseID, EventId: l.EventID, LinkKind: SecurityCaseLinkLinkKind(l.LinkKind), LinkedBy: &l.LinkedBy, LinkedUnix: &l.LinkedUnix})
+	}
+	c.JSON(http.StatusOK, out)
 }

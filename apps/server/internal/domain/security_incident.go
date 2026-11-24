@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 
+	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
@@ -542,4 +543,123 @@ func (s *SecurityIncidentService) RecoveryIsolated(ctx context.Context) (bool, e
 		return nil
 	})
 	return isolated, err
+}
+
+// ── 风险调查案件（FR-171 §cases）───────────────────────────────────────────
+
+// OpenSecurityCase 建案：管理员人工或规则检测入口共用；title/severity/reason 必填。
+func (s *SecurityIncidentService) OpenSecurityCase(ctx context.Context, p *auth.Principal, title, severity, reason string, links []repository.SecurityCaseLinkRow) (*repository.SecurityCaseRow, error) {
+	if p == nil || p.UserID <= 0 || p.Role != "admin" {
+		return nil, ErrAdmissionForbidden
+	}
+	if title == "" || reason == "" {
+		return nil, ErrValidation
+	}
+	switch severity {
+	case "low", "medium", "high", "critical":
+	default:
+		return nil, ErrValidation
+	}
+	now := s.now().Unix()
+	row := repository.SecurityCaseRow{CaseID: "case-" + uuid.NewString(), Title: title, Severity: severity,
+		State: "open", TargetVersion: 1, OpenedBy: fmt.Sprintf("%d", p.UserID), Reason: reason,
+		CreatedUnix: now, UpdatedUnix: now}
+	err := s.repo.Write(ctx, func(tx *sqlx.Tx) error {
+		if err := repository.InsertSecurityCaseTx(ctx, tx, row); err != nil {
+			return err
+		}
+		for _, l := range links {
+			if l.LinkKind != "fact" && l.LinkKind != "candidate" {
+				return ErrValidation
+			}
+			l.CaseID = row.CaseID
+			if l.LinkedBy == "" {
+				l.LinkedBy = row.OpenedBy
+			}
+			l.LinkedUnix = now
+			if err := repository.LinkSecurityCaseEventTx(ctx, tx, l); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &row, nil
+}
+
+// TransitionSecurityCase 认领/结案/重开：绑定 targetVersion，CAS 版本推进；close 需 resolutionCode。
+func (s *SecurityIncidentService) TransitionSecurityCase(ctx context.Context, p *auth.Principal, caseID, action, reason, resolution string, expectVersion int64) (*repository.SecurityCaseRow, error) {
+	if p == nil || p.UserID <= 0 || p.Role != "admin" {
+		return nil, ErrAdmissionForbidden
+	}
+	var next, res string
+	var owner *int64
+	var closedAt *int64
+	now := s.now().Unix()
+	switch action {
+	case "claim":
+		next, owner = "claimed", &p.UserID
+	case "close":
+		if reason == "" || resolution == "" {
+			return nil, ErrValidation
+		}
+		next, res, closedAt = "closed", resolution, &now
+	case "reopen":
+		if reason == "" {
+			return nil, ErrValidation
+		}
+		next = "open"
+	default:
+		return nil, ErrValidation
+	}
+	var out *repository.SecurityCaseRow
+	err := s.repo.Write(ctx, func(tx *sqlx.Tx) error {
+		cur, err := repository.GetSecurityCaseTx(ctx, tx, caseID)
+		if err != nil {
+			return err
+		}
+		if cur.TargetVersion != expectVersion {
+			return ErrSecurityConfirmationStale
+		}
+		ok, err := repository.TransitionSecurityCaseTx(ctx, tx, caseID, expectVersion, next, res, owner, closedAt, now)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return ErrSecurityConfirmationStale
+		}
+		out, err = repository.GetSecurityCaseTx(ctx, tx, caseID)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ListSecurityCases 案件清单（state 可空=全部，上限由调用方给）。
+func (s *SecurityIncidentService) ListSecurityCases(ctx context.Context, state string, limit int) ([]repository.SecurityCaseRow, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	var out []repository.SecurityCaseRow
+	err := s.repo.Read(ctx, func(tx *sqlx.Tx) error {
+		var e error
+		out, e = repository.ListSecurityCasesTx(ctx, tx, state, limit)
+		return e
+	})
+	return out, err
+}
+
+// SecurityCaseLinks 案件的关联事件（区分 fact/candidate）。
+func (s *SecurityIncidentService) SecurityCaseLinks(ctx context.Context, caseID string) ([]repository.SecurityCaseLinkRow, error) {
+	var out []repository.SecurityCaseLinkRow
+	err := s.repo.Read(ctx, func(tx *sqlx.Tx) error {
+		var e error
+		out, e = repository.ListSecurityCaseLinksTx(ctx, tx, caseID)
+		return e
+	})
+	return out, err
 }
