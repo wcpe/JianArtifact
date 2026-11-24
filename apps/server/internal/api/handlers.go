@@ -30,6 +30,7 @@ type Deps struct {
 	Checks                     []func() error
 	Migration                  func() (string, error)
 	Auth                       *domain.AuthService
+	Mfa                        *domain.SecurityMfaService // 强认证（nil = 未装配，MFA 端点返回 503）
 	Users                      *domain.UserService
 	Tokens                     *domain.TokenService
 	Repos                      *domain.RepositoryService
@@ -121,6 +122,7 @@ type Handlers struct {
 	checks                     []func() error
 	migration                  func() (string, error)
 	auth                       *domain.AuthService
+	mfa                        *domain.SecurityMfaService
 	users                      *domain.UserService
 	tokens                     *domain.TokenService
 	repos                      *domain.RepositoryService
@@ -180,6 +182,7 @@ func NewHandlers(d Deps) *Handlers {
 		checks:                     d.Checks,
 		migration:                  d.Migration,
 		auth:                       d.Auth,
+		mfa:                        d.Mfa,
 		users:                      d.Users,
 		tokens:                     d.Tokens,
 		repos:                      d.Repos,
@@ -422,6 +425,14 @@ func writeDomainErrWithOperationID(c *gin.Context, err error, operationID string
 	switch {
 	case errors.Is(err, domain.ErrSecurityAuditUnavailable):
 		write(http.StatusServiceUnavailable, "security_audit_unavailable", "安全审计暂不可用")
+	case errors.Is(err, domain.ErrInvalidAuthChallenge):
+		write(http.StatusUnauthorized, "invalid_auth_challenge", "认证挑战无效或已失效")
+	case errors.Is(err, domain.ErrAuthRateLimited):
+		write(http.StatusTooManyRequests, "auth_rate_limited", "认证尝试过于频繁")
+	case errors.Is(err, domain.ErrMfaRequired):
+		write(http.StatusForbidden, "mfa_required", "需要完成强因子验证")
+	case errors.Is(err, domain.ErrMfaFactorUnavailable):
+		write(http.StatusServiceUnavailable, "security_state_unavailable", "强认证能力未就绪")
 	case errors.Is(err, domain.ErrInvalidCredentials):
 		write(http.StatusUnauthorized, "invalid_credentials", "用户名或口令错误")
 	case errors.Is(err, domain.ErrAlreadyInitialized):

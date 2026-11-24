@@ -664,6 +664,105 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+  /api/v1/auth/mfa/verify:
+    post:
+      operationId: verifyLoginMfa
+      summary: 兑现 login_mfa 受限挑战（OTP 命中后签发会话）
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MfaVerifyRequest"
+      responses:
+        "200":
+          description: 第二因素验证通过，返回会话
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  /api/v1/auth/mfa/recover:
+    post:
+      operationId: recoverLoginMfa
+      summary: 用恢复码兑现 login_mfa 挑战并签发 factor_recover 重绑挑战
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MfaRecoverRequest"
+      responses:
+        "200":
+          description: 恢复码有效，返回重绑挑战与新的登记 URI
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MfaEnrollResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  /api/v1/auth/mfa/status:
+    get:
+      operationId: getMfaStatus
+      summary: 当前会话账号的强因子状态
+      responses:
+        "200":
+          description: 因子状态
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MfaStatusResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/v1/auth/mfa/enroll:
+    post:
+      operationId: beginMfaEnroll
+      summary: 发起强因子登记（返回挑战与登记 URI；会话内限一次活跃登记）
+      responses:
+        "200":
+          description: 登记挑战
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MfaEnrollResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  /api/v1/auth/mfa/enroll/confirm:
+    post:
+      operationId: confirmMfaEnroll
+      summary: 用首枚 OTP 确认登记并返回恢复码批次
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MfaConfirmRequest"
+      responses:
+        "200":
+          description: 登记完成，返回恢复码（仅展示一次）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MfaRecoveryCodes"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
   /api/v1/auth/me:
     get:
       operationId: getCurrentUser
@@ -5311,12 +5410,93 @@ components:
           type: string
     LoginResponse:
       type: object
-      required: [token, user]
+      required: [next, token, user]
       properties:
+        next:
+          type: string
+          enum: [authenticated, mfa_required, claim_required]
+          description: 登录签发裁决；authenticated 才发放会话令牌
         token:
           type: string
+          description: 会话 JWT；next != authenticated 时为空串
+        challengeId:
+          type: string
+          description: login_mfa 受限挑战标识；仅 next=mfa_required 时存在
+        challengeToken:
+          type: string
+          description: login_mfa 受限挑战明文；仅 next=mfa_required 时存在，展示一次后不持久
+        challengeExpiresAt:
+          type: string
+          description: 挑战过期时间（RFC3339）
         user:
           $ref: "#/components/schemas/User"
+    MfaEnrollResponse:
+      type: object
+      required: [challengeId, challengeToken, expiresAt, enrollmentUri]
+      properties:
+        challengeId:
+          type: string
+        challengeToken:
+          type: string
+          description: 受限挑战明文，展示一次后不持久
+        expiresAt:
+          type: string
+          description: 挑战过期时间（RFC3339）
+        enrollmentUri:
+          type: string
+          description: otpauth:// URI，供认证器扫码/手动录入
+    MfaConfirmRequest:
+      type: object
+      required: [challengeToken, otp]
+      properties:
+        challengeToken:
+          type: string
+        otp:
+          type: string
+          minLength: 6
+          maxLength: 6
+    MfaVerifyRequest:
+      type: object
+      required: [challengeToken, otp]
+      properties:
+        challengeToken:
+          type: string
+          description: login_mfa 受限挑战明文
+        otp:
+          type: string
+          minLength: 6
+          maxLength: 6
+    MfaRecoverRequest:
+      type: object
+      required: [challengeToken, recoveryCode]
+      properties:
+        challengeToken:
+          type: string
+          description: login_mfa 受限挑战明文（第一因素已验证的凭据）
+        recoveryCode:
+          type: string
+    MfaRecoveryCodes:
+      type: object
+      required: [recoveryCodes]
+      properties:
+        recoveryCodes:
+          type: array
+          items:
+            type: string
+          description: 恢复码批次，仅展示一次
+    MfaStatusResponse:
+      type: object
+      required: [enrolled, enrollmentPending, recoveryCodesRemaining, mfaRequired]
+      properties:
+        enrolled:
+          type: boolean
+        enrollmentPending:
+          type: boolean
+        recoveryCodesRemaining:
+          type: integer
+        mfaRequired:
+          type: boolean
+          description: 账号是否被策略强制要求启用强因子（管理员）
     User:
       type: object
       required: [id, username, role, status, webLoginDisabled, createdAt]

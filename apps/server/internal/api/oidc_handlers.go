@@ -105,17 +105,27 @@ func (h *Handlers) CompleteOidcLogin(c *gin.Context, params CompleteOidcLoginPar
 		h.oidcAttemptRejected(c, "not_allowed", "forbidden", auth.ProviderAuthDenied)
 		return
 	}
-	token, _, err := h.auth.LoginExternalContext(ctx, domain.ExternalIdentity{
+	outcome, err := h.auth.LoginExternalOutcome(ctx, domain.ExternalIdentity{
 		Source:   "oidc",
 		Subject:  claims.Subject,
 		Username: claims.Username,
 		Email:    claims.Email,
-	}, *flow.CredentialRevision)
+	}, *flow.CredentialRevision, "")
 	if err != nil {
 		h.oidcFail(c, "login_rejected")
 		return
 	}
-	c.Redirect(http.StatusFound, h.oidc.RedirectAfter+"#token="+url.QueryEscape(token))
+	if outcome.Next == domain.AuthNextMfaRequired {
+		// 挑战经 URL 片段下发（与会话令牌同通道，片段不进入服务端访问日志）。
+		c.Redirect(http.StatusFound, h.oidc.RedirectAfter+"#mfa=required&challengeId="+
+			url.QueryEscape(outcome.ChallengeID)+"&challengeToken="+url.QueryEscape(outcome.ChallengeToken))
+		return
+	}
+	if outcome.Next != domain.AuthNextAuthenticated {
+		h.oidcFail(c, "login_rejected")
+		return
+	}
+	c.Redirect(http.StatusFound, h.oidc.RedirectAfter+"#token="+url.QueryEscape(outcome.Token))
 }
 
 func (h *Handlers) oidcAttemptRejected(c *gin.Context, redirectCode, auditCode string, outcome auth.ProviderAuthOutcome) {

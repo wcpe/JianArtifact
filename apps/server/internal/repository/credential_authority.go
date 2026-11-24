@@ -24,7 +24,7 @@ type CredentialAccount struct {
 	Revision int64 `db:"credential_revision"`
 }
 
-func readCredentialAccount(ctx context.Context, q sqlx.QueryerContext, column, value string) (CredentialAccount, error) {
+func readCredentialAccount(ctx context.Context, q sqlx.QueryerContext, column string, value any) (CredentialAccount, error) {
 	var u CredentialAccount
 	err := sqlx.GetContext(ctx, q, &u, `SELECT `+credentialUserColumns+` FROM user u WHERE `+column+`=?`, value)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -35,6 +35,11 @@ func readCredentialAccount(ctx context.Context, q sqlx.QueryerContext, column, v
 
 func (r *UserRepo) CredentialAccountByUsername(ctx context.Context, username string) (CredentialAccount, error) {
 	return readCredentialAccount(ctx, r.db, "u.username", username)
+}
+
+// CredentialAccountByID 按主键取账号快照，供挑战兑现路径复核绑定对象。
+func (r *UserRepo) CredentialAccountByID(ctx context.Context, id int64) (CredentialAccount, error) {
+	return readCredentialAccount(ctx, r.db, "u.id", id)
 }
 
 // CredentialRevision 返回与账号安全变更同序的库内签发水位。

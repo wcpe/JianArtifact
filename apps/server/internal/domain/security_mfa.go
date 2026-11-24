@@ -209,18 +209,18 @@ func (s *SecurityMfaService) BeginFactorEnrollment(ctx context.Context, account 
 // 读事务只取挑战与因子状态，口令比对在锁外；命中走条件写（消耗步、消费挑战、
 // 退役旧因子、激活新因子、签发恢复码），未命中走独立的尝试扣减事务——
 // 失败也必须落额度扣减，不能随验证错误回滚。
-func (s *SecurityMfaService) ConfirmFactorEnrollment(ctx context.Context, userID int64, challengeToken, otp, sessionBinding string) ([]string, error) {
+func (s *SecurityMfaService) ConfirmFactorEnrollment(ctx context.Context, challengeToken, otp, sessionBinding string) ([]string, error) {
 	now := s.now().Unix()
 	var challenge repository.SecurityAuthChallenge
 	var factor repository.SecurityTotpFactor
 	err := s.factors.Write(ctx, func(tx *sqlx.Tx) error {
-		c, err := repository.TouchChallengeTx(ctx, tx, hashChallengeToken(challengeToken), repository.ChallengePurposeFactorEnroll, now)
+		c, err := repository.TouchChallengePurposesTx(ctx, tx, hashChallengeToken(challengeToken), now,
+			repository.ChallengePurposeFactorEnroll, repository.ChallengePurposeFactorRecover)
 		if err != nil {
 			return err
 		}
-		if c.UserID != userID {
-			return repository.ErrSecurityChallengeRejected
-		}
+		// 账号身份从服务端挑战行解析，不从请求输入重建。
+		userID := c.UserID
 		// 会话绑定只存不验即为空检查：签发时绑定的会话与确认方必须一致。
 		if c.SessionBinding != "" && c.SessionBinding != sessionBinding {
 			return repository.ErrSecurityChallengeRejected
@@ -265,7 +265,7 @@ func (s *SecurityMfaService) ConfirmFactorEnrollment(ctx context.Context, userID
 		// 挑战绑定签发时的账号代次：其间任何账号级安全变更（改密/恢复/处置）
 		// 都使在途挑战作废，不能把旧代次的授权延续到新一代。
 		var epoch int64
-		if err := tx.GetContext(ctx, &epoch, `SELECT account_epoch FROM user WHERE id=?`, userID); err != nil {
+		if err := tx.GetContext(ctx, &epoch, `SELECT account_epoch FROM user WHERE id=?`, challenge.UserID); err != nil {
 			return err
 		}
 		if epoch != challenge.AccountEpoch {
@@ -278,13 +278,13 @@ func (s *SecurityMfaService) ConfirmFactorEnrollment(ctx context.Context, userID
 		if err := repository.ConsumeChallengeTx(ctx, tx, challenge.ChallengeID, now); err != nil {
 			return err
 		}
-		if err := repository.RetireTotpFactorsTx(ctx, tx, userID, now, repository.TotpFactorStateActive); err != nil {
+		if err := repository.RetireTotpFactorsTx(ctx, tx, challenge.UserID, now, repository.TotpFactorStateActive); err != nil {
 			return err
 		}
-		if err := repository.ActivateTotpFactorTx(ctx, tx, factor.FactorID, userID, now); err != nil {
+		if err := repository.ActivateTotpFactorTx(ctx, tx, factor.FactorID, challenge.UserID, now); err != nil {
 			return err
 		}
-		issued, err := s.issueRecoveryBatch(ctx, tx, userID, factor.FactorID, now)
+		issued, err := s.issueRecoveryBatch(ctx, tx, challenge.UserID, factor.FactorID, now)
 		if err != nil {
 			return err
 		}
@@ -367,11 +367,24 @@ func (s *SecurityMfaService) VerifyTotp(ctx context.Context, userID int64, otp s
 }
 
 // RecoverFactor 用一枚有效恢复码执行受控恢复：同一事务内消费该码、作废其余旧码、
-// 撤销旧因子、提升账号代次，并签发 factor_recover 受限挑战（只可绑定新因子）。
-// 返回恢复挑战；不沿用旧挑战/会话，旧因子不可中途恢复。
+// 撤销旧因子、提升账号代次，并签发 factor_recover 受限挑战（只可绑定新因子）——
+// 同事务直接种下新的待登记因子并返回登记 URI，确认走同一 ConfirmFactorEnrollment。
+// 不沿用旧挑战/会话，旧因子不可中途恢复。
 func (s *SecurityMfaService) RecoverFactor(ctx context.Context, account repository.CredentialAccount, recoveryCode, authSource, sessionBinding string) (*MfaEnrollment, error) {
+	if s.cipher == nil {
+		return nil, ErrMfaFactorUnavailable
+	}
+	secret, secretB32, err := newTotpSecret()
+	if err != nil {
+		return nil, err
+	}
+	factorID := "tf-" + uuid.NewString()
+	ciphertext, err := s.cipher.seal(factorID, secret)
+	if err != nil {
+		return nil, err
+	}
 	var out *MfaEnrollment
-	err := s.factors.Write(ctx, func(tx *sqlx.Tx) error {
+	err = s.factors.Write(ctx, func(tx *sqlx.Tx) error {
 		now := s.now().Unix()
 		code, err := repository.ConsumeRecoveryCodeTx(ctx, tx, hashRecoveryCode(recoveryCode), now)
 		if err != nil {
@@ -394,7 +407,28 @@ func (s *SecurityMfaService) RecoverFactor(ctx context.Context, account reposito
 		if err != nil {
 			return err
 		}
-		out = &MfaEnrollment{ChallengeID: challenge.ChallengeID, ChallengeToken: token, ExpiresAt: time.Unix(challenge.ExpiresAt, 0).UTC()}
+		factor := repository.SecurityTotpFactor{
+			FactorID:         factorID,
+			UserID:           account.ID,
+			AccountEpoch:     epoch,
+			State:            repository.TotpFactorStatePending,
+			SecretCiphertext: ciphertext,
+			KeyVersion:       s.cipher.keyVer,
+			LastAcceptedStep: -1,
+			CreatedAt:        now,
+			ChallengeID:      challenge.ChallengeID,
+		}
+		exp := challenge.ExpiresAt
+		factor.ExpiresAt = &exp
+		if err := repository.InsertTotpFactorTx(ctx, tx, factor); err != nil {
+			return err
+		}
+		out = &MfaEnrollment{
+			ChallengeID:    challenge.ChallengeID,
+			ChallengeToken: token,
+			ExpiresAt:      time.Unix(challenge.ExpiresAt, 0).UTC(),
+			EnrollmentURI:  totpEnrollmentURI(s.issuer, account.Username, secretB32),
+		}
 		return nil
 	})
 	if err != nil {
@@ -404,4 +438,24 @@ func (s *SecurityMfaService) RecoverFactor(ctx context.Context, account reposito
 		return nil, err
 	}
 	return out, nil
+}
+
+// TouchLoginChallenge 复核 login_mfa 挑战并返回其绑定信息（恢复路径的第一因素凭据）。
+func (s *SecurityMfaService) TouchLoginChallenge(ctx context.Context, challengeToken string) (repository.SecurityAuthChallenge, error) {
+	now := s.now().Unix()
+	var c repository.SecurityAuthChallenge
+	err := s.factors.Write(ctx, func(tx *sqlx.Tx) error {
+		var err error
+		c, err = repository.TouchChallengeTx(ctx, tx, hashChallengeToken(challengeToken), repository.ChallengePurposeLoginMFA, now)
+		return err
+	})
+	if err != nil {
+		return repository.SecurityAuthChallenge{}, mapChallengeErr(err)
+	}
+	return c, nil
+}
+
+// CredentialAccountByID 按挑战解析的账号主键取凭据账号快照（恢复路径复核用）。
+func (s *SecurityMfaService) CredentialAccountByID(ctx context.Context, id int64) (repository.CredentialAccount, error) {
+	return s.users.CredentialAccountByID(ctx, id)
 }

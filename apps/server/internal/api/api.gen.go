@@ -785,6 +785,27 @@ func (e HostMonitoringHostState) Valid() bool {
 	}
 }
 
+// Defines values for LoginResponseNext.
+const (
+	Authenticated LoginResponseNext = "authenticated"
+	ClaimRequired LoginResponseNext = "claim_required"
+	MfaRequired   LoginResponseNext = "mfa_required"
+)
+
+// Valid indicates whether the value is a known member of the LoginResponseNext enum.
+func (e LoginResponseNext) Valid() bool {
+	switch e {
+	case Authenticated:
+		return true
+	case ClaimRequired:
+		return true
+	case MfaRequired:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MachineTokenScopeActions.
 const (
 	MachineTokenScopeActionsPublish MachineTokenScopeActions = "publish"
@@ -3384,9 +3405,25 @@ type LoginRequest struct {
 
 // LoginResponse defines model for LoginResponse.
 type LoginResponse struct {
+	// ChallengeExpiresAt 挑战过期时间（RFC3339）
+	ChallengeExpiresAt *string `json:"challengeExpiresAt,omitempty"`
+
+	// ChallengeId login_mfa 受限挑战标识；仅 next=mfa_required 时存在
+	ChallengeId *string `json:"challengeId,omitempty"`
+
+	// ChallengeToken login_mfa 受限挑战明文；仅 next=mfa_required 时存在，展示一次后不持久
+	ChallengeToken *string `json:"challengeToken,omitempty"`
+
+	// Next 登录签发裁决；authenticated 才发放会话令牌
+	Next LoginResponseNext `json:"next"`
+
+	// Token 会话 JWT；next != authenticated 时为空串
 	Token string `json:"token"`
 	User  User   `json:"user"`
 }
+
+// LoginResponseNext 登录签发裁决；authenticated 才发放会话令牌
+type LoginResponseNext string
 
 // MachineTokenScope defines model for MachineTokenScope.
 type MachineTokenScope struct {
@@ -3480,6 +3517,56 @@ type MaintenanceRestartResultScope string
 
 // MetricGroupState defines model for MetricGroupState.
 type MetricGroupState string
+
+// MfaConfirmRequest defines model for MfaConfirmRequest.
+type MfaConfirmRequest struct {
+	ChallengeToken string `json:"challengeToken"`
+	Otp            string `json:"otp"`
+}
+
+// MfaEnrollResponse defines model for MfaEnrollResponse.
+type MfaEnrollResponse struct {
+	ChallengeId string `json:"challengeId"`
+
+	// ChallengeToken 受限挑战明文，展示一次后不持久
+	ChallengeToken string `json:"challengeToken"`
+
+	// EnrollmentUri otpauth:// URI，供认证器扫码/手动录入
+	EnrollmentUri string `json:"enrollmentUri"`
+
+	// ExpiresAt 挑战过期时间（RFC3339）
+	ExpiresAt string `json:"expiresAt"`
+}
+
+// MfaRecoverRequest defines model for MfaRecoverRequest.
+type MfaRecoverRequest struct {
+	// ChallengeToken login_mfa 受限挑战明文（第一因素已验证的凭据）
+	ChallengeToken string `json:"challengeToken"`
+	RecoveryCode   string `json:"recoveryCode"`
+}
+
+// MfaRecoveryCodes defines model for MfaRecoveryCodes.
+type MfaRecoveryCodes struct {
+	// RecoveryCodes 恢复码批次，仅展示一次
+	RecoveryCodes []string `json:"recoveryCodes"`
+}
+
+// MfaStatusResponse defines model for MfaStatusResponse.
+type MfaStatusResponse struct {
+	Enrolled          bool `json:"enrolled"`
+	EnrollmentPending bool `json:"enrollmentPending"`
+
+	// MfaRequired 账号是否被策略强制要求启用强因子（管理员）
+	MfaRequired            bool `json:"mfaRequired"`
+	RecoveryCodesRemaining int  `json:"recoveryCodesRemaining"`
+}
+
+// MfaVerifyRequest defines model for MfaVerifyRequest.
+type MfaVerifyRequest struct {
+	// ChallengeToken login_mfa 受限挑战明文
+	ChallengeToken string `json:"challengeToken"`
+	Otp            string `json:"otp"`
+}
 
 // MigrationConflictPolicy defines model for MigrationConflictPolicy.
 type MigrationConflictPolicy string
@@ -4794,6 +4881,9 @@ type SecurityAuditUnavailable = Error
 // ServiceUnavailable defines model for ServiceUnavailable.
 type ServiceUnavailable = Error
 
+// TooManyRequests defines model for TooManyRequests.
+type TooManyRequests = Error
+
 // Unauthorized defines model for Unauthorized.
 type Unauthorized = Error
 
@@ -5237,6 +5327,15 @@ type BootstrapJSONRequestBody = BootstrapRequest
 // LoginJSONRequestBody defines body for Login for application/json ContentType.
 type LoginJSONRequestBody = LoginRequest
 
+// ConfirmMfaEnrollJSONRequestBody defines body for ConfirmMfaEnroll for application/json ContentType.
+type ConfirmMfaEnrollJSONRequestBody = MfaConfirmRequest
+
+// RecoverLoginMfaJSONRequestBody defines body for RecoverLoginMfa for application/json ContentType.
+type RecoverLoginMfaJSONRequestBody = MfaRecoverRequest
+
+// VerifyLoginMfaJSONRequestBody defines body for VerifyLoginMfa for application/json ContentType.
+type VerifyLoginMfaJSONRequestBody = MfaVerifyRequest
+
 // CreateBackupJSONRequestBody defines body for CreateBackup for application/json ContentType.
 type CreateBackupJSONRequestBody = CreateBackupRequest
 
@@ -5639,6 +5738,21 @@ type ServerInterface interface {
 	// GetCurrentUser 当前会话对应的用户（OIDC 回调后前端据此取身份快照）
 	// (GET /api/v1/auth/me)
 	GetCurrentUser(c *gin.Context)
+	// BeginMfaEnroll 发起强因子登记（返回挑战与登记 URI；会话内限一次活跃登记）
+	// (POST /api/v1/auth/mfa/enroll)
+	BeginMfaEnroll(c *gin.Context)
+	// ConfirmMfaEnroll 用首枚 OTP 确认登记并返回恢复码批次
+	// (POST /api/v1/auth/mfa/enroll/confirm)
+	ConfirmMfaEnroll(c *gin.Context)
+	// RecoverLoginMfa 用恢复码兑现 login_mfa 挑战并签发 factor_recover 重绑挑战
+	// (POST /api/v1/auth/mfa/recover)
+	RecoverLoginMfa(c *gin.Context)
+	// GetMfaStatus 当前会话账号的强因子状态
+	// (GET /api/v1/auth/mfa/status)
+	GetMfaStatus(c *gin.Context)
+	// VerifyLoginMfa 兑现 login_mfa 受限挑战（OTP 命中后签发会话）
+	// (POST /api/v1/auth/mfa/verify)
+	VerifyLoginMfa(c *gin.Context)
 	// CompleteOidcLogin 完成 OIDC 授权码流程并重定向回前端（成功携令牌片段，失败携错误码片段）
 	// (GET /api/v1/auth/oidc/callback)
 	CompleteOidcLogin(c *gin.Context, params CompleteOidcLoginParams)
@@ -6017,6 +6131,71 @@ func (siw *ServerInterfaceWrapper) GetCurrentUser(c *gin.Context) {
 	}
 
 	siw.Handler.GetCurrentUser(c)
+}
+
+// BeginMfaEnroll operation middleware
+func (siw *ServerInterfaceWrapper) BeginMfaEnroll(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.BeginMfaEnroll(c)
+}
+
+// ConfirmMfaEnroll operation middleware
+func (siw *ServerInterfaceWrapper) ConfirmMfaEnroll(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ConfirmMfaEnroll(c)
+}
+
+// RecoverLoginMfa operation middleware
+func (siw *ServerInterfaceWrapper) RecoverLoginMfa(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.RecoverLoginMfa(c)
+}
+
+// GetMfaStatus operation middleware
+func (siw *ServerInterfaceWrapper) GetMfaStatus(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetMfaStatus(c)
+}
+
+// VerifyLoginMfa operation middleware
+func (siw *ServerInterfaceWrapper) VerifyLoginMfa(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.VerifyLoginMfa(c)
 }
 
 // CompleteOidcLogin operation middleware
@@ -9244,6 +9423,11 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/api/v1/observability/host", wrapper.GetHostMonitoring)
 	router.POST(options.BaseURL+"/api/v1/auth/bootstrap", wrapper.Bootstrap)
 	router.POST(options.BaseURL+"/api/v1/auth/login", wrapper.Login)
+	router.POST(options.BaseURL+"/api/v1/auth/mfa/verify", wrapper.VerifyLoginMfa)
+	router.POST(options.BaseURL+"/api/v1/auth/mfa/recover", wrapper.RecoverLoginMfa)
+	router.GET(options.BaseURL+"/api/v1/auth/mfa/status", wrapper.GetMfaStatus)
+	router.POST(options.BaseURL+"/api/v1/auth/mfa/enroll", wrapper.BeginMfaEnroll)
+	router.POST(options.BaseURL+"/api/v1/auth/mfa/enroll/confirm", wrapper.ConfirmMfaEnroll)
 	router.GET(options.BaseURL+"/api/v1/auth/me", wrapper.GetCurrentUser)
 	router.GET(options.BaseURL+"/api/v1/auth/oidc/start", wrapper.StartOidcLogin)
 	router.GET(options.BaseURL+"/api/v1/auth/oidc/callback", wrapper.CompleteOidcLogin)

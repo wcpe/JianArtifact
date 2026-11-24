@@ -25,7 +25,7 @@ func (h *Handlers) Bootstrap(c *gin.Context) {
 		writeDomainErr(c, err)
 		return
 	}
-	c.JSON(http.StatusCreated, LoginResponse{Token: token, User: toAPIUser(user)})
+	c.JSON(http.StatusCreated, LoginResponse{Next: Authenticated, Token: token, User: toAPIUser(user)})
 }
 
 // GetCurrentUser 返回当前会话对应的用户：OIDC 回调后前端据此取身份快照，
@@ -63,9 +63,9 @@ func (h *Handlers) Login(c *gin.Context) {
 			return
 		}
 	}
-	token, user, err := h.auth.LoginContext(ctx, req.Username, req.Password)
+	outcome, err := h.auth.LoginOutcome(ctx, req.Username, req.Password, "")
 	if err == nil {
-		c.JSON(http.StatusOK, LoginResponse{Token: token, User: toAPIUser(user)})
+		writeLoginOutcome(c, outcome)
 		return
 	}
 	// 本地未通过：启用 LDAP 时再试目录。目录侧的身份同样要过 AuthService 的绑定/建号与
@@ -78,8 +78,8 @@ func (h *Handlers) Login(c *gin.Context) {
 				Username: identity.Username,
 				Email:    identity.Email,
 			}
-			if t, u, externalErr := h.auth.LoginExternalContext(ctx, external, revision); externalErr == nil {
-				c.JSON(http.StatusOK, LoginResponse{Token: t, User: toAPIUser(u)})
+			if ext, externalErr := h.auth.LoginExternalOutcome(ctx, external, revision, ""); externalErr == nil {
+				writeLoginOutcome(c, ext)
 				return
 			}
 		} else {
@@ -88,6 +88,24 @@ func (h *Handlers) Login(c *gin.Context) {
 	}
 	// 本地与目录都未通过：对外表现与纯本地失败完全一致（不泄露账号存在于哪一侧）。
 	writeDomainErr(c, err)
+}
+
+// writeLoginOutcome 把签发裁决映射为统一登录响应。
+func writeLoginOutcome(c *gin.Context, outcome *domain.AuthOutcome) {
+	resp := LoginResponse{Next: Authenticated, User: toAPIUser(outcome.User)}
+	switch outcome.Next {
+	case domain.AuthNextMfaRequired:
+		resp.Next = MfaRequired
+		resp.ChallengeId = &outcome.ChallengeID
+		resp.ChallengeToken = &outcome.ChallengeToken
+		exp := outcome.ExpiresAt.UTC().Format("2006-01-02T15:04:05Z07:00")
+		resp.ChallengeExpiresAt = &exp
+	case domain.AuthNextClaimRequired:
+		resp.Next = ClaimRequired
+	default:
+		resp.Token = outcome.Token
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 // Logout 注销当前会话：会话 jti 记入吊销名单直至过期。API Token 凭据登出为无操作。

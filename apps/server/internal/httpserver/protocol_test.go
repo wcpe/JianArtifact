@@ -106,11 +106,20 @@ func newProtocolEnvConfigured(t *testing.T, publicURL string, enabled formats.Se
 	nugetHandler := protocol.NewNuGetHandler(rawHandler, formatMetadataSvc, publicURL)
 	goProxyHandler := protocol.NewGoProxyHandler(rawHandler)
 
+	authSvc := domain.NewAuthService(userRepo, revokedRepo, jwtMgr)
+	mfaSvc, err := domain.NewSecurityMfaService(repository.NewSecurityAuthFactorRepo(db), userRepo,
+		[]byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatalf("构造强认证服务：%v", err)
+	}
+	authSvc.SetMfaService(mfaSvc)
+
 	handlers := api.NewHandlers(api.Deps{
 		Version:         "test",
 		Checks:          []func() error{db.Ping},
 		Migration:       db.CurrentVersion,
-		Auth:            domain.NewAuthService(userRepo, revokedRepo, jwtMgr),
+		Auth:            authSvc,
+		Mfa:             mfaSvc,
 		Users:           domain.NewUserService(userRepo),
 		Tokens:          tokenSvc,
 		Repos:           repoSvc,

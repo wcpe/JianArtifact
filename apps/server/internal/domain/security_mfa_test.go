@@ -92,7 +92,7 @@ func TestMfaEnrollConfirmAndAntiReplay(t *testing.T) {
 	secret := enrollmentSecret(t, en.EnrollmentURI)
 	otp := totpNow(t, secret, svc.now())
 
-	codes, err := svc.ConfirmFactorEnrollment(context.Background(), id, en.ChallengeToken, otp, "")
+	codes, err := svc.ConfirmFactorEnrollment(context.Background(), en.ChallengeToken, otp, "")
 	if err != nil {
 		t.Fatalf("确认登记：%v", err)
 	}
@@ -105,7 +105,7 @@ func TestMfaEnrollConfirmAndAntiReplay(t *testing.T) {
 	}
 
 	// 同一挑战 token 不能再次使用。
-	if _, err := svc.ConfirmFactorEnrollment(context.Background(), id, en.ChallengeToken, otp, ""); !errors.Is(err, ErrInvalidAuthChallenge) {
+	if _, err := svc.ConfirmFactorEnrollment(context.Background(), en.ChallengeToken, otp, ""); !errors.Is(err, ErrInvalidAuthChallenge) {
 		t.Fatalf("重复消费挑战：%v", err)
 	}
 	// 登记验证消耗该因子步：同一 OTP 在激活后不能重放。
@@ -132,7 +132,7 @@ func TestMfaConcurrentVerifySingleWinner(t *testing.T) {
 		t.Fatal(err)
 	}
 	secret := enrollmentSecret(t, en.EnrollmentURI)
-	if _, err := svc.ConfirmFactorEnrollment(context.Background(), id, en.ChallengeToken, totpNow(t, secret, svc.now()), ""); err != nil {
+	if _, err := svc.ConfirmFactorEnrollment(context.Background(), en.ChallengeToken, totpNow(t, secret, svc.now()), ""); err != nil {
 		t.Fatal(err)
 	}
 	frozen := svc.now().Add(90 * time.Second)
@@ -167,13 +167,13 @@ func TestMfaChallengeAttemptExhaustion(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < securityChallengeAttempts; i++ {
-		if _, err := svc.ConfirmFactorEnrollment(context.Background(), id, en.ChallengeToken, "000000", ""); !errors.Is(err, ErrInvalidAuthChallenge) {
+		if _, err := svc.ConfirmFactorEnrollment(context.Background(), en.ChallengeToken, "000000", ""); !errors.Is(err, ErrInvalidAuthChallenge) {
 			t.Fatalf("第 %d 次错误尝试未拒绝：%v", i+1, err)
 		}
 	}
 	// 额度耗尽后挑战终止，正确口令也不再受理。
 	secret := enrollmentSecret(t, en.EnrollmentURI)
-	if _, err := svc.ConfirmFactorEnrollment(context.Background(), id, en.ChallengeToken, totpNow(t, secret, svc.now()), ""); !errors.Is(err, ErrInvalidAuthChallenge) {
+	if _, err := svc.ConfirmFactorEnrollment(context.Background(), en.ChallengeToken, totpNow(t, secret, svc.now()), ""); !errors.Is(err, ErrInvalidAuthChallenge) {
 		t.Fatalf("耗尽后仍受理：%v", err)
 	}
 }
@@ -186,7 +186,7 @@ func TestMfaRecoveryAtomicity(t *testing.T) {
 		t.Fatal(err)
 	}
 	secret := enrollmentSecret(t, en.EnrollmentURI)
-	codes, err := svc.ConfirmFactorEnrollment(context.Background(), id, en.ChallengeToken, totpNow(t, secret, svc.now()), "")
+	codes, err := svc.ConfirmFactorEnrollment(context.Background(), en.ChallengeToken, totpNow(t, secret, svc.now()), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +241,7 @@ func TestMfaChallengeBindingEpochAndSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	secret := enrollmentSecret(t, en.EnrollmentURI)
-	if _, err := svc.ConfirmFactorEnrollment(context.Background(), id, en.ChallengeToken, totpNow(t, secret, svc.now()), "sess-2"); !errors.Is(err, ErrInvalidAuthChallenge) {
+	if _, err := svc.ConfirmFactorEnrollment(context.Background(), en.ChallengeToken, totpNow(t, secret, svc.now()), "sess-2"); !errors.Is(err, ErrInvalidAuthChallenge) {
 		t.Fatalf("跨会话确认未拒绝：%v", err)
 	}
 
@@ -258,7 +258,7 @@ func TestMfaChallengeBindingEpochAndSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.ConfirmFactorEnrollment(context.Background(), id, en2.ChallengeToken, totpNow(t, secret2, svc.now()), ""); !errors.Is(err, ErrInvalidAuthChallenge) {
+	if _, err := svc.ConfirmFactorEnrollment(context.Background(), en2.ChallengeToken, totpNow(t, secret2, svc.now()), ""); !errors.Is(err, ErrInvalidAuthChallenge) {
 		t.Fatalf("代次提升后挑战仍可用：%v", err)
 	}
 }

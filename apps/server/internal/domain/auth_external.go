@@ -25,22 +25,45 @@ func (s *AuthService) LoginExternal(identity ExternalIdentity) (string, *reposit
 
 // LoginExternalContext 按预先观察的水位完成外部登录，不将过时认证重新绑定到当前代次。
 func (s *AuthService) LoginExternalContext(ctx context.Context, identity ExternalIdentity, started int64) (string, *repository.User, error) {
+	outcome, err := s.LoginExternalOutcome(ctx, identity, started, "")
+	if errors.Is(err, ErrMfaRequired) {
+		// 外部登录命中强因子门：旧签名拿不到挑战，按受限结果处理。
+		return "", nil, err
+	}
+	var user *repository.User
+	var token string
+	if outcome != nil {
+		user, token = outcome.User, outcome.Token
+	}
+	return token, user, err
+}
+
+// LoginExternalOutcome 与 LoginExternalContext 同路径但返回结构化裁决；
+// 已启用强因子的账号得到 mfa_required + 受限挑战而非会话令牌。
+func (s *AuthService) LoginExternalOutcome(ctx context.Context, identity ExternalIdentity, started int64, sessionBinding string) (*AuthOutcome, error) {
 	method, ok := externalAuthAuditMethod(identity.Source)
 	if !ok || identity.Subject == "" || identity.Username == "" || started < 0 {
-		return "", nil, ErrInvalidCredentials
+		return nil, ErrInvalidCredentials
 	}
 	if identity.Username == AnonymousUsername {
-		return "", nil, ErrExternalIdentityInvalid
+		return nil, ErrExternalIdentityInvalid
 	}
-	token, user, err := s.issueCredentialSession(ctx, func(tx *sqlx.Tx) (repository.CredentialAccount, error) {
+	outcome, err := s.issueCredentialOutcome(ctx, func(tx *sqlx.Tx) (repository.CredentialAccount, error) {
 		u, err := repository.ExternalCredentialAccountTx(ctx, tx, identity.Source, identity.Subject, identity.Username, identity.Email, started)
 		if errors.Is(err, repository.ErrExternalCredentialBinding) {
 			err = ErrExternalIdentityInvalid
 		}
 		return u, err
-	})
+	}, sessionBinding, true)
+	var user *repository.User
+	if outcome != nil {
+		user = outcome.User
+	}
+	if err == nil && outcome.Next != AuthNextAuthenticated {
+		err = ErrMfaRequired
+	}
 	s.recordAuthAttempt(ctx, method, user, err)
-	return token, user, err
+	return outcome, err
 }
 
 // RecordExternalAuthRejection 记录在外部身份绑定之前结束的尝试，调用方只传固定裁决码。

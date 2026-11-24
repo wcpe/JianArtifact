@@ -149,11 +149,24 @@ func (r *SecurityAuthFactorRepo) ChallengeByTokenHash(ctx context.Context, token
 // TouchChallengeTx 把在途且未过期的挑战取回供验证；过期者先落终态再拒绝。
 // 返回挑战行与是否仍可用。
 func TouchChallengeTx(ctx context.Context, tx *sqlx.Tx, tokenHash, purpose string, now int64) (SecurityAuthChallenge, error) {
+	return TouchChallengePurposesTx(ctx, tx, tokenHash, now, purpose)
+}
+
+// TouchChallengePurposesTx 与 TouchChallengeTx 同语义，但接受一组合法用途
+// （登记确认同时受理 factor_enroll 与 factor_recover 绑定的挑战）。
+func TouchChallengePurposesTx(ctx context.Context, tx *sqlx.Tx, tokenHash string, now int64, purposes ...string) (SecurityAuthChallenge, error) {
 	c, err := ChallengeByTokenHashTx(ctx, tx, tokenHash)
 	if err != nil {
 		return SecurityAuthChallenge{}, err
 	}
-	if c.State != ChallengeStateIssued || c.Purpose != purpose {
+	ok := false
+	for _, p := range purposes {
+		if c.Purpose == p {
+			ok = true
+			break
+		}
+	}
+	if c.State != ChallengeStateIssued || !ok {
 		return SecurityAuthChallenge{}, ErrSecurityChallengeRejected
 	}
 	if c.ExpiresAt <= now {
@@ -434,4 +447,15 @@ func (r *SecurityAuthFactorRepo) SweepExpiredChallenges(ctx context.Context, now
 		return err
 	})
 	return int(n), err
+}
+
+// HasActiveTotpFactorTx 报告账号是否已有激活的强因子（签发门裁决用，锁内判断）。
+func HasActiveTotpFactorTx(ctx context.Context, tx *sqlx.Tx, userID int64) (bool, error) {
+	var fid string
+	err := tx.GetContext(ctx, &fid,
+		`SELECT factor_id FROM security_totp_factor WHERE user_id=? AND state='active' LIMIT 1`, userID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return fid != "", err
 }
