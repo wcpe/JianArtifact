@@ -322,11 +322,16 @@ func observabilityEventsQuery(f ObservabilityFilter, selectClause string) (strin
 		args = append(args, repoArgs...)
 	}
 	if f.Query != "" {
+		// 列侧用 unicode_lower（持久层注册的 Go 折叠函数）：内置 LOWER() 只折 ASCII，
+		// 单用小写针会让「Équipe QA」这类含非 ASCII 大写的记录搜不到；原文针也覆盖不了
+		// 用户手打小写的情形，两侧同做 Unicode 折叠才是完整口径。
 		needle := "%" + strings.ToLower(strings.TrimSpace(f.Query)) + "%"
-		query += " AND (LOWER(action) LIKE ? OR LOWER(detail) LIKE ? OR LOWER(entity_key) LIKE ?" +
-			" OR LOWER(entity_type) LIKE ? OR LOWER(actor) LIKE ? OR LOWER(actor_email) LIKE ?" +
-			" OR LOWER(http_path) LIKE ? OR LOWER(client_ip) LIKE ? OR LOWER(user_agent) LIKE ?)"
-		args = append(args, needle, needle, needle, needle, needle, needle, needle, needle, needle)
+		query += " AND (unicode_lower(action) LIKE ? OR unicode_lower(detail) LIKE ? OR unicode_lower(entity_key) LIKE ?" +
+			" OR unicode_lower(entity_type) LIKE ? OR unicode_lower(actor) LIKE ? OR unicode_lower(actor_email) LIKE ?" +
+			" OR unicode_lower(http_path) LIKE ? OR unicode_lower(client_ip) LIKE ? OR unicode_lower(user_agent) LIKE ?)"
+		for i := 0; i < 9; i++ {
+			args = append(args, needle)
+		}
 	}
 	if f.Method != "" {
 		query += " AND http_method = ?"

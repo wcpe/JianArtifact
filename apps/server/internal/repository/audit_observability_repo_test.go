@@ -413,3 +413,45 @@ func TestAttentionFilterCountsPartialAsRisk(t *testing.T) {
 		t.Fatalf("已确认应只含 partial 风险记录：%+v", acked)
 	}
 }
+
+// TestQueryNeedleMatchesNonASCIIUppercase 钉住关键词搜索对非 ASCII 大写的命中：
+// SQLite LOWER() 只折叠 ASCII，而 Go 侧 ToLower 会连 É→é 一起折——只下小写针时，
+// 存原文「Équipe QA」的记录永远匹配不上，调查按钮按组名搜索会找不到原记录。
+func TestQueryNeedleMatchesNonASCIIUppercase(t *testing.T) {
+	db, err := persistence.Open(filepath.Join(t.TempDir(), "observability-needle.db"))
+	if err != nil {
+		t.Fatalf("打开数据库：%v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := db.Migrate(); err != nil {
+		t.Fatalf("迁移数据库：%v", err)
+	}
+
+	now := time.Now().UTC()
+	if _, err := db.Exec(`INSERT INTO audit_log
+		(ts, actor, action, entity_type, entity_key, repo, detail, result, ip, source_node,
+		 status_code, duration_ms, user_agent, body_preview, http_headers)
+		VALUES (?, 'admin', 'group.member.add', 'group', 'Équipe QA', 'maven-public',
+		 'member=ops@example.test group=Équipe QA', 'ok', '203.0.113.7', '',
+		 200, 5, 'agent/1.0', '', '')`, now.Format(time.RFC3339Nano)); err != nil {
+		t.Fatalf("插入审计事件：%v", err)
+	}
+
+	repo := NewAuditObservabilityRepo(db)
+	filter := ObservabilityFilter{
+		From:       now.Add(-time.Hour).Format(time.RFC3339Nano),
+		To:         now.Add(time.Minute).Format(time.RFC3339Nano),
+		AuditMaxID: 1,
+	}
+
+	for _, query := range []string{"Équipe QA", "équipe qa", "ÉQUIPE QA"} {
+		filter.Query = query
+		events, err := repo.ListEvents(filter)
+		if err != nil {
+			t.Fatalf("关键词筛选 %q：%v", query, err)
+		}
+		if len(events) != 1 {
+			t.Fatalf("关键词 %q 应命中该记录：%+v", query, events)
+		}
+	}
+}
