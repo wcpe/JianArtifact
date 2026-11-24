@@ -739,7 +739,10 @@ describe("devmock ↔ OpenAPI 契约一致性", () => {
       manifestDigest: `sha256:${"a".repeat(64)}`,
     };
     expect(validate(body)).toBe(true);
-    expect(validate({ ...body, state: "published" })).toBe(false);
+    for (const state of ["awaiting_review", "published", "rejected", "expired"]) {
+      expect(validate({ ...body, state }), state).toBe(true);
+    }
+    expect(validate({ ...body, state: "approved" })).toBe(false);
     expect(validate({ ...body, coverage: "complete" })).toBe(false);
     expect(validate({ ...body, operationId: "f4f6df7b-a5d9-7f8a-9e90-8e92237cb582" })).toBe(false);
     for (const key of [

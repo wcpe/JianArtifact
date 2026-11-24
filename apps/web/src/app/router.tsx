@@ -27,6 +27,12 @@ const LicensesPage = lazy(() =>
 const AuditLogPage = lazy(() =>
   import("../pages/AuditLogPage").then((m) => ({ default: m.AuditLogPage })),
 );
+const SecurityPage = lazy(() =>
+  import("../pages/SecurityPage").then((m) => ({ default: m.SecurityPage })),
+);
+const SecurityCaseDetailPage = lazy(() =>
+  import("../pages/SecurityCaseDetailPage").then((m) => ({ default: m.SecurityCaseDetailPage })),
+);
 const MigrationDetailPage = lazy(() =>
   import("../pages/MigrationDetailPage").then((m) => ({ default: m.MigrationDetailPage })),
 );
@@ -140,6 +146,27 @@ export function AppRoutes() {
               <RequireAuth>
                 <RequireAdmin>
                   <AuditLogPage />
+                </RequireAdmin>
+              </RequireAuth>
+            }
+          />
+          {/* 安全治理 风险调查页（仅管理员） */}
+          <Route
+            path="/security"
+            element={
+              <RequireAuth>
+                <RequireAdmin>
+                  <SecurityPage />
+                </RequireAdmin>
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/security/cases/:caseId"
+            element={
+              <RequireAuth>
+                <RequireAdmin>
+                  <SecurityCaseDetailPage />
                 </RequireAdmin>
               </RequireAuth>
             }

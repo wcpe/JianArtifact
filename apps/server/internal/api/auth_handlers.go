@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -20,12 +21,37 @@ func (h *Handlers) Bootstrap(c *gin.Context) {
 		auth.WriteError(c, http.StatusBadRequest, "bad_request", "用户名与口令不能为空")
 		return
 	}
+	// 强认证装配后，空库首管理员必须持 claim_install 票安装（规格 安全治理）；
+	// 未装配（因子密钥缺失）时降级为传统直签路径。
+	if h.mfa != nil && (req.ClaimTicket == nil || *req.ClaimTicket == "") {
+		auth.WriteError(c, http.StatusUnauthorized, "invalid_auth_challenge", "空库首管理员须持安装认领票")
+		return
+	}
+	// 受控安装：持 claim_install 票走原子认领——创建管理员、种待登记因子、
+	// 签发确认挑战；票不直换会话，须 enroll/confirm 持票激活因子后重新登录。
+	if req.ClaimTicket != nil && *req.ClaimTicket != "" {
+		if h.mfa == nil {
+			writeDomainErr(c, domain.ErrMfaFactorUnavailable)
+			return
+		}
+		en, u, err := h.auth.BootstrapWithClaim(c.Request.Context(), req.Username, req.Password, *req.ClaimTicket)
+		if err != nil {
+			writeDomainErr(c, err)
+			return
+		}
+		expires := en.ExpiresAt.UTC().Format(time.RFC3339)
+		resp := LoginResponse{Next: ClaimRequired, User: toAPIUser(u), ChallengeId: &en.ChallengeID,
+			ChallengeToken: &en.ChallengeToken, ChallengeExpiresAt: &expires,
+			EnrollmentUri: &en.EnrollmentURI}
+		c.JSON(http.StatusCreated, resp)
+		return
+	}
 	token, user, err := h.auth.Bootstrap(req.Username, req.Password)
 	if err != nil {
 		writeDomainErr(c, err)
 		return
 	}
-	c.JSON(http.StatusCreated, LoginResponse{Token: token, User: toAPIUser(user)})
+	c.JSON(http.StatusCreated, LoginResponse{Next: Authenticated, Token: token, User: toAPIUser(user)})
 }
 
 // GetCurrentUser 返回当前会话对应的用户：OIDC 回调后前端据此取身份快照，
@@ -63,9 +89,9 @@ func (h *Handlers) Login(c *gin.Context) {
 			return
 		}
 	}
-	token, user, err := h.auth.LoginContext(ctx, req.Username, req.Password)
+	outcome, err := h.auth.LoginOutcome(ctx, req.Username, req.Password, "")
 	if err == nil {
-		c.JSON(http.StatusOK, LoginResponse{Token: token, User: toAPIUser(user)})
+		writeLoginOutcome(c, outcome)
 		return
 	}
 	// 本地未通过：启用 LDAP 时再试目录。目录侧的身份同样要过 AuthService 的绑定/建号与
@@ -78,8 +104,8 @@ func (h *Handlers) Login(c *gin.Context) {
 				Username: identity.Username,
 				Email:    identity.Email,
 			}
-			if t, u, externalErr := h.auth.LoginExternalContext(ctx, external, revision); externalErr == nil {
-				c.JSON(http.StatusOK, LoginResponse{Token: t, User: toAPIUser(u)})
+			if ext, externalErr := h.auth.LoginExternalOutcome(ctx, external, revision, ""); externalErr == nil {
+				writeLoginOutcome(c, ext)
 				return
 			}
 		} else {
@@ -88,6 +114,28 @@ func (h *Handlers) Login(c *gin.Context) {
 	}
 	// 本地与目录都未通过：对外表现与纯本地失败完全一致（不泄露账号存在于哪一侧）。
 	writeDomainErr(c, err)
+}
+
+// writeLoginOutcome 把签发裁决映射为统一登录响应。
+func writeLoginOutcome(c *gin.Context, outcome *domain.AuthOutcome) {
+	resp := LoginResponse{Next: Authenticated, User: toAPIUser(outcome.User)}
+	switch outcome.Next {
+	case domain.AuthNextMfaRequired:
+		resp.Next = MfaRequired
+		resp.ChallengeId = &outcome.ChallengeID
+		resp.ChallengeToken = &outcome.ChallengeToken
+		exp := outcome.ExpiresAt.UTC().Format("2006-01-02T15:04:05Z07:00")
+		resp.ChallengeExpiresAt = &exp
+		if outcome.EnrollmentURI != "" {
+			// 恢复重绑挑战：附带一次展示的登记 URI，客户端走 enroll/confirm 完成重绑。
+			resp.EnrollmentUri = &outcome.EnrollmentURI
+		}
+	case domain.AuthNextClaimRequired:
+		resp.Next = ClaimRequired
+	default:
+		resp.Token = outcome.Token
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 // Logout 注销当前会话：会话 jti 记入吊销名单直至过期。API Token 凭据登出为无操作。

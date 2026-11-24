@@ -785,6 +785,27 @@ func (e HostMonitoringHostState) Valid() bool {
 	}
 }
 
+// Defines values for LoginResponseNext.
+const (
+	Authenticated LoginResponseNext = "authenticated"
+	ClaimRequired LoginResponseNext = "claim_required"
+	MfaRequired   LoginResponseNext = "mfa_required"
+)
+
+// Valid indicates whether the value is a known member of the LoginResponseNext enum.
+func (e LoginResponseNext) Valid() bool {
+	switch e {
+	case Authenticated:
+		return true
+	case ClaimRequired:
+		return true
+	case MfaRequired:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MachineTokenScopeActions.
 const (
 	MachineTokenScopeActionsPublish MachineTokenScopeActions = "publish"
@@ -1087,16 +1108,16 @@ func (e ObservabilityBucket) Valid() bool {
 
 // Defines values for OperationsAlertSeverity.
 const (
-	Critical OperationsAlertSeverity = "critical"
-	Warning  OperationsAlertSeverity = "warning"
+	OperationsAlertSeverityCritical OperationsAlertSeverity = "critical"
+	OperationsAlertSeverityWarning  OperationsAlertSeverity = "warning"
 )
 
 // Valid indicates whether the value is a known member of the OperationsAlertSeverity enum.
 func (e OperationsAlertSeverity) Valid() bool {
 	switch e {
-	case Critical:
+	case OperationsAlertSeverityCritical:
 		return true
-	case Warning:
+	case OperationsAlertSeverityWarning:
 		return true
 	default:
 		return false
@@ -1121,12 +1142,15 @@ func (e PrivateAdmissionCandidateStatusCoverage) Valid() bool {
 // Defines values for PrivateAdmissionCandidateStatusErrorCode.
 const (
 	AdmissionIntegrityFailed PrivateAdmissionCandidateStatusErrorCode = "admission_integrity_failed"
+	ManualReject             PrivateAdmissionCandidateStatusErrorCode = "manual_reject"
 )
 
 // Valid indicates whether the value is a known member of the PrivateAdmissionCandidateStatusErrorCode enum.
 func (e PrivateAdmissionCandidateStatusErrorCode) Valid() bool {
 	switch e {
 	case AdmissionIntegrityFailed:
+		return true
+	case ManualReject:
 		return true
 	default:
 		return false
@@ -1135,19 +1159,61 @@ func (e PrivateAdmissionCandidateStatusErrorCode) Valid() bool {
 
 // Defines values for PrivateAdmissionCandidateStatusState.
 const (
-	Expired  PrivateAdmissionCandidateStatusState = "expired"
-	Rejected PrivateAdmissionCandidateStatusState = "rejected"
-	Staged   PrivateAdmissionCandidateStatusState = "staged"
+	AwaitingReview PrivateAdmissionCandidateStatusState = "awaiting_review"
+	Expired        PrivateAdmissionCandidateStatusState = "expired"
+	Published      PrivateAdmissionCandidateStatusState = "published"
+	Rejected       PrivateAdmissionCandidateStatusState = "rejected"
+	Staged         PrivateAdmissionCandidateStatusState = "staged"
 )
 
 // Valid indicates whether the value is a known member of the PrivateAdmissionCandidateStatusState enum.
 func (e PrivateAdmissionCandidateStatusState) Valid() bool {
 	switch e {
+	case AwaitingReview:
+		return true
 	case Expired:
+		return true
+	case Published:
 		return true
 	case Rejected:
 		return true
 	case Staged:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PrivateAdmissionDecisionPreviewRequestAction.
+const (
+	PrivateAdmissionDecisionPreviewRequestActionApprove PrivateAdmissionDecisionPreviewRequestAction = "approve"
+	PrivateAdmissionDecisionPreviewRequestActionReject  PrivateAdmissionDecisionPreviewRequestAction = "reject"
+)
+
+// Valid indicates whether the value is a known member of the PrivateAdmissionDecisionPreviewRequestAction enum.
+func (e PrivateAdmissionDecisionPreviewRequestAction) Valid() bool {
+	switch e {
+	case PrivateAdmissionDecisionPreviewRequestActionApprove:
+		return true
+	case PrivateAdmissionDecisionPreviewRequestActionReject:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PrivateAdmissionDecisionRequestAction.
+const (
+	PrivateAdmissionDecisionRequestActionApprove PrivateAdmissionDecisionRequestAction = "approve"
+	PrivateAdmissionDecisionRequestActionReject  PrivateAdmissionDecisionRequestAction = "reject"
+)
+
+// Valid indicates whether the value is a known member of the PrivateAdmissionDecisionRequestAction enum.
+func (e PrivateAdmissionDecisionRequestAction) Valid() bool {
+	switch e {
+	case PrivateAdmissionDecisionRequestActionApprove:
+		return true
+	case PrivateAdmissionDecisionRequestActionReject:
 		return true
 	default:
 		return false
@@ -1244,6 +1310,63 @@ func (e RepositoryVisibility) Valid() bool {
 	case RepositoryVisibilityPrivate:
 		return true
 	case RepositoryVisibilityPublic:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecurityActionPreviewRequestActionType.
+const (
+	HoldEvidence    SecurityActionPreviewRequestActionType = "hold_evidence"
+	LiftRestriction SecurityActionPreviewRequestActionType = "lift_restriction"
+	ReleaseHold     SecurityActionPreviewRequestActionType = "release_hold"
+	Restrict        SecurityActionPreviewRequestActionType = "restrict"
+)
+
+// Valid indicates whether the value is a known member of the SecurityActionPreviewRequestActionType enum.
+func (e SecurityActionPreviewRequestActionType) Valid() bool {
+	switch e {
+	case HoldEvidence:
+		return true
+	case LiftRestriction:
+		return true
+	case ReleaseHold:
+		return true
+	case Restrict:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecurityActionTargetKind.
+const (
+	SecurityActionTargetKindDigest            SecurityActionTargetKind = "digest"
+	SecurityActionTargetKindHold              SecurityActionTargetKind = "hold"
+	SecurityActionTargetKindInstanceWriteLock SecurityActionTargetKind = "instance_write_lock"
+	SecurityActionTargetKindIpCidr            SecurityActionTargetKind = "ip_cidr"
+	SecurityActionTargetKindPath              SecurityActionTargetKind = "path"
+	SecurityActionTargetKindRepository        SecurityActionTargetKind = "repository"
+	SecurityActionTargetKindVersion           SecurityActionTargetKind = "version"
+)
+
+// Valid indicates whether the value is a known member of the SecurityActionTargetKind enum.
+func (e SecurityActionTargetKind) Valid() bool {
+	switch e {
+	case SecurityActionTargetKindDigest:
+		return true
+	case SecurityActionTargetKindHold:
+		return true
+	case SecurityActionTargetKindInstanceWriteLock:
+		return true
+	case SecurityActionTargetKindIpCidr:
+		return true
+	case SecurityActionTargetKindPath:
+		return true
+	case SecurityActionTargetKindRepository:
+		return true
+	case SecurityActionTargetKindVersion:
 		return true
 	default:
 		return false
@@ -1643,6 +1766,219 @@ func (e SecurityAuditOutcome) Valid() bool {
 	case SecurityAuditOutcomeSucceeded:
 		return true
 	case SecurityAuditOutcomeUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecurityCaseSeverity.
+const (
+	SecurityCaseSeverityCritical SecurityCaseSeverity = "critical"
+	SecurityCaseSeverityHigh     SecurityCaseSeverity = "high"
+	SecurityCaseSeverityLow      SecurityCaseSeverity = "low"
+	SecurityCaseSeverityMedium   SecurityCaseSeverity = "medium"
+)
+
+// Valid indicates whether the value is a known member of the SecurityCaseSeverity enum.
+func (e SecurityCaseSeverity) Valid() bool {
+	switch e {
+	case SecurityCaseSeverityCritical:
+		return true
+	case SecurityCaseSeverityHigh:
+		return true
+	case SecurityCaseSeverityLow:
+		return true
+	case SecurityCaseSeverityMedium:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecurityCaseState.
+const (
+	SecurityCaseStateClaimed SecurityCaseState = "claimed"
+	SecurityCaseStateClosed  SecurityCaseState = "closed"
+	SecurityCaseStateOpen    SecurityCaseState = "open"
+)
+
+// Valid indicates whether the value is a known member of the SecurityCaseState enum.
+func (e SecurityCaseState) Valid() bool {
+	switch e {
+	case SecurityCaseStateClaimed:
+		return true
+	case SecurityCaseStateClosed:
+		return true
+	case SecurityCaseStateOpen:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecurityCaseLinkLinkKind.
+const (
+	SecurityCaseLinkLinkKindCandidate SecurityCaseLinkLinkKind = "candidate"
+	SecurityCaseLinkLinkKindFact      SecurityCaseLinkLinkKind = "fact"
+)
+
+// Valid indicates whether the value is a known member of the SecurityCaseLinkLinkKind enum.
+func (e SecurityCaseLinkLinkKind) Valid() bool {
+	switch e {
+	case SecurityCaseLinkLinkKindCandidate:
+		return true
+	case SecurityCaseLinkLinkKindFact:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecurityCaseOpenRequestEventLinksLinkKind.
+const (
+	SecurityCaseOpenRequestEventLinksLinkKindCandidate SecurityCaseOpenRequestEventLinksLinkKind = "candidate"
+	SecurityCaseOpenRequestEventLinksLinkKindFact      SecurityCaseOpenRequestEventLinksLinkKind = "fact"
+)
+
+// Valid indicates whether the value is a known member of the SecurityCaseOpenRequestEventLinksLinkKind enum.
+func (e SecurityCaseOpenRequestEventLinksLinkKind) Valid() bool {
+	switch e {
+	case SecurityCaseOpenRequestEventLinksLinkKindCandidate:
+		return true
+	case SecurityCaseOpenRequestEventLinksLinkKindFact:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecurityCaseOpenRequestSeverity.
+const (
+	SecurityCaseOpenRequestSeverityCritical SecurityCaseOpenRequestSeverity = "critical"
+	SecurityCaseOpenRequestSeverityHigh     SecurityCaseOpenRequestSeverity = "high"
+	SecurityCaseOpenRequestSeverityLow      SecurityCaseOpenRequestSeverity = "low"
+	SecurityCaseOpenRequestSeverityMedium   SecurityCaseOpenRequestSeverity = "medium"
+)
+
+// Valid indicates whether the value is a known member of the SecurityCaseOpenRequestSeverity enum.
+func (e SecurityCaseOpenRequestSeverity) Valid() bool {
+	switch e {
+	case SecurityCaseOpenRequestSeverityCritical:
+		return true
+	case SecurityCaseOpenRequestSeverityHigh:
+		return true
+	case SecurityCaseOpenRequestSeverityLow:
+		return true
+	case SecurityCaseOpenRequestSeverityMedium:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecurityCaseTransitionRequestAction.
+const (
+	Claim  SecurityCaseTransitionRequestAction = "claim"
+	Close  SecurityCaseTransitionRequestAction = "close"
+	Reopen SecurityCaseTransitionRequestAction = "reopen"
+)
+
+// Valid indicates whether the value is a known member of the SecurityCaseTransitionRequestAction enum.
+func (e SecurityCaseTransitionRequestAction) Valid() bool {
+	switch e {
+	case Claim:
+		return true
+	case Close:
+		return true
+	case Reopen:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecurityFindingConfidence.
+const (
+	SecurityFindingConfidenceHigh   SecurityFindingConfidence = "high"
+	SecurityFindingConfidenceLow    SecurityFindingConfidence = "low"
+	SecurityFindingConfidenceMedium SecurityFindingConfidence = "medium"
+)
+
+// Valid indicates whether the value is a known member of the SecurityFindingConfidence enum.
+func (e SecurityFindingConfidence) Valid() bool {
+	switch e {
+	case SecurityFindingConfidenceHigh:
+		return true
+	case SecurityFindingConfidenceLow:
+		return true
+	case SecurityFindingConfidenceMedium:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecurityFindingSeverity.
+const (
+	SecurityFindingSeverityCritical SecurityFindingSeverity = "critical"
+	SecurityFindingSeverityHigh     SecurityFindingSeverity = "high"
+	SecurityFindingSeverityLow      SecurityFindingSeverity = "low"
+	SecurityFindingSeverityMedium   SecurityFindingSeverity = "medium"
+)
+
+// Valid indicates whether the value is a known member of the SecurityFindingSeverity enum.
+func (e SecurityFindingSeverity) Valid() bool {
+	switch e {
+	case SecurityFindingSeverityCritical:
+		return true
+	case SecurityFindingSeverityHigh:
+		return true
+	case SecurityFindingSeverityLow:
+		return true
+	case SecurityFindingSeverityMedium:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecurityNotificationDeliveryChannel.
+const (
+	Qq   SecurityNotificationDeliveryChannel = "qq"
+	Smtp SecurityNotificationDeliveryChannel = "smtp"
+)
+
+// Valid indicates whether the value is a known member of the SecurityNotificationDeliveryChannel enum.
+func (e SecurityNotificationDeliveryChannel) Valid() bool {
+	switch e {
+	case Qq:
+		return true
+	case Smtp:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecurityNotificationDeliveryState.
+const (
+	SecurityNotificationDeliveryStateAccepted  SecurityNotificationDeliveryState = "accepted"
+	SecurityNotificationDeliveryStateAttempted SecurityNotificationDeliveryState = "attempted"
+	SecurityNotificationDeliveryStateFailed    SecurityNotificationDeliveryState = "failed"
+	SecurityNotificationDeliveryStatePending   SecurityNotificationDeliveryState = "pending"
+)
+
+// Valid indicates whether the value is a known member of the SecurityNotificationDeliveryState enum.
+func (e SecurityNotificationDeliveryState) Valid() bool {
+	switch e {
+	case SecurityNotificationDeliveryStateAccepted:
+		return true
+	case SecurityNotificationDeliveryStateAttempted:
+		return true
+	case SecurityNotificationDeliveryStateFailed:
+		return true
+	case SecurityNotificationDeliveryStatePending:
 		return true
 	default:
 		return false
@@ -2141,6 +2477,75 @@ func (e GetRepositoryUpstreamHealthParamsSource) Valid() bool {
 	case GetRepositoryUpstreamHealthParamsSourceProbe:
 		return true
 	case GetRepositoryUpstreamHealthParamsSourceRequest:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListSecurityCasesParamsState.
+const (
+	ListSecurityCasesParamsStateClaimed ListSecurityCasesParamsState = "claimed"
+	ListSecurityCasesParamsStateClosed  ListSecurityCasesParamsState = "closed"
+	ListSecurityCasesParamsStateOpen    ListSecurityCasesParamsState = "open"
+)
+
+// Valid indicates whether the value is a known member of the ListSecurityCasesParamsState enum.
+func (e ListSecurityCasesParamsState) Valid() bool {
+	switch e {
+	case ListSecurityCasesParamsStateClaimed:
+		return true
+	case ListSecurityCasesParamsStateClosed:
+		return true
+	case ListSecurityCasesParamsStateOpen:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GetSecurityCaseSectionParamsSection.
+const (
+	ActionsEvidence GetSecurityCaseSectionParamsSection = "actions-evidence"
+	Identity        GetSecurityCaseSectionParamsSection = "identity"
+	Timeline        GetSecurityCaseSectionParamsSection = "timeline"
+	Uploads         GetSecurityCaseSectionParamsSection = "uploads"
+)
+
+// Valid indicates whether the value is a known member of the GetSecurityCaseSectionParamsSection enum.
+func (e GetSecurityCaseSectionParamsSection) Valid() bool {
+	switch e {
+	case ActionsEvidence:
+		return true
+	case Identity:
+		return true
+	case Timeline:
+		return true
+	case Uploads:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ReportRecoveryCheckpointJSONBodyCheckpointStatus.
+const (
+	ReportRecoveryCheckpointJSONBodyCheckpointStatusMismatch ReportRecoveryCheckpointJSONBodyCheckpointStatus = "mismatch"
+	ReportRecoveryCheckpointJSONBodyCheckpointStatusMissing  ReportRecoveryCheckpointJSONBodyCheckpointStatus = "missing"
+	ReportRecoveryCheckpointJSONBodyCheckpointStatusStale    ReportRecoveryCheckpointJSONBodyCheckpointStatus = "stale"
+	ReportRecoveryCheckpointJSONBodyCheckpointStatusVerified ReportRecoveryCheckpointJSONBodyCheckpointStatus = "verified"
+)
+
+// Valid indicates whether the value is a known member of the ReportRecoveryCheckpointJSONBodyCheckpointStatus enum.
+func (e ReportRecoveryCheckpointJSONBodyCheckpointStatus) Valid() bool {
+	switch e {
+	case ReportRecoveryCheckpointJSONBodyCheckpointStatusMismatch:
+		return true
+	case ReportRecoveryCheckpointJSONBodyCheckpointStatusMissing:
+		return true
+	case ReportRecoveryCheckpointJSONBodyCheckpointStatusStale:
+		return true
+	case ReportRecoveryCheckpointJSONBodyCheckpointStatusVerified:
 		return true
 	default:
 		return false
@@ -2997,8 +3402,10 @@ type BatchDeleteAssetsResponse struct {
 
 // BootstrapRequest defines model for BootstrapRequest.
 type BootstrapRequest struct {
-	Password string `json:"password"`
-	Username string `json:"username"`
+	// ClaimTicket claim_install 安装认领票；提供时走受控安装（不直签会话，返回登记挑战）
+	ClaimTicket *string `json:"claimTicket,omitempty"`
+	Password    string  `json:"password"`
+	Username    string  `json:"username"`
 }
 
 // CapacityPoint defines model for CapacityPoint.
@@ -3384,9 +3791,28 @@ type LoginRequest struct {
 
 // LoginResponse defines model for LoginResponse.
 type LoginResponse struct {
+	// ChallengeExpiresAt 挑战过期时间（RFC3339）
+	ChallengeExpiresAt *string `json:"challengeExpiresAt,omitempty"`
+
+	// ChallengeId login_mfa 受限挑战标识；仅 next=mfa_required 时存在
+	ChallengeId *string `json:"challengeId,omitempty"`
+
+	// ChallengeToken login_mfa 受限挑战明文；仅 next=mfa_required 时存在，展示一次后不持久
+	ChallengeToken *string `json:"challengeToken,omitempty"`
+
+	// EnrollmentUri otpauth:// URI；仅受控安装/认领引导返回，展示一次后不持久
+	EnrollmentUri *string `json:"enrollmentUri,omitempty"`
+
+	// Next 登录签发裁决；authenticated 才发放会话令牌
+	Next LoginResponseNext `json:"next"`
+
+	// Token 会话 JWT；next != authenticated 时为空串
 	Token string `json:"token"`
 	User  User   `json:"user"`
 }
+
+// LoginResponseNext 登录签发裁决；authenticated 才发放会话令牌
+type LoginResponseNext string
 
 // MachineTokenScope defines model for MachineTokenScope.
 type MachineTokenScope struct {
@@ -3480,6 +3906,82 @@ type MaintenanceRestartResultScope string
 
 // MetricGroupState defines model for MetricGroupState.
 type MetricGroupState string
+
+// MfaClaimRequest defines model for MfaClaimRequest.
+type MfaClaimRequest struct {
+	// ClaimTicket 受控操作者出具的一次性认领票明文
+	ClaimTicket string `json:"claimTicket"`
+	Password    string `json:"password"`
+	Username    string `json:"username"`
+}
+
+// MfaConfirmRequest defines model for MfaConfirmRequest.
+type MfaConfirmRequest struct {
+	ChallengeToken string `json:"challengeToken"`
+
+	// ClaimTicket 认领来源挑战必须出示的在途 claim_admin 票（仅认领流程使用）
+	ClaimTicket *string `json:"claimTicket,omitempty"`
+	Otp         string  `json:"otp"`
+}
+
+// MfaEnrollResponse defines model for MfaEnrollResponse.
+type MfaEnrollResponse struct {
+	ChallengeId string `json:"challengeId"`
+
+	// ChallengeToken 受限挑战明文，展示一次后不持久
+	ChallengeToken string `json:"challengeToken"`
+
+	// EnrollmentUri otpauth:// URI，供认证器扫码/手动录入
+	EnrollmentUri string `json:"enrollmentUri"`
+
+	// ExpiresAt 挑战过期时间（RFC3339）
+	ExpiresAt string `json:"expiresAt"`
+}
+
+// MfaRecoverRequest defines model for MfaRecoverRequest.
+type MfaRecoverRequest struct {
+	// ChallengeToken login_mfa 受限挑战明文（第一因素已验证的凭据）
+	ChallengeToken string `json:"challengeToken"`
+	RecoveryCode   string `json:"recoveryCode"`
+}
+
+// MfaRecoveryCodes defines model for MfaRecoveryCodes.
+type MfaRecoveryCodes struct {
+	// RecoveryCodes 恢复码批次，仅展示一次
+	RecoveryCodes []string `json:"recoveryCodes"`
+}
+
+// MfaStatusResponse defines model for MfaStatusResponse.
+type MfaStatusResponse struct {
+	Enrolled          bool `json:"enrolled"`
+	EnrollmentPending bool `json:"enrollmentPending"`
+
+	// MfaRequired 账号是否被策略强制要求启用强因子（管理员）
+	MfaRequired            bool `json:"mfaRequired"`
+	RecoveryCodesRemaining int  `json:"recoveryCodesRemaining"`
+}
+
+// MfaStepUpChallenge defines model for MfaStepUpChallenge.
+type MfaStepUpChallenge struct {
+	ChallengeId    string `json:"challengeId"`
+	ChallengeToken string `json:"challengeToken"`
+
+	// ExpiresAt RFC3339
+	ExpiresAt string `json:"expiresAt"`
+}
+
+// MfaVerifiedResponse defines model for MfaVerifiedResponse.
+type MfaVerifiedResponse struct {
+	// MfaVerifiedAt 会话近期强认证水位（RFC3339）
+	MfaVerifiedAt string `json:"mfaVerifiedAt"`
+}
+
+// MfaVerifyRequest defines model for MfaVerifyRequest.
+type MfaVerifyRequest struct {
+	// ChallengeToken login_mfa 受限挑战明文
+	ChallengeToken string `json:"challengeToken"`
+	Otp            string `json:"otp"`
+}
 
 // MigrationConflictPolicy defines model for MigrationConflictPolicy.
 type MigrationConflictPolicy string
@@ -3759,7 +4261,7 @@ type PrivateAdmissionCandidateStatus struct {
 	// Coverage 仅跟踪私有状态，不证明扫描覆盖。
 	Coverage PrivateAdmissionCandidateStatusCoverage `json:"coverage"`
 
-	// ErrorCode 已确认的硬完整性失败；无此事实时省略。
+	// ErrorCode 已确认的硬完整性失败或管理员驳回；无此事实时省略。
 	ErrorCode *PrivateAdmissionCandidateStatusErrorCode `json:"errorCode,omitempty"`
 
 	// ExpiresAt 候选在服务端的 UTC 到期时间。
@@ -3771,9 +4273,12 @@ type PrivateAdmissionCandidateStatus struct {
 	// ManifestVersion 已确认的清单版本，未确认时省略。
 	ManifestVersion *int64 `json:"manifestVersion,omitempty"`
 	OperationId     string `json:"operationId"`
-	RepositoryId    int64  `json:"repositoryId"`
 
-	// State 已封存、拒绝或已过期；已封存不表示已发布。
+	// PublishedAssetId 批准后提升为公开资产的资产号；未发布时省略。
+	PublishedAssetId *int64 `json:"publishedAssetId,omitempty"`
+	RepositoryId     int64  `json:"repositoryId"`
+
+	// State 已封存、待审、已发布、拒绝或已过期；已封存不表示已发布。
 	State         PrivateAdmissionCandidateStatusState `json:"state"`
 	TargetVersion int64                                `json:"targetVersion"`
 }
@@ -3781,11 +4286,43 @@ type PrivateAdmissionCandidateStatus struct {
 // PrivateAdmissionCandidateStatusCoverage 仅跟踪私有状态，不证明扫描覆盖。
 type PrivateAdmissionCandidateStatusCoverage string
 
-// PrivateAdmissionCandidateStatusErrorCode 已确认的硬完整性失败；无此事实时省略。
+// PrivateAdmissionCandidateStatusErrorCode 已确认的硬完整性失败或管理员驳回；无此事实时省略。
 type PrivateAdmissionCandidateStatusErrorCode string
 
-// PrivateAdmissionCandidateStatusState 已封存、拒绝或已过期；已封存不表示已发布。
+// PrivateAdmissionCandidateStatusState 已封存、待审、已发布、拒绝或已过期；已封存不表示已发布。
 type PrivateAdmissionCandidateStatusState string
+
+// PrivateAdmissionDecisionPreviewRequest defines model for PrivateAdmissionDecisionPreviewRequest.
+type PrivateAdmissionDecisionPreviewRequest struct {
+	Action PrivateAdmissionDecisionPreviewRequestAction `json:"action"`
+	Reason string                                       `json:"reason"`
+}
+
+// PrivateAdmissionDecisionPreviewRequestAction defines model for PrivateAdmissionDecisionPreviewRequest.Action.
+type PrivateAdmissionDecisionPreviewRequestAction string
+
+// PrivateAdmissionDecisionPreviewResponse defines model for PrivateAdmissionDecisionPreviewResponse.
+type PrivateAdmissionDecisionPreviewResponse struct {
+	Blockers          []string `json:"blockers"`
+	ConfirmationToken *string  `json:"confirmationToken,omitempty"`
+
+	// ExpiresAt 处置原因，写入裁决事实。
+	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
+	Feasible  bool       `json:"feasible"`
+}
+
+// PrivateAdmissionDecisionRequest defines model for PrivateAdmissionDecisionRequest.
+type PrivateAdmissionDecisionRequest struct {
+	// Action 批准提升为公开资产或驳回候选。
+	Action PrivateAdmissionDecisionRequestAction `json:"action"`
+
+	// ConfirmationToken 同一主体经 preview 取得的短效单次确认令牌；令牌绑定人、动作、版本、摘要、规则与有效期。
+	ConfirmationToken string `json:"confirmationToken"`
+	Reason            string `json:"reason"`
+}
+
+// PrivateAdmissionDecisionRequestAction 批准提升为公开资产或驳回候选。
+type PrivateAdmissionDecisionRequestAction string
 
 // ProtocolMetricPoint defines model for ProtocolMetricPoint.
 type ProtocolMetricPoint struct {
@@ -4021,6 +4558,57 @@ type RestoreFromLocalPackageRequest struct {
 	Overwrite *bool `json:"overwrite,omitempty"`
 }
 
+// SecurityActionExecuteRequest defines model for SecurityActionExecuteRequest.
+type SecurityActionExecuteRequest struct {
+	// ActionDigest 预览返回的动作摘要；漂移即拒绝
+	ActionDigest string `json:"actionDigest"`
+}
+
+// SecurityActionItem defines model for SecurityActionItem.
+type SecurityActionItem struct {
+	Detail  string `json:"detail"`
+	Outcome string `json:"outcome"`
+	Seq     int    `json:"seq"`
+	Target  string `json:"target"`
+}
+
+// SecurityActionPreview defines model for SecurityActionPreview.
+type SecurityActionPreview struct {
+	ActionDigest string   `json:"actionDigest"`
+	ActionId     string   `json:"actionId"`
+	ActionType   string   `json:"actionType"`
+	ExpiresAt    string   `json:"expiresAt"`
+	Targets      []string `json:"targets"`
+}
+
+// SecurityActionPreviewRequest defines model for SecurityActionPreviewRequest.
+type SecurityActionPreviewRequest struct {
+	ActionType     SecurityActionPreviewRequestActionType `json:"actionType"`
+	IdempotencyKey string                                 `json:"idempotencyKey"`
+	Reason         string                                 `json:"reason"`
+	Targets        []SecurityActionTarget                 `json:"targets"`
+}
+
+// SecurityActionPreviewRequestActionType defines model for SecurityActionPreviewRequest.ActionType.
+type SecurityActionPreviewRequestActionType string
+
+// SecurityActionResult defines model for SecurityActionResult.
+type SecurityActionResult struct {
+	ActionId string               `json:"actionId"`
+	Items    []SecurityActionItem `json:"items"`
+	State    string               `json:"state"`
+}
+
+// SecurityActionTarget defines model for SecurityActionTarget.
+type SecurityActionTarget struct {
+	Effect *string                  `json:"effect,omitempty"`
+	Kind   SecurityActionTargetKind `json:"kind"`
+	Target *string                  `json:"target,omitempty"`
+}
+
+// SecurityActionTargetKind defines model for SecurityActionTarget.Kind.
+type SecurityActionTargetKind string
+
 // SecurityAuditCollectionGap defines model for SecurityAuditCollectionGap.
 type SecurityAuditCollectionGap struct {
 	Coverage  SecurityAuditCollectionGapCoverage  `json:"coverage"`
@@ -4210,6 +4798,128 @@ type SecurityAuditEventType string
 
 // SecurityAuditOutcome defines model for SecurityAuditOutcome.
 type SecurityAuditOutcome string
+
+// SecurityCase defines model for SecurityCase.
+type SecurityCase struct {
+	CaseId        string               `json:"caseId"`
+	CreatedUnix   *int64               `json:"createdUnix,omitempty"`
+	OwnerUserId   *int64               `json:"ownerUserId,omitempty"`
+	Reason        *string              `json:"reason,omitempty"`
+	Resolution    *string              `json:"resolution,omitempty"`
+	Severity      SecurityCaseSeverity `json:"severity"`
+	State         SecurityCaseState    `json:"state"`
+	TargetVersion int64                `json:"targetVersion"`
+	Title         string               `json:"title"`
+	UpdatedUnix   *int64               `json:"updatedUnix,omitempty"`
+}
+
+// SecurityCaseSeverity defines model for SecurityCase.Severity.
+type SecurityCaseSeverity string
+
+// SecurityCaseState defines model for SecurityCase.State.
+type SecurityCaseState string
+
+// SecurityCaseDetail defines model for SecurityCaseDetail.
+type SecurityCaseDetail struct {
+	Case            SecurityCase       `json:"case"`
+	Findings        []SecurityFinding  `json:"findings"`
+	Links           []SecurityCaseLink `json:"links"`
+	ReadSeenVersion *int64             `json:"readSeenVersion,omitempty"`
+	ReadUnix        *int64             `json:"readUnix,omitempty"`
+}
+
+// SecurityCaseLink defines model for SecurityCaseLink.
+type SecurityCaseLink struct {
+	CaseId     string                   `json:"caseId"`
+	EventId    string                   `json:"eventId"`
+	LinkKind   SecurityCaseLinkLinkKind `json:"linkKind"`
+	LinkedBy   *string                  `json:"linkedBy,omitempty"`
+	LinkedUnix *int64                   `json:"linkedUnix,omitempty"`
+}
+
+// SecurityCaseLinkLinkKind defines model for SecurityCaseLink.LinkKind.
+type SecurityCaseLinkLinkKind string
+
+// SecurityCaseOpenRequest defines model for SecurityCaseOpenRequest.
+type SecurityCaseOpenRequest struct {
+	EventLinks *[]struct {
+		EventId  string                                    `json:"eventId"`
+		LinkKind SecurityCaseOpenRequestEventLinksLinkKind `json:"linkKind"`
+	} `json:"eventLinks,omitempty"`
+	Reason   string                          `json:"reason"`
+	Severity SecurityCaseOpenRequestSeverity `json:"severity"`
+	Title    string                          `json:"title"`
+}
+
+// SecurityCaseOpenRequestEventLinksLinkKind defines model for SecurityCaseOpenRequest.EventLinks.LinkKind.
+type SecurityCaseOpenRequestEventLinksLinkKind string
+
+// SecurityCaseOpenRequestSeverity defines model for SecurityCaseOpenRequest.Severity.
+type SecurityCaseOpenRequestSeverity string
+
+// SecurityCaseTransitionRequest defines model for SecurityCaseTransitionRequest.
+type SecurityCaseTransitionRequest struct {
+	Action         SecurityCaseTransitionRequestAction `json:"action"`
+	Reason         *string                             `json:"reason,omitempty"`
+	ResolutionCode *string                             `json:"resolutionCode,omitempty"`
+	TargetVersion  int64                               `json:"targetVersion"`
+}
+
+// SecurityCaseTransitionRequestAction defines model for SecurityCaseTransitionRequest.Action.
+type SecurityCaseTransitionRequestAction string
+
+// SecurityFinding defines model for SecurityFinding.
+type SecurityFinding struct {
+	CaseId      *string                    `json:"caseId,omitempty"`
+	Confidence  *SecurityFindingConfidence `json:"confidence,omitempty"`
+	CreatedUnix *int64                     `json:"createdUnix,omitempty"`
+	FindingId   string                     `json:"findingId"`
+	RuleId      string                     `json:"ruleId"`
+	RuleVersion int                        `json:"ruleVersion"`
+	Severity    SecurityFindingSeverity    `json:"severity"`
+	SubjectKey  string                     `json:"subjectKey"`
+	Summary     string                     `json:"summary"`
+	WindowFrom  *int64                     `json:"windowFrom,omitempty"`
+	WindowTo    *int64                     `json:"windowTo,omitempty"`
+}
+
+// SecurityFindingConfidence defines model for SecurityFinding.Confidence.
+type SecurityFindingConfidence string
+
+// SecurityFindingSeverity defines model for SecurityFinding.Severity.
+type SecurityFindingSeverity string
+
+// SecurityNotificationDelivery defines model for SecurityNotificationDelivery.
+type SecurityNotificationDelivery struct {
+	Attempts     *int64                              `json:"attempts,omitempty"`
+	Channel      SecurityNotificationDeliveryChannel `json:"channel"`
+	DeliveryId   string                              `json:"deliveryId"`
+	LastError    *string                             `json:"lastError,omitempty"`
+	State        SecurityNotificationDeliveryState   `json:"state"`
+	TargetMasked string                              `json:"targetMasked"`
+}
+
+// SecurityNotificationDeliveryChannel defines model for SecurityNotificationDelivery.Channel.
+type SecurityNotificationDeliveryChannel string
+
+// SecurityNotificationDeliveryState defines model for SecurityNotificationDelivery.State.
+type SecurityNotificationDeliveryState string
+
+// SecurityNotificationPage defines model for SecurityNotificationPage.
+type SecurityNotificationPage struct {
+	HasMore bool `json:"hasMore"`
+	Items   []struct {
+		Acked       *bool   `json:"acked,omitempty"`
+		CreatedUnix *int64  `json:"createdUnix,omitempty"`
+		Kind        *string `json:"kind,omitempty"`
+		NoticeId    *string `json:"noticeId,omitempty"`
+		Payload     *string `json:"payload,omitempty"`
+		Seq         *int64  `json:"seq,omitempty"`
+		Title       *string `json:"title,omitempty"`
+	} `json:"items"`
+	NextCursor *int64 `json:"nextCursor,omitempty"`
+	Watermark  int64  `json:"watermark"`
+}
 
 // SetRepositoryOnlineRequest defines model for SetRepositoryOnlineRequest.
 type SetRepositoryOnlineRequest struct {
@@ -4782,6 +5492,9 @@ type PrivateAdmissionUnavailable = Error
 // PublishPolicyWriteConflict defines model for PublishPolicyWriteConflict.
 type PublishPolicyWriteConflict = Error
 
+// RecentMfaRequired defines model for RecentMfaRequired.
+type RecentMfaRequired = Error
+
 // SecurityAuditCursorExpired defines model for SecurityAuditCursorExpired.
 type SecurityAuditCursorExpired = Error
 
@@ -4793,6 +5506,9 @@ type SecurityAuditUnavailable = Error
 
 // ServiceUnavailable defines model for ServiceUnavailable.
 type ServiceUnavailable = Error
+
+// TooManyRequests defines model for TooManyRequests.
+type TooManyRequests = Error
 
 // Unauthorized defines model for Unauthorized.
 type Unauthorized = Error
@@ -5219,6 +5935,74 @@ type GetRepositoryUpstreamHealthRecentParams struct {
 	Limit *UpstreamHealthLimitParam `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
+// ListSecurityCasesParams defines parameters for ListSecurityCases.
+type ListSecurityCasesParams struct {
+	State *ListSecurityCasesParamsState `form:"state,omitempty" json:"state,omitempty"`
+}
+
+// ListSecurityCasesParamsState defines parameters for ListSecurityCases.
+type ListSecurityCasesParamsState string
+
+// MarkSecurityCaseReadJSONBody defines parameters for MarkSecurityCaseRead.
+type MarkSecurityCaseReadJSONBody struct {
+	SeenVersion int64 `json:"seenVersion"`
+}
+
+// GetSecurityCaseSectionParams defines parameters for GetSecurityCaseSection.
+type GetSecurityCaseSectionParams struct {
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// GetSecurityCaseSectionParamsSection defines parameters for GetSecurityCaseSection.
+type GetSecurityCaseSectionParamsSection string
+
+// ListSecurityFindingsParams defines parameters for ListSecurityFindings.
+type ListSecurityFindingsParams struct {
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// ListNotificationDeliveriesParams defines parameters for ListNotificationDeliveries.
+type ListNotificationDeliveriesParams struct {
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// RetryNotificationDeliveryJSONBody defines parameters for RetryNotificationDelivery.
+type RetryNotificationDeliveryJSONBody struct {
+	TargetVersion int64 `json:"targetVersion"`
+}
+
+// ListSecurityNotificationsParams defines parameters for ListSecurityNotifications.
+type ListSecurityNotificationsParams struct {
+	After *int64 `form:"after,omitempty" json:"after,omitempty"`
+	Limit *int   `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// SetSecurityQQBindingJSONBody defines parameters for SetSecurityQQBinding.
+type SetSecurityQQBindingJSONBody struct {
+	Openid string `json:"openid"`
+}
+
+// BeginRecoveryIsolationJSONBody defines parameters for BeginRecoveryIsolation.
+type BeginRecoveryIsolationJSONBody struct {
+	Reason    *string `json:"reason,omitempty"`
+	RestoreId string  `json:"restoreId"`
+}
+
+// ConfirmRecoveryJSONBody defines parameters for ConfirmRecovery.
+type ConfirmRecoveryJSONBody struct {
+	RestoreId string `json:"restoreId"`
+}
+
+// ReportRecoveryCheckpointJSONBody defines parameters for ReportRecoveryCheckpoint.
+type ReportRecoveryCheckpointJSONBody struct {
+	CheckpointStatus  ReportRecoveryCheckpointJSONBodyCheckpointStatus `json:"checkpointStatus"`
+	RestoreId         string                                           `json:"restoreId"`
+	VerifiedWatermark int                                              `json:"verifiedWatermark"`
+}
+
+// ReportRecoveryCheckpointJSONBodyCheckpointStatus defines parameters for ReportRecoveryCheckpoint.
+type ReportRecoveryCheckpointJSONBodyCheckpointStatus string
+
 // ListUserGroupsParams defines parameters for ListUserGroups.
 type ListUserGroupsParams struct {
 	Page     *PageParam     `form:"page,omitempty" json:"page,omitempty"`
@@ -5236,6 +6020,21 @@ type BootstrapJSONRequestBody = BootstrapRequest
 
 // LoginJSONRequestBody defines body for Login for application/json ContentType.
 type LoginJSONRequestBody = LoginRequest
+
+// ClaimMfaEnrollJSONRequestBody defines body for ClaimMfaEnroll for application/json ContentType.
+type ClaimMfaEnrollJSONRequestBody = MfaClaimRequest
+
+// ConfirmMfaEnrollJSONRequestBody defines body for ConfirmMfaEnroll for application/json ContentType.
+type ConfirmMfaEnrollJSONRequestBody = MfaConfirmRequest
+
+// RecoverLoginMfaJSONRequestBody defines body for RecoverLoginMfa for application/json ContentType.
+type RecoverLoginMfaJSONRequestBody = MfaRecoverRequest
+
+// VerifyMfaStepUpJSONRequestBody defines body for VerifyMfaStepUp for application/json ContentType.
+type VerifyMfaStepUpJSONRequestBody = MfaVerifyRequest
+
+// VerifyLoginMfaJSONRequestBody defines body for VerifyLoginMfa for application/json ContentType.
+type VerifyLoginMfaJSONRequestBody = MfaVerifyRequest
 
 // CreateBackupJSONRequestBody defines body for CreateBackup for application/json ContentType.
 type CreateBackupJSONRequestBody = CreateBackupRequest
@@ -5307,6 +6106,42 @@ type SetRepositoryOnlineJSONRequestBody = SetRepositoryOnlineRequest
 
 // RenameRepositoryJSONRequestBody defines body for RenameRepository for application/json ContentType.
 type RenameRepositoryJSONRequestBody = RenameRepositoryRequest
+
+// PreviewSecurityActionJSONRequestBody defines body for PreviewSecurityAction for application/json ContentType.
+type PreviewSecurityActionJSONRequestBody = SecurityActionPreviewRequest
+
+// ExecuteSecurityActionJSONRequestBody defines body for ExecuteSecurityAction for application/json ContentType.
+type ExecuteSecurityActionJSONRequestBody = SecurityActionExecuteRequest
+
+// DecidePrivateAdmissionCandidateJSONRequestBody defines body for DecidePrivateAdmissionCandidate for application/json ContentType.
+type DecidePrivateAdmissionCandidateJSONRequestBody = PrivateAdmissionDecisionRequest
+
+// PreviewPrivateAdmissionDecisionJSONRequestBody defines body for PreviewPrivateAdmissionDecision for application/json ContentType.
+type PreviewPrivateAdmissionDecisionJSONRequestBody = PrivateAdmissionDecisionPreviewRequest
+
+// OpenSecurityCaseJSONRequestBody defines body for OpenSecurityCase for application/json ContentType.
+type OpenSecurityCaseJSONRequestBody = SecurityCaseOpenRequest
+
+// MarkSecurityCaseReadJSONRequestBody defines body for MarkSecurityCaseRead for application/json ContentType.
+type MarkSecurityCaseReadJSONRequestBody MarkSecurityCaseReadJSONBody
+
+// TransitionSecurityCaseJSONRequestBody defines body for TransitionSecurityCase for application/json ContentType.
+type TransitionSecurityCaseJSONRequestBody = SecurityCaseTransitionRequest
+
+// RetryNotificationDeliveryJSONRequestBody defines body for RetryNotificationDelivery for application/json ContentType.
+type RetryNotificationDeliveryJSONRequestBody RetryNotificationDeliveryJSONBody
+
+// SetSecurityQQBindingJSONRequestBody defines body for SetSecurityQQBinding for application/json ContentType.
+type SetSecurityQQBindingJSONRequestBody SetSecurityQQBindingJSONBody
+
+// BeginRecoveryIsolationJSONRequestBody defines body for BeginRecoveryIsolation for application/json ContentType.
+type BeginRecoveryIsolationJSONRequestBody BeginRecoveryIsolationJSONBody
+
+// ConfirmRecoveryJSONRequestBody defines body for ConfirmRecovery for application/json ContentType.
+type ConfirmRecoveryJSONRequestBody ConfirmRecoveryJSONBody
+
+// ReportRecoveryCheckpointJSONRequestBody defines body for ReportRecoveryCheckpoint for application/json ContentType.
+type ReportRecoveryCheckpointJSONRequestBody ReportRecoveryCheckpointJSONBody
 
 // PutGlobalPinnedRepositoriesJSONRequestBody defines body for PutGlobalPinnedRepositories for application/json ContentType.
 type PutGlobalPinnedRepositoriesJSONRequestBody = PutPinnedRepositoriesRequest
@@ -5639,6 +6474,30 @@ type ServerInterface interface {
 	// GetCurrentUser 当前会话对应的用户（OIDC 回调后前端据此取身份快照）
 	// (GET /api/v1/auth/me)
 	GetCurrentUser(c *gin.Context)
+	// ClaimMfaEnroll 第一因素 + 认领票进入受控登记（返回挑战与登记 URI）
+	// (POST /api/v1/auth/mfa/claim)
+	ClaimMfaEnroll(c *gin.Context)
+	// BeginMfaEnroll 发起强因子登记（返回挑战与登记 URI；会话内限一次活跃登记）
+	// (POST /api/v1/auth/mfa/enroll)
+	BeginMfaEnroll(c *gin.Context)
+	// ConfirmMfaEnroll 用首枚 OTP 确认登记并返回恢复码批次
+	// (POST /api/v1/auth/mfa/enroll/confirm)
+	ConfirmMfaEnroll(c *gin.Context)
+	// RecoverLoginMfa 用恢复码兑现 login_mfa 挑战并签发 factor_recover 重绑挑战
+	// (POST /api/v1/auth/mfa/recover)
+	RecoverLoginMfa(c *gin.Context)
+	// GetMfaStatus 当前会话账号的强因子状态
+	// (GET /api/v1/auth/mfa/status)
+	GetMfaStatus(c *gin.Context)
+	// BeginMfaStepUp 为当前会话签发 step_up 受限挑战（敏感操作前的强认证提升）
+	// (POST /api/v1/auth/mfa/step-up)
+	BeginMfaStepUp(c *gin.Context)
+	// VerifyMfaStepUp 兑现 step_up 挑战并把会话强认证水位抬到当前
+	// (POST /api/v1/auth/mfa/step-up/verify)
+	VerifyMfaStepUp(c *gin.Context)
+	// VerifyLoginMfa 兑现 login_mfa 受限挑战（OTP 命中后签发会话）
+	// (POST /api/v1/auth/mfa/verify)
+	VerifyLoginMfa(c *gin.Context)
 	// CompleteOidcLogin 完成 OIDC 授权码流程并重定向回前端（成功携令牌片段，失败携错误码片段）
 	// (GET /api/v1/auth/oidc/callback)
 	CompleteOidcLogin(c *gin.Context, params CompleteOidcLoginParams)
@@ -5878,9 +6737,78 @@ type ServerInterface interface {
 	// GetRepositoryUsage 仓库客户端使用片段（据 format/type 返回接入命令）
 	// (GET /api/v1/repositories/{name}/usage)
 	GetRepositoryUsage(c *gin.Context, name RepoNameParam)
+	// PreviewSecurityAction 预览事故处置动作（幂等；5 分钟内确认有效）
+	// (POST /api/v1/security/actions)
+	PreviewSecurityAction(c *gin.Context)
+	// ExecuteSecurityAction 确认并执行预览动作（需近期强认证与动作摘要）
+	// (POST /api/v1/security/actions/{actionId}/execute)
+	ExecuteSecurityAction(c *gin.Context, actionId string)
 	// GetPrivateAdmissionCandidate 查询本人私有候选的状态
 	// (GET /api/v1/security/admission/candidates/{operationId})
 	GetPrivateAdmissionCandidate(c *gin.Context, operationId PrivateAdmissionOperationIdParam)
+	// DecidePrivateAdmissionCandidate 管理员裁决待审私有候选
+	// (POST /api/v1/security/admission/candidates/{operationId}/decisions)
+	DecidePrivateAdmissionCandidate(c *gin.Context, operationId PrivateAdmissionOperationIdParam)
+	// PreviewPrivateAdmissionDecision 预览候选裁决可行性并签发短效确认令牌
+	// (POST /api/v1/security/admission/candidates/{operationId}/decisions/preview)
+	PreviewPrivateAdmissionDecision(c *gin.Context, operationId PrivateAdmissionOperationIdParam)
+	// ListSecurityCases 风险调查案件清单
+	// (GET /api/v1/security/cases)
+	ListSecurityCases(c *gin.Context, params ListSecurityCasesParams)
+	// OpenSecurityCase 建案（人工或规则入口共用）
+	// (POST /api/v1/security/cases)
+	OpenSecurityCase(c *gin.Context)
+	// GetSecurityCase 案件详情（头 + 命中 + 关联 + 本人既読水位）
+	// (GET /api/v1/security/cases/{caseId})
+	GetSecurityCase(c *gin.Context, caseId string)
+	// ListSecurityCaseLinks 案件关联事件（fact/candidate）
+	// (GET /api/v1/security/cases/{caseId}/links)
+	ListSecurityCaseLinks(c *gin.Context, caseId string)
+	// MarkSecurityCaseRead 案件既読水位（本人・按版本幂等）
+	// (PUT /api/v1/security/cases/{caseId}/read)
+	MarkSecurityCaseRead(c *gin.Context, caseId string)
+	// TransitionSecurityCase 认领/结案/重开案件
+	// (POST /api/v1/security/cases/{caseId}/transitions)
+	TransitionSecurityCase(c *gin.Context, caseId string)
+	// GetSecurityCaseSection 案件四栏分页（timeline/uploads/identity/actions-evidence）
+	// (GET /api/v1/security/cases/{caseId}/{section})
+	GetSecurityCaseSection(c *gin.Context, caseId string, section GetSecurityCaseSectionParamsSection, params GetSecurityCaseSectionParams)
+	// ListSecurityFindings 规则命中清单
+	// (GET /api/v1/security/findings)
+	ListSecurityFindings(c *gin.Context, params ListSecurityFindingsParams)
+	// ListEvidenceHolds 保全持有清单（管理员只读）
+	// (GET /api/v1/security/holds)
+	ListEvidenceHolds(c *gin.Context)
+	// ListNotificationDeliveries 站外投递脱敏分页
+	// (GET /api/v1/security/notification-deliveries)
+	ListNotificationDeliveries(c *gin.Context, params ListNotificationDeliveriesParams)
+	// RetryNotificationDelivery 失败投递的手動再試行（targetVersion=attempts CAS・冪等）
+	// (POST /api/v1/security/notification-deliveries/{deliveryId}/retry)
+	RetryNotificationDelivery(c *gin.Context, deliveryId string)
+	// ListSecurityNotifications 站内安全通知游标分页
+	// (GET /api/v1/security/notifications)
+	ListSecurityNotifications(c *gin.Context, params ListSecurityNotificationsParams)
+	// AckSecurityNotification 确认本人通知（幂等）
+	// (PUT /api/v1/security/notifications/{noticeId}/ack)
+	AckSecurityNotification(c *gin.Context, noticeId string)
+	// DeleteSecurityQQBinding 解绑 QQ openid
+	// (DELETE /api/v1/security/qq-bindings/{userId})
+	DeleteSecurityQQBinding(c *gin.Context, userId int64)
+	// SetSecurityQQBinding 绑定管理员账号与 QQ openid
+	// (PUT /api/v1/security/qq-bindings/{userId})
+	SetSecurityQQBinding(c *gin.Context, userId int64)
+	// GetRecoveryGate 恢复隔离闸状态（管理员可读）
+	// (GET /api/v1/security/recovery)
+	GetRecoveryGate(c *gin.Context)
+	// BeginRecoveryIsolation 恢复启动进入隔离（normal → isolated）
+	// (POST /api/v1/security/recovery/begin)
+	BeginRecoveryIsolation(c *gin.Context)
+	// ConfirmRecovery 强认证管理员确认解闸（ready_for_review → normal）
+	// (POST /api/v1/security/recovery/confirm)
+	ConfirmRecovery(c *gin.Context)
+	// ReportRecoveryCheckpoint 上报可信检查点核对结果（isolated → reconciling → ready_for_review / isolated）
+	// (POST /api/v1/security/recovery/report)
+	ReportRecoveryCheckpoint(c *gin.Context)
 	// GetGlobalPinnedRepositories 全局置顶仓库（仅管理员）
 	// (GET /api/v1/settings/pinned-repositories)
 	GetGlobalPinnedRepositories(c *gin.Context)
@@ -6017,6 +6945,110 @@ func (siw *ServerInterfaceWrapper) GetCurrentUser(c *gin.Context) {
 	}
 
 	siw.Handler.GetCurrentUser(c)
+}
+
+// ClaimMfaEnroll operation middleware
+func (siw *ServerInterfaceWrapper) ClaimMfaEnroll(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ClaimMfaEnroll(c)
+}
+
+// BeginMfaEnroll operation middleware
+func (siw *ServerInterfaceWrapper) BeginMfaEnroll(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.BeginMfaEnroll(c)
+}
+
+// ConfirmMfaEnroll operation middleware
+func (siw *ServerInterfaceWrapper) ConfirmMfaEnroll(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ConfirmMfaEnroll(c)
+}
+
+// RecoverLoginMfa operation middleware
+func (siw *ServerInterfaceWrapper) RecoverLoginMfa(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.RecoverLoginMfa(c)
+}
+
+// GetMfaStatus operation middleware
+func (siw *ServerInterfaceWrapper) GetMfaStatus(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetMfaStatus(c)
+}
+
+// BeginMfaStepUp operation middleware
+func (siw *ServerInterfaceWrapper) BeginMfaStepUp(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.BeginMfaStepUp(c)
+}
+
+// VerifyMfaStepUp operation middleware
+func (siw *ServerInterfaceWrapper) VerifyMfaStepUp(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.VerifyMfaStepUp(c)
+}
+
+// VerifyLoginMfa operation middleware
+func (siw *ServerInterfaceWrapper) VerifyLoginMfa(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.VerifyLoginMfa(c)
 }
 
 // CompleteOidcLogin operation middleware
@@ -8618,6 +9650,44 @@ func (siw *ServerInterfaceWrapper) GetRepositoryUsage(c *gin.Context) {
 	siw.Handler.GetRepositoryUsage(c, name)
 }
 
+// PreviewSecurityAction operation middleware
+func (siw *ServerInterfaceWrapper) PreviewSecurityAction(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.PreviewSecurityAction(c)
+}
+
+// ExecuteSecurityAction operation middleware
+func (siw *ServerInterfaceWrapper) ExecuteSecurityAction(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "actionId" -------------
+	var actionId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "actionId", c.Param("actionId"), &actionId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter actionId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ExecuteSecurityAction(c, actionId)
+}
+
 // GetPrivateAdmissionCandidate operation middleware
 func (siw *ServerInterfaceWrapper) GetPrivateAdmissionCandidate(c *gin.Context) {
 
@@ -8641,6 +9711,495 @@ func (siw *ServerInterfaceWrapper) GetPrivateAdmissionCandidate(c *gin.Context) 
 	}
 
 	siw.Handler.GetPrivateAdmissionCandidate(c, operationId)
+}
+
+// DecidePrivateAdmissionCandidate operation middleware
+func (siw *ServerInterfaceWrapper) DecidePrivateAdmissionCandidate(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "operationId" -------------
+	var operationId PrivateAdmissionOperationIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "operationId", c.Param("operationId"), &operationId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter operationId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.DecidePrivateAdmissionCandidate(c, operationId)
+}
+
+// PreviewPrivateAdmissionDecision operation middleware
+func (siw *ServerInterfaceWrapper) PreviewPrivateAdmissionDecision(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "operationId" -------------
+	var operationId PrivateAdmissionOperationIdParam
+
+	err = runtime.BindStyledParameterWithOptions("simple", "operationId", c.Param("operationId"), &operationId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter operationId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.PreviewPrivateAdmissionDecision(c, operationId)
+}
+
+// ListSecurityCases operation middleware
+func (siw *ServerInterfaceWrapper) ListSecurityCases(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListSecurityCasesParams
+
+	// ------------- Optional query parameter "state" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "state", c.Request.URL.Query(), &params.State, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter state: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ListSecurityCases(c, params)
+}
+
+// OpenSecurityCase operation middleware
+func (siw *ServerInterfaceWrapper) OpenSecurityCase(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.OpenSecurityCase(c)
+}
+
+// GetSecurityCase operation middleware
+func (siw *ServerInterfaceWrapper) GetSecurityCase(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "caseId" -------------
+	var caseId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "caseId", c.Param("caseId"), &caseId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter caseId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetSecurityCase(c, caseId)
+}
+
+// ListSecurityCaseLinks operation middleware
+func (siw *ServerInterfaceWrapper) ListSecurityCaseLinks(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "caseId" -------------
+	var caseId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "caseId", c.Param("caseId"), &caseId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter caseId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ListSecurityCaseLinks(c, caseId)
+}
+
+// MarkSecurityCaseRead operation middleware
+func (siw *ServerInterfaceWrapper) MarkSecurityCaseRead(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "caseId" -------------
+	var caseId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "caseId", c.Param("caseId"), &caseId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter caseId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.MarkSecurityCaseRead(c, caseId)
+}
+
+// TransitionSecurityCase operation middleware
+func (siw *ServerInterfaceWrapper) TransitionSecurityCase(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "caseId" -------------
+	var caseId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "caseId", c.Param("caseId"), &caseId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter caseId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.TransitionSecurityCase(c, caseId)
+}
+
+// GetSecurityCaseSection operation middleware
+func (siw *ServerInterfaceWrapper) GetSecurityCaseSection(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "caseId" -------------
+	var caseId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "caseId", c.Param("caseId"), &caseId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter caseId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Path parameter "section" -------------
+	var section GetSecurityCaseSectionParamsSection
+
+	err = runtime.BindStyledParameterWithOptions("simple", "section", c.Param("section"), &section, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter section: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetSecurityCaseSectionParams
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", c.Request.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter limit: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetSecurityCaseSection(c, caseId, section, params)
+}
+
+// ListSecurityFindings operation middleware
+func (siw *ServerInterfaceWrapper) ListSecurityFindings(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListSecurityFindingsParams
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", c.Request.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter limit: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ListSecurityFindings(c, params)
+}
+
+// ListEvidenceHolds operation middleware
+func (siw *ServerInterfaceWrapper) ListEvidenceHolds(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ListEvidenceHolds(c)
+}
+
+// ListNotificationDeliveries operation middleware
+func (siw *ServerInterfaceWrapper) ListNotificationDeliveries(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListNotificationDeliveriesParams
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", c.Request.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter limit: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ListNotificationDeliveries(c, params)
+}
+
+// RetryNotificationDelivery operation middleware
+func (siw *ServerInterfaceWrapper) RetryNotificationDelivery(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "deliveryId" -------------
+	var deliveryId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "deliveryId", c.Param("deliveryId"), &deliveryId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter deliveryId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.RetryNotificationDelivery(c, deliveryId)
+}
+
+// ListSecurityNotifications operation middleware
+func (siw *ServerInterfaceWrapper) ListSecurityNotifications(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListSecurityNotificationsParams
+
+	// ------------- Optional query parameter "after" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "after", c.Request.URL.Query(), &params.After, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter after: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", c.Request.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter limit: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ListSecurityNotifications(c, params)
+}
+
+// AckSecurityNotification operation middleware
+func (siw *ServerInterfaceWrapper) AckSecurityNotification(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "noticeId" -------------
+	var noticeId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "noticeId", c.Param("noticeId"), &noticeId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter noticeId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.AckSecurityNotification(c, noticeId)
+}
+
+// DeleteSecurityQQBinding operation middleware
+func (siw *ServerInterfaceWrapper) DeleteSecurityQQBinding(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "userId" -------------
+	var userId int64
+
+	err = runtime.BindStyledParameterWithOptions("simple", "userId", c.Param("userId"), &userId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter userId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.DeleteSecurityQQBinding(c, userId)
+}
+
+// SetSecurityQQBinding operation middleware
+func (siw *ServerInterfaceWrapper) SetSecurityQQBinding(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "userId" -------------
+	var userId int64
+
+	err = runtime.BindStyledParameterWithOptions("simple", "userId", c.Param("userId"), &userId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter userId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.SetSecurityQQBinding(c, userId)
+}
+
+// GetRecoveryGate operation middleware
+func (siw *ServerInterfaceWrapper) GetRecoveryGate(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetRecoveryGate(c)
+}
+
+// BeginRecoveryIsolation operation middleware
+func (siw *ServerInterfaceWrapper) BeginRecoveryIsolation(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.BeginRecoveryIsolation(c)
+}
+
+// ConfirmRecovery operation middleware
+func (siw *ServerInterfaceWrapper) ConfirmRecovery(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ConfirmRecovery(c)
+}
+
+// ReportRecoveryCheckpoint operation middleware
+func (siw *ServerInterfaceWrapper) ReportRecoveryCheckpoint(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ReportRecoveryCheckpoint(c)
 }
 
 // GetGlobalPinnedRepositories operation middleware
@@ -9244,6 +10803,21 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/api/v1/observability/host", wrapper.GetHostMonitoring)
 	router.POST(options.BaseURL+"/api/v1/auth/bootstrap", wrapper.Bootstrap)
 	router.POST(options.BaseURL+"/api/v1/auth/login", wrapper.Login)
+	router.POST(options.BaseURL+"/api/v1/auth/mfa/verify", wrapper.VerifyLoginMfa)
+	router.POST(options.BaseURL+"/api/v1/auth/mfa/recover", wrapper.RecoverLoginMfa)
+	router.POST(options.BaseURL+"/api/v1/auth/mfa/claim", wrapper.ClaimMfaEnroll)
+	router.POST(options.BaseURL+"/api/v1/auth/mfa/step-up", wrapper.BeginMfaStepUp)
+	router.POST(options.BaseURL+"/api/v1/auth/mfa/step-up/verify", wrapper.VerifyMfaStepUp)
+	router.GET(options.BaseURL+"/api/v1/auth/mfa/status", wrapper.GetMfaStatus)
+	router.POST(options.BaseURL+"/api/v1/auth/mfa/enroll", wrapper.BeginMfaEnroll)
+	router.POST(options.BaseURL+"/api/v1/auth/mfa/enroll/confirm", wrapper.ConfirmMfaEnroll)
+	router.POST(options.BaseURL+"/api/v1/security/actions", wrapper.PreviewSecurityAction)
+	router.POST(options.BaseURL+"/api/v1/security/actions/:actionId/execute", wrapper.ExecuteSecurityAction)
+	router.GET(options.BaseURL+"/api/v1/security/recovery", wrapper.GetRecoveryGate)
+	router.POST(options.BaseURL+"/api/v1/security/recovery/begin", wrapper.BeginRecoveryIsolation)
+	router.POST(options.BaseURL+"/api/v1/security/recovery/report", wrapper.ReportRecoveryCheckpoint)
+	router.POST(options.BaseURL+"/api/v1/security/recovery/confirm", wrapper.ConfirmRecovery)
+	router.GET(options.BaseURL+"/api/v1/security/holds", wrapper.ListEvidenceHolds)
 	router.GET(options.BaseURL+"/api/v1/auth/me", wrapper.GetCurrentUser)
 	router.GET(options.BaseURL+"/api/v1/auth/oidc/start", wrapper.StartOidcLogin)
 	router.GET(options.BaseURL+"/api/v1/auth/oidc/callback", wrapper.CompleteOidcLogin)
@@ -9253,6 +10827,22 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.DELETE(options.BaseURL+"/api/v1/users/:id", wrapper.DeleteUser)
 	router.PATCH(options.BaseURL+"/api/v1/users/:id", wrapper.UpdateUser)
 	router.GET(options.BaseURL+"/api/v1/security/admission/candidates/:operationId", wrapper.GetPrivateAdmissionCandidate)
+	router.GET(options.BaseURL+"/api/v1/security/notifications", wrapper.ListSecurityNotifications)
+	router.PUT(options.BaseURL+"/api/v1/security/notifications/:noticeId/ack", wrapper.AckSecurityNotification)
+	router.GET(options.BaseURL+"/api/v1/security/notification-deliveries", wrapper.ListNotificationDeliveries)
+	router.GET(options.BaseURL+"/api/v1/security/cases", wrapper.ListSecurityCases)
+	router.POST(options.BaseURL+"/api/v1/security/cases", wrapper.OpenSecurityCase)
+	router.GET(options.BaseURL+"/api/v1/security/cases/:caseId", wrapper.GetSecurityCase)
+	router.GET(options.BaseURL+"/api/v1/security/cases/:caseId/:section", wrapper.GetSecurityCaseSection)
+	router.DELETE(options.BaseURL+"/api/v1/security/qq-bindings/:userId", wrapper.DeleteSecurityQQBinding)
+	router.PUT(options.BaseURL+"/api/v1/security/qq-bindings/:userId", wrapper.SetSecurityQQBinding)
+	router.POST(options.BaseURL+"/api/v1/security/cases/:caseId/transitions", wrapper.TransitionSecurityCase)
+	router.GET(options.BaseURL+"/api/v1/security/cases/:caseId/links", wrapper.ListSecurityCaseLinks)
+	router.PUT(options.BaseURL+"/api/v1/security/cases/:caseId/read", wrapper.MarkSecurityCaseRead)
+	router.POST(options.BaseURL+"/api/v1/security/notification-deliveries/:deliveryId/retry", wrapper.RetryNotificationDelivery)
+	router.GET(options.BaseURL+"/api/v1/security/findings", wrapper.ListSecurityFindings)
+	router.POST(options.BaseURL+"/api/v1/security/admission/candidates/:operationId/decisions/preview", wrapper.PreviewPrivateAdmissionDecision)
+	router.POST(options.BaseURL+"/api/v1/security/admission/candidates/:operationId/decisions", wrapper.DecidePrivateAdmissionCandidate)
 	router.POST(options.BaseURL+"/api/v1/users/:id/password", wrapper.ChangePassword)
 	router.PUT(options.BaseURL+"/api/v1/users/:id/publish-policies", wrapper.PutPublishPolicies)
 	router.GET(options.BaseURL+"/api/v1/users/:id/publish-policies/:repo", wrapper.GetPublishPolicy)

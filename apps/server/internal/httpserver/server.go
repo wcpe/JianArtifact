@@ -34,6 +34,7 @@ type Server struct {
 	protocolPrefixes        []string
 	writeFreeze             func() domain.FreezeState // 运行时写入冻结窗口状态读取器（nil 表示不启用）
 	managementSecurityAudit SecurityAuditFunc
+	incidentWriteLockGate   gin.HandlerFunc
 	securityAuditPrincipal  gin.HandlerFunc
 	securityAuditProbe      func() api.HealthStatusAuditCollection
 	sourcePolicy            auditctx.Policy
@@ -71,6 +72,11 @@ func WithReadinessCheck(c ReadinessCheck) Option {
 // WithHandlers 注入实现管理与状态端点的 api.ServerInterface。
 func WithHandlers(h api.ServerInterface) Option {
 	return func(s *Server) { s.ServerInterface = h }
+}
+
+// WithIncidentWriteLockGate 挂载事故写锁入口裁决（覆盖全部写路由，含协议入口）。
+func WithIncidentWriteLockGate(g gin.HandlerFunc) Option {
+	return func(s *Server) { s.incidentWriteLockGate = g }
 }
 
 // WithMiddleware 追加应用到全部契约路由的 Gin 中间件（如鉴权主体解析）。
@@ -183,6 +189,7 @@ func (s *Server) Handler(assets fs.FS) http.Handler {
 		})
 	}
 	// 旧审计继续记录请求耗时与白名单头，不读取正文。
+	r.Use(newAuthEdgeLimiter().middleware())
 	r.Use(auditctx.TimingMiddleware())
 	r.Use(auditctx.HeadersMiddleware())
 	if s.managementSecurityAudit != nil {
@@ -190,6 +197,9 @@ func (s *Server) Handler(assets fs.FS) http.Handler {
 	}
 	if s.writeFreeze != nil {
 		r.Use(writeFreezeMiddleware(s.writeFreeze))
+	}
+	if s.incidentWriteLockGate != nil {
+		r.Use(s.incidentWriteLockGate)
 	}
 
 	// 路由级中间件链：链首插入「进入业务路由处理」计时（duration_server_ms 口径起点），

@@ -1,6 +1,6 @@
 # 功能规格：安全通知与 QQ 人工入口（H）
 
-> 状态：用户已审核，待实施　·　关联 PRD：FR-172　·　分支：`feat/security-incident-controls`
+> 状态：开发完成，待用户验收；站内持久游标通知、投递登记、SMTP（强制 TLS）与 QQ 薄适配已实现并有回归；真实 SMTP/QQ 投递为模拟验收、待平台凭据，QQ 绑定挑战确认流待凭据接入　·　关联 PRD：FR-172　·　分支：`feat/security-two-factor`
 
 ## 1. 背景与目标
 

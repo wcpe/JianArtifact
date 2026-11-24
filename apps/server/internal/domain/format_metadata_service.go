@@ -33,6 +33,8 @@ type PypiFile struct {
 	Size           int64
 	RequiresPython string
 	Yanked         string
+	// AssetID 是发布提交的资产行号；供私有候选提升后回写 published_asset_id。
+	AssetID int64
 }
 
 // FormatMetadataService 编排 PyPI/NuGet 的格式元数据与通用资产服务。
@@ -146,7 +148,7 @@ func (s *FormatMetadataService) publishPyPI(repoName, project, version, filename
 	if err := s.publishHostedFormatAsset(repoName, r, asset, meta, audit); err != nil {
 		return nil, s.assets.cleanupFailedWrite(asset.BlobHash, err)
 	}
-	return &PypiFile{Project: project, ProjectDisplay: project, Version: version, Filename: filename, AssetPath: asset.Path, Sha256: asset.BlobHash, Size: asset.Size, RequiresPython: requiresPython, Yanked: yanked}, nil
+	return &PypiFile{Project: project, ProjectDisplay: project, Version: version, Filename: filename, AssetPath: asset.Path, Sha256: asset.BlobHash, Size: asset.Size, RequiresPython: requiresPython, Yanked: yanked, AssetID: asset.ID}, nil
 }
 
 // applyFormatMetadataSourceTimestamp 将 format_metadata 行的 created_at/updated_at
@@ -690,6 +692,8 @@ type NuGetPackage struct {
 	MetadataJSON      string
 	SourceKind        string
 	SourceMember      string
+	// AssetID 是发布提交的资产行号；供私有候选提升后回写 published_asset_id。
+	AssetID int64
 }
 
 func NormalizeNuGetID(id string) string           { return strings.ToLower(strings.TrimSpace(id)) }
@@ -745,7 +749,7 @@ func (s *FormatMetadataService) publishNuGet(repoName, id, version, filename, me
 	if err := s.publishHostedFormatAsset(repoName, r, asset, meta, AssetOperationAudit{}); err != nil {
 		return nil, s.assets.cleanupFailedWrite(asset.BlobHash, err)
 	}
-	return &NuGetPackage{ID: id, IDNormalized: idNorm, Version: version, VersionNormalized: versionNorm, Filename: filename, AssetPath: asset.Path, Sha256: asset.BlobHash, Size: asset.Size, MetadataJSON: metadataJSON}, nil
+	return &NuGetPackage{ID: id, IDNormalized: idNorm, Version: version, VersionNormalized: versionNorm, Filename: filename, AssetPath: asset.Path, Sha256: asset.BlobHash, Size: asset.Size, MetadataJSON: metadataJSON, AssetID: asset.ID}, nil
 }
 
 func (s *FormatMetadataService) NuGetPackages(repoName, id string) ([]NuGetPackage, error) {

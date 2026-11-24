@@ -22,6 +22,8 @@ import (
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 	"github.com/wcpe/jianartifact/apps/server/internal/scheduler"
 	"github.com/wcpe/jianartifact/apps/server/internal/upstream"
+
+	"github.com/jmoiron/sqlx"
 )
 
 // appServices 汇集装配后的持久化连接、领域服务与鉴权依赖，供 run 及 CLI 子命令复用。
@@ -29,6 +31,9 @@ type appServices struct {
 	db                  *persistence.DB
 	users               *repository.UserRepo
 	authSvc             *domain.AuthService
+	mfaSvc              *domain.SecurityMfaService      // 强认证（因子密钥缺失时装配失败，不做降级服务）
+	incidentSvc         *domain.SecurityIncidentService // 事故处置
+	findingSvc          *domain.SecurityFindingService  // 安全治理 規則検出投影
 	securityAudit       *domain.SecurityAuditService
 	securityAuditQuery  *api.SecurityAuditQuery
 	admission           *domain.AdmissionService
@@ -167,6 +172,7 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	formatMetadataSvc := domain.NewFormatMetadataService(assetSvc, repoRepo, formatMetadataRepo, upstreamClient)
 	formatMetadataSvc.SetBusinessWriteGate(freeze)
 	cargoSvc := domain.NewCargoService(assetSvc, repoSvc)
+	// 安全治理：cargo hosted 发布走私有候选准入（在 admission 装配后 SetAdmission）。
 	ociSvc := domain.NewOCIService(assetSvc, repoSvc)
 	if err := ociSvc.CleanupUploadTemps(); err != nil {
 		_ = db.Close()
@@ -275,6 +281,20 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	}
 	authSvc := domain.NewAuthService(userRepo, revokedRepo, jwtMgr)
 	securityAudit := domain.NewSecurityAuditService(db)
+	mfaSvc, err := domain.NewSecurityMfaService(repository.NewSecurityAuthFactorRepo(db), userRepo, cfg.MfaFactorKey)
+	if err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("初始化强认证服务：%w", err)
+	}
+	mfaSvc.SetSecurityAudit(securityAudit)
+	authSvc.SetMfaService(mfaSvc)
+	incidentSvc := domain.NewSecurityIncidentService(repository.NewSecurityAuthFactorRepo(db), userRepo)
+	// 业务写提交事务内复核事故裁决：入口鉴权后激活的写锁/限制可拦截在途发布。
+	assetSvc.SetIncidentVerdictTx(func(tx *sqlx.Tx, repo string, pathPrefixes []string) error {
+		return incidentSvc.CommitWriteVerdictTx(context.Background(), tx, repo, pathPrefixes)
+	})
+	// 安全治理规则检测投影：security_event 依次消费→带版本规则命中→自动建案（只检测与通知，不封禁）。
+	findingSvc := domain.NewSecurityFindingService(repository.NewSecurityAuthFactorRepo(db))
 	securityAuditQuery, err := api.NewSecurityAuditQuery(repository.NewSecurityEventRepo(db), securityAudit, cfg.JWTSecret, nodeIdentity.NodeID())
 	if err != nil {
 		_ = db.Close()
@@ -411,6 +431,28 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	// 回收站保留期回收：只删回收站副本，不触碰 original_path（那是 restore 的职责）。
 	registerTrashGCJob(schedulerSvc, cfg.TrashGCInterval,
 		time.Duration(cfg.TrashRetentionDays)*24*time.Hour, trashSvc.ReconcileExpired)
+	// 安全治理规则检测投影按 15 秒周期运行（单一 worker；幂等键保证重复运行不增行）。
+	schedulerSvc.Register("security-finding-projector", 15*time.Second, func(ctx context.Context) error {
+		n, err := findingSvc.RunBatch(ctx)
+		if err != nil {
+			return err
+		}
+		if n > 0 {
+			log.Printf("安全规则命中 %d 件已投影（自动建案/聚合）", n)
+		}
+		return nil
+	})
+	// 安全治理安全通知投递：待投递行按 30 秒周期派发。SMTP 未配置也以 failed 可视化，故始终登记。
+	schedulerSvc.Register("security-notification-delivery", 30*time.Second, func(ctx context.Context) error {
+		n, err := incidentSvc.DispatchPendingNotifications(ctx, smtpNotificationMailer(cfg.SMTP), qqNotificationSender(cfg.QQ))
+		if err != nil {
+			return err
+		}
+		if n > 0 {
+			log.Printf("安全通知投递 %d 件処理", n)
+		}
+		return nil
+	})
 	// 指标登记与 /metrics 渲染器；协议请求计数由 HTTP 层钩子（run）累加。
 	metricsReg := metrics.New()
 	metricsExp := metrics.NewExposition(metricsReg, schedulerJobStatuses(schedulerSvc))
@@ -458,12 +500,40 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	}
 
 	return &appServices{
-		db:                  db,
-		users:               userRepo,
-		authSvc:             authSvc,
-		securityAudit:       securityAudit,
-		securityAuditQuery:  securityAuditQuery,
-		admission:           domain.NewAdmissionService(db, blobs, userRepo, repoRepo, freeze),
+		db:                 db,
+		users:              userRepo,
+		authSvc:            authSvc,
+		mfaSvc:             mfaSvc,
+		incidentSvc:        incidentSvc,
+		findingSvc:         findingSvc,
+		securityAudit:      securityAudit,
+		securityAuditQuery: securityAuditQuery,
+		admission: func() *domain.AdmissionService {
+			s := domain.NewAdmissionService(db, blobs, userRepo, repoRepo, freeze)
+			s.SetAssetService(assetSvc)
+			cargoSvc.SetAdmission(s)
+			// 安全治理 §3.6：迁移写回逐项经私有候选，身份绑定原发起人并实时复核。
+			migRunner.SetAdmission(s, cfg.SourcePolicy.Version(), func(task *repository.MigrationTask) (*auth.Principal, error) {
+				if task == nil || !task.InitiatorUserID.Valid || task.InitiatorUserID.Int64 <= 0 {
+					return nil, domain.ErrAdmissionForbidden
+				}
+				u, err := userSvc.Get(task.InitiatorUserID.Int64)
+				if err != nil || u.Status != "active" {
+					return nil, domain.ErrAdmissionForbidden
+				}
+				// 凭据复核需账号代次：内部主体按当前代次绑定，账号代次变更即在途任务失效。
+				ca, err := userRepo.CredentialAccountByID(context.Background(), u.ID)
+				if err != nil {
+					return nil, domain.ErrAdmissionForbidden
+				}
+				return &auth.Principal{
+					UserID: u.ID, Username: u.Username, Role: u.Role,
+					Kind: auth.KindInternal, AuthSource: task.InitiatorAuthSource,
+					AccountEpoch: ca.Epoch,
+				}, nil
+			})
+			return s
+		}(),
 		userSvc:             userSvc,
 		tokenSvc:            tokenSvc,
 		repoSvc:             repoSvc,
@@ -604,6 +674,9 @@ func (s *appServices) handlers(version string, checks []func() error) *api.Handl
 		Checks:                  checks,
 		Migration:               s.db.CurrentVersion,
 		Auth:                    s.authSvc,
+		Mfa:                     s.mfaSvc,
+		Incident:                s.incidentSvc,
+		Finding:                 s.findingSvc,
 		Users:                   s.userSvc,
 		Tokens:                  s.tokenSvc,
 		Repos:                   s.repoSvc,

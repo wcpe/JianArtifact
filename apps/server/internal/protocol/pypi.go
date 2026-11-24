@@ -211,10 +211,41 @@ func (h *PypiHandler) LegacyUpload(c *gin.Context) {
 		writePublishErr(c, err)
 		return
 	}
-	if _, err := h.metadata.PublishPyPIWithAudit(repo, project, version, upload.filename, upload.fields["requires_python"], upload.fields["yanked"], upload.file, h.nativeOperationAudit(c, "pypi.publish", repo)); err != nil {
+	var body io.Reader = upload.file
+	var candRow repository.AdmissionCandidateRow
+	var candP *auth.Principal
+	if h.admission != nil {
+		if p, hasP := auth.PrincipalFrom(c); hasP {
+			if snap, _ := repositorySnapshot(c, repo); snap != nil && snap.Type == "hosted" && snap.Format == "pypi" {
+				var candErr error
+				candRow, candErr = h.admission.IntakeCandidate(c.Request.Context(), p, snap.ID, artifactPath, "application/octet-stream", upload.file)
+				if candErr != nil {
+					h.auditRejected(c, "pypi.publish", repo, artifactPath, "admission_intake_failed")
+					writeAdmissionPutErr(c, candErr)
+					return
+				}
+				prc, _, candErr := h.admission.PromoteBytes(c.Request.Context(), candRow)
+				if candErr != nil {
+					h.auditRejected(c, "pypi.publish", repo, artifactPath, "admission_promote_failed")
+					writeAdmissionPutErr(c, candErr)
+					return
+				}
+				defer func() { _ = prc.Close() }()
+				body, candP = prc, p
+			}
+		}
+	}
+	pf, err := h.metadata.PublishPyPIWithAudit(repo, project, version, upload.filename, upload.fields["requires_python"], upload.fields["yanked"], body, h.nativeOperationAudit(c, "pypi.publish", repo))
+	if err != nil {
 		h.auditRejected(c, "pypi.publish", repo, artifactPath, publishRejectionDetail(err))
 		writePublishErr(c, err)
 		return
+	}
+	if candRow.OperationID != "" {
+		if _, err := h.admission.MarkPublished(c.Request.Context(), candP, candRow, pf.AssetID); err != nil {
+			auth.WriteError(c, http.StatusServiceUnavailable, "admission_unavailable", "候选发布状态回写失败")
+			return
+		}
 	}
 	settle(true, upload.size)
 	c.Header("Content-Type", "text/plain; charset=utf-8")

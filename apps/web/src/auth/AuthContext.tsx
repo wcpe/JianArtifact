@@ -15,7 +15,7 @@ import type { ReactNode } from "react";
 import * as api from "../api/endpoints";
 import { AUTH_EXPIRED_EVENT, setToken } from "../api/client";
 import { clearAsyncCache } from "../hooks/useAsync";
-import type { User } from "../api/types";
+import type { LoginResponse, User } from "../api/types";
 
 const USER_KEY = "jianartifact.user";
 
@@ -43,8 +43,10 @@ function writeStoredUser(user: User | null): void {
 export interface AuthContextValue {
   user: User | null;
   isAuthenticated: boolean;
-  login: (username: string, password: string) => Promise<void>;
-  bootstrap: (username: string, password: string) => Promise<void>;
+  login: (username: string, password: string) => Promise<LoginResponse>;
+  bootstrap: (username: string, password: string, claimTicket?: string) => Promise<LoginResponse>;
+  /** 挑战流完成后的会话落库（mfa 验证/认领登记等拿到的令牌）。 */
+  persistSession: (token: string, user: User) => void;
   logout: () => Promise<void>;
   /** OIDC 回调失败时带回的 i18n 键；登录框消费后清空。 */
   oidcError: string | null;
@@ -93,15 +95,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = useCallback(
     async (username: string, password: string) => {
       const res = await api.login(username, password);
-      persist(res.token, res.user);
+      // next=authenticated 才直落会话；挑战流由调用方续走并在兑现后 persistSession。
+      if (res.next === "authenticated" && res.token) {
+        persist(res.token, res.user);
+      }
+      return res;
     },
     [persist],
   );
 
   const bootstrap = useCallback(
-    async (username: string, password: string) => {
-      const res = await api.bootstrap(username, password);
-      persist(res.token, res.user);
+    async (username: string, password: string, claimTicket?: string) => {
+      const res = await api.bootstrap(username, password, claimTicket);
+      if (res.next === "authenticated" && res.token) {
+        persist(res.token, res.user);
+      }
+      return res;
     },
     [persist],
   );
@@ -165,6 +174,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isAuthenticated: user !== null,
       login,
       bootstrap,
+      persistSession: persist,
       logout,
       oidcError,
       clearOidcError,

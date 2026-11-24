@@ -30,6 +30,9 @@ type Deps struct {
 	Checks                     []func() error
 	Migration                  func() (string, error)
 	Auth                       *domain.AuthService
+	Mfa                        *domain.SecurityMfaService      // 强认证（nil = 未装配，MFA 端点返回 503）
+	Incident                   *domain.SecurityIncidentService // 事故处置（nil = 未装配）
+	Finding                    *domain.SecurityFindingService  // 規則検出投影（nil = 未装配）
 	Users                      *domain.UserService
 	Tokens                     *domain.TokenService
 	Repos                      *domain.RepositoryService
@@ -121,6 +124,9 @@ type Handlers struct {
 	checks                     []func() error
 	migration                  func() (string, error)
 	auth                       *domain.AuthService
+	mfa                        *domain.SecurityMfaService
+	incident                   *domain.SecurityIncidentService
+	finding                    *domain.SecurityFindingService
 	users                      *domain.UserService
 	tokens                     *domain.TokenService
 	repos                      *domain.RepositoryService
@@ -180,6 +186,9 @@ func NewHandlers(d Deps) *Handlers {
 		checks:                     d.Checks,
 		migration:                  d.Migration,
 		auth:                       d.Auth,
+		mfa:                        d.Mfa,
+		incident:                   d.Incident,
+		finding:                    d.Finding,
 		users:                      d.Users,
 		tokens:                     d.Tokens,
 		repos:                      d.Repos,
@@ -422,6 +431,26 @@ func writeDomainErrWithOperationID(c *gin.Context, err error, operationID string
 	switch {
 	case errors.Is(err, domain.ErrSecurityAuditUnavailable):
 		write(http.StatusServiceUnavailable, "security_audit_unavailable", "安全审计暂不可用")
+	case errors.Is(err, domain.ErrInvalidAuthChallenge):
+		write(http.StatusUnauthorized, "invalid_auth_challenge", "认证挑战无效或已失效")
+	case errors.Is(err, domain.ErrAuthRateLimited):
+		write(http.StatusTooManyRequests, "auth_rate_limited", "认证尝试过于频繁")
+	case errors.Is(err, domain.ErrIncidentWriteLocked):
+		write(http.StatusServiceUnavailable, "incident_write_locked", "实例业务写锁生效，仅安全出口可用")
+	case errors.Is(err, domain.ErrIncidentRestricted):
+		write(http.StatusForbidden, "incident_restricted", "目标受事故限制约束")
+	case errors.Is(err, domain.ErrSecurityConfirmationStale):
+		write(http.StatusConflict, "security_confirmation_stale", "确认指纹过期或与预览不一致")
+	case errors.Is(err, domain.ErrSecurityIdempotencyConflict):
+		write(http.StatusConflict, "security_idempotency_conflict", "幂等键已绑定不同内容")
+	case errors.Is(err, domain.ErrSecurityTargetInvalid):
+		write(http.StatusBadRequest, "invalid_security_target", "处置目标非法")
+	case errors.Is(err, domain.ErrRecentMfaRequired):
+		write(http.StatusForbidden, "recent_mfa_required", "需要近期强认证")
+	case errors.Is(err, domain.ErrMfaRequired):
+		write(http.StatusForbidden, "mfa_required", "需要完成强因子验证")
+	case errors.Is(err, domain.ErrMfaFactorUnavailable):
+		write(http.StatusServiceUnavailable, "security_state_unavailable", "强认证能力未就绪")
 	case errors.Is(err, domain.ErrInvalidCredentials):
 		write(http.StatusUnauthorized, "invalid_credentials", "用户名或口令错误")
 	case errors.Is(err, domain.ErrAlreadyInitialized):

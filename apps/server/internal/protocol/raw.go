@@ -33,6 +33,7 @@ type RawHandler struct {
 	audit          AuditFunc          // 审计记录回调（main 注入；nil 不记录）
 	operationAudit OperationAuditFunc // 原子制品操作的同事务审计构造器
 	securityAudit  *domain.SecurityAuditService
+	admission      admissionService // 私有候选准入（nil 走原直发路径）
 }
 
 // SetSecurityAudit 将实例安全审计接入使用本处理器 Put 的发布样例。
@@ -300,6 +301,23 @@ func (h *RawHandler) Put(c *gin.Context) {
 		}
 		return
 	}
+	// 准入管线：hosted 仓库的写入先私有候选、隔离裁定，净字节再经原发布链提升。
+	var candidateRow repository.AdmissionCandidateRow
+	var candidatePrincipal *auth.Principal
+	var candidateRC io.ReadCloser
+	if h.admission != nil {
+		if p, hasP := auth.PrincipalFrom(c); hasP {
+			if snap, _ := repositorySnapshot(c, repo); snap != nil && snap.Type == "hosted" && (snap.Format == "raw" || snap.Format == "maven") {
+				row, err := h.admission.IntakeCandidate(c.Request.Context(), p, snap.ID, artPath, c.GetHeader("Content-Type"), c.Request.Body)
+				if err != nil {
+					h.auditRejected(c, "asset.put", repo, artPath, publishRejectionDetail(err))
+					writeAdmissionPutErr(c, err)
+					return
+				}
+				candidateRow, candidatePrincipal = row, p
+			}
+		}
+	}
 	var settle func(bool, int64)
 	var reservationID, limit int64
 	var err error
@@ -318,7 +336,17 @@ func (h *RawHandler) Put(c *gin.Context) {
 		defer func() { settle(false, 0) }()
 	}
 	body := io.Reader(c.Request.Body)
-	if c.Request.ContentLength < 0 && limit > 0 {
+	if candidateRow.OperationID != "" {
+		// 准入已把字节封存并裁定；发布链只消费已验证的封存字节。
+		candidateRC, _, err = h.admission.PromoteBytes(c.Request.Context(), candidateRow)
+		if err != nil {
+			h.auditRejected(c, "asset.put", repo, artPath, publishRejectionDetail(err))
+			writeAdmissionPutErr(c, err)
+			return
+		}
+		defer candidateRC.Close()
+		body = candidateRC
+	} else if c.Request.ContentLength < 0 && limit > 0 {
 		body = &quotaReader{r: c.Request.Body, left: limit, limit: limit}
 	}
 	ctx := c.Request.Context()
@@ -364,6 +392,12 @@ func (h *RawHandler) Put(c *gin.Context) {
 	}
 	if settle != nil {
 		settle(true, asset.Size)
+	}
+	if candidateRow.OperationID != "" {
+		// 提升已提交：同事务把候选标记为 published。
+		if _, markErr := h.admission.MarkPublished(c.Request.Context(), candidatePrincipal, candidateRow, asset.ID); markErr != nil {
+			log.Printf("准入候选提升后标记失败（operation=%s）：%v", candidateRow.OperationID, markErr)
+		}
 	}
 	if h.audit != nil {
 		h.audit(c, "asset.put", "asset", repo+"/"+asset.Path, repo,
@@ -766,4 +800,34 @@ func cleanArtifactPath(raw string) string {
 		s = strings.ReplaceAll(s, "//", "/")
 	}
 	return s
+}
+
+// admissionService 提交托管 Raw 写入到私有候选准入管线。
+type admissionService interface {
+	IntakeCandidate(ctx context.Context, principal *auth.Principal, repositoryID int64, canonicalPath, contentType string, body io.Reader) (repository.AdmissionCandidateRow, error)
+	PromoteBytes(ctx context.Context, row repository.AdmissionCandidateRow) (io.ReadCloser, int64, error)
+	MarkPublished(ctx context.Context, principal *auth.Principal, row repository.AdmissionCandidateRow, assetID int64) (domain.AdmissionStatus, error)
+}
+
+// SetAdmission 在 hosted Raw PUT 上启用私有候选准入（原路径保留给未启用节点）。
+func (h *RawHandler) SetAdmission(a *domain.AdmissionService) { h.admission = a }
+
+// writeAdmissionPutErr 把准入失败映射为 Raw 封套错误；任何情况下不返回发布成功。
+func writeAdmissionPutErr(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, domain.ErrAdmissionIntegrityRejected):
+		auth.WriteError(c, http.StatusUnprocessableEntity, "admission_rejected", "内容未通过完整性裁定，已拒绝")
+	case errors.Is(err, domain.ErrAdmissionUnauthenticated):
+		auth.WriteError(c, http.StatusUnauthorized, "unauthenticated", "未认证或凭据无效")
+	case errors.Is(err, domain.ErrAdmissionForbidden):
+		auth.WriteError(c, http.StatusForbidden, "admission_forbidden", "当前凭据不允许提交候选")
+	case errors.Is(err, domain.ErrValidation):
+		auth.WriteError(c, http.StatusBadRequest, "bad_request", "上传字段不合规")
+	default:
+		if errors.Is(err, domain.ErrAdmissionLimit) {
+			auth.WriteError(c, http.StatusRequestEntityTooLarge, "admission_limit", "私有暂存容量已满")
+			return
+		}
+		auth.WriteError(c, http.StatusServiceUnavailable, "admission_unavailable", "候选处理暂不可确认")
+	}
 }

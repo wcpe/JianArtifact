@@ -61,6 +61,10 @@ func (h *Handlers) UpdateUser(c *gin.Context, id UserIdParam) {
 	if !ok {
 		return
 	}
+	// 角色授予 / 账号状态处置属敏感交互：要求窗口内强认证水位。
+	if !h.requireRecentMfa(c, p) {
+		return
+	}
 	var req UpdateUserRequest
 	if !bindJSON(c, &req) {
 		return
@@ -91,7 +95,11 @@ func (h *Handlers) UpdateUser(c *gin.Context, id UserIdParam) {
 
 // DeleteUser 删除用户，仅管理员。
 func (h *Handlers) DeleteUser(c *gin.Context, id UserIdParam) {
-	if _, ok := requireAdmin(c); !ok {
+	p, ok := requireAdmin(c)
+	if !ok {
+		return
+	}
+	if !h.requireRecentMfa(c, p) {
 		return
 	}
 	if err := h.users.Delete(id); err != nil {
@@ -110,6 +118,10 @@ func (h *Handlers) ChangePassword(c *gin.Context, id UserIdParam) {
 	}
 	if !p.IsAdmin() && p.UserID != id {
 		auth.WriteError(c, http.StatusForbidden, "forbidden", "只能修改自己的口令")
+		return
+	}
+	// 跨账户改密属敏感交互：要求窗口内强认证水位。
+	if p.UserID != id && !h.requireRecentMfa(c, p) {
 		return
 	}
 	var req PasswordChangeRequest

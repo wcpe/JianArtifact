@@ -32,15 +32,19 @@ import (
 
 // protocolEnv 汇集含协议层路由的服务端句柄。
 type protocolEnv struct {
-	h          http.Handler
-	db         *persistence.DB
-	rawHandler *protocol.RawHandler
-	repoRepo   *repository.RepoRepo
-	assetRepo  *repository.AssetRepo
-	formatMeta *repository.FormatMetadataRepo
-	auditLogs  *repository.AuditLogRepo
-	blobs      *blobstore.Store
-	sourceNode string
+	h           http.Handler
+	db          *persistence.DB
+	rawHandler  *protocol.RawHandler
+	repoRepo    *repository.RepoRepo
+	assetRepo   *repository.AssetRepo
+	formatMeta  *repository.FormatMetadataRepo
+	auditLogs   *repository.AuditLogRepo
+	blobs       *blobstore.Store
+	sourceNode  string
+	mfaSvc      *domain.SecurityMfaService
+	incidentSvc *domain.SecurityIncidentService
+	findingSvc  *domain.SecurityFindingService
+	userRepo    *repository.UserRepo
 }
 
 // newProtocolEnv 装配完整服务端：契约路由 + Raw 协议路由（真实持久化 + blob 存储）。
@@ -106,11 +110,24 @@ func newProtocolEnvConfigured(t *testing.T, publicURL string, enabled formats.Se
 	nugetHandler := protocol.NewNuGetHandler(rawHandler, formatMetadataSvc, publicURL)
 	goProxyHandler := protocol.NewGoProxyHandler(rawHandler)
 
+	authSvc := domain.NewAuthService(userRepo, revokedRepo, jwtMgr)
+	mfaSvc, err := domain.NewSecurityMfaService(repository.NewSecurityAuthFactorRepo(db), userRepo,
+		[]byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatalf("构造强认证服务：%v", err)
+	}
+	authSvc.SetMfaService(mfaSvc)
+	incidentSvc := domain.NewSecurityIncidentService(repository.NewSecurityAuthFactorRepo(db), userRepo)
+	findingSvc := domain.NewSecurityFindingService(repository.NewSecurityAuthFactorRepo(db))
+
 	handlers := api.NewHandlers(api.Deps{
 		Version:         "test",
 		Checks:          []func() error{db.Ping},
 		Migration:       db.CurrentVersion,
-		Auth:            domain.NewAuthService(userRepo, revokedRepo, jwtMgr),
+		Auth:            authSvc,
+		Mfa:             mfaSvc,
+		Incident:        incidentSvc,
+		Finding:         findingSvc,
 		Users:           domain.NewUserService(userRepo),
 		Tokens:          tokenSvc,
 		Repos:           repoSvc,
@@ -125,6 +142,7 @@ func newProtocolEnvConfigured(t *testing.T, publicURL string, enabled formats.Se
 	srv := httpserver.New("test",
 		httpserver.WithReadinessCheck(db.Ping),
 		httpserver.WithHandlers(handlers),
+		httpserver.WithIncidentWriteLockGate(handlers.IncidentWriteLockGate()),
 		httpserver.WithMiddleware(api.MiddlewareFunc(authenticator.Optional())),
 		httpserver.WithProtocolRoutes(func(r gin.IRouter) {
 			protocolMW := authenticator.Protocol().Optional()
@@ -147,6 +165,7 @@ func newProtocolEnvConfigured(t *testing.T, publicURL string, enabled formats.Se
 		h:  srv.Handler(nil), rawHandler: rawHandler, repoRepo: repoRepo, assetRepo: assetRepo,
 		formatMeta: formatMetadataRepo,
 		auditLogs:  auditLogs, blobs: blobs, sourceNode: nodeIdentity.NodeID(),
+		mfaSvc: mfaSvc, incidentSvc: incidentSvc, findingSvc: findingSvc, userRepo: userRepo,
 	}
 }
 
@@ -522,13 +541,9 @@ func TestPublishPolicyPartialUpdateRetainsAllowedPrefixes(t *testing.T) {
 // bootstrapAdmin 自举首个管理员并签发协议测试用 API Token。
 func (e *protocolEnv) bootstrapAdmin(t *testing.T) string {
 	t.Helper()
-	var boot api.LoginResponse
-	if code := e.jsonReq(t, http.MethodPost, "/api/v1/auth/bootstrap", "",
-		api.BootstrapRequest{Username: "admin", Password: "admin-pass-123"}, &boot); code != http.StatusCreated {
-		t.Fatalf("自举状态码 = %d，期望 201", code)
-	}
+	sessionToken, _, _ := installAdmin(t, e, "admin", "admin-pass-123")
 	var created api.TokenCreated
-	if code := e.jsonReq(t, http.MethodPost, "/api/v1/tokens", boot.Token,
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/tokens", sessionToken,
 		api.CreateTokenRequest{Name: "protocol-test"}, &created); code != http.StatusCreated {
 		t.Fatalf("创建协议测试 Token 状态码 = %d，期望 201", code)
 	}

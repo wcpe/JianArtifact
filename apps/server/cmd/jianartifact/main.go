@@ -6,8 +6,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +17,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/smtp"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -218,6 +221,7 @@ func newApplicationHandler(cfg *config.Config, svc *appServices, assets fs.FS) h
 		rawHandler.SetAudit(apiHandlers.AuditLog)
 		rawHandler.SetOperationAudit(apiHandlers.ProtocolAssetOperationAudit)
 		rawHandler.SetSecurityAudit(svc.securityAudit)
+		rawHandler.SetAdmission(svc.admission) // hosted Raw 写入走私有候选准入
 	}
 
 	var dispatcher *protocol.Dispatcher
@@ -270,7 +274,8 @@ func newApplicationHandler(cfg *config.Config, svc *appServices, assets fs.FS) h
 		httpserver.WithIngressGate(&svc.ingressGate),
 		httpserver.WithReadinessCheck(svc.db.Ping),
 		httpserver.WithReadinessCheck(blobWritableCheck(cfg.BlobDir)),
-		httpserver.WithWriteFreeze(svc.freeze.State), // 运行时写入冻结窗口（未冻结时中间件为空操作）
+		httpserver.WithWriteFreeze(svc.freeze.State),                              // 运行时写入冻结窗口（未冻结时中间件为空操作）
+		httpserver.WithIncidentWriteLockGate(apiHandlers.IncidentWriteLockGate()), // 事故写锁入口裁决
 		httpserver.WithHandlers(apiHandlers),
 		httpserver.WithManagementSecurityAudit(apiHandlers.AuditLog),
 		httpserver.WithSecurityAuditRead(authenticator.SecurityAuditPrincipal(api.RejectSecurityAuditPrincipal), func() api.HealthStatusAuditCollection {
@@ -598,4 +603,127 @@ func buildTLSServer(cfg *config.Config, handler http.Handler) (*http.Server, err
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 	}, nil
+}
+
+// smtpNotificationMailer 返回安全通知 SMTP 投递的实发送函数。未配置时返回 nil。
+// 凭据绝不走明文：端口 465 走隐式 TLS，其余端口强制 STARTTLS 协商，
+// 服务端不宣告 STARTTLS 即视为暂时失败重试而不是降级明文发送。
+// net/smtp 不接收 ctx，因此尝试超时由 goroutine+select 外置截止
+// （被截止的发送在后台成功也只记 failed＝安全侧至多重复送达）。
+func smtpNotificationMailer(c config.SMTPConfig) domain.NotificationMailer {
+	if !c.Enabled() {
+		return nil
+	}
+	addr := fmt.Sprintf("%s:%d", c.Host, c.Port)
+	tlsCfg := &tls.Config{ServerName: c.Host, MinVersion: tls.VersionTLS12}
+	var authn smtp.Auth
+	if c.User != "" {
+		authn = smtp.PlainAuth("", c.User, c.Password, c.Host)
+	}
+	send := func(msg []byte, to string) error {
+		var client *smtp.Client
+		if c.Port == 465 {
+			conn, err := tls.Dial("tcp", addr, tlsCfg)
+			if err != nil {
+				return err
+			}
+			client, err = smtp.NewClient(conn, c.Host)
+			if err != nil {
+				_ = conn.Close()
+				return err
+			}
+		} else {
+			var err error
+			client, err = smtp.Dial(addr)
+			if err != nil {
+				return err
+			}
+			// 明文回路绝不放凭据与正文：不宣告 STARTTLS 即失败。
+			if ok, _ := client.Extension("STARTTLS"); !ok {
+				_ = client.Close()
+				return errors.New("smtp server does not offer STARTTLS")
+			}
+			if err := client.StartTLS(tlsCfg); err != nil {
+				_ = client.Close()
+				return err
+			}
+		}
+		defer func() { _ = client.Close() }()
+		if authn != nil {
+			if ok, _ := client.Extension("AUTH"); !ok {
+				return errors.New("smtp server does not offer AUTH")
+			}
+			if err := client.Auth(authn); err != nil {
+				return err
+			}
+		}
+		if err := client.Mail(c.From); err != nil {
+			return err
+		}
+		if err := client.Rcpt(to); err != nil {
+			return err
+		}
+		w, err := client.Data()
+		if err != nil {
+			return err
+		}
+		if _, err := w.Write(msg); err != nil {
+			return err
+		}
+		if err := w.Close(); err != nil {
+			return err
+		}
+		return client.Quit()
+	}
+	return func(ctx context.Context, to, subject, text string) error {
+		msg := "From: " + c.From + "\r\nTo: " + to + "\r\nSubject: " + subject +
+			"\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n" + text
+		done := make(chan error, 1)
+		go func() { done <- send([]byte(msg), to) }()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case err := <-done:
+			return err
+		}
+	}
+}
+
+// qqNotificationSender 返回安全治理 QQ 渠道的发送函数；未配置时返回 nil。
+// 薄适配器：官方 BotGo 凭据未就绪期间，向配置端点 POST {openid,title,text}。
+// 响应 2xx 视为发送成功，其余按临时错误进入重试。
+func qqNotificationSender(c config.QQConfig) domain.NotificationQQSender {
+	if !c.Enabled() {
+		return nil
+	}
+	client := &http.Client{Timeout: 15 * time.Second}
+	type qqPayload struct {
+		Openid string `json:"openid"`
+		Title  string `json:"title"`
+		Text   string `json:"text"`
+	}
+	return func(ctx context.Context, openid, title, text string) error {
+		buf, err := json.Marshal(qqPayload{Openid: openid, Title: title, Text: text})
+		if err != nil {
+			return err
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.Endpoint, bytes.NewReader(buf))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if c.Token != "" {
+			req.Header.Set("Authorization", "Bearer "+c.Token)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		_, _ = io.Copy(io.Discard, resp.Body)
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return fmt.Errorf("qq endpoint %d", resp.StatusCode)
+		}
+		return nil
+	}
 }

@@ -24,7 +24,7 @@ type CredentialAccount struct {
 	Revision int64 `db:"credential_revision"`
 }
 
-func readCredentialAccount(ctx context.Context, q sqlx.QueryerContext, column, value string) (CredentialAccount, error) {
+func readCredentialAccount(ctx context.Context, q sqlx.QueryerContext, column string, value any) (CredentialAccount, error) {
 	var u CredentialAccount
 	err := sqlx.GetContext(ctx, q, &u, `SELECT `+credentialUserColumns+` FROM user u WHERE `+column+`=?`, value)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -35,6 +35,11 @@ func readCredentialAccount(ctx context.Context, q sqlx.QueryerContext, column, v
 
 func (r *UserRepo) CredentialAccountByUsername(ctx context.Context, username string) (CredentialAccount, error) {
 	return readCredentialAccount(ctx, r.db, "u.username", username)
+}
+
+// CredentialAccountByID 按主键取账号快照，供挑战兑现路径复核绑定对象。
+func (r *UserRepo) CredentialAccountByID(ctx context.Context, id int64) (CredentialAccount, error) {
+	return readCredentialAccount(ctx, r.db, "u.id", id)
 }
 
 // CredentialRevision 返回与账号安全变更同序的库内签发水位。
@@ -119,6 +124,9 @@ func credentialAccountForProof(ctx context.Context, q sqlx.QueryerContext, p aut
 		args = append(args, p.TokenID, now)
 	case "":
 		// Basic 口令在锁外核验，以观察到的账号代次和当前通道资格重验。
+	case auth.KindInternal:
+		// 内部批写主体（迁移导入等）：服务端构造、身份绑定任务发起人，
+		// 仅按账号代次与活动状态重验，不核对会话/令牌行。
 	default:
 		return u, ErrCredentialRejected
 	}
@@ -155,10 +163,39 @@ func (r *UserRepo) CredentialTokenAccount(ctx context.Context, digest string) (C
 	return row.CredentialAccount, row.CredentialToken, err
 }
 
-func InsertCredentialSessionTx(ctx context.Context, tx *sqlx.Tx, u CredentialAccount, claims *auth.Claims) error {
-	_, err := tx.ExecContext(ctx, `INSERT INTO credential_session(session_id,jti,user_id,account_epoch,expires_at) VALUES(?,?,?,?,?)`,
-		claims.SessionID, claims.ID, u.ID, u.Epoch, claims.ExpiresAt.Unix())
+func InsertCredentialSessionTx(ctx context.Context, tx *sqlx.Tx, u CredentialAccount, claims *auth.Claims, mfaVerifiedAt *int64) error {
+	_, err := tx.ExecContext(ctx, `INSERT INTO credential_session(session_id,jti,user_id,account_epoch,expires_at,mfa_verified_at) VALUES(?,?,?,?,?,?)`,
+		claims.SessionID, claims.ID, u.ID, u.Epoch, claims.ExpiresAt.Unix(), mfaVerifiedAt)
 	return err
+}
+
+// SessionMfaVerifiedAtTx 读会话的近期强认证水位；无记录/无水位返回 nil。
+func SessionMfaVerifiedAtTx(ctx context.Context, tx *sqlx.Tx, sessionID string) (*int64, error) {
+	var at *int64
+	err := tx.GetContext(ctx, &at,
+		`SELECT mfa_verified_at FROM credential_session WHERE session_id=? AND revoked_at IS NULL`, sessionID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return at, err
+}
+
+// MarkSessionMfaVerifiedTx 把会话水位提升到 now（step_up 确认后置位）。
+func MarkSessionMfaVerifiedTx(ctx context.Context, tx *sqlx.Tx, sessionID string, now int64) error {
+	res, err := tx.ExecContext(ctx,
+		`UPDATE credential_session SET mfa_verified_at=? WHERE session_id=? AND revoked_at IS NULL`,
+		now, sessionID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return ErrSecurityChallengeRejected
+	}
+	return nil
 }
 
 // LoginCredentialAccountTx 只接受由已观察账号快照授权的本地会话签发。

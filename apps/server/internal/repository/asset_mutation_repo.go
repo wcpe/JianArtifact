@@ -538,6 +538,16 @@ func (r *AssetMutationRepo) CountBlobReferences(hash string) (int, error) {
 	return count, err
 }
 
+// CountActiveHoldReferences 返回指向该摘要的活跃证据保全数。
+func (r *AssetMutationRepo) CountActiveHoldReferences(hash string) (int, error) {
+	var count int
+	err := r.db.Get(&count, `SELECT COUNT(*) FROM evidence_hold WHERE state='active' AND (digest=? OR digest=?)`, hash, "sha256:"+hash)
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
 // GetAsset 读取协调器进行并发快照时所需的当前资产；不存在返回 nil。
 func (r *AssetMutationRepo) GetAsset(repositoryID int64, path string) (*Asset, error) {
 	var item Asset

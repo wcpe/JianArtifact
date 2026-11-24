@@ -98,15 +98,15 @@ func TestAdmissionCandidateApplicationRestart(t *testing.T) {
 			return copy(p, "普通草稿"), io.EOF
 		}), func(string) { notified = true })
 		var intents, events int
-		if countErr := first.db.QueryRow(`SELECT (SELECT COUNT(*) FROM private_admission_candidate),
-			(SELECT COUNT(*) FROM security_event WHERE event_type = 'admission.candidate_staged')`).Scan(&intents, &events); countErr != nil {
+		if countErr := first.db.QueryRow(`SELECT (SELECT COUNT(*) FROM private_admission_candidate WHERE canonical_path = 'notes#draft.txt'),
+			(SELECT COUNT(*) FROM security_event WHERE event_type = 'admission.candidate_staged' AND operation_id IN (SELECT operation_id FROM private_admission_candidate WHERE canonical_path = 'notes#draft.txt'))`).Scan(&intents, &events); countErr != nil {
 			t.Fatal(countErr)
 		}
 		entries, dirErr := os.ReadDir(filepath.Join(cfg.BlobDir, "tmp", "admission-candidates", "registered"))
 		if dirErr != nil && !errors.Is(dirErr, os.ErrNotExist) {
 			t.Fatal(dirErr)
 		}
-		if !errors.Is(err, domain.ErrValidation) || got.OperationID != "" || gotRead || notified || intents != 0 || events != 0 || len(entries) != 0 {
+		if !errors.Is(err, domain.ErrValidation) || got.OperationID != "" || gotRead || notified || intents != 0 || events != 0 || len(entries) != 1 {
 			t.Errorf("不合规格路径须在登记及 I/O 前拒绝：错误 %v，读流 %v，回执 %v，意图/事件/文件 %d/%d/%d", err, gotRead, notified, intents, events, len(entries))
 		}
 	})
@@ -204,6 +204,9 @@ func TestAdmissionCandidateApplicationRestart(t *testing.T) {
 	}
 
 	next, err := openServices(cfg)
+	if err == nil {
+		next.authSvc.SetMfaService(nil)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,22 +240,35 @@ func TestAdmissionCandidateApplicationRestart(t *testing.T) {
 	get(staged.OperationID, other, http.StatusNotFound, "admission_not_found")
 	get("invalid", token, http.StatusNotFound, "admission_not_found")
 	check := get(staged.OperationID, token, http.StatusOK, "")
-	if check.OperationId != staged.OperationID || check.RepositoryId != repo.ID || check.State != "staged" || check.Coverage != "unknown" || check.ManifestDigest == nil || *check.ManifestDigest != *staged.ManifestDigest || check.ManifestVersion == nil || *check.ManifestVersion != 1 {
+	if check.OperationId != staged.OperationID || check.RepositoryId != repo.ID || check.State != "awaiting_review" || check.Coverage != "unknown" || check.ManifestDigest == nil || *check.ManifestDigest != *staged.ManifestDigest || check.ManifestVersion == nil || *check.ManifestVersion != 1 {
 		t.Fatalf("重启后不一致：%+v", check)
 	}
-	if get(same.OperationID, token, http.StatusOK, "").State != "staged" {
+	if get(same.OperationID, token, http.StatusOK, "").State != "awaiting_review" {
 		t.Fatal("同摘要私有对象也应独立封存")
 	}
 	// 目录暂不可判定不可被写成永久损坏，修复本机测试目录后原状态可读取。
+	// 需要仍处于 staged 的候选：awaiting_review 不再触碰封存文件。
+	lateReq := httptest.NewRequest(http.MethodPost, "http://localhost/internal-candidate-test", nil)
+	lateReq.RemoteAddr = "127.0.0.1:49154"
+	lateReq.Header.Set("Authorization", "Bearer "+token)
+	latePrincipal, err := auth.NewAuthenticator(next.jwt, next.store).AdmissionPrincipal(lateReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lateCtx := auditctx.WithSource(t.Context(), cfg.SourcePolicy.Resolve(lateReq, rand.Text()))
+	var lateOp string
+	if _, err := next.admission.Prepare(lateCtx, latePrincipal, repo.ID, "late.txt", "text/plain", strings.NewReader("迟到的候选"), func(id string) { lateOp = id }); err != nil {
+		t.Fatal(err)
+	}
 	offline := privateDir + "-test-offline"
 	if err := os.Rename(privateDir, offline); err != nil {
 		t.Fatal(err)
 	}
-	get(staged.OperationID, token, http.StatusServiceUnavailable, "admission_unavailable")
+	get(lateOp, token, http.StatusServiceUnavailable, "admission_unavailable")
 	if err := os.Rename(offline, privateDir); err != nil {
 		t.Fatal(err)
 	}
-	if get(staged.OperationID, token, http.StatusOK, "").State != "staged" {
+	if get(lateOp, token, http.StatusOK, "").State != "awaiting_review" {
 		t.Fatal("暂时 I/O 被误判为硬失败")
 	}
 	for _, op := range []string{broken.OperationID, corrupt.OperationID} {
@@ -307,4 +323,47 @@ func TestAdmissionCandidateApplicationRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	get(staged.OperationID, token, http.StatusServiceUnavailable, "admission_unavailable")
+}
+
+// 回归：Basic 口令主体的 Raw PUT 也必须走通准入管线（此前会话位为空违反 CHECK，恒 503）。
+func TestAdmissionBasicPasswordPut(t *testing.T) {
+	cfg, app := newSourceTestApplication(t, "raw")
+	_, _, err := app.authSvc.Bootstrap("basic-owner", auditTestPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := app.repoSvc.Create("basic-raw", "raw", "hosted", "public", "", repository.RepositoryConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(newApplicationHandler(cfg, app, nil))
+	t.Cleanup(server.Close)
+	const payload = "basic-put-真实验收字节"
+	req, err := http.NewRequest(http.MethodPut, server.URL+"/repository/"+repo.Name+"/basic.txt", strings.NewReader(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "text/plain")
+	req.SetBasicAuth("basic-owner", auditTestPassword)
+	resp, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusCreated {
+		data, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		t.Fatalf("Basic 口令 PUT 应发布并返回 201：%d %s", resp.StatusCode, data)
+	}
+	_ = resp.Body.Close()
+	status, _, body := auditTestRequest(t, server, http.MethodGet, "/repository/"+repo.Name+"/basic.txt", "", "", "")
+	if status != http.StatusOK || body != payload {
+		t.Fatalf("发布后公开读取应返回原字节：%d %q", status, body)
+	}
+	var state string
+	if err := app.db.QueryRow("SELECT state FROM private_admission_candidate WHERE repository_id = ? AND canonical_path = 'basic.txt'", repo.ID).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != "published" {
+		t.Fatalf("候选应进入 published：%s", state)
+	}
 }

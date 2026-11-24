@@ -49,6 +49,8 @@ import type {
   ConnectionStatus,
   EnabledFormats,
   LoginResponse,
+  MfaEnrollChallenge,
+  MfaRecoveryCodes,
   MigrationConflictPolicy,
   OperationsDashboard,
   DownloadClientRanking,
@@ -207,19 +209,66 @@ export function getEnabledFormats(): Promise<EnabledFormats> {
   return request<EnabledFormats>("/formats/enabled");
 }
 
-/** 空库自举：创建首个管理员并返回会话令牌。 */
-export function bootstrap(username: string, password: string): Promise<LoginResponse> {
+/** 空库自举：创建首个管理员并返回会话令牌；装配强认证后须附安装认领票。 */
+export function bootstrap(
+  username: string,
+  password: string,
+  claimTicket?: string,
+): Promise<LoginResponse> {
   return request<LoginResponse>("/auth/bootstrap", {
+    method: "POST",
+    body: claimTicket ? { username, password, claimTicket } : { username, password },
+  });
+}
+
+/** 登录：校验凭据并返回会话令牌与用户；next=mfa_required/claim_required 时进挑战流程。 */
+export function login(username: string, password: string): Promise<LoginResponse> {
+  return request<LoginResponse>("/auth/login", {
     method: "POST",
     body: { username, password },
   });
 }
 
-/** 登录：校验凭据并返回会话令牌与用户。 */
-export function login(username: string, password: string): Promise<LoginResponse> {
-  return request<LoginResponse>("/auth/login", {
+/** 兑现 login_mfa 挑战：OTP 命中换完整会话。 */
+export function verifyLoginMfa(challengeToken: string, otp: string): Promise<LoginResponse> {
+  return request<LoginResponse>("/auth/mfa/verify", {
     method: "POST",
-    body: { username, password },
+    body: { challengeToken, otp },
+  });
+}
+
+/** 凭 login_mfa 挑战 + 恢复码换 factor_recover 重绑登记（返回新登记 URI）。 */
+export function recoverLoginMfa(
+  challengeToken: string,
+  recoveryCode: string,
+): Promise<MfaEnrollChallenge> {
+  return request<MfaEnrollChallenge>("/auth/mfa/recover", {
+    method: "POST",
+    body: { challengeToken, recoveryCode },
+  });
+}
+
+/** 受控认领：口令 + 认领票换 factor_enroll 登记挑战。 */
+export function claimMfaEnroll(
+  username: string,
+  password: string,
+  claimTicket: string,
+): Promise<MfaEnrollChallenge> {
+  return request<MfaEnrollChallenge>("/auth/mfa/claim", {
+    method: "POST",
+    body: { username, password, claimTicket },
+  });
+}
+
+/** 用首枚 OTP 确认因子登记并领取恢复码批次。 */
+export function confirmMfaEnroll(
+  challengeToken: string,
+  otp: string,
+  claimTicket?: string,
+): Promise<MfaRecoveryCodes> {
+  return request<MfaRecoveryCodes>("/auth/mfa/enroll/confirm", {
+    method: "POST",
+    body: claimTicket ? { challengeToken, otp, claimTicket } : { challengeToken, otp },
   });
 }
 
@@ -1833,4 +1882,202 @@ export function listMaintenanceJobs(): Promise<{ jobs: MaintenanceJob[] }> {
 /** 手动触发维护作业（**物理删除**，不进回收站）。 */
 export function runMaintenanceJob(name: string): Promise<{ name: string; started: boolean }> {
   return request(`/maintenance/jobs/${encodeURIComponent(name)}/run`, { method: "POST" });
+}
+
+/* ── 安全治理 风险调查（安全事件队列 + 案件） ─────────────────────────── */
+
+export interface SecurityEvent {
+  eventId: string;
+  eventType: string;
+  outcome?: string;
+  actorKind?: string;
+  actorUserId?: number;
+  actorNameSnapshot?: string;
+  clientIp?: string;
+  credentialId?: string;
+  sessionId?: string;
+  requestId?: string;
+  operationId?: string;
+  errorCode?: string;
+  occurredAt?: string;
+  committed?: string;
+}
+
+export interface SecurityEventPage {
+  items: SecurityEvent[];
+  hasMore: boolean;
+  nextCursor?: string;
+  coverage?: { status?: string };
+  projectionHealth?: string;
+}
+
+export interface SecurityEventQuery {
+  from?: string;
+  to?: string;
+  ip?: string;
+  cidr?: string;
+  eventType?: string;
+  outcome?: string;
+  actorUserId?: number;
+  repositoryId?: number;
+  credentialId?: string;
+  sessionId?: string;
+  requestId?: string;
+  operationId?: string;
+  canonicalPath?: string;
+  objectId?: string;
+  digest?: string;
+  cursor?: string;
+  limit?: number;
+}
+
+/** 安全事件队列（关联维度即查询参数；安全治理）。 */
+export function getSecurityEvents(q: SecurityEventQuery): Promise<SecurityEventPage> {
+  const params = new URLSearchParams();
+  for (const [k, v] of Object.entries(q)) {
+    if (v !== undefined && v !== null && v !== "") params.set(k, String(v));
+  }
+  return request<SecurityEventPage>(`/observability/audit/security-events?${params.toString()}`);
+}
+
+export interface SecurityCase {
+  caseId: string;
+  title: string;
+  state: "open" | "claimed" | "closed";
+  severity: "low" | "medium" | "high" | "critical";
+  resolution?: string;
+  targetVersion: number;
+  ownerUserId?: number;
+  reason?: string;
+  createdUnix?: number;
+  updatedUnix?: number;
+}
+
+export function getSecurityCases(state?: string): Promise<SecurityCase[]> {
+  return request<SecurityCase[]>(`/security/cases${state ? `?state=${state}` : ""}`);
+}
+
+export interface SecurityCaseLink {
+  caseId: string;
+  eventId: string;
+  linkKind: "fact" | "candidate";
+  linkedBy?: string;
+  linkedUnix?: number;
+}
+
+export function getSecurityCaseLinks(caseId: string): Promise<SecurityCaseLink[]> {
+  return request<SecurityCaseLink[]>(`/security/cases/${encodeURIComponent(caseId)}/links`);
+}
+
+export function transitionSecurityCase(
+  caseId: string,
+  body: {
+    action: "claim" | "close" | "reopen";
+    targetVersion: number;
+    reason?: string;
+    resolutionCode?: string;
+  },
+): Promise<SecurityCase> {
+  return request<SecurityCase>(`/security/cases/${encodeURIComponent(caseId)}/transitions`, {
+    method: "POST",
+    body,
+  });
+}
+
+export interface SecurityFinding {
+  findingId: string;
+  ruleId: string;
+  ruleVersion: number;
+  severity: "low" | "medium" | "high" | "critical";
+  confidence?: "low" | "medium" | "high";
+  subjectKey: string;
+  windowFrom?: number;
+  windowTo?: number;
+  summary: string;
+  caseId?: string;
+  createdUnix?: number;
+}
+
+export function getSecurityFindings(limit = 50): Promise<SecurityFinding[]> {
+  return request<SecurityFinding[]>(`/security/findings?limit=${limit}`);
+}
+
+// ---- 安全治理 案件四栏详情 ----
+
+export interface SecurityCaseDetail {
+  case: SecurityCase;
+  findings: SecurityFinding[];
+  links: SecurityCaseLink[];
+  readSeenVersion?: number;
+  readUnix?: number;
+}
+
+export interface SecurityCaseTimelineItem {
+  sequence: number;
+  eventId: string;
+  eventType: string;
+  occurredAt: number;
+  outcome: string;
+  errorCode: string;
+  actorUserId: number | null;
+  clientIp: string;
+  linkKind: string;
+}
+
+export interface SecurityCaseUploadItem {
+  eventId: string;
+  eventType: string;
+  canonicalPath: string;
+  objectKind: string;
+  objectId: string;
+  digest: string;
+  sizeBytes: number | null;
+  manifestDigest: string;
+  targetVersion: string;
+  repository: string;
+  linkKind: string;
+}
+
+export interface SecurityCaseIdentityItem {
+  actorUserId: number | null;
+  actorName: string;
+  credentialId: string;
+  sessionId: string;
+  authMethod: string;
+  authStrength: string;
+  clientIp: string;
+  userAgent: string;
+  events: number;
+}
+
+export interface SecurityCaseHoldItem {
+  holdId: string;
+  digest: string;
+  byteState: string;
+  state: string;
+  createdAt: number;
+}
+
+export async function getSecurityCase(caseId: string): Promise<SecurityCaseDetail> {
+  return request(`/security/cases/${encodeURIComponent(caseId)}`);
+}
+
+export type SecurityCaseSectionKind = "timeline" | "uploads" | "identity" | "actions-evidence";
+
+export async function getSecurityCaseSection(
+  caseId: string,
+  section: SecurityCaseSectionKind,
+  limit = 100,
+): Promise<Record<string, unknown[]>> {
+  return request(`/security/cases/${encodeURIComponent(caseId)}/${section}?limit=${limit}`);
+}
+
+export async function markSecurityCaseRead(
+  caseId: string,
+  body: { seenVersion: number },
+): Promise<void> {
+  return request(`/security/cases/${encodeURIComponent(caseId)}/read`, {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
 }

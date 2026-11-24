@@ -2,14 +2,17 @@ package domain
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"mime"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -27,42 +30,70 @@ const (
 	admissionMaxBytes        int64 = 64 << 20
 	admissionLifetime              = 7 * 24 * time.Hour
 	admissionIntegrityFailed       = "admission_integrity_failed"
+	// 安全治理 私有暂存容量上限（拟议预算）：超上限返回 admission_limit。
+	admissionMaxRepoPendingBytes  int64 = 4 << 30
+	admissionMaxTotalPendingBytes int64 = 32 << 30
+	admissionMaxRepoPendingCount  int64 = 256
+	admissionMaxTotalPendingCount int64 = 4096
+	// 安全治理 扫描任务：内置完整性检测版本号与租约。
+	admissionScanEngine        = "builtin-integrity"
+	admissionScanEngineVersion = "1"
+	admissionScanRulesVersion  = "1"
+	admissionScanParserProfile = "generic/1"
+	admissionScanLease         = 60 * time.Second
 )
 
 var (
 	ErrAdmissionUnauthenticated = errors.New("候选请求没有有效身份")
 	ErrAdmissionForbidden       = errors.New("候选仅允许交互会话")
 	ErrAdmissionUnavailable     = errors.New("候选状态暂不可确认")
+	// ErrAdmissionLimit 私有暂存超出容量或条数上限；映射 413 admission_limit。
+	ErrAdmissionLimit = errors.New("私有暂存容量已满")
+	// ErrConfirmationStale 确认令牌伪造、过期、重放或绑定漂移。
+	ErrConfirmationStale = errors.New("确认令牌无效或已失效")
 )
 
 // AdmissionStatus 是公开状态适配器可使用的脱敏投影，不含内部文件键、源 IP 或路径。
 type AdmissionStatus struct {
-	OperationID     string
-	RepositoryID    int64
-	State           string
-	TargetVersion   int64
-	ManifestVersion *int64
-	ManifestDigest  *string
-	ExpiresAt       time.Time
-	ErrorCode       string
+	OperationID      string
+	RepositoryID     int64
+	State            string
+	TargetVersion    int64
+	ManifestVersion  *int64
+	ManifestDigest   *string
+	ExpiresAt        time.Time
+	ErrorCode        string
+	PublishedAssetID *int64
 }
 
-// AdmissionService 只登记和追踪私有候选，不解析包、不审批、不发布。
+// admissionStatus 只投影白名单字段。
+
+// AdmissionService 登记和追踪私有候选；批准后把字节提升为公开资产。
 type AdmissionService struct {
 	rows         *repository.AdmissionCandidateRepo
+	jobs         *repository.AdmissionScanJobRepo
+	confirmKey   []byte
 	repos        *repository.RepoRepo
 	users        *repository.UserRepo
 	events       *repository.SecurityEventRepo
 	blobs        *blobstore.Store
 	freeze       *FreezeController
+	assets       *AssetService
 	bootID       string
 	receiving    sync.Map
 	intake       chan struct{}
 	verification chan struct{}
 }
 
+// SetAssetService 注入提升发布所需的资产服务（在首个请求前调用）。
+func (s *AdmissionService) SetAssetService(assets *AssetService) { s.assets = assets }
+
 func NewAdmissionService(db *persistence.DB, blobs *blobstore.Store, users *repository.UserRepo, repos *repository.RepoRepo, freeze *FreezeController) *AdmissionService {
-	return &AdmissionService{rows: repository.NewAdmissionCandidateRepo(db), users: users, repos: repos, events: repository.NewSecurityEventRepo(db), blobs: blobs, freeze: freeze, bootID: rand.Text(), intake: make(chan struct{}, 4), verification: make(chan struct{}, 2)}
+	ck := make([]byte, 32)
+	if _, err := rand.Read(ck); err != nil {
+		panic(err)
+	}
+	return &AdmissionService{rows: repository.NewAdmissionCandidateRepo(db), jobs: repository.NewAdmissionScanJobRepo(), confirmKey: ck, users: users, repos: repos, events: repository.NewSecurityEventRepo(db), blobs: blobs, freeze: freeze, bootID: rand.Text(), intake: make(chan struct{}, 4), verification: make(chan struct{}, 2)}
 }
 
 // Prepare 接收内部调用方交来的已验证会话和 HTTP 来源。registered 只在确认登记后通知操作号，
@@ -112,8 +143,21 @@ func (s *AdmissionService) Prepare(ctx context.Context, principal *auth.Principa
 	if _, err := rand.Read(random[:]); err != nil {
 		return AdmissionStatus{}, ErrAdmissionUnavailable
 	}
+	// 会话位：交互会话用 session_id，机器凭据用凭据号占位；Basic 口令与内部批写主体
+	// 没有会话位，按主体类别+账号号占位（CHECK 要求非空）。
+	sessionID := principal.SessionID
+	if sessionID == "" {
+		switch {
+		case principal.Kind == auth.KindToken:
+			sessionID = "token:" + strconv.FormatInt(principal.TokenID, 10)
+		case principal.Kind == auth.KindInternal:
+			sessionID = "internal:" + strconv.FormatInt(principal.UserID, 10)
+		case principal.Kind == "" && principal.AuthSource == auth.AuthSourceBasic:
+			sessionID = "basic:" + strconv.FormatInt(principal.UserID, 10)
+		}
+	}
 	row := repository.AdmissionCandidateRow{OperationID: op.String(), ObjectKey: blobstore.NewRegisteredPrivateCandidateKey(random), BootID: s.bootID, RepositoryID: repositoryID,
-		ActorUserID: principal.UserID, SessionID: principal.SessionID, AccountEpoch: principal.AccountEpoch, AuthMethod: principal.AuthSource, OriginRequestID: snapshot.OriginRequestID, ClientIP: snapshot.ClientIP.String(),
+		ActorUserID: principal.UserID, SessionID: sessionID, AccountEpoch: principal.AccountEpoch, AuthMethod: principal.AuthSource, OriginRequestID: snapshot.OriginRequestID, ClientIP: snapshot.ClientIP.String(),
 		ProxyTrust: string(snapshot.ProxyTrust), SourceTrustVersion: snapshot.SourceTrustVersion, CanonicalPath: canonicalPath, ContentType: contentType, State: "receiving", TargetVersion: 1,
 		ExpiresUnix: time.Now().UTC().Add(admissionLifetime).Unix()}
 	s.receiving.Store(row.OperationID, struct{}{})
@@ -144,7 +188,11 @@ func (s *AdmissionService) Prepare(ctx context.Context, principal *auth.Principa
 		return AdmissionStatus{OperationID: row.OperationID}, err
 	}
 	digest, size := object.SHA256(), object.Size()
-	manifest := admissionManifestDigest(row, digest, size)
+	repo, repoErr := s.repoByID(ctx, row.RepositoryID)
+	if repoErr != nil {
+		return AdmissionStatus{OperationID: row.OperationID}, ErrAdmissionUnavailable
+	}
+	manifest := admissionManifestDigest(row, repo.Format, digest, size)
 	eventID := repository.NewSecurityEventID()
 	row.ManifestDigest, row.BlobHash, row.SizeBytes, row.StagedEventID = &manifest, &digest, &size, &eventID
 	err = s.rows.Write(ctx, func(tx *sqlx.Tx) error {
@@ -154,6 +202,15 @@ func (s *AdmissionService) Prepare(ctx context.Context, principal *auth.Principa
 		}
 		if time.Now().Unix() >= row.ExpiresUnix {
 			return ErrAdmissionUnavailable
+		}
+		repoBytes, totalBytes, repoCount, totalCount, sumErr := s.rows.SumPendingTx(ctx, tx, row.RepositoryID)
+		if sumErr != nil {
+			return sumErr
+		}
+		// 自身 receiving 行不计入既有占用；超任一上限拒绝封存。
+		if repoBytes+size > admissionMaxRepoPendingBytes || totalBytes+size > admissionMaxTotalPendingBytes ||
+			repoCount > admissionMaxRepoPendingCount || totalCount > admissionMaxTotalPendingCount {
+			return ErrAdmissionLimit
 		}
 		if err := s.rows.SealTx(ctx, tx, row); err != nil {
 			return err
@@ -200,36 +257,129 @@ func (s *AdmissionService) Status(ctx context.Context, principal *auth.Principal
 		// 单实例重启或同实例接收失败：不能由遗留文件推导接收成功。
 		return s.transitionStatus(ctx, principal, row, "rejected", "")
 	case "staged":
-		if row.BlobHash == nil || row.SizeBytes == nil || *row.SizeBytes > admissionMaxBytes || row.ManifestVersion == nil || *row.ManifestVersion != 1 ||
-			row.ManifestDigest == nil || *row.ManifestDigest != admissionManifestDigest(row, *row.BlobHash, *row.SizeBytes) {
+		repo, repoErr := s.repoByID(ctx, row.RepositoryID)
+		if repoErr != nil || row.BlobHash == nil || row.SizeBytes == nil || *row.SizeBytes > admissionMaxBytes || row.ManifestVersion == nil || *row.ManifestVersion != 1 ||
+			row.ManifestDigest == nil || *row.ManifestDigest != admissionManifestDigest(row, repo.Format, *row.BlobHash, *row.SizeBytes) {
+			return AdmissionStatus{}, ErrAdmissionUnavailable
+		}
+		// 安全治理：检测经持久 scan_job 认领；租约带递增代次与墙钟。
+		workerID := "main-" + s.bootID
+		var job repository.AdmissionScanJobRow
+		var claimed bool
+		now := time.Now().UTC()
+		err = s.rows.Write(ctx, func(tx *sqlx.Tx) error {
+			latest, e := s.authorizedRowTx(ctx, tx, principal, operationID)
+			if e != nil || latest.State != "staged" || latest.TargetVersion != row.TargetVersion {
+				return ErrAdmissionUnavailable
+			}
+			if _, e = s.jobs.EnqueueTx(ctx, tx, repository.AdmissionScanJobRow{
+				JobID: uuid.NewString(), OperationID: operationID, ManifestVersion: *row.ManifestVersion,
+				Engine: admissionScanEngine, EngineVersion: admissionScanEngineVersion,
+				RulesVersion: admissionScanRulesVersion, ParserProfileVersion: admissionScanParserProfile,
+				NextRunAtUnix: now.Unix(), CreatedUnix: now.Unix(), UpdatedUnix: now.Unix(),
+			}); e != nil {
+				return e
+			}
+			var e2 error
+			job, claimed, e2 = s.jobs.ClaimTx(ctx, tx, operationID, *row.ManifestVersion, workerID, admissionScanLease, now)
+			return e2
+		}, s.commitWhenWritable)
+		if err != nil {
+			return AdmissionStatus{}, admissionServiceError(err)
+		}
+		if !claimed {
+			// 他人持有有效租约或尝试预算耗尽：无公开结果。
 			return AdmissionStatus{}, ErrAdmissionUnavailable
 		}
 		select {
 		case s.verification <- struct{}{}:
-			defer func() { <-s.verification }()
 		default:
+			_ = s.rows.Write(ctx, func(tx *sqlx.Tx) error {
+				_, e := s.jobs.RequeueTx(ctx, tx, job.JobID, job.LeaseGeneration, time.Now().UTC().Add(5*time.Second), "scan_busy", time.Now().UTC())
+				return e
+			}, s.commitWhenWritable)
 			return AdmissionStatus{}, ErrAdmissionUnavailable
 		}
-		err := s.blobs.VerifyRegisteredPrivateCandidate(ctx, row.ObjectKey, *row.BlobHash, *row.SizeBytes)
-		if errors.Is(err, blobstore.ErrPrivateCandidateIntegrity) {
-			return s.transitionStatus(ctx, principal, row, "rejected", admissionIntegrityFailed)
+		verifyErr := s.blobs.VerifyRegisteredPrivateCandidate(ctx, row.ObjectKey, *row.BlobHash, *row.SizeBytes)
+		<-s.verification
+		// 完成事务：租约代次栅栏 + 事实追加 + 候选转态。
+		verdict, integrity, errCode := "approved", "passed", ""
+		switch {
+		case errors.Is(verifyErr, blobstore.ErrPrivateCandidateIntegrity):
+			verdict, integrity, errCode = "rejected", "failed", admissionIntegrityFailed
+		case verifyErr != nil:
+			verdict, integrity = "", "unknown" // 可重试故障退回 queued
+		case time.Now().Unix() >= row.ExpiresUnix:
+			verdict = "" // 到期走候选 expired 路径
 		}
-		if err != nil {
+		var outcome AdmissionStatus
+		werr := s.rows.Write(ctx, func(tx *sqlx.Tx) error {
+			if integrity != "unknown" {
+				factOrdinal, e := s.jobs.CountFactsTx(ctx, tx, job.JobID)
+				if e != nil {
+					return e
+				}
+				completed, missing := int64(1), "[]"
+				if integrity != "passed" {
+					completed, missing = 0, `["integrity"]`
+				}
+				fv := verdict
+				if fv == "" {
+					fv = "rejected"
+				}
+				if e = s.jobs.InsertFactTx(ctx, tx, repository.AdmissionScanFactRow{
+					JobID: job.JobID, Ordinal: factOrdinal + 1, LeaseGeneration: job.LeaseGeneration,
+					ObjectDigest: *row.BlobHash, CoverageRequired: 1,
+					CoverageCompleted: completed, CoverageMissing: missing, Integrity: integrity,
+					Verdict: fv, Findings: "[]", WorkerID: workerID, ObservedAtUnix: time.Now().UTC().Unix(),
+				}); e != nil {
+					return e
+				}
+			}
+			if verdict == "" {
+				// 可重试故障或到期：退回队列（到期由下方候选转态处理）。
+				ok, e := s.jobs.RequeueTx(ctx, tx, job.JobID, job.LeaseGeneration, time.Now().UTC(), "retryable", time.Now().UTC())
+				if e != nil {
+					return e
+				}
+				if !ok {
+					return ErrAdmissionUnavailable // 代次不匹配：迟到结果不生效
+				}
+				return nil
+			}
+			ok, e := s.jobs.CompleteTx(ctx, tx, job.JobID, job.LeaseGeneration, verdict, errCode, time.Now().UTC())
+			if e != nil {
+				return e
+			}
+			if !ok {
+				return ErrAdmissionUnavailable // 租约被接管：本次结果作废
+			}
+			if verdict == "rejected" {
+				outcome, e = s.transitionStatusTx(ctx, tx, principal, row, "rejected", admissionIntegrityFailed)
+				return e
+			}
+			outcome, e = s.transitionStatusTx(ctx, tx, principal, row, "awaiting_review", "")
+			return e
+		}, s.commitWhenWritable)
+		if werr != nil {
+			if verifyErr != nil && !errors.Is(verifyErr, blobstore.ErrPrivateCandidateIntegrity) {
+				return AdmissionStatus{}, ErrAdmissionUnavailable
+			}
+			return AdmissionStatus{}, admissionServiceError(werr)
+		}
+		if verifyErr != nil && !errors.Is(verifyErr, blobstore.ErrPrivateCandidateIntegrity) {
 			return AdmissionStatus{}, ErrAdmissionUnavailable
 		}
+		if time.Now().Unix() >= row.ExpiresUnix && verdict == "" {
+			return s.transitionStatus(ctx, principal, row, "expired", "")
+		}
+		return outcome, nil
+	case "awaiting_review":
 		if time.Now().Unix() >= row.ExpiresUnix {
 			return s.transitionStatus(ctx, principal, row, "expired", "")
 		}
-		// 文件 I/O 完成后再次核验当前会话、归属、仓库及 ACL。
-		latest, err := s.authorizedRow(ctx, principal, operationID)
-		if err != nil {
-			return AdmissionStatus{}, admissionServiceError(err)
-		}
-		if latest.TargetVersion != row.TargetVersion {
-			return AdmissionStatus{}, ErrAdmissionUnavailable
-		}
-		return admissionStatus(latest), nil
-	case "rejected", "expired":
+		return admissionStatus(row), nil
+	case "rejected", "expired", "published":
 		return admissionStatus(row), nil
 	default:
 		return AdmissionStatus{}, ErrAdmissionUnavailable
@@ -296,7 +446,7 @@ func (s *AdmissionService) authorizeRepository(ctx context.Context, tx *sqlx.Tx,
 	if err != nil {
 		return nil, err
 	}
-	if repo.Type != "hosted" || repo.Format != "raw" || !repo.Online {
+	if repo.Type != "hosted" || !admissionFormatAllowed(repo.Format) || !repo.Online {
 		return nil, repository.ErrNotFound
 	}
 	if user.Role != "admin" {
@@ -324,6 +474,58 @@ func (s *AdmissionService) transitionStatus(ctx context.Context, p *auth.Princip
 	}, s.commitWhenWritable)
 	if errors.Is(err, repository.ErrAdmissionCommitUnknown) || errors.Is(err, repository.ErrNotFound) {
 		observed, readErr := s.authorizedRow(ctx, p, row.OperationID)
+		if readErr != nil {
+			return AdmissionStatus{}, admissionServiceError(readErr)
+		}
+		if observed.State == state && observed.ErrorCode == code && observed.TargetVersion == row.TargetVersion+1 {
+			return admissionStatus(observed), nil
+		}
+		return AdmissionStatus{}, ErrAdmissionUnavailable
+	}
+	if err != nil {
+		return AdmissionStatus{}, admissionServiceError(err)
+	}
+	row.State, row.ErrorCode, row.TargetVersion = state, code, row.TargetVersion+1
+	return admissionStatus(row), nil
+}
+
+// transitionStatusTx 在既有写事务内复核归属/版本/当前态后转态。
+func (s *AdmissionService) transitionStatusTx(ctx context.Context, tx *sqlx.Tx, p *auth.Principal, row repository.AdmissionCandidateRow, state, code string) (AdmissionStatus, error) {
+	current, err := s.authorizedRowTx(ctx, tx, p, row.OperationID)
+	if err != nil {
+		return AdmissionStatus{}, err
+	}
+	if current.RepositoryID != row.RepositoryID || current.TargetVersion != row.TargetVersion || current.State != row.State {
+		return AdmissionStatus{}, repository.ErrNotFound
+	}
+	if err := s.rows.TransitionTx(ctx, tx, row, state, code); err != nil {
+		return AdmissionStatus{}, err
+	}
+	row.State, row.ErrorCode, row.TargetVersion = state, code, row.TargetVersion+1
+	return admissionStatus(row), nil
+}
+
+// transitionStatusAdmin 与 transitionStatus 同构，但按操作号取行（管理员可处置他人候选）。
+func (s *AdmissionService) transitionStatusAdmin(ctx context.Context, row repository.AdmissionCandidateRow, state, code string) (AdmissionStatus, error) {
+	err := s.rows.Write(ctx, func(tx *sqlx.Tx) error {
+		current, err := s.rows.GetAnyTx(ctx, tx, row.OperationID)
+		if err != nil {
+			return err
+		}
+		if current.RepositoryID != row.RepositoryID || current.TargetVersion != row.TargetVersion || current.State != row.State {
+			return repository.ErrNotFound
+		}
+		return s.rows.TransitionTx(ctx, tx, row, state, code)
+	}, s.commitWhenWritable)
+	if errors.Is(err, repository.ErrAdmissionCommitUnknown) || errors.Is(err, repository.ErrNotFound) {
+		var observed repository.AdmissionCandidateRow
+		readErr := s.rows.Read(ctx, func(tx *sqlx.Tx) error {
+			r, err := s.rows.GetAnyTx(ctx, tx, row.OperationID)
+			if err == nil {
+				observed = r
+			}
+			return err
+		})
 		if readErr != nil {
 			return AdmissionStatus{}, admissionServiceError(readErr)
 		}
@@ -375,17 +577,30 @@ func checkAdmissionPrincipal(p *auth.Principal) error {
 	if p == nil || p.UserID <= 0 {
 		return ErrAdmissionUnauthenticated
 	}
-	if p.Kind != auth.KindSession || p.AuthSource != auth.AuthSourceWebJWT || p.WebLoginDisabled {
+	switch {
+	case p.Kind == auth.KindSession && p.AuthSource == auth.AuthSourceWebJWT:
+		if p.WebLoginDisabled {
+			return ErrAdmissionForbidden
+		}
+		if p.JTI == "" || p.SessionID == "" {
+			return ErrAdmissionUnauthenticated
+		}
+	case p.Kind == auth.KindToken && p.TokenID > 0:
+		// 机器凭据：凭据位由 TokenID 承载，协议写入口允许提交候选。
+	case p.Kind == auth.KindInternal:
+		// 内部批写入口（迁移导入）：身份绑定任务发起人，
+		// 每次接收仍按当前 ACL 复核发布权。
+	case p.Kind == "" && p.AuthSource == auth.AuthSourceBasic:
+		// 协议 Basic 口令主体：口令在锁外核验，凭据位由账号代次承载，
+		// 与 token 主体同等地按 ACL 复核发布权。
+	default:
 		return ErrAdmissionForbidden
-	}
-	if p.JTI == "" || p.SessionID == "" {
-		return ErrAdmissionUnauthenticated
 	}
 	return nil
 }
 
 func admissionServiceError(err error) error {
-	for _, known := range []error{ErrAdmissionUnauthenticated, ErrAdmissionForbidden, ErrAdmissionUnavailable, repository.ErrNotFound, ErrWriteFrozen, context.Canceled, context.DeadlineExceeded} {
+	for _, known := range []error{ErrAdmissionUnauthenticated, ErrAdmissionForbidden, ErrAdmissionUnavailable, ErrAdmissionLimit, repository.ErrNotFound, ErrWriteFrozen, context.Canceled, context.DeadlineExceeded} {
 		if errors.Is(err, known) {
 			return known
 		}
@@ -395,7 +610,7 @@ func admissionServiceError(err error) error {
 
 func admissionStatus(r repository.AdmissionCandidateRow) AdmissionStatus {
 	return AdmissionStatus{OperationID: r.OperationID, RepositoryID: r.RepositoryID, State: r.State, TargetVersion: r.TargetVersion, ManifestVersion: r.ManifestVersion,
-		ManifestDigest: r.ManifestDigest, ExpiresAt: time.Unix(r.ExpiresUnix, 0).UTC(), ErrorCode: r.ErrorCode}
+		ManifestDigest: r.ManifestDigest, ExpiresAt: time.Unix(r.ExpiresUnix, 0).UTC(), ErrorCode: r.ErrorCode, PublishedAssetID: r.PublishedAssetID}
 }
 
 // 准入候选的规范路径比审计事件路径更严：审计须覆盖制品键的全部合法字符（含
@@ -405,8 +620,275 @@ func validAdmissionPath(p string) bool {
 	return repository.ValidSecurityEventPath(p) && !strings.Contains(p, "#") && path.Clean(p) == p
 }
 
-func admissionManifestDigest(r repository.AdmissionCandidateRow, hash string, size int64) string {
+func admissionManifestDigest(r repository.AdmissionCandidateRow, format, hash string, size int64) string {
 	// 固定顺序、类型与编码版本；输入摘要不会被误作完整清单摘要。
-	data, _ := json.Marshal([]any{"jianartifact.private-raw-manifest.v1", r.RepositoryID, "raw", "asset.put", r.CanonicalPath, "input", r.ContentType, "sha256:" + hash, size})
+	data, _ := json.Marshal([]any{"jianartifact.private-raw-manifest.v1", r.RepositoryID, format, "asset.put", r.CanonicalPath, "input", r.ContentType, "sha256:" + hash, size})
 	return fmt.Sprintf("sha256:%x", sha256.Sum256(data))
+}
+
+// ── 安全治理 最小准入流水线：检测结论 + 管理员审批 + 提升发布 ─────────────────
+
+var ErrAdmissionDecisionRejected = errors.New("准入裁决被拒")
+
+// Decide 管理员处置候选：awaiting_review → approve（提升字节为公开资产）或 reject。
+// reason 必填；批准在最终事务内先复核仓库与权限，再把状态与资产引用同事务裁决。
+const admissionConfirmTTL = 5 * time.Minute
+
+// AdmissionDecisionPreview 裁决预览结果：可行性、阻塞项与短效单次确认令牌。
+type AdmissionDecisionPreview struct {
+	Feasible bool
+	Blockers []string
+	Token    string
+	Expires  time.Time
+}
+
+// DecidePreview 核验待审状态并签发绑定主体/动作/版本/摘要/规则与有效期的确认令牌；预览不改候选。
+func (s *AdmissionService) DecidePreview(ctx context.Context, p *auth.Principal, operationID, action, reason string) (AdmissionDecisionPreview, error) {
+	out := AdmissionDecisionPreview{Blockers: []string{}}
+	if p == nil || p.UserID <= 0 || p.Role != "admin" {
+		return out, ErrAdmissionForbidden
+	}
+	if reason == "" || (action != "approve" && action != "reject") {
+		return out, ErrValidation
+	}
+	var row repository.AdmissionCandidateRow
+	err := s.rows.Read(ctx, func(tx *sqlx.Tx) error {
+		r, e := s.rows.GetAnyTx(ctx, tx, operationID)
+		if e != nil {
+			return e
+		}
+		row = r
+		return nil
+	})
+	if err != nil {
+		return out, repository.ErrNotFound
+	}
+	feasible := row.State == "awaiting_review" && row.ManifestDigest != nil && row.BlobHash != nil && row.SizeBytes != nil
+	if !feasible {
+		out.Blockers = append(out.Blockers, "candidate_not_awaiting_review")
+		return out, nil
+	}
+	expires := time.Now().UTC().Add(admissionConfirmTTL)
+	payload := fmt.Sprintf("%d|%s|%s|%d|%s|%s|%d", p.UserID, operationID, action, row.TargetVersion, *row.ManifestDigest, admissionScanRulesVersion, expires.Unix())
+	sig := hmac.New(sha256.New, s.confirmKey)
+	sig.Write([]byte(payload))
+	out.Feasible = true
+	out.Token = base64.RawURLEncoding.EncodeToString([]byte(payload)) + "." + base64.RawURLEncoding.EncodeToString(sig.Sum(nil))
+	out.Expires = expires
+	return out, nil
+}
+
+// verifyConfirmToken 验签并比对绑定字段；返回单次令牌 ID（payload 整体）。
+func (s *AdmissionService) verifyConfirmToken(p *auth.Principal, operationID, action string, row repository.AdmissionCandidateRow, token string) (string, error) {
+	parts := strings.SplitN(token, ".", 2)
+	if len(parts) != 2 {
+		return "", ErrConfirmationStale
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return "", ErrConfirmationStale
+	}
+	sigBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return "", ErrConfirmationStale
+	}
+	sig := hmac.New(sha256.New, s.confirmKey)
+	sig.Write(raw)
+	if !hmac.Equal(sig.Sum(nil), sigBytes) {
+		return "", ErrConfirmationStale
+	}
+	fields := strings.Split(string(raw), "|")
+	if len(fields) != 7 {
+		return "", ErrConfirmationStale
+	}
+	uid, e1 := strconv.ParseInt(fields[0], 10, 64)
+	tv, e2 := strconv.ParseInt(fields[3], 10, 64)
+	exp, e3 := strconv.ParseInt(fields[6], 10, 64)
+	if e1 != nil || e2 != nil || e3 != nil {
+		return "", ErrConfirmationStale
+	}
+	op, act, md, rv := fields[1], fields[2], fields[4], fields[5]
+	if uid != p.UserID || op != operationID || act != action || time.Now().Unix() >= exp {
+		return "", ErrConfirmationStale
+	}
+	if row.ManifestDigest == nil || md != *row.ManifestDigest || tv != row.TargetVersion || rv != admissionScanRulesVersion {
+		return "", ErrConfirmationStale
+	}
+	return parts[0], nil
+}
+
+func (s *AdmissionService) Decide(ctx context.Context, p *auth.Principal, operationID, action, reason, confirmToken string) (AdmissionStatus, error) {
+	if p == nil || p.UserID <= 0 || p.Role != "admin" {
+		return AdmissionStatus{}, ErrAdmissionForbidden
+	}
+	if reason == "" || (action != "approve" && action != "reject") {
+		return AdmissionStatus{}, ErrValidation
+	}
+	var row repository.AdmissionCandidateRow
+	err := s.rows.Read(ctx, func(tx *sqlx.Tx) error {
+		r, err := s.rows.GetAnyTx(ctx, tx, operationID)
+		if err != nil {
+			return err
+		}
+		row = r
+		return nil
+	})
+	if err != nil {
+		return AdmissionStatus{}, repository.ErrNotFound
+	}
+	if row.State != "awaiting_review" {
+		return AdmissionStatus{}, ErrAdmissionDecisionRejected
+	}
+	if row.BlobHash == nil || row.SizeBytes == nil {
+		return AdmissionStatus{}, ErrAdmissionUnavailable
+	}
+	// 安全治理：确认令牌绑定主体/动作/版本/摘要/规则/有效期，登记单次消费后才允许推进。
+	tokenID, err := s.verifyConfirmToken(p, operationID, action, row, confirmToken)
+	if err != nil {
+		return AdmissionStatus{}, err
+	}
+	consumed := false
+	err = s.rows.Write(ctx, func(tx *sqlx.Tx) error {
+		ok, e := s.jobs.ConsumeConfirmationTx(ctx, tx, tokenID, time.Now().UTC())
+		if e != nil {
+			return e
+		}
+		consumed = ok
+		return nil
+	}, s.commitWhenWritable)
+	if err != nil {
+		return AdmissionStatus{}, admissionServiceError(err)
+	}
+	if !consumed {
+		return AdmissionStatus{}, ErrConfirmationStale // 重放
+	}
+	if action == "reject" {
+		return s.transitionStatusAdmin(ctx, row, "rejected", "manual_reject")
+	}
+	// 提升前业务复核：候选必须仍处送审态且未过期，原发起人须仍持目标仓发布权——
+	// 确认令牌只复核令牌要素，不替代提升点的授权与时效裁决。
+	if row.State != "awaiting_review" || (row.ExpiresUnix > 0 && row.ExpiresUnix <= time.Now().Unix()) {
+		return AdmissionStatus{}, ErrConfirmationStale
+	}
+	if err := s.recheckInitiatorPublish(ctx, row); err != nil {
+		return AdmissionStatus{}, err
+	}
+	// approve：隔离区外先做字节搬运（私有→内容寻址活动存储），再同事务标 published。
+	if s.assets == nil {
+		return AdmissionStatus{}, ErrAdmissionUnavailable
+	}
+	if err := s.blobs.VerifyRegisteredPrivateCandidate(ctx, row.ObjectKey, *row.BlobHash, *row.SizeBytes); err != nil {
+		return AdmissionStatus{}, admissionServiceError(err)
+	}
+	rc, size, err := s.blobs.OpenRegisteredPrivateCandidate(ctx, row.ObjectKey)
+	if err != nil {
+		return AdmissionStatus{}, ErrAdmissionUnavailable
+	}
+	defer rc.Close()
+	repo, err := s.repoByID(ctx, row.RepositoryID)
+	if err != nil {
+		return AdmissionStatus{}, ErrAdmissionUnavailable
+	}
+	asset, err := s.assets.Put(repo.Name, row.CanonicalPath, io.LimitReader(rc, size), row.ContentType)
+	if err != nil {
+		return AdmissionStatus{}, admissionServiceError(err)
+	}
+	row.PublishedAssetID = &asset.ID
+	return s.transitionStatusAdmin(ctx, row, "published", "")
+}
+
+// recheckInitiatorPublish 提升点复核：原发起人当前必须仍是活动账号且持目标仓
+// 发布授权（管理员直接通过，其余按 admission_publish_grant 实时裁决）。
+func (s *AdmissionService) recheckInitiatorPublish(ctx context.Context, row repository.AdmissionCandidateRow) error {
+	return s.rows.Read(ctx, func(tx *sqlx.Tx) error {
+		var u repository.User
+		if err := tx.GetContext(ctx, &u, `SELECT id, username, role, status FROM user WHERE id=?`, row.ActorUserID); err != nil {
+			return admissionServiceError(err)
+		}
+		if u.Status != "active" {
+			return ErrAdmissionForbidden
+		}
+		if u.Role == "admin" {
+			return nil
+		}
+		allowed, err := repository.AdmissionPublishGrantTx(ctx, tx, row.RepositoryID, u.ID)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			return ErrAdmissionForbidden
+		}
+		return nil
+	})
+}
+
+func (s *AdmissionService) repoByID(ctx context.Context, id int64) (*repository.Repository, error) {
+	return s.repos.GetByID(id)
+}
+
+// ErrAdmissionIntegrityRejected 表示隔离检测裁定硬完整性失败；上传方得到非成功响应。
+var ErrAdmissionIntegrityRejected = errors.New("候选完整性裁定失败")
+
+// IntakeCandidate 是 Raw hosted 写入的准入入口：私有接收→隔离完整性裁定。
+// 返回处于 awaiting_review 的候选行；受损内容落 rejected 且不返回字节。
+func (s *AdmissionService) IntakeCandidate(ctx context.Context, principal *auth.Principal, repositoryID int64, canonicalPath, contentType string, body io.Reader) (repository.AdmissionCandidateRow, error) {
+	status, err := s.Prepare(ctx, principal, repositoryID, canonicalPath, contentType, body, nil)
+	if err != nil {
+		return repository.AdmissionCandidateRow{}, err
+	}
+	status, err = s.Status(ctx, principal, status.OperationID)
+	if err != nil {
+		return repository.AdmissionCandidateRow{}, err
+	}
+	switch status.State {
+	case "awaiting_review":
+	case "rejected":
+		return repository.AdmissionCandidateRow{}, ErrAdmissionIntegrityRejected
+	default:
+		return repository.AdmissionCandidateRow{}, ErrAdmissionUnavailable
+	}
+	row, err := s.authorizedRow(ctx, principal, status.OperationID)
+	if err != nil {
+		return repository.AdmissionCandidateRow{}, admissionServiceError(err)
+	}
+	return row, nil
+}
+
+// IntakeInternalCandidate 是内部批写入口的接收变体：HTTP 上下文没有来源快照时，
+// 由调用方以任务记录的发起快照显式注入（迁移导入等后台写入口，安全治理 §3.6）。
+func (s *AdmissionService) IntakeInternalCandidate(ctx context.Context, principal *auth.Principal, source auditctx.Source, repositoryID int64, canonicalPath, contentType string, body io.Reader) (repository.AdmissionCandidateRow, error) {
+	return s.IntakeCandidate(auditctx.WithSource(ctx, source), principal, repositoryID, canonicalPath, contentType, body)
+}
+
+// PromoteBytes 复核完整性后打开封存字节供提升读取；调用方负责发布及 MarkPublished。
+func (s *AdmissionService) PromoteBytes(ctx context.Context, row repository.AdmissionCandidateRow) (io.ReadCloser, int64, error) {
+	if row.State != "awaiting_review" || row.BlobHash == nil || row.SizeBytes == nil {
+		return nil, 0, ErrAdmissionUnavailable
+	}
+	if err := s.blobs.VerifyRegisteredPrivateCandidate(ctx, row.ObjectKey, *row.BlobHash, *row.SizeBytes); err != nil {
+		return nil, 0, ErrAdmissionUnavailable
+	}
+	rc, size, err := s.blobs.OpenRegisteredPrivateCandidate(ctx, row.ObjectKey)
+	if err != nil {
+		return nil, 0, ErrAdmissionUnavailable
+	}
+	return rc, size, nil
+}
+
+// MarkPublished 在提升字节已被发布链提交后同事务置 published 并持久化资产号。
+func (s *AdmissionService) MarkPublished(ctx context.Context, principal *auth.Principal, row repository.AdmissionCandidateRow, assetID int64) (AdmissionStatus, error) {
+	row.PublishedAssetID = &assetID
+	return s.transitionStatus(ctx, principal, row, "published", "")
+}
+
+// admissionFormatAllowed 是获准走私有候选准入的协议格式集合。
+func admissionFormatAllowed(format string) bool { return AdmissionFormatAllowed(format) }
+
+// AdmissionFormatAllowed 是获准走私有候选准入的协议格式集合。
+func AdmissionFormatAllowed(format string) bool {
+	switch format {
+	case "raw", "maven", "cargo", "npm", "docker", "nuget", "pypi":
+		return true
+	}
+	return false
 }

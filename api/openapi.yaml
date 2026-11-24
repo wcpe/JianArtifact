@@ -664,6 +664,328 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+  /api/v1/auth/mfa/verify:
+    post:
+      operationId: verifyLoginMfa
+      summary: 兑现 login_mfa 受限挑战（OTP 命中后签发会话）
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MfaVerifyRequest"
+      responses:
+        "200":
+          description: 第二因素验证通过，返回会话
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  /api/v1/auth/mfa/recover:
+    post:
+      operationId: recoverLoginMfa
+      summary: 用恢复码兑现 login_mfa 挑战并签发 factor_recover 重绑挑战
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MfaRecoverRequest"
+      responses:
+        "200":
+          description: 恢复码有效，返回重绑挑战与新的登记 URI
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MfaEnrollResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  /api/v1/auth/mfa/claim:
+    post:
+      operationId: claimMfaEnroll
+      summary: 第一因素 + 认领票进入受控登记（返回挑战与登记 URI）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MfaClaimRequest"
+      responses:
+        "200":
+          description: 票与口令有效，返回登记挑战与 URI
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MfaEnrollResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  /api/v1/auth/mfa/step-up:
+    post:
+      operationId: beginMfaStepUp
+      summary: 为当前会话签发 step_up 受限挑战（敏感操作前的强认证提升）
+      responses:
+        "200":
+          description: step_up 挑战
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MfaStepUpChallenge"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  /api/v1/auth/mfa/step-up/verify:
+    post:
+      operationId: verifyMfaStepUp
+      summary: 兑现 step_up 挑战并把会话强认证水位抬到当前
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MfaVerifyRequest"
+      responses:
+        "200":
+          description: 已提升；返回水位时间
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MfaVerifiedResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  /api/v1/auth/mfa/status:
+    get:
+      operationId: getMfaStatus
+      summary: 当前会话账号的强因子状态
+      responses:
+        "200":
+          description: 因子状态
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MfaStatusResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/v1/auth/mfa/enroll:
+    post:
+      operationId: beginMfaEnroll
+      summary: 发起强因子登记（返回挑战与登记 URI；会话内限一次活跃登记）
+      responses:
+        "200":
+          description: 登记挑战
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MfaEnrollResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  /api/v1/auth/mfa/enroll/confirm:
+    post:
+      operationId: confirmMfaEnroll
+      summary: 用首枚 OTP 确认登记并返回恢复码批次
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MfaConfirmRequest"
+      responses:
+        "200":
+          description: 登记完成，返回恢复码（仅展示一次）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MfaRecoveryCodes"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  /api/v1/security/actions:
+    post:
+      operationId: previewSecurityAction
+      summary: 预览事故处置动作（幂等；5 分钟内确认有效）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SecurityActionPreviewRequest"
+      responses:
+        "200":
+          description: 动作预览
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SecurityActionPreview"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/security/actions/{actionId}/execute:
+    post:
+      operationId: executeSecurityAction
+      summary: 确认并执行预览动作（需近期强认证与动作摘要）
+      parameters:
+        - name: actionId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SecurityActionExecuteRequest"
+      responses:
+        "200":
+          description: 逐项执行结果
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SecurityActionResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/security/recovery:
+    get:
+      operationId: getRecoveryGate
+      summary: 恢复隔离闸状态（管理员可读）
+      responses:
+        "200":
+          description: 闸状态
+          content:
+            application/json:
+              schema:
+                type: object
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /api/v1/security/recovery/begin:
+    post:
+      operationId: beginRecoveryIsolation
+      summary: 恢复启动进入隔离（normal → isolated）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [restoreId]
+              properties:
+                restoreId:
+                  type: string
+                reason:
+                  type: string
+      responses:
+        "204":
+          description: 已隔离
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/security/recovery/report:
+    post:
+      operationId: reportRecoveryCheckpoint
+      summary: 上报可信检查点核对结果（isolated → reconciling → ready_for_review / isolated）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [restoreId, checkpointStatus, verifiedWatermark]
+              properties:
+                restoreId:
+                  type: string
+                checkpointStatus:
+                  type: string
+                  enum: [verified, stale, missing, mismatch]
+                verifiedWatermark:
+                  type: integer
+      responses:
+        "204":
+          description: 已受理
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/security/recovery/confirm:
+    post:
+      operationId: confirmRecovery
+      summary: 强认证管理员确认解闸（ready_for_review → normal）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [restoreId]
+              properties:
+                restoreId:
+                  type: string
+      responses:
+        "204":
+          description: 已解闸
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/security/holds:
+    get:
+      operationId: listEvidenceHolds
+      summary: 保全持有清单（管理员只读）
+      responses:
+        "200":
+          description: 清单
+          content:
+            application/json:
+              schema:
+                type: object
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
   /api/v1/auth/me:
     get:
       operationId: getCurrentUser
@@ -846,6 +1168,423 @@ paths:
           $ref: "#/components/responses/PrivateAdmissionForbidden"
         "404":
           $ref: "#/components/responses/PrivateAdmissionNotFound"
+        "503":
+          $ref: "#/components/responses/PrivateAdmissionUnavailable"
+  /api/v1/security/notifications:
+    get:
+      operationId: listSecurityNotifications
+      summary: 站内安全通知游标分页
+      security: [bearerAuth: []]
+      parameters:
+        - name: after
+          in: query
+          schema: { type: integer, format: int64 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100 }
+      responses:
+        "200":
+          description: 通知页
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SecurityNotificationPage"
+        "403":
+          $ref: "#/components/responses/RecentMfaRequired"
+  /api/v1/security/notifications/{noticeId}/ack:
+    put:
+      operationId: ackSecurityNotification
+      summary: 确认本人通知（幂等）
+      security: [bearerAuth: []]
+      parameters:
+        - name: noticeId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: 确认时间
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ackAt: { type: integer, format: int64 }
+        "404":
+          description: notification_not_found
+        "403":
+          $ref: "#/components/responses/RecentMfaRequired"
+  /api/v1/security/notification-deliveries:
+    get:
+      operationId: listNotificationDeliveries
+      summary: 站外投递脱敏分页
+      security: [bearerAuth: []]
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer }
+      responses:
+        "200":
+          description: 投递列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SecurityNotificationDelivery"
+        "403":
+          $ref: "#/components/responses/RecentMfaRequired"
+  /api/v1/security/cases:
+    get:
+      operationId: listSecurityCases
+      summary: 风险调查案件清单
+      security: [bearerAuth: []]
+      parameters:
+        - name: state
+          in: query
+          schema:
+            type: string
+            enum: [open, claimed, closed]
+      responses:
+        "200":
+          description: 案件列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SecurityCase"
+        "401":
+          $ref: "#/components/responses/PrivateAdmissionUnauthenticated"
+        "403":
+          $ref: "#/components/responses/RecentMfaRequired"
+    post:
+      operationId: openSecurityCase
+      summary: 建案（人工或规则入口共用）
+      security: [bearerAuth: []]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SecurityCaseOpenRequest"
+      responses:
+        "200":
+          description: 已建案件
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SecurityCase"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/PrivateAdmissionUnauthenticated"
+        "403":
+          $ref: "#/components/responses/RecentMfaRequired"
+  /api/v1/security/cases/{caseId}:
+    get:
+      operationId: getSecurityCase
+      summary: 案件详情（头 + 命中 + 关联 + 本人既読水位）
+      security: [bearerAuth: []]
+      parameters:
+        - name: caseId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: 案件详情
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SecurityCaseDetail"
+        "403":
+          $ref: "#/components/responses/RecentMfaRequired"
+        "404":
+          $ref: "#/components/responses/PrivateAdmissionNotFound"
+  /api/v1/security/cases/{caseId}/{section}:
+    get:
+      operationId: getSecurityCaseSection
+      summary: 案件四栏分页（timeline/uploads/identity/actions-evidence）
+      security: [bearerAuth: []]
+      parameters:
+        - name: caseId
+          in: path
+          required: true
+          schema: { type: string }
+        - name: section
+          in: path
+          required: true
+          schema: { type: string, enum: [timeline, uploads, identity, actions-evidence] }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 100, maximum: 200 }
+      responses:
+        "200":
+          description: 分栏内容（结构随 section 变化）
+          content:
+            application/json:
+              schema: { type: object }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/RecentMfaRequired"
+        "404":
+          $ref: "#/components/responses/PrivateAdmissionNotFound"
+  /api/v1/security/qq-bindings/{userId}:
+    put:
+      operationId: setSecurityQQBinding
+      summary: 绑定管理员账号与 QQ openid
+      security: [bearerAuth: []]
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [openid]
+              properties:
+                openid: { type: string, minLength: 3, maxLength: 64 }
+      responses:
+        "204": { description: 已绑定 }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/RecentMfaRequired" }
+    delete:
+      operationId: deleteSecurityQQBinding
+      summary: 解绑 QQ openid
+      security: [bearerAuth: []]
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        "204": { description: 已解绑 }
+        "403": { $ref: "#/components/responses/RecentMfaRequired" }
+        "404": { $ref: "#/components/responses/PrivateAdmissionNotFound" }
+  /api/v1/security/cases/{caseId}/transitions:
+    post:
+      operationId: transitionSecurityCase
+      summary: 认领/结案/重开案件
+      description: claim/close/reopen；close 需 reason+resolutionCode，全部绑定 targetVersion。
+      security: [bearerAuth: []]
+      parameters:
+        - name: caseId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SecurityCaseTransitionRequest"
+      responses:
+        "200":
+          description: 更新后的案件
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SecurityCase"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/RecentMfaRequired"
+        "404":
+          $ref: "#/components/responses/PrivateAdmissionNotFound"
+        "409":
+          description: targetVersion 漂移，`security_confirmation_stale`。
+  /api/v1/security/cases/{caseId}/links:
+    get:
+      operationId: listSecurityCaseLinks
+      summary: 案件关联事件（fact/candidate）
+      security: [bearerAuth: []]
+      parameters:
+        - name: caseId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 关联列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SecurityCaseLink"
+        "403":
+          $ref: "#/components/responses/RecentMfaRequired"
+  /api/v1/security/cases/{caseId}/read:
+    put:
+      operationId: markSecurityCaseRead
+      summary: 案件既読水位（本人・按版本幂等）
+      security: [bearerAuth: []]
+      parameters:
+        - name: caseId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [seenVersion]
+              properties:
+                seenVersion: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: 既読水位
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [readUnix, seenVersion]
+                properties:
+                  readUnix: { type: integer, format: int64 }
+                  seenVersion: { type: integer, format: int64 }
+        "403":
+          $ref: "#/components/responses/RecentMfaRequired"
+        "404":
+          $ref: "#/components/responses/PrivateAdmissionNotFound"
+        "409":
+          description: seenVersion 超过案件現版本，`security_confirmation_stale`。
+  /api/v1/security/notification-deliveries/{deliveryId}/retry:
+    post:
+      operationId: retryNotificationDelivery
+      summary: 失败投递的手動再試行（targetVersion=attempts CAS・冪等）
+      security: [bearerAuth: []]
+      parameters:
+        - name: deliveryId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [targetVersion]
+              properties:
+                targetVersion: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: 更新后的投递行
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SecurityNotificationDelivery"
+        "403":
+          $ref: "#/components/responses/RecentMfaRequired"
+        "404":
+          $ref: "#/components/responses/PrivateAdmissionNotFound"
+        "409":
+          description: targetVersion 漂移，`security_confirmation_stale`。
+  /api/v1/security/findings:
+    get:
+      operationId: listSecurityFindings
+      summary: 规则命中清单
+      security: [bearerAuth: []]
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50, maximum: 100 }
+      responses:
+        "200":
+          description: 命中列表（新到旧）
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SecurityFinding"
+        "401":
+          $ref: "#/components/responses/PrivateAdmissionUnauthenticated"
+        "403":
+          $ref: "#/components/responses/RecentMfaRequired"
+  /api/v1/security/admission/candidates/{operationId}/decisions/preview:
+    post:
+      operationId: previewPrivateAdmissionDecision
+      summary: 预览候选裁决可行性并签发短效确认令牌
+      description: |
+        仅管理员且经近期强认证复核可调用；预览不改变候选。返回可行性、阻塞原因及短效单次
+        `confirmationToken`；令牌绑定主体、动作、目标版本、清单摘要、规则版本与有效期，
+        实际裁决须回传同一令牌，重放或绑定失效返回 409 `security_confirmation_stale`。
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PrivateAdmissionOperationIdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PrivateAdmissionDecisionPreviewRequest"
+      responses:
+        "200":
+          description: 预览结果与确认令牌
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PrivateAdmissionDecisionPreviewResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/PrivateAdmissionUnauthenticated"
+        "403":
+          $ref: "#/components/responses/RecentMfaRequired"
+        "404":
+          $ref: "#/components/responses/PrivateAdmissionNotFound"
+        "503":
+          $ref: "#/components/responses/PrivateAdmissionUnavailable"
+  /api/v1/security/admission/candidates/{operationId}/decisions:
+    post:
+      operationId: decidePrivateAdmissionCandidate
+      summary: 管理员裁决待审私有候选
+      description: |
+        仅管理员且经近期强认证复核可调用。`awaiting_review` 候选可 `approve`（提升封存字节为公开资产并置 `published`）
+        或 `reject`（置 `rejected`）。批准不是发布：提升按顺序先搬运字节、再同事务推进状态；状态未裁决前字节不公开。
+        非待审状态统一返回 409 `admission_decision_conflict`。
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PrivateAdmissionOperationIdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PrivateAdmissionDecisionRequest"
+      responses:
+        "200":
+          description: 裁决后的候选状态
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PrivateAdmissionCandidateStatus"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/PrivateAdmissionUnauthenticated"
+        "403":
+          $ref: "#/components/responses/RecentMfaRequired"
+        "404":
+          $ref: "#/components/responses/PrivateAdmissionNotFound"
+        "409":
+          description: 候选不在待审状态；`error.code` 为 `admission_decision_conflict`。
         "503":
           $ref: "#/components/responses/PrivateAdmissionUnavailable"
   /api/v1/users/{id}/password:
@@ -3422,6 +4161,12 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
+    RecentMfaRequired:
+      description: 敏感操作缺少窗口内的近期强认证；`error.code` 为 `recent_mfa_required`。
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
     PublishPolicyWriteConflict:
       description: 发布策略冲突；账号资格子步发生版本冲突时，`error.code` 为 `credential_version_conflict`。
       content:
@@ -4356,8 +5101,8 @@ components:
           description: 已确认的清单摘要，未确认时省略。
         state:
           type: string
-          enum: [staged, rejected, expired]
-          description: 已封存、拒绝或已过期；已封存不表示已发布。
+          enum: [staged, awaiting_review, published, rejected, expired]
+          description: 已封存、待审、已发布、拒绝或已过期；已封存不表示已发布。
         coverage:
           type: string
           enum: [unknown]
@@ -4366,10 +5111,176 @@ components:
           type: string
           format: date-time
           description: 候选在服务端的 UTC 到期时间。
+        publishedAssetId:
+          type: integer
+          format: int64
+          minimum: 1
+          description: 批准后提升为公开资产的资产号；未发布时省略。
         errorCode:
           type: string
-          enum: [admission_integrity_failed]
-          description: 已确认的硬完整性失败；无此事实时省略。
+          enum: [admission_integrity_failed, manual_reject]
+          description: 已确认的硬完整性失败或管理员驳回；无此事实时省略。
+    PrivateAdmissionDecisionRequest:
+      type: object
+      additionalProperties: false
+      required: [action, reason, confirmationToken]
+      properties:
+        action:
+          type: string
+          enum: [approve, reject]
+          description: 批准提升为公开资产或驳回候选。
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 512
+        confirmationToken:
+          type: string
+          minLength: 1
+          description: 同一主体经 preview 取得的短效单次确认令牌；令牌绑定人、动作、版本、摘要、规则与有效期。
+    PrivateAdmissionDecisionPreviewRequest:
+      type: object
+      additionalProperties: false
+      required: [action, reason]
+      properties:
+        action:
+          type: string
+          enum: [approve, reject]
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 512
+    SecurityNotificationPage:
+      type: object
+      additionalProperties: false
+      required: [items, hasMore, watermark]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              seq: { type: integer, format: int64 }
+              noticeId: { type: string }
+              kind: { type: string }
+              title: { type: string }
+              payload: { type: string }
+              createdUnix: { type: integer, format: int64 }
+              acked: { type: boolean }
+        nextCursor: { type: integer, format: int64 }
+        hasMore: { type: boolean }
+        watermark: { type: integer, format: int64 }
+    SecurityNotificationDelivery:
+      type: object
+      additionalProperties: false
+      required: [deliveryId, channel, targetMasked, state]
+      properties:
+        deliveryId: { type: string }
+        channel: { type: string, enum: [smtp, qq] }
+        targetMasked: { type: string }
+        state: { type: string, enum: [pending, attempted, accepted, failed] }
+        attempts: { type: integer, format: int64 }
+        lastError: { type: string }
+    SecurityCase:
+      type: object
+      additionalProperties: false
+      required: [caseId, title, state, severity, targetVersion]
+      properties:
+        caseId: { type: string }
+        title: { type: string }
+        state: { type: string, enum: [open, claimed, closed] }
+        severity: { type: string, enum: [low, medium, high, critical] }
+        resolution: { type: string }
+        targetVersion: { type: integer, format: int64 }
+        ownerUserId: { type: integer, format: int64 }
+        reason: { type: string }
+        createdUnix: { type: integer, format: int64 }
+        updatedUnix: { type: integer, format: int64 }
+    SecurityCaseDetail:
+      type: object
+      additionalProperties: false
+      required: [case, findings, links]
+      properties:
+        case:
+          $ref: "#/components/schemas/SecurityCase"
+        findings:
+          type: array
+          items:
+            $ref: "#/components/schemas/SecurityFinding"
+        links:
+          type: array
+          items:
+            $ref: "#/components/schemas/SecurityCaseLink"
+        readSeenVersion: { type: integer, format: int64 }
+        readUnix: { type: integer, format: int64 }
+    SecurityCaseOpenRequest:
+      type: object
+      additionalProperties: false
+      required: [title, severity, reason]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 200 }
+        severity: { type: string, enum: [low, medium, high, critical] }
+        reason: { type: string, minLength: 1, maxLength: 512 }
+        eventLinks:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [eventId, linkKind]
+            properties:
+              eventId: { type: string }
+              linkKind: { type: string, enum: [fact, candidate] }
+    SecurityCaseTransitionRequest:
+      type: object
+      additionalProperties: false
+      required: [action, targetVersion]
+      properties:
+        action: { type: string, enum: [claim, close, reopen] }
+        targetVersion: { type: integer, format: int64 }
+        reason: { type: string, maxLength: 512 }
+        resolutionCode: { type: string, maxLength: 64 }
+    SecurityCaseLink:
+      type: object
+      additionalProperties: false
+      required: [caseId, eventId, linkKind]
+      properties:
+        caseId: { type: string }
+        eventId: { type: string }
+        linkKind: { type: string, enum: [fact, candidate] }
+        linkedBy: { type: string }
+        linkedUnix: { type: integer, format: int64 }
+    SecurityFinding:
+      type: object
+      additionalProperties: false
+      required: [findingId, ruleId, ruleVersion, severity, subjectKey, summary]
+      properties:
+        findingId: { type: string }
+        ruleId: { type: string }
+        ruleVersion: { type: integer }
+        severity: { type: string, enum: [low, medium, high, critical] }
+        confidence: { type: string, enum: [low, medium, high] }
+        subjectKey: { type: string }
+        windowFrom: { type: integer, format: int64 }
+        windowTo: { type: integer, format: int64 }
+        summary: { type: string }
+        caseId: { type: string }
+        createdUnix: { type: integer, format: int64 }
+    PrivateAdmissionDecisionPreviewResponse:
+      type: object
+      additionalProperties: false
+      required: [feasible, blockers]
+      properties:
+        feasible:
+          type: boolean
+        blockers:
+          type: array
+          items:
+            type: string
+        confirmationToken:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+          description: 处置原因，写入裁决事实。
     SecurityAuditEventType:
       type: string
       description: |
@@ -5291,6 +6202,81 @@ components:
           items:
             type: string
             enum: [raw, maven, npm, docker, cargo, pypi, gomod, nuget]
+    SecurityActionTarget:
+      type: object
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          enum: [instance_write_lock, repository, path, version, ip_cidr, digest, hold]
+        target:
+          type: string
+        effect:
+          type: string
+    SecurityActionPreviewRequest:
+      type: object
+      required: [actionType, reason, idempotencyKey, targets]
+      properties:
+        actionType:
+          type: string
+          enum: [restrict, lift_restriction, hold_evidence, release_hold]
+        reason:
+          type: string
+          maxLength: 512
+        idempotencyKey:
+          type: string
+          minLength: 1
+        targets:
+          type: array
+          items:
+            $ref: "#/components/schemas/SecurityActionTarget"
+    SecurityActionPreview:
+      type: object
+      required: [actionId, actionType, actionDigest, expiresAt, targets]
+      properties:
+        actionId:
+          type: string
+        actionType:
+          type: string
+        actionDigest:
+          type: string
+        expiresAt:
+          type: string
+        targets:
+          type: array
+          items:
+            type: string
+    SecurityActionExecuteRequest:
+      type: object
+      required: [actionDigest]
+      properties:
+        actionDigest:
+          type: string
+          description: 预览返回的动作摘要；漂移即拒绝
+    SecurityActionItem:
+      type: object
+      required: [seq, target, outcome, detail]
+      properties:
+        seq:
+          type: integer
+        target:
+          type: string
+        outcome:
+          type: string
+        detail:
+          type: string
+    SecurityActionResult:
+      type: object
+      required: [actionId, state, items]
+      properties:
+        actionId:
+          type: string
+        state:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SecurityActionItem"
     BootstrapRequest:
       type: object
       required: [username, password]
@@ -5301,6 +6287,9 @@ components:
         password:
           type: string
           minLength: 8
+        claimTicket:
+          type: string
+          description: claim_install 安装认领票；提供时走受控安装（不直签会话，返回登记挑战）
     LoginRequest:
       type: object
       required: [username, password]
@@ -5311,12 +6300,128 @@ components:
           type: string
     LoginResponse:
       type: object
-      required: [token, user]
+      required: [next, token, user]
       properties:
+        next:
+          type: string
+          enum: [authenticated, mfa_required, claim_required]
+          description: 登录签发裁决；authenticated 才发放会话令牌
         token:
           type: string
+          description: 会话 JWT；next != authenticated 时为空串
+        challengeId:
+          type: string
+          description: login_mfa 受限挑战标识；仅 next=mfa_required 时存在
+        challengeToken:
+          type: string
+          description: login_mfa 受限挑战明文；仅 next=mfa_required 时存在，展示一次后不持久
+        challengeExpiresAt:
+          type: string
+          description: 挑战过期时间（RFC3339）
+        enrollmentUri:
+          type: string
+          description: otpauth:// URI；仅受控安装/认领引导返回，展示一次后不持久
         user:
           $ref: "#/components/schemas/User"
+    MfaEnrollResponse:
+      type: object
+      required: [challengeId, challengeToken, expiresAt, enrollmentUri]
+      properties:
+        challengeId:
+          type: string
+        challengeToken:
+          type: string
+          description: 受限挑战明文，展示一次后不持久
+        expiresAt:
+          type: string
+          description: 挑战过期时间（RFC3339）
+        enrollmentUri:
+          type: string
+          description: otpauth:// URI，供认证器扫码/手动录入
+    MfaConfirmRequest:
+      type: object
+      required: [challengeToken, otp]
+      properties:
+        challengeToken:
+          type: string
+        otp:
+          type: string
+          minLength: 6
+          maxLength: 6
+        claimTicket:
+          type: string
+          description: 认领来源挑战必须出示的在途 claim_admin 票（仅认领流程使用）
+    MfaClaimRequest:
+      type: object
+      required: [username, password, claimTicket]
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+        claimTicket:
+          type: string
+          description: 受控操作者出具的一次性认领票明文
+    MfaStepUpChallenge:
+      type: object
+      required: [challengeId, challengeToken, expiresAt]
+      properties:
+        challengeId:
+          type: string
+        challengeToken:
+          type: string
+        expiresAt:
+          type: string
+          description: RFC3339
+    MfaVerifiedResponse:
+      type: object
+      required: [mfaVerifiedAt]
+      properties:
+        mfaVerifiedAt:
+          type: string
+          description: 会话近期强认证水位（RFC3339）
+    MfaVerifyRequest:
+      type: object
+      required: [challengeToken, otp]
+      properties:
+        challengeToken:
+          type: string
+          description: login_mfa 受限挑战明文
+        otp:
+          type: string
+          minLength: 6
+          maxLength: 6
+    MfaRecoverRequest:
+      type: object
+      required: [challengeToken, recoveryCode]
+      properties:
+        challengeToken:
+          type: string
+          description: login_mfa 受限挑战明文（第一因素已验证的凭据）
+        recoveryCode:
+          type: string
+    MfaRecoveryCodes:
+      type: object
+      required: [recoveryCodes]
+      properties:
+        recoveryCodes:
+          type: array
+          items:
+            type: string
+          description: 恢复码批次，仅展示一次
+    MfaStatusResponse:
+      type: object
+      required: [enrolled, enrollmentPending, recoveryCodesRemaining, mfaRequired]
+      properties:
+        enrolled:
+          type: boolean
+        enrollmentPending:
+          type: boolean
+        recoveryCodesRemaining:
+          type: integer
+        mfaRequired:
+          type: boolean
+          description: 账号是否被策略强制要求启用强因子（管理员）
     User:
       type: object
       required: [id, username, role, status, webLoginDisabled, createdAt]

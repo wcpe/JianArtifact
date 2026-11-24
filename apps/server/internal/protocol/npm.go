@@ -21,6 +21,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"path"
 	"strconv"
@@ -398,8 +399,43 @@ func (h *NpmHandler) publish(c *gin.Context, repoName, pkg string) {
 		}
 		_ = h.assets.DiscardStagedAssets(planned)
 	}()
-	for _, item := range attachments {
-		asset, stageErr := h.assets.StageBlob(bytes.NewReader(item.body), "application/octet-stream")
+	// 准入管线：tarball 附件是客户端字节，各自先私有接收→完整性裁定→
+	// 封存字节入暂存；packument 是服务端派生元数据，不隔离。
+	var candPrincipals []*auth.Principal
+	var candRows []repository.AdmissionCandidateRow
+	if h.admission != nil {
+		if p, hasP := auth.PrincipalFrom(c); hasP {
+			if snap, _ := repositorySnapshot(c, repoName); snap != nil && snap.Type == "hosted" && snap.Format == "npm" {
+				repoID := snap.ID
+				for _, item := range attachments {
+					assetPath := pkg + "/-/" + tarballFileName(item.name)
+					row, aerr := h.admission.IntakeCandidate(c.Request.Context(), p, repoID, assetPath, "application/octet-stream", bytes.NewReader(item.body))
+					if aerr != nil {
+						h.auditRejected(c, "npm.publish", repoName, assetPath, publishRejectionDetail(aerr))
+						writeAdmissionPutErr(c, aerr)
+						return
+					}
+					candRows, candPrincipals = append(candRows, row), append(candPrincipals, p)
+				}
+			}
+		}
+	}
+	for i, item := range attachments {
+		var src io.Reader = bytes.NewReader(item.body)
+		var prc io.ReadCloser
+		if i < len(candRows) && candRows[i].OperationID != "" {
+			rc, _, aerr := h.admission.PromoteBytes(c.Request.Context(), candRows[i])
+			if aerr != nil {
+				h.auditRejected(c, "npm.publish", repoName, pkg+"/-/"+item.name, publishRejectionDetail(aerr))
+				writeAdmissionPutErr(c, aerr)
+				return
+			}
+			prc, src = rc, rc
+		}
+		asset, stageErr := h.assets.StageBlob(src, "application/octet-stream")
+		if prc != nil {
+			_ = prc.Close()
+		}
 		if stageErr != nil {
 			h.auditRejected(c, "npm.publish", repoName, pkg+"/-/"+item.name, publishRejectionDetail(stageErr))
 			writeAssetErr(c, stageErr)
@@ -435,6 +471,19 @@ func (h *NpmHandler) publish(c *gin.Context, repoName, pkg string) {
 	published = true
 	for _, settle := range settles {
 		settle(true)
+	}
+	// 整批已提交：各 tarball 候选同事务标 published 并记录资产号。
+	for i, row := range candRows {
+		var assetID int64
+		for _, a := range planned {
+			if a.Path == row.CanonicalPath {
+				assetID = a.ID
+				break
+			}
+		}
+		if _, markErr := h.admission.MarkPublished(c.Request.Context(), candPrincipals[i], row, assetID); markErr != nil {
+			log.Printf("准入候选提升后标记失败（operation=%s）：%v", row.OperationID, markErr)
+		}
 	}
 	for _, item := range attachments {
 		h.auditPublish(c, "npm.publish", repoName, pkg+"/-/"+item.name, int64(len(item.body)))

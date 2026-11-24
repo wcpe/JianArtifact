@@ -26,6 +26,7 @@ const (
 	EnvHTTPAddr               = "JIAN_HTTP_ADDR"
 	EnvJWTSecret              = "JIAN_JWT_SECRET"
 	EnvMigrationCredentialKey = "JIAN_MIGRATION_CREDENTIAL_KEY"
+	EnvMfaFactorKey           = "JIAN_MFA_FACTOR_KEY"
 	EnvUpstreamTimeout        = "JIAN_UPSTREAM_TIMEOUT"     // proxy 回源整体超时，单位秒
 	EnvSyncPeerURL            = "JIAN_SYNC_PEER_URL"        // 遗留复制对端基址；主备角色模式下不参与调度
 	EnvSyncInterval           = "JIAN_SYNC_INTERVAL"        // 同步轮询间隔，单位秒
@@ -78,7 +79,15 @@ const (
 
 	// 一键重启的能力配置（单独成组，理由同上）。
 	// 单元名只从环境变量读取，**绝不**接受请求体输入——见 domain/restart_service.go 的注入防护说明。
-	EnvRestartUnit  = "JIAN_RESTART_UNIT"  // 重启目标单元名；缺省 jianartifact
+	EnvRestartUnit = "JIAN_RESTART_UNIT" // 重启目标单元名；缺省 jianartifact
+	// 安全治理 SMTP 通知通道：仅环境变量解析；HOST 空 = 通道未启用。
+	EnvSMTPHost     = "JIAN_SMTP_HOST"     // SMTP 服务器主机；空 = 不启用 SMTP 投递
+	EnvSMTPPort     = "JIAN_SMTP_PORT"     // 端口；缺省 25（STARTTLS 由 smtp.SendMail 协商）
+	EnvSMTPFrom     = "JIAN_SMTP_FROM"     // 发件地址；空回落 JIAN_SMTP_USER
+	EnvSMTPUser     = "JIAN_SMTP_USER"     // 登录用户；空 = 不鉴权
+	EnvSMTPPassword = "JIAN_SMTP_PASSWORD" // 登录口令（仅环境变量，不落库不打印）
+	EnvQQEndpoint   = "JIAN_QQ_ENDPOINT"   // QQ 通知适配端点（POST JSON {openid,title,text}）；空 = 不启用 QQ 渠道
+	EnvQQToken      = "JIAN_QQ_TOKEN"      // QQ 端点 Bearer 令牌；可选
 	EnvRestartScope = "JIAN_RESTART_SCOPE" // 作用域 system / systemd-user / docker；非法值回落 system
 
 	// 搜索性能：搜索链路（网页搜索 / npm 搜索 / suggest）的总预算，单位秒。
@@ -212,6 +221,7 @@ const (
 	blobDirName                      = "blobs"
 	secretFileName                   = "jwt.secret"
 	migrationCredentialKeyFileName   = "migration-credential.key"
+	mfaFactorKeyFileName             = "mfa-factor.key"
 	replicationCredentialKeyFileName = "replication-credential.key"
 )
 
@@ -224,6 +234,7 @@ type Config struct {
 	BlobDir                string          // blob 存储目录（DataDir/blobs）
 	JWTSecret              []byte          // JWT HS256 签名密钥（不入库、不打印）
 	MigrationCredentialKey []byte          // 在线迁移凭据 AES-256-GCM 专用密钥（不入库、不打印）
+	MfaFactorKey           []byte          // 强认证因子种子 AES-256-GCM 专用密钥（不入库、不打印、不复用 JWT 密钥）
 	UpstreamTimeout        time.Duration   // proxy 回源整体超时
 	// AutoBlockBaseSeconds 是 proxy 上游 auto-block 退避起始时长：
 	// 首次失败的阻止窗口，之后每档翻倍。非正数（含非法值）已在解析期回落默认值。
@@ -290,7 +301,32 @@ type Config struct {
 	TLSKey         string     // TLS PEM 私钥文件路径
 	OIDC           OIDCConfig // OIDC 身份源接入配置（Issuer 空 = 不启用）
 	LDAP           LDAPConfig // LDAP 身份源接入配置（URL 空 = 不启用）
+	SMTP           SMTPConfig // 通知邮件通道
+	QQ             QQConfig   // 通知 QQ 通道
 }
+
+// SMTPConfig 是安全通知邮件通道配置；
+// 口令只从环境变量解析，不落库、不打印、不进审计。
+type SMTPConfig struct {
+	Host     string // 服务器主机；空 = 未启用
+	Port     int    // 端口；缺省 25
+	From     string // 发件地址
+	User     string // 登录用户；空 = 不鉴权
+	Password string // 登录口令（仅环境变量）
+}
+
+// Enabled 报告 SMTP 投递是否启用。
+func (c SMTPConfig) Enabled() bool { return c.Host != "" }
+
+// QQConfig 是安全通知 QQ 通道配置；官方 API 就绪前
+// 采用适配端点（薄 HTTP 适配器）POST。未配置则渠道无效、投递以 failed 可视化。
+type QQConfig struct {
+	Endpoint string
+	Token    string
+}
+
+// Enabled 报告 QQ 渠道是否有效（端点已配置）。
+func (c QQConfig) Enabled() bool { return c.Endpoint != "" }
 
 // LDAPConfig 是 LDAP 目录接入配置（见 ADR-0029）；
 // 服务账号口令只从环境变量解析，不落库、不打印、不进审计。
@@ -381,6 +417,10 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	mfaFactorKey, err := loadOrCreateNamedKey(absData, EnvMfaFactorKey, mfaFactorKeyFileName, "强认证因子")
+	if err != nil {
+		return nil, err
+	}
 	enabledFormats, err := enabledFormats()
 	if err != nil {
 		return nil, err
@@ -403,6 +443,7 @@ func Load() (*Config, error) {
 		BlobDir:                     blobDir,
 		JWTSecret:                   secret,
 		MigrationCredentialKey:      migrationCredentialKey,
+		MfaFactorKey:                mfaFactorKey,
 		UpstreamTimeout:             upstreamTimeout(),
 		AutoBlockBaseSeconds:        autoBlockBase(),
 		SyncPeerURL:                 os.Getenv(EnvSyncPeerURL),
@@ -432,9 +473,30 @@ func Load() (*Config, error) {
 		TLSKey:                      os.Getenv(EnvTLSKey),
 		OIDC:                        oidc,
 		LDAP:                        ldap,
+		SMTP:                        smtpConfig(),
+		QQ:                          qqConfig(),
 		RestartUnit:                 envOr(EnvRestartUnit, defaultRestartUnit),
 		RestartScope:                restartScope(),
 	}, nil
+}
+
+// qqConfig 解析 安全治理 QQ 通知通道。
+func qqConfig() QQConfig {
+	return QQConfig{Endpoint: strings.TrimSpace(os.Getenv(EnvQQEndpoint)), Token: os.Getenv(EnvQQToken)}
+}
+
+// smtpConfig 解析 安全治理 SMTP 通知通道；端口非法/非正回落 25。
+func smtpConfig() SMTPConfig {
+	port, err := strconv.Atoi(strings.TrimSpace(os.Getenv(EnvSMTPPort)))
+	if err != nil || port <= 0 || port > 65535 {
+		port = 25
+	}
+	from := strings.TrimSpace(os.Getenv(EnvSMTPFrom))
+	user := strings.TrimSpace(os.Getenv(EnvSMTPUser))
+	if from == "" {
+		from = user
+	}
+	return SMTPConfig{Host: strings.TrimSpace(os.Getenv(EnvSMTPHost)), Port: port, From: from, User: user, Password: os.Getenv(EnvSMTPPassword)}
 }
 
 // loadOrCreateMigrationCredentialKey 解析在线迁移凭据的独立 AES-256 密钥。
@@ -920,4 +982,33 @@ func trashMaxBytes() int64 {
 // trashGCInterval 解析 JIAN_TRASH_GC_INTERVAL（秒）；缺省或非法值取每日一次，显式 0 禁用。
 func trashGCInterval() time.Duration {
 	return envDurationOr(EnvTrashGCInterval, defaultTrashGCInterval, time.Second)
+}
+
+// loadOrCreateNamedKey 与迁移凭据密钥同形：环境变量 base64 32B > 数据目录 0600 文件 > 生成持久化。
+func loadOrCreateNamedKey(dataDir, envName, fileName, label string) ([]byte, error) {
+	if raw := strings.TrimSpace(os.Getenv(envName)); raw != "" {
+		key, err := base64.StdEncoding.DecodeString(raw)
+		if err != nil || len(key) != 32 {
+			return nil, fmt.Errorf("解析 %s：必须为 base64 编码的 32 字节密钥", envName)
+		}
+		return key, nil
+	}
+	keyPath := filepath.Join(dataDir, fileName)
+	if key, err := os.ReadFile(keyPath); err == nil {
+		if len(key) != 32 {
+			return nil, fmt.Errorf("读取%s密钥：长度必须为 32 字节", label)
+		}
+		return key, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("读取%s密钥：%w", label, err)
+	}
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return nil, fmt.Errorf("生成%s密钥：%w", label, err)
+	}
+	if err := os.WriteFile(keyPath, key, 0o600); err != nil {
+		return nil, fmt.Errorf("持久化%s密钥：%w", label, err)
+	}
+	fmt.Fprintf(os.Stderr, "警告：未设置 %s，已在 %s 生成并持久化随机%s密钥；生产环境建议显式配置。\n", envName, keyPath, label)
+	return key, nil
 }

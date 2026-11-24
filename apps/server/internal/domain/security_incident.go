@@ -1,0 +1,1063 @@
+package domain
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
+	"net/netip"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jmoiron/sqlx"
+
+	"github.com/wcpe/jianartifact/apps/server/internal/auth"
+	"github.com/wcpe/jianartifact/apps/server/internal/repository"
+
+	"regexp"
+)
+
+// 安全治理：事故处置动作生命周期——预览→确认→执行，幂等、逐项结果、近期强认证由处理层裁决。
+
+const (
+	SecurityActionPreviewTTL = 5 * time.Minute
+	securityActionMaxTargets = 100
+	securityActionMaxReasonB = 512
+)
+
+var (
+	ErrSecurityTargetInvalid       = errors.New("invalid_security_target")
+	ErrSecurityConfirmationStale   = errors.New("security_confirmation_stale")
+	ErrSecurityIdempotencyConflict = errors.New("security_idempotency_conflict")
+	ErrIncidentWriteLocked         = errors.New("incident_write_locked")
+	ErrIncidentRestricted          = errors.New("incident_restricted")
+)
+
+type SecurityIncidentService struct {
+	repo interface {
+		Write(ctx context.Context, fn func(*sqlx.Tx) error) error
+		Read(ctx context.Context, fn func(*sqlx.Tx) error) error
+	}
+	users *repository.UserRepo
+	now   func() time.Time
+}
+
+func NewSecurityIncidentService(repo interface {
+	Write(ctx context.Context, fn func(*sqlx.Tx) error) error
+	Read(ctx context.Context, fn func(*sqlx.Tx) error) error
+}, users *repository.UserRepo) *SecurityIncidentService {
+	return &SecurityIncidentService{repo: repo, users: users, now: time.Now}
+}
+
+type SecurityTarget struct {
+	Kind   string `json:"kind"`
+	Target string `json:"target"`
+	Effect string `json:"effect,omitempty"`
+}
+
+type SecurityActionPreview struct {
+	ActionID     string   `json:"actionId"`
+	ActionType   string   `json:"actionType"`
+	ActionDigest string   `json:"actionDigest"`
+	ExpiresAt    string   `json:"expiresAt"`
+	Targets      []string `json:"targets"`
+}
+
+type SecurityActionResult struct {
+	ActionID string                          `json:"actionId"`
+	State    string                          `json:"state"`
+	Items    []repository.SecurityActionItem `json:"items"`
+}
+
+func securityActionDigest(actionType string, targets []SecurityTarget) string {
+	type d struct {
+		Type    string           `json:"t"`
+		Targets []SecurityTarget `json:"g"`
+	}
+	b, _ := json.Marshal(d{actionType, targets})
+	return hashChallengeToken(string(b))
+}
+
+// PreviewSecurityAction 建立预览动作；幂等键冲突且摘要一致时回放既有动作。
+func (s *SecurityIncidentService) PreviewSecurityAction(ctx context.Context, actorUserID int64, actionType, reason string, targets []SecurityTarget, idempotencyKey string) (*SecurityActionPreview, error) {
+	if reason == "" || len(reason) > securityActionMaxReasonB {
+		return nil, ErrValidation
+	}
+	if len(targets) == 0 || len(targets) > securityActionMaxTargets {
+		return nil, ErrSecurityTargetInvalid
+	}
+	for _, tg := range targets {
+		if !validSecurityTarget(actionType, tg) {
+			return nil, ErrSecurityTargetInvalid
+		}
+	}
+	digest := securityActionDigest(actionType, targets)
+	now := s.now()
+	var preview *SecurityActionPreview
+	err := s.repo.Write(ctx, func(tx *sqlx.Tx) error {
+		if existing, err := repository.SecurityActionByKeyTx(ctx, tx, actorUserID, idempotencyKey); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		} else if err == nil {
+			if existing.ActionDigest != digest {
+				return ErrSecurityIdempotencyConflict
+			}
+			items, ierr := repository.SecurityActionItemsTx(ctx, tx, existing.ActionID)
+			if ierr != nil {
+				return ierr
+			}
+			tgs := make([]string, 0, len(items))
+			for _, it := range items {
+				tgs = append(tgs, it.Target)
+			}
+			preview = &SecurityActionPreview{ActionID: existing.ActionID, ActionType: existing.ActionType,
+				ActionDigest: existing.ActionDigest, ExpiresAt: time.Unix(existing.ExpiresAt, 0).UTC().Format(time.RFC3339), Targets: tgs}
+			return nil
+		}
+		a := repository.SecurityAction{
+			ActionID:       "sa-" + uuid.NewString(),
+			ActionType:     actionType,
+			State:          repository.SecurityActionStatePreviewed,
+			ActorUserID:    actorUserID,
+			Reason:         reason,
+			ActionDigest:   digest,
+			IdempotencyKey: idempotencyKey,
+			ExpiresAt:      now.Add(SecurityActionPreviewTTL).Unix(),
+			CreatedAt:      now.Unix(),
+		}
+		items := make([]repository.SecurityActionItem, 0, len(targets))
+		for i, tg := range targets {
+			b, _ := json.Marshal(tg)
+			items = append(items, repository.SecurityActionItem{ActionID: a.ActionID, Seq: i, Target: string(b), Outcome: "pending"})
+		}
+		if err := repository.InsertSecurityActionTx(ctx, tx, a, items); err != nil {
+			return err
+		}
+		tgs := make([]string, 0, len(targets))
+		for _, it := range items {
+			tgs = append(tgs, it.Target)
+		}
+		preview = &SecurityActionPreview{ActionID: a.ActionID, ActionType: actionType, ActionDigest: digest,
+			ExpiresAt: time.Unix(a.ExpiresAt, 0).UTC().Format(time.RFC3339), Targets: tgs}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return preview, nil
+}
+
+// ExecuteSecurityAction 确认并执行预览动作；指纹漂移或过期一律拒绝，逐项落结果。
+// apply 为每项副作用函数，在同一最终事务内与结果写同事务执行。
+func (s *SecurityIncidentService) ExecuteSecurityAction(ctx context.Context, actorUserID int64, actionID, expectedDigest string,
+	apply func(tx *sqlx.Tx, target SecurityTarget) (outcome, detail string, err error)) (*SecurityActionResult, error) {
+	ctx = context.WithoutCancel(ctx)
+	var out *SecurityActionResult
+	err := s.repo.Write(ctx, func(tx *sqlx.Tx) error {
+		a, err := repository.SecurityActionByIDTx(ctx, tx, actionID)
+		if err != nil {
+			return ErrSecurityConfirmationStale
+		}
+		now := s.now().Unix()
+		if a.ActorUserID != actorUserID || a.ActionDigest != expectedDigest {
+			return ErrSecurityConfirmationStale
+		}
+		if a.State != repository.SecurityActionStatePreviewed && a.State != repository.SecurityActionStateConfirmed {
+			return ErrSecurityConfirmationStale
+		}
+		if a.ExpiresAt <= now {
+			_ = repository.FinalizeSecurityActionTx(ctx, tx, a.ActionID, repository.SecurityActionStateExpired, now)
+			return ErrSecurityConfirmationStale
+		}
+		items, err := repository.SecurityActionItemsTx(ctx, tx, a.ActionID)
+		if err != nil {
+			return err
+		}
+		partial := false
+		for _, it := range items {
+			var tg SecurityTarget
+			if err := json.Unmarshal([]byte(it.Target), &tg); err != nil {
+				return err
+			}
+			outcome, detail, aerr := apply(tx, tg)
+			if aerr != nil {
+				partial = true
+				outcome, detail = "rejected", aerr.Error()
+			}
+			if err := repository.SetSecurityActionItemTx(ctx, tx, a.ActionID, it.Seq, outcome, detail); err != nil {
+				return err
+			}
+		}
+		final := repository.SecurityActionStateApplied
+		if partial {
+			final = repository.SecurityActionStatePartially
+		}
+		if err := repository.FinalizeSecurityActionTx(ctx, tx, a.ActionID, final, now); err != nil {
+			return err
+		}
+		// 受保护安全状态变更同事务抬水位（恢复核对的可比版本）。
+		if _, err := repository.BumpSecurityWatermarkTx(ctx, tx); err != nil {
+			return err
+		}
+		items, err = repository.SecurityActionItemsTx(ctx, tx, a.ActionID)
+		if err != nil {
+			return err
+		}
+		out = &SecurityActionResult{ActionID: a.ActionID, State: final, Items: items}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// GetActionType 读动作类型（执行前的路由依据）。
+func (s *SecurityIncidentService) GetActionType(ctx context.Context, actionID string) (string, error) {
+	var t string
+	err := s.repo.Read(ctx, func(tx *sqlx.Tx) error {
+		a, err := repository.SecurityActionByIDTx(ctx, tx, actionID)
+		if err != nil {
+			return err
+		}
+		t = a.ActionType
+		return nil
+	})
+	return t, err
+}
+
+// IncidentVerdict 入口裁决结果：实例写锁或目标命中。
+type IncidentVerdict struct {
+	Locked     bool
+	Restricted bool
+}
+
+// BusinessWriteVerdict 入口裁决：实例写锁 + 按仓库/路径前缀命中活跃限制。
+func (s *SecurityIncidentService) BusinessWriteVerdict(ctx context.Context, repo, pathPrefix string) (IncidentVerdict, error) {
+	var v IncidentVerdict
+	err := s.repo.Read(ctx, func(tx *sqlx.Tx) error {
+		locked, err := repository.InstanceWriteLockedTx(ctx, tx, s.now().Unix())
+		if err != nil {
+			return err
+		}
+		v.Locked = locked
+		restricted, err := s.targetRestrictedTx(ctx, tx, repo, pathPrefix)
+		if err != nil {
+			return err
+		}
+		v.Restricted = restricted
+		return nil
+	})
+	return v, err
+}
+
+// targetRestrictedTx 按 repository/path/version 三类目标裁决命中；读与写共用同一命中规则。
+func (s *SecurityIncidentService) targetRestrictedTx(ctx context.Context, tx *sqlx.Tx, repo, pathPrefix string) (bool, error) {
+	var rows []repository.IncidentRestriction
+	if err := tx.SelectContext(ctx, &rows, `SELECT restriction_id, kind, target, effects, state, version, effective_at, expires_at, action_id, lifted_action, created_at
+		FROM incident_restriction WHERE state='active' AND kind IN ('repository','path','version')`); err != nil {
+		return false, err
+	}
+	for _, r := range rows {
+		switch r.Kind {
+		case "repository":
+			if repo != "" && r.Target == repo {
+				return true, nil
+			}
+		case "path":
+			// 目标=仓库名:路径前缀
+			if i := strings.Index(r.Target, ":"); i > 0 && repo == r.Target[:i] && pathPrefix != "" && strings.HasPrefix(pathPrefix, r.Target[i+1:]) {
+				return true, nil
+			}
+		case "version":
+			// 目标=仓库名:路径@版本；读侧按路径前缀命中（版本裁决在字节层完成）。
+			if i := strings.Index(r.Target, ":"); i > 0 {
+				spec := r.Target[i+1:]
+				if j := strings.LastIndex(spec, "@"); j > 0 {
+					spec = spec[:j]
+				}
+				if repo == r.Target[:i] && pathPrefix != "" && strings.HasPrefix(pathPrefix, spec) {
+					return true, nil
+				}
+			}
+		}
+	}
+	return false, nil
+}
+
+// CommitWriteVerdictTx 提交事务内复核：调用方同一 tx 内重查实例写锁与目标限制，
+// 入口鉴权后新激活的裁决可拦截在途写入。命中分别返回 ErrIncidentWriteLocked /
+// ErrIncidentRestricted。仅服务写事务，读路径请走 BusinessReadVerdict。
+func (s *SecurityIncidentService) CommitWriteVerdictTx(ctx context.Context, tx *sqlx.Tx, repo string, pathPrefixes []string) error {
+	locked, err := repository.InstanceWriteLockedTx(ctx, tx, s.now().Unix())
+	if err != nil {
+		return err
+	}
+	if locked {
+		return ErrIncidentWriteLocked
+	}
+	for _, p := range pathPrefixes {
+		restricted, err := s.targetRestrictedTx(ctx, tx, repo, p)
+		if err != nil {
+			return err
+		}
+		if restricted {
+			return ErrIncidentRestricted
+		}
+	}
+	return nil
+}
+
+// BusinessReadVerdict 入口裁决（读/下载）：目标命中活动限制即拒绝；
+// 隔离的目标字节在解除前一律不可读。不检查实例写锁（写锁只管写）。
+func (s *SecurityIncidentService) BusinessReadVerdict(ctx context.Context, repo, pathPrefix string) (bool, error) {
+	var restricted bool
+	err := s.repo.Read(ctx, func(tx *sqlx.Tx) error {
+		var err error
+		restricted, err = s.targetRestrictedTx(ctx, tx, repo, pathPrefix)
+		return err
+	})
+	return restricted, err
+}
+
+// IncidentClientVerdict 裁决客户端 IP 是否落入活动的 ip_cidr 限制；
+// effect 语义：空/全集默认 login+publish+read，显式列表取子集。
+// read 场景用 "read"，写场景用 "publish"。命中返回 true。
+func (s *SecurityIncidentService) IncidentClientVerdict(ctx context.Context, clientIP netip.Addr, effect string) (bool, error) {
+	if !clientIP.IsValid() {
+		return false, nil
+	}
+	var hit bool
+	err := s.repo.Read(ctx, func(tx *sqlx.Tx) error {
+		var rows []repository.IncidentRestriction
+		if err := tx.SelectContext(ctx, &rows, `SELECT restriction_id, kind, target, effects, state, version, effective_at, expires_at, action_id, lifted_action, created_at
+			FROM incident_restriction WHERE state='active' AND kind='ip_cidr'`); err != nil {
+			return err
+		}
+		for _, r := range rows {
+			prefix, err := netip.ParsePrefix(r.Target)
+			if err != nil || !prefix.Contains(clientIP) {
+				continue
+			}
+			// effects 子集匹配：未声明（空）视为全集生效。
+			if r.Effects == "" || effectInList(r.Effects, effect) {
+				hit = true
+				return nil
+			}
+		}
+		return nil
+	})
+	return hit, err
+}
+
+// effectInList 判断逗号分隔 effects 是否覆盖指定效果。
+func effectInList(effects, effect string) bool {
+	for _, e := range strings.Split(effects, ",") {
+		if strings.TrimSpace(e) == effect {
+			return true
+		}
+	}
+	return false
+}
+
+// BusinessWriteLocked 入口裁决：是否存在活跃实例业务写锁。
+func (s *SecurityIncidentService) BusinessWriteLocked(ctx context.Context) (bool, error) {
+	var locked bool
+	err := s.repo.Read(ctx, func(tx *sqlx.Tx) error {
+		var err error
+		locked, err = repository.InstanceWriteLockedTx(ctx, tx, s.now().Unix())
+		return err
+	})
+	return locked, err
+}
+
+// ApplyInstanceLock 逐项副作用：为每个目标写活跃实例写锁。
+func (s *SecurityIncidentService) ApplyInstanceLock(actionID string) func(*sqlx.Tx, SecurityTarget) (string, string, error) {
+	now := s.now()
+	return func(tx *sqlx.Tx, tg SecurityTarget) (string, string, error) {
+		r := repository.IncidentRestriction{
+			RestrictionID: "ir-" + uuid.NewString(),
+			Kind:          repository.RestrictionKindInstanceLock,
+			State:         repository.RestrictionStateActive,
+			Version:       1,
+			EffectiveAt:   now.Unix(),
+			ActionID:      actionID,
+			CreatedAt:     now.Unix(),
+		}
+		if err := repository.InsertIncidentRestrictionTx(context.Background(), tx, r); err != nil {
+			return "", "", fmt.Errorf("写入实例锁：%w", err)
+		}
+		return "applied", "实例业务写锁已生效", nil
+	}
+}
+
+// ApplyRestriction 逐项副作用：按目标种类写活跃事故限制。
+func (s *SecurityIncidentService) ApplyRestriction(actionID string) func(*sqlx.Tx, SecurityTarget) (string, string, error) {
+	now := s.now()
+	return func(tx *sqlx.Tx, tg SecurityTarget) (string, string, error) {
+		r := repository.IncidentRestriction{
+			RestrictionID: "ir-" + uuid.NewString(),
+			Kind:          tg.Kind,
+			Target:        tg.Target,
+			Effects:       tg.Effect,
+			State:         repository.RestrictionStateActive,
+			Version:       1,
+			EffectiveAt:   now.Unix(),
+			ActionID:      actionID,
+			CreatedAt:     now.Unix(),
+		}
+		if tg.Kind == repository.RestrictionKindInstanceLock {
+			r.Target = ""
+		}
+		if err := repository.InsertIncidentRestrictionTx(context.Background(), tx, r); err != nil {
+			return "", "", fmt.Errorf("写入事故限制：%w", err)
+		}
+		return "applied", "事故限制已生效", nil
+	}
+}
+
+// ApplyEvidenceHold 逐项副作用：按摘要登记保全持有；字节状态未知起步，
+// 由补录/核对推进 present/metadata_only（本增量不裁定字节）。
+func (s *SecurityIncidentService) ApplyEvidenceHold(actionID string) func(*sqlx.Tx, SecurityTarget) (string, string, error) {
+	now := s.now()
+	return func(tx *sqlx.Tx, tg SecurityTarget) (string, string, error) {
+		if existing, err := repository.EvidenceHoldByDigestTx(context.Background(), tx, tg.Target); err != nil {
+			return "", "", err
+		} else if existing != nil {
+			return "skipped", "该摘要已有活跃保全：" + existing.HoldID, nil
+		}
+		h := repository.EvidenceHold{
+			HoldID: "eh-" + uuid.NewString(), ObjectID: tg.Target, Digest: tg.Target,
+			ByteState: repository.EvidenceHoldByteUnknown, State: repository.EvidenceHoldStateActive,
+			ActionID: actionID, CreatedAt: now.Unix(),
+		}
+		// 字节状态裁决：摘要被已发布资产引用即 present（字节在内容寻址存储内），否则 metadata_only。
+		var cnt int
+		if err := tx.GetContext(context.Background(), &cnt,
+			`SELECT COUNT(*) FROM asset WHERE blob_hash = ? OR blob_hash = ?`, tg.Target, "sha256:"+tg.Target); err != nil {
+			return "", "", fmt.Errorf("裁决字节状态：%w", err)
+		}
+		if cnt > 0 {
+			h.ByteState = repository.EvidenceHoldBytePresent
+			var sz *int64
+			_ = tx.GetContext(context.Background(), &sz,
+				`SELECT MIN(size) FROM asset WHERE blob_hash = ? OR blob_hash = ?`, tg.Target, "sha256:"+tg.Target)
+			if sz != nil {
+				h.SizeBytes = *sz
+			}
+		} else {
+			h.ByteState = repository.EvidenceHoldByteMetadataOnly
+		}
+		if err := repository.InsertEvidenceHoldTx(context.Background(), tx, h); err != nil {
+			return "", "", fmt.Errorf("登记保全：%w", err)
+		}
+		return "applied", "保全已登记（byte_state=" + h.ByteState + "）", nil
+	}
+}
+
+// ApplyReleaseHold 逐项副作用：释放活跃保全。
+func (s *SecurityIncidentService) ApplyReleaseHold(actionID string) func(*sqlx.Tx, SecurityTarget) (string, string, error) {
+	now := s.now()
+	return func(tx *sqlx.Tx, tg SecurityTarget) (string, string, error) {
+		if err := repository.ReleaseEvidenceHoldTx(context.Background(), tx, tg.Target, actionID, now.Unix()); err != nil {
+			return "", "", fmt.Errorf("释放保全：%w", err)
+		}
+		return "applied", "保全已释放", nil
+	}
+}
+
+// ListEvidenceHolds 保全清单（活跃/全部，按创建倒序，上限 200）。
+func (s *SecurityIncidentService) ListEvidenceHolds(ctx context.Context) ([]repository.EvidenceHold, error) {
+	var out []repository.EvidenceHold
+	err := s.repo.Read(ctx, func(tx *sqlx.Tx) error {
+		return tx.SelectContext(ctx, &out, `SELECT hold_id, object_id, digest, byte_state, size_bytes, state, action_id, created_at, released_at
+			FROM evidence_hold ORDER BY created_at DESC LIMIT 200`)
+	})
+	return out, err
+}
+
+// ApplyLiftInstanceLock 逐项副作用：解除活跃实例写锁。
+func (s *SecurityIncidentService) ApplyLiftInstanceLock(actionID string) func(*sqlx.Tx, SecurityTarget) (string, string, error) {
+	now := s.now()
+	return func(tx *sqlx.Tx, tg SecurityTarget) (string, string, error) {
+		var id string
+		err := tx.GetContext(context.Background(), &id, `SELECT restriction_id FROM incident_restriction WHERE kind=? AND target=? AND state='active' LIMIT 1`, tg.Kind, tg.Target)
+		if err != nil {
+			return "", "", err
+		}
+		if err := repository.LiftIncidentRestrictionTx(context.Background(), tx, id, actionID, now.Unix()); err != nil {
+			return "", "", fmt.Errorf("解除事故限制：%w", err)
+		}
+		return "applied", "事故限制已解除", nil
+	}
+}
+
+// 合法目标种类：instance_write_lock / repository / path / version / ip_cidr。
+// repository 目标=仓库名；path=仓库名:规范路径前缀；version=仓库名:路径@版本；ip_cidr=CIDR+effects 子集。
+func validSecurityTarget(actionType string, tg SecurityTarget) bool {
+	switch actionType {
+	case "restrict":
+		switch tg.Kind {
+		case "instance_write_lock":
+			return true
+		case "repository":
+			return tg.Target != ""
+		case "path", "version":
+			return tg.Target != "" && strings.Contains(tg.Target, ":")
+		case "ip_cidr":
+			if tg.Target == "" {
+				return false
+			}
+			if _, _, err := net.ParseCIDR(tg.Target); err != nil {
+				return false
+			}
+			// 未给 effects 默认 login+publish+read 全集；给了必须是子集。
+			for _, e := range strings.Split(tg.Effect, ",") {
+				e = strings.TrimSpace(e)
+				if e == "" {
+					continue
+				}
+				if e != "login" && e != "publish" && e != "read" {
+					return false
+				}
+			}
+			return true
+		}
+	case "lift_restriction":
+		return tg.Kind != "" && tg.Target != "" || tg.Kind == "instance_write_lock"
+	case "hold_evidence":
+		// 目标=制品摘要（digest 作为唯一物理字节身份）。
+		return tg.Kind == "digest" && tg.Target != ""
+	case "release_hold":
+		return tg.Kind == "hold" && tg.Target != ""
+	}
+	return false
+}
+
+// ── 恢复隔离闸───────────────────────────────────────
+
+// BeginRestoreIsolation 恢复启动：normal → isolated，记恢复标识与原因。
+func (s *SecurityIncidentService) BeginRestoreIsolation(ctx context.Context, restoreID, reason string) error {
+	return s.repo.Write(ctx, func(tx *sqlx.Tx) error {
+		g, err := repository.RecoveryGateTx(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if g.State != repository.RecoveryGateNormal && (g.RestoreID == nil || *g.RestoreID != restoreID) {
+			return ErrSecurityConfirmationStale
+		}
+		g.State = repository.RecoveryGateIsolated
+		g.RestoreID = &restoreID
+		g.Reason = reason
+		g.CheckpointStatus = repository.CheckpointNone
+		g.GapStatus = "none"
+		g.UpdatedAt = s.now().Unix()
+		return repository.SetRecoveryGateTx(ctx, tx, *g)
+	})
+}
+
+// ReportRestoreCheckpoint 恢复核对：可信检查点 verified 且水位齐 → ready_for_review；
+// stale/mismatch/missing 一律回 isolated 并留原因。
+func (s *SecurityIncidentService) ReportRestoreCheckpoint(ctx context.Context, restoreID, status string, watermark int64) error {
+	return s.repo.Write(ctx, func(tx *sqlx.Tx) error {
+		g, err := repository.RecoveryGateTx(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if g.RestoreID == nil || *g.RestoreID != restoreID || (g.State != repository.RecoveryGateIsolated && g.State != repository.RecoveryGateReconciling) {
+			return ErrSecurityConfirmationStale
+		}
+		g.State = repository.RecoveryGateReconciling
+		g.CheckpointStatus = status
+		g.VerifiedWatermark = watermark
+		// 水位比对：低于库内当前水位即检查点过时。
+		current, err := repository.SecurityWatermarkTx(ctx, tx)
+		if err != nil {
+			return err
+		}
+		switch {
+		case status == repository.CheckpointVerified && watermark >= current:
+			g.State = repository.RecoveryGateReadyForReview
+			g.GapStatus = "none"
+			g.Reason = ""
+		case status == repository.CheckpointVerified && watermark < current:
+			g.State = repository.RecoveryGateIsolated
+			g.CheckpointStatus = repository.CheckpointStale
+			g.GapStatus = "gap"
+			g.Reason = "检查点水位低于当前受保护状态版本，视为过时"
+		default:
+			g.State = repository.RecoveryGateIsolated
+			g.GapStatus = "unknown"
+			g.Reason = "无可采信检查点（" + status + "），须本机重新认领与核对"
+		}
+		g.UpdatedAt = s.now().Unix()
+		return repository.SetRecoveryGateTx(ctx, tx, *g)
+	})
+}
+
+// ConfirmRestore 已重新认领的强认证管理员解闸：ready_for_review → normal。
+func (s *SecurityIncidentService) ConfirmRestore(ctx context.Context, restoreID string) error {
+	return s.repo.Write(ctx, func(tx *sqlx.Tx) error {
+		g, err := repository.RecoveryGateTx(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if g.RestoreID == nil || *g.RestoreID != restoreID || g.State != repository.RecoveryGateReadyForReview {
+			return ErrSecurityConfirmationStale
+		}
+		g.State = repository.RecoveryGateNormal
+		g.RestoreID = nil
+		g.SecurityEpoch++
+		g.UpdatedAt = s.now().Unix()
+		return repository.SetRecoveryGateTx(ctx, tx, *g)
+	})
+}
+
+// RecoveryGateStatus 恢复闸状态（管理员可读）。
+func (s *SecurityIncidentService) RecoveryGateStatus(ctx context.Context) (*repository.RecoveryGate, error) {
+	var g *repository.RecoveryGate
+	err := s.repo.Read(ctx, func(tx *sqlx.Tx) error {
+		var err error
+		g, err = repository.RecoveryGateTx(ctx, tx)
+		return err
+	})
+	return g, err
+}
+
+// RecoveryIsolated 入口裁决：隔离中（非 normal）一律阻断公网业务。
+func (s *SecurityIncidentService) RecoveryIsolated(ctx context.Context) (bool, error) {
+	var isolated bool
+	err := s.repo.Read(ctx, func(tx *sqlx.Tx) error {
+		g, err := repository.RecoveryGateTx(ctx, tx)
+		if err != nil {
+			return err
+		}
+		isolated = g.State != repository.RecoveryGateNormal
+		return nil
+	})
+	return isolated, err
+}
+
+// ── 风险调查案件───────────────────────────────────────────
+
+// OpenSecurityCase 建案：管理员人工或规则检测入口共用；title/severity/reason 必填。
+func (s *SecurityIncidentService) OpenSecurityCase(ctx context.Context, p *auth.Principal, title, severity, reason string, links []repository.SecurityCaseLinkRow) (*repository.SecurityCaseRow, error) {
+	if p == nil || p.UserID <= 0 || p.Role != "admin" {
+		return nil, ErrAdmissionForbidden
+	}
+	if title == "" || reason == "" {
+		return nil, ErrValidation
+	}
+	switch severity {
+	case "low", "medium", "high", "critical":
+	default:
+		return nil, ErrValidation
+	}
+	now := s.now().Unix()
+	row := repository.SecurityCaseRow{CaseID: "case-" + uuid.NewString(), Title: title, Severity: severity,
+		State: "open", TargetVersion: 1, OpenedBy: fmt.Sprintf("%d", p.UserID), Reason: reason,
+		CreatedUnix: now, UpdatedUnix: now}
+	err := s.repo.Write(ctx, func(tx *sqlx.Tx) error {
+		if err := repository.InsertSecurityCaseTx(ctx, tx, row); err != nil {
+			return err
+		}
+		if _, err := EmitSecurityNotificationTx(ctx, tx, "security.case_opened", row.Title,
+			fmt.Sprintf(`{"caseId":%q,"severity":%q}`, row.CaseID, row.Severity), s.now()); err != nil {
+			return err
+		}
+		for _, l := range links {
+			if l.LinkKind != "fact" && l.LinkKind != "candidate" {
+				return ErrValidation
+			}
+			l.CaseID = row.CaseID
+			if l.LinkedBy == "" {
+				l.LinkedBy = row.OpenedBy
+			}
+			l.LinkedUnix = now
+			if err := repository.LinkSecurityCaseEventTx(ctx, tx, l); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &row, nil
+}
+
+// TransitionSecurityCase 认领/结案/重开：绑定 targetVersion，CAS 版本推进；close 需 resolutionCode。
+func (s *SecurityIncidentService) TransitionSecurityCase(ctx context.Context, p *auth.Principal, caseID, action, reason, resolution string, expectVersion int64) (*repository.SecurityCaseRow, error) {
+	if p == nil || p.UserID <= 0 || p.Role != "admin" {
+		return nil, ErrAdmissionForbidden
+	}
+	var next, res string
+	var owner *int64
+	var closedAt *int64
+	now := s.now().Unix()
+	switch action {
+	case "claim":
+		next, owner = "claimed", &p.UserID
+	case "close":
+		if reason == "" || resolution == "" {
+			return nil, ErrValidation
+		}
+		next, res, closedAt = "closed", resolution, &now
+	case "reopen":
+		if reason == "" {
+			return nil, ErrValidation
+		}
+		next = "open"
+	default:
+		return nil, ErrValidation
+	}
+	var out *repository.SecurityCaseRow
+	err := s.repo.Write(ctx, func(tx *sqlx.Tx) error {
+		cur, err := repository.GetSecurityCaseTx(ctx, tx, caseID)
+		if err != nil {
+			return err
+		}
+		if cur.TargetVersion != expectVersion {
+			return ErrSecurityConfirmationStale
+		}
+		ok, err := repository.TransitionSecurityCaseTx(ctx, tx, caseID, expectVersion, next, res, owner, closedAt, now)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return ErrSecurityConfirmationStale
+		}
+		out, err = repository.GetSecurityCaseTx(ctx, tx, caseID)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ListSecurityCases 案件清单（state 可空=全部，上限由调用方给）。
+func (s *SecurityIncidentService) ListSecurityCases(ctx context.Context, state string, limit int) ([]repository.SecurityCaseRow, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	var out []repository.SecurityCaseRow
+	err := s.repo.Read(ctx, func(tx *sqlx.Tx) error {
+		var e error
+		out, e = repository.ListSecurityCasesTx(ctx, tx, state, limit)
+		return e
+	})
+	return out, err
+}
+
+// SecurityCaseLinks 案件的关联事件（区分 fact/candidate）。
+func (s *SecurityIncidentService) SecurityCaseLinks(ctx context.Context, caseID string) ([]repository.SecurityCaseLinkRow, error) {
+	var out []repository.SecurityCaseLinkRow
+	err := s.repo.Read(ctx, func(tx *sqlx.Tx) error {
+		var e error
+		out, e = repository.ListSecurityCaseLinksTx(ctx, tx, caseID)
+		return e
+	})
+	return out, err
+}
+
+// ── 安全通知──────────────────────────────────────────────
+
+// SecurityNoticePage 游标补查页：items + nextCursor + hasMore + watermark 同源。
+type SecurityNoticePage struct {
+	Items     []repository.SecurityNotificationRow
+	Acked     map[int64]bool
+	NextSeq   int64
+	HasMore   bool
+	Watermark int64
+}
+
+// EmitSecurityNotificationTx 在既有写事务内发射站内条目（供案件/处置等调用方同事务使用）。
+func EmitSecurityNotificationTx(ctx context.Context, tx *sqlx.Tx, kind, title, payload string, now time.Time) (int64, error) {
+	seq, err := repository.EmitNotificationTx(ctx, tx, repository.SecurityNotificationRow{
+		NoticeID: "ntf-" + uuid.NewString(), Kind: kind, Title: title, Payload: payload, CreatedUnix: now.Unix(),
+	}, nil)
+	if err != nil {
+		return 0, err
+	}
+	// 站外投递行在同一事务登记（通知与投递的原子性）。
+	if err := emitDeliveriesForNotificationTx(ctx, tx, seq, now); err != nil {
+		return 0, err
+	}
+	return seq, nil
+}
+
+// ListSecurityNotifications 管理员游标分页；after=0 从头（返回最新一页而非全部）。
+func (s *SecurityIncidentService) ListSecurityNotifications(ctx context.Context, p *auth.Principal, after int64, limit int) (*SecurityNoticePage, error) {
+	if p == nil || p.UserID <= 0 || p.Role != "admin" {
+		return nil, ErrAdmissionForbidden
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	out := &SecurityNoticePage{Acked: map[int64]bool{}}
+	err := s.repo.Read(ctx, func(tx *sqlx.Tx) error {
+		var e error
+		out.Watermark, e = repository.NotificationWatermarkTx(ctx, tx)
+		if e != nil {
+			return e
+		}
+		if after <= 0 {
+			// 首开取最近一页：游标回到 watermark-limit，仍然 seq 有序。
+			start := out.Watermark - int64(limit)
+			if start < 0 {
+				start = 0
+			}
+			out.Items, e = repository.NotificationsAfterTx(ctx, tx, p.UserID, start, limit)
+		} else {
+			out.Items, e = repository.NotificationsAfterTx(ctx, tx, p.UserID, after, limit)
+		}
+		if e != nil {
+			return e
+		}
+		for _, it := range out.Items {
+			out.NextSeq = it.Seq
+			out.Acked[it.Seq], _ = repository.NotificationAckedTx(ctx, tx, it.Seq, p.UserID)
+		}
+		out.HasMore = out.NextSeq < out.Watermark
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// AckSecurityNotification 幂等确认（本人）；不可见/不存在 → 404。
+func (s *SecurityIncidentService) AckSecurityNotification(ctx context.Context, p *auth.Principal, noticeID string) (time.Time, error) {
+	if p == nil || p.UserID <= 0 || p.Role != "admin" {
+		return time.Time{}, ErrAdmissionForbidden
+	}
+	now := s.now()
+	var acked bool
+	err := s.repo.Write(ctx, func(tx *sqlx.Tx) error {
+		var e error
+		acked, e = repository.AckNotificationTx(ctx, tx, noticeID, p.UserID, now.Unix())
+		return e
+	})
+	if err != nil {
+		return time.Time{}, err
+	}
+	_ = acked // 幂等：重复确认返回同一时刻语义
+	return now, nil
+}
+
+// ListNotificationDeliveries 脱敏投递分页。
+func (s *SecurityIncidentService) ListNotificationDeliveries(ctx context.Context, p *auth.Principal, limit int) ([]repository.SecurityNotificationDeliveryRow, error) {
+	if p == nil || p.UserID <= 0 || p.Role != "admin" {
+		return nil, ErrAdmissionForbidden
+	}
+	if limit <= 0 || limit > 200 {
+		limit = 100
+	}
+	var out []repository.SecurityNotificationDeliveryRow
+	err := s.repo.Read(ctx, func(tx *sqlx.Tx) error {
+		var e error
+		out, e = repository.ListDeliveriesTx(ctx, tx, limit)
+		return e
+	})
+	return out, err
+}
+
+// MarkSecurityCaseRead 本人既読水位：seen_version 不可超过案件現版本；同版本重放冪等。
+func (s *SecurityIncidentService) MarkSecurityCaseRead(ctx context.Context, p *auth.Principal, caseID string, seenVersion int64) (*repository.SecurityCaseReadRow, error) {
+	if p == nil || p.UserID <= 0 || p.Role != "admin" {
+		return nil, ErrAdmissionForbidden
+	}
+	var out *repository.SecurityCaseReadRow
+	err := s.repo.Write(ctx, func(tx *sqlx.Tx) error {
+		c, err := repository.GetSecurityCaseTx(ctx, tx, caseID)
+		if err != nil {
+			return err
+		}
+		if seenVersion < 0 || seenVersion > c.TargetVersion {
+			return ErrSecurityConfirmationStale
+		}
+		now := s.now().Unix()
+		if err := repository.MarkCaseReadTx(ctx, tx, caseID, p.UserID, seenVersion, now); err != nil {
+			return err
+		}
+		r, err := repository.CaseReadTx(ctx, tx, caseID, p.UserID)
+		if err != nil {
+			return err
+		}
+		out = &r
+		return nil
+	})
+	return out, err
+}
+
+// RetryNotificationDelivery 失败投递的手動再試行：attempts=CAS targetVersion，
+// 同 targetVersion 的重放冪等無変化。
+func (s *SecurityIncidentService) RetryNotificationDelivery(ctx context.Context, p *auth.Principal, deliveryID string, expectAttempts int64) (*repository.SecurityNotificationDeliveryRow, error) {
+	if p == nil || p.UserID <= 0 || p.Role != "admin" {
+		return nil, ErrAdmissionForbidden
+	}
+	var out *repository.SecurityNotificationDeliveryRow
+	err := s.repo.Write(ctx, func(tx *sqlx.Tx) error {
+		d, err := repository.DeliveryTx(ctx, tx, deliveryID)
+		if err != nil {
+			return err
+		}
+		moved, err := repository.RetryDeliveryTx(ctx, tx, deliveryID, expectAttempts, s.now().Unix())
+		if err != nil {
+			return err
+		}
+		if !moved && d.Attempts != expectAttempts {
+			return ErrSecurityConfirmationStale
+		}
+		d2, err := repository.DeliveryTx(ctx, tx, deliveryID)
+		if err != nil {
+			return err
+		}
+		out = &d2
+		return nil
+	})
+	return out, err
+}
+
+// SecurityCaseDetail 案件头 + 命中 + 关联 + 本人既読水位。
+type SecurityCaseDetail struct {
+	Case     repository.SecurityCaseRow
+	Findings []repository.SecurityFindingRow
+	Links    []repository.SecurityCaseLinkRow
+	Read     *repository.SecurityCaseReadRow
+}
+
+// SecurityCaseDetail 详情：案件存在性 + 附属投影。管理员限定。
+func (s *SecurityIncidentService) SecurityCaseDetail(ctx context.Context, p *auth.Principal, caseID string) (*SecurityCaseDetail, error) {
+	if p == nil || p.UserID <= 0 || p.Role != "admin" {
+		return nil, ErrAdmissionForbidden
+	}
+	out := &SecurityCaseDetail{}
+	err := s.repo.Read(ctx, func(tx *sqlx.Tx) error {
+		c, err := repository.GetSecurityCaseTx(ctx, tx, caseID)
+		if err != nil {
+			return err
+		}
+		out.Case = *c
+		if out.Findings, err = repository.CaseFindingsTx(ctx, tx, caseID); err != nil {
+			return err
+		}
+		if out.Links, err = repository.ListSecurityCaseLinksTx(ctx, tx, caseID); err != nil {
+			return err
+		}
+		if r, err := repository.CaseReadTx(ctx, tx, caseID, p.UserID); err == nil {
+			out.Read = &r
+		}
+		return nil
+	})
+	return out, err
+}
+
+// SecurityCaseSection 四栏：timeline / uploads / identity / actions-evidence。
+// actions-evidence = 案件附着命中 + 覆盖案件对象摘要的保全。
+type SecurityCaseActionsEvidence struct {
+	Findings []repository.SecurityFindingRow
+	Holds    []repository.EvidenceHold
+}
+
+func (s *SecurityIncidentService) SecurityCaseTimeline(ctx context.Context, p *auth.Principal, caseID string, limit int) ([]repository.SecurityCaseTimelineRow, error) {
+	var out []repository.SecurityCaseTimelineRow
+	err := s.caseSection(ctx, p, caseID, func(tx *sqlx.Tx) error {
+		var e error
+		out, e = repository.CaseTimelineTx(ctx, tx, caseID, limit)
+		return e
+	})
+	return out, err
+}
+
+func (s *SecurityIncidentService) SecurityCaseUploads(ctx context.Context, p *auth.Principal, caseID string, limit int) ([]repository.SecurityCaseUploadRow, error) {
+	var out []repository.SecurityCaseUploadRow
+	err := s.caseSection(ctx, p, caseID, func(tx *sqlx.Tx) error {
+		var e error
+		out, e = repository.CaseUploadsTx(ctx, tx, caseID, limit)
+		return e
+	})
+	return out, err
+}
+
+func (s *SecurityIncidentService) SecurityCaseIdentity(ctx context.Context, p *auth.Principal, caseID string, limit int) ([]repository.SecurityCaseIdentityRow, error) {
+	var out []repository.SecurityCaseIdentityRow
+	err := s.caseSection(ctx, p, caseID, func(tx *sqlx.Tx) error {
+		var e error
+		out, e = repository.CaseIdentityTx(ctx, tx, caseID, limit)
+		return e
+	})
+	return out, err
+}
+
+func (s *SecurityIncidentService) SecurityCaseActionsEvidence(ctx context.Context, p *auth.Principal, caseID string, limit int) (*SecurityCaseActionsEvidence, error) {
+	out := &SecurityCaseActionsEvidence{}
+	err := s.caseSection(ctx, p, caseID, func(tx *sqlx.Tx) error {
+		var e error
+		if out.Findings, e = repository.CaseFindingsTx(ctx, tx, caseID); e != nil {
+			return e
+		}
+		out.Holds, e = repository.CaseEvidenceHoldsTx(ctx, tx, caseID, limit)
+		return e
+	})
+	return out, err
+}
+
+// caseSection 共通：管理员裁决 + 案件存在检查 + limit 夹取。
+func (s *SecurityIncidentService) caseSection(ctx context.Context, p *auth.Principal, caseID string, fn func(*sqlx.Tx) error) error {
+	if p == nil || p.UserID <= 0 || p.Role != "admin" {
+		return ErrAdmissionForbidden
+	}
+	return s.repo.Read(ctx, func(tx *sqlx.Tx) error {
+		if _, err := repository.GetSecurityCaseTx(ctx, tx, caseID); err != nil {
+			return err
+		}
+		return fn(tx)
+	})
+}
+
+// ---- 安全治理 QQ 渠道绑定 ----
+
+var qqOpenidPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{3,64}$`)
+
+// SetQQBinding 绑定管理员账号与 QQ openid。仅管理员；openid 形态校验。
+func (s *SecurityIncidentService) SetQQBinding(ctx context.Context, p *auth.Principal, targetUserID int64, openid string) error {
+	if p == nil || p.UserID <= 0 || p.Role != "admin" {
+		return ErrAdmissionForbidden
+	}
+	if targetUserID <= 0 || !qqOpenidPattern.MatchString(openid) {
+		return ErrValidation
+	}
+	// 绑定目标必须仍是活动管理员（QQ 通知只投管理员；绑定降级账号没有意义）。
+	u, err := s.users.GetByID(targetUserID)
+	if err != nil {
+		return err
+	}
+	if u.Role != "admin" || u.Status != "active" {
+		return ErrValidation
+	}
+	return s.repo.Write(ctx, func(tx *sqlx.Tx) error {
+		return repository.SetQQBindingTx(ctx, tx, targetUserID, openid, s.now().Unix())
+	})
+}
+
+// RemoveQQBinding 解绑。仅管理员。
+func (s *SecurityIncidentService) RemoveQQBinding(ctx context.Context, p *auth.Principal, targetUserID int64) error {
+	if p == nil || p.UserID <= 0 || p.Role != "admin" {
+		return ErrAdmissionForbidden
+	}
+	var removed bool
+	err := s.repo.Write(ctx, func(tx *sqlx.Tx) error {
+		var e error
+		removed, e = repository.DeleteQQBindingTx(ctx, tx, targetUserID)
+		return e
+	})
+	if err == nil && !removed {
+		return sql.ErrNoRows
+	}
+	return err
+}

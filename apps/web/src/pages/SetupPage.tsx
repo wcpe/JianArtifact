@@ -6,6 +6,7 @@ import {
   Button,
   Card,
   Center,
+  Code,
   Group,
   PasswordInput,
   Progress,
@@ -22,7 +23,8 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Navigate, useNavigate } from "react-router-dom";
 
-import { getStatus } from "../api/endpoints";
+import { confirmMfaEnroll, getStatus } from "../api/endpoints";
+import { ApiError } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { BrandLogo } from "../components/BrandLogo";
 import { useAsync } from "../hooks/useAsync";
@@ -32,6 +34,7 @@ interface FormValues {
   username: string;
   password: string;
   confirmPassword: string;
+  claimTicket: string;
 }
 
 /** 口令强度评分（0–100）：长度达标为主，数字 / 大小写混合 / 符号各加成。 */
@@ -51,10 +54,16 @@ export function SetupPage() {
   const status = useAsync(getStatus, []);
   const [active, setActive] = useState(0);
   const [submitting, setSubmitting] = useState(false);
+  const [needClaim, setNeedClaim] = useState(false);
+  const [enroll, setEnroll] = useState<{ challengeToken: string; enrollmentUri: string } | null>(
+    null,
+  );
+  const [otp, setOtp] = useState("");
+  const [codes, setCodes] = useState<string[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const form = useForm<FormValues>({
-    initialValues: { username: "", password: "", confirmPassword: "" },
+    initialValues: { username: "", password: "", confirmPassword: "", claimTicket: "" },
     validate: {
       username: (v) => (v.trim().length > 0 ? null : t("auth.username")),
       password: (v) => (v.length >= 8 ? null : t("auth.passwordRule")),
@@ -121,11 +130,29 @@ export function SetupPage() {
   const handleSubmit = form.onSubmit((values) => {
     setSubmitting(true);
     setError(null);
-    bootstrap(values.username, values.password)
-      .then(() => {
+    bootstrap(values.username, values.password, values.claimTicket || undefined)
+      .then((res) => {
+        if (res.next === "claim_required" && res.enrollmentUri && res.challengeToken) {
+          // 认领票已受理：展示登记 URI，输入首枚 OTP 完成因子激活。
+          setEnroll({ challengeToken: res.challengeToken, enrollmentUri: res.enrollmentUri });
+          setError(null);
+          return;
+        }
+        if (res.next && res.next !== "authenticated") {
+          // 首个管理员仍须持认领票完成因子登记。
+          setNeedClaim(true);
+          setError(t("setup.claimRequired"));
+          return;
+        }
         setActive(2);
       })
-      .catch(() => {
+      .catch((err: unknown) => {
+        // 强认证装配后空库须持安装认领票：识别挑战错误转认领票录入。
+        if (err instanceof ApiError && err.code === "invalid_auth_challenge") {
+          setNeedClaim(true);
+          setError(t("setup.claimRequired"));
+          return;
+        }
         setError(t("setup.bootstrapFailed"));
       })
       .finally(() => {
@@ -163,58 +190,116 @@ export function SetupPage() {
 
             {/* 第二步：创建管理员。 */}
             <Stepper.Step label={t("setup.stepAdmin")}>
-              <form onSubmit={handleSubmit}>
+              {!enroll && !codes ? (
+                <form onSubmit={handleSubmit}>
+                  <Stack gap="sm" mt="md">
+                    <Text c="dimmed" size="sm">
+                      {t("setup.adminDesc")}
+                    </Text>
+                    {error ? (
+                      <Alert color="red" variant="light">
+                        {error}
+                      </Alert>
+                    ) : null}
+                    <TextInput
+                      label={t("auth.username")}
+                      withAsterisk
+                      {...form.getInputProps("username")}
+                    />
+                    <PasswordInput
+                      label={t("auth.password")}
+                      withAsterisk
+                      {...form.getInputProps("password")}
+                    />
+                    {form.values.password ? (
+                      <Box>
+                        <Group justify="space-between" mb={4}>
+                          <Text size="xs" c="dimmed">
+                            {t("setup.strength")}
+                          </Text>
+                          <Text size="xs" c={strengthColor}>
+                            {strengthLabel}
+                          </Text>
+                        </Group>
+                        <Progress value={strength} color={strengthColor} size="sm" />
+                      </Box>
+                    ) : null}
+                    <PasswordInput
+                      label={t("setup.confirmPassword")}
+                      withAsterisk
+                      {...form.getInputProps("confirmPassword")}
+                    />
+                    {needClaim ? (
+                      <TextInput
+                        label={t("auth.claimTicket")}
+                        withAsterisk
+                        {...form.getInputProps("claimTicket")}
+                      />
+                    ) : null}
+                    <Group justify="space-between" mt="sm">
+                      <Button variant="default" onClick={() => setActive(0)}>
+                        {t("setup.back")}
+                      </Button>
+                      <Button
+                        type="submit"
+                        loading={submitting}
+                        leftSection={<IconCheck size={16} />}
+                      >
+                        {t("setup.submit")}
+                      </Button>
+                    </Group>
+                  </Stack>
+                </form>
+              ) : null}
+              {enroll ? (
                 <Stack gap="sm" mt="md">
                   <Text c="dimmed" size="sm">
-                    {t("setup.adminDesc")}
+                    {t("auth.enrollUriHint")}
                   </Text>
+                  <Code block>{enroll.enrollmentUri}</Code>
                   {error ? (
                     <Alert color="red" variant="light">
                       {error}
                     </Alert>
                   ) : null}
                   <TextInput
-                    label={t("auth.username")}
+                    label={t("auth.mfaCode")}
                     withAsterisk
-                    {...form.getInputProps("username")}
+                    value={otp}
+                    onChange={(e) => setOtp(e.currentTarget.value)}
                   />
-                  <PasswordInput
-                    label={t("auth.password")}
-                    withAsterisk
-                    {...form.getInputProps("password")}
-                  />
-                  {form.values.password ? (
-                    <Box>
-                      <Group justify="space-between" mb={4}>
-                        <Text size="xs" c="dimmed">
-                          {t("setup.strength")}
-                        </Text>
-                        <Text size="xs" c={strengthColor}>
-                          {strengthLabel}
-                        </Text>
-                      </Group>
-                      <Progress value={strength} color={strengthColor} size="sm" />
-                    </Box>
-                  ) : null}
-                  <PasswordInput
-                    label={t("setup.confirmPassword")}
-                    withAsterisk
-                    {...form.getInputProps("confirmPassword")}
-                  />
-                  <Group justify="space-between" mt="sm">
-                    <Button variant="default" onClick={() => setActive(0)}>
-                      {t("setup.back")}
-                    </Button>
-                    <Button
-                      type="submit"
-                      loading={submitting}
-                      leftSection={<IconCheck size={16} />}
-                    >
-                      {t("setup.submit")}
-                    </Button>
-                  </Group>
+                  <Button
+                    loading={submitting}
+                    disabled={!otp.trim()}
+                    onClick={() => {
+                      setSubmitting(true);
+                      setError(null);
+                      confirmMfaEnroll(
+                        enroll.challengeToken,
+                        otp.trim(),
+                        form.values.claimTicket || undefined,
+                      )
+                        .then((res) => {
+                          setCodes(res.recoveryCodes);
+                          setEnroll(null);
+                        })
+                        .catch(() => setError(t("setup.enrollFailed")))
+                        .finally(() => setSubmitting(false));
+                    }}
+                  >
+                    {t("auth.confirmEnroll")}
+                  </Button>
                 </Stack>
-              </form>
+              ) : null}
+              {codes ? (
+                <Stack gap="sm" mt="md">
+                  <Text c="dimmed" size="sm">
+                    {t("auth.recoveryCodesHint")}
+                  </Text>
+                  <Code block>{codes.join("\n")}</Code>
+                  <Button onClick={() => setActive(2)}>{t("auth.codesSaved")}</Button>
+                </Stack>
+              ) : null}
             </Stepper.Step>
 
             {/* 第三步：完成。 */}

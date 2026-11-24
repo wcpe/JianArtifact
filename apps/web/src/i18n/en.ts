@@ -258,6 +258,22 @@ export const en = {
     oidcErrorUnavailable:
       "The identity provider is unavailable. Try again later or use a local account.",
     oidcErrorFailed: "OIDC sign-in failed. Try again or use a local account.",
+    mfaCode: "One-time code",
+    mfaCodeHint: "Enter the 6-digit one-time code shown by your authenticator.",
+    mfaVerify: "Verify",
+    useRecoveryCode: "Use a recovery code",
+    recoveryCode: "Recovery code",
+    recoveryCodeHint: "Enter an unused recovery code to rebind your factor.",
+    recoverFactor: "Recover and rebind",
+    claimTicket: "Claim ticket",
+    claimTicketHint:
+      "This account requires an admin claim ticket to enroll a factor before sign-in.",
+    claimEnroll: "Claim and enroll factor",
+    enrollUriHint:
+      "Scan or enter this enrollment URI in your authenticator (shown once), then enter the first one-time code:",
+    confirmEnroll: "Confirm enrollment",
+    recoveryCodesHint: "Save these one-time recovery codes now (shown once, cannot be recovered):",
+    codesSaved: "Saved, sign in again",
   },
   setup: {
     title: "Initialize Instance",
@@ -286,6 +302,9 @@ export const en = {
     bootstrapUnavailableHint: "Please wait until the instance is ready before proceeding.",
     statusUnavailable:
       "Unable to confirm whether this instance allows initialization; please try again later.",
+    claimRequired:
+      "This account must enroll a factor with a claim ticket before sign-in. Enter the ticket and submit again.",
+    enrollFailed: "Factor enrollment failed. Check the one-time code and retry.",
     bootstrapFailed: "Failed to create the administrator, please check and try again.",
   },
   dashboard: {
