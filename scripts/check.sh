@@ -11,6 +11,8 @@
 #   go-static    Go 格式 / 静态检查 / 漏洞扫描 / 编译
 #   go-test-1    Go 测试分片一
 #   go-test-2    Go 测试分片二
+#   go-test-3    Go 测试分片三
+#   go-test-4    Go 测试分片四
 # 任一分片失败即整体失败；本地默认 all 会把它们顺序跑一遍。
 set -euo pipefail
 
@@ -29,17 +31,20 @@ SCOPE="${JIAN_GATE_SCOPE:-all}"
 # 新增慢包时要重算这三片，否则某一片会明显更慢，并行收益被它吃掉。
 #
 # 分片用显式包列表而不是 ./...，因此**没有测试文件的包也必须列出**：它们今天不产生测试，
-# 但一旦有人补上，漏列就会让测试静默不跑。三片的并集必须等于 go list ./... 的全部输出
+# 但一旦有人补上，漏列就会让测试静默不跑。四片的并集必须等于 go list ./... 的全部输出
 # （internal、internal/licenses、web 目前无测试，仍列在此处以保持这条不变量）。
 GO_TEST_SHARD_1=(
+  # api 与 domain 各自都是三百秒级大包，分开成片后墙上时间由最大的 repository 决定。
   ./internal/api/...
-  ./internal/domain/...
 )
 GO_TEST_SHARD_2=(
-  # repository 是最大单包（约 352s），单独成片才能与另外两片配平。
+  # repository 是最大单包（约 352s），单独成片才能与另外三片配平。
   ./internal/repository/...
 )
 GO_TEST_SHARD_3=(
+  ./internal/domain/...
+)
+GO_TEST_SHARD_4=(
   ./internal/migration/...
   ./internal/httpserver/...
   ./cmd/...
@@ -61,8 +66,8 @@ GO_TEST_SHARD_3=(
 )
 
 # 分片清单的单一来源：case 分支按下标取用，避免新增分片时漏改某处。
-GO_TEST_SHARDS=("${GO_TEST_SHARD_1[*]}" "${GO_TEST_SHARD_2[*]}" "${GO_TEST_SHARD_3[*]}")
-GO_TEST_SHARD_COUNT=3
+GO_TEST_SHARDS=("${GO_TEST_SHARD_1[*]}" "${GO_TEST_SHARD_2[*]}" "${GO_TEST_SHARD_3[*]}" "${GO_TEST_SHARD_4[*]}")
+GO_TEST_SHARD_COUNT=4
 
 sync_dist() {
   # 后端 //go:embed all:dist：dist 目录不入库（见 .gitignore），没有产物时 go build 会直接
