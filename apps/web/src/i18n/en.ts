@@ -1369,6 +1369,7 @@ export const en = {
     kpiFilterFailure: "Click to view failed records only",
     kpiFilterHighRisk: "High-risk means irreversible changes; click to focus on failures",
     kpiFilterPending: "Click to view unacknowledged risk batches only",
+    kpiFocusOnly: "Also selected with other results — click to view only this",
     colCategory: "Category",
     colStatus: "Result",
     colDuration: "Duration",

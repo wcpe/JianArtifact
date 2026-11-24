@@ -115,6 +115,22 @@ export function AuditWorkbenchView() {
     toggleArrayFilter("result", "failure");
   }, [toggleArrayFilter]);
 
+  // 高亮本身无法区分「多选中的一项」与「唯一聚焦项」，但两者的点击语义不同
+  // （前者收敛为仅此一项，后者取消筛选）；提示文案按当前状态如实说明。
+  const resultSelectHint = useCallback(
+    (value: "success" | "failure", filterHint: string) => {
+      const selected = filters.result;
+      if (selected.length === 1 && selected[0] === value) {
+        return t("auditWorkbench.kpiClearFilters");
+      }
+      if (selected.includes(value)) {
+        return t("auditWorkbench.kpiFocusOnly");
+      }
+      return filterHint;
+    },
+    [filters.result, t],
+  );
+
   // 无权限早退必须在全部 Hooks 之后：useCallback 等钩子已先执行，
   // 权限一旦从有变无，提前 return 会造成 Hook 数量不一致直接崩溃。
   if (model.summary.forbidden) {
@@ -149,7 +165,7 @@ export function AuditWorkbenchView() {
       icon: <IconCircleCheck size={18} />,
       onSelect: () => toggleArrayFilter("result", "success"),
       active: filters.result.includes("success"),
-      selectHint: t("auditWorkbench.kpiFilterSuccess"),
+      selectHint: resultSelectHint("success", t("auditWorkbench.kpiFilterSuccess")),
     },
     {
       label: t("auditWorkbench.kpiFailure"),
@@ -160,7 +176,7 @@ export function AuditWorkbenchView() {
       icon: <IconCircleX size={18} />,
       onSelect: () => toggleArrayFilter("result", "failure"),
       active: filters.result.includes("failure"),
-      selectHint: t("auditWorkbench.kpiFilterFailure"),
+      selectHint: resultSelectHint("failure", t("auditWorkbench.kpiFilterFailure")),
     },
     {
       label: t("auditWorkbench.kpiHighRisk"),

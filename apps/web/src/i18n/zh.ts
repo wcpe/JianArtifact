@@ -1296,6 +1296,7 @@ export const zh = {
     kpiFilterFailure: "点击只看失败记录",
     kpiFilterHighRisk: "高危多为不可逆操作；点击聚焦失败记录",
     kpiFilterPending: "点击只看待确认的风险批次",
+    kpiFocusOnly: "已与其他结果一并选中，点击仅看此项",
     colCategory: "类别",
     colStatus: "结果",
     colDuration: "耗时",
