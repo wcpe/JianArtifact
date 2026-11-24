@@ -10,7 +10,6 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/wcpe/jianartifact/apps/server/internal/api"
 	"github.com/wcpe/jianartifact/apps/server/internal/config"
 )
 
@@ -74,26 +73,17 @@ func TestSearchIndexRoutesRegisteredThroughProductionRouter(t *testing.T) {
 		t.Fatalf("匿名触发重建 = %d，期望 401", code)
 	}
 
-	// 管理员：先自举再登录。
-	// 自举签发的首个管理员会话仍然有效；未登记强因子的管理员
-	// 再走密码登录只会得到 claim_required，不能取得第二个会话。
-	var boot api.LoginResponse
-	if code, body := request(http.MethodPost, "/api/v1/auth/bootstrap", "", api.BootstrapRequest{
-		Username: "admin", Password: "admin-pass-123",
-	}, &boot); code != http.StatusCreated {
-		t.Fatalf("自举状态 = %d：%s", code, body)
+	// 管理员：装配强认证后须走 claim_install 安装流取会话。
+	req := func(method, path, token string, body, out any) int {
+		code, raw := request(method, path, token, body, out)
+		_ = raw
+		return code
 	}
-	var login api.LoginResponse
-	if code, body := request(http.MethodPost, "/api/v1/auth/login", "", api.LoginRequest{
-		Username: "admin", Password: "admin-pass-123",
-	}, &login); code != http.StatusOK || login.Next != api.ClaimRequired || login.Token != "" {
-		t.Fatalf("登录状态 = %d next=%q：%s，期望 claim_required", code, login.Next, body)
-	}
-	login.Token = boot.Token
+	loginToken := cmdInstallAdmin(t, server, svc, "admin", "admin-pass-123", req)
 
 	// 状态端点：字段齐全（全新库上回填未开始 → ready=false、计数为 0）。
 	var status map[string]any
-	if code, body := request(http.MethodGet, "/api/v1/search/index", login.Token, nil, &status); code != http.StatusOK {
+	if code, body := request(http.MethodGet, "/api/v1/search/index", loginToken, nil, &status); code != http.StatusOK {
 		t.Fatalf("管理员读状态 = %d：%s", code, body)
 	}
 	for _, key := range []string{"ready", "indexed", "total", "lastId", "updatedAt"} {
@@ -108,11 +98,11 @@ func TestSearchIndexRoutesRegisteredThroughProductionRouter(t *testing.T) {
 	// 重建端点：202 受理。随后轮询状态直到 ready=true——空库回填是瞬时的，
 	// 这一步同时证明「受理后后台任务真的跑起来了」。
 	var accepted map[string]any
-	if code, body := request(http.MethodPost, "/api/v1/search/index/rebuild", login.Token, nil, &accepted); code != http.StatusAccepted {
+	if code, body := request(http.MethodPost, "/api/v1/search/index/rebuild", loginToken, nil, &accepted); code != http.StatusAccepted {
 		t.Fatalf("受理重建 = %d，期望 202：%s", code, body)
 	}
 	for i := 0; i < 200; i++ {
-		if code, body := request(http.MethodGet, "/api/v1/search/index", login.Token, nil, &status); code != http.StatusOK {
+		if code, body := request(http.MethodGet, "/api/v1/search/index", loginToken, nil, &status); code != http.StatusOK {
 			t.Fatalf("轮询状态 = %d：%s", code, body)
 		}
 		if status["ready"] == true {

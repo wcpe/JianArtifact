@@ -485,19 +485,11 @@ func TestApplicationHandlerLoginJWTAuthenticatesManagementWrite(t *testing.T) {
 		return resp.StatusCode
 	}
 
-	var bootstrap api.LoginResponse
-	if code := request(http.MethodPost, "/api/v1/auth/bootstrap", "", api.BootstrapRequest{Username: "admin", Password: "admin-pass-123"}, &bootstrap); code != http.StatusCreated {
-		t.Fatalf("HTTP 自举状态 = %d", code)
-	}
-	// 未登记强因子的管理员凭密码登录只得 claim_required；可凭据来自自举会话。
-	var login api.LoginResponse
-	if code := request(http.MethodPost, "/api/v1/auth/login", "", api.LoginRequest{Username: "admin", Password: "admin-pass-123"}, &login); code != http.StatusOK || login.Next != api.ClaimRequired || login.Token != "" {
-		t.Fatalf("HTTP 登录状态 = %d next=%q，期望 claim_required", code, login.Next)
-	}
-	login.Token = bootstrap.Token
+	// 装配强认证后首管理员须走 claim_install 安装流取会话。
+	token := cmdInstallAdmin(t, server, svc, "admin", "admin-pass-123", request)
 	format := api.CreateRepositoryRequestFormat("raw")
 	repoType := api.CreateRepositoryRequestType("hosted")
-	if code := request(http.MethodPost, "/api/v1/repositories", login.Token, api.CreateRepositoryRequest{
+	if code := request(http.MethodPost, "/api/v1/repositories", token, api.CreateRepositoryRequest{
 		Name: "jwt-created", Format: format, Type: repoType,
 	}, nil); code != http.StatusCreated {
 		t.Fatalf("登录 JWT 创建仓库状态 = %d，期望 201", code)

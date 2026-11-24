@@ -468,14 +468,18 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	}
 
 	return &appServices{
-		db:                  db,
-		users:               userRepo,
-		authSvc:             authSvc,
-		mfaSvc:              mfaSvc,
-		incidentSvc:         incidentSvc,
-		securityAudit:       securityAudit,
-		securityAuditQuery:  securityAuditQuery,
-		admission:           func() *domain.AdmissionService { s := domain.NewAdmissionService(db, blobs, userRepo, repoRepo, freeze); s.SetAssetService(assetSvc); return s }(),
+		db:                 db,
+		users:              userRepo,
+		authSvc:            authSvc,
+		mfaSvc:             mfaSvc,
+		incidentSvc:        incidentSvc,
+		securityAudit:      securityAudit,
+		securityAuditQuery: securityAuditQuery,
+		admission: func() *domain.AdmissionService {
+			s := domain.NewAdmissionService(db, blobs, userRepo, repoRepo, freeze)
+			s.SetAssetService(assetSvc)
+			return s
+		}(),
 		userSvc:             userSvc,
 		tokenSvc:            tokenSvc,
 		repoSvc:             repoSvc,

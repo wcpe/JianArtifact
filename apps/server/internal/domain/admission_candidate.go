@@ -10,6 +10,7 @@ import (
 	"io"
 	"mime"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -119,8 +120,13 @@ func (s *AdmissionService) Prepare(ctx context.Context, principal *auth.Principa
 	if _, err := rand.Read(random[:]); err != nil {
 		return AdmissionStatus{}, ErrAdmissionUnavailable
 	}
+	// 会话位：交互会话用 session_id，机器凭据用凭据号占位（CHECK 要求非空）。
+	sessionID := principal.SessionID
+	if sessionID == "" && principal.Kind == auth.KindToken {
+		sessionID = "token:" + strconv.FormatInt(principal.TokenID, 10)
+	}
 	row := repository.AdmissionCandidateRow{OperationID: op.String(), ObjectKey: blobstore.NewRegisteredPrivateCandidateKey(random), BootID: s.bootID, RepositoryID: repositoryID,
-		ActorUserID: principal.UserID, SessionID: principal.SessionID, AccountEpoch: principal.AccountEpoch, AuthMethod: principal.AuthSource, OriginRequestID: snapshot.OriginRequestID, ClientIP: snapshot.ClientIP.String(),
+		ActorUserID: principal.UserID, SessionID: sessionID, AccountEpoch: principal.AccountEpoch, AuthMethod: principal.AuthSource, OriginRequestID: snapshot.OriginRequestID, ClientIP: snapshot.ClientIP.String(),
 		ProxyTrust: string(snapshot.ProxyTrust), SourceTrustVersion: snapshot.SourceTrustVersion, CanonicalPath: canonicalPath, ContentType: contentType, State: "receiving", TargetVersion: 1,
 		ExpiresUnix: time.Now().UTC().Add(admissionLifetime).Unix()}
 	s.receiving.Store(row.OperationID, struct{}{})
@@ -427,11 +433,18 @@ func checkAdmissionPrincipal(p *auth.Principal) error {
 	if p == nil || p.UserID <= 0 {
 		return ErrAdmissionUnauthenticated
 	}
-	if p.Kind != auth.KindSession || p.AuthSource != auth.AuthSourceWebJWT || p.WebLoginDisabled {
+	switch {
+	case p.Kind == auth.KindSession && p.AuthSource == auth.AuthSourceWebJWT:
+		if p.WebLoginDisabled {
+			return ErrAdmissionForbidden
+		}
+		if p.JTI == "" || p.SessionID == "" {
+			return ErrAdmissionUnauthenticated
+		}
+	case p.Kind == auth.KindToken && p.TokenID > 0:
+		// 机器凭据：凭据位由 TokenID 承载，协议写入口允许提交候选。
+	default:
 		return ErrAdmissionForbidden
-	}
-	if p.JTI == "" || p.SessionID == "" {
-		return ErrAdmissionUnauthenticated
 	}
 	return nil
 }
@@ -523,4 +536,82 @@ func (s *AdmissionService) Decide(ctx context.Context, p *auth.Principal, operat
 
 func (s *AdmissionService) repoByID(ctx context.Context, id int64) (*repository.Repository, error) {
 	return s.repos.GetByID(id)
+}
+
+// ErrAdmissionIntegrityRejected 表示隔离检测裁定硬完整性失败；上传方得到非成功响应。
+var ErrAdmissionIntegrityRejected = errors.New("候选完整性裁定失败")
+
+// IntakeCandidate 是 Raw hosted 写入的准入入口：私有接收→隔离完整性裁定。
+// 返回处于 awaiting_review 的候选行；受损内容落 rejected 且不返回字节。
+func (s *AdmissionService) IntakeCandidate(ctx context.Context, principal *auth.Principal, repositoryID int64, canonicalPath, contentType string, body io.Reader) (repository.AdmissionCandidateRow, error) {
+	status, err := s.Prepare(ctx, principal, repositoryID, canonicalPath, contentType, body, nil)
+	if err != nil {
+		return repository.AdmissionCandidateRow{}, err
+	}
+	status, err = s.Status(ctx, principal, status.OperationID)
+	if err != nil {
+		return repository.AdmissionCandidateRow{}, err
+	}
+	switch status.State {
+	case "awaiting_review":
+	case "rejected":
+		return repository.AdmissionCandidateRow{}, ErrAdmissionIntegrityRejected
+	default:
+		return repository.AdmissionCandidateRow{}, ErrAdmissionUnavailable
+	}
+	row, err := s.authorizedRow(ctx, principal, status.OperationID)
+	if err != nil {
+		return repository.AdmissionCandidateRow{}, admissionServiceError(err)
+	}
+	return row, nil
+}
+
+// PromoteBytes 复核完整性后打开封存字节供提升读取；调用方负责发布及 MarkPublished。
+func (s *AdmissionService) PromoteBytes(ctx context.Context, row repository.AdmissionCandidateRow) (io.ReadCloser, int64, error) {
+	if row.State != "awaiting_review" || row.BlobHash == nil || row.SizeBytes == nil {
+		return nil, 0, ErrAdmissionUnavailable
+	}
+	if err := s.blobs.VerifyRegisteredPrivateCandidate(ctx, row.ObjectKey, *row.BlobHash, *row.SizeBytes); err != nil {
+		return nil, 0, ErrAdmissionUnavailable
+	}
+	rc, size, err := s.blobs.OpenRegisteredPrivateCandidate(ctx, row.ObjectKey)
+	if err != nil {
+		return nil, 0, ErrAdmissionUnavailable
+	}
+	return rc, size, nil
+}
+
+// MarkPublished 在提升字节已被发布链提交后同事务置 published 并持久化资产号。
+func (s *AdmissionService) MarkPublished(ctx context.Context, principal *auth.Principal, row repository.AdmissionCandidateRow, assetID int64) (AdmissionStatus, error) {
+	row.PublishedAssetID = &assetID
+	return s.transitionStatus(ctx, principal, row, "published", "")
+}
+
+// SubmitCandidate 完整内联流水线（内部/测试用）：Intake → 提升 → 发布 → 标记。
+func (s *AdmissionService) SubmitCandidate(ctx context.Context, principal *auth.Principal, repositoryID int64, canonicalPath, contentType string, body io.Reader) (AdmissionStatus, int64, error) {
+	row, err := s.IntakeCandidate(ctx, principal, repositoryID, canonicalPath, contentType, body)
+	if err != nil {
+		return AdmissionStatus{OperationID: row.OperationID}, 0, err
+	}
+	if s.assets == nil {
+		return AdmissionStatus{OperationID: row.OperationID}, 0, ErrAdmissionUnavailable
+	}
+	rc, size, err := s.PromoteBytes(ctx, row)
+	if err != nil {
+		return AdmissionStatus{OperationID: row.OperationID}, 0, err
+	}
+	defer rc.Close()
+	repo, err := s.repos.GetByID(row.RepositoryID)
+	if err != nil {
+		return AdmissionStatus{OperationID: row.OperationID}, 0, ErrAdmissionUnavailable
+	}
+	asset, err := s.assets.Put(repo.Name, row.CanonicalPath, io.LimitReader(rc, size), row.ContentType)
+	if err != nil {
+		return AdmissionStatus{OperationID: row.OperationID}, 0, admissionServiceError(err)
+	}
+	st, err := s.MarkPublished(ctx, principal, row, asset.ID)
+	if err != nil {
+		return st, 0, err
+	}
+	return st, asset.ID, nil
 }

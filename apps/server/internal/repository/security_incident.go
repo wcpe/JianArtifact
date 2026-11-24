@@ -229,14 +229,14 @@ func ReleaseEvidenceHoldTx(ctx context.Context, tx *sqlx.Tx, holdID, actionID st
 // ── 恢复隔离闸与安全状态水位（FR-168 §3.4 最小切片）─────────────────────────
 
 type RecoveryGate struct {
-	State             string `db:"state"`
+	State             string  `db:"state"`
 	RestoreID         *string `db:"restore_id"`
-	SecurityEpoch     int64  `db:"security_epoch"`
-	CheckpointStatus  string `db:"checkpoint_status"`
-	VerifiedWatermark int64  `db:"verified_watermark"`
-	GapStatus         string `db:"gap_status"`
-	Reason            string `db:"reason"`
-	UpdatedAt         int64  `db:"updated_at"`
+	SecurityEpoch     int64   `db:"security_epoch"`
+	CheckpointStatus  string  `db:"checkpoint_status"`
+	VerifiedWatermark int64   `db:"verified_watermark"`
+	GapStatus         string  `db:"gap_status"`
+	Reason            string  `db:"reason"`
+	UpdatedAt         int64   `db:"updated_at"`
 }
 
 const (

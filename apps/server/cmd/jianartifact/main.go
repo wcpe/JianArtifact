@@ -218,6 +218,7 @@ func newApplicationHandler(cfg *config.Config, svc *appServices, assets fs.FS) h
 		rawHandler.SetAudit(apiHandlers.AuditLog)
 		rawHandler.SetOperationAudit(apiHandlers.ProtocolAssetOperationAudit)
 		rawHandler.SetSecurityAudit(svc.securityAudit)
+		rawHandler.SetAdmission(svc.admission) // hosted Raw 写入走私有候选准入
 	}
 
 	var dispatcher *protocol.Dispatcher

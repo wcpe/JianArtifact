@@ -601,18 +601,32 @@ func TestSecurityAuditHTTPRawPublish(t *testing.T) {
 			path := "/repository/" + repo.Name + (&url.URL{Path: "/" + tc.path}).EscapedPath()
 			status, requestID, body := auditTestRequest(t, server, "PUT", path, "application/octet-stream", content, token)
 			if tc.table != "" {
-				if status != 503 || !strings.Contains(body, `"security_audit_unavailable"`) || strings.Contains(body, "test-private-db-error") {
+				// 准入先行：对象明细写失败落在候选封存事件上，对外为 admission_unavailable；
+				// 事件头写失败发生在提升发布时，候选及其封存事件对象属合法残留。
+				wantCode := "security_audit_unavailable"
+				wantObjects := 0
+				if tc.table == "security_event_object" {
+					wantCode = "admission_unavailable"
+				}
+				if tc.table == "security_event" {
+					wantObjects = 1
+				}
+				if status != 503 || !strings.Contains(body, `"`+wantCode+`"`) || strings.Contains(body, "test-private-db-error") {
 					t.Errorf("故障响应：%d %s", status, body)
 				}
 				status, _, _ := auditTestRequest(t, server, "GET", path, "", "", "")
 				if status != 404 {
 					t.Errorf("回滚后制品不可公开：%d", status)
 				}
-				for _, q := range []string{`SELECT count(*) FROM asset`, `SELECT count(*) FROM asset_path_fts WHERE asset_path_fts MATCH 'failure'`, `SELECT count(*) FROM replication_operation_outbox`, `SELECT count(*) FROM security_event WHERE event_type='asset.change_committed'`, `SELECT count(*) FROM security_event_object`} {
+				for _, q := range []string{`SELECT count(*) FROM asset`, `SELECT count(*) FROM asset_path_fts WHERE asset_path_fts MATCH 'failure'`, `SELECT count(*) FROM replication_operation_outbox`, `SELECT count(*) FROM security_event WHERE event_type='asset.change_committed'`} {
 					var n int
 					if err := svc.db.Get(&n, q); err != nil || n != 0 {
 						t.Errorf("回滚后残留：%s => %d / %v", q, n, err)
 					}
+				}
+				var n int
+				if err := svc.db.Get(&n, `SELECT count(*) FROM security_event_object`); err != nil || n != wantObjects {
+					t.Errorf("封存事件对象残留不符：%d，期望 %d / %v", n, wantObjects, err)
 				}
 				return
 			}

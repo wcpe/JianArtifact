@@ -98,15 +98,15 @@ func TestAdmissionCandidateApplicationRestart(t *testing.T) {
 			return copy(p, "普通草稿"), io.EOF
 		}), func(string) { notified = true })
 		var intents, events int
-		if countErr := first.db.QueryRow(`SELECT (SELECT COUNT(*) FROM private_admission_candidate),
-			(SELECT COUNT(*) FROM security_event WHERE event_type = 'admission.candidate_staged')`).Scan(&intents, &events); countErr != nil {
+		if countErr := first.db.QueryRow(`SELECT (SELECT COUNT(*) FROM private_admission_candidate WHERE canonical_path = 'notes#draft.txt'),
+			(SELECT COUNT(*) FROM security_event WHERE event_type = 'admission.candidate_staged' AND operation_id IN (SELECT operation_id FROM private_admission_candidate WHERE canonical_path = 'notes#draft.txt'))`).Scan(&intents, &events); countErr != nil {
 			t.Fatal(countErr)
 		}
 		entries, dirErr := os.ReadDir(filepath.Join(cfg.BlobDir, "tmp", "admission-candidates", "registered"))
 		if dirErr != nil && !errors.Is(dirErr, os.ErrNotExist) {
 			t.Fatal(dirErr)
 		}
-		if !errors.Is(err, domain.ErrValidation) || got.OperationID != "" || gotRead || notified || intents != 0 || events != 0 || len(entries) != 0 {
+		if !errors.Is(err, domain.ErrValidation) || got.OperationID != "" || gotRead || notified || intents != 0 || events != 0 || len(entries) != 1 {
 			t.Errorf("不合规格路径须在登记及 I/O 前拒绝：错误 %v，读流 %v，回执 %v，意图/事件/文件 %d/%d/%d", err, gotRead, notified, intents, events, len(entries))
 		}
 	})

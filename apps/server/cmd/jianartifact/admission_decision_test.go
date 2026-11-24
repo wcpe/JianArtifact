@@ -134,3 +134,63 @@ func TestAdmissionDecisionEndToEnd(t *testing.T) {
 	// 不存在的操作号统一 404。
 	decide("00000000-0000-4000-8000-000000000000", "approve", adminToken, http.StatusNotFound)
 }
+
+// TestRawPutViaAdmissionEndToEnd 交互会话的 hosted Raw PUT 经私有候选准入：净内容自动发布，
+// 字节在提升前不可经公开路径读取；候选状态持久为 published。
+func TestRawPutViaAdmissionEndToEnd(t *testing.T) {
+	cfg, app := newSourceTestApplication(t, "raw")
+	if _, _, err := app.authSvc.Bootstrap("raw-adm", auditTestPassword); err != nil {
+		t.Fatal(err)
+	}
+	owner, err := app.userSvc.Create("raw-owner", auditTestPassword, "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := app.repoSvc.Create("raw-adm-hosted", "raw", "hosted", "public", "", repository.RepositoryConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.NewAclRepo(app.db).Replace(repo.ID, []repository.Acl{{SubjectID: owner.ID, Action: repository.ActionPublish}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.securityAudit.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(newApplicationHandler(cfg, app, nil))
+	t.Cleanup(server.Close)
+	issuer, _, err := app.tokenSvc.Create(owner.ID, "raw-issuer")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 凭据 PUT → 准入管线 → 净内容提升并返回 201（协议主体为机器凭据）。
+	status, _, body := auditTestRequest(t, server, http.MethodPut, "/repository/"+repo.Name+"/v1.txt", "text/plain", "经过准入的净字节", issuer)
+	if status != http.StatusCreated {
+		t.Fatalf("准入 PUT 应 201：%d %s", status, body)
+	}
+	// 候选须为 published 且带出资产号；同一主体状态查询不回 interim。
+	var opID, state string
+	var assetID *int64
+	if err := app.db.QueryRow(`SELECT operation_id,state,published_asset_id FROM private_admission_candidate ORDER BY rowid DESC LIMIT 1`).Scan(&opID, &state, &assetID); err != nil {
+		t.Fatal(err)
+	}
+	if state != "published" || assetID == nil {
+		t.Fatalf("净候选应提升为 published：%s", state)
+	}
+	status, _, body = auditTestRequest(t, server, http.MethodGet, "/repository/"+repo.Name+"/v1.txt", "", "", "")
+	if status != http.StatusOK || body != "经过准入的净字节" {
+		t.Fatalf("发布后公开读取不符：%d %q", status, body)
+	}
+	status, _, body = auditTestRequest(t, server, http.MethodPost, "/api/v1/auth/login", "application/json",
+		`{"username":"raw-owner","password":"`+auditTestPassword+`"}`, "")
+	if status != http.StatusOK {
+		t.Fatalf("登录失败：%d %s", status, body)
+	}
+	token := queryDecode[struct {
+		Token string `json:"token"`
+	}](t, body).Token
+	status, _, body = auditTestRequest(t, server, http.MethodGet, "/api/v1/security/admission/candidates/"+opID, "", "", token)
+	if status != http.StatusOK || !strings.Contains(body, `"state":"published"`) {
+		t.Fatalf("状态查询不符：%d %s", status, body)
+	}
+}
