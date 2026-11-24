@@ -260,7 +260,7 @@ proxy/group 读路径对「确认不存在」的路径做短窗负缓存（默�
 - `POST /api/v1/maintenance/asset-trash/restore`：`{ids[]}` 恢复；目标路径已存在时跳过并报 `conflicts`，绝不覆盖。
 - `POST /api/v1/maintenance/asset-trash/purge`：`{ids[]}` 彻底清理：先标 `purged` 落库再释放 blob。确认词由控制台界面按界面语言校验（如中文界面为「清理」），**不是**请求参数。
 
-降级注意：回滚到本变更之前的版本前须先清空回收站，否则旧版 GC 会把 `asset_trash` 引用的 blob 判为孤儿回收（见迁移 `0074_asset_trash.sql` 头注）。
+降级注意：回滚到本变更之前的版本前须先清空回收站，否则旧版 GC 会把 `asset_trash` 引用的 blob 判为孤儿回收（见迁移 `0075_asset_trash.sql` 头注）。
 
 ### 备份包导入（FR-137，三通道）
 
