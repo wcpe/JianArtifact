@@ -27,6 +27,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/jmoiron/sqlx"
@@ -246,33 +247,58 @@ func (s *AssetService) snapshotMetadataPointedBuild(repo *repository.Repository,
 		if err != nil || asset == nil {
 			continue
 		}
-		// 元数据正常只有几 KB；超限不读入内存——巨型伪造 metadata 会耗尽服务内存。
-		// 跳过它等于「指向不明」，走保守删除分支。
-		if asset.Size > 4<<20 {
-			continue
-		}
-		data, err := s.readAsset(asset)
+		rc, _, err := s.blobs.Open(asset.BlobHash)
 		if err != nil {
 			continue
 		}
-		var meta struct {
-			Versioning struct {
-				Snapshot struct {
-					Timestamp   string `xml:"timestamp"`
-					BuildNumber string `xml:"buildNumber"`
-				} `xml:"snapshot"`
-			} `xml:"versioning"`
-		}
-		if xml.Unmarshal(data, &meta) != nil {
-			continue
-		}
-		ts, bn := meta.Versioning.Snapshot.Timestamp, meta.Versioning.Snapshot.BuildNumber
+		// 流式解析而非整体读入：超大伪造 metadata 不再撑爆内存（限长兜底 CPU），
+		// 指向存活构建的合法大文件也不会被误判成「指向不明」而删掉。
+		ts, bn := parseSnapshotPointedBuild(io.LimitReader(rc, 8<<20))
+		_ = rc.Close()
 		if ts == "" || bn == "" {
 			continue
 		}
 		return ts + "-" + bn
 	}
 	return ""
+}
+
+// parseSnapshotPointedBuild 流式读出 maven-metadata.xml 里 versioning>snapshot 的
+// timestamp 与 buildNumber，读到两个值立即返回。输入可能被限长截断或损坏，
+// 此时返回已解析到的部分（可能为空串），由调用方决定跳过。
+func parseSnapshotPointedBuild(r io.Reader) (timestamp, buildNumber string) {
+	dec := xml.NewDecoder(r)
+	var depth []string
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return timestamp, buildNumber
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			depth = append(depth, t.Name.Local)
+		case xml.EndElement:
+			if len(depth) > 0 {
+				depth = depth[:len(depth)-1]
+			}
+		case xml.CharData:
+			if len(depth) == 4 && depth[1] == "versioning" && depth[2] == "snapshot" {
+				switch depth[3] {
+				case "timestamp":
+					if timestamp == "" {
+						timestamp = strings.TrimSpace(string(t))
+					}
+				case "buildNumber":
+					if buildNumber == "" {
+						buildNumber = strings.TrimSpace(string(t))
+					}
+				}
+			}
+		}
+		if timestamp != "" && buildNumber != "" {
+			return timestamp, buildNumber
+		}
+	}
 }
 
 // deleteAssetsDeadOn 硬删除一批**派生文件**（如 metadata），不进回收站。
