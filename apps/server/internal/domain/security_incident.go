@@ -337,10 +337,27 @@ func (s *SecurityIncidentService) ApplyEvidenceHold(actionID string) func(*sqlx.
 			ByteState: repository.EvidenceHoldByteUnknown, State: repository.EvidenceHoldStateActive,
 			ActionID: actionID, CreatedAt: now.Unix(),
 		}
+		// 字节状态裁决：摘要被已发布资产引用即 present（字节在内容寻址存储内），否则 metadata_only。
+		var cnt int
+		if err := tx.GetContext(context.Background(), &cnt,
+			`SELECT COUNT(*) FROM asset WHERE blob_hash = ? OR blob_hash = ?`, tg.Target, "sha256:"+tg.Target); err != nil {
+			return "", "", fmt.Errorf("裁决字节状态：%w", err)
+		}
+		if cnt > 0 {
+			h.ByteState = repository.EvidenceHoldBytePresent
+			var sz *int64
+			_ = tx.GetContext(context.Background(), &sz,
+				`SELECT MIN(size) FROM asset WHERE blob_hash = ? OR blob_hash = ?`, tg.Target, "sha256:"+tg.Target)
+			if sz != nil {
+				h.SizeBytes = *sz
+			}
+		} else {
+			h.ByteState = repository.EvidenceHoldByteMetadataOnly
+		}
 		if err := repository.InsertEvidenceHoldTx(context.Background(), tx, h); err != nil {
 			return "", "", fmt.Errorf("登记保全：%w", err)
 		}
-		return "applied", "保全已登记（byte_state=unknown）", nil
+		return "applied", "保全已登记（byte_state=" + h.ByteState + "）", nil
 	}
 }
 

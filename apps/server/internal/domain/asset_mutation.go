@@ -360,6 +360,10 @@ func (c *AssetMutationCoordinator) RemoveIfUnreferenced(hash string) error {
 	defer finish()
 	c.gate.Lock()
 	count, err := c.mutations.CountBlobReferences(hash)
+	if err == nil && count == 0 {
+		// 活跃证据保全对摘要构成删除预约：字节不得回收。
+		count, err = c.mutations.CountActiveHoldReferences(hash)
+	}
 	c.gate.Unlock()
 	if err != nil || count != 0 {
 		return err
