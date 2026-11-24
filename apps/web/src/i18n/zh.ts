@@ -1401,6 +1401,7 @@ export const zh = {
     drawerContextRequestId: "请求 ID：{{id}}",
     drawerContextToken: "令牌预览：{{token}}",
     drawerContextUserAgent: "User-Agent：{{ua}}",
+    drawerContextHeaders: "请求头（白名单）",
     drawerContextBody: "请求体（已脱敏）",
     confirmTitle: "确认已处理",
     confirmPopover: "确认该批次全部风险记录已处理？确认后写入确认人与时间。",

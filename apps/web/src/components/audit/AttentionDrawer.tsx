@@ -213,6 +213,7 @@ function BatchMemberRow({ event }: { event: AuditEvent }) {
         userAgent?: string;
         tokenPreview?: string;
         bodyPreview?: string;
+        httpHeaders?: string;
       }
     | undefined;
   // 目标文本对设置类事件是键名、对制品事件是路径，二者都是「改了什么」的主体。
@@ -222,6 +223,7 @@ function BatchMemberRow({ event }: { event: AuditEvent }) {
     http?.userAgent ||
     http?.tokenPreview ||
     http?.bodyPreview ||
+    http?.httpHeaders ||
     event.clientIp ||
     event.durationMs ||
     event.durationServerMs,
@@ -316,6 +318,19 @@ function BatchMemberRow({ event }: { event: AuditEvent }) {
                 {t("auditWorkbench.drawerContextUserAgent", { ua: http.userAgent })}
               </Text>
             ) : null}
+            {http?.httpHeaders ? (
+              <Box mt={2}>
+                <Text size="xs" c="dimmed" mb={2}>
+                  {t("auditWorkbench.drawerContextHeaders")}
+                </Text>
+                <Code
+                  block
+                  style={{ fontSize: 11, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}
+                >
+                  {http.httpHeaders}
+                </Code>
+              </Box>
+            ) : null}
             {http?.bodyPreview ? (
               <Box mt={2}>
                 <Text size="xs" c="dimmed" mb={2}>
@@ -370,7 +385,8 @@ export function AttentionDrawer({
 
   const detail = state.data;
   // 批次概览：把「谁做了什么」压成可扫读的结论，替代此前重复的计数与技术字段铺开。
-  const overview = detail ? summarizeBatch(detail.items, detail.attention, t) : null;
+  // 概览随成员分页刷新：加载更多后统计的是已加载的全部成员，而非首屏样本。
+  const overview = detail ? summarizeBatch(items, detail.attention, t) : null;
 
   const acknowledge = async () => {
     setAcknowledging(true);
@@ -459,7 +475,7 @@ export function AttentionDrawer({
           <BatchOverview
             overview={overview}
             totalCount={detail.totalCount}
-            sampled={detail.items.length < detail.totalCount}
+            sampled={items.length < detail.totalCount}
           />
           {detail.attention.state === "unacknowledged" ? (
             <Popover

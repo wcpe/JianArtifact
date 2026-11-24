@@ -1474,6 +1474,7 @@ export const en = {
     drawerContextRequestId: "Request ID: {{id}}",
     drawerContextToken: "Token preview: {{token}}",
     drawerContextUserAgent: "User-Agent: {{ua}}",
+    drawerContextHeaders: "Request headers (allowlist)",
     drawerContextBody: "Request body (redacted)",
     confirmTitle: "Confirm handled",
     confirmPopover:
