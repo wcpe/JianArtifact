@@ -344,3 +344,72 @@ func TestAuditRequestHeadersAndServerDurationProjection(t *testing.T) {
 			replEvent.HTTPHeaders, replEvent.DurationServerMs)
 	}
 }
+
+// TestAttentionFilterCountsPartialAsRisk 钉住确认筛选与批次口径的一致性：
+// 批量操作部分成功会落 result='partial'，风险批次（isRiskEvent → classifyAuditResult
+// 将 partial 归入失败）已把它计入成员；确认筛选若漏掉 'partial'，这类记录
+// 在待确认与已确认列表里都会消失。
+func TestAttentionFilterCountsPartialAsRisk(t *testing.T) {
+	db, err := persistence.Open(filepath.Join(t.TempDir(), "observability-attention.db"))
+	if err != nil {
+		t.Fatalf("打开数据库：%v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := db.Migrate(); err != nil {
+		t.Fatalf("迁移数据库：%v", err)
+	}
+
+	now := time.Now().UTC()
+	seed := func(action, result string) {
+		if _, err := db.Exec(`INSERT INTO audit_log
+			(ts, actor, action, entity_type, entity_key, repo, detail, result, ip, source_node,
+			 status_code, duration_ms, user_agent, body_preview, http_headers)
+			VALUES (?, 'admin', ?, 'repository', 'maven-public', 'maven-public', '', ?, '203.0.113.7', '',
+			 200, 5, 'agent/1.0', '', '')`, now.Format(time.RFC3339Nano), action, result); err != nil {
+			t.Fatalf("插入审计事件：%v", err)
+		}
+	}
+	seed("publish_policy.update", "partial")
+	seed("publish_policy.update", "ok")
+
+	repo := NewAuditObservabilityRepo(db)
+	filter := ObservabilityFilter{
+		From:       now.Add(-time.Hour).Format(time.RFC3339Nano),
+		To:         now.Add(time.Minute).Format(time.RFC3339Nano),
+		AuditMaxID: 2,
+	}
+
+	filter.Attention = "pending"
+	pending, err := repo.ListEvents(filter)
+	if err != nil {
+		t.Fatalf("待确认筛选：%v", err)
+	}
+	if len(pending) != 1 || pending[0].Result != "partial" {
+		t.Fatalf("待确认应只含 partial 风险记录：%+v", pending)
+	}
+
+	// 确认 partial 记录后：pending 空、acknowledged 只剩它。
+	if _, _, err := repo.AcknowledgeAndAudit(
+		[]ObservabilityEvent{{Source: "audit", SourceEventID: 1}},
+		nil, "admin", "web",
+		now.Format(time.RFC3339Nano),
+		AuditLogEntry{TS: now.Format(time.RFC3339Nano), Action: "audit.attention_acknowledge", Actor: "admin"},
+	); err != nil {
+		t.Fatalf("确认记录：%v", err)
+	}
+	pending, err = repo.ListEvents(filter)
+	if err != nil {
+		t.Fatalf("再查待确认：%v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("确认后待确认应为空：%+v", pending)
+	}
+	filter.Attention = "acknowledged"
+	acked, err := repo.ListEvents(filter)
+	if err != nil {
+		t.Fatalf("已确认筛选：%v", err)
+	}
+	if len(acked) != 1 || acked[0].Result != "partial" {
+		t.Fatalf("已确认应只含 partial 风险记录：%+v", acked)
+	}
+}
