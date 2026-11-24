@@ -77,6 +77,12 @@ func main() {
 			fmt.Fprintln(os.Stderr, "探活失败：", err)
 			os.Exit(1)
 		}
+	case "query":
+		// 远程查询：不碰本地数据目录，失败时按「用法错误 2 / 其它 1」区分退出码。
+		if err := queryCmd(args[1:]); err != nil {
+			fmt.Fprintln(os.Stderr, "query 子命令失败：", err)
+			os.Exit(queryExitCode(err))
+		}
 	case "help", "-h", "--help":
 		usage(os.Stdout)
 	default:
@@ -130,6 +136,9 @@ func usage(w io.Writer) {
                      交互终端下目标非空会二次确认，--yes 跳过；无 TTY 时
                      --overwrite 即视为已确认。导入后需重启服务方可生效。
   healthcheck        对本地 /readyz 探活，供容器健康检查
+  query repos|ls|find|get|usage|api
+                     远程查询远端实例（内容类型校验：收到前端页面立即非零退出）
+                     详见 jianartifact query help
   help               显示本帮助
 
 环境变量：
@@ -154,12 +163,16 @@ func usage(w io.Writer) {
   JIAN_TLS_ADDR      HTTPS 监听地址（为空则不启用 HTTPS）
   JIAN_TLS_CERT      TLS 证书 PEM 路径（配置 JIAN_TLS_ADDR 时必填）
   JIAN_TLS_KEY       TLS 私钥 PEM 路径（配置 JIAN_TLS_ADDR 时必填）
+  JIAN_SERVER       query 子命令的远端实例基址（形如 https://host:port）
+  JIAN_TOKEN        query 子命令的访问令牌（也可用 --token 覆盖）
 
 示例：
   jianartifact run
   jianartifact admin reset --username admin
   jianartifact admin backfill-checksums --all
   jianartifact status
+  jianartifact query repos
+  jianartifact query ls maven-public/org/springframework
 `, version)
 }
 

@@ -21,6 +21,45 @@ import (
 // 0.1.0 无外部依赖，检查集合为空（恒就绪）；后续版本注入 SQLite / blob 存储等自检。
 type ReadinessCheck func() error
 
+// spaRoutePrefixes 是允许回退到前端 index.html 的路由**首段**白名单。
+// 来源为前端真实路由表 apps/web/src/app/router.tsx，新增前端页面时必须同步登记，
+// 否则该页面刷新后会 404。空串代表根路径 "/"（其首段为空）。
+//
+// 为什么用白名单而不是黑名单：此前 NoRoute 只拒绝协议前缀，其余路径一律回退 index.html，
+// 于是 /api/v1/nonexistent、/org/x/maven-metadata.xml、/llms.txt 这类"不像前端页面"的
+// 请求也拿到 200 + HTML。AI agent 与工具链会把这段 HTML 当成 XML / JSON 数据解析，
+// 进而给出基于幻觉的结论。收窄为白名单后只有前端真实路由才回退，其余一律 404 + JSON。
+//
+// 为什么静态产物（/assets/*、favicon 等）不登记在白名单里：它们在 NoRoute 中先按真实文件
+// 命中即返回（见 mountStatic），根本不走到白名单判定；未命中说明文件确实不存在，此时
+// 返回 404 比返回首页 HTML 更正确——浏览器把 HTML 当 JS / CSS 解析只会得到语法错误。
+var spaRoutePrefixes = map[string]struct{}{
+	"":                {}, // 根路径 "/"
+	"setup":           {},
+	"login":           {}, // 兼容旧链接，前端重定向到 /repositories
+	"p":               {}, // /p/:name 公开链接别名
+	"repositories":    {},
+	"search":          {},
+	"licenses":        {},
+	"settings":        {},
+	"audit-logs":      {},
+	"host-monitoring": {},
+	"dashboard":       {},
+	"users":           {},
+	"user-groups":     {},
+	"tokens":          {},
+	"migrations":      {},
+	"maintenance":     {},
+	"security":        {},
+}
+
+// spaFirstSegment 取请求路径的首段，用于 SPA 回退白名单判定。
+// 先补前导 "/" 再 path.Clean，使 "repositories/x"、"//repositories/x"、"repositories/"
+// 等写法都归一到同一首段；Clean 保证结果以 "/" 开头，故切分后至少有 2 段。
+func spaFirstSegment(requestPath string) string {
+	return strings.SplitN(path.Clean("/"+requestPath), "/", 3)[1]
+}
+
 // Server 实现契约生成的 api.ServerInterface，并持有版本与就绪检查集合。
 // 管理与状态端点由注入的 api.ServerInterface（api.Handlers）经嵌入提供；
 // Server 自身覆盖 GetHealthz / GetReadyz，使无依赖装配（如测试）也能提供健康探针。
@@ -262,6 +301,13 @@ func (s *Server) mountStatic(r *gin.Engine, assets fs.FS) {
 		c.Request.URL.Path = "/"
 		fileServer.ServeHTTP(c.Writer, c.Request)
 	}
+	// 未命中契约路由且不属于前端页面时的统一出口：JSON 错误体，与 api / auth 的
+	// 错误格式保持一致（{"error":{"code":...,"message":...}}），
+	// 避免调用方拿到 HTML 后误当数据解析。
+	notFound := func(c *gin.Context) {
+		c.Header("Cache-Control", "no-cache")
+		auth.WriteError(c, http.StatusNotFound, "not_found", "资源不存在")
+	}
 	r.NoRoute(func(c *gin.Context) {
 		if c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead {
 			c.Status(http.StatusNotFound)
@@ -273,11 +319,17 @@ func (s *Server) mountStatic(r *gin.Engine, assets fs.FS) {
 				return
 			}
 		}
-		name := strings.TrimPrefix(path.Clean(c.Request.URL.Path), "/")
+		// 先归一化路径：静态查找与白名单判定共用同一份清理结果，
+		// 避免「/repositories/../api/v1/x」这类写法让两者得出不同结论。
+		cleanPath := path.Clean(c.Request.URL.Path)
+		name := strings.TrimPrefix(cleanPath, "/")
 		if name == "" {
 			serveIndex(c)
 			return
 		}
+		// 真实静态资源查找排在白名单判定**之前**：/assets/*、favicon 等产物的首段
+		// 本就不在前端路由表里，若先判白名单它们会全部 404。命中文件即按原有缓存
+		// 策略返回，与「首段是否像前端路由」无关。
 		if f, err := assets.Open(name); err == nil {
 			_ = f.Close()
 			if strings.HasPrefix(name, "assets/") {
@@ -286,6 +338,11 @@ func (s *Server) mountStatic(r *gin.Engine, assets fs.FS) {
 				c.Header("Cache-Control", "no-cache")
 			}
 			fileServer.ServeHTTP(c.Writer, c.Request)
+			return
+		}
+		// 文件不存在：只有首段命中前端路由白名单才回退 index.html。
+		if _, ok := spaRoutePrefixes[spaFirstSegment(cleanPath)]; !ok {
+			notFound(c)
 			return
 		}
 		serveIndex(c)
