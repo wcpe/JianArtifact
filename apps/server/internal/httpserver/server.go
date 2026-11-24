@@ -50,6 +50,7 @@ var spaRoutePrefixes = map[string]struct{}{
 	"tokens":          {},
 	"migrations":      {},
 	"maintenance":     {},
+	"security":        {},
 }
 
 // spaFirstSegment 取请求路径的首段，用于 SPA 回退白名单判定。

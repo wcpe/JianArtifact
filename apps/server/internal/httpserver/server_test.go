@@ -228,6 +228,7 @@ func TestWhitelistedFrontendRoutesFallbackToIndex(t *testing.T) {
 		"/migrations",
 		"/migrations/new",
 		"/maintenance",
+		"/security",
 		"/p/somename",
 	} {
 		t.Run(path, func(t *testing.T) {
