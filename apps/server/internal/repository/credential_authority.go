@@ -160,10 +160,39 @@ func (r *UserRepo) CredentialTokenAccount(ctx context.Context, digest string) (C
 	return row.CredentialAccount, row.CredentialToken, err
 }
 
-func InsertCredentialSessionTx(ctx context.Context, tx *sqlx.Tx, u CredentialAccount, claims *auth.Claims) error {
-	_, err := tx.ExecContext(ctx, `INSERT INTO credential_session(session_id,jti,user_id,account_epoch,expires_at) VALUES(?,?,?,?,?)`,
-		claims.SessionID, claims.ID, u.ID, u.Epoch, claims.ExpiresAt.Unix())
+func InsertCredentialSessionTx(ctx context.Context, tx *sqlx.Tx, u CredentialAccount, claims *auth.Claims, mfaVerifiedAt *int64) error {
+	_, err := tx.ExecContext(ctx, `INSERT INTO credential_session(session_id,jti,user_id,account_epoch,expires_at,mfa_verified_at) VALUES(?,?,?,?,?,?)`,
+		claims.SessionID, claims.ID, u.ID, u.Epoch, claims.ExpiresAt.Unix(), mfaVerifiedAt)
 	return err
+}
+
+// SessionMfaVerifiedAtTx 读会话的近期强认证水位；无记录/无水位返回 nil。
+func SessionMfaVerifiedAtTx(ctx context.Context, tx *sqlx.Tx, sessionID string) (*int64, error) {
+	var at *int64
+	err := tx.GetContext(ctx, &at,
+		`SELECT mfa_verified_at FROM credential_session WHERE session_id=? AND revoked_at IS NULL`, sessionID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return at, err
+}
+
+// MarkSessionMfaVerifiedTx 把会话水位提升到 now（step_up 确认后置位）。
+func MarkSessionMfaVerifiedTx(ctx context.Context, tx *sqlx.Tx, sessionID string, now int64) error {
+	res, err := tx.ExecContext(ctx,
+		`UPDATE credential_session SET mfa_verified_at=? WHERE session_id=? AND revoked_at IS NULL`,
+		now, sessionID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return ErrSecurityChallengeRejected
+	}
+	return nil
 }
 
 // LoginCredentialAccountTx 只接受由已观察账号快照授权的本地会话签发。

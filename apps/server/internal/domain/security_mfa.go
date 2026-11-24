@@ -32,6 +32,8 @@ var (
 	ErrMfaRequired = errors.New("mfa_required")
 	// ErrAuthRateLimited 表示账号或来源的挑战签发超过有界限流。
 	ErrAuthRateLimited = errors.New("auth_rate_limited")
+	// ErrRecentMfaRequired 表示敏感操作需要窗口内的近期强认证水位。
+	ErrRecentMfaRequired = errors.New("recent_mfa_required")
 )
 
 // SecurityMfaService 管理挑战、TOTP 因子与恢复码的原子生命周期。

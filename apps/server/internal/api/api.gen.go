@@ -3572,6 +3572,21 @@ type MfaStatusResponse struct {
 	RecoveryCodesRemaining int  `json:"recoveryCodesRemaining"`
 }
 
+// MfaStepUpChallenge defines model for MfaStepUpChallenge.
+type MfaStepUpChallenge struct {
+	ChallengeId    string `json:"challengeId"`
+	ChallengeToken string `json:"challengeToken"`
+
+	// ExpiresAt RFC3339
+	ExpiresAt string `json:"expiresAt"`
+}
+
+// MfaVerifiedResponse defines model for MfaVerifiedResponse.
+type MfaVerifiedResponse struct {
+	// MfaVerifiedAt 会话近期强认证水位（RFC3339）
+	MfaVerifiedAt string `json:"mfaVerifiedAt"`
+}
+
 // MfaVerifyRequest defines model for MfaVerifyRequest.
 type MfaVerifyRequest struct {
 	// ChallengeToken login_mfa 受限挑战明文
@@ -5347,6 +5362,9 @@ type ConfirmMfaEnrollJSONRequestBody = MfaConfirmRequest
 // RecoverLoginMfaJSONRequestBody defines body for RecoverLoginMfa for application/json ContentType.
 type RecoverLoginMfaJSONRequestBody = MfaRecoverRequest
 
+// VerifyMfaStepUpJSONRequestBody defines body for VerifyMfaStepUp for application/json ContentType.
+type VerifyMfaStepUpJSONRequestBody = MfaVerifyRequest
+
 // VerifyLoginMfaJSONRequestBody defines body for VerifyLoginMfa for application/json ContentType.
 type VerifyLoginMfaJSONRequestBody = MfaVerifyRequest
 
@@ -5767,6 +5785,12 @@ type ServerInterface interface {
 	// GetMfaStatus 当前会话账号的强因子状态
 	// (GET /api/v1/auth/mfa/status)
 	GetMfaStatus(c *gin.Context)
+	// BeginMfaStepUp 为当前会话签发 step_up 受限挑战（敏感操作前的强认证提升）
+	// (POST /api/v1/auth/mfa/step-up)
+	BeginMfaStepUp(c *gin.Context)
+	// VerifyMfaStepUp 兑现 step_up 挑战并把会话强认证水位抬到当前
+	// (POST /api/v1/auth/mfa/step-up/verify)
+	VerifyMfaStepUp(c *gin.Context)
 	// VerifyLoginMfa 兑现 login_mfa 受限挑战（OTP 命中后签发会话）
 	// (POST /api/v1/auth/mfa/verify)
 	VerifyLoginMfa(c *gin.Context)
@@ -6213,6 +6237,32 @@ func (siw *ServerInterfaceWrapper) GetMfaStatus(c *gin.Context) {
 	}
 
 	siw.Handler.GetMfaStatus(c)
+}
+
+// BeginMfaStepUp operation middleware
+func (siw *ServerInterfaceWrapper) BeginMfaStepUp(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.BeginMfaStepUp(c)
+}
+
+// VerifyMfaStepUp operation middleware
+func (siw *ServerInterfaceWrapper) VerifyMfaStepUp(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.VerifyMfaStepUp(c)
 }
 
 // VerifyLoginMfa operation middleware
@@ -9456,6 +9506,8 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.POST(options.BaseURL+"/api/v1/auth/mfa/verify", wrapper.VerifyLoginMfa)
 	router.POST(options.BaseURL+"/api/v1/auth/mfa/recover", wrapper.RecoverLoginMfa)
 	router.POST(options.BaseURL+"/api/v1/auth/mfa/claim", wrapper.ClaimMfaEnroll)
+	router.POST(options.BaseURL+"/api/v1/auth/mfa/step-up", wrapper.BeginMfaStepUp)
+	router.POST(options.BaseURL+"/api/v1/auth/mfa/step-up/verify", wrapper.VerifyMfaStepUp)
 	router.GET(options.BaseURL+"/api/v1/auth/mfa/status", wrapper.GetMfaStatus)
 	router.POST(options.BaseURL+"/api/v1/auth/mfa/enroll", wrapper.BeginMfaEnroll)
 	router.POST(options.BaseURL+"/api/v1/auth/mfa/enroll/confirm", wrapper.ConfirmMfaEnroll)

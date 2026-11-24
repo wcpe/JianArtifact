@@ -140,7 +140,7 @@ func (s *AuthService) loginOutcome(ctx context.Context, username, password, sess
 	}
 	outcome, err := s.issueCredentialOutcome(ctx, func(tx *sqlx.Tx) (repository.CredentialAccount, error) {
 		return s.users.LoginCredentialAccountTx(ctx, tx, u)
-	}, sessionBinding, true)
+	}, sessionBinding, true, false)
 	// 第一因素已核验即返回用户供 attempt 记录；mfa_required 是受限成功。
 	var user *repository.User
 	if outcome != nil {
@@ -196,7 +196,7 @@ func (s *AuthService) CompleteLoginMfa(ctx context.Context, challengeToken, otp,
 	}
 	outcome, err := s.issueCredentialOutcome(ctx, func(tx *sqlx.Tx) (repository.CredentialAccount, error) {
 		return s.users.LoginCredentialAccountTx(ctx, tx, account)
-	}, sessionBinding, false)
+	}, sessionBinding, false, true)
 	if err != nil {
 		return "", nil, err
 	}
@@ -230,7 +230,7 @@ func (s *AuthService) createSessionForNewUser(username, password string) (string
 		}
 		// 空库首个管理员的安装认领票门属 claim_install 增量；当前 bootstrap 不过门。
 		return u, err
-	}, "", false)
+	}, "", false, false)
 	if err != nil {
 		return "", nil, err
 	}
@@ -240,7 +240,7 @@ func (s *AuthService) createSessionForNewUser(username, password string) (string
 // issueCredentialOutcome 是唯一的会话签发入口。已启用强因子的账号在同一事务内
 // 改写为签发 login_mfa 受限挑战——挑战与会话互斥签发，不存在二者同时成立的中间态。。mfaGate 为真时先查活跃 TOTP 因子：
 // 有则转 mfa_required 而非直签会话；CompleteLoginMfa 传 false（挑战已兑现，不再绕回门）。
-func (s *AuthService) issueCredentialOutcome(ctx context.Context, account func(*sqlx.Tx) (repository.CredentialAccount, error), sessionBinding string, mfaGate bool) (*AuthOutcome, error) {
+func (s *AuthService) issueCredentialOutcome(ctx context.Context, account func(*sqlx.Tx) (repository.CredentialAccount, error), sessionBinding string, mfaGate, mfaVerified bool) (*AuthOutcome, error) {
 	var outcome *AuthOutcome
 	err := s.users.CredentialWrite(ctx, func(tx *sqlx.Tx) error {
 		current, err := account(tx)
@@ -277,7 +277,12 @@ func (s *AuthService) issueCredentialOutcome(ctx context.Context, account func(*
 		if err != nil {
 			return err
 		}
-		if err := repository.InsertCredentialSessionTx(ctx, tx, current, claims); err != nil {
+		var verifiedAt *int64
+		if mfaVerified {
+			now := time.Now().Unix()
+			verifiedAt = &now
+		}
+		if err := repository.InsertCredentialSessionTx(ctx, tx, current, claims, verifiedAt); err != nil {
 			return err
 		}
 		o.Token = signed

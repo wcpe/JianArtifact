@@ -54,7 +54,7 @@ func (s *AuthService) LoginExternalOutcome(ctx context.Context, identity Externa
 			err = ErrExternalIdentityInvalid
 		}
 		return u, err
-	}, sessionBinding, true)
+	}, sessionBinding, true, false)
 	var user *repository.User
 	if outcome != nil {
 		user = outcome.User

@@ -183,6 +183,7 @@ func (s *Server) Handler(assets fs.FS) http.Handler {
 		})
 	}
 	// 旧审计继续记录请求耗时与白名单头，不读取正文。
+	r.Use(newAuthEdgeLimiter().middleware())
 	r.Use(auditctx.TimingMiddleware())
 	r.Use(auditctx.HeadersMiddleware())
 	if s.managementSecurityAudit != nil {

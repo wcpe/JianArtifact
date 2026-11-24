@@ -46,10 +46,12 @@ func testTotp(t *testing.T, secretB32 string, at time.Time) string {
 // nextStepOtp 计算「严格大于已接受水位且在 ±1 验证窗内」的下一步 OTP：
 // 登记确认与验证都消耗步水位，紧跟其后的验证必须落到下一可用步；
 // 罕见边界下水位已领先墙钟一步，等墙钟追平至多一个周期。
-func nextStepOtp(t *testing.T, e *protocolEnv, secretB32 string) string {
+func nextStepOtp(t *testing.T, e *protocolEnv, username, secretB32 string) string {
 	t.Helper()
 	var last int64
-	if err := e.db.Get(&last, `SELECT last_accepted_step FROM security_totp_factor WHERE state='active'`); err != nil {
+	if err := e.db.Get(&last,
+		`SELECT f.last_accepted_step FROM security_totp_factor f JOIN user u ON u.id=f.user_id
+		 WHERE u.username=? AND f.state='active'`, username); err != nil {
 		t.Fatalf("读取防重放水位：%v", err)
 	}
 	now := time.Now().Unix() / 30
@@ -122,13 +124,13 @@ func TestMfaLoginGateEndToEnd(t *testing.T) {
 	// 正确 OTP：兑现挑战签发会话。
 	var done api.LoginResponse
 	if code := e.jsonReq(t, http.MethodPost, "/api/v1/auth/mfa/verify", "",
-		api.MfaVerifyRequest{ChallengeToken: *gated.ChallengeToken, Otp: nextStepOtp(t, e, secret)}, &done); code != http.StatusOK || done.Token == "" {
+		api.MfaVerifyRequest{ChallengeToken: *gated.ChallengeToken, Otp: nextStepOtp(t, e, "admin", secret)}, &done); code != http.StatusOK || done.Token == "" {
 		t.Fatalf("OTP 兑现状态码 = %d，期望 200 且签发会话", code)
 	}
 
 	// 挑战单用途：同一挑战再次兑现被拒。
 	if code := e.jsonReq(t, http.MethodPost, "/api/v1/auth/mfa/verify", "",
-		api.MfaVerifyRequest{ChallengeToken: *gated.ChallengeToken, Otp: nextStepOtp(t, e, secret)}, &bad); code != http.StatusUnauthorized {
+		api.MfaVerifyRequest{ChallengeToken: *gated.ChallengeToken, Otp: nextStepOtp(t, e, "admin", secret)}, &bad); code != http.StatusUnauthorized {
 		t.Fatalf("挑战重放状态码 = %d，期望 401", code)
 	}
 
@@ -168,7 +170,7 @@ func TestMfaLoginGateEndToEnd(t *testing.T) {
 	}
 	var relogin api.LoginResponse
 	if code := e.jsonReq(t, http.MethodPost, "/api/v1/auth/mfa/verify", "",
-		api.MfaVerifyRequest{ChallengeToken: *gated3.ChallengeToken, Otp: nextStepOtp(t, e, newSecret)}, &relogin); code != http.StatusOK || relogin.Token == "" {
+		api.MfaVerifyRequest{ChallengeToken: *gated3.ChallengeToken, Otp: nextStepOtp(t, e, "admin", newSecret)}, &relogin); code != http.StatusOK || relogin.Token == "" {
 		t.Fatalf("恢复后兑现状态码 = %d，期望 200 且签发会话", code)
 	}
 
@@ -227,7 +229,40 @@ func TestMfaLoginGateEndToEnd(t *testing.T) {
 	}
 	var cdone api.LoginResponse
 	if code := e.jsonReq(t, http.MethodPost, "/api/v1/auth/mfa/verify", "",
-		api.MfaVerifyRequest{ChallengeToken: *cg.ChallengeToken, Otp: nextStepOtp(t, e, claimSecret)}, &cdone); code != http.StatusOK || cdone.Token == "" {
+		api.MfaVerifyRequest{ChallengeToken: *cg.ChallengeToken, Otp: nextStepOtp(t, e, "admin-claim", claimSecret)}, &cdone); code != http.StatusOK || cdone.Token == "" {
 		t.Fatalf("认领后兑现状态码 = %d，期望 200 且签发会话", code)
+	}
+
+	// ── step_up：水位过期会话做敏感写入被 403 拦截，step-up 兑现后放行。 ──
+	// cdone 由 OTP 兑现签发，自带水位；清库水位模拟窗口过期（不可时间旅行）。
+	var sessID string
+	if err := e.db.Get(&sessID,
+		`SELECT session_id FROM credential_session WHERE user_id=? ORDER BY expires_at DESC LIMIT 1`, admin2.Id); err != nil {
+		t.Fatalf("查会话：%v", err)
+	}
+	if _, err := e.db.Exec(`UPDATE credential_session SET mfa_verified_at=NULL WHERE session_id=?`, sessID); err != nil {
+		t.Fatalf("清水位：%v", err)
+	}
+	var rootID int64
+	if err := e.db.Get(&rootID, `SELECT id FROM user WHERE username='admin'`); err != nil {
+		t.Fatalf("查根管理员：%v", err)
+	}
+	pwdBody := api.PasswordChangeRequest{Password: "claim-pass-rotated-1"}
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/users/"+itoa64(rootID)+"/password", cdone.Token,
+		pwdBody, &bad); code != http.StatusForbidden {
+		t.Fatalf("无水位跨账户改密状态码 = %d，期望 403 recent_mfa_required", code)
+	}
+	var stepup api.MfaStepUpChallenge
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/auth/mfa/step-up", cdone.Token, nil, &stepup); code != http.StatusOK || stepup.ChallengeToken == "" {
+		t.Fatalf("step-up 签发状态码 = %d，期望 200", code)
+	}
+	var verified api.MfaVerifiedResponse
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/auth/mfa/step-up/verify", cdone.Token,
+		api.MfaVerifyRequest{ChallengeToken: stepup.ChallengeToken, Otp: nextStepOtp(t, e, "admin-claim", claimSecret)}, &verified); code != http.StatusOK || verified.MfaVerifiedAt == "" {
+		t.Fatalf("step-up 兑现状态码 = %d，期望 200 且返回水位", code)
+	}
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/users/"+itoa64(rootID)+"/password", cdone.Token,
+		pwdBody, nil); code != http.StatusNoContent {
+		t.Fatalf("step-up 后跨账户改密状态码 = %d，期望 204", code)
 	}
 }

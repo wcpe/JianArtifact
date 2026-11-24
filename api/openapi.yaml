@@ -735,6 +735,44 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "429":
           $ref: "#/components/responses/TooManyRequests"
+  /api/v1/auth/mfa/step-up:
+    post:
+      operationId: beginMfaStepUp
+      summary: 为当前会话签发 step_up 受限挑战（敏感操作前的强认证提升）
+      responses:
+        "200":
+          description: step_up 挑战
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MfaStepUpChallenge"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  /api/v1/auth/mfa/step-up/verify:
+    post:
+      operationId: verifyMfaStepUp
+      summary: 兑现 step_up 挑战并把会话强认证水位抬到当前
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MfaVerifyRequest"
+      responses:
+        "200":
+          description: 已提升；返回水位时间
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MfaVerifiedResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
   /api/v1/auth/mfa/status:
     get:
       operationId: getMfaStatus
@@ -5492,6 +5530,24 @@ components:
         claimTicket:
           type: string
           description: 受控操作者出具的一次性认领票明文
+    MfaStepUpChallenge:
+      type: object
+      required: [challengeId, challengeToken, expiresAt]
+      properties:
+        challengeId:
+          type: string
+        challengeToken:
+          type: string
+        expiresAt:
+          type: string
+          description: RFC3339
+    MfaVerifiedResponse:
+      type: object
+      required: [mfaVerifiedAt]
+      properties:
+        mfaVerifiedAt:
+          type: string
+          description: 会话近期强认证水位（RFC3339）
     MfaVerifyRequest:
       type: object
       required: [challengeToken, otp]

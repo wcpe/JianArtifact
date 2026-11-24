@@ -429,6 +429,8 @@ func writeDomainErrWithOperationID(c *gin.Context, err error, operationID string
 		write(http.StatusUnauthorized, "invalid_auth_challenge", "认证挑战无效或已失效")
 	case errors.Is(err, domain.ErrAuthRateLimited):
 		write(http.StatusTooManyRequests, "auth_rate_limited", "认证尝试过于频繁")
+	case errors.Is(err, domain.ErrRecentMfaRequired):
+		write(http.StatusForbidden, "recent_mfa_required", "需要近期强认证")
 	case errors.Is(err, domain.ErrMfaRequired):
 		write(http.StatusForbidden, "mfa_required", "需要完成强因子验证")
 	case errors.Is(err, domain.ErrMfaFactorUnavailable):
