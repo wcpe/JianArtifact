@@ -143,10 +143,18 @@ func (s *AdmissionService) Prepare(ctx context.Context, principal *auth.Principa
 	if _, err := rand.Read(random[:]); err != nil {
 		return AdmissionStatus{}, ErrAdmissionUnavailable
 	}
-	// 会话位：交互会话用 session_id，机器凭据用凭据号占位（CHECK 要求非空）。
+	// 会话位：交互会话用 session_id，机器凭据用凭据号占位；Basic 口令与内部批写主体
+	// 没有会话位，按主体类别+账号号占位（CHECK 要求非空）。
 	sessionID := principal.SessionID
-	if sessionID == "" && principal.Kind == auth.KindToken {
-		sessionID = "token:" + strconv.FormatInt(principal.TokenID, 10)
+	if sessionID == "" {
+		switch {
+		case principal.Kind == auth.KindToken:
+			sessionID = "token:" + strconv.FormatInt(principal.TokenID, 10)
+		case principal.Kind == auth.KindInternal:
+			sessionID = "internal:" + strconv.FormatInt(principal.UserID, 10)
+		case principal.Kind == "" && principal.AuthSource == auth.AuthSourceBasic:
+			sessionID = "basic:" + strconv.FormatInt(principal.UserID, 10)
+		}
 	}
 	row := repository.AdmissionCandidateRow{OperationID: op.String(), ObjectKey: blobstore.NewRegisteredPrivateCandidateKey(random), BootID: s.bootID, RepositoryID: repositoryID,
 		ActorUserID: principal.UserID, SessionID: sessionID, AccountEpoch: principal.AccountEpoch, AuthMethod: principal.AuthSource, OriginRequestID: snapshot.OriginRequestID, ClientIP: snapshot.ClientIP.String(),

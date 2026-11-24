@@ -324,3 +324,46 @@ func TestAdmissionCandidateApplicationRestart(t *testing.T) {
 	}
 	get(staged.OperationID, token, http.StatusServiceUnavailable, "admission_unavailable")
 }
+
+// 回归：Basic 口令主体的 Raw PUT 也必须走通准入管线（此前会话位为空违反 CHECK，恒 503）。
+func TestAdmissionBasicPasswordPut(t *testing.T) {
+	cfg, app := newSourceTestApplication(t, "raw")
+	_, _, err := app.authSvc.Bootstrap("basic-owner", auditTestPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := app.repoSvc.Create("basic-raw", "raw", "hosted", "public", "", repository.RepositoryConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(newApplicationHandler(cfg, app, nil))
+	t.Cleanup(server.Close)
+	const payload = "basic-put-真实验收字节"
+	req, err := http.NewRequest(http.MethodPut, server.URL+"/repository/"+repo.Name+"/basic.txt", strings.NewReader(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "text/plain")
+	req.SetBasicAuth("basic-owner", auditTestPassword)
+	resp, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusCreated {
+		data, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		t.Fatalf("Basic 口令 PUT 应发布并返回 201：%d %s", resp.StatusCode, data)
+	}
+	_ = resp.Body.Close()
+	status, _, body := auditTestRequest(t, server, http.MethodGet, "/repository/"+repo.Name+"/basic.txt", "", "", "")
+	if status != http.StatusOK || body != payload {
+		t.Fatalf("发布后公开读取应返回原字节：%d %q", status, body)
+	}
+	var state string
+	if err := app.db.QueryRow("SELECT state FROM private_admission_candidate WHERE repository_id = ? AND canonical_path = 'basic.txt'", repo.ID).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != "published" {
+		t.Fatalf("候选应进入 published：%s", state)
+	}
+}
