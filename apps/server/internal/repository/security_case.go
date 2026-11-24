@@ -80,3 +80,29 @@ func ListSecurityCaseLinksTx(ctx context.Context, tx *sqlx.Tx, caseID string) ([
 	var out []SecurityCaseLinkRow
 	return out, tx.SelectContext(ctx, &out, `SELECT * FROM security_case_link WHERE case_id=? ORDER BY linked_unix`, caseID)
 }
+
+// SecurityCaseReadRow 案件既読（本人・按版本冪等）。
+type SecurityCaseReadRow struct {
+	CaseID      string `db:"case_id"`
+	UserID      int64  `db:"user_id"`
+	SeenVersion int64  `db:"seen_version"`
+	ReadUnix    int64  `db:"read_unix"`
+}
+
+// MarkCaseReadTx は本人既読水位を max(seen_version) に進める（同版本重放冪等）。
+func MarkCaseReadTx(ctx context.Context, tx *sqlx.Tx, caseID string, userID, seenVersion, now int64) error {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO security_case_read (case_id,user_id,seen_version,read_unix)
+		VALUES (?,?,?,?)
+		ON CONFLICT (case_id,user_id) DO UPDATE SET seen_version=MAX(seen_version,excluded.seen_version), read_unix=excluded.read_unix`,
+		caseID, userID, seenVersion, now); err != nil {
+		return err
+	}
+	return nil
+}
+
+// CaseReadTx は本人既読水位を返す（無ければ seen_version=0）。
+func CaseReadTx(ctx context.Context, tx *sqlx.Tx, caseID string, userID int64) (SecurityCaseReadRow, error) {
+	var r SecurityCaseReadRow
+	err := tx.GetContext(ctx, &r, `SELECT case_id,user_id,seen_version,read_unix FROM security_case_read WHERE case_id=? AND user_id=?`, caseID, userID)
+	return r, err
+}

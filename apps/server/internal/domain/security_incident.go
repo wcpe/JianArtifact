@@ -770,3 +770,60 @@ func (s *SecurityIncidentService) ListNotificationDeliveries(ctx context.Context
 	})
 	return out, err
 }
+
+// MarkSecurityCaseRead 本人既読水位：seen_version 不可超过案件現版本；同版本重放冪等。
+func (s *SecurityIncidentService) MarkSecurityCaseRead(ctx context.Context, p *auth.Principal, caseID string, seenVersion int64) (*repository.SecurityCaseReadRow, error) {
+	if p == nil || p.UserID <= 0 || p.Role != "admin" {
+		return nil, ErrAdmissionForbidden
+	}
+	var out *repository.SecurityCaseReadRow
+	err := s.repo.Write(ctx, func(tx *sqlx.Tx) error {
+		c, err := repository.GetSecurityCaseTx(ctx, tx, caseID)
+		if err != nil {
+			return err
+		}
+		if seenVersion < 0 || seenVersion > c.TargetVersion {
+			return ErrSecurityConfirmationStale
+		}
+		now := s.now().Unix()
+		if err := repository.MarkCaseReadTx(ctx, tx, caseID, p.UserID, seenVersion, now); err != nil {
+			return err
+		}
+		r, err := repository.CaseReadTx(ctx, tx, caseID, p.UserID)
+		if err != nil {
+			return err
+		}
+		out = &r
+		return nil
+	})
+	return out, err
+}
+
+// RetryNotificationDelivery 失败投递的手動再試行：attempts=CAS targetVersion，
+// 同 targetVersion 的重放冪等無変化。
+func (s *SecurityIncidentService) RetryNotificationDelivery(ctx context.Context, p *auth.Principal, deliveryID string, expectAttempts int64) (*repository.SecurityNotificationDeliveryRow, error) {
+	if p == nil || p.UserID <= 0 || p.Role != "admin" {
+		return nil, ErrAdmissionForbidden
+	}
+	var out *repository.SecurityNotificationDeliveryRow
+	err := s.repo.Write(ctx, func(tx *sqlx.Tx) error {
+		d, err := repository.DeliveryTx(ctx, tx, deliveryID)
+		if err != nil {
+			return err
+		}
+		moved, err := repository.RetryDeliveryTx(ctx, tx, deliveryID, expectAttempts, s.now().Unix())
+		if err != nil {
+			return err
+		}
+		if !moved && d.Attempts != expectAttempts {
+			return ErrSecurityConfirmationStale
+		}
+		d2, err := repository.DeliveryTx(ctx, tx, deliveryID)
+		if err != nil {
+			return err
+		}
+		out = &d2
+		return nil
+	})
+	return out, err
+}

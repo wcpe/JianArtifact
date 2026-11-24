@@ -155,3 +155,23 @@ func NotificationTitleTx(ctx context.Context, tx *sqlx.Tx, seq int64) (string, e
 	err := tx.GetContext(ctx, &title, `SELECT title FROM security_notification WHERE seq=?`, seq)
 	return title, err
 }
+
+// RetryDeliveryTx は失敗/終態投递を手動再試行：attempts が targetVersion と一致する行だけ
+// pending+now に戻す（CAS、重複呼出は冪等に無変化）。戻り値は行が動いたか。
+func RetryDeliveryTx(ctx context.Context, tx *sqlx.Tx, deliveryID string, expectAttempts, now int64) (bool, error) {
+	res, err := tx.ExecContext(ctx,
+		`UPDATE security_notification_delivery SET state='pending', next_retry_unix=?, updated_unix=?
+		  WHERE delivery_id=? AND attempts=? AND state IN ('failed','accepted','attempted')`, now, now, deliveryID, expectAttempts)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+// DeliveryTx は投递行を delivery_id で読む。
+func DeliveryTx(ctx context.Context, tx *sqlx.Tx, deliveryID string) (SecurityNotificationDeliveryRow, error) {
+	var d SecurityNotificationDeliveryRow
+	err := tx.GetContext(ctx, &d, `SELECT * FROM security_notification_delivery WHERE delivery_id=?`, deliveryID)
+	return d, err
+}

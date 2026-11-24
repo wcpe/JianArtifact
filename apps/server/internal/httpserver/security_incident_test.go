@@ -391,3 +391,64 @@ func TestSecurityNotificationSmtpDeliveryEndToEnd(t *testing.T) {
 		t.Fatalf("未設定終態 = %q err=%v，期望 failed", st, err)
 	}
 }
+
+// FR-171/172：案件既読水位（同版本冪等・超版本 409）と失败投递的手動再試行。
+func TestSecurityCaseReadAndDeliveryRetry(t *testing.T) {
+	e := newProtocolEnv(t)
+	token, _, _ := installAdmin(t, e, "adm-r", "admin-pass-123")
+	if _, err := e.db.Exec(`UPDATE user SET email='r@example.com' WHERE username='adm-r'`); err != nil {
+		t.Fatal(err)
+	}
+
+	var opened api.SecurityCase
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/security/cases", token,
+		map[string]any{"title": "既読案件", "severity": "medium", "reason": "テスト"}, &opened); code != http.StatusOK {
+		t.Fatalf("建案状態码 = %d", code)
+	}
+
+	// 既読：同一版本重放冪等。
+	var read1 map[string]any
+	if code := e.jsonReq(t, http.MethodPut, "/api/v1/security/cases/"+opened.CaseId+"/read", token,
+		map[string]any{"seenVersion": 1}, &read1); code != http.StatusOK {
+		t.Fatalf("既読状態码 = %d，期望 200", code)
+	}
+	var read2 map[string]any
+	if code := e.jsonReq(t, http.MethodPut, "/api/v1/security/cases/"+opened.CaseId+"/read", token,
+		map[string]any{"seenVersion": 1}, &read2); code != http.StatusOK || read2["seenVersion"] != read1["seenVersion"] {
+		t.Fatalf("既読重放 = %d %+v", code, read2)
+	}
+	// 超現版本 → 409。
+	if code := e.jsonReq(t, http.MethodPut, "/api/v1/security/cases/"+opened.CaseId+"/read", token,
+		map[string]any{"seenVersion": 99}, nil); code != http.StatusConflict {
+		t.Fatalf("超版本既読 = %d，期望 409", code)
+	}
+
+	// 未設定 SMTP で failed 化 → 手動再試行で pending に戻る（attempts CAS）。
+	if _, err := e.incidentSvc.DispatchPendingNotifications(t.Context(), nil); err != nil {
+		t.Fatalf("派发：%v", err)
+	}
+	var dels []struct {
+		DeliveryID string `json:"deliveryId"`
+		State      string `json:"state"`
+		Attempts   int    `json:"attempts"`
+	}
+	if code := e.jsonReq(t, http.MethodGet, "/api/v1/security/notification-deliveries", token, nil, &dels); code != http.StatusOK || len(dels) != 1 || dels[0].State != "failed" {
+		t.Fatalf("投递 = %d %+v，期望 1 件 failed", code, dels)
+	}
+	var retried map[string]any
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/security/notification-deliveries/"+dels[0].DeliveryID+"/retry", token,
+		map[string]any{"targetVersion": dels[0].Attempts}, &retried); code != http.StatusOK || retried["state"] != "pending" {
+		t.Fatalf("再試行 = %d %+v，期望 pending", code, retried)
+	}
+	// 漂移 attempts → 409。
+	// 同一 targetVersion 重放は冪等（pending のまま 200）。
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/security/notification-deliveries/"+dels[0].DeliveryID+"/retry", token,
+		map[string]any{"targetVersion": dels[0].Attempts}, nil); code != http.StatusOK {
+		t.Fatalf("冪等重放 = %d，期望 200", code)
+	}
+	// 未曾一致した版本 → 409。
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/security/notification-deliveries/"+dels[0].DeliveryID+"/retry", token,
+		map[string]any{"targetVersion": 42}, nil); code != http.StatusConflict {
+		t.Fatalf("漂移再試行 = %d，期望 409", code)
+	}
+}

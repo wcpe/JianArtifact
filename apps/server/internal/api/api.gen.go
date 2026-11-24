@@ -5910,6 +5910,11 @@ type ListSecurityCasesParams struct {
 // ListSecurityCasesParamsState defines parameters for ListSecurityCases.
 type ListSecurityCasesParamsState string
 
+// MarkSecurityCaseReadJSONBody defines parameters for MarkSecurityCaseRead.
+type MarkSecurityCaseReadJSONBody struct {
+	SeenVersion int64 `json:"seenVersion"`
+}
+
 // ListSecurityFindingsParams defines parameters for ListSecurityFindings.
 type ListSecurityFindingsParams struct {
 	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
@@ -5918,6 +5923,11 @@ type ListSecurityFindingsParams struct {
 // ListNotificationDeliveriesParams defines parameters for ListNotificationDeliveries.
 type ListNotificationDeliveriesParams struct {
 	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// RetryNotificationDeliveryJSONBody defines parameters for RetryNotificationDelivery.
+type RetryNotificationDeliveryJSONBody struct {
+	TargetVersion int64 `json:"targetVersion"`
 }
 
 // ListSecurityNotificationsParams defines parameters for ListSecurityNotifications.
@@ -6066,8 +6076,14 @@ type PreviewPrivateAdmissionDecisionJSONRequestBody = PrivateAdmissionDecisionPr
 // OpenSecurityCaseJSONRequestBody defines body for OpenSecurityCase for application/json ContentType.
 type OpenSecurityCaseJSONRequestBody = SecurityCaseOpenRequest
 
+// MarkSecurityCaseReadJSONRequestBody defines body for MarkSecurityCaseRead for application/json ContentType.
+type MarkSecurityCaseReadJSONRequestBody MarkSecurityCaseReadJSONBody
+
 // TransitionSecurityCaseJSONRequestBody defines body for TransitionSecurityCase for application/json ContentType.
 type TransitionSecurityCaseJSONRequestBody = SecurityCaseTransitionRequest
+
+// RetryNotificationDeliveryJSONRequestBody defines body for RetryNotificationDelivery for application/json ContentType.
+type RetryNotificationDeliveryJSONRequestBody RetryNotificationDeliveryJSONBody
 
 // BeginRecoveryIsolationJSONRequestBody defines body for BeginRecoveryIsolation for application/json ContentType.
 type BeginRecoveryIsolationJSONRequestBody BeginRecoveryIsolationJSONBody
@@ -6696,6 +6712,9 @@ type ServerInterface interface {
 	// ListSecurityCaseLinks 案件关联事件（fact/candidate）
 	// (GET /api/v1/security/cases/{caseId}/links)
 	ListSecurityCaseLinks(c *gin.Context, caseId string)
+	// MarkSecurityCaseRead 案件既読水位（本人・按版本幂等）
+	// (PUT /api/v1/security/cases/{caseId}/read)
+	MarkSecurityCaseRead(c *gin.Context, caseId string)
 	// TransitionSecurityCase 认领/结案/重开案件
 	// (POST /api/v1/security/cases/{caseId}/transitions)
 	TransitionSecurityCase(c *gin.Context, caseId string)
@@ -6708,6 +6727,9 @@ type ServerInterface interface {
 	// ListNotificationDeliveries 站外投递脱敏分页
 	// (GET /api/v1/security/notification-deliveries)
 	ListNotificationDeliveries(c *gin.Context, params ListNotificationDeliveriesParams)
+	// RetryNotificationDelivery 失败投递的手動再試行（targetVersion=attempts CAS・冪等）
+	// (POST /api/v1/security/notification-deliveries/{deliveryId}/retry)
+	RetryNotificationDelivery(c *gin.Context, deliveryId string)
 	// ListSecurityNotifications 站内安全通知游标分页
 	// (GET /api/v1/security/notifications)
 	ListSecurityNotifications(c *gin.Context, params ListSecurityNotificationsParams)
@@ -9745,6 +9767,31 @@ func (siw *ServerInterfaceWrapper) ListSecurityCaseLinks(c *gin.Context) {
 	siw.Handler.ListSecurityCaseLinks(c, caseId)
 }
 
+// MarkSecurityCaseRead operation middleware
+func (siw *ServerInterfaceWrapper) MarkSecurityCaseRead(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "caseId" -------------
+	var caseId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "caseId", c.Param("caseId"), &caseId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter caseId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.MarkSecurityCaseRead(c, caseId)
+}
+
 // TransitionSecurityCase operation middleware
 func (siw *ServerInterfaceWrapper) TransitionSecurityCase(c *gin.Context) {
 
@@ -9835,6 +9882,31 @@ func (siw *ServerInterfaceWrapper) ListNotificationDeliveries(c *gin.Context) {
 	}
 
 	siw.Handler.ListNotificationDeliveries(c, params)
+}
+
+// RetryNotificationDelivery operation middleware
+func (siw *ServerInterfaceWrapper) RetryNotificationDelivery(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "deliveryId" -------------
+	var deliveryId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "deliveryId", c.Param("deliveryId"), &deliveryId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter deliveryId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.RetryNotificationDelivery(c, deliveryId)
 }
 
 // ListSecurityNotifications operation middleware
@@ -10581,6 +10653,8 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.POST(options.BaseURL+"/api/v1/security/cases", wrapper.OpenSecurityCase)
 	router.POST(options.BaseURL+"/api/v1/security/cases/:caseId/transitions", wrapper.TransitionSecurityCase)
 	router.GET(options.BaseURL+"/api/v1/security/cases/:caseId/links", wrapper.ListSecurityCaseLinks)
+	router.PUT(options.BaseURL+"/api/v1/security/cases/:caseId/read", wrapper.MarkSecurityCaseRead)
+	router.POST(options.BaseURL+"/api/v1/security/notification-deliveries/:deliveryId/retry", wrapper.RetryNotificationDelivery)
 	router.GET(options.BaseURL+"/api/v1/security/findings", wrapper.ListSecurityFindings)
 	router.POST(options.BaseURL+"/api/v1/security/admission/candidates/:operationId/decisions/preview", wrapper.PreviewPrivateAdmissionDecision)
 	router.POST(options.BaseURL+"/api/v1/security/admission/candidates/:operationId/decisions", wrapper.DecidePrivateAdmissionCandidate)

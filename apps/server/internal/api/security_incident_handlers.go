@@ -558,3 +558,58 @@ func (h *Handlers) ListSecurityFindings(c *gin.Context, params ListSecurityFindi
 	}
 	c.JSON(http.StatusOK, out)
 }
+
+// MarkSecurityCaseRead 本人既読水位（同版本冪等）。
+func (h *Handlers) MarkSecurityCaseRead(c *gin.Context, caseID string) {
+	c.Header("Cache-Control", "private, no-store")
+	p, ok := requireAdmin(c)
+	if !ok || !h.requireRecentMfa(c, p) {
+		return
+	}
+	var req MarkSecurityCaseReadJSONRequestBody
+	if err := c.ShouldBindJSON(&req); err != nil {
+		auth.WriteError(c, http.StatusBadRequest, "bad_request", "请求体无效")
+		return
+	}
+	row, err := h.incident.MarkSecurityCaseRead(c.Request.Context(), p, caseID, req.SeenVersion)
+	switch {
+	case err == nil:
+	case errors.Is(err, domain.ErrSecurityConfirmationStale):
+		writeDomainErr(c, domain.ErrSecurityConfirmationStale)
+		return
+	default:
+		auth.WriteError(c, http.StatusNotFound, "security_case_not_found", "案件不存在")
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"readUnix": row.ReadUnix, "seenVersion": row.SeenVersion})
+}
+
+// RetryNotificationDelivery 失败投递の手動再試行（attempts=CAS）。
+func (h *Handlers) RetryNotificationDelivery(c *gin.Context, deliveryID string) {
+	c.Header("Cache-Control", "private, no-store")
+	p, ok := requireAdmin(c)
+	if !ok || !h.requireRecentMfa(c, p) {
+		return
+	}
+	var req RetryNotificationDeliveryJSONRequestBody
+	if err := c.ShouldBindJSON(&req); err != nil {
+		auth.WriteError(c, http.StatusBadRequest, "bad_request", "请求体无效")
+		return
+	}
+	row, err := h.incident.RetryNotificationDelivery(c.Request.Context(), p, deliveryID, req.TargetVersion)
+	switch {
+	case err == nil:
+	case errors.Is(err, domain.ErrSecurityConfirmationStale):
+		writeDomainErr(c, domain.ErrSecurityConfirmationStale)
+		return
+	default:
+		auth.WriteError(c, http.StatusNotFound, "delivery_not_found", "投递不存在")
+		return
+	}
+	out := SecurityNotificationDelivery{DeliveryId: row.DeliveryID, Channel: SecurityNotificationDeliveryChannel(row.Channel),
+		TargetMasked: row.TargetMasked, State: SecurityNotificationDeliveryState(row.State), Attempts: &row.Attempts}
+	if row.LastError != "" {
+		out.LastError = &row.LastError
+	}
+	c.JSON(http.StatusOK, out)
+}
