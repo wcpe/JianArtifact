@@ -191,6 +191,34 @@ describe("审计工作台（筛选与搜索）", () => {
     );
   });
 
+  it("待确认批次卡跨时间范围：从 7d+待处理+IP 回到卡片统计口径", async () => {
+    const user = userEvent.setup();
+    renderWorkbench("/audit-logs?range=7d&attention=pending&clientIp=203.0.113");
+    await screen.findByText("审计事件");
+
+    // 前置态：7 天范围 + 待处理 + 客户端 IP 草稿都在。
+    expect((screen.getByRole("radio", { name: "7d" }) as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByLabelText("客户端 IP") as HTMLInputElement).value.length).toBeGreaterThan(
+      0,
+    );
+
+    // 卡片统计口径是最近 24h 全部待确认批次：点击后对齐 24h、保留待处理、清掉 IP。
+    await user.click(screen.getByRole("button", { name: /待确认批次/ }));
+    await waitFor(() => {
+      expect((screen.getByRole("radio", { name: "24h" }) as HTMLInputElement).checked).toBe(true);
+    });
+    expect((screen.getByRole("radio", { name: "待处理" }) as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByLabelText("客户端 IP") as HTMLInputElement).value).toBe("");
+
+    // 已处卡片口径时再点一次才是取消待处理筛选。
+    await user.click(screen.getByRole("button", { name: /待确认批次/ }));
+    await waitFor(() => {
+      expect((screen.getByRole("radio", { name: "待处理" }) as HTMLInputElement).checked).toBe(
+        false,
+      );
+    });
+  });
+
   it("风险状态筛选：待处理 / 已确认", async () => {
     const user = userEvent.setup();
     renderWorkbench();
