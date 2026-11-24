@@ -1,6 +1,6 @@
 # 功能规格：事故处置、证据保全与恢复安全闸
 
-> 状态：用户已审核，待实施　·　关联 PRD：FR-168　·　分支：`feat/security-incident-controls`
+> 状态：开发完成，待用户验收；处置动作生命周期、实例业务写锁、repository/path/version/ip_cidr 限制目标、证据保全（字节裁决与 GC 删除预约）与恢复隔离闸已实现并有回归；恢复解闸的外部签名封存凭证与一次性转移授权为设计余量，审查已上报待裁　·　关联 PRD：FR-168　·　分支：`feat/security-two-factor`
 
 ## 1. 背景与目标
 
