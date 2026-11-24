@@ -323,7 +323,7 @@ func (s *AdmissionService) authorizeRepository(ctx context.Context, tx *sqlx.Tx,
 	if err != nil {
 		return nil, err
 	}
-	if repo.Type != "hosted" || (repo.Format != "raw" && repo.Format != "maven" && repo.Format != "cargo") || !repo.Online {
+	if repo.Type != "hosted" || !admissionFormatAllowed(repo.Format) || !repo.Online {
 		return nil, repository.ErrNotFound
 	}
 	if user.Role != "admin" {
@@ -592,31 +592,11 @@ func (s *AdmissionService) MarkPublished(ctx context.Context, principal *auth.Pr
 	return s.transitionStatus(ctx, principal, row, "published", "")
 }
 
-// SubmitCandidate 完整内联流水线（内部/测试用）：Intake → 提升 → 发布 → 标记。
-func (s *AdmissionService) SubmitCandidate(ctx context.Context, principal *auth.Principal, repositoryID int64, canonicalPath, contentType string, body io.Reader) (AdmissionStatus, int64, error) {
-	row, err := s.IntakeCandidate(ctx, principal, repositoryID, canonicalPath, contentType, body)
-	if err != nil {
-		return AdmissionStatus{OperationID: row.OperationID}, 0, err
+// admissionFormatAllowed 是获准走私有候选准入的协议格式集合（FR-169 已接入口径）。
+func admissionFormatAllowed(format string) bool {
+	switch format {
+	case "raw", "maven", "cargo", "npm":
+		return true
 	}
-	if s.assets == nil {
-		return AdmissionStatus{OperationID: row.OperationID}, 0, ErrAdmissionUnavailable
-	}
-	rc, size, err := s.PromoteBytes(ctx, row)
-	if err != nil {
-		return AdmissionStatus{OperationID: row.OperationID}, 0, err
-	}
-	defer rc.Close()
-	repo, err := s.repos.GetByID(row.RepositoryID)
-	if err != nil {
-		return AdmissionStatus{OperationID: row.OperationID}, 0, ErrAdmissionUnavailable
-	}
-	asset, err := s.assets.Put(repo.Name, row.CanonicalPath, io.LimitReader(rc, size), row.ContentType)
-	if err != nil {
-		return AdmissionStatus{OperationID: row.OperationID}, 0, admissionServiceError(err)
-	}
-	st, err := s.MarkPublished(ctx, principal, row, asset.ID)
-	if err != nil {
-		return st, 0, err
-	}
-	return st, asset.ID, nil
+	return false
 }

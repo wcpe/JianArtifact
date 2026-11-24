@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -385,5 +386,61 @@ func TestCargoPublishViaAdmissionEndToEnd(t *testing.T) {
 	status, _, body = auditTestRequest(t, server, http.MethodGet, "/cargo/"+repo.Name+"/api/v1/crates/probe-crate/1.0.0/download", "", "", "")
 	if status != http.StatusOK || body != string(crate) {
 		t.Fatalf("发布后 crate 读取不符：%d %q", status, body)
+	}
+}
+
+// TestNpmPublishViaAdmissionEndToEnd npm hosted 发布的每个 tarball 附件各自经私有候选准入：
+// 封存→裁定→提升后 tarball 与 packument 可公开读取、候选落 published。
+func TestNpmPublishViaAdmissionEndToEnd(t *testing.T) {
+	cfg, app := newSourceTestApplication(t, "npm")
+	if _, _, err := app.authSvc.Bootstrap("npm-adm", auditTestPassword); err != nil {
+		t.Fatal(err)
+	}
+	owner, err := app.userSvc.Create("npm-owner", auditTestPassword, "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := app.repoSvc.Create("npm-adm-hosted", "npm", "hosted", "public", "", repository.RepositoryConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.NewAclRepo(app.db).Replace(repo.ID, []repository.Acl{{SubjectID: owner.ID, Action: repository.ActionPublish}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.securityAudit.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(newApplicationHandler(cfg, app, nil))
+	t.Cleanup(server.Close)
+	issuer, _, err := app.tokenSvc.Create(owner.ID, "npm-issuer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tarball := []byte("fake-tarball-bytes")
+	doc := map[string]any{
+		"_id": "probe-pkg", "name": "probe-pkg", "dist-tags": map[string]any{"latest": "1.0.0"},
+		"versions": map[string]any{"1.0.0": map[string]any{"name": "probe-pkg", "version": "1.0.0",
+			"dist": map[string]any{"tarball": "http://x.invalid/probe-pkg/-/probe-pkg-1.0.0.tgz"}}},
+		"_attachments": map[string]any{"probe-pkg-1.0.0.tgz": map[string]any{
+			"content_type": "application/octet-stream",
+			"data":         base64.StdEncoding.EncodeToString(tarball),
+			"length":       len(tarball)}},
+	}
+	raw, _ := json.Marshal(doc)
+	status, _, body := auditTestRequest(t, server, http.MethodPut, "/npm/"+repo.Name+"/probe-pkg", "application/json", string(raw), issuer)
+	if status != http.StatusCreated {
+		t.Fatalf("npm 准入发布应 201：%d %s", status, body)
+	}
+	var state string
+	var assetID *int64
+	if err := app.db.QueryRow(`SELECT state,published_asset_id FROM private_admission_candidate ORDER BY rowid DESC LIMIT 1`).Scan(&state, &assetID); err != nil {
+		t.Fatal(err)
+	}
+	if state != "published" || assetID == nil {
+		t.Fatalf("npm tarball 候选应提升为 published：%s", state)
+	}
+	status, _, body = auditTestRequest(t, server, http.MethodGet, "/npm/"+repo.Name+"/probe-pkg/-/probe-pkg-1.0.0.tgz", "", "", "")
+	if status != http.StatusOK || body != string(tarball) {
+		t.Fatalf("发布后 tarball 读取不符：%d %q", status, body)
 	}
 }
