@@ -1834,3 +1834,98 @@ export function listMaintenanceJobs(): Promise<{ jobs: MaintenanceJob[] }> {
 export function runMaintenanceJob(name: string): Promise<{ name: string; started: boolean }> {
   return request(`/maintenance/jobs/${encodeURIComponent(name)}/run`, { method: "POST" });
 }
+
+/* ── FR-171 风险调查（安全事件队列 + 案件） ─────────────────────────── */
+
+export interface SecurityEvent {
+  eventId: string;
+  eventType: string;
+  outcome?: string;
+  actorKind?: string;
+  actorUserId?: number;
+  actorNameSnapshot?: string;
+  clientIp?: string;
+  credentialId?: string;
+  sessionId?: string;
+  requestId?: string;
+  operationId?: string;
+  errorCode?: string;
+  occurredAt?: string;
+  committed?: string;
+}
+
+export interface SecurityEventPage {
+  items: SecurityEvent[];
+  hasMore: boolean;
+  nextCursor?: string;
+  coverage?: { status?: string };
+  projectionHealth?: string;
+}
+
+export interface SecurityEventQuery {
+  from?: string;
+  to?: string;
+  ip?: string;
+  cidr?: string;
+  eventType?: string;
+  outcome?: string;
+  actorUserId?: number;
+  repositoryId?: number;
+  credentialId?: string;
+  sessionId?: string;
+  requestId?: string;
+  operationId?: string;
+  canonicalPath?: string;
+  objectId?: string;
+  digest?: string;
+  cursor?: string;
+  limit?: number;
+}
+
+/** 安全事件队列（关联维度即查询参数；FR-171）。 */
+export function getSecurityEvents(q: SecurityEventQuery): Promise<SecurityEventPage> {
+  const params = new URLSearchParams();
+  for (const [k, v] of Object.entries(q)) {
+    if (v !== undefined && v !== null && v !== "") params.set(k, String(v));
+  }
+  return request<SecurityEventPage>(`/observability/audit/security-events?${params.toString()}`);
+}
+
+export interface SecurityCase {
+  caseId: string;
+  title: string;
+  state: "open" | "claimed" | "closed";
+  severity: "low" | "medium" | "high" | "critical";
+  resolution?: string;
+  targetVersion: number;
+  ownerUserId?: number;
+  reason?: string;
+  createdUnix?: number;
+  updatedUnix?: number;
+}
+
+export function getSecurityCases(state?: string): Promise<SecurityCase[]> {
+  return request<SecurityCase[]>(`/security/cases${state ? `?state=${state}` : ""}`);
+}
+
+export interface SecurityCaseLink {
+  caseId: string;
+  eventId: string;
+  linkKind: "fact" | "candidate";
+  linkedBy?: string;
+  linkedUnix?: number;
+}
+
+export function getSecurityCaseLinks(caseId: string): Promise<SecurityCaseLink[]> {
+  return request<SecurityCaseLink[]>(`/security/cases/${encodeURIComponent(caseId)}/links`);
+}
+
+export function transitionSecurityCase(
+  caseId: string,
+  body: { action: "claim" | "close" | "reopen"; targetVersion: number; reason?: string; resolutionCode?: string },
+): Promise<SecurityCase> {
+  return request<SecurityCase>(`/security/cases/${encodeURIComponent(caseId)}/transitions`, {
+    method: "POST",
+    body,
+  });
+}

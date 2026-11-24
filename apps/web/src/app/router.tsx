@@ -27,6 +27,9 @@ const LicensesPage = lazy(() =>
 const AuditLogPage = lazy(() =>
   import("../pages/AuditLogPage").then((m) => ({ default: m.AuditLogPage })),
 );
+const SecurityPage = lazy(() =>
+  import("../pages/SecurityPage").then((m) => ({ default: m.SecurityPage })),
+);
 const MigrationDetailPage = lazy(() =>
   import("../pages/MigrationDetailPage").then((m) => ({ default: m.MigrationDetailPage })),
 );
@@ -140,6 +143,17 @@ export function AppRoutes() {
               <RequireAuth>
                 <RequireAdmin>
                   <AuditLogPage />
+                </RequireAdmin>
+              </RequireAuth>
+            }
+          />
+          {/* FR-171 风险调查页（仅管理员） */}
+          <Route
+            path="/security"
+            element={
+              <RequireAuth>
+                <RequireAdmin>
+                  <SecurityPage />
                 </RequireAdmin>
               </RequireAuth>
             }
