@@ -5,6 +5,8 @@ import { IconAlertTriangle, IconRefresh, IconSearch } from "@tabler/icons-react"
 import {
   getSecurityCases,
   getSecurityEvents,
+  getSecurityFindings,
+  type SecurityFinding,
   transitionSecurityCase,
   type SecurityCase,
   type SecurityEvent,
@@ -13,6 +15,7 @@ import {
 export function SecurityPage() {
   const [events, setEvents] = useState<SecurityEvent[]>([]);
   const [cases, setCases] = useState<SecurityCase[]>([]);
+  const [findings, setFindings] = useState<SecurityFinding[]>([]);
   const [failed, setFailed] = useState<string>("");
   const [filter, setFilter] = useState({ ip: "", eventType: "", digest: "", outcome: "" });
 
@@ -20,7 +23,7 @@ export function SecurityPage() {
     try {
       const to = new Date();
       const from = new Date(to.getTime() - 24 * 3600 * 1000);
-      const [ev, cs] = await Promise.all([
+      const [ev, cs, fd] = await Promise.all([
         getSecurityEvents({
           from: from.toISOString(),
           to: to.toISOString(),
@@ -31,9 +34,11 @@ export function SecurityPage() {
           limit: 50,
         }),
         getSecurityCases(),
+        getSecurityFindings(),
       ]);
       setEvents(ev.items);
       setCases(cs);
+      setFindings(fd);
       setFailed("");
     } catch {
       setFailed("安全数据加载失败");
@@ -105,6 +110,29 @@ export function SecurityPage() {
                   <Button size="xs" variant="light" color="red" onClick={() => void act(c, "close")}>结案</Button>
                 )}
               </Table.Td>
+            </Table.Tr>
+          ))}
+        </Table.Tbody>
+      </Table>
+
+      <Text fw={600} mb="xs">规则命中</Text>
+      <Table striped verticalSpacing={6} mb="lg" miw={720}>
+        <Table.Thead>
+          <Table.Tr>
+            <Table.Th>规则</Table.Th><Table.Th>严重度</Table.Th><Table.Th>主体</Table.Th>
+            <Table.Th>说明</Table.Th><Table.Th>案件</Table.Th>
+          </Table.Tr>
+        </Table.Thead>
+        <Table.Tbody>
+          {findings.length === 0 ? (
+            <Table.Tr><Table.Td colSpan={5}><Text size="sm" c="dimmed">无命中</Text></Table.Td></Table.Tr>
+          ) : findings.map((f) => (
+            <Table.Tr key={f.findingId}>
+              <Table.Td><Text size="xs">{f.ruleId} v{f.ruleVersion}</Text></Table.Td>
+              <Table.Td>{f.severity}</Table.Td>
+              <Table.Td><Text size="xs">{f.subjectKey}</Text></Table.Td>
+              <Table.Td><Text size="xs">{f.summary}</Text></Table.Td>
+              <Table.Td><Text size="xs">{f.caseId ?? "-"}</Text></Table.Td>
             </Table.Tr>
           ))}
         </Table.Tbody>

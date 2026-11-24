@@ -518,3 +518,43 @@ func (h *Handlers) ListNotificationDeliveries(c *gin.Context, params ListNotific
 	}
 	c.JSON(http.StatusOK, out)
 }
+
+// ListSecurityFindings は規則検出命中を新しい順で返す（FR-171）。
+func (h *Handlers) ListSecurityFindings(c *gin.Context, params ListSecurityFindingsParams) {
+	c.Header("Cache-Control", "private, no-store")
+	p, ok := requireAdmin(c)
+	if !ok || !h.requireRecentMfa(c, p) {
+		return
+	}
+	if h.finding == nil {
+		auth.WriteError(c, http.StatusServiceUnavailable, "security_projection_unavailable", "検出投影未装配")
+		return
+	}
+	limit := 50
+	if params.Limit != nil {
+		limit = *params.Limit
+	}
+	items, err := h.finding.ListFindings(c.Request.Context(), p, limit)
+	if err != nil {
+		auth.WriteError(c, http.StatusServiceUnavailable, "security_projection_unavailable", "検出投影暂不可用")
+		return
+	}
+	out := make([]SecurityFinding, 0, len(items))
+	for _, f := range items {
+		item := SecurityFinding{
+			FindingId: f.FindingID, RuleId: f.RuleID, RuleVersion: f.RuleVersion,
+			Severity:   SecurityFindingSeverity(f.Severity),
+			SubjectKey: f.SubjectKey, WindowFrom: &f.WindowFrom, WindowTo: &f.WindowTo,
+			Summary: f.Summary, CreatedUnix: &f.CreatedUnix,
+		}
+		if f.Confidence != "" {
+			c := SecurityFindingConfidence(f.Confidence)
+			item.Confidence = &c
+		}
+		if f.CaseID != "" {
+			item.CaseId = &f.CaseID
+		}
+		out = append(out, item)
+	}
+	c.JSON(http.StatusOK, out)
+}

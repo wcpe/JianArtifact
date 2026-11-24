@@ -286,6 +286,12 @@ func TestSecurityNotificationCursorEndToEnd(t *testing.T) {
 		t.Fatalf("不可见确认应 404，实际 %d", code)
 	}
 
+	// 命中清单端点可用（此处无规则命中 → 空列表）。
+	var findings []map[string]any
+	if code := e.jsonReq(t, http.MethodGet, "/api/v1/security/findings", token, nil, &findings); code != http.StatusOK {
+		t.Fatalf("命中清单状態码 = %d，期望 200", code)
+	}
+
 	// 案件转态：claim → close。
 	var claimed api.SecurityCase
 	if code := e.jsonReq(t, http.MethodPost, "/api/v1/security/cases/"+opened.CaseId+"/transitions", token,

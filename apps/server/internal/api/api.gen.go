@@ -1898,6 +1898,51 @@ func (e SecurityCaseTransitionRequestAction) Valid() bool {
 	}
 }
 
+// Defines values for SecurityFindingConfidence.
+const (
+	SecurityFindingConfidenceHigh   SecurityFindingConfidence = "high"
+	SecurityFindingConfidenceLow    SecurityFindingConfidence = "low"
+	SecurityFindingConfidenceMedium SecurityFindingConfidence = "medium"
+)
+
+// Valid indicates whether the value is a known member of the SecurityFindingConfidence enum.
+func (e SecurityFindingConfidence) Valid() bool {
+	switch e {
+	case SecurityFindingConfidenceHigh:
+		return true
+	case SecurityFindingConfidenceLow:
+		return true
+	case SecurityFindingConfidenceMedium:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecurityFindingSeverity.
+const (
+	SecurityFindingSeverityCritical SecurityFindingSeverity = "critical"
+	SecurityFindingSeverityHigh     SecurityFindingSeverity = "high"
+	SecurityFindingSeverityLow      SecurityFindingSeverity = "low"
+	SecurityFindingSeverityMedium   SecurityFindingSeverity = "medium"
+)
+
+// Valid indicates whether the value is a known member of the SecurityFindingSeverity enum.
+func (e SecurityFindingSeverity) Valid() bool {
+	switch e {
+	case SecurityFindingSeverityCritical:
+		return true
+	case SecurityFindingSeverityHigh:
+		return true
+	case SecurityFindingSeverityLow:
+		return true
+	case SecurityFindingSeverityMedium:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SecurityNotificationDeliveryChannel.
 const (
 	Qq   SecurityNotificationDeliveryChannel = "qq"
@@ -4790,6 +4835,27 @@ type SecurityCaseTransitionRequest struct {
 // SecurityCaseTransitionRequestAction defines model for SecurityCaseTransitionRequest.Action.
 type SecurityCaseTransitionRequestAction string
 
+// SecurityFinding defines model for SecurityFinding.
+type SecurityFinding struct {
+	CaseId      *string                    `json:"caseId,omitempty"`
+	Confidence  *SecurityFindingConfidence `json:"confidence,omitempty"`
+	CreatedUnix *int64                     `json:"createdUnix,omitempty"`
+	FindingId   string                     `json:"findingId"`
+	RuleId      string                     `json:"ruleId"`
+	RuleVersion int                        `json:"ruleVersion"`
+	Severity    SecurityFindingSeverity    `json:"severity"`
+	SubjectKey  string                     `json:"subjectKey"`
+	Summary     string                     `json:"summary"`
+	WindowFrom  *int64                     `json:"windowFrom,omitempty"`
+	WindowTo    *int64                     `json:"windowTo,omitempty"`
+}
+
+// SecurityFindingConfidence defines model for SecurityFinding.Confidence.
+type SecurityFindingConfidence string
+
+// SecurityFindingSeverity defines model for SecurityFinding.Severity.
+type SecurityFindingSeverity string
+
 // SecurityNotificationDelivery defines model for SecurityNotificationDelivery.
 type SecurityNotificationDelivery struct {
 	Attempts     *int64                              `json:"attempts,omitempty"`
@@ -5844,6 +5910,11 @@ type ListSecurityCasesParams struct {
 // ListSecurityCasesParamsState defines parameters for ListSecurityCases.
 type ListSecurityCasesParamsState string
 
+// ListSecurityFindingsParams defines parameters for ListSecurityFindings.
+type ListSecurityFindingsParams struct {
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
 // ListNotificationDeliveriesParams defines parameters for ListNotificationDeliveries.
 type ListNotificationDeliveriesParams struct {
 	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
@@ -6628,6 +6699,9 @@ type ServerInterface interface {
 	// TransitionSecurityCase 认领/结案/重开案件
 	// (POST /api/v1/security/cases/{caseId}/transitions)
 	TransitionSecurityCase(c *gin.Context, caseId string)
+	// ListSecurityFindings 规则命中清单（FR-171 检测投影）
+	// (GET /api/v1/security/findings)
+	ListSecurityFindings(c *gin.Context, params ListSecurityFindingsParams)
 	// ListEvidenceHolds 保全持有清单（管理员只读）
 	// (GET /api/v1/security/holds)
 	ListEvidenceHolds(c *gin.Context)
@@ -9696,6 +9770,33 @@ func (siw *ServerInterfaceWrapper) TransitionSecurityCase(c *gin.Context) {
 	siw.Handler.TransitionSecurityCase(c, caseId)
 }
 
+// ListSecurityFindings operation middleware
+func (siw *ServerInterfaceWrapper) ListSecurityFindings(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListSecurityFindingsParams
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", c.Request.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter limit: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ListSecurityFindings(c, params)
+}
+
 // ListEvidenceHolds operation middleware
 func (siw *ServerInterfaceWrapper) ListEvidenceHolds(c *gin.Context) {
 
@@ -10480,6 +10581,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.POST(options.BaseURL+"/api/v1/security/cases", wrapper.OpenSecurityCase)
 	router.POST(options.BaseURL+"/api/v1/security/cases/:caseId/transitions", wrapper.TransitionSecurityCase)
 	router.GET(options.BaseURL+"/api/v1/security/cases/:caseId/links", wrapper.ListSecurityCaseLinks)
+	router.GET(options.BaseURL+"/api/v1/security/findings", wrapper.ListSecurityFindings)
 	router.POST(options.BaseURL+"/api/v1/security/admission/candidates/:operationId/decisions/preview", wrapper.PreviewPrivateAdmissionDecision)
 	router.POST(options.BaseURL+"/api/v1/security/admission/candidates/:operationId/decisions", wrapper.DecidePrivateAdmissionCandidate)
 	router.POST(options.BaseURL+"/api/v1/users/:id/password", wrapper.ChangePassword)

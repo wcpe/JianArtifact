@@ -32,6 +32,7 @@ type Deps struct {
 	Auth                       *domain.AuthService
 	Mfa                        *domain.SecurityMfaService      // 强认证（nil = 未装配，MFA 端点返回 503）
 	Incident                   *domain.SecurityIncidentService // 事故处置（nil = 未装配）
+	Finding                    *domain.SecurityFindingService  // 規則検出投影（nil = 未装配）
 	Users                      *domain.UserService
 	Tokens                     *domain.TokenService
 	Repos                      *domain.RepositoryService
@@ -125,6 +126,7 @@ type Handlers struct {
 	auth                       *domain.AuthService
 	mfa                        *domain.SecurityMfaService
 	incident                   *domain.SecurityIncidentService
+	finding                    *domain.SecurityFindingService
 	users                      *domain.UserService
 	tokens                     *domain.TokenService
 	repos                      *domain.RepositoryService
@@ -186,6 +188,7 @@ func NewHandlers(d Deps) *Handlers {
 		auth:                       d.Auth,
 		mfa:                        d.Mfa,
 		incident:                   d.Incident,
+		finding:                    d.Finding,
 		users:                      d.Users,
 		tokens:                     d.Tokens,
 		repos:                      d.Repos,

@@ -1929,3 +1929,21 @@ export function transitionSecurityCase(
     body,
   });
 }
+
+export interface SecurityFinding {
+  findingId: string;
+  ruleId: string;
+  ruleVersion: number;
+  severity: "low" | "medium" | "high" | "critical";
+  confidence?: "low" | "medium" | "high";
+  subjectKey: string;
+  windowFrom?: number;
+  windowTo?: number;
+  summary: string;
+  caseId?: string;
+  createdUnix?: number;
+}
+
+export function getSecurityFindings(limit = 50): Promise<SecurityFinding[]> {
+  return request<SecurityFinding[]>(`/security/findings?limit=${limit}`);
+}

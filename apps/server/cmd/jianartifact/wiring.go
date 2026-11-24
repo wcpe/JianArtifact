@@ -31,6 +31,7 @@ type appServices struct {
 	authSvc             *domain.AuthService
 	mfaSvc              *domain.SecurityMfaService      // 强认证（因子密钥缺失时装配失败，不做降级服务）
 	incidentSvc         *domain.SecurityIncidentService // 事故处置
+	findingSvc          *domain.SecurityFindingService  // FR-171 規則検出投影
 	securityAudit       *domain.SecurityAuditService
 	securityAuditQuery  *api.SecurityAuditQuery
 	admission           *domain.AdmissionService
@@ -286,6 +287,8 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	mfaSvc.SetSecurityAudit(securityAudit)
 	authSvc.SetMfaService(mfaSvc)
 	incidentSvc := domain.NewSecurityIncidentService(repository.NewSecurityAuthFactorRepo(db), userRepo)
+	// FR-171 規則検出投影：security_event 順次消費→版付き規則命中→自動建案（検出と通知のみ、封禁しない）。
+	findingSvc := domain.NewSecurityFindingService(repository.NewSecurityAuthFactorRepo(db))
 	securityAuditQuery, err := api.NewSecurityAuditQuery(repository.NewSecurityEventRepo(db), securityAudit, cfg.JWTSecret, nodeIdentity.NodeID())
 	if err != nil {
 		_ = db.Close()
@@ -422,6 +425,17 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	// 回收站保留期回收：只删回收站副本，不触碰 original_path（那是 restore 的职责）。
 	registerTrashGCJob(schedulerSvc, cfg.TrashGCInterval,
 		time.Duration(cfg.TrashRetentionDays)*24*time.Hour, trashSvc.ReconcileExpired)
+	// FR-171 規則検出投影を 15 秒周期で回す（単一 worker；冪等键で二重走しても増えない）。
+	schedulerSvc.Register("security-finding-projector", 15*time.Second, func(ctx context.Context) error {
+		n, err := findingSvc.RunBatch(ctx)
+		if err != nil {
+			return err
+		}
+		if n > 0 {
+			log.Printf("安全規則命中 %d 件を投影（自動建案/集約）", n)
+		}
+		return nil
+	})
 	// FR-172 安全通知投递：待機行を 30 秒周期で派发。SMTP 未設定でも failed で可視化するため常時登録。
 	schedulerSvc.Register("security-notification-delivery", 30*time.Second, func(ctx context.Context) error {
 		n, err := incidentSvc.DispatchPendingNotifications(ctx, smtpNotificationMailer(cfg.SMTP))
@@ -485,6 +499,7 @@ func openServices(cfg *config.Config) (*appServices, error) {
 		authSvc:            authSvc,
 		mfaSvc:             mfaSvc,
 		incidentSvc:        incidentSvc,
+		findingSvc:         findingSvc,
 		securityAudit:      securityAudit,
 		securityAuditQuery: securityAuditQuery,
 		admission: func() *domain.AdmissionService {
@@ -649,6 +664,7 @@ func (s *appServices) handlers(version string, checks []func() error) *api.Handl
 		Auth:                    s.authSvc,
 		Mfa:                     s.mfaSvc,
 		Incident:                s.incidentSvc,
+		Finding:                 s.findingSvc,
 		Users:                   s.userSvc,
 		Tokens:                  s.tokenSvc,
 		Repos:                   s.repoSvc,

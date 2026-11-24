@@ -43,6 +43,7 @@ type protocolEnv struct {
 	sourceNode  string
 	mfaSvc      *domain.SecurityMfaService
 	incidentSvc *domain.SecurityIncidentService
+	findingSvc  *domain.SecurityFindingService
 	userRepo    *repository.UserRepo
 }
 
@@ -117,6 +118,7 @@ func newProtocolEnvConfigured(t *testing.T, publicURL string, enabled formats.Se
 	}
 	authSvc.SetMfaService(mfaSvc)
 	incidentSvc := domain.NewSecurityIncidentService(repository.NewSecurityAuthFactorRepo(db), userRepo)
+	findingSvc := domain.NewSecurityFindingService(repository.NewSecurityAuthFactorRepo(db))
 
 	handlers := api.NewHandlers(api.Deps{
 		Version:         "test",
@@ -125,6 +127,7 @@ func newProtocolEnvConfigured(t *testing.T, publicURL string, enabled formats.Se
 		Auth:            authSvc,
 		Mfa:             mfaSvc,
 		Incident:        incidentSvc,
+		Finding:         findingSvc,
 		Users:           domain.NewUserService(userRepo),
 		Tokens:          tokenSvc,
 		Repos:           repoSvc,
@@ -162,7 +165,7 @@ func newProtocolEnvConfigured(t *testing.T, publicURL string, enabled formats.Se
 		h:  srv.Handler(nil), rawHandler: rawHandler, repoRepo: repoRepo, assetRepo: assetRepo,
 		formatMeta: formatMetadataRepo,
 		auditLogs:  auditLogs, blobs: blobs, sourceNode: nodeIdentity.NodeID(),
-		mfaSvc: mfaSvc, incidentSvc: incidentSvc, userRepo: userRepo,
+		mfaSvc: mfaSvc, incidentSvc: incidentSvc, findingSvc: findingSvc, userRepo: userRepo,
 	}
 }
 

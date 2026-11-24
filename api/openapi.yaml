@@ -1336,6 +1336,28 @@ paths:
                   $ref: "#/components/schemas/SecurityCaseLink"
         "403":
           $ref: "#/components/responses/RecentMfaRequired"
+  /api/v1/security/findings:
+    get:
+      operationId: listSecurityFindings
+      summary: 规则命中清单（FR-171 检测投影）
+      security: [bearerAuth: []]
+      parameters:
+        - name: limit
+          in: query
+          schema: {type: integer, default: 50, maximum: 100}
+      responses:
+        "200":
+          description: 命中列表（新到旧）
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SecurityFinding"
+        "401":
+          $ref: "#/components/responses/PrivateAdmissionUnauthenticated"
+        "403":
+          $ref: "#/components/responses/RecentMfaRequired"
   /api/v1/security/admission/candidates/{operationId}/decisions/preview:
     post:
       operationId: previewPrivateAdmissionDecision
@@ -5052,6 +5074,22 @@ components:
         linkKind: {type: string, enum: [fact, candidate]}
         linkedBy: {type: string}
         linkedUnix: {type: integer, format: int64}
+    SecurityFinding:
+      type: object
+      additionalProperties: false
+      required: [findingId, ruleId, ruleVersion, severity, subjectKey, summary]
+      properties:
+        findingId: {type: string}
+        ruleId: {type: string}
+        ruleVersion: {type: integer}
+        severity: {type: string, enum: [low, medium, high, critical]}
+        confidence: {type: string, enum: [low, medium, high]}
+        subjectKey: {type: string}
+        windowFrom: {type: integer, format: int64}
+        windowTo: {type: integer, format: int64}
+        summary: {type: string}
+        caseId: {type: string}
+        createdUnix: {type: integer, format: int64}
     PrivateAdmissionDecisionPreviewResponse:
       type: object
       additionalProperties: false
