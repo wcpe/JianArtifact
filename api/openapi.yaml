@@ -824,6 +824,62 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "429":
           $ref: "#/components/responses/TooManyRequests"
+  /api/v1/security/actions:
+    post:
+      operationId: previewSecurityAction
+      summary: 预览事故处置动作（幂等；5 分钟内确认有效）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SecurityActionPreviewRequest"
+      responses:
+        "200":
+          description: 动作预览
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SecurityActionPreview"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/security/actions/{actionId}/execute:
+    post:
+      operationId: executeSecurityAction
+      summary: 确认并执行预览动作（需近期强认证与动作摘要）
+      parameters:
+        - name: actionId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SecurityActionExecuteRequest"
+      responses:
+        "200":
+          description: 逐项执行结果
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SecurityActionResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
   /api/v1/auth/me:
     get:
       operationId: getCurrentUser
@@ -5451,6 +5507,81 @@ components:
           items:
             type: string
             enum: [raw, maven, npm, docker, cargo, pypi, gomod, nuget]
+    SecurityActionTarget:
+      type: object
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          enum: [instance_write_lock]
+        target:
+          type: string
+        effect:
+          type: string
+    SecurityActionPreviewRequest:
+      type: object
+      required: [actionType, reason, idempotencyKey, targets]
+      properties:
+        actionType:
+          type: string
+          enum: [restrict, lift_restriction]
+        reason:
+          type: string
+          maxLength: 512
+        idempotencyKey:
+          type: string
+          minLength: 1
+        targets:
+          type: array
+          items:
+            $ref: "#/components/schemas/SecurityActionTarget"
+    SecurityActionPreview:
+      type: object
+      required: [actionId, actionType, actionDigest, expiresAt, targets]
+      properties:
+        actionId:
+          type: string
+        actionType:
+          type: string
+        actionDigest:
+          type: string
+        expiresAt:
+          type: string
+        targets:
+          type: array
+          items:
+            type: string
+    SecurityActionExecuteRequest:
+      type: object
+      required: [actionDigest]
+      properties:
+        actionDigest:
+          type: string
+          description: 预览返回的动作摘要；漂移即拒绝
+    SecurityActionItem:
+      type: object
+      required: [seq, target, outcome, detail]
+      properties:
+        seq:
+          type: integer
+        target:
+          type: string
+        outcome:
+          type: string
+        detail:
+          type: string
+    SecurityActionResult:
+      type: object
+      required: [actionId, state, items]
+      properties:
+        actionId:
+          type: string
+        state:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SecurityActionItem"
     BootstrapRequest:
       type: object
       required: [username, password]

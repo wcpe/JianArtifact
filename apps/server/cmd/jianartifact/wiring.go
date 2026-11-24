@@ -29,7 +29,8 @@ type appServices struct {
 	db                  *persistence.DB
 	users               *repository.UserRepo
 	authSvc             *domain.AuthService
-	mfaSvc              *domain.SecurityMfaService // 强认证（因子密钥缺失时装配失败，不做降级服务）
+	mfaSvc              *domain.SecurityMfaService      // 强认证（因子密钥缺失时装配失败，不做降级服务）
+	incidentSvc         *domain.SecurityIncidentService // 事故处置
 	securityAudit       *domain.SecurityAuditService
 	securityAuditQuery  *api.SecurityAuditQuery
 	admission           *domain.AdmissionService
@@ -283,6 +284,7 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	}
 	mfaSvc.SetSecurityAudit(securityAudit)
 	authSvc.SetMfaService(mfaSvc)
+	incidentSvc := domain.NewSecurityIncidentService(repository.NewSecurityAuthFactorRepo(db), userRepo)
 	securityAuditQuery, err := api.NewSecurityAuditQuery(repository.NewSecurityEventRepo(db), securityAudit, cfg.JWTSecret, nodeIdentity.NodeID())
 	if err != nil {
 		_ = db.Close()
@@ -470,6 +472,7 @@ func openServices(cfg *config.Config) (*appServices, error) {
 		users:               userRepo,
 		authSvc:             authSvc,
 		mfaSvc:              mfaSvc,
+		incidentSvc:         incidentSvc,
 		securityAudit:       securityAudit,
 		securityAuditQuery:  securityAuditQuery,
 		admission:           domain.NewAdmissionService(db, blobs, userRepo, repoRepo, freeze),
@@ -614,6 +617,7 @@ func (s *appServices) handlers(version string, checks []func() error) *api.Handl
 		Migration:               s.db.CurrentVersion,
 		Auth:                    s.authSvc,
 		Mfa:                     s.mfaSvc,
+		Incident:                s.incidentSvc,
 		Users:                   s.userSvc,
 		Tokens:                  s.tokenSvc,
 		Repos:                   s.repoSvc,

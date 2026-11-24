@@ -32,17 +32,18 @@ import (
 
 // protocolEnv 汇集含协议层路由的服务端句柄。
 type protocolEnv struct {
-	h          http.Handler
-	db         *persistence.DB
-	rawHandler *protocol.RawHandler
-	repoRepo   *repository.RepoRepo
-	assetRepo  *repository.AssetRepo
-	formatMeta *repository.FormatMetadataRepo
-	auditLogs  *repository.AuditLogRepo
-	blobs      *blobstore.Store
-	sourceNode string
-	mfaSvc     *domain.SecurityMfaService
-	userRepo   *repository.UserRepo
+	h           http.Handler
+	db          *persistence.DB
+	rawHandler  *protocol.RawHandler
+	repoRepo    *repository.RepoRepo
+	assetRepo   *repository.AssetRepo
+	formatMeta  *repository.FormatMetadataRepo
+	auditLogs   *repository.AuditLogRepo
+	blobs       *blobstore.Store
+	sourceNode  string
+	mfaSvc      *domain.SecurityMfaService
+	incidentSvc *domain.SecurityIncidentService
+	userRepo    *repository.UserRepo
 }
 
 // newProtocolEnv 装配完整服务端：契约路由 + Raw 协议路由（真实持久化 + blob 存储）。
@@ -115,6 +116,7 @@ func newProtocolEnvConfigured(t *testing.T, publicURL string, enabled formats.Se
 		t.Fatalf("构造强认证服务：%v", err)
 	}
 	authSvc.SetMfaService(mfaSvc)
+	incidentSvc := domain.NewSecurityIncidentService(repository.NewSecurityAuthFactorRepo(db), userRepo)
 
 	handlers := api.NewHandlers(api.Deps{
 		Version:         "test",
@@ -122,6 +124,7 @@ func newProtocolEnvConfigured(t *testing.T, publicURL string, enabled formats.Se
 		Migration:       db.CurrentVersion,
 		Auth:            authSvc,
 		Mfa:             mfaSvc,
+		Incident:        incidentSvc,
 		Users:           domain.NewUserService(userRepo),
 		Tokens:          tokenSvc,
 		Repos:           repoSvc,
@@ -136,6 +139,7 @@ func newProtocolEnvConfigured(t *testing.T, publicURL string, enabled formats.Se
 	srv := httpserver.New("test",
 		httpserver.WithReadinessCheck(db.Ping),
 		httpserver.WithHandlers(handlers),
+		httpserver.WithIncidentWriteLockGate(handlers.IncidentWriteLockGate()),
 		httpserver.WithMiddleware(api.MiddlewareFunc(authenticator.Optional())),
 		httpserver.WithProtocolRoutes(func(r gin.IRouter) {
 			protocolMW := authenticator.Protocol().Optional()
@@ -158,7 +162,7 @@ func newProtocolEnvConfigured(t *testing.T, publicURL string, enabled formats.Se
 		h:  srv.Handler(nil), rawHandler: rawHandler, repoRepo: repoRepo, assetRepo: assetRepo,
 		formatMeta: formatMetadataRepo,
 		auditLogs:  auditLogs, blobs: blobs, sourceNode: nodeIdentity.NodeID(),
-		mfaSvc: mfaSvc, userRepo: userRepo,
+		mfaSvc: mfaSvc, incidentSvc: incidentSvc, userRepo: userRepo,
 	}
 }
 

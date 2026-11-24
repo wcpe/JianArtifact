@@ -102,6 +102,24 @@ func (r *SecurityAuthFactorRepo) Write(ctx context.Context, apply func(*sqlx.Tx)
 	return tx.Commit()
 }
 
+// Read 只读事务（入口裁决等需要一致性读的路径）。
+func (r *SecurityAuthFactorRepo) Read(ctx context.Context, apply func(*sqlx.Tx) error) error {
+	conn, err := r.db.Connx(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+	tx, err := conn.BeginTxx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := apply(tx); err != nil {
+		return err
+	}
+	return tx.Rollback()
+}
+
 func InsertSecurityChallengeTx(ctx context.Context, tx *sqlx.Tx, c SecurityAuthChallenge) error {
 	_, err := tx.ExecContext(ctx,
 		`INSERT INTO security_auth_challenge

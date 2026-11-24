@@ -270,7 +270,8 @@ func newApplicationHandler(cfg *config.Config, svc *appServices, assets fs.FS) h
 		httpserver.WithIngressGate(&svc.ingressGate),
 		httpserver.WithReadinessCheck(svc.db.Ping),
 		httpserver.WithReadinessCheck(blobWritableCheck(cfg.BlobDir)),
-		httpserver.WithWriteFreeze(svc.freeze.State), // 运行时写入冻结窗口（未冻结时中间件为空操作）
+		httpserver.WithWriteFreeze(svc.freeze.State),                              // 运行时写入冻结窗口（未冻结时中间件为空操作）
+		httpserver.WithIncidentWriteLockGate(apiHandlers.IncidentWriteLockGate()), // 事故写锁入口裁决
 		httpserver.WithHandlers(apiHandlers),
 		httpserver.WithManagementSecurityAudit(apiHandlers.AuditLog),
 		httpserver.WithSecurityAuditRead(authenticator.SecurityAuditPrincipal(api.RejectSecurityAuditPrincipal), func() api.HealthStatusAuditCollection {

@@ -1271,6 +1271,39 @@ func (e RepositoryVisibility) Valid() bool {
 	}
 }
 
+// Defines values for SecurityActionPreviewRequestActionType.
+const (
+	LiftRestriction SecurityActionPreviewRequestActionType = "lift_restriction"
+	Restrict        SecurityActionPreviewRequestActionType = "restrict"
+)
+
+// Valid indicates whether the value is a known member of the SecurityActionPreviewRequestActionType enum.
+func (e SecurityActionPreviewRequestActionType) Valid() bool {
+	switch e {
+	case LiftRestriction:
+		return true
+	case Restrict:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecurityActionTargetKind.
+const (
+	InstanceWriteLock SecurityActionTargetKind = "instance_write_lock"
+)
+
+// Valid indicates whether the value is a known member of the SecurityActionTargetKind enum.
+func (e SecurityActionTargetKind) Valid() bool {
+	switch e {
+	case InstanceWriteLock:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SecurityAuditCollectionGapCoverage.
 const (
 	SecurityAuditCollectionGapCoverageGapped  SecurityAuditCollectionGapCoverage = "gapped"
@@ -4139,6 +4172,57 @@ type RestoreFromLocalPackageRequest struct {
 	Overwrite *bool `json:"overwrite,omitempty"`
 }
 
+// SecurityActionExecuteRequest defines model for SecurityActionExecuteRequest.
+type SecurityActionExecuteRequest struct {
+	// ActionDigest 预览返回的动作摘要；漂移即拒绝
+	ActionDigest string `json:"actionDigest"`
+}
+
+// SecurityActionItem defines model for SecurityActionItem.
+type SecurityActionItem struct {
+	Detail  string `json:"detail"`
+	Outcome string `json:"outcome"`
+	Seq     int    `json:"seq"`
+	Target  string `json:"target"`
+}
+
+// SecurityActionPreview defines model for SecurityActionPreview.
+type SecurityActionPreview struct {
+	ActionDigest string   `json:"actionDigest"`
+	ActionId     string   `json:"actionId"`
+	ActionType   string   `json:"actionType"`
+	ExpiresAt    string   `json:"expiresAt"`
+	Targets      []string `json:"targets"`
+}
+
+// SecurityActionPreviewRequest defines model for SecurityActionPreviewRequest.
+type SecurityActionPreviewRequest struct {
+	ActionType     SecurityActionPreviewRequestActionType `json:"actionType"`
+	IdempotencyKey string                                 `json:"idempotencyKey"`
+	Reason         string                                 `json:"reason"`
+	Targets        []SecurityActionTarget                 `json:"targets"`
+}
+
+// SecurityActionPreviewRequestActionType defines model for SecurityActionPreviewRequest.ActionType.
+type SecurityActionPreviewRequestActionType string
+
+// SecurityActionResult defines model for SecurityActionResult.
+type SecurityActionResult struct {
+	ActionId string               `json:"actionId"`
+	Items    []SecurityActionItem `json:"items"`
+	State    string               `json:"state"`
+}
+
+// SecurityActionTarget defines model for SecurityActionTarget.
+type SecurityActionTarget struct {
+	Effect *string                  `json:"effect,omitempty"`
+	Kind   SecurityActionTargetKind `json:"kind"`
+	Target *string                  `json:"target,omitempty"`
+}
+
+// SecurityActionTargetKind defines model for SecurityActionTarget.Kind.
+type SecurityActionTargetKind string
+
 // SecurityAuditCollectionGap defines model for SecurityAuditCollectionGap.
 type SecurityAuditCollectionGap struct {
 	Coverage  SecurityAuditCollectionGapCoverage  `json:"coverage"`
@@ -5444,6 +5528,12 @@ type SetRepositoryOnlineJSONRequestBody = SetRepositoryOnlineRequest
 // RenameRepositoryJSONRequestBody defines body for RenameRepository for application/json ContentType.
 type RenameRepositoryJSONRequestBody = RenameRepositoryRequest
 
+// PreviewSecurityActionJSONRequestBody defines body for PreviewSecurityAction for application/json ContentType.
+type PreviewSecurityActionJSONRequestBody = SecurityActionPreviewRequest
+
+// ExecuteSecurityActionJSONRequestBody defines body for ExecuteSecurityAction for application/json ContentType.
+type ExecuteSecurityActionJSONRequestBody = SecurityActionExecuteRequest
+
 // PutGlobalPinnedRepositoriesJSONRequestBody defines body for PutGlobalPinnedRepositories for application/json ContentType.
 type PutGlobalPinnedRepositoriesJSONRequestBody = PutPinnedRepositoriesRequest
 
@@ -6038,6 +6128,12 @@ type ServerInterface interface {
 	// GetRepositoryUsage 仓库客户端使用片段（据 format/type 返回接入命令）
 	// (GET /api/v1/repositories/{name}/usage)
 	GetRepositoryUsage(c *gin.Context, name RepoNameParam)
+	// PreviewSecurityAction 预览事故处置动作（幂等；5 分钟内确认有效）
+	// (POST /api/v1/security/actions)
+	PreviewSecurityAction(c *gin.Context)
+	// ExecuteSecurityAction 确认并执行预览动作（需近期强认证与动作摘要）
+	// (POST /api/v1/security/actions/{actionId}/execute)
+	ExecuteSecurityAction(c *gin.Context, actionId string)
 	// GetPrivateAdmissionCandidate 查询本人私有候选的状态
 	// (GET /api/v1/security/admission/candidates/{operationId})
 	GetPrivateAdmissionCandidate(c *gin.Context, operationId PrivateAdmissionOperationIdParam)
@@ -8882,6 +8978,44 @@ func (siw *ServerInterfaceWrapper) GetRepositoryUsage(c *gin.Context) {
 	siw.Handler.GetRepositoryUsage(c, name)
 }
 
+// PreviewSecurityAction operation middleware
+func (siw *ServerInterfaceWrapper) PreviewSecurityAction(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.PreviewSecurityAction(c)
+}
+
+// ExecuteSecurityAction operation middleware
+func (siw *ServerInterfaceWrapper) ExecuteSecurityAction(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "actionId" -------------
+	var actionId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "actionId", c.Param("actionId"), &actionId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter actionId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ExecuteSecurityAction(c, actionId)
+}
+
 // GetPrivateAdmissionCandidate operation middleware
 func (siw *ServerInterfaceWrapper) GetPrivateAdmissionCandidate(c *gin.Context) {
 
@@ -9516,6 +9650,8 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/api/v1/auth/mfa/status", wrapper.GetMfaStatus)
 	router.POST(options.BaseURL+"/api/v1/auth/mfa/enroll", wrapper.BeginMfaEnroll)
 	router.POST(options.BaseURL+"/api/v1/auth/mfa/enroll/confirm", wrapper.ConfirmMfaEnroll)
+	router.POST(options.BaseURL+"/api/v1/security/actions", wrapper.PreviewSecurityAction)
+	router.POST(options.BaseURL+"/api/v1/security/actions/:actionId/execute", wrapper.ExecuteSecurityAction)
 	router.GET(options.BaseURL+"/api/v1/auth/me", wrapper.GetCurrentUser)
 	router.GET(options.BaseURL+"/api/v1/auth/oidc/start", wrapper.StartOidcLogin)
 	router.GET(options.BaseURL+"/api/v1/auth/oidc/callback", wrapper.CompleteOidcLogin)
