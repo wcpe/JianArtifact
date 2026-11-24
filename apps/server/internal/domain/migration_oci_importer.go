@@ -7,60 +7,75 @@ import (
 )
 
 // ImportMigrationAsset 按 OCI blob、manifest、tag 的依赖顺序导入迁移资产。
-func (s *OCIService) ImportMigrationAsset(asset MigrationAsset) error {
+func (s *OCIService) ImportMigrationAsset(asset MigrationAsset) (int64, error) {
 	path := strings.Trim(asset.SourcePath, "/")
 	if digest, ok := strings.CutPrefix(path, "oci/blobs/sha256/"); ok {
-		_, err := s.putBlob(asset.Repository, "sha256:"+digest, asset.Body, asset.SourceModified, true)
-		return err
+		staged, err := s.putBlob(asset.Repository, "sha256:"+digest, asset.Body, asset.SourceModified, true)
+		if err != nil {
+			return 0, err
+		}
+		return staged.ID, nil
 	}
 	if _, digest, ok := migrationNexusOCIBlob(path); ok {
-		_, err := s.putBlob(asset.Repository, "sha256:"+digest, asset.Body, asset.SourceModified, true)
-		return err
+		staged, err := s.putBlob(asset.Repository, "sha256:"+digest, asset.Body, asset.SourceModified, true)
+		if err != nil {
+			return 0, err
+		}
+		return staged.ID, nil
 	}
 	if image, digest, ok := migrationOCIPath(path, "oci/manifests/"); ok {
 		body, err := io.ReadAll(io.LimitReader(asset.Body, maxOCIManifestBytes+1))
 		if err != nil || len(body) > maxOCIManifestBytes {
-			return ErrValidation
+			return 0, ErrValidation
 		}
-		_, err = s.putManifest(asset.Repository, image, "sha256:"+digest, body, "application/vnd.oci.image.manifest.v1+json", asset.SourceModified, true)
-		return err
+		res, err := s.putManifest(asset.Repository, image, "sha256:"+digest, body, "application/vnd.oci.image.manifest.v1+json", asset.SourceModified, true)
+		if err != nil {
+			return 0, err
+		}
+		return res.AssetID, nil
 	}
 	if image, tag, ok := migrationOCIPath(path, "oci/tags/"); ok {
 		digestBytes, err := io.ReadAll(io.LimitReader(asset.Body, 80))
 		if err != nil {
-			return err
+			return 0, err
 		}
 		digest := strings.TrimSpace(string(digestBytes))
 		if _, ok := validOCIDigest(digest); !ok {
-			return ErrValidation
+			return 0, ErrValidation
 		}
 		_, rc, err := s.assets.Get(asset.Repository, ociManifestPath(image, digest))
 		if err != nil {
-			return err
+			return 0, err
 		}
 		defer func() { _ = rc.Close() }()
 		body, err := io.ReadAll(io.LimitReader(rc, maxOCIManifestBytes+1))
 		if err != nil || len(body) > maxOCIManifestBytes {
-			return ErrValidation
+			return 0, ErrValidation
 		}
-		_, err = s.putManifest(asset.Repository, image, tag, body, "application/vnd.oci.image.manifest.v1+json", asset.SourceModified, true)
-		return err
+		res, err := s.putManifest(asset.Repository, image, tag, body, "application/vnd.oci.image.manifest.v1+json", asset.SourceModified, true)
+		if err != nil {
+			return 0, err
+		}
+		return res.AssetID, nil
 	}
 	if rest, ok := strings.CutPrefix(path, "v2/"); ok {
 		if at := strings.Index(rest, "/manifests/"); at > 0 {
 			image, reference := rest[:at], rest[at+len("/manifests/"):]
 			if !validOCIImage(image) || !validOCIReference(reference) {
-				return ErrValidation
+				return 0, ErrValidation
 			}
 			body, err := io.ReadAll(io.LimitReader(asset.Body, maxOCIManifestBytes+1))
 			if err != nil || len(body) > maxOCIManifestBytes {
-				return ErrValidation
+				return 0, ErrValidation
 			}
-			_, err = s.putManifest(asset.Repository, image, reference, body, "application/vnd.oci.image.manifest.v1+json", asset.SourceModified, true)
-			return err
+			res, err := s.putManifest(asset.Repository, image, reference, body, "application/vnd.oci.image.manifest.v1+json", asset.SourceModified, true)
+			if err != nil {
+				return 0, err
+			}
+			return res.AssetID, nil
 		}
 	}
-	return fmt.Errorf("%w: OCI 迁移路径不受支持", ErrValidation)
+	return 0, fmt.Errorf("%w: OCI 迁移路径不受支持", ErrValidation)
 }
 
 func migrationNexusOCIBlob(source string) (string, string, bool) {

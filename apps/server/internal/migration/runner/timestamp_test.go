@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"context"
 	"io"
 	"strings"
 	"testing"
@@ -48,7 +49,7 @@ func TestImportItemPassesSourceTimestamp(t *testing.T) {
 			return io.NopCloser(strings.NewReader("blob-bytes")), nil
 		},
 	}
-	if err := r.importItem(item); err != nil {
+	if err := r.importItem(context.Background(), item, nil); err != nil {
 		t.Fatalf("importItem：%v", err)
 	}
 	if !stub.putWithTS {
@@ -69,7 +70,7 @@ func TestImportItemPassesSourceTimestamp(t *testing.T) {
 			return io.NopCloser(strings.NewReader("x")), nil
 		},
 	}
-	if err := r2.importItem(zeroItem); err != nil {
+	if err := r2.importItem(context.Background(), zeroItem, nil); err != nil {
 		t.Fatalf("importItem(零值)：%v", err)
 	}
 	if !stub2.putWithTS {

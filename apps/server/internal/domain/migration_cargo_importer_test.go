@@ -49,7 +49,7 @@ func TestCargoMigrationIndexMergesSourceMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("编码来源索引：%v", err)
 	}
-	if err := cargo.ImportMigrationAsset(MigrationAsset{Repository: "raw", Format: "cargo", SourcePath: "de/mo/demo", Body: bytes.NewReader(append(data, '\n'))}); err != nil {
+	if _, err := cargo.ImportMigrationAsset(MigrationAsset{Repository: "raw", Format: "cargo", SourcePath: "de/mo/demo", Body: bytes.NewReader(append(data, '\n'))}); err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			t.Fatalf("来源索引校验错误：%v", err)
 		}

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"sort"
@@ -15,6 +16,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wcpe/jianartifact/apps/server/internal/auditctx"
+	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
 	"github.com/wcpe/jianartifact/apps/server/internal/migration/credential"
 	"github.com/wcpe/jianartifact/apps/server/internal/migration/discover"
@@ -65,6 +68,10 @@ type Runner struct {
 	audit    *repository.AuditLogRepo
 	// 离线目录持久化索引（可选）：就绪时枚举走索引
 	offlineIndex *repository.OfflineIndexRepo
+	// 私有候选准入：获准格式 hosted 写回逐项接收，principalFn 按任务发起人还原主体。
+	admission   *domain.AdmissionService
+	srcVersion  string
+	principalFn func(task *repository.MigrationTask) (*auth.Principal, error)
 	// onlineHTTP 是在线 Nexus 列表与下载共用的安全出站客户端。
 	onlineHTTP       *upstream.Client
 	credentialSealer *credential.Sealer
@@ -105,6 +112,12 @@ func (r *Runner) SetOfflineIndex(idx *repository.OfflineIndexRepo) {
 // SetFormatImporter 注入需要协议元数据的格式迁移器。
 func (r *Runner) SetFormatImporter(importer domain.MigrationFormatImporter) {
 	r.importer = importer
+}
+
+// SetAdmission 装配私有候选准入与发起人主体构造（FR-169 §3.6 迁移写回）。
+// principalFn 按任务发起人还原主体；返回错误即暂停该项写回。
+func (r *Runner) SetAdmission(a *domain.AdmissionService, sourceVersion string, principalFn func(task *repository.MigrationTask) (*auth.Principal, error)) {
+	r.admission, r.srcVersion, r.principalFn = a, sourceVersion, principalFn
 }
 
 // SetAuditLogRepo 注入异步迁移结果审计仓储；nil 表示不记录，保持测试与旧装配兼容。
@@ -168,7 +181,7 @@ func (r *Runner) Finalize(ctx context.Context, taskID int64) error {
 			skipped++
 			continue
 		}
-		if err := r.importItem(item); err != nil {
+		if err := r.importItem(ctx, item, task); err != nil {
 			return err
 		}
 		copied++
@@ -424,7 +437,7 @@ func (r *Runner) run(taskID int64) {
 		}
 
 		report.Message = "写入 " + item.Repo + "（已复制 " + itoa(report.Copied) + "）"
-		if err := r.importItem(item); err != nil {
+		if err := r.importItem(ctx, item, task); err != nil {
 			report.Failed++
 			report.Failures = appendLimited(report.Failures, failEntry(item, err.Error()))
 			flushCP(true)
@@ -577,18 +590,31 @@ func cargoMigrationOrder(item sourceItem) int {
 	return 1
 }
 
-func (r *Runner) importItem(item sourceItem) error {
+// importItem 写回一个迁移制品。获准格式的 hosted 目标先经私有候选准入
+// 接收：封存→完整性裁定→提升净字节进格式导入器，提交后回写 published（FR-169 §3.6）。
+func (r *Runner) importItem(ctx context.Context, item sourceItem, task *repository.MigrationTask) error {
+	var candRow repository.AdmissionCandidateRow
+	var candP *auth.Principal
+	open := func() (io.ReadCloser, error) {
+		rc, err := item.Open()
+		if err != nil {
+			return nil, err
+		}
+		return r.admissionWrap(ctx, item, task, rc, &candRow, &candP)
+	}
+	var assetID int64
+	var err error
 	switch item.Format {
 	case "pypi", "nuget", "cargo", "docker":
 		if r.importer == nil {
 			return fmt.Errorf("%w: %s 迁移器未配置", domain.ErrValidation, item.Format)
 		}
-		rc, err := item.Open()
-		if err != nil {
-			return err
+		rc, e := open()
+		if e != nil {
+			return e
 		}
 		defer func() { _ = rc.Close() }()
-		return r.importer.ImportMigrationAsset(domain.MigrationAsset{
+		assetID, err = r.importer.ImportMigrationAsset(domain.MigrationAsset{
 			Repository:     item.Repo,
 			Format:         item.Format,
 			SourcePath:     item.Path,
@@ -598,15 +624,72 @@ func (r *Runner) importItem(item sourceItem) error {
 	case "gomod":
 		return fmt.Errorf("%w: %s 迁移尚未支持安全导入", domain.ErrValidation, item.Format)
 	default:
-		rc, err := item.Open()
-		if err != nil {
-			return err
+		rc, e := open()
+		if e != nil {
+			return e
 		}
 		defer func() { _ = rc.Close() }()
 		// 在线迁移保留源资产时间戳：把从 Nexus 解析的源端时间回填到 created_at/updated_at。
-		_, err = r.assets.PutWithTimestamps(item.Repo, item.Path, rc, "application/octet-stream", item.SourceModified)
+		staged, e2 := r.assets.PutWithTimestamps(item.Repo, item.Path, rc, "application/octet-stream", item.SourceModified)
+		if e2 != nil {
+			return e2
+		}
+		assetID = staged.ID
+	}
+	if err != nil {
 		return err
 	}
+	if candRow.OperationID != "" {
+		if _, merr := r.admission.MarkPublished(ctx, candP, candRow, assetID); merr != nil {
+			return fmt.Errorf("准入候选发布状态回写失败：%w", merr)
+		}
+	}
+	return nil
+}
+
+// admissionAssetLookup 准入所需的仓库查询能力（由 AssetServiceAdapter 满足）。
+type admissionAssetLookup interface {
+	RepoByName(name string) (*repository.Repository, error)
+}
+
+// admissionWrap 把获准格式的 hosted 写回字节先送入私有候选：返回提升后的净字节。
+// 未装配、目标非 hosted/未获准格式或任务无发起人时原样返回。
+func (r *Runner) admissionWrap(ctx context.Context, item sourceItem, task *repository.MigrationTask, rc io.ReadCloser, rowOut *repository.AdmissionCandidateRow, pOut **auth.Principal) (io.ReadCloser, error) {
+	if r.admission == nil || r.principalFn == nil || task == nil {
+		return rc, nil
+	}
+	lk, ok := r.assets.(admissionAssetLookup)
+	if !ok {
+		return rc, nil
+	}
+	repo, err := lk.RepoByName(item.Repo)
+	if err != nil || repo.Type != "hosted" || !domain.AdmissionFormatAllowed(repo.Format) {
+		return rc, nil
+	}
+	// FR-169 §3.6：每次提升复核原发起人身份与权限；无法证明可放行时拒绝。
+	p, err := r.principalFn(task)
+	if err != nil {
+		_ = rc.Close()
+		return nil, err
+	}
+	src := auditctx.Source{
+		RequestID:          fmt.Sprintf("migration-%d", task.ID),
+		ClientIP:           netip.MustParseAddr("127.0.0.1"),
+		ProxyTrust:         auditctx.ProxyTrustDirect,
+		SourceTrustVersion: r.srcVersion,
+	}
+	row, err := r.admission.IntakeInternalCandidate(ctx, p, src, repo.ID, strings.Trim(item.Path, "/"), "application/octet-stream", rc)
+	if err != nil {
+		_ = rc.Close()
+		return nil, err
+	}
+	prc, _, err := r.admission.PromoteBytes(ctx, row)
+	if err != nil {
+		_ = rc.Close()
+		return nil, err
+	}
+	*rowOut, *pOut = row, p
+	return prc, nil
 }
 
 func (r *Runner) enumerate(ctx context.Context, task *repository.MigrationTask, onProg discover.EnumProgress) ([]sourceItem, error) {
@@ -1179,6 +1262,11 @@ func (a AssetServiceAdapter) LoadPathSet(repoName string) (map[string]bool, erro
 		set[p] = true
 	}
 	return set, nil
+}
+
+// RepoByName 供准入裁决查询仓库格式与类型。
+func (a AssetServiceAdapter) RepoByName(repoName string) (*repository.Repository, error) {
+	return a.Repos.GetByName(repoName)
 }
 
 func (a AssetServiceAdapter) ImmutableRelease(repoName string) (bool, error) {

@@ -56,6 +56,8 @@ type CargoPublishResult struct {
 	Checksum string
 	Path     string
 	Size     int64
+	// AssetID 是 crate 资产行号；供私有候选提升后回写 published_asset_id。
+	AssetID int64
 }
 
 // CargoPublishGuard 在 crate 字节落库前校验发布策略；返回的结算函数必须只在发布成功后调用。
@@ -213,7 +215,7 @@ func (s *CargoService) publishCargo(ctx context.Context, repoName string, r io.R
 		}
 	}
 	settle(true)
-	return &CargoPublishResult{Name: name, Version: version, Checksum: checksum, Path: cratePath, Size: int64(crateLen)}, nil
+	return &CargoPublishResult{Name: name, Version: version, Checksum: checksum, Path: cratePath, Size: int64(crateLen), AssetID: crateAsset.ID}, nil
 }
 
 // Index 返回一个仓库的 sparse JSON Lines。group 依成员顺序合并同版本记录。

@@ -16,9 +16,9 @@ import (
 )
 
 // ImportMigrationAsset 以 Cargo crate 与 sparse index 的语义导入迁移资产。
-func (s *CargoService) ImportMigrationAsset(asset MigrationAsset) error {
+func (s *CargoService) ImportMigrationAsset(asset MigrationAsset) (int64, error) {
 	if asset.Body == nil {
-		return fmt.Errorf("%w: Cargo 迁移制品内容不能为空", ErrValidation)
+		return 0, fmt.Errorf("%w: Cargo 迁移制品内容不能为空", ErrValidation)
 	}
 	if name, version, ok := cargoMigrationCratePath(asset.SourcePath); ok {
 		return s.importMigrationCrate(asset.Repository, name, version, asset.Body, asset.SourceModified)
@@ -26,13 +26,13 @@ func (s *CargoService) ImportMigrationAsset(asset MigrationAsset) error {
 	if name, ok := cargoMigrationIndexName(asset.SourcePath); ok {
 		return s.importMigrationIndex(asset.Repository, name, asset.Body)
 	}
-	return fmt.Errorf("%w: Cargo 迁移路径不受支持", ErrValidation)
+	return 0, fmt.Errorf("%w: Cargo 迁移路径不受支持", ErrValidation)
 }
 
-func (s *CargoService) importMigrationCrate(repo, name, version string, body io.Reader, sourceModified time.Time) error {
+func (s *CargoService) importMigrationCrate(repo, name, version string, body io.Reader, sourceModified time.Time) (int64, error) {
 	file, size, err := spoolMigrationCargo(body)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer func() {
 		_ = file.Close()
@@ -40,36 +40,39 @@ func (s *CargoService) importMigrationCrate(repo, name, version string, body io.
 	}()
 	frame, err := cargoMigrationFrame(name, version, file, size)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	_, err = s.publishCargo(context.Background(), repo, frame, nil, sourceModified, true, nil)
-	return err
+	res, err := s.publishCargo(context.Background(), repo, frame, nil, sourceModified, true, nil)
+	if err != nil {
+		return 0, err
+	}
+	return res.AssetID, nil
 }
 
-func (s *CargoService) importMigrationIndex(repo, name string, body io.Reader) error {
+func (s *CargoService) importMigrationIndex(repo, name string, body io.Reader) (int64, error) {
 	data, err := io.ReadAll(io.LimitReader(body, cargoMaxMetadataBytes+1))
 	if err != nil || len(data) > cargoMaxMetadataBytes {
-		return fmt.Errorf("%w: Cargo 索引内容非法", ErrValidation)
+		return 0, fmt.Errorf("%w: Cargo 索引内容非法", ErrValidation)
 	}
 	if err := s.validateMigrationIndex(repo, name, data); err != nil {
-		return err
+		return 0, err
 	}
 	merged, changed, err := s.mergeMigrationIndex(repo, name, data)
 	if err != nil || !changed {
-		return err
+		return 0, err
 	}
 	asset, err := s.assets.StageBlob(bytes.NewReader(merged), "application/json")
 	if err != nil {
-		return err
+		return 0, err
 	}
 	asset.Path = cargoHostedIndexAssetPath(name)
 	// 迁移导入属管理员批量操作：显式豁免仓库存储配额。
 	markQuotaExempt(asset)
 	_, err = s.assets.PublishAssets(repo, []*repository.Asset{asset})
 	if err != nil {
-		return s.assets.cleanupFailedWrite(asset.BlobHash, err)
+		return 0, s.assets.cleanupFailedWrite(asset.BlobHash, err)
 	}
-	return nil
+	return asset.ID, nil
 }
 
 func (s *CargoService) mergeMigrationIndex(repo, name string, incoming []byte) ([]byte, bool, error) {

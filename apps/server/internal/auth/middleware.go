@@ -21,6 +21,9 @@ type Kind string
 const (
 	KindSession Kind = "session" // JWT 会话
 	KindToken   Kind = "token"   // API Token
+	// KindInternal 仅由服务端内部批写入口（迁移导入等）构造，
+	// 身份绑定任务发起人；凭据认证永不产生该主体。
+	KindInternal Kind = "internal"
 )
 
 // 认证来源用于审计和管理面策略判断，不包含任何凭据内容。

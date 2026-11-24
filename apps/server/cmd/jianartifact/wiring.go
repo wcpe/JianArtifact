@@ -480,6 +480,20 @@ func openServices(cfg *config.Config) (*appServices, error) {
 			s := domain.NewAdmissionService(db, blobs, userRepo, repoRepo, freeze)
 			s.SetAssetService(assetSvc)
 			cargoSvc.SetAdmission(s)
+			// FR-169 §3.6：迁移写回逐项经私有候选，身份绑定原发起人并实时复核。
+			migRunner.SetAdmission(s, cfg.SourcePolicy.Version(), func(task *repository.MigrationTask) (*auth.Principal, error) {
+				if task == nil || !task.InitiatorUserID.Valid || task.InitiatorUserID.Int64 <= 0 {
+					return nil, domain.ErrAdmissionForbidden
+				}
+				u, err := userSvc.Get(task.InitiatorUserID.Int64)
+				if err != nil || u.Status != "active" {
+					return nil, domain.ErrAdmissionForbidden
+				}
+				return &auth.Principal{
+					UserID: u.ID, Username: u.Username, Role: u.Role,
+					Kind: auth.KindInternal, AuthSource: task.InitiatorAuthSource,
+				}, nil
+			})
 			return s
 		}(),
 		userSvc:             userSvc,

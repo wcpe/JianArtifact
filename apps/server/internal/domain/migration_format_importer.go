@@ -3,6 +3,9 @@ package domain
 import (
 	"fmt"
 	"io"
+
+	"github.com/wcpe/jianartifact/apps/server/internal/auditctx"
+	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 	"os"
 	"path"
 	"strings"
@@ -22,11 +25,16 @@ type MigrationAsset struct {
 	// SourceModified 源端最后修改时间（在线迁移保留源时间戳）；
 	// 零值时各格式服务回退本地时间语义，与离线迁移一致。
 	SourceModified time.Time
+	// Principal 与 Source 是私有候选准入的发起主体与来源快照
+	// （FR-169 §3.6：迁移写回按原发起人逐项复核）；为零值时跳过准入。
+	Principal *auth.Principal
+	Source    auditctx.Source
 }
 
 // MigrationFormatImporter 以格式语义写入迁移制品，禁止降级为裸资产写入。
 type MigrationFormatImporter interface {
-	ImportMigrationAsset(MigrationAsset) error
+	// ImportMigrationAsset 返回发布提交的资产行号（供准入候选回写）。
+	ImportMigrationAsset(MigrationAsset) (int64, error)
 }
 
 type migrationFormatImporter struct {
@@ -44,29 +52,29 @@ func NewMigrationFormatImporter(metadata *FormatMetadataService, cargo *CargoSer
 	return &migrationFormatImporter{metadata: metadata, cargo: cargo, oci: service}
 }
 
-func (i *migrationFormatImporter) ImportMigrationAsset(asset MigrationAsset) error {
+func (i *migrationFormatImporter) ImportMigrationAsset(asset MigrationAsset) (int64, error) {
 	if asset.Format == "cargo" {
 		if i.cargo == nil {
-			return fmt.Errorf("%w: cargo 迁移器未配置", ErrValidation)
+			return 0, fmt.Errorf("%w: cargo 迁移器未配置", ErrValidation)
 		}
 		return i.cargo.ImportMigrationAsset(asset)
 	}
 	if asset.Format == "docker" {
 		if i.oci == nil {
-			return fmt.Errorf("%w: OCI 迁移器未配置", ErrValidation)
+			return 0, fmt.Errorf("%w: OCI 迁移器未配置", ErrValidation)
 		}
 		return i.oci.ImportMigrationAsset(asset)
 	}
 	if i.metadata == nil {
-		return fmt.Errorf("%w: 格式元数据迁移器未配置", ErrValidation)
+		return 0, fmt.Errorf("%w: 格式元数据迁移器未配置", ErrValidation)
 	}
 	return i.metadata.ImportMigrationAsset(asset)
 }
 
-// ImportMigrationAsset 按格式验证并写入协议索引与制品内容。
-func (s *FormatMetadataService) ImportMigrationAsset(asset MigrationAsset) error {
+// ImportMigrationAsset 按格式验证并写入协议索引与制品内容；返回资产行号。
+func (s *FormatMetadataService) ImportMigrationAsset(asset MigrationAsset) (int64, error) {
 	if asset.Body == nil {
-		return fmt.Errorf("%w: 迁移制品内容不能为空", ErrValidation)
+		return 0, fmt.Errorf("%w: 迁移制品内容不能为空", ErrValidation)
 	}
 	switch asset.Format {
 	case "pypi":
@@ -74,24 +82,27 @@ func (s *FormatMetadataService) ImportMigrationAsset(asset MigrationAsset) error
 	case "nuget":
 		return s.importMigrationNuGet(asset)
 	default:
-		return fmt.Errorf("%w: 不支持格式 %q 的迁移导入", ErrValidation, asset.Format)
+		return 0, fmt.Errorf("%w: 不支持格式 %q 的迁移导入", ErrValidation, asset.Format)
 	}
 }
 
-func (s *FormatMetadataService) importMigrationPyPI(asset MigrationAsset) error {
+func (s *FormatMetadataService) importMigrationPyPI(asset MigrationAsset) (int64, error) {
 	filename := path.Base(asset.SourcePath)
 	project, version, err := migrationPyPINameVersion(filename)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	_, err = s.PublishPyPIWithSourceTime(asset.Repository, project, version, filename, "", "", asset.Body, asset.SourceModified)
-	return err
+	pf, err := s.PublishPyPIWithSourceTime(asset.Repository, project, version, filename, "", "", asset.Body, asset.SourceModified)
+	if err != nil {
+		return 0, err
+	}
+	return pf.AssetID, nil
 }
 
-func (s *FormatMetadataService) importMigrationNuGet(asset MigrationAsset) error {
+func (s *FormatMetadataService) importMigrationNuGet(asset MigrationAsset) (int64, error) {
 	file, size, err := spoolMigrationNuGet(asset.Body)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer func() {
 		_ = file.Close()
@@ -99,20 +110,23 @@ func (s *FormatMetadataService) importMigrationNuGet(asset MigrationAsset) error
 	}()
 	id, version, metadata, err := nugetpackage.Parse(file, size)
 	if err != nil {
-		return fmt.Errorf("%w: nupkg 校验失败：%v", ErrValidation, err)
+		return 0, fmt.Errorf("%w: nupkg 校验失败：%v", ErrValidation, err)
 	}
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return err
+		return 0, err
 	}
 	filename := path.Base(asset.SourcePath)
 	if !strings.HasSuffix(strings.ToLower(filename), ".nupkg") || !validPackageFilename(filename) {
 		filename = id + "." + version + ".nupkg"
 	}
 	if !validPackageFilename(filename) {
-		return fmt.Errorf("%w: nupkg 文件名非法", ErrValidation)
+		return 0, fmt.Errorf("%w: nupkg 文件名非法", ErrValidation)
 	}
-	_, err = s.PublishNuGetWithSourceTime(asset.Repository, id, version, filename, metadata, file, asset.SourceModified)
-	return err
+	pkg, err := s.PublishNuGetWithSourceTime(asset.Repository, id, version, filename, metadata, file, asset.SourceModified)
+	if err != nil {
+		return 0, err
+	}
+	return pkg.AssetID, nil
 }
 
 func spoolMigrationNuGet(source io.Reader) (*os.File, int64, error) {

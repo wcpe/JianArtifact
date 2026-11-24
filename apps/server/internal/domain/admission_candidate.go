@@ -448,6 +448,9 @@ func checkAdmissionPrincipal(p *auth.Principal) error {
 		}
 	case p.Kind == auth.KindToken && p.TokenID > 0:
 		// 机器凭据：凭据位由 TokenID 承载，协议写入口允许提交候选。
+	case p.Kind == auth.KindInternal:
+		// 内部批写入口（迁移导入）：身份绑定任务发起人，
+		// 每次接收仍按当前 ACL 复核发布权。
 	default:
 		return ErrAdmissionForbidden
 	}
@@ -571,6 +574,12 @@ func (s *AdmissionService) IntakeCandidate(ctx context.Context, principal *auth.
 	return row, nil
 }
 
+// IntakeInternalCandidate 是内部批写入口的接收变体：HTTP 上下文没有来源快照时，
+// 由调用方以任务记录的发起快照显式注入（迁移导入等后台写入口，FR-169 §3.6）。
+func (s *AdmissionService) IntakeInternalCandidate(ctx context.Context, principal *auth.Principal, source auditctx.Source, repositoryID int64, canonicalPath, contentType string, body io.Reader) (repository.AdmissionCandidateRow, error) {
+	return s.IntakeCandidate(auditctx.WithSource(ctx, source), principal, repositoryID, canonicalPath, contentType, body)
+}
+
 // PromoteBytes 复核完整性后打开封存字节供提升读取；调用方负责发布及 MarkPublished。
 func (s *AdmissionService) PromoteBytes(ctx context.Context, row repository.AdmissionCandidateRow) (io.ReadCloser, int64, error) {
 	if row.State != "awaiting_review" || row.BlobHash == nil || row.SizeBytes == nil {
@@ -593,7 +602,10 @@ func (s *AdmissionService) MarkPublished(ctx context.Context, principal *auth.Pr
 }
 
 // admissionFormatAllowed 是获准走私有候选准入的协议格式集合（FR-169 已接入口径）。
-func admissionFormatAllowed(format string) bool {
+func admissionFormatAllowed(format string) bool { return AdmissionFormatAllowed(format) }
+
+// AdmissionFormatAllowed 是获准走私有候选准入的协议格式集合（FR-169 已接入口径）。
+func AdmissionFormatAllowed(format string) bool {
 	switch format {
 	case "raw", "maven", "cargo", "npm", "docker", "nuget", "pypi":
 		return true
