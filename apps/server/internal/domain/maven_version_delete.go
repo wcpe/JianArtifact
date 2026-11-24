@@ -246,6 +246,11 @@ func (s *AssetService) snapshotMetadataPointedBuild(repo *repository.Repository,
 		if err != nil || asset == nil {
 			continue
 		}
+		// 元数据正常只有几 KB；超限不读入内存——巨型伪造 metadata 会耗尽服务内存。
+		// 跳过它等于「指向不明」，走保守删除分支。
+		if asset.Size > 4<<20 {
+			continue
+		}
 		data, err := s.readAsset(asset)
 		if err != nil {
 			continue

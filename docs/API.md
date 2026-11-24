@@ -251,14 +251,14 @@ proxy/group 读路径对「确认不存在」的路径做短窗负缓存（默�
 
 仅管理员。版本级清理把「删掉一个 Maven 版本」变成可预览、可恢复的操作：资产从 `asset` 表移入 `asset_trash`（blob 保留），恢复还原全部元数据字段；彻底清理才释放字节。共享同一保留期与 `trash-gc` 作业。
 
-- `GET /api/v1/repositories/{name}/maven-versions/plan?groupId=&artifactId=&version=&buildId=`：预览清理计划（文件分组、SNAPSHOT 历史构建列表），只读。版本不存在返回 404 `maven_version_empty`。
+- `GET /api/v1/repositories/{name}/maven-versions/plan?groupId=&artifactId=&version=&buildId=`：预览清理计划（文件分组、SNAPSHOT 历史构建列表），只读。版本不存在时返回 200，计划体 `exists:false`，前端据此提示无可清理内容。
 - `GET /api/v1/repositories/{name}/maven-packages/search?groupId=&artifactId=&version=&snapshotOnly=&updatedBefore=&minBytes=&maxBytes=`：按包名搜索版本（批量清理入口），返回版本列表含文件数、大小、构建标记。
 - `GET /api/v1/repositories/{name}/maven-versions/diagnose?groupId=&artifactId=&version=`：跨仓同坐标诊断（哪个仓库的制品遮蔽了请求），只读。
-- `POST /api/v1/repositories/{name}/maven-versions/trash`：`{groupId, artifactId, version, buildId?, paths?, overrideReason?}` 把单个版本（或某次 SNAPSHOT 构建）移入回收站。`paths` 为前端确认的子集，服务端对回传项重新校验，不在计划内整批拒绝。
-- `POST /api/v1/repositories/{name}/maven-versions/trash-batch`：`{versions[], overrideReason?}` 批量移入回收站，逐项结果 `{trashed, failures[]}`，部分失败不整批回滚。
-- `GET /api/v1/maintenance/asset-trash?repository=&status=&page=&page_size=`：回收站分页列表（统一回收站入口，含其它来源分区）。
+- `POST /api/v1/repositories/{name}/maven-versions/trash`：`{groupId, artifactId, version, buildId?, paths?, overrideReason}` 把单个版本（或某次 SNAPSHOT 构建）移入回收站。`overrideReason` **必填**（≤512 字符），记入审计；`paths` 为前端确认的子集，服务端对回传项重新校验，不在计划内整批拒绝。
+- `POST /api/v1/repositories/{name}/maven-versions/trash-batch`：`{versions[], overrideReason}` 批量移入回收站，`overrideReason` 同样**必填**；逐项结果 `{trashedVersions, trashedFiles, failures[]}`，部分失败不整批回滚。
+- `GET /api/v1/maintenance/asset-trash?page=&pageSize=`：回收站分页列表（`pageSize` 上限 100；暂不支持 repository/status 筛选，统一回收站入口含各来源分区）。
 - `POST /api/v1/maintenance/asset-trash/restore`：`{ids[]}` 恢复；目标路径已存在时跳过并报 `conflicts`，绝不覆盖。
-- `POST /api/v1/maintenance/asset-trash/purge`：`{ids[], confirm:"清理"}` 彻底清理：先标 `purged` 落库再释放 blob，需输入确认词。
+- `POST /api/v1/maintenance/asset-trash/purge`：`{ids[]}` 彻底清理：先标 `purged` 落库再释放 blob。确认词「清理」由控制台界面校验，**不是**请求参数。
 
 降级注意：回滚到本变更之前的版本前须先清空回收站，否则旧版 GC 会把 `asset_trash` 引用的 blob 判为孤儿回收（见迁移 `0074_asset_trash.sql` 头注）。
 
