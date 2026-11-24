@@ -59,6 +59,8 @@ type job struct {
 	// 但在生产上表现为「偶发读到半个值」这种更难查的形态。
 	intervalNanos atomic.Int64
 	run           func(ctx context.Context) error
+	// poke 唤醒等待中的 loop 重新起算间隔（缓冲 1，多个连续 SetInterval 合并成一次重排）。
+	poke chan struct{}
 
 	mu         sync.Mutex
 	runs       int64
@@ -102,7 +104,7 @@ func (s *Scheduler) Register(name string, interval time.Duration, run func(ctx c
 	if name == "" || interval <= 0 || run == nil {
 		return
 	}
-	next := &job{name: name, run: run}
+	next := &job{name: name, run: run, poke: make(chan struct{}, 1)}
 	next.setInterval(interval)
 	s.jobs = append(s.jobs, next)
 }
@@ -165,13 +167,12 @@ func (s *Scheduler) runContext() context.Context {
 // SetInterval 在运行期修改某个已注册作业的执行间隔。
 //
 // 语义边界（刻意如此，别改成"立即重启该作业"）：
-//   - **不重排当前正在等待的那次定时**。loop 每轮只在顶部读一次间隔并起 timer，
-//     SetInterval 改原子量不会唤醒已有 timer——所以改小间隔后，首次触发仍按**旧**
-//     间隔在到期时发生，之后每轮才按新值。这是本方法最容易被误读的一点：
-//     Status() 读的是原子量、会**立刻**显示新间隔，而作业实际要等旧间隔到期。
-//     运维看到「间隔已是 3600s」却仍等 24h，很容易被判成「配置没生效」。
+//   - 正在等待的那次定时会被**重排**：SetInterval 通过 poke 唤醒 loop，
+//     丢弃未触发的旧 timer，从唤醒时刻按**新间隔**重新起算下一次触发——
+//     否则改小间隔后作业仍要等旧间隔（最长 30 天）到期，等于「改了不生效」。
 //   - 当轮不打断——当轮可能正在写盘，强行中断会留下半成品；
-//   - 已在运行的那一轮跑完后，再按新间隔起算，仍保持「同一作业不自我重叠」；
+//   - 已在运行的那一轮不被打断（poke 在运行期间被缓冲，待下一轮等待时才处理），
+//     仍保持「同一作业不自我重叠」；
 //   - 未注册的作业名返回 false，不报错（与 Register「静默跳过」的口径一致）；
 //   - d <= 0 同样返回 false：0 表示禁用，而"禁用"应当通过不注册表达，
 //     运行期把间隔改成 0 会让 loop 进入忙等（time.NewTimer(0) 立即触发）。
@@ -187,6 +188,10 @@ func (s *Scheduler) SetInterval(name string, d time.Duration) bool {
 		return false
 	}
 	j.setInterval(d)
+	select {
+	case j.poke <- struct{}{}:
+	default:
+	}
 	return true
 }
 
@@ -210,6 +215,7 @@ func (s *Scheduler) Status() []JobStatus {
 }
 
 // loop 按间隔驱动单个作业：每轮重新起算定时，作业耗时超过间隔时不会补跑连发。
+// poke 到达表示间隔被运行期改过：丢弃未触发的旧 timer，按新间隔重新等待。
 func (j *job) loop(ctx context.Context) {
 	for {
 		timer := time.NewTimer(j.interval())
@@ -218,6 +224,9 @@ func (j *job) loop(ctx context.Context) {
 			timer.Stop()
 			return
 		case <-timer.C:
+		case <-j.poke:
+			timer.Stop()
+			continue
 		}
 		if ctx.Err() != nil {
 			return
