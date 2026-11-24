@@ -902,7 +902,10 @@ func TestNegativeCacheGroupAutoBlockSkippedNotCached(t *testing.T) {
 	defer fastSrv.Close()
 
 	svc, repos := newAssetService(t)
-	svc.SetAutoBlockBase(100 * time.Millisecond)
+	// 窗口必须显著长于一次 Resolve 的耗时：慢 CI 上单次解析可超 100ms，
+	// 窗口过短会让「阻止期内第二次请求」漏过判定重新打上游（偶发失败）。
+	// 1s 仍小于恢复等待上限（3s），不拖慢测试。
+	svc.SetAutoBlockBase(time.Second)
 	boomID, err := repos.Create("boom-proxy", "raw", "proxy", "private", proxyConfigJSON(t, boomSrv.URL))
 	if err != nil {
 		t.Fatalf("建 boom-proxy：%v", err)
