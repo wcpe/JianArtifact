@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
 
@@ -32,14 +33,21 @@ var cargoNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
 // CargoService 负责 Cargo sparse 索引、crate 发布与下载的领域规则。
 // 索引和字节均复用通用 asset/blob 存储，避免为单一协议引入第二套内容真源。
 type CargoService struct {
-	assets *AssetService
-	repos  *RepositoryService
+	assets    *AssetService
+	repos     *RepositoryService
+	admission *AdmissionService // 私有候选准入（FR-169；nil 走原直发路径）
 }
 
 // NewCargoService 构造 Cargo sparse 领域服务。
 func NewCargoService(assets *AssetService, repos *RepositoryService) *CargoService {
 	return &CargoService{assets: assets, repos: repos}
 }
+
+// SetAdmission 启用 crate 字节的私有候选准入。
+func (s *CargoService) SetAdmission(a *AdmissionService) { s.admission = a }
+
+// HasAdmission 报告是否已接入私有候选准入。
+func (s *CargoService) HasAdmission() bool { return s.admission != nil }
 
 // CargoPublishResult 是一次 Cargo publish 的结果摘要。
 type CargoPublishResult struct {
@@ -87,14 +95,20 @@ func (s *CargoService) Publish(ctx context.Context, repoName string, r io.Reader
 
 // PublishWithGuard 在解析出规范 crate 路径及实际字节数后、写入任何资产前执行发布策略。
 func (s *CargoService) PublishWithGuard(ctx context.Context, repoName string, r io.Reader, guard CargoPublishGuard) (*CargoPublishResult, error) {
-	return s.publishCargo(ctx, repoName, r, guard, time.Time{}, false)
+	return s.publishCargo(ctx, repoName, r, guard, time.Time{}, false, nil)
+}
+
+// PublishViaAdmission 经私有候选准入发布（FR-169）：crate 字节先私有接收、完整性裁定，
+// 封存字节再进入暂存批量提交；迁移等内部导入路径仍走 PublishWithGuard。
+func (s *CargoService) PublishViaAdmission(ctx context.Context, principal *auth.Principal, repoName string, r io.Reader, guard CargoPublishGuard) (*CargoPublishResult, error) {
+	return s.publishCargo(ctx, repoName, r, guard, time.Time{}, false, principal)
 }
 
 // publishCargo 是 Publish 的共享实现；sourceModified 非零时将 crate 资产行
 // created_at/updated_at 固定为源端时间（在线迁移保留源时间戳）。
 // 索引资产是既有索引与新版本行合并后的衍生内容，保持本地时间语义。
 // quotaExempt 为 true 时本次写入在提交点豁免仓库存储配额（仅迁移导入）。
-func (s *CargoService) publishCargo(ctx context.Context, repoName string, r io.Reader, guard CargoPublishGuard, sourceModified time.Time, quotaExempt bool) (*CargoPublishResult, error) {
+func (s *CargoService) publishCargo(ctx context.Context, repoName string, r io.Reader, guard CargoPublishGuard, sourceModified time.Time, quotaExempt bool, admissionPrincipal *auth.Principal) (*CargoPublishResult, error) {
 	repo, err := s.repos.Get(repoName)
 	if err != nil {
 		return nil, err
@@ -153,7 +167,22 @@ func (s *CargoService) publishCargo(ctx context.Context, repoName string, r io.R
 	if _, err := crateFile.Seek(0, io.SeekStart); err != nil {
 		return nil, err
 	}
-	crateAsset, err := s.assets.StageBlob(crateFile, "application/x-tar")
+	// 准入管线（FR-169）：crate 是客户端字节，先私有接收→完整性裁定→封存字节入暂存。
+	var candRow repository.AdmissionCandidateRow
+	crateReader := io.Reader(crateFile)
+	if s.admission != nil && admissionPrincipal != nil && !quotaExempt {
+		row, aerr := s.admission.IntakeCandidate(ctx, admissionPrincipal, repo.ID, cratePath, "application/x-tar", crateFile)
+		if aerr != nil {
+			return nil, aerr
+		}
+		prc, _, aerr := s.admission.PromoteBytes(ctx, row)
+		if aerr != nil {
+			return nil, aerr
+		}
+		defer func() { _ = prc.Close() }()
+		crateReader, candRow = prc, row
+	}
+	crateAsset, err := s.assets.StageBlob(crateReader, "application/x-tar")
 	if err != nil {
 		return nil, err
 	}
@@ -177,6 +206,11 @@ func (s *CargoService) publishCargo(ctx context.Context, repoName string, r io.R
 	}
 	if _, err := s.assets.PublishAssets(repoName, []*repository.Asset{crateAsset, indexAsset}); err != nil {
 		return nil, s.assets.cleanupFailedWrite(indexAsset.BlobHash, s.assets.cleanupFailedWrite(crateAsset.BlobHash, err))
+	}
+	if candRow.OperationID != "" {
+		if _, markErr := s.admission.MarkPublished(ctx, admissionPrincipal, candRow, crateAsset.ID); markErr != nil {
+			return nil, markErr
+		}
 	}
 	settle(true)
 	return &CargoPublishResult{Name: name, Version: version, Checksum: checksum, Path: cratePath, Size: int64(crateLen)}, nil

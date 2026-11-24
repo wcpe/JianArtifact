@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -332,5 +333,57 @@ func TestMavenWebUploadViaAdmissionEndToEnd(t *testing.T) {
 	status, _, body := auditTestRequest(t, server, http.MethodGet, "/repository/"+repo.Name+"/com/example/app/1.0.0/app-1.0.0.jar", "", "", "")
 	if status != http.StatusOK || body != "fake-jar-via-web" {
 		t.Fatalf("发布后公开读取不符：%d %q", status, body)
+	}
+}
+
+// TestCargoPublishViaAdmissionEndToEnd Cargo hosted 发布的 crate 字节经私有候选准入：
+// 封存→裁定→提升后 crate 可下载、候选落 published。
+func TestCargoPublishViaAdmissionEndToEnd(t *testing.T) {
+	cfg, app := newSourceTestApplication(t, "cargo")
+	if _, _, err := app.authSvc.Bootstrap("cargo-adm", auditTestPassword); err != nil {
+		t.Fatal(err)
+	}
+	owner, err := app.userSvc.Create("cargo-owner", auditTestPassword, "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := app.repoSvc.Create("cargo-adm-hosted", "cargo", "hosted", "public", "", repository.RepositoryConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.NewAclRepo(app.db).Replace(repo.ID, []repository.Acl{{SubjectID: owner.ID, Action: repository.ActionPublish}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.securityAudit.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(newApplicationHandler(cfg, app, nil))
+	t.Cleanup(server.Close)
+	issuer, _, err := app.tokenSvc.Create(owner.ID, "cargo-issuer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, _ := json.Marshal(map[string]any{"name": "probe-crate", "vers": "1.0.0", "deps": []any{}, "features": map[string]any{}})
+	crate := []byte("fake-crate-bytes")
+	var frame bytes.Buffer
+	_ = binary.Write(&frame, binary.LittleEndian, uint32(len(metadata)))
+	_, _ = frame.Write(metadata)
+	_ = binary.Write(&frame, binary.LittleEndian, uint32(len(crate)))
+	_, _ = frame.Write(crate)
+	status, _, body := auditTestRequest(t, server, http.MethodPut, "/cargo/"+repo.Name+"/api/v1/crates/new", "application/octet-stream", frame.String(), issuer)
+	if status != http.StatusOK {
+		t.Fatalf("Cargo 准入发布应 200：%d %s", status, body)
+	}
+	var state string
+	var assetID *int64
+	if err := app.db.QueryRow(`SELECT state,published_asset_id FROM private_admission_candidate ORDER BY rowid DESC LIMIT 1`).Scan(&state, &assetID); err != nil {
+		t.Fatal(err)
+	}
+	if state != "published" || assetID == nil {
+		t.Fatalf("Cargo 净候选应提升为 published：%s", state)
+	}
+	status, _, body = auditTestRequest(t, server, http.MethodGet, "/cargo/"+repo.Name+"/api/v1/crates/probe-crate/1.0.0/download", "", "", "")
+	if status != http.StatusOK || body != string(crate) {
+		t.Fatalf("发布后 crate 读取不符：%d %q", status, body)
 	}
 }

@@ -169,6 +169,7 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	formatMetadataSvc := domain.NewFormatMetadataService(assetSvc, repoRepo, formatMetadataRepo, upstreamClient)
 	formatMetadataSvc.SetBusinessWriteGate(freeze)
 	cargoSvc := domain.NewCargoService(assetSvc, repoSvc)
+	// FR-169：cargo hosted 发布走私有候选准入（在 admission 装配后 SetAdmission）。
 	ociSvc := domain.NewOCIService(assetSvc, repoSvc)
 	if err := ociSvc.CleanupUploadTemps(); err != nil {
 		_ = db.Close()
@@ -478,6 +479,7 @@ func openServices(cfg *config.Config) (*appServices, error) {
 		admission: func() *domain.AdmissionService {
 			s := domain.NewAdmissionService(db, blobs, userRepo, repoRepo, freeze)
 			s.SetAssetService(assetSvc)
+			cargoSvc.SetAdmission(s)
 			return s
 		}(),
 		userSvc:             userSvc,

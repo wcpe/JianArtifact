@@ -42,7 +42,7 @@ func (s *CargoService) importMigrationCrate(repo, name, version string, body io.
 	if err != nil {
 		return err
 	}
-	_, err = s.publishCargo(context.Background(), repo, frame, nil, sourceModified, true)
+	_, err = s.publishCargo(context.Background(), repo, frame, nil, sourceModified, true, nil)
 	return err
 }
 

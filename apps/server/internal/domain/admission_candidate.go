@@ -323,7 +323,7 @@ func (s *AdmissionService) authorizeRepository(ctx context.Context, tx *sqlx.Tx,
 	if err != nil {
 		return nil, err
 	}
-	if repo.Type != "hosted" || (repo.Format != "raw" && repo.Format != "maven") || !repo.Online {
+	if repo.Type != "hosted" || (repo.Format != "raw" && repo.Format != "maven" && repo.Format != "cargo") || !repo.Online {
 		return nil, repository.ErrNotFound
 	}
 	if user.Role != "admin" {

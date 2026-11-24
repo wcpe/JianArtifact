@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/auditctx"
+	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 	"github.com/wcpe/jianartifact/apps/server/internal/domain"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
 )
@@ -81,9 +82,17 @@ func (h *CargoHandler) Put(c *gin.Context) {
 		return
 	}
 	if rest == "api/v1/crates/new" {
-		result, err := h.cargo.PublishWithGuard(c.Request.Context(), repoName, c.Request.Body, func(path string, size int64) (func(bool), error) {
+		guard := func(path string, size int64) (func(bool), error) {
 			return h.beginPublish(c, repoName, path, size)
-		})
+		}
+		var result *domain.CargoPublishResult
+		var err error
+		if p, hasP := auth.PrincipalFrom(c); hasP && h.cargo.HasAdmission() {
+			// FR-169：crate 字节走私有候选准入（封存→裁定→提升）。
+			result, err = h.cargo.PublishViaAdmission(c.Request.Context(), p, repoName, c.Request.Body, guard)
+		} else {
+			result, err = h.cargo.PublishWithGuard(c.Request.Context(), repoName, c.Request.Body, guard)
+		}
 		if err != nil {
 			h.auditRejected(c, "cargo.publish", repoName, cargoAuditPath(rest), publishRejectionDetail(err))
 			h.recordQuotaRejection(err)
