@@ -12,17 +12,13 @@ import (
 // 与同时可用的管理 API Token（协议/仓库设置用）。
 func bootstrapJWT(t *testing.T, e *protocolEnv) (string, string) {
 	t.Helper()
-	var boot api.LoginResponse
-	if code := e.jsonReq(t, http.MethodPost, "/api/v1/auth/bootstrap", "",
-		api.BootstrapRequest{Username: "admin", Password: "admin-pass-123"}, &boot); code != http.StatusCreated {
-		t.Fatalf("自举状态码 = %d，期望 201", code)
-	}
+	sessionToken, _, _ := installAdmin(t, e, "admin", "admin-pass-123")
 	var created api.TokenCreated
-	if code := e.jsonReq(t, http.MethodPost, "/api/v1/tokens", boot.Token,
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/tokens", sessionToken,
 		api.CreateTokenRequest{Name: "protocol-test"}, &created); code != http.StatusCreated {
 		t.Fatalf("创建协议测试 Token 状态码 = %d，期望 201", code)
 	}
-	return boot.Token, created.Token
+	return sessionToken, created.Token
 }
 
 func issueScopedToken(t *testing.T, e *protocolEnv, sessionJWT, repo, prefix string, actions []string) string {

@@ -21,6 +21,12 @@ func (h *Handlers) Bootstrap(c *gin.Context) {
 		auth.WriteError(c, http.StatusBadRequest, "bad_request", "用户名与口令不能为空")
 		return
 	}
+	// 强认证装配后，空库首管理员必须持 claim_install 票安装（规格 FR-167）；
+	// 未装配（因子密钥缺失）时降级为传统直签路径。
+	if h.mfa != nil && (req.ClaimTicket == nil || *req.ClaimTicket == "") {
+		auth.WriteError(c, http.StatusUnauthorized, "invalid_auth_challenge", "空库首管理员须持安装认领票")
+		return
+	}
 	// 受控安装：持 claim_install 票走原子认领——创建管理员、种待登记因子、
 	// 签发确认挑战；票不直换会话，须 enroll/confirm 持票激活因子后重新登录。
 	if req.ClaimTicket != nil && *req.ClaimTicket != "" {

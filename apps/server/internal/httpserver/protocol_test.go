@@ -534,13 +534,9 @@ func TestPublishPolicyPartialUpdateRetainsAllowedPrefixes(t *testing.T) {
 // bootstrapAdmin 自举首个管理员并签发协议测试用 API Token。
 func (e *protocolEnv) bootstrapAdmin(t *testing.T) string {
 	t.Helper()
-	var boot api.LoginResponse
-	if code := e.jsonReq(t, http.MethodPost, "/api/v1/auth/bootstrap", "",
-		api.BootstrapRequest{Username: "admin", Password: "admin-pass-123"}, &boot); code != http.StatusCreated {
-		t.Fatalf("自举状态码 = %d，期望 201", code)
-	}
+	sessionToken, _, _ := installAdmin(t, e, "admin", "admin-pass-123")
 	var created api.TokenCreated
-	if code := e.jsonReq(t, http.MethodPost, "/api/v1/tokens", boot.Token,
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/tokens", sessionToken,
 		api.CreateTokenRequest{Name: "protocol-test"}, &created); code != http.StatusCreated {
 		t.Fatalf("创建协议测试 Token 状态码 = %d，期望 201", code)
 	}

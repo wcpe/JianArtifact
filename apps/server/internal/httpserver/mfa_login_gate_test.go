@@ -80,29 +80,48 @@ func totpSecretFromURI(t *testing.T, uri string) string {
 	return s
 }
 
+// installAdmin 走完整 claim_install 安装流（票据→自举→持票确认→登录→OTP 兑现），
+// 返回已认证会话令牌、TOTP 种子与恢复码批次；等价于 CLI 发票 + 管理员完成引导。
+func installAdmin(t *testing.T, e *protocolEnv, username, password string) (string, string, []string) {
+	t.Helper()
+	ticket, err := e.mfaSvc.IssueInstallClaimTicket(t.Context(), "test", "install")
+	if err != nil {
+		t.Fatalf("出具安装票：%v", err)
+	}
+	var boot api.LoginResponse
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/auth/bootstrap", "",
+		api.BootstrapRequest{Username: username, Password: password, ClaimTicket: &ticket.Ticket}, &boot); code != http.StatusCreated {
+		t.Fatalf("受控自举状态码 = %d，期望 201", code)
+	}
+	secret := totpSecretFromURI(t, *boot.EnrollmentUri)
+	var codes api.MfaRecoveryCodes
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/auth/mfa/enroll/confirm", "",
+		api.MfaConfirmRequest{ChallengeToken: *boot.ChallengeToken, Otp: testTotp(t, secret, time.Now()), ClaimTicket: &ticket.Ticket}, &codes); code != http.StatusOK {
+		t.Fatalf("安装确认状态码 = %d，期望 200", code)
+	}
+	var gated api.LoginResponse
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/auth/login", "",
+		api.LoginRequest{Username: username, Password: password}, &gated); code != http.StatusOK || gated.Next != api.MfaRequired {
+		t.Fatalf("安装后登录状态码 = %d 裁决 = %q，期望 mfa_required", code, gated.Next)
+	}
+	var done api.LoginResponse
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/auth/mfa/verify", "",
+		api.MfaVerifyRequest{ChallengeToken: *gated.ChallengeToken, Otp: nextStepOtp(t, e, username, secret)}, &done); code != http.StatusOK || done.Token == "" {
+		t.Fatalf("安装后兑现状态码 = %d，期望 200 且签发会话", code)
+	}
+	return done.Token, secret, codes.RecoveryCodes
+}
+
 func TestMfaLoginGateEndToEnd(t *testing.T) {
 	e := newProtocolEnv(t)
 
-	// 自举 + 普通登录直通（未启用因子时 next=authenticated）。
-	var boot api.LoginResponse
+	// 空库自举须持票：缺票 → 401；持票安装后即带激活因子。
+	var bad map[string]any
 	if code := e.jsonReq(t, http.MethodPost, "/api/v1/auth/bootstrap", "",
-		api.BootstrapRequest{Username: "admin", Password: "admin-pass-123"}, &boot); code != http.StatusCreated || boot.Token == "" {
-		t.Fatalf("自举状态码 = %d，期望 201 且签发会话", code)
+		api.BootstrapRequest{Username: "admin", Password: "admin-pass-123"}, &bad); code != http.StatusUnauthorized {
+		t.Fatalf("缺票自举状态码 = %d，期望 401", code)
 	}
-
-	// 登记：挑战 + otpauth URI。
-	var en api.MfaEnrollResponse
-	if code := e.jsonReq(t, http.MethodPost, "/api/v1/auth/mfa/enroll", boot.Token, nil, &en); code != http.StatusOK {
-		t.Fatalf("发起登记状态码 = %d，期望 200", code)
-	}
-	secret := totpSecretFromURI(t, en.EnrollmentUri)
-
-	// 确认：首枚 OTP 换恢复码批次。
-	var codes api.MfaRecoveryCodes
-	if code := e.jsonReq(t, http.MethodPost, "/api/v1/auth/mfa/enroll/confirm", boot.Token,
-		api.MfaConfirmRequest{ChallengeToken: en.ChallengeToken, Otp: testTotp(t, secret, time.Now())}, &codes); code != http.StatusOK || len(codes.RecoveryCodes) != 10 {
-		t.Fatalf("确认登记状态码 = %d，码数 = %d，期望 200 且 10 枚", code, len(codes.RecoveryCodes))
-	}
+	_, secret, codes := installAdmin(t, e, "admin", "admin-pass-123")
 
 	// 登录门：同账号再登录必须得到 mfa_required + 挑战，不签会话。
 	var gated api.LoginResponse
@@ -115,7 +134,6 @@ func TestMfaLoginGateEndToEnd(t *testing.T) {
 	}
 
 	// 错误 OTP：统一 invalid_auth_challenge，不签会话。
-	var bad map[string]any
 	if code := e.jsonReq(t, http.MethodPost, "/api/v1/auth/mfa/verify", "",
 		api.MfaVerifyRequest{ChallengeToken: *gated.ChallengeToken, Otp: "000000"}, &bad); code != http.StatusUnauthorized {
 		t.Fatalf("错误 OTP 状态码 = %d，期望 401", code)
@@ -148,7 +166,7 @@ func TestMfaLoginGateEndToEnd(t *testing.T) {
 	}
 	var rec api.MfaEnrollResponse
 	if code := e.jsonReq(t, http.MethodPost, "/api/v1/auth/mfa/recover", "",
-		api.MfaRecoverRequest{ChallengeToken: *gated2.ChallengeToken, RecoveryCode: codes.RecoveryCodes[0]}, &rec); code != http.StatusOK || rec.EnrollmentUri == "" {
+		api.MfaRecoverRequest{ChallengeToken: *gated2.ChallengeToken, RecoveryCode: codes[0]}, &rec); code != http.StatusOK || rec.EnrollmentUri == "" {
 		t.Fatalf("恢复状态码 = %d，期望 200 且返回重绑 URI", code)
 	}
 	newSecret := totpSecretFromURI(t, rec.EnrollmentUri)
@@ -159,7 +177,7 @@ func TestMfaLoginGateEndToEnd(t *testing.T) {
 	}
 	// 旧恢复码全部作废。
 	if code := e.jsonReq(t, http.MethodPost, "/api/v1/auth/mfa/recover", "",
-		api.MfaRecoverRequest{ChallengeToken: *gated2.ChallengeToken, RecoveryCode: codes.RecoveryCodes[1]}, &bad); code != http.StatusUnauthorized {
+		api.MfaRecoverRequest{ChallengeToken: *gated2.ChallengeToken, RecoveryCode: codes[1]}, &bad); code != http.StatusUnauthorized {
 		t.Fatalf("旧恢复码重放状态码 = %d，期望 401", code)
 	}
 	// 恢复要求重新登录：口令 → 新因子 OTP → 会话。
