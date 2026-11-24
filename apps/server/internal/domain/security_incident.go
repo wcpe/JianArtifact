@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -218,6 +220,48 @@ func (s *SecurityIncidentService) GetActionType(ctx context.Context, actionID st
 	return t, err
 }
 
+// IncidentVerdict 入口裁决结果：实例写锁或目标命中。
+type IncidentVerdict struct {
+	Locked     bool
+	Restricted bool
+}
+
+// BusinessWriteVerdict 入口裁决：实例写锁 + 按仓库/路径前缀命中活跃限制。
+func (s *SecurityIncidentService) BusinessWriteVerdict(ctx context.Context, repo, pathPrefix string) (IncidentVerdict, error) {
+	var v IncidentVerdict
+	err := s.repo.Read(ctx, func(tx *sqlx.Tx) error {
+		locked, err := repository.InstanceWriteLockedTx(ctx, tx, s.now().Unix())
+		if err != nil {
+			return err
+		}
+		v.Locked = locked
+		var rows []repository.IncidentRestriction
+		if err := tx.SelectContext(ctx, &rows, `SELECT restriction_id, kind, target, effects, state, version, effective_at, expires_at, action_id, lifted_action, created_at
+			FROM incident_restriction WHERE state='active' AND kind IN ('repository','path','version')`); err != nil {
+			return err
+		}
+		for _, r := range rows {
+			switch r.Kind {
+			case "repository":
+				if repo != "" && r.Target == repo {
+					v.Restricted = true
+				}
+			case "path":
+				// 目标=仓库名:路径前缀
+				if i := strings.Index(r.Target, ":"); i > 0 && repo == r.Target[:i] && pathPrefix != "" && strings.HasPrefix(pathPrefix, r.Target[i+1:]) {
+					v.Restricted = true
+				}
+			case "version":
+				if r.Target != "" && repo != "" && pathPrefix != "" && strings.HasPrefix(r.Target, repo+":") && strings.HasPrefix(pathPrefix, strings.SplitN(r.Target, "@", 2)[0][len(repo)+1:]) {
+					v.Restricted = true
+				}
+			}
+		}
+		return nil
+	})
+	return v, err
+}
+
 // BusinessWriteLocked 入口裁决：是否存在活跃实例业务写锁。
 func (s *SecurityIncidentService) BusinessWriteLocked(ctx context.Context) (bool, error) {
 	var locked bool
@@ -249,27 +293,80 @@ func (s *SecurityIncidentService) ApplyInstanceLock(actionID string) func(*sqlx.
 	}
 }
 
+// ApplyRestriction 逐项副作用：按目标种类写活跃事故限制。
+func (s *SecurityIncidentService) ApplyRestriction(actionID string) func(*sqlx.Tx, SecurityTarget) (string, string, error) {
+	now := s.now()
+	return func(tx *sqlx.Tx, tg SecurityTarget) (string, string, error) {
+		r := repository.IncidentRestriction{
+			RestrictionID: "ir-" + uuid.NewString(),
+			Kind:          tg.Kind,
+			Target:        tg.Target,
+			Effects:       tg.Effect,
+			State:         repository.RestrictionStateActive,
+			Version:       1,
+			EffectiveAt:   now.Unix(),
+			ActionID:      actionID,
+			CreatedAt:     now.Unix(),
+		}
+		if tg.Kind == repository.RestrictionKindInstanceLock {
+			r.Target = ""
+		}
+		if err := repository.InsertIncidentRestrictionTx(context.Background(), tx, r); err != nil {
+			return "", "", fmt.Errorf("写入事故限制：%w", err)
+		}
+		return "applied", "事故限制已生效", nil
+	}
+}
+
 // ApplyLiftInstanceLock 逐项副作用：解除活跃实例写锁。
 func (s *SecurityIncidentService) ApplyLiftInstanceLock(actionID string) func(*sqlx.Tx, SecurityTarget) (string, string, error) {
 	now := s.now()
 	return func(tx *sqlx.Tx, tg SecurityTarget) (string, string, error) {
 		var id string
-		if err := tx.GetContext(context.Background(), &id, `SELECT restriction_id FROM incident_restriction WHERE kind='instance_write_lock' AND state='active' LIMIT 1`); err != nil {
+		err := tx.GetContext(context.Background(), &id, `SELECT restriction_id FROM incident_restriction WHERE kind=? AND target=? AND state='active' LIMIT 1`, tg.Kind, tg.Target)
+		if err != nil {
 			return "", "", err
 		}
 		if err := repository.LiftIncidentRestrictionTx(context.Background(), tx, id, actionID, now.Unix()); err != nil {
-			return "", "", fmt.Errorf("解除实例锁：%w", err)
+			return "", "", fmt.Errorf("解除事故限制：%w", err)
 		}
-		return "applied", "实例业务写锁已解除", nil
+		return "applied", "事故限制已解除", nil
 	}
 }
 
+// 合法目标种类：instance_write_lock / repository / path / version / ip_cidr。
+// repository 目标=仓库名；path=仓库名:规范路径前缀；version=仓库名:路径@版本；ip_cidr=CIDR+effects 子集。
 func validSecurityTarget(actionType string, tg SecurityTarget) bool {
 	switch actionType {
 	case "restrict":
-		return tg.Kind == "instance_write_lock"
+		switch tg.Kind {
+		case "instance_write_lock":
+			return true
+		case "repository":
+			return tg.Target != ""
+		case "path", "version":
+			return tg.Target != "" && strings.Contains(tg.Target, ":")
+		case "ip_cidr":
+			if tg.Target == "" {
+				return false
+			}
+			if _, _, err := net.ParseCIDR(tg.Target); err != nil {
+				return false
+			}
+			// 未给 effects 默认 login+publish+read 全集；给了必须是子集。
+			for _, e := range strings.Split(tg.Effect, ",") {
+				e = strings.TrimSpace(e)
+				if e == "" {
+					continue
+				}
+				if e != "login" && e != "publish" && e != "read" {
+					return false
+				}
+			}
+			return true
+		}
 	case "lift_restriction":
-		return tg.Kind == "instance_write_lock"
+		return tg.Kind != "" && tg.Target != "" || tg.Kind == "instance_write_lock"
 	}
 	return false
 }

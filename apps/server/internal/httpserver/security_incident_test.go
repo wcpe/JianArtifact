@@ -89,3 +89,46 @@ func TestIncidentInstanceWriteLockEndToEnd(t *testing.T) {
 	}
 	_ = secret
 }
+
+func TestIncidentRepositoryRestrictionEndToEnd(t *testing.T) {
+	e := newProtocolEnv(t)
+	token, _, _ := installAdmin(t, e, "admin", "admin-pass-123")
+	var created api.TokenCreated
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/tokens", token,
+		api.CreateTokenRequest{Name: "incident-test"}, &created); code != http.StatusCreated {
+		t.Fatalf("创建 Token 状态码 = %d，期望 201", code)
+	}
+	apiToken := created.Token
+
+	// 建两个仓库：受限 raw-locked 与对照 raw-open。
+	for _, name := range []string{"raw-locked", "raw-open"} {
+		e.createRawRepo(t, token, name, "private")
+	}
+
+	// 对 raw-locked 加 repository 限制。
+	var prev api.SecurityActionPreview
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/security/actions", token,
+		api.SecurityActionPreviewRequest{
+			ActionType: api.Restrict, Reason: "repo-incident", IdempotencyKey: "repo-1",
+			Targets: []api.SecurityActionTarget{{Kind: "repository", Target: strPtr("raw-locked")}},
+		}, &prev); code != http.StatusOK {
+		t.Fatalf("仓库限制预览状态码 = %d，期望 200", code)
+	}
+	var res api.SecurityActionResult
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/security/actions/"+prev.ActionId+"/execute", token,
+		api.SecurityActionExecuteRequest{ActionDigest: prev.ActionDigest}, &res); code != http.StatusOK || res.State != "applied" {
+		t.Fatalf("仓库限制执行状态码 = %d 状态 = %q，期望 applied", code, res.State)
+	}
+
+	// 受限仓写入 → 403 incident_restricted；对照仓正常。
+	rec := e.rawReq(http.MethodPut, "/repository/raw-locked/a.bin", basicHeader(apiToken), "application/octet-stream", []byte("x"))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("受限仓写状态码 = %d，期望 403", rec.Code)
+	}
+	rec = e.rawReq(http.MethodPut, "/repository/raw-open/a.bin", basicHeader(apiToken), "application/octet-stream", []byte("x"))
+	if rec.Code != http.StatusOK && rec.Code != http.StatusCreated {
+		t.Fatalf("对照仓写状态码 = %d，期望 2xx", rec.Code)
+	}
+}
+
+func strPtr(s string) *string { return &s }

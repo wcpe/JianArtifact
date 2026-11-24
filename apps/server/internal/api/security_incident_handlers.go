@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -75,7 +76,7 @@ func (h *Handlers) ExecuteSecurityAction(c *gin.Context, actionId string) {
 	case "restrict":
 		apply = func() (*domain.SecurityActionResult, error) {
 			return h.incident.ExecuteSecurityAction(c.Request.Context(), p.UserID, actionId, req.ActionDigest,
-				h.incident.ApplyInstanceLock(actionId))
+				h.incident.ApplyRestriction(actionId))
 		}
 	case "lift_restriction":
 		apply = func() (*domain.SecurityActionResult, error) {
@@ -116,18 +117,56 @@ func (h *Handlers) IncidentWriteLockGate() gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		locked, err := h.incident.BusinessWriteLocked(c.Request.Context())
+		repo, prefix := incidentTargetOf(c.Request.Method, path)
+		v, err := h.incident.BusinessWriteVerdict(c.Request.Context(), repo, prefix)
 		if err != nil {
 			c.Next()
 			return
 		}
-		if locked {
+		if v.Locked {
 			auth.WriteError(c, http.StatusServiceUnavailable, "incident_write_locked", "实例业务写锁生效，仅安全出口可用")
+			c.Abort()
+			return
+		}
+		if v.Restricted {
+			auth.WriteError(c, http.StatusForbidden, "incident_restricted", "目标受事故限制约束")
 			c.Abort()
 			return
 		}
 		c.Next()
 	}
+}
+
+// incidentTargetOf 从请求目标粗解出仓库名与路径前缀（入口级裁决；
+// 权威裁决在最终写事务内，本层只做已知名称的快速拦截）。
+func incidentTargetOf(method, path string) (repo, prefix string) {
+	if method != http.MethodPut && method != http.MethodPost && method != http.MethodDelete && method != http.MethodPatch {
+		return "", ""
+	}
+	p := strings.TrimPrefix(path, "/")
+	if strings.HasPrefix(p, "api/v1/repositories/") {
+		rest := strings.TrimPrefix(p, "api/v1/repositories/")
+		if i := strings.Index(rest, "/"); i > 0 {
+			return rest[:i], rest[i+1:]
+		}
+		return rest, ""
+	}
+	if strings.HasPrefix(p, "api/v1/") {
+		return "", ""
+	}
+	// 协议路由：/repository/{repo}/... 形态取第二段为仓库名。
+	if strings.HasPrefix(p, "repository/") {
+		rest := strings.TrimPrefix(p, "repository/")
+		if i := strings.Index(rest, "/"); i > 0 {
+			return rest[:i], rest[i+1:]
+		}
+		return rest, ""
+	}
+	// 其余协议入口（npm/cargo/oci 等自有挂载）：首段按仓库名试探。
+	if i := strings.Index(p, "/"); i > 0 {
+		return p[:i], p[i+1:]
+	}
+	return "", ""
 }
 
 func hasPrefixAny(path string, prefixes ...string) bool {
