@@ -318,6 +318,49 @@ func (s *SecurityIncidentService) ApplyRestriction(actionID string) func(*sqlx.T
 	}
 }
 
+// ApplyEvidenceHold 逐项副作用：按摘要登记保全持有；字节状态未知起步，
+// 由补录/核对推进 present/metadata_only（本增量不裁定字节）。
+func (s *SecurityIncidentService) ApplyEvidenceHold(actionID string) func(*sqlx.Tx, SecurityTarget) (string, string, error) {
+	now := s.now()
+	return func(tx *sqlx.Tx, tg SecurityTarget) (string, string, error) {
+		if existing, err := repository.EvidenceHoldByDigestTx(context.Background(), tx, tg.Target); err != nil {
+			return "", "", err
+		} else if existing != nil {
+			return "skipped", "该摘要已有活跃保全：" + existing.HoldID, nil
+		}
+		h := repository.EvidenceHold{
+			HoldID: "eh-" + uuid.NewString(), ObjectID: tg.Target, Digest: tg.Target,
+			ByteState: repository.EvidenceHoldByteUnknown, State: repository.EvidenceHoldStateActive,
+			ActionID: actionID, CreatedAt: now.Unix(),
+		}
+		if err := repository.InsertEvidenceHoldTx(context.Background(), tx, h); err != nil {
+			return "", "", fmt.Errorf("登记保全：%w", err)
+		}
+		return "applied", "保全已登记（byte_state=unknown）", nil
+	}
+}
+
+// ApplyReleaseHold 逐项副作用：释放活跃保全。
+func (s *SecurityIncidentService) ApplyReleaseHold(actionID string) func(*sqlx.Tx, SecurityTarget) (string, string, error) {
+	now := s.now()
+	return func(tx *sqlx.Tx, tg SecurityTarget) (string, string, error) {
+		if err := repository.ReleaseEvidenceHoldTx(context.Background(), tx, tg.Target, actionID, now.Unix()); err != nil {
+			return "", "", fmt.Errorf("释放保全：%w", err)
+		}
+		return "applied", "保全已释放", nil
+	}
+}
+
+// ListEvidenceHolds 保全清单（活跃/全部，按创建倒序，上限 200）。
+func (s *SecurityIncidentService) ListEvidenceHolds(ctx context.Context) ([]repository.EvidenceHold, error) {
+	var out []repository.EvidenceHold
+	err := s.repo.Read(ctx, func(tx *sqlx.Tx) error {
+		return tx.SelectContext(ctx, &out, `SELECT hold_id, object_id, digest, byte_state, size_bytes, state, action_id, created_at, released_at
+			FROM evidence_hold ORDER BY created_at DESC LIMIT 200`)
+	})
+	return out, err
+}
+
 // ApplyLiftInstanceLock 逐项副作用：解除活跃实例写锁。
 func (s *SecurityIncidentService) ApplyLiftInstanceLock(actionID string) func(*sqlx.Tx, SecurityTarget) (string, string, error) {
 	now := s.now()
@@ -367,6 +410,11 @@ func validSecurityTarget(actionType string, tg SecurityTarget) bool {
 		}
 	case "lift_restriction":
 		return tg.Kind != "" && tg.Target != "" || tg.Kind == "instance_write_lock"
+	case "hold_evidence":
+		// 目标=制品摘要（digest 作为唯一物理字节身份）。
+		return tg.Kind == "digest" && tg.Target != ""
+	case "release_hold":
+		return tg.Kind == "hold" && tg.Target != ""
 	}
 	return false
 }

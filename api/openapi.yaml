@@ -880,6 +880,21 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "409":
           $ref: "#/components/responses/Conflict"
+  /api/v1/security/holds:
+    get:
+      operationId: listEvidenceHolds
+      summary: 保全持有清单（管理员只读）
+      responses:
+        "200":
+          description: 清单
+          content:
+            application/json:
+              schema:
+                type: object
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
   /api/v1/auth/me:
     get:
       operationId: getCurrentUser
@@ -5513,7 +5528,7 @@ components:
       properties:
         kind:
           type: string
-          enum: [instance_write_lock]
+          enum: [instance_write_lock, repository, path, version, ip_cidr, digest, hold]
         target:
           type: string
         effect:
@@ -5524,7 +5539,7 @@ components:
       properties:
         actionType:
           type: string
-          enum: [restrict, lift_restriction]
+          enum: [restrict, lift_restriction, hold_evidence, release_hold]
         reason:
           type: string
           maxLength: 512

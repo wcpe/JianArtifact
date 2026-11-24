@@ -1273,14 +1273,20 @@ func (e RepositoryVisibility) Valid() bool {
 
 // Defines values for SecurityActionPreviewRequestActionType.
 const (
+	HoldEvidence    SecurityActionPreviewRequestActionType = "hold_evidence"
 	LiftRestriction SecurityActionPreviewRequestActionType = "lift_restriction"
+	ReleaseHold     SecurityActionPreviewRequestActionType = "release_hold"
 	Restrict        SecurityActionPreviewRequestActionType = "restrict"
 )
 
 // Valid indicates whether the value is a known member of the SecurityActionPreviewRequestActionType enum.
 func (e SecurityActionPreviewRequestActionType) Valid() bool {
 	switch e {
+	case HoldEvidence:
+		return true
 	case LiftRestriction:
+		return true
+	case ReleaseHold:
 		return true
 	case Restrict:
 		return true
@@ -1291,13 +1297,31 @@ func (e SecurityActionPreviewRequestActionType) Valid() bool {
 
 // Defines values for SecurityActionTargetKind.
 const (
-	InstanceWriteLock SecurityActionTargetKind = "instance_write_lock"
+	SecurityActionTargetKindDigest            SecurityActionTargetKind = "digest"
+	SecurityActionTargetKindHold              SecurityActionTargetKind = "hold"
+	SecurityActionTargetKindInstanceWriteLock SecurityActionTargetKind = "instance_write_lock"
+	SecurityActionTargetKindIpCidr            SecurityActionTargetKind = "ip_cidr"
+	SecurityActionTargetKindPath              SecurityActionTargetKind = "path"
+	SecurityActionTargetKindRepository        SecurityActionTargetKind = "repository"
+	SecurityActionTargetKindVersion           SecurityActionTargetKind = "version"
 )
 
 // Valid indicates whether the value is a known member of the SecurityActionTargetKind enum.
 func (e SecurityActionTargetKind) Valid() bool {
 	switch e {
-	case InstanceWriteLock:
+	case SecurityActionTargetKindDigest:
+		return true
+	case SecurityActionTargetKindHold:
+		return true
+	case SecurityActionTargetKindInstanceWriteLock:
+		return true
+	case SecurityActionTargetKindIpCidr:
+		return true
+	case SecurityActionTargetKindPath:
+		return true
+	case SecurityActionTargetKindRepository:
+		return true
+	case SecurityActionTargetKindVersion:
 		return true
 	default:
 		return false
@@ -6137,6 +6161,9 @@ type ServerInterface interface {
 	// GetPrivateAdmissionCandidate 查询本人私有候选的状态
 	// (GET /api/v1/security/admission/candidates/{operationId})
 	GetPrivateAdmissionCandidate(c *gin.Context, operationId PrivateAdmissionOperationIdParam)
+	// ListEvidenceHolds 保全持有清单（管理员只读）
+	// (GET /api/v1/security/holds)
+	ListEvidenceHolds(c *gin.Context)
 	// GetGlobalPinnedRepositories 全局置顶仓库（仅管理员）
 	// (GET /api/v1/settings/pinned-repositories)
 	GetGlobalPinnedRepositories(c *gin.Context)
@@ -9041,6 +9068,19 @@ func (siw *ServerInterfaceWrapper) GetPrivateAdmissionCandidate(c *gin.Context) 
 	siw.Handler.GetPrivateAdmissionCandidate(c, operationId)
 }
 
+// ListEvidenceHolds operation middleware
+func (siw *ServerInterfaceWrapper) ListEvidenceHolds(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ListEvidenceHolds(c)
+}
+
 // GetGlobalPinnedRepositories operation middleware
 func (siw *ServerInterfaceWrapper) GetGlobalPinnedRepositories(c *gin.Context) {
 
@@ -9652,6 +9692,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.POST(options.BaseURL+"/api/v1/auth/mfa/enroll/confirm", wrapper.ConfirmMfaEnroll)
 	router.POST(options.BaseURL+"/api/v1/security/actions", wrapper.PreviewSecurityAction)
 	router.POST(options.BaseURL+"/api/v1/security/actions/:actionId/execute", wrapper.ExecuteSecurityAction)
+	router.GET(options.BaseURL+"/api/v1/security/holds", wrapper.ListEvidenceHolds)
 	router.GET(options.BaseURL+"/api/v1/auth/me", wrapper.GetCurrentUser)
 	router.GET(options.BaseURL+"/api/v1/auth/oidc/start", wrapper.StartOidcLogin)
 	router.GET(options.BaseURL+"/api/v1/auth/oidc/callback", wrapper.CompleteOidcLogin)

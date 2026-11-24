@@ -131,4 +131,56 @@ func TestIncidentRepositoryRestrictionEndToEnd(t *testing.T) {
 	}
 }
 
+func TestIncidentEvidenceHoldEndToEnd(t *testing.T) {
+	e := newProtocolEnv(t)
+	token, _, _ := installAdmin(t, e, "admin", "admin-pass-123")
+
+	runAction := func(actionType api.SecurityActionPreviewRequestActionType, key string, targets []api.SecurityActionTarget) api.SecurityActionResult {
+		t.Helper()
+		var prev api.SecurityActionPreview
+		if code := e.jsonReq(t, http.MethodPost, "/api/v1/security/actions", token,
+			api.SecurityActionPreviewRequest{ActionType: actionType, Reason: "e2e", IdempotencyKey: key, Targets: targets}, &prev); code != http.StatusOK {
+			t.Fatalf("预览状态码 = %d，期望 200", code)
+		}
+		var res api.SecurityActionResult
+		if code := e.jsonReq(t, http.MethodPost, "/api/v1/security/actions/"+prev.ActionId+"/execute", token,
+			api.SecurityActionExecuteRequest{ActionDigest: prev.ActionDigest}, &res); code != http.StatusOK {
+			t.Fatalf("执行状态码 = %d，期望 200", code)
+		}
+		return res
+	}
+
+	// 保全两枚摘要；重复摘要第二动作标 skipped。
+	r1 := runAction(api.HoldEvidence, "hold-1", []api.SecurityActionTarget{{Kind: "digest", Target: strPtr("sha256:aaa")}})
+	if r1.State != "applied" {
+		t.Fatalf("保全状态 = %q，期望 applied", r1.State)
+	}
+	r2 := runAction(api.HoldEvidence, "hold-2", []api.SecurityActionTarget{{Kind: "digest", Target: strPtr("sha256:aaa")}})
+	if r2.Items[0].Outcome != "skipped" {
+		t.Fatalf("重复摘要结果 = %q，期望 skipped", r2.Items[0].Outcome)
+	}
+
+	// 清单含活跃保全。
+	var list struct {
+		Items []struct {
+			HoldID    string `json:"holdId"`
+			Digest    string `json:"digest"`
+			ByteState string `json:"byteState"`
+			State     string `json:"state"`
+		} `json:"items"`
+	}
+	if code := e.jsonReq(t, http.MethodGet, "/api/v1/security/holds", token, nil, &list); code != http.StatusOK || len(list.Items) != 1 || list.Items[0].ByteState != "unknown" {
+		t.Fatalf("清单状态码 = %d 项数 = %d，期望 200 且 1 枚 unknown", code, len(list.Items))
+	}
+
+	// 释放后清单清空。
+	r3 := runAction(api.ReleaseHold, "rel-1", []api.SecurityActionTarget{{Kind: "hold", Target: &list.Items[0].HoldID}})
+	if r3.State != "applied" {
+		t.Fatalf("释放状态 = %q，期望 applied", r3.State)
+	}
+	if code := e.jsonReq(t, http.MethodGet, "/api/v1/security/holds", token, nil, &list); code != http.StatusOK || len(list.Items) != 1 || list.Items[0].State != "released" {
+		t.Fatalf("释放后清单状态 = %v，期望 released", list.Items)
+	}
+}
+
 func strPtr(s string) *string { return &s }

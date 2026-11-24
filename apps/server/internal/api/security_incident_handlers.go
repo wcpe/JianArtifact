@@ -83,6 +83,16 @@ func (h *Handlers) ExecuteSecurityAction(c *gin.Context, actionId string) {
 			return h.incident.ExecuteSecurityAction(c.Request.Context(), p.UserID, actionId, req.ActionDigest,
 				h.incident.ApplyLiftInstanceLock(actionId))
 		}
+	case "hold_evidence":
+		apply = func() (*domain.SecurityActionResult, error) {
+			return h.incident.ExecuteSecurityAction(c.Request.Context(), p.UserID, actionId, req.ActionDigest,
+				h.incident.ApplyEvidenceHold(actionId))
+		}
+	case "release_hold":
+		apply = func() (*domain.SecurityActionResult, error) {
+			return h.incident.ExecuteSecurityAction(c.Request.Context(), p.UserID, actionId, req.ActionDigest,
+				h.incident.ApplyReleaseHold(actionId))
+		}
 	default:
 		writeDomainErr(c, domain.ErrSecurityConfirmationStale)
 		return
@@ -97,6 +107,28 @@ func (h *Handlers) ExecuteSecurityAction(c *gin.Context, actionId string) {
 		items = append(items, SecurityActionItem{Seq: it.Seq, Target: it.Target, Outcome: it.Outcome, Detail: it.Detail})
 	}
 	c.JSON(http.StatusOK, SecurityActionResult{ActionId: out.ActionID, State: out.State, Items: items})
+}
+
+// ListEvidenceHolds 保全清单（管理员只读）。
+func (h *Handlers) ListEvidenceHolds(c *gin.Context) {
+	if _, ok := requireAdmin(c); !ok {
+		return
+	}
+	if h.incident == nil {
+		writeDomainErr(c, domain.ErrMfaFactorUnavailable)
+		return
+	}
+	holds, err := h.incident.ListEvidenceHolds(c.Request.Context())
+	if err != nil {
+		writeDomainErr(c, err)
+		return
+	}
+	out := make([]gin.H, 0, len(holds))
+	for _, hd := range holds {
+		out = append(out, gin.H{"holdId": hd.HoldID, "digest": hd.Digest, "byteState": hd.ByteState,
+			"state": hd.State, "sizeBytes": hd.SizeBytes, "createdAt": hd.CreatedAt})
+	}
+	c.JSON(http.StatusOK, gin.H{"items": out})
 }
 
 // IncidentWriteLockGate 业务写锁入口裁决：写锁激活时业务/管理写一律 503；
