@@ -11,6 +11,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"regexp"
 	"strings"
@@ -178,7 +179,30 @@ func (h *MavenHandler) UploadForm(c *gin.Context) {
 		return
 	}
 	defer func() { _ = f.Close() }()
-	if err := stageWithChecksums(mainPath, mainContentType(packaging), f); err != nil {
+	// 准入管线（FR-169）：表单主文件是客户端字节，先私有接收→完整性裁定→
+	// 封存字节进入暂存；服务端派生的 pom/metadata/校验和不需隔离。
+	var candidateRow repository.AdmissionCandidateRow
+	var candidatePrincipal *auth.Principal
+	mainSrc := io.Reader(f)
+	if h.admission != nil {
+		if p, hasP := auth.PrincipalFrom(c); hasP {
+			row, aerr := h.admission.IntakeCandidate(c.Request.Context(), p, repo.ID, mainPath, mainContentType(packaging), f)
+			if aerr != nil {
+				h.auditRejected(c, "asset.put", repoName, mainPath, publishRejectionDetail(aerr))
+				writeAdmissionPutErr(c, aerr)
+				return
+			}
+			prc, _, aerr := h.admission.PromoteBytes(c.Request.Context(), row)
+			if aerr != nil {
+				h.auditRejected(c, "asset.put", repoName, mainPath, publishRejectionDetail(aerr))
+				writeAdmissionPutErr(c, aerr)
+				return
+			}
+			defer func() { _ = prc.Close() }()
+			mainSrc, candidateRow, candidatePrincipal = prc, row, p
+		}
+	}
+	if err := stageWithChecksums(mainPath, mainContentType(packaging), mainSrc); err != nil {
 		writeAssetErr(c, err)
 		return
 	}
@@ -234,6 +258,19 @@ func (h *MavenHandler) UploadForm(c *gin.Context) {
 		return
 	}
 	committed = true
+	if candidateRow.OperationID != "" {
+		// 整批已提交：把候选标为 published（主文件资产号）。
+		var mainAssetID int64
+		for _, a := range planned {
+			if a.Path == mainPath {
+				mainAssetID = a.ID
+				break
+			}
+		}
+		if _, markErr := h.admission.MarkPublished(c.Request.Context(), candidatePrincipal, candidateRow, mainAssetID); markErr != nil {
+			log.Printf("准入候选提升后标记失败（operation=%s）：%v", candidateRow.OperationID, markErr)
+		}
+	}
 	// 逐个文件写审计：Maven 表单上传是一批文件（主文件 / 校验和 / POM / metadata），
 	// 与 raw 上传保持同一口径（action=asset.put、EntityKey=repo/path、Detail=size=N），
 	// 每个实际落库的文件一行，审计里才能看出「传了什么」。

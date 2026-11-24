@@ -1,13 +1,18 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
+	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/wcpe/jianartifact/apps/server/internal/api"
 	"github.com/wcpe/jianartifact/apps/server/internal/auditctx"
 	"github.com/wcpe/jianartifact/apps/server/internal/auth"
 	"github.com/wcpe/jianartifact/apps/server/internal/repository"
@@ -237,6 +242,95 @@ func TestMavenPutViaAdmissionEndToEnd(t *testing.T) {
 	}
 	status, _, body = auditTestRequest(t, server, http.MethodGet, "/repository/"+repo.Name+"/com/example/demo/1.0/demo-1.0.jar", "", "", "")
 	if status != http.StatusOK || body != string(jar) {
+		t.Fatalf("发布后公开读取不符：%d %q", status, body)
+	}
+}
+
+// TestMavenWebUploadViaAdmissionEndToEnd 管理端 Maven 表单上传的主文件经私有候选准入：
+// 封存字节进入暂存批量提交，候选落 published；服务端派生文件不隔离。
+func TestMavenWebUploadViaAdmissionEndToEnd(t *testing.T) {
+	cfg, app := newSourceTestApplication(t, "maven")
+	repo, err := app.repoSvc.Create("mvn-web-hosted", "maven", "hosted", "public", "", repository.RepositoryConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := app.securityAudit.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(newApplicationHandler(cfg, app, nil))
+	t.Cleanup(server.Close)
+	request := func(method, path, token string, body, out any) int {
+		payload, _ := json.Marshal(body)
+		req, err := http.NewRequest(method, server.URL+path, bytes.NewReader(payload))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		resp, err := server.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		raw, _ := io.ReadAll(resp.Body)
+		if out != nil && len(raw) > 0 {
+			_ = json.Unmarshal(raw, out)
+		}
+		return resp.StatusCode
+	}
+	if _, _, err := app.authSvc.Bootstrap("web-adm", auditTestPassword); err != nil {
+		t.Fatal(err)
+	}
+	var login api.LoginResponse
+	if code := request(http.MethodPost, "/api/v1/auth/login", "", api.LoginRequest{Username: "web-adm", Password: auditTestPassword}, &login); code != http.StatusOK || login.Token == "" {
+		t.Fatalf("登录失败：%d", code)
+	}
+	token := login.Token
+
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	for k, v := range map[string]string{"groupId": "com.example", "artifactId": "app", "version": "1.0.0"} {
+		if err := w.WriteField(k, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fw, err := w.CreateFormFile("file", "app.jar")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fw.Write([]byte("fake-jar-via-web")); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/api/v1/repositories/"+repo.Name+"/maven-upload", &buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("网页上传状态码 = %d，期望 201：%s", resp.StatusCode, raw)
+	}
+	var state string
+	var assetID *int64
+	if err := app.db.QueryRow(`SELECT state,published_asset_id FROM private_admission_candidate ORDER BY rowid DESC LIMIT 1`).Scan(&state, &assetID); err != nil {
+		t.Fatal(err)
+	}
+	if state != "published" || assetID == nil {
+		t.Fatalf("网页上传候选应提升为 published：%s", state)
+	}
+	status, _, body := auditTestRequest(t, server, http.MethodGet, "/repository/"+repo.Name+"/com/example/app/1.0.0/app-1.0.0.jar", "", "", "")
+	if status != http.StatusOK || body != "fake-jar-via-web" {
 		t.Fatalf("发布后公开读取不符：%d %q", status, body)
 	}
 }
