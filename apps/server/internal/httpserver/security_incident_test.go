@@ -184,3 +184,53 @@ func TestIncidentEvidenceHoldEndToEnd(t *testing.T) {
 }
 
 func strPtr(s string) *string { return &s }
+
+func TestIncidentRecoveryGateEndToEnd(t *testing.T) {
+	e := newProtocolEnv(t)
+	token, _, _ := installAdmin(t, e, "admin", "admin-pass-123")
+	vis := api.CreateRepositoryRequestVisibility("private")
+
+	// 恢复启动 → 隔离；业务写 503 recovery_isolated，安全出口（本命名空间）仍通。
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/security/recovery/begin", token,
+		map[string]any{"restoreId": "rst-1", "reason": "dr-restore"}, nil); code != http.StatusNoContent {
+		t.Fatalf("进入隔离状态码 = %d，期望 204", code)
+	}
+	var bad map[string]any
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/repositories", token,
+		api.CreateRepositoryRequest{Name: "r", Type: "hosted", Format: "raw", Visibility: &vis}, &bad); code != http.StatusServiceUnavailable {
+		t.Fatalf("隔离期业务写状态码 = %d，期望 503", code)
+	}
+	var gate map[string]any
+	if code := e.jsonReq(t, http.MethodGet, "/api/v1/security/recovery", token, nil, &gate); code != http.StatusOK || gate["state"] != "isolated" {
+		t.Fatalf("闸状态 = %v，期望 isolated", gate["state"])
+	}
+
+	// 低水位检查点 → 回 isolated 且标 stale（库内当前水位 0，报告 -1 等效低于；用 0 vs 后续抬高更真）。
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/security/recovery/report", token,
+		map[string]any{"restoreId": "rst-1", "checkpointStatus": "missing", "verifiedWatermark": 0}, nil); code != http.StatusNoContent {
+		t.Fatalf("上报状态码 = %d，期望 204", code)
+	}
+	if code := e.jsonReq(t, http.MethodGet, "/api/v1/security/recovery", token, nil, &gate); code != http.StatusOK || gate["state"] != "isolated" || gate["gapStatus"] != "unknown" {
+		t.Fatalf("缺失检查点闸状态 = %v，期望 isolated+unknown", gate["state"])
+	}
+
+	// 可信且水位齐 → ready_for_review。
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/security/recovery/report", token,
+		map[string]any{"restoreId": "rst-1", "checkpointStatus": "verified", "verifiedWatermark": 0}, nil); code != http.StatusNoContent {
+		t.Fatalf("可信上报状态码 = %d，期望 204", code)
+	}
+	if code := e.jsonReq(t, http.MethodGet, "/api/v1/security/recovery", token, nil, &gate); code != http.StatusOK || gate["state"] != "ready_for_review" {
+		t.Fatalf("核对后闸状态 = %v，期望 ready_for_review", gate["state"])
+	}
+
+	// 解闸需近期强认证（安装会话水位新鲜）→ normal；业务写恢复。
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/security/recovery/confirm", token,
+		map[string]any{"restoreId": "rst-1"}, nil); code != http.StatusNoContent {
+		t.Fatalf("解闸状态码 = %d，期望 204", code)
+	}
+	var repo api.Repository
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/repositories", token,
+		api.CreateRepositoryRequest{Name: "post-restore", Type: "hosted", Format: "raw", Visibility: &vis}, &repo); code != http.StatusCreated {
+		t.Fatalf("解闸后业务写状态码 = %d，期望 201", code)
+	}
+}

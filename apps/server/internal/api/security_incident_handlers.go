@@ -135,10 +135,6 @@ func (h *Handlers) ListEvidenceHolds(c *gin.Context) {
 // 只放开具名安全出口（事故处置、强认证、只读查询）。
 func (h *Handlers) IncidentWriteLockGate() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if c.Request.Method == http.MethodGet || c.Request.Method == http.MethodHead || c.Request.Method == http.MethodOptions {
-			c.Next()
-			return
-		}
 		if h.incident == nil {
 			c.Next()
 			return
@@ -146,6 +142,16 @@ func (h *Handlers) IncidentWriteLockGate() gin.HandlerFunc {
 		path := c.Request.URL.Path
 		// 安全出口：事故处置与强认证链路不放行业务写之外的检查会导致死锁。
 		if hasPrefixAny(path, "/api/v1/security/", "/api/v1/auth/mfa", "/api/v1/auth/login", "/api/v1/auth/logout", "/api/v1/auth/bootstrap") {
+			c.Next()
+			return
+		}
+		// 恢复隔离中：公网管理/协议/下载一律 503 recovery_isolated（读也拦）。
+		if isolated, ierr := h.incident.RecoveryIsolated(c.Request.Context()); ierr == nil && isolated {
+			auth.WriteError(c, http.StatusServiceUnavailable, "recovery_isolated", "恢复隔离中，仅受控安全出口可用")
+			c.Abort()
+			return
+		}
+		if c.Request.Method == http.MethodGet || c.Request.Method == http.MethodHead || c.Request.Method == http.MethodOptions {
 			c.Next()
 			return
 		}
@@ -208,4 +214,96 @@ func hasPrefixAny(path string, prefixes ...string) bool {
 		}
 	}
 	return false
+}
+
+// GetRecoveryGate 恢复闸状态（管理员可读，隔离中仍可查）。
+func (h *Handlers) GetRecoveryGate(c *gin.Context) {
+	if _, ok := requireAdmin(c); !ok {
+		return
+	}
+	if h.incident == nil {
+		writeDomainErr(c, domain.ErrMfaFactorUnavailable)
+		return
+	}
+	g, err := h.incident.RecoveryGateStatus(c.Request.Context())
+	if err != nil {
+		writeDomainErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"state": g.State, "restoreId": g.RestoreID, "securityEpoch": g.SecurityEpoch,
+		"checkpointStatus": g.CheckpointStatus, "verifiedWatermark": g.VerifiedWatermark,
+		"gapStatus": g.GapStatus, "reason": g.Reason})
+}
+
+// BeginRecoveryIsolation 恢复启动：normal → isolated。
+func (h *Handlers) BeginRecoveryIsolation(c *gin.Context) {
+	p, ok := requireAdmin(c)
+	if !ok {
+		return
+	}
+	if h.incident == nil {
+		writeDomainErr(c, domain.ErrMfaFactorUnavailable)
+		return
+	}
+	var req BeginRecoveryIsolationJSONRequestBody
+	if !bindJSON(c, &req) {
+		return
+	}
+	if !h.requireRecentMfa(c, p) {
+		return
+	}
+	var reason string
+	if req.Reason != nil {
+		reason = *req.Reason
+	}
+	if err := h.incident.BeginRestoreIsolation(c.Request.Context(), req.RestoreId, reason); err != nil {
+		writeDomainErr(c, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+// ReportRecoveryCheckpoint 检查点核对（隔离中放行——核对本身是安全出口）。
+func (h *Handlers) ReportRecoveryCheckpoint(c *gin.Context) {
+	if _, ok := requireAdmin(c); !ok {
+		return
+	}
+	if h.incident == nil {
+		writeDomainErr(c, domain.ErrMfaFactorUnavailable)
+		return
+	}
+	var req ReportRecoveryCheckpointJSONRequestBody
+	if !bindJSON(c, &req) {
+		return
+	}
+	if err := h.incident.ReportRestoreCheckpoint(c.Request.Context(), req.RestoreId,
+		string(req.CheckpointStatus), int64(req.VerifiedWatermark)); err != nil {
+		writeDomainErr(c, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+// ConfirmRecovery 近期强认证管理员解闸。
+func (h *Handlers) ConfirmRecovery(c *gin.Context) {
+	p, ok := requireAdmin(c)
+	if !ok {
+		return
+	}
+	if h.incident == nil {
+		writeDomainErr(c, domain.ErrMfaFactorUnavailable)
+		return
+	}
+	var req ConfirmRecoveryJSONRequestBody
+	if !bindJSON(c, &req) {
+		return
+	}
+	if !h.requireRecentMfa(c, p) {
+		return
+	}
+	if err := h.incident.ConfirmRestore(c.Request.Context(), req.RestoreId); err != nil {
+		writeDomainErr(c, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
 }

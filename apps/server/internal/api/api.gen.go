@@ -2225,6 +2225,30 @@ func (e GetRepositoryUpstreamHealthParamsSource) Valid() bool {
 	}
 }
 
+// Defines values for ReportRecoveryCheckpointJSONBodyCheckpointStatus.
+const (
+	ReportRecoveryCheckpointJSONBodyCheckpointStatusMismatch ReportRecoveryCheckpointJSONBodyCheckpointStatus = "mismatch"
+	ReportRecoveryCheckpointJSONBodyCheckpointStatusMissing  ReportRecoveryCheckpointJSONBodyCheckpointStatus = "missing"
+	ReportRecoveryCheckpointJSONBodyCheckpointStatusStale    ReportRecoveryCheckpointJSONBodyCheckpointStatus = "stale"
+	ReportRecoveryCheckpointJSONBodyCheckpointStatusVerified ReportRecoveryCheckpointJSONBodyCheckpointStatus = "verified"
+)
+
+// Valid indicates whether the value is a known member of the ReportRecoveryCheckpointJSONBodyCheckpointStatus enum.
+func (e ReportRecoveryCheckpointJSONBodyCheckpointStatus) Valid() bool {
+	switch e {
+	case ReportRecoveryCheckpointJSONBodyCheckpointStatusMismatch:
+		return true
+	case ReportRecoveryCheckpointJSONBodyCheckpointStatusMissing:
+		return true
+	case ReportRecoveryCheckpointJSONBodyCheckpointStatusStale:
+		return true
+	case ReportRecoveryCheckpointJSONBodyCheckpointStatusVerified:
+		return true
+	default:
+		return false
+	}
+}
+
 // AcknowledgeAuditAttentionRequest 只接受服务端签发的风险关注批次标识；身份从当前会话取得，客户端不得提交确认人、时间或成员事件。
 type AcknowledgeAuditAttentionRequest struct {
 	AttentionId string `json:"attentionId"`
@@ -5448,6 +5472,27 @@ type GetRepositoryUpstreamHealthRecentParams struct {
 	Limit *UpstreamHealthLimitParam `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
+// BeginRecoveryIsolationJSONBody defines parameters for BeginRecoveryIsolation.
+type BeginRecoveryIsolationJSONBody struct {
+	Reason    *string `json:"reason,omitempty"`
+	RestoreId string  `json:"restoreId"`
+}
+
+// ConfirmRecoveryJSONBody defines parameters for ConfirmRecovery.
+type ConfirmRecoveryJSONBody struct {
+	RestoreId string `json:"restoreId"`
+}
+
+// ReportRecoveryCheckpointJSONBody defines parameters for ReportRecoveryCheckpoint.
+type ReportRecoveryCheckpointJSONBody struct {
+	CheckpointStatus  ReportRecoveryCheckpointJSONBodyCheckpointStatus `json:"checkpointStatus"`
+	RestoreId         string                                           `json:"restoreId"`
+	VerifiedWatermark int                                              `json:"verifiedWatermark"`
+}
+
+// ReportRecoveryCheckpointJSONBodyCheckpointStatus defines parameters for ReportRecoveryCheckpoint.
+type ReportRecoveryCheckpointJSONBodyCheckpointStatus string
+
 // ListUserGroupsParams defines parameters for ListUserGroups.
 type ListUserGroupsParams struct {
 	Page     *PageParam     `form:"page,omitempty" json:"page,omitempty"`
@@ -5557,6 +5602,15 @@ type PreviewSecurityActionJSONRequestBody = SecurityActionPreviewRequest
 
 // ExecuteSecurityActionJSONRequestBody defines body for ExecuteSecurityAction for application/json ContentType.
 type ExecuteSecurityActionJSONRequestBody = SecurityActionExecuteRequest
+
+// BeginRecoveryIsolationJSONRequestBody defines body for BeginRecoveryIsolation for application/json ContentType.
+type BeginRecoveryIsolationJSONRequestBody BeginRecoveryIsolationJSONBody
+
+// ConfirmRecoveryJSONRequestBody defines body for ConfirmRecovery for application/json ContentType.
+type ConfirmRecoveryJSONRequestBody ConfirmRecoveryJSONBody
+
+// ReportRecoveryCheckpointJSONRequestBody defines body for ReportRecoveryCheckpoint for application/json ContentType.
+type ReportRecoveryCheckpointJSONRequestBody ReportRecoveryCheckpointJSONBody
 
 // PutGlobalPinnedRepositoriesJSONRequestBody defines body for PutGlobalPinnedRepositories for application/json ContentType.
 type PutGlobalPinnedRepositoriesJSONRequestBody = PutPinnedRepositoriesRequest
@@ -6164,6 +6218,18 @@ type ServerInterface interface {
 	// ListEvidenceHolds 保全持有清单（管理员只读）
 	// (GET /api/v1/security/holds)
 	ListEvidenceHolds(c *gin.Context)
+	// GetRecoveryGate 恢复隔离闸状态（管理员可读）
+	// (GET /api/v1/security/recovery)
+	GetRecoveryGate(c *gin.Context)
+	// BeginRecoveryIsolation 恢复启动进入隔离（normal → isolated）
+	// (POST /api/v1/security/recovery/begin)
+	BeginRecoveryIsolation(c *gin.Context)
+	// ConfirmRecovery 强认证管理员确认解闸（ready_for_review → normal）
+	// (POST /api/v1/security/recovery/confirm)
+	ConfirmRecovery(c *gin.Context)
+	// ReportRecoveryCheckpoint 上报可信检查点核对结果（isolated → reconciling → ready_for_review / isolated）
+	// (POST /api/v1/security/recovery/report)
+	ReportRecoveryCheckpoint(c *gin.Context)
 	// GetGlobalPinnedRepositories 全局置顶仓库（仅管理员）
 	// (GET /api/v1/settings/pinned-repositories)
 	GetGlobalPinnedRepositories(c *gin.Context)
@@ -9081,6 +9147,58 @@ func (siw *ServerInterfaceWrapper) ListEvidenceHolds(c *gin.Context) {
 	siw.Handler.ListEvidenceHolds(c)
 }
 
+// GetRecoveryGate operation middleware
+func (siw *ServerInterfaceWrapper) GetRecoveryGate(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetRecoveryGate(c)
+}
+
+// BeginRecoveryIsolation operation middleware
+func (siw *ServerInterfaceWrapper) BeginRecoveryIsolation(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.BeginRecoveryIsolation(c)
+}
+
+// ConfirmRecovery operation middleware
+func (siw *ServerInterfaceWrapper) ConfirmRecovery(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ConfirmRecovery(c)
+}
+
+// ReportRecoveryCheckpoint operation middleware
+func (siw *ServerInterfaceWrapper) ReportRecoveryCheckpoint(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ReportRecoveryCheckpoint(c)
+}
+
 // GetGlobalPinnedRepositories operation middleware
 func (siw *ServerInterfaceWrapper) GetGlobalPinnedRepositories(c *gin.Context) {
 
@@ -9692,6 +9810,10 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.POST(options.BaseURL+"/api/v1/auth/mfa/enroll/confirm", wrapper.ConfirmMfaEnroll)
 	router.POST(options.BaseURL+"/api/v1/security/actions", wrapper.PreviewSecurityAction)
 	router.POST(options.BaseURL+"/api/v1/security/actions/:actionId/execute", wrapper.ExecuteSecurityAction)
+	router.GET(options.BaseURL+"/api/v1/security/recovery", wrapper.GetRecoveryGate)
+	router.POST(options.BaseURL+"/api/v1/security/recovery/begin", wrapper.BeginRecoveryIsolation)
+	router.POST(options.BaseURL+"/api/v1/security/recovery/report", wrapper.ReportRecoveryCheckpoint)
+	router.POST(options.BaseURL+"/api/v1/security/recovery/confirm", wrapper.ConfirmRecovery)
 	router.GET(options.BaseURL+"/api/v1/security/holds", wrapper.ListEvidenceHolds)
 	router.GET(options.BaseURL+"/api/v1/auth/me", wrapper.GetCurrentUser)
 	router.GET(options.BaseURL+"/api/v1/auth/oidc/start", wrapper.StartOidcLogin)

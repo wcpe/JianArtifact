@@ -225,3 +225,71 @@ func ReleaseEvidenceHoldTx(ctx context.Context, tx *sqlx.Tx, holdID, actionID st
 	}
 	return nil
 }
+
+// ── 恢复隔离闸与安全状态水位（FR-168 §3.4 最小切片）─────────────────────────
+
+type RecoveryGate struct {
+	State             string `db:"state"`
+	RestoreID         *string `db:"restore_id"`
+	SecurityEpoch     int64  `db:"security_epoch"`
+	CheckpointStatus  string `db:"checkpoint_status"`
+	VerifiedWatermark int64  `db:"verified_watermark"`
+	GapStatus         string `db:"gap_status"`
+	Reason            string `db:"reason"`
+	UpdatedAt         int64  `db:"updated_at"`
+}
+
+const (
+	RecoveryGateNormal         = "normal"
+	RecoveryGateIsolated       = "isolated"
+	RecoveryGateReconciling    = "reconciling"
+	RecoveryGateReadyForReview = "ready_for_review"
+	CheckpointNone             = "none"
+	CheckpointVerified         = "verified"
+	CheckpointStale            = "stale"
+	CheckpointMissing          = "missing"
+	CheckpointMismatch         = "mismatch"
+)
+
+func RecoveryGateTx(ctx context.Context, tx *sqlx.Tx) (*RecoveryGate, error) {
+	var g RecoveryGate
+	if err := tx.GetContext(ctx, &g, `SELECT state, restore_id, security_epoch, checkpoint_status,
+		verified_watermark, gap_status, reason, updated_at FROM recovery_gate WHERE row_id=1`); err != nil {
+		return nil, err
+	}
+	return &g, nil
+}
+
+// SetRecoveryGateTx 状态推进由领域裁决（合法迁移在调用方保证）。
+func SetRecoveryGateTx(ctx context.Context, tx *sqlx.Tx, g RecoveryGate) error {
+	res, err := tx.ExecContext(ctx, `UPDATE recovery_gate SET state=?, restore_id=?, security_epoch=?,
+		checkpoint_status=?, verified_watermark=?, gap_status=?, reason=?, updated_at=? WHERE row_id=1`,
+		g.State, g.RestoreID, g.SecurityEpoch, g.CheckpointStatus, g.VerifiedWatermark, g.GapStatus, g.Reason, g.UpdatedAt)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrSecurityActionRejected
+	}
+	return nil
+}
+
+// BumpSecurityWatermarkTx 受保护安全写在同一最终事务内抬水位。
+func BumpSecurityWatermarkTx(ctx context.Context, tx *sqlx.Tx) (int64, error) {
+	if _, err := tx.ExecContext(ctx, `UPDATE security_state_watermark SET version=version+1 WHERE row_id=1`); err != nil {
+		return 0, err
+	}
+	var v int64
+	if err := tx.GetContext(ctx, &v, `SELECT version FROM security_state_watermark WHERE row_id=1`); err != nil {
+		return 0, err
+	}
+	return v, nil
+}
+
+func SecurityWatermarkTx(ctx context.Context, tx *sqlx.Tx) (int64, error) {
+	var v int64
+	if err := tx.GetContext(ctx, &v, `SELECT version FROM security_state_watermark WHERE row_id=1`); err != nil {
+		return 0, err
+	}
+	return v, nil
+}

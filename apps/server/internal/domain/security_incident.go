@@ -193,6 +193,10 @@ func (s *SecurityIncidentService) ExecuteSecurityAction(ctx context.Context, act
 		if err := repository.FinalizeSecurityActionTx(ctx, tx, a.ActionID, final, now); err != nil {
 			return err
 		}
+		// 受保护安全状态变更同事务抬水位（恢复核对的可比版本）。
+		if _, err := repository.BumpSecurityWatermarkTx(ctx, tx); err != nil {
+			return err
+		}
 		items, err = repository.SecurityActionItemsTx(ctx, tx, a.ActionID)
 		if err != nil {
 			return err
@@ -417,4 +421,108 @@ func validSecurityTarget(actionType string, tg SecurityTarget) bool {
 		return tg.Kind == "hold" && tg.Target != ""
 	}
 	return false
+}
+
+// ── 恢复隔离闸（FR-168 §3.4 最小切片）───────────────────────────────────────
+
+// BeginRestoreIsolation 恢复启动：normal → isolated，记恢复标识与原因。
+func (s *SecurityIncidentService) BeginRestoreIsolation(ctx context.Context, restoreID, reason string) error {
+	return s.repo.Write(ctx, func(tx *sqlx.Tx) error {
+		g, err := repository.RecoveryGateTx(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if g.State != repository.RecoveryGateNormal && (g.RestoreID == nil || *g.RestoreID != restoreID) {
+			return ErrSecurityConfirmationStale
+		}
+		g.State = repository.RecoveryGateIsolated
+		g.RestoreID = &restoreID
+		g.Reason = reason
+		g.CheckpointStatus = repository.CheckpointNone
+		g.GapStatus = "none"
+		g.UpdatedAt = s.now().Unix()
+		return repository.SetRecoveryGateTx(ctx, tx, *g)
+	})
+}
+
+// ReportRestoreCheckpoint 恢复核对：可信检查点 verified 且水位齐 → ready_for_review；
+// stale/mismatch/missing 一律回 isolated 并留原因。
+func (s *SecurityIncidentService) ReportRestoreCheckpoint(ctx context.Context, restoreID, status string, watermark int64) error {
+	return s.repo.Write(ctx, func(tx *sqlx.Tx) error {
+		g, err := repository.RecoveryGateTx(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if g.RestoreID == nil || *g.RestoreID != restoreID || (g.State != repository.RecoveryGateIsolated && g.State != repository.RecoveryGateReconciling) {
+			return ErrSecurityConfirmationStale
+		}
+		g.State = repository.RecoveryGateReconciling
+		g.CheckpointStatus = status
+		g.VerifiedWatermark = watermark
+		// 水位比对：低于库内当前水位即检查点过时。
+		current, err := repository.SecurityWatermarkTx(ctx, tx)
+		if err != nil {
+			return err
+		}
+		switch {
+		case status == repository.CheckpointVerified && watermark >= current:
+			g.State = repository.RecoveryGateReadyForReview
+			g.GapStatus = "none"
+			g.Reason = ""
+		case status == repository.CheckpointVerified && watermark < current:
+			g.State = repository.RecoveryGateIsolated
+			g.CheckpointStatus = repository.CheckpointStale
+			g.GapStatus = "gap"
+			g.Reason = "检查点水位低于当前受保护状态版本，视为过时"
+		default:
+			g.State = repository.RecoveryGateIsolated
+			g.GapStatus = "unknown"
+			g.Reason = "无可采信检查点（" + status + "），须本机重新认领与核对"
+		}
+		g.UpdatedAt = s.now().Unix()
+		return repository.SetRecoveryGateTx(ctx, tx, *g)
+	})
+}
+
+// ConfirmRestore 已重新认领的强认证管理员解闸：ready_for_review → normal。
+func (s *SecurityIncidentService) ConfirmRestore(ctx context.Context, restoreID string) error {
+	return s.repo.Write(ctx, func(tx *sqlx.Tx) error {
+		g, err := repository.RecoveryGateTx(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if g.RestoreID == nil || *g.RestoreID != restoreID || g.State != repository.RecoveryGateReadyForReview {
+			return ErrSecurityConfirmationStale
+		}
+		g.State = repository.RecoveryGateNormal
+		g.RestoreID = nil
+		g.SecurityEpoch++
+		g.UpdatedAt = s.now().Unix()
+		return repository.SetRecoveryGateTx(ctx, tx, *g)
+	})
+}
+
+// RecoveryGateStatus 恢复闸状态（管理员可读）。
+func (s *SecurityIncidentService) RecoveryGateStatus(ctx context.Context) (*repository.RecoveryGate, error) {
+	var g *repository.RecoveryGate
+	err := s.repo.Read(ctx, func(tx *sqlx.Tx) error {
+		var err error
+		g, err = repository.RecoveryGateTx(ctx, tx)
+		return err
+	})
+	return g, err
+}
+
+// RecoveryIsolated 入口裁决：隔离中（非 normal）一律阻断公网业务。
+func (s *SecurityIncidentService) RecoveryIsolated(ctx context.Context) (bool, error) {
+	var isolated bool
+	err := s.repo.Read(ctx, func(tx *sqlx.Tx) error {
+		g, err := repository.RecoveryGateTx(ctx, tx)
+		if err != nil {
+			return err
+		}
+		isolated = g.State != repository.RecoveryGateNormal
+		return nil
+	})
+	return isolated, err
 }

@@ -880,6 +880,97 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "409":
           $ref: "#/components/responses/Conflict"
+  /api/v1/security/recovery:
+    get:
+      operationId: getRecoveryGate
+      summary: 恢复隔离闸状态（管理员可读）
+      responses:
+        "200":
+          description: 闸状态
+          content:
+            application/json:
+              schema:
+                type: object
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /api/v1/security/recovery/begin:
+    post:
+      operationId: beginRecoveryIsolation
+      summary: 恢复启动进入隔离（normal → isolated）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [restoreId]
+              properties:
+                restoreId:
+                  type: string
+                reason:
+                  type: string
+      responses:
+        "204":
+          description: 已隔离
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/security/recovery/report:
+    post:
+      operationId: reportRecoveryCheckpoint
+      summary: 上报可信检查点核对结果（isolated → reconciling → ready_for_review / isolated）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [restoreId, checkpointStatus, verifiedWatermark]
+              properties:
+                restoreId:
+                  type: string
+                checkpointStatus:
+                  type: string
+                  enum: [verified, stale, missing, mismatch]
+                verifiedWatermark:
+                  type: integer
+      responses:
+        "204":
+          description: 已受理
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/security/recovery/confirm:
+    post:
+      operationId: confirmRecovery
+      summary: 强认证管理员确认解闸（ready_for_review → normal）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [restoreId]
+              properties:
+                restoreId:
+                  type: string
+      responses:
+        "204":
+          description: 已解闸
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
   /api/v1/security/holds:
     get:
       operationId: listEvidenceHolds
