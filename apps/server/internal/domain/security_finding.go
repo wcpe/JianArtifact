@@ -141,7 +141,8 @@ func (s *SecurityFindingService) evaluate(ctx context.Context, tx *sqlx.Tx, ev r
 			}
 		}
 		// 規則 denied_then_committed：拒否の後、別来源から已提交が成功。
-		if ev.EventType == "asset.change_committed" && ev.Committed == "committed" {
+		// ip: 主体は来源そのものなので「新来源」は成立せず評価しない。
+		if ev.EventType == "asset.change_committed" && ev.Committed == "committed" && sub.Kind != "ip" {
 			n, err := repository.DeniedFromOtherIPTx(ctx, tx, sub.Column, sub.Value,
 				ev.OccurredAt-deniedThenCommitWindow, ev.OccurredAt, ev.ClientIPFamily, ev.ClientIP)
 			if err != nil {

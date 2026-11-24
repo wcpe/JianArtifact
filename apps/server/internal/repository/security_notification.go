@@ -105,12 +105,14 @@ func ClaimDueDeliveriesTx(ctx context.Context, tx *sqlx.Tx, now int64, limit int
 	if err := tx.SelectContext(ctx, &rows,
 		`SELECT delivery_id, seq, channel, target_masked, state, attempts, next_retry_unix, last_error
 		   FROM security_notification_delivery
-		  WHERE state='pending' AND next_retry_unix<=? ORDER BY delivery_id LIMIT ?`, now, limit); err != nil {
+		  WHERE (state='pending' AND next_retry_unix<=?)
+		     OR (state='attempted' AND updated_unix<?)
+		  ORDER BY delivery_id LIMIT ?`, now, now-120, limit); err != nil {
 		return nil, err
 	}
 	for i := range rows {
 		if _, err := tx.ExecContext(ctx,
-			`UPDATE security_notification_delivery SET state='attempted', attempts=attempts+1, updated_unix=? WHERE delivery_id=? AND state='pending'`,
+			`UPDATE security_notification_delivery SET state='attempted', attempts=attempts+1, updated_unix=? WHERE delivery_id=? AND state IN ('pending','attempted')`,
 			now, rows[i].DeliveryID); err != nil {
 			return nil, err
 		}
@@ -161,7 +163,7 @@ func NotificationTitleTx(ctx context.Context, tx *sqlx.Tx, seq int64) (string, e
 func RetryDeliveryTx(ctx context.Context, tx *sqlx.Tx, deliveryID string, expectAttempts, now int64) (bool, error) {
 	res, err := tx.ExecContext(ctx,
 		`UPDATE security_notification_delivery SET state='pending', next_retry_unix=?, updated_unix=?
-		  WHERE delivery_id=? AND attempts=? AND state IN ('failed','accepted','attempted')`, now, now, deliveryID, expectAttempts)
+		  WHERE delivery_id=? AND attempts=? AND state='failed'`, now, now, deliveryID, expectAttempts)
 	if err != nil {
 		return false, err
 	}
