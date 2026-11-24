@@ -422,6 +422,17 @@ func openServices(cfg *config.Config) (*appServices, error) {
 	// 回收站保留期回收：只删回收站副本，不触碰 original_path（那是 restore 的职责）。
 	registerTrashGCJob(schedulerSvc, cfg.TrashGCInterval,
 		time.Duration(cfg.TrashRetentionDays)*24*time.Hour, trashSvc.ReconcileExpired)
+	// FR-172 安全通知投递：待機行を 30 秒周期で派发。SMTP 未設定でも failed で可視化するため常時登録。
+	schedulerSvc.Register("security-notification-delivery", 30*time.Second, func(ctx context.Context) error {
+		n, err := incidentSvc.DispatchPendingNotifications(ctx, smtpNotificationMailer(cfg.SMTP))
+		if err != nil {
+			return err
+		}
+		if n > 0 {
+			log.Printf("安全通知投递 %d 件処理", n)
+		}
+		return nil
+	})
 	// 指标登记与 /metrics 渲染器；协议请求计数由 HTTP 层钩子（run）累加。
 	metricsReg := metrics.New()
 	metricsExp := metrics.NewExposition(metricsReg, schedulerJobStatuses(schedulerSvc))

@@ -681,9 +681,17 @@ type SecurityNoticePage struct {
 
 // EmitSecurityNotificationTx 在既有写事务内发射站内条目（供案件/处置等调用方同事务使用）。
 func EmitSecurityNotificationTx(ctx context.Context, tx *sqlx.Tx, kind, title, payload string, now time.Time) (int64, error) {
-	return repository.EmitNotificationTx(ctx, tx, repository.SecurityNotificationRow{
+	seq, err := repository.EmitNotificationTx(ctx, tx, repository.SecurityNotificationRow{
 		NoticeID: "ntf-" + uuid.NewString(), Kind: kind, Title: title, Payload: payload, CreatedUnix: now.Unix(),
 	}, nil)
+	if err != nil {
+		return 0, err
+	}
+	// 站外投递行も同一トランザクションで登録（通知と投递の原子性）。
+	if err := emitDeliveriesForNotificationTx(ctx, tx, seq, now); err != nil {
+		return 0, err
+	}
+	return seq, nil
 }
 
 // ListSecurityNotifications 管理员游标分页；after=0 从头（返回最新一页而非全部）。

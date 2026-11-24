@@ -97,3 +97,61 @@ func ListDeliveriesTx(ctx context.Context, tx *sqlx.Tx, limit int) ([]SecurityNo
 	var out []SecurityNotificationDeliveryRow
 	return out, tx.SelectContext(ctx, &out, `SELECT * FROM security_notification_delivery ORDER BY created_unix DESC LIMIT ?`, limit)
 }
+
+// ClaimDueDeliveriesTx 认领到期待投递记录：pending 且 next_retry_unix <= now，
+// 同事务改为 attempted 并累加 attempts，返回记录供事务外发送。
+func ClaimDueDeliveriesTx(ctx context.Context, tx *sqlx.Tx, now int64, limit int) ([]SecurityNotificationDeliveryRow, error) {
+	var rows []SecurityNotificationDeliveryRow
+	if err := tx.SelectContext(ctx, &rows,
+		`SELECT delivery_id, seq, channel, target_masked, state, attempts, next_retry_unix, last_error
+		   FROM security_notification_delivery
+		  WHERE state='pending' AND next_retry_unix<=? ORDER BY delivery_id LIMIT ?`, now, limit); err != nil {
+		return nil, err
+	}
+	for i := range rows {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE security_notification_delivery SET state='attempted', attempts=attempts+1, updated_unix=? WHERE delivery_id=? AND state='pending'`,
+			now, rows[i].DeliveryID); err != nil {
+			return nil, err
+		}
+	}
+	return rows, nil
+}
+
+// SettleDeliveryTx 结算一次投递尝试：accepted 终态；失败按尝试次数指数退避
+// 重排 pending，超过上限（8 次）落 failed 终态并保留末次错误（已脱敏）。
+func SettleDeliveryTx(ctx context.Context, tx *sqlx.Tx, deliveryID string, ok bool, lastErr string, now, nextRetry int64, attempts int64) error {
+	state := "pending"
+	if ok {
+		state = "accepted"
+	} else if attempts >= 8 {
+		state = "failed"
+	}
+	_, err := tx.ExecContext(ctx,
+		`UPDATE security_notification_delivery SET state=?, next_retry_unix=?, last_error=?, updated_unix=? WHERE delivery_id=?`,
+		state, nextRetry, lastErr, now, deliveryID)
+	return err
+}
+
+// AdminEmailsTx 列出活跃管理员邮箱（SMTP 投递目标）。
+func AdminEmailsTx(ctx context.Context, tx *sqlx.Tx) ([]string, error) {
+	var emails []string
+	err := tx.SelectContext(ctx, &emails,
+		`SELECT email FROM user WHERE role='admin' AND status='active' AND email<>''`)
+	return emails, err
+}
+
+// InsertDeliveryTx は投递行を 1 件登録する。
+func InsertDeliveryTx(ctx context.Context, tx *sqlx.Tx, d SecurityNotificationDeliveryRow) error {
+	_, err := tx.NamedExecContext(ctx, `INSERT INTO security_notification_delivery
+ (delivery_id,seq,channel,target_masked,state,attempts,last_error,next_retry_unix,created_unix,updated_unix)
+ VALUES (:delivery_id,:seq,:channel,:target_masked,:state,:attempts,:last_error,:next_retry_unix,:created_unix,:updated_unix)`, d)
+	return err
+}
+
+// NotificationTitleTx は seq の通知件名を返す（不在なら空文字）。
+func NotificationTitleTx(ctx context.Context, tx *sqlx.Tx, seq int64) (string, error) {
+	var title string
+	err := tx.GetContext(ctx, &title, `SELECT title FROM security_notification WHERE seq=?`, seq)
+	return title, err
+}

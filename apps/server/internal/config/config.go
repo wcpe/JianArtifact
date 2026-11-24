@@ -79,7 +79,13 @@ const (
 
 	// 一键重启的能力配置（单独成组，理由同上）。
 	// 单元名只从环境变量读取，**绝不**接受请求体输入——见 domain/restart_service.go 的注入防护说明。
-	EnvRestartUnit  = "JIAN_RESTART_UNIT"  // 重启目标单元名；缺省 jianartifact
+	EnvRestartUnit = "JIAN_RESTART_UNIT" // 重启目标单元名；缺省 jianartifact
+	// FR-172 SMTP 通知通道：仅环境变量解析；HOST 空 = 通道未启用。
+	EnvSMTPHost     = "JIAN_SMTP_HOST"     // SMTP 服务器主机；空 = 不启用 SMTP 投递
+	EnvSMTPPort     = "JIAN_SMTP_PORT"     // 端口；缺省 25（STARTTLS 由 smtp.SendMail 协商）
+	EnvSMTPFrom     = "JIAN_SMTP_FROM"     // 发件地址；空回落 JIAN_SMTP_USER
+	EnvSMTPUser     = "JIAN_SMTP_USER"     // 登录用户；空 = 不鉴权
+	EnvSMTPPassword = "JIAN_SMTP_PASSWORD" // 登录口令（仅环境变量，不落库不打印）
 	EnvRestartScope = "JIAN_RESTART_SCOPE" // 作用域 system / systemd-user / docker；非法值回落 system
 
 	// 搜索性能：搜索链路（网页搜索 / npm 搜索 / suggest）的总预算，单位秒。
@@ -293,7 +299,21 @@ type Config struct {
 	TLSKey         string     // TLS PEM 私钥文件路径
 	OIDC           OIDCConfig // OIDC 身份源接入配置（Issuer 空 = 不启用）
 	LDAP           LDAPConfig // LDAP 身份源接入配置（URL 空 = 不启用）
+	SMTP           SMTPConfig // 通知邮件通道（FR-172；HOST 空 = 不启用）
 }
+
+// SMTPConfig 是安全通知邮件通道配置（FR-172）；
+// 口令只从环境变量解析，不落库、不打印、不进审计。
+type SMTPConfig struct {
+	Host     string // 服务器主机；空 = 未启用
+	Port     int    // 端口；缺省 25
+	From     string // 发件地址
+	User     string // 登录用户；空 = 不鉴权
+	Password string // 登录口令（仅环境变量）
+}
+
+// Enabled 报告 SMTP 投递是否启用。
+func (c SMTPConfig) Enabled() bool { return c.Host != "" }
 
 // LDAPConfig 是 LDAP 目录接入配置（见 ADR-0029）；
 // 服务账号口令只从环境变量解析，不落库、不打印、不进审计。
@@ -440,9 +460,24 @@ func Load() (*Config, error) {
 		TLSKey:                      os.Getenv(EnvTLSKey),
 		OIDC:                        oidc,
 		LDAP:                        ldap,
+		SMTP:                        smtpConfig(),
 		RestartUnit:                 envOr(EnvRestartUnit, defaultRestartUnit),
 		RestartScope:                restartScope(),
 	}, nil
+}
+
+// smtpConfig 解析 FR-172 SMTP 通知通道；端口非法/非正回落 25。
+func smtpConfig() SMTPConfig {
+	port, err := strconv.Atoi(strings.TrimSpace(os.Getenv(EnvSMTPPort)))
+	if err != nil || port <= 0 || port > 65535 {
+		port = 25
+	}
+	from := strings.TrimSpace(os.Getenv(EnvSMTPFrom))
+	user := strings.TrimSpace(os.Getenv(EnvSMTPUser))
+	if from == "" {
+		from = user
+	}
+	return SMTPConfig{Host: strings.TrimSpace(os.Getenv(EnvSMTPHost)), Port: port, From: from, User: user, Password: os.Getenv(EnvSMTPPassword)}
 }
 
 // loadOrCreateMigrationCredentialKey 解析在线迁移凭据的独立 AES-256 密钥。

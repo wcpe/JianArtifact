@@ -2,8 +2,12 @@
 package httpserver_test
 
 import (
+	"context"
+	"fmt"
 	"net/http"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/api"
 )
@@ -297,5 +301,87 @@ func TestSecurityNotificationCursorEndToEnd(t *testing.T) {
 	if code := e.jsonReq(t, http.MethodPost, "/api/v1/security/cases/"+opened.CaseId+"/transitions", token,
 		map[string]any{"action": "reopen", "targetVersion": opened.TargetVersion, "reason": "复查"}, nil); code != http.StatusConflict {
 		t.Fatalf("过期版本重放应 409，实际 %d", code)
+	}
+}
+
+// FR-172：建案 → 管理员メール宛 smtp 投递行（脱敏）→ 派发结算。
+func TestSecurityNotificationSmtpDeliveryEndToEnd(t *testing.T) {
+	e := newProtocolEnv(t)
+	token, _, _ := installAdmin(t, e, "adm-d", "admin-pass-123")
+	if _, err := e.db.Exec(`UPDATE user SET email='admin@example.com' WHERE username='adm-d'`); err != nil {
+		t.Fatalf("設定メール：%v", err)
+	}
+
+	var opened api.SecurityCase
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/security/cases", token,
+		map[string]any{"title": "配送テスト案件", "severity": "high", "reason": "テスト"}, &opened); code != http.StatusOK {
+		t.Fatalf("建案状態码 = %d", code)
+	}
+
+	// 投递登记：pending・脱敏宛先（実メールが出ないこと）。
+	var dels []struct {
+		DeliveryID   string `json:"deliveryId"`
+		Channel      string `json:"channel"`
+		TargetMasked string `json:"targetMasked"`
+		State        string `json:"state"`
+		Attempts     int    `json:"attempts"`
+	}
+	if code := e.jsonReq(t, http.MethodGet, "/api/v1/security/notification-deliveries", token, nil, &dels); code != http.StatusOK || len(dels) != 1 {
+		t.Fatalf("投递清单状態码 = %d 件数 = %d，期望 200・1 件", code, len(dels))
+	}
+	d := dels[0]
+	if d.Channel != "smtp" || d.State != "pending" || d.TargetMasked == "admin@example.com" || !strings.HasSuffix(d.TargetMasked, "@example.com") {
+		t.Fatalf("投递行異常: %+v", d)
+	}
+
+	// 配送失敗 → 仍 pending・attempts=1・退避で再試行予約。
+	if n, err := e.incidentSvc.DispatchPendingNotifications(t.Context(), func(ctx context.Context, to, subject, text string) error {
+		return fmt.Errorf("dial tcp: connection refused")
+	}); err != nil || n != 1 {
+		t.Fatalf("失敗派发 = %d, %v，期望 1 件", n, err)
+	}
+	row := struct {
+		State     string `db:"state"`
+		Attempts  int    `db:"attempts"`
+		NextRetry int64  `db:"next_retry_unix"`
+		LastErr   string `db:"last_error"`
+	}{}
+	if err := e.db.Get(&row, `SELECT state,attempts,next_retry_unix,last_error FROM security_notification_delivery WHERE delivery_id=?`, d.DeliveryID); err != nil {
+		t.Fatalf("投递行読取：%v", err)
+	}
+	if row.State != "pending" || row.Attempts != 1 || row.NextRetry <= time.Now().Unix() || !strings.Contains(row.LastErr, "refused") {
+		t.Fatalf("失敗结算異常: %+v", row)
+	}
+
+	// 再試行予約を現在に戻して成功送信 → accepted 終态、実宛先で送信されたこと。
+	if _, err := e.db.Exec(`UPDATE security_notification_delivery SET next_retry_unix=0 WHERE delivery_id=?`, d.DeliveryID); err != nil {
+		t.Fatalf("再試行予約：%v", err)
+	}
+	var gotTo string
+	if n, err := e.incidentSvc.DispatchPendingNotifications(t.Context(), func(ctx context.Context, to, subject, text string) error {
+		gotTo = to
+		return nil
+	}); err != nil || n != 1 || gotTo != "admin@example.com" {
+		t.Fatalf("成功派发 = %d to=%q err=%v", n, gotTo, err)
+	}
+	if err := e.db.Get(&row, `SELECT state,attempts,next_retry_unix,last_error FROM security_notification_delivery WHERE delivery_id=?`, d.DeliveryID); err != nil {
+		t.Fatalf("終態読取：%v", err)
+	}
+	if row.State != "accepted" {
+		t.Fatalf("終態 = %q，期望 accepted", row.State)
+	}
+
+	// SMTP 未設定(nil mailer)で新規投递は failed で可視化（成功を偽装しない）。
+	var opened2 api.SecurityCase
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/security/cases", token,
+		map[string]any{"title": "未設定案件", "severity": "low", "reason": "テスト2"}, &opened2); code != http.StatusOK {
+		t.Fatalf("建案2状態码 = %d", code)
+	}
+	if n, err := e.incidentSvc.DispatchPendingNotifications(t.Context(), nil); err != nil || n != 1 {
+		t.Fatalf("未設定派发 = %d, %v", n, err)
+	}
+	var st string
+	if err := e.db.Get(&st, `SELECT state FROM security_notification_delivery WHERE delivery_id!=? ORDER BY created_unix DESC LIMIT 1`, d.DeliveryID); err != nil || st != "failed" {
+		t.Fatalf("未設定終態 = %q err=%v，期望 failed", st, err)
 	}
 }

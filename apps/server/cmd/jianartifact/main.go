@@ -15,6 +15,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/smtp"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -600,4 +601,30 @@ func buildTLSServer(cfg *config.Config, handler http.Handler) (*http.Server, err
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 	}, nil
+}
+
+// smtpNotificationMailer は FR-172 SMTP 投递の実送信関数を返す。未設定時は nil。
+// net/smtp は ctx を受けないため、試行タイムアウトは goroutine+select で外側から打ち切る
+// （打ち切った送信が裏で成功しても行は failed 記録＝安全側の二重送付のみ）。
+func smtpNotificationMailer(c config.SMTPConfig) domain.NotificationMailer {
+	if !c.Enabled() {
+		return nil
+	}
+	addr := fmt.Sprintf("%s:%d", c.Host, c.Port)
+	var authn smtp.Auth
+	if c.User != "" {
+		authn = smtp.PlainAuth("", c.User, c.Password, c.Host)
+	}
+	return func(ctx context.Context, to, subject, text string) error {
+		msg := "From: " + c.From + "\r\nTo: " + to + "\r\nSubject: " + subject +
+			"\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n" + text
+		done := make(chan error, 1)
+		go func() { done <- smtp.SendMail(addr, authn, c.From, []string{to}, []byte(msg)) }()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case err := <-done:
+			return err
+		}
+	}
 }
