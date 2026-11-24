@@ -85,6 +85,17 @@ export function MavenPackageBatchPanel({ repositories, onTrashed }: MavenPackage
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [trashing, setTrashing] = useState(false);
 
+  // 切换仓库必须清空上一仓库的搜索结果与勾选：留着旧清单确认时，
+  // 会把未经预览的同坐标制品提交给新仓库，等于盲删。
+  useEffect(() => {
+    setVersions([]);
+    setSelected(new Set());
+    setSearched(false);
+    setTruncated(false);
+    setTotalVersions(0);
+    setError(null);
+  }, [repo]);
+
   const search = useCallback(() => {
     if (!repo) {
       setError(t("maintenance.pkgErrNoRepo"));

@@ -114,7 +114,7 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
-  # 后端静态检查与两个测试分片：三者互不依赖，全部并行。
+  # 后端静态检查与四个测试分片：互不依赖，全部并行。
   go-static:
     name: 后端静态检查
     needs: build-dist
@@ -152,7 +152,7 @@ jobs:
           JIAN_GATE_SCOPE: go-static
         run: bash scripts/check.sh
 
-  # 三个测试分片由矩阵生成：shard 数必须与 scripts/check.sh 的 GO_TEST_SHARD_COUNT 一致，
+  # 四个测试分片由矩阵生成：shard 数必须与 scripts/check.sh 的 GO_TEST_SHARD_COUNT 一致，
   # 目前 4 片（api / repository / domain / 其余），最慢分片决定后端测试墙上时间。
   go-test:
     name: 后端测试（${{ matrix.shard }}）

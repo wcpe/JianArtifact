@@ -3348,7 +3348,7 @@ export const handlers = [
     }
     const url = new URL(request.url);
     const page = Number(url.searchParams.get("page") ?? "1");
-    const pageSize = Number(url.searchParams.get("pageSize") ?? "20");
+    const pageSize = Number(url.searchParams.get("page_size") ?? "20");
     const items = [
       {
         ID: 3,

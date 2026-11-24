@@ -128,6 +128,14 @@ export function MavenVersionCleanupPanel({
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [trashing, setTrashing] = useState(false);
 
+  // 切换仓库必须作废上一仓库的预览清单与勾选：文件清单是按旧仓库
+  // 生成的，直接复用会把未经预览的同坐标制品提交给新仓库。
+  useEffect(() => {
+    setPlan(null);
+    setSelected(new Set());
+    setError(null);
+  }, [repo]);
+
   const parsed = useMemo(() => parseCoordinate(coordinate), [coordinate]);
 
   const loadPlan = useCallback(() => {

@@ -12,3 +12,4 @@ apps/server/
 pnpm-lock.yaml
 # Helm 模板含 Go 模板语法（{{ }}），非合法 YAML，prettier 无法解析
 deploy/helm/templates/
+apps/web/public/mockServiceWorker.js

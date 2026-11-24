@@ -21,6 +21,11 @@ var tableNamePattern = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 // 刻意不含 blob_quarantine：隔离区 blob 已从活动路径移走，属于在途操作的回滚态，
 // 不在搬迁的数据边界内。若存在未完成的资产操作，打包阶段会因读不到 blob 而失败，
 // 这是预期行为（宁可在源头报错，也不产出静默缺内容的包）。
+//
+// 含 asset_trash：回收站记录的原始路径、校验和与状态都进了备份（asset_trash 表本身
+// 随 SQLite 快照整体搬迁），若漏掉其 blob，还原后的回收站条目全部指向不存在的内容，
+// 「恢复」名义可用、实际拿不到字节。asset 与 asset_trash 可能引用同一 blob，
+// GROUP BY 去重后按 MAX(size) 取值，与原来的聚合口径一致。
 func AssetBlobs(dbPath string) (map[string]int64, error) {
 	conn, err := sql.Open("sqlite", snapshotDSN(dbPath))
 	if err != nil {
@@ -30,7 +35,19 @@ func AssetBlobs(dbPath string) (map[string]int64, error) {
 	// 专用单用途池：本函数顺序发出一条聚合查询再逐行扫描，不需要第二条连接。
 	conn.SetMaxOpenConns(1)
 
-	rows, err := conn.Query(`SELECT blob_hash, MAX(size) FROM asset GROUP BY blob_hash`)
+	// asset_trash 在老快照上可能不存在：先探测表再决定是否并集，避免备份老库直接报错。
+	trashTableCount := 0
+	_ = conn.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='asset_trash'`).Scan(&trashTableCount)
+	hasTrash := trashTableCount > 0
+	query := `SELECT blob_hash, MAX(size) FROM asset GROUP BY blob_hash`
+	if hasTrash {
+		query = `SELECT blob_hash, MAX(size) FROM (
+			SELECT blob_hash, size FROM asset
+			UNION ALL
+			SELECT blob_hash, size FROM asset_trash
+		) GROUP BY blob_hash`
+	}
+	rows, err := conn.Query(query)
 	if err != nil {
 		return nil, fmt.Errorf("读取 asset blob 集合：%w", err)
 	}

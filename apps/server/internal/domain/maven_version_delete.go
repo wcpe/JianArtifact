@@ -24,8 +24,10 @@ package domain
 //     不做部分信任——否则前端一个 bug 就能删掉用户没看见的文件。
 
 import (
+	"encoding/xml"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/jmoiron/sqlx"
 
@@ -216,14 +218,56 @@ func (s *AssetService) trashMavenBatch(repo *repository.Repository, coord MavenV
 //
 // 这里刻意**不缩小 metadata 的语义**：版本级 maven-metadata.xml 描述的是"该 SNAPSHOT
 // 版本当前指向哪次构建"（<snapshot><timestamp><buildNumber>），不是历史构建列表。
-// 因此删掉一次构建后，若它正是 metadata 指向的那次，必须整体移除这些文件，
-// 让客户端显式地拿不到"当前构建"而不是拿到一个 404 的时间戳。
+// 因此只有当被删的这次构建正是 metadata 当前所指时才移除这些文件——
+// 若 metadata 指向的是仍存在的另一次构建，删掉它会让客户端连"当前构建"都解析不到，
+// 原 -SNAPSHOT 路径对全部剩余构建一起 404。
 func (s *AssetService) rebuildSnapshotMetadataAfterBuildDelete(repo *repository.Repository, coord MavenVersionCoordinate, metadata []MavenVersionFile) error {
+	pointed := s.snapshotMetadataPointedBuild(repo, metadata)
+	if pointed != "" && pointed != coord.BuildID {
+		// metadata 指向的是另一次仍然存在的构建：保持原样，不动 metadata。
+		return nil
+	}
 	paths := make([]string, 0, len(metadata))
 	for _, file := range metadata {
 		paths = append(paths, file.Path)
 	}
 	return s.deleteAssetsDeadOn(repo, paths)
+}
+
+// snapshotMetadataPointedBuild 读取版本级 maven-metadata.xml 里 <snapshot> 指向的
+// <timestamp>-<buildNumber>。文件缺失、读取失败或字段不完整都返回空串，
+// 调用方按"无法证伪"处理（保守维持原删除语义，不留下指向已删构建的指针）。
+func (s *AssetService) snapshotMetadataPointedBuild(repo *repository.Repository, metadata []MavenVersionFile) string {
+	for _, file := range metadata {
+		if !strings.HasSuffix(file.Path, "maven-metadata.xml") {
+			continue
+		}
+		asset, err := s.assets.GetByPath(repo.ID, file.Path)
+		if err != nil || asset == nil {
+			continue
+		}
+		data, err := s.readAsset(asset)
+		if err != nil {
+			continue
+		}
+		var meta struct {
+			Versioning struct {
+				Snapshot struct {
+					Timestamp   string `xml:"timestamp"`
+					BuildNumber string `xml:"buildNumber"`
+				} `xml:"snapshot"`
+			} `xml:"versioning"`
+		}
+		if xml.Unmarshal(data, &meta) != nil {
+			continue
+		}
+		ts, bn := meta.Versioning.Snapshot.Timestamp, meta.Versioning.Snapshot.BuildNumber
+		if ts == "" || bn == "" {
+			continue
+		}
+		return ts + "-" + bn
+	}
+	return ""
 }
 
 // deleteAssetsDeadOn 硬删除一批**派生文件**（如 metadata），不进回收站。

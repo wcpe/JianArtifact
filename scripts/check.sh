@@ -25,10 +25,10 @@ SCOPE="${JIAN_GATE_SCOPE:-all}"
 #
 # 本机（4 核口径，-race）实测：api 276s、repository 352s、domain 108s、migration/runner 105s、
 # cmd 78s、protocol 50s、httpserver 39s、persistence 34s，其余各包合计约 25s。总量约 1067s。
-# 三片各约 355s 时最平衡：repository 单独成片（它是最大单包，和谁都放一起都会把该片拖长），
-# api+domain 一片，其余一片。
+# 四片配平：repository 单独成片（它是最大单包，和谁都放一起都会把该片拖长），
+# api、domain 各自一片，其余合并一片。墙上时间由最大的 repository 分片决定。
 #
-# 新增慢包时要重算这三片，否则某一片会明显更慢，并行收益被它吃掉。
+# 新增慢包时要重算这四片，否则某一片会明显更慢，并行收益被它吃掉。
 #
 # 分片用显式包列表而不是 ./...，因此**没有测试文件的包也必须列出**：它们今天不产生测试，
 # 但一旦有人补上，漏列就会让测试静默不跑。四片的并集必须等于 go list ./... 的全部输出
