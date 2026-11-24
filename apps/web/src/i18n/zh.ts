@@ -1391,6 +1391,7 @@ export const zh = {
     drawerActionMultiple: "{{first}} 等 {{count}} 类操作",
     drawerScaleValue: "共 {{total}} 条记录",
     drawerScaleFailure: "其中 {{count}} 条失败",
+    drawerSampleScope: "（基于已加载样本）",
     // 技术上下文默认折叠，按需展开。
     drawerShowContext: "技术细节",
     drawerHideContext: "收起细节",

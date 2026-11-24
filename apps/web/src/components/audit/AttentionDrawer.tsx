@@ -68,7 +68,7 @@ interface BatchOverviewData {
  */
 function summarizeBatch(
   events: AuditEvent[],
-  attention: { firstOccurredAt?: string; latestOccurredAt?: string },
+  attention: { firstOccurredAt?: string; latestOccurredAt?: string; failureCount?: number },
   t: (key: string, options?: Record<string, unknown>) => string,
 ): BatchOverviewData {
   const actorCounter = new Map<string, number>();
@@ -96,7 +96,9 @@ function summarizeBatch(
     actorCount: actorNames.length,
     actions: actionNames.slice(0, 3),
     actionCount: actionNames.length,
-    failureCount,
+    // 失败数用服务端的全批次聚合（成员分页返回，首页样本口径会偏小）；
+    // 操作者/动作仍基于已加载样本，样本不全时在概览里注明范围。
+    failureCount: attention.failureCount ?? failureCount,
     firstAt: attention.firstOccurredAt ?? sortedTimes[0] ?? "",
     latestAt: attention.latestOccurredAt ?? sortedTimes[sortedTimes.length - 1] ?? "",
   };
@@ -109,9 +111,12 @@ function summarizeBatch(
 function BatchOverview({
   overview,
   totalCount,
+  sampled,
 }: {
   overview: BatchOverviewData;
   totalCount: number;
+  /** 成员只加载了第一页时，操作者/动作统计只是样本口径，需在概览注明。 */
+  sampled: boolean;
 }) {
   const { t } = useTranslation();
   // 单人单动作是批次最常见形态，此时直接给结论句，避免堆一排只有一项的标签。
@@ -148,6 +153,11 @@ function BatchOverview({
           </Text>
           <Text size="sm" fw={600}>
             {actorSummary}
+            {sampled ? (
+              <Text span size="xs" c="dimmed" ml={6}>
+                {t("auditWorkbench.drawerSampleScope")}
+              </Text>
+            ) : null}
           </Text>
         </Group>
         <Group gap={6} wrap="wrap" align="baseline">
@@ -446,7 +456,11 @@ export function AttentionDrawer({
             </Group>
             <Text fw={700}>{actionLabel(detail.attention.action, t)}</Text>
           </Stack>
-          <BatchOverview overview={overview} totalCount={detail.totalCount} />
+          <BatchOverview
+            overview={overview}
+            totalCount={detail.totalCount}
+            sampled={detail.items.length < detail.totalCount}
+          />
           {detail.attention.state === "unacknowledged" ? (
             <Popover
               opened={confirmOpen}

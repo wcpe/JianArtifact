@@ -273,12 +273,26 @@ describe("审计工作台（详情：服务端耗时与请求头）", () => {
     expect(await screen.findByText("服务端耗时")).toBeTruthy();
     expect(screen.getAllByText("71 ms").length).toBeGreaterThan(0);
     expect(screen.getAllByText("96 ms").length).toBeGreaterThan(0);
-    // 请求头区块：区块标题 + 键名等宽原样展示（英文头名不翻译）+ 值渲染出来。
-    expect(screen.getByText("请求头（已过滤）")).toBeTruthy();
+
+    // 排障上下文默认收起：文本已挂载（Mantine Activity 隐藏模式）但对读者不可见。
+    const headersHeading = screen.getByText("请求头（已过滤）");
+    expect(headersHeading.closest('[aria-hidden="true"]')).toBeTruthy();
+    const toggle = screen.getByRole("button", { name: "技术细节" });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+
+    // 展开后内容真正可见（折叠壳的 aria-hidden 随展开翻转）。
+    await user.click(toggle);
+    expect(screen.getByRole("button", { name: "收起细节" })).toBeTruthy();
+    expect(headersHeading.closest('[aria-hidden="true"]')).toBeNull();
     expect(screen.getByText("Accept")).toBeTruthy();
     expect(screen.getByText("Content-Type")).toBeTruthy();
     // 头值与键名同一行（"Accept: application/json"），按包含匹配即可证明值已渲染。
     expect(screen.getAllByText(/application\/json/).length).toBeGreaterThan(0);
+
+    // 再次点击收起。
+    await user.click(screen.getByRole("button", { name: "收起细节" }));
+    expect(screen.getByRole("button", { name: "技术细节" })).toBeTruthy();
+    expect(headersHeading.closest('[aria-hidden="true"]')).toBeTruthy();
   });
 
   it("请求头 JSON 解析失败时回退展示原始文本，不静默丢内容", async () => {
@@ -299,7 +313,9 @@ describe("审计工作台（详情：服务端耗时与请求头）", () => {
     expect(rows).toHaveLength(1);
     await user.click(rows[0]!);
 
-    expect(await screen.findByText("请求头（已过滤）")).toBeTruthy();
+    // 展开「技术细节」后才断言请求头区块（与真实读者路径一致）。
+    await user.click(await screen.findByRole("button", { name: "技术细节" }));
+    expect(screen.getByText("请求头（已过滤）").closest('[aria-hidden="true"]')).toBeNull();
     // 解析失败兜底：原始文本原样可见。
     expect(screen.getByText("{not-valid-json")).toBeTruthy();
   });
