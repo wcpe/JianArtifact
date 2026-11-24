@@ -236,7 +236,8 @@ export function AuditWorkbenchView() {
       // 卡片本身统计的是最近 24h 的全部待确认批次，点击时对齐时间范围并清掉
       // 其余筛选，否则在别的时段/筛选下卡片有数字、列表却查不到对应批次。
       onSelect: () => {
-        if (filters.attention === "pending") {
+        if (filters.attention === "pending" && model.range === "24h") {
+          // 已处于卡片口径（与下方 active 判定一致）→ 本次点击才是取消。
           setFilters({ ...filters, attention: undefined });
         } else {
           setFilters({ category: [], result: [], attention: "pending" });

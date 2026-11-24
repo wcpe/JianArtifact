@@ -2,7 +2,7 @@
 // + Mantine Table（完整时间 / 操作者邮箱 / 动作+方法路径 / 状态码 / 耗时 / 客户端 IP / 详情）。
 // 全部筛选走服务端（关键字、动作、操作者邮箱、客户端 IP、请求方法、认证方式、结果、风险状态）。
 import { useMediaQuery } from "@mantine/hooks";
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Badge,
@@ -118,6 +118,11 @@ export function RecordsStream({ model, onInvestigate, onOpenAttention }: Records
     {},
   );
   const [ipDraft, setIpDraft] = useState(model.filters.clientIp ?? "");
+  // 外部联动（KPI 卡等）改写 filters 时同步回显；否则卡片清掉的 IP 残留在
+  // 输入框，下次失焦又把旧值写回筛选。
+  useEffect(() => {
+    setIpDraft(model.filters.clientIp ?? "");
+  }, [model.filters.clientIp]);
   const { records, filters, setFilters, actorFacets, emailFacets } = model;
   // 窄屏：高级筛选收起，默认只留关键字那行。
   const isNarrow = useMediaQuery("(max-width: 48em)") ?? false;
@@ -845,10 +850,15 @@ function OperationRow({
   const fileCount = operationFileCount(operation);
   // 徽章只报「另有几个文件」：行上已经展示了最新那个文件，+N 是折叠掉的其余 N 个。
   const collapsedCount = Math.max(fileCount - 1, 0);
-  // 折叠行同样给风险批次入口：任一成员事件属于批次即可直达，
-  // 否则批量删除等折叠场景仍须逐条展开详情才能打开批次抽屉。
-  const attentionId = operation.events.find((event) => event.attention?.attentionId)?.attention
-    ?.attentionId;
+  // 折叠行同样给风险批次入口：成员事件可能分属不同批次（同目录多条删除失败
+  // 可被分到不同批次），按去重后的全部批次各给一个徽章，不遗漏其余批次。
+  const attentionIds = [
+    ...new Set(
+      operation.events
+        .map((event) => event.attention?.attentionId)
+        .filter((id): id is string => Boolean(id)),
+    ),
+  ];
 
   return (
     <>
@@ -898,9 +908,9 @@ function OperationRow({
                 {t("auditWorkbench.severityHigh")}
               </Badge>
             ) : null}
-            {attentionId ? (
-              <RiskBadge attentionId={attentionId} onOpenAttention={onOpenAttention} />
-            ) : null}
+            {attentionIds.map((id) => (
+              <RiskBadge key={id} attentionId={id} onOpenAttention={onOpenAttention} />
+            ))}
           </Group>
           <Text size="xs" c="dimmed" truncate title={rowTarget}>
             {rowTarget}
