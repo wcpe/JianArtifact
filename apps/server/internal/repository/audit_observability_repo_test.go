@@ -414,6 +414,92 @@ func TestAttentionFilterCountsPartialAsRisk(t *testing.T) {
 	}
 }
 
+// TestResultAndCategoryFiltersClassifyPartialAsFailure 钉住结果/类别筛选对
+// partial 的归类：classifyAuditResult 将 partial 归入失败，SQL 侧三套筛选
+// （结果「失败/未知」、类别「security_event/asset_change/management_change」）
+// 必须用同一份失败集合——缺一端会让记录显示为失败却在「失败」下消失、
+// 在「未知」或「管理变更」下出现。
+func TestResultAndCategoryFiltersClassifyPartialAsFailure(t *testing.T) {
+	db, err := persistence.Open(filepath.Join(t.TempDir(), "observability-partial-classify.db"))
+	if err != nil {
+		t.Fatalf("打开数据库：%v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := db.Migrate(); err != nil {
+		t.Fatalf("迁移数据库：%v", err)
+	}
+
+	now := time.Now().UTC()
+	seed := func(action, result string) {
+		if _, err := db.Exec(`INSERT INTO audit_log
+			(ts, actor, action, entity_type, entity_key, repo, detail, result, ip, source_node,
+			 status_code, duration_ms, user_agent, body_preview, http_headers)
+			VALUES (?, 'admin', ?, 'repository', 'maven-public', 'maven-public', '', ?, '203.0.113.7', '',
+			 200, 5, 'agent/1.0', '', '')`, now.Format(time.RFC3339Nano), action, result); err != nil {
+			t.Fatalf("插入审计事件：%v", err)
+		}
+	}
+	seed("publish_policy.update", "partial") // 非 asset.* 动作的部分失败
+	seed("asset.publish", "partial")         // asset.* 动作的部分失败
+	seed("publish_policy.update", "ok")
+
+	repo := NewAuditObservabilityRepo(db)
+	base := ObservabilityFilter{
+		From:       now.Add(-time.Hour).Format(time.RFC3339Nano),
+		To:         now.Add(time.Minute).Format(time.RFC3339Nano),
+		AuditMaxID: 3,
+	}
+
+	results := func(f ObservabilityFilter) []string {
+		events, err := repo.ListEvents(f)
+		if err != nil {
+			t.Fatalf("查询：%v", err)
+		}
+		var out []string
+		for _, e := range events {
+			out = append(out, e.Action+":"+e.Result)
+		}
+		return out
+	}
+
+	// 「失败」结果筛选：两条 partial 都必须在。
+	f := base
+	f.Results = []string{"failure"}
+	got := results(f)
+	if len(got) != 2 {
+		t.Fatalf("「失败」应命中两条 partial：%+v", got)
+	}
+
+	// 「未知」结果筛选：partial 不再落进去。
+	f = base
+	f.Results = []string{"unknown"}
+	if got := results(f); len(got) != 0 {
+		t.Fatalf("「未知」不应命中 partial：%+v", got)
+	}
+
+	// 「安全事件」类别：partial 计入。
+	f = base
+	f.Categories = []string{"security_event"}
+	if got := results(f); len(got) != 2 {
+		t.Fatalf("安全事件应命中两条 partial：%+v", got)
+	}
+
+	// 「管理变更」类别：只剩 ok 的那条非 asset 动作。
+	f = base
+	f.Categories = []string{"management_change"}
+	got = results(f)
+	if len(got) != 1 || got[0] != "publish_policy.update:ok" {
+		t.Fatalf("管理变更应只剩 ok 记录：%+v", got)
+	}
+
+	// 「资产变更」类别：partial 的 asset.publish 不在其中。
+	f = base
+	f.Categories = []string{"asset_change"}
+	if got := results(f); len(got) != 0 {
+		t.Fatalf("资产变更不应命中 partial：%+v", got)
+	}
+}
+
 // TestQueryNeedleMatchesNonASCIIUppercase 钉住关键词搜索对非 ASCII 大写的命中：
 // SQLite LOWER() 只折叠 ASCII，而 Go 侧 ToLower 会连 É→é 一起折——只下小写针时，
 // 存原文「Équipe QA」的记录永远匹配不上，调查按钮按组名搜索会找不到原记录。
