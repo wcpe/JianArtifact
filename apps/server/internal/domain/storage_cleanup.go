@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/wcpe/jianartifact/apps/server/internal/blobstore"
@@ -96,8 +97,12 @@ type StorageCleanupService struct {
 	meta     *repository.StorageCleanupRepo
 	assetSvc *AssetService
 	blobs    *blobstore.Store
-	opts     StorageCleanupOptions
-	now      func() time.Time
+	// optsMu 保护 opts：两个保留阈值现在可以在设置页改（JIAN_STORAGE_METADATA_RETENTION_DAYS /
+	// JIAN_STORAGE_TEMP_MAX_AGE_HOURS 降级为播种初值），写入来自 HTTP 处理 goroutine，
+	// 读取来自作业 goroutine 里的一轮 Run——不加锁就是数据竞态。
+	optsMu sync.RWMutex
+	opts   StorageCleanupOptions
+	now    func() time.Time
 	// upstreamHealth 是上游健康历史的保留清理入口；nil 表示跳过该步骤。
 	// 它是「顺带清理」而非新增作业：规格 §2.2 明确要求复用 storage-cleanup。
 	upstreamHealth *repository.UpstreamHealthRepo
@@ -112,6 +117,29 @@ func NewStorageCleanupService(meta *repository.StorageCleanupRepo, assetSvc *Ass
 		meta: meta, assetSvc: assetSvc, blobs: blobs, opts: opts, now: time.Now,
 		cacheDeletesPerRun: maxProxyCacheDeletesPerRun,
 	}
+}
+
+// SetRetentionOptions 更新两个保留阈值（终态元数据保留期 / 过期上传临时文件最长存活）。
+//
+// 由作业在**每轮开始时**调用一次（见 wiring.go 的 storage-cleanup 注册处）：
+// 保留策略的语义是"这一轮按什么阈值裁剪"，每轮现读才能让界面改完下一轮即生效。
+//
+// 0 表示禁用对应子步骤，照实存下、不做加工——把它当成"未配置"回退默认值，
+// 会让运维关掉的两个子步骤在下一轮自己重新打开。
+func (s *StorageCleanupService) SetRetentionOptions(opts StorageCleanupOptions) {
+	if s == nil {
+		return
+	}
+	s.optsMu.Lock()
+	defer s.optsMu.Unlock()
+	s.opts = opts
+}
+
+// retentionOptions 返回本轮生效的两个保留阈值（副本，读方法不持锁返回）。
+func (s *StorageCleanupService) retentionOptions() StorageCleanupOptions {
+	s.optsMu.RLock()
+	defer s.optsMu.RUnlock()
+	return s.opts
 }
 
 // SetProxyCacheDeletesPerRun 调整单轮代理缓存删除上限（默认 maxProxyCacheDeletesPerRun=200；
@@ -169,10 +197,13 @@ func (s *StorageCleanupService) Run() (StorageCleanupResult, error) {
 		return result, nil
 	}
 	now := s.now()
+	// 本轮阈值取一份快照：遍历过程中设置页可能又改了值，同一轮里读到两个不同的保留期
+	// 会让"这一轮按 X 天裁、下一句按 Y 天裁"这种自相矛盾的窗口出现。
+	opts := s.retentionOptions()
 	var errs []error
 
-	if s.meta != nil && s.opts.MetadataRetention > 0 {
-		counts, err := s.meta.PruneTerminalMutations(storageSQLTime(now.Add(-s.opts.MetadataRetention)))
+	if s.meta != nil && opts.MetadataRetention > 0 {
+		counts, err := s.meta.PruneTerminalMutations(storageSQLTime(now.Add(-opts.MetadataRetention)))
 		if err != nil {
 			errs = append(errs, err)
 		} else {
@@ -193,8 +224,8 @@ func (s *StorageCleanupService) Run() (StorageCleanupResult, error) {
 		}
 	}
 
-	if s.blobs != nil && s.opts.TempMaxAge > 0 {
-		removed, skipped, err := s.blobs.CleanupOCIUploadTempsBefore(now.Add(-s.opts.TempMaxAge))
+	if s.blobs != nil && opts.TempMaxAge > 0 {
+		removed, skipped, err := s.blobs.CleanupOCIUploadTempsBefore(now.Add(-opts.TempMaxAge))
 		if err != nil {
 			errs = append(errs, fmt.Errorf("清理过期上传临时文件：%w", err))
 		} else {

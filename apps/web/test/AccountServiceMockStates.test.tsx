@@ -179,7 +179,7 @@ describe("账户与服务页开发态场景", () => {
     const publicUrl = (await screen.findByLabelText("对外基础 URL")) as HTMLInputElement;
     await user.clear(publicUrl);
     await user.type(publicUrl, "https://settings.example.com");
-    await user.click(screen.getByRole("button", { name: "保存设置" }));
+    await user.click(screen.getByRole("button", { name: "保存「对外基础 URL」" }));
     expect(await screen.findByText("保存成功")).toBeTruthy();
     expect(publicUrl.value).toBe("https://settings.example.com");
 
@@ -192,7 +192,7 @@ describe("账户与服务页开发态场景", () => {
     const standbyUrl = (await screen.findByLabelText("对外基础 URL")) as HTMLInputElement;
     await user.clear(standbyUrl);
     await user.type(standbyUrl, "https://keep.example.com");
-    await user.click(screen.getByRole("button", { name: "保存设置" }));
+    await user.click(screen.getByRole("button", { name: "保存「对外基础 URL」" }));
     expect(await screen.findByText("备用节点为只读，当前请求已拒绝")).toBeTruthy();
     expect(standbyUrl.value).toBe("https://keep.example.com");
   });

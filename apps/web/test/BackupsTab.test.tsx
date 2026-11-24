@@ -810,7 +810,6 @@ describe("备份与搬迁", () => {
       anonymousAccess: false,
       publicUrl: "",
       upstreamTimeout: 30,
-      syncInterval: 60,
       allowedHosts: [],
       originTokenEnabled: false,
       originTokenHeader: "",

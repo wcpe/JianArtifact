@@ -2,6 +2,7 @@ package repository
 
 import (
 	"database/sql"
+	"strings"
 
 	"github.com/jmoiron/sqlx"
 
@@ -46,6 +47,81 @@ type AuditLogEntry struct {
 
 // AuditLogRepo 读写 audit_log 表（审计日志）。
 type AuditLogRepo struct{ db *persistence.DB }
+
+// SettingAuditAction 是设置写入的审计动作名。
+const SettingAuditAction = "setting.set"
+
+// settingHistorySep 分隔 detail 中的旧值与新值。
+//
+// 用 ASCII Unit Separator（0x1F）而不是冒号或竖线：设置值里可能出现任意可打印字符
+// （public_url 含 ':://'、白名单是逗号串），用可打印分隔符会让解析出现歧义。
+// 0x1F 不可能出现在这些值里（HTTP 头与 JSON 都会转义控制字符）。
+const settingHistorySep = "\x1f"
+
+// EncodeSettingHistoryDetail 把「旧值 → 新值」编码成可回读的审计 detail。
+//
+// 空串表示「该键此前从未落库」（首次设置），界面上按「未设置」展示。
+func EncodeSettingHistoryDetail(oldVal, newVal string) string {
+	return oldVal + settingHistorySep + newVal
+}
+
+// decodeSettingHistoryDetail 从审计 detail 还原前后值。
+//
+// ok=false 表示这条 detail 不是本格式（例如 0.14 之前遗留的
+// 「基础设置更新」摘要行、或置顶仓库那条「全局置顶更新：n=N」）。
+// 调用方据此丢弃该行：它无法回答「从什么改成什么」，
+// 把它当 (空 → 空) 展示会凭空造出一条「— → —」的假变更。
+func decodeSettingHistoryDetail(detail string) (oldVal, newVal string, ok bool) {
+	return strings.Cut(detail, settingHistorySep)
+}
+
+// SettingHistoryEntry 是一条设置变更历史（供设置页逐项展示）。
+//
+// 只抽取展示所需字段：设置历史是给运维看「谁在什么时候把值改成了什么」，
+// 不需要审计原文里的 IP、User-Agent 等排障字段。
+type SettingHistoryEntry struct {
+	TS     string `json:"ts"`
+	Actor  string `json:"actor"`
+	OldVal string `json:"oldValue"`
+	NewVal string `json:"newValue"`
+}
+
+// ListSettingHistory 按设置键查询最近的变更历史（新→旧）。
+//
+// 数据源是 audit_log：设置写入会逐键落一条 action='setting.set'、
+// entity_type='setting'、entity_key=<设置键> 的记录，前后值编码在 detail 里
+// （格式见 encodeSettingHistoryDetail）。
+func (r *AuditLogRepo) ListSettingHistory(key string, limit int) ([]SettingHistoryEntry, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	const query = `SELECT ts, actor, detail FROM audit_log
+		WHERE action = ? AND entity_type = ? AND entity_key = ?
+		ORDER BY ts DESC, id DESC LIMIT ?`
+	var rows []struct {
+		TS     string `db:"ts"`
+		Actor  string `db:"actor"`
+		Detail string `db:"detail"`
+	}
+	if err := r.db.Select(&rows, query, SettingAuditAction, "setting", key, limit); err != nil {
+		return nil, err
+	}
+	out := make([]SettingHistoryEntry, 0, len(rows))
+	for _, row := range rows {
+		oldVal, newVal, ok := decodeSettingHistoryDetail(row.Detail)
+		if !ok {
+			// 不是本格式的旧行（摘要类）直接跳过，不产出语义不明的条目。
+			continue
+		}
+		out = append(out, SettingHistoryEntry{
+			TS: row.TS, Actor: row.Actor, OldVal: oldVal, NewVal: newVal,
+		})
+	}
+	return out, nil
+}
 
 // NewAuditLogRepo 构造 AuditLogRepo。
 func NewAuditLogRepo(db *persistence.DB) *AuditLogRepo { return &AuditLogRepo{db: db} }

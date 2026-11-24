@@ -27,3 +27,24 @@ html {
     transform: rotate(360deg);
   }
 }
+
+/* 运行期策略输入框的校验描边。
+ *
+ * 为什么用 CSS 类而不是 Mantine 的 styles 属性：
+ *   1. styles 每次渲染都要新建一个对象，13 个字段 × 每次输入都会重建，
+ *      实测让相关用例慢了约 30%（7.5s → 9.7s），并行门禁因此撞上超时；
+ *   2. Mantine 的 error 样式选择器优先级高于内联 styles，绿框会被红框盖掉，
+ *      类名 + !important 才能稳定压过。
+ *
+ * 未校验（没碰过）时不加任何类，保持默认外观——否则一进页面满屏绿框，
+ * 绿就失去「这一项已确认可用」的含义。
+ */
+.ja-field-valid input {
+  border-color: var(--mantine-color-teal-6) !important;
+  box-shadow: 0 0 0 1px var(--mantine-color-teal-6);
+}
+
+.ja-field-invalid input {
+  border-color: var(--mantine-color-red-6) !important;
+  box-shadow: 0 0 0 1px var(--mantine-color-red-6);
+}
