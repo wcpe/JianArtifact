@@ -28,12 +28,19 @@ const (
 	admissionMaxBytes        int64 = 64 << 20
 	admissionLifetime              = 7 * 24 * time.Hour
 	admissionIntegrityFailed       = "admission_integrity_failed"
+	// FR-169 私有暂存容量上限（拟议预算）：超上限返回 admission_limit。
+	admissionMaxRepoPendingBytes  int64 = 4 << 30
+	admissionMaxTotalPendingBytes int64 = 32 << 30
+	admissionMaxRepoPendingCount  int64 = 256
+	admissionMaxTotalPendingCount int64 = 4096
 )
 
 var (
 	ErrAdmissionUnauthenticated = errors.New("候选请求没有有效身份")
 	ErrAdmissionForbidden       = errors.New("候选仅允许交互会话")
 	ErrAdmissionUnavailable     = errors.New("候选状态暂不可确认")
+	// ErrAdmissionLimit 私有暂存超出容量或条数上限；映射 413 admission_limit。
+	ErrAdmissionLimit = errors.New("私有暂存容量已满")
 )
 
 // AdmissionStatus 是公开状态适配器可使用的脱敏投影，不含内部文件键、源 IP 或路径。
@@ -171,6 +178,15 @@ func (s *AdmissionService) Prepare(ctx context.Context, principal *auth.Principa
 		}
 		if time.Now().Unix() >= row.ExpiresUnix {
 			return ErrAdmissionUnavailable
+		}
+		repoBytes, totalBytes, repoCount, totalCount, sumErr := s.rows.SumPendingTx(ctx, tx, row.RepositoryID)
+		if sumErr != nil {
+			return sumErr
+		}
+		// 自身 receiving 行不计入既有占用；超任一上限拒绝封存。
+		if repoBytes+size > admissionMaxRepoPendingBytes || totalBytes+size > admissionMaxTotalPendingBytes ||
+			repoCount > admissionMaxRepoPendingCount || totalCount > admissionMaxTotalPendingCount {
+			return ErrAdmissionLimit
 		}
 		if err := s.rows.SealTx(ctx, tx, row); err != nil {
 			return err
@@ -458,7 +474,7 @@ func checkAdmissionPrincipal(p *auth.Principal) error {
 }
 
 func admissionServiceError(err error) error {
-	for _, known := range []error{ErrAdmissionUnauthenticated, ErrAdmissionForbidden, ErrAdmissionUnavailable, repository.ErrNotFound, ErrWriteFrozen, context.Canceled, context.DeadlineExceeded} {
+	for _, known := range []error{ErrAdmissionUnauthenticated, ErrAdmissionForbidden, ErrAdmissionUnavailable, ErrAdmissionLimit, repository.ErrNotFound, ErrWriteFrozen, context.Canceled, context.DeadlineExceeded} {
 		if errors.Is(err, known) {
 			return known
 		}

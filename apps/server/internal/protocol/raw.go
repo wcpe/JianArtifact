@@ -824,6 +824,10 @@ func writeAdmissionPutErr(c *gin.Context, err error) {
 	case errors.Is(err, domain.ErrValidation):
 		auth.WriteError(c, http.StatusBadRequest, "bad_request", "上传字段不合规")
 	default:
+		if errors.Is(err, domain.ErrAdmissionLimit) {
+			auth.WriteError(c, http.StatusRequestEntityTooLarge, "admission_limit", "私有暂存容量已满")
+			return
+		}
 		auth.WriteError(c, http.StatusServiceUnavailable, "admission_unavailable", "候选处理暂不可确认")
 	}
 }
