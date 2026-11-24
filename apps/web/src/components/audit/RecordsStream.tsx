@@ -908,13 +908,19 @@ function OperationRow({
                 {t("auditWorkbench.severityHigh")}
               </Badge>
             ) : null}
-            {attentionIds.map((id) => (
-              <RiskBadge key={id} attentionId={id} onOpenAttention={onOpenAttention} />
-            ))}
           </Group>
           <Text size="xs" c="dimmed" truncate title={rowTarget}>
             {rowTarget}
           </Text>
+          {/* 批次徽章独立成行并可换行：同目录不同批次可能并存多枚，
+              塞在 nowrap 主行里会被裁掉、窄屏下直接点不到。 */}
+          {attentionIds.length > 0 ? (
+            <Group gap={4} wrap="wrap" mt={2}>
+              {attentionIds.map((id) => (
+                <RiskBadge key={id} attentionId={id} onOpenAttention={onOpenAttention} />
+              ))}
+            </Group>
+          ) : null}
           {isNarrow ? (
             <Text size="xs" c="dimmed" truncate title={`${email} · ${actorName}`}>
               {email} · {formatDuration(head.durationMs)} · {head.clientIp ?? "—"}
