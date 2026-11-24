@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -730,14 +731,16 @@ func TestQueryEndpointBasePathNotDoubleDecoded(t *testing.T) {
 		gotEscaped, gotPath = r.URL.EscapedPath(), r.URL.Path
 		_, _ = w.Write([]byte(`{"ok":true}`))
 	})
+	// 基址写 %2520 表示路径段里字面含 %20：解码一次得 "/sub%20dir"，
+	// 若被再次解码会变成 "/sub dir"——正是要防的重复解码。
 	if _, err := runQueryCapture(t, queryEnv{getenv: func(string) string { return "" }},
-		"api", "/api/v1/repositories/a%20b/status", "--server", server.URL+"/sub%20dir"); err != nil {
+		"api", "/api/v1/repositories/a%20b/status", "--server", server.URL+"/sub%2520dir"); err != nil {
 		t.Fatalf("query api 应当成功：%v", err)
 	}
-	if gotPath != "/sub dir/api/v1/repositories/a b/status" {
-		t.Errorf("解码后路径不符，实际 %q", gotPath)
+	if gotPath != "/sub%20dir/api/v1/repositories/a b/status" {
+		t.Errorf("解码后路径应保留字面 %%20，实际 %q", gotPath)
 	}
-	if gotEscaped != "/sub%20dir/api/v1/repositories/a%20b/status" {
+	if gotEscaped != "/sub%2520dir/api/v1/repositories/a%20b/status" {
 		t.Errorf("应保留单次转义，实际 %q", gotEscaped)
 	}
 }
@@ -755,13 +758,33 @@ func TestQueryConfigTokenSameServerWithDefaultPort(t *testing.T) {
 		t.Fatalf("写入临时配置：%v", err)
 	}
 	env := queryEnv{getenv: func(string) string { return "" }, configPath: configPath}
-	// httptest 端口非 443/80，改用同地址显式端口验证比较逻辑等价（端口非默认时
-	// canonicalQueryBase 原样保留，同串即同实例）。
 	if _, err := runQueryCapture(t, env, "repos", "--server", server.URL); err != nil {
 		t.Fatalf("同实例查询应当成功：%v", err)
 	}
 	if gotAuth != "Bearer file-token" {
 		t.Errorf("同实例应沿用配置文件令牌，实际 %q", gotAuth)
+	}
+}
+
+// TestCanonicalQueryBaseStripsDefaultPort 校验默认端口规范化：显式 :443/:80 与省略等价。
+func TestCanonicalQueryBaseStripsDefaultPort(t *testing.T) {
+	cases := []struct{ a, b string }{
+		{"https://h.example", "https://h.example:443"},
+		{"http://h.example", "http://h.example:80"},
+		{"https://h.example/p", "https://h.example:443/p/"},
+	}
+	for i, testCase := range cases {
+		ua, err := url.Parse(testCase.a)
+		if err != nil {
+			t.Fatalf("case %d 解析 %q：%v", i, testCase.a, err)
+		}
+		ub, err := url.Parse(testCase.b)
+		if err != nil {
+			t.Fatalf("case %d 解析 %q：%v", i, testCase.b, err)
+		}
+		if canonicalQueryBase(ua) != canonicalQueryBase(ub) {
+			t.Errorf("case %d：%q 与 %q 规范化后应相等（%q != %q）", i, testCase.a, testCase.b, canonicalQueryBase(ua), canonicalQueryBase(ub))
+		}
 	}
 }
 

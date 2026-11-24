@@ -1059,9 +1059,10 @@ func queryAPI(args []string, out io.Writer, env queryEnv) error {
 	// 空响应体（典型如 204 删除成功、202 受理）：动作已生效，直接报告状态，
 	// 不能把空体当 JSON 解析失败而谎报失败——调用方可能据此重试或告警。
 	if len(bytes.TrimSpace(reply.body)) == 0 {
-		// --json / --jq 模式下必须输出合法 JSON，否则下游解析失败。
+		// --json / --jq 模式下必须输出合法 JSON，否则下游解析失败；
+		// 同时带上状态码，让脚本能确认 204/202 这类「成功但无体」的结果。
 		if opts.json || opts.jq != "" {
-			_, err = fmt.Fprintln(out, "null")
+			_, err = fmt.Fprintf(out, "{\"status\":%d}\n", reply.status)
 			return err
 		}
 		_, err = fmt.Fprintf(out, "%s %s -> %d（无响应体，已受理）\n", method, endpointPath, reply.status)
