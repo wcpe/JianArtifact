@@ -95,12 +95,12 @@ export function AuditWorkbenchView() {
   // 不必再去筛选条里逐个还原同样的条件。
   const { filters, setFilters } = model;
 
-  /** 切换数组型筛选（结果 / 类别）：已选中则取消，否则只选这一项。 */
+  /** KPI 点击是「聚焦该指标」：只有已单独选中时才取消，多选状态下点击收敛为仅此一项。 */
   const toggleArrayFilter = useCallback(
     (key: "result" | "category", value: string) => {
       const current = filters[key] as string[];
-      const next = current.includes(value) ? current.filter((item) => item !== value) : [value];
-      setFilters({ ...filters, [key]: next });
+      const focused = current.length === 1 && current[0] === value;
+      setFilters({ ...filters, [key]: focused ? [] : [value] });
     },
     [filters, setFilters],
   );
@@ -240,7 +240,10 @@ export function AuditWorkbenchView() {
           // 已处于卡片口径（与下方 active 判定一致）→ 本次点击才是取消。
           setFilters({ ...filters, attention: undefined });
         } else {
+          // 全部条件复位：残留的关键词/操作者等会让待确认记录查不出来。
           setFilters({ category: [], result: [], attention: "pending" });
+          model.setSearch("");
+          model.setDraft("");
           model.setRange("24h");
         }
       },

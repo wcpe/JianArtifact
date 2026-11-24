@@ -1081,16 +1081,19 @@ function artifactLabel(event: AuditEvent): string | null {
 }
 
 /**
- * 目标文本（兜底）：制品事件优先展示制品路径；其余维持既有语义——
- * 先路由模板，再目标 label/repository。
+ * 目标文本（兜底）：制品事件优先展示制品路径；其余按「目标 → 路由模板」取。
  */
 function asTextLabel(event: AuditEvent): string {
   const artifact = artifactLabel(event);
   if (artifact) return artifact;
+  // 与详情展示同一口径：目标名优先于接口路径——「调查该目标」搜的应该是
+  // 读者看到的那个目标，而不是共享该路由模板的接口。
+  const target = eventTarget(event);
+  if (target?.label) return target.label;
+  if (target?.repository) return target.repository;
   const http = event.http as { path?: string } | undefined;
   if (http?.path) return http.path;
-  const target = eventTarget(event);
-  return target?.label ?? target?.repository ?? "—";
+  return "—";
 }
 
 /**
