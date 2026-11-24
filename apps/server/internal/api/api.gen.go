@@ -1898,6 +1898,48 @@ func (e SecurityCaseTransitionRequestAction) Valid() bool {
 	}
 }
 
+// Defines values for SecurityNotificationDeliveryChannel.
+const (
+	Qq   SecurityNotificationDeliveryChannel = "qq"
+	Smtp SecurityNotificationDeliveryChannel = "smtp"
+)
+
+// Valid indicates whether the value is a known member of the SecurityNotificationDeliveryChannel enum.
+func (e SecurityNotificationDeliveryChannel) Valid() bool {
+	switch e {
+	case Qq:
+		return true
+	case Smtp:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecurityNotificationDeliveryState.
+const (
+	SecurityNotificationDeliveryStateAccepted  SecurityNotificationDeliveryState = "accepted"
+	SecurityNotificationDeliveryStateAttempted SecurityNotificationDeliveryState = "attempted"
+	SecurityNotificationDeliveryStateFailed    SecurityNotificationDeliveryState = "failed"
+	SecurityNotificationDeliveryStatePending   SecurityNotificationDeliveryState = "pending"
+)
+
+// Valid indicates whether the value is a known member of the SecurityNotificationDeliveryState enum.
+func (e SecurityNotificationDeliveryState) Valid() bool {
+	switch e {
+	case SecurityNotificationDeliveryStateAccepted:
+		return true
+	case SecurityNotificationDeliveryStateAttempted:
+		return true
+	case SecurityNotificationDeliveryStateFailed:
+		return true
+	case SecurityNotificationDeliveryStatePending:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TokenPurpose.
 const (
 	TokenPurposeArtifactPublish TokenPurpose = "artifact_publish"
@@ -4748,6 +4790,38 @@ type SecurityCaseTransitionRequest struct {
 // SecurityCaseTransitionRequestAction defines model for SecurityCaseTransitionRequest.Action.
 type SecurityCaseTransitionRequestAction string
 
+// SecurityNotificationDelivery defines model for SecurityNotificationDelivery.
+type SecurityNotificationDelivery struct {
+	Attempts     *int64                              `json:"attempts,omitempty"`
+	Channel      SecurityNotificationDeliveryChannel `json:"channel"`
+	DeliveryId   string                              `json:"deliveryId"`
+	LastError    *string                             `json:"lastError,omitempty"`
+	State        SecurityNotificationDeliveryState   `json:"state"`
+	TargetMasked string                              `json:"targetMasked"`
+}
+
+// SecurityNotificationDeliveryChannel defines model for SecurityNotificationDelivery.Channel.
+type SecurityNotificationDeliveryChannel string
+
+// SecurityNotificationDeliveryState defines model for SecurityNotificationDelivery.State.
+type SecurityNotificationDeliveryState string
+
+// SecurityNotificationPage defines model for SecurityNotificationPage.
+type SecurityNotificationPage struct {
+	HasMore bool `json:"hasMore"`
+	Items   []struct {
+		Acked       *bool   `json:"acked,omitempty"`
+		CreatedUnix *int64  `json:"createdUnix,omitempty"`
+		Kind        *string `json:"kind,omitempty"`
+		NoticeId    *string `json:"noticeId,omitempty"`
+		Payload     *string `json:"payload,omitempty"`
+		Seq         *int64  `json:"seq,omitempty"`
+		Title       *string `json:"title,omitempty"`
+	} `json:"items"`
+	NextCursor *int64 `json:"nextCursor,omitempty"`
+	Watermark  int64  `json:"watermark"`
+}
+
 // SetRepositoryOnlineRequest defines model for SetRepositoryOnlineRequest.
 type SetRepositoryOnlineRequest struct {
 	// Online 是否在线（true=在线，false=离线；必填）
@@ -5770,6 +5844,17 @@ type ListSecurityCasesParams struct {
 // ListSecurityCasesParamsState defines parameters for ListSecurityCases.
 type ListSecurityCasesParamsState string
 
+// ListNotificationDeliveriesParams defines parameters for ListNotificationDeliveries.
+type ListNotificationDeliveriesParams struct {
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// ListSecurityNotificationsParams defines parameters for ListSecurityNotifications.
+type ListSecurityNotificationsParams struct {
+	After *int64 `form:"after,omitempty" json:"after,omitempty"`
+	Limit *int   `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
 // BeginRecoveryIsolationJSONBody defines parameters for BeginRecoveryIsolation.
 type BeginRecoveryIsolationJSONBody struct {
 	Reason    *string `json:"reason,omitempty"`
@@ -6546,6 +6631,15 @@ type ServerInterface interface {
 	// ListEvidenceHolds 保全持有清单（管理员只读）
 	// (GET /api/v1/security/holds)
 	ListEvidenceHolds(c *gin.Context)
+	// ListNotificationDeliveries 站外投递脱敏分页
+	// (GET /api/v1/security/notification-deliveries)
+	ListNotificationDeliveries(c *gin.Context, params ListNotificationDeliveriesParams)
+	// ListSecurityNotifications 站内安全通知游标分页
+	// (GET /api/v1/security/notifications)
+	ListSecurityNotifications(c *gin.Context, params ListSecurityNotificationsParams)
+	// AckSecurityNotification 确认本人通知（幂等）
+	// (PUT /api/v1/security/notifications/{noticeId}/ack)
+	AckSecurityNotification(c *gin.Context, noticeId string)
 	// GetRecoveryGate 恢复隔离闸状态（管理员可读）
 	// (GET /api/v1/security/recovery)
 	GetRecoveryGate(c *gin.Context)
@@ -9615,6 +9709,93 @@ func (siw *ServerInterfaceWrapper) ListEvidenceHolds(c *gin.Context) {
 	siw.Handler.ListEvidenceHolds(c)
 }
 
+// ListNotificationDeliveries operation middleware
+func (siw *ServerInterfaceWrapper) ListNotificationDeliveries(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListNotificationDeliveriesParams
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", c.Request.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter limit: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ListNotificationDeliveries(c, params)
+}
+
+// ListSecurityNotifications operation middleware
+func (siw *ServerInterfaceWrapper) ListSecurityNotifications(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListSecurityNotificationsParams
+
+	// ------------- Optional query parameter "after" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "after", c.Request.URL.Query(), &params.After, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter after: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", c.Request.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter limit: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ListSecurityNotifications(c, params)
+}
+
+// AckSecurityNotification operation middleware
+func (siw *ServerInterfaceWrapper) AckSecurityNotification(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "noticeId" -------------
+	var noticeId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "noticeId", c.Param("noticeId"), &noticeId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter noticeId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.AckSecurityNotification(c, noticeId)
+}
+
 // GetRecoveryGate operation middleware
 func (siw *ServerInterfaceWrapper) GetRecoveryGate(c *gin.Context) {
 
@@ -10292,6 +10473,9 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.DELETE(options.BaseURL+"/api/v1/users/:id", wrapper.DeleteUser)
 	router.PATCH(options.BaseURL+"/api/v1/users/:id", wrapper.UpdateUser)
 	router.GET(options.BaseURL+"/api/v1/security/admission/candidates/:operationId", wrapper.GetPrivateAdmissionCandidate)
+	router.GET(options.BaseURL+"/api/v1/security/notifications", wrapper.ListSecurityNotifications)
+	router.PUT(options.BaseURL+"/api/v1/security/notifications/:noticeId/ack", wrapper.AckSecurityNotification)
+	router.GET(options.BaseURL+"/api/v1/security/notification-deliveries", wrapper.ListNotificationDeliveries)
 	router.GET(options.BaseURL+"/api/v1/security/cases", wrapper.ListSecurityCases)
 	router.POST(options.BaseURL+"/api/v1/security/cases", wrapper.OpenSecurityCase)
 	router.POST(options.BaseURL+"/api/v1/security/cases/:caseId/transitions", wrapper.TransitionSecurityCase)

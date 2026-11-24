@@ -169,8 +169,8 @@ func TestIncidentEvidenceHoldEndToEnd(t *testing.T) {
 			State     string `json:"state"`
 		} `json:"items"`
 	}
-	if code := e.jsonReq(t, http.MethodGet, "/api/v1/security/holds", token, nil, &list); code != http.StatusOK || len(list.Items) != 1 || list.Items[0].ByteState != "unknown" {
-		t.Fatalf("清单状态码 = %d 项数 = %d，期望 200 且 1 枚 unknown", code, len(list.Items))
+	if code := e.jsonReq(t, http.MethodGet, "/api/v1/security/holds", token, nil, &list); code != http.StatusOK || len(list.Items) != 1 || list.Items[0].ByteState != "metadata_only" {
+		t.Fatalf("清单状态码 = %d 项数 = %d，期望 200 且 1 枚 metadata_only", code, len(list.Items))
 	}
 
 	// 释放后清单清空。
@@ -232,5 +232,70 @@ func TestIncidentRecoveryGateEndToEnd(t *testing.T) {
 	if code := e.jsonReq(t, http.MethodPost, "/api/v1/repositories", token,
 		api.CreateRepositoryRequest{Name: "post-restore", Type: "hosted", Format: "raw", Visibility: &vis}, &repo); code != http.StatusCreated {
 		t.Fatalf("解闸后业务写状态码 = %d，期望 201", code)
+	}
+}
+
+// FR-171/172：建案触发站内通知 → 游标分页 → 幂等确认。
+func TestSecurityNotificationCursorEndToEnd(t *testing.T) {
+	e := newProtocolEnv(t)
+	token, _, _ := installAdmin(t, e, "adm-n", "admin-pass-123")
+
+	// 建案（同事务发射站内条目）。
+	var opened api.SecurityCase
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/security/cases", token,
+		map[string]any{"title": "可疑发布链", "severity": "high", "reason": "重复拒绝上传"}, &opened); code != http.StatusOK || opened.CaseId == "" {
+		t.Fatalf("建案状态码 = %d，期望 200", code)
+	}
+
+	// 首开：含建案通知与水位。
+	var page struct {
+		Items []struct {
+			NoticeId string `json:"noticeId"`
+			Kind     string `json:"kind"`
+			Seq      int64  `json:"seq"`
+			Acked    bool   `json:"acked"`
+		} `json:"items"`
+		NextCursor *int64 `json:"nextCursor"`
+		Watermark  int64  `json:"watermark"`
+	}
+	if code := e.jsonReq(t, http.MethodGet, "/api/v1/security/notifications", token, nil, &page); code != http.StatusOK {
+		t.Fatalf("首开状态码 = %d", code)
+	}
+	if len(page.Items) != 1 || page.Items[0].Kind != "security.case_opened" || page.Watermark < 1 {
+		t.Fatalf("首开条目不符：%+v", page)
+	}
+
+	// 幂等确认 → acked；重复确认仍 200。
+	var ack map[string]int64
+	if code := e.jsonReq(t, http.MethodPut, "/api/v1/security/notifications/"+page.Items[0].NoticeId+"/ack", token, nil, &ack); code != http.StatusOK {
+		t.Fatalf("确认状态码 = %d", code)
+	}
+	var page2 struct {
+		Items []struct {
+			Acked bool `json:"acked"`
+		} `json:"items"`
+	}
+	if code := e.jsonReq(t, http.MethodGet, "/api/v1/security/notifications", token, nil, &page2); code != http.StatusOK || !page2.Items[0].Acked {
+		t.Fatalf("确认后 acked 应为 true：%+v", page2)
+	}
+	if code := e.jsonReq(t, http.MethodPut, "/api/v1/security/notifications/nonexistent/ack", token, nil, nil); code != http.StatusNotFound {
+		t.Fatalf("不可见确认应 404，实际 %d", code)
+	}
+
+	// 案件转态：claim → close。
+	var claimed api.SecurityCase
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/security/cases/"+opened.CaseId+"/transitions", token,
+		map[string]any{"action": "claim", "targetVersion": opened.TargetVersion}, &claimed); code != http.StatusOK || claimed.State != "claimed" {
+		t.Fatalf("认领状态码 = %d", code)
+	}
+	var closed api.SecurityCase
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/security/cases/"+opened.CaseId+"/transitions", token,
+		map[string]any{"action": "close", "targetVersion": claimed.TargetVersion, "reason": "已处置", "resolutionCode": "resolved"}, &closed); code != http.StatusOK || closed.State != "closed" {
+		t.Fatalf("结案状态码 = %d", code)
+	}
+	// 旧版本重放 → 409。
+	if code := e.jsonReq(t, http.MethodPost, "/api/v1/security/cases/"+opened.CaseId+"/transitions", token,
+		map[string]any{"action": "reopen", "targetVersion": opened.TargetVersion, "reason": "复查"}, nil); code != http.StatusConflict {
+		t.Fatalf("过期版本重放应 409，实际 %d", code)
 	}
 }

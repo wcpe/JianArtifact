@@ -568,6 +568,10 @@ func (s *SecurityIncidentService) OpenSecurityCase(ctx context.Context, p *auth.
 		if err := repository.InsertSecurityCaseTx(ctx, tx, row); err != nil {
 			return err
 		}
+		if _, err := EmitSecurityNotificationTx(ctx, tx, "security.case_opened", row.Title,
+			fmt.Sprintf(`{"caseId":%q,"severity":%q}`, row.CaseID, row.Severity), s.now()); err != nil {
+			return err
+		}
 		for _, l := range links {
 			if l.LinkKind != "fact" && l.LinkKind != "candidate" {
 				return ErrValidation
@@ -659,6 +663,101 @@ func (s *SecurityIncidentService) SecurityCaseLinks(ctx context.Context, caseID 
 	err := s.repo.Read(ctx, func(tx *sqlx.Tx) error {
 		var e error
 		out, e = repository.ListSecurityCaseLinksTx(ctx, tx, caseID)
+		return e
+	})
+	return out, err
+}
+
+// ── 安全通知（FR-172 站内通道）──────────────────────────────────────────────
+
+// SecurityNoticePage 游标补查页：items + nextCursor + hasMore + watermark 同源。
+type SecurityNoticePage struct {
+	Items     []repository.SecurityNotificationRow
+	Acked     map[int64]bool
+	NextSeq   int64
+	HasMore   bool
+	Watermark int64
+}
+
+// EmitSecurityNotificationTx 在既有写事务内发射站内条目（供案件/处置等调用方同事务使用）。
+func EmitSecurityNotificationTx(ctx context.Context, tx *sqlx.Tx, kind, title, payload string, now time.Time) (int64, error) {
+	return repository.EmitNotificationTx(ctx, tx, repository.SecurityNotificationRow{
+		NoticeID: "ntf-" + uuid.NewString(), Kind: kind, Title: title, Payload: payload, CreatedUnix: now.Unix(),
+	}, nil)
+}
+
+// ListSecurityNotifications 管理员游标分页；after=0 从头（返回最新一页而非全部）。
+func (s *SecurityIncidentService) ListSecurityNotifications(ctx context.Context, p *auth.Principal, after int64, limit int) (*SecurityNoticePage, error) {
+	if p == nil || p.UserID <= 0 || p.Role != "admin" {
+		return nil, ErrAdmissionForbidden
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	out := &SecurityNoticePage{Acked: map[int64]bool{}}
+	err := s.repo.Read(ctx, func(tx *sqlx.Tx) error {
+		var e error
+		out.Watermark, e = repository.NotificationWatermarkTx(ctx, tx)
+		if e != nil {
+			return e
+		}
+		if after <= 0 {
+			// 首开取最近一页：游标回到 watermark-limit，仍然 seq 有序。
+			start := out.Watermark - int64(limit)
+			if start < 0 {
+				start = 0
+			}
+			out.Items, e = repository.NotificationsAfterTx(ctx, tx, p.UserID, start, limit)
+		} else {
+			out.Items, e = repository.NotificationsAfterTx(ctx, tx, p.UserID, after, limit)
+		}
+		if e != nil {
+			return e
+		}
+		for _, it := range out.Items {
+			out.NextSeq = it.Seq
+			out.Acked[it.Seq], _ = repository.NotificationAckedTx(ctx, tx, it.Seq, p.UserID)
+		}
+		out.HasMore = out.NextSeq < out.Watermark
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// AckSecurityNotification 幂等确认（本人）；不可见/不存在 → 404。
+func (s *SecurityIncidentService) AckSecurityNotification(ctx context.Context, p *auth.Principal, noticeID string) (time.Time, error) {
+	if p == nil || p.UserID <= 0 || p.Role != "admin" {
+		return time.Time{}, ErrAdmissionForbidden
+	}
+	now := s.now()
+	var acked bool
+	err := s.repo.Write(ctx, func(tx *sqlx.Tx) error {
+		var e error
+		acked, e = repository.AckNotificationTx(ctx, tx, noticeID, p.UserID, now.Unix())
+		return e
+	})
+	if err != nil {
+		return time.Time{}, err
+	}
+	_ = acked // 幂等：重复确认返回同一时刻语义
+	return now, nil
+}
+
+// ListNotificationDeliveries 脱敏投递分页。
+func (s *SecurityIncidentService) ListNotificationDeliveries(ctx context.Context, p *auth.Principal, limit int) ([]repository.SecurityNotificationDeliveryRow, error) {
+	if p == nil || p.UserID <= 0 || p.Role != "admin" {
+		return nil, ErrAdmissionForbidden
+	}
+	if limit <= 0 || limit > 200 {
+		limit = 100
+	}
+	var out []repository.SecurityNotificationDeliveryRow
+	err := s.repo.Read(ctx, func(tx *sqlx.Tx) error {
+		var e error
+		out, e = repository.ListDeliveriesTx(ctx, tx, limit)
 		return e
 	})
 	return out, err

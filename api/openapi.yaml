@@ -1170,6 +1170,70 @@ paths:
           $ref: "#/components/responses/PrivateAdmissionNotFound"
         "503":
           $ref: "#/components/responses/PrivateAdmissionUnavailable"
+  /api/v1/security/notifications:
+    get:
+      operationId: listSecurityNotifications
+      summary: 站内安全通知游标分页
+      security: [bearerAuth: []]
+      parameters:
+        - name: after
+          in: query
+          schema: {type: integer, format: int64}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100}
+      responses:
+        "200":
+          description: 通知页
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SecurityNotificationPage"
+        "403":
+          $ref: "#/components/responses/RecentMfaRequired"
+  /api/v1/security/notifications/{noticeId}/ack:
+    put:
+      operationId: ackSecurityNotification
+      summary: 确认本人通知（幂等）
+      security: [bearerAuth: []]
+      parameters:
+        - name: noticeId
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: 确认时间
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ackAt: {type: integer, format: int64}
+        "404":
+          description: notification_not_found
+        "403":
+          $ref: "#/components/responses/RecentMfaRequired"
+  /api/v1/security/notification-deliveries:
+    get:
+      operationId: listNotificationDeliveries
+      summary: 站外投递脱敏分页
+      security: [bearerAuth: []]
+      parameters:
+        - name: limit
+          in: query
+          schema: {type: integer}
+      responses:
+        "200":
+          description: 投递列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SecurityNotificationDelivery"
+        "403":
+          $ref: "#/components/responses/RecentMfaRequired"
   /api/v1/security/cases:
     get:
       operationId: listSecurityCases
@@ -4906,6 +4970,37 @@ components:
           type: string
           minLength: 1
           maxLength: 512
+    SecurityNotificationPage:
+      type: object
+      additionalProperties: false
+      required: [items, hasMore, watermark]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              seq: {type: integer, format: int64}
+              noticeId: {type: string}
+              kind: {type: string}
+              title: {type: string}
+              payload: {type: string}
+              createdUnix: {type: integer, format: int64}
+              acked: {type: boolean}
+        nextCursor: {type: integer, format: int64}
+        hasMore: {type: boolean}
+        watermark: {type: integer, format: int64}
+    SecurityNotificationDelivery:
+      type: object
+      additionalProperties: false
+      required: [deliveryId, channel, targetMasked, state]
+      properties:
+        deliveryId: {type: string}
+        channel: {type: string, enum: [smtp, qq]}
+        targetMasked: {type: string}
+        state: {type: string, enum: [pending, attempted, accepted, failed]}
+        attempts: {type: integer, format: int64}
+        lastError: {type: string}
     SecurityCase:
       type: object
       additionalProperties: false

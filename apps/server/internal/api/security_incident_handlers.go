@@ -431,3 +431,90 @@ func (h *Handlers) ListSecurityCaseLinks(c *gin.Context, caseID string) {
 	}
 	c.JSON(http.StatusOK, out)
 }
+
+// ── FR-172 站内安全通知 ────────────────────────────────────────────────────
+
+func (h *Handlers) ListSecurityNotifications(c *gin.Context, params ListSecurityNotificationsParams) {
+	c.Header("Cache-Control", "private, no-store")
+	p, ok := requireAdmin(c)
+	if !ok || !h.requireRecentMfa(c, p) {
+		return
+	}
+	var after, limit int64 = 0, 50
+	if params.After != nil {
+		after = *params.After
+	}
+	if params.Limit != nil {
+		limit = int64(*params.Limit)
+	}
+	page, err := h.incident.ListSecurityNotifications(c.Request.Context(), p, after, int(limit))
+	if err != nil {
+		auth.WriteError(c, http.StatusServiceUnavailable, "notification_projection_unavailable", "通知投影暂不可用")
+		return
+	}
+	type noticeItem = struct {
+		Acked       *bool   `json:"acked,omitempty"`
+		CreatedUnix *int64  `json:"createdUnix,omitempty"`
+		Kind        *string `json:"kind,omitempty"`
+		NoticeId    *string `json:"noticeId,omitempty"`
+		Payload     *string `json:"payload,omitempty"`
+		Seq         *int64  `json:"seq,omitempty"`
+		Title       *string `json:"title,omitempty"`
+	}
+	items := make([]noticeItem, 0, len(page.Items))
+	for _, it := range page.Items {
+		acked := page.Acked[it.Seq]
+		items = append(items, noticeItem{Seq: &it.Seq, NoticeId: &it.NoticeID, Kind: &it.Kind,
+			Title: &it.Title, Payload: &it.Payload, CreatedUnix: &it.CreatedUnix, Acked: &acked})
+	}
+	out := SecurityNotificationPage{Items: items, HasMore: page.HasMore, Watermark: page.Watermark}
+	if page.NextSeq > 0 {
+		out.NextCursor = &page.NextSeq
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+func (h *Handlers) AckSecurityNotification(c *gin.Context, noticeID string) {
+	c.Header("Cache-Control", "private, no-store")
+	p, ok := requireAdmin(c)
+	if !ok || !h.requireRecentMfa(c, p) {
+		return
+	}
+	ackAt, err := h.incident.AckSecurityNotification(c.Request.Context(), p, noticeID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			auth.WriteError(c, http.StatusNotFound, "notification_not_found", "通知不存在或不可见")
+			return
+		}
+		auth.WriteError(c, http.StatusServiceUnavailable, "notification_projection_unavailable", "确认暂不可用")
+		return
+	}
+	c.JSON(http.StatusOK, map[string]int64{"ackAt": ackAt.Unix()})
+}
+
+func (h *Handlers) ListNotificationDeliveries(c *gin.Context, params ListNotificationDeliveriesParams) {
+	c.Header("Cache-Control", "private, no-store")
+	p, ok := requireAdmin(c)
+	if !ok || !h.requireRecentMfa(c, p) {
+		return
+	}
+	limit := 100
+	if params.Limit != nil {
+		limit = int(*params.Limit)
+	}
+	rows, err := h.incident.ListNotificationDeliveries(c.Request.Context(), p, limit)
+	if err != nil {
+		auth.WriteError(c, http.StatusServiceUnavailable, "notification_projection_unavailable", "投递查询暂不可用")
+		return
+	}
+	out := make([]SecurityNotificationDelivery, 0, len(rows))
+	for _, r := range rows {
+		d := SecurityNotificationDelivery{DeliveryId: r.DeliveryID, Channel: SecurityNotificationDeliveryChannel(r.Channel),
+			TargetMasked: r.TargetMasked, State: SecurityNotificationDeliveryState(r.State), Attempts: &r.Attempts}
+		if r.LastError != "" {
+			d.LastError = &r.LastError
+		}
+		out = append(out, d)
+	}
+	c.JSON(http.StatusOK, out)
+}
