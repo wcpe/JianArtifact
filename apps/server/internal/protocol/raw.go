@@ -307,7 +307,7 @@ func (h *RawHandler) Put(c *gin.Context) {
 	var candidateRC io.ReadCloser
 	if h.admission != nil {
 		if p, hasP := auth.PrincipalFrom(c); hasP {
-			if snap, _ := repositorySnapshot(c, repo); snap != nil && snap.Type == "hosted" && snap.Format == "raw" {
+			if snap, _ := repositorySnapshot(c, repo); snap != nil && snap.Type == "hosted" && (snap.Format == "raw" || snap.Format == "maven") {
 				row, err := h.admission.IntakeCandidate(c.Request.Context(), p, snap.ID, artPath, c.GetHeader("Content-Type"), c.Request.Body)
 				if err != nil {
 					h.auditRejected(c, "asset.put", repo, artPath, publishRejectionDetail(err))

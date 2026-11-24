@@ -157,7 +157,11 @@ func (s *AdmissionService) Prepare(ctx context.Context, principal *auth.Principa
 		return AdmissionStatus{OperationID: row.OperationID}, err
 	}
 	digest, size := object.SHA256(), object.Size()
-	manifest := admissionManifestDigest(row, digest, size)
+	repo, repoErr := s.repoByID(ctx, row.RepositoryID)
+	if repoErr != nil {
+		return AdmissionStatus{OperationID: row.OperationID}, ErrAdmissionUnavailable
+	}
+	manifest := admissionManifestDigest(row, repo.Format, digest, size)
 	eventID := repository.NewSecurityEventID()
 	row.ManifestDigest, row.BlobHash, row.SizeBytes, row.StagedEventID = &manifest, &digest, &size, &eventID
 	err = s.rows.Write(ctx, func(tx *sqlx.Tx) error {
@@ -213,8 +217,9 @@ func (s *AdmissionService) Status(ctx context.Context, principal *auth.Principal
 		// 单实例重启或同实例接收失败：不能由遗留文件推导接收成功。
 		return s.transitionStatus(ctx, principal, row, "rejected", "")
 	case "staged":
-		if row.BlobHash == nil || row.SizeBytes == nil || *row.SizeBytes > admissionMaxBytes || row.ManifestVersion == nil || *row.ManifestVersion != 1 ||
-			row.ManifestDigest == nil || *row.ManifestDigest != admissionManifestDigest(row, *row.BlobHash, *row.SizeBytes) {
+		repo, repoErr := s.repoByID(ctx, row.RepositoryID)
+		if repoErr != nil || row.BlobHash == nil || row.SizeBytes == nil || *row.SizeBytes > admissionMaxBytes || row.ManifestVersion == nil || *row.ManifestVersion != 1 ||
+			row.ManifestDigest == nil || *row.ManifestDigest != admissionManifestDigest(row, repo.Format, *row.BlobHash, *row.SizeBytes) {
 			return AdmissionStatus{}, ErrAdmissionUnavailable
 		}
 		select {
@@ -318,7 +323,7 @@ func (s *AdmissionService) authorizeRepository(ctx context.Context, tx *sqlx.Tx,
 	if err != nil {
 		return nil, err
 	}
-	if repo.Type != "hosted" || repo.Format != "raw" || !repo.Online {
+	if repo.Type != "hosted" || (repo.Format != "raw" && repo.Format != "maven") || !repo.Online {
 		return nil, repository.ErrNotFound
 	}
 	if user.Role != "admin" {
@@ -470,9 +475,9 @@ func validAdmissionPath(p string) bool {
 	return repository.ValidSecurityEventPath(p) && !strings.Contains(p, "#") && path.Clean(p) == p
 }
 
-func admissionManifestDigest(r repository.AdmissionCandidateRow, hash string, size int64) string {
+func admissionManifestDigest(r repository.AdmissionCandidateRow, format, hash string, size int64) string {
 	// 固定顺序、类型与编码版本；输入摘要不会被误作完整清单摘要。
-	data, _ := json.Marshal([]any{"jianartifact.private-raw-manifest.v1", r.RepositoryID, "raw", "asset.put", r.CanonicalPath, "input", r.ContentType, "sha256:" + hash, size})
+	data, _ := json.Marshal([]any{"jianartifact.private-raw-manifest.v1", r.RepositoryID, format, "asset.put", r.CanonicalPath, "input", r.ContentType, "sha256:" + hash, size})
 	return fmt.Sprintf("sha256:%x", sha256.Sum256(data))
 }
 

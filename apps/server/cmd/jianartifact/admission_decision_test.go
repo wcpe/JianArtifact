@@ -194,3 +194,49 @@ func TestRawPutViaAdmissionEndToEnd(t *testing.T) {
 		t.Fatalf("状态查询不符：%d %s", status, body)
 	}
 }
+
+// TestMavenPutViaAdmissionEndToEnd Maven hosted PUT 与 Raw 共用准入管线：封存字节
+// 记录仓库真实格式于清单摘要，净内容提升发布后可公开解析。
+func TestMavenPutViaAdmissionEndToEnd(t *testing.T) {
+	cfg, app := newSourceTestApplication(t, "maven")
+	if _, _, err := app.authSvc.Bootstrap("mvn-adm", auditTestPassword); err != nil {
+		t.Fatal(err)
+	}
+	owner, err := app.userSvc.Create("mvn-owner", auditTestPassword, "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := app.repoSvc.Create("mvn-adm-hosted", "maven", "hosted", "public", "", repository.RepositoryConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.NewAclRepo(app.db).Replace(repo.ID, []repository.Acl{{SubjectID: owner.ID, Action: repository.ActionPublish}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.securityAudit.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(newApplicationHandler(cfg, app, nil))
+	t.Cleanup(server.Close)
+	issuer, _, err := app.tokenSvc.Create(owner.ID, "mvn-issuer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	jar := []byte("fake-jar-bytes")
+	status, _, body := auditTestRequest(t, server, http.MethodPut, "/repository/"+repo.Name+"/com/example/demo/1.0/demo-1.0.jar", "application/java-archive", string(jar), issuer)
+	if status != http.StatusCreated {
+		t.Fatalf("Maven 准入 PUT 应 201：%d %s", status, body)
+	}
+	var state string
+	var assetID *int64
+	if err := app.db.QueryRow(`SELECT state,published_asset_id FROM private_admission_candidate ORDER BY rowid DESC LIMIT 1`).Scan(&state, &assetID); err != nil {
+		t.Fatal(err)
+	}
+	if state != "published" || assetID == nil {
+		t.Fatalf("Maven 净候选应提升为 published：%s", state)
+	}
+	status, _, body = auditTestRequest(t, server, http.MethodGet, "/repository/"+repo.Name+"/com/example/demo/1.0/demo-1.0.jar", "", "", "")
+	if status != http.StatusOK || body != string(jar) {
+		t.Fatalf("发布后公开读取不符：%d %q", status, body)
+	}
+}
