@@ -153,7 +153,7 @@ export function SetupPage() {
           setError(t("setup.claimRequired"));
           return;
         }
-        setError(err instanceof ApiError ? err.message : t("setup.bootstrapFailed"));
+        setError(t("setup.bootstrapFailed"));
       })
       .finally(() => {
         setSubmitting(false);
