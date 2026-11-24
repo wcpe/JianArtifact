@@ -48,8 +48,9 @@ func NewOCIService(assets *AssetService, repos *RepositoryService) *OCIService {
 
 // OCIPublishResult 是 manifest 发布摘要。
 type OCIPublishResult struct {
-	Digest string
-	Size   int64
+	Digest  string
+	Size    int64
+	AssetID int64 // manifest 资产号（FR-169 准入提升回执）
 }
 
 // PutBlob 校验 sha256 后写入 hosted OCI blob。digest 只接受 sha256。
@@ -205,7 +206,7 @@ func (s *OCIService) putManifest(repoName, image, reference string, body []byte,
 		return nil, err
 	}
 	restore = nil
-	return &OCIPublishResult{Digest: digest, Size: int64(len(body))}, nil
+	return &OCIPublishResult{Digest: digest, Size: int64(len(body)), AssetID: manifest.ID}, nil
 }
 
 // CreateUploadTemp 创建当前实例 OCI 分块上传会话的专用临时文件。

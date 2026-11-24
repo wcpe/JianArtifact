@@ -595,7 +595,7 @@ func (s *AdmissionService) MarkPublished(ctx context.Context, principal *auth.Pr
 // admissionFormatAllowed 是获准走私有候选准入的协议格式集合（FR-169 已接入口径）。
 func admissionFormatAllowed(format string) bool {
 	switch format {
-	case "raw", "maven", "cargo", "npm":
+	case "raw", "maven", "cargo", "npm", "docker":
 		return true
 	}
 	return false

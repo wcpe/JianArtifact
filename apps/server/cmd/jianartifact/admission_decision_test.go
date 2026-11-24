@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -442,5 +443,63 @@ func TestNpmPublishViaAdmissionEndToEnd(t *testing.T) {
 	status, _, body = auditTestRequest(t, server, http.MethodGet, "/npm/"+repo.Name+"/probe-pkg/-/probe-pkg-1.0.0.tgz", "", "", "")
 	if status != http.StatusOK || body != string(tarball) {
 		t.Fatalf("发布后 tarball 读取不符：%d %q", status, body)
+	}
+}
+
+// TestOCIPublishViaAdmissionEndToEnd OCI hosted 的 blob/monolithic PUT 与 manifest PUT
+// 均经私有候选准入：封存→裁定→提升后可公开解析、候选落 published。
+func TestOCIPublishViaAdmissionEndToEnd(t *testing.T) {
+	cfg, app := newSourceTestApplication(t, "docker")
+	if _, _, err := app.authSvc.Bootstrap("oci-adm", auditTestPassword); err != nil {
+		t.Fatal(err)
+	}
+	owner, err := app.userSvc.Create("oci-owner", auditTestPassword, "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := app.repoSvc.Create("oci-adm-hosted", "docker", "hosted", "public", "", repository.RepositoryConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.NewAclRepo(app.db).Replace(repo.ID, []repository.Acl{{SubjectID: owner.ID, Action: repository.ActionPublish}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.securityAudit.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(newApplicationHandler(cfg, app, nil))
+	t.Cleanup(server.Close)
+	issuer, _, err := app.tokenSvc.Create(owner.ID, "oci-issuer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob := []byte("fake-oci-blob")
+	digest := fmt.Sprintf("sha256:%x", sha256.Sum256(blob))
+	status, _, body := auditTestRequest(t, server, http.MethodPut,
+		"/v2/"+repo.Name+"/demo/blobs/uploads/?digest="+digest, "application/octet-stream", string(blob), issuer)
+	if status != http.StatusCreated {
+		t.Fatalf("OCI blob 准入发布应 201：%d %s", status, body)
+	}
+	var state string
+	var assetID *int64
+	if err := app.db.QueryRow(`SELECT state,published_asset_id FROM private_admission_candidate ORDER BY rowid DESC LIMIT 1`).Scan(&state, &assetID); err != nil {
+		t.Fatal(err)
+	}
+	if state != "published" || assetID == nil {
+		t.Fatalf("OCI blob 候选应提升为 published：%s", state)
+	}
+	manifest := `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","layers":[{"mediaType":"application/octet-stream","digest":"` + digest + `","size":` + fmt.Sprint(len(blob)) + `}]}`
+	status, _, body = auditTestRequest(t, server, http.MethodPut,
+		"/v2/"+repo.Name+"/demo/manifests/v1", "application/vnd.oci.image.manifest.v1+json", manifest, issuer)
+	if status != http.StatusCreated {
+		t.Fatalf("OCI manifest 准入发布应 201：%d %s", status, body)
+	}
+	var n int
+	if err := app.db.Get(&n, `SELECT count(*) FROM private_admission_candidate WHERE state='published'`); err != nil || n < 2 {
+		t.Fatalf("manifest 与 blob 候选均应 published：n=%d err=%v", n, err)
+	}
+	status, _, body = auditTestRequest(t, server, http.MethodGet, "/v2/"+repo.Name+"/demo/blobs/"+digest, "", "", "")
+	if status != http.StatusOK || body != string(blob) {
+		t.Fatalf("发布后 blob 读取不符：%d %q", status, body)
 	}
 }

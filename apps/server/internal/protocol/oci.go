@@ -1,11 +1,13 @@
 package protocol
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strconv"
@@ -283,12 +285,20 @@ func (h *OCIHandler) putManifest(c *gin.Context, repo, image, reference string) 
 		return
 	}
 	defer func() { settle(false) }()
+	// FR-169：manifest 是客户端字节，私有接收→裁定→封存字节再入发布。
+	body, candRow, candP, candErr := h.ociAdmissionIntake(c, repo, ociManifestPolicyPath(image, reference), defaultContentType(c.GetHeader("Content-Type")), bytes.NewReader(body), int64(len(body)))
+	if candErr != nil {
+		h.auditRejected(c, "oci.manifest.put", repo, ociManifestPolicyPath(image, reference), publishRejectionDetail(candErr))
+		writeOCIError(c, ociStatus(candErr), ociCode(candErr), "manifest 准入失败")
+		return
+	}
 	result, err := h.oci.PutManifest(repo, image, reference, body, defaultContentType(c.GetHeader("Content-Type")))
 	if err != nil {
 		h.auditRejected(c, "oci.manifest.put", repo, ociManifestPolicyPath(image, reference), publishRejectionDetail(err))
 		writeOCIError(c, ociStatus(err), ociCode(err), "manifest 发布失败")
 		return
 	}
+	h.ociAdmissionMark(c, candP, candRow, result.AssetID)
 	settle(true)
 	c.Header("Docker-Distribution-API-Version", "registry/2.0")
 	c.Header("Location", "/v2/"+repo+"/"+image+"/manifests/"+result.Digest)
@@ -359,12 +369,24 @@ func (h *OCIHandler) completeUpload(c *gin.Context, repo, image, id string) {
 		writeOCIError(c, http.StatusInternalServerError, "BLOB_UPLOAD_INVALID", "读取暂存失败")
 		return
 	}
-	_, err = h.oci.PutBlob(repo, digest, file)
+	// FR-169：组装好的 blob 字节经私有候选准入再发布。
+	blobSrc, candRow, candP, candErr := h.ociAdmissionIntakeRC(c, repo, path, "application/octet-stream", file)
+	if candErr != nil {
+		h.auditRejected(c, "oci.blob.put", repo, path, publishRejectionDetail(candErr))
+		cleanup = h.closeUploadLocked(id, session, false)
+		writeOCIError(c, ociStatus(candErr), ociCode(candErr), "blob 准入失败")
+		return
+	}
+	if candSrc, ok := blobSrc.(io.ReadCloser); ok {
+		defer func() { _ = candSrc.Close() }()
+	}
+	asset, err := h.oci.PutBlob(repo, digest, blobSrc)
 	if err != nil {
 		h.auditRejected(c, "oci.blob.put", repo, path, publishRejectionDetail(err))
 		writeOCIError(c, ociStatus(err), ociCode(err), "blob 发布失败")
 		return
 	}
+	h.ociAdmissionMark(c, candP, candRow, asset.ID)
 	closeErr := file.Close()
 	cleanup = h.closeUploadLocked(id, session, true)
 	if closeErr != nil {
@@ -390,13 +412,24 @@ func (h *OCIHandler) completeDirectUpload(c *gin.Context, repo, image, digest st
 	if c.Request.ContentLength < 0 && limit > 0 {
 		body = &quotaReader{r: c.Request.Body, left: limit, limit: limit}
 	}
-	asset, err := h.oci.PutBlob(repo, digest, body)
+	blobSrc, candRow, candP, candErr := h.ociAdmissionIntakeRC(c, repo, path, "application/octet-stream", body)
+	if candErr != nil {
+		h.auditRejected(c, "oci.blob.put", repo, path, publishRejectionDetail(candErr))
+		h.recordQuotaRejection(candErr)
+		writeOCIError(c, ociStatus(candErr), ociCode(candErr), "blob 准入失败")
+		return
+	}
+	if candSrc, ok := blobSrc.(io.ReadCloser); ok {
+		defer func() { _ = candSrc.Close() }()
+	}
+	asset, err := h.oci.PutBlob(repo, digest, blobSrc)
 	if err != nil {
 		h.auditRejected(c, "oci.blob.put", repo, path, publishRejectionDetail(err))
 		h.recordQuotaRejection(err)
 		writeOCIError(c, ociStatus(err), ociCode(err), "blob 发布失败")
 		return
 	}
+	h.ociAdmissionMark(c, candP, candRow, asset.ID)
 	settle(true, asset.Size)
 	c.Header("Location", "/v2/"+repo+"/"+image+"/blobs/"+digest)
 	c.Header("Docker-Content-Digest", digest)
@@ -595,4 +628,54 @@ func maxInt64(value, fallback int64) int64 {
 		return fallback
 	}
 	return value
+}
+
+// ── OCI 私有候选准入（FR-169）──────────────────────────────────────────────
+
+// ociAdmissionIntake 接收客户端字节为私有候选并完成完整性裁定；返回封存字节内容。
+// 未装配准入或仓库未获准（非 hosted OCI）时原样返回输入。
+func (h *OCIHandler) ociAdmissionIntake(c *gin.Context, repoName, path, contentType string, src io.Reader, size int64) ([]byte, repository.AdmissionCandidateRow, *auth.Principal, error) {
+	rc, row, p, err := h.ociAdmissionIntakeRC(c, repoName, path, contentType, src)
+	if err != nil {
+		return nil, row, p, err
+	}
+	if closer, ok := rc.(io.ReadCloser); ok {
+		defer func() { _ = closer.Close() }()
+	}
+	body, err := io.ReadAll(rc)
+	return body, row, p, err
+}
+
+// ociAdmissionIntakeRC 同 intake，但以流返回封存字节（适配大 blob）。
+func (h *OCIHandler) ociAdmissionIntakeRC(c *gin.Context, repoName, path, contentType string, src io.Reader) (io.Reader, repository.AdmissionCandidateRow, *auth.Principal, error) {
+	if h.admission == nil {
+		return src, repository.AdmissionCandidateRow{}, nil, nil
+	}
+	p, hasP := auth.PrincipalFrom(c)
+	if !hasP {
+		return src, repository.AdmissionCandidateRow{}, nil, nil
+	}
+	snap, _ := repositorySnapshot(c, repoName)
+	if snap == nil || snap.Type != "hosted" || snap.Format != "docker" {
+		return src, repository.AdmissionCandidateRow{}, nil, nil
+	}
+	row, err := h.admission.IntakeCandidate(c.Request.Context(), p, snap.ID, path, contentType, src)
+	if err != nil {
+		return nil, repository.AdmissionCandidateRow{}, p, err
+	}
+	prc, _, err := h.admission.PromoteBytes(c.Request.Context(), row)
+	if err != nil {
+		return nil, repository.AdmissionCandidateRow{}, p, err
+	}
+	return prc, row, p, nil
+}
+
+// ociAdmissionMark 提升后把候选标为 published 并记录资产号。
+func (h *OCIHandler) ociAdmissionMark(c *gin.Context, p *auth.Principal, row repository.AdmissionCandidateRow, assetID int64) {
+	if row.OperationID == "" {
+		return
+	}
+	if _, err := h.admission.MarkPublished(c.Request.Context(), p, row, assetID); err != nil {
+		log.Printf("准入候选提升后标记失败（operation=%s）：%v", row.OperationID, err)
+	}
 }
