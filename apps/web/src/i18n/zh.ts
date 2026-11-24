@@ -184,7 +184,7 @@ export const zh = {
     runtimePolicyGroupRetention: "保留策略",
     runtimePolicyGroupThresholds: "容量与阈值",
     runtimePolicyGroupUpstream: "回源与搜索",
-    runtimePolicyTimingJobIntervals: "从下一轮起生效（不重排当前等待）",
+    runtimePolicyTimingJobIntervals: "从下一次调度起生效（运行中的一轮不打断）",
     runtimePolicyTimingNextJobRun: "下一次作业运行时生效",
     runtimePolicyTimingNextCleanup: "下一次清理时生效",
     runtimePolicyTimingNextRequest: "下一次请求生效",

@@ -196,7 +196,7 @@ export const en = {
     runtimePolicyGroupRetention: "Retention rules",
     runtimePolicyGroupThresholds: "Capacity & thresholds",
     runtimePolicyGroupUpstream: "Upstream & search",
-    runtimePolicyTimingJobIntervals: "From the next run (current wait is not rescheduled)",
+    runtimePolicyTimingJobIntervals: "Effective from the next scheduled run (a run in progress is not interrupted)",
     runtimePolicyTimingNextJobRun: "Takes effect on the next job run",
     runtimePolicyTimingNextCleanup: "Takes effect on the next cleanup",
     runtimePolicyTimingNextRequest: "Takes effect on the next request",

@@ -135,7 +135,7 @@ describe("设置页", () => {
     // 5 个作业间隔 / 3 个「下一次作业运行」的保留策略 / 2 个清理类 / 3 个请求预算。
     // 注意「保留策略」组内本是 4 项，其中回收站保留天数在下一次清理时才生效，
     // 因此这里 3 + 2 而不是 4 + 1。
-    expect(screen.getAllByText("从下一轮起生效（不重排当前等待）")).toHaveLength(5);
+    expect(screen.getAllByText("从下一次调度起生效（运行中的一轮不打断）")).toHaveLength(5);
     expect(screen.getAllByText("下一次作业运行时生效")).toHaveLength(3);
     expect(screen.getAllByText("下一次清理时生效")).toHaveLength(2);
     expect(screen.getAllByText("下一次请求生效")).toHaveLength(3);
